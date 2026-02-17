@@ -4,6 +4,9 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <chrono>
+#ifdef __APPLE__
+#include <mach/mach.h>
+#endif
 #include "pufferlib.cpp"
 
 using namespace pufferlib;
@@ -101,6 +104,7 @@ pybind11::dict log_utilization(pybind11::object pufferl_obj) {
     auto& pufferl = pufferl_obj.cast<PuffeRL&>();
     pybind11::dict result;
 
+#ifdef WITH_CUDA
     nvmlUtilization_t util;
     nvmlDeviceGetUtilizationRates(pufferl.nvml_device, &util);
     result["gpu_util"] = (float)util.gpu;
@@ -113,8 +117,15 @@ pybind11::dict log_utilization(pybind11::object pufferl_obj) {
     cudaMemGetInfo(&cuda_free, &cuda_total);
     result["vram_used_gb"] = (float)(cuda_total - cuda_free) / (1024.0f * 1024.0f * 1024.0f);
     result["vram_total_gb"] = (float)cuda_total / (1024.0f * 1024.0f * 1024.0f);
+#else
+    (void)pufferl;
+    result["gpu_util"] = 0.0f;
+    result["gpu_mem"] = 0.0f;
+    result["vram_used_gb"] = 0.0f;
+    result["vram_total_gb"] = 0.0f;
+#endif
 
-    // CPU memory from /proc/self/status
+    // CPU memory from /proc/self/status (Linux only)
     long rss_kb = 0;
     FILE* f = fopen("/proc/self/status", "r");
     if (f) {
@@ -124,6 +135,17 @@ pybind11::dict log_utilization(pybind11::object pufferl_obj) {
         }
         fclose(f);
     }
+#ifdef __APPLE__
+    // macOS: use task_info for resident memory
+    {
+        struct mach_task_basic_info info;
+        mach_msg_type_number_t size = MACH_TASK_BASIC_INFO_COUNT;
+        if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO,
+                      (task_info_t)&info, &size) == KERN_SUCCESS) {
+            rss_kb = info.resident_size / 1024;
+        }
+    }
+#endif
     result["cpu_mem_gb"] = (float)rss_kb / (1024.0f * 1024.0f);
 
     return result;
@@ -204,6 +226,7 @@ std::unique_ptr<pufferlib::PuffeRL> create_pufferl(pybind11::dict kwargs, pybind
     hypers.rank = get_config(kwargs, "rank");
     hypers.world_size = get_config(kwargs, "world_size");
     hypers.nccl_id_path = kwargs["nccl_id_path"].cast<std::string>();
+    hypers.device = kwargs["device"].cast<std::string>();
 
     std::string env_name = kwargs["env_name"].cast<std::string>();
     Dict* vec_dict = py_dict_to_c_dict(vec_kwargs.cast<py::dict>());
@@ -221,14 +244,18 @@ TORCH_LIBRARY_IMPL(pufferlib, CPU, m) {
   m.impl("compute_puff_advantage", &puff_advantage_cpu);
 }
 
+#ifdef WITH_CUDA
 TORCH_LIBRARY_IMPL(pufferlib, CUDA, m) {
   m.impl("compute_puff_advantage", &puff_advantage_cuda);
 }
+#endif
 
+#ifdef WITH_CUDA
 TORCH_LIBRARY(_C, m) {
     m.def("mingru_gate(Tensor state, Tensor combined) -> (Tensor, Tensor)");
     m.def("fc_max(Tensor x, Tensor W, Tensor b) -> Tensor");
 }
+#endif
 
 PYBIND11_MODULE(_C, m) {
     m.def("log_environments", &log_environments);
@@ -238,12 +265,18 @@ PYBIND11_MODULE(_C, m) {
     m.def("rollouts", &rollouts);
     m.def("train", &train);
     m.def("close", &puf_close);
+#ifdef WITH_CUDA
     m.def("logcumsumexp_cuda", [](torch::Tensor x) { return LogCumsumExp::apply(x)[0]; });
+#endif
     m.def("initial_state", &initial_state);
+#ifdef WITH_CUDA
     m.def("mingru_gate", &mingru_gate);
     m.def("fc_max", [](torch::Tensor x, torch::Tensor W, torch::Tensor b) { return FCMax::apply(x, W, b)[0]; });
+#endif
     m.def("fc_max_cpp", &fc_max_cpp);
+#ifdef WITH_CUDA
     m.def("sample_logits", &sample_logits);
+#endif
     m.def("python_vec_recv", &python_vec_recv);
     m.def("python_vec_send", &python_vec_send);
     m.def("env_buffers", &env_buffers);
@@ -290,7 +323,8 @@ PYBIND11_MODULE(_C, m) {
         .def_readwrite("profile", &HypersT::profile)
         .def_readwrite("rank", &HypersT::rank)
         .def_readwrite("world_size", &HypersT::world_size)
-        .def_readwrite("nccl_id_path", &HypersT::nccl_id_path);
+        .def_readwrite("nccl_id_path", &HypersT::nccl_id_path)
+        .def_readwrite("device", &HypersT::device);
 
     py::class_<RolloutBuf>(m, "RolloutBuf")
         .def_readwrite("observations", &RolloutBuf::observations)

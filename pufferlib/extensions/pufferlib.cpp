@@ -10,17 +10,21 @@
 #include <torch/extension.h>
 #include <torch/torch.h>
 
+#ifdef WITH_CUDA
 #include <c10/cuda/CUDACachingAllocator.h>
 #include <cuda_runtime.h>
 #include <cuda_profiler_api.h>
 #include <nccl.h>
-#include <unistd.h>
-#include <vector>
 #include <ATen/cuda/CUDAGraph.h>
 #include <ATen/cuda/CUDAGeneratorImpl.h>
 #include <ATen/cuda/CUDAContext.h>
 #include <nvtx3/nvToolsExt.h>
 #include <nvml.h>
+#endif
+
+#include <unistd.h>
+#include <vector>
+#include <chrono>
 
 #include "muon.h"
 #include "env_binding.h"
@@ -59,17 +63,27 @@ typedef struct {
 tuple<StaticVec*, Tensor> create_environments(int num_buffers, int total_agents,
         const std::string& env_name, Dict* vec_kwargs, Dict* env_kwargs, EnvBuf& env) {
     StaticVec* vec = create_static_vec(total_agents, num_buffers, vec_kwargs, env_kwargs);
-    printf("DEBUG create_environments: vec->size=%d, vec->total_agents=%d\n",
-        vec->size, vec->total_agents);
 
     int obs_size = get_obs_size();
     int num_atns = get_num_atns();
 
-    auto obs_cuda_t = torch::dtype(to_torch_dtype(get_obs_type())).device(torch::kCUDA);
-    env.obs = torch::from_blob(vec->gpu_observations, {total_agents, obs_size}, obs_cuda_t);
-    env.actions = torch::from_blob(vec->gpu_actions, {total_agents, num_atns}, cuda_f64);
-    env.rewards = torch::from_blob(vec->gpu_rewards, {total_agents}, cuda_f32);
-    env.terminals = torch::from_blob(vec->gpu_terminals, {total_agents}, cuda_f32);
+#ifdef WITH_CUDA
+    // GPU path: wrap CUDA-mapped buffers
+    auto obs_dev_t = torch::dtype(to_torch_dtype(get_obs_type())).device(g_device);
+    env.obs = torch::from_blob(vec->gpu_observations, {total_agents, obs_size}, obs_dev_t);
+    env.actions = torch::from_blob(vec->gpu_actions, {total_agents, num_atns}, dev_action);
+    env.rewards = torch::from_blob(vec->gpu_rewards, {total_agents}, dev_f32);
+    env.terminals = torch::from_blob(vec->gpu_terminals, {total_agents}, dev_f32);
+#else
+    // CPU/MPS path: wrap host buffers directly (from_blob gives a live view
+    // into the C env's memory, updated in-place each step). Stays on CPU;
+    // data is moved to device inside net_callback_wrapper via copy_.
+    auto obs_cpu_t = torch::dtype(to_torch_dtype(get_obs_type()));
+    env.obs = torch::from_blob(vec->observations, {total_agents, obs_size}, obs_cpu_t);
+    env.actions = torch::from_blob(vec->actions, {total_agents, num_atns}, torch::kFloat64);
+    env.rewards = torch::from_blob(vec->rewards, {total_agents}, torch::kFloat32);
+    env.terminals = torch::from_blob(vec->terminals, {total_agents}, torch::kFloat32);
+#endif
 
     Tensor act_sizes = torch::from_blob(get_act_sizes(), {num_atns}, torch::dtype(torch::kInt32)).clone();
 
@@ -92,16 +106,16 @@ typedef struct {
 TrainGraph create_train_graph(int mb_segments, int horizon, int input_size,
         int hidden_size, int num_atns, int num_layers) {
     return {
-        .mb_obs = torch::zeros({mb_segments, horizon, input_size}, cuda_t),
-        .mb_state = torch::zeros({num_layers, mb_segments, 1, hidden_size}, cuda_t),
-        .mb_actions = torch::zeros({mb_segments, horizon, num_atns}, cuda_f64),
-        .mb_logprobs = torch::zeros({mb_segments, horizon}, cuda_t),
-        .mb_advantages = torch::zeros({mb_segments, horizon}, cuda_f32),  // always fp32 for precision
-        .mb_prio = torch::zeros({mb_segments, 1}, cuda_t),
-        .mb_values = torch::zeros({mb_segments, horizon}, cuda_t),
-        .mb_returns = torch::zeros({mb_segments, horizon}, cuda_t),
-        .mb_ratio = torch::zeros({mb_segments, horizon}, cuda_t),
-        .mb_newvalue = torch::zeros({mb_segments, horizon, 1}, cuda_t),
+        .mb_obs = torch::zeros({mb_segments, horizon, input_size}, dev_t),
+        .mb_state = torch::zeros({num_layers, mb_segments, 1, hidden_size}, dev_t),
+        .mb_actions = torch::zeros({mb_segments, horizon, num_atns}, dev_action),
+        .mb_logprobs = torch::zeros({mb_segments, horizon}, dev_t),
+        .mb_advantages = torch::zeros({mb_segments, horizon}, dev_f32),  // always fp32 for precision
+        .mb_prio = torch::zeros({mb_segments, 1}, dev_t),
+        .mb_values = torch::zeros({mb_segments, horizon}, dev_t),
+        .mb_returns = torch::zeros({mb_segments, horizon}, dev_t),
+        .mb_ratio = torch::zeros({mb_segments, horizon}, dev_t),
+        .mb_newvalue = torch::zeros({mb_segments, horizon, 1}, dev_t),
     };
 }
 
@@ -118,14 +132,14 @@ typedef struct {
 
 RolloutBuf create_rollouts(int horizon, int segments, int input_size, int num_atns) {
     return {
-        .observations = torch::zeros({horizon, segments, input_size}, cuda_t),
-        .actions = torch::zeros({horizon, segments, num_atns}, cuda_f64),
-        .values = torch::zeros({horizon, segments}, cuda_t),
-        .logprobs = torch::zeros({horizon, segments}, cuda_t),
-        .rewards = torch::zeros({horizon, segments}, cuda_t),
-        .terminals = torch::zeros({horizon, segments}, cuda_t),
-        .ratio = torch::zeros({horizon, segments}, cuda_t),
-        .importance = torch::zeros({horizon, segments}, cuda_t),
+        .observations = torch::zeros({horizon, segments, input_size}, dev_t),
+        .actions = torch::zeros({horizon, segments, num_atns}, dev_action),
+        .values = torch::zeros({horizon, segments}, dev_t),
+        .logprobs = torch::zeros({horizon, segments}, dev_t),
+        .rewards = torch::zeros({horizon, segments}, dev_t),
+        .terminals = torch::zeros({horizon, segments}, dev_t),
+        .ratio = torch::zeros({horizon, segments}, dev_t),
+        .importance = torch::zeros({horizon, segments}, dev_t),
     };
 }
 
@@ -176,6 +190,8 @@ typedef struct {
     std::string nccl_id_path;
     // Threading
     int num_threads;
+    // Device
+    std::string device;  // "cuda", "mps", or "cpu"
 } HypersT;
 
 enum ProfileIdx {
@@ -197,7 +213,11 @@ static const char* PROF_NAMES[NUM_PROF] = {
 
 #define NUM_TRAIN_EVENTS 5  // preloop start/end, loop misc start, forward start/end
 typedef struct {
+#ifdef WITH_CUDA
     cudaEvent_t events[NUM_TRAIN_EVENTS];
+#else
+    std::chrono::high_resolution_clock::time_point events[NUM_TRAIN_EVENTS];
+#endif
     float accum[NUM_PROF];
 } ProfileT;
 
@@ -206,29 +226,34 @@ typedef struct {
     Policy* policy_fp32;  // Master weights (fp32) - used for optimizer
     StaticVec* vec;
     Muon* muon;
+    torch::Device device = torch::kCPU;  // Runtime device (CUDA, MPS, or CPU)
+#ifdef WITH_CUDA
     ncclComm_t nccl_comm;  // NCCL communicator for multi-GPU
+#endif
     HypersT hypers;
     bool is_continuous;  // True if all action dimensions are continuous (size==1)
     vector<Tensor> buffer_states;  // Per-buffer states for contiguous access
     RolloutBuf rollouts;
     EnvBuf env;
     TrainGraph train_buf;
+#ifdef WITH_CUDA
     vector<vector<at::cuda::CUDAGraph>> fused_rollout_cudagraphs;  // [horizon][num_buffers]
     at::cuda::CUDAGraph train_cudagraph;
     at::cuda::MempoolId_t train_pool_id;     // Pool ID for releasing graph memory
     at::cuda::MempoolId_t rollout_pool_id;   // Pool ID for releasing graph memory
     vector<at::cuda::CUDAStream> torch_streams;  // PyTorch-managed streams for OMP
-    Tensor act_sizes;      // CUDA int32 tensor of action head sizes for MultiDiscrete
+    bool rollout_captured;
+    bool train_captured;
+    Tensor rng_offset;  // CUDA tensor so increment is graphable
+    nvmlDevice_t nvml_device;
+#endif
+    Tensor act_sizes;      // Device int32 tensor of action head sizes for MultiDiscrete
     Tensor act_sizes_cpu;  // CPU int64 tensor (pre-computed to avoid alloc during graph replay)
     Tensor losses;         // (NUM_LOSSES,) float32 accumulator for loss components
     ProfileT profile;
-    nvmlDevice_t nvml_device;
     int epoch;
     int train_warmup;
-    bool rollout_captured;
-    bool train_captured;
     uint64_t rng_seed;
-    Tensor rng_offset;  // CUDA tensor so increment is graphable
 } PuffeRL;
 
 Dict* log_environments_impl(PuffeRL& pufferl) {
@@ -243,17 +268,29 @@ Dict* log_environments_impl(PuffeRL& pufferl) {
 
 //TODO: Profile without sync
 inline void profile_begin(const char* tag, bool enable) {
+#ifdef WITH_CUDA
     if (enable) { cudaDeviceSynchronize(); nvtxRangePushA(tag); }
+#else
+    (void)tag; (void)enable;
+#endif
 }
 
 inline void profile_end(bool enable) {
+#ifdef WITH_CUDA
     if (enable) { cudaDeviceSynchronize(); nvtxRangePop(); }
+#else
+    (void)enable;
+#endif
 }
 
 // Thread initialization callback - sets CUDA stream once per thread
 extern "C" void thread_init_wrapper(void* ctx, int buf) {
+#ifdef WITH_CUDA
     PuffeRL* pufferl = (PuffeRL*)ctx;
     at::cuda::setCurrentCUDAStream(pufferl->torch_streams[buf]);
+#else
+    (void)ctx; (void)buf;  // no streams on CPU/MPS
+#endif
 }
 
 // Called by vecenv per buffer thread
@@ -263,6 +300,7 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
     HypersT& hypers = pufferl->hypers;
     profile_begin("fused_rollout", hypers.profile);
 
+#ifdef WITH_CUDA
     if (pufferl->rollout_captured) {
         pufferl->fused_rollout_cudagraphs[t][buf].replay();
         profile_end(hypers.profile);
@@ -276,42 +314,67 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
         at::cuda::setCurrentCUDAStream(cap_stream);
         pufferl->fused_rollout_cudagraphs[t][buf].capture_begin(pufferl->rollout_pool_id);
     }
+#endif
 
     RolloutBuf& rollouts = pufferl->rollouts;
     EnvBuf& env = pufferl->env;
     int block_size = pufferl->vec->total_agents / hypers.num_buffers;
     int start = buf * block_size;
 
-    // Copy env data to rollout buffer
+    // Copy env data to rollout buffer.
+    // CUDA uses non_blocking=true because env data lives in separate gpu_* buffers
+    // that c_step doesn't touch. On MPS/CPU, env buffers ARE the copy source, so
+    // we must block to prevent c_step from overwriting data before the copy completes.
+#ifdef WITH_CUDA
+    constexpr bool nb = true;
+#else
+    constexpr bool nb = false;
+#endif
     Tensor obs = env.obs.narrow(0, start, block_size);
-    rollouts.observations.select(0, t).narrow(0, start, block_size).copy_(obs, true);
+    rollouts.observations.select(0, t).narrow(0, start, block_size).copy_(obs, nb);
     Tensor rewards = env.rewards.narrow(0, start, block_size);
-    rollouts.rewards.select(0, t).narrow(0, start, block_size).copy_(rewards, true);
+    rollouts.rewards.select(0, t).narrow(0, start, block_size).copy_(rewards, nb);
     Tensor terminals = env.terminals.narrow(0, start, block_size);
-    rollouts.terminals.select(0, t).narrow(0, start, block_size).copy_(terminals, true);
+    rollouts.terminals.select(0, t).narrow(0, start, block_size).copy_(terminals, nb);
 
-    // Forward pass
+    // Forward pass (use rollout copy which is on-device for MPS/CUDA)
+    Tensor obs_dev = rollouts.observations.select(0, t).narrow(0, start, block_size);
     Tensor& state = pufferl->buffer_states[buf];
-    auto [logits, value, state_out] = pufferl->policy_bf16->forward(obs, state);
+    auto [logits, value, state_out] = pufferl->policy_bf16->forward(obs_dev, state);
     state.copy_(state_out, false);
 
     // Sample actions, logprobs, values into rollout buffer
     Tensor actions = rollouts.actions.select(0, t).narrow(0, start, block_size);
     Tensor logprobs = rollouts.logprobs.select(0, t).narrow(0, start, block_size);
     Tensor values = rollouts.values.select(0, t).narrow(0, start, block_size);
+#ifdef WITH_CUDA
     sample_actions(logits, value, actions, logprobs, values,
         pufferl->act_sizes, pufferl->act_sizes_cpu,
         pufferl->is_continuous, hypers.kernels, pufferl->rng_seed, pufferl->rng_offset);
+#else
+    sample_actions(logits, value, actions, logprobs, values,
+        pufferl->act_sizes, pufferl->act_sizes_cpu,
+        pufferl->is_continuous, false, pufferl->rng_seed, Tensor());
+#endif
 
     // Copy actions to env
+#ifdef WITH_CUDA
+    // CUDA: direct device-to-device, non-blocking (env.actions wraps gpu_actions buffer)
     env.actions.narrow(0, start, block_size).copy_(actions, true);
+#else
+    // MPS/CPU: actions may be on MPS (float32), env.actions wraps host memory (float64).
+    // Explicit .to(kCPU) + blocking copy to avoid race with c_step overwriting source.
+    env.actions.narrow(0, start, block_size).copy_(actions.to(torch::kCPU), false);
+#endif
 
+#ifdef WITH_CUDA
     if (capturing) {
         pufferl->fused_rollout_cudagraphs[t][buf].capture_end();
         cap_stream.synchronize();
         cudaDeviceSynchronize();
         at::cuda::setCurrentCUDAStream(saved_stream);
     }
+#endif
     profile_end(hypers.profile);
 }
 
@@ -328,18 +391,23 @@ void rollouts_impl(PuffeRL& pufferl) {
         int h = i / num_buffers;
 
         net_callback_wrapper(&pufferl, buf, h);
+#ifdef WITH_CUDA
         cudaDeviceSynchronize();
+#endif
     }
 }
 
 void train_impl(PuffeRL& pufferl) {
-    // Update to HypersT& p
     HypersT& hypers = pufferl.hypers;
 
     // Buffers are stored as {horizon, segments, ...} for contiguous rollout writes
     // Transpose to {segments, horizon, ...} for train logic
-    // Need .contiguous() because puff_advantage_cuda uses raw data pointers
+    // Need .contiguous() because puff_advantage uses raw data pointers
+#ifdef WITH_CUDA
     cudaEventRecord(pufferl.profile.events[0]);  // pre-loop start
+#else
+    pufferl.profile.events[0] = std::chrono::high_resolution_clock::now();
+#endif
     RolloutBuf rollouts;
     rollouts.observations = pufferl.rollouts.observations.permute({1, 0, 2}).contiguous();
     rollouts.actions = pufferl.rollouts.actions.transpose(0, 1).contiguous();
@@ -351,8 +419,7 @@ void train_impl(PuffeRL& pufferl) {
     Tensor old_values = rollouts.values.clone();
 
     rollouts.rewards.clamp_(-1.0, 1.0);  // Clamp rewards here instead of in eval to save a kernel call per step
-                                         
-    // Inline any of these only used once
+
     int minibatch_size = hypers.minibatch_size;
     int batch_size = hypers.total_agents * hypers.horizon;
     int minibatch_segments = minibatch_size / hypers.horizon;
@@ -362,7 +429,6 @@ void train_impl(PuffeRL& pufferl) {
     int current_epoch = pufferl.epoch;
 
     Policy* policy_bf16 = pufferl.policy_bf16;
-    // Policy* policy_fp32 = pufferl.policy_fp32;
     Muon* muon = pufferl.muon;
 
     int total_epochs = hypers.total_timesteps / batch_size;
@@ -383,26 +449,57 @@ void train_impl(PuffeRL& pufferl) {
     int total_minibatches = hypers.replay_ratio * batch_size / hypers.minibatch_size;
 
     TrainGraph& graph = pufferl.train_buf;
+#ifdef WITH_CUDA
     cudaEventRecord(pufferl.profile.events[1]);  // pre-loop end
+#else
+    pufferl.profile.events[1] = std::chrono::high_resolution_clock::now();
+#endif
 
     for (int mb = 0; mb < total_minibatches; ++mb) {
+#ifdef WITH_CUDA
         cudaEventRecord(pufferl.profile.events[2]);  // start of misc (overwritten each iter)
+#else
+        pufferl.profile.events[2] = std::chrono::high_resolution_clock::now();
+#endif
         advantages.fill_(0.0);
 
         profile_begin("compute_advantage", hypers.profile);
+#ifdef WITH_CUDA
         puff_advantage_cuda(rollouts.values, rollouts.rewards, rollouts.terminals,
             rollouts.ratio, advantages, hypers.gamma, hypers.gae_lambda,
             hypers.vtrace_rho_clip, hypers.vtrace_c_clip);
+#else
+        // CPU advantage requires CPU tensors — move from MPS/device if needed
+        {
+            auto cpu_vals = rollouts.values.to(torch::kCPU).to(torch::kFloat32).contiguous();
+            auto cpu_rew  = rollouts.rewards.to(torch::kCPU).to(torch::kFloat32).contiguous();
+            auto cpu_term = rollouts.terminals.to(torch::kCPU).to(torch::kFloat32).contiguous();
+            auto cpu_ratio = rollouts.ratio.to(torch::kCPU).to(torch::kFloat32).contiguous();
+            auto cpu_adv  = advantages.to(torch::kCPU).contiguous();
+            puff_advantage_cpu(cpu_vals, cpu_rew, cpu_term,
+                cpu_ratio, cpu_adv, hypers.gamma, hypers.gae_lambda,
+                hypers.vtrace_rho_clip, hypers.vtrace_c_clip);
+            advantages.copy_(cpu_adv.to(advantages.device()));
+        }
+#endif
         profile_end(hypers.profile);
 
         profile_begin("compute_prio", hypers.profile);
+#ifdef WITH_CUDA
         auto prio_fn = hypers.kernels ? prio_replay_cuda : prio_replay_cpp;
+#else
+        auto prio_fn = prio_replay_cpp;
+#endif
         auto [idx, mb_prio] = prio_fn(advantages, prio_alpha, minibatch_segments,
             hypers.total_agents, anneal_beta);
         profile_end(hypers.profile);
 
         profile_begin("train_select_and_copy", hypers.profile);
+#ifdef WITH_CUDA
         auto copy_fn = hypers.kernels ? train_select_and_copy_cuda : train_select_and_copy_cpp;
+#else
+        auto copy_fn = train_select_and_copy_cpp;
+#endif
         copy_fn(rollouts.observations, rollouts.actions, rollouts.logprobs,
             old_values, advantages, idx, mb_prio,
             graph.mb_obs, graph.mb_state, graph.mb_actions,
@@ -410,6 +507,7 @@ void train_impl(PuffeRL& pufferl) {
             graph.mb_values, graph.mb_returns);
         profile_end(hypers.profile);
 
+#ifdef WITH_CUDA
         cudaEventRecord(pufferl.profile.events[3]);  // end misc / start forward
         if (pufferl.train_captured) {
             pufferl.train_cudagraph.replay();
@@ -421,11 +519,15 @@ void train_impl(PuffeRL& pufferl) {
                 at::cuda::setCurrentCUDAStream(cap_stream);
                 pufferl.train_cudagraph.capture_begin(pufferl.train_pool_id);
             }
-
+#else
+        pufferl.profile.events[3] = std::chrono::high_resolution_clock::now();
+        {
+#endif
             auto [logits, newvalue] = pufferl.policy_bf16->forward_train(graph.mb_obs, graph.mb_state);
             Tensor newvalue_out = graph.mb_newvalue.view({graph.mb_ratio.size(0), graph.mb_ratio.size(1)});
 
             // TODO: Try using global (epoch-level) adv mean/std instead of per-minibatch
+#ifdef WITH_CUDA
             Tensor loss = (hypers.kernels
                 ? PPOLoss::apply(logits.mean, logits.logstd, newvalue,
                     graph.mb_actions, graph.mb_logprobs, graph.mb_advantages, graph.mb_prio,
@@ -438,6 +540,13 @@ void train_impl(PuffeRL& pufferl) {
                     pufferl.act_sizes, pufferl.losses,
                     hypers.clip_coef, hypers.vf_clip_coef, hypers.vf_coef, hypers.ent_coef)
             )[0];
+#else
+            Tensor loss = fused_ppo_loss_cpp(logits.mean, logits.logstd, newvalue,
+                    graph.mb_actions, graph.mb_logprobs, graph.mb_advantages, graph.mb_prio,
+                    graph.mb_values, graph.mb_returns, graph.mb_ratio, newvalue_out,
+                    pufferl.act_sizes, pufferl.losses,
+                    hypers.clip_coef, hypers.vf_clip_coef, hypers.vf_coef, hypers.ent_coef)[0];
+#endif
 
             loss.backward();
 
@@ -452,6 +561,7 @@ void train_impl(PuffeRL& pufferl) {
                 sync_policy_weights(pufferl.policy_bf16, pufferl.policy_fp32);
             }
 
+#ifdef WITH_CUDA
             if (capturing) {
                 pufferl.train_cudagraph.capture_end();
                 cap_stream.synchronize();
@@ -459,6 +569,7 @@ void train_impl(PuffeRL& pufferl) {
                 at::cuda::setCurrentCUDAStream(saved_stream);
                 pufferl.train_captured = true;
             }
+#endif
             pufferl.train_warmup++;
         }
 
@@ -466,14 +577,21 @@ void train_impl(PuffeRL& pufferl) {
         rollouts.ratio.index_copy_(0, idx, new_ratio);
         Tensor new_value = graph.mb_newvalue.detach().squeeze(-1).to(PRECISION_DTYPE);
         rollouts.values.index_copy_(0, idx, new_value);
+#ifdef WITH_CUDA
         cudaEventRecord(pufferl.profile.events[4]);  // end forward
+#else
+        pufferl.profile.events[4] = std::chrono::high_resolution_clock::now();
+#endif
     }
     pufferl.epoch += 1;
 
+#ifdef WITH_CUDA
     cudaStreamSynchronize(at::cuda::getCurrentCUDAStream());
+#endif
 
     if (total_minibatches > 0) {
         float ms;
+#ifdef WITH_CUDA
         // Pre-loop setup (transpose, advantage, allocs)
         cudaEventElapsedTime(&ms, pufferl.profile.events[0], pufferl.profile.events[1]);
         pufferl.profile.accum[PROF_TRAIN_MISC] += ms;
@@ -483,14 +601,46 @@ void train_impl(PuffeRL& pufferl) {
         // In-loop forward (last iteration, representative) scaled by count
         cudaEventElapsedTime(&ms, pufferl.profile.events[3], pufferl.profile.events[4]);
         pufferl.profile.accum[PROF_TRAIN_FORWARD] += ms * total_minibatches;
+#else
+        // CPU/MPS timing via chrono (milliseconds)
+        auto dur01 = std::chrono::duration<float, std::milli>(pufferl.profile.events[1] - pufferl.profile.events[0]);
+        pufferl.profile.accum[PROF_TRAIN_MISC] += dur01.count();
+        auto dur23 = std::chrono::duration<float, std::milli>(pufferl.profile.events[3] - pufferl.profile.events[2]);
+        pufferl.profile.accum[PROF_TRAIN_MISC] += dur23.count() * total_minibatches;
+        auto dur34 = std::chrono::duration<float, std::milli>(pufferl.profile.events[4] - pufferl.profile.events[3]);
+        pufferl.profile.accum[PROF_TRAIN_FORWARD] += dur34.count() * total_minibatches;
+#endif
     }
 }
 
 std::unique_ptr<pufferlib::PuffeRL> create_pufferl_impl(HypersT& hypers, const std::string& env_name, Dict* vec_kwargs, Dict* env_kwargs) {
     auto pufferl = std::make_unique<pufferlib::PuffeRL>();
     pufferl->hypers = hypers;
-    pufferl->nccl_comm = nullptr;
 
+    // Determine runtime device from config
+    std::string device_str = hypers.device;
+#ifdef WITH_CUDA
+    if (device_str == "cuda" || device_str.substr(0, 5) == "cuda:") {
+        g_device = torch::kCUDA;
+        pufferl->device = torch::kCUDA;
+    } else {
+        g_device = torch::kCPU;
+        pufferl->device = torch::kCPU;
+    }
+    pufferl->nccl_comm = nullptr;
+#else
+    if (device_str == "mps" && at::hasMPS()) {
+        g_device = torch::Device(torch::kMPS);
+        pufferl->device = torch::Device(torch::kMPS);
+    } else {
+        g_device = torch::kCPU;
+        pufferl->device = torch::kCPU;
+    }
+#endif
+    printf("Using %s device\n", pufferl->device.str().c_str());
+    init_device_tensor_options();
+
+#ifdef WITH_CUDA
     // Multi-GPU: initialize NCCL (device already set by Python)
     if (hypers.world_size > 1) {
         ncclUniqueId nccl_id;
@@ -515,15 +665,18 @@ std::unique_ptr<pufferlib::PuffeRL> create_pufferl_impl(HypersT& hypers, const s
         ncclCommInitRank(&pufferl->nccl_comm, hypers.world_size, nccl_id, hypers.rank);
         printf("Rank %d/%d: NCCL initialized\n", hypers.rank, hypers.world_size);
     }
+#endif
 
     // Seeding (vary by rank for different random exploration)
-    // CC: Base seed should come from train config
     int seed = 42 + hypers.rank;
     torch::manual_seed(seed);
+#ifdef WITH_CUDA
     torch::cuda::manual_seed(seed);
-    pufferl->rng_seed = seed;
     pufferl->rng_offset = torch::zeros({1}, torch::dtype(torch::kInt64).device(torch::kCUDA));
+#endif
+    pufferl->rng_seed = seed;
 
+#ifdef WITH_CUDA
     // Enable cuDNN benchmarking
     torch::globalContext().setBenchmarkCuDNN(true);
     torch::globalContext().setDeterministicCuDNN(false);
@@ -538,6 +691,7 @@ std::unique_ptr<pufferlib::PuffeRL> create_pufferl_impl(HypersT& hypers, const s
 
     // BF16 reduction (if using bfloat16)
     torch::globalContext().setAllowBF16ReductionCuBLAS(true);
+#endif
 
     // Load environment first to get input_size and action info from env
     // act_sizes: 1D tensor of action space sizes per head
@@ -549,16 +703,20 @@ std::unique_ptr<pufferlib::PuffeRL> create_pufferl_impl(HypersT& hypers, const s
     int act_n = act_sizes.sum().item<int>();
 
     pufferl->vec = vec;
-    pufferl->act_sizes = act_sizes.to(torch::kCUDA);
+    pufferl->act_sizes = act_sizes.to(g_device);
     pufferl->act_sizes_cpu = act_sizes.to(torch::kInt64).contiguous();
-    pufferl->losses = torch::zeros({NUM_LOSSES}, cuda_f32);
+    pufferl->losses = torch::zeros({NUM_LOSSES}, dev_f32);
+#ifdef WITH_CUDA
     for (int i = 0; i < NUM_TRAIN_EVENTS; i++) {
         cudaEventCreate(&pufferl->profile.events[i]);
     }
+#endif
     memset(pufferl->profile.accum, 0, sizeof(pufferl->profile.accum));
 
+#ifdef WITH_CUDA
     nvmlInit();
     nvmlDeviceGetHandleByIndex(hypers.rank, &pufferl->nvml_device);
+#endif
 
     // Determine action space type
     int* act_sizes_ptr = get_act_sizes();
@@ -594,7 +752,7 @@ std::unique_ptr<pufferlib::PuffeRL> create_pufferl_impl(HypersT& hypers, const s
     // Create fp32 master policy (for optimizer - precise gradient accumulation)
     Policy* policy_fp32 = create_policy(env_name, input_size, hidden_size,
         decoder_output_size, num_layers, act_n, is_continuous, kernels);
-    policy_fp32->to(torch::kCUDA);
+    policy_fp32->to(g_device);
     policy_fp32->to(torch::kFloat32);
     pufferl->policy_fp32 = policy_fp32;
 
@@ -602,7 +760,7 @@ std::unique_ptr<pufferlib::PuffeRL> create_pufferl_impl(HypersT& hypers, const s
         // create bf16 working policy (for fwd/bwd)
         Policy* policy_bf16 = create_policy(env_name, input_size, hidden_size,
             decoder_output_size, num_layers, act_n, is_continuous, kernels);
-        policy_bf16->to(torch::kCUDA);
+        policy_bf16->to(g_device);
         policy_bf16->to(torch::kBFloat16);
         pufferl->policy_bf16 = policy_bf16;
         sync_policy_weights(policy_bf16, policy_fp32); // initial sync
@@ -616,18 +774,15 @@ std::unique_ptr<pufferlib::PuffeRL> create_pufferl_impl(HypersT& hypers, const s
     float eps = hypers.eps;
     pufferl->muon = new Muon(policy_fp32->parameters(), lr, beta1, eps, 0.0);
     pufferl->muon->init_contiguous_weights();
+#ifdef WITH_CUDA
     pufferl->muon->nccl_comm = pufferl->nccl_comm;
+#endif
     pufferl->muon->world_size = hypers.world_size;
-    printf("DEBUG: Contiguous weight buffer: %ld elements\n", pufferl->muon->weight_buffer.numel());
-
     // Allocate buffers
     int horizon = hypers.horizon;
     int total_agents = vec->total_agents;
     int batch = total_agents / hypers.num_buffers;
     int num_buffers = hypers.num_buffers;
-
-    printf("DEBUG: num_envs=%d, total_agents=%d, batch=%d, num_buffers=%d\n",
-        vec->size, total_agents, batch, num_buffers);
 
     int minibatch_segments = hypers.minibatch_size / horizon;
 
@@ -638,9 +793,10 @@ std::unique_ptr<pufferlib::PuffeRL> create_pufferl_impl(HypersT& hypers, const s
     // Per-buffer states: each is {num_layers, block_size, hidden} for contiguous access
     pufferl->buffer_states.resize(num_buffers);
     for (int i = 0; i < num_buffers; i++) {
-        pufferl->buffer_states[i] = pufferl->policy_bf16->initial_state(batch, torch::kCUDA);
+        pufferl->buffer_states[i] = pufferl->policy_bf16->initial_state(batch, g_device);
     }
 
+#ifdef WITH_CUDA
     if (hypers.cudagraphs >= 0) {
         pufferl->train_cudagraph = at::cuda::CUDAGraph();
         pufferl->train_pool_id = at::cuda::graph_pool_handle();
@@ -711,6 +867,7 @@ std::unique_ptr<pufferlib::PuffeRL> create_pufferl_impl(HypersT& hypers, const s
         pufferl->torch_streams.push_back(at::cuda::getStreamFromPool(false));
         vec->streams[i] = pufferl->torch_streams[i].stream();
     }
+#endif
 
     create_static_threads(vec, hypers.num_threads, horizon, pufferl.get(),
         net_callback_wrapper, thread_init_wrapper);
@@ -720,6 +877,7 @@ std::unique_ptr<pufferlib::PuffeRL> create_pufferl_impl(HypersT& hypers, const s
 }
 
 void close_impl(PuffeRL& pufferl) {
+#ifdef WITH_CUDA
     cudaDeviceSynchronize();
     nvmlShutdown();
     for (int i = 0; i < NUM_TRAIN_EVENTS; i++) {
@@ -729,6 +887,7 @@ void close_impl(PuffeRL& pufferl) {
     // Reset CUDA graphs first (they hold references to tensor memory)
     pufferl.train_cudagraph.reset();
     pufferl.fused_rollout_cudagraphs.clear();
+#endif
 
     delete pufferl.muon;
     pufferl.muon = nullptr;
@@ -740,10 +899,10 @@ void close_impl(PuffeRL& pufferl) {
     pufferl.policy_bf16 = nullptr;
     pufferl.policy_fp32 = nullptr;
 
-    // Clear buffer states (releases CUDA tensors)
+    // Clear buffer states (releases device tensors)
     pufferl.buffer_states.clear();
 
-    // Clear rollout buffers (releases CUDA tensors)
+    // Clear rollout buffers
     pufferl.rollouts.observations = Tensor();
     pufferl.rollouts.actions = Tensor();
     pufferl.rollouts.values = Tensor();
@@ -753,7 +912,7 @@ void close_impl(PuffeRL& pufferl) {
     pufferl.rollouts.ratio = Tensor();
     pufferl.rollouts.importance = Tensor();
 
-    // Clear train buffers (releases CUDA tensors)
+    // Clear train buffers
     pufferl.train_buf.mb_obs = Tensor();
     pufferl.train_buf.mb_state = Tensor();
     pufferl.train_buf.mb_actions = Tensor();
@@ -769,7 +928,9 @@ void close_impl(PuffeRL& pufferl) {
     pufferl.act_sizes = Tensor();
     pufferl.act_sizes_cpu = Tensor();
     pufferl.losses = Tensor();
+#ifdef WITH_CUDA
     pufferl.rng_offset = Tensor();
+#endif
 
     // Clear env tensors (from_blob wrappers - don't own memory but hold refs)
     pufferl.env.obs = Tensor();
@@ -777,35 +938,46 @@ void close_impl(PuffeRL& pufferl) {
     pufferl.env.rewards = Tensor();
     pufferl.env.terminals = Tensor();
 
+#ifdef WITH_CUDA
     // Clear torch streams
     pufferl.torch_streams.clear();
+#endif
 
-    // Close environment vectorization (frees env GPU buffers)
+    // Close environment vectorization (frees env buffers)
     static_vec_close(pufferl.vec);
     pufferl.vec = nullptr;
 
+#ifdef WITH_CUDA
     // Cleanup NCCL
     if (pufferl.nccl_comm != nullptr) {
         ncclCommDestroy(pufferl.nccl_comm);
         pufferl.nccl_comm = nullptr;
     }
 
-    // Force CUDA to release cached memory first
+    // Force CUDA to release cached memory
     c10::cuda::CUDACachingAllocator::emptyCache();
     cudaDeviceSynchronize();
-
+#endif
 }
 
 void profiler_start() {
+#ifdef WITH_CUDA
     cudaDeviceSynchronize();
     printf("cudaProfilerStart()\n");
     cudaProfilerStart();
+#else
+    printf("profiler_start() is a no-op without CUDA\n");
+#endif
 }
 
 void profiler_stop() {
+#ifdef WITH_CUDA
     cudaDeviceSynchronize();
     cudaProfilerStop();
     printf("cudaProfilerStop()\n");
+#else
+    printf("profiler_stop() is a no-op without CUDA\n");
+#endif
 }
 
 } // namespace pufferlib

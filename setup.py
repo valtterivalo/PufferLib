@@ -85,13 +85,20 @@ extra_compile_args = [
 ]
 extra_link_args = [
     '-fwrapv',
-    '-fopenmp',
 ]
 cxx_args = [
     '-fdiagnostics-color=always',
     '-std=c++17',
-    '-fopenmp',
 ]
+
+# OpenMP: use -Xpreprocessor on macOS (Apple Clang needs it)
+if platform.system() == 'Darwin':
+    extra_link_args += ['-lomp']
+    cxx_args += ['-Xpreprocessor', '-fopenmp']
+    extra_compile_args += ['-Xpreprocessor', '-fopenmp']
+else:
+    extra_link_args += ['-fopenmp']
+    cxx_args += ['-fopenmp']
 nvcc_args = [
     '-Xcompiler=-D_GLIBCXX_USE_CXX11_ABI=1',
     '-std=c++17',
@@ -150,10 +157,13 @@ elif system == 'Darwin':
         '-Wno-error=incompatible-function-pointer-types',
         '-Wno-error=implicit-function-declaration',
     ]
+    import torch as _torch
+    _torch_lib = os.path.join(_torch.__path__[0], 'lib')
     extra_link_args += [
         '-framework', 'Cocoa',
         '-framework', 'OpenGL',
         '-framework', 'IOKit',
+        f'-Wl,-rpath,{_torch_lib}',
     ]
 else:
     raise ValueError(f'Unsupported system: {system}')
@@ -204,6 +214,7 @@ extension_kwargs = dict(
 
 # Find C extensions
 c_extensions = []
+c_extension_paths = []
 if not NO_OCEAN:
     c_extension_paths = glob.glob('pufferlib/ocean/**/binding.c', recursive=True)
     c_extensions = [
@@ -331,12 +342,31 @@ def create_static_env_build_class(env_name):
             clang_cmd = [
                 'clang', '-c', '-O2', '-DNDEBUG',
                 '-I.', '-Ipufferlib/extensions', f'-Ipufferlib/ocean/{env_name}',
-                f'-I./{RAYLIB_NAME}/include', '-I/usr/local/cuda/include',
+                f'-I./{RAYLIB_NAME}/include',
                 '-DPLATFORM_DESKTOP',
                 '-fno-semantic-interposition', '-fvisibility=hidden',
-                '-fPIC', '-fopenmp',
+                '-fPIC',
                 env_binding_src, '-o', static_obj
             ]
+            if BUID_CUDA_EXT:
+                clang_cmd.insert(-2, '-I/usr/local/cuda/include')
+                clang_cmd.insert(-2, '-DWITH_CUDA')
+                clang_cmd.insert(-2, '-fopenmp')
+            elif platform.system() == 'Darwin':
+                # macOS needs homebrew libomp for OpenMP support
+                import subprocess as _sp
+                try:
+                    omp_prefix = _sp.check_output(['brew', '--prefix', 'libomp'], stderr=_sp.DEVNULL).decode().strip()
+                except (FileNotFoundError, _sp.CalledProcessError):
+                    raise RuntimeError(
+                        "libomp not found. Install with: brew install libomp\n"
+                        "If you don't have Homebrew: https://brew.sh"
+                    )
+                clang_cmd.insert(-2, f'-I{omp_prefix}/include')
+                clang_cmd.insert(-2, '-Xpreprocessor')
+                clang_cmd.insert(-2, '-fopenmp')
+            else:
+                clang_cmd.insert(-2, '-fopenmp')
             print(f'Building static env: {" ".join(clang_cmd)}')
             subprocess.check_call(clang_cmd)
 
@@ -388,8 +418,19 @@ if not NO_TRAIN:
         extension = CUDAExtension
         torch_sources.append("pufferlib/extensions/cuda/squared_torch.cu")
         torch_sources.append("pufferlib/extensions/cuda/modules.cu")
+        cxx_args.append('-DWITH_CUDA')
     else:
         extension = CppExtension
+
+    # Libraries: CUDA-only libs are conditional
+    torch_libs = []
+    torch_lib_dirs = []
+    if BUID_CUDA_EXT:
+        torch_libs += [nvtx_lib, 'nccl', 'nvidia-ml']
+        torch_lib_dirs.append(nvtx_lib_dir)
+    # OpenMP runtime library
+    if platform.system() != 'Darwin':
+        torch_libs.append('omp5')
 
     import torch
     # Note: Use build_<envname> (e.g. build_breakout, build_drive) to build with static env linking
@@ -405,8 +446,8 @@ if not NO_TRAIN:
             },
             extra_link_args=extra_link_args,
             extra_objects=[RAYLIB_A],
-            libraries=[nvtx_lib, 'omp5', 'nccl', 'nvidia-ml'],
-            library_dirs=[nvtx_lib_dir],
+            libraries=torch_libs,
+            library_dirs=torch_lib_dirs,
         ),
     ]
 
@@ -436,7 +477,6 @@ if not NO_TRAIN:
     install_requires += [
         'torch>=2.9',
         'psutil',
-        'nvidia-ml-py',
         'rich',
         'rich_argparse',
         'imageio',
@@ -446,6 +486,9 @@ if not NO_TRAIN:
         'neptune',
         'wandb',
     ]
+    # nvidia-ml-py only needed on CUDA platforms
+    if BUID_CUDA_EXT:
+        install_requires.append('nvidia-ml-py')
 
 setup(
     version="3.0.0",

@@ -61,6 +61,7 @@ void puff_advantage_cpu(Tensor values, Tensor rewards,
 }
 
 // Forward declare CUDA implementation
+#ifdef WITH_CUDA
 void puff_advantage_cuda(
     Tensor values,
     Tensor rewards,
@@ -72,4 +73,5 @@ void puff_advantage_cuda(
     double rho_clip,
     double c_clip
 );
+#endif
 

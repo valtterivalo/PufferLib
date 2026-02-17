@@ -67,8 +67,12 @@ static inline void dict_set(Dict* dict, const char* key, double value) {
     dict->size++;
 }
 
-// Forward declare CUDA stream type
+// Forward declare CUDA stream type (or void* stub on non-CUDA platforms)
+#ifdef WITH_CUDA
 typedef struct CUstream_st* cudaStream_t;
+#else
+typedef void* cudaStream_t;
+#endif
 
 // Threading state
 typedef struct StaticThreading StaticThreading;

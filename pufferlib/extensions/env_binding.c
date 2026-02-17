@@ -10,6 +10,7 @@
 #include "env_binding.h"
 #include "binding.h"
 
+#ifdef WITH_CUDA
 // Forward declare CUDA types and functions to avoid conflicts with raylib's float3
 typedef int cudaError_t;
 typedef int cudaMemcpyKind;
@@ -32,6 +33,7 @@ extern cudaError_t cudaStreamSynchronize(cudaStream_t);
 extern cudaError_t cudaStreamCreateWithFlags(cudaStream_t*, unsigned int);
 extern cudaError_t cudaStreamQuery(cudaStream_t);
 extern const char* cudaGetErrorString(cudaError_t);
+#endif
 
 #define OMP_WAITING 5
 #define OMP_RUNNING 6
@@ -91,15 +93,12 @@ static void* static_omp_threadmanager(void* arg) {
 
     Env* envs = (Env*)vec->envs;
 
-    printf("Num workers: %d\n", num_workers);
     while (true) {
         while (atomic_load(&buffer_states[buf]) != OMP_RUNNING) {
             if (atomic_load(&threading->shutdown)) {
                 return NULL;
             }
         }
-        cudaStream_t stream = vec->streams[buf];
-
         float* my_accum = &threading->accum[buf * NUM_EVAL_PROF];
         struct timespec t0, t1;
 
@@ -107,12 +106,18 @@ static void* static_omp_threadmanager(void* arg) {
             clock_gettime(CLOCK_MONOTONIC, &t0);
             net_callback(ctx, buf, t);
 
-            cudaMemcpyAsync(
-                &vec->actions[agent_start * NUM_ATNS],
-                &vec->gpu_actions[agent_start * NUM_ATNS],
-                agents_per_buffer * NUM_ATNS * sizeof(double),
-                cudaMemcpyDeviceToHost, stream);
-            cudaStreamSynchronize(stream);
+#ifdef WITH_CUDA
+            {
+                cudaStream_t stream = vec->streams[buf];
+                cudaMemcpyAsync(
+                    &vec->actions[agent_start * NUM_ATNS],
+                    &vec->gpu_actions[agent_start * NUM_ATNS],
+                    agents_per_buffer * NUM_ATNS * sizeof(double),
+                    cudaMemcpyDeviceToHost, stream);
+                cudaStreamSynchronize(stream);
+            }
+#endif
+            // Without CUDA: actions are already in host memory (written by pufferlib.cpp)
             clock_gettime(CLOCK_MONOTONIC, &t1);
             my_accum[EVAL_GPU] += (t1.tv_sec - t0.tv_sec) * 1000.0f + (t1.tv_nsec - t0.tv_nsec) / 1e6f;
 
@@ -124,23 +129,34 @@ static void* static_omp_threadmanager(void* arg) {
             clock_gettime(CLOCK_MONOTONIC, &t1);
             my_accum[EVAL_ENV_STEP] += (t1.tv_sec - t0.tv_sec) * 1000.0f + (t1.tv_nsec - t0.tv_nsec) / 1e6f;
 
-            cudaMemcpyAsync(
-                (char*)vec->gpu_observations + agent_start * OBS_SIZE * obs_element_size(),
-                (char*)vec->observations + agent_start * OBS_SIZE * obs_element_size(),
-                agents_per_buffer * OBS_SIZE * obs_element_size(),
-                cudaMemcpyHostToDevice, stream);
-            cudaMemcpyAsync(
-                &vec->gpu_rewards[agent_start],
-                &vec->rewards[agent_start],
-                agents_per_buffer * sizeof(float),
-                cudaMemcpyHostToDevice, stream);
-            cudaMemcpyAsync(
-                &vec->gpu_terminals[agent_start],
-                &vec->terminals[agent_start],
-                agents_per_buffer * sizeof(float),
-                cudaMemcpyHostToDevice, stream);
+#ifdef WITH_CUDA
+            {
+                cudaStream_t stream = vec->streams[buf];
+                cudaMemcpyAsync(
+                    (char*)vec->gpu_observations + agent_start * OBS_SIZE * obs_element_size(),
+                    (char*)vec->observations + agent_start * OBS_SIZE * obs_element_size(),
+                    agents_per_buffer * OBS_SIZE * obs_element_size(),
+                    cudaMemcpyHostToDevice, stream);
+                cudaMemcpyAsync(
+                    &vec->gpu_rewards[agent_start],
+                    &vec->rewards[agent_start],
+                    agents_per_buffer * sizeof(float),
+                    cudaMemcpyHostToDevice, stream);
+                cudaMemcpyAsync(
+                    &vec->gpu_terminals[agent_start],
+                    &vec->terminals[agent_start],
+                    agents_per_buffer * sizeof(float),
+                    cudaMemcpyHostToDevice, stream);
+            }
         }
-        cudaStreamSynchronize(stream);
+        {
+            cudaStream_t stream = vec->streams[buf];
+            cudaStreamSynchronize(stream);
+        }
+#else
+            // Without CUDA: obs/rewards/terminals are already in host memory
+        }
+#endif
         atomic_store(&buffer_states[buf], OMP_WAITING);
     }
 }
@@ -227,6 +243,7 @@ StaticVec* create_static_vec(int total_agents, int num_buffers, Dict* vec_kwargs
     vec->size = num_envs;
 
     size_t obs_elem_size = obs_element_size();
+#ifdef WITH_CUDA
     cudaHostAlloc((void**)&vec->observations, total_agents * OBS_SIZE * obs_elem_size, cudaHostAllocPortable);
     cudaHostAlloc((void**)&vec->actions, total_agents * NUM_ATNS * sizeof(double), cudaHostAllocPortable);
     cudaHostAlloc((void**)&vec->rewards, total_agents * sizeof(float), cudaHostAllocPortable);
@@ -242,8 +259,19 @@ StaticVec* create_static_vec(int total_agents, int num_buffers, Dict* vec_kwargs
     cudaMemset(vec->gpu_rewards, 0, total_agents * sizeof(float));
     cudaMemset(vec->gpu_terminals, 0, total_agents * sizeof(float));
 
-    // Streams allocated here, created in create_static_threads
     vec->streams = (cudaStream_t*)calloc(num_buffers, sizeof(cudaStream_t));
+#else
+    // CPU-only: plain malloc, no GPU buffers needed
+    vec->observations = calloc(total_agents * OBS_SIZE, obs_elem_size);
+    vec->actions = (double*)calloc(total_agents * NUM_ATNS, sizeof(double));
+    vec->rewards = (float*)calloc(total_agents, sizeof(float));
+    vec->terminals = (float*)calloc(total_agents, sizeof(float));
+    vec->gpu_observations = NULL;
+    vec->gpu_actions = NULL;
+    vec->gpu_rewards = NULL;
+    vec->gpu_terminals = NULL;
+    vec->streams = NULL;
+#endif
 
     // Assign pointers to envs based on buffer layout
     Env* envs = (Env*)vec->envs;
@@ -272,6 +300,7 @@ void static_vec_reset(StaticVec* vec) {
     for (int i = 0; i < vec->size; i++) {
         c_reset(&envs[i]);
     }
+#ifdef WITH_CUDA
     cudaMemcpy(vec->gpu_observations, vec->observations,
         vec->total_agents * OBS_SIZE * obs_element_size(), cudaMemcpyHostToDevice);
     cudaMemcpy(vec->gpu_rewards, vec->rewards,
@@ -279,6 +308,7 @@ void static_vec_reset(StaticVec* vec) {
     cudaMemcpy(vec->gpu_terminals, vec->terminals,
         vec->total_agents * sizeof(float), cudaMemcpyHostToDevice);
     cudaDeviceSynchronize();
+#endif
 }
 
 void create_static_threads(StaticVec* vec, int num_threads, int horizon,
@@ -327,11 +357,8 @@ void static_vec_close(StaticVec* vec) {
     free(vec->buffer_env_starts);
     free(vec->buffer_env_counts);
 
+#ifdef WITH_CUDA
     cudaDeviceSynchronize();
-    size_t obs_bytes = vec->total_agents * OBS_SIZE * obs_element_size();
-    size_t act_bytes = vec->total_agents * NUM_ATNS * sizeof(double);
-    size_t rew_bytes = vec->total_agents * sizeof(float);
-    size_t term_bytes = vec->total_agents * sizeof(float);
     cudaFree(vec->gpu_observations);
     cudaFree(vec->gpu_actions);
     cudaFree(vec->gpu_rewards);
@@ -340,8 +367,13 @@ void static_vec_close(StaticVec* vec) {
     cudaFreeHost(vec->actions);
     cudaFreeHost(vec->rewards);
     cudaFreeHost(vec->terminals);
-
     free(vec->streams);
+#else
+    free(vec->observations);
+    free(vec->actions);
+    free(vec->rewards);
+    free(vec->terminals);
+#endif
     free(vec);
 }
 

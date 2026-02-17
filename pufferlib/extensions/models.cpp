@@ -16,12 +16,34 @@ constexpr bool USE_BF16 = true;
 constexpr torch::ScalarType PRECISION_DTYPE = torch::kBFloat16;
 #endif
 
-// Common tensor options
-auto cuda_f32 = torch::dtype(torch::kFloat32).device(torch::kCUDA);
-auto cuda_f64 = torch::dtype(torch::kFloat64).device(torch::kCUDA);
-auto cuda_i32 = torch::dtype(torch::kInt32).device(torch::kCUDA);
-auto cuda_i64 = torch::dtype(torch::kInt64).device(torch::kCUDA);
-auto cuda_t = torch::dtype(PRECISION_DTYPE).device(torch::kCUDA);
+// Runtime device — set by create_pufferl_impl before any tensor allocation.
+// Defaults to CUDA when WITH_CUDA is defined, CPU otherwise.
+#ifdef WITH_CUDA
+torch::Device g_device = torch::kCUDA;
+#else
+torch::Device g_device = torch::kCPU;  // overridden to MPS at init if available
+#endif
+
+// Common tensor options (use g_device so they work on CUDA, MPS, or CPU)
+auto dev_f32 = torch::dtype(torch::kFloat32).device(g_device);
+// Action dtype: float64 on CUDA/CPU, float32 on MPS (MPS lacks float64 support).
+// Used for action tensors only — discrete indices, so no precision loss from float32.
+auto dev_action = torch::dtype(torch::kFloat64).device(g_device);
+auto dev_i32 = torch::dtype(torch::kInt32).device(g_device);
+auto dev_i64 = torch::dtype(torch::kInt64).device(g_device);
+auto dev_t   = torch::dtype(PRECISION_DTYPE).device(g_device);
+
+// Reinitialize tensor options after g_device is set at runtime.
+// Must be called before any tensor allocation.
+void init_device_tensor_options() {
+    dev_f32 = torch::dtype(torch::kFloat32).device(g_device);
+    dev_action = (g_device.type() == torch::kMPS)
+        ? torch::dtype(torch::kFloat32).device(g_device)
+        : torch::dtype(torch::kFloat64).device(g_device);
+    dev_i32 = torch::dtype(torch::kInt32).device(g_device);
+    dev_i64 = torch::dtype(torch::kInt64).device(g_device);
+    dev_t   = torch::dtype(PRECISION_DTYPE).device(g_device);
+}
 
 // Raw struct bundling decoder outputs: mean (logits for discrete) + logstd
 struct Logits {
@@ -183,8 +205,12 @@ struct MinGRU : public RNN {
         for (int i = 0; i < num_layers; i++) {
             Tensor state_i = state.select(0, i);
             Tensor combined = layers[i]->forward(x);
+#ifdef WITH_CUDA
             auto result = kernels ? mingru_gate(state_i, combined.contiguous())
                                   : mingru_gate_cpp(state_i, combined);
+#else
+            auto result = mingru_gate_cpp(state_i, combined);
+#endif
             x = result[0];
             state.select(0, i).copy_(result[1]);
         }
@@ -202,8 +228,12 @@ struct MinGRU : public RNN {
         for (int i = 0; i < num_layers; i++) {
             Tensor state_i = state.select(0, i);
             Tensor combined = layers[i]->forward(x);
+#ifdef WITH_CUDA
             auto result = kernels ? PrefixScan::apply(combined, state_i)
                                   : fused_scan_cpp(combined, state_i);
+#else
+            auto result = fused_scan_cpp(combined, state_i);
+#endif
             x = result[0];
         }
         return x;
@@ -553,18 +583,21 @@ void sample_actions(Logits& logits, Tensor value,
         Tensor actions_out, Tensor logprobs_out, Tensor values_out,
         Tensor act_sizes, Tensor act_sizes_cpu,
         bool is_continuous, bool kernels, uint64_t rng_seed, Tensor rng_offset) {
+#ifdef WITH_CUDA
     if (kernels) {
         Tensor logstd = logits.logstd.defined() ? logits.logstd : Tensor();
         sample_logits(logits.mean, logstd, value, actions_out, logprobs_out,
             values_out, act_sizes, rng_seed, rng_offset);
-    } else {
+    } else
+#endif
+    {
         vector<Tensor> result;
         if (is_continuous) {
             result = sample_continuous_cpp(logits.mean, logits.logstd);
         } else {
             result = sample_discrete_cpp(logits.mean, act_sizes_cpu, actions_out.size(1));
         }
-        actions_out.copy_(result[0].to(torch::kFloat64), false);
+        actions_out.copy_(result[0].to(actions_out.dtype()), false);
         logprobs_out.copy_(result[1], false);
         values_out.copy_(value.flatten(), false);
     }

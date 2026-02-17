@@ -276,7 +276,13 @@ class DriveEncoder : public Encoder {
         int hidden;
         bool use_fused_kernel;
 
-    DriveEncoder(int input, int hidden, bool use_fused_kernel = true)
+    DriveEncoder(int input, int hidden, bool use_fused_kernel =
+#ifdef WITH_CUDA
+        true
+#else
+        false
+#endif
+    )
         : input(128), hidden(hidden), use_fused_kernel(use_fused_kernel) {
 
         // Ego encoder: 7 -> 128 -> 128 (Linear -> ReLU -> Linear)
@@ -350,10 +356,13 @@ class DriveEncoder : public Encoder {
         // Partner encoding
         Tensor partner_objects = partner_obs.view({B, 63, 7}).contiguous();
         Tensor partner_features;
+#ifdef WITH_CUDA
         if (use_fused_kernel) {
             // Fused FC -> Max kernel
             partner_features = FCMax::apply(partner_objects, partner_W, partner_b)[0];
-        } else {
+        } else
+#endif
+        {
             // Torch: Linear -> LayerNorm -> Linear -> Max
             auto h = partner_linear1->forward(partner_objects);  // (B, 63, 128)
             h = partner_ln->forward(h);
@@ -369,10 +378,13 @@ class DriveEncoder : public Encoder {
         Tensor road_combined = torch::cat({road_continuous, road_onehot}, 2).contiguous();  // (B, 200, 13)
 
         Tensor road_features;
+#ifdef WITH_CUDA
         if (use_fused_kernel) {
             // Fused FC -> Max kernel
             road_features = FCMax::apply(road_combined, road_W, road_b)[0];
-        } else {
+        } else
+#endif
+        {
             // Torch: Linear -> LayerNorm -> Linear -> Max
             auto h = road_linear1->forward(road_combined);  // (B, 200, 128)
             h = road_ln->forward(h);

@@ -57,6 +57,21 @@ from torch.utils.cpp_extension import (
 # and can find CUDA or HIP in the system
 ADVANTAGE_CUDA = bool(CUDA_HOME or ROCM_HOME)
 
+def _device_synchronize(device):
+    device_str = str(device)
+    if 'cuda' in device_str:
+        torch.cuda.synchronize()
+    elif device_str == 'mps':
+        torch.mps.synchronize()
+
+def _empty_device_cache(device):
+    device_str = str(device)
+    if 'cuda' in device_str:
+        torch.cuda.empty_cache()
+        torch._C._cuda_clearCublasWorkspaces()
+    elif device_str == 'mps':
+        torch.mps.empty_cache()
+
 # DEBUG FLAG IS A BUG. FUCK THIS DO NOT NOT NOT ENABLE
 #torch.autograd.set_detect_anomaly(True)
 #torch._dynamo.config.capture_scalar_outputs = True
@@ -132,7 +147,7 @@ class PuffeRL:
         self.epoch += 1
         done_training = self.global_step >= self.config['total_timesteps']
         if done_training or self.global_step == 0 or time.time() > self.last_log_time + 0.6:
-            torch.cuda.synchronize()
+            _device_synchronize(self.config.get('device', 'cpu'))
             logs = _C.log_environments(self.pufferl_cpp)
             self.stats = logs
             self.losses = _C.log_losses(self.pufferl_cpp)
@@ -185,15 +200,12 @@ class PuffeRL:
         self.rewards = None
         self.terminals = None
 
-        torch.cuda.synchronize()
+        _device_synchronize(self.config.get('device', 'cpu'))
         _C.close(self.pufferl_cpp)
         self.pufferl_cpp = None
 
-        # Clear cuBLAS workspaces that accumulate per-stream
-        # This is the only way to check for memleaks. May not
-        # be strictly necessary for normal training.
-        torch.cuda.empty_cache()
-        torch._C._cuda_clearCublasWorkspaces()
+        # Clear device caches that accumulate during training
+        _empty_device_cache(self.config.get('device', 'cpu'))
 
         if not self.logger:
             return
@@ -461,7 +473,7 @@ class Logger:
 def _train_rank(env_name, args=None, logger=None, verbose=True, early_stop_fn=None):
     """Worker function for multi-GPU training. Runs on each GPU."""
 
-    if args:
+    if args and 'cuda' in str(args['train'].get('device', '')):
         torch.cuda.set_device(args['train']['rank'])
 
     args = args or load_config(env_name)
@@ -548,7 +560,8 @@ def train(env_name, args=None, logger=None, verbose=True, early_stop_fn=None):
         procs.append(p)
 
     # Run rank 0 on main process
-    torch.cuda.set_device(0)
+    if 'cuda' in str(args['train'].get('device', '')):
+        torch.cuda.set_device(0)
 
     args['train']['rank'] = 0
 
@@ -575,7 +588,7 @@ def train(env_name, args=None, logger=None, verbose=True, early_stop_fn=None):
         if i == 0 or i % 32 != 0:
             continue
 
-        torch.cuda.synchronize()
+        _device_synchronize(args['train'].get('device', 'cpu'))
         logs = _C.log_environments(pufferl.pufferl_cpp)
         pufferl.stats = logs
 
@@ -675,7 +688,7 @@ def multisweep(args=None, env_name=None):
     args = args or load_config(env_name)
     sweep_gpus = args['sweep_gpus']
     if sweep_gpus == -1:
-        sweep_gpus = torch.cuda.device_count()
+        sweep_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 1
 
     method = args['sweep'].pop('method')
     try:
@@ -695,12 +708,14 @@ def multisweep(args=None, env_name=None):
     workers = []
     worker_args = []
     set_start_method('spawn')
+    device_base = args['train'].get('device', 'cuda')
     for i in range(sweep_gpus):
         q_host = Queue()
         q_worker = Queue()
+        device = f'{device_base}:{i}' if sweep_gpus > 1 else device_base
         w = Process(
             target=_sweep_worker,
-            args=(env_name, q_host, q_worker, f'cuda:{i}')
+            args=(env_name, q_host, q_worker, device)
         )
         w.start()
         host_queues.append(q_host)
@@ -748,7 +763,7 @@ def paretosweep(args=None, env_name=None):
     args = args or load_config(env_name)
     sweep_gpus = args['sweep_gpus']
     if sweep_gpus == -1:
-        sweep_gpus = torch.cuda.device_count()
+        sweep_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 1
 
     method = args['sweep'].pop('method')
     try:
@@ -773,12 +788,14 @@ def paretosweep(args=None, env_name=None):
     workers = []
     worker_args = []
     set_start_method('spawn')
+    device_base = args['train'].get('device', 'cuda')
     for i in range(sweep_gpus):
         q_host = Queue()
         q_worker = Queue()
+        device = f'{device_base}:{i}' if sweep_gpus > 1 else device_base
         w = Process(
             target=_sweep_worker,
-            args=(env_name, q_host, q_worker, f'cuda:{i}')
+            args=(env_name, q_host, q_worker, device)
         )
         w.start()
         host_queues.append(q_host)

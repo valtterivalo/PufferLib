@@ -1,8 +1,10 @@
 #pragma once
 
 #include <torch/torch.h>
+#ifdef WITH_CUDA
 #include <ATen/cuda/CUDAContext.h>
 #include <nccl.h>
+#endif
 
 static constexpr double ns_coeffs[5][3] = {
     {4.0848, -6.8946, 2.9270},
@@ -43,13 +45,15 @@ struct Muon {
     double eps;
 
     // State
-    torch::Tensor lr;              // scalar CUDA tensor
+    torch::Tensor lr;              // scalar tensor on device
     torch::Tensor weight_buffer;   // contiguous fp32 param buffer
     torch::Tensor momentum_buffer; // contiguous momentum buffer
     std::vector<torch::Tensor> params;
 
     // Multi-GPU
+#ifdef WITH_CUDA
     ncclComm_t nccl_comm = nullptr;
+#endif
     int world_size = 1;
 
     Muon(std::vector<torch::Tensor> params, double lr_val, double momentum,
@@ -60,7 +64,9 @@ struct Muon {
         TORCH_CHECK(lr_val >= 0, "Invalid learning rate: ", lr_val);
         TORCH_CHECK(eps >= 0, "Invalid epsilon value: ", eps);
         TORCH_CHECK(weight_decay >= 0, "Invalid weight_decay value: ", weight_decay);
-        lr = torch::tensor(lr_val, torch::dtype(torch::kFloat32).device(torch::kCUDA).requires_grad(false));
+        // lr placed on same device as the first param (set by caller)
+        auto device = this->params.empty() ? torch::kCPU : this->params[0].device();
+        lr = torch::tensor(lr_val, torch::dtype(torch::kFloat32).device(device).requires_grad(false));
     }
 
     void init_contiguous_weights() {
@@ -109,11 +115,13 @@ struct Muon {
         }
 
         // Multi-GPU gradient sync
+#ifdef WITH_CUDA
         if (nccl_comm != nullptr && world_size > 1) {
             ncclAllReduce(all_grads.data_ptr(), all_grads.data_ptr(),
                           all_grads.numel(), ncclFloat, ncclAvg,
                           nccl_comm, at::cuda::getCurrentCUDAStream());
         }
+#endif
 
         // Nesterov momentum
         momentum_buffer.mul_(momentum);

@@ -17,10 +17,11 @@ enum LossIdx {
     NUM_LOSSES = 8,
 };
 
-// Autograd modules (implementations in cuda/modules.cu)
+// Autograd modules (implementations in cuda/modules.cu — CUDA only)
 using tensor_list = torch::autograd::tensor_list;
 using AutogradCtx = torch::autograd::AutogradContext;
 
+#ifdef WITH_CUDA
 class PrefixScan : public torch::autograd::Function<PrefixScan> {
 public:
     static tensor_list forward(AutogradCtx* ctx,
@@ -54,21 +55,21 @@ public:
     static tensor_list backward(AutogradCtx* ctx, tensor_list grad_outputs);
 };
 
-// Fused mingru gate inference
+// Fused mingru gate inference (CUDA kernel)
 std::vector<torch::Tensor> mingru_gate(torch::Tensor state, torch::Tensor combined);
 
-// Fused sample_logits: handles both discrete and continuous action sampling
+// Fused sample_logits: handles both discrete and continuous action sampling (CUDA kernel)
 void sample_logits(
     torch::Tensor logits, torch::Tensor logstd, torch::Tensor value,
     torch::Tensor actions_out, torch::Tensor logprobs_out, torch::Tensor value_out,
     torch::Tensor act_sizes, uint64_t seed, torch::Tensor offset);
 
-// Priority replay: fused priority sampling for minibatch selection
+// Priority replay: fused priority sampling for minibatch selection (CUDA kernel)
 std::tuple<torch::Tensor, torch::Tensor> prio_replay_cuda(
     torch::Tensor advantages, float prio_alpha,
     int minibatch_segments, int total_agents, float anneal_beta);
 
-// Select + Copy: fused index_select and copy for minibatch preparation
+// Select + Copy: fused index_select and copy for minibatch preparation (CUDA kernel)
 void train_select_and_copy_cuda(
     torch::Tensor observations, torch::Tensor actions,
     torch::Tensor logprobs, torch::Tensor values, torch::Tensor advantages,
@@ -85,5 +86,6 @@ void puff_advantage_cuda(
     torch::Tensor dones, torch::Tensor importance, torch::Tensor advantages,
     double gamma, double lambda, double rho_clip, double c_clip);
 }
+#endif // WITH_CUDA
 
 #endif // PUFFERLIB_MODULES_H
