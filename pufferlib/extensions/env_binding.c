@@ -284,10 +284,18 @@ StaticVec* create_static_vec(int total_agents, int num_buffers, Dict* vec_kwargs
         for (int e = 0; e < env_count; e++) {
             Env* env = &envs[env_start + e];
             int slot = buf_start + buf_agent;
+#ifdef ENV_ASSIGN_BUFFERS
+            ENV_ASSIGN_BUFFERS(env,
+                (void*)((char*)vec->observations + slot * OBS_SIZE * obs_elem_size),
+                vec->actions + slot * NUM_ATNS,
+                vec->rewards + slot,
+                vec->terminals + slot);
+#else
             env->observations = (void*)((char*)vec->observations + slot * OBS_SIZE * obs_elem_size);
             env->actions = vec->actions + slot * NUM_ATNS;
             env->rewards = vec->rewards + slot;
             env->terminals = vec->terminals + slot;
+#endif
             buf_agent += env->num_agents;
         }
     }

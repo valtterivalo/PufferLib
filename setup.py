@@ -326,6 +326,13 @@ STATIC_ENVS = [
     and os.path.exists(f'pufferlib/ocean/{name}/binding.h')
 ]
 
+_SETUP_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Extra include paths for static env builds (env-specific external source dirs)
+STATIC_ENV_EXTRA_INCLUDES = {
+    'osrs_pvp': ['-I' + os.path.join(_SETUP_DIR, '..', 'pvp-c')],
+}
+
 def create_static_env_build_class(env_name):
     """Create a build class that compiles env with clang and links with torch extension."""
     class StaticEnvBuildExt(cpp_extension.BuildExtension):
@@ -346,6 +353,7 @@ def create_static_env_build_class(env_name):
                 '-DPLATFORM_DESKTOP',
                 '-fno-semantic-interposition', '-fvisibility=hidden',
                 '-fPIC',
+            ] + STATIC_ENV_EXTRA_INCLUDES.get(env_name, []) + [
                 env_binding_src, '-o', static_obj
             ]
             if BUID_CUDA_EXT:
