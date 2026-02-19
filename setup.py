@@ -27,6 +27,9 @@ from torch.utils.cpp_extension import (
 # may require `uv pip install --no-build-isolation` or `python setup.py build_ext --inplace`
 BUID_CUDA_EXT = bool(CUDA_HOME or ROCM_HOME)
 
+# build Metal extension on macOS when CUDA is not available
+BUILD_MPS_EXT = (platform.system() == 'Darwin' and not BUID_CUDA_EXT)
+
 # Use ccache if available for faster rebuilds
 if shutil.which('ccache'):
     os.environ.setdefault('CC', 'ccache cc')
@@ -93,9 +96,12 @@ cxx_args = [
 
 # OpenMP: use -Xpreprocessor on macOS (Apple Clang needs it)
 if platform.system() == 'Darwin':
+    extra_compile_args += ['-DPRECISION_FLOAT']  # fp32 — bf16 on MPS causes NaN with Muon
     extra_link_args += ['-lomp']
     cxx_args += ['-Xpreprocessor', '-fopenmp']
     extra_compile_args += ['-Xpreprocessor', '-fopenmp']
+    if BUILD_MPS_EXT:
+        cxx_args += ['-DWITH_METAL', '-fno-objc-arc']
 else:
     extra_link_args += ['-fopenmp']
     cxx_args += ['-fopenmp']
@@ -163,6 +169,8 @@ elif system == 'Darwin':
         '-framework', 'Cocoa',
         '-framework', 'OpenGL',
         '-framework', 'IOKit',
+        '-framework', 'Metal',
+        '-framework', 'Foundation',
         f'-Wl,-rpath,{_torch_lib}',
     ]
 else:
@@ -202,6 +210,19 @@ class TorchBuildExt(cpp_extension.BuildExtension):
     def run(self):
         self.extensions = [e for e in self.extensions if e.name in extnames]
         super().run()
+
+    def build_extensions(self):
+        # Register .mm (Objective-C++) as a valid C++ source extension so the
+        # compiler dispatches them through the C++ pipeline with -ObjC++ flag.
+        if BUILD_MPS_EXT and hasattr(self.compiler, 'src_extensions'):
+            self.compiler.src_extensions.append('.mm')
+            _orig_compile = self.compiler._compile
+            def _patched_compile(obj, src, ext, cc_args, extra_postargs, pp_opts):
+                if src.endswith('.mm'):
+                    extra_postargs = list(extra_postargs) + ['-ObjC++']
+                return _orig_compile(obj, src, ext, cc_args, extra_postargs, pp_opts)
+            self.compiler._compile = _patched_compile
+        super().build_extensions()
 
 INCLUDE = [f'{BOX2D_NAME}/include', f'{BOX2D_NAME}/src']
 RAYLIB_A = f'{RAYLIB_NAME}/lib/libraylib.a'
@@ -429,6 +450,11 @@ if not NO_TRAIN:
         cxx_args.append('-DWITH_CUDA')
     else:
         extension = CppExtension
+
+    # Metal compute kernels on macOS (when CUDA is not available)
+    if BUILD_MPS_EXT:
+        metal_sources = glob.glob('pufferlib/extensions/metal/*.mm')
+        torch_sources.extend(metal_sources)
 
     # Libraries: CUDA-only libs are conditional
     torch_libs = []

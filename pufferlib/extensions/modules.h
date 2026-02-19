@@ -88,4 +88,36 @@ void puff_advantage_cuda(
 }
 #endif // WITH_CUDA
 
+#ifdef WITH_METAL
+#include "metal/metal_context.h"
+#include "metal/metal_kernels.h"
+
+// Autograd wrappers for Metal kernel paths
+class PrefixScanMetal : public torch::autograd::Function<PrefixScanMetal> {
+public:
+    static tensor_list forward(AutogradCtx* ctx,
+        torch::Tensor combined, torch::Tensor state);
+    static tensor_list backward(AutogradCtx* ctx, tensor_list grad_outputs);
+};
+
+class LogCumsumExpMetal : public torch::autograd::Function<LogCumsumExpMetal> {
+public:
+    static tensor_list forward(AutogradCtx* ctx, torch::Tensor x);
+    static tensor_list backward(AutogradCtx* ctx, tensor_list grad_outputs);
+};
+
+class PPOLossMetal : public torch::autograd::Function<PPOLossMetal> {
+public:
+    static tensor_list forward(AutogradCtx* ctx,
+        torch::Tensor logits, torch::Tensor logstd,
+        torch::Tensor values_pred, torch::Tensor actions,
+        torch::Tensor old_logprobs, torch::Tensor advantages,
+        torch::Tensor prio, torch::Tensor values, torch::Tensor returns,
+        torch::Tensor ratio_out, torch::Tensor newvalue_out,
+        torch::Tensor act_sizes, torch::Tensor losses_acc,
+        double clip_coef, double vf_clip_coef, double vf_coef, double ent_coef);
+    static tensor_list backward(AutogradCtx* ctx, tensor_list grad_outputs);
+};
+#endif // WITH_METAL
+
 #endif // PUFFERLIB_MODULES_H

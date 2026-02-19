@@ -52,6 +52,9 @@ void c_reset(Env* env) {
     }
     pvp_reset(env);
     ocean_write_obs(env);
+    if (env->ocean_obs_p1 != NULL) {
+        ocean_write_obs_p1(env);
+    }
     env->ocean_rew[0] = 0.0f;
     env->_4_0_terminals[0] = 0.0f;
 }
@@ -123,6 +126,8 @@ void my_init(Env* env, Dict* kwargs) {
 
     // Override from config
     DictItem* item;
+    if ((item = dict_get_unsafe(kwargs, "shaping_enabled")))
+        env->shaping.enabled = (int)item->value;
     if ((item = dict_get_unsafe(kwargs, "shaping_scale")))
         env->shaping.shaping_scale = (float)item->value;
     if ((item = dict_get_unsafe(kwargs, "use_c_opponent")))
@@ -154,12 +159,89 @@ void my_log(Log* log, Dict* out) {
 }
 
 // ============================================================================
+// PFSP: set/get opponent pool weights across all envs in the flat array
+// Called from Python via pybind wrappers in bindings.cpp
+// ============================================================================
+
+void osrs_pvp_set_pfsp_weights(void* vec_ptr, int* pool, int* cum_weights, int pool_size) {
+    StaticVec* vec = (StaticVec*)vec_ptr;
+    Env* envs = (Env*)vec->envs;
+    if (pool_size > MAX_OPPONENT_POOL) pool_size = MAX_OPPONENT_POOL;
+    for (int e = 0; e < vec->size; e++) {
+        envs[e].pfsp.pool_size = pool_size;
+        for (int i = 0; i < pool_size; i++) {
+            envs[e].pfsp.pool[i] = (OpponentType)pool[i];
+            envs[e].pfsp.cum_weights[i] = cum_weights[i];
+        }
+    }
+}
+
+void osrs_pvp_get_pfsp_stats(void* vec_ptr, float* out_wins, float* out_episodes, int* out_pool_size) {
+    StaticVec* vec = (StaticVec*)vec_ptr;
+    Env* envs = (Env*)vec->envs;
+    int pool_size = 0;
+
+    // Find max pool_size and zero output arrays
+    for (int e = 0; e < vec->size; e++) {
+        if (envs[e].pfsp.pool_size > pool_size)
+            pool_size = envs[e].pfsp.pool_size;
+    }
+    *out_pool_size = pool_size;
+    for (int i = 0; i < pool_size; i++) {
+        out_wins[i] = 0.0f;
+        out_episodes[i] = 0.0f;
+    }
+
+    // Aggregate and reset (read-and-reset pattern)
+    for (int e = 0; e < vec->size; e++) {
+        for (int i = 0; i < envs[e].pfsp.pool_size; i++) {
+            out_wins[i] += envs[e].pfsp.wins[i];
+            out_episodes[i] += envs[e].pfsp.episodes[i];
+        }
+        memset(envs[e].pfsp.wins, 0, sizeof(envs[e].pfsp.wins));
+        memset(envs[e].pfsp.episodes, 0, sizeof(envs[e].pfsp.episodes));
+    }
+}
+
+// ============================================================================
+// Selfplay: enable P1 obs buffer + mask, push opponent actions
+// Called from Python via pybind wrappers in bindings.cpp
+// ============================================================================
+
+void osrs_pvp_enable_selfplay(void* vec_ptr, float* obs_p1_buf, unsigned char* mask_buf) {
+    StaticVec* vec = (StaticVec*)vec_ptr;
+    Env* envs = (Env*)vec->envs;
+    for (int e = 0; e < vec->size; e++) {
+        envs[e].ocean_obs_p1 = obs_p1_buf + e * OCEAN_OBS_SIZE;
+        envs[e].ocean_selfplay_mask = &mask_buf[e];
+    }
+}
+
+void osrs_pvp_set_opponent_actions(void* vec_ptr, int* actions_buf) {
+    StaticVec* vec = (StaticVec*)vec_ptr;
+    Env* envs = (Env*)vec->envs;
+    for (int e = 0; e < vec->size; e++) {
+        memcpy(envs[e].external_opponent_actions,
+               actions_buf + e * NUM_ACTION_HEADS,
+               NUM_ACTION_HEADS * sizeof(int));
+    }
+}
+
+void osrs_pvp_set_env_opponent_actions(void* vec_ptr, int env_idx, int* actions) {
+    StaticVec* vec = (StaticVec*)vec_ptr;
+    Env* envs = (Env*)vec->envs;
+    memcpy(envs[env_idx].external_opponent_actions, actions, NUM_ACTION_HEADS * sizeof(int));
+}
+
+// ============================================================================
 // my_put: runtime config updates
 // ============================================================================
 
 int my_put(void* _env, Dict* kwargs) {
     Env* env = (Env*)_env;
     DictItem* item;
+    if ((item = dict_get_unsafe(kwargs, "shaping_enabled")))
+        env->shaping.enabled = (int)item->value;
     if ((item = dict_get_unsafe(kwargs, "shaping_scale")))
         env->shaping.shaping_scale = (float)item->value;
     if ((item = dict_get_unsafe(kwargs, "use_c_opponent")))

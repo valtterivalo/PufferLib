@@ -153,6 +153,15 @@ class PuffeRL:
             self.losses = _C.log_losses(self.pufferl_cpp)
             self.profile = _C.log_profile(self.pufferl_cpp)
             self.utilization = _C.log_utilization(self.pufferl_cpp)
+            # Augment MPS memory stats (C++ has no Metal API access)
+            device = self.config.get('device', 'cpu')
+            if str(device) == 'mps':
+                alloc = torch.mps.current_allocated_memory()
+                driver = torch.mps.driver_allocated_memory()
+                self.utilization['vram_used_gb'] = alloc / (1024 ** 3)
+                self.utilization['vram_total_gb'] = driver / (1024 ** 3)
+                if driver > 0:
+                    self.utilization['gpu_mem'] = 100.0 * alloc / driver
             logs = self.write_logs(logs)
 
             self.print_dashboard()

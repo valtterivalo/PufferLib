@@ -512,6 +512,64 @@ class LSTMWrapper(nn.Module):
         values = values.reshape(B, TT)
         return logits, values
 
+class MinGRUWrapper(nn.Module):
+    def __init__(self, env, policy, input_size=128, hidden_size=128,
+                 num_layers=1, expansion_factor=1.0, **kwargs):
+        super().__init__()
+        self.obs_shape = env.single_observation_space.shape
+        self.policy = policy
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        self.expansion_factor = expansion_factor
+        self.is_continuous = self.policy.is_continuous
+
+        self.mingru = nn.ModuleList([
+            MinGRULayer(hidden_size, expansion_factor)
+            for _ in range(num_layers)
+        ])
+
+    def initial_state(self, batch_size, device):
+        dim_inner = int(self.hidden_size * self.expansion_factor)
+        state = torch.zeros(self.num_layers, batch_size, dim_inner, device=device)
+        return (state,)
+
+    def forward_eval(self, x, state):
+        state = state[0]
+        assert state.shape[1] == x.shape[0]
+        h = self.policy.encode_observations(x)
+        h = h.unsqueeze(1)
+        state = state.unsqueeze(2)
+        state_out = []
+        for i in range(self.num_layers):
+            h, s = self.mingru[i](h, state[i])
+            state_out.append(s)
+
+        h = h.squeeze(1)
+        state = torch.stack(state_out, 0).squeeze(2)
+        logits, values = self.policy.decode_actions(h)
+        return logits, values, (state,)
+
+    def forward(self, x):
+        x_shape, space_shape = x.shape, self.obs_shape
+        x_n, space_n = len(x_shape), len(space_shape)
+        assert x_shape[-space_n:] == space_shape
+
+        B, TT = x_shape[:2]
+        x = x.reshape(B*TT, *space_shape)
+        h = self.policy.encode_observations(x)
+        assert h.shape == (B*TT, self.input_size)
+        h = h.reshape(B, TT, self.input_size)
+
+        state = self.initial_state(B, h.device)[0].unsqueeze(2)
+        for i in range(self.num_layers):
+            h, _ = self.mingru[i](h, state[i])
+
+        flat_hidden = h.reshape(B*TT, self.hidden_size)
+        logits, values = self.policy.decode_actions(flat_hidden)
+        values = values.reshape(B, TT)
+        return logits, values
+
 class Convolutional(nn.Module):
     def __init__(self, env, *args, framestack, flat_size,
             input_size=512, hidden_size=512, output_size=512,

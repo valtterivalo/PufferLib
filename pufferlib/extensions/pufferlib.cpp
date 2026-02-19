@@ -249,11 +249,22 @@ typedef struct {
 #endif
     Tensor act_sizes;      // Device int32 tensor of action head sizes for MultiDiscrete
     Tensor act_sizes_cpu;  // CPU int64 tensor (pre-computed to avoid alloc during graph replay)
+    std::vector<int64_t> act_sizes_vec;  // Backup copy for corruption detection
     Tensor losses;         // (NUM_LOSSES,) float32 accumulator for loss components
     ProfileT profile;
     int epoch;
     int train_warmup;
     uint64_t rng_seed;
+    // Selfplay: frozen opponent policy running inside the rollout loop
+    std::string env_name;
+    int input_size;
+    int act_n;
+    Policy* selfplay_policy = nullptr;
+    float* selfplay_obs_raw = nullptr;
+    unsigned char* selfplay_mask_raw = nullptr;
+    Tensor selfplay_obs;    // (N, obs_size) wraps selfplay_obs_raw
+    Tensor selfplay_state;  // (num_layers, N, hidden) frozen policy RNN state (inference shape)
+    bool selfplay_enabled = false;
 } PuffeRL;
 
 Dict* log_environments_impl(PuffeRL& pufferl) {
@@ -291,6 +302,63 @@ extern "C" void thread_init_wrapper(void* ctx, int buf) {
 #else
     (void)ctx; (void)buf;  // no streams on CPU/MPS
 #endif
+}
+
+// Selfplay: run frozen policy on P1 observations, write int actions to C envs.
+// Called after main policy actions are written, before c_step reads them.
+//
+// selfplay_state lives on CPU to avoid MPS fallback issues with index_select/
+// index_copy_ (aten::index_copy.out has no MPS kernel — the automatic CPU
+// fallback corrupts tensor state). Only the forward pass runs on-device.
+void selfplay_step(PuffeRL* pufferl, int start, int block_size) {
+    if (!pufferl->selfplay_enabled || !pufferl->selfplay_policy) return;
+
+    unsigned char* mask = pufferl->selfplay_mask_raw;
+    int num_atns = pufferl->hypers.num_atns;
+
+    // Collect local indices of selfplay envs in this block
+    std::vector<long> sp_local;
+    for (int i = 0; i < block_size; i++) {
+        if (mask[start + i]) sp_local.push_back(i);
+    }
+    if (sp_local.empty()) return;
+
+    int sp_count = (int)sp_local.size();
+    Tensor sp_idx = torch::from_blob(sp_local.data(), {sp_count}, torch::kLong).clone();
+    Tensor sp_idx_global = sp_idx + start;  // stays on CPU (selfplay_state is CPU)
+
+    // Gather P1 obs for selfplay envs (obs is on CPU, move to device for forward)
+    Tensor obs_block = pufferl->selfplay_obs.narrow(0, start, block_size);
+    Tensor sp_obs = obs_block.index_select(0, sp_idx).to(pufferl->device);
+
+    // Gather RNN states on CPU, move to device for forward pass
+    Tensor sp_state = pufferl->selfplay_state.index_select(1, sp_idx_global)
+                          .to(pufferl->device);
+
+    // Forward pass through frozen policy (on device)
+    auto [logits, value, state_out] = pufferl->selfplay_policy->forward(sp_obs, sp_state);
+
+    // Scatter RNN states back (move to CPU for index_copy_)
+    pufferl->selfplay_state.index_copy_(1, sp_idx_global, state_out.to(torch::kCPU));
+
+    // Sample actions per head (categorical) — on CPU to avoid MPS multinomial issues
+    Tensor logits_cpu = logits.mean.to(torch::kCPU);
+    auto split = logits_cpu.split(
+        c10::IntArrayRef(pufferl->act_sizes_vec.data(), num_atns), 1);
+    std::vector<Tensor> act_vecs;
+    for (int h = 0; h < num_atns; h++) {
+        Tensor probs = split[h].softmax(-1);
+        act_vecs.push_back(at::multinomial(probs, 1, true));
+    }
+    Tensor sp_actions = torch::cat(act_vecs, 1).to(torch::kInt32);
+
+    // Write to C envs via extern C function (Env type not visible in C++)
+    int32_t* acts_ptr = sp_actions.data_ptr<int32_t>();
+    for (int j = 0; j < sp_count; j++) {
+        int env_idx = start + (int)sp_local[j];
+        osrs_pvp_set_env_opponent_actions(pufferl->vec, env_idx,
+            acts_ptr + j * num_atns);
+    }
 }
 
 // Called by vecenv per buffer thread
@@ -347,14 +415,37 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
     Tensor actions = rollouts.actions.select(0, t).narrow(0, start, block_size);
     Tensor logprobs = rollouts.logprobs.select(0, t).narrow(0, start, block_size);
     Tensor values = rollouts.values.select(0, t).narrow(0, start, block_size);
+
 #ifdef WITH_CUDA
     sample_actions(logits, value, actions, logprobs, values,
-        pufferl->act_sizes, pufferl->act_sizes_cpu,
+        pufferl->act_sizes, pufferl->act_sizes_vec.data(),
         pufferl->is_continuous, hypers.kernels, pufferl->rng_seed, pufferl->rng_offset);
+#elif defined(WITH_METAL)
+    if (hypers.kernels) {
+        sample_logits_metal(logits.mean, logits.logstd, value,
+            actions, logprobs, values,
+            pufferl->act_sizes, pufferl->rng_seed, Tensor());
+    } else {
+        Logits cpu_logits;
+        cpu_logits.mean = logits.mean.to(torch::kCPU);
+        if (logits.logstd.defined())
+            cpu_logits.logstd = logits.logstd.to(torch::kCPU);
+        Tensor cpu_value = value.to(torch::kCPU);
+        sample_actions(cpu_logits, cpu_value, actions, logprobs, values,
+            pufferl->act_sizes, pufferl->act_sizes_vec.data(),
+            pufferl->is_continuous, false, pufferl->rng_seed, Tensor());
+    }
 #else
-    sample_actions(logits, value, actions, logprobs, values,
-        pufferl->act_sizes, pufferl->act_sizes_cpu,
-        pufferl->is_continuous, false, pufferl->rng_seed, Tensor());
+    {
+        Logits cpu_logits;
+        cpu_logits.mean = logits.mean.to(torch::kCPU);
+        if (logits.logstd.defined())
+            cpu_logits.logstd = logits.logstd.to(torch::kCPU);
+        Tensor cpu_value = value.to(torch::kCPU);
+        sample_actions(cpu_logits, cpu_value, actions, logprobs, values,
+            pufferl->act_sizes, pufferl->act_sizes_vec.data(),
+            pufferl->is_continuous, false, pufferl->rng_seed, Tensor());
+    }
 #endif
 
     // Copy actions to env
@@ -362,9 +453,11 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
     // CUDA: direct device-to-device, non-blocking (env.actions wraps gpu_actions buffer)
     env.actions.narrow(0, start, block_size).copy_(actions, true);
 #else
-    // MPS/CPU: actions may be on MPS (float32), env.actions wraps host memory (float64).
-    // Explicit .to(kCPU) + blocking copy to avoid race with c_step overwriting source.
+    // MPS/CPU: actions already on CPU from sample_actions above.
     env.actions.narrow(0, start, block_size).copy_(actions.to(torch::kCPU), false);
+
+    // Selfplay: run frozen policy on P1 obs, write actions before c_step
+    selfplay_step(pufferl, start, block_size);
 #endif
 
 #ifdef WITH_CUDA
@@ -432,6 +525,7 @@ void train_impl(PuffeRL& pufferl) {
     Muon* muon = pufferl.muon;
 
     int total_epochs = hypers.total_timesteps / batch_size;
+    if (total_epochs < 1) total_epochs = 1;
 
     if (anneal_lr) {
         float lr_min = hypers.min_lr_ratio * hypers.lr;
@@ -468,6 +562,22 @@ void train_impl(PuffeRL& pufferl) {
         puff_advantage_cuda(rollouts.values, rollouts.rewards, rollouts.terminals,
             rollouts.ratio, advantages, hypers.gamma, hypers.gae_lambda,
             hypers.vtrace_rho_clip, hypers.vtrace_c_clip);
+#elif defined(WITH_METAL)
+        if (hypers.kernels) {
+            pufferlib::puff_advantage_metal(rollouts.values, rollouts.rewards, rollouts.terminals,
+                rollouts.ratio, advantages, hypers.gamma, hypers.gae_lambda,
+                hypers.vtrace_rho_clip, hypers.vtrace_c_clip);
+        } else {
+            auto cpu_vals = rollouts.values.to(torch::kCPU).to(torch::kFloat32).contiguous();
+            auto cpu_rew  = rollouts.rewards.to(torch::kCPU).to(torch::kFloat32).contiguous();
+            auto cpu_term = rollouts.terminals.to(torch::kCPU).to(torch::kFloat32).contiguous();
+            auto cpu_ratio = rollouts.ratio.to(torch::kCPU).to(torch::kFloat32).contiguous();
+            auto cpu_adv  = advantages.to(torch::kCPU).contiguous();
+            puff_advantage_cpu(cpu_vals, cpu_rew, cpu_term,
+                cpu_ratio, cpu_adv, hypers.gamma, hypers.gae_lambda,
+                hypers.vtrace_rho_clip, hypers.vtrace_c_clip);
+            advantages.copy_(cpu_adv.to(advantages.device()));
+        }
 #else
         // CPU advantage requires CPU tensors — move from MPS/device if needed
         {
@@ -487,6 +597,8 @@ void train_impl(PuffeRL& pufferl) {
         profile_begin("compute_prio", hypers.profile);
 #ifdef WITH_CUDA
         auto prio_fn = hypers.kernels ? prio_replay_cuda : prio_replay_cpp;
+#elif defined(WITH_METAL)
+        auto prio_fn = hypers.kernels ? prio_replay_metal : prio_replay_cpp;
 #else
         auto prio_fn = prio_replay_cpp;
 #endif
@@ -497,6 +609,8 @@ void train_impl(PuffeRL& pufferl) {
         profile_begin("train_select_and_copy", hypers.profile);
 #ifdef WITH_CUDA
         auto copy_fn = hypers.kernels ? train_select_and_copy_cuda : train_select_and_copy_cpp;
+#elif defined(WITH_METAL)
+        auto copy_fn = hypers.kernels ? train_select_and_copy_metal : train_select_and_copy_cpp;
 #else
         auto copy_fn = train_select_and_copy_cpp;
 #endif
@@ -530,6 +644,19 @@ void train_impl(PuffeRL& pufferl) {
 #ifdef WITH_CUDA
             Tensor loss = (hypers.kernels
                 ? PPOLoss::apply(logits.mean, logits.logstd, newvalue,
+                    graph.mb_actions, graph.mb_logprobs, graph.mb_advantages, graph.mb_prio,
+                    graph.mb_values, graph.mb_returns, graph.mb_ratio, newvalue_out,
+                    pufferl.act_sizes, pufferl.losses,
+                    hypers.clip_coef, hypers.vf_clip_coef, hypers.vf_coef, hypers.ent_coef)
+                : fused_ppo_loss_cpp(logits.mean, logits.logstd, newvalue,
+                    graph.mb_actions, graph.mb_logprobs, graph.mb_advantages, graph.mb_prio,
+                    graph.mb_values, graph.mb_returns, graph.mb_ratio, newvalue_out,
+                    pufferl.act_sizes, pufferl.losses,
+                    hypers.clip_coef, hypers.vf_clip_coef, hypers.vf_coef, hypers.ent_coef)
+            )[0];
+#elif defined(WITH_METAL)
+            Tensor loss = (hypers.kernels
+                ? PPOLossMetal::apply(logits.mean, logits.logstd, newvalue,
                     graph.mb_actions, graph.mb_logprobs, graph.mb_advantages, graph.mb_prio,
                     graph.mb_values, graph.mb_returns, graph.mb_ratio, newvalue_out,
                     pufferl.act_sizes, pufferl.losses,
@@ -629,9 +756,19 @@ std::unique_ptr<pufferlib::PuffeRL> create_pufferl_impl(HypersT& hypers, const s
     }
     pufferl->nccl_comm = nullptr;
 #else
+    // MPS (Apple Silicon): supported with these constraints:
+    // - fp32 only (bf16 causes NaN with Muon optimizer, controlled by PRECISION_FLOAT)
+    // - float64 not available on MPS (action tensors use float32, see init_device_tensor_options)
+    // - env buffers stay on CPU host memory; explicit copies to/from MPS each step
+    // - advantage computation round-trips through CPU (puff_advantage_cpu uses raw pointers)
+    // - no CUDA graphs, no custom kernels (cpp fallbacks used throughout)
+    // - no GPU utilization metric (VRAM reported via Python-side torch.mps calls)
     if (device_str == "mps" && at::hasMPS()) {
         g_device = torch::Device(torch::kMPS);
         pufferl->device = torch::Device(torch::kMPS);
+#ifdef WITH_METAL
+        metal_init();
+#endif
     } else {
         g_device = torch::kCPU;
         pufferl->device = torch::kCPU;
@@ -701,10 +838,17 @@ std::unique_ptr<pufferlib::PuffeRL> create_pufferl_impl(HypersT& hypers, const s
         env_name, vec_kwargs, env_kwargs, pufferl->env);
     int num_action_heads = pufferl->env.actions.size(1);
     int act_n = act_sizes.sum().item<int>();
+    pufferl->hypers.num_atns = num_action_heads;
 
     pufferl->vec = vec;
+    pufferl->env_name = env_name;
+    pufferl->act_n = act_n;
     pufferl->act_sizes = act_sizes.to(g_device);
     pufferl->act_sizes_cpu = act_sizes.to(torch::kInt64).contiguous();
+    {
+        auto* p = pufferl->act_sizes_cpu.data_ptr<int64_t>();
+        pufferl->act_sizes_vec.assign(p, p + num_action_heads);
+    }
     pufferl->losses = torch::zeros({NUM_LOSSES}, dev_f32);
 #ifdef WITH_CUDA
     for (int i = 0; i < NUM_TRAIN_EVENTS; i++) {
@@ -741,6 +885,7 @@ std::unique_ptr<pufferlib::PuffeRL> create_pufferl_impl(HypersT& hypers, const s
     }
 
     int input_size = pufferl->env.obs.size(1);
+    pufferl->input_size = input_size;
     int hidden_size = hypers.hidden_size;
     int num_layers = hypers.num_layers;
     bool kernels = hypers.kernels;
@@ -942,6 +1087,22 @@ void close_impl(PuffeRL& pufferl) {
     // Clear torch streams
     pufferl.torch_streams.clear();
 #endif
+
+    // Free selfplay resources
+    if (pufferl.selfplay_policy) {
+        delete pufferl.selfplay_policy;
+        pufferl.selfplay_policy = nullptr;
+    }
+    if (pufferl.selfplay_obs_raw) {
+        free(pufferl.selfplay_obs_raw);
+        pufferl.selfplay_obs_raw = nullptr;
+    }
+    if (pufferl.selfplay_mask_raw) {
+        free(pufferl.selfplay_mask_raw);
+        pufferl.selfplay_mask_raw = nullptr;
+    }
+    pufferl.selfplay_obs = Tensor();
+    pufferl.selfplay_state = Tensor();
 
     // Close environment vectorization (frees env buffers)
     static_vec_close(pufferl.vec);

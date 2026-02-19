@@ -15,6 +15,10 @@ static constexpr double ns_coeffs[5][3] = {
 };
 
 inline torch::Tensor zeropower_via_newtonschulz(torch::Tensor G) {
+    // bf16 is safe on MPS for these 5 small Newton-Schulz iterations (tested with
+    // param shapes up to 512x512, no NaN/inf). The PRECISION_FLOAT compile flag
+    // controls model precision separately — this local bf16 cast is purely for
+    // the orthogonalization math and doesn't interact with the Muon NaN issue.
     auto x = G.to(torch::kBFloat16);
     if (G.size(-2) > G.size(-1)) {
         x = x.mT();

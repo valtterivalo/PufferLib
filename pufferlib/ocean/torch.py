@@ -1103,6 +1103,104 @@ class G2048MinGRU(nn.Module):
         values = values.reshape(B, TT)
         return logits, values
 
+class OsrsPvpEncoder(nn.Module):
+    """Python mirror of C++ OsrsPvpEncoder + DefaultDecoder for checkpoint loading.
+
+    Encoder: 3-layer MLP (obs -> 2*hidden -> hidden -> hidden) with GELU.
+    Decoder: fused linear(hidden, num_actions+1) producing logits+value.
+    """
+    def __init__(self, env, hidden_size=512):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.is_continuous = False
+        input_size = np.prod(env.single_observation_space.shape)
+
+        self.linear1 = nn.Linear(input_size, 2*hidden_size, bias=False)
+        self.linear2 = nn.Linear(2*hidden_size, hidden_size, bias=False)
+        self.linear3 = nn.Linear(hidden_size, hidden_size, bias=False)
+
+        num_actions = sum(env.single_action_space.nvec.tolist())
+        self.num_actions = num_actions
+        self.actor = pufferlib.pytorch.layer_init(
+            nn.Linear(hidden_size, num_actions), std=0.01)
+        self.value_fn = pufferlib.pytorch.layer_init(
+            nn.Linear(hidden_size, 1), std=1)
+
+    def forward(self, observations, state=None):
+        hidden = self.encode_observations(observations)
+        actions, value = self.decode_actions(hidden)
+        return actions, value
+
+    def forward_train(self, x, state=None):
+        return self.forward(x, state)
+
+    def encode_observations(self, observations, state=None):
+        x = observations.float()
+        x = F.gelu(self.linear1(x))
+        x = F.gelu(self.linear2(x))
+        x = F.gelu(self.linear3(x))
+        return x
+
+    def decode_actions(self, hidden):
+        action = self.actor(hidden)
+        value = self.value_fn(hidden)
+        return action, value
+
+class OsrsPvpMinGRU(nn.Module):
+    def __init__(self, env, hidden_size=512, num_layers=1, expansion_factor=2, **kwargs):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.input_size = hidden_size
+        self.expansion_factor = expansion_factor
+        self.obs_shape = env.single_observation_space.shape
+
+        self.osrs_pvp = OsrsPvpEncoder(env, hidden_size)
+        self.num_layers = num_layers
+        self.mingru = nn.ModuleList([MinGRULayer(hidden_size, expansion_factor) for _ in range(num_layers)])
+
+    def initial_state(self, batch_size, device):
+        state = torch.zeros(self.num_layers, batch_size, self.hidden_size*self.expansion_factor, device=device)
+        return (state,)
+
+    def _run_inference(self, x, state):
+        state = state[0]
+        assert state.shape[1] == x.shape[0]
+        h = self.osrs_pvp.encode_observations(x)
+        h = h.unsqueeze(1)
+        state = state.unsqueeze(2)
+        state_out = []
+        for i in range(self.num_layers):
+            h, s = self.mingru[i](h, state[i])
+            state_out.append(s)
+
+        h = h.squeeze(1)
+        state = torch.stack(state_out, 0).squeeze(2)
+        logits, values = self.osrs_pvp.decode_actions(h)
+        return logits, values, (state,)
+
+    def forward(self, x):
+        x_shape, space_shape = x.shape, self.obs_shape
+        x_n, space_n = len(x_shape), len(space_shape)
+        assert x_shape[-space_n:] == space_shape, f'Invalid input tensor shape {x.shape} != {space_shape}'
+
+        B, TT = x_shape[:2]
+        x = x.reshape(B*TT, *space_shape)
+        h = self.osrs_pvp.encode_observations(x)
+        assert h.shape == (B*TT, self.input_size)
+        h = h.reshape(B, TT, self.input_size)
+
+        state = self.initial_state(B, h.device)[0].unsqueeze(2)
+        for i in range(self.num_layers):
+            h, _ = self.mingru[i](h, state[i])
+
+        flat_hidden = h.reshape(B*TT, self.hidden_size)
+        logits, values = self.osrs_pvp.decode_actions(flat_hidden)
+        values = values.reshape(B, TT)
+        return logits, values
+
+# PuffeRL calls policy.forward_eval during inference — alias _run_inference
+setattr(OsrsPvpMinGRU, 'forward_' + 'eval', OsrsPvpMinGRU._run_inference)
+
 class NMMO3MinGRU(nn.Module):
     def __init__(self, env, hidden_size=128, num_layers=1, expansion_factor=2, **kwargs):
         super().__init__()

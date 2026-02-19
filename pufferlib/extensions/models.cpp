@@ -208,6 +208,9 @@ struct MinGRU : public RNN {
 #ifdef WITH_CUDA
             auto result = kernels ? mingru_gate(state_i, combined.contiguous())
                                   : mingru_gate_cpp(state_i, combined);
+#elif defined(WITH_METAL)
+            auto result = kernels ? mingru_gate_metal(state_i, combined)
+                                  : mingru_gate_cpp(state_i, combined);
 #else
             auto result = mingru_gate_cpp(state_i, combined);
 #endif
@@ -230,6 +233,9 @@ struct MinGRU : public RNN {
             Tensor combined = layers[i]->forward(x);
 #ifdef WITH_CUDA
             auto result = kernels ? PrefixScan::apply(combined, state_i)
+                                  : fused_scan_cpp(combined, state_i);
+#elif defined(WITH_METAL)
+            auto result = kernels ? PrefixScanMetal::apply(combined, state_i)
                                   : fused_scan_cpp(combined, state_i);
 #else
             auto result = fused_scan_cpp(combined, state_i);
@@ -454,12 +460,13 @@ void sync_fp16_fp32(PolicyLSTM* policy_16, PolicyLSTM* policy_32) {
     }
 }
 
-// Sync bf16 working weights from fp32 master weights (for mixed-precision training)
-void sync_policy_weights(Policy* policy_bf16, Policy* policy_fp32) {
-    auto params_fp32 = policy_fp32->parameters();
-    auto params_bf16 = policy_bf16->parameters();
-    for (size_t i = 0; i < params_fp32.size(); ++i) {
-        params_bf16[i].data().copy_(params_fp32[i].data().to(torch::kBFloat16));
+// Sync working weights from fp32 master weights (mixed-precision or selfplay)
+// Uses PRECISION_DTYPE so fp32 builds (MPS/Darwin) don't do lossy bf16 roundtrips.
+void sync_policy_weights(Policy* dst, Policy* src) {
+    auto params_src = src->parameters();
+    auto params_dst = dst->parameters();
+    for (size_t i = 0; i < params_src.size(); ++i) {
+        params_dst[i].data().copy_(params_src[i].data().to(PRECISION_DTYPE));
     }
 }
 
@@ -495,9 +502,9 @@ Tensor logcumsumexp_cpp(Tensor x) {
 
 // Sample from multi-head discrete distribution
 // Returns {actions (B, heads), total_logprob (B,)}
-vector<Tensor> sample_discrete_cpp(Tensor logits, Tensor act_sizes_cpu, int num_heads) {
+vector<Tensor> sample_discrete_cpp(Tensor logits, const int64_t* act_sizes_data, int num_heads) {
     logits = torch::nan_to_num(logits, 1e-8, 1e-8, 1e-8);
-    auto split = torch::split(logits, c10::IntArrayRef(act_sizes_cpu.data_ptr<int64_t>(), num_heads), 1);
+    auto split = torch::split(logits, c10::IntArrayRef(act_sizes_data, num_heads), 1);
     vector<Tensor> actions_vec, logprobs_vec;
     for (int i = 0; i < num_heads; i++) {
         auto log_probs = torch::log_softmax(split[i], 1);
@@ -519,9 +526,9 @@ vector<Tensor> sample_continuous_cpp(Tensor mean, Tensor logstd) {
 
 // Compute logprob + entropy for multi-head discrete actions
 // Returns {logprob (batch,), entropy scalar}
-vector<Tensor> discrete_logprob_entropy_cpp(Tensor logits, Tensor actions, Tensor act_sizes_cpu, int num_heads) {
+vector<Tensor> discrete_logprob_entropy_cpp(Tensor logits, Tensor actions, const int64_t* act_sizes_data, int num_heads) {
     logits = torch::nan_to_num(logits, 1e-8, 1e-8, 1e-8);
-    auto split = torch::split(logits, c10::IntArrayRef(act_sizes_cpu.data_ptr<int64_t>(), num_heads), 1);
+    auto split = torch::split(logits, c10::IntArrayRef(act_sizes_data, num_heads), 1);
     int batch = logits.size(0);
     vector<Tensor> logprobs_vec, entropies_vec;
     for (int h = 0; h < num_heads; h++) {
@@ -581,7 +588,7 @@ Tensor ppo_loss_cpp(Tensor ratio, Tensor advantages, Tensor prio,
 // Dispatch: sample actions using kernel or cpp path, write to output buffers
 void sample_actions(Logits& logits, Tensor value,
         Tensor actions_out, Tensor logprobs_out, Tensor values_out,
-        Tensor act_sizes, Tensor act_sizes_cpu,
+        Tensor act_sizes, const int64_t* act_sizes_data,
         bool is_continuous, bool kernels, uint64_t rng_seed, Tensor rng_offset) {
 #ifdef WITH_CUDA
     if (kernels) {
@@ -595,7 +602,7 @@ void sample_actions(Logits& logits, Tensor value,
         if (is_continuous) {
             result = sample_continuous_cpp(logits.mean, logits.logstd);
         } else {
-            result = sample_discrete_cpp(logits.mean, act_sizes_cpu, actions_out.size(1));
+            result = sample_discrete_cpp(logits.mean, act_sizes_data, actions_out.size(1));
         }
         actions_out.copy_(result[0].to(actions_out.dtype()), false);
         logprobs_out.copy_(result[1], false);
@@ -660,9 +667,9 @@ torch::autograd::tensor_list fused_ppo_loss_cpp(
             logits.reshape({batch, -1}), logstd.reshape({batch, -1}),
             actions.reshape({batch, -1}));
     } else {
-        Tensor act_sizes_cpu = act_sizes.to(torch::kCPU).to(torch::kInt64);
+        Tensor act_sizes_cpu = act_sizes.to(torch::kCPU).to(torch::kInt64).contiguous();
         result = discrete_logprob_entropy_cpp(
-            logits.reshape({batch, -1}), actions, act_sizes_cpu, num_heads);
+            logits.reshape({batch, -1}), actions, act_sizes_cpu.data_ptr<int64_t>(), num_heads);
     }
     Tensor ratio = (result[0].reshape({segments, horizon}) - old_logprobs).exp();
     ratio_out.copy_(ratio, false);

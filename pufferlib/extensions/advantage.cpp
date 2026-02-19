@@ -75,3 +75,18 @@ void puff_advantage_cuda(
 );
 #endif
 
+// Forward declare Metal implementation
+#ifdef WITH_METAL
+void puff_advantage_metal(
+    Tensor values,
+    Tensor rewards,
+    Tensor dones,
+    Tensor importance,
+    Tensor advantages,
+    double gamma,
+    double lambda,
+    double rho_clip,
+    double c_clip
+);
+#endif
+

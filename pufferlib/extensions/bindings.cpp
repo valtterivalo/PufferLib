@@ -7,6 +7,17 @@
 #ifdef __APPLE__
 #include <mach/mach.h>
 #endif
+
+// PFSP + selfplay C functions from osrs_pvp binding.h (linked via static lib)
+// Must be declared before pufferlib.cpp include since selfplay_step() calls these.
+extern "C" {
+    void osrs_pvp_set_pfsp_weights(void* vec_ptr, int* pool, int* cum_weights, int pool_size);
+    void osrs_pvp_get_pfsp_stats(void* vec_ptr, float* out_wins, float* out_episodes, int* out_pool_size);
+    void osrs_pvp_enable_selfplay(void* vec_ptr, float* obs_p1_buf, unsigned char* mask_buf);
+    void osrs_pvp_set_opponent_actions(void* vec_ptr, int* actions_buf);
+    void osrs_pvp_set_env_opponent_actions(void* vec_ptr, int env_idx, int* actions);
+}
+
 #include "pufferlib.cpp"
 
 using namespace pufferlib;
@@ -248,12 +259,20 @@ TORCH_LIBRARY_IMPL(pufferlib, CPU, m) {
 TORCH_LIBRARY_IMPL(pufferlib, CUDA, m) {
   m.impl("compute_puff_advantage", &puff_advantage_cuda);
 }
+#elif defined(WITH_METAL)
+TORCH_LIBRARY_IMPL(pufferlib, MPS, m) {
+  m.impl("compute_puff_advantage", &pufferlib::puff_advantage_metal);
+}
 #endif
 
 #ifdef WITH_CUDA
 TORCH_LIBRARY(_C, m) {
     m.def("mingru_gate(Tensor state, Tensor combined) -> (Tensor, Tensor)");
     m.def("fc_max(Tensor x, Tensor W, Tensor b) -> Tensor");
+}
+#elif defined(WITH_METAL)
+TORCH_LIBRARY(_C, m) {
+    m.def("mingru_gate(Tensor state, Tensor combined) -> (Tensor, Tensor)");
 }
 #endif
 
@@ -267,15 +286,21 @@ PYBIND11_MODULE(_C, m) {
     m.def("close", &puf_close);
 #ifdef WITH_CUDA
     m.def("logcumsumexp_cuda", [](torch::Tensor x) { return LogCumsumExp::apply(x)[0]; });
+#elif defined(WITH_METAL)
+    m.def("logcumsumexp_metal", [](torch::Tensor x) { return LogCumsumExpMetal::apply(x)[0]; });
 #endif
     m.def("initial_state", &initial_state);
 #ifdef WITH_CUDA
     m.def("mingru_gate", &mingru_gate);
     m.def("fc_max", [](torch::Tensor x, torch::Tensor W, torch::Tensor b) { return FCMax::apply(x, W, b)[0]; });
+#elif defined(WITH_METAL)
+    m.def("mingru_gate", &mingru_gate_metal);
 #endif
     m.def("fc_max_cpp", &fc_max_cpp);
 #ifdef WITH_CUDA
     m.def("sample_logits", &sample_logits);
+#elif defined(WITH_METAL)
+    m.def("sample_logits", &sample_logits_metal);
 #endif
     m.def("python_vec_recv", &python_vec_recv);
     m.def("python_vec_send", &python_vec_send);
@@ -342,7 +367,74 @@ PYBIND11_MODULE(_C, m) {
         .def_readwrite("policy_fp32", &PuffeRL::policy_fp32)
         .def_readwrite("muon", &PuffeRL::muon)
         .def_readwrite("hypers", &PuffeRL::hypers)
-        .def_readwrite("rollouts", &PuffeRL::rollouts);
+        .def_readwrite("rollouts", &PuffeRL::rollouts)
+        .def("set_pfsp_weights", [](PuffeRL& self, py::list pool, py::list cum_weights) {
+            int pool_size = (int)py::len(pool);
+            std::vector<int> pool_arr(pool_size);
+            std::vector<int> weights_arr(pool_size);
+            for (int i = 0; i < pool_size; i++) {
+                pool_arr[i] = pool[i].cast<int>();
+                weights_arr[i] = cum_weights[i].cast<int>();
+            }
+            osrs_pvp_set_pfsp_weights(self.vec, pool_arr.data(), weights_arr.data(), pool_size);
+        })
+        .def("get_pfsp_stats", [](PuffeRL& self) {
+            float wins[32] = {0};
+            float episodes[32] = {0};
+            int pool_size = 0;
+            osrs_pvp_get_pfsp_stats(self.vec, wins, episodes, &pool_size);
+            py::list wins_list, eps_list;
+            for (int i = 0; i < pool_size; i++) {
+                wins_list.append(wins[i]);
+                eps_list.append(episodes[i]);
+            }
+            return py::make_tuple(wins_list, eps_list);
+        })
+        .def("enable_selfplay", [](PuffeRL& self) {
+            int N = self.hypers.total_agents;
+            int obs_size = self.env.obs.size(1);
+            int hidden = self.hypers.hidden_size;
+            int num_layers = self.hypers.num_layers;
+            bool kernels = self.hypers.kernels;
+            bool is_continuous = self.is_continuous;
+            int decoder_out = is_continuous ? self.hypers.num_atns : self.act_n;
+
+            // Allocate P1 obs buffer and selfplay mask
+            self.selfplay_obs_raw = (float*)calloc(N * obs_size, sizeof(float));
+            self.selfplay_mask_raw = (unsigned char*)calloc(N, sizeof(unsigned char));
+
+            // Wire C env pointers to slices of these buffers
+            osrs_pvp_enable_selfplay(self.vec, self.selfplay_obs_raw, self.selfplay_mask_raw);
+
+            // Wrap as tensors for frozen policy input
+            self.selfplay_obs = torch::from_blob(
+                self.selfplay_obs_raw, {N, obs_size}, torch::kFloat32);
+
+            // Create frozen policy (same architecture as main, fp32)
+            self.selfplay_policy = create_policy(
+                self.env_name, self.input_size, hidden,
+                decoder_out, num_layers, self.act_n, is_continuous, kernels);
+            self.selfplay_policy->to(self.device);
+            self.selfplay_policy->to(torch::kFloat32);
+
+            // Copy current weights from master policy
+            sync_policy_weights(self.selfplay_policy, self.policy_fp32);
+
+            // RNN state for inference forward: (num_layers, N, hidden) on CPU
+            // (kept on CPU to avoid MPS index_copy_ fallback corruption)
+            self.selfplay_state = torch::zeros(
+                {num_layers, N, hidden},
+                torch::TensorOptions().device(torch::kCPU));
+
+            self.selfplay_enabled = true;
+            printf("Selfplay enabled: frozen policy created (%d envs, hidden=%d)\n", N, hidden);
+        })
+        .def("update_selfplay_policy", [](PuffeRL& self) {
+            if (!self.selfplay_policy) return;
+            sync_policy_weights(self.selfplay_policy, self.policy_fp32);
+            // Reset RNN states after weight update
+            self.selfplay_state.zero_();
+        });
 
     py::class_<PolicyLSTM, std::shared_ptr<PolicyLSTM>, torch::nn::Module> cls(m, "PolicyLSTM");
     cls.def(py::init<int, int, int>());
@@ -370,6 +462,10 @@ PYBIND11_MODULE(_C, m) {
     py::class_<NMMO3Decoder, std::shared_ptr<NMMO3Decoder>, Decoder>(m, "NMMO3Decoder")
         .def(py::init<int, int>());
     py::class_<DriveEncoder, std::shared_ptr<DriveEncoder>, Encoder>(m, "DriveEncoder")
+        .def(py::init<int, int>());
+    py::class_<OsrsPvpEncoder, std::shared_ptr<OsrsPvpEncoder>, Encoder>(m, "OsrsPvpEncoder")
+        .def(py::init<int, int>());
+    py::class_<OsrsPvpDecoder, std::shared_ptr<OsrsPvpDecoder>, Decoder>(m, "OsrsPvpDecoder")
         .def(py::init<int, int>());
 
     py::class_<RNN, std::shared_ptr<RNN>, torch::nn::Module>(m, "RNN");

@@ -448,6 +448,72 @@ class G2048Decoder : public Decoder {
     }
 };
 
+// OSRS PvP encoder: 3-layer MLP (obs -> 2*hidden -> hidden -> hidden) with GELU
+// No embeddings needed — PvP observations are already normalized floats.
+class OsrsPvpEncoder : public Encoder {
+    public:
+        torch::nn::Linear linear1{nullptr};
+        torch::nn::Linear linear2{nullptr};
+        torch::nn::Linear linear3{nullptr};
+        int input;
+        int hidden;
+
+    OsrsPvpEncoder(int input, int hidden)
+        : input(input), hidden(hidden) {
+        linear1 = register_module("linear1", torch::nn::Linear(
+            torch::nn::LinearOptions(input, 2*hidden).bias(false)));
+        torch::nn::init::orthogonal_(linear1->weight, std::sqrt(2.0));
+
+        linear2 = register_module("linear2", torch::nn::Linear(
+            torch::nn::LinearOptions(2*hidden, hidden).bias(false)));
+        torch::nn::init::orthogonal_(linear2->weight, std::sqrt(2.0));
+
+        linear3 = register_module("linear3", torch::nn::Linear(
+            torch::nn::LinearOptions(hidden, hidden).bias(false)));
+        torch::nn::init::orthogonal_(linear3->weight, std::sqrt(2.0));
+    }
+
+    Tensor forward(Tensor x) override {
+        auto target_dtype = linear1->weight.dtype();
+        x = torch::gelu(linear1->forward(x.to(target_dtype)));
+        x = torch::gelu(linear2->forward(x));
+        x = torch::gelu(linear3->forward(x));
+        return x;
+    }
+};
+
+// OSRS PvP decoder: LayerNorm -> fused logits+value
+// Prevents bf16 overflow at high lr (Muon) by normalizing hidden state
+// before logit/value output. Without this, unbounded encoder activations
+// cause NaN in the value head (actor logits are protected by nan_to_num
+// in discrete_logprob_entropy_cpp, but value output is not).
+class OsrsPvpDecoder : public Decoder {
+    public:
+        torch::nn::LayerNorm layer_norm{nullptr};
+        torch::nn::Linear linear{nullptr};
+        int hidden;
+        int output;
+
+    OsrsPvpDecoder(int hidden, int output)
+        : hidden(hidden), output(output) {
+        layer_norm = register_module("layer_norm", torch::nn::LayerNorm(
+            torch::nn::LayerNormOptions({hidden})));
+
+        linear = register_module("linear", torch::nn::Linear(
+            torch::nn::LinearOptions(hidden, output + 1).bias(true)));
+        torch::nn::init::orthogonal_(linear->weight, 0.01);
+        torch::nn::init::constant_(linear->bias, 0.0);
+    }
+
+    std::tuple<Logits, Tensor> forward(Tensor h) override {
+        Tensor x = layer_norm->forward(h);
+        Tensor out = linear->forward(x);
+        Tensor logits = out.narrow(-1, 0, output);
+        Tensor value = out.narrow(-1, output, 1);
+        return {Logits{logits, Tensor()}, value.squeeze(-1)};
+    }
+};
+
 // Create policy with env-specific encoder/decoder
 Policy* create_policy(const std::string& env_name, int input_size, int hidden_size,
         int decoder_output_size, int num_layers, int act_n, bool is_continuous, bool kernels) {
@@ -465,6 +531,9 @@ Policy* create_policy(const std::string& env_name, int input_size, int hidden_si
         dec = std::make_shared<NMMO3Decoder>(hidden_size, decoder_output_size);
     } else if (env_name == "puffer_drive") {
         enc = std::make_shared<DriveEncoder>(input_size, hidden_size);
+        dec = std::make_shared<DefaultDecoder>(hidden_size, decoder_output_size, is_continuous);
+    } else if (env_name == "osrs_pvp") {
+        enc = std::make_shared<OsrsPvpEncoder>(input_size, hidden_size);
         dec = std::make_shared<DefaultDecoder>(hidden_size, decoder_output_size, is_continuous);
     } else {
         enc = std::make_shared<DefaultEncoder>(input_size, hidden_size);
