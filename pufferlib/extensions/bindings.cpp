@@ -420,10 +420,11 @@ PYBIND11_MODULE(_C, m) {
             // Copy current weights from master policy
             sync_policy_weights(self.selfplay_policy, self.policy_fp32);
 
-            // RNN state for inference forward: (num_layers, N, hidden) on CPU
-            // (kept on CPU to avoid MPS index_copy_ fallback corruption)
+            // RNN state for inference forward: on CPU to avoid MPS fallback corruption.
+            // query actual RNN layer count from the policy (may differ from config)
+            int rnn_layers = (int)self.selfplay_policy->initial_state(1, torch::kCPU).size(0);
             self.selfplay_state = torch::zeros(
-                {num_layers, N, hidden},
+                {rnn_layers, N, hidden},
                 torch::TensorOptions().device(torch::kCPU));
 
             self.selfplay_enabled = true;

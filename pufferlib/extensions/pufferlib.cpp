@@ -932,8 +932,11 @@ std::unique_ptr<pufferlib::PuffeRL> create_pufferl_impl(HypersT& hypers, const s
     int minibatch_segments = hypers.minibatch_size / horizon;
 
     pufferl->rollouts = create_rollouts(horizon, total_agents, input_size, num_action_heads);
+    // use actual RNN layer count from the policy (may differ from config num_layers
+    // when env-specific create_policy overrides the RNN depth)
+    int rnn_layers = (int)pufferl->policy_fp32->initial_state(1, g_device).size(0);
     pufferl->train_buf = create_train_graph(minibatch_segments, horizon, input_size,
-        hidden_size, num_action_heads, num_layers);
+        hidden_size, num_action_heads, rnn_layers);
 
     // Per-buffer states: each is {num_layers, block_size, hidden} for contiguous access
     pufferl->buffer_states.resize(num_buffers);

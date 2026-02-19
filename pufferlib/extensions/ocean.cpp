@@ -482,14 +482,16 @@ class OsrsPvpEncoder : public Encoder {
     }
 };
 
-// OSRS PvP decoder: LayerNorm -> fused logits+value
-// Prevents bf16 overflow at high lr (Muon) by normalizing hidden state
-// before logit/value output. Without this, unbounded encoder activations
-// cause NaN in the value head (actor logits are protected by nan_to_num
-// in discrete_logprob_entropy_cpp, but value output is not).
+// OSRS PvP decoder: 2-layer actor+critic with split initialization.
+// Matches pufferlib 3.0 architecture: intermediate hidden layer with ReLU
+// before the fused output. Value column uses std=1.0 (not 0.01) so the
+// critic starts with reasonable scale — without this, vf_loss converges
+// glacially because the value output starts near zero.
+// LayerNorm on input prevents bf16 overflow at high lr (Muon).
 class OsrsPvpDecoder : public Decoder {
     public:
         torch::nn::LayerNorm layer_norm{nullptr};
+        torch::nn::Linear intermediate{nullptr};
         torch::nn::Linear linear{nullptr};
         int hidden;
         int output;
@@ -499,14 +501,30 @@ class OsrsPvpDecoder : public Decoder {
         layer_norm = register_module("layer_norm", torch::nn::LayerNorm(
             torch::nn::LayerNormOptions({hidden})));
 
+        // intermediate layer: hidden -> hidden (matches 3.0's 2-layer heads)
+        intermediate = register_module("intermediate", torch::nn::Linear(
+            torch::nn::LinearOptions(hidden, hidden).bias(true)));
+        torch::nn::init::orthogonal_(intermediate->weight, std::sqrt(2.0));
+        torch::nn::init::constant_(intermediate->bias, 0.0);
+
+        // fused output: hidden -> (output + 1) where last column is value
+        // split init: actor columns std=0.01, value column std=1.0
         linear = register_module("linear", torch::nn::Linear(
             torch::nn::LinearOptions(hidden, output + 1).bias(true)));
-        torch::nn::init::orthogonal_(linear->weight, 0.01);
+        {
+            torch::NoGradGuard no_grad;
+            auto w = linear->weight;
+            // actor weights (rows 0..output-1): std=0.01
+            nn::init::orthogonal_(w.narrow(0, 0, output), 0.01);
+            // value weight (last row): std=1.0
+            nn::init::orthogonal_(w.narrow(0, output, 1), 1.0);
+        }
         torch::nn::init::constant_(linear->bias, 0.0);
     }
 
     std::tuple<Logits, Tensor> forward(Tensor h) override {
         Tensor x = layer_norm->forward(h);
+        x = torch::relu(intermediate->forward(x));
         Tensor out = linear->forward(x);
         Tensor logits = out.narrow(-1, 0, output);
         Tensor value = out.narrow(-1, output, 1);
@@ -534,11 +552,14 @@ Policy* create_policy(const std::string& env_name, int input_size, int hidden_si
         dec = std::make_shared<DefaultDecoder>(hidden_size, decoder_output_size, is_continuous);
     } else if (env_name == "osrs_pvp") {
         enc = std::make_shared<OsrsPvpEncoder>(input_size, hidden_size);
-        dec = std::make_shared<DefaultDecoder>(hidden_size, decoder_output_size, is_continuous);
+        dec = std::make_shared<OsrsPvpDecoder>(hidden_size, decoder_output_size);
     } else {
         enc = std::make_shared<DefaultEncoder>(input_size, hidden_size);
         dec = std::make_shared<DefaultDecoder>(hidden_size, decoder_output_size, is_continuous);
     }
-    auto rnn = std::make_shared<MinGRU>(hidden_size, num_layers, kernels);
+    // osrs_pvp: encoder has its own 3-layer MLP, so num_layers only controls MinGRU.
+    // use 1 MinGRU layer to match the working pufferlib 3.0 architecture.
+    int rnn_layers = (env_name == "osrs_pvp") ? 1 : num_layers;
+    auto rnn = std::make_shared<MinGRU>(hidden_size, rnn_layers, kernels);
     return new Policy(enc, dec, rnn, input_size, act_n, hidden_size);
 }
