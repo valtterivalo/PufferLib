@@ -291,7 +291,8 @@ torch::Tensor logcumsumexp_backward_metal(
 void sample_logits_metal(
     torch::Tensor logits, torch::Tensor logstd, torch::Tensor value,
     torch::Tensor actions_out, torch::Tensor logprobs_out, torch::Tensor value_out,
-    torch::Tensor act_sizes, uint64_t seed, torch::Tensor offset) {
+    torch::Tensor act_sizes, uint64_t seed, torch::Tensor offset,
+    torch::Tensor mask) {
     TORCH_CHECK(metal_is_ready(), "Metal context not initialized");
     @autoreleasepool {
 
@@ -305,6 +306,20 @@ void sample_logits_metal(
     int B = logits_m.size(0);
     int num_atns = act_sizes_m.size(0);
 
+    // Cache act_sizes sum and RNG offset tensor (constant across training)
+    static int cached_num_atns_total = -1;
+    static torch::Tensor persistent_offset;
+    if (cached_num_atns_total < 0) {
+        cached_num_atns_total = (int)act_sizes.to(torch::kInt32).sum().item<int>();
+        persistent_offset = torch::zeros({1}, mps_i32);
+    }
+    int num_atns_total = cached_num_atns_total;
+
+    // Prepare mask tensor on MPS (use provided mask or all-ones fallback)
+    auto mask_m = (mask.defined() && mask.numel() > 0)
+        ? to_mps(mask)
+        : torch::ones({B, num_atns_total}, mps_f32);
+
     // Bind caller's output tensors directly if they're MPS fp32 contiguous,
     // avoiding intermediate allocation + copy_. Otherwise allocate and copy.
     bool lp_direct = logprobs_out.is_mps() && logprobs_out.scalar_type() == torch::kFloat32 && logprobs_out.is_contiguous();
@@ -314,18 +329,19 @@ void sample_logits_metal(
     auto vo_buf = vo_direct ? value_out : mps_empty({B});
     // actions always need intermediate (kernel writes float, caller expects int)
     auto act_buf = mps_empty({B, num_atns});
-    auto offset_m = torch::zeros({1}, mps_i32);
+    auto& offset_m = persistent_offset;
 
     struct {
         uint64_t seed;
         int num_atns;
+        int num_atns_total;
         int B;
         int logits_stride;
         int logstd_stride;
         int value_stride;
         int is_continuous;
     } params = {
-        seed, num_atns, B,
+        seed, num_atns, num_atns_total, B,
         (int)logits_m.stride(0),
         is_continuous ? (int)logstd_m.stride(0) : 0,
         (int)value_m.stride(0),
@@ -346,6 +362,7 @@ void sample_logits_metal(
         set_buf(enc, act_sizes_m, 6);
         set_buf(enc, offset_m, 7);
         set_params(enc, params, 8);
+        set_buf(enc, mask_m, 9);
 
         NSUInteger tg = MIN((NSUInteger)pso.maxTotalThreadsPerThreadgroup, 256);
         [enc dispatchThreads:MTLSizeMake(B, 1, 1) threadsPerThreadgroup:MTLSizeMake(tg, 1, 1)];
@@ -709,7 +726,7 @@ std::tuple<torch::Tensor, torch::Tensor> prio_replay_metal(
         set_buf(enc, pw_t, 1);
         set_params(enc, prio_params, 2);
         [enc dispatchThreadgroups:MTLSizeMake(num_segments, 1, 1)
-           threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+           threadsPerThreadgroup:MTLSizeMake(32, 1, 1)];
 
         // Barrier: step 1 must complete before step 2 reads pw_t
         stream->endKernelCoalescing();

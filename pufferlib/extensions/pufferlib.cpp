@@ -329,7 +329,11 @@ void selfplay_step(PuffeRL* pufferl, int start, int block_size) {
 
     // Gather P1 obs for selfplay envs (obs is on CPU, move to device for forward)
     Tensor obs_block = pufferl->selfplay_obs.narrow(0, start, block_size);
-    Tensor sp_obs = obs_block.index_select(0, sp_idx).to(pufferl->device);
+    Tensor sp_obs_cpu = obs_block.index_select(0, sp_idx);
+    // Extract action mask from selfplay obs (last act_n floats, stays on CPU for sampling)
+    int act_n = pufferl->act_n;
+    Tensor sp_mask = sp_obs_cpu.narrow(1, sp_obs_cpu.size(1) - act_n, act_n);
+    Tensor sp_obs = sp_obs_cpu.to(pufferl->device);
 
     // Gather RNN states on CPU, move to device for forward pass
     Tensor sp_state = pufferl->selfplay_state.index_select(1, sp_idx_global)
@@ -342,13 +346,19 @@ void selfplay_step(PuffeRL* pufferl, int start, int block_size) {
     pufferl->selfplay_state.index_copy_(1, sp_idx_global, state_out.to(torch::kCPU));
 
     // Sample actions per head (categorical) — on CPU to avoid MPS multinomial issues
+    // Apply action mask before softmax to enforce valid actions
     Tensor logits_cpu = logits.mean.to(torch::kCPU);
     auto split = logits_cpu.split(
         c10::IntArrayRef(pufferl->act_sizes_vec.data(), num_atns), 1);
     std::vector<Tensor> act_vecs;
+    int mask_offset = 0;
     for (int h = 0; h < num_atns; h++) {
-        Tensor probs = split[h].softmax(-1);
+        Tensor head_logits = split[h];
+        Tensor head_mask = sp_mask.narrow(1, mask_offset, pufferl->act_sizes_vec[h]);
+        head_logits = head_logits.masked_fill(head_mask < 0.5f, -1e9f);
+        Tensor probs = head_logits.softmax(-1);
         act_vecs.push_back(at::multinomial(probs, 1, true));
+        mask_offset += pufferl->act_sizes_vec[h];
     }
     Tensor sp_actions = torch::cat(act_vecs, 1).to(torch::kInt32);
 
@@ -408,6 +418,18 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
     // Forward pass (use rollout copy which is on-device for MPS/CUDA)
     Tensor obs_dev = rollouts.observations.select(0, t).narrow(0, start, block_size);
     Tensor& state = pufferl->buffer_states[buf];
+
+    // Zero RNN state for envs that just terminated (episode boundary).
+    // Each episode is independent — carrying state across episodes corrupts
+    // the temporal context the RNN needs for value prediction.
+    // terminals is (block_size,) with 1.0 for finished episodes.
+    // state is (num_layers, block_size, hidden). Multiply by (1 - terminal)
+    // to zero terminated rows while preserving ongoing episode state.
+    if (hypers.use_rnn) {
+        Tensor keep = (1.0f - terminals.to(state.device())).unsqueeze(0).unsqueeze(-1);
+        state.mul_(keep);
+    }
+
     auto [logits, value, state_out] = pufferl->policy_bf16->forward(obs_dev, state);
     state.copy_(state_out, false);
 
@@ -416,24 +438,32 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
     Tensor logprobs = rollouts.logprobs.select(0, t).narrow(0, start, block_size);
     Tensor values = rollouts.values.select(0, t).narrow(0, start, block_size);
 
+    // Extract action mask from observations (last act_n floats, zero-copy view)
+    int act_n = pufferl->act_n;
+    Tensor mask_dev = obs_dev.narrow(1, obs_dev.size(1) - act_n, act_n);
+
 #ifdef WITH_CUDA
     sample_actions(logits, value, actions, logprobs, values,
         pufferl->act_sizes, pufferl->act_sizes_vec.data(),
-        pufferl->is_continuous, hypers.kernels, pufferl->rng_seed, pufferl->rng_offset);
+        pufferl->is_continuous, hypers.kernels, pufferl->rng_seed, pufferl->rng_offset,
+        mask_dev);
 #elif defined(WITH_METAL)
     if (hypers.kernels) {
         sample_logits_metal(logits.mean, logits.logstd, value,
             actions, logprobs, values,
-            pufferl->act_sizes, pufferl->rng_seed, Tensor());
+            pufferl->act_sizes, pufferl->rng_seed, Tensor(),
+            mask_dev);
     } else {
         Logits cpu_logits;
         cpu_logits.mean = logits.mean.to(torch::kCPU);
         if (logits.logstd.defined())
             cpu_logits.logstd = logits.logstd.to(torch::kCPU);
         Tensor cpu_value = value.to(torch::kCPU);
+        Tensor mask_cpu = mask_dev.to(torch::kCPU);
         sample_actions(cpu_logits, cpu_value, actions, logprobs, values,
             pufferl->act_sizes, pufferl->act_sizes_vec.data(),
-            pufferl->is_continuous, false, pufferl->rng_seed, Tensor());
+            pufferl->is_continuous, false, pufferl->rng_seed, Tensor(),
+            mask_cpu);
     }
 #else
     {
@@ -444,7 +474,8 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
         Tensor cpu_value = value.to(torch::kCPU);
         sample_actions(cpu_logits, cpu_value, actions, logprobs, values,
             pufferl->act_sizes, pufferl->act_sizes_vec.data(),
-            pufferl->is_continuous, false, pufferl->rng_seed, Tensor());
+            pufferl->is_continuous, false, pufferl->rng_seed, Tensor(),
+            mask_dev);
     }
 #endif
 
@@ -477,7 +508,6 @@ void rollouts_impl(PuffeRL& pufferl) {
 
     int horizon = hypers.horizon;
     int num_buffers = hypers.num_buffers;
-    // TODO: You removed state zeros and reward clamping
 
     for (int i = 0; i < num_buffers*horizon; ++i) {
         int buf = i % num_buffers;
@@ -640,6 +670,11 @@ void train_impl(PuffeRL& pufferl) {
             auto [logits, newvalue] = pufferl.policy_bf16->forward_train(graph.mb_obs, graph.mb_state);
             Tensor newvalue_out = graph.mb_newvalue.view({graph.mb_ratio.size(0), graph.mb_ratio.size(1)});
 
+            // Extract action mask from minibatch obs (last act_n floats)
+            int act_n = pufferl.act_n;
+            Tensor mb_mask = graph.mb_obs.narrow(-1, graph.mb_obs.size(-1) - act_n, act_n);
+            Tensor mask_flat = mb_mask.reshape({graph.mb_obs.size(0) * graph.mb_obs.size(1), -1});
+
             // TODO: Try using global (epoch-level) adv mean/std instead of per-minibatch
 #ifdef WITH_CUDA
             Tensor loss = (hypers.kernels
@@ -652,27 +687,25 @@ void train_impl(PuffeRL& pufferl) {
                     graph.mb_actions, graph.mb_logprobs, graph.mb_advantages, graph.mb_prio,
                     graph.mb_values, graph.mb_returns, graph.mb_ratio, newvalue_out,
                     pufferl.act_sizes, pufferl.losses,
-                    hypers.clip_coef, hypers.vf_clip_coef, hypers.vf_coef, hypers.ent_coef)
+                    hypers.clip_coef, hypers.vf_clip_coef, hypers.vf_coef, hypers.ent_coef,
+                    mask_flat)
             )[0];
 #elif defined(WITH_METAL)
-            Tensor loss = (hypers.kernels
-                ? PPOLossMetal::apply(logits.mean, logits.logstd, newvalue,
+            // Always use CPP loss path on Metal — PPOLossMetal doesn't support
+            // action masks, which would cause a ratio mismatch with masked sampling.
+            Tensor loss = fused_ppo_loss_cpp(logits.mean, logits.logstd, newvalue,
                     graph.mb_actions, graph.mb_logprobs, graph.mb_advantages, graph.mb_prio,
                     graph.mb_values, graph.mb_returns, graph.mb_ratio, newvalue_out,
                     pufferl.act_sizes, pufferl.losses,
-                    hypers.clip_coef, hypers.vf_clip_coef, hypers.vf_coef, hypers.ent_coef)
-                : fused_ppo_loss_cpp(logits.mean, logits.logstd, newvalue,
-                    graph.mb_actions, graph.mb_logprobs, graph.mb_advantages, graph.mb_prio,
-                    graph.mb_values, graph.mb_returns, graph.mb_ratio, newvalue_out,
-                    pufferl.act_sizes, pufferl.losses,
-                    hypers.clip_coef, hypers.vf_clip_coef, hypers.vf_coef, hypers.ent_coef)
-            )[0];
+                    hypers.clip_coef, hypers.vf_clip_coef, hypers.vf_coef, hypers.ent_coef,
+                    mask_flat)[0];
 #else
             Tensor loss = fused_ppo_loss_cpp(logits.mean, logits.logstd, newvalue,
                     graph.mb_actions, graph.mb_logprobs, graph.mb_advantages, graph.mb_prio,
                     graph.mb_values, graph.mb_returns, graph.mb_ratio, newvalue_out,
                     pufferl.act_sizes, pufferl.losses,
-                    hypers.clip_coef, hypers.vf_clip_coef, hypers.vf_coef, hypers.ent_coef)[0];
+                    hypers.clip_coef, hypers.vf_clip_coef, hypers.vf_coef, hypers.ent_coef,
+                    mask_flat)[0];
 #endif
 
             loss.backward();

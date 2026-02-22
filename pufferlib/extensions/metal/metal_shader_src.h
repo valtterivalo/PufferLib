@@ -70,18 +70,24 @@ inline float lerp_f(float a, float b, float w) {
     return abs(w) < 0.5f ? a + w * diff : b - diff * (1.0f - w);
 }
 
+// MSL has no built-in log1p. Goldberg's trick: compensates for rounding in 1+x.
+inline float log1p_f(float x) {
+    float u = 1.0f + x;
+    return (u == 1.0f) ? x : log(u) * x / (u - 1.0f);
+}
+
 constant float SOFTPLUS_BETA = 1.0f;
 constant float SOFTPLUS_THRESHOLD = 20.0f;
 
 inline float softplus_fwd(float x) {
     float xs = x * SOFTPLUS_BETA;
-    return xs > SOFTPLUS_THRESHOLD ? x : log(1.0f +exp(xs)) / SOFTPLUS_BETA;
+    return xs > SOFTPLUS_THRESHOLD ? x : log1p_f(exp(xs)) / SOFTPLUS_BETA;
 }
 
 inline void log_coeffs_and_values_fwd(float gate, float hidden,
                                        thread float& log_coeff, thread float& log_value) {
     float abs_gate = abs(gate);
-    float sp_neg = log(1.0f +exp(-abs_gate));
+    float sp_neg = log1p_f(exp(-abs_gate));
     float softplus_gate, softplus_neg_gate;
     if (gate >= 0.0f) {
         softplus_gate = gate + sp_neg;
@@ -192,79 +198,7 @@ kernel void puff_advantage_kernel(
 }
 
 // ============================================================================
-// Section 4: Select+Copy kernel (for minibatch preparation)
-// ============================================================================
-
-struct SelectCopyParams {
-    int obs_row_bytes;
-    int actions_row_bytes;
-    int logprobs_row_bytes;
-    int horizon;
-};
-
-// Each threadgroup handles one (mb, channel) pair.
-// channel 0=obs, 1=actions, 2=logprobs, 3=values+adv+returns, 4=prio
-kernel void select_copy_kernel(
-    const device int64_t* idx           [[buffer(0)]],
-    const device char* src_obs          [[buffer(1)]],
-    device char* dst_obs                [[buffer(2)]],
-    const device char* src_actions      [[buffer(3)]],
-    device char* dst_actions            [[buffer(4)]],
-    const device char* src_logprobs     [[buffer(5)]],
-    device char* dst_logprobs           [[buffer(6)]],
-    const device float* src_values      [[buffer(7)]],
-    device float* dst_values            [[buffer(8)]],
-    const device float* src_advantages  [[buffer(9)]],
-    device float* dst_advantages        [[buffer(10)]],
-    device float* dst_returns           [[buffer(11)]],
-    const device float* src_prio        [[buffer(12)]],
-    device float* dst_prio              [[buffer(13)]],
-    constant SelectCopyParams& p        [[buffer(14)]],
-    uint2 gid [[thread_position_in_grid]],
-    uint tid [[thread_index_in_threadgroup]]
-) {
-    int mb = gid.x;
-    int ch = gid.y;
-    int src_row = (int)idx[mb];
-
-    if (ch == 0) {
-        // Copy obs row (byte-level copy using int4 for coalescing)
-        const device int* s = (const device int*)(src_obs + (int64_t)src_row * p.obs_row_bytes);
-        device int* d = (device int*)(dst_obs + (int64_t)mb * p.obs_row_bytes);
-        for (int i = (int)tid; i < p.obs_row_bytes / 4; i += 256) {
-            d[i] = s[i];
-        }
-    } else if (ch == 1) {
-        const device int* s = (const device int*)(src_actions + (int64_t)src_row * p.actions_row_bytes);
-        device int* d = (device int*)(dst_actions + (int64_t)mb * p.actions_row_bytes);
-        for (int i = (int)tid; i < p.actions_row_bytes / 4; i += 256) {
-            d[i] = s[i];
-        }
-    } else if (ch == 2) {
-        const device int* s = (const device int*)(src_logprobs + (int64_t)src_row * p.logprobs_row_bytes);
-        device int* d = (device int*)(dst_logprobs + (int64_t)mb * p.logprobs_row_bytes);
-        for (int i = (int)tid; i < p.logprobs_row_bytes / 4; i += 256) {
-            d[i] = s[i];
-        }
-    } else if (ch == 3) {
-        int srh = src_row * p.horizon;
-        int drh = mb * p.horizon;
-        for (int i = (int)tid; i < p.horizon; i += 256) {
-            float val = src_values[srh + i];
-            float adv_val = src_advantages[srh + i];
-            dst_values[drh + i] = val;
-            dst_advantages[drh + i] = adv_val;
-            dst_returns[drh + i] = val + adv_val;
-        }
-    } else if (ch == 4) {
-        if (tid == 0) {
-            dst_prio[mb] = src_prio[mb];
-        }
-    }
-}
-
-// ============================================================================
-// Section 5: Philox RNG (for sampling kernel)
+// Section 4: Philox RNG (for sampling kernel)
 // ============================================================================
 
 // Philox4x32-10 counter-based RNG (same algorithm as cuRAND)
@@ -321,6 +255,7 @@ inline float philox_normal(float u1, float u2) {
 struct SampleParams {
     uint64_t seed;
     int num_atns;
+    int num_atns_total;  // sum of act_sizes (e.g. 39), for mask buffer indexing
     int B;
     int logits_stride;
     int logstd_stride;
@@ -338,6 +273,7 @@ kernel void sample_logits_kernel(
     const device int* act_sizes         [[buffer(6)]],
     device atomic_uint* offset_ptr      [[buffer(7)]],
     constant SampleParams& sp           [[buffer(8)]],
+    const device float* action_mask     [[buffer(9)]],
     uint idx [[thread_position_in_grid]]
 ) {
     if ((int)idx >= sp.B) return;
@@ -388,19 +324,26 @@ kernel void sample_logits_kernel(
         for (int h = 0; h < sp.num_atns; h++) {
             int A = act_sizes[h];
 
-            // Find max for numerical stability (with nan_to_num)
+            // Mask base index for this env (flat across all heads)
+            int mask_base = (int)idx * sp.num_atns_total;
+
+            // Find max for numerical stability (with mask + nan_to_num)
             float max_val = -INFINITY;
             for (int a = 0; a < A; a++) {
                 float l = logits[logits_base + logits_offset + a];
+                float m = action_mask[mask_base + logits_offset + a];
+                if (m < 0.5f) l = -1e9f;
                 if (isnan(l)) l = 0.0f;
                 if (isinf(l)) l = (l > 0) ? 3.4028e+38f : -3.4028e+38f;
                 max_val = fmax(max_val, l);
             }
 
-            // logsumexp
+            // logsumexp (with mask)
             float sum_exp = 0.0f;
             for (int a = 0; a < A; a++) {
                 float l = logits[logits_base + logits_offset + a];
+                float m = action_mask[mask_base + logits_offset + a];
+                if (m < 0.5f) l = -1e9f;
                 if (isnan(l)) l = 0.0f;
                 if (isinf(l)) l = (l > 0) ? 3.4028e+38f : -3.4028e+38f;
                 sum_exp += exp(l - max_val);
@@ -415,11 +358,13 @@ kernel void sample_logits_kernel(
                 rng_idx = 0;
             }
 
-            // Inverse CDF sampling
+            // Inverse CDF sampling (with mask)
             float cumsum = 0.0f;
             int sampled_action = A - 1;
             for (int a = 0; a < A; a++) {
                 float l = logits[logits_base + logits_offset + a];
+                float m = action_mask[mask_base + logits_offset + a];
+                if (m < 0.5f) l = -1e9f;
                 if (isnan(l)) l = 0.0f;
                 if (isinf(l)) l = (l > 0) ? 3.4028e+38f : -3.4028e+38f;
                 float prob = exp(l - logsumexp_val);
@@ -430,8 +375,10 @@ kernel void sample_logits_kernel(
                 }
             }
 
-            // Gather log probability
+            // Gather log probability (with mask)
             float sampled_logit = logits[logits_base + logits_offset + sampled_action];
+            float sm = action_mask[mask_base + logits_offset + sampled_action];
+            if (sm < 0.5f) sampled_logit = -1e9f;
             if (isnan(sampled_logit)) sampled_logit = 0.0f;
             if (isinf(sampled_logit)) sampled_logit = (sampled_logit > 0) ? 3.4028e+38f : -3.4028e+38f;
             float log_prob = sampled_logit - logsumexp_val;
@@ -507,7 +454,7 @@ kernel void fused_scan_forward_checkpointed(
 
         float z = log_value - a_star;
         float max_val = fmax(s, z);
-        s = max_val + log(1.0f +exp(-abs(s - z)));
+        s = max_val + log1p_f(exp(-abs(s - z)));
 
         float scan_result = exp(a_star + s);
         float proj_sigmoid = sigmoid_f(proj_val);
@@ -588,7 +535,7 @@ kernel void fused_scan_backward_checkpointed(
 
             float z = recomp_log_value - recomp_a_star;
             float mv = fmax(recomp_s, z);
-            recomp_s = mv + log(1.0f +exp(-abs(recomp_s - z)));
+            recomp_s = mv + log1p_f(exp(-abs(recomp_s - z)));
 
             chunk_a_star[i] = recomp_a_star;
             chunk_s[i] = recomp_s;
@@ -693,7 +640,7 @@ kernel void logcumsumexp_forward_kernel(
         } else {
             float min_v = fmin(s, x_val);
             float max_v = fmax(s, x_val);
-            float y = log(1.0f +exp(min_v - max_v)) - compensation;
+            float y = log1p_f(exp(min_v - max_v)) - compensation;
             float t_val = max_v + y;
             compensation = (t_val - max_v) - y;
             s = t_val;
@@ -1119,7 +1066,7 @@ kernel void prio_adv_reduction_kernel(
     int offset = (int)row * pp.stride;
 
     float local_sum = 0.0f;
-    for (int t = (int)tx; t < pp.stride; t += 256) {
+    for (int t = (int)tx; t < pp.stride; t += 32) {
         local_sum += abs(advantages[offset + t]);
     }
 

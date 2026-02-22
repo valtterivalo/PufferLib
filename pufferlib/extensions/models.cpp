@@ -502,15 +502,23 @@ Tensor logcumsumexp_cpp(Tensor x) {
 
 // Sample from multi-head discrete distribution
 // Returns {actions (B, heads), total_logprob (B,)}
-vector<Tensor> sample_discrete_cpp(Tensor logits, const int64_t* act_sizes_data, int num_heads) {
+// mask: optional (B, total_A) float tensor, 1=valid 0=invalid
+vector<Tensor> sample_discrete_cpp(Tensor logits, const int64_t* act_sizes_data, int num_heads, Tensor mask = {}) {
     logits = torch::nan_to_num(logits, 1e-8, 1e-8, 1e-8);
     auto split = torch::split(logits, c10::IntArrayRef(act_sizes_data, num_heads), 1);
     vector<Tensor> actions_vec, logprobs_vec;
+    int offset = 0;
     for (int i = 0; i < num_heads; i++) {
-        auto log_probs = torch::log_softmax(split[i], 1);
+        auto head_logits = split[i];
+        if (mask.defined() && mask.numel() > 0) {
+            auto head_mask = mask.narrow(1, offset, act_sizes_data[i]);
+            head_logits = head_logits.masked_fill(head_mask < 0.5f, -1e9f);
+        }
+        auto log_probs = torch::log_softmax(head_logits, 1);
         auto action = at::multinomial(log_probs.exp(), 1, true);
         actions_vec.push_back(action);
         logprobs_vec.push_back(log_probs.gather(1, action));
+        offset += act_sizes_data[i];
     }
     return {torch::cat(actions_vec, 1), torch::cat(logprobs_vec, 1).sum(1)};
 }
@@ -526,17 +534,25 @@ vector<Tensor> sample_continuous_cpp(Tensor mean, Tensor logstd) {
 
 // Compute logprob + entropy for multi-head discrete actions
 // Returns {logprob (batch,), entropy scalar}
-vector<Tensor> discrete_logprob_entropy_cpp(Tensor logits, Tensor actions, const int64_t* act_sizes_data, int num_heads) {
+// mask: optional (batch, total_A) float tensor, 1=valid 0=invalid
+vector<Tensor> discrete_logprob_entropy_cpp(Tensor logits, Tensor actions, const int64_t* act_sizes_data, int num_heads, Tensor mask = {}) {
     logits = torch::nan_to_num(logits, 1e-8, 1e-8, 1e-8);
     auto split = torch::split(logits, c10::IntArrayRef(act_sizes_data, num_heads), 1);
     int batch = logits.size(0);
     vector<Tensor> logprobs_vec, entropies_vec;
+    int offset = 0;
     for (int h = 0; h < num_heads; h++) {
-        auto log_probs = torch::log_softmax(split[h], 1);
+        auto head_logits = split[h];
+        if (mask.defined() && mask.numel() > 0) {
+            auto head_mask = mask.narrow(1, offset, act_sizes_data[h]);
+            head_logits = head_logits.masked_fill(head_mask < 0.5f, -1e9f);
+        }
+        auto log_probs = torch::log_softmax(head_logits, 1);
         auto probs = log_probs.exp();
         auto head_actions = actions.select(-1, h).reshape({batch}).to(torch::kInt64);
         logprobs_vec.push_back(log_probs.gather(1, head_actions.unsqueeze(1)));
         entropies_vec.push_back(-(probs * log_probs).sum(1, true));
+        offset += act_sizes_data[h];
     }
     auto logprob = torch::cat(logprobs_vec, 1).sum(1);
     auto entropy = torch::cat(entropies_vec, 1).sum(1).mean();
@@ -586,10 +602,12 @@ Tensor ppo_loss_cpp(Tensor ratio, Tensor advantages, Tensor prio,
 }
 
 // Dispatch: sample actions using kernel or cpp path, write to output buffers
+// mask: optional (B, total_A) float tensor, 1=valid 0=invalid
 void sample_actions(Logits& logits, Tensor value,
         Tensor actions_out, Tensor logprobs_out, Tensor values_out,
         Tensor act_sizes, const int64_t* act_sizes_data,
-        bool is_continuous, bool kernels, uint64_t rng_seed, Tensor rng_offset) {
+        bool is_continuous, bool kernels, uint64_t rng_seed, Tensor rng_offset,
+        Tensor mask = {}) {
 #ifdef WITH_CUDA
     if (kernels) {
         Tensor logstd = logits.logstd.defined() ? logits.logstd : Tensor();
@@ -602,7 +620,7 @@ void sample_actions(Logits& logits, Tensor value,
         if (is_continuous) {
             result = sample_continuous_cpp(logits.mean, logits.logstd);
         } else {
-            result = sample_discrete_cpp(logits.mean, act_sizes_data, actions_out.size(1));
+            result = sample_discrete_cpp(logits.mean, act_sizes_data, actions_out.size(1), mask);
         }
         actions_out.copy_(result[0].to(actions_out.dtype()), false);
         logprobs_out.copy_(result[1], false);
@@ -648,13 +666,15 @@ std::tuple<Tensor, Tensor> prio_replay_cpp(
 }
 
 // Fused PPO loss (PyTorch fallback path — matches PPOLoss::apply signature)
+// mask: optional (batch, total_A) float tensor, 1=valid 0=invalid
 torch::autograd::tensor_list fused_ppo_loss_cpp(
         Tensor logits, Tensor logstd, Tensor newvalue,
         Tensor actions, Tensor old_logprobs, Tensor advantages, Tensor prio,
         Tensor values, Tensor returns,
         Tensor ratio_out, Tensor newvalue_out,
         Tensor act_sizes, Tensor losses,
-        float clip_coef, float vf_clip_coef, float vf_coef, float ent_coef) {
+        float clip_coef, float vf_clip_coef, float vf_coef, float ent_coef,
+        Tensor mask = {}) {
     bool is_continuous = logstd.numel() > 0;
     int num_heads = actions.size(-1);
     int segments = actions.size(0);
@@ -669,7 +689,7 @@ torch::autograd::tensor_list fused_ppo_loss_cpp(
     } else {
         Tensor act_sizes_cpu = act_sizes.to(torch::kCPU).to(torch::kInt64).contiguous();
         result = discrete_logprob_entropy_cpp(
-            logits.reshape({batch, -1}), actions, act_sizes_cpu.data_ptr<int64_t>(), num_heads);
+            logits.reshape({batch, -1}), actions, act_sizes_cpu.data_ptr<int64_t>(), num_heads, mask);
     }
     Tensor ratio = (result[0].reshape({segments, horizon}) - old_logprobs).exp();
     ratio_out.copy_(ratio, false);

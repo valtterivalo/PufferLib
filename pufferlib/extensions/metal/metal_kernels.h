@@ -34,10 +34,12 @@ torch::Tensor logcumsumexp_backward_metal(
     torch::Tensor grad_out, torch::Tensor x, torch::Tensor s_buf);
 
 // --- Sampling ---
+// mask: (B, num_atns_total) float, 1=valid 0=invalid action
 void sample_logits_metal(
     torch::Tensor logits, torch::Tensor logstd, torch::Tensor value,
     torch::Tensor actions_out, torch::Tensor logprobs_out, torch::Tensor value_out,
-    torch::Tensor act_sizes, uint64_t seed, torch::Tensor offset);
+    torch::Tensor act_sizes, uint64_t seed, torch::Tensor offset,
+    torch::Tensor mask);
 
 // --- PPO loss ---
 std::vector<torch::Tensor> ppo_loss_forward_metal(

@@ -168,10 +168,17 @@ void osrs_pvp_set_pfsp_weights(void* vec_ptr, int* pool, int* cum_weights, int p
     Env* envs = (Env*)vec->envs;
     if (pool_size > MAX_OPPONENT_POOL) pool_size = MAX_OPPONENT_POOL;
     for (int e = 0; e < vec->size; e++) {
+        int was_unconfigured = (envs[e].pfsp.pool_size == 0);
         envs[e].pfsp.pool_size = pool_size;
         for (int i = 0; i < pool_size; i++) {
             envs[e].pfsp.pool[i] = (OpponentType)pool[i];
             envs[e].pfsp.cum_weights[i] = cum_weights[i];
+        }
+        // Only reset on first configuration — restarts the episode that was started
+        // during env creation before the pool was set (would have used fallback opponent).
+        // Periodic weight updates must NOT reset: that would corrupt PufferLib's rollout.
+        if (was_unconfigured) {
+            c_reset(&envs[e]);
         }
     }
 }
