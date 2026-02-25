@@ -1894,10 +1894,11 @@ static PufTensor mingru_forward(void *w, PufTensor x, PufTensor state,
                       (const float *)a->combined[i].bytes,
                       (const float *)state_i.bytes, H, B);
     } else {
-      mtl_mingru_gate((float *)a->out.bytes, (float *)a->next_state.bytes,
+      // In-place state update: each thread reads state[idx] before writing.
+      // Safe because the kernel has no cross-element dependencies.
+      mtl_mingru_gate((float *)a->out.bytes, (float *)state_i.bytes,
                       (const float *)a->combined[i].bytes,
                       (const float *)state_i.bytes, H, B, stream);
-      puf_copy(state_i, a->next_state, stream);
     }
     x = a->out;
   }
