@@ -2404,6 +2404,429 @@ kernel void reduce_ksplit(
     C[gid] = p.alpha * sum + p.beta * C[gid];
 }
 
+// ============================================================================
+// Section 22b: FP16 decoder gradient assembly (fp32 PPO grads → fp16 grad_out)
+// ============================================================================
+
+// Reads fp32 grad_logits and grad_value (from PPO kernel), writes fp16 grad_out.
+// grad_out[row * od1 + col] = (col < od) ? grad_logits[row * od + col] : grad_value[row]
+kernel void assemble_decoder_grad_f32_to_f16(
+    device half* grad_out                   [[buffer(0)]],
+    const device float* grad_logits         [[buffer(1)]],
+    const device float* grad_value          [[buffer(2)]],
+    constant int& B_TT                      [[buffer(3)]],
+    constant int& od                        [[buffer(4)]],
+    constant int& od1                       [[buffer(5)]],
+    uint gid [[thread_position_in_grid]]
+) {
+    int total = B_TT * od1;
+    if ((int)gid >= total) return;
+    int row = (int)gid / od1;
+    int col = (int)gid % od1;
+    float val = (col < od) ? grad_logits[row * od + col] : grad_value[row];
+    grad_out[gid] = half(val);
+}
+
+// ============================================================================
+// Section 23: FP16 cast kernels
+// ============================================================================
+
+kernel void cast_f32_to_f16(
+    device half* dst            [[buffer(0)]],
+    const device float* src     [[buffer(1)]],
+    constant int& count         [[buffer(2)]],
+    uint gid [[thread_position_in_grid]]
+) {
+    if ((int)gid >= count) return;
+    dst[gid] = half(src[gid]);
+}
+
+kernel void cast_f16_to_f32(
+    device float* dst           [[buffer(0)]],
+    const device half* src      [[buffer(1)]],
+    constant int& count         [[buffer(2)]],
+    uint gid [[thread_position_in_grid]]
+) {
+    if ((int)gid >= count) return;
+    dst[gid] = float(src[gid]);
+}
+
+// ============================================================================
+// Section 24: FP16 GEMM — half inputs, float accumulation, half output
+// Same tile strategy as sgemm_reg (BM=BN=32, BK=16, TM=TN=4).
+// ============================================================================
+
+kernel void hgemm_reg(
+    device const half* A       [[buffer(0)]],
+    device const half* B       [[buffer(1)]],
+    device half* C             [[buffer(2)]],
+    constant GemmParams& p     [[buffer(3)]],
+    uint2 group_id    [[threadgroup_position_in_grid]],
+    uint2 local_id    [[thread_position_in_threadgroup]]
+) {
+    threadgroup half sA[BM][BK];
+    threadgroup half sB[BK][BN];
+
+    int trow = (int)local_id.y;
+    int tcol = (int)local_id.x;
+    int tid = trow * (BN / TN) + tcol;
+
+    float acc[TM][TN];
+    for (int m = 0; m < TM; m++)
+        for (int n = 0; n < TN; n++)
+            acc[m][n] = 0.0f;
+
+    int num_k_tiles = (p.K + BK - 1) / BK;
+
+    for (int kt = 0; kt < num_k_tiles; kt++) {
+        int k_base = kt * BK;
+
+        for (int i = 0; i < (BM * BK) / 64; i++) {
+            int idx = tid + i * 64;
+            int r = idx / BK;
+            int c = idx % BK;
+            int gr = (int)group_id.y * BM + r;
+            int gc = k_base + c;
+            sA[r][c] = (gr < p.M && gc < p.K)
+                ? (p.trans_a ? A[gc * p.lda + gr] : A[gr * p.lda + gc])
+                : half(0.0h);
+        }
+
+        for (int i = 0; i < (BK * BN) / 64; i++) {
+            int idx = tid + i * 64;
+            int r = idx / BN;
+            int c = idx % BN;
+            int gr = k_base + r;
+            int gc = (int)group_id.x * BN + c;
+            sB[r][c] = (gr < p.K && gc < p.N)
+                ? (p.trans_b ? B[gc * p.ldb + gr] : B[gr * p.ldb + gc])
+                : half(0.0h);
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        for (int k = 0; k < BK; k++) {
+            float a_reg[TM];
+            float b_reg[TN];
+            for (int m = 0; m < TM; m++) a_reg[m] = float(sA[trow * TM + m][k]);
+            for (int n = 0; n < TN; n++) b_reg[n] = float(sB[k][tcol * TN + n]);
+            for (int m = 0; m < TM; m++)
+                for (int n = 0; n < TN; n++)
+                    acc[m][n] += a_reg[m] * b_reg[n];
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    int row_base = (int)group_id.y * BM + trow * TM;
+    int col_base = (int)group_id.x * BN + tcol * TN;
+    for (int m = 0; m < TM; m++) {
+        for (int n = 0; n < TN; n++) {
+            int r = row_base + m;
+            int c = col_base + n;
+            if (r < p.M && c < p.N) {
+                int idx = r * p.ldc + c;
+                C[idx] = half(p.alpha * acc[m][n] + p.beta * float(C[idx]));
+            }
+        }
+    }
+}
+
+// FP16 K-split GEMM — half inputs, float partials (same reduce step)
+kernel void hgemm_ksplit(
+    device const half* A       [[buffer(0)]],
+    device const half* B       [[buffer(1)]],
+    device float* partials     [[buffer(2)]],
+    constant GemmParams& p     [[buffer(3)]],
+    constant int& k_per_split  [[buffer(4)]],
+    uint3 group_id    [[threadgroup_position_in_grid]],
+    uint3 local_id    [[thread_position_in_threadgroup]]
+) {
+    threadgroup half sA[BM][BK];
+    threadgroup half sB[BK][BN];
+
+    int trow = (int)local_id.y;
+    int tcol = (int)local_id.x;
+    int tid = trow * (BN / TN) + tcol;
+
+    float acc[TM][TN];
+    for (int m = 0; m < TM; m++)
+        for (int n = 0; n < TN; n++)
+            acc[m][n] = 0.0f;
+
+    int k_start = (int)group_id.z * k_per_split;
+    int k_end = min(k_start + k_per_split, p.K);
+    int num_k_tiles = (k_end - k_start + BK - 1) / BK;
+
+    for (int kt = 0; kt < num_k_tiles; kt++) {
+        int k_base = k_start + kt * BK;
+
+        for (int i = 0; i < (BM * BK) / 64; i++) {
+            int idx = tid + i * 64;
+            int r = idx / BK;
+            int c = idx % BK;
+            int gr = (int)group_id.y * BM + r;
+            int gc = k_base + c;
+            sA[r][c] = (gr < p.M && gc < k_end)
+                ? (p.trans_a ? A[gc * p.lda + gr] : A[gr * p.lda + gc])
+                : half(0.0h);
+        }
+
+        for (int i = 0; i < (BK * BN) / 64; i++) {
+            int idx = tid + i * 64;
+            int r = idx / BN;
+            int c = idx % BN;
+            int gr = k_base + r;
+            int gc = (int)group_id.x * BN + c;
+            sB[r][c] = (gr < k_end && gc < p.N)
+                ? (p.trans_b ? B[gc * p.ldb + gr] : B[gr * p.ldb + gc])
+                : half(0.0h);
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        for (int k = 0; k < BK; k++) {
+            float a_reg[TM];
+            float b_reg[TN];
+            for (int m = 0; m < TM; m++) a_reg[m] = float(sA[trow * TM + m][k]);
+            for (int n = 0; n < TN; n++) b_reg[n] = float(sB[k][tcol * TN + n]);
+            for (int m = 0; m < TM; m++)
+                for (int n = 0; n < TN; n++)
+                    acc[m][n] += a_reg[m] * b_reg[n];
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    int split_offset = (int)group_id.z * p.M * p.N;
+    int row_base = (int)group_id.y * BM + trow * TM;
+    int col_base = (int)group_id.x * BN + tcol * TN;
+    for (int m = 0; m < TM; m++) {
+        for (int n = 0; n < TN; n++) {
+            int r = row_base + m;
+            int c = col_base + n;
+            if (r < p.M && c < p.N) {
+                partials[split_offset + r * p.N + c] = acc[m][n];
+            }
+        }
+    }
+}
+
+// Reduce K-split partials to fp16 output
+kernel void reduce_ksplit_fp16(
+    device const float* partials   [[buffer(0)]],
+    device half* C                 [[buffer(1)]],
+    constant ReduceKsplitParams& p [[buffer(2)]],
+    uint gid [[thread_position_in_grid]]
+) {
+    if ((int)gid >= p.MN) return;
+    float sum = 0.0f;
+    for (int s = 0; s < p.num_splits; s++) {
+        sum += partials[s * p.MN + (int)gid];
+    }
+    C[gid] = half(p.alpha * sum + p.beta * float(C[gid]));
+}
+
+// ============================================================================
+// Section 25: FP16 MinGRU scan kernels — half I/O, float internal computation
+// ============================================================================
+
+kernel void fused_scan_forward_checkpointed_fp16(
+    device half* out                [[buffer(0)]],
+    device half* next_state         [[buffer(1)]],
+    device float* a_star_buf        [[buffer(2)]],
+    device float* s_buf             [[buffer(3)]],
+    device float* log_values_buf    [[buffer(4)]],
+    const device half* combined     [[buffer(5)]],
+    const device half* state        [[buffer(6)]],
+    constant ScanParams& p          [[buffer(7)]],
+    uint idx [[thread_position_in_grid]]
+) {
+    if ((int)idx >= p.B * p.H) return;
+
+    int b = (int)idx / p.H;
+    int h = (int)idx % p.H;
+    int bH = b * p.H;
+    int H3 = 3 * p.H;
+    int bHT = bH * p.T_seq;
+    int out_base = bHT + h;
+    int cbase = 3 * bHT;
+
+    float a_star = 0.0f;
+    float log_value = 0.0f;
+    float s = log(float(state[bH + h]));
+    log_value = s;
+
+    int T_out = p.T_seq + 1;
+    int buf_base = b * T_out * p.H + h;
+    int buf_curr = buf_base;
+    a_star_buf[buf_curr] = a_star;
+    s_buf[buf_curr] = s;
+    log_values_buf[buf_curr] = log_value;
+
+    int out_curr = out_base;
+    int t_offset = 0;
+
+    for (int t = 1; t < p.T_seq + 1; t++) {
+        float hidden_val = float(combined[cbase + h + t_offset]);
+        float gate_val = float(combined[cbase + p.H + h + t_offset]);
+        float proj_val = float(combined[cbase + 2 * p.H + h + t_offset]);
+
+        float log_coeff_val;
+        log_coeffs_and_values_fwd(gate_val, hidden_val, log_coeff_val, log_value);
+
+        a_star += log_coeff_val;
+
+        float z = log_value - a_star;
+        float max_val = fmax(s, z);
+        s = max_val + log1p_f(exp(-abs(s - z)));
+
+        float scan_result = exp(a_star + s);
+        float proj_sigmoid = sigmoid_f(proj_val);
+
+        out[out_curr] = half(proj_sigmoid * scan_result);
+
+        buf_curr += p.H;
+        out_curr += p.H;
+        t_offset += H3;
+
+        if (t % CHECKPOINT_INTERVAL == 0) {
+            a_star_buf[buf_curr] = a_star;
+            s_buf[buf_curr] = s;
+            log_values_buf[buf_curr] = log_value;
+        }
+    }
+
+    next_state[bH + h] = half(exp(a_star + s));
+}
+
+kernel void fused_scan_backward_checkpointed_fp16(
+    device half* grad_combined            [[buffer(0)]],
+    device half* grad_state               [[buffer(1)]],
+    const device half* grad_out           [[buffer(2)]],
+    const device half* grad_next_state    [[buffer(3)]],
+    const device half* combined           [[buffer(4)]],
+    const device half* state              [[buffer(5)]],
+    const device float* a_star_buf        [[buffer(6)]],
+    const device float* s_buf             [[buffer(7)]],
+    const device float* log_values_buf    [[buffer(8)]],
+    constant ScanParams& p                [[buffer(9)]],
+    uint idx [[thread_position_in_grid]]
+) {
+    if ((int)idx >= p.B * p.H) return;
+
+    int b = (int)idx / p.H;
+    int h = (int)idx % p.H;
+    int bHT = b * p.H * p.T_seq;
+    int cbase = 3 * bHT;
+    int H3 = 3 * p.H;
+    int state_idx = b * p.H + h;
+    int out_base = bHT + h;
+
+    int T_out = p.T_seq + 1;
+    int buf_base = b * T_out * p.H + h;
+
+    float acc = 0.0f;
+    float s_val_next = 0.0f;
+    float carry_grad_a = 0.0f;
+
+    for (int chunk_end = p.T_seq; chunk_end > 0; chunk_end -= CHECKPOINT_INTERVAL) {
+        int chunk_start = (chunk_end > CHECKPOINT_INTERVAL) ? (chunk_end - CHECKPOINT_INTERVAL) : 0;
+        int chunk_len = chunk_end - chunk_start;
+
+        float chunk_a_star[CHECKPOINT_INTERVAL];
+        float chunk_s[CHECKPOINT_INTERVAL];
+        float chunk_log_values[CHECKPOINT_INTERVAL];
+        float chunk_hidden[CHECKPOINT_INTERVAL];
+        float chunk_gate[CHECKPOINT_INTERVAL];
+
+        int ckpt_buf_idx = buf_base + chunk_start * p.H;
+        float recomp_a_star = a_star_buf[ckpt_buf_idx];
+        float recomp_s = s_buf[ckpt_buf_idx];
+        float recomp_log_value = log_values_buf[ckpt_buf_idx];
+
+        for (int i = 0; i < chunk_len; i++) {
+            int t = chunk_start + 1 + i;
+            int t_offset = (t - 1) * H3;
+            float hv = float(combined[cbase + h + t_offset]);
+            float gv = float(combined[cbase + p.H + h + t_offset]);
+
+            float lc;
+            log_coeffs_and_values_fwd(gv, hv, lc, recomp_log_value);
+            recomp_a_star += lc;
+
+            float z = recomp_log_value - recomp_a_star;
+            float mv = fmax(recomp_s, z);
+            recomp_s = mv + log1p_f(exp(-abs(recomp_s - z)));
+
+            chunk_a_star[i] = recomp_a_star;
+            chunk_s[i] = recomp_s;
+            chunk_log_values[i] = recomp_log_value;
+            chunk_hidden[i] = hv;
+            chunk_gate[i] = gv;
+        }
+
+        for (int i = chunk_len - 1; i >= 0; i--) {
+            int t = chunk_start + 1 + i;
+            int t_offset = (t - 1) * H3;
+
+            float a_star_t = chunk_a_star[i];
+            float s_t = chunk_s[i];
+            float log_value_t = chunk_log_values[i];
+            float hidden_val = chunk_hidden[i];
+            float gate_val = chunk_gate[i];
+            float proj_val = float(combined[cbase + 2 * p.H + h + t_offset]);
+
+            float scan_result = exp(a_star_t + s_t);
+            float z = log_value_t - a_star_t;
+
+            float grad_out_val = float(grad_out[out_base + (t - 1) * p.H]);
+            float grad_scan_from_next = (t == p.T_seq) ? float(grad_next_state[state_idx]) : 0.0f;
+
+            float proj_sigmoid = sigmoid_f(proj_val);
+            float grad_scan_result = grad_scan_from_next + grad_out_val * proj_sigmoid;
+            float grad_proj = grad_out_val * scan_result * proj_sigmoid * (1.0f - proj_sigmoid);
+
+            float grad_log_h = grad_scan_result * scan_result;
+            float grad_s = grad_log_h;
+
+            if (t == p.T_seq) {
+                acc = grad_s;
+            } else {
+                acc = grad_s + acc * exp(s_t - s_val_next);
+            }
+            float grad_z = acc * exp(z - s_t);
+            s_val_next = s_t;
+
+            float grad_a = grad_log_h + carry_grad_a - grad_z;
+            carry_grad_a = grad_a;
+
+            float grad_g, grad_h;
+            log_coeffs_and_values_bwd(grad_a, grad_z, gate_val, hidden_val, grad_g, grad_h);
+
+            grad_combined[cbase + h + t_offset] = half(grad_h);
+            grad_combined[cbase + p.H + h + t_offset] = half(grad_g);
+            grad_combined[cbase + 2 * p.H + h + t_offset] = half(grad_proj);
+        }
+    }
+
+    int ckpt_0_idx = buf_base;
+    float a_star_0 = a_star_buf[ckpt_0_idx];
+    float s_0 = s_buf[ckpt_0_idx];
+    float log_value_0 = log_values_buf[ckpt_0_idx];
+
+    float scan_result_0 = exp(a_star_0 + s_0);
+    float z_0 = log_value_0 - a_star_0;
+
+    float grad_log_h_0 = 0.0f;
+    float grad_s_0 = grad_log_h_0;
+
+    acc = grad_s_0 + acc * exp(s_0 - s_val_next);
+    float grad_z_0 = acc * exp(z_0 - s_0);
+
+    grad_state[state_idx] = half(grad_z_0 / float(state[state_idx]));
+}
+
 )METAL";
 }
 

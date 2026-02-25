@@ -258,6 +258,9 @@ static id<MTLBuffer> buffer_for_ptr(const void *ptr, NSUInteger *out_offset) {
 //
 // Auto-detects tall-K shapes (few M/N tiles, large K) and uses K-split GEMM
 // to increase GPU occupancy. Threshold: < 128 spatial TGs triggers K-split.
+//
+// fp16 variant (gpu_gemm_fp16): half inputs, float accumulation, half output.
+// K-split path uses fp32 partials (same scratch buffer), reduce writes half.
 
 static constexpr int GEMM_TILE_SIZE = 32;
 static constexpr int KSPLIT_TG_TARGET = 128;
@@ -415,6 +418,131 @@ static void gpu_gemm(const float *A, int physical_rows_A, int physical_cols_A,
   [enc dispatchThreadgroups:groups threadsPerThreadgroup:tg_size];
 }
 
+// GPU GEMM fp16: half inputs, float accumulation, half output.
+// Uses hgemm_reg / hgemm_ksplit + reduce_ksplit_fp16 kernels.
+// K-split partials are fp32 (reuses g_ksplit_buf), reduce writes half.
+static void gpu_gemm_fp16(const void *A, int physical_rows_A, int physical_cols_A,
+                           bool transpose_A,
+                           const void *B, int physical_rows_B, int physical_cols_B,
+                           bool transpose_B,
+                           void *C, int result_rows, int result_cols,
+                           int interior_cols,
+                           float alpha, float beta,
+                           cudaStream_t stream) {
+  int M = result_rows, N = result_cols, K = interior_cols;
+  int tiles_m = (M + GEMM_TILE_SIZE - 1) / GEMM_TILE_SIZE;
+  int tiles_n = (N + GEMM_TILE_SIZE - 1) / GEMM_TILE_SIZE;
+  int spatial_tgs = tiles_m * tiles_n;
+
+  // K-split path for tall-K shapes (backward weight grads)
+  if (spatial_tgs < KSPLIT_TG_TARGET && K > GEMM_TILE_SIZE) {
+    int num_splits = (KSPLIT_TG_TARGET + spatial_tgs - 1) / spatial_tgs;
+    int max_splits = (K + 15) / 16;
+    if (num_splits > max_splits) num_splits = max_splits;
+    int k_per_split = (K + num_splits - 1) / num_splits;
+
+    // K-split partials are fp32 (same scratch buffer as fp32 GEMM)
+    ensure_ksplit_buf((int64_t)num_splits * M * N);
+
+    MetalStream *ms = get_stream(stream);
+
+    // Pass 1: K-split GEMM → fp32 partials
+    {
+      auto enc = ms->compute_encoder();
+      auto pso = mtl_pipeline("hgemm_ksplit");
+      [enc setComputePipelineState:pso];
+
+      NSUInteger off_a, off_b, off_p;
+      id<MTLBuffer> buf_a = buffer_for_ptr(A, &off_a);
+      id<MTLBuffer> buf_b = buffer_for_ptr(B, &off_b);
+      id<MTLBuffer> buf_p = buffer_for_ptr(g_ksplit_buf, &off_p);
+
+      [enc setBuffer:buf_a offset:off_a atIndex:0];
+      [enc setBuffer:buf_b offset:off_b atIndex:1];
+      [enc setBuffer:buf_p offset:off_p atIndex:2];
+
+      struct {
+        int M, N, K;
+        int lda, ldb, ldc;
+        float alpha, beta;
+        int trans_a, trans_b;
+      } params = {
+          M, N, K,
+          physical_cols_A, physical_cols_B, N,
+          1.0f, 0.0f,  // raw partials, alpha/beta applied in reduce
+          transpose_A ? 1 : 0, transpose_B ? 1 : 0};
+      [enc setBytes:&params length:sizeof(params) atIndex:3];
+      [enc setBytes:&k_per_split length:sizeof(k_per_split) atIndex:4];
+
+      MTLSize groups = MTLSizeMake(tiles_n, tiles_m, num_splits);
+      MTLSize tg_size = MTLSizeMake(8, 8, 1);
+      [enc dispatchThreadgroups:groups threadsPerThreadgroup:tg_size];
+    }
+
+    // Pass 2: reduce fp32 partials → half output
+    {
+      auto enc = ms->compute_encoder();
+      auto pso = mtl_pipeline("reduce_ksplit_fp16");
+      [enc setComputePipelineState:pso];
+
+      NSUInteger off_p, off_c;
+      id<MTLBuffer> buf_p = buffer_for_ptr(g_ksplit_buf, &off_p);
+      id<MTLBuffer> buf_c = buffer_for_ptr(C, &off_c);
+
+      [enc setBuffer:buf_p offset:off_p atIndex:0];
+      [enc setBuffer:buf_c offset:off_c atIndex:1];
+
+      struct {
+        int MN;
+        int num_splits;
+        float alpha_val;
+        float beta_val;
+      } rparams = {M * N, num_splits, alpha, beta};
+      [enc setBytes:&rparams length:sizeof(rparams) atIndex:2];
+
+      int total = M * N;
+      int threads_per_tg = (int)pso.maxTotalThreadsPerThreadgroup;
+      if (threads_per_tg > 256) threads_per_tg = 256;
+      int groups_needed = (total + threads_per_tg - 1) / threads_per_tg;
+      [enc dispatchThreadgroups:MTLSizeMake(groups_needed, 1, 1)
+          threadsPerThreadgroup:MTLSizeMake(threads_per_tg, 1, 1)];
+    }
+
+    return;
+  }
+
+  // Regular path: enough spatial TGs for good occupancy
+  MetalStream *ms = get_stream(stream);
+  auto enc = ms->compute_encoder();
+  auto pso = mtl_pipeline("hgemm_reg");
+  [enc setComputePipelineState:pso];
+
+  NSUInteger off_a, off_b, off_c;
+  id<MTLBuffer> buf_a = buffer_for_ptr(A, &off_a);
+  id<MTLBuffer> buf_b = buffer_for_ptr(B, &off_b);
+  id<MTLBuffer> buf_c = buffer_for_ptr(C, &off_c);
+
+  [enc setBuffer:buf_a offset:off_a atIndex:0];
+  [enc setBuffer:buf_b offset:off_b atIndex:1];
+  [enc setBuffer:buf_c offset:off_c atIndex:2];
+
+  struct {
+    int M, N, K;
+    int lda, ldb, ldc;
+    float alpha, beta;
+    int trans_a, trans_b;
+  } params = {
+      M, N, K,
+      physical_cols_A, physical_cols_B, N,
+      alpha, beta,
+      transpose_A ? 1 : 0, transpose_B ? 1 : 0};
+  [enc setBytes:&params length:sizeof(params) atIndex:3];
+
+  MTLSize groups = MTLSizeMake(tiles_n, tiles_m, 1);
+  MTLSize tg_size = MTLSizeMake(8, 8, 1);
+  [enc dispatchThreadgroups:groups threadsPerThreadgroup:tg_size];
+}
+
 // out(...,N) = a(...,K) @ b(N,K)^T — leading dims folded into M
 void puf_mm(PufTensor &a, PufTensor &b, PufTensor &out,
             cudaStream_t stream) {
@@ -428,6 +556,11 @@ void puf_mm(PufTensor &a, PufTensor &b, PufTensor &out,
     cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans, M, N, K, 1.0f,
                 (const float *)a.bytes, K, (const float *)b.bytes, K,
                 0.0f, (float *)out.bytes, N);
+  } else if (a.dtype_size == 2) {
+    gpu_gemm_fp16(a.bytes, M, K, false,
+                  b.bytes, N, K, true,
+                  out.bytes, M, N, K,
+                  1.0f, 0.0f, stream);
   } else {
     gpu_gemm((const float *)a.bytes, M, K, false,
              (const float *)b.bytes, N, K, true,
@@ -449,6 +582,11 @@ void puf_mm_tn(PufTensor &a, PufTensor &b, PufTensor &out,
     cblas_sgemm(CblasRowMajor, CblasTrans, CblasNoTrans, M, N, K, 1.0f,
                 (const float *)a.bytes, M, (const float *)b.bytes, N,
                 0.0f, (float *)out.bytes, N);
+  } else if (a.dtype_size == 2) {
+    gpu_gemm_fp16(a.bytes, K, M, true,
+                  b.bytes, K, N, false,
+                  out.bytes, M, N, K,
+                  1.0f, 0.0f, stream);
   } else {
     gpu_gemm((const float *)a.bytes, K, M, true,
              (const float *)b.bytes, K, N, false,
@@ -471,6 +609,11 @@ void puf_mm_nn(PufTensor &a, PufTensor &b, PufTensor &out,
     // C(M,N) = A(M,K) * B(K,N), all row-major stride-1.
     vDSP_mmul((const float *)a.bytes, 1, (const float *)b.bytes, 1,
               (float *)out.bytes, 1, M, N, K);
+  } else if (a.dtype_size == 2) {
+    gpu_gemm_fp16(a.bytes, M, K, false,
+                  b.bytes, K, N, false,
+                  out.bytes, M, N, K,
+                  1.0f, 0.0f, stream);
   } else {
     gpu_gemm((const float *)a.bytes, M, K, false,
              (const float *)b.bytes, K, N, false,
@@ -493,6 +636,7 @@ void puf_addmm_nn(PufTensor &a, PufTensor &b, PufTensor &out, float alpha,
                 (const float *)a.bytes, K, (const float *)b.bytes, N,
                 beta, (float *)out.bytes, N);
   } else {
+    // addmm only used by Muon Newton-Schulz (always fp32)
     gpu_gemm((const float *)a.bytes, M, K, false,
              (const float *)b.bytes, K, N, false,
              (float *)out.bytes, M, N, K,

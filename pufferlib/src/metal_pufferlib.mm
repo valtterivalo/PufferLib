@@ -192,7 +192,7 @@ typedef struct {
 typedef struct {
     Policy* policy;
     PolicyWeights weights_fp32;
-    PolicyWeights weights_bf16;  // = weights_fp32 (no bf16 on Metal)
+    PolicyWeights weights_bf16;  // fp16 training weights (was shared with fp32)
     // Double-buffered inference weights for rollout/training overlap.
     // Rollout reads weights_infer (CPU cblas), training writes weights_fp32 (GPU).
     // After each training sync, weights_fp32 is memcpy'd to weights_infer.
@@ -202,6 +202,7 @@ typedef struct {
     bool train_pending = false;  // GPU training dispatched but not yet synced
     PolicyActivations train_activations;
     AllocSet alloc_fp32;
+    AllocSet alloc_fp16;  // fp16 training: weights, activations, gradients
     Allocator pufferl_alloc;
     StaticVec* vec;
     Muon* muon;
@@ -221,9 +222,16 @@ typedef struct {
     PPOBuffersPuf ppo_bufs_puf;
     PrioBuffers prio_bufs;
     PufTensor param_fp32_puf;
-    PufTensor grad_bf16_puf;  // actually f32 (no bf16 on Metal)
+    PufTensor param_fp16_puf;   // fp16 weight buffer (flat view)
+    PufTensor grad_bf16_puf;    // fp16 gradient buffer (flat view)
     PufTensor grad_norm_puf;
     PufTensor rng_offset_puf;
+    // fp16 boundary buffers: obs cast (fp32→fp16), dec_out cast (fp16→fp32),
+    // state (zeroed fp16 for scan initial state)
+    PufTensor fp16_obs_buf;
+    PufTensor fp32_dec_out_buf;
+    PufTensor fp16_state_buf;
+    Allocator fp16_boundary_alloc;
     ProfileT profile;
     int rollout_sync_count;
     double rollout_sync_ms;
@@ -306,8 +314,11 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
     // GPU training that writes to weights_fp32 concurrently.
     puf_set_cpu_inference(true);
     PufTensor state_puf = pufferl->buffer_states[buf];
+    // Rollout uses fp32 CPU inference (cblas/vDSP/NEON).
+    // When overlap is enabled, use weights_infer (snapshot copy).
+    // Otherwise, use weights_fp32 (master weights, updated by muon).
     PolicyWeights& infer_weights = pufferl->overlap_enabled
-        ? pufferl->weights_infer : pufferl->weights_bf16;
+        ? pufferl->weights_infer : pufferl->weights_fp32;
     Policy* p = pufferl->policy;
     PolicyActivations& acts = pufferl->buffer_activations[buf];
 
@@ -535,29 +546,44 @@ void train_impl(PuffeRL& pufferl) {
 
         uint64_t tp3 = mach_absolute_time();
 
-        // Forward pass
-        PufTensor obs_puf = graph.mb_obs;
-        PufTensor state_puf = graph.mb_state;
+        // Cast fp32 observations → fp16 for encoder input
+        mtl_cast_f32_to_f16(pufferl.fp16_obs_buf.bytes,
+                            (const float*)graph.mb_obs.bytes,
+                            (int)graph.mb_obs.numel(), train_stream);
+
+        // Zero fp16 state buffer (scan initial state, zeroed each minibatch)
+        puf_zero(pufferl.fp16_state_buf, train_stream);
+
+        // Forward pass (all fp16: weights, activations, scan)
+        PufTensor obs_puf = pufferl.fp16_obs_buf;
+        PufTensor state_puf = pufferl.fp16_state_buf;
         PufTensor dec_puf = policy_forward_train(pufferl.policy, pufferl.weights_bf16,
             pufferl.train_activations, obs_puf, state_puf, train_stream);
 
         uint64_t tp4 = mach_absolute_time();
 
-        // PPO loss
+        // Cast fp16 decoder output → fp32 for PPO kernel
+        mtl_cast_f16_to_f32((float*)pufferl.fp32_dec_out_buf.bytes,
+                            dec_puf.bytes,
+                            (int)dec_puf.numel(), train_stream);
+        PufTensor dec_puf_f32 = pufferl.fp32_dec_out_buf;
+
+        // PPO loss (operates on fp32 decoder output)
         DecoderWeights* dw_train = (DecoderWeights*)pufferl.weights_bf16.decoder;
         PufTensor p_logstd;
         if (dw_train->continuous) {
             p_logstd = dw_train->logstd;
         }
 
-        ppo_loss_fwd_bwd(dec_puf, p_logstd, graph,
+        ppo_loss_fwd_bwd(dec_puf_f32, p_logstd, graph,
             pufferl.act_sizes_puf, pufferl.losses_puf,
             hypers.clip_coef, hypers.vf_clip_coef, hypers.vf_coef, hypers.ent_coef,
             pufferl.ppo_bufs_puf, pufferl.is_continuous, train_stream);
 
         uint64_t tp5 = mach_absolute_time();
 
-        // Backward pass
+        // Backward pass (fp16 activations/weights, PPO grads are fp32 —
+        // decoder_backward handles the f32→f16 boundary via assemble kernel)
         PufTensor grad_logits_puf = pufferl.ppo_bufs_puf.grad_logits;
         PufTensor grad_logstd_puf = pufferl.is_continuous ? pufferl.ppo_bufs_puf.grad_logstd : PufTensor();
         PufTensor grad_values_puf = pufferl.ppo_bufs_puf.grad_values;
@@ -566,14 +592,14 @@ void train_impl(PuffeRL& pufferl) {
 
         uint64_t tp6 = mach_absolute_time();
 
-        // Copy grads to muon gc_puf (GPU copy — stays on encoder)
-        mtl_copy_f32((float*)pufferl.muon->gc_puf.bytes,
-            (const float*)pufferl.grad_bf16_puf.bytes,
-            (int)pufferl.grad_bf16_puf.numel(), train_stream);
+        // Cast fp16 grads → fp32 for muon optimizer
+        mtl_cast_f16_to_f32((float*)pufferl.muon->gc_puf.bytes,
+                            pufferl.grad_bf16_puf.bytes,
+                            (int)pufferl.grad_bf16_puf.numel(), train_stream);
 
         uint64_t tp7 = mach_absolute_time();
 
-        // Clip grad norm
+        // Clip grad norm (fp32)
         {
             PufTensor& grad = pufferl.muon->gc_puf;
             float* scratch = (float*)pufferl.grad_norm_puf.bytes;
@@ -583,6 +609,11 @@ void train_impl(PuffeRL& pufferl) {
         uint64_t tp8 = mach_absolute_time();
 
         muon_step(pufferl.muon, train_stream);
+
+        // Cast fp32 master weights → fp16 training weights (after optimizer)
+        mtl_cast_f32_to_f16(pufferl.param_fp16_puf.bytes,
+                            (const float*)pufferl.param_fp32_puf.bytes,
+                            (int)pufferl.param_fp32_puf.numel(), train_stream);
 
         uint64_t tp9 = mach_absolute_time();
 
@@ -789,35 +820,92 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     pufferl->overlap_enabled = false;
 
     // ========================================================================
-    // fp32 compute policy (no bf16 on Metal)
-    // weights_bf16 = weights_fp32 (shared, no separate allocation)
+    // fp16 training weights, activations, gradients
+    // Separate allocators with dtype_size=2 for all training tensors.
+    // Rollout stays fp32. Muon optimizer operates on fp32 master weights.
+    // Boundaries: obs fp32→fp16 (before encoder), dec_out fp16→fp32 (before PPO),
+    //   PPO grads fp32→fp16 (decoder backward handles this), grads fp16→fp32 (before muon),
+    //   weights fp32→fp16 (after muon step).
     // ========================================================================
 
     int B_TT = minibatch_segments * hypers.horizon;
+    int esz_fp16 = 2;
 
-    pufferl->weights_bf16 = pufferl->weights_fp32;
+    // fp16 training weights (separate allocation from fp32 master)
+    pufferl->alloc_fp16.esz = esz_fp16;
+    Allocator& fp16_params = pufferl->alloc_fp16.params;
+    Allocator& acts = pufferl->alloc_fp16.acts;
+    Allocator& grads = pufferl->alloc_fp16.grads;
 
-    // Train activations and grads use the fp32 alloc
-    pufferl->alloc_fp32.esz = esz_fp32;
-    Allocator& acts = pufferl->alloc_fp32.acts;
-    Allocator& grads = pufferl->alloc_fp32.grads;
+    pufferl->weights_bf16 = new_weights(esz_fp16);
+    PolicyWeights& wfp16 = pufferl->weights_bf16;
 
+    encoder.reg_params(wfp16.encoder, &fp16_params, esz_fp16);
+    decoder.reg_params(wfp16.decoder, &fp16_params, esz_fp16);
+    network.reg_params(wfp16.network, &fp16_params, esz_fp16);
+
+    // Register train activations/grads with fp16 allocators.
+    // reg_train uses PRECISION_SIZE (4) for dtype_size, so we fix them up after.
     PolicyActivations& tb = pufferl->train_activations;
     tb.encoder = new EncoderActivations{};
     tb.decoder = new DecoderActivations{};
     tb.network = new MinGRUActivations{};
-    encoder.reg_train(wfp32.encoder, tb.encoder, &acts, &grads, B_TT);
-    decoder.reg_train(wfp32.decoder, tb.decoder, &acts, &grads, B_TT);
-    network.reg_train(wfp32.network, tb.network, &acts, &grads, B_TT);
+    encoder.reg_train(wfp16.encoder, tb.encoder, &acts, &grads, B_TT);
+    decoder.reg_train(wfp16.decoder, tb.decoder, &acts, &grads, B_TT);
+    network.reg_train(wfp16.network, tb.network, &acts, &grads, B_TT);
 
-    pufferl->alloc_fp32.acts.create();
-    pufferl->alloc_fp32.grads.create();
+    // Fix up dtype_size: reg_train sets PRECISION_SIZE (4), we need fp16 (2).
+    // Scan internal buffers (a_star, s_vals, log_values_buf) must stay fp32
+    // for numerical stability in the parallel scan accumulation.
+    for (auto *t : acts.regs) {
+        if (t->dtype_size == PRECISION_SIZE) t->dtype_size = esz_fp16;
+    }
+    for (auto *t : grads.regs) {
+        if (t->dtype_size == PRECISION_SIZE) t->dtype_size = esz_fp16;
+    }
+    // Restore fp32 on scan internal buffers (blanket fixup incorrectly changed them
+    // because sizeof(float) == PRECISION_SIZE on Metal)
+    {
+        MinGRUActivations *ma = (MinGRUActivations *)tb.network;
+        for (int i = 0; i < num_layers; i++) {
+            ma->scan_bufs[i].a_star.dtype_size = esz_fp32;
+            ma->scan_bufs[i].s_vals.dtype_size = esz_fp32;
+            ma->scan_bufs[i].log_values_buf.dtype_size = esz_fp32;
+        }
+    }
 
-    // Wrap activation and grad allocators for Metal GPU access
-    mtl_wrap_allocator(&pufferl->alloc_fp32.acts);
-    mtl_wrap_allocator(&pufferl->alloc_fp32.grads);
+    pufferl->alloc_fp16.create();
 
-    pufferl->grad_bf16_puf = {.bytes = (char*)grads.mem, .shape = {grads.total_elems}, .dtype_size = esz_fp32};
+    // Wrap fp16 allocators for Metal GPU access
+    mtl_wrap_allocator(&fp16_params);
+    mtl_wrap_allocator(&acts);
+    mtl_wrap_allocator(&grads);
+
+    pufferl->param_fp16_puf = {.bytes = (char*)fp16_params.mem, .shape = {fp16_params.total_elems}, .dtype_size = esz_fp16};
+    pufferl->grad_bf16_puf = {.bytes = (char*)grads.mem, .shape = {grads.total_elems}, .dtype_size = esz_fp16};
+
+    // Cast fp32 master weights → fp16 training weights
+    {
+        cudaStream_t s = (cudaStream_t)mtl_stream();
+        mtl_cast_f32_to_f16(pufferl->param_fp16_puf.bytes,
+                            (const float*)fp32_params.mem,
+                            (int)fp32_params.total_elems, s);
+        ensure_gpu_synced(s);
+    }
+
+    // Boundary buffers: fp16 obs (encoder input), fp32 dec_out (PPO input),
+    // fp16 state (scan initial state — mb_state is fp32 but scan reads half*)
+    {
+        int dec_fused = decoder_output_size + 1;
+        pufferl->fp16_obs_buf = {.shape = {minibatch_segments, hypers.horizon, input_size}, .dtype_size = esz_fp16};
+        pufferl->fp32_dec_out_buf = {.shape = {minibatch_segments, hypers.horizon, dec_fused}, .dtype_size = esz_fp32};
+        pufferl->fp16_state_buf = {.shape = {num_layers, minibatch_segments, 1, hidden_size}, .dtype_size = esz_fp16};
+        pufferl->fp16_boundary_alloc.reg(&pufferl->fp16_obs_buf);
+        pufferl->fp16_boundary_alloc.reg(&pufferl->fp32_dec_out_buf);
+        pufferl->fp16_boundary_alloc.reg(&pufferl->fp16_state_buf);
+        pufferl->fp16_boundary_alloc.create();
+        mtl_wrap_allocator(&pufferl->fp16_boundary_alloc);
+    }
 
     // ========================================================================
     // Optimizer (Muon) — operates on fp32 master weights
@@ -913,9 +1001,10 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
         rbuf.encoder = new EncoderActivations{};
         rbuf.decoder = new DecoderActivations{};
         rbuf.network = new MinGRUActivations{};
-        encoder.reg_rollout(pufferl->weights_bf16.encoder, rbuf.encoder, &ralloc, inf_batch);
-        decoder.reg_rollout(pufferl->weights_bf16.decoder, rbuf.decoder, &ralloc, inf_batch);
-        network.reg_rollout(pufferl->weights_bf16.network, rbuf.network, &ralloc, inf_batch);
+        // Rollout uses fp32 — register with fp32 weights (dimensions only, dtype from PRECISION_SIZE)
+        encoder.reg_rollout(pufferl->weights_fp32.encoder, rbuf.encoder, &ralloc, inf_batch);
+        decoder.reg_rollout(pufferl->weights_fp32.decoder, rbuf.decoder, &ralloc, inf_batch);
+        network.reg_rollout(pufferl->weights_fp32.network, rbuf.network, &ralloc, inf_batch);
         ralloc.create();
         // Wrap each per-buffer allocator for Metal GPU access
         mtl_wrap_allocator(&ralloc);
@@ -949,11 +1038,11 @@ void close_impl(PuffeRL& pufferl) {
         delete (DecoderWeights*)w.decoder;
         delete (MinGRUWeights*)w.network;
     };
-    // No separate bf16 weights on Metal (weights_bf16 == weights_fp32)
     delete (EncoderActivations*)pufferl.train_activations.encoder;
     delete (DecoderActivations*)pufferl.train_activations.decoder;
     delete (MinGRUActivations*)pufferl.train_activations.network;
     delete_weights(pufferl.weights_fp32);
+    delete_weights(pufferl.weights_bf16);  // separate fp16 weights
     delete_weights(pufferl.weights_infer);
     for (auto& rbuf : pufferl.buffer_activations) {
         delete (EncoderActivations*)rbuf.encoder;
@@ -963,6 +1052,8 @@ void close_impl(PuffeRL& pufferl) {
     delete pufferl.policy;
 
     pufferl.alloc_fp32.destroy();
+    pufferl.alloc_fp16.destroy();
+    pufferl.fp16_boundary_alloc.destroy();
     pufferl.infer_params_alloc.destroy();
     pufferl.pufferl_alloc.destroy();
     for (auto& a : pufferl.buffer_allocs) {

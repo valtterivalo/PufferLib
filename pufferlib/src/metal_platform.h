@@ -191,6 +191,15 @@ void cpu_sample_logits(const float *dec_out, int fused_cols, int B,
                        uint64_t seed, uint32_t *offset_ptr);
 
 // ============================================================================
+// fp16 cast dispatchers — GPU kernel dispatch for f32↔f16 conversion
+// ============================================================================
+
+void mtl_cast_f32_to_f16(void *dst, const float *src, int count,
+                          cudaStream_t stream);
+void mtl_cast_f16_to_f32(float *dst, const void *src, int count,
+                          cudaStream_t stream);
+
+// ============================================================================
 // LAPACK via Accelerate — symmetric eigendecomposition for Muon optimizer
 // ============================================================================
 

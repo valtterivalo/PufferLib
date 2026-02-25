@@ -53,6 +53,17 @@ static inline void mtl_set_ptr(id<MTLComputeCommandEncoder> enc,
 // Forward declarations for GPU memory ops (defined below in element-wise section)
 void mtl_fill_f32(float *ptr, float value, int count, cudaStream_t stream);
 void mtl_copy_f32(float *dst, const float *src, int count, cudaStream_t stream);
+void mtl_fill_f16(void *ptr, int count, cudaStream_t stream);
+void mtl_copy_f16(void *dst, const void *src, int count, cudaStream_t stream);
+void mtl_fused_scan_forward_fp16(PrefixScan &scan, cudaStream_t stream);
+void mtl_fused_scan_backward_fp16(PrefixScan &scan, const void *grad,
+                                    const void *grad_next_state,
+                                    cudaStream_t stream);
+void mtl_assemble_decoder_grad_f32_to_f16(void *grad_out,
+                                            const float *grad_logits,
+                                            const float *grad_value, int B_TT,
+                                            int od, int od1,
+                                            cudaStream_t stream);
 
 // ============================================================================
 // Memory operations — CPU-side on unified memory (synced), or GPU when training
@@ -64,6 +75,8 @@ void puf_copy(PufTensor &dst, const PufTensor &src, cudaStream_t stream) {
   if (puf_is_gpu_training() && dst.dtype_size == 4) {
     mtl_copy_f32((float *)dst.bytes, (const float *)src.bytes,
                  (int)dst.numel(), stream);
+  } else if (puf_is_gpu_training() && dst.dtype_size == 2) {
+    mtl_copy_f16(dst.bytes, src.bytes, (int)dst.numel(), stream);
   } else {
     mtl_ensure_synced(stream);
     memcpy(dst.bytes, src.bytes, dst.numel() * dst.dtype_size);
@@ -73,6 +86,8 @@ void puf_copy(PufTensor &dst, const PufTensor &src, cudaStream_t stream) {
 void puf_zero(PufTensor &dst, cudaStream_t stream) {
   if (puf_is_gpu_training() && dst.dtype_size == 4) {
     mtl_fill_f32((float *)dst.bytes, 0.0f, (int)dst.numel(), stream);
+  } else if (puf_is_gpu_training() && dst.dtype_size == 2) {
+    mtl_fill_f16(dst.bytes, (int)dst.numel(), stream);
   } else {
     mtl_ensure_synced(stream);
     memset(dst.bytes, 0, dst.numel() * dst.dtype_size);
@@ -164,6 +179,69 @@ void puf_cast_u8_to_f32(PufTensor &dst, const PufTensor &src,
   } params = {(int)src.numel()};
   [enc setBytes:&params length:sizeof(params) atIndex:2];
   mtl_dispatch_1d(enc, pso, (int)src.numel());
+}
+
+// ============================================================================
+// fp16 cast dispatchers
+// ============================================================================
+
+void mtl_cast_f32_to_f16(void *dst, const float *src, int count,
+                          cudaStream_t stream) {
+  MetalStream *ms = mtl_get_stream(stream);
+  auto enc = ms->compute_encoder();
+  auto pso = mtl_pipeline("cast_f32_to_f16");
+  [enc setComputePipelineState:pso];
+  mtl_set_ptr(enc, dst, 0);
+  mtl_set_ptr(enc, src, 1);
+  [enc setBytes:&count length:sizeof(count) atIndex:2];
+  mtl_dispatch_1d(enc, pso, count);
+}
+
+void mtl_cast_f16_to_f32(float *dst, const void *src, int count,
+                          cudaStream_t stream) {
+  MetalStream *ms = mtl_get_stream(stream);
+  auto enc = ms->compute_encoder();
+  auto pso = mtl_pipeline("cast_f16_to_f32");
+  [enc setComputePipelineState:pso];
+  mtl_set_ptr(enc, dst, 0);
+  mtl_set_ptr(enc, src, 1);
+  [enc setBytes:&count length:sizeof(count) atIndex:2];
+  mtl_dispatch_1d(enc, pso, count);
+}
+
+// ============================================================================
+// fp16 memory ops
+// ============================================================================
+
+void mtl_fill_f16(void *ptr, int count, cudaStream_t stream) {
+  // Fill fp16 buffer with zeros (the only fill value needed for fp16)
+  MetalStream *ms = mtl_get_stream(stream);
+  auto enc = ms->compute_encoder();
+  auto pso = mtl_pipeline("fill_f32");
+  [enc setComputePipelineState:pso];
+  mtl_set_ptr(enc, ptr, 0);
+  // Fill count/2 fp32 words with 0.0f — zeros in fp16 are also 0x0000
+  int f32_count = (count + 1) / 2;
+  struct {
+    float value;
+    int count;
+  } params = {0.0f, f32_count};
+  [enc setBytes:&params length:sizeof(params) atIndex:1];
+  mtl_dispatch_1d(enc, pso, f32_count);
+}
+
+void mtl_copy_f16(void *dst, const void *src, int count,
+                   cudaStream_t stream) {
+  // Copy fp16 data — reuse copy_f32 by treating pairs of fp16 as fp32
+  MetalStream *ms = mtl_get_stream(stream);
+  auto enc = ms->compute_encoder();
+  auto pso = mtl_pipeline("copy_f32");
+  [enc setComputePipelineState:pso];
+  mtl_set_ptr(enc, dst, 0);
+  mtl_set_ptr(enc, src, 1);
+  int f32_count = (count + 1) / 2;
+  [enc setBytes:&f32_count length:sizeof(f32_count) atIndex:2];
+  mtl_dispatch_1d(enc, pso, f32_count);
 }
 
 // ============================================================================
@@ -373,6 +451,25 @@ void mtl_assemble_decoder_grad_f32(float *grad_out, const float *grad_logits,
     int B_TT, od, od1;
   } params = {B_TT, od, od1};
   [enc setBytes:&params length:sizeof(params) atIndex:3];
+  mtl_dispatch_1d(enc, pso, B_TT * od1);
+}
+
+// Assemble fp32 PPO gradients into fp16 decoder gradient output.
+void mtl_assemble_decoder_grad_f32_to_f16(void *grad_out,
+                                            const float *grad_logits,
+                                            const float *grad_value, int B_TT,
+                                            int od, int od1,
+                                            cudaStream_t stream) {
+  MetalStream *ms = mtl_get_stream(stream);
+  auto enc = ms->compute_encoder();
+  auto pso = mtl_pipeline("assemble_decoder_grad_f32_to_f16");
+  [enc setComputePipelineState:pso];
+  mtl_set_ptr(enc, grad_out, 0);
+  mtl_set_ptr(enc, grad_logits, 1);
+  mtl_set_ptr(enc, grad_value, 2);
+  [enc setBytes:&B_TT length:sizeof(int) atIndex:3];
+  [enc setBytes:&od length:sizeof(int) atIndex:4];
+  [enc setBytes:&od1 length:sizeof(int) atIndex:5];
   mtl_dispatch_1d(enc, pso, B_TT * od1);
 }
 
@@ -601,6 +698,49 @@ void mtl_fused_scan_backward(PrefixScan &scan, const float *grad,
   MetalStream *ms = mtl_get_stream(stream);
   auto enc = ms->compute_encoder();
   auto pso = mtl_pipeline("fused_scan_backward_checkpointed");
+  [enc setComputePipelineState:pso];
+  mtl_set_ptr(enc, scan.grad_combined.bytes, 0);
+  mtl_set_ptr(enc, scan.grad_state.bytes, 1);
+  mtl_set_ptr(enc, grad, 2);
+  mtl_set_ptr(enc, grad_next_state, 3);
+  mtl_set_ptr(enc, scan.combined_ptr, 4);
+  mtl_set_ptr(enc, scan.state_ptr, 5);
+  mtl_set_ptr(enc, scan.a_star.bytes, 6);
+  mtl_set_ptr(enc, scan.s_vals.bytes, 7);
+  mtl_set_ptr(enc, scan.log_values_buf.bytes, 8);
+  struct {
+    int T_seq, H, B;
+  } params = {scan.T, scan.H, scan.B};
+  [enc setBytes:&params length:sizeof(params) atIndex:9];
+  mtl_dispatch_1d(enc, pso, scan.B * scan.H);
+}
+
+// fp16 scan dispatchers: half combined/state/out, fp32 internal (a_star/s_vals/log_values)
+void mtl_fused_scan_forward_fp16(PrefixScan &scan, cudaStream_t stream) {
+  MetalStream *ms = mtl_get_stream(stream);
+  auto enc = ms->compute_encoder();
+  auto pso = mtl_pipeline("fused_scan_forward_checkpointed_fp16");
+  [enc setComputePipelineState:pso];
+  mtl_set_ptr(enc, scan.out.bytes, 0);
+  mtl_set_ptr(enc, scan.next_state.bytes, 1);
+  mtl_set_ptr(enc, scan.a_star.bytes, 2);
+  mtl_set_ptr(enc, scan.s_vals.bytes, 3);
+  mtl_set_ptr(enc, scan.log_values_buf.bytes, 4);
+  mtl_set_ptr(enc, scan.combined_ptr, 5);
+  mtl_set_ptr(enc, scan.state_ptr, 6);
+  struct {
+    int T_seq, H, B;
+  } params = {scan.T, scan.H, scan.B};
+  [enc setBytes:&params length:sizeof(params) atIndex:7];
+  mtl_dispatch_1d(enc, pso, scan.B * scan.H);
+}
+
+void mtl_fused_scan_backward_fp16(PrefixScan &scan, const void *grad,
+                                    const void *grad_next_state,
+                                    cudaStream_t stream) {
+  MetalStream *ms = mtl_get_stream(stream);
+  auto enc = ms->compute_encoder();
+  auto pso = mtl_pipeline("fused_scan_backward_checkpointed_fp16");
   [enc setComputePipelineState:pso];
   mtl_set_ptr(enc, scan.grad_combined.bytes, 0);
   mtl_set_ptr(enc, scan.grad_state.bytes, 1);
@@ -1527,11 +1667,19 @@ static PufTensor decoder_backward(void *w, void *activations,
   int B_TT = (int)a->saved_input.shape[0];
   int od = dw->output_dim, od1 = od + 1;
 
-  // Assemble gradient: concat [grad_logits, grad_value] per row
-  mtl_assemble_decoder_grad_f32((float *)a->grad_out.bytes,
-                                (const float *)grad_logits.bytes,
-                                (const float *)grad_value.bytes, B_TT, od, od1,
-                                stream);
+  // Assemble gradient: concat [grad_logits, grad_value] per row.
+  // PPO grads are always fp32. If decoder activations are fp16, use the
+  // f32-to-f16 assembly kernel to cast and concatenate in one dispatch.
+  if (a->grad_out.dtype_size == 2)
+    mtl_assemble_decoder_grad_f32_to_f16(a->grad_out.bytes,
+                                          (const float *)grad_logits.bytes,
+                                          (const float *)grad_value.bytes,
+                                          B_TT, od, od1, stream);
+  else
+    mtl_assemble_decoder_grad_f32((float *)a->grad_out.bytes,
+                                  (const float *)grad_logits.bytes,
+                                  (const float *)grad_value.bytes, B_TT, od,
+                                  od1, stream);
 
   puf_mm_tn(a->grad_out, a->saved_input, a->wgrad_scratch, stream);
 
@@ -1723,7 +1871,11 @@ static PufTensor mingru_forward_train(void *w, PufTensor x, PufTensor state,
     puf_mm(x, m->weights[i], a->combined_bufs[i], stream);
     a->scan_bufs[i].combined_ptr = a->combined_bufs[i].bytes;
     a->scan_bufs[i].state_ptr = state_i.bytes;
-    mtl_fused_scan_forward(a->scan_bufs[i], stream);
+    // Dispatch fp16 or fp32 scan based on activation dtype
+    if (a->combined_bufs[i].dtype_size == 2)
+      mtl_fused_scan_forward_fp16(a->scan_bufs[i], stream);
+    else
+      mtl_fused_scan_forward(a->scan_bufs[i], stream);
     x = a->scan_bufs[i].out;
   }
   return x;
@@ -1736,8 +1888,13 @@ static PufTensor mingru_backward(void *w, PufTensor grad, void *activations,
 
   for (int i = m->num_layers - 1; i >= 0; i--) {
     PrefixScan &scan = a->scan_bufs[i];
-    mtl_fused_scan_backward(scan, (const float *)grad.bytes,
-                            (const float *)a->grad_next_state.bytes, stream);
+    // Dispatch fp16 or fp32 scan backward based on activation dtype
+    if (grad.dtype_size == 2)
+      mtl_fused_scan_backward_fp16(scan, grad.bytes,
+                                   a->grad_next_state.bytes, stream);
+    else
+      mtl_fused_scan_backward(scan, (const float *)grad.bytes,
+                              (const float *)a->grad_next_state.bytes, stream);
     puf_mm_tn(scan.grad_combined, a->saved_inputs[i], a->wgrad_scratch[i],
               stream);
     puf_mm_nn(scan.grad_combined, m->weights[i], a->grad_input_buf, stream);
