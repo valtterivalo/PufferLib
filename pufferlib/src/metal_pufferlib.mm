@@ -16,6 +16,8 @@
 #include "metal_kernels.mm"
 #include "vecenv.h"
 
+#include <vecLib/vecLib.h>  // BLASSetThreading
+
 #include <chrono>
 #include <cstring>
 #include <memory>
@@ -239,6 +241,18 @@ Dict* log_environments_impl(PuffeRL& pufferl) {
     Dict* out = create_dict(32);
     static_vec_log(pufferl.vec, out);
     return out;
+}
+
+// ============================================================================
+// Per-buffer thread init — called once per buffer thread at creation
+// ============================================================================
+
+extern "C" void thread_init_metal(void* ctx, int buf) {
+    // Small GEMMs (256x384x128) don't benefit from multi-threaded BLAS.
+    // Thread coordination overhead dominates. macOS 15+ per-thread setting.
+    if (__builtin_available(macOS 15.0, *)) {
+        BLASSetThreading(BLAS_THREADING_SINGLE_THREADED);
+    }
 }
 
 // ============================================================================
@@ -701,9 +715,8 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
         // Initial copy: weights_fp32 → weights_infer
         copy_weights_to_infer(*pufferl);
     }
-    // Overlap disabled at H=128: unified memory contention between cblas and
-    // Metal GEMM slows rollout fwd by ~40%, negating the overlap savings.
-    // Re-enable for H=512+ where the contention ratio is more favorable.
+    // Overlap disabled: unified memory contention doubles rollout fwd time
+    // (25ms→52ms), negating overlap savings. Fundamental M-series constraint.
     pufferl->overlap_enabled = false;
 
     // ========================================================================
@@ -841,9 +854,9 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
 
     // No CUDA graph warmup on Metal (cudagraphs always -1)
 
-    // Create threads for vecenv — nullptr for thread_init (no per-thread stream setup on Metal)
+    // Create threads for vecenv — thread_init sets BLAS single-threading
     create_static_threads(vec, hypers.num_threads, horizon, pufferl.get(),
-        net_callback_wrapper, nullptr);
+        net_callback_wrapper, thread_init_metal);
     static_vec_reset(vec);
 
     pufferl->epoch = 0;
