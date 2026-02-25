@@ -54,6 +54,9 @@ void rollouts(pybind11::object pufferl_obj) {
     // After rollout finishes, sync GPU training (should be instant — GPU training
     // ~30ms finishes well before rollout ~70ms) and copy updated weights.
     sync_pending_train(pufferl);
+    // Re-transpose inference weights after training may have updated them.
+    // ~50μs for all weights — negligible vs rollout time.
+    sync_transposed_weights(pufferl.weights_bf16);
     float sec = std::chrono::duration<float>(
         std::chrono::high_resolution_clock::now() - t0).count();
     pufferl.profile.accum[PROF_ROLLOUT] += sec * 1000.0f;

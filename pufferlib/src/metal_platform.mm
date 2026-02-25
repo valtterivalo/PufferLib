@@ -467,9 +467,10 @@ void puf_mm_nn(PufTensor &a, PufTensor &b, PufTensor &out,
 
   if (!use_gpu_gemm() && !g_gpu_training) {
     ensure_gpu_synced(stream);
-    cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, M, N, K, 1.0f,
-                (const float *)a.bytes, K, (const float *)b.bytes, N,
-                0.0f, (float *)out.bytes, N);
+    // vDSP_mmul: simpler dispatch than cblas_sgemm (no enum/scaling args).
+    // C(M,N) = A(M,K) * B(K,N), all row-major stride-1.
+    vDSP_mmul((const float *)a.bytes, 1, (const float *)b.bytes, 1,
+              (float *)out.bytes, 1, M, N, K);
   } else {
     gpu_gemm((const float *)a.bytes, M, K, false,
              (const float *)b.bytes, K, N, false,

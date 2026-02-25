@@ -399,6 +399,27 @@ void mtl_sum_rows_to_f32(float *dst, const float *src, int rows, int cols,
 static bool g_cpu_inference = false;
 void puf_set_cpu_inference(bool val) { g_cpu_inference = val; }
 
+// Transpose weight matrix (rows, cols) into pre-allocated dst (cols, rows).
+// dst must have shape {cols, rows} and enough bytes allocated.
+static void transpose_weight(PufTensor &dst, const PufTensor &src) {
+  int rows = (int)src.shape[0], cols = (int)src.shape[1];
+  const float *s = (const float *)src.bytes;
+  float *d = (float *)dst.bytes;
+  for (int r = 0; r < rows; r++)
+    for (int c = 0; c < cols; c++)
+      d[c * rows + r] = s[r * cols + c];
+}
+
+// Allocate a transposed weight buffer (calloc, outside the Allocator pool).
+static PufTensor alloc_transposed(int rows, int cols) {
+  PufTensor t;
+  t.shape[0] = cols;
+  t.shape[1] = rows;
+  t.dtype_size = sizeof(float);
+  t.bytes = (char *)calloc(cols * rows, sizeof(float));
+  return t;
+}
+
 // ============================================================================
 // MinGRU inference kernel
 // ============================================================================
@@ -464,17 +485,6 @@ static inline float32x4_t neon_sigmoid(float32x4_t x) {
   float32x4_t sig_neg = vmulq_f32(z, recip);  // z/(1+z) for x < 0
   uint32x4_t pos_mask = vcgeq_f32(x, vdupq_n_f32(0.0f));
   return vbslq_f32(pos_mask, sig_pos, sig_neg);
-}
-
-// NEON fast exp(-|x|) using Schraudolph's method (same as in neon_sigmoid).
-static inline float32x4_t neon_exp_neg_abs(float32x4_t abs_x) {
-  float32x4_t neg_abs = vnegq_f32(abs_x);
-  float32x4_t exp_scale = vdupq_n_f32(12102203.0f);
-  float32x4_t exp_bias = vdupq_n_f32(1065353216.0f);
-  float32x4_t exp_correction = vdupq_n_f32(486411.0f);
-  float32x4_t exp_bits = vmlaq_f32(vaddq_f32(exp_bias, exp_correction), neg_abs, exp_scale);
-  exp_bits = vmaxq_f32(exp_bits, vdupq_n_f32(0.0f));
-  return vreinterpretq_f32_s32(vcvtq_s32_f32(exp_bits));
 }
 
 // CPU implementation of mingru gate — NEON-vectorized, 4-wide SIMD.
@@ -1440,7 +1450,10 @@ static PufTensor encoder_forward(void *w, void *activations, PufTensor input,
   EncoderActivations *a = (EncoderActivations *)activations;
   if (a->saved_input.bytes)
     puf_copy(a->saved_input, input, stream);
-  puf_mm(input, ew->weight, a->out, stream);
+  if (g_cpu_inference && ew->weight_t.bytes)
+    puf_mm_nn(input, ew->weight_t, a->out, stream);
+  else
+    puf_mm(input, ew->weight, a->out, stream);
   return a->out;
 }
 
@@ -1498,7 +1511,10 @@ static PufTensor decoder_forward(void *w, void *activations, PufTensor input,
   DecoderActivations *a = (DecoderActivations *)activations;
   if (a->saved_input.bytes)
     puf_copy(a->saved_input, input, stream);
-  puf_mm(input, dw->weight, a->out, stream);
+  if (g_cpu_inference && dw->weight_t.bytes)
+    puf_mm_nn(input, dw->weight_t, a->out, stream);
+  else
+    puf_mm(input, dw->weight, a->out, stream);
   return a->out;
 }
 
@@ -1672,13 +1688,16 @@ static PufTensor mingru_forward(void *w, PufTensor x, PufTensor state,
 
   for (int i = 0; i < m->num_layers; i++) {
     PufTensor state_i = mingru_state_layer(m, state, i);
-    puf_mm(x, m->weights[i], a->combined[i], stream);
+    if (g_cpu_inference && i < (int)m->weights_t.size() && m->weights_t[i].bytes)
+      puf_mm_nn(x, m->weights_t[i], a->combined[i], stream);
+    else
+      puf_mm(x, m->weights[i], a->combined[i], stream);
     if (g_cpu_inference) {
-      cpu_mingru_gate((float *)a->out.bytes, (float *)a->next_state.bytes,
+      // Write next_state directly into state_i (in-place update).
+      // Safe because the gate reads each element before writing it.
+      cpu_mingru_gate((float *)a->out.bytes, (float *)state_i.bytes,
                       (const float *)a->combined[i].bytes,
                       (const float *)state_i.bytes, H, B);
-      memcpy(state_i.bytes, a->next_state.bytes,
-             state_i.numel() * state_i.dtype_size);
     } else {
       mtl_mingru_gate((float *)a->out.bytes, (float *)a->next_state.bytes,
                       (const float *)a->combined[i].bytes,

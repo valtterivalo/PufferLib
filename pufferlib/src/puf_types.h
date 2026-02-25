@@ -424,6 +424,7 @@ struct Network {
 
 struct EncoderWeights {
   PufTensor weight;
+  PufTensor weight_t;  // (in_dim, out_dim) — pre-transposed for CPU NoTrans inference
   int in_dim, out_dim;
 };
 struct EncoderActivations {
@@ -432,6 +433,7 @@ struct EncoderActivations {
 
 struct DecoderWeights {
   PufTensor weight, logstd;
+  PufTensor weight_t;  // (hidden_dim, output_dim+1) — pre-transposed for CPU NoTrans inference
   int hidden_dim, output_dim;
   bool continuous;
 };
@@ -458,6 +460,7 @@ struct MinGRUActivations {
 struct MinGRUWeights {
   int hidden, num_layers, horizon;
   vector<PufTensor> weights;
+  vector<PufTensor> weights_t;  // per-layer (H, 3*H) — pre-transposed for CPU NoTrans inference
 };
 
 // ============================================================================

@@ -357,6 +357,35 @@ static void copy_weights_to_infer(PuffeRL& pufferl) {
     memcpy(pufferl.infer_params_alloc.mem, pufferl.alloc_fp32.params.mem, nbytes);
 }
 
+// Allocate pre-transposed weight buffers for CPU NoTrans inference.
+// Called once at init. The buffers are calloc'd (outside the Allocator pool).
+static void alloc_transposed_weights(PolicyWeights& w) {
+    EncoderWeights *ew = (EncoderWeights *)w.encoder;
+    ew->weight_t = alloc_transposed(ew->out_dim, ew->in_dim);
+
+    DecoderWeights *dw = (DecoderWeights *)w.decoder;
+    dw->weight_t = alloc_transposed(dw->output_dim + 1, dw->hidden_dim);
+
+    MinGRUWeights *mw = (MinGRUWeights *)w.network;
+    mw->weights_t.resize(mw->num_layers);
+    for (int i = 0; i < mw->num_layers; i++)
+        mw->weights_t[i] = alloc_transposed(3 * mw->hidden, mw->hidden);
+}
+
+// Transpose current fp32 weights into the pre-transposed buffers.
+// Called after weight init and before each rollout (after training updates).
+static void sync_transposed_weights(PolicyWeights& w) {
+    EncoderWeights *ew = (EncoderWeights *)w.encoder;
+    transpose_weight(ew->weight_t, ew->weight);
+
+    DecoderWeights *dw = (DecoderWeights *)w.decoder;
+    transpose_weight(dw->weight_t, dw->weight);
+
+    MinGRUWeights *mw = (MinGRUWeights *)w.network;
+    for (int i = 0; i < mw->num_layers; i++)
+        transpose_weight(mw->weights_t[i], mw->weights[i]);
+}
+
 // ============================================================================
 // Rollout loop — serial (single stream, no per-buffer threads for GPU work)
 // ============================================================================
@@ -697,6 +726,10 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
         decoder.init_weights(wfp32.decoder, &seed, default_stream);
         network.init_weights(wfp32.network, &seed, default_stream);
     }
+
+    // Pre-transposed weight buffers for CPU NoTrans GEMM during inference.
+    alloc_transposed_weights(wfp32);
+    sync_transposed_weights(wfp32);
 
     // ========================================================================
     // Double-buffered inference weights (for rollout/training overlap)
