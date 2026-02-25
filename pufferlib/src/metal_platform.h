@@ -77,6 +77,10 @@ struct MetalContext {
   id<MTLLibrary> library; // JIT-compiled MSL shaders
   NSMutableDictionary<NSString *, id<MTLComputePipelineState>> *pipelines;
 
+  // Metal 4 tensor_ops GEMM — separate library (different MSL includes).
+  // Stays on the compute encoder (no MPS encoder transitions).
+  id<MTLComputePipelineState> tensor_ops_gemm_nt_f32;
+
   MetalStream stream;       // default stream (rollout)
   MetalStream train_stream; // training stream (separate queue for overlap)
   std::vector<WrappedBuffer> buffers;
@@ -189,10 +193,17 @@ void puf_addmm_nn(PufTensor &a, PufTensor &b, PufTensor &out, float alpha,
 // Read and reset sync stats since last call.
 void mtl_sync_stats(int *out_count, double *out_total_ms);
 
+// Read and reset GEMM dispatch counts.
+void mtl_gemm_stats(int *tensor_ops_count, int *mps_count);
+
 // CPU inference mode — when true, mingru_forward uses CPU gate + memcpy
 // instead of Metal dispatch, eliminating rollout syncs.
 void puf_set_cpu_inference(bool val);
 bool puf_is_cpu_inference();
+
+// Check if a stream has an active compute encoder (work pending on GPU).
+// Used by puf_copy to avoid flushing the encoder chain during rollout.
+bool puf_stream_has_encoder(cudaStream_t stream);
 
 // GPU training mode — when true, puf_mm/puf_copy/puf_zero use GPU
 // instead of sync+CPU, keeping everything on the compute encoder chain.

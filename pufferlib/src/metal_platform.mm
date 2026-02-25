@@ -25,6 +25,56 @@
 static MetalContext g_ctx = {};
 
 // ============================================================================
+// Metal 4 tensor_ops GEMM — MSL source for JIT compilation.
+// Separate library because it needs different includes (metal_tensor,
+// MetalPerformancePrimitives). Stays on the compute encoder — zero
+// MPS encoder restart overhead.
+// ============================================================================
+
+static const char *get_tensor_ops_shader_source() {
+  return R"METAL(
+#include <metal_stdlib>
+#include <metal_tensor>
+#include <MetalPerformancePrimitives/MPPTensorOpsMatMul2d.h>
+using namespace metal;
+using namespace mpp::tensor_ops;
+
+// C(M,N) = A(M,K) @ B(N,K)^T — float32, tensor_inline with device memory.
+// Tile: 64 rows (M) x 32 cols (N), dynamic K.
+// N MUST be a multiple of 32 (caller pads or falls back to MPS).
+kernel void tensor_ops_gemm_nt_f32(
+    device float* A_buf [[buffer(0)]],
+    device float* B_buf [[buffer(1)]],
+    device float* C_buf [[buffer(2)]],
+    constant uint& M    [[buffer(3)]],
+    constant uint& N    [[buffer(4)]],
+    constant uint& K    [[buffer(5)]],
+    uint2 tgid [[threadgroup_position_in_grid]])
+{
+    auto A = tensor<device float, dextents<int32_t, 2>, tensor_inline>(
+        A_buf, dextents<int32_t, 2>(K, M));
+    auto B = tensor<device float, dextents<int32_t, 2>, tensor_inline>(
+        B_buf, dextents<int32_t, 2>(K, N));
+    auto C = tensor<device float, dextents<int32_t, 2>, tensor_inline>(
+        C_buf, dextents<int32_t, 2>(N, M));
+
+    constexpr auto desc = matmul2d_descriptor(
+        64, 32,
+        static_cast<int>(dynamic_extent),
+        false, true, false
+    );
+    matmul2d<desc, execution_simdgroups<4>> op;
+
+    auto mA = A.slice(0, tgid.y * 64);
+    auto mB = B.slice(0, tgid.x * 32);
+    auto mC = C.slice(tgid.x * 32, tgid.y * 64);
+
+    op.run(mA, mB, mC);
+}
+)METAL";
+}
+
+// ============================================================================
 // MPS GEMM cache — reuse MPSMatrixMultiplication objects across calls.
 // Each object encodes (M, N, K, transpose flags, alpha, beta, fp16) and
 // configures the GPU pipeline internally. Creating one per GEMM call adds
@@ -147,6 +197,16 @@ void mtl_sync_stats(int *out_count, double *out_total_ms) {
   g_sync_total_ns = 0.0;
 }
 
+static int g_tensor_ops_dispatch_count = 0;
+static int g_mps_dispatch_count = 0;
+
+void mtl_gemm_stats(int *tensor_ops_count, int *mps_count) {
+  *tensor_ops_count = g_tensor_ops_dispatch_count;
+  *mps_count = g_mps_dispatch_count;
+  g_tensor_ops_dispatch_count = 0;
+  g_mps_dispatch_count = 0;
+}
+
 // ============================================================================
 // Lifecycle
 // ============================================================================
@@ -165,6 +225,7 @@ void mtl_init() {
         [NSString stringWithUTF8String:get_all_metal_shader_source()];
     MTLCompileOptions *opts = [[MTLCompileOptions alloc] init];
     opts.mathMode = MTLMathModeFast;
+    opts.languageVersion = MTLLanguageVersion4_0;
     g_ctx.library =
         [g_ctx.device newLibraryWithSource:src options:opts error:&error];
     if (!g_ctx.library) {
@@ -173,6 +234,38 @@ void mtl_init() {
     }
 
     g_ctx.pipelines = [NSMutableDictionary new];
+
+    // Compile Metal 4 tensor_ops GEMM (separate library, different includes).
+    // Falls back gracefully if compilation fails (e.g. older macOS).
+    {
+      NSString *tensor_src = [NSString stringWithUTF8String:get_tensor_ops_shader_source()];
+      MTLCompileOptions *tensor_opts = [[MTLCompileOptions alloc] init];
+      tensor_opts.mathMode = MTLMathModeFast;
+      tensor_opts.languageVersion = MTLLanguageVersion4_0;
+      NSError *tensor_err = nil;
+      id<MTLLibrary> tensor_lib = [g_ctx.device newLibraryWithSource:tensor_src
+                                                             options:tensor_opts
+                                                               error:&tensor_err];
+      if (tensor_lib) {
+        id<MTLFunction> fn = [tensor_lib newFunctionWithName:@"tensor_ops_gemm_nt_f32"];
+        MTLComputePipelineDescriptor *pd = [[MTLComputePipelineDescriptor alloc] init];
+        pd.computeFunction = fn;
+        pd.maxTotalThreadsPerThreadgroup = 128;
+        g_ctx.tensor_ops_gemm_nt_f32 =
+            [g_ctx.device newComputePipelineStateWithDescriptor:pd
+                                                       options:0
+                                                    reflection:nil
+                                                         error:&tensor_err];
+        if (g_ctx.tensor_ops_gemm_nt_f32)
+          printf("[metal] tensor_ops GEMM: OK\n");
+        else
+          printf("[metal] tensor_ops GEMM pipeline failed: %s\n",
+                 tensor_err.localizedDescription.UTF8String);
+      } else {
+        printf("[metal] tensor_ops compilation failed (non-fatal): %s\n",
+               tensor_err.localizedDescription.UTF8String);
+      }
+    }
 
     // Start the default stream (rollout) and training stream
     g_ctx.stream.queue = g_ctx.queue;
@@ -315,6 +408,11 @@ static bool g_gpu_training = false;
 void puf_set_gpu_training(bool val) { g_gpu_training = val; }
 bool puf_is_gpu_training() { return g_gpu_training; }
 
+bool puf_stream_has_encoder(cudaStream_t stream) {
+  MetalStream *ms = get_stream(stream);
+  return ms->enc_active;
+}
+
 // Find MTLBuffer containing a raw pointer and compute byte offset.
 static id<MTLBuffer> buffer_for_ptr(const void *ptr, NSUInteger *out_offset) {
   for (auto &wb : g_ctx.buffers) {
@@ -425,6 +523,7 @@ static void gpu_gemm(const float *A, int physical_rows_A, int physical_cols_A,
                                                    alpha, beta, /*fp16=*/false);
   [matmul encodeToCommandBuffer:ms->cmd leftMatrix:mat_a rightMatrix:mat_b resultMatrix:mat_c];
   ms->pending_work = true;
+  g_mps_dispatch_count++;
 }
 
 // GPU GEMM fp16: half inputs, half output, float accumulation inside MPS.
@@ -472,6 +571,45 @@ static void gpu_gemm_fp16(const void *A, int physical_rows_A, int physical_cols_
   ms->pending_work = true;
 }
 
+// ============================================================================
+// tensor_ops GEMM: C(M,N) = A(M,K) @ B(N,K)^T on the compute encoder.
+// Uses Metal 4 matmul2d with tensor_inline — no MPS encoder transition.
+// Requires N % 32 == 0, M % 64 == 0 (tiles). Returns false if unavailable.
+// ============================================================================
+
+static bool tensor_ops_gemm_nt(const float *A, const float *B, float *C,
+                                int M, int N, int K,
+                                cudaStream_t stream) {
+  if (!g_ctx.tensor_ops_gemm_nt_f32) return false;
+  g_tensor_ops_dispatch_count++;
+
+  MetalStream *ms = get_stream(stream);
+  id<MTLComputeCommandEncoder> enc = ms->compute_encoder();
+  [enc setComputePipelineState:g_ctx.tensor_ops_gemm_nt_f32];
+
+  NSUInteger off_a, off_b, off_c;
+  id<MTLBuffer> buf_a = buffer_for_ptr(A, &off_a);
+  id<MTLBuffer> buf_b = buffer_for_ptr(B, &off_b);
+  id<MTLBuffer> buf_c = buffer_for_ptr(C, &off_c);
+
+  [enc setBuffer:buf_a offset:off_a atIndex:0];
+  [enc setBuffer:buf_b offset:off_b atIndex:1];
+  [enc setBuffer:buf_c offset:off_c atIndex:2];
+
+  uint32_t mM = (uint32_t)M, mN = (uint32_t)N, mK = (uint32_t)K;
+  [enc setBytes:&mM length:sizeof(mM) atIndex:3];
+  [enc setBytes:&mN length:sizeof(mN) atIndex:4];
+  [enc setBytes:&mK length:sizeof(mK) atIndex:5];
+
+  int groups_m = (M + 63) / 64;
+  int groups_n = (N + 31) / 32;
+  [enc dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
+      threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+
+  ms->pending_work = true;
+  return true;
+}
+
 // out(...,N) = a(...,K) @ b(N,K)^T — leading dims folded into M
 void puf_mm(PufTensor &a, PufTensor &b, PufTensor &out,
             cudaStream_t stream) {
@@ -490,6 +628,10 @@ void puf_mm(PufTensor &a, PufTensor &b, PufTensor &out,
                   b.bytes, N, K, true,
                   out.bytes, M, N, K,
                   1.0f, 0.0f, stream);
+  } else if ((N % 32 == 0) && !getenv("PUFFERLIB_NO_TENSOR_OPS") &&
+             tensor_ops_gemm_nt((const float *)a.bytes, (const float *)b.bytes,
+                                (float *)out.bytes, M, N, K, stream)) {
+    // tensor_ops GEMM on compute encoder — no MPS encoder transition
   } else {
     gpu_gemm((const float *)a.bytes, M, K, false,
              (const float *)b.bytes, N, K, true,
