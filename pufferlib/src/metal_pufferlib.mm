@@ -332,7 +332,12 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
         Policy* p = pufferl->policy;
         PolicyActivations& acts = pufferl->buffer_activations[buf];
 
-        PufTensor mingru_input = p->encoder.forward(infer_weights.encoder, acts.encoder, obs_dst, stream);
+        // When fused encoder+layer0 is available, skip encoder and pass obs
+        // directly to mingru (layer0 uses fused weight: obs @ fused^T → combined).
+        MinGRUWeights *mw = (MinGRUWeights *)infer_weights.network;
+        PufTensor mingru_input = mw->fused_enc_layer0.bytes
+            ? obs_dst
+            : p->encoder.forward(infer_weights.encoder, acts.encoder, obs_dst, stream);
         PufTensor h = p->network.forward(infer_weights.network, mingru_input, state_puf, acts.network, stream);
         dec_puf = p->decoder.forward(infer_weights.decoder, acts.decoder, h, stream);
         ensure_gpu_synced(stream);
@@ -398,11 +403,11 @@ static void alloc_transposed_weights(PolicyWeights& w) {
     for (int i = 0; i < mw->num_layers; i++)
         mw->weights_t[i] = alloc_transposed(3 * mw->hidden, mw->hidden);
 
-    // Fused encoder+layer0 disabled: the fused weight is (obs_dim, 3*H) but
-    // mingru_forward receives encoder OUTPUT (B, H), not raw obs (B, obs_dim).
-    // To enable, encoder_forward must pass through raw obs when fused is active.
+    // Fused encoder+layer0: combined(B,3H) = obs(B,obs_dim) @ fused(3H,obs_dim)^T
+    // Eliminates one GEMM per step (encoder + mingru layer0 → single fused GEMM).
+    // Shape (3H, obs_dim) for puf_mm (NT layout). Metal-wrapped for GPU access.
     mw->fused_obs_dim = ew->in_dim;
-    mw->fused_enc_layer0 = {};
+    mw->fused_enc_layer0 = alloc_metal_tensor(3 * mw->hidden, ew->in_dim);
 }
 
 // Transpose current fp32 weights into the pre-transposed buffers.
@@ -419,17 +424,35 @@ static void sync_transposed_weights(PolicyWeights& w) {
     for (int i = 0; i < mw->num_layers; i++)
         transpose_weight(mw->weights_t[i], mw->weights[i]);
 
-    // Compute fused weight: enc_weight_t(obs_dim, H) × mingru0_weight_t(H, 3*H)
-    // Result is (obs_dim, 3*H) stored row-major.
+    // Compute fused weight: mingru_weight[0](3H,H) × encoder_weight(H,obs_dim)
+    // Result is (3H, obs_dim) for puf_mm NT layout.
     if (mw->fused_enc_layer0.bytes) {
         int obs_dim = mw->fused_obs_dim;
         int H = mw->hidden;
         int N3H = 3 * H;
-        vDSP_mmul((const float *)ew->weight_t.bytes, 1,
-                  (const float *)mw->weights_t[0].bytes, 1,
-                  (float *)mw->fused_enc_layer0.bytes, 1,
-                  obs_dim, N3H, H);
+        cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
+                    N3H, obs_dim, H, 1.0f,
+                    (const float *)mw->weights[0].bytes, H,
+                    (const float *)ew->weight.bytes, obs_dim,
+                    0.0f, (float *)mw->fused_enc_layer0.bytes, obs_dim);
     }
+}
+
+// Re-compute fused encoder+layer0 weight after training updates.
+// Must be called before each rollout (after train_impl updates weights_fp32).
+void sync_fused_weight(PuffeRL& pufferl) {
+    PolicyWeights& w = pufferl.weights_fp32;
+    EncoderWeights *ew = (EncoderWeights *)w.encoder;
+    MinGRUWeights *mw = (MinGRUWeights *)w.network;
+    if (!mw->fused_enc_layer0.bytes) return;
+    int obs_dim = mw->fused_obs_dim;
+    int H = mw->hidden;
+    int N3H = 3 * H;
+    cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
+                N3H, obs_dim, H, 1.0f,
+                (const float *)mw->weights[0].bytes, H,
+                (const float *)ew->weight.bytes, obs_dim,
+                0.0f, (float *)mw->fused_enc_layer0.bytes, obs_dim);
 }
 
 // ============================================================================

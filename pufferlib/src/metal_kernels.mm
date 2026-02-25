@@ -520,6 +520,28 @@ static PufTensor alloc_transposed(int rows, int cols) {
   return t;
 }
 
+// Allocate a Metal-wrapped tensor (page-aligned, registered with Metal context).
+// Use for buffers that need GPU access via buffer_for_ptr.
+static PufTensor alloc_metal_tensor(int dim0, int dim1) {
+  PufTensor t = {};
+  t.shape[0] = dim0;
+  t.shape[1] = dim1;
+  t.dtype_size = sizeof(float);
+  int64_t size = (int64_t)dim0 * dim1 * sizeof(float);
+  int64_t page = 16384;
+  int64_t alloc_size = (size + page - 1) & ~(page - 1);
+  posix_memalign((void **)&t.bytes, page, alloc_size);
+  memset(t.bytes, 0, alloc_size);
+  id<MTLBuffer> buf = [mtl_ctx()->device
+      newBufferWithBytesNoCopy:t.bytes
+                        length:alloc_size
+                       options:MTLResourceStorageModeShared
+                   deallocator:nil];
+  assert(buf);
+  mtl_ctx()->buffers.push_back({t.bytes, alloc_size, buf});
+  return t;
+}
+
 // ============================================================================
 // MinGRU inference kernel
 // ============================================================================
@@ -1856,9 +1878,12 @@ static PufTensor mingru_forward(void *w, PufTensor x, PufTensor state,
 
   for (int i = 0; i < m->num_layers; i++) {
     PufTensor state_i = mingru_state_layer(m, state, i);
-    if (g_cpu_inference && i == 0 && m->fused_enc_layer0.bytes)
-      puf_mm_nn(x, m->fused_enc_layer0, a->combined[i], stream);
-    else if (g_cpu_inference && i < (int)m->weights_t.size() && m->weights_t[i].bytes)
+    if (i == 0 && m->fused_enc_layer0.bytes) {
+      if (g_cpu_inference)
+        puf_mm_nn(x, m->fused_enc_layer0, a->combined[i], stream);
+      else
+        puf_mm(x, m->fused_enc_layer0, a->combined[i], stream);
+    } else if (g_cpu_inference && i < (int)m->weights_t.size() && m->weights_t[i].bytes)
       puf_mm_nn(x, m->weights_t[i], a->combined[i], stream);
     else
       puf_mm(x, m->weights[i], a->combined[i], stream);

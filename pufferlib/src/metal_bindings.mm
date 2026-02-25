@@ -41,11 +41,15 @@ void render(pybind11::object pufferl_obj, int env_id) {
     static_vec_render(pufferl.vec, env_id);
 }
 
+void sync_fused_weight(PuffeRL& pufferl);
+
 void rollouts(pybind11::object pufferl_obj) {
     PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
     // Reset sync stats before rollout to capture rollout-only syncs
     { int _c; double _m; mtl_sync_stats(&_c, &_m); }
     pybind11::gil_scoped_release no_gil;
+    // Recompute fused encoder+layer0 weight (fast: single GEMM on Accelerate)
+    sync_fused_weight(pufferl);
     auto t0 = std::chrono::high_resolution_clock::now();
     // Rollout runs CONCURRENTLY with pending GPU training (overlap mode).
     // Uses weights_infer (snapshot from previous iteration). Training writes
