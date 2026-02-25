@@ -21,7 +21,14 @@
 #include <chrono>
 #include <cstring>
 #include <memory>
+#include <mutex>
 #include <vector>
+
+// Serializes GPU access across buffer threads in multi-buffer mode.
+// Without this, concurrent net_callback calls from different buffer threads
+// interleave Metal commands on the same command buffer, causing
+// "commit command buffer with uncommitted encoder" assertion failures.
+static std::mutex g_rollout_gpu_mutex;
 
 // ============================================================================
 // GPU sync helper — flush any pending Metal compute work before CPU access.
@@ -315,18 +322,22 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
     // All tensors are in unified memory (MTLBuffer-wrapped allocators), so GPU
     // reads/writes are zero-copy. One sync after forward to make results
     // CPU-visible for action sampling.
-    puf_set_gpu_training(true);
-    PufTensor state_puf = pufferl->buffer_states[buf];
-    PolicyWeights& infer_weights = pufferl->overlap_enabled
-        ? pufferl->weights_infer : pufferl->weights_fp32;
-    Policy* p = pufferl->policy;
-    PolicyActivations& acts = pufferl->buffer_activations[buf];
+    PufTensor dec_puf = {};
+    {
+        std::lock_guard<std::mutex> gpu_guard(g_rollout_gpu_mutex);
+        puf_set_gpu_training(true);
+        PufTensor state_puf = pufferl->buffer_states[buf];
+        PolicyWeights& infer_weights = pufferl->overlap_enabled
+            ? pufferl->weights_infer : pufferl->weights_fp32;
+        Policy* p = pufferl->policy;
+        PolicyActivations& acts = pufferl->buffer_activations[buf];
 
-    PufTensor mingru_input = p->encoder.forward(infer_weights.encoder, acts.encoder, obs_dst, stream);
-    PufTensor h = p->network.forward(infer_weights.network, mingru_input, state_puf, acts.network, stream);
-    PufTensor dec_puf = p->decoder.forward(infer_weights.decoder, acts.decoder, h, stream);
-    ensure_gpu_synced(stream);
-    puf_set_gpu_training(false);
+        PufTensor mingru_input = p->encoder.forward(infer_weights.encoder, acts.encoder, obs_dst, stream);
+        PufTensor h = p->network.forward(infer_weights.network, mingru_input, state_puf, acts.network, stream);
+        dec_puf = p->decoder.forward(infer_weights.decoder, acts.decoder, h, stream);
+        ensure_gpu_synced(stream);
+        puf_set_gpu_training(false);
+    }
 
     uint64_t tp2 = mach_absolute_time();
 

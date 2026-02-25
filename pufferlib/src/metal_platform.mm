@@ -637,10 +637,10 @@ int cudaDeviceSynchronize(void) {
 }
 
 int cudaStreamSynchronize(void * /*stream*/) {
-  // vecenv.h passes per-buffer streams, but Metal uses a single stream.
-  // Sync the global stream to ensure all GPU work is visible to CPU.
-  if (g_ctx.stream.enc_active)
-    g_ctx.stream.sync();
+  // No-op on Metal. GPU work is already synced inside net_callback_wrapper
+  // (ensure_gpu_synced under mutex). The vecenv memcpys are also no-ops
+  // (unified memory). Calling sync() here would race with other buffer
+  // threads that hold the GPU mutex and have an active encoder.
   return 0;
 }
 
