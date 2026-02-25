@@ -156,6 +156,7 @@ enum ProfileIdx {
     PROF_TRAIN_GRAD_COPY,
     PROF_TRAIN_GRAD_CLIP,
     PROF_TRAIN_MUON,
+    PROF_TRAIN_SYNC,
     NUM_PROF,
 };
 
@@ -179,6 +180,7 @@ static const char* PROF_NAMES[NUM_PROF] = {
     "train_grad_copy",
     "train_grad_clip",
     "train_muon",
+    "train_sync",
 };
 
 typedef struct {
@@ -309,32 +311,22 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
 
     uint64_t tp1 = mach_absolute_time();
 
-    // Forward pass — CPU inference mode: cblas GEMM + cpu_mingru_gate, zero syncs.
-    // When overlap is enabled, use weights_infer (snapshot) to avoid racing with
-    // GPU training that writes to weights_fp32 concurrently.
-    puf_set_cpu_inference(true);
+    // Forward pass — GPU inference via MPS GEMM + Metal MinGRU gate.
+    // All tensors are in unified memory (MTLBuffer-wrapped allocators), so GPU
+    // reads/writes are zero-copy. One sync after forward to make results
+    // CPU-visible for action sampling.
+    puf_set_gpu_training(true);
     PufTensor state_puf = pufferl->buffer_states[buf];
-    // Rollout uses fp32 CPU inference (cblas/vDSP/NEON).
-    // When overlap is enabled, use weights_infer (snapshot copy).
-    // Otherwise, use weights_fp32 (master weights, updated by muon).
     PolicyWeights& infer_weights = pufferl->overlap_enabled
         ? pufferl->weights_infer : pufferl->weights_fp32;
     Policy* p = pufferl->policy;
     PolicyActivations& acts = pufferl->buffer_activations[buf];
 
-    // Fused encoder+layer0 path: skip encoder GEMM entirely.
-    // encoder(obs→enc) + mingru_layer0(enc→combined) fuses into a single
-    // obs→combined GEMM since both are linear with no intermediate nonlinearity.
-    MinGRUWeights *mw = (MinGRUWeights *)infer_weights.network;
-    PufTensor mingru_input;
-    if (mw->fused_enc_layer0.bytes) {
-        mingru_input = obs_dst;  // Raw obs, layer 0 uses fused weight
-    } else {
-        mingru_input = p->encoder.forward(infer_weights.encoder, acts.encoder, obs_dst, stream);
-    }
+    PufTensor mingru_input = p->encoder.forward(infer_weights.encoder, acts.encoder, obs_dst, stream);
     PufTensor h = p->network.forward(infer_weights.network, mingru_input, state_puf, acts.network, stream);
     PufTensor dec_puf = p->decoder.forward(infer_weights.decoder, acts.decoder, h, stream);
-    puf_set_cpu_inference(false);
+    ensure_gpu_synced(stream);
+    puf_set_gpu_training(false);
 
     uint64_t tp2 = mach_absolute_time();
 
@@ -395,15 +387,11 @@ static void alloc_transposed_weights(PolicyWeights& w) {
     for (int i = 0; i < mw->num_layers; i++)
         mw->weights_t[i] = alloc_transposed(3 * mw->hidden, mw->hidden);
 
-    // Fused encoder+layer0 weight: (obs_dim, 3*H).
-    // Combines encoder(obs_dim, H) × mingru_layer0(H, 3*H) into one matrix.
-    // No nonlinearity between encoder and mingru, so fusion is exact.
+    // Fused encoder+layer0 disabled: the fused weight is (obs_dim, 3*H) but
+    // mingru_forward receives encoder OUTPUT (B, H), not raw obs (B, obs_dim).
+    // To enable, encoder_forward must pass through raw obs when fused is active.
     mw->fused_obs_dim = ew->in_dim;
-    mw->fused_enc_layer0 = alloc_transposed(0, 0);  // placeholder
-    mw->fused_enc_layer0.shape[0] = ew->in_dim;
-    mw->fused_enc_layer0.shape[1] = 3 * mw->hidden;
-    mw->fused_enc_layer0.dtype_size = sizeof(float);
-    mw->fused_enc_layer0.bytes = (char *)calloc(ew->in_dim * 3 * mw->hidden, sizeof(float));
+    mw->fused_enc_layer0 = {};
 }
 
 // Transpose current fp32 weights into the pre-transposed buffers.
@@ -512,22 +500,28 @@ void train_impl(PuffeRL& pufferl) {
     TrainGraph& graph = pufferl.train_buf;
 
     uint64_t tp_preloop1 = mach_absolute_time();
+
+    // Advantage + prio precompute: hoisted outside the minibatch loop.
+    // Advantages depend only on rollout data (values, rewards, terminals, ratio)
+    // which doesn't change between minibatches. Computing once + single GPU sync
+    // eliminates per-minibatch syncs that were the dominant training cost.
+    puf_zero(advantages_puf, train_stream);
+    puff_advantage_cuda(rollouts.values, rollouts.rewards, rollouts.terminals,
+        rollouts.ratio, advantages_puf, hypers.gamma, hypers.gae_lambda,
+        hypers.vtrace_rho_clip, hypers.vtrace_c_clip, train_stream);
+    prio_precompute(advantages_puf, prio_alpha, pufferl.prio_bufs, train_stream);
+
+    uint64_t tp_prio_done = mach_absolute_time();
     pufferl.profile.accum[PROF_TRAIN_PRELOOP] += prof_ms(tp_preloop0, tp_preloop1);
+    pufferl.profile.accum[PROF_TRAIN_ADVANTAGE] += prof_ms(tp_preloop1, tp_prio_done);
+
+    uint32_t* train_rng_offset = (uint32_t*)((int64_t*)pufferl.rng_offset_puf.bytes + hypers.num_buffers);
 
     for (int mb = 0; mb < total_minibatches; ++mb) {
         uint64_t tp0 = mach_absolute_time();
 
-        puf_zero(advantages_puf, train_stream);
-        puff_advantage_cuda(rollouts.values, rollouts.rewards, rollouts.terminals,
-            rollouts.ratio, advantages_puf, hypers.gamma, hypers.gae_lambda,
-            hypers.vtrace_rho_clip, hypers.vtrace_c_clip, train_stream);
-
-        uint64_t tp1 = mach_absolute_time();
-
-        // Priority replay
-        uint32_t* train_rng_offset = (uint32_t*)((int64_t*)pufferl.rng_offset_puf.bytes + hypers.num_buffers);
-        prio_replay_cuda(advantages_puf, prio_alpha, minibatch_segments,
-            hypers.total_agents, anneal_beta,
+        // Sample from cached CDF + dispatch GPU importance weights (no sync)
+        prio_sample(minibatch_segments, hypers.total_agents, anneal_beta,
             pufferl.prio_bufs, pufferl.rng_seed, train_rng_offset, train_stream);
 
         uint64_t tp2 = mach_absolute_time();
@@ -618,8 +612,8 @@ void train_impl(PuffeRL& pufferl) {
         uint64_t tp9 = mach_absolute_time();
 
         // Accumulate fine-grained training timing (every minibatch)
-        pufferl.profile.accum[PROF_TRAIN_ADVANTAGE] += prof_ms(tp0, tp1);
-        pufferl.profile.accum[PROF_TRAIN_PRIO] += prof_ms(tp1, tp2);
+        // NOTE: PROF_TRAIN_ADVANTAGE is tracked in the hoisted pre-loop section
+        pufferl.profile.accum[PROF_TRAIN_PRIO] += prof_ms(tp0, tp2);
         pufferl.profile.accum[PROF_TRAIN_SELECT] += prof_ms(tp2, tp3);
         pufferl.profile.accum[PROF_TRAIN_FWD] += prof_ms(tp3, tp4);
         pufferl.profile.accum[PROF_TRAIN_PPO] += prof_ms(tp4, tp5);
@@ -635,14 +629,11 @@ void train_impl(PuffeRL& pufferl) {
 
     pufferl.epoch += 1;
 
-    // End GPU training mode. When overlap is enabled, skip the final sync —
-    // the next rollouts_impl call will sync before reading weights_infer.
+    uint64_t tp_sync0 = mach_absolute_time();
     puf_set_gpu_training(false);
-    if (pufferl.overlap_enabled) {
-        pufferl.train_pending = true;
-    } else {
-        ensure_gpu_synced(train_stream);
-    }
+    ensure_gpu_synced(train_stream);
+    uint64_t tp_sync1 = mach_absolute_time();
+    pufferl.profile.accum[PROF_TRAIN_SYNC] += prof_ms(tp_sync0, tp_sync1);
 }
 
 // Sync pending GPU training and copy weights to inference buffer.
@@ -650,7 +641,6 @@ void train_impl(PuffeRL& pufferl) {
 static void sync_pending_train(PuffeRL& pufferl) {
     if (!pufferl.train_pending) return;
     ensure_gpu_synced((cudaStream_t)mtl_stream());
-    copy_weights_to_infer(pufferl);
     pufferl.train_pending = false;
 }
 

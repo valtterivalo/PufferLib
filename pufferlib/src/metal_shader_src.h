@@ -34,6 +34,7 @@ static const char *get_all_metal_shader_source() {
 #include <metal_stdlib>
 #include <metal_math>
 #include <metal_simdgroup>
+#include <metal_simdgroup_matrix>
 #include <metal_atomic>
 using namespace metal;
 
@@ -1239,7 +1240,7 @@ kernel void ppo_loss_backward_kernel(
     } else {
         d_val_pred = val_pred - ret;
     }
-    grad_values_pred[values_idx] = dL * pp.vf_coef * d_val_pred;
+    grad_values_pred[nt] = dL * pp.vf_coef * d_val_pred;
 
     if (pp.is_continuous) {
         constexpr float HALF_LOG_2PI = 0.9189385332046727f;
@@ -2825,6 +2826,189 @@ kernel void fused_scan_backward_checkpointed_fp16(
     float grad_z_0 = acc * exp(z_0 - s_0);
 
     grad_state[state_idx] = half(grad_z_0 / float(state[state_idx]));
+}
+
+// ============================================================================
+// Section 26: Steel GEMM — C = alpha * op(A) @ op(B) + beta * C
+//
+// MLX-inspired 64x64 tiled GEMM using simdgroup_matrix (Apple Silicon M3+).
+// 4 simdgroups in 2x2 layout (128 threads), each computing 32x32 output
+// via a 4x4 grid of 8x8 simdgroup_matrix multiply-accumulate operations.
+//
+// Hot loop uses direct device memory loads (ThunderMittens-validated:
+// Apple Silicon's L2 cache provides effective data reuse without explicit
+// threadgroup staging, eliminating barrier overhead). K-remainder and edge
+// tile stores use threadgroup fallback.
+//
+// Stays in the compute encoder — no MPS encoder restart overhead (~120us
+// per GEMM saved, ~37ms/iter across ~308 dispatches).
+// ============================================================================
+
+kernel void steel_gemm(
+    device const float* A      [[buffer(0)]],
+    device const float* B      [[buffer(1)]],
+    device float* C            [[buffer(2)]],
+    constant GemmParams& p     [[buffer(3)]],
+    uint2 tgid                 [[threadgroup_position_in_grid]],
+    uint sgid                  [[simdgroup_index_in_threadgroup]],
+    uint lane                  [[thread_index_in_simdgroup]]
+) {
+    // 64x64 output tile, 4 simdgroups (2x2), each 32x32 = 4x4 grid of 8x8
+    constexpr int BM = 64, BN = 64;
+    constexpr int WM = 2, WN = 2;
+    constexpr int TM = BM / (8 * WM); // 4
+    constexpr int TN = BN / (8 * WN); // 4
+
+    const int bm = (int)tgid.y * BM;
+    const int bn = (int)tgid.x * BN;
+    const int wm = (int)(sgid / WN);
+    const int wn = (int)(sgid % WN);
+    const int tid = (int)(sgid * 32 + lane);
+
+    // Per-simdgroup 32x32 output starts at (sm, sn)
+    const int sm = bm + wm * 32;
+    const int sn = bn + wn * 32;
+
+    // 4x4 accumulator grid of 8x8 simdgroup matrices (16 per simd group)
+    simdgroup_float8x8 acc[TM][TN];
+    for (int i = 0; i < TM; i++)
+        for (int j = 0; j < TN; j++)
+            acc[i][j] = simdgroup_float8x8(0);
+
+    const int K_aligned = (p.K / 8) * 8;
+
+    // ---- Main loop: direct device loads, no threadgroup, no barriers ----
+    // Each simd group loads its own A and B fragments independently.
+    // L2 cache provides cross-simdgroup data reuse (validated by
+    // ThunderMittens: 9% faster than MLX's threadgroup approach on M2 Pro).
+
+    if (!p.trans_a && p.trans_b) {
+        // NT: C = A(M,K) @ B(N,K)^T — forward pass, Muon
+        for (int k = 0; k < K_aligned; k += 8) {
+            simdgroup_float8x8 a_frag[TM];
+            for (int i = 0; i < TM; i++)
+                simdgroup_load(a_frag[i], A + (long)(sm + i*8) * p.lda + k, p.lda);
+            for (int j = 0; j < TN; j++) {
+                simdgroup_float8x8 b_frag;
+                simdgroup_load(b_frag, B + (long)(sn + j*8) * p.ldb + k, p.ldb,
+                               ulong2(0,0), true);
+                for (int i = 0; i < TM; i++)
+                    simdgroup_multiply_accumulate(acc[i][j], a_frag[i], b_frag, acc[i][j]);
+            }
+        }
+    } else if (!p.trans_a && !p.trans_b) {
+        // NN: C = A(M,K) @ B(K,N) — backward input grad, Muon addmm
+        for (int k = 0; k < K_aligned; k += 8) {
+            simdgroup_float8x8 a_frag[TM];
+            for (int i = 0; i < TM; i++)
+                simdgroup_load(a_frag[i], A + (long)(sm + i*8) * p.lda + k, p.lda);
+            for (int j = 0; j < TN; j++) {
+                simdgroup_float8x8 b_frag;
+                simdgroup_load(b_frag, B + (long)k * p.ldb + sn + j*8, p.ldb);
+                for (int i = 0; i < TM; i++)
+                    simdgroup_multiply_accumulate(acc[i][j], a_frag[i], b_frag, acc[i][j]);
+            }
+        }
+    } else if (p.trans_a && !p.trans_b) {
+        // TN: C = A(K,M)^T @ B(K,N) — backward weight grad
+        for (int k = 0; k < K_aligned; k += 8) {
+            simdgroup_float8x8 a_frag[TM];
+            for (int i = 0; i < TM; i++)
+                simdgroup_load(a_frag[i], A + (long)k * p.lda + sm + i*8, p.lda,
+                               ulong2(0,0), true);
+            for (int j = 0; j < TN; j++) {
+                simdgroup_float8x8 b_frag;
+                simdgroup_load(b_frag, B + (long)k * p.ldb + sn + j*8, p.ldb);
+                for (int i = 0; i < TM; i++)
+                    simdgroup_multiply_accumulate(acc[i][j], a_frag[i], b_frag, acc[i][j]);
+            }
+        }
+    }
+
+    // ---- K-remainder: threadgroup fallback for last partial chunk ----
+    // Only triggered when K % 8 != 0 (e.g., K=373). Loads remaining
+    // elements into zero-padded 8-wide threadgroup tiles.
+    if (K_aligned < p.K) {
+        threadgroup float sA[BM][9];       // BM rows × 8+1 cols (padded)
+        threadgroup float sB[8][BN + 1];   // 8 rows × BN+1 cols (padded)
+
+        int k = K_aligned;
+        int rem = p.K - k;
+
+        // Cooperative load A: BM × 8 (zero-padded beyond rem)
+        int total_a = BM * 8;
+        for (int idx = tid; idx < total_a; idx += 128) {
+            int r = idx / 8;
+            int c = idx % 8;
+            int gr = bm + r;
+            int gc = k + c;
+            sA[r][c] = (gr < p.M && c < rem)
+                ? (p.trans_a ? A[(long)gc * p.lda + gr] : A[(long)gr * p.lda + gc])
+                : 0.0f;
+        }
+
+        // Cooperative load B: 8 × BN (zero-padded beyond rem)
+        int total_b = 8 * BN;
+        for (int idx = tid; idx < total_b; idx += 128) {
+            int r = idx / BN;
+            int c = idx % BN;
+            int gr = k + r;
+            int gc = bn + c;
+            sB[r][c] = (r < rem && gc < p.N)
+                ? (p.trans_b ? B[(long)gc * p.ldb + gr] : B[(long)gr * p.ldb + gc])
+                : 0.0f;
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        simdgroup_float8x8 a_frag[TM];
+        for (int i = 0; i < TM; i++)
+            simdgroup_load(a_frag[i], &sA[wm * 32 + i * 8][0], 9);
+        for (int j = 0; j < TN; j++) {
+            simdgroup_float8x8 b_frag;
+            simdgroup_load(b_frag, &sB[0][wn * 32 + j * 8], BN + 1);
+            for (int i = 0; i < TM; i++)
+                simdgroup_multiply_accumulate(acc[i][j], a_frag[i], b_frag, acc[i][j]);
+        }
+    }
+
+    // ---- Store results ----
+    // Fast path: direct simdgroup_store for interior tiles with alpha=1, beta=0.
+    // Slow path: threadgroup staging for edge tiles and non-trivial alpha/beta.
+    // CRITICAL: condition must be uniform across the threadgroup — all simdgroups
+    // must take the same branch, otherwise the threadgroup_barrier in the slow
+    // path causes undefined behavior (some threads skip it).
+    bool fast_store = (p.alpha == 1.0f && p.beta == 0.0f
+                       && bm + BM <= p.M && bn + BN <= p.N);
+    if (fast_store) {
+        for (int i = 0; i < TM; i++)
+            for (int j = 0; j < TN; j++)
+                simdgroup_store(acc[i][j],
+                    C + (long)(sm + i*8) * p.ldc + sn + j*8, p.ldc);
+    } else {
+        threadgroup float sC[BM][BN + 1];  // padded to avoid bank conflicts
+        for (int i = 0; i < TM; i++)
+            for (int j = 0; j < TN; j++)
+                simdgroup_store(acc[i][j],
+                    &sC[wm*32 + i*8][wn*32 + j*8], BN + 1);
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        // Cooperative store to device: each thread handles BM*BN/128 = 32 elements
+        for (int idx = tid; idx < BM * BN; idx += 128) {
+            int r = idx / BN;
+            int c = idx % BN;
+            int gr = bm + r;
+            int gc = bn + c;
+            if (gr < p.M && gc < p.N) {
+                long out_idx = (long)gr * p.ldc + gc;
+                float val = sC[r][c];
+                if (p.beta == 0.0f)
+                    C[out_idx] = p.alpha * val;
+                else
+                    C[out_idx] = p.alpha * val + p.beta * C[out_idx];
+            }
+        }
+    }
 }
 
 )METAL";

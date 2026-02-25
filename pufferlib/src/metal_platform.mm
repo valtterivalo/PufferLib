@@ -10,17 +10,64 @@
  */
 
 #import "metal_platform.h"
+#import <MetalPerformanceShaders/MetalPerformanceShaders.h>
 #include "metal_shader_src.h"
 
 #include <cassert>
 #include <cstdio>
 #include <cstring>
+#include <unordered_map>
 
 // ============================================================================
 // Global singleton
 // ============================================================================
 
 static MetalContext g_ctx = {};
+
+// ============================================================================
+// MPS GEMM cache — reuse MPSMatrixMultiplication objects across calls.
+// Each object encodes (M, N, K, transpose flags, alpha, beta, fp16) and
+// configures the GPU pipeline internally. Creating one per GEMM call adds
+// significant ObjC overhead; caching eliminates it for the ~10-20 unique
+// shapes used during training and rollout.
+// ============================================================================
+
+struct GemmKey {
+  int M, N, K;
+  bool tA, tB, fp16;
+  float alpha, beta;
+  bool operator==(const GemmKey& o) const {
+    return M == o.M && N == o.N && K == o.K && tA == o.tA && tB == o.tB
+        && fp16 == o.fp16 && alpha == o.alpha && beta == o.beta;
+  }
+};
+
+struct GemmKeyHash {
+  size_t operator()(const GemmKey& k) const {
+    size_t h = (size_t)k.M * 73856093u ^ (size_t)k.N * 19349663u
+             ^ (size_t)k.K * 83492791u;
+    h ^= (size_t)k.tA | ((size_t)k.tB << 1) | ((size_t)k.fp16 << 2);
+    h ^= (k.beta == 0.0f ? 0u : 7u) << 3;
+    return h;
+  }
+};
+
+static std::unordered_map<GemmKey, MPSMatrixMultiplication*, GemmKeyHash> g_matmul_cache;
+
+static MPSMatrixMultiplication* cached_matmul(int M, int N, int K,
+                                               bool tA, bool tB,
+                                               float alpha, float beta,
+                                               bool fp16) {
+  GemmKey key = {M, N, K, tA, tB, fp16, alpha, beta};
+  auto it = g_matmul_cache.find(key);
+  if (it != g_matmul_cache.end()) return it->second;
+  MPSMatrixMultiplication* mm = [[MPSMatrixMultiplication alloc]
+      initWithDevice:g_ctx.device transposeLeft:tA transposeRight:tB
+          resultRows:M resultColumns:N interiorColumns:K
+               alpha:(double)alpha beta:(double)beta];
+  g_matmul_cache[key] = mm;
+  return mm;
+}
 
 // ============================================================================
 // MetalStream implementation
@@ -30,7 +77,8 @@ void MetalStream::begin() {
   enc = nil;
   enc_active = false;
   pending_work = false;
-  cmd = [g_ctx.queue commandBuffer];
+  flushed = false;
+  cmd = [queue commandBuffer];
 }
 
 id<MTLComputeCommandEncoder> MetalStream::compute_encoder() {
@@ -71,6 +119,27 @@ void MetalStream::sync() {
   begin();
 }
 
+void MetalStream::flush() {
+  end_compute();
+  if (pending_work) {
+    [cmd commit];
+    flushed = true;
+    pending_work = false;
+  }
+}
+
+void MetalStream::wait_completed() {
+  if (flushed) {
+    uint64_t t0 = mach_absolute_time();
+    [cmd waitUntilCompleted];
+    uint64_t t1 = mach_absolute_time();
+    g_sync_count++;
+    g_sync_total_ns += mach_to_ns(t1 - t0);
+    flushed = false;
+    begin();
+  }
+}
+
 void mtl_sync_stats(int *out_count, double *out_total_ms) {
   *out_count = g_sync_count;
   *out_total_ms = g_sync_total_ns / 1e6;
@@ -88,6 +157,7 @@ void mtl_init() {
     assert(g_ctx.device && "No Metal device found");
 
     g_ctx.queue = [g_ctx.device newCommandQueue];
+    g_ctx.train_queue = [g_ctx.device newCommandQueue];
 
     // JIT-compile all MSL shaders from the embedded source string
     NSError *error = nil;
@@ -104,8 +174,11 @@ void mtl_init() {
 
     g_ctx.pipelines = [NSMutableDictionary new];
 
-    // Start the default stream
+    // Start the default stream (rollout) and training stream
+    g_ctx.stream.queue = g_ctx.queue;
     g_ctx.stream.begin();
+    g_ctx.train_stream.queue = g_ctx.train_queue;
+    g_ctx.train_stream.begin();
 
     printf("[metal] device: %s, unified memory: %s\n",
            g_ctx.device.name.UTF8String,
@@ -117,13 +190,19 @@ MetalContext *mtl_ctx() { return &g_ctx; }
 
 void *mtl_stream() { return &g_ctx.stream; }
 
+void *mtl_train_stream() { return &g_ctx.train_stream; }
+
 void mtl_destroy() {
   g_ctx.stream.end_compute();
   g_ctx.stream.cmd = nil;
+  g_ctx.train_stream.end_compute();
+  g_ctx.train_stream.cmd = nil;
+  g_matmul_cache.clear();
   g_ctx.buffers.clear();
   g_ctx.pipelines = nil;
   g_ctx.library = nil;
   g_ctx.queue = nil;
+  g_ctx.train_queue = nil;
   g_ctx.device = nil;
 }
 
@@ -249,51 +328,60 @@ static id<MTLBuffer> buffer_for_ptr(const void *ptr, NSUInteger *out_offset) {
   __builtin_unreachable();
 }
 
-// GPU GEMM: C = alpha * op(A) @ op(B) + beta * C
-// Uses custom MSL tiled kernel on the compute encoder — no MPS/compute
-// interop overhead, no per-GEMM sync needed.
-//
-// physical_rows_A/cols_A describe the STORED layout of A (before transpose).
-// Same for B. The kernel indexes into the stored layout using trans_a/trans_b.
-//
-// Auto-detects tall-K shapes (few M/N tiles, large K) and uses K-split GEMM
-// to increase GPU occupancy. Threshold: < 128 spatial TGs triggers K-split.
-//
-// fp16 variant (gpu_gemm_fp16): half inputs, float accumulation, half output.
-// K-split path uses fp32 partials (same scratch buffer), reduce writes half.
+// ============================================================================
+// Metal compute GEMM: uses simdgroup_matrix hardware instructions (M3+).
+// Stays in the compute encoder — zero MPS encoder restart overhead.
+// Used for fp32 GEMMs (rollout inference + Muon optimizer).
+// ============================================================================
 
-static constexpr int GEMM_TILE_SIZE = 32;
-static constexpr int KSPLIT_TG_TARGET = 128;
+// Must match MSL GemmParams layout exactly (10 x 4 bytes = 40 bytes).
+struct HostGemmParams {
+  int M, N, K, lda, ldb, ldc;
+  float alpha, beta;
+  int trans_a, trans_b;
+};
 
-// Persistent scratch buffer for K-split partial sums.
-static float *g_ksplit_buf = nullptr;
-static int64_t g_ksplit_capacity = 0;
+// C(M,N) = alpha * op(A) @ op(B) + beta * C
+// op(A) is MxK, op(B) is KxN. lda/ldb/ldc are physical row strides.
+static void compute_gemm(const float *A, const float *B, float *C,
+                          int M, int N, int K,
+                          bool trans_a, bool trans_b,
+                          int lda, int ldb, int ldc,
+                          float alpha, float beta,
+                          cudaStream_t stream) {
+  MetalStream *ms = get_stream(stream);
+  id<MTLComputeCommandEncoder> enc = ms->compute_encoder();
+  id<MTLComputePipelineState> pso = mtl_pipeline("steel_gemm");
+  [enc setComputePipelineState:pso];
 
-static void ensure_ksplit_buf(int64_t floats_needed) {
-  if (g_ksplit_buf && floats_needed <= g_ksplit_capacity) return;
-  if (g_ksplit_buf) {
-    // Remove old buffer from wrapped list (it's the last one we added)
-    for (auto it = g_ctx.buffers.begin(); it != g_ctx.buffers.end(); ++it) {
-      if (it->base == (char *)g_ksplit_buf) {
-        g_ctx.buffers.erase(it);
-        break;
-      }
-    }
-    free(g_ksplit_buf);
-  }
-  g_ksplit_capacity = floats_needed;
-  int64_t bytes = g_ksplit_capacity * (int64_t)sizeof(float);
-  int64_t page = 16384;
-  bytes = (bytes + page - 1) & ~(page - 1);
-  posix_memalign((void **)&g_ksplit_buf, page, bytes);
-  id<MTLBuffer> buf =
-      [g_ctx.device newBufferWithBytesNoCopy:g_ksplit_buf
-                                      length:bytes
-                                     options:MTLResourceStorageModeShared
-                                 deallocator:nil];
-  assert(buf);
-  g_ctx.buffers.push_back({(char *)g_ksplit_buf, bytes, buf});
+  NSUInteger off_a, off_b, off_c;
+  id<MTLBuffer> buf_a = buffer_for_ptr(A, &off_a);
+  id<MTLBuffer> buf_b = buffer_for_ptr(B, &off_b);
+  id<MTLBuffer> buf_c = buffer_for_ptr(C, &off_c);
+
+  [enc setBuffer:buf_a offset:off_a atIndex:0];
+  [enc setBuffer:buf_b offset:off_b atIndex:1];
+  [enc setBuffer:buf_c offset:off_c atIndex:2];
+
+  HostGemmParams params = {M, N, K, lda, ldb, ldc, alpha, beta,
+                            trans_a ? 1 : 0, trans_b ? 1 : 0};
+  [enc setBytes:&params length:sizeof(params) atIndex:3];
+
+  // 64x64 output tile per threadgroup, 128 threads (4 simdgroups)
+  int groups_m = (M + 63) / 64;
+  int groups_n = (N + 63) / 64;
+  [enc dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
+      threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+
+  ms->pending_work = true;
 }
+
+// ============================================================================
+// MPS GEMM: C = alpha * op(A) @ op(B) + beta * C
+// Uses MPSMatrixMultiplication — best for fp16 large-batch training GEMMs.
+// MPS encodes to the command buffer (not compute encoder), so we end any
+// active compute encoder before encoding.
+// ============================================================================
 
 static void gpu_gemm(const float *A, int physical_rows_A, int physical_cols_A,
                       bool transpose_A,
@@ -304,123 +392,42 @@ static void gpu_gemm(const float *A, int physical_rows_A, int physical_cols_A,
                       float alpha, float beta,
                       cudaStream_t stream) {
   int M = result_rows, N = result_cols, K = interior_cols;
-  int tiles_m = (M + GEMM_TILE_SIZE - 1) / GEMM_TILE_SIZE;
-  int tiles_n = (N + GEMM_TILE_SIZE - 1) / GEMM_TILE_SIZE;
-  int spatial_tgs = tiles_m * tiles_n;
 
-  // K-split path for tall-K shapes (backward weight grads)
-  if (spatial_tgs < KSPLIT_TG_TARGET && K > GEMM_TILE_SIZE) {
-    int num_splits = (KSPLIT_TG_TARGET + spatial_tgs - 1) / spatial_tgs;
-    // Don't split finer than BK=16
-    int max_splits = (K + 15) / 16;
-    if (num_splits > max_splits) num_splits = max_splits;
-    int k_per_split = (K + num_splits - 1) / num_splits;
-
-    ensure_ksplit_buf((int64_t)num_splits * M * N);
-
-    MetalStream *ms = get_stream(stream);
-
-    // Pass 1: K-split GEMM → partials
-    {
-      auto enc = ms->compute_encoder();
-      auto pso = mtl_pipeline("sgemm_ksplit");
-      [enc setComputePipelineState:pso];
-
-      NSUInteger off_a, off_b, off_p;
-      id<MTLBuffer> buf_a = buffer_for_ptr(A, &off_a);
-      id<MTLBuffer> buf_b = buffer_for_ptr(B, &off_b);
-      id<MTLBuffer> buf_p = buffer_for_ptr(g_ksplit_buf, &off_p);
-
-      [enc setBuffer:buf_a offset:off_a atIndex:0];
-      [enc setBuffer:buf_b offset:off_b atIndex:1];
-      [enc setBuffer:buf_p offset:off_p atIndex:2];
-
-      struct {
-        int M, N, K;
-        int lda, ldb, ldc;
-        float alpha, beta;
-        int trans_a, trans_b;
-      } params = {
-          M, N, K,
-          physical_cols_A, physical_cols_B, N,
-          1.0f, 0.0f,  // raw partials, alpha/beta applied in reduce
-          transpose_A ? 1 : 0, transpose_B ? 1 : 0};
-      [enc setBytes:&params length:sizeof(params) atIndex:3];
-      [enc setBytes:&k_per_split length:sizeof(k_per_split) atIndex:4];
-
-      MTLSize groups = MTLSizeMake(tiles_n, tiles_m, num_splits);
-      MTLSize tg_size = MTLSizeMake(8, 8, 1);  // 8×8 = 64 threads, TM=TN=4
-      [enc dispatchThreadgroups:groups threadsPerThreadgroup:tg_size];
-    }
-
-    // Pass 2: reduce partials → C
-    {
-      auto enc = ms->compute_encoder();
-      auto pso = mtl_pipeline("reduce_ksplit");
-      [enc setComputePipelineState:pso];
-
-      NSUInteger off_p, off_c;
-      id<MTLBuffer> buf_p = buffer_for_ptr(g_ksplit_buf, &off_p);
-      id<MTLBuffer> buf_c = buffer_for_ptr(C, &off_c);
-
-      [enc setBuffer:buf_p offset:off_p atIndex:0];
-      [enc setBuffer:buf_c offset:off_c atIndex:1];
-
-      struct {
-        int MN;
-        int num_splits;
-        float alpha_val;
-        float beta_val;
-      } rparams = {M * N, num_splits, alpha, beta};
-      [enc setBytes:&rparams length:sizeof(rparams) atIndex:2];
-
-      // 1D dispatch over M*N elements
-      int total = M * N;
-      int threads_per_tg = (int)pso.maxTotalThreadsPerThreadgroup;
-      if (threads_per_tg > 256) threads_per_tg = 256;
-      int groups_needed = (total + threads_per_tg - 1) / threads_per_tg;
-      [enc dispatchThreadgroups:MTLSizeMake(groups_needed, 1, 1)
-          threadsPerThreadgroup:MTLSizeMake(threads_per_tg, 1, 1)];
-    }
-
-    return;
-  }
-
-  // Regular path: enough spatial TGs for good occupancy
   MetalStream *ms = get_stream(stream);
-  auto enc = ms->compute_encoder();
-  auto pso = mtl_pipeline("sgemm_reg");
-  [enc setComputePipelineState:pso];
+  ms->end_compute();
 
   NSUInteger off_a, off_b, off_c;
   id<MTLBuffer> buf_a = buffer_for_ptr(A, &off_a);
   id<MTLBuffer> buf_b = buffer_for_ptr(B, &off_b);
   id<MTLBuffer> buf_c = buffer_for_ptr(C, &off_c);
 
-  [enc setBuffer:buf_a offset:off_a atIndex:0];
-  [enc setBuffer:buf_b offset:off_b atIndex:1];
-  [enc setBuffer:buf_c offset:off_c atIndex:2];
+  MPSMatrixDescriptor *desc_a = [MPSMatrixDescriptor
+      matrixDescriptorWithRows:physical_rows_A
+                       columns:physical_cols_A
+                      rowBytes:physical_cols_A * sizeof(float)
+                      dataType:MPSDataTypeFloat32];
+  MPSMatrixDescriptor *desc_b = [MPSMatrixDescriptor
+      matrixDescriptorWithRows:physical_rows_B
+                       columns:physical_cols_B
+                      rowBytes:physical_cols_B * sizeof(float)
+                      dataType:MPSDataTypeFloat32];
+  MPSMatrixDescriptor *desc_c = [MPSMatrixDescriptor
+      matrixDescriptorWithRows:M
+                       columns:N
+                      rowBytes:N * sizeof(float)
+                      dataType:MPSDataTypeFloat32];
 
-  struct {
-    int M, N, K;
-    int lda, ldb, ldc;
-    float alpha, beta;
-    int trans_a, trans_b;
-  } params = {
-      M, N, K,
-      physical_cols_A, physical_cols_B, N,
-      alpha, beta,
-      transpose_A ? 1 : 0, transpose_B ? 1 : 0};
-  [enc setBytes:&params length:sizeof(params) atIndex:3];
+  MPSMatrix *mat_a = [[MPSMatrix alloc] initWithBuffer:buf_a offset:off_a descriptor:desc_a];
+  MPSMatrix *mat_b = [[MPSMatrix alloc] initWithBuffer:buf_b offset:off_b descriptor:desc_b];
+  MPSMatrix *mat_c = [[MPSMatrix alloc] initWithBuffer:buf_c offset:off_c descriptor:desc_c];
 
-  MTLSize groups = MTLSizeMake(tiles_n, tiles_m, 1);
-  MTLSize tg_size = MTLSizeMake(8, 8, 1);  // 8×8 = 64 threads, TM=TN=4
-  [enc dispatchThreadgroups:groups threadsPerThreadgroup:tg_size];
+  MPSMatrixMultiplication *matmul = cached_matmul(M, N, K, transpose_A, transpose_B,
+                                                   alpha, beta, /*fp16=*/false);
+  [matmul encodeToCommandBuffer:ms->cmd leftMatrix:mat_a rightMatrix:mat_b resultMatrix:mat_c];
+  ms->pending_work = true;
 }
 
-// GPU GEMM fp16: half inputs, float accumulation, half output.
-// Uses hgemm_reg / hgemm_ksplit + reduce_ksplit_fp16 kernels.
-// K-split partials are fp32 (reuses g_ksplit_buf), reduce writes half.
+// GPU GEMM fp16: half inputs, half output, float accumulation inside MPS.
 static void gpu_gemm_fp16(const void *A, int physical_rows_A, int physical_cols_A,
                            bool transpose_A,
                            const void *B, int physical_rows_B, int physical_cols_B,
@@ -430,117 +437,39 @@ static void gpu_gemm_fp16(const void *A, int physical_rows_A, int physical_cols_
                            float alpha, float beta,
                            cudaStream_t stream) {
   int M = result_rows, N = result_cols, K = interior_cols;
-  int tiles_m = (M + GEMM_TILE_SIZE - 1) / GEMM_TILE_SIZE;
-  int tiles_n = (N + GEMM_TILE_SIZE - 1) / GEMM_TILE_SIZE;
-  int spatial_tgs = tiles_m * tiles_n;
 
-  // K-split path for tall-K shapes (backward weight grads)
-  if (spatial_tgs < KSPLIT_TG_TARGET && K > GEMM_TILE_SIZE) {
-    int num_splits = (KSPLIT_TG_TARGET + spatial_tgs - 1) / spatial_tgs;
-    int max_splits = (K + 15) / 16;
-    if (num_splits > max_splits) num_splits = max_splits;
-    int k_per_split = (K + num_splits - 1) / num_splits;
-
-    // K-split partials are fp32 (same scratch buffer as fp32 GEMM)
-    ensure_ksplit_buf((int64_t)num_splits * M * N);
-
-    MetalStream *ms = get_stream(stream);
-
-    // Pass 1: K-split GEMM → fp32 partials
-    {
-      auto enc = ms->compute_encoder();
-      auto pso = mtl_pipeline("hgemm_ksplit");
-      [enc setComputePipelineState:pso];
-
-      NSUInteger off_a, off_b, off_p;
-      id<MTLBuffer> buf_a = buffer_for_ptr(A, &off_a);
-      id<MTLBuffer> buf_b = buffer_for_ptr(B, &off_b);
-      id<MTLBuffer> buf_p = buffer_for_ptr(g_ksplit_buf, &off_p);
-
-      [enc setBuffer:buf_a offset:off_a atIndex:0];
-      [enc setBuffer:buf_b offset:off_b atIndex:1];
-      [enc setBuffer:buf_p offset:off_p atIndex:2];
-
-      struct {
-        int M, N, K;
-        int lda, ldb, ldc;
-        float alpha, beta;
-        int trans_a, trans_b;
-      } params = {
-          M, N, K,
-          physical_cols_A, physical_cols_B, N,
-          1.0f, 0.0f,  // raw partials, alpha/beta applied in reduce
-          transpose_A ? 1 : 0, transpose_B ? 1 : 0};
-      [enc setBytes:&params length:sizeof(params) atIndex:3];
-      [enc setBytes:&k_per_split length:sizeof(k_per_split) atIndex:4];
-
-      MTLSize groups = MTLSizeMake(tiles_n, tiles_m, num_splits);
-      MTLSize tg_size = MTLSizeMake(8, 8, 1);
-      [enc dispatchThreadgroups:groups threadsPerThreadgroup:tg_size];
-    }
-
-    // Pass 2: reduce fp32 partials → half output
-    {
-      auto enc = ms->compute_encoder();
-      auto pso = mtl_pipeline("reduce_ksplit_fp16");
-      [enc setComputePipelineState:pso];
-
-      NSUInteger off_p, off_c;
-      id<MTLBuffer> buf_p = buffer_for_ptr(g_ksplit_buf, &off_p);
-      id<MTLBuffer> buf_c = buffer_for_ptr(C, &off_c);
-
-      [enc setBuffer:buf_p offset:off_p atIndex:0];
-      [enc setBuffer:buf_c offset:off_c atIndex:1];
-
-      struct {
-        int MN;
-        int num_splits;
-        float alpha_val;
-        float beta_val;
-      } rparams = {M * N, num_splits, alpha, beta};
-      [enc setBytes:&rparams length:sizeof(rparams) atIndex:2];
-
-      int total = M * N;
-      int threads_per_tg = (int)pso.maxTotalThreadsPerThreadgroup;
-      if (threads_per_tg > 256) threads_per_tg = 256;
-      int groups_needed = (total + threads_per_tg - 1) / threads_per_tg;
-      [enc dispatchThreadgroups:MTLSizeMake(groups_needed, 1, 1)
-          threadsPerThreadgroup:MTLSizeMake(threads_per_tg, 1, 1)];
-    }
-
-    return;
-  }
-
-  // Regular path: enough spatial TGs for good occupancy
   MetalStream *ms = get_stream(stream);
-  auto enc = ms->compute_encoder();
-  auto pso = mtl_pipeline("hgemm_reg");
-  [enc setComputePipelineState:pso];
+  ms->end_compute();
 
   NSUInteger off_a, off_b, off_c;
   id<MTLBuffer> buf_a = buffer_for_ptr(A, &off_a);
   id<MTLBuffer> buf_b = buffer_for_ptr(B, &off_b);
   id<MTLBuffer> buf_c = buffer_for_ptr(C, &off_c);
 
-  [enc setBuffer:buf_a offset:off_a atIndex:0];
-  [enc setBuffer:buf_b offset:off_b atIndex:1];
-  [enc setBuffer:buf_c offset:off_c atIndex:2];
+  MPSMatrixDescriptor *desc_a = [MPSMatrixDescriptor
+      matrixDescriptorWithRows:physical_rows_A
+                       columns:physical_cols_A
+                      rowBytes:physical_cols_A * sizeof(__fp16)
+                      dataType:MPSDataTypeFloat16];
+  MPSMatrixDescriptor *desc_b = [MPSMatrixDescriptor
+      matrixDescriptorWithRows:physical_rows_B
+                       columns:physical_cols_B
+                      rowBytes:physical_cols_B * sizeof(__fp16)
+                      dataType:MPSDataTypeFloat16];
+  MPSMatrixDescriptor *desc_c = [MPSMatrixDescriptor
+      matrixDescriptorWithRows:M
+                       columns:N
+                      rowBytes:N * sizeof(__fp16)
+                      dataType:MPSDataTypeFloat16];
 
-  struct {
-    int M, N, K;
-    int lda, ldb, ldc;
-    float alpha, beta;
-    int trans_a, trans_b;
-  } params = {
-      M, N, K,
-      physical_cols_A, physical_cols_B, N,
-      alpha, beta,
-      transpose_A ? 1 : 0, transpose_B ? 1 : 0};
-  [enc setBytes:&params length:sizeof(params) atIndex:3];
+  MPSMatrix *mat_a = [[MPSMatrix alloc] initWithBuffer:buf_a offset:off_a descriptor:desc_a];
+  MPSMatrix *mat_b = [[MPSMatrix alloc] initWithBuffer:buf_b offset:off_b descriptor:desc_b];
+  MPSMatrix *mat_c = [[MPSMatrix alloc] initWithBuffer:buf_c offset:off_c descriptor:desc_c];
 
-  MTLSize groups = MTLSizeMake(tiles_n, tiles_m, 1);
-  MTLSize tg_size = MTLSizeMake(8, 8, 1);
-  [enc dispatchThreadgroups:groups threadsPerThreadgroup:tg_size];
+  MPSMatrixMultiplication *matmul = cached_matmul(M, N, K, transpose_A, transpose_B,
+                                                   alpha, beta, /*fp16=*/true);
+  [matmul encodeToCommandBuffer:ms->cmd leftMatrix:mat_a rightMatrix:mat_b resultMatrix:mat_c];
+  ms->pending_work = true;
 }
 
 // out(...,N) = a(...,K) @ b(N,K)^T — leading dims folded into M
@@ -605,8 +534,6 @@ void puf_mm_nn(PufTensor &a, PufTensor &b, PufTensor &out,
 
   if (!use_gpu_gemm() && !g_gpu_training) {
     ensure_gpu_synced(stream);
-    // vDSP_mmul: simpler dispatch than cblas_sgemm (no enum/scaling args).
-    // C(M,N) = A(M,K) * B(K,N), all row-major stride-1.
     vDSP_mmul((const float *)a.bytes, 1, (const float *)b.bytes, 1,
               (float *)out.bytes, 1, M, N, K);
   } else if (a.dtype_size == 2) {
@@ -623,6 +550,8 @@ void puf_mm_nn(PufTensor &a, PufTensor &b, PufTensor &out,
 }
 
 // out(...,N) = beta*out + alpha * a(...,K) @ b(K,N)
+// Only called from Muon Newton-Schulz (small fp32 GEMMs: 512×512).
+// Uses compute encoder to avoid MPS encoder restarts (40 per training step).
 void puf_addmm_nn(PufTensor &a, PufTensor &b, PufTensor &out, float alpha,
                    float beta, cudaStream_t stream) {
   int na = a.ndim(), nb = b.ndim();
@@ -636,7 +565,6 @@ void puf_addmm_nn(PufTensor &a, PufTensor &b, PufTensor &out, float alpha,
                 (const float *)a.bytes, K, (const float *)b.bytes, N,
                 beta, (float *)out.bytes, N);
   } else {
-    // addmm only used by Muon Newton-Schulz (always fp32)
     gpu_gemm((const float *)a.bytes, M, K, false,
              (const float *)b.bytes, K, N, false,
              (float *)out.bytes, M, N, K,

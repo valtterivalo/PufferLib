@@ -660,6 +660,8 @@ METAL_FRAMEWORKS = [
     "-framework",
     "Metal",
     "-framework",
+    "MetalPerformanceShaders",
+    "-framework",
     "Accelerate",
     "-framework",
     "Foundation",

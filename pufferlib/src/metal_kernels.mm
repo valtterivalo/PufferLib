@@ -495,6 +495,7 @@ void mtl_sum_rows_to_f32(float *dst, const float *src, int rows, int cols,
 
 static bool g_cpu_inference = false;
 void puf_set_cpu_inference(bool val) { g_cpu_inference = val; }
+bool puf_is_cpu_inference() { return g_cpu_inference; }
 
 // Transpose weight matrix (rows, cols) into pre-allocated dst (cols, rows).
 // dst must have shape {cols, rows} and enough bytes allocated.
@@ -1076,7 +1077,7 @@ void ppo_loss_fwd_bwd(PufTensor &dec_out, PufTensor &logstd, TrainGraph &graph,
     mtl_set_ptr(enc, bufs.grad_values.bytes, 3);
     mtl_set_ptr(enc, dec_out.bytes, 4);                   // logits
     mtl_set_ptr(enc, is_continuous ? logstd.bytes : dec_out.bytes, 5); // logstd
-    mtl_set_ptr(enc, dec_out.bytes, 6); // values_pred (offset handled in kernel via stride)
+    mtl_set_ptr(enc, (float *)dec_out.bytes + A_total, 6); // values_pred (last column of fused decoder output)
     mtl_set_ptr(enc, ppo_act_f32, 7);  // f32 actions (converted from f64)
     mtl_set_ptr(enc, graph.mb_logprobs.bytes, 8);
     mtl_set_ptr(enc, graph.mb_advantages.bytes, 9);
@@ -1163,10 +1164,11 @@ void puff_advantage_cuda(PufTensor &values, PufTensor &rewards,
 // Priority replay
 // ============================================================================
 
-void prio_replay_cuda(PufTensor &advantages, float prio_alpha,
-                       int minibatch_segments, int total_agents,
-                       float anneal_beta, PrioBuffers &bufs, uint64_t seed,
-                       uint32_t *offset_ptr, cudaStream_t stream) {
+// Prio replay split into two phases to eliminate per-minibatch GPU syncs.
+// Phase 1 (precompute): GPU reduction + normalize + sync + CPU CDF build.
+// Called once before the minibatch loop since advantages don't change.
+void prio_precompute(PufTensor &advantages, float prio_alpha,
+                     PrioBuffers &bufs, cudaStream_t stream) {
   int S = (int)advantages.shape[0], T = (int)advantages.shape[1];
   MetalStream *ms = mtl_get_stream(stream);
 
@@ -1198,19 +1200,26 @@ void prio_replay_cuda(PufTensor &advantages, float prio_alpha,
     mtl_dispatch_groups(enc, pso, 1, 256);
   }
 
-  // Multinomial sampling — done on CPU after syncing
-  // (GPU shared memory for CDF is complex in Metal; CPU is fine for small S)
+  // Sync to read normalized probs on CPU, then build CDF
   mtl_ensure_synced(stream);
-  {
-    float *probs = (float *)bufs.prio_probs.bytes;
-    int64_t *idx = (int64_t *)bufs.idx.bytes;
-    // Build CDF on CPU
-    float *cdf = (float *)bufs.cdf.bytes;
-    cdf[0] = probs[0];
-    for (int i = 1; i < S; i++)
-      cdf[i] = cdf[i - 1] + probs[i];
+  float *probs = (float *)bufs.prio_probs.bytes;
+  float *cdf = (float *)bufs.cdf.bytes;
+  cdf[0] = probs[0];
+  for (int i = 1; i < S; i++)
+    cdf[i] = cdf[i - 1] + probs[i];
+}
 
-    // Sample using Philox-style deterministic RNG
+// Phase 2 (per-minibatch): CPU sampling from cached CDF + GPU importance weights.
+// No GPU sync needed — samples from pre-computed CDF, dispatches imp_weights to GPU.
+void prio_sample(int minibatch_segments, int total_agents,
+                 float anneal_beta, PrioBuffers &bufs, uint64_t seed,
+                 uint32_t *offset_ptr, cudaStream_t stream) {
+  int S = (int)bufs.prio_probs.shape[0];
+
+  // CPU multinomial sampling from cached CDF (no GPU sync)
+  {
+    float *cdf = (float *)bufs.cdf.bytes;
+    int64_t *idx = (int64_t *)bufs.idx.bytes;
     std::mt19937_64 rng(seed + *offset_ptr);
     std::uniform_real_distribution<float> dist(0.0f, 1.0f);
     for (int i = 0; i < minibatch_segments; i++) {
@@ -1228,10 +1237,10 @@ void prio_replay_cuda(PufTensor &advantages, float prio_alpha,
     *offset_ptr += minibatch_segments;
   }
 
-  // Importance weights
+  // Importance weights (GPU dispatch, no sync)
   {
-    MetalStream *ms2 = mtl_get_stream(stream);
-    auto enc = ms2->compute_encoder();
+    MetalStream *ms = mtl_get_stream(stream);
+    auto enc = ms->compute_encoder();
     auto pso = mtl_pipeline("prio_imp_weights_kernel");
     [enc setComputePipelineState:pso];
     mtl_set_ptr(enc, bufs.idx.bytes, 0);
@@ -1243,9 +1252,18 @@ void prio_replay_cuda(PufTensor &advantages, float prio_alpha,
       int minibatch_segments;
     } params = {total_agents, anneal_beta, minibatch_segments};
     [enc setBytes:&params length:sizeof(params) atIndex:3];
-    int blocks = (minibatch_segments + 255) / 256;
     mtl_dispatch_1d(enc, pso, minibatch_segments);
   }
+}
+
+// Legacy combined API (kept for CUDA compat, calls both phases)
+void prio_replay_cuda(PufTensor &advantages, float prio_alpha,
+                       int minibatch_segments, int total_agents,
+                       float anneal_beta, PrioBuffers &bufs, uint64_t seed,
+                       uint32_t *offset_ptr, cudaStream_t stream) {
+  prio_precompute(advantages, prio_alpha, bufs, stream);
+  prio_sample(minibatch_segments, total_agents, anneal_beta, bufs,
+              seed, offset_ptr, stream);
 }
 
 // ============================================================================

@@ -54,7 +54,7 @@ void c_step(Env* env) {
     env->terminals[0] = (float)env->ocean_term_staging;
 
     /* copy PVP log to wrapper log on episode end */
-    if (env->pvp.episode_over) {
+    if (env->ocean_term_staging) {
         env->log.episode_return = env->pvp.log.episode_return;
         env->log.episode_length = env->pvp.log.episode_length;
         env->log.wins = env->pvp.log.wins;

@@ -30,8 +30,10 @@
 struct MetalStream {
   id<MTLCommandBuffer> cmd;
   id<MTLComputeCommandEncoder> enc;
+  id<MTLCommandQueue> queue;  // owning queue (for creating command buffers)
   bool enc_active = false;
   bool pending_work = false; // true when compute work is encoded but not synced
+  bool flushed = false;      // true when cmd committed but not waited on
 
   // Create a fresh command buffer, ready for encoding.
   void begin();
@@ -44,6 +46,14 @@ struct MetalStream {
 
   // Commit and wait for GPU completion, then begin a new command buffer.
   void sync();
+
+  // Commit without waiting — GPU work continues asynchronously.
+  // Call wait_completed() later to ensure it finished.
+  void flush();
+
+  // Wait for previously flushed command buffer to complete.
+  // No-op if nothing was flushed.
+  void wait_completed();
 };
 
 // ============================================================================
@@ -63,10 +73,12 @@ struct WrappedBuffer {
 struct MetalContext {
   id<MTLDevice> device;
   id<MTLCommandQueue> queue;
+  id<MTLCommandQueue> train_queue;  // separate queue for async training overlap
   id<MTLLibrary> library; // JIT-compiled MSL shaders
   NSMutableDictionary<NSString *, id<MTLComputePipelineState>> *pipelines;
 
-  MetalStream stream; // default stream
+  MetalStream stream;       // default stream (rollout)
+  MetalStream train_stream; // training stream (separate queue for overlap)
   std::vector<WrappedBuffer> buffers;
 };
 
@@ -82,6 +94,9 @@ MetalContext *mtl_ctx();
 
 // Default stream as void* (cast to cudaStream_t for vtable functions).
 void *mtl_stream();
+
+// Training stream (separate command queue for async overlap with rollout).
+void *mtl_train_stream();
 
 // Tear down Metal context.
 void mtl_destroy();
@@ -177,6 +192,7 @@ void mtl_sync_stats(int *out_count, double *out_total_ms);
 // CPU inference mode — when true, mingru_forward uses CPU gate + memcpy
 // instead of Metal dispatch, eliminating rollout syncs.
 void puf_set_cpu_inference(bool val);
+bool puf_is_cpu_inference();
 
 // GPU training mode — when true, puf_mm/puf_copy/puf_zero use GPU
 // instead of sync+CPU, keeping everything on the compute encoder chain.
