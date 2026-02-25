@@ -1688,7 +1688,9 @@ static PufTensor mingru_forward(void *w, PufTensor x, PufTensor state,
 
   for (int i = 0; i < m->num_layers; i++) {
     PufTensor state_i = mingru_state_layer(m, state, i);
-    if (g_cpu_inference && i < (int)m->weights_t.size() && m->weights_t[i].bytes)
+    if (g_cpu_inference && i == 0 && m->fused_enc_layer0.bytes)
+      puf_mm_nn(x, m->fused_enc_layer0, a->combined[i], stream);
+    else if (g_cpu_inference && i < (int)m->weights_t.size() && m->weights_t[i].bytes)
       puf_mm_nn(x, m->weights_t[i], a->combined[i], stream);
     else
       puf_mm(x, m->weights[i], a->combined[i], stream);

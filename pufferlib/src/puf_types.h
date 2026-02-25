@@ -461,6 +461,8 @@ struct MinGRUWeights {
   int hidden, num_layers, horizon;
   vector<PufTensor> weights;
   vector<PufTensor> weights_t;  // per-layer (H, 3*H) — pre-transposed for CPU NoTrans inference
+  PufTensor fused_enc_layer0;   // (obs_dim, 3*H) — fused encoder+layer0 for CPU inference
+  int fused_obs_dim;            // obs_dim for the fused weight
 };
 
 // ============================================================================

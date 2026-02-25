@@ -308,8 +308,21 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
     PufTensor state_puf = pufferl->buffer_states[buf];
     PolicyWeights& infer_weights = pufferl->overlap_enabled
         ? pufferl->weights_infer : pufferl->weights_bf16;
-    PufTensor dec_puf = policy_forward(pufferl->policy, infer_weights,
-        pufferl->buffer_activations[buf], obs_dst, state_puf, stream);
+    Policy* p = pufferl->policy;
+    PolicyActivations& acts = pufferl->buffer_activations[buf];
+
+    // Fused encoder+layer0 path: skip encoder GEMM entirely.
+    // encoder(obs→enc) + mingru_layer0(enc→combined) fuses into a single
+    // obs→combined GEMM since both are linear with no intermediate nonlinearity.
+    MinGRUWeights *mw = (MinGRUWeights *)infer_weights.network;
+    PufTensor mingru_input;
+    if (mw->fused_enc_layer0.bytes) {
+        mingru_input = obs_dst;  // Raw obs, layer 0 uses fused weight
+    } else {
+        mingru_input = p->encoder.forward(infer_weights.encoder, acts.encoder, obs_dst, stream);
+    }
+    PufTensor h = p->network.forward(infer_weights.network, mingru_input, state_puf, acts.network, stream);
+    PufTensor dec_puf = p->decoder.forward(infer_weights.decoder, acts.decoder, h, stream);
     puf_set_cpu_inference(false);
 
     uint64_t tp2 = mach_absolute_time();
@@ -370,9 +383,20 @@ static void alloc_transposed_weights(PolicyWeights& w) {
     mw->weights_t.resize(mw->num_layers);
     for (int i = 0; i < mw->num_layers; i++)
         mw->weights_t[i] = alloc_transposed(3 * mw->hidden, mw->hidden);
+
+    // Fused encoder+layer0 weight: (obs_dim, 3*H).
+    // Combines encoder(obs_dim, H) × mingru_layer0(H, 3*H) into one matrix.
+    // No nonlinearity between encoder and mingru, so fusion is exact.
+    mw->fused_obs_dim = ew->in_dim;
+    mw->fused_enc_layer0 = alloc_transposed(0, 0);  // placeholder
+    mw->fused_enc_layer0.shape[0] = ew->in_dim;
+    mw->fused_enc_layer0.shape[1] = 3 * mw->hidden;
+    mw->fused_enc_layer0.dtype_size = sizeof(float);
+    mw->fused_enc_layer0.bytes = (char *)calloc(ew->in_dim * 3 * mw->hidden, sizeof(float));
 }
 
 // Transpose current fp32 weights into the pre-transposed buffers.
+// Also compute fused encoder+layer0 weight.
 // Called after weight init and before each rollout (after training updates).
 static void sync_transposed_weights(PolicyWeights& w) {
     EncoderWeights *ew = (EncoderWeights *)w.encoder;
@@ -384,6 +408,18 @@ static void sync_transposed_weights(PolicyWeights& w) {
     MinGRUWeights *mw = (MinGRUWeights *)w.network;
     for (int i = 0; i < mw->num_layers; i++)
         transpose_weight(mw->weights_t[i], mw->weights[i]);
+
+    // Compute fused weight: enc_weight_t(obs_dim, H) × mingru0_weight_t(H, 3*H)
+    // Result is (obs_dim, 3*H) stored row-major.
+    if (mw->fused_enc_layer0.bytes) {
+        int obs_dim = mw->fused_obs_dim;
+        int H = mw->hidden;
+        int N3H = 3 * H;
+        vDSP_mmul((const float *)ew->weight_t.bytes, 1,
+                  (const float *)mw->weights_t[0].bytes, 1,
+                  (float *)mw->fused_enc_layer0.bytes, 1,
+                  obs_dim, N3H, H);
+    }
 }
 
 // ============================================================================
