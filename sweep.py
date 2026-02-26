@@ -22,7 +22,7 @@ uniform [0, 1] float: <0.5 = muon, >=0.5 = adam. Protein can discover which
 optimizer works best at each cost level and include it in the Pareto front.
 
 Usage:
-    python sweep.py                          # run sweep (default: novice_nh)
+    python sweep.py                          # run sweep (default: true_random)
     python sweep.py --opponent improved      # harder opponent (OPP_IMPROVED=8)
     python sweep.py --timeout 6              # custom timeout in hours
     python sweep.py --results                # print results and exit
@@ -68,14 +68,14 @@ OPPONENT_TYPES = {
     "improved": 8,
     "novice_nh": 17,
 }
-DEFAULT_OPPONENT = "novice_nh"
+DEFAULT_OPPONENT = "true_random"
 
 # regex to parse train_pvp.py stdout metrics
 # format: [step=     32,768 | SPS= 271,000 | ret=  0.12 wins=0.56 len=142 | ent=1.234 pg=0.0012 vf=0.3456]
 METRIC_PATTERN = re.compile(
     r"\[step=\s*([\d,]+)\s*\|\s*SPS=\s*([\d,]+)\s*\|\s*"
     r"ret=\s*([\d.-]+)\s+wins=([\d.]+)\s+len=(\d+)\s*\|\s*"
-    r"ent=([\d.]+)\s+pg=([\d.]+)\s+vf=([\d.]+)\]"
+    r"ent=([\d.-]+)\s+pg=([\d.-]+)\s+vf=([\d.-]+)\]"
 )
 
 
