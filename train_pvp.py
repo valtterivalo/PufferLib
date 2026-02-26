@@ -35,6 +35,16 @@ def parse_args():
     p.add_argument("--total-timesteps", type=int, default=50_000_000)
     p.add_argument("--learning-rate", type=float, default=0.00112)
     p.add_argument("--minibatch-size", type=int, default=4096)
+    p.add_argument("--replay-ratio", type=float, default=0.25)
+    p.add_argument("--ent-coef", type=float, default=0.0016)
+    p.add_argument("--gamma", type=float, default=0.991)
+    p.add_argument("--gae-lambda", type=float, default=0.845)
+    p.add_argument("--prio-alpha", type=float, default=0.914)
+    p.add_argument("--prio-beta0", type=float, default=0.218)
+    p.add_argument("--clip-coef", type=float, default=0.32)
+    p.add_argument("--vf-coef", type=float, default=2.5)
+    p.add_argument("--vf-clip-coef", type=float, default=0.1)
+    p.add_argument("--max-grad-norm", type=float, default=0.5)
     p.add_argument("--opponent-type", type=int, default=OPP_MASTER_NH)
     p.add_argument("--wandb-project", type=str, default="osrs-pvp-rl")
     p.add_argument("--experiment-name", type=str, default="metal-pvp-master-nh")
@@ -44,6 +54,7 @@ def parse_args():
     p.add_argument("--num-buffers", type=int, default=1)
     p.add_argument("--num-threads", type=int, default=1)
     p.add_argument("--overlap", action="store_true", help="async training overlap (train on separate GPU queue)")
+    p.add_argument("--optimizer", choices=["muon", "adam"], default="muon")
     p.add_argument("--no-wandb", action="store_true")
     return p.parse_args()
 
@@ -61,24 +72,25 @@ def main():
         "beta2": 0.999,
         "eps": 1e-12,
         "minibatch_size": args.minibatch_size,
-        "replay_ratio": 0.25,
+        "replay_ratio": args.replay_ratio,
         "total_timesteps": args.total_timesteps,
-        "max_grad_norm": 0.5,
-        "clip_coef": 0.32,
-        "vf_clip_coef": 0.1,
-        "vf_coef": 2.5,
-        "ent_coef": 0.0016,
-        "gamma": 0.991,
-        "gae_lambda": 0.845,
+        "max_grad_norm": args.max_grad_norm,
+        "clip_coef": args.clip_coef,
+        "vf_clip_coef": args.vf_clip_coef,
+        "vf_coef": args.vf_coef,
+        "ent_coef": args.ent_coef,
+        "gamma": args.gamma,
+        "gae_lambda": args.gae_lambda,
         "vtrace_rho_clip": 1.0,
         "vtrace_c_clip": 1.0,
-        "prio_alpha": 0.914,
-        "prio_beta0": 0.218,
+        "prio_alpha": args.prio_alpha,
+        "prio_beta0": args.prio_beta0,
         "use_rnn": 1.0,
         "cudagraphs": -1.0,
         "kernels": 1.0,
         "profile": 0.0,
         "overlap": 1.0 if args.overlap else 0.0,
+        "use_adam": 1.0 if args.optimizer == "adam" else 0.0,
         "env_name": "osrs_pvp",
     }
     vec_config = {
@@ -144,7 +156,7 @@ def main():
 
     print(f"training: {total_iters:,} iterations, {args.total_timesteps:,} total steps")
     print(f"batch_size={steps_per_iter}, minibatch={args.minibatch_size}, "
-          f"replay_ratio=0.25 -> {int(0.25 * steps_per_iter / args.minibatch_size)} minibatches/iter")
+          f"replay_ratio={args.replay_ratio} -> {int(args.replay_ratio * steps_per_iter / args.minibatch_size)} minibatches/iter")
 
     for iteration in range(1, total_iters + 1):
         _C.rollouts(pufferl)

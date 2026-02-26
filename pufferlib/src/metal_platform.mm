@@ -11,6 +11,7 @@
 
 #import "metal_platform.h"
 #import <MetalPerformanceShaders/MetalPerformanceShaders.h>
+#import <QuartzCore/CABase.h>  // CACurrentMediaTime
 #include "metal_shader_src.h"
 
 #include <cassert>
@@ -195,6 +196,10 @@ static int g_sync_count = 0;
 static double g_sync_total_ns = 0.0;
 static mach_timebase_info_data_t g_timebase = {0, 0};
 
+// GPU timing diagnostic — actual kernel execution vs scheduling delay
+static double g_gpu_exec_ns = 0.0;
+static double g_sched_wait_ns = 0.0;
+
 static double mach_to_ns(uint64_t ticks) {
   if (g_timebase.denom == 0) mach_timebase_info(&g_timebase);
   return (double)ticks * g_timebase.numer / g_timebase.denom;
@@ -203,17 +208,26 @@ static double mach_to_ns(uint64_t ticks) {
 void MetalStream::sync() {
   end_compute();
   uint64_t t0 = mach_absolute_time();
+  CFTimeInterval cpu_commit = CACurrentMediaTime();
   [cmd commit];
   [cmd waitUntilCompleted];
   uint64_t t1 = mach_absolute_time();
   g_sync_count++;
   g_sync_total_ns += mach_to_ns(t1 - t0);
+  // GPU timing diagnostic
+  CFTimeInterval gpu_start = cmd.GPUStartTime;
+  CFTimeInterval gpu_end = cmd.GPUEndTime;
+  if (gpu_start > 0 && gpu_end > 0) {
+    g_gpu_exec_ns += (gpu_end - gpu_start) * 1e9;
+    g_sched_wait_ns += (gpu_start - cpu_commit) * 1e9;
+  }
   begin();
 }
 
 void MetalStream::flush() {
   end_compute();
   if (pending_work) {
+    commit_time = CACurrentMediaTime();
     [cmd commit];
     flushed = true;
     pending_work = false;
@@ -227,6 +241,13 @@ void MetalStream::wait_completed() {
     uint64_t t1 = mach_absolute_time();
     g_sync_count++;
     g_sync_total_ns += mach_to_ns(t1 - t0);
+    // GPU timing diagnostic
+    CFTimeInterval gpu_start = cmd.GPUStartTime;
+    CFTimeInterval gpu_end = cmd.GPUEndTime;
+    if (gpu_start > 0 && gpu_end > 0) {
+      g_gpu_exec_ns += (gpu_end - gpu_start) * 1e9;
+      g_sched_wait_ns += (gpu_start - commit_time) * 1e9;
+    }
     flushed = false;
     begin();
   }
@@ -237,6 +258,13 @@ void mtl_sync_stats(int *out_count, double *out_total_ms) {
   *out_total_ms = g_sync_total_ns / 1e6;
   g_sync_count = 0;
   g_sync_total_ns = 0.0;
+}
+
+void mtl_gpu_timing_stats(double *gpu_exec_ms, double *sched_wait_ms) {
+  *gpu_exec_ms = g_gpu_exec_ns / 1e6;
+  *sched_wait_ms = g_sched_wait_ns / 1e6;
+  g_gpu_exec_ns = 0.0;
+  g_sched_wait_ns = 0.0;
 }
 
 static int g_tensor_ops_dispatch_count = 0;
@@ -445,17 +473,6 @@ static inline void ensure_gpu_synced(cudaStream_t s) {
   MetalStream *ms = get_stream(s);
   if (ms->enc_active || ms->pending_work)
     ms->sync();
-}
-
-// Runtime flag: PUFFERLIB_GPU_GEMM=1 forces MSL tiled kernel instead of cblas.
-// Default is cblas (Accelerate AMX) — faster for small matrices (hidden ≤ 512).
-static int g_use_gpu_gemm = -1; // -1 = uninitialized
-static bool use_gpu_gemm() {
-  if (g_use_gpu_gemm < 0) {
-    const char *env = getenv("PUFFERLIB_GPU_GEMM");
-    g_use_gpu_gemm = (env && env[0] == '1') ? 1 : 0;
-  }
-  return g_use_gpu_gemm != 0;
 }
 
 // GPU training mode — when true, puf_mm forces GPU GEMM to avoid ensure_gpu_synced.
@@ -715,12 +732,7 @@ void puf_mm(PufTensor &a, PufTensor &b, PufTensor &out,
   int K = (int)a.shape[na - 1];
   int N = (int)b.shape[nb - 2];
 
-  if (!use_gpu_gemm() && !g_gpu_training) {
-    ensure_gpu_synced(stream);
-    cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans, M, N, K, 1.0f,
-                (const float *)a.bytes, K, (const float *)b.bytes, K,
-                0.0f, (float *)out.bytes, N);
-  } else if (a.dtype_size == 2) {
+  if (a.dtype_size == 2) {
     gpu_gemm_fp16(a.bytes, M, K, false,
                   b.bytes, N, K, true,
                   out.bytes, M, N, K,
@@ -745,12 +757,7 @@ void puf_mm_tn(PufTensor &a, PufTensor &b, PufTensor &out,
   int M = (int)a.shape[na - 1];
   int N = (int)b.shape[nb - 1];
 
-  if (!use_gpu_gemm() && !g_gpu_training) {
-    ensure_gpu_synced(stream);
-    cblas_sgemm(CblasRowMajor, CblasTrans, CblasNoTrans, M, N, K, 1.0f,
-                (const float *)a.bytes, M, (const float *)b.bytes, N,
-                0.0f, (float *)out.bytes, N);
-  } else if (a.dtype_size == 2) {
+  if (a.dtype_size == 2) {
     gpu_gemm_fp16(a.bytes, K, M, true,
                   b.bytes, K, N, false,
                   out.bytes, M, N, K,
@@ -771,11 +778,7 @@ void puf_mm_nn(PufTensor &a, PufTensor &b, PufTensor &out,
   int K = (int)a.shape[na - 1];
   int N = (int)b.shape[nb - 1];
 
-  if (!use_gpu_gemm() && !g_gpu_training) {
-    ensure_gpu_synced(stream);
-    vDSP_mmul((const float *)a.bytes, 1, (const float *)b.bytes, 1,
-              (float *)out.bytes, 1, M, N, K);
-  } else if (a.dtype_size == 2) {
+  if (a.dtype_size == 2) {
     gpu_gemm_fp16(a.bytes, M, K, false,
                   b.bytes, K, N, false,
                   out.bytes, M, N, K,
@@ -840,12 +843,7 @@ void puf_addmm_nn(PufTensor &a, PufTensor &b, PufTensor &out, float alpha,
   int K = (int)a.shape[na - 1];
   int N = (int)b.shape[nb - 1];
 
-  if (!use_gpu_gemm() && !g_gpu_training) {
-    ensure_gpu_synced(stream);
-    cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, M, N, K, alpha,
-                (const float *)a.bytes, K, (const float *)b.bytes, N,
-                beta, (float *)out.bytes, N);
-  } else if ((M % 64 == 0) && (N % 32 == 0) &&
+  if ((M % 64 == 0) && (N % 32 == 0) &&
              !getenv("PUFFERLIB_NO_TENSOR_OPS") &&
              g_ctx.tensor_ops_gemm_nn_f32) {
     // Decompose: out = beta*out + alpha*(a@b)

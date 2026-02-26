@@ -134,6 +134,7 @@ typedef struct {
     bool kernels;
     bool profile;
     bool overlap;  // async training overlap: train on separate GPU queue
+    bool use_adam;  // use Adam optimizer instead of Muon
     // Threading
     int num_threads;
 } HypersT;
@@ -216,6 +217,8 @@ typedef struct {
     Allocator pufferl_alloc;
     StaticVec* vec;
     Muon* muon;
+    Adam* adam;
+    bool use_adam = false;
     HypersT hypers;
     bool is_continuous;
     std::vector<PufTensor> buffer_states;
@@ -272,6 +275,7 @@ extern "C" void thread_init_metal(void* ctx, int buf) {
         BLASSetThreading(BLAS_THREADING_SINGLE_THREADED);
     }
 }
+
 
 // ============================================================================
 // Rollout callback — called per buffer per horizon step
@@ -385,6 +389,7 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
     pufferl->profile.accum[PROF_ROLLOUT_FWD] += prof_ms(tp1, tp2);
     pufferl->profile.accum[PROF_ROLLOUT_SAMPLE] += prof_ms(tp2, tp3);
     pufferl->profile.accum[PROF_ROLLOUT_ACT_COPY] += prof_ms(tp3, tp4);
+
 }
 
 // ============================================================================
@@ -396,53 +401,14 @@ static void copy_weights_to_infer(PuffeRL& pufferl) {
     memcpy(pufferl.infer_params_alloc.mem, pufferl.alloc_fp32.params.mem, nbytes);
 }
 
-// Allocate pre-transposed weight buffers for CPU NoTrans inference.
-// Called once at init. The buffers are calloc'd (outside the Allocator pool).
-static void alloc_transposed_weights(PolicyWeights& w) {
+// Allocate fused encoder+layer0 weight buffer.
+// Eliminates one GEMM per step (encoder + mingru layer0 → single fused GEMM).
+// Shape (3H, obs_dim) for puf_mm (NT layout). Metal-wrapped for GPU access.
+static void alloc_fused_weight(PolicyWeights& w) {
     EncoderWeights *ew = (EncoderWeights *)w.encoder;
-    ew->weight_t = alloc_transposed(ew->out_dim, ew->in_dim);
-
-    DecoderWeights *dw = (DecoderWeights *)w.decoder;
-    dw->weight_t = alloc_transposed(dw->output_dim + 1, dw->hidden_dim);
-
     MinGRUWeights *mw = (MinGRUWeights *)w.network;
-    mw->weights_t.resize(mw->num_layers);
-    for (int i = 0; i < mw->num_layers; i++)
-        mw->weights_t[i] = alloc_transposed(3 * mw->hidden, mw->hidden);
-
-    // Fused encoder+layer0: combined(B,3H) = obs(B,obs_dim) @ fused(3H,obs_dim)^T
-    // Eliminates one GEMM per step (encoder + mingru layer0 → single fused GEMM).
-    // Shape (3H, obs_dim) for puf_mm (NT layout). Metal-wrapped for GPU access.
     mw->fused_obs_dim = ew->in_dim;
     mw->fused_enc_layer0 = alloc_metal_tensor(3 * mw->hidden, ew->in_dim);
-}
-
-// Transpose current fp32 weights into the pre-transposed buffers.
-// Also compute fused encoder+layer0 weight.
-// Called after weight init and before each rollout (after training updates).
-static void sync_transposed_weights(PolicyWeights& w) {
-    EncoderWeights *ew = (EncoderWeights *)w.encoder;
-    transpose_weight(ew->weight_t, ew->weight);
-
-    DecoderWeights *dw = (DecoderWeights *)w.decoder;
-    transpose_weight(dw->weight_t, dw->weight);
-
-    MinGRUWeights *mw = (MinGRUWeights *)w.network;
-    for (int i = 0; i < mw->num_layers; i++)
-        transpose_weight(mw->weights_t[i], mw->weights[i]);
-
-    // Compute fused weight: mingru_weight[0](3H,H) × encoder_weight(H,obs_dim)
-    // Result is (3H, obs_dim) for puf_mm NT layout.
-    if (mw->fused_enc_layer0.bytes) {
-        int obs_dim = mw->fused_obs_dim;
-        int H = mw->hidden;
-        int N3H = 3 * H;
-        cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
-                    N3H, obs_dim, H, 1.0f,
-                    (const float *)mw->weights[0].bytes, H,
-                    (const float *)ew->weight.bytes, obs_dim,
-                    0.0f, (float *)mw->fused_enc_layer0.bytes, obs_dim);
-    }
 }
 
 // Re-compute fused encoder+layer0 weight after training updates.
@@ -485,11 +451,7 @@ void train_impl(PuffeRL& pufferl) {
     HypersT& hypers = pufferl.hypers;
     uint64_t tp_preloop0 = mach_absolute_time();
 
-    // When overlap enabled, use separate train_stream (different MTLCommandQueue)
-    // so training GPU work can run concurrently with rollout.
-    cudaStream_t train_stream = pufferl.overlap_enabled
-        ? (cudaStream_t)mtl_train_stream()
-        : (cudaStream_t)mtl_stream();
+    cudaStream_t train_stream = (cudaStream_t)mtl_stream();
 
     // GPU training: keep all ops on the Metal encoder (GEMM, copy, zero, add).
     puf_set_gpu_training(true);
@@ -513,87 +475,202 @@ void train_impl(PuffeRL& pufferl) {
                  (int)rollouts.ratio.numel(), train_stream);
 
     // old_values = values.clone()
-    PufTensor& old_values_puf = pufferl.old_values_puf;
-    puf_copy(old_values_puf, rollouts.values, train_stream);
+    puf_copy(pufferl.old_values_puf, rollouts.values, train_stream);
 
-    // Zero pre-allocated advantages buffer
-    PufTensor& advantages_puf = pufferl.advantages_puf;
-
-    int minibatch_size = hypers.minibatch_size;
     int batch_size = hypers.total_agents * hypers.horizon;
-    int minibatch_segments = minibatch_size / hypers.horizon;
-    float prio_beta0 = hypers.prio_beta0;
+    int minibatch_segments = hypers.minibatch_size / hypers.horizon;
     float prio_alpha = hypers.prio_alpha;
-    bool anneal_lr = hypers.anneal_lr;
     int current_epoch = pufferl.epoch;
-
-    Muon* muon = pufferl.muon;
     int total_epochs = hypers.total_timesteps / batch_size;
-
-    if (anneal_lr) {
-        float lr_min = hypers.min_lr_ratio * hypers.lr;
-        float lr = cosine_annealing(hypers.lr, lr_min, current_epoch, total_epochs);
-        *muon->lr_ptr = lr;
-    }
-
-    // Annealed priority exponent
-    float anneal_beta = prio_beta0 + (1.0f - prio_beta0) * prio_alpha
-        * (float)current_epoch / (float)total_epochs;
-
     int total_minibatches = hypers.replay_ratio * batch_size / hypers.minibatch_size;
 
-    TrainGraph& graph = pufferl.train_buf;
+    if (hypers.anneal_lr) {
+        float lr_min = hypers.min_lr_ratio * hypers.lr;
+        float lr = cosine_annealing(hypers.lr, lr_min, current_epoch, total_epochs);
+        float* lr_ptr = pufferl.use_adam ? pufferl.adam->lr_ptr : pufferl.muon->lr_ptr;
+        *lr_ptr = lr;
+    }
+
+    float anneal_beta = hypers.prio_beta0 + (1.0f - hypers.prio_beta0) * prio_alpha
+        * (float)current_epoch / (float)total_epochs;
 
     uint64_t tp_preloop1 = mach_absolute_time();
 
-    // Advantage + prio precompute: hoisted outside the minibatch loop.
-    // Advantages depend only on rollout data (values, rewards, terminals, ratio)
-    // which doesn't change between minibatches. Computing once + single GPU sync
-    // eliminates per-minibatch syncs that were the dominant training cost.
-    puf_zero(advantages_puf, train_stream);
+    // Advantage + prio precompute (single GPU sync for CDF read).
+    puf_zero(pufferl.advantages_puf, train_stream);
     puff_advantage_cuda(rollouts.values, rollouts.rewards, rollouts.terminals,
-        rollouts.ratio, advantages_puf, hypers.gamma, hypers.gae_lambda,
+        rollouts.ratio, pufferl.advantages_puf, hypers.gamma, hypers.gae_lambda,
         hypers.vtrace_rho_clip, hypers.vtrace_c_clip, train_stream);
-    prio_precompute(advantages_puf, prio_alpha, pufferl.prio_bufs, train_stream);
+    prio_precompute(pufferl.advantages_puf, prio_alpha, pufferl.prio_bufs, train_stream);
 
     uint64_t tp_prio_done = mach_absolute_time();
     pufferl.profile.accum[PROF_TRAIN_PRELOOP] += prof_ms(tp_preloop0, tp_preloop1);
     pufferl.profile.accum[PROF_TRAIN_ADVANTAGE] += prof_ms(tp_preloop1, tp_prio_done);
 
+    puf_set_gpu_training(false);
+
+    if (pufferl.overlap_enabled) {
+        // Iteration-level async: dispatch ALL training minibatches on train_stream
+        // (separate Metal command queue). GPU executes the training work asynchronously
+        // during the next rollout's CPU env_step (~4.5s of GPU-idle time per rollout).
+        // Inference runs on the default queue, reading from weights_infer (updated at
+        // the end of training via GPU blit). 1-iteration policy lag — PPO handles this
+        // via importance ratios (stored log-probs).
+        cudaStream_t ts = (cudaStream_t)mtl_train_stream();
+        uint32_t* train_rng_offset = (uint32_t*)((int64_t*)pufferl.rng_offset_puf.bytes + hypers.num_buffers);
+
+        puf_set_gpu_training(true);
+
+        for (int mb = 0; mb < total_minibatches; ++mb) {
+            uint64_t tp0 = mach_absolute_time();
+
+            prio_sample(minibatch_segments, hypers.total_agents, anneal_beta,
+                pufferl.prio_bufs, pufferl.rng_seed, train_rng_offset, ts);
+
+            uint64_t tp2 = mach_absolute_time();
+
+            puf_zero(pufferl.train_buf.mb_state, ts);
+            {
+                RolloutBuf sel_src = rollouts;
+                sel_src.values = pufferl.old_values_puf;
+                mtl_select_copy(sel_src, pufferl.train_buf,
+                    (const int64_t*)pufferl.prio_bufs.idx.bytes,
+                    (const float*)pufferl.advantages_puf.bytes,
+                    (const float*)pufferl.prio_bufs.mb_prio.bytes,
+                    minibatch_segments, ts);
+            }
+
+            uint64_t tp3 = mach_absolute_time();
+
+            mtl_cast_f32_to_f16(pufferl.fp16_obs_buf.bytes,
+                                (const float*)pufferl.train_buf.mb_obs.bytes,
+                                (int)pufferl.train_buf.mb_obs.numel(), ts);
+            puf_zero(pufferl.fp16_state_buf, ts);
+            PufTensor obs_puf = pufferl.fp16_obs_buf;
+            PufTensor state_puf = pufferl.fp16_state_buf;
+            PufTensor dec_puf = policy_forward_train(pufferl.policy, pufferl.weights_bf16,
+                pufferl.train_activations, obs_puf, state_puf, ts);
+
+            uint64_t tp4 = mach_absolute_time();
+
+            mtl_cast_f16_to_f32((float*)pufferl.fp32_dec_out_buf.bytes,
+                                dec_puf.bytes, (int)dec_puf.numel(), ts);
+            PufTensor dec_puf_f32 = pufferl.fp32_dec_out_buf;
+
+            DecoderWeights* dw_train = (DecoderWeights*)pufferl.weights_bf16.decoder;
+            PufTensor p_logstd;
+            if (dw_train->continuous) p_logstd = dw_train->logstd;
+
+            ppo_loss_fwd_bwd(dec_puf_f32, p_logstd, pufferl.train_buf,
+                pufferl.act_sizes_puf, pufferl.losses_puf,
+                hypers.clip_coef, hypers.vf_clip_coef, hypers.vf_coef, hypers.ent_coef,
+                pufferl.ppo_bufs_puf, pufferl.is_continuous, ts);
+
+            uint64_t tp5 = mach_absolute_time();
+
+            PufTensor grad_logits_puf = pufferl.ppo_bufs_puf.grad_logits;
+            PufTensor grad_logstd_puf = pufferl.is_continuous ? pufferl.ppo_bufs_puf.grad_logstd : PufTensor();
+            PufTensor grad_values_puf = pufferl.ppo_bufs_puf.grad_values;
+            policy_backward(pufferl.policy, pufferl.weights_bf16, pufferl.train_activations,
+                grad_logits_puf, grad_logstd_puf, grad_values_puf, ts);
+
+            uint64_t tp6 = mach_absolute_time();
+
+            PufTensor& gc = pufferl.use_adam ? pufferl.adam->gc_puf : pufferl.muon->gc_puf;
+            mtl_cast_f16_to_f32((float*)gc.bytes,
+                                pufferl.grad_bf16_puf.bytes,
+                                (int)pufferl.grad_bf16_puf.numel(), ts);
+
+            uint64_t tp7 = mach_absolute_time();
+
+            {
+                float* scratch = (float*)pufferl.grad_norm_puf.bytes;
+                clip_grad_norm_f32(gc, scratch, hypers.max_grad_norm, 1e-6f, ts);
+            }
+
+            uint64_t tp8 = mach_absolute_time();
+
+            if (pufferl.use_adam)
+                adam_step(pufferl.adam, ts);
+            else
+                muon_step(pufferl.muon, ts);
+
+            mtl_cast_f32_to_f16(pufferl.param_fp16_puf.bytes,
+                                (const float*)pufferl.param_fp32_puf.bytes,
+                                (int)pufferl.param_fp32_puf.numel(), ts);
+
+            uint64_t tp9 = mach_absolute_time();
+
+            pufferl.profile.accum[PROF_TRAIN_PRIO] += prof_ms(tp0, tp2);
+            pufferl.profile.accum[PROF_TRAIN_SELECT] += prof_ms(tp2, tp3);
+            pufferl.profile.accum[PROF_TRAIN_FWD] += prof_ms(tp3, tp4);
+            pufferl.profile.accum[PROF_TRAIN_PPO] += prof_ms(tp4, tp5);
+            pufferl.profile.accum[PROF_TRAIN_BACKWARD] += prof_ms(tp5, tp6);
+            pufferl.profile.accum[PROF_TRAIN_GRAD_COPY] += prof_ms(tp6, tp7);
+            pufferl.profile.accum[PROF_TRAIN_GRAD_CLIP] += prof_ms(tp7, tp8);
+            pufferl.profile.accum[PROF_TRAIN_MUON] += prof_ms(tp8, tp9);
+            pufferl.profile.accum[PROF_TRAIN_MISC] += prof_ms(tp0, tp3);
+            pufferl.profile.accum[PROF_TRAIN_FORWARD] += prof_ms(tp3, tp9);
+        }
+
+        // After all minibatches: GPU-copy weights to infer and recompute fused weight.
+        // Both dispatched on train_stream so they execute after training completes.
+        {
+            int64_t total_elems = pufferl.alloc_fp32.params.total_elems;
+            PufTensor fp32_all = {.bytes = (char*)pufferl.alloc_fp32.params.mem,
+                                  .shape = {total_elems}, .dtype_size = sizeof(float)};
+            PufTensor infer_all = {.bytes = (char*)pufferl.infer_params_alloc.mem,
+                                   .shape = {total_elems}, .dtype_size = sizeof(float)};
+            puf_copy(infer_all, fp32_all, ts);
+            PolicyWeights& wi = pufferl.weights_infer;
+            MinGRUWeights* mw = (MinGRUWeights*)wi.network;
+            EncoderWeights* ew = (EncoderWeights*)wi.encoder;
+            if (mw->fused_enc_layer0.bytes) {
+                puf_mm_nn(mw->weights[0], ew->weight, mw->fused_enc_layer0, ts);
+            }
+        }
+
+        puf_set_gpu_training(false);
+
+        // Flush train_stream: commit command buffer so GPU starts executing
+        // asynchronously. wait_completed() is called at the start of the next
+        // rollouts() to ensure training is done before inference reads weights_infer.
+        ((MetalStream*)mtl_train_stream())->flush();
+
+        pufferl.train_pending = true;
+        pufferl.epoch += 1;
+        return;
+    }
+
+    // Non-overlap: run minibatch loop synchronously.
     uint32_t* train_rng_offset = (uint32_t*)((int64_t*)pufferl.rng_offset_puf.bytes + hypers.num_buffers);
 
+    puf_set_gpu_training(true);
     for (int mb = 0; mb < total_minibatches; ++mb) {
         uint64_t tp0 = mach_absolute_time();
 
-        // Sample from cached CDF + dispatch GPU importance weights (no sync)
         prio_sample(minibatch_segments, hypers.total_agents, anneal_beta,
             pufferl.prio_bufs, pufferl.rng_seed, train_rng_offset, train_stream);
 
         uint64_t tp2 = mach_absolute_time();
 
-        // Select and copy minibatch data
-        puf_zero(graph.mb_state, train_stream);
+        puf_zero(pufferl.train_buf.mb_state, train_stream);
         {
             RolloutBuf sel_src = rollouts;
-            sel_src.values = old_values_puf;
-            mtl_select_copy(sel_src, graph,
+            sel_src.values = pufferl.old_values_puf;
+            mtl_select_copy(sel_src, pufferl.train_buf,
                 (const int64_t*)pufferl.prio_bufs.idx.bytes,
-                (const float*)advantages_puf.bytes,
+                (const float*)pufferl.advantages_puf.bytes,
                 (const float*)pufferl.prio_bufs.mb_prio.bytes,
                 minibatch_segments, train_stream);
         }
 
         uint64_t tp3 = mach_absolute_time();
 
-        // Cast fp32 observations → fp16 for encoder input
         mtl_cast_f32_to_f16(pufferl.fp16_obs_buf.bytes,
-                            (const float*)graph.mb_obs.bytes,
-                            (int)graph.mb_obs.numel(), train_stream);
-
-        // Zero fp16 state buffer (scan initial state, zeroed each minibatch)
+                            (const float*)pufferl.train_buf.mb_obs.bytes,
+                            (int)pufferl.train_buf.mb_obs.numel(), train_stream);
         puf_zero(pufferl.fp16_state_buf, train_stream);
-
-        // Forward pass (all fp16: weights, activations, scan)
         PufTensor obs_puf = pufferl.fp16_obs_buf;
         PufTensor state_puf = pufferl.fp16_state_buf;
         PufTensor dec_puf = policy_forward_train(pufferl.policy, pufferl.weights_bf16,
@@ -601,28 +678,21 @@ void train_impl(PuffeRL& pufferl) {
 
         uint64_t tp4 = mach_absolute_time();
 
-        // Cast fp16 decoder output → fp32 for PPO kernel
         mtl_cast_f16_to_f32((float*)pufferl.fp32_dec_out_buf.bytes,
-                            dec_puf.bytes,
-                            (int)dec_puf.numel(), train_stream);
+                            dec_puf.bytes, (int)dec_puf.numel(), train_stream);
         PufTensor dec_puf_f32 = pufferl.fp32_dec_out_buf;
 
-        // PPO loss (operates on fp32 decoder output)
         DecoderWeights* dw_train = (DecoderWeights*)pufferl.weights_bf16.decoder;
         PufTensor p_logstd;
-        if (dw_train->continuous) {
-            p_logstd = dw_train->logstd;
-        }
+        if (dw_train->continuous) p_logstd = dw_train->logstd;
 
-        ppo_loss_fwd_bwd(dec_puf_f32, p_logstd, graph,
+        ppo_loss_fwd_bwd(dec_puf_f32, p_logstd, pufferl.train_buf,
             pufferl.act_sizes_puf, pufferl.losses_puf,
             hypers.clip_coef, hypers.vf_clip_coef, hypers.vf_coef, hypers.ent_coef,
             pufferl.ppo_bufs_puf, pufferl.is_continuous, train_stream);
 
         uint64_t tp5 = mach_absolute_time();
 
-        // Backward pass (fp16 activations/weights, PPO grads are fp32 —
-        // decoder_backward handles the f32→f16 boundary via assemble kernel)
         PufTensor grad_logits_puf = pufferl.ppo_bufs_puf.grad_logits;
         PufTensor grad_logstd_puf = pufferl.is_continuous ? pufferl.ppo_bufs_puf.grad_logstd : PufTensor();
         PufTensor grad_values_puf = pufferl.ppo_bufs_puf.grad_values;
@@ -631,33 +701,31 @@ void train_impl(PuffeRL& pufferl) {
 
         uint64_t tp6 = mach_absolute_time();
 
-        // Cast fp16 grads → fp32 for muon optimizer
-        mtl_cast_f16_to_f32((float*)pufferl.muon->gc_puf.bytes,
+        PufTensor& gc_sync = pufferl.use_adam ? pufferl.adam->gc_puf : pufferl.muon->gc_puf;
+        mtl_cast_f16_to_f32((float*)gc_sync.bytes,
                             pufferl.grad_bf16_puf.bytes,
                             (int)pufferl.grad_bf16_puf.numel(), train_stream);
 
         uint64_t tp7 = mach_absolute_time();
 
-        // Clip grad norm (fp32)
         {
-            PufTensor& grad = pufferl.muon->gc_puf;
             float* scratch = (float*)pufferl.grad_norm_puf.bytes;
-            clip_grad_norm_f32(grad, scratch, hypers.max_grad_norm, 1e-6f, train_stream);
+            clip_grad_norm_f32(gc_sync, scratch, hypers.max_grad_norm, 1e-6f, train_stream);
         }
 
         uint64_t tp8 = mach_absolute_time();
 
-        muon_step(pufferl.muon, train_stream);
+        if (pufferl.use_adam)
+            adam_step(pufferl.adam, train_stream);
+        else
+            muon_step(pufferl.muon, train_stream);
 
-        // Cast fp32 master weights → fp16 training weights (after optimizer)
         mtl_cast_f32_to_f16(pufferl.param_fp16_puf.bytes,
                             (const float*)pufferl.param_fp32_puf.bytes,
                             (int)pufferl.param_fp32_puf.numel(), train_stream);
 
         uint64_t tp9 = mach_absolute_time();
 
-        // Accumulate fine-grained training timing (every minibatch)
-        // NOTE: PROF_TRAIN_ADVANTAGE is tracked in the hoisted pre-loop section
         pufferl.profile.accum[PROF_TRAIN_PRIO] += prof_ms(tp0, tp2);
         pufferl.profile.accum[PROF_TRAIN_SELECT] += prof_ms(tp2, tp3);
         pufferl.profile.accum[PROF_TRAIN_FWD] += prof_ms(tp3, tp4);
@@ -666,8 +734,6 @@ void train_impl(PuffeRL& pufferl) {
         pufferl.profile.accum[PROF_TRAIN_GRAD_COPY] += prof_ms(tp6, tp7);
         pufferl.profile.accum[PROF_TRAIN_GRAD_CLIP] += prof_ms(tp7, tp8);
         pufferl.profile.accum[PROF_TRAIN_MUON] += prof_ms(tp8, tp9);
-
-        // Legacy coarse-grained accumulators (backward compat)
         pufferl.profile.accum[PROF_TRAIN_MISC] += prof_ms(tp0, tp3);
         pufferl.profile.accum[PROF_TRAIN_FORWARD] += prof_ms(tp3, tp9);
     }
@@ -676,15 +742,7 @@ void train_impl(PuffeRL& pufferl) {
 
     uint64_t tp_sync0 = mach_absolute_time();
     puf_set_gpu_training(false);
-    if (pufferl.overlap_enabled) {
-        // Flush training commands to GPU without blocking — training continues
-        // asynchronously while the next rollout runs.
-        MetalStream* ts = (MetalStream*)mtl_train_stream();
-        ts->flush();
-        pufferl.train_pending = true;
-    } else {
-        ensure_gpu_synced(train_stream);
-    }
+    ensure_gpu_synced(train_stream);
     uint64_t tp_sync1 = mach_absolute_time();
     pufferl.profile.accum[PROF_TRAIN_SYNC] += prof_ms(tp_sync0, tp_sync1);
 }
@@ -693,28 +751,11 @@ void train_impl(PuffeRL& pufferl) {
 // Called at the end of rollouts() before the next iteration needs updated weights.
 static void sync_pending_train(PuffeRL& pufferl) {
     if (!pufferl.train_pending) return;
-    // Wait for async training to finish on the separate train stream.
+    // Wait for async training on train_stream (separate queue) to complete.
+    // After this, weights_infer and fused weight are up-to-date.
     MetalStream* ts = (MetalStream*)mtl_train_stream();
     ts->wait_completed();
     pufferl.train_pending = false;
-    // Snapshot master fp32 weights to inference buffer.
-    copy_weights_to_infer(pufferl);
-    // Recompute transposed weights for CPU inference path.
-    sync_transposed_weights(pufferl.weights_infer);
-    // Recompute fused encoder+layer0 weight for inference.
-    PolicyWeights& wi = pufferl.weights_infer;
-    EncoderWeights* ew = (EncoderWeights*)wi.encoder;
-    MinGRUWeights* mw = (MinGRUWeights*)wi.network;
-    if (mw->fused_enc_layer0.bytes) {
-        int obs_dim = mw->fused_obs_dim;
-        int H = mw->hidden;
-        int N3H = 3 * H;
-        cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
-                    N3H, obs_dim, H, 1.0f,
-                    (const float *)mw->weights[0].bytes, H,
-                    (const float *)ew->weight.bytes, obs_dim,
-                    0.0f, (float *)mw->fused_enc_layer0.bytes, obs_dim);
-    }
 }
 
 // ============================================================================
@@ -860,9 +901,9 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
         network.init_weights(wfp32.network, &seed, default_stream);
     }
 
-    // Pre-transposed weight buffers for CPU NoTrans GEMM during inference.
-    alloc_transposed_weights(wfp32);
-    sync_transposed_weights(wfp32);
+    // Fused encoder+layer0 weight: eliminates one GEMM per forward step.
+    alloc_fused_weight(wfp32);
+    sync_fused_weight(*pufferl);
 
     // ========================================================================
     // Double-buffered inference weights (for rollout/training overlap)
@@ -880,11 +921,26 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
         mtl_wrap_allocator(&infer_alloc);
         // Initial copy: weights_fp32 → weights_infer
         copy_weights_to_infer(*pufferl);
-        // Allocate transposed + fused weights for inference buffer
-        alloc_transposed_weights(wi);
-        sync_transposed_weights(wi);
+        // Allocate fused weight for inference buffer
+        alloc_fused_weight(wi);
+        // Compute fused weight from copied weights
+        {
+            EncoderWeights *ew = (EncoderWeights *)wi.encoder;
+            MinGRUWeights *mw = (MinGRUWeights *)wi.network;
+            if (mw->fused_enc_layer0.bytes) {
+                int obs_dim = mw->fused_obs_dim;
+                int H = mw->hidden;
+                int N3H = 3 * H;
+                cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
+                            N3H, obs_dim, H, 1.0f,
+                            (const float *)mw->weights[0].bytes, H,
+                            (const float *)ew->weight.bytes, obs_dim,
+                            0.0f, (float *)mw->fused_enc_layer0.bytes, obs_dim);
+            }
+        }
     }
     pufferl->overlap_enabled = hypers.overlap;
+    pufferl->use_adam = hypers.use_adam;
 
     // ========================================================================
     // fp16 training weights, activations, gradients
@@ -982,6 +1038,7 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     float beta1 = hypers.beta1;
     float eps = hypers.eps;
     pufferl->muon = new Muon{};
+    pufferl->adam = new Adam{};
     int horizon = hypers.horizon;
     int total_agents = vec->total_agents;
     int batch = total_agents / hypers.num_buffers;
@@ -1031,11 +1088,13 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     // Priority replay buffers
     register_prio_buffers(pufferl->prio_bufs, alloc, hypers.total_agents, minibatch_segments);
 
-    // Muon optimizer (init + register buffers)
+    // Optimizer init (register buffers with shared allocator)
     muon_init(pufferl->muon, &fp32_params,
         pufferl->param_fp32_puf, lr, beta1, eps, 0.0, alloc);
     pufferl->muon->nccl_comm = nullptr;
     pufferl->muon->world_size = 1;
+    adam_init(pufferl->adam, &fp32_params,
+        pufferl->param_fp32_puf, lr, 0.9, 0.999, 1e-8, 0.0, alloc);
     // Single allocation for all registered buffers
     alloc.create();
 
@@ -1058,6 +1117,9 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     *pufferl->muon->lr_ptr = pufferl->muon->lr_val_init;
     memset(pufferl->muon->lr_derived_ptr, 0, 2 * sizeof(float));
     memset(pufferl->muon->mb_puf.bytes, 0, pufferl->muon->mb_puf.numel() * sizeof(float));
+
+    // adam_post_create
+    adam_post_create(pufferl->adam);
 
     // Per-buffer inference activations (separate allocators)
     pufferl->buffer_activations.resize(num_buffers);

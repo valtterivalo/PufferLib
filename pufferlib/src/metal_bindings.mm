@@ -48,19 +48,17 @@ void rollouts(pybind11::object pufferl_obj) {
     // Reset sync stats before rollout to capture rollout-only syncs
     { int _c; double _m; mtl_sync_stats(&_c, &_m); }
     pybind11::gil_scoped_release no_gil;
-    // Recompute fused encoder+layer0 weight for the active rollout weights.
-    // When overlap enabled, sync_pending_train handles weights_infer.
-    if (!pufferl.overlap_enabled) {
+    // Sync async training from previous iteration (if any).
+    // Overlap: wait for train_stream to complete — weights_infer and fused weight
+    // were updated on the GPU as the last ops in train_impl's async dispatch.
+    // Baseline: recompute fused weight on CPU after training updated weights_fp32.
+    if (pufferl.train_pending) {
+        sync_pending_train(pufferl);
+    } else if (!pufferl.overlap_enabled) {
         sync_fused_weight(pufferl);
     }
     auto t0 = std::chrono::high_resolution_clock::now();
-    // Rollout runs CONCURRENTLY with pending GPU training (overlap mode).
-    // Uses weights_infer (snapshot from previous iteration). Training writes
-    // to weights_fp32 on GPU — no conflict since rollout only reads weights_infer.
     static_vec_omp_step(pufferl.vec);
-    // After rollout finishes, sync GPU training (should be instant — GPU training
-    // ~30ms finishes well before rollout ~70ms) and copy updated weights.
-    sync_pending_train(pufferl);
     float sec = std::chrono::duration<float>(
         std::chrono::high_resolution_clock::now() - t0).count();
     pufferl.profile.accum[PROF_ROLLOUT] += sec * 1000.0f;
@@ -153,10 +151,17 @@ pybind11::dict log_profile(pybind11::object pufferl_obj) {
         a[PROF_TRAIN_FWD], a[PROF_TRAIN_PPO],
         a[PROF_TRAIN_BACKWARD], a[PROF_TRAIN_GRAD_COPY],
         a[PROF_TRAIN_GRAD_CLIP], a[PROF_TRAIN_MUON], a[PROF_TRAIN_SYNC]);
+    // GPU timing diagnostic: actual kernel execution vs scheduling delay
+    double gpu_exec_ms, sched_wait_ms;
+    mtl_gpu_timing_stats(&gpu_exec_ms, &sched_wait_ms);
+    result["gpu_exec"] = gpu_exec_ms / 1000.0;
+    result["sched_wait"] = sched_wait_ms / 1000.0;
+
     fprintf(stderr,
-        "[metal-prof] total: %d syncs, %.1fms sync, %.1fms rollout + %.1fms train\n",
+        "[metal-prof] total: %d syncs, %.1fms sync, %.1fms rollout + %.1fms train | "
+        "gpu_exec=%.1fms sched_wait=%.1fms\n",
         r_sync + t_sync, r_sync_ms + t_sync_ms,
-        a[PROF_ROLLOUT], train_ms);
+        a[PROF_ROLLOUT], train_ms, gpu_exec_ms, sched_wait_ms);
 
     memset(pufferl.profile.accum, 0, sizeof(pufferl.profile.accum));
     pufferl.rollout_sync_count = 0;
@@ -296,6 +301,7 @@ std::unique_ptr<PuffeRL> create_pufferl(pybind11::dict kwargs,
     hypers.kernels = true;   // always use Metal kernels
     hypers.profile = get_config(kwargs, "profile");
     hypers.overlap = kwargs.contains("overlap") && get_config(kwargs, "overlap") > 0;
+    hypers.use_adam = kwargs.contains("use_adam") && get_config(kwargs, "use_adam") > 0;
 
     std::string env_name = kwargs["env_name"].cast<std::string>();
     Dict* vec_dict = py_dict_to_c_dict(vec_kwargs.cast<py::dict>());

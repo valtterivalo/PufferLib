@@ -424,7 +424,6 @@ struct Network {
 
 struct EncoderWeights {
   PufTensor weight;
-  PufTensor weight_t;  // (in_dim, out_dim) — pre-transposed for CPU NoTrans inference
   int in_dim, out_dim;
 };
 struct EncoderActivations {
@@ -433,7 +432,6 @@ struct EncoderActivations {
 
 struct DecoderWeights {
   PufTensor weight, logstd;
-  PufTensor weight_t;  // (hidden_dim, output_dim+1) — pre-transposed for CPU NoTrans inference
   int hidden_dim, output_dim;
   bool continuous;
 };
@@ -460,8 +458,7 @@ struct MinGRUActivations {
 struct MinGRUWeights {
   int hidden, num_layers, horizon;
   vector<PufTensor> weights;
-  vector<PufTensor> weights_t;  // per-layer (H, 3*H) — pre-transposed for CPU NoTrans inference
-  PufTensor fused_enc_layer0;   // (obs_dim, 3*H) — fused encoder+layer0 for CPU inference
+  PufTensor fused_enc_layer0;   // (3*H, obs_dim) — fused encoder+layer0 (NT layout for puf_mm)
   int fused_obs_dim;            // obs_dim for the fused weight
 };
 
@@ -571,6 +568,18 @@ struct Muon {
   void *nccl_comm; // unused on non-CUDA (single GPU)
 #endif
   int world_size;
+};
+
+struct Adam {
+  float beta1, beta2, eps, weight_decay;
+  float lr_val_init;
+  float *lr_ptr;
+  int step;                   // optimizer step count (for bias correction)
+  PufTensor lr_puf;
+  PufTensor wb_puf;           // weight buffer (shared with param allocator)
+  PufTensor gc_puf;           // gradient buffer (clipped)
+  PufTensor m_puf, v_puf;    // first/second moment estimates
+  Allocator *param_alloc;
 };
 
 // ============================================================================

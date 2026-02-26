@@ -34,6 +34,7 @@ struct MetalStream {
   bool enc_active = false;
   bool pending_work = false; // true when compute work is encoded but not synced
   bool flushed = false;      // true when cmd committed but not waited on
+  CFTimeInterval commit_time = 0; // host time at commit (for sched_wait diagnostic)
 
   // Create a fresh command buffer, ready for encoding.
   void begin();
@@ -194,13 +195,11 @@ void puf_addmm_nn(PufTensor &a, PufTensor &b, PufTensor &out, float alpha,
 // Read and reset sync stats since last call.
 void mtl_sync_stats(int *out_count, double *out_total_ms);
 
+// Read and reset GPU timing diagnostic (actual kernel time vs scheduling delay).
+void mtl_gpu_timing_stats(double *gpu_exec_ms, double *sched_wait_ms);
+
 // Read and reset GEMM dispatch counts.
 void mtl_gemm_stats(int *tensor_ops_count, int *mps_count);
-
-// CPU inference mode — when true, mingru_forward uses CPU gate + memcpy
-// instead of Metal dispatch, eliminating rollout syncs.
-void puf_set_cpu_inference(bool val);
-bool puf_is_cpu_inference();
 
 // Check if a stream has an active compute encoder (work pending on GPU).
 // Used by puf_copy to avoid flushing the encoder chain during rollout.
@@ -211,12 +210,8 @@ bool puf_stream_has_encoder(cudaStream_t stream);
 void puf_set_gpu_training(bool val);
 bool puf_is_gpu_training();
 
-// CPU kernels for sync-free rollout inference
+// CPU u8→f32 cast for observation encoding (NEON-vectorized).
 void cpu_cast_u8_to_f32(float *dst, const uint8_t *src, int count);
-void cpu_sample_logits(const float *dec_out, int fused_cols, int B,
-                       const int32_t *act_sizes, int num_atns,
-                       double *actions, float *logprobs, float *value_out,
-                       uint64_t seed, uint32_t *offset_ptr);
 
 // ============================================================================
 // fp16 cast dispatchers — GPU kernel dispatch for f32↔f16 conversion
