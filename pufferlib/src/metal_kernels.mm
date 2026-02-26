@@ -305,6 +305,23 @@ void mtl_scale_f32(float *ptr, float scale, int count, cudaStream_t stream) {
   mtl_dispatch_1d(enc, pso, count);
 }
 
+// dst += alpha * src
+void mtl_axpy_f32(float *dst, const float *src, float alpha, int count,
+                   cudaStream_t stream) {
+  MetalStream *ms = mtl_get_stream(stream);
+  auto enc = ms->compute_encoder();
+  auto pso = mtl_pipeline("axpy_f32");
+  [enc setComputePipelineState:pso];
+  mtl_set_ptr(enc, dst, 0);
+  mtl_set_ptr(enc, src, 1);
+  struct {
+    float alpha;
+    int count;
+  } params = {alpha, count};
+  [enc setBytes:&params length:sizeof(params) atIndex:2];
+  mtl_dispatch_1d(enc, pso, count);
+}
+
 void mtl_nesterov_f32(float *momentum, const float *grad, float mu, int count,
                        cudaStream_t stream) {
   MetalStream *ms = mtl_get_stream(stream);

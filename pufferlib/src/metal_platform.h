@@ -80,6 +80,7 @@ struct MetalContext {
   // Metal 4 tensor_ops GEMM — separate library (different MSL includes).
   // Stays on the compute encoder (no MPS encoder transitions).
   id<MTLComputePipelineState> tensor_ops_gemm_nt_f32;
+  id<MTLComputePipelineState> tensor_ops_gemm_nn_f32;
 
   MetalStream stream;       // default stream (rollout)
   MetalStream train_stream; // training stream (separate queue for overlap)
