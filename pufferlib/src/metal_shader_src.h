@@ -524,12 +524,13 @@ kernel void logcumsumexp_backward_kernel(
 struct SampleParams {
     uint64_t seed;
     int num_atns;
-    int num_atns_total;  // sum of act_sizes, for mask buffer indexing
+    int num_atns_total;  // sum of act_sizes
     int B;
     int logits_stride;
     int logstd_stride;
     int value_stride;
     int is_continuous;  // 1 for continuous, 0 for discrete
+    int mask_stride;    // stride between rows in mask buffer (may differ from num_atns_total)
 };
 
 kernel void sample_logits_kernel(
@@ -592,8 +593,8 @@ kernel void sample_logits_kernel(
         for (int h = 0; h < sp.num_atns; h++) {
             int A = act_sizes[h];
 
-            // Mask base index for this env (flat across all heads)
-            int mask_base = (int)idx * sp.num_atns_total;
+            // Mask base index for this env (mask_stride allows non-contiguous layout)
+            int mask_base = (int)idx * sp.mask_stride;
 
             // Find max for numerical stability (with mask + nan_to_num)
             float max_val = -INFINITY;

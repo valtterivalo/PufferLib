@@ -318,11 +318,17 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
 
     uint64_t tp1 = mach_absolute_time();
 
-    // Forward pass — GPU inference via MPS GEMM + Metal MinGRU gate.
-    // All tensors are in unified memory (MTLBuffer-wrapped allocators), so GPU
-    // reads/writes are zero-copy. One sync after forward to make results
-    // CPU-visible for action sampling.
+    // Forward pass + fused GPU sampling — dispatched on the same command buffer.
+    // Single sync makes both forward results and sampled actions CPU-visible.
+    PufTensor act_slice = puf_slice(rollouts.actions, t, start, block_size);
+    PufTensor lp_slice = puf_slice(rollouts.logprobs, t, start, block_size);
+    PufTensor val_slice = puf_slice(rollouts.values, t, start, block_size);
+    int num_atns = (int)pufferl->act_sizes_puf.numel();
+    uint32_t* buf_rng_offset = (uint32_t*)((int64_t*)pufferl->rng_offset_puf.bytes + buf);
+    uint64_t buf_rng_seed = pufferl->rng_seed + buf;
+
     PufTensor dec_puf = {};
+    float* act_f32 = nullptr;
     {
         std::lock_guard<std::mutex> gpu_guard(g_rollout_gpu_mutex);
         puf_set_gpu_training(true);
@@ -340,31 +346,31 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
             : p->encoder.forward(infer_weights.encoder, acts.encoder, obs_dst, stream);
         PufTensor h = p->network.forward(infer_weights.network, mingru_input, state_puf, acts.network, stream);
         dec_puf = p->decoder.forward(infer_weights.decoder, acts.decoder, h, stream);
+
+        // GPU sampling: dispatch on same command buffer, before sync.
+        // Action mask lives in obs columns [mask_offset .. mask_offset+39).
+        int obs_cols = (int)obs_dst.shape[1];
+        int fused_cols = (int)dec_puf.shape[1];
+        int mask_offset = obs_cols - (fused_cols - 1);  // 373 - 39 = 334
+        const float* mask_ptr = (const float*)obs_dst.bytes + mask_offset;
+
+        act_f32 = mtl_sample_logits_dispatch(
+            dec_puf, pufferl->act_sizes_puf,
+            (float*)lp_slice.bytes, (float*)val_slice.bytes,
+            mask_ptr, obs_cols,
+            buf_rng_seed, buf_rng_offset, stream);
+
         ensure_gpu_synced(stream);
         puf_set_gpu_training(false);
     }
 
     uint64_t tp2 = mach_absolute_time();
 
-    // Sample actions, logprobs, values — CPU, no GPU dispatch
-    PufTensor act_slice = puf_slice(rollouts.actions, t, start, block_size);
-    PufTensor lp_slice = puf_slice(rollouts.logprobs, t, start, block_size);
-    PufTensor val_slice = puf_slice(rollouts.values, t, start, block_size);
-
-    int num_atns = (int)pufferl->act_sizes_puf.numel();
-    int fused_cols = (int)dec_puf.shape[1];
-
-    uint32_t* buf_rng_offset = (uint32_t*)((int64_t*)pufferl->rng_offset_puf.bytes + buf);
-    uint64_t buf_rng_seed = pufferl->rng_seed + buf;
-
-    cpu_sample_logits((const float*)dec_puf.bytes, fused_cols, block_size,
-        (const int32_t*)pufferl->act_sizes_puf.bytes, num_atns,
-        (double*)act_slice.bytes, (float*)lp_slice.bytes, (float*)val_slice.bytes,
-        buf_rng_seed, buf_rng_offset);
+    // Expand f32 GPU actions to f64 + copy to env (trivial post-sync)
+    mtl_sample_logits_expand(act_f32, (double*)act_slice.bytes, block_size * num_atns);
 
     uint64_t tp3 = mach_absolute_time();
 
-    // Copy actions to env — no GPU sync needed (all CPU)
     int64_t act_cols = env.actions.shape[1];
     memcpy(
         env.actions.bytes + start * act_cols * env.actions.dtype_size,
@@ -744,6 +750,9 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
 
     int minibatch_segments = hypers.minibatch_size / hypers.horizon;
     int inf_batch = vec->total_agents / hypers.num_buffers;
+
+    // Pre-allocate GPU sampling buffer (f32 actions, one per buffer batch)
+    mtl_sample_logits_init(inf_batch, num_action_heads);
 
     // ========================================================================
     // fp32 master weights (for optimizer)

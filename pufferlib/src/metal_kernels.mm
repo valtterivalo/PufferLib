@@ -787,54 +787,58 @@ void mtl_fused_scan_backward_fp16(PrefixScan &scan, const void *grad,
 // Sample logits kernel
 // ============================================================================
 
-void mtl_sample_logits(PufTensor &dec_out, PufTensor &logstd_puf,
-                        PufTensor &act_sizes_puf, double *actions,
-                        float *logprobs, float *value_out, uint64_t seed,
-                        uint32_t *offset_ptr, cudaStream_t stream) {
+// Pre-allocate the f32 action buffer for GPU sampling (MSL has no double).
+// Call once at init when B and num_atns are known.
+static float *g_sample_act_f32 = nullptr;
+static int g_sample_act_f32_cap = 0;
+
+void mtl_sample_logits_init(int B, int num_atns) {
+  int needed = B * num_atns;
+  if (g_sample_act_f32 && needed <= g_sample_act_f32_cap) return;
+  if (g_sample_act_f32) free(g_sample_act_f32);
+  g_sample_act_f32_cap = needed;
+  int64_t alloc_bytes = needed * sizeof(float);
+  int64_t page = 16384;
+  alloc_bytes = (alloc_bytes + page - 1) & ~(page - 1);
+  posix_memalign((void **)&g_sample_act_f32, page, alloc_bytes);
+  memset(g_sample_act_f32, 0, alloc_bytes);
+  id<MTLBuffer> buf = [mtl_ctx()->device
+      newBufferWithBytesNoCopy:g_sample_act_f32
+                        length:alloc_bytes
+                       options:MTLResourceStorageModeShared
+                   deallocator:nil];
+  assert(buf);
+  mtl_ctx()->buffers.push_back({(char *)g_sample_act_f32, alloc_bytes, buf});
+}
+
+// Dispatch GPU sampling kernel on the current command buffer (no sync).
+// Call BEFORE ensure_gpu_synced so sampling runs in the same command buffer
+// as the forward pass. Returns the f32 action buffer pointer for post-sync expansion.
+float* mtl_sample_logits_dispatch(
+    PufTensor &dec_out, PufTensor &act_sizes_puf,
+    float *logprobs, float *value_out,
+    const float *action_mask, int mask_stride,
+    uint64_t seed, uint32_t *offset_ptr, cudaStream_t stream) {
+
   int B = (int)dec_out.shape[0];
   int fused_cols = (int)dec_out.shape[1];
   int num_atns = (int)act_sizes_puf.numel();
   int A_total = fused_cols - 1;
-  bool is_continuous = logstd_puf.bytes != nullptr && logstd_puf.numel() > 0;
 
-  // MSL doesn't support double — use a temp float buffer for actions,
-  // then expand float→double on CPU after GPU sync.
-  int act_count = B * num_atns;
-  static float *act_f32_buf = nullptr;
-  static int act_f32_capacity = 0;
-  if (!act_f32_buf || act_count > act_f32_capacity) {
-    if (act_f32_buf) free(act_f32_buf);
-    act_f32_capacity = act_count;
-    int64_t alloc_bytes = act_f32_capacity * sizeof(float);
-    int64_t page = 16384;
-    alloc_bytes = (alloc_bytes + page - 1) & ~(page - 1);
-    posix_memalign((void **)&act_f32_buf, page, alloc_bytes);
-    id<MTLBuffer> buf = [mtl_ctx()->device
-        newBufferWithBytesNoCopy:act_f32_buf
-                          length:alloc_bytes
-                         options:MTLResourceStorageModeShared
-                     deallocator:nil];
-    assert(buf);
-    mtl_ctx()->buffers.push_back({(char *)act_f32_buf, alloc_bytes, buf});
-  }
+  assert(g_sample_act_f32 && B * num_atns <= g_sample_act_f32_cap);
 
   MetalStream *ms = mtl_get_stream(stream);
   auto enc = ms->compute_encoder();
   auto pso = mtl_pipeline("sample_logits_kernel");
   [enc setComputePipelineState:pso];
 
-  // Buffer bindings matching MSL kernel signature
-  mtl_set_ptr(enc, act_f32_buf, 0);  // kernel writes float actions here
+  mtl_set_ptr(enc, g_sample_act_f32, 0);
   mtl_set_ptr(enc, logprobs, 1);
   mtl_set_ptr(enc, value_out, 2);
-  mtl_set_ptr(enc, dec_out.bytes, 3); // logits
-  if (is_continuous) {
-    mtl_set_ptr(enc, logstd_puf.bytes, 4);
-  } else {
-    // Bind a dummy buffer (the kernel checks is_continuous)
-    mtl_set_ptr(enc, dec_out.bytes, 4);
-  }
-  mtl_set_ptr(enc, (float *)dec_out.bytes + A_total, 5); // value column
+  mtl_set_ptr(enc, dec_out.bytes, 3);
+  mtl_set_ptr(enc, dec_out.bytes, 4);  // dummy logstd (discrete only)
+  // value column: last column of dec_out, stride = fused_cols
+  mtl_set_ptr(enc, dec_out.bytes, 5);
   mtl_set_ptr(enc, act_sizes_puf.bytes, 6);
   mtl_set_ptr(enc, offset_ptr, 7);
 
@@ -847,41 +851,20 @@ void mtl_sample_logits(PufTensor &dec_out, PufTensor &logstd_puf,
     int logstd_stride;
     int value_stride;
     int is_continuous;
-  } params = {seed,        num_atns, A_total,         B,
-              fused_cols,  0,        fused_cols,       is_continuous ? 1 : 0};
+    int mask_stride;
+  } params = {seed, num_atns, A_total, B,
+              fused_cols, 0, fused_cols, 0, mask_stride};
   [enc setBytes:&params length:sizeof(params) atIndex:8];
 
-  // Action mask: all-1.0 buffer (all actions valid).
-  // static-native doesn't use masks at sampling time (CUDA kernel has no mask param).
-  // MSL kernel inherited mask logic from our 4.0 port — pass all-1.0 to make it a no-op.
-  static float *ones_mask = nullptr;
-  static int ones_mask_size = 0;
-  int mask_needed = B * A_total;
-  if (!ones_mask || mask_needed > ones_mask_size) {
-    if (ones_mask) free(ones_mask);
-    ones_mask_size = mask_needed;
-    int64_t alloc_bytes = ones_mask_size * sizeof(float);
-    int64_t page = 16384;
-    alloc_bytes = (alloc_bytes + page - 1) & ~(page - 1);
-    posix_memalign((void **)&ones_mask, page, alloc_bytes);
-    for (int i = 0; i < ones_mask_size; i++) ones_mask[i] = 1.0f;
-    id<MTLBuffer> buf = [mtl_ctx()->device
-        newBufferWithBytesNoCopy:ones_mask
-                          length:alloc_bytes
-                         options:MTLResourceStorageModeShared
-                     deallocator:nil];
-    assert(buf);
-    mtl_ctx()->buffers.push_back({(char *)ones_mask, alloc_bytes, buf});
-  }
-  mtl_set_ptr(enc, ones_mask, 9);
+  mtl_set_ptr(enc, (void *)action_mask, 9);
 
   mtl_dispatch_1d(enc, pso, B);
+  return g_sample_act_f32;
+}
 
-  // GPU writes float actions to act_f32_buf. Sync and expand to double.
-  ms->sync();
-  for (int i = 0; i < act_count; i++) {
-    actions[i] = (double)act_f32_buf[i];
-  }
+// Expand f32 GPU actions to f64 (call after ensure_gpu_synced).
+void mtl_sample_logits_expand(const float *f32, double *f64, int count) {
+  for (int i = 0; i < count; i++) f64[i] = (double)f32[i];
 }
 
 // ============================================================================
