@@ -43,6 +43,7 @@ def parse_args():
     p.add_argument("--save-dir", type=str, default="checkpoints")
     p.add_argument("--num-buffers", type=int, default=1)
     p.add_argument("--num-threads", type=int, default=1)
+    p.add_argument("--overlap", action="store_true", help="async training overlap (train on separate GPU queue)")
     p.add_argument("--no-wandb", action="store_true")
     return p.parse_args()
 
@@ -77,6 +78,7 @@ def main():
         "cudagraphs": -1.0,
         "kernels": 1.0,
         "profile": 0.0,
+        "overlap": 1.0 if args.overlap else 0.0,
         "env_name": "osrs_pvp",
     }
     vec_config = {

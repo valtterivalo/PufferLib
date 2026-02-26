@@ -133,6 +133,7 @@ typedef struct {
     int cudagraphs;  // kept for API compat, always -1 (ignored)
     bool kernels;
     bool profile;
+    bool overlap;  // async training overlap: train on separate GPU queue
     // Threading
     int num_threads;
 } HypersT;
@@ -484,7 +485,11 @@ void train_impl(PuffeRL& pufferl) {
     HypersT& hypers = pufferl.hypers;
     uint64_t tp_preloop0 = mach_absolute_time();
 
-    cudaStream_t train_stream = (cudaStream_t)mtl_stream();
+    // When overlap enabled, use separate train_stream (different MTLCommandQueue)
+    // so training GPU work can run concurrently with rollout.
+    cudaStream_t train_stream = pufferl.overlap_enabled
+        ? (cudaStream_t)mtl_train_stream()
+        : (cudaStream_t)mtl_stream();
 
     // GPU training: keep all ops on the Metal encoder (GEMM, copy, zero, add).
     puf_set_gpu_training(true);
@@ -671,17 +676,45 @@ void train_impl(PuffeRL& pufferl) {
 
     uint64_t tp_sync0 = mach_absolute_time();
     puf_set_gpu_training(false);
-    ensure_gpu_synced(train_stream);
+    if (pufferl.overlap_enabled) {
+        // Flush training commands to GPU without blocking — training continues
+        // asynchronously while the next rollout runs.
+        MetalStream* ts = (MetalStream*)mtl_train_stream();
+        ts->flush();
+        pufferl.train_pending = true;
+    } else {
+        ensure_gpu_synced(train_stream);
+    }
     uint64_t tp_sync1 = mach_absolute_time();
     pufferl.profile.accum[PROF_TRAIN_SYNC] += prof_ms(tp_sync0, tp_sync1);
 }
 
-// Sync pending GPU training and copy weights to inference buffer.
-// Called at the start of rollouts when overlap is enabled.
+// Wait for async GPU training to complete, then snapshot weights for inference.
+// Called at the end of rollouts() before the next iteration needs updated weights.
 static void sync_pending_train(PuffeRL& pufferl) {
     if (!pufferl.train_pending) return;
-    ensure_gpu_synced((cudaStream_t)mtl_stream());
+    // Wait for async training to finish on the separate train stream.
+    MetalStream* ts = (MetalStream*)mtl_train_stream();
+    ts->wait_completed();
     pufferl.train_pending = false;
+    // Snapshot master fp32 weights to inference buffer.
+    copy_weights_to_infer(pufferl);
+    // Recompute transposed weights for CPU inference path.
+    sync_transposed_weights(pufferl.weights_infer);
+    // Recompute fused encoder+layer0 weight for inference.
+    PolicyWeights& wi = pufferl.weights_infer;
+    EncoderWeights* ew = (EncoderWeights*)wi.encoder;
+    MinGRUWeights* mw = (MinGRUWeights*)wi.network;
+    if (mw->fused_enc_layer0.bytes) {
+        int obs_dim = mw->fused_obs_dim;
+        int H = mw->hidden;
+        int N3H = 3 * H;
+        cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
+                    N3H, obs_dim, H, 1.0f,
+                    (const float *)mw->weights[0].bytes, H,
+                    (const float *)ew->weight.bytes, obs_dim,
+                    0.0f, (float *)mw->fused_enc_layer0.bytes, obs_dim);
+    }
 }
 
 // ============================================================================
@@ -847,10 +880,11 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
         mtl_wrap_allocator(&infer_alloc);
         // Initial copy: weights_fp32 → weights_infer
         copy_weights_to_infer(*pufferl);
+        // Allocate transposed + fused weights for inference buffer
+        alloc_transposed_weights(wi);
+        sync_transposed_weights(wi);
     }
-    // Overlap disabled: unified memory contention doubles rollout fwd time
-    // (25ms→52ms), negating overlap savings. Fundamental M-series constraint.
-    pufferl->overlap_enabled = false;
+    pufferl->overlap_enabled = hypers.overlap;
 
     // ========================================================================
     // fp16 training weights, activations, gradients

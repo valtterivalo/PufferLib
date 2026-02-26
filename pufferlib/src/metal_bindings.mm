@@ -48,8 +48,11 @@ void rollouts(pybind11::object pufferl_obj) {
     // Reset sync stats before rollout to capture rollout-only syncs
     { int _c; double _m; mtl_sync_stats(&_c, &_m); }
     pybind11::gil_scoped_release no_gil;
-    // Recompute fused encoder+layer0 weight (fast: single GEMM on Accelerate)
-    sync_fused_weight(pufferl);
+    // Recompute fused encoder+layer0 weight for the active rollout weights.
+    // When overlap enabled, sync_pending_train handles weights_infer.
+    if (!pufferl.overlap_enabled) {
+        sync_fused_weight(pufferl);
+    }
     auto t0 = std::chrono::high_resolution_clock::now();
     // Rollout runs CONCURRENTLY with pending GPU training (overlap mode).
     // Uses weights_infer (snapshot from previous iteration). Training writes
@@ -292,6 +295,7 @@ std::unique_ptr<PuffeRL> create_pufferl(pybind11::dict kwargs,
     hypers.cudagraphs = -1;  // always disabled on Metal
     hypers.kernels = true;   // always use Metal kernels
     hypers.profile = get_config(kwargs, "profile");
+    hypers.overlap = kwargs.contains("overlap") && get_config(kwargs, "overlap") > 0;
 
     std::string env_name = kwargs["env_name"].cast<std::string>();
     Dict* vec_dict = py_dict_to_c_dict(vec_kwargs.cast<py::dict>());
@@ -358,7 +362,8 @@ PYBIND11_MODULE(_C, m) {
         .def_readwrite("use_rnn", &HypersT::use_rnn)
         .def_readwrite("cudagraphs", &HypersT::cudagraphs)
         .def_readwrite("kernels", &HypersT::kernels)
-        .def_readwrite("profile", &HypersT::profile);
+        .def_readwrite("profile", &HypersT::profile)
+        .def_readwrite("overlap", &HypersT::overlap);
 
     py::class_<PufTensor>(m, "PufTensor")
         .def("__repr__", &PufTensor::repr)
