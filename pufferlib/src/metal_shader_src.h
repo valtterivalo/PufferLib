@@ -692,11 +692,14 @@ inline void atomic_add_float(device atomic_uint* addr, float val) {
     }
 }
 
-// PPO helper: compute logsumexp, entropy, log_prob for a single discrete head (no masks)
+// PPO helper: compute logsumexp, entropy, log_prob for a single discrete head with masks.
+// mask pointer + mask_offset index into the action mask for this head.
+// Invalid actions (mask < 0.5) get logit = -1e9, matching rollout sampling.
 inline void ppo_discrete_head(
     const device float* logits,
     int logits_base, int logits_stride_a, int logits_offset,
     int A, int act,
+    const device float* mask, int mask_offset,
     thread float& out_logsumexp, thread float& out_entropy, thread float& out_logp
 ) {
     float max_logit = -INFINITY;
@@ -705,6 +708,7 @@ inline void ppo_discrete_head(
 
     for (int a = 0; a < A; a++) {
         float l = logits[logits_base + (logits_offset + a) * logits_stride_a];
+        if (mask[mask_offset + a] < 0.5f) l = -1e9f;
         if (a == act) act_logit = l;
         if (l > max_logit) {
             sum *= exp(max_logit - l);
@@ -717,6 +721,7 @@ inline void ppo_discrete_head(
     float ent = 0.0f;
     for (int a = 0; a < A; a++) {
         float l = logits[logits_base + (logits_offset + a) * logits_stride_a];
+        if (mask[mask_offset + a] < 0.5f) l = -1e9f;
         float logp = l - lse;
         float p = exp(logp);
         ent -= p * logp;
@@ -755,6 +760,8 @@ struct PPOFusedParams {
     int values_stride_n;
     int values_stride_t;
     int is_continuous;
+    int num_atns_total;  // sum of act_sizes, for mask buffer indexing
+    int mask_stride;     // stride in floats between consecutive mask rows in obs
 };
 
 // Fused PPO forward + backward: computes loss partials AND gradients in one pass.
@@ -777,6 +784,7 @@ kernel void ppo_loss_fwd_bwd_kernel(
     const device float* adv_var             [[buffer(14)]],
     const device int* act_sizes             [[buffer(15)]],
     constant PPOFusedParams& pp             [[buffer(16)]],
+    const device float* action_mask         [[buffer(17)]],
     uint idx [[thread_position_in_grid]],
     uint tid [[thread_index_in_threadgroup]],
     uint block_id [[threadgroup_position_in_grid]]
@@ -884,7 +892,8 @@ kernel void ppo_loss_fwd_bwd_kernel(
             block_losses[LOSS_APPROX_KL][tid] = ((ratio - 1.0f) - logratio) * inv_NT;
             block_losses[LOSS_CLIPFRAC][tid] = (abs(ratio - 1.0f) > pp.clip_coef ? 1.0f : 0.0f) * inv_NT;
         } else {
-            // Discrete: compute per-head logsumexp, entropy, log_prob in one pass
+            // Discrete: compute per-head logsumexp, entropy, log_prob with action masks.
+            // Mask data is embedded in obs buffer with stride pp.mask_stride.
             float head_logsumexp[MAX_ATN_HEADS];
             float head_entropy[MAX_ATN_HEADS];
             int head_act[MAX_ATN_HEADS];
@@ -892,13 +901,15 @@ kernel void ppo_loss_fwd_bwd_kernel(
             int logits_offset = 0;
             float total_log_prob = 0.0f;
             float total_entropy = 0.0f;
+            int mask_base = (int)idx * pp.mask_stride;
 
             for (int h = 0; h < pp.num_atns; h++) {
                 int A = act_sizes[h];
                 int act = int(actions[nt * pp.num_atns + h]);
                 head_act[h] = act;
                 float lse, ent, lp;
-                ppo_discrete_head(logits, logits_base, pp.logits_stride_a, logits_offset, A, act, lse, ent, lp);
+                ppo_discrete_head(logits, logits_base, pp.logits_stride_a, logits_offset,
+                    A, act, action_mask, mask_base + logits_offset, lse, ent, lp);
                 head_logsumexp[h] = lse;
                 head_entropy[h] = ent;
                 total_log_prob += lp;
@@ -923,7 +934,7 @@ kernel void ppo_loss_fwd_bwd_kernel(
             }
             float d_new_logp = d_ratio * ratio;
 
-            // Gradient pass over logits (reuses head_logsumexp, head_entropy)
+            // Gradient pass over logits with masks (reuses head_logsumexp, head_entropy)
             logits_offset = 0;
             for (int h = 0; h < pp.num_atns; h++) {
                 int A = act_sizes[h];
@@ -932,12 +943,16 @@ kernel void ppo_loss_fwd_bwd_kernel(
                 float ent = head_entropy[h];
 
                 for (int a = 0; a < A; a++) {
-                    float l = logits[logits_base + (logits_offset + a) * pp.logits_stride_a];
+                    float raw_l = logits[logits_base + (logits_offset + a) * pp.logits_stride_a];
+                    float m = action_mask[mask_base + logits_offset + a];
+                    float l = (m < 0.5f) ? -1e9f : raw_l;
                     float logp = l - lse;
                     float p = exp(logp);
                     float d_logit = (a == act) ? d_new_logp : 0.0f;
                     d_logit -= p * d_new_logp;
                     d_logit += d_entropy_term * p * (-ent - logp);
+                    // Zero gradient for masked-out actions
+                    if (m < 0.5f) d_logit = 0.0f;
                     grad_logits[grad_logits_base + logits_offset + a] = d_logit;
                 }
                 logits_offset += A;
@@ -2459,7 +2474,8 @@ kernel void assemble_decoder_grad_f32_to_f16(
     int row = (int)gid / od1;
     int col = (int)gid % od1;
     float val = (col < od) ? grad_logits[row * od + col] : grad_value[row];
-    grad_out[gid] = half(val);
+    // Clamp to fp16 range to prevent inf (Metal fp16 max ~65504, unlike CUDA bf16)
+    grad_out[gid] = half(clamp(val, -65000.0f, 65000.0f));
 }
 
 // ============================================================================
@@ -2839,9 +2855,10 @@ kernel void fused_scan_backward_checkpointed_fp16(
             float grad_g, grad_h;
             log_coeffs_and_values_bwd(grad_a, grad_z, gate_val, hidden_val, grad_g, grad_h);
 
-            grad_combined[cbase + h + t_offset] = half(grad_h);
-            grad_combined[cbase + p.H + h + t_offset] = half(grad_g);
-            grad_combined[cbase + 2 * p.H + h + t_offset] = half(grad_proj);
+            // Clamp to fp16 range to prevent inf (Metal fp16 max ~65504)
+            grad_combined[cbase + h + t_offset] = half(clamp(grad_h, -65000.0f, 65000.0f));
+            grad_combined[cbase + p.H + h + t_offset] = half(clamp(grad_g, -65000.0f, 65000.0f));
+            grad_combined[cbase + 2 * p.H + h + t_offset] = half(clamp(grad_proj, -65000.0f, 65000.0f));
         }
     }
 
@@ -2859,7 +2876,8 @@ kernel void fused_scan_backward_checkpointed_fp16(
     acc = grad_s_0 + acc * exp(s_0 - s_val_next);
     float grad_z_0 = acc * exp(z_0 - s_0);
 
-    grad_state[state_idx] = half(grad_z_0 / float(state[state_idx]));
+    // Clamp to fp16 range to prevent inf (Metal fp16 max ~65504)
+    grad_state[state_idx] = half(clamp(grad_z_0 / float(state[state_idx]), -65000.0f, 65000.0f));
 }
 
 // ============================================================================

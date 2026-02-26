@@ -825,6 +825,15 @@ void ppo_loss_fwd_bwd(PufTensor &dec_out, PufTensor &logstd, TrainGraph &graph,
     mtl_dispatch_1d(enc, pso, act_count);
   }
 
+  // Action mask: embedded in mb_obs columns [mask_offset .. mask_offset + A_total).
+  // mb_obs shape: (S, H, input_size) row-major. For flat index nt, mask starts at
+  // nt * input_size + mask_offset. We pass mask_ptr already offset by mask_offset,
+  // so the kernel indexes as mask_ptr[idx * mask_stride + logits_offset + a].
+  int input_size = (int)graph.mb_obs.shape[2];
+  int mask_offset = input_size - A_total;  // 373 - 39 = 334
+  const float *mask_ptr = (const float *)graph.mb_obs.bytes + mask_offset;
+  int mask_stride = input_size;
+
   // Fused PPO kernel
   {
     auto enc = ms->compute_encoder();
@@ -856,6 +865,8 @@ void ppo_loss_fwd_bwd(PufTensor &dec_out, PufTensor &logstd, TrainGraph &graph,
       int logits_stride_n, logits_stride_t, logits_stride_a;
       int values_stride_n, values_stride_t;
       int is_continuous;
+      int num_atns_total;
+      int mask_stride_val;
     } params = {num_atns,
                 clip_coef,
                 vf_clip_coef,
@@ -869,8 +880,11 @@ void ppo_loss_fwd_bwd(PufTensor &dec_out, PufTensor &logstd, TrainGraph &graph,
                 logits_stride_a,
                 values_stride_n,
                 values_stride_t,
-                is_continuous ? 1 : 0};
+                is_continuous ? 1 : 0,
+                A_total,
+                mask_stride};
     [enc setBytes:&params length:sizeof(params) atIndex:16];
+    mtl_set_ptr(enc, (void *)mask_ptr, 17);
     mtl_dispatch_groups(enc, pso, ppo_grid, ppo_threads);
   }
 
