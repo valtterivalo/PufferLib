@@ -28,9 +28,17 @@
 // ============================================================================
 
 struct MetalStream {
+  // Metal 3 (transient command buffers)
   id<MTLCommandBuffer> cmd;
   id<MTLComputeCommandEncoder> enc;
   id<MTLCommandQueue> queue;  // owning queue (for creating command buffers)
+
+  // Metal 4 (reusable command buffers + argument tables)
+  id<MTL4CommandAllocator> allocator;
+  id<MTL4CommandBuffer> cmd4;
+  id<MTL4ComputeCommandEncoder> enc4;
+  id<MTL4ArgumentTable> arg_table;
+
   bool enc_active = false;
   bool pending_work = false; // true when compute work is encoded but not synced
   bool flushed = false;      // true when cmd committed but not waited on
@@ -71,6 +79,9 @@ struct WrappedBuffer {
 // MetalContext — singleton managing device, queue, shaders, pipelines.
 // ============================================================================
 
+// Constants ring buffer size for Metal 4 setBytes replacement.
+static const NSUInteger MTL_CONST_RING_SIZE = 64 * 1024;
+
 struct MetalContext {
   id<MTLDevice> device;
   id<MTLCommandQueue> queue;
@@ -86,6 +97,16 @@ struct MetalContext {
   id<MTLComputePipelineState> tensor_ops_gemm_nt_f16;
   id<MTLComputePipelineState> tensor_ops_gemm_nn_f16;
   id<MTLComputePipelineState> tensor_ops_gemm_tn_f16;
+
+  // Metal 4 reusable command buffer infrastructure
+  bool has_metal4 = false;
+  id<MTL4CommandQueue> queue4;        // Metal 4 rollout queue
+  id<MTL4CommandQueue> train_queue4;  // Metal 4 training queue
+  id<MTLResidencySet> residency_set;  // all wrapped buffers for GPU address access
+  id<MTLSharedEvent> sync_event;      // CPU-GPU synchronization
+  uint64_t sync_event_value = 0;      // monotonically increasing signal counter
+  id<MTLBuffer> const_ring;           // ring buffer for inline constants (setBytes replacement)
+  NSUInteger const_ring_offset = 0;   // current write position in ring
 
   MetalStream stream;       // default stream (rollout)
   MetalStream train_stream; // training stream (separate queue for overlap)
@@ -136,38 +157,83 @@ id<MTLBuffer> mtl_buffer_for(const PufTensor &t, NSUInteger *out_offset);
 id<MTLComputePipelineState> mtl_pipeline(const char *name);
 
 // ============================================================================
-// Inline dispatch helpers
+// Inline dispatch helpers — unified Metal 3 / Metal 4 interface.
+// All take MetalStream* to support both encoder types transparently.
 // ============================================================================
 
-// Bind a PufTensor to the compute encoder at the given buffer index.
-inline void mtl_set_tensor(id<MTLComputeCommandEncoder> enc,
-                           const PufTensor &t, uint32_t index) {
-  NSUInteger offset;
-  id<MTLBuffer> buf = mtl_buffer_for(t, &offset);
-  [enc setBuffer:buf offset:offset atIndex:index];
+// Set compute pipeline state on the active encoder.
+inline void mtl_set_pso(MetalStream *ms, id<MTLComputePipelineState> pso) {
+  if (mtl_ctx()->has_metal4) {
+    [ms->enc4 setComputePipelineState:pso];
+  } else {
+    [ms->enc setComputePipelineState:pso];
+  }
 }
 
-// Bind constant data directly into the encoder's argument table.
-template <typename T>
-inline void mtl_set_params(id<MTLComputeCommandEncoder> enc, const T &params,
+// Bind a PufTensor at the given buffer index.
+inline void mtl_set_tensor(MetalStream *ms, const PufTensor &t,
                            uint32_t index) {
-  [enc setBytes:&params length:sizeof(T) atIndex:index];
+  NSUInteger offset;
+  id<MTLBuffer> buf = mtl_buffer_for(t, &offset);
+  if (mtl_ctx()->has_metal4) {
+    [ms->arg_table setAddress:(buf.gpuAddress + offset) atIndex:index];
+  } else {
+    [ms->enc setBuffer:buf offset:offset atIndex:index];
+  }
+}
+
+// Bind constant data (replaces setBytes — uses ring buffer on Metal 4).
+template <typename T>
+inline void mtl_set_params(MetalStream *ms, const T &params, uint32_t index) {
+  MetalContext *ctx = mtl_ctx();
+  if (ctx->has_metal4) {
+    NSUInteger aligned = (sizeof(T) + 15) & ~15;
+    assert(ctx->const_ring_offset + aligned <= MTL_CONST_RING_SIZE);
+    memcpy((char *)[ctx->const_ring contents] + ctx->const_ring_offset,
+           &params, sizeof(T));
+    [ms->arg_table
+        setAddress:(ctx->const_ring.gpuAddress + ctx->const_ring_offset)
+           atIndex:index];
+    ctx->const_ring_offset += aligned;
+  } else {
+    [ms->enc setBytes:&params length:sizeof(T) atIndex:index];
+  }
 }
 
 // 1D dispatch with auto threadgroup sizing (capped at 256).
-inline void mtl_dispatch_1d(id<MTLComputeCommandEncoder> enc,
-                            id<MTLComputePipelineState> pso, int count) {
+inline void mtl_dispatch_1d(MetalStream *ms, id<MTLComputePipelineState> pso,
+                            int count) {
   NSUInteger tg = MIN((NSUInteger)pso.maxTotalThreadsPerThreadgroup, 256);
-  [enc dispatchThreads:MTLSizeMake(count, 1, 1)
-      threadsPerThreadgroup:MTLSizeMake(tg, 1, 1)];
+  if (mtl_ctx()->has_metal4) {
+    [ms->enc4 dispatchThreads:MTLSizeMake(count, 1, 1)
+        threadsPerThreadgroup:MTLSizeMake(tg, 1, 1)];
+  } else {
+    [ms->enc dispatchThreads:MTLSizeMake(count, 1, 1)
+        threadsPerThreadgroup:MTLSizeMake(tg, 1, 1)];
+  }
 }
 
 // Threadgroup dispatch (for kernels that use shared memory).
-inline void mtl_dispatch_groups(id<MTLComputeCommandEncoder> enc,
+inline void mtl_dispatch_groups(MetalStream *ms,
                                 id<MTLComputePipelineState> pso,
                                 int num_groups, int group_size) {
-  [enc dispatchThreadgroups:MTLSizeMake(num_groups, 1, 1)
-      threadsPerThreadgroup:MTLSizeMake(group_size, 1, 1)];
+  if (mtl_ctx()->has_metal4) {
+    [ms->enc4 dispatchThreadgroups:MTLSizeMake(num_groups, 1, 1)
+        threadsPerThreadgroup:MTLSizeMake(group_size, 1, 1)];
+  } else {
+    [ms->enc dispatchThreadgroups:MTLSizeMake(num_groups, 1, 1)
+        threadsPerThreadgroup:MTLSizeMake(group_size, 1, 1)];
+  }
+}
+
+// Set threadgroup memory length on the active encoder.
+inline void mtl_set_threadgroup_memory(MetalStream *ms, NSUInteger length,
+                                       uint32_t index) {
+  if (mtl_ctx()->has_metal4) {
+    [ms->enc4 setThreadgroupMemoryLength:length atIndex:index];
+  } else {
+    [ms->enc setThreadgroupMemoryLength:length atIndex:index];
+  }
 }
 
 // ============================================================================

@@ -255,15 +255,30 @@ kernel void tensor_ops_gemm_tn_f16(
 
 void MetalStream::begin() {
   enc = nil;
+  enc4 = nil;
   enc_active = false;
   pending_work = false;
   flushed = false;
-  cmd = [queue commandBuffer];
+  MetalContext *ctx = mtl_ctx();
+  if (ctx->has_metal4) {
+    [allocator reset];
+    [cmd4 beginCommandBufferWithAllocator:allocator];
+    [cmd4 useResidencySet:ctx->residency_set];
+    ctx->const_ring_offset = 0;
+  } else {
+    cmd = [queue commandBuffer];
+  }
 }
 
 id<MTLComputeCommandEncoder> MetalStream::compute_encoder() {
   if (!enc_active) {
-    enc = [cmd computeCommandEncoder];
+    MetalContext *ctx = mtl_ctx();
+    if (ctx->has_metal4) {
+      enc4 = [cmd4 computeCommandEncoder];
+      [enc4 setArgumentTable:arg_table];
+    } else {
+      enc = [cmd computeCommandEncoder];
+    }
     enc_active = true;
     pending_work = true;
   }
@@ -272,8 +287,13 @@ id<MTLComputeCommandEncoder> MetalStream::compute_encoder() {
 
 void MetalStream::end_compute() {
   if (enc_active) {
-    [enc endEncoding];
-    enc = nil;
+    if (mtl_ctx()->has_metal4) {
+      [enc4 endEncoding];
+      enc4 = nil;
+    } else {
+      [enc endEncoding];
+      enc = nil;
+    }
     enc_active = false;
   }
 }
@@ -294,20 +314,32 @@ static double mach_to_ns(uint64_t ticks) {
 
 void MetalStream::sync() {
   end_compute();
+  MetalContext *ctx = mtl_ctx();
   uint64_t t0 = mach_absolute_time();
-  CFTimeInterval cpu_commit = CACurrentMediaTime();
-  [cmd commit];
-  [cmd waitUntilCompleted];
+  if (ctx->has_metal4) {
+    [cmd4 endCommandBuffer];
+    uint64_t val = ++ctx->sync_event_value;
+    id<MTL4CommandBuffer> bufs[] = { cmd4 };
+    id<MTL4CommandQueue> q =
+        (this == &ctx->train_stream) ? ctx->train_queue4 : ctx->queue4;
+    [q commit:bufs count:1];
+    [q signalEvent:ctx->sync_event value:val];
+    [ctx->sync_event waitUntilSignaledValue:val timeoutMS:5000];
+  } else {
+    CFTimeInterval cpu_commit = CACurrentMediaTime();
+    [cmd commit];
+    [cmd waitUntilCompleted];
+    // GPU timing diagnostic (Metal 3 only — cmd has GPUStartTime/GPUEndTime)
+    CFTimeInterval gpu_start = cmd.GPUStartTime;
+    CFTimeInterval gpu_end = cmd.GPUEndTime;
+    if (gpu_start > 0 && gpu_end > 0) {
+      g_gpu_exec_ns += (gpu_end - gpu_start) * 1e9;
+      g_sched_wait_ns += (gpu_start - cpu_commit) * 1e9;
+    }
+  }
   uint64_t t1 = mach_absolute_time();
   g_sync_count++;
   g_sync_total_ns += mach_to_ns(t1 - t0);
-  // GPU timing diagnostic
-  CFTimeInterval gpu_start = cmd.GPUStartTime;
-  CFTimeInterval gpu_end = cmd.GPUEndTime;
-  if (gpu_start > 0 && gpu_end > 0) {
-    g_gpu_exec_ns += (gpu_end - gpu_start) * 1e9;
-    g_sched_wait_ns += (gpu_start - cpu_commit) * 1e9;
-  }
   begin();
 }
 
@@ -315,7 +347,16 @@ void MetalStream::flush() {
   end_compute();
   if (pending_work) {
     commit_time = CACurrentMediaTime();
-    [cmd commit];
+    MetalContext *ctx = mtl_ctx();
+    if (ctx->has_metal4) {
+      [cmd4 endCommandBuffer];
+      id<MTL4CommandBuffer> bufs[] = { cmd4 };
+      id<MTL4CommandQueue> q =
+          (this == &ctx->train_stream) ? ctx->train_queue4 : ctx->queue4;
+      [q commit:bufs count:1];
+    } else {
+      [cmd commit];
+    }
     flushed = true;
     pending_work = false;
   }
@@ -324,17 +365,26 @@ void MetalStream::flush() {
 void MetalStream::wait_completed() {
   if (flushed) {
     uint64_t t0 = mach_absolute_time();
-    [cmd waitUntilCompleted];
+    MetalContext *ctx = mtl_ctx();
+    if (ctx->has_metal4) {
+      uint64_t val = ++ctx->sync_event_value;
+      id<MTL4CommandQueue> q =
+          (this == &ctx->train_stream) ? ctx->train_queue4 : ctx->queue4;
+      [q signalEvent:ctx->sync_event value:val];
+      [ctx->sync_event waitUntilSignaledValue:val timeoutMS:5000];
+    } else {
+      [cmd waitUntilCompleted];
+      // GPU timing diagnostic (Metal 3 only)
+      CFTimeInterval gpu_start = cmd.GPUStartTime;
+      CFTimeInterval gpu_end = cmd.GPUEndTime;
+      if (gpu_start > 0 && gpu_end > 0) {
+        g_gpu_exec_ns += (gpu_end - gpu_start) * 1e9;
+        g_sched_wait_ns += (gpu_start - commit_time) * 1e9;
+      }
+    }
     uint64_t t1 = mach_absolute_time();
     g_sync_count++;
     g_sync_total_ns += mach_to_ns(t1 - t0);
-    // GPU timing diagnostic
-    CFTimeInterval gpu_start = cmd.GPUStartTime;
-    CFTimeInterval gpu_end = cmd.GPUEndTime;
-    if (gpu_start > 0 && gpu_end > 0) {
-      g_gpu_exec_ns += (gpu_end - gpu_start) * 1e9;
-      g_sched_wait_ns += (gpu_start - commit_time) * 1e9;
-    }
     flushed = false;
     begin();
   }
@@ -492,6 +542,56 @@ void mtl_init() {
       }
     }
 
+    // Metal 4 reusable command buffer infrastructure
+    g_ctx.has_metal4 =
+        [g_ctx.device respondsToSelector:@selector(newMTL4CommandQueue)];
+    if (g_ctx.has_metal4) {
+      g_ctx.queue4 = [g_ctx.device newMTL4CommandQueue];
+      g_ctx.train_queue4 = [g_ctx.device newMTL4CommandQueue];
+      g_ctx.sync_event = [g_ctx.device newSharedEvent];
+      g_ctx.sync_event_value = 0;
+
+      // Command allocators + reusable command buffers
+      g_ctx.stream.allocator = [g_ctx.device newCommandAllocator];
+      g_ctx.stream.cmd4 = [g_ctx.device newCommandBuffer];
+      g_ctx.train_stream.allocator = [g_ctx.device newCommandAllocator];
+      g_ctx.train_stream.cmd4 = [g_ctx.device newCommandBuffer];
+
+      // Argument tables (max 16 buffer bindings — our kernels use at most ~15)
+      MTL4ArgumentTableDescriptor *atd = [MTL4ArgumentTableDescriptor new];
+      atd.maxBufferBindCount = 16;
+      NSError *at_err = nil;
+      g_ctx.stream.arg_table =
+          [g_ctx.device newArgumentTableWithDescriptor:atd error:&at_err];
+      assert(g_ctx.stream.arg_table && "Failed to create argument table");
+      g_ctx.train_stream.arg_table =
+          [g_ctx.device newArgumentTableWithDescriptor:atd error:&at_err];
+      assert(g_ctx.train_stream.arg_table &&
+             "Failed to create train argument table");
+
+      // Constants ring buffer (64KB, replaces setBytes on Metal 4)
+      g_ctx.const_ring =
+          [g_ctx.device newBufferWithLength:MTL_CONST_RING_SIZE
+                                    options:MTLResourceStorageModeShared];
+      g_ctx.const_ring_offset = 0;
+
+      // Residency set — populated by mtl_wrap_allocator as buffers arrive
+      MTLResidencySetDescriptor *rsd = [MTLResidencySetDescriptor new];
+      rsd.initialCapacity = 16;
+      NSError *rs_err = nil;
+      g_ctx.residency_set =
+          [g_ctx.device newResidencySetWithDescriptor:rsd error:&rs_err];
+      assert(g_ctx.residency_set && "Failed to create residency set");
+      [g_ctx.residency_set addAllocation:g_ctx.const_ring];
+      [g_ctx.residency_set requestResidency];
+      [g_ctx.queue4 addResidencySet:g_ctx.residency_set];
+      [g_ctx.train_queue4 addResidencySet:g_ctx.residency_set];
+
+      printf("[metal] Metal 4 available — reusable command buffers enabled\n");
+    } else {
+      printf("[metal] Metal 4 not available — using transient command buffers\n");
+    }
+
     // Start the default stream (rollout) and training stream
     g_ctx.stream.queue = g_ctx.queue;
     g_ctx.stream.begin();
@@ -535,6 +635,22 @@ void mtl_destroy() {
   // 3. Release all Metal objects inside @autoreleasepool to force immediate
   //    deallocation. Device released LAST — MTLBuffers/pipelines reference it.
   @autoreleasepool {
+    // Metal 4 objects
+    if (g_ctx.has_metal4) {
+      g_ctx.stream.arg_table = nil;
+      g_ctx.stream.cmd4 = nil;
+      g_ctx.stream.allocator = nil;
+      g_ctx.stream.enc4 = nil;
+      g_ctx.train_stream.arg_table = nil;
+      g_ctx.train_stream.cmd4 = nil;
+      g_ctx.train_stream.allocator = nil;
+      g_ctx.train_stream.enc4 = nil;
+      g_ctx.const_ring = nil;
+      g_ctx.residency_set = nil;
+      g_ctx.sync_event = nil;
+      g_ctx.queue4 = nil;
+      g_ctx.train_queue4 = nil;
+    }
     g_ctx.buffers.clear();
     g_ctx.pipelines = nil;
     g_ctx.library = nil;
@@ -578,6 +694,13 @@ id<MTLBuffer> mtl_wrap_allocator(Allocator *alloc) {
                 "page-aligned? (requires WITH_METAL)");
 
   g_ctx.buffers.push_back({(char *)alloc->mem, size, buf});
+
+  // Metal 4: add to residency set so GPU addresses are valid
+  if (g_ctx.has_metal4) {
+    [g_ctx.residency_set addAllocation:buf];
+    [g_ctx.residency_set requestResidency];
+  }
+
   return buf;
 }
 
@@ -658,6 +781,16 @@ static id<MTLBuffer> buffer_for_ptr(const void *ptr, NSUInteger *out_offset) {
   __builtin_unreachable();
 }
 
+// Bind a pre-resolved MTLBuffer+offset to a stream binding slot (GEMM helpers).
+static inline void bind_buf(MetalStream *ms, id<MTLBuffer> buf,
+                             NSUInteger offset, uint32_t index) {
+  if (g_ctx.has_metal4) {
+    [ms->arg_table setAddress:(buf.gpuAddress + offset) atIndex:index];
+  } else {
+    [ms->enc setBuffer:buf offset:offset atIndex:index];
+  }
+}
+
 // ============================================================================
 // Metal compute GEMM: uses simdgroup_matrix hardware instructions (M3+).
 // Stays on the compute encoder (no encoder transitions).
@@ -680,28 +813,33 @@ static void compute_gemm(const float *A, const float *B, float *C,
                           float alpha, float beta,
                           cudaStream_t stream) {
   MetalStream *ms = get_stream(stream);
-  id<MTLComputeCommandEncoder> enc = ms->compute_encoder();
+  ms->compute_encoder();
   id<MTLComputePipelineState> pso = mtl_pipeline("steel_gemm");
-  [enc setComputePipelineState:pso];
+  mtl_set_pso(ms, pso);
 
   NSUInteger off_a, off_b, off_c;
   id<MTLBuffer> buf_a = buffer_for_ptr(A, &off_a);
   id<MTLBuffer> buf_b = buffer_for_ptr(B, &off_b);
   id<MTLBuffer> buf_c = buffer_for_ptr(C, &off_c);
 
-  [enc setBuffer:buf_a offset:off_a atIndex:0];
-  [enc setBuffer:buf_b offset:off_b atIndex:1];
-  [enc setBuffer:buf_c offset:off_c atIndex:2];
+  bind_buf(ms, buf_a, off_a, 0);
+  bind_buf(ms, buf_b, off_b, 1);
+  bind_buf(ms, buf_c, off_c, 2);
 
   HostGemmParams params = {M, N, K, lda, ldb, ldc, alpha, beta,
                             trans_a ? 1 : 0, trans_b ? 1 : 0};
-  [enc setBytes:&params length:sizeof(params) atIndex:3];
+  mtl_set_params(ms, params, 3);
 
   // 64x64 output tile per threadgroup, 128 threads (4 simdgroups)
   int groups_m = (M + 63) / 64;
   int groups_n = (N + 63) / 64;
-  [enc dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
-      threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+  if (g_ctx.has_metal4) {
+    [ms->enc4 dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
+        threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+  } else {
+    [ms->enc dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
+        threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+  };
 
   ms->pending_work = true;
 }
@@ -715,27 +853,32 @@ static void compute_gemm_f16(const void *A, const void *B, void *C,
                               float alpha, float beta,
                               cudaStream_t stream) {
   MetalStream *ms = get_stream(stream);
-  id<MTLComputeCommandEncoder> enc = ms->compute_encoder();
+  ms->compute_encoder();
   id<MTLComputePipelineState> pso = mtl_pipeline("steel_gemm_f16");
-  [enc setComputePipelineState:pso];
+  mtl_set_pso(ms, pso);
 
   NSUInteger off_a, off_b, off_c;
   id<MTLBuffer> buf_a = buffer_for_ptr(A, &off_a);
   id<MTLBuffer> buf_b = buffer_for_ptr(B, &off_b);
   id<MTLBuffer> buf_c = buffer_for_ptr(C, &off_c);
 
-  [enc setBuffer:buf_a offset:off_a atIndex:0];
-  [enc setBuffer:buf_b offset:off_b atIndex:1];
-  [enc setBuffer:buf_c offset:off_c atIndex:2];
+  bind_buf(ms, buf_a, off_a, 0);
+  bind_buf(ms, buf_b, off_b, 1);
+  bind_buf(ms, buf_c, off_c, 2);
 
   HostGemmParams params = {M, N, K, lda, ldb, ldc, alpha, beta,
                             trans_a ? 1 : 0, trans_b ? 1 : 0};
-  [enc setBytes:&params length:sizeof(params) atIndex:3];
+  mtl_set_params(ms, params, 3);
 
   int groups_m = (M + 63) / 64;
   int groups_n = (N + 63) / 64;
-  [enc dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
-      threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+  if (g_ctx.has_metal4) {
+    [ms->enc4 dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
+        threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+  } else {
+    [ms->enc dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
+        threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+  };
 
   ms->pending_work = true;
   g_tensor_ops_dispatch_count++;  // count as compute-encoder dispatch
@@ -754,27 +897,32 @@ static bool tensor_ops_gemm_nt(const float *A, const float *B, float *C,
   g_tensor_ops_dispatch_count++;
 
   MetalStream *ms = get_stream(stream);
-  id<MTLComputeCommandEncoder> enc = ms->compute_encoder();
-  [enc setComputePipelineState:g_ctx.tensor_ops_gemm_nt_f32];
+  ms->compute_encoder();
+  mtl_set_pso(ms, g_ctx.tensor_ops_gemm_nt_f32);
 
   NSUInteger off_a, off_b, off_c;
   id<MTLBuffer> buf_a = buffer_for_ptr(A, &off_a);
   id<MTLBuffer> buf_b = buffer_for_ptr(B, &off_b);
   id<MTLBuffer> buf_c = buffer_for_ptr(C, &off_c);
 
-  [enc setBuffer:buf_a offset:off_a atIndex:0];
-  [enc setBuffer:buf_b offset:off_b atIndex:1];
-  [enc setBuffer:buf_c offset:off_c atIndex:2];
+  bind_buf(ms, buf_a, off_a, 0);
+  bind_buf(ms, buf_b, off_b, 1);
+  bind_buf(ms, buf_c, off_c, 2);
 
   uint32_t mM = (uint32_t)M, mN = (uint32_t)N, mK = (uint32_t)K;
-  [enc setBytes:&mM length:sizeof(mM) atIndex:3];
-  [enc setBytes:&mN length:sizeof(mN) atIndex:4];
-  [enc setBytes:&mK length:sizeof(mK) atIndex:5];
+  mtl_set_params(ms, mM, 3);
+  mtl_set_params(ms, mN, 4);
+  mtl_set_params(ms, mK, 5);
 
   int groups_m = (M + 63) / 64;
   int groups_n = (N + 31) / 32;
-  [enc dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
-      threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+  if (g_ctx.has_metal4) {
+    [ms->enc4 dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
+        threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+  } else {
+    [ms->enc dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
+        threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+  };
 
   ms->pending_work = true;
   return true;
@@ -794,28 +942,33 @@ static bool tensor_ops_gemm_nn(const float *A, const float *B, float *C,
   g_tensor_ops_dispatch_count++;
 
   MetalStream *ms = get_stream(stream);
-  id<MTLComputeCommandEncoder> enc = ms->compute_encoder();
-  [enc setComputePipelineState:g_ctx.tensor_ops_gemm_nn_f32];
+  ms->compute_encoder();
+  mtl_set_pso(ms, g_ctx.tensor_ops_gemm_nn_f32);
 
   NSUInteger off_a, off_b, off_c;
   id<MTLBuffer> buf_a = buffer_for_ptr(A, &off_a);
   id<MTLBuffer> buf_b = buffer_for_ptr(B, &off_b);
   id<MTLBuffer> buf_c = buffer_for_ptr(C, &off_c);
 
-  [enc setBuffer:buf_a offset:off_a atIndex:0];
-  [enc setBuffer:buf_b offset:off_b atIndex:1];
-  [enc setBuffer:buf_c offset:off_c atIndex:2];
+  bind_buf(ms, buf_a, off_a, 0);
+  bind_buf(ms, buf_b, off_b, 1);
+  bind_buf(ms, buf_c, off_c, 2);
 
   uint32_t mM = (uint32_t)M, mN = (uint32_t)N, mK = (uint32_t)K;
-  [enc setBytes:&mM length:sizeof(mM) atIndex:3];
-  [enc setBytes:&mN length:sizeof(mN) atIndex:4];
-  [enc setBytes:&mK length:sizeof(mK) atIndex:5];
+  mtl_set_params(ms, mM, 3);
+  mtl_set_params(ms, mN, 4);
+  mtl_set_params(ms, mK, 5);
 
   // tgid.y tiles M (stride 64), tgid.x tiles N (stride 32) — same as NT kernel
   int groups_m = (M + 63) / 64;
   int groups_n = (N + 31) / 32;
-  [enc dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
-      threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+  if (g_ctx.has_metal4) {
+    [ms->enc4 dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
+        threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+  } else {
+    [ms->enc dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
+        threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+  };
 
   ms->pending_work = true;
   return true;
@@ -833,27 +986,32 @@ static bool tensor_ops_gemm_nt_f16(const void *A, const void *B, void *C,
   g_tensor_ops_dispatch_count++;
 
   MetalStream *ms = get_stream(stream);
-  id<MTLComputeCommandEncoder> enc = ms->compute_encoder();
-  [enc setComputePipelineState:g_ctx.tensor_ops_gemm_nt_f16];
+  ms->compute_encoder();
+  mtl_set_pso(ms, g_ctx.tensor_ops_gemm_nt_f16);
 
   NSUInteger off_a, off_b, off_c;
   id<MTLBuffer> buf_a = buffer_for_ptr(A, &off_a);
   id<MTLBuffer> buf_b = buffer_for_ptr(B, &off_b);
   id<MTLBuffer> buf_c = buffer_for_ptr(C, &off_c);
 
-  [enc setBuffer:buf_a offset:off_a atIndex:0];
-  [enc setBuffer:buf_b offset:off_b atIndex:1];
-  [enc setBuffer:buf_c offset:off_c atIndex:2];
+  bind_buf(ms, buf_a, off_a, 0);
+  bind_buf(ms, buf_b, off_b, 1);
+  bind_buf(ms, buf_c, off_c, 2);
 
   uint32_t mM = (uint32_t)M, mN = (uint32_t)N, mK = (uint32_t)K;
-  [enc setBytes:&mM length:sizeof(mM) atIndex:3];
-  [enc setBytes:&mN length:sizeof(mN) atIndex:4];
-  [enc setBytes:&mK length:sizeof(mK) atIndex:5];
+  mtl_set_params(ms, mM, 3);
+  mtl_set_params(ms, mN, 4);
+  mtl_set_params(ms, mK, 5);
 
   int groups_m = (M + 63) / 64;
   int groups_n = (N + 31) / 32;
-  [enc dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
-      threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+  if (g_ctx.has_metal4) {
+    [ms->enc4 dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
+        threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+  } else {
+    [ms->enc dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
+        threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+  };
 
   ms->pending_work = true;
   return true;
@@ -866,27 +1024,32 @@ static bool tensor_ops_gemm_nn_f16(const void *A, const void *B, void *C,
   g_tensor_ops_dispatch_count++;
 
   MetalStream *ms = get_stream(stream);
-  id<MTLComputeCommandEncoder> enc = ms->compute_encoder();
-  [enc setComputePipelineState:g_ctx.tensor_ops_gemm_nn_f16];
+  ms->compute_encoder();
+  mtl_set_pso(ms, g_ctx.tensor_ops_gemm_nn_f16);
 
   NSUInteger off_a, off_b, off_c;
   id<MTLBuffer> buf_a = buffer_for_ptr(A, &off_a);
   id<MTLBuffer> buf_b = buffer_for_ptr(B, &off_b);
   id<MTLBuffer> buf_c = buffer_for_ptr(C, &off_c);
 
-  [enc setBuffer:buf_a offset:off_a atIndex:0];
-  [enc setBuffer:buf_b offset:off_b atIndex:1];
-  [enc setBuffer:buf_c offset:off_c atIndex:2];
+  bind_buf(ms, buf_a, off_a, 0);
+  bind_buf(ms, buf_b, off_b, 1);
+  bind_buf(ms, buf_c, off_c, 2);
 
   uint32_t mM = (uint32_t)M, mN = (uint32_t)N, mK = (uint32_t)K;
-  [enc setBytes:&mM length:sizeof(mM) atIndex:3];
-  [enc setBytes:&mN length:sizeof(mN) atIndex:4];
-  [enc setBytes:&mK length:sizeof(mK) atIndex:5];
+  mtl_set_params(ms, mM, 3);
+  mtl_set_params(ms, mN, 4);
+  mtl_set_params(ms, mK, 5);
 
   int groups_m = (M + 63) / 64;
   int groups_n = (N + 31) / 32;
-  [enc dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
-      threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+  if (g_ctx.has_metal4) {
+    [ms->enc4 dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
+        threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+  } else {
+    [ms->enc dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
+        threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+  };
 
   ms->pending_work = true;
   return true;
@@ -906,27 +1069,32 @@ static bool tensor_ops_gemm_tn(const float *A, const float *B, float *C,
   g_tensor_ops_dispatch_count++;
 
   MetalStream *ms = get_stream(stream);
-  id<MTLComputeCommandEncoder> enc = ms->compute_encoder();
-  [enc setComputePipelineState:g_ctx.tensor_ops_gemm_tn_f32];
+  ms->compute_encoder();
+  mtl_set_pso(ms, g_ctx.tensor_ops_gemm_tn_f32);
 
   NSUInteger off_a, off_b, off_c;
   id<MTLBuffer> buf_a = buffer_for_ptr(A, &off_a);
   id<MTLBuffer> buf_b = buffer_for_ptr(B, &off_b);
   id<MTLBuffer> buf_c = buffer_for_ptr(C, &off_c);
 
-  [enc setBuffer:buf_a offset:off_a atIndex:0];
-  [enc setBuffer:buf_b offset:off_b atIndex:1];
-  [enc setBuffer:buf_c offset:off_c atIndex:2];
+  bind_buf(ms, buf_a, off_a, 0);
+  bind_buf(ms, buf_b, off_b, 1);
+  bind_buf(ms, buf_c, off_c, 2);
 
   uint32_t mM = (uint32_t)M, mN = (uint32_t)N, mK = (uint32_t)K;
-  [enc setBytes:&mM length:sizeof(mM) atIndex:3];
-  [enc setBytes:&mN length:sizeof(mN) atIndex:4];
-  [enc setBytes:&mK length:sizeof(mK) atIndex:5];
+  mtl_set_params(ms, mM, 3);
+  mtl_set_params(ms, mN, 4);
+  mtl_set_params(ms, mK, 5);
 
   int groups_m = (M + 63) / 64;
   int groups_n = (N + 31) / 32;
-  [enc dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
-      threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+  if (g_ctx.has_metal4) {
+    [ms->enc4 dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
+        threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+  } else {
+    [ms->enc dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
+        threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+  };
 
   ms->pending_work = true;
   return true;
@@ -939,27 +1107,32 @@ static bool tensor_ops_gemm_tn_f16(const void *A, const void *B, void *C,
   g_tensor_ops_dispatch_count++;
 
   MetalStream *ms = get_stream(stream);
-  id<MTLComputeCommandEncoder> enc = ms->compute_encoder();
-  [enc setComputePipelineState:g_ctx.tensor_ops_gemm_tn_f16];
+  ms->compute_encoder();
+  mtl_set_pso(ms, g_ctx.tensor_ops_gemm_tn_f16);
 
   NSUInteger off_a, off_b, off_c;
   id<MTLBuffer> buf_a = buffer_for_ptr(A, &off_a);
   id<MTLBuffer> buf_b = buffer_for_ptr(B, &off_b);
   id<MTLBuffer> buf_c = buffer_for_ptr(C, &off_c);
 
-  [enc setBuffer:buf_a offset:off_a atIndex:0];
-  [enc setBuffer:buf_b offset:off_b atIndex:1];
-  [enc setBuffer:buf_c offset:off_c atIndex:2];
+  bind_buf(ms, buf_a, off_a, 0);
+  bind_buf(ms, buf_b, off_b, 1);
+  bind_buf(ms, buf_c, off_c, 2);
 
   uint32_t mM = (uint32_t)M, mN = (uint32_t)N, mK = (uint32_t)K;
-  [enc setBytes:&mM length:sizeof(mM) atIndex:3];
-  [enc setBytes:&mN length:sizeof(mN) atIndex:4];
-  [enc setBytes:&mK length:sizeof(mK) atIndex:5];
+  mtl_set_params(ms, mM, 3);
+  mtl_set_params(ms, mN, 4);
+  mtl_set_params(ms, mK, 5);
 
   int groups_m = (M + 63) / 64;
   int groups_n = (N + 31) / 32;
-  [enc dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
-      threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+  if (g_ctx.has_metal4) {
+    [ms->enc4 dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
+        threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+  } else {
+    [ms->enc dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
+        threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+  };
 
   ms->pending_work = true;
   return true;
@@ -972,27 +1145,32 @@ static void small_gemm_nt_dispatch(const float *A, const float *B, float *C,
                                     int M, int N, int K,
                                     cudaStream_t stream) {
   MetalStream *ms = get_stream(stream);
-  id<MTLComputeCommandEncoder> enc = ms->compute_encoder();
+  ms->compute_encoder();
   id<MTLComputePipelineState> pso = mtl_pipeline("small_gemm_nt_f32");
-  [enc setComputePipelineState:pso];
+  mtl_set_pso(ms, pso);
 
   NSUInteger off_a, off_b, off_c;
   id<MTLBuffer> buf_a = buffer_for_ptr(A, &off_a);
   id<MTLBuffer> buf_b = buffer_for_ptr(B, &off_b);
   id<MTLBuffer> buf_c = buffer_for_ptr(C, &off_c);
 
-  [enc setBuffer:buf_a offset:off_a atIndex:0];
-  [enc setBuffer:buf_b offset:off_b atIndex:1];
-  [enc setBuffer:buf_c offset:off_c atIndex:2];
+  bind_buf(ms, buf_a, off_a, 0);
+  bind_buf(ms, buf_b, off_b, 1);
+  bind_buf(ms, buf_c, off_c, 2);
 
   struct { uint32_t M, N, K; } params = {(uint32_t)M, (uint32_t)N, (uint32_t)K};
-  [enc setBytes:&params length:sizeof(params) atIndex:3];
+  mtl_set_params(ms, params, 3);
 
   // threadgroup size: round N up to next multiple of 32 for simdgroup alignment
   int tg_size = ((N + 31) / 32) * 32;
   tg_size = MIN(tg_size, (int)pso.maxTotalThreadsPerThreadgroup);
-  [enc dispatchThreadgroups:MTLSizeMake(M, 1, 1)
-      threadsPerThreadgroup:MTLSizeMake(tg_size, 1, 1)];
+  if (g_ctx.has_metal4) {
+    [ms->enc4 dispatchThreadgroups:MTLSizeMake(M, 1, 1)
+        threadsPerThreadgroup:MTLSizeMake(tg_size, 1, 1)];
+  } else {
+    [ms->enc dispatchThreadgroups:MTLSizeMake(M, 1, 1)
+        threadsPerThreadgroup:MTLSizeMake(tg_size, 1, 1)];
+  }
 
   ms->pending_work = true;
   g_tensor_ops_dispatch_count++;
@@ -1159,32 +1337,29 @@ void puf_addmm_nn(PufTensor &a, PufTensor &b, PufTensor &out, float alpha,
 
     // Step 2: out *= beta (compute encoder)
     MetalStream *ms = get_stream(stream);
-    id<MTLComputeCommandEncoder> enc = ms->compute_encoder();
+    ms->compute_encoder();
     int count = M * N;
 
     if (beta != 1.0f) {
       auto pso = mtl_pipeline("scale_f32");
-      [enc setComputePipelineState:pso];
+      mtl_set_pso(ms, pso);
       NSUInteger off_out;
-      [enc setBuffer:buffer_for_ptr(out.bytes, &off_out)
-              offset:off_out atIndex:0];
+      bind_buf(ms, buffer_for_ptr(out.bytes, &off_out), off_out, 0);
       struct { float alpha; int n; } sp = {beta, count};
-      [enc setBytes:&sp length:sizeof(sp) atIndex:1];
-      mtl_dispatch_1d(enc, pso, count);
+      mtl_set_params(ms, sp, 1);
+      mtl_dispatch_1d(ms, pso, count);
     }
 
     // Step 3: out += alpha * temp (compute encoder)
     {
       auto pso = mtl_pipeline("axpy_f32");
-      [enc setComputePipelineState:pso];
+      mtl_set_pso(ms, pso);
       NSUInteger off_out, off_temp;
-      [enc setBuffer:buffer_for_ptr(out.bytes, &off_out)
-              offset:off_out atIndex:0];
-      [enc setBuffer:buffer_for_ptr(temp, &off_temp)
-              offset:off_temp atIndex:1];
+      bind_buf(ms, buffer_for_ptr(out.bytes, &off_out), off_out, 0);
+      bind_buf(ms, buffer_for_ptr(temp, &off_temp), off_temp, 1);
       struct { float alpha; int n; } ap = {alpha, count};
-      [enc setBytes:&ap length:sizeof(ap) atIndex:2];
-      mtl_dispatch_1d(enc, pso, count);
+      mtl_set_params(ms, ap, 2);
+      mtl_dispatch_1d(ms, pso, count);
     }
     ms->pending_work = true;
   } else {
