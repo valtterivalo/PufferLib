@@ -167,3 +167,52 @@ void my_log(Log* log, Dict* out) {
     dict_set(out, "damage_dealt", log->damage_dealt);
     dict_set(out, "damage_received", log->damage_received);
 }
+
+/* ========================================================================
+ * PFSP: set/get opponent pool weights across all envs
+ * Called from Python via pybind11 wrappers in metal_bindings.mm
+ * ======================================================================== */
+
+void binding_set_pfsp_weights(StaticVec* vec, int* pool, int* cum_weights, int pool_size) {
+    Env* envs = (Env*)vec->envs;
+    if (pool_size > MAX_OPPONENT_POOL) pool_size = MAX_OPPONENT_POOL;
+    for (int e = 0; e < vec->size; e++) {
+        int was_unconfigured = (envs[e].pvp.pfsp.pool_size == 0);
+        envs[e].pvp.pfsp.pool_size = pool_size;
+        for (int i = 0; i < pool_size; i++) {
+            envs[e].pvp.pfsp.pool[i] = (OpponentType)pool[i];
+            envs[e].pvp.pfsp.cum_weights[i] = cum_weights[i];
+        }
+        /* Only reset on first configuration — restarts the episode that was started
+         * during env creation before the pool was set (would have used fallback opponent).
+         * Periodic weight updates must NOT reset: that would corrupt PufferLib's rollout. */
+        if (was_unconfigured) {
+            c_reset(&envs[e]);
+        }
+    }
+}
+
+void binding_get_pfsp_stats(StaticVec* vec, float* out_wins, float* out_episodes, int* out_pool_size) {
+    Env* envs = (Env*)vec->envs;
+    int pool_size = 0;
+
+    for (int e = 0; e < vec->size; e++) {
+        if (envs[e].pvp.pfsp.pool_size > pool_size)
+            pool_size = envs[e].pvp.pfsp.pool_size;
+    }
+    *out_pool_size = pool_size;
+    for (int i = 0; i < pool_size; i++) {
+        out_wins[i] = 0.0f;
+        out_episodes[i] = 0.0f;
+    }
+
+    /* Aggregate and reset (read-and-reset pattern) */
+    for (int e = 0; e < vec->size; e++) {
+        for (int i = 0; i < envs[e].pvp.pfsp.pool_size; i++) {
+            out_wins[i] += envs[e].pvp.pfsp.wins[i];
+            out_episodes[i] += envs[e].pvp.pfsp.episodes[i];
+        }
+        memset(envs[e].pvp.pfsp.wins, 0, sizeof(envs[e].pvp.pfsp.wins));
+        memset(envs[e].pvp.pfsp.episodes, 0, sizeof(envs[e].pvp.pfsp.episodes));
+    }
+}

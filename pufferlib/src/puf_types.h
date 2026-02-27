@@ -466,6 +466,39 @@ struct DecoderActivations {
   PufTensor bias_grad;
 };
 
+// ============================================================================
+// Architecture selection: simple (upstream-matching) vs rich (Metal default)
+// ============================================================================
+
+enum ArchType { ARCH_RICH = 0, ARCH_SIMPLE = 1 };
+
+// Simple (upstream-matching) encoder: single linear, no activation
+struct SimpleEncoderWeights {
+  PufTensor weight; // (out_dim, in_dim)
+  int in_dim, out_dim;
+};
+struct SimpleEncoderActivations {
+  PufTensor out;         // (B, out_dim)
+  PufTensor saved_input; // (B, in_dim) — training only
+  PufTensor wgrad;       // (out_dim, in_dim) — training only
+};
+
+// Simple (upstream-matching) decoder: single linear, no LN/intermediate/bias
+struct SimpleDecoderWeights {
+  PufTensor weight; // (output_dim+1, hidden_dim)
+  PufTensor logstd; // continuous only: (1, output_dim)
+  int hidden_dim, output_dim;
+  bool continuous;
+};
+struct SimpleDecoderActivations {
+  PufTensor out;            // (B, output_dim+1)
+  PufTensor grad_out;       // (B_TT, output_dim+1)
+  PufTensor saved_input;    // (B_TT, hidden_dim)
+  PufTensor grad_input;     // (B_TT, hidden_dim)
+  PufTensor wgrad;          // (output_dim+1, hidden_dim)
+  PufTensor logstd_scratch; // continuous: (1, output_dim)
+};
+
 struct MinGRUActivations {
   int num_layers;
   // Rollout

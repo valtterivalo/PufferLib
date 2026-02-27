@@ -917,6 +917,7 @@ void ppo_loss_fwd_bwd(PufTensor &dec_out, PufTensor &logstd, TrainGraph &graph,
                        PufTensor &act_sizes, PufTensor &losses_acc,
                        float clip_coef, float vf_clip_coef, float vf_coef,
                        float ent_coef, PPOBuffersPuf &bufs, bool is_continuous,
+                       const float *ext_mask_ptr, int ext_mask_stride,
                        cudaStream_t stream) {
   int N = (int)dec_out.shape[0], T = (int)dec_out.shape[1];
   int fused_cols = (int)dec_out.shape[2];
@@ -1004,14 +1005,19 @@ void ppo_loss_fwd_bwd(PufTensor &dec_out, PufTensor &logstd, TrainGraph &graph,
     mtl_dispatch_1d(enc, pso, act_count);
   }
 
-  // Action mask: embedded in mb_obs columns [mask_offset .. mask_offset + A_total).
-  // mb_obs shape: (S, H, input_size) row-major. For flat index nt, mask starts at
-  // nt * input_size + mask_offset. We pass mask_ptr already offset by mask_offset,
-  // so the kernel indexes as mask_ptr[idx * mask_stride + logits_offset + a].
+  // Action mask: either from external all-ones buffer (no mask) or embedded in obs.
   int input_size = (int)graph.mb_obs.shape[2];
-  int mask_offset = input_size - A_total;  // 373 - 39 = 334
-  const float *mask_ptr = (const float *)graph.mb_obs.bytes + mask_offset;
-  int mask_stride = input_size;
+  const float *mask_ptr;
+  int mask_stride;
+  if (ext_mask_ptr) {
+    mask_ptr = ext_mask_ptr;
+    mask_stride = ext_mask_stride;
+  } else {
+    // Mask embedded in mb_obs last A_total columns
+    int mask_offset = input_size - A_total;
+    mask_ptr = (const float *)graph.mb_obs.bytes + mask_offset;
+    mask_stride = input_size;
+  }
 
   // Fused PPO kernel
   {
@@ -1064,6 +1070,8 @@ void ppo_loss_fwd_bwd(PufTensor &dec_out, PufTensor &logstd, TrainGraph &graph,
                 mask_stride};
     [enc setBytes:&params length:sizeof(params) atIndex:16];
     mtl_set_ptr(enc, (void *)mask_ptr, 17);
+    mtl_set_ptr(enc, graph.mb_ratio.bytes, 18);
+    mtl_set_ptr(enc, graph.mb_newvalue.bytes, 19);
     mtl_dispatch_groups(enc, pso, ppo_grid, ppo_threads);
   }
 
@@ -1083,6 +1091,42 @@ void ppo_loss_fwd_bwd(PufTensor &dec_out, PufTensor &logstd, TrainGraph &graph,
     [enc setBytes:&params length:sizeof(params) atIndex:3];
     mtl_dispatch_groups(enc, pso, 1, LOSS_N + 1);
   }
+}
+
+// Scatter mb_ratio and mb_newvalue from minibatch back into rollout buffers.
+// Called after ppo_loss_fwd_bwd so subsequent minibatches see updated values.
+void mtl_scatter_ppo_outputs(TrainGraph& graph, RolloutBuf& rollouts,
+                              const int64_t* idx, cudaStream_t stream) {
+    MetalStream *ms = mtl_get_stream(stream);
+    int num_idx = (int)graph.mb_ratio.shape[0];
+
+    // mb_ratio → rollouts.ratio
+    {
+        auto enc = ms->compute_encoder();
+        auto pso = mtl_pipeline("index_copy_kernel");
+        [enc setComputePipelineState:pso];
+        int row_bytes = (int)(graph.mb_ratio.shape[1] * graph.mb_ratio.dtype_size);
+        mtl_set_ptr(enc, rollouts.ratio.bytes, 0);
+        mtl_set_ptr(enc, (void*)idx, 1);
+        mtl_set_ptr(enc, graph.mb_ratio.bytes, 2);
+        struct { int num_idx; int row_bytes; } p = {num_idx, row_bytes};
+        [enc setBytes:&p length:sizeof(p) atIndex:3];
+        mtl_dispatch_groups(enc, pso, (num_idx + 255) / 256, 256);
+    }
+
+    // mb_newvalue → rollouts.values
+    {
+        auto enc = ms->compute_encoder();
+        auto pso = mtl_pipeline("index_copy_kernel");
+        [enc setComputePipelineState:pso];
+        int row_bytes = (int)(graph.mb_newvalue.shape[1] * graph.mb_newvalue.dtype_size);
+        mtl_set_ptr(enc, rollouts.values.bytes, 0);
+        mtl_set_ptr(enc, (void*)idx, 1);
+        mtl_set_ptr(enc, graph.mb_newvalue.bytes, 2);
+        struct { int num_idx; int row_bytes; } p = {num_idx, row_bytes};
+        [enc setBytes:&p length:sizeof(p) atIndex:3];
+        mtl_dispatch_groups(enc, pso, (num_idx + 255) / 256, 256);
+    }
 }
 
 // ============================================================================
@@ -1997,6 +2041,169 @@ static void decoder_reg_rollout(void *w, void *activations, Allocator *alloc,
   alloc->reg(&a->saved_x_hat);
   alloc->reg(&a->saved_rstd);
   alloc->reg(&a->intermediate_out);
+  alloc->reg(&a->out);
+}
+
+// ============================================================================
+// Model components — Simple encoder/decoder (upstream-matching architecture)
+// Single linear layer each, no activation, no bias, no LayerNorm.
+// ============================================================================
+
+static PufTensor simple_encoder_forward(void *w, void *activations,
+                                         PufTensor input, cudaStream_t stream) {
+  SimpleEncoderWeights *ew = (SimpleEncoderWeights *)w;
+  SimpleEncoderActivations *a = (SimpleEncoderActivations *)activations;
+  if (a->saved_input.bytes)
+    puf_copy(a->saved_input, input, stream);
+  puf_mm(input, ew->weight, a->out, stream);
+  return a->out;
+}
+
+static void simple_encoder_backward(void *w, void *activations, PufTensor grad,
+                                      cudaStream_t stream) {
+  SimpleEncoderActivations *a = (SimpleEncoderActivations *)activations;
+  puf_mm_tn(grad, a->saved_input, a->wgrad, stream);
+}
+
+static void simple_encoder_init_weights(void *w, uint64_t *seed,
+                                          cudaStream_t stream) {
+  SimpleEncoderWeights *ew = (SimpleEncoderWeights *)w;
+  PufTensor wt = {.bytes = ew->weight.bytes,
+                  .shape = {ew->out_dim, ew->in_dim},
+                  .dtype_size = ew->weight.dtype_size};
+  puf_orthogonal_init(wt, std::sqrt(2.0f), (*seed)++, stream);
+}
+
+static void simple_encoder_reg_params(void *w, Allocator *alloc, int esz) {
+  SimpleEncoderWeights *ew = (SimpleEncoderWeights *)w;
+  ew->weight = {.shape = {ew->out_dim, ew->in_dim}, .dtype_size = esz};
+  alloc->reg(&ew->weight);
+}
+
+static void simple_encoder_reg_train(void *w, void *activations,
+                                       Allocator *acts, Allocator *grads,
+                                       int B_TT) {
+  SimpleEncoderWeights *ew = (SimpleEncoderWeights *)w;
+  SimpleEncoderActivations *a = (SimpleEncoderActivations *)activations;
+  int p = PRECISION_SIZE;
+  *a = (SimpleEncoderActivations){
+      .out = {.shape = {B_TT, ew->out_dim}, .dtype_size = p},
+      .saved_input = {.shape = {B_TT, ew->in_dim}, .dtype_size = p},
+      .wgrad = {.shape = {ew->out_dim, ew->in_dim}, .dtype_size = p},
+  };
+  acts->reg(&a->out);
+  acts->reg(&a->saved_input);
+  grads->reg(&a->wgrad);
+}
+
+static void simple_encoder_reg_rollout(void *w, void *activations,
+                                         Allocator *alloc, int B) {
+  SimpleEncoderWeights *ew = (SimpleEncoderWeights *)w;
+  SimpleEncoderActivations *a = (SimpleEncoderActivations *)activations;
+  a->out = {.shape = {B, ew->out_dim}, .dtype_size = PRECISION_SIZE};
+  alloc->reg(&a->out);
+}
+
+static PufTensor simple_decoder_forward(void *w, void *activations,
+                                          PufTensor input,
+                                          cudaStream_t stream) {
+  SimpleDecoderWeights *dw = (SimpleDecoderWeights *)w;
+  SimpleDecoderActivations *a = (SimpleDecoderActivations *)activations;
+  if (a->saved_input.bytes)
+    puf_copy(a->saved_input, input, stream);
+  puf_mm(input, dw->weight, a->out, stream);
+  return a->out;
+}
+
+static PufTensor simple_decoder_backward(void *w, void *activations,
+                                           PufTensor grad_logits,
+                                           PufTensor grad_logstd,
+                                           PufTensor grad_value,
+                                           cudaStream_t stream) {
+  SimpleDecoderWeights *dw = (SimpleDecoderWeights *)w;
+  SimpleDecoderActivations *a = (SimpleDecoderActivations *)activations;
+  int B_TT = (int)a->saved_input.shape[0];
+  int od = dw->output_dim, od1 = od + 1;
+
+  // assemble gradient: concat [grad_logits, grad_value] per row
+  if (a->grad_out.dtype_size == 2)
+    mtl_assemble_decoder_grad_f32_to_f16(a->grad_out.bytes,
+                                          (const float *)grad_logits.bytes,
+                                          (const float *)grad_value.bytes,
+                                          B_TT, od, od1, stream);
+  else
+    mtl_assemble_decoder_grad_f32((float *)a->grad_out.bytes,
+                                  (const float *)grad_logits.bytes,
+                                  (const float *)grad_value.bytes, B_TT, od,
+                                  od1, stream);
+
+  // weight grad: grad_out^T @ saved_input
+  puf_mm_tn(a->grad_out, a->saved_input, a->wgrad, stream);
+
+  if (dw->continuous && grad_logstd.bytes != nullptr) {
+    mtl_sum_rows_to_f32((float *)a->logstd_scratch.bytes,
+                        (const float *)grad_logstd.bytes, B_TT,
+                        dw->output_dim, stream);
+  }
+
+  // grad → hidden: grad_out @ weight
+  puf_mm_nn(a->grad_out, dw->weight, a->grad_input, stream);
+  return a->grad_input;
+}
+
+static void simple_decoder_init_weights(void *w, uint64_t *seed,
+                                          cudaStream_t stream) {
+  SimpleDecoderWeights *dw = (SimpleDecoderWeights *)w;
+  int od1 = dw->output_dim + 1;
+  PufTensor wt = {.bytes = dw->weight.bytes,
+                  .shape = {od1, dw->hidden_dim},
+                  .dtype_size = dw->weight.dtype_size};
+  puf_orthogonal_init(wt, 0.01f, (*seed)++, stream);
+}
+
+static void simple_decoder_reg_params(void *w, Allocator *alloc, int esz) {
+  SimpleDecoderWeights *dw = (SimpleDecoderWeights *)w;
+  int od1 = dw->output_dim + 1;
+  dw->weight = {.shape = {od1, dw->hidden_dim}, .dtype_size = esz};
+  alloc->reg(&dw->weight);
+  if (dw->continuous) {
+    dw->logstd = {.shape = {1, dw->output_dim}, .dtype_size = esz};
+    alloc->reg(&dw->logstd);
+  }
+}
+
+static void simple_decoder_reg_train(void *w, void *activations,
+                                       Allocator *acts, Allocator *grads,
+                                       int B_TT) {
+  SimpleDecoderWeights *dw = (SimpleDecoderWeights *)w;
+  SimpleDecoderActivations *a = (SimpleDecoderActivations *)activations;
+  int p = PRECISION_SIZE;
+  int od1 = dw->output_dim + 1;
+  *a = (SimpleDecoderActivations){
+      .out = {.shape = {B_TT, od1}, .dtype_size = p},
+      .grad_out = {.shape = {B_TT, od1}, .dtype_size = p},
+      .saved_input = {.shape = {B_TT, dw->hidden_dim}, .dtype_size = p},
+      .grad_input = {.shape = {B_TT, dw->hidden_dim}, .dtype_size = p},
+      .wgrad = {.shape = {od1, dw->hidden_dim}, .dtype_size = p},
+      .logstd_scratch = {.shape = {1, dw->output_dim}, .dtype_size = p},
+  };
+  acts->reg(&a->out);
+  acts->reg(&a->saved_input);
+  // grad registration order MUST match param registration order in reg_params
+  acts->reg(&a->grad_out);
+  acts->reg(&a->grad_input);
+  grads->reg(&a->wgrad);
+  if (dw->continuous)
+    grads->reg(&a->logstd_scratch);
+}
+
+static void simple_decoder_reg_rollout(void *w, void *activations,
+                                         Allocator *alloc, int B) {
+  SimpleDecoderWeights *dw = (SimpleDecoderWeights *)w;
+  SimpleDecoderActivations *a = (SimpleDecoderActivations *)activations;
+  int od1 = dw->output_dim + 1;
+  *a = {};
+  a->out = {.shape = {B, od1}, .dtype_size = PRECISION_SIZE};
   alloc->reg(&a->out);
 }
 

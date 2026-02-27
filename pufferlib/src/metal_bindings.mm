@@ -14,6 +14,20 @@
 
 namespace py = pybind11;
 
+// PFSP C functions from binding.c (linked via static env lib).
+// Weak defaults for envs that don't implement PFSP (breakout, g2048, etc.).
+extern "C" {
+    void binding_set_pfsp_weights(StaticVec* vec, int* pool, int* cum_weights, int pool_size)
+        __attribute__((weak));
+    void binding_get_pfsp_stats(StaticVec* vec, float* out_wins, float* out_episodes, int* out_pool_size)
+        __attribute__((weak));
+}
+
+void binding_set_pfsp_weights(StaticVec*, int*, int*, int) {}
+void binding_get_pfsp_stats(StaticVec*, float*, float*, int* out_pool_size) {
+    if (out_pool_size) *out_pool_size = 0;
+}
+
 // ============================================================================
 // Wrapper functions
 // ============================================================================
@@ -268,6 +282,7 @@ std::unique_ptr<PuffeRL> create_pufferl(pybind11::dict kwargs,
     // Model architecture
     hypers.hidden_size = get_config(policy_kwargs, "hidden_size");
     hypers.num_layers = get_config(policy_kwargs, "num_layers");
+    hypers.arch_type = policy_kwargs.contains("arch") ? (int)get_config(policy_kwargs, "arch") : ARCH_RICH;
     // Learning rate
     hypers.lr = get_config(kwargs, "learning_rate");
     hypers.min_lr_ratio = get_config(kwargs, "min_lr_ratio");
@@ -395,5 +410,27 @@ PYBIND11_MODULE(_C, m) {
         .def_readwrite("rollouts", &PuffeRL::rollouts)
         .def("num_params", [](PuffeRL& self) -> int64_t {
             return self.alloc_fp32.params.total_elems;
+        })
+        .def("set_pfsp_weights", [](PuffeRL& self, py::list pool, py::list cum_weights) {
+            int pool_size = (int)py::len(pool);
+            std::vector<int> pool_arr(pool_size);
+            std::vector<int> weights_arr(pool_size);
+            for (int i = 0; i < pool_size; i++) {
+                pool_arr[i] = pool[i].cast<int>();
+                weights_arr[i] = cum_weights[i].cast<int>();
+            }
+            binding_set_pfsp_weights(self.vec, pool_arr.data(), weights_arr.data(), pool_size);
+        })
+        .def("get_pfsp_stats", [](PuffeRL& self) {
+            float wins[32] = {0};
+            float episodes[32] = {0};
+            int pool_size = 0;
+            binding_get_pfsp_stats(self.vec, wins, episodes, &pool_size);
+            py::list wins_list, eps_list;
+            for (int i = 0; i < pool_size; i++) {
+                wins_list.append(wins[i]);
+                eps_list.append(episodes[i]);
+            }
+            return py::make_tuple(wins_list, eps_list);
         });
 }

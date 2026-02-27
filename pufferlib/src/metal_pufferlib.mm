@@ -135,6 +135,8 @@ typedef struct {
     bool profile;
     bool overlap;  // async training overlap: train on separate GPU queue
     bool use_adam;  // use Adam optimizer instead of Muon
+    // Architecture
+    int arch_type;  // 0=ARCH_RICH (3-layer MLP + LN decoder), 1=ARCH_SIMPLE (upstream single-linear)
     // Threading
     int num_threads;
 } HypersT;
@@ -252,6 +254,10 @@ typedef struct {
     double train_sync_ms;
     int epoch;
     uint64_t rng_seed;
+    // Action mask: true if obs embeds a mask in the last act_n columns.
+    // When false, a static all-ones buffer is used instead.
+    bool has_mask = false;
+    PufTensor ones_mask;  // (total_agents * obs_cols) all 1.0f, fallback mask
 } PuffeRL;
 
 // ============================================================================
@@ -353,20 +359,47 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
         dec_puf = p->decoder.forward(infer_weights.decoder, acts.decoder, h, stream);
 
         // GPU sampling: dispatch on same command buffer, before sync.
-        // Action mask lives in obs columns [mask_offset .. mask_offset+39).
+        // Action mask: if env embeds mask in obs, read from last act_n columns.
+        // Otherwise use all-ones fallback with stride=0 (no masking).
         int obs_cols = (int)obs_dst.shape[1];
         int fused_cols = (int)dec_puf.shape[1];
-        int mask_offset = obs_cols - (fused_cols - 1);  // 373 - 39 = 334
-        const float* mask_ptr = (const float*)obs_dst.bytes + mask_offset;
+        const float* mask_ptr;
+        int mask_stride;
+        if (pufferl->has_mask) {
+            int mask_offset = obs_cols - (fused_cols - 1);  // e.g. 373 - 39 = 334
+            mask_ptr = (const float*)obs_dst.bytes + mask_offset;
+            mask_stride = obs_cols;
+        } else {
+            mask_ptr = (const float*)pufferl->ones_mask.bytes;
+            mask_stride = 0;  // all rows read same act_n ones
+        }
 
         act_f32 = mtl_sample_logits_dispatch(
             dec_puf, pufferl->act_sizes_puf,
             (float*)lp_slice.bytes, (float*)val_slice.bytes,
-            mask_ptr, obs_cols,
+            mask_ptr, mask_stride,
             buf_rng_seed, buf_rng_offset, stream);
 
         ensure_gpu_synced(stream);
         puf_set_gpu_training(false);
+    }
+
+    // Zero RNN state for agents that terminated this step.
+    // After sync: terminals (CPU memcpy) and buffer_states (GPU write) are both visible.
+    {
+        PufTensor& st = pufferl->buffer_states[buf];
+        const float* terms = (const float*)term_dst.bytes;
+        int layers = (int)st.shape[0];
+        int H = (int)st.shape[2];
+        int row_bytes = H * (int)st.dtype_size;
+        char* base = (char*)st.bytes;
+        for (int a = 0; a < block_size; a++) {
+            if (terms[a] != 0.0f) {
+                for (int l = 0; l < layers; l++) {
+                    memset(base + ((int64_t)l * block_size + a) * row_bytes, 0, row_bytes);
+                }
+            }
+        }
     }
 
     uint64_t tp2 = mach_absolute_time();
@@ -512,7 +545,6 @@ void train_impl(PuffeRL& pufferl) {
             puf_zero(pufferl.train_buf.mb_state, ts);
             {
                 RolloutBuf sel_src = rollouts;
-                sel_src.values = pufferl.old_values_puf;
                 mtl_select_copy(sel_src, pufferl.train_buf,
                     (const int64_t*)pufferl.prio_bufs.idx.bytes,
                     (const float*)pufferl.advantages_puf.bytes,
@@ -544,7 +576,13 @@ void train_impl(PuffeRL& pufferl) {
             ppo_loss_fwd_bwd(dec_puf_f32, p_logstd, pufferl.train_buf,
                 pufferl.act_sizes_puf, pufferl.losses_puf,
                 hypers.clip_coef, hypers.vf_clip_coef, hypers.vf_coef, hypers.ent_coef,
-                pufferl.ppo_bufs_puf, pufferl.is_continuous, ts);
+                pufferl.ppo_bufs_puf, pufferl.is_continuous,
+                pufferl.has_mask ? nullptr : (const float*)pufferl.ones_mask.bytes,
+                pufferl.has_mask ? 0 : 0,  // stride=0: all rows read same ones
+                ts);
+
+            mtl_scatter_ppo_outputs(pufferl.train_buf, rollouts,
+                (const int64_t*)pufferl.prio_bufs.idx.bytes, ts);
 
             uint64_t tp5 = mach_absolute_time();
 
@@ -632,7 +670,6 @@ void train_impl(PuffeRL& pufferl) {
         puf_zero(pufferl.train_buf.mb_state, train_stream);
         {
             RolloutBuf sel_src = rollouts;
-            sel_src.values = pufferl.old_values_puf;
             mtl_select_copy(sel_src, pufferl.train_buf,
                 (const int64_t*)pufferl.prio_bufs.idx.bytes,
                 (const float*)pufferl.advantages_puf.bytes,
@@ -664,7 +701,13 @@ void train_impl(PuffeRL& pufferl) {
         ppo_loss_fwd_bwd(dec_puf_f32, p_logstd, pufferl.train_buf,
             pufferl.act_sizes_puf, pufferl.losses_puf,
             hypers.clip_coef, hypers.vf_clip_coef, hypers.vf_coef, hypers.ent_coef,
-            pufferl.ppo_bufs_puf, pufferl.is_continuous, train_stream);
+            pufferl.ppo_bufs_puf, pufferl.is_continuous,
+            pufferl.has_mask ? nullptr : (const float*)pufferl.ones_mask.bytes,
+            pufferl.has_mask ? 0 : 0,  // stride=0: all rows read same ones
+            train_stream);
+
+        mtl_scatter_ppo_outputs(pufferl.train_buf, rollouts,
+            (const int64_t*)pufferl.prio_bufs.idx.bytes, train_stream);
 
         uint64_t tp5 = mach_absolute_time();
 
@@ -794,6 +837,26 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     int hidden_size = hypers.hidden_size;
     int num_layers = hypers.num_layers;
 
+    // Auto-detect action masks: if obs_size > act_n, the env likely embeds
+    // a mask in the last act_n columns (e.g. PVP: 373 = 334 features + 39 mask).
+    // When obs_size <= act_n or there's no room, use an all-ones fallback mask.
+    // Action mask: if env_config contains "mask_in_obs" > 0, the env embeds a mask
+    // in the last act_n columns of observations. Otherwise use all-ones (no masking).
+    {
+        DictItem* mask_entry = dict_get_unsafe(env_kwargs, "mask_in_obs");
+        pufferl->has_mask = (mask_entry && mask_entry->value > 0.0f);
+    }
+    if (!pufferl->has_mask) {
+        fprintf(stderr, "[metal] init: no action mask in obs (obs=%d, act_n=%d), using all-ones\n",
+            input_size, act_n);
+    } else {
+        fprintf(stderr, "[metal] init: action mask in obs (obs=%d, act_n=%d)\n",
+            input_size, act_n);
+    }
+
+    fprintf(stderr, "[metal] init: arch=%s\n",
+        hypers.arch_type == ARCH_SIMPLE ? "simple" : "rich");
+
     bool is_continuous = pufferl->is_continuous;
     int decoder_output_size = is_continuous ? num_action_heads : act_n;
 
@@ -811,22 +874,44 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     pufferl->alloc_fp32.esz = esz_fp32;
     Allocator& fp32_params = pufferl->alloc_fp32.params;
 
-    Encoder encoder = {
-        .forward = encoder_forward,
-        .backward = encoder_backward,
-        .init_weights = encoder_init_weights,
-        .reg_params = encoder_reg_params,
-        .reg_train = encoder_reg_train,
-        .reg_rollout = encoder_reg_rollout,
-    };
-    Decoder decoder = {
-        .forward = decoder_forward,
-        .backward = decoder_backward,
-        .init_weights = decoder_init_weights,
-        .reg_params = decoder_reg_params,
-        .reg_train = decoder_reg_train,
-        .reg_rollout = decoder_reg_rollout,
-    };
+    Encoder encoder;
+    Decoder decoder;
+    bool simple_arch = (hypers.arch_type == ARCH_SIMPLE);
+    if (simple_arch) {
+        encoder = {
+            .forward = simple_encoder_forward,
+            .backward = simple_encoder_backward,
+            .init_weights = simple_encoder_init_weights,
+            .reg_params = simple_encoder_reg_params,
+            .reg_train = simple_encoder_reg_train,
+            .reg_rollout = simple_encoder_reg_rollout,
+        };
+        decoder = {
+            .forward = simple_decoder_forward,
+            .backward = simple_decoder_backward,
+            .init_weights = simple_decoder_init_weights,
+            .reg_params = simple_decoder_reg_params,
+            .reg_train = simple_decoder_reg_train,
+            .reg_rollout = simple_decoder_reg_rollout,
+        };
+    } else {
+        encoder = {
+            .forward = encoder_forward,
+            .backward = encoder_backward,
+            .init_weights = encoder_init_weights,
+            .reg_params = encoder_reg_params,
+            .reg_train = encoder_reg_train,
+            .reg_rollout = encoder_reg_rollout,
+        };
+        decoder = {
+            .forward = decoder_forward,
+            .backward = decoder_backward,
+            .init_weights = decoder_init_weights,
+            .reg_params = decoder_reg_params,
+            .reg_train = decoder_reg_train,
+            .reg_rollout = decoder_reg_rollout,
+        };
+    }
     Network network = {
         .forward = mingru_forward,
         .forward_train = mingru_forward_train,
@@ -847,8 +932,13 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     // fp32 master weights
     auto new_weights = [&](int esz) -> PolicyWeights {
         PolicyWeights w;
-        w.encoder = new EncoderWeights{.in_dim = input_size, .mid_dim = 2 * hidden_size, .out_dim = hidden_size};
-        w.decoder = new DecoderWeights{.hidden_dim = hidden_size, .output_dim = decoder_output_size, .continuous = is_continuous};
+        if (simple_arch) {
+            w.encoder = new SimpleEncoderWeights{.in_dim = input_size, .out_dim = hidden_size};
+            w.decoder = new SimpleDecoderWeights{.hidden_dim = hidden_size, .output_dim = decoder_output_size, .continuous = is_continuous};
+        } else {
+            w.encoder = new EncoderWeights{.in_dim = input_size, .mid_dim = 2 * hidden_size, .out_dim = hidden_size};
+            w.decoder = new DecoderWeights{.hidden_dim = hidden_size, .output_dim = decoder_output_size, .continuous = is_continuous};
+        }
         w.network = new MinGRUWeights{.hidden = hidden_size, .num_layers = num_layers, .horizon = hypers.horizon};
         ((MinGRUWeights*)w.network)->weights.resize(num_layers);
         return w;
@@ -928,8 +1018,13 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     // Register train activations/grads with fp16 allocators.
     // reg_train uses PRECISION_SIZE (4) for dtype_size, so we fix them up after.
     PolicyActivations& tb = pufferl->train_activations;
-    tb.encoder = new EncoderActivations{};
-    tb.decoder = new DecoderActivations{};
+    if (simple_arch) {
+        tb.encoder = new SimpleEncoderActivations{};
+        tb.decoder = new SimpleDecoderActivations{};
+    } else {
+        tb.encoder = new EncoderActivations{};
+        tb.decoder = new DecoderActivations{};
+    }
     tb.network = new MinGRUActivations{};
     encoder.reg_train(wfp16.encoder, tb.encoder, &acts, &grads, B_TT);
     decoder.reg_train(wfp16.decoder, tb.decoder, &acts, &grads, B_TT);
@@ -958,7 +1053,8 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     // GELU pre_act and LayerNorm saved_x_hat/saved_rstd need fp32 to prevent
     // gradient precision loss in backward (catastrophic cancellation in LN,
     // precision-sensitive tanh/exp in GELU). Matches MinGRU scan buffer pattern.
-    {
+    // Simple arch has no GELU/LayerNorm — nothing to restore.
+    if (!simple_arch) {
         EncoderActivations *ea = (EncoderActivations *)tb.encoder;
         ea->pre_act1.dtype_size = esz_fp32;
         ea->pre_act2.dtype_size = esz_fp32;
@@ -1060,6 +1156,13 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     // Priority replay buffers
     register_prio_buffers(pufferl->prio_bufs, alloc, hypers.total_agents, minibatch_segments);
 
+    // All-ones mask fallback for envs without embedded action masks.
+    // With mask_stride=0, all rows read the same act_n floats, so we only need act_n elements.
+    if (!pufferl->has_mask) {
+        pufferl->ones_mask = {.shape = {act_n}, .dtype_size = (int)sizeof(float)};
+        alloc.reg(&pufferl->ones_mask);
+    }
+
     // Optimizer init (register buffers with shared allocator)
     muon_init(pufferl->muon, &fp32_params,
         pufferl->param_fp32_puf, lr, beta1, eps, 0.0, alloc);
@@ -1077,6 +1180,12 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     memset(pufferl->rng_offset_puf.bytes, 0, (num_buffers + 1) * sizeof(int64_t));
     memcpy(pufferl->act_sizes_puf.bytes, raw_act_sizes, num_action_heads * sizeof(int32_t));
     memset(pufferl->losses_puf.bytes, 0, NUM_LOSSES * sizeof(float));
+
+    // Fill all-ones mask (after alloc.create + mtl_wrap)
+    if (!pufferl->has_mask) {
+        float* ones = (float*)pufferl->ones_mask.bytes;
+        for (int i = 0; i < act_n; i++) ones[i] = 1.0f;
+    }
 
     // post_create_ppo_buffers: write 1.0f to grad_loss (unified memory)
     *(float*)pufferl->ppo_bufs_puf.grad_loss.bytes = 1.0f;
@@ -1099,8 +1208,13 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     for (int i = 0; i < num_buffers; i++) {
         PolicyActivations& rbuf = pufferl->buffer_activations[i];
         Allocator& ralloc = pufferl->buffer_allocs[i];
-        rbuf.encoder = new EncoderActivations{};
-        rbuf.decoder = new DecoderActivations{};
+        if (simple_arch) {
+            rbuf.encoder = new SimpleEncoderActivations{};
+            rbuf.decoder = new SimpleDecoderActivations{};
+        } else {
+            rbuf.encoder = new EncoderActivations{};
+            rbuf.decoder = new DecoderActivations{};
+        }
         rbuf.network = new MinGRUActivations{};
         // Rollout uses fp32 — register with fp32 weights (dimensions only, dtype from PRECISION_SIZE)
         encoder.reg_rollout(pufferl->weights_fp32.encoder, rbuf.encoder, &ralloc, inf_batch);
@@ -1134,20 +1248,36 @@ void close_impl(PuffeRL& pufferl) {
 
     delete pufferl.muon;
 
-    auto delete_weights = [](PolicyWeights& w) {
-        delete (EncoderWeights*)w.encoder;
-        delete (DecoderWeights*)w.decoder;
+    bool simple = (pufferl.hypers.arch_type == ARCH_SIMPLE);
+    auto delete_weights = [simple](PolicyWeights& w) {
+        if (simple) {
+            delete (SimpleEncoderWeights*)w.encoder;
+            delete (SimpleDecoderWeights*)w.decoder;
+        } else {
+            delete (EncoderWeights*)w.encoder;
+            delete (DecoderWeights*)w.decoder;
+        }
         delete (MinGRUWeights*)w.network;
     };
-    delete (EncoderActivations*)pufferl.train_activations.encoder;
-    delete (DecoderActivations*)pufferl.train_activations.decoder;
+    if (simple) {
+        delete (SimpleEncoderActivations*)pufferl.train_activations.encoder;
+        delete (SimpleDecoderActivations*)pufferl.train_activations.decoder;
+    } else {
+        delete (EncoderActivations*)pufferl.train_activations.encoder;
+        delete (DecoderActivations*)pufferl.train_activations.decoder;
+    }
     delete (MinGRUActivations*)pufferl.train_activations.network;
     delete_weights(pufferl.weights_fp32);
     delete_weights(pufferl.weights_bf16);  // separate fp16 weights
     delete_weights(pufferl.weights_infer);
     for (auto& rbuf : pufferl.buffer_activations) {
-        delete (EncoderActivations*)rbuf.encoder;
-        delete (DecoderActivations*)rbuf.decoder;
+        if (simple) {
+            delete (SimpleEncoderActivations*)rbuf.encoder;
+            delete (SimpleDecoderActivations*)rbuf.decoder;
+        } else {
+            delete (EncoderActivations*)rbuf.encoder;
+            delete (DecoderActivations*)rbuf.decoder;
+        }
         delete (MinGRUActivations*)rbuf.network;
     }
     delete pufferl.policy;

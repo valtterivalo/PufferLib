@@ -50,7 +50,7 @@ from pufferlib.pufferl import downsample
 # sweep configuration
 # ---------------------------------------------------------------------------
 
-SWEEP_DIR = Path("runs/sweep_protein")
+SWEEP_DIR_BASE = Path("runs/sweep_protein")
 DOWNSAMPLE_POINTS = 5
 
 # how often to poll stdout log for training progress (seconds)
@@ -58,17 +58,19 @@ POLL_INTERVAL = 10
 
 # opponent type name -> enum value (from osrs_pvp_types.h OpponentType)
 OPPONENT_TYPES = {
-    "true_random": 1,
-    "panicking": 2,
-    "weak_random": 3,
-    "semi_random": 4,
-    "sticky_prayer": 5,
-    "random_eater": 6,
-    "prayer_rookie": 7,
-    "improved": 8,
-    "novice_nh": 17,
+    "true_random": 1, "panicking": 2, "weak_random": 3, "semi_random": 4,
+    "sticky_prayer": 5, "random_eater": 6, "prayer_rookie": 7, "improved": 8,
+    "mixed_easy": 9, "mixed_medium": 10, "onetick": 11,
+    "unpredictable_improved": 12, "unpredictable_onetick": 13,
+    "mixed_hard": 14, "mixed_hard_balanced": 15,
+    "novice_nh": 17, "apprentice_nh": 18, "competent_nh": 19,
+    "intermediate_nh": 20, "advanced_nh": 21, "proficient_nh": 22,
+    "expert_nh": 23, "master_nh": 24, "savant_nh": 25,
+    "nightmare_nh": 26, "veng_fighter": 27, "blood_healer": 28,
+    "gmaul_combo": 29,
 }
 DEFAULT_OPPONENT = "true_random"
+DEFAULT_PFSP_POOL = ",".join(OPPONENT_TYPES.keys())
 
 # regex to parse train_pvp.py stdout metrics
 # format: [step=     32,768 | SPS= 271,000 | ret=  0.12 wins=0.56 len=142 | ent=1.234 pg=0.0012 vf=0.3456]
@@ -118,89 +120,95 @@ SWEEP_CONFIG = {
     "max_suggestion_cost": 3600,  # 1 hour max wall-clock per trial
     "early_stop_quantile": 0.3,
 
-    # searchable hyperparameters
+    # searchable hyperparameters — wide ranges for maximum information extraction
     "train": {
         "total_timesteps": {
             "distribution": "log_normal",
-            "min": 5_000_000,
-            "max": 200_000_000,
+            "min": 2_000_000,
+            "max": 500_000_000,
             "scale": "time",
         },
         "horizon": {
             "distribution": "uniform_pow2",
-            "min": 16,
-            "max": 128,
+            "min": 8,
+            "max": 512,
             "scale": "auto",
         },
         "learning_rate": {
             "distribution": "log_normal",
-            "min": 0.0001,
-            "max": 0.03,
+            "min": 0.00003,
+            "max": 0.01,
             "scale": 0.5,
         },
         "ent_coef": {
             "distribution": "log_normal",
-            "min": 0.0005,
-            "max": 0.05,
+            "min": 0.0001,
+            "max": 0.1,
             "scale": "auto",
         },
         "gamma": {
             "distribution": "logit_normal",
-            "min": 0.98,
-            "max": 0.999,
+            "min": 0.95,
+            "max": 0.9999,
             "scale": "auto",
         },
         "gae_lambda": {
             "distribution": "logit_normal",
-            "min": 0.8,
-            "max": 0.99,
+            "min": 0.5,
+            "max": 0.999,
             "scale": "auto",
         },
         "prio_alpha": {
             "distribution": "logit_normal",
-            "min": 0.01,
-            "max": 0.95,
+            "min": 0.001,
+            "max": 0.999,
             "scale": "auto",
         },
         "prio_beta0": {
             "distribution": "logit_normal",
-            "min": 0.1,
-            "max": 0.95,
+            "min": 0.001,
+            "max": 0.999,
             "scale": "auto",
         },
         "clip_coef": {
             "distribution": "uniform",
-            "min": 0.1,
-            "max": 0.5,
+            "min": 0.05,
+            "max": 0.8,
             "scale": "auto",
         },
         "vf_coef": {
-            "distribution": "uniform",
-            "min": 0.5,
-            "max": 5.0,
+            "distribution": "log_normal",
+            "min": 0.1,
+            "max": 10.0,
             "scale": "auto",
         },
         "vf_clip_coef": {
             "distribution": "uniform",
-            "min": 0.1,
-            "max": 1.5,
+            "min": 0.05,
+            "max": 2.0,
             "scale": "auto",
         },
         "max_grad_norm": {
-            "distribution": "uniform",
-            "min": 0.3,
-            "max": 4.0,
+            "distribution": "log_normal",
+            "min": 0.1,
+            "max": 10.0,
             "scale": "auto",
         },
         "replay_ratio": {
-            "distribution": "uniform",
-            "min": 0.1,
-            "max": 2.0,
+            "distribution": "log_normal",
+            "min": 0.05,
+            "max": 4.0,
             "scale": "auto",
         },
         "minibatch_size": {
             "distribution": "uniform_pow2",
-            "min": 1024,
+            "min": 512,
+            "max": 32768,
+            "scale": "auto",
+        },
+        "total_agents": {
+            "distribution": "uniform_pow2",
+            "min": 512,
             "max": 16384,
             "scale": "auto",
         },
@@ -209,13 +217,13 @@ SWEEP_CONFIG = {
         "hidden_size": {
             "distribution": "uniform_pow2",
             "min": 128,
-            "max": 1024,
+            "max": 512,
             "scale": "auto",
         },
         "num_layers": {
             "distribution": "uniform",
             "min": 1,
-            "max": 5,
+            "max": 4,
             "scale": "auto",
         },
     },
@@ -236,7 +244,7 @@ DEFAULT_PARAMS = {
     "train": {
         "total_timesteps": 50_000_000,
         "horizon": 32,
-        "learning_rate": 0.00112,
+        "learning_rate": 0.0003,
         "ent_coef": 0.0016,
         "gamma": 0.991,
         "gae_lambda": 0.845,
@@ -248,10 +256,11 @@ DEFAULT_PARAMS = {
         "max_grad_norm": 0.5,
         "replay_ratio": 0.25,
         "minibatch_size": 4096,
+        "total_agents": 2048,
     },
     "policy": {
         "hidden_size": 512,
-        "num_layers": 3,
+        "num_layers": 1,
     },
     "optim": {
         "optimizer_idx": 0.0,  # muon for anchor trial
@@ -288,13 +297,14 @@ CLI_MAP = {
     "train/max_grad_norm": "max-grad-norm",
     "train/replay_ratio": "replay-ratio",
     "train/minibatch_size": "minibatch-size",
+    "train/total_agents": "total-agents",
     "policy/hidden_size": "hidden-size",
     "policy/num_layers": "num-layers",
 }
 
 # params passed as integers (everything else is float)
 INTEGER_PARAMS = {
-    "total_timesteps", "horizon", "minibatch_size",
+    "total_timesteps", "horizon", "minibatch_size", "total_agents",
     "hidden_size", "num_layers",
 }
 
@@ -341,16 +351,53 @@ def load_observations(path: Path) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# cross-parameter constraints: reject degenerate combos without restricting
+# individual ranges. called after Protein.suggest(), mutates params in place.
+# ---------------------------------------------------------------------------
+
+def clamp_params(params: dict) -> None:
+    """Enforce cross-parameter constraints to avoid degenerate combinations."""
+    train = params.get("train", {})
+    policy = params.get("policy", {})
+
+    hidden = int(policy.get("hidden_size", 512))
+    layers = int(policy.get("num_layers", 1))
+    total_agents = int(train.get("total_agents", 2048))
+    horizon = int(train.get("horizon", 32))
+    minibatch = int(train.get("minibatch_size", 4096))
+
+    batch_size = total_agents * horizon
+
+    # big model + small batch = painfully slow, cap agents down
+    # rough param count ~ hidden^2 * layers * 4
+    model_cost = hidden * hidden * layers
+    if model_cost > 512 * 512 * 2 and total_agents > 4096:
+        train["total_agents"] = 4096
+
+    # minibatch can't exceed batch size
+    if minibatch > batch_size:
+        train["minibatch_size"] = batch_size
+
+    # very high replay_ratio with small batch = way too many minibatches
+    replay = train.get("replay_ratio", 0.25)
+    max_minibatches = 32
+    effective_mb = int(replay * batch_size / max(minibatch, 1))
+    if effective_mb > max_minibatches:
+        train["replay_ratio"] = max_minibatches * minibatch / max(batch_size, 1)
+
+
+# ---------------------------------------------------------------------------
 # trial execution
 # ---------------------------------------------------------------------------
 
-def build_command(params: dict, opponent_type: int) -> list[str]:
+def build_command(params: dict, opponent_type: int, pfsp_pool: str | None = None) -> list[str]:
     """Build the train_pvp.py CLI command for a trial.
 
     Args:
         params: nested dict from Protein.suggest() with searchable params.
             optimizer_idx is decoded to --optimizer muon/adam.
         opponent_type: integer opponent type enum value from osrs_pvp_types.h.
+        pfsp_pool: comma-separated pool names, or None for single-opponent mode.
     """
     optimizer = decode_optimizer(params)
     cmd = [
@@ -359,8 +406,14 @@ def build_command(params: dict, opponent_type: int) -> list[str]:
         f"--optimizer={optimizer}",
         "--save-interval=0",  # no checkpointing during sweep
         "--log-interval=5",   # frequent logging for better curves
-        f"--opponent-type={opponent_type}",
+        "--num-threads=4",
+        "--num-buffers=2",
     ]
+
+    if pfsp_pool is not None:
+        cmd.append(f"--pfsp={pfsp_pool}")
+    else:
+        cmd.append(f"--opponent-type={opponent_type}")
 
     flat_params = dict(pufferlib.unroll_nested_dict(params))
     for key, value in flat_params.items():
@@ -381,13 +434,15 @@ def run_trial(
     params: dict,
     protein: Protein,
     opponent_type: int,
+    sweep_dir: Path = SWEEP_DIR_BASE,
+    pfsp_pool: str | None = None,
 ) -> dict | None:
     """Run a single training trial and observe results.
 
     Returns a summary dict on success, None on failure.
     """
     optimizer = decode_optimizer(params)
-    cmd = build_command(params, opponent_type)
+    cmd = build_command(params, opponent_type, pfsp_pool=pfsp_pool)
 
     flat = dict(pufferlib.unroll_nested_dict(params))
     total_steps = int(flat.get("train/total_timesteps", 0))
@@ -400,7 +455,7 @@ def run_trial(
         print(f"  {short_key:20s} = {fmt}")
     print(f"{'='*70}")
 
-    log_dir = SWEEP_DIR / f"trial_{trial_idx}"
+    log_dir = sweep_dir / f"trial_{trial_idx}"
     log_dir.mkdir(parents=True, exist_ok=True)
 
     # save trial config for reference
@@ -633,11 +688,15 @@ def run_sweep(
     max_trials: int | None,
     timeout_h: float,
     opponent_name: str,
+    pfsp_pool: str | None = None,
 ) -> None:
     """Run the Protein sweep."""
-    opponent_type = OPPONENT_TYPES[opponent_name]
-    SWEEP_DIR.mkdir(parents=True, exist_ok=True)
-    obs_path = SWEEP_DIR / "observations.jsonl"
+    opponent_type = OPPONENT_TYPES.get(opponent_name, 0) if not pfsp_pool else 0
+    pool_count = len(pfsp_pool.split(",")) if pfsp_pool else 0
+    sweep_label = f"pfsp_{pool_count}" if pfsp_pool else opponent_name
+    sweep_dir = SWEEP_DIR_BASE / sweep_label
+    sweep_dir.mkdir(parents=True, exist_ok=True)
+    obs_path = sweep_dir / "observations.jsonl"
 
     protein = Protein(
         SWEEP_CONFIG,
@@ -667,7 +726,10 @@ def run_sweep(
     print(f"  optimizer: searchable (muon vs adam via optimizer_idx)")
     print(f"  metric: win_rate (percentile/logit transform)")
     print(f"  {n_params} searchable hyperparameters (incl. optimizer)")
-    print(f"  opponent: {opponent_name} ({opponent_type})")
+    if pfsp_pool:
+        print(f"  opponent: PFSP pool={pfsp_pool}")
+    else:
+        print(f"  opponent: {opponent_name} ({opponent_type})")
     print(f"  downsample: {DOWNSAMPLE_POINTS} points per training curve")
     print(f"  timeout: {timeout_h:.1f}h")
     print(f"  max trials: {max_trials or 'unlimited'}")
@@ -689,6 +751,7 @@ def run_sweep(
         else:
             fill = deepcopy(DEFAULT_PARAMS)
             params, info = protein.suggest(fill)
+            clamp_params(params)
             if info:
                 pred_cost = info.get("cost", 0)
                 pred_score = info.get("score", 0)
@@ -696,7 +759,7 @@ def run_sweep(
                 print(f"\nprotein prediction: score={pred_score:.3f} (wr~{pred_wr:.3f}), cost={pred_cost:.0f}s")
 
         optimizer = decode_optimizer(params)
-        result = run_trial(trial_idx, params, protein, opponent_type)
+        result = run_trial(trial_idx, params, protein, opponent_type, sweep_dir, pfsp_pool=pfsp_pool)
 
         if result is not None:
             for obs in result["observations"]:
@@ -741,18 +804,27 @@ def main() -> None:
     parser.add_argument("--opponent", type=str, default=DEFAULT_OPPONENT,
                         choices=list(OPPONENT_TYPES.keys()),
                         help=f"opponent type (default: {DEFAULT_OPPONENT})")
+    parser.add_argument("--pfsp-pool", type=str, default=DEFAULT_PFSP_POOL,
+                        help=f"PFSP opponent pool (default: {DEFAULT_PFSP_POOL}). "
+                             "pass 'none' to disable and use --opponent instead.")
     parser.add_argument("--results", action="store_true",
                         help="print results and exit")
     args = parser.parse_args()
 
+    pfsp_pool = args.pfsp_pool if args.pfsp_pool.lower() != "none" else None
+
     if args.results:
-        print_results(SWEEP_DIR / "observations.jsonl")
+        label = args.opponent
+        if pfsp_pool:
+            label = f"pfsp_{len(pfsp_pool.split(','))}"
+        print_results(SWEEP_DIR_BASE / label / "observations.jsonl")
         return
 
     run_sweep(
         max_trials=args.max_trials,
         timeout_h=args.timeout,
         opponent_name=args.opponent,
+        pfsp_pool=pfsp_pool,
     )
 
 

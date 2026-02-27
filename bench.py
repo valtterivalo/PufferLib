@@ -1,0 +1,176 @@
+"""Metal training for simple envs (breakout, g2048, etc).
+
+Requires building the env first: python setup.py build_<env> --force
+
+Usage:
+    python bench.py --env breakout --total-timesteps 5000000
+    python bench.py --env g2048 --total-timesteps 10000000
+"""
+
+import argparse
+import time
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+from pufferlib import _C
+
+# Default env configs (kwargs passed to my_init via Dict)
+ENV_DEFAULTS = {
+    "breakout": {
+        "frameskip": 4.0,
+        "width": 576.0,
+        "height": 330.0,
+        "paddle_width": 62.0,
+        "paddle_height": 8.0,
+        "ball_width": 32.0,
+        "ball_height": 32.0,
+        "brick_width": 32.0,
+        "brick_height": 12.0,
+        "brick_rows": 6.0,
+        "brick_cols": 18.0,
+        "initial_ball_speed": 256.0,
+        "max_ball_speed": 448.0,
+        "paddle_speed": 620.0,
+        "continuous": 0.0,
+    },
+    "g2048": {
+        "scaffolding_ratio": 0.0,
+    },
+}
+
+
+def parse_args():
+    p = argparse.ArgumentParser(description="Metal training for simple envs")
+    p.add_argument("--env", type=str, required=True, choices=list(ENV_DEFAULTS.keys()))
+    p.add_argument("--total-agents", type=int, default=2048)
+    p.add_argument("--hidden-size", type=int, default=128)
+    p.add_argument("--num-layers", type=int, default=1)
+    p.add_argument("--horizon", type=int, default=32)
+    p.add_argument("--total-timesteps", type=int, default=5_000_000)
+    p.add_argument("--learning-rate", type=float, default=0.001)
+    p.add_argument("--minibatch-size", type=int, default=4096)
+    p.add_argument("--replay-ratio", type=float, default=0.25)
+    p.add_argument("--ent-coef", type=float, default=0.01)
+    p.add_argument("--gamma", type=float, default=0.99)
+    p.add_argument("--gae-lambda", type=float, default=0.95)
+    p.add_argument("--prio-alpha", type=float, default=0.0)
+    p.add_argument("--prio-beta0", type=float, default=0.4)
+    p.add_argument("--clip-coef", type=float, default=0.2)
+    p.add_argument("--vf-coef", type=float, default=0.5)
+    p.add_argument("--vf-clip-coef", type=float, default=0.1)
+    p.add_argument("--max-grad-norm", type=float, default=0.5)
+    p.add_argument("--no-overlap", action="store_true")
+    p.add_argument("--optimizer", choices=["muon", "adam"], default="muon")
+    p.add_argument("--log-interval", type=int, default=10)
+    p.add_argument("--num-buffers", type=int, default=1)
+    p.add_argument("--num-threads", type=int, default=1)
+    p.add_argument("--arch", choices=["simple", "rich"], default="simple",
+                   help="model arch: simple (upstream single-linear) or rich (3-layer MLP + LN decoder)")
+    return p.parse_args()
+
+
+def main():
+    args = parse_args()
+
+    config = {
+        "horizon": args.horizon,
+        "learning_rate": args.learning_rate,
+        "min_lr_ratio": 0.1,
+        "anneal_lr": 1.0,
+        "beta1": 0.95,
+        "beta2": 0.999,
+        "eps": 1e-12,
+        "minibatch_size": args.minibatch_size,
+        "replay_ratio": args.replay_ratio,
+        "total_timesteps": args.total_timesteps,
+        "max_grad_norm": args.max_grad_norm,
+        "clip_coef": args.clip_coef,
+        "vf_clip_coef": args.vf_clip_coef,
+        "vf_coef": args.vf_coef,
+        "ent_coef": args.ent_coef,
+        "gamma": args.gamma,
+        "gae_lambda": args.gae_lambda,
+        "vtrace_rho_clip": 1.0,
+        "vtrace_c_clip": 1.0,
+        "prio_alpha": args.prio_alpha,
+        "prio_beta0": args.prio_beta0,
+        "use_rnn": 1.0,
+        "cudagraphs": -1.0,
+        "kernels": 1.0,
+        "profile": 0.0,
+        "overlap": 0.0 if args.no_overlap else 1.0,
+        "use_adam": 1.0 if args.optimizer == "adam" else 0.0,
+        "env_name": args.env,
+    }
+    vec_config = {
+        "total_agents": float(args.total_agents),
+        "num_buffers": float(args.num_buffers),
+        "num_threads": float(args.num_threads),
+    }
+    policy_config = {
+        "hidden_size": float(args.hidden_size),
+        "num_layers": float(args.num_layers),
+        "arch": 1.0 if args.arch == "simple" else 0.0,
+    }
+    env_config = ENV_DEFAULTS[args.env]
+
+    print(f"env={args.env}, agents={args.total_agents}, hidden={args.hidden_size}, "
+          f"layers={args.num_layers}, horizon={args.horizon}, overlap={not args.no_overlap}, "
+          f"arch={args.arch}")
+
+    pufferl = _C.create_pufferl(config, vec_config, env_config, policy_config)
+    print(f"model params: {pufferl.num_params():,}")
+
+    # warmup
+    print("warming up...")
+    _C.rollouts(pufferl)
+    _C.train(pufferl)
+    _C.log_losses(pufferl)
+
+    steps_per_iter = args.total_agents * args.horizon
+    total_iters = args.total_timesteps // steps_per_iter
+    global_step = 0
+    log_interval = args.log_interval
+    t_start = time.time()
+    t_last_log = t_start
+
+    print(f"training: {total_iters:,} iters, {args.total_timesteps:,} steps")
+
+    for iteration in range(1, total_iters + 1):
+        _C.rollouts(pufferl)
+        _C.train(pufferl)
+        global_step += steps_per_iter
+
+        if iteration % log_interval == 0:
+            now = time.time()
+            elapsed = now - t_last_log
+            sps = (log_interval * steps_per_iter) / elapsed
+            t_last_log = now
+
+            losses = _C.log_losses(pufferl)
+            env_stats = _C.log_environments(pufferl)
+
+            ent = losses.get("entropy", 0)
+            pg = losses.get("pg_loss", 0)
+            vf = losses.get("vf_loss", 0)
+            ep_ret = env_stats.get("episode_return", 0)
+            ep_len = env_stats.get("episode_length", 0)
+            score = env_stats.get("score", ep_ret)
+            # parseable format matching sweep_bench.py METRIC_PATTERN
+            print(f"[step={global_step:>10,} | SPS={sps:>10,.0f} | "
+                  f"ret={ep_ret:>8.2f} score={score:>8.2f} len={ep_len:>6.0f} | "
+                  f"ent={ent:.3f} pg={pg:.4f} vf={vf:.4f}]")
+
+    total_time = time.time() - t_start
+    avg_sps = global_step / total_time
+    print(f"\ndone. {global_step:,} steps in {total_time:.1f}s")
+    print(f"avg SPS: {avg_sps:,.0f}")
+
+    profile = _C.log_profile(pufferl)
+    for k, v in sorted(profile.items()):
+        print(f"  {k}: {v:.3f}")
+
+
+if __name__ == "__main__":
+    main()

@@ -2,6 +2,7 @@
 
 Designed for fair comparison against PufferLib 4.0 C++ training.
 Both backends use the same C env, same Muon optimizer, same model arch.
+Supports PFSP (prioritized fictitious self-play) via --pfsp flag.
 """
 
 import argparse
@@ -22,8 +23,20 @@ for env_path in [Path(__file__).parent / ".env", Path.home() / "Projects/storm/s
 sys.path.insert(0, str(Path(__file__).parent))
 from pufferlib import _C
 
-# OPP_MASTER_NH = 24 (from osrs_pvp_types.h enum)
-OPP_MASTER_NH = 24
+# opponent name -> enum value (from osrs_pvp_types.h OpponentType)
+OPPONENT_TYPES = {
+    "true_random": 1, "panicking": 2, "weak_random": 3, "semi_random": 4,
+    "sticky_prayer": 5, "random_eater": 6, "prayer_rookie": 7, "improved": 8,
+    "mixed_easy": 9, "mixed_medium": 10, "onetick": 11,
+    "unpredictable_improved": 12, "unpredictable_onetick": 13,
+    "mixed_hard": 14, "mixed_hard_balanced": 15,
+    "novice_nh": 17, "apprentice_nh": 18, "competent_nh": 19,
+    "intermediate_nh": 20, "advanced_nh": 21, "proficient_nh": 22,
+    "expert_nh": 23, "master_nh": 24, "savant_nh": 25,
+    "nightmare_nh": 26, "veng_fighter": 27, "blood_healer": 28,
+    "gmaul_combo": 29,
+}
+OPP_PFSP = 16
 
 
 def parse_args():
@@ -45,7 +58,7 @@ def parse_args():
     p.add_argument("--vf-coef", type=float, default=2.5)
     p.add_argument("--vf-clip-coef", type=float, default=0.1)
     p.add_argument("--max-grad-norm", type=float, default=0.5)
-    p.add_argument("--opponent-type", type=int, default=OPP_MASTER_NH)
+    p.add_argument("--opponent-type", type=int, default=OPPONENT_TYPES["master_nh"])
     p.add_argument("--wandb-project", type=str, default="osrs-pvp-rl")
     p.add_argument("--experiment-name", type=str, default="metal-pvp-master-nh")
     p.add_argument("--log-interval", type=int, default=10, help="log every N iterations")
@@ -53,15 +66,39 @@ def parse_args():
     p.add_argument("--save-dir", type=str, default="checkpoints")
     p.add_argument("--num-buffers", type=int, default=1)
     p.add_argument("--num-threads", type=int, default=1)
-    p.add_argument("--overlap", action="store_true", help="async training overlap (train on separate GPU queue)")
+    p.add_argument("--no-overlap", action="store_true", help="disable async training overlap")
     p.add_argument("--optimizer", choices=["muon", "adam"], default="muon")
     p.add_argument("--no-wandb", action="store_true")
     p.add_argument("--shaping", action="store_true", help="enable reward shaping")
+    p.add_argument("--arch", choices=["simple", "rich"], default="rich",
+                   help="model arch: simple (upstream single-linear) or rich (3-layer MLP + LN decoder)")
+    # PFSP args
+    p.add_argument("--pfsp", type=str, default=None,
+                   help="comma-separated opponent pool names for PFSP (e.g. improved,onetick,master_nh)")
+    p.add_argument("--pfsp-p", type=float, default=1.5,
+                   help="PFSP weight exponent: (1-winrate)^p")
+    p.add_argument("--pfsp-update-interval", type=int, default=2_000_000,
+                   help="steps between PFSP weight recomputation")
+    p.add_argument("--pfsp-weight-floor", type=float, default=0.02,
+                   help="minimum sampling probability per opponent")
+    p.add_argument("--pfsp-warmup-episodes", type=int, default=50,
+                   help="min cumulative episodes per opponent before reweighting")
     return p.parse_args()
 
 
 def main():
     args = parse_args()
+
+    # PFSP: parse pool names and override opponent_type
+    pfsp_enabled = args.pfsp is not None
+    pfsp_pool_names: list[str] = []
+    pfsp_pool_types: list[int] = []
+    if pfsp_enabled:
+        pfsp_pool_names = [n.strip() for n in args.pfsp.split(",")]
+        for name in pfsp_pool_names:
+            assert name in OPPONENT_TYPES, f"unknown opponent: {name}"
+        pfsp_pool_types = [OPPONENT_TYPES[n] for n in pfsp_pool_names]
+        args.opponent_type = OPP_PFSP
 
     # Hyperparams matching osrs_pvp.ini production config
     config = {
@@ -90,7 +127,7 @@ def main():
         "cudagraphs": -1.0,
         "kernels": 1.0,
         "profile": 0.0,
-        "overlap": 1.0 if args.overlap else 0.0,
+        "overlap": 0.0 if args.no_overlap else 1.0,
         "use_adam": 1.0 if args.optimizer == "adam" else 0.0,
         "env_name": "osrs_pvp",
     }
@@ -102,14 +139,17 @@ def main():
     policy_config = {
         "hidden_size": float(args.hidden_size),
         "num_layers": float(args.num_layers),
+        "arch": 1.0 if args.arch == "simple" else 0.0,
     }
     env_config = {
         "opponent_type": float(args.opponent_type),
         "shaping_scale": 1.0 if args.shaping else 0.0,
         "shaping_enabled": 1.0 if args.shaping else 0.0,
+        "mask_in_obs": 1.0,  # PVP embeds action mask in last 39 obs columns
     }
 
     # wandb
+    opponent_label = f"pfsp({args.pfsp})" if pfsp_enabled else f"opp_{args.opponent_type}"
     wandb_run = None
     if not args.no_wandb:
         import wandb
@@ -127,7 +167,9 @@ def main():
                 "learning_rate": args.learning_rate,
                 "minibatch_size": args.minibatch_size,
                 "opponent_type": args.opponent_type,
-                "opponent_name": "master_nh",
+                "opponent_name": opponent_label,
+                "pfsp_pool": args.pfsp,
+                "pfsp_p": args.pfsp_p,
                 **{k: v for k, v in config.items() if k not in ("env_name",)},
             },
         )
@@ -137,6 +179,16 @@ def main():
           f"layers={args.num_layers}, horizon={args.horizon}")
     pufferl = _C.create_pufferl(config, vec_config, env_config, policy_config)
     print(f"model params: {pufferl.num_params():,}")
+
+    # PFSP init: push pool types + uniform cumulative weights
+    pfsp_pool_size = len(pfsp_pool_types)
+    pfsp_cumulative_episodes: list[float] = [0.0] * pfsp_pool_size
+    pfsp_last_update_step = 0
+    if pfsp_enabled:
+        cum_weights = [int((i + 1) / pfsp_pool_size * 1000) for i in range(pfsp_pool_size)]
+        cum_weights[-1] = 1000  # clamp last to exactly 1000
+        pufferl.set_pfsp_weights(pfsp_pool_types, cum_weights)
+        print(f"PFSP enabled: pool={pfsp_pool_names}, initial weights=uniform")
 
     # Save dir
     save_dir = Path(args.save_dir) / (wandb_run.name if wandb_run else args.experiment_name)
@@ -194,6 +246,49 @@ def main():
             print(f"[step={global_step:>10,} | SPS={sps:>8,.0f} | "
                   f"ret={ep_ret:>6.2f} wins={wins:.2f} len={ep_len:.0f} | "
                   f"ent={ent:.3f} pg={pg:.4f} vf={vf:.4f}]")
+
+        # PFSP weight recomputation
+        if pfsp_enabled and (global_step - pfsp_last_update_step) >= args.pfsp_update_interval:
+            wins_delta, episodes_delta = pufferl.get_pfsp_stats()
+            pfsp_logs: dict[str, float] = {}
+            total_eps = 0.0
+            for i in range(pfsp_pool_size):
+                pfsp_cumulative_episodes[i] += episodes_delta[i]
+                total_eps += episodes_delta[i]
+                wr = wins_delta[i] / max(episodes_delta[i], 1)
+                pfsp_logs[f"pfsp/{pfsp_pool_names[i]}_win_rate"] = wr
+                pfsp_logs[f"pfsp/{pfsp_pool_names[i]}_episodes"] = episodes_delta[i]
+
+            min_cumulative = min(pfsp_cumulative_episodes)
+            if min_cumulative < args.pfsp_warmup_episodes:
+                wr_strs = []
+                for i in range(pfsp_pool_size):
+                    wr = wins_delta[i] / max(episodes_delta[i], 1)
+                    ep = int(pfsp_cumulative_episodes[i])
+                    wr_strs.append(f"{pfsp_pool_names[i]}:{wr:.0%}({ep}ep)")
+                print(f"[pfsp step={global_step}] warmup (min_ep={int(min_cumulative)}/{args.pfsp_warmup_episodes}) {' | '.join(wr_strs)}")
+            else:
+                raw_weights = []
+                for i in range(pfsp_pool_size):
+                    wr = wins_delta[i] / max(episodes_delta[i], 1)
+                    raw_weights.append(max((1.0 - wr) ** args.pfsp_p, args.pfsp_weight_floor))
+                total_w = sum(raw_weights)
+                cum_weights = []
+                for i in range(pfsp_pool_size):
+                    cum_weights.append(int(sum(raw_weights[:i + 1]) / total_w * 1000))
+                cum_weights[-1] = 1000
+                pufferl.set_pfsp_weights(pfsp_pool_types, cum_weights)
+
+                wr_strs = []
+                for i in range(pfsp_pool_size):
+                    wr = wins_delta[i] / max(episodes_delta[i], 1)
+                    ep = int(pfsp_cumulative_episodes[i])
+                    wr_strs.append(f"{pfsp_pool_names[i]}={wr:.2f}")
+                print(f"[pfsp step={global_step}] {' '.join(wr_strs)} ({int(total_eps)} eps since last update)")
+
+            if wandb_run:
+                wandb_run.log(pfsp_logs, step=global_step)
+            pfsp_last_update_step = global_step
 
         if args.save_interval > 0 and iteration % args.save_interval == 0:
             path = str(save_dir / f"weights_{global_step}.bin")

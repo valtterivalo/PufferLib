@@ -802,6 +802,8 @@ kernel void ppo_loss_fwd_bwd_kernel(
     const device int* act_sizes             [[buffer(15)]],
     constant PPOFusedParams& pp             [[buffer(16)]],
     const device float* action_mask         [[buffer(17)]],
+    device float* out_ratio                 [[buffer(18)]],
+    device float* out_newvalue              [[buffer(19)]],
     uint idx [[thread_position_in_grid]],
     uint tid [[thread_index_in_threadgroup]],
     uint block_id [[threadgroup_position_in_grid]]
@@ -831,6 +833,7 @@ kernel void ppo_loss_fwd_bwd_kernel(
         float val = values[nt];
         float ret = returns_buf[nt];
         float val_pred = values_pred[values_idx];
+        out_newvalue[nt] = val_pred;
 
         float adv_std = sqrt(adv_var[0]);
         float adv_normalized = (adv - adv_mean[0]) / (adv_std + 1e-8f);
@@ -873,6 +876,7 @@ kernel void ppo_loss_fwd_bwd_kernel(
 
             float logratio = total_log_prob - old_logp;
             float ratio = exp(logratio);
+            out_ratio[nt] = ratio;
             float ratio_clipped = clamp(ratio, 1.0f - pp.clip_coef, 1.0f + pp.clip_coef);
             float wa = -w * adv_normalized;
             float pg_loss1 = wa * ratio;
@@ -936,6 +940,7 @@ kernel void ppo_loss_fwd_bwd_kernel(
 
             float logratio = total_log_prob - old_logp;
             float ratio = exp(logratio);
+            out_ratio[nt] = ratio;
             float ratio_clipped = clamp(ratio, 1.0f - pp.clip_coef, 1.0f + pp.clip_coef);
             float wa = -w * adv_normalized;
             float pg_loss1 = wa * ratio;
