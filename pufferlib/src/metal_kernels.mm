@@ -1272,7 +1272,8 @@ void prio_replay_cuda(PufTensor &advantages, float prio_alpha,
 
 void mtl_select_copy(RolloutBuf &rollouts, TrainGraph &graph,
                       const int64_t *idx, const float *advantages,
-                      const float *mb_prio, int mb_segs, cudaStream_t stream) {
+                      const float *mb_prio, int mb_segs,
+                      void *fp16_obs_out, cudaStream_t stream) {
   int obs_row_bytes = (int)(rollouts.observations.numel() /
                             rollouts.observations.shape[0]) *
                       rollouts.observations.dtype_size;
@@ -1309,6 +1310,8 @@ void mtl_select_copy(RolloutBuf &rollouts, TrainGraph &graph,
   } params = {obs_row_bytes, act_row_bytes, lp_row_bytes, horizon};
   [enc setBytes:&params length:sizeof(params) atIndex:14];
 
+  mtl_set_ptr(enc, fp16_obs_out, 15);
+
   // 2D dispatch: (mb_segs, 5) threadgroups, 256 threads each
   [enc dispatchThreadgroups:MTLSizeMake(mb_segs, 5, 1)
       threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
@@ -1320,7 +1323,7 @@ void mtl_select_copy(RolloutBuf &rollouts, TrainGraph &graph,
 
 void mtl_muon_weight_update(float *weights, const float *updates,
                               const float *lr_ptr, float weight_decay, int count,
-                              cudaStream_t stream) {
+                              void *fp16_out, cudaStream_t stream) {
   MetalStream *ms = mtl_get_stream(stream);
   auto enc = ms->compute_encoder();
   auto pso = mtl_pipeline("muon_weight_update_kernel");
@@ -1333,6 +1336,7 @@ void mtl_muon_weight_update(float *weights, const float *updates,
     int count;
   } params = {weight_decay, count};
   [enc setBytes:&params length:sizeof(params) atIndex:3];
+  mtl_set_ptr(enc, fp16_out, 4);
   mtl_dispatch_1d(enc, pso, count);
 }
 
@@ -1496,7 +1500,7 @@ void muon_post_create(Muon *m) {
   memset(m->mb_puf.bytes, 0, m->mb_puf.numel() * sizeof(float));
 }
 
-void muon_step(Muon *m, cudaStream_t stream) {
+void muon_step(Muon *m, void *fp16_out, cudaStream_t stream) {
   if (m->wb_puf.bytes == nullptr)
     return;
 
@@ -1592,10 +1596,10 @@ void muon_step(Muon *m, cudaStream_t stream) {
     offset += t->numel();
   }
 
-  // Apply weight update: w -= lr * up + weight_decay * w
+  // Apply weight update: w -= lr * up + weight_decay * w (fused with fp16 cast)
   mtl_muon_weight_update((float *)m->wb_puf.bytes, (const float *)m->up_puf.bytes,
                          m->lr_ptr, (float)m->weight_decay,
-                         (int)m->wb_puf.numel(), stream);
+                         (int)m->wb_puf.numel(), fp16_out, stream);
 }
 
 // ============================================================================
@@ -1633,7 +1637,7 @@ void adam_post_create(Adam *a) {
   memset(a->v_puf.bytes, 0, a->v_puf.numel() * sizeof(float));
 }
 
-void adam_step(Adam *a, cudaStream_t stream) {
+void adam_step(Adam *a, void *fp16_out, cudaStream_t stream) {
   if (a->wb_puf.bytes == nullptr) return;
   a->step++;
 
@@ -1668,6 +1672,7 @@ void adam_step(Adam *a, cudaStream_t stream) {
   [enc setBuffer:gc_buf offset:gc_off atIndex:3];
   [enc setBuffer:lr_buf offset:lr_off atIndex:4];
   [enc setBytes:&params length:sizeof(params) atIndex:5];
+  mtl_set_ptr(enc, fp16_out, 6);
   mtl_dispatch_1d(enc, pso, params.n);
 }
 

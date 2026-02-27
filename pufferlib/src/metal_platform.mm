@@ -10,14 +10,12 @@
  */
 
 #import "metal_platform.h"
-#import <MetalPerformanceShaders/MetalPerformanceShaders.h>
 #import <QuartzCore/CABase.h>  // CACurrentMediaTime
 #include "metal_shader_src.h"
 
 #include <cassert>
 #include <cstdio>
 #include <cstring>
-#include <unordered_map>
 
 // ============================================================================
 // Global singleton
@@ -27,9 +25,7 @@ static MetalContext g_ctx = {};
 
 // ============================================================================
 // Metal 4 tensor_ops GEMM — MSL source for JIT compilation.
-// Separate library because it needs different includes (metal_tensor,
-// MetalPerformancePrimitives). Stays on the compute encoder — zero
-// MPS encoder restart overhead.
+// Separate library (needs metal_tensor + MetalPerformancePrimitives includes).
 // ============================================================================
 
 static const char *get_tensor_ops_shader_source() {
@@ -42,7 +38,7 @@ using namespace mpp::tensor_ops;
 
 // C(M,N) = A(M,K) @ B(N,K)^T — float32, tensor_inline with device memory.
 // Tile: 64 rows (M) x 32 cols (N), dynamic K.
-// N MUST be a multiple of 32 (caller pads or falls back to MPS).
+// N MUST be a multiple of 32, M MUST be a multiple of 64.
 kernel void tensor_ops_gemm_nt_f32(
     device float* A_buf [[buffer(0)]],
     device float* B_buf [[buffer(1)]],
@@ -76,7 +72,7 @@ kernel void tensor_ops_gemm_nt_f32(
 // C(M,N) = A(M,K) @ B(K,N) — float32, tensor_inline with device memory.
 // Row-major NN maps to col-major: C_cm(N,M) = B_cm(N,K) @ A_cm(K,M).
 // Tiling follows NT convention: tgid.y tiles M (stride 64), tgid.x tiles N (stride 32).
-// M % 64 == 0 and N % 32 == 0 required (caller falls back to MPS).
+// M % 64 == 0 and N % 32 == 0 required (caller falls back to steel_gemm).
 kernel void tensor_ops_gemm_nn_f32(
     device float* A_buf [[buffer(0)]],
     device float* B_buf [[buffer(1)]],
@@ -254,48 +250,6 @@ kernel void tensor_ops_gemm_tn_f16(
 }
 
 // ============================================================================
-// MPS GEMM cache — reuse MPSMatrixMultiplication objects across calls.
-// Only used for fp16 unaligned fallback (f32 uses steel_gemm compute encoder).
-// ============================================================================
-
-struct GemmKey {
-  int M, N, K;
-  bool tA, tB, fp16;
-  float alpha, beta;
-  bool operator==(const GemmKey& o) const {
-    return M == o.M && N == o.N && K == o.K && tA == o.tA && tB == o.tB
-        && fp16 == o.fp16 && alpha == o.alpha && beta == o.beta;
-  }
-};
-
-struct GemmKeyHash {
-  size_t operator()(const GemmKey& k) const {
-    size_t h = (size_t)k.M * 73856093u ^ (size_t)k.N * 19349663u
-             ^ (size_t)k.K * 83492791u;
-    h ^= (size_t)k.tA | ((size_t)k.tB << 1) | ((size_t)k.fp16 << 2);
-    h ^= (k.beta == 0.0f ? 0u : 7u) << 3;
-    return h;
-  }
-};
-
-static std::unordered_map<GemmKey, MPSMatrixMultiplication*, GemmKeyHash> g_matmul_cache;
-
-static MPSMatrixMultiplication* cached_matmul(int M, int N, int K,
-                                               bool tA, bool tB,
-                                               float alpha, float beta,
-                                               bool fp16) {
-  GemmKey key = {M, N, K, tA, tB, fp16, alpha, beta};
-  auto it = g_matmul_cache.find(key);
-  if (it != g_matmul_cache.end()) return it->second;
-  MPSMatrixMultiplication* mm = [[MPSMatrixMultiplication alloc]
-      initWithDevice:g_ctx.device transposeLeft:tA transposeRight:tB
-          resultRows:M resultColumns:N interiorColumns:K
-               alpha:(double)alpha beta:(double)beta];
-  g_matmul_cache[key] = mm;
-  return mm;
-}
-
-// ============================================================================
 // MetalStream implementation
 // ============================================================================
 
@@ -401,13 +355,11 @@ void mtl_gpu_timing_stats(double *gpu_exec_ms, double *sched_wait_ms) {
 }
 
 static int g_tensor_ops_dispatch_count = 0;
-static int g_mps_dispatch_count = 0;
 
 void mtl_gemm_stats(int *tensor_ops_count, int *mps_count) {
   *tensor_ops_count = g_tensor_ops_dispatch_count;
-  *mps_count = g_mps_dispatch_count;
+  *mps_count = 0;  // MPS eliminated — all GEMMs on compute encoder
   g_tensor_ops_dispatch_count = 0;
-  g_mps_dispatch_count = 0;
 }
 
 // ============================================================================
@@ -583,7 +535,6 @@ void mtl_destroy() {
   // 3. Release all Metal objects inside @autoreleasepool to force immediate
   //    deallocation. Device released LAST — MTLBuffers/pipelines reference it.
   @autoreleasepool {
-    g_matmul_cache.clear();
     g_ctx.buffers.clear();
     g_ctx.pipelines = nil;
     g_ctx.library = nil;
@@ -666,15 +617,11 @@ id<MTLComputePipelineState> mtl_pipeline(const char *name) {
 }
 
 // ============================================================================
-// GEMM — MSL tiled kernel (GPU) or Accelerate cblas (CPU fallback)
+// GEMM dispatch — tensor_ops (aligned) or steel_gemm (unaligned) on GPU.
+// CPU cblas_sgemm via Accelerate used only during rollout (non-training mode).
 //
-// These match the cuBLAS calling conventions in models.cu. cuBLAS operates
-// in column-major but PufferLib stores data row-major. The cuBLAS calls
-// use the standard "flip everything" trick.
-//
-// Default: cblas_sgemm via Accelerate (AMX coprocessor) — fastest for small
-// matrices (hidden_size ≤ 512). Set PUFFERLIB_GPU_GEMM=1 to use the MSL
-// tiled kernel instead (useful for large hidden sizes or benchmarking).
+// Matches cuBLAS calling conventions in models.cu (row-major data,
+// column-major API trick: swap A/B and transpose flags).
 // ============================================================================
 
 static inline MetalStream *get_stream(cudaStream_t s) {
@@ -713,7 +660,7 @@ static id<MTLBuffer> buffer_for_ptr(const void *ptr, NSUInteger *out_offset) {
 
 // ============================================================================
 // Metal compute GEMM: uses simdgroup_matrix hardware instructions (M3+).
-// Stays in the compute encoder — zero MPS encoder restart overhead.
+// Stays on the compute encoder (no encoder transitions).
 // Used for fp32 GEMMs (rollout inference + Muon optimizer).
 // ============================================================================
 
@@ -759,56 +706,44 @@ static void compute_gemm(const float *A, const float *B, float *C,
   ms->pending_work = true;
 }
 
-// MPS GEMM fp16: half inputs, half output, float accumulation inside MPS.
-// Only used for fp16 unaligned fallback (tensor_ops require alignment).
-static void gpu_gemm_fp16(const void *A, int physical_rows_A, int physical_cols_A,
-                           bool transpose_A,
-                           const void *B, int physical_rows_B, int physical_cols_B,
-                           bool transpose_B,
-                           void *C, int result_rows, int result_cols,
-                           int interior_cols,
-                           float alpha, float beta,
-                           cudaStream_t stream) {
-  int M = result_rows, N = result_cols, K = interior_cols;
-
+// fp16 compute-encoder GEMM: half I/O, float accumulation via simdgroup_matrix.
+// Same interface as compute_gemm but for __fp16 buffers. Uses steel_gemm_f16 kernel.
+static void compute_gemm_f16(const void *A, const void *B, void *C,
+                              int M, int N, int K,
+                              bool trans_a, bool trans_b,
+                              int lda, int ldb, int ldc,
+                              float alpha, float beta,
+                              cudaStream_t stream) {
   MetalStream *ms = get_stream(stream);
-  ms->end_compute();
+  id<MTLComputeCommandEncoder> enc = ms->compute_encoder();
+  id<MTLComputePipelineState> pso = mtl_pipeline("steel_gemm_f16");
+  [enc setComputePipelineState:pso];
 
   NSUInteger off_a, off_b, off_c;
   id<MTLBuffer> buf_a = buffer_for_ptr(A, &off_a);
   id<MTLBuffer> buf_b = buffer_for_ptr(B, &off_b);
   id<MTLBuffer> buf_c = buffer_for_ptr(C, &off_c);
 
-  MPSMatrixDescriptor *desc_a = [MPSMatrixDescriptor
-      matrixDescriptorWithRows:physical_rows_A
-                       columns:physical_cols_A
-                      rowBytes:physical_cols_A * sizeof(__fp16)
-                      dataType:MPSDataTypeFloat16];
-  MPSMatrixDescriptor *desc_b = [MPSMatrixDescriptor
-      matrixDescriptorWithRows:physical_rows_B
-                       columns:physical_cols_B
-                      rowBytes:physical_cols_B * sizeof(__fp16)
-                      dataType:MPSDataTypeFloat16];
-  MPSMatrixDescriptor *desc_c = [MPSMatrixDescriptor
-      matrixDescriptorWithRows:M
-                       columns:N
-                      rowBytes:N * sizeof(__fp16)
-                      dataType:MPSDataTypeFloat16];
+  [enc setBuffer:buf_a offset:off_a atIndex:0];
+  [enc setBuffer:buf_b offset:off_b atIndex:1];
+  [enc setBuffer:buf_c offset:off_c atIndex:2];
 
-  MPSMatrix *mat_a = [[MPSMatrix alloc] initWithBuffer:buf_a offset:off_a descriptor:desc_a];
-  MPSMatrix *mat_b = [[MPSMatrix alloc] initWithBuffer:buf_b offset:off_b descriptor:desc_b];
-  MPSMatrix *mat_c = [[MPSMatrix alloc] initWithBuffer:buf_c offset:off_c descriptor:desc_c];
+  HostGemmParams params = {M, N, K, lda, ldb, ldc, alpha, beta,
+                            trans_a ? 1 : 0, trans_b ? 1 : 0};
+  [enc setBytes:&params length:sizeof(params) atIndex:3];
 
-  MPSMatrixMultiplication *matmul = cached_matmul(M, N, K, transpose_A, transpose_B,
-                                                   alpha, beta, /*fp16=*/true);
-  [matmul encodeToCommandBuffer:ms->cmd leftMatrix:mat_a rightMatrix:mat_b resultMatrix:mat_c];
+  int groups_m = (M + 63) / 64;
+  int groups_n = (N + 63) / 64;
+  [enc dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
+      threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+
   ms->pending_work = true;
-  g_mps_dispatch_count++;
+  g_tensor_ops_dispatch_count++;  // count as compute-encoder dispatch
 }
 
 // ============================================================================
 // tensor_ops GEMM: C(M,N) = A(M,K) @ B(N,K)^T on the compute encoder.
-// Uses Metal 4 matmul2d with tensor_inline — no MPS encoder transition.
+// Uses Metal 4 matmul2d with tensor_inline layout.
 // Requires N % 32 == 0, M % 64 == 0 (tiles). Returns false if unavailable.
 // ============================================================================
 
@@ -847,7 +782,7 @@ static bool tensor_ops_gemm_nt(const float *A, const float *B, float *C,
 
 // ============================================================================
 // tensor_ops GEMM: C(M,N) = A(M,K) @ B(K,N) on the compute encoder.
-// Uses Metal 4 matmul2d with tensor_inline — no MPS encoder transition.
+// Uses Metal 4 matmul2d with tensor_inline layout.
 // Requires M % 64 == 0, N % 32 == 0 (tile_M=64, tile_N=32).
 // Returns false if unavailable.
 // ============================================================================
@@ -887,7 +822,7 @@ static bool tensor_ops_gemm_nn(const float *A, const float *B, float *C,
 }
 
 // ============================================================================
-// tensor_ops fp16 GEMM: stays on compute encoder, no MPS transitions.
+// tensor_ops fp16 GEMM on the compute encoder.
 // Same alignment requirements as fp32: M % 64 == 0, N % 32 == 0.
 // ============================================================================
 
@@ -959,7 +894,7 @@ static bool tensor_ops_gemm_nn_f16(const void *A, const void *B, void *C,
 
 // ============================================================================
 // tensor_ops GEMM: C(M,N) = A(K,M)^T @ B(K,N) on the compute encoder.
-// Uses Metal 4 matmul2d with tensor_inline — no MPS encoder transition.
+// Uses Metal 4 matmul2d with tensor_inline layout.
 // Requires M % 64 == 0, N % 32 == 0 (tile_M=64, tile_N=32).
 // Returns false if unavailable.
 // ============================================================================
@@ -1030,10 +965,9 @@ static bool tensor_ops_gemm_tn_f16(const void *A, const void *B, void *C,
   return true;
 }
 
-// Small compute-encoder GEMM for unaligned N (avoids MPS encoder transitions).
+// Small compute-encoder GEMM for unaligned N.
 // C(M,N) = A(M,K) @ B(N,K)^T. One threadgroup per row, threads partition columns.
-// Efficient for small N (e.g. decoder output N=40) where MPS transition overhead
-// exceeds actual compute time.
+// Efficient for small N (e.g. decoder output N=40) where 64x64 tile waste dominates.
 static void small_gemm_nt_dispatch(const float *A, const float *B, float *C,
                                     int M, int N, int K,
                                     cudaStream_t stream) {
@@ -1061,7 +995,7 @@ static void small_gemm_nt_dispatch(const float *A, const float *B, float *C,
       threadsPerThreadgroup:MTLSizeMake(tg_size, 1, 1)];
 
   ms->pending_work = true;
-  g_tensor_ops_dispatch_count++;  // count as compute-encoder GEMM (not MPS)
+  g_tensor_ops_dispatch_count++;
 }
 
 // out(...,N) = a(...,K) @ b(N,K)^T — leading dims folded into M
@@ -1077,17 +1011,17 @@ void puf_mm(PufTensor &a, PufTensor &b, PufTensor &out,
   if (a.dtype_size == 2) {
     if (aligned && !no_tensor &&
         tensor_ops_gemm_nt_f16(a.bytes, b.bytes, out.bytes, M, N, K, stream)) {
-      // fp16 tensor_ops on compute encoder — no MPS transition
+      // fp16 tensor_ops (aligned)
     } else {
-      gpu_gemm_fp16(a.bytes, M, K, false,
-                    b.bytes, N, K, true,
-                    out.bytes, M, N, K,
-                    1.0f, 0.0f, stream);
+      // fp16 unaligned NT: steel_gemm_f16 (stays on compute encoder)
+      compute_gemm_f16(a.bytes, b.bytes, out.bytes, M, N, K,
+                       /*trans_a=*/false, /*trans_b=*/true,
+                       K, K, N, 1.0f, 0.0f, stream);
     }
   } else if (aligned && !no_tensor &&
              tensor_ops_gemm_nt((const float *)a.bytes, (const float *)b.bytes,
                                 (float *)out.bytes, M, N, K, stream)) {
-    // fp32 tensor_ops on compute encoder — no MPS transition
+    // fp32 tensor_ops (aligned)
   } else if (a.dtype_size == 4 && N < 128) {
     // Small unaligned N: 1-row-per-threadgroup kernel (avoids 64x64 tile waste)
     small_gemm_nt_dispatch((const float *)a.bytes, (const float *)b.bytes,
@@ -1117,11 +1051,10 @@ void puf_mm_tn(PufTensor &a, PufTensor &b, PufTensor &out,
         tensor_ops_gemm_tn_f16(a.bytes, b.bytes, out.bytes, M, N, K, stream)) {
       // fp16 tensor_ops TN on compute encoder
     } else {
-      // fp16 unaligned TN — MPS fallback (steel_gemm is f32 only)
-      gpu_gemm_fp16(a.bytes, K, M, true,
-                    b.bytes, K, N, false,
-                    out.bytes, M, N, K,
-                    1.0f, 0.0f, stream);
+      // fp16 unaligned TN: steel_gemm_f16 (stays on compute encoder)
+      compute_gemm_f16(a.bytes, b.bytes, out.bytes, M, N, K,
+                       /*trans_a=*/true, /*trans_b=*/false,
+                       M, N, N, 1.0f, 0.0f, stream);
     }
   } else if (aligned && !no_tensor &&
              tensor_ops_gemm_tn((const float *)a.bytes, (const float *)b.bytes,
@@ -1152,15 +1085,15 @@ void puf_mm_nn(PufTensor &a, PufTensor &b, PufTensor &out,
         tensor_ops_gemm_nn_f16(a.bytes, b.bytes, out.bytes, M, N, K, stream)) {
       // fp16 tensor_ops NN on compute encoder
     } else {
-      gpu_gemm_fp16(a.bytes, M, K, false,
-                    b.bytes, K, N, false,
-                    out.bytes, M, N, K,
-                    1.0f, 0.0f, stream);
+      // fp16 unaligned NN: steel_gemm_f16 (stays on compute encoder)
+      compute_gemm_f16(a.bytes, b.bytes, out.bytes, M, N, K,
+                       /*trans_a=*/false, /*trans_b=*/false,
+                       K, N, N, 1.0f, 0.0f, stream);
     }
   } else if (aligned && !no_tensor &&
              tensor_ops_gemm_nn((const float *)a.bytes, (const float *)b.bytes,
                                 (float *)out.bytes, M, N, K, stream)) {
-    // fp32 tensor_ops NN on compute encoder — no MPS transition
+    // fp32 tensor_ops NN (aligned)
   } else {
     // f32 unaligned: steel_gemm NN (stays on compute encoder)
     compute_gemm((const float *)a.bytes, (const float *)b.bytes,
@@ -1207,7 +1140,7 @@ static float *addmm_temp_buf(int count) {
 //   temp = A @ B (tensor_ops, compute encoder)
 //   out *= beta (scale, compute encoder)
 //   out += alpha * temp (axpy, compute encoder)
-// All three ops stay on the compute encoder — zero MPS transitions.
+// All three ops stay on the compute encoder.
 void puf_addmm_nn(PufTensor &a, PufTensor &b, PufTensor &out, float alpha,
                    float beta, cudaStream_t stream) {
   int na = a.ndim(), nb = b.ndim();

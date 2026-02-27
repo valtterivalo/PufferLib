@@ -549,14 +549,13 @@ void train_impl(PuffeRL& pufferl) {
                     (const int64_t*)pufferl.prio_bufs.idx.bytes,
                     (const float*)pufferl.advantages_puf.bytes,
                     (const float*)pufferl.prio_bufs.mb_prio.bytes,
-                    minibatch_segments, ts);
+                    minibatch_segments,
+                    pufferl.fp16_obs_buf.bytes, ts);
             }
 
             uint64_t tp3 = mach_absolute_time();
 
-            mtl_cast_f32_to_f16(pufferl.fp16_obs_buf.bytes,
-                                (const float*)pufferl.train_buf.mb_obs.bytes,
-                                (int)pufferl.train_buf.mb_obs.numel(), ts);
+            // obs f32→f16 cast is fused into select_copy_kernel (channel 0)
             puf_zero(pufferl.fp16_state_buf, ts);
             PufTensor obs_puf = pufferl.fp16_obs_buf;
             PufTensor state_puf = pufferl.fp16_state_buf;
@@ -608,14 +607,11 @@ void train_impl(PuffeRL& pufferl) {
 
             uint64_t tp8 = mach_absolute_time();
 
+            // Optimizer step with fused fp32→fp16 param cast
             if (pufferl.use_adam)
-                adam_step(pufferl.adam, ts);
+                adam_step(pufferl.adam, pufferl.param_fp16_puf.bytes, ts);
             else
-                muon_step(pufferl.muon, ts);
-
-            mtl_cast_f32_to_f16(pufferl.param_fp16_puf.bytes,
-                                (const float*)pufferl.param_fp32_puf.bytes,
-                                (int)pufferl.param_fp32_puf.numel(), ts);
+                muon_step(pufferl.muon, pufferl.param_fp16_puf.bytes, ts);
 
             uint64_t tp9 = mach_absolute_time();
 
@@ -674,14 +670,13 @@ void train_impl(PuffeRL& pufferl) {
                 (const int64_t*)pufferl.prio_bufs.idx.bytes,
                 (const float*)pufferl.advantages_puf.bytes,
                 (const float*)pufferl.prio_bufs.mb_prio.bytes,
-                minibatch_segments, train_stream);
+                minibatch_segments,
+                pufferl.fp16_obs_buf.bytes, train_stream);
         }
 
         uint64_t tp3 = mach_absolute_time();
 
-        mtl_cast_f32_to_f16(pufferl.fp16_obs_buf.bytes,
-                            (const float*)pufferl.train_buf.mb_obs.bytes,
-                            (int)pufferl.train_buf.mb_obs.numel(), train_stream);
+        // obs f32→f16 cast is fused into select_copy_kernel (channel 0)
         puf_zero(pufferl.fp16_state_buf, train_stream);
         PufTensor obs_puf = pufferl.fp16_obs_buf;
         PufTensor state_puf = pufferl.fp16_state_buf;
@@ -733,14 +728,11 @@ void train_impl(PuffeRL& pufferl) {
 
         uint64_t tp8 = mach_absolute_time();
 
+        // Optimizer step with fused fp32→fp16 param cast
         if (pufferl.use_adam)
-            adam_step(pufferl.adam, train_stream);
+            adam_step(pufferl.adam, pufferl.param_fp16_puf.bytes, train_stream);
         else
-            muon_step(pufferl.muon, train_stream);
-
-        mtl_cast_f32_to_f16(pufferl.param_fp16_puf.bytes,
-                            (const float*)pufferl.param_fp32_puf.bytes,
-                            (int)pufferl.param_fp32_puf.numel(), train_stream);
+            muon_step(pufferl.muon, pufferl.param_fp16_puf.bytes, train_stream);
 
         uint64_t tp9 = mach_absolute_time();
 

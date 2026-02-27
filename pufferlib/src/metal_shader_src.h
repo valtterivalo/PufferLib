@@ -1709,18 +1709,21 @@ struct MuonParams {
     int n;
 };
 
-// Fused weight update: wb = wb * (1 - lr*wd) - lr * up
+// Fused weight update + fp16 cast: wb = wb * (1 - lr*wd) - lr * up, param_fp16 = half(wb)
 kernel void muon_weight_update_kernel(
     device float* wb                    [[buffer(0)]],
     const device float* up              [[buffer(1)]],
     const device float* lr_ptr          [[buffer(2)]],
     constant MuonParams& p              [[buffer(3)]],
+    device half* param_fp16             [[buffer(4)]],
     uint idx [[thread_position_in_grid]]
 ) {
     if ((int)idx >= p.n) return;
     float lr = *lr_ptr;
     float wd_scale = 1.0f - lr * p.wd;
-    wb[idx] = wb[idx] * wd_scale - lr * up[idx];
+    float new_w = wb[idx] * wd_scale - lr * up[idx];
+    wb[idx] = new_w;
+    param_fp16[idx] = half(clamp(new_w, -65000.0f, 65000.0f));
 }
 
 // Fused Adam optimizer step:
@@ -1742,6 +1745,7 @@ kernel void adam_step_kernel(
     const device float* grad            [[buffer(3)]],
     const device float* lr_ptr          [[buffer(4)]],
     constant AdamParams& p              [[buffer(5)]],
+    device half* param_fp16             [[buffer(6)]],
     uint idx [[thread_position_in_grid]]
 ) {
     if ((int)idx >= p.n) return;
@@ -1753,7 +1757,9 @@ kernel void adam_step_kernel(
     float m_hat = mi * p.bc1;
     float v_hat = vi * p.bc2;
     float lr = *lr_ptr;
-    wb[idx] = wb[idx] * (1.0f - lr * p.wd) - lr * m_hat / (sqrt(v_hat) + p.eps);
+    float new_w = wb[idx] * (1.0f - lr * p.wd) - lr * m_hat / (sqrt(v_hat) + p.eps);
+    wb[idx] = new_w;
+    param_fp16[idx] = half(clamp(new_w, -65000.0f, 65000.0f));
 }
 
 // ============================================================================
@@ -2445,7 +2451,8 @@ struct SelectCopyParams {
 };
 
 // Minibatch assembly: copy observations, actions, logprobs, values+advantages+returns, prio
-// Dispatched as (minibatch_size, 5) threadgroups, each handles one channel for one row
+// Channel 0 fuses obs gather + f32→f16 cast: reads f32 src, writes f16 directly to fp16_obs_out.
+// Dispatched as (minibatch_size, 5) threadgroups, each handles one channel for one row.
 kernel void select_copy_kernel(
     device char* mb_obs                 [[buffer(0)]],
     device char* mb_actions             [[buffer(1)]],
@@ -2462,6 +2469,7 @@ kernel void select_copy_kernel(
     const device int64_t* idx           [[buffer(12)]],
     const device float* mb_prio_in      [[buffer(13)]],
     constant SelectCopyParams& p        [[buffer(14)]],
+    device half* fp16_obs_out           [[buffer(15)]],
     uint2 group_id [[threadgroup_position_in_grid]],
     uint tid [[thread_index_in_threadgroup]]
 ) {
@@ -2470,10 +2478,17 @@ kernel void select_copy_kernel(
     int src_row = (int)idx[mb];
 
     if (ch == 0) {
-        // Copy observations (as int32 words for alignment)
-        const device int* sptr = (const device int*)(src_obs + (int64_t)src_row * p.obs_row_bytes);
-        device int* dptr = (device int*)(mb_obs + (int64_t)mb * p.obs_row_bytes);
-        for (int i = (int)tid; i < p.obs_row_bytes / 4; i += 256) dptr[i] = sptr[i];
+        // Fused obs gather + f32→f16 cast: copy f32 to mb_obs AND write f16 directly.
+        // mb_obs f32 copy is needed because PPO reads embedded action masks from it.
+        const device float* sptr = (const device float*)(src_obs + (int64_t)src_row * p.obs_row_bytes);
+        int count = p.obs_row_bytes / 4;  // number of floats
+        device float* f32ptr = (device float*)(mb_obs + (int64_t)mb * p.obs_row_bytes);
+        device half* f16ptr = fp16_obs_out + (int64_t)mb * count;
+        for (int i = (int)tid; i < count; i += 256) {
+            float val = sptr[i];
+            f32ptr[i] = val;
+            f16ptr[i] = half(val);
+        }
     } else if (ch == 1) {
         // Copy actions
         const device int* sptr = (const device int*)(src_actions + (int64_t)src_row * p.act_row_bytes);
@@ -2623,9 +2638,8 @@ kernel void colmaj_to_rowmaj_scale_f32(
 // ============================================================================
 // Section 20: Tiled GEMM — C = alpha * op(A) @ op(B) + beta * C
 //
-// Replaces MPSMatrixMultiplication for small matrices (hidden_size 128-512).
-// Runs on the same compute encoder as all other kernels — no MPS/compute
-// interop overhead, no per-GEMM sync needed.
+// 64x64 tiled simdgroup_matrix GEMM for f32. Supports NT, NN, TN layouts
+// via trans_a/trans_b parameters. Runs on the compute encoder.
 // ============================================================================
 
 struct GemmParams {
@@ -3339,8 +3353,6 @@ kernel void fused_scan_backward_checkpointed_fp16(
 // threadgroup staging, eliminating barrier overhead). K-remainder and edge
 // tile stores use threadgroup fallback.
 //
-// Stays in the compute encoder — no MPS encoder restart overhead (~120us
-// per GEMM saved, ~37ms/iter across ~308 dispatches).
 // ============================================================================
 
 kernel void steel_gemm(
@@ -3514,7 +3526,6 @@ kernel void steel_gemm(
 // Section 26: Small GEMM — compute-encoder fallback for unaligned N
 // ============================================================================
 // Used when N doesn't meet tensor_ops alignment (N%32!=0).
-// Stays on the compute encoder to avoid MPS encoder transitions.
 // One threadgroup per output row, threads partition N columns.
 // C(M,N) = A(M,K) @ B(N,K)^T, all row-major.
 
@@ -3552,6 +3563,158 @@ kernel void small_gemm_nt_f32(
         sum += a_row[k] * b_row[k];
 
     C[m * p.N + tid] = sum;
+}
+
+// ============================================================================
+// Section 27: Steel GEMM fp16 — half I/O, float accumulation
+//
+// Same 64x64 tiled GEMM as steel_gemm but with half-precision inputs/outputs.
+// Uses simdgroup_half8x8 for loads, simdgroup_float8x8 for accumulation
+// (mixed-precision multiply_accumulate). Stores back as half.
+// ============================================================================
+
+kernel void steel_gemm_f16(
+    device const half* A       [[buffer(0)]],
+    device const half* B       [[buffer(1)]],
+    device half* C             [[buffer(2)]],
+    constant GemmParams& p     [[buffer(3)]],
+    uint2 tgid                 [[threadgroup_position_in_grid]],
+    uint sgid                  [[simdgroup_index_in_threadgroup]],
+    uint lane                  [[thread_index_in_simdgroup]]
+) {
+    constexpr int BM = 64, BN = 64;
+    constexpr int WM = 2, WN = 2;
+    constexpr int TM = BM / (8 * WM); // 4
+    constexpr int TN = BN / (8 * WN); // 4
+
+    const int bm = (int)tgid.y * BM;
+    const int bn = (int)tgid.x * BN;
+    const int wm = (int)(sgid / WN);
+    const int wn = (int)(sgid % WN);
+    const int tid = (int)(sgid * 32 + lane);
+
+    const int sm = bm + wm * 32;
+    const int sn = bn + wn * 32;
+
+    // f32 accumulators for numerical stability
+    simdgroup_float8x8 acc[TM][TN];
+    for (int i = 0; i < TM; i++)
+        for (int j = 0; j < TN; j++)
+            acc[i][j] = simdgroup_float8x8(0);
+
+    const int K_aligned = (p.K / 8) * 8;
+
+    if (!p.trans_a && p.trans_b) {
+        // NT: C = A(M,K) @ B(N,K)^T
+        for (int k = 0; k < K_aligned; k += 8) {
+            simdgroup_half8x8 a_frag[TM];
+            for (int i = 0; i < TM; i++)
+                simdgroup_load(a_frag[i], A + (long)(sm + i*8) * p.lda + k, p.lda);
+            for (int j = 0; j < TN; j++) {
+                simdgroup_half8x8 b_frag;
+                simdgroup_load(b_frag, B + (long)(sn + j*8) * p.ldb + k, p.ldb,
+                               ulong2(0,0), true);
+                for (int i = 0; i < TM; i++)
+                    simdgroup_multiply_accumulate(acc[i][j], a_frag[i], b_frag, acc[i][j]);
+            }
+        }
+    } else if (!p.trans_a && !p.trans_b) {
+        // NN: C = A(M,K) @ B(K,N)
+        for (int k = 0; k < K_aligned; k += 8) {
+            simdgroup_half8x8 a_frag[TM];
+            for (int i = 0; i < TM; i++)
+                simdgroup_load(a_frag[i], A + (long)(sm + i*8) * p.lda + k, p.lda);
+            for (int j = 0; j < TN; j++) {
+                simdgroup_half8x8 b_frag;
+                simdgroup_load(b_frag, B + (long)k * p.ldb + sn + j*8, p.ldb);
+                for (int i = 0; i < TM; i++)
+                    simdgroup_multiply_accumulate(acc[i][j], a_frag[i], b_frag, acc[i][j]);
+            }
+        }
+    } else if (p.trans_a && !p.trans_b) {
+        // TN: C = A(K,M)^T @ B(K,N)
+        for (int k = 0; k < K_aligned; k += 8) {
+            simdgroup_half8x8 a_frag[TM];
+            for (int i = 0; i < TM; i++)
+                simdgroup_load(a_frag[i], A + (long)k * p.lda + sm + i*8, p.lda,
+                               ulong2(0,0), true);
+            for (int j = 0; j < TN; j++) {
+                simdgroup_half8x8 b_frag;
+                simdgroup_load(b_frag, B + (long)k * p.ldb + sn + j*8, p.ldb);
+                for (int i = 0; i < TM; i++)
+                    simdgroup_multiply_accumulate(acc[i][j], a_frag[i], b_frag, acc[i][j]);
+            }
+        }
+    }
+
+    // K-remainder: threadgroup fallback
+    if (K_aligned < p.K) {
+        threadgroup half sA[BM][9];
+        threadgroup half sB[8][BN + 1];
+
+        int k = K_aligned;
+        int rem = p.K - k;
+
+        int total_a = BM * 8;
+        for (int idx = tid; idx < total_a; idx += 128) {
+            int r = idx / 8;
+            int c = idx % 8;
+            int gr = bm + r;
+            int gc = k + c;
+            sA[r][c] = (gr < p.M && c < rem)
+                ? (p.trans_a ? A[(long)gc * p.lda + gr] : A[(long)gr * p.lda + gc])
+                : half(0);
+        }
+
+        int total_b = 8 * BN;
+        for (int idx = tid; idx < total_b; idx += 128) {
+            int r = idx / BN;
+            int c = idx % BN;
+            int gr = k + r;
+            int gc = bn + c;
+            sB[r][c] = (r < rem && gc < p.N)
+                ? (p.trans_b ? B[(long)gc * p.ldb + gr] : B[(long)gr * p.ldb + gc])
+                : half(0);
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        simdgroup_half8x8 a_frag[TM];
+        for (int i = 0; i < TM; i++)
+            simdgroup_load(a_frag[i], &sA[wm * 32 + i * 8][0], 9);
+        for (int j = 0; j < TN; j++) {
+            simdgroup_half8x8 b_frag;
+            simdgroup_load(b_frag, &sB[0][wn * 32 + j * 8], BN + 1);
+            for (int i = 0; i < TM; i++)
+                simdgroup_multiply_accumulate(acc[i][j], a_frag[i], b_frag, acc[i][j]);
+        }
+    }
+
+    // Store: f32 acc → half output via threadgroup staging
+    // (simdgroup_store of float8x8 requires float* destination)
+    {
+        threadgroup float sC[BM][BN + 1];
+        for (int i = 0; i < TM; i++)
+            for (int j = 0; j < TN; j++)
+                simdgroup_store(acc[i][j],
+                    &sC[wm*32 + i*8][wn*32 + j*8], BN + 1);
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        for (int idx = tid; idx < BM * BN; idx += 128) {
+            int r = idx / BN;
+            int c = idx % BN;
+            int gr = bm + r;
+            int gc = bn + c;
+            if (gr < p.M && gc < p.N) {
+                long out_idx = (long)gr * p.ldc + gc;
+                float val = sC[r][c];
+                if (p.beta == 0.0f)
+                    C[out_idx] = half(p.alpha * val);
+                else
+                    C[out_idx] = half(p.alpha * val + p.beta * float(C[out_idx]));
+            }
+        }
+    }
 }
 
 )METAL";

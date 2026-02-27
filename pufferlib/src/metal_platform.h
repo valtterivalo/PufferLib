@@ -79,7 +79,7 @@ struct MetalContext {
   NSMutableDictionary<NSString *, id<MTLComputePipelineState>> *pipelines;
 
   // Metal 4 tensor_ops GEMM — separate library (different MSL includes).
-  // Stays on the compute encoder (no MPS encoder transitions).
+  // Metal 4 tensor_ops GEMM pipelines (all layouts, f32 + f16).
   id<MTLComputePipelineState> tensor_ops_gemm_nt_f32;
   id<MTLComputePipelineState> tensor_ops_gemm_nn_f32;
   id<MTLComputePipelineState> tensor_ops_gemm_tn_f32;
@@ -171,8 +171,8 @@ inline void mtl_dispatch_groups(id<MTLComputeCommandEncoder> enc,
 }
 
 // ============================================================================
-// GEMM wrappers — cblas_sgemm (CPU, default) or MSL tiled kernel (GPU).
-// Set PUFFERLIB_GPU_GEMM=1 to force GPU path (for benchmarking).
+// GEMM wrappers — tensor_ops (aligned) or steel_gemm (unaligned) on GPU.
+// CPU cblas_sgemm path used only during rollout (non-training mode).
 //
 // These match the cuBLAS GEMM conventions in models.cu:
 //   puf_mm:    out = a @ b^T   (OP_T, OP_N in cuBLAS column-major)
