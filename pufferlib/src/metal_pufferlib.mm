@@ -402,30 +402,10 @@ static void copy_weights_to_infer(PuffeRL& pufferl) {
 }
 
 // Allocate fused encoder+layer0 weight buffer.
-// Eliminates one GEMM per step (encoder + mingru layer0 → single fused GEMM).
-// Shape (3H, obs_dim) for puf_mm (NT layout). Metal-wrapped for GPU access.
-static void alloc_fused_weight(PolicyWeights& w) {
-    EncoderWeights *ew = (EncoderWeights *)w.encoder;
-    MinGRUWeights *mw = (MinGRUWeights *)w.network;
-    mw->fused_obs_dim = ew->in_dim;
-    mw->fused_enc_layer0 = alloc_metal_tensor(3 * mw->hidden, ew->in_dim);
-}
-
-// Re-compute fused encoder+layer0 weight after training updates.
-// Must be called before each rollout (after train_impl updates weights_fp32).
+// Fused encoder+layer0 disabled: nonlinear 3-layer encoder can't be fused.
+// sync_fused_weight kept as no-op — called from metal_bindings.mm.
 void sync_fused_weight(PuffeRL& pufferl) {
-    PolicyWeights& w = pufferl.weights_fp32;
-    EncoderWeights *ew = (EncoderWeights *)w.encoder;
-    MinGRUWeights *mw = (MinGRUWeights *)w.network;
-    if (!mw->fused_enc_layer0.bytes) return;
-    int obs_dim = mw->fused_obs_dim;
-    int H = mw->hidden;
-    int N3H = 3 * H;
-    cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
-                N3H, obs_dim, H, 1.0f,
-                (const float *)mw->weights[0].bytes, H,
-                (const float *)ew->weight.bytes, obs_dim,
-                0.0f, (float *)mw->fused_enc_layer0.bytes, obs_dim);
+    (void)pufferl; // nothing to sync with nonlinear encoder
 }
 
 // ============================================================================
@@ -622,12 +602,7 @@ void train_impl(PuffeRL& pufferl) {
             PufTensor infer_all = {.bytes = (char*)pufferl.infer_params_alloc.mem,
                                    .shape = {total_elems}, .dtype_size = sizeof(float)};
             puf_copy(infer_all, fp32_all, ts);
-            PolicyWeights& wi = pufferl.weights_infer;
-            MinGRUWeights* mw = (MinGRUWeights*)wi.network;
-            EncoderWeights* ew = (EncoderWeights*)wi.encoder;
-            if (mw->fused_enc_layer0.bytes) {
-                puf_mm_nn(mw->weights[0], ew->weight, mw->fused_enc_layer0, ts);
-            }
+            // fused_enc_layer0 disabled (nonlinear encoder)
         }
 
         puf_set_gpu_training(false);
@@ -872,7 +847,7 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     // fp32 master weights
     auto new_weights = [&](int esz) -> PolicyWeights {
         PolicyWeights w;
-        w.encoder = new EncoderWeights{.in_dim = input_size, .out_dim = hidden_size};
+        w.encoder = new EncoderWeights{.in_dim = input_size, .mid_dim = 2 * hidden_size, .out_dim = hidden_size};
         w.decoder = new DecoderWeights{.hidden_dim = hidden_size, .output_dim = decoder_output_size, .continuous = is_continuous};
         w.network = new MinGRUWeights{.hidden = hidden_size, .num_layers = num_layers, .horizon = hypers.horizon};
         ((MinGRUWeights*)w.network)->weights.resize(num_layers);
@@ -901,9 +876,8 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
         network.init_weights(wfp32.network, &seed, default_stream);
     }
 
-    // Fused encoder+layer0 weight: eliminates one GEMM per forward step.
-    alloc_fused_weight(wfp32);
-    sync_fused_weight(*pufferl);
+    // Fused encoder+layer0 is disabled: nonlinear 3-layer encoder can't be fused.
+    // The null guard in mingru_forward falls back to encoder.forward().
 
     // ========================================================================
     // Double-buffered inference weights (for rollout/training overlap)
@@ -921,23 +895,7 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
         mtl_wrap_allocator(&infer_alloc);
         // Initial copy: weights_fp32 → weights_infer
         copy_weights_to_infer(*pufferl);
-        // Allocate fused weight for inference buffer
-        alloc_fused_weight(wi);
-        // Compute fused weight from copied weights
-        {
-            EncoderWeights *ew = (EncoderWeights *)wi.encoder;
-            MinGRUWeights *mw = (MinGRUWeights *)wi.network;
-            if (mw->fused_enc_layer0.bytes) {
-                int obs_dim = mw->fused_obs_dim;
-                int H = mw->hidden;
-                int N3H = 3 * H;
-                cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
-                            N3H, obs_dim, H, 1.0f,
-                            (const float *)mw->weights[0].bytes, H,
-                            (const float *)ew->weight.bytes, obs_dim,
-                            0.0f, (float *)mw->fused_enc_layer0.bytes, obs_dim);
-            }
-        }
+        // Fused encoder+layer0 disabled (nonlinear encoder)
     }
     pufferl->overlap_enabled = hypers.overlap;
     pufferl->use_adam = hypers.use_adam;
@@ -995,6 +953,20 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
             ma->scan_bufs[i].s_vals.dtype_size = esz_fp32;
             ma->scan_bufs[i].log_values_buf.dtype_size = esz_fp32;
         }
+    }
+    // Restore fp32 on precision-critical saved state for backward passes.
+    // GELU pre_act and LayerNorm saved_x_hat/saved_rstd need fp32 to prevent
+    // gradient precision loss in backward (catastrophic cancellation in LN,
+    // precision-sensitive tanh/exp in GELU). Matches MinGRU scan buffer pattern.
+    {
+        EncoderActivations *ea = (EncoderActivations *)tb.encoder;
+        ea->pre_act1.dtype_size = esz_fp32;
+        ea->pre_act2.dtype_size = esz_fp32;
+        ea->pre_act3.dtype_size = esz_fp32;
+
+        DecoderActivations *da = (DecoderActivations *)tb.decoder;
+        da->saved_x_hat.dtype_size = esz_fp32;
+        da->saved_rstd.dtype_size = esz_fp32;
     }
 
     pufferl->alloc_fp16.create();

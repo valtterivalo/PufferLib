@@ -82,6 +82,8 @@ struct MetalContext {
   // Stays on the compute encoder (no MPS encoder transitions).
   id<MTLComputePipelineState> tensor_ops_gemm_nt_f32;
   id<MTLComputePipelineState> tensor_ops_gemm_nn_f32;
+  id<MTLComputePipelineState> tensor_ops_gemm_nt_f16;
+  id<MTLComputePipelineState> tensor_ops_gemm_nn_f16;
 
   MetalStream stream;       // default stream (rollout)
   MetalStream train_stream; // training stream (separate queue for overlap)

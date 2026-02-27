@@ -28,9 +28,9 @@ OPP_MASTER_NH = 24
 
 def parse_args():
     p = argparse.ArgumentParser(description="Metal PVP training with wandb")
-    p.add_argument("--total-agents", type=int, default=1024)
+    p.add_argument("--total-agents", type=int, default=2048)
     p.add_argument("--hidden-size", type=int, default=512)
-    p.add_argument("--num-layers", type=int, default=3)
+    p.add_argument("--num-layers", type=int, default=1)
     p.add_argument("--horizon", type=int, default=32)
     p.add_argument("--total-timesteps", type=int, default=50_000_000)
     p.add_argument("--learning-rate", type=float, default=0.00112)
@@ -56,6 +56,7 @@ def parse_args():
     p.add_argument("--overlap", action="store_true", help="async training overlap (train on separate GPU queue)")
     p.add_argument("--optimizer", choices=["muon", "adam"], default="muon")
     p.add_argument("--no-wandb", action="store_true")
+    p.add_argument("--shaping", action="store_true", help="enable reward shaping")
     return p.parse_args()
 
 
@@ -104,8 +105,8 @@ def main():
     }
     env_config = {
         "opponent_type": float(args.opponent_type),
-        "shaping_scale": 0.0,
-        "shaping_enabled": 0.0,
+        "shaping_scale": 1.0 if args.shaping else 0.0,
+        "shaping_enabled": 1.0 if args.shaping else 0.0,
     }
 
     # wandb

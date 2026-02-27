@@ -143,6 +143,23 @@ inline void log_coeffs_and_values_bwd(float grad_lc, float grad_lv,
 inline float relu_f(float x) { return max(0.0f, x); }
 inline float relu_backward_f(float x, float grad_output) { return (x > 0.0f) ? grad_output : 0.0f; }
 
+// GELU (tanh approximation): 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
+// MSL doesn't have erf(), so we use the standard tanh approx (matches PyTorch gelu(approximate='tanh'))
+inline float gelu_f(float x) {
+    float c = 0.7978845608028654f; // sqrt(2/pi)
+    float inner = c * (x + 0.044715f * x * x * x);
+    return 0.5f * x * (1.0f + tanh(inner));
+}
+inline float gelu_backward_f(float x, float grad_output) {
+    float c = 0.7978845608028654f;
+    float x3 = x * x * x;
+    float inner = c * (x + 0.044715f * x3);
+    float tanh_inner = tanh(inner);
+    float sech2 = 1.0f - tanh_inner * tanh_inner;
+    float d_inner = c * (1.0f + 3.0f * 0.044715f * x * x);
+    return grad_output * 0.5f * ((1.0f + tanh_inner) + x * sech2 * d_inner);
+}
+
 // ============================================================================
 // Section 2: Philox RNG (counter-based PRNG matching cuRAND)
 // ============================================================================
@@ -1963,6 +1980,431 @@ kernel void sum_rows_to_f32_kernel(
 }
 
 // ============================================================================
+// Section 15b: GELU element-wise kernels
+// ============================================================================
+
+struct GeluParams { int n; };
+
+// gelu_fwd: out[i] = gelu(in[i])
+kernel void gelu_fwd_kernel(
+    const device float* in          [[buffer(0)]],
+    device float* out               [[buffer(1)]],
+    constant GeluParams& p          [[buffer(2)]],
+    uint idx [[thread_position_in_grid]]
+) {
+    if ((int)idx < p.n) out[idx] = gelu_f(in[idx]);
+}
+
+// gelu_bwd: grad_in[i] = grad_out[i] * gelu'(pre_act[i])
+kernel void gelu_bwd_kernel(
+    const device float* grad_out    [[buffer(0)]],
+    const device float* pre_act     [[buffer(1)]],
+    device float* grad_in           [[buffer(2)]],
+    constant GeluParams& p          [[buffer(3)]],
+    uint idx [[thread_position_in_grid]]
+) {
+    if ((int)idx < p.n) grad_in[idx] = gelu_backward_f(pre_act[idx], grad_out[idx]);
+}
+
+// gelu_fwd_inplace: x[i] = gelu(x[i]), saves pre-activation to pre_act
+kernel void gelu_fwd_save_kernel(
+    device float* x                 [[buffer(0)]],
+    device float* pre_act           [[buffer(1)]],
+    constant GeluParams& p          [[buffer(2)]],
+    uint idx [[thread_position_in_grid]]
+) {
+    if ((int)idx >= p.n) return;
+    float v = x[idx];
+    pre_act[idx] = v;
+    x[idx] = gelu_f(v);
+}
+
+// ============================================================================
+// Section 15c: LayerNorm kernels (one threadgroup per row)
+// ============================================================================
+
+struct LayerNormParams {
+    int H;      // feature dimension (columns per row)
+    float eps;  // epsilon for numerical stability
+};
+
+// layernorm_fwd: per-row normalize, apply affine weight*x_hat+bias.
+// one threadgroup per row, threads cooperate on reduction.
+// saves x_hat (normalized) and rstd for backward.
+kernel void layernorm_fwd_kernel(
+    const device float* input       [[buffer(0)]],   // (B, H)
+    const device float* weight      [[buffer(1)]],   // (H,)
+    const device float* bias        [[buffer(2)]],   // (H,)
+    device float* output            [[buffer(3)]],   // (B, H)
+    device float* saved_x_hat       [[buffer(4)]],   // (B, H)
+    device float* saved_rstd        [[buffer(5)]],   // (B,)
+    constant LayerNormParams& p     [[buffer(6)]],
+    uint row [[threadgroup_position_in_grid]],
+    uint tid [[thread_index_in_threadgroup]]
+) {
+    threadgroup float sdata[256];
+    int H = p.H;
+    int base = (int)row * H;
+
+    // pass 1: mean
+    float sum = 0.0f;
+    for (int i = (int)tid; i < H; i += 256) sum += input[base + i];
+    sdata[tid] = sum;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (int s = 128; s > 0; s >>= 1) {
+        if ((int)tid < s) sdata[tid] += sdata[tid + s];
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    float mean = sdata[0] / float(H);
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    // pass 2: variance
+    float ss = 0.0f;
+    for (int i = (int)tid; i < H; i += 256) {
+        float d = input[base + i] - mean;
+        ss += d * d;
+    }
+    sdata[tid] = ss;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (int s = 128; s > 0; s >>= 1) {
+        if ((int)tid < s) sdata[tid] += sdata[tid + s];
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    float var = sdata[0] / float(H);
+    float rstd = rsqrt(var + p.eps);
+    if (tid == 0) saved_rstd[row] = rstd;
+
+    // pass 3: normalize and apply affine
+    for (int i = (int)tid; i < H; i += 256) {
+        float x_hat = (input[base + i] - mean) * rstd;
+        saved_x_hat[base + i] = x_hat;
+        output[base + i] = weight[i] * x_hat + bias[i];
+    }
+}
+
+// layernorm_bwd: compute grad_input, accumulate grad_weight and grad_bias.
+// one threadgroup per row for grad_input, then separate reduction for param grads.
+kernel void layernorm_bwd_kernel(
+    const device float* grad_out    [[buffer(0)]],   // (B, H)
+    const device float* saved_x_hat [[buffer(1)]],   // (B, H)
+    const device float* saved_rstd  [[buffer(2)]],   // (B,)
+    const device float* weight      [[buffer(3)]],   // (H,)
+    device float* grad_input        [[buffer(4)]],   // (B, H)
+    constant LayerNormParams& p     [[buffer(5)]],
+    uint row [[threadgroup_position_in_grid]],
+    uint tid [[thread_index_in_threadgroup]]
+) {
+    threadgroup float sdata[256];
+    threadgroup float sdata2[256];
+    int H = p.H;
+    int base = (int)row * H;
+    float rstd = saved_rstd[row];
+
+    // accumulate: sum(grad_out * weight) and sum(grad_out * weight * x_hat)
+    float dot_gw = 0.0f;
+    float dot_gwx = 0.0f;
+    for (int i = (int)tid; i < H; i += 256) {
+        float gw = grad_out[base + i] * weight[i];
+        dot_gw += gw;
+        dot_gwx += gw * saved_x_hat[base + i];
+    }
+    sdata[tid] = dot_gw;
+    sdata2[tid] = dot_gwx;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (int s = 128; s > 0; s >>= 1) {
+        if ((int)tid < s) {
+            sdata[tid] += sdata[tid + s];
+            sdata2[tid] += sdata2[tid + s];
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    float c1 = sdata[0] / float(H);
+    float c2 = sdata2[0] / float(H);
+
+    // grad_input = rstd * (grad_out * weight - c1 - x_hat * c2)
+    for (int i = (int)tid; i < H; i += 256) {
+        float gw = grad_out[base + i] * weight[i];
+        grad_input[base + i] = rstd * (gw - c1 - saved_x_hat[base + i] * c2);
+    }
+}
+
+// layernorm_param_grad: accumulate grad_weight and grad_bias over batch.
+// simple column-wise sum (one thread per column).
+kernel void layernorm_param_grad_kernel(
+    const device float* grad_out    [[buffer(0)]],   // (B, H)
+    const device float* saved_x_hat [[buffer(1)]],   // (B, H)
+    device float* grad_weight       [[buffer(2)]],   // (H,)
+    device float* grad_bias         [[buffer(3)]],   // (H,)
+    constant SumRowsParams& p       [[buffer(4)]],   // R=B, C=H
+    uint col [[thread_position_in_grid]]
+) {
+    if ((int)col >= p.C) return;
+    float gw = 0.0f, gb = 0.0f;
+    for (int r = 0; r < p.R; r++) {
+        int idx = r * p.C + (int)col;
+        gw += grad_out[idx] * saved_x_hat[idx];
+        gb += grad_out[idx];
+    }
+    grad_weight[col] = gw;
+    grad_bias[col] = gb;
+}
+
+// ============================================================================
+// Section 15d: Bias add (broadcast)
+// ============================================================================
+
+struct BiasAddParams {
+    int cols;
+    int n;   // total elements (rows * cols)
+};
+
+// bias_add: inout[i] += bias[i % cols]
+kernel void bias_add_kernel(
+    device float* inout             [[buffer(0)]],
+    const device float* bias        [[buffer(1)]],
+    constant BiasAddParams& p       [[buffer(2)]],
+    uint idx [[thread_position_in_grid]]
+) {
+    if ((int)idx < p.n) inout[idx] += bias[(int)idx % p.cols];
+}
+
+// ============================================================================
+// Section 15e: ReLU element-wise kernels
+// ============================================================================
+
+// relu_fwd_save: out[i] = relu(in[i]), pre_act[i] = in[i] (save for backward)
+kernel void relu_fwd_save_kernel(
+    const device float* in          [[buffer(0)]],
+    device float* out               [[buffer(1)]],
+    device float* pre_act           [[buffer(2)]],
+    constant GeluParams& p          [[buffer(3)]],  // reuse GeluParams (just int n)
+    uint idx [[thread_position_in_grid]]
+) {
+    if ((int)idx >= p.n) return;
+    float v = in[idx];
+    pre_act[idx] = v;
+    out[idx] = max(0.0f, v);
+}
+
+// relu_bwd: grad_in[i] = (pre_act[i] > 0) ? grad_out[i] : 0
+kernel void relu_bwd_kernel(
+    const device float* grad_out    [[buffer(0)]],
+    const device float* pre_act     [[buffer(1)]],
+    device float* grad_in           [[buffer(2)]],
+    constant GeluParams& p          [[buffer(3)]],
+    uint idx [[thread_position_in_grid]]
+) {
+    if ((int)idx >= p.n) return;
+    grad_in[idx] = (pre_act[idx] > 0.0f) ? grad_out[idx] : 0.0f;
+}
+
+// ============================================================================
+// Section 15f: fp16 element-wise kernel variants
+// Main data (activations, gradients) uses half. Precision-critical saved state
+// (pre_act for GELU, saved_x_hat/saved_rstd for LayerNorm) stays float to
+// prevent gradient computation precision loss in backward passes.
+// ============================================================================
+
+// --- GELU fp16 (mixed: half I/O, float pre_act save) ---
+
+kernel void gelu_fwd_f16_kernel(
+    const device half* in           [[buffer(0)]],
+    device half* out                [[buffer(1)]],
+    constant GeluParams& p          [[buffer(2)]],
+    uint idx [[thread_position_in_grid]]
+) {
+    if ((int)idx < p.n) out[idx] = half(gelu_f(float(in[idx])));
+}
+
+// gelu_fwd_save_f16: half x → half x (post-gelu), FLOAT pre_act
+kernel void gelu_fwd_save_f16_kernel(
+    device half* x                  [[buffer(0)]],
+    device float* pre_act           [[buffer(1)]],
+    constant GeluParams& p          [[buffer(2)]],
+    uint idx [[thread_position_in_grid]]
+) {
+    if ((int)idx >= p.n) return;
+    float v = float(x[idx]);
+    pre_act[idx] = v;           // fp32 save for backward precision
+    x[idx] = half(gelu_f(v));
+}
+
+// gelu_bwd_f16: half grad I/O, FLOAT pre_act read
+kernel void gelu_bwd_f16_kernel(
+    const device half* grad_out     [[buffer(0)]],
+    const device float* pre_act     [[buffer(1)]],
+    device half* grad_in            [[buffer(2)]],
+    constant GeluParams& p          [[buffer(3)]],
+    uint idx [[thread_position_in_grid]]
+) {
+    if ((int)idx < p.n)
+        grad_in[idx] = half(gelu_backward_f(pre_act[idx], float(grad_out[idx])));
+}
+
+// --- LayerNorm fp16 (mixed: half data, float saved_x_hat/saved_rstd) ---
+
+kernel void layernorm_fwd_f16_kernel(
+    const device half* input        [[buffer(0)]],
+    const device half* weight       [[buffer(1)]],
+    const device half* bias         [[buffer(2)]],
+    device half* output             [[buffer(3)]],
+    device float* saved_x_hat       [[buffer(4)]],
+    device float* saved_rstd        [[buffer(5)]],
+    constant LayerNormParams& p     [[buffer(6)]],
+    uint row [[threadgroup_position_in_grid]],
+    uint tid [[thread_index_in_threadgroup]]
+) {
+    threadgroup float sdata[256];
+    int H = p.H;
+    int base = (int)row * H;
+
+    float sum = 0.0f;
+    for (int i = (int)tid; i < H; i += 256) sum += float(input[base + i]);
+    sdata[tid] = sum;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (int s = 128; s > 0; s >>= 1) {
+        if ((int)tid < s) sdata[tid] += sdata[tid + s];
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    float mean = sdata[0] / float(H);
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    float ss = 0.0f;
+    for (int i = (int)tid; i < H; i += 256) {
+        float d = float(input[base + i]) - mean;
+        ss += d * d;
+    }
+    sdata[tid] = ss;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (int s = 128; s > 0; s >>= 1) {
+        if ((int)tid < s) sdata[tid] += sdata[tid + s];
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    float var = sdata[0] / float(H);
+    float rstd = rsqrt(var + p.eps);
+    if (tid == 0) saved_rstd[row] = rstd;  // fp32
+
+    for (int i = (int)tid; i < H; i += 256) {
+        float x_hat = (float(input[base + i]) - mean) * rstd;
+        saved_x_hat[base + i] = x_hat;     // fp32
+        output[base + i] = half(float(weight[i]) * x_hat + float(bias[i]));
+    }
+}
+
+kernel void layernorm_bwd_f16_kernel(
+    const device half* grad_out     [[buffer(0)]],
+    const device float* saved_x_hat [[buffer(1)]],
+    const device float* saved_rstd  [[buffer(2)]],
+    const device half* weight       [[buffer(3)]],
+    device half* grad_input         [[buffer(4)]],
+    constant LayerNormParams& p     [[buffer(5)]],
+    uint row [[threadgroup_position_in_grid]],
+    uint tid [[thread_index_in_threadgroup]]
+) {
+    threadgroup float sdata[256];
+    threadgroup float sdata2[256];
+    int H = p.H;
+    int base = (int)row * H;
+    float rstd = saved_rstd[row];  // fp32 read
+
+    float dot_gw = 0.0f;
+    float dot_gwx = 0.0f;
+    for (int i = (int)tid; i < H; i += 256) {
+        float gw = float(grad_out[base + i]) * float(weight[i]);
+        dot_gw += gw;
+        dot_gwx += gw * saved_x_hat[base + i];  // fp32 read
+    }
+    sdata[tid] = dot_gw;
+    sdata2[tid] = dot_gwx;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (int s = 128; s > 0; s >>= 1) {
+        if ((int)tid < s) {
+            sdata[tid] += sdata[tid + s];
+            sdata2[tid] += sdata2[tid + s];
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    float c1 = sdata[0] / float(H);
+    float c2 = sdata2[0] / float(H);
+
+    for (int i = (int)tid; i < H; i += 256) {
+        float gw = float(grad_out[base + i]) * float(weight[i]);
+        grad_input[base + i] = half(rstd * (gw - c1 - saved_x_hat[base + i] * c2));
+    }
+}
+
+kernel void layernorm_param_grad_f16_kernel(
+    const device half* grad_out     [[buffer(0)]],
+    const device float* saved_x_hat [[buffer(1)]],
+    device half* grad_weight        [[buffer(2)]],
+    device half* grad_bias          [[buffer(3)]],
+    constant SumRowsParams& p       [[buffer(4)]],
+    uint col [[thread_position_in_grid]]
+) {
+    if ((int)col >= p.C) return;
+    float gw = 0.0f, gb = 0.0f;
+    for (int r = 0; r < p.R; r++) {
+        int idx = r * p.C + (int)col;
+        gw += float(grad_out[idx]) * saved_x_hat[idx];  // fp32 read
+        gb += float(grad_out[idx]);
+    }
+    grad_weight[col] = half(gw);
+    grad_bias[col] = half(gb);
+}
+
+// --- ReLU fp16 ---
+
+kernel void relu_fwd_save_f16_kernel(
+    const device half* in           [[buffer(0)]],
+    device half* out                [[buffer(1)]],
+    device half* pre_act            [[buffer(2)]],
+    constant GeluParams& p          [[buffer(3)]],
+    uint idx [[thread_position_in_grid]]
+) {
+    if ((int)idx >= p.n) return;
+    float v = float(in[idx]);
+    pre_act[idx] = half(v);
+    out[idx] = half(max(0.0f, v));
+}
+
+kernel void relu_bwd_f16_kernel(
+    const device half* grad_out     [[buffer(0)]],
+    const device half* pre_act      [[buffer(1)]],
+    device half* grad_in            [[buffer(2)]],
+    constant GeluParams& p          [[buffer(3)]],
+    uint idx [[thread_position_in_grid]]
+) {
+    if ((int)idx >= p.n) return;
+    grad_in[idx] = (float(pre_act[idx]) > 0.0f) ? grad_out[idx] : half(0.0f);
+}
+
+// --- Bias add fp16 ---
+
+kernel void bias_add_f16_kernel(
+    device half* inout              [[buffer(0)]],
+    const device half* bias         [[buffer(1)]],
+    constant BiasAddParams& p       [[buffer(2)]],
+    uint idx [[thread_position_in_grid]]
+) {
+    if ((int)idx < p.n)
+        inout[idx] = half(float(inout[idx]) + float(bias[(int)idx % p.cols]));
+}
+
+// --- Sum rows fp16 (for bias/LN param grads) ---
+
+kernel void sum_rows_f16_kernel(
+    device half* dst                [[buffer(0)]],
+    const device half* src          [[buffer(1)]],
+    constant SumRowsParams& p       [[buffer(2)]],
+    uint col [[thread_position_in_grid]]
+) {
+    if ((int)col >= p.C) return;
+    float sum = 0.0f;
+    for (int r = 0; r < p.R; r++) sum += float(src[r * p.C + (int)col]);
+    dst[col] = half(sum);
+}
+
+// ============================================================================
 // Section 16: Decoder grad assembly
 // ============================================================================
 
@@ -3061,6 +3503,50 @@ kernel void steel_gemm(
             }
         }
     }
+}
+
+// ============================================================================
+// Section 26: Small GEMM — compute-encoder fallback for unaligned N
+// ============================================================================
+// Used when N doesn't meet tensor_ops alignment (N%32!=0).
+// Stays on the compute encoder to avoid MPS encoder transitions.
+// One threadgroup per output row, threads partition N columns.
+// C(M,N) = A(M,K) @ B(N,K)^T, all row-major.
+
+struct SmallGemmParams {
+    uint M;
+    uint N;
+    uint K;
+};
+
+kernel void small_gemm_nt_f32(
+    const device float* A          [[buffer(0)]],
+    const device float* B          [[buffer(1)]],
+    device float* C                [[buffer(2)]],
+    constant SmallGemmParams& p    [[buffer(3)]],
+    uint tgid [[threadgroup_position_in_grid]],
+    uint tid  [[thread_index_in_threadgroup]])
+{
+    // tgid = output row, tid = output column
+    uint m = tgid;
+    if (tid >= p.N) return;
+
+    const device float* a_row = A + m * p.K;
+    const device float* b_row = B + tid * p.K;
+
+    float sum = 0.0f;
+    // float4 vectorized accumulation (K must be multiple of 4)
+    uint K4 = p.K & ~3u;
+    for (uint k = 0; k < K4; k += 4) {
+        float4 a4 = *reinterpret_cast<const device float4*>(a_row + k);
+        float4 b4 = *reinterpret_cast<const device float4*>(b_row + k);
+        sum += dot(a4, b4);
+    }
+    // handle remainder (K not multiple of 4)
+    for (uint k = K4; k < p.K; k++)
+        sum += a_row[k] * b_row[k];
+
+    C[m * p.N + tid] = sum;
 }
 
 )METAL";
