@@ -178,15 +178,84 @@ kernel void tensor_ops_gemm_nn_f16(
 
     op.run(mFirst, mSecond, mResult);
 }
+
+// C(M,N) = A(K,M)^T @ B(K,N) — float32, tensor_inline with device memory.
+// TN: backward weight gradient. Row-major A(K,M) = col-major (M,K).
+// matmul2d: result(N,M) = second(N,K) @ transpose(first(M,K))
+// M % 64 == 0 and N % 32 == 0 required (caller falls back to steel_gemm).
+kernel void tensor_ops_gemm_tn_f32(
+    device float* A_buf [[buffer(0)]],
+    device float* B_buf [[buffer(1)]],
+    device float* C_buf [[buffer(2)]],
+    constant uint& M    [[buffer(3)]],
+    constant uint& N    [[buffer(4)]],
+    constant uint& K    [[buffer(5)]],
+    uint2 tgid [[threadgroup_position_in_grid]])
+{
+    // Row-major A(K,M) in memory == col-major tensor(M, K)
+    auto A_cm = tensor<device float, dextents<int32_t, 2>, tensor_inline>(
+        A_buf, dextents<int32_t, 2>(M, K));
+    // Row-major B(K,N) in memory == col-major tensor(N, K)
+    auto B_cm = tensor<device float, dextents<int32_t, 2>, tensor_inline>(
+        B_buf, dextents<int32_t, 2>(N, K));
+    // Row-major C(M,N) in memory == col-major tensor(N, M)
+    auto C_cm = tensor<device float, dextents<int32_t, 2>, tensor_inline>(
+        C_buf, dextents<int32_t, 2>(N, M));
+
+    // result(N,M) = second(N,K) @ transpose(first(M,K))
+    // transpose_first=true: matmul sees first as (K,M)
+    // (N,K) @ (K,M) = (N,M) = result
+    constexpr auto desc = matmul2d_descriptor(
+        64, 32,
+        static_cast<int>(dynamic_extent),
+        true, false, false
+    );
+    matmul2d<desc, execution_simdgroups<4>> op;
+
+    // tgid.y tiles M at stride 64, tgid.x tiles N at stride 32
+    auto mFirst  = A_cm.slice(tgid.y * 64, 0);
+    auto mSecond = B_cm.slice(tgid.x * 32, 0);
+    auto mResult = C_cm.slice(tgid.x * 32, tgid.y * 64);
+
+    op.run(mFirst, mSecond, mResult);
+}
+
+// C(M,N) = A(K,M)^T @ B(K,N) — half precision TN variant.
+kernel void tensor_ops_gemm_tn_f16(
+    device half* A_buf [[buffer(0)]],
+    device half* B_buf [[buffer(1)]],
+    device half* C_buf [[buffer(2)]],
+    constant uint& M    [[buffer(3)]],
+    constant uint& N    [[buffer(4)]],
+    constant uint& K    [[buffer(5)]],
+    uint2 tgid [[threadgroup_position_in_grid]])
+{
+    auto A_cm = tensor<device half, dextents<int32_t, 2>, tensor_inline>(
+        A_buf, dextents<int32_t, 2>(M, K));
+    auto B_cm = tensor<device half, dextents<int32_t, 2>, tensor_inline>(
+        B_buf, dextents<int32_t, 2>(N, K));
+    auto C_cm = tensor<device half, dextents<int32_t, 2>, tensor_inline>(
+        C_buf, dextents<int32_t, 2>(N, M));
+
+    constexpr auto desc = matmul2d_descriptor(
+        64, 32,
+        static_cast<int>(dynamic_extent),
+        true, false, false
+    );
+    matmul2d<desc, execution_simdgroups<4>> op;
+
+    auto mFirst  = A_cm.slice(tgid.y * 64, 0);
+    auto mSecond = B_cm.slice(tgid.x * 32, 0);
+    auto mResult = C_cm.slice(tgid.x * 32, tgid.y * 64);
+
+    op.run(mFirst, mSecond, mResult);
+}
 )METAL";
 }
 
 // ============================================================================
 // MPS GEMM cache — reuse MPSMatrixMultiplication objects across calls.
-// Each object encodes (M, N, K, transpose flags, alpha, beta, fp16) and
-// configures the GPU pipeline internally. Creating one per GEMM call adds
-// significant ObjC overhead; caching eliminates it for the ~10-20 unique
-// shapes used during training and rollout.
+// Only used for fp16 unaligned fallback (f32 uses steel_gemm compute encoder).
 // ============================================================================
 
 struct GemmKey {
@@ -427,11 +496,40 @@ void mtl_init() {
                                                         reflection:nil
                                                              error:&nn16_err];
           }
-          printf("[metal] tensor_ops GEMM: NT=%s NN=%s NT16=%s NN16=%s\n",
+          // TN variants (backward weight gradients)
+          {
+            NSError *tn_err = nil;
+            id<MTLFunction> fn_tn = [tensor_lib newFunctionWithName:@"tensor_ops_gemm_tn_f32"];
+            if (fn_tn) {
+              MTLComputePipelineDescriptor *pd_tn = [[MTLComputePipelineDescriptor alloc] init];
+              pd_tn.computeFunction = fn_tn;
+              pd_tn.maxTotalThreadsPerThreadgroup = 128;
+              g_ctx.tensor_ops_gemm_tn_f32 =
+                  [g_ctx.device newComputePipelineStateWithDescriptor:pd_tn
+                                                             options:0
+                                                          reflection:nil
+                                                               error:&tn_err];
+            }
+            id<MTLFunction> fn_tn16 = [tensor_lib newFunctionWithName:@"tensor_ops_gemm_tn_f16"];
+            if (fn_tn16) {
+              MTLComputePipelineDescriptor *pd_tn16 = [[MTLComputePipelineDescriptor alloc] init];
+              pd_tn16.computeFunction = fn_tn16;
+              pd_tn16.maxTotalThreadsPerThreadgroup = 128;
+              NSError *tn16_err = nil;
+              g_ctx.tensor_ops_gemm_tn_f16 =
+                  [g_ctx.device newComputePipelineStateWithDescriptor:pd_tn16
+                                                             options:0
+                                                          reflection:nil
+                                                               error:&tn16_err];
+            }
+          }
+          printf("[metal] tensor_ops GEMM: NT=%s NN=%s TN=%s NT16=%s NN16=%s TN16=%s\n",
                  "OK",
                  g_ctx.tensor_ops_gemm_nn_f32 ? "OK" : nn_err.localizedDescription.UTF8String,
+                 g_ctx.tensor_ops_gemm_tn_f32 ? "OK" : "FAIL",
                  g_ctx.tensor_ops_gemm_nt_f16 ? "OK" : "FAIL",
-                 g_ctx.tensor_ops_gemm_nn_f16 ? "OK" : "FAIL");
+                 g_ctx.tensor_ops_gemm_nn_f16 ? "OK" : "FAIL",
+                 g_ctx.tensor_ops_gemm_tn_f16 ? "OK" : "FAIL");
         } else {
           printf("[metal] tensor_ops GEMM pipeline failed: %s\n",
                  tensor_err.localizedDescription.UTF8String);
@@ -661,59 +759,8 @@ static void compute_gemm(const float *A, const float *B, float *C,
   ms->pending_work = true;
 }
 
-// ============================================================================
-// MPS GEMM: C = alpha * op(A) @ op(B) + beta * C
-// Uses MPSMatrixMultiplication — best for fp16 large-batch training GEMMs.
-// MPS encodes to the command buffer (not compute encoder), so we end any
-// active compute encoder before encoding.
-// ============================================================================
-
-static void gpu_gemm(const float *A, int physical_rows_A, int physical_cols_A,
-                      bool transpose_A,
-                      const float *B, int physical_rows_B, int physical_cols_B,
-                      bool transpose_B,
-                      float *C, int result_rows, int result_cols,
-                      int interior_cols,
-                      float alpha, float beta,
-                      cudaStream_t stream) {
-  int M = result_rows, N = result_cols, K = interior_cols;
-
-  MetalStream *ms = get_stream(stream);
-  ms->end_compute();
-
-  NSUInteger off_a, off_b, off_c;
-  id<MTLBuffer> buf_a = buffer_for_ptr(A, &off_a);
-  id<MTLBuffer> buf_b = buffer_for_ptr(B, &off_b);
-  id<MTLBuffer> buf_c = buffer_for_ptr(C, &off_c);
-
-  MPSMatrixDescriptor *desc_a = [MPSMatrixDescriptor
-      matrixDescriptorWithRows:physical_rows_A
-                       columns:physical_cols_A
-                      rowBytes:physical_cols_A * sizeof(float)
-                      dataType:MPSDataTypeFloat32];
-  MPSMatrixDescriptor *desc_b = [MPSMatrixDescriptor
-      matrixDescriptorWithRows:physical_rows_B
-                       columns:physical_cols_B
-                      rowBytes:physical_cols_B * sizeof(float)
-                      dataType:MPSDataTypeFloat32];
-  MPSMatrixDescriptor *desc_c = [MPSMatrixDescriptor
-      matrixDescriptorWithRows:M
-                       columns:N
-                      rowBytes:N * sizeof(float)
-                      dataType:MPSDataTypeFloat32];
-
-  MPSMatrix *mat_a = [[MPSMatrix alloc] initWithBuffer:buf_a offset:off_a descriptor:desc_a];
-  MPSMatrix *mat_b = [[MPSMatrix alloc] initWithBuffer:buf_b offset:off_b descriptor:desc_b];
-  MPSMatrix *mat_c = [[MPSMatrix alloc] initWithBuffer:buf_c offset:off_c descriptor:desc_c];
-
-  MPSMatrixMultiplication *matmul = cached_matmul(M, N, K, transpose_A, transpose_B,
-                                                   alpha, beta, /*fp16=*/false);
-  [matmul encodeToCommandBuffer:ms->cmd leftMatrix:mat_a rightMatrix:mat_b resultMatrix:mat_c];
-  ms->pending_work = true;
-  g_mps_dispatch_count++;
-}
-
-// GPU GEMM fp16: half inputs, half output, float accumulation inside MPS.
+// MPS GEMM fp16: half inputs, half output, float accumulation inside MPS.
+// Only used for fp16 unaligned fallback (tensor_ops require alignment).
 static void gpu_gemm_fp16(const void *A, int physical_rows_A, int physical_cols_A,
                            bool transpose_A,
                            const void *B, int physical_rows_B, int physical_cols_B,
@@ -756,6 +803,7 @@ static void gpu_gemm_fp16(const void *A, int physical_rows_A, int physical_cols_
                                                    alpha, beta, /*fp16=*/true);
   [matmul encodeToCommandBuffer:ms->cmd leftMatrix:mat_a rightMatrix:mat_b resultMatrix:mat_c];
   ms->pending_work = true;
+  g_mps_dispatch_count++;
 }
 
 // ============================================================================
@@ -909,6 +957,79 @@ static bool tensor_ops_gemm_nn_f16(const void *A, const void *B, void *C,
   return true;
 }
 
+// ============================================================================
+// tensor_ops GEMM: C(M,N) = A(K,M)^T @ B(K,N) on the compute encoder.
+// Uses Metal 4 matmul2d with tensor_inline — no MPS encoder transition.
+// Requires M % 64 == 0, N % 32 == 0 (tile_M=64, tile_N=32).
+// Returns false if unavailable.
+// ============================================================================
+
+static bool tensor_ops_gemm_tn(const float *A, const float *B, float *C,
+                                int M, int N, int K,
+                                cudaStream_t stream) {
+  if (!g_ctx.tensor_ops_gemm_tn_f32) return false;
+  g_tensor_ops_dispatch_count++;
+
+  MetalStream *ms = get_stream(stream);
+  id<MTLComputeCommandEncoder> enc = ms->compute_encoder();
+  [enc setComputePipelineState:g_ctx.tensor_ops_gemm_tn_f32];
+
+  NSUInteger off_a, off_b, off_c;
+  id<MTLBuffer> buf_a = buffer_for_ptr(A, &off_a);
+  id<MTLBuffer> buf_b = buffer_for_ptr(B, &off_b);
+  id<MTLBuffer> buf_c = buffer_for_ptr(C, &off_c);
+
+  [enc setBuffer:buf_a offset:off_a atIndex:0];
+  [enc setBuffer:buf_b offset:off_b atIndex:1];
+  [enc setBuffer:buf_c offset:off_c atIndex:2];
+
+  uint32_t mM = (uint32_t)M, mN = (uint32_t)N, mK = (uint32_t)K;
+  [enc setBytes:&mM length:sizeof(mM) atIndex:3];
+  [enc setBytes:&mN length:sizeof(mN) atIndex:4];
+  [enc setBytes:&mK length:sizeof(mK) atIndex:5];
+
+  int groups_m = (M + 63) / 64;
+  int groups_n = (N + 31) / 32;
+  [enc dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
+      threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+
+  ms->pending_work = true;
+  return true;
+}
+
+static bool tensor_ops_gemm_tn_f16(const void *A, const void *B, void *C,
+                                    int M, int N, int K,
+                                    cudaStream_t stream) {
+  if (!g_ctx.tensor_ops_gemm_tn_f16) return false;
+  g_tensor_ops_dispatch_count++;
+
+  MetalStream *ms = get_stream(stream);
+  id<MTLComputeCommandEncoder> enc = ms->compute_encoder();
+  [enc setComputePipelineState:g_ctx.tensor_ops_gemm_tn_f16];
+
+  NSUInteger off_a, off_b, off_c;
+  id<MTLBuffer> buf_a = buffer_for_ptr(A, &off_a);
+  id<MTLBuffer> buf_b = buffer_for_ptr(B, &off_b);
+  id<MTLBuffer> buf_c = buffer_for_ptr(C, &off_c);
+
+  [enc setBuffer:buf_a offset:off_a atIndex:0];
+  [enc setBuffer:buf_b offset:off_b atIndex:1];
+  [enc setBuffer:buf_c offset:off_c atIndex:2];
+
+  uint32_t mM = (uint32_t)M, mN = (uint32_t)N, mK = (uint32_t)K;
+  [enc setBytes:&mM length:sizeof(mM) atIndex:3];
+  [enc setBytes:&mN length:sizeof(mN) atIndex:4];
+  [enc setBytes:&mK length:sizeof(mK) atIndex:5];
+
+  int groups_m = (M + 63) / 64;
+  int groups_n = (N + 31) / 32;
+  [enc dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
+      threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+
+  ms->pending_work = true;
+  return true;
+}
+
 // Small compute-encoder GEMM for unaligned N (avoids MPS encoder transitions).
 // C(M,N) = A(M,K) @ B(N,K)^T. One threadgroup per row, threads partition columns.
 // Efficient for small N (e.g. decoder output N=40) where MPS transition overhead
@@ -967,15 +1088,16 @@ void puf_mm(PufTensor &a, PufTensor &b, PufTensor &out,
              tensor_ops_gemm_nt((const float *)a.bytes, (const float *)b.bytes,
                                 (float *)out.bytes, M, N, K, stream)) {
     // fp32 tensor_ops on compute encoder — no MPS transition
-  } else if (a.dtype_size == 4 && N < 128 && !no_tensor) {
-    // Small N: use compute-encoder GEMM to avoid MPS transition overhead
+  } else if (a.dtype_size == 4 && N < 128) {
+    // Small unaligned N: 1-row-per-threadgroup kernel (avoids 64x64 tile waste)
     small_gemm_nt_dispatch((const float *)a.bytes, (const float *)b.bytes,
                            (float *)out.bytes, M, N, K, stream);
   } else {
-    gpu_gemm((const float *)a.bytes, M, K, false,
-             (const float *)b.bytes, N, K, true,
-             (float *)out.bytes, M, N, K,
-             1.0f, 0.0f, stream);
+    // f32 unaligned: steel_gemm NT (stays on compute encoder)
+    compute_gemm((const float *)a.bytes, (const float *)b.bytes,
+                 (float *)out.bytes, M, N, K,
+                 /*trans_a=*/false, /*trans_b=*/true,
+                 K, K, N, 1.0f, 0.0f, stream);
   }
 }
 
@@ -987,16 +1109,30 @@ void puf_mm_tn(PufTensor &a, PufTensor &b, PufTensor &out,
   int M = (int)a.shape[na - 1];
   int N = (int)b.shape[nb - 1];
 
+  bool no_tensor = getenv("PUFFERLIB_NO_TENSOR_OPS");
+  bool aligned = (M % 64 == 0) && (N % 32 == 0);
+
   if (a.dtype_size == 2) {
-    gpu_gemm_fp16(a.bytes, K, M, true,
-                  b.bytes, K, N, false,
-                  out.bytes, M, N, K,
-                  1.0f, 0.0f, stream);
+    if (aligned && !no_tensor &&
+        tensor_ops_gemm_tn_f16(a.bytes, b.bytes, out.bytes, M, N, K, stream)) {
+      // fp16 tensor_ops TN on compute encoder
+    } else {
+      // fp16 unaligned TN — MPS fallback (steel_gemm is f32 only)
+      gpu_gemm_fp16(a.bytes, K, M, true,
+                    b.bytes, K, N, false,
+                    out.bytes, M, N, K,
+                    1.0f, 0.0f, stream);
+    }
+  } else if (aligned && !no_tensor &&
+             tensor_ops_gemm_tn((const float *)a.bytes, (const float *)b.bytes,
+                                (float *)out.bytes, M, N, K, stream)) {
+    // fp32 tensor_ops TN on compute encoder
   } else {
-    gpu_gemm((const float *)a.bytes, K, M, true,
-             (const float *)b.bytes, K, N, false,
-             (float *)out.bytes, M, N, K,
-             1.0f, 0.0f, stream);
+    // fp32 steel_gemm TN fallback (stays on compute encoder)
+    compute_gemm((const float *)a.bytes, (const float *)b.bytes,
+                 (float *)out.bytes, M, N, K,
+                 /*trans_a=*/true, /*trans_b=*/false,
+                 M, N, N, 1.0f, 0.0f, stream);
   }
 }
 
@@ -1026,10 +1162,11 @@ void puf_mm_nn(PufTensor &a, PufTensor &b, PufTensor &out,
                                 (float *)out.bytes, M, N, K, stream)) {
     // fp32 tensor_ops NN on compute encoder — no MPS transition
   } else {
-    gpu_gemm((const float *)a.bytes, M, K, false,
-             (const float *)b.bytes, K, N, false,
-             (float *)out.bytes, M, N, K,
-             1.0f, 0.0f, stream);
+    // f32 unaligned: steel_gemm NN (stays on compute encoder)
+    compute_gemm((const float *)a.bytes, (const float *)b.bytes,
+                 (float *)out.bytes, M, N, K,
+                 /*trans_a=*/false, /*trans_b=*/false,
+                 K, N, N, 1.0f, 0.0f, stream);
   }
 }
 
@@ -1118,10 +1255,11 @@ void puf_addmm_nn(PufTensor &a, PufTensor &b, PufTensor &out, float alpha,
     }
     ms->pending_work = true;
   } else {
-    gpu_gemm((const float *)a.bytes, M, K, false,
-             (const float *)b.bytes, K, N, false,
-             (float *)out.bytes, M, N, K,
-             alpha, beta, stream);
+    // Unaligned addmm: steel_gemm with alpha/beta (stays on compute encoder)
+    compute_gemm((const float *)a.bytes, (const float *)b.bytes,
+                 (float *)out.bytes, M, N, K,
+                 /*trans_a=*/false, /*trans_b=*/false,
+                 K, N, N, alpha, beta, stream);
   }
 }
 
