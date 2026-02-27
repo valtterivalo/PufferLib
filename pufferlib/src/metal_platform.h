@@ -109,6 +109,9 @@ void *mtl_train_stream();
 // Tear down Metal context.
 void mtl_destroy();
 
+// Reset lazy-init kernel scratch buffers (called by mtl_destroy).
+void mtl_kernels_reset();
+
 // ============================================================================
 // Buffer management — zero-copy wrapping of Allocator memory
 // ============================================================================

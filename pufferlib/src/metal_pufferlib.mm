@@ -1242,10 +1242,11 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
 // ============================================================================
 
 void close_impl(PuffeRL& pufferl) {
-    // Sync any pending GPU work
+    fprintf(stderr, "[metal] close: syncing GPU\n");
     sync_pending_train(pufferl);
     ensure_gpu_synced((cudaStream_t)mtl_stream());
 
+    fprintf(stderr, "[metal] close: deleting structs\n");
     delete pufferl.muon;
 
     bool simple = (pufferl.hypers.arch_type == ARCH_SIMPLE);
@@ -1282,6 +1283,13 @@ void close_impl(PuffeRL& pufferl) {
     }
     delete pufferl.policy;
 
+    // Release MTLBuffers BEFORE freeing the underlying memory they reference.
+    // MTLBuffers created with newBufferWithBytesNoCopy need their backing pages
+    // still mapped when ARC releases them (Metal unmaps the GPU address space).
+    fprintf(stderr, "[metal] close: destroying Metal context\n");
+    mtl_destroy();
+
+    fprintf(stderr, "[metal] close: freeing allocators\n");
     pufferl.alloc_fp32.destroy();
     pufferl.alloc_fp16.destroy();
     pufferl.fp16_boundary_alloc.destroy();
@@ -1291,7 +1299,7 @@ void close_impl(PuffeRL& pufferl) {
         a.destroy();
     }
 
+    fprintf(stderr, "[metal] close: closing vec env\n");
     static_vec_close(pufferl.vec);
-
-    mtl_destroy();
+    fprintf(stderr, "[metal] close: done\n");
 }

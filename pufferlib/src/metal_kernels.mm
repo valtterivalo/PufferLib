@@ -913,6 +913,12 @@ void mtl_sample_logits_expand(const float *f32, double *f64, int count) {
 // PPO loss fused forward + backward
 // ============================================================================
 
+// PPO scratch buffers — file-scope so mtl_kernels_reset() can free them.
+static float *ppo_partials_buf = nullptr;
+static int ppo_partials_capacity = 0;
+static float *ppo_act_f32 = nullptr;
+static int ppo_act_f32_capacity = 0;
+
 void ppo_loss_fwd_bwd(PufTensor &dec_out, PufTensor &logstd, TrainGraph &graph,
                        PufTensor &act_sizes, PufTensor &losses_acc,
                        float clip_coef, float vf_clip_coef, float vf_coef,
@@ -951,8 +957,6 @@ void ppo_loss_fwd_bwd(PufTensor &dec_out, PufTensor &logstd, TrainGraph &graph,
   // PPO partials buffer
   int ppo_threads = 256;
   int ppo_grid = (total + ppo_threads - 1) / ppo_threads;
-  static float *ppo_partials_buf = nullptr;
-  static int ppo_partials_capacity = 0;
   int ppo_partials_needed = ppo_grid * (LOSS_N + 1);
   if (!ppo_partials_buf || ppo_partials_needed > ppo_partials_capacity) {
     if (ppo_partials_buf)
@@ -978,8 +982,6 @@ void ppo_loss_fwd_bwd(PufTensor &dec_out, PufTensor &logstd, TrainGraph &graph,
   // Uses cast_f64_to_f32 kernel (IEEE 754 bit manipulation via uint2) to
   // avoid flushing the GPU encoder for a CPU conversion loop.
   int act_count = (int)graph.mb_actions.numel();
-  static float *ppo_act_f32 = nullptr;
-  static int ppo_act_f32_capacity = 0;
   if (!ppo_act_f32 || act_count > ppo_act_f32_capacity) {
     if (ppo_act_f32) free(ppo_act_f32);
     ppo_act_f32_capacity = act_count;
@@ -2355,4 +2357,18 @@ static PufTensor mingru_backward(void *w, PufTensor grad, void *activations,
     grad = a->grad_input_buf;
   }
   return grad;
+}
+
+// ============================================================================
+// Reset lazy-init scratch buffers between trials
+// ============================================================================
+
+// Called from mtl_destroy() to prevent stale pointers surviving into a new
+// Metal context (g_ctx.buffers is cleared but these statics would persist,
+// causing mtl_set_ptr assertion failures on the second trial).
+void mtl_kernels_reset() {
+  if (norm_partials_buf) { free(norm_partials_buf); norm_partials_buf = nullptr; }
+  if (g_sample_act_f32)  { free(g_sample_act_f32);  g_sample_act_f32 = nullptr; g_sample_act_f32_cap = 0; }
+  if (ppo_partials_buf)  { free(ppo_partials_buf);  ppo_partials_buf = nullptr; ppo_partials_capacity = 0; }
+  if (ppo_act_f32)       { free(ppo_act_f32);       ppo_act_f32 = nullptr;      ppo_act_f32_capacity = 0; }
 }

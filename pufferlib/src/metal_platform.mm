@@ -456,22 +456,45 @@ void mtl_init() {
 
 MetalContext *mtl_ctx() { return &g_ctx; }
 
+// Forward declarations for lazily-allocated temp buffers (defined below)
+static char *g_addmm_temp_base;
+static int64_t g_addmm_temp_size;
+
 void *mtl_stream() { return &g_ctx.stream; }
 
 void *mtl_train_stream() { return &g_ctx.train_stream; }
 
 void mtl_destroy() {
+  fprintf(stderr, "[metal] destroy: starting teardown\n");
+
+  // 1. Drain both command queues — no GPU work in flight.
   g_ctx.stream.end_compute();
   g_ctx.stream.cmd = nil;
   g_ctx.train_stream.end_compute();
   g_ctx.train_stream.cmd = nil;
-  g_matmul_cache.clear();
-  g_ctx.buffers.clear();
-  g_ctx.pipelines = nil;
-  g_ctx.library = nil;
-  g_ctx.queue = nil;
-  g_ctx.train_queue = nil;
+
+  // 2. Free lazy-init scratch buffers BEFORE clearing the buffer registry,
+  //    while MTLBuffer refs still exist (backing memory released after).
+  mtl_kernels_reset();
+  if (g_addmm_temp_base) {
+    free(g_addmm_temp_base);
+    g_addmm_temp_base = nullptr;
+    g_addmm_temp_size = 0;
+  }
+
+  // 3. Release all Metal objects inside @autoreleasepool to force immediate
+  //    deallocation. Device released LAST — MTLBuffers/pipelines reference it.
+  @autoreleasepool {
+    g_matmul_cache.clear();
+    g_ctx.buffers.clear();
+    g_ctx.pipelines = nil;
+    g_ctx.library = nil;
+    g_ctx.queue = nil;
+    g_ctx.train_queue = nil;
+  }
   g_ctx.device = nil;
+
+  fprintf(stderr, "[metal] destroy: teardown complete\n");
 }
 
 // ============================================================================
@@ -1014,9 +1037,6 @@ void puf_mm_nn(PufTensor &a, PufTensor &b, PufTensor &out,
 // addmm temp buffer — lazily allocated for tensor_ops addmm decomposition.
 // Only used for aligned muon NS GEMMs (512×512). Page-aligned for MTLBuffer.
 // ============================================================================
-
-static char *g_addmm_temp_base = nullptr;
-static int64_t g_addmm_temp_size = 0;
 
 static float *addmm_temp_buf(int count) {
   int64_t needed = (int64_t)count * sizeof(float);
