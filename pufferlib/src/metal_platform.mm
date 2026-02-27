@@ -22,6 +22,7 @@
 // ============================================================================
 
 static MetalContext g_ctx = {};
+static bool g_no_tensor_ops = false; // cached getenv("PUFFERLIB_NO_TENSOR_OPS")
 
 // ============================================================================
 // Metal 4 tensor_ops GEMM — MSL source for JIT compilation.
@@ -264,7 +265,7 @@ void MetalStream::begin() {
     [allocator reset];
     [cmd4 beginCommandBufferWithAllocator:allocator];
     [cmd4 useResidencySet:ctx->residency_set];
-    ctx->const_ring_offset = 0;
+    const_ring_offset = 0;
   } else {
     cmd = [queue commandBuffer];
   }
@@ -569,11 +570,13 @@ void mtl_init() {
       assert(g_ctx.train_stream.arg_table &&
              "Failed to create train argument table");
 
-      // Constants ring buffer (64KB, replaces setBytes on Metal 4)
-      g_ctx.const_ring =
+      // Per-stream constants ring buffers (64KB each, replaces setBytes on Metal 4)
+      g_ctx.stream.const_ring =
           [g_ctx.device newBufferWithLength:MTL_CONST_RING_SIZE
                                     options:MTLResourceStorageModeShared];
-      g_ctx.const_ring_offset = 0;
+      g_ctx.train_stream.const_ring =
+          [g_ctx.device newBufferWithLength:MTL_CONST_RING_SIZE
+                                    options:MTLResourceStorageModeShared];
 
       // Residency set — populated by mtl_wrap_allocator as buffers arrive
       MTLResidencySetDescriptor *rsd = [MTLResidencySetDescriptor new];
@@ -582,7 +585,8 @@ void mtl_init() {
       g_ctx.residency_set =
           [g_ctx.device newResidencySetWithDescriptor:rsd error:&rs_err];
       assert(g_ctx.residency_set && "Failed to create residency set");
-      [g_ctx.residency_set addAllocation:g_ctx.const_ring];
+      [g_ctx.residency_set addAllocation:g_ctx.stream.const_ring];
+      [g_ctx.residency_set addAllocation:g_ctx.train_stream.const_ring];
       [g_ctx.residency_set requestResidency];
       [g_ctx.queue4 addResidencySet:g_ctx.residency_set];
       [g_ctx.train_queue4 addResidencySet:g_ctx.residency_set];
@@ -591,6 +595,8 @@ void mtl_init() {
     } else {
       printf("[metal] Metal 4 not available — using transient command buffers\n");
     }
+
+    g_no_tensor_ops = (getenv("PUFFERLIB_NO_TENSOR_OPS") != nullptr);
 
     // Start the default stream (rollout) and training stream
     g_ctx.stream.queue = g_ctx.queue;
@@ -645,7 +651,8 @@ void mtl_destroy() {
       g_ctx.train_stream.cmd4 = nil;
       g_ctx.train_stream.allocator = nil;
       g_ctx.train_stream.enc4 = nil;
-      g_ctx.const_ring = nil;
+      g_ctx.stream.const_ring = nil;
+      g_ctx.train_stream.const_ring = nil;
       g_ctx.residency_set = nil;
       g_ctx.sync_event = nil;
       g_ctx.queue4 = nil;
@@ -1183,7 +1190,7 @@ void puf_mm(PufTensor &a, PufTensor &b, PufTensor &out,
   int M = (int)(a.batch_size() * a.shape[na - 2]);
   int K = (int)a.shape[na - 1];
   int N = (int)b.shape[nb - 2];
-  bool no_tensor = getenv("PUFFERLIB_NO_TENSOR_OPS");
+  bool no_tensor = g_no_tensor_ops;
   bool aligned = (N % 32 == 0) && (M % 64 == 0);
 
   if (a.dtype_size == 2) {
@@ -1221,7 +1228,7 @@ void puf_mm_tn(PufTensor &a, PufTensor &b, PufTensor &out,
   int M = (int)a.shape[na - 1];
   int N = (int)b.shape[nb - 1];
 
-  bool no_tensor = getenv("PUFFERLIB_NO_TENSOR_OPS");
+  bool no_tensor = g_no_tensor_ops;
   bool aligned = (M % 64 == 0) && (N % 32 == 0);
 
   if (a.dtype_size == 2) {
@@ -1255,7 +1262,7 @@ void puf_mm_nn(PufTensor &a, PufTensor &b, PufTensor &out,
   int K = (int)a.shape[na - 1];
   int N = (int)b.shape[nb - 1];
 
-  bool no_tensor = getenv("PUFFERLIB_NO_TENSOR_OPS");
+  bool no_tensor = g_no_tensor_ops;
   bool aligned = (M % 64 == 0) && (N % 32 == 0);
 
   if (a.dtype_size == 2) {
@@ -1327,7 +1334,7 @@ void puf_addmm_nn(PufTensor &a, PufTensor &b, PufTensor &out, float alpha,
   int N = (int)b.shape[nb - 1];
 
   if ((M % 64 == 0) && (N % 32 == 0) &&
-             !getenv("PUFFERLIB_NO_TENSOR_OPS") &&
+             !g_no_tensor_ops &&
              g_ctx.tensor_ops_gemm_nn_f32) {
     // Decompose: out = beta*out + alpha*(a@b)
     // Step 1: temp = a @ b via tensor_ops NN (compute encoder)

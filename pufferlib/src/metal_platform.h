@@ -38,6 +38,8 @@ struct MetalStream {
   id<MTL4CommandBuffer> cmd4;
   id<MTL4ComputeCommandEncoder> enc4;
   id<MTL4ArgumentTable> arg_table;
+  id<MTLBuffer> const_ring;            // per-stream ring buffer for inline constants
+  NSUInteger const_ring_offset = 0;    // current write position in ring
 
   bool enc_active = false;
   bool pending_work = false; // true when compute work is encoded but not synced
@@ -105,8 +107,6 @@ struct MetalContext {
   id<MTLResidencySet> residency_set;  // all wrapped buffers for GPU address access
   id<MTLSharedEvent> sync_event;      // CPU-GPU synchronization
   uint64_t sync_event_value = 0;      // monotonically increasing signal counter
-  id<MTLBuffer> const_ring;           // ring buffer for inline constants (setBytes replacement)
-  NSUInteger const_ring_offset = 0;   // current write position in ring
 
   MetalStream stream;       // default stream (rollout)
   MetalStream train_stream; // training stream (separate queue for overlap)
@@ -185,16 +185,15 @@ inline void mtl_set_tensor(MetalStream *ms, const PufTensor &t,
 // Bind constant data (replaces setBytes — uses ring buffer on Metal 4).
 template <typename T>
 inline void mtl_set_params(MetalStream *ms, const T &params, uint32_t index) {
-  MetalContext *ctx = mtl_ctx();
-  if (ctx->has_metal4) {
+  if (mtl_ctx()->has_metal4) {
     NSUInteger aligned = (sizeof(T) + 15) & ~15;
-    assert(ctx->const_ring_offset + aligned <= MTL_CONST_RING_SIZE);
-    memcpy((char *)[ctx->const_ring contents] + ctx->const_ring_offset,
+    assert(ms->const_ring_offset + aligned <= MTL_CONST_RING_SIZE);
+    memcpy((char *)[ms->const_ring contents] + ms->const_ring_offset,
            &params, sizeof(T));
     [ms->arg_table
-        setAddress:(ctx->const_ring.gpuAddress + ctx->const_ring_offset)
+        setAddress:(ms->const_ring.gpuAddress + ms->const_ring_offset)
            atIndex:index];
-    ctx->const_ring_offset += aligned;
+    ms->const_ring_offset += aligned;
   } else {
     [ms->enc setBytes:&params length:sizeof(T) atIndex:index];
   }

@@ -1838,21 +1838,24 @@ kernel void norm_f32_kernel(
     uint idx [[thread_position_in_grid]],
     uint tid [[thread_index_in_threadgroup]],
     uint block_id [[threadgroup_position_in_grid]],
-    uint block_size [[threads_per_threadgroup]],
-    uint grid_size [[threads_per_grid]]
+    uint grid_size [[threads_per_grid]],
+    uint simd_lane [[thread_index_in_simdgroup]],
+    uint simd_id [[simdgroup_index_in_threadgroup]]
 ) {
-    threadgroup float sdata[256];
+    constexpr int NUM_WARPS = 8;  // 256 / 32
+    threadgroup float sdata[NUM_WARPS];
     float sum = 0.0f;
     for (int i = (int)idx; i < p.n; i += (int)grid_size) {
         sum += src[i] * src[i];
     }
-    sdata[tid] = sum;
+    sum = simd_sum(sum);
+    if (simd_lane == 0) sdata[simd_id] = sum;
     threadgroup_barrier(mem_flags::mem_threadgroup);
-    for (int s = (int)block_size / 2; s > 0; s >>= 1) {
-        if ((int)tid < s) sdata[tid] += sdata[tid + s];
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (simd_id == 0) {
+        sum = (simd_lane < NUM_WARPS) ? sdata[simd_lane] : 0.0f;
+        sum = simd_sum(sum);
+        if (simd_lane == 0) partials[block_id] = sum;
     }
-    if (tid == 0) partials[block_id] = sdata[0];
 }
 
 struct NormReduceParams {
@@ -1864,16 +1867,21 @@ kernel void norm_reduce_kernel(
     device float* out                   [[buffer(0)]],
     const device float* partials        [[buffer(1)]],
     constant NormReduceParams& p        [[buffer(2)]],
-    uint tid [[thread_index_in_threadgroup]]
+    uint tid [[thread_index_in_threadgroup]],
+    uint simd_lane [[thread_index_in_simdgroup]],
+    uint simd_id [[simdgroup_index_in_threadgroup]]
 ) {
-    threadgroup float sdata[256];
-    sdata[tid] = ((int)tid < p.num_blocks) ? partials[tid] : 0.0f;
+    constexpr int NUM_WARPS = 8;
+    threadgroup float sdata[NUM_WARPS];
+    float val = ((int)tid < p.num_blocks) ? partials[tid] : 0.0f;
+    val = simd_sum(val);
+    if (simd_lane == 0) sdata[simd_id] = val;
     threadgroup_barrier(mem_flags::mem_threadgroup);
-    for (int s = 128; s > 0; s >>= 1) {
-        if ((int)tid < s) sdata[tid] += sdata[tid + s];
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (simd_id == 0) {
+        val = (simd_lane < NUM_WARPS) ? sdata[simd_lane] : 0.0f;
+        val = simd_sum(val);
+        if (simd_lane == 0) *out = val;
     }
-    if (tid == 0) *out = sdata[0];
 }
 
 struct ClipByNormParams {
@@ -1923,22 +1931,27 @@ kernel void var_mean_kernel(
     device float* var_out           [[buffer(1)]],
     device float* mean_out          [[buffer(2)]],
     constant VarMeanParams& p       [[buffer(3)]],
-    uint tid [[thread_index_in_threadgroup]]
+    uint tid [[thread_index_in_threadgroup]],
+    uint simd_lane [[thread_index_in_simdgroup]],
+    uint simd_id [[simdgroup_index_in_threadgroup]]
 ) {
-    threadgroup float sdata[256];
+    constexpr int NUM_WARPS = 8;
+    threadgroup float sdata[NUM_WARPS];
 
     // Pass 1: compute mean
     float sum = 0.0f;
     for (int i = (int)tid; i < p.n; i += 256) sum += src[i];
-    sdata[tid] = sum;
+    sum = simd_sum(sum);
+    if (simd_lane == 0) sdata[simd_id] = sum;
     threadgroup_barrier(mem_flags::mem_threadgroup);
-    for (int s = 128; s > 0; s >>= 1) {
-        if ((int)tid < s) sdata[tid] += sdata[tid + s];
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (simd_id == 0) {
+        sum = (simd_lane < NUM_WARPS) ? sdata[simd_lane] : 0.0f;
+        sum = simd_sum(sum);
+        if (simd_lane == 0) sdata[0] = sum;
     }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
     float mean = sdata[0] / float(p.n);
     if (tid == 0) *mean_out = mean;
-    threadgroup_barrier(mem_flags::mem_threadgroup);
 
     // Pass 2: compute variance
     float ss = 0.0f;
@@ -1946,12 +1959,15 @@ kernel void var_mean_kernel(
         float d = src[i] - mean;
         ss += d * d;
     }
-    sdata[tid] = ss;
+    ss = simd_sum(ss);
+    if (simd_lane == 0) sdata[simd_id] = ss;
     threadgroup_barrier(mem_flags::mem_threadgroup);
-    for (int s = 128; s > 0; s >>= 1) {
-        if ((int)tid < s) sdata[tid] += sdata[tid + s];
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (simd_id == 0) {
+        ss = (simd_lane < NUM_WARPS) ? sdata[simd_lane] : 0.0f;
+        ss = simd_sum(ss);
+        if (simd_lane == 0) sdata[0] = ss;
     }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
     if (tid == 0) *var_out = sdata[0] / float(p.n - 1);
 }
 
@@ -2051,23 +2067,28 @@ kernel void layernorm_fwd_kernel(
     device float* saved_rstd        [[buffer(5)]],   // (B,)
     constant LayerNormParams& p     [[buffer(6)]],
     uint row [[threadgroup_position_in_grid]],
-    uint tid [[thread_index_in_threadgroup]]
+    uint tid [[thread_index_in_threadgroup]],
+    uint simd_lane [[thread_index_in_simdgroup]],
+    uint simd_id [[simdgroup_index_in_threadgroup]]
 ) {
-    threadgroup float sdata[256];
+    constexpr int NUM_WARPS = 8;  // 256 / 32
+    threadgroup float sdata[NUM_WARPS];
     int H = p.H;
     int base = (int)row * H;
 
     // pass 1: mean
     float sum = 0.0f;
     for (int i = (int)tid; i < H; i += 256) sum += input[base + i];
-    sdata[tid] = sum;
+    sum = simd_sum(sum);
+    if (simd_lane == 0) sdata[simd_id] = sum;
     threadgroup_barrier(mem_flags::mem_threadgroup);
-    for (int s = 128; s > 0; s >>= 1) {
-        if ((int)tid < s) sdata[tid] += sdata[tid + s];
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (simd_id == 0) {
+        sum = (simd_lane < NUM_WARPS) ? sdata[simd_lane] : 0.0f;
+        sum = simd_sum(sum);
+        if (simd_lane == 0) sdata[0] = sum;
     }
-    float mean = sdata[0] / float(H);
     threadgroup_barrier(mem_flags::mem_threadgroup);
+    float mean = sdata[0] / float(H);
 
     // pass 2: variance
     float ss = 0.0f;
@@ -2075,12 +2096,15 @@ kernel void layernorm_fwd_kernel(
         float d = input[base + i] - mean;
         ss += d * d;
     }
-    sdata[tid] = ss;
+    ss = simd_sum(ss);
+    if (simd_lane == 0) sdata[simd_id] = ss;
     threadgroup_barrier(mem_flags::mem_threadgroup);
-    for (int s = 128; s > 0; s >>= 1) {
-        if ((int)tid < s) sdata[tid] += sdata[tid + s];
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (simd_id == 0) {
+        ss = (simd_lane < NUM_WARPS) ? sdata[simd_lane] : 0.0f;
+        ss = simd_sum(ss);
+        if (simd_lane == 0) sdata[0] = ss;
     }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
     float var = sdata[0] / float(H);
     float rstd = rsqrt(var + p.eps);
     if (tid == 0) saved_rstd[row] = rstd;
@@ -2103,10 +2127,13 @@ kernel void layernorm_bwd_kernel(
     device float* grad_input        [[buffer(4)]],   // (B, H)
     constant LayerNormParams& p     [[buffer(5)]],
     uint row [[threadgroup_position_in_grid]],
-    uint tid [[thread_index_in_threadgroup]]
+    uint tid [[thread_index_in_threadgroup]],
+    uint simd_lane [[thread_index_in_simdgroup]],
+    uint simd_id [[simdgroup_index_in_threadgroup]]
 ) {
-    threadgroup float sdata[256];
-    threadgroup float sdata2[256];
+    constexpr int NUM_WARPS = 8;
+    threadgroup float sdata[NUM_WARPS];
+    threadgroup float sdata2[NUM_WARPS];
     int H = p.H;
     int base = (int)row * H;
     float rstd = saved_rstd[row];
@@ -2119,16 +2146,18 @@ kernel void layernorm_bwd_kernel(
         dot_gw += gw;
         dot_gwx += gw * saved_x_hat[base + i];
     }
-    sdata[tid] = dot_gw;
-    sdata2[tid] = dot_gwx;
+    dot_gw = simd_sum(dot_gw);
+    dot_gwx = simd_sum(dot_gwx);
+    if (simd_lane == 0) { sdata[simd_id] = dot_gw; sdata2[simd_id] = dot_gwx; }
     threadgroup_barrier(mem_flags::mem_threadgroup);
-    for (int s = 128; s > 0; s >>= 1) {
-        if ((int)tid < s) {
-            sdata[tid] += sdata[tid + s];
-            sdata2[tid] += sdata2[tid + s];
-        }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (simd_id == 0) {
+        dot_gw = (simd_lane < NUM_WARPS) ? sdata[simd_lane] : 0.0f;
+        dot_gwx = (simd_lane < NUM_WARPS) ? sdata2[simd_lane] : 0.0f;
+        dot_gw = simd_sum(dot_gw);
+        dot_gwx = simd_sum(dot_gwx);
+        if (simd_lane == 0) { sdata[0] = dot_gw; sdata2[0] = dot_gwx; }
     }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
     float c1 = sdata[0] / float(H);
     float c2 = sdata2[0] / float(H);
 
@@ -2263,34 +2292,42 @@ kernel void layernorm_fwd_f16_kernel(
     device float* saved_rstd        [[buffer(5)]],
     constant LayerNormParams& p     [[buffer(6)]],
     uint row [[threadgroup_position_in_grid]],
-    uint tid [[thread_index_in_threadgroup]]
+    uint tid [[thread_index_in_threadgroup]],
+    uint simd_lane [[thread_index_in_simdgroup]],
+    uint simd_id [[simdgroup_index_in_threadgroup]]
 ) {
-    threadgroup float sdata[256];
+    constexpr int NUM_WARPS = 8;
+    threadgroup float sdata[NUM_WARPS];
     int H = p.H;
     int base = (int)row * H;
 
     float sum = 0.0f;
     for (int i = (int)tid; i < H; i += 256) sum += float(input[base + i]);
-    sdata[tid] = sum;
+    sum = simd_sum(sum);
+    if (simd_lane == 0) sdata[simd_id] = sum;
     threadgroup_barrier(mem_flags::mem_threadgroup);
-    for (int s = 128; s > 0; s >>= 1) {
-        if ((int)tid < s) sdata[tid] += sdata[tid + s];
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (simd_id == 0) {
+        sum = (simd_lane < NUM_WARPS) ? sdata[simd_lane] : 0.0f;
+        sum = simd_sum(sum);
+        if (simd_lane == 0) sdata[0] = sum;
     }
-    float mean = sdata[0] / float(H);
     threadgroup_barrier(mem_flags::mem_threadgroup);
+    float mean = sdata[0] / float(H);
 
     float ss = 0.0f;
     for (int i = (int)tid; i < H; i += 256) {
         float d = float(input[base + i]) - mean;
         ss += d * d;
     }
-    sdata[tid] = ss;
+    ss = simd_sum(ss);
+    if (simd_lane == 0) sdata[simd_id] = ss;
     threadgroup_barrier(mem_flags::mem_threadgroup);
-    for (int s = 128; s > 0; s >>= 1) {
-        if ((int)tid < s) sdata[tid] += sdata[tid + s];
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (simd_id == 0) {
+        ss = (simd_lane < NUM_WARPS) ? sdata[simd_lane] : 0.0f;
+        ss = simd_sum(ss);
+        if (simd_lane == 0) sdata[0] = ss;
     }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
     float var = sdata[0] / float(H);
     float rstd = rsqrt(var + p.eps);
     if (tid == 0) saved_rstd[row] = rstd;  // fp32
@@ -2310,31 +2347,36 @@ kernel void layernorm_bwd_f16_kernel(
     device half* grad_input         [[buffer(4)]],
     constant LayerNormParams& p     [[buffer(5)]],
     uint row [[threadgroup_position_in_grid]],
-    uint tid [[thread_index_in_threadgroup]]
+    uint tid [[thread_index_in_threadgroup]],
+    uint simd_lane [[thread_index_in_simdgroup]],
+    uint simd_id [[simdgroup_index_in_threadgroup]]
 ) {
-    threadgroup float sdata[256];
-    threadgroup float sdata2[256];
+    constexpr int NUM_WARPS = 8;
+    threadgroup float sdata[NUM_WARPS];
+    threadgroup float sdata2[NUM_WARPS];
     int H = p.H;
     int base = (int)row * H;
-    float rstd = saved_rstd[row];  // fp32 read
+    float rstd = saved_rstd[row];
 
     float dot_gw = 0.0f;
     float dot_gwx = 0.0f;
     for (int i = (int)tid; i < H; i += 256) {
         float gw = float(grad_out[base + i]) * float(weight[i]);
         dot_gw += gw;
-        dot_gwx += gw * saved_x_hat[base + i];  // fp32 read
+        dot_gwx += gw * saved_x_hat[base + i];
     }
-    sdata[tid] = dot_gw;
-    sdata2[tid] = dot_gwx;
+    dot_gw = simd_sum(dot_gw);
+    dot_gwx = simd_sum(dot_gwx);
+    if (simd_lane == 0) { sdata[simd_id] = dot_gw; sdata2[simd_id] = dot_gwx; }
     threadgroup_barrier(mem_flags::mem_threadgroup);
-    for (int s = 128; s > 0; s >>= 1) {
-        if ((int)tid < s) {
-            sdata[tid] += sdata[tid + s];
-            sdata2[tid] += sdata2[tid + s];
-        }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (simd_id == 0) {
+        dot_gw = (simd_lane < NUM_WARPS) ? sdata[simd_lane] : 0.0f;
+        dot_gwx = (simd_lane < NUM_WARPS) ? sdata2[simd_lane] : 0.0f;
+        dot_gw = simd_sum(dot_gw);
+        dot_gwx = simd_sum(dot_gwx);
+        if (simd_lane == 0) { sdata[0] = dot_gw; sdata2[0] = dot_gwx; }
     }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
     float c1 = sdata[0] / float(H);
     float c2 = sdata2[0] / float(H);
 
@@ -2533,12 +2575,14 @@ kernel void index_copy_kernel(
 ) {
     if ((int)i >= p.num_idx) return;
     int64_t dst_row = idx[i];
-    // Copy row_bytes from src row i to dst row dst_row (byte by byte for generality)
     const device char* s = src + (int64_t)i * p.row_bytes;
     device char* d = dst + dst_row * p.row_bytes;
-    for (int b = 0; b < p.row_bytes; b++) {
-        d[b] = s[b];
-    }
+    // Copy as 4-byte words, then handle remainder bytes
+    int words = p.row_bytes / 4;
+    const device uint* s4 = (const device uint*)s;
+    device uint* d4 = (device uint*)d;
+    for (int b = 0; b < words; b++) d4[b] = s4[b];
+    for (int b = words * 4; b < p.row_bytes; b++) d[b] = s[b];
 }
 
 // ============================================================================
