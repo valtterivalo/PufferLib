@@ -64,6 +64,10 @@ struct MetalStream {
   // Call wait_completed() later to ensure it finished.
   void flush();
 
+  // Commit current work and immediately begin a fresh command buffer.
+  // Used to insert scheduling yield points inside long async training loops.
+  void commit_chunk();
+
   // Wait for previously flushed command buffer to complete.
   // No-op if nothing was flushed.
   void wait_completed();
@@ -211,6 +215,15 @@ inline void mtl_dispatch_groups(MetalStream *ms,
 inline void mtl_set_threadgroup_memory(MetalStream *ms, NSUInteger length,
                                        uint32_t index) {
   [ms->enc setThreadgroupMemoryLength:length atIndex:index];
+}
+
+// Memory barrier: end current encoder and start a new one within the same
+// command buffer. Metal guarantees all work from encoder N completes before
+// encoder N+1 starts, giving us full memory coherence. Much cheaper than
+// sync() (no command buffer commit, no CPU wait — just encoder boundary).
+inline void mtl_barrier(MetalStream *ms) {
+  ms->end_compute();
+  ms->compute_encoder();
 }
 
 // ============================================================================

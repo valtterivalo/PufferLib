@@ -323,7 +323,8 @@ void MetalStream::sync() {
     }];
     [q commit:bufs count:1 options:opts];
     [q signalEvent:ctx->sync_event value:val];
-    [ctx->sync_event waitUntilSignaledValue:val timeoutMS:5000];
+    BOOL signaled = [ctx->sync_event waitUntilSignaledValue:val timeoutMS:5000];
+    assert(signaled && "Metal sync timeout in MetalStream::sync");
     if (gpu_start > 0 && gpu_end > 0) {
       g_gpu_exec_ns += (gpu_end - gpu_start) * 1e9;
       g_sched_wait_ns += (gpu_start - cpu_commit) * 1e9;
@@ -331,7 +332,8 @@ void MetalStream::sync() {
   } else {
     [q commit:bufs count:1];
     [q signalEvent:ctx->sync_event value:val];
-    [ctx->sync_event waitUntilSignaledValue:val timeoutMS:5000];
+    BOOL signaled = [ctx->sync_event waitUntilSignaledValue:val timeoutMS:5000];
+    assert(signaled && "Metal sync timeout in MetalStream::sync");
   }
   uint64_t t1 = mach_absolute_time();
   g_sync_count++;
@@ -342,31 +344,42 @@ void MetalStream::sync() {
 void MetalStream::flush() {
   end_compute();
   if (pending_work) {
-    commit_time = CACurrentMediaTime();
     MetalContext *ctx = mtl_ctx();
     [cmd endCommandBuffer];
     id<MTL4CommandBuffer> bufs[] = { cmd };
     id<MTL4CommandQueue> q =
         (this == &ctx->train_stream) ? ctx->train_queue : ctx->queue;
-    // Commit with feedback + signal event value for wait_completed()
+    // Signal event value for wait_completed().
     flush_event_val = ++ctx->sync_event_value;
-    MTL4CommitOptions *opts = [MTL4CommitOptions new];
-    __block CFTimeInterval gpu_s = 0, gpu_e = 0;
-    [opts addFeedbackHandler:^(id<MTL4CommitFeedback> fb) {
-      gpu_s = fb.GPUStartTime;
-      gpu_e = fb.GPUEndTime;
-    }];
-    [q commit:bufs count:1 options:opts];
+    [q commit:bufs count:1];
     [q signalEvent:ctx->sync_event value:flush_event_val];
     flushed = true;
     pending_work = false;
   }
 }
 
+void MetalStream::commit_chunk() {
+  end_compute();
+  if (!pending_work) return;
+
+  MetalContext *ctx = mtl_ctx();
+  [cmd endCommandBuffer];
+  id<MTL4CommandBuffer> bufs[] = { cmd };
+  id<MTL4CommandQueue> q =
+      (this == &ctx->train_stream) ? ctx->train_queue : ctx->queue;
+  [q commit:bufs count:1];
+
+  cmd = [ctx->device newCommandBuffer];
+  assert(cmd && "Failed to allocate Metal command buffer for chunked training");
+  begin();
+}
+
 void MetalStream::wait_completed() {
   if (flushed) {
     uint64_t t0 = mach_absolute_time();
-    [mtl_ctx()->sync_event waitUntilSignaledValue:flush_event_val timeoutMS:5000];
+    BOOL signaled =
+        [mtl_ctx()->sync_event waitUntilSignaledValue:flush_event_val timeoutMS:5000];
+    assert(signaled && "Metal sync timeout in MetalStream::wait_completed");
     uint64_t t1 = mach_absolute_time();
     g_sync_count++;
     g_sync_total_ns += mach_to_ns(t1 - t0);
@@ -537,9 +550,9 @@ void mtl_init() {
     g_ctx.train_stream.allocator = [g_ctx.device newCommandAllocator];
     g_ctx.train_stream.cmd = [g_ctx.device newCommandBuffer];
 
-    // Argument tables — PPO kernel uses slots 0-19 (16 buffers + params + 3 more)
+    // Argument tables — PPO kernel uses slots 0-19, Metal 4 max is 31
     MTL4ArgumentTableDescriptor *atd = [MTL4ArgumentTableDescriptor new];
-    atd.maxBufferBindCount = 32;
+    atd.maxBufferBindCount = 31;
     NSError *at_err = nil;
     g_ctx.stream.arg_table =
         [g_ctx.device newArgumentTableWithDescriptor:atd error:&at_err];
@@ -566,6 +579,7 @@ void mtl_init() {
     assert(g_ctx.residency_set && "Failed to create residency set");
     [g_ctx.residency_set addAllocation:g_ctx.stream.const_ring];
     [g_ctx.residency_set addAllocation:g_ctx.train_stream.const_ring];
+    [g_ctx.residency_set commit];
     [g_ctx.residency_set requestResidency];
     [g_ctx.queue addResidencySet:g_ctx.residency_set];
     [g_ctx.train_queue addResidencySet:g_ctx.residency_set];
@@ -669,6 +683,7 @@ id<MTLBuffer> mtl_wrap_allocator(Allocator *alloc) {
 
   // Add to residency set so GPU addresses are valid
   [g_ctx.residency_set addAllocation:buf];
+  [g_ctx.residency_set commit];
   [g_ctx.residency_set requestResidency];
 
   return buf;
@@ -754,7 +769,9 @@ static id<MTLBuffer> buffer_for_ptr(const void *ptr, NSUInteger *out_offset) {
 // Bind a pre-resolved MTLBuffer+offset to a stream binding slot (GEMM helpers).
 static inline void bind_buf(MetalStream *ms, id<MTLBuffer> buf,
                              NSUInteger offset, uint32_t index) {
-  [ms->arg_table setAddress:(buf.gpuAddress + offset) atIndex:index];
+  uint64_t addr = buf.gpuAddress + offset;
+  [ms->arg_table setAddress:addr atIndex:index];
+  ms->bound_addresses[index] = addr;
 }
 
 // ============================================================================
@@ -1229,6 +1246,9 @@ static float *addmm_temp_buf(int count) {
                                  deallocator:nil];
   assert(buf && "addmm temp buffer MTLBuffer creation failed");
   g_ctx.buffers.push_back({g_addmm_temp_base, size, buf});
+  [g_ctx.residency_set addAllocation:buf];
+  [g_ctx.residency_set commit];
+  [g_ctx.residency_set requestResidency];
   g_addmm_temp_size = size;
   return (float *)g_addmm_temp_base;
 }

@@ -21,6 +21,7 @@
 #import "metal_platform.h"
 
 #include <arm_neon.h>
+#include <algorithm>
 #include <cstring>
 #include <random>
 
@@ -55,6 +56,16 @@ static inline void mtl_set_ptr(MetalStream *ms, const void *ptr,
     }
   }
   assert(false && "Pointer not in any wrapped allocator buffer");
+}
+
+static inline void mtl_unwrap_ptr(const void *ptr_base) {
+  auto &bufs = mtl_ctx()->buffers;
+  bufs.erase(
+      std::remove_if(bufs.begin(), bufs.end(),
+                     [ptr_base](const WrappedBuffer &wb) {
+                       return wb.base == (const char *)ptr_base;
+                     }),
+      bufs.end());
 }
 
 // Forward declarations for GPU memory ops (defined below in element-wise section)
@@ -570,6 +581,9 @@ static void ensure_norm_partials() {
                      deallocator:nil];
     assert(buf);
     mtl_ctx()->buffers.push_back({(char *)norm_partials_buf, 16384, buf});
+    [mtl_ctx()->residency_set addAllocation:buf];
+    [mtl_ctx()->residency_set commit];
+    [mtl_ctx()->residency_set requestResidency];
   }
 }
 
@@ -745,6 +759,9 @@ static PufTensor alloc_metal_tensor(int dim0, int dim1) {
                    deallocator:nil];
   assert(buf);
   mtl_ctx()->buffers.push_back({t.bytes, alloc_size, buf});
+  [mtl_ctx()->residency_set addAllocation:buf];
+  [mtl_ctx()->residency_set commit];
+  [mtl_ctx()->residency_set requestResidency];
   return t;
 }
 
@@ -872,7 +889,10 @@ static int g_sample_act_f32_cap = 0;
 void mtl_sample_logits_init(int B, int num_atns) {
   int needed = B * num_atns;
   if (g_sample_act_f32 && needed <= g_sample_act_f32_cap) return;
-  if (g_sample_act_f32) free(g_sample_act_f32);
+  if (g_sample_act_f32) {
+    mtl_unwrap_ptr(g_sample_act_f32);
+    free(g_sample_act_f32);
+  }
   g_sample_act_f32_cap = needed;
   int64_t alloc_bytes = needed * sizeof(float);
   int64_t page = 16384;
@@ -886,6 +906,9 @@ void mtl_sample_logits_init(int B, int num_atns) {
                    deallocator:nil];
   assert(buf);
   mtl_ctx()->buffers.push_back({(char *)g_sample_act_f32, alloc_bytes, buf});
+  [mtl_ctx()->residency_set addAllocation:buf];
+  [mtl_ctx()->residency_set commit];
+  [mtl_ctx()->residency_set requestResidency];
 }
 
 // Dispatch GPU sampling kernel on the current command buffer (no sync).
@@ -994,8 +1017,10 @@ void ppo_loss_fwd_bwd(PufTensor &dec_out, PufTensor &logstd, TrainGraph &graph,
   int ppo_grid = (total + ppo_threads - 1) / ppo_threads;
   int ppo_partials_needed = ppo_grid * (LOSS_N + 1);
   if (!ppo_partials_buf || ppo_partials_needed > ppo_partials_capacity) {
-    if (ppo_partials_buf)
+    if (ppo_partials_buf) {
+      mtl_unwrap_ptr(ppo_partials_buf);
       free(ppo_partials_buf);
+    }
     ppo_partials_capacity = ppo_partials_needed;
     int64_t alloc_bytes = ppo_partials_capacity * sizeof(float);
     int64_t page = 16384;
@@ -1008,17 +1033,24 @@ void ppo_loss_fwd_bwd(PufTensor &dec_out, PufTensor &logstd, TrainGraph &graph,
                      deallocator:nil];
     assert(buf);
     mtl_ctx()->buffers.push_back({(char *)ppo_partials_buf, alloc_bytes, buf});
+    [mtl_ctx()->residency_set addAllocation:buf];
+    [mtl_ctx()->residency_set commit];
+    [mtl_ctx()->residency_set requestResidency];
   }
 
-  // Zero loss output
-  *(float *)bufs.loss_output.bytes = 0.0f;
+  // Zero loss output on GPU (CUDA uses cudaMemsetAsync here — CPU write races
+  // with reduce kernel's *loss += sum from the previous minibatch).
+  puf_zero(bufs.loss_output, stream);
 
   // MSL doesn't support double — convert actions from f64 to f32 on GPU.
   // Uses cast_f64_to_f32 kernel (IEEE 754 bit manipulation via uint2) to
   // avoid flushing the GPU encoder for a CPU conversion loop.
   int act_count = (int)graph.mb_actions.numel();
   if (!ppo_act_f32 || act_count > ppo_act_f32_capacity) {
-    if (ppo_act_f32) free(ppo_act_f32);
+    if (ppo_act_f32) {
+      mtl_unwrap_ptr(ppo_act_f32);
+      free(ppo_act_f32);
+    }
     ppo_act_f32_capacity = act_count;
     int64_t alloc_bytes = ppo_act_f32_capacity * sizeof(float);
     int64_t page = 16384;
@@ -1031,6 +1063,9 @@ void ppo_loss_fwd_bwd(PufTensor &dec_out, PufTensor &logstd, TrainGraph &graph,
                      deallocator:nil];
     assert(buf);
     mtl_ctx()->buffers.push_back({(char *)ppo_act_f32, alloc_bytes, buf});
+    [mtl_ctx()->residency_set addAllocation:buf];
+    [mtl_ctx()->residency_set commit];
+    [mtl_ctx()->residency_set requestResidency];
   }
   {
     ms->compute_encoder();
@@ -1055,6 +1090,10 @@ void ppo_loss_fwd_bwd(PufTensor &dec_out, PufTensor &logstd, TrainGraph &graph,
     mask_ptr = (const float *)graph.mb_obs.bytes + mask_offset;
     mask_stride = input_size;
   }
+
+  // Metal 4 coherence: barrier so PPO kernel sees var_mean + cast_f64 outputs.
+  // Without this, adv_mean/adv_var reads as zero → 1e8× gradient explosion.
+  mtl_barrier(ms);
 
   // Fused PPO kernel
   {
@@ -1112,7 +1151,33 @@ void ppo_loss_fwd_bwd(PufTensor &dec_out, PufTensor &logstd, TrainGraph &graph,
     mtl_dispatch_groups(ms, pso, ppo_grid, ppo_threads);
   }
 
+  // Metal 4 coherence: sync so reduce kernel sees PPO partials.
+  ms->sync();
 
+  // Diagnostic: dump PPO partials and inputs from CPU after sync
+  {
+    static int diag_count = 0;
+    if (diag_count < 12) {
+      // Check adv_mean/adv_var that PPO kernel reads
+      float adv_var_val = *(float *)bufs.adv_scratch.bytes;
+      float adv_mean_val = *((float *)bufs.adv_scratch.bytes + 1);
+      fprintf(stderr, "[ppo-diag] mb=%d adv_mean=%.6f adv_var=%.6f\n", diag_count, adv_mean_val, adv_var_val);
+      // Check a few logits from dec_out
+      float *logits_ptr = (float *)dec_out.bytes;
+      fprintf(stderr, "[ppo-diag]   logits[0..3]=%.6f %.6f %.6f %.6f\n",
+              logits_ptr[0], logits_ptr[1], logits_ptr[2], logits_ptr[3]);
+      // Partials
+      int nan_count = 0;
+      for (int i = 0; i < ppo_grid * (LOSS_N + 1); i++) {
+        if (isnan(ppo_partials_buf[i])) nan_count++;
+      }
+      fprintf(stderr, "[ppo-diag]   partials: %d/%d NaN, block0=[%.4f,%.4f,%.4f,%.4f,...,%.4f]\n",
+              nan_count, ppo_grid * (LOSS_N + 1),
+              ppo_partials_buf[0], ppo_partials_buf[1], ppo_partials_buf[2],
+              ppo_partials_buf[3], ppo_partials_buf[7]);
+      diag_count++;
+    }
+  }
 
   // Reduce partials
   {
@@ -1126,6 +1191,7 @@ void ppo_loss_fwd_bwd(PufTensor &dec_out, PufTensor &logstd, TrainGraph &graph,
       int num_blocks;
     } params = {ppo_grid};
     mtl_set_params(ms, params, 3);
+
     mtl_dispatch_groups(ms, pso, 1, LOSS_N + 1);
   }
 }
@@ -2089,7 +2155,9 @@ static PufTensor simple_encoder_forward(void *w, void *activations,
   SimpleEncoderActivations *a = (SimpleEncoderActivations *)activations;
   if (a->saved_input.bytes)
     puf_copy(a->saved_input, input, stream);
+
   puf_mm(input, ew->weight, a->out, stream);
+
   return a->out;
 }
 
@@ -2399,8 +2467,27 @@ static PufTensor mingru_backward(void *w, PufTensor grad, void *activations,
 // Metal context (g_ctx.buffers is cleared but these statics would persist,
 // causing mtl_set_ptr assertion failures on the second trial).
 void mtl_kernels_reset() {
-  if (norm_partials_buf) { free(norm_partials_buf); norm_partials_buf = nullptr; }
-  if (g_sample_act_f32)  { free(g_sample_act_f32);  g_sample_act_f32 = nullptr; g_sample_act_f32_cap = 0; }
-  if (ppo_partials_buf)  { free(ppo_partials_buf);  ppo_partials_buf = nullptr; ppo_partials_capacity = 0; }
-  if (ppo_act_f32)       { free(ppo_act_f32);       ppo_act_f32 = nullptr;      ppo_act_f32_capacity = 0; }
+  if (norm_partials_buf) {
+    mtl_unwrap_ptr(norm_partials_buf);
+    free(norm_partials_buf);
+    norm_partials_buf = nullptr;
+  }
+  if (g_sample_act_f32) {
+    mtl_unwrap_ptr(g_sample_act_f32);
+    free(g_sample_act_f32);
+    g_sample_act_f32 = nullptr;
+    g_sample_act_f32_cap = 0;
+  }
+  if (ppo_partials_buf) {
+    mtl_unwrap_ptr(ppo_partials_buf);
+    free(ppo_partials_buf);
+    ppo_partials_buf = nullptr;
+    ppo_partials_capacity = 0;
+  }
+  if (ppo_act_f32) {
+    mtl_unwrap_ptr(ppo_act_f32);
+    free(ppo_act_f32);
+    ppo_act_f32 = nullptr;
+    ppo_act_f32_capacity = 0;
+  }
 }

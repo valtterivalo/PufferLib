@@ -3509,12 +3509,22 @@ kernel void steel_gemm(
         }
     }
 
+    // Single threadgroup allocation shared between K-remainder and store phases.
+    // These phases are sequential (barriers between), so memory is safely reused.
+    // The compiler doubles explicit threadgroup memory (simdgroup register spill),
+    // so separate arrays for sA+sB+sC exceed 32KB. Aliasing them into one buffer
+    // keeps total at BM*BN*4*2 = 32768 = limit.
+    constexpr int SMEM_STRIDE = BN;
+    threadgroup float _smem[BM * SMEM_STRIDE];
+
     // ---- K-remainder: threadgroup fallback for last partial chunk ----
     // Only triggered when K % 8 != 0 (e.g., K=373). Loads remaining
     // elements into zero-padded 8-wide threadgroup tiles.
+    // Reinterprets _smem as sA (BM×9 float) and sB (8×(BN+1) float).
     if (K_aligned < p.K) {
-        threadgroup float sA[BM][9];       // BM rows × 8+1 cols (padded)
-        threadgroup float sB[8][BN + 1];   // 8 rows × BN+1 cols (padded)
+        threadgroup float* sA = _smem;                // BM*9 = 576 floats
+        threadgroup float* sB = _smem + BM * 9;       // 8*(BN+1) = 520 floats
+        constexpr int sB_stride = BN + 1;
 
         int k = K_aligned;
         int rem = p.K - k;
@@ -3526,7 +3536,7 @@ kernel void steel_gemm(
             int c = idx % 8;
             int gr = bm + r;
             int gc = k + c;
-            sA[r][c] = (gr < p.M && c < rem)
+            sA[r * 9 + c] = (gr < p.M && c < rem)
                 ? (p.trans_a ? A[(long)gc * p.lda + gr] : A[(long)gr * p.lda + gc])
                 : 0.0f;
         }
@@ -3538,7 +3548,7 @@ kernel void steel_gemm(
             int c = idx % BN;
             int gr = k + r;
             int gc = bn + c;
-            sB[r][c] = (r < rem && gc < p.N)
+            sB[r * sB_stride + c] = (r < rem && gc < p.N)
                 ? (p.trans_b ? B[(long)gc * p.ldb + gr] : B[(long)gr * p.ldb + gc])
                 : 0.0f;
         }
@@ -3547,10 +3557,10 @@ kernel void steel_gemm(
 
         simdgroup_float8x8 a_frag[TM];
         for (int i = 0; i < TM; i++)
-            simdgroup_load(a_frag[i], &sA[wm * 32 + i * 8][0], 9);
+            simdgroup_load(a_frag[i], sA + (wm * 32 + i * 8) * 9, 9);
         for (int j = 0; j < TN; j++) {
             simdgroup_float8x8 b_frag;
-            simdgroup_load(b_frag, &sB[0][wn * 32 + j * 8], BN + 1);
+            simdgroup_load(b_frag, sB + (wn * 32 + j * 8), sB_stride);
             for (int i = 0; i < TM; i++)
                 simdgroup_multiply_accumulate(acc[i][j], a_frag[i], b_frag, acc[i][j]);
         }
@@ -3558,7 +3568,7 @@ kernel void steel_gemm(
 
     // ---- Store results ----
     // Fast path: direct simdgroup_store for interior tiles with alpha=1, beta=0.
-    // Slow path: threadgroup staging for edge tiles and non-trivial alpha/beta.
+    // Slow path: threadgroup staging via _smem for edge tiles and non-trivial alpha/beta.
     // CRITICAL: condition must be uniform across the threadgroup — all simdgroups
     // must take the same branch, otherwise the threadgroup_barrier in the slow
     // path causes undefined behavior (some threads skip it).
@@ -3570,11 +3580,11 @@ kernel void steel_gemm(
                 simdgroup_store(acc[i][j],
                     C + (long)(sm + i*8) * p.ldc + sn + j*8, p.ldc);
     } else {
-        threadgroup float sC[BM][BN + 1];  // padded to avoid bank conflicts
         for (int i = 0; i < TM; i++)
             for (int j = 0; j < TN; j++)
                 simdgroup_store(acc[i][j],
-                    &sC[wm*32 + i*8][wn*32 + j*8], BN + 1);
+                    _smem + (wm*32 + i*8) * SMEM_STRIDE + (wn*32 + j*8),
+                    SMEM_STRIDE);
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
         // Cooperative store to device: each thread handles BM*BN/128 = 32 elements
@@ -3585,7 +3595,7 @@ kernel void steel_gemm(
             int gc = bn + c;
             if (gr < p.M && gc < p.N) {
                 long out_idx = (long)gr * p.ldc + gc;
-                float val = sC[r][c];
+                float val = _smem[r * SMEM_STRIDE + c];
                 if (p.beta == 0.0f)
                     C[out_idx] = p.alpha * val;
                 else
@@ -3720,10 +3730,22 @@ kernel void steel_gemm_f16(
         }
     }
 
-    // K-remainder: threadgroup fallback
+    // Single threadgroup allocation shared between K-remainder and store phases.
+    // These phases are sequential (barriers between), so memory is safely reused.
+    // Store needs BM*BN floats = 16384 bytes (largest consumer).
+    // K-remainder needs BM*9 + 8*(BN+1) halves = 2192 bytes (fits inside).
+    // Without aliasing, the compiler allocates all three arrays statically and
+    // exceeds the 32KB threadgroup memory limit. The compiler doubles explicit
+    // threadgroup memory (simdgroup register spill), so BM*BN*4*2 = 32768 = limit.
+    // No +1 stride padding: minor bank conflict on simdgroup_store vs. correctness.
+    constexpr int SMEM_STRIDE = BN;
+    threadgroup float _smem[BM * SMEM_STRIDE];
+
+    // K-remainder: reinterpret _smem as half arrays for partial-K accumulation
     if (K_aligned < p.K) {
-        threadgroup half sA[BM][9];
-        threadgroup half sB[8][BN + 1];
+        threadgroup half* sA = (threadgroup half*)_smem;
+        threadgroup half* sB = sA + BM * 9;
+        constexpr int sB_stride = BN + 1;
 
         int k = K_aligned;
         int rem = p.K - k;
@@ -3734,7 +3756,7 @@ kernel void steel_gemm_f16(
             int c = idx % 8;
             int gr = bm + r;
             int gc = k + c;
-            sA[r][c] = (gr < p.M && c < rem)
+            sA[r * 9 + c] = (gr < p.M && c < rem)
                 ? (p.trans_a ? A[(long)gc * p.lda + gr] : A[(long)gr * p.lda + gc])
                 : half(0);
         }
@@ -3745,7 +3767,7 @@ kernel void steel_gemm_f16(
             int c = idx % BN;
             int gr = k + r;
             int gc = bn + c;
-            sB[r][c] = (r < rem && gc < p.N)
+            sB[r * sB_stride + c] = (r < rem && gc < p.N)
                 ? (p.trans_b ? B[(long)gc * p.ldb + gr] : B[(long)gr * p.ldb + gc])
                 : half(0);
         }
@@ -3754,23 +3776,24 @@ kernel void steel_gemm_f16(
 
         simdgroup_half8x8 a_frag[TM];
         for (int i = 0; i < TM; i++)
-            simdgroup_load(a_frag[i], &sA[wm * 32 + i * 8][0], 9);
+            simdgroup_load(a_frag[i], sA + (wm * 32 + i * 8) * 9, 9);
         for (int j = 0; j < TN; j++) {
             simdgroup_half8x8 b_frag;
-            simdgroup_load(b_frag, &sB[0][wn * 32 + j * 8], BN + 1);
+            simdgroup_load(b_frag, sB + (wn * 32 + j * 8), sB_stride);
             for (int i = 0; i < TM; i++)
                 simdgroup_multiply_accumulate(acc[i][j], a_frag[i], b_frag, acc[i][j]);
         }
     }
 
-    // Store: f32 acc → half output via threadgroup staging
-    // (simdgroup_store of float8x8 requires float* destination)
+    // Store: f32 acc → half output via _smem staging (reuses same memory)
+    // simdgroup_store of float8x8 requires float* destination, so we stage
+    // through _smem then convert element-by-element to half for output.
     {
-        threadgroup float sC[BM][BN + 1];
         for (int i = 0; i < TM; i++)
             for (int j = 0; j < TN; j++)
                 simdgroup_store(acc[i][j],
-                    &sC[wm*32 + i*8][wn*32 + j*8], BN + 1);
+                    _smem + (wm*32 + i*8) * SMEM_STRIDE + (wn*32 + j*8),
+                    SMEM_STRIDE);
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
         for (int idx = tid; idx < BM * BN; idx += 128) {
@@ -3780,7 +3803,7 @@ kernel void steel_gemm_f16(
             int gc = bn + c;
             if (gr < p.M && gc < p.N) {
                 long out_idx = (long)gr * p.ldc + gc;
-                float val = sC[r][c];
+                float val = _smem[r * SMEM_STRIDE + c];
                 if (p.beta == 0.0f)
                     C[out_idx] = half(p.alpha * val);
                 else

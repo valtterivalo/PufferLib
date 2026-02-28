@@ -107,6 +107,11 @@ pybind11::dict log_losses(pybind11::object pufferl_obj) {
     ensure_gpu_synced((cudaStream_t)mtl_stream());
     float* losses_host = (float*)pufferl.losses_puf.bytes;
     float n = losses_host[LOSS_N];
+    // Debug: dump raw losses buffer
+    int nloss = (int)pufferl.losses_puf.numel();
+    fprintf(stderr, "[log_losses] n=%.1f raw:", n);
+    for (int i = 0; i < nloss && i < 10; i++) fprintf(stderr, " [%d]=%.6f", i, losses_host[i]);
+    fprintf(stderr, "\n");
     pybind11::dict result;
     if (n > 0) {
         float inv_n = 1.0f / n;
@@ -118,7 +123,6 @@ pybind11::dict log_losses(pybind11::object pufferl_obj) {
         result["approx_kl"] = losses_host[LOSS_APPROX_KL] * inv_n;
         result["clipfrac"] = losses_host[LOSS_CLIPFRAC] * inv_n;
     }
-    // Zero the accumulator (unified memory: memset directly)
     memset(losses_host, 0, pufferl.losses_puf.numel() * pufferl.losses_puf.dtype_size);
     return result;
 }

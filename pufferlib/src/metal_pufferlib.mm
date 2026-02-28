@@ -567,13 +567,20 @@ void train_impl(PuffeRL& pufferl) {
 
             uint64_t tp4 = mach_absolute_time();
 
+            // Metal 4 coherence: barrier before cast reads decoder steel_gemm_f16 output
+            mtl_barrier((MetalStream*)ts);
             mtl_cast_f16_to_f32((float*)pufferl.fp32_dec_out_buf.bytes,
                                 dec_puf.bytes, (int)dec_puf.numel(), ts);
             PufTensor dec_puf_f32 = pufferl.fp32_dec_out_buf;
 
-            DecoderWeights* dw_train = (DecoderWeights*)pufferl.weights_bf16.decoder;
             PufTensor p_logstd;
-            if (dw_train->continuous) p_logstd = dw_train->logstd;
+            if (pufferl.is_continuous) {
+                if (hypers.arch_type == ARCH_SIMPLE) {
+                    p_logstd = ((SimpleDecoderWeights*)pufferl.weights_bf16.decoder)->logstd;
+                } else {
+                    p_logstd = ((DecoderWeights*)pufferl.weights_bf16.decoder)->logstd;
+                }
+            }
 
             ppo_loss_fwd_bwd(dec_puf_f32, p_logstd, pufferl.train_buf,
                 pufferl.act_sizes_puf, pufferl.losses_puf,
@@ -596,13 +603,16 @@ void train_impl(PuffeRL& pufferl) {
 
             uint64_t tp6 = mach_absolute_time();
 
+            // Metal 4 coherence: barrier before cast reads backward steel_gemm_f16 output
             PufTensor& gc = pufferl.use_adam ? pufferl.adam->gc_puf : pufferl.muon->gc_puf;
+            mtl_barrier((MetalStream*)ts);
             mtl_cast_f16_to_f32((float*)gc.bytes,
                                 pufferl.grad_bf16_puf.bytes,
                                 (int)pufferl.grad_bf16_puf.numel(), ts);
 
             uint64_t tp7 = mach_absolute_time();
 
+            mtl_barrier((MetalStream*)ts); // grad_cast→clip
             {
                 float* scratch = (float*)pufferl.grad_norm_puf.bytes;
                 clip_grad_norm_f32(gc, scratch, hypers.max_grad_norm, 1e-6f, ts);
@@ -610,11 +620,48 @@ void train_impl(PuffeRL& pufferl) {
 
             uint64_t tp8 = mach_absolute_time();
 
+            mtl_barrier((MetalStream*)ts); // clip→optimizer
             // Optimizer step with fused fp32→fp16 param cast
             if (pufferl.use_adam)
                 adam_step(pufferl.adam, pufferl.param_fp16_puf.bytes, ts);
             else
                 muon_step(pufferl.muon, pufferl.param_fp16_puf.bytes, ts);
+
+            // Metal 4 coherence: sync so next minibatch's forward pass
+            // sees updated weights from optimizer.
+            ((MetalStream*)ts)->sync();
+
+            // Diagnostic: check fp16 weights and fp32 master after optimizer
+            {
+                static int opt_diag = 0;
+                if (opt_diag < 4) {
+                    // Check fp16 weights
+                    uint16_t *fp16 = (uint16_t*)pufferl.param_fp16_puf.bytes;
+                    int n16 = (int)pufferl.param_fp16_puf.numel();
+                    int nan16 = 0;
+                    for (int i = 0; i < n16; i++) {
+                        uint16_t v = fp16[i];
+                        if ((v & 0x7C00) == 0x7C00 && (v & 0x03FF) != 0) nan16++;
+                    }
+                    // Check fp32 master weights
+                    float *fp32 = (float*)(pufferl.use_adam ? pufferl.adam->wb_puf.bytes : pufferl.muon->gc_puf.bytes);
+                    int n32 = pufferl.use_adam ? (int)pufferl.adam->wb_puf.numel() : 0;
+                    int nan32 = 0;
+                    for (int i = 0; i < n32; i++) {
+                        if (isnan(fp32[i])) nan32++;
+                    }
+                    // Also check gradients
+                    float *gc = (float*)(pufferl.use_adam ? pufferl.adam->gc_puf.bytes : pufferl.muon->gc_puf.bytes);
+                    int ngc = pufferl.use_adam ? (int)pufferl.adam->gc_puf.numel() : (int)pufferl.muon->gc_puf.numel();
+                    int nangc = 0;
+                    for (int i = 0; i < ngc; i++) {
+                        if (isnan(gc[i])) nangc++;
+                    }
+                    fprintf(stderr, "[opt-diag] mb=%d fp16_nan=%d/%d fp32_nan=%d/%d grad_nan=%d/%d\n",
+                            mb, nan16, n16, nan32, n32, nangc, ngc);
+                    opt_diag++;
+                }
+            }
 
             uint64_t tp9 = mach_absolute_time();
 
@@ -688,14 +735,21 @@ void train_impl(PuffeRL& pufferl) {
 
         uint64_t tp4 = mach_absolute_time();
 
+        // Metal 4 coherence: barrier before cast reads decoder steel_gemm_f16 output
+        mtl_barrier((MetalStream*)train_stream);
         mtl_cast_f16_to_f32((float*)pufferl.fp32_dec_out_buf.bytes,
-                            dec_puf.bytes, (int)dec_puf.numel(), train_stream);
+                             (const void*)dec_puf.bytes,
+                             (int)dec_puf.numel(), train_stream);
         PufTensor dec_puf_f32 = pufferl.fp32_dec_out_buf;
 
-        DecoderWeights* dw_train = (DecoderWeights*)pufferl.weights_bf16.decoder;
         PufTensor p_logstd;
-        if (dw_train->continuous) p_logstd = dw_train->logstd;
-
+        if (pufferl.is_continuous) {
+            if (hypers.arch_type == ARCH_SIMPLE) {
+                p_logstd = ((SimpleDecoderWeights*)pufferl.weights_bf16.decoder)->logstd;
+            } else {
+                p_logstd = ((DecoderWeights*)pufferl.weights_bf16.decoder)->logstd;
+            }
+        }
         ppo_loss_fwd_bwd(dec_puf_f32, p_logstd, pufferl.train_buf,
             pufferl.act_sizes_puf, pufferl.losses_puf,
             hypers.clip_coef, hypers.vf_clip_coef, hypers.vf_coef, hypers.ent_coef,
@@ -717,13 +771,16 @@ void train_impl(PuffeRL& pufferl) {
 
         uint64_t tp6 = mach_absolute_time();
 
+        // Metal 4 coherence: barrier before cast reads backward steel_gemm_f16 output
         PufTensor& gc_sync = pufferl.use_adam ? pufferl.adam->gc_puf : pufferl.muon->gc_puf;
+        mtl_barrier((MetalStream*)train_stream);
         mtl_cast_f16_to_f32((float*)gc_sync.bytes,
                             pufferl.grad_bf16_puf.bytes,
                             (int)pufferl.grad_bf16_puf.numel(), train_stream);
 
         uint64_t tp7 = mach_absolute_time();
 
+        mtl_barrier((MetalStream*)train_stream); // grad_cast→clip
         {
             float* scratch = (float*)pufferl.grad_norm_puf.bytes;
             clip_grad_norm_f32(gc_sync, scratch, hypers.max_grad_norm, 1e-6f, train_stream);
@@ -731,11 +788,15 @@ void train_impl(PuffeRL& pufferl) {
 
         uint64_t tp8 = mach_absolute_time();
 
-        // Optimizer step with fused fp32→fp16 param cast
+        mtl_barrier((MetalStream*)train_stream); // clip→optimizer
         if (pufferl.use_adam)
             adam_step(pufferl.adam, pufferl.param_fp16_puf.bytes, train_stream);
         else
             muon_step(pufferl.muon, pufferl.param_fp16_puf.bytes, train_stream);
+
+        // Metal 4 coherence: barrier so next minibatch's forward pass
+        // sees updated weights from optimizer.
+        mtl_barrier((MetalStream*)train_stream);
 
         uint64_t tp9 = mach_absolute_time();
 
@@ -758,6 +819,7 @@ void train_impl(PuffeRL& pufferl) {
     ensure_gpu_synced(train_stream);
     uint64_t tp_sync1 = mach_absolute_time();
     pufferl.profile.accum[PROF_TRAIN_SYNC] += prof_ms(tp_sync0, tp_sync1);
+
 }
 
 // Wait for async GPU training to complete, then snapshot weights for inference.
@@ -959,6 +1021,7 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
         encoder.init_weights(wfp32.encoder, &seed, default_stream);
         decoder.init_weights(wfp32.decoder, &seed, default_stream);
         network.init_weights(wfp32.network, &seed, default_stream);
+        ensure_gpu_synced(default_stream);
     }
 
     // Fused encoder+layer0 is disabled: nonlinear 3-layer encoder can't be fused.
