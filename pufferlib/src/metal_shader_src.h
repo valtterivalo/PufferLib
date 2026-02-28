@@ -2226,6 +2226,21 @@ kernel void relu_fwd_save_kernel(
     out[idx] = max(0.0f, v);
 }
 
+// bias_add_relu_fwd_save: fused bias_add + relu_fwd_save.
+// inout[i] = relu(inout[i] + bias[i % cols]), pre_act[i] = inout[i] + bias[i % cols]
+kernel void bias_add_relu_fwd_save_kernel(
+    device float* inout             [[buffer(0)]],
+    const device float* bias        [[buffer(1)]],
+    device float* pre_act           [[buffer(2)]],
+    constant BiasAddParams& p       [[buffer(3)]],
+    uint idx [[thread_position_in_grid]]
+) {
+    if ((int)idx >= p.n) return;
+    float v = inout[idx] + bias[(int)idx % p.cols];
+    pre_act[idx] = v;
+    inout[idx] = max(0.0f, v);
+}
+
 // relu_bwd: grad_in[i] = (pre_act[i] > 0) ? grad_out[i] : 0
 kernel void relu_bwd_kernel(
     const device float* grad_out    [[buffer(0)]],
@@ -2441,6 +2456,20 @@ kernel void bias_add_f16_kernel(
 ) {
     if ((int)idx < p.n)
         inout[idx] = half(float(inout[idx]) + float(bias[(int)idx % p.cols]));
+}
+
+// bias_add_relu_fwd_save_f16: fused bias_add + relu_fwd_save (half I/O, half pre_act)
+kernel void bias_add_relu_fwd_save_f16_kernel(
+    device half* inout              [[buffer(0)]],
+    const device half* bias         [[buffer(1)]],
+    device half* pre_act            [[buffer(2)]],
+    constant BiasAddParams& p       [[buffer(3)]],
+    uint idx [[thread_position_in_grid]]
+) {
+    if ((int)idx >= p.n) return;
+    float v = float(inout[idx]) + float(bias[(int)idx % p.cols]);
+    pre_act[idx] = half(v);
+    inout[idx] = half(max(0.0f, v));
 }
 
 // --- Sum rows fp16 (for bias/LN param grads) ---

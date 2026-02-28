@@ -2,6 +2,9 @@
  * @fileoverview Metal kernel dispatch layer, model components, orthogonal
  * init (Accelerate LAPACK), and Muon optimizer for PufferLib static-native.
  *
+ * REQUIRES Metal 4 (macOS 15+, Apple Silicon M3+). All GPU dispatch uses
+ * MTL4ComputeCommandEncoder + MTL4ArgumentTable (no Metal 3 fallback).
+ *
  * Provides all PufTensor operation wrappers that models.cu provides on CUDA:
  *   - Memory ops: puf_copy, puf_zero, puf_add, puf_transpose_01
  *   - Kernel dispatchers: mingru, scan, sample, PPO, advantage, prio, etc.
@@ -43,11 +46,10 @@ static inline void mtl_set_ptr(MetalStream *ms, const void *ptr,
     if ((const char *)ptr >= wb.base &&
         (const char *)ptr < wb.base + wb.size) {
       NSUInteger offset = (NSUInteger)((const char *)ptr - wb.base);
-      if (ctx->has_metal4) {
-        [ms->arg_table setAddress:(wb.buffer.gpuAddress + offset)
-                          atIndex:index];
-      } else {
-        [ms->enc setBuffer:wb.buffer offset:offset atIndex:index];
+      uint64_t addr = wb.buffer.gpuAddress + offset;
+      if (ms->bound_addresses[index] != addr) {
+        [ms->arg_table setAddress:addr atIndex:index];
+        ms->bound_addresses[index] = addr;
       }
       return;
     }
@@ -495,6 +497,24 @@ void mtl_relu_fwd_save(const void *in, void *out, void *pre_act, int n,
   mtl_set_ptr(ms, out, 1);
   mtl_set_ptr(ms, pre_act, 2);
   struct { int n; } params = {n};
+  mtl_set_params(ms, params, 3);
+  mtl_dispatch_1d(ms, pso, n);
+}
+
+// bias_add_relu_fwd_save: fused bias_add + relu with pre-act save
+void mtl_bias_add_relu_fwd_save(void *inout, const void *bias, void *pre_act,
+                                 int cols, int n, int dtype_size,
+                                 cudaStream_t stream) {
+  MetalStream *ms = mtl_get_stream(stream);
+  ms->compute_encoder();
+  const char *name = (dtype_size == 2) ? "bias_add_relu_fwd_save_f16_kernel"
+                                       : "bias_add_relu_fwd_save_kernel";
+  auto pso = mtl_pipeline(name);
+  mtl_set_pso(ms, pso);
+  mtl_set_ptr(ms, inout, 0);
+  mtl_set_ptr(ms, bias, 1);
+  mtl_set_ptr(ms, pre_act, 2);
+  struct { int cols; int n; } params = {cols, n};
   mtl_set_params(ms, params, 3);
   mtl_dispatch_1d(ms, pso, n);
 }
@@ -1328,13 +1348,8 @@ void mtl_select_copy(RolloutBuf &rollouts, TrainGraph &graph,
   mtl_set_ptr(ms, fp16_obs_out, 15);
 
   // 2D dispatch: (mb_segs, 5) threadgroups, 256 threads each
-  if (mtl_ctx()->has_metal4) {
-    [ms->enc4 dispatchThreadgroups:MTLSizeMake(mb_segs, 5, 1)
-        threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
-  } else {
-    [ms->enc dispatchThreadgroups:MTLSizeMake(mb_segs, 5, 1)
-        threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
-  }
+  [ms->enc dispatchThreadgroups:MTLSizeMake(mb_segs, 5, 1)
+      threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
 }
 
 // ============================================================================
@@ -1860,17 +1875,15 @@ static PufTensor decoder_forward(void *w, void *activations, PufTensor input,
                      a->post_ln.bytes, a->saved_x_hat.bytes,
                      a->saved_rstd.bytes, B, H, 1e-5f, dsz, stream);
 
-  // step 2: intermediate Linear + bias + ReLU
+  // step 2: intermediate Linear + fused bias+ReLU
   puf_mm(a->post_ln, dw->intermediate_weight, a->intermediate_out, stream);
-  mtl_bias_add(a->intermediate_out.bytes, dw->intermediate_bias.bytes,
-               H, B * H, dsz, stream);
-  if (a->intermediate_pre_relu.bytes)
-    mtl_relu_fwd_save(a->intermediate_out.bytes, a->intermediate_out.bytes,
-                       a->intermediate_pre_relu.bytes, B * H, dsz, stream);
-  else {
-    // rollout: in-place ReLU (no need to save pre-act)
-    mtl_relu_fwd_save(a->intermediate_out.bytes, a->intermediate_out.bytes,
-                       a->intermediate_out.bytes, B * H, dsz, stream);
+  {
+    void *pre_act = a->intermediate_pre_relu.bytes
+                        ? a->intermediate_pre_relu.bytes
+                        : a->intermediate_out.bytes; // rollout: don't need pre-act
+    mtl_bias_add_relu_fwd_save(a->intermediate_out.bytes,
+                                dw->intermediate_bias.bytes, pre_act,
+                                H, B * H, dsz, stream);
   }
 
   // step 3: output Linear + bias → (B, out+1)

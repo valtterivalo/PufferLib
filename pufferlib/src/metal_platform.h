@@ -1,6 +1,10 @@
 /**
  * @fileoverview Metal backend infrastructure for PufferLib static-native.
  *
+ * REQUIRES Metal 4 (macOS 15+, Apple Silicon M3+). Uses reusable command
+ * buffers, argument tables, residency sets, and shared events. No Metal 3
+ * transient command buffer fallback — this code assumes Metal 4 is available.
+ *
  * Provides device/queue management, MSL shader compilation with pipeline
  * caching, buffer wrapping for PufTensor memory (zero-copy on Apple Silicon
  * unified memory), command buffer lifecycle, and dispatch helpers.
@@ -28,18 +32,15 @@
 // ============================================================================
 
 struct MetalStream {
-  // Metal 3 (transient command buffers)
-  id<MTLCommandBuffer> cmd;
-  id<MTLComputeCommandEncoder> enc;
-  id<MTLCommandQueue> queue;  // owning queue (for creating command buffers)
-
-  // Metal 4 (reusable command buffers + argument tables)
   id<MTL4CommandAllocator> allocator;
-  id<MTL4CommandBuffer> cmd4;
-  id<MTL4ComputeCommandEncoder> enc4;
+  id<MTL4CommandBuffer> cmd;
+  id<MTL4ComputeCommandEncoder> enc;
   id<MTL4ArgumentTable> arg_table;
   id<MTLBuffer> const_ring;            // per-stream ring buffer for inline constants
   NSUInteger const_ring_offset = 0;    // current write position in ring
+
+  // Argument table binding cache — skip redundant setAddress calls
+  uint64_t bound_addresses[32] = {};
 
   bool enc_active = false;
   bool pending_work = false; // true when compute work is encoded but not synced
@@ -83,17 +84,17 @@ struct WrappedBuffer {
 // ============================================================================
 
 // Constants ring buffer size for Metal 4 setBytes replacement.
-static const NSUInteger MTL_CONST_RING_SIZE = 64 * 1024;
+// Must hold all params pushed between begin() and sync()/flush().
+// High replay_ratio (e.g. 2-4x) encodes 32+ minibatches per command buffer,
+// each with ~2-3KB of params (forward + PPO + backward + optimizer GEMMs).
+static const NSUInteger MTL_CONST_RING_SIZE = 512 * 1024;
 
 struct MetalContext {
   id<MTLDevice> device;
-  id<MTLCommandQueue> queue;
-  id<MTLCommandQueue> train_queue;  // separate queue for async training overlap
   id<MTLLibrary> library; // JIT-compiled MSL shaders
   NSMutableDictionary<NSString *, id<MTLComputePipelineState>> *pipelines;
 
-  // Metal 4 tensor_ops GEMM — separate library (different MSL includes).
-  // Metal 4 tensor_ops GEMM pipelines (all layouts, f32 + f16).
+  // tensor_ops GEMM pipelines (all layouts, f32 + f16)
   id<MTLComputePipelineState> tensor_ops_gemm_nt_f32;
   id<MTLComputePipelineState> tensor_ops_gemm_nn_f32;
   id<MTLComputePipelineState> tensor_ops_gemm_tn_f32;
@@ -102,9 +103,8 @@ struct MetalContext {
   id<MTLComputePipelineState> tensor_ops_gemm_tn_f16;
 
   // Metal 4 reusable command buffer infrastructure
-  bool has_metal4 = false;
-  id<MTL4CommandQueue> queue4;        // Metal 4 rollout queue
-  id<MTL4CommandQueue> train_queue4;  // Metal 4 training queue
+  id<MTL4CommandQueue> queue;        // rollout queue
+  id<MTL4CommandQueue> train_queue;  // training queue (async overlap)
   id<MTLResidencySet> residency_set;  // all wrapped buffers for GPU address access
   id<MTLSharedEvent> sync_event;      // CPU-GPU synchronization
   uint64_t sync_event_value = 0;      // monotonically increasing signal counter
@@ -158,82 +158,59 @@ id<MTLBuffer> mtl_buffer_for(const PufTensor &t, NSUInteger *out_offset);
 id<MTLComputePipelineState> mtl_pipeline(const char *name);
 
 // ============================================================================
-// Inline dispatch helpers — unified Metal 3 / Metal 4 interface.
-// All take MetalStream* to support both encoder types transparently.
+// Inline dispatch helpers — Metal 4 argument table + reusable encoder.
 // ============================================================================
 
 // Set compute pipeline state on the active encoder.
 inline void mtl_set_pso(MetalStream *ms, id<MTLComputePipelineState> pso) {
-  if (mtl_ctx()->has_metal4) {
-    [ms->enc4 setComputePipelineState:pso];
-  } else {
-    [ms->enc setComputePipelineState:pso];
-  }
+  [ms->enc setComputePipelineState:pso];
 }
 
-// Bind a PufTensor at the given buffer index.
+// Bind a PufTensor at the given buffer index (with binding cache).
 inline void mtl_set_tensor(MetalStream *ms, const PufTensor &t,
                            uint32_t index) {
   NSUInteger offset;
   id<MTLBuffer> buf = mtl_buffer_for(t, &offset);
-  if (mtl_ctx()->has_metal4) {
-    [ms->arg_table setAddress:(buf.gpuAddress + offset) atIndex:index];
-  } else {
-    [ms->enc setBuffer:buf offset:offset atIndex:index];
+  uint64_t addr = buf.gpuAddress + offset;
+  if (ms->bound_addresses[index] != addr) {
+    [ms->arg_table setAddress:addr atIndex:index];
+    ms->bound_addresses[index] = addr;
   }
 }
 
-// Bind constant data (replaces setBytes — uses ring buffer on Metal 4).
+// Bind constant data via ring buffer (replaces setBytes).
 template <typename T>
 inline void mtl_set_params(MetalStream *ms, const T &params, uint32_t index) {
-  if (mtl_ctx()->has_metal4) {
-    NSUInteger aligned = (sizeof(T) + 15) & ~15;
-    assert(ms->const_ring_offset + aligned <= MTL_CONST_RING_SIZE);
-    memcpy((char *)[ms->const_ring contents] + ms->const_ring_offset,
-           &params, sizeof(T));
-    [ms->arg_table
-        setAddress:(ms->const_ring.gpuAddress + ms->const_ring_offset)
-           atIndex:index];
-    ms->const_ring_offset += aligned;
-  } else {
-    [ms->enc setBytes:&params length:sizeof(T) atIndex:index];
-  }
+  NSUInteger aligned = (sizeof(T) + 15) & ~15;
+  assert(ms->const_ring_offset + aligned <= MTL_CONST_RING_SIZE);
+  memcpy((char *)[ms->const_ring contents] + ms->const_ring_offset,
+         &params, sizeof(T));
+  [ms->arg_table
+      setAddress:(ms->const_ring.gpuAddress + ms->const_ring_offset)
+         atIndex:index];
+  ms->const_ring_offset += aligned;
 }
 
 // 1D dispatch with auto threadgroup sizing (capped at 256).
 inline void mtl_dispatch_1d(MetalStream *ms, id<MTLComputePipelineState> pso,
                             int count) {
   NSUInteger tg = MIN((NSUInteger)pso.maxTotalThreadsPerThreadgroup, 256);
-  if (mtl_ctx()->has_metal4) {
-    [ms->enc4 dispatchThreads:MTLSizeMake(count, 1, 1)
-        threadsPerThreadgroup:MTLSizeMake(tg, 1, 1)];
-  } else {
-    [ms->enc dispatchThreads:MTLSizeMake(count, 1, 1)
-        threadsPerThreadgroup:MTLSizeMake(tg, 1, 1)];
-  }
+  [ms->enc dispatchThreads:MTLSizeMake(count, 1, 1)
+      threadsPerThreadgroup:MTLSizeMake(tg, 1, 1)];
 }
 
 // Threadgroup dispatch (for kernels that use shared memory).
 inline void mtl_dispatch_groups(MetalStream *ms,
                                 id<MTLComputePipelineState> pso,
                                 int num_groups, int group_size) {
-  if (mtl_ctx()->has_metal4) {
-    [ms->enc4 dispatchThreadgroups:MTLSizeMake(num_groups, 1, 1)
-        threadsPerThreadgroup:MTLSizeMake(group_size, 1, 1)];
-  } else {
-    [ms->enc dispatchThreadgroups:MTLSizeMake(num_groups, 1, 1)
-        threadsPerThreadgroup:MTLSizeMake(group_size, 1, 1)];
-  }
+  [ms->enc dispatchThreadgroups:MTLSizeMake(num_groups, 1, 1)
+      threadsPerThreadgroup:MTLSizeMake(group_size, 1, 1)];
 }
 
 // Set threadgroup memory length on the active encoder.
 inline void mtl_set_threadgroup_memory(MetalStream *ms, NSUInteger length,
                                        uint32_t index) {
-  if (mtl_ctx()->has_metal4) {
-    [ms->enc4 setThreadgroupMemoryLength:length atIndex:index];
-  } else {
-    [ms->enc setThreadgroupMemoryLength:length atIndex:index];
-  }
+  [ms->enc setThreadgroupMemoryLength:length atIndex:index];
 }
 
 // ============================================================================

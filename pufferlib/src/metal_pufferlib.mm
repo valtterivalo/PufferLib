@@ -288,6 +288,7 @@ extern "C" void thread_init_metal(void* ctx, int buf) {
 // ============================================================================
 
 extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
+  @autoreleasepool {
     PuffeRL* pufferl = (PuffeRL*)ctx;
     HypersT& hypers = pufferl->hypers;
 
@@ -381,6 +382,11 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
             buf_rng_seed, buf_rng_offset, stream);
 
         ensure_gpu_synced(stream);
+
+        // Expand f32 GPU actions to f64 INSIDE the mutex — g_sample_act_f32 is
+        // a shared buffer that the next thread's GPU dispatch will overwrite.
+        mtl_sample_logits_expand(act_f32, (double*)act_slice.bytes, block_size * num_atns);
+
         puf_set_gpu_training(false);
     }
 
@@ -404,9 +410,6 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
 
     uint64_t tp2 = mach_absolute_time();
 
-    // Expand f32 GPU actions to f64 + copy to env (trivial post-sync)
-    mtl_sample_logits_expand(act_f32, (double*)act_slice.bytes, block_size * num_atns);
-
     uint64_t tp3 = mach_absolute_time();
 
     int64_t act_cols = env.actions.shape[1];
@@ -422,7 +425,7 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
     pufferl->profile.accum[PROF_ROLLOUT_FWD] += prof_ms(tp1, tp2);
     pufferl->profile.accum[PROF_ROLLOUT_SAMPLE] += prof_ms(tp2, tp3);
     pufferl->profile.accum[PROF_ROLLOUT_ACT_COPY] += prof_ms(tp3, tp4);
-
+  } // @autoreleasepool
 }
 
 // ============================================================================
@@ -1240,6 +1243,7 @@ void close_impl(PuffeRL& pufferl) {
 
     fprintf(stderr, "[metal] close: deleting structs\n");
     delete pufferl.muon;
+    delete pufferl.adam;
 
     bool simple = (pufferl.hypers.arch_type == ARCH_SIMPLE);
     auto delete_weights = [simple](PolicyWeights& w) {
@@ -1261,7 +1265,7 @@ void close_impl(PuffeRL& pufferl) {
     }
     delete (MinGRUActivations*)pufferl.train_activations.network;
     delete_weights(pufferl.weights_fp32);
-    delete_weights(pufferl.weights_bf16);  // separate fp16 weights
+    delete_weights(pufferl.weights_bf16);
     delete_weights(pufferl.weights_infer);
     for (auto& rbuf : pufferl.buffer_activations) {
         if (simple) {

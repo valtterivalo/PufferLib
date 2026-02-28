@@ -3,6 +3,10 @@
  * compilation, buffer wrapping, GEMM (Accelerate cblas / MSL tiled kernel),
  * LAPACK (Accelerate).
  *
+ * REQUIRES Metal 4 (macOS 15+, Apple Silicon M3+). Uses MTL4CommandQueue,
+ * MTL4CommandBuffer, MTL4ArgumentTable, MTLResidencySet, MTLSharedEvent.
+ * No Metal 3 transient command buffer fallback.
+ *
  * All GPU memory is allocated via page-aligned posix_memalign (see
  * WITH_METAL path in puf_types.h Allocator::create) and wrapped as
  * MTLBuffer with StorageModeShared for zero-copy GPU access on Apple
@@ -256,45 +260,30 @@ kernel void tensor_ops_gemm_tn_f16(
 
 void MetalStream::begin() {
   enc = nil;
-  enc4 = nil;
   enc_active = false;
   pending_work = false;
   flushed = false;
-  MetalContext *ctx = mtl_ctx();
-  if (ctx->has_metal4) {
-    [allocator reset];
-    [cmd4 beginCommandBufferWithAllocator:allocator];
-    [cmd4 useResidencySet:ctx->residency_set];
-    const_ring_offset = 0;
-  } else {
-    cmd = [queue commandBuffer];
-  }
+  memset(bound_addresses, 0, sizeof(bound_addresses));
+  [allocator reset];
+  [cmd beginCommandBufferWithAllocator:allocator];
+  [cmd useResidencySet:mtl_ctx()->residency_set];
+  const_ring_offset = 0;
 }
 
 id<MTLComputeCommandEncoder> MetalStream::compute_encoder() {
   if (!enc_active) {
-    MetalContext *ctx = mtl_ctx();
-    if (ctx->has_metal4) {
-      enc4 = [cmd4 computeCommandEncoder];
-      [enc4 setArgumentTable:arg_table];
-    } else {
-      enc = [cmd computeCommandEncoder];
-    }
+    enc = [cmd computeCommandEncoder];
+    [enc setArgumentTable:arg_table];
     enc_active = true;
     pending_work = true;
   }
-  return enc;
+  return nil; // callers use enc via helpers, not this return value
 }
 
 void MetalStream::end_compute() {
   if (enc_active) {
-    if (mtl_ctx()->has_metal4) {
-      [enc4 endEncoding];
-      enc4 = nil;
-    } else {
-      [enc endEncoding];
-      enc = nil;
-    }
+    [enc endEncoding];
+    enc = nil;
     enc_active = false;
   }
 }
@@ -317,45 +306,32 @@ void MetalStream::sync() {
   end_compute();
   MetalContext *ctx = mtl_ctx();
   uint64_t t0 = mach_absolute_time();
-  if (ctx->has_metal4) {
-    [cmd4 endCommandBuffer];
-    uint64_t val = ++ctx->sync_event_value;
-    id<MTL4CommandBuffer> bufs[] = { cmd4 };
-    id<MTL4CommandQueue> q =
-        (this == &ctx->train_stream) ? ctx->train_queue4 : ctx->queue4;
-    // Sample GPU timing every 8th sync to amortize ObjC/block overhead
-    bool sample_timing = (g_sync_count % 32 == 0);
-    if (sample_timing) {
-      CFTimeInterval cpu_commit = CACurrentMediaTime();
-      MTL4CommitOptions *opts = [MTL4CommitOptions new];
-      __block CFTimeInterval gpu_start = 0, gpu_end = 0;
-      [opts addFeedbackHandler:^(id<MTL4CommitFeedback> fb) {
-        gpu_start = fb.GPUStartTime;
-        gpu_end = fb.GPUEndTime;
-      }];
-      [q commit:bufs count:1 options:opts];
-      [q signalEvent:ctx->sync_event value:val];
-      [ctx->sync_event waitUntilSignaledValue:val timeoutMS:5000];
-      if (gpu_start > 0 && gpu_end > 0) {
-        g_gpu_exec_ns += (gpu_end - gpu_start) * 1e9;
-        g_sched_wait_ns += (gpu_start - cpu_commit) * 1e9;
-      }
-    } else {
-      [q commit:bufs count:1];
-      [q signalEvent:ctx->sync_event value:val];
-      [ctx->sync_event waitUntilSignaledValue:val timeoutMS:5000];
-    }
-  } else {
+  [cmd endCommandBuffer];
+  uint64_t val = ++ctx->sync_event_value;
+  id<MTL4CommandBuffer> bufs[] = { cmd };
+  id<MTL4CommandQueue> q =
+      (this == &ctx->train_stream) ? ctx->train_queue : ctx->queue;
+  // Sample GPU timing every 32nd sync to amortize ObjC/block overhead
+  bool sample_timing = (g_sync_count % 32 == 0);
+  if (sample_timing) {
     CFTimeInterval cpu_commit = CACurrentMediaTime();
-    [cmd commit];
-    [cmd waitUntilCompleted];
-    // GPU timing diagnostic (Metal 3 only — cmd has GPUStartTime/GPUEndTime)
-    CFTimeInterval gpu_start = cmd.GPUStartTime;
-    CFTimeInterval gpu_end = cmd.GPUEndTime;
+    MTL4CommitOptions *opts = [MTL4CommitOptions new];
+    __block CFTimeInterval gpu_start = 0, gpu_end = 0;
+    [opts addFeedbackHandler:^(id<MTL4CommitFeedback> fb) {
+      gpu_start = fb.GPUStartTime;
+      gpu_end = fb.GPUEndTime;
+    }];
+    [q commit:bufs count:1 options:opts];
+    [q signalEvent:ctx->sync_event value:val];
+    [ctx->sync_event waitUntilSignaledValue:val timeoutMS:5000];
     if (gpu_start > 0 && gpu_end > 0) {
       g_gpu_exec_ns += (gpu_end - gpu_start) * 1e9;
       g_sched_wait_ns += (gpu_start - cpu_commit) * 1e9;
     }
+  } else {
+    [q commit:bufs count:1];
+    [q signalEvent:ctx->sync_event value:val];
+    [ctx->sync_event waitUntilSignaledValue:val timeoutMS:5000];
   }
   uint64_t t1 = mach_absolute_time();
   g_sync_count++;
@@ -368,24 +344,20 @@ void MetalStream::flush() {
   if (pending_work) {
     commit_time = CACurrentMediaTime();
     MetalContext *ctx = mtl_ctx();
-    if (ctx->has_metal4) {
-      [cmd4 endCommandBuffer];
-      id<MTL4CommandBuffer> bufs[] = { cmd4 };
-      id<MTL4CommandQueue> q =
-          (this == &ctx->train_stream) ? ctx->train_queue4 : ctx->queue4;
-      // Commit with feedback + signal event value for wait_completed()
-      flush_event_val = ++ctx->sync_event_value;
-      MTL4CommitOptions *opts = [MTL4CommitOptions new];
-      __block CFTimeInterval gpu_s = 0, gpu_e = 0;
-      [opts addFeedbackHandler:^(id<MTL4CommitFeedback> fb) {
-        gpu_s = fb.GPUStartTime;
-        gpu_e = fb.GPUEndTime;
-      }];
-      [q commit:bufs count:1 options:opts];
-      [q signalEvent:ctx->sync_event value:flush_event_val];
-    } else {
-      [cmd commit];
-    }
+    [cmd endCommandBuffer];
+    id<MTL4CommandBuffer> bufs[] = { cmd };
+    id<MTL4CommandQueue> q =
+        (this == &ctx->train_stream) ? ctx->train_queue : ctx->queue;
+    // Commit with feedback + signal event value for wait_completed()
+    flush_event_val = ++ctx->sync_event_value;
+    MTL4CommitOptions *opts = [MTL4CommitOptions new];
+    __block CFTimeInterval gpu_s = 0, gpu_e = 0;
+    [opts addFeedbackHandler:^(id<MTL4CommitFeedback> fb) {
+      gpu_s = fb.GPUStartTime;
+      gpu_e = fb.GPUEndTime;
+    }];
+    [q commit:bufs count:1 options:opts];
+    [q signalEvent:ctx->sync_event value:flush_event_val];
     flushed = true;
     pending_work = false;
   }
@@ -394,20 +366,7 @@ void MetalStream::flush() {
 void MetalStream::wait_completed() {
   if (flushed) {
     uint64_t t0 = mach_absolute_time();
-    MetalContext *ctx = mtl_ctx();
-    if (ctx->has_metal4) {
-      // Wait on the event value saved by flush() — no extra signal needed
-      [ctx->sync_event waitUntilSignaledValue:flush_event_val timeoutMS:5000];
-    } else {
-      [cmd waitUntilCompleted];
-      // GPU timing diagnostic (Metal 3 only)
-      CFTimeInterval gpu_start = cmd.GPUStartTime;
-      CFTimeInterval gpu_end = cmd.GPUEndTime;
-      if (gpu_start > 0 && gpu_end > 0) {
-        g_gpu_exec_ns += (gpu_end - gpu_start) * 1e9;
-        g_sched_wait_ns += (gpu_start - commit_time) * 1e9;
-      }
-    }
+    [mtl_ctx()->sync_event waitUntilSignaledValue:flush_event_val timeoutMS:5000];
     uint64_t t1 = mach_absolute_time();
     g_sync_count++;
     g_sync_total_ns += mach_to_ns(t1 - t0);
@@ -446,9 +405,6 @@ void mtl_init() {
   @autoreleasepool {
     g_ctx.device = MTLCreateSystemDefaultDevice();
     assert(g_ctx.device && "No Metal device found");
-
-    g_ctx.queue = [g_ctx.device newCommandQueue];
-    g_ctx.train_queue = [g_ctx.device newCommandQueue];
 
     // JIT-compile all MSL shaders from the embedded source string
     NSError *error = nil;
@@ -569,64 +525,55 @@ void mtl_init() {
     }
 
     // Metal 4 reusable command buffer infrastructure
-    g_ctx.has_metal4 =
-        [g_ctx.device respondsToSelector:@selector(newMTL4CommandQueue)];
-    if (g_ctx.has_metal4) {
-      g_ctx.queue4 = [g_ctx.device newMTL4CommandQueue];
-      g_ctx.train_queue4 = [g_ctx.device newMTL4CommandQueue];
-      g_ctx.sync_event = [g_ctx.device newSharedEvent];
-      g_ctx.sync_event_value = 0;
+    g_ctx.queue = [g_ctx.device newMTL4CommandQueue];
+    assert(g_ctx.queue && "Metal 4 required — device must support newMTL4CommandQueue");
+    g_ctx.train_queue = [g_ctx.device newMTL4CommandQueue];
+    g_ctx.sync_event = [g_ctx.device newSharedEvent];
+    g_ctx.sync_event_value = 0;
 
-      // Command allocators + reusable command buffers
-      g_ctx.stream.allocator = [g_ctx.device newCommandAllocator];
-      g_ctx.stream.cmd4 = [g_ctx.device newCommandBuffer];
-      g_ctx.train_stream.allocator = [g_ctx.device newCommandAllocator];
-      g_ctx.train_stream.cmd4 = [g_ctx.device newCommandBuffer];
+    // Command allocators + reusable command buffers
+    g_ctx.stream.allocator = [g_ctx.device newCommandAllocator];
+    g_ctx.stream.cmd = [g_ctx.device newCommandBuffer];
+    g_ctx.train_stream.allocator = [g_ctx.device newCommandAllocator];
+    g_ctx.train_stream.cmd = [g_ctx.device newCommandBuffer];
 
-      // Argument tables (max 16 buffer bindings — our kernels use at most ~15)
-      MTL4ArgumentTableDescriptor *atd = [MTL4ArgumentTableDescriptor new];
-      atd.maxBufferBindCount = 16;
-      NSError *at_err = nil;
-      g_ctx.stream.arg_table =
-          [g_ctx.device newArgumentTableWithDescriptor:atd error:&at_err];
-      assert(g_ctx.stream.arg_table && "Failed to create argument table");
-      g_ctx.train_stream.arg_table =
-          [g_ctx.device newArgumentTableWithDescriptor:atd error:&at_err];
-      assert(g_ctx.train_stream.arg_table &&
-             "Failed to create train argument table");
+    // Argument tables — PPO kernel uses slots 0-19 (16 buffers + params + 3 more)
+    MTL4ArgumentTableDescriptor *atd = [MTL4ArgumentTableDescriptor new];
+    atd.maxBufferBindCount = 32;
+    NSError *at_err = nil;
+    g_ctx.stream.arg_table =
+        [g_ctx.device newArgumentTableWithDescriptor:atd error:&at_err];
+    assert(g_ctx.stream.arg_table && "Failed to create argument table");
+    g_ctx.train_stream.arg_table =
+        [g_ctx.device newArgumentTableWithDescriptor:atd error:&at_err];
+    assert(g_ctx.train_stream.arg_table &&
+           "Failed to create train argument table");
 
-      // Per-stream constants ring buffers (64KB each, replaces setBytes on Metal 4)
-      g_ctx.stream.const_ring =
-          [g_ctx.device newBufferWithLength:MTL_CONST_RING_SIZE
-                                    options:MTLResourceStorageModeShared];
-      g_ctx.train_stream.const_ring =
-          [g_ctx.device newBufferWithLength:MTL_CONST_RING_SIZE
-                                    options:MTLResourceStorageModeShared];
+    // Per-stream constants ring buffers (64KB each, replaces setBytes)
+    g_ctx.stream.const_ring =
+        [g_ctx.device newBufferWithLength:MTL_CONST_RING_SIZE
+                                  options:MTLResourceStorageModeShared];
+    g_ctx.train_stream.const_ring =
+        [g_ctx.device newBufferWithLength:MTL_CONST_RING_SIZE
+                                  options:MTLResourceStorageModeShared];
 
-      // Residency set — populated by mtl_wrap_allocator as buffers arrive
-      MTLResidencySetDescriptor *rsd = [MTLResidencySetDescriptor new];
-      rsd.initialCapacity = 16;
-      NSError *rs_err = nil;
-      g_ctx.residency_set =
-          [g_ctx.device newResidencySetWithDescriptor:rsd error:&rs_err];
-      assert(g_ctx.residency_set && "Failed to create residency set");
-      [g_ctx.residency_set addAllocation:g_ctx.stream.const_ring];
-      [g_ctx.residency_set addAllocation:g_ctx.train_stream.const_ring];
-      [g_ctx.residency_set requestResidency];
-      [g_ctx.queue4 addResidencySet:g_ctx.residency_set];
-      [g_ctx.train_queue4 addResidencySet:g_ctx.residency_set];
-
-      printf("[metal] Metal 4 available — reusable command buffers enabled\n");
-    } else {
-      printf("[metal] Metal 4 not available — using transient command buffers\n");
-    }
+    // Residency set — populated by mtl_wrap_allocator as buffers arrive
+    MTLResidencySetDescriptor *rsd = [MTLResidencySetDescriptor new];
+    rsd.initialCapacity = 16;
+    NSError *rs_err = nil;
+    g_ctx.residency_set =
+        [g_ctx.device newResidencySetWithDescriptor:rsd error:&rs_err];
+    assert(g_ctx.residency_set && "Failed to create residency set");
+    [g_ctx.residency_set addAllocation:g_ctx.stream.const_ring];
+    [g_ctx.residency_set addAllocation:g_ctx.train_stream.const_ring];
+    [g_ctx.residency_set requestResidency];
+    [g_ctx.queue addResidencySet:g_ctx.residency_set];
+    [g_ctx.train_queue addResidencySet:g_ctx.residency_set];
 
     g_no_tensor_ops = (getenv("PUFFERLIB_NO_TENSOR_OPS") != nullptr);
 
     // Start the default stream (rollout) and training stream
-    g_ctx.stream.queue = g_ctx.queue;
     g_ctx.stream.begin();
-    g_ctx.train_stream.queue = g_ctx.train_queue;
     g_ctx.train_stream.begin();
 
     printf("[metal] device: %s, unified memory: %s\n",
@@ -650,9 +597,7 @@ void mtl_destroy() {
 
   // 1. Drain both command queues — no GPU work in flight.
   g_ctx.stream.end_compute();
-  g_ctx.stream.cmd = nil;
   g_ctx.train_stream.end_compute();
-  g_ctx.train_stream.cmd = nil;
 
   // 2. Free lazy-init scratch buffers BEFORE clearing the buffer registry,
   //    while MTLBuffer refs still exist (backing memory released after).
@@ -666,28 +611,23 @@ void mtl_destroy() {
   // 3. Release all Metal objects inside @autoreleasepool to force immediate
   //    deallocation. Device released LAST — MTLBuffers/pipelines reference it.
   @autoreleasepool {
-    // Metal 4 objects
-    if (g_ctx.has_metal4) {
-      g_ctx.stream.arg_table = nil;
-      g_ctx.stream.cmd4 = nil;
-      g_ctx.stream.allocator = nil;
-      g_ctx.stream.enc4 = nil;
-      g_ctx.train_stream.arg_table = nil;
-      g_ctx.train_stream.cmd4 = nil;
-      g_ctx.train_stream.allocator = nil;
-      g_ctx.train_stream.enc4 = nil;
-      g_ctx.stream.const_ring = nil;
-      g_ctx.train_stream.const_ring = nil;
-      g_ctx.residency_set = nil;
-      g_ctx.sync_event = nil;
-      g_ctx.queue4 = nil;
-      g_ctx.train_queue4 = nil;
-    }
+    g_ctx.stream.arg_table = nil;
+    g_ctx.stream.cmd = nil;
+    g_ctx.stream.allocator = nil;
+    g_ctx.stream.enc = nil;
+    g_ctx.train_stream.arg_table = nil;
+    g_ctx.train_stream.cmd = nil;
+    g_ctx.train_stream.allocator = nil;
+    g_ctx.train_stream.enc = nil;
+    g_ctx.stream.const_ring = nil;
+    g_ctx.train_stream.const_ring = nil;
+    g_ctx.residency_set = nil;
+    g_ctx.sync_event = nil;
+    g_ctx.queue = nil;
+    g_ctx.train_queue = nil;
     g_ctx.buffers.clear();
     g_ctx.pipelines = nil;
     g_ctx.library = nil;
-    g_ctx.queue = nil;
-    g_ctx.train_queue = nil;
   }
   g_ctx.device = nil;
 
@@ -727,11 +667,9 @@ id<MTLBuffer> mtl_wrap_allocator(Allocator *alloc) {
 
   g_ctx.buffers.push_back({(char *)alloc->mem, size, buf});
 
-  // Metal 4: add to residency set so GPU addresses are valid
-  if (g_ctx.has_metal4) {
-    [g_ctx.residency_set addAllocation:buf];
-    [g_ctx.residency_set requestResidency];
-  }
+  // Add to residency set so GPU addresses are valid
+  [g_ctx.residency_set addAllocation:buf];
+  [g_ctx.residency_set requestResidency];
 
   return buf;
 }
@@ -816,11 +754,7 @@ static id<MTLBuffer> buffer_for_ptr(const void *ptr, NSUInteger *out_offset) {
 // Bind a pre-resolved MTLBuffer+offset to a stream binding slot (GEMM helpers).
 static inline void bind_buf(MetalStream *ms, id<MTLBuffer> buf,
                              NSUInteger offset, uint32_t index) {
-  if (g_ctx.has_metal4) {
-    [ms->arg_table setAddress:(buf.gpuAddress + offset) atIndex:index];
-  } else {
-    [ms->enc setBuffer:buf offset:offset atIndex:index];
-  }
+  [ms->arg_table setAddress:(buf.gpuAddress + offset) atIndex:index];
 }
 
 // ============================================================================
@@ -865,13 +799,8 @@ static void compute_gemm(const float *A, const float *B, float *C,
   // 64x64 output tile per threadgroup, 128 threads (4 simdgroups)
   int groups_m = (M + 63) / 64;
   int groups_n = (N + 63) / 64;
-  if (g_ctx.has_metal4) {
-    [ms->enc4 dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
-        threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
-  } else {
-    [ms->enc dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
-        threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
-  };
+  [ms->enc dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
+      threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
 
   ms->pending_work = true;
 }
@@ -904,13 +833,8 @@ static void compute_gemm_f16(const void *A, const void *B, void *C,
 
   int groups_m = (M + 63) / 64;
   int groups_n = (N + 63) / 64;
-  if (g_ctx.has_metal4) {
-    [ms->enc4 dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
-        threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
-  } else {
-    [ms->enc dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
-        threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
-  };
+  [ms->enc dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
+      threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
 
   ms->pending_work = true;
   g_tensor_ops_dispatch_count++;  // count as compute-encoder dispatch
@@ -948,13 +872,8 @@ static bool tensor_ops_gemm_nt(const float *A, const float *B, float *C,
 
   int groups_m = (M + 63) / 64;
   int groups_n = (N + 31) / 32;
-  if (g_ctx.has_metal4) {
-    [ms->enc4 dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
-        threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
-  } else {
-    [ms->enc dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
-        threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
-  };
+  [ms->enc dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
+      threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
 
   ms->pending_work = true;
   return true;
@@ -994,13 +913,8 @@ static bool tensor_ops_gemm_nn(const float *A, const float *B, float *C,
   // tgid.y tiles M (stride 64), tgid.x tiles N (stride 32) — same as NT kernel
   int groups_m = (M + 63) / 64;
   int groups_n = (N + 31) / 32;
-  if (g_ctx.has_metal4) {
-    [ms->enc4 dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
-        threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
-  } else {
-    [ms->enc dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
-        threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
-  };
+  [ms->enc dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
+      threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
 
   ms->pending_work = true;
   return true;
@@ -1037,13 +951,8 @@ static bool tensor_ops_gemm_nt_f16(const void *A, const void *B, void *C,
 
   int groups_m = (M + 63) / 64;
   int groups_n = (N + 31) / 32;
-  if (g_ctx.has_metal4) {
-    [ms->enc4 dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
-        threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
-  } else {
-    [ms->enc dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
-        threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
-  };
+  [ms->enc dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
+      threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
 
   ms->pending_work = true;
   return true;
@@ -1075,13 +984,8 @@ static bool tensor_ops_gemm_nn_f16(const void *A, const void *B, void *C,
 
   int groups_m = (M + 63) / 64;
   int groups_n = (N + 31) / 32;
-  if (g_ctx.has_metal4) {
-    [ms->enc4 dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
-        threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
-  } else {
-    [ms->enc dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
-        threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
-  };
+  [ms->enc dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
+      threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
 
   ms->pending_work = true;
   return true;
@@ -1120,13 +1024,8 @@ static bool tensor_ops_gemm_tn(const float *A, const float *B, float *C,
 
   int groups_m = (M + 63) / 64;
   int groups_n = (N + 31) / 32;
-  if (g_ctx.has_metal4) {
-    [ms->enc4 dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
-        threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
-  } else {
-    [ms->enc dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
-        threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
-  };
+  [ms->enc dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
+      threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
 
   ms->pending_work = true;
   return true;
@@ -1158,13 +1057,8 @@ static bool tensor_ops_gemm_tn_f16(const void *A, const void *B, void *C,
 
   int groups_m = (M + 63) / 64;
   int groups_n = (N + 31) / 32;
-  if (g_ctx.has_metal4) {
-    [ms->enc4 dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
-        threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
-  } else {
-    [ms->enc dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
-        threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
-  };
+  [ms->enc dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
+      threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
 
   ms->pending_work = true;
   return true;
@@ -1196,13 +1090,8 @@ static void small_gemm_nt_dispatch(const float *A, const float *B, float *C,
   // threadgroup size: round N up to next multiple of 32 for simdgroup alignment
   int tg_size = ((N + 31) / 32) * 32;
   tg_size = MIN(tg_size, (int)pso.maxTotalThreadsPerThreadgroup);
-  if (g_ctx.has_metal4) {
-    [ms->enc4 dispatchThreadgroups:MTLSizeMake(M, 1, 1)
-        threadsPerThreadgroup:MTLSizeMake(tg_size, 1, 1)];
-  } else {
-    [ms->enc dispatchThreadgroups:MTLSizeMake(M, 1, 1)
-        threadsPerThreadgroup:MTLSizeMake(tg_size, 1, 1)];
-  }
+  [ms->enc dispatchThreadgroups:MTLSizeMake(M, 1, 1)
+      threadsPerThreadgroup:MTLSizeMake(tg_size, 1, 1)];
 
   ms->pending_work = true;
   g_tensor_ops_dispatch_count++;
