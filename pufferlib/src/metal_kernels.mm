@@ -937,8 +937,8 @@ float* mtl_sample_logits_dispatch(
   mtl_set_ptr(ms, value_out, 2);
   mtl_set_ptr(ms, dec_out.bytes, 3);
   mtl_set_ptr(ms, dec_out.bytes, 4);  // dummy logstd (discrete only)
-  // value column: last column of dec_out, stride = fused_cols
-  mtl_set_ptr(ms, dec_out.bytes, 5);
+  // value column is the last fused decoder column.
+  mtl_set_ptr(ms, (float *)dec_out.bytes + (fused_cols - 1), 5);
   mtl_set_ptr(ms, act_sizes_puf.bytes, 6);
   mtl_set_ptr(ms, offset_ptr, 7);
 
@@ -1151,33 +1151,8 @@ void ppo_loss_fwd_bwd(PufTensor &dec_out, PufTensor &logstd, TrainGraph &graph,
     mtl_dispatch_groups(ms, pso, ppo_grid, ppo_threads);
   }
 
-  // Metal 4 coherence: sync so reduce kernel sees PPO partials.
-  ms->sync();
-
-  // Diagnostic: dump PPO partials and inputs from CPU after sync
-  {
-    static int diag_count = 0;
-    if (diag_count < 12) {
-      // Check adv_mean/adv_var that PPO kernel reads
-      float adv_var_val = *(float *)bufs.adv_scratch.bytes;
-      float adv_mean_val = *((float *)bufs.adv_scratch.bytes + 1);
-      fprintf(stderr, "[ppo-diag] mb=%d adv_mean=%.6f adv_var=%.6f\n", diag_count, adv_mean_val, adv_var_val);
-      // Check a few logits from dec_out
-      float *logits_ptr = (float *)dec_out.bytes;
-      fprintf(stderr, "[ppo-diag]   logits[0..3]=%.6f %.6f %.6f %.6f\n",
-              logits_ptr[0], logits_ptr[1], logits_ptr[2], logits_ptr[3]);
-      // Partials
-      int nan_count = 0;
-      for (int i = 0; i < ppo_grid * (LOSS_N + 1); i++) {
-        if (isnan(ppo_partials_buf[i])) nan_count++;
-      }
-      fprintf(stderr, "[ppo-diag]   partials: %d/%d NaN, block0=[%.4f,%.4f,%.4f,%.4f,...,%.4f]\n",
-              nan_count, ppo_grid * (LOSS_N + 1),
-              ppo_partials_buf[0], ppo_partials_buf[1], ppo_partials_buf[2],
-              ppo_partials_buf[3], ppo_partials_buf[7]);
-      diag_count++;
-    }
-  }
+  // Metal 4 coherence: force visibility before reduce kernel consumes partials.
+  mtl_barrier(ms);
 
   // Reduce partials
   {
@@ -1604,23 +1579,28 @@ void muon_post_create(Muon *m) {
 void muon_step(Muon *m, void *fp16_out, cudaStream_t stream) {
   if (m->wb_puf.bytes == nullptr)
     return;
+  MetalStream *ms = mtl_get_stream(stream);
 
   // No NCCL on Metal (single GPU)
 
   // Nesterov momentum update: mb = mu * mb + gc
   mtl_nesterov_f32((float *)m->mb_puf.bytes, (float *)m->gc_puf.bytes,
                    (float)m->momentum, (int)m->mb_puf.numel(), stream);
+  mtl_barrier(ms);
 
   // Zero update buffer
   puf_zero(m->up_puf, stream);
+  mtl_barrier(ms);
 
   int64_t offset = 0;
   for (auto *t : m->param_alloc->regs) {
     float *gc_ptr = (float *)m->gc_puf.bytes + offset;
     float *up_ptr = (float *)m->up_puf.bytes + offset;
+    int64_t R = t->shape[0];
+    int64_t C = t->numel() / std::max<int64_t>(1, R);
+    int64_t min_dim = std::min(R, C);
 
-    if (t->ndim() >= 2) {
-      int64_t R = t->shape[0], C = t->numel() / R;
+    if (t->ndim() >= 2 && min_dim >= 8) {
       bool transposed_flag = R > C;
       int64_t M = transposed_flag ? C : R;
       int64_t N = transposed_flag ? R : C;
@@ -1640,6 +1620,7 @@ void muon_step(Muon *m, void *fp16_out, cudaStream_t stream) {
       } else {
         puf_copy(x, G_f32, stream);
       }
+      mtl_barrier(ms);
 
       // Normalize x
       ensure_norm_partials();
@@ -1647,10 +1628,13 @@ void muon_step(Muon *m, void *fp16_out, cudaStream_t stream) {
         int nblk = std::min((int)((x.numel() + 255) / 256), 256);
         mtl_norm_f32(norm_partials_buf, (const float *)x.bytes,
                      (int)x.numel(), nblk, stream);
+        mtl_barrier(ms);
         mtl_norm_reduce(m->ns.norm_ptr, norm_partials_buf, nblk, stream);
+        mtl_barrier(ms);
       }
       mtl_normalize_f32((float *)x.bytes, m->ns.norm_ptr, 1e-7f,
                         (int)x.numel(), stream);
+      mtl_barrier(ms);
 
       // 5 Newton-Schulz iterations (all GEMM — synced internally)
       for (int i = 0; i < 5; ++i) {
@@ -1659,10 +1643,15 @@ void muon_step(Muon *m, void *fp16_out, cudaStream_t stream) {
         PufTensor &src = (i % 2 == 0) ? x : tmp;
         PufTensor &dst = (i % 2 == 0) ? tmp : x;
         puf_mm(src, src, A, stream);
+        mtl_barrier(ms);
         puf_copy(gram, A, stream);
+        mtl_barrier(ms);
         puf_addmm_nn(A, A, gram, c, b, stream);
+        mtl_barrier(ms);
         puf_copy(dst, src, stream);
+        mtl_barrier(ms);
         puf_addmm_nn(gram, src, dst, 1.0f, a, stream);
+        mtl_barrier(ms);
       }
 
       PufTensor &result_precision = tmp;
@@ -1684,8 +1673,9 @@ void muon_step(Muon *m, void *fp16_out, cudaStream_t stream) {
       } else {
         puf_copy(out_f32, result_precision, stream);
       }
+      mtl_barrier(ms);
     } else {
-      // 1D params: just copy gradient as update
+      // 1D and tiny matrix params: use direct gradient update.
       PufTensor src_puf = {.bytes = (char *)gc_ptr,
                            .shape = {t->numel()},
                            .dtype_size = 4};
@@ -1693,6 +1683,7 @@ void muon_step(Muon *m, void *fp16_out, cudaStream_t stream) {
                            .shape = {t->numel()},
                            .dtype_size = 4};
       puf_copy(dst_puf, src_puf, stream);
+      mtl_barrier(ms);
     }
     offset += t->numel();
   }
@@ -1701,6 +1692,7 @@ void muon_step(Muon *m, void *fp16_out, cudaStream_t stream) {
   mtl_muon_weight_update((float *)m->wb_puf.bytes, (const float *)m->up_puf.bytes,
                          m->lr_ptr, (float)m->weight_decay,
                          (int)m->wb_puf.numel(), fp16_out, stream);
+  mtl_barrier(ms);
 }
 
 // ============================================================================
@@ -2398,6 +2390,7 @@ static PufTensor mingru_forward(void *w, PufTensor x, PufTensor state,
   MinGRUActivations *a = (MinGRUActivations *)activations;
   int B = (int)state.shape[1];
   int H = (int)state.shape[2];
+  MetalStream *ms = mtl_get_stream(stream);
 
   for (int i = 0; i < m->num_layers; i++) {
     PufTensor state_i = mingru_state_layer(m, state, i);
@@ -2405,11 +2398,14 @@ static PufTensor mingru_forward(void *w, PufTensor x, PufTensor state,
       puf_mm(x, m->fused_enc_layer0, a->combined[i], stream);
     else
       puf_mm(x, m->weights[i], a->combined[i], stream);
-    // In-place state update: each thread reads state[idx] before writing.
-    // Safe because the kernel has no cross-element dependencies.
-    mtl_mingru_gate((float *)a->out.bytes, (float *)state_i.bytes,
+    mtl_barrier(ms);
+    mtl_mingru_gate((float *)a->out.bytes, (float *)a->next_state.bytes,
                     (const float *)a->combined[i].bytes,
                     (const float *)state_i.bytes, H, B, stream);
+    mtl_barrier(ms);
+    puf_copy(state_i, a->next_state, stream);
+    if (i + 1 < m->num_layers)
+      mtl_barrier(ms);
     x = a->out;
   }
   return x;
@@ -2420,11 +2416,14 @@ static PufTensor mingru_forward_train(void *w, PufTensor x, PufTensor state,
                                        cudaStream_t stream) {
   MinGRUWeights *m = (MinGRUWeights *)w;
   MinGRUActivations *a = (MinGRUActivations *)activations;
+  MetalStream *ms = mtl_get_stream(stream);
 
   for (int i = 0; i < m->num_layers; i++) {
     puf_copy(a->saved_inputs[i], x, stream);
     PufTensor state_i = mingru_state_layer(m, state, i);
     puf_mm(x, m->weights[i], a->combined_bufs[i], stream);
+    // Layer-local dependency: scan reads matmul output from this layer.
+    mtl_barrier(ms);
     a->scan_bufs[i].combined_ptr = a->combined_bufs[i].bytes;
     a->scan_bufs[i].state_ptr = state_i.bytes;
     // Dispatch fp16 or fp32 scan based on activation dtype
@@ -2432,6 +2431,9 @@ static PufTensor mingru_forward_train(void *w, PufTensor x, PufTensor state,
       mtl_fused_scan_forward_fp16(a->scan_bufs[i], stream);
     else
       mtl_fused_scan_forward(a->scan_bufs[i], stream);
+    // Cross-layer dependency: next layer consumes this layer's scan output.
+    if (i + 1 < m->num_layers)
+      mtl_barrier(ms);
     x = a->scan_bufs[i].out;
   }
   return x;
@@ -2441,6 +2443,7 @@ static PufTensor mingru_backward(void *w, PufTensor grad, void *activations,
                                   cudaStream_t stream) {
   MinGRUWeights *m = (MinGRUWeights *)w;
   MinGRUActivations *a = (MinGRUActivations *)activations;
+  MetalStream *ms = mtl_get_stream(stream);
 
   for (int i = m->num_layers - 1; i >= 0; i--) {
     PrefixScan &scan = a->scan_bufs[i];
@@ -2451,9 +2454,14 @@ static PufTensor mingru_backward(void *w, PufTensor grad, void *activations,
     else
       mtl_fused_scan_backward(scan, (const float *)grad.bytes,
                               (const float *)a->grad_next_state.bytes, stream);
+    // scan.grad_combined is consumed by the GEMMs below.
+    mtl_barrier(ms);
     puf_mm_tn(scan.grad_combined, a->saved_inputs[i], a->wgrad_scratch[i],
               stream);
     puf_mm_nn(scan.grad_combined, m->weights[i], a->grad_input_buf, stream);
+    // Next iteration consumes grad_input_buf as "grad".
+    if (i > 0)
+      mtl_barrier(ms);
     grad = a->grad_input_buf;
   }
   return grad;

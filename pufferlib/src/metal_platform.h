@@ -217,13 +217,23 @@ inline void mtl_set_threadgroup_memory(MetalStream *ms, NSUInteger length,
   [ms->enc setThreadgroupMemoryLength:length atIndex:index];
 }
 
-// Memory barrier: end current encoder and start a new one within the same
-// command buffer. Metal guarantees all work from encoder N completes before
-// encoder N+1 starts, giving us full memory coherence. Much cheaper than
-// sync() (no command buffer commit, no CPU wait — just encoder boundary).
+// Memory barrier between dependent compute dispatches.
+// On Metal 4, use explicit intrapass barrier for dispatch->dispatch visibility.
+// Fallback to encoder boundary when the API isn't available.
 inline void mtl_barrier(MetalStream *ms) {
-  ms->end_compute();
-  ms->compute_encoder();
+  if (ms->enc_active) {
+#if __OBJC__
+    if (__builtin_available(macOS 15.0, *)) {
+      [ms->enc barrierAfterEncoderStages:MTLStageDispatch
+                      beforeEncoderStages:MTLStageDispatch
+                        visibilityOptions:MTL4VisibilityOptionDevice];
+      ms->pending_work = true;
+      return;
+    }
+#endif
+    ms->end_compute();
+    ms->compute_encoder();
+  }
 }
 
 // ============================================================================

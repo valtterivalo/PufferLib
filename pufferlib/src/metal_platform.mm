@@ -1230,14 +1230,9 @@ static float *addmm_temp_buf(int count) {
   int64_t size = (needed + page - 1) & ~(page - 1);
   if (size <= g_addmm_temp_size) return (float *)g_addmm_temp_base;
 
-  // Remove old buffer from wrapped list
-  if (g_addmm_temp_base) {
-    auto &bufs = g_ctx.buffers;
-    bufs.erase(std::remove_if(bufs.begin(), bufs.end(),
-        [](const WrappedBuffer &wb) { return wb.base == g_addmm_temp_base; }),
-        bufs.end());
-    free(g_addmm_temp_base);
-  }
+  // Never free old temp buffers here: in-flight command buffers may still
+  // reference them. We grow by allocating a new buffer and keeping old ones
+  // until global reset.
   posix_memalign((void **)&g_addmm_temp_base, page, size);
   id<MTLBuffer> buf =
       [g_ctx.device newBufferWithBytesNoCopy:g_addmm_temp_base
@@ -1275,6 +1270,8 @@ void puf_addmm_nn(PufTensor &a, PufTensor &b, PufTensor &out, float alpha,
     float *temp = addmm_temp_buf(M * N);
     tensor_ops_gemm_nn((const float *)a.bytes, (const float *)b.bytes,
                        temp, M, N, K, stream);
+    // Metal 4: force visibility of temp writes before scale/axpy reads.
+    mtl_barrier(get_stream(stream));
 
     // Step 2: out *= beta (compute encoder)
     MetalStream *ms = get_stream(stream);
@@ -1289,6 +1286,9 @@ void puf_addmm_nn(PufTensor &a, PufTensor &b, PufTensor &out, float alpha,
       struct { float alpha; int n; } sp = {beta, count};
       mtl_set_params(ms, sp, 1);
       mtl_dispatch_1d(ms, pso, count);
+      // Ensure scaled out is visible before axpy accumulation.
+      mtl_barrier(ms);
+      ms->compute_encoder();
     }
 
     // Step 3: out += alpha * temp (compute encoder)

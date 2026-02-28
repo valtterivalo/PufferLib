@@ -627,41 +627,9 @@ void train_impl(PuffeRL& pufferl) {
             else
                 muon_step(pufferl.muon, pufferl.param_fp16_puf.bytes, ts);
 
-            // Metal 4 coherence: sync so next minibatch's forward pass
+            // Metal 4 coherence: barrier so next minibatch's forward pass
             // sees updated weights from optimizer.
-            ((MetalStream*)ts)->sync();
-
-            // Diagnostic: check fp16 weights and fp32 master after optimizer
-            {
-                static int opt_diag = 0;
-                if (opt_diag < 4) {
-                    // Check fp16 weights
-                    uint16_t *fp16 = (uint16_t*)pufferl.param_fp16_puf.bytes;
-                    int n16 = (int)pufferl.param_fp16_puf.numel();
-                    int nan16 = 0;
-                    for (int i = 0; i < n16; i++) {
-                        uint16_t v = fp16[i];
-                        if ((v & 0x7C00) == 0x7C00 && (v & 0x03FF) != 0) nan16++;
-                    }
-                    // Check fp32 master weights
-                    float *fp32 = (float*)(pufferl.use_adam ? pufferl.adam->wb_puf.bytes : pufferl.muon->gc_puf.bytes);
-                    int n32 = pufferl.use_adam ? (int)pufferl.adam->wb_puf.numel() : 0;
-                    int nan32 = 0;
-                    for (int i = 0; i < n32; i++) {
-                        if (isnan(fp32[i])) nan32++;
-                    }
-                    // Also check gradients
-                    float *gc = (float*)(pufferl.use_adam ? pufferl.adam->gc_puf.bytes : pufferl.muon->gc_puf.bytes);
-                    int ngc = pufferl.use_adam ? (int)pufferl.adam->gc_puf.numel() : (int)pufferl.muon->gc_puf.numel();
-                    int nangc = 0;
-                    for (int i = 0; i < ngc; i++) {
-                        if (isnan(gc[i])) nangc++;
-                    }
-                    fprintf(stderr, "[opt-diag] mb=%d fp16_nan=%d/%d fp32_nan=%d/%d grad_nan=%d/%d\n",
-                            mb, nan16, n16, nan32, n32, nangc, ngc);
-                    opt_diag++;
-                }
-            }
+            mtl_barrier((MetalStream*)ts);
 
             uint64_t tp9 = mach_absolute_time();
 
