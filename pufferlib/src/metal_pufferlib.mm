@@ -590,8 +590,8 @@ void train_impl(PuffeRL& pufferl) {
                 pufferl.has_mask ? 0 : 0,  // stride=0: all rows read same ones
                 ts);
 
-            mtl_scatter_ppo_outputs(pufferl.train_buf, rollouts,
-                (const int64_t*)pufferl.prio_bufs.idx.bytes, ts);
+            // Keep parity with current upstream static-native CUDA path:
+            // do not scatter mb_ratio/mb_newvalue back into rollout buffers.
 
             uint64_t tp5 = mach_absolute_time();
 
@@ -726,8 +726,8 @@ void train_impl(PuffeRL& pufferl) {
             pufferl.has_mask ? 0 : 0,  // stride=0: all rows read same ones
             train_stream);
 
-        mtl_scatter_ppo_outputs(pufferl.train_buf, rollouts,
-            (const int64_t*)pufferl.prio_bufs.idx.bytes, train_stream);
+        // Keep parity with current upstream static-native CUDA path:
+        // do not scatter mb_ratio/mb_newvalue back into rollout buffers.
 
         uint64_t tp5 = mach_absolute_time();
 

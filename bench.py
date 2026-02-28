@@ -49,11 +49,16 @@ def parse_args():
     p.add_argument("--horizon", type=int, default=32)
     p.add_argument("--total-timesteps", type=int, default=5_000_000)
     p.add_argument("--learning-rate", type=float, default=0.001)
+    p.add_argument("--beta1", type=float, default=0.95)
+    p.add_argument("--beta2", type=float, default=0.999)
+    p.add_argument("--eps", type=float, default=1e-12)
     p.add_argument("--minibatch-size", type=int, default=4096)
     p.add_argument("--replay-ratio", type=float, default=0.25)
     p.add_argument("--ent-coef", type=float, default=0.01)
     p.add_argument("--gamma", type=float, default=0.99)
     p.add_argument("--gae-lambda", type=float, default=0.95)
+    p.add_argument("--vtrace-rho-clip", type=float, default=1.0)
+    p.add_argument("--vtrace-c-clip", type=float, default=1.0)
     p.add_argument("--prio-alpha", type=float, default=0.0)
     p.add_argument("--prio-beta0", type=float, default=0.4)
     p.add_argument("--clip-coef", type=float, default=0.2)
@@ -78,9 +83,9 @@ def main():
         "learning_rate": args.learning_rate,
         "min_lr_ratio": 0.1,
         "anneal_lr": 1.0,
-        "beta1": 0.95,
-        "beta2": 0.999,
-        "eps": 1e-12,
+        "beta1": args.beta1,
+        "beta2": args.beta2,
+        "eps": args.eps,
         "minibatch_size": args.minibatch_size,
         "replay_ratio": args.replay_ratio,
         "total_timesteps": args.total_timesteps,
@@ -91,8 +96,8 @@ def main():
         "ent_coef": args.ent_coef,
         "gamma": args.gamma,
         "gae_lambda": args.gae_lambda,
-        "vtrace_rho_clip": 1.0,
-        "vtrace_c_clip": 1.0,
+        "vtrace_rho_clip": args.vtrace_rho_clip,
+        "vtrace_c_clip": args.vtrace_c_clip,
         "prio_alpha": args.prio_alpha,
         "prio_beta0": args.prio_beta0,
         "use_rnn": 1.0,
