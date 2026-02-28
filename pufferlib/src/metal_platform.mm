@@ -323,9 +323,28 @@ void MetalStream::sync() {
     id<MTL4CommandBuffer> bufs[] = { cmd4 };
     id<MTL4CommandQueue> q =
         (this == &ctx->train_stream) ? ctx->train_queue4 : ctx->queue4;
-    [q commit:bufs count:1];
-    [q signalEvent:ctx->sync_event value:val];
-    [ctx->sync_event waitUntilSignaledValue:val timeoutMS:5000];
+    // Sample GPU timing every 8th sync to amortize ObjC/block overhead
+    bool sample_timing = (g_sync_count % 32 == 0);
+    if (sample_timing) {
+      CFTimeInterval cpu_commit = CACurrentMediaTime();
+      MTL4CommitOptions *opts = [MTL4CommitOptions new];
+      __block CFTimeInterval gpu_start = 0, gpu_end = 0;
+      [opts addFeedbackHandler:^(id<MTL4CommitFeedback> fb) {
+        gpu_start = fb.GPUStartTime;
+        gpu_end = fb.GPUEndTime;
+      }];
+      [q commit:bufs count:1 options:opts];
+      [q signalEvent:ctx->sync_event value:val];
+      [ctx->sync_event waitUntilSignaledValue:val timeoutMS:5000];
+      if (gpu_start > 0 && gpu_end > 0) {
+        g_gpu_exec_ns += (gpu_end - gpu_start) * 1e9;
+        g_sched_wait_ns += (gpu_start - cpu_commit) * 1e9;
+      }
+    } else {
+      [q commit:bufs count:1];
+      [q signalEvent:ctx->sync_event value:val];
+      [ctx->sync_event waitUntilSignaledValue:val timeoutMS:5000];
+    }
   } else {
     CFTimeInterval cpu_commit = CACurrentMediaTime();
     [cmd commit];
@@ -354,7 +373,16 @@ void MetalStream::flush() {
       id<MTL4CommandBuffer> bufs[] = { cmd4 };
       id<MTL4CommandQueue> q =
           (this == &ctx->train_stream) ? ctx->train_queue4 : ctx->queue4;
-      [q commit:bufs count:1];
+      // Commit with feedback + signal event value for wait_completed()
+      flush_event_val = ++ctx->sync_event_value;
+      MTL4CommitOptions *opts = [MTL4CommitOptions new];
+      __block CFTimeInterval gpu_s = 0, gpu_e = 0;
+      [opts addFeedbackHandler:^(id<MTL4CommitFeedback> fb) {
+        gpu_s = fb.GPUStartTime;
+        gpu_e = fb.GPUEndTime;
+      }];
+      [q commit:bufs count:1 options:opts];
+      [q signalEvent:ctx->sync_event value:flush_event_val];
     } else {
       [cmd commit];
     }
@@ -368,11 +396,8 @@ void MetalStream::wait_completed() {
     uint64_t t0 = mach_absolute_time();
     MetalContext *ctx = mtl_ctx();
     if (ctx->has_metal4) {
-      uint64_t val = ++ctx->sync_event_value;
-      id<MTL4CommandQueue> q =
-          (this == &ctx->train_stream) ? ctx->train_queue4 : ctx->queue4;
-      [q signalEvent:ctx->sync_event value:val];
-      [ctx->sync_event waitUntilSignaledValue:val timeoutMS:5000];
+      // Wait on the event value saved by flush() — no extra signal needed
+      [ctx->sync_event waitUntilSignaledValue:flush_event_val timeoutMS:5000];
     } else {
       [cmd waitUntilCompleted];
       // GPU timing diagnostic (Metal 3 only)

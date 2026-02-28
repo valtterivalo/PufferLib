@@ -45,6 +45,7 @@ struct MetalStream {
   bool pending_work = false; // true when compute work is encoded but not synced
   bool flushed = false;      // true when cmd committed but not waited on
   CFTimeInterval commit_time = 0; // host time at commit (for sched_wait diagnostic)
+  uint64_t flush_event_val = 0;   // event value saved by flush(), waited on by wait_completed()
 
   // Create a fresh command buffer, ready for encoding.
   void begin();

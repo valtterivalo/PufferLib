@@ -168,9 +168,19 @@ void puf_transpose_01(PufTensor &dst, const PufTensor &src,
 // Cast kernels
 // ============================================================================
 
-// CPU u8→f32 cast — no GPU dispatch, no sync needed.
+// CPU u8→f32 cast — NEON vectorized, no GPU dispatch, no sync needed.
 void cpu_cast_u8_to_f32(float *dst, const uint8_t *src, int count) {
-  for (int i = 0; i < count; i++) dst[i] = (float)src[i];
+  int i = 0;
+  for (; i + 16 <= count; i += 16) {
+    uint8x16_t v = vld1q_u8(src + i);
+    uint16x8_t lo16 = vmovl_u8(vget_low_u8(v));
+    uint16x8_t hi16 = vmovl_u8(vget_high_u8(v));
+    vst1q_f32(dst + i,      vcvtq_f32_u32(vmovl_u16(vget_low_u16(lo16))));
+    vst1q_f32(dst + i + 4,  vcvtq_f32_u32(vmovl_u16(vget_high_u16(lo16))));
+    vst1q_f32(dst + i + 8,  vcvtq_f32_u32(vmovl_u16(vget_low_u16(hi16))));
+    vst1q_f32(dst + i + 12, vcvtq_f32_u32(vmovl_u16(vget_high_u16(hi16))));
+  }
+  for (; i < count; i++) dst[i] = (float)src[i];
 }
 
 void puf_cast_u8_to_f32(PufTensor &dst, const PufTensor &src,
