@@ -158,10 +158,11 @@ enum LossIdx {
 struct PrefixScan {
   void *combined_ptr = nullptr;
   void *state_ptr = nullptr;
+  void *input_ptr = nullptr;
   int B = 0, T = 0, H = 0;
   PufTensor a_star, s_vals, log_values_buf;
   PufTensor out, next_state;
-  PufTensor grad_combined, grad_state;
+  PufTensor grad_combined, grad_state, grad_input;
 };
 
 // ============================================================================
@@ -173,7 +174,6 @@ struct Allocator {
   std::vector<PufTensor *> regs;
   void *mem = nullptr;
   int64_t total_elems = 0;
-  int64_t alignment_bytes = 16;
 
   void reg(PufTensor *ptr) { regs.push_back(ptr); }
 
@@ -188,12 +188,10 @@ struct Allocator {
   }
 
   void create() {
-    int64_t align = alignment_bytes > 0 ? alignment_bytes : 1;
-    int64_t align_mask = align - 1;
     int64_t total_bytes = 0;
     total_elems = 0;
     for (auto *t : regs) {
-      total_bytes = (total_bytes + align_mask) & ~align_mask;
+      total_bytes = (total_bytes + 15) & ~15; // align each tensor to 16 bytes
       total_bytes += t->numel() * t->dtype_size;
       total_elems += t->numel();
     }
@@ -210,7 +208,7 @@ struct Allocator {
 #endif
       int64_t offset = 0;
       for (auto *t : regs) {
-        offset = (offset + align_mask) & ~align_mask;
+        offset = (offset + 15) & ~15; // align each tensor to 16 bytes
         t->bytes = (char *)mem + offset;
         offset += t->numel() * t->dtype_size;
       }

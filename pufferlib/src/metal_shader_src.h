@@ -212,9 +212,11 @@ inline float philox_normal(float u1, float u2) {
 // Section 3: MinGRU inference kernel
 // ============================================================================
 
-// mingru_gate_inference: fused chunk + tilde_relu + lerp + sigmoid(proj)
+// mingru_gate_inference: fused chunk + tilde_relu + lerp + highway output gate
 // combined is (B, 3*H) = [hidden, gate, proj], state is (B, H)
-// out = sigmoid(proj) * mingru_out, next_state = mingru_out
+// x_in is (B, H) = input before projection
+// out = sigmoid(proj) * mingru_out + (1 - sigmoid(proj)) * x_in
+// next_state = mingru_out
 struct MingruGateParams {
     int H;
     int B;
@@ -225,7 +227,8 @@ kernel void mingru_gate_inference(
     device float* next_state        [[buffer(1)]],
     const device float* combined    [[buffer(2)]],
     const device float* state_in    [[buffer(3)]],
-    constant MingruGateParams& p    [[buffer(4)]],
+    const device float* x_in        [[buffer(4)]],
+    constant MingruGateParams& p    [[buffer(5)]],
     uint idx [[thread_position_in_grid]]
 ) {
     int N = p.B * p.H;
@@ -239,13 +242,15 @@ kernel void mingru_gate_inference(
     float gate = combined[base + p.H + h];
     float proj = combined[base + 2 * p.H + h];
     float state = state_in[idx];
+    float x = x_in[idx];
 
     float gate_sig = sigmoid_f(gate);
     float hidden_tilde = tilde_relu_fwd(hidden);
     float mingru_out = lerp_f(state, hidden_tilde, gate_sig);
+    float proj_sig = sigmoid_f(proj);
 
     next_state[idx] = mingru_out;
-    out[idx] = sigmoid_f(proj) * mingru_out;
+    out[idx] = proj_sig * mingru_out + (1.0f - proj_sig) * x;
 }
 
 // ============================================================================
@@ -268,7 +273,8 @@ kernel void fused_scan_forward_checkpointed(
     device float* log_values_buf    [[buffer(4)]],
     const device float* combined    [[buffer(5)]],
     const device float* state       [[buffer(6)]],
-    constant ScanParams& p          [[buffer(7)]],
+    const device float* input       [[buffer(7)]],
+    constant ScanParams& p          [[buffer(8)]],
     uint idx [[thread_position_in_grid]]
 ) {
     if ((int)idx >= p.B * p.H) return;
@@ -300,6 +306,7 @@ kernel void fused_scan_forward_checkpointed(
         float hidden_val = combined[cbase + h + t_offset];
         float gate_val = combined[cbase + p.H + h + t_offset];
         float proj_val = combined[cbase + 2 * p.H + h + t_offset];
+        float x_val = input[out_base + (t - 1) * p.H];
 
         float log_coeff_val;
         log_coeffs_and_values_fwd(gate_val, hidden_val, log_coeff_val, log_value);
@@ -313,7 +320,7 @@ kernel void fused_scan_forward_checkpointed(
         float scan_result = exp(a_star + s);
         float proj_sigmoid = sigmoid_f(proj_val);
 
-        out[out_curr] = proj_sigmoid * scan_result;
+        out[out_curr] = proj_sigmoid * scan_result + (1.0f - proj_sigmoid) * x_val;
 
         buf_curr += p.H;
         out_curr += p.H;
@@ -332,14 +339,16 @@ kernel void fused_scan_forward_checkpointed(
 kernel void fused_scan_backward_checkpointed(
     device float* grad_combined          [[buffer(0)]],
     device float* grad_state             [[buffer(1)]],
-    const device float* grad_out         [[buffer(2)]],
-    const device float* grad_next_state  [[buffer(3)]],
-    const device float* combined         [[buffer(4)]],
-    const device float* state            [[buffer(5)]],
-    const device float* a_star_buf       [[buffer(6)]],
-    const device float* s_buf            [[buffer(7)]],
-    const device float* log_values_buf   [[buffer(8)]],
-    constant ScanParams& p               [[buffer(9)]],
+    device float* grad_input             [[buffer(2)]],
+    const device float* grad_out         [[buffer(3)]],
+    const device float* grad_next_state  [[buffer(4)]],
+    const device float* combined         [[buffer(5)]],
+    const device float* state            [[buffer(6)]],
+    const device float* input            [[buffer(7)]],
+    const device float* a_star_buf       [[buffer(8)]],
+    const device float* s_buf            [[buffer(9)]],
+    const device float* log_values_buf   [[buffer(10)]],
+    constant ScanParams& p               [[buffer(11)]],
     uint idx [[thread_position_in_grid]]
 ) {
     if ((int)idx >= p.B * p.H) return;
@@ -409,16 +418,19 @@ kernel void fused_scan_backward_checkpointed(
             float hidden_val = chunk_hidden[i];
             float gate_val = chunk_gate[i];
             float proj_val = combined[cbase + 2 * p.H + h + t_offset];
+            int input_idx = out_base + (t - 1) * p.H;
+            float x_val = input[input_idx];
 
             float scan_result = exp(a_star_t + s_t);
             float z = log_value_t - a_star_t;
 
-            float grad_out_val = grad_out[out_base + (t - 1) * p.H];
+            float grad_out_val = grad_out[input_idx];
             float grad_scan_from_next = (t == p.T_seq) ? grad_next_state[state_idx] : 0.0f;
 
             float proj_sigmoid = sigmoid_f(proj_val);
             float grad_scan_result = grad_scan_from_next + grad_out_val * proj_sigmoid;
-            float grad_proj = grad_out_val * scan_result * proj_sigmoid * (1.0f - proj_sigmoid);
+            float grad_proj = grad_out_val * (scan_result - x_val) * proj_sigmoid * (1.0f - proj_sigmoid);
+            grad_input[input_idx] = grad_out_val * (1.0f - proj_sigmoid);
 
             float grad_log_h = grad_scan_result * scan_result;
             float grad_s = grad_log_h;
@@ -1669,6 +1681,15 @@ kernel void add_f32(
     uint idx [[thread_position_in_grid]]
 ) {
     if ((int)idx < p.n) dst[idx] += src[idx];
+}
+
+kernel void add_f16(
+    device half* dst                [[buffer(0)]],
+    const device half* src          [[buffer(1)]],
+    constant AddParams& p           [[buffer(2)]],
+    uint idx [[thread_position_in_grid]]
+) {
+    if ((int)idx < p.n) dst[idx] = half(float(dst[idx]) + float(src[idx]));
 }
 
 struct NesterovParams {
@@ -3297,7 +3318,8 @@ kernel void fused_scan_forward_checkpointed_fp16(
     device float* log_values_buf    [[buffer(4)]],
     const device half* combined     [[buffer(5)]],
     const device half* state        [[buffer(6)]],
-    constant ScanParams& p          [[buffer(7)]],
+    const device half* input        [[buffer(7)]],
+    constant ScanParams& p          [[buffer(8)]],
     uint idx [[thread_position_in_grid]]
 ) {
     if ((int)idx >= p.B * p.H) return;
@@ -3329,6 +3351,7 @@ kernel void fused_scan_forward_checkpointed_fp16(
         float hidden_val = float(combined[cbase + h + t_offset]);
         float gate_val = float(combined[cbase + p.H + h + t_offset]);
         float proj_val = float(combined[cbase + 2 * p.H + h + t_offset]);
+        float x_val = float(input[out_base + (t - 1) * p.H]);
 
         float log_coeff_val;
         log_coeffs_and_values_fwd(gate_val, hidden_val, log_coeff_val, log_value);
@@ -3341,7 +3364,7 @@ kernel void fused_scan_forward_checkpointed_fp16(
 
         float scan_result = exp(a_star + s);
         float proj_sigmoid = sigmoid_f(proj_val);
-        float out_val = proj_sigmoid * scan_result;
+        float out_val = proj_sigmoid * scan_result + (1.0f - proj_sigmoid) * x_val;
         if (!isfinite(out_val)) out_val = 0.0f;
         if (!isfinite(scan_result)) scan_result = 1.0f;
 
@@ -3366,14 +3389,16 @@ kernel void fused_scan_forward_checkpointed_fp16(
 kernel void fused_scan_backward_checkpointed_fp16(
     device half* grad_combined            [[buffer(0)]],
     device half* grad_state               [[buffer(1)]],
-    const device half* grad_out           [[buffer(2)]],
-    const device half* grad_next_state    [[buffer(3)]],
-    const device half* combined           [[buffer(4)]],
-    const device half* state              [[buffer(5)]],
-    const device float* a_star_buf        [[buffer(6)]],
-    const device float* s_buf             [[buffer(7)]],
-    const device float* log_values_buf    [[buffer(8)]],
-    constant ScanParams& p                [[buffer(9)]],
+    device half* grad_input               [[buffer(2)]],
+    const device half* grad_out           [[buffer(3)]],
+    const device half* grad_next_state    [[buffer(4)]],
+    const device half* combined           [[buffer(5)]],
+    const device half* state              [[buffer(6)]],
+    const device half* input              [[buffer(7)]],
+    const device float* a_star_buf        [[buffer(8)]],
+    const device float* s_buf             [[buffer(9)]],
+    const device float* log_values_buf    [[buffer(10)]],
+    constant ScanParams& p                [[buffer(11)]],
     uint idx [[thread_position_in_grid]]
 ) {
     if ((int)idx >= p.B * p.H) return;
@@ -3439,16 +3464,21 @@ kernel void fused_scan_backward_checkpointed_fp16(
             float hidden_val = chunk_hidden[i];
             float gate_val = chunk_gate[i];
             float proj_val = float(combined[cbase + 2 * p.H + h + t_offset]);
+            int input_idx = out_base + (t - 1) * p.H;
+            float x_val = float(input[input_idx]);
 
             float scan_result = exp(a_star_t + s_t);
             float z = log_value_t - a_star_t;
 
-            float grad_out_val = float(grad_out[out_base + (t - 1) * p.H]);
+            float grad_out_val = float(grad_out[input_idx]);
             float grad_scan_from_next = (t == p.T_seq) ? float(grad_next_state[state_idx]) : 0.0f;
 
             float proj_sigmoid = sigmoid_f(proj_val);
             float grad_scan_result = grad_scan_from_next + grad_out_val * proj_sigmoid;
-            float grad_proj = grad_out_val * scan_result * proj_sigmoid * (1.0f - proj_sigmoid);
+            float grad_proj = grad_out_val * (scan_result - x_val) * proj_sigmoid * (1.0f - proj_sigmoid);
+            float grad_input_val = grad_out_val * (1.0f - proj_sigmoid);
+            if (!isfinite(grad_input_val)) grad_input_val = 0.0f;
+            grad_input[input_idx] = half(clamp(grad_input_val, -65000.0f, 65000.0f));
 
             float grad_log_h = grad_scan_result * scan_result;
             float grad_s = grad_log_h;

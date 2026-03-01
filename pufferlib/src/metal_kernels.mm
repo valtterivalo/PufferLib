@@ -116,13 +116,12 @@ void puf_zero(PufTensor &dst, cudaStream_t stream) {
 
 void puf_add(PufTensor &dst, const PufTensor &src, cudaStream_t stream) {
   assert(dst.numel() == src.numel() && "puf_add: size mismatch");
-  assert(dst.dtype_size == 4 && "puf_add: dst must be f32");
-  assert(src.dtype_size == 4 && "puf_add: src must be f32 (Metal fp32 only)");
+  assert(dst.dtype_size == src.dtype_size && "puf_add: dtype mismatch");
   if (puf_is_gpu_training()) {
-    // add_f32 MSL kernel: dst[i] += src[i]
     MetalStream *ms = mtl_get_stream(stream);
     ms->compute_encoder();
-    auto pso = mtl_pipeline("add_f32");
+    const char *name = (dst.dtype_size == 2) ? "add_f16" : "add_f32";
+    auto pso = mtl_pipeline(name);
     mtl_set_pso(ms, pso);
     mtl_set_ptr(ms, dst.bytes, 0);
     mtl_set_ptr(ms, src.bytes, 1);
@@ -130,6 +129,7 @@ void puf_add(PufTensor &dst, const PufTensor &src, cudaStream_t stream) {
     mtl_set_params(ms, count, 2);
     mtl_dispatch_1d(ms, pso, count);
   } else {
+    assert(dst.dtype_size == 4 && "puf_add: CPU path supports f32 only");
     mtl_ensure_synced(stream);
     float *d = (float *)dst.bytes;
     const float *s = (const float *)src.bytes;
@@ -770,7 +770,7 @@ static PufTensor alloc_metal_tensor(int dim0, int dim1) {
 // ============================================================================
 
 void mtl_mingru_gate(float *out, float *next_state, const float *combined,
-                      const float *state_in, int H, int B,
+                      const float *state_in, const float *x_in, int H, int B,
                       cudaStream_t stream) {
   MetalStream *ms = mtl_get_stream(stream);
   ms->compute_encoder();
@@ -780,10 +780,11 @@ void mtl_mingru_gate(float *out, float *next_state, const float *combined,
   mtl_set_ptr(ms, next_state, 1);
   mtl_set_ptr(ms, combined, 2);
   mtl_set_ptr(ms, state_in, 3);
+  mtl_set_ptr(ms, x_in, 4);
   struct {
     int H, B;
   } params = {H, B};
-  mtl_set_params(ms, params, 4);
+  mtl_set_params(ms, params, 5);
   mtl_dispatch_1d(ms, pso, B * H);
 }
 
@@ -804,10 +805,11 @@ void mtl_fused_scan_forward(PrefixScan &scan, cudaStream_t stream) {
   mtl_set_ptr(ms, scan.log_values_buf.bytes, 4);
   mtl_set_ptr(ms, scan.combined_ptr, 5);
   mtl_set_ptr(ms, scan.state_ptr, 6);
+  mtl_set_ptr(ms, scan.input_ptr, 7);
   struct {
     int T_seq, H, B;
   } params = {scan.T, scan.H, scan.B};
-  mtl_set_params(ms, params, 7);
+  mtl_set_params(ms, params, 8);
   mtl_dispatch_1d(ms, pso, scan.B * scan.H);
 }
 
@@ -820,17 +822,19 @@ void mtl_fused_scan_backward(PrefixScan &scan, const float *grad,
   mtl_set_pso(ms, pso);
   mtl_set_ptr(ms, scan.grad_combined.bytes, 0);
   mtl_set_ptr(ms, scan.grad_state.bytes, 1);
-  mtl_set_ptr(ms, grad, 2);
-  mtl_set_ptr(ms, grad_next_state, 3);
-  mtl_set_ptr(ms, scan.combined_ptr, 4);
-  mtl_set_ptr(ms, scan.state_ptr, 5);
-  mtl_set_ptr(ms, scan.a_star.bytes, 6);
-  mtl_set_ptr(ms, scan.s_vals.bytes, 7);
-  mtl_set_ptr(ms, scan.log_values_buf.bytes, 8);
+  mtl_set_ptr(ms, scan.grad_input.bytes, 2);
+  mtl_set_ptr(ms, grad, 3);
+  mtl_set_ptr(ms, grad_next_state, 4);
+  mtl_set_ptr(ms, scan.combined_ptr, 5);
+  mtl_set_ptr(ms, scan.state_ptr, 6);
+  mtl_set_ptr(ms, scan.input_ptr, 7);
+  mtl_set_ptr(ms, scan.a_star.bytes, 8);
+  mtl_set_ptr(ms, scan.s_vals.bytes, 9);
+  mtl_set_ptr(ms, scan.log_values_buf.bytes, 10);
   struct {
     int T_seq, H, B;
   } params = {scan.T, scan.H, scan.B};
-  mtl_set_params(ms, params, 9);
+  mtl_set_params(ms, params, 11);
   mtl_dispatch_1d(ms, pso, scan.B * scan.H);
 }
 
@@ -847,10 +851,11 @@ void mtl_fused_scan_forward_fp16(PrefixScan &scan, cudaStream_t stream) {
   mtl_set_ptr(ms, scan.log_values_buf.bytes, 4);
   mtl_set_ptr(ms, scan.combined_ptr, 5);
   mtl_set_ptr(ms, scan.state_ptr, 6);
+  mtl_set_ptr(ms, scan.input_ptr, 7);
   struct {
     int T_seq, H, B;
   } params = {scan.T, scan.H, scan.B};
-  mtl_set_params(ms, params, 7);
+  mtl_set_params(ms, params, 8);
   mtl_dispatch_1d(ms, pso, scan.B * scan.H);
 }
 
@@ -863,17 +868,19 @@ void mtl_fused_scan_backward_fp16(PrefixScan &scan, const void *grad,
   mtl_set_pso(ms, pso);
   mtl_set_ptr(ms, scan.grad_combined.bytes, 0);
   mtl_set_ptr(ms, scan.grad_state.bytes, 1);
-  mtl_set_ptr(ms, grad, 2);
-  mtl_set_ptr(ms, grad_next_state, 3);
-  mtl_set_ptr(ms, scan.combined_ptr, 4);
-  mtl_set_ptr(ms, scan.state_ptr, 5);
-  mtl_set_ptr(ms, scan.a_star.bytes, 6);
-  mtl_set_ptr(ms, scan.s_vals.bytes, 7);
-  mtl_set_ptr(ms, scan.log_values_buf.bytes, 8);
+  mtl_set_ptr(ms, scan.grad_input.bytes, 2);
+  mtl_set_ptr(ms, grad, 3);
+  mtl_set_ptr(ms, grad_next_state, 4);
+  mtl_set_ptr(ms, scan.combined_ptr, 5);
+  mtl_set_ptr(ms, scan.state_ptr, 6);
+  mtl_set_ptr(ms, scan.input_ptr, 7);
+  mtl_set_ptr(ms, scan.a_star.bytes, 8);
+  mtl_set_ptr(ms, scan.s_vals.bytes, 9);
+  mtl_set_ptr(ms, scan.log_values_buf.bytes, 10);
   struct {
     int T_seq, H, B;
   } params = {scan.T, scan.H, scan.B};
-  mtl_set_params(ms, params, 9);
+  mtl_set_params(ms, params, 11);
   mtl_dispatch_1d(ms, pso, scan.B * scan.H);
 }
 
@@ -2350,6 +2357,7 @@ static void mingru_reg_train(void *w, void *activations, Allocator *acts,
         .next_state = {.shape = {B, 1, H}, .dtype_size = p},
         .grad_combined = {.shape = {B, TT, 3 * H}, .dtype_size = p},
         .grad_state = {.shape = {B, 1, H}, .dtype_size = p},
+        .grad_input = {.shape = {B, TT, H}, .dtype_size = p},
     };
     a->saved_inputs[i] = {.shape = {B, TT, H}, .dtype_size = p};
     a->combined_bufs[i] = {.shape = {B_TT, 3 * H}, .dtype_size = p};
@@ -2363,6 +2371,7 @@ static void mingru_reg_train(void *w, void *activations, Allocator *acts,
     acts->reg(&a->scan_bufs[i].log_values_buf);
     acts->reg(&a->scan_bufs[i].grad_combined);
     acts->reg(&a->scan_bufs[i].grad_state);
+    acts->reg(&a->scan_bufs[i].grad_input);
     grads->reg(&a->wgrad_scratch[i]);
   }
 }
@@ -2401,7 +2410,8 @@ static PufTensor mingru_forward(void *w, PufTensor x, PufTensor state,
     mtl_barrier(ms);
     mtl_mingru_gate((float *)a->out.bytes, (float *)a->next_state.bytes,
                     (const float *)a->combined[i].bytes,
-                    (const float *)state_i.bytes, H, B, stream);
+                    (const float *)state_i.bytes, (const float *)x.bytes, H, B,
+                    stream);
     mtl_barrier(ms);
     puf_copy(state_i, a->next_state, stream);
     if (i + 1 < m->num_layers)
@@ -2426,6 +2436,7 @@ static PufTensor mingru_forward_train(void *w, PufTensor x, PufTensor state,
     mtl_barrier(ms);
     a->scan_bufs[i].combined_ptr = a->combined_bufs[i].bytes;
     a->scan_bufs[i].state_ptr = state_i.bytes;
+    a->scan_bufs[i].input_ptr = a->saved_inputs[i].bytes;
     // Dispatch fp16 or fp32 scan based on activation dtype
     if (a->combined_bufs[i].dtype_size == 2)
       mtl_fused_scan_forward_fp16(a->scan_bufs[i], stream);
@@ -2459,6 +2470,7 @@ static PufTensor mingru_backward(void *w, PufTensor grad, void *activations,
     puf_mm_tn(scan.grad_combined, a->saved_inputs[i], a->wgrad_scratch[i],
               stream);
     puf_mm_nn(scan.grad_combined, m->weights[i], a->grad_input_buf, stream);
+    puf_add(a->grad_input_buf, scan.grad_input, stream);
     // Next iteration consumes grad_input_buf as "grad".
     if (i > 0)
       mtl_barrier(ms);
