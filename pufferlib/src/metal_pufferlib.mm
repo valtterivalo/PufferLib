@@ -467,9 +467,7 @@ void train_impl(PuffeRL& pufferl) {
     HypersT& hypers = pufferl.hypers;
     uint64_t tp_preloop0 = mach_absolute_time();
 
-    cudaStream_t train_stream = pufferl.overlap_enabled
-        ? (cudaStream_t)mtl_train_stream()
-        : (cudaStream_t)mtl_stream();
+    cudaStream_t train_stream = (cudaStream_t)mtl_stream();
 
     // GPU training: keep all ops on the Metal encoder (GEMM, copy, zero, add).
     puf_set_gpu_training(true);
@@ -534,6 +532,7 @@ void train_impl(PuffeRL& pufferl) {
         // Inference runs on the default queue, reading from weights_infer (updated at
         // the end of training via GPU blit). 1-iteration policy lag — PPO handles this
         // via importance ratios (stored log-probs).
+        cudaStream_t ts = (cudaStream_t)mtl_train_stream();
         uint32_t* train_rng_offset = (uint32_t*)((int64_t*)pufferl.rng_offset_puf.bytes + hypers.num_buffers);
 
         puf_set_gpu_training(true);
@@ -542,11 +541,11 @@ void train_impl(PuffeRL& pufferl) {
             uint64_t tp0 = mach_absolute_time();
 
             prio_sample(minibatch_segments, hypers.total_agents, anneal_beta,
-                pufferl.prio_bufs, pufferl.rng_seed, train_rng_offset, train_stream);
+                pufferl.prio_bufs, pufferl.rng_seed, train_rng_offset, ts);
 
             uint64_t tp2 = mach_absolute_time();
 
-            puf_zero(pufferl.train_buf.mb_state, train_stream);
+            puf_zero(pufferl.train_buf.mb_state, ts);
             {
                 RolloutBuf sel_src = rollouts;
                 mtl_select_copy(sel_src, pufferl.train_buf,
@@ -554,32 +553,26 @@ void train_impl(PuffeRL& pufferl) {
                     (const float*)pufferl.advantages_puf.bytes,
                     (const float*)pufferl.prio_bufs.mb_prio.bytes,
                     minibatch_segments,
-                    pufferl.fp16_obs_buf.bytes, train_stream);
+                    pufferl.fp16_obs_buf.bytes, ts);
             }
 
             uint64_t tp3 = mach_absolute_time();
 
-            // obs f32→f16 cast is fused into select_copy_kernel (channel 0)
-            puf_zero(pufferl.fp16_state_buf, train_stream);
-            PufTensor obs_puf = pufferl.fp16_obs_buf;
-            PufTensor state_puf = pufferl.fp16_state_buf;
-            PufTensor dec_puf = policy_forward_train(pufferl.policy, pufferl.weights_bf16,
-                pufferl.train_activations, obs_puf, state_puf, train_stream);
+            PufTensor obs_puf = pufferl.train_buf.mb_obs;
+            PufTensor state_puf = pufferl.train_buf.mb_state;
+            PufTensor dec_puf = policy_forward_train(pufferl.policy, pufferl.weights_fp32,
+                pufferl.train_activations, obs_puf, state_puf, ts);
 
             uint64_t tp4 = mach_absolute_time();
 
-            // Metal 4 coherence: barrier before cast reads decoder steel_gemm_f16 output
-            mtl_barrier((MetalStream*)train_stream);
-            mtl_cast_f16_to_f32((float*)pufferl.fp32_dec_out_buf.bytes,
-                                dec_puf.bytes, (int)dec_puf.numel(), train_stream);
-            PufTensor dec_puf_f32 = pufferl.fp32_dec_out_buf;
+            PufTensor dec_puf_f32 = dec_puf;
 
             PufTensor p_logstd;
             if (pufferl.is_continuous) {
                 if (hypers.arch_type == ARCH_SIMPLE) {
-                    p_logstd = ((SimpleDecoderWeights*)pufferl.weights_bf16.decoder)->logstd;
+                    p_logstd = ((SimpleDecoderWeights*)pufferl.weights_fp32.decoder)->logstd;
                 } else {
-                    p_logstd = ((DecoderWeights*)pufferl.weights_bf16.decoder)->logstd;
+                    p_logstd = ((DecoderWeights*)pufferl.weights_fp32.decoder)->logstd;
                 }
             }
 
@@ -589,7 +582,7 @@ void train_impl(PuffeRL& pufferl) {
                 pufferl.ppo_bufs_puf, pufferl.is_continuous,
                 pufferl.has_mask ? nullptr : (const float*)pufferl.ones_mask.bytes,
                 pufferl.has_mask ? 0 : 0,  // stride=0: all rows read same ones
-                train_stream);
+                ts);
 
             // Keep parity with current upstream static-native CUDA path:
             // do not scatter mb_ratio/mb_newvalue back into rollout buffers.
@@ -599,38 +592,41 @@ void train_impl(PuffeRL& pufferl) {
             PufTensor grad_logits_puf = pufferl.ppo_bufs_puf.grad_logits;
             PufTensor grad_logstd_puf = pufferl.is_continuous ? pufferl.ppo_bufs_puf.grad_logstd : PufTensor();
             PufTensor grad_values_puf = pufferl.ppo_bufs_puf.grad_values;
-            policy_backward(pufferl.policy, pufferl.weights_bf16, pufferl.train_activations,
-                grad_logits_puf, grad_logstd_puf, grad_values_puf, train_stream);
+            policy_backward(pufferl.policy, pufferl.weights_fp32, pufferl.train_activations,
+                grad_logits_puf, grad_logstd_puf, grad_values_puf, ts);
 
             uint64_t tp6 = mach_absolute_time();
 
-            // Metal 4 coherence: barrier before cast reads backward steel_gemm_f16 output
             PufTensor& gc = pufferl.use_adam ? pufferl.adam->gc_puf : pufferl.muon->gc_puf;
-            mtl_barrier((MetalStream*)train_stream);
-            mtl_cast_f16_to_f32((float*)gc.bytes,
-                                pufferl.grad_bf16_puf.bytes,
-                                (int)pufferl.grad_bf16_puf.numel(), train_stream);
+            if (pufferl.grad_bf16_puf.dtype_size == 2) {
+                mtl_barrier((MetalStream*)ts);
+                mtl_cast_f16_to_f32((float*)gc.bytes,
+                                    pufferl.grad_bf16_puf.bytes,
+                                    (int)pufferl.grad_bf16_puf.numel(), ts);
+            } else {
+                puf_copy(gc, pufferl.grad_bf16_puf, ts);
+            }
 
             uint64_t tp7 = mach_absolute_time();
 
-            mtl_barrier((MetalStream*)train_stream); // grad_cast→clip
+            mtl_barrier((MetalStream*)ts); // grad_cast→clip
             {
                 float* scratch = (float*)pufferl.grad_norm_puf.bytes;
-                clip_grad_norm_f32(gc, scratch, hypers.max_grad_norm, 1e-6f, train_stream);
+                clip_grad_norm_f32(gc, scratch, hypers.max_grad_norm, 1e-6f, ts);
             }
 
             uint64_t tp8 = mach_absolute_time();
 
-            mtl_barrier((MetalStream*)train_stream); // clip→optimizer
+            mtl_barrier((MetalStream*)ts); // clip→optimizer
             // Optimizer step with fused fp32→fp16 param cast
             if (pufferl.use_adam)
-                adam_step(pufferl.adam, pufferl.param_fp16_puf.bytes, train_stream);
+                adam_step(pufferl.adam, pufferl.param_fp16_puf.bytes, ts);
             else
-                muon_step(pufferl.muon, pufferl.param_fp16_puf.bytes, train_stream);
+                muon_step(pufferl.muon, pufferl.param_fp16_puf.bytes, ts);
 
             // Metal 4 coherence: barrier so next minibatch's forward pass
             // sees updated weights from optimizer.
-            mtl_barrier((MetalStream*)train_stream);
+            mtl_barrier((MetalStream*)ts);
 
             uint64_t tp9 = mach_absolute_time();
 
@@ -646,11 +642,23 @@ void train_impl(PuffeRL& pufferl) {
             pufferl.profile.accum[PROF_TRAIN_FORWARD] += prof_ms(tp3, tp9);
         }
 
+        // After all minibatches: GPU-copy weights to infer and recompute fused weight.
+        // Both dispatched on train_stream so they execute after training completes.
+        {
+            int64_t total_elems = pufferl.alloc_fp32.params.total_elems;
+            PufTensor fp32_all = {.bytes = (char*)pufferl.alloc_fp32.params.mem,
+                                  .shape = {total_elems}, .dtype_size = sizeof(float)};
+            PufTensor infer_all = {.bytes = (char*)pufferl.infer_params_alloc.mem,
+                                   .shape = {total_elems}, .dtype_size = sizeof(float)};
+            puf_copy(infer_all, fp32_all, ts);
+            // fused_enc_layer0 disabled (nonlinear encoder)
+        }
+
         puf_set_gpu_training(false);
 
         // Flush train_stream: commit command buffer so GPU starts executing
-        // asynchronously. The next train() call performs wait + fp32->infer
-        // snapshot copy before dispatching another async train wave.
+        // asynchronously. wait_completed() is called at the start of the next
+        // rollouts() to ensure training is done before inference reads weights_infer.
         ((MetalStream*)mtl_train_stream())->flush();
 
         pufferl.train_pending = true;
@@ -683,28 +691,21 @@ void train_impl(PuffeRL& pufferl) {
 
         uint64_t tp3 = mach_absolute_time();
 
-        // obs f32→f16 cast is fused into select_copy_kernel (channel 0)
-        puf_zero(pufferl.fp16_state_buf, train_stream);
-        PufTensor obs_puf = pufferl.fp16_obs_buf;
-        PufTensor state_puf = pufferl.fp16_state_buf;
-        PufTensor dec_puf = policy_forward_train(pufferl.policy, pufferl.weights_bf16,
+        PufTensor obs_puf = pufferl.train_buf.mb_obs;
+        PufTensor state_puf = pufferl.train_buf.mb_state;
+        PufTensor dec_puf = policy_forward_train(pufferl.policy, pufferl.weights_fp32,
             pufferl.train_activations, obs_puf, state_puf, train_stream);
 
         uint64_t tp4 = mach_absolute_time();
 
-        // Metal 4 coherence: barrier before cast reads decoder steel_gemm_f16 output
-        mtl_barrier((MetalStream*)train_stream);
-        mtl_cast_f16_to_f32((float*)pufferl.fp32_dec_out_buf.bytes,
-                             (const void*)dec_puf.bytes,
-                             (int)dec_puf.numel(), train_stream);
-        PufTensor dec_puf_f32 = pufferl.fp32_dec_out_buf;
+        PufTensor dec_puf_f32 = dec_puf;
 
         PufTensor p_logstd;
         if (pufferl.is_continuous) {
             if (hypers.arch_type == ARCH_SIMPLE) {
-                p_logstd = ((SimpleDecoderWeights*)pufferl.weights_bf16.decoder)->logstd;
+                p_logstd = ((SimpleDecoderWeights*)pufferl.weights_fp32.decoder)->logstd;
             } else {
-                p_logstd = ((DecoderWeights*)pufferl.weights_bf16.decoder)->logstd;
+                p_logstd = ((DecoderWeights*)pufferl.weights_fp32.decoder)->logstd;
             }
         }
         ppo_loss_fwd_bwd(dec_puf_f32, p_logstd, pufferl.train_buf,
@@ -714,64 +715,6 @@ void train_impl(PuffeRL& pufferl) {
             pufferl.has_mask ? nullptr : (const float*)pufferl.ones_mask.bytes,
             pufferl.has_mask ? 0 : 0,  // stride=0: all rows read same ones
             train_stream);
-        if (mb == 0 && pufferl.epoch < 12) {
-            ensure_gpu_synced(train_stream);
-            const float* ratio = (const float*)pufferl.train_buf.mb_ratio.bytes;
-            int ratio_n = (int)pufferl.train_buf.mb_ratio.numel();
-            int ratio_clip = 0;
-            int ratio_nonfinite = 0;
-            float ratio_min = INFINITY;
-            float ratio_max = -INFINITY;
-            double ratio_sum = 0.0;
-            for (int i = 0; i < ratio_n; i++) {
-                float r = ratio[i];
-                if (!std::isfinite(r)) {
-                    ratio_nonfinite++;
-                    continue;
-                }
-                ratio_min = std::min(ratio_min, r);
-                ratio_max = std::max(ratio_max, r);
-                ratio_sum += r;
-                if (std::abs(r - 1.0f) > hypers.clip_coef) {
-                    ratio_clip++;
-                }
-            }
-            const float* gl = (const float*)pufferl.ppo_bufs_puf.grad_logits.bytes;
-            const float* gv = (const float*)pufferl.ppo_bufs_puf.grad_values.bytes;
-            int gl_n = (int)pufferl.ppo_bufs_puf.grad_logits.numel();
-            int gv_n = (int)pufferl.ppo_bufs_puf.grad_values.numel();
-            double gl_l1 = 0.0;
-            double gv_l1 = 0.0;
-            const float* pr = (const float*)pufferl.train_buf.mb_prio.bytes;
-            int pr_n = (int)pufferl.train_buf.mb_prio.numel();
-            float pr_min = INFINITY;
-            float pr_max = -INFINITY;
-            double pr_sum = 0.0;
-            for (int i = 0; i < gl_n; i++) {
-                float v = gl[i];
-                if (std::isfinite(v)) gl_l1 += std::abs((double)v);
-            }
-            for (int i = 0; i < gv_n; i++) {
-                float v = gv[i];
-                if (std::isfinite(v)) gv_l1 += std::abs((double)v);
-            }
-            for (int i = 0; i < pr_n; i++) {
-                float v = pr[i];
-                if (!std::isfinite(v)) continue;
-                pr_min = std::min(pr_min, v);
-                pr_max = std::max(pr_max, v);
-                pr_sum += v;
-            }
-            fprintf(stderr,
-                "[diag ppo mb0] epoch=%d ratio_nonfinite=%d/%d ratio_min=%.6g ratio_max=%.6g ratio_mean=%.6g clipfrac=%.6f prio_min=%.6g prio_max=%.6g prio_mean=%.6g gl_l1=%.9g gv_l1=%.9g\n",
-                pufferl.epoch,
-                ratio_nonfinite, ratio_n,
-                ratio_min, ratio_max,
-                (ratio_n - ratio_nonfinite) > 0 ? (ratio_sum / (double)(ratio_n - ratio_nonfinite)) : 0.0,
-                ratio_n > 0 ? ((double)ratio_clip / (double)ratio_n) : 0.0,
-                pr_min, pr_max, pr_n > 0 ? (pr_sum / (double)pr_n) : 0.0,
-                gl_l1, gv_l1);
-        }
 
         // Keep parity with current upstream static-native CUDA path:
         // do not scatter mb_ratio/mb_newvalue back into rollout buffers.
@@ -781,62 +724,19 @@ void train_impl(PuffeRL& pufferl) {
         PufTensor grad_logits_puf = pufferl.ppo_bufs_puf.grad_logits;
         PufTensor grad_logstd_puf = pufferl.is_continuous ? pufferl.ppo_bufs_puf.grad_logstd : PufTensor();
         PufTensor grad_values_puf = pufferl.ppo_bufs_puf.grad_values;
-        policy_backward(pufferl.policy, pufferl.weights_bf16, pufferl.train_activations,
+        policy_backward(pufferl.policy, pufferl.weights_fp32, pufferl.train_activations,
             grad_logits_puf, grad_logstd_puf, grad_values_puf, train_stream);
 
         uint64_t tp6 = mach_absolute_time();
 
-        // Metal 4 coherence: barrier before cast reads backward steel_gemm_f16 output
         PufTensor& gc_sync = pufferl.use_adam ? pufferl.adam->gc_puf : pufferl.muon->gc_puf;
-        mtl_barrier((MetalStream*)train_stream);
-        mtl_cast_f16_to_f32((float*)gc_sync.bytes,
-                            pufferl.grad_bf16_puf.bytes,
-                            (int)pufferl.grad_bf16_puf.numel(), train_stream);
-        if (mb == 0 && pufferl.epoch < 12) {
-            ensure_gpu_synced(train_stream);
-            const float* gc_ptr = (const float*)gc_sync.bytes;
-            int gc_n = (int)gc_sync.numel();
-            int gc_nz = 0;
-            int gc_nonfinite = 0;
-            double gc_l1 = 0.0;
-            double gc_abs_max = 0.0;
-            for (int i = 0; i < gc_n; i++) {
-                float v = gc_ptr[i];
-                if (!std::isfinite(v)) {
-                    gc_nonfinite++;
-                    continue;
-                }
-                gc_l1 += std::abs((double)v);
-                gc_abs_max = std::max(gc_abs_max, std::abs((double)v));
-                if (v != 0.0f) gc_nz++;
-            }
-            fprintf(stderr,
-                "[diag gc mb0] epoch=%d nonzero=%d/%d nonfinite=%d abs_max=%.9g l1=%.9g\n",
-                pufferl.epoch, gc_nz, gc_n, gc_nonfinite, gc_abs_max, gc_l1);
-            if (pufferl.epoch < 2) {
-                int64_t off = 0;
-                int tensor_i = 0;
-                for (PufTensor* t : pufferl.alloc_fp16.grads.regs) {
-                    int n = (int)t->numel();
-                    int nf = 0;
-                    double l1 = 0.0;
-                    double amax = 0.0;
-                    for (int i = 0; i < n; i++) {
-                        float v = gc_ptr[off + i];
-                        if (!std::isfinite(v)) {
-                            nf++;
-                            continue;
-                        }
-                        l1 += std::abs((double)v);
-                        amax = std::max(amax, std::abs((double)v));
-                    }
-                    fprintf(stderr,
-                        "[diag gc tensor] epoch=%d t=%d n=%d nonfinite=%d abs_max=%.9g l1=%.9g\n",
-                        pufferl.epoch, tensor_i, n, nf, amax, l1);
-                    off += n;
-                    tensor_i++;
-                }
-            }
+        if (pufferl.grad_bf16_puf.dtype_size == 2) {
+            mtl_barrier((MetalStream*)train_stream);
+            mtl_cast_f16_to_f32((float*)gc_sync.bytes,
+                                pufferl.grad_bf16_puf.bytes,
+                                (int)pufferl.grad_bf16_puf.numel(), train_stream);
+        } else {
+            puf_copy(gc_sync, pufferl.grad_bf16_puf, train_stream);
         }
 
         uint64_t tp7 = mach_absolute_time();
@@ -845,14 +745,6 @@ void train_impl(PuffeRL& pufferl) {
         {
             float* scratch = (float*)pufferl.grad_norm_puf.bytes;
             clip_grad_norm_f32(gc_sync, scratch, hypers.max_grad_norm, 1e-6f, train_stream);
-            if (mb == 0 && pufferl.epoch < 12) {
-                ensure_gpu_synced(train_stream);
-                float norm_val = scratch[0];
-                fprintf(stderr,
-                    "[diag clip mb0] epoch=%d grad_norm=%.9g max_norm=%.6f scale=%.9g\n",
-                    pufferl.epoch, norm_val, hypers.max_grad_norm,
-                    norm_val > 1.0e-6f ? (hypers.max_grad_norm / norm_val) : 1.0f);
-            }
         }
 
         uint64_t tp8 = mach_absolute_time();
@@ -889,41 +781,14 @@ void train_impl(PuffeRL& pufferl) {
     uint64_t tp_sync1 = mach_absolute_time();
     pufferl.profile.accum[PROF_TRAIN_SYNC] += prof_ms(tp_sync0, tp_sync1);
 
-    if (hypers.arch_type == ARCH_SIMPLE && pufferl.epoch < 12) {
-        SimpleDecoderWeights* dw = (SimpleDecoderWeights*)pufferl.weights_fp32.decoder;
-        const float* w = (const float*)dw->weight.bytes;
-        int H = dw->hidden_dim;
-        int od = dw->output_dim;
-        double policy_l1 = 0.0;
-        double policy_l2 = 0.0;
-        for (int r = 0; r < od; r++) {
-            const float* row = w + (int64_t)r * H;
-            for (int c = 0; c < H; c++) {
-                double v = row[c];
-                policy_l1 += std::abs(v);
-                policy_l2 += v * v;
-            }
-        }
-        double value_l1 = 0.0;
-        double value_l2 = 0.0;
-        const float* value_row = w + (int64_t)od * H;
-        for (int c = 0; c < H; c++) {
-            double v = value_row[c];
-            value_l1 += std::abs(v);
-            value_l2 += v * v;
-        }
-        fprintf(stderr,
-            "[diag decoder fp32] epoch=%d policy_l1=%.9g policy_l2=%.9g value_l1=%.9g value_l2=%.9g\n",
-            pufferl.epoch, policy_l1, std::sqrt(policy_l2), value_l1, std::sqrt(value_l2));
-    }
-
 }
 
-// Wait for async GPU training to complete.
-// In overlap mode, train() performs the fp32 -> infer snapshot after this wait.
+// Wait for async GPU training to complete, then snapshot weights for inference.
+// Called at the end of rollouts() before the next iteration needs updated weights.
 static void sync_pending_train(PuffeRL& pufferl) {
     if (!pufferl.train_pending) return;
     // Wait for async training on train_stream (separate queue) to complete.
+    // After this, weights_infer and fused weight are up-to-date.
     MetalStream* ts = (MetalStream*)mtl_train_stream();
     ts->wait_completed();
     pufferl.train_pending = false;
@@ -1026,7 +891,6 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     int esz_fp32 = sizeof(float);
     pufferl->alloc_fp32.esz = esz_fp32;
     Allocator& fp32_params = pufferl->alloc_fp32.params;
-    fp32_params.alignment_bytes = 1;
 
     Encoder encoder;
     Decoder decoder;
@@ -1131,7 +995,6 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
 
     {
         Allocator& infer_alloc = pufferl->infer_params_alloc;
-        infer_alloc.alignment_bytes = 1;
         pufferl->weights_infer = new_weights(esz_fp32);
         PolicyWeights& wi = pufferl->weights_infer;
         encoder.reg_params(wi.encoder, &infer_alloc, esz_fp32);
@@ -1163,8 +1026,6 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     Allocator& fp16_params = pufferl->alloc_fp16.params;
     Allocator& acts = pufferl->alloc_fp16.acts;
     Allocator& grads = pufferl->alloc_fp16.grads;
-    fp16_params.alignment_bytes = 1;
-    grads.alignment_bytes = 1;
 
     pufferl->weights_bf16 = new_weights(esz_fp16);
     PolicyWeights& wfp16 = pufferl->weights_bf16;
@@ -1173,8 +1034,8 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     decoder.reg_params(wfp16.decoder, &fp16_params, esz_fp16);
     network.reg_params(wfp16.network, &fp16_params, esz_fp16);
 
-    // Register train activations/grads with fp16 allocators.
-    // reg_train uses PRECISION_SIZE (4) for dtype_size, so we fix them up after.
+    // Register train activations/grads. Keep fp32 training buffers on Metal:
+    // fp16 accumulation over long horizons overflows easily for MinGRU/encoder grads.
     PolicyActivations& tb = pufferl->train_activations;
     if (simple_arch) {
         tb.encoder = new SimpleEncoderActivations{};
@@ -1188,41 +1049,6 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     decoder.reg_train(wfp16.decoder, tb.decoder, &acts, &grads, B_TT);
     network.reg_train(wfp16.network, tb.network, &acts, &grads, B_TT);
 
-    // Fix up dtype_size: reg_train sets PRECISION_SIZE (4), we need fp16 (2).
-    // Scan internal buffers (a_star, s_vals, log_values_buf) must stay fp32
-    // for numerical stability in the parallel scan accumulation.
-    for (auto *t : acts.regs) {
-        if (t->dtype_size == PRECISION_SIZE) t->dtype_size = esz_fp16;
-    }
-    for (auto *t : grads.regs) {
-        if (t->dtype_size == PRECISION_SIZE) t->dtype_size = esz_fp16;
-    }
-    // Restore fp32 on scan internal buffers (blanket fixup incorrectly changed them
-    // because sizeof(float) == PRECISION_SIZE on Metal)
-    {
-        MinGRUActivations *ma = (MinGRUActivations *)tb.network;
-        for (int i = 0; i < num_layers; i++) {
-            ma->scan_bufs[i].a_star.dtype_size = esz_fp32;
-            ma->scan_bufs[i].s_vals.dtype_size = esz_fp32;
-            ma->scan_bufs[i].log_values_buf.dtype_size = esz_fp32;
-        }
-    }
-    // Restore fp32 on precision-critical saved state for backward passes.
-    // GELU pre_act and LayerNorm saved_x_hat/saved_rstd need fp32 to prevent
-    // gradient precision loss in backward (catastrophic cancellation in LN,
-    // precision-sensitive tanh/exp in GELU). Matches MinGRU scan buffer pattern.
-    // Simple arch has no GELU/LayerNorm — nothing to restore.
-    if (!simple_arch) {
-        EncoderActivations *ea = (EncoderActivations *)tb.encoder;
-        ea->pre_act1.dtype_size = esz_fp32;
-        ea->pre_act2.dtype_size = esz_fp32;
-        ea->pre_act3.dtype_size = esz_fp32;
-
-        DecoderActivations *da = (DecoderActivations *)tb.decoder;
-        da->saved_x_hat.dtype_size = esz_fp32;
-        da->saved_rstd.dtype_size = esz_fp32;
-    }
-
     pufferl->alloc_fp16.create();
 
     // Wrap fp16 allocators for Metal GPU access
@@ -1231,7 +1057,7 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     mtl_wrap_allocator(&grads);
 
     pufferl->param_fp16_puf = {.bytes = (char*)fp16_params.mem, .shape = {fp16_params.total_elems}, .dtype_size = esz_fp16};
-    pufferl->grad_bf16_puf = {.bytes = (char*)grads.mem, .shape = {grads.total_elems}, .dtype_size = esz_fp16};
+    pufferl->grad_bf16_puf = {.bytes = (char*)grads.mem, .shape = {grads.total_elems}, .dtype_size = esz_fp32};
 
     // Cast fp32 master weights → fp16 training weights
     {

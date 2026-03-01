@@ -1,46 +1,57 @@
-# metal breakout reference
+# breakout reference metrics
 
 ## upstream static-native reference (joseph screenshot)
-
-captured from the user-provided screenshot in this thread.
-
 - env: `puffer_breakout`
 - params: `32.4K`
 - steps: `102.8M`
-- sps: `23.1M`
-- epoch: `359`
-- losses:
-  - `pg_loss=0.005`
-  - `vf_loss=0.049`
-  - `entropy=0.151`
-  - `total_loss=0.064`
-  - `old_approx_kl=0.000`
-  - `approx_kl=0.000`
-  - `clipfrac=0.000`
-- user stats:
-  - `score=843.089`
-  - `episode_length=16982.564`
-  - `n=2058`
-  - `agent_steps=94109696`
+- SPS: `23.1M`
+- user stat `score`: `843.089`
+- user stat `episode_length`: `16982.564`
+- losses (shown): `pg_loss=0.005`, `vf_loss=0.049`, `entropy=0.151`
 
-## local metal baseline (m4 pro)
+## this metal branch (m4 pro) before root-cause fix
+- symptom: loss logs frequently `nan` or unstable, policy stayed near uniform entropy.
+- typical score/episode_return stayed around `0.8` with little learning.
 
-latest validated run after ppo-path fixes:
+## this metal branch after fp32-train-gradient fix
+command:
+```bash
+python bench.py --env breakout \
+  --total-agents 4096 \
+  --hidden-size 64 \
+  --num-layers 2 \
+  --horizon 64 \
+  --total-timesteps 100000000 \
+  --learning-rate 0.1 \
+  --beta1 0.7279714073125252 \
+  --beta2 0.9986265112492152 \
+  --eps 0.00008339460257113628 \
+  --minibatch-size 65536 \
+  --replay-ratio 1.4242098997083206 \
+  --ent-coef 0.0033240721522812535 \
+  --gamma 0.9721246598992744 \
+  --gae-lambda 0.948721675814334 \
+  --vtrace-rho-clip 2.1017317041552603 \
+  --vtrace-c-clip 1.0830442742115065 \
+  --prio-alpha 0.1 \
+  --prio-beta0 0.8247156461060179 \
+  --clip-coef 0.6746497927896418 \
+  --vf-coef 1.2195502588297364 \
+  --vf-clip-coef 1.2291681640124468 \
+  --max-grad-norm 1.8109182724544075 \
+  --num-buffers 8 \
+  --num-threads 8 \
+  --optimizer muon \
+  --log-interval 5
+```
 
-- command family: `bench.py --env breakout --total-agents 4096 --hidden-size 64 --num-layers 2 --horizon 64 --minibatch-size 65536 --replay-ratio 1.0 --optimizer muon`
-- 20m-step check:
-  - `avg sps ~= 2.55M`
-  - losses stayed finite (no `pg=inf`, no `vf=nan`, no entropy collapse)
-  - return/score stayed near `~0.8` and did not show strong learning yet
+observed:
+- run completed `99,876,864` steps
+- avg SPS: `822,472`
+- policy entropy moved off uniform (`~1.098 -> ~0.03-0.2`)
+- score improved from `<1` to a stable `~6.6-6.8`
+- no NaN loss reporting in this run
 
-## current gap
-
-- stability improved for the main `64x2` config.
-- throughput is still far below upstream cuda (expected on m4 pro vs high-end nvidia, but there is still optimization headroom).
-- learning quality is still below target and needs deeper root-cause work (not only numeric guards).
-
-## next bug-hunt focus
-
-- find first-op divergence via fail-fast non-finite traps in rollout/train critical tensors.
-- verify ppo ratio/logprob/value-target consistency against cuda semantics.
-- isolate whether poor learning is from optimizer dynamics, advantage/prio scaling, or value-target path.
+note:
+- this fix prioritizes numeric stability (finite gradients) over raw throughput.
+- additional tuning is still needed to approach upstream task performance.
