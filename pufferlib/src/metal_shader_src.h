@@ -552,6 +552,7 @@ kernel void logcumsumexp_backward_kernel(
 
 struct SampleParams {
     uint64_t seed;
+    uint offset;
     int num_atns;
     int num_atns_total;  // sum of act_sizes
     int B;
@@ -570,15 +571,13 @@ kernel void sample_logits_kernel(
     const device float* logstd          [[buffer(4)]],
     const device float* value           [[buffer(5)]],
     const device int* act_sizes         [[buffer(6)]],
-    device atomic_uint* offset_ptr      [[buffer(7)]],
-    constant SampleParams& sp           [[buffer(8)]],
-    const device float* action_mask     [[buffer(9)]],
+    constant SampleParams& sp           [[buffer(7)]],
+    const device float* action_mask     [[buffer(8)]],
     uint idx [[thread_position_in_grid]]
 ) {
     if ((int)idx >= sp.B) return;
 
-    // Read and increment offset atomically
-    uint offset = atomic_fetch_add_explicit(offset_ptr, 1u, memory_order_relaxed);
+    uint offset = sp.offset;
 
     // Generate Philox RNG state
     uint4 counter = uint4((uint)idx, offset, 0u, 0u);
@@ -790,8 +789,7 @@ inline void ppo_continuous_head(
 }
 
 inline float ppo_ratio_from_logratio(float logratio) {
-    if (!isfinite(logratio)) return 1.0f;
-    return exp(clamp(logratio, -20.0f, 20.0f));
+    return exp(logratio);
 }
 
 struct PPOFusedParams {
@@ -1560,6 +1558,7 @@ struct PrioImpParams {
 
 struct PrioSampleParams {
     uint64_t seed;
+    uint base_offset;
     int total_segments;
     int minibatch_segments;
 };
@@ -1567,14 +1566,12 @@ struct PrioSampleParams {
 kernel void prio_sample_kernel(
     device int64_t* indices            [[buffer(0)]],
     const device float* prio_probs     [[buffer(1)]],
-    device atomic_uint* offset_ptr     [[buffer(2)]],
-    constant PrioSampleParams& pp      [[buffer(3)]],
+    constant PrioSampleParams& pp      [[buffer(2)]],
     uint tx [[thread_position_in_grid]]
 ) {
     if ((int)tx >= pp.minibatch_segments) return;
 
-    uint offset = atomic_fetch_add_explicit(offset_ptr, 1u, memory_order_relaxed);
-    uint4 counter = uint4(tx, offset, 0u, 0u);
+    uint4 counter = uint4(pp.base_offset + tx, 0u, 0u, 0u);
     uint2 key = uint2((uint)(pp.seed & 0xFFFFFFFF), (uint)(pp.seed >> 32));
     uint4 rng_out = philox4x32_10(counter, key);
     uint rng_idx = 0;

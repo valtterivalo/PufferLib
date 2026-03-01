@@ -554,7 +554,7 @@ void train_impl(PuffeRL& pufferl) {
             puf_zero(pufferl.train_buf.mb_state, ts);
             {
                 RolloutBuf sel_src = rollouts;
-                sel_src.values = pufferl.old_values_puf;
+                sel_src.values = rollouts.values;
                 mtl_select_copy(sel_src, pufferl.train_buf,
                     (const int64_t*)pufferl.prio_bufs.idx.bytes,
                     (const float*)pufferl.advantages_puf.bytes,
@@ -593,8 +593,9 @@ void train_impl(PuffeRL& pufferl) {
                 ts);
             mtl_barrier((MetalStream*)ts); // PPO outputs -> scatter
 
-            // Match current upstream static-native CUDA behavior:
-            // mb_ratio/mb_newvalue scatter is intentionally disabled.
+            mtl_scatter_ppo_outputs(pufferl.train_buf, rollouts,
+                (const int64_t*)pufferl.prio_bufs.idx.bytes, ts);
+            mtl_barrier((MetalStream*)ts); // scatter -> next mb advantage/select
 
             uint64_t tp5 = mach_absolute_time();
 
@@ -696,7 +697,7 @@ void train_impl(PuffeRL& pufferl) {
         puf_zero(pufferl.train_buf.mb_state, train_stream);
         {
             RolloutBuf sel_src = rollouts;
-            sel_src.values = pufferl.old_values_puf;
+            sel_src.values = rollouts.values;
             mtl_select_copy(sel_src, pufferl.train_buf,
                 (const int64_t*)pufferl.prio_bufs.idx.bytes,
                 (const float*)pufferl.advantages_puf.bytes,
@@ -734,8 +735,9 @@ void train_impl(PuffeRL& pufferl) {
             train_stream);
         mtl_barrier((MetalStream*)train_stream); // PPO outputs -> scatter
 
-        // Match current upstream static-native CUDA behavior:
-        // mb_ratio/mb_newvalue scatter is intentionally disabled.
+        mtl_scatter_ppo_outputs(pufferl.train_buf, rollouts,
+            (const int64_t*)pufferl.prio_bufs.idx.bytes, train_stream);
+        mtl_barrier((MetalStream*)train_stream); // scatter -> next mb advantage/select
 
         uint64_t tp5 = mach_absolute_time();
 

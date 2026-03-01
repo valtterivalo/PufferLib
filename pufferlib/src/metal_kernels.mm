@@ -922,10 +922,12 @@ void mtl_sample_logits_dispatch_to(
   // value column is the last fused decoder column.
   mtl_set_ptr(ms, (float *)dec_out.bytes + (fused_cols - 1), 5);
   mtl_set_ptr(ms, act_sizes_puf.bytes, 6);
-  mtl_set_ptr(ms, offset_ptr, 7);
+  uint32_t offset_snapshot = *offset_ptr;
+  *offset_ptr = offset_snapshot + 1u;
 
   struct {
     uint64_t seed;
+    uint32_t offset;
     int num_atns;
     int num_atns_total;
     int B;
@@ -934,11 +936,11 @@ void mtl_sample_logits_dispatch_to(
     int value_stride;
     int is_continuous;
     int mask_stride;
-  } params = {seed, num_atns, A_total, B,
+  } params = {seed, offset_snapshot, num_atns, A_total, B,
               fused_cols, 0, fused_cols, 0, mask_stride};
-  mtl_set_params(ms, params, 8);
+  mtl_set_params(ms, params, 7);
 
-  mtl_set_ptr(ms, (void *)action_mask, 9);
+  mtl_set_ptr(ms, (void *)action_mask, 8);
 
   mtl_dispatch_1d(ms, pso, B);
 }
@@ -1272,13 +1274,15 @@ void prio_sample(int minibatch_segments, int total_agents,
     mtl_set_pso(ms, pso);
     mtl_set_ptr(ms, bufs.idx.bytes, 0);
     mtl_set_ptr(ms, bufs.prio_probs.bytes, 1);
-    mtl_set_ptr(ms, offset_ptr, 2);
+    uint32_t base_offset = *offset_ptr;
+    *offset_ptr = base_offset + (uint32_t)minibatch_segments;
     struct {
       uint64_t seed;
+      uint32_t base_offset;
       int total_segments;
       int minibatch_segments;
-    } params = {seed, S, minibatch_segments};
-    mtl_set_params(ms, params, 3);
+    } params = {seed, base_offset, S, minibatch_segments};
+    mtl_set_params(ms, params, 2);
     mtl_dispatch_1d(ms, pso, minibatch_segments);
   }
 
