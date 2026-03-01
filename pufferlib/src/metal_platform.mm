@@ -29,6 +29,10 @@
 
 static MetalContext g_ctx = {};
 static bool g_no_tensor_ops = false; // cached getenv("PUFFERLIB_NO_TENSOR_OPS")
+static bool g_no_tensor_ops_nt = true; // default off: unstable in long breakout runs
+static bool g_no_tensor_ops_nn = false;
+static bool g_no_tensor_ops_tn = false;
+static bool g_no_tensor_ops_addmm = false;
 static std::mutex g_pipeline_mutex;
 
 // ============================================================================
@@ -590,6 +594,12 @@ void mtl_init() {
     [g_ctx.train_queue addResidencySet:g_ctx.residency_set];
 
     g_no_tensor_ops = (getenv("PUFFERLIB_NO_TENSOR_OPS") != nullptr);
+    bool enable_tensor_ops_nt = (getenv("PUFFERLIB_ENABLE_TENSOR_OPS_NT") != nullptr);
+    bool disable_tensor_ops_nt = (getenv("PUFFERLIB_NO_TENSOR_OPS_NT") != nullptr);
+    g_no_tensor_ops_nt = disable_tensor_ops_nt || !enable_tensor_ops_nt;
+    g_no_tensor_ops_nn = (getenv("PUFFERLIB_NO_TENSOR_OPS_NN") != nullptr);
+    g_no_tensor_ops_tn = (getenv("PUFFERLIB_NO_TENSOR_OPS_TN") != nullptr);
+    g_no_tensor_ops_addmm = (getenv("PUFFERLIB_NO_TENSOR_OPS_ADDMM") != nullptr);
 
     // Start the default stream (rollout) and training stream
     g_ctx.stream.begin();
@@ -1171,7 +1181,7 @@ void puf_mm(PufTensor &a, PufTensor &b, PufTensor &out,
   int M = (int)(a.batch_size() * a.shape[na - 2]);
   int K = (int)a.shape[na - 1];
   int N = (int)b.shape[nb - 2];
-  bool no_tensor = g_no_tensor_ops;
+  bool no_tensor = g_no_tensor_ops || g_no_tensor_ops_nt;
   bool aligned = (N % 32 == 0) && (M % 64 == 0);
 
   if (a.dtype_size == 2) {
@@ -1209,7 +1219,7 @@ void puf_mm_tn(PufTensor &a, PufTensor &b, PufTensor &out,
   int M = (int)a.shape[na - 1];
   int N = (int)b.shape[nb - 1];
 
-  bool no_tensor = g_no_tensor_ops;
+  bool no_tensor = g_no_tensor_ops || g_no_tensor_ops_tn;
   bool aligned = (M % 64 == 0) && (N % 32 == 0);
 
   if (a.dtype_size == 2) {
@@ -1243,7 +1253,7 @@ void puf_mm_nn(PufTensor &a, PufTensor &b, PufTensor &out,
   int K = (int)a.shape[na - 1];
   int N = (int)b.shape[nb - 1];
 
-  bool no_tensor = g_no_tensor_ops;
+  bool no_tensor = g_no_tensor_ops || g_no_tensor_ops_nn;
   bool aligned = (M % 64 == 0) && (N % 32 == 0);
 
   if (a.dtype_size == 2) {
@@ -1314,6 +1324,8 @@ void puf_addmm_nn(PufTensor &a, PufTensor &b, PufTensor &out, float alpha,
 
   if ((M % 64 == 0) && (N % 32 == 0) &&
              !g_no_tensor_ops &&
+             !g_no_tensor_ops_addmm &&
+             !g_no_tensor_ops_nn &&
              g_ctx.tensor_ops_gemm_nn_f32) {
     // Decompose: out = beta*out + alpha*(a@b)
     // Step 1: temp = a @ b via tensor_ops NN (compute encoder)
