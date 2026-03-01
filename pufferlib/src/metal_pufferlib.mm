@@ -591,9 +591,8 @@ void train_impl(PuffeRL& pufferl) {
                 ts);
             mtl_barrier((MetalStream*)ts); // PPO outputs -> scatter
 
-            mtl_scatter_ppo_outputs(
-                pufferl.train_buf, rollouts,
-                (const int64_t*)pufferl.prio_bufs.idx.bytes, ts);
+            // Match current upstream static-native CUDA behavior:
+            // mb_ratio/mb_newvalue scatter is intentionally disabled.
 
             uint64_t tp5 = mach_absolute_time();
 
@@ -733,9 +732,8 @@ void train_impl(PuffeRL& pufferl) {
             train_stream);
         mtl_barrier((MetalStream*)train_stream); // PPO outputs -> scatter
 
-        mtl_scatter_ppo_outputs(
-            pufferl.train_buf, rollouts,
-            (const int64_t*)pufferl.prio_bufs.idx.bytes, train_stream);
+        // Match current upstream static-native CUDA behavior:
+        // mb_ratio/mb_newvalue scatter is intentionally disabled.
 
         uint64_t tp5 = mach_absolute_time();
 
