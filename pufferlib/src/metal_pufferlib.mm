@@ -1105,6 +1105,7 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
 
     float lr = hypers.lr;
     float beta1 = hypers.beta1;
+    float beta2 = hypers.beta2;
     float eps = hypers.eps;
     pufferl->muon = new Muon{};
     pufferl->adam = new Adam{};
@@ -1173,7 +1174,7 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     pufferl->muon->nccl_comm = nullptr;
     pufferl->muon->world_size = 1;
     adam_init(pufferl->adam, &fp32_params,
-        pufferl->param_fp32_puf, lr, 0.9, 0.999, 1e-8, 0.0, alloc);
+        pufferl->param_fp32_puf, lr, beta1, beta2, eps, 0.0, alloc);
     // Single allocation for all registered buffers
     alloc.create();
 

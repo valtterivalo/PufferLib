@@ -654,13 +654,16 @@ void mtl_normalize_f32(float *data, const float *norm_ptr, float eps,
 // scratch must point to a float in wrapped MTLBuffer memory.
 void clip_grad_norm_f32(PufTensor &grad, float *scratch, float max_norm,
                         float eps, cudaStream_t stream) {
+  MetalStream *ms = mtl_get_stream(stream);
   ensure_norm_partials();
   int count = (int)grad.numel();
   int num_blocks = (count + 255) / 256;
   if (num_blocks > 256) num_blocks = 256;
   mtl_norm_f32(norm_partials_buf, (const float *)grad.bytes, count, num_blocks,
                stream);
+  mtl_barrier(ms);
   mtl_norm_reduce(scratch, norm_partials_buf, num_blocks, stream);
+  mtl_barrier(ms);
   mtl_clip_by_norm_f32((float *)grad.bytes, scratch, max_norm, eps, count,
                        stream);
 }
@@ -1565,9 +1568,7 @@ void muon_step(Muon *m, void *fp16_out, cudaStream_t stream) {
     float *up_ptr = (float *)m->up_puf.bytes + offset;
     int64_t R = t->shape[0];
     int64_t C = t->numel() / std::max<int64_t>(1, R);
-    int64_t min_dim = std::min(R, C);
-
-    if (t->ndim() >= 2 && min_dim >= 8) {
+    if (t->ndim() >= 2) {
       bool transposed_flag = R > C;
       int64_t M = transposed_flag ? C : R;
       int64_t N = transposed_flag ? R : C;
@@ -1741,6 +1742,7 @@ static PufTensor encoder_forward(void *w, void *activations, PufTensor input,
                                   cudaStream_t stream) {
   EncoderWeights *ew = (EncoderWeights *)w;
   EncoderActivations *a = (EncoderActivations *)activations;
+  MetalStream *ms = mtl_get_stream(stream);
 
   // save input for layer 1 weight grad (training only)
   if (a->saved_input.bytes)
@@ -1751,18 +1753,24 @@ static PufTensor encoder_forward(void *w, void *activations, PufTensor input,
 
   // layer 1: input @ w1^T → layer1_out (B, 2H), then GELU
   puf_mm(input, ew->weight1, a->layer1_out, stream);
+  mtl_barrier(ms);
   mtl_gelu_fwd_save(a->layer1_out.bytes, a->pre_act1.bytes,
                      B * ew->mid_dim, dsz, stream);
+  mtl_barrier(ms);
 
   // layer 2: layer1_out @ w2^T → layer2_out (B, H), then GELU
   puf_mm(a->layer1_out, ew->weight2, a->layer2_out, stream);
+  mtl_barrier(ms);
   mtl_gelu_fwd_save(a->layer2_out.bytes, a->pre_act2.bytes,
                      B * ew->out_dim, dsz, stream);
+  mtl_barrier(ms);
 
   // layer 3: layer2_out @ w3^T → out (B, H), then GELU
   puf_mm(a->layer2_out, ew->weight3, a->out, stream);
+  mtl_barrier(ms);
   mtl_gelu_fwd_save(a->out.bytes, a->pre_act3.bytes,
                      B * ew->out_dim, dsz, stream);
+  mtl_barrier(ms);
 
   return a->out;
 }
@@ -1886,6 +1894,7 @@ static PufTensor decoder_forward(void *w, void *activations, PufTensor input,
                                   cudaStream_t stream) {
   DecoderWeights *dw = (DecoderWeights *)w;
   DecoderActivations *a = (DecoderActivations *)activations;
+  MetalStream *ms = mtl_get_stream(stream);
   int B = (int)input.shape[0];
   int H = dw->hidden_dim, od1 = dw->output_dim + 1;
 
@@ -1899,9 +1908,11 @@ static PufTensor decoder_forward(void *w, void *activations, PufTensor input,
   mtl_layernorm_fwd(input.bytes, dw->ln_weight.bytes, dw->ln_bias.bytes,
                      a->post_ln.bytes, a->saved_x_hat.bytes,
                      a->saved_rstd.bytes, B, H, 1e-5f, dsz, stream);
+  mtl_barrier(ms);
 
   // step 2: intermediate Linear + fused bias+ReLU
   puf_mm(a->post_ln, dw->intermediate_weight, a->intermediate_out, stream);
+  mtl_barrier(ms);
   {
     void *pre_act = a->intermediate_pre_relu.bytes
                         ? a->intermediate_pre_relu.bytes
@@ -1910,10 +1921,13 @@ static PufTensor decoder_forward(void *w, void *activations, PufTensor input,
                                 dw->intermediate_bias.bytes, pre_act,
                                 H, B * H, dsz, stream);
   }
+  mtl_barrier(ms);
 
   // step 3: output Linear + bias → (B, out+1)
   puf_mm(a->intermediate_out, dw->weight, a->out, stream);
+  mtl_barrier(ms);
   mtl_bias_add(a->out.bytes, dw->bias.bytes, od1, B * od1, dsz, stream);
+  mtl_barrier(ms);
 
   return a->out;
 }
@@ -2112,10 +2126,12 @@ static PufTensor simple_encoder_forward(void *w, void *activations,
                                          PufTensor input, cudaStream_t stream) {
   SimpleEncoderWeights *ew = (SimpleEncoderWeights *)w;
   SimpleEncoderActivations *a = (SimpleEncoderActivations *)activations;
+  MetalStream *ms = mtl_get_stream(stream);
   if (a->saved_input.bytes)
     puf_copy(a->saved_input, input, stream);
 
   puf_mm(input, ew->weight, a->out, stream);
+  mtl_barrier(ms);
 
   return a->out;
 }
@@ -2170,9 +2186,11 @@ static PufTensor simple_decoder_forward(void *w, void *activations,
                                           cudaStream_t stream) {
   SimpleDecoderWeights *dw = (SimpleDecoderWeights *)w;
   SimpleDecoderActivations *a = (SimpleDecoderActivations *)activations;
+  MetalStream *ms = mtl_get_stream(stream);
   if (a->saved_input.bytes)
     puf_copy(a->saved_input, input, stream);
   puf_mm(input, dw->weight, a->out, stream);
+  mtl_barrier(ms);
   return a->out;
 }
 
