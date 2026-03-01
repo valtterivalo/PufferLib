@@ -62,13 +62,8 @@ void rollouts(pybind11::object pufferl_obj) {
     // Reset sync stats before rollout to capture rollout-only syncs
     { int _c; double _m; mtl_sync_stats(&_c, &_m); }
     pybind11::gil_scoped_release no_gil;
-    // Sync async training from previous iteration (if any).
-    // Overlap: wait for train_stream to complete — weights_infer and fused weight
-    // were updated on the GPU as the last ops in train_impl's async dispatch.
-    // Baseline: recompute fused weight on CPU after training updated weights_fp32.
-    if (pufferl.train_pending) {
-        sync_pending_train(pufferl);
-    } else if (!pufferl.overlap_enabled) {
+    // Non-overlap uses weights_fp32 directly for rollout; keep fused-weight hook parity.
+    if (!pufferl.overlap_enabled) {
         sync_fused_weight(pufferl);
     }
     auto t0 = std::chrono::high_resolution_clock::now();
@@ -92,6 +87,12 @@ pybind11::dict train(pybind11::object pufferl_obj) {
     { int _c; double _m; mtl_sync_stats(&_c, &_m); }
     {
         pybind11::gil_scoped_release no_gil;
+        // Overlap mode: defer the wait here (not at rollout start) so rollout CPU
+        // work can overlap previous train-stream execution safely.
+        if (pufferl.overlap_enabled && pufferl.train_pending) {
+            sync_pending_train(pufferl);
+            copy_weights_to_infer(pufferl);
+        }
         train_impl(pufferl);
     }
     // Capture train sync stats

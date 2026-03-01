@@ -173,6 +173,7 @@ struct Allocator {
   std::vector<PufTensor *> regs;
   void *mem = nullptr;
   int64_t total_elems = 0;
+  int64_t alignment_bytes = 16;
 
   void reg(PufTensor *ptr) { regs.push_back(ptr); }
 
@@ -187,10 +188,12 @@ struct Allocator {
   }
 
   void create() {
+    int64_t align = alignment_bytes > 0 ? alignment_bytes : 1;
+    int64_t align_mask = align - 1;
     int64_t total_bytes = 0;
     total_elems = 0;
     for (auto *t : regs) {
-      total_bytes = (total_bytes + 15) & ~15; // align each tensor to 16 bytes
+      total_bytes = (total_bytes + align_mask) & ~align_mask;
       total_bytes += t->numel() * t->dtype_size;
       total_elems += t->numel();
     }
@@ -207,7 +210,7 @@ struct Allocator {
 #endif
       int64_t offset = 0;
       for (auto *t : regs) {
-        offset = (offset + 15) & ~15; // align each tensor to 16 bytes
+        offset = (offset + align_mask) & ~align_mask;
         t->bytes = (char *)mem + offset;
         offset += t->numel() * t->dtype_size;
       }
