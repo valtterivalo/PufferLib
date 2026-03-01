@@ -8,7 +8,7 @@
  * - No bf16 (always PRECISION_FLOAT, USE_BF16 = false, PRECISION_SIZE = 4)
  * - Unified memory: memcpy/memset for host<->device (same physical memory)
  * - MetalStream passed as cudaStream_t (void*) through vtable function pointers
- * - No per-buffer streams; single MetalStream for all work
+ * - Per-buffer Metal streams for rollout callback threads
  * - CPU timing via std::chrono instead of CUDA events
  */
 
@@ -24,11 +24,8 @@
 #include <mutex>
 #include <vector>
 
-// Serializes GPU access across buffer threads in multi-buffer mode.
-// Without this, concurrent net_callback calls from different buffer threads
-// interleave Metal commands on the same command buffer, causing
-// "commit command buffer with uncommitted encoder" assertion failures.
-static std::mutex g_rollout_gpu_mutex;
+static thread_local cudaStream_t tl_rollout_stream = 0;
+static std::mutex g_rollout_profile_mutex;
 
 // ============================================================================
 // GPU sync helper — flush any pending Metal compute work before CPU access.
@@ -48,7 +45,8 @@ static inline void ensure_gpu_synced(cudaStream_t s) {
 // Mach-time to milliseconds for profiling
 static mach_timebase_info_data_t g_prof_tb = {0, 0};
 static inline float prof_ms(uint64_t t0, uint64_t t1) {
-    if (g_prof_tb.denom == 0) mach_timebase_info(&g_prof_tb);
+    static std::once_flag g_prof_tb_once;
+    std::call_once(g_prof_tb_once, []() { mach_timebase_info(&g_prof_tb); });
     return (float)((double)(t1 - t0) * g_prof_tb.numer / g_prof_tb.denom / 1e6);
 }
 
@@ -223,7 +221,9 @@ typedef struct {
     bool use_adam = false;
     HypersT hypers;
     bool is_continuous;
+    std::vector<cudaStream_t> rollout_streams;
     std::vector<PufTensor> buffer_states;
+    std::vector<PufTensor> sample_act_f32_buffers;
     std::vector<PolicyActivations> buffer_activations;
     std::vector<Allocator> buffer_allocs;
     RolloutBuf rollouts;
@@ -275,6 +275,11 @@ Dict* log_environments_impl(PuffeRL& pufferl) {
 // ============================================================================
 
 extern "C" void thread_init_metal(void* ctx, int buf) {
+    PuffeRL* pufferl = (PuffeRL*)ctx;
+    assert(buf >= 0 && buf < (int)pufferl->rollout_streams.size());
+    tl_rollout_stream = pufferl->rollout_streams[buf];
+    assert(tl_rollout_stream && "thread_init_metal requires per-buffer stream");
+
     // Small GEMMs (256x384x128) don't benefit from multi-threaded BLAS.
     // Thread coordination overhead dominates. macOS 15+ per-thread setting.
     if (__builtin_available(macOS 15.0, *)) {
@@ -296,7 +301,8 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
     EnvBuf& env = pufferl->env;
     int block_size = pufferl->vec->total_agents / hypers.num_buffers;
     int start = buf * block_size;
-    cudaStream_t stream = (cudaStream_t)mtl_stream();
+    cudaStream_t stream = tl_rollout_stream;
+    assert(stream && "rollout callback requires thread-local stream");
 
     uint64_t tp0 = mach_absolute_time();
 
@@ -339,56 +345,47 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
     uint32_t* buf_rng_offset = (uint32_t*)((int64_t*)pufferl->rng_offset_puf.bytes + buf);
     uint64_t buf_rng_seed = pufferl->rng_seed + buf;
 
-    PufTensor dec_puf = {};
-    float* act_f32 = nullptr;
-    {
-        std::lock_guard<std::mutex> gpu_guard(g_rollout_gpu_mutex);
-        puf_set_gpu_training(true);
-        PufTensor state_puf = pufferl->buffer_states[buf];
-        PolicyWeights& infer_weights = pufferl->overlap_enabled
-            ? pufferl->weights_infer : pufferl->weights_fp32;
-        Policy* p = pufferl->policy;
-        PolicyActivations& acts = pufferl->buffer_activations[buf];
+    PufTensor state_puf = pufferl->buffer_states[buf];
+    PolicyWeights& infer_weights = pufferl->overlap_enabled
+        ? pufferl->weights_infer : pufferl->weights_fp32;
+    Policy* p = pufferl->policy;
+    PolicyActivations& acts = pufferl->buffer_activations[buf];
+    PufTensor& act_f32_buf = pufferl->sample_act_f32_buffers[buf];
 
-        // When fused encoder+layer0 is available, skip encoder and pass obs
-        // directly to mingru (layer0 uses fused weight: obs @ fused^T → combined).
-        MinGRUWeights *mw = (MinGRUWeights *)infer_weights.network;
-        PufTensor mingru_input = mw->fused_enc_layer0.bytes
-            ? obs_dst
-            : p->encoder.forward(infer_weights.encoder, acts.encoder, obs_dst, stream);
-        PufTensor h = p->network.forward(infer_weights.network, mingru_input, state_puf, acts.network, stream);
-        dec_puf = p->decoder.forward(infer_weights.decoder, acts.decoder, h, stream);
+    // When fused encoder+layer0 is available, skip encoder and pass obs
+    // directly to mingru (layer0 uses fused weight: obs @ fused^T → combined).
+    MinGRUWeights *mw = (MinGRUWeights *)infer_weights.network;
+    PufTensor mingru_input = mw->fused_enc_layer0.bytes
+        ? obs_dst
+        : p->encoder.forward(infer_weights.encoder, acts.encoder, obs_dst, stream);
+    PufTensor h = p->network.forward(infer_weights.network, mingru_input, state_puf, acts.network, stream);
+    PufTensor dec_puf = p->decoder.forward(infer_weights.decoder, acts.decoder, h, stream);
 
-        // GPU sampling: dispatch on same command buffer, before sync.
-        // Action mask: if env embeds mask in obs, read from last act_n columns.
-        // Otherwise use all-ones fallback with stride=0 (no masking).
-        int obs_cols = (int)obs_dst.shape[1];
-        int fused_cols = (int)dec_puf.shape[1];
-        const float* mask_ptr;
-        int mask_stride;
-        if (pufferl->has_mask) {
-            int mask_offset = obs_cols - (fused_cols - 1);  // e.g. 373 - 39 = 334
-            mask_ptr = (const float*)obs_dst.bytes + mask_offset;
-            mask_stride = obs_cols;
-        } else {
-            mask_ptr = (const float*)pufferl->ones_mask.bytes;
-            mask_stride = 0;  // all rows read same act_n ones
-        }
-
-        act_f32 = mtl_sample_logits_dispatch(
-            dec_puf, pufferl->act_sizes_puf,
-            (float*)lp_slice.bytes, (float*)val_slice.bytes,
-            mask_ptr, mask_stride,
-            buf_rng_seed, buf_rng_offset, stream);
-
-        ensure_gpu_synced(stream);
-
-        // Expand f32 GPU actions to f64 INSIDE the mutex — g_sample_act_f32 is
-        // a shared buffer that the next thread's GPU dispatch will overwrite.
-        mtl_sample_logits_expand(act_f32, (double*)act_slice.bytes, block_size * num_atns);
-
-        puf_set_gpu_training(false);
+    // GPU sampling: dispatch on same command buffer, before sync.
+    // Action mask: if env embeds mask in obs, read from last act_n columns.
+    // Otherwise use all-ones fallback with stride=0 (no masking).
+    int obs_cols = (int)obs_dst.shape[1];
+    int fused_cols = (int)dec_puf.shape[1];
+    const float* mask_ptr;
+    int mask_stride;
+    if (pufferl->has_mask) {
+        int mask_offset = obs_cols - (fused_cols - 1);  // e.g. 373 - 39 = 334
+        mask_ptr = (const float*)obs_dst.bytes + mask_offset;
+        mask_stride = obs_cols;
+    } else {
+        mask_ptr = (const float*)pufferl->ones_mask.bytes;
+        mask_stride = 0;  // all rows read same act_n ones
     }
+
+    mtl_sample_logits_dispatch_to(
+        dec_puf, pufferl->act_sizes_puf,
+        (float*)act_f32_buf.bytes, (float*)lp_slice.bytes, (float*)val_slice.bytes,
+        mask_ptr, mask_stride,
+        buf_rng_seed, buf_rng_offset, stream);
+
+    ensure_gpu_synced(stream);
+    mtl_sample_logits_expand((const float*)act_f32_buf.bytes,
+                             (double*)act_slice.bytes, block_size * num_atns);
 
     // Zero RNN state for agents that terminated this step.
     // After sync: terminals (CPU memcpy) and buffer_states (GPU write) are both visible.
@@ -420,11 +417,14 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
 
     uint64_t tp4 = mach_absolute_time();
 
-    // Accumulate fine-grained rollout timing
-    pufferl->profile.accum[PROF_ROLLOUT_OBS_COPY] += prof_ms(tp0, tp1);
-    pufferl->profile.accum[PROF_ROLLOUT_FWD] += prof_ms(tp1, tp2);
-    pufferl->profile.accum[PROF_ROLLOUT_SAMPLE] += prof_ms(tp2, tp3);
-    pufferl->profile.accum[PROF_ROLLOUT_ACT_COPY] += prof_ms(tp3, tp4);
+    // Accumulate fine-grained rollout timing (callbacks run concurrently).
+    {
+        std::lock_guard<std::mutex> lk(g_rollout_profile_mutex);
+        pufferl->profile.accum[PROF_ROLLOUT_OBS_COPY] += prof_ms(tp0, tp1);
+        pufferl->profile.accum[PROF_ROLLOUT_FWD] += prof_ms(tp1, tp2);
+        pufferl->profile.accum[PROF_ROLLOUT_SAMPLE] += prof_ms(tp2, tp3);
+        pufferl->profile.accum[PROF_ROLLOUT_ACT_COPY] += prof_ms(tp3, tp4);
+    }
   } // @autoreleasepool
 }
 
@@ -883,7 +883,8 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     int minibatch_segments = hypers.minibatch_size / hypers.horizon;
     int inf_batch = vec->total_agents / hypers.num_buffers;
 
-    // Pre-allocate GPU sampling buffer (f32 actions, one per buffer batch)
+    // Legacy global sampling init is a no-op on Metal; rollout uses per-buffer
+    // scratch buffers registered below.
     mtl_sample_logits_init(inf_batch, num_action_heads);
 
     // ========================================================================
@@ -1115,9 +1116,12 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
 
     // Per-buffer RNN states
     pufferl->buffer_states.resize(num_buffers);
+    pufferl->sample_act_f32_buffers.resize(num_buffers);
     for (int i = 0; i < num_buffers; i++) {
         pufferl->buffer_states[i] = {.shape = {num_layers, batch, hidden_size}, .dtype_size = p};
         alloc.reg(&pufferl->buffer_states[i]);
+        pufferl->sample_act_f32_buffers[i] = {.shape = {batch, num_action_heads}, .dtype_size = (int)sizeof(float)};
+        alloc.reg(&pufferl->sample_act_f32_buffers[i]);
     }
 
     // Rollout buffers (horizon, total_agents, ...)
@@ -1213,7 +1217,15 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
 
     // No CUDA graph warmup on Metal (cudagraphs always -1)
 
-    // Create threads for vecenv — thread_init sets BLAS single-threading
+    // Create per-buffer Metal streams for rollout callback workers.
+    pufferl->rollout_streams.resize(num_buffers);
+    for (int i = 0; i < num_buffers; i++) {
+        cudaStream_t s = (cudaStream_t)mtl_create_stream();
+        pufferl->rollout_streams[i] = s;
+        vec->streams[i] = s;
+    }
+
+    // Create threads for vecenv — thread_init binds per-thread rollout stream
     create_static_threads(vec, hypers.num_threads, horizon, pufferl.get(),
         net_callback_wrapper, thread_init_metal);
     static_vec_reset(vec);
@@ -1270,6 +1282,15 @@ void close_impl(PuffeRL& pufferl) {
     }
     delete pufferl.policy;
 
+    fprintf(stderr, "[metal] close: closing vec env\n");
+    static_vec_close(pufferl.vec);
+
+    fprintf(stderr, "[metal] close: destroying rollout streams\n");
+    for (cudaStream_t s : pufferl.rollout_streams) {
+        mtl_destroy_stream((void*)s);
+    }
+    pufferl.rollout_streams.clear();
+
     // Release MTLBuffers BEFORE freeing the underlying memory they reference.
     // MTLBuffers created with newBufferWithBytesNoCopy need their backing pages
     // still mapped when ARC releases them (Metal unmaps the GPU address space).
@@ -1286,7 +1307,5 @@ void close_impl(PuffeRL& pufferl) {
         a.destroy();
     }
 
-    fprintf(stderr, "[metal] close: closing vec env\n");
-    static_vec_close(pufferl.vec);
     fprintf(stderr, "[metal] close: done\n");
 }

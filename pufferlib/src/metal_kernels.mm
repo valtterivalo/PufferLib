@@ -888,42 +888,14 @@ void mtl_fused_scan_backward_fp16(PrefixScan &scan, const void *grad,
 // Sample logits kernel
 // ============================================================================
 
-// Pre-allocate the f32 action buffer for GPU sampling (MSL has no double).
-// Call once at init when B and num_atns are known.
-static float *g_sample_act_f32 = nullptr;
-static int g_sample_act_f32_cap = 0;
-
-void mtl_sample_logits_init(int B, int num_atns) {
-  int needed = B * num_atns;
-  if (g_sample_act_f32 && needed <= g_sample_act_f32_cap) return;
-  if (g_sample_act_f32) {
-    mtl_unwrap_ptr(g_sample_act_f32);
-    free(g_sample_act_f32);
-  }
-  g_sample_act_f32_cap = needed;
-  int64_t alloc_bytes = needed * sizeof(float);
-  int64_t page = 16384;
-  alloc_bytes = (alloc_bytes + page - 1) & ~(page - 1);
-  posix_memalign((void **)&g_sample_act_f32, page, alloc_bytes);
-  memset(g_sample_act_f32, 0, alloc_bytes);
-  id<MTLBuffer> buf = [mtl_ctx()->device
-      newBufferWithBytesNoCopy:g_sample_act_f32
-                        length:alloc_bytes
-                       options:MTLResourceStorageModeShared
-                   deallocator:nil];
-  assert(buf);
-  mtl_ctx()->buffers.push_back({(char *)g_sample_act_f32, alloc_bytes, buf});
-  [mtl_ctx()->residency_set addAllocation:buf];
-  [mtl_ctx()->residency_set commit];
-  [mtl_ctx()->residency_set requestResidency];
-}
+void mtl_sample_logits_init(int /*B*/, int /*num_atns*/) {}
 
 // Dispatch GPU sampling kernel on the current command buffer (no sync).
 // Call BEFORE ensure_gpu_synced so sampling runs in the same command buffer
-// as the forward pass. Returns the f32 action buffer pointer for post-sync expansion.
-float* mtl_sample_logits_dispatch(
+// as the forward pass.
+void mtl_sample_logits_dispatch_to(
     PufTensor &dec_out, PufTensor &act_sizes_puf,
-    float *logprobs, float *value_out,
+    float *action_out_f32, float *logprobs, float *value_out,
     const float *action_mask, int mask_stride,
     uint64_t seed, uint32_t *offset_ptr, cudaStream_t stream) {
 
@@ -932,14 +904,14 @@ float* mtl_sample_logits_dispatch(
   int num_atns = (int)act_sizes_puf.numel();
   int A_total = fused_cols - 1;
 
-  assert(g_sample_act_f32 && B * num_atns <= g_sample_act_f32_cap);
+  assert(action_out_f32 && "sampling destination buffer must be allocated");
 
   MetalStream *ms = mtl_get_stream(stream);
   ms->compute_encoder();
   auto pso = mtl_pipeline("sample_logits_kernel");
   mtl_set_pso(ms, pso);
 
-  mtl_set_ptr(ms, g_sample_act_f32, 0);
+  mtl_set_ptr(ms, action_out_f32, 0);
   mtl_set_ptr(ms, logprobs, 1);
   mtl_set_ptr(ms, value_out, 2);
   mtl_set_ptr(ms, dec_out.bytes, 3);
@@ -966,7 +938,6 @@ float* mtl_sample_logits_dispatch(
   mtl_set_ptr(ms, (void *)action_mask, 9);
 
   mtl_dispatch_1d(ms, pso, B);
-  return g_sample_act_f32;
 }
 
 // Expand f32 GPU actions to f64 (call after ensure_gpu_synced).
@@ -2491,12 +2462,6 @@ void mtl_kernels_reset() {
     mtl_unwrap_ptr(norm_partials_buf);
     free(norm_partials_buf);
     norm_partials_buf = nullptr;
-  }
-  if (g_sample_act_f32) {
-    mtl_unwrap_ptr(g_sample_act_f32);
-    free(g_sample_act_f32);
-    g_sample_act_f32 = nullptr;
-    g_sample_act_f32_cap = 0;
   }
   if (ppo_partials_buf) {
     mtl_unwrap_ptr(ppo_partials_buf);

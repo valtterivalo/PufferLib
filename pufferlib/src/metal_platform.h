@@ -24,6 +24,7 @@
 
 #include "puf_types.h"
 #include <cassert>
+#include <atomic>
 #include <vector>
 
 // ============================================================================
@@ -111,7 +112,7 @@ struct MetalContext {
   id<MTL4CommandQueue> train_queue;  // training queue (async overlap)
   id<MTLResidencySet> residency_set;  // all wrapped buffers for GPU address access
   id<MTLSharedEvent> sync_event;      // CPU-GPU synchronization
-  uint64_t sync_event_value = 0;      // monotonically increasing signal counter
+  std::atomic<uint64_t> sync_event_value{0};      // monotonically increasing signal counter
 
   MetalStream stream;       // default stream (rollout)
   MetalStream train_stream; // training stream (separate queue for overlap)
@@ -133,6 +134,10 @@ void *mtl_stream();
 
 // Training stream (separate command queue for async overlap with rollout).
 void *mtl_train_stream();
+
+// Create/destroy additional rollout streams (one per vecenv buffer thread).
+void *mtl_create_stream();
+void mtl_destroy_stream(void *stream);
 
 // Tear down Metal context.
 void mtl_destroy();

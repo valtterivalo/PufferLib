@@ -58,14 +58,22 @@ note:
 
 ## march 2026 update (current investigation)
 - upstream `static-native` moved from `6a4646ff` to `0a479a58` (`git fetch upstream static-native`).
-- metal now mirrors one additional cuda behavior: recurrent rollout state is reset at rollout boundaries.
+- metal no longer resets recurrent rollout state at rollout boundaries (cuda parity).
 
 observed bottlenecks:
 - `num_buffers=8` reduces inference batch size from `4096` to `512` and increases rollout callback count from `64` to `512` per iteration.
-- metal rollout callback currently serializes gpu work through a global mutex + per-callback sync on a single stream, so `num_threads=8` does not translate to 8-way gpu concurrency.
-- this explains the large sps drop (`~2.4m` with `num_buffers=1` vs `~0.8m` with `num_buffers=8` on m4 pro for these runs).
+- per-callback sync is still required before env step consumes actions, but rollout now runs on per-buffer metal streams with per-buffer sampling scratch (global rollout gpu mutex removed).
+- this raised throughput in the `num_buffers=8` tuned run from roughly `~0.82m` to `~1.00m` SPS on m4 pro.
 
 important parity caveat:
 - cuda can recompute priority sampling every minibatch fully on gpu.
 - current metal prio path still builds cdf on cpu (`prio_precompute` sync), so forcing full per-minibatch cuda parity on metal causes heavy stalls and learning regression.
 - root-cause follow-up should be a full gpu prio sampler on metal (to remove cpu cdf sync), then re-test per-minibatch parity.
+
+latest local checkpoints:
+- `num_buffers=1`, `num_threads=1`, 10M-step sanity run:
+  - avg SPS: `~1.14m`
+  - score: `~0.82` at 9.17M steps
+- `num_buffers=8`, `num_threads=8`, tuned 10M-step run:
+  - avg SPS: `~1.00m`
+  - score: `~5.43` at 9.17M steps

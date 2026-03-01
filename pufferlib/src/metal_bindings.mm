@@ -76,14 +76,10 @@ void rollouts(pybind11::object pufferl_obj) {
         sync_fused_weight(pufferl);
     }
 
-    // Match static-native CUDA semantics: reset recurrent state at rollout
-    // boundary so each rollout chunk starts from zero state.
-    for (PufTensor& state : pufferl.buffer_states) {
-        memset(state.bytes, 0, state.numel() * state.dtype_size);
-    }
-
     auto t0 = std::chrono::high_resolution_clock::now();
+    puf_set_gpu_training(true);
     static_vec_omp_step(pufferl.vec);
+    puf_set_gpu_training(false);
     float sec = std::chrono::duration<float>(
         std::chrono::high_resolution_clock::now() - t0).count();
     pufferl.profile.accum[PROF_ROLLOUT] += sec * 1000.0f;

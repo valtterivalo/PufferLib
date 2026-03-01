@@ -18,8 +18,10 @@
 #include "metal_shader_src.h"
 
 #include <cassert>
+#include <atomic>
 #include <cstdio>
 #include <cstring>
+#include <mutex>
 
 // ============================================================================
 // Global singleton
@@ -27,6 +29,7 @@
 
 static MetalContext g_ctx = {};
 static bool g_no_tensor_ops = false; // cached getenv("PUFFERLIB_NO_TENSOR_OPS")
+static std::mutex g_pipeline_mutex;
 
 // ============================================================================
 // Metal 4 tensor_ops GEMM — MSL source for JIT compilation.
@@ -307,7 +310,7 @@ void MetalStream::sync() {
   MetalContext *ctx = mtl_ctx();
   uint64_t t0 = mach_absolute_time();
   [cmd endCommandBuffer];
-  uint64_t val = ++ctx->sync_event_value;
+  uint64_t val = ctx->sync_event_value.fetch_add(1, std::memory_order_relaxed) + 1;
   id<MTL4CommandBuffer> bufs[] = { cmd };
   id<MTL4CommandQueue> q =
       (this == &ctx->train_stream) ? ctx->train_queue : ctx->queue;
@@ -350,7 +353,7 @@ void MetalStream::flush() {
     id<MTL4CommandQueue> q =
         (this == &ctx->train_stream) ? ctx->train_queue : ctx->queue;
     // Signal event value for wait_completed().
-    flush_event_val = ++ctx->sync_event_value;
+    flush_event_val = ctx->sync_event_value.fetch_add(1, std::memory_order_relaxed) + 1;
     [q commit:bufs count:1];
     [q signalEvent:ctx->sync_event value:flush_event_val];
     flushed = true;
@@ -606,6 +609,45 @@ void *mtl_stream() { return &g_ctx.stream; }
 
 void *mtl_train_stream() { return &g_ctx.train_stream; }
 
+void *mtl_create_stream() {
+  MetalStream *ms = new MetalStream{};
+  ms->allocator = [g_ctx.device newCommandAllocator];
+  ms->cmd = [g_ctx.device newCommandBuffer];
+  assert(ms->allocator && ms->cmd && "Failed to create Metal stream allocator/cmd");
+
+  MTL4ArgumentTableDescriptor *atd = [MTL4ArgumentTableDescriptor new];
+  atd.maxBufferBindCount = 31;
+  NSError *at_err = nil;
+  ms->arg_table = [g_ctx.device newArgumentTableWithDescriptor:atd error:&at_err];
+  assert(ms->arg_table && "Failed to create Metal stream argument table");
+
+  ms->const_ring = [g_ctx.device newBufferWithLength:MTL_CONST_RING_SIZE
+                                             options:MTLResourceStorageModeShared];
+  assert(ms->const_ring && "Failed to create Metal stream constants ring");
+  [g_ctx.residency_set addAllocation:ms->const_ring];
+  [g_ctx.residency_set commit];
+  [g_ctx.residency_set requestResidency];
+
+  ms->begin();
+  return ms;
+}
+
+void mtl_destroy_stream(void *stream) {
+  if (!stream) return;
+  MetalStream *ms = (MetalStream *)stream;
+  if (ms->flushed) {
+    ms->wait_completed();
+  } else if (ms->enc_active || ms->pending_work) {
+    ms->sync();
+  }
+  ms->arg_table = nil;
+  ms->cmd = nil;
+  ms->allocator = nil;
+  ms->enc = nil;
+  ms->const_ring = nil;
+  delete ms;
+}
+
 void mtl_destroy() {
   fprintf(stderr, "[metal] destroy: starting teardown\n");
 
@@ -705,6 +747,7 @@ id<MTLBuffer> mtl_buffer_for(const PufTensor &t, NSUInteger *out_offset) {
 // ============================================================================
 
 id<MTLComputePipelineState> mtl_pipeline(const char *name) {
+  std::lock_guard<std::mutex> lock(g_pipeline_mutex);
   NSString *key = [NSString stringWithUTF8String:name];
   id<MTLComputePipelineState> pso = g_ctx.pipelines[key];
   if (pso)
@@ -744,9 +787,9 @@ static inline void ensure_gpu_synced(cudaStream_t s) {
 
 // GPU training mode — when true, puf_mm forces GPU GEMM to avoid ensure_gpu_synced.
 // Set by train_impl to keep all training ops on the GPU encoder chain.
-static bool g_gpu_training = false;
-void puf_set_gpu_training(bool val) { g_gpu_training = val; }
-bool puf_is_gpu_training() { return g_gpu_training; }
+static std::atomic_bool g_gpu_training = false;
+void puf_set_gpu_training(bool val) { g_gpu_training.store(val, std::memory_order_release); }
+bool puf_is_gpu_training() { return g_gpu_training.load(std::memory_order_acquire); }
 
 bool puf_stream_has_encoder(cudaStream_t stream) {
   MetalStream *ms = get_stream(stream);
@@ -1384,7 +1427,9 @@ int cudaStreamSynchronize(void * /*stream*/) {
   return 0;
 }
 
-int cudaStreamCreateWithFlags(void ** /*stream*/, unsigned int /*flags*/) {
+int cudaStreamCreateWithFlags(void **stream, unsigned int /*flags*/) {
+  assert(stream && "cudaStreamCreateWithFlags expects a non-null stream pointer");
+  *stream = mtl_create_stream();
   return 0;
 }
 
