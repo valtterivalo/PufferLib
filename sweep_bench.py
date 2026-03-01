@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 import time
 from copy import deepcopy
@@ -28,6 +29,12 @@ from bench import ENV_DEFAULTS
 from pufferlib import _C
 from pufferlib.pufferl import downsample
 from pufferlib.sweep import Protein, pareto_points, prune_pareto_front
+
+# Keep logs live when piping through tee (stdout is block-buffered otherwise).
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(line_buffering=True, write_through=True)
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(line_buffering=True, write_through=True)
 
 SWEEP_DIR_BASE = Path("runs/sweep_bench")
 DOWNSAMPLE_POINTS = 5
@@ -43,14 +50,14 @@ SWEEP_CONFIG = {
     "downsample": DOWNSAMPLE_POINTS,
     "use_gpu": False,
     "prune_pareto": True,
-    "max_suggestion_cost": 3600,  # 1 hour max per trial (aligned with upstream)
+    "max_suggestion_cost": 1800,  # keep suggestions in the short-run sweep budget
     "early_stop_quantile": 0.3,
 
     "train": {
         "total_timesteps": {
             "distribution": "log_normal",
-            "min": 30_000_000,
-            "max": 10_000_000_000,
+            "min": 60_000_000,
+            "max": 140_000_000,
             "scale": "time",
         },
         "horizon": {
@@ -61,94 +68,136 @@ SWEEP_CONFIG = {
         },
         "learning_rate": {
             "distribution": "log_normal",
-            "min": 0.00001,
-            "max": 0.1,
+            "min": 0.02,
+            "max": 0.2,
             "scale": 0.5,
+        },
+        "beta1": {
+            "distribution": "uniform",
+            "min": 0.65,
+            "max": 0.9,
+            "scale": "auto",
+        },
+        "beta2": {
+            "distribution": "logit_normal",
+            "min": 0.995,
+            "max": 0.9999,
+            "scale": "auto",
+        },
+        "eps": {
+            "distribution": "log_normal",
+            "min": 1e-5,
+            "max": 3e-4,
+            "scale": "auto",
         },
         "ent_coef": {
             "distribution": "log_normal",
-            "min": 0.00001,
-            "max": 0.2,
+            "min": 0.001,
+            "max": 0.01,
             "scale": "auto",
         },
         "gamma": {
             "distribution": "logit_normal",
-            "min": 0.8,
-            "max": 0.9999,
+            "min": 0.96,
+            "max": 0.995,
             "scale": "auto",
         },
         "gae_lambda": {
             "distribution": "logit_normal",
-            "min": 0.2,
-            "max": 0.995,
+            "min": 0.9,
+            "max": 0.99,
+            "scale": "auto",
+        },
+        "vtrace_rho_clip": {
+            "distribution": "uniform",
+            "min": 1.0,
+            "max": 3.0,
+            "scale": "auto",
+        },
+        "vtrace_c_clip": {
+            "distribution": "uniform",
+            "min": 1.0,
+            "max": 2.0,
             "scale": "auto",
         },
         "prio_alpha": {
             "distribution": "logit_normal",
-            "min": 0.1,
-            "max": 0.99,
+            "min": 0.05,
+            "max": 0.95,
             "scale": "auto",
         },
         "prio_beta0": {
             "distribution": "logit_normal",
-            "min": 0.1,
-            "max": 0.99,
+            "min": 0.6,
+            "max": 0.95,
             "scale": "auto",
         },
         "clip_coef": {
             "distribution": "uniform",
-            "min": 0.01,
-            "max": 1.0,
+            "min": 0.4,
+            "max": 0.85,
             "scale": "auto",
         },
         "vf_coef": {
             "distribution": "uniform",
-            "min": 0.1,
-            "max": 5.0,
+            "min": 0.8,
+            "max": 2.5,
             "scale": "auto",
         },
         "vf_clip_coef": {
             "distribution": "uniform",
-            "min": 0.01,
-            "max": 5.0,
+            "min": 0.6,
+            "max": 2.0,
             "scale": "auto",
         },
         "max_grad_norm": {
             "distribution": "uniform",
-            "min": 0.1,
-            "max": 5.0,
+            "min": 0.8,
+            "max": 2.5,
             "scale": "auto",
         },
         "replay_ratio": {
             "distribution": "uniform",
-            "min": 0.25,
-            "max": 4.0,
+            "min": 0.8,
+            "max": 2.2,
             "scale": "auto",
         },
         "minibatch_size": {
             "distribution": "uniform_pow2",
-            "min": 4096,
+            "min": 16384,
             "max": 65536,
             "scale": "auto",
         },
         "total_agents": {
             "distribution": "uniform_pow2",
-            "min": 256,
-            "max": 16384,
+            "min": 2048,
+            "max": 4096,
+            "scale": "auto",
+        },
+        "num_buffers": {
+            "distribution": "uniform_pow2",
+            "min": 4,
+            "max": 8,
+            "scale": "auto",
+        },
+        "num_threads": {
+            "distribution": "uniform_pow2",
+            "min": 4,
+            "max": 8,
             "scale": "auto",
         },
     },
     "policy": {
         "hidden_size": {
             "distribution": "uniform_pow2",
-            "min": 32,
-            "max": 1024,
+            "min": 64,
+            "max": 128,
             "scale": "auto",
         },
         "num_layers": {
             "distribution": "uniform",
             "min": 1,
-            "max": 8,
+            "max": 2.5,
             "scale": "auto",
         },
     },
@@ -156,34 +205,41 @@ SWEEP_CONFIG = {
         "optimizer_idx": {
             "distribution": "uniform",
             "min": 0.0,
-            "max": 1.0,
+            "max": 0.2,
             "scale": "auto",
         },
     },
 }
 
-# defaults aligned with upstream static-native config/default.ini
+# defaults from bench.py — known working Breakout params
 DEFAULT_PARAMS = {
     "train": {
         "total_timesteps": 100_000_000,
         "horizon": 64,
-        "learning_rate": 0.015,
-        "ent_coef": 0.001,
-        "gamma": 0.995,
-        "gae_lambda": 0.90,
-        "prio_alpha": 0.8,
-        "prio_beta0": 0.2,
-        "clip_coef": 0.2,
-        "vf_coef": 2.0,
-        "vf_clip_coef": 0.2,
-        "max_grad_norm": 1.5,
-        "replay_ratio": 1.0,
-        "minibatch_size": 8192,
+        "learning_rate": 0.1,
+        "beta1": 0.7279714073125252,
+        "beta2": 0.9986265112492152,
+        "eps": 0.00008339460257113628,
+        "ent_coef": 0.0033240721522812535,
+        "gamma": 0.9721246598992744,
+        "gae_lambda": 0.948721675814334,
+        "vtrace_rho_clip": 2.1017317041552603,
+        "vtrace_c_clip": 1.0830442742115065,
+        "prio_alpha": 0.1,
+        "prio_beta0": 0.8247156461060179,
+        "clip_coef": 0.6746497927896418,
+        "vf_coef": 1.2195502588297364,
+        "vf_clip_coef": 1.2291681640124468,
+        "max_grad_norm": 1.8109182724544075,
+        "replay_ratio": 1.4242098997083206,
+        "minibatch_size": 65536,
         "total_agents": 4096,
+        "num_buffers": 8,
+        "num_threads": 8,
     },
     "policy": {
-        "hidden_size": 128,
-        "num_layers": 4,
+        "hidden_size": 64,
+        "num_layers": 2,
     },
     "optim": {
         "optimizer_idx": 0.0,
@@ -207,12 +263,12 @@ def build_configs(
 
     config = {
         "horizon": int(train.get("horizon", 64)),
-        "learning_rate": train.get("learning_rate", 0.015),
+        "learning_rate": train.get("learning_rate", 0.1),
         "min_lr_ratio": 0.1,
         "anneal_lr": 1.0,
-        "beta1": 0.95,
-        "beta2": 0.999,
-        "eps": 1e-12,
+        "beta1": train.get("beta1", 0.73),
+        "beta2": train.get("beta2", 0.9986),
+        "eps": train.get("eps", 8.3e-5),
         "minibatch_size": int(train.get("minibatch_size", 8192)),
         "replay_ratio": train.get("replay_ratio", 1.0),
         "total_timesteps": int(train.get("total_timesteps", 100_000_000)),
@@ -223,8 +279,8 @@ def build_configs(
         "ent_coef": train.get("ent_coef", 0.001),
         "gamma": train.get("gamma", 0.995),
         "gae_lambda": train.get("gae_lambda", 0.90),
-        "vtrace_rho_clip": 1.0,
-        "vtrace_c_clip": 1.0,
+        "vtrace_rho_clip": train.get("vtrace_rho_clip", 2.0),
+        "vtrace_c_clip": train.get("vtrace_c_clip", 1.1),
         "prio_alpha": train.get("prio_alpha", 0.8),
         "prio_beta0": train.get("prio_beta0", 0.2),
         "use_rnn": 1.0,
@@ -237,8 +293,8 @@ def build_configs(
     }
     vec_config = {
         "total_agents": float(int(train.get("total_agents", 4096))),
-        "num_buffers": 2.0,
-        "num_threads": 4.0,
+        "num_buffers": float(int(train.get("num_buffers", 1))),
+        "num_threads": float(int(train.get("num_threads", 1))),
     }
     policy_config = {
         "hidden_size": float(int(policy.get("hidden_size", 128))),
@@ -274,6 +330,7 @@ def clamp_params(params: dict) -> None:
     """Enforce cross-parameter constraints."""
     train = params.get("train", {})
     policy = params.get("policy", {})
+    optimizer = decode_optimizer(params)
 
     hidden = int(policy.get("hidden_size", 128))
     layers = int(policy.get("num_layers", 1))
@@ -300,6 +357,28 @@ def clamp_params(params: dict) -> None:
     effective_mb = int(replay * batch_size / max(minibatch, 1))
     if effective_mb > 32:
         train["replay_ratio"] = 32 * minibatch / max(batch_size, 1)
+
+    # Keep sampled values in a known-stable regime for current Metal Breakout.
+    train["learning_rate"] = min(max(float(train.get("learning_rate", 0.1)), 0.01), 0.3)
+    train["beta1"] = min(max(float(train.get("beta1", 0.73)), 0.6), 0.95)
+    train["beta2"] = min(max(float(train.get("beta2", 0.9986)), 0.99), 0.99995)
+    train["eps"] = min(max(float(train.get("eps", 8.3e-5)), 1e-6), 1e-3)
+    train["ent_coef"] = min(max(float(train.get("ent_coef", 0.0033)), 1e-4), 0.05)
+    train["gamma"] = min(max(float(train.get("gamma", 0.972)), 0.94), 0.9995)
+    train["gae_lambda"] = min(max(float(train.get("gae_lambda", 0.949)), 0.85), 0.995)
+    train["vtrace_rho_clip"] = min(max(float(train.get("vtrace_rho_clip", 2.1)), 1.0), 4.0)
+    train["vtrace_c_clip"] = min(max(float(train.get("vtrace_c_clip", 1.08)), 1.0), 3.0)
+    train["clip_coef"] = min(max(float(train.get("clip_coef", 0.67)), 0.1), 0.95)
+    train["vf_coef"] = min(max(float(train.get("vf_coef", 1.22)), 0.1), 5.0)
+    train["vf_clip_coef"] = min(max(float(train.get("vf_clip_coef", 1.23)), 0.1), 5.0)
+    train["max_grad_norm"] = min(max(float(train.get("max_grad_norm", 1.81)), 0.1), 10.0)
+    train["replay_ratio"] = min(max(float(train.get("replay_ratio", 1.4)), 0.1), 4.0)
+
+    if optimizer == "adam":
+        train["learning_rate"] = min(float(train.get("learning_rate", 0.003)), 0.02)
+        train["replay_ratio"] = min(float(train.get("replay_ratio", 1.0)), 2.0)
+    else:
+        train["learning_rate"] = min(float(train.get("learning_rate", 0.1)), 0.3)
 
 
 def run_trial(
@@ -365,6 +444,13 @@ def run_trial(
 
                 losses = _C.log_losses(pufferl)
                 env_stats = _C.log_environments(pufferl)
+                for loss_name in ("entropy", "pg_loss", "vf_loss"):
+                    loss_value = losses.get(loss_name)
+                    if loss_value is None or not math.isfinite(float(loss_value)):
+                        raise RuntimeError(
+                            f"invalid loss metric {loss_name}={loss_value} "
+                            f"at step={global_step}"
+                        )
 
                 score = env_stats.get("score", env_stats.get("episode_return", 0))
                 ep_ret = env_stats.get("episode_return", 0)
@@ -510,7 +596,7 @@ def print_results(obs_path: Path) -> None:
         print(f"  wall: {best['cost']:.0f}s")
         print(f"  optimizer: {best.get('optimizer', 'muon')}")
         flat = dict(pufferlib.unroll_nested_dict(best["params"]))
-        print(f"\n  hyperparameters:")
+        print("\n  hyperparameters:")
         for key, value in sorted(flat.items()):
             short_key = key.split("/")[-1]
             fmt = f"{value:.6f}" if isinstance(value, float) else str(value)
@@ -536,7 +622,7 @@ def print_results(obs_path: Path) -> None:
             )
 
     by_score = sorted(trial_summaries, key=lambda t: t["score"], reverse=True)
-    print(f"\ntop 15 by score:")
+    print("\ntop 15 by score:")
     for t in by_score[:15]:
         flat = dict(pufferlib.unroll_nested_dict(t["params"]))
         hz = int(flat.get("train/horizon", 0))
@@ -582,7 +668,7 @@ def run_sweep(env_name: str, max_trials: int | None, timeout_h: float) -> None:
     )))
 
     print(f"protein sweep ({env_name}, metal, in-process)")
-    print(f"  metric: score (linear distribution)")
+    print("  metric: score (linear distribution)")
     print(f"  {n_params} searchable hyperparameters")
     print(f"  timeout: {timeout_h:.1f}h")
     print(f"  max trials: {max_trials or 'unlimited'}")

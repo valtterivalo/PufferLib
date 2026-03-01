@@ -137,6 +137,8 @@ typedef struct {
     int arch_type;  // 0=ARCH_RICH (3-layer MLP + LN decoder), 1=ARCH_SIMPLE (upstream single-linear)
     // Threading
     int num_threads;
+    // RNG seed
+    uint64_t seed;
 } HypersT;
 
 // ============================================================================
@@ -825,8 +827,7 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     fprintf(stderr, "[metal] init: Metal ready\n");
 
     // Seed
-    int seed = 42;
-    pufferl->rng_seed = seed;
+    pufferl->rng_seed = hypers.seed;
 
     fprintf(stderr, "[metal] init: creating environments (agents=%d, buffers=%d)...\n",
         hypers.total_agents, hypers.num_buffers);
@@ -995,10 +996,10 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     // Init weights on fp32 master
     {
         cudaStream_t default_stream = (cudaStream_t)mtl_stream();
-        uint64_t seed = 42;
-        encoder.init_weights(wfp32.encoder, &seed, default_stream);
-        decoder.init_weights(wfp32.decoder, &seed, default_stream);
-        network.init_weights(wfp32.network, &seed, default_stream);
+        uint64_t init_seed = hypers.seed;
+        encoder.init_weights(wfp32.encoder, &init_seed, default_stream);
+        decoder.init_weights(wfp32.decoder, &init_seed, default_stream);
+        network.init_weights(wfp32.network, &init_seed, default_stream);
         ensure_gpu_synced(default_stream);
     }
 

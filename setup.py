@@ -312,9 +312,6 @@ class ProfileTorchBuildExt(build_ext):
 
         nvcc = cpp_ext._join_cuda_home("bin", "nvcc")
         arch = "-arch=sm_89"
-        lib_paths = cpp_ext.library_paths()
-        nvtx_lib_dir = os.path.join(cpp_ext.CUDA_HOME, "lib64")
-
         precision_flag = "-DPRECISION_FLOAT" if self.precision == "float" else ""
 
         # Step 1: Compile to object file
@@ -743,13 +740,36 @@ def _build_metal_C(static_lib=None, force=False):
                  "-framework", "CoreGraphics", "-framework", "CoreFoundation",
                  "-framework", "CoreVideo", "-framework", "CoreAudio",
                  "-framework", "AudioToolbox", "-framework", "UniformTypeIdentifiers"]
-    # OpenMP runtime for vecenv.h threading
-    import subprocess as _sp
+    # OpenMP runtime for vecenv.h threading.
+    #
+    # Prefer torch's bundled libomp when available so sweep_bench (which uses
+    # torch/gpytorch) and pufferlib._C share one OpenMP runtime in-process.
+    # Mixing Homebrew libomp + torch libomp has caused sweep-time segfaults.
+    omp_runtime = None
+    omp_source = None
     try:
-        omp_prefix = _sp.check_output(["brew", "--prefix", "libomp"], text=True).strip()
-        link_cmd += [f"-L{omp_prefix}/lib", "-lomp"]
+        import torch as _torch  # noqa: PLC0415
+
+        torch_lib_dir = os.path.join(os.path.dirname(_torch.__file__), "lib")
+        torch_omp = os.path.join(torch_lib_dir, "libomp.dylib")
+        if os.path.exists(torch_omp):
+            omp_runtime = torch_lib_dir
+            omp_source = "torch"
     except Exception:
         pass
+
+    if omp_runtime is None:
+        import subprocess as _sp  # noqa: PLC0415
+        try:
+            omp_prefix = _sp.check_output(["brew", "--prefix", "libomp"], text=True).strip()
+            omp_runtime = f"{omp_prefix}/lib"
+            omp_source = "homebrew"
+        except Exception:
+            omp_runtime = None
+
+    if omp_runtime is not None:
+        link_cmd += [f"-L{omp_runtime}", f"-Wl,-rpath,{omp_runtime}", "-lomp"]
+        print(f"Metal link: using OpenMP runtime from {omp_source}: {omp_runtime}/libomp.dylib")
     if DEBUG:
         link_cmd += ["-g"]
     else:
@@ -757,6 +777,29 @@ def _build_metal_C(static_lib=None, force=False):
     link_cmd += ["-o", output]
     print(f"link: {' '.join(link_cmd)}")
     subprocess.check_call(link_cmd)
+
+    # Normalize OpenMP linkage to @rpath so we don't pin _C to a different
+    # absolute libomp path than torch in the same process.
+    if omp_source == "torch":
+        omp_install_names = [
+            "/opt/homebrew/opt/libomp/lib/libomp.dylib",
+            "/usr/local/opt/libomp/lib/libomp.dylib",
+        ]
+        for install_name in omp_install_names:
+            try:
+                subprocess.check_call(
+                    [
+                        "install_name_tool",
+                        "-change",
+                        install_name,
+                        "@rpath/libomp.dylib",
+                        output,
+                    ]
+                )
+            except subprocess.CalledProcessError:
+                # No-op when the install name is not present in this binary.
+                pass
+
     print(f"Built: {output}")
 
 

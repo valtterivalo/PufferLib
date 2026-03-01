@@ -77,3 +77,47 @@ latest local checkpoints:
 - `num_buffers=8`, `num_threads=8`, tuned 10M-step run:
   - avg SPS: `~1.00m`
   - score: `~5.43` at 9.17M steps
+
+## march 2026 latest stable long run (100m, tuned muon config)
+command:
+```bash
+python bench.py --env breakout \
+  --total-agents 4096 \
+  --hidden-size 64 \
+  --num-layers 2 \
+  --horizon 64 \
+  --total-timesteps 100000000 \
+  --learning-rate 0.1 \
+  --beta1 0.7279714073125252 \
+  --beta2 0.9986265112492152 \
+  --eps 0.00008339460257113628 \
+  --minibatch-size 65536 \
+  --replay-ratio 1.4242098997083206 \
+  --ent-coef 0.0033240721522812535 \
+  --gamma 0.9721246598992744 \
+  --gae-lambda 0.948721675814334 \
+  --vtrace-rho-clip 2.1017317041552603 \
+  --vtrace-c-clip 1.0830442742115065 \
+  --prio-alpha 0.1 \
+  --prio-beta0 0.8247156461060179 \
+  --clip-coef 0.6746497927896418 \
+  --vf-coef 1.2195502588297364 \
+  --vf-clip-coef 1.2291681640124468 \
+  --max-grad-norm 1.8109182724544075 \
+  --num-buffers 8 \
+  --num-threads 8 \
+  --optimizer muon \
+  --log-interval 20
+```
+
+observed:
+- run completed `99,876,864` steps
+- avg SPS: `877,254`
+- final score: `~436.25`
+- final episode length: `~8759`
+- final entropy: `~0.703`
+- no NaN loss reporting, no hang/crash
+
+gap vs upstream screenshot:
+- still below upstream static-native reference (`score ~843` at ~100m).
+- current priorities remain: close learning gap first, then improve throughput.

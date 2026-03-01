@@ -8,6 +8,7 @@ Usage:
 """
 
 import argparse
+import json
 import time
 import sys
 from pathlib import Path
@@ -68,6 +69,19 @@ def parse_args():
     p.add_argument("--no-overlap", action="store_true")
     p.add_argument("--optimizer", choices=["muon", "adam"], default="muon")
     p.add_argument("--log-interval", type=int, default=10)
+    p.add_argument("--seed", type=int, default=42)
+    p.add_argument(
+        "--trace-path",
+        type=str,
+        default="",
+        help="optional jsonl trace output path for parity debugging",
+    )
+    p.add_argument(
+        "--trace-every",
+        type=int,
+        default=1,
+        help="write one trace row every N training iterations",
+    )
     p.add_argument("--num-buffers", type=int, default=1)
     p.add_argument("--num-threads", type=int, default=1)
     p.add_argument("--arch", choices=["simple", "rich"], default="simple",
@@ -106,6 +120,7 @@ def main():
         "profile": 0.0,
         "overlap": 0.0 if args.no_overlap else 1.0,
         "use_adam": 1.0 if args.optimizer == "adam" else 0.0,
+        "seed": float(args.seed),
         "env_name": args.env,
     }
     vec_config = {
@@ -122,7 +137,39 @@ def main():
 
     print(f"env={args.env}, agents={args.total_agents}, hidden={args.hidden_size}, "
           f"layers={args.num_layers}, horizon={args.horizon}, overlap={not args.no_overlap}, "
-          f"arch={args.arch}")
+          f"arch={args.arch}, seed={args.seed}")
+
+    trace_file = None
+    trace_every = max(int(args.trace_every), 1)
+    if args.trace_path:
+        trace_path = Path(args.trace_path).expanduser().resolve()
+        trace_path.parent.mkdir(parents=True, exist_ok=True)
+        trace_file = trace_path.open("w", encoding="utf-8")
+        trace_file.write(json.dumps({
+            "event": "meta",
+            "env": args.env,
+            "seed": args.seed,
+            "total_agents": args.total_agents,
+            "hidden_size": args.hidden_size,
+            "num_layers": args.num_layers,
+            "horizon": args.horizon,
+            "total_timesteps": args.total_timesteps,
+            "learning_rate": args.learning_rate,
+            "optimizer": args.optimizer,
+            "minibatch_size": args.minibatch_size,
+            "replay_ratio": args.replay_ratio,
+            "ent_coef": args.ent_coef,
+            "gamma": args.gamma,
+            "gae_lambda": args.gae_lambda,
+            "clip_coef": args.clip_coef,
+            "vf_coef": args.vf_coef,
+            "vf_clip_coef": args.vf_clip_coef,
+            "max_grad_norm": args.max_grad_norm,
+            "num_buffers": args.num_buffers,
+            "num_threads": args.num_threads,
+            "trace_every": trace_every,
+        }) + "\n")
+        trace_file.flush()
 
     pufferl = _C.create_pufferl(config, vec_config, env_config, policy_config)
     print(f"model params: {pufferl.num_params():,}")
@@ -139,6 +186,8 @@ def main():
     log_interval = args.log_interval
     t_start = time.time()
     t_last_log = t_start
+    t_last_trace = t_start
+    last_trace_iter = 0
 
     print(f"training: {total_iters:,} iters, {args.total_timesteps:,} steps")
 
@@ -147,14 +196,18 @@ def main():
         _C.train(pufferl)
         global_step += steps_per_iter
 
-        if iteration % log_interval == 0:
+        should_log = iteration % log_interval == 0
+        should_trace = trace_file is not None and iteration % trace_every == 0
+
+        if should_log or should_trace:
             now = time.time()
+            losses = _C.log_losses(pufferl)
+            env_stats = _C.log_environments(pufferl)
+
+        if should_log:
             elapsed = now - t_last_log
             sps = (log_interval * steps_per_iter) / elapsed
             t_last_log = now
-
-            losses = _C.log_losses(pufferl)
-            env_stats = _C.log_environments(pufferl)
 
             ent = losses.get("entropy", 0)
             pg = losses.get("pg_loss", 0)
@@ -167,6 +220,29 @@ def main():
                   f"ret={ep_ret:>8.2f} score={score:>8.2f} len={ep_len:>6.0f} | "
                   f"ent={ent:.3f} pg={pg:.4f} vf={vf:.4f}]")
 
+        if should_trace and trace_file is not None:
+            trace_elapsed = max(now - t_last_trace, 1e-9)
+            trace_iters = max(iteration - last_trace_iter, 1)
+            trace_sps = (trace_iters * steps_per_iter) / trace_elapsed
+            t_last_trace = now
+            last_trace_iter = iteration
+            trace_file.write(json.dumps({
+                "event": "tick",
+                "iteration": iteration,
+                "step": global_step,
+                "sps": trace_sps,
+                "score": env_stats.get("score", env_stats.get("episode_return", 0)),
+                "episode_return": env_stats.get("episode_return", 0),
+                "episode_length": env_stats.get("episode_length", 0),
+                "entropy": losses.get("entropy", 0),
+                "pg_loss": losses.get("pg_loss", 0),
+                "vf_loss": losses.get("vf_loss", 0),
+                "total_loss": losses.get("total_loss", 0),
+                "old_approx_kl": losses.get("old_approx_kl", 0),
+                "approx_kl": losses.get("approx_kl", 0),
+                "clipfrac": losses.get("clipfrac", 0),
+            }) + "\n")
+
     total_time = time.time() - t_start
     avg_sps = global_step / total_time
     print(f"\ndone. {global_step:,} steps in {total_time:.1f}s")
@@ -175,6 +251,17 @@ def main():
     profile = _C.log_profile(pufferl)
     for k, v in sorted(profile.items()):
         print(f"  {k}: {v:.3f}")
+
+    if trace_file is not None:
+        trace_file.write(json.dumps({
+            "event": "final",
+            "step": global_step,
+            "total_time_seconds": total_time,
+            "avg_sps": avg_sps,
+            "profile": profile,
+        }) + "\n")
+        trace_file.flush()
+        trace_file.close()
 
 
 if __name__ == "__main__":

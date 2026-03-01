@@ -865,25 +865,10 @@ kernel void ppo_loss_fwd_bwd_kernel(
         float val = values[nt];
         float ret = returns_buf[nt];
         float val_pred = values_pred[values_idx];
-        if (!isfinite(val)) val = 0.0f;
-        if (!isfinite(ret)) ret = 0.0f;
-        if (!isfinite(val_pred)) val_pred = 0.0f;
-        val = clamp(val, -1.0e6f, 1.0e6f);
-        ret = clamp(ret, -1.0e6f, 1.0e6f);
-        val_pred = clamp(val_pred, -1.0e6f, 1.0e6f);
         out_newvalue[nt] = val_pred;
 
-        if (!isfinite(old_logp)) old_logp = 0.0f;
-        if (!isfinite(adv)) adv = 0.0f;
-        if (!isfinite(w)) w = 1.0f;
-        float adv_mean_val = adv_mean[0];
-        float adv_var_val = adv_var[0];
-        if (!isfinite(adv_mean_val)) adv_mean_val = 0.0f;
-        if (!isfinite(adv_var_val) || adv_var_val < 0.0f) adv_var_val = 0.0f;
-        float adv_std = sqrt(adv_var_val + 1e-8f);
-        float adv_normalized = (adv - adv_mean_val) / (adv_std + 1e-8f);
-        if (!isfinite(adv_normalized)) adv_normalized = 0.0f;
-        adv_normalized = clamp(adv_normalized, -20.0f, 20.0f);
+        float adv_std = sqrt(adv_var[0]);
+        float adv_normalized = (adv - adv_mean[0]) / (adv_std + 1e-8f);
 
         // grad_loss is always 1.0
         float dL = inv_NT;
@@ -892,18 +877,10 @@ kernel void ppo_loss_fwd_bwd_kernel(
 
         // Value loss (forward) + value gradient (backward)
         float v_error = val_pred - val;
-        if (!isfinite(v_error)) v_error = 0.0f;
         float v_clipped = val + clamp(v_error, -pp.vf_clip_coef, pp.vf_clip_coef);
-        float v_delta = val_pred - ret;
-        float v_delta_clipped = v_clipped - ret;
-        if (!isfinite(v_delta)) v_delta = 0.0f;
-        if (!isfinite(v_delta_clipped)) v_delta_clipped = 0.0f;
-        v_delta = clamp(v_delta, -1.0e4f, 1.0e4f);
-        v_delta_clipped = clamp(v_delta_clipped, -1.0e4f, 1.0e4f);
-        float v_loss_unclipped = v_delta * v_delta;
-        float v_loss_clipped = v_delta_clipped * v_delta_clipped;
+        float v_loss_unclipped = (val_pred - ret) * (val_pred - ret);
+        float v_loss_clipped = (v_clipped - ret) * (v_clipped - ret);
         float v_loss = 0.5f * fmax(v_loss_unclipped, v_loss_clipped);
-        if (!isfinite(v_loss)) v_loss = 0.0f;
 
         float d_val_pred = 0.0f;
         if (v_loss_clipped > v_loss_unclipped) {
@@ -913,9 +890,7 @@ kernel void ppo_loss_fwd_bwd_kernel(
         } else {
             d_val_pred = val_pred - ret;
         }
-        if (!isfinite(d_val_pred)) d_val_pred = 0.0f;
-        float g_val = dL * pp.vf_coef * d_val_pred;
-        grad_values_pred[nt] = isfinite(g_val) ? g_val : 0.0f;
+        grad_values_pred[nt] = dL * pp.vf_coef * d_val_pred;
 
         // Policy loss + gradients
         if (pp.is_continuous) {
@@ -931,7 +906,6 @@ kernel void ppo_loss_fwd_bwd_kernel(
                 total_entropy += ent;
             }
 
-            if (!isfinite(total_log_prob)) total_log_prob = old_logp;
             float logratio = total_log_prob - old_logp;
             float ratio = ppo_ratio_from_logratio(logratio);
             out_ratio[nt] = ratio;
@@ -949,21 +923,17 @@ kernel void ppo_loss_fwd_bwd_kernel(
                 }
             }
             float d_new_logp = d_ratio * ratio;
-            if (!isfinite(d_new_logp)) d_new_logp = 0.0f;
 
             for (int h = 0; h < pp.num_atns; h++) {
                 float mean = logits[logits_base + h * pp.logits_stride_a];
                 float log_std = logstd[logits_base + h * pp.logits_stride_a];
                 float std = exp(log_std);
-                if (!isfinite(std) || std < 1.0e-6f) std = 1.0e-6f;
                 float var = std * std;
                 float action = actions[nt * pp.num_atns + h];
                 float diff = action - mean;
 
-                float g_mean = d_new_logp * diff / var;
-                float g_logstd = d_new_logp * (diff * diff / var - 1.0f) + d_entropy_term;
-                grad_logits[grad_logits_base + h] = isfinite(g_mean) ? g_mean : 0.0f;
-                grad_logstd[grad_logits_base + h] = isfinite(g_logstd) ? g_logstd : 0.0f;
+                grad_logits[grad_logits_base + h] = d_new_logp * diff / var;
+                grad_logstd[grad_logits_base + h] = d_new_logp * (diff * diff / var - 1.0f) + d_entropy_term;
             }
 
             float thread_loss = (pg_loss + pp.vf_coef * v_loss - pp.ent_coef * total_entropy) * inv_NT;
@@ -1000,7 +970,6 @@ kernel void ppo_loss_fwd_bwd_kernel(
                 logits_offset += A;
             }
 
-            if (!isfinite(total_log_prob)) total_log_prob = old_logp;
             float logratio = total_log_prob - old_logp;
             float ratio = ppo_ratio_from_logratio(logratio);
             out_ratio[nt] = ratio;
@@ -1018,7 +987,6 @@ kernel void ppo_loss_fwd_bwd_kernel(
                 }
             }
             float d_new_logp = d_ratio * ratio;
-            if (!isfinite(d_new_logp)) d_new_logp = 0.0f;
 
             // Gradient pass over logits with masks (reuses head_logsumexp, head_entropy)
             logits_offset = 0;
@@ -1039,7 +1007,7 @@ kernel void ppo_loss_fwd_bwd_kernel(
                     d_logit += d_entropy_term * p * (-ent - logp);
                     // Zero gradient for masked-out actions
                     if (m < 0.5f) d_logit = 0.0f;
-                    grad_logits[grad_logits_base + logits_offset + a] = isfinite(d_logit) ? d_logit : 0.0f;
+                    grad_logits[grad_logits_base + logits_offset + a] = d_logit;
                 }
                 logits_offset += A;
             }
@@ -1828,12 +1796,7 @@ kernel void muon_weight_update_kernel(
     if ((int)idx >= p.n) return;
     float lr = *lr_ptr;
     float wd_scale = 1.0f - lr * p.wd;
-    float w = wb[idx];
-    float u = up[idx];
-    if (!isfinite(w)) w = 0.0f;
-    if (!isfinite(u)) u = 0.0f;
-    float new_w = w * wd_scale - lr * u;
-    if (!isfinite(new_w)) new_w = 0.0f;
+    float new_w = wb[idx] * wd_scale - lr * up[idx];
     float clamped_w = clamp(new_w, -65000.0f, 65000.0f);
     wb[idx] = clamped_w;
     param_fp16[idx] = half(clamped_w);
@@ -1863,28 +1826,14 @@ kernel void adam_step_kernel(
 ) {
     if ((int)idx >= p.n) return;
     float g = grad[idx];
-    float m_prev = m[idx];
-    float v_prev = v[idx];
-    float w_prev = wb[idx];
-    if (!isfinite(g)) g = 0.0f;
-    if (!isfinite(m_prev)) m_prev = 0.0f;
-    if (!isfinite(v_prev)) v_prev = 0.0f;
-    if (!isfinite(w_prev)) w_prev = 0.0f;
-    float mi = p.beta1 * m_prev + (1.0f - p.beta1) * g;
-    float vi = p.beta2 * v_prev + (1.0f - p.beta2) * g * g;
-    if (!isfinite(mi)) mi = 0.0f;
-    if (!isfinite(vi)) vi = 0.0f;
+    float mi = p.beta1 * m[idx] + (1.0f - p.beta1) * g;
+    float vi = p.beta2 * v[idx] + (1.0f - p.beta2) * g * g;
     m[idx] = mi;
     v[idx] = vi;
     float m_hat = mi * p.bc1;
     float v_hat = vi * p.bc2;
-    if (!isfinite(m_hat)) m_hat = 0.0f;
-    if (!isfinite(v_hat)) v_hat = 0.0f;
     float lr = *lr_ptr;
-    float denom = sqrt(max(v_hat, 0.0f)) + p.eps;
-    if (!isfinite(denom) || denom <= 0.0f) denom = p.eps;
-    float new_w = w_prev * (1.0f - lr * p.wd) - lr * m_hat / denom;
-    if (!isfinite(new_w)) new_w = 0.0f;
+    float new_w = wb[idx] * (1.0f - lr * p.wd) - lr * m_hat / (sqrt(v_hat) + p.eps);
     float clamped_w = clamp(new_w, -65000.0f, 65000.0f);
     wb[idx] = clamped_w;
     param_fp16[idx] = half(clamped_w);

@@ -298,6 +298,7 @@ std::unique_ptr<PuffeRL> create_pufferl(pybind11::dict kwargs,
     hypers.hidden_size = get_config(policy_kwargs, "hidden_size");
     hypers.num_layers = get_config(policy_kwargs, "num_layers");
     hypers.arch_type = policy_kwargs.contains("arch") ? (int)get_config(policy_kwargs, "arch") : ARCH_RICH;
+    hypers.seed = kwargs.contains("seed") ? (uint64_t)get_config(kwargs, "seed") : 42;
     // Learning rate
     hypers.lr = get_config(kwargs, "learning_rate");
     hypers.min_lr_ratio = get_config(kwargs, "min_lr_ratio");
@@ -377,6 +378,7 @@ PYBIND11_MODULE(_C, m) {
         .def_readwrite("hidden_size", &HypersT::hidden_size)
         .def_readwrite("replay_ratio", &HypersT::replay_ratio)
         .def_readwrite("num_layers", &HypersT::num_layers)
+        .def_readwrite("seed", &HypersT::seed)
         .def_readwrite("lr", &HypersT::lr)
         .def_readwrite("min_lr_ratio", &HypersT::min_lr_ratio)
         .def_readwrite("anneal_lr", &HypersT::anneal_lr)
