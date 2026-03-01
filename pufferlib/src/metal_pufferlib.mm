@@ -548,6 +548,7 @@ void train_impl(PuffeRL& pufferl) {
             puf_zero(pufferl.train_buf.mb_state, ts);
             {
                 RolloutBuf sel_src = rollouts;
+                sel_src.values = pufferl.old_values_puf;
                 mtl_select_copy(sel_src, pufferl.train_buf,
                     (const int64_t*)pufferl.prio_bufs.idx.bytes,
                     (const float*)pufferl.advantages_puf.bytes,
@@ -681,6 +682,7 @@ void train_impl(PuffeRL& pufferl) {
         puf_zero(pufferl.train_buf.mb_state, train_stream);
         {
             RolloutBuf sel_src = rollouts;
+            sel_src.values = pufferl.old_values_puf;
             mtl_select_copy(sel_src, pufferl.train_buf,
                 (const int64_t*)pufferl.prio_bufs.idx.bytes,
                 (const float*)pufferl.advantages_puf.bytes,
