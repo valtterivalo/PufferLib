@@ -10,9 +10,125 @@
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include <cmath>
 #include <mach/mach.h>
 
 namespace py = pybind11;
+
+struct FloatStats {
+    double mean = 0.0;
+    double stddev = 0.0;
+    double abs_mean = 0.0;
+    double min = 0.0;
+    double max = 0.0;
+};
+
+static FloatStats compute_float_stats(const float* data, int64_t count) {
+    FloatStats stats;
+    if (data == nullptr || count <= 0) return stats;
+
+    double sum = 0.0;
+    double sum_sq = 0.0;
+    double sum_abs = 0.0;
+    float min_v = data[0];
+    float max_v = data[0];
+    for (int64_t i = 0; i < count; i++) {
+        float v = data[i];
+        sum += v;
+        sum_sq += (double)v * (double)v;
+        sum_abs += std::fabs((double)v);
+        if (v < min_v) min_v = v;
+        if (v > max_v) max_v = v;
+    }
+
+    double n = (double)count;
+    double mean = sum / n;
+    double var = (sum_sq / n) - (mean * mean);
+    if (var < 0.0) var = 0.0;
+
+    stats.mean = mean;
+    stats.stddev = std::sqrt(var);
+    stats.abs_mean = sum_abs / n;
+    stats.min = min_v;
+    stats.max = max_v;
+    return stats;
+}
+
+static double compute_clipfrac(const float* data, int64_t count, double clip_coef) {
+    if (data == nullptr || count <= 0) return 0.0;
+    int64_t clipped = 0;
+    for (int64_t i = 0; i < count; i++) {
+        if (std::fabs((double)data[i] - 1.0) > clip_coef) clipped++;
+    }
+    return (double)clipped / (double)count;
+}
+
+static double compute_frac_gt(const float* data, int64_t count, double threshold) {
+    if (data == nullptr || count <= 0) return 0.0;
+    int64_t matched = 0;
+    for (int64_t i = 0; i < count; i++) {
+        if ((double)data[i] > threshold) matched++;
+    }
+    return (double)matched / (double)count;
+}
+
+static double compute_frac_lt(const float* data, int64_t count, double threshold) {
+    if (data == nullptr || count <= 0) return 0.0;
+    int64_t matched = 0;
+    for (int64_t i = 0; i < count; i++) {
+        if ((double)data[i] < threshold) matched++;
+    }
+    return (double)matched / (double)count;
+}
+
+static double compute_frac_abs_gt(const float* data, int64_t count, double threshold) {
+    if (data == nullptr || count <= 0) return 0.0;
+    int64_t matched = 0;
+    for (int64_t i = 0; i < count; i++) {
+        if (std::fabs((double)data[i]) > threshold) matched++;
+    }
+    return (double)matched / (double)count;
+}
+
+struct DistributionStats {
+    double sum = 0.0;
+    double min = 0.0;
+    double max = 0.0;
+    double entropy = 0.0;
+    double ess = 0.0;
+    double ess_fraction = 0.0;
+};
+
+static DistributionStats compute_distribution_stats(const float* data, int64_t count) {
+    DistributionStats stats;
+    if (data == nullptr || count <= 0) return stats;
+
+    double sum = 0.0;
+    double sum_sq = 0.0;
+    double entropy = 0.0;
+    float min_v = data[0];
+    float max_v = data[0];
+    for (int64_t i = 0; i < count; i++) {
+        float v = data[i];
+        if (v < min_v) min_v = v;
+        if (v > max_v) max_v = v;
+        if (v <= 0.0f) continue;
+        double vd = (double)v;
+        sum += vd;
+        sum_sq += vd * vd;
+        entropy -= vd * std::log(vd);
+    }
+
+    stats.sum = sum;
+    stats.min = min_v;
+    stats.max = max_v;
+    stats.entropy = entropy;
+    if (sum_sq > 0.0) {
+        stats.ess = (sum * sum) / sum_sq;
+        stats.ess_fraction = stats.ess / (double)count;
+    }
+    return stats;
+}
 
 // PFSP C functions from binding.c (linked via static env lib).
 // Weak defaults for envs that don't implement PFSP (breakout, g2048, etc.).
@@ -200,6 +316,92 @@ pybind11::dict log_profile(pybind11::object pufferl_obj) {
     return result;
 }
 
+pybind11::dict log_train_debug(pybind11::object pufferl_obj) {
+    auto& pufferl = pufferl_obj.cast<PuffeRL&>();
+    sync_pending_train(pufferl);
+    ensure_gpu_synced((cudaStream_t)mtl_stream());
+
+    const float* mb_adv = (const float*)pufferl.train_buf.mb_advantages.bytes;
+    int64_t mb_adv_n = pufferl.train_buf.mb_advantages.numel();
+    const float* mb_prio = (const float*)pufferl.train_buf.mb_prio.bytes;
+    int64_t mb_prio_n = pufferl.train_buf.mb_prio.numel();
+    const float* mb_ratio = (const float*)pufferl.train_buf.mb_ratio.bytes;
+    int64_t mb_ratio_n = pufferl.train_buf.mb_ratio.numel();
+    const float* roll_ratio = (const float*)pufferl.train_rollouts.ratio.bytes;
+    int64_t roll_ratio_n = pufferl.train_rollouts.ratio.numel();
+    const float* param_fp32 = (const float*)pufferl.param_fp32_puf.bytes;
+    int64_t param_fp32_n = pufferl.param_fp32_puf.numel();
+    const float* prio_probs = (const float*)pufferl.prio_bufs.prio_probs.bytes;
+    int64_t prio_probs_n = pufferl.prio_bufs.prio_probs.numel();
+    const float* sampled_prio = (const float*)pufferl.prio_bufs.mb_prio.bytes;
+    int64_t sampled_prio_n = pufferl.prio_bufs.mb_prio.numel();
+    const float* grad_sum_sq = (const float*)pufferl.grad_norm_puf.bytes;
+
+    FloatStats adv_stats = compute_float_stats(mb_adv, mb_adv_n);
+    FloatStats prio_stats = compute_float_stats(mb_prio, mb_prio_n);
+    FloatStats ratio_stats = compute_float_stats(mb_ratio, mb_ratio_n);
+    FloatStats roll_ratio_stats = compute_float_stats(roll_ratio, roll_ratio_n);
+    FloatStats sampled_prio_stats = compute_float_stats(sampled_prio, sampled_prio_n);
+    FloatStats param_stats = compute_float_stats(param_fp32, param_fp32_n);
+    DistributionStats prio_prob_stats = compute_distribution_stats(prio_probs, prio_probs_n);
+    double grad_l2 = 0.0;
+    if (grad_sum_sq != nullptr) grad_l2 = std::sqrt(std::max(0.0, (double)grad_sum_sq[0]));
+    double grad_clip_coef = std::min(
+        (double)pufferl.hypers.max_grad_norm / (grad_l2 + 1e-6), 1.0);
+    double param_abs_max = std::max(std::fabs(param_stats.min), std::fabs(param_stats.max));
+
+    pybind11::dict out;
+    out["mb_adv_mean"] = adv_stats.mean;
+    out["mb_adv_std"] = adv_stats.stddev;
+    out["mb_adv_abs_mean"] = adv_stats.abs_mean;
+    out["mb_adv_min"] = adv_stats.min;
+    out["mb_adv_max"] = adv_stats.max;
+
+    out["mb_prio_mean"] = prio_stats.mean;
+    out["mb_prio_std"] = prio_stats.stddev;
+    out["mb_prio_abs_mean"] = prio_stats.abs_mean;
+    out["mb_prio_min"] = prio_stats.min;
+    out["mb_prio_max"] = prio_stats.max;
+    out["sampled_prio_mean"] = sampled_prio_stats.mean;
+    out["sampled_prio_std"] = sampled_prio_stats.stddev;
+    out["sampled_prio_min"] = sampled_prio_stats.min;
+    out["sampled_prio_max"] = sampled_prio_stats.max;
+
+    out["mb_ratio_mean"] = ratio_stats.mean;
+    out["mb_ratio_std"] = ratio_stats.stddev;
+    out["mb_ratio_abs_mean"] = ratio_stats.abs_mean;
+    out["mb_ratio_min"] = ratio_stats.min;
+    out["mb_ratio_max"] = ratio_stats.max;
+    out["mb_ratio_clipfrac_raw"] = compute_clipfrac(
+        mb_ratio, mb_ratio_n, pufferl.hypers.clip_coef);
+    out["mb_ratio_gt_2_frac"] = compute_frac_gt(mb_ratio, mb_ratio_n, 2.0);
+    out["mb_ratio_lt_0_5_frac"] = compute_frac_lt(mb_ratio, mb_ratio_n, 0.5);
+
+    out["roll_ratio_mean"] = roll_ratio_stats.mean;
+    out["roll_ratio_std"] = roll_ratio_stats.stddev;
+    out["roll_ratio_abs_mean"] = roll_ratio_stats.abs_mean;
+    out["roll_ratio_min"] = roll_ratio_stats.min;
+    out["roll_ratio_max"] = roll_ratio_stats.max;
+    out["roll_ratio_clipfrac_raw"] = compute_clipfrac(
+        roll_ratio, roll_ratio_n, pufferl.hypers.clip_coef);
+    out["prio_prob_sum"] = prio_prob_stats.sum;
+    out["prio_prob_min"] = prio_prob_stats.min;
+    out["prio_prob_max"] = prio_prob_stats.max;
+    out["prio_prob_entropy"] = prio_prob_stats.entropy;
+    out["prio_prob_ess"] = prio_prob_stats.ess;
+    out["prio_prob_ess_frac"] = prio_prob_stats.ess_fraction;
+    out["param_abs_max"] = param_abs_max;
+    out["param_abs_gt_100"] = compute_frac_abs_gt(param_fp32, param_fp32_n, 100.0);
+    out["param_abs_gt_1k"] = compute_frac_abs_gt(param_fp32, param_fp32_n, 1000.0);
+    out["param_abs_gt_60k"] = compute_frac_abs_gt(param_fp32, param_fp32_n, 60000.0);
+    out["grad_l2"] = grad_l2;
+    out["grad_clip_coef"] = grad_clip_coef;
+
+    float current_lr = pufferl.use_adam ? *pufferl.adam->lr_ptr : *pufferl.muon->lr_ptr;
+    out["optimizer_lr"] = current_lr;
+    return out;
+}
+
 pybind11::dict log_utilization(pybind11::object pufferl_obj) {
     (void)pufferl_obj;
     pybind11::dict result;
@@ -355,6 +557,7 @@ PYBIND11_MODULE(_C, m) {
     m.def("log_environments", &log_environments);
     m.def("log_losses", &log_losses);
     m.def("log_profile", &log_profile);
+    m.def("log_train_debug", &log_train_debug);
     m.def("log_utilization", &log_utilization);
     m.def("render", &render);
     m.def("rollouts", &rollouts);

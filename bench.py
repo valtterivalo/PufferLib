@@ -203,6 +203,7 @@ def main():
             now = time.time()
             losses = _C.log_losses(pufferl)
             env_stats = _C.log_environments(pufferl)
+            train_debug = _C.log_train_debug(pufferl) if should_trace else {}
 
         if should_log:
             elapsed = now - t_last_log
@@ -226,7 +227,7 @@ def main():
             trace_sps = (trace_iters * steps_per_iter) / trace_elapsed
             t_last_trace = now
             last_trace_iter = iteration
-            trace_file.write(json.dumps({
+            trace_row = {
                 "event": "tick",
                 "iteration": iteration,
                 "step": global_step,
@@ -241,7 +242,9 @@ def main():
                 "old_approx_kl": losses.get("old_approx_kl", 0),
                 "approx_kl": losses.get("approx_kl", 0),
                 "clipfrac": losses.get("clipfrac", 0),
-            }) + "\n")
+            }
+            trace_row.update(train_debug)
+            trace_file.write(json.dumps(trace_row) + "\n")
 
     total_time = time.time() - t_start
     avg_sps = global_step / total_time
