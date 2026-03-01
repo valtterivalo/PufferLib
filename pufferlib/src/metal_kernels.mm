@@ -1218,9 +1218,7 @@ void puff_advantage_cuda(PufTensor &values, PufTensor &rewards,
 // Priority replay
 // ============================================================================
 
-// Prio replay split into two phases to eliminate per-minibatch GPU syncs.
-// Phase 1 (precompute): GPU reduction + normalize + sync + CPU CDF build.
-// Called once before the minibatch loop since advantages don't change.
+// Phase 1: compute normalized per-segment probabilities on GPU.
 void prio_precompute(PufTensor &advantages, float prio_alpha,
                      PrioBuffers &bufs, cudaStream_t stream) {
   int S = (int)advantages.shape[0], T = (int)advantages.shape[1];
@@ -1240,6 +1238,7 @@ void prio_precompute(PufTensor &advantages, float prio_alpha,
     mtl_set_params(ms, params, 2);
     mtl_dispatch_groups(ms, pso, S, 32);
   }
+  mtl_barrier(ms); // reduction -> normalize
 
   // Normalize
   {
@@ -1253,48 +1252,38 @@ void prio_precompute(PufTensor &advantages, float prio_alpha,
     mtl_set_params(ms, params, 1);
     mtl_dispatch_groups(ms, pso, 1, 256);
   }
-
-  // Sync to read normalized probs on CPU, then build CDF
-  mtl_ensure_synced(stream);
-  float *probs = (float *)bufs.prio_probs.bytes;
-  float *cdf = (float *)bufs.cdf.bytes;
-  cdf[0] = probs[0];
-  for (int i = 1; i < S; i++)
-    cdf[i] = cdf[i - 1] + probs[i];
+  mtl_barrier(ms); // normalize -> sample
 }
 
-// Phase 2 (per-minibatch): CPU sampling from cached CDF + GPU importance weights.
-// No GPU sync needed — samples from pre-computed CDF, dispatches imp_weights to GPU.
+// Phase 2 (per-minibatch): GPU sampling from prio_probs + GPU importance weights.
 void prio_sample(int minibatch_segments, int total_agents,
                  float anneal_beta, PrioBuffers &bufs, uint64_t seed,
                  uint32_t *offset_ptr, cudaStream_t stream) {
   int S = (int)bufs.prio_probs.shape[0];
+  MetalStream *ms = mtl_get_stream(stream);
 
-  // CPU multinomial sampling from cached CDF (no GPU sync)
+  // prio_probs -> sampled indices
+  ms->compute_encoder();
   {
-    float *cdf = (float *)bufs.cdf.bytes;
-    int64_t *idx = (int64_t *)bufs.idx.bytes;
-    std::mt19937_64 rng(seed + *offset_ptr);
-    std::uniform_real_distribution<float> dist(0.0f, 1.0f);
-    for (int i = 0; i < minibatch_segments; i++) {
-      float u = dist(rng);
-      int lo = 0, hi = S - 1;
-      while (lo < hi) {
-        int mid = (lo + hi) / 2;
-        if (cdf[mid] < u)
-          lo = mid + 1;
-        else
-          hi = mid;
-      }
-      idx[i] = lo;
-    }
-    *offset_ptr += minibatch_segments;
+    auto pso = mtl_pipeline("prio_sample_kernel");
+    mtl_set_pso(ms, pso);
+    mtl_set_ptr(ms, bufs.idx.bytes, 0);
+    mtl_set_ptr(ms, bufs.prio_probs.bytes, 1);
+    mtl_set_ptr(ms, offset_ptr, 2);
+    struct {
+      uint64_t seed;
+      int total_segments;
+      int minibatch_segments;
+    } params = {seed, S, minibatch_segments};
+    mtl_set_params(ms, params, 3);
+    mtl_dispatch_1d(ms, pso, minibatch_segments);
   }
 
-  // Importance weights (GPU dispatch, no sync)
+  mtl_barrier(ms);  // sampled idx -> imp-weights
+
+  // sampled indices + prio_probs -> importance weights
+  ms->compute_encoder();
   {
-    MetalStream *ms = mtl_get_stream(stream);
-    ms->compute_encoder();
     auto pso = mtl_pipeline("prio_imp_weights_kernel");
     mtl_set_pso(ms, pso);
     mtl_set_ptr(ms, bufs.idx.bytes, 0);

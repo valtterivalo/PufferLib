@@ -1590,6 +1590,40 @@ struct PrioImpParams {
     int minibatch_segments;
 };
 
+struct PrioSampleParams {
+    uint64_t seed;
+    int total_segments;
+    int minibatch_segments;
+};
+
+kernel void prio_sample_kernel(
+    device int64_t* indices            [[buffer(0)]],
+    const device float* prio_probs     [[buffer(1)]],
+    device atomic_uint* offset_ptr     [[buffer(2)]],
+    constant PrioSampleParams& pp      [[buffer(3)]],
+    uint tx [[thread_position_in_grid]]
+) {
+    if ((int)tx >= pp.minibatch_segments) return;
+
+    uint offset = atomic_fetch_add_explicit(offset_ptr, 1u, memory_order_relaxed);
+    uint4 counter = uint4(tx, offset, 0u, 0u);
+    uint2 key = uint2((uint)(pp.seed & 0xFFFFFFFF), (uint)(pp.seed >> 32));
+    uint4 rng_out = philox4x32_10(counter, key);
+    uint rng_idx = 0;
+    float u = philox_uniform(rng_idx, rng_out);
+
+    float cumsum = 0.0f;
+    int sampled = pp.total_segments - 1;
+    for (int i = 0; i < pp.total_segments; i++) {
+        cumsum += prio_probs[i];
+        if (u <= cumsum) {
+            sampled = i;
+            break;
+        }
+    }
+    indices[tx] = sampled;
+}
+
 kernel void prio_imp_weights_kernel(
     const device int64_t* indices       [[buffer(0)]],
     const device float* prio_probs      [[buffer(1)]],
@@ -2726,7 +2760,7 @@ kernel void cast_u8_to_f32(
 }
 
 // IEEE 754 f64→f32 bit cast. Metal has no native double, so we read each
-// 8-byte double as uint2 (lo=x, hi=y on little-endian ARM64) and extract
+// 8-byte double as uint2 and extract
 // sign, exponent, mantissa via bit manipulation. Subnormals flush to zero.
 kernel void cast_f64_to_f32(
     device const uint2* src [[buffer(0)]],

@@ -467,7 +467,9 @@ void train_impl(PuffeRL& pufferl) {
     HypersT& hypers = pufferl.hypers;
     uint64_t tp_preloop0 = mach_absolute_time();
 
-    cudaStream_t train_stream = (cudaStream_t)mtl_stream();
+    cudaStream_t train_stream = pufferl.overlap_enabled
+        ? (cudaStream_t)mtl_train_stream()
+        : (cudaStream_t)mtl_stream();
 
     // GPU training: keep all ops on the Metal encoder (GEMM, copy, zero, add).
     puf_set_gpu_training(true);
@@ -492,6 +494,8 @@ void train_impl(PuffeRL& pufferl) {
 
     // old_values = values.clone()
     puf_copy(pufferl.old_values_puf, rollouts.values, train_stream);
+    // Metal 4 visibility boundary before minibatch loop consumes transposed rollouts.
+    mtl_barrier((MetalStream*)train_stream);
 
     int batch_size = hypers.total_agents * hypers.horizon;
     int minibatch_segments = hypers.minibatch_size / hypers.horizon;
@@ -513,12 +517,6 @@ void train_impl(PuffeRL& pufferl) {
     uint64_t tp_preloop1 = mach_absolute_time();
 
     // Advantage + prio precompute (single GPU sync for CDF read).
-    puf_zero(pufferl.advantages_puf, train_stream);
-    puff_advantage_cuda(rollouts.values, rollouts.rewards, rollouts.terminals,
-        rollouts.ratio, pufferl.advantages_puf, hypers.gamma, hypers.gae_lambda,
-        hypers.vtrace_rho_clip, hypers.vtrace_c_clip, train_stream);
-    prio_precompute(pufferl.advantages_puf, prio_alpha, pufferl.prio_bufs, train_stream);
-
     uint64_t tp_prio_done = mach_absolute_time();
     pufferl.profile.accum[PROF_TRAIN_PRELOOP] += prof_ms(tp_preloop0, tp_preloop1);
     pufferl.profile.accum[PROF_TRAIN_ADVANTAGE] += prof_ms(tp_preloop1, tp_prio_done);
@@ -532,7 +530,7 @@ void train_impl(PuffeRL& pufferl) {
         // Inference runs on the default queue, reading from weights_infer (updated at
         // the end of training via GPU blit). 1-iteration policy lag — PPO handles this
         // via importance ratios (stored log-probs).
-        cudaStream_t ts = (cudaStream_t)mtl_train_stream();
+        cudaStream_t ts = train_stream;
         uint32_t* train_rng_offset = (uint32_t*)((int64_t*)pufferl.rng_offset_puf.bytes + hypers.num_buffers);
 
         puf_set_gpu_training(true);
@@ -540,8 +538,14 @@ void train_impl(PuffeRL& pufferl) {
         for (int mb = 0; mb < total_minibatches; ++mb) {
             uint64_t tp0 = mach_absolute_time();
 
-            prio_sample(minibatch_segments, hypers.total_agents, anneal_beta,
+            puf_zero(pufferl.advantages_puf, ts);
+            puff_advantage_cuda(rollouts.values, rollouts.rewards, rollouts.terminals,
+                rollouts.ratio, pufferl.advantages_puf, hypers.gamma, hypers.gae_lambda,
+                hypers.vtrace_rho_clip, hypers.vtrace_c_clip, ts);
+            prio_replay_cuda(pufferl.advantages_puf, prio_alpha, minibatch_segments,
+                hypers.total_agents, anneal_beta,
                 pufferl.prio_bufs, pufferl.rng_seed, train_rng_offset, ts);
+            mtl_barrier((MetalStream*)ts); // prio idx/weights -> select copy
 
             uint64_t tp2 = mach_absolute_time();
 
@@ -556,6 +560,7 @@ void train_impl(PuffeRL& pufferl) {
                     minibatch_segments,
                     pufferl.fp16_obs_buf.bytes, ts);
             }
+            mtl_barrier((MetalStream*)ts); // minibatch buffers -> forward/PPO
 
             uint64_t tp3 = mach_absolute_time();
 
@@ -584,9 +589,11 @@ void train_impl(PuffeRL& pufferl) {
                 pufferl.has_mask ? nullptr : (const float*)pufferl.ones_mask.bytes,
                 pufferl.has_mask ? 0 : 0,  // stride=0: all rows read same ones
                 ts);
+            mtl_barrier((MetalStream*)ts); // PPO outputs -> scatter
 
-            // Keep parity with current upstream static-native CUDA path:
-            // do not scatter mb_ratio/mb_newvalue back into rollout buffers.
+            mtl_scatter_ppo_outputs(
+                pufferl.train_buf, rollouts,
+                (const int64_t*)pufferl.prio_bufs.idx.bytes, ts);
 
             uint64_t tp5 = mach_absolute_time();
 
@@ -660,7 +667,7 @@ void train_impl(PuffeRL& pufferl) {
         // Flush train_stream: commit command buffer so GPU starts executing
         // asynchronously. wait_completed() is called at the start of the next
         // rollouts() to ensure training is done before inference reads weights_infer.
-        ((MetalStream*)mtl_train_stream())->flush();
+        ((MetalStream*)train_stream)->flush();
 
         pufferl.train_pending = true;
         pufferl.epoch += 1;
@@ -674,8 +681,14 @@ void train_impl(PuffeRL& pufferl) {
     for (int mb = 0; mb < total_minibatches; ++mb) {
         uint64_t tp0 = mach_absolute_time();
 
-        prio_sample(minibatch_segments, hypers.total_agents, anneal_beta,
+        puf_zero(pufferl.advantages_puf, train_stream);
+        puff_advantage_cuda(rollouts.values, rollouts.rewards, rollouts.terminals,
+            rollouts.ratio, pufferl.advantages_puf, hypers.gamma, hypers.gae_lambda,
+            hypers.vtrace_rho_clip, hypers.vtrace_c_clip, train_stream);
+        prio_replay_cuda(pufferl.advantages_puf, prio_alpha, minibatch_segments,
+            hypers.total_agents, anneal_beta,
             pufferl.prio_bufs, pufferl.rng_seed, train_rng_offset, train_stream);
+        mtl_barrier((MetalStream*)train_stream); // prio idx/weights -> select copy
 
         uint64_t tp2 = mach_absolute_time();
 
@@ -690,6 +703,7 @@ void train_impl(PuffeRL& pufferl) {
                 minibatch_segments,
                 pufferl.fp16_obs_buf.bytes, train_stream);
         }
+        mtl_barrier((MetalStream*)train_stream); // minibatch buffers -> forward/PPO
 
         uint64_t tp3 = mach_absolute_time();
 
@@ -717,9 +731,11 @@ void train_impl(PuffeRL& pufferl) {
             pufferl.has_mask ? nullptr : (const float*)pufferl.ones_mask.bytes,
             pufferl.has_mask ? 0 : 0,  // stride=0: all rows read same ones
             train_stream);
+        mtl_barrier((MetalStream*)train_stream); // PPO outputs -> scatter
 
-        // Keep parity with current upstream static-native CUDA path:
-        // do not scatter mb_ratio/mb_newvalue back into rollout buffers.
+        mtl_scatter_ppo_outputs(
+            pufferl.train_buf, rollouts,
+            (const int64_t*)pufferl.prio_bufs.idx.bytes, train_stream);
 
         uint64_t tp5 = mach_absolute_time();
 

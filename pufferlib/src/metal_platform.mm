@@ -299,6 +299,7 @@ static mach_timebase_info_data_t g_timebase = {0, 0};
 // GPU timing diagnostic — actual kernel execution vs scheduling delay
 static double g_gpu_exec_ns = 0.0;
 static double g_sched_wait_ns = 0.0;
+static constexpr NSUInteger kMetalSyncTimeoutMs = 300000; // 5 minutes
 
 static double mach_to_ns(uint64_t ticks) {
   if (g_timebase.denom == 0) mach_timebase_info(&g_timebase);
@@ -326,7 +327,7 @@ void MetalStream::sync() {
     }];
     [q commit:bufs count:1 options:opts];
     [q signalEvent:ctx->sync_event value:val];
-    BOOL signaled = [ctx->sync_event waitUntilSignaledValue:val timeoutMS:5000];
+    BOOL signaled = [ctx->sync_event waitUntilSignaledValue:val timeoutMS:kMetalSyncTimeoutMs];
     assert(signaled && "Metal sync timeout in MetalStream::sync");
     if (gpu_start > 0 && gpu_end > 0) {
       g_gpu_exec_ns += (gpu_end - gpu_start) * 1e9;
@@ -335,7 +336,7 @@ void MetalStream::sync() {
   } else {
     [q commit:bufs count:1];
     [q signalEvent:ctx->sync_event value:val];
-    BOOL signaled = [ctx->sync_event waitUntilSignaledValue:val timeoutMS:5000];
+    BOOL signaled = [ctx->sync_event waitUntilSignaledValue:val timeoutMS:kMetalSyncTimeoutMs];
     assert(signaled && "Metal sync timeout in MetalStream::sync");
   }
   uint64_t t1 = mach_absolute_time();
@@ -381,7 +382,7 @@ void MetalStream::wait_completed() {
   if (flushed) {
     uint64_t t0 = mach_absolute_time();
     BOOL signaled =
-        [mtl_ctx()->sync_event waitUntilSignaledValue:flush_event_val timeoutMS:5000];
+        [mtl_ctx()->sync_event waitUntilSignaledValue:flush_event_val timeoutMS:kMetalSyncTimeoutMs];
     assert(signaled && "Metal sync timeout in MetalStream::wait_completed");
     uint64_t t1 = mach_absolute_time();
     g_sync_count++;
