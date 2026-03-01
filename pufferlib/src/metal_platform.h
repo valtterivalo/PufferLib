@@ -194,9 +194,9 @@ inline void mtl_set_params(MetalStream *ms, const T &params, uint32_t index) {
   assert(ms->const_ring_offset + aligned <= MTL_CONST_RING_SIZE);
   memcpy((char *)[ms->const_ring contents] + ms->const_ring_offset,
          &params, sizeof(T));
-  [ms->arg_table
-      setAddress:(ms->const_ring.gpuAddress + ms->const_ring_offset)
-         atIndex:index];
+  uint64_t addr = ms->const_ring.gpuAddress + ms->const_ring_offset;
+  [ms->arg_table setAddress:addr atIndex:index];
+  ms->bound_addresses[index] = addr;
   ms->const_ring_offset += aligned;
 }
 

@@ -712,9 +712,10 @@ id<MTLBuffer> mtl_wrap_allocator(Allocator *alloc) {
       max_end = end;
   }
 
-  // Round up to ARM64 page boundary (16KB)
-  int64_t page = 16384;
-  int64_t size = (max_end + page - 1) & ~(page - 1);
+  // Wrap exactly the allocator's used byte range.
+  // Rounding up past allocated memory can cause pointer-range overlap between
+  // allocators and incorrect buffer resolution in mtl_buffer_for().
+  int64_t size = max_end;
 
   // Zero-copy wrap: StorageModeShared on Apple Silicon means CPU and GPU
   // access the same physical memory pages. No deallocator — Allocator
