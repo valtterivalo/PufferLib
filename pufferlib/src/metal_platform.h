@@ -37,6 +37,7 @@ struct MetalStream {
   id<MTL4CommandBuffer> cmd;
   id<MTL4ComputeCommandEncoder> enc;
   id<MTL4ArgumentTable> arg_table;
+  id<MTLSharedEvent> sync_event;       // per-stream CPU/GPU synchronization event
   id<MTLBuffer> const_ring;            // per-stream ring buffer for inline constants
   NSUInteger const_ring_offset = 0;    // current write position in ring
 
@@ -47,7 +48,8 @@ struct MetalStream {
   bool pending_work = false; // true when compute work is encoded but not synced
   bool flushed = false;      // true when cmd committed but not waited on
   CFTimeInterval commit_time = 0; // host time at commit (for sched_wait diagnostic)
-  uint64_t flush_event_val = 0;   // event value saved by flush(), waited on by wait_completed()
+  uint64_t flush_event_val = 0;   // sync_event value saved by flush(), waited on by wait_completed()
+  uint64_t sync_event_value = 0;  // monotonically increasing per-stream signal counter
 
   // Create a fresh command buffer, ready for encoding.
   void begin();
@@ -111,8 +113,6 @@ struct MetalContext {
   id<MTL4CommandQueue> queue;        // rollout queue
   id<MTL4CommandQueue> train_queue;  // training queue (async overlap)
   id<MTLResidencySet> residency_set;  // all wrapped buffers for GPU address access
-  id<MTLSharedEvent> sync_event;      // CPU-GPU synchronization
-  std::atomic<uint64_t> sync_event_value{0};      // monotonically increasing signal counter
 
   MetalStream stream;       // default stream (rollout)
   MetalStream train_stream; // training stream (separate queue for overlap)

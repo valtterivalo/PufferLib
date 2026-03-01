@@ -299,7 +299,7 @@ static mach_timebase_info_data_t g_timebase = {0, 0};
 // GPU timing diagnostic — actual kernel execution vs scheduling delay
 static double g_gpu_exec_ns = 0.0;
 static double g_sched_wait_ns = 0.0;
-static constexpr NSUInteger kMetalSyncTimeoutMs = 300000; // 5 minutes
+static constexpr NSUInteger kMetalSyncTimeoutMs = 5000; // fail fast on stalled GPU sync
 
 static double mach_to_ns(uint64_t ticks) {
   if (g_timebase.denom == 0) mach_timebase_info(&g_timebase);
@@ -308,11 +308,11 @@ static double mach_to_ns(uint64_t ticks) {
 
 void MetalStream::sync() {
   end_compute();
-  MetalContext *ctx = mtl_ctx();
   uint64_t t0 = mach_absolute_time();
   [cmd endCommandBuffer];
-  uint64_t val = ctx->sync_event_value.fetch_add(1, std::memory_order_relaxed) + 1;
+  uint64_t val = ++sync_event_value;
   id<MTL4CommandBuffer> bufs[] = { cmd };
+  MetalContext *ctx = mtl_ctx();
   id<MTL4CommandQueue> q =
       (this == &ctx->train_stream) ? ctx->train_queue : ctx->queue;
   // Sample GPU timing every 32nd sync to amortize ObjC/block overhead
@@ -326,8 +326,8 @@ void MetalStream::sync() {
       gpu_end = fb.GPUEndTime;
     }];
     [q commit:bufs count:1 options:opts];
-    [q signalEvent:ctx->sync_event value:val];
-    BOOL signaled = [ctx->sync_event waitUntilSignaledValue:val timeoutMS:kMetalSyncTimeoutMs];
+    [q signalEvent:sync_event value:val];
+    BOOL signaled = [sync_event waitUntilSignaledValue:val timeoutMS:kMetalSyncTimeoutMs];
     assert(signaled && "Metal sync timeout in MetalStream::sync");
     if (gpu_start > 0 && gpu_end > 0) {
       g_gpu_exec_ns += (gpu_end - gpu_start) * 1e9;
@@ -335,8 +335,8 @@ void MetalStream::sync() {
     }
   } else {
     [q commit:bufs count:1];
-    [q signalEvent:ctx->sync_event value:val];
-    BOOL signaled = [ctx->sync_event waitUntilSignaledValue:val timeoutMS:kMetalSyncTimeoutMs];
+    [q signalEvent:sync_event value:val];
+    BOOL signaled = [sync_event waitUntilSignaledValue:val timeoutMS:kMetalSyncTimeoutMs];
     assert(signaled && "Metal sync timeout in MetalStream::sync");
   }
   uint64_t t1 = mach_absolute_time();
@@ -348,15 +348,15 @@ void MetalStream::sync() {
 void MetalStream::flush() {
   end_compute();
   if (pending_work) {
-    MetalContext *ctx = mtl_ctx();
     [cmd endCommandBuffer];
     id<MTL4CommandBuffer> bufs[] = { cmd };
+    MetalContext *ctx = mtl_ctx();
     id<MTL4CommandQueue> q =
         (this == &ctx->train_stream) ? ctx->train_queue : ctx->queue;
     // Signal event value for wait_completed().
-    flush_event_val = ctx->sync_event_value.fetch_add(1, std::memory_order_relaxed) + 1;
+    flush_event_val = ++sync_event_value;
     [q commit:bufs count:1];
-    [q signalEvent:ctx->sync_event value:flush_event_val];
+    [q signalEvent:sync_event value:flush_event_val];
     flushed = true;
     pending_work = false;
   }
@@ -381,8 +381,7 @@ void MetalStream::commit_chunk() {
 void MetalStream::wait_completed() {
   if (flushed) {
     uint64_t t0 = mach_absolute_time();
-    BOOL signaled =
-        [mtl_ctx()->sync_event waitUntilSignaledValue:flush_event_val timeoutMS:kMetalSyncTimeoutMs];
+    BOOL signaled = [sync_event waitUntilSignaledValue:flush_event_val timeoutMS:kMetalSyncTimeoutMs];
     assert(signaled && "Metal sync timeout in MetalStream::wait_completed");
     uint64_t t1 = mach_absolute_time();
     g_sync_count++;
@@ -545,14 +544,16 @@ void mtl_init() {
     g_ctx.queue = [g_ctx.device newMTL4CommandQueue];
     assert(g_ctx.queue && "Metal 4 required — device must support newMTL4CommandQueue");
     g_ctx.train_queue = [g_ctx.device newMTL4CommandQueue];
-    g_ctx.sync_event = [g_ctx.device newSharedEvent];
-    g_ctx.sync_event_value = 0;
 
     // Command allocators + reusable command buffers
     g_ctx.stream.allocator = [g_ctx.device newCommandAllocator];
     g_ctx.stream.cmd = [g_ctx.device newCommandBuffer];
+    g_ctx.stream.sync_event = [g_ctx.device newSharedEvent];
+    g_ctx.stream.sync_event_value = 0;
     g_ctx.train_stream.allocator = [g_ctx.device newCommandAllocator];
     g_ctx.train_stream.cmd = [g_ctx.device newCommandBuffer];
+    g_ctx.train_stream.sync_event = [g_ctx.device newSharedEvent];
+    g_ctx.train_stream.sync_event_value = 0;
 
     // Argument tables — PPO kernel uses slots 0-19, Metal 4 max is 31
     MTL4ArgumentTableDescriptor *atd = [MTL4ArgumentTableDescriptor new];
@@ -614,6 +615,8 @@ void *mtl_create_stream() {
   MetalStream *ms = new MetalStream{};
   ms->allocator = [g_ctx.device newCommandAllocator];
   ms->cmd = [g_ctx.device newCommandBuffer];
+  ms->sync_event = [g_ctx.device newSharedEvent];
+  ms->sync_event_value = 0;
   assert(ms->allocator && ms->cmd && "Failed to create Metal stream allocator/cmd");
 
   MTL4ArgumentTableDescriptor *atd = [MTL4ArgumentTableDescriptor new];
@@ -645,6 +648,7 @@ void mtl_destroy_stream(void *stream) {
   ms->cmd = nil;
   ms->allocator = nil;
   ms->enc = nil;
+  ms->sync_event = nil;
   ms->const_ring = nil;
   delete ms;
 }
@@ -672,14 +676,15 @@ void mtl_destroy() {
     g_ctx.stream.cmd = nil;
     g_ctx.stream.allocator = nil;
     g_ctx.stream.enc = nil;
+    g_ctx.stream.sync_event = nil;
     g_ctx.train_stream.arg_table = nil;
     g_ctx.train_stream.cmd = nil;
     g_ctx.train_stream.allocator = nil;
     g_ctx.train_stream.enc = nil;
+    g_ctx.train_stream.sync_event = nil;
     g_ctx.stream.const_ring = nil;
     g_ctx.train_stream.const_ring = nil;
     g_ctx.residency_set = nil;
-    g_ctx.sync_event = nil;
     g_ctx.queue = nil;
     g_ctx.train_queue = nil;
     g_ctx.buffers.clear();
