@@ -67,10 +67,21 @@ void rollouts(pybind11::object pufferl_obj) {
     // were updated on the GPU as the last ops in train_impl's async dispatch.
     // Baseline: recompute fused weight on CPU after training updated weights_fp32.
     if (pufferl.train_pending) {
+        auto wait_start = std::chrono::high_resolution_clock::now();
         sync_pending_train(pufferl);
+        float wait_ms = std::chrono::duration<float, std::milli>(
+            std::chrono::high_resolution_clock::now() - wait_start).count();
+        pufferl.profile.accum[PROF_TRAIN_SYNC] += wait_ms;
     } else if (!pufferl.overlap_enabled) {
         sync_fused_weight(pufferl);
     }
+
+    // Match static-native CUDA semantics: reset recurrent state at rollout
+    // boundary so each rollout chunk starts from zero state.
+    for (PufTensor& state : pufferl.buffer_states) {
+        memset(state.bytes, 0, state.numel() * state.dtype_size);
+    }
+
     auto t0 = std::chrono::high_resolution_clock::now();
     static_vec_omp_step(pufferl.vec);
     float sec = std::chrono::duration<float>(
