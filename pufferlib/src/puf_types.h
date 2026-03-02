@@ -630,18 +630,6 @@ struct Muon {
   int world_size;
 };
 
-struct Adam {
-  float beta1, beta2, eps, weight_decay;
-  float lr_val_init;
-  float *lr_ptr;
-  int step;                   // optimizer step count (for bias correction)
-  PufTensor lr_puf;
-  PufTensor wb_puf;           // weight buffer (shared with param allocator)
-  PufTensor gc_puf;           // gradient buffer (clipped)
-  PufTensor m_puf, v_puf;    // first/second moment estimates
-  Allocator *param_alloc;
-};
-
 // ============================================================================
 // Utility functions (pure PufTensor operations, no platform deps)
 // ============================================================================

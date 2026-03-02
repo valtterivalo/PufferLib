@@ -1828,39 +1828,6 @@ kernel void muon_weight_update_kernel(
     wb[idx] = wb[idx] * wd_scale - lr * up[idx];
 }
 
-// Fused Adam optimizer step:
-//   m = beta1*m + (1-beta1)*g
-//   v = beta2*v + (1-beta2)*g^2
-//   m_hat = m / (1 - beta1^step)
-//   v_hat = v / (1 - beta2^step)
-//   w = w*(1-lr*wd) - lr * m_hat / (sqrt(v_hat) + eps)
-struct AdamParams {
-    float beta1, beta2, eps, wd;
-    float bc1, bc2; // bias correction: 1/(1-beta1^step), 1/(1-beta2^step)
-    int n;
-};
-
-kernel void adam_step_kernel(
-    device float* wb                    [[buffer(0)]],
-    device float* m                     [[buffer(1)]],
-    device float* v                     [[buffer(2)]],
-    const device float* grad            [[buffer(3)]],
-    const device float* lr_ptr          [[buffer(4)]],
-    constant AdamParams& p              [[buffer(5)]],
-    uint idx [[thread_position_in_grid]]
-) {
-    if ((int)idx >= p.n) return;
-    float g = grad[idx];
-    float mi = p.beta1 * m[idx] + (1.0f - p.beta1) * g;
-    float vi = p.beta2 * v[idx] + (1.0f - p.beta2) * g * g;
-    m[idx] = mi;
-    v[idx] = vi;
-    float m_hat = mi * p.bc1;
-    float v_hat = vi * p.bc2;
-    float lr = *lr_ptr;
-    wb[idx] = wb[idx] * (1.0f - lr * p.wd) - lr * m_hat / (sqrt(v_hat) + p.eps);
-}
-
 // ============================================================================
 // Section 12: Transpose kernels
 // ============================================================================

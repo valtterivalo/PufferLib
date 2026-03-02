@@ -47,7 +47,6 @@ BASE_CONFIG = {
     "kernels": 1.0,
     "profile": 0.0,
     "overlap": 1.0,
-    "use_adam": 1.0,
     "env_name": ENV_NAME,
 }
 

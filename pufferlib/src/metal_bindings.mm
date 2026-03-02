@@ -397,7 +397,7 @@ pybind11::dict log_train_debug(pybind11::object pufferl_obj) {
     out["grad_l2"] = grad_l2;
     out["grad_clip_coef"] = grad_clip_coef;
 
-    float current_lr = pufferl.use_adam ? *pufferl.adam->lr_ptr : *pufferl.muon->lr_ptr;
+    float current_lr = *pufferl.muon->lr_ptr;
     out["optimizer_lr"] = current_lr;
     return out;
 }
@@ -534,7 +534,6 @@ std::unique_ptr<PuffeRL> create_pufferl(pybind11::dict kwargs,
     hypers.kernels = true;   // always use Metal kernels
     hypers.profile = get_config(kwargs, "profile");
     hypers.overlap = kwargs.contains("overlap") && get_config(kwargs, "overlap") > 0;
-    hypers.use_adam = kwargs.contains("use_adam") && get_config(kwargs, "use_adam") > 0;
 
     std::string env_name = kwargs["env_name"].cast<std::string>();
     Dict* vec_dict = py_dict_to_c_dict(vec_kwargs.cast<py::dict>());

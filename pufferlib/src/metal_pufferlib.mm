@@ -132,7 +132,6 @@ typedef struct {
     bool kernels;
     bool profile;
     bool overlap;  // async training overlap: train on separate GPU queue
-    bool use_adam;  // use Adam optimizer instead of Muon
     // Architecture
     int arch_type;  // 0=ARCH_RICH (3-layer MLP + LN decoder), 1=ARCH_SIMPLE (upstream single-linear)
     // Threading
@@ -219,8 +218,6 @@ typedef struct {
     Allocator pufferl_alloc;
     StaticVec* vec;
     Muon* muon;
-    Adam* adam;
-    bool use_adam = false;
     HypersT hypers;
     bool is_continuous;
     std::vector<cudaStream_t> rollout_streams;
@@ -495,7 +492,7 @@ void train_impl(PuffeRL& pufferl) {
     if (hypers.anneal_lr) {
         float lr_min = hypers.min_lr_ratio * hypers.lr;
         float lr = cosine_annealing(hypers.lr, lr_min, current_epoch, total_epochs);
-        float* lr_ptr = pufferl.use_adam ? pufferl.adam->lr_ptr : pufferl.muon->lr_ptr;
+        float* lr_ptr = pufferl.muon->lr_ptr;
         *lr_ptr = lr;
     }
 
@@ -589,7 +586,7 @@ void train_impl(PuffeRL& pufferl) {
 
             uint64_t tp6 = mach_absolute_time();
 
-            PufTensor& gc = pufferl.use_adam ? pufferl.adam->gc_puf : pufferl.muon->gc_puf;
+            PufTensor& gc = pufferl.muon->gc_puf;
             if (pufferl.grad_bf16_puf.dtype_size == 2) {
                 mtl_barrier((MetalStream*)ts);
                 mtl_cast_f16_to_f32((float*)gc.bytes,
@@ -611,10 +608,7 @@ void train_impl(PuffeRL& pufferl) {
 
             mtl_barrier((MetalStream*)ts); // clip→optimizer
             // Optimizer step with fused fp32→fp16 param cast
-            if (pufferl.use_adam)
-                adam_step(pufferl.adam, ts);
-            else
-                muon_step(pufferl.muon, ts);
+            muon_step(pufferl.muon, ts);
 
             // Metal 4 coherence: barrier so next minibatch's forward pass
             // sees updated weights from optimizer.
@@ -727,7 +721,7 @@ void train_impl(PuffeRL& pufferl) {
 
         uint64_t tp6 = mach_absolute_time();
 
-        PufTensor& gc_sync = pufferl.use_adam ? pufferl.adam->gc_puf : pufferl.muon->gc_puf;
+        PufTensor& gc_sync = pufferl.muon->gc_puf;
         if (pufferl.grad_bf16_puf.dtype_size == 2) {
             mtl_barrier((MetalStream*)train_stream);
             mtl_cast_f16_to_f32((float*)gc_sync.bytes,
@@ -748,10 +742,7 @@ void train_impl(PuffeRL& pufferl) {
         uint64_t tp8 = mach_absolute_time();
 
         mtl_barrier((MetalStream*)train_stream); // clip→optimizer
-        if (pufferl.use_adam)
-            adam_step(pufferl.adam, train_stream);
-        else
-            muon_step(pufferl.muon, train_stream);
+        muon_step(pufferl.muon, train_stream);
 
         // Metal 4 coherence: barrier so next minibatch's forward pass
         // sees updated weights from optimizer.
@@ -1005,7 +996,6 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
         // Fused encoder+layer0 disabled (nonlinear encoder)
     }
     pufferl->overlap_enabled = hypers.overlap;
-    pufferl->use_adam = hypers.use_adam;
 
     // ========================================================================
     // fp16 training weights, activations, gradients
@@ -1089,7 +1079,6 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     float beta2 = hypers.beta2;
     float eps = hypers.eps;
     pufferl->muon = new Muon{};
-    pufferl->adam = new Adam{};
     int horizon = hypers.horizon;
     int total_agents = vec->total_agents;
     int batch = total_agents / hypers.num_buffers;
@@ -1154,8 +1143,6 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
         pufferl->param_fp32_puf, lr, beta1, eps, 0.0, alloc);
     pufferl->muon->nccl_comm = nullptr;
     pufferl->muon->world_size = 1;
-    adam_init(pufferl->adam, &fp32_params,
-        pufferl->param_fp32_puf, lr, beta1, beta2, eps, 0.0, alloc);
     // Single allocation for all registered buffers
     alloc.create();
 
@@ -1184,9 +1171,6 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     *pufferl->muon->lr_ptr = pufferl->muon->lr_val_init;
     memset(pufferl->muon->lr_derived_ptr, 0, 2 * sizeof(float));
     memset(pufferl->muon->mb_puf.bytes, 0, pufferl->muon->mb_puf.numel() * sizeof(float));
-
-    // adam_post_create
-    adam_post_create(pufferl->adam);
 
     // Per-buffer inference activations (separate allocators)
     pufferl->buffer_activations.resize(num_buffers);
@@ -1242,7 +1226,6 @@ void close_impl(PuffeRL& pufferl) {
 
     fprintf(stderr, "[metal] close: deleting structs\n");
     delete pufferl.muon;
-    delete pufferl.adam;
 
     bool simple = (pufferl.hypers.arch_type == ARCH_SIMPLE);
     auto delete_weights = [simple](PolicyWeights& w) {

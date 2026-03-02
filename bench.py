@@ -67,7 +67,6 @@ def parse_args():
     p.add_argument("--vf-clip-coef", type=float, default=0.1)
     p.add_argument("--max-grad-norm", type=float, default=0.5)
     p.add_argument("--no-overlap", action="store_true")
-    p.add_argument("--optimizer", choices=["muon", "adam"], default="muon")
     p.add_argument("--log-interval", type=int, default=10)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument(
@@ -127,7 +126,6 @@ def main():
         "kernels": 1.0,
         "profile": 0.0,
         "overlap": 0.0 if args.no_overlap else 1.0,
-        "use_adam": 1.0 if args.optimizer == "adam" else 0.0,
         "seed": float(args.seed),
         "env_name": args.env,
     }
@@ -163,7 +161,7 @@ def main():
             "horizon": args.horizon,
             "total_timesteps": args.total_timesteps,
             "learning_rate": args.learning_rate,
-            "optimizer": args.optimizer,
+            "optimizer": "muon",
             "minibatch_size": args.minibatch_size,
             "replay_ratio": args.replay_ratio,
             "ent_coef": args.ent_coef,

@@ -208,14 +208,6 @@ SWEEP_CONFIG = {
             "scale": "auto",
         },
     },
-    "optim": {
-        "optimizer_idx": {
-            "distribution": "uniform",
-            "min": 0.0,
-            "max": 1.0,
-            "scale": "auto",
-        },
-    },
 }
 
 # defaults from bench.py — known working Breakout params
@@ -250,16 +242,7 @@ DEFAULT_PARAMS = {
         "hidden_size": 64,
         "num_layers": 2,
     },
-    "optim": {
-        "optimizer_idx": 0.0,
-    },
 }
-
-
-def decode_optimizer(params: dict) -> str:
-    """Decode optimizer_idx: <0.5 = muon, >=0.5 = adam."""
-    idx = params.get("optim", {}).get("optimizer_idx", 0.0)
-    return "adam" if idx >= 0.5 else "muon"
 
 
 def build_configs(
@@ -268,7 +251,6 @@ def build_configs(
     """Convert Protein params dict to _C.create_pufferl config dicts."""
     train = params.get("train", {})
     policy = params.get("policy", {})
-    optimizer = decode_optimizer(params)
 
     config = {
         "horizon": int(train.get("horizon", 64)),
@@ -297,7 +279,6 @@ def build_configs(
         "kernels": 1.0,
         "profile": 0.0,
         "overlap": 1.0 if train.get("overlap", 0.0) >= 0.5 else 0.0,
-        "use_adam": 1.0 if optimizer == "adam" else 0.0,
         "env_name": env_name,
     }
     vec_config = {
@@ -339,8 +320,6 @@ def clamp_params(params: dict) -> None:
     """Enforce cross-parameter constraints."""
     train = params.get("train", {})
     policy = params.get("policy", {})
-    optimizer = decode_optimizer(params)
-
     hidden = int(policy.get("hidden_size", 128))
     layers = int(policy.get("num_layers", 1))
     total_agents = int(train.get("total_agents", 2048))
@@ -388,11 +367,6 @@ def clamp_params(params: dict) -> None:
     num_buf = int(train.get("num_buffers", 1))
     train["num_threads"] = num_buf
 
-    if optimizer == "adam":
-        train["learning_rate"] = min(float(train.get("learning_rate", 0.003)), 0.02)
-        train["replay_ratio"] = min(float(train.get("replay_ratio", 1.0)), 2.0)
-    else:
-        train["learning_rate"] = min(float(train.get("learning_rate", 0.1)), 0.3)
 
 
 def run_trial(
@@ -403,14 +377,13 @@ def run_trial(
     sweep_dir: Path,
 ) -> dict | None:
     """Run a single in-process training trial via _C calls."""
-    optimizer = decode_optimizer(params)
     flat = dict(pufferlib.unroll_nested_dict(params))
     total_steps = int(flat.get("train/total_timesteps", 0))
     total_agents = int(flat.get("train/total_agents", 4096))
     horizon = int(flat.get("train/horizon", 64))
 
     print(f"\n{'='*70}")
-    print(f"trial {trial_idx}  ({total_steps/1e6:.1f}M steps, {optimizer})")
+    print(f"trial {trial_idx}  ({total_steps/1e6:.1f}M steps, muon)")
     for key, value in sorted(flat.items()):
         short_key = key.split("/")[-1]
         fmt = f"{value:.6f}" if isinstance(value, float) else str(value)
@@ -421,7 +394,7 @@ def run_trial(
     log_dir.mkdir(parents=True, exist_ok=True)
 
     with (log_dir / "config.json").open("w") as f:
-        json.dump({"params": params, "optimizer": optimizer}, f, indent=2)
+        json.dump({"params": params}, f, indent=2)
 
     pufferl = None
     try:
@@ -556,7 +529,6 @@ def run_trial(
     return {
         "trial": trial_idx,
         "params": params,
-        "optimizer": optimizer,
         "final_score": final_score,
         "tail_score": tail_score,
         "mean_sps": mean_sps,
@@ -587,7 +559,6 @@ def print_results(obs_path: Path) -> None:
             "cost": best["cost"],
             "step": best["step"],
             "params": best["params"],
-            "optimizer": best.get("optimizer", "muon"),
             "mean_sps": best.get("mean_sps", 0),
             "output": score,
         })
@@ -608,7 +579,6 @@ def print_results(obs_path: Path) -> None:
         print(f"  score: {best['score']:.2f}")
         print(f"  steps: {best['step']/1e6:.1f}M")
         print(f"  wall: {best['cost']:.0f}s")
-        print(f"  optimizer: {best.get('optimizer', 'muon')}")
         flat = dict(pufferlib.unroll_nested_dict(best["params"]))
         print("\n  hyperparameters:")
         for key, value in sorted(flat.items()):
@@ -626,13 +596,12 @@ def print_results(obs_path: Path) -> None:
             hs = int(flat.get("policy/hidden_size", 0))
             nl = int(flat.get("policy/num_layers", 0))
             steps_m = t["step"] / 1e6
-            opt = t.get("optimizer", "muon")
             sps = t.get("mean_sps", 0)
             sps_str = f"  sps={sps/1e6:.2f}M" if sps > 0 else ""
             print(
                 f"  #{t['trial']:3d}  score={t['score']:>8.2f}  "
                 f"steps={steps_m:>5.1f}M  wall={t['cost']:>5.0f}s{sps_str}  "
-                f"hz={hz:>3}  lr={lr:.4f}  ent={ent:.4f}  hs={hs}  L{nl}  {opt}"
+                f"hz={hz:>3}  lr={lr:.4f}  ent={ent:.4f}  hs={hs}  L{nl}"
             )
 
     by_score = sorted(trial_summaries, key=lambda t: t["score"], reverse=True)
@@ -645,14 +614,13 @@ def print_results(obs_path: Path) -> None:
         hs = int(flat.get("policy/hidden_size", 0))
         nl = int(flat.get("policy/num_layers", 0))
         steps_m = t["step"] / 1e6
-        opt = t.get("optimizer", "muon")
         sps = t.get("mean_sps", 0)
         sps_str = f"  sps={sps/1e6:.2f}M" if sps > 0 else ""
         is_pareto = " *" if t["trial"] in pareto_ids else ""
         print(
             f"  #{t['trial']:3d}  score={t['score']:>8.2f}  "
             f"steps={steps_m:>5.1f}M  wall={t['cost']:>5.0f}s{sps_str}  "
-            f"hz={hz:>3}  lr={lr:.4f}  ent={ent:.4f}  hs={hs}  L{nl}  {opt}{is_pareto}"
+            f"hz={hz:>3}  lr={lr:.4f}  ent={ent:.4f}  hs={hs}  L{nl}{is_pareto}"
         )
 
 
@@ -709,7 +677,6 @@ def run_sweep(env_name: str, max_trials: int | None, timeout_h: float) -> None:
                 pred_score = info.get("score", 0)
                 print(f"\nprotein prediction: score={pred_score:.3f}, cost={pred_cost:.0f}s")
 
-        optimizer = decode_optimizer(params)
         result = run_trial(trial_idx, env_name, params, protein, sweep_dir)
 
         if result is not None:
@@ -720,7 +687,6 @@ def run_sweep(env_name: str, max_trials: int | None, timeout_h: float) -> None:
                     "score": obs["score"],
                     "cost": obs["cost"],
                     "step": obs["step"],
-                    "optimizer": optimizer,
                     "mean_sps": result["mean_sps"],
                 }, obs_path)
         else:
@@ -732,7 +698,6 @@ def run_sweep(env_name: str, max_trials: int | None, timeout_h: float) -> None:
                 "cost": 1.0,
                 "step": 0,
                 "is_failure": True,
-                "optimizer": optimizer,
                 "mean_sps": 0,
             }, obs_path)
 

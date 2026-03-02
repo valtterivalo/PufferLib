@@ -67,7 +67,6 @@ def parse_args():
     p.add_argument("--num-buffers", type=int, default=1)
     p.add_argument("--num-threads", type=int, default=1)
     p.add_argument("--no-overlap", action="store_true", help="disable async training overlap")
-    p.add_argument("--optimizer", choices=["muon", "adam"], default="muon")
     p.add_argument("--no-wandb", action="store_true")
     p.add_argument("--shaping", action="store_true", help="enable reward shaping")
     p.add_argument("--arch", choices=["simple", "rich"], default="rich",
@@ -128,7 +127,6 @@ def main():
         "kernels": 1.0,
         "profile": 0.0,
         "overlap": 0.0 if args.no_overlap else 1.0,
-        "use_adam": 1.0 if args.optimizer == "adam" else 0.0,
         "env_name": "osrs_pvp",
     }
     vec_config = {
