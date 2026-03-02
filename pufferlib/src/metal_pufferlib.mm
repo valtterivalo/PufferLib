@@ -655,8 +655,10 @@ void train_impl(PuffeRL& pufferl) {
     // Non-overlap: run minibatch loop synchronously.
     uint32_t* train_rng_offset = (uint32_t*)((int64_t*)pufferl.rng_offset_puf.bytes + hypers.num_buffers);
 
+    bool gpu_profile = hypers.profile;
     puf_set_gpu_training(true);
     for (int mb = 0; mb < total_minibatches; ++mb) {
+        if (gpu_profile) ensure_gpu_synced(train_stream);
         uint64_t tp0 = mach_absolute_time();
 
         puf_zero(pufferl.advantages_puf, train_stream);
@@ -668,6 +670,7 @@ void train_impl(PuffeRL& pufferl) {
             pufferl.prio_bufs, pufferl.rng_seed, train_rng_offset, train_stream);
         mtl_barrier((MetalStream*)train_stream); // prio idx/weights -> select copy
 
+        if (gpu_profile) ensure_gpu_synced(train_stream);
         uint64_t tp2 = mach_absolute_time();
 
         puf_zero(pufferl.train_buf.mb_state, train_stream);
@@ -683,6 +686,7 @@ void train_impl(PuffeRL& pufferl) {
         }
         mtl_barrier((MetalStream*)train_stream); // minibatch buffers -> forward/PPO
 
+        if (gpu_profile) ensure_gpu_synced(train_stream);
         uint64_t tp3 = mach_absolute_time();
 
         PufTensor obs_puf = pufferl.train_buf.mb_obs;
@@ -690,6 +694,7 @@ void train_impl(PuffeRL& pufferl) {
         PufTensor dec_puf = policy_forward_train(pufferl.policy, pufferl.weights_fp32,
             pufferl.train_activations, obs_puf, state_puf, train_stream);
 
+        if (gpu_profile) ensure_gpu_synced(train_stream);
         uint64_t tp4 = mach_absolute_time();
 
         PufTensor dec_puf_f32 = dec_puf;
@@ -711,6 +716,7 @@ void train_impl(PuffeRL& pufferl) {
             train_stream);
         mtl_barrier((MetalStream*)train_stream); // PPO outputs -> backward
 
+        if (gpu_profile) ensure_gpu_synced(train_stream);
         uint64_t tp5 = mach_absolute_time();
 
         PufTensor grad_logits_puf = pufferl.ppo_bufs_puf.grad_logits;
@@ -719,6 +725,7 @@ void train_impl(PuffeRL& pufferl) {
         policy_backward(pufferl.policy, pufferl.weights_fp32, pufferl.train_activations,
             grad_logits_puf, grad_logstd_puf, grad_values_puf, train_stream);
 
+        if (gpu_profile) ensure_gpu_synced(train_stream);
         uint64_t tp6 = mach_absolute_time();
 
         PufTensor& gc_sync = pufferl.muon->gc_puf;
@@ -731,6 +738,7 @@ void train_impl(PuffeRL& pufferl) {
             puf_copy(gc_sync, pufferl.grad_bf16_puf, train_stream);
         }
 
+        if (gpu_profile) ensure_gpu_synced(train_stream);
         uint64_t tp7 = mach_absolute_time();
 
         mtl_barrier((MetalStream*)train_stream); // grad_cast→clip
@@ -739,6 +747,7 @@ void train_impl(PuffeRL& pufferl) {
             clip_grad_norm_f32(gc_sync, scratch, hypers.max_grad_norm, 1e-6f, train_stream);
         }
 
+        if (gpu_profile) ensure_gpu_synced(train_stream);
         uint64_t tp8 = mach_absolute_time();
 
         mtl_barrier((MetalStream*)train_stream); // clip→optimizer
@@ -748,6 +757,7 @@ void train_impl(PuffeRL& pufferl) {
         // sees updated weights from optimizer.
         mtl_barrier((MetalStream*)train_stream);
 
+        if (gpu_profile) ensure_gpu_synced(train_stream);
         uint64_t tp9 = mach_absolute_time();
 
         pufferl.profile.accum[PROF_TRAIN_PRIO] += prof_ms(tp0, tp2);

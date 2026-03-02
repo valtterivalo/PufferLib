@@ -89,6 +89,8 @@ def parse_args():
                    help="minimum LR as ratio of initial (upstream default: 0.0)")
     p.add_argument("--tf32-sim", action="store_true",
                    help="simulate CUDA TF32 precision by rounding GEMM inputs to 10-bit mantissa")
+    p.add_argument("--profile", action="store_true",
+                   help="GPU sync after each training phase for accurate per-kernel profiling")
     return p.parse_args()
 
 
@@ -124,7 +126,7 @@ def main():
         "use_rnn": 1.0,
         "cudagraphs": -1.0,
         "kernels": 1.0,
-        "profile": 0.0,
+        "profile": 1.0 if args.profile else 0.0,
         "overlap": 0.0 if args.no_overlap else 1.0,
         "seed": float(args.seed),
         "env_name": args.env,
