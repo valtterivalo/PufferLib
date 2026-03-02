@@ -1,123 +1,38 @@
 # breakout reference metrics
 
-## upstream static-native reference (joseph screenshot)
+## upstream static-native reference
+- source: joseph suarez screenshot shared in-thread
 - env: `puffer_breakout`
-- params: `32.4K`
-- steps: `102.8M`
-- SPS: `23.1M`
-- user stat `score`: `843.089`
-- user stat `episode_length`: `16982.564`
+- params: `32.4k`
+- steps: `102.8m`
+- sps: `23.1m`
+- score: `843.089`
+- episode length: `16982.564`
 - losses (shown): `pg_loss=0.005`, `vf_loss=0.049`, `entropy=0.151`
 
-## this metal branch (m4 pro) before root-cause fix
-- symptom: loss logs frequently `nan` or unstable, policy stayed near uniform entropy.
-- typical score/episode_return stayed around `0.8` with little learning.
+## metal branch status (m4 pro)
 
-## this metal branch after fp32-train-gradient fix
-command:
-```bash
-python bench.py --env breakout \
-  --total-agents 4096 \
-  --hidden-size 64 \
-  --num-layers 2 \
-  --horizon 64 \
-  --total-timesteps 100000000 \
-  --learning-rate 0.1 \
-  --beta1 0.7279714073125252 \
-  --beta2 0.9986265112492152 \
-  --eps 0.00008339460257113628 \
-  --minibatch-size 65536 \
-  --replay-ratio 1.4242098997083206 \
-  --ent-coef 0.0033240721522812535 \
-  --gamma 0.9721246598992744 \
-  --gae-lambda 0.948721675814334 \
-  --vtrace-rho-clip 2.1017317041552603 \
-  --vtrace-c-clip 1.0830442742115065 \
-  --prio-alpha 0.1 \
-  --prio-beta0 0.8247156461060179 \
-  --clip-coef 0.6746497927896418 \
-  --vf-coef 1.2195502588297364 \
-  --vf-clip-coef 1.2291681640124468 \
-  --max-grad-norm 1.8109182724544075 \
-  --num-buffers 8 \
-  --num-threads 8 \
-  --optimizer muon \
-  --log-interval 5
-```
+### latest stable 100m runs on current head
+- config family: tuned `muon`, `total_agents=4096`, `hidden=64`, `layers=2`, `horizon=64`, `num_buffers=8`, `num_threads=8`
+- seed 40: final `score=479.03`, `avg sps=879,518` (`/tmp/metal_seed_40.log`)
+- seed 41: final `score=516.69`, `avg sps=861,528` (`/tmp/metal_seed_41.log`)
+- seed 42: final `score=455.57`, `avg sps=848,112` (`/tmp/metal_seed_42.log`)
+- no nan loss reporting in these runs
 
-observed:
-- run completed `99,876,864` steps
-- avg SPS: `822,472`
-- policy entropy moved off uniform (`~1.098 -> ~0.03-0.2`)
-- score improved from `<1` to a stable `~6.6-6.8`
-- no NaN loss reporting in this run
+### best known sweep points (historical, still valid)
+- from `/tmp/metal_breakout_sweep_results_latest.txt`
+- best score found: `672.82` at `126.5m` steps, `1.12m sps` (trial `#29`)
+- fastest pareto point: `2.35m sps` at `score=304.19` (trial `#20`)
 
-note:
-- this fix prioritizes numeric stability (finite gradients) over raw throughput.
-- additional tuning is still needed to approach upstream task performance.
+## interpretation
+- metal is now learning reliably (far beyond the previous `~0.8` plateau).
+- sample-efficiency gap still exists vs upstream reference at similar step counts.
+- this gap is larger than expected from hardware differences alone, so backend/parity work is still needed.
 
-## march 2026 update (current investigation)
-- upstream `static-native` moved from `6a4646ff` to `0a479a58` (`git fetch upstream static-native`).
-- metal no longer resets recurrent rollout state at rollout boundaries (cuda parity).
+## current priorities
+1. close learning-efficiency gap first (parity/debugging).
+2. then optimize throughput aggressively after semantics are trusted.
 
-observed bottlenecks:
-- `num_buffers=8` reduces inference batch size from `4096` to `512` and increases rollout callback count from `64` to `512` per iteration.
-- per-callback sync is still required before env step consumes actions, but rollout now runs on per-buffer metal streams with per-buffer sampling scratch (global rollout gpu mutex removed).
-- this raised throughput in the `num_buffers=8` tuned run from roughly `~0.82m` to `~1.00m` SPS on m4 pro.
-
-important parity caveat:
-- cuda can recompute priority sampling every minibatch fully on gpu.
-- current metal prio path still builds cdf on cpu (`prio_precompute` sync), so forcing full per-minibatch cuda parity on metal causes heavy stalls and learning regression.
-- root-cause follow-up should be a full gpu prio sampler on metal (to remove cpu cdf sync), then re-test per-minibatch parity.
-
-latest local checkpoints:
-- `num_buffers=1`, `num_threads=1`, 10M-step sanity run:
-  - avg SPS: `~1.14m`
-  - score: `~0.82` at 9.17M steps
-- `num_buffers=8`, `num_threads=8`, tuned 10M-step run:
-  - avg SPS: `~1.00m`
-  - score: `~5.43` at 9.17M steps
-
-## march 2026 latest stable long run (100m, tuned muon config)
-command:
-```bash
-python bench.py --env breakout \
-  --total-agents 4096 \
-  --hidden-size 64 \
-  --num-layers 2 \
-  --horizon 64 \
-  --total-timesteps 100000000 \
-  --learning-rate 0.1 \
-  --beta1 0.7279714073125252 \
-  --beta2 0.9986265112492152 \
-  --eps 0.00008339460257113628 \
-  --minibatch-size 65536 \
-  --replay-ratio 1.4242098997083206 \
-  --ent-coef 0.0033240721522812535 \
-  --gamma 0.9721246598992744 \
-  --gae-lambda 0.948721675814334 \
-  --vtrace-rho-clip 2.1017317041552603 \
-  --vtrace-c-clip 1.0830442742115065 \
-  --prio-alpha 0.1 \
-  --prio-beta0 0.8247156461060179 \
-  --clip-coef 0.6746497927896418 \
-  --vf-coef 1.2195502588297364 \
-  --vf-clip-coef 1.2291681640124468 \
-  --max-grad-norm 1.8109182724544075 \
-  --num-buffers 8 \
-  --num-threads 8 \
-  --optimizer muon \
-  --log-interval 20
-```
-
-observed:
-- run completed `99,876,864` steps
-- avg SPS: `877,254`
-- final score: `~436.25`
-- final episode length: `~8759`
-- final entropy: `~0.703`
-- no NaN loss reporting, no hang/crash
-
-gap vs upstream screenshot:
-- still below upstream static-native reference (`score ~843` at ~100m).
-- current priorities remain: close learning gap first, then improve throughput.
+## known caveats to keep in mind
+- `bench.py` and `sweep_bench.py` are fork-specific harnesses; direct comparability to upstream harness is imperfect.
+- `python -m pufferlib.pufferl train puffer_breakout ...` currently behaves differently and can collapse; treat that path as a separate parity target.
