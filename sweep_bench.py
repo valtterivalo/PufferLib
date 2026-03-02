@@ -66,6 +66,18 @@ SWEEP_CONFIG = {
             "max": 64,
             "scale": "auto",
         },
+        "overlap": {
+            "distribution": "uniform",
+            "min": 0.0,
+            "max": 1.0,
+            "scale": "auto",
+        },
+        "min_lr_ratio": {
+            "distribution": "uniform",
+            "min": 0.0,
+            "max": 0.2,
+            "scale": "auto",
+        },
         "learning_rate": {
             "distribution": "log_normal",
             "min": 0.02,
@@ -176,16 +188,11 @@ SWEEP_CONFIG = {
         },
         "num_buffers": {
             "distribution": "uniform_pow2",
-            "min": 4,
+            "min": 1,
             "max": 8,
             "scale": "auto",
         },
-        "num_threads": {
-            "distribution": "uniform_pow2",
-            "min": 4,
-            "max": 8,
-            "scale": "auto",
-        },
+        # num_threads always set to match num_buffers in clamp_params
     },
     "policy": {
         "hidden_size": {
@@ -205,7 +212,7 @@ SWEEP_CONFIG = {
         "optimizer_idx": {
             "distribution": "uniform",
             "min": 0.0,
-            "max": 0.2,
+            "max": 1.0,
             "scale": "auto",
         },
     },
@@ -216,6 +223,8 @@ DEFAULT_PARAMS = {
     "train": {
         "total_timesteps": 100_000_000,
         "horizon": 64,
+        "overlap": 0.0,
+        "min_lr_ratio": 0.0,
         "learning_rate": 0.1,
         "beta1": 0.7279714073125252,
         "beta2": 0.9986265112492152,
@@ -234,8 +243,8 @@ DEFAULT_PARAMS = {
         "replay_ratio": 1.4242098997083206,
         "minibatch_size": 65536,
         "total_agents": 4096,
-        "num_buffers": 8,
-        "num_threads": 8,
+        "num_buffers": 1,
+        "num_threads": 1,
     },
     "policy": {
         "hidden_size": 64,
@@ -264,7 +273,7 @@ def build_configs(
     config = {
         "horizon": int(train.get("horizon", 64)),
         "learning_rate": train.get("learning_rate", 0.1),
-        "min_lr_ratio": 0.1,
+        "min_lr_ratio": train.get("min_lr_ratio", 0.0),
         "anneal_lr": 1.0,
         "beta1": train.get("beta1", 0.73),
         "beta2": train.get("beta2", 0.9986),
@@ -287,7 +296,7 @@ def build_configs(
         "cudagraphs": -1.0,
         "kernels": 1.0,
         "profile": 0.0,
-        "overlap": 1.0,
+        "overlap": 1.0 if train.get("overlap", 0.0) >= 0.5 else 0.0,
         "use_adam": 1.0 if optimizer == "adam" else 0.0,
         "env_name": env_name,
     }
@@ -297,8 +306,8 @@ def build_configs(
         "num_threads": float(int(train.get("num_threads", 1))),
     }
     policy_config = {
-        "hidden_size": float(int(policy.get("hidden_size", 128))),
-        "num_layers": float(int(policy.get("num_layers", 4))),
+        "hidden_size": float(int(policy.get("hidden_size", 64))),
+        "num_layers": float(int(policy.get("num_layers", 2))),
         "arch": 1.0,  # always simple for bench sweep
     }
     env_config = ENV_DEFAULTS[env_name]
@@ -373,6 +382,11 @@ def clamp_params(params: dict) -> None:
     train["vf_clip_coef"] = min(max(float(train.get("vf_clip_coef", 1.23)), 0.1), 5.0)
     train["max_grad_norm"] = min(max(float(train.get("max_grad_norm", 1.81)), 0.1), 10.0)
     train["replay_ratio"] = min(max(float(train.get("replay_ratio", 1.4)), 0.1), 4.0)
+    train["min_lr_ratio"] = min(max(float(train.get("min_lr_ratio", 0.0)), 0.0), 0.3)
+
+    # num_threads must match num_buffers (one thread per buffer)
+    num_buf = int(train.get("num_buffers", 1))
+    train["num_threads"] = num_buf
 
     if optimizer == "adam":
         train["learning_rate"] = min(float(train.get("learning_rate", 0.003)), 0.02)
