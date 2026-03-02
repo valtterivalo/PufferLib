@@ -304,6 +304,31 @@ void mtl_copy_f32(float *dst, const float *src, int count,
   mtl_dispatch_1d(ms, pso, count);
 }
 
+// TF32 round-copy: dst[i] = tf32_round(src[i]) for TF32 GEMM simulation.
+void mtl_tf32_round_copy(float *dst, const float *src, int count,
+                          cudaStream_t stream) {
+  MetalStream *ms = mtl_get_stream(stream);
+  ms->compute_encoder();
+  auto pso = mtl_pipeline("tf32_round_copy_kernel");
+  mtl_set_pso(ms, pso);
+  mtl_set_ptr(ms, dst, 0);
+  mtl_set_ptr(ms, src, 1);
+  mtl_set_params(ms, count, 2);
+  mtl_dispatch_1d(ms, pso, count);
+}
+
+// TF32 in-place rounding: buf[i] = tf32_round(buf[i]) for TF32 GEMM simulation.
+// Avoids scratch buffer visibility issues by modifying the original buffer.
+void mtl_tf32_round_inplace(float *buf, int count, cudaStream_t stream) {
+  MetalStream *ms = mtl_get_stream(stream);
+  ms->compute_encoder();
+  auto pso = mtl_pipeline("tf32_round_inplace_kernel");
+  mtl_set_pso(ms, pso);
+  mtl_set_ptr(ms, buf, 0);
+  mtl_set_params(ms, count, 1);
+  mtl_dispatch_1d(ms, pso, count);
+}
+
 void mtl_clamp_f32(float *ptr, float lo, float hi, int count,
                     cudaStream_t stream) {
   MetalStream *ms = mtl_get_stream(stream);
@@ -1373,7 +1398,7 @@ void mtl_select_copy(RolloutBuf &rollouts, TrainGraph &graph,
 
 void mtl_muon_weight_update(float *weights, const float *updates,
                               const float *lr_ptr, float weight_decay, int count,
-                              void *fp16_out, cudaStream_t stream) {
+                              cudaStream_t stream) {
   MetalStream *ms = mtl_get_stream(stream);
   ms->compute_encoder();
   auto pso = mtl_pipeline("muon_weight_update_kernel");
@@ -1386,7 +1411,6 @@ void mtl_muon_weight_update(float *weights, const float *updates,
     int count;
   } params = {weight_decay, count};
   mtl_set_params(ms, params, 3);
-  mtl_set_ptr(ms, fp16_out, 4);
   mtl_dispatch_1d(ms, pso, count);
 }
 
@@ -1550,7 +1574,7 @@ void muon_post_create(Muon *m) {
   memset(m->mb_puf.bytes, 0, m->mb_puf.numel() * sizeof(float));
 }
 
-void muon_step(Muon *m, void *fp16_out, cudaStream_t stream) {
+void muon_step(Muon *m, cudaStream_t stream) {
   if (m->wb_puf.bytes == nullptr)
     return;
   MetalStream *ms = mtl_get_stream(stream);
@@ -1660,10 +1684,10 @@ void muon_step(Muon *m, void *fp16_out, cudaStream_t stream) {
     offset += t->numel();
   }
 
-  // Apply weight update: w -= lr * up + weight_decay * w (fused with fp16 cast)
+  // Apply weight update: w -= lr * up + weight_decay * w
   mtl_muon_weight_update((float *)m->wb_puf.bytes, (const float *)m->up_puf.bytes,
                          m->lr_ptr, (float)m->weight_decay,
-                         (int)m->wb_puf.numel(), fp16_out, stream);
+                         (int)m->wb_puf.numel(), stream);
   mtl_barrier(ms);
 }
 
@@ -1702,7 +1726,7 @@ void adam_post_create(Adam *a) {
   memset(a->v_puf.bytes, 0, a->v_puf.numel() * sizeof(float));
 }
 
-void adam_step(Adam *a, void *fp16_out, cudaStream_t stream) {
+void adam_step(Adam *a, cudaStream_t stream) {
   if (a->wb_puf.bytes == nullptr) return;
   a->step++;
 
@@ -1731,7 +1755,6 @@ void adam_step(Adam *a, void *fp16_out, cudaStream_t stream) {
   mtl_set_tensor(ms, a->gc_puf, 3);
   mtl_set_tensor(ms, a->lr_puf, 4);
   mtl_set_params(ms, params, 5);
-  mtl_set_ptr(ms, fp16_out, 6);
   mtl_dispatch_1d(ms, pso, params.n);
 }
 

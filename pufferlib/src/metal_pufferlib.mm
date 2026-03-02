@@ -389,23 +389,9 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
     mtl_sample_logits_expand((const float*)act_f32_buf.bytes,
                              (double*)act_slice.bytes, block_size * num_atns);
 
-    // Zero RNN state for agents that terminated this step.
-    // After sync: terminals (CPU memcpy) and buffer_states (GPU write) are both visible.
-    {
-        PufTensor& st = pufferl->buffer_states[buf];
-        const float* terms = (const float*)term_dst.bytes;
-        int layers = (int)st.shape[0];
-        int H = (int)st.shape[2];
-        int row_bytes = H * (int)st.dtype_size;
-        char* base = (char*)st.bytes;
-        for (int a = 0; a < block_size; a++) {
-            if (terms[a] != 0.0f) {
-                for (int l = 0; l < layers; l++) {
-                    memset(base + ((int64_t)l * block_size + a) * row_bytes, 0, row_bytes);
-                }
-            }
-        }
-    }
+    // RNN state NOT zeroed on terminal — matches CUDA upstream behavior.
+    // CUDA deliberately removed state zeroing (pufferlib.cu:376).
+    // The MinGRU highway gating learns to ignore stale state.
 
     uint64_t tp2 = mach_absolute_time();
 
@@ -554,7 +540,7 @@ void train_impl(PuffeRL& pufferl) {
             puf_zero(pufferl.train_buf.mb_state, ts);
             {
                 RolloutBuf sel_src = rollouts;
-                sel_src.values = rollouts.values;
+                sel_src.values = pufferl.old_values_puf;
                 mtl_select_copy(sel_src, pufferl.train_buf,
                     (const int64_t*)pufferl.prio_bufs.idx.bytes,
                     (const float*)pufferl.advantages_puf.bytes,
@@ -591,11 +577,7 @@ void train_impl(PuffeRL& pufferl) {
                 pufferl.has_mask ? nullptr : (const float*)pufferl.ones_mask.bytes,
                 pufferl.has_mask ? 0 : 0,  // stride=0: all rows read same ones
                 ts);
-            mtl_barrier((MetalStream*)ts); // PPO outputs -> scatter
-
-            mtl_scatter_ppo_outputs(pufferl.train_buf, rollouts,
-                (const int64_t*)pufferl.prio_bufs.idx.bytes, ts);
-            mtl_barrier((MetalStream*)ts); // scatter -> next mb advantage/select
+            mtl_barrier((MetalStream*)ts); // PPO outputs -> backward
 
             uint64_t tp5 = mach_absolute_time();
 
@@ -630,9 +612,9 @@ void train_impl(PuffeRL& pufferl) {
             mtl_barrier((MetalStream*)ts); // clip→optimizer
             // Optimizer step with fused fp32→fp16 param cast
             if (pufferl.use_adam)
-                adam_step(pufferl.adam, pufferl.param_fp16_puf.bytes, ts);
+                adam_step(pufferl.adam, ts);
             else
-                muon_step(pufferl.muon, pufferl.param_fp16_puf.bytes, ts);
+                muon_step(pufferl.muon, ts);
 
             // Metal 4 coherence: barrier so next minibatch's forward pass
             // sees updated weights from optimizer.
@@ -697,7 +679,7 @@ void train_impl(PuffeRL& pufferl) {
         puf_zero(pufferl.train_buf.mb_state, train_stream);
         {
             RolloutBuf sel_src = rollouts;
-            sel_src.values = rollouts.values;
+            sel_src.values = pufferl.old_values_puf;
             mtl_select_copy(sel_src, pufferl.train_buf,
                 (const int64_t*)pufferl.prio_bufs.idx.bytes,
                 (const float*)pufferl.advantages_puf.bytes,
@@ -733,11 +715,7 @@ void train_impl(PuffeRL& pufferl) {
             pufferl.has_mask ? nullptr : (const float*)pufferl.ones_mask.bytes,
             pufferl.has_mask ? 0 : 0,  // stride=0: all rows read same ones
             train_stream);
-        mtl_barrier((MetalStream*)train_stream); // PPO outputs -> scatter
-
-        mtl_scatter_ppo_outputs(pufferl.train_buf, rollouts,
-            (const int64_t*)pufferl.prio_bufs.idx.bytes, train_stream);
-        mtl_barrier((MetalStream*)train_stream); // scatter -> next mb advantage/select
+        mtl_barrier((MetalStream*)train_stream); // PPO outputs -> backward
 
         uint64_t tp5 = mach_absolute_time();
 
@@ -771,9 +749,9 @@ void train_impl(PuffeRL& pufferl) {
 
         mtl_barrier((MetalStream*)train_stream); // clip→optimizer
         if (pufferl.use_adam)
-            adam_step(pufferl.adam, pufferl.param_fp16_puf.bytes, train_stream);
+            adam_step(pufferl.adam, train_stream);
         else
-            muon_step(pufferl.muon, pufferl.param_fp16_puf.bytes, train_stream);
+            muon_step(pufferl.muon, train_stream);
 
         // Metal 4 coherence: barrier so next minibatch's forward pass
         // sees updated weights from optimizer.

@@ -86,16 +86,24 @@ def parse_args():
     p.add_argument("--num-threads", type=int, default=1)
     p.add_argument("--arch", choices=["simple", "rich"], default="simple",
                    help="model arch: simple (upstream single-linear) or rich (3-layer MLP + LN decoder)")
+    p.add_argument("--min-lr-ratio", type=float, default=0.0,
+                   help="minimum LR as ratio of initial (upstream default: 0.0)")
+    p.add_argument("--tf32-sim", action="store_true",
+                   help="simulate CUDA TF32 precision by rounding GEMM inputs to 10-bit mantissa")
     return p.parse_args()
 
 
 def main():
     args = parse_args()
 
+    if args.tf32_sim:
+        import os
+        os.environ["PUFFERLIB_TF32_SIM"] = "1"
+
     config = {
         "horizon": args.horizon,
         "learning_rate": args.learning_rate,
-        "min_lr_ratio": 0.1,
+        "min_lr_ratio": args.min_lr_ratio,
         "anneal_lr": 1.0,
         "beta1": args.beta1,
         "beta2": args.beta2,

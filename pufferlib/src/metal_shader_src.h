@@ -289,7 +289,8 @@ kernel void fused_scan_forward_checkpointed(
 
     float a_star = 0.0f;
     float log_value = 0.0f;
-    float s = log(state[bH + h]);
+    // fast:: math matches CUDA's __logf/__expf fast intrinsics in the scan loop.
+    float s = fast::log(state[bH + h]);
     log_value = s;
 
     int T_out = p.T_seq + 1;
@@ -315,9 +316,9 @@ kernel void fused_scan_forward_checkpointed(
 
         float z = log_value - a_star;
         float max_val = fmax(s, z);
-        s = max_val + log1p_f(exp(-abs(s - z)));
+        s = max_val + log1p_f(fast::exp(-abs(s - z)));
 
-        float scan_result = exp(a_star + s);
+        float scan_result = fast::exp(a_star + s);
         float proj_sigmoid = sigmoid_f(proj_val);
 
         out[out_curr] = proj_sigmoid * scan_result + (1.0f - proj_sigmoid) * x_val;
@@ -333,7 +334,7 @@ kernel void fused_scan_forward_checkpointed(
         }
     }
 
-    next_state[bH + h] = exp(a_star + s);
+    next_state[bH + h] = fast::exp(a_star + s);
 }
 
 kernel void fused_scan_backward_checkpointed(
@@ -398,7 +399,7 @@ kernel void fused_scan_backward_checkpointed(
 
             float z = recomp_log_value - recomp_a_star;
             float mv = fmax(recomp_s, z);
-            recomp_s = mv + log1p_f(exp(-abs(recomp_s - z)));
+            recomp_s = mv + log1p_f(fast::exp(-abs(recomp_s - z)));
 
             chunk_a_star[i] = recomp_a_star;
             chunk_s[i] = recomp_s;
@@ -421,7 +422,7 @@ kernel void fused_scan_backward_checkpointed(
             int input_idx = out_base + (t - 1) * p.H;
             float x_val = input[input_idx];
 
-            float scan_result = exp(a_star_t + s_t);
+            float scan_result = fast::exp(a_star_t + s_t);
             float z = log_value_t - a_star_t;
 
             float grad_out_val = grad_out[input_idx];
@@ -438,9 +439,9 @@ kernel void fused_scan_backward_checkpointed(
             if (t == p.T_seq) {
                 acc = grad_s;
             } else {
-                acc = grad_s + acc * exp(s_t - s_val_next);
+                acc = grad_s + acc * fast::exp(s_t - s_val_next);
             }
-            float grad_z = acc * exp(z - s_t);
+            float grad_z = acc * fast::exp(z - s_t);
             s_val_next = s_t;
 
             float grad_a = grad_log_h + carry_grad_a - grad_z;
@@ -461,14 +462,14 @@ kernel void fused_scan_backward_checkpointed(
     float s_0 = s_buf[ckpt_0_idx];
     float log_value_0 = log_values_buf[ckpt_0_idx];
 
-    float scan_result_0 = exp(a_star_0 + s_0);
+    float scan_result_0 = fast::exp(a_star_0 + s_0);
     float z_0 = log_value_0 - a_star_0;
 
     float grad_log_h_0 = 0.0f;
     float grad_s_0 = grad_log_h_0;
 
-    acc = grad_s_0 + acc * exp(s_0 - s_val_next);
-    float grad_z_0 = acc * exp(z_0 - s_0);
+    acc = grad_s_0 + acc * fast::exp(s_0 - s_val_next);
+    float grad_z_0 = acc * fast::exp(z_0 - s_0);
 
     grad_state[state_idx] = grad_z_0 / state[state_idx];
 }
@@ -687,11 +688,8 @@ kernel void sample_logits_kernel(
         }
     }
 
-    if (!isfinite(total_log_prob)) total_log_prob = 0.0f;
     logprobs[idx] = total_log_prob;
-    float sampled_value = value[(int)idx * sp.value_stride];
-    if (!isfinite(sampled_value)) sampled_value = 0.0f;
-    value_out[idx] = clamp(sampled_value, -1.0e6f, 1.0e6f);
+    value_out[idx] = value[(int)idx * sp.value_stride];
 }
 
 // ============================================================================
@@ -1628,6 +1626,41 @@ kernel void copy_f32(
     if ((int)idx < n) dst[idx] = src[idx];
 }
 
+// TF32 round-copy: copies src → dst with TF32 mantissa truncation.
+// Zeros the lower 13 mantissa bits of each float, matching CUDA TF32
+// tensor core precision (10-bit mantissa multiply, fp32 accumulate).
+kernel void tf32_round_copy_kernel(
+    device float* dst           [[buffer(0)]],
+    device const float* src     [[buffer(1)]],
+    constant int& n             [[buffer(2)]],
+    uint idx [[thread_position_in_grid]]
+) {
+    if ((int)idx >= n) return;
+    uint bits = as_type<uint>(src[idx]);
+    // Round-to-nearest (matching CUDA TF32 tensor core behavior):
+    // Add 0.5 ULP at bit 12, then truncate lower 13 bits.
+    // Skip rounding for inf/NaN (exponent 0xFF) to avoid inf → NaN.
+    uint exp = bits & 0x7F800000u;
+    bits = (exp != 0x7F800000u) ? ((bits + 0x1000u) & 0xFFFFE000u)
+                                : (bits & 0xFFFFE000u);
+    dst[idx] = as_type<float>(bits);
+}
+
+// TF32 in-place rounding: rounds buffer values to 10-bit mantissa in-place.
+// Used instead of scratch-copy to avoid Metal 4 buffer visibility issues.
+kernel void tf32_round_inplace_kernel(
+    device float* buf               [[buffer(0)]],
+    constant int& n                 [[buffer(1)]],
+    uint idx [[thread_position_in_grid]]
+) {
+    if ((int)idx >= n) return;
+    uint bits = as_type<uint>(buf[idx]);
+    uint exp = bits & 0x7F800000u;
+    bits = (exp != 0x7F800000u) ? ((bits + 0x1000u) & 0xFFFFE000u)
+                                : (bits & 0xFFFFE000u);
+    buf[idx] = as_type<float>(bits);
+}
+
 struct ClampParams {
     float lo;
     float hi;
@@ -1787,16 +1820,12 @@ kernel void muon_weight_update_kernel(
     const device float* up              [[buffer(1)]],
     const device float* lr_ptr          [[buffer(2)]],
     constant MuonParams& p              [[buffer(3)]],
-    device half* param_fp16             [[buffer(4)]],
     uint idx [[thread_position_in_grid]]
 ) {
     if ((int)idx >= p.n) return;
     float lr = *lr_ptr;
     float wd_scale = 1.0f - lr * p.wd;
-    float new_w = wb[idx] * wd_scale - lr * up[idx];
-    float clamped_w = clamp(new_w, -65000.0f, 65000.0f);
-    wb[idx] = clamped_w;
-    param_fp16[idx] = half(clamped_w);
+    wb[idx] = wb[idx] * wd_scale - lr * up[idx];
 }
 
 // Fused Adam optimizer step:
@@ -1818,7 +1847,6 @@ kernel void adam_step_kernel(
     const device float* grad            [[buffer(3)]],
     const device float* lr_ptr          [[buffer(4)]],
     constant AdamParams& p              [[buffer(5)]],
-    device half* param_fp16             [[buffer(6)]],
     uint idx [[thread_position_in_grid]]
 ) {
     if ((int)idx >= p.n) return;
@@ -1830,10 +1858,7 @@ kernel void adam_step_kernel(
     float m_hat = mi * p.bc1;
     float v_hat = vi * p.bc2;
     float lr = *lr_ptr;
-    float new_w = wb[idx] * (1.0f - lr * p.wd) - lr * m_hat / (sqrt(v_hat) + p.eps);
-    float clamped_w = clamp(new_w, -65000.0f, 65000.0f);
-    wb[idx] = clamped_w;
-    param_fp16[idx] = half(clamped_w);
+    wb[idx] = wb[idx] * (1.0f - lr * p.wd) - lr * m_hat / (sqrt(v_hat) + p.eps);
 }
 
 // ============================================================================
