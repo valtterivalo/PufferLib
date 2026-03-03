@@ -14,6 +14,7 @@
 
 #import "metal_platform.h"
 #include "metal_kernels.mm"
+#include "cpu_inference.h"
 #include "vecenv.h"
 
 
@@ -131,6 +132,7 @@ typedef struct {
     bool kernels;
     bool profile;
     bool overlap;  // async training overlap: train on separate GPU queue
+    bool cpu_inference;  // CPU forward pass during rollout (no GPU sync)
     // Architecture
     int arch_type;  // 0=ARCH_RICH (3-layer MLP + LN decoder), 1=ARCH_SIMPLE (upstream single-linear)
     // Threading
@@ -256,6 +258,7 @@ typedef struct {
     // When false, a static all-ones buffer is used instead.
     bool has_mask = false;
     PufTensor ones_mask;  // (total_agents * obs_cols) all 1.0f, fallback mask
+    bool cpu_inference = false;  // CPU forward pass for rollout (no GPU sync)
 } PuffeRL;
 
 // ============================================================================
@@ -329,8 +332,7 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
 
     uint64_t tp1 = mach_absolute_time();
 
-    // Forward pass + fused GPU sampling — dispatched on the same command buffer.
-    // Single sync makes both forward results and sampled actions CPU-visible.
+    // Forward pass + sampling
     PufTensor act_slice = puf_slice(rollouts.actions, t, start, block_size);
     PufTensor lp_slice = puf_slice(rollouts.logprobs, t, start, block_size);
     PufTensor val_slice = puf_slice(rollouts.values, t, start, block_size);
@@ -344,41 +346,51 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
     Policy* p = pufferl->policy;
     PolicyActivations& acts = pufferl->buffer_activations[buf];
     PufTensor& act_f32_buf = pufferl->sample_act_f32_buffers[buf];
-
-    // When fused encoder+layer0 is available, skip encoder and pass obs
-    // directly to mingru (layer0 uses fused weight: obs @ fused^T → combined).
     MinGRUWeights *mw = (MinGRUWeights *)infer_weights.network;
-    PufTensor mingru_input = mw->fused_enc_layer0.bytes
-        ? obs_dst
-        : p->encoder.forward(infer_weights.encoder, acts.encoder, obs_dst, stream);
-    PufTensor h = p->network.forward(infer_weights.network, mingru_input, state_puf, acts.network, stream);
-    PufTensor dec_puf = p->decoder.forward(infer_weights.decoder, acts.decoder, h, stream);
 
-    // GPU sampling: dispatch on same command buffer, before sync.
-    // Action mask: if env embeds mask in obs, read from last act_n columns.
-    // Otherwise use all-ones fallback with stride=0 (no masking).
+    // Decoder output width needed for mask setup (derived from weights, not GPU output)
+    int fused_cols = ((SimpleDecoderWeights *)infer_weights.decoder)->output_dim + 1;
     int obs_cols = (int)obs_dst.shape[1];
-    int fused_cols = (int)dec_puf.shape[1];
     const float* mask_ptr;
     int mask_stride;
     if (pufferl->has_mask) {
-        int mask_offset = obs_cols - (fused_cols - 1);  // e.g. 373 - 39 = 334
+        int mask_offset = obs_cols - (fused_cols - 1);
         mask_ptr = (const float*)obs_dst.bytes + mask_offset;
         mask_stride = obs_cols;
     } else {
         mask_ptr = (const float*)pufferl->ones_mask.bytes;
-        mask_stride = 0;  // all rows read same act_n ones
+        mask_stride = 0;
     }
 
-    mtl_sample_logits_dispatch_to(
-        dec_puf, pufferl->act_sizes_puf,
-        (float*)act_f32_buf.bytes, (float*)lp_slice.bytes, (float*)val_slice.bytes,
-        mask_ptr, mask_stride,
-        buf_rng_seed, buf_rng_offset, stream);
+    if (pufferl->cpu_inference) {
+        // CPU path: cblas_sgemm + scalar gate + CPU sampling. No GPU, no sync.
+        cpu_forward_and_sample(
+            obs_dst, state_puf, infer_weights, hypers.hidden_size, acts,
+            pufferl->act_sizes_puf, act_f32_buf,
+            (float *)lp_slice.bytes, (float *)val_slice.bytes,
+            mask_ptr, mask_stride,
+            buf_rng_seed, buf_rng_offset,
+            mw->fused_enc_layer0.bytes != nullptr);
+        mtl_sample_logits_expand((const float*)act_f32_buf.bytes,
+                                 (double*)act_slice.bytes, block_size * num_atns);
+    } else {
+        // GPU path: Metal dispatch + sync (original behavior)
+        PufTensor mingru_input = mw->fused_enc_layer0.bytes
+            ? obs_dst
+            : p->encoder.forward(infer_weights.encoder, acts.encoder, obs_dst, stream);
+        PufTensor h = p->network.forward(infer_weights.network, mingru_input, state_puf, acts.network, stream);
+        PufTensor dec_puf = p->decoder.forward(infer_weights.decoder, acts.decoder, h, stream);
 
-    ensure_gpu_synced(stream);
-    mtl_sample_logits_expand((const float*)act_f32_buf.bytes,
-                             (double*)act_slice.bytes, block_size * num_atns);
+        mtl_sample_logits_dispatch_to(
+            dec_puf, pufferl->act_sizes_puf,
+            (float*)act_f32_buf.bytes, (float*)lp_slice.bytes, (float*)val_slice.bytes,
+            mask_ptr, mask_stride,
+            buf_rng_seed, buf_rng_offset, stream);
+
+        ensure_gpu_synced(stream);
+        mtl_sample_logits_expand((const float*)act_f32_buf.bytes,
+                                 (double*)act_slice.bytes, block_size * num_atns);
+    }
 
     // RNN state NOT zeroed on terminal — matches CUDA upstream behavior.
     // CUDA deliberately removed state zeroing (pufferlib.cu:376).
@@ -988,6 +1000,7 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
         // Fused encoder+layer0 disabled (nonlinear encoder)
     }
     pufferl->overlap_enabled = hypers.overlap;
+    pufferl->cpu_inference = hypers.cpu_inference;
 
     // ========================================================================
     // fp16 training weights, activations, gradients

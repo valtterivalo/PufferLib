@@ -91,6 +91,8 @@ def parse_args():
                    help="simulate CUDA TF32 precision by rounding GEMM inputs to 10-bit mantissa")
     p.add_argument("--profile", action="store_true",
                    help="GPU sync after each training phase for accurate per-kernel profiling")
+    p.add_argument("--cpu-inference", action="store_true",
+                   help="CPU forward pass during rollout (no GPU sync, uses Accelerate cblas)")
     return p.parse_args()
 
 
@@ -128,6 +130,7 @@ def main():
         "kernels": 1.0,
         "profile": 1.0 if args.profile else 0.0,
         "overlap": 0.0 if args.no_overlap else 1.0,
+        "cpu_inference": 1.0 if args.cpu_inference else 0.0,
         "seed": float(args.seed),
         "env_name": args.env,
     }
@@ -145,7 +148,7 @@ def main():
 
     print(f"env={args.env}, agents={args.total_agents}, hidden={args.hidden_size}, "
           f"layers={args.num_layers}, horizon={args.horizon}, overlap={not args.no_overlap}, "
-          f"arch={args.arch}, seed={args.seed}")
+          f"arch={args.arch}, cpu_infer={args.cpu_inference}, seed={args.seed}")
 
     trace_file = None
     trace_every = max(int(args.trace_every), 1)

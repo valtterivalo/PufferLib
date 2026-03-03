@@ -186,9 +186,9 @@ void rollouts(pybind11::object pufferl_obj) {
     }
 
     auto t0 = std::chrono::high_resolution_clock::now();
-    puf_set_gpu_training(true);
+    if (!pufferl.cpu_inference) puf_set_gpu_training(true);
     static_vec_omp_step(pufferl.vec);
-    puf_set_gpu_training(false);
+    if (!pufferl.cpu_inference) puf_set_gpu_training(false);
     float sec = std::chrono::duration<float>(
         std::chrono::high_resolution_clock::now() - t0).count();
     pufferl.profile.accum[PROF_ROLLOUT] += sec * 1000.0f;
@@ -527,6 +527,7 @@ std::unique_ptr<PuffeRL> create_pufferl(pybind11::dict kwargs,
     hypers.kernels = true;   // always use Metal kernels
     hypers.profile = get_config(kwargs, "profile");
     hypers.overlap = kwargs.contains("overlap") && get_config(kwargs, "overlap") > 0;
+    hypers.cpu_inference = kwargs.contains("cpu_inference") && get_config(kwargs, "cpu_inference") > 0;
 
     std::string env_name = kwargs["env_name"].cast<std::string>();
     Dict* vec_dict = py_dict_to_c_dict(vec_kwargs.cast<py::dict>());
