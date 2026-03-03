@@ -668,6 +668,8 @@ void mtl_destroy_stream(void *stream) {
   delete ms;
 }
 
+static void ksplit_reset();  // forward decl — defined near K-split GEMM
+
 void mtl_destroy() {
   fprintf(stderr, "[metal] destroy: starting teardown\n");
 
@@ -678,6 +680,7 @@ void mtl_destroy() {
   // 2. Free lazy-init scratch buffers BEFORE clearing the buffer registry,
   //    while MTLBuffer refs still exist (backing memory released after).
   mtl_kernels_reset();
+  ksplit_reset();
   if (g_addmm_temp_base) {
     free(g_addmm_temp_base);
     g_addmm_temp_base = nullptr;
@@ -1114,6 +1117,101 @@ static bool tensor_ops_gemm_tn(const float *A, const float *B, float *C,
   return true;
 }
 
+// K-split TN GEMM for small-M, small-N, large-K reductions (wgrad).
+// Partitions K across Z threadgroups, each writing partial sums. Then reduces.
+static id<MTLBuffer> ksplit_buf = nil;
+static float *ksplit_ptr = nullptr;
+static int ksplit_capacity = 0;
+
+// Reset K-split state on Metal context teardown.
+static void ksplit_reset() {
+  ksplit_buf = nil;
+  ksplit_ptr = nullptr;
+  ksplit_capacity = 0;
+}
+
+static void compute_gemm_ksplit_tn(const float *A, const float *B, float *C,
+                                    int M, int N, int K,
+                                    int lda, int ldb, int ldc,
+                                    cudaStream_t stream) {
+  int tile_groups_m = (M + 31) / 32;
+  int tile_groups_n = (N + 31) / 32;
+  int tile_groups = tile_groups_m * tile_groups_n;
+
+  // Target ~32 threadgroups per GPU core (16 cores on M4 Pro).
+  int target_tgs = 16 * 32;
+  int num_splits = (target_tgs + tile_groups - 1) / tile_groups;
+  num_splits = std::max(2, std::min(num_splits, K / 32));
+  int k_per_split = (K + num_splits - 1) / num_splits;
+
+  // Lazy-allocate partials buffer as a shared Metal buffer.
+  int partials_count = num_splits * M * N;
+  if (partials_count > ksplit_capacity) {
+    NSUInteger sz = (NSUInteger)partials_count * sizeof(float);
+    // Remove old buffer from residency and buffer list.
+    if (ksplit_buf) {
+      auto &bufs = g_ctx.buffers;
+      bufs.erase(std::remove_if(bufs.begin(), bufs.end(),
+                   [](const WrappedBuffer &wb) {
+                     return wb.base == (const char *)ksplit_ptr;
+                   }), bufs.end());
+    }
+    ksplit_buf = [g_ctx.device newBufferWithLength:sz
+                                          options:MTLResourceStorageModeShared];
+    ksplit_ptr = (float *)ksplit_buf.contents;
+    g_ctx.buffers.push_back({(char *)ksplit_ptr, (int64_t)sz, ksplit_buf});
+    [g_ctx.residency_set addAllocation:ksplit_buf];
+    [g_ctx.residency_set commit];
+    [g_ctx.residency_set requestResidency];
+    ksplit_capacity = partials_count;
+  }
+
+  MetalStream *ms = get_stream(stream);
+
+  // Step 1: K-split GEMM — write partials.
+  ms->compute_encoder();
+  auto pso_ksplit = mtl_pipeline("sgemm_ksplit");
+  mtl_set_pso(ms, pso_ksplit);
+
+  NSUInteger off_a, off_b, off_p;
+  id<MTLBuffer> buf_a = buffer_for_ptr(A, &off_a);
+  id<MTLBuffer> buf_b = buffer_for_ptr(B, &off_b);
+  id<MTLBuffer> buf_p = buffer_for_ptr(ksplit_ptr, &off_p);
+
+  bind_buf(ms, buf_a, off_a, 0);
+  bind_buf(ms, buf_b, off_b, 1);
+  bind_buf(ms, buf_p, off_p, 2);
+
+  HostGemmParams params = {M, N, K, lda, ldb, ldc, 1.0f, 0.0f, 1, 0}; // trans_a=TN
+  mtl_set_params(ms, params, 3);
+  int kps = k_per_split;
+  mtl_set_params(ms, kps, 4);
+
+  // sgemm_ksplit uses 2D threadgroups: (BN/TN, BM/TM) = (8, 8) = 64 threads.
+  [ms->enc dispatchThreadgroups:MTLSizeMake(tile_groups_n, tile_groups_m, num_splits)
+      threadsPerThreadgroup:MTLSizeMake(8, 8, 1)];
+  ms->pending_work = true;
+
+  // Barrier before reduce.
+  mtl_barrier(ms);
+
+  // Step 2: Reduce partials → C.
+  ms->compute_encoder();
+  auto pso_reduce = mtl_pipeline("reduce_ksplit");
+  mtl_set_pso(ms, pso_reduce);
+
+  NSUInteger off_c;
+  id<MTLBuffer> buf_c = buffer_for_ptr(C, &off_c);
+  bind_buf(ms, buf_p, off_p, 0);
+  bind_buf(ms, buf_c, off_c, 1);
+
+  struct { int MN, num_splits; float alpha, beta; }
+    rp = {M * N, num_splits, 1.0f, 0.0f};
+  mtl_set_params(ms, rp, 2);
+
+  mtl_dispatch_1d(ms, pso_reduce, M * N);
+}
+
 static bool tensor_ops_gemm_tn_f16(const void *A, const void *B, void *C,
                                     int M, int N, int K,
                                     cudaStream_t stream) {
@@ -1270,6 +1368,12 @@ void puf_mm_tn(PufTensor &a, PufTensor &b, PufTensor &out,
                        /*trans_a=*/true, /*trans_b=*/false,
                        M, N, N, 1.0f, 0.0f, stream);
     }
+  } else if (a.dtype_size == 4 && K > 4096 &&
+             ((M + 31) / 32) * ((N + 31) / 32) < 32) {
+    // K-split TN for small output (few tiles) + large K reduction.
+    compute_gemm_ksplit_tn(a_f32, b_f32,
+                           (float *)out.bytes, M, N, K,
+                           M, N, N, stream);
   } else if (aligned && !no_tensor &&
              tensor_ops_gemm_tn(a_f32, b_f32,
                                 (float *)out.bytes, M, N, K, stream)) {
