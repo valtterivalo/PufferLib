@@ -437,13 +437,10 @@ static void sync_pending_train(PuffeRL& pufferl);
 // ============================================================================
 
 void rollouts_impl(PuffeRL& pufferl) {
-    // Overlap: wait for previous async training to complete before reading weights.
-    // weights_infer was updated (GPU blit on train_stream) at the end of train_impl,
-    // so after this sync the rollout reads 1-iteration-old weights — PPO's importance
-    // ratios compensate for the policy lag.
-    if (pufferl.overlap_enabled && pufferl.train_pending) {
-        sync_pending_train(pufferl);
-    }
+    // No sync here — overlap lets rollout run on the main GPU queue concurrently
+    // with async training on train_stream. Rollout reads weights_infer (updated
+    // at start of the previous train_impl), giving 1-iteration policy lag.
+    // V-trace importance ratios compensate for the staleness.
 
     int horizon = pufferl.hypers.horizon;
     int num_buffers = pufferl.hypers.num_buffers;
@@ -522,12 +519,28 @@ void train_impl(PuffeRL& pufferl) {
     if (pufferl.overlap_enabled) {
         // Iteration-level async: dispatch ALL training minibatches on train_stream
         // (separate Metal command queue). GPU executes the training work asynchronously
-        // during the next rollout's CPU env_step (~4.5s of GPU-idle time per rollout).
-        // Inference runs on the default queue, reading from weights_infer (updated at
-        // the end of training via GPU blit). 1-iteration policy lag — PPO handles this
-        // via importance ratios (stored log-probs).
+        // during the next rollout (which reads weights_infer on the main queue).
+        // 1-iteration policy lag — V-trace importance ratios compensate.
         cudaStream_t ts = train_stream;
         uint32_t* train_rng_offset = (uint32_t*)((int64_t*)pufferl.rng_offset_puf.bytes + hypers.num_buffers);
+
+        // Sync previous async training before copying updated weights.
+        // After this, weights_fp32 reflect the latest optimizer step.
+        if (pufferl.train_pending) {
+            sync_pending_train(pufferl);
+        }
+
+        // Copy trained weights to inference buffer so the NEXT rollout sees them.
+        // Safe: rollout is not running (main loop is sequential: rollout → train).
+        {
+            int64_t total_elems = pufferl.alloc_fp32.params.total_elems;
+            PufTensor fp32_all = {.bytes = (char*)pufferl.alloc_fp32.params.mem,
+                                  .shape = {total_elems}, .dtype_size = sizeof(float)};
+            PufTensor infer_all = {.bytes = (char*)pufferl.infer_params_alloc.mem,
+                                   .shape = {total_elems}, .dtype_size = sizeof(float)};
+            puf_copy(infer_all, fp32_all, ts);
+            mtl_barrier((MetalStream*)ts);  // ensure copy visible before training reads weights_fp32
+        }
 
         puf_set_gpu_training(true);
 
@@ -639,23 +652,13 @@ void train_impl(PuffeRL& pufferl) {
             pufferl.profile.accum[PROF_TRAIN_FORWARD] += prof_ms(tp3, tp9);
         }
 
-        // After all minibatches: GPU-copy weights to infer and recompute fused weight.
-        // Both dispatched on train_stream so they execute after training completes.
-        {
-            int64_t total_elems = pufferl.alloc_fp32.params.total_elems;
-            PufTensor fp32_all = {.bytes = (char*)pufferl.alloc_fp32.params.mem,
-                                  .shape = {total_elems}, .dtype_size = sizeof(float)};
-            PufTensor infer_all = {.bytes = (char*)pufferl.infer_params_alloc.mem,
-                                   .shape = {total_elems}, .dtype_size = sizeof(float)};
-            puf_copy(infer_all, fp32_all, ts);
-            // fused_enc_layer0 disabled (nonlinear encoder)
-        }
+        // Weight copy moved to START of next train_impl (after sync).
+        // No copy here — training compute runs async, rollout reads old weights_infer.
 
         puf_set_gpu_training(false);
 
         // Flush train_stream: commit command buffer so GPU starts executing
-        // asynchronously. wait_completed() is called at the start of the next
-        // rollouts() to ensure training is done before inference reads weights_infer.
+        // asynchronously. Next train_impl syncs before copying updated weights.
         ((MetalStream*)train_stream)->flush();
 
         pufferl.train_pending = true;

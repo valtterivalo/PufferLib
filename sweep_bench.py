@@ -195,12 +195,7 @@ SWEEP_CONFIG = {
         # num_threads always set to match num_buffers in clamp_params
     },
     "policy": {
-        "hidden_size": {
-            "distribution": "uniform_pow2",
-            "min": 64,
-            "max": 128,
-            "scale": "auto",
-        },
+        # hidden_size fixed at 64 in build_configs (128 is numerically unstable on Metal)
         "num_layers": {
             "distribution": "uniform",
             "min": 1,
@@ -210,33 +205,34 @@ SWEEP_CONFIG = {
     },
 }
 
-# defaults from bench.py — known working Breakout params
+# best known Metal breakout config (trial #16, score 825 at 140M)
+# overlap=1.0 to test the overlap fix on trial 0
 DEFAULT_PARAMS = {
     "train": {
-        "total_timesteps": 100_000_000,
-        "horizon": 64,
-        "overlap": 0.0,
-        "min_lr_ratio": 0.0,
-        "learning_rate": 0.1,
-        "beta1": 0.7279714073125252,
-        "beta2": 0.9986265112492152,
-        "eps": 0.00008339460257113628,
-        "ent_coef": 0.0033240721522812535,
-        "gamma": 0.9721246598992744,
-        "gae_lambda": 0.948721675814334,
-        "vtrace_rho_clip": 2.1017317041552603,
-        "vtrace_c_clip": 1.0830442742115065,
-        "prio_alpha": 0.1,
-        "prio_beta0": 0.8247156461060179,
-        "clip_coef": 0.6746497927896418,
-        "vf_coef": 1.2195502588297364,
-        "vf_clip_coef": 1.2291681640124468,
-        "max_grad_norm": 1.8109182724544075,
-        "replay_ratio": 1.4242098997083206,
+        "total_timesteps": 140_000_000,
+        "horizon": 32,
+        "overlap": 1.0,
+        "min_lr_ratio": 0.077,
+        "learning_rate": 0.0843,
+        "beta1": 0.65,
+        "beta2": 0.995,
+        "eps": 1e-5,
+        "ent_coef": 0.0033,
+        "gamma": 0.96,
+        "gae_lambda": 0.9,
+        "vtrace_rho_clip": 2.009,
+        "vtrace_c_clip": 1.307,
+        "prio_alpha": 0.213,
+        "prio_beta0": 0.95,
+        "clip_coef": 0.785,
+        "vf_coef": 1.675,
+        "vf_clip_coef": 0.670,
+        "max_grad_norm": 1.585,
+        "replay_ratio": 2.2,
         "minibatch_size": 65536,
-        "total_agents": 4096,
-        "num_buffers": 1,
-        "num_threads": 1,
+        "total_agents": 2048,
+        "num_buffers": 8,
+        "num_threads": 8,
     },
     "policy": {
         "hidden_size": 64,
@@ -287,7 +283,7 @@ def build_configs(
         "num_threads": float(int(train.get("num_threads", 1))),
     }
     policy_config = {
-        "hidden_size": float(int(policy.get("hidden_size", 64))),
+        "hidden_size": 64.0,  # fixed: 128 is numerically unstable on Metal
         "num_layers": float(int(policy.get("num_layers", 2))),
         "arch": 1.0,  # always simple for bench sweep
     }
