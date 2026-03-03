@@ -39,7 +39,7 @@ if hasattr(sys.stderr, "reconfigure"):
 SWEEP_DIR_BASE = Path("runs/sweep_bench")
 DOWNSAMPLE_POINTS = 5
 LOG_INTERVAL = 5  # log every N iterations for early stop checks
-MIN_SPS = 100_000  # abort trial if SPS below this after warmup
+MIN_SPS = 500_000  # abort trial if SPS below this after warmup (CPU inference baseline ~1.4M+)
 
 
 SWEEP_CONFIG = {
@@ -64,12 +64,6 @@ SWEEP_CONFIG = {
             "distribution": "uniform_pow2",
             "min": 32,
             "max": 64,
-            "scale": "auto",
-        },
-        "overlap": {
-            "distribution": "uniform",
-            "min": 0.0,
-            "max": 1.0,
             "scale": "auto",
         },
         "min_lr_ratio": {
@@ -206,12 +200,10 @@ SWEEP_CONFIG = {
 }
 
 # best known Metal breakout config (trial #16, score 825 at 140M)
-# overlap=1.0 to test the overlap fix on trial 0
 DEFAULT_PARAMS = {
     "train": {
         "total_timesteps": 140_000_000,
         "horizon": 32,
-        "overlap": 1.0,
         "min_lr_ratio": 0.077,
         "learning_rate": 0.0843,
         "beta1": 0.65,
@@ -274,7 +266,8 @@ def build_configs(
         "cudagraphs": -1.0,
         "kernels": 1.0,
         "profile": 0.0,
-        "overlap": 1.0 if train.get("overlap", 0.0) >= 0.5 else 0.0,
+        "overlap": 1.0,
+        "cpu_inference": 1.0,
         "env_name": env_name,
     }
     vec_config = {
