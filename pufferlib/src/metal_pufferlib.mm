@@ -430,10 +430,21 @@ void sync_fused_weight(PuffeRL& pufferl) {
 }
 
 // ============================================================================
+// Forward declaration: waits for async GPU training to complete.
+static void sync_pending_train(PuffeRL& pufferl);
+
 // Rollout loop — serial (single stream, no per-buffer threads for GPU work)
 // ============================================================================
 
 void rollouts_impl(PuffeRL& pufferl) {
+    // Overlap: wait for previous async training to complete before reading weights.
+    // weights_infer was updated (GPU blit on train_stream) at the end of train_impl,
+    // so after this sync the rollout reads 1-iteration-old weights — PPO's importance
+    // ratios compensate for the policy lag.
+    if (pufferl.overlap_enabled && pufferl.train_pending) {
+        sync_pending_train(pufferl);
+    }
+
     int horizon = pufferl.hypers.horizon;
     int num_buffers = pufferl.hypers.num_buffers;
 
