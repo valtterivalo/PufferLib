@@ -39,7 +39,7 @@ if hasattr(sys.stderr, "reconfigure"):
 SWEEP_DIR_BASE = Path("runs/sweep_bench")
 DOWNSAMPLE_POINTS = 5
 LOG_INTERVAL = 5  # log every N iterations for early stop checks
-MIN_SPS = 500_000  # abort trial if SPS below this after warmup (CPU inference baseline ~1.4M+)
+MIN_SPS = 300_000  # abort trial if SPS below this after warmup (L2 training-dominated configs ~450-550K)
 
 
 SWEEP_CONFIG = {
@@ -57,132 +57,132 @@ SWEEP_CONFIG = {
         "total_timesteps": {
             "distribution": "log_normal",
             "min": 60_000_000,
-            "max": 140_000_000,
+            "max": 200_000_000,
             "scale": "time",
         },
         "horizon": {
             "distribution": "uniform_pow2",
-            "min": 32,
+            "min": 16,
             "max": 64,
             "scale": "auto",
         },
         "min_lr_ratio": {
             "distribution": "uniform",
             "min": 0.0,
-            "max": 0.2,
+            "max": 0.25,
             "scale": "auto",
         },
         "learning_rate": {
             "distribution": "log_normal",
-            "min": 0.02,
-            "max": 0.2,
+            "min": 0.01,
+            "max": 0.3,
             "scale": 0.5,
         },
         "beta1": {
             "distribution": "uniform",
-            "min": 0.65,
-            "max": 0.9,
+            "min": 0.5,
+            "max": 0.95,
             "scale": "auto",
         },
         "beta2": {
             "distribution": "logit_normal",
-            "min": 0.995,
-            "max": 0.9999,
+            "min": 0.99,
+            "max": 0.99999,
             "scale": "auto",
         },
         "eps": {
             "distribution": "log_normal",
-            "min": 1e-5,
-            "max": 3e-4,
+            "min": 1e-6,
+            "max": 1e-3,
             "scale": "auto",
         },
         "ent_coef": {
             "distribution": "log_normal",
-            "min": 0.001,
-            "max": 0.01,
+            "min": 0.0005,
+            "max": 0.02,
             "scale": "auto",
         },
         "gamma": {
             "distribution": "logit_normal",
-            "min": 0.96,
-            "max": 0.995,
+            "min": 0.92,
+            "max": 0.998,
             "scale": "auto",
         },
         "gae_lambda": {
             "distribution": "logit_normal",
-            "min": 0.9,
-            "max": 0.99,
+            "min": 0.8,
+            "max": 0.995,
             "scale": "auto",
         },
         "vtrace_rho_clip": {
             "distribution": "uniform",
             "min": 1.0,
-            "max": 3.0,
+            "max": 4.0,
             "scale": "auto",
         },
         "vtrace_c_clip": {
             "distribution": "uniform",
             "min": 1.0,
-            "max": 2.0,
+            "max": 3.0,
             "scale": "auto",
         },
         "prio_alpha": {
             "distribution": "logit_normal",
-            "min": 0.05,
+            "min": 0.01,
             "max": 0.95,
             "scale": "auto",
         },
         "prio_beta0": {
             "distribution": "logit_normal",
-            "min": 0.6,
-            "max": 0.95,
+            "min": 0.5,
+            "max": 0.99,
             "scale": "auto",
         },
         "clip_coef": {
             "distribution": "uniform",
-            "min": 0.4,
-            "max": 0.85,
+            "min": 0.1,
+            "max": 0.95,
             "scale": "auto",
         },
         "vf_coef": {
             "distribution": "uniform",
-            "min": 0.8,
-            "max": 2.5,
+            "min": 0.5,
+            "max": 4.0,
             "scale": "auto",
         },
         "vf_clip_coef": {
             "distribution": "uniform",
-            "min": 0.6,
-            "max": 2.0,
+            "min": 0.3,
+            "max": 3.0,
             "scale": "auto",
         },
         "max_grad_norm": {
             "distribution": "uniform",
-            "min": 0.8,
-            "max": 2.5,
+            "min": 0.5,
+            "max": 4.0,
             "scale": "auto",
         },
         "replay_ratio": {
             "distribution": "uniform",
-            "min": 0.8,
-            "max": 2.2,
+            "min": 0.5,
+            "max": 4.0,
             "scale": "auto",
         },
         "minibatch_size": {
             "distribution": "uniform_pow2",
             "min": 16384,
-            "max": 65536,
+            "max": 131072,
             "scale": "auto",
         },
         "total_agents": {
             "distribution": "uniform_pow2",
             "min": 2048,
-            "max": 4096,
+            "max": 8192,
             "scale": "auto",
         },
         "num_buffers": {
             "distribution": "uniform_pow2",
-            "min": 1,
+            "min": 2,
             "max": 8,
             "scale": "auto",
         },
@@ -190,37 +190,38 @@ SWEEP_CONFIG = {
     },
     "policy": {
         # hidden_size fixed at 64 in build_configs (128 is numerically unstable on Metal)
+        # L1 models consistently score <10 on breakout, so floor at 2
         "num_layers": {
             "distribution": "uniform",
-            "min": 1,
-            "max": 2.5,
+            "min": 2,
+            "max": 3.5,
             "scale": "auto",
         },
     },
 }
 
-# best known Metal breakout config (trial #16, score 825 at 140M)
+# best known Metal breakout config (trial #24, score 846 at 170M, CPU infer + overlap)
 DEFAULT_PARAMS = {
     "train": {
-        "total_timesteps": 140_000_000,
+        "total_timesteps": 170_000_000,
         "horizon": 32,
-        "min_lr_ratio": 0.077,
-        "learning_rate": 0.0843,
-        "beta1": 0.65,
+        "min_lr_ratio": 0.041,
+        "learning_rate": 0.0969,
+        "beta1": 0.559,
         "beta2": 0.995,
-        "eps": 1e-5,
-        "ent_coef": 0.0033,
-        "gamma": 0.96,
-        "gae_lambda": 0.9,
-        "vtrace_rho_clip": 2.009,
-        "vtrace_c_clip": 1.307,
-        "prio_alpha": 0.213,
-        "prio_beta0": 0.95,
-        "clip_coef": 0.785,
-        "vf_coef": 1.675,
-        "vf_clip_coef": 0.670,
-        "max_grad_norm": 1.585,
-        "replay_ratio": 2.2,
+        "eps": 3.46e-6,
+        "ent_coef": 0.0078,
+        "gamma": 0.946,
+        "gae_lambda": 0.889,
+        "vtrace_rho_clip": 1.979,
+        "vtrace_c_clip": 1.272,
+        "prio_alpha": 0.220,
+        "prio_beta0": 0.951,
+        "clip_coef": 0.833,
+        "vf_coef": 1.580,
+        "vf_clip_coef": 1.339,
+        "max_grad_norm": 2.276,
+        "replay_ratio": 2.41,
         "minibatch_size": 65536,
         "total_agents": 2048,
         "num_buffers": 8,
@@ -318,14 +319,12 @@ def clamp_params(params: dict) -> None:
     batch_size = total_agents * horizon
 
     model_cost = hidden * hidden * layers
-    if model_cost > 512 * 512 * 2 and total_agents > 4096:
-        train["total_agents"] = 4096
+    if model_cost > 512 * 512 * 2 and total_agents > 8192:
+        train["total_agents"] = 8192
 
     # prevent expensive models with tiny batches (causes terrible SPS)
     if model_cost > 128 * 128 * 2 and total_agents < 2048:
         train["total_agents"] = 2048
-    if model_cost > 256 * 256 * 4 and total_agents < 4096:
-        train["total_agents"] = 4096
 
     if minibatch > batch_size:
         train["minibatch_size"] = batch_size
@@ -335,22 +334,22 @@ def clamp_params(params: dict) -> None:
     if effective_mb > 32:
         train["replay_ratio"] = 32 * minibatch / max(batch_size, 1)
 
-    # Keep sampled values in a known-stable regime for current Metal Breakout.
-    train["learning_rate"] = min(max(float(train.get("learning_rate", 0.1)), 0.01), 0.3)
-    train["beta1"] = min(max(float(train.get("beta1", 0.73)), 0.6), 0.95)
-    train["beta2"] = min(max(float(train.get("beta2", 0.9986)), 0.99), 0.99995)
-    train["eps"] = min(max(float(train.get("eps", 8.3e-5)), 1e-6), 1e-3)
+    # Clamp to wider stable regime — must match SWEEP_CONFIG ranges.
+    train["learning_rate"] = min(max(float(train.get("learning_rate", 0.1)), 0.005), 0.4)
+    train["beta1"] = min(max(float(train.get("beta1", 0.73)), 0.4), 0.98)
+    train["beta2"] = min(max(float(train.get("beta2", 0.9986)), 0.98), 0.999995)
+    train["eps"] = min(max(float(train.get("eps", 8.3e-5)), 1e-7), 1e-2)
     train["ent_coef"] = min(max(float(train.get("ent_coef", 0.0033)), 1e-4), 0.05)
-    train["gamma"] = min(max(float(train.get("gamma", 0.972)), 0.94), 0.9995)
-    train["gae_lambda"] = min(max(float(train.get("gae_lambda", 0.949)), 0.85), 0.995)
-    train["vtrace_rho_clip"] = min(max(float(train.get("vtrace_rho_clip", 2.1)), 1.0), 4.0)
-    train["vtrace_c_clip"] = min(max(float(train.get("vtrace_c_clip", 1.08)), 1.0), 3.0)
-    train["clip_coef"] = min(max(float(train.get("clip_coef", 0.67)), 0.1), 0.95)
-    train["vf_coef"] = min(max(float(train.get("vf_coef", 1.22)), 0.1), 5.0)
+    train["gamma"] = min(max(float(train.get("gamma", 0.972)), 0.90), 0.999)
+    train["gae_lambda"] = min(max(float(train.get("gae_lambda", 0.949)), 0.75), 0.999)
+    train["vtrace_rho_clip"] = min(max(float(train.get("vtrace_rho_clip", 2.1)), 1.0), 5.0)
+    train["vtrace_c_clip"] = min(max(float(train.get("vtrace_c_clip", 1.08)), 1.0), 4.0)
+    train["clip_coef"] = min(max(float(train.get("clip_coef", 0.67)), 0.05), 1.0)
+    train["vf_coef"] = min(max(float(train.get("vf_coef", 1.22)), 0.1), 6.0)
     train["vf_clip_coef"] = min(max(float(train.get("vf_clip_coef", 1.23)), 0.1), 5.0)
-    train["max_grad_norm"] = min(max(float(train.get("max_grad_norm", 1.81)), 0.1), 10.0)
-    train["replay_ratio"] = min(max(float(train.get("replay_ratio", 1.4)), 0.1), 4.0)
-    train["min_lr_ratio"] = min(max(float(train.get("min_lr_ratio", 0.0)), 0.0), 0.3)
+    train["max_grad_norm"] = min(max(float(train.get("max_grad_norm", 1.81)), 0.3), 6.0)
+    train["replay_ratio"] = min(max(float(train.get("replay_ratio", 1.4)), 0.25), 5.0)
+    train["min_lr_ratio"] = min(max(float(train.get("min_lr_ratio", 0.0)), 0.0), 0.35)
 
     # num_threads must match num_buffers (one thread per buffer)
     num_buf = int(train.get("num_buffers", 1))
