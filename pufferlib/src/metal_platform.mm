@@ -1,6 +1,6 @@
 /**
  * @fileoverview Metal platform implementation — device init, shader
- * compilation, buffer wrapping, GEMM (Accelerate cblas / MSL tiled kernel),
+ * compilation, buffer wrapping, GEMM (tensor_ops / steel_gemm on GPU),
  * LAPACK (Accelerate).
  *
  * REQUIRES Metal 4 (macOS 15+, Apple Silicon M3+). Uses MTL4CommandQueue,
@@ -792,7 +792,7 @@ id<MTLComputePipelineState> mtl_pipeline(const char *name) {
 
 // ============================================================================
 // GEMM dispatch — tensor_ops (aligned) or steel_gemm (unaligned) on GPU.
-// CPU cblas_sgemm via Accelerate used only during rollout (non-training mode).
+// All GEMM goes through Metal compute shaders (no CPU cblas path).
 //
 // Matches cuBLAS calling conventions in models.cu (row-major data,
 // column-major API trick: swap A/B and transpose flags).

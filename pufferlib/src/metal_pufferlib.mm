@@ -16,7 +16,6 @@
 #include "metal_kernels.mm"
 #include "vecenv.h"
 
-#include <vecLib/vecLib.h>  // BLASSetThreading
 
 #include <chrono>
 #include <cstring>
@@ -206,7 +205,7 @@ typedef struct {
     PolicyWeights weights_fp32;
     PolicyWeights weights_bf16;  // fp16 training weights (was shared with fp32)
     // Double-buffered inference weights for rollout/training overlap.
-    // Rollout reads weights_infer (CPU cblas), training writes weights_fp32 (GPU).
+    // Rollout reads weights_infer (GPU compute), training writes weights_fp32 (GPU).
     // After each training sync, weights_fp32 is memcpy'd to weights_infer.
     PolicyWeights weights_infer;
     Allocator infer_params_alloc;
@@ -279,11 +278,6 @@ extern "C" void thread_init_metal(void* ctx, int buf) {
     tl_rollout_stream = pufferl->rollout_streams[buf];
     assert(tl_rollout_stream && "thread_init_metal requires per-buffer stream");
 
-    // Small GEMMs (256x384x128) don't benefit from multi-threaded BLAS.
-    // Thread coordination overhead dominates. macOS 15+ per-thread setting.
-    if (__builtin_available(macOS 15.0, *)) {
-        BLASSetThreading(BLAS_THREADING_SINGLE_THREADED);
-    }
 }
 
 
@@ -422,35 +416,9 @@ static void copy_weights_to_infer(PuffeRL& pufferl) {
     memcpy(pufferl.infer_params_alloc.mem, pufferl.alloc_fp32.params.mem, nbytes);
 }
 
-// Allocate fused encoder+layer0 weight buffer.
-// Fused encoder+layer0 disabled: nonlinear 3-layer encoder can't be fused.
-// sync_fused_weight kept as no-op — called from metal_bindings.mm.
-void sync_fused_weight(PuffeRL& pufferl) {
-    (void)pufferl; // nothing to sync with nonlinear encoder
-}
-
 // ============================================================================
 // Forward declaration: waits for async GPU training to complete.
 static void sync_pending_train(PuffeRL& pufferl);
-
-// Rollout loop — serial (single stream, no per-buffer threads for GPU work)
-// ============================================================================
-
-void rollouts_impl(PuffeRL& pufferl) {
-    // No sync here — overlap lets rollout run on the main GPU queue concurrently
-    // with async training on train_stream. Rollout reads weights_infer (updated
-    // at start of the previous train_impl), giving 1-iteration policy lag.
-    // V-trace importance ratios compensate for the staleness.
-
-    int horizon = pufferl.hypers.horizon;
-    int num_buffers = pufferl.hypers.num_buffers;
-
-    for (int i = 0; i < num_buffers * horizon; ++i) {
-        int buf = i % num_buffers;
-        int h = i / num_buffers;
-        net_callback_wrapper(&pufferl, buf, h);
-    }
-}
 
 // ============================================================================
 // Training loop

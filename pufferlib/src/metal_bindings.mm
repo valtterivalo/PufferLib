@@ -171,25 +171,18 @@ void render(pybind11::object pufferl_obj, int env_id) {
     static_vec_render(pufferl.vec, env_id);
 }
 
-void sync_fused_weight(PuffeRL& pufferl);
-
 void rollouts(pybind11::object pufferl_obj) {
     PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
     // Reset sync stats before rollout to capture rollout-only syncs
     { int _c; double _m; mtl_sync_stats(&_c, &_m); }
     pybind11::gil_scoped_release no_gil;
     // Sync async training from previous iteration (if any).
-    // Overlap: wait for train_stream to complete — weights_infer and fused weight
-    // were updated on the GPU as the last ops in train_impl's async dispatch.
-    // Baseline: recompute fused weight on CPU after training updated weights_fp32.
     if (pufferl.train_pending) {
         auto wait_start = std::chrono::high_resolution_clock::now();
         sync_pending_train(pufferl);
         float wait_ms = std::chrono::duration<float, std::milli>(
             std::chrono::high_resolution_clock::now() - wait_start).count();
         pufferl.profile.accum[PROF_TRAIN_SYNC] += wait_ms;
-    } else if (!pufferl.overlap_enabled) {
-        sync_fused_weight(pufferl);
     }
 
     auto t0 = std::chrono::high_resolution_clock::now();

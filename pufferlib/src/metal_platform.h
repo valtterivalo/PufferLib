@@ -243,7 +243,7 @@ inline void mtl_barrier(MetalStream *ms) {
 
 // ============================================================================
 // GEMM wrappers — tensor_ops (aligned) or steel_gemm (unaligned) on GPU.
-// CPU cblas_sgemm path used only during rollout (non-training mode).
+// All GEMM dispatches go through Metal compute shaders (no CPU cblas).
 //
 // These match the cuBLAS GEMM conventions in models.cu:
 //   puf_mm:    out = a @ b^T   (OP_T, OP_N in cuBLAS column-major)

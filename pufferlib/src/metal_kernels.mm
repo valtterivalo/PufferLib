@@ -9,13 +9,13 @@
  *   - Memory ops: puf_copy, puf_zero, puf_add, puf_transpose_01
  *   - Kernel dispatchers: mingru, scan, sample, PPO, advantage, prio, etc.
  *   - Orthogonal init via Accelerate QR decomposition
- *   - Muon optimizer (Newton-Schulz via Accelerate GEMM + Metal kernels)
+ *   - Muon optimizer (Newton-Schulz via GPU GEMM + Metal kernels)
  *   - Model components: encoder, decoder, MinGRU forward/backward/init
  *
  * On Apple Silicon unified memory, CPU and GPU share the same physical pages.
  * Simple memory ops use CPU memcpy/memset (with GPU sync when needed).
  * Compute-heavy kernels dispatch to Metal GPU via MSL shaders.
- * GEMM uses Accelerate cblas (CPU, synced in metal_platform.mm).
+ * GEMM uses Metal compute shaders (tensor_ops / steel_gemm on GPU).
  */
 
 #import "metal_platform.h"
