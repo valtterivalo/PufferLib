@@ -975,6 +975,33 @@ void mtl_sample_logits_expand(const float *f32, double *f64, int count) {
   for (int i = 0; i < count; i++) f64[i] = (double)f32[i];
 }
 
+// Recompute logprobs from CPU-produced logits using GPU fast::exp.
+// Dispatches on the given stream, no sync. The tiny kernel (B threads)
+// completes in ~1us and ensures old_logp matches PPO training precision.
+void mtl_recompute_logprobs(
+    float *logprobs, const float *logits, const float *actions_f32,
+    const int *act_sizes, const float *action_mask, int mask_stride,
+    int B, int num_atns, int fused_cols, cudaStream_t stream) {
+
+  MetalStream *ms = mtl_get_stream(stream);
+  ms->compute_encoder();
+  auto pso = mtl_pipeline("recompute_logprobs_kernel");
+  mtl_set_pso(ms, pso);
+
+  mtl_set_ptr(ms, logprobs, 0);
+  mtl_set_ptr(ms, (void *)logits, 1);
+  mtl_set_ptr(ms, (void *)actions_f32, 2);
+  mtl_set_ptr(ms, (void *)act_sizes, 3);
+  mtl_set_ptr(ms, (void *)action_mask, 4);
+
+  struct {
+    int B, num_atns, logits_stride, mask_stride;
+  } params = {B, num_atns, fused_cols, mask_stride};
+  mtl_set_params(ms, params, 5);
+
+  mtl_dispatch_1d(ms, pso, B);
+}
+
 // ============================================================================
 // PPO loss fused forward + backward
 // ============================================================================

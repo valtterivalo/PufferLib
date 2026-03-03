@@ -259,6 +259,13 @@ typedef struct {
     bool has_mask = false;
     PufTensor ones_mask;  // (total_agents * obs_cols) all 1.0f, fallback mask
     bool cpu_inference = false;  // CPU forward pass for rollout (no GPU sync)
+    // Decoder logits + f32 actions for GPU logprob recompute (cpu_inference only).
+    // Stored during CPU rollout, transposed at training start, then a batched GPU
+    // kernel recomputes logprobs using fast::exp to match PPO training precision.
+    PufTensor rollout_logits;    // (horizon, total_agents, fused_cols)
+    PufTensor train_logits;      // (total_agents, horizon, fused_cols)
+    PufTensor rollout_actions_f32; // (horizon, total_agents, num_atns)
+    PufTensor train_actions_f32;   // (total_agents, horizon, num_atns)
 } PuffeRL;
 
 // ============================================================================
@@ -371,6 +378,15 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
             mask_ptr, mask_stride,
             buf_rng_seed, buf_rng_offset,
             mw->fused_enc_layer0.bytes != nullptr);
+
+        // Store decoder logits + f32 actions for GPU logprob recompute at
+        // training start. CPU sampling uses IEEE expf, PPO uses GPU fast::exp.
+        SimpleDecoderActivations *da = (SimpleDecoderActivations *)acts.decoder;
+        PufTensor logits_dst = puf_slice(pufferl->rollout_logits, t, start, block_size);
+        memcpy(logits_dst.bytes, da->out.bytes, block_size * fused_cols * sizeof(float));
+        PufTensor acts_f32_dst = puf_slice(pufferl->rollout_actions_f32, t, start, block_size);
+        memcpy(acts_f32_dst.bytes, act_f32_buf.bytes, block_size * num_atns * sizeof(float));
+
         mtl_sample_logits_expand((const float*)act_f32_buf.bytes,
                                  (double*)act_slice.bytes, block_size * num_atns);
     } else {
@@ -458,6 +474,39 @@ void train_impl(PuffeRL& pufferl) {
     puf_transpose_01(rollouts.terminals, src.terminals, train_stream);
     puf_transpose_01(rollouts.ratio, src.ratio, train_stream);
     puf_transpose_01(rollouts.values, src.values, train_stream);
+
+    // CPU inference: recompute logprobs on GPU using fast::exp to match PPO.
+    // Transpose stored logits + f32 actions, then batch-recompute logprobs
+    // for all (total_agents * horizon) samples in one kernel dispatch.
+    if (pufferl.cpu_inference) {
+        puf_transpose_01(pufferl.train_logits, pufferl.rollout_logits, train_stream);
+        puf_transpose_01(pufferl.train_actions_f32, pufferl.rollout_actions_f32, train_stream);
+
+        int total_samples = hypers.total_agents * hypers.horizon;
+        int fused_cols = (int)pufferl.train_logits.shape[2];
+        int num_atns = (int)pufferl.train_actions_f32.shape[2];
+
+        // Mask: embedded in obs or all-ones fallback
+        const float *mask_ptr;
+        int mask_stride;
+        if (pufferl.has_mask) {
+            int obs_cols = (int)rollouts.observations.shape[2];
+            int mask_offset = obs_cols - (fused_cols - 1);
+            mask_ptr = (const float *)rollouts.observations.bytes + mask_offset;
+            mask_stride = obs_cols;
+        } else {
+            mask_ptr = (const float *)pufferl.ones_mask.bytes;
+            mask_stride = 0;
+        }
+
+        mtl_recompute_logprobs(
+            (float *)rollouts.logprobs.bytes,
+            (const float *)pufferl.train_logits.bytes,
+            (const float *)pufferl.train_actions_f32.bytes,
+            (const int *)pufferl.act_sizes_puf.bytes,
+            mask_ptr, mask_stride,
+            total_samples, num_atns, fused_cols, train_stream);
+    }
 
     // Clamp rewards and fill ratio (f32 path only, no bf16)
     mtl_clamp_f32((float*)rollouts.rewards.bytes, -1.0f, 1.0f,
@@ -1141,6 +1190,20 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     if (!pufferl->has_mask) {
         pufferl->ones_mask = {.shape = {act_n}, .dtype_size = (int)sizeof(float)};
         alloc.reg(&pufferl->ones_mask);
+    }
+
+    // Decoder logits + f32 actions for GPU logprob recompute (cpu_inference only).
+    if (pufferl->cpu_inference) {
+        int fused = decoder_output_size + 1;
+        int na = num_action_heads;
+        pufferl->rollout_logits = {.shape = {horizon, total_agents, fused}, .dtype_size = (int)sizeof(float)};
+        pufferl->train_logits = {.shape = {total_agents, horizon, fused}, .dtype_size = (int)sizeof(float)};
+        pufferl->rollout_actions_f32 = {.shape = {horizon, total_agents, na}, .dtype_size = (int)sizeof(float)};
+        pufferl->train_actions_f32 = {.shape = {total_agents, horizon, na}, .dtype_size = (int)sizeof(float)};
+        alloc.reg(&pufferl->rollout_logits);
+        alloc.reg(&pufferl->train_logits);
+        alloc.reg(&pufferl->rollout_actions_f32);
+        alloc.reg(&pufferl->train_actions_f32);
     }
 
     // Optimizer init (register buffers with shared allocator)
