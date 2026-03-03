@@ -42,6 +42,12 @@ using namespace metal;
 // Section 1: Math ops
 // ============================================================================
 
+// IEEE-compliant exp/log for PPO logprob computation.
+// Must match CPU ieee expf/logf so that old_logp (CPU inference) and
+// new_logp (GPU training) use identical precision in the importance ratio.
+inline float precise_exp_f(float x) { return precise::exp(x); }
+inline float precise_log_f(float x) { return precise::log(x); }
+
 inline float sigmoid_f(float x) {
     float z = exp(-abs(x));
     return x >= 0.0f ? 1.0f / (1.0f + z) : z / (1.0f + z);
@@ -741,10 +747,10 @@ inline void ppo_discrete_head(
         if (!isfinite(l)) l = 0.0f;
         if (a == act) act_logit = l;
         if (l > max_logit) {
-            sum *= exp(max_logit - l);
+            sum *= precise_exp_f(max_logit - l);
             max_logit = l;
         }
-        sum += exp(l - max_logit);
+        sum += precise_exp_f(l - max_logit);
     }
     if (!isfinite(max_logit) || !isfinite(sum) || sum <= 0.0f) {
         out_logsumexp = 0.0f;
@@ -752,7 +758,7 @@ inline void ppo_discrete_head(
         out_logp = 0.0f;
         return;
     }
-    float lse = max_logit + log(sum);
+    float lse = max_logit + precise_log_f(sum);
     if (!isfinite(lse)) lse = max_logit;
 
     float ent = 0.0f;
@@ -762,7 +768,7 @@ inline void ppo_discrete_head(
         if (!isfinite(l)) l = 0.0f;
         float logp = l - lse;
         if (!isfinite(logp)) logp = -80.0f;
-        float p = exp(clamp(logp, -80.0f, 80.0f));
+        float p = precise_exp_f(clamp(logp, -80.0f, 80.0f));
         float ent_term = p * logp;
         if (isfinite(ent_term)) ent -= ent_term;
     }
@@ -787,7 +793,7 @@ inline void ppo_continuous_head(
 }
 
 inline float ppo_ratio_from_logratio(float logratio) {
-    return exp(logratio);
+    return precise_exp_f(logratio);
 }
 
 struct PPOFusedParams {
@@ -997,7 +1003,7 @@ kernel void ppo_loss_fwd_bwd_kernel(
                     float m = action_mask[mask_base + logits_offset + a];
                     float l = (m < 0.5f) ? -1e9f : raw_l;
                     float logp = l - lse;
-                    float p = exp(logp);
+                    float p = precise_exp_f(logp);
                     float d_logit = (a == act) ? d_new_logp : 0.0f;
                     d_logit -= p * d_new_logp;
                     d_logit += d_entropy_term * p * (-ent - logp);
@@ -1167,12 +1173,12 @@ kernel void ppo_loss_forward_kernel(
                         action_mask[mask_base + logits_offset + a]);
                     if (a == act) act_logit = l;
                     if (l > max_logit_val) {
-                        sum *= exp(max_logit_val - l);
+                        sum *= precise_exp_f(max_logit_val - l);
                         max_logit_val = l;
                     }
-                    sum += exp(l - max_logit_val);
+                    sum += precise_exp_f(l - max_logit_val);
                 }
-                float lse = max_logit_val + log(sum);
+                float lse = max_logit_val + precise_log_f(sum);
 
                 float head_entropy = 0.0f;
                 for (int a = 0; a < A; a++) {
@@ -1180,7 +1186,7 @@ kernel void ppo_loss_forward_kernel(
                         logits[logits_base + (logits_offset + a) * pp.logits_stride_a],
                         action_mask[mask_base + logits_offset + a]);
                     float logp = l - lse;
-                    float p = exp(logp);
+                    float p = precise_exp_f(logp);
                     head_entropy -= p * logp;
                 }
 
@@ -1371,12 +1377,12 @@ kernel void ppo_loss_backward_kernel(
                     action_mask[mask_base + logits_offset + a]);
                 if (a == act) act_logit = l;
                 if (l > max_logit_val) {
-                    sum *= exp(max_logit_val - l);
+                    sum *= precise_exp_f(max_logit_val - l);
                     max_logit_val = l;
                 }
-                sum += exp(l - max_logit_val);
+                sum += precise_exp_f(l - max_logit_val);
             }
-            float lse = max_logit_val + log(sum);
+            float lse = max_logit_val + precise_log_f(sum);
             head_logsumexp_arr[h] = lse;
 
             float ent = 0.0f;
@@ -1385,7 +1391,7 @@ kernel void ppo_loss_backward_kernel(
                     logits[logits_base + (logits_offset + a) * pp.logits_stride_a],
                     action_mask[mask_base + logits_offset + a]);
                 float logp = l - lse;
-                float p = exp(logp);
+                float p = precise_exp_f(logp);
                 ent -= p * logp;
             }
             head_entropy_arr[h] = ent;
@@ -1418,7 +1424,7 @@ kernel void ppo_loss_backward_kernel(
                     logits[logits_base + (logits_offset + a) * pp.logits_stride_a],
                     action_mask[mask_base + logits_offset + a]);
                 float logp = l - lse;
-                float p = exp(logp);
+                float p = precise_exp_f(logp);
 
                 float d_logit = (a == act) ? d_new_logp : 0.0f;
                 d_logit -= p * d_new_logp;
