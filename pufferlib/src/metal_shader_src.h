@@ -3943,6 +3943,10 @@ kernel void steel_gemm_f16(
         }
     }
 
+    // Barrier: K-remainder reads _smem as half, store writes it as float.
+    // Without this, a fast simdgroup's float writes corrupt a slow one's half reads.
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
     // Store: f32 acc → half output via _smem staging (reuses same memory)
     // simdgroup_store of float8x8 requires float* destination, so we stage
     // through _smem then convert element-by-element to half for output.

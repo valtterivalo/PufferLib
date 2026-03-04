@@ -29,7 +29,7 @@
 
 static MetalContext g_ctx = {};
 static bool g_no_tensor_ops = false; // cached getenv("PUFFERLIB_NO_TENSOR_OPS")
-static bool g_no_tensor_ops_nt = true; // default off: unstable in long breakout runs
+static bool g_no_tensor_ops_nt = false;
 static bool g_no_tensor_ops_nn = false;
 static bool g_no_tensor_ops_tn = false;
 static bool g_no_tensor_ops_addmm = false;
@@ -595,9 +595,7 @@ void mtl_init() {
     [g_ctx.train_queue addResidencySet:g_ctx.residency_set];
 
     g_no_tensor_ops = (getenv("PUFFERLIB_NO_TENSOR_OPS") != nullptr);
-    bool enable_tensor_ops_nt = (getenv("PUFFERLIB_ENABLE_TENSOR_OPS_NT") != nullptr);
-    bool disable_tensor_ops_nt = (getenv("PUFFERLIB_NO_TENSOR_OPS_NT") != nullptr);
-    g_no_tensor_ops_nt = disable_tensor_ops_nt || !enable_tensor_ops_nt;
+    g_no_tensor_ops_nt = (getenv("PUFFERLIB_NO_TENSOR_OPS_NT") != nullptr);
     g_no_tensor_ops_nn = (getenv("PUFFERLIB_NO_TENSOR_OPS_NN") != nullptr);
     g_no_tensor_ops_tn = (getenv("PUFFERLIB_NO_TENSOR_OPS_TN") != nullptr);
     g_no_tensor_ops_addmm = (getenv("PUFFERLIB_NO_TENSOR_OPS_ADDMM") != nullptr);
