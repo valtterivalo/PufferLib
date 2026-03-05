@@ -86,7 +86,7 @@ SWEEP_CONFIG = {
         },
         "beta2": {
             "distribution": "logit_normal",
-            "min": 0.99,
+            "min": 0.95,
             "max": 0.99999,
             "scale": "auto",
         },
@@ -104,7 +104,7 @@ SWEEP_CONFIG = {
         },
         "gamma": {
             "distribution": "logit_normal",
-            "min": 0.92,
+            "min": 0.88,
             "max": 0.998,
             "scale": "auto",
         },
@@ -141,19 +141,19 @@ SWEEP_CONFIG = {
         "clip_coef": {
             "distribution": "uniform",
             "min": 0.1,
-            "max": 0.95,
+            "max": 1.5,
             "scale": "auto",
         },
         "vf_coef": {
             "distribution": "uniform",
             "min": 0.5,
-            "max": 4.0,
+            "max": 8.0,
             "scale": "auto",
         },
         "vf_clip_coef": {
             "distribution": "uniform",
             "min": 0.3,
-            "max": 3.0,
+            "max": 6.0,
             "scale": "auto",
         },
         "max_grad_norm": {
@@ -340,13 +340,13 @@ def clamp_params(params: dict) -> None:
     train["beta2"] = min(max(float(train.get("beta2", 0.9986)), 0.98), 0.999995)
     train["eps"] = min(max(float(train.get("eps", 8.3e-5)), 1e-7), 1e-2)
     train["ent_coef"] = min(max(float(train.get("ent_coef", 0.0033)), 1e-4), 0.05)
-    train["gamma"] = min(max(float(train.get("gamma", 0.972)), 0.90), 0.999)
+    train["gamma"] = min(max(float(train.get("gamma", 0.972)), 0.85), 0.999)
     train["gae_lambda"] = min(max(float(train.get("gae_lambda", 0.949)), 0.75), 0.999)
     train["vtrace_rho_clip"] = min(max(float(train.get("vtrace_rho_clip", 2.1)), 1.0), 5.0)
     train["vtrace_c_clip"] = min(max(float(train.get("vtrace_c_clip", 1.08)), 1.0), 4.0)
-    train["clip_coef"] = min(max(float(train.get("clip_coef", 0.67)), 0.05), 1.0)
-    train["vf_coef"] = min(max(float(train.get("vf_coef", 1.22)), 0.1), 6.0)
-    train["vf_clip_coef"] = min(max(float(train.get("vf_clip_coef", 1.23)), 0.1), 5.0)
+    train["clip_coef"] = min(max(float(train.get("clip_coef", 0.67)), 0.05), 2.0)
+    train["vf_coef"] = min(max(float(train.get("vf_coef", 1.22)), 0.1), 10.0)
+    train["vf_clip_coef"] = min(max(float(train.get("vf_clip_coef", 1.23)), 0.1), 8.0)
     train["max_grad_norm"] = min(max(float(train.get("max_grad_norm", 1.81)), 0.3), 6.0)
     train["replay_ratio"] = min(max(float(train.get("replay_ratio", 1.4)), 0.25), 5.0)
     train["min_lr_ratio"] = min(max(float(train.get("min_lr_ratio", 0.0)), 0.0), 0.35)
