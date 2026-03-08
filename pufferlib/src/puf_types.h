@@ -368,7 +368,7 @@ typedef void (*init_weights_fn)(void *weights, uint64_t *seed,
                                 cudaStream_t stream);
 typedef void (*reg_params_fn)(void *weights, Allocator *alloc, int esz);
 typedef void (*reg_train_fn)(void *weights, void *buf, Allocator *acts,
-                             Allocator *grads, int B_TT);
+                             Allocator *grads, int B_TT, int precision);
 typedef void (*reg_rollout_fn)(void *weights, void *buf, Allocator *alloc,
                                int B);
 typedef PufTensor (*forward_fn)(void *weights, void *activations,
@@ -616,6 +616,7 @@ inline PufTensor ns_slice(PufTensor &buf, int64_t rows, int64_t cols) {
 struct Muon {
   double momentum, weight_decay, eps;
   float lr_val_init;
+  int ns_iters;  // Newton-Schulz iterations (default 5, sweepable)
   float *lr_ptr;
   float *lr_derived_ptr;
   PufTensor lr_puf, lr_derived_puf, ns_norm_puf;

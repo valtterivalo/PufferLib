@@ -133,6 +133,8 @@ typedef struct {
     bool profile;
     bool overlap;  // async training overlap: train on separate GPU queue
     bool cpu_inference;  // CPU forward pass during rollout (no GPU sync)
+    bool train_fp16;     // fp16 activations/grads during training (rollout stays fp32)
+    int ns_iters;        // Newton-Schulz iterations in muon optimizer (1-5, default 5)
     // Architecture
     int arch_type;  // 0=ARCH_RICH (3-layer MLP + LN decoder), 1=ARCH_SIMPLE (upstream single-linear)
     // Threading
@@ -259,6 +261,7 @@ typedef struct {
     bool has_mask = false;
     PufTensor ones_mask;  // (total_agents * obs_cols) all 1.0f, fallback mask
     bool cpu_inference = false;  // CPU forward pass for rollout (no GPU sync)
+    bool train_fp16 = false;     // fp16 training activations/grads
     // Decoder logits + f32 actions for GPU logprob recompute (cpu_inference only).
     // Stored during CPU rollout, transposed at training start, then a batched GPU
     // kernel recomputes logprobs using fast::exp to match PPO training precision.
@@ -602,17 +605,35 @@ void train_impl(PuffeRL& pufferl) {
 
             uint64_t tp3 = mach_absolute_time();
 
-            PufTensor obs_puf = pufferl.train_buf.mb_obs;
-            PufTensor state_puf = pufferl.train_buf.mb_state;
-            PufTensor dec_puf = policy_forward_train(pufferl.policy, pufferl.weights_fp32,
+            // fp16 training: use fp16 obs/state/weights; fp32: use standard buffers
+            PolicyWeights& train_weights = pufferl.train_fp16 ? pufferl.weights_bf16 : pufferl.weights_fp32;
+            PufTensor obs_puf = pufferl.train_fp16 ? pufferl.fp16_obs_buf : pufferl.train_buf.mb_obs;
+            PufTensor state_puf = pufferl.train_fp16 ? pufferl.fp16_state_buf : pufferl.train_buf.mb_state;
+            if (pufferl.train_fp16) puf_zero(pufferl.fp16_state_buf, ts);
+
+            PufTensor dec_puf = policy_forward_train(pufferl.policy, train_weights,
                 pufferl.train_activations, obs_puf, state_puf, ts);
 
             uint64_t tp4 = mach_absolute_time();
 
-            PufTensor dec_puf_f32 = dec_puf;
+            // PPO operates in fp32. Cast decoder output if training in fp16.
+            PufTensor dec_puf_f32;
+            if (pufferl.train_fp16) {
+                mtl_barrier((MetalStream*)ts);
+                mtl_cast_f16_to_f32((float*)pufferl.fp32_dec_out_buf.bytes,
+                                    dec_puf.bytes, (int)dec_puf.numel(), ts);
+                mtl_barrier((MetalStream*)ts);
+                dec_puf_f32 = pufferl.fp32_dec_out_buf;
+                dec_puf_f32.shape[0] = dec_puf.shape[0];
+                dec_puf_f32.shape[1] = dec_puf.shape[1];
+                dec_puf_f32.shape[2] = dec_puf.shape[2];
+            } else {
+                dec_puf_f32 = dec_puf;
+            }
 
             PufTensor p_logstd;
             if (pufferl.is_continuous) {
+                // logstd always read from fp32 master weights for PPO precision
                 if (hypers.arch_type == ARCH_SIMPLE) {
                     p_logstd = ((SimpleDecoderWeights*)pufferl.weights_fp32.decoder)->logstd;
                 } else {
@@ -634,7 +655,7 @@ void train_impl(PuffeRL& pufferl) {
             PufTensor grad_logits_puf = pufferl.ppo_bufs_puf.grad_logits;
             PufTensor grad_logstd_puf = pufferl.is_continuous ? pufferl.ppo_bufs_puf.grad_logstd : PufTensor();
             PufTensor grad_values_puf = pufferl.ppo_bufs_puf.grad_values;
-            policy_backward(pufferl.policy, pufferl.weights_fp32, pufferl.train_activations,
+            policy_backward(pufferl.policy, train_weights, pufferl.train_activations,
                 grad_logits_puf, grad_logstd_puf, grad_values_puf, ts);
 
             uint64_t tp6 = mach_absolute_time();
@@ -660,8 +681,14 @@ void train_impl(PuffeRL& pufferl) {
             uint64_t tp8 = mach_absolute_time();
 
             mtl_barrier((MetalStream*)ts); // clip→optimizer
-            // Optimizer step with fused fp32→fp16 param cast
             muon_step(pufferl.muon, ts);
+
+            // fp16 training: cast updated fp32 master weights back to fp16
+            if (pufferl.train_fp16) {
+                mtl_cast_f32_to_f16(pufferl.param_fp16_puf.bytes,
+                                    (const float*)pufferl.alloc_fp32.params.mem,
+                                    (int)pufferl.alloc_fp32.params.total_elems, ts);
+            }
 
             // Metal 4 coherence: barrier so next minibatch's forward pass
             // sees updated weights from optimizer.
@@ -732,18 +759,36 @@ void train_impl(PuffeRL& pufferl) {
         if (gpu_profile) ensure_gpu_synced(train_stream);
         uint64_t tp3 = mach_absolute_time();
 
-        PufTensor obs_puf = pufferl.train_buf.mb_obs;
-        PufTensor state_puf = pufferl.train_buf.mb_state;
-        PufTensor dec_puf = policy_forward_train(pufferl.policy, pufferl.weights_fp32,
+        // fp16 training: use fp16 obs/state/weights; fp32: use standard buffers
+        PolicyWeights& train_weights = pufferl.train_fp16 ? pufferl.weights_bf16 : pufferl.weights_fp32;
+        PufTensor obs_puf = pufferl.train_fp16 ? pufferl.fp16_obs_buf : pufferl.train_buf.mb_obs;
+        PufTensor state_puf = pufferl.train_fp16 ? pufferl.fp16_state_buf : pufferl.train_buf.mb_state;
+        if (pufferl.train_fp16) puf_zero(pufferl.fp16_state_buf, train_stream);
+
+        PufTensor dec_puf = policy_forward_train(pufferl.policy, train_weights,
             pufferl.train_activations, obs_puf, state_puf, train_stream);
 
         if (gpu_profile) ensure_gpu_synced(train_stream);
         uint64_t tp4 = mach_absolute_time();
 
-        PufTensor dec_puf_f32 = dec_puf;
+        // PPO operates in fp32. Cast decoder output if training in fp16.
+        PufTensor dec_puf_f32;
+        if (pufferl.train_fp16) {
+            mtl_barrier((MetalStream*)train_stream);
+            mtl_cast_f16_to_f32((float*)pufferl.fp32_dec_out_buf.bytes,
+                                dec_puf.bytes, (int)dec_puf.numel(), train_stream);
+            mtl_barrier((MetalStream*)train_stream);
+            dec_puf_f32 = pufferl.fp32_dec_out_buf;
+            dec_puf_f32.shape[0] = dec_puf.shape[0];
+            dec_puf_f32.shape[1] = dec_puf.shape[1];
+            dec_puf_f32.shape[2] = dec_puf.shape[2];
+        } else {
+            dec_puf_f32 = dec_puf;
+        }
 
         PufTensor p_logstd;
         if (pufferl.is_continuous) {
+            // logstd always read from fp32 master weights for PPO precision
             if (hypers.arch_type == ARCH_SIMPLE) {
                 p_logstd = ((SimpleDecoderWeights*)pufferl.weights_fp32.decoder)->logstd;
             } else {
@@ -765,7 +810,7 @@ void train_impl(PuffeRL& pufferl) {
         PufTensor grad_logits_puf = pufferl.ppo_bufs_puf.grad_logits;
         PufTensor grad_logstd_puf = pufferl.is_continuous ? pufferl.ppo_bufs_puf.grad_logstd : PufTensor();
         PufTensor grad_values_puf = pufferl.ppo_bufs_puf.grad_values;
-        policy_backward(pufferl.policy, pufferl.weights_fp32, pufferl.train_activations,
+        policy_backward(pufferl.policy, train_weights, pufferl.train_activations,
             grad_logits_puf, grad_logstd_puf, grad_values_puf, train_stream);
 
         if (gpu_profile) ensure_gpu_synced(train_stream);
@@ -795,6 +840,13 @@ void train_impl(PuffeRL& pufferl) {
 
         mtl_barrier((MetalStream*)train_stream); // clip→optimizer
         muon_step(pufferl.muon, train_stream);
+
+        // fp16 training: cast updated fp32 master weights back to fp16
+        if (pufferl.train_fp16) {
+            mtl_cast_f32_to_f16(pufferl.param_fp16_puf.bytes,
+                                (const float*)pufferl.alloc_fp32.params.mem,
+                                (int)pufferl.alloc_fp32.params.total_elems, train_stream);
+        }
 
         // Metal 4 coherence: barrier so next minibatch's forward pass
         // sees updated weights from optimizer.
@@ -1050,14 +1102,14 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     }
     pufferl->overlap_enabled = hypers.overlap;
     pufferl->cpu_inference = hypers.cpu_inference;
+    pufferl->train_fp16 = hypers.train_fp16;
 
     // ========================================================================
     // fp16 training weights, activations, gradients
-    // Separate allocators with dtype_size=2 for all training tensors.
-    // Rollout stays fp32. Muon optimizer operates on fp32 master weights.
-    // Boundaries: obs fp32→fp16 (before encoder), dec_out fp16→fp32 (before PPO),
-    //   PPO grads fp32→fp16 (decoder backward handles this), grads fp16→fp32 (before muon),
-    //   weights fp32→fp16 (after muon step).
+    // Always allocated (fp16 weight copy used by muon regardless of train_fp16).
+    // When train_fp16=true: activations/grads use fp16, GEMM dispatch uses fp16 paths.
+    // When train_fp16=false: activations/grads use fp32, same as before.
+    // Rollout always stays fp32. Muon optimizer operates on fp32 master weights.
     // ========================================================================
 
     int B_TT = minibatch_segments * hypers.horizon;
@@ -1076,8 +1128,10 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     decoder.reg_params(wfp16.decoder, &fp16_params, esz_fp16);
     network.reg_params(wfp16.network, &fp16_params, esz_fp16);
 
-    // Register train activations/grads. Keep fp32 training buffers on Metal:
-    // fp16 accumulation over long horizons overflows easily for MinGRU/encoder grads.
+    // Register train activations/grads.
+    // train_fp16: activations/grads use fp16 (esz_fp16=2), enabling fp16 GEMM paths.
+    // Otherwise: activations/grads stay fp32 (PRECISION_SIZE=4) even in fp16 allocator.
+    int train_precision = pufferl->train_fp16 ? esz_fp16 : PRECISION_SIZE;
     PolicyActivations& tb = pufferl->train_activations;
     if (simple_arch) {
         tb.encoder = new SimpleEncoderActivations{};
@@ -1087,9 +1141,9 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
         tb.decoder = new DecoderActivations{};
     }
     tb.network = new MinGRUActivations{};
-    encoder.reg_train(wfp16.encoder, tb.encoder, &acts, &grads, B_TT);
-    decoder.reg_train(wfp16.decoder, tb.decoder, &acts, &grads, B_TT);
-    network.reg_train(wfp16.network, tb.network, &acts, &grads, B_TT);
+    encoder.reg_train(wfp16.encoder, tb.encoder, &acts, &grads, B_TT, train_precision);
+    decoder.reg_train(wfp16.decoder, tb.decoder, &acts, &grads, B_TT, train_precision);
+    network.reg_train(wfp16.network, tb.network, &acts, &grads, B_TT, train_precision);
 
     pufferl->alloc_fp16.create();
 
@@ -1099,7 +1153,10 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     mtl_wrap_allocator(&grads);
 
     pufferl->param_fp16_puf = {.bytes = (char*)fp16_params.mem, .shape = {fp16_params.total_elems}, .dtype_size = esz_fp16};
-    pufferl->grad_bf16_puf = {.bytes = (char*)grads.mem, .shape = {grads.total_elems}, .dtype_size = esz_fp32};
+    // When train_fp16: grads are fp16, need cast to fp32 before muon.
+    // When fp32: grads are fp32, just copy (no cast needed).
+    int grad_dtype = pufferl->train_fp16 ? esz_fp16 : esz_fp32;
+    pufferl->grad_bf16_puf = {.bytes = (char*)grads.mem, .shape = {grads.total_elems}, .dtype_size = grad_dtype};
 
     // Cast fp32 master weights → fp16 training weights
     {
@@ -1208,7 +1265,7 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
 
     // Optimizer init (register buffers with shared allocator)
     muon_init(pufferl->muon, &fp32_params,
-        pufferl->param_fp32_puf, lr, beta1, eps, 0.0, alloc);
+        pufferl->param_fp32_puf, lr, beta1, eps, 0.0, hypers.ns_iters, alloc);
     pufferl->muon->nccl_comm = nullptr;
     pufferl->muon->world_size = 1;
     // Single allocation for all registered buffers

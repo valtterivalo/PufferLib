@@ -747,7 +747,7 @@ static void encoder_reg_params(void* w, Allocator* alloc, int esz) {
     alloc->reg(&ew->weight);
 }
 
-static void encoder_reg_train(void* w, void* activations, Allocator* acts, Allocator* grads, int B_TT) {
+static void encoder_reg_train(void* w, void* activations, Allocator* acts, Allocator* grads, int B_TT, int precision) {
     EncoderWeights* ew = (EncoderWeights*)w;
     EncoderActivations* a = (EncoderActivations*)activations;
     int p = PRECISION_SIZE;
@@ -799,7 +799,7 @@ static void decoder_reg_params(void* w, Allocator* alloc, int esz) {
     }
 }
 
-static void decoder_reg_train(void* w, void* activations, Allocator* acts, Allocator* grads, int B_TT) {
+static void decoder_reg_train(void* w, void* activations, Allocator* acts, Allocator* grads, int B_TT, int precision) {
     DecoderWeights* dw = (DecoderWeights*)w;
     DecoderActivations* a = (DecoderActivations*)activations;
     int p = PRECISION_SIZE;
@@ -909,7 +909,7 @@ static void mingru_reg_params(void* w, Allocator* alloc, int esz) {
     }
 }
 
-static void mingru_reg_train(void* w, void* activations, Allocator* acts, Allocator* grads, int B_TT) {
+static void mingru_reg_train(void* w, void* activations, Allocator* acts, Allocator* grads, int B_TT, int precision) {
     MinGRUWeights* m = (MinGRUWeights*)w;
     MinGRUActivations* a = (MinGRUActivations*)activations;
     int H = m->hidden, TT = m->horizon, B = B_TT / TT, p = PRECISION_SIZE;
@@ -1100,10 +1100,11 @@ struct Muon {
 
 void muon_init(Muon* m, Allocator* param_alloc, PufTensor weight_buffer,
                double lr_val, double momentum, double eps, double weight_decay,
-               Allocator& alloc) {
+               int ns_iters, Allocator& alloc) {
     m->momentum = momentum;
     m->weight_decay = weight_decay;
     m->eps = eps;
+    m->ns_iters = (ns_iters > 0 && ns_iters <= 5) ? ns_iters : 5;
     m->lr_val_init = (float)lr_val;
     m->lr_ptr = nullptr;
     m->lr_derived_ptr = nullptr;

@@ -39,10 +39,19 @@ if hasattr(sys.stderr, "reconfigure"):
 SWEEP_DIR_BASE = Path("runs/sweep_bench")
 DOWNSAMPLE_POINTS = 5
 LOG_INTERVAL = 5  # log every N iterations for early stop checks
-MIN_SPS = 300_000  # abort trial if SPS below this after warmup (L2 training-dominated configs ~450-550K)
+MIN_SPS_PER_ENV = {
+    "breakout": 300_000,
+    "g2048": 100_000,  # larger models (hs=256, L=5) can be slow
+}
 
 
-SWEEP_CONFIG = {
+
+# ============================================================================
+# per-env sweep configs and defaults
+# ============================================================================
+
+# shared sweep config skeleton (overridden per env)
+_SWEEP_BASE = {
     "method": "Protein",
     "metric": "score",
     "metric_distribution": "linear",
@@ -50,186 +59,145 @@ SWEEP_CONFIG = {
     "downsample": DOWNSAMPLE_POINTS,
     "use_gpu": False,
     "prune_pareto": True,
-    "max_suggestion_cost": 1800,  # keep suggestions in the short-run sweep budget
     "early_stop_quantile": 0.3,
+}
 
-    "train": {
-        "total_timesteps": {
-            "distribution": "log_normal",
-            "min": 60_000_000,
-            "max": 200_000_000,
-            "scale": "time",
+SWEEP_CONFIGS = {
+    "breakout": {
+        **_SWEEP_BASE,
+        "max_suggestion_cost": 1800,
+        "train": {
+            "total_timesteps": {"distribution": "log_normal", "min": 60_000_000, "max": 200_000_000, "scale": "time"},
+            "horizon": {"distribution": "uniform_pow2", "min": 16, "max": 64, "scale": "auto"},
+            "min_lr_ratio": {"distribution": "uniform", "min": 0.0, "max": 0.25, "scale": "auto"},
+            "learning_rate": {"distribution": "log_normal", "min": 0.01, "max": 0.3, "scale": 0.5},
+            "beta1": {"distribution": "uniform", "min": 0.5, "max": 0.95, "scale": "auto"},
+            "beta2": {"distribution": "logit_normal", "min": 0.95, "max": 0.99999, "scale": "auto"},
+            "eps": {"distribution": "log_normal", "min": 1e-6, "max": 1e-3, "scale": "auto"},
+            "ent_coef": {"distribution": "log_normal", "min": 0.0005, "max": 0.02, "scale": "auto"},
+            "gamma": {"distribution": "logit_normal", "min": 0.88, "max": 0.998, "scale": "auto"},
+            "gae_lambda": {"distribution": "logit_normal", "min": 0.8, "max": 0.995, "scale": "auto"},
+            "vtrace_rho_clip": {"distribution": "uniform", "min": 1.0, "max": 4.0, "scale": "auto"},
+            "vtrace_c_clip": {"distribution": "uniform", "min": 1.0, "max": 3.0, "scale": "auto"},
+            "prio_alpha": {"distribution": "logit_normal", "min": 0.01, "max": 0.95, "scale": "auto"},
+            "prio_beta0": {"distribution": "logit_normal", "min": 0.5, "max": 0.99, "scale": "auto"},
+            "clip_coef": {"distribution": "uniform", "min": 0.1, "max": 1.5, "scale": "auto"},
+            "vf_coef": {"distribution": "uniform", "min": 0.5, "max": 8.0, "scale": "auto"},
+            "vf_clip_coef": {"distribution": "uniform", "min": 0.3, "max": 6.0, "scale": "auto"},
+            "max_grad_norm": {"distribution": "uniform", "min": 0.5, "max": 4.0, "scale": "auto"},
+            "replay_ratio": {"distribution": "uniform", "min": 0.5, "max": 4.0, "scale": "auto"},
+            "minibatch_size": {"distribution": "uniform_pow2", "min": 16384, "max": 131072, "scale": "auto"},
+            "total_agents": {"distribution": "uniform_pow2", "min": 2048, "max": 8192, "scale": "auto"},
+            "num_buffers": {"distribution": "uniform_pow2", "min": 2, "max": 8, "scale": "auto"},
+            "ns_iters": {"distribution": "uniform", "min": 3, "max": 5.99, "scale": "auto"},
         },
-        "horizon": {
-            "distribution": "uniform_pow2",
-            "min": 16,
-            "max": 64,
-            "scale": "auto",
+        "policy": {
+            "num_layers": {"distribution": "uniform", "min": 2, "max": 3.5, "scale": "auto"},
         },
-        "min_lr_ratio": {
-            "distribution": "uniform",
-            "min": 0.0,
-            "max": 0.25,
-            "scale": "auto",
-        },
-        "learning_rate": {
-            "distribution": "log_normal",
-            "min": 0.01,
-            "max": 0.3,
-            "scale": 0.5,
-        },
-        "beta1": {
-            "distribution": "uniform",
-            "min": 0.5,
-            "max": 0.95,
-            "scale": "auto",
-        },
-        "beta2": {
-            "distribution": "logit_normal",
-            "min": 0.95,
-            "max": 0.99999,
-            "scale": "auto",
-        },
-        "eps": {
-            "distribution": "log_normal",
-            "min": 1e-6,
-            "max": 1e-3,
-            "scale": "auto",
-        },
-        "ent_coef": {
-            "distribution": "log_normal",
-            "min": 0.0005,
-            "max": 0.02,
-            "scale": "auto",
-        },
-        "gamma": {
-            "distribution": "logit_normal",
-            "min": 0.88,
-            "max": 0.998,
-            "scale": "auto",
-        },
-        "gae_lambda": {
-            "distribution": "logit_normal",
-            "min": 0.8,
-            "max": 0.995,
-            "scale": "auto",
-        },
-        "vtrace_rho_clip": {
-            "distribution": "uniform",
-            "min": 1.0,
-            "max": 4.0,
-            "scale": "auto",
-        },
-        "vtrace_c_clip": {
-            "distribution": "uniform",
-            "min": 1.0,
-            "max": 3.0,
-            "scale": "auto",
-        },
-        "prio_alpha": {
-            "distribution": "logit_normal",
-            "min": 0.01,
-            "max": 0.95,
-            "scale": "auto",
-        },
-        "prio_beta0": {
-            "distribution": "logit_normal",
-            "min": 0.5,
-            "max": 0.99,
-            "scale": "auto",
-        },
-        "clip_coef": {
-            "distribution": "uniform",
-            "min": 0.1,
-            "max": 1.5,
-            "scale": "auto",
-        },
-        "vf_coef": {
-            "distribution": "uniform",
-            "min": 0.5,
-            "max": 8.0,
-            "scale": "auto",
-        },
-        "vf_clip_coef": {
-            "distribution": "uniform",
-            "min": 0.3,
-            "max": 6.0,
-            "scale": "auto",
-        },
-        "max_grad_norm": {
-            "distribution": "uniform",
-            "min": 0.5,
-            "max": 4.0,
-            "scale": "auto",
-        },
-        "replay_ratio": {
-            "distribution": "uniform",
-            "min": 0.5,
-            "max": 4.0,
-            "scale": "auto",
-        },
-        "minibatch_size": {
-            "distribution": "uniform_pow2",
-            "min": 16384,
-            "max": 131072,
-            "scale": "auto",
-        },
-        "total_agents": {
-            "distribution": "uniform_pow2",
-            "min": 2048,
-            "max": 8192,
-            "scale": "auto",
-        },
-        "num_buffers": {
-            "distribution": "uniform_pow2",
-            "min": 2,
-            "max": 8,
-            "scale": "auto",
-        },
-        # num_threads always set to match num_buffers in clamp_params
     },
-    "policy": {
-        # hidden_size fixed at 64 in build_configs (128 is numerically unstable on Metal)
-        # L1 models consistently score <10 on breakout, so floor at 2
-        "num_layers": {
-            "distribution": "uniform",
-            "min": 2,
-            "max": 3.5,
-            "scale": "auto",
+    "g2048": {
+        **_SWEEP_BASE,
+        "max_suggestion_cost": 7200,  # g2048 needs longer runs
+        "train": {
+            "total_timesteps": {"distribution": "log_normal", "min": 300_000_000, "max": 1_000_000_000, "scale": "time"},
+            "horizon": {"distribution": "uniform_pow2", "min": 16, "max": 64, "scale": "auto"},
+            "min_lr_ratio": {"distribution": "uniform", "min": 0.0, "max": 0.25, "scale": "auto"},
+            "learning_rate": {"distribution": "log_normal", "min": 0.0005, "max": 0.02, "scale": 0.5},
+            "beta1": {"distribution": "uniform", "min": 0.5, "max": 0.95, "scale": "auto"},
+            "beta2": {"distribution": "logit_normal", "min": 0.95, "max": 0.99999, "scale": "auto"},
+            "eps": {"distribution": "log_normal", "min": 1e-6, "max": 1e-3, "scale": "auto"},
+            "ent_coef": {"distribution": "log_normal", "min": 0.0005, "max": 0.05, "scale": "auto"},
+            "gamma": {"distribution": "logit_normal", "min": 0.97, "max": 0.9999, "scale": "auto"},
+            "gae_lambda": {"distribution": "logit_normal", "min": 0.5, "max": 0.995, "scale": "auto"},
+            "vtrace_rho_clip": {"distribution": "uniform", "min": 1.0, "max": 4.0, "scale": "auto"},
+            "vtrace_c_clip": {"distribution": "uniform", "min": 1.0, "max": 3.0, "scale": "auto"},
+            "prio_alpha": {"distribution": "logit_normal", "min": 0.01, "max": 0.95, "scale": "auto"},
+            "prio_beta0": {"distribution": "logit_normal", "min": 0.5, "max": 0.99, "scale": "auto"},
+            "clip_coef": {"distribution": "uniform", "min": 0.05, "max": 0.5, "scale": "auto"},
+            "vf_coef": {"distribution": "uniform", "min": 0.1, "max": 8.0, "scale": "auto"},
+            "vf_clip_coef": {"distribution": "uniform", "min": 0.05, "max": 6.0, "scale": "auto"},
+            "max_grad_norm": {"distribution": "uniform", "min": 0.2, "max": 6.0, "scale": "auto"},
+            "replay_ratio": {"distribution": "uniform", "min": 0.25, "max": 4.0, "scale": "auto"},
+            "minibatch_size": {"distribution": "uniform_pow2", "min": 4096, "max": 65536, "scale": "auto"},
+            "total_agents": {"distribution": "uniform_pow2", "min": 2048, "max": 16384, "scale": "auto"},
+            "num_buffers": {"distribution": "uniform_pow2", "min": 2, "max": 8, "scale": "auto"},
+            "ns_iters": {"distribution": "uniform", "min": 3, "max": 5.99, "scale": "auto"},
+            "scaffolding_ratio": {"distribution": "uniform", "min": 0.0, "max": 0.9, "scale": "auto"},
+        },
+        "policy": {
+            "hidden_size": {"distribution": "uniform_pow2", "min": 64, "max": 256, "scale": "auto"},
+            "num_layers": {"distribution": "uniform", "min": 2, "max": 5.5, "scale": "auto"},
         },
     },
 }
 
-# best known Metal breakout config (trial #95, score 836 at 176M, K-split TN GEMM)
-DEFAULT_PARAMS = {
-    "train": {
-        "total_timesteps": 176_000_000,
-        "horizon": 32,
-        "min_lr_ratio": 0.113,
-        "learning_rate": 0.0669,
-        "beta1": 0.523,
-        "beta2": 0.993,
-        "eps": 6e-6,
-        "ent_coef": 0.0081,
-        "gamma": 0.920,
-        "gae_lambda": 0.931,
-        "vtrace_rho_clip": 1.828,
-        "vtrace_c_clip": 1.000,
-        "prio_alpha": 0.010,
-        "prio_beta0": 0.976,
-        "clip_coef": 0.756,
-        "vf_coef": 2.956,
-        "vf_clip_coef": 2.824,
-        "max_grad_norm": 2.046,
-        "replay_ratio": 2.10,
-        "minibatch_size": 65536,
-        "total_agents": 2048,
-        "num_buffers": 8,
-        "num_threads": 8,
+DEFAULT_PARAMS_PER_ENV = {
+    # best known Metal breakout config (trial #203, score 854, tensor_ops NT)
+    "breakout": {
+        "train": {
+            "total_timesteps": 176_000_000,
+            "horizon": 32,
+            "min_lr_ratio": 0.113,
+            "learning_rate": 0.0669,
+            "beta1": 0.523,
+            "beta2": 0.993,
+            "eps": 6e-6,
+            "ent_coef": 0.0081,
+            "gamma": 0.920,
+            "gae_lambda": 0.931,
+            "vtrace_rho_clip": 1.828,
+            "vtrace_c_clip": 1.000,
+            "prio_alpha": 0.010,
+            "prio_beta0": 0.976,
+            "clip_coef": 0.756,
+            "vf_coef": 2.956,
+            "vf_clip_coef": 2.824,
+            "max_grad_norm": 2.046,
+            "replay_ratio": 2.10,
+            "minibatch_size": 65536,
+            "total_agents": 2048,
+            "num_buffers": 8,
+            "num_threads": 8,
+            "ns_iters": 5,
+        },
+        "policy": {
+            "hidden_size": 64,
+            "num_layers": 2,
+        },
     },
-    "policy": {
-        "hidden_size": 64,
-        "num_layers": 2,
+    # g2048 anchor: upstream-ish config adapted for Metal (hs=128 L=3 as baseline)
+    "g2048": {
+        "train": {
+            "total_timesteps": 200_000_000,
+            "horizon": 32,
+            "min_lr_ratio": 0.0,
+            "learning_rate": 0.003,
+            "beta1": 0.9,
+            "beta2": 0.999,
+            "eps": 1e-5,
+            "ent_coef": 0.01,
+            "gamma": 0.998,
+            "gae_lambda": 0.95,
+            "vtrace_rho_clip": 1.0,
+            "vtrace_c_clip": 1.0,
+            "prio_alpha": 0.01,
+            "prio_beta0": 0.4,
+            "clip_coef": 0.2,
+            "vf_coef": 1.0,
+            "vf_clip_coef": 0.1,
+            "max_grad_norm": 0.5,
+            "replay_ratio": 1.5,
+            "minibatch_size": 8192,
+            "total_agents": 4096,
+            "num_buffers": 4,
+            "num_threads": 4,
+            "ns_iters": 5,
+            "scaffolding_ratio": 0.5,
+        },
+        "policy": {
+            "hidden_size": 128,
+            "num_layers": 3,
+        },
     },
 }
 
@@ -269,6 +237,8 @@ def build_configs(
         "profile": 0.0,
         "overlap": 1.0,
         "cpu_inference": 1.0,
+        "train_fp16": float(int(train.get("train_fp16", 0))),
+        "ns_iters": float(int(train.get("ns_iters", 5))),
         "env_name": env_name,
     }
     vec_config = {
@@ -277,11 +247,15 @@ def build_configs(
         "num_threads": float(int(train.get("num_threads", 1))),
     }
     policy_config = {
-        "hidden_size": 64.0,  # fixed: 128 is numerically unstable on Metal
+        "hidden_size": float(int(policy.get("hidden_size", 64))),
         "num_layers": float(int(policy.get("num_layers", 2))),
         "arch": 1.0,  # always simple for bench sweep
     }
-    env_config = ENV_DEFAULTS[env_name]
+    env_config = ENV_DEFAULTS[env_name].copy()
+
+    # g2048: scaffolding_ratio is a sweepable param
+    if "scaffolding_ratio" in train:
+        env_config["scaffolding_ratio"] = train["scaffolding_ratio"]
 
     return config, vec_config, env_config, policy_config
 
@@ -306,12 +280,12 @@ def load_observations(path: Path) -> list[dict]:
     return records
 
 
-def clamp_params(params: dict) -> None:
+def clamp_params(params: dict, env_name: str = "breakout") -> None:
     """Enforce cross-parameter constraints."""
     train = params.get("train", {})
     policy = params.get("policy", {})
-    hidden = int(policy.get("hidden_size", 128))
-    layers = int(policy.get("num_layers", 1))
+    hidden = int(policy.get("hidden_size", 64))
+    layers = int(policy.get("num_layers", 2))
     total_agents = int(train.get("total_agents", 2048))
     horizon = int(train.get("horizon", 32))
     minibatch = int(train.get("minibatch_size", 4096))
@@ -334,17 +308,26 @@ def clamp_params(params: dict) -> None:
     if effective_mb > 32:
         train["replay_ratio"] = 32 * minibatch / max(batch_size, 1)
 
-    # Clamp to wider stable regime — must match SWEEP_CONFIG ranges.
-    train["learning_rate"] = min(max(float(train.get("learning_rate", 0.1)), 0.005), 0.4)
+    # per-env clamp ranges
+    if env_name == "g2048":
+        train["learning_rate"] = min(max(float(train.get("learning_rate", 0.003)), 0.0002), 0.03)
+        train["gamma"] = min(max(float(train.get("gamma", 0.998)), 0.96), 0.9999)
+        train["clip_coef"] = min(max(float(train.get("clip_coef", 0.2)), 0.05), 0.6)
+        train["scaffolding_ratio"] = min(max(float(train.get("scaffolding_ratio", 0.5)), 0.0), 0.8)
+        policy["hidden_size"] = int(policy.get("hidden_size", 128))
+    else:
+        train["learning_rate"] = min(max(float(train.get("learning_rate", 0.1)), 0.005), 0.4)
+        train["gamma"] = min(max(float(train.get("gamma", 0.972)), 0.85), 0.999)
+        train["clip_coef"] = min(max(float(train.get("clip_coef", 0.67)), 0.05), 2.0)
+
+    # shared clamps
     train["beta1"] = min(max(float(train.get("beta1", 0.73)), 0.4), 0.98)
     train["beta2"] = min(max(float(train.get("beta2", 0.9986)), 0.98), 0.999995)
     train["eps"] = min(max(float(train.get("eps", 8.3e-5)), 1e-7), 1e-2)
     train["ent_coef"] = min(max(float(train.get("ent_coef", 0.0033)), 1e-4), 0.05)
-    train["gamma"] = min(max(float(train.get("gamma", 0.972)), 0.85), 0.999)
-    train["gae_lambda"] = min(max(float(train.get("gae_lambda", 0.949)), 0.75), 0.999)
+    train["gae_lambda"] = min(max(float(train.get("gae_lambda", 0.949)), 0.4), 0.999)
     train["vtrace_rho_clip"] = min(max(float(train.get("vtrace_rho_clip", 2.1)), 1.0), 5.0)
     train["vtrace_c_clip"] = min(max(float(train.get("vtrace_c_clip", 1.08)), 1.0), 4.0)
-    train["clip_coef"] = min(max(float(train.get("clip_coef", 0.67)), 0.05), 2.0)
     train["vf_coef"] = min(max(float(train.get("vf_coef", 1.22)), 0.1), 10.0)
     train["vf_clip_coef"] = min(max(float(train.get("vf_clip_coef", 1.23)), 0.1), 8.0)
     train["max_grad_norm"] = min(max(float(train.get("max_grad_norm", 1.81)), 0.3), 6.0)
@@ -454,9 +437,10 @@ def run_trial(
                     last_report_time = now
 
                 # abort if SPS is too low (bad param combo for the hardware)
-                if len(entries) <= 2 and sps < MIN_SPS:
+                min_sps = MIN_SPS_PER_ENV.get(env_name, 100_000)
+                if len(entries) <= 2 and sps < min_sps:
                     print(
-                        f"  ABORT: SPS={sps:.0f} < {MIN_SPS} "
+                        f"  ABORT: SPS={sps:.0f} < {min_sps} "
                         f"(bad param combo), skipping trial"
                     )
                     early_stopped = True
@@ -618,13 +602,19 @@ def run_sweep(env_name: str, max_trials: int | None, timeout_h: float) -> None:
     sweep_dir.mkdir(parents=True, exist_ok=True)
     obs_path = sweep_dir / "observations.jsonl"
 
-    protein = Protein(SWEEP_CONFIG, use_gpu=False, prune_pareto=True)
+    sweep_config = SWEEP_CONFIGS[env_name]
+    default_params = DEFAULT_PARAMS_PER_ENV[env_name]
+
+    protein = Protein(sweep_config, use_gpu=False, prune_pareto=True)
 
     existing_records = load_observations(obs_path)
     existing_trials: set[int] = set()
     if existing_records:
         for r in existing_records:
             existing_trials.add(r["trial"])
+            # backfill params added after old sweep runs
+            if "train" in r["params"]:
+                r["params"]["train"].setdefault("ns_iters", 5)
             score = r.get("score", r.get("episode_return", 0))
             protein.observe(r["params"], score, r["cost"])
         print(f"replayed {len(existing_records)} observations from {len(existing_trials)} previous trials")
@@ -634,7 +624,7 @@ def run_sweep(env_name: str, max_trials: int | None, timeout_h: float) -> None:
     timeout_s = timeout_h * 3600
 
     n_params = len(dict(pufferlib.unroll_nested_dict(
-        {k: v for k, v in SWEEP_CONFIG.items() if isinstance(v, dict)}
+        {k: v for k, v in sweep_config.items() if isinstance(v, dict)}
     )))
 
     print(f"protein sweep ({env_name}, metal, in-process)")
@@ -654,12 +644,12 @@ def run_sweep(env_name: str, max_trials: int | None, timeout_h: float) -> None:
             break
 
         if trial_idx == 0:
-            params = deepcopy(DEFAULT_PARAMS)
+            params = deepcopy(default_params)
             print("\ntrial 0: using default hyperparameters as anchor")
         else:
-            fill = deepcopy(DEFAULT_PARAMS)
+            fill = deepcopy(default_params)
             params, info = protein.suggest(fill)
-            clamp_params(params)
+            clamp_params(params, env_name)
             if info:
                 pred_cost = info.get("cost", 0)
                 pred_score = info.get("score", 0)

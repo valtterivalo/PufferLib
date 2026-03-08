@@ -43,6 +43,7 @@ typedef struct Log {
     float episode_return;
     float episode_length;
     float lifetime_max_tile;
+    float reached_16384;
     float reached_32768;
     float reached_65536;
     float reached_131072;
@@ -135,6 +136,7 @@ void add_log(Game* game) {
     game->log.episode_length += game->tick;
     game->log.episode_return += game->episode_reward;
     game->log.lifetime_max_tile += (float)(1 << game->lifetime_max_tile);
+    game->log.reached_16384 += (game->max_tile >= 14);
     game->log.reached_32768 += (game->max_tile >= 15);
     game->log.reached_65536 += (game->max_tile >= 16);
     game->log.reached_131072 += (game->max_tile >= 17);
@@ -371,14 +373,13 @@ void c_step(Game* game) {
 
     if (did_move) {
         game->moves_made++;
-        place_tile_at_random_cell(game, get_new_tile(game));
         game->score += score_add;
-
         update_stats(game);
+        place_tile_at_random_cell(game, get_new_tile(game));
 
         // Observations only change if the grid changes
         update_observations(game);
-        
+
         // This is to limit infinite invalid moves during eval (happens for noob agents)
         // Don't need to be tight. Don't need to show to human player.
         int tick_multiplier = max(1, game->lifetime_max_tile - 8); // practically no limit for competent agent
@@ -416,9 +417,9 @@ void step_without_reset(Game* game) {
 
     if (did_move) {
         game->moves_made++;
-        place_tile_at_random_cell(game, get_new_tile(game));
         game->score += score_add;
         update_stats(game);
+        place_tile_at_random_cell(game, get_new_tile(game));
         // Observations only change if the grid changes
         update_observations(game);
     }

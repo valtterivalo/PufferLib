@@ -1538,10 +1538,11 @@ void puf_orthogonal_init(PufTensor &dst, float gain, uint64_t seed,
 
 void muon_init(Muon *m, Allocator *param_alloc, PufTensor weight_buffer,
                double lr_val, double momentum, double eps, double weight_decay,
-               Allocator &alloc) {
+               int ns_iters, Allocator &alloc) {
   m->momentum = momentum;
   m->weight_decay = weight_decay;
   m->eps = eps;
+  m->ns_iters = (ns_iters > 0 && ns_iters <= 5) ? ns_iters : 5;
   m->lr_val_init = (float)lr_val;
   m->lr_ptr = nullptr;
   m->lr_derived_ptr = nullptr;
@@ -1659,10 +1660,14 @@ void muon_step(Muon *m, cudaStream_t stream) {
                         (int)x.numel(), stream);
       mtl_barrier(ms);
 
-      // 5 Newton-Schulz iterations (all GEMM — synced internally)
-      for (int i = 0; i < 5; ++i) {
-        float a = (float)ns_coeffs[i][0], b = (float)ns_coeffs[i][1],
-              c = (float)ns_coeffs[i][2];
+      // Newton-Schulz iterations (all GEMM — synced internally)
+      // When ns_iters < 5, space out coefficient indices evenly across the
+      // full 5-step schedule (e.g. ns_iters=3 uses coeffs {0,2,4}) so we
+      // get both aggressive early corrections and conservative polishing.
+      for (int i = 0; i < m->ns_iters; ++i) {
+        int ci = i * 4 / (m->ns_iters - 1 + (m->ns_iters == 1));
+        float a = (float)ns_coeffs[ci][0], b = (float)ns_coeffs[ci][1],
+              c = (float)ns_coeffs[ci][2];
         PufTensor &src = (i % 2 == 0) ? x : tmp;
         PufTensor &dst = (i % 2 == 0) ? tmp : x;
         puf_mm(src, src, A, stream);
@@ -1824,10 +1829,10 @@ static void encoder_reg_params(void *w, Allocator *alloc, int esz) {
 }
 
 static void encoder_reg_train(void *w, void *activations, Allocator *acts,
-                                Allocator *grads, int B_TT) {
+                                Allocator *grads, int B_TT, int precision) {
   EncoderWeights *ew = (EncoderWeights *)w;
   EncoderActivations *a = (EncoderActivations *)activations;
-  int p = PRECISION_SIZE;
+  int p = precision;
   int H = ew->out_dim, midH = ew->mid_dim;
   *a = {};
   // forward intermediates
@@ -2038,10 +2043,10 @@ static void decoder_reg_params(void *w, Allocator *alloc, int esz) {
 }
 
 static void decoder_reg_train(void *w, void *activations, Allocator *acts,
-                                Allocator *grads, int B_TT) {
+                                Allocator *grads, int B_TT, int precision) {
   DecoderWeights *dw = (DecoderWeights *)w;
   DecoderActivations *a = (DecoderActivations *)activations;
-  int p = PRECISION_SIZE;
+  int p = precision;
   int H = dw->hidden_dim, od1 = dw->output_dim + 1;
   *a = {};
   // forward intermediates
@@ -2146,10 +2151,10 @@ static void simple_encoder_reg_params(void *w, Allocator *alloc, int esz) {
 
 static void simple_encoder_reg_train(void *w, void *activations,
                                        Allocator *acts, Allocator *grads,
-                                       int B_TT) {
+                                       int B_TT, int precision) {
   SimpleEncoderWeights *ew = (SimpleEncoderWeights *)w;
   SimpleEncoderActivations *a = (SimpleEncoderActivations *)activations;
-  int p = PRECISION_SIZE;
+  int p = precision;
   *a = (SimpleEncoderActivations){
       .out = {.shape = {B_TT, ew->out_dim}, .dtype_size = p},
       .saved_input = {.shape = {B_TT, ew->in_dim}, .dtype_size = p},
@@ -2240,10 +2245,10 @@ static void simple_decoder_reg_params(void *w, Allocator *alloc, int esz) {
 
 static void simple_decoder_reg_train(void *w, void *activations,
                                        Allocator *acts, Allocator *grads,
-                                       int B_TT) {
+                                       int B_TT, int precision) {
   SimpleDecoderWeights *dw = (SimpleDecoderWeights *)w;
   SimpleDecoderActivations *a = (SimpleDecoderActivations *)activations;
-  int p = PRECISION_SIZE;
+  int p = precision;
   int od1 = dw->output_dim + 1;
   *a = (SimpleDecoderActivations){
       .out = {.shape = {B_TT, od1}, .dtype_size = p},
@@ -2296,10 +2301,10 @@ static void mingru_reg_params(void *w, Allocator *alloc, int esz) {
 }
 
 static void mingru_reg_train(void *w, void *activations, Allocator *acts,
-                               Allocator *grads, int B_TT) {
+                               Allocator *grads, int B_TT, int precision) {
   MinGRUWeights *m = (MinGRUWeights *)w;
   MinGRUActivations *a = (MinGRUActivations *)activations;
-  int H = m->hidden, TT = m->horizon, B = B_TT / TT, p = PRECISION_SIZE;
+  int H = m->hidden, TT = m->horizon, B = B_TT / TT, p = precision;
   int f = sizeof(float);
   a->num_layers = m->num_layers;
   a->saved_inputs.resize(m->num_layers);

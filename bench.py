@@ -93,6 +93,12 @@ def parse_args():
                    help="GPU sync after each training phase for accurate per-kernel profiling")
     p.add_argument("--cpu-inference", action="store_true",
                    help="CPU forward pass during rollout (no GPU sync, uses Accelerate cblas)")
+    p.add_argument("--fp16", action="store_true",
+                   help="fp16 training activations/grads (rollout stays fp32)")
+    p.add_argument("--ns-iters", type=int, default=5,
+                   help="Newton-Schulz iterations in muon optimizer (1-5, default 5)")
+    p.add_argument("--scaffolding-ratio", type=float, default=None,
+                   help="Override env scaffolding_ratio (g2048 only)")
     return p.parse_args()
 
 
@@ -131,6 +137,8 @@ def main():
         "profile": 1.0 if args.profile else 0.0,
         "overlap": 0.0 if args.no_overlap else 1.0,
         "cpu_inference": 1.0 if args.cpu_inference else 0.0,
+        "train_fp16": 1.0 if args.fp16 else 0.0,
+        "ns_iters": float(args.ns_iters),
         "seed": float(args.seed),
         "env_name": args.env,
     }
@@ -144,11 +152,13 @@ def main():
         "num_layers": float(args.num_layers),
         "arch": 1.0 if args.arch == "simple" else 0.0,
     }
-    env_config = ENV_DEFAULTS[args.env]
+    env_config = ENV_DEFAULTS[args.env].copy()
+    if args.scaffolding_ratio is not None:
+        env_config["scaffolding_ratio"] = args.scaffolding_ratio
 
     print(f"env={args.env}, agents={args.total_agents}, hidden={args.hidden_size}, "
           f"layers={args.num_layers}, horizon={args.horizon}, overlap={not args.no_overlap}, "
-          f"arch={args.arch}, cpu_infer={args.cpu_inference}, seed={args.seed}")
+          f"arch={args.arch}, cpu_infer={args.cpu_inference}, fp16={args.fp16}, seed={args.seed}")
 
     trace_file = None
     trace_every = max(int(args.trace_every), 1)

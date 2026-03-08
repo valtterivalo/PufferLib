@@ -797,9 +797,9 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
         tb.encoder = new EncoderActivations{};
         tb.decoder = new DecoderActivations{};
         tb.network = new MinGRUActivations{};
-        encoder.reg_train(wbf16.encoder, tb.encoder, &acts, &grads, B_TT);
-        decoder.reg_train(wbf16.decoder, tb.decoder, &acts, &grads, B_TT);
-        network.reg_train(wbf16.network, tb.network, &acts, &grads, B_TT);
+        encoder.reg_train(wbf16.encoder, tb.encoder, &acts, &grads, B_TT, PRECISION_SIZE);
+        decoder.reg_train(wbf16.decoder, tb.decoder, &acts, &grads, B_TT, PRECISION_SIZE);
+        network.reg_train(wbf16.network, tb.network, &acts, &grads, B_TT, PRECISION_SIZE);
 
         pufferl->alloc_bf16.create();
         pufferl->param_bf16_puf = {.bytes = (char*)bf16_params.mem, .shape = {bf16_params.total_elems}, .dtype_size = 2};
@@ -819,9 +819,9 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
         tb.encoder = new EncoderActivations{};
         tb.decoder = new DecoderActivations{};
         tb.network = new MinGRUActivations{};
-        encoder.reg_train(wfp32.encoder, tb.encoder, &acts, &grads, B_TT);
-        decoder.reg_train(wfp32.decoder, tb.decoder, &acts, &grads, B_TT);
-        network.reg_train(wfp32.network, tb.network, &acts, &grads, B_TT);
+        encoder.reg_train(wfp32.encoder, tb.encoder, &acts, &grads, B_TT, PRECISION_SIZE);
+        decoder.reg_train(wfp32.decoder, tb.decoder, &acts, &grads, B_TT, PRECISION_SIZE);
+        network.reg_train(wfp32.network, tb.network, &acts, &grads, B_TT, PRECISION_SIZE);
 
         pufferl->alloc_fp32.acts.create();
         pufferl->alloc_fp32.grads.create();
@@ -895,7 +895,7 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
 
     // Muon optimizer (init + register buffers)
     muon_init(pufferl->muon, &fp32_params,
-        pufferl->param_fp32_puf, lr, beta1, eps, 0.0, alloc);
+        pufferl->param_fp32_puf, lr, beta1, eps, 0.0, 5, alloc);
     pufferl->muon->nccl_comm = pufferl->nccl_comm;
     pufferl->muon->world_size = hypers.world_size;
     printf("DEBUG: Contiguous weight buffer: %ld elements\n", pufferl->muon->wb_puf.numel());

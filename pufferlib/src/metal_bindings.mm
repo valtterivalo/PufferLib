@@ -528,6 +528,8 @@ std::unique_ptr<PuffeRL> create_pufferl(pybind11::dict kwargs,
     hypers.profile = get_config(kwargs, "profile");
     hypers.overlap = kwargs.contains("overlap") && get_config(kwargs, "overlap") > 0;
     hypers.cpu_inference = kwargs.contains("cpu_inference") && get_config(kwargs, "cpu_inference") > 0;
+    hypers.train_fp16 = kwargs.contains("train_fp16") && get_config(kwargs, "train_fp16") > 0;
+    hypers.ns_iters = kwargs.contains("ns_iters") ? (int)get_config(kwargs, "ns_iters") : 5;
 
     std::string env_name = kwargs["env_name"].cast<std::string>();
     Dict* vec_dict = py_dict_to_c_dict(vec_kwargs.cast<py::dict>());
@@ -597,7 +599,9 @@ PYBIND11_MODULE(_C, m) {
         .def_readwrite("cudagraphs", &HypersT::cudagraphs)
         .def_readwrite("kernels", &HypersT::kernels)
         .def_readwrite("profile", &HypersT::profile)
-        .def_readwrite("overlap", &HypersT::overlap);
+        .def_readwrite("overlap", &HypersT::overlap)
+        .def_readwrite("train_fp16", &HypersT::train_fp16)
+        .def_readwrite("ns_iters", &HypersT::ns_iters);
 
     py::class_<PufTensor>(m, "PufTensor")
         .def("__repr__", &PufTensor::repr)
