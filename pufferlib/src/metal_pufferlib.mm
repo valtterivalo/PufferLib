@@ -135,8 +135,6 @@ typedef struct {
     bool cpu_inference;  // CPU forward pass during rollout (no GPU sync)
     bool train_fp16;     // fp16 activations/grads during training (rollout stays fp32)
     int ns_iters;        // Newton-Schulz iterations in muon optimizer (1-5, default 5)
-    // Architecture
-    int arch_type;  // 0=ARCH_RICH (3-layer MLP + LN decoder), 1=ARCH_SIMPLE (upstream single-linear)
     // Threading
     int num_threads;
     // RNG seed
@@ -359,7 +357,7 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
     MinGRUWeights *mw = (MinGRUWeights *)infer_weights.network;
 
     // Decoder output width needed for mask setup (derived from weights, not GPU output)
-    int fused_cols = ((SimpleDecoderWeights *)infer_weights.decoder)->output_dim + 1;
+    int fused_cols = ((DecoderWeights *)infer_weights.decoder)->output_dim + 1;
     int obs_cols = (int)obs_dst.shape[1];
     const float* mask_ptr;
     int mask_stride;
@@ -384,7 +382,7 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
 
         // Store decoder logits + f32 actions for GPU logprob recompute at
         // training start. CPU sampling uses IEEE expf, PPO uses GPU fast::exp.
-        SimpleDecoderActivations *da = (SimpleDecoderActivations *)acts.decoder;
+        DecoderActivations *da = (DecoderActivations *)acts.decoder;
         PufTensor logits_dst = puf_slice(pufferl->rollout_logits, t, start, block_size);
         memcpy(logits_dst.bytes, da->out.bytes, block_size * fused_cols * sizeof(float));
         PufTensor acts_f32_dst = puf_slice(pufferl->rollout_actions_f32, t, start, block_size);
@@ -633,12 +631,7 @@ void train_impl(PuffeRL& pufferl) {
 
             PufTensor p_logstd;
             if (pufferl.is_continuous) {
-                // logstd always read from fp32 master weights for PPO precision
-                if (hypers.arch_type == ARCH_SIMPLE) {
-                    p_logstd = ((SimpleDecoderWeights*)pufferl.weights_fp32.decoder)->logstd;
-                } else {
-                    p_logstd = ((DecoderWeights*)pufferl.weights_fp32.decoder)->logstd;
-                }
+                p_logstd = ((DecoderWeights*)pufferl.weights_fp32.decoder)->logstd;
             }
 
             ppo_loss_fwd_bwd(dec_puf_f32, p_logstd, pufferl.train_buf,
@@ -788,12 +781,7 @@ void train_impl(PuffeRL& pufferl) {
 
         PufTensor p_logstd;
         if (pufferl.is_continuous) {
-            // logstd always read from fp32 master weights for PPO precision
-            if (hypers.arch_type == ARCH_SIMPLE) {
-                p_logstd = ((SimpleDecoderWeights*)pufferl.weights_fp32.decoder)->logstd;
-            } else {
-                p_logstd = ((DecoderWeights*)pufferl.weights_fp32.decoder)->logstd;
-            }
+            p_logstd = ((DecoderWeights*)pufferl.weights_fp32.decoder)->logstd;
         }
         ppo_loss_fwd_bwd(dec_puf_f32, p_logstd, pufferl.train_buf,
             pufferl.act_sizes_puf, pufferl.losses_puf,
@@ -965,9 +953,6 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
             input_size, act_n);
     }
 
-    fprintf(stderr, "[metal] init: arch=%s\n",
-        hypers.arch_type == ARCH_SIMPLE ? "simple" : "rich");
-
     bool is_continuous = pufferl->is_continuous;
     int decoder_output_size = is_continuous ? num_action_heads : act_n;
 
@@ -986,44 +971,22 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     pufferl->alloc_fp32.esz = esz_fp32;
     Allocator& fp32_params = pufferl->alloc_fp32.params;
 
-    Encoder encoder;
-    Decoder decoder;
-    bool simple_arch = (hypers.arch_type == ARCH_SIMPLE);
-    if (simple_arch) {
-        encoder = {
-            .forward = simple_encoder_forward,
-            .backward = simple_encoder_backward,
-            .init_weights = simple_encoder_init_weights,
-            .reg_params = simple_encoder_reg_params,
-            .reg_train = simple_encoder_reg_train,
-            .reg_rollout = simple_encoder_reg_rollout,
-        };
-        decoder = {
-            .forward = simple_decoder_forward,
-            .backward = simple_decoder_backward,
-            .init_weights = simple_decoder_init_weights,
-            .reg_params = simple_decoder_reg_params,
-            .reg_train = simple_decoder_reg_train,
-            .reg_rollout = simple_decoder_reg_rollout,
-        };
-    } else {
-        encoder = {
-            .forward = encoder_forward,
-            .backward = encoder_backward,
-            .init_weights = encoder_init_weights,
-            .reg_params = encoder_reg_params,
-            .reg_train = encoder_reg_train,
-            .reg_rollout = encoder_reg_rollout,
-        };
-        decoder = {
-            .forward = decoder_forward,
-            .backward = decoder_backward,
-            .init_weights = decoder_init_weights,
-            .reg_params = decoder_reg_params,
-            .reg_train = decoder_reg_train,
-            .reg_rollout = decoder_reg_rollout,
-        };
-    }
+    Encoder encoder = {
+        .forward = encoder_forward,
+        .backward = encoder_backward,
+        .init_weights = encoder_init_weights,
+        .reg_params = encoder_reg_params,
+        .reg_train = encoder_reg_train,
+        .reg_rollout = encoder_reg_rollout,
+    };
+    Decoder decoder = {
+        .forward = decoder_forward,
+        .backward = decoder_backward,
+        .init_weights = decoder_init_weights,
+        .reg_params = decoder_reg_params,
+        .reg_train = decoder_reg_train,
+        .reg_rollout = decoder_reg_rollout,
+    };
     Network network = {
         .forward = mingru_forward,
         .forward_train = mingru_forward_train,
@@ -1044,13 +1007,8 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     // fp32 master weights
     auto new_weights = [&](int esz) -> PolicyWeights {
         PolicyWeights w;
-        if (simple_arch) {
-            w.encoder = new SimpleEncoderWeights{.in_dim = input_size, .out_dim = hidden_size};
-            w.decoder = new SimpleDecoderWeights{.hidden_dim = hidden_size, .output_dim = decoder_output_size, .continuous = is_continuous};
-        } else {
-            w.encoder = new EncoderWeights{.in_dim = input_size, .mid_dim = 2 * hidden_size, .out_dim = hidden_size};
-            w.decoder = new DecoderWeights{.hidden_dim = hidden_size, .output_dim = decoder_output_size, .continuous = is_continuous};
-        }
+        w.encoder = new EncoderWeights{.in_dim = input_size, .out_dim = hidden_size};
+        w.decoder = new DecoderWeights{.hidden_dim = hidden_size, .output_dim = decoder_output_size, .continuous = is_continuous};
         w.network = new MinGRUWeights{.hidden = hidden_size, .num_layers = num_layers, .horizon = hypers.horizon};
         ((MinGRUWeights*)w.network)->weights.resize(num_layers);
         return w;
@@ -1079,7 +1037,7 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
         ensure_gpu_synced(default_stream);
     }
 
-    // Fused encoder+layer0 is disabled: nonlinear 3-layer encoder can't be fused.
+    // Fused encoder+layer0 is disabled.
     // The null guard in mingru_forward falls back to encoder.forward().
 
     // ========================================================================
@@ -1133,13 +1091,8 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     // Otherwise: activations/grads stay fp32 (PRECISION_SIZE=4) even in fp16 allocator.
     int train_precision = pufferl->train_fp16 ? esz_fp16 : PRECISION_SIZE;
     PolicyActivations& tb = pufferl->train_activations;
-    if (simple_arch) {
-        tb.encoder = new SimpleEncoderActivations{};
-        tb.decoder = new SimpleDecoderActivations{};
-    } else {
-        tb.encoder = new EncoderActivations{};
-        tb.decoder = new DecoderActivations{};
-    }
+    tb.encoder = new EncoderActivations{};
+    tb.decoder = new DecoderActivations{};
     tb.network = new MinGRUActivations{};
     encoder.reg_train(wfp16.encoder, tb.encoder, &acts, &grads, B_TT, train_precision);
     decoder.reg_train(wfp16.decoder, tb.decoder, &acts, &grads, B_TT, train_precision);
@@ -1303,13 +1256,8 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     for (int i = 0; i < num_buffers; i++) {
         PolicyActivations& rbuf = pufferl->buffer_activations[i];
         Allocator& ralloc = pufferl->buffer_allocs[i];
-        if (simple_arch) {
-            rbuf.encoder = new SimpleEncoderActivations{};
-            rbuf.decoder = new SimpleDecoderActivations{};
-        } else {
-            rbuf.encoder = new EncoderActivations{};
-            rbuf.decoder = new DecoderActivations{};
-        }
+        rbuf.encoder = new EncoderActivations{};
+        rbuf.decoder = new DecoderActivations{};
         rbuf.network = new MinGRUActivations{};
         // Rollout uses fp32 — register with fp32 weights (dimensions only, dtype from PRECISION_SIZE)
         encoder.reg_rollout(pufferl->weights_fp32.encoder, rbuf.encoder, &ralloc, inf_batch);
@@ -1352,36 +1300,20 @@ void close_impl(PuffeRL& pufferl) {
     fprintf(stderr, "[metal] close: deleting structs\n");
     delete pufferl.muon;
 
-    bool simple = (pufferl.hypers.arch_type == ARCH_SIMPLE);
-    auto delete_weights = [simple](PolicyWeights& w) {
-        if (simple) {
-            delete (SimpleEncoderWeights*)w.encoder;
-            delete (SimpleDecoderWeights*)w.decoder;
-        } else {
-            delete (EncoderWeights*)w.encoder;
-            delete (DecoderWeights*)w.decoder;
-        }
+    auto delete_weights = [](PolicyWeights& w) {
+        delete (EncoderWeights*)w.encoder;
+        delete (DecoderWeights*)w.decoder;
         delete (MinGRUWeights*)w.network;
     };
-    if (simple) {
-        delete (SimpleEncoderActivations*)pufferl.train_activations.encoder;
-        delete (SimpleDecoderActivations*)pufferl.train_activations.decoder;
-    } else {
-        delete (EncoderActivations*)pufferl.train_activations.encoder;
-        delete (DecoderActivations*)pufferl.train_activations.decoder;
-    }
+    delete (EncoderActivations*)pufferl.train_activations.encoder;
+    delete (DecoderActivations*)pufferl.train_activations.decoder;
     delete (MinGRUActivations*)pufferl.train_activations.network;
     delete_weights(pufferl.weights_fp32);
     delete_weights(pufferl.weights_bf16);
     delete_weights(pufferl.weights_infer);
     for (auto& rbuf : pufferl.buffer_activations) {
-        if (simple) {
-            delete (SimpleEncoderActivations*)rbuf.encoder;
-            delete (SimpleDecoderActivations*)rbuf.decoder;
-        } else {
-            delete (EncoderActivations*)rbuf.encoder;
-            delete (DecoderActivations*)rbuf.decoder;
-        }
+        delete (EncoderActivations*)rbuf.encoder;
+        delete (DecoderActivations*)rbuf.decoder;
         delete (MinGRUActivations*)rbuf.network;
     }
     delete pufferl.policy;

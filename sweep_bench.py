@@ -50,24 +50,36 @@ MIN_SPS_PER_ENV = {
 # per-env score metric: which env_stats key to use as the optimization target.
 # defaults to "score" (which falls back to "episode_return") for most envs.
 SCORE_METRIC_PER_ENV = {
-    "osrs_pvp": "wins",  # win rate [0, 1]
+    "osrs_pvp": "episode_return",  # denser signal than wins (which averages across PFSP pool)
     "osrs_zulrah": "episode_return",
 }
 
 # per-env metric distribution for Protein (how scores are transformed).
 # "linear" for unbounded scores, "percentile" for [0,1] rates.
 METRIC_DIST_PER_ENV = {
-    "osrs_pvp": "percentile",
+    "osrs_pvp": "linear",
     "osrs_zulrah": "linear",
 }
 
-# per-env arch default: 1.0 = simple (single linear), 0.0 = rich (3-layer MLP + LN)
-ARCH_PER_ENV = {
-    "breakout": 1.0,
-    "g2048": 1.0,
-    "osrs_pvp": 0.0,  # rich arch for PvP
-    "osrs_zulrah": 0.0,  # rich arch for Zulrah
+# PFSP (prioritized fictitious self-play) config for osrs_pvp.
+# opponent name -> enum value (from osrs_pvp_types.h OpponentType)
+OPP_PFSP = 16  # special opponent type that samples from the pool
+PFSP_POOL = {
+    "true_random": 1, "panicking": 2, "weak_random": 3, "semi_random": 4,
+    "sticky_prayer": 5, "random_eater": 6, "prayer_rookie": 7, "improved": 8,
+    "onetick": 11, "unpredictable_improved": 12, "unpredictable_onetick": 13,
+    "novice_nh": 17, "apprentice_nh": 18, "competent_nh": 19,
+    "intermediate_nh": 20, "advanced_nh": 21, "proficient_nh": 22,
+    "expert_nh": 23, "master_nh": 24, "savant_nh": 25,
+    "nightmare_nh": 26, "veng_fighter": 27, "blood_healer": 28,
+    "gmaul_combo": 29,
 }
+PFSP_POOL_NAMES = list(PFSP_POOL.keys())
+PFSP_POOL_TYPES = list(PFSP_POOL.values())
+PFSP_P = 1.5  # weight exponent: (1-winrate)^p
+PFSP_WEIGHT_FLOOR = 0.02
+PFSP_UPDATE_INTERVAL = 2_000_000  # steps between weight recomputation
+PFSP_WARMUP_EPISODES = 50  # min episodes per opponent before reweighting
 
 
 
@@ -156,37 +168,33 @@ SWEEP_CONFIGS = {
     },
     "osrs_pvp": {
         **_SWEEP_BASE,
-        "metric": "win_rate",
-        "metric_distribution": "percentile",
-        "max_suggestion_cost": 3600,
+        "metric": "episode_return",
+        "metric_distribution": "linear",
+        "max_suggestion_cost": 1800,  # PFSP needs longer trials
         "train": {
-            "total_timesteps": {"distribution": "log_normal", "min": 10_000_000, "max": 200_000_000, "scale": "time"},
-            "horizon": {"distribution": "uniform_pow2", "min": 16, "max": 128, "scale": "auto"},
-            "min_lr_ratio": {"distribution": "uniform", "min": 0.0, "max": 0.25, "scale": "auto"},
-            "learning_rate": {"distribution": "log_normal", "min": 0.0001, "max": 0.01, "scale": 0.5},
-            "beta1": {"distribution": "uniform", "min": 0.5, "max": 0.95, "scale": "auto"},
-            "beta2": {"distribution": "logit_normal", "min": 0.95, "max": 0.99999, "scale": "auto"},
+            # narrowed from edge analysis (pinned values set in anchor)
+            "total_timesteps": {"distribution": "log_normal", "min": 10_000_000, "max": 100_000_000, "scale": "time"},
+            "learning_rate": {"distribution": "log_normal", "min": 0.003, "max": 0.015, "scale": 0.5},
+            "ent_coef": {"distribution": "log_normal", "min": 0.0001, "max": 0.003, "scale": "auto"},
+            "gamma": {"distribution": "logit_normal", "min": 0.955, "max": 0.985, "scale": "auto"},
+            "min_lr_ratio": {"distribution": "uniform", "min": 0.15, "max": 0.25, "scale": "auto"},
+            "beta2": {"distribution": "logit_normal", "min": 0.998, "max": 0.99999, "scale": "auto"},
+            "gae_lambda": {"distribution": "logit_normal", "min": 0.92, "max": 0.995, "scale": "auto"},
+            "beta1": {"distribution": "uniform", "min": 0.6, "max": 0.95, "scale": "auto"},
             "eps": {"distribution": "log_normal", "min": 1e-6, "max": 1e-3, "scale": "auto"},
-            "ent_coef": {"distribution": "log_normal", "min": 0.0003, "max": 0.05, "scale": "auto"},
-            "gamma": {"distribution": "logit_normal", "min": 0.97, "max": 0.9999, "scale": "auto"},
-            "gae_lambda": {"distribution": "logit_normal", "min": 0.5, "max": 0.999, "scale": "auto"},
-            "vtrace_rho_clip": {"distribution": "uniform", "min": 1.0, "max": 4.0, "scale": "auto"},
-            "vtrace_c_clip": {"distribution": "uniform", "min": 1.0, "max": 3.0, "scale": "auto"},
-            "prio_alpha": {"distribution": "logit_normal", "min": 0.01, "max": 0.99, "scale": "auto"},
+            "vtrace_c_clip": {"distribution": "uniform", "min": 1.0, "max": 2.5, "scale": "auto"},
+            "prio_alpha": {"distribution": "logit_normal", "min": 0.0, "max": 0.99, "scale": "auto"},
             "prio_beta0": {"distribution": "logit_normal", "min": 0.01, "max": 0.99, "scale": "auto"},
-            "clip_coef": {"distribution": "uniform", "min": 0.05, "max": 0.8, "scale": "auto"},
-            "vf_coef": {"distribution": "log_normal", "min": 0.1, "max": 10.0, "scale": "auto"},
-            "vf_clip_coef": {"distribution": "uniform", "min": 0.05, "max": 2.0, "scale": "auto"},
-            "max_grad_norm": {"distribution": "uniform", "min": 0.3, "max": 4.0, "scale": "auto"},
-            "replay_ratio": {"distribution": "uniform", "min": 0.1, "max": 4.0, "scale": "auto"},
-            "minibatch_size": {"distribution": "uniform_pow2", "min": 2048, "max": 32768, "scale": "auto"},
-            "total_agents": {"distribution": "uniform_pow2", "min": 1024, "max": 4096, "scale": "auto"},
+            "clip_coef": {"distribution": "uniform", "min": 0.05, "max": 1.0, "scale": "auto"},
+            "vf_clip_coef": {"distribution": "uniform", "min": 0.1, "max": 2.0, "scale": "auto"},
+            "max_grad_norm": {"distribution": "uniform", "min": 1.0, "max": 3.5, "scale": "auto"},
+            "replay_ratio": {"distribution": "uniform", "min": 0.25, "max": 3.5, "scale": "auto"},
+            "minibatch_size": {"distribution": "uniform_pow2", "min": 2048, "max": 16384, "scale": "auto"},
             "num_buffers": {"distribution": "uniform_pow2", "min": 1, "max": 4, "scale": "auto"},
-            "ns_iters": {"distribution": "uniform", "min": 3, "max": 5.99, "scale": "auto"},
         },
         "policy": {
             "hidden_size": {"distribution": "uniform_pow2", "min": 128, "max": 512, "scale": "auto"},
-            "num_layers": {"distribution": "uniform", "min": 1, "max": 3.5, "scale": "auto"},
+            "num_layers": {"distribution": "uniform", "min": 2.5, "max": 4.0, "scale": "auto"},
         },
     },
     "osrs_zulrah": {
@@ -292,37 +300,37 @@ DEFAULT_PARAMS_PER_ENV = {
             "num_layers": 3,
         },
     },
-    # osrs_pvp anchor: from train_pvp.py defaults (master_nh opponent)
+    # osrs_pvp anchor: diagnostic sweep vs true_random
     "osrs_pvp": {
         "train": {
-            "total_timesteps": 50_000_000,
-            "horizon": 32,
-            "min_lr_ratio": 0.1,
-            "learning_rate": 0.00112,
-            "beta1": 0.95,
-            "beta2": 0.999,
-            "eps": 1e-12,
-            "ent_coef": 0.0016,
-            "gamma": 0.991,
-            "gae_lambda": 0.845,
+            "total_timesteps": 20_000_000,
+            "horizon": 16,
+            "min_lr_ratio": 0.25,
+            "learning_rate": 0.015,
+            "beta1": 0.86,
+            "beta2": 0.9999,
+            "eps": 4e-6,
+            "ent_coef": 0.0003,
+            "gamma": 0.96,
+            "gae_lambda": 0.965,
             "vtrace_rho_clip": 1.0,
-            "vtrace_c_clip": 1.0,
-            "prio_alpha": 0.914,
-            "prio_beta0": 0.218,
-            "clip_coef": 0.32,
-            "vf_coef": 2.5,
-            "vf_clip_coef": 0.1,
-            "max_grad_norm": 0.5,
+            "vtrace_c_clip": 1.6,
+            "prio_alpha": 0.98,
+            "prio_beta0": 0.84,
+            "clip_coef": 0.58,
+            "vf_coef": 0.1,
+            "vf_clip_coef": 0.12,
+            "max_grad_norm": 2.7,
             "replay_ratio": 0.25,
-            "minibatch_size": 4096,
+            "minibatch_size": 2048,
             "total_agents": 2048,
             "num_buffers": 2,
             "num_threads": 2,
             "ns_iters": 5,
         },
         "policy": {
-            "hidden_size": 512,
-            "num_layers": 1,
+            "hidden_size": 256,
+            "num_layers": 3,
         },
     },
     # osrs_zulrah anchor: from train_zulrah.py defaults
@@ -395,7 +403,7 @@ def build_configs(
         "kernels": 1.0,
         "profile": 0.0,
         "overlap": 1.0,
-        "cpu_inference": 1.0,
+        "cpu_inference": 1.0 if env_name in ("breakout", "g2048") else 0.0,
         "train_fp16": float(int(train.get("train_fp16", 0))),
         "ns_iters": float(int(train.get("ns_iters", 5))),
         "env_name": env_name,
@@ -408,7 +416,6 @@ def build_configs(
     policy_config = {
         "hidden_size": float(int(policy.get("hidden_size", 64))),
         "num_layers": float(int(policy.get("num_layers", 2))),
-        "arch": ARCH_PER_ENV.get(env_name, 1.0),
     }
     env_config = ENV_DEFAULTS[env_name].copy()
 
@@ -503,6 +510,44 @@ def clamp_params(params: dict, env_name: str = "breakout") -> None:
 
 
 
+def _init_pfsp(pufferl: object, total_agents: int) -> dict:
+    """Initialize PFSP pool with uniform weights. Returns PFSP state dict."""
+    pool_size = len(PFSP_POOL_TYPES)
+    cum_weights = [int((i + 1) / pool_size * 1000) for i in range(pool_size)]
+    cum_weights[-1] = 1000
+    pufferl.set_pfsp_weights(PFSP_POOL_TYPES, cum_weights)
+    return {
+        "cum_episodes": [0.0] * pool_size,
+        "last_update_step": 0,
+    }
+
+
+def _update_pfsp(pufferl: object, pfsp_state: dict, global_step: int) -> None:
+    """Recompute PFSP weights based on per-opponent win rates."""
+    if (global_step - pfsp_state["last_update_step"]) < PFSP_UPDATE_INTERVAL:
+        return
+
+    wins_delta, episodes_delta = pufferl.get_pfsp_stats()
+    pool_size = len(PFSP_POOL_TYPES)
+
+    for i in range(pool_size):
+        pfsp_state["cum_episodes"][i] += episodes_delta[i]
+
+    if min(pfsp_state["cum_episodes"]) < PFSP_WARMUP_EPISODES:
+        pfsp_state["last_update_step"] = global_step
+        return
+
+    raw_weights = []
+    for i in range(pool_size):
+        wr = wins_delta[i] / max(episodes_delta[i], 1)
+        raw_weights.append(max((1.0 - wr) ** PFSP_P, PFSP_WEIGHT_FLOOR))
+    total_w = sum(raw_weights)
+    cum_weights = [int(sum(raw_weights[:i + 1]) / total_w * 1000) for i in range(pool_size)]
+    cum_weights[-1] = 1000
+    pufferl.set_pfsp_weights(PFSP_POOL_TYPES, cum_weights)
+    pfsp_state["last_update_step"] = global_step
+
+
 def run_trial(
     trial_idx: int,
     env_name: str,
@@ -538,6 +583,12 @@ def run_trial(
         pufferl = _C.create_pufferl(config, vec_config, env_config, policy_config)
         print(f"  params: {pufferl.num_params():,}")
 
+        # PFSP init for osrs_pvp (only when using OPP_PFSP opponent type)
+        pfsp_state = None
+        if env_name == "osrs_pvp" and env_config.get("opponent_type", 0) == float(OPP_PFSP):
+            pfsp_state = _init_pfsp(pufferl, total_agents)
+            print(f"  PFSP: {len(PFSP_POOL_TYPES)} opponents, uniform initial weights")
+
         # warmup
         _C.rollouts(pufferl)
         _C.train(pufferl)
@@ -556,6 +607,10 @@ def run_trial(
             _C.rollouts(pufferl)
             _C.train(pufferl)
             global_step += steps_per_iter
+
+            # PFSP weight recomputation
+            if pfsp_state is not None:
+                _update_pfsp(pufferl, pfsp_state, global_step)
 
             if iteration % LOG_INTERVAL == 0:
                 now = time.time()

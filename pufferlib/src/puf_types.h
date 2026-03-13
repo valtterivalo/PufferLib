@@ -423,75 +423,25 @@ struct Network {
 // Weight and activation structs for encoder, decoder, MinGRU
 // ============================================================================
 
+// Encoder: single linear projection (obs → hidden), matching upstream CUDA
 struct EncoderWeights {
-  PufTensor weight1, weight2, weight3; // 3-layer MLP (no bias, GELU)
-  int in_dim, mid_dim, out_dim;        // in=obs, mid=2*H, out=H
-};
-struct EncoderActivations {
-  // forward outputs (post-GELU)
-  PufTensor layer1_out; // (B, 2*H)
-  PufTensor layer2_out; // (B, H)
-  PufTensor out;        // (B, H)
-  // pre-activation saved for GELU backward
-  PufTensor pre_act1;   // (B, 2*H)
-  PufTensor pre_act2;   // (B, H)
-  PufTensor pre_act3;   // (B, H)
-  // saved input for layer 1 weight grad
-  PufTensor saved_input; // (B, in_dim)
-  // weight gradient scratch
-  PufTensor wgrad1, wgrad2, wgrad3;
-};
-
-struct DecoderWeights {
-  PufTensor ln_weight, ln_bias;                       // LayerNorm: (H)
-  PufTensor intermediate_weight, intermediate_bias;   // (H, H)
-  PufTensor weight, bias;                             // fused output: (out+1, H), (out+1)
-  PufTensor logstd;                                   // continuous only
-  int hidden_dim, output_dim;
-  bool continuous;
-};
-struct DecoderActivations {
-  // forward intermediates
-  PufTensor post_ln;               // (B, H) — after LayerNorm
-  PufTensor saved_x_hat;           // (B, H) — normalized pre-affine (for LN backward)
-  PufTensor saved_rstd;            // (B) — inverse stddev (for LN backward)
-  PufTensor intermediate_pre_relu; // (B, H) — saved for ReLU backward
-  PufTensor intermediate_out;      // (B, H) — post-ReLU
-  PufTensor out;                   // (B, out+1)
-  // backward
-  PufTensor grad_out, saved_input, grad_input;
-  PufTensor wgrad_scratch, logstd_scratch;
-  // param grads
-  PufTensor ln_wgrad, ln_bgrad;
-  PufTensor intermediate_wgrad, intermediate_bgrad;
-  PufTensor bias_grad;
-};
-
-// ============================================================================
-// Architecture selection: simple (upstream-matching) vs rich (Metal default)
-// ============================================================================
-
-enum ArchType { ARCH_RICH = 0, ARCH_SIMPLE = 1 };
-
-// Simple (upstream-matching) encoder: single linear, no activation
-struct SimpleEncoderWeights {
   PufTensor weight; // (out_dim, in_dim)
   int in_dim, out_dim;
 };
-struct SimpleEncoderActivations {
+struct EncoderActivations {
   PufTensor out;         // (B, out_dim)
   PufTensor saved_input; // (B, in_dim) — training only
   PufTensor wgrad;       // (out_dim, in_dim) — training only
 };
 
-// Simple (upstream-matching) decoder: single linear, no LN/intermediate/bias
-struct SimpleDecoderWeights {
+// Decoder: single linear projection (hidden → logits+value), matching upstream CUDA
+struct DecoderWeights {
   PufTensor weight; // (output_dim+1, hidden_dim)
   PufTensor logstd; // continuous only: (1, output_dim)
   int hidden_dim, output_dim;
   bool continuous;
 };
-struct SimpleDecoderActivations {
+struct DecoderActivations {
   PufTensor out;            // (B, output_dim+1)
   PufTensor grad_out;       // (B_TT, output_dim+1)
   PufTensor saved_input;    // (B_TT, hidden_dim)

@@ -492,7 +492,6 @@ std::unique_ptr<PuffeRL> create_pufferl(pybind11::dict kwargs,
     // Model architecture
     hypers.hidden_size = get_config(policy_kwargs, "hidden_size");
     hypers.num_layers = get_config(policy_kwargs, "num_layers");
-    hypers.arch_type = policy_kwargs.contains("arch") ? (int)get_config(policy_kwargs, "arch") : ARCH_RICH;
     hypers.seed = kwargs.contains("seed") ? (uint64_t)get_config(kwargs, "seed") : 42;
     // Learning rate
     hypers.lr = get_config(kwargs, "learning_rate");

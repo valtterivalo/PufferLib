@@ -1,7 +1,7 @@
 """Train OSRS PVP on Metal backend with wandb logging.
 
 Designed for fair comparison against PufferLib 4.0 C++ training.
-Both backends use the same C env, same Muon optimizer, same model arch.
+Both backends use the same C env, same Muon optimizer, same model architecture.
 Supports PFSP (prioritized fictitious self-play) via --pfsp flag.
 """
 
@@ -69,8 +69,6 @@ def parse_args():
     p.add_argument("--no-overlap", action="store_true", help="disable async training overlap")
     p.add_argument("--no-wandb", action="store_true")
     p.add_argument("--shaping", action="store_true", help="enable reward shaping")
-    p.add_argument("--arch", choices=["simple", "rich"], default="rich",
-                   help="model arch: simple (upstream single-linear) or rich (3-layer MLP + LN decoder)")
     # PFSP args
     p.add_argument("--pfsp", type=str, default=None,
                    help="comma-separated opponent pool names for PFSP (e.g. improved,onetick,master_nh)")
@@ -137,7 +135,6 @@ def main():
     policy_config = {
         "hidden_size": float(args.hidden_size),
         "num_layers": float(args.num_layers),
-        "arch": 1.0 if args.arch == "simple" else 0.0,
     }
     env_config = {
         "opponent_type": float(args.opponent_type),

@@ -8,7 +8,7 @@
  * Eliminates all GPU syncs during rollout, enabling true CPU/GPU overlap
  * (CPU rollout runs in parallel with GPU training on separate hardware).
  *
- * Only supports ARCH_SIMPLE (upstream-matching single-linear encoder/decoder).
+ * Single-linear encoder/decoder, matching upstream CUDA.
  *
  * Included from metal_pufferlib.mm — not a standalone translation unit.
  */
@@ -298,18 +298,18 @@ static void cpu_forward_and_sample(
     int obs_dim = (int)obs.shape[1];
     int H = hidden_dim;
 
-    SimpleEncoderWeights *ew = (SimpleEncoderWeights *)weights.encoder;
+    EncoderWeights *ew = (EncoderWeights *)weights.encoder;
     MinGRUWeights *mw = (MinGRUWeights *)weights.network;
     MinGRUActivations *ma = (MinGRUActivations *)acts.network;
-    SimpleDecoderWeights *dw = (SimpleDecoderWeights *)weights.decoder;
-    SimpleDecoderActivations *da = (SimpleDecoderActivations *)acts.decoder;
+    DecoderWeights *dw = (DecoderWeights *)weights.decoder;
+    DecoderActivations *da = (DecoderActivations *)acts.decoder;
 
     // --- Encoder ---
     float *layer_input;
     if (has_fused_enc_layer0) {
         layer_input = (float *)obs.bytes;
     } else {
-        SimpleEncoderActivations *ea = (SimpleEncoderActivations *)acts.encoder;
+        EncoderActivations *ea = (EncoderActivations *)acts.encoder;
         cpu_mm_nt((const float *)obs.bytes, (const float *)ew->weight.bytes,
                   (float *)ea->out.bytes, B, obs_dim, ew->out_dim);
         layer_input = (float *)ea->out.bytes;

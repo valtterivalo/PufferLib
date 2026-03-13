@@ -39,7 +39,7 @@ ENV_DEFAULTS = {
         "scaffolding_ratio": 0.0,
     },
     "osrs_pvp": {
-        "opponent_type": 24.0,  # master_nh
+        "opponent_type": 16.0,  # OPP_PFSP
         "shaping_scale": 0.0,
         "shaping_enabled": 0.0,
         "mask_in_obs": 1.0,
@@ -94,8 +94,6 @@ def parse_args():
     )
     p.add_argument("--num-buffers", type=int, default=1)
     p.add_argument("--num-threads", type=int, default=1)
-    p.add_argument("--arch", choices=["simple", "rich"], default="simple",
-                   help="model arch: simple (upstream single-linear) or rich (3-layer MLP + LN decoder)")
     p.add_argument("--min-lr-ratio", type=float, default=0.0,
                    help="minimum LR as ratio of initial (upstream default: 0.0)")
     p.add_argument("--tf32-sim", action="store_true",
@@ -161,7 +159,6 @@ def main():
     policy_config = {
         "hidden_size": float(args.hidden_size),
         "num_layers": float(args.num_layers),
-        "arch": 1.0 if args.arch == "simple" else 0.0,
     }
     env_config = ENV_DEFAULTS[args.env].copy()
     if args.scaffolding_ratio is not None:
@@ -169,7 +166,7 @@ def main():
 
     print(f"env={args.env}, agents={args.total_agents}, hidden={args.hidden_size}, "
           f"layers={args.num_layers}, horizon={args.horizon}, overlap={not args.no_overlap}, "
-          f"arch={args.arch}, cpu_infer={args.cpu_inference}, fp16={args.fp16}, seed={args.seed}")
+          f"cpu_infer={args.cpu_inference}, fp16={args.fp16}, seed={args.seed}")
 
     trace_file = None
     trace_every = max(int(args.trace_every), 1)

@@ -391,187 +391,6 @@ void mtl_nesterov_f32(float *momentum, const float *grad, float mu, int count,
   mtl_dispatch_1d(ms, pso, count);
 }
 
-// ============================================================================
-// GELU, LayerNorm, bias_add, ReLU dispatchers (dtype-aware: fp32/fp16)
-// All accept void* and dispatch fp16 or fp32 kernel based on dtype_size.
-// ============================================================================
-
-// gelu_bwd: grad_in[i] = grad_out[i] * gelu'(pre_act[i])
-void mtl_gelu_bwd(const void *grad_out, const void *pre_act, void *grad_in,
-                   int n, int dtype_size, cudaStream_t stream) {
-  MetalStream *ms = mtl_get_stream(stream);
-  ms->compute_encoder();
-  const char *name = (dtype_size == 2) ? "gelu_bwd_f16_kernel" : "gelu_bwd_kernel";
-  auto pso = mtl_pipeline(name);
-  mtl_set_pso(ms, pso);
-  mtl_set_ptr(ms, grad_out, 0);
-  mtl_set_ptr(ms, pre_act, 1);
-  mtl_set_ptr(ms, grad_in, 2);
-  struct { int n; } params = {n};
-  mtl_set_params(ms, params, 3);
-  mtl_dispatch_1d(ms, pso, n);
-}
-
-// gelu_fwd_save: x[i] = gelu(x[i]), saves pre-activation to pre_act.
-// if pre_act is null (rollout), uses non-saving gelu_fwd in-place.
-void mtl_gelu_fwd_save(void *x, void *pre_act, int n, int dtype_size,
-                        cudaStream_t stream) {
-  MetalStream *ms = mtl_get_stream(stream);
-  ms->compute_encoder();
-  if (pre_act) {
-    const char *name = (dtype_size == 2) ? "gelu_fwd_save_f16_kernel"
-                                         : "gelu_fwd_save_kernel";
-    auto pso = mtl_pipeline(name);
-    mtl_set_pso(ms, pso);
-    mtl_set_ptr(ms, x, 0);
-    mtl_set_ptr(ms, pre_act, 1);
-    struct { int n; } params = {n};
-    mtl_set_params(ms, params, 2);
-    mtl_dispatch_1d(ms, pso, n);
-  } else {
-    // rollout: in-place gelu without saving pre-activation
-    const char *name = (dtype_size == 2) ? "gelu_fwd_f16_kernel"
-                                         : "gelu_fwd_kernel";
-    auto pso = mtl_pipeline(name);
-    mtl_set_pso(ms, pso);
-    mtl_set_ptr(ms, x, 0);  // in
-    mtl_set_ptr(ms, x, 1);  // out = in (in-place)
-    struct { int n; } params = {n};
-    mtl_set_params(ms, params, 2);
-    mtl_dispatch_1d(ms, pso, n);
-  }
-}
-
-// layernorm_fwd: per-row normalize with affine, saves x_hat and rstd.
-void mtl_layernorm_fwd(const void *input, const void *weight,
-                        const void *bias, void *output, void *saved_x_hat,
-                        void *saved_rstd, int B, int H, float eps,
-                        int dtype_size, cudaStream_t stream) {
-  MetalStream *ms = mtl_get_stream(stream);
-  ms->compute_encoder();
-  const char *name = (dtype_size == 2) ? "layernorm_fwd_f16_kernel"
-                                       : "layernorm_fwd_kernel";
-  auto pso = mtl_pipeline(name);
-  mtl_set_pso(ms, pso);
-  mtl_set_ptr(ms, input, 0);
-  mtl_set_ptr(ms, weight, 1);
-  mtl_set_ptr(ms, bias, 2);
-  mtl_set_ptr(ms, output, 3);
-  mtl_set_ptr(ms, saved_x_hat, 4);
-  mtl_set_ptr(ms, saved_rstd, 5);
-  struct { int H; float eps; } params = {H, eps};
-  mtl_set_params(ms, params, 6);
-  mtl_dispatch_groups(ms, pso, B, 256);
-}
-
-// layernorm_bwd: compute grad_input from saved x_hat and rstd.
-void mtl_layernorm_bwd(const void *grad_out, const void *saved_x_hat,
-                        const void *saved_rstd, const void *weight,
-                        void *grad_input, int B, int H, float eps,
-                        int dtype_size, cudaStream_t stream) {
-  MetalStream *ms = mtl_get_stream(stream);
-  ms->compute_encoder();
-  const char *name = (dtype_size == 2) ? "layernorm_bwd_f16_kernel"
-                                       : "layernorm_bwd_kernel";
-  auto pso = mtl_pipeline(name);
-  mtl_set_pso(ms, pso);
-  mtl_set_ptr(ms, grad_out, 0);
-  mtl_set_ptr(ms, saved_x_hat, 1);
-  mtl_set_ptr(ms, saved_rstd, 2);
-  mtl_set_ptr(ms, weight, 3);
-  mtl_set_ptr(ms, grad_input, 4);
-  struct { int H; float eps; } params = {H, eps};
-  mtl_set_params(ms, params, 5);
-  mtl_dispatch_groups(ms, pso, B, 256);
-}
-
-// layernorm_param_grad: column-wise sum for grad_weight and grad_bias.
-void mtl_layernorm_param_grad(const void *grad_out, const void *saved_x_hat,
-                               void *grad_weight, void *grad_bias, int B,
-                               int H, int dtype_size, cudaStream_t stream) {
-  MetalStream *ms = mtl_get_stream(stream);
-  ms->compute_encoder();
-  const char *name = (dtype_size == 2) ? "layernorm_param_grad_f16_kernel"
-                                       : "layernorm_param_grad_kernel";
-  auto pso = mtl_pipeline(name);
-  mtl_set_pso(ms, pso);
-  mtl_set_ptr(ms, grad_out, 0);
-  mtl_set_ptr(ms, saved_x_hat, 1);
-  mtl_set_ptr(ms, grad_weight, 2);
-  mtl_set_ptr(ms, grad_bias, 3);
-  struct { int R; int C; } params = {B, H};
-  mtl_set_params(ms, params, 4);
-  mtl_dispatch_1d(ms, pso, H);
-}
-
-// bias_add: inout[i] += bias[i % cols]
-void mtl_bias_add(void *inout, const void *bias, int cols, int n,
-                   int dtype_size, cudaStream_t stream) {
-  MetalStream *ms = mtl_get_stream(stream);
-  ms->compute_encoder();
-  const char *name = (dtype_size == 2) ? "bias_add_f16_kernel"
-                                       : "bias_add_kernel";
-  auto pso = mtl_pipeline(name);
-  mtl_set_pso(ms, pso);
-  mtl_set_ptr(ms, inout, 0);
-  mtl_set_ptr(ms, bias, 1);
-  struct { int cols; int n; } params = {cols, n};
-  mtl_set_params(ms, params, 2);
-  mtl_dispatch_1d(ms, pso, n);
-}
-
-// relu_fwd_save: out = relu(in), saves pre-activation
-void mtl_relu_fwd_save(const void *in, void *out, void *pre_act, int n,
-                        int dtype_size, cudaStream_t stream) {
-  MetalStream *ms = mtl_get_stream(stream);
-  ms->compute_encoder();
-  const char *name = (dtype_size == 2) ? "relu_fwd_save_f16_kernel"
-                                       : "relu_fwd_save_kernel";
-  auto pso = mtl_pipeline(name);
-  mtl_set_pso(ms, pso);
-  mtl_set_ptr(ms, in, 0);
-  mtl_set_ptr(ms, out, 1);
-  mtl_set_ptr(ms, pre_act, 2);
-  struct { int n; } params = {n};
-  mtl_set_params(ms, params, 3);
-  mtl_dispatch_1d(ms, pso, n);
-}
-
-// bias_add_relu_fwd_save: fused bias_add + relu with pre-act save
-void mtl_bias_add_relu_fwd_save(void *inout, const void *bias, void *pre_act,
-                                 int cols, int n, int dtype_size,
-                                 cudaStream_t stream) {
-  MetalStream *ms = mtl_get_stream(stream);
-  ms->compute_encoder();
-  const char *name = (dtype_size == 2) ? "bias_add_relu_fwd_save_f16_kernel"
-                                       : "bias_add_relu_fwd_save_kernel";
-  auto pso = mtl_pipeline(name);
-  mtl_set_pso(ms, pso);
-  mtl_set_ptr(ms, inout, 0);
-  mtl_set_ptr(ms, bias, 1);
-  mtl_set_ptr(ms, pre_act, 2);
-  struct { int cols; int n; } params = {cols, n};
-  mtl_set_params(ms, params, 3);
-  mtl_dispatch_1d(ms, pso, n);
-}
-
-// relu_bwd: grad_in = (pre_act > 0) ? grad_out : 0
-void mtl_relu_bwd(const void *grad_out, const void *pre_act, void *grad_in,
-                   int n, int dtype_size, cudaStream_t stream) {
-  MetalStream *ms = mtl_get_stream(stream);
-  ms->compute_encoder();
-  const char *name = (dtype_size == 2) ? "relu_bwd_f16_kernel"
-                                       : "relu_bwd_kernel";
-  auto pso = mtl_pipeline(name);
-  mtl_set_pso(ms, pso);
-  mtl_set_ptr(ms, grad_out, 0);
-  mtl_set_ptr(ms, pre_act, 1);
-  mtl_set_ptr(ms, grad_in, 2);
-  struct { int n; } params = {n};
-  mtl_set_params(ms, params, 3);
-  mtl_dispatch_1d(ms, pso, n);
-}
-
 // sum_rows: dst[c] = sum over rows of src[:, c] (dtype-aware)
 void mtl_sum_rows(void *dst, const void *src, int rows, int cols,
                    int dtype_size, cudaStream_t stream) {
@@ -1724,400 +1543,13 @@ void muon_step(Muon *m, cudaStream_t stream) {
 }
 
 // ============================================================================
-// Model components — encoder
+// Model components — encoder (single linear, matching upstream CUDA)
 // ============================================================================
 
-// 3-layer MLP encoder: input → Linear(in,2H) → GELU → Linear(2H,H) → GELU → Linear(H,H) → GELU
-// No bias. Matches PufferLib 4.0 OsrsPvpEncoder.
-// Dispatchers handle fp16/fp32 transparently via dtype_size checks.
-static PufTensor encoder_forward(void *w, void *activations, PufTensor input,
-                                  cudaStream_t stream) {
-  EncoderWeights *ew = (EncoderWeights *)w;
-  EncoderActivations *a = (EncoderActivations *)activations;
-  MetalStream *ms = mtl_get_stream(stream);
-
-  // save input for layer 1 weight grad (training only)
-  if (a->saved_input.bytes)
-    puf_copy(a->saved_input, input, stream);
-
-  int B = (int)input.shape[0];
-  int dsz = a->layer1_out.dtype_size;
-
-  // layer 1: input @ w1^T → layer1_out (B, 2H), then GELU
-  puf_mm(input, ew->weight1, a->layer1_out, stream);
-  mtl_barrier(ms);
-  mtl_gelu_fwd_save(a->layer1_out.bytes, a->pre_act1.bytes,
-                     B * ew->mid_dim, dsz, stream);
-  mtl_barrier(ms);
-
-  // layer 2: layer1_out @ w2^T → layer2_out (B, H), then GELU
-  puf_mm(a->layer1_out, ew->weight2, a->layer2_out, stream);
-  mtl_barrier(ms);
-  mtl_gelu_fwd_save(a->layer2_out.bytes, a->pre_act2.bytes,
-                     B * ew->out_dim, dsz, stream);
-  mtl_barrier(ms);
-
-  // layer 3: layer2_out @ w3^T → out (B, H), then GELU
-  puf_mm(a->layer2_out, ew->weight3, a->out, stream);
-  mtl_barrier(ms);
-  mtl_gelu_fwd_save(a->out.bytes, a->pre_act3.bytes,
-                     B * ew->out_dim, dsz, stream);
-  mtl_barrier(ms);
-
-  return a->out;
-}
-
-static void encoder_backward(void *w, void *activations, PufTensor grad,
-                               cudaStream_t stream) {
-  EncoderWeights *ew = (EncoderWeights *)w;
-  EncoderActivations *a = (EncoderActivations *)activations;
-  int B = (int)grad.shape[0];
-  int dsz = grad.dtype_size;
-
-  // layer 3 backward: GELU'(pre_act3) * grad → grad through w3
-  mtl_gelu_bwd(grad.bytes, a->pre_act3.bytes, grad.bytes,
-                B * ew->out_dim, dsz, stream);
-  puf_mm_tn(grad, a->layer2_out, a->wgrad3, stream);
-
-  // grad_input for layer 2: grad @ w3
-  // reuse layer2_out buffer as scratch for the input gradient
-  PufTensor grad2 = a->layer2_out; // (B, H) — safe to overwrite, already consumed
-  puf_mm_nn(grad, ew->weight3, grad2, stream);
-
-  // layer 2 backward
-  mtl_gelu_bwd(grad2.bytes, a->pre_act2.bytes, grad2.bytes,
-                B * ew->out_dim, dsz, stream);
-  puf_mm_tn(grad2, a->layer1_out, a->wgrad2, stream);
-
-  // grad_input for layer 1: grad2 @ w2
-  PufTensor grad1 = a->layer1_out; // (B, 2H) — safe to overwrite
-  puf_mm_nn(grad2, ew->weight2, grad1, stream);
-
-  // layer 1 backward
-  mtl_gelu_bwd(grad1.bytes, a->pre_act1.bytes, grad1.bytes,
-                B * ew->mid_dim, dsz, stream);
-  puf_mm_tn(grad1, a->saved_input, a->wgrad1, stream);
-  // no need to propagate further — encoder is start of graph
-}
-
-static void encoder_init_weights(void *w, uint64_t *seed,
-                                  cudaStream_t stream) {
-  EncoderWeights *ew = (EncoderWeights *)w;
-  float gain = std::sqrt(2.0f);
-  PufTensor w1 = {.bytes = ew->weight1.bytes,
-                  .shape = {ew->mid_dim, ew->in_dim},
-                  .dtype_size = ew->weight1.dtype_size};
-  puf_orthogonal_init(w1, gain, (*seed)++, stream);
-  PufTensor w2 = {.bytes = ew->weight2.bytes,
-                  .shape = {ew->out_dim, ew->mid_dim},
-                  .dtype_size = ew->weight2.dtype_size};
-  puf_orthogonal_init(w2, gain, (*seed)++, stream);
-  PufTensor w3 = {.bytes = ew->weight3.bytes,
-                  .shape = {ew->out_dim, ew->out_dim},
-                  .dtype_size = ew->weight3.dtype_size};
-  puf_orthogonal_init(w3, gain, (*seed)++, stream);
-}
-
-static void encoder_reg_params(void *w, Allocator *alloc, int esz) {
-  EncoderWeights *ew = (EncoderWeights *)w;
-  ew->weight1 = {.shape = {ew->mid_dim, ew->in_dim}, .dtype_size = esz};
-  ew->weight2 = {.shape = {ew->out_dim, ew->mid_dim}, .dtype_size = esz};
-  ew->weight3 = {.shape = {ew->out_dim, ew->out_dim}, .dtype_size = esz};
-  alloc->reg(&ew->weight1);
-  alloc->reg(&ew->weight2);
-  alloc->reg(&ew->weight3);
-}
-
-static void encoder_reg_train(void *w, void *activations, Allocator *acts,
-                                Allocator *grads, int B_TT, int precision) {
-  EncoderWeights *ew = (EncoderWeights *)w;
-  EncoderActivations *a = (EncoderActivations *)activations;
-  int p = precision;
-  int H = ew->out_dim, midH = ew->mid_dim;
-  *a = {};
-  // forward intermediates
-  a->layer1_out = {.shape = {B_TT, midH}, .dtype_size = p};
-  a->layer2_out = {.shape = {B_TT, H}, .dtype_size = p};
-  a->out = {.shape = {B_TT, H}, .dtype_size = p};
-  // pre-activations (saved for GELU backward)
-  a->pre_act1 = {.shape = {B_TT, midH}, .dtype_size = p};
-  a->pre_act2 = {.shape = {B_TT, H}, .dtype_size = p};
-  a->pre_act3 = {.shape = {B_TT, H}, .dtype_size = p};
-  // saved input for layer 1 weight grad
-  a->saved_input = {.shape = {B_TT, ew->in_dim}, .dtype_size = p};
-  // weight gradients
-  a->wgrad1 = {.shape = {midH, ew->in_dim}, .dtype_size = p};
-  a->wgrad2 = {.shape = {H, midH}, .dtype_size = p};
-  a->wgrad3 = {.shape = {H, H}, .dtype_size = p};
-
-  acts->reg(&a->layer1_out);
-  acts->reg(&a->layer2_out);
-  acts->reg(&a->out);
-  acts->reg(&a->pre_act1);
-  acts->reg(&a->pre_act2);
-  acts->reg(&a->pre_act3);
-  acts->reg(&a->saved_input);
-  grads->reg(&a->wgrad1);
-  grads->reg(&a->wgrad2);
-  grads->reg(&a->wgrad3);
-}
-
-static void encoder_reg_rollout(void *w, void *activations, Allocator *alloc,
-                                 int B) {
-  EncoderWeights *ew = (EncoderWeights *)w;
-  EncoderActivations *a = (EncoderActivations *)activations;
-  int p = PRECISION_SIZE;
-  // rollout only needs forward outputs (no pre_act, no saved_input, no wgrads)
-  a->layer1_out = {.shape = {B, ew->mid_dim}, .dtype_size = p};
-  a->layer2_out = {.shape = {B, ew->out_dim}, .dtype_size = p};
-  a->out = {.shape = {B, ew->out_dim}, .dtype_size = p};
-  alloc->reg(&a->layer1_out);
-  alloc->reg(&a->layer2_out);
-  alloc->reg(&a->out);
-}
-
-// ============================================================================
-// Model components — decoder
-// ============================================================================
-
-// Decoder: LayerNorm → Linear(H,H)+bias+ReLU → Linear(H,out+1)+bias
-// Matches PufferLib 4.0 OsrsPvpDecoder with split init.
-static PufTensor decoder_forward(void *w, void *activations, PufTensor input,
-                                  cudaStream_t stream) {
-  DecoderWeights *dw = (DecoderWeights *)w;
-  DecoderActivations *a = (DecoderActivations *)activations;
-  MetalStream *ms = mtl_get_stream(stream);
-  int B = (int)input.shape[0];
-  int H = dw->hidden_dim, od1 = dw->output_dim + 1;
-
-  // save input for LayerNorm backward (training only)
-  if (a->saved_input.bytes)
-    puf_copy(a->saved_input, input, stream);
-
-  int dsz = a->post_ln.dtype_size;
-
-  // step 1: LayerNorm (saved_x_hat and saved_rstd always allocated — kernel writes unconditionally)
-  mtl_layernorm_fwd(input.bytes, dw->ln_weight.bytes, dw->ln_bias.bytes,
-                     a->post_ln.bytes, a->saved_x_hat.bytes,
-                     a->saved_rstd.bytes, B, H, 1e-5f, dsz, stream);
-  mtl_barrier(ms);
-
-  // step 2: intermediate Linear + fused bias+ReLU
-  puf_mm(a->post_ln, dw->intermediate_weight, a->intermediate_out, stream);
-  mtl_barrier(ms);
-  {
-    void *pre_act = a->intermediate_pre_relu.bytes
-                        ? a->intermediate_pre_relu.bytes
-                        : a->intermediate_out.bytes; // rollout: don't need pre-act
-    mtl_bias_add_relu_fwd_save(a->intermediate_out.bytes,
-                                dw->intermediate_bias.bytes, pre_act,
-                                H, B * H, dsz, stream);
-  }
-  mtl_barrier(ms);
-
-  // step 3: output Linear + bias → (B, out+1)
-  puf_mm(a->intermediate_out, dw->weight, a->out, stream);
-  mtl_barrier(ms);
-  mtl_bias_add(a->out.bytes, dw->bias.bytes, od1, B * od1, dsz, stream);
-  mtl_barrier(ms);
-
-  return a->out;
-}
-
-static PufTensor decoder_backward(void *w, void *activations,
-                                    PufTensor grad_logits,
-                                    PufTensor grad_logstd,
-                                    PufTensor grad_value, cudaStream_t stream) {
-  DecoderWeights *dw = (DecoderWeights *)w;
-  DecoderActivations *a = (DecoderActivations *)activations;
-  int B_TT = (int)a->saved_input.shape[0];
-  int H = dw->hidden_dim;
-  int od = dw->output_dim, od1 = od + 1;
-
-  // assemble gradient: concat [grad_logits, grad_value] per row
-  if (a->grad_out.dtype_size == 2)
-    mtl_assemble_decoder_grad_f32_to_f16(a->grad_out.bytes,
-                                          (const float *)grad_logits.bytes,
-                                          (const float *)grad_value.bytes,
-                                          B_TT, od, od1, stream);
-  else
-    mtl_assemble_decoder_grad_f32((float *)a->grad_out.bytes,
-                                  (const float *)grad_logits.bytes,
-                                  (const float *)grad_value.bytes, B_TT, od,
-                                  od1, stream);
-
-  int dsz = a->grad_out.dtype_size;
-
-  // output layer backward: wgrad = grad_out^T @ intermediate_out
-  puf_mm_tn(a->grad_out, a->intermediate_out, a->wgrad_scratch, stream);
-  // bias grad: sum over batch
-  mtl_sum_rows(a->bias_grad.bytes, a->grad_out.bytes, B_TT, od1, dsz, stream);
-  // grad → intermediate: grad_out @ weight
-  PufTensor grad_inter = {.bytes = a->intermediate_out.bytes,
-                          .shape = {B_TT, H},
-                          .dtype_size = a->intermediate_out.dtype_size};
-  puf_mm_nn(a->grad_out, dw->weight, grad_inter, stream);
-
-  // ReLU backward
-  mtl_relu_bwd(grad_inter.bytes, a->intermediate_pre_relu.bytes,
-                grad_inter.bytes, B_TT * H, dsz, stream);
-
-  // intermediate layer backward: wgrad = grad^T @ post_ln
-  puf_mm_tn(grad_inter, a->post_ln, a->intermediate_wgrad, stream);
-  // intermediate bias grad: sum over batch
-  mtl_sum_rows(a->intermediate_bgrad.bytes, grad_inter.bytes,
-                B_TT, H, dsz, stream);
-  // grad → post_ln: grad @ intermediate_weight
-  PufTensor grad_ln = a->post_ln; // reuse buffer
-  puf_mm_nn(grad_inter, dw->intermediate_weight, grad_ln, stream);
-
-  // LayerNorm backward: compute grad_input from grad_ln
-  mtl_layernorm_bwd(grad_ln.bytes, a->saved_x_hat.bytes,
-                     a->saved_rstd.bytes, dw->ln_weight.bytes,
-                     a->grad_input.bytes, B_TT, H, 1e-5f, dsz, stream);
-  // LayerNorm param grads (grad_weight, grad_bias)
-  mtl_layernorm_param_grad(grad_ln.bytes, a->saved_x_hat.bytes,
-                            a->ln_wgrad.bytes, a->ln_bgrad.bytes,
-                            B_TT, H, dsz, stream);
-
-  if (dw->continuous && grad_logstd.bytes != nullptr) {
-    // grad_logstd is always fp32 (from PPO), logstd_scratch is in grads allocator
-    mtl_sum_rows_to_f32((float *)a->logstd_scratch.bytes,
-                        (const float *)grad_logstd.bytes, B_TT,
-                        dw->output_dim, stream);
-  }
-
-  return a->grad_input;
-}
-
-static void decoder_init_weights(void *w, uint64_t *seed,
-                                  cudaStream_t stream) {
-  DecoderWeights *dw = (DecoderWeights *)w;
-  int H = dw->hidden_dim, od = dw->output_dim;
-
-  // LayerNorm: weight = 1.0, bias = 0.0
-  mtl_fill_f32((float *)dw->ln_weight.bytes, 1.0f, H, stream);
-  mtl_fill_f32((float *)dw->ln_bias.bytes, 0.0f, H, stream);
-
-  // Intermediate: orthogonal gain sqrt(2), bias = 0
-  PufTensor iw = {.bytes = dw->intermediate_weight.bytes,
-                  .shape = {H, H},
-                  .dtype_size = dw->intermediate_weight.dtype_size};
-  puf_orthogonal_init(iw, std::sqrt(2.0f), (*seed)++, stream);
-  mtl_fill_f32((float *)dw->intermediate_bias.bytes, 0.0f, H, stream);
-
-  // Output: split init — actor rows (0..od-1) gain 0.01, value row (od) gain 1.0
-  // First init all rows with gain 0.01 (actor)
-  PufTensor ow = {.bytes = dw->weight.bytes,
-                  .shape = {od + 1, H},
-                  .dtype_size = dw->weight.dtype_size};
-  puf_orthogonal_init(ow, 0.01f, (*seed)++, stream);
-  // Then re-init value row with gain 1.0
-  int row_bytes = H * dw->weight.dtype_size;
-  PufTensor vrow = {.bytes = (char *)dw->weight.bytes + od * row_bytes,
-                    .shape = {1, H},
-                    .dtype_size = dw->weight.dtype_size};
-  puf_orthogonal_init(vrow, 1.0f, (*seed)++, stream);
-  mtl_fill_f32((float *)dw->bias.bytes, 0.0f, od + 1, stream);
-}
-
-static void decoder_reg_params(void *w, Allocator *alloc, int esz) {
-  DecoderWeights *dw = (DecoderWeights *)w;
-  int H = dw->hidden_dim, od1 = dw->output_dim + 1;
-  dw->ln_weight = {.shape = {1, H}, .dtype_size = esz};
-  dw->ln_bias = {.shape = {1, H}, .dtype_size = esz};
-  dw->intermediate_weight = {.shape = {H, H}, .dtype_size = esz};
-  dw->intermediate_bias = {.shape = {1, H}, .dtype_size = esz};
-  dw->weight = {.shape = {od1, H}, .dtype_size = esz};
-  dw->bias = {.shape = {1, od1}, .dtype_size = esz};
-  alloc->reg(&dw->ln_weight);
-  alloc->reg(&dw->ln_bias);
-  alloc->reg(&dw->intermediate_weight);
-  alloc->reg(&dw->intermediate_bias);
-  alloc->reg(&dw->weight);
-  alloc->reg(&dw->bias);
-  if (dw->continuous) {
-    dw->logstd = {.shape = {1, dw->output_dim}, .dtype_size = esz};
-    alloc->reg(&dw->logstd);
-  }
-}
-
-static void decoder_reg_train(void *w, void *activations, Allocator *acts,
-                                Allocator *grads, int B_TT, int precision) {
-  DecoderWeights *dw = (DecoderWeights *)w;
-  DecoderActivations *a = (DecoderActivations *)activations;
-  int p = precision;
-  int H = dw->hidden_dim, od1 = dw->output_dim + 1;
-  *a = {};
-  // forward intermediates
-  a->post_ln = {.shape = {B_TT, H}, .dtype_size = p};
-  a->saved_x_hat = {.shape = {B_TT, H}, .dtype_size = p};
-  a->saved_rstd = {.shape = {B_TT, 1}, .dtype_size = sizeof(float)};
-  a->intermediate_pre_relu = {.shape = {B_TT, H}, .dtype_size = p};
-  a->intermediate_out = {.shape = {B_TT, H}, .dtype_size = p};
-  a->out = {.shape = {B_TT, od1}, .dtype_size = p};
-  // backward
-  a->grad_out = {.shape = {B_TT, od1}, .dtype_size = p};
-  a->saved_input = {.shape = {B_TT, H}, .dtype_size = p};
-  a->grad_input = {.shape = {B_TT, H}, .dtype_size = p};
-  a->wgrad_scratch = {.shape = {od1, H}, .dtype_size = p};
-  a->logstd_scratch = {.shape = {1, dw->output_dim}, .dtype_size = p};
-  // param grads
-  a->ln_wgrad = {.shape = {1, H}, .dtype_size = p};
-  a->ln_bgrad = {.shape = {1, H}, .dtype_size = p};
-  a->intermediate_wgrad = {.shape = {H, H}, .dtype_size = p};
-  a->intermediate_bgrad = {.shape = {1, H}, .dtype_size = p};
-  a->bias_grad = {.shape = {1, od1}, .dtype_size = p};
-
-  acts->reg(&a->post_ln);
-  acts->reg(&a->saved_x_hat);
-  acts->reg(&a->saved_rstd);
-  acts->reg(&a->intermediate_pre_relu);
-  acts->reg(&a->intermediate_out);
-  acts->reg(&a->out);
-  acts->reg(&a->grad_out);
-  acts->reg(&a->saved_input);
-  acts->reg(&a->grad_input);
-  // grad registration order MUST match param registration order in reg_params:
-  // ln_weight, ln_bias, intermediate_weight, intermediate_bias, weight, bias
-  grads->reg(&a->ln_wgrad);
-  grads->reg(&a->ln_bgrad);
-  grads->reg(&a->intermediate_wgrad);
-  grads->reg(&a->intermediate_bgrad);
-  grads->reg(&a->wgrad_scratch);  // output weight grad
-  grads->reg(&a->bias_grad);
-  if (dw->continuous)
-    grads->reg(&a->logstd_scratch);
-}
-
-static void decoder_reg_rollout(void *w, void *activations, Allocator *alloc,
-                                 int B) {
-  DecoderWeights *dw = (DecoderWeights *)w;
-  DecoderActivations *a = (DecoderActivations *)activations;
-  int p = PRECISION_SIZE;
-  int H = dw->hidden_dim, od1 = dw->output_dim + 1;
-  *a = {};
-  a->post_ln = {.shape = {B, H}, .dtype_size = p};
-  a->saved_x_hat = {.shape = {B, H}, .dtype_size = p};  // kernel writes unconditionally
-  a->saved_rstd = {.shape = {B, 1}, .dtype_size = sizeof(float)};
-  a->intermediate_out = {.shape = {B, H}, .dtype_size = p};
-  a->out = {.shape = {B, od1}, .dtype_size = p};
-  alloc->reg(&a->post_ln);
-  alloc->reg(&a->saved_x_hat);
-  alloc->reg(&a->saved_rstd);
-  alloc->reg(&a->intermediate_out);
-  alloc->reg(&a->out);
-}
-
-// ============================================================================
-// Model components — Simple encoder/decoder (upstream-matching architecture)
-// Single linear layer each, no activation, no bias, no LayerNorm.
-// ============================================================================
-
-static PufTensor simple_encoder_forward(void *w, void *activations,
+static PufTensor encoder_forward(void *w, void *activations,
                                          PufTensor input, cudaStream_t stream) {
-  SimpleEncoderWeights *ew = (SimpleEncoderWeights *)w;
-  SimpleEncoderActivations *a = (SimpleEncoderActivations *)activations;
+  EncoderWeights *ew = (EncoderWeights *)w;
+  EncoderActivations *a = (EncoderActivations *)activations;
   MetalStream *ms = mtl_get_stream(stream);
   if (a->saved_input.bytes)
     puf_copy(a->saved_input, input, stream);
@@ -2128,34 +1560,34 @@ static PufTensor simple_encoder_forward(void *w, void *activations,
   return a->out;
 }
 
-static void simple_encoder_backward(void *w, void *activations, PufTensor grad,
+static void encoder_backward(void *w, void *activations, PufTensor grad,
                                       cudaStream_t stream) {
-  SimpleEncoderActivations *a = (SimpleEncoderActivations *)activations;
+  EncoderActivations *a = (EncoderActivations *)activations;
   puf_mm_tn(grad, a->saved_input, a->wgrad, stream);
 }
 
-static void simple_encoder_init_weights(void *w, uint64_t *seed,
+static void encoder_init_weights(void *w, uint64_t *seed,
                                           cudaStream_t stream) {
-  SimpleEncoderWeights *ew = (SimpleEncoderWeights *)w;
+  EncoderWeights *ew = (EncoderWeights *)w;
   PufTensor wt = {.bytes = ew->weight.bytes,
                   .shape = {ew->out_dim, ew->in_dim},
                   .dtype_size = ew->weight.dtype_size};
   puf_orthogonal_init(wt, std::sqrt(2.0f), (*seed)++, stream);
 }
 
-static void simple_encoder_reg_params(void *w, Allocator *alloc, int esz) {
-  SimpleEncoderWeights *ew = (SimpleEncoderWeights *)w;
+static void encoder_reg_params(void *w, Allocator *alloc, int esz) {
+  EncoderWeights *ew = (EncoderWeights *)w;
   ew->weight = {.shape = {ew->out_dim, ew->in_dim}, .dtype_size = esz};
   alloc->reg(&ew->weight);
 }
 
-static void simple_encoder_reg_train(void *w, void *activations,
+static void encoder_reg_train(void *w, void *activations,
                                        Allocator *acts, Allocator *grads,
                                        int B_TT, int precision) {
-  SimpleEncoderWeights *ew = (SimpleEncoderWeights *)w;
-  SimpleEncoderActivations *a = (SimpleEncoderActivations *)activations;
+  EncoderWeights *ew = (EncoderWeights *)w;
+  EncoderActivations *a = (EncoderActivations *)activations;
   int p = precision;
-  *a = (SimpleEncoderActivations){
+  *a = (EncoderActivations){
       .out = {.shape = {B_TT, ew->out_dim}, .dtype_size = p},
       .saved_input = {.shape = {B_TT, ew->in_dim}, .dtype_size = p},
       .wgrad = {.shape = {ew->out_dim, ew->in_dim}, .dtype_size = p},
@@ -2165,19 +1597,19 @@ static void simple_encoder_reg_train(void *w, void *activations,
   grads->reg(&a->wgrad);
 }
 
-static void simple_encoder_reg_rollout(void *w, void *activations,
+static void encoder_reg_rollout(void *w, void *activations,
                                          Allocator *alloc, int B) {
-  SimpleEncoderWeights *ew = (SimpleEncoderWeights *)w;
-  SimpleEncoderActivations *a = (SimpleEncoderActivations *)activations;
+  EncoderWeights *ew = (EncoderWeights *)w;
+  EncoderActivations *a = (EncoderActivations *)activations;
   a->out = {.shape = {B, ew->out_dim}, .dtype_size = PRECISION_SIZE};
   alloc->reg(&a->out);
 }
 
-static PufTensor simple_decoder_forward(void *w, void *activations,
+static PufTensor decoder_forward(void *w, void *activations,
                                           PufTensor input,
                                           cudaStream_t stream) {
-  SimpleDecoderWeights *dw = (SimpleDecoderWeights *)w;
-  SimpleDecoderActivations *a = (SimpleDecoderActivations *)activations;
+  DecoderWeights *dw = (DecoderWeights *)w;
+  DecoderActivations *a = (DecoderActivations *)activations;
   MetalStream *ms = mtl_get_stream(stream);
   if (a->saved_input.bytes)
     puf_copy(a->saved_input, input, stream);
@@ -2186,13 +1618,13 @@ static PufTensor simple_decoder_forward(void *w, void *activations,
   return a->out;
 }
 
-static PufTensor simple_decoder_backward(void *w, void *activations,
+static PufTensor decoder_backward(void *w, void *activations,
                                            PufTensor grad_logits,
                                            PufTensor grad_logstd,
                                            PufTensor grad_value,
                                            cudaStream_t stream) {
-  SimpleDecoderWeights *dw = (SimpleDecoderWeights *)w;
-  SimpleDecoderActivations *a = (SimpleDecoderActivations *)activations;
+  DecoderWeights *dw = (DecoderWeights *)w;
+  DecoderActivations *a = (DecoderActivations *)activations;
   int B_TT = (int)a->saved_input.shape[0];
   int od = dw->output_dim, od1 = od + 1;
 
@@ -2222,9 +1654,9 @@ static PufTensor simple_decoder_backward(void *w, void *activations,
   return a->grad_input;
 }
 
-static void simple_decoder_init_weights(void *w, uint64_t *seed,
+static void decoder_init_weights(void *w, uint64_t *seed,
                                           cudaStream_t stream) {
-  SimpleDecoderWeights *dw = (SimpleDecoderWeights *)w;
+  DecoderWeights *dw = (DecoderWeights *)w;
   int od1 = dw->output_dim + 1;
   PufTensor wt = {.bytes = dw->weight.bytes,
                   .shape = {od1, dw->hidden_dim},
@@ -2232,8 +1664,8 @@ static void simple_decoder_init_weights(void *w, uint64_t *seed,
   puf_orthogonal_init(wt, 0.01f, (*seed)++, stream);
 }
 
-static void simple_decoder_reg_params(void *w, Allocator *alloc, int esz) {
-  SimpleDecoderWeights *dw = (SimpleDecoderWeights *)w;
+static void decoder_reg_params(void *w, Allocator *alloc, int esz) {
+  DecoderWeights *dw = (DecoderWeights *)w;
   int od1 = dw->output_dim + 1;
   dw->weight = {.shape = {od1, dw->hidden_dim}, .dtype_size = esz};
   alloc->reg(&dw->weight);
@@ -2243,14 +1675,14 @@ static void simple_decoder_reg_params(void *w, Allocator *alloc, int esz) {
   }
 }
 
-static void simple_decoder_reg_train(void *w, void *activations,
+static void decoder_reg_train(void *w, void *activations,
                                        Allocator *acts, Allocator *grads,
                                        int B_TT, int precision) {
-  SimpleDecoderWeights *dw = (SimpleDecoderWeights *)w;
-  SimpleDecoderActivations *a = (SimpleDecoderActivations *)activations;
+  DecoderWeights *dw = (DecoderWeights *)w;
+  DecoderActivations *a = (DecoderActivations *)activations;
   int p = precision;
   int od1 = dw->output_dim + 1;
-  *a = (SimpleDecoderActivations){
+  *a = (DecoderActivations){
       .out = {.shape = {B_TT, od1}, .dtype_size = p},
       .grad_out = {.shape = {B_TT, od1}, .dtype_size = p},
       .saved_input = {.shape = {B_TT, dw->hidden_dim}, .dtype_size = p},
@@ -2268,10 +1700,10 @@ static void simple_decoder_reg_train(void *w, void *activations,
     grads->reg(&a->logstd_scratch);
 }
 
-static void simple_decoder_reg_rollout(void *w, void *activations,
+static void decoder_reg_rollout(void *w, void *activations,
                                          Allocator *alloc, int B) {
-  SimpleDecoderWeights *dw = (SimpleDecoderWeights *)w;
-  SimpleDecoderActivations *a = (SimpleDecoderActivations *)activations;
+  DecoderWeights *dw = (DecoderWeights *)w;
+  DecoderActivations *a = (DecoderActivations *)activations;
   int od1 = dw->output_dim + 1;
   *a = {};
   a->out = {.shape = {B, od1}, .dtype_size = PRECISION_SIZE};
