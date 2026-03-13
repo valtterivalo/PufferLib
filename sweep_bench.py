@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Protein hyperparameter sweep for Metal simple envs (breakout, g2048).
+"""Protein hyperparameter sweep for Metal envs (breakout, g2048, osrs_pvp, osrs_zulrah).
 
 Runs training in-process via _C calls (no subprocess overhead). Each trial
 gets a fresh pufferl instance with full Metal teardown between trials.
@@ -8,7 +8,8 @@ Each env must be built first: python setup.py build_<env> --force
 
 Usage:
     python sweep_bench.py --env breakout
-    python sweep_bench.py --env g2048 --timeout 2
+    python sweep_bench.py --env osrs_pvp --timeout 6
+    python sweep_bench.py --env osrs_zulrah --timeout 6
     python sweep_bench.py --env breakout --results
 """
 
@@ -42,6 +43,30 @@ LOG_INTERVAL = 5  # log every N iterations for early stop checks
 MIN_SPS_PER_ENV = {
     "breakout": 300_000,
     "g2048": 100_000,  # larger models (hs=256, L=5) can be slow
+    "osrs_pvp": 50_000,  # 373 obs, 7 heads — much heavier than breakout
+    "osrs_zulrah": 50_000,  # 105 obs, 6 heads
+}
+
+# per-env score metric: which env_stats key to use as the optimization target.
+# defaults to "score" (which falls back to "episode_return") for most envs.
+SCORE_METRIC_PER_ENV = {
+    "osrs_pvp": "wins",  # win rate [0, 1]
+    "osrs_zulrah": "episode_return",
+}
+
+# per-env metric distribution for Protein (how scores are transformed).
+# "linear" for unbounded scores, "percentile" for [0,1] rates.
+METRIC_DIST_PER_ENV = {
+    "osrs_pvp": "percentile",
+    "osrs_zulrah": "linear",
+}
+
+# per-env arch default: 1.0 = simple (single linear), 0.0 = rich (3-layer MLP + LN)
+ARCH_PER_ENV = {
+    "breakout": 1.0,
+    "g2048": 1.0,
+    "osrs_pvp": 0.0,  # rich arch for PvP
+    "osrs_zulrah": 0.0,  # rich arch for Zulrah
 }
 
 
@@ -129,6 +154,74 @@ SWEEP_CONFIGS = {
             "num_layers": {"distribution": "uniform", "min": 2, "max": 5.5, "scale": "auto"},
         },
     },
+    "osrs_pvp": {
+        **_SWEEP_BASE,
+        "metric": "win_rate",
+        "metric_distribution": "percentile",
+        "max_suggestion_cost": 3600,
+        "train": {
+            "total_timesteps": {"distribution": "log_normal", "min": 10_000_000, "max": 200_000_000, "scale": "time"},
+            "horizon": {"distribution": "uniform_pow2", "min": 16, "max": 128, "scale": "auto"},
+            "min_lr_ratio": {"distribution": "uniform", "min": 0.0, "max": 0.25, "scale": "auto"},
+            "learning_rate": {"distribution": "log_normal", "min": 0.0001, "max": 0.01, "scale": 0.5},
+            "beta1": {"distribution": "uniform", "min": 0.5, "max": 0.95, "scale": "auto"},
+            "beta2": {"distribution": "logit_normal", "min": 0.95, "max": 0.99999, "scale": "auto"},
+            "eps": {"distribution": "log_normal", "min": 1e-6, "max": 1e-3, "scale": "auto"},
+            "ent_coef": {"distribution": "log_normal", "min": 0.0003, "max": 0.05, "scale": "auto"},
+            "gamma": {"distribution": "logit_normal", "min": 0.97, "max": 0.9999, "scale": "auto"},
+            "gae_lambda": {"distribution": "logit_normal", "min": 0.5, "max": 0.999, "scale": "auto"},
+            "vtrace_rho_clip": {"distribution": "uniform", "min": 1.0, "max": 4.0, "scale": "auto"},
+            "vtrace_c_clip": {"distribution": "uniform", "min": 1.0, "max": 3.0, "scale": "auto"},
+            "prio_alpha": {"distribution": "logit_normal", "min": 0.01, "max": 0.99, "scale": "auto"},
+            "prio_beta0": {"distribution": "logit_normal", "min": 0.01, "max": 0.99, "scale": "auto"},
+            "clip_coef": {"distribution": "uniform", "min": 0.05, "max": 0.8, "scale": "auto"},
+            "vf_coef": {"distribution": "log_normal", "min": 0.1, "max": 10.0, "scale": "auto"},
+            "vf_clip_coef": {"distribution": "uniform", "min": 0.05, "max": 2.0, "scale": "auto"},
+            "max_grad_norm": {"distribution": "uniform", "min": 0.3, "max": 4.0, "scale": "auto"},
+            "replay_ratio": {"distribution": "uniform", "min": 0.1, "max": 4.0, "scale": "auto"},
+            "minibatch_size": {"distribution": "uniform_pow2", "min": 2048, "max": 32768, "scale": "auto"},
+            "total_agents": {"distribution": "uniform_pow2", "min": 1024, "max": 4096, "scale": "auto"},
+            "num_buffers": {"distribution": "uniform_pow2", "min": 1, "max": 4, "scale": "auto"},
+            "ns_iters": {"distribution": "uniform", "min": 3, "max": 5.99, "scale": "auto"},
+        },
+        "policy": {
+            "hidden_size": {"distribution": "uniform_pow2", "min": 128, "max": 512, "scale": "auto"},
+            "num_layers": {"distribution": "uniform", "min": 1, "max": 3.5, "scale": "auto"},
+        },
+    },
+    "osrs_zulrah": {
+        **_SWEEP_BASE,
+        "max_suggestion_cost": 3600,
+        "train": {
+            "total_timesteps": {"distribution": "log_normal", "min": 50_000_000, "max": 500_000_000, "scale": "time"},
+            "horizon": {"distribution": "uniform_pow2", "min": 32, "max": 256, "scale": "auto"},
+            "min_lr_ratio": {"distribution": "uniform", "min": 0.0, "max": 0.25, "scale": "auto"},
+            "learning_rate": {"distribution": "log_normal", "min": 0.0002, "max": 0.01, "scale": 0.5},
+            "beta1": {"distribution": "uniform", "min": 0.5, "max": 0.95, "scale": "auto"},
+            "beta2": {"distribution": "logit_normal", "min": 0.95, "max": 0.99999, "scale": "auto"},
+            "eps": {"distribution": "log_normal", "min": 1e-6, "max": 1e-3, "scale": "auto"},
+            "ent_coef": {"distribution": "log_normal", "min": 0.001, "max": 0.05, "scale": "auto"},
+            "gamma": {"distribution": "logit_normal", "min": 0.97, "max": 0.9999, "scale": "auto"},
+            "gae_lambda": {"distribution": "logit_normal", "min": 0.5, "max": 0.999, "scale": "auto"},
+            "vtrace_rho_clip": {"distribution": "uniform", "min": 1.0, "max": 4.0, "scale": "auto"},
+            "vtrace_c_clip": {"distribution": "uniform", "min": 1.0, "max": 3.0, "scale": "auto"},
+            "prio_alpha": {"distribution": "logit_normal", "min": 0.01, "max": 0.95, "scale": "auto"},
+            "prio_beta0": {"distribution": "logit_normal", "min": 0.01, "max": 0.95, "scale": "auto"},
+            "clip_coef": {"distribution": "uniform", "min": 0.05, "max": 0.5, "scale": "auto"},
+            "vf_coef": {"distribution": "uniform", "min": 0.1, "max": 8.0, "scale": "auto"},
+            "vf_clip_coef": {"distribution": "uniform", "min": 0.05, "max": 4.0, "scale": "auto"},
+            "max_grad_norm": {"distribution": "uniform", "min": 0.3, "max": 4.0, "scale": "auto"},
+            "replay_ratio": {"distribution": "uniform", "min": 0.1, "max": 4.0, "scale": "auto"},
+            "minibatch_size": {"distribution": "uniform_pow2", "min": 2048, "max": 32768, "scale": "auto"},
+            "total_agents": {"distribution": "uniform_pow2", "min": 1024, "max": 4096, "scale": "auto"},
+            "num_buffers": {"distribution": "uniform_pow2", "min": 1, "max": 4, "scale": "auto"},
+            "ns_iters": {"distribution": "uniform", "min": 3, "max": 5.99, "scale": "auto"},
+        },
+        "policy": {
+            "hidden_size": {"distribution": "uniform_pow2", "min": 128, "max": 512, "scale": "auto"},
+            "num_layers": {"distribution": "uniform", "min": 1, "max": 3.5, "scale": "auto"},
+        },
+    },
 }
 
 DEFAULT_PARAMS_PER_ENV = {
@@ -199,6 +292,72 @@ DEFAULT_PARAMS_PER_ENV = {
             "num_layers": 3,
         },
     },
+    # osrs_pvp anchor: from train_pvp.py defaults (master_nh opponent)
+    "osrs_pvp": {
+        "train": {
+            "total_timesteps": 50_000_000,
+            "horizon": 32,
+            "min_lr_ratio": 0.1,
+            "learning_rate": 0.00112,
+            "beta1": 0.95,
+            "beta2": 0.999,
+            "eps": 1e-12,
+            "ent_coef": 0.0016,
+            "gamma": 0.991,
+            "gae_lambda": 0.845,
+            "vtrace_rho_clip": 1.0,
+            "vtrace_c_clip": 1.0,
+            "prio_alpha": 0.914,
+            "prio_beta0": 0.218,
+            "clip_coef": 0.32,
+            "vf_coef": 2.5,
+            "vf_clip_coef": 0.1,
+            "max_grad_norm": 0.5,
+            "replay_ratio": 0.25,
+            "minibatch_size": 4096,
+            "total_agents": 2048,
+            "num_buffers": 2,
+            "num_threads": 2,
+            "ns_iters": 5,
+        },
+        "policy": {
+            "hidden_size": 512,
+            "num_layers": 1,
+        },
+    },
+    # osrs_zulrah anchor: from train_zulrah.py defaults
+    "osrs_zulrah": {
+        "train": {
+            "total_timesteps": 500_000_000,
+            "horizon": 128,
+            "min_lr_ratio": 0.1,
+            "learning_rate": 0.001,
+            "beta1": 0.95,
+            "beta2": 0.999,
+            "eps": 1e-12,
+            "ent_coef": 0.01,
+            "gamma": 0.99,
+            "gae_lambda": 0.95,
+            "vtrace_rho_clip": 1.0,
+            "vtrace_c_clip": 1.0,
+            "prio_alpha": 0.0,
+            "prio_beta0": 0.0,
+            "clip_coef": 0.2,
+            "vf_coef": 0.5,
+            "vf_clip_coef": 0.1,
+            "max_grad_norm": 0.5,
+            "replay_ratio": 0.25,
+            "minibatch_size": 4096,
+            "total_agents": 2048,
+            "num_buffers": 1,
+            "num_threads": 1,
+            "ns_iters": 5,
+        },
+        "policy": {
+            "hidden_size": 256,
+            "num_layers": 1,
+        },
+    },
 }
 
 
@@ -249,7 +408,7 @@ def build_configs(
     policy_config = {
         "hidden_size": float(int(policy.get("hidden_size", 64))),
         "num_layers": float(int(policy.get("num_layers", 2))),
-        "arch": 1.0,  # always simple for bench sweep
+        "arch": ARCH_PER_ENV.get(env_name, 1.0),
     }
     env_config = ENV_DEFAULTS[env_name].copy()
 
@@ -315,6 +474,10 @@ def clamp_params(params: dict, env_name: str = "breakout") -> None:
         train["clip_coef"] = min(max(float(train.get("clip_coef", 0.2)), 0.05), 0.6)
         train["scaffolding_ratio"] = min(max(float(train.get("scaffolding_ratio", 0.5)), 0.0), 0.8)
         policy["hidden_size"] = int(policy.get("hidden_size", 128))
+    elif env_name in ("osrs_pvp", "osrs_zulrah"):
+        train["learning_rate"] = min(max(float(train.get("learning_rate", 0.001)), 0.00005), 0.015)
+        train["gamma"] = min(max(float(train.get("gamma", 0.99)), 0.96), 0.9999)
+        train["clip_coef"] = min(max(float(train.get("clip_coef", 0.2)), 0.05), 1.0)
     else:
         train["learning_rate"] = min(max(float(train.get("learning_rate", 0.1)), 0.005), 0.4)
         train["gamma"] = min(max(float(train.get("gamma", 0.972)), 0.85), 0.999)
@@ -410,7 +573,8 @@ def run_trial(
                             f"at step={global_step}"
                         )
 
-                score = env_stats.get("score", env_stats.get("episode_return", 0))
+                score_key = SCORE_METRIC_PER_ENV.get(env_name, "score")
+                score = env_stats.get(score_key, env_stats.get("episode_return", 0))
                 ep_ret = env_stats.get("episode_return", 0)
                 ep_len = env_stats.get("episode_length", 0)
                 ent = losses.get("entropy", 0)
@@ -602,7 +766,10 @@ def run_sweep(env_name: str, max_trials: int | None, timeout_h: float) -> None:
     sweep_dir.mkdir(parents=True, exist_ok=True)
     obs_path = sweep_dir / "observations.jsonl"
 
-    sweep_config = SWEEP_CONFIGS[env_name]
+    sweep_config = deepcopy(SWEEP_CONFIGS[env_name])
+    # override metric distribution per env if specified
+    if env_name in METRIC_DIST_PER_ENV:
+        sweep_config["metric_distribution"] = METRIC_DIST_PER_ENV[env_name]
     default_params = DEFAULT_PARAMS_PER_ENV[env_name]
 
     protein = Protein(sweep_config, use_gpu=False, prune_pareto=True)
@@ -627,8 +794,10 @@ def run_sweep(env_name: str, max_trials: int | None, timeout_h: float) -> None:
         {k: v for k, v in sweep_config.items() if isinstance(v, dict)}
     )))
 
+    score_key = SCORE_METRIC_PER_ENV.get(env_name, "score")
+    metric_dist = sweep_config.get("metric_distribution", "linear")
     print(f"protein sweep ({env_name}, metal, in-process)")
-    print("  metric: score (linear distribution)")
+    print(f"  metric: {score_key} ({metric_dist} distribution)")
     print(f"  {n_params} searchable hyperparameters")
     print(f"  timeout: {timeout_h:.1f}h")
     print(f"  max trials: {max_trials or 'unlimited'}")
@@ -687,7 +856,8 @@ def run_sweep(env_name: str, max_trials: int | None, timeout_h: float) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="protein sweep for Metal simple envs")
-    parser.add_argument("--env", type=str, required=True, choices=["breakout", "g2048"])
+    parser.add_argument("--env", type=str, required=True,
+                        choices=list(SWEEP_CONFIGS.keys()))
     parser.add_argument("--timeout", type=float, default=4.0,
                         help="max hours (default: 4)")
     parser.add_argument("--max-trials", type=int, default=None)

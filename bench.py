@@ -38,12 +38,23 @@ ENV_DEFAULTS = {
     "g2048": {
         "scaffolding_ratio": 0.0,
     },
+    "osrs_pvp": {
+        "opponent_type": 24.0,  # master_nh
+        "shaping_scale": 0.0,
+        "shaping_enabled": 0.0,
+        "mask_in_obs": 1.0,
+    },
+    "osrs_zulrah": {
+        "gear_tier": 0.0,
+        "mask_in_obs": 1.0,
+    },
 }
 
 
 def parse_args():
     p = argparse.ArgumentParser(description="Metal training for simple envs")
-    p.add_argument("--env", type=str, required=True, choices=list(ENV_DEFAULTS.keys()))
+    p.add_argument("--env", type=str, required=True,
+                   choices=list(ENV_DEFAULTS.keys()))
     p.add_argument("--total-agents", type=int, default=2048)
     p.add_argument("--hidden-size", type=int, default=128)
     p.add_argument("--num-layers", type=int, default=1)
