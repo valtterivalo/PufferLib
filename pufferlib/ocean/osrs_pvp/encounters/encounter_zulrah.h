@@ -1834,8 +1834,34 @@ static void zul_write_mask(EncounterState* state, float* mask) {
 /* ======================================================================== */
 
 static float zul_compute_reward(ZulrahState* s) {
-    if (!s->episode_over) return 0.0f;
-    return (s->winner == 0) ? 1.0f : -1.0f;
+    /* terminal: +1 kill, -1 death */
+    if (s->episode_over)
+        return (s->winner == 0) ? 1.0f : -1.0f;
+
+    /* per-tick shaping (small signals to bootstrap learning).
+     * rewards are clamped to [-1, 1] by the training backend,
+     * so keep individual components well under that. */
+    float r = 0.0f;
+
+    /* damage dealt: small reward for any damage */
+    if (s->damage_dealt_this_tick > 0.0f)
+        r += 0.02f * (s->damage_dealt_this_tick / 50.0f);
+
+    /* correct attack style bonus: green/red → mage, blue → range */
+    if (s->damage_dealt_this_tick > 0.0f) {
+        int style = s->player.attack_style_this_tick;
+        int form = (int)s->current_form;
+        int correct = (form == ZUL_FORM_BLUE && style == ATTACK_STYLE_RANGED) ||
+                      ((form == ZUL_FORM_GREEN || form == ZUL_FORM_RED) &&
+                       style == ATTACK_STYLE_MAGIC);
+        r += correct ? 0.05f * (s->damage_dealt_this_tick / 50.0f) : 0.0f;
+    }
+
+    /* damage taken penalty */
+    if (s->damage_received_this_tick > 0.0f)
+        r -= 0.01f * (s->damage_received_this_tick / 50.0f);
+
+    return r;
 }
 
 /* ======================================================================== */
