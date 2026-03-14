@@ -174,13 +174,13 @@ SWEEP_CONFIGS = {
         "train": {
             # ranges centered on storm proven config with generous room
             "total_timesteps": {"distribution": "log_normal", "min": 50_000_000, "max": 200_000_000, "scale": "time"},
-            "horizon": {"distribution": "uniform_pow2", "min": 32, "max": 256, "scale": "auto"},
-            "learning_rate": {"distribution": "log_normal", "min": 0.0003, "max": 0.01, "scale": 0.5},
-            "ent_coef": {"distribution": "log_normal", "min": 0.0002, "max": 0.01, "scale": "auto"},
-            "gamma": {"distribution": "logit_normal", "min": 0.98, "max": 0.999, "scale": "auto"},
+            "horizon": {"distribution": "uniform_pow2", "min": 16, "max": 256, "scale": "auto"},
+            "learning_rate": {"distribution": "log_normal", "min": 0.0003, "max": 0.03, "scale": 0.5},
+            "ent_coef": {"distribution": "log_normal", "min": 0.00005, "max": 0.01, "scale": "auto"},
+            "gamma": {"distribution": "logit_normal", "min": 0.98, "max": 0.9999, "scale": "auto"},
             "min_lr_ratio": {"distribution": "uniform", "min": 0.02, "max": 0.3, "scale": "auto"},
             "beta2": {"distribution": "logit_normal", "min": 0.99, "max": 0.9999, "scale": "auto"},
-            "gae_lambda": {"distribution": "logit_normal", "min": 0.5, "max": 0.99, "scale": "auto"},
+            "gae_lambda": {"distribution": "logit_normal", "min": 0.1, "max": 0.99, "scale": "auto"},
             "beta1": {"distribution": "uniform", "min": 0.8, "max": 0.99, "scale": "auto"},
             "eps": {"distribution": "log_normal", "min": 1e-6, "max": 1e-3, "scale": "auto"},
             "vtrace_c_clip": {"distribution": "uniform", "min": 1.0, "max": 3.0, "scale": "auto"},
@@ -196,7 +196,7 @@ SWEEP_CONFIGS = {
         },
         "policy": {
             "hidden_size": {"distribution": "uniform_pow2", "min": 256, "max": 1024, "scale": "auto"},
-            "num_layers": {"distribution": "uniform", "min": 2.0, "max": 5.0, "scale": "auto"},
+            "num_layers": {"distribution": "uniform", "min": 2.0, "max": 6.0, "scale": "auto"},
         },
     },
     "osrs_zulrah": {
