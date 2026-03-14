@@ -959,7 +959,9 @@ kernel void ppo_loss_fwd_bwd_kernel(
                 total_entropy += ent;
             }
 
-            float logratio = total_log_prob - old_logp;
+            // clamp logratio: cpu_inference + multi-head GEMM precision mismatch can
+            // push |logratio| past exp overflow. exp(5)≈148 is plenty for PPO clipping.
+            float logratio = clamp(total_log_prob - old_logp, -5.0f, 5.0f);
             float ratio = ppo_ratio_from_logratio(logratio);
             out_ratio[nt] = ratio;
             float ratio_clipped = clamp(ratio, 1.0f - pp.clip_coef, 1.0f + pp.clip_coef);
@@ -1023,7 +1025,9 @@ kernel void ppo_loss_fwd_bwd_kernel(
                 logits_offset += A;
             }
 
-            float logratio = total_log_prob - old_logp;
+            // clamp logratio: cpu_inference + multi-head GEMM precision mismatch can
+            // push |logratio| past exp overflow. exp(5)≈148 is plenty for PPO clipping.
+            float logratio = clamp(total_log_prob - old_logp, -5.0f, 5.0f);
             float ratio = ppo_ratio_from_logratio(logratio);
             out_ratio[nt] = ratio;
             float ratio_clipped = clamp(ratio, 1.0f - pp.clip_coef, 1.0f + pp.clip_coef);
