@@ -40,7 +40,9 @@ OPP_PFSP = 16
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description="Metal PVP training with wandb")
+    p = argparse.ArgumentParser(description="Metal OSRS training with wandb")
+    p.add_argument("--env", type=str, default="osrs_pvp",
+                   choices=["osrs_pvp", "osrs_zulrah"])
     p.add_argument("--total-agents", type=int, default=2048)
     p.add_argument("--hidden-size", type=int, default=512)
     p.add_argument("--num-layers", type=int, default=1)
@@ -58,6 +60,14 @@ def parse_args():
     p.add_argument("--vf-coef", type=float, default=2.5)
     p.add_argument("--vf-clip-coef", type=float, default=0.1)
     p.add_argument("--max-grad-norm", type=float, default=0.5)
+    p.add_argument("--beta1", type=float, default=0.95)
+    p.add_argument("--beta2", type=float, default=0.999)
+    p.add_argument("--eps", type=float, default=1e-12)
+    p.add_argument("--min-lr-ratio", type=float, default=0.1)
+    p.add_argument("--vtrace-rho-clip", type=float, default=1.0)
+    p.add_argument("--vtrace-c-clip", type=float, default=1.0)
+    p.add_argument("--ns-iters", type=int, default=5)
+    p.add_argument("--cpu-inference", action="store_true")
     p.add_argument("--opponent-type", type=int, default=OPPONENT_TYPES["master_nh"])
     p.add_argument("--wandb-project", type=str, default="osrs-pvp-rl")
     p.add_argument("--experiment-name", type=str, default="metal-pvp-master-nh")
@@ -86,8 +96,8 @@ def parse_args():
 def main():
     args = parse_args()
 
-    # PFSP: parse pool names and override opponent_type
-    pfsp_enabled = args.pfsp is not None
+    # PFSP: parse pool names and override opponent_type (osrs_pvp only)
+    pfsp_enabled = args.pfsp is not None and args.env == "osrs_pvp"
     pfsp_pool_names: list[str] = []
     pfsp_pool_types: list[int] = []
     if pfsp_enabled:
@@ -101,11 +111,11 @@ def main():
     config = {
         "horizon": args.horizon,
         "learning_rate": args.learning_rate,
-        "min_lr_ratio": 0.1,
+        "min_lr_ratio": args.min_lr_ratio,
         "anneal_lr": 1.0,
-        "beta1": 0.95,
-        "beta2": 0.999,
-        "eps": 1e-12,
+        "beta1": args.beta1,
+        "beta2": args.beta2,
+        "eps": args.eps,
         "minibatch_size": args.minibatch_size,
         "replay_ratio": args.replay_ratio,
         "total_timesteps": args.total_timesteps,
@@ -116,8 +126,8 @@ def main():
         "ent_coef": args.ent_coef,
         "gamma": args.gamma,
         "gae_lambda": args.gae_lambda,
-        "vtrace_rho_clip": 1.0,
-        "vtrace_c_clip": 1.0,
+        "vtrace_rho_clip": args.vtrace_rho_clip,
+        "vtrace_c_clip": args.vtrace_c_clip,
         "prio_alpha": args.prio_alpha,
         "prio_beta0": args.prio_beta0,
         "use_rnn": 1.0,
@@ -125,7 +135,9 @@ def main():
         "kernels": 1.0,
         "profile": 0.0,
         "overlap": 0.0 if args.no_overlap else 1.0,
-        "env_name": "osrs_pvp",
+        "cpu_inference": 1.0 if args.cpu_inference else 0.0,
+        "ns_iters": float(args.ns_iters),
+        "env_name": args.env,
     }
     vec_config = {
         "total_agents": float(args.total_agents),
@@ -136,15 +148,25 @@ def main():
         "hidden_size": float(args.hidden_size),
         "num_layers": float(args.num_layers),
     }
-    env_config = {
-        "opponent_type": float(args.opponent_type),
-        "shaping_scale": 1.0 if args.shaping else 0.0,
-        "shaping_enabled": 1.0 if args.shaping else 0.0,
-        "mask_in_obs": 1.0,  # PVP embeds action mask in last 39 obs columns
+    env_configs = {
+        "osrs_pvp": {
+            "opponent_type": float(args.opponent_type),
+            "shaping_scale": 1.0 if args.shaping else 0.0,
+            "shaping_enabled": 1.0 if args.shaping else 0.0,
+            "mask_in_obs": 1.0,
+        },
+        "osrs_zulrah": {
+            "gear_tier": 0.0,
+            "mask_in_obs": 1.0,
+        },
     }
+    env_config = env_configs[args.env]
 
     # wandb
-    opponent_label = f"pfsp({args.pfsp})" if pfsp_enabled else f"opp_{args.opponent_type}"
+    if args.env == "osrs_pvp":
+        opponent_label = f"pfsp({args.pfsp})" if pfsp_enabled else f"opp_{args.opponent_type}"
+    else:
+        opponent_label = args.env
     wandb_run = None
     if not args.no_wandb:
         import wandb
