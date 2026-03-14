@@ -132,4 +132,14 @@ void my_log(Log* log, Dict* out) {
     dict_set(out, "wins", log->wins);
     dict_set(out, "damage_dealt", log->damage_dealt);
     dict_set(out, "damage_received", log->damage_received);
+
+    /* composite score: winrate-gated efficiency.
+     * must win to score positive. among winners, faster kills and less
+     * damage taken score higher. scale factors keep efficiency in [0, ~0.5]
+     * so winrate always dominates. */
+    float wr = log->wins;  /* already averaged (0-1) */
+    float speed_bonus = (wr > 0.1f) ? (1.0f - log->episode_length / 600.0f) * 0.3f : 0.0f;
+    float dmg_penalty = (wr > 0.1f) ? (log->damage_received / 500.0f) * 0.2f : 0.0f;
+    float score = wr + speed_bonus - dmg_penalty - (1.0f - wr);
+    dict_set(out, "score", score);
 }

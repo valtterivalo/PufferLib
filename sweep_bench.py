@@ -51,7 +51,7 @@ MIN_SPS_PER_ENV = {
 # defaults to "score" (which falls back to "episode_return") for most envs.
 SCORE_METRIC_PER_ENV = {
     "osrs_pvp": "episode_return",  # denser signal than wins (which averages across PFSP pool)
-    "osrs_zulrah": "episode_return",
+    "osrs_zulrah": "score",
 }
 
 # per-env metric distribution for Protein (how scores are transformed).
