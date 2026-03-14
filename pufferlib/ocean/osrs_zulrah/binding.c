@@ -71,17 +71,16 @@ void c_step(Env* env) {
     env->term_staging = (unsigned char)is_term;
     env->terminals[0] = (float)is_term;
 
-    /* copy log on episode end */
+    /* log directly into env->log (vecenv accumulates + clears periodically).
+       bypass get_log vtable to avoid double-counting from encounter's own += */
     if (is_term) {
-        Log* enc_log = (Log*)ENCOUNTER_ZULRAH.get_log(env->enc_state);
-        if (enc_log) {
-            env->log.episode_return = enc_log->episode_return;
-            env->log.episode_length = enc_log->episode_length;
-            env->log.wins = enc_log->wins;
-            env->log.damage_dealt = enc_log->damage_dealt;
-            env->log.damage_received = enc_log->damage_received;
-            env->log.n = enc_log->n;
-        }
+        ZulrahState* zs = (ZulrahState*)env->enc_state;
+        env->log.episode_return += zs->reward;
+        env->log.episode_length += (float)zs->tick;
+        env->log.wins += (zs->winner == 0) ? 1.0f : 0.0f;
+        env->log.damage_dealt += zs->total_damage_dealt;
+        env->log.damage_received += zs->total_damage_received;
+        env->log.n += 1.0f;
 
         /* auto-reset */
         ENCOUNTER_ZULRAH.reset(env->enc_state, 0);

@@ -1855,13 +1855,16 @@ static void zul_reset(EncounterState* state, uint32_t seed) {
     int saved_wx = s->world_offset_x;
     int saved_wy = s->world_offset_y;
     int saved_tier = s->gear_tier;
+    uint32_t saved_rng = s->rng_state;
     memset(s, 0, sizeof(ZulrahState));
     s->log = saved_log;
     s->collision_map = saved_cmap;
     s->world_offset_x = saved_wx;
     s->world_offset_y = saved_wy;
     s->gear_tier = saved_tier;
-    s->rng_state = (seed != 0) ? seed : 12345;
+    // preserve RNG across resets for episode variety (same pattern as PvP).
+    // seed=0 on first create uses default; subsequent resets keep rolling RNG.
+    s->rng_state = (seed != 0) ? seed : (saved_rng != 0 ? saved_rng : 12345);
 
     /* player */
     s->player.entity_type = ENTITY_PLAYER;
@@ -1994,6 +1997,7 @@ static void zul_step(EncounterState* state, const int* actions) {
     }
     s->reward = zul_compute_reward(s);
     zul_sync_player_consumables(s);
+
 }
 
 /* ======================================================================== */
@@ -2135,7 +2139,7 @@ static void* zul_get_log(EncounterState* state) {
     ZulrahState* s = (ZulrahState*)state;
     if (s->episode_over) {
         s->log.episode_return += s->reward;
-        s->log.episode_length = (float)s->tick;
+        s->log.episode_length += (float)s->tick;
         s->log.wins += (s->winner == 0) ? 1.0f : 0.0f;
         s->log.damage_dealt += s->total_damage_dealt;
         s->log.damage_received += s->total_damage_received;
