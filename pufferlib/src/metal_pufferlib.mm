@@ -476,12 +476,17 @@ void train_impl(PuffeRL& pufferl) {
     puf_transpose_01(rollouts.ratio, src.ratio, train_stream);
     puf_transpose_01(rollouts.values, src.values, train_stream);
 
+    // Metal 4: ensure all rollout transposes are visible before consumers read them.
+    // recompute_logprobs reads mask from transposed obs, clamp reads transposed rewards.
+    mtl_barrier((MetalStream*)train_stream);
+
     // CPU inference: recompute logprobs on GPU using fast::exp to match PPO.
     // Transpose stored logits + f32 actions, then batch-recompute logprobs
     // for all (total_agents * horizon) samples in one kernel dispatch.
     if (pufferl.cpu_inference) {
         puf_transpose_01(pufferl.train_logits, pufferl.rollout_logits, train_stream);
         puf_transpose_01(pufferl.train_actions_f32, pufferl.rollout_actions_f32, train_stream);
+        mtl_barrier((MetalStream*)train_stream);
 
         int total_samples = hypers.total_agents * hypers.horizon;
         int fused_cols = (int)pufferl.train_logits.shape[2];
