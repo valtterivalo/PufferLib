@@ -251,7 +251,11 @@ static void run_visual(OsrsPvp* env, const char* encounter_name, const char* rep
          * transforms are fixed. 2D rendering with colored squares works. */
         rc->npc_model_cache = model_cache_load("data/inferno_npcs.models");
         rc->npc_anim_cache = anim_cache_load("data/inferno_npcs.anims");
-        rc->show_models = 0;  /* force 2D mode until 3D model transforms fixed */
+        /* don't load NPC model cache — render NPCs as colored cubes in 3D.
+         * the exported NPC model data has garbled transforms. once the model
+         * export pipeline is fixed, uncomment these lines. */
+        /* rc->npc_model_cache = model_cache_load("data/inferno_npcs.models"); */
+        /* rc->npc_anim_cache = anim_cache_load("data/inferno_npcs.anims"); */
         fprintf(stderr, "inferno: npc_models=%d, npc_anims=%d seqs (3D disabled, using 2D)\n",
                 rc->npc_model_cache ? rc->npc_model_cache->count : 0,
                 rc->npc_anim_cache ? rc->npc_anim_cache->seq_count : 0);
