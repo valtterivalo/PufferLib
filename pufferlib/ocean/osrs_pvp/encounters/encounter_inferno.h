@@ -1615,14 +1615,10 @@ static int inf_get_entity_count(EncounterState* state) {
 
 static void* inf_get_entity(EncounterState* state, int index) {
     InfernoState* s = (InfernoState*)state;
+    /* only index 0 (player) returns a valid Player*.
+     * NPC indices can't return Player* since InfNPC is a different struct.
+     * GUI/human input code must NULL-check. */
     if (index == 0) return &s->player;
-    int n = 0;
-    for (int i = 0; i < INF_MAX_NPCS; i++) {
-        if (s->npcs[i].active) {
-            n++;
-            if (n == index) return &s->npcs[i];
-        }
-    }
     return NULL;
 }
 
