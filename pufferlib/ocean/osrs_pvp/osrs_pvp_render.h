@@ -1082,6 +1082,19 @@ static void render_populate_entities(RenderClient* rc, OsrsPvp* env) {
             int count = 0;
             def->fill_render_entities(env->encounter_state, rc->entities, MAX_RENDER_ENTITIES, &count);
             rc->entity_count = count;
+            /* debug: print entity info on first populate */
+            static int debug_once = 1;
+            if (debug_once && count > 0) {
+                debug_once = 0;
+                fprintf(stderr, "render_populate: %d entities\n", count);
+                for (int di = 0; di < count && di < 5; di++) {
+                    fprintf(stderr, "  [%d] type=%d npc_id=%d visible=%d size=%d pos=(%d,%d) hp=%d/%d\n",
+                            di, rc->entities[di].entity_type, rc->entities[di].npc_def_id,
+                            rc->entities[di].npc_visible, rc->entities[di].npc_size,
+                            rc->entities[di].x, rc->entities[di].y,
+                            rc->entities[di].current_hitpoints, rc->entities[di].base_hitpoints);
+                }
+            }
         } else {
             /* legacy fallback: cast get_entity to Player* */
             int count = def->get_entity_count(env->encounter_state);

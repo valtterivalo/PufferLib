@@ -246,10 +246,13 @@ static void run_visual(OsrsPvp* env, const char* encounter_name, const char* rep
         rc->collision_world_offset_x = 2256;
         rc->collision_world_offset_y = 3061;
     } else if (encounter_name && strcmp(encounter_name, "inferno") == 0) {
-        /* inferno: load NPC models + animations as secondary caches */
+        /* inferno: load NPC models + animations as secondary caches.
+         * TODO: 3D NPC models are garbled — disable show_models until model
+         * transforms are fixed. 2D rendering with colored squares works. */
         rc->npc_model_cache = model_cache_load("data/inferno_npcs.models");
         rc->npc_anim_cache = anim_cache_load("data/inferno_npcs.anims");
-        fprintf(stderr, "inferno: npc_models=%d, npc_anims=%d seqs\n",
+        rc->show_models = 0;  /* force 2D mode until 3D model transforms fixed */
+        fprintf(stderr, "inferno: npc_models=%d, npc_anims=%d seqs (3D disabled, using 2D)\n",
                 rc->npc_model_cache ? rc->npc_model_cache->count : 0,
                 rc->npc_anim_cache ? rc->npc_anim_cache->seq_count : 0);
     }
