@@ -579,6 +579,21 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
     s->player.current_hitpoints = 99;
     s->player.base_prayer = 99;
     s->player.current_prayer = 99;
+    /* equip tbow loadout (from InfernoTrainer loadoutMaxTbow) */
+    memset(s->player.equipped, ITEM_NONE, NUM_GEAR_SLOTS);
+    s->player.equipped[GEAR_SLOT_HEAD] = ITEM_MASORI_MASK_F;
+    s->player.equipped[GEAR_SLOT_CAPE] = ITEM_DIZANAS_QUIVER;
+    s->player.equipped[GEAR_SLOT_NECK] = ITEM_OCCULT_NECKLACE;
+    s->player.equipped[GEAR_SLOT_AMMO] = ITEM_DRAGON_ARROWS;
+    s->player.equipped[GEAR_SLOT_WEAPON] = ITEM_KODAI_WAND;
+    s->player.equipped[GEAR_SLOT_SHIELD] = ITEM_ELIDINIS_WARD_F;
+    s->player.equipped[GEAR_SLOT_BODY] = ITEM_ANCESTRAL_TOP;
+    s->player.equipped[GEAR_SLOT_LEGS] = ITEM_ANCESTRAL_BOTTOM;
+    s->player.equipped[GEAR_SLOT_HANDS] = ITEM_ZARYTE_VAMBRACES;
+    s->player.equipped[GEAR_SLOT_FEET] = ITEM_AVERNIC_TREADS;
+    s->player.equipped[GEAR_SLOT_RING] = ITEM_RING_OF_SUFFERING_RI;
+    s->player.visible_gear = GEAR_MAGE;
+    s->player.current_gear = GEAR_MAGE;
     s->player_food_count = 8;
     s->player_brew_doses = 12;
     s->player_restore_doses = 16;
