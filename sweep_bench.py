@@ -45,6 +45,7 @@ MIN_SPS_PER_ENV = {
     "g2048": 100_000,  # larger models (hs=256, L=5) can be slow
     "osrs_pvp": 50_000,  # 373 obs, 7 heads — much heavier than breakout
     "osrs_zulrah": 50_000,  # 105 obs, 6 heads
+    "osrs_inferno": 50_000,  # 200 obs, 6 heads, long episodes
 }
 
 # per-env score metric: which env_stats key to use as the optimization target.
@@ -52,12 +53,14 @@ MIN_SPS_PER_ENV = {
 SCORE_METRIC_PER_ENV = {
     "osrs_pvp": "episode_return",  # denser signal than wins (which averages across PFSP pool)
     "osrs_zulrah": "score",
+    "osrs_inferno": "episode_return",  # wave completion shaping + terminal ±1
 }
 
 # per-env metric distribution for Protein (how scores are transformed).
 # "linear" for unbounded scores, "percentile" for [0,1] rates.
 METRIC_DIST_PER_ENV = {
     "osrs_pvp": "linear",
+    "osrs_inferno": "linear",
     "osrs_zulrah": "linear",
 }
 
@@ -233,6 +236,42 @@ SWEEP_CONFIGS = {
             "num_layers": {"distribution": "uniform", "min": 1, "max": 6.0, "scale": "auto"},
         },
     },
+    "osrs_inferno": {
+        **_SWEEP_BASE,
+        "metric": "episode_return",
+        "metric_distribution": "linear",
+        "max_suggestion_cost": 1800,
+        "train": {
+            # wide ranges — inferno is very different from pvp/zulrah (long episodes,
+            # large action space, needs high entropy to explore, long horizon for credit
+            # assignment through multi-tick combat sequences)
+            "total_timesteps": {"distribution": "log_normal", "min": 50_000_000, "max": 500_000_000, "scale": "time"},
+            "horizon": {"distribution": "uniform_pow2", "min": 16, "max": 256, "scale": "auto"},
+            "learning_rate": {"distribution": "log_normal", "min": 0.0003, "max": 0.02, "scale": 0.5},
+            "ent_coef": {"distribution": "log_normal", "min": 0.001, "max": 0.05, "scale": "auto"},
+            "gamma": {"distribution": "logit_normal", "min": 0.99, "max": 0.9999, "scale": "auto"},
+            "min_lr_ratio": {"distribution": "uniform", "min": 0.0, "max": 0.3, "scale": "auto"},
+            "beta1": {"distribution": "uniform", "min": 0.7, "max": 0.99, "scale": "auto"},
+            "beta2": {"distribution": "logit_normal", "min": 0.99, "max": 0.9999, "scale": "auto"},
+            "eps": {"distribution": "log_normal", "min": 1e-6, "max": 1e-3, "scale": "auto"},
+            "gae_lambda": {"distribution": "logit_normal", "min": 0.5, "max": 0.999, "scale": "auto"},
+            "vtrace_rho_clip": {"distribution": "uniform", "min": 1.0, "max": 4.0, "scale": "auto"},
+            "vtrace_c_clip": {"distribution": "uniform", "min": 1.0, "max": 3.0, "scale": "auto"},
+            "prio_alpha": {"distribution": "logit_normal", "min": 0.0, "max": 0.99, "scale": "auto"},
+            "prio_beta0": {"distribution": "logit_normal", "min": 0.01, "max": 0.95, "scale": "auto"},
+            "clip_coef": {"distribution": "uniform", "min": 0.05, "max": 0.5, "scale": "auto"},
+            "vf_coef": {"distribution": "log_normal", "min": 0.1, "max": 5.0, "scale": "auto"},
+            "vf_clip_coef": {"distribution": "uniform", "min": 0.05, "max": 4.0, "scale": "auto"},
+            "max_grad_norm": {"distribution": "uniform", "min": 0.3, "max": 5.0, "scale": "auto"},
+            "replay_ratio": {"distribution": "uniform", "min": 0.1, "max": 3.0, "scale": "auto"},
+            "minibatch_size": {"distribution": "uniform_pow2", "min": 2048, "max": 16384, "scale": "auto"},
+            "num_buffers": {"distribution": "uniform_pow2", "min": 1, "max": 4, "scale": "auto"},
+        },
+        "policy": {
+            "hidden_size": {"distribution": "uniform_pow2", "min": 128, "max": 512, "scale": "auto"},
+            "num_layers": {"distribution": "uniform", "min": 1, "max": 5.0, "scale": "auto"},
+        },
+    },
 }
 
 DEFAULT_PARAMS_PER_ENV = {
@@ -334,6 +373,39 @@ DEFAULT_PARAMS_PER_ENV = {
         "policy": {
             "hidden_size": 512,
             "num_layers": 3,
+        },
+    },
+    # osrs_inferno anchor: from initial training runs that survived 2400+ ticks
+    "osrs_inferno": {
+        "train": {
+            "total_timesteps": 100_000_000,
+            "horizon": 32,
+            "min_lr_ratio": 0.1,
+            "learning_rate": 0.003,
+            "beta1": 0.9,
+            "beta2": 0.999,
+            "eps": 1e-5,
+            "ent_coef": 0.005,
+            "gamma": 0.997,
+            "gae_lambda": 0.85,
+            "vtrace_rho_clip": 1.0,
+            "vtrace_c_clip": 1.5,
+            "prio_alpha": 0.5,
+            "prio_beta0": 0.3,
+            "clip_coef": 0.2,
+            "vf_coef": 0.5,
+            "vf_clip_coef": 0.5,
+            "max_grad_norm": 2.0,
+            "replay_ratio": 0.25,
+            "minibatch_size": 2048,
+            "total_agents": 2048,
+            "num_buffers": 2,
+            "num_threads": 2,
+            "ns_iters": 5,
+        },
+        "policy": {
+            "hidden_size": 256,
+            "num_layers": 2,
         },
     },
     # osrs_zulrah anchor: sweep trial 601, fastest positive (score=0.88, 702K SPS)
