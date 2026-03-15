@@ -625,6 +625,14 @@ typedef struct {
     /* gear tier */
     int gear_tier;                /* 0=budget, 1=mid, 2=BIS */
 
+    /* eye of ayak soul rend: cumulative magic defence drain on zulrah.
+     * carries over between forms (magic defence is a stat, not a level). */
+    int magic_def_drain;
+
+    /* confliction gauntlets: primed after a magic miss, next magic attack
+     * rolls accuracy twice (like osmumten's fang). cleared on next magic attack. */
+    int confliction_primed;
+
     /* collision */
     void* collision_map;      /* CollisionMap* for walkability checks */
     int world_offset_x;       /* local (0,0) = world (offset_x, offset_y) */
@@ -816,6 +824,18 @@ static float zul_hit_chance(int att_roll, int def_roll) {
     return (float)att_roll / (2.0f * (def_roll + 1));
 }
 
+/* confliction gauntlets double accuracy roll (same formula as osmumten's fang).
+ * on a primed magic attack, accuracy is rolled twice — hitting if either roll succeeds. */
+static float zul_hit_chance_double(int a, int d) {
+    float fa = (float)a, fd = (float)d;
+    if (a >= d) {
+        float num = (fd + 2.0f) * (2.0f * fd + 3.0f);
+        float den = 6.0f * (fa + 1.0f) * (fa + 1.0f);
+        return 1.0f - num / den;
+    }
+    return fa * (4.0f * fa + 5.0f) / (6.0f * (fa + 1.0f) * (fd + 1.0f));
+}
+
 /* compute player's defence roll against a specific NPC attack style.
    uses current gear (mage/range) and gear tier for defence bonuses.
    magic defence uses 70% magic level + 30% defence level per OSRS formula. */
@@ -987,9 +1007,21 @@ static int zul_player_attack_hits(ZulrahState* s, int is_mage) {
         case ZUL_FORM_RED:   def_magic = ZUL_RED_DEF_MAGIC;   def_ranged = ZUL_RED_DEF_RANGED;   break;
         case ZUL_FORM_BLUE:  def_magic = ZUL_BLUE_DEF_MAGIC;  def_ranged = ZUL_BLUE_DEF_RANGED;  break;
     }
+    /* apply eye of ayak magic defence drain (carries across forms) */
+    if (is_mage) {
+        def_magic -= s->magic_def_drain;
+        if (def_magic < -64) def_magic = -64;  /* can't go below -64 (makes def_roll 0) */
+    }
     int def_bonus = is_mage ? def_magic : def_ranged;
     int def_roll = (ZUL_DEF_LEVEL + 8) * (def_bonus + 64);
     if (def_roll < 0) def_roll = 0;
+
+    /* confliction gauntlets: double accuracy roll on primed magic attacks (tier 2 only).
+     * primed = previous magic attack missed. eye of ayak is one-handed so effect applies. */
+    if (is_mage && s->confliction_primed && s->gear_tier == 2) {
+        s->confliction_primed = 0;
+        return zul_rand_float(s) < zul_hit_chance_double(att_roll, def_roll);
+    }
 
     return zul_rand_float(s) < zul_hit_chance(att_roll, def_roll);
 }
@@ -1007,13 +1039,18 @@ static void zul_player_attack(ZulrahState* s, int is_mage) {
 
     int max_hit = is_mage ? t->mage_max_hit : t->range_max_hit;
     int dmg = 0;
-    if (zul_player_attack_hits(s, is_mage)) {
+    int hit = zul_player_attack_hits(s, is_mage);
+    if (hit) {
         dmg = zul_rand_int(s, max_hit + 1);
         dmg = zul_cap_damage(s, dmg);
         s->zulrah.current_hitpoints -= dmg;
         s->damage_dealt_this_tick += dmg;
         s->total_damage_dealt += dmg;
         if (s->zulrah.current_hitpoints < 0) s->zulrah.current_hitpoints = 0;
+    }
+    /* confliction gauntlets: prime on magic miss, clear on magic hit */
+    if (is_mage && s->gear_tier == 2) {
+        s->confliction_primed = !hit;
     }
     s->player.just_attacked = 1;
     s->player.last_attack_style = is_mage ? ATTACK_STYLE_MAGIC : ATTACK_STYLE_RANGED;
@@ -1025,46 +1062,54 @@ static void zul_player_attack(ZulrahState* s, int is_mage) {
     s->zulrah.hit_was_successful = (dmg > 0);
 }
 
-/* ranged special attack: weapon-dependent.
-   tier 0 MSB(i) "Snapshot": 2 arrows, ~43% accuracy boost, max hit uses only ammo str.
-   tier 1-2 blowpipe: 1 hit, heals 50% of damage dealt. */
+/* special attack: weapon-dependent, all cost 50% spec energy.
+   tier 0: MSB(i) "Snapshot" — 2 arrows, ~43% accuracy boost, ranged only.
+   tier 1: blowpipe — 1 hit, heals 50% of damage dealt, ranged only.
+   tier 2: eye of ayak "Soul Rend" — 5-tick mage attack, 2x accuracy, 1.3x max hit,
+           drains target magic defence by damage dealt. mage gear only. */
 static void zul_player_spec(ZulrahState* s) {
     if (!s->zulrah_visible || s->is_diving) return;
     if (s->player_attack_timer > 0) return;
     if (s->player_stunned_ticks > 0) return;
     if (s->player_special_energy < ZUL_SPEC_COST) return;
-    if (s->player_gear != ZUL_GEAR_RANGE) return;
+
+    /* tier 2 specs from mage gear (eye of ayak), tier 0-1 from ranged gear */
+    if (s->gear_tier == 2) {
+        if (s->player_gear != ZUL_GEAR_MAGE) return;
+    } else {
+        if (s->player_gear != ZUL_GEAR_RANGE) return;
+    }
 
     s->player_special_energy -= ZUL_SPEC_COST;
     s->player.just_attacked = 1;
-    s->player.last_attack_style = ATTACK_STYLE_RANGED;
-    s->player.attack_style_this_tick = ATTACK_STYLE_RANGED;
     s->player.used_special_this_tick = 1;
 
     const ZulGearTierStats* t = &ZUL_GEAR_TIERS[s->gear_tier];
-    int def_ranged = 0;
-    switch (s->current_form) {
-        case ZUL_FORM_GREEN: def_ranged = ZUL_GREEN_DEF_RANGED; break;
-        case ZUL_FORM_RED:   def_ranged = ZUL_RED_DEF_RANGED; break;
-        case ZUL_FORM_BLUE:  def_ranged = ZUL_BLUE_DEF_RANGED; break;
-    }
-    int def_roll = (ZUL_DEF_LEVEL + 8) * (def_ranged + 64);
-    if (def_roll < 0) def_roll = 0;
-
     int total_dmg = 0;
 
     if (s->gear_tier == 0) {
         /* MSB(i) Snapshot: 2 arrows, 10/7 accuracy boost.
            max hit = floor(0.5 + (visible_level + 10) * (ammo_str + 64) / 640)
            with amethyst arrows (str 55): floor(0.5 + 109*119/640) = 20 */
+        s->player.last_attack_style = ATTACK_STYLE_RANGED;
+        s->player.attack_style_this_tick = ATTACK_STYLE_RANGED;
         s->player_attack_timer = 3;
+
+        int def_ranged = 0;
+        switch (s->current_form) {
+            case ZUL_FORM_GREEN: def_ranged = ZUL_GREEN_DEF_RANGED; break;
+            case ZUL_FORM_RED:   def_ranged = ZUL_RED_DEF_RANGED; break;
+            case ZUL_FORM_BLUE:  def_ranged = ZUL_BLUE_DEF_RANGED; break;
+        }
+        int def_roll = (ZUL_DEF_LEVEL + 8) * (def_ranged + 64);
+        if (def_roll < 0) def_roll = 0;
+
         int msb_max_hit = (int)(0.5f + (float)(99 + 10) * (55 + 64) / 640.0f);
         int att_roll_base = t->eff_range_level * (t->range_att_bonus + 64);
-        int att_roll_spec = att_roll_base * 10 / 7;  /* ~43% accuracy boost */
+        int att_roll_spec = att_roll_base * 10 / 7;
 
         for (int arrow = 0; arrow < 2; arrow++) {
-            float chance = zul_hit_chance(att_roll_spec, def_roll);
-            if (zul_rand_float(s) < chance) {
+            if (zul_rand_float(s) < zul_hit_chance(att_roll_spec, def_roll)) {
                 int dmg = zul_rand_int(s, msb_max_hit + 1);
                 dmg = zul_cap_damage(s, dmg);
                 s->zulrah.current_hitpoints -= dmg;
@@ -1072,9 +1117,21 @@ static void zul_player_spec(ZulrahState* s) {
                 total_dmg += dmg;
             }
         }
-    } else {
+    } else if (s->gear_tier == 1) {
         /* blowpipe spec: 1 hit, heals 50% of damage dealt */
+        s->player.last_attack_style = ATTACK_STYLE_RANGED;
+        s->player.attack_style_this_tick = ATTACK_STYLE_RANGED;
         s->player_attack_timer = 3;
+
+        int def_ranged = 0;
+        switch (s->current_form) {
+            case ZUL_FORM_GREEN: def_ranged = ZUL_GREEN_DEF_RANGED; break;
+            case ZUL_FORM_RED:   def_ranged = ZUL_RED_DEF_RANGED; break;
+            case ZUL_FORM_BLUE:  def_ranged = ZUL_BLUE_DEF_RANGED; break;
+        }
+        int def_roll = (ZUL_DEF_LEVEL + 8) * (def_ranged + 64);
+        if (def_roll < 0) def_roll = 0;
+
         int att_roll = t->eff_range_level * (t->bp_att_bonus + 64);
         if (zul_rand_float(s) < zul_hit_chance(att_roll, def_roll)) {
             int dmg = zul_rand_int(s, t->bp_max_hit + 1);
@@ -1086,6 +1143,36 @@ static void zul_player_spec(ZulrahState* s) {
             s->player.current_hitpoints += heal;
             if (s->player.current_hitpoints > s->player.base_hitpoints)
                 s->player.current_hitpoints = s->player.base_hitpoints;
+        }
+    } else {
+        /* eye of ayak Soul Rend: 5-tick mage attack, 2x accuracy, 1.3x max hit.
+           on hit: drain target magic defence by damage dealt (carries across forms). */
+        s->player.last_attack_style = ATTACK_STYLE_MAGIC;
+        s->player.attack_style_this_tick = ATTACK_STYLE_MAGIC;
+        s->player_attack_timer = 5;  /* slower than normal 3-tick */
+
+        int def_magic = 0;
+        switch (s->current_form) {
+            case ZUL_FORM_GREEN: def_magic = ZUL_GREEN_DEF_MAGIC; break;
+            case ZUL_FORM_RED:   def_magic = ZUL_RED_DEF_MAGIC; break;
+            case ZUL_FORM_BLUE:  def_magic = ZUL_BLUE_DEF_MAGIC; break;
+        }
+        def_magic -= s->magic_def_drain;
+        if (def_magic < -64) def_magic = -64;
+        int def_roll = (ZUL_DEF_LEVEL + 8) * (def_magic + 64);
+        if (def_roll < 0) def_roll = 0;
+
+        int att_roll = t->eff_mage_level * (t->mage_att_bonus + 64) * 2;  /* 2x accuracy */
+        int spec_max_hit = t->mage_max_hit * 130 / 100;  /* 1.3x max hit */
+
+        if (zul_rand_float(s) < zul_hit_chance(att_roll, def_roll)) {
+            int dmg = zul_rand_int(s, spec_max_hit + 1);
+            dmg = zul_cap_damage(s, dmg);
+            s->zulrah.current_hitpoints -= dmg;
+            if (s->zulrah.current_hitpoints < 0) s->zulrah.current_hitpoints = 0;
+            total_dmg = dmg;
+            /* drain target magic defence by damage dealt */
+            s->magic_def_drain += dmg;
         }
     }
 
