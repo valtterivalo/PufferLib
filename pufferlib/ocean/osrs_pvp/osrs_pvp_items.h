@@ -151,8 +151,14 @@ typedef enum {
     ITEM_BLACK_DHIDE_CHAPS = 92,
     ITEM_MAGIC_SHORTBOW_I = 93,
     ITEM_AVAS_ACCUMULATOR = 94,
+    // inferno gear
+    ITEM_CRYSTAL_SHIELD = 95,
+    ITEM_PEGASIAN_BOOTS = 96,
+    ITEM_JUSTICIAR_FACEGUARD = 97,
+    ITEM_JUSTICIAR_CHESTGUARD = 98,
+    ITEM_JUSTICIAR_LEGGUARDS = 99,
 
-    NUM_ITEMS = 95,
+    NUM_ITEMS = 100,
     ITEM_NONE = 255
 } ItemIndex;
 
@@ -1069,6 +1075,51 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .defence_stab = 0, .defence_slash = 1, .defence_crush = 0,
         .defence_magic = 4, .defence_ranged = 0,
         .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+    },
+    [ITEM_CRYSTAL_SHIELD] = {
+        .item_id = 4224, .name = "Crystal shield", .slot = SLOT_SHIELD,
+        .attack_speed = 0, .attack_range = 0,
+        .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
+        .attack_magic = 0, .attack_ranged = 0,
+        .defence_stab = 51, .defence_slash = 54, .defence_crush = 53,
+        .defence_magic = 0, .defence_ranged = 80,
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+    },
+    [ITEM_PEGASIAN_BOOTS] = {
+        .item_id = 13237, .name = "Pegasian boots", .slot = SLOT_FEET,
+        .attack_speed = 0, .attack_range = 0,
+        .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
+        .attack_magic = -12, .attack_ranged = 12,
+        .defence_stab = 5, .defence_slash = 3, .defence_crush = 5,
+        .defence_magic = -3, .defence_ranged = 5,
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+    },
+    [ITEM_JUSTICIAR_FACEGUARD] = {
+        .item_id = 22326, .name = "Justiciar faceguard", .slot = SLOT_HEAD,
+        .attack_speed = 0, .attack_range = 0,
+        .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
+        .attack_magic = -6, .attack_ranged = -2,
+        .defence_stab = 56, .defence_slash = 59, .defence_crush = 63,
+        .defence_magic = -4, .defence_ranged = 59,
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 1
+    },
+    [ITEM_JUSTICIAR_CHESTGUARD] = {
+        .item_id = 22327, .name = "Justiciar chestguard", .slot = SLOT_BODY,
+        .attack_speed = 0, .attack_range = 0,
+        .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
+        .attack_magic = -16, .attack_ranged = -7,
+        .defence_stab = 132, .defence_slash = 130, .defence_crush = 107,
+        .defence_magic = -16, .defence_ranged = 69,
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 4
+    },
+    [ITEM_JUSTICIAR_LEGGUARDS] = {
+        .item_id = 22328, .name = "Justiciar legguards", .slot = SLOT_LEGS,
+        .attack_speed = 0, .attack_range = 0,
+        .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
+        .attack_magic = -21, .attack_ranged = -14,
+        .defence_stab = 95, .defence_slash = 92, .defence_crush = 83,
+        .defence_magic = -9, .defence_ranged = 65,
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 3
     },
 };
 

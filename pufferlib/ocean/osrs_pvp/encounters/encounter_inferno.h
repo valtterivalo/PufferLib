@@ -19,6 +19,7 @@
 #include "../osrs_pvp_types.h"
 #include "../osrs_pvp_items.h"
 #include "../osrs_pvp_collision.h"
+#include "../osrs_combat_shared.h"
 #include "../osrs_encounter.h"
 #include <string.h>
 #include <stdio.h>
@@ -117,6 +118,8 @@ typedef struct {
     int str_level;
     int range_level;
     int magic_level;
+    int magic_def_bonus;   /* NPC magic defence equipment bonus */
+    int ranged_def_bonus;  /* NPC ranged defence equipment bonus */
     int stun_on_spawn;   /* ticks of stun when first spawned */
     int can_move;        /* 0 = cannot move (zuk, zuk healers) */
 } InfNPCStats;
@@ -127,85 +130,113 @@ static const InfNPCStats INF_NPC_STATS[INF_NUM_NPC_TYPES] = {
     [INF_NPC_NIBBLER] = { .hp = 10, .max_hit = 4, .attack_speed = 4,
         .attack_range = 1, .size = 1, .default_style = ATTACK_STYLE_MELEE,
         .can_melee = 0, .def_level = 15, .att_level = 1, .str_level = 1,
-        .range_level = 0, .magic_level = 0, .stun_on_spawn = 1, .can_move = 1 },
+        .range_level = 0, .magic_level = 15,
+        .magic_def_bonus = 0, .ranged_def_bonus = 0,
+        .stun_on_spawn = 1, .can_move = 1 },
 
     /* BAT (JalMejRah): HP=25, ranged (range=4), size=2, drains run energy on hit */
     [INF_NPC_BAT] = { .hp = 25, .max_hit = 30, .attack_speed = 3,
         .attack_range = 4, .size = 2, .default_style = ATTACK_STYLE_RANGED,
         .can_melee = 0, .def_level = 55, .att_level = 0, .str_level = 0,
-        .range_level = 120, .magic_level = 120, .stun_on_spawn = 0, .can_move = 1 },
+        .range_level = 120, .magic_level = 120,
+        .magic_def_bonus = 0, .ranged_def_bonus = 0,
+        .stun_on_spawn = 0, .can_move = 1 },
 
     /* BLOB (JalAk): HP=40, prayer reader, size=3, speed=3 (effective 6 with scan phase) */
     [INF_NPC_BLOB] = { .hp = 40, .max_hit = 29, .attack_speed = 6,
         .attack_range = 15, .size = 3, .default_style = ATTACK_STYLE_MAGIC,
         .can_melee = 1, .def_level = 95, .att_level = 160, .str_level = 160,
-        .range_level = 160, .magic_level = 160, .stun_on_spawn = 0, .can_move = 1 },
+        .range_level = 160, .magic_level = 160,
+        .magic_def_bonus = 25, .ranged_def_bonus = 0,
+        .stun_on_spawn = 0, .can_move = 1 },
 
     /* BLOB_MELEE (JalAkRekKet): HP=15, melee, size=1 */
     [INF_NPC_BLOB_MELEE] = { .hp = 15, .max_hit = 25, .attack_speed = 4,
         .attack_range = 1, .size = 1, .default_style = ATTACK_STYLE_MELEE,
         .can_melee = 0, .def_level = 95, .att_level = 120, .str_level = 120,
-        .range_level = 0, .magic_level = 0, .stun_on_spawn = 0, .can_move = 1 },
+        .range_level = 0, .magic_level = 0,
+        .magic_def_bonus = 0, .ranged_def_bonus = 0,
+        .stun_on_spawn = 0, .can_move = 1 },
 
     /* BLOB_RANGE (JalAkRekXil): HP=15, ranged, size=1 */
     [INF_NPC_BLOB_RANGE] = { .hp = 15, .max_hit = 25, .attack_speed = 4,
         .attack_range = 15, .size = 1, .default_style = ATTACK_STYLE_RANGED,
         .can_melee = 0, .def_level = 95, .att_level = 0, .str_level = 0,
-        .range_level = 120, .magic_level = 0, .stun_on_spawn = 0, .can_move = 1 },
+        .range_level = 120, .magic_level = 0,
+        .magic_def_bonus = 0, .ranged_def_bonus = 0,
+        .stun_on_spawn = 0, .can_move = 1 },
 
     /* BLOB_MAGE (JalAkRekMej): HP=15, magic, size=1, magic_dmg=1.25 */
     [INF_NPC_BLOB_MAGE] = { .hp = 15, .max_hit = 25, .attack_speed = 4,
         .attack_range = 15, .size = 1, .default_style = ATTACK_STYLE_MAGIC,
         .can_melee = 0, .def_level = 95, .att_level = 0, .str_level = 0,
-        .range_level = 0, .magic_level = 120, .stun_on_spawn = 0, .can_move = 1 },
+        .range_level = 0, .magic_level = 120,
+        .magic_def_bonus = 25, .ranged_def_bonus = 0,
+        .stun_on_spawn = 0, .can_move = 1 },
 
     /* MELEER (JalImKot): HP=75, melee slash, size=4, dig mechanic */
     [INF_NPC_MELEER] = { .hp = 75, .max_hit = 40, .attack_speed = 4,
         .attack_range = 1, .size = 4, .default_style = ATTACK_STYLE_MELEE,
         .can_melee = 0, .def_level = 120, .att_level = 210, .str_level = 290,
-        .range_level = 0, .magic_level = 0, .stun_on_spawn = 0, .can_move = 1 },
+        .range_level = 0, .magic_level = 120,
+        .magic_def_bonus = 30, .ranged_def_bonus = 0,
+        .stun_on_spawn = 0, .can_move = 1 },
 
     /* RANGER (JalXil): HP=125, ranged (range=15), size=3, can melee (crush) if close */
     [INF_NPC_RANGER] = { .hp = 125, .max_hit = 50, .attack_speed = 4,
         .attack_range = 15, .size = 3, .default_style = ATTACK_STYLE_RANGED,
         .can_melee = 1, .def_level = 60, .att_level = 140, .str_level = 180,
-        .range_level = 250, .magic_level = 0, .stun_on_spawn = 0, .can_move = 1 },
+        .range_level = 250, .magic_level = 90,
+        .magic_def_bonus = 0, .ranged_def_bonus = 0,
+        .stun_on_spawn = 0, .can_move = 1 },
 
     /* MAGER (JalZek): HP=220, magic (range=15), size=4, resurrects dead mobs, can melee (stab) */
     [INF_NPC_MAGER] = { .hp = 220, .max_hit = 70, .attack_speed = 4,
         .attack_range = 15, .size = 4, .default_style = ATTACK_STYLE_MAGIC,
         .can_melee = 1, .def_level = 260, .att_level = 370, .str_level = 510,
-        .range_level = 510, .magic_level = 300, .stun_on_spawn = 0, .can_move = 1 },
+        .range_level = 510, .magic_level = 300,
+        .magic_def_bonus = 0, .ranged_def_bonus = 0,
+        .stun_on_spawn = 0, .can_move = 1 },
 
     /* JAD (JalTokJad): HP=350, random 50/50 range/mage, size=5, range=50 */
     [INF_NPC_JAD] = { .hp = 350, .max_hit = 113, .attack_speed = 8,
         .attack_range = 50, .size = 5, .default_style = ATTACK_STYLE_RANGED,
         .can_melee = 0, .def_level = 480, .att_level = 750, .str_level = 1020,
-        .range_level = 1020, .magic_level = 510, .stun_on_spawn = 0, .can_move = 1 },
+        .range_level = 1020, .magic_level = 510,
+        .magic_def_bonus = 0, .ranged_def_bonus = 0,
+        .stun_on_spawn = 0, .can_move = 1 },
 
     /* ZUK (TzKalZuk): HP=1200, typeless attacks, size=7, cannot move */
     [INF_NPC_ZUK] = { .hp = 1200, .max_hit = 251, .attack_speed = 10,
         .attack_range = 99, .size = 7, .default_style = ATTACK_STYLE_MAGIC,
         .can_melee = 0, .def_level = 234, .att_level = 350, .str_level = 600,
-        .range_level = 400, .magic_level = 150, .stun_on_spawn = 8, .can_move = 0 },
+        .range_level = 400, .magic_level = 150,
+        .magic_def_bonus = 350, .ranged_def_bonus = 0,
+        .stun_on_spawn = 8, .can_move = 0 },
 
     /* HEALER_JAD (YtHurKot): HP=90, melee, size=1 */
     [INF_NPC_HEALER_JAD] = { .hp = 90, .max_hit = 19, .attack_speed = 4,
         .attack_range = 1, .size = 1, .default_style = ATTACK_STYLE_MELEE,
         .can_melee = 0, .def_level = 100, .att_level = 165, .str_level = 125,
-        .range_level = 0, .magic_level = 0, .stun_on_spawn = 0, .can_move = 1 },
+        .range_level = 0, .magic_level = 150,
+        .magic_def_bonus = 130, .ranged_def_bonus = 0,
+        .stun_on_spawn = 0, .can_move = 1 },
 
     /* HEALER_ZUK (JalMejJak): HP=75, AOE sparks, size=1, cannot move */
     [INF_NPC_HEALER_ZUK] = { .hp = 75, .max_hit = 24, .attack_speed = 4,
         .attack_range = 99, .size = 1, .default_style = ATTACK_STYLE_MAGIC,
         .can_melee = 0, .def_level = 100, .att_level = 0, .str_level = 0,
-        .range_level = 0, .magic_level = 0, .stun_on_spawn = 0, .can_move = 0 },
+        .range_level = 0, .magic_level = 0,
+        .magic_def_bonus = 0, .ranged_def_bonus = 0,
+        .stun_on_spawn = 0, .can_move = 0 },
 
     /* ZUK_SHIELD: HP=600, size=5 (width), oscillates left-right */
     [INF_NPC_ZUK_SHIELD] = { .hp = 600, .max_hit = 0, .attack_speed = 0,
         .attack_range = 0, .size = 5, .default_style = ATTACK_STYLE_NONE,
         .can_melee = 0, .def_level = 0, .att_level = 0, .str_level = 0,
-        .range_level = 0, .magic_level = 0, .stun_on_spawn = 1, .can_move = 0 },
+        .range_level = 0, .magic_level = 0,
+        .magic_def_bonus = 0, .ranged_def_bonus = 0,
+        .stun_on_spawn = 1, .can_move = 0 },
 };
 
 /* ======================================================================== */
@@ -364,6 +395,9 @@ typedef struct {
     /* mager resurrection state */
     int resurrect_cooldown; /* mager: ticks until next resurrection attempt */
 
+    /* freeze state (ice barrage) */
+    int frozen_ticks;       /* ticks remaining in ice barrage freeze */
+
     /* heal state */
     int heal_target;       /* healer: NPC index being healed (-1 = none) */
     int heal_timer;        /* healer: ticks until next heal tick */
@@ -398,6 +432,93 @@ typedef struct {
     int healer_spawned;    /* 1 when healers have been spawned */
     int jad_spawned;       /* 1 when jad has been spawned during shield phase */
 } InfZukState;
+
+/* ======================================================================== */
+/* weapon sets and pre-computed stats                                         */
+/* ======================================================================== */
+
+typedef enum {
+    INF_GEAR_MAGE = 0,
+    INF_GEAR_TBOW,
+    INF_GEAR_BP,
+    INF_NUM_WEAPON_SETS
+} InfWeaponSet;
+
+typedef struct {
+    int att_bonus;      /* attack bonus for accuracy roll */
+    int max_hit;        /* base max hit (before tbow scaling) */
+    int eff_level;      /* effective attack level (base + prayer + style + 8) */
+    int attack_speed;   /* ticks between attacks */
+    AttackStyle style;  /* ATTACK_STYLE_MAGIC or ATTACK_STYLE_RANGED */
+} InfWeaponStats;
+
+/* pre-computed weapon stats per loadout:
+ * mage: kodai + augury, att_bonus from gear, max_hit = barrage(30) * 1.29 magic_dmg%
+ * tbow: rigour, att_bonus from gear, max_hit before tbow scaling
+ * bp: rigour, att_bonus from gear, max_hit with dragon darts */
+static const InfWeaponStats INF_WEAPON_STATS[INF_NUM_WEAPON_SETS] = {
+    [INF_GEAR_MAGE] = { .att_bonus = 88, .max_hit = 38, .eff_level = 131,
+        .attack_speed = 5, .style = ATTACK_STYLE_MAGIC },
+    [INF_GEAR_TBOW] = { .att_bonus = 215, .max_hit = 33, .eff_level = 126,
+        .attack_speed = 5, .style = ATTACK_STYLE_RANGED },
+    [INF_GEAR_BP]   = { .att_bonus = 175, .max_hit = 25, .eff_level = 126,
+        .attack_speed = 3, .style = ATTACK_STYLE_RANGED },
+};
+
+/* gear loadout arrays per weapon set */
+static const uint8_t INF_MAGE_LOADOUT[NUM_GEAR_SLOTS] = {
+    [GEAR_SLOT_HEAD]   = ITEM_MASORI_MASK_F,
+    [GEAR_SLOT_CAPE]   = ITEM_DIZANAS_QUIVER,
+    [GEAR_SLOT_NECK]   = ITEM_OCCULT_NECKLACE,
+    [GEAR_SLOT_AMMO]   = ITEM_DRAGON_ARROWS,
+    [GEAR_SLOT_WEAPON] = ITEM_KODAI_WAND,
+    [GEAR_SLOT_SHIELD] = ITEM_CRYSTAL_SHIELD,
+    [GEAR_SLOT_BODY]   = ITEM_ANCESTRAL_TOP,
+    [GEAR_SLOT_LEGS]   = ITEM_ANCESTRAL_BOTTOM,
+    [GEAR_SLOT_HANDS]  = ITEM_ZARYTE_VAMBRACES,
+    [GEAR_SLOT_FEET]   = ITEM_PEGASIAN_BOOTS,
+    [GEAR_SLOT_RING]   = ITEM_RING_OF_SUFFERING_RI,
+};
+
+static const uint8_t INF_RANGE_TBOW_LOADOUT[NUM_GEAR_SLOTS] = {
+    [GEAR_SLOT_HEAD]   = ITEM_MASORI_MASK_F,
+    [GEAR_SLOT_CAPE]   = ITEM_DIZANAS_QUIVER,
+    [GEAR_SLOT_NECK]   = ITEM_NECKLACE_OF_ANGUISH,
+    [GEAR_SLOT_AMMO]   = ITEM_DRAGON_ARROWS,
+    [GEAR_SLOT_WEAPON] = ITEM_TWISTED_BOW,
+    [GEAR_SLOT_SHIELD] = ITEM_NONE,  /* tbow is 2h */
+    [GEAR_SLOT_BODY]   = ITEM_MASORI_BODY_F,
+    [GEAR_SLOT_LEGS]   = ITEM_MASORI_CHAPS_F,
+    [GEAR_SLOT_HANDS]  = ITEM_ZARYTE_VAMBRACES,
+    [GEAR_SLOT_FEET]   = ITEM_PEGASIAN_BOOTS,
+    [GEAR_SLOT_RING]   = ITEM_RING_OF_SUFFERING_RI,
+};
+
+static const uint8_t INF_RANGE_BP_LOADOUT[NUM_GEAR_SLOTS] = {
+    [GEAR_SLOT_HEAD]   = ITEM_MASORI_MASK_F,
+    [GEAR_SLOT_CAPE]   = ITEM_DIZANAS_QUIVER,
+    [GEAR_SLOT_NECK]   = ITEM_NECKLACE_OF_ANGUISH,
+    [GEAR_SLOT_AMMO]   = ITEM_DRAGON_ARROWS,  /* arrows persist across all switches */
+    [GEAR_SLOT_WEAPON] = ITEM_TOXIC_BLOWPIPE,
+    [GEAR_SLOT_SHIELD] = ITEM_NONE,  /* bp is 2h */
+    [GEAR_SLOT_BODY]   = ITEM_MASORI_BODY_F,
+    [GEAR_SLOT_LEGS]   = ITEM_MASORI_CHAPS_F,
+    [GEAR_SLOT_HANDS]  = ITEM_ZARYTE_VAMBRACES,
+    [GEAR_SLOT_FEET]   = ITEM_PEGASIAN_BOOTS,
+    [GEAR_SLOT_RING]   = ITEM_RING_OF_SUFFERING_RI,
+};
+
+/* pointer array for loadout switching */
+static const uint8_t* const INF_LOADOUTS[INF_NUM_WEAPON_SETS] = {
+    INF_MAGE_LOADOUT,
+    INF_RANGE_TBOW_LOADOUT,
+    INF_RANGE_BP_LOADOUT,
+};
+
+/* tank overlay items (justiciar) */
+#define INF_TANK_HEAD ITEM_JUSTICIAR_FACEGUARD
+#define INF_TANK_BODY ITEM_JUSTICIAR_CHESTGUARD
+#define INF_TANK_LEGS ITEM_JUSTICIAR_LEGGUARDS
 
 /* ======================================================================== */
 /* encounter state                                                           */
@@ -443,18 +564,27 @@ typedef struct {
     OverheadPrayer active_prayer;
     int player_attack_timer;
     int player_attack_target; /* NPC index or -1 */
-    int player_food_count;
     int player_brew_doses;
     int player_restore_doses;
-    int player_special_energy;
-    int player_food_timer;
+    int player_bastion_doses;
+    int player_stamina_doses;
     int player_potion_timer;
+
+    /* gear state */
+    InfWeaponSet weapon_set;
+    int armor_tank;            /* 1 = justiciar overlay active */
+    int stamina_active_ticks;  /* countdown for stamina effect */
+    int spell_choice;          /* 0 = blood barrage, 1 = ice barrage */
 
     /* nibbler pillar target: random pillar chosen per wave, all nibblers attack it */
     int nibbler_target_pillar;
 
     /* spawn position shuffle buffer */
     int spawn_order[INF_NUM_SPAWN_POS];
+
+    /* collision map (loaded from cache, passed via put_ptr) */
+    const CollisionMap* collision_map;
+    int world_offset_x, world_offset_y;
 
     /* config */
     int start_wave;        /* for curriculum: start from a later wave */
@@ -569,9 +699,15 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
     Log saved_log = s->log;
     int saved_start = s->start_wave;
     uint32_t saved_rng = s->rng_state;
+    const CollisionMap* saved_cmap = s->collision_map;
+    int saved_wox = s->world_offset_x;
+    int saved_woy = s->world_offset_y;
     memset(s, 0, sizeof(InfernoState));
     s->log = saved_log;
     s->start_wave = saved_start;
+    s->collision_map = saved_cmap;
+    s->world_offset_x = saved_wox;
+    s->world_offset_y = saved_woy;
     s->rng_state = (seed != 0) ? seed : (saved_rng != 0 ? saved_rng : 12345);
 
     /* player */
@@ -580,25 +716,23 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
     s->player.current_hitpoints = 99;
     s->player.base_prayer = 99;
     s->player.current_prayer = 99;
-    /* equip tbow loadout (from InfernoTrainer loadoutMaxTbow) */
-    memset(s->player.equipped, ITEM_NONE, NUM_GEAR_SLOTS);
-    s->player.equipped[GEAR_SLOT_HEAD] = ITEM_MASORI_MASK_F;
-    s->player.equipped[GEAR_SLOT_CAPE] = ITEM_DIZANAS_QUIVER;
-    s->player.equipped[GEAR_SLOT_NECK] = ITEM_OCCULT_NECKLACE;
-    s->player.equipped[GEAR_SLOT_AMMO] = ITEM_DRAGON_ARROWS;
-    s->player.equipped[GEAR_SLOT_WEAPON] = ITEM_KODAI_WAND;
-    s->player.equipped[GEAR_SLOT_SHIELD] = ITEM_ELIDINIS_WARD_F;
-    s->player.equipped[GEAR_SLOT_BODY] = ITEM_ANCESTRAL_TOP;
-    s->player.equipped[GEAR_SLOT_LEGS] = ITEM_ANCESTRAL_BOTTOM;
-    s->player.equipped[GEAR_SLOT_HANDS] = ITEM_ZARYTE_VAMBRACES;
-    s->player.equipped[GEAR_SLOT_FEET] = ITEM_AVERNIC_TREADS;
-    s->player.equipped[GEAR_SLOT_RING] = ITEM_RING_OF_SUFFERING_RI;
-    s->player.visible_gear = GEAR_MAGE;
-    s->player.current_gear = GEAR_MAGE;
-    s->player_food_count = 8;
-    s->player_brew_doses = 12;
-    s->player_restore_doses = 16;
-    s->player_special_energy = 100;
+    /* start in mage gear (kodai + crystal shield + ancestral) */
+    s->weapon_set = INF_GEAR_MAGE;
+    s->armor_tank = 0;
+    encounter_apply_loadout(&s->player, INF_MAGE_LOADOUT, GEAR_MAGE);
+    {
+        uint8_t tank_extra[NUM_GEAR_SLOTS];
+        memset(tank_extra, ITEM_NONE, NUM_GEAR_SLOTS);
+        tank_extra[GEAR_SLOT_HEAD] = INF_TANK_HEAD;
+        tank_extra[GEAR_SLOT_BODY] = INF_TANK_BODY;
+        tank_extra[GEAR_SLOT_LEGS] = INF_TANK_LEGS;
+        encounter_populate_inventory(&s->player, INF_LOADOUTS, INF_NUM_WEAPON_SETS, tank_extra);
+    }
+    s->player_brew_doses = 32;     /* 8 pots x 4 doses */
+    s->player_restore_doses = 40;  /* 10 pots x 4 doses */
+    s->player_bastion_doses = 4;   /* 1 pot x 4 doses */
+    s->player_stamina_doses = 4;   /* 1 pot x 4 doses */
+    s->stamina_active_ticks = 0;
     s->active_prayer = PRAYER_NONE;
     s->player_attack_target = -1;
 
@@ -762,6 +896,7 @@ static void inf_npc_move(InfernoState* s, int idx) {
     if (!npc->active) return;
     if (npc->stun_timer > 0) return;
     if (npc->dig_freeze_timer > 0) return;
+    if (npc->frozen_ticks > 0) return;  /* ice barrage freeze */
 
     const InfNPCStats* stats = &INF_NPC_STATS[npc->type];
     if (!stats->can_move) return;
@@ -923,6 +1058,7 @@ static void inf_npc_attack(InfernoState* s, int idx) {
         s->player.current_hitpoints -= dmg;
         if (s->player.current_hitpoints < 0) s->player.current_hitpoints = 0;
         s->damage_received_this_tick += dmg;
+        if (dmg > 0) { s->player.hit_landed_this_tick = 1; s->player.hit_damage = dmg; }
         npc->attack_timer = stats->attack_speed;
         return;
     }
@@ -950,6 +1086,7 @@ static void inf_npc_attack(InfernoState* s, int idx) {
             s->player.current_hitpoints -= dmg;
             if (s->player.current_hitpoints < 0) s->player.current_hitpoints = 0;
             s->damage_received_this_tick += dmg;
+            if (dmg > 0) { s->player.hit_landed_this_tick = 1; s->player.hit_damage = dmg; }
         }
         npc->attack_timer = stats->attack_speed;
         return;
@@ -1053,6 +1190,7 @@ static void inf_npc_attack(InfernoState* s, int idx) {
     s->player.current_hitpoints -= dmg;
     if (s->player.current_hitpoints < 0) s->player.current_hitpoints = 0;
     s->damage_received_this_tick += dmg;
+    if (dmg > 0) { s->player.hit_landed_this_tick = 1; s->player.hit_damage = dmg; }
 
     npc->attack_timer = stats->attack_speed;
 
@@ -1228,6 +1366,9 @@ static void inf_tick_npcs(InfernoState* s) {
     for (int i = 0; i < INF_MAX_NPCS; i++) {
         if (!s->npcs[i].active) continue;
 
+        /* decrement ice barrage freeze timer */
+        if (s->npcs[i].frozen_ticks > 0) s->npcs[i].frozen_ticks--;
+
         /* meleer dig check */
         if (s->npcs[i].type == INF_NPC_MELEER)
             inf_meleer_dig_check(s, i);
@@ -1252,23 +1393,25 @@ static void inf_tick_npcs(InfernoState* s) {
 #define INF_HEAD_MOVE    0   /* 9: idle + 8 directions */
 #define INF_HEAD_PRAYER  1   /* 4: none, melee, range, mage */
 #define INF_HEAD_TARGET  2   /* INF_MAX_NPCS+1: none or NPC index */
-#define INF_HEAD_EAT     3   /* 3: none, food, karambwan */
-#define INF_HEAD_POTION  4   /* 3: none, restore, brew */
-#define INF_HEAD_SPEC    5   /* 2: none, spec */
-#define INF_NUM_ACTION_HEADS 6
+#define INF_HEAD_GEAR    3   /* 5: no_switch, mage, tbow, bp, tank */
+#define INF_HEAD_EAT     4   /* 2: none, brew */
+#define INF_HEAD_POTION  5   /* 4: none, restore, bastion, stamina */
+#define INF_HEAD_SPELL   6   /* 2: blood_barrage, ice_barrage */
+#define INF_NUM_ACTION_HEADS 7
 
-static const int INF_ACTION_DIMS[INF_NUM_ACTION_HEADS] = { 9, 4, INF_MAX_NPCS+1, 3, 3, 2 };
-#define INF_ACTION_MASK_SIZE (9 + 4 + INF_MAX_NPCS+1 + 3 + 3 + 2)
+static const int INF_ACTION_DIMS[INF_NUM_ACTION_HEADS] = { 9, 4, INF_MAX_NPCS+1, 5, 2, 4, 2 };
+#define INF_ACTION_MASK_SIZE (9 + 4 + INF_MAX_NPCS+1 + 5 + 2 + 4 + 2)
 
 /* movement directions: 0=idle, 1-8 = N,NE,E,SE,S,SW,W,NW */
 static const int INF_MOVE_DX[9] = { 0, 0, 1, 1, 0, -1, -1, -1, 1 };
 static const int INF_MOVE_DY[9] = { 0, 1, 1, 0, -1, -1, 0, 1, -1 };
 
-#define INF_FOOD_HEAL     22   /* manta ray */
-#define INF_BREW_HEAL     16   /* sara brew heals 16, boosts def */
+#define INF_BREW_HEAL     16   /* sara brew heals 16, can overcap to base+16 */
 #define INF_RESTORE_PRAY  (7 + 99/4)  /* 31 points */
 
 static void inf_tick_player(InfernoState* s, const int* actions) {
+    encounter_clear_tick_flags(&s->player);
+
     /* prayer */
     int prayer_act = actions[INF_HEAD_PRAYER];
     switch (prayer_act) {
@@ -1277,20 +1420,45 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
         case 2: s->active_prayer = PRAYER_PROTECT_RANGED; break;
         case 3: s->active_prayer = PRAYER_PROTECT_MAGIC; break;
     }
+    s->player.prayer = s->active_prayer;
 
-    /* eating */
-    if (s->player_food_timer > 0) s->player_food_timer--;
-    if (s->player_potion_timer > 0) s->player_potion_timer--;
-
-    int eat_act = actions[INF_HEAD_EAT];
-    if (eat_act == 1 && s->player_food_count > 0 && s->player_food_timer == 0) {
-        s->player.current_hitpoints += INF_FOOD_HEAL;
-        if (s->player.current_hitpoints > s->player.base_hitpoints)
-            s->player.current_hitpoints = s->player.base_hitpoints;
-        s->player_food_count--;
-        s->player_food_timer = 3;
+    /* gear switching */
+    int gear_act = actions[INF_HEAD_GEAR];
+    if (gear_act >= 1 && gear_act <= 3) {
+        /* 1=mage, 2=tbow, 3=bp */
+        InfWeaponSet new_set = (InfWeaponSet)(gear_act - 1);
+        s->weapon_set = new_set;
+        s->armor_tank = 0;
+        GearSet gs = (new_set == INF_GEAR_MAGE) ? GEAR_MAGE : GEAR_RANGED;
+        encounter_apply_loadout(&s->player, INF_LOADOUTS[new_set], gs);
+    } else if (gear_act == 4) {
+        /* tank overlay: justiciar head/body/legs on current loadout */
+        s->armor_tank = 1;
+        s->player.equipped[GEAR_SLOT_HEAD] = INF_TANK_HEAD;
+        s->player.equipped[GEAR_SLOT_BODY] = INF_TANK_BODY;
+        s->player.equipped[GEAR_SLOT_LEGS] = INF_TANK_LEGS;
     }
 
+    /* spell choice for mage attacks */
+    int spell_act = actions[INF_HEAD_SPELL];
+    s->spell_choice = spell_act;  /* 0 = blood barrage, 1 = ice barrage */
+
+    /* consumables — shared 3-tick potion timer */
+    if (s->player_potion_timer > 0) s->player_potion_timer--;
+    if (s->stamina_active_ticks > 0) s->stamina_active_ticks--;
+
+    /* brew (INF_HEAD_EAT): heals 16 HP, can overcap to base+16 */
+    int eat_act = actions[INF_HEAD_EAT];
+    if (eat_act == 1 && s->player_brew_doses > 0 && s->player_potion_timer == 0) {
+        s->player.current_hitpoints += INF_BREW_HEAL;
+        if (s->player.current_hitpoints > s->player.base_hitpoints + 16)
+            s->player.current_hitpoints = s->player.base_hitpoints + 16;
+        s->player_brew_doses--;
+        s->player_potion_timer = 3;
+        s->player.ate_food_this_tick = 1;
+    }
+
+    /* potions (INF_HEAD_POTION): 1=restore, 2=bastion, 3=stamina */
     int pot_act = actions[INF_HEAD_POTION];
     if (pot_act == 1 && s->player_restore_doses > 0 && s->player_potion_timer == 0) {
         s->player.current_prayer += INF_RESTORE_PRAY;
@@ -1298,11 +1466,13 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
             s->player.current_prayer = s->player.base_prayer;
         s->player_restore_doses--;
         s->player_potion_timer = 3;
-    } else if (pot_act == 2 && s->player_brew_doses > 0 && s->player_potion_timer == 0) {
-        s->player.current_hitpoints += INF_BREW_HEAL;
-        if (s->player.current_hitpoints > s->player.base_hitpoints + 16)
-            s->player.current_hitpoints = s->player.base_hitpoints + 16;
-        s->player_brew_doses--;
+    } else if (pot_act == 2 && s->player_bastion_doses > 0 && s->player_potion_timer == 0) {
+        /* bastion potion: simplified as flat +6 effective range level (handled in combat) */
+        s->player_bastion_doses--;
+        s->player_potion_timer = 3;
+    } else if (pot_act == 3 && s->player_stamina_doses > 0 && s->player_potion_timer == 0) {
+        s->stamina_active_ticks = 200;
+        s->player_stamina_doses--;
         s->player_potion_timer = 3;
     }
 
@@ -1312,10 +1482,19 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
     if (move_act > 0 && move_act < 9) {
         int nx = s->player.x + INF_MOVE_DX[move_act];
         int ny = s->player.y + INF_MOVE_DY[move_act];
-        if (inf_in_arena(nx, ny) && !inf_blocked_by_pillar(s, nx, ny, 1)) {
+        int walkable = inf_in_arena(nx, ny) && !inf_blocked_by_pillar(s, nx, ny, 1);
+        if (walkable && s->collision_map) {
+            int wx = nx + s->world_offset_x;
+            int wy = ny + s->world_offset_y;
+            walkable = collision_tile_walkable(s->collision_map, 0, wx, wy);
+        }
+        if (walkable) {
             s->player.x = nx;
             s->player.y = ny;
-            s->player.is_running = 1;
+            s->player.dest_x = nx;
+            s->player.dest_y = ny;
+            /* 1 tile per tick = walking speed. is_running=1 would cause
+               the interpolation to finish early and snap between ticks. */
         }
     }
 
@@ -1335,8 +1514,49 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
     if (s->player_attack_target >= 0 && s->player_attack_timer == 0) {
         InfNPC* target_npc = &s->npcs[s->player_attack_target];
         if (target_npc->active) {
-            int max_hit = 45;  /* tbow against high-magic monsters */
-            int dmg = inf_rand_int(s, max_hit + 1);
+            const InfWeaponStats* ws = &INF_WEAPON_STATS[s->weapon_set];
+            const InfNPCStats* ns = &INF_NPC_STATS[target_npc->type];
+            int dmg = 0;
+
+            if (s->weapon_set == INF_GEAR_MAGE) {
+                /* magic attack: accuracy roll using magic defence */
+                int att_roll = ws->eff_level * (ws->att_bonus + 64);
+                int def_roll = (ns->def_level + 8) * (ns->magic_def_bonus + 64);
+                if (inf_rand_float(s) < osrs_hit_chance(att_roll, def_roll)) {
+                    dmg = inf_rand_int(s, ws->max_hit + 1);
+                }
+                /* ice barrage freeze */
+                if (s->spell_choice == 1) {
+                    target_npc->frozen_ticks = 32;
+                }
+                /* blood barrage heal: 25% of damage dealt */
+                if (s->spell_choice == 0 && dmg > 0) {
+                    s->player.current_hitpoints += dmg / 4;
+                    if (s->player.current_hitpoints > s->player.base_hitpoints + 16)
+                        s->player.current_hitpoints = s->player.base_hitpoints + 16;
+                }
+            } else if (s->weapon_set == INF_GEAR_TBOW) {
+                /* tbow: scale accuracy and damage by target magic level */
+                int tbow_m = ns->magic_level > ns->magic_def_bonus
+                           ? ns->magic_level : ns->magic_def_bonus;
+                if (tbow_m > 250) tbow_m = 250;
+                float acc_mult = osrs_tbow_acc_mult(tbow_m);
+                float dmg_mult = osrs_tbow_dmg_mult(tbow_m);
+                int att_roll = (int)(ws->eff_level * (ws->att_bonus + 64) * acc_mult);
+                int def_roll = (ns->def_level + 8) * (ns->ranged_def_bonus + 64);
+                int max_hit = (int)(ws->max_hit * dmg_mult);
+                if (inf_rand_float(s) < osrs_hit_chance(att_roll, def_roll)) {
+                    dmg = inf_rand_int(s, max_hit + 1);
+                }
+            } else {
+                /* blowpipe: ranged attack against ranged defence */
+                int att_roll = ws->eff_level * (ws->att_bonus + 64);
+                int def_roll = (ns->def_level + 8) * (ns->ranged_def_bonus + 64);
+                if (inf_rand_float(s) < osrs_hit_chance(att_roll, def_roll)) {
+                    dmg = inf_rand_int(s, ws->max_hit + 1);
+                }
+            }
+
             target_npc->hp -= dmg;
             s->damage_dealt_this_tick += dmg;
             if (target_npc->hp <= 0) {
@@ -1370,7 +1590,13 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
                     }
                 }
             }
-            s->player_attack_timer = 4;  /* tbow speed on rapid */
+            s->player_attack_timer = ws->attack_speed;
+
+            /* animation flags for renderer */
+            s->player.attack_style_this_tick = ws->style;
+            s->player.hit_landed_this_tick = (dmg > 0) ? 1 : 0;
+            s->player.hit_damage = dmg;
+            s->player.hit_was_successful = (dmg > 0) ? 1 : 0;
         }
     }
 }
@@ -1478,39 +1704,49 @@ static void inf_step(EncounterState* state, const int* actions) {
 /* observations                                                              */
 /* ======================================================================== */
 
-#define INF_NUM_OBS 200
+/* obs layout: 19 player + 6 pillar + 32 NPCs * 11 = 377. round up to 380. */
+#define INF_NUM_OBS 380
 
 static void inf_write_obs(EncounterState* state, float* obs) {
     InfernoState* s = (InfernoState*)state;
     memset(obs, 0, INF_NUM_OBS * sizeof(float));
     int i = 0;
 
-    /* player state */
+    /* player state (19 features) */
     obs[i++] = (float)s->player.current_hitpoints / 99.0f;
     obs[i++] = (float)(s->player.x - INF_ARENA_MIN_X) / (float)INF_ARENA_WIDTH;
     obs[i++] = (float)(s->player.y - INF_ARENA_MIN_Y) / (float)INF_ARENA_HEIGHT;
     obs[i++] = (s->active_prayer == PRAYER_PROTECT_MELEE) ? 1.0f : 0.0f;
     obs[i++] = (s->active_prayer == PRAYER_PROTECT_RANGED) ? 1.0f : 0.0f;
     obs[i++] = (s->active_prayer == PRAYER_PROTECT_MAGIC) ? 1.0f : 0.0f;
-    obs[i++] = (float)s->player_food_count / 8.0f;
-    obs[i++] = (float)s->player_brew_doses / 12.0f;
-    obs[i++] = (float)s->player_restore_doses / 16.0f;
-    obs[i++] = (float)s->player_special_energy / 100.0f;
+    obs[i++] = (float)s->player_brew_doses / 32.0f;
+    obs[i++] = (float)s->player_restore_doses / 40.0f;
+    obs[i++] = (float)s->player.current_prayer / 99.0f;
     obs[i++] = (float)s->wave / (float)INF_NUM_WAVES;
     obs[i++] = (float)s->tick / (float)INF_MAX_TICKS;
+    /* weapon_set one-hot (3 floats) */
+    obs[i++] = (s->weapon_set == INF_GEAR_MAGE) ? 1.0f : 0.0f;
+    obs[i++] = (s->weapon_set == INF_GEAR_TBOW) ? 1.0f : 0.0f;
+    obs[i++] = (s->weapon_set == INF_GEAR_BP) ? 1.0f : 0.0f;
+    /* armor_tank */
+    obs[i++] = s->armor_tank ? 1.0f : 0.0f;
+    /* consumable doses */
+    obs[i++] = (float)s->player_bastion_doses / 4.0f;
+    obs[i++] = (float)s->player_stamina_doses / 4.0f;
+    obs[i++] = (s->stamina_active_ticks > 0) ? 1.0f : 0.0f;
+    /* potion cooldown */
+    obs[i++] = (float)s->player_potion_timer / 3.0f;
 
-    /* pillars */
+    /* pillars (6 features) */
     for (int p = 0; p < INF_NUM_PILLARS; p++) {
         obs[i++] = s->pillars[p].active ? 1.0f : 0.0f;
         obs[i++] = (float)s->pillars[p].hp / (float)INF_PILLAR_HP;
     }
 
-    /* NPCs (up to INF_MAX_NPCS, but cap obs to avoid overflow) */
-    int max_npc_obs = (INF_NUM_OBS - i) / 10;
-    if (max_npc_obs > INF_MAX_NPCS) max_npc_obs = INF_MAX_NPCS;
-    for (int n = 0; n < max_npc_obs; n++) {
+    /* NPCs: 11 features each, up to INF_MAX_NPCS */
+    for (int n = 0; n < INF_MAX_NPCS && (i + 11) <= INF_NUM_OBS; n++) {
         InfNPC* npc = &s->npcs[n];
-        if (npc->active && (i + 10) <= INF_NUM_OBS) {
+        if (npc->active) {
             obs[i++] = 1.0f;
             obs[i++] = (float)npc->type / (float)INF_NUM_NPC_TYPES;
             obs[i++] = (float)npc->hp / (float)npc->max_hp;
@@ -1521,10 +1757,9 @@ static void inf_write_obs(EncounterState* state, float* obs) {
             obs[i++] = (npc->attack_style == ATTACK_STYLE_RANGED) ? 1.0f : 0.0f;
             obs[i++] = (npc->attack_style == ATTACK_STYLE_MAGIC) ? 1.0f : 0.0f;
             obs[i++] = inf_npc_has_los(s, n) ? 1.0f : 0.0f;
+            obs[i++] = (float)npc->frozen_ticks / 32.0f;
         } else {
-            int remaining = INF_NUM_OBS - i;
-            int to_write = remaining < 10 ? remaining : 10;
-            for (int j = 0; j < to_write; j++) obs[i++] = 0.0f;
+            for (int j = 0; j < 11; j++) obs[i++] = 0.0f;
         }
     }
 
@@ -1546,7 +1781,7 @@ static void inf_write_mask(EncounterState* state, float* mask) {
     }
 
     /* HEAD_PRAYER (4): mask out the prayer that's already active */
-    mask[offset++] = (s->active_prayer != PRAYER_NONE) ? 1.0f : 0.0f;         /* none: only if something is on */
+    mask[offset++] = (s->active_prayer != PRAYER_NONE) ? 1.0f : 0.0f;
     mask[offset++] = (s->active_prayer != PRAYER_PROTECT_MELEE) ? 1.0f : 0.0f;
     mask[offset++] = (s->active_prayer != PRAYER_PROTECT_RANGED) ? 1.0f : 0.0f;
     mask[offset++] = (s->active_prayer != PRAYER_PROTECT_MAGIC) ? 1.0f : 0.0f;
@@ -1557,31 +1792,15 @@ static void inf_write_mask(EncounterState* state, float* mask) {
         mask[offset++] = s->npcs[n].active ? 1.0f : 0.0f;
     }
 
-    /* HEAD_EAT (3): none, food, karambwan */
-    mask[offset++] = 1.0f;  /* none always valid */
-    /* food: mask if no food, eat timer active, or would waste more than half the heal */
-    {
-        int hp_missing = s->player.base_hitpoints - s->player.current_hitpoints;
-        mask[offset++] = (s->player_food_count > 0 &&
-                          s->player_food_timer == 0 &&
-                          hp_missing >= INF_FOOD_HEAL / 2)
-                         ? 1.0f : 0.0f;
-    }
-    /* karambwan not implemented separately, always masked */
-    mask[offset++] = 0.0f;
+    /* HEAD_GEAR (5): no_switch, mage, tbow, bp, tank */
+    mask[offset++] = 1.0f;  /* no_switch always valid */
+    mask[offset++] = (s->weapon_set != INF_GEAR_MAGE || s->armor_tank) ? 1.0f : 0.0f;
+    mask[offset++] = (s->weapon_set != INF_GEAR_TBOW || s->armor_tank) ? 1.0f : 0.0f;
+    mask[offset++] = (s->weapon_set != INF_GEAR_BP || s->armor_tank) ? 1.0f : 0.0f;
+    mask[offset++] = 1.0f;  /* tank toggle always allowed */
 
-    /* HEAD_POTION (3): none, restore, brew */
+    /* HEAD_EAT (2): none, brew */
     mask[offset++] = 1.0f;  /* none always valid */
-    /* restore: mask if no doses, timer active, or would waste more than half */
-    {
-        int pray_missing = s->player.base_prayer - s->player.current_prayer;
-        mask[offset++] = (s->player_restore_doses > 0 &&
-                          s->player_potion_timer == 0 &&
-                          pray_missing >= INF_RESTORE_PRAY / 2)
-                         ? 1.0f : 0.0f;
-    }
-    /* brew: mask if no doses, timer active, or would waste more than half.
-       brew cap is base+16, so missing = (base+16) - current */
     {
         int brew_hp_room = (s->player.base_hitpoints + 16) - s->player.current_hitpoints;
         mask[offset++] = (s->player_brew_doses > 0 &&
@@ -1590,9 +1809,28 @@ static void inf_write_mask(EncounterState* state, float* mask) {
                          ? 1.0f : 0.0f;
     }
 
-    /* HEAD_SPEC (2): none, spec */
+    /* HEAD_POTION (4): none, restore, bastion, stamina */
     mask[offset++] = 1.0f;  /* none always valid */
-    mask[offset++] = (s->player_special_energy >= 50) ? 1.0f : 0.0f;
+    /* restore: mask if no doses, timer active, or would waste more than half */
+    {
+        int pray_missing = s->player.base_prayer - s->player.current_prayer;
+        mask[offset++] = (s->player_restore_doses > 0 &&
+                          s->player_potion_timer == 0 &&
+                          pray_missing >= (INF_RESTORE_PRAY + 1) / 2)
+                         ? 1.0f : 0.0f;
+    }
+    /* bastion: mask if no doses or timer active */
+    mask[offset++] = (s->player_bastion_doses > 0 && s->player_potion_timer == 0)
+                     ? 1.0f : 0.0f;
+    /* stamina: mask if no doses, timer active, or already active */
+    mask[offset++] = (s->player_stamina_doses > 0 &&
+                      s->player_potion_timer == 0 &&
+                      s->stamina_active_ticks == 0)
+                     ? 1.0f : 0.0f;
+
+    /* HEAD_SPELL (2): blood_barrage, ice_barrage — masked when not in mage gear */
+    mask[offset++] = (s->weapon_set == INF_GEAR_MAGE) ? 1.0f : 0.0f;
+    mask[offset++] = (s->weapon_set == INF_GEAR_MAGE) ? 1.0f : 0.0f;
 }
 
 /* ======================================================================== */
@@ -1630,7 +1868,7 @@ static void inf_fill_render_entities(EncounterState* state, RenderEntity* out, i
     int n = 0;
 
     /* sync consumable counts to Player struct so GUI inventory can read them */
-    s->player.food_count = s->player_food_count;
+    s->player.food_count = 0;
     s->player.brew_doses = s->player_brew_doses;
     s->player.restore_doses = s->player_restore_doses;
 
@@ -1667,6 +1905,8 @@ static void inf_put_int(EncounterState* state, const char* key, int value) {
     InfernoState* s = (InfernoState*)state;
     if (strcmp(key, "start_wave") == 0) s->start_wave = value;
     else if (strcmp(key, "seed") == 0) s->rng_state = (uint32_t)value;
+    else if (strcmp(key, "world_offset_x") == 0) s->world_offset_x = value;
+    else if (strcmp(key, "world_offset_y") == 0) s->world_offset_y = value;
 }
 
 static void inf_put_float(EncounterState* state, const char* key, float value) {
@@ -1674,7 +1914,8 @@ static void inf_put_float(EncounterState* state, const char* key, float value) {
 }
 
 static void inf_put_ptr(EncounterState* state, const char* key, void* value) {
-    (void)state; (void)key; (void)value;
+    InfernoState* s = (InfernoState*)state;
+    if (strcmp(key, "collision_map") == 0) s->collision_map = (const CollisionMap*)value;
 }
 
 static int inf_get_tick(EncounterState* state) {

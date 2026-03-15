@@ -168,8 +168,12 @@ static void run_visual(OsrsPvp* env, const char* encounter_name, const char* rep
         } else if (strcmp(encounter_name, "inferno") == 0) {
             CollisionMap* cmap = collision_map_load("data/inferno.cmap");
             if (cmap) {
+                edef->put_ptr(env->encounter_state, "collision_map", cmap);
+                edef->put_int(env->encounter_state, "world_offset_x", 2246);
+                edef->put_int(env->encounter_state, "world_offset_y", 5315);
                 env->collision_map = cmap;
-                fprintf(stderr, "inferno collision map: %d regions\n", cmap->count);
+                fprintf(stderr, "inferno collision map: %d regions, offset (2246, 5315)\n",
+                        cmap->count);
             }
         }
 

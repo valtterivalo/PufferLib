@@ -35,6 +35,7 @@
 #include "../osrs_encounter.h"
 #include "../osrs_pvp_types.h"
 #include "../osrs_pvp_items.h"
+#include "../osrs_combat_shared.h"
 #include "../osrs_pvp_collision.h"
 #include "../osrs_pvp_pathfinding.h"
 #include "../data/npc_models.h"
@@ -499,34 +500,14 @@ static const uint8_t ZUL_RANGE_LOADOUT[ZUL_NUM_GEAR_TIERS][NUM_GEAR_SLOTS] = {
       ITEM_ZARYTE_VAMBRACES, ITEM_AVERNIC_TREADS, ITEM_RING_OF_SUFFERING_RI },
 };
 
-/* helper: populate equipped[] from a loadout table (uses Player directly
-   since this is defined before ZulrahState) */
-static void zul_equip_loadout_player(Player* p, const uint8_t loadout[NUM_GEAR_SLOTS]) {
-    memcpy(p->equipped, loadout, NUM_GEAR_SLOTS);
-}
-
-/** Populate player inventory[][] with all items from both mage and range loadouts.
-    The GUI filters out currently equipped items, showing only swap gear. */
+/* gear switching uses shared helpers from osrs_encounter.h:
+   encounter_apply_loadout() and encounter_populate_inventory(). */
 static void zul_populate_player_inventory(Player* p, int gear_tier) {
-    memset(p->inventory, ITEM_NONE, sizeof(p->inventory));
-    memset(p->num_items_in_slot, 0, sizeof(p->num_items_in_slot));
-
-    const uint8_t* mage = ZUL_MAGE_LOADOUT[gear_tier];
-    const uint8_t* range = ZUL_RANGE_LOADOUT[gear_tier];
-
-    /* collect unique items from both loadouts into per-slot inventories */
-    for (int s = 0; s < NUM_GEAR_SLOTS; s++) {
-        int n = 0;
-        /* add mage item for this slot */
-        if (mage[s] != ITEM_NONE && n < MAX_ITEMS_PER_SLOT) {
-            p->inventory[s][n++] = mage[s];
-        }
-        /* add range item if different */
-        if (range[s] != ITEM_NONE && range[s] != mage[s] && n < MAX_ITEMS_PER_SLOT) {
-            p->inventory[s][n++] = range[s];
-        }
-        p->num_items_in_slot[s] = n;
-    }
+    const uint8_t* loadouts[] = {
+        ZUL_MAGE_LOADOUT[gear_tier],
+        ZUL_RANGE_LOADOUT[gear_tier],
+    };
+    encounter_populate_inventory(p, loadouts, 2, NULL);
 }
 
 /* snakeling spawn positions (shifted +6x for new base offset 2254,3060) */
@@ -838,11 +819,8 @@ static void zul_try_envenom(ZulrahState* s) {
 /* ======================================================================== */
 
 /* OSRS accuracy formula: if att > def: 1 - (def+2)/(2*(att+1)), else att/(2*(def+1)) */
-static float zul_hit_chance(int att_roll, int def_roll) {
-    if (att_roll > def_roll)
-        return 1.0f - ((float)(def_roll + 2) / (2.0f * (att_roll + 1)));
-    return (float)att_roll / (2.0f * (def_roll + 1));
-}
+/* hit chance: use shared OSRS accuracy formula from osrs_combat_shared.h */
+#define zul_hit_chance osrs_hit_chance
 
 /* confliction gauntlets double accuracy roll (same formula as osmumten's fang).
  * on a primed magic attack, accuracy is rolled twice — hitting if either roll succeeds. */
@@ -1810,14 +1788,10 @@ static void zul_process_potion(ZulrahState* s, int a) {
 static void zul_process_gear(ZulrahState* s, int atk) {
     if (atk == ZUL_ATK_MAGE && s->player_gear != ZUL_GEAR_MAGE) {
         s->player_gear = ZUL_GEAR_MAGE;
-        s->player.current_gear = GEAR_MAGE;
-        s->player.visible_gear = GEAR_MAGE;
-        zul_equip_loadout_player(&s->player, ZUL_MAGE_LOADOUT[s->gear_tier]);
+        encounter_apply_loadout(&s->player, ZUL_MAGE_LOADOUT[s->gear_tier], GEAR_MAGE);
     } else if (atk == ZUL_ATK_RANGE && s->player_gear != ZUL_GEAR_RANGE) {
         s->player_gear = ZUL_GEAR_RANGE;
-        s->player.current_gear = GEAR_RANGED;
-        s->player.visible_gear = GEAR_RANGED;
-        zul_equip_loadout_player(&s->player, ZUL_RANGE_LOADOUT[s->gear_tier]);
+        encounter_apply_loadout(&s->player, ZUL_RANGE_LOADOUT[s->gear_tier], GEAR_RANGED);
     }
 }
 
@@ -2081,9 +2055,7 @@ static void zul_reset(EncounterState* state, uint32_t seed) {
         s->thrall_attack_timer = ZUL_THRALL_SPEED;
     }
     s->player_gear = ZUL_GEAR_MAGE;
-    s->player.current_gear = GEAR_MAGE;
-    s->player.visible_gear = GEAR_MAGE;
-    zul_equip_loadout_player(&s->player, ZUL_MAGE_LOADOUT[s->gear_tier]);
+    encounter_apply_loadout(&s->player, ZUL_MAGE_LOADOUT[s->gear_tier], GEAR_MAGE);
     zul_populate_player_inventory(&s->player, s->gear_tier);
     s->player.recoil_charges =
         zul_has_recoil_effect(&s->player) ? RECOIL_MAX_CHARGES : 0;

@@ -126,6 +126,69 @@ static inline void render_entity_from_player(const Player* p, RenderEntity* out)
 }
 
 /* ======================================================================== */
+/* shared per-tick flag clearing for encounters                              */
+/* ======================================================================== */
+
+/** clear all per-tick animation/event flags on a player.
+    call at the start of each encounter tick, then set flags as events happen.
+    the renderer reads these once per frame via RenderEntity. */
+static inline void encounter_clear_tick_flags(Player* p) {
+    p->attack_style_this_tick = ATTACK_STYLE_NONE;
+    p->magic_type_this_tick = 0;
+    p->hit_landed_this_tick = 0;
+    p->hit_damage = 0;
+    p->hit_was_successful = 0;
+    p->cast_veng_this_tick = 0;
+    p->ate_food_this_tick = 0;
+    p->ate_karambwan_this_tick = 0;
+    p->used_special_this_tick = 0;
+}
+
+/* ======================================================================== */
+/* shared gear switching helpers for encounters                              */
+/* ======================================================================== */
+
+/** apply a full static loadout to player equipment and set gear state.
+    used by Zulrah, Inferno, and future boss encounters with fixed loadouts. */
+static inline void encounter_apply_loadout(
+    Player* p, const uint8_t loadout[NUM_GEAR_SLOTS], GearSet gear_set
+) {
+    memcpy(p->equipped, loadout, NUM_GEAR_SLOTS);
+    p->current_gear = gear_set;
+    p->visible_gear = gear_set;
+}
+
+/** populate player inventory from multiple loadouts (deduped per slot).
+    extra_items is an optional overlay array (e.g. justiciar for tank), NULL to skip.
+    the GUI reads p->inventory[][] to display available gear switches. */
+static void encounter_populate_inventory(
+    Player* p,
+    const uint8_t* const* loadouts, int num_loadouts,
+    const uint8_t extra_items[NUM_GEAR_SLOTS]
+) {
+    memset(p->inventory, 255 /* ITEM_NONE */, sizeof(p->inventory));
+    memset(p->num_items_in_slot, 0, sizeof(p->num_items_in_slot));
+
+    for (int s = 0; s < NUM_GEAR_SLOTS; s++) {
+        int n = 0;
+        for (int l = 0; l < num_loadouts && n < MAX_ITEMS_PER_SLOT; l++) {
+            uint8_t item = loadouts[l][s];
+            if (item == 255 /* ITEM_NONE */) continue;
+            int dup = 0;
+            for (int j = 0; j < n; j++) { if (p->inventory[s][j] == item) { dup = 1; break; } }
+            if (dup) continue;
+            p->inventory[s][n++] = item;
+        }
+        if (extra_items && extra_items[s] != 255 /* ITEM_NONE */ && n < MAX_ITEMS_PER_SLOT) {
+            int dup = 0;
+            for (int j = 0; j < n; j++) { if (p->inventory[s][j] == extra_items[s]) { dup = 1; break; } }
+            if (!dup) p->inventory[s][n++] = extra_items[s];
+        }
+        p->num_items_in_slot[s] = n;
+    }
+}
+
+/* ======================================================================== */
 /* encounter definition (vtable)                                             */
 /* ======================================================================== */
 
