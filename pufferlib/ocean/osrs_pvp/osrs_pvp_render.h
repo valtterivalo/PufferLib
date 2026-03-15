@@ -1214,7 +1214,10 @@ static void render_post_tick(RenderClient* rc, OsrsPvp* env) {
         }
     }
 
-    /* spawn visual effects based on this tick's events */
+    /* spawn visual effects based on this tick's events.
+     * skip for encounters with more than 2 entities — the effect system
+     * assumes 2-entity PvP layout (attacker/defender). inferno effects TODO. */
+    if (rc->entity_count > 2) goto skip_effects;
     int ct = rc->effect_client_tick_counter;
     for (int i = 0; i < rc->entity_count; i++) {
         RenderEntity* p = &rc->entities[i];
@@ -1337,6 +1340,7 @@ static void render_post_tick(RenderClient* rc, OsrsPvp* env) {
             }
         }
     }
+skip_effects: (void)0;
 }
 
 /**
