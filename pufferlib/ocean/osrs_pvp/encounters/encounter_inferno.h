@@ -1475,26 +1475,36 @@ static void inf_write_mask(EncounterState* state, float* mask) {
 
     /* HEAD_EAT (3): none, food, karambwan */
     mask[offset++] = 1.0f;  /* none always valid */
-    /* food: mask out if no food left, eat timer active, or would waste (HP >= max) */
-    mask[offset++] = (s->player_food_count > 0 &&
-                      s->player_food_timer == 0 &&
-                      s->player.current_hitpoints < s->player.base_hitpoints)
-                     ? 1.0f : 0.0f;
-    /* karambwan: same logic (reusing food slot 2 for simplicity — no separate karambwan tracking yet) */
-    mask[offset++] = 0.0f;  /* karambwan not implemented separately, always masked */
+    /* food: mask if no food, eat timer active, or would waste more than half the heal */
+    {
+        int hp_missing = s->player.base_hitpoints - s->player.current_hitpoints;
+        mask[offset++] = (s->player_food_count > 0 &&
+                          s->player_food_timer == 0 &&
+                          hp_missing >= INF_FOOD_HEAL / 2)
+                         ? 1.0f : 0.0f;
+    }
+    /* karambwan not implemented separately, always masked */
+    mask[offset++] = 0.0f;
 
     /* HEAD_POTION (3): none, restore, brew */
     mask[offset++] = 1.0f;  /* none always valid */
-    /* restore: mask out if no doses, timer active, or prayer is full */
-    mask[offset++] = (s->player_restore_doses > 0 &&
-                      s->player_potion_timer == 0 &&
-                      s->player.current_prayer < s->player.base_prayer)
-                     ? 1.0f : 0.0f;
-    /* brew: mask out if no doses, timer active, or HP already at brew cap (base+16) */
-    mask[offset++] = (s->player_brew_doses > 0 &&
-                      s->player_potion_timer == 0 &&
-                      s->player.current_hitpoints < s->player.base_hitpoints + 16)
-                     ? 1.0f : 0.0f;
+    /* restore: mask if no doses, timer active, or would waste more than half */
+    {
+        int pray_missing = s->player.base_prayer - s->player.current_prayer;
+        mask[offset++] = (s->player_restore_doses > 0 &&
+                          s->player_potion_timer == 0 &&
+                          pray_missing >= INF_RESTORE_PRAY / 2)
+                         ? 1.0f : 0.0f;
+    }
+    /* brew: mask if no doses, timer active, or would waste more than half.
+       brew cap is base+16, so missing = (base+16) - current */
+    {
+        int brew_hp_room = (s->player.base_hitpoints + 16) - s->player.current_hitpoints;
+        mask[offset++] = (s->player_brew_doses > 0 &&
+                          s->player_potion_timer == 0 &&
+                          brew_hp_room >= INF_BREW_HEAL / 2)
+                         ? 1.0f : 0.0f;
+    }
 
     /* HEAD_SPEC (2): none, spec */
     mask[offset++] = 1.0f;  /* none always valid */
