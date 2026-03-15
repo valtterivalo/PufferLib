@@ -420,14 +420,19 @@ static const ZulGearTierStats ZUL_GEAR_TIERS[ZUL_NUM_GEAR_TIERS] = {
         .mage_def_melee = 20,   .mage_def_ranged = 25,  .mage_def_magic = 65,
         .range_def_melee = 60,  .range_def_ranged = 70,  .range_def_magic = -10,
     },
-    /* tier 1 (mid): sang staff + ahrim's + blessed d'hide + blowpipe, rigour/augury
+    /* tier 1 (mid): sang staff + ahrim's + bowfa + crystal armor, rigour/augury
        eff mage: floor(112*1.25)+8 = 148, eff range: floor(112*1.20)+8 = 142
        magic_def_eff: floor(0.7*(112+8) + 0.3*(floor(99*1.25)+8))
-                    = floor(0.7*120 + 0.3*131) = floor(84+39.3) = 123 */
+                    = floor(0.7*120 + 0.3*131) = floor(84+39.3) = 123
+       sang max: floor(112/3)-1 = 36, * 1.15 (occult+tormented) = floor(41.4) = 41
+       bowfa: +128 att, +106 str. crystal set: +30% acc (applied in code), +15% dmg.
+       range att: 128+9+31+18+15+8+12+7 = 228. range str: 106+5+2 = 113.
+       base range max: floor(0.5 + 142*(113+64)/640) = 39, *1.15 = floor(44.85) = 44
+       bp_att/max for blowpipe spec (amethyst darts) */
     {
-        .mage_att_bonus = 105,  .range_att_bonus = 80,  .bp_att_bonus = 80,
-        .mage_max_hit = 35,     .range_max_hit = 35,    .bp_max_hit = 28,
-        .eff_mage_level = 148,  .eff_range_level = 142, .range_speed = 3,
+        .mage_att_bonus = 105,  .range_att_bonus = 228, .bp_att_bonus = 80,
+        .mage_max_hit = 41,     .range_max_hit = 44,    .bp_max_hit = 28,
+        .eff_mage_level = 148,  .eff_range_level = 142, .range_speed = 4,
         .def_level = 99,        .magic_def_eff = 123,
         .mage_def_melee = 40,   .mage_def_ranged = 50,  .mage_def_magic = 95,
         .range_def_melee = 75,  .range_def_ranged = 95,  .range_def_magic = 5,
@@ -1000,6 +1005,9 @@ static int zul_player_attack_hits(ZulrahState* s, int is_mage) {
     int eff_level = is_mage ? t->eff_mage_level : t->eff_range_level;
     int att_bonus = is_mage ? t->mage_att_bonus : t->range_att_bonus;
     int att_roll = eff_level * (att_bonus + 64);
+    /* crystal armor set bonus: +30% ranged accuracy with bowfa (tier 1 only) */
+    if (!is_mage && s->gear_tier == 1)
+        att_roll = att_roll * 130 / 100;
 
     int def_magic = 0, def_ranged = 0;
     switch (s->current_form) {
@@ -1047,6 +1055,13 @@ static void zul_player_attack(ZulrahState* s, int is_mage) {
         s->damage_dealt_this_tick += dmg;
         s->total_damage_dealt += dmg;
         if (s->zulrah.current_hitpoints < 0) s->zulrah.current_hitpoints = 0;
+        /* sang staff passive (tier 1 mage): 1/6 chance to heal 50% of damage dealt */
+        if (is_mage && s->gear_tier == 1 && dmg > 0 && zul_rand_int(s, 6) == 0) {
+            int heal = dmg / 2;
+            s->player.current_hitpoints += heal;
+            if (s->player.current_hitpoints > s->player.base_hitpoints)
+                s->player.current_hitpoints = s->player.base_hitpoints;
+        }
     }
     /* confliction gauntlets: prime on magic miss, clear on magic hit */
     if (is_mage && s->gear_tier == 2) {
