@@ -143,6 +143,14 @@ static const int ZUL_POSITIONS[ZUL_NUM_POSITIONS][2] = {
 #define ZUL_SPEC_COST            50     /* 50% special energy */
 #define ZUL_SPEC_HEAL_PCT        50     /* heal 50% of damage dealt */
 
+/* thrall: greater ghost (arceuus spellbook, always hits, ignores armour).
+ * max hit 3, attack speed 4 ticks. duration = 0.6 * magic_level seconds
+ * = magic_level ticks (at 99 magic = 99 ticks ≈ 59.4s, then resummon). */
+#define ZUL_THRALL_MAX_HIT       3
+#define ZUL_THRALL_SPEED         4      /* attacks every 4 ticks */
+#define ZUL_THRALL_DURATION      99     /* ticks (0.6 * 99 magic = 59.4s) */
+#define ZUL_THRALL_COOLDOWN      17     /* 10 second resummon cooldown */
+
 /* player starting stats */
 #define ZUL_PLAYER_HP         99
 #define ZUL_PLAYER_PRAYER     77
@@ -637,6 +645,13 @@ typedef struct {
     /* confliction gauntlets: primed after a magic miss, next magic attack
      * rolls accuracy twice (like osmumten's fang). cleared on next magic attack. */
     int confliction_primed;
+
+    /* thrall (arceuus greater ghost): auto-attacks zulrah every 4 ticks,
+     * always hits 0-3, ignores armour. auto-resummons after expiry + cooldown. */
+    int thrall_active;
+    int thrall_attack_timer;
+    int thrall_duration_remaining;
+    int thrall_cooldown;
 
     /* collision */
     void* collision_map;      /* CollisionMap* for walkability checks */
@@ -1463,6 +1478,42 @@ static void zul_venom_tick(ZulrahState* s) {
 }
 
 /* ======================================================================== */
+/* thrall: arceuus greater ghost                                             */
+/* ======================================================================== */
+
+static void zul_thrall_tick(ZulrahState* s) {
+    if (!s->thrall_active) {
+        /* resummon after cooldown */
+        if (s->thrall_cooldown > 0) { s->thrall_cooldown--; return; }
+        s->thrall_active = 1;
+        s->thrall_duration_remaining = ZUL_THRALL_DURATION;
+        s->thrall_attack_timer = 1;  /* attacks on next tick */
+        return;
+    }
+
+    s->thrall_duration_remaining--;
+    if (s->thrall_duration_remaining <= 0) {
+        /* despawn + cooldown before resummon */
+        s->thrall_active = 0;
+        s->thrall_cooldown = ZUL_THRALL_COOLDOWN;
+        return;
+    }
+
+    /* attack: always hits, ignores armour, only when zulrah is targetable */
+    if (s->thrall_attack_timer > 0) { s->thrall_attack_timer--; return; }
+    s->thrall_attack_timer = ZUL_THRALL_SPEED;
+
+    if (!s->zulrah_visible || s->is_diving) return;
+
+    int dmg = zul_rand_int(s, ZUL_THRALL_MAX_HIT + 1);
+    dmg = zul_cap_damage(s, dmg);
+    s->zulrah.current_hitpoints -= dmg;
+    if (s->zulrah.current_hitpoints < 0) s->zulrah.current_hitpoints = 0;
+    s->damage_dealt_this_tick += dmg;
+    s->total_damage_dealt += dmg;
+}
+
+/* ======================================================================== */
 /* phase machine: execute current action in rotation table                   */
 /* ======================================================================== */
 
@@ -2023,6 +2074,10 @@ static void zul_reset(EncounterState* state, uint32_t seed) {
     s->player_restore_doses = ZUL_PLAYER_RESTORE_DOSES;
     s->player_special_energy = 100;
     s->antivenom_doses = ZUL_ANTIVENOM_DOSES;
+    /* thrall: summoned before fight starts */
+    s->thrall_active = 1;
+    s->thrall_duration_remaining = ZUL_THRALL_DURATION;
+    s->thrall_attack_timer = ZUL_THRALL_SPEED;
     s->player_gear = ZUL_GEAR_MAGE;
     s->player.current_gear = GEAR_MAGE;
     s->player.visible_gear = GEAR_MAGE;
@@ -2123,6 +2178,9 @@ static void zul_step(EncounterState* state, const int* actions) {
 
     /* snakelings */
     zul_snakeling_tick(s);
+
+    /* thrall (arceuus greater ghost) */
+    zul_thrall_tick(s);
 
     /* venom */
     zul_venom_tick(s);
