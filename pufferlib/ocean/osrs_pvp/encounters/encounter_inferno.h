@@ -430,6 +430,9 @@ typedef struct {
     int player_food_timer;
     int player_potion_timer;
 
+    /* nibbler pillar target: random pillar chosen per wave, all nibblers attack it */
+    int nibbler_target_pillar;
+
     /* spawn position shuffle buffer */
     int spawn_order[INF_NUM_SPAWN_POS];
 
@@ -634,6 +637,17 @@ static void inf_spawn_wave(InfernoState* s) {
     /* shuffle spawn positions */
     inf_shuffle_spawns(s);
 
+    /* pick random active pillar for nibblers this wave */
+    {
+        int active_pillars[INF_NUM_PILLARS];
+        int num_active = 0;
+        for (int p = 0; p < INF_NUM_PILLARS; p++) {
+            if (s->pillars[p].active) active_pillars[num_active++] = p;
+        }
+        s->nibbler_target_pillar = (num_active > 0)
+            ? active_pillars[inf_rand_int(s, num_active)] : -1;
+    }
+
     /* zuk wave (wave 69, index 68) is special */
     if (s->wave == 68) {
         /* spawn Zuk — fixed position, cannot move */
@@ -717,23 +731,29 @@ static void inf_npc_move(InfernoState* s, int idx) {
     const InfNPCStats* stats = &INF_NPC_STATS[npc->type];
     if (!stats->can_move) return;
 
-    /* nibblers target nearest active pillar */
+    /* nibblers target the wave's randomly assigned pillar (all nibblers
+     * in a wave attack the same pillar, chosen at wave spawn time) */
     int tx, ty;
     if (npc->type == INF_NPC_NIBBLER) {
-        int best = -1, best_dist = 999999;
-        for (int p = 0; p < INF_NUM_PILLARS; p++) {
-            if (!s->pillars[p].active) continue;
-            int dx = s->pillars[p].x - npc->x;
-            int dy = s->pillars[p].y - npc->y;
-            int dist = dx*dx + dy*dy;
-            if (dist < best_dist) { best_dist = dist; best = p; }
-        }
-        if (best >= 0) {
-            tx = s->pillars[best].x;
-            ty = s->pillars[best].y;
+        int p = s->nibbler_target_pillar;
+        if (p >= 0 && p < INF_NUM_PILLARS && s->pillars[p].active) {
+            tx = s->pillars[p].x;
+            ty = s->pillars[p].y;
         } else {
-            tx = s->player.x;
-            ty = s->player.y;
+            /* target pillar destroyed — pick any remaining one */
+            int found = 0;
+            for (int pp = 0; pp < INF_NUM_PILLARS; pp++) {
+                if (s->pillars[pp].active) {
+                    tx = s->pillars[pp].x;
+                    ty = s->pillars[pp].y;
+                    found = 1;
+                    break;
+                }
+            }
+            if (!found) {
+                tx = s->player.x;
+                ty = s->player.y;
+            }
         }
     } else {
         tx = s->player.x;
