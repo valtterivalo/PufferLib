@@ -1367,10 +1367,11 @@ static float inf_compute_reward(InfernoState* s) {
     if (s->ticks_without_action > 10)
         r -= 0.005f;
 
-    /* pillar destroyed: big penalty. losing pillars is catastrophic in the
-     * inferno — the agent MUST prioritize killing nibblers to protect them. */
+    /* pillar destroyed: losing all 3 pillars costs -0.8 total (~0.27 each).
+     * not worse than dying (-1.0) since pillars aren't strictly required,
+     * but losing them makes survival much harder. */
     if (s->pillar_lost_this_tick)
-        r -= 0.5f;
+        r -= 0.27f;
 
     /* accumulate diagnostic stats */
     s->total_damage_dealt += s->damage_dealt_this_tick;
