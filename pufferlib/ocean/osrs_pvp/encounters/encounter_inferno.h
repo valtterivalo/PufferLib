@@ -59,7 +59,7 @@ static const int INF_SPAWN_POS[INF_NUM_SPAWN_POS][2] = {
 #define INF_NIBBLER_SPAWN_X 20
 #define INF_NIBBLER_SPAWN_Y 25
 
-#define INF_MAX_TICKS     6000  /* 60 minutes at 0.6s/tick */
+#define INF_MAX_TICKS     3000   /* 30 min at 0.6s/tick. increase for later waves. */
 #define INF_NUM_WAVES     69
 
 /* ======================================================================== */
@@ -411,6 +411,12 @@ typedef struct {
     int prayer_correct_this_tick;
     int wave_completed_this_tick;
     int pillar_lost_this_tick;
+
+    /* cumulative stats for diagnostics */
+    float total_damage_dealt;
+    float total_damage_received;
+    int total_waves_cleared;
+    int ticks_without_action;  /* consecutive ticks with no attack or movement */
 
     /* player combat state */
     OverheadPrayer active_prayer;
@@ -1320,15 +1326,26 @@ static float inf_compute_reward(InfernoState* s) {
     if (s->episode_over)
         return (s->winner == 0) ? 1.0f : -1.0f;
 
-    /* wave completion: small reward that scales with wave number.
-     * early waves are easy and worth less, later waves worth more.
-     * wave 1 = 0.001, wave 69 = 0.069. total if all waves cleared ≈ 2.4.
-     * kept small relative to terminal ±1.0 so the agent doesn't
-     * farm early waves instead of pushing to zuk. */
-    if (s->wave_completed_this_tick)
-        return 0.001f * (float)(s->wave + 1);
+    float r = 0.0f;
 
-    return 0.0f;
+    /* wave completion: scales with wave number.
+     * wave 1 = 0.001, wave 69 = 0.069. total ≈ 2.4 if all cleared. */
+    if (s->wave_completed_this_tick) {
+        r += 0.001f * (float)(s->wave + 1);
+        s->total_waves_cleared = s->wave + 1;
+    }
+
+    /* damage dealt: tiny reward to bootstrap learning.
+     * without this, random actions never discover wave completion reward
+     * because killing requires both targeting + attacking on correct ticks. */
+    if (s->damage_dealt_this_tick > 0.0f)
+        r += 0.0005f * (s->damage_dealt_this_tick / 50.0f);
+
+    /* accumulate diagnostic stats */
+    s->total_damage_dealt += s->damage_dealt_this_tick;
+    s->total_damage_received += s->damage_received_this_tick;
+
+    return r;
 }
 
 /* ======================================================================== */

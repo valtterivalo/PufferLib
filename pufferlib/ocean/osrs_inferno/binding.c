@@ -59,6 +59,8 @@ void c_step(Env* env) {
         env->log.episode_return += s->reward;
         env->log.episode_length += (float)s->tick;
         env->log.wins += (s->winner == 0) ? 1.0f : 0.0f;
+        env->log.damage_dealt += s->total_damage_dealt;
+        env->log.damage_received += s->total_damage_received;
         env->log.n += 1.0f;
 
         ENCOUNTER_INFERNO.reset(env->enc_state, 0);
@@ -105,6 +107,8 @@ void my_init(Env* env, Dict* kwargs) {
 
 void my_log(Log* log, Dict* out) {
     dict_set(out, "episode_return", log->episode_return);
+    dict_set(out, "damage_dealt", log->damage_dealt);
+    dict_set(out, "damage_received", log->damage_received);
     dict_set(out, "episode_length", log->episode_length);
     dict_set(out, "wins", log->wins);
 
