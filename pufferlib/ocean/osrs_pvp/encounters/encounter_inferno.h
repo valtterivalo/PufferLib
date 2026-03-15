@@ -1316,22 +1316,19 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
 /* ======================================================================== */
 
 static float inf_compute_reward(InfernoState* s) {
+    /* terminal: +1 zuk kill (win), -1 death (fail) */
     if (s->episode_over)
         return (s->winner == 0) ? 1.0f : -1.0f;
 
-    float r = 0.0f;
-    if (s->damage_dealt_this_tick > 0)
-        r += 0.01f * (s->damage_dealt_this_tick / 50.0f);
-    if (s->damage_received_this_tick > 0)
-        r -= 0.02f * (s->damage_received_this_tick / 50.0f);
-    if (s->prayer_correct_this_tick)
-        r += 0.03f;
+    /* wave completion: small reward that scales with wave number.
+     * early waves are easy and worth less, later waves worth more.
+     * wave 1 = 0.001, wave 69 = 0.069. total if all waves cleared ≈ 2.4.
+     * kept small relative to terminal ±1.0 so the agent doesn't
+     * farm early waves instead of pushing to zuk. */
     if (s->wave_completed_this_tick)
-        r += 0.05f;
-    if (s->pillar_lost_this_tick)
-        r -= 0.1f;
+        return 0.001f * (float)(s->wave + 1);
 
-    return r;
+    return 0.0f;
 }
 
 /* ======================================================================== */
