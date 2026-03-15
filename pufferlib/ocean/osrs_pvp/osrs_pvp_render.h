@@ -1614,14 +1614,23 @@ static void render_draw_grid(RenderClient* rc, OsrsPvp* env) {
                     DrawRectangle(sx + ts - 2, sy, 2, ts, COLOR_WALL_LINE);
             }
 
-            /* encounter arena: color platform vs water tiles */
+            /* encounter arena: color tiles based on encounter type */
             if (env->encounter_def && cmap == NULL) {
-                int on_plat = (dx >= ZUL_PLATFORM_MIN && dx <= ZUL_PLATFORM_MAX &&
-                               dy >= ZUL_PLATFORM_MIN && dy <= ZUL_PLATFORM_MAX);
-                if (on_plat)
-                    DrawRectangle(sx, sy, ts, ts, CLITERAL(Color){ 30, 60, 30, 255 });
-                else
-                    DrawRectangle(sx, sy, ts, ts, CLITERAL(Color){ 20, 30, 50, 255 });
+                if (rc->npc_model_cache) {
+                    /* inferno: dark cave floor */
+                    int shade = 18 + ((dx * 7 + dy * 13) % 10);
+                    DrawRectangle(sx, sy, ts, ts, CLITERAL(Color){
+                        (unsigned char)(shade + 3), (unsigned char)(shade - 1),
+                        (unsigned char)(shade - 3), 255 });
+                } else {
+                    /* zulrah: platform vs water */
+                    int on_plat = (dx >= ZUL_PLATFORM_MIN && dx <= ZUL_PLATFORM_MAX &&
+                                   dy >= ZUL_PLATFORM_MIN && dy <= ZUL_PLATFORM_MAX);
+                    if (on_plat)
+                        DrawRectangle(sx, sy, ts, ts, CLITERAL(Color){ 30, 60, 30, 255 });
+                    else
+                        DrawRectangle(sx, sy, ts, ts, CLITERAL(Color){ 20, 30, 50, 255 });
+                }
             }
 
             /* grid lines */
@@ -1986,19 +1995,51 @@ static void render_draw_header(RenderClient* rc, OsrsPvp* env) {
 /* drawing: NPC/boss info panel (below GUI tabs)                             */
 /* ======================================================================== */
 
+/** Look up inferno NPC name from npc_def_id. returns NULL if not an inferno NPC. */
+static const char* inferno_npc_name(int npc_def_id) {
+    switch (npc_def_id) {
+        case 7691: return "Jal-Nib";
+        case 7692: return "Jal-MejRah";
+        case 7693: return "Jal-Ak";
+        case 7694: return "Jal-AkRek-Ket";
+        case 7695: return "Jal-AkRek-Xil";
+        case 7696: return "Jal-AkRek-Mej";
+        case 7697: return "Jal-ImKot";
+        case 7698: return "Jal-Xil";
+        case 7699: return "Jal-Zek";
+        case 7700: return "JalTok-Jad";
+        case 7701: return "Yt-HurKot";
+        case 7706: return "TzKal-Zuk";
+        case 7707: return "Ancestral Glyph";
+        case 7708: return "Jal-MejJak";
+        default:   return NULL;
+    }
+}
+
 static void render_draw_panel_npc(int x, int y, RenderEntity* p, OsrsPvp* env) {
     int line_h = 14;
-    const char* form_names[] = { "GREEN", "RED", "BLUE" };
 
-    /* determine form name from npc_def_id */
-    const char* form = "NPC";
-    Color form_color = COLOR_TEXT;
-    if (p->npc_def_id == 2042) { form = "GREEN"; form_color = GREEN; }
-    else if (p->npc_def_id == 2043) { form = "RED"; form_color = RED; }
-    else if (p->npc_def_id == 2044) { form = "BLUE"; form_color = CLITERAL(Color){ 80, 140, 255, 255 }; }
-    (void)form_names;
+    /* determine NPC display name and color from npc_def_id */
+    const char* npc_name = NULL;
+    Color name_color = COLOR_TEXT;
 
-    DrawText(TextFormat("Zulrah [%s]", form), x, y, 14, form_color);
+    /* zulrah forms */
+    if (p->npc_def_id == 2042)      { npc_name = "Zulrah [GREEN]"; name_color = GREEN; }
+    else if (p->npc_def_id == 2043) { npc_name = "Zulrah [RED]"; name_color = RED; }
+    else if (p->npc_def_id == 2044) { npc_name = "Zulrah [BLUE]"; name_color = CLITERAL(Color){ 80, 140, 255, 255 }; }
+
+    /* inferno NPCs */
+    if (!npc_name) {
+        const char* inf_name = inferno_npc_name(p->npc_def_id);
+        if (inf_name) {
+            npc_name = inf_name;
+            name_color = CLITERAL(Color){ 255, 120, 50, 255 };  /* inferno orange */
+        }
+    }
+
+    if (!npc_name) npc_name = TextFormat("NPC %d", p->npc_def_id);
+
+    DrawText(npc_name, x, y, 14, name_color);
     y += line_h + 4;
 
     DrawText(TextFormat("HP:     %d / %d", p->current_hitpoints, p->base_hitpoints), x, y, 10, COLOR_TEXT);
@@ -2006,34 +2047,55 @@ static void render_draw_panel_npc(int x, int y, RenderEntity* p, OsrsPvp* env) {
     DrawText(TextFormat("Pos:    (%d, %d)", p->x, p->y), x, y, 10, COLOR_TEXT_DIM);
     y += line_h;
 
-    /* zulrah-specific state from encounter */
-    if (env->encounter_state) {
-        ZulrahState* zs = (ZulrahState*)env->encounter_state;
-        DrawText(TextFormat("Visible: %s", zs->zulrah_visible ? "yes" : "no"), x, y, 10, COLOR_TEXT_DIM);
-        y += line_h;
-        DrawText(TextFormat("Phase: %d  Surface: %d  %s", zs->phase_timer, zs->surface_timer,
-            zs->is_diving ? "DIVING" : ""), x, y, 10, zs->is_diving ? COLOR_FREEZE : COLOR_TEXT_DIM);
-        y += line_h;
-        const char* rot_names[] = { "Magma A", "Magma B", "Serp", "Tanz" };
-        const char* rot_name = (zs->rotation_index >= 0 && zs->rotation_index < 4)
-            ? rot_names[zs->rotation_index] : "???";
-        DrawText(TextFormat("Rotation: %s (phase %d/%d)", rot_name,
-            zs->phase_index + 1,
-            (zs->rotation_index >= 0 && zs->rotation_index < 4)
-                ? ZUL_ROT_LENGTHS[zs->rotation_index] : 0),
-            x, y, 10, COLOR_TEXT);
-        y += line_h;
-        DrawText(TextFormat("Action:  %d/%d (timer %d)", zs->action_index,
-            zs->action_progress, zs->action_timer), x, y, 10, COLOR_TEXT_DIM);
-        y += line_h;
+    /* encounter-specific state overlay */
+    if (env->encounter_def && env->encounter_state) {
+        const EncounterDef* edef = (const EncounterDef*)env->encounter_def;
 
-        /* count active snakelings and clouds */
-        int snakes = 0, clouds = 0;
-        for (int i = 0; i < ZUL_MAX_SNAKELINGS; i++)
-            if (zs->snakelings[i].active) snakes++;
-        for (int i = 0; i < ZUL_MAX_CLOUDS; i++)
-            if (zs->clouds[i].active) clouds++;
-        DrawText(TextFormat("Snakelings: %d  Clouds: %d", snakes, clouds), x, y, 10, COLOR_TEXT_DIM);
+        if (strcmp(edef->name, "zulrah") == 0) {
+            /* zulrah-specific state */
+            ZulrahState* zs = (ZulrahState*)env->encounter_state;
+            DrawText(TextFormat("Visible: %s", zs->zulrah_visible ? "yes" : "no"), x, y, 10, COLOR_TEXT_DIM);
+            y += line_h;
+            DrawText(TextFormat("Phase: %d  Surface: %d  %s", zs->phase_timer, zs->surface_timer,
+                zs->is_diving ? "DIVING" : ""), x, y, 10, zs->is_diving ? COLOR_FREEZE : COLOR_TEXT_DIM);
+            y += line_h;
+            const char* rot_names[] = { "Magma A", "Magma B", "Serp", "Tanz" };
+            const char* rot_name = (zs->rotation_index >= 0 && zs->rotation_index < 4)
+                ? rot_names[zs->rotation_index] : "???";
+            DrawText(TextFormat("Rotation: %s (phase %d/%d)", rot_name,
+                zs->phase_index + 1,
+                (zs->rotation_index >= 0 && zs->rotation_index < 4)
+                    ? ZUL_ROT_LENGTHS[zs->rotation_index] : 0),
+                x, y, 10, COLOR_TEXT);
+            y += line_h;
+            DrawText(TextFormat("Action:  %d/%d (timer %d)", zs->action_index,
+                zs->action_progress, zs->action_timer), x, y, 10, COLOR_TEXT_DIM);
+            y += line_h;
+
+            int snakes = 0, clouds = 0;
+            for (int i = 0; i < ZUL_MAX_SNAKELINGS; i++)
+                if (zs->snakelings[i].active) snakes++;
+            for (int i = 0; i < ZUL_MAX_CLOUDS; i++)
+                if (zs->clouds[i].active) clouds++;
+            DrawText(TextFormat("Snakelings: %d  Clouds: %d", snakes, clouds), x, y, 10, COLOR_TEXT_DIM);
+
+        } else if (strcmp(edef->name, "inferno") == 0) {
+            /* inferno-specific state */
+            InfernoState* is = (InfernoState*)env->encounter_state;
+            DrawText(TextFormat("Wave:   %d / %d", is->wave + 1, INF_NUM_WAVES), x, y, 10, COLOR_TEXT);
+            y += line_h;
+
+            int active_npcs = 0;
+            for (int i = 0; i < INF_MAX_NPCS; i++)
+                if (is->npcs[i].active) active_npcs++;
+            DrawText(TextFormat("NPCs:   %d active", active_npcs), x, y, 10, COLOR_TEXT_DIM);
+            y += line_h;
+
+            int pillars_alive = 0;
+            for (int i = 0; i < INF_NUM_PILLARS; i++)
+                if (is->pillars[i].active) pillars_alive++;
+            DrawText(TextFormat("Pillars: %d / %d", pillars_alive, INF_NUM_PILLARS), x, y, 10, COLOR_TEXT_DIM);
+        }
     }
     (void)y;
 }
@@ -2655,9 +2717,24 @@ static void render_draw_3d_world(RenderClient* rc) {
                 }
             }
         }
+    } else if (rc->npc_model_cache) {
+        /* inferno: dark cave floor. all tiles are walkable ground. */
+        float plat_y = 2.0f;
+        for (int dx = 0; dx < rc->arena_width; dx++) {
+            for (int dy = 0; dy < rc->arena_height; dy++) {
+                float tx = (float)(rc->arena_base_x + dx);
+                float tz = -(float)(rc->arena_base_y + dy + 1);
+
+                /* dark volcanic rock with subtle variation */
+                int shade = 20 + ((dx * 7 + dy * 13) % 12);
+                int r = shade + ((dx * 3 + dy * 11) % 8);  /* slight reddish tint */
+                Color c = { (unsigned char)r, (unsigned char)(shade - 2), (unsigned char)(shade - 4), 255 };
+                DrawCube((Vector3){ tx + 0.5f, plat_y - 0.05f, tz + 0.5f },
+                         1.0f, 0.1f, 1.0f, c);
+            }
+        }
     } else {
-        /* no terrain loaded — procedural arena for encounters.
-           Zulrah: raised green platform over blue water, with cloud/position overlays.
+        /* zulrah / generic encounter: raised green platform over blue water.
            the real arena is instanced so it can't be exported from the cache. */
         float water_y = 1.5f;
         float plat_y = 2.0f;
@@ -2680,13 +2757,11 @@ static void render_draw_3d_world(RenderClient* rc) {
                 }
 
                 if (on_plat) {
-                    /* slight color variation for visual interest */
                     int shade = 35 + ((dx * 7 + dy * 13) % 15);
                     Color c = { (unsigned char)shade, (unsigned char)(shade * 2), (unsigned char)shade, 255 };
                     DrawCube((Vector3){ tx + 0.5f, plat_y - 0.05f, tz + 0.5f },
                              1.0f, 0.1f, 1.0f, c);
                 } else {
-                    /* water with slight wave pattern */
                     int shade = 15 + ((dx * 3 + dy * 5) % 10);
                     Color c = { (unsigned char)(shade / 2), (unsigned char)shade, (unsigned char)(shade * 3), 255 };
                     DrawCube((Vector3){ tx + 0.5f, water_y - 0.05f, tz + 0.5f },
@@ -2694,7 +2769,6 @@ static void render_draw_3d_world(RenderClient* rc) {
                 }
             }
         }
-
     }
 
     /* debug: highlight the last raycast-selected tile */
