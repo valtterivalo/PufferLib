@@ -59,7 +59,7 @@ static const int INF_SPAWN_POS[INF_NUM_SPAWN_POS][2] = {
 #define INF_NIBBLER_SPAWN_X 20
 #define INF_NIBBLER_SPAWN_Y 25
 
-#define INF_MAX_TICKS     3000   /* 30 min at 0.6s/tick. increase for later waves. */
+#define INF_MAX_TICKS     18000  /* 3 hours at 0.6s/tick */
 #define INF_NUM_WAVES     69
 
 /* ======================================================================== */
