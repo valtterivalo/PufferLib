@@ -84,6 +84,25 @@ typedef enum {
     INF_NUM_NPC_TYPES
 } InfNPCType;
 
+/* OSRS NPC definition IDs — maps InfNPCType enum to actual cache NPC IDs
+ * used by the renderer to look up models/animations in npc_models.h */
+static const int INF_NPC_DEF_IDS[INF_NUM_NPC_TYPES] = {
+    [INF_NPC_NIBBLER]    = 7691,  /* Jal-Nib */
+    [INF_NPC_BAT]        = 7692,  /* Jal-MejRah */
+    [INF_NPC_BLOB]       = 7693,  /* Jal-Ak */
+    [INF_NPC_BLOB_MELEE] = 7694,  /* Jal-AkRek-Mej */
+    [INF_NPC_BLOB_RANGE] = 7695,  /* Jal-AkRek-Xil */
+    [INF_NPC_BLOB_MAGE]  = 7696,  /* Jal-AkRek-Ket */
+    [INF_NPC_MELEER]     = 7697,  /* Jal-ImKot */
+    [INF_NPC_RANGER]     = 7698,  /* Jal-Xil */
+    [INF_NPC_MAGER]      = 7699,  /* Jal-Zek */
+    [INF_NPC_JAD]        = 7700,  /* JalTok-Jad */
+    [INF_NPC_ZUK]        = 7706,  /* TzKal-Zuk */
+    [INF_NPC_HEALER_JAD] = 7701,  /* Yt-HurKot */
+    [INF_NPC_HEALER_ZUK] = 7708,  /* Jal-MejJak */
+    [INF_NPC_ZUK_SHIELD] = 7707,  /* Ancestral Glyph */
+};
+
 typedef struct {
     int hp;
     int max_hit;
@@ -1609,7 +1628,7 @@ static void inf_fill_render_entities(EncounterState* state, RenderEntity* out, i
         RenderEntity* re = &out[n++];
         memset(re, 0, sizeof(RenderEntity));
         re->entity_type = ENTITY_NPC;
-        re->npc_def_id = (int)npc->type;
+        re->npc_def_id = INF_NPC_DEF_IDS[npc->type];
         re->npc_visible = npc->active;
         re->npc_size = npc->size;
         re->npc_anim_id = -1;
