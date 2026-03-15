@@ -1,10 +1,10 @@
 /**
  * @file binding.c
- * @brief Metal static-native binding for OSRS Zulrah encounter.
+ * @brief Static-native binding for OSRS Zulrah encounter.
  *
  * Bridges vecenv.h's contract (double actions, float terminals) with the
- * Zulrah encounter's vtable interface. Similar to the PvP binding but uses
- * the encounter system (EncounterDef) instead of OsrsPvp directly.
+ * Zulrah encounter's vtable interface. Uses the encounter system (EncounterDef)
+ * rather than OsrsPvp directly.
  */
 
 #include <stdlib.h>
@@ -32,36 +32,32 @@ typedef struct {
 
     EncounterState* enc_state;
 
-    /* staging buffers for type conversion */
+    /* staging buffer for action type conversion */
     int acts_staging[ZUL_NUM_ACTION_HEADS];
     unsigned char term_staging;
-    float mask_buf[ZUL_ACTION_MASK_SIZE];
-} MetalZulrahEnv;
+} ZulrahEnv;
 
 #define OBS_SIZE ZUL_TOTAL_OBS
 #define NUM_ATNS ZUL_NUM_ACTION_HEADS
 #define ACT_SIZES {ZUL_MOVE_DIM, ZUL_ATTACK_DIM, ZUL_PRAYER_DIM, ZUL_FOOD_DIM, ZUL_POTION_DIM, ZUL_SPEC_DIM}
 #define OBS_TYPE FLOAT
 #define ACT_TYPE DOUBLE
-#define Env MetalZulrahEnv
+#define Env ZulrahEnv
 
 /* c_step/c_reset/c_close/c_render must be defined BEFORE including vecenv.h */
 
 void c_step(Env* env) {
-    /* double actions → int staging */
+    /* double actions -> int staging */
     for (int i = 0; i < NUM_ATNS; i++) {
         env->acts_staging[i] = (int)env->actions[i];
     }
 
     ENCOUNTER_ZULRAH.step(env->enc_state, env->acts_staging);
 
-    /* write obs (raw obs portion) */
+    /* write obs + mask directly (mask appended after raw obs) */
     float* obs = (float*)env->observations;
     ENCOUNTER_ZULRAH.write_obs(env->enc_state, obs);
-
-    /* write mask (appended after obs) */
-    ENCOUNTER_ZULRAH.write_mask(env->enc_state, env->mask_buf);
-    memcpy(obs + ZUL_NUM_OBS, env->mask_buf, ZUL_ACTION_MASK_SIZE * sizeof(float));
+    ENCOUNTER_ZULRAH.write_mask(env->enc_state, obs + ZUL_NUM_OBS);
 
     /* reward */
     env->rewards[0] = ENCOUNTER_ZULRAH.get_reward(env->enc_state);
@@ -85,8 +81,7 @@ void c_step(Env* env) {
         /* auto-reset */
         ENCOUNTER_ZULRAH.reset(env->enc_state, 0);
         ENCOUNTER_ZULRAH.write_obs(env->enc_state, obs);
-        ENCOUNTER_ZULRAH.write_mask(env->enc_state, env->mask_buf);
-        memcpy(obs + ZUL_NUM_OBS, env->mask_buf, ZUL_ACTION_MASK_SIZE * sizeof(float));
+        ENCOUNTER_ZULRAH.write_mask(env->enc_state, obs + ZUL_NUM_OBS);
     }
 }
 
@@ -95,8 +90,7 @@ void c_reset(Env* env) {
 
     float* obs = (float*)env->observations;
     ENCOUNTER_ZULRAH.write_obs(env->enc_state, obs);
-    ENCOUNTER_ZULRAH.write_mask(env->enc_state, env->mask_buf);
-    memcpy(obs + ZUL_NUM_OBS, env->mask_buf, ZUL_ACTION_MASK_SIZE * sizeof(float));
+    ENCOUNTER_ZULRAH.write_mask(env->enc_state, obs + ZUL_NUM_OBS);
 
     env->rewards[0] = 0.0f;
     env->term_staging = 0;
@@ -135,11 +129,14 @@ void my_log(Log* log, Dict* out) {
 
     /* composite score: winrate-gated efficiency.
      * must win to score positive. among winners, faster kills and less
-     * damage taken score higher. scale factors keep efficiency in [0, ~0.5]
-     * so winrate always dominates. */
-    float wr = log->wins;  /* already averaged (0-1) */
-    float speed_bonus = (wr > 0.1f) ? (1.0f - log->episode_length / 600.0f) * 0.3f : 0.0f;
-    float dmg_penalty = (wr > 0.1f) ? (log->damage_received / 500.0f) * 0.2f : 0.0f;
+     * damage taken score higher. winrate always dominates (~1.0 scale
+     * vs ~0.3 efficiency). vecenv divides all log fields by n before
+     * calling my_log, so log->wins is already a winrate in [0, 1]. */
+    float wr = log->wins;
+    float speed_bonus = (wr > 0.1f)
+        ? (1.0f - log->episode_length / (float)ZUL_MAX_TICKS) * 0.3f : 0.0f;
+    float dmg_penalty = (wr > 0.1f)
+        ? (log->damage_received / (float)ZUL_BASE_HP) * 0.2f : 0.0f;
     float score = wr + speed_bonus - dmg_penalty - (1.0f - wr);
     dict_set(out, "score", score);
 }

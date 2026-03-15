@@ -201,7 +201,7 @@ SWEEP_CONFIGS = {
     },
     "osrs_zulrah": {
         **_SWEEP_BASE,
-        "metric": "episode_return",
+        "metric": "score",
         "metric_distribution": "linear",
         "max_suggestion_cost": 1800,
         "train": {
@@ -502,10 +502,10 @@ def clamp_params(params: dict, env_name: str = "breakout") -> None:
     train["vtrace_rho_clip"] = min(max(float(train.get("vtrace_rho_clip", 2.1)), 1.0), 5.0)
     train["vtrace_c_clip"] = min(max(float(train.get("vtrace_c_clip", 1.08)), 1.0), 4.0)
     train["vf_coef"] = min(max(float(train.get("vf_coef", 1.22)), 0.1), 10.0)
-    train["vf_clip_coef"] = min(max(float(train.get("vf_clip_coef", 1.23)), 0.1), 8.0)
-    train["max_grad_norm"] = min(max(float(train.get("max_grad_norm", 1.81)), 0.3), 6.0)
-    train["replay_ratio"] = min(max(float(train.get("replay_ratio", 1.4)), 0.25), 5.0)
-    train["min_lr_ratio"] = min(max(float(train.get("min_lr_ratio", 0.0)), 0.0), 0.35)
+    train["vf_clip_coef"] = min(max(float(train.get("vf_clip_coef", 1.23)), 0.05), 8.0)
+    train["max_grad_norm"] = min(max(float(train.get("max_grad_norm", 1.81)), 0.3), 10.0)
+    train["replay_ratio"] = min(max(float(train.get("replay_ratio", 1.4)), 0.1), 5.0)
+    train["min_lr_ratio"] = min(max(float(train.get("min_lr_ratio", 0.0)), 0.0), 0.5)
 
     # num_threads must match num_buffers (one thread per buffer)
     num_buf = int(train.get("num_buffers", 1))

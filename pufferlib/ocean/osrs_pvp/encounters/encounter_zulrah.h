@@ -1843,18 +1843,16 @@ static float zul_compute_reward(ZulrahState* s) {
      * so keep individual components well under that. */
     float r = 0.0f;
 
-    /* damage dealt: small reward for any damage */
-    if (s->damage_dealt_this_tick > 0.0f)
-        r += 0.02f * (s->damage_dealt_this_tick / 50.0f);
-
-    /* correct attack style bonus: green/red → mage, blue → range */
+    /* damage dealt + correct attack style bonus (green/red -> mage, blue -> range) */
     if (s->damage_dealt_this_tick > 0.0f) {
-        int style = s->player.attack_style_this_tick;
-        int form = (int)s->current_form;
-        int correct = (form == ZUL_FORM_BLUE && style == ATTACK_STYLE_RANGED) ||
-                      ((form == ZUL_FORM_GREEN || form == ZUL_FORM_RED) &&
-                       style == ATTACK_STYLE_MAGIC);
-        r += correct ? 0.05f * (s->damage_dealt_this_tick / 50.0f) : 0.0f;
+        float norm_dmg = s->damage_dealt_this_tick / 50.0f;
+        r += 0.02f * norm_dmg;
+        int correct = (s->current_form == ZUL_FORM_BLUE &&
+                       s->player.attack_style_this_tick == ATTACK_STYLE_RANGED) ||
+                      ((s->current_form == ZUL_FORM_GREEN ||
+                        s->current_form == ZUL_FORM_RED) &&
+                       s->player.attack_style_this_tick == ATTACK_STYLE_MAGIC);
+        if (correct) r += 0.05f * norm_dmg;
     }
 
     /* damage taken penalty */
@@ -1888,9 +1886,12 @@ static void zul_reset(EncounterState* state, uint32_t seed) {
     s->world_offset_x = saved_wx;
     s->world_offset_y = saved_wy;
     s->gear_tier = saved_tier;
-    // preserve RNG across resets for episode variety (same pattern as PvP).
-    // seed=0 on first create uses default; subsequent resets keep rolling RNG.
-    s->rng_state = (seed != 0) ? seed : (saved_rng != 0 ? saved_rng : 12345);
+    /* RNG priority: explicit seed > preserved state > default.
+     * preserving RNG across resets gives episode variety (same pattern as PvP). */
+    uint32_t rng = 12345;
+    if (saved_rng != 0) rng = saved_rng;
+    if (seed != 0) rng = seed;
+    s->rng_state = rng;
 
     /* player */
     s->player.entity_type = ENTITY_PLAYER;
