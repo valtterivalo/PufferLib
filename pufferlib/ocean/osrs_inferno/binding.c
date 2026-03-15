@@ -56,7 +56,7 @@ void c_step(Env* env) {
 
     if (is_term) {
         InfernoState* s = (InfernoState*)env->enc_state;
-        env->log.episode_return += s->reward;
+        env->log.episode_return += s->episode_return;
         env->log.episode_length += (float)s->tick;
         env->log.wins += (s->winner == 0) ? 1.0f : 0.0f;
         env->log.damage_dealt += s->total_damage_dealt;

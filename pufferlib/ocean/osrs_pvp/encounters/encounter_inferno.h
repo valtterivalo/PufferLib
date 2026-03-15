@@ -406,6 +406,7 @@ typedef struct {
 
     /* reward tracking */
     float reward;
+    float episode_return;  /* accumulated reward over entire episode */
     float damage_dealt_this_tick;
     float damage_received_this_tick;
     int prayer_correct_this_tick;
@@ -1407,6 +1408,7 @@ static void inf_step(EncounterState* state, const int* actions) {
     }
 
     s->reward = inf_compute_reward(s);
+    s->episode_return += s->reward;
 }
 
 /* ======================================================================== */
