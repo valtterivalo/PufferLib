@@ -39,6 +39,9 @@
 #define GFX_DRAGON_DART     1122   /* dragon dart projectile (blowpipe) */
 #define GFX_RUNE_DART       231    /* rune dart projectile */
 #define GFX_BLOWPIPE_SPEC   1043   /* blowpipe special attack effect */
+/* TODO: add voidwaker lightning on-hit GFX (spotanim on opponent).
+ * TODO: add VLS special attack on-hit effect.
+ * combat mechanics for both work correctly, just missing visual effects. */
 
 typedef struct {
     int gfx_id;
