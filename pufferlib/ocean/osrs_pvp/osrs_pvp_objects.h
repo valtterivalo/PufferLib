@@ -213,6 +213,36 @@ static void objects_offset(ObjectMesh* om, int wx, int wy) {
     fprintf(stderr, "objects_offset: shifted by (%d, %d)\n", wx, wy);
 }
 
+/* mirror object mesh along Z axis (north-south flip). */
+static void objects_mirror_z(ObjectMesh* om, float center_y) {
+    if (!om || !om->loaded) return;
+    float center_z = -center_y;
+    float* verts = om->model.meshes[0].vertices;
+    for (int i = 0; i < om->total_vertex_count; i++) {
+        verts[i * 3 + 2] = 2.0f * center_z - verts[i * 3 + 2];
+    }
+    for (int t = 0; t < om->total_vertex_count / 3; t++) {
+        int a = t * 3 * 3, c = (t * 3 + 2) * 3;
+        for (int j = 0; j < 3; j++) {
+            float tmp = verts[a + j]; verts[a + j] = verts[c + j]; verts[c + j] = tmp;
+        }
+        if (om->model.meshes[0].colors) {
+            unsigned char* cols = om->model.meshes[0].colors;
+            int ca = t * 3 * 4, cc = (t * 3 + 2) * 4;
+            for (int j = 0; j < 4; j++) {
+                unsigned char tmp = cols[ca + j]; cols[ca + j] = cols[cc + j]; cols[cc + j] = tmp;
+            }
+        }
+    }
+    UpdateMeshBuffer(om->model.meshes[0], 0, verts,
+                     om->total_vertex_count * 3 * sizeof(float), 0);
+    if (om->model.meshes[0].colors) {
+        UpdateMeshBuffer(om->model.meshes[0], 3, om->model.meshes[0].colors,
+                         om->total_vertex_count * 4, 0);
+    }
+    fprintf(stderr, "objects_mirror_z: mirrored around y=%.1f\n", center_y);
+}
+
 static void objects_free(ObjectMesh* om) {
     if (!om) return;
     if (om->loaded) {

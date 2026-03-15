@@ -1308,12 +1308,14 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
 
     /* movement */
     int move_act = actions[INF_HEAD_MOVE];
+    s->player.is_running = 0;
     if (move_act > 0 && move_act < 9) {
         int nx = s->player.x + INF_MOVE_DX[move_act];
         int ny = s->player.y + INF_MOVE_DY[move_act];
         if (inf_in_arena(nx, ny) && !inf_blocked_by_pillar(s, nx, ny, 1)) {
             s->player.x = nx;
             s->player.y = ny;
+            s->player.is_running = 1;
         }
     }
 
@@ -1626,6 +1628,11 @@ static void* inf_get_entity(EncounterState* state, int index) {
 static void inf_fill_render_entities(EncounterState* state, RenderEntity* out, int max_entities, int* count) {
     InfernoState* s = (InfernoState*)state;
     int n = 0;
+
+    /* sync consumable counts to Player struct so GUI inventory can read them */
+    s->player.food_count = s->player_food_count;
+    s->player.brew_doses = s->player_brew_doses;
+    s->player.restore_doses = s->player_restore_doses;
 
     /* index 0: the player */
     if (n < max_entities) {

@@ -372,23 +372,27 @@ def decode_floor_definitions_modern(
 
 
 def load_texture_average_colors_modern(reader: ModernCacheReader) -> dict[int, int]:
-    """Load per-texture average color (15-bit HSL) from modern cache.
+    """Load per-texture average color (HSL16) from modern cache.
 
-    In the modern cache, texture definitions live in index 9, group 0.
-    Each texture entry stores sprite file IDs but NOT a precomputed average
-    color — the average is computed at runtime from sprite pixels.
+    Modern OSRS (rev233+) texture format in index 9, group 0:
+      u16 fileId (sprite group in index 8)
+      u16 missingColor (HSL16 fallback — used as the texture's average color)
+      u8  field1778
+      u8  animationDirection
+      u8  animationSpeed
 
-    For terrain export, this is rarely needed: most modern overlays with
-    textures also carry a direct rgb field. Returns an empty dict if texture
-    average colors can't be loaded (textured overlays will fall back to
-    underlay color blending).
+    The missingColor field is the precomputed average color of the texture
+    sprite, stored as 16-bit packed HSL. This is what the OSRS client uses
+    for terrain tile coloring.
     """
-    # modern cache does not store precomputed texture average colors.
-    # a full implementation would load sprite pixels from index 8 and
-    # compute averages. this is only needed for overlays that have
-    # texture >= 0 and rgb == 0, which doesn't apply to Zulrah or
-    # most terrain we export.
-    return {}
+    tex_files = reader.read_group(9, 0)
+    result: dict[int, int] = {}
+    for tex_id, data in tex_files.items():
+        if len(data) < 4:
+            continue
+        missing_color = struct.unpack(">H", data[2:4])[0]
+        result[tex_id] = missing_color
+    return result
 
 
 def djb2(name: str) -> int:
@@ -657,6 +661,7 @@ def build_terrain_mesh(
     overlays: dict[int, FloorDef],
     target_plane: int = 0,
     tex_colors: dict[int, int] | None = None,
+    brightness: float = 1.0,
 ) -> tuple[list[float], list[int]]:
     """Build a vertex-colored terrain mesh from parsed regions.
 
@@ -678,7 +683,8 @@ def build_terrain_mesh(
 
         # compute lighting per vertex (mirrors method171 lighting pass)
         # intensity[65][65] for tile corners
-        intensity = [[96] * 65 for _ in range(65)]
+        base_intensity = int(96 * brightness)
+        intensity = [[base_intensity] * 65 for _ in range(65)]
 
         light_x, light_y, light_z = -50, -10, -50
         light_len = int(math.sqrt(light_x * light_x + light_y * light_y + light_z * light_z))
@@ -694,7 +700,7 @@ def build_terrain_mesh(
                 nx = (dx << 8) // length
                 ny = (256 << 8) // length
                 nz = (dy << 8) // length
-                intensity[tx][ty] = 96 + (light_x * nx + light_y * ny + light_z * nz) // distribution
+                intensity[tx][ty] = base_intensity + (light_x * nx + light_y * ny + light_z * nz) // distribution
 
         # compute blended underlay colors using 11x11 window
         # for simplicity, compute per-tile center color
@@ -749,7 +755,7 @@ def build_terrain_mesh(
                         # overlay tile
                         oflo = overlays.get(oid - 1)
                         if oflo and oflo.rgb == 0xFF00FF:
-                            tile_rgb = (0, 0, 0)  # transparent
+                            continue  # void tile — skip geometry so objects show through
                         elif oflo and oflo.texture >= 0 and tex_colors:
                             # textured overlay: use texture average color (water, dirt, stone)
                             tex_hsl = tex_colors.get(oflo.texture)
@@ -1059,7 +1065,8 @@ def _build_and_write(
     stitch_region_edges(parsed)
 
     print("building terrain mesh...")
-    verts, colors = build_terrain_mesh(parsed, underlays, overlays_defs, tex_colors=tex_colors)
+    brightness = getattr(args, 'brightness', 1.0)
+    verts, colors = build_terrain_mesh(parsed, underlays, overlays_defs, tex_colors=tex_colors, brightness=brightness)
     vert_count = len(verts) // 3
     tri_count = vert_count // 3
     print(f"  {vert_count} vertices, {tri_count} triangles")
@@ -1111,6 +1118,12 @@ def main() -> None:
         type=int,
         default=2,
         help="regions around wilderness center to export (317 mode only, default: 2)",
+    )
+    parser.add_argument(
+        "--brightness",
+        type=float,
+        default=1.0,
+        help="brightness multiplier for terrain lighting (e.g. 1.8 for caves, default: 1.0)",
     )
     args = parser.parse_args()
 

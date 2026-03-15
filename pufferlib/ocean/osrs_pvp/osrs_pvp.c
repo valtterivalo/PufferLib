@@ -246,19 +246,26 @@ static void run_visual(OsrsPvp* env, const char* encounter_name, const char* rep
         rc->collision_world_offset_x = 2256;
         rc->collision_world_offset_y = 3061;
     } else if (encounter_name && strcmp(encounter_name, "inferno") == 0) {
-        /* inferno: load NPC models + animations as secondary caches.
-         * TODO: 3D NPC models are garbled — disable show_models until model
-         * transforms are fixed. 2D rendering with colored squares works. */
+        rc->terrain = terrain_load("data/inferno.terrain");
+        rc->objects = objects_load("data/inferno.objects");
+        /* inferno region (35,83) starts at world (2240, 5312).
+           encounter uses region-local coords (10-40, 13-44).
+           offset terrain/objects so local coord 0 maps to world 2240. */
+        if (rc->terrain)
+            terrain_offset(rc->terrain, 2240, 5312);
+        if (rc->objects)
+            objects_offset(rc->objects, 2240, 5312);
+
         rc->npc_model_cache = model_cache_load("data/inferno_npcs.models");
         rc->npc_anim_cache = anim_cache_load("data/inferno_npcs.anims");
-        /* don't load NPC model cache — render NPCs as colored cubes in 3D.
-         * the exported NPC model data has garbled transforms. once the model
-         * export pipeline is fixed, uncomment these lines. */
-        /* rc->npc_model_cache = model_cache_load("data/inferno_npcs.models"); */
-        /* rc->npc_anim_cache = anim_cache_load("data/inferno_npcs.anims"); */
-        fprintf(stderr, "inferno: npc_models=%d, npc_anims=%d seqs (3D disabled, using 2D)\n",
+        fprintf(stderr, "inferno: terrain=%s, npc_models=%d, npc_anims=%d seqs\n",
+                rc->terrain ? "loaded" : "MISSING",
                 rc->npc_model_cache ? rc->npc_model_cache->count : 0,
                 rc->npc_anim_cache ? rc->npc_anim_cache->seq_count : 0);
+        /* entity/pillar Y coords are mirrored vs the cache terrain/objects.
+           mirror entity rendering AND objects to match. terrain already correct. */
+        rc->mirror_y = 1;
+        rc->mirror_y_center = (float)(INF_ARENA_MIN_Y + INF_ARENA_MAX_Y) / 2.0f;
     }
 
     /* populate entity pointers (also sets arena bounds from encounter) */

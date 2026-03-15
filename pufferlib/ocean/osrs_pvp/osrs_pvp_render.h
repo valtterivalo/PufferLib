@@ -241,6 +241,8 @@ typedef struct {
     int show_models;
     int show_safe_spots;
     int show_debug;       /* toggle raycast debug, hulls, hitboxes, projectile trails */
+    int mirror_y;         /* flip Y axis (north-south) for encounters with mirrored coords */
+    float mirror_y_center; /* Y center for mirroring (in OSRS tile coords, before Z negation) */
 
     /* 3D model rendering */
     ModelCache* model_cache;
@@ -1528,7 +1530,8 @@ static void render_get_visual_pos(
     float tile_y = (float)rc->sub_y[player_idx] / 128.0f;
 
     *out_x = tile_x;
-    *out_z = -tile_y;
+    float eff_y = rc->mirror_y ? (2.0f * rc->mirror_y_center - tile_y) : tile_y;
+    *out_z = -eff_y;
 
     if (rc->terrain) {
         *out_ground = terrain_height_avg(rc->terrain,
@@ -2742,10 +2745,10 @@ static void render_draw_3d_world(RenderClient* rc) {
                 float tx = (float)(rc->arena_base_x + dx);
                 float tz = -(float)(rc->arena_base_y + dy + 1);
 
-                /* dark volcanic rock with subtle variation */
-                int shade = 20 + ((dx * 7 + dy * 13) % 12);
-                int r = shade + ((dx * 3 + dy * 11) % 8);  /* slight reddish tint */
-                Color c = { (unsigned char)r, (unsigned char)(shade - 2), (unsigned char)(shade - 4), 255 };
+                /* volcanic rock with subtle variation — bright enough to distinguish from background */
+                int shade = 45 + ((dx * 7 + dy * 13) % 15);
+                int r = shade + ((dx * 3 + dy * 11) % 10);  /* slight reddish tint */
+                Color c = { (unsigned char)r, (unsigned char)(shade - 3), (unsigned char)(shade - 6), 255 };
                 DrawCube((Vector3){ tx + 0.5f, plat_y - 0.05f, tz + 0.5f },
                          1.0f, 0.1f, 1.0f, c);
             }
@@ -2785,6 +2788,41 @@ static void render_draw_3d_world(RenderClient* rc) {
                              1.0f, 0.1f, 1.0f, c);
                 }
             }
+        }
+    }
+
+    /* inferno pillars: 3x3 tile stone blocks.
+       npc_model_cache is only loaded for inferno, so it doubles as an encounter type check.
+       InfernoState is available via encounter_inferno.h included before this header. */
+    if (rc->npc_model_cache && rc->gui.encounter_state) {
+        InfernoState* is = (InfernoState*)rc->gui.encounter_state;
+        float plat_y = 2.0f;
+        for (int p = 0; p < INF_NUM_PILLARS; p++) {
+            if (!is->pillars[p].active) continue;
+            float hp_frac = (float)is->pillars[p].hp / (float)INF_PILLAR_HP;
+            /* base stone color, reddens as HP drops */
+            int base_r = (int)(120 + (1.0f - hp_frac) * 100);
+            int base_g = (int)(100 * hp_frac);
+            int base_b = (int)(80 * hp_frac);
+            Color pillar_col = { (unsigned char)base_r, (unsigned char)base_g, (unsigned char)base_b, 240 };
+            for (int dx = 0; dx < INF_PILLAR_SIZE; dx++) {
+                for (int dy = 0; dy < INF_PILLAR_SIZE; dy++) {
+                    float tx = (float)(is->pillars[p].x + dx);
+                    float py_val = (float)(is->pillars[p].y + dy);
+                    if (rc->mirror_y) py_val = 2.0f * rc->mirror_y_center - py_val;
+                    float tz = -(py_val + 1.0f);
+                    for (int h = 0; h < 3; h++) {
+                        DrawCube((Vector3){ tx + 0.5f, plat_y + 0.5f + (float)h, tz + 0.5f },
+                                 0.95f, 0.95f, 0.95f, pillar_col);
+                    }
+                }
+            }
+            float cx = (float)is->pillars[p].x + INF_PILLAR_SIZE / 2.0f;
+            float py_c = (float)(is->pillars[p].y + INF_PILLAR_SIZE / 2);
+            if (rc->mirror_y) py_c = 2.0f * rc->mirror_y_center - py_c;
+            float cz = -(py_c + 1.0f) + INF_PILLAR_SIZE / 2.0f;
+            DrawCubeWires((Vector3){ cx, plat_y + 1.5f, cz },
+                          (float)INF_PILLAR_SIZE, 3.0f, (float)INF_PILLAR_SIZE, BLACK);
         }
     }
 
@@ -3037,8 +3075,39 @@ static void render_draw_3d_world(RenderClient* rc) {
             base = MatrixMultiply(base, MatrixRotateY(rc->yaw[i]));
             base = MatrixMultiply(base, MatrixTranslate(px, ground, pz));
 
-            /* rebuild composite if equipment changed, animate, upload, draw */
-            render_player_composite(rc, i, base);
+            /* rebuild composite if equipment changed, animate, upload, draw.
+               skip composite for NPCs when npc_model_cache has garbled data —
+               draw colored cubes instead. player composites (equipment models) still render. */
+            int skip_npc_composite = (ep->entity_type == ENTITY_NPC && rc->npc_model_cache);
+            if (!skip_npc_composite)
+                render_player_composite(rc, i, base);
+
+            /* colored cube for NPCs: either composite was skipped or produced no geometry */
+            if (ep->entity_type == ENTITY_NPC &&
+                (skip_npc_composite || rc->composites[i].face_count == 0)) {
+                float sz = (float)(ep->npc_size > 1 ? ep->npc_size : 1) * 0.6f;
+                Color npc_col;
+                switch (ep->npc_def_id) {
+                    case 7691: npc_col = CLITERAL(Color){255, 220, 50, 220};  break; /* nibbler - yellow */
+                    case 7692: npc_col = CLITERAL(Color){140, 90, 40, 220};   break; /* bat - brown */
+                    case 7693: npc_col = CLITERAL(Color){100, 100, 220, 220}; break; /* blob - blue */
+                    case 7694: npc_col = CLITERAL(Color){200, 80, 80, 220};   break; /* blob melee - red */
+                    case 7695: npc_col = CLITERAL(Color){80, 200, 80, 220};   break; /* blob range - green */
+                    case 7696: npc_col = CLITERAL(Color){80, 80, 200, 220};   break; /* blob mage - blue */
+                    case 7697: npc_col = CLITERAL(Color){180, 120, 60, 220};  break; /* meleer - orange */
+                    case 7698: npc_col = CLITERAL(Color){60, 180, 60, 220};   break; /* ranger - green */
+                    case 7699: npc_col = CLITERAL(Color){120, 60, 200, 220};  break; /* mager - purple */
+                    case 7700: npc_col = CLITERAL(Color){255, 80, 0, 220};    break; /* jad - bright orange */
+                    case 7706: npc_col = CLITERAL(Color){200, 30, 30, 220};   break; /* zuk - dark red */
+                    case 7701: npc_col = CLITERAL(Color){255, 200, 200, 220}; break; /* jad healer - pink */
+                    case 7708: npc_col = CLITERAL(Color){200, 200, 255, 220}; break; /* zuk healer - light blue */
+                    case 7707: npc_col = CLITERAL(Color){180, 180, 180, 220}; break; /* shield - grey */
+                    default:   npc_col = CLITERAL(Color){200, 50, 50, 220};   break;
+                }
+                DrawCube((Vector3){ px, ground + sz / 2.0f, pz }, sz, sz, sz, npc_col);
+                /* wireframe outline for depth */
+                DrawCubeWires((Vector3){ px, ground + sz / 2.0f, pz }, sz, sz, sz, BLACK);
+            }
 
             /* project animated mesh vertices to 2D screen for convex hull click detection.
                ported from RuneLite RSModelMixin.getConvexHull → Perspective.modelToCanvas.
