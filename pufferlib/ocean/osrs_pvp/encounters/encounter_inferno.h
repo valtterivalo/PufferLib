@@ -1329,17 +1329,22 @@ static float inf_compute_reward(InfernoState* s) {
     float r = 0.0f;
 
     /* wave completion: scales with wave number.
-     * wave 1 = 0.001, wave 69 = 0.069. total ≈ 2.4 if all cleared. */
+     * wave 1 = 0.01, wave 69 = 0.69. total ≈ 24 if all cleared. */
     if (s->wave_completed_this_tick) {
-        r += 0.001f * (float)(s->wave + 1);
+        r += 0.01f * (float)(s->wave + 1);
         s->total_waves_cleared = s->wave + 1;
     }
 
-    /* damage dealt: tiny reward to bootstrap learning.
-     * without this, random actions never discover wave completion reward
-     * because killing requires both targeting + attacking on correct ticks. */
+    /* damage dealt: reward for hitting monsters.
+     * a 45-damage hit gives 0.045. this is the primary learning signal
+     * since the agent needs to discover that targeting + attacking = good. */
     if (s->damage_dealt_this_tick > 0.0f)
-        r += 0.0005f * (s->damage_dealt_this_tick / 50.0f);
+        r += 0.02f * (s->damage_dealt_this_tick / 50.0f);
+
+    /* idle penalty: if not attacking anything for 10+ ticks, small penalty.
+     * pushes the agent toward combat rather than hiding behind pillars. */
+    if (s->ticks_without_action > 10)
+        r -= 0.005f;
 
     /* accumulate diagnostic stats */
     s->total_damage_dealt += s->damage_dealt_this_tick;
