@@ -17,6 +17,7 @@
 #define ENCOUNTER_INFERNO_H
 
 #include "../osrs_pvp_types.h"
+#include "../osrs_pvp_items.h"
 #include "../osrs_pvp_collision.h"
 #include "../osrs_encounter.h"
 #include <string.h>
@@ -1642,6 +1643,7 @@ static void inf_fill_render_entities(EncounterState* state, RenderEntity* out, i
 
         RenderEntity* re = &out[n++];
         memset(re, 0, sizeof(RenderEntity));
+        memset(re->equipped, ITEM_NONE, NUM_GEAR_SLOTS);
         re->entity_type = ENTITY_NPC;
         re->npc_def_id = INF_NPC_DEF_IDS[npc->type];
         re->npc_visible = npc->active;
