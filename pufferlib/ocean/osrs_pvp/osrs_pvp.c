@@ -431,6 +431,7 @@ static void run_visual(OsrsPvp* env, const char* encounter_name, const char* rep
 
 int main(int argc, char** argv) {
     int use_visual = 0;
+    int gear_tier = -1;  /* -1 = random (default LMS distribution) */
     const char* encounter_name __attribute__((unused)) = NULL;
     const char* replay_path __attribute__((unused)) = NULL;
     for (int i = 1; i < argc; i++) {
@@ -439,6 +440,8 @@ int main(int argc, char** argv) {
             encounter_name = argv[++i];
         else if (strcmp(argv[i], "--replay") == 0 && i + 1 < argc)
             replay_path = argv[++i];
+        else if (strcmp(argv[i], "--tier") == 0 && i + 1 < argc)
+            gear_tier = atoi(argv[++i]);
     }
 
     srand((unsigned int)time(NULL));
@@ -471,6 +474,18 @@ int main(int argc, char** argv) {
 #ifdef OSRS_PVP_VISUAL
         /* pvp_init uses internal buffers — no malloc needed */
         pvp_init(&env);
+        /* set gear tier: --tier N forces both players to tier N,
+           otherwise default LMS distribution (mostly tier 0) */
+        if (gear_tier >= 0 && gear_tier <= 3) {
+            for (int t = 0; t < 4; t++) env.gear_tier_weights[t] = 0.0f;
+            env.gear_tier_weights[gear_tier] = 1.0f;
+        } else {
+            /* default LMS: 60% tier 0, 25% tier 1, 10% tier 2, 5% tier 3 */
+            env.gear_tier_weights[0] = 0.60f;
+            env.gear_tier_weights[1] = 0.25f;
+            env.gear_tier_weights[2] = 0.10f;
+            env.gear_tier_weights[3] = 0.05f;
+        }
         env.ocean_acts = env.actions;
         env.ocean_obs = env._obs_buf;
         env.ocean_rew = env.rewards;
