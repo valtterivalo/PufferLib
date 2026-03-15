@@ -242,6 +242,10 @@ typedef struct {
    plugin uses OSRS local coords (128 units/tile). conversion:
    grid_x = local_x/128 - 38, grid_y = local_y/128 - 44
    (derived from NORTH zulrah center (6720,7616) → grid (12,13)) */
+/* TODO: safe tile positions are adapted from a zulrah helper plugin and may not
+ * be perfectly accurate. need to verify these coordinates against actual game
+ * behavior, especially the pillar-adjacent positions which serve as safespots
+ * where zulrah's ranged/magic attacks should be blocked by line of sight. */
 #define ZUL_STAND_SOUTHWEST       0   /* (10,  9) */
 #define ZUL_STAND_WEST            1   /* ( 8, 15) */
 #define ZUL_STAND_CENTER          2   /* (15, 10) */
@@ -859,6 +863,12 @@ static void zul_record_attack(ZulrahState* s, int src_x, int src_y,
    unlike magic, ranged CAN miss (accuracy roll required).
    wiki: "ranged and magic attacks will envenom the player unless they miss,
    even if blocked by a protection prayer." so venom only on hit. */
+/* TODO: ranged and magic attacks currently ignore line of sight. in the real game,
+ * standing behind the east/west pillars blocks ranged and magic projectiles too,
+ * not just melee. we only check pillar safespots for melee (zul_on_pillar_safespot).
+ * need to investigate whether the game uses proper LOS raycasting from zulrah's
+ * tile to the player tile, or just checks specific safespot coordinates. this also
+ * applies to the PvP encounter — entities may currently shoot through walls. */
 static void zul_attack_ranged(ZulrahState* s) {
     int dmg = 0;
     int did_hit = 0;
@@ -1215,7 +1225,11 @@ static int zul_cloud_fits(ZulrahState* s, int x, int y) {
     return 1;
 }
 
-/* pick a valid cloud position: walkable 3x3, not safe, not overlapping */
+/* pick a valid cloud position: walkable 3x3, not safe, not overlapping.
+ * TODO: cloud landing positions are currently random within the walkable area.
+ * in the real game, zulrah targets specific positions based on the current phase
+ * and player location. need to reverse-engineer the actual targeting formula
+ * (possibly from runelite source or game observation). */
 static int zul_pick_cloud_pos(ZulrahState* s, int stand, int stall, int* ox, int* oy) {
     int attempts = 0;
     while (attempts++ < 100) {
