@@ -411,7 +411,7 @@ typedef struct {
     float damage_received_this_tick;
     int prayer_correct_this_tick;
     int wave_completed_this_tick;
-    int pillar_lost_this_tick;
+    int pillar_lost_this_tick;     /* -1 = none, 0-2 = which pillar was destroyed */
 
     /* cumulative stats for diagnostics */
     float total_damage_dealt;
@@ -861,7 +861,7 @@ static void inf_npc_attack(InfernoState* s, int idx) {
                 s->pillars[p].hp -= stats->max_hit;
                 if (s->pillars[p].hp <= 0) {
                     s->pillars[p].active = 0;
-                    s->pillar_lost_this_tick = 1;
+                    s->pillar_lost_this_tick = p;
                     inf_rebuild_los(s);
                 }
                 npc->attack_timer = stats->attack_speed;
@@ -1367,11 +1367,11 @@ static float inf_compute_reward(InfernoState* s) {
     if (s->ticks_without_action > 10)
         r -= 0.005f;
 
-    /* pillar destroyed: losing all 3 pillars costs -0.8 total (~0.27 each).
-     * not worse than dying (-1.0) since pillars aren't strictly required,
-     * but losing them makes survival much harder. */
-    if (s->pillar_lost_this_tick)
-        r -= 0.27f;
+    /* pillar destroyed: north pillar (idx 2) is the most important safespot,
+     * south (0) and west (1) are less critical. total = -0.8 for all three. */
+    if (s->pillar_lost_this_tick >= 0) {
+        r -= (s->pillar_lost_this_tick == 2) ? 0.4f : 0.2f;
+    }
 
     /* accumulate diagnostic stats */
     s->total_damage_dealt += s->damage_dealt_this_tick;
@@ -1394,7 +1394,7 @@ static void inf_step(EncounterState* state, const int* actions) {
     s->damage_received_this_tick = 0.0f;
     s->prayer_correct_this_tick = 0;
     s->wave_completed_this_tick = 0;
-    s->pillar_lost_this_tick = 0;
+    s->pillar_lost_this_tick = -1;
     s->tick++;
 
     /* player actions */
