@@ -2318,6 +2318,20 @@ static void* zul_get_entity(EncounterState* state, int index) {
     return &s->player;
 }
 
+/* render entity population */
+static void zul_fill_render_entities(EncounterState* state, RenderEntity* out, int max_entities, int* count) {
+    ZulrahState* s = (ZulrahState*)state;
+    int n = 0;
+    if (n < max_entities) render_entity_from_player(&s->player, &out[n++]);
+    if (n < max_entities) render_entity_from_player(&s->zulrah, &out[n++]);
+    for (int i = 0; i < ZUL_MAX_SNAKELINGS && n < max_entities; i++) {
+        if (s->snakelings[i].active) {
+            render_entity_from_player(&s->snakelings[i].entity, &out[n++]);
+        }
+    }
+    *count = n;
+}
+
 /* config */
 static void zul_put_int(EncounterState* state, const char* key, int value) {
     ZulrahState* s = (ZulrahState*)state;
@@ -2436,6 +2450,7 @@ static const EncounterDef ENCOUNTER_ZULRAH = {
     .is_terminal = zul_is_terminal,
     .get_entity_count = zul_get_entity_count,
     .get_entity = zul_get_entity,
+    .fill_render_entities = zul_fill_render_entities,
     .put_int = zul_put_int,
     .put_float = zul_put_float,
     .put_ptr = zul_put_ptr,

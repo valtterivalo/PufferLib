@@ -20,6 +20,8 @@
 #define OSRS_ENCOUNTER_H
 
 #include <stdint.h>
+#include <string.h>
+#include "osrs_pvp_types.h"
 
 /* opaque encounter state — each encounter defines its own struct */
 typedef struct EncounterState EncounterState;
@@ -62,6 +64,68 @@ typedef struct {
 } EncounterOverlay;
 
 /* ======================================================================== */
+/* render entity: shared abstraction for renderer (value type, not pointer)  */
+/* ======================================================================== */
+
+typedef struct {
+    EntityType entity_type;
+    int npc_def_id;
+    int npc_visible;
+    int npc_size;
+    int npc_anim_id;
+    int x, y;
+    int dest_x, dest_y;
+    int current_hitpoints, base_hitpoints;
+    int special_energy;
+    OverheadPrayer prayer;
+    GearSet visible_gear;
+    int frozen_ticks;
+    int veng_active;
+    int is_running;
+    AttackStyle attack_style_this_tick;
+    int magic_type_this_tick;
+    int hit_landed_this_tick;
+    int hit_damage;
+    int hit_was_successful;
+    int cast_veng_this_tick;
+    int ate_food_this_tick;
+    int ate_karambwan_this_tick;
+    int used_special_this_tick;
+    uint8_t equipped[NUM_GEAR_SLOTS];
+} RenderEntity;
+
+/** Fill a RenderEntity from a Player struct (PvP, Zulrah, snakelings). */
+static inline void render_entity_from_player(const Player* p, RenderEntity* out) {
+    out->entity_type = p->entity_type;
+    out->npc_def_id = p->npc_def_id;
+    out->npc_visible = p->npc_visible;
+    out->npc_size = p->npc_size;
+    out->npc_anim_id = p->npc_anim_id;
+    out->x = p->x;
+    out->y = p->y;
+    out->dest_x = p->dest_x;
+    out->dest_y = p->dest_y;
+    out->current_hitpoints = p->current_hitpoints;
+    out->base_hitpoints = p->base_hitpoints;
+    out->special_energy = p->special_energy;
+    out->prayer = p->prayer;
+    out->visible_gear = p->visible_gear;
+    out->frozen_ticks = p->frozen_ticks;
+    out->veng_active = p->veng_active;
+    out->is_running = p->is_running;
+    out->attack_style_this_tick = p->attack_style_this_tick;
+    out->magic_type_this_tick = p->magic_type_this_tick;
+    out->hit_landed_this_tick = p->hit_landed_this_tick;
+    out->hit_damage = p->hit_damage;
+    out->hit_was_successful = p->hit_was_successful;
+    out->cast_veng_this_tick = p->cast_veng_this_tick;
+    out->ate_food_this_tick = p->ate_food_this_tick;
+    out->ate_karambwan_this_tick = p->ate_karambwan_this_tick;
+    out->used_special_this_tick = p->used_special_this_tick;
+    memcpy(out->equipped, p->equipped, NUM_GEAR_SLOTS);
+}
+
+/* ======================================================================== */
 /* encounter definition (vtable)                                             */
 /* ======================================================================== */
 
@@ -92,6 +156,10 @@ typedef struct {
        renderer uses this to draw all entities generically. */
     int (*get_entity_count)(EncounterState* state);
     void* (*get_entity)(EncounterState* state, int index);  /* returns Player* */
+
+    /* render entity population: fills array of RenderEntity structs for the renderer.
+       replaces get_entity casting for rendering. NULL = renderer falls back to get_entity. */
+    void (*fill_render_entities)(EncounterState* state, RenderEntity* out, int max_entities, int* count);
 
     /* encounter-specific config (key-value put/get for binding kwargs) */
     void (*put_int)(EncounterState* state, const char* key, int value);

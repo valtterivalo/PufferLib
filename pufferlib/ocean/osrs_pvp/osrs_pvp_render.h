@@ -268,9 +268,10 @@ typedef struct {
     /* ray info */
     Vector3 debug_ray_origin, debug_ray_dir;
 
-    /* entity pointers: populated per-frame from env->players or encounter vtable.
-       index 0 = agent, 1+ = opponents/NPCs/bosses */
-    Player* entities[MAX_RENDER_ENTITIES];
+    /* render entities: populated per-frame from env->players or encounter vtable.
+       index 0 = agent, 1+ = opponents/NPCs/bosses.
+       stored by value (not pointer) via fill_render_entities. */
+    RenderEntity entities[MAX_RENDER_ENTITIES];
     int entity_count;
 
     /* per-entity composite model (merged body + equipment, animated as one) */
@@ -383,6 +384,19 @@ typedef struct {
 
 /* forward declarations */
 static Camera3D render_build_3d_camera(RenderClient* rc);
+
+/** Get the raw Player* for a given entity index (for GUI functions that need full Player state).
+    Returns the Player* from get_entity for encounters that use Player structs (PvP, Zulrah).
+    Returns NULL if no encounter or index is out of range. GUI code must NULL-check. */
+static Player* render_get_player_ptr(OsrsPvp* env, int index) {
+    if (env->encounter_def && env->encounter_state) {
+        const EncounterDef* def = (const EncounterDef*)env->encounter_def;
+        return (Player*)def->get_entity(env->encounter_state, index);
+    }
+    if (index >= 0 && index < NUM_AGENTS)
+        return &env->players[index];
+    return NULL;
+}
 
 /* ======================================================================== */
 /* coordinate helpers                                                        */
@@ -757,7 +771,7 @@ static void render_destroy_client(RenderClient* rc) {
 /* input                                                                     */
 /* ======================================================================== */
 
-static void render_handle_input(RenderClient* rc) {
+static void render_handle_input(RenderClient* rc, OsrsPvp* env) {
     if (IsKeyPressed(KEY_SPACE))  rc->is_paused = !rc->is_paused;
 
     if (IsKeyPressed(KEY_RIGHT) && rc->is_paused) {
@@ -875,7 +889,7 @@ static void render_handle_input(RenderClient* rc) {
             my >= rc->gui.panel_y && my < rc->gui.panel_y + rc->gui.panel_h) {
 
             Player* viewed = (rc->entity_count > 0 && rc->gui.gui_entity_idx < rc->entity_count)
-                ? rc->entities[rc->gui.gui_entity_idx] : NULL;
+                ? render_get_player_ptr(env, rc->gui.gui_entity_idx) : NULL;
 
             if (viewed) {
                 switch (rc->gui.active_tab) {
@@ -906,7 +920,7 @@ static void render_handle_input(RenderClient* rc) {
                 int entity_hit = 0;
                 for (int ei = 0; ei < rc->entity_count; ei++) {
                     if (ei == rc->gui.gui_entity_idx) continue;
-                    Player* ent = rc->entities[ei];
+                    RenderEntity* ent = &rc->entities[ei];
                     if (ent->entity_type == ENTITY_NPC && !ent->npc_visible) continue;
                     if (hull_contains(&rc->entity_hulls[ei], mx, my)) {
                         rc->human_input.pending_attack = 1;
@@ -1041,15 +1055,24 @@ static void render_push_splat(RenderClient* rc, int damage, int pidx);
 /* ======================================================================== */
 
 /* populate rc->entities from env->players (legacy) or encounter vtable.
-   call before render_post_tick and pvp_render so all draw code uses rc->entities. */
+   call before render_post_tick and pvp_render so all draw code uses rc->entities.
+   uses fill_render_entities when available, falls back to get_entity + cast. */
 static void render_populate_entities(RenderClient* rc, OsrsPvp* env) {
     if (env->encounter_def && env->encounter_state) {
         const EncounterDef* def = (const EncounterDef*)env->encounter_def;
-        int count = def->get_entity_count(env->encounter_state);
-        if (count > MAX_RENDER_ENTITIES) count = MAX_RENDER_ENTITIES;
-        rc->entity_count = count;
-        for (int i = 0; i < count; i++) {
-            rc->entities[i] = (Player*)def->get_entity(env->encounter_state, i);
+        if (def->fill_render_entities) {
+            int count = 0;
+            def->fill_render_entities(env->encounter_state, rc->entities, MAX_RENDER_ENTITIES, &count);
+            rc->entity_count = count;
+        } else {
+            /* legacy fallback: cast get_entity to Player* */
+            int count = def->get_entity_count(env->encounter_state);
+            if (count > MAX_RENDER_ENTITIES) count = MAX_RENDER_ENTITIES;
+            rc->entity_count = count;
+            for (int i = 0; i < count; i++) {
+                Player* p = (Player*)def->get_entity(env->encounter_state, i);
+                if (p) render_entity_from_player(p, &rc->entities[i]);
+            }
         }
         /* override arena bounds from encounter if set */
         if (def->arena_width > 0 && def->arena_height > 0) {
@@ -1061,7 +1084,7 @@ static void render_populate_entities(RenderClient* rc, OsrsPvp* env) {
     } else {
         rc->entity_count = NUM_AGENTS;
         for (int i = 0; i < NUM_AGENTS; i++) {
-            rc->entities[i] = &env->players[i];
+            render_entity_from_player(&env->players[i], &rc->entities[i]);
         }
     }
 }
@@ -1091,7 +1114,7 @@ static void render_pre_tick(RenderClient* rc, OsrsPvp* env) {
 static void render_post_tick(RenderClient* rc, OsrsPvp* env) {
     render_populate_entities(rc, env);
     for (int i = 0; i < rc->entity_count; i++) {
-        Player* p = rc->entities[i];
+        RenderEntity* p = &rc->entities[i];
 
         /* convert game tile to sub-tile destination (128 units/tile, centered).
            the entity's (x,y) is the SW anchor tile. for size-1 entities,
@@ -1163,9 +1186,9 @@ static void render_post_tick(RenderClient* rc, OsrsPvp* env) {
     /* spawn visual effects based on this tick's events */
     int ct = rc->effect_client_tick_counter;
     for (int i = 0; i < rc->entity_count; i++) {
-        Player* p = rc->entities[i];
+        RenderEntity* p = &rc->entities[i];
         int target_i = (rc->entity_count == 2) ? (1 - i) : (i == 0 ? 1 : 0);
-        Player* t = rc->entities[target_i];
+        RenderEntity* t = &rc->entities[target_i];
 
         /* attacker cast a spell this tick — spawn projectile */
         if (p->attack_style_this_tick == ATTACK_STYLE_MAGIC) {
@@ -1275,9 +1298,9 @@ static void render_post_tick(RenderClient* rc, OsrsPvp* env) {
             }
 
             /* update attack projectile targets to track player's current position */
-            if (rc->entity_count > 0 && rc->entities[0]) {
-                float px = (float)rc->entities[0]->x;
-                float py = (float)rc->entities[0]->y;
+            if (rc->entity_count > 0) {
+                float px = (float)rc->entities[0].x;
+                float py = (float)rc->entities[0].y;
                 flight_update_targets(rc, 0, px, py);  /* ranged */
                 flight_update_targets(rc, 1, px, py);  /* magic */
             }
@@ -1408,9 +1431,9 @@ static void render_client_tick(RenderClient* rc, int player_idx) {
     /* secondary (pose): select based on visual movement state.
        NPCs use their own idle animation from the NPC model mapping. */
     int new_secondary;
-    if (rc->entities[player_idx]->entity_type == ENTITY_NPC) {
+    if (rc->entities[player_idx].entity_type == ENTITY_NPC) {
         const NpcModelMapping* nm = npc_model_lookup(
-            (uint16_t)rc->entities[player_idx]->npc_def_id);
+            (uint16_t)rc->entities[player_idx].npc_def_id);
         new_secondary = nm ? (int)nm->idle_anim : -1;
     } else {
         new_secondary = render_select_secondary(rc, player_idx);
@@ -1753,7 +1776,7 @@ static void render_draw_players(RenderClient* rc) {
     int ts = RENDER_TILE_SIZE;
 
     for (int i = 0; i < rc->entity_count; i++) {
-        Player* p = rc->entities[i];
+        RenderEntity* p = &rc->entities[i];
         Color color = (i == 0) ? COLOR_P0 : COLOR_P1;
         int sx = render_world_to_screen_x_rc(rc, p->x);
         int sy = render_world_to_screen_y_rc(rc, p->y);
@@ -1820,7 +1843,7 @@ static void render_draw_dest_markers(RenderClient* rc) {
     int ts = RENDER_TILE_SIZE;
 
     for (int i = 0; i < rc->entity_count; i++) {
-        Player* p = rc->entities[i];
+        RenderEntity* p = &rc->entities[i];
         Color dest_color = (i == 0) ? COLOR_P0_LIGHT : COLOR_P1_LIGHT;
         if (p->dest_x != p->x || p->dest_y != p->y) {
             int sx = render_world_to_screen_x_rc(rc, p->dest_x);
@@ -1881,7 +1904,7 @@ static void render_splat_slot_offset(int slot, int* dx, int* dy) {
 /* 2D mode: draw splats at entity tile positions */
 static void render_draw_splats_2d(RenderClient* rc) {
     for (int p = 0; p < rc->entity_count; p++) {
-        Player* pl = rc->entities[p];
+        RenderEntity* pl = &rc->entities[p];
         int base_x = render_world_to_screen_x_rc(rc, pl->x) + RENDER_TILE_SIZE / 2;
         int base_y = render_world_to_screen_y_rc(rc, pl->y) + RENDER_TILE_SIZE / 2;
 
@@ -1925,15 +1948,15 @@ static void render_draw_header(RenderClient* rc, OsrsPvp* env) {
 
     /* right: HP summary (show first 2 entities) */
     if (rc->entity_count >= 2) {
-        Player* p0 = rc->entities[0];
-        Player* p1 = rc->entities[1];
+        RenderEntity* p0 = &rc->entities[0];
+        RenderEntity* p1 = &rc->entities[1];
         const char* hp_txt = TextFormat("P0: %d/%d   P1: %d/%d",
             p0->current_hitpoints, p0->base_hitpoints,
             p1->current_hitpoints, p1->base_hitpoints);
         int hp_w = MeasureText(hp_txt, 16);
         DrawText(hp_txt, RENDER_GRID_W - hp_w - 10, 12, 16, COLOR_TEXT);
     } else if (rc->entity_count == 1) {
-        Player* p0 = rc->entities[0];
+        RenderEntity* p0 = &rc->entities[0];
         const char* hp_txt = TextFormat("P0: %d/%d",
             p0->current_hitpoints, p0->base_hitpoints);
         int hp_w = MeasureText(hp_txt, 16);
@@ -1945,7 +1968,7 @@ static void render_draw_header(RenderClient* rc, OsrsPvp* env) {
 /* drawing: NPC/boss info panel (below GUI tabs)                             */
 /* ======================================================================== */
 
-static void render_draw_panel_npc(int x, int y, Player* p, OsrsPvp* env) {
+static void render_draw_panel_npc(int x, int y, RenderEntity* p, OsrsPvp* env) {
     int line_h = 14;
     const char* form_names[] = { "GREEN", "RED", "BLUE" };
 
@@ -2088,7 +2111,7 @@ static int render_get_attack_anim(uint8_t weapon_db_idx, int is_special) {
  * Primary animations are server-driven in the real client: attacks, casts, etc.
  * They play once then auto-expire (loopCount=1 effectively).
  */
-static int render_select_primary(Player* p) {
+static int render_select_primary(RenderEntity* p) {
     if (p->current_hitpoints <= 0) return ANIM_SEQ_DEATH;
 
     if (p->attack_style_this_tick != ATTACK_STYLE_NONE) {
@@ -2190,7 +2213,7 @@ static void composite_add_model(PlayerComposite* comp, OsrsModel* om) {
  * Called when equipment changes or on first frame.
  */
 static void composite_rebuild(
-    PlayerComposite* comp, ModelCache* cache, Player* p
+    PlayerComposite* comp, ModelCache* cache, RenderEntity* p
 ) {
     comp->base_vert_count = 0;
     comp->face_count = 0;
@@ -2449,7 +2472,7 @@ static void render_player_composite(
     if (!rc->model_cache) return;
 
     PlayerComposite* comp = &rc->composites[player_idx];
-    Player* p = rc->entities[player_idx];
+    RenderEntity* p = &rc->entities[player_idx];
 
     composite_init_gpu(comp);
 
@@ -2886,7 +2909,7 @@ static void render_draw_3d_world(RenderClient* rc) {
 
         rlDisableBackfaceCulling();
         for (int i = 0; i < rc->entity_count; i++) {
-            Player* ep = rc->entities[i];
+            RenderEntity* ep = &rc->entities[i];
 
             /* skip invisible NPCs (diving, dead, etc.) */
             if (ep->entity_type == ENTITY_NPC && !ep->npc_visible) continue;
@@ -3053,7 +3076,7 @@ static void render_draw_models_2d_overlay(RenderClient* rc) {
     BeginMode3D(cam);
 
     for (int i = 0; i < rc->entity_count; i++) {
-        Player* p = rc->entities[i];
+        RenderEntity* p = &rc->entities[i];
 
         uint8_t slot_idx = p->equipped[GEAR_SLOT_WEAPON];
         uint8_t db_idx = get_item_for_slot(GEAR_SLOT_WEAPON, slot_idx);
@@ -3115,7 +3138,7 @@ static void render_draw_overhead_status(RenderClient* rc, OsrsPvp* env) {
     };
 
     for (int i = 0; i < rc->entity_count; i++) {
-        Player* p = rc->entities[i];
+        RenderEntity* p = &rc->entities[i];
 
         /* skip invisible NPCs */
         if (p->entity_type == ENTITY_NPC && !p->npc_visible) continue;
@@ -3197,12 +3220,13 @@ void pvp_render(OsrsPvp* env) {
        during pause, rewind, or initial frame) */
     render_populate_entities(rc, env);
 
-    render_handle_input(rc);
+    render_handle_input(rc, env);
 
-    /* inventory mouse interaction (clicks, drags) — runs every frame */
+    /* inventory mouse interaction (clicks, drags) — runs every frame.
+       gui functions need the full Player* (inventory, stats, etc.) */
     if (rc->entity_count > 0 && rc->gui.gui_entity_idx < rc->entity_count) {
-        gui_inv_handle_mouse(&rc->gui, rc->entities[rc->gui.gui_entity_idx],
-                             &rc->human_input);
+        Player* gui_p = render_get_player_ptr(env, rc->gui.gui_entity_idx);
+        if (gui_p) gui_inv_handle_mouse(&rc->gui, gui_p, &rc->human_input);
     }
 
     /* run client ticks at 50 Hz (20ms each), matching the real OSRS client's
@@ -3266,8 +3290,8 @@ void pvp_render(OsrsPvp* env) {
 
         /* entity HP summary top-right */
         if (rc->entity_count >= 2) {
-            Player* p0 = rc->entities[0];
-            Player* p1 = rc->entities[1];
+            RenderEntity* p0 = &rc->entities[0];
+            RenderEntity* p1 = &rc->entities[1];
             const char* hp_txt = TextFormat("P0: %d/%d   P1: %d/%d",
                 p0->current_hitpoints, p0->base_hitpoints,
                 p1->current_hitpoints, p1->base_hitpoints);
@@ -3343,15 +3367,18 @@ void pvp_render(OsrsPvp* env) {
     }
 
     if (rc->entity_count > 0) {
-        Player* gui_player = rc->entities[rc->gui.gui_entity_idx];
-        gui_draw(&rc->gui, gui_player);
+        /* gui_draw needs full Player* for inventory/stats/prayers.
+           render_get_player_ptr fetches from encounter vtable. */
+        Player* gui_player = render_get_player_ptr(env, rc->gui.gui_entity_idx);
+        if (gui_player) gui_draw(&rc->gui, gui_player);
 
         /* boss/NPC info: top-left overlay (instead of below panel) */
-        if (gui_player->entity_type != ENTITY_NPC && rc->entity_count > 1) {
+        RenderEntity* gui_re = &rc->entities[rc->gui.gui_entity_idx];
+        if (gui_re->entity_type != ENTITY_NPC && rc->entity_count > 1) {
             for (int ei = 0; ei < rc->entity_count; ei++) {
-                if (rc->entities[ei]->entity_type == ENTITY_NPC) {
+                if (rc->entities[ei].entity_type == ENTITY_NPC) {
                     render_draw_panel_npc(10, RENDER_HEADER_HEIGHT + 8,
-                                         rc->entities[ei], env);
+                                         &rc->entities[ei], env);
                     break;
                 }
             }

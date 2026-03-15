@@ -1591,6 +1591,39 @@ static void* inf_get_entity(EncounterState* state, int index) {
     return NULL;
 }
 
+/* render entity population */
+static void inf_fill_render_entities(EncounterState* state, RenderEntity* out, int max_entities, int* count) {
+    InfernoState* s = (InfernoState*)state;
+    int n = 0;
+
+    /* index 0: the player */
+    if (n < max_entities) {
+        render_entity_from_player(&s->player, &out[n++]);
+    }
+
+    /* active NPCs: manually fill since InfNPC is not a Player */
+    for (int i = 0; i < INF_MAX_NPCS && n < max_entities; i++) {
+        InfNPC* npc = &s->npcs[i];
+        if (!npc->active) continue;
+
+        RenderEntity* re = &out[n++];
+        memset(re, 0, sizeof(RenderEntity));
+        re->entity_type = ENTITY_NPC;
+        re->npc_def_id = (int)npc->type;
+        re->npc_visible = npc->active;
+        re->npc_size = npc->size;
+        re->npc_anim_id = -1;
+        re->x = npc->x;
+        re->y = npc->y;
+        re->dest_x = npc->target_x;
+        re->dest_y = npc->target_y;
+        re->current_hitpoints = npc->hp;
+        re->base_hitpoints = npc->max_hp;
+        re->attack_style_this_tick = (AttackStyle)npc->attack_style;
+    }
+    *count = n;
+}
+
 static void inf_put_int(EncounterState* state, const char* key, int value) {
     InfernoState* s = (InfernoState*)state;
     if (strcmp(key, "start_wave") == 0) s->start_wave = value;
@@ -1640,6 +1673,7 @@ static const EncounterDef ENCOUNTER_INFERNO = {
 
     .get_entity_count = inf_get_entity_count,
     .get_entity = inf_get_entity,
+    .fill_render_entities = inf_fill_render_entities,
 
     .put_int = inf_put_int,
     .put_float = inf_put_float,

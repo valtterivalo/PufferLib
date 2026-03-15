@@ -85,7 +85,7 @@ static inline int human_screen_to_world_y(int screen_y, int arena_base_y,
 /** Check if world tile (wx,wy) is within an NPC's bounding box.
     OSRS NPCs occupy npc_size x npc_size tiles anchored at (x,y) as southwest corner.
     Players have npc_size 0 or 1, occupying just their tile. */
-static int human_tile_hits_entity(Player* ent, int wx, int wy) {
+static int human_tile_hits_entity(RenderEntity* ent, int wx, int wy) {
     int size = ent->npc_size > 1 ? ent->npc_size : 1;
     return wx >= ent->x && wx < ent->x + size &&
            wy >= ent->y && wy < ent->y + size;
@@ -105,13 +105,13 @@ static void human_set_click_cross(HumanInput* hi, int screen_x, int screen_y, in
 static void human_process_tile_click(HumanInput* hi,
                                       int wx, int wy,
                                       int screen_x, int screen_y,
-                                      Player** entities, int entity_count,
+                                      RenderEntity* entities, int entity_count,
                                       int gui_entity_idx) {
     /* check if an attackable entity occupies this tile (bounding box) */
     for (int i = 0; i < entity_count; i++) {
         if (i == gui_entity_idx) continue;  /* can't attack self */
-        if (!entities[i]->npc_visible && entities[i]->entity_type == ENTITY_NPC) continue;
-        if (human_tile_hits_entity(entities[i], wx, wy)) {
+        if (!entities[i].npc_visible && entities[i].entity_type == ENTITY_NPC) continue;
+        if (human_tile_hits_entity(&entities[i], wx, wy)) {
             hi->pending_attack = 1;
             /* attack cancels movement — server stops walking to old dest
                and auto-walks toward target instead (OSRS server behavior) */
@@ -143,7 +143,7 @@ static void human_handle_ground_click(HumanInput* hi,
                                        int mouse_x, int mouse_y,
                                        int arena_base_x, int arena_base_y,
                                        int arena_width, int arena_height,
-                                       Player** entities, int entity_count,
+                                       RenderEntity* entities, int entity_count,
                                        int gui_entity_idx,
                                        int tile_size, int header_h) {
     if (mouse_y < header_h) return;
