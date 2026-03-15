@@ -2074,10 +2074,12 @@ static void zul_reset(EncounterState* state, uint32_t seed) {
     s->player_restore_doses = ZUL_PLAYER_RESTORE_DOSES;
     s->player_special_energy = 100;
     s->antivenom_doses = ZUL_ANTIVENOM_DOSES;
-    /* thrall: summoned before fight starts */
-    s->thrall_active = 1;
-    s->thrall_duration_remaining = ZUL_THRALL_DURATION;
-    s->thrall_attack_timer = ZUL_THRALL_SPEED;
+    /* thrall: tier 1+ only (budget gear doesn't have arceuus access) */
+    if (s->gear_tier >= 1) {
+        s->thrall_active = 1;
+        s->thrall_duration_remaining = ZUL_THRALL_DURATION;
+        s->thrall_attack_timer = ZUL_THRALL_SPEED;
+    }
     s->player_gear = ZUL_GEAR_MAGE;
     s->player.current_gear = GEAR_MAGE;
     s->player.visible_gear = GEAR_MAGE;
