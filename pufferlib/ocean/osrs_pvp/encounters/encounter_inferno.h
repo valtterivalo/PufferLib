@@ -1449,8 +1449,56 @@ static void inf_write_obs(EncounterState* state, float* obs) {
 }
 
 static void inf_write_mask(EncounterState* state, float* mask) {
-    (void)state;
-    for (int i = 0; i < INF_ACTION_MASK_SIZE; i++) mask[i] = 1.0f;
+    InfernoState* s = (InfernoState*)state;
+    int offset = 0;
+
+    /* HEAD_MOVE (9): idle always valid, directions valid if in arena + not blocked */
+    mask[offset++] = 1.0f;  /* idle always valid */
+    for (int d = 1; d < 9; d++) {
+        int nx = s->player.x + INF_MOVE_DX[d];
+        int ny = s->player.y + INF_MOVE_DY[d];
+        mask[offset++] = (inf_in_arena(nx, ny) && !inf_blocked_by_pillar(s, nx, ny, 1))
+                         ? 1.0f : 0.0f;
+    }
+
+    /* HEAD_PRAYER (4): mask out the prayer that's already active */
+    mask[offset++] = (s->active_prayer != PRAYER_NONE) ? 1.0f : 0.0f;         /* none: only if something is on */
+    mask[offset++] = (s->active_prayer != PRAYER_PROTECT_MELEE) ? 1.0f : 0.0f;
+    mask[offset++] = (s->active_prayer != PRAYER_PROTECT_RANGED) ? 1.0f : 0.0f;
+    mask[offset++] = (s->active_prayer != PRAYER_PROTECT_MAGIC) ? 1.0f : 0.0f;
+
+    /* HEAD_TARGET (INF_MAX_NPCS+1): none always valid, NPC valid only if active */
+    mask[offset++] = 1.0f;  /* no target */
+    for (int n = 0; n < INF_MAX_NPCS; n++) {
+        mask[offset++] = s->npcs[n].active ? 1.0f : 0.0f;
+    }
+
+    /* HEAD_EAT (3): none, food, karambwan */
+    mask[offset++] = 1.0f;  /* none always valid */
+    /* food: mask out if no food left, eat timer active, or would waste (HP >= max) */
+    mask[offset++] = (s->player_food_count > 0 &&
+                      s->player_food_timer == 0 &&
+                      s->player.current_hitpoints < s->player.base_hitpoints)
+                     ? 1.0f : 0.0f;
+    /* karambwan: same logic (reusing food slot 2 for simplicity — no separate karambwan tracking yet) */
+    mask[offset++] = 0.0f;  /* karambwan not implemented separately, always masked */
+
+    /* HEAD_POTION (3): none, restore, brew */
+    mask[offset++] = 1.0f;  /* none always valid */
+    /* restore: mask out if no doses, timer active, or prayer is full */
+    mask[offset++] = (s->player_restore_doses > 0 &&
+                      s->player_potion_timer == 0 &&
+                      s->player.current_prayer < s->player.base_prayer)
+                     ? 1.0f : 0.0f;
+    /* brew: mask out if no doses, timer active, or HP already at brew cap (base+16) */
+    mask[offset++] = (s->player_brew_doses > 0 &&
+                      s->player_potion_timer == 0 &&
+                      s->player.current_hitpoints < s->player.base_hitpoints + 16)
+                     ? 1.0f : 0.0f;
+
+    /* HEAD_SPEC (2): none, spec */
+    mask[offset++] = 1.0f;  /* none always valid */
+    mask[offset++] = (s->player_special_energy >= 50) ? 1.0f : 0.0f;
 }
 
 /* ======================================================================== */
