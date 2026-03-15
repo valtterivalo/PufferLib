@@ -14,6 +14,7 @@
 #include "osrs_encounter.h"
 #include "encounters/encounter_nh_pvp.h"
 #include "encounters/encounter_zulrah.h"
+#include "encounters/encounter_inferno.h"
 
 #ifdef OSRS_PVP_VISUAL
 #include "osrs_pvp_render.h"

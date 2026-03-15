@@ -48,6 +48,10 @@ ENV_DEFAULTS = {
         "gear_tier": 0.0,
         "mask_in_obs": 1.0,
     },
+    "osrs_inferno": {
+        "start_wave": 0.0,
+        "mask_in_obs": 1.0,
+    },
 }
 
 
