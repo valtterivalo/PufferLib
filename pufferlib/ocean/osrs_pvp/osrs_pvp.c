@@ -245,6 +245,13 @@ static void run_visual(OsrsPvp* env, const char* encounter_name, const char* rep
         rc->collision_map = (const CollisionMap*)env->collision_map;
         rc->collision_world_offset_x = 2256;
         rc->collision_world_offset_y = 3061;
+    } else if (encounter_name && strcmp(encounter_name, "inferno") == 0) {
+        /* inferno: load NPC models + animations as secondary caches */
+        rc->npc_model_cache = model_cache_load("data/inferno_npcs.models");
+        rc->npc_anim_cache = anim_cache_load("data/inferno_npcs.anims");
+        fprintf(stderr, "inferno: npc_models=%d, npc_anims=%d seqs\n",
+                rc->npc_model_cache ? rc->npc_model_cache->count : 0,
+                rc->npc_anim_cache ? rc->npc_anim_cache->seq_count : 0);
     }
 
     /* populate entity pointers (also sets arena bounds from encounter) */
@@ -255,9 +262,9 @@ static void run_visual(OsrsPvp* env, const char* encounter_name, const char* rep
     rc->cam_target_z = -((float)rc->arena_base_y + (float)rc->arena_height / 2.0f);
 
     for (int i = 0; i < rc->entity_count; i++) {
-        int size = rc->entities[i]->npc_size > 1 ? rc->entities[i]->npc_size : 1;
-        rc->sub_x[i] = rc->entities[i]->x * 128 + size * 64;
-        rc->sub_y[i] = rc->entities[i]->y * 128 + size * 64;
+        int size = rc->entities[i].npc_size > 1 ? rc->entities[i].npc_size : 1;
+        rc->sub_x[i] = rc->entities[i].x * 128 + size * 64;
+        rc->sub_y[i] = rc->entities[i].y * 128 + size * 64;
         rc->dest_x[i] = rc->sub_x[i];
         rc->dest_y[i] = rc->sub_y[i];
     }
@@ -408,8 +415,8 @@ static void run_visual(OsrsPvp* env, const char* encounter_name, const char* rep
             }
             render_populate_entities(rc, env);
             for (int i = 0; i < rc->entity_count; i++) {
-                rc->sub_x[i] = rc->entities[i]->x * 128 + 64;
-                rc->sub_y[i] = rc->entities[i]->y * 128 + 64;
+                rc->sub_x[i] = rc->entities[i].x * 128 + 64;
+                rc->sub_y[i] = rc->entities[i].y * 128 + 64;
                 rc->dest_x[i] = rc->sub_x[i];
                 rc->dest_y[i] = rc->sub_y[i];
             }

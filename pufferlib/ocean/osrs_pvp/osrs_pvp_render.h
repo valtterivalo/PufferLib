@@ -245,6 +245,8 @@ typedef struct {
     /* 3D model rendering */
     ModelCache* model_cache;
     AnimCache* anim_cache;
+    ModelCache* npc_model_cache;  /* secondary cache for encounter-specific NPC models */
+    AnimCache* npc_anim_cache;    /* secondary cache for encounter-specific NPC anims */
     float model_scale;
 
     /* overhead prayer icon textures (from headicons_prayer sprites) */
@@ -396,6 +398,22 @@ static Player* render_get_player_ptr(OsrsPvp* env, int index) {
     if (index >= 0 && index < NUM_AGENTS)
         return &env->players[index];
     return NULL;
+}
+
+/** Look up an animation sequence, checking secondary NPC cache as fallback. */
+static AnimSequence* render_get_anim_sequence(RenderClient* rc, uint16_t seq_id) {
+    AnimSequence* seq = NULL;
+    if (rc->anim_cache) seq = anim_get_sequence(rc->anim_cache, seq_id);
+    if (!seq && rc->npc_anim_cache) seq = anim_get_sequence(rc->npc_anim_cache, seq_id);
+    return seq;
+}
+
+/** Look up an animation framebase, checking secondary NPC cache as fallback. */
+static AnimFrameBase* render_get_framebase(RenderClient* rc, uint16_t base_id) {
+    AnimFrameBase* fb = NULL;
+    if (rc->anim_cache) fb = anim_get_framebase(rc->anim_cache, base_id);
+    if (!fb && rc->npc_anim_cache) fb = anim_get_framebase(rc->npc_anim_cache, base_id);
+    return fb;
 }
 
 /* ======================================================================== */
@@ -2282,7 +2300,7 @@ static void composite_rebuild(
  * Used for Zulrah forms, snakelings, and other encounter NPCs.
  */
 static void composite_rebuild_npc(
-    PlayerComposite* comp, ModelCache* cache, int npc_def_id
+    PlayerComposite* comp, ModelCache* cache, ModelCache* npc_cache, int npc_def_id
 ) {
     comp->base_vert_count = 0;
     comp->face_count = 0;
@@ -2298,6 +2316,9 @@ static void composite_rebuild_npc(
     }
 
     OsrsModel* om = model_cache_get(cache, model_id);
+    /* fallback: check secondary NPC model cache (inferno etc.) */
+    if (!om && npc_cache)
+        om = model_cache_get(npc_cache, model_id);
     if (om) composite_add_model(comp, om);
 
     /* rebuild animation state */
@@ -2479,7 +2500,7 @@ static void render_player_composite(
     /* branch on entity type: NPCs use single-model composites */
     if (p->entity_type == ENTITY_NPC) {
         if (comp->needs_rebuild || comp->last_npc_def_id != p->npc_def_id) {
-            composite_rebuild_npc(comp, rc->model_cache, p->npc_def_id);
+            composite_rebuild_npc(comp, rc->model_cache, rc->npc_model_cache, p->npc_def_id);
         }
     } else {
         if (comp->needs_rebuild ||
