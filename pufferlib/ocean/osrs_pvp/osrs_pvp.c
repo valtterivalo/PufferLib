@@ -159,12 +159,17 @@ static void run_visual(OsrsPvp* env, const char* encounter_name, const char* rep
             CollisionMap* cmap = collision_map_load("data/zulrah.cmap");
             if (cmap) {
                 edef->put_ptr(env->encounter_state, "collision_map", cmap);
-                /* local (0,0) = world (2254, 3060) per ZUL_POSITIONS anchor */
                 edef->put_int(env->encounter_state, "world_offset_x", 2256);
                 edef->put_int(env->encounter_state, "world_offset_y", 3061);
                 env->collision_map = cmap;
                 fprintf(stderr, "zulrah collision map: %d regions, offset (2256, 3061)\n",
                         cmap->count);
+            }
+        } else if (strcmp(encounter_name, "inferno") == 0) {
+            CollisionMap* cmap = collision_map_load("data/inferno.cmap");
+            if (cmap) {
+                env->collision_map = cmap;
+                fprintf(stderr, "inferno collision map: %d regions\n", cmap->count);
             }
         }
 
@@ -252,20 +257,29 @@ static void run_visual(OsrsPvp* env, const char* encounter_name, const char* rep
            encounter uses region-local coords (10-40, 13-44).
            offset terrain/objects so local coord 0 maps to world 2240. */
         if (rc->terrain)
-            terrain_offset(rc->terrain, 2240, 5312);
+            terrain_offset(rc->terrain, 2246, 5315);
         if (rc->objects)
-            objects_offset(rc->objects, 2240, 5312);
+            objects_offset(rc->objects, 2246, 5315);
 
         rc->npc_model_cache = model_cache_load("data/inferno_npcs.models");
         rc->npc_anim_cache = anim_cache_load("data/inferno_npcs.anims");
-        fprintf(stderr, "inferno: terrain=%s, npc_models=%d, npc_anims=%d seqs\n",
+
+        /* collision map for debug overlay (C key) */
+        if (env->collision_map) {
+            rc->collision_map = (const CollisionMap*)env->collision_map;
+            rc->collision_world_offset_x = 2246;
+            rc->collision_world_offset_y = 5315;
+        }
+
+        fprintf(stderr, "inferno: terrain=%s, cmap=%s, npc_models=%d, npc_anims=%d seqs\n",
                 rc->terrain ? "loaded" : "MISSING",
+                rc->collision_map ? "loaded" : "MISSING",
                 rc->npc_model_cache ? rc->npc_model_cache->count : 0,
                 rc->npc_anim_cache ? rc->npc_anim_cache->seq_count : 0);
         /* entity/pillar Y coords are mirrored vs the cache terrain/objects.
            mirror entity rendering AND objects to match. terrain already correct. */
         rc->mirror_y = 1;
-        rc->mirror_y_center = (float)(INF_ARENA_MIN_Y + INF_ARENA_MAX_Y) / 2.0f;
+        rc->mirror_y_center = (float)(INF_ARENA_MIN_Y + INF_ARENA_MAX_Y) / 2.0f + 1.0f;
     }
 
     /* populate entity pointers (also sets arena bounds from encounter) */

@@ -2817,10 +2817,15 @@ static void render_draw_3d_world(RenderClient* rc) {
                     }
                 }
             }
+            /* wireframe: average the actual draw positions of first and last solid tile */
             float cx = (float)is->pillars[p].x + INF_PILLAR_SIZE / 2.0f;
-            float py_c = (float)(is->pillars[p].y + INF_PILLAR_SIZE / 2);
-            if (rc->mirror_y) py_c = 2.0f * rc->mirror_y_center - py_c;
-            float cz = -(py_c + 1.0f) + INF_PILLAR_SIZE / 2.0f;
+            float py0 = (float)is->pillars[p].y;
+            float py2 = (float)(is->pillars[p].y + INF_PILLAR_SIZE - 1);
+            if (rc->mirror_y) { py0 = 2.0f * rc->mirror_y_center - py0; py2 = 2.0f * rc->mirror_y_center - py2; }
+            /* solid cubes draw at -(py + 1) + 0.5 */
+            float z0 = -(py0 + 1.0f) + 0.5f;
+            float z2 = -(py2 + 1.0f) + 0.5f;
+            float cz = (z0 + z2) / 2.0f;
             DrawCubeWires((Vector3){ cx, plat_y + 1.5f, cz },
                           (float)INF_PILLAR_SIZE, 3.0f, (float)INF_PILLAR_SIZE, BLACK);
         }
