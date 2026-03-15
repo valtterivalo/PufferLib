@@ -424,4 +424,153 @@ static inline int collision_map_save(const CollisionMap* map, const char* path) 
     return 0;
 }
 
+/* =========================================================================
+ * LINE OF SIGHT — fixed-point ray tracing with directional masks
+ *
+ * used by inferno pillars, zulrah safespots, and any future encounter
+ * that needs projectile blocking around obstacles.
+ *
+ * algorithm: Bresenham-style ray trace in Q16 fixed-point from tile center.
+ * each blocker has a directional bitmask indicating which sides block sight.
+ * FULL_MASK blocks from all directions.
+ *
+ * reference: osrs-sdk LineOfSight.ts
+ * ========================================================================= */
+
+#define LOS_FULL_MASK   0x20000
+#define LOS_EAST_MASK   0x01000
+#define LOS_WEST_MASK   0x10000
+#define LOS_NORTH_MASK  0x00400
+#define LOS_SOUTH_MASK  0x04000
+
+/* an entity that blocks line of sight. pillars, walls, etc.
+ * the los_mask indicates which directions are blocked. */
+typedef struct {
+    int x, y;       /* top-left tile of the blocker */
+    int size;       /* NxN footprint */
+    uint32_t los_mask;  /* bitmask: which directions block LOS */
+} LOSBlocker;
+
+/* check if point (px,py) overlaps any blocker, return its mask or 0 */
+static uint32_t los_check_tile(const LOSBlocker* blockers, int count,
+                                int px, int py) {
+    for (int i = 0; i < count; i++) {
+        const LOSBlocker* b = &blockers[i];
+        if (px >= b->x && px < b->x + b->size &&
+            py >= b->y && py < b->y + b->size) {
+            return b->los_mask;
+        }
+    }
+    return 0;
+}
+
+/* AABB overlap check for two entities */
+static int los_aabb_overlap(int x1, int y1, int s1, int x2, int y2, int s2) {
+    return !(x1 >= x2 + s2 || x1 + s1 <= x2 || y1 >= y2 + s2 || y1 + s1 <= y2);
+}
+
+/* fixed-point Q16 ray trace. returns 1 if clear LOS, 0 if blocked.
+ * traces from (x1,y1) to (x2,y2). src_size is the source entity size (1 for player).
+ * range is max tile distance (-1 = unlimited). */
+static int has_line_of_sight(const LOSBlocker* blockers, int blocker_count,
+                              int x1, int y1, int x2, int y2,
+                              int src_size, int range) {
+    int dx = x2 - x1;
+    int dy = y2 - y1;
+
+    /* reject if either endpoint is inside a blocker */
+    if (los_check_tile(blockers, blocker_count, x1, y1)) return 0;
+    if (los_check_tile(blockers, blocker_count, x2, y2)) return 0;
+
+    /* self-overlap check */
+    if (los_aabb_overlap(x1, y1, src_size, x2, y2, 1)) return 0;
+
+    /* melee range = adjacency only, no ray tracing */
+    if (range == 1) {
+        int adx = dx < 0 ? -dx : dx;
+        int ady = dy < 0 ? -dy : dy;
+        return (adx <= 1 && ady <= 1 && (adx + ady) > 0);
+    }
+
+    /* range check */
+    if (range > 0) {
+        int adx = dx < 0 ? -dx : dx;
+        int ady = dy < 0 ? -dy : dy;
+        if (adx > range || ady > range) return 0;
+    }
+
+    int adx = dx < 0 ? -dx : dx;
+    int ady = dy < 0 ? -dy : dy;
+
+    if (adx > ady) {
+        /* x-dominant ray */
+        int x_tile = x1;
+        int y_fp = (y1 << 16) + 0x8000;
+        int slope = (adx > 0) ? ((dy << 16) / adx) : 0;
+        int x_inc = (dx > 0) ? 1 : -1;
+        uint32_t x_mask = (dx > 0) ? (LOS_WEST_MASK | LOS_FULL_MASK)
+                                    : (LOS_EAST_MASK | LOS_FULL_MASK);
+        uint32_t y_mask = (dy < 0) ? (LOS_NORTH_MASK | LOS_FULL_MASK)
+                                    : (LOS_SOUTH_MASK | LOS_FULL_MASK);
+        if (dy < 0) y_fp -= 1;
+
+        while (x_tile != x2) {
+            x_tile += x_inc;
+            int y_tile = y_fp >> 16;
+            if (los_check_tile(blockers, blocker_count, x_tile, y_tile) & x_mask)
+                return 0;
+            y_fp += slope;
+            int new_y = y_fp >> 16;
+            if (new_y != y_tile) {
+                if (los_check_tile(blockers, blocker_count, x_tile, new_y) & y_mask)
+                    return 0;
+            }
+        }
+    } else if (ady > 0) {
+        /* y-dominant ray */
+        int y_tile = y1;
+        int x_fp = (x1 << 16) + 0x8000;
+        int slope = (ady > 0) ? ((dx << 16) / ady) : 0;
+        int y_inc = (dy > 0) ? 1 : -1;
+        uint32_t y_mask = (dy > 0) ? (LOS_SOUTH_MASK | LOS_FULL_MASK)
+                                    : (LOS_NORTH_MASK | LOS_FULL_MASK);
+        uint32_t x_mask = (dx < 0) ? (LOS_EAST_MASK | LOS_FULL_MASK)
+                                    : (LOS_WEST_MASK | LOS_FULL_MASK);
+        if (dx < 0) x_fp -= 1;
+
+        while (y_tile != y2) {
+            y_tile += y_inc;
+            int x_tile = x_fp >> 16;
+            if (los_check_tile(blockers, blocker_count, x_tile, y_tile) & y_mask)
+                return 0;
+            x_fp += slope;
+            int new_x = x_fp >> 16;
+            if (new_x != x_tile) {
+                if (los_check_tile(blockers, blocker_count, new_x, y_tile) & x_mask)
+                    return 0;
+            }
+        }
+    }
+    /* else dx==0 && dy==0: same tile, always has LOS */
+
+    return 1;
+}
+
+/* NPC LOS: for size>1 NPCs, check from target's closest point back to NPC.
+ * npc is at (nx,ny) with npc_size. target is at (tx,ty) size 1. */
+static int npc_has_line_of_sight(const LOSBlocker* blockers, int blocker_count,
+                                  int nx, int ny, int npc_size,
+                                  int tx, int ty, int range) {
+    /* find closest point on NPC footprint to the target */
+    int cx = tx;
+    if (cx < nx) cx = nx;
+    if (cx >= nx + npc_size) cx = nx + npc_size - 1;
+    int cy = ty;
+    if (cy < ny) cy = ny;
+    if (cy >= ny + npc_size) cy = ny + npc_size - 1;
+
+    /* trace from target to closest NPC point (reversed perspective) */
+    return has_line_of_sight(blockers, blocker_count, tx, ty, cx, cy, 1, range);
+}
+
 #endif /* OSRS_PVP_COLLISION_H */
