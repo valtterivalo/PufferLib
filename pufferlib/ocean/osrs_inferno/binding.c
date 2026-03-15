@@ -54,15 +54,19 @@ void c_step(Env* env) {
     env->term_staging = (unsigned char)is_term;
     env->terminals[0] = (float)is_term;
 
-    if (is_term) {
+    /* continuously update log with running stats so the sweep always has signal,
+       even mid-episode. vecenv clears env->log periodically via memset. */
+    {
         InfernoState* s = (InfernoState*)env->enc_state;
-        env->log.episode_return += s->episode_return;
-        env->log.episode_length += (float)s->tick;
-        env->log.wins += (s->winner == 0) ? 1.0f : 0.0f;
-        env->log.damage_dealt += s->total_damage_dealt;
-        env->log.damage_received += s->total_damage_received;
-        env->log.n += 1.0f;
+        env->log.episode_return = s->episode_return;
+        env->log.episode_length = (float)s->tick;
+        env->log.damage_dealt = s->total_damage_dealt;
+        env->log.damage_received = s->total_damage_received;
+        env->log.wins = (is_term && s->winner == 0) ? 1.0f : 0.0f;
+        env->log.n = 1.0f;  /* always report so sweep has continuous signal */
+    }
 
+    if (is_term) {
         ENCOUNTER_INFERNO.reset(env->enc_state, 0);
         ENCOUNTER_INFERNO.write_obs(env->enc_state, obs);
         ENCOUNTER_INFERNO.write_mask(env->enc_state, obs + INF_NUM_OBS);
