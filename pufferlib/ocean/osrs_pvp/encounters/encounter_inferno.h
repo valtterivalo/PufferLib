@@ -1412,6 +1412,37 @@ static const int INF_MOVE_DY[9] = { 0, 1, 1, 0, -1, -1, 0, 1, -1 };
 #define INF_BREW_HEAL     16   /* sara brew heals 16, can overcap to base+16 */
 #define INF_RESTORE_PRAY  (7 + 99/4)  /* 31 points */
 
+/* apply NPC death: blob split, mager resurrection store, jad healer cleanup.
+   call after reducing npc->hp. checks if hp <= 0 and handles death effects. */
+static void inf_apply_npc_death(InfernoState* s, int npc_idx) {
+    InfNPC* npc = &s->npcs[npc_idx];
+    if (npc->hp > 0 || !npc->active) return;
+    npc->active = 0;
+
+    if (npc->type == INF_NPC_BLOB) {
+        InfNPCType split_types[3] = {
+            INF_NPC_BLOB_MELEE, INF_NPC_BLOB_RANGE, INF_NPC_BLOB_MAGE
+        };
+        for (int sp = 0; sp < 3; sp++) {
+            int slot = inf_find_free_npc(s);
+            if (slot < 0) break;
+            inf_init_npc(s, slot, split_types[sp], npc->x + (sp - 1), npc->y);
+        }
+    } else {
+        inf_store_dead_mob(s, npc);
+    }
+
+    if (npc->type == INF_NPC_JAD) {
+        for (int j = 0; j < INF_MAX_NPCS; j++) {
+            if (s->npcs[j].active &&
+                s->npcs[j].type == INF_NPC_HEALER_JAD &&
+                s->npcs[j].jad_owner_idx == npc_idx) {
+                s->npcs[j].active = 0;
+            }
+        }
+    }
+}
+
 static void inf_tick_player(InfernoState* s, const int* actions) {
     encounter_clear_tick_flags(&s->player);
 
@@ -1518,28 +1549,61 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
         InfNPC* target_npc = &s->npcs[s->player_attack_target];
         if (target_npc->active) {
             const InfWeaponStats* ws = &INF_WEAPON_STATS[s->weapon_set];
-            const InfNPCStats* ns = &INF_NPC_STATS[target_npc->type];
-            int dmg = 0;
+            int total_dmg = 0;
 
             if (s->weapon_set == INF_GEAR_MAGE) {
-                /* magic attack: accuracy roll using magic defence */
-                int att_roll = ws->eff_level * (ws->att_bonus + 64);
-                int def_roll = (ns->def_level + 8) * (ns->magic_def_bonus + 64);
-                if (inf_rand_float(s) < osrs_hit_chance(att_roll, def_roll)) {
-                    dmg = inf_rand_int(s, ws->max_hit + 1);
+                /* barrage spells: 3x3 AoE via shared osrs_barrage_resolve.
+                   ice barrage: freeze on hit (including 0 dmg), not on splash.
+                   blood barrage: heal 25% of total AoE damage. */
+                int mage_att_roll = ws->eff_level * (ws->att_bonus + 64);
+
+                /* build target array: primary target first, then all other active NPCs */
+                BarrageTarget btargets[INF_MAX_NPCS + 1];
+                int bt_count = 0;
+                {
+                    const InfNPCStats* ns = &INF_NPC_STATS[target_npc->type];
+                    btargets[bt_count++] = (BarrageTarget){
+                        .active = 1, .x = target_npc->x, .y = target_npc->y,
+                        .def_level = ns->def_level, .magic_def_bonus = ns->magic_def_bonus,
+                        .npc_idx = s->player_attack_target, .hit = 0, .damage = 0
+                    };
                 }
-                /* ice barrage freeze */
-                if (s->spell_choice == 1) {
-                    target_npc->frozen_ticks = 32;
+                for (int i = 0; i < INF_MAX_NPCS; i++) {
+                    if (i == s->player_attack_target || !s->npcs[i].active) continue;
+                    const InfNPCStats* ns2 = &INF_NPC_STATS[s->npcs[i].type];
+                    btargets[bt_count++] = (BarrageTarget){
+                        .active = 1, .x = s->npcs[i].x, .y = s->npcs[i].y,
+                        .def_level = ns2->def_level, .magic_def_bonus = ns2->magic_def_bonus,
+                        .npc_idx = i, .hit = 0, .damage = 0
+                    };
                 }
-                /* blood barrage heal: 25% of damage dealt */
-                if (s->spell_choice == 0 && dmg > 0) {
-                    s->player.current_hitpoints += dmg / 4;
-                    if (s->player.current_hitpoints > s->player.base_hitpoints + 16)
-                        s->player.current_hitpoints = s->player.base_hitpoints + 16;
+
+                BarrageResult br = osrs_barrage_resolve(
+                    btargets, bt_count, mage_att_roll, ws->max_hit, &s->rng_state);
+                total_dmg = br.total_damage;
+
+                /* apply damage, freeze, and death to each hit target */
+                for (int i = 0; i < bt_count; i++) {
+                    if (!btargets[i].active) continue;
+                    int idx = btargets[i].npc_idx;
+                    if (btargets[i].hit) {
+                        s->npcs[idx].hp -= btargets[i].damage;
+                        if (s->spell_choice == 1)
+                            s->npcs[idx].frozen_ticks = BARRAGE_FREEZE_TICKS;
+                        inf_apply_npc_death(s, idx);
+                    }
                 }
+
+                /* blood barrage: heal 25% of total AoE damage */
+                if (s->spell_choice == 0 && total_dmg > 0) {
+                    s->player.current_hitpoints += total_dmg / 4;
+                    if (s->player.current_hitpoints > s->player.base_hitpoints)
+                        s->player.current_hitpoints = s->player.base_hitpoints;
+                }
+
             } else if (s->weapon_set == INF_GEAR_TBOW) {
-                /* tbow: scale accuracy and damage by target magic level */
+                /* tbow: single target, scale by target magic level */
+                const InfNPCStats* ns = &INF_NPC_STATS[target_npc->type];
                 int tbow_m = ns->magic_level > ns->magic_def_bonus
                            ? ns->magic_level : ns->magic_def_bonus;
                 if (tbow_m > 250) tbow_m = 250;
@@ -1549,57 +1613,31 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
                 int def_roll = (ns->def_level + 8) * (ns->ranged_def_bonus + 64);
                 int max_hit = (int)(ws->max_hit * dmg_mult);
                 if (inf_rand_float(s) < osrs_hit_chance(att_roll, def_roll)) {
-                    dmg = inf_rand_int(s, max_hit + 1);
+                    total_dmg = inf_rand_int(s, max_hit + 1);
                 }
+                target_npc->hp -= total_dmg;
+                inf_apply_npc_death(s, s->player_attack_target);
+
             } else {
-                /* blowpipe: ranged attack against ranged defence */
+                /* blowpipe: single target */
+                const InfNPCStats* ns = &INF_NPC_STATS[target_npc->type];
                 int att_roll = ws->eff_level * (ws->att_bonus + 64);
                 int def_roll = (ns->def_level + 8) * (ns->ranged_def_bonus + 64);
                 if (inf_rand_float(s) < osrs_hit_chance(att_roll, def_roll)) {
-                    dmg = inf_rand_int(s, ws->max_hit + 1);
+                    total_dmg = inf_rand_int(s, ws->max_hit + 1);
                 }
+                target_npc->hp -= total_dmg;
+                inf_apply_npc_death(s, s->player_attack_target);
             }
 
-            target_npc->hp -= dmg;
-            s->damage_dealt_this_tick += dmg;
-            if (target_npc->hp <= 0) {
-                target_npc->active = 0;
-
-                /* blob splits into THREE mobs on death */
-                if (target_npc->type == INF_NPC_BLOB) {
-                    InfNPCType split_types[3] = {
-                        INF_NPC_BLOB_MELEE, INF_NPC_BLOB_RANGE, INF_NPC_BLOB_MAGE
-                    };
-                    for (int sp = 0; sp < 3; sp++) {
-                        int slot = inf_find_free_npc(s);
-                        if (slot < 0) break;
-                        int sx = target_npc->x + (sp - 1);
-                        int sy = target_npc->y;
-                        inf_init_npc(s, slot, split_types[sp], sx, sy);
-                    }
-                } else {
-                    /* store for mager resurrection */
-                    inf_store_dead_mob(s, target_npc);
-                }
-
-                /* jad healer dies when its jad dies */
-                if (target_npc->type == INF_NPC_JAD) {
-                    for (int j = 0; j < INF_MAX_NPCS; j++) {
-                        if (s->npcs[j].active &&
-                            s->npcs[j].type == INF_NPC_HEALER_JAD &&
-                            s->npcs[j].jad_owner_idx == s->player_attack_target) {
-                            s->npcs[j].active = 0;
-                        }
-                    }
-                }
-            }
+            s->damage_dealt_this_tick += total_dmg;
             s->player_attack_timer = ws->attack_speed;
 
             /* animation flags for renderer */
             s->player.attack_style_this_tick = ws->style;
-            s->player.hit_landed_this_tick = (dmg > 0) ? 1 : 0;
-            s->player.hit_damage = dmg;
-            s->player.hit_was_successful = (dmg > 0) ? 1 : 0;
+            s->player.hit_landed_this_tick = (total_dmg > 0) ? 1 : 0;
+            s->player.hit_damage = total_dmg;
+            s->player.hit_was_successful = (total_dmg > 0) ? 1 : 0;
         }
     }
 }
