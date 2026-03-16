@@ -2802,22 +2802,37 @@ static void render_draw_3d_world(RenderClient* rc) {
         }
     }
 
-    /* inferno pillars: 3D models come from inferno.objects (placed scene geometry).
-       draw only an HP-colored wireframe outline so pillar health is visible.
-       when a pillar is destroyed, TODO: hide the objects geometry for those tiles. */
+    /* inferno pillars: solid stone blocks with HP-based color + wireframe.
+       inferno pillars are dynamically spawned (not in static objects file),
+       so we must draw them explicitly. */
     if (rc->npc_model_cache && rc->gui.encounter_state) {
         InfernoState* is = (InfernoState*)rc->gui.encounter_state;
         float plat_y = 2.0f;
         for (int p = 0; p < INF_NUM_PILLARS; p++) {
             if (!is->pillars[p].active) continue;
             float hp_frac = (float)is->pillars[p].hp / (float)INF_PILLAR_HP;
-            /* HP-colored wireframe: green at full HP, red when low */
+            /* stone color: darkens and reddens as HP drops */
+            int base_r = (int)(140 * hp_frac + 180 * (1.0f - hp_frac));
+            int base_g = (int)(130 * hp_frac + 40 * (1.0f - hp_frac));
+            int base_b = (int)(100 * hp_frac + 20 * (1.0f - hp_frac));
+            Color pillar_col = { (unsigned char)base_r, (unsigned char)base_g, (unsigned char)base_b, 240 };
+            for (int dx = 0; dx < INF_PILLAR_SIZE; dx++) {
+                for (int dy = 0; dy < INF_PILLAR_SIZE; dy++) {
+                    float tx = (float)(is->pillars[p].x + dx);
+                    float tz = -(float)(is->pillars[p].y + dy + 1);
+                    for (int h = 0; h < 3; h++) {
+                        DrawCube((Vector3){ tx + 0.5f, plat_y + 0.5f + (float)h, tz + 0.5f },
+                                 0.95f, 0.95f, 0.95f, pillar_col);
+                    }
+                }
+            }
+            /* HP-colored wireframe outline */
             int wr = (int)(255 * (1.0f - hp_frac));
             int wg = (int)(255 * hp_frac);
             Color wire_col = { (unsigned char)wr, (unsigned char)wg, 0, 255 };
             float cx = (float)is->pillars[p].x + INF_PILLAR_SIZE / 2.0f;
-            float cy = -(float)(is->pillars[p].y + INF_PILLAR_SIZE / 2) - 0.5f;
-            DrawCubeWires((Vector3){ cx, plat_y + 1.5f, cy },
+            float cz = -(float)(is->pillars[p].y + INF_PILLAR_SIZE / 2) - 0.5f;
+            DrawCubeWires((Vector3){ cx, plat_y + 1.5f, cz },
                           (float)INF_PILLAR_SIZE, 3.0f, (float)INF_PILLAR_SIZE, wire_col);
         }
     }
