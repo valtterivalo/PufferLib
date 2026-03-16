@@ -382,8 +382,9 @@ static const int ZUL_ACTION_HEAD_DIMS[ZUL_NUM_ACTION_HEADS] = {
     ZUL_FOOD_DIM, ZUL_POTION_DIM, ZUL_SPEC_DIM,
 };
 
-static const int ZUL_MOVE_DX[9] = { 0, 0, 1, 1, 1, 0, -1, -1, -1 };
-static const int ZUL_MOVE_DY[9] = { 0, 1, 1, 0, -1, -1, -1, 0, 1 };
+/* movement uses shared ENCOUNTER_MOVE_DX/DY from osrs_encounter.h */
+#define ZUL_MOVE_DX ENCOUNTER_MOVE_DX
+#define ZUL_MOVE_DY ENCOUNTER_MOVE_DY
 
 /* ======================================================================== */
 /* gear tier precomputed stats — from wiki strategy guide loadouts           */

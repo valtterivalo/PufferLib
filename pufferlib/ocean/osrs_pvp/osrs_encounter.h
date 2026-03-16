@@ -126,6 +126,42 @@ static inline void render_entity_from_player(const Player* p, RenderEntity* out)
 }
 
 /* ======================================================================== */
+/* shared movement: direction table + walk/run helper                        */
+/* ======================================================================== */
+
+/* canonical 8-direction table (clockwise from north).
+   0=idle, 1=N, 2=NE, 3=E, 4=SE, 5=S, 6=SW, 7=W, 8=NW */
+static const int ENCOUNTER_MOVE_DX[9] = { 0, 0, 1, 1, 1, 0, -1, -1, -1 };
+static const int ENCOUNTER_MOVE_DY[9] = { 0, 1, 1, 0, -1, -1, -1, 0, 1 };
+
+/* callback: returns 1 if tile (x, y) is walkable for the encounter.
+   ctx is encounter-specific state (InfernoState*, ZulrahState*, etc.) */
+typedef int (*encounter_walkable_fn)(void* ctx, int x, int y);
+
+/** move player up to 2 tiles in direction (dx, dy).
+    checks walkability per tile via callback. sets is_running based on
+    whether 2 tiles were actually traversed (walk=1, run=2).
+    returns number of tiles moved (0, 1, or 2). */
+static inline int encounter_move_player(
+    Player* p, int dx, int dy,
+    encounter_walkable_fn is_walkable, void* ctx
+) {
+    int steps = 0;
+    for (int step = 0; step < 2; step++) {
+        int nx = p->x + dx;
+        int ny = p->y + dy;
+        if (!is_walkable(ctx, nx, ny)) break;
+        p->x = nx;
+        p->y = ny;
+        steps++;
+    }
+    p->is_running = (steps == 2);
+    p->dest_x = p->x;
+    p->dest_y = p->y;
+    return steps;
+}
+
+/* ======================================================================== */
 /* shared per-tick flag clearing for encounters                              */
 /* ======================================================================== */
 

@@ -1432,9 +1432,18 @@ static void inf_tick_npcs(InfernoState* s) {
 static const int INF_ACTION_DIMS[INF_NUM_ACTION_HEADS] = { 9, 4, INF_MAX_NPCS+1, 5, 2, 4, 2 };
 #define INF_ACTION_MASK_SIZE (9 + 4 + INF_MAX_NPCS+1 + 5 + 2 + 4 + 2)
 
-/* movement directions: 0=idle, 1-8 = N,NE,E,SE,S,SW,W,NW */
-static const int INF_MOVE_DX[9] = { 0, 0, 1, 1, 0, -1, -1, -1, 1 };
-static const int INF_MOVE_DY[9] = { 0, 1, 1, 0, -1, -1, 0, 1, -1 };
+/* movement uses shared ENCOUNTER_MOVE_DX/DY + encounter_move_player from osrs_encounter.h */
+
+/* walkability callback for encounter_move_player */
+static int inf_tile_walkable(void* ctx, int x, int y) {
+    InfernoState* s = (InfernoState*)ctx;
+    if (!inf_in_arena(x, y)) return 0;
+    if (inf_blocked_by_pillar(s, x, y, 1)) return 0;
+    if (s->collision_map)
+        return collision_tile_walkable(s->collision_map, 0,
+            x + s->world_offset_x, y + s->world_offset_y);
+    return 1;
+}
 
 #define INF_BREW_HEAL     16   /* sara brew heals 16, can overcap to base+16 */
 #define INF_RESTORE_PRAY  (7 + 99/4)  /* 31 points */
@@ -1537,24 +1546,14 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
         s->player_potion_timer = 3;
     }
 
-    /* movement: 1 tile per tick (walking). in OSRS inferno, precise 1-tile
-       positioning matters for prayer flicking and safespot management.
-       running (2 tiles) can be added as a future action head. */
+    /* movement: shared walk/run helper. attempts 2 tiles (run), falls back to 1 (walk).
+       uses encounter_move_player from osrs_encounter.h with inf_tile_walkable callback. */
     int move_act = actions[INF_HEAD_MOVE];
     s->player.is_running = 0;
     if (move_act > 0 && move_act < 9) {
-        int nx = s->player.x + INF_MOVE_DX[move_act];
-        int ny = s->player.y + INF_MOVE_DY[move_act];
-        int walkable = inf_in_arena(nx, ny) && !inf_blocked_by_pillar(s, nx, ny, 1);
-        if (walkable && s->collision_map)
-            walkable = collision_tile_walkable(s->collision_map, 0,
-                nx + s->world_offset_x, ny + s->world_offset_y);
-        if (walkable) {
-            s->player.x = nx;
-            s->player.y = ny;
-            s->player.dest_x = nx;
-            s->player.dest_y = ny;
-        }
+        encounter_move_player(&s->player,
+            ENCOUNTER_MOVE_DX[move_act], ENCOUNTER_MOVE_DY[move_act],
+            inf_tile_walkable, s);
     }
 
     /* attack target */
@@ -1870,8 +1869,8 @@ static void inf_write_mask(EncounterState* state, float* mask) {
     /* HEAD_MOVE (9): idle always valid, directions valid if in arena + not blocked */
     mask[offset++] = 1.0f;  /* idle always valid */
     for (int d = 1; d < 9; d++) {
-        int nx = s->player.x + INF_MOVE_DX[d];
-        int ny = s->player.y + INF_MOVE_DY[d];
+        int nx = s->player.x + ENCOUNTER_MOVE_DX[d];
+        int ny = s->player.y + ENCOUNTER_MOVE_DY[d];
         mask[offset++] = (inf_in_arena(nx, ny) && !inf_blocked_by_pillar(s, nx, ny, 1))
                          ? 1.0f : 0.0f;
     }
