@@ -1385,8 +1385,8 @@ static void render_client_tick(RenderClient* rc, int player_idx) {
         int stall = 0;
         if (rc->anim[player_idx].primary_seq_id >= 0 &&
             rc->anim[player_idx].primary_loops == 0 && rc->anim_cache) {
-            AnimSequence* seq = anim_get_sequence(
-                rc->anim_cache, (uint16_t)rc->anim[player_idx].primary_seq_id);
+            AnimSequence* seq = render_get_anim_sequence(
+                rc, (uint16_t)rc->anim[player_idx].primary_seq_id);
             if (seq && seq->interleave_count == 0) {
                 stall = 1;
             }
@@ -2657,7 +2657,7 @@ static void render_player_composite(
             int fidx = rc->anim[player_idx].secondary_frame_idx % seq->frame_count;
             AnimSequenceFrame* sf = &seq->frames[fidx];
             if (sf->frame.framebase_id != 0xFFFF) {
-                AnimFrameBase* fb = anim_get_framebase(rc->anim_cache, sf->frame.framebase_id);
+                AnimFrameBase* fb = render_get_framebase(rc, sf->frame.framebase_id);
                 if (fb) { sec_sf = sf; sec_fb = fb; }
             }
         }
@@ -2671,7 +2671,7 @@ static void render_player_composite(
             int fidx = rc->anim[player_idx].primary_frame_idx % seq->frame_count;
             AnimSequenceFrame* sf = &seq->frames[fidx];
             if (sf->frame.framebase_id != 0xFFFF) {
-                AnimFrameBase* fb = anim_get_framebase(rc->anim_cache, sf->frame.framebase_id);
+                AnimFrameBase* fb = render_get_framebase(rc, sf->frame.framebase_id);
                 if (fb) { pri_sf = sf; pri_fb = fb; }
             }
         }
@@ -3109,16 +3109,11 @@ static void render_draw_3d_world(RenderClient* rc) {
             base = MatrixMultiply(base, MatrixRotateY(rc->yaw[i]));
             base = MatrixMultiply(base, MatrixTranslate(px, ground, pz));
 
-            /* rebuild composite if equipment changed, animate, upload, draw.
-               skip composite for NPCs when npc_model_cache has garbled data —
-               draw colored cubes instead. player composites (equipment models) still render. */
-            int skip_npc_composite = (ep->entity_type == ENTITY_NPC && rc->npc_model_cache);
-            if (!skip_npc_composite)
-                render_player_composite(rc, i, base);
+            /* rebuild composite if equipment changed, animate, upload, draw */
+            render_player_composite(rc, i, base);
 
-            /* colored cube for NPCs: either composite was skipped or produced no geometry */
-            if (ep->entity_type == ENTITY_NPC &&
-                (skip_npc_composite || rc->composites[i].face_count == 0)) {
+            /* colored cube fallback for NPCs without valid 3D models */
+            if (ep->entity_type == ENTITY_NPC && rc->composites[i].face_count == 0) {
                 float sz = (float)(ep->npc_size > 1 ? ep->npc_size : 1) * 0.6f;
                 Color npc_col;
                 switch (ep->npc_def_id) {
@@ -3203,10 +3198,10 @@ static void render_draw_3d_world(RenderClient* rc) {
                which is fine since effects render sequentially. */
             if (e->anim_state && e->meta->anim_seq_id >= 0 && rc->anim_cache
                 && om->face_indices) {
-                AnimSequence* seq = anim_get_sequence(rc->anim_cache, e->meta->anim_seq_id);
+                AnimSequence* seq = render_get_anim_sequence(rc, e->meta->anim_seq_id);
                 if (seq && e->anim_frame < seq->frame_count) {
                     AnimSequenceFrame* sf = &seq->frames[e->anim_frame];
-                    AnimFrameBase* fb = anim_get_framebase(rc->anim_cache,
+                    AnimFrameBase* fb = render_get_framebase(rc,
                         sf->frame.framebase_id);
                     if (fb) {
                         anim_apply_frame(e->anim_state, om->base_vertices,

@@ -21,6 +21,7 @@
 #include "../osrs_pvp_collision.h"
 #include "../osrs_combat_shared.h"
 #include "../osrs_encounter.h"
+#include "../data/npc_models.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -401,6 +402,10 @@ typedef struct {
     /* heal state */
     int heal_target;       /* healer: NPC index being healed (-1 = none) */
     int heal_timer;        /* healer: ticks until next heal tick */
+
+    /* per-tick render flags (cleared at start of each tick) */
+    int attacked_this_tick;  /* 1 when NPC attacks this tick */
+    int moved_this_tick;     /* 1 when NPC moves this tick */
 } InfNPC;
 
 /* ======================================================================== */
@@ -576,6 +581,12 @@ typedef struct {
     int armor_tank;            /* 1 = justiciar overlay active */
     int stamina_active_ticks;  /* countdown for stamina effect */
     int spell_choice;          /* 0 = blood barrage, 1 = ice barrage */
+
+    /* per-tick player attack event for renderer projectiles */
+    int player_attacked_this_tick;  /* 1 if player fired an attack this tick */
+    int player_attack_npc_idx;      /* NPC index targeted by player attack */
+    int player_attack_dmg;          /* total damage dealt */
+    int player_attack_style_id;     /* ATTACK_STYLE_* of the player attack */
 
     /* nibbler pillar target: random pillar chosen per wave, all nibblers attack it */
     int nibbler_target_pillar;
@@ -940,6 +951,8 @@ static void inf_npc_move(InfernoState* s, int idx) {
     if (ty > npc->y) dy = 1;
     else if (ty < npc->y) dy = -1;
 
+    int ox = npc->x, oy = npc->y;
+
     /* try diagonal first, then axis-only */
     int nx = npc->x + dx;
     int ny = npc->y + dy;
@@ -960,6 +973,9 @@ static void inf_npc_move(InfernoState* s, int idx) {
                 npc->y = ny;
         }
     }
+
+    if (npc->x != ox || npc->y != oy)
+        npc->moved_this_tick = 1;
 }
 
 /* ======================================================================== */
@@ -1037,6 +1053,7 @@ static void inf_npc_attack(InfernoState* s, int idx) {
                     s->pillar_lost_this_tick = p;
                     inf_rebuild_los(s);
                 }
+                npc->attacked_this_tick = 1;
                 npc->attack_timer = stats->attack_speed;
                 return;
             }
@@ -1062,6 +1079,7 @@ static void inf_npc_attack(InfernoState* s, int idx) {
         if (s->player.current_hitpoints < 0) s->player.current_hitpoints = 0;
         s->damage_received_this_tick += dmg;
         if (dmg > 0) { s->player.hit_landed_this_tick = 1; s->player.hit_damage = dmg; }
+        npc->attacked_this_tick = 1;
         npc->attack_timer = stats->attack_speed;
         return;
     }
@@ -1091,6 +1109,7 @@ static void inf_npc_attack(InfernoState* s, int idx) {
             s->damage_received_this_tick += dmg;
             if (dmg > 0) { s->player.hit_landed_this_tick = 1; s->player.hit_damage = dmg; }
         }
+        npc->attacked_this_tick = 1;
         npc->attack_timer = stats->attack_speed;
         return;
     }
@@ -1156,6 +1175,7 @@ static void inf_npc_attack(InfernoState* s, int idx) {
                     shield->active = 0;
                     s->zuk.shield_idx = -1;
                 }
+                npc->attacked_this_tick = 1;
                 npc->attack_timer = s->zuk.enraged ? 7 : stats->attack_speed;
                 return;
             }
@@ -1166,6 +1186,7 @@ static void inf_npc_attack(InfernoState* s, int idx) {
         s->player.current_hitpoints -= dmg;
         if (s->player.current_hitpoints < 0) s->player.current_hitpoints = 0;
         s->damage_received_this_tick += dmg;
+        npc->attacked_this_tick = 1;
         npc->attack_timer = s->zuk.enraged ? 7 : stats->attack_speed;
         return;
     }
@@ -1195,6 +1216,7 @@ static void inf_npc_attack(InfernoState* s, int idx) {
     s->damage_received_this_tick += dmg;
     if (dmg > 0) { s->player.hit_landed_this_tick = 1; s->player.hit_damage = dmg; }
 
+    npc->attacked_this_tick = 1;
     npc->attack_timer = stats->attack_speed;
 
     /* jad attack speed varies by wave */
@@ -1363,6 +1385,12 @@ static void inf_zuk_tick(InfernoState* s) {
 /* ======================================================================== */
 
 static void inf_tick_npcs(InfernoState* s) {
+    /* clear per-tick render flags */
+    for (int i = 0; i < INF_MAX_NPCS; i++) {
+        s->npcs[i].attacked_this_tick = 0;
+        s->npcs[i].moved_this_tick = 0;
+    }
+
     /* zuk-specific phases first */
     inf_zuk_tick(s);
 
@@ -1633,6 +1661,12 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
             s->damage_dealt_this_tick += total_dmg;
             s->player_attack_timer = ws->attack_speed;
 
+            /* player projectile event for renderer */
+            s->player_attacked_this_tick = 1;
+            s->player_attack_npc_idx = s->player_attack_target;
+            s->player_attack_dmg = total_dmg;
+            s->player_attack_style_id = ws->style;
+
             /* animation flags for renderer */
             s->player.attack_style_this_tick = ws->style;
             s->player.hit_landed_this_tick = (total_dmg > 0) ? 1 : 0;
@@ -1699,6 +1733,7 @@ static void inf_step(EncounterState* state, const int* actions) {
     s->prayer_correct_this_tick = 0;
     s->wave_completed_this_tick = 0;
     s->pillar_lost_this_tick = -1;
+    s->player_attacked_this_tick = 0;
     s->tick++;
 
     /* initial wave spawn delay */
@@ -1942,7 +1977,15 @@ static void inf_fill_render_entities(EncounterState* state, RenderEntity* out, i
         re->npc_def_id = INF_NPC_DEF_IDS[npc->type];
         re->npc_visible = npc->active;
         re->npc_size = npc->size;
-        re->npc_anim_id = -1;
+        {
+            const NpcModelMapping* nm = npc_model_lookup(INF_NPC_DEF_IDS[npc->type]);
+            if (npc->attacked_this_tick && nm && nm->attack_anim != 65535)
+                re->npc_anim_id = (int)nm->attack_anim;
+            else if (npc->moved_this_tick && nm && nm->walk_anim != 65535)
+                re->npc_anim_id = (int)nm->walk_anim;
+            else
+                re->npc_anim_id = nm ? (int)nm->idle_anim : -1;
+        }
         re->x = npc->x;
         re->y = npc->y;
         re->dest_x = npc->target_x;
@@ -1984,6 +2027,73 @@ static void* inf_get_log(EncounterState* state) {
 }
 
 /* ======================================================================== */
+/* render post-tick: populate overlay projectiles for renderer               */
+/* ======================================================================== */
+
+/* map AttackStyle enum to overlay projectile style (0=ranged, 1=magic, 2=melee) */
+static inline int inf_attack_style_to_proj_style(int attack_style) {
+    switch (attack_style) {
+        case ATTACK_STYLE_RANGED: return 0;
+        case ATTACK_STYLE_MAGIC:  return 1;
+        case ATTACK_STYLE_MELEE:  return 2;
+        default: return 0;
+    }
+}
+
+static void inf_render_post_tick(EncounterState* state, EncounterOverlay* ov) {
+    InfernoState* s = (InfernoState*)state;
+    ov->projectile_count = 0;
+
+    /* NPC attack projectiles */
+    for (int i = 0; i < INF_MAX_NPCS; i++) {
+        InfNPC* npc = &s->npcs[i];
+        if (!npc->active || !npc->attacked_this_tick) continue;
+        if (ov->projectile_count >= ENCOUNTER_MAX_OVERLAY_PROJECTILES) break;
+
+        /* nibblers attack pillars, not worth showing as projectile */
+        if (npc->type == INF_NPC_NIBBLER) continue;
+
+        const InfNPCStats* stats = &INF_NPC_STATS[npc->type];
+        int actual_style = stats->default_style;
+
+        /* jad uses its per-attack random style */
+        if (npc->type == INF_NPC_JAD)
+            actual_style = npc->jad_attack_style;
+
+        /* zuk is typeless — show as magic for visual purposes */
+        if (npc->type == INF_NPC_ZUK)
+            actual_style = ATTACK_STYLE_MAGIC;
+
+        int pi = ov->projectile_count++;
+        ov->projectiles[pi].active = 1;
+        ov->projectiles[pi].src_x = npc->x;
+        ov->projectiles[pi].src_y = npc->y;
+        ov->projectiles[pi].dst_x = s->player.x;
+        ov->projectiles[pi].dst_y = s->player.y;
+        ov->projectiles[pi].style = inf_attack_style_to_proj_style(actual_style);
+        ov->projectiles[pi].damage = (int)s->damage_received_this_tick;
+    }
+
+    /* player attack projectile (ranged/magic only — melee has no projectile) */
+    if (s->player_attacked_this_tick &&
+        s->player_attack_style_id != ATTACK_STYLE_MELEE &&
+        ov->projectile_count < ENCOUNTER_MAX_OVERLAY_PROJECTILES) {
+        int target_idx = s->player_attack_npc_idx;
+        if (target_idx >= 0 && target_idx < INF_MAX_NPCS) {
+            InfNPC* target = &s->npcs[target_idx];
+            int pi = ov->projectile_count++;
+            ov->projectiles[pi].active = 1;
+            ov->projectiles[pi].src_x = s->player.x;
+            ov->projectiles[pi].src_y = s->player.y;
+            ov->projectiles[pi].dst_x = target->x;
+            ov->projectiles[pi].dst_y = target->y;
+            ov->projectiles[pi].style = inf_attack_style_to_proj_style(s->player_attack_style_id);
+            ov->projectiles[pi].damage = s->player_attack_dmg;
+        }
+    }
+}
+
+/* ======================================================================== */
 /* encounter definition                                                      */
 /* ======================================================================== */
 
@@ -2017,7 +2127,7 @@ static const EncounterDef ENCOUNTER_INFERNO = {
     .arena_width = INF_ARENA_WIDTH,
     .arena_height = INF_ARENA_HEIGHT,
 
-    .render_post_tick = NULL,
+    .render_post_tick = inf_render_post_tick,
     .get_log = inf_get_log,
     .get_tick = inf_get_tick,
     .get_winner = inf_get_winner,

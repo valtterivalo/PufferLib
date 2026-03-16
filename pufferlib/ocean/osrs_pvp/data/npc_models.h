@@ -15,13 +15,14 @@ typedef struct {
     uint32_t model_id;
     uint32_t idle_anim;
     uint32_t attack_anim;
+    uint32_t walk_anim;    /* walk cycle animation; 65535 = use idle_anim */
 } NpcModelMapping;
 
 /* zulrah forms + snakeling */
 static const NpcModelMapping NPC_MODEL_MAP_ZULRAH[] = {
-    {2042, 14408, 5069, 5068},  /* green zulrah (ranged) */
-    {2043, 14409, 5069, 5068},  /* red zulrah (melee) */
-    {2044, 14407, 5069, 5068},  /* blue zulrah (magic) */
+    {2042, 14408, 5069, 5068, 65535},  /* green zulrah (ranged) */
+    {2043, 14409, 5069, 5068, 65535},  /* red zulrah (melee) */
+    {2044, 14407, 5069, 5068, 65535},  /* blue zulrah (magic) */
 };
 
 /* snakeling model + animations (NPC 2045 melee, 2046 magic — same model) */
@@ -55,36 +56,21 @@ static const NpcModelMapping NPC_MODEL_MAP_ZULRAH[] = {
 /* ================================================================ */
 
 static const NpcModelMapping NPC_MODEL_MAP_INFERNO[] = {
-    {7691, 0xC1E0B, 7573, 65535},  /* Jal-Nib (nibbler) */
-    {7692, 0xC1E0C, 7577, 65535},  /* Jal-MejRah (bat) */
-    {7693, 0xC1E0D, 7586, 65535},  /* Jal-Ak (blob) */
-    {7694, 0xC1E0E, 7586, 65535},  /* Jal-Ak-Rek-Ket (blob melee split) */
-    {7695, 0xC1E0F, 7586, 65535},  /* Jal-Ak-Rek-Xil (blob range split) */
-    {7696, 0xC1E10, 7586, 65535},  /* Jal-Ak-Rek-Mej (blob mage split) */
-    {7697, 0xC1E11, 7595, 65535},  /* Jal-ImKot (meleer) */
-    {7698, 0xC1E12, 7602, 65535},  /* Jal-Xil (ranger) */
-    {7699, 0xC1E13, 7609, 65535},  /* Jal-Zek (mager) */
-    {7700, 0xC1E14, 7589, 65535},  /* JalTok-Jad */
-    {7701, 0xC1E15, 2636, 65535},  /* Yt-HurKot (jad healer) */
-    {7706, 0xC1E1A, 7564, 65535},  /* TzKal-Zuk */
-    {7707, 0xC1E1B, 7567, 65535},  /* Zuk shield */
-    {7708, 0xC1E1C, 2867, 65535},  /* Jal-MejJak (zuk healer) */
+    {7691, 0xC1E0B, 7573, 7574, 7572},   /* Jal-Nib (nibbler) */
+    {7692, 0xC1E0C, 7577, 7578, 7577},   /* Jal-MejRah (bat) — walk = idle */
+    {7693, 0xC1E0D, 7586, 7581, 7587},   /* Jal-Ak (blob) */
+    {7694, 0xC1E0E, 7586, 65535, 7587},  /* Jal-Ak-Rek-Ket (blob melee split) */
+    {7695, 0xC1E0F, 7586, 65535, 7587},  /* Jal-Ak-Rek-Xil (blob range split) */
+    {7696, 0xC1E10, 7586, 65535, 7587},  /* Jal-Ak-Rek-Mej (blob mage split) */
+    {7697, 0xC1E11, 7595, 7597, 7596},   /* Jal-ImKot (meleer) */
+    {7698, 0xC1E12, 7602, 7605, 7603},   /* Jal-Xil (ranger) */
+    {7699, 0xC1E13, 7609, 7610, 7608},   /* Jal-Zek (mager) */
+    {7700, 0xC1E14, 7589, 7593, 7588},   /* JalTok-Jad */
+    {7701, 0xC1E15, 2636, 65535, 2634},  /* Yt-HurKot (jad healer) */
+    {7706, 0xC1E1A, 7564, 7566, 65535},  /* TzKal-Zuk — no walk */
+    {7707, 0xC1E1B, 7567, 65535, 7567},  /* Zuk shield */
+    {7708, 0xC1E1C, 2867, 65535, 2863},  /* Jal-MejJak (zuk healer) */
 };
-
-/* inferno NPC walk animation IDs */
-#define INF_WALK_ANIM_NIBBLER  7572
-#define INF_WALK_ANIM_BAT  7577
-#define INF_WALK_ANIM_BLOB  7587
-#define INF_WALK_ANIM_BLOB_MELEE_SPLIT  7587
-#define INF_WALK_ANIM_BLOB_RANGE_SPLIT  7587
-#define INF_WALK_ANIM_BLOB_MAGE_SPLIT  7587
-#define INF_WALK_ANIM_MELEER  7596
-#define INF_WALK_ANIM_RANGER  7603
-#define INF_WALK_ANIM_MAGER  7608
-#define INF_WALK_ANIM_JALTOK_JAD  7588
-#define INF_WALK_ANIM_JAD_HEALER  2634
-#define INF_WALK_ANIM_ZUK_SHIELD  7567
-#define INF_WALK_ANIM_ZUK_HEALER  2863
 
 /* inferno spotanim (projectile/effect) model + animation IDs */
 #define INF_GFX_157_MODEL  3116  /* Jad magic hit */
