@@ -11,7 +11,7 @@ typedef struct {
     uint8_t  has_sleeves;
 } ItemModelMapping;
 
-#define ITEM_MODEL_COUNT 94
+#define ITEM_MODEL_COUNT 99
 
 static const ItemModelMapping ITEM_MODEL_MAP[] = {
     { 10828, 21938, 917504, 0 },
@@ -108,6 +108,11 @@ static const ItemModelMapping ITEM_MODEL_MAP[] = {
     { 2497, 2507, 917596, 0 },
     { 12788, 48061, 917597, 0 },
     { 10499, 20454, 917598, 0 },
+    { 22326, 35751, 917599, 0 },
+    { 22327, 35750, 917600, 0 },
+    { 22328, 35752, 917601, 0 },
+    { 4224, 5198, 917602, 0 },
+    { 13237, 29396, 917603, 0 },
 };
 
 #endif /* ITEM_MODELS_H */

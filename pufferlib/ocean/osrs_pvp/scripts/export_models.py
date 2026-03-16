@@ -1850,6 +1850,12 @@ SIM_ITEM_IDS = [
     2497,   # Black d'hide chaps
     12788,  # Magic shortbow (i)
     10499,  # Ava's accumulator
+    # --- Inferno encounter items ---
+    22326,  # Justiciar faceguard
+    22327,  # Justiciar chestguard
+    22328,  # Justiciar legguards
+    4224,   # Crystal shield
+    13237,  # Pegasian boots
 ]
 
 
