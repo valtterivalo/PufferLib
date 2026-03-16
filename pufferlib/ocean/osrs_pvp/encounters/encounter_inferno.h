@@ -406,6 +406,8 @@ typedef struct {
     /* per-tick render flags (cleared at start of each tick) */
     int attacked_this_tick;  /* 1 when NPC attacks this tick */
     int moved_this_tick;     /* 1 when NPC moves this tick */
+    int hit_landed_this_tick; /* 1 when this NPC was hit by player */
+    int hit_damage;          /* damage dealt to this NPC this tick */
 } InfNPC;
 
 /* ======================================================================== */
@@ -1389,6 +1391,8 @@ static void inf_tick_npcs(InfernoState* s) {
     for (int i = 0; i < INF_MAX_NPCS; i++) {
         s->npcs[i].attacked_this_tick = 0;
         s->npcs[i].moved_this_tick = 0;
+        s->npcs[i].hit_landed_this_tick = 0;
+        s->npcs[i].hit_damage = 0;
     }
 
     /* zuk-specific phases first */
@@ -1538,25 +1542,43 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
         s->player_potion_timer = 3;
     }
 
-    /* movement */
+    /* movement: always attempt 2 tiles (running). if first tile blocked, don't move.
+       if second tile blocked, move 1 tile (walking). set is_running based on result. */
     int move_act = actions[INF_HEAD_MOVE];
     s->player.is_running = 0;
     if (move_act > 0 && move_act < 9) {
-        int nx = s->player.x + INF_MOVE_DX[move_act];
-        int ny = s->player.y + INF_MOVE_DY[move_act];
-        int walkable = inf_in_arena(nx, ny) && !inf_blocked_by_pillar(s, nx, ny, 1);
-        if (walkable && s->collision_map) {
-            int wx = nx + s->world_offset_x;
-            int wy = ny + s->world_offset_y;
-            walkable = collision_tile_walkable(s->collision_map, 0, wx, wy);
-        }
-        if (walkable) {
-            s->player.x = nx;
-            s->player.y = ny;
-            s->player.dest_x = nx;
-            s->player.dest_y = ny;
-            /* 1 tile per tick = walking speed. is_running=1 would cause
-               the interpolation to finish early and snap between ticks. */
+        int dx = INF_MOVE_DX[move_act];
+        int dy = INF_MOVE_DY[move_act];
+
+        /* check first tile */
+        int nx1 = s->player.x + dx;
+        int ny1 = s->player.y + dy;
+        int walk1 = inf_in_arena(nx1, ny1) && !inf_blocked_by_pillar(s, nx1, ny1, 1);
+        if (walk1 && s->collision_map)
+            walk1 = collision_tile_walkable(s->collision_map, 0,
+                nx1 + s->world_offset_x, ny1 + s->world_offset_y);
+
+        if (walk1) {
+            /* check second tile (running) */
+            int nx2 = nx1 + dx;
+            int ny2 = ny1 + dy;
+            int walk2 = inf_in_arena(nx2, ny2) && !inf_blocked_by_pillar(s, nx2, ny2, 1);
+            if (walk2 && s->collision_map)
+                walk2 = collision_tile_walkable(s->collision_map, 0,
+                    nx2 + s->world_offset_x, ny2 + s->world_offset_y);
+
+            if (walk2) {
+                /* run: move 2 tiles */
+                s->player.x = nx2;
+                s->player.y = ny2;
+                s->player.is_running = 1;
+            } else {
+                /* walk: move 1 tile */
+                s->player.x = nx1;
+                s->player.y = ny1;
+            }
+            s->player.dest_x = s->player.x;
+            s->player.dest_y = s->player.y;
         }
     }
 
@@ -1610,12 +1632,14 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
                     btargets, bt_count, mage_att_roll, ws->max_hit, &s->rng_state);
                 total_dmg = br.total_damage;
 
-                /* apply damage, freeze, and death to each hit target */
+                /* apply damage, freeze, death, and hit splat to each target */
                 for (int i = 0; i < bt_count; i++) {
                     if (!btargets[i].active) continue;
                     int idx = btargets[i].npc_idx;
                     if (btargets[i].hit) {
                         s->npcs[idx].hp -= btargets[i].damage;
+                        s->npcs[idx].hit_landed_this_tick = 1;
+                        s->npcs[idx].hit_damage = btargets[i].damage;
                         if (s->spell_choice == 1)
                             s->npcs[idx].frozen_ticks = BARRAGE_FREEZE_TICKS;
                         inf_apply_npc_death(s, idx);
@@ -1644,6 +1668,8 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
                     total_dmg = inf_rand_int(s, max_hit + 1);
                 }
                 target_npc->hp -= total_dmg;
+                target_npc->hit_landed_this_tick = 1;
+                target_npc->hit_damage = total_dmg;
                 inf_apply_npc_death(s, s->player_attack_target);
 
             } else {
@@ -1655,6 +1681,8 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
                     total_dmg = inf_rand_int(s, ws->max_hit + 1);
                 }
                 target_npc->hp -= total_dmg;
+                target_npc->hit_landed_this_tick = 1;
+                target_npc->hit_damage = total_dmg;
                 inf_apply_npc_death(s, s->player_attack_target);
             }
 
@@ -1667,11 +1695,8 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
             s->player_attack_dmg = total_dmg;
             s->player_attack_style_id = ws->style;
 
-            /* animation flags for renderer */
+            /* player attack animation flag for renderer */
             s->player.attack_style_this_tick = ws->style;
-            s->player.hit_landed_this_tick = (total_dmg > 0) ? 1 : 0;
-            s->player.hit_damage = total_dmg;
-            s->player.hit_was_successful = (total_dmg > 0) ? 1 : 0;
         }
     }
 }
@@ -1993,6 +2018,8 @@ static void inf_fill_render_entities(EncounterState* state, RenderEntity* out, i
         re->current_hitpoints = npc->hp;
         re->base_hitpoints = npc->max_hp;
         re->attack_style_this_tick = (AttackStyle)npc->attack_style;
+        re->hit_landed_this_tick = npc->hit_landed_this_tick;
+        re->hit_damage = npc->hit_damage;
     }
     *count = n;
 }

@@ -111,8 +111,8 @@ typedef struct {
  * body, so origin/pivot transforms compute correct centroids.
  * we replicate that here: one composite mesh per player. */
 
-#define COMPOSITE_MAX_BASE_VERTS 12000  /* ~16 models * ~750 base verts each */
-#define COMPOSITE_MAX_FACES      8000   /* ~16 models * ~500 faces each */
+#define COMPOSITE_MAX_BASE_VERTS 24000  /* large NPC models (Zuk, Jad) need more */
+#define COMPOSITE_MAX_FACES      16000  /* inferno NPCs are single merged meshes */
 #define COMPOSITE_MAX_EXP_VERTS  (COMPOSITE_MAX_FACES * 3)
 
 typedef struct {
@@ -2390,6 +2390,13 @@ static void composite_rebuild_npc(
 ) {
     comp->base_vert_count = 0;
     comp->face_count = 0;
+
+    /* zero mesh buffers to prevent stale GPU data from showing as garbled geometry
+       if the model fails to load or exceeds composite limits */
+    if (comp->mesh.vertices)
+        memset(comp->mesh.vertices, 0, COMPOSITE_MAX_EXP_VERTS * 3 * sizeof(float));
+    if (comp->mesh.colors)
+        memset(comp->mesh.colors, 0, COMPOSITE_MAX_EXP_VERTS * 4);
 
     /* look up model ID from NPC definition */
     uint32_t model_id = 0;
