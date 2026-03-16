@@ -152,39 +152,6 @@ static void terrain_offset(TerrainMesh* tm, int wx, int wy) {
             wx, wy, tm->min_world_x, tm->min_world_y);
 }
 
-/* mirror terrain mesh along Z axis (north-south flip).
-   center_y is in OSRS tile coords; Z = -Y in our system.
-   flips Z around -(center_y), swaps triangle winding to fix normals. */
-static void terrain_mirror_z(TerrainMesh* tm, float center_y) {
-    if (!tm || !tm->loaded) return;
-    float center_z = -center_y;
-    float* verts = tm->model.meshes[0].vertices;
-    for (int i = 0; i < tm->vertex_count; i++) {
-        verts[i * 3 + 2] = 2.0f * center_z - verts[i * 3 + 2];
-    }
-    /* flipping one axis reverses triangle winding — swap first and third vertex */
-    for (int t = 0; t < tm->vertex_count / 3; t++) {
-        int a = t * 3 * 3, c = (t * 3 + 2) * 3;
-        for (int j = 0; j < 3; j++) {
-            float tmp = verts[a + j]; verts[a + j] = verts[c + j]; verts[c + j] = tmp;
-        }
-        if (tm->model.meshes[0].colors) {
-            unsigned char* cols = tm->model.meshes[0].colors;
-            int ca = t * 3 * 4, cc = (t * 3 + 2) * 4;
-            for (int j = 0; j < 4; j++) {
-                unsigned char tmp = cols[ca + j]; cols[ca + j] = cols[cc + j]; cols[cc + j] = tmp;
-            }
-        }
-    }
-    UpdateMeshBuffer(tm->model.meshes[0], 0, verts,
-                     tm->vertex_count * 3 * sizeof(float), 0);
-    if (tm->model.meshes[0].colors) {
-        UpdateMeshBuffer(tm->model.meshes[0], 3, tm->model.meshes[0].colors,
-                         tm->vertex_count * 4, 0);
-    }
-    fprintf(stderr, "terrain_mirror_z: mirrored around y=%.1f (z=%.1f)\n", center_y, center_z);
-}
-
 /* query terrain height at a world tile position (tile corner) */
 static float terrain_height_at(TerrainMesh* tm, int world_x, int world_y) {
     if (!tm || !tm->heightmap) return -2.0f;

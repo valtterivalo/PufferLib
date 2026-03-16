@@ -280,10 +280,6 @@ static void run_visual(OsrsPvp* env, const char* encounter_name, const char* rep
                 rc->collision_map ? "loaded" : "MISSING",
                 rc->npc_model_cache ? rc->npc_model_cache->count : 0,
                 rc->npc_anim_cache ? rc->npc_anim_cache->seq_count : 0);
-        /* entity/pillar Y coords are mirrored vs the cache terrain/objects.
-           mirror entity rendering AND objects to match. terrain already correct. */
-        rc->mirror_y = 1;
-        rc->mirror_y_center = (float)(INF_ARENA_MIN_Y + INF_ARENA_MAX_Y) / 2.0f + 1.0f;
     }
 
     /* populate entity pointers (also sets arena bounds from encounter) */

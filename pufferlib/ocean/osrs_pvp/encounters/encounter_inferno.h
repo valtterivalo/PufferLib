@@ -36,30 +36,30 @@
 #define INF_ARENA_HEIGHT   (INF_ARENA_MAX_Y - INF_ARENA_MIN_Y + 1)  /* 32 */
 
 #define INF_PLAYER_START_X 28
-#define INF_PLAYER_START_Y 17
+#define INF_PLAYER_START_Y 40
 #define INF_ZUK_PLAYER_START_X 25
-#define INF_ZUK_PLAYER_START_Y 15
+#define INF_ZUK_PLAYER_START_Y 42
 
 #define INF_NUM_PILLARS   3
 #define INF_PILLAR_SIZE   3
 #define INF_PILLAR_HP     255
 
 static const int INF_PILLAR_POS[INF_NUM_PILLARS][2] = {
-    { 21, 37 },  /* south pillar */
-    { 11, 23 },  /* west pillar */
-    { 28, 21 },  /* north pillar */
+    { 21, 20 },  /* south pillar */
+    { 11, 34 },  /* west pillar */
+    { 28, 36 },  /* north pillar */
 };
 
 /* 9 mob spawn positions (shuffled per wave) */
 #define INF_NUM_SPAWN_POS 9
 static const int INF_SPAWN_POS[INF_NUM_SPAWN_POS][2] = {
-    {12, 19}, {33, 19}, {14, 25}, {34, 26}, {27, 31},
-    {16, 37}, {34, 39}, {12, 42}, {26, 42},
+    {12, 38}, {33, 38}, {14, 32}, {34, 31}, {27, 26},
+    {16, 20}, {34, 18}, {12, 15}, {26, 15},
 };
 
 /* nibbler spawn position (near pillars) */
 #define INF_NIBBLER_SPAWN_X 20
-#define INF_NIBBLER_SPAWN_Y 25
+#define INF_NIBBLER_SPAWN_Y 32
 
 #define INF_MAX_TICKS     18000  /* 3 hours at 0.6s/tick */
 #define INF_NUM_WAVES     69
@@ -822,14 +822,14 @@ static void inf_spawn_wave(InfernoState* s) {
         /* spawn Zuk — fixed position, cannot move */
         int zuk_idx = inf_find_free_npc(s);
         if (zuk_idx >= 0) {
-            inf_init_npc(s, zuk_idx, INF_NPC_ZUK, 20, 5);
+            inf_init_npc(s, zuk_idx, INF_NPC_ZUK, 20, 52);
             s->npcs[zuk_idx].stun_timer = 14;  /* initial delay */
         }
 
         /* spawn shield */
         int shield_idx = inf_find_free_npc(s);
         if (shield_idx >= 0) {
-            inf_init_npc(s, shield_idx, INF_NPC_ZUK_SHIELD, 23, 13);
+            inf_init_npc(s, shield_idx, INF_NPC_ZUK_SHIELD, 23, 44);
             s->zuk.shield_idx = shield_idx;
             s->zuk.shield_dir = (inf_rand_int(s, 2) == 0) ? 1 : -1;
             s->zuk.shield_freeze = 1;  /* 1-tick freeze on spawn */
@@ -1143,9 +1143,9 @@ static void inf_npc_attack(InfernoState* s, int idx) {
             InfNPC* shield = &s->npcs[shield_idx];
             int shield_left = shield->x;
             int shield_right = shield->x + shield->size;
-            /* shield blocks if player within shield x range AND y <= 16 */
+            /* shield blocks if player within shield x range AND y >= 41 */
             if (s->player.x >= shield_left && s->player.x < shield_right &&
-                s->player.y <= 16) {
+                s->player.y >= 41) {
                 /* shield absorbs the hit */
                 int dmg = inf_rand_int(s, stats->max_hit + 1);
                 shield->hp -= dmg;
@@ -1311,11 +1311,11 @@ static void inf_zuk_tick(InfernoState* s) {
     if (s->zuk.set_timer > 0) {
         s->zuk.set_timer--;
     } else {
-        /* spawn mager at {20,21} and ranger at {29,21} */
+        /* spawn mager at {20,36} and ranger at {29,36} */
         int m_slot = inf_find_free_npc(s);
-        if (m_slot >= 0) inf_init_npc(s, m_slot, INF_NPC_MAGER, 20, 21);
+        if (m_slot >= 0) inf_init_npc(s, m_slot, INF_NPC_MAGER, 20, 36);
         int r_slot = inf_find_free_npc(s);
-        if (r_slot >= 0) inf_init_npc(s, r_slot, INF_NPC_RANGER, 29, 21);
+        if (r_slot >= 0) inf_init_npc(s, r_slot, INF_NPC_RANGER, 29, 36);
 
         /* when shield dies, these switch aggro to player (default behavior) */
         s->zuk.set_timer = s->zuk.set_interval;
@@ -1327,7 +1327,7 @@ static void inf_zuk_tick(InfernoState* s) {
         s->zuk.jad_spawned = 1;
         int j_slot = inf_find_free_npc(s);
         if (j_slot >= 0) {
-            inf_init_npc(s, j_slot, INF_NPC_JAD, 24, 25);
+            inf_init_npc(s, j_slot, INF_NPC_JAD, 24, 32);
         }
     }
 
@@ -1336,7 +1336,7 @@ static void inf_zuk_tick(InfernoState* s) {
         s->zuk.healer_spawned = 1;
         s->zuk.enraged = 1;
         static const int healer_pos[4][2] = {
-            {16, 9}, {20, 9}, {30, 9}, {34, 9}
+            {16, 48}, {20, 48}, {30, 48}, {34, 48}
         };
         for (int h = 0; h < 4; h++) {
             int slot = inf_find_free_npc(s);
@@ -1630,8 +1630,8 @@ static float inf_compute_reward(InfernoState* s) {
     if (s->ticks_without_action > 10)
         r -= 0.005f;
 
-    /* pillar destroyed: north pillar (idx 2) is the most important safespot,
-     * south (0) and west (1) are less critical. total = -0.8 for all three. */
+    /* pillar destroyed: north pillar (idx 2, highest Y) is the most important
+     * safespot, south (0) and west (1) are less critical. total = -0.8 for all. */
     if (s->pillar_lost_this_tick >= 0) {
         r -= (s->pillar_lost_this_tick == 2) ? 0.4f : 0.2f;
     }

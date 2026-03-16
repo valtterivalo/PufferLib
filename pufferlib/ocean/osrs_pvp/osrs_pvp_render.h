@@ -241,8 +241,6 @@ typedef struct {
     int show_models;
     int show_safe_spots;
     int show_debug;       /* toggle raycast debug, hulls, hitboxes, projectile trails */
-    int mirror_y;         /* flip Y axis (north-south) for encounters with mirrored coords */
-    float mirror_y_center; /* Y center for mirroring (in OSRS tile coords, before Z negation) */
 
     /* 3D model rendering */
     ModelCache* model_cache;
@@ -1206,8 +1204,6 @@ static void render_post_tick(RenderClient* rc, OsrsPvp* env) {
         } else if (moved) {
             float dx = (float)(new_dest_x - rc->sub_x[i]);
             float dy = (float)(new_dest_y - rc->sub_y[i]);
-            /* mirror_y flips the visual Y axis, so negate dy for yaw */
-            if (rc->mirror_y) dy = -dy;
             if (dx != 0.0f || dy != 0.0f) {
                 rc->target_yaw[i] = atan2f(-dx, dy);
             }
@@ -1426,7 +1422,6 @@ static void render_client_tick(RenderClient* rc, int player_idx) {
             if (!rc->facing_opponent[player_idx]) {
                 float fdx = (float)dx;
                 float fdy = (float)dy;
-                if (rc->mirror_y) fdy = -fdy;
                 if (fdx != 0.0f || fdy != 0.0f) {
                     rc->target_yaw[player_idx] = atan2f(-fdx, fdy);
                 }
@@ -1446,7 +1441,6 @@ static void render_client_tick(RenderClient* rc, int player_idx) {
             int opp = (rc->entity_count == 2) ? (1 - player_idx) : (player_idx == 0 ? 1 : 0);
             float dx = (float)(rc->sub_x[opp] - rc->sub_x[player_idx]);
             float dy = (float)(rc->sub_y[opp] - rc->sub_y[player_idx]);
-            if (rc->mirror_y) dy = -dy;
             if (dx != 0.0f || dy != 0.0f) {
                 rc->target_yaw[player_idx] = atan2f(-dx, dy);
             }
@@ -1541,8 +1535,7 @@ static void render_get_visual_pos(
     float tile_y = (float)rc->sub_y[player_idx] / 128.0f;
 
     *out_x = tile_x;
-    float eff_y = rc->mirror_y ? (2.0f * rc->mirror_y_center - tile_y) : tile_y;
-    *out_z = -eff_y;
+    *out_z = -tile_y;
 
     if (rc->terrain) {
         *out_ground = terrain_height_avg(rc->terrain,
@@ -2820,7 +2813,6 @@ static void render_draw_3d_world(RenderClient* rc) {
                 for (int dy = 0; dy < INF_PILLAR_SIZE; dy++) {
                     float tx = (float)(is->pillars[p].x + dx);
                     float py_val = (float)(is->pillars[p].y + dy);
-                    if (rc->mirror_y) py_val = 2.0f * rc->mirror_y_center - py_val;
                     float tz = -(py_val + 1.0f);
                     for (int h = 0; h < 3; h++) {
                         DrawCube((Vector3){ tx + 0.5f, plat_y + 0.5f + (float)h, tz + 0.5f },
@@ -2832,7 +2824,6 @@ static void render_draw_3d_world(RenderClient* rc) {
             float cx = (float)is->pillars[p].x + INF_PILLAR_SIZE / 2.0f;
             float py0 = (float)is->pillars[p].y;
             float py2 = (float)(is->pillars[p].y + INF_PILLAR_SIZE - 1);
-            if (rc->mirror_y) { py0 = 2.0f * rc->mirror_y_center - py0; py2 = 2.0f * rc->mirror_y_center - py2; }
             /* solid cubes draw at -(py + 1) + 0.5 */
             float z0 = -(py0 + 1.0f) + 0.5f;
             float z2 = -(py2 + 1.0f) + 0.5f;
@@ -2861,6 +2852,33 @@ static void render_draw_3d_world(RenderClient* rc) {
                       a.y + rc->debug_ray_dir.y * 50.0f,
                       a.z + rc->debug_ray_dir.z * 50.0f };
         DrawLine3D(a, b, YELLOW);
+    }
+
+    /* debug: draw game-logic tile positions for all entities.
+       green = player, cyan = NPCs. shows where the game thinks entities are
+       vs where the 3D model renders (which uses sub_x/sub_y interpolation). */
+    if (rc->show_debug) {
+        for (int i = 0; i < rc->entity_count; i++) {
+            RenderEntity* ep = &rc->entities[i];
+            if (ep->entity_type == ENTITY_NPC && !ep->npc_visible) continue;
+            float tx = (float)ep->x;
+            float ty = (float)ep->y;
+            float tz = -(ty + 1.0f);
+            float ground = rc->terrain
+                ? terrain_height_avg(rc->terrain, ep->x, ep->y) : 2.0f;
+            int sz = ep->npc_size > 1 ? ep->npc_size : 1;
+            Color col = (ep->entity_type == ENTITY_PLAYER)
+                ? CLITERAL(Color){ 0, 255, 0, 100 }
+                : CLITERAL(Color){ 0, 200, 255, 80 };
+            for (int dx = 0; dx < sz; dx++) {
+                for (int dy = 0; dy < sz; dy++) {
+                    float mx = tx + (float)dx;
+                    float mz = tz - (float)dy;
+                    DrawCube((Vector3){ mx + 0.5f, ground + 0.08f, mz + 0.5f },
+                             0.9f, 0.04f, 0.9f, col);
+                }
+            }
+        }
     }
 
     /* entity click hitboxes are now drawn as 2D convex hulls after EndMode3D */
