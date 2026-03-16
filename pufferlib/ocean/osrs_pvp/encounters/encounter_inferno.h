@@ -35,8 +35,8 @@
 #define INF_ARENA_WIDTH    (INF_ARENA_MAX_X - INF_ARENA_MIN_X + 1)  /* 31 */
 #define INF_ARENA_HEIGHT   (INF_ARENA_MAX_Y - INF_ARENA_MIN_Y + 1)  /* 32 */
 
-#define INF_PLAYER_START_X 28
-#define INF_PLAYER_START_Y 40
+#define INF_PLAYER_START_X 25
+#define INF_PLAYER_START_Y 16
 #define INF_ZUK_PLAYER_START_X 25
 #define INF_ZUK_PLAYER_START_Y 42
 
@@ -542,6 +542,7 @@ typedef struct {
     /* wave tracking */
     int wave;              /* current wave (0-indexed, 0-68) */
     int tick;
+    int wave_spawn_delay;  /* ticks until first wave spawns (0 = spawn immediately) */
     int episode_over;
     int winner;            /* 0 = player won (zuk dead), 1 = player died */
 
@@ -753,9 +754,11 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
     /* dead mob store */
     s->dead_mob_count = 0;
 
-    /* start at configured wave (for curriculum) */
+    /* start at configured wave (for curriculum).
+       delay first wave spawn by 10 ticks — in-game there's a delay
+       after entering the inferno before wave 1 begins. */
     s->wave = s->start_wave;
-    inf_spawn_wave(s);
+    s->wave_spawn_delay = 10;
 }
 
 /* ======================================================================== */
@@ -1659,6 +1662,18 @@ static void inf_step(EncounterState* state, const int* actions) {
     s->wave_completed_this_tick = 0;
     s->pillar_lost_this_tick = -1;
     s->tick++;
+
+    /* initial wave spawn delay */
+    if (s->wave_spawn_delay > 0) {
+        s->wave_spawn_delay--;
+        if (s->wave_spawn_delay == 0) {
+            inf_spawn_wave(s);
+        }
+        /* player can still move/pray during delay */
+        inf_tick_player(s, actions);
+        s->reward = inf_compute_reward(s);
+        return;
+    }
 
     /* player actions */
     inf_tick_player(s, actions);

@@ -9,6 +9,9 @@ pufferlib/extensions/hip/
 # Raylib
 raylib_wasm/
 
+# Reference repos and caches (large, not tracked)
+.refs/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
