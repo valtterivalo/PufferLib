@@ -162,6 +162,44 @@ static inline int encounter_move_player(
 }
 
 /* ======================================================================== */
+/* shared NPC greedy pathfinding                                             */
+/* ======================================================================== */
+
+/* callback: returns 1 if tile (x, y) is blocked for an NPC of given size */
+typedef int (*encounter_npc_blocked_fn)(void* ctx, int x, int y, int size);
+
+/** greedy NPC step toward target. tries diagonal first, then x-only, then y-only.
+    this is the standard OSRS NPC movement algorithm — 99.9% of NPCs use this.
+    returns 1 if moved, 0 if blocked or already at target. */
+static inline int encounter_npc_step_toward(
+    int* x, int* y, int tx, int ty, int size,
+    encounter_npc_blocked_fn is_blocked, void* ctx
+) {
+    int dx = 0, dy = 0;
+    if (tx > *x) dx = 1;
+    else if (tx < *x) dx = -1;
+    if (ty > *y) dy = 1;
+    else if (ty < *y) dy = -1;
+    if (dx == 0 && dy == 0) return 0;
+
+    /* try diagonal */
+    if (dx != 0 && dy != 0) {
+        if (!is_blocked(ctx, *x + dx, *y + dy, size)) {
+            *x += dx; *y += dy; return 1;
+        }
+    }
+    /* try x-only */
+    if (dx != 0 && !is_blocked(ctx, *x + dx, *y, size)) {
+        *x += dx; return 1;
+    }
+    /* try y-only */
+    if (dy != 0 && !is_blocked(ctx, *x, *y + dy, size)) {
+        *y += dy; return 1;
+    }
+    return 0;
+}
+
+/* ======================================================================== */
 /* shared per-tick flag clearing for encounters                              */
 /* ======================================================================== */
 

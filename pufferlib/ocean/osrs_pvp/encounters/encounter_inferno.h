@@ -907,18 +907,51 @@ static int inf_blocked_by_pillar(InfernoState* s, int x, int y, int size) {
     return 0;
 }
 
+/* NPC movement blocked callback for encounter_npc_step_toward.
+   checks arena bounds, pillars, collision map, and NPC-vs-NPC collision.
+   ctx is a temporary struct with state + current NPC index. */
+typedef struct { InfernoState* s; int self_idx; } InfMoveCtx;
+
+static int inf_npc_blocked(void* ctx, int x, int y, int size) {
+    InfMoveCtx* mc = (InfMoveCtx*)ctx;
+    InfernoState* s = mc->s;
+    if (!inf_in_arena(x, y)) return 1;
+    if (inf_blocked_by_pillar(s, x, y, size)) return 1;
+    if (s->collision_map &&
+        !collision_tile_walkable(s->collision_map, 0,
+            x + s->world_offset_x, y + s->world_offset_y))
+        return 1;
+    /* NPC-vs-NPC collision: check all active NPCs except self and nibblers
+       (nibblers don't consume space — other mobs walk through them) */
+    for (int i = 0; i < INF_MAX_NPCS; i++) {
+        if (i == mc->self_idx) continue;
+        InfNPC* other = &s->npcs[i];
+        if (!other->active) continue;
+        if (other->type == INF_NPC_NIBBLER) continue;  /* nibblers transparent */
+        if (los_aabb_overlap(x, y, size, other->x, other->y, other->size))
+            return 1;
+    }
+    return 0;
+}
+
 static void inf_npc_move(InfernoState* s, int idx) {
     InfNPC* npc = &s->npcs[idx];
     if (!npc->active) return;
     if (npc->stun_timer > 0) return;
     if (npc->dig_freeze_timer > 0) return;
-    if (npc->frozen_ticks > 0) return;  /* ice barrage freeze */
+    if (npc->frozen_ticks > 0) return;
 
     const InfNPCStats* stats = &INF_NPC_STATS[npc->type];
     if (!stats->can_move) return;
 
-    /* nibblers target the wave's randomly assigned pillar (all nibblers
-     * in a wave attack the same pillar, chosen at wave spawn time) */
+    /* ranged/magic NPCs stop moving when they have LOS to the player.
+       this is the core OSRS mechanic: NPCs only walk toward their target
+       while they cannot see it. once LOS is established, they attack. */
+    if (npc->type != INF_NPC_NIBBLER && stats->attack_range > 1) {
+        if (inf_npc_has_los(s, idx)) return;
+    }
+
+    /* target selection */
     int tx, ty;
     if (npc->type == INF_NPC_NIBBLER) {
         int p = s->nibbler_target_pillar;
@@ -926,7 +959,6 @@ static void inf_npc_move(InfernoState* s, int idx) {
             tx = s->pillars[p].x;
             ty = s->pillars[p].y;
         } else {
-            /* target pillar destroyed — pick any remaining one */
             int found = 0;
             for (int pp = 0; pp < INF_NUM_PILLARS; pp++) {
                 if (s->pillars[pp].active) {
@@ -936,46 +968,18 @@ static void inf_npc_move(InfernoState* s, int idx) {
                     break;
                 }
             }
-            if (!found) {
-                tx = s->player.x;
-                ty = s->player.y;
-            }
+            if (!found) { tx = s->player.x; ty = s->player.y; }
         }
     } else {
         tx = s->player.x;
         ty = s->player.y;
     }
 
-    /* move 1 tile toward target */
-    int dx = 0, dy = 0;
-    if (tx > npc->x) dx = 1;
-    else if (tx < npc->x) dx = -1;
-    if (ty > npc->y) dy = 1;
-    else if (ty < npc->y) dy = -1;
-
+    /* greedy step toward target using shared helper */
     int ox = npc->x, oy = npc->y;
-
-    /* try diagonal first, then axis-only */
-    int nx = npc->x + dx;
-    int ny = npc->y + dy;
-    if (inf_in_arena(nx, ny) && !inf_blocked_by_pillar(s, nx, ny, npc->size)) {
-        npc->x = nx;
-        npc->y = ny;
-    } else {
-        /* try x-only */
-        nx = npc->x + dx;
-        ny = npc->y;
-        if (dx != 0 && inf_in_arena(nx, ny) && !inf_blocked_by_pillar(s, nx, ny, npc->size)) {
-            npc->x = nx;
-        } else {
-            /* try y-only */
-            nx = npc->x;
-            ny = npc->y + dy;
-            if (dy != 0 && inf_in_arena(nx, ny) && !inf_blocked_by_pillar(s, nx, ny, npc->size))
-                npc->y = ny;
-        }
-    }
-
+    InfMoveCtx mc = { s, idx };
+    encounter_npc_step_toward(&npc->x, &npc->y, tx, ty, npc->size,
+                              inf_npc_blocked, &mc);
     if (npc->x != ox || npc->y != oy)
         npc->moved_this_tick = 1;
 }
