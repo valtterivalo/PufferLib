@@ -1387,13 +1387,8 @@ static void inf_zuk_tick(InfernoState* s) {
 /* ======================================================================== */
 
 static void inf_tick_npcs(InfernoState* s) {
-    /* clear per-tick render flags */
-    for (int i = 0; i < INF_MAX_NPCS; i++) {
-        s->npcs[i].attacked_this_tick = 0;
-        s->npcs[i].moved_this_tick = 0;
-        s->npcs[i].hit_landed_this_tick = 0;
-        s->npcs[i].hit_damage = 0;
-    }
+    /* NPC per-tick flags are cleared in inf_step BEFORE inf_tick_player,
+       so player hit flags survive through both tick functions into render_post_tick. */
 
     /* zuk-specific phases first */
     inf_zuk_tick(s);
@@ -1542,43 +1537,23 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
         s->player_potion_timer = 3;
     }
 
-    /* movement: always attempt 2 tiles (running). if first tile blocked, don't move.
-       if second tile blocked, move 1 tile (walking). set is_running based on result. */
+    /* movement: 1 tile per tick (walking). in OSRS inferno, precise 1-tile
+       positioning matters for prayer flicking and safespot management.
+       running (2 tiles) can be added as a future action head. */
     int move_act = actions[INF_HEAD_MOVE];
     s->player.is_running = 0;
     if (move_act > 0 && move_act < 9) {
-        int dx = INF_MOVE_DX[move_act];
-        int dy = INF_MOVE_DY[move_act];
-
-        /* check first tile */
-        int nx1 = s->player.x + dx;
-        int ny1 = s->player.y + dy;
-        int walk1 = inf_in_arena(nx1, ny1) && !inf_blocked_by_pillar(s, nx1, ny1, 1);
-        if (walk1 && s->collision_map)
-            walk1 = collision_tile_walkable(s->collision_map, 0,
-                nx1 + s->world_offset_x, ny1 + s->world_offset_y);
-
-        if (walk1) {
-            /* check second tile (running) */
-            int nx2 = nx1 + dx;
-            int ny2 = ny1 + dy;
-            int walk2 = inf_in_arena(nx2, ny2) && !inf_blocked_by_pillar(s, nx2, ny2, 1);
-            if (walk2 && s->collision_map)
-                walk2 = collision_tile_walkable(s->collision_map, 0,
-                    nx2 + s->world_offset_x, ny2 + s->world_offset_y);
-
-            if (walk2) {
-                /* run: move 2 tiles */
-                s->player.x = nx2;
-                s->player.y = ny2;
-                s->player.is_running = 1;
-            } else {
-                /* walk: move 1 tile */
-                s->player.x = nx1;
-                s->player.y = ny1;
-            }
-            s->player.dest_x = s->player.x;
-            s->player.dest_y = s->player.y;
+        int nx = s->player.x + INF_MOVE_DX[move_act];
+        int ny = s->player.y + INF_MOVE_DY[move_act];
+        int walkable = inf_in_arena(nx, ny) && !inf_blocked_by_pillar(s, nx, ny, 1);
+        if (walkable && s->collision_map)
+            walkable = collision_tile_walkable(s->collision_map, 0,
+                nx + s->world_offset_x, ny + s->world_offset_y);
+        if (walkable) {
+            s->player.x = nx;
+            s->player.y = ny;
+            s->player.dest_x = nx;
+            s->player.dest_y = ny;
         }
     }
 
@@ -1759,6 +1734,14 @@ static void inf_step(EncounterState* state, const int* actions) {
     s->wave_completed_this_tick = 0;
     s->pillar_lost_this_tick = -1;
     s->player_attacked_this_tick = 0;
+    /* clear NPC per-tick flags BEFORE player actions, so hit flags set by
+       inf_tick_player survive through inf_tick_npcs into render_post_tick */
+    for (int i = 0; i < INF_MAX_NPCS; i++) {
+        s->npcs[i].attacked_this_tick = 0;
+        s->npcs[i].moved_this_tick = 0;
+        s->npcs[i].hit_landed_this_tick = 0;
+        s->npcs[i].hit_damage = 0;
+    }
     s->tick++;
 
     /* initial wave spawn delay */
