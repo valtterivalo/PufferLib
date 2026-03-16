@@ -1206,6 +1206,8 @@ static void render_post_tick(RenderClient* rc, OsrsPvp* env) {
         } else if (moved) {
             float dx = (float)(new_dest_x - rc->sub_x[i]);
             float dy = (float)(new_dest_y - rc->sub_y[i]);
+            /* mirror_y flips the visual Y axis, so negate dy for yaw */
+            if (rc->mirror_y) dy = -dy;
             if (dx != 0.0f || dy != 0.0f) {
                 rc->target_yaw[i] = atan2f(-dx, dy);
             }
@@ -1424,6 +1426,7 @@ static void render_client_tick(RenderClient* rc, int player_idx) {
             if (!rc->facing_opponent[player_idx]) {
                 float fdx = (float)dx;
                 float fdy = (float)dy;
+                if (rc->mirror_y) fdy = -fdy;
                 if (fdx != 0.0f || fdy != 0.0f) {
                     rc->target_yaw[player_idx] = atan2f(-fdx, fdy);
                 }
@@ -1443,6 +1446,7 @@ static void render_client_tick(RenderClient* rc, int player_idx) {
             int opp = (rc->entity_count == 2) ? (1 - player_idx) : (player_idx == 0 ? 1 : 0);
             float dx = (float)(rc->sub_x[opp] - rc->sub_x[player_idx]);
             float dy = (float)(rc->sub_y[opp] - rc->sub_y[player_idx]);
+            if (rc->mirror_y) dy = -dy;
             if (dx != 0.0f || dy != 0.0f) {
                 rc->target_yaw[player_idx] = atan2f(-dx, dy);
             }
