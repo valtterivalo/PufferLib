@@ -111,8 +111,8 @@ typedef struct {
  * body, so origin/pivot transforms compute correct centroids.
  * we replicate that here: one composite mesh per player. */
 
-#define COMPOSITE_MAX_BASE_VERTS 24000  /* large NPC models (Zuk, Jad) need more */
-#define COMPOSITE_MAX_FACES      16000  /* inferno NPCs are single merged meshes */
+#define COMPOSITE_MAX_BASE_VERTS 12000  /* ~16 models * ~750 base verts each */
+#define COMPOSITE_MAX_FACES      8000   /* ~16 models * ~500 faces each */
 #define COMPOSITE_MAX_EXP_VERTS  (COMPOSITE_MAX_FACES * 3)
 
 typedef struct {
@@ -3116,11 +3116,17 @@ static void render_draw_3d_world(RenderClient* rc) {
             base = MatrixMultiply(base, MatrixRotateY(rc->yaw[i]));
             base = MatrixMultiply(base, MatrixTranslate(px, ground, pz));
 
-            /* rebuild composite if equipment changed, animate, upload, draw */
-            render_player_composite(rc, i, base);
+            /* rebuild composite if equipment changed, animate, upload, draw.
+               skip NPC composites when npc_model_cache is loaded — the exported
+               inferno NPC model data has garbled vertex coordinates. use colored
+               cubes until the export pipeline is fixed. */
+            int skip_npc_model = (ep->entity_type == ENTITY_NPC && rc->npc_model_cache);
+            if (!skip_npc_model)
+                render_player_composite(rc, i, base);
 
-            /* colored cube fallback for NPCs without valid 3D models */
-            if (ep->entity_type == ENTITY_NPC && rc->composites[i].face_count == 0) {
+            /* colored cube fallback for NPCs */
+            if (ep->entity_type == ENTITY_NPC &&
+                (skip_npc_model || rc->composites[i].face_count == 0)) {
                 float sz = (float)(ep->npc_size > 1 ? ep->npc_size : 1) * 0.6f;
                 Color npc_col;
                 switch (ep->npc_def_id) {
