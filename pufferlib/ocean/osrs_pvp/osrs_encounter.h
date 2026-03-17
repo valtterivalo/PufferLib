@@ -26,6 +26,20 @@
 /* opaque encounter state — each encounter defines its own struct */
 typedef struct EncounterState EncounterState;
 
+/* ======================================================================== */
+/* shared pending hit system for delayed projectile damage                   */
+/* ======================================================================== */
+
+#define ENCOUNTER_MAX_PENDING_HITS 8
+
+typedef struct {
+    int active;
+    int damage;
+    int ticks_remaining;   /* countdown to landing */
+    int attack_style;      /* ATTACK_STYLE_* for prayer check at land time */
+    int check_prayer;      /* 1 = re-check prayer when hit lands (jad) */
+} EncounterPendingHit;
+
 /* visual overlay data: shared between encounter and renderer.
    encounter's render_post_tick populates this, renderer reads it. */
 #define ENCOUNTER_MAX_OVERLAY_TILES 16

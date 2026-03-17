@@ -140,4 +140,28 @@ static inline BarrageResult osrs_barrage_resolve(
     return result;
 }
 
+/* ======================================================================== */
+/* hit delay formulas (matching PvP + InfernoTrainer SDK)                    */
+/* ======================================================================== */
+
+/* magic hit delay: floor((1 + distance) / 3) + 1, +1 if attacker is player */
+static inline int encounter_magic_hit_delay(int distance, int is_player) {
+    return (1 + distance) / 3 + 1 + (is_player ? 1 : 0);
+}
+
+/* ranged hit delay: floor((3 + distance) / 6) + 1, +1 if attacker is player */
+static inline int encounter_ranged_hit_delay(int distance, int is_player) {
+    return (3 + distance) / 6 + 1 + (is_player ? 1 : 0);
+}
+
+/* chebyshev distance from point (px,py) to nearest tile of NPC footprint
+   at (nx,ny) with given npc_size. accounts for multi-tile NPCs. */
+static inline int encounter_dist_to_npc(int px, int py, int nx, int ny, int npc_size) {
+    int cx = px < nx ? nx : (px > nx + npc_size - 1 ? nx + npc_size - 1 : px);
+    int cy = py < ny ? ny : (py > ny + npc_size - 1 ? ny + npc_size - 1 : py);
+    int dx = px - cx; if (dx < 0) dx = -dx;
+    int dy = py - cy; if (dy < 0) dy = -dy;
+    return dx > dy ? dx : dy;
+}
+
 #endif /* OSRS_COMBAT_SHARED_H */

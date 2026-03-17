@@ -403,6 +403,9 @@ typedef struct {
     int heal_target;       /* healer: NPC index being healed (-1 = none) */
     int heal_timer;        /* healer: ticks until next heal tick */
 
+    /* pending hit from player attack (projectile in flight) */
+    EncounterPendingHit pending_hit;
+
     /* per-tick render flags (cleared at start of each tick) */
     int attacked_this_tick;  /* 1 when NPC attacks this tick */
     int moved_this_tick;     /* 1 when NPC moves this tick */
@@ -456,6 +459,7 @@ typedef struct {
     int max_hit;        /* base max hit (before tbow scaling) */
     int eff_level;      /* effective attack level (base + prayer + style + 8) */
     int attack_speed;   /* ticks between attacks */
+    int attack_range;   /* max attack distance (chebyshev tiles) */
     AttackStyle style;  /* ATTACK_STYLE_MAGIC or ATTACK_STYLE_RANGED */
 } InfWeaponStats;
 
@@ -465,11 +469,11 @@ typedef struct {
  * bp: rigour, att_bonus from gear, max_hit with dragon darts */
 static const InfWeaponStats INF_WEAPON_STATS[INF_NUM_WEAPON_SETS] = {
     [INF_GEAR_MAGE] = { .att_bonus = 88, .max_hit = 38, .eff_level = 131,
-        .attack_speed = 5, .style = ATTACK_STYLE_MAGIC },
+        .attack_speed = 5, .attack_range = 10, .style = ATTACK_STYLE_MAGIC },
     [INF_GEAR_TBOW] = { .att_bonus = 215, .max_hit = 33, .eff_level = 126,
-        .attack_speed = 5, .style = ATTACK_STYLE_RANGED },
+        .attack_speed = 5, .attack_range = 10, .style = ATTACK_STYLE_RANGED },
     [INF_GEAR_BP]   = { .att_bonus = 175, .max_hit = 25, .eff_level = 126,
-        .attack_speed = 3, .style = ATTACK_STYLE_RANGED },
+        .attack_speed = 3, .attack_range = 5, .style = ATTACK_STYLE_RANGED },
 };
 
 /* gear loadout arrays per weapon set */
@@ -590,6 +594,10 @@ typedef struct {
     int player_attack_dmg;          /* total damage dealt */
     int player_attack_style_id;     /* ATTACK_STYLE_* of the player attack */
 
+    /* pending hits on player from NPC attacks (projectiles in flight) */
+    EncounterPendingHit player_pending_hits[ENCOUNTER_MAX_PENDING_HITS];
+    int player_pending_hit_count;
+
     /* nibbler pillar target: random pillar chosen per wave, all nibblers attack it */
     int nibbler_target_pillar;
 
@@ -606,6 +614,16 @@ typedef struct {
 
     Log log;
 } InfernoState;
+
+/* ======================================================================== */
+/* prayer check helper                                                       */
+/* ======================================================================== */
+
+static inline int inf_prayer_correct_for_style(OverheadPrayer prayer, int attack_style) {
+    return (attack_style == ATTACK_STYLE_MELEE && prayer == PRAYER_PROTECT_MELEE) ||
+           (attack_style == ATTACK_STYLE_RANGED && prayer == PRAYER_PROTECT_RANGED) ||
+           (attack_style == ATTACK_STYLE_MAGIC && prayer == PRAYER_PROTECT_MAGIC);
+}
 
 /* ======================================================================== */
 /* RNG                                                                       */
@@ -813,8 +831,9 @@ static void inf_spawn_wave(InfernoState* s) {
 
     const InfWaveDef* w = &INF_WAVES[s->wave];
 
-    /* clear all NPCs */
+    /* clear all NPCs and pending hits */
     for (int i = 0; i < INF_MAX_NPCS; i++) s->npcs[i].active = 0;
+    s->player_pending_hit_count = 0;
 
     /* clear dead mob store each wave */
     s->dead_mob_count = 0;
@@ -1067,7 +1086,7 @@ static void inf_npc_attack(InfernoState* s, int idx) {
         return;
     }
 
-    /* zuk healer: heals zuk + AOE sparks on player */
+    /* zuk healer: heals zuk + AOE sparks on player (instant, no projectile delay) */
     if (npc->type == INF_NPC_HEALER_ZUK) {
         /* heal Zuk */
         for (int i = 0; i < INF_MAX_NPCS; i++) {
@@ -1079,12 +1098,17 @@ static void inf_npc_attack(InfernoState* s, int idx) {
                 break;
             }
         }
-        /* AOE sparks on player (3 spark projectiles, simplified to single hit) */
+        /* AOE sparks on player — queue as pending hit with magic delay */
         int dmg = inf_rand_int(s, stats->max_hit + 1);
-        s->player.current_hitpoints -= dmg;
-        if (s->player.current_hitpoints < 0) s->player.current_hitpoints = 0;
-        s->damage_received_this_tick += dmg;
-        if (dmg > 0) { s->player.hit_landed_this_tick = 1; s->player.hit_damage = dmg; }
+        if (s->player_pending_hit_count < ENCOUNTER_MAX_PENDING_HITS) {
+            int d = encounter_dist_to_npc(npc->x, npc->y, s->player.x, s->player.y, 1);
+            EncounterPendingHit* ph = &s->player_pending_hits[s->player_pending_hit_count++];
+            ph->active = 1;
+            ph->damage = dmg;
+            ph->ticks_remaining = encounter_magic_hit_delay(d, 0);
+            ph->attack_style = ATTACK_STYLE_MAGIC;
+            ph->check_prayer = 0;
+        }
         npc->attacked_this_tick = 1;
         npc->attack_timer = stats->attack_speed;
         return;
@@ -1101,7 +1125,8 @@ static void inf_npc_attack(InfernoState* s, int idx) {
             if (s->npcs[jad_idx].hp > s->npcs[jad_idx].max_hp)
                 s->npcs[jad_idx].hp = s->npcs[jad_idx].max_hp;
         }
-        /* if player has targeted this healer, attack player in melee range */
+        /* if player has targeted this healer, attack player in melee range.
+           melee = instant (delay 0), apply immediately. */
         int px = s->player.x, py = s->player.y;
         int ddx = npc->x - px, ddy = npc->y - py;
         int dist = (ddx < 0 ? -ddx : ddx) > (ddy < 0 ? -ddy : ddy)
@@ -1123,11 +1148,9 @@ static void inf_npc_attack(InfernoState* s, int idx) {
     /* check LOS for ranged/magic attackers */
     if (stats->attack_range > 1 && !inf_npc_has_los(s, idx)) return;
 
-    /* check range */
-    int ddx = npc->x - s->player.x;
-    int ddy = npc->y - s->player.y;
-    int dist = (ddx < 0 ? -ddx : ddx) > (ddy < 0 ? -ddy : ddy)
-               ? (ddx < 0 ? -ddx : ddx) : (ddy < 0 ? -ddy : ddy);
+    /* compute distance to player */
+    int dist = encounter_dist_to_npc(s->player.x, s->player.y,
+                                      npc->x, npc->y, npc->size);
     if (dist > stats->attack_range) return;
 
     /* blob prayer reading: 2-phase attack cycle */
@@ -1187,7 +1210,7 @@ static void inf_npc_attack(InfernoState* s, int idx) {
             }
         }
 
-        /* typeless hit — not blockable by prayer */
+        /* typeless hit — not blockable by prayer, instant (no delay) */
         int dmg = inf_rand_int(s, stats->max_hit + 1);
         s->player.current_hitpoints -= dmg;
         if (s->player.current_hitpoints < 0) s->player.current_hitpoints = 0;
@@ -1205,22 +1228,40 @@ static void inf_npc_attack(InfernoState* s, int idx) {
     /* damage calculation */
     int dmg = inf_rand_int(s, stats->max_hit + 1);
 
-    /* prayer reduction */
-    int prayer_matches = (actual_style == ATTACK_STYLE_MELEE && s->active_prayer == PRAYER_PROTECT_MELEE) ||
-                         (actual_style == ATTACK_STYLE_RANGED && s->active_prayer == PRAYER_PROTECT_RANGED) ||
-                         (actual_style == ATTACK_STYLE_MAGIC && s->active_prayer == PRAYER_PROTECT_MAGIC);
+    /* compute hit delay based on attack style */
+    int hit_delay = 0;
+    if (actual_style == ATTACK_STYLE_MAGIC)
+        hit_delay = encounter_magic_hit_delay(dist, 0);
+    else if (actual_style == ATTACK_STYLE_RANGED)
+        hit_delay = encounter_ranged_hit_delay(dist, 0);
+    /* melee: delay = 0 */
 
-    /* jad: prayer checked at projectile hit time (3 ticks after attack animation).
-       simplified here to check at attack time. */
-    if (prayer_matches) {
-        dmg = 0;
-        s->prayer_correct_this_tick = 1;
+    if (hit_delay == 0) {
+        /* melee: instant damage, check prayer now */
+        int prayer_matches = inf_prayer_correct_for_style(s->active_prayer, actual_style);
+        if (prayer_matches) { dmg = 0; s->prayer_correct_this_tick = 1; }
+        s->player.current_hitpoints -= dmg;
+        if (s->player.current_hitpoints < 0) s->player.current_hitpoints = 0;
+        s->damage_received_this_tick += dmg;
+        if (dmg > 0) { s->player.hit_landed_this_tick = 1; s->player.hit_damage = dmg; }
+    } else {
+        /* ranged/magic: queue pending hit on player */
+        if (s->player_pending_hit_count < ENCOUNTER_MAX_PENDING_HITS) {
+            /* for non-jad NPCs, check prayer at queue time (standard OSRS behavior).
+               for jad, check prayer at hit time (gives 3-tick reaction window). */
+            int is_jad = (npc->type == INF_NPC_JAD);
+            if (!is_jad) {
+                int prayer_matches = inf_prayer_correct_for_style(s->active_prayer, actual_style);
+                if (prayer_matches) { dmg = 0; s->prayer_correct_this_tick = 1; }
+            }
+            EncounterPendingHit* ph = &s->player_pending_hits[s->player_pending_hit_count++];
+            ph->active = 1;
+            ph->damage = dmg;
+            ph->ticks_remaining = hit_delay;
+            ph->attack_style = actual_style;
+            ph->check_prayer = is_jad ? 1 : 0;
+        }
     }
-
-    s->player.current_hitpoints -= dmg;
-    if (s->player.current_hitpoints < 0) s->player.current_hitpoints = 0;
-    s->damage_received_this_tick += dmg;
-    if (dmg > 0) { s->player.hit_landed_this_tick = 1; s->player.hit_damage = dmg; }
 
     npc->attacked_this_tick = 1;
     npc->attack_timer = stats->attack_speed;
@@ -1577,104 +1618,112 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
         InfNPC* target_npc = &s->npcs[s->player_attack_target];
         if (target_npc->active) {
             const InfWeaponStats* ws = &INF_WEAPON_STATS[s->weapon_set];
-            int total_dmg = 0;
 
-            if (s->weapon_set == INF_GEAR_MAGE) {
-                /* barrage spells: 3x3 AoE via shared osrs_barrage_resolve.
-                   ice barrage: freeze on hit (including 0 dmg), not on splash.
-                   blood barrage: heal 25% of total AoE damage. */
-                int mage_att_roll = ws->eff_level * (ws->att_bonus + 64);
+            /* range check: compute distance to target NPC, skip if out of range */
+            int target_dist = encounter_dist_to_npc(s->player.x, s->player.y,
+                target_npc->x, target_npc->y, target_npc->size);
 
-                /* build target array: primary target first, then all other active NPCs */
-                BarrageTarget btargets[INF_MAX_NPCS + 1];
-                int bt_count = 0;
-                {
-                    const InfNPCStats* ns = &INF_NPC_STATS[target_npc->type];
-                    btargets[bt_count++] = (BarrageTarget){
-                        .active = 1, .x = target_npc->x, .y = target_npc->y,
-                        .def_level = ns->def_level, .magic_def_bonus = ns->magic_def_bonus,
-                        .npc_idx = s->player_attack_target, .hit = 0, .damage = 0
-                    };
-                }
-                for (int i = 0; i < INF_MAX_NPCS; i++) {
-                    if (i == s->player_attack_target || !s->npcs[i].active) continue;
-                    const InfNPCStats* ns2 = &INF_NPC_STATS[s->npcs[i].type];
-                    btargets[bt_count++] = (BarrageTarget){
-                        .active = 1, .x = s->npcs[i].x, .y = s->npcs[i].y,
-                        .def_level = ns2->def_level, .magic_def_bonus = ns2->magic_def_bonus,
-                        .npc_idx = i, .hit = 0, .damage = 0
-                    };
-                }
+            if (target_dist <= ws->attack_range) {
+                /* compute hit delay for projectile flight */
+                int hit_delay;
+                if (ws->style == ATTACK_STYLE_MAGIC)
+                    hit_delay = encounter_magic_hit_delay(target_dist, 1);
+                else
+                    hit_delay = encounter_ranged_hit_delay(target_dist, 1);
 
-                BarrageResult br = osrs_barrage_resolve(
-                    btargets, bt_count, mage_att_roll, ws->max_hit, &s->rng_state);
-                total_dmg = br.total_damage;
+                int total_dmg = 0;
 
-                /* apply damage, freeze, death, and hit splat to each target */
-                for (int i = 0; i < bt_count; i++) {
-                    if (!btargets[i].active) continue;
-                    int idx = btargets[i].npc_idx;
-                    if (btargets[i].hit) {
-                        s->npcs[idx].hp -= btargets[i].damage;
-                        s->npcs[idx].hit_landed_this_tick = 1;
-                        s->npcs[idx].hit_damage = btargets[i].damage;
-                        if (s->spell_choice == 1)
-                            s->npcs[idx].frozen_ticks = BARRAGE_FREEZE_TICKS;
-                        inf_apply_npc_death(s, idx);
+                if (s->weapon_set == INF_GEAR_MAGE) {
+                    /* barrage spells: 3x3 AoE via shared osrs_barrage_resolve.
+                       ice barrage: freeze on hit (including 0 dmg), not on splash.
+                       blood barrage: heal 25% of total AoE damage (applied when hits land). */
+                    int mage_att_roll = ws->eff_level * (ws->att_bonus + 64);
+
+                    /* build target array: primary target first, then all other active NPCs */
+                    BarrageTarget btargets[INF_MAX_NPCS + 1];
+                    int bt_count = 0;
+                    {
+                        const InfNPCStats* ns = &INF_NPC_STATS[target_npc->type];
+                        btargets[bt_count++] = (BarrageTarget){
+                            .active = 1, .x = target_npc->x, .y = target_npc->y,
+                            .def_level = ns->def_level, .magic_def_bonus = ns->magic_def_bonus,
+                            .npc_idx = s->player_attack_target, .hit = 0, .damage = 0
+                        };
                     }
+                    for (int i = 0; i < INF_MAX_NPCS; i++) {
+                        if (i == s->player_attack_target || !s->npcs[i].active) continue;
+                        const InfNPCStats* ns2 = &INF_NPC_STATS[s->npcs[i].type];
+                        btargets[bt_count++] = (BarrageTarget){
+                            .active = 1, .x = s->npcs[i].x, .y = s->npcs[i].y,
+                            .def_level = ns2->def_level, .magic_def_bonus = ns2->magic_def_bonus,
+                            .npc_idx = i, .hit = 0, .damage = 0
+                        };
+                    }
+
+                    BarrageResult br = osrs_barrage_resolve(
+                        btargets, bt_count, mage_att_roll, ws->max_hit, &s->rng_state);
+                    total_dmg = br.total_damage;
+
+                    /* queue pending hits on each AoE target (all get same delay from primary distance) */
+                    for (int i = 0; i < bt_count; i++) {
+                        if (!btargets[i].active || !btargets[i].hit) continue;
+                        int nidx = btargets[i].npc_idx;
+                        EncounterPendingHit* ph = &s->npcs[nidx].pending_hit;
+                        ph->active = 1;
+                        ph->damage = btargets[i].damage;
+                        ph->ticks_remaining = hit_delay;
+                        ph->attack_style = ATTACK_STYLE_MAGIC;
+                        ph->check_prayer = s->spell_choice;  /* 0=blood, 1=ice — used at land time */
+                    }
+
+                } else if (s->weapon_set == INF_GEAR_TBOW) {
+                    /* tbow: single target, scale by target magic level */
+                    const InfNPCStats* ns = &INF_NPC_STATS[target_npc->type];
+                    int tbow_m = ns->magic_level > ns->magic_def_bonus
+                               ? ns->magic_level : ns->magic_def_bonus;
+                    if (tbow_m > 250) tbow_m = 250;
+                    float acc_mult = osrs_tbow_acc_mult(tbow_m);
+                    float dmg_mult = osrs_tbow_dmg_mult(tbow_m);
+                    int att_roll = (int)(ws->eff_level * (ws->att_bonus + 64) * acc_mult);
+                    int def_roll = (ns->def_level + 8) * (ns->ranged_def_bonus + 64);
+                    int max_hit = (int)(ws->max_hit * dmg_mult);
+                    if (inf_rand_float(s) < osrs_hit_chance(att_roll, def_roll)) {
+                        total_dmg = inf_rand_int(s, max_hit + 1);
+                    }
+                    EncounterPendingHit* ph = &target_npc->pending_hit;
+                    ph->active = 1;
+                    ph->damage = total_dmg;
+                    ph->ticks_remaining = hit_delay;
+                    ph->attack_style = ATTACK_STYLE_RANGED;
+                    ph->check_prayer = 0;
+
+                } else {
+                    /* blowpipe: single target */
+                    const InfNPCStats* ns = &INF_NPC_STATS[target_npc->type];
+                    int att_roll = ws->eff_level * (ws->att_bonus + 64);
+                    int def_roll = (ns->def_level + 8) * (ns->ranged_def_bonus + 64);
+                    if (inf_rand_float(s) < osrs_hit_chance(att_roll, def_roll)) {
+                        total_dmg = inf_rand_int(s, ws->max_hit + 1);
+                    }
+                    EncounterPendingHit* ph = &target_npc->pending_hit;
+                    ph->active = 1;
+                    ph->damage = total_dmg;
+                    ph->ticks_remaining = hit_delay;
+                    ph->attack_style = ATTACK_STYLE_RANGED;
+                    ph->check_prayer = 0;
                 }
 
-                /* blood barrage: heal 25% of total AoE damage */
-                if (s->spell_choice == 0 && total_dmg > 0) {
-                    s->player.current_hitpoints += total_dmg / 4;
-                    if (s->player.current_hitpoints > s->player.base_hitpoints)
-                        s->player.current_hitpoints = s->player.base_hitpoints;
-                }
+                s->player_attack_timer = ws->attack_speed;
 
-            } else if (s->weapon_set == INF_GEAR_TBOW) {
-                /* tbow: single target, scale by target magic level */
-                const InfNPCStats* ns = &INF_NPC_STATS[target_npc->type];
-                int tbow_m = ns->magic_level > ns->magic_def_bonus
-                           ? ns->magic_level : ns->magic_def_bonus;
-                if (tbow_m > 250) tbow_m = 250;
-                float acc_mult = osrs_tbow_acc_mult(tbow_m);
-                float dmg_mult = osrs_tbow_dmg_mult(tbow_m);
-                int att_roll = (int)(ws->eff_level * (ws->att_bonus + 64) * acc_mult);
-                int def_roll = (ns->def_level + 8) * (ns->ranged_def_bonus + 64);
-                int max_hit = (int)(ws->max_hit * dmg_mult);
-                if (inf_rand_float(s) < osrs_hit_chance(att_roll, def_roll)) {
-                    total_dmg = inf_rand_int(s, max_hit + 1);
-                }
-                target_npc->hp -= total_dmg;
-                target_npc->hit_landed_this_tick = 1;
-                target_npc->hit_damage = total_dmg;
-                inf_apply_npc_death(s, s->player_attack_target);
+                /* player projectile event for renderer */
+                s->player_attacked_this_tick = 1;
+                s->player_attack_npc_idx = s->player_attack_target;
+                s->player_attack_dmg = total_dmg;
+                s->player_attack_style_id = ws->style;
 
-            } else {
-                /* blowpipe: single target */
-                const InfNPCStats* ns = &INF_NPC_STATS[target_npc->type];
-                int att_roll = ws->eff_level * (ws->att_bonus + 64);
-                int def_roll = (ns->def_level + 8) * (ns->ranged_def_bonus + 64);
-                if (inf_rand_float(s) < osrs_hit_chance(att_roll, def_roll)) {
-                    total_dmg = inf_rand_int(s, ws->max_hit + 1);
-                }
-                target_npc->hp -= total_dmg;
-                target_npc->hit_landed_this_tick = 1;
-                target_npc->hit_damage = total_dmg;
-                inf_apply_npc_death(s, s->player_attack_target);
+                /* player attack animation flag for renderer */
+                s->player.attack_style_this_tick = ws->style;
             }
-
-            s->damage_dealt_this_tick += total_dmg;
-            s->player_attack_timer = ws->attack_speed;
-
-            /* player projectile event for renderer */
-            s->player_attacked_this_tick = 1;
-            s->player_attack_npc_idx = s->player_attack_target;
-            s->player_attack_dmg = total_dmg;
-            s->player_attack_style_id = ws->style;
-
-            /* player attack animation flag for renderer */
-            s->player.attack_style_this_tick = ws->style;
         }
     }
 }
@@ -1764,6 +1813,67 @@ static void inf_step(EncounterState* state, const int* actions) {
 
     /* NPC AI */
     inf_tick_npcs(s);
+
+    /* ------------------------------------------------------------------ */
+    /* process pending hits: NPC pending hits (player attacks landing)     */
+    /* ------------------------------------------------------------------ */
+    {
+        int barrage_dmg_landed = 0;  /* track blood barrage healing */
+        for (int i = 0; i < INF_MAX_NPCS; i++) {
+            EncounterPendingHit* ph = &s->npcs[i].pending_hit;
+            if (!ph->active) continue;
+            ph->ticks_remaining--;
+            if (ph->ticks_remaining <= 0) {
+                int dmg = ph->damage;
+                int is_ice_barrage = (ph->attack_style == ATTACK_STYLE_MAGIC && ph->check_prayer == 1);
+                int is_blood_barrage = (ph->attack_style == ATTACK_STYLE_MAGIC && ph->check_prayer == 0);
+                /* apply damage */
+                if (s->npcs[i].active) {
+                    s->npcs[i].hp -= dmg;
+                    s->npcs[i].hit_landed_this_tick = 1;
+                    s->npcs[i].hit_damage = dmg;
+                    s->damage_dealt_this_tick += dmg;
+                    /* ice barrage freeze on hit (including 0 dmg hits, not splashes —
+                       damage > 0 means it hit, queued hits already passed accuracy) */
+                    if (is_ice_barrage)
+                        s->npcs[i].frozen_ticks = BARRAGE_FREEZE_TICKS;
+                    if (is_blood_barrage)
+                        barrage_dmg_landed += dmg;
+                    inf_apply_npc_death(s, i);
+                }
+                ph->active = 0;
+            }
+        }
+        /* blood barrage: heal 25% of total AoE damage that landed this tick */
+        if (barrage_dmg_landed > 0) {
+            s->player.current_hitpoints += barrage_dmg_landed / 4;
+            if (s->player.current_hitpoints > s->player.base_hitpoints)
+                s->player.current_hitpoints = s->player.base_hitpoints;
+        }
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* process pending hits: player pending hits (NPC attacks landing)     */
+    /* ------------------------------------------------------------------ */
+    for (int i = 0; i < s->player_pending_hit_count; i++) {
+        s->player_pending_hits[i].ticks_remaining--;
+        if (s->player_pending_hits[i].ticks_remaining <= 0) {
+            int dmg = s->player_pending_hits[i].damage;
+            /* for jad: re-check prayer at hit time (3-tick reaction window) */
+            if (s->player_pending_hits[i].check_prayer) {
+                int correct = inf_prayer_correct_for_style(s->active_prayer,
+                    s->player_pending_hits[i].attack_style);
+                if (correct) { dmg = 0; s->prayer_correct_this_tick = 1; }
+            }
+            s->player.current_hitpoints -= dmg;
+            if (s->player.current_hitpoints < 0) s->player.current_hitpoints = 0;
+            s->damage_received_this_tick += dmg;
+            if (dmg > 0) { s->player.hit_landed_this_tick = 1; s->player.hit_damage = dmg; }
+            /* remove from queue (swap with last) */
+            s->player_pending_hits[i] = s->player_pending_hits[--s->player_pending_hit_count];
+            i--;  /* re-check this index */
+        }
+    }
 
     /* check player death */
     if (s->player.current_hitpoints <= 0) {
