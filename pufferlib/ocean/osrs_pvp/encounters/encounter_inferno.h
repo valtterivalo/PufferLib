@@ -1076,11 +1076,21 @@ static void inf_npc_attack(InfernoState* s, int idx) {
             int ddx = npc->x - s->pillars[p].x;
             int ddy = npc->y - s->pillars[p].y;
             if (ddx >= -1 && ddx <= INF_PILLAR_SIZE && ddy >= -1 && ddy <= INF_PILLAR_SIZE) {
-                s->pillars[p].hp -= stats->max_hit;
+                /* nibblers deal 0-4 damage per hit (ref: InfernoTrainer JalNib.ts) */
+                int dmg = inf_rand_int(s, stats->max_hit + 1);
+                s->pillars[p].hp -= dmg;
                 if (s->pillars[p].hp <= 0) {
                     s->pillars[p].active = 0;
                     s->pillar_lost_this_tick = p;
                     inf_rebuild_los(s);
+                    /* pillar death AOE: kills all nibblers adjacent to the pillar */
+                    for (int n = 0; n < INF_MAX_NPCS; n++) {
+                        if (!s->npcs[n].active || s->npcs[n].type != INF_NPC_NIBBLER) continue;
+                        int ndx = s->npcs[n].x - s->pillars[p].x;
+                        int ndy = s->npcs[n].y - s->pillars[p].y;
+                        if (ndx >= -1 && ndx <= INF_PILLAR_SIZE && ndy >= -1 && ndy <= INF_PILLAR_SIZE)
+                            s->npcs[n].active = 0;
+                    }
                 }
                 npc->attacked_this_tick = 1;
                 npc->attack_timer = stats->attack_speed;
