@@ -50,6 +50,7 @@
 #include <string.h>
 #include "osrs_pvp_types.h"
 #include "osrs_pvp_items.h"
+#include "osrs_pvp_pathfinding.h"
 
 /* opaque encounter state — each encounter defines its own struct */
 typedef struct EncounterState EncounterState;
@@ -235,6 +236,58 @@ static inline int encounter_move_to_target(
     p->is_running = (steps == 2);
     p->dest_x = p->x;
     p->dest_y = p->y;
+    return steps;
+}
+
+/* ======================================================================== */
+/* shared BFS click-to-move (human mode + destination-based movement)        */
+/* ======================================================================== */
+
+/* shared BFS pathfind wrapper — translates local coords to world coords for pathfind_step */
+static inline PathResult encounter_pathfind(
+    const CollisionMap* cmap, int world_offset_x, int world_offset_y,
+    int src_x, int src_y, int dst_x, int dst_y
+) {
+    if (!cmap) {
+        /* no collision map: greedy direction */
+        PathResult pr = {0, 0, 0, 0, 0};
+        pr.found = 1;
+        int dx = dst_x - src_x, dy = dst_y - src_y;
+        pr.next_dx = dx > 0 ? 1 : (dx < 0 ? -1 : 0);
+        pr.next_dy = dy > 0 ? 1 : (dy < 0 ? -1 : 0);
+        return pr;
+    }
+    return pathfind_step(cmap, 0,
+        src_x + world_offset_x, src_y + world_offset_y,
+        dst_x + world_offset_x, dst_y + world_offset_y);
+}
+
+/* shared click-to-move: BFS toward destination, take up to 2 steps (run).
+   call each tick when player_dest is set. clears dest when arrived.
+   returns steps taken (0, 1, or 2). */
+static inline int encounter_move_toward_dest(
+    Player* p, int* dest_x, int* dest_y,
+    const CollisionMap* cmap, int world_offset_x, int world_offset_y,
+    encounter_walkable_fn is_walkable, void* ctx
+) {
+    if (*dest_x < 0 || *dest_y < 0) return 0;
+    if (p->x == *dest_x && p->y == *dest_y) {
+        *dest_x = -1; *dest_y = -1;
+        return 0;
+    }
+    int steps = 0;
+    for (int step = 0; step < 2; step++) {
+        if (p->x == *dest_x && p->y == *dest_y) break;
+        PathResult pr = encounter_pathfind(cmap, world_offset_x, world_offset_y,
+                                            p->x, p->y, *dest_x, *dest_y);
+        if (!pr.found || (pr.next_dx == 0 && pr.next_dy == 0)) break;
+        int nx = p->x + pr.next_dx, ny = p->y + pr.next_dy;
+        if (!is_walkable(ctx, nx, ny)) break;
+        p->x = nx; p->y = ny;
+        steps++;
+    }
+    p->is_running = (steps == 2);
+    p->dest_x = p->x; p->dest_y = p->y;
     return steps;
 }
 

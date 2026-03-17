@@ -716,23 +716,14 @@ static inline int zul_on_platform(ZulrahState* s, int x, int y) {
     return collision_tile_walkable((const CollisionMap*)s->collision_map, 0, wx, wy);
 }
 
-/* BFS pathfinding on the zulrah arena. converts local coords to world coords
-   for the pathfinder, then returns the first step direction in local space. */
-static inline PathResult zul_pathfind(ZulrahState* s, int src_x, int src_y,
-                                       int dst_x, int dst_y) {
-    if (!s->collision_map) {
-        /* no collision map — greedy fallback */
-        PathResult r = {0, 0, 0, dst_x, dst_y};
-        if (src_x == dst_x && src_y == dst_y) { r.found = 1; return r; }
-        int dx = dst_x - src_x, dy = dst_y - src_y;
-        r.found = 1;
-        r.next_dx = (dx > 0) ? 1 : (dx < 0) ? -1 : 0;
-        r.next_dy = (dy > 0) ? 1 : (dy < 0) ? -1 : 0;
-        return r;
-    }
-    int ox = s->world_offset_x, oy = s->world_offset_y;
-    return pathfind_step((const CollisionMap*)s->collision_map, 0,
-                         src_x + ox, src_y + oy, dst_x + ox, dst_y + oy);
+/* BFS pathfinding uses shared encounter_pathfind from osrs_encounter.h */
+#define zul_pathfind(s, sx, sy, dx, dy) \
+    encounter_pathfind((const CollisionMap*)(s)->collision_map, \
+        (s)->world_offset_x, (s)->world_offset_y, (sx), (sy), (dx), (dy))
+
+/* walkability callback for encounter_move_toward_dest */
+static int zul_tile_walkable(void* ctx, int x, int y) {
+    return zul_on_platform((ZulrahState*)ctx, x, y);
 }
 
 /* cloud overlap: player (1x1) inside cloud (3x3) */
@@ -1681,43 +1672,10 @@ static void zul_process_movement(ZulrahState* s, int move) {
     if (move <= 0 || move >= ZUL_MOVE_DIM) return;
     if (s->player_stunned_ticks > 0) return;
 
-    int steps_taken = 0;
-    for (int step = 0; step < 2; step++) {
-        /* reached click destination — stop (walk, don't overshoot) */
-        if (s->player.x == s->player_dest_x && s->player.y == s->player_dest_y) break;
-
-        /* BFS pathfind toward destination if we have one, otherwise use raw direction */
-        int dx, dy;
-        if (s->player_dest_x >= 0 && s->player_dest_y >= 0) {
-            PathResult pr = zul_pathfind(s, s->player.x, s->player.y,
-                                          s->player_dest_x, s->player_dest_y);
-            if (!pr.found || (pr.next_dx == 0 && pr.next_dy == 0)) break;
-            dx = pr.next_dx;
-            dy = pr.next_dy;
-        } else {
-            dx = ENCOUNTER_MOVE_TARGET_DX[move];
-            dy = ENCOUNTER_MOVE_TARGET_DY[move];
-        }
-
-        int px = s->player.x, py = s->player.y;
-        if (s->collision_map) {
-            int wx = px + s->world_offset_x;
-            int wy = py + s->world_offset_y;
-            if (collision_traversable_step((const CollisionMap*)s->collision_map,
-                                            0, wx, wy, dx, dy)) {
-                s->player.x = px + dx;
-                s->player.y = py + dy;
-                steps_taken++;
-            }
-        } else {
-            int nx = px + dx, ny = py + dy;
-            if (zul_on_platform(s, nx, ny)) {
-                s->player.x = nx; s->player.y = ny;
-                steps_taken++;
-            }
-        }
-    }
-    s->player.is_running = (steps_taken == 2);
+    /* use shared BFS click-to-move when destination is set (human or RL) */
+    encounter_move_toward_dest(&s->player, &s->player_dest_x, &s->player_dest_y,
+        (const CollisionMap*)s->collision_map, s->world_offset_x, s->world_offset_y,
+        zul_tile_walkable, s);
 }
 
 static void zul_process_prayer(ZulrahState* s, int p) {

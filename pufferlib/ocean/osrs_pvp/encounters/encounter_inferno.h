@@ -594,6 +594,9 @@ typedef struct {
     const CollisionMap* collision_map;
     int world_offset_x, world_offset_y;
 
+    /* human click-to-move destination (-1 = no dest) */
+    int player_dest_x, player_dest_y;
+
     /* config */
     int start_wave;        /* for curriculum: start from a later wave */
     uint32_t rng_state;
@@ -728,6 +731,10 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
     s->world_offset_x = saved_wox;
     s->world_offset_y = saved_woy;
     s->rng_state = (seed != 0) ? seed : (saved_rng != 0 ? saved_rng : 12345);
+
+    /* human click-to-move: no destination after reset */
+    s->player_dest_x = -1;
+    s->player_dest_y = -1;
 
     /* player */
     s->player.entity_type = ENTITY_PLAYER;
@@ -1610,14 +1617,21 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
         s->player_potion_timer = 3;
     }
 
-    /* movement: 25-action system (idle + 8 walk + 16 run).
-       uses encounter_move_to_target from osrs_encounter.h with inf_tile_walkable callback. */
-    int move_act = actions[INF_HEAD_MOVE];
-    s->player.is_running = 0;
-    if (move_act > 0 && move_act < ENCOUNTER_MOVE_ACTIONS) {
-        encounter_move_to_target(&s->player,
-            ENCOUNTER_MOVE_TARGET_DX[move_act], ENCOUNTER_MOVE_TARGET_DY[move_act],
+    /* movement: human click (BFS) or RL agent (direct 25-action) */
+    if (s->player_dest_x >= 0) {
+        /* human click or destination-based: BFS toward dest */
+        encounter_move_toward_dest(&s->player, &s->player_dest_x, &s->player_dest_y,
+            s->collision_map, s->world_offset_x, s->world_offset_y,
             inf_tile_walkable, s);
+    } else {
+        /* RL agent: direct movement from action head */
+        int move_act = actions[INF_HEAD_MOVE];
+        s->player.is_running = 0;
+        if (move_act > 0 && move_act < ENCOUNTER_MOVE_ACTIONS) {
+            encounter_move_to_target(&s->player,
+                ENCOUNTER_MOVE_TARGET_DX[move_act], ENCOUNTER_MOVE_TARGET_DY[move_act],
+                inf_tile_walkable, s);
+        }
     }
 
     /* attack target */
@@ -2144,6 +2158,8 @@ static void inf_put_int(EncounterState* state, const char* key, int value) {
     else if (strcmp(key, "seed") == 0) s->rng_state = (uint32_t)value;
     else if (strcmp(key, "world_offset_x") == 0) s->world_offset_x = value;
     else if (strcmp(key, "world_offset_y") == 0) s->world_offset_y = value;
+    else if (strcmp(key, "player_dest_x") == 0) s->player_dest_x = value;
+    else if (strcmp(key, "player_dest_y") == 0) s->player_dest_y = value;
 }
 
 static void inf_put_float(EncounterState* state, const char* key, float value) {
