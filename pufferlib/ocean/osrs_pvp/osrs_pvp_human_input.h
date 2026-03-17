@@ -30,6 +30,7 @@ static void human_input_init(HumanInput* hi) {
     hi->pending_move_y = -1;
     hi->pending_prayer = -1;
     hi->pending_offensive_prayer = -1;
+    hi->pending_target_idx = -1;
     hi->click_cross_active = 0;
 }
 
@@ -48,6 +49,8 @@ static void human_input_clear_pending(HumanInput* hi) {
     hi->pending_veng = 0;
     hi->pending_spec = 0;
     hi->pending_spell = 0;
+    hi->pending_target_idx = -1;
+    hi->pending_gear = 0;
     /* don't clear cursor_mode or selected_spell — those persist until cancelled */
     /* don't clear click_tile — visual feedback fades on its own */
 }
@@ -113,6 +116,7 @@ static void human_process_tile_click(HumanInput* hi,
         if (!entities[i].npc_visible && entities[i].entity_type == ENTITY_NPC) continue;
         if (human_tile_hits_entity(&entities[i], wx, wy)) {
             hi->pending_attack = 1;
+            hi->pending_target_idx = i;
             /* attack cancels movement — server stops walking to old dest
                and auto-walks toward target instead (OSRS server behavior) */
             hi->pending_move_x = -1;
@@ -408,80 +412,84 @@ static void human_to_pvp_actions(HumanInput* hi, int* actions,
     }
 }
 
-/** Translate human input to encounter actions using the encounter vtable.
-    Movement is translated from absolute tile coords to the encounter's
-    movement system. The encounter's player entity is obtained via get_entity(0).
-
-    Generic implementation that works for any encounter with standard
-    action heads: MOVE(8-dir), ATTACK, PRAYER, FOOD, POTION, SPEC.
-    For encounter-specific translators, override in the .c file. */
+/** Translate human input to encounter actions using named head indices from EncounterDef.
+    Each encounter sets head_move, head_prayer, etc. to its action head index (or -1 if absent).
+    Movement is handled via put_int("player_dest_x/y") for click-to-move encounters. */
 static void human_to_encounter_actions_generic(HumanInput* hi, int* actions,
                                                 const EncounterDef* edef,
                                                 void* encounter_state) {
     for (int h = 0; h < edef->num_action_heads; h++) actions[h] = 0;
 
-    /* get player position via vtable */
-    Player* player = edef->get_entity(encounter_state, 0);
-    if (!player) return;
+    /* movement: convert absolute tile to 8-directional using ENCOUNTER_MOVE_TARGET tables.
+       movement head uses standard 25-action system (idle + 8 walk + 16 run). */
+    if (hi->pending_move_x >= 0 && hi->pending_move_y >= 0 && edef->head_move >= 0) {
+        Player* player = edef->get_entity(encounter_state, 0);
+        if (player) {
+            int dx = hi->pending_move_x - player->x;
+            int dy = hi->pending_move_y - player->y;
+            int sx = (dx > 0) ? 1 : (dx < 0) ? -1 : 0;
+            int sy = (dy > 0) ? 1 : (dy < 0) ? -1 : 0;
 
-    /* movement: convert absolute tile to 8-directional.
-       assumes head 0 is MOVE with dim=9, directions at indices 1-8. */
-    if (hi->pending_move_x >= 0 && hi->pending_move_y >= 0 &&
-        edef->num_action_heads > 0 && edef->action_head_dims[0] == 9) {
-        int dx = hi->pending_move_x - player->x;
-        int dy = hi->pending_move_y - player->y;
-        int sx = (dx > 0) ? 1 : (dx < 0) ? -1 : 0;
-        int sy = (dy > 0) ? 1 : (dy < 0) ? -1 : 0;
-
-        /* 8-direction LUT: index 1-8 maps to (dx,dy) pairs.
-           standard order: N(0,1), NE(1,1), E(1,0), SE(1,-1),
-           S(0,-1), SW(-1,-1), W(-1,0), NW(-1,1) */
-        static const int DX8[9] = { 0, 0, 1, 1, 1, 0, -1, -1, -1 };
-        static const int DY8[9] = { 0, 1, 1, 0, -1, -1, -1, 0, 1 };
-        for (int m = 1; m < 9; m++) {
-            if (DX8[m] == sx && DY8[m] == sy) {
-                actions[0] = m;
-                break;
+            /* 8-direction LUT: index 1-8 maps to (dx,dy) pairs.
+               standard order: N(0,1), NE(1,1), E(1,0), SE(1,-1),
+               S(0,-1), SW(-1,-1), W(-1,0), NW(-1,1) */
+            static const int DX8[9] = { 0, 0, 1, 1, 1, 0, -1, -1, -1 };
+            static const int DY8[9] = { 0, 1, 1, 0, -1, -1, -1, 0, 1 };
+            for (int m = 1; m < 9; m++) {
+                if (DX8[m] == sx && DY8[m] == sy) {
+                    actions[edef->head_move] = m;
+                    break;
+                }
             }
         }
     }
 
-    /* attack: head 1, values 0=none, 1=mage, 2=range (encounter convention) */
-    if (hi->pending_attack && edef->num_action_heads > 1) {
-        if (hi->pending_spell == ATTACK_ICE || hi->pending_spell == ATTACK_BLOOD) {
-            actions[1] = 1;  /* mage attack */
-        } else {
-            actions[1] = 2;  /* range attack */
-        }
-    }
-
-    /* prayer: head 2, values 0=none, 1=magic, 2=ranged, 3=melee */
-    if (hi->pending_prayer >= 0 && edef->num_action_heads > 2) {
+    /* prayer */
+    if (hi->pending_prayer >= 0 && edef->head_prayer >= 0) {
         switch (hi->pending_prayer) {
-            case OVERHEAD_NONE:   actions[2] = 0; break;
-            case OVERHEAD_MAGE:   actions[2] = 1; break;
-            case OVERHEAD_RANGED: actions[2] = 2; break;
-            case OVERHEAD_MELEE:  actions[2] = 3; break;
+            case OVERHEAD_NONE:   actions[edef->head_prayer] = 0; break;
+            case OVERHEAD_MAGE:   actions[edef->head_prayer] = 1; break;
+            case OVERHEAD_RANGED: actions[edef->head_prayer] = 2; break;
+            case OVERHEAD_MELEE:  actions[edef->head_prayer] = 3; break;
             default: break;
         }
     }
 
-    /* food: head 3 */
-    if (hi->pending_food && edef->num_action_heads > 3) {
-        actions[3] = 1;
+    /* NPC target: 0=none, 1+=NPC index (render entity index, directly usable) */
+    if (hi->pending_target_idx >= 0 && edef->head_target >= 0)
+        actions[edef->head_target] = hi->pending_target_idx + 1;
+
+    /* attack style (zulrah: 0=none, 1=mage, 2=range) */
+    if (hi->pending_attack && edef->head_attack >= 0) {
+        if (hi->pending_spell == ATTACK_ICE || hi->pending_spell == ATTACK_BLOOD) {
+            actions[edef->head_attack] = 1;  /* mage */
+        } else {
+            actions[edef->head_attack] = 2;  /* range */
+        }
     }
 
-    /* potion: head 4 */
-    if (hi->pending_potion > 0 && edef->num_action_heads > 4) {
-        if (hi->pending_potion == POTION_BREW) actions[4] = 1;
-        else if (hi->pending_potion == POTION_RESTORE) actions[4] = 2;
-        else if (hi->pending_potion == POTION_ANTIVENOM) actions[4] = 3;
+    /* food/brew */
+    if (hi->pending_food && edef->head_eat >= 0)
+        actions[edef->head_eat] = 1;
+
+    /* potion */
+    if (hi->pending_potion > 0 && edef->head_potion >= 0) {
+        if (hi->pending_potion == POTION_BREW) actions[edef->head_potion] = 1;
+        else if (hi->pending_potion == POTION_RESTORE) actions[edef->head_potion] = 2;
+        else if (hi->pending_potion == POTION_ANTIVENOM) actions[edef->head_potion] = 3;
     }
 
-    /* spec: head 5 */
-    if (hi->pending_spec && edef->num_action_heads > 5) {
-        actions[5] = 1;
-    }
+    /* spec */
+    if (hi->pending_spec && edef->head_spec >= 0)
+        actions[edef->head_spec] = 1;
+
+    /* gear switch */
+    if (hi->pending_gear > 0 && edef->head_gear >= 0)
+        actions[edef->head_gear] = hi->pending_gear;
+
+    /* spell choice */
+    if (hi->pending_spell >= 0 && edef->head_spell >= 0)
+        actions[edef->head_spell] = hi->pending_spell;
 }
 
 /* ======================================================================== */

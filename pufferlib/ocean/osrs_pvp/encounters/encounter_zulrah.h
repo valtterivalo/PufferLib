@@ -2380,6 +2380,16 @@ static const EncounterDef ENCOUNTER_ZULRAH = {
     .get_log = zul_get_log,
     .get_tick = zul_get_tick,
     .get_winner = zul_get_winner,
+
+    .head_move = ZUL_HEAD_MOVE,
+    .head_prayer = ZUL_HEAD_PRAYER,
+    .head_target = -1,
+    .head_gear = -1,
+    .head_eat = ZUL_HEAD_FOOD,
+    .head_potion = ZUL_HEAD_POTION,
+    .head_spell = -1,
+    .head_spec = ZUL_HEAD_SPEC,
+    .head_attack = ZUL_HEAD_ATTACK,
 };
 
 __attribute__((constructor))

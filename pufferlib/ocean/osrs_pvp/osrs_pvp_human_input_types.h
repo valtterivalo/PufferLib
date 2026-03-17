@@ -27,6 +27,8 @@ typedef struct HumanInput {
     int pending_veng;                      /* 1 = cast vengeance */
     int pending_spec;                      /* 1 = use special attack */
     int pending_spell;                     /* 0=none, ATTACK_ICE or ATTACK_BLOOD */
+    int pending_target_idx;                /* NPC entity index to attack, -1 = none */
+    int pending_gear;                      /* gear switch action value, 0 = none */
 
     CursorMode cursor_mode;
     int selected_spell;                    /* ATTACK_ICE or ATTACK_BLOOD for targeting */

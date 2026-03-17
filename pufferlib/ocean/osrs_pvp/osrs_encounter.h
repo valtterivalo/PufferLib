@@ -618,6 +618,19 @@ typedef struct {
     int arena_base_x, arena_base_y;
     int arena_width, arena_height;
 
+    /* named action head indices for human mode input translation.
+       set to -1 if the encounter doesn't have that action head.
+       the generic human input translator uses these instead of hardcoded indices. */
+    int head_move;     /* movement (walk/run) */
+    int head_prayer;   /* prayer switching */
+    int head_target;   /* NPC target selection (index into NPC array) */
+    int head_gear;     /* gear/loadout switching */
+    int head_eat;      /* eat food/brew */
+    int head_potion;   /* drink potion (restore, bastion, stamina) */
+    int head_spell;    /* spell selection (blood/ice barrage) */
+    int head_spec;     /* special attack */
+    int head_attack;   /* attack style (mage/range -- zulrah) */
+
     /* render hooks (optional — NULL if not implemented).
        populates visual overlay data for the renderer. */
     void (*render_post_tick)(EncounterState* state, EncounterOverlay* overlay);

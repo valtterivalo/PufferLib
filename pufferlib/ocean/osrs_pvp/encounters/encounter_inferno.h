@@ -2288,6 +2288,16 @@ static const EncounterDef ENCOUNTER_INFERNO = {
     .get_log = inf_get_log,
     .get_tick = inf_get_tick,
     .get_winner = inf_get_winner,
+
+    .head_move = INF_HEAD_MOVE,
+    .head_prayer = INF_HEAD_PRAYER,
+    .head_target = INF_HEAD_TARGET,
+    .head_gear = INF_HEAD_GEAR,
+    .head_eat = INF_HEAD_EAT,
+    .head_potion = INF_HEAD_POTION,
+    .head_spell = INF_HEAD_SPELL,
+    .head_spec = -1,
+    .head_attack = -1,
 };
 
 __attribute__((constructor))
