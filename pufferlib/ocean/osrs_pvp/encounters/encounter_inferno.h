@@ -1084,7 +1084,7 @@ static void inf_npc_attack(InfernoState* s, int idx) {
                     s->pillars[p].active = 0;
                     s->pillar_lost_this_tick = p;
                     inf_rebuild_los(s);
-                    /* pillar death AOE: deals 12 damage to all mobs within 1 tile */
+                    /* pillar death AOE: deals damage to all mobs + player within 1 tile */
                     for (int n = 0; n < INF_MAX_NPCS; n++) {
                         if (!s->npcs[n].active) continue;
                         int ndx = s->npcs[n].x - s->pillars[p].x;
@@ -1094,6 +1094,21 @@ static void inf_npc_attack(InfernoState* s, int idx) {
                             s->npcs[n].hit_landed_this_tick = 1;
                             s->npcs[n].hit_damage = 12;
                             inf_apply_npc_death(s, n);
+                        }
+                    }
+                    /* also damages the player if standing next to the pillar */
+                    {
+                        int pdx = s->player.x - s->pillars[p].x;
+                        int pdy = s->player.y - s->pillars[p].y;
+                        if (pdx >= -1 && pdx <= INF_PILLAR_SIZE && pdy >= -1 && pdy <= INF_PILLAR_SIZE) {
+                            /* TODO: find actual pillar collapse damage formula (server-side).
+                               49 observed in-game, likely scales with something. */
+                            int pdmg = 49;
+                            s->player.current_hitpoints -= pdmg;
+                            if (s->player.current_hitpoints < 0) s->player.current_hitpoints = 0;
+                            s->damage_received_this_tick += pdmg;
+                            s->player.hit_landed_this_tick = 1;
+                            s->player.hit_damage = pdmg;
                         }
                     }
                 }
