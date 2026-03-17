@@ -3142,38 +3142,13 @@ static void render_draw_3d_world(RenderClient* rc) {
             /* rebuild composite if equipment changed, animate, upload, draw */
             render_player_composite(rc, i, base);
 
-            /* colored cube fallback for NPCs without valid 3D models */
-            if (ep->entity_type == ENTITY_NPC && rc->composites[i].face_count == 0) {
-                float sz = (float)(ep->npc_size > 1 ? ep->npc_size : 1) * 0.6f;
-                Color npc_col;
-                switch (ep->npc_def_id) {
-                    case 7691: npc_col = CLITERAL(Color){255, 220, 50, 220};  break; /* nibbler - yellow */
-                    case 7692: npc_col = CLITERAL(Color){140, 90, 40, 220};   break; /* bat - brown */
-                    case 7693: npc_col = CLITERAL(Color){100, 100, 220, 220}; break; /* blob - blue */
-                    case 7694: npc_col = CLITERAL(Color){200, 80, 80, 220};   break; /* blob melee - red */
-                    case 7695: npc_col = CLITERAL(Color){80, 200, 80, 220};   break; /* blob range - green */
-                    case 7696: npc_col = CLITERAL(Color){80, 80, 200, 220};   break; /* blob mage - blue */
-                    case 7697: npc_col = CLITERAL(Color){180, 120, 60, 220};  break; /* meleer - orange */
-                    case 7698: npc_col = CLITERAL(Color){60, 180, 60, 220};   break; /* ranger - green */
-                    case 7699: npc_col = CLITERAL(Color){120, 60, 200, 220};  break; /* mager - purple */
-                    case 7700: npc_col = CLITERAL(Color){255, 80, 0, 220};    break; /* jad - bright orange */
-                    case 7706: npc_col = CLITERAL(Color){200, 30, 30, 220};   break; /* zuk - dark red */
-                    case 7701: npc_col = CLITERAL(Color){255, 200, 200, 220}; break; /* jad healer - pink */
-                    case 7708: npc_col = CLITERAL(Color){200, 200, 255, 220}; break; /* zuk healer - light blue */
-                    case 7707: npc_col = CLITERAL(Color){180, 180, 180, 220}; break; /* shield - grey */
-                    default:   npc_col = CLITERAL(Color){200, 50, 50, 220};   break;
-                }
-                DrawCube((Vector3){ px, ground + sz / 2.0f, pz }, sz, sz, sz, npc_col);
-                /* wireframe outline for depth */
-                DrawCubeWires((Vector3){ px, ground + sz / 2.0f, pz }, sz, sz, sz, BLACK);
-            }
 
             /* project animated mesh vertices to 2D screen for convex hull click detection.
                ported from RuneLite RSModelMixin.getConvexHull → Perspective.modelToCanvas.
                we sample every Nth vertex for performance (full hull is overkill). */
             PlayerComposite* comp = &rc->composites[i];
             Camera3D hull_cam = render_build_3d_camera(rc);
-            int nv = comp->mesh.vertexCount;
+            int nv = comp->face_count * 3;  /* actual used verts, not pre-allocated capacity */
             int stride = (nv > 200) ? (nv / 100) : 1;  /* sample ~100 verts max */
             int hull_n = 0;
             /* stack arrays for projection — max 200 sampled points */
