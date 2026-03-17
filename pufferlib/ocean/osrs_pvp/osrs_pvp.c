@@ -356,12 +356,17 @@ static void run_visual(OsrsPvp* env, const char* encounter_name, const char* rep
                 /* human control: translate staged clicks to encounter actions */
                 human_to_encounter_actions_generic(&rc->human_input, enc_actions,
                                                     edef, env->encounter_state);
-                /* set encounter destination from human click for proper pathfinding */
+                /* set encounter destination from human click for proper pathfinding.
+                   attacking an NPC cancels movement (OSRS: server stops walking
+                   to old dest and auto-walks toward target instead). */
                 if (rc->human_input.pending_move_x >= 0 && edef->put_int) {
                     edef->put_int(env->encounter_state, "player_dest_x",
                                   rc->human_input.pending_move_x);
                     edef->put_int(env->encounter_state, "player_dest_y",
                                   rc->human_input.pending_move_y);
+                } else if (rc->human_input.pending_attack && edef->put_int) {
+                    edef->put_int(env->encounter_state, "player_dest_x", -1);
+                    edef->put_int(env->encounter_state, "player_dest_y", -1);
                 }
                 human_input_clear_pending(&rc->human_input);
             } else if (replay && replay_get_actions(replay, enc_actions)) {

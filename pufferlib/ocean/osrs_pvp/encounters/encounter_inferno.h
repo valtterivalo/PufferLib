@@ -1634,14 +1634,21 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
         }
     }
 
-    /* attack target */
+    /* attack target: persistent until NPC dies or player issues movement.
+       in OSRS, clicking an NPC locks target for auto-attack; clicking ground cancels.
+       target=0 means "no new target this tick" (preserves existing target). */
     int target = actions[INF_HEAD_TARGET];
     if (target > 0 && target <= INF_MAX_NPCS) {
         int npc_idx = target - 1;
         if (s->npcs[npc_idx].active) {
             s->player_attack_target = npc_idx;
         }
-    } else {
+    } else if (actions[INF_HEAD_MOVE] > 0 || s->player_dest_x >= 0) {
+        /* walking cancels attack target (OSRS: clicking ground stops auto-attack) */
+        s->player_attack_target = -1;
+    }
+    /* clear target if NPC died */
+    if (s->player_attack_target >= 0 && !s->npcs[s->player_attack_target].active) {
         s->player_attack_target = -1;
     }
 
