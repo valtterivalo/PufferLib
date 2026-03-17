@@ -135,6 +135,7 @@ typedef struct {
     int ate_karambwan_this_tick;
     int used_special_this_tick;
     uint8_t equipped[NUM_GEAR_SLOTS];
+    int npc_slot;  /* source slot index in encounter's NPC array; -1 for player */
 } RenderEntity;
 
 /** Fill a RenderEntity from a Player struct (PvP, Zulrah, snakelings). */
@@ -166,6 +167,7 @@ static inline void render_entity_from_player(const Player* p, RenderEntity* out)
     out->ate_karambwan_this_tick = p->ate_karambwan_this_tick;
     out->used_special_this_tick = p->used_special_this_tick;
     memcpy(out->equipped, p->equipped, NUM_GEAR_SLOTS);
+    out->npc_slot = -1;  /* player, not an NPC */
 }
 
 /* ======================================================================== */

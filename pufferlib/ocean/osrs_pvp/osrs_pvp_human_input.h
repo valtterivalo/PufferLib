@@ -116,7 +116,7 @@ static void human_process_tile_click(HumanInput* hi,
         if (!entities[i].npc_visible && entities[i].entity_type == ENTITY_NPC) continue;
         if (human_tile_hits_entity(&entities[i], wx, wy)) {
             hi->pending_attack = 1;
-            hi->pending_target_idx = i;
+            hi->pending_target_idx = entities[i].npc_slot;
             /* attack cancels movement — server stops walking to old dest
                and auto-walks toward target instead (OSRS server behavior) */
             hi->pending_move_x = -1;

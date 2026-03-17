@@ -956,7 +956,7 @@ static void render_handle_input(RenderClient* rc, OsrsPvp* env) {
                     if (ent->entity_type == ENTITY_NPC && !ent->npc_visible) continue;
                     if (hull_contains(&rc->entity_hulls[ei], mx, my)) {
                         rc->human_input.pending_attack = 1;
-                        rc->human_input.pending_target_idx = ei;
+                        rc->human_input.pending_target_idx = rc->entities[ei].npc_slot;
                         /* attack cancels movement — server stops walking to old dest */
                         rc->human_input.pending_move_x = -1;
                         rc->human_input.pending_move_y = -1;

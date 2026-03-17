@@ -2128,6 +2128,7 @@ static void inf_fill_render_entities(EncounterState* state, RenderEntity* out, i
         memset(re->equipped, ITEM_NONE, NUM_GEAR_SLOTS);
         re->entity_type = ENTITY_NPC;
         re->npc_def_id = INF_NPC_DEF_IDS[npc->type];
+        re->npc_slot = i;  /* NPC array slot for click targeting */
         re->npc_visible = npc->active;
         re->npc_size = npc->size;
         {
