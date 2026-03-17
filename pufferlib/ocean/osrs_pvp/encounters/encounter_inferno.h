@@ -454,27 +454,12 @@ typedef enum {
     INF_NUM_WEAPON_SETS
 } InfWeaponSet;
 
-typedef struct {
-    int att_bonus;      /* attack bonus for accuracy roll */
-    int max_hit;        /* base max hit (before tbow scaling) */
-    int eff_level;      /* effective attack level (base + prayer + style + 8) */
-    int attack_speed;   /* ticks between attacks */
-    int attack_range;   /* max attack distance (chebyshev tiles) */
-    AttackStyle style;  /* ATTACK_STYLE_MAGIC or ATTACK_STYLE_RANGED */
-} InfWeaponStats;
-
-/* pre-computed weapon stats per loadout:
- * mage: kodai + augury, att_bonus from gear, max_hit = barrage(30) * 1.29 magic_dmg%
- * tbow: rigour, att_bonus from gear, max_hit before tbow scaling
- * bp: rigour, att_bonus from gear, max_hit with dragon darts */
-static const InfWeaponStats INF_WEAPON_STATS[INF_NUM_WEAPON_SETS] = {
-    [INF_GEAR_MAGE] = { .att_bonus = 88, .max_hit = 38, .eff_level = 131,
-        .attack_speed = 5, .attack_range = 10, .style = ATTACK_STYLE_MAGIC },
-    [INF_GEAR_TBOW] = { .att_bonus = 215, .max_hit = 33, .eff_level = 126,
-        .attack_speed = 5, .attack_range = 10, .style = ATTACK_STYLE_RANGED },
-    [INF_GEAR_BP]   = { .att_bonus = 175, .max_hit = 25, .eff_level = 126,
-        .attack_speed = 3, .attack_range = 5, .style = ATTACK_STYLE_RANGED },
-};
+/* weapon stats are now computed from loadouts via encounter_compute_loadout_stats()
+ * in inf_reset. see EncounterLoadoutStats in osrs_encounter.h.
+ * old hardcoded reference values for verification:
+ *   mage: att_bonus=88, max_hit=38, eff_level=131, speed=5, range=10
+ *   tbow: att_bonus=215, max_hit=33, eff_level=126, speed=5, range=10
+ *   bp:   att_bonus=175, max_hit=25, eff_level=126, speed=3, range=5 */
 
 /* gear loadout arrays per weapon set */
 static const uint8_t INF_MAGE_LOADOUT[NUM_GEAR_SLOTS] = {
@@ -584,6 +569,7 @@ typedef struct {
 
     /* gear state */
     InfWeaponSet weapon_set;
+    EncounterLoadoutStats loadout_stats[INF_NUM_WEAPON_SETS];
     int armor_tank;            /* 1 = justiciar overlay active */
     int stamina_active_ticks;  /* countdown for stamina effect */
     int spell_choice;          /* 0 = blood barrage, 1 = ice barrage */
@@ -767,6 +753,24 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
     s->stamina_active_ticks = 0;
     s->active_prayer = PRAYER_NONE;
     s->player_attack_target = -1;
+
+    /* compute loadout stats from item database (replaces old hardcoded INF_WEAPON_STATS) */
+    encounter_compute_loadout_stats(INF_MAGE_LOADOUT, ATTACK_STYLE_MAGIC,
+        ENCOUNTER_PRAYER_AUGURY, 99, 0, 30, &s->loadout_stats[INF_GEAR_MAGE]);
+    encounter_compute_loadout_stats(INF_RANGE_TBOW_LOADOUT, ATTACK_STYLE_RANGED,
+        ENCOUNTER_PRAYER_RIGOUR, 99, 0, 0, &s->loadout_stats[INF_GEAR_TBOW]);
+    encounter_compute_loadout_stats(INF_RANGE_BP_LOADOUT, ATTACK_STYLE_RANGED,
+        ENCOUNTER_PRAYER_RIGOUR, 99, 0, 0, &s->loadout_stats[INF_GEAR_BP]);
+
+    /* verify computed stats match expected values (remove after validation) */
+    fprintf(stderr, "[inferno] loadout stats computed from ITEM_DATABASE:\n");
+    for (int i = 0; i < INF_NUM_WEAPON_SETS; i++) {
+        const EncounterLoadoutStats* ls = &s->loadout_stats[i];
+        const char* names[] = {"mage", "tbow", "bp"};
+        fprintf(stderr, "  %s: att_bonus=%d, max_hit=%d, eff_level=%d, speed=%d, range=%d\n",
+            names[i], ls->attack_bonus, ls->max_hit, ls->eff_level,
+            ls->attack_speed, ls->attack_range);
+    }
 
     /* spawn position depends on wave */
     int is_zuk_wave = (saved_start >= 68);
@@ -1617,16 +1621,16 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
     if (s->player_attack_target >= 0 && s->player_attack_timer == 0) {
         InfNPC* target_npc = &s->npcs[s->player_attack_target];
         if (target_npc->active) {
-            const InfWeaponStats* ws = &INF_WEAPON_STATS[s->weapon_set];
+            const EncounterLoadoutStats* ls = &s->loadout_stats[s->weapon_set];
 
             /* range check: compute distance to target NPC, skip if out of range */
             int target_dist = encounter_dist_to_npc(s->player.x, s->player.y,
                 target_npc->x, target_npc->y, target_npc->size);
 
-            if (target_dist <= ws->attack_range) {
+            if (target_dist <= ls->attack_range) {
                 /* compute hit delay for projectile flight */
                 int hit_delay;
-                if (ws->style == ATTACK_STYLE_MAGIC)
+                if (ls->style == ATTACK_STYLE_MAGIC)
                     hit_delay = encounter_magic_hit_delay(target_dist, 1);
                 else
                     hit_delay = encounter_ranged_hit_delay(target_dist, 1);
@@ -1637,7 +1641,7 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
                     /* barrage spells: 3x3 AoE via shared osrs_barrage_resolve.
                        ice barrage: freeze on hit (including 0 dmg), not on splash.
                        blood barrage: heal 25% of total AoE damage (applied when hits land). */
-                    int mage_att_roll = ws->eff_level * (ws->att_bonus + 64);
+                    int mage_att_roll = ls->eff_level * (ls->attack_bonus + 64);
 
                     /* build target array: primary target first, then all other active NPCs */
                     BarrageTarget btargets[INF_MAX_NPCS + 1];
@@ -1661,7 +1665,7 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
                     }
 
                     BarrageResult br = osrs_barrage_resolve(
-                        btargets, bt_count, mage_att_roll, ws->max_hit, &s->rng_state);
+                        btargets, bt_count, mage_att_roll, ls->max_hit, &s->rng_state);
                     total_dmg = br.total_damage;
 
                     /* queue pending hits on each AoE target (all get same delay from primary distance) */
@@ -1677,16 +1681,17 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
                     }
 
                 } else if (s->weapon_set == INF_GEAR_TBOW) {
-                    /* tbow: single target, scale by target magic level */
+                    /* tbow: single target, scale by target magic level.
+                       ls->max_hit is BASE max hit before tbow scaling. */
                     const InfNPCStats* ns = &INF_NPC_STATS[target_npc->type];
                     int tbow_m = ns->magic_level > ns->magic_def_bonus
                                ? ns->magic_level : ns->magic_def_bonus;
                     if (tbow_m > 250) tbow_m = 250;
                     float acc_mult = osrs_tbow_acc_mult(tbow_m);
                     float dmg_mult = osrs_tbow_dmg_mult(tbow_m);
-                    int att_roll = (int)(ws->eff_level * (ws->att_bonus + 64) * acc_mult);
+                    int att_roll = (int)(ls->eff_level * (ls->attack_bonus + 64) * acc_mult);
                     int def_roll = (ns->def_level + 8) * (ns->ranged_def_bonus + 64);
-                    int max_hit = (int)(ws->max_hit * dmg_mult);
+                    int max_hit = (int)(ls->max_hit * dmg_mult);
                     if (inf_rand_float(s) < osrs_hit_chance(att_roll, def_roll)) {
                         total_dmg = inf_rand_int(s, max_hit + 1);
                     }
@@ -1700,10 +1705,10 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
                 } else {
                     /* blowpipe: single target */
                     const InfNPCStats* ns = &INF_NPC_STATS[target_npc->type];
-                    int att_roll = ws->eff_level * (ws->att_bonus + 64);
+                    int att_roll = ls->eff_level * (ls->attack_bonus + 64);
                     int def_roll = (ns->def_level + 8) * (ns->ranged_def_bonus + 64);
                     if (inf_rand_float(s) < osrs_hit_chance(att_roll, def_roll)) {
-                        total_dmg = inf_rand_int(s, ws->max_hit + 1);
+                        total_dmg = inf_rand_int(s, ls->max_hit + 1);
                     }
                     EncounterPendingHit* ph = &target_npc->pending_hit;
                     ph->active = 1;
@@ -1713,16 +1718,16 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
                     ph->check_prayer = 0;
                 }
 
-                s->player_attack_timer = ws->attack_speed;
+                s->player_attack_timer = ls->attack_speed;
 
                 /* player projectile event for renderer */
                 s->player_attacked_this_tick = 1;
                 s->player_attack_npc_idx = s->player_attack_target;
                 s->player_attack_dmg = total_dmg;
-                s->player_attack_style_id = ws->style;
+                s->player_attack_style_id = ls->style;
 
                 /* player attack animation flag for renderer */
-                s->player.attack_style_this_tick = ws->style;
+                s->player.attack_style_this_tick = ls->style;
             }
         }
     }

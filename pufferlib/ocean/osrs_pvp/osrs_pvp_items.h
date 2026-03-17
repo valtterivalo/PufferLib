@@ -877,7 +877,8 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 30,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 20, .magic_damage = 0, .prayer = 0
+        /* ranged_strength = 40 (blowpipe charged) + 20 (dragon darts) */
+        .melee_strength = 0, .ranged_strength = 60, .magic_damage = 0, .prayer = 0
     },
 
     // --- tier 1 (mid) mage ---

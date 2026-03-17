@@ -1,19 +1,21 @@
 /**
- * @file osrs_encounter.h
- * @brief Encounter interface for the OSRS simulation engine.
+ * @fileoverview osrs_encounter.h — encounter interface and shared combat utilities.
  *
- * An encounter is a specific training scenario (NH PvP, Jad, Cerberus, etc.)
- * that plugs into the shared OSRS engine (combat, movement, collision, rendering).
+ * provides the encounter vtable (EncounterDef) plus shared systems that all
+ * encounters use. adding a new encounter = one header file + registering it.
  *
- * Each encounter defines its own:
- *   - Entity configuration (agents, NPCs, adds)
- *   - Observation and action spaces
- *   - Reset/step logic and NPC AI
- *   - Reward function and termination conditions
- *   - Arena bounds and spawn positions
- *
- * The ocean binding and renderer dispatch through EncounterDef function pointers,
- * so adding a new encounter is just writing one header file + registering it.
+ * shared systems available:
+ *   - EncounterLoadoutStats + encounter_compute_loadout_stats(): derive attack
+ *     bonuses, max hits, effective levels from ITEM_DATABASE. encounters should
+ *     NOT manually hardcode these — call this function at reset instead.
+ *   - EncounterPrayer enum for prayer multiplier selection.
+ *   - encounter_move_to_target(): 25-action movement (idle + walk + run).
+ *   - encounter_npc_step_toward(): greedy NPC pathfinding.
+ *   - encounter_clear_tick_flags(): per-tick animation flag reset.
+ *   - encounter_apply_loadout() / encounter_populate_inventory(): gear switching.
+ *   - EncounterPendingHit: delayed projectile damage system.
+ *   - RenderEntity + render_entity_from_player(): renderer abstraction.
+ *   - EncounterOverlay: visual overlay (clouds, projectiles, boss state).
  */
 
 #ifndef OSRS_ENCOUNTER_H
@@ -22,6 +24,7 @@
 #include <stdint.h>
 #include <string.h>
 #include "osrs_pvp_types.h"
+#include "osrs_pvp_items.h"
 
 /* opaque encounter state — each encounter defines its own struct */
 typedef struct EncounterState EncounterState;
@@ -265,6 +268,155 @@ static inline void encounter_clear_tick_flags(Player* p) {
     p->ate_food_this_tick = 0;
     p->ate_karambwan_this_tick = 0;
     p->used_special_this_tick = 0;
+}
+
+/* ======================================================================== */
+/* shared loadout stat computation                                           */
+/*                                                                           */
+/* ENCOUNTERS: do NOT manually compute attack bonuses, max hits, or          */
+/* effective levels. call encounter_compute_loadout_stats() with a loadout   */
+/* array and it derives everything from ITEM_DATABASE automatically.         */
+/*                                                                           */
+/* available structs/functions:                                               */
+/*   EncounterLoadoutStats — computed combat stats for one gear loadout      */
+/*   EncounterPrayer       — prayer enum (NONE, AUGURY, RIGOUR, PIETY)      */
+/*   encounter_compute_loadout_stats() — derive stats from loadout + prayer  */
+/* ======================================================================== */
+
+/** combat stats derived from a gear loadout + prayer + style.
+    computed once at reset, read during combat. */
+typedef struct {
+    int attack_bonus;     /* primary attack bonus for the style */
+    int strength_bonus;   /* ranged_strength, magic_damage %, or melee_strength */
+    int eff_level;        /* effective attack level (floor(base*prayer) + style + 8) */
+    int max_hit;          /* base max hit (before tbow/set bonuses) */
+    int attack_speed;     /* ticks between attacks */
+    int attack_range;     /* max chebyshev distance */
+    AttackStyle style;
+    /* defence bonuses from gear */
+    int def_stab, def_slash, def_crush, def_magic, def_ranged;
+} EncounterLoadoutStats;
+
+/** overhead prayer multipliers for effective level computation. */
+typedef enum {
+    ENCOUNTER_PRAYER_NONE = 0,
+    ENCOUNTER_PRAYER_AUGURY,   /* +25% magic attack, +25% magic defence */
+    ENCOUNTER_PRAYER_RIGOUR,   /* +20% ranged attack, +23% ranged strength */
+    ENCOUNTER_PRAYER_PIETY,    /* +20% melee attack, +23% melee strength, +25% defence */
+} EncounterPrayer;
+
+/** derive all combat stats from a loadout array + prayer + style.
+    sums equipment bonuses from ITEM_DATABASE, applies prayer multiplier,
+    computes effective level and max hit.
+
+    @param loadout          gear array indexed by GEAR_SLOT_* (ITEM_NONE=255 for empty)
+    @param style            ATTACK_STYLE_MAGIC, ATTACK_STYLE_RANGED, or ATTACK_STYLE_MELEE
+    @param prayer           prayer enum for level multiplier
+    @param base_level       base combat level (usually 99)
+    @param style_bonus      +0 for rapid/autocast, +3 for accurate, +1 for controlled
+    @param spell_base_damage 0 for ranged/melee, 30 for ice/blood barrage
+    @param out              output struct to fill */
+static void encounter_compute_loadout_stats(
+    const uint8_t loadout[NUM_GEAR_SLOTS],
+    AttackStyle style,
+    EncounterPrayer prayer,
+    int base_level,
+    int style_bonus,
+    int spell_base_damage,
+    EncounterLoadoutStats* out
+) {
+    memset(out, 0, sizeof(*out));
+    out->style = style;
+
+    /* sum equipment bonuses from all gear slots */
+    int sum_attack_stab = 0, sum_attack_slash = 0, sum_attack_crush = 0;
+    int sum_attack_magic = 0, sum_attack_ranged = 0;
+    int sum_melee_strength = 0, sum_ranged_strength = 0, sum_magic_damage = 0;
+    int sum_def_stab = 0, sum_def_slash = 0, sum_def_crush = 0;
+    int sum_def_magic = 0, sum_def_ranged = 0;
+
+    for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
+        uint8_t item_idx = loadout[slot];
+        if (item_idx == 255) continue;  /* ITEM_NONE */
+        const Item* item = &ITEM_DATABASE[item_idx];
+        sum_attack_stab += item->attack_stab;
+        sum_attack_slash += item->attack_slash;
+        sum_attack_crush += item->attack_crush;
+        sum_attack_magic += item->attack_magic;
+        sum_attack_ranged += item->attack_ranged;
+        sum_melee_strength += item->melee_strength;
+        sum_ranged_strength += item->ranged_strength;
+        sum_magic_damage += item->magic_damage;
+        sum_def_stab += item->defence_stab;
+        sum_def_slash += item->defence_slash;
+        sum_def_crush += item->defence_crush;
+        sum_def_magic += item->defence_magic;
+        sum_def_ranged += item->defence_ranged;
+    }
+
+    out->def_stab = sum_def_stab;
+    out->def_slash = sum_def_slash;
+    out->def_crush = sum_def_crush;
+    out->def_magic = sum_def_magic;
+    out->def_ranged = sum_def_ranged;
+
+    /* weapon slot determines attack_speed and attack_range */
+    uint8_t weapon_idx = loadout[GEAR_SLOT_WEAPON];
+    if (weapon_idx != 255) {
+        const Item* weapon = &ITEM_DATABASE[weapon_idx];
+        out->attack_speed = weapon->attack_speed;
+        out->attack_range = weapon->attack_range;
+    }
+
+    /* primary attack bonus based on style */
+    if (style == ATTACK_STYLE_MAGIC) {
+        out->attack_bonus = sum_attack_magic;
+    } else if (style == ATTACK_STYLE_RANGED) {
+        out->attack_bonus = sum_attack_ranged;
+    } else {
+        /* melee: best of stab/slash/crush */
+        out->attack_bonus = sum_attack_stab;
+        if (sum_attack_slash > out->attack_bonus) out->attack_bonus = sum_attack_slash;
+        if (sum_attack_crush > out->attack_bonus) out->attack_bonus = sum_attack_crush;
+    }
+
+    /* prayer multipliers */
+    float att_prayer_mult = 1.0f;
+    float str_prayer_mult = 1.0f;
+    switch (prayer) {
+        case ENCOUNTER_PRAYER_AUGURY:
+            att_prayer_mult = 1.25f;
+            break;
+        case ENCOUNTER_PRAYER_RIGOUR:
+            att_prayer_mult = 1.20f;
+            str_prayer_mult = 1.23f;
+            break;
+        case ENCOUNTER_PRAYER_PIETY:
+            att_prayer_mult = 1.20f;
+            str_prayer_mult = 1.23f;
+            break;
+        case ENCOUNTER_PRAYER_NONE:
+            break;
+    }
+
+    /* effective attack level: floor(base * prayer_mult) + style_bonus + 8 */
+    out->eff_level = (int)(base_level * att_prayer_mult) + style_bonus + 8;
+
+    /* effective strength level (for max hit): floor(base * str_prayer_mult) + style_bonus + 8
+       note: style_bonus for strength is typically 0 for rapid/autocast, +3 for aggressive */
+    int eff_str_level = (int)(base_level * str_prayer_mult) + style_bonus + 8;
+
+    /* max hit and strength bonus depend on combat style */
+    if (style == ATTACK_STYLE_RANGED) {
+        out->strength_bonus = sum_ranged_strength;
+        out->max_hit = (int)(0.5 + eff_str_level * (sum_ranged_strength + 64) / 640.0);
+    } else if (style == ATTACK_STYLE_MAGIC) {
+        out->strength_bonus = sum_magic_damage;
+        out->max_hit = (int)(spell_base_damage * (1.0 + sum_magic_damage / 100.0));
+    } else {
+        out->strength_bonus = sum_melee_strength;
+        out->max_hit = (int)(0.5 + eff_str_level * (sum_melee_strength + 64) / 640.0);
+    }
 }
 
 /* ======================================================================== */
