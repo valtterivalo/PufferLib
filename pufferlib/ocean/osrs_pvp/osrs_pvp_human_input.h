@@ -444,13 +444,14 @@ static void human_to_encounter_actions_generic(HumanInput* hi, int* actions,
         }
     }
 
-    /* prayer */
+    /* prayer: 0=no change, 1=off, 2=melee, 3=ranged, 4=magic.
+       only written when user clicks a prayer; otherwise stays 0 (no change). */
     if (hi->pending_prayer >= 0 && edef->head_prayer >= 0) {
         switch (hi->pending_prayer) {
-            case OVERHEAD_NONE:   actions[edef->head_prayer] = 0; break;
-            case OVERHEAD_MAGE:   actions[edef->head_prayer] = 1; break;
-            case OVERHEAD_RANGED: actions[edef->head_prayer] = 2; break;
-            case OVERHEAD_MELEE:  actions[edef->head_prayer] = 3; break;
+            case OVERHEAD_NONE:   actions[edef->head_prayer] = 1; break;
+            case OVERHEAD_MELEE:  actions[edef->head_prayer] = 2; break;
+            case OVERHEAD_RANGED: actions[edef->head_prayer] = 3; break;
+            case OVERHEAD_MAGE:   actions[edef->head_prayer] = 4; break;
             default: break;
         }
     }

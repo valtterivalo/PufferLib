@@ -1607,8 +1607,8 @@ static void inf_tick_npcs(InfernoState* s) {
 #define INF_HEAD_SPELL   6   /* 2: blood_barrage, ice_barrage */
 #define INF_NUM_ACTION_HEADS 7
 
-static const int INF_ACTION_DIMS[INF_NUM_ACTION_HEADS] = { ENCOUNTER_MOVE_ACTIONS, 4, INF_MAX_NPCS+1, 5, 2, 4, 2 };
-#define INF_ACTION_MASK_SIZE (ENCOUNTER_MOVE_ACTIONS + 4 + INF_MAX_NPCS+1 + 5 + 2 + 4 + 2)
+static const int INF_ACTION_DIMS[INF_NUM_ACTION_HEADS] = { ENCOUNTER_MOVE_ACTIONS, 5, INF_MAX_NPCS+1, 5, 2, 4, 2 };
+#define INF_ACTION_MASK_SIZE (ENCOUNTER_MOVE_ACTIONS + 5 + INF_MAX_NPCS+1 + 5 + 2 + 4 + 2)
 
 /* movement uses shared encounter_move_to_target from osrs_encounter.h */
 
@@ -1662,13 +1662,14 @@ static void inf_apply_npc_death(InfernoState* s, int npc_idx) {
 static void inf_tick_player(InfernoState* s, const int* actions) {
     encounter_clear_tick_flags(&s->player);
 
-    /* prayer */
+    /* prayer: 0=no change, 1=off, 2=melee, 3=ranged, 4=magic */
     int prayer_act = actions[INF_HEAD_PRAYER];
     switch (prayer_act) {
-        case 0: s->active_prayer = PRAYER_NONE; break;
-        case 1: s->active_prayer = PRAYER_PROTECT_MELEE; break;
-        case 2: s->active_prayer = PRAYER_PROTECT_RANGED; break;
-        case 3: s->active_prayer = PRAYER_PROTECT_MAGIC; break;
+        case 0: break;  /* no change — prayer persists across ticks */
+        case 1: s->active_prayer = PRAYER_NONE; break;
+        case 2: s->active_prayer = PRAYER_PROTECT_MELEE; break;
+        case 3: s->active_prayer = PRAYER_PROTECT_RANGED; break;
+        case 4: s->active_prayer = PRAYER_PROTECT_MAGIC; break;
     }
     s->player.prayer = s->active_prayer;
 
@@ -1687,6 +1688,23 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
         s->player.equipped[GEAR_SLOT_HEAD] = INF_TANK_HEAD;
         s->player.equipped[GEAR_SLOT_BODY] = INF_TANK_BODY;
         s->player.equipped[GEAR_SLOT_LEGS] = INF_TANK_LEGS;
+    }
+
+    /* auto-detect gear switch from direct inventory equip (human mode).
+       gui_inv_click mutates p->equipped directly, bypassing the action head.
+       detect weapon mismatch and sync weapon_set + full loadout. */
+    {
+        uint8_t current_weapon = s->player.equipped[GEAR_SLOT_WEAPON];
+        if (current_weapon != INF_LOADOUTS[s->weapon_set][GEAR_SLOT_WEAPON]) {
+            for (int g = 0; g < INF_NUM_WEAPON_SETS; g++) {
+                if (INF_LOADOUTS[g][GEAR_SLOT_WEAPON] == current_weapon) {
+                    s->weapon_set = (InfWeaponSet)g;
+                    GearSet gs = (g == INF_GEAR_MAGE) ? GEAR_MAGE : GEAR_RANGED;
+                    encounter_apply_loadout(&s->player, INF_LOADOUTS[g], gs);
+                    break;
+                }
+            }
+        }
     }
 
     /* spell choice for mage attacks */
@@ -1873,8 +1891,12 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
                 s->player_attack_dmg = total_dmg;
                 s->player_attack_style_id = ls->style;
 
-                /* player attack animation flag for renderer */
+                /* player attack animation + spell type for renderer effect system */
                 s->player.attack_style_this_tick = ls->style;
+                if (s->weapon_set == INF_GEAR_MAGE) {
+                    /* 0=none, 1=ice, 2=blood — spell_choice is 0=blood, 1=ice */
+                    s->player.magic_type_this_tick = (s->spell_choice == 1) ? 1 : 2;
+                }
             }
         }
     }
@@ -1963,11 +1985,10 @@ static void inf_step(EncounterState* state, const int* actions) {
     /* player actions */
     inf_tick_player(s, actions);
 
-    /* NPC AI */
-    inf_tick_npcs(s);
-
     /* ------------------------------------------------------------------ */
     /* process pending hits: NPC pending hits (player attacks landing)     */
+    /* runs BEFORE inf_tick_npcs so that ice barrage freeze takes effect   */
+    /* on the same tick the projectile lands (NPC can't act while frozen). */
     /* ------------------------------------------------------------------ */
     {
         int barrage_dmg_landed = 0;  /* track blood barrage healing */
@@ -2001,6 +2022,9 @@ static void inf_step(EncounterState* state, const int* actions) {
                 s->player.current_hitpoints = s->player.base_hitpoints;
         }
     }
+
+    /* NPC AI: runs after pending hits so ice barrage freeze is already active */
+    inf_tick_npcs(s);
 
     /* ------------------------------------------------------------------ */
     /* process pending hits: player pending hits (NPC attacks landing)     */
@@ -2136,7 +2160,8 @@ static void inf_write_mask(EncounterState* state, float* mask) {
                          ? 1.0f : 0.0f;
     }
 
-    /* HEAD_PRAYER (4): mask out the prayer that's already active */
+    /* HEAD_PRAYER (5): 0=no change (always valid), 1-4=switch (mask out current) */
+    mask[offset++] = 1.0f;  /* no change — always valid */
     mask[offset++] = (s->active_prayer != PRAYER_NONE) ? 1.0f : 0.0f;
     mask[offset++] = (s->active_prayer != PRAYER_PROTECT_MELEE) ? 1.0f : 0.0f;
     mask[offset++] = (s->active_prayer != PRAYER_PROTECT_RANGED) ? 1.0f : 0.0f;
@@ -2269,6 +2294,9 @@ static void inf_fill_render_entities(EncounterState* state, RenderEntity* out, i
         re->attack_style_this_tick = (AttackStyle)npc->attack_style;
         re->hit_landed_this_tick = npc->hit_landed_this_tick;
         re->hit_damage = npc->hit_damage;
+        /* barrage hits that pass accuracy are queued; splashes never enter the queue.
+           so any NPC with hit_landed_this_tick from a pending hit was a successful hit. */
+        re->hit_was_successful = npc->hit_landed_this_tick;
     }
 
     encounter_resolve_attack_target(out, n, s->player_attack_target);

@@ -1236,14 +1236,21 @@ static void render_post_tick(RenderClient* rc, OsrsPvp* env) {
         }
     }
 
-    /* spawn visual effects based on this tick's events.
-     * skip for encounters with more than 2 entities — the effect system
-     * assumes 2-entity PvP layout (attacker/defender). inferno effects TODO. */
-    if (rc->entity_count > 2) goto skip_effects;
+    /* spawn visual effects (projectiles, spell impacts) based on this tick's events.
+       works for any entity count — uses attack_target_entity_idx for multi-entity encounters. */
     int ct = rc->effect_client_tick_counter;
     for (int i = 0; i < rc->entity_count; i++) {
         RenderEntity* p = &rc->entities[i];
-        int target_i = (rc->entity_count == 2) ? (1 - i) : (i == 0 ? 1 : 0);
+        /* resolve target: use attack_target_entity_idx if set, otherwise PvP fallback */
+        int target_i;
+        if (p->attack_target_entity_idx >= 0) {
+            target_i = p->attack_target_entity_idx;
+        } else if (rc->entity_count == 2) {
+            target_i = 1 - i;
+        } else {
+            target_i = (i == 0) ? 1 : 0;
+        }
+        if (target_i < 0 || target_i >= rc->entity_count) continue;
         RenderEntity* t = &rc->entities[target_i];
 
         /* attacker cast a spell this tick — spawn projectile */
@@ -1283,14 +1290,23 @@ static void render_post_tick(RenderClient* rc, OsrsPvp* env) {
                 0, 40, 43 * 4, 31 * 4, 16, ct, rc->model_cache);
         }
 
-        /* defender: check what landed on player p this tick */
+        /* defender: check what landed on entity p this tick.
+           for NPC defenders, the attacker is entity 0 (the player).
+           for player (entity 0), attacker is the current target entity. */
         if (p->hit_landed_this_tick) {
+            RenderEntity* att;
+            if (i == 0) {
+                att = t;  /* player was hit — attacker is target entity */
+            } else {
+                att = &rc->entities[0];  /* NPC was hit — attacker is player */
+            }
+
             /* check if attacker used a powered staff (trident/sang/ayak) */
-            uint8_t att_wpn = t->equipped[GEAR_SLOT_WEAPON];
+            uint8_t att_wpn = att->equipped[GEAR_SLOT_WEAPON];
             int att_is_powered_staff = (att_wpn == ITEM_TRIDENT_OF_SWAMP ||
                 att_wpn == ITEM_SANGUINESTI_STAFF || att_wpn == ITEM_EYE_OF_AYAK);
 
-            if (att_is_powered_staff && t->attack_style_this_tick == ATTACK_STYLE_MAGIC) {
+            if (att_is_powered_staff && att->attack_style_this_tick == ATTACK_STYLE_MAGIC) {
                 /* powered staff hit: trident impact splash */
                 if (p->hit_was_successful) {
                     effect_spawn_spotanim(rc->effects, GFX_TRIDENT_IMPACT,
@@ -1300,7 +1316,7 @@ static void render_post_tick(RenderClient* rc, OsrsPvp* env) {
                         p->x, p->y, ct, rc->anim_cache, rc->model_cache);
                 }
             } else {
-                int attacker_magic = t->magic_type_this_tick;
+                int attacker_magic = att->magic_type_this_tick;
                 if (attacker_magic > 0) {
                     if (p->hit_was_successful) {
                         /* spell hit: spawn impact GFX */
