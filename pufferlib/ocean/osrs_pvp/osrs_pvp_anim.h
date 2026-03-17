@@ -269,7 +269,7 @@ static AnimModelState* anim_model_state_create(
 ) {
     AnimModelState* state = (AnimModelState*)calloc(1, sizeof(AnimModelState));
     state->vert_count = base_vert_count;
-    state->verts = (int16_t*)malloc(base_vert_count * 3 * sizeof(int16_t));
+    state->verts = (int16_t*)calloc(base_vert_count * 3, sizeof(int16_t));
 
     /* build vertex group lookup from skin labels */
     state->groups = (int**)calloc(ANIM_MAX_LABELS, sizeof(int*));

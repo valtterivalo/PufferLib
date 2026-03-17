@@ -1488,8 +1488,8 @@ static void render_client_tick(RenderClient* rc, int player_idx) {
 
     /* advance secondary frame timing */
     if (rc->anim_cache && rc->anim[player_idx].secondary_seq_id >= 0) {
-        AnimSequence* seq = anim_get_sequence(
-            rc->anim_cache, (uint16_t)rc->anim[player_idx].secondary_seq_id);
+        AnimSequence* seq = render_get_anim_sequence(
+            rc, (uint16_t)rc->anim[player_idx].secondary_seq_id);
         if (seq && seq->frame_count > 0) {
             int fidx = rc->anim[player_idx].secondary_frame_idx % seq->frame_count;
             int delay = seq->frames[fidx].delay > 0 ? seq->frames[fidx].delay : 1;
@@ -1504,8 +1504,8 @@ static void render_client_tick(RenderClient* rc, int player_idx) {
 
     /* advance primary frame timing (if active) */
     if (rc->anim_cache && rc->anim[player_idx].primary_seq_id >= 0) {
-        AnimSequence* seq = anim_get_sequence(
-            rc->anim_cache, (uint16_t)rc->anim[player_idx].primary_seq_id);
+        AnimSequence* seq = render_get_anim_sequence(
+            rc, (uint16_t)rc->anim[player_idx].primary_seq_id);
         if (seq && seq->frame_count > 0) {
             int fidx = rc->anim[player_idx].primary_frame_idx % seq->frame_count;
             int delay = seq->frames[fidx].delay > 0 ? seq->frames[fidx].delay : 1;
@@ -2658,8 +2658,8 @@ static void render_player_composite(
 
     /* secondary frame */
     if (rc->anim[player_idx].secondary_seq_id >= 0) {
-        AnimSequence* seq = anim_get_sequence(
-            rc->anim_cache, (uint16_t)rc->anim[player_idx].secondary_seq_id);
+        AnimSequence* seq = render_get_anim_sequence(
+            rc, (uint16_t)rc->anim[player_idx].secondary_seq_id);
         if (seq && seq->frame_count > 0) {
             int fidx = rc->anim[player_idx].secondary_frame_idx % seq->frame_count;
             AnimSequenceFrame* sf = &seq->frames[fidx];
@@ -2672,8 +2672,8 @@ static void render_player_composite(
 
     /* primary frame */
     if (rc->anim[player_idx].primary_seq_id >= 0) {
-        AnimSequence* seq = anim_get_sequence(
-            rc->anim_cache, (uint16_t)rc->anim[player_idx].primary_seq_id);
+        AnimSequence* seq = render_get_anim_sequence(
+            rc, (uint16_t)rc->anim[player_idx].primary_seq_id);
         if (seq && seq->frame_count > 0) {
             int fidx = rc->anim[player_idx].primary_frame_idx % seq->frame_count;
             AnimSequenceFrame* sf = &seq->frames[fidx];
@@ -2688,8 +2688,8 @@ static void render_player_composite(
     const uint8_t* interleave = NULL;
     int interleave_count = 0;
     if (pri_sf) {
-        AnimSequence* prim_seq = anim_get_sequence(
-            rc->anim_cache, (uint16_t)rc->anim[player_idx].primary_seq_id);
+        AnimSequence* prim_seq = render_get_anim_sequence(
+            rc, (uint16_t)rc->anim[player_idx].primary_seq_id);
         if (prim_seq && prim_seq->interleave_order) {
             interleave = prim_seq->interleave_order;
             interleave_count = prim_seq->interleave_count;
@@ -3113,17 +3113,11 @@ static void render_draw_3d_world(RenderClient* rc) {
             base = MatrixMultiply(base, MatrixRotateY(rc->yaw[i]));
             base = MatrixMultiply(base, MatrixTranslate(px, ground, pz));
 
-            /* rebuild composite if equipment changed, animate, upload, draw.
-               skip NPC composites when npc_model_cache is loaded — the exported
-               inferno NPC model data has garbled vertex coordinates. use colored
-               cubes until the export pipeline is fixed. */
-            int skip_npc_model = (ep->entity_type == ENTITY_NPC && rc->npc_model_cache);
-            if (!skip_npc_model)
-                render_player_composite(rc, i, base);
+            /* rebuild composite if equipment changed, animate, upload, draw */
+            render_player_composite(rc, i, base);
 
-            /* colored cube fallback for NPCs */
-            if (ep->entity_type == ENTITY_NPC &&
-                (skip_npc_model || rc->composites[i].face_count == 0)) {
+            /* colored cube fallback for NPCs without valid 3D models */
+            if (ep->entity_type == ENTITY_NPC && rc->composites[i].face_count == 0) {
                 float sz = (float)(ep->npc_size > 1 ? ep->npc_size : 1) * 0.6f;
                 Color npc_col;
                 switch (ep->npc_def_id) {
