@@ -776,12 +776,8 @@ static inline int zul_has_recoil_effect(Player* p) {
 static void zul_apply_player_damage(ZulrahState* s, int damage, AttackStyle style,
                                     Player* attacker) {
     if (damage <= 0) return;
-    s->player.current_hitpoints -= damage;
-    s->damage_received_this_tick += damage;
+    encounter_damage_player(&s->player, damage, &s->damage_received_this_tick);
     s->total_damage_received += damage;
-    if (s->player.current_hitpoints < 0) s->player.current_hitpoints = 0;
-    s->player.hit_landed_this_tick = 1;
-    s->player.hit_damage = damage;
     s->player.hit_style = style;
 
     /* ring of recoil / ring of suffering (i) */
@@ -790,8 +786,7 @@ static void zul_apply_player_damage(ZulrahState* s, int damage, AttackStyle styl
         if (recoil > s->player.recoil_charges) {
             recoil = s->player.recoil_charges;
         }
-        attacker->current_hitpoints -= recoil;
-        if (attacker->current_hitpoints < 0) attacker->current_hitpoints = 0;
+        encounter_damage_player(attacker, recoil, NULL);
 
         if (s->player.equipped[GEAR_SLOT_RING] == ITEM_RING_OF_RECOIL) {
             s->player.recoil_charges -= recoil;
@@ -1043,10 +1038,8 @@ static void zul_player_attack(ZulrahState* s, int is_mage) {
     if (hit) {
         dmg = zul_rand_int(s, max_hit + 1);
         dmg = zul_cap_damage(s, dmg);
-        s->zulrah.current_hitpoints -= dmg;
-        s->damage_dealt_this_tick += dmg;
+        encounter_damage_player(&s->zulrah, dmg, &s->damage_dealt_this_tick);
         s->total_damage_dealt += dmg;
-        if (s->zulrah.current_hitpoints < 0) s->zulrah.current_hitpoints = 0;
         /* sang staff passive (tier 1 mage): 1/6 chance to heal 50% of damage dealt */
         if (is_mage && s->gear_tier == 1 && dmg > 0 && zul_rand_int(s, 6) == 0) {
             int heal = dmg / 2;
@@ -1119,8 +1112,7 @@ static void zul_player_spec(ZulrahState* s) {
             if (zul_rand_float(s) < zul_hit_chance(att_roll_spec, def_roll)) {
                 int dmg = zul_rand_int(s, msb_max_hit + 1);
                 dmg = zul_cap_damage(s, dmg);
-                s->zulrah.current_hitpoints -= dmg;
-                if (s->zulrah.current_hitpoints < 0) s->zulrah.current_hitpoints = 0;
+                encounter_damage_player(&s->zulrah, dmg, NULL);
                 total_dmg += dmg;
             }
         }
@@ -1143,8 +1135,7 @@ static void zul_player_spec(ZulrahState* s) {
         if (zul_rand_float(s) < zul_hit_chance(att_roll, def_roll)) {
             int dmg = zul_rand_int(s, t->bp_max_hit + 1);
             dmg = zul_cap_damage(s, dmg);
-            s->zulrah.current_hitpoints -= dmg;
-            if (s->zulrah.current_hitpoints < 0) s->zulrah.current_hitpoints = 0;
+            encounter_damage_player(&s->zulrah, dmg, NULL);
             total_dmg = dmg;
             int heal = dmg * ZUL_SPEC_HEAL_PCT / 100;
             s->player.current_hitpoints += heal;
@@ -1175,8 +1166,7 @@ static void zul_player_spec(ZulrahState* s) {
         if (zul_rand_float(s) < zul_hit_chance(att_roll, def_roll)) {
             int dmg = zul_rand_int(s, spec_max_hit + 1);
             dmg = zul_cap_damage(s, dmg);
-            s->zulrah.current_hitpoints -= dmg;
-            if (s->zulrah.current_hitpoints < 0) s->zulrah.current_hitpoints = 0;
+            encounter_damage_player(&s->zulrah, dmg, NULL);
             total_dmg = dmg;
             /* drain target magic defence by damage dealt */
             s->magic_def_drain += dmg;
@@ -1484,9 +1474,7 @@ static void zul_thrall_tick(ZulrahState* s) {
 
     int dmg = zul_rand_int(s, ZUL_THRALL_MAX_HIT + 1);
     dmg = zul_cap_damage(s, dmg);
-    s->zulrah.current_hitpoints -= dmg;
-    if (s->zulrah.current_hitpoints < 0) s->zulrah.current_hitpoints = 0;
-    s->damage_dealt_this_tick += dmg;
+    encounter_damage_player(&s->zulrah, dmg, &s->damage_dealt_this_tick);
     s->total_damage_dealt += dmg;
 }
 
