@@ -358,27 +358,33 @@ static inline int encounter_npc_step_toward(
 
 /** apply damage to a player. updates HP (clamped to 0), sets hit splat flags,
     and accumulates damage into a per-tick tracker (for reward calculation).
-    damage_tracker can be NULL if not needed. */
+    damage_tracker can be NULL if not needed.
+    always sets hit_landed_this_tick so the renderer shows a splat —
+    0 damage produces a blue "miss" splat (standard OSRS behavior). */
 static inline void encounter_damage_player(
     Player* p, int damage, float* damage_tracker
 ) {
-    if (damage <= 0) return;
-    p->current_hitpoints -= damage;
-    if (p->current_hitpoints < 0) p->current_hitpoints = 0;
-    if (damage_tracker) *damage_tracker += (float)damage;
+    if (damage > 0) {
+        p->current_hitpoints -= damage;
+        if (p->current_hitpoints < 0) p->current_hitpoints = 0;
+        if (damage_tracker) *damage_tracker += (float)damage;
+    }
     p->hit_landed_this_tick = 1;
-    p->hit_damage = damage;
+    p->hit_damage = damage > 0 ? damage : 0;
 }
 
 /** apply damage to an NPC-like entity via raw field pointers.
-    works with any struct that has hp/hit_landed/hit_damage int fields. */
+    works with any struct that has hp/hit_landed/hit_damage int fields.
+    always sets hit_landed so the renderer shows a splat —
+    0 damage produces a blue "miss" splat (standard OSRS behavior). */
 static inline void encounter_damage_npc(
     int* hp, int* hit_landed, int* hit_damage, int damage
 ) {
-    if (damage <= 0) return;
-    *hp -= damage;
+    if (damage > 0) {
+        *hp -= damage;
+    }
     *hit_landed = 1;
-    *hit_damage = damage;
+    *hit_damage = damage > 0 ? damage : 0;
 }
 
 /* ======================================================================== */

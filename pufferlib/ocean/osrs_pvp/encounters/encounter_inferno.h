@@ -1982,9 +1982,6 @@ static void inf_step(EncounterState* state, const int* actions) {
                 /* apply damage (skip dying NPCs in death linger) */
                 if (s->npcs[i].active && s->npcs[i].death_ticks == 0) {
                     encounter_damage_npc(&s->npcs[i].hp, &s->npcs[i].hit_landed_this_tick, &s->npcs[i].hit_damage, dmg);
-                    /* always show hitsplat for queued hits (they passed accuracy) */
-                    s->npcs[i].hit_landed_this_tick = 1;
-                    s->npcs[i].hit_damage = dmg;
                     s->damage_dealt_this_tick += dmg;
                     /* ice barrage freeze on hit (including 0 dmg hits, not splashes —
                        damage > 0 means it hit, queued hits already passed accuracy) */
