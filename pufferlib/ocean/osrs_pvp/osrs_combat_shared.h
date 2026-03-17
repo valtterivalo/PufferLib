@@ -1,9 +1,21 @@
 /**
- * @file osrs_combat_shared.h
- * @brief Shared OSRS combat formulas for all encounters.
+ * @fileoverview osrs_combat_shared.h — pure combat math shared by all encounters.
  *
- * Standard accuracy roll, twisted bow scaling, and other combat utilities
- * reusable across PvP, Zulrah, Inferno, and future encounters.
+ * stateless functions with no dependencies beyond <math.h>. use these instead
+ * of reimplementing combat formulas per encounter.
+ *
+ * SHARED FUNCTIONS:
+ *   osrs_hit_chance(att_roll, def_roll)    standard OSRS accuracy formula
+ *   osrs_tbow_acc_mult(target_magic)       twisted bow accuracy multiplier
+ *   osrs_tbow_dmg_mult(target_magic)       twisted bow damage multiplier
+ *   osrs_barrage_resolve(targets, ...)     barrage 3x3 AoE with independent rolls
+ *   encounter_magic_hit_delay(dist, is_p)  magic projectile flight delay (ticks)
+ *   encounter_ranged_hit_delay(dist, is_p) ranged projectile flight delay (ticks)
+ *   encounter_dist_to_npc(px,py,nx,ny,sz)  chebyshev dist to multi-tile NPC
+ *
+ * SEE ALSO:
+ *   osrs_encounter.h    encounter-level abstractions (damage, movement, gear, etc.)
+ *   osrs_pvp_combat.h   PvP-specific combat (prayer, veng, recoil, pending hits)
  */
 
 #ifndef OSRS_COMBAT_SHARED_H

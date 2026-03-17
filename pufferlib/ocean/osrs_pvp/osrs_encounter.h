@@ -1,21 +1,46 @@
 /**
- * @fileoverview osrs_encounter.h — encounter interface and shared combat utilities.
+ * @fileoverview osrs_encounter.h — shared encounter interface and core game mechanics.
  *
- * provides the encounter vtable (EncounterDef) plus shared systems that all
- * encounters use. adding a new encounter = one header file + registering it.
+ * this is the single source of truth for shared OSRS mechanics. all encounters
+ * MUST use these abstractions instead of reimplementing their own. adding a
+ * new encounter = one header file that calls into these shared systems.
  *
- * shared systems available:
- *   - EncounterLoadoutStats + encounter_compute_loadout_stats(): derive attack
- *     bonuses, max hits, effective levels from ITEM_DATABASE. encounters should
- *     NOT manually hardcode these — call this function at reset instead.
- *   - EncounterPrayer enum for prayer multiplier selection.
- *   - encounter_move_to_target(): 25-action movement (idle + walk + run).
- *   - encounter_npc_step_toward(): greedy NPC pathfinding.
- *   - encounter_clear_tick_flags(): per-tick animation flag reset.
- *   - encounter_apply_loadout() / encounter_populate_inventory(): gear switching.
- *   - EncounterPendingHit: delayed projectile damage system.
- *   - RenderEntity + render_entity_from_player(): renderer abstraction.
- *   - EncounterOverlay: visual overlay (clouds, projectiles, boss state).
+ * SHARED SYSTEMS (in order of appearance in this file):
+ *
+ *   rendering:
+ *     RenderEntity                     value struct for renderer (not Player*)
+ *     render_entity_from_player()      copy Player fields to RenderEntity
+ *     EncounterOverlay                 visual overlay (clouds, projectiles, boss)
+ *
+ *   movement:
+ *     ENCOUNTER_MOVE_TARGET_DX/DY[25]  direction tables (idle + 8 walk + 16 run)
+ *     encounter_move_to_target()       player movement: walk 1 tile or run 2
+ *
+ *   NPC pathfinding:
+ *     encounter_npc_step_toward()      greedy 1-tile step (diagonal > x > y)
+ *
+ *   damage:
+ *     encounter_damage_player()        apply damage to player (HP, clamp, splat, tracker)
+ *     encounter_damage_npc()           apply damage to NPC (HP, splat flags)
+ *
+ *   per-tick flags:
+ *     encounter_clear_tick_flags()     reset animation/event flags each tick
+ *
+ *   gear switching:
+ *     encounter_apply_loadout()        memcpy loadout + set gear state
+ *     encounter_populate_inventory()   dedup items from multiple loadouts for GUI
+ *
+ *   combat stats:
+ *     EncounterLoadoutStats            derived stats (att bonus, max hit, eff level...)
+ *     EncounterPrayer                  prayer multiplier enum
+ *     encounter_compute_loadout_stats() derive all stats from ITEM_DATABASE + loadout
+ *
+ *   hit delays:
+ *     EncounterPendingHit              queued damage with tick countdown
+ *
+ * ALSO SEE:
+ *   osrs_combat_shared.h              hit chance, tbow formula, barrage AoE, delay formulas
+ *   osrs_pvp_combat.h                 PvP-specific damage (prayer, veng, recoil, smite)
  */
 
 #ifndef OSRS_ENCOUNTER_H
