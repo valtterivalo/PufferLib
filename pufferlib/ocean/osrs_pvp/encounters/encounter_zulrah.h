@@ -170,7 +170,7 @@ static const int ZUL_POSITIONS[ZUL_NUM_POSITIONS][2] = {
 #define ZUL_NUM_OBS           81
 #define ZUL_NUM_ACTION_HEADS  6
 
-#define ZUL_MOVE_DIM    9
+#define ZUL_MOVE_DIM    ENCOUNTER_MOVE_ACTIONS
 #define ZUL_ATTACK_DIM  3
 #define ZUL_PRAYER_DIM  4
 #define ZUL_FOOD_DIM    3   /* none, shark, karambwan */
@@ -382,9 +382,7 @@ static const int ZUL_ACTION_HEAD_DIMS[ZUL_NUM_ACTION_HEADS] = {
     ZUL_FOOD_DIM, ZUL_POTION_DIM, ZUL_SPEC_DIM,
 };
 
-/* movement uses shared ENCOUNTER_MOVE_DX/DY from osrs_encounter.h */
-#define ZUL_MOVE_DX ENCOUNTER_MOVE_DX
-#define ZUL_MOVE_DY ENCOUNTER_MOVE_DY
+/* movement uses shared encounter_move_to_target + ENCOUNTER_MOVE_TARGET_DX/DY from osrs_encounter.h */
 
 /* ======================================================================== */
 /* gear tier precomputed stats — from wiki strategy guide loadouts           */
@@ -1709,8 +1707,8 @@ static void zul_process_movement(ZulrahState* s, int move) {
             dx = pr.next_dx;
             dy = pr.next_dy;
         } else {
-            dx = ZUL_MOVE_DX[move];
-            dy = ZUL_MOVE_DY[move];
+            dx = ENCOUNTER_MOVE_TARGET_DX[move];
+            dy = ENCOUNTER_MOVE_TARGET_DY[move];
         }
 
         int px = s->player.x, py = s->player.y;
@@ -1916,13 +1914,13 @@ static void zul_write_mask(EncounterState* state, float* mask) {
     for (int i = 0; i < ZUL_ACTION_MASK_SIZE; i++) mask[i] = 1.0f;
     int off = 0;
 
-    /* movement */
+    /* movement: 25-action system (idle + 8 walk + 16 run) */
     for (int m = 0; m < ZUL_MOVE_DIM; m++) {
         if (m > 0) {
             if (s->player_stunned_ticks > 0) { mask[off] = 0.0f; }
             else {
-                int nx = s->player.x + ZUL_MOVE_DX[m] * 2;
-                int ny = s->player.y + ZUL_MOVE_DY[m] * 2;
+                int nx = s->player.x + ENCOUNTER_MOVE_TARGET_DX[m];
+                int ny = s->player.y + ENCOUNTER_MOVE_TARGET_DY[m];
                 if (!zul_on_platform(s, nx, ny)) mask[off] = 0.0f;
             }
         }
@@ -2124,8 +2122,8 @@ static void zul_step(EncounterState* state, const int* actions) {
     } else {
         int m = actions[ZUL_HEAD_MOVE];
         if (m > 0 && m < ZUL_MOVE_DIM) {
-            s->player_dest_x = s->player.x + 2 * ZUL_MOVE_DX[m];
-            s->player_dest_y = s->player.y + 2 * ZUL_MOVE_DY[m];
+            s->player_dest_x = s->player.x + ENCOUNTER_MOVE_TARGET_DX[m];
+            s->player_dest_y = s->player.y + ENCOUNTER_MOVE_TARGET_DY[m];
         }
     }
     zul_process_movement(s, actions[ZUL_HEAD_MOVE]);
@@ -2232,8 +2230,9 @@ static void zul_heuristic_actions(ZulrahState* s, int* actions) {
             if (tx != s->player.x || ty != s->player.y) {
                 PathResult pr = zul_pathfind(s, s->player.x, s->player.y, tx, ty);
                 if (pr.found && (pr.next_dx != 0 || pr.next_dy != 0)) {
-                    for (int m = 1; m < ZUL_MOVE_DIM; m++) {
-                        if (ZUL_MOVE_DX[m] == pr.next_dx && ZUL_MOVE_DY[m] == pr.next_dy) {
+                    /* heuristic uses walk actions (1-8) for single-step BFS directions */
+                    for (int m = 1; m <= 8; m++) {
+                        if (ENCOUNTER_MOVE_TARGET_DX[m] == pr.next_dx && ENCOUNTER_MOVE_TARGET_DY[m] == pr.next_dy) {
                             actions[ZUL_HEAD_MOVE] = m;
                             break;
                         }

@@ -126,35 +126,70 @@ static inline void render_entity_from_player(const Player* p, RenderEntity* out)
 }
 
 /* ======================================================================== */
-/* shared movement: direction table + walk/run helper                        */
+/* shared movement: 25-action system (idle + 8 walk + 16 run)                */
 /* ======================================================================== */
 
-/* canonical 8-direction table (clockwise from north).
-   0=idle, 1=N, 2=NE, 3=E, 4=SE, 5=S, 6=SW, 7=W, 8=NW */
-static const int ENCOUNTER_MOVE_DX[9] = { 0, 0, 1, 1, 1, 0, -1, -1, -1 };
-static const int ENCOUNTER_MOVE_DY[9] = { 0, 1, 1, 0, -1, -1, -1, 0, 1 };
+/* 25 movement actions: idle(0), walk(1-8), run(9-24) */
+#define ENCOUNTER_MOVE_ACTIONS 25
+
+/* target offsets: (dx, dy) relative to player position */
+static const int ENCOUNTER_MOVE_TARGET_DX[25] = {
+    0,                          /* 0: idle */
+    -1, -1, -1, 0, 0, 1, 1, 1, /* 1-8: walk (dist 1) */
+    -2, -2, -2, -2, -2,        /* 9-13: run west edge */
+    -1, -1,                     /* 14-15: run inner */
+    0, 0,                       /* 16-17: run N/S 2 tiles */
+    1, 1,                       /* 18-19: run inner */
+    2, 2, 2, 2, 2              /* 20-24: run east edge */
+};
+static const int ENCOUNTER_MOVE_TARGET_DY[25] = {
+    0,
+    -1, 0, 1, -1, 1, -1, 0, 1,
+    -2, -1, 0, 1, 2,
+    -2, 2,
+    -2, 2,
+    -2, 2,
+    -2, -1, 0, 1, 2
+};
 
 /* callback: returns 1 if tile (x, y) is walkable for the encounter.
    ctx is encounter-specific state (InfernoState*, ZulrahState*, etc.) */
 typedef int (*encounter_walkable_fn)(void* ctx, int x, int y);
 
-/** move player up to 2 tiles in direction (dx, dy).
-    checks walkability per tile via callback. sets is_running based on
-    whether 2 tiles were actually traversed (walk=1, run=2).
+/** move player toward target offset via up to 2 greedy steps.
+    walk actions (dist 1) take 1 step, run actions (dist 2) take up to 2.
+    sets is_running = 1 if 2 steps were taken.
     returns number of tiles moved (0, 1, or 2). */
-static inline int encounter_move_player(
-    Player* p, int dx, int dy,
+static inline int encounter_move_to_target(
+    Player* p, int target_dx, int target_dy,
     encounter_walkable_fn is_walkable, void* ctx
 ) {
+    int tx = p->x + target_dx;
+    int ty = p->y + target_dy;
+    int dist = abs(target_dx) > abs(target_dy) ? abs(target_dx) : abs(target_dy);
+    int max_steps = dist;  /* 1 for walk, 2 for run */
     int steps = 0;
-    for (int step = 0; step < 2; step++) {
-        int nx = p->x + dx;
-        int ny = p->y + dy;
-        if (!is_walkable(ctx, nx, ny)) break;
-        p->x = nx;
-        p->y = ny;
+
+    for (int step = 0; step < max_steps; step++) {
+        if (p->x == tx && p->y == ty) break;
+        /* greedy step toward target */
+        int dx = 0, dy = 0;
+        if (tx > p->x) dx = 1; else if (tx < p->x) dx = -1;
+        if (ty > p->y) dy = 1; else if (ty < p->y) dy = -1;
+
+        /* try diagonal, x-only, y-only */
+        int moved = 0;
+        if (dx != 0 && dy != 0 && is_walkable(ctx, p->x + dx, p->y + dy)) {
+            p->x += dx; p->y += dy; moved = 1;
+        } else if (dx != 0 && is_walkable(ctx, p->x + dx, p->y)) {
+            p->x += dx; moved = 1;
+        } else if (dy != 0 && is_walkable(ctx, p->x, p->y + dy)) {
+            p->y += dy; moved = 1;
+        }
+        if (!moved) break;
         steps++;
     }
+
     p->is_running = (steps == 2);
     p->dest_x = p->x;
     p->dest_y = p->y;

@@ -1424,7 +1424,7 @@ static void inf_tick_npcs(InfernoState* s) {
 /* player actions                                                            */
 /* ======================================================================== */
 
-#define INF_HEAD_MOVE    0   /* 9: idle + 8 directions */
+#define INF_HEAD_MOVE    0   /* 25: idle + 8 walk + 16 run */
 #define INF_HEAD_PRAYER  1   /* 4: none, melee, range, mage */
 #define INF_HEAD_TARGET  2   /* INF_MAX_NPCS+1: none or NPC index */
 #define INF_HEAD_GEAR    3   /* 5: no_switch, mage, tbow, bp, tank */
@@ -1433,12 +1433,12 @@ static void inf_tick_npcs(InfernoState* s) {
 #define INF_HEAD_SPELL   6   /* 2: blood_barrage, ice_barrage */
 #define INF_NUM_ACTION_HEADS 7
 
-static const int INF_ACTION_DIMS[INF_NUM_ACTION_HEADS] = { 9, 4, INF_MAX_NPCS+1, 5, 2, 4, 2 };
-#define INF_ACTION_MASK_SIZE (9 + 4 + INF_MAX_NPCS+1 + 5 + 2 + 4 + 2)
+static const int INF_ACTION_DIMS[INF_NUM_ACTION_HEADS] = { ENCOUNTER_MOVE_ACTIONS, 4, INF_MAX_NPCS+1, 5, 2, 4, 2 };
+#define INF_ACTION_MASK_SIZE (ENCOUNTER_MOVE_ACTIONS + 4 + INF_MAX_NPCS+1 + 5 + 2 + 4 + 2)
 
-/* movement uses shared ENCOUNTER_MOVE_DX/DY + encounter_move_player from osrs_encounter.h */
+/* movement uses shared encounter_move_to_target from osrs_encounter.h */
 
-/* walkability callback for encounter_move_player */
+/* walkability callback for encounter_move_to_target */
 static int inf_tile_walkable(void* ctx, int x, int y) {
     InfernoState* s = (InfernoState*)ctx;
     if (!inf_in_arena(x, y)) return 0;
@@ -1550,13 +1550,13 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
         s->player_potion_timer = 3;
     }
 
-    /* movement: shared walk/run helper. attempts 2 tiles (run), falls back to 1 (walk).
-       uses encounter_move_player from osrs_encounter.h with inf_tile_walkable callback. */
+    /* movement: 25-action system (idle + 8 walk + 16 run).
+       uses encounter_move_to_target from osrs_encounter.h with inf_tile_walkable callback. */
     int move_act = actions[INF_HEAD_MOVE];
     s->player.is_running = 0;
-    if (move_act > 0 && move_act < 9) {
-        encounter_move_player(&s->player,
-            ENCOUNTER_MOVE_DX[move_act], ENCOUNTER_MOVE_DY[move_act],
+    if (move_act > 0 && move_act < ENCOUNTER_MOVE_ACTIONS) {
+        encounter_move_to_target(&s->player,
+            ENCOUNTER_MOVE_TARGET_DX[move_act], ENCOUNTER_MOVE_TARGET_DY[move_act],
             inf_tile_walkable, s);
     }
 
@@ -1870,11 +1870,11 @@ static void inf_write_mask(EncounterState* state, float* mask) {
     InfernoState* s = (InfernoState*)state;
     int offset = 0;
 
-    /* HEAD_MOVE (9): idle always valid, directions valid if in arena + not blocked */
+    /* HEAD_MOVE (25): idle always valid, walk/run valid if target tile reachable */
     mask[offset++] = 1.0f;  /* idle always valid */
-    for (int d = 1; d < 9; d++) {
-        int nx = s->player.x + ENCOUNTER_MOVE_DX[d];
-        int ny = s->player.y + ENCOUNTER_MOVE_DY[d];
+    for (int d = 1; d < ENCOUNTER_MOVE_ACTIONS; d++) {
+        int nx = s->player.x + ENCOUNTER_MOVE_TARGET_DX[d];
+        int ny = s->player.y + ENCOUNTER_MOVE_TARGET_DY[d];
         mask[offset++] = (inf_in_arena(nx, ny) && !inf_blocked_by_pillar(s, nx, ny, 1))
                          ? 1.0f : 0.0f;
     }
