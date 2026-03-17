@@ -697,6 +697,7 @@ static float inf_compute_reward(InfernoState* s);
 static void inf_spawn_wave(InfernoState* s);
 static void inf_tick_npcs(InfernoState* s);
 static void inf_tick_player(InfernoState* s, const int* actions);
+static void inf_apply_npc_death(InfernoState* s, int npc_idx);
 
 /* ======================================================================== */
 /* lifecycle                                                                 */
@@ -1083,13 +1084,17 @@ static void inf_npc_attack(InfernoState* s, int idx) {
                     s->pillars[p].active = 0;
                     s->pillar_lost_this_tick = p;
                     inf_rebuild_los(s);
-                    /* pillar death AOE: kills all nibblers adjacent to the pillar */
+                    /* pillar death AOE: deals 12 damage to all mobs within 1 tile */
                     for (int n = 0; n < INF_MAX_NPCS; n++) {
-                        if (!s->npcs[n].active || s->npcs[n].type != INF_NPC_NIBBLER) continue;
+                        if (!s->npcs[n].active) continue;
                         int ndx = s->npcs[n].x - s->pillars[p].x;
                         int ndy = s->npcs[n].y - s->pillars[p].y;
-                        if (ndx >= -1 && ndx <= INF_PILLAR_SIZE && ndy >= -1 && ndy <= INF_PILLAR_SIZE)
-                            s->npcs[n].active = 0;
+                        if (ndx >= -1 && ndx <= INF_PILLAR_SIZE && ndy >= -1 && ndy <= INF_PILLAR_SIZE) {
+                            s->npcs[n].hp -= 12;
+                            s->npcs[n].hit_landed_this_tick = 1;
+                            s->npcs[n].hit_damage = 12;
+                            inf_apply_npc_death(s, n);
+                        }
                     }
                 }
                 npc->attacked_this_tick = 1;
