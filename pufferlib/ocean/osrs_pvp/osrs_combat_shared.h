@@ -15,6 +15,11 @@
  *   osrs_npc_max_hit(style, ...)              dispatches to style-specific formula
  *   osrs_npc_attack_roll(att, bonus)          NPC attack roll
  *   osrs_player_def_roll_vs_npc(def,mag,b,s)  player defence roll vs NPC
+ *   encounter_xorshift(state)                 xorshift32 RNG step
+ *   encounter_rand_int(state, max)            random int in [0, max)
+ *   encounter_rand_float(state)               random float in [0, 1)
+ *   encounter_npc_roll_attack(att,def,mh,rng) NPC accuracy+damage in one call
+ *   encounter_prayer_correct_for_style(p, s)  prayer blocks attack style check
  *   encounter_magic_hit_delay(dist, is_p)     magic projectile flight delay (ticks)
  *   encounter_ranged_hit_delay(dist, is_p)    ranged projectile flight delay (ticks)
  *   encounter_dist_to_npc(px,py,nx,ny,sz)     chebyshev dist to multi-tile NPC
@@ -28,6 +33,7 @@
 #define OSRS_COMBAT_SHARED_H
 
 #include <math.h>
+#include <stdint.h>
 
 /* standard OSRS accuracy formula.
    att_roll and def_roll are pre-computed: eff_level * (bonus + 64).
@@ -61,6 +67,28 @@ static inline float osrs_tbow_dmg_mult(int target_magic) {
     if (mult > 2.5f) mult = 2.5f;
     if (mult < 0.0f) mult = 0.0f;
     return mult;
+}
+
+/* ======================================================================== */
+/* shared encounter RNG (xorshift32)                                         */
+/* ======================================================================== */
+
+/* all encounters should use these instead of reimplementing.
+   state must be non-zero. */
+static inline uint32_t encounter_xorshift(uint32_t* state) {
+    *state ^= *state << 13;
+    *state ^= *state >> 17;
+    *state ^= *state << 5;
+    return *state;
+}
+
+static inline int encounter_rand_int(uint32_t* rng_state, int max) {
+    if (max <= 0) return 0;
+    return (int)(encounter_xorshift(rng_state) % (unsigned)max);
+}
+
+static inline float encounter_rand_float(uint32_t* rng_state) {
+    return (float)(encounter_xorshift(rng_state) & 0xFFFF) / 65536.0f;
 }
 
 /* ======================================================================== */
@@ -108,20 +136,6 @@ static inline BarrageResult osrs_barrage_resolve(
 ) {
     BarrageResult result = { 0, 0, 0 };
 
-    /* simple xorshift for rolls (same as inf_rand) */
-    #define BARRAGE_RAND_INT(state, n) ({ \
-        *(state) ^= *(state) << 13; \
-        *(state) ^= *(state) >> 17; \
-        *(state) ^= *(state) << 5; \
-        (int)(*(state) % (unsigned)(n)); \
-    })
-    #define BARRAGE_RAND_FLOAT(state) ({ \
-        *(state) ^= *(state) << 13; \
-        *(state) ^= *(state) >> 17; \
-        *(state) ^= *(state) << 5; \
-        (float)(*(state) & 0xFFFF) / 65536.0f; \
-    })
-
     if (max_targets < 1 || !targets[0].active) return result;
 
     /* primary target (index 0) always gets rolled */
@@ -129,8 +143,8 @@ static inline BarrageResult osrs_barrage_resolve(
     {
         int def_roll = (targets[0].def_level + 8) * (targets[0].magic_def_bonus + 64);
         float chance = osrs_hit_chance(att_roll, def_roll);
-        targets[0].hit = BARRAGE_RAND_FLOAT(rng_state) < chance;
-        targets[0].damage = targets[0].hit ? BARRAGE_RAND_INT(rng_state, max_hit + 1) : 0;
+        targets[0].hit = encounter_rand_float(rng_state) < chance;
+        targets[0].damage = targets[0].hit ? encounter_rand_int(rng_state, max_hit + 1) : 0;
         result.total_damage += targets[0].damage;
         result.num_hits++;
         if (targets[0].hit) result.num_successful++;
@@ -145,15 +159,12 @@ static inline BarrageResult osrs_barrage_resolve(
 
         int def_roll = (targets[i].def_level + 8) * (targets[i].magic_def_bonus + 64);
         float chance = osrs_hit_chance(att_roll, def_roll);
-        targets[i].hit = BARRAGE_RAND_FLOAT(rng_state) < chance;
-        targets[i].damage = targets[i].hit ? BARRAGE_RAND_INT(rng_state, max_hit + 1) : 0;
+        targets[i].hit = encounter_rand_float(rng_state) < chance;
+        targets[i].damage = targets[i].hit ? encounter_rand_int(rng_state, max_hit + 1) : 0;
         result.total_damage += targets[i].damage;
         result.num_hits++;
         if (targets[i].hit) result.num_successful++;
     }
-
-    #undef BARRAGE_RAND_INT
-    #undef BARRAGE_RAND_FLOAT
 
     return result;
 }
@@ -192,7 +203,7 @@ static inline int osrs_player_def_roll_vs_npc(
     int def_level, int magic_level, int def_bonus, int attack_style
 ) {
     int eff_def;
-    if (attack_style == 3) {  /* ATTACK_STYLE_MAGIC */
+    if (attack_style == 3) {  /* ATTACK_STYLE_MAGIC = 3 */
         eff_def = (int)(magic_level * 0.7 + def_level * 0.3) + 9;
     } else {
         eff_def = def_level + 9;
@@ -208,13 +219,35 @@ static inline int osrs_npc_max_hit(
     int melee_str_bonus, int ranged_str_bonus,
     int magic_base_dmg, int magic_dmg_pct
 ) {
-    if (attack_style == 1) /* ATTACK_STYLE_MELEE */
+    if (attack_style == 1) /* ATTACK_STYLE_MELEE = 1 */
         return osrs_npc_melee_max_hit(str_level, melee_str_bonus);
-    if (attack_style == 2) /* ATTACK_STYLE_RANGED */
+    if (attack_style == 2) /* ATTACK_STYLE_RANGED = 2 */
         return osrs_npc_ranged_max_hit(range_level, ranged_str_bonus);
-    if (attack_style == 3) /* ATTACK_STYLE_MAGIC */
+    if (attack_style == 3) /* ATTACK_STYLE_MAGIC = 3 */
         return osrs_npc_magic_max_hit(magic_base_dmg, magic_dmg_pct);
     return 0;
+}
+
+/* NPC attack roll: accuracy check + damage roll in one call.
+   returns damage (0 on miss). caller handles prayer separately. */
+static inline int encounter_npc_roll_attack(
+    int att_roll, int def_roll, int max_hit, uint32_t* rng_state
+) {
+    int dmg = encounter_rand_int(rng_state, max_hit + 1);
+    if (encounter_rand_float(rng_state) >= osrs_hit_chance(att_roll, def_roll))
+        dmg = 0;
+    return dmg;
+}
+
+/* check if overhead prayer blocks the given attack style.
+   uses int values directly: ATTACK_STYLE_MELEE(1) matches PRAYER_PROTECT_MELEE(3), etc.
+   prayer enum: NONE=0, MAGIC=1, RANGED=2, MELEE=3.
+   attack style enum: NONE=0, MELEE=1, RANGED=2, MAGIC=3.
+   mapping: melee attack(1)->protect melee(3), ranged(2)->protect ranged(2), magic(3)->protect magic(1). */
+static inline int encounter_prayer_correct_for_style(int prayer, int attack_style) {
+    return (attack_style == 1 /* ATTACK_STYLE_MELEE */  && prayer == 3 /* PRAYER_PROTECT_MELEE */)  ||
+           (attack_style == 2 /* ATTACK_STYLE_RANGED */ && prayer == 2 /* PRAYER_PROTECT_RANGED */) ||
+           (attack_style == 3 /* ATTACK_STYLE_MAGIC */  && prayer == 1 /* PRAYER_PROTECT_MAGIC */);
 }
 
 /* ======================================================================== */

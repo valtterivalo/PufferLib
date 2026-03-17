@@ -10,11 +10,18 @@
  *   rendering:
  *     RenderEntity                     value struct for renderer (not Player*)
  *     render_entity_from_player()      copy Player fields to RenderEntity
+ *     encounter_resolve_attack_target() match npc_slot to render entity index
  *     EncounterOverlay                 visual overlay (clouds, projectiles, boss)
+ *
+ *   prayer:
+ *     ENCOUNTER_PRAYER_*               canonical 5-value prayer action encoding
+ *     encounter_apply_prayer_action()  apply prayer action to OverheadPrayer state
  *
  *   movement:
  *     ENCOUNTER_MOVE_TARGET_DX/DY[25]  direction tables (idle + 8 walk + 16 run)
  *     encounter_move_to_target()       player movement: walk 1 tile or run 2
+ *     encounter_move_toward_dest()     BFS click-to-move toward destination
+ *     encounter_pathfind()             shared BFS pathfind wrapper
  *
  *   NPC pathfinding:
  *     encounter_npc_step_toward()      greedy 1-tile step (diagonal > x > y)
@@ -185,6 +192,35 @@ static inline void encounter_resolve_attack_target(
             entities[0].attack_target_entity_idx = i;
             return;
         }
+    }
+}
+
+/* ======================================================================== */
+/* canonical prayer action encoding                                          */
+/* ======================================================================== */
+
+/* all encounters MUST use this encoding for the prayer action head.
+   0 = no change (prayer persists from previous tick)
+   1 = turn off prayer (PRAYER_NONE)
+   2 = protect melee
+   3 = protect ranged
+   4 = protect magic
+   action dim = 5 for any encounter using this encoding. */
+#define ENCOUNTER_PRAYER_NO_CHANGE  0
+#define ENCOUNTER_PRAYER_OFF        1
+#define ENCOUNTER_PRAYER_MELEE      2
+#define ENCOUNTER_PRAYER_RANGED     3
+#define ENCOUNTER_PRAYER_MAGIC      4
+#define ENCOUNTER_PRAYER_DIM        5
+
+/* apply a prayer action to the active prayer state. 0=no change. */
+static inline void encounter_apply_prayer_action(OverheadPrayer* prayer, int action) {
+    switch (action) {
+        case ENCOUNTER_PRAYER_NO_CHANGE: break;
+        case ENCOUNTER_PRAYER_OFF:    *prayer = PRAYER_NONE; break;
+        case ENCOUNTER_PRAYER_MELEE:  *prayer = PRAYER_PROTECT_MELEE; break;
+        case ENCOUNTER_PRAYER_RANGED: *prayer = PRAYER_PROTECT_RANGED; break;
+        case ENCOUNTER_PRAYER_MAGIC:  *prayer = PRAYER_PROTECT_MAGIC; break;
     }
 }
 
