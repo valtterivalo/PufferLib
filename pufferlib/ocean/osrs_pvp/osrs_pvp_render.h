@@ -604,7 +604,7 @@ static void render_init_overlay_models(RenderClient* rc) {
     rc->cloud_proj_model_ready = render_build_static_model(
         rc->model_cache, GFX_CLOUD_PROJ_MODEL, &rc->cloud_proj_model);
     rc->pillar_model_ready = render_build_static_model(
-        rc->model_cache, INF_PILLAR_MODEL_INTACT, &rc->pillar_model);
+        rc->model_cache, INF_PILLAR_MODEL_100, &rc->pillar_model);
 
     if (rc->cloud_model_ready) printf("overlay: cloud model loaded\n");
     if (rc->pillar_model_ready) printf("overlay: pillar model loaded\n");

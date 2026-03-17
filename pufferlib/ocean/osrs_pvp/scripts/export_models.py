@@ -2052,10 +2052,11 @@ def main() -> None:
         11221,  # GFX 1045 cloud projectile
         26593,  # GFX 1046 magic projectile (zulrah)
         4086,   # object 11700 toxic cloud on ground
-        # inferno pillars (game objects, dynamically spawned)
-        24022,  # object 11706 — intact pillar
-        24010,  # object 11707 — damaged pillar
-        24020,  # object 11708 — destroyed pillar
+        # inferno pillars — "Rocky support" objects 30284-30287 (4 HP levels)
+        33044,  # object 30284 — Rocky support (100% HP)
+        33043,  # object 30285 — Rocky support (75% HP)
+        33042,  # object 30286 — Rocky support (50% HP)
+        33045,  # object 30287 — Rocky support (25% HP)
         # player weapon projectiles
         20825,  # GFX 1040 trident of swamp projectile
         20824,  # GFX 1042 trident impact

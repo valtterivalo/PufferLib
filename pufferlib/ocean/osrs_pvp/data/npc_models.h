@@ -104,10 +104,11 @@ static const NpcModelMapping NPC_MODEL_MAP_INFERNO[] = {
 #define INF_GFX_1385_MODEL  3142  /* Healer magic attack */
 #define INF_GFX_1385_ANIM   366
 
-/* inferno pillar models (game objects, not NPCs) */
-#define INF_PILLAR_MODEL_INTACT   24022  /* object 11706 — full health */
-#define INF_PILLAR_MODEL_DAMAGED  24010  /* object 11707 — cracked */
-#define INF_PILLAR_MODEL_DESTROYED 24020 /* object 11708 — crumbled */
+/* inferno pillar models — "Rocky support" objects 30284-30287, 4 HP levels */
+#define INF_PILLAR_MODEL_100  33044  /* object 30284 — full health */
+#define INF_PILLAR_MODEL_75   33043  /* object 30285 — 75% HP */
+#define INF_PILLAR_MODEL_50   33042  /* object 30286 — 50% HP */
+#define INF_PILLAR_MODEL_25   33045  /* object 30287 — 25% HP */
 
 static const NpcModelMapping* npc_model_lookup(uint16_t npc_id) {
     for (int i = 0; i < (int)(sizeof(NPC_MODEL_MAP_ZULRAH) / sizeof(NPC_MODEL_MAP_ZULRAH[0])); i++) {
