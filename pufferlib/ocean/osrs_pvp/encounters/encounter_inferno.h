@@ -108,135 +108,169 @@ static const int INF_NPC_DEF_IDS[INF_NUM_NPC_TYPES] = {
 
 typedef struct {
     int hp;
-    int max_hit;
     int attack_speed;
     int attack_range;
     int size;
     int default_style;   /* ATTACK_STYLE_* */
     int can_melee;       /* 1 if can switch to melee when close */
-    int def_level;
-    int att_level;
-    int str_level;
-    int range_level;
-    int magic_level;
-    int magic_def_bonus;   /* NPC magic defence equipment bonus */
-    int ranged_def_bonus;  /* NPC ranged defence equipment bonus */
+
+    /* combat levels (used for attack rolls and max hit computation) */
+    int att_level, str_level, def_level, range_level, magic_level;
+
+    /* attack bonuses (for NPC attack roll: (level + 9) * (bonus + 64)) */
+    int melee_att_bonus;   /* best of stab/slash/crush */
+    int range_att_bonus;
+    int magic_att_bonus;
+
+    /* strength bonuses (for max hit formulas) */
+    int melee_str_bonus;   /* bonuses.other.meleeStrength */
+    int ranged_str_bonus;  /* bonuses.other.rangedStrength */
+    int magic_base_dmg;    /* base spell damage (magicMaxHit() in InfernoTrainer) */
+    int magic_dmg_pct;     /* magic damage multiplier as % (100 = 1.0x) */
+
+    /* defence bonuses (for player hit chance against this NPC) */
+    int stab_def, slash_def, crush_def;
+    int magic_def_bonus;
+    int ranged_def_bonus;
+
+    /* wiki max hit cap: 0 = no cap (use formula), >0 = clamp to this value.
+       needed for Jad/Zuk where InfernoTrainer multipliers overshoot wiki values. */
+    int max_hit_cap;
+
     int stun_on_spawn;   /* ticks of stun when first spawned */
     int can_move;        /* 0 = cannot move (zuk, zuk healers) */
 } InfNPCStats;
 
-/* exact stats from InfernoTrainer TypeScript reference */
+/* stats from InfernoTrainer TypeScript reference + OSRS wiki.
+   max hits are computed from levels + bonuses via osrs_npc_*_max_hit() formulas. */
 static const InfNPCStats INF_NPC_STATS[INF_NUM_NPC_TYPES] = {
-    /* NIBBLER: HP=10, melee crush, size=1, attacks pillars not player, 1 tick stun on spawn */
-    [INF_NPC_NIBBLER] = { .hp = 10, .max_hit = 4, .attack_speed = 4,
-        .attack_range = 1, .size = 1, .default_style = ATTACK_STYLE_MELEE,
-        .can_melee = 0, .def_level = 15, .att_level = 1, .str_level = 1,
-        .range_level = 0, .magic_level = 15,
-        .magic_def_bonus = 0, .ranged_def_bonus = 0,
+    /* NIBBLER (JalNib): attacks pillars not player, bypasses combat formula (hardcoded 0-4) */
+    [INF_NPC_NIBBLER] = { .hp = 10, .attack_speed = 4, .attack_range = 1, .size = 1,
+        .default_style = ATTACK_STYLE_MELEE, .can_melee = 0,
+        .att_level = 1, .str_level = 1, .def_level = 15, .range_level = 0, .magic_level = 15,
+        .melee_att_bonus = 0, .range_att_bonus = 0, .magic_att_bonus = 0,
+        .melee_str_bonus = 0, .ranged_str_bonus = 0, .magic_base_dmg = 0, .magic_dmg_pct = 0,
+        .stab_def = -20, .slash_def = -20, .crush_def = -20, .magic_def_bonus = -20, .ranged_def_bonus = -20,
         .stun_on_spawn = 1, .can_move = 1 },
 
-    /* BAT (JalMejRah): HP=25, ranged (range=4), size=2, drains run energy on hit */
-    [INF_NPC_BAT] = { .hp = 25, .max_hit = 30, .attack_speed = 3,
-        .attack_range = 4, .size = 2, .default_style = ATTACK_STYLE_RANGED,
-        .can_melee = 0, .def_level = 55, .att_level = 0, .str_level = 0,
-        .range_level = 120, .magic_level = 120,
-        .magic_def_bonus = 0, .ranged_def_bonus = 0,
+    /* BAT (JalMejRah): ranged, drains run energy on hit. computed max hit = 19 */
+    [INF_NPC_BAT] = { .hp = 25, .attack_speed = 3, .attack_range = 4, .size = 2,
+        .default_style = ATTACK_STYLE_RANGED, .can_melee = 0,
+        .att_level = 0, .str_level = 0, .def_level = 55, .range_level = 120, .magic_level = 120,
+        .melee_att_bonus = 0, .range_att_bonus = 25, .magic_att_bonus = 0,
+        .melee_str_bonus = 0, .ranged_str_bonus = 30, .magic_base_dmg = 0, .magic_dmg_pct = 0,
+        .stab_def = 30, .slash_def = 30, .crush_def = 30, .magic_def_bonus = -20, .ranged_def_bonus = 45,
         .stun_on_spawn = 0, .can_move = 1 },
 
-    /* BLOB (JalAk): HP=40, prayer reader, size=3, speed=3 (effective 6 with scan phase) */
-    [INF_NPC_BLOB] = { .hp = 40, .max_hit = 29, .attack_speed = 6,
-        .attack_range = 15, .size = 3, .default_style = ATTACK_STYLE_MAGIC,
-        .can_melee = 1, .def_level = 95, .att_level = 160, .str_level = 160,
-        .range_level = 160, .magic_level = 160,
-        .magic_def_bonus = 25, .ranged_def_bonus = 0,
+    /* BLOB (JalAk): prayer reader, can melee if close. computed max hit = 29 */
+    [INF_NPC_BLOB] = { .hp = 40, .attack_speed = 6, .attack_range = 15, .size = 3,
+        .default_style = ATTACK_STYLE_MAGIC, .can_melee = 1,
+        .att_level = 160, .str_level = 160, .def_level = 95, .range_level = 160, .magic_level = 160,
+        .melee_att_bonus = 0, .range_att_bonus = 40, .magic_att_bonus = 45,
+        .melee_str_bonus = 45, .ranged_str_bonus = 45, .magic_base_dmg = 29, .magic_dmg_pct = 100,
+        .stab_def = 25, .slash_def = 25, .crush_def = 25, .magic_def_bonus = 25, .ranged_def_bonus = 25,
         .stun_on_spawn = 0, .can_move = 1 },
 
-    /* BLOB_MELEE (JalAkRekKet): HP=15, melee, size=1 */
-    [INF_NPC_BLOB_MELEE] = { .hp = 15, .max_hit = 25, .attack_speed = 4,
-        .attack_range = 1, .size = 1, .default_style = ATTACK_STYLE_MELEE,
-        .can_melee = 0, .def_level = 95, .att_level = 120, .str_level = 120,
-        .range_level = 0, .magic_level = 0,
-        .magic_def_bonus = 0, .ranged_def_bonus = 0,
+    /* BLOB_MELEE (JalAkRekKet): melee split. computed max hit = 18 */
+    [INF_NPC_BLOB_MELEE] = { .hp = 15, .attack_speed = 4, .attack_range = 1, .size = 1,
+        .default_style = ATTACK_STYLE_MELEE, .can_melee = 0,
+        .att_level = 120, .str_level = 120, .def_level = 95, .range_level = 0, .magic_level = 0,
+        .melee_att_bonus = 0, .range_att_bonus = 25, .magic_att_bonus = 0,
+        .melee_str_bonus = 25, .ranged_str_bonus = 0, .magic_base_dmg = 0, .magic_dmg_pct = 0,
+        .stab_def = 25, .slash_def = 25, .crush_def = 25, .magic_def_bonus = 0, .ranged_def_bonus = 0,
         .stun_on_spawn = 0, .can_move = 1 },
 
-    /* BLOB_RANGE (JalAkRekXil): HP=15, ranged, size=1 */
-    [INF_NPC_BLOB_RANGE] = { .hp = 15, .max_hit = 25, .attack_speed = 4,
-        .attack_range = 15, .size = 1, .default_style = ATTACK_STYLE_RANGED,
-        .can_melee = 0, .def_level = 95, .att_level = 0, .str_level = 0,
-        .range_level = 120, .magic_level = 0,
-        .magic_def_bonus = 0, .ranged_def_bonus = 0,
+    /* BLOB_RANGE (JalAkRekXil): ranged split. computed max hit = 18 */
+    [INF_NPC_BLOB_RANGE] = { .hp = 15, .attack_speed = 4, .attack_range = 15, .size = 1,
+        .default_style = ATTACK_STYLE_RANGED, .can_melee = 0,
+        .att_level = 0, .str_level = 0, .def_level = 95, .range_level = 120, .magic_level = 0,
+        .melee_att_bonus = 0, .range_att_bonus = 25, .magic_att_bonus = 0,
+        .melee_str_bonus = 0, .ranged_str_bonus = 25, .magic_base_dmg = 0, .magic_dmg_pct = 0,
+        .stab_def = 0, .slash_def = 0, .crush_def = 0, .magic_def_bonus = 0, .ranged_def_bonus = 25,
         .stun_on_spawn = 0, .can_move = 1 },
 
-    /* BLOB_MAGE (JalAkRekMej): HP=15, magic, size=1, magic_dmg=1.25 */
-    [INF_NPC_BLOB_MAGE] = { .hp = 15, .max_hit = 25, .attack_speed = 4,
-        .attack_range = 15, .size = 1, .default_style = ATTACK_STYLE_MAGIC,
-        .can_melee = 0, .def_level = 95, .att_level = 0, .str_level = 0,
-        .range_level = 0, .magic_level = 120,
-        .magic_def_bonus = 25, .ranged_def_bonus = 0,
+    /* BLOB_MAGE (JalAkRekMej): magic split. wiki max hit = 25. InfernoTrainer has
+       magicMaxHit()=0 (base Mob) but wiki clearly shows max hit 25 — use wiki value. */
+    [INF_NPC_BLOB_MAGE] = { .hp = 15, .attack_speed = 4, .attack_range = 15, .size = 1,
+        .default_style = ATTACK_STYLE_MAGIC, .can_melee = 0,
+        .att_level = 0, .str_level = 0, .def_level = 95, .range_level = 0, .magic_level = 120,
+        .melee_att_bonus = 0, .range_att_bonus = 0, .magic_att_bonus = 25,
+        .melee_str_bonus = 0, .ranged_str_bonus = 0, .magic_base_dmg = 25, .magic_dmg_pct = 100,
+        .stab_def = 0, .slash_def = 0, .crush_def = 0, .magic_def_bonus = 25, .ranged_def_bonus = 0,
         .stun_on_spawn = 0, .can_move = 1 },
 
-    /* MELEER (JalImKot): HP=75, melee slash, size=4, dig mechanic */
-    [INF_NPC_MELEER] = { .hp = 75, .max_hit = 40, .attack_speed = 4,
-        .attack_range = 1, .size = 4, .default_style = ATTACK_STYLE_MELEE,
-        .can_melee = 0, .def_level = 120, .att_level = 210, .str_level = 290,
-        .range_level = 0, .magic_level = 120,
-        .magic_def_bonus = 30, .ranged_def_bonus = 0,
+    /* MELEER (JalImKot): melee slash, dig mechanic. computed max hit = 48 (wiki: 49) */
+    [INF_NPC_MELEER] = { .hp = 75, .attack_speed = 4, .attack_range = 1, .size = 4,
+        .default_style = ATTACK_STYLE_MELEE, .can_melee = 0,
+        .att_level = 210, .str_level = 290, .def_level = 120, .range_level = 220, .magic_level = 120,
+        .melee_att_bonus = 0, .range_att_bonus = 0, .magic_att_bonus = 0,
+        .melee_str_bonus = 40, .ranged_str_bonus = 0, .magic_base_dmg = 0, .magic_dmg_pct = 0,
+        .stab_def = 65, .slash_def = 65, .crush_def = 65, .magic_def_bonus = 30, .ranged_def_bonus = 50,
         .stun_on_spawn = 0, .can_move = 1 },
 
-    /* RANGER (JalXil): HP=125, ranged (range=15), size=3, can melee (crush) if close */
-    [INF_NPC_RANGER] = { .hp = 125, .max_hit = 50, .attack_speed = 4,
-        .attack_range = 15, .size = 3, .default_style = ATTACK_STYLE_RANGED,
-        .can_melee = 1, .def_level = 60, .att_level = 140, .str_level = 180,
-        .range_level = 250, .magic_level = 90,
-        .magic_def_bonus = 0, .ranged_def_bonus = 0,
+    /* RANGER (JalXil): ranged, can melee if close. computed max hit = 46 */
+    [INF_NPC_RANGER] = { .hp = 125, .attack_speed = 4, .attack_range = 15, .size = 3,
+        .default_style = ATTACK_STYLE_RANGED, .can_melee = 1,
+        .att_level = 140, .str_level = 180, .def_level = 60, .range_level = 250, .magic_level = 90,
+        .melee_att_bonus = 0, .range_att_bonus = 40, .magic_att_bonus = 0,
+        .melee_str_bonus = 0, .ranged_str_bonus = 50, .magic_base_dmg = 0, .magic_dmg_pct = 0,
+        .stab_def = 0, .slash_def = 0, .crush_def = 0, .magic_def_bonus = 0, .ranged_def_bonus = 0,
         .stun_on_spawn = 0, .can_move = 1 },
 
-    /* MAGER (JalZek): HP=220, magic (range=15), size=4, resurrects dead mobs, can melee (stab) */
-    [INF_NPC_MAGER] = { .hp = 220, .max_hit = 70, .attack_speed = 4,
-        .attack_range = 15, .size = 4, .default_style = ATTACK_STYLE_MAGIC,
-        .can_melee = 1, .def_level = 260, .att_level = 370, .str_level = 510,
-        .range_level = 510, .magic_level = 300,
-        .magic_def_bonus = 0, .ranged_def_bonus = 0,
+    /* MAGER (JalZek): magic, resurrects dead mobs, can melee. computed max hit = 70 */
+    [INF_NPC_MAGER] = { .hp = 220, .attack_speed = 4, .attack_range = 15, .size = 4,
+        .default_style = ATTACK_STYLE_MAGIC, .can_melee = 1,
+        .att_level = 370, .str_level = 510, .def_level = 260, .range_level = 510, .magic_level = 300,
+        .melee_att_bonus = 0, .range_att_bonus = 0, .magic_att_bonus = 80,
+        .melee_str_bonus = 0, .ranged_str_bonus = 0, .magic_base_dmg = 70, .magic_dmg_pct = 100,
+        .stab_def = 0, .slash_def = 0, .crush_def = 0, .magic_def_bonus = 0, .ranged_def_bonus = 0,
         .stun_on_spawn = 0, .can_move = 1 },
 
-    /* JAD (JalTokJad): HP=350, random 50/50 range/mage, size=5, range=50 */
-    [INF_NPC_JAD] = { .hp = 350, .max_hit = 113, .attack_speed = 8,
-        .attack_range = 50, .size = 5, .default_style = ATTACK_STYLE_RANGED,
-        .can_melee = 0, .def_level = 480, .att_level = 750, .str_level = 1020,
-        .range_level = 1020, .magic_level = 510,
-        .magic_def_bonus = 0, .ranged_def_bonus = 0,
+    /* JAD (JalTokJad): 50/50 range/mage. wiki max hit = 113. formula gives 231 ranged
+       (due to very high range level + bonus), capped to wiki value. */
+    [INF_NPC_JAD] = { .hp = 350, .attack_speed = 8, .attack_range = 50, .size = 5,
+        .default_style = ATTACK_STYLE_RANGED, .can_melee = 0,
+        .att_level = 750, .str_level = 1020, .def_level = 480, .range_level = 1020, .magic_level = 510,
+        .melee_att_bonus = 0, .range_att_bonus = 80, .magic_att_bonus = 100,
+        .melee_str_bonus = 0, .ranged_str_bonus = 80, .magic_base_dmg = 113, .magic_dmg_pct = 100,
+        .stab_def = 0, .slash_def = 0, .crush_def = 0, .magic_def_bonus = 0, .ranged_def_bonus = 0,
+        .max_hit_cap = 113,
         .stun_on_spawn = 0, .can_move = 1 },
 
-    /* ZUK (TzKalZuk): HP=1200, typeless attacks, size=7, cannot move */
-    [INF_NPC_ZUK] = { .hp = 1200, .max_hit = 251, .attack_speed = 10,
-        .attack_range = 99, .size = 7, .default_style = ATTACK_STYLE_MAGIC,
-        .can_melee = 0, .def_level = 234, .att_level = 350, .str_level = 600,
-        .range_level = 400, .magic_level = 150,
-        .magic_def_bonus = 350, .ranged_def_bonus = 0,
+    /* ZUK (TzKalZuk): typeless attacks, wiki max hit = 148 */
+    [INF_NPC_ZUK] = { .hp = 1200, .attack_speed = 10, .attack_range = 99, .size = 7,
+        .default_style = ATTACK_STYLE_MAGIC, .can_melee = 0,
+        .att_level = 350, .str_level = 600, .def_level = 260, .range_level = 400, .magic_level = 150,
+        .melee_att_bonus = 0, .range_att_bonus = 550, .magic_att_bonus = 550,
+        .melee_str_bonus = 200, .ranged_str_bonus = 200, .magic_base_dmg = 148, .magic_dmg_pct = 100,
+        .stab_def = 0, .slash_def = 0, .crush_def = 0, .magic_def_bonus = 350, .ranged_def_bonus = 100,
         .stun_on_spawn = 8, .can_move = 0 },
 
-    /* HEALER_JAD (YtHurKot): HP=90, melee, size=1 */
-    [INF_NPC_HEALER_JAD] = { .hp = 90, .max_hit = 19, .attack_speed = 4,
-        .attack_range = 1, .size = 1, .default_style = ATTACK_STYLE_MELEE,
-        .can_melee = 0, .def_level = 100, .att_level = 165, .str_level = 125,
-        .range_level = 0, .magic_level = 150,
-        .magic_def_bonus = 130, .ranged_def_bonus = 0,
+    /* HEALER_JAD (YtHurKot): melee, heals its Jad */
+    [INF_NPC_HEALER_JAD] = { .hp = 90, .attack_speed = 4, .attack_range = 1, .size = 1,
+        .default_style = ATTACK_STYLE_MELEE, .can_melee = 0,
+        .att_level = 165, .str_level = 125, .def_level = 100, .range_level = 0, .magic_level = 150,
+        .melee_att_bonus = 0, .range_att_bonus = 0, .magic_att_bonus = 0,
+        .melee_str_bonus = 0, .ranged_str_bonus = 0, .magic_base_dmg = 0, .magic_dmg_pct = 0,
+        .stab_def = 0, .slash_def = 0, .crush_def = 0, .magic_def_bonus = 130, .ranged_def_bonus = 0,
         .stun_on_spawn = 0, .can_move = 1 },
 
-    /* HEALER_ZUK (JalMejJak): HP=75, AOE sparks, size=1, cannot move */
-    [INF_NPC_HEALER_ZUK] = { .hp = 75, .max_hit = 24, .attack_speed = 4,
-        .attack_range = 99, .size = 1, .default_style = ATTACK_STYLE_MAGIC,
-        .can_melee = 0, .def_level = 100, .att_level = 0, .str_level = 0,
-        .range_level = 0, .magic_level = 0,
-        .magic_def_bonus = 0, .ranged_def_bonus = 0,
+    /* HEALER_ZUK (JalMejJak): AOE magic sparks, cannot move */
+    [INF_NPC_HEALER_ZUK] = { .hp = 75, .attack_speed = 4, .attack_range = 99, .size = 1,
+        .default_style = ATTACK_STYLE_MAGIC, .can_melee = 0,
+        .att_level = 0, .str_level = 0, .def_level = 100, .range_level = 0, .magic_level = 0,
+        .melee_att_bonus = 0, .range_att_bonus = 0, .magic_att_bonus = 0,
+        .melee_str_bonus = 0, .ranged_str_bonus = 0, .magic_base_dmg = 24, .magic_dmg_pct = 100,
+        .stab_def = 0, .slash_def = 0, .crush_def = 0, .magic_def_bonus = 0, .ranged_def_bonus = 0,
         .stun_on_spawn = 0, .can_move = 0 },
 
-    /* ZUK_SHIELD: HP=600, size=5 (width), oscillates left-right */
-    [INF_NPC_ZUK_SHIELD] = { .hp = 600, .max_hit = 0, .attack_speed = 0,
-        .attack_range = 0, .size = 5, .default_style = ATTACK_STYLE_NONE,
-        .can_melee = 0, .def_level = 0, .att_level = 0, .str_level = 0,
-        .range_level = 0, .magic_level = 0,
-        .magic_def_bonus = 0, .ranged_def_bonus = 0,
+    /* ZUK_SHIELD: no attacks, oscillates left-right */
+    [INF_NPC_ZUK_SHIELD] = { .hp = 600, .attack_speed = 0, .attack_range = 0, .size = 5,
+        .default_style = ATTACK_STYLE_NONE, .can_melee = 0,
+        .att_level = 0, .str_level = 0, .def_level = 0, .range_level = 0, .magic_level = 0,
+        .melee_att_bonus = 0, .range_att_bonus = 0, .magic_att_bonus = 0,
+        .melee_str_bonus = 0, .ranged_str_bonus = 0, .magic_base_dmg = 0, .magic_dmg_pct = 0,
+        .stab_def = 0, .slash_def = 0, .crush_def = 0, .magic_def_bonus = 0, .ranged_def_bonus = 0,
         .stun_on_spawn = 1, .can_move = 0 },
 };
 
@@ -784,6 +818,24 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
             ls->attack_speed, ls->attack_range);
     }
 
+    /* verify NPC max hits computed from formulas */
+    {
+        const char* npc_names[] = {
+            "nibbler", "bat", "blob", "blob_melee", "blob_range", "blob_mage",
+            "meleer", "ranger", "mager", "jad", "zuk", "healer_jad", "healer_zuk", "shield"
+        };
+        fprintf(stderr, "[inferno] NPC max hits (computed from OSRS formulas):\n");
+        for (int i = 0; i < INF_NUM_NPC_TYPES; i++) {
+            const InfNPCStats* ns = &INF_NPC_STATS[i];
+            int mh = osrs_npc_max_hit(ns->default_style,
+                ns->str_level, ns->range_level,
+                ns->melee_str_bonus, ns->ranged_str_bonus,
+                ns->magic_base_dmg, ns->magic_dmg_pct);
+            if (ns->max_hit_cap > 0 && mh > ns->max_hit_cap) mh = ns->max_hit_cap;
+            fprintf(stderr, "  %s: %d\n", npc_names[i], mh);
+        }
+    }
+
     /* spawn position depends on wave */
     int is_zuk_wave = (saved_start >= 68);
     s->player.x = is_zuk_wave ? INF_ZUK_PLAYER_START_X : INF_PLAYER_START_X;
@@ -1088,8 +1140,9 @@ static void inf_npc_attack(InfernoState* s, int idx) {
             int ddx = npc->x - s->pillars[p].x;
             int ddy = npc->y - s->pillars[p].y;
             if (ddx >= -1 && ddx <= INF_PILLAR_SIZE && ddy >= -1 && ddy <= INF_PILLAR_SIZE) {
-                /* nibblers deal 0-4 damage per hit (ref: InfernoTrainer JalNib.ts) */
-                int dmg = inf_rand_int(s, stats->max_hit + 1);
+                /* nibblers deal 0-4 damage per hit (ref: InfernoTrainer JalNib.ts).
+                   bypasses combat formula — custom weapon directly rolls rand(0..4). */
+                int dmg = inf_rand_int(s, 5);
                 s->pillars[p].hp -= dmg;
                 if (s->pillars[p].hp <= 0) {
                     s->pillars[p].active = 0;
@@ -1137,7 +1190,8 @@ static void inf_npc_attack(InfernoState* s, int idx) {
             }
         }
         /* AOE sparks on player — queue as pending hit with magic delay */
-        int dmg = inf_rand_int(s, stats->max_hit + 1);
+        int max_hit = osrs_npc_magic_max_hit(stats->magic_base_dmg, stats->magic_dmg_pct);
+        int dmg = inf_rand_int(s, max_hit + 1);
         if (s->player_pending_hit_count < ENCOUNTER_MAX_PENDING_HITS) {
             int d = encounter_dist_to_npc(npc->x, npc->y, s->player.x, s->player.y, 1);
             EncounterPendingHit* ph = &s->player_pending_hits[s->player_pending_hit_count++];
@@ -1170,7 +1224,14 @@ static void inf_npc_attack(InfernoState* s, int idx) {
         int dist = (ddx < 0 ? -ddx : ddx) > (ddy < 0 ? -ddy : ddy)
                    ? (ddx < 0 ? -ddx : ddx) : (ddy < 0 ? -ddy : ddy);
         if (dist <= 1) {
-            int dmg = inf_rand_int(s, stats->max_hit + 1);
+            int max_hit = osrs_npc_melee_max_hit(stats->str_level, stats->melee_str_bonus);
+            int dmg = inf_rand_int(s, max_hit + 1);
+            /* accuracy roll */
+            int att_roll = osrs_npc_attack_roll(stats->att_level, stats->melee_att_bonus);
+            const EncounterLoadoutStats* ls = &s->loadout_stats[s->weapon_set];
+            int def_bonus = ls->def_stab;  /* melee: use stab def as approximation */
+            int def_roll = osrs_player_def_roll_vs_npc(99, 99, def_bonus, ATTACK_STYLE_MELEE);
+            if (inf_rand_float(s) >= osrs_hit_chance(att_roll, def_roll)) dmg = 0;
             int prayer_matches = (s->active_prayer == PRAYER_PROTECT_MELEE);
             if (prayer_matches) { dmg = 0; s->prayer_correct_this_tick = 1; }
             encounter_damage_player(&s->player, dmg, &s->damage_received_this_tick);
@@ -1232,8 +1293,9 @@ static void inf_npc_attack(InfernoState* s, int idx) {
             /* shield blocks if player within shield x range AND y >= 41 */
             if (s->player.x >= shield_left && s->player.x < shield_right &&
                 s->player.y >= 41) {
-                /* shield absorbs the hit */
-                int dmg = inf_rand_int(s, stats->max_hit + 1);
+                /* shield absorbs the hit (typeless — no accuracy roll) */
+                int max_hit = osrs_npc_magic_max_hit(stats->magic_base_dmg, stats->magic_dmg_pct);
+                int dmg = inf_rand_int(s, max_hit + 1);
                 encounter_damage_npc(&shield->hp, &shield->hit_landed_this_tick, &shield->hit_damage, dmg);
                 if (shield->hp <= 0) {
                     shield->active = 0;
@@ -1245,8 +1307,9 @@ static void inf_npc_attack(InfernoState* s, int idx) {
             }
         }
 
-        /* typeless hit — not blockable by prayer, instant (no delay) */
-        int dmg = inf_rand_int(s, stats->max_hit + 1);
+        /* typeless hit — not blockable by prayer, no accuracy roll, instant */
+        int max_hit = osrs_npc_magic_max_hit(stats->magic_base_dmg, stats->magic_dmg_pct);
+        int dmg = inf_rand_int(s, max_hit + 1);
         encounter_damage_player(&s->player, dmg, &s->damage_received_this_tick);
         npc->attacked_this_tick = 1;
         npc->attack_timer = s->zuk.enraged ? 7 : stats->attack_speed;
@@ -1258,8 +1321,41 @@ static void inf_npc_attack(InfernoState* s, int idx) {
         actual_style = ATTACK_STYLE_MELEE;
     }
 
-    /* damage calculation */
-    int dmg = inf_rand_int(s, stats->max_hit + 1);
+    /* max hit from stats + bonuses via OSRS combat formulas */
+    int max_hit = osrs_npc_max_hit(actual_style,
+        stats->str_level, stats->range_level,
+        stats->melee_str_bonus, stats->ranged_str_bonus,
+        stats->magic_base_dmg, stats->magic_dmg_pct);
+    if (stats->max_hit_cap > 0 && max_hit > stats->max_hit_cap)
+        max_hit = stats->max_hit_cap;
+    int dmg = inf_rand_int(s, max_hit + 1);
+
+    /* accuracy roll: NPC attack roll vs player defence roll */
+    {
+        int att_lvl, att_bonus;
+        if (actual_style == ATTACK_STYLE_MELEE) {
+            att_lvl = stats->att_level; att_bonus = stats->melee_att_bonus;
+        } else if (actual_style == ATTACK_STYLE_RANGED) {
+            att_lvl = stats->range_level; att_bonus = stats->range_att_bonus;
+        } else {
+            att_lvl = stats->magic_level; att_bonus = stats->magic_att_bonus;
+        }
+        int att_roll = osrs_npc_attack_roll(att_lvl, att_bonus);
+        const EncounterLoadoutStats* ls = &s->loadout_stats[s->weapon_set];
+        int def_bonus;
+        if (actual_style == ATTACK_STYLE_RANGED) def_bonus = ls->def_ranged;
+        else if (actual_style == ATTACK_STYLE_MAGIC) def_bonus = ls->def_magic;
+        else def_bonus = ls->def_stab;  /* melee: stab as approximation */
+        int def_roll = osrs_player_def_roll_vs_npc(99, 99, def_bonus, actual_style);
+        if (inf_rand_float(s) >= osrs_hit_chance(att_roll, def_roll))
+            dmg = 0;  /* missed */
+    }
+
+    /* bat special: drain run energy on every hit */
+    if (npc->type == INF_NPC_BAT && dmg > 0) {
+        s->player.run_energy -= 300;
+        if (s->player.run_energy < 0) s->player.run_energy = 0;
+    }
 
     /* compute hit delay based on attack style */
     int hit_delay = 0;

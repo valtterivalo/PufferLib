@@ -5,13 +5,19 @@
  * of reimplementing combat formulas per encounter.
  *
  * SHARED FUNCTIONS:
- *   osrs_hit_chance(att_roll, def_roll)    standard OSRS accuracy formula
- *   osrs_tbow_acc_mult(target_magic)       twisted bow accuracy multiplier
- *   osrs_tbow_dmg_mult(target_magic)       twisted bow damage multiplier
- *   osrs_barrage_resolve(targets, ...)     barrage 3x3 AoE with independent rolls
- *   encounter_magic_hit_delay(dist, is_p)  magic projectile flight delay (ticks)
- *   encounter_ranged_hit_delay(dist, is_p) ranged projectile flight delay (ticks)
- *   encounter_dist_to_npc(px,py,nx,ny,sz)  chebyshev dist to multi-tile NPC
+ *   osrs_hit_chance(att_roll, def_roll)       standard OSRS accuracy formula
+ *   osrs_tbow_acc_mult(target_magic)          twisted bow accuracy multiplier
+ *   osrs_tbow_dmg_mult(target_magic)          twisted bow damage multiplier
+ *   osrs_barrage_resolve(targets, ...)        barrage 3x3 AoE with independent rolls
+ *   osrs_npc_melee_max_hit(str, bonus)        NPC melee max hit from stats
+ *   osrs_npc_ranged_max_hit(range, bonus)     NPC ranged max hit from stats
+ *   osrs_npc_magic_max_hit(base, pct)         NPC magic max hit from stats
+ *   osrs_npc_max_hit(style, ...)              dispatches to style-specific formula
+ *   osrs_npc_attack_roll(att, bonus)          NPC attack roll
+ *   osrs_player_def_roll_vs_npc(def,mag,b,s)  player defence roll vs NPC
+ *   encounter_magic_hit_delay(dist, is_p)     magic projectile flight delay (ticks)
+ *   encounter_ranged_hit_delay(dist, is_p)    ranged projectile flight delay (ticks)
+ *   encounter_dist_to_npc(px,py,nx,ny,sz)     chebyshev dist to multi-tile NPC
  *
  * SEE ALSO:
  *   osrs_encounter.h    encounter-level abstractions (damage, movement, gear, etc.)
@@ -150,6 +156,65 @@ static inline BarrageResult osrs_barrage_resolve(
     #undef BARRAGE_RAND_FLOAT
 
     return result;
+}
+
+/* ======================================================================== */
+/* NPC combat formulas (from InfernoTrainer/osrs-sdk)                        */
+/* ======================================================================== */
+
+/* NPC melee max hit: floor((str + 8) * (melee_str_bonus + 64) + 320) / 640) */
+static inline int osrs_npc_melee_max_hit(int str_level, int melee_str_bonus) {
+    return ((str_level + 8) * (melee_str_bonus + 64) + 320) / 640;
+}
+
+/* NPC ranged max hit: floor(0.5 + (range + 8) * (ranged_str_bonus + 64) / 640) */
+static inline int osrs_npc_ranged_max_hit(int range_level, int ranged_str_bonus) {
+    return (int)(0.5 + (double)(range_level + 8) * (ranged_str_bonus + 64) / 640.0);
+}
+
+/* NPC magic max hit: floor(base_spell_dmg * magic_dmg_pct / 100).
+   magic_dmg_pct=100 means 1.0x multiplier, 175 means 1.75x. */
+static inline int osrs_npc_magic_max_hit(int base_spell_dmg, int magic_dmg_pct) {
+    return base_spell_dmg * magic_dmg_pct / 100;
+}
+
+/* NPC attack roll: (att_level + 9) * (att_bonus + 64).
+   NPCs don't have prayer or void bonuses — just level + invisible +9. */
+static inline int osrs_npc_attack_roll(int att_level, int att_bonus) {
+    return (att_level + 9) * (att_bonus + 64);
+}
+
+/* player defence roll against NPC attack.
+   vs melee/ranged: (def_level + 9) * (def_bonus + 64).
+   vs magic: (floor(magic_level * 0.7 + def_level * 0.3) + 9) * (def_bonus + 64).
+   the magic formula uses 70% magic + 30% defence per OSRS standard. */
+static inline int osrs_player_def_roll_vs_npc(
+    int def_level, int magic_level, int def_bonus, int attack_style
+) {
+    int eff_def;
+    if (attack_style == 3) {  /* ATTACK_STYLE_MAGIC */
+        eff_def = (int)(magic_level * 0.7 + def_level * 0.3) + 9;
+    } else {
+        eff_def = def_level + 9;
+    }
+    return eff_def * (def_bonus + 64);
+}
+
+/* NPC max hit by style: dispatches to melee/ranged/magic formula.
+   for magic, uses magic_base_dmg * magic_dmg_pct / 100. */
+static inline int osrs_npc_max_hit(
+    int attack_style,
+    int str_level, int range_level,
+    int melee_str_bonus, int ranged_str_bonus,
+    int magic_base_dmg, int magic_dmg_pct
+) {
+    if (attack_style == 1) /* ATTACK_STYLE_MELEE */
+        return osrs_npc_melee_max_hit(str_level, melee_str_bonus);
+    if (attack_style == 2) /* ATTACK_STYLE_RANGED */
+        return osrs_npc_ranged_max_hit(range_level, ranged_str_bonus);
+    if (attack_style == 3) /* ATTACK_STYLE_MAGIC */
+        return osrs_npc_magic_max_hit(magic_base_dmg, magic_dmg_pct);
+    return 0;
 }
 
 /* ======================================================================== */
