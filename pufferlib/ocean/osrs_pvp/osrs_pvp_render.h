@@ -358,7 +358,7 @@ typedef struct {
     Model ranged_proj_model; int ranged_proj_model_ready;
     Model magic_proj_model;  int magic_proj_model_ready;
     Model cloud_proj_model;  int cloud_proj_model_ready;
-    Model pillar_model;      int pillar_model_ready;
+    Model pillar_models[4];  int pillar_models_ready;  /* 0=100%, 1=75%, 2=50%, 3=25% HP */
 
     /* active projectile flights: interpolated at 50Hz between game ticks.
        spawned from encounter overlay events, auto-expired on arrival. */
@@ -603,11 +603,18 @@ static void render_init_overlay_models(RenderClient* rc) {
 
     rc->cloud_proj_model_ready = render_build_static_model(
         rc->model_cache, GFX_CLOUD_PROJ_MODEL, &rc->cloud_proj_model);
-    rc->pillar_model_ready = render_build_static_model(
-        rc->model_cache, INF_PILLAR_MODEL_100, &rc->pillar_model);
+    {
+        uint32_t pillar_ids[4] = { INF_PILLAR_MODEL_100, INF_PILLAR_MODEL_75,
+                                    INF_PILLAR_MODEL_50, INF_PILLAR_MODEL_25 };
+        rc->pillar_models_ready = 1;
+        for (int i = 0; i < 4; i++) {
+            if (!render_build_static_model(rc->model_cache, pillar_ids[i], &rc->pillar_models[i]))
+                rc->pillar_models_ready = 0;
+        }
+    }
 
     if (rc->cloud_model_ready) printf("overlay: cloud model loaded\n");
-    if (rc->pillar_model_ready) printf("overlay: pillar model loaded\n");
+    if (rc->pillar_models_ready) printf("overlay: pillar models loaded (4 HP levels)\n");
     if (rc->snakeling_model_ready) printf("overlay: snakeling model loaded\n");
     if (rc->ranged_proj_model_ready) printf("overlay: ranged projectile model loaded\n");
     if (rc->magic_proj_model_ready) printf("overlay: magic projectile model loaded\n");
@@ -760,7 +767,9 @@ static void render_destroy_client(RenderClient* rc) {
     if (rc->ranged_proj_model_ready) UnloadModel(rc->ranged_proj_model);
     if (rc->magic_proj_model_ready) UnloadModel(rc->magic_proj_model);
     if (rc->cloud_proj_model_ready) UnloadModel(rc->cloud_proj_model);
-    if (rc->pillar_model_ready) UnloadModel(rc->pillar_model);
+    if (rc->pillar_models_ready) {
+        for (int i = 0; i < 4; i++) UnloadModel(rc->pillar_models[i]);
+    }
     /* free per-entity composite models */
     for (int p = 0; p < MAX_RENDER_ENTITIES; p++) {
         composite_free(&rc->composites[p]);
@@ -2807,8 +2816,8 @@ static void render_draw_3d_world(RenderClient* rc) {
         }
     }
 
-    /* inferno pillars: dynamically spawned game objects (not in static objects file).
-       draw 3D model from cache if available, fallback to DrawCube blocks. */
+    /* inferno pillars: "Rocky support" objects with 4 HP-level models.
+       dynamically spawned (not in static objects file). */
     if (rc->npc_model_cache && rc->gui.encounter_state) {
         InfernoState* is = (InfernoState*)rc->gui.encounter_state;
         float plat_y = 2.0f;
@@ -2817,21 +2826,21 @@ static void render_draw_3d_world(RenderClient* rc) {
             if (!is->pillars[p].active) continue;
             float hp_frac = (float)is->pillars[p].hp / (float)INF_PILLAR_HP;
 
-            /* pillar center position (3x3 tile footprint) */
             float cx = (float)is->pillars[p].x + INF_PILLAR_SIZE / 2.0f;
             float cz = -(float)(is->pillars[p].y + INF_PILLAR_SIZE / 2) - 0.5f;
 
-            if (rc->pillar_model_ready) {
-                /* draw 3D model from OSRS cache */
+            if (rc->pillar_models_ready) {
+                /* select model by HP: 100%, 75%, 50%, 25% */
+                int mi = 0;
+                if (hp_frac <= 0.25f) mi = 3;
+                else if (hp_frac <= 0.50f) mi = 2;
+                else if (hp_frac <= 0.75f) mi = 1;
+
                 rlDisableBackfaceCulling();
-                rc->pillar_model.transform = MatrixMultiply(
+                rc->pillar_models[mi].transform = MatrixMultiply(
                     MatrixScale(-ms, ms, ms),
                     MatrixTranslate(cx, plat_y, cz));
-                /* HP tint: white at full, reddish when damaged */
-                Color tint = { (unsigned char)(255),
-                               (unsigned char)(255 * hp_frac),
-                               (unsigned char)(255 * hp_frac), 255 };
-                DrawModel(rc->pillar_model, (Vector3){0,0,0}, 1.0f, tint);
+                DrawModel(rc->pillar_models[mi], (Vector3){0,0,0}, 1.0f, WHITE);
                 rlEnableBackfaceCulling();
             } else {
                 /* fallback: colored DrawCube blocks */
@@ -2850,13 +2859,6 @@ static void render_draw_3d_world(RenderClient* rc) {
                     }
                 }
             }
-
-            /* HP-colored wireframe outline (always drawn) */
-            int wr = (int)(255 * (1.0f - hp_frac));
-            int wg = (int)(255 * hp_frac);
-            Color wire_col = { (unsigned char)wr, (unsigned char)wg, 0, 255 };
-            DrawCubeWires((Vector3){ cx, plat_y + 1.5f, cz },
-                          (float)INF_PILLAR_SIZE, 3.0f, (float)INF_PILLAR_SIZE, wire_col);
         }
     }
 
