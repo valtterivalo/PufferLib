@@ -406,6 +406,10 @@ typedef struct {
     /* pending hit from player attack (projectile in flight) */
     EncounterPendingHit pending_hit;
 
+    /* death linger: NPC stays visible for death animation + final hitsplat.
+       >0 means dying (decremented each tick), 0 = alive or fully removed. */
+    int death_ticks;
+
     /* per-tick render flags (cleared at start of each tick) */
     int attacked_this_tick;  /* 1 when NPC attacks this tick */
     int moved_this_tick;     /* 1 when NPC moves this tick */
@@ -1467,6 +1471,13 @@ static void inf_tick_npcs(InfernoState* s) {
     for (int i = 0; i < INF_MAX_NPCS; i++) {
         if (!s->npcs[i].active) continue;
 
+        /* death linger: decrement and deactivate when done */
+        if (s->npcs[i].death_ticks > 0) {
+            s->npcs[i].death_ticks--;
+            if (s->npcs[i].death_ticks == 0) s->npcs[i].active = 0;
+            continue;  /* dying NPCs don't move or attack */
+        }
+
         /* decrement ice barrage freeze timer */
         if (s->npcs[i].frozen_ticks > 0) s->npcs[i].frozen_ticks--;
 
@@ -1523,8 +1534,10 @@ static int inf_tile_walkable(void* ctx, int x, int y) {
    call after reducing npc->hp. checks if hp <= 0 and handles death effects. */
 static void inf_apply_npc_death(InfernoState* s, int npc_idx) {
     InfNPC* npc = &s->npcs[npc_idx];
-    if (npc->hp > 0 || !npc->active) return;
-    npc->active = 0;
+    if (npc->hp > 0 || !npc->active || npc->death_ticks > 0) return;
+    /* keep active=1 for death_ticks so renderer shows final hitsplat + death anim.
+       inf_tick_npcs decrements death_ticks and sets active=0 when it reaches 0. */
+    npc->death_ticks = 2;
 
     if (npc->type == INF_NPC_BLOB) {
         InfNPCType split_types[3] = {
@@ -1640,15 +1653,17 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
     int target = actions[INF_HEAD_TARGET];
     if (target > 0 && target <= INF_MAX_NPCS) {
         int npc_idx = target - 1;
-        if (s->npcs[npc_idx].active) {
+        if (s->npcs[npc_idx].active && s->npcs[npc_idx].death_ticks == 0) {
             s->player_attack_target = npc_idx;
         }
     } else if (actions[INF_HEAD_MOVE] > 0 || s->player_dest_x >= 0) {
         /* walking cancels attack target (OSRS: clicking ground stops auto-attack) */
         s->player_attack_target = -1;
     }
-    /* clear target if NPC died */
-    if (s->player_attack_target >= 0 && !s->npcs[s->player_attack_target].active) {
+    /* clear target if NPC died or is dying */
+    if (s->player_attack_target >= 0 &&
+        (!s->npcs[s->player_attack_target].active ||
+         s->npcs[s->player_attack_target].death_ticks > 0)) {
         s->player_attack_target = -1;
     }
 
@@ -1868,8 +1883,8 @@ static void inf_step(EncounterState* state, const int* actions) {
                 int dmg = ph->damage;
                 int is_ice_barrage = (ph->attack_style == ATTACK_STYLE_MAGIC && ph->check_prayer == 1);
                 int is_blood_barrage = (ph->attack_style == ATTACK_STYLE_MAGIC && ph->check_prayer == 0);
-                /* apply damage */
-                if (s->npcs[i].active) {
+                /* apply damage (skip dying NPCs in death linger) */
+                if (s->npcs[i].active && s->npcs[i].death_ticks == 0) {
                     encounter_damage_npc(&s->npcs[i].hp, &s->npcs[i].hit_landed_this_tick, &s->npcs[i].hit_damage, dmg);
                     /* always show hitsplat for queued hits (they passed accuracy) */
                     s->npcs[i].hit_landed_this_tick = 1;
@@ -2034,10 +2049,10 @@ static void inf_write_mask(EncounterState* state, float* mask) {
     mask[offset++] = (s->active_prayer != PRAYER_PROTECT_RANGED) ? 1.0f : 0.0f;
     mask[offset++] = (s->active_prayer != PRAYER_PROTECT_MAGIC) ? 1.0f : 0.0f;
 
-    /* HEAD_TARGET (INF_MAX_NPCS+1): none always valid, NPC valid only if active */
+    /* HEAD_TARGET (INF_MAX_NPCS+1): none always valid, NPC valid only if alive (not dying) */
     mask[offset++] = 1.0f;  /* no target */
     for (int n = 0; n < INF_MAX_NPCS; n++) {
-        mask[offset++] = s->npcs[n].active ? 1.0f : 0.0f;
+        mask[offset++] = (s->npcs[n].active && s->npcs[n].death_ticks == 0) ? 1.0f : 0.0f;
     }
 
     /* HEAD_GEAR (5): no_switch, mage, tbow, bp, tank */
@@ -2135,17 +2150,22 @@ static void inf_fill_render_entities(EncounterState* state, RenderEntity* out, i
         memset(re->equipped, ITEM_NONE, NUM_GEAR_SLOTS);
         re->entity_type = ENTITY_NPC;
         re->npc_def_id = INF_NPC_DEF_IDS[npc->type];
-        re->npc_slot = i;  /* NPC array slot for click targeting */
+        re->npc_slot = i;
+        re->attack_target_entity_idx = -1;
         re->npc_visible = npc->active;
         re->npc_size = npc->size;
         {
             const NpcModelMapping* nm = npc_model_lookup(INF_NPC_DEF_IDS[npc->type]);
-            if (npc->attacked_this_tick && nm && nm->attack_anim != 65535)
-                re->npc_anim_id = (int)nm->attack_anim;
-            else if (npc->moved_this_tick && nm && nm->walk_anim != 65535)
-                re->npc_anim_id = (int)nm->walk_anim;
-            else
+            if (npc->death_ticks > 0) {
+                /* dying: hold idle pose while hitsplat + health bar display */
                 re->npc_anim_id = nm ? (int)nm->idle_anim : -1;
+            } else if (npc->attacked_this_tick && nm && nm->attack_anim != 65535) {
+                re->npc_anim_id = (int)nm->attack_anim;
+            } else if (npc->moved_this_tick && nm && nm->walk_anim != 65535) {
+                re->npc_anim_id = (int)nm->walk_anim;
+            } else {
+                re->npc_anim_id = nm ? (int)nm->idle_anim : -1;
+            }
         }
         re->x = npc->x;
         re->y = npc->y;
@@ -2157,6 +2177,8 @@ static void inf_fill_render_entities(EncounterState* state, RenderEntity* out, i
         re->hit_landed_this_tick = npc->hit_landed_this_tick;
         re->hit_damage = npc->hit_damage;
     }
+
+    encounter_resolve_attack_target(out, n, s->player_attack_target);
     *count = n;
 }
 

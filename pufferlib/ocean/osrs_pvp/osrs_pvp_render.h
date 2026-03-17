@@ -1453,7 +1453,12 @@ static void render_client_tick(RenderClient* rc, int player_idx) {
         if (rc->facing_opponent[player_idx]) {
             /* recompute target yaw from current visual positions each client tick,
                matching how appendFocusDestination recalculates from live coords */
-            int opp = (rc->entity_count == 2) ? (1 - player_idx) : (player_idx == 0 ? 1 : 0);
+            int opp;
+            if (rc->entities[player_idx].attack_target_entity_idx >= 0) {
+                opp = rc->entities[player_idx].attack_target_entity_idx;
+            } else {
+                opp = (rc->entity_count == 2) ? (1 - player_idx) : (player_idx == 0 ? 1 : 0);
+            }
             float dx = (float)(rc->sub_x[opp] - rc->sub_x[player_idx]);
             float dy = (float)(rc->sub_y[opp] - rc->sub_y[player_idx]);
             if (dx != 0.0f || dy != 0.0f) {

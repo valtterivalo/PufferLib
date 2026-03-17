@@ -136,6 +136,7 @@ typedef struct {
     int used_special_this_tick;
     uint8_t equipped[NUM_GEAR_SLOTS];
     int npc_slot;  /* source slot index in encounter's NPC array; -1 for player */
+    int attack_target_entity_idx;  /* render entity index of attack target, -1 = none */
 } RenderEntity;
 
 /** Fill a RenderEntity from a Player struct (PvP, Zulrah, snakelings). */
@@ -168,6 +169,23 @@ static inline void render_entity_from_player(const Player* p, RenderEntity* out)
     out->used_special_this_tick = p->used_special_this_tick;
     memcpy(out->equipped, p->equipped, NUM_GEAR_SLOTS);
     out->npc_slot = -1;  /* player, not an NPC */
+    out->attack_target_entity_idx = -1;
+}
+
+/** Resolve attack_target_entity_idx for entity 0 (player) by matching npc_slot.
+    call after fill_render_entities populates the entity array. any encounter with
+    NPC targeting should call this so the renderer faces the correct target. */
+static inline void encounter_resolve_attack_target(
+    RenderEntity* entities, int count, int target_npc_slot
+) {
+    entities[0].attack_target_entity_idx = -1;
+    if (target_npc_slot < 0) return;
+    for (int i = 1; i < count; i++) {
+        if (entities[i].npc_slot == target_npc_slot) {
+            entities[0].attack_target_entity_idx = i;
+            return;
+        }
+    }
 }
 
 /* ======================================================================== */
