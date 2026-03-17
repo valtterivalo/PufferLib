@@ -1090,9 +1090,7 @@ static void inf_npc_attack(InfernoState* s, int idx) {
                         int ndx = s->npcs[n].x - s->pillars[p].x;
                         int ndy = s->npcs[n].y - s->pillars[p].y;
                         if (ndx >= -1 && ndx <= INF_PILLAR_SIZE && ndy >= -1 && ndy <= INF_PILLAR_SIZE) {
-                            s->npcs[n].hp -= 12;
-                            s->npcs[n].hit_landed_this_tick = 1;
-                            s->npcs[n].hit_damage = 12;
+                            encounter_damage_npc(&s->npcs[n].hp, &s->npcs[n].hit_landed_this_tick, &s->npcs[n].hit_damage, 12);
                             inf_apply_npc_death(s, n);
                         }
                     }
@@ -1103,12 +1101,7 @@ static void inf_npc_attack(InfernoState* s, int idx) {
                         if (pdx >= -1 && pdx <= INF_PILLAR_SIZE && pdy >= -1 && pdy <= INF_PILLAR_SIZE) {
                             /* TODO: find actual pillar collapse damage formula (server-side).
                                49 observed in-game, likely scales with something. */
-                            int pdmg = 49;
-                            s->player.current_hitpoints -= pdmg;
-                            if (s->player.current_hitpoints < 0) s->player.current_hitpoints = 0;
-                            s->damage_received_this_tick += pdmg;
-                            s->player.hit_landed_this_tick = 1;
-                            s->player.hit_damage = pdmg;
+                            encounter_damage_player(&s->player, 49, &s->damage_received_this_tick);
                         }
                     }
                 }
@@ -1169,10 +1162,7 @@ static void inf_npc_attack(InfernoState* s, int idx) {
             int dmg = inf_rand_int(s, stats->max_hit + 1);
             int prayer_matches = (s->active_prayer == PRAYER_PROTECT_MELEE);
             if (prayer_matches) { dmg = 0; s->prayer_correct_this_tick = 1; }
-            s->player.current_hitpoints -= dmg;
-            if (s->player.current_hitpoints < 0) s->player.current_hitpoints = 0;
-            s->damage_received_this_tick += dmg;
-            if (dmg > 0) { s->player.hit_landed_this_tick = 1; s->player.hit_damage = dmg; }
+            encounter_damage_player(&s->player, dmg, &s->damage_received_this_tick);
         }
         npc->attacked_this_tick = 1;
         npc->attack_timer = stats->attack_speed;
@@ -1233,7 +1223,7 @@ static void inf_npc_attack(InfernoState* s, int idx) {
                 s->player.y >= 41) {
                 /* shield absorbs the hit */
                 int dmg = inf_rand_int(s, stats->max_hit + 1);
-                shield->hp -= dmg;
+                encounter_damage_npc(&shield->hp, &shield->hit_landed_this_tick, &shield->hit_damage, dmg);
                 if (shield->hp <= 0) {
                     shield->active = 0;
                     s->zuk.shield_idx = -1;
@@ -1246,9 +1236,7 @@ static void inf_npc_attack(InfernoState* s, int idx) {
 
         /* typeless hit — not blockable by prayer, instant (no delay) */
         int dmg = inf_rand_int(s, stats->max_hit + 1);
-        s->player.current_hitpoints -= dmg;
-        if (s->player.current_hitpoints < 0) s->player.current_hitpoints = 0;
-        s->damage_received_this_tick += dmg;
+        encounter_damage_player(&s->player, dmg, &s->damage_received_this_tick);
         npc->attacked_this_tick = 1;
         npc->attack_timer = s->zuk.enraged ? 7 : stats->attack_speed;
         return;
@@ -1274,10 +1262,7 @@ static void inf_npc_attack(InfernoState* s, int idx) {
         /* melee: instant damage, check prayer now */
         int prayer_matches = inf_prayer_correct_for_style(s->active_prayer, actual_style);
         if (prayer_matches) { dmg = 0; s->prayer_correct_this_tick = 1; }
-        s->player.current_hitpoints -= dmg;
-        if (s->player.current_hitpoints < 0) s->player.current_hitpoints = 0;
-        s->damage_received_this_tick += dmg;
-        if (dmg > 0) { s->player.hit_landed_this_tick = 1; s->player.hit_damage = dmg; }
+        encounter_damage_player(&s->player, dmg, &s->damage_received_this_tick);
     } else {
         /* ranged/magic: queue pending hit on player */
         if (s->player_pending_hit_count < ENCOUNTER_MAX_PENDING_HITS) {
@@ -1864,7 +1849,8 @@ static void inf_step(EncounterState* state, const int* actions) {
                 int is_blood_barrage = (ph->attack_style == ATTACK_STYLE_MAGIC && ph->check_prayer == 0);
                 /* apply damage */
                 if (s->npcs[i].active) {
-                    s->npcs[i].hp -= dmg;
+                    encounter_damage_npc(&s->npcs[i].hp, &s->npcs[i].hit_landed_this_tick, &s->npcs[i].hit_damage, dmg);
+                    /* always show hitsplat for queued hits (they passed accuracy) */
                     s->npcs[i].hit_landed_this_tick = 1;
                     s->npcs[i].hit_damage = dmg;
                     s->damage_dealt_this_tick += dmg;
@@ -1900,10 +1886,7 @@ static void inf_step(EncounterState* state, const int* actions) {
                     s->player_pending_hits[i].attack_style);
                 if (correct) { dmg = 0; s->prayer_correct_this_tick = 1; }
             }
-            s->player.current_hitpoints -= dmg;
-            if (s->player.current_hitpoints < 0) s->player.current_hitpoints = 0;
-            s->damage_received_this_tick += dmg;
-            if (dmg > 0) { s->player.hit_landed_this_tick = 1; s->player.hit_damage = dmg; }
+            encounter_damage_player(&s->player, dmg, &s->damage_received_this_tick);
             /* remove from queue (swap with last) */
             s->player_pending_hits[i] = s->player_pending_hits[--s->player_pending_hit_count];
             i--;  /* re-check this index */

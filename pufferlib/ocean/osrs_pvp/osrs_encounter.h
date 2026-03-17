@@ -252,6 +252,38 @@ static inline int encounter_npc_step_toward(
 }
 
 /* ======================================================================== */
+/* shared damage application helpers                                         */
+/*                                                                           */
+/* ENCOUNTERS: use these instead of manually subtracting HP, clamping,       */
+/* and setting hit splat flags. prevents bugs from forgetting a step.        */
+/* ======================================================================== */
+
+/** apply damage to a player. updates HP (clamped to 0), sets hit splat flags,
+    and accumulates damage into a per-tick tracker (for reward calculation).
+    damage_tracker can be NULL if not needed. */
+static inline void encounter_damage_player(
+    Player* p, int damage, float* damage_tracker
+) {
+    if (damage <= 0) return;
+    p->current_hitpoints -= damage;
+    if (p->current_hitpoints < 0) p->current_hitpoints = 0;
+    if (damage_tracker) *damage_tracker += (float)damage;
+    p->hit_landed_this_tick = 1;
+    p->hit_damage = damage;
+}
+
+/** apply damage to an NPC-like entity via raw field pointers.
+    works with any struct that has hp/hit_landed/hit_damage int fields. */
+static inline void encounter_damage_npc(
+    int* hp, int* hit_landed, int* hit_damage, int damage
+) {
+    if (damage <= 0) return;
+    *hp -= damage;
+    *hit_landed = 1;
+    *hit_damage = damage;
+}
+
+/* ======================================================================== */
 /* shared per-tick flag clearing for encounters                              */
 /* ======================================================================== */
 
