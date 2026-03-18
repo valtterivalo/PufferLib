@@ -72,6 +72,21 @@ static const NpcModelMapping NPC_MODEL_MAP_INFERNO[] = {
     {7708, 0xC1E1C, 2867, 65535, 2863},  /* Jal-MejJak (zuk healer) */
 };
 
+/* inferno NPC walk animation IDs */
+#define INF_WALK_ANIM_NIBBLER  7572
+#define INF_WALK_ANIM_BAT  7577
+#define INF_WALK_ANIM_BLOB  7587
+#define INF_WALK_ANIM_BLOB_MELEE_SPLIT  7587
+#define INF_WALK_ANIM_BLOB_RANGE_SPLIT  7587
+#define INF_WALK_ANIM_BLOB_MAGE_SPLIT  7587
+#define INF_WALK_ANIM_MELEER  7596
+#define INF_WALK_ANIM_RANGER  7603
+#define INF_WALK_ANIM_MAGER  7608
+#define INF_WALK_ANIM_JALTOK_JAD  7588
+#define INF_WALK_ANIM_JAD_HEALER  2634
+#define INF_WALK_ANIM_ZUK_SHIELD  7567
+#define INF_WALK_ANIM_ZUK_HEALER  2863
+
 /* inferno spotanim (projectile/effect) model + animation IDs */
 #define INF_GFX_157_MODEL  3116  /* Jad magic hit */
 #define INF_GFX_157_ANIM   693
@@ -81,6 +96,8 @@ static const NpcModelMapping NPC_MODEL_MAP_INFERNO[] = {
 #define INF_GFX_448_ANIM   2659
 #define INF_GFX_451_MODEL  9342  /* Jad ranged hit */
 #define INF_GFX_451_ANIM   2660
+#define INF_GFX_942_MODEL  19374  /* Dragon arrow projectile (twisted bow) */
+#define INF_GFX_942_ANIM   5233
 #define INF_GFX_1374_MODEL  3082  /* Bat ranged projectile */
 #define INF_GFX_1374_ANIM   660
 #define INF_GFX_1375_MODEL  33006  /* Zuk magic projectile */

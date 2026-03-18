@@ -103,8 +103,17 @@ typedef struct {
         int active;
         int src_x, src_y;   /* source tile (e.g. Zulrah position) */
         int dst_x, dst_y;   /* target tile (e.g. player position) */
-        int style;           /* 0=ranged, 1=magic, 2=melee */
+        int style;           /* 0=ranged, 1=magic, 2=melee, 3=cloud, 4=spawn_orb */
         int damage;          /* for hit splat at destination */
+        /* flight parameters — encounters set these, renderer reads them */
+        int duration_ticks;  /* flight duration in client ticks (0 = use default 35) */
+        int start_h;         /* start height in OSRS units /128 (0 = use default) */
+        int end_h;           /* end height in OSRS units /128 (0 = use default) */
+        int curve;           /* OSRS slope param (0 = use default 16) */
+        float arc_height;    /* sinusoidal arc peak in tiles (0 = quadratic/straight) */
+        int tracks_target;   /* 1 = re-aim toward target each tick */
+        int src_size;        /* source entity size for center offset (0 = use boss_size) */
+        uint32_t model_id;   /* GFX model from cache (0 = style-based fallback) */
     } projectiles[ENCOUNTER_MAX_OVERLAY_PROJECTILES];
     int projectile_count;
 
@@ -112,6 +121,36 @@ typedef struct {
     int melee_target_active;
     int melee_target_x, melee_target_y;
 } EncounterOverlay;
+
+/* populate an overlay projectile slot with flight parameters.
+   encounters should call this instead of filling fields manually. */
+static inline int encounter_emit_projectile(
+    EncounterOverlay* ov,
+    int src_x, int src_y, int dst_x, int dst_y,
+    int style, int damage,
+    int duration_ticks, int start_h, int end_h, int curve,
+    float arc_height, int tracks_target, int src_size,
+    uint32_t model_id
+) {
+    if (ov->projectile_count >= ENCOUNTER_MAX_OVERLAY_PROJECTILES) return -1;
+    int i = ov->projectile_count++;
+    ov->projectiles[i].active = 1;
+    ov->projectiles[i].src_x = src_x;
+    ov->projectiles[i].src_y = src_y;
+    ov->projectiles[i].dst_x = dst_x;
+    ov->projectiles[i].dst_y = dst_y;
+    ov->projectiles[i].style = style;
+    ov->projectiles[i].damage = damage;
+    ov->projectiles[i].duration_ticks = duration_ticks;
+    ov->projectiles[i].start_h = start_h;
+    ov->projectiles[i].end_h = end_h;
+    ov->projectiles[i].curve = curve;
+    ov->projectiles[i].arc_height = arc_height;
+    ov->projectiles[i].tracks_target = tracks_target;
+    ov->projectiles[i].src_size = src_size;
+    ov->projectiles[i].model_id = model_id;
+    return i;
+}
 
 /* ======================================================================== */
 /* render entity: shared abstraction for renderer (value type, not pointer)  */

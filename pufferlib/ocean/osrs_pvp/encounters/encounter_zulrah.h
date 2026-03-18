@@ -2308,27 +2308,37 @@ static void zul_render_post_tick(EncounterState* state, EncounterOverlay* ov) {
     ov->melee_target_x = s->melee_target_x;
     ov->melee_target_y = s->melee_target_y;
 
-    /* projectile events this tick (attacks + cloud spits) */
+    /* projectile events this tick (attacks + cloud spits).
+       zulrah is size 5: start_h = 5*0.75*128 = 480, end_h = 64 (player size 1) */
     ov->projectile_count = 0;
     for (int i = 0; i < s->attack_event_count && ov->projectile_count < ENCOUNTER_MAX_OVERLAY_PROJECTILES; i++) {
-        int pi = ov->projectile_count++;
-        ov->projectiles[pi].active = 1;
-        ov->projectiles[pi].src_x = s->attack_events[i].src_x;
-        ov->projectiles[pi].src_y = s->attack_events[i].src_y;
-        ov->projectiles[pi].dst_x = s->attack_events[i].dst_x;
-        ov->projectiles[pi].dst_y = s->attack_events[i].dst_y;
-        ov->projectiles[pi].style = s->attack_events[i].style;
-        ov->projectiles[pi].damage = s->attack_events[i].damage;
+        if (s->attack_events[i].style == 4) {
+            /* snakeling spawn orb: flies to spawn point, no tracking */
+            encounter_emit_projectile(ov,
+                s->attack_events[i].src_x, s->attack_events[i].src_y,
+                s->attack_events[i].dst_x, s->attack_events[i].dst_y,
+                4, 0,
+                40, 100, 0, 12, 0.0f, 0, ZUL_NPC_SIZE, 0);
+        } else {
+            /* ranged/magic attack: tracks player, zulrah height → player height */
+            uint32_t zul_proj_model = (s->attack_events[i].style == 0)
+                ? GFX_RANGED_PROJ_MODEL : GFX_MAGIC_PROJ_MODEL;
+            encounter_emit_projectile(ov,
+                s->attack_events[i].src_x, s->attack_events[i].src_y,
+                s->attack_events[i].dst_x, s->attack_events[i].dst_y,
+                s->attack_events[i].style, s->attack_events[i].damage,
+                35, 480, 64, 16, 0.0f, 1, ZUL_NPC_SIZE, zul_proj_model);
+        }
     }
     for (int i = 0; i < s->cloud_event_count && ov->projectile_count < ENCOUNTER_MAX_OVERLAY_PROJECTILES; i++) {
-        int pi = ov->projectile_count++;
-        ov->projectiles[pi].active = 1;
-        ov->projectiles[pi].src_x = s->cloud_events[i].src_x;
-        ov->projectiles[pi].src_y = s->cloud_events[i].src_y;
-        ov->projectiles[pi].dst_x = s->cloud_events[i].dst_x;
-        ov->projectiles[pi].dst_y = s->cloud_events[i].dst_y;
-        ov->projectiles[pi].style = 3;  /* cloud projectile */
-        ov->projectiles[pi].damage = s->cloud_events[i].flight_ticks;  /* repurpose: flight duration */
+        encounter_emit_projectile(ov,
+            s->cloud_events[i].src_x, s->cloud_events[i].src_y,
+            s->cloud_events[i].dst_x, s->cloud_events[i].dst_y,
+            3, 0,  /* style=cloud, damage=0 */
+            /* duration from flight_ticks * 30, high arc start, ground end,
+               curve=10, arc_height=3.0 (high sinusoidal), no tracking, src_size=5 */
+            s->cloud_events[i].flight_ticks * 30, 200, 0, 10, 3.0f, 0, ZUL_NPC_SIZE,
+            GFX_CLOUD_PROJ_MODEL);
     }
 }
 static int zul_get_winner(EncounterState* state) { return ((ZulrahState*)state)->winner; }

@@ -103,6 +103,8 @@ INFERNO_SPOTANIM_IDS = {
     1384: "Blob magic",
     # healer
     1385: "Healer magic attack",
+    # player projectiles (needed for tbow in inferno)
+    942: "Dragon arrow projectile (twisted bow)",
 }
 
 

@@ -100,6 +100,9 @@ typedef struct {
     float height_accel;         /* quadratic height correction */
     float yaw;                  /* current facing direction (radians) */
     float pitch;                /* current vertical tilt (radians) */
+    float arc_height;           /* sinusoidal arc peak in tiles (0 = use quadratic) */
+    int tracks_target;          /* 1 = re-aim toward target each tick */
+    uint32_t model_id;          /* GFX model from cache (0 = style-based fallback) */
 } FlightProjectile;
 
 /* ======================================================================== */
@@ -364,6 +367,11 @@ typedef struct {
        spawned from encounter overlay events, auto-expired on arrival. */
     FlightProjectile flights[MAX_FLIGHT_PROJECTILES];
 
+    /* dynamic projectile model cache: lazily loads per-NPC-type projectile models */
+#define MAX_PROJ_MODELS 16
+    struct { uint32_t id; Model model; int ready; } proj_models[MAX_PROJ_MODELS];
+    int proj_model_count;
+
     /* collision map: pointer to env's CollisionMap (shared, not owned).
        world offset translates arena coords to collision map world coords. */
     const CollisionMap* collision_map;
@@ -585,6 +593,27 @@ static int render_build_static_model(ModelCache* cache, uint32_t model_id, Model
     return 1;
 }
 
+/** Lazily load and cache a projectile model by GFX model ID.
+ *  Searches both model_cache and npc_model_cache. Returns NULL if not found
+ *  or if model_id is 0 (style-based fallback). */
+static Model* render_get_proj_model(RenderClient* rc, uint32_t model_id) {
+    if (model_id == 0) return NULL;
+    for (int i = 0; i < rc->proj_model_count; i++) {
+        if (rc->proj_models[i].id == model_id)
+            return rc->proj_models[i].ready ? &rc->proj_models[i].model : NULL;
+    }
+    if (rc->proj_model_count >= MAX_PROJ_MODELS) return NULL;
+    int idx = rc->proj_model_count++;
+    rc->proj_models[idx].id = model_id;
+    rc->proj_models[idx].ready = render_build_static_model(
+        rc->model_cache, model_id, &rc->proj_models[idx].model);
+    if (!rc->proj_models[idx].ready && rc->npc_model_cache) {
+        rc->proj_models[idx].ready = render_build_static_model(
+            rc->npc_model_cache, model_id, &rc->proj_models[idx].model);
+    }
+    return rc->proj_models[idx].ready ? &rc->proj_models[idx].model : NULL;
+}
+
 /**
  * Build all overlay models (clouds, projectiles, snakelings) from the model cache.
  * Call after model_cache is loaded.
@@ -636,7 +665,8 @@ static void render_init_overlay_models(RenderClient* rc) {
 static void flight_spawn(RenderClient* rc,
                          float src_x, float src_y, float dst_x, float dst_y,
                          int style, int damage,
-                         int duration_ticks, int start_h, int end_h, int curve) {
+                         int duration_ticks, int start_h, int end_h, int curve,
+                         float arc_height, int tracks_target, uint32_t model_id) {
     int slot = -1;
     for (int i = 0; i < MAX_FLIGHT_PROJECTILES; i++) {
         if (!rc->flights[i].active) { slot = i; break; }
@@ -659,17 +689,26 @@ static void flight_spawn(RenderClient* rc,
     fp->curve = (float)curve;
     fp->style = style;
     fp->damage = damage;
+    fp->arc_height = arc_height;
+    fp->tracks_target = tracks_target;
+    fp->model_id = model_id;
 
-    /* height arc: OSRS SceneProjectile.calculateIncrements */
+    /* height arc: OSRS SceneProjectile.calculateIncrements
+       skip quadratic computation when using sinusoidal arc */
     float dx = dst_x - src_x, dy = dst_y - src_y;
     float dist = sqrtf(dx * dx + dy * dy);
     if (dist < 0.01f) dist = 1.0f;
-    fp->height_vel = -dist * tanf(curve * PROJ_OSRS_SLOPE_TO_RAD);
-    fp->height_accel = 2.0f * (fp->end_height - fp->start_height - fp->height_vel);
+    if (arc_height > 0.0f) {
+        fp->height_vel = 0.0f;
+        fp->height_accel = 0.0f;
+    } else {
+        fp->height_vel = -dist * tanf(curve * PROJ_OSRS_SLOPE_TO_RAD);
+        fp->height_accel = 2.0f * (fp->end_height - fp->start_height - fp->height_vel);
+    }
 
     /* initial facing */
     fp->yaw = atan2f(dx, dy);
-    fp->pitch = atan2f(fp->height_vel, dist);
+    fp->pitch = (arc_height > 0.0f) ? 0.0f : atan2f(fp->height_vel, dist);
 }
 
 /**
@@ -713,20 +752,6 @@ static void flight_client_tick(RenderClient* rc) {
 }
 
 /**
- * Update target position for in-flight projectiles matching a style.
- * Call each game tick with the target entity's current position.
- */
-static void flight_update_targets(RenderClient* rc, int style_match, float new_x, float new_y) {
-    for (int i = 0; i < MAX_FLIGHT_PROJECTILES; i++) {
-        FlightProjectile* fp = &rc->flights[i];
-        if (!fp->active) continue;
-        if (style_match >= 0 && fp->style != style_match) continue;
-        fp->dst_x = new_x;
-        fp->dst_y = new_y;
-    }
-}
-
-/**
  * Get the interpolated world position of a flight projectile.
  */
 static Vector3 flight_get_position(const FlightProjectile* fp, float src_ground, float dst_ground) {
@@ -735,7 +760,15 @@ static Vector3 flight_get_position(const FlightProjectile* fp, float src_ground,
     if (t > 1.0f) t = 1.0f;
 
     float ground = src_ground + (dst_ground - src_ground) * t;
-    float h = fp->start_height + fp->height_vel * t + 0.5f * fp->height_accel * t * t;
+    float h;
+    if (fp->arc_height > 0.0f) {
+        /* sinusoidal arc (from InfernoTrainer ArcProjectileMotionInterpolator) */
+        h = sinf(t * 3.14159265f) * fp->arc_height
+            + fp->start_height + (fp->end_height - fp->start_height) * t;
+    } else {
+        /* quadratic arc (OSRS SceneProjectile) */
+        h = fp->start_height + fp->height_vel * t + 0.5f * fp->height_accel * t * t;
+    }
 
     return (Vector3){ fp->x + 0.5f, ground + h, -(fp->y + 1.0f) + 0.5f };
 }
@@ -769,6 +802,10 @@ static void render_destroy_client(RenderClient* rc) {
     if (rc->cloud_proj_model_ready) UnloadModel(rc->cloud_proj_model);
     if (rc->pillar_models_ready) {
         for (int i = 0; i < 4; i++) UnloadModel(rc->pillar_models[i]);
+    }
+    /* free dynamic projectile model cache */
+    for (int i = 0; i < rc->proj_model_count; i++) {
+        if (rc->proj_models[i].ready) UnloadModel(rc->proj_models[i].model);
     }
     /* free per-entity composite models */
     for (int p = 0; p < MAX_RENDER_ENTITIES; p++) {
@@ -1253,41 +1290,49 @@ static void render_post_tick(RenderClient* rc, OsrsPvp* env) {
         if (target_i < 0 || target_i >= rc->entity_count) continue;
         RenderEntity* t = &rc->entities[target_i];
 
-        /* attacker cast a spell this tick — spawn projectile */
-        if (p->attack_style_this_tick == ATTACK_STYLE_MAGIC) {
-            uint8_t wpn = p->equipped[GEAR_SLOT_WEAPON];
-            if (wpn == ITEM_TRIDENT_OF_SWAMP || wpn == ITEM_SANGUINESTI_STAFF ||
-                wpn == ITEM_EYE_OF_AYAK) {
-                /* trident/sang/ayak: powered staff projectile */
-                effect_spawn_projectile(rc->effects, GFX_TRIDENT_PROJ,
-                    p->x, p->y, t->x, t->y,
-                    0, 40, 40 * 4, 30 * 4, 16, ct, rc->model_cache);
-            } else if (p->magic_type_this_tick == 1) {
-                /* ice barrage: projectile orb rises from target tile
-                   heights *4 per reference (stream.readUnsignedByte() * 4) */
-                effect_spawn_projectile(rc->effects, GFX_ICE_BARRAGE_PROJ,
-                    t->x, t->y, t->x, t->y,  /* src=dst (rises in place) */
-                    0, 56, 43 * 4, 0, 16, ct, rc->model_cache);
-            }
-            /* blood barrage: no projectile, impact spawns on hit */
-        }
+        /* attacker projectile effects: only for PvP (no encounter overlay).
+           encounters with render_post_tick handle their own projectiles via
+           encounter_emit_projectile -> flight system. */
+        int has_encounter_overlay = (env->encounter_def &&
+            ((const EncounterDef*)env->encounter_def)->render_post_tick);
 
-        /* attacker fired a ranged attack this tick */
-        if (p->attack_style_this_tick == ATTACK_STYLE_RANGED) {
-            uint8_t wpn = p->equipped[GEAR_SLOT_WEAPON];
-            int gfx;
-            if (wpn == ITEM_TOXIC_BLOWPIPE) {
-                gfx = GFX_DRAGON_DART;
-            } else if (wpn == ITEM_MAGIC_SHORTBOW_I || wpn == ITEM_DARK_BOW ||
-                       wpn == ITEM_BOW_OF_FAERDHINEN || wpn == ITEM_TWISTED_BOW) {
-                gfx = GFX_RUNE_ARROW;
-            } else {
-                gfx = GFX_BOLT;  /* crossbows, default */
+        if (!has_encounter_overlay) {
+            /* attacker cast a spell this tick — spawn projectile */
+            if (p->attack_style_this_tick == ATTACK_STYLE_MAGIC) {
+                uint8_t wpn = p->equipped[GEAR_SLOT_WEAPON];
+                if (wpn == ITEM_TRIDENT_OF_SWAMP || wpn == ITEM_SANGUINESTI_STAFF ||
+                    wpn == ITEM_EYE_OF_AYAK) {
+                    /* trident/sang/ayak: powered staff projectile */
+                    effect_spawn_projectile(rc->effects, GFX_TRIDENT_PROJ,
+                        p->x, p->y, t->x, t->y,
+                        0, 40, 40 * 4, 30 * 4, 16, ct, rc->model_cache);
+                } else if (p->magic_type_this_tick == 1) {
+                    /* ice barrage: projectile orb rises from target tile
+                       heights *4 per reference (stream.readUnsignedByte() * 4) */
+                    effect_spawn_projectile(rc->effects, GFX_ICE_BARRAGE_PROJ,
+                        t->x, t->y, t->x, t->y,  /* src=dst (rises in place) */
+                        0, 56, 43 * 4, 0, 16, ct, rc->model_cache);
+                }
+                /* blood barrage: no projectile, impact spawns on hit */
             }
-            /* heights *4 per reference: 43*4=172 start, 31*4=124 end */
-            effect_spawn_projectile(rc->effects, gfx,
-                p->x, p->y, t->x, t->y,
-                0, 40, 43 * 4, 31 * 4, 16, ct, rc->model_cache);
+
+            /* attacker fired a ranged attack this tick */
+            if (p->attack_style_this_tick == ATTACK_STYLE_RANGED) {
+                uint8_t wpn = p->equipped[GEAR_SLOT_WEAPON];
+                int gfx;
+                if (wpn == ITEM_TOXIC_BLOWPIPE) {
+                    gfx = GFX_DRAGON_DART;
+                } else if (wpn == ITEM_MAGIC_SHORTBOW_I || wpn == ITEM_DARK_BOW ||
+                           wpn == ITEM_BOW_OF_FAERDHINEN || wpn == ITEM_TWISTED_BOW) {
+                    gfx = GFX_RUNE_ARROW;
+                } else {
+                    gfx = GFX_BOLT;  /* crossbows, default */
+                }
+                /* heights *4 per reference: 43*4=172 start, 31*4=124 end */
+                effect_spawn_projectile(rc->effects, gfx,
+                    p->x, p->y, t->x, t->y,
+                    0, 40, 43 * 4, 31 * 4, 16, ct, rc->model_cache);
+            }
         }
 
         /* defender: check what landed on entity p this tick.
@@ -1340,45 +1385,50 @@ static void render_post_tick(RenderClient* rc, OsrsPvp* env) {
         if (edef->render_post_tick) {
             edef->render_post_tick(env->encounter_state, &rc->encounter_overlay);
 
-            /* spawn flight projectiles from new overlay events.
-               attack projectiles: duration=35 client ticks, startH=85, endH=40, curve=16.
-               cloud projectiles: duration = flight_ticks * 30 client ticks (stored in .damage),
-               startH=200 (high arc), endH=0 (ground), curve=10 */
+            /* spawn flight projectiles from overlay events.
+               per-projectile params with backward-compat defaults. */
             EncounterOverlay* ov = &rc->encounter_overlay;
             for (int i = 0; i < ov->projectile_count; i++) {
                 if (!ov->projectiles[i].active) continue;
-                float half_sz = (float)ov->boss_size / 2.0f;
+                int sz = ov->projectiles[i].src_size > 0 ? ov->projectiles[i].src_size : ov->boss_size;
+                float half_sz = (float)sz / 2.0f;
                 float sx = (float)ov->projectiles[i].src_x + half_sz;
                 float sy = (float)ov->projectiles[i].src_y + half_sz;
                 float dx = (float)ov->projectiles[i].dst_x;
                 float dy = (float)ov->projectiles[i].dst_y;
-                if (ov->projectiles[i].style == 3) {
-                    /* cloud projectile: flies for N game ticks (30 client ticks each) */
-                    int flight_ticks = ov->projectiles[i].damage;
-                    flight_spawn(rc, sx, sy, dx + 0.5f, dy + 0.5f,
-                        3, 0, flight_ticks * 30, 200, 0, 10);
-                } else if (ov->projectiles[i].style == 4) {
-                    /* snakeling spawn orb: flies to spawn point, doesn't track */
-                    flight_spawn(rc, sx, sy, dx + 0.5f, dy + 0.5f,
-                        4, 0, 40, 100, 0, 12);
-                } else {
-                    /* attack projectile: tracks player */
-                    flight_spawn(rc, sx, sy, dx, dy,
-                        ov->projectiles[i].style, ov->projectiles[i].damage,
-                        35, 85, 40, 16);
+
+                /* use per-projectile params, with defaults for backward compat */
+                int dur = ov->projectiles[i].duration_ticks > 0 ? ov->projectiles[i].duration_ticks : 35;
+                int sh  = ov->projectiles[i].start_h > 0 ? ov->projectiles[i].start_h : 85;
+                int eh  = ov->projectiles[i].end_h > 0 ? ov->projectiles[i].end_h : 40;
+                int cv  = ov->projectiles[i].curve > 0 ? ov->projectiles[i].curve : 16;
+                float arc = ov->projectiles[i].arc_height;
+                int trk = ov->projectiles[i].tracks_target;
+
+                /* cloud/orb styles: offset dst to tile center */
+                if (ov->projectiles[i].style == 3 || ov->projectiles[i].style == 4) {
+                    dx += 0.5f;
+                    dy += 0.5f;
                 }
+
+                flight_spawn(rc, sx, sy, dx, dy,
+                    ov->projectiles[i].style, ov->projectiles[i].damage,
+                    dur, sh, eh, cv, arc, trk, ov->projectiles[i].model_id);
             }
 
-            /* update attack projectile targets to track player's current position */
+            /* update tracking projectile targets to player's current position */
             if (rc->entity_count > 0) {
                 float px = (float)rc->entities[0].x;
                 float py = (float)rc->entities[0].y;
-                flight_update_targets(rc, 0, px, py);  /* ranged */
-                flight_update_targets(rc, 1, px, py);  /* magic */
+                for (int fi = 0; fi < MAX_FLIGHT_PROJECTILES; fi++) {
+                    if (rc->flights[fi].active && rc->flights[fi].tracks_target) {
+                        rc->flights[fi].dst_x = px;
+                        rc->flights[fi].dst_y = py;
+                    }
+                }
             }
         }
     }
-skip_effects: (void)0;
 }
 
 /**
@@ -3052,21 +3102,28 @@ static void render_draw_3d_world(RenderClient* rc) {
             Vector3 pos = flight_get_position(fp, src_ground, dst_ground);
 
             Model* proj_model = NULL;
-            if (fp->style == 0 && rc->ranged_proj_model_ready)
-                proj_model = &rc->ranged_proj_model;
-            else if (fp->style == 1 && rc->magic_proj_model_ready)
-                proj_model = &rc->magic_proj_model;
-            else if (fp->style == 3 && rc->cloud_proj_model_ready)
-                proj_model = &rc->cloud_proj_model;
-            else if (fp->style == 4 && rc->ranged_proj_model_ready)
-                proj_model = &rc->ranged_proj_model;  /* spawn orb reuses ranged mesh */
+            if (fp->model_id > 0) {
+                proj_model = render_get_proj_model(rc, fp->model_id);
+            }
+            if (!proj_model) {
+                /* style-based fallback for backward compatibility */
+                if (fp->style == 0 && rc->ranged_proj_model_ready)
+                    proj_model = &rc->ranged_proj_model;
+                else if (fp->style == 1 && rc->magic_proj_model_ready)
+                    proj_model = &rc->magic_proj_model;
+                else if (fp->style == 3 && rc->cloud_proj_model_ready)
+                    proj_model = &rc->cloud_proj_model;
+                else if (fp->style == 4 && rc->ranged_proj_model_ready)
+                    proj_model = &rc->ranged_proj_model;  /* spawn orb reuses ranged mesh */
+            }
 
             if (proj_model) {
                 rlDisableBackfaceCulling();
+                float pms = 1.0f / 128.0f;
                 proj_model->transform = MatrixMultiply(
                     MatrixMultiply(
-                        MatrixScale(ms, ms, ms),
-                        MatrixMultiply(MatrixRotateX(fp->pitch), MatrixRotateY(fp->yaw))),
+                        MatrixScale(-pms, pms, pms),
+                        MatrixMultiply(MatrixRotateY(fp->yaw + 1.5707963f), MatrixRotateX(fp->pitch))),
                     MatrixTranslate(pos.x, pos.y, pos.z));
                 DrawModel(*proj_model, (Vector3){0,0,0}, 1.0f, WHITE);
                 rlEnableBackfaceCulling();

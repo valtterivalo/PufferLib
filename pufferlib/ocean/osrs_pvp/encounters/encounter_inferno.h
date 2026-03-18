@@ -2261,7 +2261,8 @@ static void inf_fill_render_entities(EncounterState* state, RenderEntity* out, i
         re->dest_y = npc->target_y;
         re->current_hitpoints = npc->hp;
         re->base_hitpoints = npc->max_hp;
-        re->attack_style_this_tick = (AttackStyle)npc->attack_style;
+        re->attack_style_this_tick = npc->attacked_this_tick
+            ? (AttackStyle)npc->attack_style : ATTACK_STYLE_NONE;
         re->hit_landed_this_tick = npc->hit_landed_this_tick;
         re->hit_damage = npc->hit_damage;
         /* barrage hits that pass accuracy are queued; splashes never enter the queue.
@@ -2331,7 +2332,7 @@ static void inf_render_post_tick(EncounterState* state, EncounterOverlay* ov) {
     InfernoState* s = (InfernoState*)state;
     ov->projectile_count = 0;
 
-    /* NPC attack projectiles */
+    /* NPC attack projectiles — per-NPC-type flight parameters */
     for (int i = 0; i < INF_MAX_NPCS; i++) {
         InfNPC* npc = &s->npcs[i];
         if (!npc->active || !npc->attacked_this_tick) continue;
@@ -2351,14 +2352,67 @@ static void inf_render_post_tick(EncounterState* state, EncounterOverlay* ov) {
         if (npc->type == INF_NPC_ZUK)
             actual_style = ATTACK_STYLE_MAGIC;
 
-        int pi = ov->projectile_count++;
-        ov->projectiles[pi].active = 1;
-        ov->projectiles[pi].src_x = npc->x;
-        ov->projectiles[pi].src_y = npc->y;
-        ov->projectiles[pi].dst_x = s->player.x;
-        ov->projectiles[pi].dst_y = s->player.y;
-        ov->projectiles[pi].style = inf_attack_style_to_proj_style(actual_style);
-        ov->projectiles[pi].damage = (int)s->damage_received_this_tick;
+        int proj_style = inf_attack_style_to_proj_style(actual_style);
+        int npc_size = stats->size;
+        int start_h = (int)(npc_size * 0.75f * 128);
+        int end_h = 64;  /* player: size 1 * 0.5 * 128 */
+        int dist = encounter_dist_to_npc(s->player.x, s->player.y,
+            npc->x, npc->y, npc_size);
+        int hit_delay;
+        if (actual_style == ATTACK_STYLE_MAGIC)
+            hit_delay = encounter_magic_hit_delay(dist, 0);
+        else
+            hit_delay = encounter_ranged_hit_delay(dist, 0);
+        int duration = hit_delay * 30;
+        int curve = 16;
+        float arc = 0.0f;
+        int tracks = 1;
+
+        /* per-NPC-type projectile GFX model ID */
+        uint32_t proj_model_id = 0;
+        switch (npc->type) {
+            case INF_NPC_BAT:        proj_model_id = INF_GFX_1374_MODEL; break;
+            case INF_NPC_BLOB:       proj_model_id = (actual_style == ATTACK_STYLE_RANGED) ? INF_GFX_1383_MODEL : INF_GFX_1384_MODEL; break;
+            case INF_NPC_BLOB_RANGE: proj_model_id = INF_GFX_1383_MODEL; break;
+            case INF_NPC_BLOB_MAGE:  proj_model_id = INF_GFX_1384_MODEL; break;
+            case INF_NPC_BLOB_MELEE: proj_model_id = INF_GFX_1382_MODEL; break;
+            case INF_NPC_RANGER:     proj_model_id = INF_GFX_1377_MODEL; break;
+            case INF_NPC_MAGER:      proj_model_id = INF_GFX_1379_MODEL; break;
+            case INF_NPC_JAD:
+                proj_model_id = (actual_style == ATTACK_STYLE_MAGIC) ? INF_GFX_448_MODEL : INF_GFX_447_MODEL;
+                break;
+            case INF_NPC_ZUK:        proj_model_id = INF_GFX_1375_MODEL; break;
+            case INF_NPC_HEALER_ZUK: proj_model_id = INF_GFX_1385_MODEL; break;
+            default: break;
+        }
+
+        /* NPC-specific flight overrides */
+        switch (npc->type) {
+            case INF_NPC_MAGER:
+                duration += 60;  /* visual delay ~2 ticks */
+                break;
+            case INF_NPC_RANGER:
+                duration += 60;  /* visual delay ~2 ticks + slower travel */
+                break;
+            case INF_NPC_JAD:
+                if (actual_style == ATTACK_STYLE_MAGIC) {
+                    arc = 1.0f;  /* arcing magic projectile */
+                }
+                break;
+            case INF_NPC_HEALER_ZUK:
+                arc = 3.0f;      /* high arcing spark */
+                duration = 4 * 30;  /* fixed 4 tick delay */
+                break;
+            case INF_NPC_ZUK:
+                duration = 4 * 30;  /* fixed 4 tick delay */
+                break;
+            default: break;
+        }
+
+        encounter_emit_projectile(ov,
+            npc->x, npc->y, s->player.x, s->player.y,
+            proj_style, (int)s->damage_received_this_tick,
+            duration, start_h, end_h, curve, arc, tracks, npc_size, proj_model_id);
     }
 
     /* player attack projectile (ranged/magic only — melee has no projectile) */
@@ -2368,14 +2422,39 @@ static void inf_render_post_tick(EncounterState* state, EncounterOverlay* ov) {
         int target_idx = s->player_attack_npc_idx;
         if (target_idx >= 0 && target_idx < INF_MAX_NPCS) {
             InfNPC* target = &s->npcs[target_idx];
-            int pi = ov->projectile_count++;
-            ov->projectiles[pi].active = 1;
-            ov->projectiles[pi].src_x = s->player.x;
-            ov->projectiles[pi].src_y = s->player.y;
-            ov->projectiles[pi].dst_x = target->x;
-            ov->projectiles[pi].dst_y = target->y;
-            ov->projectiles[pi].style = inf_attack_style_to_proj_style(s->player_attack_style_id);
-            ov->projectiles[pi].damage = s->player_attack_dmg;
+            int target_size = INF_NPC_STATS[target->type].size;
+            int p_start_h = 64;   /* player: size 1 * 0.5 * 128 */
+            int p_end_h = (int)(target_size * 0.5f * 128);
+            int p_dist = encounter_dist_to_npc(s->player.x, s->player.y,
+                target->x, target->y, target_size);
+            int p_style = inf_attack_style_to_proj_style(s->player_attack_style_id);
+            float p_arc = 0.0f;
+            int p_tracks = 1;
+            int p_duration;
+
+            uint32_t player_proj_model = 0;
+            if (s->weapon_set == INF_GEAR_MAGE) {
+                p_duration = encounter_magic_hit_delay(p_dist, 1) * 30;
+                p_arc = 0.0f;
+                /* barrage: no projectile model (effect system handles it) */
+            } else if (s->weapon_set == INF_GEAR_TBOW) {
+                p_duration = encounter_ranged_hit_delay(p_dist, 1) * 30;
+                p_arc = 1.0f;
+                player_proj_model = 3136;  /* rune arrow (GFX 15) — dragon arrow visually similar */
+            } else {
+                /* blowpipe */
+                p_duration = encounter_ranged_hit_delay(p_dist, 1) * 30;
+                p_arc = 0.5f;
+                player_proj_model = 26379;  /* dragon dart */
+            }
+
+            /* barrage has no in-flight projectile in OSRS (only hit splash) */
+            if (player_proj_model > 0) {
+                encounter_emit_projectile(ov,
+                    s->player.x, s->player.y, target->x, target->y,
+                    p_style, s->player_attack_dmg,
+                    p_duration, p_start_h, p_end_h, 16, p_arc, p_tracks, 1, player_proj_model);
+            }
         }
     }
 }
