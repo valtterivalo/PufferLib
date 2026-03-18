@@ -158,14 +158,6 @@ pybind11::dict log_environments(pybind11::object pufferl_obj) {
     return py_out;
 }
 
-void python_vec_recv(pybind11::object /*pufferl_obj*/, int /*buf*/) {
-    // Not used in static/OMP path
-}
-
-void python_vec_send(pybind11::object /*pufferl_obj*/, int /*buf*/) {
-    // Not used in static/OMP path
-}
-
 void render(pybind11::object pufferl_obj, int env_id) {
     PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
     static_vec_render(pufferl.vec, env_id);
@@ -559,8 +551,6 @@ PYBIND11_MODULE(_C, m) {
     m.def("close", &puf_close);
     m.def("save_weights", &save_weights);
     m.def("load_weights", &load_weights);
-    m.def("python_vec_recv", &python_vec_recv);
-    m.def("python_vec_send", &python_vec_send);
 
     py::class_<Policy>(m, "Policy");
     py::class_<Muon>(m, "Muon");

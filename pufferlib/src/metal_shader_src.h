@@ -17,11 +17,10 @@
  *  12. Transpose kernels (transpose_f32, transpose_01, transpose_01_u64)
  *  13. Norm and clip (norm_f32, norm_reduce, clip_by_norm, normalize)
  *  14. Variance/mean (var_mean)
- *  15. Sum rows (sum_rows_add, sum_rows_to_f32)
+ *  15. Sum rows (sum_rows_to_f32)
  *  16. Decoder grad assembly (assemble_decoder_grad_f32)
  *  17. Select/copy + index copy (minibatch assembly)
  *  18. Cast (cast_u8_to_f32, cast_f64_to_f32)
- *  19. Orthogonal init helpers (sign_correct_columns, extract_diag_sign, colmaj_to_rowmaj_scale)
  *
  * Float32 only — no bf16 variants.
  */
@@ -1133,10 +1132,6 @@ kernel void ppo_loss_reduce_kernel(
 // Section 8: Advantage kernel
 // ============================================================================
 
-// ============================================================================
-// Section 8: Advantage kernel
-// ============================================================================
-
 struct AdvantageParams {
     float gamma;
     float lambda;
@@ -1326,26 +1321,6 @@ kernel void copy_f32(
     uint idx [[thread_position_in_grid]]
 ) {
     if ((int)idx < n) dst[idx] = src[idx];
-}
-
-// TF32 round-copy: copies src → dst with TF32 mantissa truncation.
-// Zeros the lower 13 mantissa bits of each float, matching CUDA TF32
-// tensor core precision (10-bit mantissa multiply, fp32 accumulate).
-kernel void tf32_round_copy_kernel(
-    device float* dst           [[buffer(0)]],
-    device const float* src     [[buffer(1)]],
-    constant int& n             [[buffer(2)]],
-    uint idx [[thread_position_in_grid]]
-) {
-    if ((int)idx >= n) return;
-    uint bits = as_type<uint>(src[idx]);
-    // Round-to-nearest (matching CUDA TF32 tensor core behavior):
-    // Add 0.5 ULP at bit 12, then truncate lower 13 bits.
-    // Skip rounding for inf/NaN (exponent 0xFF) to avoid inf → NaN.
-    uint exp = bits & 0x7F800000u;
-    bits = (exp != 0x7F800000u) ? ((bits + 0x1000u) & 0xFFFFE000u)
-                                : (bits & 0xFFFFE000u);
-    dst[idx] = as_type<float>(bits);
 }
 
 // TF32 in-place rounding: rounds buffer values to 10-bit mantissa in-place.
@@ -1748,20 +1723,7 @@ struct SumRowsParams {
     int C;
 };
 
-// dst[c] += sum over rows of src[:, c]
-kernel void sum_rows_add_kernel(
-    device float* dst               [[buffer(0)]],
-    const device float* src         [[buffer(1)]],
-    constant SumRowsParams& p       [[buffer(2)]],
-    uint col [[thread_position_in_grid]]
-) {
-    if ((int)col >= p.C) return;
-    float sum = 0.0f;
-    for (int r = 0; r < p.R; r++) sum += src[r * p.C + (int)col];
-    dst[col] += sum;
-}
-
-// dst[c] = sum over rows of src[:, c] (set, not accumulate)
+// dst[c] = sum over rows of src[:, c]
 kernel void sum_rows_to_f32_kernel(
     device float* dst               [[buffer(0)]],
     const device float* src         [[buffer(1)]],
@@ -1774,7 +1736,6 @@ kernel void sum_rows_to_f32_kernel(
     dst[col] = sum;
 }
 
-// (Section 15b-15e removed: GELU, LayerNorm, bias_add, ReLU — rich arch deleted)
 
 // --- Sum rows fp16 (for bias/LN param grads) ---
 
@@ -1962,57 +1923,6 @@ kernel void cast_f64_to_f32(
 }
 
 // ============================================================================
-// Section 19: Orthogonal init helpers
-// ============================================================================
-
-struct OrthoParams {
-    int m;
-    int n;
-};
-
-// Multiply each column of Q by its corresponding diagonal sign
-kernel void sign_correct_columns_kernel(
-    device float* Q                     [[buffer(0)]],
-    const device float* diag_signs      [[buffer(1)]],
-    constant OrthoParams& p             [[buffer(2)]],
-    uint idx [[thread_position_in_grid]]
-) {
-    if ((int)idx >= p.m * p.n) return;
-    // Column-major: column index = idx / m
-    Q[idx] *= diag_signs[(int)idx / p.m];
-}
-
-// Extract sign of diagonal elements: signs[i] = sign(A[i, i]) where A is column-major (m x n)
-kernel void extract_diag_sign_kernel(
-    device float* signs                 [[buffer(0)]],
-    const device float* A               [[buffer(1)]],
-    constant OrthoParams& p             [[buffer(2)]],
-    uint i [[thread_position_in_grid]]
-) {
-    if ((int)i >= p.n) return;
-    // Column-major diagonal: A[i + i*m]
-    signs[i] = (A[(int)i + (int64_t)i * p.m] >= 0.0f) ? 1.0f : -1.0f;
-}
-
-struct ColmajScaleParams {
-    float gain;
-    int m;
-    int n;
-};
-
-// Convert column-major Q to row-major with scaling: dst[r*n + c] = Q[r + c*m] * gain
-kernel void colmaj_to_rowmaj_scale_f32(
-    device float* dst                   [[buffer(0)]],
-    const device float* Q               [[buffer(1)]],
-    constant ColmajScaleParams& p       [[buffer(2)]],
-    uint idx [[thread_position_in_grid]]
-) {
-    if ((int)idx >= p.m * p.n) return;
-    // Row-major index: row = idx/n, col = idx%n. Column-major source: Q[row + col*m]
-    dst[idx] = Q[((int)idx / p.n) + (int64_t)((int)idx % p.n) * p.m] * p.gain;
-}
-
-// ============================================================================
 // Section 20: Tiled GEMM — C = alpha * op(A) @ op(B) + beta * C
 //
 // 64x64 tiled simdgroup_matrix GEMM for f32. Supports NT, NN, TN layouts
@@ -2031,63 +1941,6 @@ struct GemmParams {
     int trans_a; // 0 = no transpose, 1 = transpose
     int trans_b;
 };
-
-constant int GEMM_TILE = 16;
-
-kernel void sgemm_tiled(
-    device const float* A      [[buffer(0)]],
-    device const float* B      [[buffer(1)]],
-    device float* C            [[buffer(2)]],
-    constant GemmParams& p     [[buffer(3)]],
-    uint2 group_id    [[threadgroup_position_in_grid]],
-    uint2 local_id    [[thread_position_in_threadgroup]]
-) {
-    threadgroup float tileA[GEMM_TILE][GEMM_TILE];
-    threadgroup float tileB[GEMM_TILE][GEMM_TILE];
-
-    int row = (int)group_id.y * GEMM_TILE + (int)local_id.y;
-    int col = (int)group_id.x * GEMM_TILE + (int)local_id.x;
-
-    float sum = 0.0f;
-    int num_tiles = (p.K + GEMM_TILE - 1) / GEMM_TILE;
-
-    for (int t = 0; t < num_tiles; t++) {
-        int k_base = t * GEMM_TILE;
-
-        // Load A tile: logical A[row, k] where k = k_base + local_id.x
-        int ak = k_base + (int)local_id.x;
-        if (row < p.M && ak < p.K) {
-            tileA[local_id.y][local_id.x] = p.trans_a
-                ? A[ak * p.lda + row]
-                : A[row * p.lda + ak];
-        } else {
-            tileA[local_id.y][local_id.x] = 0.0f;
-        }
-
-        // Load B tile: logical B[k, col] where k = k_base + local_id.y
-        int bk = k_base + (int)local_id.y;
-        if (bk < p.K && col < p.N) {
-            tileB[local_id.y][local_id.x] = p.trans_b
-                ? B[col * p.ldb + bk]
-                : B[bk * p.ldb + col];
-        } else {
-            tileB[local_id.y][local_id.x] = 0.0f;
-        }
-
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-
-        for (int kk = 0; kk < GEMM_TILE; kk++) {
-            sum += tileA[local_id.y][kk] * tileB[kk][local_id.x];
-        }
-
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-    }
-
-    if (row < p.M && col < p.N) {
-        int idx = row * p.ldc + col;
-        C[idx] = p.alpha * sum + p.beta * C[idx];
-    }
-}
 
 // ============================================================================
 // Section 21: Register-tiled GEMM — C = alpha * op(A) @ op(B) + beta * C

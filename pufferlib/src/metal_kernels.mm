@@ -306,19 +306,6 @@ void mtl_copy_f32(float *dst, const float *src, int count,
   mtl_dispatch_1d(ms, pso, count);
 }
 
-// TF32 round-copy: dst[i] = tf32_round(src[i]) for TF32 GEMM simulation.
-void mtl_tf32_round_copy(float *dst, const float *src, int count,
-                          cudaStream_t stream) {
-  MetalStream *ms = mtl_get_stream(stream);
-  ms->compute_encoder();
-  auto pso = mtl_pipeline("tf32_round_copy_kernel");
-  mtl_set_pso(ms, pso);
-  mtl_set_ptr(ms, dst, 0);
-  mtl_set_ptr(ms, src, 1);
-  mtl_set_params(ms, count, 2);
-  mtl_dispatch_1d(ms, pso, count);
-}
-
 // TF32 in-place rounding: buf[i] = tf32_round(buf[i]) for TF32 GEMM simulation.
 // Avoids scratch buffer visibility issues by modifying the original buffer.
 void mtl_tf32_round_inplace(float *buf, int count, cudaStream_t stream) {
@@ -736,8 +723,6 @@ void mtl_fused_scan_backward_fp16(PrefixScan &scan, const void *grad,
 // ============================================================================
 // Sample logits kernel
 // ============================================================================
-
-void mtl_sample_logits_init(int /*B*/, int /*num_atns*/) {}
 
 // Dispatch GPU sampling kernel on the current command buffer (no sync).
 // Call BEFORE ensure_gpu_synced so sampling runs in the same command buffer
@@ -1410,17 +1395,6 @@ void muon_init(Muon *m, Allocator *param_alloc, PufTensor weight_buffer,
     alloc.reg(&m->ns.result_f32);
     alloc.reg(&m->ns_norm_puf);
   }
-}
-
-void muon_post_create(Muon *m) {
-  m->lr_ptr = (float *)m->lr_puf.bytes;
-  m->lr_derived_ptr = (float *)m->lr_derived_puf.bytes;
-  if (m->ns_norm_puf.bytes)
-    m->ns.norm_ptr = (float *)m->ns_norm_puf.bytes;
-  // Direct writes — unified memory, no cudaMemcpy needed
-  *m->lr_ptr = m->lr_val_init;
-  memset(m->lr_derived_ptr, 0, 2 * sizeof(float));
-  memset(m->mb_puf.bytes, 0, m->mb_puf.numel() * sizeof(float));
 }
 
 void muon_step(Muon *m, cudaStream_t stream) {

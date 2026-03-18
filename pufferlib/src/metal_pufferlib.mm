@@ -143,8 +143,6 @@ enum ProfileIdx {
     PROF_ROLLOUT = 0,
     PROF_EVAL_GPU,
     PROF_EVAL_ENV,
-    PROF_TRAIN_MISC,
-    PROF_TRAIN_FORWARD,
     // Fine-grained rollout sub-phases
     PROF_ROLLOUT_OBS_COPY,
     PROF_ROLLOUT_FWD,
@@ -167,8 +165,6 @@ static const char* PROF_NAMES[NUM_PROF] = {
     "rollout",
     "eval_gpu",
     "eval_env",
-    "train_misc",
-    "train_forward",
     "rollout_obs_copy",
     "rollout_fwd",
     "rollout_act_copy",
@@ -662,8 +658,6 @@ void train_impl(PuffeRL& pufferl) {
         pufferl.profile.accum[PROF_TRAIN_GRAD_COPY] += prof_ms(tp6, tp7);
         pufferl.profile.accum[PROF_TRAIN_GRAD_CLIP] += prof_ms(tp7, tp8);
         pufferl.profile.accum[PROF_TRAIN_MUON] += prof_ms(tp8, tp9);
-        pufferl.profile.accum[PROF_TRAIN_MISC] += prof_ms(tp0, tp3);
-        pufferl.profile.accum[PROF_TRAIN_FORWARD] += prof_ms(tp3, tp9);
     };
 
     uint32_t* train_rng_offset = (uint32_t*)((int64_t*)pufferl.rng_offset_puf.bytes + hypers.num_buffers);
@@ -812,10 +806,6 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
 
     int minibatch_segments = hypers.minibatch_size / hypers.horizon;
     int inf_batch = vec->total_agents / hypers.num_buffers;
-
-    // Legacy global sampling init is a no-op on Metal; rollout uses per-buffer
-    // scratch buffers registered below.
-    mtl_sample_logits_init(inf_batch, num_action_heads);
 
     // ========================================================================
     // fp32 master weights (for optimizer)
