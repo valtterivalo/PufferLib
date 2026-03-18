@@ -391,24 +391,10 @@ void mtl_sum_rows(void *dst, const void *src, int rows, int cols,
 // Norm and clip kernels
 // ============================================================================
 
-// Scratch buffer for partial sums in norm reduction (Muon NS + clip_grad_norm)
 static float *norm_partials_buf = nullptr;
 static void ensure_norm_partials() {
-  if (!norm_partials_buf) {
-    posix_memalign((void **)&norm_partials_buf, 16384,
-                   ((256 * sizeof(float) + 16383) / 16384) * 16384);
-    // Wrap as MTLBuffer for GPU access
-    id<MTLBuffer> buf = [mtl_ctx()->device
-        newBufferWithBytesNoCopy:norm_partials_buf
-                          length:16384
-                         options:MTLResourceStorageModeShared
-                     deallocator:nil];
-    assert(buf);
-    mtl_ctx()->buffers.push_back({(char *)norm_partials_buf, 16384, buf});
-    [mtl_ctx()->residency_set addAllocation:buf];
-    [mtl_ctx()->residency_set commit];
-    [mtl_ctx()->residency_set requestResidency];
-  }
+  if (!norm_partials_buf)
+    norm_partials_buf = (float *)mtl_alloc_scratch(256 * sizeof(float));
 }
 
 void mtl_norm_f32(float *partials, const float *data, int count,
@@ -567,28 +553,12 @@ void mtl_sum_rows_to_f32(float *dst, const float *src, int rows, int cols,
 // instead of Metal dispatch + puf_copy, eliminating all rollout syncs.
 // ============================================================================
 
-// Allocate a Metal-wrapped tensor (page-aligned, registered with Metal context).
-// Use for buffers that need GPU access via buffer_for_ptr.
 static PufTensor alloc_metal_tensor(int dim0, int dim1) {
   PufTensor t = {};
   t.shape[0] = dim0;
   t.shape[1] = dim1;
   t.dtype_size = sizeof(float);
-  int64_t size = (int64_t)dim0 * dim1 * sizeof(float);
-  int64_t page = 16384;
-  int64_t alloc_size = (size + page - 1) & ~(page - 1);
-  posix_memalign((void **)&t.bytes, page, alloc_size);
-  memset(t.bytes, 0, alloc_size);
-  id<MTLBuffer> buf = [mtl_ctx()->device
-      newBufferWithBytesNoCopy:t.bytes
-                        length:alloc_size
-                       options:MTLResourceStorageModeShared
-                   deallocator:nil];
-  assert(buf);
-  mtl_ctx()->buffers.push_back({t.bytes, alloc_size, buf});
-  [mtl_ctx()->residency_set addAllocation:buf];
-  [mtl_ctx()->residency_set commit];
-  [mtl_ctx()->residency_set requestResidency];
+  t.bytes = (char *)mtl_alloc_scratch((int64_t)dim0 * dim1 * sizeof(float));
   return t;
 }
 
@@ -821,20 +791,7 @@ void ppo_loss_fwd_bwd(PufTensor &dec_out, PufTensor &logstd, TrainGraph &graph,
       free(ppo_partials_buf);
     }
     ppo_partials_capacity = ppo_partials_needed;
-    int64_t alloc_bytes = ppo_partials_capacity * sizeof(float);
-    int64_t page = 16384;
-    alloc_bytes = (alloc_bytes + page - 1) & ~(page - 1);
-    posix_memalign((void **)&ppo_partials_buf, page, alloc_bytes);
-    id<MTLBuffer> buf = [mtl_ctx()->device
-        newBufferWithBytesNoCopy:ppo_partials_buf
-                          length:alloc_bytes
-                         options:MTLResourceStorageModeShared
-                     deallocator:nil];
-    assert(buf);
-    mtl_ctx()->buffers.push_back({(char *)ppo_partials_buf, alloc_bytes, buf});
-    [mtl_ctx()->residency_set addAllocation:buf];
-    [mtl_ctx()->residency_set commit];
-    [mtl_ctx()->residency_set requestResidency];
+    ppo_partials_buf = (float *)mtl_alloc_scratch(ppo_partials_capacity * sizeof(float));
   }
 
   // Zero loss output on GPU (CUDA uses cudaMemsetAsync here — CPU write races
@@ -851,20 +808,7 @@ void ppo_loss_fwd_bwd(PufTensor &dec_out, PufTensor &logstd, TrainGraph &graph,
       free(ppo_act_f32);
     }
     ppo_act_f32_capacity = act_count;
-    int64_t alloc_bytes = ppo_act_f32_capacity * sizeof(float);
-    int64_t page = 16384;
-    alloc_bytes = (alloc_bytes + page - 1) & ~(page - 1);
-    posix_memalign((void **)&ppo_act_f32, page, alloc_bytes);
-    id<MTLBuffer> buf = [mtl_ctx()->device
-        newBufferWithBytesNoCopy:ppo_act_f32
-                          length:alloc_bytes
-                         options:MTLResourceStorageModeShared
-                     deallocator:nil];
-    assert(buf);
-    mtl_ctx()->buffers.push_back({(char *)ppo_act_f32, alloc_bytes, buf});
-    [mtl_ctx()->residency_set addAllocation:buf];
-    [mtl_ctx()->residency_set commit];
-    [mtl_ctx()->residency_set requestResidency];
+    ppo_act_f32 = (float *)mtl_alloc_scratch(ppo_act_f32_capacity * sizeof(float));
   }
   {
     ms->compute_encoder();

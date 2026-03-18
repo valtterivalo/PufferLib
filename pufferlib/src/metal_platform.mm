@@ -1187,20 +1187,9 @@ static float *addmm_temp_buf(int count) {
   int64_t size = (needed + page - 1) & ~(page - 1);
   if (size <= g_addmm_temp_size) return (float *)g_addmm_temp_base;
 
-  // Never free old temp buffers here: in-flight command buffers may still
-  // reference them. We grow by allocating a new buffer and keeping old ones
-  // until global reset.
-  posix_memalign((void **)&g_addmm_temp_base, page, size);
-  id<MTLBuffer> buf =
-      [g_ctx.device newBufferWithBytesNoCopy:g_addmm_temp_base
-                                      length:size
-                                     options:MTLResourceStorageModeShared
-                                 deallocator:nil];
-  assert(buf && "addmm temp buffer MTLBuffer creation failed");
-  g_ctx.buffers.push_back({g_addmm_temp_base, size, buf});
-  [g_ctx.residency_set addAllocation:buf];
-  [g_ctx.residency_set commit];
-  [g_ctx.residency_set requestResidency];
+  // Old buffer stays in residency set (in-flight commands may reference it).
+  // mtl_alloc_scratch registers the new one.
+  g_addmm_temp_base = (char *)mtl_alloc_scratch(size);
   g_addmm_temp_size = size;
   return (float *)g_addmm_temp_base;
 }

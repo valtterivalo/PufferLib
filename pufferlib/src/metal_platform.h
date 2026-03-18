@@ -154,6 +154,29 @@ static inline void mtl_ensure_stream_synced(cudaStream_t s) {
 void *mtl_create_stream();
 void mtl_destroy_stream(void *stream);
 
+// Allocate page-aligned scratch memory and register as a shared MTLBuffer
+// in the global residency set. Returns the CPU pointer (also GPU-accessible
+// on Apple Silicon unified memory).
+static inline void *mtl_alloc_scratch(int64_t bytes) {
+  int64_t page = 16384;
+  int64_t alloc = ((bytes + page - 1) / page) * page;
+  void *ptr = nullptr;
+  posix_memalign(&ptr, page, alloc);
+  assert(ptr && "mtl_alloc_scratch: posix_memalign failed");
+  memset(ptr, 0, alloc);
+  MetalContext *ctx = mtl_ctx();
+  id<MTLBuffer> buf = [ctx->device newBufferWithBytesNoCopy:ptr
+                                                     length:(NSUInteger)alloc
+                                                    options:MTLResourceStorageModeShared
+                                                deallocator:nil];
+  assert(buf);
+  ctx->buffers.push_back({(char *)ptr, alloc, buf});
+  [ctx->residency_set addAllocation:buf];
+  [ctx->residency_set commit];
+  [ctx->residency_set requestResidency];
+  return ptr;
+}
+
 // Tear down Metal context.
 void mtl_destroy();
 
