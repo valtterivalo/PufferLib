@@ -410,12 +410,12 @@ void mtl_gpu_timing_stats(double *gpu_exec_ms, double *sched_wait_ms) {
   g_sched_wait_ns = 0.0;
 }
 
-static int g_tensor_ops_dispatch_count = 0;
+static int g_gemm_dispatch_count = 0;
 
 void mtl_gemm_stats(int *tensor_ops_count, int *mps_count) {
-  *tensor_ops_count = g_tensor_ops_dispatch_count;
+  *tensor_ops_count = g_gemm_dispatch_count;
   *mps_count = 0;  // MPS eliminated — all GEMMs on compute encoder
-  g_tensor_ops_dispatch_count = 0;
+  g_gemm_dispatch_count = 0;
 }
 
 // ============================================================================
@@ -864,7 +864,7 @@ static void compute_gemm_f16(const void *A, const void *B, void *C,
       threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
 
   ms->pending_work = true;
-  g_tensor_ops_dispatch_count++;  // count as compute-encoder dispatch
+  g_gemm_dispatch_count++;
 }
 
 // ============================================================================
@@ -877,7 +877,7 @@ static bool tensor_ops_gemm_nt(const float *A, const float *B, float *C,
                                 int M, int N, int K,
                                 cudaStream_t stream) {
   if (!g_ctx.tensor_ops_gemm_nt_f32) return false;
-  g_tensor_ops_dispatch_count++;
+  g_gemm_dispatch_count++;
 
   MetalStream *ms = get_stream(stream);
   ms->compute_encoder();
@@ -917,7 +917,7 @@ static bool tensor_ops_gemm_nn(const float *A, const float *B, float *C,
                                 int M, int N, int K,
                                 cudaStream_t stream) {
   if (!g_ctx.tensor_ops_gemm_nn_f32) return false;
-  g_tensor_ops_dispatch_count++;
+  g_gemm_dispatch_count++;
 
   MetalStream *ms = get_stream(stream);
   ms->compute_encoder();
@@ -956,7 +956,7 @@ static bool tensor_ops_gemm_nt_f16(const void *A, const void *B, void *C,
                                     int M, int N, int K,
                                     cudaStream_t stream) {
   if (!g_ctx.tensor_ops_gemm_nt_f16) return false;
-  g_tensor_ops_dispatch_count++;
+  g_gemm_dispatch_count++;
 
   MetalStream *ms = get_stream(stream);
   ms->compute_encoder();
@@ -989,7 +989,7 @@ static bool tensor_ops_gemm_nn_f16(const void *A, const void *B, void *C,
                                     int M, int N, int K,
                                     cudaStream_t stream) {
   if (!g_ctx.tensor_ops_gemm_nn_f16) return false;
-  g_tensor_ops_dispatch_count++;
+  g_gemm_dispatch_count++;
 
   MetalStream *ms = get_stream(stream);
   ms->compute_encoder();
@@ -1029,7 +1029,7 @@ static bool tensor_ops_gemm_tn(const float *A, const float *B, float *C,
                                 int M, int N, int K,
                                 cudaStream_t stream) {
   if (!g_ctx.tensor_ops_gemm_tn_f32) return false;
-  g_tensor_ops_dispatch_count++;
+  g_gemm_dispatch_count++;
 
   MetalStream *ms = get_stream(stream);
   ms->compute_encoder();
@@ -1157,7 +1157,7 @@ static bool tensor_ops_gemm_tn_f16(const void *A, const void *B, void *C,
                                     int M, int N, int K,
                                     cudaStream_t stream) {
   if (!g_ctx.tensor_ops_gemm_tn_f16) return false;
-  g_tensor_ops_dispatch_count++;
+  g_gemm_dispatch_count++;
 
   MetalStream *ms = get_stream(stream);
   ms->compute_encoder();
@@ -1216,7 +1216,7 @@ static void small_gemm_nt_dispatch(const float *A, const float *B, float *C,
       threadsPerThreadgroup:MTLSizeMake(tg_size, 1, 1)];
 
   ms->pending_work = true;
-  g_tensor_ops_dispatch_count++;
+  g_gemm_dispatch_count++;
 }
 
 // ============================================================================

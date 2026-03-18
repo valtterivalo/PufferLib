@@ -289,17 +289,17 @@ pybind11::dict log_profile(pybind11::object pufferl_obj) {
     result["gpu_exec"] = gpu_exec_ms / 1000.0;
     result["sched_wait"] = sched_wait_ms / 1000.0;
 
-    int gemm_tensor_ops, gemm_mps;
-    mtl_gemm_stats(&gemm_tensor_ops, &gemm_mps);
-    result["gemm_tensor_ops"] = gemm_tensor_ops;
+    int gemm_gpu, gemm_mps;
+    mtl_gemm_stats(&gemm_gpu, &gemm_mps);
+    result["gemm_gpu"] = gemm_gpu;
     result["gemm_mps"] = gemm_mps;
 
     fprintf(stderr,
         "[metal-prof] total: %d syncs, %.1fms sync, %.1fms rollout + %.1fms train | "
-        "gpu_exec=%.1fms sched_wait=%.1fms | gemm: tensor_ops=%d mps=%d\n",
+        "gpu_exec=%.1fms sched_wait=%.1fms | gemm: gpu=%d mps=%d\n",
         r_sync + t_sync, r_sync_ms + t_sync_ms,
         a[PROF_ROLLOUT], train_ms, gpu_exec_ms, sched_wait_ms,
-        gemm_tensor_ops, gemm_mps);
+        gemm_gpu, gemm_mps);
 
     memset(pufferl.profile.accum, 0, sizeof(pufferl.profile.accum));
     pufferl.rollout_sync_count = 0;
