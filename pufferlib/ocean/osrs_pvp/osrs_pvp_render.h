@@ -300,6 +300,10 @@ typedef struct {
         int secondary_ticks;
     } anim[MAX_RENDER_ENTITIES];
 
+    /* entity identity tracking — detect slot compaction shifts to reset stale anim/composite */
+    int prev_npc_slot[MAX_RENDER_ENTITIES];
+    int prev_entity_count;
+
     /* terrain */
     TerrainMesh* terrain;
 
@@ -482,9 +486,11 @@ static RenderClient* render_make_client(void) {
     rc->history_count = 0;
     rc->history_cursor = -1;  /* -1 = live (not rewinding) */
     rc->entity_count = 0;  /* populated by render_populate_entities */
+    rc->prev_entity_count = 0;
     for (int i = 0; i < MAX_RENDER_ENTITIES; i++) {
         rc->anim[i].primary_seq_id = -1;
         rc->anim[i].secondary_seq_id = 808; /* ANIM_SEQ_IDLE */
+        rc->prev_npc_slot[i] = -1;
     }
 
     InitWindow(RENDER_WINDOW_W, RENDER_WINDOW_H, "OSRS PvP Debug Viewer");
@@ -1196,6 +1202,27 @@ static void render_pre_tick(RenderClient* rc, OsrsPvp* env) {
  */
 static void render_post_tick(RenderClient* rc, OsrsPvp* env) {
     render_populate_entities(rc, env);
+
+    /* detect entity identity changes from slot compaction (NPC deaths cause
+       remaining NPCs to shift to lower indices). reset stale animation and
+       composite state when a slot's NPC identity changes. */
+    for (int i = 0; i < rc->entity_count; i++) {
+        if (rc->entities[i].npc_slot != rc->prev_npc_slot[i]) {
+            rc->anim[i].primary_seq_id = -1;
+            rc->anim[i].primary_frame_idx = 0;
+            rc->anim[i].primary_ticks = 0;
+            rc->anim[i].primary_loops = 0;
+            rc->anim[i].secondary_seq_id = -1;
+            rc->anim[i].secondary_frame_idx = 0;
+            rc->anim[i].secondary_ticks = 0;
+            rc->composites[i].needs_rebuild = 1;
+        }
+        rc->prev_npc_slot[i] = rc->entities[i].npc_slot;
+    }
+    for (int i = rc->entity_count; i < rc->prev_entity_count; i++)
+        rc->prev_npc_slot[i] = -1;
+    rc->prev_entity_count = rc->entity_count;
+
     for (int i = 0; i < rc->entity_count; i++) {
         RenderEntity* p = &rc->entities[i];
 
@@ -2633,15 +2660,18 @@ static void composite_animate_and_draw(
     UpdateMeshBuffer(comp->mesh, 3, comp->mesh.colors,
                      exp_verts * 4, 0);
 
-    /* draw with the current face count (may be less than max capacity) */
-    comp->mesh.vertexCount = exp_verts;
-    comp->mesh.triangleCount = comp->face_count;
+    /* draw with the current face count. CRITICAL: must set vertexCount on
+       model.meshes[0], NOT comp->mesh — LoadModelFromMesh copies the mesh
+       struct by value, so comp->mesh and model.meshes[0] are independent.
+       DrawModel reads model.meshes[0].vertexCount for glDrawArrays count. */
+    comp->model.meshes[0].vertexCount = exp_verts;
+    comp->model.meshes[0].triangleCount = comp->face_count;
     comp->model.transform = transform;
     DrawModel(comp->model, (Vector3){ 0, 0, 0 }, 1.0f, WHITE);
 
     /* restore max counts so the VBO stays valid for next UpdateMeshBuffer */
-    comp->mesh.vertexCount = COMPOSITE_MAX_EXP_VERTS;
-    comp->mesh.triangleCount = COMPOSITE_MAX_FACES;
+    comp->model.meshes[0].vertexCount = COMPOSITE_MAX_EXP_VERTS;
+    comp->model.meshes[0].triangleCount = COMPOSITE_MAX_FACES;
 }
 
 static void composite_free(PlayerComposite* comp) {
@@ -2692,12 +2722,12 @@ static void render_player_composite(
         /* no animation: draw static */
         if (comp->face_count > 0) {
             int exp_verts = comp->face_count * 3;
-            comp->mesh.vertexCount = exp_verts;
-            comp->mesh.triangleCount = comp->face_count;
+            comp->model.meshes[0].vertexCount = exp_verts;
+            comp->model.meshes[0].triangleCount = comp->face_count;
             comp->model.transform = transform;
             DrawModel(comp->model, (Vector3){ 0, 0, 0 }, 1.0f, WHITE);
-            comp->mesh.vertexCount = COMPOSITE_MAX_EXP_VERTS;
-            comp->mesh.triangleCount = COMPOSITE_MAX_FACES;
+            comp->model.meshes[0].vertexCount = COMPOSITE_MAX_EXP_VERTS;
+            comp->model.meshes[0].triangleCount = COMPOSITE_MAX_FACES;
         }
         return;
     }
