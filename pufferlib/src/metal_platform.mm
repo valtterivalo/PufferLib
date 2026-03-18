@@ -788,74 +788,50 @@ struct HostGemmParams {
   int trans_a, trans_b;
 };
 
-// C(M,N) = alpha * op(A) @ op(B) + beta * C
-// op(A) is MxK, op(B) is KxN. lda/ldb/ldc are physical row strides.
-static void compute_gemm(const float *A, const float *B, float *C,
-                          int M, int N, int K,
-                          bool trans_a, bool trans_b,
-                          int lda, int ldb, int ldc,
-                          float alpha, float beta,
-                          cudaStream_t stream) {
+// steel_gemm dispatch: C(M,N) = alpha * op(A) @ op(B) + beta * C.
+// 64x64 output tile per threadgroup, 128 threads (4 simdgroups).
+static void steel_gemm_dispatch(const char *kernel_name,
+                                 const void *A, const void *B, void *C,
+                                 int M, int N, int K,
+                                 bool trans_a, bool trans_b,
+                                 int lda, int ldb, int ldc,
+                                 float alpha, float beta,
+                                 cudaStream_t stream) {
   MetalStream *ms = mtl_resolve_stream(stream);
   ms->compute_encoder();
-  id<MTLComputePipelineState> pso = mtl_pipeline("steel_gemm");
+  id<MTLComputePipelineState> pso = mtl_pipeline(kernel_name);
   mtl_set_pso(ms, pso);
 
   NSUInteger off_a, off_b, off_c;
-  id<MTLBuffer> buf_a = buffer_for_ptr(A, &off_a);
-  id<MTLBuffer> buf_b = buffer_for_ptr(B, &off_b);
-  id<MTLBuffer> buf_c = buffer_for_ptr(C, &off_c);
-
-  bind_buf(ms, buf_a, off_a, 0);
-  bind_buf(ms, buf_b, off_b, 1);
-  bind_buf(ms, buf_c, off_c, 2);
+  bind_buf(ms, buffer_for_ptr(A, &off_a), off_a, 0);
+  bind_buf(ms, buffer_for_ptr(B, &off_b), off_b, 1);
+  bind_buf(ms, buffer_for_ptr(C, &off_c), off_c, 2);
 
   HostGemmParams params = {M, N, K, lda, ldb, ldc, alpha, beta,
                             trans_a ? 1 : 0, trans_b ? 1 : 0};
   mtl_set_params(ms, params, 3);
 
-  // 64x64 output tile per threadgroup, 128 threads (4 simdgroups)
-  int groups_m = (M + 63) / 64;
-  int groups_n = (N + 63) / 64;
-  [ms->enc dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
-      threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
-
-  ms->pending_work = true;
-}
-
-// fp16 compute-encoder GEMM: half I/O, float accumulation via simdgroup_matrix.
-// Same interface as compute_gemm but for __fp16 buffers. Uses steel_gemm_f16 kernel.
-static void compute_gemm_f16(const void *A, const void *B, void *C,
-                              int M, int N, int K,
-                              bool trans_a, bool trans_b,
-                              int lda, int ldb, int ldc,
-                              float alpha, float beta,
-                              cudaStream_t stream) {
-  MetalStream *ms = mtl_resolve_stream(stream);
-  ms->compute_encoder();
-  id<MTLComputePipelineState> pso = mtl_pipeline("steel_gemm_f16");
-  mtl_set_pso(ms, pso);
-
-  NSUInteger off_a, off_b, off_c;
-  id<MTLBuffer> buf_a = buffer_for_ptr(A, &off_a);
-  id<MTLBuffer> buf_b = buffer_for_ptr(B, &off_b);
-  id<MTLBuffer> buf_c = buffer_for_ptr(C, &off_c);
-
-  bind_buf(ms, buf_a, off_a, 0);
-  bind_buf(ms, buf_b, off_b, 1);
-  bind_buf(ms, buf_c, off_c, 2);
-
-  HostGemmParams params = {M, N, K, lda, ldb, ldc, alpha, beta,
-                            trans_a ? 1 : 0, trans_b ? 1 : 0};
-  mtl_set_params(ms, params, 3);
-
-  int groups_m = (M + 63) / 64;
-  int groups_n = (N + 63) / 64;
-  [ms->enc dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
+  [ms->enc dispatchThreadgroups:MTLSizeMake((N + 63) / 64, (M + 63) / 64, 1)
       threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
 
   ms->pending_work = true;
   g_gemm_dispatch_count++;
+}
+
+static void compute_gemm(const float *A, const float *B, float *C,
+                          int M, int N, int K, bool trans_a, bool trans_b,
+                          int lda, int ldb, int ldc, float alpha, float beta,
+                          cudaStream_t stream) {
+  steel_gemm_dispatch("steel_gemm", A, B, C, M, N, K, trans_a, trans_b,
+                       lda, ldb, ldc, alpha, beta, stream);
+}
+
+static void compute_gemm_f16(const void *A, const void *B, void *C,
+                              int M, int N, int K, bool trans_a, bool trans_b,
+                              int lda, int ldb, int ldc, float alpha, float beta,
+                              cudaStream_t stream) {
+  steel_gemm_dispatch("steel_gemm_f16", A, B, C, M, N, K, trans_a, trans_b,
+                       lda, ldb, ldc, alpha, beta, stream);
 }
 
 // ============================================================================
