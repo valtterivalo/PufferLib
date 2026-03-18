@@ -29,15 +29,10 @@
 // Helpers — stream access and GPU sync
 // ============================================================================
 
-static inline MetalStream *mtl_get_stream(cudaStream_t s) {
-  return s ? (MetalStream *)s : (MetalStream *)mtl_stream();
-}
-
-static inline void mtl_ensure_synced(cudaStream_t s) {
-  MetalStream *ms = mtl_get_stream(s);
-  if (ms->enc_active)
-    ms->sync();
-}
+// Use header-provided mtl_resolve_stream / mtl_ensure_stream_synced.
+// Local aliases for brevity in this file.
+static inline MetalStream *mtl_get_stream(cudaStream_t s) { return mtl_resolve_stream(s); }
+static inline void mtl_ensure_synced(cudaStream_t s) { mtl_ensure_stream_synced(s); }
 
 // Bind a raw pointer (within a wrapped allocator) to a buffer binding slot.
 static inline void mtl_set_ptr(MetalStream *ms, const void *ptr,

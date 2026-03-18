@@ -33,14 +33,8 @@ static std::mutex g_rollout_profile_mutex;
 // a separate translation unit.
 // ============================================================================
 
-static inline MetalStream* get_stream(cudaStream_t s) {
-    return s ? (MetalStream*)s : &mtl_ctx()->stream;
-}
-
-static inline void ensure_gpu_synced(cudaStream_t s) {
-    MetalStream* ms = get_stream(s);
-    if (ms->enc_active || ms->pending_work) ms->sync();
-}
+static inline MetalStream* get_stream(cudaStream_t s) { return mtl_resolve_stream(s); }
+static inline void ensure_gpu_synced(cudaStream_t s) { mtl_ensure_stream_synced(s); }
 
 // Mach-time to milliseconds for profiling
 static mach_timebase_info_data_t g_prof_tb = {0, 0};

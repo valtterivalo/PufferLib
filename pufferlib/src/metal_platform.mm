@@ -742,15 +742,8 @@ id<MTLComputePipelineState> mtl_pipeline(const char *name) {
 // column-major API trick: swap A/B and transpose flags).
 // ============================================================================
 
-static inline MetalStream *get_stream(cudaStream_t s) {
-  return s ? (MetalStream *)s : &g_ctx.stream;
-}
-
-static inline void ensure_gpu_synced(cudaStream_t s) {
-  MetalStream *ms = get_stream(s);
-  if (ms->enc_active || ms->pending_work)
-    ms->sync();
-}
+static inline MetalStream *get_stream(cudaStream_t s) { return mtl_resolve_stream(s); }
+static inline void ensure_gpu_synced(cudaStream_t s) { mtl_ensure_stream_synced(s); }
 
 // GPU training mode — when true, puf_mm forces GPU GEMM to avoid ensure_gpu_synced.
 // Set by train_impl to keep all training ops on the GPU encoder chain.

@@ -135,6 +135,21 @@ void *mtl_stream();
 // Training stream (separate command queue for async overlap with rollout).
 void *mtl_train_stream();
 
+// Stream resolution: returns the typed MetalStream* for a cudaStream_t handle,
+// falling back to the default stream when s is null.
+static inline MetalStream *mtl_resolve_stream(cudaStream_t s) {
+  return s ? (MetalStream *)s : (MetalStream *)mtl_stream();
+}
+
+// Ensure all pending GPU work on a stream is committed and synced to CPU.
+// Checks both enc_active (encoder needs ending) and pending_work (command
+// buffer needs committing). Both must be checked — the encoder can be ended
+// but the command buffer not yet committed.
+static inline void mtl_ensure_stream_synced(cudaStream_t s) {
+  MetalStream *ms = mtl_resolve_stream(s);
+  if (ms->enc_active || ms->pending_work) ms->sync();
+}
+
 // Create/destroy additional rollout streams (one per vecenv buffer thread).
 void *mtl_create_stream();
 void mtl_destroy_stream(void *stream);
