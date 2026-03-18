@@ -58,6 +58,7 @@
 #include "osrs_pvp_types.h"
 #include "osrs_pvp_items.h"
 #include "osrs_pvp_pathfinding.h"
+#include "osrs_combat_shared.h"
 
 /* opaque encounter state — each encounter defines its own struct */
 typedef struct EncounterState EncounterState;
@@ -338,10 +339,13 @@ static inline int encounter_move_to_target(
 /* shared BFS click-to-move (human mode + destination-based movement)        */
 /* ======================================================================== */
 
-/* shared BFS pathfind wrapper — translates local coords to world coords for pathfind_step */
+/* shared BFS pathfind wrapper — translates local coords to world coords for pathfind_step.
+   extra_blocked/blocked_ctx: optional callback for dynamic obstacles (pillars etc.).
+   pass NULL/NULL for encounters with no dynamic obstacles. */
 static inline PathResult encounter_pathfind(
     const CollisionMap* cmap, int world_offset_x, int world_offset_y,
-    int src_x, int src_y, int dst_x, int dst_y
+    int src_x, int src_y, int dst_x, int dst_y,
+    pathfind_blocked_fn extra_blocked, void* blocked_ctx
 ) {
     if (!cmap) {
         /* no collision map: greedy direction */
@@ -354,16 +358,19 @@ static inline PathResult encounter_pathfind(
     }
     return pathfind_step(cmap, 0,
         src_x + world_offset_x, src_y + world_offset_y,
-        dst_x + world_offset_x, dst_y + world_offset_y);
+        dst_x + world_offset_x, dst_y + world_offset_y,
+        extra_blocked, blocked_ctx);
 }
 
 /* shared click-to-move: BFS toward destination, take up to 2 steps (run).
    call each tick when player_dest is set. clears dest when arrived.
+   extra_blocked/blocked_ctx: optional dynamic obstacle callback for BFS.
    returns steps taken (0, 1, or 2). */
 static inline int encounter_move_toward_dest(
     Player* p, int* dest_x, int* dest_y,
     const CollisionMap* cmap, int world_offset_x, int world_offset_y,
-    encounter_walkable_fn is_walkable, void* ctx
+    encounter_walkable_fn is_walkable, void* ctx,
+    pathfind_blocked_fn extra_blocked, void* blocked_ctx
 ) {
     if (*dest_x < 0 || *dest_y < 0) return 0;
     if (p->x == *dest_x && p->y == *dest_y) {
@@ -374,7 +381,8 @@ static inline int encounter_move_toward_dest(
     for (int step = 0; step < 2; step++) {
         if (p->x == *dest_x && p->y == *dest_y) break;
         PathResult pr = encounter_pathfind(cmap, world_offset_x, world_offset_y,
-                                            p->x, p->y, *dest_x, *dest_y);
+                                            p->x, p->y, *dest_x, *dest_y,
+                                            extra_blocked, blocked_ctx);
         if (!pr.found || (pr.next_dx == 0 && pr.next_dy == 0)) break;
         int nx = p->x + pr.next_dx, ny = p->y + pr.next_dy;
         if (!is_walkable(ctx, nx, ny)) break;
@@ -384,6 +392,48 @@ static inline int encounter_move_toward_dest(
     p->is_running = (steps == 2);
     p->dest_x = p->x; p->dest_y = p->y;
     return steps;
+}
+
+/* ======================================================================== */
+/* shared attack-target chase (auto-walk toward out-of-range NPC)            */
+/* ======================================================================== */
+
+/* auto-walk toward attack target when out of range.
+   OSRS: player pathfinds toward NPC every tick until in weapon range.
+   extra_blocked/blocked_ctx: optional dynamic obstacle callback for BFS.
+   returns 1 if player moved (chasing), 0 if already in range or stuck. */
+static inline int encounter_chase_attack_target(
+    Player* p, int target_x, int target_y, int target_size, int attack_range,
+    const CollisionMap* cmap, int world_offset_x, int world_offset_y,
+    encounter_walkable_fn is_walkable, void* ctx,
+    pathfind_blocked_fn extra_blocked, void* blocked_ctx
+) {
+    int dist = encounter_dist_to_npc(p->x, p->y, target_x, target_y, target_size);
+    if (dist <= attack_range) return 0;
+
+    /* nearest tile of the NPC to pathfind toward */
+    int cx = p->x < target_x ? target_x :
+             (p->x > target_x + target_size - 1 ? target_x + target_size - 1 : p->x);
+    int cy = p->y < target_y ? target_y :
+             (p->y > target_y + target_size - 1 ? target_y + target_size - 1 : p->y);
+
+    /* BFS up to 2 steps (run) toward closest NPC tile */
+    int steps = 0;
+    for (int step = 0; step < 2; step++) {
+        if (encounter_dist_to_npc(p->x, p->y, target_x, target_y, target_size) <= attack_range)
+            break;
+        PathResult pr = encounter_pathfind(cmap, world_offset_x, world_offset_y,
+                                           p->x, p->y, cx, cy,
+                                           extra_blocked, blocked_ctx);
+        if (!pr.found || (pr.next_dx == 0 && pr.next_dy == 0)) break;
+        int nx = p->x + pr.next_dx, ny = p->y + pr.next_dy;
+        if (!is_walkable(ctx, nx, ny)) break;
+        p->x = nx; p->y = ny;
+        steps++;
+    }
+    p->is_running = (steps == 2);
+    p->dest_x = p->x; p->dest_y = p->y;
+    return steps > 0 ? 1 : 0;
 }
 
 /* ======================================================================== */

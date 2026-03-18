@@ -63,16 +63,22 @@ typedef struct {
  *
  * All working memory is stack-allocated.
  *
- * @param map     Collision map (may be NULL = no obstacles)
- * @param height  Height plane (0 for standard PvP)
- * @param src_x   Source global x
- * @param src_y   Source global y
- * @param dest_x  Destination global x
- * @param dest_y  Destination global y
+ * @param map            Collision map (may be NULL = no obstacles)
+ * @param height         Height plane (0 for standard PvP)
+ * @param src_x          Source global x
+ * @param src_y          Source global y
+ * @param dest_x         Destination global x
+ * @param dest_y         Destination global y
+ * @param extra_blocked  Optional callback: returns 1 if tile is blocked by dynamic
+ *                       objects (pillars, etc.). NULL = no extra checks.
+ * @param blocked_ctx    Context pointer passed to extra_blocked
  * @return PathResult with first step direction
  */
+typedef int (*pathfind_blocked_fn)(void* ctx, int abs_x, int abs_y);
+
 static inline PathResult pathfind_step(const CollisionMap* map, int height,
-                                       int src_x, int src_y, int dest_x, int dest_y) {
+                                       int src_x, int src_y, int dest_x, int dest_y,
+                                       pathfind_blocked_fn extra_blocked, void* blocked_ctx) {
     PathResult result = {0, 0, 0, dest_x, dest_y};
 
     /* already there */
@@ -146,9 +152,13 @@ static inline PathResult pathfind_step(const CollisionMap* map, int height,
         int abs_y = origin_y + cur_y;
         int next_cost = cost[cur_x][cur_y] + 1;
 
+        /* macro: check extra_blocked callback for dynamic obstacles (pillars etc.) */
+        #define EB(ax, ay) (extra_blocked && extra_blocked(blocked_ctx, (ax), (ay)))
+
         /* try south (y - 1) */
         if (cur_y > 0 && via[cur_x][cur_y - 1] == 0
-            && collision_traversable_south(map, height, abs_x, abs_y)) {
+            && collision_traversable_south(map, height, abs_x, abs_y)
+            && !EB(abs_x, abs_y - 1)) {
             queue_x[tail] = cur_x;
             queue_y[tail] = cur_y - 1;
             tail++;
@@ -158,7 +168,8 @@ static inline PathResult pathfind_step(const CollisionMap* map, int height,
 
         /* try west (x - 1) */
         if (cur_x > 0 && via[cur_x - 1][cur_y] == 0
-            && collision_traversable_west(map, height, abs_x, abs_y)) {
+            && collision_traversable_west(map, height, abs_x, abs_y)
+            && !EB(abs_x - 1, abs_y)) {
             queue_x[tail] = cur_x - 1;
             queue_y[tail] = cur_y;
             tail++;
@@ -168,7 +179,8 @@ static inline PathResult pathfind_step(const CollisionMap* map, int height,
 
         /* try north (y + 1) */
         if (cur_y < PATHFIND_GRID_SIZE - 1 && via[cur_x][cur_y + 1] == 0
-            && collision_traversable_north(map, height, abs_x, abs_y)) {
+            && collision_traversable_north(map, height, abs_x, abs_y)
+            && !EB(abs_x, abs_y + 1)) {
             queue_x[tail] = cur_x;
             queue_y[tail] = cur_y + 1;
             tail++;
@@ -178,7 +190,8 @@ static inline PathResult pathfind_step(const CollisionMap* map, int height,
 
         /* try east (x + 1) */
         if (cur_x < PATHFIND_GRID_SIZE - 1 && via[cur_x + 1][cur_y] == 0
-            && collision_traversable_east(map, height, abs_x, abs_y)) {
+            && collision_traversable_east(map, height, abs_x, abs_y)
+            && !EB(abs_x + 1, abs_y)) {
             queue_x[tail] = cur_x + 1;
             queue_y[tail] = cur_y;
             tail++;
@@ -190,7 +203,8 @@ static inline PathResult pathfind_step(const CollisionMap* map, int height,
         if (cur_x > 0 && cur_y > 0 && via[cur_x - 1][cur_y - 1] == 0
             && collision_traversable_south_west(map, height, abs_x, abs_y)
             && collision_traversable_south(map, height, abs_x, abs_y)
-            && collision_traversable_west(map, height, abs_x, abs_y)) {
+            && collision_traversable_west(map, height, abs_x, abs_y)
+            && !EB(abs_x - 1, abs_y - 1) && !EB(abs_x, abs_y - 1) && !EB(abs_x - 1, abs_y)) {
             queue_x[tail] = cur_x - 1;
             queue_y[tail] = cur_y - 1;
             tail++;
@@ -202,7 +216,8 @@ static inline PathResult pathfind_step(const CollisionMap* map, int height,
         if (cur_x > 0 && cur_y < PATHFIND_GRID_SIZE - 1 && via[cur_x - 1][cur_y + 1] == 0
             && collision_traversable_north_west(map, height, abs_x, abs_y)
             && collision_traversable_north(map, height, abs_x, abs_y)
-            && collision_traversable_west(map, height, abs_x, abs_y)) {
+            && collision_traversable_west(map, height, abs_x, abs_y)
+            && !EB(abs_x - 1, abs_y + 1) && !EB(abs_x, abs_y + 1) && !EB(abs_x - 1, abs_y)) {
             queue_x[tail] = cur_x - 1;
             queue_y[tail] = cur_y + 1;
             tail++;
@@ -214,7 +229,8 @@ static inline PathResult pathfind_step(const CollisionMap* map, int height,
         if (cur_x < PATHFIND_GRID_SIZE - 1 && cur_y > 0 && via[cur_x + 1][cur_y - 1] == 0
             && collision_traversable_south_east(map, height, abs_x, abs_y)
             && collision_traversable_south(map, height, abs_x, abs_y)
-            && collision_traversable_east(map, height, abs_x, abs_y)) {
+            && collision_traversable_east(map, height, abs_x, abs_y)
+            && !EB(abs_x + 1, abs_y - 1) && !EB(abs_x, abs_y - 1) && !EB(abs_x + 1, abs_y)) {
             queue_x[tail] = cur_x + 1;
             queue_y[tail] = cur_y - 1;
             tail++;
@@ -227,13 +243,16 @@ static inline PathResult pathfind_step(const CollisionMap* map, int height,
             && via[cur_x + 1][cur_y + 1] == 0
             && collision_traversable_north_east(map, height, abs_x, abs_y)
             && collision_traversable_north(map, height, abs_x, abs_y)
-            && collision_traversable_east(map, height, abs_x, abs_y)) {
+            && collision_traversable_east(map, height, abs_x, abs_y)
+            && !EB(abs_x + 1, abs_y + 1) && !EB(abs_x, abs_y + 1) && !EB(abs_x + 1, abs_y)) {
             queue_x[tail] = cur_x + 1;
             queue_y[tail] = cur_y + 1;
             tail++;
             via[cur_x + 1][cur_y + 1] = VIA_NE;
             cost[cur_x + 1][cur_y + 1] = next_cost;
         }
+
+        #undef EB
     }
 
     /* fallback: if no exact path, find closest reachable tile near dest */

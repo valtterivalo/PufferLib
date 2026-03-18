@@ -969,6 +969,15 @@ static int inf_blocked_by_pillar(InfernoState* s, int x, int y, int size) {
     return 0;
 }
 
+/* BFS dynamic obstacle callback — pillars block pathfinding.
+   receives absolute world coords, converts to local for pillar check. */
+static int inf_pathfind_blocked(void* ctx, int abs_x, int abs_y) {
+    InfernoState* s = (InfernoState*)ctx;
+    int lx = abs_x - s->world_offset_x;
+    int ly = abs_y - s->world_offset_y;
+    return inf_blocked_by_pillar(s, lx, ly, 1);
+}
+
 /* NPC movement blocked callback for encounter_npc_step_toward.
    checks arena bounds, pillars, collision map, and NPC-vs-NPC collision.
    ctx is a temporary struct with state + current NPC index. */
@@ -1712,34 +1721,22 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
         s->player_potion_timer = 3;
     }
 
-    /* movement: human click (BFS) or RL agent (direct 25-action) */
-    if (s->player_dest_x >= 0) {
-        /* human click or destination-based: BFS toward dest */
-        encounter_move_toward_dest(&s->player, &s->player_dest_x, &s->player_dest_y,
-            s->collision_map, s->world_offset_x, s->world_offset_y,
-            inf_tile_walkable, s);
-    } else {
-        /* RL agent: direct movement from action head */
-        int move_act = actions[INF_HEAD_MOVE];
-        s->player.is_running = 0;
-        if (move_act > 0 && move_act < ENCOUNTER_MOVE_ACTIONS) {
-            encounter_move_to_target(&s->player,
-                ENCOUNTER_MOVE_TARGET_DX[move_act], ENCOUNTER_MOVE_TARGET_DY[move_act],
-                inf_tile_walkable, s);
-        }
-    }
-
-    /* attack target: persistent until NPC dies or player issues movement.
-       in OSRS, clicking an NPC locks target for auto-attack; clicking ground cancels.
+    /* attack target selection: persistent until NPC dies or player clicks ground.
        target=0 means "no new target this tick" (preserves existing target). */
     int target = actions[INF_HEAD_TARGET];
+    int has_new_target = 0;
     if (target > 0 && target <= INF_MAX_NPCS) {
         int npc_idx = target - 1;
         if (s->npcs[npc_idx].active && s->npcs[npc_idx].death_ticks == 0) {
             s->player_attack_target = npc_idx;
+            has_new_target = 1;
         }
-    } else if (actions[INF_HEAD_MOVE] > 0 || s->player_dest_x >= 0) {
-        /* walking cancels attack target (OSRS: clicking ground stops auto-attack) */
+    }
+    /* explicit movement (ground click or RL move) cancels attack target,
+       but only if no new target was set this tick. auto-chase movement
+       does NOT cancel — only explicit user actions do. */
+    int has_explicit_move = (actions[INF_HEAD_MOVE] > 0 || s->player_dest_x >= 0);
+    if (!has_new_target && has_explicit_move) {
         s->player_attack_target = -1;
     }
     /* clear target if NPC died or is dying */
@@ -1747,6 +1744,35 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
         (!s->npcs[s->player_attack_target].active ||
          s->npcs[s->player_attack_target].death_ticks > 0)) {
         s->player_attack_target = -1;
+    }
+
+    /* movement: explicit move, auto-chase toward target, or idle.
+       OSRS order: target selection → movement → attack check. */
+    int chasing = 0;
+    if (has_explicit_move && s->player_attack_target < 0) {
+        /* explicit movement (ground click or RL agent) — no attack target */
+        if (s->player_dest_x >= 0) {
+            encounter_move_toward_dest(&s->player, &s->player_dest_x, &s->player_dest_y,
+                s->collision_map, s->world_offset_x, s->world_offset_y,
+                inf_tile_walkable, s, inf_pathfind_blocked, s);
+        } else {
+            int move_act = actions[INF_HEAD_MOVE];
+            s->player.is_running = 0;
+            if (move_act > 0 && move_act < ENCOUNTER_MOVE_ACTIONS) {
+                encounter_move_to_target(&s->player,
+                    ENCOUNTER_MOVE_TARGET_DX[move_act], ENCOUNTER_MOVE_TARGET_DY[move_act],
+                    inf_tile_walkable, s);
+            }
+        }
+    } else if (s->player_attack_target >= 0) {
+        /* auto-chase: pathfind toward attack target when out of range */
+        InfNPC* chase_npc = &s->npcs[s->player_attack_target];
+        const EncounterLoadoutStats* ls = &s->loadout_stats[s->weapon_set];
+        chasing = encounter_chase_attack_target(&s->player,
+            chase_npc->x, chase_npc->y, INF_NPC_STATS[chase_npc->type].size,
+            ls->attack_range,
+            s->collision_map, s->world_offset_x, s->world_offset_y,
+            inf_tile_walkable, s, inf_pathfind_blocked, s);
     }
 
     /* player attacks targeted NPC */

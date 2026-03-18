@@ -706,7 +706,7 @@ static inline int zul_on_platform(ZulrahState* s, int x, int y) {
 /* BFS pathfinding uses shared encounter_pathfind from osrs_encounter.h */
 #define zul_pathfind(s, sx, sy, dx, dy) \
     encounter_pathfind((const CollisionMap*)(s)->collision_map, \
-        (s)->world_offset_x, (s)->world_offset_y, (sx), (sy), (dx), (dy))
+        (s)->world_offset_x, (s)->world_offset_y, (sx), (sy), (dx), (dy), NULL, NULL)
 
 /* walkability callback for encounter_move_toward_dest */
 static int zul_tile_walkable(void* ctx, int x, int y) {
@@ -1664,7 +1664,7 @@ static void zul_process_movement(ZulrahState* s, int move) {
     /* use shared BFS click-to-move when destination is set (human or RL) */
     encounter_move_toward_dest(&s->player, &s->player_dest_x, &s->player_dest_y,
         (const CollisionMap*)s->collision_map, s->world_offset_x, s->world_offset_y,
-        zul_tile_walkable, s);
+        zul_tile_walkable, s, NULL, NULL);
 }
 
 static void zul_process_prayer(ZulrahState* s, int p) {
