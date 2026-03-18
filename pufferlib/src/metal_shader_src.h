@@ -914,10 +914,13 @@ kernel void ppo_loss_fwd_bwd_kernel(
         }
         grad_values_pred[nt] = dL * pp.vf_coef * d_val_pred;
 
-        // Policy loss + gradients
+        // Policy loss + gradients. Both branches produce pg_loss, total_entropy,
+        // logratio, ratio — the block-loss accumulation is shared after the if/else.
+        float pg_loss, total_entropy, logratio, ratio;
+
         if (pp.is_continuous) {
             float total_log_prob = 0.0f;
-            float total_entropy = 0.0f;
+            total_entropy = 0.0f;
             for (int h = 0; h < pp.num_atns; h++) {
                 float mean = logits[logits_base + h * pp.logits_stride_a];
                 float log_std = logstd[logits_base + h * pp.logits_stride_a];
@@ -928,23 +931,18 @@ kernel void ppo_loss_fwd_bwd_kernel(
                 total_entropy += ent;
             }
 
-            // clamp logratio: cpu_inference + multi-head GEMM precision mismatch can
-            // push |logratio| past exp overflow. exp(5)≈148 is plenty for PPO clipping.
-            float logratio = clamp(total_log_prob - old_logp, -5.0f, 5.0f);
-            float ratio = exp(logratio);
+            logratio = clamp(total_log_prob - old_logp, -5.0f, 5.0f);
+            ratio = exp(logratio);
             out_ratio[nt] = ratio;
             float ratio_clipped = clamp(ratio, 1.0f - pp.clip_coef, 1.0f + pp.clip_coef);
             float wa = -w * adv_normalized;
-            float pg_loss1 = wa * ratio;
-            float pg_loss2 = wa * ratio_clipped;
-            float pg_loss = fmax(pg_loss1, pg_loss2);
+            pg_loss = fmax(wa * ratio, wa * ratio_clipped);
 
             // Backward: policy gradient
             float d_ratio = wa * d_pg_loss;
-            if (pg_loss2 > pg_loss1) {
-                if (ratio <= (1.0f - pp.clip_coef) || ratio >= (1.0f + pp.clip_coef)) {
+            if (wa * ratio_clipped > wa * ratio) {
+                if (ratio <= (1.0f - pp.clip_coef) || ratio >= (1.0f + pp.clip_coef))
                     d_ratio = 0.0f;
-                }
             }
             float d_new_logp = d_ratio * ratio;
 
@@ -959,15 +957,6 @@ kernel void ppo_loss_fwd_bwd_kernel(
                 grad_logits[grad_logits_base + h] = d_new_logp * diff / var;
                 grad_logstd[grad_logits_base + h] = d_new_logp * (diff * diff / var - 1.0f) + d_entropy_term;
             }
-
-            float thread_loss = (pg_loss + pp.vf_coef * v_loss - pp.ent_coef * total_entropy) * inv_NT;
-            block_losses[LOSS_PG][tid] = pg_loss * inv_NT;
-            block_losses[LOSS_VF][tid] = v_loss * inv_NT;
-            block_losses[LOSS_ENT][tid] = total_entropy * inv_NT;
-            block_losses[LOSS_TOTAL][tid] = thread_loss;
-            block_losses[LOSS_OLD_APPROX_KL][tid] = (-logratio) * inv_NT;
-            block_losses[LOSS_APPROX_KL][tid] = ((ratio - 1.0f) - logratio) * inv_NT;
-            block_losses[LOSS_CLIPFRAC][tid] = (abs(ratio - 1.0f) > pp.clip_coef ? 1.0f : 0.0f) * inv_NT;
         } else {
             // Discrete: compute per-head logsumexp, entropy, log_prob with action masks.
             // Mask data is embedded in obs buffer with stride pp.mask_stride.
@@ -977,7 +966,7 @@ kernel void ppo_loss_fwd_bwd_kernel(
 
             int logits_offset = 0;
             float total_log_prob = 0.0f;
-            float total_entropy = 0.0f;
+            total_entropy = 0.0f;
             int mask_base = (int)idx * pp.mask_stride;
 
             for (int h = 0; h < pp.num_atns; h++) {
@@ -994,23 +983,18 @@ kernel void ppo_loss_fwd_bwd_kernel(
                 logits_offset += A;
             }
 
-            // clamp logratio: cpu_inference + multi-head GEMM precision mismatch can
-            // push |logratio| past exp overflow. exp(5)≈148 is plenty for PPO clipping.
-            float logratio = clamp(total_log_prob - old_logp, -5.0f, 5.0f);
-            float ratio = exp(logratio);
+            logratio = clamp(total_log_prob - old_logp, -5.0f, 5.0f);
+            ratio = exp(logratio);
             out_ratio[nt] = ratio;
             float ratio_clipped = clamp(ratio, 1.0f - pp.clip_coef, 1.0f + pp.clip_coef);
             float wa = -w * adv_normalized;
-            float pg_loss1 = wa * ratio;
-            float pg_loss2 = wa * ratio_clipped;
-            float pg_loss = fmax(pg_loss1, pg_loss2);
+            pg_loss = fmax(wa * ratio, wa * ratio_clipped);
 
             // Backward: policy gradient
             float d_ratio = wa * d_pg_loss;
-            if (pg_loss2 > pg_loss1) {
-                if (ratio <= (1.0f - pp.clip_coef) || ratio >= (1.0f + pp.clip_coef)) {
+            if (wa * ratio_clipped > wa * ratio) {
+                if (ratio <= (1.0f - pp.clip_coef) || ratio >= (1.0f + pp.clip_coef))
                     d_ratio = 0.0f;
-                }
             }
             float d_new_logp = d_ratio * ratio;
 
@@ -1031,22 +1015,21 @@ kernel void ppo_loss_fwd_bwd_kernel(
                     float d_logit = (a == act) ? d_new_logp : 0.0f;
                     d_logit -= p * d_new_logp;
                     d_logit += d_entropy_term * p * (-ent - logp);
-                    // Zero gradient for masked-out actions
                     if (m < 0.5f) d_logit = 0.0f;
                     grad_logits[grad_logits_base + logits_offset + a] = d_logit;
                 }
                 logits_offset += A;
             }
-
-            float thread_loss = (pg_loss + pp.vf_coef * v_loss - pp.ent_coef * total_entropy) * inv_NT;
-            block_losses[LOSS_PG][tid] = pg_loss * inv_NT;
-            block_losses[LOSS_VF][tid] = v_loss * inv_NT;
-            block_losses[LOSS_ENT][tid] = total_entropy * inv_NT;
-            block_losses[LOSS_TOTAL][tid] = thread_loss;
-            block_losses[LOSS_OLD_APPROX_KL][tid] = (-logratio) * inv_NT;
-            block_losses[LOSS_APPROX_KL][tid] = ((ratio - 1.0f) - logratio) * inv_NT;
-            block_losses[LOSS_CLIPFRAC][tid] = (abs(ratio - 1.0f) > pp.clip_coef ? 1.0f : 0.0f) * inv_NT;
         }
+
+        // Shared loss accumulation (both branches produce pg_loss, total_entropy, logratio, ratio)
+        block_losses[LOSS_PG][tid] = pg_loss * inv_NT;
+        block_losses[LOSS_VF][tid] = v_loss * inv_NT;
+        block_losses[LOSS_ENT][tid] = total_entropy * inv_NT;
+        block_losses[LOSS_TOTAL][tid] = (pg_loss + pp.vf_coef * v_loss - pp.ent_coef * total_entropy) * inv_NT;
+        block_losses[LOSS_OLD_APPROX_KL][tid] = (-logratio) * inv_NT;
+        block_losses[LOSS_APPROX_KL][tid] = ((ratio - 1.0f) - logratio) * inv_NT;
+        block_losses[LOSS_CLIPFRAC][tid] = (abs(ratio - 1.0f) > pp.clip_coef ? 1.0f : 0.0f) * inv_NT;
     } // end if (idx < total_elements)
 
     threadgroup_barrier(mem_flags::mem_threadgroup);
