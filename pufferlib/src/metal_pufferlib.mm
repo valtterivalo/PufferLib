@@ -643,8 +643,8 @@ void train_impl(PuffeRL& pufferl) {
                 pufferl.act_sizes_puf, pufferl.losses_puf,
                 hypers.clip_coef, hypers.vf_clip_coef, hypers.vf_coef, hypers.ent_coef,
                 pufferl.ppo_bufs_puf, pufferl.is_continuous,
-                pufferl.has_mask ? nullptr : (const float*)pufferl.ones_mask.bytes,
-                pufferl.has_mask ? 0 : 0,  // stride=0: all rows read same ones
+                pufferl.has_mask ? nullptr : (const float*)pufferl.ones_mask.bytes,  // nullptr = mask embedded in obs
+                0,  // ext_mask_stride: 0 = broadcast single row (only used when ext_mask_ptr != nullptr)
                 ts);
             mtl_barrier((MetalStream*)ts); // PPO outputs -> backward
 
