@@ -69,12 +69,18 @@ typedef struct EncounterState EncounterState;
 
 #define ENCOUNTER_MAX_PENDING_HITS 8
 
+/* spell types for barrage freeze/heal effects on pending hits */
+#define ENCOUNTER_SPELL_NONE  0
+#define ENCOUNTER_SPELL_ICE   1   /* ice barrage: freeze on hit */
+#define ENCOUNTER_SPELL_BLOOD 2   /* blood barrage: heal 25% of AoE damage */
+
 typedef struct {
     int active;
     int damage;
     int ticks_remaining;   /* countdown to landing */
     int attack_style;      /* ATTACK_STYLE_* for prayer check at land time */
     int check_prayer;      /* 1 = re-check prayer when hit lands (jad) */
+    int spell_type;        /* ENCOUNTER_SPELL_* for freeze/heal effects */
 } EncounterPendingHit;
 
 /* visual overlay data: shared between encounter and renderer.
@@ -510,6 +516,41 @@ static inline void encounter_damage_npc(
     }
     *hit_landed = 1;
     *hit_damage = damage > 0 ? damage : 0;
+}
+
+/* ======================================================================== */
+/* shared NPC pending hit resolution (barrage freeze + blood heal)           */
+/* ======================================================================== */
+
+/** resolve a single NPC's pending hit. tick down, apply damage when it lands.
+    ice barrage: sets *frozen_ticks = BARRAGE_FREEZE_TICKS on hit.
+    blood barrage: accumulates landed damage into *blood_heal_acc for 25% heal.
+    returns 1 if hit landed this call, 0 otherwise. */
+static inline int encounter_resolve_npc_pending_hit(
+    EncounterPendingHit* ph,
+    int* npc_hp, int* hit_landed, int* hit_damage,
+    int* frozen_ticks, int* blood_heal_acc, float* damage_dealt_acc
+) {
+    if (!ph->active) return 0;
+    ph->ticks_remaining--;
+    if (ph->ticks_remaining > 0) return 0;
+
+    /* hit landed */
+    int dmg = ph->damage;
+    encounter_damage_npc(npc_hp, hit_landed, hit_damage, dmg);
+    if (damage_dealt_acc) *damage_dealt_acc += dmg;
+
+    /* ice barrage: freeze on hit (including 0 dmg — only splashes don't freeze,
+       and splashes never enter the pending hit queue) */
+    if (ph->spell_type == ENCOUNTER_SPELL_ICE && frozen_ticks)
+        *frozen_ticks = BARRAGE_FREEZE_TICKS;
+
+    /* blood barrage: accumulate damage for 25% heal */
+    if (ph->spell_type == ENCOUNTER_SPELL_BLOOD && blood_heal_acc)
+        *blood_heal_acc += dmg;
+
+    ph->active = 0;
+    return 1;
 }
 
 /* ======================================================================== */

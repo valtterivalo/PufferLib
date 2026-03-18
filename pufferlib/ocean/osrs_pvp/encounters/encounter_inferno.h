@@ -1684,9 +1684,13 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
         }
     }
 
-    /* spell choice for mage attacks */
+    /* spell choice for mage attacks — normalize to ENCOUNTER_SPELL_*.
+       human sends ATTACK_ICE=2 / ATTACK_BLOOD=3, RL sends 0=blood / 1=ice. */
     int spell_act = actions[INF_HEAD_SPELL];
-    s->spell_choice = spell_act;  /* 0 = blood barrage, 1 = ice barrage */
+    if (spell_act == ATTACK_ICE || spell_act == 1)
+        s->spell_choice = ENCOUNTER_SPELL_ICE;
+    else
+        s->spell_choice = ENCOUNTER_SPELL_BLOOD;
 
     /* consumables — shared 3-tick potion timer */
     if (s->player_potion_timer > 0) s->player_potion_timer--;
@@ -1836,7 +1840,8 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
                         ph->damage = btargets[i].damage;
                         ph->ticks_remaining = hit_delay;
                         ph->attack_style = ATTACK_STYLE_MAGIC;
-                        ph->check_prayer = s->spell_choice;  /* 0=blood, 1=ice — used at land time */
+                        ph->check_prayer = 0;
+                        ph->spell_type = s->spell_choice;  /* ENCOUNTER_SPELL_ICE or _BLOOD */
                     }
 
                 } else if (s->weapon_set == INF_GEAR_TBOW) {
@@ -1888,8 +1893,8 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
                 /* player attack animation + spell type for renderer effect system */
                 s->player.attack_style_this_tick = ls->style;
                 if (s->weapon_set == INF_GEAR_MAGE) {
-                    /* 0=none, 1=ice, 2=blood — spell_choice is 0=blood, 1=ice */
-                    s->player.magic_type_this_tick = (s->spell_choice == 1) ? 1 : 2;
+                    /* 0=none, 1=ice, 2=blood */
+                    s->player.magic_type_this_tick = (s->spell_choice == ENCOUNTER_SPELL_ICE) ? 1 : 2;
                 }
             }
         }
@@ -1985,33 +1990,17 @@ static void inf_step(EncounterState* state, const int* actions) {
     /* on the same tick the projectile lands (NPC can't act while frozen). */
     /* ------------------------------------------------------------------ */
     {
-        int barrage_dmg_landed = 0;  /* track blood barrage healing */
+        int blood_heal_acc = 0;
         for (int i = 0; i < INF_MAX_NPCS; i++) {
-            EncounterPendingHit* ph = &s->npcs[i].pending_hit;
-            if (!ph->active) continue;
-            ph->ticks_remaining--;
-            if (ph->ticks_remaining <= 0) {
-                int dmg = ph->damage;
-                int is_ice_barrage = (ph->attack_style == ATTACK_STYLE_MAGIC && ph->check_prayer == 1);
-                int is_blood_barrage = (ph->attack_style == ATTACK_STYLE_MAGIC && ph->check_prayer == 0);
-                /* apply damage (skip dying NPCs in death linger) */
-                if (s->npcs[i].active && s->npcs[i].death_ticks == 0) {
-                    encounter_damage_npc(&s->npcs[i].hp, &s->npcs[i].hit_landed_this_tick, &s->npcs[i].hit_damage, dmg);
-                    s->damage_dealt_this_tick += dmg;
-                    /* ice barrage freeze on hit (including 0 dmg hits, not splashes —
-                       damage > 0 means it hit, queued hits already passed accuracy) */
-                    if (is_ice_barrage)
-                        s->npcs[i].frozen_ticks = BARRAGE_FREEZE_TICKS;
-                    if (is_blood_barrage)
-                        barrage_dmg_landed += dmg;
-                    inf_apply_npc_death(s, i);
-                }
-                ph->active = 0;
-            }
+            if (!s->npcs[i].active || s->npcs[i].death_ticks > 0) continue;
+            int landed = encounter_resolve_npc_pending_hit(
+                &s->npcs[i].pending_hit,
+                &s->npcs[i].hp, &s->npcs[i].hit_landed_this_tick, &s->npcs[i].hit_damage,
+                &s->npcs[i].frozen_ticks, &blood_heal_acc, &s->damage_dealt_this_tick);
+            if (landed) inf_apply_npc_death(s, i);
         }
-        /* blood barrage: heal 25% of total AoE damage that landed this tick */
-        if (barrage_dmg_landed > 0) {
-            s->player.current_hitpoints += barrage_dmg_landed / 4;
+        if (blood_heal_acc > 0) {
+            s->player.current_hitpoints += blood_heal_acc / 4;
             if (s->player.current_hitpoints > s->player.base_hitpoints)
                 s->player.current_hitpoints = s->player.base_hitpoints;
         }
