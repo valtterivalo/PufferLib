@@ -2429,7 +2429,7 @@ static void inf_render_post_tick(EncounterState* state, EncounterOverlay* ov) {
                 target->x, target->y, target_size);
             int p_style = inf_attack_style_to_proj_style(s->player_attack_style_id);
             float p_arc = 0.0f;
-            int p_tracks = 1;
+            int p_tracks = 0;  /* don't track — tracking loop targets entity 0 (player) */
             int p_duration;
 
             uint32_t player_proj_model = 0;
