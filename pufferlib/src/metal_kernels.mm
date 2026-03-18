@@ -977,33 +977,21 @@ void mtl_scatter_ppo_outputs(TrainGraph& graph, RolloutBuf& rollouts,
     MetalStream *ms = mtl_resolve_stream(stream);
     int num_idx = (int)graph.mb_ratio.shape[0];
 
-    // mb_ratio → rollouts.ratio
-    {
+    auto scatter = [&](PufTensor& dst, PufTensor& src) {
         ms->compute_encoder();
         auto pso = mtl_pipeline("index_copy_kernel");
         mtl_set_pso(ms, pso);
-        int row_bytes = (int)(graph.mb_ratio.shape[1] * graph.mb_ratio.dtype_size);
-        mtl_set_ptr(ms, rollouts.ratio.bytes, 0);
+        int row_bytes = (int)(src.shape[1] * src.dtype_size);
+        mtl_set_ptr(ms, dst.bytes, 0);
         mtl_set_ptr(ms, (void*)idx, 1);
-        mtl_set_ptr(ms, graph.mb_ratio.bytes, 2);
+        mtl_set_ptr(ms, src.bytes, 2);
         struct { int num_idx; int row_bytes; } p = {num_idx, row_bytes};
         mtl_set_params(ms, p, 3);
         mtl_dispatch_groups(ms, pso, (num_idx + 255) / 256, 256);
-    }
+    };
 
-    // mb_newvalue → rollouts.values
-    {
-        ms->compute_encoder();
-        auto pso = mtl_pipeline("index_copy_kernel");
-        mtl_set_pso(ms, pso);
-        int row_bytes = (int)(graph.mb_newvalue.shape[1] * graph.mb_newvalue.dtype_size);
-        mtl_set_ptr(ms, rollouts.values.bytes, 0);
-        mtl_set_ptr(ms, (void*)idx, 1);
-        mtl_set_ptr(ms, graph.mb_newvalue.bytes, 2);
-        struct { int num_idx; int row_bytes; } p = {num_idx, row_bytes};
-        mtl_set_params(ms, p, 3);
-        mtl_dispatch_groups(ms, pso, (num_idx + 255) / 256, 256);
-    }
+    scatter(rollouts.ratio, graph.mb_ratio);
+    scatter(rollouts.values, graph.mb_newvalue);
 }
 
 // ============================================================================
