@@ -201,7 +201,7 @@ typedef struct {
 typedef struct {
     Policy* policy;
     PolicyWeights weights_fp32;
-    PolicyWeights weights_bf16;  // fp16 training weights (was shared with fp32)
+    PolicyWeights weights_fp16;  // fp16 training weights
     // Double-buffered inference weights for rollout/training overlap.
     // Rollout reads weights_infer (GPU compute), training writes weights_fp32 (GPU).
     // After each training sync, weights_fp32 is memcpy'd to weights_infer.
@@ -234,7 +234,7 @@ typedef struct {
     PrioBuffers prio_bufs;
     PufTensor param_fp32_puf;
     PufTensor param_fp16_puf;   // fp16 weight buffer (flat view)
-    PufTensor grad_bf16_puf;    // fp16 gradient buffer (flat view)
+    PufTensor grad_fp16_puf;  // gradient buffer (fp16 when train_fp16, else fp32)
     PufTensor grad_norm_puf;
     PufTensor rng_offset_puf;
     // fp16 boundary buffers: obs cast (fp32→fp16), dec_out cast (fp16→fp32),
@@ -538,199 +538,26 @@ void train_impl(PuffeRL& pufferl) {
     uint64_t tp_preloop1 = mach_absolute_time();
     pufferl.profile.accum[PROF_TRAIN_PRELOOP] += prof_ms(tp_preloop0, tp_preloop1);
 
-    puf_set_gpu_training(false);
-
-    if (pufferl.overlap_enabled) {
-        // Iteration-level async: dispatch ALL training minibatches on train_stream
-        // (separate Metal command queue). GPU executes the training work asynchronously
-        // during the next rollout (which reads weights_infer on the main queue).
-        // 1-iteration policy lag — V-trace importance ratios compensate.
-        cudaStream_t ts = train_stream;
-        uint32_t* train_rng_offset = (uint32_t*)((int64_t*)pufferl.rng_offset_puf.bytes + hypers.num_buffers);
-
-        // Sync previous async training before copying updated weights.
-        // After this, weights_fp32 reflect the latest optimizer step.
-        if (pufferl.train_pending) {
-            sync_pending_train(pufferl);
-        }
-
-        // Copy trained weights to inference buffer so the NEXT rollout sees them.
-        // Safe: rollout is not running (main loop is sequential: rollout → train).
-        {
-            int64_t total_elems = pufferl.alloc_fp32.params.total_elems;
-            PufTensor fp32_all = {.bytes = (char*)pufferl.alloc_fp32.params.mem,
-                                  .shape = {total_elems}, .dtype_size = sizeof(float)};
-            PufTensor infer_all = {.bytes = (char*)pufferl.infer_params_alloc.mem,
-                                   .shape = {total_elems}, .dtype_size = sizeof(float)};
-            puf_copy(infer_all, fp32_all, ts);
-            mtl_barrier((MetalStream*)ts);  // ensure copy visible before training reads weights_fp32
-        }
-
-        puf_set_gpu_training(true);
-
-        for (int mb = 0; mb < total_minibatches; ++mb) {
-            uint64_t tp0 = mach_absolute_time();
-
-            puf_zero(pufferl.advantages_puf, ts);
-            puff_advantage_cuda(rollouts.values, rollouts.rewards, rollouts.terminals,
-                rollouts.ratio, pufferl.advantages_puf, hypers.gamma, hypers.gae_lambda,
-                hypers.vtrace_rho_clip, hypers.vtrace_c_clip, ts);
-            prio_replay_cuda(pufferl.advantages_puf, prio_alpha, minibatch_segments,
-                hypers.total_agents, anneal_beta,
-                pufferl.prio_bufs, pufferl.rng_seed, train_rng_offset, ts);
-            mtl_barrier((MetalStream*)ts); // prio idx/weights -> select copy
-
-            uint64_t tp2 = mach_absolute_time();
-
-            puf_zero(pufferl.train_buf.mb_state, ts);
-            {
-                RolloutBuf sel_src = rollouts;
-                sel_src.values = pufferl.old_values_puf;
-                mtl_select_copy(sel_src, pufferl.train_buf,
-                    (const int64_t*)pufferl.prio_bufs.idx.bytes,
-                    (const float*)pufferl.advantages_puf.bytes,
-                    (const float*)pufferl.prio_bufs.mb_prio.bytes,
-                    minibatch_segments,
-                    pufferl.fp16_obs_buf.bytes, ts);
-            }
-            mtl_barrier((MetalStream*)ts); // minibatch buffers -> forward/PPO
-
-            uint64_t tp3 = mach_absolute_time();
-
-            // fp16 training: use fp16 obs/state/weights; fp32: use standard buffers
-            PolicyWeights& train_weights = pufferl.train_fp16 ? pufferl.weights_bf16 : pufferl.weights_fp32;
-            PufTensor obs_puf = pufferl.train_fp16 ? pufferl.fp16_obs_buf : pufferl.train_buf.mb_obs;
-            PufTensor state_puf = pufferl.train_fp16 ? pufferl.fp16_state_buf : pufferl.train_buf.mb_state;
-            if (pufferl.train_fp16) puf_zero(pufferl.fp16_state_buf, ts);
-
-            PufTensor dec_puf = policy_forward_train(pufferl.policy, train_weights,
-                pufferl.train_activations, obs_puf, state_puf, ts);
-
-            uint64_t tp4 = mach_absolute_time();
-
-            // PPO operates in fp32. Cast decoder output if training in fp16.
-            PufTensor dec_puf_f32;
-            if (pufferl.train_fp16) {
-                mtl_barrier((MetalStream*)ts);
-                mtl_cast_f16_to_f32((float*)pufferl.fp32_dec_out_buf.bytes,
-                                    dec_puf.bytes, (int)dec_puf.numel(), ts);
-                mtl_barrier((MetalStream*)ts);
-                dec_puf_f32 = pufferl.fp32_dec_out_buf;
-                dec_puf_f32.shape[0] = dec_puf.shape[0];
-                dec_puf_f32.shape[1] = dec_puf.shape[1];
-                dec_puf_f32.shape[2] = dec_puf.shape[2];
-            } else {
-                dec_puf_f32 = dec_puf;
-            }
-
-            PufTensor p_logstd;
-            if (pufferl.is_continuous) {
-                p_logstd = ((DecoderWeights*)pufferl.weights_fp32.decoder)->logstd;
-            }
-
-            ppo_loss_fwd_bwd(dec_puf_f32, p_logstd, pufferl.train_buf,
-                pufferl.act_sizes_puf, pufferl.losses_puf,
-                hypers.clip_coef, hypers.vf_clip_coef, hypers.vf_coef, hypers.ent_coef,
-                pufferl.ppo_bufs_puf, pufferl.is_continuous,
-                pufferl.has_mask ? nullptr : (const float*)pufferl.ones_mask.bytes,  // nullptr = mask embedded in obs
-                0,  // ext_mask_stride: 0 = broadcast single row (only used when ext_mask_ptr != nullptr)
-                ts);
-            mtl_barrier((MetalStream*)ts); // PPO outputs -> backward
-
-            uint64_t tp5 = mach_absolute_time();
-
-            PufTensor grad_logits_puf = pufferl.ppo_bufs_puf.grad_logits;
-            PufTensor grad_logstd_puf = pufferl.is_continuous ? pufferl.ppo_bufs_puf.grad_logstd : PufTensor();
-            PufTensor grad_values_puf = pufferl.ppo_bufs_puf.grad_values;
-            policy_backward(pufferl.policy, train_weights, pufferl.train_activations,
-                grad_logits_puf, grad_logstd_puf, grad_values_puf, ts);
-
-            uint64_t tp6 = mach_absolute_time();
-
-            PufTensor& gc = pufferl.muon->gc_puf;
-            if (pufferl.grad_bf16_puf.dtype_size == 2) {
-                mtl_barrier((MetalStream*)ts);
-                mtl_cast_f16_to_f32((float*)gc.bytes,
-                                    pufferl.grad_bf16_puf.bytes,
-                                    (int)pufferl.grad_bf16_puf.numel(), ts);
-            } else {
-                puf_copy(gc, pufferl.grad_bf16_puf, ts);
-            }
-
-            uint64_t tp7 = mach_absolute_time();
-
-            mtl_barrier((MetalStream*)ts); // grad_cast→clip
-            {
-                float* scratch = (float*)pufferl.grad_norm_puf.bytes;
-                clip_grad_norm_f32(gc, scratch, hypers.max_grad_norm, 1e-6f, ts);
-            }
-
-            uint64_t tp8 = mach_absolute_time();
-
-            mtl_barrier((MetalStream*)ts); // clip→optimizer
-            muon_step(pufferl.muon, ts);
-
-            // fp16 training: cast updated fp32 master weights back to fp16
-            if (pufferl.train_fp16) {
-                mtl_cast_f32_to_f16(pufferl.param_fp16_puf.bytes,
-                                    (const float*)pufferl.alloc_fp32.params.mem,
-                                    (int)pufferl.alloc_fp32.params.total_elems, ts);
-            }
-
-            // Metal 4 coherence: barrier so next minibatch's forward pass
-            // sees updated weights from optimizer.
-            mtl_barrier((MetalStream*)ts);
-
-            uint64_t tp9 = mach_absolute_time();
-
-            pufferl.profile.accum[PROF_TRAIN_PRIO] += prof_ms(tp0, tp2);
-            pufferl.profile.accum[PROF_TRAIN_SELECT] += prof_ms(tp2, tp3);
-            pufferl.profile.accum[PROF_TRAIN_FWD] += prof_ms(tp3, tp4);
-            pufferl.profile.accum[PROF_TRAIN_PPO] += prof_ms(tp4, tp5);
-            pufferl.profile.accum[PROF_TRAIN_BACKWARD] += prof_ms(tp5, tp6);
-            pufferl.profile.accum[PROF_TRAIN_GRAD_COPY] += prof_ms(tp6, tp7);
-            pufferl.profile.accum[PROF_TRAIN_GRAD_CLIP] += prof_ms(tp7, tp8);
-            pufferl.profile.accum[PROF_TRAIN_MUON] += prof_ms(tp8, tp9);
-            pufferl.profile.accum[PROF_TRAIN_MISC] += prof_ms(tp0, tp3);
-            pufferl.profile.accum[PROF_TRAIN_FORWARD] += prof_ms(tp3, tp9);
-        }
-
-        // Weight copy moved to START of next train_impl (after sync).
-        // No copy here — training compute runs async, rollout reads old weights_infer.
-
-        puf_set_gpu_training(false);
-
-        // Flush train_stream: commit command buffer so GPU starts executing
-        // asynchronously. Next train_impl syncs before copying updated weights.
-        ((MetalStream*)train_stream)->flush();
-
-        pufferl.train_pending = true;
-        pufferl.epoch += 1;
-        return;
-    }
-
-    // Non-overlap: run minibatch loop synchronously.
-    uint32_t* train_rng_offset = (uint32_t*)((int64_t*)pufferl.rng_offset_puf.bytes + hypers.num_buffers);
-
-    bool gpu_profile = hypers.profile;
-    puf_set_gpu_training(true);
-    for (int mb = 0; mb < total_minibatches; ++mb) {
-        if (gpu_profile) ensure_gpu_synced(train_stream);
+    // Single minibatch step: advantage → prio → select → forward → PPO → backward → muon.
+    // Used by both overlap and non-overlap paths. gpu_profile gates sync-before-timestamp
+    // for accurate per-phase GPU timing (defeats async, so only used in non-overlap + --profile).
+    auto run_minibatch = [&](cudaStream_t s, uint32_t* rng_offset, bool gpu_profile) {
+        if (gpu_profile) ensure_gpu_synced(s);
         uint64_t tp0 = mach_absolute_time();
 
-        puf_zero(pufferl.advantages_puf, train_stream);
+        puf_zero(pufferl.advantages_puf, s);
         puff_advantage_cuda(rollouts.values, rollouts.rewards, rollouts.terminals,
             rollouts.ratio, pufferl.advantages_puf, hypers.gamma, hypers.gae_lambda,
-            hypers.vtrace_rho_clip, hypers.vtrace_c_clip, train_stream);
+            hypers.vtrace_rho_clip, hypers.vtrace_c_clip, s);
         prio_replay_cuda(pufferl.advantages_puf, prio_alpha, minibatch_segments,
             hypers.total_agents, anneal_beta,
-            pufferl.prio_bufs, pufferl.rng_seed, train_rng_offset, train_stream);
-        mtl_barrier((MetalStream*)train_stream); // prio idx/weights -> select copy
+            pufferl.prio_bufs, pufferl.rng_seed, rng_offset, s);
+        mtl_barrier((MetalStream*)s);
 
-        if (gpu_profile) ensure_gpu_synced(train_stream);
+        if (gpu_profile) ensure_gpu_synced(s);
         uint64_t tp2 = mach_absolute_time();
 
-        puf_zero(pufferl.train_buf.mb_state, train_stream);
+        puf_zero(pufferl.train_buf.mb_state, s);
         {
             RolloutBuf sel_src = rollouts;
             sel_src.values = pufferl.old_values_puf;
@@ -739,32 +566,30 @@ void train_impl(PuffeRL& pufferl) {
                 (const float*)pufferl.advantages_puf.bytes,
                 (const float*)pufferl.prio_bufs.mb_prio.bytes,
                 minibatch_segments,
-                pufferl.fp16_obs_buf.bytes, train_stream);
+                pufferl.fp16_obs_buf.bytes, s);
         }
-        mtl_barrier((MetalStream*)train_stream); // minibatch buffers -> forward/PPO
+        mtl_barrier((MetalStream*)s);
 
-        if (gpu_profile) ensure_gpu_synced(train_stream);
+        if (gpu_profile) ensure_gpu_synced(s);
         uint64_t tp3 = mach_absolute_time();
 
-        // fp16 training: use fp16 obs/state/weights; fp32: use standard buffers
-        PolicyWeights& train_weights = pufferl.train_fp16 ? pufferl.weights_bf16 : pufferl.weights_fp32;
+        PolicyWeights& train_weights = pufferl.train_fp16 ? pufferl.weights_fp16 : pufferl.weights_fp32;
         PufTensor obs_puf = pufferl.train_fp16 ? pufferl.fp16_obs_buf : pufferl.train_buf.mb_obs;
         PufTensor state_puf = pufferl.train_fp16 ? pufferl.fp16_state_buf : pufferl.train_buf.mb_state;
-        if (pufferl.train_fp16) puf_zero(pufferl.fp16_state_buf, train_stream);
+        if (pufferl.train_fp16) puf_zero(pufferl.fp16_state_buf, s);
 
         PufTensor dec_puf = policy_forward_train(pufferl.policy, train_weights,
-            pufferl.train_activations, obs_puf, state_puf, train_stream);
+            pufferl.train_activations, obs_puf, state_puf, s);
 
-        if (gpu_profile) ensure_gpu_synced(train_stream);
+        if (gpu_profile) ensure_gpu_synced(s);
         uint64_t tp4 = mach_absolute_time();
 
-        // PPO operates in fp32. Cast decoder output if training in fp16.
         PufTensor dec_puf_f32;
         if (pufferl.train_fp16) {
-            mtl_barrier((MetalStream*)train_stream);
+            mtl_barrier((MetalStream*)s);
             mtl_cast_f16_to_f32((float*)pufferl.fp32_dec_out_buf.bytes,
-                                dec_puf.bytes, (int)dec_puf.numel(), train_stream);
-            mtl_barrier((MetalStream*)train_stream);
+                                dec_puf.bytes, (int)dec_puf.numel(), s);
+            mtl_barrier((MetalStream*)s);
             dec_puf_f32 = pufferl.fp32_dec_out_buf;
             dec_puf_f32.shape[0] = dec_puf.shape[0];
             dec_puf_f32.shape[1] = dec_puf.shape[1];
@@ -777,64 +602,62 @@ void train_impl(PuffeRL& pufferl) {
         if (pufferl.is_continuous) {
             p_logstd = ((DecoderWeights*)pufferl.weights_fp32.decoder)->logstd;
         }
+
         ppo_loss_fwd_bwd(dec_puf_f32, p_logstd, pufferl.train_buf,
             pufferl.act_sizes_puf, pufferl.losses_puf,
             hypers.clip_coef, hypers.vf_clip_coef, hypers.vf_coef, hypers.ent_coef,
             pufferl.ppo_bufs_puf, pufferl.is_continuous,
-            pufferl.has_mask ? nullptr : (const float*)pufferl.ones_mask.bytes,
-            pufferl.has_mask ? 0 : 0,  // stride=0: all rows read same ones
-            train_stream);
-        mtl_barrier((MetalStream*)train_stream); // PPO outputs -> backward
+            pufferl.has_mask ? nullptr : (const float*)pufferl.ones_mask.bytes,  // nullptr = mask embedded in obs
+            0,  // ext_mask_stride: 0 = broadcast single row (only used when ext_mask_ptr != nullptr)
+            s);
+        mtl_barrier((MetalStream*)s);
 
-        if (gpu_profile) ensure_gpu_synced(train_stream);
+        if (gpu_profile) ensure_gpu_synced(s);
         uint64_t tp5 = mach_absolute_time();
 
         PufTensor grad_logits_puf = pufferl.ppo_bufs_puf.grad_logits;
         PufTensor grad_logstd_puf = pufferl.is_continuous ? pufferl.ppo_bufs_puf.grad_logstd : PufTensor();
         PufTensor grad_values_puf = pufferl.ppo_bufs_puf.grad_values;
         policy_backward(pufferl.policy, train_weights, pufferl.train_activations,
-            grad_logits_puf, grad_logstd_puf, grad_values_puf, train_stream);
+            grad_logits_puf, grad_logstd_puf, grad_values_puf, s);
 
-        if (gpu_profile) ensure_gpu_synced(train_stream);
+        if (gpu_profile) ensure_gpu_synced(s);
         uint64_t tp6 = mach_absolute_time();
 
-        PufTensor& gc_sync = pufferl.muon->gc_puf;
-        if (pufferl.grad_bf16_puf.dtype_size == 2) {
-            mtl_barrier((MetalStream*)train_stream);
-            mtl_cast_f16_to_f32((float*)gc_sync.bytes,
-                                pufferl.grad_bf16_puf.bytes,
-                                (int)pufferl.grad_bf16_puf.numel(), train_stream);
+        PufTensor& gc = pufferl.muon->gc_puf;
+        if (pufferl.grad_fp16_puf.dtype_size == 2) {
+            mtl_barrier((MetalStream*)s);
+            mtl_cast_f16_to_f32((float*)gc.bytes,
+                                pufferl.grad_fp16_puf.bytes,
+                                (int)pufferl.grad_fp16_puf.numel(), s);
         } else {
-            puf_copy(gc_sync, pufferl.grad_bf16_puf, train_stream);
+            puf_copy(gc, pufferl.grad_fp16_puf, s);
         }
 
-        if (gpu_profile) ensure_gpu_synced(train_stream);
+        if (gpu_profile) ensure_gpu_synced(s);
         uint64_t tp7 = mach_absolute_time();
 
-        mtl_barrier((MetalStream*)train_stream); // grad_cast→clip
+        mtl_barrier((MetalStream*)s);
         {
             float* scratch = (float*)pufferl.grad_norm_puf.bytes;
-            clip_grad_norm_f32(gc_sync, scratch, hypers.max_grad_norm, 1e-6f, train_stream);
+            clip_grad_norm_f32(gc, scratch, hypers.max_grad_norm, 1e-6f, s);
         }
 
-        if (gpu_profile) ensure_gpu_synced(train_stream);
+        if (gpu_profile) ensure_gpu_synced(s);
         uint64_t tp8 = mach_absolute_time();
 
-        mtl_barrier((MetalStream*)train_stream); // clip→optimizer
-        muon_step(pufferl.muon, train_stream);
+        mtl_barrier((MetalStream*)s);
+        muon_step(pufferl.muon, s);
 
-        // fp16 training: cast updated fp32 master weights back to fp16
         if (pufferl.train_fp16) {
             mtl_cast_f32_to_f16(pufferl.param_fp16_puf.bytes,
                                 (const float*)pufferl.alloc_fp32.params.mem,
-                                (int)pufferl.alloc_fp32.params.total_elems, train_stream);
+                                (int)pufferl.alloc_fp32.params.total_elems, s);
         }
 
-        // Metal 4 coherence: barrier so next minibatch's forward pass
-        // sees updated weights from optimizer.
-        mtl_barrier((MetalStream*)train_stream);
+        mtl_barrier((MetalStream*)s);
 
-        if (gpu_profile) ensure_gpu_synced(train_stream);
+        if (gpu_profile) ensure_gpu_synced(s);
         uint64_t tp9 = mach_absolute_time();
 
         pufferl.profile.accum[PROF_TRAIN_PRIO] += prof_ms(tp0, tp2);
@@ -847,6 +670,49 @@ void train_impl(PuffeRL& pufferl) {
         pufferl.profile.accum[PROF_TRAIN_MUON] += prof_ms(tp8, tp9);
         pufferl.profile.accum[PROF_TRAIN_MISC] += prof_ms(tp0, tp3);
         pufferl.profile.accum[PROF_TRAIN_FORWARD] += prof_ms(tp3, tp9);
+    };
+
+    uint32_t* train_rng_offset = (uint32_t*)((int64_t*)pufferl.rng_offset_puf.bytes + hypers.num_buffers);
+
+    puf_set_gpu_training(false);
+
+    if (pufferl.overlap_enabled) {
+        // Overlap: dispatch all minibatches on train_stream (separate Metal command queue).
+        // GPU executes async during next rollout. 1-iteration policy lag — V-trace compensates.
+        cudaStream_t ts = train_stream;
+
+        if (pufferl.train_pending) {
+            sync_pending_train(pufferl);
+        }
+
+        // Copy trained weights to inference buffer so the NEXT rollout sees them.
+        {
+            int64_t total_elems = pufferl.alloc_fp32.params.total_elems;
+            PufTensor fp32_all = {.bytes = (char*)pufferl.alloc_fp32.params.mem,
+                                  .shape = {total_elems}, .dtype_size = sizeof(float)};
+            PufTensor infer_all = {.bytes = (char*)pufferl.infer_params_alloc.mem,
+                                   .shape = {total_elems}, .dtype_size = sizeof(float)};
+            puf_copy(infer_all, fp32_all, ts);
+            mtl_barrier((MetalStream*)ts);
+        }
+
+        puf_set_gpu_training(true);
+        for (int mb = 0; mb < total_minibatches; ++mb) {
+            run_minibatch(ts, train_rng_offset, false);
+        }
+        puf_set_gpu_training(false);
+
+        ((MetalStream*)train_stream)->flush();
+        pufferl.train_pending = true;
+        pufferl.epoch += 1;
+        return;
+    }
+
+    // Non-overlap: run minibatch loop synchronously.
+    bool gpu_profile = hypers.profile;
+    puf_set_gpu_training(true);
+    for (int mb = 0; mb < total_minibatches; ++mb) {
+        run_minibatch(train_stream, train_rng_offset, gpu_profile);
     }
 
     pufferl.epoch += 1;
@@ -1073,8 +939,8 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     Allocator& acts = pufferl->alloc_fp16.acts;
     Allocator& grads = pufferl->alloc_fp16.grads;
 
-    pufferl->weights_bf16 = new_weights(esz_fp16);
-    PolicyWeights& wfp16 = pufferl->weights_bf16;
+    pufferl->weights_fp16 = new_weights(esz_fp16);
+    PolicyWeights& wfp16 = pufferl->weights_fp16;
 
     encoder.reg_params(wfp16.encoder, &fp16_params, esz_fp16);
     decoder.reg_params(wfp16.decoder, &fp16_params, esz_fp16);
@@ -1103,7 +969,7 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     // When train_fp16: grads are fp16, need cast to fp32 before muon.
     // When fp32: grads are fp32, just copy (no cast needed).
     int grad_dtype = pufferl->train_fp16 ? esz_fp16 : esz_fp32;
-    pufferl->grad_bf16_puf = {.bytes = (char*)grads.mem, .shape = {grads.total_elems}, .dtype_size = grad_dtype};
+    pufferl->grad_fp16_puf = {.bytes = (char*)grads.mem, .shape = {grads.total_elems}, .dtype_size = grad_dtype};
 
     // Cast fp32 master weights → fp16 training weights
     {
@@ -1303,7 +1169,7 @@ void close_impl(PuffeRL& pufferl) {
     delete (DecoderActivations*)pufferl.train_activations.decoder;
     delete (MinGRUActivations*)pufferl.train_activations.network;
     delete_weights(pufferl.weights_fp32);
-    delete_weights(pufferl.weights_bf16);
+    delete_weights(pufferl.weights_fp16);
     delete_weights(pufferl.weights_infer);
     for (auto& rbuf : pufferl.buffer_activations) {
         delete (EncoderActivations*)rbuf.encoder;
