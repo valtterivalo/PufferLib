@@ -443,8 +443,8 @@ void mtl_init() {
 
     g_ctx.pipelines = [NSMutableDictionary new];
 
-    // Compile Metal 4 tensor_ops GEMM (separate library, different includes).
-    // Falls back gracefully if compilation fails (e.g. older macOS).
+    // Compile Metal 4 tensor_ops GEMM pipelines. All variants must succeed —
+    // steel_gemm fallback is 2-3x slower and we target M4 Pro exclusively.
     {
       NSString *tensor_src = [NSString stringWithUTF8String:get_tensor_ops_shader_source()];
       MTLCompileOptions *tensor_opts = [[MTLCompileOptions alloc] init];
@@ -454,95 +454,38 @@ void mtl_init() {
       id<MTLLibrary> tensor_lib = [g_ctx.device newLibraryWithSource:tensor_src
                                                              options:tensor_opts
                                                                error:&tensor_err];
-      if (tensor_lib) {
-        id<MTLFunction> fn = [tensor_lib newFunctionWithName:@"tensor_ops_gemm_nt_f32"];
+      assert(tensor_lib && "tensor_ops library compilation failed");
+
+      // Helper: compile one PSO from the tensor_ops library, assert on failure.
+      auto compile_pso = [&](const char *name) -> id<MTLComputePipelineState> {
+        id<MTLFunction> fn = [tensor_lib newFunctionWithName:
+            [NSString stringWithUTF8String:name]];
+        assert(fn && "tensor_ops function not found");
         MTLComputePipelineDescriptor *pd = [[MTLComputePipelineDescriptor alloc] init];
         pd.computeFunction = fn;
         pd.maxTotalThreadsPerThreadgroup = 128;
-        g_ctx.tensor_ops_gemm_nt_f32 =
+        NSError *err = nil;
+        id<MTLComputePipelineState> pso =
             [g_ctx.device newComputePipelineStateWithDescriptor:pd
                                                        options:0
                                                     reflection:nil
-                                                         error:&tensor_err];
-        if (g_ctx.tensor_ops_gemm_nt_f32) {
-          // Also compile NN variant for muon Newton-Schulz
-          id<MTLFunction> fn_nn = [tensor_lib newFunctionWithName:@"tensor_ops_gemm_nn_f32"];
-          MTLComputePipelineDescriptor *pd_nn = [[MTLComputePipelineDescriptor alloc] init];
-          pd_nn.computeFunction = fn_nn;
-          pd_nn.maxTotalThreadsPerThreadgroup = 128;
-          NSError *nn_err = nil;
-          g_ctx.tensor_ops_gemm_nn_f32 =
-              [g_ctx.device newComputePipelineStateWithDescriptor:pd_nn
-                                                         options:0
-                                                      reflection:nil
-                                                           error:&nn_err];
-          // Compile fp16 variants
-          NSError *f16_err = nil;
-          id<MTLFunction> fn_nt16 = [tensor_lib newFunctionWithName:@"tensor_ops_gemm_nt_f16"];
-          if (fn_nt16) {
-            MTLComputePipelineDescriptor *pd16 = [[MTLComputePipelineDescriptor alloc] init];
-            pd16.computeFunction = fn_nt16;
-            pd16.maxTotalThreadsPerThreadgroup = 128;
-            g_ctx.tensor_ops_gemm_nt_f16 =
-                [g_ctx.device newComputePipelineStateWithDescriptor:pd16
-                                                           options:0
-                                                        reflection:nil
-                                                             error:&f16_err];
-          }
-          if (g_ctx.tensor_ops_gemm_nt_f16) {
-            id<MTLFunction> fn_nn16 = [tensor_lib newFunctionWithName:@"tensor_ops_gemm_nn_f16"];
-            MTLComputePipelineDescriptor *pd_nn16 = [[MTLComputePipelineDescriptor alloc] init];
-            pd_nn16.computeFunction = fn_nn16;
-            pd_nn16.maxTotalThreadsPerThreadgroup = 128;
-            NSError *nn16_err = nil;
-            g_ctx.tensor_ops_gemm_nn_f16 =
-                [g_ctx.device newComputePipelineStateWithDescriptor:pd_nn16
-                                                           options:0
-                                                        reflection:nil
-                                                             error:&nn16_err];
-          }
-          // TN variants (backward weight gradients)
-          {
-            NSError *tn_err = nil;
-            id<MTLFunction> fn_tn = [tensor_lib newFunctionWithName:@"tensor_ops_gemm_tn_f32"];
-            if (fn_tn) {
-              MTLComputePipelineDescriptor *pd_tn = [[MTLComputePipelineDescriptor alloc] init];
-              pd_tn.computeFunction = fn_tn;
-              pd_tn.maxTotalThreadsPerThreadgroup = 128;
-              g_ctx.tensor_ops_gemm_tn_f32 =
-                  [g_ctx.device newComputePipelineStateWithDescriptor:pd_tn
-                                                             options:0
-                                                          reflection:nil
-                                                               error:&tn_err];
-            }
-            id<MTLFunction> fn_tn16 = [tensor_lib newFunctionWithName:@"tensor_ops_gemm_tn_f16"];
-            if (fn_tn16) {
-              MTLComputePipelineDescriptor *pd_tn16 = [[MTLComputePipelineDescriptor alloc] init];
-              pd_tn16.computeFunction = fn_tn16;
-              pd_tn16.maxTotalThreadsPerThreadgroup = 128;
-              NSError *tn16_err = nil;
-              g_ctx.tensor_ops_gemm_tn_f16 =
-                  [g_ctx.device newComputePipelineStateWithDescriptor:pd_tn16
-                                                             options:0
-                                                          reflection:nil
-                                                               error:&tn16_err];
-            }
-          }
-          printf("[metal] tensor_ops GEMM: NT=%s NN=%s TN=%s NT16=%s NN16=%s TN16=%s\n",
-                 "OK",
-                 g_ctx.tensor_ops_gemm_nn_f32 ? "OK" : nn_err.localizedDescription.UTF8String,
-                 g_ctx.tensor_ops_gemm_tn_f32 ? "OK" : "FAIL",
-                 g_ctx.tensor_ops_gemm_nt_f16 ? "OK" : "FAIL",
-                 g_ctx.tensor_ops_gemm_nn_f16 ? "OK" : "FAIL",
-                 g_ctx.tensor_ops_gemm_tn_f16 ? "OK" : "FAIL");
-        } else {
-          printf("[metal] tensor_ops GEMM pipeline failed: %s\n",
-                 tensor_err.localizedDescription.UTF8String);
+                                                         error:&err];
+        if (!pso) {
+          fprintf(stderr, "[metal] tensor_ops PSO '%s' failed: %s\n",
+                  name, err.localizedDescription.UTF8String);
+          assert(false && "tensor_ops PSO compilation failed");
         }
-      } else {
-        printf("[metal] tensor_ops compilation failed (non-fatal): %s\n",
-               tensor_err.localizedDescription.UTF8String);
-      }
+        return pso;
+      };
+
+      g_ctx.tensor_ops_gemm_nt_f32  = compile_pso("tensor_ops_gemm_nt_f32");
+      g_ctx.tensor_ops_gemm_nn_f32  = compile_pso("tensor_ops_gemm_nn_f32");
+      g_ctx.tensor_ops_gemm_tn_f32  = compile_pso("tensor_ops_gemm_tn_f32");
+      g_ctx.tensor_ops_gemm_nt_f16  = compile_pso("tensor_ops_gemm_nt_f16");
+      g_ctx.tensor_ops_gemm_nn_f16  = compile_pso("tensor_ops_gemm_nn_f16");
+      g_ctx.tensor_ops_gemm_tn_f16  = compile_pso("tensor_ops_gemm_tn_f16");
+
+      printf("[metal] tensor_ops GEMM: NT=OK NN=OK TN=OK NT16=OK NN16=OK TN16=OK\n");
     }
 
     // Metal 4 reusable command buffer infrastructure
