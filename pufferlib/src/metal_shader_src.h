@@ -795,7 +795,6 @@ inline void ppo_discrete_head(
     for (int a = 0; a < A; a++) {
         float l = logits[logits_base + (logits_offset + a) * logits_stride_a];
         if (mask[mask_offset + a] < 0.5f) l = -1e9f;
-        if (!isfinite(l)) l = 0.0f;
         if (a == act) act_logit = l;
         if (l > max_logit) {
             sum *= exp(max_logit - l);
@@ -803,31 +802,29 @@ inline void ppo_discrete_head(
         }
         sum += exp(l - max_logit);
     }
+    // Degenerate input (all masked or non-finite model output): propagate NaN
+    // so the corruption surfaces immediately in the PPO loss rather than
+    // silently producing logp=0 (ratio=1) which poisons gradients.
     if (!isfinite(max_logit) || !isfinite(sum) || sum <= 0.0f) {
-        out_logsumexp = 0.0f;
-        out_entropy = 0.0f;
-        out_logp = 0.0f;
+        out_logsumexp = NAN;
+        out_entropy = NAN;
+        out_logp = NAN;
         return;
     }
     float lse = max_logit + log(sum);
-    if (!isfinite(lse)) lse = max_logit;
 
     float ent = 0.0f;
     for (int a = 0; a < A; a++) {
         float l = logits[logits_base + (logits_offset + a) * logits_stride_a];
         if (mask[mask_offset + a] < 0.5f) l = -1e9f;
-        if (!isfinite(l)) l = 0.0f;
         float logp = l - lse;
-        if (!isfinite(logp)) logp = -80.0f;
         float p = exp(clamp(logp, -80.0f, 80.0f));
-        float ent_term = p * logp;
-        if (isfinite(ent_term)) ent -= ent_term;
+        ent -= p * logp;
     }
 
     out_logsumexp = lse;
     out_entropy = ent;
-    float out_lp = act_logit - lse;
-    out_logp = isfinite(out_lp) ? out_lp : 0.0f;
+    out_logp = act_logit - lse;
 }
 
 // PPO helper: compute log_prob and entropy for a single continuous head
