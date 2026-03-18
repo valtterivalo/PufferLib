@@ -629,10 +629,12 @@ void mtl_mingru_gate(float *out, float *next_state, const float *combined,
 // MinGRU training scan kernels
 // ============================================================================
 
-void mtl_fused_scan_forward(PrefixScan &scan, cudaStream_t stream) {
+// Shared scan dispatch: binds all buffers and dispatches the named kernel.
+static void dispatch_scan_forward(const char *kernel_name, PrefixScan &scan,
+                                   cudaStream_t stream) {
   MetalStream *ms = mtl_get_stream(stream);
   ms->compute_encoder();
-  auto pso = mtl_pipeline("fused_scan_forward_checkpointed");
+  auto pso = mtl_pipeline(kernel_name);
   mtl_set_pso(ms, pso);
   mtl_set_ptr(ms, scan.out.bytes, 0);
   mtl_set_ptr(ms, scan.next_state.bytes, 1);
@@ -642,65 +644,17 @@ void mtl_fused_scan_forward(PrefixScan &scan, cudaStream_t stream) {
   mtl_set_ptr(ms, scan.combined_ptr, 5);
   mtl_set_ptr(ms, scan.state_ptr, 6);
   mtl_set_ptr(ms, scan.input_ptr, 7);
-  struct {
-    int T_seq, H, B;
-  } params = {scan.T, scan.H, scan.B};
+  struct { int T_seq, H, B; } params = {scan.T, scan.H, scan.B};
   mtl_set_params(ms, params, 8);
   mtl_dispatch_1d(ms, pso, scan.B * scan.H);
 }
 
-void mtl_fused_scan_backward(PrefixScan &scan, const float *grad,
-                               const float *grad_next_state,
-                               cudaStream_t stream) {
-  MetalStream *ms = mtl_get_stream(stream);
-  ms->compute_encoder();
-  auto pso = mtl_pipeline("fused_scan_backward_checkpointed");
-  mtl_set_pso(ms, pso);
-  mtl_set_ptr(ms, scan.grad_combined.bytes, 0);
-  mtl_set_ptr(ms, scan.grad_state.bytes, 1);
-  mtl_set_ptr(ms, scan.grad_input.bytes, 2);
-  mtl_set_ptr(ms, grad, 3);
-  mtl_set_ptr(ms, grad_next_state, 4);
-  mtl_set_ptr(ms, scan.combined_ptr, 5);
-  mtl_set_ptr(ms, scan.state_ptr, 6);
-  mtl_set_ptr(ms, scan.input_ptr, 7);
-  mtl_set_ptr(ms, scan.a_star.bytes, 8);
-  mtl_set_ptr(ms, scan.s_vals.bytes, 9);
-  mtl_set_ptr(ms, scan.log_values_buf.bytes, 10);
-  struct {
-    int T_seq, H, B;
-  } params = {scan.T, scan.H, scan.B};
-  mtl_set_params(ms, params, 11);
-  mtl_dispatch_1d(ms, pso, scan.B * scan.H);
-}
-
-// fp16 scan dispatchers: half combined/state/out, fp32 internal (a_star/s_vals/log_values)
-void mtl_fused_scan_forward_fp16(PrefixScan &scan, cudaStream_t stream) {
-  MetalStream *ms = mtl_get_stream(stream);
-  ms->compute_encoder();
-  auto pso = mtl_pipeline("fused_scan_forward_checkpointed_fp16");
-  mtl_set_pso(ms, pso);
-  mtl_set_ptr(ms, scan.out.bytes, 0);
-  mtl_set_ptr(ms, scan.next_state.bytes, 1);
-  mtl_set_ptr(ms, scan.a_star.bytes, 2);
-  mtl_set_ptr(ms, scan.s_vals.bytes, 3);
-  mtl_set_ptr(ms, scan.log_values_buf.bytes, 4);
-  mtl_set_ptr(ms, scan.combined_ptr, 5);
-  mtl_set_ptr(ms, scan.state_ptr, 6);
-  mtl_set_ptr(ms, scan.input_ptr, 7);
-  struct {
-    int T_seq, H, B;
-  } params = {scan.T, scan.H, scan.B};
-  mtl_set_params(ms, params, 8);
-  mtl_dispatch_1d(ms, pso, scan.B * scan.H);
-}
-
-void mtl_fused_scan_backward_fp16(PrefixScan &scan, const void *grad,
-                                    const void *grad_next_state,
+static void dispatch_scan_backward(const char *kernel_name, PrefixScan &scan,
+                                    const void *grad, const void *grad_next_state,
                                     cudaStream_t stream) {
   MetalStream *ms = mtl_get_stream(stream);
   ms->compute_encoder();
-  auto pso = mtl_pipeline("fused_scan_backward_checkpointed_fp16");
+  auto pso = mtl_pipeline(kernel_name);
   mtl_set_pso(ms, pso);
   mtl_set_ptr(ms, scan.grad_combined.bytes, 0);
   mtl_set_ptr(ms, scan.grad_state.bytes, 1);
@@ -713,11 +667,24 @@ void mtl_fused_scan_backward_fp16(PrefixScan &scan, const void *grad,
   mtl_set_ptr(ms, scan.a_star.bytes, 8);
   mtl_set_ptr(ms, scan.s_vals.bytes, 9);
   mtl_set_ptr(ms, scan.log_values_buf.bytes, 10);
-  struct {
-    int T_seq, H, B;
-  } params = {scan.T, scan.H, scan.B};
+  struct { int T_seq, H, B; } params = {scan.T, scan.H, scan.B};
   mtl_set_params(ms, params, 11);
   mtl_dispatch_1d(ms, pso, scan.B * scan.H);
+}
+
+void mtl_fused_scan_forward(PrefixScan &scan, cudaStream_t stream) {
+  dispatch_scan_forward("fused_scan_forward_checkpointed", scan, stream);
+}
+void mtl_fused_scan_backward(PrefixScan &scan, const float *grad,
+                               const float *grad_next_state, cudaStream_t stream) {
+  dispatch_scan_backward("fused_scan_backward_checkpointed", scan, grad, grad_next_state, stream);
+}
+void mtl_fused_scan_forward_fp16(PrefixScan &scan, cudaStream_t stream) {
+  dispatch_scan_forward("fused_scan_forward_checkpointed_fp16", scan, stream);
+}
+void mtl_fused_scan_backward_fp16(PrefixScan &scan, const void *grad,
+                                    const void *grad_next_state, cudaStream_t stream) {
+  dispatch_scan_backward("fused_scan_backward_checkpointed_fp16", scan, grad, grad_next_state, stream);
 }
 
 // ============================================================================
