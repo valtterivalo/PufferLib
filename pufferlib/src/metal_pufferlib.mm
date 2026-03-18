@@ -154,11 +154,9 @@ enum ProfileIdx {
     // Fine-grained rollout sub-phases
     PROF_ROLLOUT_OBS_COPY,
     PROF_ROLLOUT_FWD,
-    PROF_ROLLOUT_SAMPLE,
     PROF_ROLLOUT_ACT_COPY,
     // Fine-grained training sub-phases
     PROF_TRAIN_PRELOOP,
-    PROF_TRAIN_ADVANTAGE,
     PROF_TRAIN_PRIO,
     PROF_TRAIN_SELECT,
     PROF_TRAIN_FWD,
@@ -179,10 +177,8 @@ static const char* PROF_NAMES[NUM_PROF] = {
     "train_forward",
     "rollout_obs_copy",
     "rollout_fwd",
-    "rollout_sample",
     "rollout_act_copy",
     "train_preloop",
-    "train_advantage",
     "train_prio",
     "train_select",
     "train_fwd",
@@ -415,23 +411,20 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
 
     uint64_t tp2 = mach_absolute_time();
 
-    uint64_t tp3 = mach_absolute_time();
-
     int64_t act_cols = env.actions.shape[1];
     memcpy(
         env.actions.bytes + start * act_cols * env.actions.dtype_size,
         act_slice.bytes,
         act_slice.numel() * act_slice.dtype_size);
 
-    uint64_t tp4 = mach_absolute_time();
+    uint64_t tp3 = mach_absolute_time();
 
     // Accumulate fine-grained rollout timing (callbacks run concurrently).
     {
         std::lock_guard<std::mutex> lk(g_rollout_profile_mutex);
         pufferl->profile.accum[PROF_ROLLOUT_OBS_COPY] += prof_ms(tp0, tp1);
         pufferl->profile.accum[PROF_ROLLOUT_FWD] += prof_ms(tp1, tp2);
-        pufferl->profile.accum[PROF_ROLLOUT_SAMPLE] += prof_ms(tp2, tp3);
-        pufferl->profile.accum[PROF_ROLLOUT_ACT_COPY] += prof_ms(tp3, tp4);
+        pufferl->profile.accum[PROF_ROLLOUT_ACT_COPY] += prof_ms(tp2, tp3);
     }
   } // @autoreleasepool
 }
@@ -543,11 +536,7 @@ void train_impl(PuffeRL& pufferl) {
         * (float)current_epoch / (float)total_epochs;
 
     uint64_t tp_preloop1 = mach_absolute_time();
-
-    // Advantage + prio precompute (single GPU sync for CDF read).
-    uint64_t tp_prio_done = mach_absolute_time();
     pufferl.profile.accum[PROF_TRAIN_PRELOOP] += prof_ms(tp_preloop0, tp_preloop1);
-    pufferl.profile.accum[PROF_TRAIN_ADVANTAGE] += prof_ms(tp_preloop1, tp_prio_done);
 
     puf_set_gpu_training(false);
 

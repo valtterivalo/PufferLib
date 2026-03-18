@@ -251,7 +251,7 @@ pybind11::dict log_profile(pybind11::object pufferl_obj) {
     // Train total from fine-grained phases (ms)
     float* a = pufferl.profile.accum;
     float train_ms = a[PROF_TRAIN_PRELOOP] + a[PROF_TRAIN_SYNC];
-    for (int i = PROF_TRAIN_ADVANTAGE; i <= PROF_TRAIN_MUON; i++) train_ms += a[i];
+    for (int i = PROF_TRAIN_PRIO; i <= PROF_TRAIN_MUON; i++) train_ms += a[i];
     result["train"] = train_ms / 1000.0f;
 
     // Sync stats
@@ -267,18 +267,18 @@ pybind11::dict log_profile(pybind11::object pufferl_obj) {
     // Compact profile report to stderr
     fprintf(stderr,
         "[metal-prof] rollout: %d syncs (%.1fms), "
-        "obs=%.1fms fwd=%.1fms sample=%.1fms act=%.1fms | "
+        "obs=%.1fms fwd=%.1fms act=%.1fms | "
         "env=%.1fms total=%.1fms\n",
         r_sync, r_sync_ms,
         a[PROF_ROLLOUT_OBS_COPY], a[PROF_ROLLOUT_FWD],
-        a[PROF_ROLLOUT_SAMPLE], a[PROF_ROLLOUT_ACT_COPY],
+        a[PROF_ROLLOUT_ACT_COPY],
         a[PROF_EVAL_ENV], a[PROF_ROLLOUT]);
     fprintf(stderr,
         "[metal-prof] train:  %d syncs (%.1fms), "
-        "pre=%.1fms adv=%.1fms prio=%.1fms sel=%.1fms "
+        "pre=%.1fms prio=%.1fms sel=%.1fms "
         "fwd=%.1fms ppo=%.1fms bwd=%.1fms gc=%.1fms clip=%.1fms muon=%.1fms sync=%.1fms\n",
         t_sync, t_sync_ms,
-        a[PROF_TRAIN_PRELOOP], a[PROF_TRAIN_ADVANTAGE],
+        a[PROF_TRAIN_PRELOOP],
         a[PROF_TRAIN_PRIO], a[PROF_TRAIN_SELECT],
         a[PROF_TRAIN_FWD], a[PROF_TRAIN_PPO],
         a[PROF_TRAIN_BACKWARD], a[PROF_TRAIN_GRAD_COPY],
