@@ -27,15 +27,6 @@
 static thread_local cudaStream_t tl_rollout_stream = 0;
 static std::mutex g_rollout_profile_mutex;
 
-// ============================================================================
-// GPU sync helper — flush any pending Metal compute work before CPU access.
-// Mirrors the static inline in metal_platform.mm, needed here since that's
-// a separate translation unit.
-// ============================================================================
-
-static inline MetalStream* get_stream(cudaStream_t s) { return mtl_resolve_stream(s); }
-static inline void ensure_gpu_synced(cudaStream_t s) { mtl_ensure_stream_synced(s); }
-
 // Mach-time to milliseconds for profiling
 static mach_timebase_info_data_t g_prof_tb = {0, 0};
 static inline float prof_ms(uint64_t t0, uint64_t t1) {
@@ -390,7 +381,7 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
             mask_ptr, mask_stride,
             buf_rng_seed, buf_rng_offset, stream);
 
-        ensure_gpu_synced(stream);
+        mtl_ensure_stream_synced(stream);
         mtl_sample_logits_expand((const float*)act_f32_buf.bytes,
                                  (double*)act_slice.bytes, block_size * num_atns);
     }
@@ -532,7 +523,7 @@ void train_impl(PuffeRL& pufferl) {
     // Used by both overlap and non-overlap paths. gpu_profile gates sync-before-timestamp
     // for accurate per-phase GPU timing (defeats async, so only used in non-overlap + --profile).
     auto run_minibatch = [&](cudaStream_t s, uint32_t* rng_offset, bool gpu_profile) {
-        if (gpu_profile) ensure_gpu_synced(s);
+        if (gpu_profile) mtl_ensure_stream_synced(s);
         uint64_t tp0 = mach_absolute_time();
 
         puf_zero(pufferl.advantages_puf, s);
@@ -544,7 +535,7 @@ void train_impl(PuffeRL& pufferl) {
             pufferl.prio_bufs, pufferl.rng_seed, rng_offset, s);
         mtl_barrier((MetalStream*)s);
 
-        if (gpu_profile) ensure_gpu_synced(s);
+        if (gpu_profile) mtl_ensure_stream_synced(s);
         uint64_t tp2 = mach_absolute_time();
 
         puf_zero(pufferl.train_buf.mb_state, s);
@@ -560,7 +551,7 @@ void train_impl(PuffeRL& pufferl) {
         }
         mtl_barrier((MetalStream*)s);
 
-        if (gpu_profile) ensure_gpu_synced(s);
+        if (gpu_profile) mtl_ensure_stream_synced(s);
         uint64_t tp3 = mach_absolute_time();
 
         PolicyWeights& train_weights = pufferl.train_fp16 ? pufferl.weights_fp16 : pufferl.weights_fp32;
@@ -571,7 +562,7 @@ void train_impl(PuffeRL& pufferl) {
         PufTensor dec_puf = policy_forward_train(pufferl.policy, train_weights,
             pufferl.train_activations, obs_puf, state_puf, s);
 
-        if (gpu_profile) ensure_gpu_synced(s);
+        if (gpu_profile) mtl_ensure_stream_synced(s);
         uint64_t tp4 = mach_absolute_time();
 
         PufTensor dec_puf_f32;
@@ -602,7 +593,7 @@ void train_impl(PuffeRL& pufferl) {
             s);
         mtl_barrier((MetalStream*)s);
 
-        if (gpu_profile) ensure_gpu_synced(s);
+        if (gpu_profile) mtl_ensure_stream_synced(s);
         uint64_t tp5 = mach_absolute_time();
 
         PufTensor grad_logits_puf = pufferl.ppo_bufs_puf.grad_logits;
@@ -611,7 +602,7 @@ void train_impl(PuffeRL& pufferl) {
         policy_backward(pufferl.policy, train_weights, pufferl.train_activations,
             grad_logits_puf, grad_logstd_puf, grad_values_puf, s);
 
-        if (gpu_profile) ensure_gpu_synced(s);
+        if (gpu_profile) mtl_ensure_stream_synced(s);
         uint64_t tp6 = mach_absolute_time();
 
         PufTensor& gc = pufferl.muon->gc_puf;
@@ -624,7 +615,7 @@ void train_impl(PuffeRL& pufferl) {
             puf_copy(gc, pufferl.grad_fp16_puf, s);
         }
 
-        if (gpu_profile) ensure_gpu_synced(s);
+        if (gpu_profile) mtl_ensure_stream_synced(s);
         uint64_t tp7 = mach_absolute_time();
 
         mtl_barrier((MetalStream*)s);
@@ -633,7 +624,7 @@ void train_impl(PuffeRL& pufferl) {
             clip_grad_norm_f32(gc, scratch, hypers.max_grad_norm, 1e-6f, s);
         }
 
-        if (gpu_profile) ensure_gpu_synced(s);
+        if (gpu_profile) mtl_ensure_stream_synced(s);
         uint64_t tp8 = mach_absolute_time();
 
         mtl_barrier((MetalStream*)s);
@@ -647,7 +638,7 @@ void train_impl(PuffeRL& pufferl) {
 
         mtl_barrier((MetalStream*)s);
 
-        if (gpu_profile) ensure_gpu_synced(s);
+        if (gpu_profile) mtl_ensure_stream_synced(s);
         uint64_t tp9 = mach_absolute_time();
 
         pufferl.profile.accum[PROF_TRAIN_PRIO] += prof_ms(tp0, tp2);
@@ -707,7 +698,7 @@ void train_impl(PuffeRL& pufferl) {
 
     uint64_t tp_sync0 = mach_absolute_time();
     puf_set_gpu_training(false);
-    ensure_gpu_synced(train_stream);
+    mtl_ensure_stream_synced(train_stream);
     uint64_t tp_sync1 = mach_absolute_time();
     pufferl.profile.accum[PROF_TRAIN_SYNC] += prof_ms(tp_sync0, tp_sync1);
 
@@ -878,7 +869,7 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
         encoder.init_weights(wfp32.encoder, &init_seed, default_stream);
         decoder.init_weights(wfp32.decoder, &init_seed, default_stream);
         network.init_weights(wfp32.network, &init_seed, default_stream);
-        ensure_gpu_synced(default_stream);
+        mtl_ensure_stream_synced(default_stream);
     }
 
     // Fused encoder+layer0 is disabled.
@@ -961,7 +952,7 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
         mtl_cast_f32_to_f16(pufferl->param_fp16_puf.bytes,
                             (const float*)fp32_params.mem,
                             (int)fp32_params.total_elems, s);
-        ensure_gpu_synced(s);
+        mtl_ensure_stream_synced(s);
     }
 
     // Boundary buffers: fp16 obs (encoder input), fp32 dec_out (PPO input),
@@ -1139,7 +1130,7 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
 void close_impl(PuffeRL& pufferl) {
     fprintf(stderr, "[metal] close: syncing GPU\n");
     sync_pending_train(pufferl);
-    ensure_gpu_synced((cudaStream_t)mtl_stream());
+    mtl_ensure_stream_synced((cudaStream_t)mtl_stream());
 
     fprintf(stderr, "[metal] close: deleting structs\n");
     delete pufferl.muon;

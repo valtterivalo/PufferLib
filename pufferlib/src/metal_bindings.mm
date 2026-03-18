@@ -212,7 +212,7 @@ pybind11::dict log_losses(pybind11::object pufferl_obj) {
     auto& pufferl = pufferl_obj.cast<PuffeRL&>();
     // Sync pending training — losses are written by GPU training
     sync_pending_train(pufferl);
-    ensure_gpu_synced((cudaStream_t)mtl_stream());
+    mtl_ensure_stream_synced((cudaStream_t)mtl_stream());
     float* losses_host = (float*)pufferl.losses_puf.bytes;
     float n = losses_host[LOSS_N];
     pybind11::dict result;
@@ -304,7 +304,7 @@ pybind11::dict log_profile(pybind11::object pufferl_obj) {
 pybind11::dict log_train_debug(pybind11::object pufferl_obj) {
     auto& pufferl = pufferl_obj.cast<PuffeRL&>();
     sync_pending_train(pufferl);
-    ensure_gpu_synced((cudaStream_t)mtl_stream());
+    mtl_ensure_stream_synced((cudaStream_t)mtl_stream());
 
     const float* mb_adv = (const float*)pufferl.train_buf.mb_advantages.bytes;
     int64_t mb_adv_n = pufferl.train_buf.mb_advantages.numel();
@@ -424,7 +424,7 @@ void save_weights(pybind11::object pufferl_obj, const std::string& path) {
     int64_t nbytes = pufferl.alloc_fp32.params.total_elems * sizeof(float);
     // Sync pending training before reading weights
     sync_pending_train(pufferl);
-    ensure_gpu_synced((cudaStream_t)mtl_stream());
+    mtl_ensure_stream_synced((cudaStream_t)mtl_stream());
     FILE* f = fopen(path.c_str(), "wb");
     assert(f && "Failed to open weight file for writing");
     fwrite(pufferl.alloc_fp32.params.mem, 1, nbytes, f);
@@ -442,7 +442,7 @@ void load_weights(pybind11::object pufferl_obj, const std::string& path) {
     assert(file_size == nbytes && "Weight file size mismatch");
     // Sync pending training before overwriting weights
     sync_pending_train(pufferl);
-    ensure_gpu_synced((cudaStream_t)mtl_stream());
+    mtl_ensure_stream_synced((cudaStream_t)mtl_stream());
     size_t nread = fread(pufferl.alloc_fp32.params.mem, 1, nbytes, f);
     assert((int64_t)nread == nbytes && "Failed to read weight file");
     fclose(f);

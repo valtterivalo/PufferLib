@@ -742,8 +742,6 @@ id<MTLComputePipelineState> mtl_pipeline(const char *name) {
 // column-major API trick: swap A/B and transpose flags).
 // ============================================================================
 
-static inline MetalStream *get_stream(cudaStream_t s) { return mtl_resolve_stream(s); }
-static inline void ensure_gpu_synced(cudaStream_t s) { mtl_ensure_stream_synced(s); }
 
 // GPU training mode — when true, puf_mm forces GPU GEMM to avoid ensure_gpu_synced.
 // Set by train_impl to keep all training ops on the GPU encoder chain.
@@ -752,7 +750,7 @@ void puf_set_gpu_training(bool val) { g_gpu_training.store(val, std::memory_orde
 bool puf_is_gpu_training() { return g_gpu_training.load(std::memory_order_acquire); }
 
 bool puf_stream_has_encoder(cudaStream_t stream) {
-  MetalStream *ms = get_stream(stream);
+  MetalStream *ms = mtl_resolve_stream(stream);
   return ms->enc_active;
 }
 
@@ -798,7 +796,7 @@ static void compute_gemm(const float *A, const float *B, float *C,
                           int lda, int ldb, int ldc,
                           float alpha, float beta,
                           cudaStream_t stream) {
-  MetalStream *ms = get_stream(stream);
+  MetalStream *ms = mtl_resolve_stream(stream);
   ms->compute_encoder();
   id<MTLComputePipelineState> pso = mtl_pipeline("steel_gemm");
   mtl_set_pso(ms, pso);
@@ -833,7 +831,7 @@ static void compute_gemm_f16(const void *A, const void *B, void *C,
                               int lda, int ldb, int ldc,
                               float alpha, float beta,
                               cudaStream_t stream) {
-  MetalStream *ms = get_stream(stream);
+  MetalStream *ms = mtl_resolve_stream(stream);
   ms->compute_encoder();
   id<MTLComputePipelineState> pso = mtl_pipeline("steel_gemm_f16");
   mtl_set_pso(ms, pso);
@@ -872,7 +870,7 @@ static bool tensor_ops_dispatch(id<MTLComputePipelineState> pso,
   if (!pso) return false;
   g_gemm_dispatch_count++;
 
-  MetalStream *ms = get_stream(stream);
+  MetalStream *ms = mtl_resolve_stream(stream);
   ms->compute_encoder();
   mtl_set_pso(ms, pso);
 
@@ -974,7 +972,7 @@ static void compute_gemm_ksplit_tn(const float *A, const float *B, float *C,
     ksplit_capacity = partials_count;
   }
 
-  MetalStream *ms = get_stream(stream);
+  MetalStream *ms = mtl_resolve_stream(stream);
 
   // Step 1: K-split GEMM — write partials.
   ms->compute_encoder();
@@ -1026,7 +1024,7 @@ static void compute_gemm_ksplit_tn(const float *A, const float *B, float *C,
 static void small_gemm_nt_dispatch(const float *A, const float *B, float *C,
                                     int M, int N, int K,
                                     cudaStream_t stream) {
-  MetalStream *ms = get_stream(stream);
+  MetalStream *ms = mtl_resolve_stream(stream);
   ms->compute_encoder();
   id<MTLComputePipelineState> pso = mtl_pipeline("small_gemm_nt_f32");
   mtl_set_pso(ms, pso);
@@ -1070,7 +1068,7 @@ static void tf32_round_gemm_inputs(float *a_ptr, int a_elems,
   mtl_tf32_round_inplace(a_ptr, a_elems, stream);
   mtl_tf32_round_inplace(b_ptr, b_elems, stream);
   // Barrier: ensure in-place rounding writes are visible to the GEMM dispatch.
-  mtl_barrier(get_stream(stream));
+  mtl_barrier(mtl_resolve_stream(stream));
 }
 
 // out(...,N) = a(...,K) @ b(N,K)^T — leading dims folded into M
@@ -1260,10 +1258,10 @@ void puf_addmm_nn(PufTensor &a, PufTensor &b, PufTensor &out, float alpha,
     float *temp = addmm_temp_buf(M * N);
     tensor_ops_gemm_nn(a_f32, b_f32, temp, M, N, K, stream);
     // Metal 4: force visibility of temp writes before scale/axpy reads.
-    mtl_barrier(get_stream(stream));
+    mtl_barrier(mtl_resolve_stream(stream));
 
     // Step 2: out *= beta (compute encoder)
-    MetalStream *ms = get_stream(stream);
+    MetalStream *ms = mtl_resolve_stream(stream);
     ms->compute_encoder();
     int count = M * N;
 

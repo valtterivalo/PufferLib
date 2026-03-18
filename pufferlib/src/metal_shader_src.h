@@ -815,9 +815,6 @@ inline void ppo_continuous_head(
     out_entropy = HALF_1_PLUS_LOG_2PI + log_std;
 }
 
-inline float ppo_ratio_from_logratio(float logratio) {
-    return exp(logratio);
-}
 
 struct PPOFusedParams {
     int num_atns;
@@ -934,7 +931,7 @@ kernel void ppo_loss_fwd_bwd_kernel(
             // clamp logratio: cpu_inference + multi-head GEMM precision mismatch can
             // push |logratio| past exp overflow. exp(5)≈148 is plenty for PPO clipping.
             float logratio = clamp(total_log_prob - old_logp, -5.0f, 5.0f);
-            float ratio = ppo_ratio_from_logratio(logratio);
+            float ratio = exp(logratio);
             out_ratio[nt] = ratio;
             float ratio_clipped = clamp(ratio, 1.0f - pp.clip_coef, 1.0f + pp.clip_coef);
             float wa = -w * adv_normalized;
@@ -1000,7 +997,7 @@ kernel void ppo_loss_fwd_bwd_kernel(
             // clamp logratio: cpu_inference + multi-head GEMM precision mismatch can
             // push |logratio| past exp overflow. exp(5)≈148 is plenty for PPO clipping.
             float logratio = clamp(total_log_prob - old_logp, -5.0f, 5.0f);
-            float ratio = ppo_ratio_from_logratio(logratio);
+            float ratio = exp(logratio);
             out_ratio[nt] = ratio;
             float ratio_clipped = clamp(ratio, 1.0f - pp.clip_coef, 1.0f + pp.clip_coef);
             float wa = -w * adv_normalized;
