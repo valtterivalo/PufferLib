@@ -87,11 +87,18 @@ void mtl_assemble_decoder_grad_f32_to_f16(void *grad_out,
 // Memory operations — CPU-side on unified memory (synced), or GPU when training
 // ============================================================================
 
+static bool g_no_gpu_copy = false;
+static bool g_no_gpu_copy_inited = false;
+
 void puf_copy(PufTensor &dst, const PufTensor &src, cudaStream_t stream) {
   assert(dst.numel() == src.numel() && "puf_copy: size mismatch");
   assert(dst.dtype_size == src.dtype_size && "puf_copy: dtype mismatch");
+  if (!g_no_gpu_copy_inited) {
+    g_no_gpu_copy = (getenv("PUFFERLIB_NO_GPU_COPY") != nullptr);
+    g_no_gpu_copy_inited = true;
+  }
   bool gpu = puf_is_gpu_training() ||
-             (!getenv("PUFFERLIB_NO_GPU_COPY") && puf_stream_has_encoder(stream));
+             (!g_no_gpu_copy && puf_stream_has_encoder(stream));
   if (gpu && dst.dtype_size == 4) {
     mtl_copy_f32((float *)dst.bytes, (const float *)src.bytes,
                  (int)dst.numel(), stream);
