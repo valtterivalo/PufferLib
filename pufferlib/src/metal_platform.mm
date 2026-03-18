@@ -868,194 +868,68 @@ static void compute_gemm_f16(const void *A, const void *B, void *C,
 }
 
 // ============================================================================
-// tensor_ops GEMM: C(M,N) = A(M,K) @ B(N,K)^T on the compute encoder.
-// Uses Metal 4 matmul2d with tensor_inline layout.
-// Requires N % 32 == 0, M % 64 == 0 (tiles). Returns false if unavailable.
+// tensor_ops GEMM dispatch. All variants (NT/NN/TN x fp32/fp16) use identical
+// dispatch: bind A/B/C buffers, set M/N/K params, dispatch 64x32 tile groups.
+// Returns false if the PSO is nil (compilation failed).
 // ============================================================================
 
+static bool tensor_ops_dispatch(id<MTLComputePipelineState> pso,
+                                const void *A, const void *B, void *C,
+                                int M, int N, int K, cudaStream_t stream) {
+  if (!pso) return false;
+  g_gemm_dispatch_count++;
+
+  MetalStream *ms = get_stream(stream);
+  ms->compute_encoder();
+  mtl_set_pso(ms, pso);
+
+  NSUInteger off_a, off_b, off_c;
+  id<MTLBuffer> buf_a = buffer_for_ptr(A, &off_a);
+  id<MTLBuffer> buf_b = buffer_for_ptr(B, &off_b);
+  id<MTLBuffer> buf_c = buffer_for_ptr(C, &off_c);
+
+  bind_buf(ms, buf_a, off_a, 0);
+  bind_buf(ms, buf_b, off_b, 1);
+  bind_buf(ms, buf_c, off_c, 2);
+
+  uint32_t mM = (uint32_t)M, mN = (uint32_t)N, mK = (uint32_t)K;
+  mtl_set_params(ms, mM, 3);
+  mtl_set_params(ms, mN, 4);
+  mtl_set_params(ms, mK, 5);
+
+  int groups_m = (M + 63) / 64;
+  int groups_n = (N + 31) / 32;
+  [ms->enc dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
+      threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+
+  ms->pending_work = true;
+  return true;
+}
+
+// Typed wrappers for callers that pass float* (fp32 variants).
 static bool tensor_ops_gemm_nt(const float *A, const float *B, float *C,
-                                int M, int N, int K,
-                                cudaStream_t stream) {
-  if (!g_ctx.tensor_ops_gemm_nt_f32) return false;
-  g_gemm_dispatch_count++;
-
-  MetalStream *ms = get_stream(stream);
-  ms->compute_encoder();
-  mtl_set_pso(ms, g_ctx.tensor_ops_gemm_nt_f32);
-
-  NSUInteger off_a, off_b, off_c;
-  id<MTLBuffer> buf_a = buffer_for_ptr(A, &off_a);
-  id<MTLBuffer> buf_b = buffer_for_ptr(B, &off_b);
-  id<MTLBuffer> buf_c = buffer_for_ptr(C, &off_c);
-
-  bind_buf(ms, buf_a, off_a, 0);
-  bind_buf(ms, buf_b, off_b, 1);
-  bind_buf(ms, buf_c, off_c, 2);
-
-  uint32_t mM = (uint32_t)M, mN = (uint32_t)N, mK = (uint32_t)K;
-  mtl_set_params(ms, mM, 3);
-  mtl_set_params(ms, mN, 4);
-  mtl_set_params(ms, mK, 5);
-
-  int groups_m = (M + 63) / 64;
-  int groups_n = (N + 31) / 32;
-  [ms->enc dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
-      threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
-
-  ms->pending_work = true;
-  return true;
+                                int M, int N, int K, cudaStream_t s) {
+  return tensor_ops_dispatch(g_ctx.tensor_ops_gemm_nt_f32, A, B, C, M, N, K, s);
 }
-
-// ============================================================================
-// tensor_ops GEMM: C(M,N) = A(M,K) @ B(K,N) on the compute encoder.
-// Uses Metal 4 matmul2d with tensor_inline layout.
-// Requires M % 64 == 0, N % 32 == 0 (tile_M=64, tile_N=32).
-// Returns false if unavailable.
-// ============================================================================
-
 static bool tensor_ops_gemm_nn(const float *A, const float *B, float *C,
-                                int M, int N, int K,
-                                cudaStream_t stream) {
-  if (!g_ctx.tensor_ops_gemm_nn_f32) return false;
-  g_gemm_dispatch_count++;
-
-  MetalStream *ms = get_stream(stream);
-  ms->compute_encoder();
-  mtl_set_pso(ms, g_ctx.tensor_ops_gemm_nn_f32);
-
-  NSUInteger off_a, off_b, off_c;
-  id<MTLBuffer> buf_a = buffer_for_ptr(A, &off_a);
-  id<MTLBuffer> buf_b = buffer_for_ptr(B, &off_b);
-  id<MTLBuffer> buf_c = buffer_for_ptr(C, &off_c);
-
-  bind_buf(ms, buf_a, off_a, 0);
-  bind_buf(ms, buf_b, off_b, 1);
-  bind_buf(ms, buf_c, off_c, 2);
-
-  uint32_t mM = (uint32_t)M, mN = (uint32_t)N, mK = (uint32_t)K;
-  mtl_set_params(ms, mM, 3);
-  mtl_set_params(ms, mN, 4);
-  mtl_set_params(ms, mK, 5);
-
-  // tgid.y tiles M (stride 64), tgid.x tiles N (stride 32) — same as NT kernel
-  int groups_m = (M + 63) / 64;
-  int groups_n = (N + 31) / 32;
-  [ms->enc dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
-      threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
-
-  ms->pending_work = true;
-  return true;
+                                int M, int N, int K, cudaStream_t s) {
+  return tensor_ops_dispatch(g_ctx.tensor_ops_gemm_nn_f32, A, B, C, M, N, K, s);
 }
-
-// ============================================================================
-// tensor_ops fp16 GEMM on the compute encoder.
-// Same alignment requirements as fp32: M % 64 == 0, N % 32 == 0.
-// ============================================================================
-
-static bool tensor_ops_gemm_nt_f16(const void *A, const void *B, void *C,
-                                    int M, int N, int K,
-                                    cudaStream_t stream) {
-  if (!g_ctx.tensor_ops_gemm_nt_f16) return false;
-  g_gemm_dispatch_count++;
-
-  MetalStream *ms = get_stream(stream);
-  ms->compute_encoder();
-  mtl_set_pso(ms, g_ctx.tensor_ops_gemm_nt_f16);
-
-  NSUInteger off_a, off_b, off_c;
-  id<MTLBuffer> buf_a = buffer_for_ptr(A, &off_a);
-  id<MTLBuffer> buf_b = buffer_for_ptr(B, &off_b);
-  id<MTLBuffer> buf_c = buffer_for_ptr(C, &off_c);
-
-  bind_buf(ms, buf_a, off_a, 0);
-  bind_buf(ms, buf_b, off_b, 1);
-  bind_buf(ms, buf_c, off_c, 2);
-
-  uint32_t mM = (uint32_t)M, mN = (uint32_t)N, mK = (uint32_t)K;
-  mtl_set_params(ms, mM, 3);
-  mtl_set_params(ms, mN, 4);
-  mtl_set_params(ms, mK, 5);
-
-  int groups_m = (M + 63) / 64;
-  int groups_n = (N + 31) / 32;
-  [ms->enc dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
-      threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
-
-  ms->pending_work = true;
-  return true;
-}
-
-static bool tensor_ops_gemm_nn_f16(const void *A, const void *B, void *C,
-                                    int M, int N, int K,
-                                    cudaStream_t stream) {
-  if (!g_ctx.tensor_ops_gemm_nn_f16) return false;
-  g_gemm_dispatch_count++;
-
-  MetalStream *ms = get_stream(stream);
-  ms->compute_encoder();
-  mtl_set_pso(ms, g_ctx.tensor_ops_gemm_nn_f16);
-
-  NSUInteger off_a, off_b, off_c;
-  id<MTLBuffer> buf_a = buffer_for_ptr(A, &off_a);
-  id<MTLBuffer> buf_b = buffer_for_ptr(B, &off_b);
-  id<MTLBuffer> buf_c = buffer_for_ptr(C, &off_c);
-
-  bind_buf(ms, buf_a, off_a, 0);
-  bind_buf(ms, buf_b, off_b, 1);
-  bind_buf(ms, buf_c, off_c, 2);
-
-  uint32_t mM = (uint32_t)M, mN = (uint32_t)N, mK = (uint32_t)K;
-  mtl_set_params(ms, mM, 3);
-  mtl_set_params(ms, mN, 4);
-  mtl_set_params(ms, mK, 5);
-
-  int groups_m = (M + 63) / 64;
-  int groups_n = (N + 31) / 32;
-  [ms->enc dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
-      threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
-
-  ms->pending_work = true;
-  return true;
-}
-
-// ============================================================================
-// tensor_ops GEMM: C(M,N) = A(K,M)^T @ B(K,N) on the compute encoder.
-// Uses Metal 4 matmul2d with tensor_inline layout.
-// Requires M % 64 == 0, N % 32 == 0 (tile_M=64, tile_N=32).
-// Returns false if unavailable.
-// ============================================================================
-
 static bool tensor_ops_gemm_tn(const float *A, const float *B, float *C,
-                                int M, int N, int K,
-                                cudaStream_t stream) {
-  if (!g_ctx.tensor_ops_gemm_tn_f32) return false;
-  g_gemm_dispatch_count++;
-
-  MetalStream *ms = get_stream(stream);
-  ms->compute_encoder();
-  mtl_set_pso(ms, g_ctx.tensor_ops_gemm_tn_f32);
-
-  NSUInteger off_a, off_b, off_c;
-  id<MTLBuffer> buf_a = buffer_for_ptr(A, &off_a);
-  id<MTLBuffer> buf_b = buffer_for_ptr(B, &off_b);
-  id<MTLBuffer> buf_c = buffer_for_ptr(C, &off_c);
-
-  bind_buf(ms, buf_a, off_a, 0);
-  bind_buf(ms, buf_b, off_b, 1);
-  bind_buf(ms, buf_c, off_c, 2);
-
-  uint32_t mM = (uint32_t)M, mN = (uint32_t)N, mK = (uint32_t)K;
-  mtl_set_params(ms, mM, 3);
-  mtl_set_params(ms, mN, 4);
-  mtl_set_params(ms, mK, 5);
-
-  int groups_m = (M + 63) / 64;
-  int groups_n = (N + 31) / 32;
-  [ms->enc dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
-      threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
-
-  ms->pending_work = true;
-  return true;
+                                int M, int N, int K, cudaStream_t s) {
+  return tensor_ops_dispatch(g_ctx.tensor_ops_gemm_tn_f32, A, B, C, M, N, K, s);
+}
+static bool tensor_ops_gemm_nt_f16(const void *A, const void *B, void *C,
+                                    int M, int N, int K, cudaStream_t s) {
+  return tensor_ops_dispatch(g_ctx.tensor_ops_gemm_nt_f16, A, B, C, M, N, K, s);
+}
+static bool tensor_ops_gemm_nn_f16(const void *A, const void *B, void *C,
+                                    int M, int N, int K, cudaStream_t s) {
+  return tensor_ops_dispatch(g_ctx.tensor_ops_gemm_nn_f16, A, B, C, M, N, K, s);
+}
+static bool tensor_ops_gemm_tn_f16(const void *A, const void *B, void *C,
+                                    int M, int N, int K, cudaStream_t s) {
+  return tensor_ops_dispatch(g_ctx.tensor_ops_gemm_tn_f16, A, B, C, M, N, K, s);
 }
 
 // K-split TN GEMM for small-M, small-N, large-K reductions (wgrad).
@@ -1151,39 +1025,6 @@ static void compute_gemm_ksplit_tn(const float *A, const float *B, float *C,
   mtl_set_params(ms, rp, 2);
 
   mtl_dispatch_1d(ms, pso_reduce, M * N);
-}
-
-static bool tensor_ops_gemm_tn_f16(const void *A, const void *B, void *C,
-                                    int M, int N, int K,
-                                    cudaStream_t stream) {
-  if (!g_ctx.tensor_ops_gemm_tn_f16) return false;
-  g_gemm_dispatch_count++;
-
-  MetalStream *ms = get_stream(stream);
-  ms->compute_encoder();
-  mtl_set_pso(ms, g_ctx.tensor_ops_gemm_tn_f16);
-
-  NSUInteger off_a, off_b, off_c;
-  id<MTLBuffer> buf_a = buffer_for_ptr(A, &off_a);
-  id<MTLBuffer> buf_b = buffer_for_ptr(B, &off_b);
-  id<MTLBuffer> buf_c = buffer_for_ptr(C, &off_c);
-
-  bind_buf(ms, buf_a, off_a, 0);
-  bind_buf(ms, buf_b, off_b, 1);
-  bind_buf(ms, buf_c, off_c, 2);
-
-  uint32_t mM = (uint32_t)M, mN = (uint32_t)N, mK = (uint32_t)K;
-  mtl_set_params(ms, mM, 3);
-  mtl_set_params(ms, mN, 4);
-  mtl_set_params(ms, mK, 5);
-
-  int groups_m = (M + 63) / 64;
-  int groups_n = (N + 31) / 32;
-  [ms->enc dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
-      threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
-
-  ms->pending_work = true;
-  return true;
 }
 
 // Small compute-encoder GEMM for unaligned N.
