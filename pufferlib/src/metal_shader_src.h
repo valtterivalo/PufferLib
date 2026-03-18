@@ -444,14 +444,8 @@ kernel void fused_scan_backward_checkpointed(
     float s_0 = s_buf[ckpt_0_idx];
     float log_value_0 = log_values_buf[ckpt_0_idx];
 
-    float scan_result_0 = fast::exp(a_star_0 + s_0);
-    float z_0 = log_value_0 - a_star_0;
-
-    float grad_log_h_0 = 0.0f;
-    float grad_s_0 = grad_log_h_0;
-
-    acc = grad_s_0 + acc * fast::exp(s_0 - s_val_next);
-    float grad_z_0 = acc * fast::exp(z_0 - s_0);
+    acc = acc * fast::exp(s_0 - s_val_next);
+    float grad_z_0 = acc * fast::exp((log_value_0 - a_star_0) - s_0);
 
     grad_state[state_idx] = grad_z_0 / state[state_idx];
 }
@@ -546,6 +540,14 @@ struct SampleParams {
     int mask_stride;    // stride between rows in mask buffer (may differ from num_atns_total)
 };
 
+// Apply action mask to a logit: invalid actions get -1e9, NaN/inf sanitized.
+inline float masked_logit(float l, float m) {
+    if (m < 0.5f) l = -1e9f;
+    if (isnan(l)) l = 0.0f;
+    if (isinf(l)) l = (l > 0) ? 3.4028e+38f : -3.4028e+38f;
+    return l;
+}
+
 kernel void sample_logits_kernel(
     device float* actions               [[buffer(0)]],
     device float* logprobs              [[buffer(1)]],
@@ -607,25 +609,17 @@ kernel void sample_logits_kernel(
             // Mask base index for this env (mask_stride allows non-contiguous layout)
             int mask_base = (int)idx * sp.mask_stride;
 
-            // Find max for numerical stability (with mask + nan_to_num)
+            // Max + logsumexp (with mask)
             float max_val = -INFINITY;
             for (int a = 0; a < A; a++) {
-                float l = logits[logits_base + logits_offset + a];
-                float m = action_mask[mask_base + logits_offset + a];
-                if (m < 0.5f) l = -1e9f;
-                if (isnan(l)) l = 0.0f;
-                if (isinf(l)) l = (l > 0) ? 3.4028e+38f : -3.4028e+38f;
+                float l = masked_logit(logits[logits_base + logits_offset + a],
+                                       action_mask[mask_base + logits_offset + a]);
                 max_val = fmax(max_val, l);
             }
-
-            // logsumexp (with mask)
             float sum_exp = 0.0f;
             for (int a = 0; a < A; a++) {
-                float l = logits[logits_base + logits_offset + a];
-                float m = action_mask[mask_base + logits_offset + a];
-                if (m < 0.5f) l = -1e9f;
-                if (isnan(l)) l = 0.0f;
-                if (isinf(l)) l = (l > 0) ? 3.4028e+38f : -3.4028e+38f;
+                float l = masked_logit(logits[logits_base + logits_offset + a],
+                                       action_mask[mask_base + logits_offset + a]);
                 sum_exp += exp(l - max_val);
             }
             float logsumexp_val = max_val + log(sum_exp);
@@ -642,11 +636,8 @@ kernel void sample_logits_kernel(
             float cumsum = 0.0f;
             int sampled_action = A - 1;
             for (int a = 0; a < A; a++) {
-                float l = logits[logits_base + logits_offset + a];
-                float m = action_mask[mask_base + logits_offset + a];
-                if (m < 0.5f) l = -1e9f;
-                if (isnan(l)) l = 0.0f;
-                if (isinf(l)) l = (l > 0) ? 3.4028e+38f : -3.4028e+38f;
+                float l = masked_logit(logits[logits_base + logits_offset + a],
+                                       action_mask[mask_base + logits_offset + a]);
                 float prob = exp(l - logsumexp_val);
                 cumsum += prob;
                 if (rand_val < cumsum) {
@@ -655,13 +646,10 @@ kernel void sample_logits_kernel(
                 }
             }
 
-            // Gather log probability (with mask)
-            float sampled_logit = logits[logits_base + logits_offset + sampled_action];
-            float sm = action_mask[mask_base + logits_offset + sampled_action];
-            if (sm < 0.5f) sampled_logit = -1e9f;
-            if (isnan(sampled_logit)) sampled_logit = 0.0f;
-            if (isinf(sampled_logit)) sampled_logit = (sampled_logit > 0) ? 3.4028e+38f : -3.4028e+38f;
-            float log_prob = sampled_logit - logsumexp_val;
+            // Gather log probability
+            float log_prob = masked_logit(
+                logits[logits_base + logits_offset + sampled_action],
+                action_mask[mask_base + logits_offset + sampled_action]) - logsumexp_val;
 
             actions[(int)idx * sp.num_atns + h] = float(sampled_action);
             total_log_prob += log_prob;
@@ -711,36 +699,24 @@ kernel void recompute_logprobs_kernel(
         int A = act_sizes[h];
         int act = int(actions_f32[(int)idx * rp.num_atns + h]);
 
-        // Masked max for numerical stability
+        // Max + logsumexp (with mask)
         float max_val = -INFINITY;
         for (int a = 0; a < A; a++) {
-            float l = logits[logits_base + logits_offset + a];
-            float m = action_mask[mask_base + logits_offset + a];
-            if (m < 0.5f) l = -1e9f;
-            if (isnan(l)) l = 0.0f;
-            if (isinf(l)) l = (l > 0) ? 3.4028e+38f : -3.4028e+38f;
-            max_val = fmax(max_val, l);
+            max_val = fmax(max_val, masked_logit(
+                logits[logits_base + logits_offset + a],
+                action_mask[mask_base + logits_offset + a]));
         }
-
-        // logsumexp
         float sum_exp = 0.0f;
         for (int a = 0; a < A; a++) {
-            float l = logits[logits_base + logits_offset + a];
-            float m = action_mask[mask_base + logits_offset + a];
-            if (m < 0.5f) l = -1e9f;
-            if (isnan(l)) l = 0.0f;
-            if (isinf(l)) l = (l > 0) ? 3.4028e+38f : -3.4028e+38f;
-            sum_exp += exp(l - max_val);
+            sum_exp += exp(masked_logit(
+                logits[logits_base + logits_offset + a],
+                action_mask[mask_base + logits_offset + a]) - max_val);
         }
         float logsumexp_val = max_val + log(sum_exp);
 
-        // Gather log probability for the sampled action
-        float sampled_logit = logits[logits_base + logits_offset + act];
-        float sm = action_mask[mask_base + logits_offset + act];
-        if (sm < 0.5f) sampled_logit = -1e9f;
-        if (isnan(sampled_logit)) sampled_logit = 0.0f;
-        if (isinf(sampled_logit)) sampled_logit = (sampled_logit > 0) ? 3.4028e+38f : -3.4028e+38f;
-        total_log_prob += sampled_logit - logsumexp_val;
+        total_log_prob += masked_logit(
+            logits[logits_base + logits_offset + act],
+            action_mask[mask_base + logits_offset + act]) - logsumexp_val;
 
         logits_offset += A;
     }
@@ -2572,14 +2548,8 @@ kernel void fused_scan_backward_checkpointed_fp16(
     float s_0 = s_buf[ckpt_0_idx];
     float log_value_0 = log_values_buf[ckpt_0_idx];
 
-    float scan_result_0 = exp(a_star_0 + s_0);
-    float z_0 = log_value_0 - a_star_0;
-
-    float grad_log_h_0 = 0.0f;
-    float grad_s_0 = grad_log_h_0;
-
-    acc = grad_s_0 + acc * exp(s_0 - s_val_next);
-    float grad_z_0 = acc * exp(z_0 - s_0);
+    acc = acc * exp(s_0 - s_val_next);
+    float grad_z_0 = acc * exp((log_value_0 - a_star_0) - s_0);
 
     float denom = float(state[state_idx]);
     if (!isfinite(denom) || denom < 1.0e-6f) denom = 1.0e-6f;
