@@ -312,6 +312,7 @@ void puf_addmm_nn(PufTensor &a, PufTensor &b, PufTensor &out, float alpha,
 void mtl_sync_stats(int *out_count, double *out_total_ms);
 
 // Read and reset GPU timing diagnostic (actual kernel time vs scheduling delay).
+void mtl_enable_gpu_timing(bool enable);
 void mtl_gpu_timing_stats(double *gpu_exec_ms, double *sched_wait_ms);
 
 // Read and reset GEMM dispatch counts.

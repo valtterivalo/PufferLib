@@ -301,7 +301,11 @@ static int g_sync_count = 0;
 static double g_sync_total_ns = 0.0;
 static mach_timebase_info_data_t g_timebase = {0, 0};
 
-// GPU timing diagnostic — actual kernel execution vs scheduling delay
+// GPU timing diagnostic — actual kernel execution vs scheduling delay.
+// Only active when g_gpu_timing_enabled is true (set via mtl_enable_gpu_timing).
+// The MTL4CommitOptions + feedback handler allocation adds ObjC overhead that
+// causes measurable scheduling jitter when sampled unconditionally.
+static bool g_gpu_timing_enabled = false;
 static double g_gpu_exec_ns = 0.0;
 static double g_sched_wait_ns = 0.0;
 static constexpr NSUInteger kMetalSyncTimeoutMs = 30000; // fail fast on stalled GPU sync
@@ -320,8 +324,10 @@ void MetalStream::sync() {
   MetalContext *ctx = mtl_ctx();
   id<MTL4CommandQueue> q =
       (this == &ctx->train_stream) ? ctx->train_queue : ctx->queue;
-  // Sample GPU timing every 32nd sync to amortize ObjC/block overhead
-  bool sample_timing = (g_sync_count % 32 == 0);
+  // Sample GPU timing every 32nd sync, only when profiling is enabled.
+  // The MTL4CommitOptions + ObjC feedback handler block allocation adds
+  // measurable jitter (~50-200us) that contributes to SPS variance.
+  bool sample_timing = g_gpu_timing_enabled && (g_sync_count % 32 == 0);
   if (sample_timing) {
     CFTimeInterval cpu_commit = CACurrentMediaTime();
     MTL4CommitOptions *opts = [MTL4CommitOptions new];
@@ -401,6 +407,10 @@ void mtl_sync_stats(int *out_count, double *out_total_ms) {
   *out_total_ms = g_sync_total_ns / 1e6;
   g_sync_count = 0;
   g_sync_total_ns = 0.0;
+}
+
+void mtl_enable_gpu_timing(bool enable) {
+  g_gpu_timing_enabled = enable;
 }
 
 void mtl_gpu_timing_stats(double *gpu_exec_ms, double *sched_wait_ms) {

@@ -517,6 +517,7 @@ std::unique_ptr<PuffeRL> create_pufferl(pybind11::dict kwargs,
     hypers.cudagraphs = -1;  // always disabled on Metal
     hypers.kernels = true;   // always use Metal kernels
     hypers.profile = get_config(kwargs, "profile");
+    mtl_enable_gpu_timing(hypers.profile);
     hypers.overlap = kwargs.contains("overlap") && get_config(kwargs, "overlap") > 0;
     hypers.cpu_inference = kwargs.contains("cpu_inference") && get_config(kwargs, "cpu_inference") > 0;
     hypers.train_fp16 = kwargs.contains("train_fp16") && get_config(kwargs, "train_fp16") > 0;
