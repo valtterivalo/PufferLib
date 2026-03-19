@@ -639,16 +639,10 @@ typedef struct {
 /* prayer check and RNG: use shared encounter_prayer_correct_for_style(),
    encounter_rand_int(), encounter_rand_float() from osrs_combat_shared.h */
 
-/* fisher-yates shuffle for spawn positions */
 static void inf_shuffle_spawns(InfernoState* s) {
     for (int i = 0; i < INF_NUM_SPAWN_POS; i++)
         s->spawn_order[i] = i;
-    for (int i = INF_NUM_SPAWN_POS - 1; i > 0; i--) {
-        int j = encounter_rand_int(&s->rng_state, i + 1);
-        int tmp = s->spawn_order[i];
-        s->spawn_order[i] = s->spawn_order[j];
-        s->spawn_order[j] = tmp;
-    }
+    encounter_shuffle(s->spawn_order, INF_NUM_SPAWN_POS, &s->rng_state);
 }
 
 /* ======================================================================== */
@@ -735,7 +729,7 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
     s->collision_map = saved_cmap;
     s->world_offset_x = saved_wox;
     s->world_offset_y = saved_woy;
-    s->rng_state = (seed != 0) ? seed : (saved_rng != 0 ? saved_rng : 12345);
+    s->rng_state = encounter_resolve_seed(saved_rng, seed);
 
     /* human click-to-move: no destination after reset */
     s->player_dest_x = -1;
@@ -1974,22 +1968,10 @@ static void inf_step(EncounterState* state, const int* actions) {
     /* ------------------------------------------------------------------ */
     /* process pending hits: player pending hits (NPC attacks landing)     */
     /* ------------------------------------------------------------------ */
-    for (int i = 0; i < s->player_pending_hit_count; i++) {
-        s->player_pending_hits[i].ticks_remaining--;
-        if (s->player_pending_hits[i].ticks_remaining <= 0) {
-            int dmg = s->player_pending_hits[i].damage;
-            /* for jad: re-check prayer at hit time (3-tick reaction window) */
-            if (s->player_pending_hits[i].check_prayer) {
-                int correct = encounter_prayer_correct_for_style(s->active_prayer,
-                    s->player_pending_hits[i].attack_style);
-                if (correct) { dmg = 0; s->prayer_correct_this_tick = 1; }
-            }
-            encounter_damage_player(&s->player, dmg, &s->damage_received_this_tick);
-            /* remove from queue (swap with last) */
-            s->player_pending_hits[i] = s->player_pending_hits[--s->player_pending_hit_count];
-            i--;  /* re-check this index */
-        }
-    }
+    encounter_resolve_player_pending_hits(
+        s->player_pending_hits, &s->player_pending_hit_count,
+        &s->player, s->active_prayer,
+        &s->damage_received_this_tick, &s->prayer_correct_this_tick);
 
     /* check player death */
     if (s->player.current_hitpoints <= 0) {

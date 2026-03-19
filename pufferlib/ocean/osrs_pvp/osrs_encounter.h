@@ -564,6 +564,33 @@ static inline int encounter_resolve_npc_pending_hit(
     return 1;
 }
 
+/** resolve player pending hits (NPC attacks landing on the player).
+    ticks down each hit, applies damage when it lands, handles deferred
+    prayer checks (jad-style: check_prayer=1 re-checks at land time).
+    encounters MUST call this each tick for projectile-based NPC attacks.
+    prayer_correct_flag: set to 1 when a deferred prayer check succeeds. */
+static inline void encounter_resolve_player_pending_hits(
+    EncounterPendingHit* hits, int* hit_count,
+    Player* player, OverheadPrayer active_prayer,
+    float* damage_received_acc, int* prayer_correct_flag
+) {
+    for (int i = 0; i < *hit_count; i++) {
+        hits[i].ticks_remaining--;
+        if (hits[i].ticks_remaining <= 0) {
+            int dmg = hits[i].damage;
+            if (hits[i].check_prayer) {
+                if (encounter_prayer_correct_for_style(active_prayer, hits[i].attack_style)) {
+                    dmg = 0;
+                    if (prayer_correct_flag) *prayer_correct_flag = 1;
+                }
+            }
+            encounter_damage_player(player, dmg, damage_received_acc);
+            hits[i] = hits[--(*hit_count)];
+            i--;
+        }
+    }
+}
+
 /* ======================================================================== */
 /* shared per-tick flag clearing for encounters                              */
 /* ======================================================================== */
@@ -581,6 +608,19 @@ static inline void encounter_clear_tick_flags(Player* p) {
     p->ate_food_this_tick = 0;
     p->ate_karambwan_this_tick = 0;
     p->used_special_this_tick = 0;
+}
+
+/* ======================================================================== */
+/* shared reset helpers                                                      */
+/* ======================================================================== */
+
+/** resolve RNG seed for encounter reset. priority: explicit seed > saved state > default.
+    all encounters MUST use this to ensure consistent RNG initialization. */
+static inline uint32_t encounter_resolve_seed(uint32_t saved_rng, uint32_t explicit_seed) {
+    uint32_t rng = 12345;
+    if (saved_rng != 0) rng = saved_rng;
+    if (explicit_seed != 0) rng = explicit_seed;
+    return rng;
 }
 
 /* ======================================================================== */

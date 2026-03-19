@@ -274,4 +274,13 @@ static inline int encounter_dist_to_npc(int px, int py, int nx, int ny, int npc_
     return dx > dy ? dx : dy;
 }
 
+/* fisher-yates shuffle for int arrays. used for spawn position randomization,
+   snakeling placement, etc. encounters should use this instead of inlining. */
+static inline void encounter_shuffle(int* arr, int n, uint32_t* rng) {
+    for (int i = n - 1; i > 0; i--) {
+        int j = encounter_rand_int(rng, i + 1);
+        int tmp = arr[i]; arr[i] = arr[j]; arr[j] = tmp;
+    }
+}
+
 #endif /* OSRS_COMBAT_SHARED_H */

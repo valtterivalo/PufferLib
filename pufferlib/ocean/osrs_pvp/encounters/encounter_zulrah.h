@@ -1147,10 +1147,7 @@ static void zul_pick_snakeling_pos(ZulrahState* s, int* ox, int* oy) {
     /* try predefined positions in random order */
     int order[ZUL_NUM_SNAKELING_POSITIONS];
     for (int i = 0; i < ZUL_NUM_SNAKELING_POSITIONS; i++) order[i] = i;
-    for (int i = ZUL_NUM_SNAKELING_POSITIONS - 1; i > 0; i--) {
-        int j = encounter_rand_int(&s->rng_state, i + 1);
-        int tmp = order[i]; order[i] = order[j]; order[j] = tmp;
-    }
+    encounter_shuffle(order, ZUL_NUM_SNAKELING_POSITIONS, &s->rng_state);
     for (int i = 0; i < ZUL_NUM_SNAKELING_POSITIONS; i++) {
         int px = ZUL_SNAKELING_POSITIONS[order[i]][0];
         int py = ZUL_SNAKELING_POSITIONS[order[i]][1];
@@ -1922,12 +1919,7 @@ static void zul_reset(EncounterState* state, uint32_t seed) {
     s->world_offset_x = saved_wx;
     s->world_offset_y = saved_wy;
     s->gear_tier = saved_tier;
-    /* RNG priority: explicit seed > preserved state > default.
-     * preserving RNG across resets gives episode variety (same pattern as PvP). */
-    uint32_t rng = 12345;
-    if (saved_rng != 0) rng = saved_rng;
-    if (seed != 0) rng = seed;
-    s->rng_state = rng;
+    s->rng_state = encounter_resolve_seed(saved_rng, seed);
 
     /* player */
     s->player.entity_type = ENTITY_PLAYER;
