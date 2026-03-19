@@ -26,7 +26,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 import pufferlib
-from bench import ENV_DEFAULTS
+from train import ENV_DEFAULTS, build_configs, run_training
 from pufferlib import _C
 from pufferlib.pufferl import downsample
 from pufferlib.sweep import Protein, pareto_points, prune_pareto_front
@@ -444,71 +444,6 @@ DEFAULT_PARAMS_PER_ENV = {
 }
 
 
-def build_configs(
-    env_name: str, params: dict,
-) -> tuple[dict, dict, dict, dict]:
-    """Convert Protein params dict to _C.create_pufferl config dicts."""
-    train = params.get("train", {})
-    policy = params.get("policy", {})
-
-    config = {
-        "horizon": int(train.get("horizon", 64)),
-        "learning_rate": train.get("learning_rate", 0.1),
-        "min_lr_ratio": train.get("min_lr_ratio", 0.0),
-        "anneal_lr": 1.0,
-        "beta1": train.get("beta1", 0.73),
-        "beta2": train.get("beta2", 0.9986),
-        "eps": train.get("eps", 8.3e-5),
-        "minibatch_size": int(train.get("minibatch_size", 8192)),
-        "replay_ratio": train.get("replay_ratio", 1.0),
-        "total_timesteps": int(train.get("total_timesteps", 100_000_000)),
-        "max_grad_norm": train.get("max_grad_norm", 1.5),
-        "clip_coef": train.get("clip_coef", 0.2),
-        "vf_clip_coef": train.get("vf_clip_coef", 0.2),
-        "vf_coef": train.get("vf_coef", 2.0),
-        "ent_coef": train.get("ent_coef", 0.001),
-        "gamma": train.get("gamma", 0.995),
-        "gae_lambda": train.get("gae_lambda", 0.90),
-        "vtrace_rho_clip": train.get("vtrace_rho_clip", 2.0),
-        "vtrace_c_clip": train.get("vtrace_c_clip", 1.1),
-        "prio_alpha": train.get("prio_alpha", 0.8),
-        "prio_beta0": train.get("prio_beta0", 0.2),
-        "use_rnn": 1.0,
-        "cudagraphs": -1.0,
-        "kernels": 1.0,
-        "profile": 0.0,
-        "overlap": 1.0,
-        "cpu_inference": 1.0 if env_name in ("breakout", "g2048") else 0.0,
-        "train_fp16": float(int(train.get("train_fp16", 0))),
-        "ns_iters": float(int(train.get("ns_iters", 5))),
-        "env_name": env_name,
-    }
-    # structural constraints: num_threads must match num_buffers,
-    # and minibatch can't exceed batch size
-    num_buffers = int(train.get("num_buffers", 1))
-    total_agents = int(train.get("total_agents", 4096))
-    horizon = config["horizon"]
-    batch_size = total_agents * horizon
-    minibatch = config["minibatch_size"]
-    if minibatch > batch_size:
-        config["minibatch_size"] = batch_size
-
-    vec_config = {
-        "total_agents": float(total_agents),
-        "num_buffers": float(num_buffers),
-        "num_threads": float(num_buffers),
-    }
-    policy_config = {
-        "hidden_size": float(int(policy.get("hidden_size", 64))),
-        "num_layers": float(int(policy.get("num_layers", 2))),
-    }
-    env_config = ENV_DEFAULTS[env_name].copy()
-
-    # g2048: scaffolding_ratio is a sweepable param
-    if "scaffolding_ratio" in train:
-        env_config["scaffolding_ratio"] = train["scaffolding_ratio"]
-
-    return config, vec_config, env_config, policy_config
 
 
 def save_observation(obs: dict, path: Path) -> None:
@@ -579,11 +514,10 @@ def run_trial(
     protein: Protein,
     sweep_dir: Path,
 ) -> dict | None:
-    """Run a single in-process training trial via _C calls."""
+    """Run a single training trial using the shared training loop."""
     flat = dict(pufferlib.unroll_nested_dict(params))
     total_steps = int(flat.get("train/total_timesteps", 0))
     total_agents = int(flat.get("train/total_agents", 4096))
-    horizon = int(flat.get("train/horizon", 64))
 
     print(f"\n{'='*70}")
     print(f"trial {trial_idx}  ({total_steps/1e6:.1f}M steps, muon)")
@@ -595,116 +529,75 @@ def run_trial(
 
     log_dir = sweep_dir / f"trial_{trial_idx}"
     log_dir.mkdir(parents=True, exist_ok=True)
-
     with (log_dir / "config.json").open("w") as f:
         json.dump({"params": params}, f, indent=2)
 
-    pufferl = None
+    config, vec_config, env_config, policy_config = build_configs(env_name, params)
+
+    # PFSP setup for osrs_pvp
+    pfsp_state = None
+    if env_name == "osrs_pvp" and env_config.get("opponent_type", 0) == float(OPP_PFSP):
+        pfsp_state = {"total_agents": total_agents}
+
+    last_report_time = time.time()
+    log_count = 0
+    score_key = SCORE_METRIC_PER_ENV.get(env_name, "score")
+
+    def on_log(iteration, global_step, sps, losses, env_stats):
+        nonlocal last_report_time, log_count
+        log_count += 1
+        score = env_stats.get(score_key, env_stats.get("episode_return", 0))
+        now = time.time()
+        if now - last_report_time > 30:
+            print(
+                f"  [{global_step/1e6:.1f}M / {total_steps/1e6:.0f}M]  "
+                f"score={score:.2f}  sps={sps:.0f}  "
+                f"elapsed={now - start_time:.0f}s"
+            )
+            last_report_time = now
+
+    def should_stop(score, elapsed):
+        # SPS abort: check first 2 log points
+        if log_count <= 2 and result_ref[0] and result_ref[0].entries:
+            recent_sps = result_ref[0].entries[-1]["sps"]
+            min_sps = MIN_SPS_PER_ENV.get(env_name, 100_000)
+            if recent_sps < min_sps:
+                print(f"  ABORT: SPS={recent_sps:.0f} < {min_sps}")
+                return True
+        return protein.should_stop(score, elapsed)
+
+    pfsp_initialized = [False]
+
+    def on_iteration(pufferl, global_step):
+        if pfsp_state is not None:
+            if not pfsp_initialized[0]:
+                _init_pfsp(pufferl, total_agents)
+                pfsp_state["cum_episodes"] = [0.0] * len(PFSP_POOL_TYPES)
+                pfsp_state["last_update_step"] = 0
+                pfsp_initialized[0] = True
+                print(f"  PFSP: {len(PFSP_POOL_TYPES)} opponents, uniform initial weights")
+            _update_pfsp(pufferl, pfsp_state, global_step)
+
+    result_ref = [None]
+    start_time = time.time()
+
     try:
-        config, vec_config, env_config, policy_config = build_configs(
-            env_name, params,
+
+        result = run_training(
+            config, vec_config, env_config, policy_config,
+            log_interval=LOG_INTERVAL,
+            score_key=score_key,
+            on_log=on_log,
+            should_stop=should_stop,
+            on_iteration=on_iteration,
         )
-        pufferl = _C.create_pufferl(config, vec_config, env_config, policy_config)
-        print(f"  params: {pufferl.num_params():,}")
-
-        # PFSP init for osrs_pvp (only when using OPP_PFSP opponent type)
-        pfsp_state = None
-        if env_name == "osrs_pvp" and env_config.get("opponent_type", 0) == float(OPP_PFSP):
-            pfsp_state = _init_pfsp(pufferl, total_agents)
-            print(f"  PFSP: {len(PFSP_POOL_TYPES)} opponents, uniform initial weights")
-
-        # warmup
-        _C.rollouts(pufferl)
-        _C.train(pufferl)
-        _C.log_losses(pufferl)
-
-        steps_per_iter = total_agents * horizon
-        total_iters = total_steps // steps_per_iter
-        global_step = 0
-        start_time = time.time()
-        t_last_log = start_time
-        last_report_time = start_time
-        entries: list[dict] = []
-        early_stopped = False
-
-        for iteration in range(1, total_iters + 1):
-            _C.rollouts(pufferl)
-            _C.train(pufferl)
-            global_step += steps_per_iter
-
-            # PFSP weight recomputation
-            if pfsp_state is not None:
-                _update_pfsp(pufferl, pfsp_state, global_step)
-
-            if iteration % LOG_INTERVAL == 0:
-                now = time.time()
-                elapsed_since_log = now - t_last_log
-                sps = (LOG_INTERVAL * steps_per_iter) / elapsed_since_log
-                t_last_log = now
-
-                losses = _C.log_losses(pufferl)
-                env_stats = _C.log_environments(pufferl)
-                for loss_name in ("entropy", "pg_loss", "vf_loss"):
-                    loss_value = losses.get(loss_name)
-                    if loss_value is None or not math.isfinite(float(loss_value)):
-                        raise RuntimeError(
-                            f"invalid loss metric {loss_name}={loss_value} "
-                            f"at step={global_step}"
-                        )
-
-                score_key = SCORE_METRIC_PER_ENV.get(env_name, "score")
-                score = env_stats.get(score_key, env_stats.get("episode_return", 0))
-                ep_ret = env_stats.get("episode_return", 0)
-                ep_len = env_stats.get("episode_length", 0)
-                ent = losses.get("entropy", 0)
-
-                entries.append({
-                    "step": global_step,
-                    "sps": sps,
-                    "score": score,
-                    "episode_return": ep_ret,
-                    "episode_length": ep_len,
-                    "entropy": ent,
-                    "pg_loss": losses.get("pg_loss", 0),
-                    "vf_loss": losses.get("vf_loss", 0),
-                })
-
-                elapsed = now - start_time
-                if now - last_report_time > 30:
-                    mean_sps = sum(e["sps"] for e in entries) / len(entries)
-                    print(
-                        f"  [{global_step/1e6:.1f}M / {total_steps/1e6:.0f}M]  "
-                        f"score={score:.2f}  sps={mean_sps:.0f}  "
-                        f"elapsed={elapsed:.0f}s"
-                    )
-                    last_report_time = now
-
-                # abort if SPS is too low (bad param combo for the hardware)
-                min_sps = MIN_SPS_PER_ENV.get(env_name, 100_000)
-                if len(entries) <= 2 and sps < min_sps:
-                    print(
-                        f"  ABORT: SPS={sps:.0f} < {min_sps} "
-                        f"(bad param combo), skipping trial"
-                    )
-                    early_stopped = True
-                    break
-
-                if protein.should_stop(score, elapsed):
-                    print(
-                        f"  EARLY STOP at {global_step/1e6:.1f}M steps "
-                        f"({elapsed:.0f}s), score={score:.2f}"
-                    )
-                    early_stopped = True
-                    break
-
-        elapsed = time.time() - start_time
-
+        result_ref[0] = result
     except Exception as e:
         print(f"  FAILED: {e}")
         return None
-    finally:
-        if pufferl is not None:
-            _C.close(pufferl)
+
+    entries = result.entries
+    elapsed = result.elapsed
 
     if not entries:
         print(f"  FAILED: no metric entries ({elapsed:.0f}s)")
@@ -733,6 +626,7 @@ def run_trial(
     tail_start = int(len(scores) * 0.75)
     tail_score = sum(scores[tail_start:]) / max(len(scores[tail_start:]), 1)
     mean_sps = sum(e["sps"] for e in entries) / len(entries)
+    early_stopped = result.steps < int(params.get("train", {}).get("total_timesteps", 0))
     stop_label = "  (early)" if early_stopped else ""
 
     print(
