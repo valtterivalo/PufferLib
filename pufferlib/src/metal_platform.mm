@@ -410,12 +410,12 @@ void mtl_gpu_timing_stats(double *gpu_exec_ms, double *sched_wait_ms) {
   g_sched_wait_ns = 0.0;
 }
 
-static int g_tensor_ops_dispatch_count = 0;
+static int g_gemm_dispatch_count = 0;
 
 void mtl_gemm_stats(int *tensor_ops_count, int *mps_count) {
-  *tensor_ops_count = g_tensor_ops_dispatch_count;
+  *tensor_ops_count = g_gemm_dispatch_count;
   *mps_count = 0;  // MPS eliminated — all GEMMs on compute encoder
-  g_tensor_ops_dispatch_count = 0;
+  g_gemm_dispatch_count = 0;
 }
 
 // ============================================================================
@@ -443,8 +443,8 @@ void mtl_init() {
 
     g_ctx.pipelines = [NSMutableDictionary new];
 
-    // Compile Metal 4 tensor_ops GEMM (separate library, different includes).
-    // Falls back gracefully if compilation fails (e.g. older macOS).
+    // Compile Metal 4 tensor_ops GEMM pipelines. All variants must succeed —
+    // steel_gemm fallback is 2-3x slower and we target M4 Pro exclusively.
     {
       NSString *tensor_src = [NSString stringWithUTF8String:get_tensor_ops_shader_source()];
       MTLCompileOptions *tensor_opts = [[MTLCompileOptions alloc] init];
@@ -454,95 +454,38 @@ void mtl_init() {
       id<MTLLibrary> tensor_lib = [g_ctx.device newLibraryWithSource:tensor_src
                                                              options:tensor_opts
                                                                error:&tensor_err];
-      if (tensor_lib) {
-        id<MTLFunction> fn = [tensor_lib newFunctionWithName:@"tensor_ops_gemm_nt_f32"];
+      assert(tensor_lib && "tensor_ops library compilation failed");
+
+      // Helper: compile one PSO from the tensor_ops library, assert on failure.
+      auto compile_pso = [&](const char *name) -> id<MTLComputePipelineState> {
+        id<MTLFunction> fn = [tensor_lib newFunctionWithName:
+            [NSString stringWithUTF8String:name]];
+        assert(fn && "tensor_ops function not found");
         MTLComputePipelineDescriptor *pd = [[MTLComputePipelineDescriptor alloc] init];
         pd.computeFunction = fn;
         pd.maxTotalThreadsPerThreadgroup = 128;
-        g_ctx.tensor_ops_gemm_nt_f32 =
+        NSError *err = nil;
+        id<MTLComputePipelineState> pso =
             [g_ctx.device newComputePipelineStateWithDescriptor:pd
                                                        options:0
                                                     reflection:nil
-                                                         error:&tensor_err];
-        if (g_ctx.tensor_ops_gemm_nt_f32) {
-          // Also compile NN variant for muon Newton-Schulz
-          id<MTLFunction> fn_nn = [tensor_lib newFunctionWithName:@"tensor_ops_gemm_nn_f32"];
-          MTLComputePipelineDescriptor *pd_nn = [[MTLComputePipelineDescriptor alloc] init];
-          pd_nn.computeFunction = fn_nn;
-          pd_nn.maxTotalThreadsPerThreadgroup = 128;
-          NSError *nn_err = nil;
-          g_ctx.tensor_ops_gemm_nn_f32 =
-              [g_ctx.device newComputePipelineStateWithDescriptor:pd_nn
-                                                         options:0
-                                                      reflection:nil
-                                                           error:&nn_err];
-          // Compile fp16 variants
-          NSError *f16_err = nil;
-          id<MTLFunction> fn_nt16 = [tensor_lib newFunctionWithName:@"tensor_ops_gemm_nt_f16"];
-          if (fn_nt16) {
-            MTLComputePipelineDescriptor *pd16 = [[MTLComputePipelineDescriptor alloc] init];
-            pd16.computeFunction = fn_nt16;
-            pd16.maxTotalThreadsPerThreadgroup = 128;
-            g_ctx.tensor_ops_gemm_nt_f16 =
-                [g_ctx.device newComputePipelineStateWithDescriptor:pd16
-                                                           options:0
-                                                        reflection:nil
-                                                             error:&f16_err];
-          }
-          if (g_ctx.tensor_ops_gemm_nt_f16) {
-            id<MTLFunction> fn_nn16 = [tensor_lib newFunctionWithName:@"tensor_ops_gemm_nn_f16"];
-            MTLComputePipelineDescriptor *pd_nn16 = [[MTLComputePipelineDescriptor alloc] init];
-            pd_nn16.computeFunction = fn_nn16;
-            pd_nn16.maxTotalThreadsPerThreadgroup = 128;
-            NSError *nn16_err = nil;
-            g_ctx.tensor_ops_gemm_nn_f16 =
-                [g_ctx.device newComputePipelineStateWithDescriptor:pd_nn16
-                                                           options:0
-                                                        reflection:nil
-                                                             error:&nn16_err];
-          }
-          // TN variants (backward weight gradients)
-          {
-            NSError *tn_err = nil;
-            id<MTLFunction> fn_tn = [tensor_lib newFunctionWithName:@"tensor_ops_gemm_tn_f32"];
-            if (fn_tn) {
-              MTLComputePipelineDescriptor *pd_tn = [[MTLComputePipelineDescriptor alloc] init];
-              pd_tn.computeFunction = fn_tn;
-              pd_tn.maxTotalThreadsPerThreadgroup = 128;
-              g_ctx.tensor_ops_gemm_tn_f32 =
-                  [g_ctx.device newComputePipelineStateWithDescriptor:pd_tn
-                                                             options:0
-                                                          reflection:nil
-                                                               error:&tn_err];
-            }
-            id<MTLFunction> fn_tn16 = [tensor_lib newFunctionWithName:@"tensor_ops_gemm_tn_f16"];
-            if (fn_tn16) {
-              MTLComputePipelineDescriptor *pd_tn16 = [[MTLComputePipelineDescriptor alloc] init];
-              pd_tn16.computeFunction = fn_tn16;
-              pd_tn16.maxTotalThreadsPerThreadgroup = 128;
-              NSError *tn16_err = nil;
-              g_ctx.tensor_ops_gemm_tn_f16 =
-                  [g_ctx.device newComputePipelineStateWithDescriptor:pd_tn16
-                                                             options:0
-                                                          reflection:nil
-                                                               error:&tn16_err];
-            }
-          }
-          printf("[metal] tensor_ops GEMM: NT=%s NN=%s TN=%s NT16=%s NN16=%s TN16=%s\n",
-                 "OK",
-                 g_ctx.tensor_ops_gemm_nn_f32 ? "OK" : nn_err.localizedDescription.UTF8String,
-                 g_ctx.tensor_ops_gemm_tn_f32 ? "OK" : "FAIL",
-                 g_ctx.tensor_ops_gemm_nt_f16 ? "OK" : "FAIL",
-                 g_ctx.tensor_ops_gemm_nn_f16 ? "OK" : "FAIL",
-                 g_ctx.tensor_ops_gemm_tn_f16 ? "OK" : "FAIL");
-        } else {
-          printf("[metal] tensor_ops GEMM pipeline failed: %s\n",
-                 tensor_err.localizedDescription.UTF8String);
+                                                         error:&err];
+        if (!pso) {
+          fprintf(stderr, "[metal] tensor_ops PSO '%s' failed: %s\n",
+                  name, err.localizedDescription.UTF8String);
+          assert(false && "tensor_ops PSO compilation failed");
         }
-      } else {
-        printf("[metal] tensor_ops compilation failed (non-fatal): %s\n",
-               tensor_err.localizedDescription.UTF8String);
-      }
+        return pso;
+      };
+
+      g_ctx.tensor_ops_gemm_nt_f32  = compile_pso("tensor_ops_gemm_nt_f32");
+      g_ctx.tensor_ops_gemm_nn_f32  = compile_pso("tensor_ops_gemm_nn_f32");
+      g_ctx.tensor_ops_gemm_tn_f32  = compile_pso("tensor_ops_gemm_tn_f32");
+      g_ctx.tensor_ops_gemm_nt_f16  = compile_pso("tensor_ops_gemm_nt_f16");
+      g_ctx.tensor_ops_gemm_nn_f16  = compile_pso("tensor_ops_gemm_nn_f16");
+      g_ctx.tensor_ops_gemm_tn_f16  = compile_pso("tensor_ops_gemm_tn_f16");
+
+      printf("[metal] tensor_ops GEMM: NT=OK NN=OK TN=OK NT16=OK NN16=OK TN16=OK\n");
     }
 
     // Metal 4 reusable command buffer infrastructure
@@ -799,15 +742,6 @@ id<MTLComputePipelineState> mtl_pipeline(const char *name) {
 // column-major API trick: swap A/B and transpose flags).
 // ============================================================================
 
-static inline MetalStream *get_stream(cudaStream_t s) {
-  return s ? (MetalStream *)s : &g_ctx.stream;
-}
-
-static inline void ensure_gpu_synced(cudaStream_t s) {
-  MetalStream *ms = get_stream(s);
-  if (ms->enc_active || ms->pending_work)
-    ms->sync();
-}
 
 // GPU training mode — when true, puf_mm forces GPU GEMM to avoid ensure_gpu_synced.
 // Set by train_impl to keep all training ops on the GPU encoder chain.
@@ -816,7 +750,7 @@ void puf_set_gpu_training(bool val) { g_gpu_training.store(val, std::memory_orde
 bool puf_is_gpu_training() { return g_gpu_training.load(std::memory_order_acquire); }
 
 bool puf_stream_has_encoder(cudaStream_t stream) {
-  MetalStream *ms = get_stream(stream);
+  MetalStream *ms = mtl_resolve_stream(stream);
   return ms->enc_active;
 }
 
@@ -854,52 +788,66 @@ struct HostGemmParams {
   int trans_a, trans_b;
 };
 
-// C(M,N) = alpha * op(A) @ op(B) + beta * C
-// op(A) is MxK, op(B) is KxN. lda/ldb/ldc are physical row strides.
+// steel_gemm dispatch: C(M,N) = alpha * op(A) @ op(B) + beta * C.
+// 64x64 output tile per threadgroup, 128 threads (4 simdgroups).
+static void steel_gemm_dispatch(const char *kernel_name,
+                                 const void *A, const void *B, void *C,
+                                 int M, int N, int K,
+                                 bool trans_a, bool trans_b,
+                                 int lda, int ldb, int ldc,
+                                 float alpha, float beta,
+                                 cudaStream_t stream) {
+  MetalStream *ms = mtl_resolve_stream(stream);
+  ms->compute_encoder();
+  id<MTLComputePipelineState> pso = mtl_pipeline(kernel_name);
+  mtl_set_pso(ms, pso);
+
+  NSUInteger off_a, off_b, off_c;
+  bind_buf(ms, buffer_for_ptr(A, &off_a), off_a, 0);
+  bind_buf(ms, buffer_for_ptr(B, &off_b), off_b, 1);
+  bind_buf(ms, buffer_for_ptr(C, &off_c), off_c, 2);
+
+  HostGemmParams params = {M, N, K, lda, ldb, ldc, alpha, beta,
+                            trans_a ? 1 : 0, trans_b ? 1 : 0};
+  mtl_set_params(ms, params, 3);
+
+  [ms->enc dispatchThreadgroups:MTLSizeMake((N + 63) / 64, (M + 63) / 64, 1)
+      threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+
+  ms->pending_work = true;
+  g_gemm_dispatch_count++;
+}
+
 static void compute_gemm(const float *A, const float *B, float *C,
-                          int M, int N, int K,
-                          bool trans_a, bool trans_b,
-                          int lda, int ldb, int ldc,
-                          float alpha, float beta,
+                          int M, int N, int K, bool trans_a, bool trans_b,
+                          int lda, int ldb, int ldc, float alpha, float beta,
                           cudaStream_t stream) {
-  MetalStream *ms = get_stream(stream);
-  ms->compute_encoder();
-  id<MTLComputePipelineState> pso = mtl_pipeline("steel_gemm");
-  mtl_set_pso(ms, pso);
-
-  NSUInteger off_a, off_b, off_c;
-  id<MTLBuffer> buf_a = buffer_for_ptr(A, &off_a);
-  id<MTLBuffer> buf_b = buffer_for_ptr(B, &off_b);
-  id<MTLBuffer> buf_c = buffer_for_ptr(C, &off_c);
-
-  bind_buf(ms, buf_a, off_a, 0);
-  bind_buf(ms, buf_b, off_b, 1);
-  bind_buf(ms, buf_c, off_c, 2);
-
-  HostGemmParams params = {M, N, K, lda, ldb, ldc, alpha, beta,
-                            trans_a ? 1 : 0, trans_b ? 1 : 0};
-  mtl_set_params(ms, params, 3);
-
-  // 64x64 output tile per threadgroup, 128 threads (4 simdgroups)
-  int groups_m = (M + 63) / 64;
-  int groups_n = (N + 63) / 64;
-  [ms->enc dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
-      threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
-
-  ms->pending_work = true;
+  steel_gemm_dispatch("steel_gemm", A, B, C, M, N, K, trans_a, trans_b,
+                       lda, ldb, ldc, alpha, beta, stream);
 }
 
-// fp16 compute-encoder GEMM: half I/O, float accumulation via simdgroup_matrix.
-// Same interface as compute_gemm but for __fp16 buffers. Uses steel_gemm_f16 kernel.
 static void compute_gemm_f16(const void *A, const void *B, void *C,
-                              int M, int N, int K,
-                              bool trans_a, bool trans_b,
-                              int lda, int ldb, int ldc,
-                              float alpha, float beta,
+                              int M, int N, int K, bool trans_a, bool trans_b,
+                              int lda, int ldb, int ldc, float alpha, float beta,
                               cudaStream_t stream) {
-  MetalStream *ms = get_stream(stream);
+  steel_gemm_dispatch("steel_gemm_f16", A, B, C, M, N, K, trans_a, trans_b,
+                       lda, ldb, ldc, alpha, beta, stream);
+}
+
+// ============================================================================
+// tensor_ops GEMM dispatch. All variants (NT/NN/TN x fp32/fp16) use identical
+// dispatch: bind A/B/C buffers, set M/N/K params, dispatch 64x32 tile groups.
+// Returns false if the PSO is nil (compilation failed).
+// ============================================================================
+
+static bool tensor_ops_dispatch(id<MTLComputePipelineState> pso,
+                                const void *A, const void *B, void *C,
+                                int M, int N, int K, cudaStream_t stream) {
+  if (!pso) return false;
+  g_gemm_dispatch_count++;
+
+  MetalStream *ms = mtl_resolve_stream(stream);
   ms->compute_encoder();
-  id<MTLComputePipelineState> pso = mtl_pipeline("steel_gemm_f16");
   mtl_set_pso(ms, pso);
 
   NSUInteger off_a, off_b, off_c;
@@ -911,208 +859,44 @@ static void compute_gemm_f16(const void *A, const void *B, void *C,
   bind_buf(ms, buf_b, off_b, 1);
   bind_buf(ms, buf_c, off_c, 2);
 
-  HostGemmParams params = {M, N, K, lda, ldb, ldc, alpha, beta,
-                            trans_a ? 1 : 0, trans_b ? 1 : 0};
-  mtl_set_params(ms, params, 3);
+  uint32_t mM = (uint32_t)M, mN = (uint32_t)N, mK = (uint32_t)K;
+  mtl_set_params(ms, mM, 3);
+  mtl_set_params(ms, mN, 4);
+  mtl_set_params(ms, mK, 5);
 
   int groups_m = (M + 63) / 64;
-  int groups_n = (N + 63) / 64;
+  int groups_n = (N + 31) / 32;
   [ms->enc dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
       threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
 
   ms->pending_work = true;
-  g_tensor_ops_dispatch_count++;  // count as compute-encoder dispatch
+  return true;
 }
 
-// ============================================================================
-// tensor_ops GEMM: C(M,N) = A(M,K) @ B(N,K)^T on the compute encoder.
-// Uses Metal 4 matmul2d with tensor_inline layout.
-// Requires N % 32 == 0, M % 64 == 0 (tiles). Returns false if unavailable.
-// ============================================================================
-
+// Typed wrappers for callers that pass float* (fp32 variants).
 static bool tensor_ops_gemm_nt(const float *A, const float *B, float *C,
-                                int M, int N, int K,
-                                cudaStream_t stream) {
-  if (!g_ctx.tensor_ops_gemm_nt_f32) return false;
-  g_tensor_ops_dispatch_count++;
-
-  MetalStream *ms = get_stream(stream);
-  ms->compute_encoder();
-  mtl_set_pso(ms, g_ctx.tensor_ops_gemm_nt_f32);
-
-  NSUInteger off_a, off_b, off_c;
-  id<MTLBuffer> buf_a = buffer_for_ptr(A, &off_a);
-  id<MTLBuffer> buf_b = buffer_for_ptr(B, &off_b);
-  id<MTLBuffer> buf_c = buffer_for_ptr(C, &off_c);
-
-  bind_buf(ms, buf_a, off_a, 0);
-  bind_buf(ms, buf_b, off_b, 1);
-  bind_buf(ms, buf_c, off_c, 2);
-
-  uint32_t mM = (uint32_t)M, mN = (uint32_t)N, mK = (uint32_t)K;
-  mtl_set_params(ms, mM, 3);
-  mtl_set_params(ms, mN, 4);
-  mtl_set_params(ms, mK, 5);
-
-  int groups_m = (M + 63) / 64;
-  int groups_n = (N + 31) / 32;
-  [ms->enc dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
-      threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
-
-  ms->pending_work = true;
-  return true;
+                                int M, int N, int K, cudaStream_t s) {
+  return tensor_ops_dispatch(g_ctx.tensor_ops_gemm_nt_f32, A, B, C, M, N, K, s);
 }
-
-// ============================================================================
-// tensor_ops GEMM: C(M,N) = A(M,K) @ B(K,N) on the compute encoder.
-// Uses Metal 4 matmul2d with tensor_inline layout.
-// Requires M % 64 == 0, N % 32 == 0 (tile_M=64, tile_N=32).
-// Returns false if unavailable.
-// ============================================================================
-
 static bool tensor_ops_gemm_nn(const float *A, const float *B, float *C,
-                                int M, int N, int K,
-                                cudaStream_t stream) {
-  if (!g_ctx.tensor_ops_gemm_nn_f32) return false;
-  g_tensor_ops_dispatch_count++;
-
-  MetalStream *ms = get_stream(stream);
-  ms->compute_encoder();
-  mtl_set_pso(ms, g_ctx.tensor_ops_gemm_nn_f32);
-
-  NSUInteger off_a, off_b, off_c;
-  id<MTLBuffer> buf_a = buffer_for_ptr(A, &off_a);
-  id<MTLBuffer> buf_b = buffer_for_ptr(B, &off_b);
-  id<MTLBuffer> buf_c = buffer_for_ptr(C, &off_c);
-
-  bind_buf(ms, buf_a, off_a, 0);
-  bind_buf(ms, buf_b, off_b, 1);
-  bind_buf(ms, buf_c, off_c, 2);
-
-  uint32_t mM = (uint32_t)M, mN = (uint32_t)N, mK = (uint32_t)K;
-  mtl_set_params(ms, mM, 3);
-  mtl_set_params(ms, mN, 4);
-  mtl_set_params(ms, mK, 5);
-
-  // tgid.y tiles M (stride 64), tgid.x tiles N (stride 32) — same as NT kernel
-  int groups_m = (M + 63) / 64;
-  int groups_n = (N + 31) / 32;
-  [ms->enc dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
-      threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
-
-  ms->pending_work = true;
-  return true;
+                                int M, int N, int K, cudaStream_t s) {
+  return tensor_ops_dispatch(g_ctx.tensor_ops_gemm_nn_f32, A, B, C, M, N, K, s);
 }
-
-// ============================================================================
-// tensor_ops fp16 GEMM on the compute encoder.
-// Same alignment requirements as fp32: M % 64 == 0, N % 32 == 0.
-// ============================================================================
-
-static bool tensor_ops_gemm_nt_f16(const void *A, const void *B, void *C,
-                                    int M, int N, int K,
-                                    cudaStream_t stream) {
-  if (!g_ctx.tensor_ops_gemm_nt_f16) return false;
-  g_tensor_ops_dispatch_count++;
-
-  MetalStream *ms = get_stream(stream);
-  ms->compute_encoder();
-  mtl_set_pso(ms, g_ctx.tensor_ops_gemm_nt_f16);
-
-  NSUInteger off_a, off_b, off_c;
-  id<MTLBuffer> buf_a = buffer_for_ptr(A, &off_a);
-  id<MTLBuffer> buf_b = buffer_for_ptr(B, &off_b);
-  id<MTLBuffer> buf_c = buffer_for_ptr(C, &off_c);
-
-  bind_buf(ms, buf_a, off_a, 0);
-  bind_buf(ms, buf_b, off_b, 1);
-  bind_buf(ms, buf_c, off_c, 2);
-
-  uint32_t mM = (uint32_t)M, mN = (uint32_t)N, mK = (uint32_t)K;
-  mtl_set_params(ms, mM, 3);
-  mtl_set_params(ms, mN, 4);
-  mtl_set_params(ms, mK, 5);
-
-  int groups_m = (M + 63) / 64;
-  int groups_n = (N + 31) / 32;
-  [ms->enc dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
-      threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
-
-  ms->pending_work = true;
-  return true;
-}
-
-static bool tensor_ops_gemm_nn_f16(const void *A, const void *B, void *C,
-                                    int M, int N, int K,
-                                    cudaStream_t stream) {
-  if (!g_ctx.tensor_ops_gemm_nn_f16) return false;
-  g_tensor_ops_dispatch_count++;
-
-  MetalStream *ms = get_stream(stream);
-  ms->compute_encoder();
-  mtl_set_pso(ms, g_ctx.tensor_ops_gemm_nn_f16);
-
-  NSUInteger off_a, off_b, off_c;
-  id<MTLBuffer> buf_a = buffer_for_ptr(A, &off_a);
-  id<MTLBuffer> buf_b = buffer_for_ptr(B, &off_b);
-  id<MTLBuffer> buf_c = buffer_for_ptr(C, &off_c);
-
-  bind_buf(ms, buf_a, off_a, 0);
-  bind_buf(ms, buf_b, off_b, 1);
-  bind_buf(ms, buf_c, off_c, 2);
-
-  uint32_t mM = (uint32_t)M, mN = (uint32_t)N, mK = (uint32_t)K;
-  mtl_set_params(ms, mM, 3);
-  mtl_set_params(ms, mN, 4);
-  mtl_set_params(ms, mK, 5);
-
-  int groups_m = (M + 63) / 64;
-  int groups_n = (N + 31) / 32;
-  [ms->enc dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
-      threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
-
-  ms->pending_work = true;
-  return true;
-}
-
-// ============================================================================
-// tensor_ops GEMM: C(M,N) = A(K,M)^T @ B(K,N) on the compute encoder.
-// Uses Metal 4 matmul2d with tensor_inline layout.
-// Requires M % 64 == 0, N % 32 == 0 (tile_M=64, tile_N=32).
-// Returns false if unavailable.
-// ============================================================================
-
 static bool tensor_ops_gemm_tn(const float *A, const float *B, float *C,
-                                int M, int N, int K,
-                                cudaStream_t stream) {
-  if (!g_ctx.tensor_ops_gemm_tn_f32) return false;
-  g_tensor_ops_dispatch_count++;
-
-  MetalStream *ms = get_stream(stream);
-  ms->compute_encoder();
-  mtl_set_pso(ms, g_ctx.tensor_ops_gemm_tn_f32);
-
-  NSUInteger off_a, off_b, off_c;
-  id<MTLBuffer> buf_a = buffer_for_ptr(A, &off_a);
-  id<MTLBuffer> buf_b = buffer_for_ptr(B, &off_b);
-  id<MTLBuffer> buf_c = buffer_for_ptr(C, &off_c);
-
-  bind_buf(ms, buf_a, off_a, 0);
-  bind_buf(ms, buf_b, off_b, 1);
-  bind_buf(ms, buf_c, off_c, 2);
-
-  uint32_t mM = (uint32_t)M, mN = (uint32_t)N, mK = (uint32_t)K;
-  mtl_set_params(ms, mM, 3);
-  mtl_set_params(ms, mN, 4);
-  mtl_set_params(ms, mK, 5);
-
-  int groups_m = (M + 63) / 64;
-  int groups_n = (N + 31) / 32;
-  [ms->enc dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
-      threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
-
-  ms->pending_work = true;
-  return true;
+                                int M, int N, int K, cudaStream_t s) {
+  return tensor_ops_dispatch(g_ctx.tensor_ops_gemm_tn_f32, A, B, C, M, N, K, s);
+}
+static bool tensor_ops_gemm_nt_f16(const void *A, const void *B, void *C,
+                                    int M, int N, int K, cudaStream_t s) {
+  return tensor_ops_dispatch(g_ctx.tensor_ops_gemm_nt_f16, A, B, C, M, N, K, s);
+}
+static bool tensor_ops_gemm_nn_f16(const void *A, const void *B, void *C,
+                                    int M, int N, int K, cudaStream_t s) {
+  return tensor_ops_dispatch(g_ctx.tensor_ops_gemm_nn_f16, A, B, C, M, N, K, s);
+}
+static bool tensor_ops_gemm_tn_f16(const void *A, const void *B, void *C,
+                                    int M, int N, int K, cudaStream_t s) {
+  return tensor_ops_dispatch(g_ctx.tensor_ops_gemm_tn_f16, A, B, C, M, N, K, s);
 }
 
 // K-split TN GEMM for small-M, small-N, large-K reductions (wgrad).
@@ -1164,7 +948,7 @@ static void compute_gemm_ksplit_tn(const float *A, const float *B, float *C,
     ksplit_capacity = partials_count;
   }
 
-  MetalStream *ms = get_stream(stream);
+  MetalStream *ms = mtl_resolve_stream(stream);
 
   // Step 1: K-split GEMM — write partials.
   ms->compute_encoder();
@@ -1210,46 +994,13 @@ static void compute_gemm_ksplit_tn(const float *A, const float *B, float *C,
   mtl_dispatch_1d(ms, pso_reduce, M * N);
 }
 
-static bool tensor_ops_gemm_tn_f16(const void *A, const void *B, void *C,
-                                    int M, int N, int K,
-                                    cudaStream_t stream) {
-  if (!g_ctx.tensor_ops_gemm_tn_f16) return false;
-  g_tensor_ops_dispatch_count++;
-
-  MetalStream *ms = get_stream(stream);
-  ms->compute_encoder();
-  mtl_set_pso(ms, g_ctx.tensor_ops_gemm_tn_f16);
-
-  NSUInteger off_a, off_b, off_c;
-  id<MTLBuffer> buf_a = buffer_for_ptr(A, &off_a);
-  id<MTLBuffer> buf_b = buffer_for_ptr(B, &off_b);
-  id<MTLBuffer> buf_c = buffer_for_ptr(C, &off_c);
-
-  bind_buf(ms, buf_a, off_a, 0);
-  bind_buf(ms, buf_b, off_b, 1);
-  bind_buf(ms, buf_c, off_c, 2);
-
-  uint32_t mM = (uint32_t)M, mN = (uint32_t)N, mK = (uint32_t)K;
-  mtl_set_params(ms, mM, 3);
-  mtl_set_params(ms, mN, 4);
-  mtl_set_params(ms, mK, 5);
-
-  int groups_m = (M + 63) / 64;
-  int groups_n = (N + 31) / 32;
-  [ms->enc dispatchThreadgroups:MTLSizeMake(groups_n, groups_m, 1)
-      threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
-
-  ms->pending_work = true;
-  return true;
-}
-
 // Small compute-encoder GEMM for unaligned N.
 // C(M,N) = A(M,K) @ B(N,K)^T. One threadgroup per row, threads partition columns.
 // Efficient for small N (e.g. decoder output N=40) where 64x64 tile waste dominates.
 static void small_gemm_nt_dispatch(const float *A, const float *B, float *C,
                                     int M, int N, int K,
                                     cudaStream_t stream) {
-  MetalStream *ms = get_stream(stream);
+  MetalStream *ms = mtl_resolve_stream(stream);
   ms->compute_encoder();
   id<MTLComputePipelineState> pso = mtl_pipeline("small_gemm_nt_f32");
   mtl_set_pso(ms, pso);
@@ -1273,7 +1024,7 @@ static void small_gemm_nt_dispatch(const float *A, const float *B, float *C,
       threadsPerThreadgroup:MTLSizeMake(tg_size, 1, 1)];
 
   ms->pending_work = true;
-  g_tensor_ops_dispatch_count++;
+  g_gemm_dispatch_count++;
 }
 
 // ============================================================================
@@ -1293,7 +1044,7 @@ static void tf32_round_gemm_inputs(float *a_ptr, int a_elems,
   mtl_tf32_round_inplace(a_ptr, a_elems, stream);
   mtl_tf32_round_inplace(b_ptr, b_elems, stream);
   // Barrier: ensure in-place rounding writes are visible to the GEMM dispatch.
-  mtl_barrier(get_stream(stream));
+  mtl_barrier(mtl_resolve_stream(stream));
 }
 
 // out(...,N) = a(...,K) @ b(N,K)^T — leading dims folded into M
@@ -1436,20 +1187,9 @@ static float *addmm_temp_buf(int count) {
   int64_t size = (needed + page - 1) & ~(page - 1);
   if (size <= g_addmm_temp_size) return (float *)g_addmm_temp_base;
 
-  // Never free old temp buffers here: in-flight command buffers may still
-  // reference them. We grow by allocating a new buffer and keeping old ones
-  // until global reset.
-  posix_memalign((void **)&g_addmm_temp_base, page, size);
-  id<MTLBuffer> buf =
-      [g_ctx.device newBufferWithBytesNoCopy:g_addmm_temp_base
-                                      length:size
-                                     options:MTLResourceStorageModeShared
-                                 deallocator:nil];
-  assert(buf && "addmm temp buffer MTLBuffer creation failed");
-  g_ctx.buffers.push_back({g_addmm_temp_base, size, buf});
-  [g_ctx.residency_set addAllocation:buf];
-  [g_ctx.residency_set commit];
-  [g_ctx.residency_set requestResidency];
+  // Old buffer stays in residency set (in-flight commands may reference it).
+  // mtl_alloc_scratch registers the new one.
+  g_addmm_temp_base = (char *)mtl_alloc_scratch(size);
   g_addmm_temp_size = size;
   return (float *)g_addmm_temp_base;
 }
@@ -1483,10 +1223,10 @@ void puf_addmm_nn(PufTensor &a, PufTensor &b, PufTensor &out, float alpha,
     float *temp = addmm_temp_buf(M * N);
     tensor_ops_gemm_nn(a_f32, b_f32, temp, M, N, K, stream);
     // Metal 4: force visibility of temp writes before scale/axpy reads.
-    mtl_barrier(get_stream(stream));
+    mtl_barrier(mtl_resolve_stream(stream));
 
     // Step 2: out *= beta (compute encoder)
-    MetalStream *ms = get_stream(stream);
+    MetalStream *ms = mtl_resolve_stream(stream);
     ms->compute_encoder();
     int count = M * N;
 

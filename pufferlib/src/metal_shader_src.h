@@ -17,11 +17,10 @@
  *  12. Transpose kernels (transpose_f32, transpose_01, transpose_01_u64)
  *  13. Norm and clip (norm_f32, norm_reduce, clip_by_norm, normalize)
  *  14. Variance/mean (var_mean)
- *  15. Sum rows (sum_rows_add, sum_rows_to_f32)
+ *  15. Sum rows (sum_rows_to_f32)
  *  16. Decoder grad assembly (assemble_decoder_grad_f32)
  *  17. Select/copy + index copy (minibatch assembly)
  *  18. Cast (cast_u8_to_f32, cast_f64_to_f32)
- *  19. Orthogonal init helpers (sign_correct_columns, extract_diag_sign, colmaj_to_rowmaj_scale)
  *
  * Float32 only — no bf16 variants.
  */
@@ -445,14 +444,8 @@ kernel void fused_scan_backward_checkpointed(
     float s_0 = s_buf[ckpt_0_idx];
     float log_value_0 = log_values_buf[ckpt_0_idx];
 
-    float scan_result_0 = fast::exp(a_star_0 + s_0);
-    float z_0 = log_value_0 - a_star_0;
-
-    float grad_log_h_0 = 0.0f;
-    float grad_s_0 = grad_log_h_0;
-
-    acc = grad_s_0 + acc * fast::exp(s_0 - s_val_next);
-    float grad_z_0 = acc * fast::exp(z_0 - s_0);
+    acc = acc * fast::exp(s_0 - s_val_next);
+    float grad_z_0 = acc * fast::exp((log_value_0 - a_star_0) - s_0);
 
     grad_state[state_idx] = grad_z_0 / state[state_idx];
 }
@@ -547,6 +540,14 @@ struct SampleParams {
     int mask_stride;    // stride between rows in mask buffer (may differ from num_atns_total)
 };
 
+// Apply action mask to a logit: invalid actions get -1e9, NaN/inf sanitized.
+inline float masked_logit(float l, float m) {
+    if (m < 0.5f) l = -1e9f;
+    if (isnan(l)) l = 0.0f;
+    if (isinf(l)) l = (l > 0) ? 3.4028e+38f : -3.4028e+38f;
+    return l;
+}
+
 kernel void sample_logits_kernel(
     device float* actions               [[buffer(0)]],
     device float* logprobs              [[buffer(1)]],
@@ -608,25 +609,17 @@ kernel void sample_logits_kernel(
             // Mask base index for this env (mask_stride allows non-contiguous layout)
             int mask_base = (int)idx * sp.mask_stride;
 
-            // Find max for numerical stability (with mask + nan_to_num)
+            // Max + logsumexp (with mask)
             float max_val = -INFINITY;
             for (int a = 0; a < A; a++) {
-                float l = logits[logits_base + logits_offset + a];
-                float m = action_mask[mask_base + logits_offset + a];
-                if (m < 0.5f) l = -1e9f;
-                if (isnan(l)) l = 0.0f;
-                if (isinf(l)) l = (l > 0) ? 3.4028e+38f : -3.4028e+38f;
+                float l = masked_logit(logits[logits_base + logits_offset + a],
+                                       action_mask[mask_base + logits_offset + a]);
                 max_val = fmax(max_val, l);
             }
-
-            // logsumexp (with mask)
             float sum_exp = 0.0f;
             for (int a = 0; a < A; a++) {
-                float l = logits[logits_base + logits_offset + a];
-                float m = action_mask[mask_base + logits_offset + a];
-                if (m < 0.5f) l = -1e9f;
-                if (isnan(l)) l = 0.0f;
-                if (isinf(l)) l = (l > 0) ? 3.4028e+38f : -3.4028e+38f;
+                float l = masked_logit(logits[logits_base + logits_offset + a],
+                                       action_mask[mask_base + logits_offset + a]);
                 sum_exp += exp(l - max_val);
             }
             float logsumexp_val = max_val + log(sum_exp);
@@ -643,11 +636,8 @@ kernel void sample_logits_kernel(
             float cumsum = 0.0f;
             int sampled_action = A - 1;
             for (int a = 0; a < A; a++) {
-                float l = logits[logits_base + logits_offset + a];
-                float m = action_mask[mask_base + logits_offset + a];
-                if (m < 0.5f) l = -1e9f;
-                if (isnan(l)) l = 0.0f;
-                if (isinf(l)) l = (l > 0) ? 3.4028e+38f : -3.4028e+38f;
+                float l = masked_logit(logits[logits_base + logits_offset + a],
+                                       action_mask[mask_base + logits_offset + a]);
                 float prob = exp(l - logsumexp_val);
                 cumsum += prob;
                 if (rand_val < cumsum) {
@@ -656,13 +646,10 @@ kernel void sample_logits_kernel(
                 }
             }
 
-            // Gather log probability (with mask)
-            float sampled_logit = logits[logits_base + logits_offset + sampled_action];
-            float sm = action_mask[mask_base + logits_offset + sampled_action];
-            if (sm < 0.5f) sampled_logit = -1e9f;
-            if (isnan(sampled_logit)) sampled_logit = 0.0f;
-            if (isinf(sampled_logit)) sampled_logit = (sampled_logit > 0) ? 3.4028e+38f : -3.4028e+38f;
-            float log_prob = sampled_logit - logsumexp_val;
+            // Gather log probability
+            float log_prob = masked_logit(
+                logits[logits_base + logits_offset + sampled_action],
+                action_mask[mask_base + logits_offset + sampled_action]) - logsumexp_val;
 
             actions[(int)idx * sp.num_atns + h] = float(sampled_action);
             total_log_prob += log_prob;
@@ -712,36 +699,24 @@ kernel void recompute_logprobs_kernel(
         int A = act_sizes[h];
         int act = int(actions_f32[(int)idx * rp.num_atns + h]);
 
-        // Masked max for numerical stability
+        // Max + logsumexp (with mask)
         float max_val = -INFINITY;
         for (int a = 0; a < A; a++) {
-            float l = logits[logits_base + logits_offset + a];
-            float m = action_mask[mask_base + logits_offset + a];
-            if (m < 0.5f) l = -1e9f;
-            if (isnan(l)) l = 0.0f;
-            if (isinf(l)) l = (l > 0) ? 3.4028e+38f : -3.4028e+38f;
-            max_val = fmax(max_val, l);
+            max_val = fmax(max_val, masked_logit(
+                logits[logits_base + logits_offset + a],
+                action_mask[mask_base + logits_offset + a]));
         }
-
-        // logsumexp
         float sum_exp = 0.0f;
         for (int a = 0; a < A; a++) {
-            float l = logits[logits_base + logits_offset + a];
-            float m = action_mask[mask_base + logits_offset + a];
-            if (m < 0.5f) l = -1e9f;
-            if (isnan(l)) l = 0.0f;
-            if (isinf(l)) l = (l > 0) ? 3.4028e+38f : -3.4028e+38f;
-            sum_exp += exp(l - max_val);
+            sum_exp += exp(masked_logit(
+                logits[logits_base + logits_offset + a],
+                action_mask[mask_base + logits_offset + a]) - max_val);
         }
         float logsumexp_val = max_val + log(sum_exp);
 
-        // Gather log probability for the sampled action
-        float sampled_logit = logits[logits_base + logits_offset + act];
-        float sm = action_mask[mask_base + logits_offset + act];
-        if (sm < 0.5f) sampled_logit = -1e9f;
-        if (isnan(sampled_logit)) sampled_logit = 0.0f;
-        if (isinf(sampled_logit)) sampled_logit = (sampled_logit > 0) ? 3.4028e+38f : -3.4028e+38f;
-        total_log_prob += sampled_logit - logsumexp_val;
+        total_log_prob += masked_logit(
+            logits[logits_base + logits_offset + act],
+            action_mask[mask_base + logits_offset + act]) - logsumexp_val;
 
         logits_offset += A;
     }
@@ -795,7 +770,6 @@ inline void ppo_discrete_head(
     for (int a = 0; a < A; a++) {
         float l = logits[logits_base + (logits_offset + a) * logits_stride_a];
         if (mask[mask_offset + a] < 0.5f) l = -1e9f;
-        if (!isfinite(l)) l = 0.0f;
         if (a == act) act_logit = l;
         if (l > max_logit) {
             sum *= exp(max_logit - l);
@@ -803,31 +777,29 @@ inline void ppo_discrete_head(
         }
         sum += exp(l - max_logit);
     }
+    // Degenerate input (all masked or non-finite model output): propagate NaN
+    // so the corruption surfaces immediately in the PPO loss rather than
+    // silently producing logp=0 (ratio=1) which poisons gradients.
     if (!isfinite(max_logit) || !isfinite(sum) || sum <= 0.0f) {
-        out_logsumexp = 0.0f;
-        out_entropy = 0.0f;
-        out_logp = 0.0f;
+        out_logsumexp = NAN;
+        out_entropy = NAN;
+        out_logp = NAN;
         return;
     }
     float lse = max_logit + log(sum);
-    if (!isfinite(lse)) lse = max_logit;
 
     float ent = 0.0f;
     for (int a = 0; a < A; a++) {
         float l = logits[logits_base + (logits_offset + a) * logits_stride_a];
         if (mask[mask_offset + a] < 0.5f) l = -1e9f;
-        if (!isfinite(l)) l = 0.0f;
         float logp = l - lse;
-        if (!isfinite(logp)) logp = -80.0f;
         float p = exp(clamp(logp, -80.0f, 80.0f));
-        float ent_term = p * logp;
-        if (isfinite(ent_term)) ent -= ent_term;
+        ent -= p * logp;
     }
 
     out_logsumexp = lse;
     out_entropy = ent;
-    float out_lp = act_logit - lse;
-    out_logp = isfinite(out_lp) ? out_lp : 0.0f;
+    out_logp = act_logit - lse;
 }
 
 // PPO helper: compute log_prob and entropy for a single continuous head
@@ -843,9 +815,6 @@ inline void ppo_continuous_head(
     out_entropy = HALF_1_PLUS_LOG_2PI + log_std;
 }
 
-inline float ppo_ratio_from_logratio(float logratio) {
-    return exp(logratio);
-}
 
 struct PPOFusedParams {
     int num_atns;
@@ -945,10 +914,13 @@ kernel void ppo_loss_fwd_bwd_kernel(
         }
         grad_values_pred[nt] = dL * pp.vf_coef * d_val_pred;
 
-        // Policy loss + gradients
+        // Policy loss + gradients. Both branches produce pg_loss, total_entropy,
+        // logratio, ratio — the block-loss accumulation is shared after the if/else.
+        float pg_loss, total_entropy, logratio, ratio;
+
         if (pp.is_continuous) {
             float total_log_prob = 0.0f;
-            float total_entropy = 0.0f;
+            total_entropy = 0.0f;
             for (int h = 0; h < pp.num_atns; h++) {
                 float mean = logits[logits_base + h * pp.logits_stride_a];
                 float log_std = logstd[logits_base + h * pp.logits_stride_a];
@@ -959,23 +931,18 @@ kernel void ppo_loss_fwd_bwd_kernel(
                 total_entropy += ent;
             }
 
-            // clamp logratio: cpu_inference + multi-head GEMM precision mismatch can
-            // push |logratio| past exp overflow. exp(5)≈148 is plenty for PPO clipping.
-            float logratio = clamp(total_log_prob - old_logp, -5.0f, 5.0f);
-            float ratio = ppo_ratio_from_logratio(logratio);
+            logratio = clamp(total_log_prob - old_logp, -5.0f, 5.0f);
+            ratio = exp(logratio);
             out_ratio[nt] = ratio;
             float ratio_clipped = clamp(ratio, 1.0f - pp.clip_coef, 1.0f + pp.clip_coef);
             float wa = -w * adv_normalized;
-            float pg_loss1 = wa * ratio;
-            float pg_loss2 = wa * ratio_clipped;
-            float pg_loss = fmax(pg_loss1, pg_loss2);
+            pg_loss = fmax(wa * ratio, wa * ratio_clipped);
 
             // Backward: policy gradient
             float d_ratio = wa * d_pg_loss;
-            if (pg_loss2 > pg_loss1) {
-                if (ratio <= (1.0f - pp.clip_coef) || ratio >= (1.0f + pp.clip_coef)) {
+            if (wa * ratio_clipped > wa * ratio) {
+                if (ratio <= (1.0f - pp.clip_coef) || ratio >= (1.0f + pp.clip_coef))
                     d_ratio = 0.0f;
-                }
             }
             float d_new_logp = d_ratio * ratio;
 
@@ -990,15 +957,6 @@ kernel void ppo_loss_fwd_bwd_kernel(
                 grad_logits[grad_logits_base + h] = d_new_logp * diff / var;
                 grad_logstd[grad_logits_base + h] = d_new_logp * (diff * diff / var - 1.0f) + d_entropy_term;
             }
-
-            float thread_loss = (pg_loss + pp.vf_coef * v_loss - pp.ent_coef * total_entropy) * inv_NT;
-            block_losses[LOSS_PG][tid] = pg_loss * inv_NT;
-            block_losses[LOSS_VF][tid] = v_loss * inv_NT;
-            block_losses[LOSS_ENT][tid] = total_entropy * inv_NT;
-            block_losses[LOSS_TOTAL][tid] = thread_loss;
-            block_losses[LOSS_OLD_APPROX_KL][tid] = (-logratio) * inv_NT;
-            block_losses[LOSS_APPROX_KL][tid] = ((ratio - 1.0f) - logratio) * inv_NT;
-            block_losses[LOSS_CLIPFRAC][tid] = (abs(ratio - 1.0f) > pp.clip_coef ? 1.0f : 0.0f) * inv_NT;
         } else {
             // Discrete: compute per-head logsumexp, entropy, log_prob with action masks.
             // Mask data is embedded in obs buffer with stride pp.mask_stride.
@@ -1008,7 +966,7 @@ kernel void ppo_loss_fwd_bwd_kernel(
 
             int logits_offset = 0;
             float total_log_prob = 0.0f;
-            float total_entropy = 0.0f;
+            total_entropy = 0.0f;
             int mask_base = (int)idx * pp.mask_stride;
 
             for (int h = 0; h < pp.num_atns; h++) {
@@ -1025,23 +983,18 @@ kernel void ppo_loss_fwd_bwd_kernel(
                 logits_offset += A;
             }
 
-            // clamp logratio: cpu_inference + multi-head GEMM precision mismatch can
-            // push |logratio| past exp overflow. exp(5)≈148 is plenty for PPO clipping.
-            float logratio = clamp(total_log_prob - old_logp, -5.0f, 5.0f);
-            float ratio = ppo_ratio_from_logratio(logratio);
+            logratio = clamp(total_log_prob - old_logp, -5.0f, 5.0f);
+            ratio = exp(logratio);
             out_ratio[nt] = ratio;
             float ratio_clipped = clamp(ratio, 1.0f - pp.clip_coef, 1.0f + pp.clip_coef);
             float wa = -w * adv_normalized;
-            float pg_loss1 = wa * ratio;
-            float pg_loss2 = wa * ratio_clipped;
-            float pg_loss = fmax(pg_loss1, pg_loss2);
+            pg_loss = fmax(wa * ratio, wa * ratio_clipped);
 
             // Backward: policy gradient
             float d_ratio = wa * d_pg_loss;
-            if (pg_loss2 > pg_loss1) {
-                if (ratio <= (1.0f - pp.clip_coef) || ratio >= (1.0f + pp.clip_coef)) {
+            if (wa * ratio_clipped > wa * ratio) {
+                if (ratio <= (1.0f - pp.clip_coef) || ratio >= (1.0f + pp.clip_coef))
                     d_ratio = 0.0f;
-                }
             }
             float d_new_logp = d_ratio * ratio;
 
@@ -1062,22 +1015,21 @@ kernel void ppo_loss_fwd_bwd_kernel(
                     float d_logit = (a == act) ? d_new_logp : 0.0f;
                     d_logit -= p * d_new_logp;
                     d_logit += d_entropy_term * p * (-ent - logp);
-                    // Zero gradient for masked-out actions
                     if (m < 0.5f) d_logit = 0.0f;
                     grad_logits[grad_logits_base + logits_offset + a] = d_logit;
                 }
                 logits_offset += A;
             }
-
-            float thread_loss = (pg_loss + pp.vf_coef * v_loss - pp.ent_coef * total_entropy) * inv_NT;
-            block_losses[LOSS_PG][tid] = pg_loss * inv_NT;
-            block_losses[LOSS_VF][tid] = v_loss * inv_NT;
-            block_losses[LOSS_ENT][tid] = total_entropy * inv_NT;
-            block_losses[LOSS_TOTAL][tid] = thread_loss;
-            block_losses[LOSS_OLD_APPROX_KL][tid] = (-logratio) * inv_NT;
-            block_losses[LOSS_APPROX_KL][tid] = ((ratio - 1.0f) - logratio) * inv_NT;
-            block_losses[LOSS_CLIPFRAC][tid] = (abs(ratio - 1.0f) > pp.clip_coef ? 1.0f : 0.0f) * inv_NT;
         }
+
+        // Shared loss accumulation (both branches produce pg_loss, total_entropy, logratio, ratio)
+        block_losses[LOSS_PG][tid] = pg_loss * inv_NT;
+        block_losses[LOSS_VF][tid] = v_loss * inv_NT;
+        block_losses[LOSS_ENT][tid] = total_entropy * inv_NT;
+        block_losses[LOSS_TOTAL][tid] = (pg_loss + pp.vf_coef * v_loss - pp.ent_coef * total_entropy) * inv_NT;
+        block_losses[LOSS_OLD_APPROX_KL][tid] = (-logratio) * inv_NT;
+        block_losses[LOSS_APPROX_KL][tid] = ((ratio - 1.0f) - logratio) * inv_NT;
+        block_losses[LOSS_CLIPFRAC][tid] = (abs(ratio - 1.0f) > pp.clip_coef ? 1.0f : 0.0f) * inv_NT;
     } // end if (idx < total_elements)
 
     threadgroup_barrier(mem_flags::mem_threadgroup);
@@ -1129,366 +1081,6 @@ kernel void ppo_loss_reduce_kernel(
     // Fold add_scalar: increment epoch count
     if (tid == 0) {
         losses_acc[LOSS_N] += 1.0f;
-    }
-}
-
-// ============================================================================
-// Section 7: PPO loss — separate forward/backward (4.0 alternative)
-// ============================================================================
-
-struct PPOParams {
-    float clip_coef;
-    float vf_clip_coef;
-    float vf_coef;
-    float ent_coef;
-    int T_seq;
-    int A_total;
-    int N;
-    int logits_stride_n;
-    int logits_stride_t;
-    int logits_stride_a;
-    int values_stride_n;
-    int values_stride_t;
-    int num_atns;
-    int is_continuous;
-    int num_atns_total;  // sum of act_sizes, for mask buffer indexing
-};
-
-// Apply action mask to a logit: invalid actions get -1e9
-inline float masked_logit(float l, float m) {
-    return (m < 0.5f) ? -1e9f : l;
-}
-
-kernel void ppo_loss_forward_kernel(
-    device atomic_uint* loss            [[buffer(0)]],
-    device atomic_uint* losses_acc      [[buffer(1)]],
-    const device float* logits          [[buffer(2)]],
-    const device float* logstd          [[buffer(3)]],
-    const device float* values_pred     [[buffer(4)]],
-    const device float* actions          [[buffer(5)]],
-    const device float* old_logprobs    [[buffer(6)]],
-    const device float* advantages      [[buffer(7)]],
-    const device float* prio            [[buffer(8)]],
-    const device float* values          [[buffer(9)]],
-    const device float* returns_buf     [[buffer(10)]],
-    const device float* adv_mean        [[buffer(11)]],
-    const device float* adv_var         [[buffer(12)]],
-    const device int* act_sizes         [[buffer(13)]],
-    constant PPOParams& pp              [[buffer(14)]],
-    const device float* action_mask     [[buffer(15)]],
-    uint idx [[thread_position_in_grid]],
-    uint tid [[thread_index_in_threadgroup]]
-) {
-    int total_elements = pp.N * pp.T_seq;
-
-    // Shared memory for block reduction
-    threadgroup float block_losses[7][PPO_THREADS];
-    for (int c = 0; c < LOSS_N; c++) {
-        block_losses[c][tid] = 0.0f;
-    }
-
-    if ((int)idx < total_elements) {
-        int n = (int)idx / pp.T_seq;
-        int t = (int)idx % pp.T_seq;
-        int nt = n * pp.T_seq + t;
-        int logits_base = n * pp.logits_stride_n + t * pp.logits_stride_t;
-        int values_idx = n * pp.values_stride_n + t * pp.values_stride_t;
-
-        float total_log_prob = 0.0f;
-        float total_entropy = 0.0f;
-
-        if (pp.is_continuous) {
-            constexpr float HALF_LOG_2PI = 0.9189385332046727f;
-            constexpr float HALF_1_PLUS_LOG_2PI = 1.4189385332046727f;
-
-            for (int h = 0; h < pp.num_atns; h++) {
-                float mean = logits[logits_base + h * pp.logits_stride_a];
-                float log_std = logstd[logits_base + h * pp.logits_stride_a];
-                float std = exp(log_std);
-                float action = float(actions[nt * pp.num_atns + h]);
-
-                float normalized = (action - mean) / std;
-                total_log_prob += -0.5f * normalized * normalized - HALF_LOG_2PI - log_std;
-                total_entropy += HALF_1_PLUS_LOG_2PI + log_std;
-            }
-        } else {
-            int logits_offset = 0;
-            int mask_base = (int)idx * pp.num_atns_total;
-            for (int h = 0; h < pp.num_atns; h++) {
-                int A = act_sizes[h];
-                int act = int(actions[nt * pp.num_atns + h]);
-
-                float max_logit_val = -INFINITY;
-                float sum = 0.0f;
-                float act_logit = 0.0f;
-
-                for (int a = 0; a < A; a++) {
-                    float l = masked_logit(
-                        logits[logits_base + (logits_offset + a) * pp.logits_stride_a],
-                        action_mask[mask_base + logits_offset + a]);
-                    if (a == act) act_logit = l;
-                    if (l > max_logit_val) {
-                        sum *= exp(max_logit_val - l);
-                        max_logit_val = l;
-                    }
-                    sum += exp(l - max_logit_val);
-                }
-                float lse = max_logit_val + log(sum);
-
-                float head_entropy = 0.0f;
-                for (int a = 0; a < A; a++) {
-                    float l = masked_logit(
-                        logits[logits_base + (logits_offset + a) * pp.logits_stride_a],
-                        action_mask[mask_base + logits_offset + a]);
-                    float logp = l - lse;
-                    float p = exp(logp);
-                    head_entropy -= p * logp;
-                }
-
-                total_log_prob += act_logit - lse;
-                total_entropy += head_entropy;
-                logits_offset += A;
-            }
-        }
-
-        float new_logp = total_log_prob;
-        float entropy = total_entropy;
-        float old_logp = old_logprobs[nt];
-        float adv = advantages[nt];
-        float w = prio[n];
-        float adv_std = sqrt(adv_var[0]);
-        float adv_normalized = (adv - adv_mean[0]) / (adv_std + 1e-8f);
-
-        float logratio = new_logp - old_logp;
-        float ratio = ppo_ratio_from_logratio(logratio);
-
-        float ratio_clipped = clamp(ratio, 1.0f - pp.clip_coef, 1.0f + pp.clip_coef);
-        float wa = -w * adv_normalized;
-        float pg_loss = fmax(wa * ratio, wa * ratio_clipped);
-
-        float val = values[nt];
-        float ret = returns_buf[nt];
-        float val_pred = values_pred[values_idx];
-
-        float v_error = val_pred - val;
-        float v_clipped = val + clamp(v_error, -pp.vf_clip_coef, pp.vf_clip_coef);
-        float v_loss_unclipped = (val_pred - ret) * (val_pred - ret);
-        float v_loss_clipped = (v_clipped - ret) * (v_clipped - ret);
-        float v_loss = 0.5f * fmax(v_loss_unclipped, v_loss_clipped);
-
-        float thread_loss = (pg_loss + pp.vf_coef * v_loss - pp.ent_coef * entropy) / float(total_elements);
-        float inv_total = 1.0f / float(total_elements);
-
-        block_losses[LOSS_PG][tid] = pg_loss * inv_total;
-        block_losses[LOSS_VF][tid] = v_loss * inv_total;
-        block_losses[LOSS_ENT][tid] = entropy * inv_total;
-        block_losses[LOSS_TOTAL][tid] = thread_loss;
-        block_losses[LOSS_OLD_APPROX_KL][tid] = (-logratio) * inv_total;
-        block_losses[LOSS_APPROX_KL][tid] = ((ratio - 1.0f) - logratio) * inv_total;
-        block_losses[LOSS_CLIPFRAC][tid] = (abs(ratio - 1.0f) > pp.clip_coef ? 1.0f : 0.0f) * inv_total;
-    }
-
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-
-    // Block reduction (tree reduction)
-    for (int stride = PPO_THREADS / 2; stride > 0; stride >>= 1) {
-        if ((int)tid < stride) {
-            for (int c = 0; c < LOSS_N; c++) {
-                block_losses[c][tid] += block_losses[c][tid + stride];
-            }
-        }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-    }
-
-    if (tid == 0) {
-        atomic_add_float(loss, block_losses[LOSS_TOTAL][0]);
-        for (int c = 0; c < LOSS_N; c++) {
-            atomic_add_float(&losses_acc[c], block_losses[c][0]);
-        }
-    }
-}
-
-kernel void ppo_loss_backward_kernel(
-    device float* grad_logits           [[buffer(0)]],
-    device float* grad_logstd           [[buffer(1)]],
-    device float* grad_values_pred      [[buffer(2)]],
-    const device float* grad_loss       [[buffer(3)]],
-    const device float* logits          [[buffer(4)]],
-    const device float* logstd          [[buffer(5)]],
-    const device float* values_pred     [[buffer(6)]],
-    const device float* actions          [[buffer(7)]],
-    const device float* old_logprobs    [[buffer(8)]],
-    const device float* advantages      [[buffer(9)]],
-    const device float* prio            [[buffer(10)]],
-    const device float* values          [[buffer(11)]],
-    const device float* returns_buf     [[buffer(12)]],
-    const device float* adv_mean        [[buffer(13)]],
-    const device float* adv_var         [[buffer(14)]],
-    const device int* act_sizes         [[buffer(15)]],
-    constant PPOParams& pp              [[buffer(16)]],
-    const device float* action_mask     [[buffer(17)]],
-    uint idx [[thread_position_in_grid]]
-) {
-    int total_elements = pp.N * pp.T_seq;
-    if ((int)idx >= total_elements) return;
-
-    float inv_NT = 1.0f / float(total_elements);
-    int n = (int)idx / pp.T_seq;
-    int t = (int)idx % pp.T_seq;
-    int nt = n * pp.T_seq + t;
-    int logits_base = n * pp.logits_stride_n + t * pp.logits_stride_t;
-    int values_idx = n * pp.values_stride_n + t * pp.values_stride_t;
-
-    float old_logp = old_logprobs[nt];
-    float adv = advantages[nt];
-    float w = prio[n];
-    float val = values[nt];
-    float ret = returns_buf[nt];
-    float val_pred = values_pred[values_idx];
-
-    float adv_std_val = sqrt(adv_var[0]);
-    float adv_normalized = (adv - adv_mean[0]) / (adv_std_val + 1e-8f);
-
-    float dL = grad_loss[0] * inv_NT;
-    float d_pg_loss = dL;
-    float d_entropy_term = dL * (-pp.ent_coef);
-
-    // Value gradient
-    float v_error = val_pred - val;
-    float v_clipped = val + clamp(v_error, -pp.vf_clip_coef, pp.vf_clip_coef);
-    float v_loss_unclipped = (val_pred - ret) * (val_pred - ret);
-    float v_loss_clipped = (v_clipped - ret) * (v_clipped - ret);
-
-    float d_val_pred = 0.0f;
-    if (v_loss_clipped > v_loss_unclipped) {
-        if (v_error >= -pp.vf_clip_coef && v_error <= pp.vf_clip_coef) {
-            d_val_pred = v_clipped - ret;
-        }
-    } else {
-        d_val_pred = val_pred - ret;
-    }
-    grad_values_pred[nt] = dL * pp.vf_coef * d_val_pred;
-
-    if (pp.is_continuous) {
-        constexpr float HALF_LOG_2PI = 0.9189385332046727f;
-        float total_log_prob = 0.0f;
-
-        for (int h = 0; h < pp.num_atns; h++) {
-            float mean = logits[logits_base + h * pp.logits_stride_a];
-            float log_std = logstd[logits_base + h * pp.logits_stride_a];
-            float std = exp(log_std);
-            float action = float(actions[nt * pp.num_atns + h]);
-
-            float normalized = (action - mean) / std;
-            total_log_prob += -0.5f * normalized * normalized - HALF_LOG_2PI - log_std;
-        }
-
-        float ratio = ppo_ratio_from_logratio(total_log_prob - old_logp);
-        float ratio_clipped = clamp(ratio, 1.0f - pp.clip_coef, 1.0f + pp.clip_coef);
-        float pg_loss1 = -w * adv_normalized * ratio;
-        float pg_loss2 = -w * adv_normalized * ratio_clipped;
-
-        float d_ratio = -w * adv_normalized * d_pg_loss;
-        if (pg_loss2 > pg_loss1) {
-            if (ratio <= (1.0f - pp.clip_coef) || ratio >= (1.0f + pp.clip_coef)) {
-                d_ratio = 0.0f;
-            }
-        }
-        float d_new_logp = d_ratio * ratio;
-
-        for (int h = 0; h < pp.num_atns; h++) {
-            float mean = logits[logits_base + h * pp.logits_stride_a];
-            float log_std = logstd[logits_base + h * pp.logits_stride_a];
-            float std = exp(log_std);
-            float var = std * std;
-            float action = float(actions[nt * pp.num_atns + h]);
-            float diff = action - mean;
-
-            grad_logits[logits_base + h * pp.logits_stride_a] = d_new_logp * diff / var;
-            grad_logstd[logits_base + h * pp.logits_stride_a] =
-                d_new_logp * (diff * diff / var - 1.0f) + d_entropy_term;
-        }
-    } else {
-        // Discrete backward
-        int logits_offset = 0;
-        int mask_base = (int)idx * pp.num_atns_total;
-        float total_log_prob = 0.0f;
-        float head_logsumexp_arr[MAX_ATN_HEADS];
-        float head_entropy_arr[MAX_ATN_HEADS];
-        int head_act_arr[MAX_ATN_HEADS];
-
-        for (int h = 0; h < pp.num_atns; h++) {
-            int A = act_sizes[h];
-            int act = int(actions[nt * pp.num_atns + h]);
-            head_act_arr[h] = act;
-
-            float max_logit_val = -INFINITY;
-            float sum = 0.0f;
-            float act_logit = 0.0f;
-
-            for (int a = 0; a < A; a++) {
-                float l = masked_logit(
-                    logits[logits_base + (logits_offset + a) * pp.logits_stride_a],
-                    action_mask[mask_base + logits_offset + a]);
-                if (a == act) act_logit = l;
-                if (l > max_logit_val) {
-                    sum *= exp(max_logit_val - l);
-                    max_logit_val = l;
-                }
-                sum += exp(l - max_logit_val);
-            }
-            float lse = max_logit_val + log(sum);
-            head_logsumexp_arr[h] = lse;
-
-            float ent = 0.0f;
-            for (int a = 0; a < A; a++) {
-                float l = masked_logit(
-                    logits[logits_base + (logits_offset + a) * pp.logits_stride_a],
-                    action_mask[mask_base + logits_offset + a]);
-                float logp = l - lse;
-                float p = exp(logp);
-                ent -= p * logp;
-            }
-            head_entropy_arr[h] = ent;
-            total_log_prob += act_logit - lse;
-            logits_offset += A;
-        }
-
-        float ratio = ppo_ratio_from_logratio(total_log_prob - old_logp);
-        float ratio_clipped = clamp(ratio, 1.0f - pp.clip_coef, 1.0f + pp.clip_coef);
-        float pg_loss1 = -w * adv_normalized * ratio;
-        float pg_loss2 = -w * adv_normalized * ratio_clipped;
-
-        float d_ratio = -w * adv_normalized * d_pg_loss;
-        if (pg_loss2 > pg_loss1) {
-            if (ratio <= (1.0f - pp.clip_coef) || ratio >= (1.0f + pp.clip_coef)) {
-                d_ratio = 0.0f;
-            }
-        }
-        float d_new_logp = d_ratio * ratio;
-
-        logits_offset = 0;
-        for (int h = 0; h < pp.num_atns; h++) {
-            int A = act_sizes[h];
-            int act = head_act_arr[h];
-            float lse = head_logsumexp_arr[h];
-            float ent = head_entropy_arr[h];
-
-            for (int a = 0; a < A; a++) {
-                float l = masked_logit(
-                    logits[logits_base + (logits_offset + a) * pp.logits_stride_a],
-                    action_mask[mask_base + logits_offset + a]);
-                float logp = l - lse;
-                float p = exp(logp);
-
-                float d_logit = (a == act) ? d_new_logp : 0.0f;
-                d_logit -= p * d_new_logp;
-                d_logit += d_entropy_term * p * (-ent - logp);
-
-                grad_logits[logits_base + (logits_offset + a) * pp.logits_stride_a] = d_logit;
-            }
-            logits_offset += A;
-        }
     }
 }
 
@@ -1685,26 +1277,6 @@ kernel void copy_f32(
     uint idx [[thread_position_in_grid]]
 ) {
     if ((int)idx < n) dst[idx] = src[idx];
-}
-
-// TF32 round-copy: copies src → dst with TF32 mantissa truncation.
-// Zeros the lower 13 mantissa bits of each float, matching CUDA TF32
-// tensor core precision (10-bit mantissa multiply, fp32 accumulate).
-kernel void tf32_round_copy_kernel(
-    device float* dst           [[buffer(0)]],
-    device const float* src     [[buffer(1)]],
-    constant int& n             [[buffer(2)]],
-    uint idx [[thread_position_in_grid]]
-) {
-    if ((int)idx >= n) return;
-    uint bits = as_type<uint>(src[idx]);
-    // Round-to-nearest (matching CUDA TF32 tensor core behavior):
-    // Add 0.5 ULP at bit 12, then truncate lower 13 bits.
-    // Skip rounding for inf/NaN (exponent 0xFF) to avoid inf → NaN.
-    uint exp = bits & 0x7F800000u;
-    bits = (exp != 0x7F800000u) ? ((bits + 0x1000u) & 0xFFFFE000u)
-                                : (bits & 0xFFFFE000u);
-    dst[idx] = as_type<float>(bits);
 }
 
 // TF32 in-place rounding: rounds buffer values to 10-bit mantissa in-place.
@@ -2107,20 +1679,7 @@ struct SumRowsParams {
     int C;
 };
 
-// dst[c] += sum over rows of src[:, c]
-kernel void sum_rows_add_kernel(
-    device float* dst               [[buffer(0)]],
-    const device float* src         [[buffer(1)]],
-    constant SumRowsParams& p       [[buffer(2)]],
-    uint col [[thread_position_in_grid]]
-) {
-    if ((int)col >= p.C) return;
-    float sum = 0.0f;
-    for (int r = 0; r < p.R; r++) sum += src[r * p.C + (int)col];
-    dst[col] += sum;
-}
-
-// dst[c] = sum over rows of src[:, c] (set, not accumulate)
+// dst[c] = sum over rows of src[:, c]
 kernel void sum_rows_to_f32_kernel(
     device float* dst               [[buffer(0)]],
     const device float* src         [[buffer(1)]],
@@ -2133,7 +1692,6 @@ kernel void sum_rows_to_f32_kernel(
     dst[col] = sum;
 }
 
-// (Section 15b-15e removed: GELU, LayerNorm, bias_add, ReLU — rich arch deleted)
 
 // --- Sum rows fp16 (for bias/LN param grads) ---
 
@@ -2321,57 +1879,6 @@ kernel void cast_f64_to_f32(
 }
 
 // ============================================================================
-// Section 19: Orthogonal init helpers
-// ============================================================================
-
-struct OrthoParams {
-    int m;
-    int n;
-};
-
-// Multiply each column of Q by its corresponding diagonal sign
-kernel void sign_correct_columns_kernel(
-    device float* Q                     [[buffer(0)]],
-    const device float* diag_signs      [[buffer(1)]],
-    constant OrthoParams& p             [[buffer(2)]],
-    uint idx [[thread_position_in_grid]]
-) {
-    if ((int)idx >= p.m * p.n) return;
-    // Column-major: column index = idx / m
-    Q[idx] *= diag_signs[(int)idx / p.m];
-}
-
-// Extract sign of diagonal elements: signs[i] = sign(A[i, i]) where A is column-major (m x n)
-kernel void extract_diag_sign_kernel(
-    device float* signs                 [[buffer(0)]],
-    const device float* A               [[buffer(1)]],
-    constant OrthoParams& p             [[buffer(2)]],
-    uint i [[thread_position_in_grid]]
-) {
-    if ((int)i >= p.n) return;
-    // Column-major diagonal: A[i + i*m]
-    signs[i] = (A[(int)i + (int64_t)i * p.m] >= 0.0f) ? 1.0f : -1.0f;
-}
-
-struct ColmajScaleParams {
-    float gain;
-    int m;
-    int n;
-};
-
-// Convert column-major Q to row-major with scaling: dst[r*n + c] = Q[r + c*m] * gain
-kernel void colmaj_to_rowmaj_scale_f32(
-    device float* dst                   [[buffer(0)]],
-    const device float* Q               [[buffer(1)]],
-    constant ColmajScaleParams& p       [[buffer(2)]],
-    uint idx [[thread_position_in_grid]]
-) {
-    if ((int)idx >= p.m * p.n) return;
-    // Row-major index: row = idx/n, col = idx%n. Column-major source: Q[row + col*m]
-    dst[idx] = Q[((int)idx / p.n) + (int64_t)((int)idx % p.n) * p.m] * p.gain;
-}
-
-// ============================================================================
 // Section 20: Tiled GEMM — C = alpha * op(A) @ op(B) + beta * C
 //
 // 64x64 tiled simdgroup_matrix GEMM for f32. Supports NT, NN, TN layouts
@@ -2390,63 +1897,6 @@ struct GemmParams {
     int trans_a; // 0 = no transpose, 1 = transpose
     int trans_b;
 };
-
-constant int GEMM_TILE = 16;
-
-kernel void sgemm_tiled(
-    device const float* A      [[buffer(0)]],
-    device const float* B      [[buffer(1)]],
-    device float* C            [[buffer(2)]],
-    constant GemmParams& p     [[buffer(3)]],
-    uint2 group_id    [[threadgroup_position_in_grid]],
-    uint2 local_id    [[thread_position_in_threadgroup]]
-) {
-    threadgroup float tileA[GEMM_TILE][GEMM_TILE];
-    threadgroup float tileB[GEMM_TILE][GEMM_TILE];
-
-    int row = (int)group_id.y * GEMM_TILE + (int)local_id.y;
-    int col = (int)group_id.x * GEMM_TILE + (int)local_id.x;
-
-    float sum = 0.0f;
-    int num_tiles = (p.K + GEMM_TILE - 1) / GEMM_TILE;
-
-    for (int t = 0; t < num_tiles; t++) {
-        int k_base = t * GEMM_TILE;
-
-        // Load A tile: logical A[row, k] where k = k_base + local_id.x
-        int ak = k_base + (int)local_id.x;
-        if (row < p.M && ak < p.K) {
-            tileA[local_id.y][local_id.x] = p.trans_a
-                ? A[ak * p.lda + row]
-                : A[row * p.lda + ak];
-        } else {
-            tileA[local_id.y][local_id.x] = 0.0f;
-        }
-
-        // Load B tile: logical B[k, col] where k = k_base + local_id.y
-        int bk = k_base + (int)local_id.y;
-        if (bk < p.K && col < p.N) {
-            tileB[local_id.y][local_id.x] = p.trans_b
-                ? B[col * p.ldb + bk]
-                : B[bk * p.ldb + col];
-        } else {
-            tileB[local_id.y][local_id.x] = 0.0f;
-        }
-
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-
-        for (int kk = 0; kk < GEMM_TILE; kk++) {
-            sum += tileA[local_id.y][kk] * tileB[kk][local_id.x];
-        }
-
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-    }
-
-    if (row < p.M && col < p.N) {
-        int idx = row * p.ldc + col;
-        C[idx] = p.alpha * sum + p.beta * C[idx];
-    }
-}
 
 // ============================================================================
 // Section 21: Register-tiled GEMM — C = alpha * op(A) @ op(B) + beta * C
@@ -3078,14 +2528,8 @@ kernel void fused_scan_backward_checkpointed_fp16(
     float s_0 = s_buf[ckpt_0_idx];
     float log_value_0 = log_values_buf[ckpt_0_idx];
 
-    float scan_result_0 = exp(a_star_0 + s_0);
-    float z_0 = log_value_0 - a_star_0;
-
-    float grad_log_h_0 = 0.0f;
-    float grad_s_0 = grad_log_h_0;
-
-    acc = grad_s_0 + acc * exp(s_0 - s_val_next);
-    float grad_z_0 = acc * exp(z_0 - s_0);
+    acc = acc * exp(s_0 - s_val_next);
+    float grad_z_0 = acc * exp((log_value_0 - a_star_0) - s_0);
 
     float denom = float(state[state_idx]);
     if (!isfinite(denom) || denom < 1.0e-6f) denom = 1.0e-6f;

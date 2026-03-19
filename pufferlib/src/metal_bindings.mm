@@ -158,14 +158,6 @@ pybind11::dict log_environments(pybind11::object pufferl_obj) {
     return py_out;
 }
 
-void python_vec_recv(pybind11::object /*pufferl_obj*/, int /*buf*/) {
-    // Not used in static/OMP path
-}
-
-void python_vec_send(pybind11::object /*pufferl_obj*/, int /*buf*/) {
-    // Not used in static/OMP path
-}
-
 void render(pybind11::object pufferl_obj, int env_id) {
     PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
     static_vec_render(pufferl.vec, env_id);
@@ -220,7 +212,7 @@ pybind11::dict log_losses(pybind11::object pufferl_obj) {
     auto& pufferl = pufferl_obj.cast<PuffeRL&>();
     // Sync pending training — losses are written by GPU training
     sync_pending_train(pufferl);
-    ensure_gpu_synced((cudaStream_t)mtl_stream());
+    mtl_ensure_stream_synced((cudaStream_t)mtl_stream());
     float* losses_host = (float*)pufferl.losses_puf.bytes;
     float n = losses_host[LOSS_N];
     pybind11::dict result;
@@ -251,7 +243,7 @@ pybind11::dict log_profile(pybind11::object pufferl_obj) {
     // Train total from fine-grained phases (ms)
     float* a = pufferl.profile.accum;
     float train_ms = a[PROF_TRAIN_PRELOOP] + a[PROF_TRAIN_SYNC];
-    for (int i = PROF_TRAIN_ADVANTAGE; i <= PROF_TRAIN_MUON; i++) train_ms += a[i];
+    for (int i = PROF_TRAIN_PRIO; i <= PROF_TRAIN_MUON; i++) train_ms += a[i];
     result["train"] = train_ms / 1000.0f;
 
     // Sync stats
@@ -267,18 +259,18 @@ pybind11::dict log_profile(pybind11::object pufferl_obj) {
     // Compact profile report to stderr
     fprintf(stderr,
         "[metal-prof] rollout: %d syncs (%.1fms), "
-        "obs=%.1fms fwd=%.1fms sample=%.1fms act=%.1fms | "
+        "obs=%.1fms fwd=%.1fms act=%.1fms | "
         "env=%.1fms total=%.1fms\n",
         r_sync, r_sync_ms,
         a[PROF_ROLLOUT_OBS_COPY], a[PROF_ROLLOUT_FWD],
-        a[PROF_ROLLOUT_SAMPLE], a[PROF_ROLLOUT_ACT_COPY],
+        a[PROF_ROLLOUT_ACT_COPY],
         a[PROF_EVAL_ENV], a[PROF_ROLLOUT]);
     fprintf(stderr,
         "[metal-prof] train:  %d syncs (%.1fms), "
-        "pre=%.1fms adv=%.1fms prio=%.1fms sel=%.1fms "
+        "pre=%.1fms prio=%.1fms sel=%.1fms "
         "fwd=%.1fms ppo=%.1fms bwd=%.1fms gc=%.1fms clip=%.1fms muon=%.1fms sync=%.1fms\n",
         t_sync, t_sync_ms,
-        a[PROF_TRAIN_PRELOOP], a[PROF_TRAIN_ADVANTAGE],
+        a[PROF_TRAIN_PRELOOP],
         a[PROF_TRAIN_PRIO], a[PROF_TRAIN_SELECT],
         a[PROF_TRAIN_FWD], a[PROF_TRAIN_PPO],
         a[PROF_TRAIN_BACKWARD], a[PROF_TRAIN_GRAD_COPY],
@@ -289,17 +281,17 @@ pybind11::dict log_profile(pybind11::object pufferl_obj) {
     result["gpu_exec"] = gpu_exec_ms / 1000.0;
     result["sched_wait"] = sched_wait_ms / 1000.0;
 
-    int gemm_tensor_ops, gemm_mps;
-    mtl_gemm_stats(&gemm_tensor_ops, &gemm_mps);
-    result["gemm_tensor_ops"] = gemm_tensor_ops;
+    int gemm_gpu, gemm_mps;
+    mtl_gemm_stats(&gemm_gpu, &gemm_mps);
+    result["gemm_gpu"] = gemm_gpu;
     result["gemm_mps"] = gemm_mps;
 
     fprintf(stderr,
         "[metal-prof] total: %d syncs, %.1fms sync, %.1fms rollout + %.1fms train | "
-        "gpu_exec=%.1fms sched_wait=%.1fms | gemm: tensor_ops=%d mps=%d\n",
+        "gpu_exec=%.1fms sched_wait=%.1fms | gemm: gpu=%d mps=%d\n",
         r_sync + t_sync, r_sync_ms + t_sync_ms,
         a[PROF_ROLLOUT], train_ms, gpu_exec_ms, sched_wait_ms,
-        gemm_tensor_ops, gemm_mps);
+        gemm_gpu, gemm_mps);
 
     memset(pufferl.profile.accum, 0, sizeof(pufferl.profile.accum));
     pufferl.rollout_sync_count = 0;
@@ -312,7 +304,7 @@ pybind11::dict log_profile(pybind11::object pufferl_obj) {
 pybind11::dict log_train_debug(pybind11::object pufferl_obj) {
     auto& pufferl = pufferl_obj.cast<PuffeRL&>();
     sync_pending_train(pufferl);
-    ensure_gpu_synced((cudaStream_t)mtl_stream());
+    mtl_ensure_stream_synced((cudaStream_t)mtl_stream());
 
     const float* mb_adv = (const float*)pufferl.train_buf.mb_advantages.bytes;
     int64_t mb_adv_n = pufferl.train_buf.mb_advantages.numel();
@@ -432,7 +424,7 @@ void save_weights(pybind11::object pufferl_obj, const std::string& path) {
     int64_t nbytes = pufferl.alloc_fp32.params.total_elems * sizeof(float);
     // Sync pending training before reading weights
     sync_pending_train(pufferl);
-    ensure_gpu_synced((cudaStream_t)mtl_stream());
+    mtl_ensure_stream_synced((cudaStream_t)mtl_stream());
     FILE* f = fopen(path.c_str(), "wb");
     assert(f && "Failed to open weight file for writing");
     fwrite(pufferl.alloc_fp32.params.mem, 1, nbytes, f);
@@ -450,7 +442,7 @@ void load_weights(pybind11::object pufferl_obj, const std::string& path) {
     assert(file_size == nbytes && "Weight file size mismatch");
     // Sync pending training before overwriting weights
     sync_pending_train(pufferl);
-    ensure_gpu_synced((cudaStream_t)mtl_stream());
+    mtl_ensure_stream_synced((cudaStream_t)mtl_stream());
     size_t nread = fread(pufferl.alloc_fp32.params.mem, 1, nbytes, f);
     assert((int64_t)nread == nbytes && "Failed to read weight file");
     fclose(f);
@@ -559,8 +551,6 @@ PYBIND11_MODULE(_C, m) {
     m.def("close", &puf_close);
     m.def("save_weights", &save_weights);
     m.def("load_weights", &load_weights);
-    m.def("python_vec_recv", &python_vec_recv);
-    m.def("python_vec_send", &python_vec_send);
 
     py::class_<Policy>(m, "Policy");
     py::class_<Muon>(m, "Muon");

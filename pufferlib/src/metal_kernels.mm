@@ -29,15 +29,6 @@
 // Helpers — stream access and GPU sync
 // ============================================================================
 
-static inline MetalStream *mtl_get_stream(cudaStream_t s) {
-  return s ? (MetalStream *)s : (MetalStream *)mtl_stream();
-}
-
-static inline void mtl_ensure_synced(cudaStream_t s) {
-  MetalStream *ms = mtl_get_stream(s);
-  if (ms->enc_active)
-    ms->sync();
-}
 
 // Bind a raw pointer (within a wrapped allocator) to a buffer binding slot.
 static inline void mtl_set_ptr(MetalStream *ms, const void *ptr,
@@ -87,18 +78,20 @@ void mtl_assemble_decoder_grad_f32_to_f16(void *grad_out,
 // Memory operations — CPU-side on unified memory (synced), or GPU when training
 // ============================================================================
 
+static const bool g_no_gpu_copy = (getenv("PUFFERLIB_NO_GPU_COPY") != nullptr);
+
 void puf_copy(PufTensor &dst, const PufTensor &src, cudaStream_t stream) {
   assert(dst.numel() == src.numel() && "puf_copy: size mismatch");
   assert(dst.dtype_size == src.dtype_size && "puf_copy: dtype mismatch");
   bool gpu = puf_is_gpu_training() ||
-             (!getenv("PUFFERLIB_NO_GPU_COPY") && puf_stream_has_encoder(stream));
+             (!g_no_gpu_copy && puf_stream_has_encoder(stream));
   if (gpu && dst.dtype_size == 4) {
     mtl_copy_f32((float *)dst.bytes, (const float *)src.bytes,
                  (int)dst.numel(), stream);
   } else if (gpu && dst.dtype_size == 2) {
     mtl_copy_f16(dst.bytes, src.bytes, (int)dst.numel(), stream);
   } else {
-    mtl_ensure_synced(stream);
+    mtl_ensure_stream_synced(stream);
     memcpy(dst.bytes, src.bytes, dst.numel() * dst.dtype_size);
   }
 }
@@ -109,7 +102,7 @@ void puf_zero(PufTensor &dst, cudaStream_t stream) {
   } else if (puf_is_gpu_training() && dst.dtype_size == 2) {
     mtl_fill_f16(dst.bytes, (int)dst.numel(), stream);
   } else {
-    mtl_ensure_synced(stream);
+    mtl_ensure_stream_synced(stream);
     memset(dst.bytes, 0, dst.numel() * dst.dtype_size);
   }
 }
@@ -118,7 +111,7 @@ void puf_add(PufTensor &dst, const PufTensor &src, cudaStream_t stream) {
   assert(dst.numel() == src.numel() && "puf_add: size mismatch");
   assert(dst.dtype_size == src.dtype_size && "puf_add: dtype mismatch");
   if (puf_is_gpu_training()) {
-    MetalStream *ms = mtl_get_stream(stream);
+    MetalStream *ms = mtl_resolve_stream(stream);
     ms->compute_encoder();
     const char *name = (dst.dtype_size == 2) ? "add_f16" : "add_f32";
     auto pso = mtl_pipeline(name);
@@ -130,7 +123,7 @@ void puf_add(PufTensor &dst, const PufTensor &src, cudaStream_t stream) {
     mtl_dispatch_1d(ms, pso, count);
   } else {
     assert(dst.dtype_size == 4 && "puf_add: CPU path supports f32 only");
-    mtl_ensure_synced(stream);
+    mtl_ensure_stream_synced(stream);
     float *d = (float *)dst.bytes;
     const float *s = (const float *)src.bytes;
     int64_t n = dst.numel();
@@ -150,7 +143,7 @@ void puf_transpose_01(PufTensor &dst, const PufTensor &src,
   // For f64 (dtype_size=8): GPU transpose via uint2 — avoids CPU sync.
   // Actions are f64 (int64_t) because the vecenv C binding uses int64_t*.
   if (src.dtype_size == 8) {
-    MetalStream *ms = mtl_get_stream(stream);
+    MetalStream *ms = mtl_resolve_stream(stream);
     ms->compute_encoder();
     auto pso = mtl_pipeline("transpose_01_u64");
     mtl_set_pso(ms, pso);
@@ -164,7 +157,7 @@ void puf_transpose_01(PufTensor &dst, const PufTensor &src,
     return;
   }
 
-  MetalStream *ms = mtl_get_stream(stream);
+  MetalStream *ms = mtl_resolve_stream(stream);
   ms->compute_encoder();
   auto pso = mtl_pipeline("transpose_01");
   mtl_set_pso(ms, pso);
@@ -198,7 +191,7 @@ void cpu_cast_u8_to_f32(float *dst, const uint8_t *src, int count) {
 
 void puf_cast_u8_to_f32(PufTensor &dst, const PufTensor &src,
                           cudaStream_t stream) {
-  MetalStream *ms = mtl_get_stream(stream);
+  MetalStream *ms = mtl_resolve_stream(stream);
   ms->compute_encoder();
   auto pso = mtl_pipeline("cast_u8_to_f32");
   mtl_set_pso(ms, pso);
@@ -217,7 +210,7 @@ void puf_cast_u8_to_f32(PufTensor &dst, const PufTensor &src,
 
 void mtl_cast_f32_to_f16(void *dst, const float *src, int count,
                           cudaStream_t stream) {
-  MetalStream *ms = mtl_get_stream(stream);
+  MetalStream *ms = mtl_resolve_stream(stream);
   ms->compute_encoder();
   auto pso = mtl_pipeline("cast_f32_to_f16");
   mtl_set_pso(ms, pso);
@@ -229,7 +222,7 @@ void mtl_cast_f32_to_f16(void *dst, const float *src, int count,
 
 void mtl_cast_f16_to_f32(float *dst, const void *src, int count,
                           cudaStream_t stream) {
-  MetalStream *ms = mtl_get_stream(stream);
+  MetalStream *ms = mtl_resolve_stream(stream);
   ms->compute_encoder();
   auto pso = mtl_pipeline("cast_f16_to_f32");
   mtl_set_pso(ms, pso);
@@ -245,7 +238,7 @@ void mtl_cast_f16_to_f32(float *dst, const void *src, int count,
 
 void mtl_fill_f16(void *ptr, int count, cudaStream_t stream) {
   // Fill fp16 buffer with zeros (the only fill value needed for fp16)
-  MetalStream *ms = mtl_get_stream(stream);
+  MetalStream *ms = mtl_resolve_stream(stream);
   ms->compute_encoder();
   auto pso = mtl_pipeline("fill_f32");
   mtl_set_pso(ms, pso);
@@ -263,7 +256,7 @@ void mtl_fill_f16(void *ptr, int count, cudaStream_t stream) {
 void mtl_copy_f16(void *dst, const void *src, int count,
                    cudaStream_t stream) {
   // Copy fp16 data — reuse copy_f32 by treating pairs of fp16 as fp32
-  MetalStream *ms = mtl_get_stream(stream);
+  MetalStream *ms = mtl_resolve_stream(stream);
   ms->compute_encoder();
   auto pso = mtl_pipeline("copy_f32");
   mtl_set_pso(ms, pso);
@@ -279,7 +272,7 @@ void mtl_copy_f16(void *dst, const void *src, int count,
 // ============================================================================
 
 void mtl_fill_f32(float *ptr, float value, int count, cudaStream_t stream) {
-  MetalStream *ms = mtl_get_stream(stream);
+  MetalStream *ms = mtl_resolve_stream(stream);
   ms->compute_encoder();
   auto pso = mtl_pipeline("fill_f32");
   mtl_set_pso(ms, pso);
@@ -294,22 +287,9 @@ void mtl_fill_f32(float *ptr, float value, int count, cudaStream_t stream) {
 
 void mtl_copy_f32(float *dst, const float *src, int count,
                    cudaStream_t stream) {
-  MetalStream *ms = mtl_get_stream(stream);
+  MetalStream *ms = mtl_resolve_stream(stream);
   ms->compute_encoder();
   auto pso = mtl_pipeline("copy_f32");
-  mtl_set_pso(ms, pso);
-  mtl_set_ptr(ms, dst, 0);
-  mtl_set_ptr(ms, src, 1);
-  mtl_set_params(ms, count, 2);
-  mtl_dispatch_1d(ms, pso, count);
-}
-
-// TF32 round-copy: dst[i] = tf32_round(src[i]) for TF32 GEMM simulation.
-void mtl_tf32_round_copy(float *dst, const float *src, int count,
-                          cudaStream_t stream) {
-  MetalStream *ms = mtl_get_stream(stream);
-  ms->compute_encoder();
-  auto pso = mtl_pipeline("tf32_round_copy_kernel");
   mtl_set_pso(ms, pso);
   mtl_set_ptr(ms, dst, 0);
   mtl_set_ptr(ms, src, 1);
@@ -320,7 +300,7 @@ void mtl_tf32_round_copy(float *dst, const float *src, int count,
 // TF32 in-place rounding: buf[i] = tf32_round(buf[i]) for TF32 GEMM simulation.
 // Avoids scratch buffer visibility issues by modifying the original buffer.
 void mtl_tf32_round_inplace(float *buf, int count, cudaStream_t stream) {
-  MetalStream *ms = mtl_get_stream(stream);
+  MetalStream *ms = mtl_resolve_stream(stream);
   ms->compute_encoder();
   auto pso = mtl_pipeline("tf32_round_inplace_kernel");
   mtl_set_pso(ms, pso);
@@ -331,7 +311,7 @@ void mtl_tf32_round_inplace(float *buf, int count, cudaStream_t stream) {
 
 void mtl_clamp_f32(float *ptr, float lo, float hi, int count,
                     cudaStream_t stream) {
-  MetalStream *ms = mtl_get_stream(stream);
+  MetalStream *ms = mtl_resolve_stream(stream);
   ms->compute_encoder();
   auto pso = mtl_pipeline("clamp_f32");
   mtl_set_pso(ms, pso);
@@ -345,7 +325,7 @@ void mtl_clamp_f32(float *ptr, float lo, float hi, int count,
 }
 
 void mtl_scale_f32(float *ptr, float scale, int count, cudaStream_t stream) {
-  MetalStream *ms = mtl_get_stream(stream);
+  MetalStream *ms = mtl_resolve_stream(stream);
   ms->compute_encoder();
   auto pso = mtl_pipeline("scale_f32");
   mtl_set_pso(ms, pso);
@@ -361,7 +341,7 @@ void mtl_scale_f32(float *ptr, float scale, int count, cudaStream_t stream) {
 // dst += alpha * src
 void mtl_axpy_f32(float *dst, const float *src, float alpha, int count,
                    cudaStream_t stream) {
-  MetalStream *ms = mtl_get_stream(stream);
+  MetalStream *ms = mtl_resolve_stream(stream);
   ms->compute_encoder();
   auto pso = mtl_pipeline("axpy_f32");
   mtl_set_pso(ms, pso);
@@ -377,7 +357,7 @@ void mtl_axpy_f32(float *dst, const float *src, float alpha, int count,
 
 void mtl_nesterov_f32(float *momentum, const float *grad, float mu, int count,
                        cudaStream_t stream) {
-  MetalStream *ms = mtl_get_stream(stream);
+  MetalStream *ms = mtl_resolve_stream(stream);
   ms->compute_encoder();
   auto pso = mtl_pipeline("nesterov_f32");
   mtl_set_pso(ms, pso);
@@ -394,7 +374,7 @@ void mtl_nesterov_f32(float *momentum, const float *grad, float mu, int count,
 // sum_rows: dst[c] = sum over rows of src[:, c] (dtype-aware)
 void mtl_sum_rows(void *dst, const void *src, int rows, int cols,
                    int dtype_size, cudaStream_t stream) {
-  MetalStream *ms = mtl_get_stream(stream);
+  MetalStream *ms = mtl_resolve_stream(stream);
   ms->compute_encoder();
   const char *name = (dtype_size == 2) ? "sum_rows_f16_kernel"
                                        : "sum_rows_to_f32_kernel";
@@ -411,29 +391,15 @@ void mtl_sum_rows(void *dst, const void *src, int rows, int cols,
 // Norm and clip kernels
 // ============================================================================
 
-// Scratch buffer for partial sums in norm reduction (Muon NS + clip_grad_norm)
 static float *norm_partials_buf = nullptr;
 static void ensure_norm_partials() {
-  if (!norm_partials_buf) {
-    posix_memalign((void **)&norm_partials_buf, 16384,
-                   ((256 * sizeof(float) + 16383) / 16384) * 16384);
-    // Wrap as MTLBuffer for GPU access
-    id<MTLBuffer> buf = [mtl_ctx()->device
-        newBufferWithBytesNoCopy:norm_partials_buf
-                          length:16384
-                         options:MTLResourceStorageModeShared
-                     deallocator:nil];
-    assert(buf);
-    mtl_ctx()->buffers.push_back({(char *)norm_partials_buf, 16384, buf});
-    [mtl_ctx()->residency_set addAllocation:buf];
-    [mtl_ctx()->residency_set commit];
-    [mtl_ctx()->residency_set requestResidency];
-  }
+  if (!norm_partials_buf)
+    norm_partials_buf = (float *)mtl_alloc_scratch(256 * sizeof(float));
 }
 
 void mtl_norm_f32(float *partials, const float *data, int count,
                    int num_blocks, cudaStream_t stream) {
-  MetalStream *ms = mtl_get_stream(stream);
+  MetalStream *ms = mtl_resolve_stream(stream);
   ms->compute_encoder();
   auto pso = mtl_pipeline("norm_f32_kernel");
   mtl_set_pso(ms, pso);
@@ -448,7 +414,7 @@ void mtl_norm_f32(float *partials, const float *data, int count,
 
 void mtl_norm_reduce(float *result, const float *partials, int num_blocks,
                       cudaStream_t stream) {
-  MetalStream *ms = mtl_get_stream(stream);
+  MetalStream *ms = mtl_resolve_stream(stream);
   ms->compute_encoder();
   auto pso = mtl_pipeline("norm_reduce_kernel");
   mtl_set_pso(ms, pso);
@@ -464,7 +430,7 @@ void mtl_norm_reduce(float *result, const float *partials, int num_blocks,
 void mtl_clip_by_norm_f32(float *data, const float *norm_ptr,
                             float max_norm, float eps, int count,
                             cudaStream_t stream) {
-  MetalStream *ms = mtl_get_stream(stream);
+  MetalStream *ms = mtl_resolve_stream(stream);
   ms->compute_encoder();
   auto pso = mtl_pipeline("clip_by_norm_f32");
   mtl_set_pso(ms, pso);
@@ -480,7 +446,7 @@ void mtl_clip_by_norm_f32(float *data, const float *norm_ptr,
 
 void mtl_normalize_f32(float *data, const float *norm_ptr, float eps,
                         int count, cudaStream_t stream) {
-  MetalStream *ms = mtl_get_stream(stream);
+  MetalStream *ms = mtl_resolve_stream(stream);
   ms->compute_encoder();
   auto pso = mtl_pipeline("normalize_f32");
   mtl_set_pso(ms, pso);
@@ -498,7 +464,7 @@ void mtl_normalize_f32(float *data, const float *norm_ptr, float eps,
 // scratch must point to a float in wrapped MTLBuffer memory.
 void clip_grad_norm_f32(PufTensor &grad, float *scratch, float max_norm,
                         float eps, cudaStream_t stream) {
-  MetalStream *ms = mtl_get_stream(stream);
+  MetalStream *ms = mtl_resolve_stream(stream);
   ensure_norm_partials();
   int count = (int)grad.numel();
   int num_blocks = (count + 255) / 256;
@@ -514,7 +480,7 @@ void clip_grad_norm_f32(PufTensor &grad, float *scratch, float max_norm,
 
 void mtl_transpose_f32(float *dst, const float *src, int rows, int cols,
                         cudaStream_t stream) {
-  MetalStream *ms = mtl_get_stream(stream);
+  MetalStream *ms = mtl_resolve_stream(stream);
   ms->compute_encoder();
   auto pso = mtl_pipeline("transpose_f32");
   mtl_set_pso(ms, pso);
@@ -534,7 +500,7 @@ void mtl_transpose_f32(float *dst, const float *src, int rows, int cols,
 void mtl_assemble_decoder_grad_f32(float *grad_out, const float *grad_logits,
                                      const float *grad_value, int B_TT, int od,
                                      int od1, cudaStream_t stream) {
-  MetalStream *ms = mtl_get_stream(stream);
+  MetalStream *ms = mtl_resolve_stream(stream);
   ms->compute_encoder();
   auto pso = mtl_pipeline("assemble_decoder_grad_f32");
   mtl_set_pso(ms, pso);
@@ -554,7 +520,7 @@ void mtl_assemble_decoder_grad_f32_to_f16(void *grad_out,
                                             const float *grad_value, int B_TT,
                                             int od, int od1,
                                             cudaStream_t stream) {
-  MetalStream *ms = mtl_get_stream(stream);
+  MetalStream *ms = mtl_resolve_stream(stream);
   ms->compute_encoder();
   auto pso = mtl_pipeline("assemble_decoder_grad_f32_to_f16");
   mtl_set_pso(ms, pso);
@@ -569,7 +535,7 @@ void mtl_assemble_decoder_grad_f32_to_f16(void *grad_out,
 
 void mtl_sum_rows_to_f32(float *dst, const float *src, int rows, int cols,
                            cudaStream_t stream) {
-  MetalStream *ms = mtl_get_stream(stream);
+  MetalStream *ms = mtl_resolve_stream(stream);
   ms->compute_encoder();
   auto pso = mtl_pipeline("sum_rows_to_f32_kernel");
   mtl_set_pso(ms, pso);
@@ -587,28 +553,12 @@ void mtl_sum_rows_to_f32(float *dst, const float *src, int rows, int cols,
 // instead of Metal dispatch + puf_copy, eliminating all rollout syncs.
 // ============================================================================
 
-// Allocate a Metal-wrapped tensor (page-aligned, registered with Metal context).
-// Use for buffers that need GPU access via buffer_for_ptr.
 static PufTensor alloc_metal_tensor(int dim0, int dim1) {
   PufTensor t = {};
   t.shape[0] = dim0;
   t.shape[1] = dim1;
   t.dtype_size = sizeof(float);
-  int64_t size = (int64_t)dim0 * dim1 * sizeof(float);
-  int64_t page = 16384;
-  int64_t alloc_size = (size + page - 1) & ~(page - 1);
-  posix_memalign((void **)&t.bytes, page, alloc_size);
-  memset(t.bytes, 0, alloc_size);
-  id<MTLBuffer> buf = [mtl_ctx()->device
-      newBufferWithBytesNoCopy:t.bytes
-                        length:alloc_size
-                       options:MTLResourceStorageModeShared
-                   deallocator:nil];
-  assert(buf);
-  mtl_ctx()->buffers.push_back({t.bytes, alloc_size, buf});
-  [mtl_ctx()->residency_set addAllocation:buf];
-  [mtl_ctx()->residency_set commit];
-  [mtl_ctx()->residency_set requestResidency];
+  t.bytes = (char *)mtl_alloc_scratch((int64_t)dim0 * dim1 * sizeof(float));
   return t;
 }
 
@@ -619,7 +569,7 @@ static PufTensor alloc_metal_tensor(int dim0, int dim1) {
 void mtl_mingru_gate(float *out, float *next_state, const float *combined,
                       const float *state_in, const float *x_in, int H, int B,
                       cudaStream_t stream) {
-  MetalStream *ms = mtl_get_stream(stream);
+  MetalStream *ms = mtl_resolve_stream(stream);
   ms->compute_encoder();
   auto pso = mtl_pipeline("mingru_gate_inference");
   mtl_set_pso(ms, pso);
@@ -640,10 +590,12 @@ void mtl_mingru_gate(float *out, float *next_state, const float *combined,
 // MinGRU training scan kernels
 // ============================================================================
 
-void mtl_fused_scan_forward(PrefixScan &scan, cudaStream_t stream) {
-  MetalStream *ms = mtl_get_stream(stream);
+// Shared scan dispatch: binds all buffers and dispatches the named kernel.
+static void dispatch_scan_forward(const char *kernel_name, PrefixScan &scan,
+                                   cudaStream_t stream) {
+  MetalStream *ms = mtl_resolve_stream(stream);
   ms->compute_encoder();
-  auto pso = mtl_pipeline("fused_scan_forward_checkpointed");
+  auto pso = mtl_pipeline(kernel_name);
   mtl_set_pso(ms, pso);
   mtl_set_ptr(ms, scan.out.bytes, 0);
   mtl_set_ptr(ms, scan.next_state.bytes, 1);
@@ -653,65 +605,17 @@ void mtl_fused_scan_forward(PrefixScan &scan, cudaStream_t stream) {
   mtl_set_ptr(ms, scan.combined_ptr, 5);
   mtl_set_ptr(ms, scan.state_ptr, 6);
   mtl_set_ptr(ms, scan.input_ptr, 7);
-  struct {
-    int T_seq, H, B;
-  } params = {scan.T, scan.H, scan.B};
+  struct { int T_seq, H, B; } params = {scan.T, scan.H, scan.B};
   mtl_set_params(ms, params, 8);
   mtl_dispatch_1d(ms, pso, scan.B * scan.H);
 }
 
-void mtl_fused_scan_backward(PrefixScan &scan, const float *grad,
-                               const float *grad_next_state,
-                               cudaStream_t stream) {
-  MetalStream *ms = mtl_get_stream(stream);
-  ms->compute_encoder();
-  auto pso = mtl_pipeline("fused_scan_backward_checkpointed");
-  mtl_set_pso(ms, pso);
-  mtl_set_ptr(ms, scan.grad_combined.bytes, 0);
-  mtl_set_ptr(ms, scan.grad_state.bytes, 1);
-  mtl_set_ptr(ms, scan.grad_input.bytes, 2);
-  mtl_set_ptr(ms, grad, 3);
-  mtl_set_ptr(ms, grad_next_state, 4);
-  mtl_set_ptr(ms, scan.combined_ptr, 5);
-  mtl_set_ptr(ms, scan.state_ptr, 6);
-  mtl_set_ptr(ms, scan.input_ptr, 7);
-  mtl_set_ptr(ms, scan.a_star.bytes, 8);
-  mtl_set_ptr(ms, scan.s_vals.bytes, 9);
-  mtl_set_ptr(ms, scan.log_values_buf.bytes, 10);
-  struct {
-    int T_seq, H, B;
-  } params = {scan.T, scan.H, scan.B};
-  mtl_set_params(ms, params, 11);
-  mtl_dispatch_1d(ms, pso, scan.B * scan.H);
-}
-
-// fp16 scan dispatchers: half combined/state/out, fp32 internal (a_star/s_vals/log_values)
-void mtl_fused_scan_forward_fp16(PrefixScan &scan, cudaStream_t stream) {
-  MetalStream *ms = mtl_get_stream(stream);
-  ms->compute_encoder();
-  auto pso = mtl_pipeline("fused_scan_forward_checkpointed_fp16");
-  mtl_set_pso(ms, pso);
-  mtl_set_ptr(ms, scan.out.bytes, 0);
-  mtl_set_ptr(ms, scan.next_state.bytes, 1);
-  mtl_set_ptr(ms, scan.a_star.bytes, 2);
-  mtl_set_ptr(ms, scan.s_vals.bytes, 3);
-  mtl_set_ptr(ms, scan.log_values_buf.bytes, 4);
-  mtl_set_ptr(ms, scan.combined_ptr, 5);
-  mtl_set_ptr(ms, scan.state_ptr, 6);
-  mtl_set_ptr(ms, scan.input_ptr, 7);
-  struct {
-    int T_seq, H, B;
-  } params = {scan.T, scan.H, scan.B};
-  mtl_set_params(ms, params, 8);
-  mtl_dispatch_1d(ms, pso, scan.B * scan.H);
-}
-
-void mtl_fused_scan_backward_fp16(PrefixScan &scan, const void *grad,
-                                    const void *grad_next_state,
+static void dispatch_scan_backward(const char *kernel_name, PrefixScan &scan,
+                                    const void *grad, const void *grad_next_state,
                                     cudaStream_t stream) {
-  MetalStream *ms = mtl_get_stream(stream);
+  MetalStream *ms = mtl_resolve_stream(stream);
   ms->compute_encoder();
-  auto pso = mtl_pipeline("fused_scan_backward_checkpointed_fp16");
+  auto pso = mtl_pipeline(kernel_name);
   mtl_set_pso(ms, pso);
   mtl_set_ptr(ms, scan.grad_combined.bytes, 0);
   mtl_set_ptr(ms, scan.grad_state.bytes, 1);
@@ -724,18 +628,29 @@ void mtl_fused_scan_backward_fp16(PrefixScan &scan, const void *grad,
   mtl_set_ptr(ms, scan.a_star.bytes, 8);
   mtl_set_ptr(ms, scan.s_vals.bytes, 9);
   mtl_set_ptr(ms, scan.log_values_buf.bytes, 10);
-  struct {
-    int T_seq, H, B;
-  } params = {scan.T, scan.H, scan.B};
+  struct { int T_seq, H, B; } params = {scan.T, scan.H, scan.B};
   mtl_set_params(ms, params, 11);
   mtl_dispatch_1d(ms, pso, scan.B * scan.H);
+}
+
+void mtl_fused_scan_forward(PrefixScan &scan, cudaStream_t stream) {
+  dispatch_scan_forward("fused_scan_forward_checkpointed", scan, stream);
+}
+void mtl_fused_scan_backward(PrefixScan &scan, const float *grad,
+                               const float *grad_next_state, cudaStream_t stream) {
+  dispatch_scan_backward("fused_scan_backward_checkpointed", scan, grad, grad_next_state, stream);
+}
+void mtl_fused_scan_forward_fp16(PrefixScan &scan, cudaStream_t stream) {
+  dispatch_scan_forward("fused_scan_forward_checkpointed_fp16", scan, stream);
+}
+void mtl_fused_scan_backward_fp16(PrefixScan &scan, const void *grad,
+                                    const void *grad_next_state, cudaStream_t stream) {
+  dispatch_scan_backward("fused_scan_backward_checkpointed_fp16", scan, grad, grad_next_state, stream);
 }
 
 // ============================================================================
 // Sample logits kernel
 // ============================================================================
-
-void mtl_sample_logits_init(int /*B*/, int /*num_atns*/) {}
 
 // Dispatch GPU sampling kernel on the current command buffer (no sync).
 // Call BEFORE ensure_gpu_synced so sampling runs in the same command buffer
@@ -753,7 +668,7 @@ void mtl_sample_logits_dispatch_to(
 
   assert(action_out_f32 && "sampling destination buffer must be allocated");
 
-  MetalStream *ms = mtl_get_stream(stream);
+  MetalStream *ms = mtl_resolve_stream(stream);
   ms->compute_encoder();
   auto pso = mtl_pipeline("sample_logits_kernel");
   mtl_set_pso(ms, pso);
@@ -802,7 +717,7 @@ void mtl_recompute_logprobs(
     const int *act_sizes, const float *action_mask, int mask_stride,
     int B, int num_atns, int fused_cols, cudaStream_t stream) {
 
-  MetalStream *ms = mtl_get_stream(stream);
+  MetalStream *ms = mtl_resolve_stream(stream);
   ms->compute_encoder();
   auto pso = mtl_pipeline("recompute_logprobs_kernel");
   mtl_set_pso(ms, pso);
@@ -849,7 +764,7 @@ void ppo_loss_fwd_bwd(PufTensor &dec_out, PufTensor &logstd, TrainGraph &graph,
   int values_stride_n = T * fused_cols;
   int values_stride_t = fused_cols;
 
-  MetalStream *ms = mtl_get_stream(stream);
+  MetalStream *ms = mtl_resolve_stream(stream);
 
   // var_mean of advantages
   {
@@ -876,20 +791,7 @@ void ppo_loss_fwd_bwd(PufTensor &dec_out, PufTensor &logstd, TrainGraph &graph,
       free(ppo_partials_buf);
     }
     ppo_partials_capacity = ppo_partials_needed;
-    int64_t alloc_bytes = ppo_partials_capacity * sizeof(float);
-    int64_t page = 16384;
-    alloc_bytes = (alloc_bytes + page - 1) & ~(page - 1);
-    posix_memalign((void **)&ppo_partials_buf, page, alloc_bytes);
-    id<MTLBuffer> buf = [mtl_ctx()->device
-        newBufferWithBytesNoCopy:ppo_partials_buf
-                          length:alloc_bytes
-                         options:MTLResourceStorageModeShared
-                     deallocator:nil];
-    assert(buf);
-    mtl_ctx()->buffers.push_back({(char *)ppo_partials_buf, alloc_bytes, buf});
-    [mtl_ctx()->residency_set addAllocation:buf];
-    [mtl_ctx()->residency_set commit];
-    [mtl_ctx()->residency_set requestResidency];
+    ppo_partials_buf = (float *)mtl_alloc_scratch(ppo_partials_capacity * sizeof(float));
   }
 
   // Zero loss output on GPU (CUDA uses cudaMemsetAsync here — CPU write races
@@ -906,20 +808,7 @@ void ppo_loss_fwd_bwd(PufTensor &dec_out, PufTensor &logstd, TrainGraph &graph,
       free(ppo_act_f32);
     }
     ppo_act_f32_capacity = act_count;
-    int64_t alloc_bytes = ppo_act_f32_capacity * sizeof(float);
-    int64_t page = 16384;
-    alloc_bytes = (alloc_bytes + page - 1) & ~(page - 1);
-    posix_memalign((void **)&ppo_act_f32, page, alloc_bytes);
-    id<MTLBuffer> buf = [mtl_ctx()->device
-        newBufferWithBytesNoCopy:ppo_act_f32
-                          length:alloc_bytes
-                         options:MTLResourceStorageModeShared
-                     deallocator:nil];
-    assert(buf);
-    mtl_ctx()->buffers.push_back({(char *)ppo_act_f32, alloc_bytes, buf});
-    [mtl_ctx()->residency_set addAllocation:buf];
-    [mtl_ctx()->residency_set commit];
-    [mtl_ctx()->residency_set requestResidency];
+    ppo_act_f32 = (float *)mtl_alloc_scratch(ppo_act_f32_capacity * sizeof(float));
   }
   {
     ms->compute_encoder();
@@ -1029,36 +918,24 @@ void ppo_loss_fwd_bwd(PufTensor &dec_out, PufTensor &logstd, TrainGraph &graph,
 // Called after ppo_loss_fwd_bwd so subsequent minibatches see updated values.
 void mtl_scatter_ppo_outputs(TrainGraph& graph, RolloutBuf& rollouts,
                               const int64_t* idx, cudaStream_t stream) {
-    MetalStream *ms = mtl_get_stream(stream);
+    MetalStream *ms = mtl_resolve_stream(stream);
     int num_idx = (int)graph.mb_ratio.shape[0];
 
-    // mb_ratio → rollouts.ratio
-    {
+    auto scatter = [&](PufTensor& dst, PufTensor& src) {
         ms->compute_encoder();
         auto pso = mtl_pipeline("index_copy_kernel");
         mtl_set_pso(ms, pso);
-        int row_bytes = (int)(graph.mb_ratio.shape[1] * graph.mb_ratio.dtype_size);
-        mtl_set_ptr(ms, rollouts.ratio.bytes, 0);
+        int row_bytes = (int)(src.shape[1] * src.dtype_size);
+        mtl_set_ptr(ms, dst.bytes, 0);
         mtl_set_ptr(ms, (void*)idx, 1);
-        mtl_set_ptr(ms, graph.mb_ratio.bytes, 2);
+        mtl_set_ptr(ms, src.bytes, 2);
         struct { int num_idx; int row_bytes; } p = {num_idx, row_bytes};
         mtl_set_params(ms, p, 3);
         mtl_dispatch_groups(ms, pso, (num_idx + 255) / 256, 256);
-    }
+    };
 
-    // mb_newvalue → rollouts.values
-    {
-        ms->compute_encoder();
-        auto pso = mtl_pipeline("index_copy_kernel");
-        mtl_set_pso(ms, pso);
-        int row_bytes = (int)(graph.mb_newvalue.shape[1] * graph.mb_newvalue.dtype_size);
-        mtl_set_ptr(ms, rollouts.values.bytes, 0);
-        mtl_set_ptr(ms, (void*)idx, 1);
-        mtl_set_ptr(ms, graph.mb_newvalue.bytes, 2);
-        struct { int num_idx; int row_bytes; } p = {num_idx, row_bytes};
-        mtl_set_params(ms, p, 3);
-        mtl_dispatch_groups(ms, pso, (num_idx + 255) / 256, 256);
-    }
+    scatter(rollouts.ratio, graph.mb_ratio);
+    scatter(rollouts.values, graph.mb_newvalue);
 }
 
 // ============================================================================
@@ -1072,7 +949,7 @@ void puff_advantage_cuda(PufTensor &values, PufTensor &rewards,
   int num_steps = (int)values.shape[0], horizon = (int)values.shape[1];
   assert(advantages.dtype_size == 4 && "advantages must be f32");
 
-  MetalStream *ms = mtl_get_stream(stream);
+  MetalStream *ms = mtl_resolve_stream(stream);
   ms->compute_encoder();
   auto pso = mtl_pipeline("puff_advantage_kernel");
   mtl_set_pso(ms, pso);
@@ -1098,7 +975,7 @@ void puff_advantage_cuda(PufTensor &values, PufTensor &rewards,
 void prio_precompute(PufTensor &advantages, float prio_alpha,
                      PrioBuffers &bufs, cudaStream_t stream) {
   int S = (int)advantages.shape[0], T = (int)advantages.shape[1];
-  MetalStream *ms = mtl_get_stream(stream);
+  MetalStream *ms = mtl_resolve_stream(stream);
 
   // Prio adv reduction
   {
@@ -1136,7 +1013,7 @@ void prio_sample(int minibatch_segments, int total_agents,
                  float anneal_beta, PrioBuffers &bufs, uint64_t seed,
                  uint32_t *offset_ptr, cudaStream_t stream) {
   int S = (int)bufs.prio_probs.shape[0];
-  MetalStream *ms = mtl_get_stream(stream);
+  MetalStream *ms = mtl_resolve_stream(stream);
 
   // prio_probs -> sampled indices
   ms->compute_encoder();
@@ -1206,7 +1083,7 @@ void mtl_select_copy(RolloutBuf &rollouts, TrainGraph &graph,
                      rollouts.logprobs.dtype_size;
   int horizon = (int)rollouts.values.shape[1];
 
-  MetalStream *ms = mtl_get_stream(stream);
+  MetalStream *ms = mtl_resolve_stream(stream);
   ms->compute_encoder();
   auto pso = mtl_pipeline("select_copy_kernel");
   mtl_set_pso(ms, pso);
@@ -1245,7 +1122,7 @@ void mtl_select_copy(RolloutBuf &rollouts, TrainGraph &graph,
 void mtl_muon_weight_update(float *weights, const float *updates,
                               const float *lr_ptr, float weight_decay, int count,
                               cudaStream_t stream) {
-  MetalStream *ms = mtl_get_stream(stream);
+  MetalStream *ms = mtl_resolve_stream(stream);
   ms->compute_encoder();
   auto pso = mtl_pipeline("muon_weight_update_kernel");
   mtl_set_pso(ms, pso);
@@ -1277,7 +1154,7 @@ void post_create_ppo_buffers(PPOBuffersPuf &bufs) {
 
 void puf_orthogonal_init(PufTensor &dst, float gain, uint64_t seed,
                           cudaStream_t stream) {
-  mtl_ensure_synced(stream);
+  mtl_ensure_stream_synced(stream);
 
   assert(dst.ndim() == 2);
   int64_t rows = dst.shape[0], cols = dst.shape[1];
@@ -1410,21 +1287,10 @@ void muon_init(Muon *m, Allocator *param_alloc, PufTensor weight_buffer,
   }
 }
 
-void muon_post_create(Muon *m) {
-  m->lr_ptr = (float *)m->lr_puf.bytes;
-  m->lr_derived_ptr = (float *)m->lr_derived_puf.bytes;
-  if (m->ns_norm_puf.bytes)
-    m->ns.norm_ptr = (float *)m->ns_norm_puf.bytes;
-  // Direct writes — unified memory, no cudaMemcpy needed
-  *m->lr_ptr = m->lr_val_init;
-  memset(m->lr_derived_ptr, 0, 2 * sizeof(float));
-  memset(m->mb_puf.bytes, 0, m->mb_puf.numel() * sizeof(float));
-}
-
 void muon_step(Muon *m, cudaStream_t stream) {
   if (m->wb_puf.bytes == nullptr)
     return;
-  MetalStream *ms = mtl_get_stream(stream);
+  MetalStream *ms = mtl_resolve_stream(stream);
 
   // No NCCL on Metal (single GPU)
 
@@ -1550,7 +1416,7 @@ static PufTensor encoder_forward(void *w, void *activations,
                                          PufTensor input, cudaStream_t stream) {
   EncoderWeights *ew = (EncoderWeights *)w;
   EncoderActivations *a = (EncoderActivations *)activations;
-  MetalStream *ms = mtl_get_stream(stream);
+  MetalStream *ms = mtl_resolve_stream(stream);
   if (a->saved_input.bytes)
     puf_copy(a->saved_input, input, stream);
 
@@ -1610,7 +1476,7 @@ static PufTensor decoder_forward(void *w, void *activations,
                                           cudaStream_t stream) {
   DecoderWeights *dw = (DecoderWeights *)w;
   DecoderActivations *a = (DecoderActivations *)activations;
-  MetalStream *ms = mtl_get_stream(stream);
+  MetalStream *ms = mtl_resolve_stream(stream);
   if (a->saved_input.bytes)
     puf_copy(a->saved_input, input, stream);
   puf_mm(input, dw->weight, a->out, stream);
@@ -1801,7 +1667,7 @@ static PufTensor mingru_forward(void *w, PufTensor x, PufTensor state,
   MinGRUActivations *a = (MinGRUActivations *)activations;
   int B = (int)state.shape[1];
   int H = (int)state.shape[2];
-  MetalStream *ms = mtl_get_stream(stream);
+  MetalStream *ms = mtl_resolve_stream(stream);
 
   for (int i = 0; i < m->num_layers; i++) {
     PufTensor state_i = mingru_state_layer(m, state, i);
@@ -1828,7 +1694,7 @@ static PufTensor mingru_forward_train(void *w, PufTensor x, PufTensor state,
                                        cudaStream_t stream) {
   MinGRUWeights *m = (MinGRUWeights *)w;
   MinGRUActivations *a = (MinGRUActivations *)activations;
-  MetalStream *ms = mtl_get_stream(stream);
+  MetalStream *ms = mtl_resolve_stream(stream);
 
   for (int i = 0; i < m->num_layers; i++) {
     puf_copy(a->saved_inputs[i], x, stream);
@@ -1856,7 +1722,7 @@ static PufTensor mingru_backward(void *w, PufTensor grad, void *activations,
                                   cudaStream_t stream) {
   MinGRUWeights *m = (MinGRUWeights *)w;
   MinGRUActivations *a = (MinGRUActivations *)activations;
-  MetalStream *ms = mtl_get_stream(stream);
+  MetalStream *ms = mtl_resolve_stream(stream);
 
   for (int i = m->num_layers - 1; i >= 0; i--) {
     PrefixScan &scan = a->scan_bufs[i];

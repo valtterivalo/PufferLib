@@ -135,9 +135,47 @@ void *mtl_stream();
 // Training stream (separate command queue for async overlap with rollout).
 void *mtl_train_stream();
 
+// Stream resolution: returns the typed MetalStream* for a cudaStream_t handle,
+// falling back to the default stream when s is null.
+static inline MetalStream *mtl_resolve_stream(cudaStream_t s) {
+  return s ? (MetalStream *)s : (MetalStream *)mtl_stream();
+}
+
+// Ensure all pending GPU work on a stream is committed and synced to CPU.
+// Checks both enc_active (encoder needs ending) and pending_work (command
+// buffer needs committing). Both must be checked — the encoder can be ended
+// but the command buffer not yet committed.
+static inline void mtl_ensure_stream_synced(cudaStream_t s) {
+  MetalStream *ms = mtl_resolve_stream(s);
+  if (ms->enc_active || ms->pending_work) ms->sync();
+}
+
 // Create/destroy additional rollout streams (one per vecenv buffer thread).
 void *mtl_create_stream();
 void mtl_destroy_stream(void *stream);
+
+// Allocate page-aligned scratch memory and register as a shared MTLBuffer
+// in the global residency set. Returns the CPU pointer (also GPU-accessible
+// on Apple Silicon unified memory).
+static inline void *mtl_alloc_scratch(int64_t bytes) {
+  int64_t page = 16384;
+  int64_t alloc = ((bytes + page - 1) / page) * page;
+  void *ptr = nullptr;
+  posix_memalign(&ptr, page, alloc);
+  assert(ptr && "mtl_alloc_scratch: posix_memalign failed");
+  memset(ptr, 0, alloc);
+  MetalContext *ctx = mtl_ctx();
+  id<MTLBuffer> buf = [ctx->device newBufferWithBytesNoCopy:ptr
+                                                     length:(NSUInteger)alloc
+                                                    options:MTLResourceStorageModeShared
+                                                deallocator:nil];
+  assert(buf);
+  ctx->buffers.push_back({(char *)ptr, alloc, buf});
+  [ctx->residency_set addAllocation:buf];
+  [ctx->residency_set commit];
+  [ctx->residency_set requestResidency];
+  return ptr;
+}
 
 // Tear down Metal context.
 void mtl_destroy();
