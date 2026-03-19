@@ -415,9 +415,17 @@ def _build_sweep_config(config: dict) -> dict:
 
 
 def _build_default_params(config: dict) -> dict:
-    """Extract default params (train + policy) from loaded config dict."""
+    """Extract default params (train + policy) from loaded config dict.
+
+    Protein's sweep config nests vec params (total_agents, num_buffers) under
+    train/, so we merge vec into train here to match the sweep key paths."""
+    train = dict(config.get("train", {}))
+    # vec params are sweepable under train/ in the sweep config
+    for k, v in config.get("vec", {}).items():
+        if k not in train:
+            train[k] = v
     return {
-        "train": dict(config.get("train", {})),
+        "train": train,
         "policy": dict(config.get("policy", {})),
     }
 
