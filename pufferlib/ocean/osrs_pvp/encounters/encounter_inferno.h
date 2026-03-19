@@ -2009,7 +2009,7 @@ static void inf_step(EncounterState* state, const int* actions) {
             s->episode_over = 1;
             s->winner = 0;
         } else {
-            inf_spawn_wave(s);
+            s->wave_spawn_delay = 5;
         }
     }
 
