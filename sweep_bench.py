@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Protein hyperparameter sweep for Metal envs (breakout, g2048, osrs_pvp, osrs_zulrah).
+"""Protein hyperparameter sweep for Metal envs (breakout, g2048, osrs_pvp, osrs_zulrah, osrs_inferno).
 
 Runs training in-process via _C calls (no subprocess overhead). Each trial
 gets a fresh pufferl instance with full Metal teardown between trials.
@@ -375,13 +375,13 @@ DEFAULT_PARAMS_PER_ENV = {
             "num_layers": 3,
         },
     },
-    # osrs_inferno anchor: from initial training runs that survived 2400+ ticks
+    # osrs_inferno anchor: lr=0.002 confirmed stable at 10M steps (ret 0.76→1.57)
     "osrs_inferno": {
         "train": {
             "total_timesteps": 100_000_000,
             "horizon": 32,
             "min_lr_ratio": 0.1,
-            "learning_rate": 0.003,
+            "learning_rate": 0.002,
             "beta1": 0.9,
             "beta2": 0.999,
             "eps": 1e-5,
@@ -556,7 +556,7 @@ def clamp_params(params: dict, env_name: str = "breakout") -> None:
         train["clip_coef"] = min(max(float(train.get("clip_coef", 0.2)), 0.05), 0.6)
         train["scaffolding_ratio"] = min(max(float(train.get("scaffolding_ratio", 0.5)), 0.0), 0.8)
         policy["hidden_size"] = int(policy.get("hidden_size", 128))
-    elif env_name in ("osrs_pvp", "osrs_zulrah"):
+    elif env_name in ("osrs_pvp", "osrs_zulrah", "osrs_inferno"):
         train["learning_rate"] = min(max(float(train.get("learning_rate", 0.001)), 0.00005), 0.015)
         train["gamma"] = min(max(float(train.get("gamma", 0.99)), 0.96), 0.9999)
         train["clip_coef"] = min(max(float(train.get("clip_coef", 0.2)), 0.05), 1.0)
