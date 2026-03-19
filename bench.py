@@ -69,7 +69,10 @@ def parse_args():
     p.add_argument("--beta2", type=float, default=0.999)
     p.add_argument("--eps", type=float, default=1e-12)
     p.add_argument("--minibatch-size", type=int, default=4096)
-    p.add_argument("--replay-ratio", type=float, default=0.25)
+    p.add_argument("--replay-ratio", type=float, default=0.25,
+                   help="minibatch replays per rollout. values above ~0.5 cause catastrophic "
+                        "policy drift in multi-head action spaces (7+ heads). breakout (1 head) "
+                        "tolerates 1.9+, osrs_pvp (7 heads) needs 0.25-0.5.")
     p.add_argument("--ent-coef", type=float, default=0.01)
     p.add_argument("--gamma", type=float, default=0.99)
     p.add_argument("--gae-lambda", type=float, default=0.95)
