@@ -590,6 +590,7 @@ typedef struct {
 
     /* player combat state */
     OverheadPrayer active_prayer;
+    int prayer_drain_counter;  /* shared drain system counter (see encounter_drain_prayer) */
     int player_attack_timer;
     int player_attack_target; /* NPC index or -1 */
     int player_brew_doses;
@@ -1607,6 +1608,8 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
 
     /* prayer: uses shared 5-value encoding from osrs_encounter.h */
     encounter_apply_prayer_action(&s->active_prayer, actions[INF_HEAD_PRAYER]);
+    /* drain prayer at OSRS rate (protection prayers: ~1 point per 5 ticks with 0 bonus) */
+    encounter_drain_prayer(&s->player.current_prayer, &s->active_prayer, 0, &s->prayer_drain_counter);
     s->player.prayer = s->active_prayer;
 
     /* gear switching */

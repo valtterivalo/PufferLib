@@ -573,6 +573,62 @@ static inline void encounter_clear_tick_flags(Player* p) {
 }
 
 /* ======================================================================== */
+/* shared prayer drain                                                       */
+/*                                                                           */
+/* ENCOUNTERS: call encounter_drain_prayer() each tick to drain prayer       */
+/* points at the correct OSRS rate. all encounters with overhead prayers     */
+/* MUST use this — do not hand-roll prayer drain logic.                      */
+/*                                                                           */
+/* OSRS drain formula: each prayer has a "drain effect" value.               */
+/* drain rate = 1 point per floor((18 + floor(bonus/4)) / drain_effect)      */
+/* seconds. the drain counter increments each tick; when it reaches the      */
+/* threshold, 1 prayer point is drained and the counter resets.              */
+/*                                                                           */
+/* protection prayers (melee/ranged/magic): drain_effect = 12               */
+/* rigour: drain_effect = 24, augury: drain_effect = 24                     */
+/* ======================================================================== */
+
+/** drain effect values for prayers used in encounters.
+    from the OSRS prayer table — higher values drain faster. */
+static inline int encounter_prayer_drain_effect(OverheadPrayer prayer) {
+    switch (prayer) {
+        case PRAYER_PROTECT_MELEE:  return 12;
+        case PRAYER_PROTECT_RANGED: return 12;
+        case PRAYER_PROTECT_MAGIC:  return 12;
+        default: return 0;  /* PRAYER_NONE / PRAYER_OFF — no drain */
+    }
+}
+
+/** drain prayer points at the correct OSRS rate. call once per game tick.
+    prayer_bonus is the player's total prayer equipment bonus (typically 0-30).
+    drain_counter is persistent state that accumulates fractional drain between ticks.
+    automatically deactivates prayer when points reach 0. */
+static inline void encounter_drain_prayer(
+    int* current_prayer, OverheadPrayer* active_prayer,
+    int prayer_bonus, int* drain_counter
+) {
+    if (*active_prayer == PRAYER_NONE) return;
+    int drain_effect = encounter_prayer_drain_effect(*active_prayer);
+    if (drain_effect == 0) return;
+
+    /* OSRS: drain interval = floor((18 + floor(bonus/4)) / drain_effect) seconds
+       converted to ticks (1 tick = 0.6s): multiply by 5/3.
+       but OSRS actually uses a point-based counter system, not seconds.
+       the drain_effect is subtracted from a counter each tick, and when the
+       counter goes below 0, a prayer point is drained and counter is reset
+       to (60 + prayer_bonus * 15). this is the actual OSRS implementation. */
+    *drain_counter -= drain_effect;
+    if (*drain_counter <= 0) {
+        *drain_counter += 60 + prayer_bonus * 15;
+        (*current_prayer)--;
+        if (*current_prayer <= 0) {
+            *current_prayer = 0;
+            *active_prayer = PRAYER_NONE;
+        }
+    }
+}
+
+/* ======================================================================== */
 /* shared loadout stat computation                                           */
 /*                                                                           */
 /* ENCOUNTERS: do NOT manually compute attack bonuses, max hits, or          */

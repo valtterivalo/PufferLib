@@ -601,6 +601,7 @@ typedef struct {
     int player_food_timer;
     int player_potion_timer;
     OverheadPrayer player_prayer;
+    int prayer_drain_counter;  /* shared drain system counter (see encounter_drain_prayer) */
     int player_special_energy;
     int player_dest_x, player_dest_y;   /* click destination for 2-tile run clamping */
     int player_dest_explicit;            /* 1 = dest set via put_int (human click), skip direction-based override */
@@ -1702,22 +1703,6 @@ static void zul_process_gear(ZulrahState* s, int atk) {
     }
 }
 
-static void zul_drain_prayer(ZulrahState* s) {
-    if (s->player_prayer == PRAYER_NONE) return;
-    if (s->player.current_prayer <= 0) {
-        s->player_prayer = PRAYER_NONE;
-        s->player.prayer = PRAYER_NONE;
-        return;
-    }
-    if (s->tick % 3 == 0) {
-        s->player.current_prayer--;
-        if (s->player.current_prayer <= 0) {
-            s->player.current_prayer = 0;
-            s->player_prayer = PRAYER_NONE;
-            s->player.prayer = PRAYER_NONE;
-        }
-    }
-}
 
 /* ======================================================================== */
 /* observations                                                              */
@@ -2068,8 +2053,9 @@ static void zul_step(EncounterState* state, const int* actions) {
     /* venom */
     zul_venom_tick(s);
 
-    /* prayer drain */
-    zul_drain_prayer(s);
+    /* prayer drain (shared OSRS formula) */
+    encounter_drain_prayer(&s->player.current_prayer, &s->player_prayer, 0, &s->prayer_drain_counter);
+    s->player.prayer = s->player_prayer;
 
     if (s->player.current_hitpoints <= 0) {
         s->episode_over = 1; s->winner = 1;
