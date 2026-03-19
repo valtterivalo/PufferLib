@@ -643,6 +643,7 @@ typedef struct {
 
     /* reward tracking */
     float reward;
+    float episode_return;  /* running sum of reward across all ticks */
     float damage_dealt_this_tick;
     float damage_received_this_tick;
     int prayer_blocked_this_tick;
@@ -2030,7 +2031,7 @@ static void zul_step(EncounterState* state, const int* actions) {
 
     if (s->zulrah.current_hitpoints <= 0) {
         s->episode_over = 1; s->winner = 0;
-        s->reward = zul_compute_reward(s); return;
+        s->reward = zul_compute_reward(s); s->episode_return += s->reward; return;
     }
 
     /* resolve pending cloud projectiles, then tick active clouds */
@@ -2038,7 +2039,7 @@ static void zul_step(EncounterState* state, const int* actions) {
     zul_cloud_tick(s);
     if (s->player.current_hitpoints <= 0) {
         s->episode_over = 1; s->winner = 1;
-        s->reward = zul_compute_reward(s); return;
+        s->reward = zul_compute_reward(s); s->episode_return += s->reward; return;
     }
 
     /* phase machine */
@@ -2059,13 +2060,14 @@ static void zul_step(EncounterState* state, const int* actions) {
 
     if (s->player.current_hitpoints <= 0) {
         s->episode_over = 1; s->winner = 1;
-        s->reward = zul_compute_reward(s); return;
+        s->reward = zul_compute_reward(s); s->episode_return += s->reward; return;
     }
     if (s->tick >= ZUL_MAX_TICKS) {
         s->episode_over = 1; s->winner = 1;
-        s->reward = zul_compute_reward(s); return;
+        s->reward = zul_compute_reward(s); s->episode_return += s->reward; return;
     }
     s->reward = zul_compute_reward(s);
+    s->episode_return += s->reward;
     zul_sync_player_consumables(s);
 
 }
@@ -2222,7 +2224,7 @@ static void zul_put_ptr(EncounterState* st, const char* k, void* v) {
 static void* zul_get_log(EncounterState* state) {
     ZulrahState* s = (ZulrahState*)state;
     if (s->episode_over) {
-        s->log.episode_return += s->reward;
+        s->log.episode_return += s->episode_return;
         s->log.episode_length += (float)s->tick;
         s->log.wins += (s->winner == 0) ? 1.0f : 0.0f;
         s->log.damage_dealt += s->total_damage_dealt;

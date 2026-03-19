@@ -129,6 +129,17 @@ typedef struct {
     int melee_target_x, melee_target_y;
 } EncounterOverlay;
 
+/* map AttackStyle enum to overlay projectile style index.
+   used by encounter_emit_projectile and render overlay systems. */
+static inline int encounter_attack_style_to_proj_style(int attack_style) {
+    switch (attack_style) {
+        case ATTACK_STYLE_RANGED: return 0;
+        case ATTACK_STYLE_MAGIC:  return 1;
+        case ATTACK_STYLE_MELEE:  return 2;
+        default: return 0;
+    }
+}
+
 /* populate an overlay projectile slot with flight parameters.
    encounters should call this instead of filling fields manually. */
 static inline int encounter_emit_projectile(

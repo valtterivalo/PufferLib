@@ -2295,15 +2295,6 @@ static void* inf_get_log(EncounterState* state) {
 /* render post-tick: populate overlay projectiles for renderer               */
 /* ======================================================================== */
 
-/* map AttackStyle enum to overlay projectile style (0=ranged, 1=magic, 2=melee) */
-static inline int inf_attack_style_to_proj_style(int attack_style) {
-    switch (attack_style) {
-        case ATTACK_STYLE_RANGED: return 0;
-        case ATTACK_STYLE_MAGIC:  return 1;
-        case ATTACK_STYLE_MELEE:  return 2;
-        default: return 0;
-    }
-}
 
 static void inf_render_post_tick(EncounterState* state, EncounterOverlay* ov) {
     InfernoState* s = (InfernoState*)state;
@@ -2329,7 +2320,7 @@ static void inf_render_post_tick(EncounterState* state, EncounterOverlay* ov) {
         if (npc->type == INF_NPC_ZUK)
             actual_style = ATTACK_STYLE_MAGIC;
 
-        int proj_style = inf_attack_style_to_proj_style(actual_style);
+        int proj_style = encounter_attack_style_to_proj_style(actual_style);
         int npc_size = stats->size;
         int start_h = (int)(npc_size * 0.75f * 128);
         int end_h = 64;  /* player: size 1 * 0.5 * 128 */
@@ -2404,7 +2395,7 @@ static void inf_render_post_tick(EncounterState* state, EncounterOverlay* ov) {
             int p_end_h = (int)(target_size * 0.5f * 128);
             int p_dist = encounter_dist_to_npc(s->player.x, s->player.y,
                 target->x, target->y, target_size);
-            int p_style = inf_attack_style_to_proj_style(s->player_attack_style_id);
+            int p_style = encounter_attack_style_to_proj_style(s->player_attack_style_id);
             float p_arc = 0.0f;
             int p_tracks = 0;  /* don't track — tracking loop targets entity 0 (player) */
             int p_duration;
