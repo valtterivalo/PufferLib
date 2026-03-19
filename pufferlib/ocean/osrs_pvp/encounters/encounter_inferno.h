@@ -963,6 +963,9 @@ static int inf_npc_blocked(void* ctx, int x, int y, int size) {
     return 0;
 }
 
+/* forward declaration — defined after potions/food section */
+static int inf_tile_walkable(void* ctx, int x, int y);
+
 static void inf_npc_move(InfernoState* s, int idx) {
     InfNPC* npc = &s->npcs[idx];
     if (!npc->active) return;
@@ -972,6 +975,19 @@ static void inf_npc_move(InfernoState* s, int idx) {
 
     const InfNPCStats* stats = &INF_NPC_STATS[npc->type];
     if (!stats->can_move) return;
+
+    /* OSRS: NPC shuffles off player tile when overlapping (Mob.ts:109-153).
+       if the NPC steps out, skip further movement this tick. */
+    if (npc->type != INF_NPC_NIBBLER) {
+        int stepped = encounter_npc_step_out_from_under(
+            &npc->x, &npc->y, npc->size,
+            s->player.x, s->player.y,
+            inf_tile_walkable, s, &s->rng_state);
+        if (stepped) {
+            npc->moved_this_tick = 1;
+            return;
+        }
+    }
 
     /* ranged/magic NPCs stop moving when they have LOS to the player.
        this is the core OSRS mechanic: NPCs only walk toward their target
@@ -1161,7 +1177,7 @@ static void inf_npc_attack(InfernoState* s, int idx) {
         }
         /* if player has targeted this healer, attack player in melee range.
            melee = instant (delay 0), apply immediately. */
-        if (encounter_dist_to_npc(s->player.x, s->player.y, npc->x, npc->y, 1) <= 1) {
+        if (encounter_dist_to_npc(s->player.x, s->player.y, npc->x, npc->y, 1) == 1) {
             int max_hit = osrs_npc_melee_max_hit(stats->str_level, stats->melee_str_bonus);
             int dmg = encounter_rand_int(&s->rng_state, max_hit + 1);
             /* accuracy roll */
@@ -1185,7 +1201,7 @@ static void inf_npc_attack(InfernoState* s, int idx) {
     /* compute distance to player */
     int dist = encounter_dist_to_npc(s->player.x, s->player.y,
                                       npc->x, npc->y, npc->size);
-    if (dist > stats->attack_range) return;
+    if (dist == 0 || dist > stats->attack_range) return;
 
     /* blob prayer reading: 2-phase attack cycle */
     if (npc->type == INF_NPC_BLOB) {
@@ -1255,7 +1271,7 @@ static void inf_npc_attack(InfernoState* s, int idx) {
     }
 
     /* melee switchover for ranger/mager: when close */
-    if (stats->can_melee && dist <= 1) {
+    if (stats->can_melee && dist == 1) {
         actual_style = ATTACK_STYLE_MELEE;
     }
 
@@ -1746,7 +1762,7 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
             int target_dist = encounter_dist_to_npc(s->player.x, s->player.y,
                 target_npc->x, target_npc->y, target_npc->size);
 
-            if (target_dist <= ls->attack_range) {
+            if (target_dist >= 1 && target_dist <= ls->attack_range) {
                 /* compute hit delay for projectile flight */
                 int hit_delay;
                 if (ls->style == ATTACK_STYLE_MAGIC)

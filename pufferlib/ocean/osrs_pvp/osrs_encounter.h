@@ -24,6 +24,7 @@
  *     encounter_pathfind()             shared BFS pathfind wrapper
  *
  *   NPC pathfinding:
+ *     encounter_npc_step_out_from_under()  shuffle NPC off player tile (OSRS overlap rule)
  *     encounter_npc_step_toward()      greedy 1-tile step (diagonal > x > y)
  *
  *   damage:
@@ -426,7 +427,7 @@ static inline int encounter_chase_attack_target(
     pathfind_blocked_fn extra_blocked, void* blocked_ctx
 ) {
     int dist = encounter_dist_to_npc(p->x, p->y, target_x, target_y, target_size);
-    if (dist <= attack_range) return 0;
+    if (dist >= 1 && dist <= attack_range) return 0;
 
     /* nearest tile of the NPC to pathfind toward */
     int cx = p->x < target_x ? target_x :
@@ -451,6 +452,49 @@ static inline int encounter_chase_attack_target(
     p->is_running = (steps == 2);
     p->dest_x = p->x; p->dest_y = p->y;
     return steps > 0 ? 1 : 0;
+}
+
+/* ======================================================================== */
+/* shared NPC step-out-from-under (OSRS: NPC shuffles off player tile)       */
+/* ======================================================================== */
+
+/* when an NPC overlaps the player (AABB overlap), it shuffles one tile in a
+   random cardinal direction. matches osrs-sdk Mob.ts:109-153 behavior:
+   50% pick X-axis vs Y-axis, then 50% +1 or -1 on that axis.
+   returns 1 if the NPC moved, 0 if stuck or no overlap. */
+static inline int encounter_npc_step_out_from_under(
+    int* npc_x, int* npc_y, int npc_size,
+    int player_x, int player_y,
+    encounter_walkable_fn is_walkable, void* ctx, uint32_t* rng
+) {
+    /* AABB overlap check (handles multi-tile NPCs) */
+    int overlap = !(*npc_x >= player_x + 1 || *npc_x + npc_size <= player_x ||
+                    *npc_y >= player_y + 1 || *npc_y + npc_size <= player_y);
+    if (!overlap) return 0;
+
+    /* 4 cardinal directions: +x, -x, +y, -y */
+    int dirs[4][2] = {{1,0}, {-1,0}, {0,1}, {0,-1}};
+
+    /* random start: 50% X-axis first (dirs 0,1) vs Y-axis first (dirs 2,3),
+       then 50% positive vs negative on that axis */
+    int axis = encounter_rand_int(rng, 2);       /* 0=X, 1=Y */
+    int sign = encounter_rand_int(rng, 2);        /* 0=positive, 1=negative */
+    int order[4];
+    order[0] = axis * 2 + sign;         /* primary: chosen axis+sign */
+    order[1] = axis * 2 + (1 - sign);   /* secondary: chosen axis, other sign */
+    order[2] = (1 - axis) * 2 + sign;   /* tertiary: other axis, same sign */
+    order[3] = (1 - axis) * 2 + (1 - sign); /* last: other axis, other sign */
+
+    for (int i = 0; i < 4; i++) {
+        int nx = *npc_x + dirs[order[i]][0];
+        int ny = *npc_y + dirs[order[i]][1];
+        if (is_walkable(ctx, nx, ny)) {
+            *npc_x = nx;
+            *npc_y = ny;
+            return 1;
+        }
+    }
+    return 0;
 }
 
 /* ======================================================================== */
