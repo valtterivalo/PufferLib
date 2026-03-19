@@ -281,9 +281,13 @@ static void* static_omp_threadmanager(void* arg) {
             my_accum[EVAL_GPU] += (t1.tv_sec - t0.tv_sec) * 1000.0f + (t1.tv_nsec - t0.tv_nsec) / 1e6f;
 
             clock_gettime(CLOCK_MONOTONIC, &t0);
-            #pragma omp parallel for schedule(static) num_threads(num_workers)
-            for (int i = env_start; i < env_start + env_count; i++) {
-                c_step(&envs[i]);
+            if (num_workers <= 1) {
+                for (int i = env_start; i < env_start + env_count; i++)
+                    c_step(&envs[i]);
+            } else {
+                #pragma omp parallel for schedule(static) num_threads(num_workers)
+                for (int i = env_start; i < env_start + env_count; i++)
+                    c_step(&envs[i]);
             }
             clock_gettime(CLOCK_MONOTONIC, &t1);
             my_accum[EVAL_ENV_STEP] += (t1.tv_sec - t0.tv_sec) * 1000.0f + (t1.tv_nsec - t0.tv_nsec) / 1e6f;
