@@ -18,7 +18,7 @@ run_bench() {
     echo "" | tee -a "$OUT"
     echo "--- $env / $label ---" | tee -a "$OUT"
     python setup.py "build_${env}" --force 2>/dev/null
-    result=$(python bench.py --env "$env" "$@" 2>&1 | grep -E "avg SPS|done\.")
+    result=$(python pufferl.py train --env "$env" "$@" 2>&1 | grep -E "avg SPS|done\.")
     echo "$result" | tee -a "$OUT"
 }
 
