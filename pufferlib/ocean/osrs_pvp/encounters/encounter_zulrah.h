@@ -191,13 +191,6 @@ static const int ZUL_POSITIONS[ZUL_NUM_POSITIONS][2] = {
 #define ZUL_ATK_NONE  0
 #define ZUL_ATK_MAGE  1
 #define ZUL_ATK_RANGE 2
-/* prayer uses shared ENCOUNTER_PRAYER_* encoding from osrs_encounter.h:
-   0=no_change, 1=off, 2=melee, 3=ranged, 4=magic */
-#define ZUL_PRAY_NO_CHANGE  ENCOUNTER_PRAYER_NO_CHANGE
-#define ZUL_PRAY_OFF        ENCOUNTER_PRAYER_OFF
-#define ZUL_PRAY_MELEE      ENCOUNTER_PRAYER_MELEE
-#define ZUL_PRAY_RANGED     ENCOUNTER_PRAYER_RANGED
-#define ZUL_PRAY_MAGIC      ENCOUNTER_PRAYER_MAGIC
 
 /* ======================================================================== */
 /* enums                                                                     */
@@ -719,13 +712,6 @@ static inline int zul_player_in_cloud(int cx, int cy, int px, int py) {
            py >= cy && py < cy + ZUL_CLOUD_SIZE;
 }
 
-static inline int zul_dist_to_zulrah(ZulrahState* s) {
-    int px = s->player.x, py = s->player.y;
-    int zx = s->zulrah.x, zy = s->zulrah.y;
-    int cx = clamp(px, zx, zx + ZUL_NPC_SIZE - 1);
-    int cy = clamp(py, zy, zy + ZUL_NPC_SIZE - 1);
-    return max_int(abs_int(px - cx), abs_int(py - cy));
-}
 
 static int zul_form_npc_id(ZulrahForm f) {
     return (f == ZUL_FORM_GREEN) ? 2042 : (f == ZUL_FORM_RED) ? 2043 : 2044;
@@ -792,7 +778,6 @@ static void zul_try_envenom(ZulrahState* s) {
 
 /* OSRS accuracy formula: if att > def: 1 - (def+2)/(2*(att+1)), else att/(2*(def+1)) */
 /* hit chance: use shared OSRS accuracy formula from osrs_combat_shared.h */
-#define zul_hit_chance osrs_hit_chance
 
 /* confliction gauntlets double accuracy roll (same formula as osmumten's fang).
  * on a primed magic attack, accuracy is rolled twice — hitting if either roll succeeds. */
@@ -865,7 +850,7 @@ static void zul_attack_ranged(ZulrahState* s) {
     if (encounter_prayer_correct_for_style(s->player_prayer, ATTACK_STYLE_RANGED)) {
         /* prayer blocks damage but venom still applies (unless miss) */
         int def_roll = zul_player_def_roll(s, ATTACK_STYLE_RANGED);
-        float chance = zul_hit_chance(ZUL_NPC_RANGED_ATT_ROLL, def_roll);
+        float chance = osrs_hit_chance(ZUL_NPC_RANGED_ATT_ROLL, def_roll);
         did_hit = (encounter_rand_float(&s->rng_state) < chance);
         if (did_hit) {
             s->prayer_blocked_this_tick = 1;
@@ -874,7 +859,7 @@ static void zul_attack_ranged(ZulrahState* s) {
     } else {
         /* accuracy roll: NPC ranged att vs player ranged def */
         int def_roll = zul_player_def_roll(s, ATTACK_STYLE_RANGED);
-        float chance = zul_hit_chance(ZUL_NPC_RANGED_ATT_ROLL, def_roll);
+        float chance = osrs_hit_chance(ZUL_NPC_RANGED_ATT_ROLL, def_roll);
         if (encounter_rand_float(&s->rng_state) < chance) {
             did_hit = 1;
             dmg = encounter_rand_int(&s->rng_state, ZUL_MAX_HIT + 1);
@@ -965,6 +950,15 @@ static void zul_attack_jad(ZulrahState* s) {
 /* player attacks zulrah                                                     */
 /* ======================================================================== */
 
+/* per-form defence bonuses — called from normal attacks and spec handler */
+static inline void zul_form_def_bonuses(ZulrahForm form, int* def_magic, int* def_ranged) {
+    switch (form) {
+        case ZUL_FORM_GREEN: *def_magic = ZUL_GREEN_DEF_MAGIC; *def_ranged = ZUL_GREEN_DEF_RANGED; break;
+        case ZUL_FORM_RED:   *def_magic = ZUL_RED_DEF_MAGIC;   *def_ranged = ZUL_RED_DEF_RANGED;   break;
+        case ZUL_FORM_BLUE:  *def_magic = ZUL_BLUE_DEF_MAGIC;  *def_ranged = ZUL_BLUE_DEF_RANGED;  break;
+    }
+}
+
 static int zul_player_attack_hits(ZulrahState* s, int is_mage) {
     const ZulGearTierStats* t = &ZUL_GEAR_TIERS[s->gear_tier];
     int eff_level = is_mage ? t->eff_mage_level : t->eff_range_level;
@@ -975,11 +969,7 @@ static int zul_player_attack_hits(ZulrahState* s, int is_mage) {
         att_roll = att_roll * 130 / 100;
 
     int def_magic = 0, def_ranged = 0;
-    switch (s->current_form) {
-        case ZUL_FORM_GREEN: def_magic = ZUL_GREEN_DEF_MAGIC; def_ranged = ZUL_GREEN_DEF_RANGED; break;
-        case ZUL_FORM_RED:   def_magic = ZUL_RED_DEF_MAGIC;   def_ranged = ZUL_RED_DEF_RANGED;   break;
-        case ZUL_FORM_BLUE:  def_magic = ZUL_BLUE_DEF_MAGIC;  def_ranged = ZUL_BLUE_DEF_RANGED;  break;
-    }
+    zul_form_def_bonuses(s->current_form, &def_magic, &def_ranged);
     /* apply eye of ayak magic defence drain (carries across forms) */
     if (is_mage) {
         def_magic -= s->magic_def_drain;
@@ -996,7 +986,7 @@ static int zul_player_attack_hits(ZulrahState* s, int is_mage) {
         return encounter_rand_float(&s->rng_state) < zul_hit_chance_double(att_roll, def_roll);
     }
 
-    return encounter_rand_float(&s->rng_state) < zul_hit_chance(att_roll, def_roll);
+    return encounter_rand_float(&s->rng_state) < osrs_hit_chance(att_roll, def_roll);
 }
 
 static void zul_player_attack(ZulrahState* s, int is_mage) {
@@ -1073,12 +1063,8 @@ static void zul_player_spec(ZulrahState* s) {
         s->player.attack_style_this_tick = ATTACK_STYLE_RANGED;
         s->player_attack_timer = 3;
 
-        int def_ranged = 0;
-        switch (s->current_form) {
-            case ZUL_FORM_GREEN: def_ranged = ZUL_GREEN_DEF_RANGED; break;
-            case ZUL_FORM_RED:   def_ranged = ZUL_RED_DEF_RANGED; break;
-            case ZUL_FORM_BLUE:  def_ranged = ZUL_BLUE_DEF_RANGED; break;
-        }
+        int _dm1 = 0, def_ranged = 0;
+        zul_form_def_bonuses(s->current_form, &_dm1, &def_ranged);
         int def_roll = (ZUL_DEF_LEVEL + 8) * (def_ranged + 64);
         if (def_roll < 0) def_roll = 0;
 
@@ -1087,7 +1073,7 @@ static void zul_player_spec(ZulrahState* s) {
         int att_roll_spec = att_roll_base * 10 / 7;
 
         for (int arrow = 0; arrow < 2; arrow++) {
-            if (encounter_rand_float(&s->rng_state) < zul_hit_chance(att_roll_spec, def_roll)) {
+            if (encounter_rand_float(&s->rng_state) < osrs_hit_chance(att_roll_spec, def_roll)) {
                 int dmg = encounter_rand_int(&s->rng_state, msb_max_hit + 1);
                 dmg = zul_cap_damage(s, dmg);
                 encounter_damage_player(&s->zulrah, dmg, NULL);
@@ -1100,17 +1086,13 @@ static void zul_player_spec(ZulrahState* s) {
         s->player.attack_style_this_tick = ATTACK_STYLE_RANGED;
         s->player_attack_timer = 3;
 
-        int def_ranged = 0;
-        switch (s->current_form) {
-            case ZUL_FORM_GREEN: def_ranged = ZUL_GREEN_DEF_RANGED; break;
-            case ZUL_FORM_RED:   def_ranged = ZUL_RED_DEF_RANGED; break;
-            case ZUL_FORM_BLUE:  def_ranged = ZUL_BLUE_DEF_RANGED; break;
-        }
+        int _dm2 = 0, def_ranged = 0;
+        zul_form_def_bonuses(s->current_form, &_dm2, &def_ranged);
         int def_roll = (ZUL_DEF_LEVEL + 8) * (def_ranged + 64);
         if (def_roll < 0) def_roll = 0;
 
         int att_roll = t->eff_range_level * (t->bp_att_bonus + 64);
-        if (encounter_rand_float(&s->rng_state) < zul_hit_chance(att_roll, def_roll)) {
+        if (encounter_rand_float(&s->rng_state) < osrs_hit_chance(att_roll, def_roll)) {
             int dmg = encounter_rand_int(&s->rng_state, t->bp_max_hit + 1);
             dmg = zul_cap_damage(s, dmg);
             encounter_damage_player(&s->zulrah, dmg, NULL);
@@ -1127,12 +1109,8 @@ static void zul_player_spec(ZulrahState* s) {
         s->player.attack_style_this_tick = ATTACK_STYLE_MAGIC;
         s->player_attack_timer = 5;  /* slower than normal 3-tick */
 
-        int def_magic = 0;
-        switch (s->current_form) {
-            case ZUL_FORM_GREEN: def_magic = ZUL_GREEN_DEF_MAGIC; break;
-            case ZUL_FORM_RED:   def_magic = ZUL_RED_DEF_MAGIC; break;
-            case ZUL_FORM_BLUE:  def_magic = ZUL_BLUE_DEF_MAGIC; break;
-        }
+        int def_magic = 0, _dr3 = 0;
+        zul_form_def_bonuses(s->current_form, &def_magic, &_dr3);
         def_magic -= s->magic_def_drain;
         if (def_magic < -64) def_magic = -64;
         int def_roll = (ZUL_DEF_LEVEL + 8) * (def_magic + 64);
@@ -1141,7 +1119,7 @@ static void zul_player_spec(ZulrahState* s) {
         int att_roll = t->eff_mage_level * (t->mage_att_bonus + 64) * 2;  /* 2x accuracy */
         int spec_max_hit = t->mage_max_hit * 130 / 100;  /* 1.3x max hit */
 
-        if (encounter_rand_float(&s->rng_state) < zul_hit_chance(att_roll, def_roll)) {
+        if (encounter_rand_float(&s->rng_state) < osrs_hit_chance(att_roll, def_roll)) {
             int dmg = encounter_rand_int(&s->rng_state, spec_max_hit + 1);
             dmg = zul_cap_damage(s, dmg);
             encounter_damage_player(&s->zulrah, dmg, NULL);
@@ -1779,7 +1757,7 @@ static void zul_write_obs(EncounterState* state, float* obs) {
     obs[i++] = s->is_diving ? 1.0f : 0.0f;
     obs[i++] = s->zulrah_attacking ? 1.0f : 0.0f;
     obs[i++] = (float)s->action_timer / ZUL_ATTACK_SPEED;
-    obs[i++] = (float)zul_dist_to_zulrah(s) / ZUL_ARENA_SIZE;
+    obs[i++] = (float)encounter_dist_to_npc(s->player.x, s->player.y, s->zulrah.x, s->zulrah.y, ZUL_NPC_SIZE) / ZUL_ARENA_SIZE;
     obs[i++] = (float)s->rotation_index / (ZUL_NUM_ROTATIONS - 1);
     obs[i++] = (float)s->phase_index / 12.0f;
     obs[i++] = (s->melee_pending) ? 1.0f : 0.0f;

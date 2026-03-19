@@ -492,13 +492,6 @@ typedef enum {
     INF_NUM_WEAPON_SETS
 } InfWeaponSet;
 
-/* weapon stats are now computed from loadouts via encounter_compute_loadout_stats()
- * in inf_reset. see EncounterLoadoutStats in osrs_encounter.h.
- * old hardcoded reference values for verification:
- *   mage: att_bonus=88, max_hit=38, eff_level=131, speed=5, range=10
- *   tbow: att_bonus=215, max_hit=33, eff_level=126, speed=5, range=10
- *   bp:   att_bonus=175, max_hit=25, eff_level=126, speed=3, range=5 */
-
 /* gear loadout arrays per weapon set */
 static const uint8_t INF_MAGE_LOADOUT[NUM_GEAR_SLOTS] = {
     [GEAR_SLOT_HEAD]   = ITEM_MASORI_MASK_F,
@@ -780,36 +773,6 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
         ENCOUNTER_PRAYER_RIGOUR, 99, 0, 0, &s->loadout_stats[INF_GEAR_TBOW]);
     encounter_compute_loadout_stats(INF_RANGE_BP_LOADOUT, ATTACK_STYLE_RANGED,
         ENCOUNTER_PRAYER_RIGOUR, 99, 0, 0, &s->loadout_stats[INF_GEAR_BP]);
-
-#ifndef NDEBUG
-    /* debug: verify computed stats match expected values */
-    fprintf(stderr, "[inferno] loadout stats computed from ITEM_DATABASE:\n");
-    for (int i = 0; i < INF_NUM_WEAPON_SETS; i++) {
-        const EncounterLoadoutStats* ls = &s->loadout_stats[i];
-        const char* names[] = {"mage", "tbow", "bp"};
-        fprintf(stderr, "  %s: att_bonus=%d, max_hit=%d, eff_level=%d, speed=%d, range=%d\n",
-            names[i], ls->attack_bonus, ls->max_hit, ls->eff_level,
-            ls->attack_speed, ls->attack_range);
-    }
-
-    /* debug: verify NPC max hits computed from formulas */
-    {
-        const char* npc_names[] = {
-            "nibbler", "bat", "blob", "blob_melee", "blob_range", "blob_mage",
-            "meleer", "ranger", "mager", "jad", "zuk", "healer_jad", "healer_zuk", "shield"
-        };
-        fprintf(stderr, "[inferno] NPC max hits (computed from OSRS formulas):\n");
-        for (int i = 0; i < INF_NUM_NPC_TYPES; i++) {
-            const InfNPCStats* ns = &INF_NPC_STATS[i];
-            int mh = osrs_npc_max_hit(ns->default_style,
-                ns->str_level, ns->range_level,
-                ns->melee_str_bonus, ns->ranged_str_bonus,
-                ns->magic_base_dmg, ns->magic_dmg_pct);
-            if (ns->max_hit_cap > 0 && mh > ns->max_hit_cap) mh = ns->max_hit_cap;
-            fprintf(stderr, "  %s: %d\n", npc_names[i], mh);
-        }
-    }
-#endif
 
     /* spawn position depends on wave */
     int is_zuk_wave = (saved_start >= 68);
@@ -1203,11 +1166,7 @@ static void inf_npc_attack(InfernoState* s, int idx) {
         }
         /* if player has targeted this healer, attack player in melee range.
            melee = instant (delay 0), apply immediately. */
-        int px = s->player.x, py = s->player.y;
-        int ddx = npc->x - px, ddy = npc->y - py;
-        int dist = (ddx < 0 ? -ddx : ddx) > (ddy < 0 ? -ddy : ddy)
-                   ? (ddx < 0 ? -ddx : ddx) : (ddy < 0 ? -ddy : ddy);
-        if (dist <= 1) {
+        if (encounter_dist_to_npc(s->player.x, s->player.y, npc->x, npc->y, 1) <= 1) {
             int max_hit = osrs_npc_melee_max_hit(stats->str_level, stats->melee_str_bonus);
             int dmg = encounter_rand_int(&s->rng_state, max_hit + 1);
             /* accuracy roll */
