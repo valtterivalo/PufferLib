@@ -483,10 +483,20 @@ def build_configs(
         "ns_iters": float(int(train.get("ns_iters", 5))),
         "env_name": env_name,
     }
+    # structural constraints: num_threads must match num_buffers,
+    # and minibatch can't exceed batch size
+    num_buffers = int(train.get("num_buffers", 1))
+    total_agents = int(train.get("total_agents", 4096))
+    horizon = config["horizon"]
+    batch_size = total_agents * horizon
+    minibatch = config["minibatch_size"]
+    if minibatch > batch_size:
+        config["minibatch_size"] = batch_size
+
     vec_config = {
-        "total_agents": float(int(train.get("total_agents", 4096))),
-        "num_buffers": float(int(train.get("num_buffers", 1))),
-        "num_threads": float(int(train.get("num_threads", 1))),
+        "total_agents": float(total_agents),
+        "num_buffers": float(num_buffers),
+        "num_threads": float(num_buffers),
     }
     policy_config = {
         "hidden_size": float(int(policy.get("hidden_size", 64))),
@@ -521,67 +531,6 @@ def load_observations(path: Path) -> list[dict]:
     return records
 
 
-def clamp_params(params: dict, env_name: str = "breakout") -> None:
-    """Enforce cross-parameter constraints."""
-    train = params.get("train", {})
-    policy = params.get("policy", {})
-    hidden = int(policy.get("hidden_size", 64))
-    layers = int(policy.get("num_layers", 2))
-    total_agents = int(train.get("total_agents", 2048))
-    horizon = int(train.get("horizon", 32))
-    minibatch = int(train.get("minibatch_size", 4096))
-
-    batch_size = total_agents * horizon
-
-    model_cost = hidden * hidden * layers
-    if model_cost > 512 * 512 * 2 and total_agents > 8192:
-        train["total_agents"] = 8192
-
-    # prevent expensive models with tiny batches (causes terrible SPS)
-    if model_cost > 128 * 128 * 2 and total_agents < 2048:
-        train["total_agents"] = 2048
-
-    if minibatch > batch_size:
-        train["minibatch_size"] = batch_size
-
-    replay = train.get("replay_ratio", 0.25)
-    effective_mb = int(replay * batch_size / max(minibatch, 1))
-    if effective_mb > 32:
-        train["replay_ratio"] = 32 * minibatch / max(batch_size, 1)
-
-    # per-env clamp ranges
-    if env_name == "g2048":
-        train["learning_rate"] = min(max(float(train.get("learning_rate", 0.003)), 0.0002), 0.03)
-        train["gamma"] = min(max(float(train.get("gamma", 0.998)), 0.96), 0.9999)
-        train["clip_coef"] = min(max(float(train.get("clip_coef", 0.2)), 0.05), 0.6)
-        train["scaffolding_ratio"] = min(max(float(train.get("scaffolding_ratio", 0.5)), 0.0), 0.8)
-        policy["hidden_size"] = int(policy.get("hidden_size", 128))
-    elif env_name in ("osrs_pvp", "osrs_zulrah", "osrs_inferno"):
-        train["learning_rate"] = min(max(float(train.get("learning_rate", 0.001)), 0.00005), 0.015)
-        train["gamma"] = min(max(float(train.get("gamma", 0.99)), 0.96), 0.9999)
-        train["clip_coef"] = min(max(float(train.get("clip_coef", 0.2)), 0.05), 1.0)
-    else:
-        train["learning_rate"] = min(max(float(train.get("learning_rate", 0.1)), 0.005), 0.4)
-        train["gamma"] = min(max(float(train.get("gamma", 0.972)), 0.85), 0.999)
-        train["clip_coef"] = min(max(float(train.get("clip_coef", 0.67)), 0.05), 2.0)
-
-    # shared clamps
-    train["beta1"] = min(max(float(train.get("beta1", 0.73)), 0.4), 0.98)
-    train["beta2"] = min(max(float(train.get("beta2", 0.9986)), 0.98), 0.999995)
-    train["eps"] = min(max(float(train.get("eps", 8.3e-5)), 1e-7), 1e-2)
-    train["ent_coef"] = min(max(float(train.get("ent_coef", 0.0033)), 1e-4), 0.05)
-    train["gae_lambda"] = min(max(float(train.get("gae_lambda", 0.949)), 0.05), 0.999)
-    train["vtrace_rho_clip"] = min(max(float(train.get("vtrace_rho_clip", 2.1)), 1.0), 5.0)
-    train["vtrace_c_clip"] = min(max(float(train.get("vtrace_c_clip", 1.08)), 1.0), 4.0)
-    train["vf_coef"] = min(max(float(train.get("vf_coef", 1.22)), 0.1), 10.0)
-    train["vf_clip_coef"] = min(max(float(train.get("vf_clip_coef", 1.23)), 0.05), 8.0)
-    train["max_grad_norm"] = min(max(float(train.get("max_grad_norm", 1.81)), 0.3), 10.0)
-    train["replay_ratio"] = min(max(float(train.get("replay_ratio", 1.4)), 0.1), 5.0)
-    train["min_lr_ratio"] = min(max(float(train.get("min_lr_ratio", 0.0)), 0.0), 0.5)
-
-    # num_threads must match num_buffers (one thread per buffer)
-    num_buf = int(train.get("num_buffers", 1))
-    train["num_threads"] = num_buf
 
 
 
@@ -948,7 +897,6 @@ def run_sweep(env_name: str, max_trials: int | None, timeout_h: float) -> None:
         else:
             fill = deepcopy(default_params)
             params, info = protein.suggest(fill)
-            clamp_params(params, env_name)
             if info:
                 pred_cost = info.get("cost", 0)
                 pred_score = info.get("score", 0)
