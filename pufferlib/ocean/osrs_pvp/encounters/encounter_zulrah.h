@@ -1634,11 +1634,11 @@ static void zul_phase_tick(ZulrahState* s) {
 /* player action processing                                                  */
 /* ======================================================================== */
 
-static void zul_process_movement(ZulrahState* s, int move) {
-    if (move <= 0 || move >= ZUL_MOVE_DIM) return;
+static void zul_process_movement(ZulrahState* s) {
+    if (s->player_dest_x < 0 || s->player_dest_y < 0) return;
     if (s->player_stunned_ticks > 0) return;
 
-    /* use shared BFS click-to-move when destination is set (human or RL) */
+    /* shared BFS click-to-move: runs (2 steps) when dest > 1 tile away */
     encounter_move_toward_dest(&s->player, &s->player_dest_x, &s->player_dest_y,
         (const CollisionMap*)s->collision_map, s->world_offset_x, s->world_offset_y,
         zul_tile_walkable, s, NULL, NULL);
@@ -2001,20 +2001,22 @@ static void zul_step(EncounterState* state, const int* actions) {
     zul_process_potion(s, actions[ZUL_HEAD_POTION]);
     zul_process_gear(s, actions[ZUL_HEAD_ATTACK]);
 
-    /* set dest: if human click set an explicit dest via put_int, use that.
-       otherwise default to 2 tiles in move direction (RL agent).
-       heuristic overrides via player_dest_x/y for walk-to-tile (stops at dest). */
+    /* set dest: explicit (human click or heuristic) takes priority,
+       then RL action offset, then idle (action 0) clears dest. */
     if (s->player_dest_explicit) {
-        /* dest already set by put_int — clear flag for next tick */
         s->player_dest_explicit = 0;
     } else {
         int m = actions[ZUL_HEAD_MOVE];
         if (m > 0 && m < ZUL_MOVE_DIM) {
             s->player_dest_x = s->player.x + ENCOUNTER_MOVE_TARGET_DX[m];
             s->player_dest_y = s->player.y + ENCOUNTER_MOVE_TARGET_DY[m];
+        } else {
+            /* idle: clear destination */
+            s->player_dest_x = -1;
+            s->player_dest_y = -1;
         }
     }
-    zul_process_movement(s, actions[ZUL_HEAD_MOVE]);
+    zul_process_movement(s);
 
     /* spec takes priority over normal attack if requested */
     if (actions[ZUL_HEAD_SPEC] == 1) zul_player_spec(s);
@@ -2107,27 +2109,18 @@ static void zul_heuristic_actions(ZulrahState* s, int* actions) {
         actions[ZUL_HEAD_POTION] = 1;  /* prayer pot */
     }
 
-    /* movement: BFS pathfind toward current phase's safe spot */
+    /* movement: set dest to current phase's safe spot.
+       zul_process_movement BFS-paths there, running when > 1 tile away. */
     {
         const ZulRotationPhase* phase = zul_current_phase(s);
         int stand = phase->stand;
         if (stand < ZUL_NUM_STAND_LOCATIONS) {
             int tx = ZUL_STAND_COORDS[stand][0];
             int ty = ZUL_STAND_COORDS[stand][1];
-            /* set click destination so movement stops at safe spot (no overshoot) */
-            s->player_dest_x = tx;
-            s->player_dest_y = ty;
             if (tx != s->player.x || ty != s->player.y) {
-                PathResult pr = zul_pathfind(s, s->player.x, s->player.y, tx, ty);
-                if (pr.found && (pr.next_dx != 0 || pr.next_dy != 0)) {
-                    /* heuristic uses walk actions (1-8) for single-step BFS directions */
-                    for (int m = 1; m <= 8; m++) {
-                        if (ENCOUNTER_MOVE_TARGET_DX[m] == pr.next_dx && ENCOUNTER_MOVE_TARGET_DY[m] == pr.next_dy) {
-                            actions[ZUL_HEAD_MOVE] = m;
-                            break;
-                        }
-                    }
-                }
+                s->player_dest_x = tx;
+                s->player_dest_y = ty;
+                s->player_dest_explicit = 1;
             }
         }
     }
