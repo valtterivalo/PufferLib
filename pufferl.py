@@ -12,8 +12,11 @@ requires building the env first: python setup.py build_<env> --force
 from __future__ import annotations
 
 import argparse
+import ast
+import configparser
 import json
 import math
+import os
 import sys
 import time
 from copy import deepcopy
@@ -34,66 +37,161 @@ if hasattr(sys.stderr, "reconfigure"):
 
 
 # ============================================================================
+# config loading (reads .ini files, builds argparse dynamically)
+# ============================================================================
+
+METAL_CONFIG_DIR = Path(__file__).parent / "pufferlib" / "config" / "metal"
+SWEEP_DIR_BASE = Path("runs/sweep_bench")
+LOG_INTERVAL = 5
+
+
+def _parse_ini_value(raw: str):
+    """Parse a single .ini value into its Python type.
+
+    Uses ast.literal_eval (safe: only parses Python literals like strings,
+    numbers, booleans, None — no arbitrary code execution). Falls back to
+    returning the raw string if literal_eval can't parse it.
+    """
+    try:
+        return ast.literal_eval(raw)
+    except (ValueError, SyntaxError):
+        return raw
+
+
+def load_config(env_name: str) -> dict:
+    """Load Metal config from default.ini + per-env .ini, merged via configparser.
+
+    Returns a nested dict with sections as top-level keys. Sweep sections
+    (sweep.train.*, sweep.policy.*) are restructured into {"sweep": {"train": {...}, ...}}.
+    """
+    default_ini = METAL_CONFIG_DIR / "default.ini"
+    env_ini = METAL_CONFIG_DIR / "ocean" / f"{env_name}.ini"
+
+    if not env_ini.exists():
+        raise FileNotFoundError(f"no Metal config for env '{env_name}': {env_ini}")
+
+    p = configparser.ConfigParser()
+    p.read([str(default_ini), str(env_ini)])
+
+    config = {}
+    for section in p.sections():
+        parsed_section = {}
+        for key in p[section]:
+            parsed_section[key] = _parse_ini_value(p[section][key])
+        config[section] = parsed_section
+
+    # restructure sweep.train.X / sweep.policy.X into nested sweep dict
+    sweep = config.pop("sweep", {})
+    sweep_params = {"train": {}, "policy": {}, "env": {}}
+    sweep_sections_to_remove = []
+    for section_name, section_data in list(config.items()):
+        if section_name.startswith("sweep."):
+            parts = section_name.split(".", 2)  # sweep.train.learning_rate
+            if len(parts) == 3:
+                group, param = parts[1], parts[2]
+                sweep_params.setdefault(group, {})[param] = section_data
+            sweep_sections_to_remove.append(section_name)
+    for key in sweep_sections_to_remove:
+        config.pop(key)
+
+    # merge sweep metadata + param ranges
+    sweep_params = {k: v for k, v in sweep_params.items() if v}
+    config["sweep"] = {**sweep, **sweep_params}
+
+    return config
+
+
+def apply_cli_overrides(config: dict, env_name: str) -> dict:
+    """Build argparse from config keys, parse CLI, apply overrides.
+
+    Mutates and returns config. CLI args like --learning-rate override
+    config["train"]["learning_rate"].
+    """
+    parser = argparse.ArgumentParser(
+        description=f"Metal training for {env_name}",
+        add_help=True,
+    )
+
+    # register all config keys as CLI args (skip sweep sections)
+    arg_registry = {}  # maps cli_name -> (section, key)
+    for section in ("train", "policy", "vec", "env", "base"):
+        section_data = config.get(section, {})
+        for key, value in section_data.items():
+            cli_name = f"--{key.replace('_', '-')}"
+            if cli_name in arg_registry:
+                continue
+            arg_registry[cli_name] = (section, key)
+            if isinstance(value, bool):
+                parser.add_argument(cli_name, type=lambda x: x.lower() in ("1", "true", "yes"),
+                                    default=value)
+            elif isinstance(value, int):
+                parser.add_argument(cli_name, type=int, default=value)
+            elif isinstance(value, float):
+                parser.add_argument(cli_name, type=float, default=value)
+            elif isinstance(value, str):
+                parser.add_argument(cli_name, type=str, default=value)
+            else:
+                parser.add_argument(cli_name, type=type(value), default=value)
+
+    # extra CLI-only args
+    parser.add_argument("--no-overlap", action="store_true")
+    parser.add_argument("--fp16", action="store_true",
+                        help="fp16 training activations/grads (rollout stays fp32)")
+    parser.add_argument("--log-interval", type=int, default=10)
+    parser.add_argument("--trace-path", type=str, default="")
+    parser.add_argument("--trace-every", type=int, default=1)
+    parser.add_argument("--timeout", type=float, default=4.0,
+                        help="max sweep hours (default: 4)")
+    parser.add_argument("--max-trials", type=int, default=None)
+    parser.add_argument("--results", action="store_true",
+                        help="print sweep results and exit")
+
+    args = parser.parse_args()
+
+    # apply overrides back into config
+    parsed = vars(args)
+    for cli_name, (section, key) in arg_registry.items():
+        attr = cli_name.lstrip("-").replace("-", "_")
+        if attr in parsed:
+            config.setdefault(section, {})[key] = parsed[attr]
+
+    # handle special flags
+    if args.no_overlap:
+        config.setdefault("train", {})["overlap"] = 0
+    if args.fp16:
+        config.setdefault("train", {})["train_fp16"] = 1
+
+    config["_cli"] = {
+        "log_interval": args.log_interval,
+        "trace_path": args.trace_path,
+        "trace_every": args.trace_every,
+        "timeout": args.timeout,
+        "max_trials": args.max_trials,
+        "results": args.results,
+    }
+
+    return config
+
+
+# ============================================================================
 # training engine
 # ============================================================================
 
-# env configs (kwargs passed to my_init via Dict)
-ENV_DEFAULTS = {
-    "breakout": {
-        "frameskip": 4.0,
-        "width": 576.0,
-        "height": 330.0,
-        "paddle_width": 62.0,
-        "paddle_height": 8.0,
-        "ball_width": 32.0,
-        "ball_height": 32.0,
-        "brick_width": 32.0,
-        "brick_height": 12.0,
-        "brick_rows": 6.0,
-        "brick_cols": 18.0,
-        "initial_ball_speed": 256.0,
-        "max_ball_speed": 448.0,
-        "paddle_speed": 620.0,
-        "continuous": 0.0,
-    },
-    "g2048": {
-        "scaffolding_ratio": 0.0,
-    },
-    "osrs_pvp": {
-        "opponent_type": 16.0,  # OPP_PFSP
-        "shaping_scale": 0.0,
-        "shaping_enabled": 0.0,
-        "mask_in_obs": 1.0,
-    },
-    "osrs_zulrah": {
-        "gear_tier": 0.0,
-        "mask_in_obs": 1.0,
-    },
-    "osrs_inferno": {
-        "start_wave": 0.0,
-        "mask_in_obs": 1.0,
-    },
-}
-
-
-def build_configs(env_name, params):
-    """Convert a flat or nested params dict to the 4 config dicts for _C.create_pufferl.
+def build_configs(env_name: str, config: dict):
+    """Convert loaded config dict to the 4 config dicts for _C.create_pufferl.
 
     Accepts either:
+      - full config from load_config: {"train": {...}, "policy": {...}, "vec": {...}, ...}
       - nested Protein format: {"train": {...}, "policy": {...}}
-      - flat CLI format: {"horizon": 32, "learning_rate": 0.001, ...}
-        (wrapped into {"train": flat, "policy": flat} internally)
     """
-    # normalize: if there's no "train" key, treat the whole dict as flat
-    if "train" not in params:
-        params = {"train": params, "policy": params}
-
-    train = params.get("train", {})
-    policy = params.get("policy", {})
+    train = config.get("train", {})
+    policy = config.get("policy", {})
+    vec = config.get("vec", {})
+    env = config.get("env", {})
 
     horizon = int(train.get("horizon", 64))
-    total_agents = int(train.get("total_agents", 4096))
-    num_buffers = int(train.get("num_buffers", 1))
+    total_agents = int(vec.get("total_agents", train.get("total_agents", 4096)))
+    num_buffers = int(vec.get("num_buffers", train.get("num_buffers", 1)))
     minibatch_size = int(train.get("minibatch_size", 8192))
 
     # structural: minibatch can't exceed batch size
@@ -101,7 +199,7 @@ def build_configs(env_name, params):
     if minibatch_size > batch_size:
         minibatch_size = batch_size
 
-    config = {
+    c = {
         "horizon": horizon,
         "learning_rate": train.get("learning_rate", 0.1),
         "min_lr_ratio": train.get("min_lr_ratio", 0.0),
@@ -144,12 +242,12 @@ def build_configs(env_name, params):
         "hidden_size": float(int(policy.get("hidden_size", 64))),
         "num_layers": float(int(policy.get("num_layers", 2))),
     }
-    env_config = ENV_DEFAULTS[env_name].copy()
+    env_config = dict(env)
 
     if "scaffolding_ratio" in train:
         env_config["scaffolding_ratio"] = train["scaffolding_ratio"]
 
-    return config, vec_config, env_config, policy_config
+    return c, vec_config, env_config, policy_config
 
 
 class TrainingResult:
@@ -172,7 +270,7 @@ def run_training(config, vec_config, env_config, policy_config, *,
                  log_interval=5, score_key="score",
                  on_log=None, should_stop=None, on_iteration=None,
                  keep_alive=False):
-    """Run the Metal training loop. Single entry point for bench.py and sweep_bench.py.
+    """Run the Metal training loop.
 
     on_log(iteration, global_step, sps, losses, env_stats):
         called every log_interval iterations. return value ignored.
@@ -181,7 +279,7 @@ def run_training(config, vec_config, env_config, policy_config, *,
     on_iteration(pufferl, global_step):
         called every iteration (for PFSP weight updates etc.)
     keep_alive:
-        if True, don't close pufferl — caller gets it via result.pufferl.
+        if True, don't close pufferl -- caller gets it via result.pufferl.
     """
     total_agents = int(vec_config["total_agents"])
     horizon = int(config["horizon"])
@@ -222,7 +320,7 @@ def run_training(config, vec_config, env_config, policy_config, *,
                 losses = _C.log_losses(pufferl)
                 env_stats = _C.log_environments(pufferl)
 
-                # NaN guard — surfaces data integrity bugs immediately
+                # NaN guard -- surfaces data integrity bugs immediately
                 for loss_name in ("entropy", "pg_loss", "vf_loss"):
                     v = losses.get(loss_name)
                     if v is None or not math.isfinite(float(v)):
@@ -271,813 +369,6 @@ def run_training(config, vec_config, env_config, policy_config, *,
     return result
 
 
-
-# ============================================================================
-# sweep configuration
-# ============================================================================
-
-SWEEP_DIR_BASE = Path("runs/sweep_bench")
-DOWNSAMPLE_POINTS = 5
-LOG_INTERVAL = 5  # log every N iterations for early stop checks
-MIN_SPS_PER_ENV = {
-    "breakout": 300_000,
-    "g2048": 100_000,  # larger models (hs=256, L=5) can be slow
-    "osrs_pvp": 50_000,  # 373 obs, 7 heads — much heavier than breakout
-    "osrs_zulrah": 50_000,  # 105 obs, 6 heads
-    "osrs_inferno": 50_000,  # 200 obs, 6 heads, long episodes
-}
-
-# per-env score metric: which env_stats key to use as the optimization target.
-# defaults to "score" (which falls back to "episode_return") for most envs.
-SCORE_METRIC_PER_ENV = {
-    "osrs_pvp": "episode_return",  # denser signal than wins (which averages across PFSP pool)
-    "osrs_zulrah": "score",
-    "osrs_inferno": "episode_return",  # wave completion shaping + terminal ±1
-}
-
-# per-env metric distribution for Protein (how scores are transformed).
-# "linear" for unbounded scores, "percentile" for [0,1] rates.
-METRIC_DIST_PER_ENV = {
-    "osrs_pvp": "linear",
-    "osrs_inferno": "linear",
-    "osrs_zulrah": "linear",
-}
-
-# PFSP (prioritized fictitious self-play) config for osrs_pvp.
-# opponent name -> enum value (from osrs_pvp_types.h OpponentType)
-OPP_PFSP = 16  # special opponent type that samples from the pool
-PFSP_POOL = {
-    "true_random": 1, "panicking": 2, "weak_random": 3, "semi_random": 4,
-    "sticky_prayer": 5, "random_eater": 6, "prayer_rookie": 7, "improved": 8,
-    "onetick": 11, "unpredictable_improved": 12, "unpredictable_onetick": 13,
-    "novice_nh": 17, "apprentice_nh": 18, "competent_nh": 19,
-    "intermediate_nh": 20, "advanced_nh": 21, "proficient_nh": 22,
-    "expert_nh": 23, "master_nh": 24, "savant_nh": 25,
-    "nightmare_nh": 26, "veng_fighter": 27, "blood_healer": 28,
-    "gmaul_combo": 29,
-}
-PFSP_POOL_NAMES = list(PFSP_POOL.keys())
-PFSP_POOL_TYPES = list(PFSP_POOL.values())
-PFSP_P = 1.5  # weight exponent: (1-winrate)^p
-PFSP_WEIGHT_FLOOR = 0.02
-PFSP_UPDATE_INTERVAL = 2_000_000  # steps between weight recomputation
-PFSP_WARMUP_EPISODES = 50  # min episodes per opponent before reweighting
-
-
-
-# ============================================================================
-# per-env sweep configs and defaults
-# ============================================================================
-
-# shared sweep config skeleton (overridden per env)
-_SWEEP_BASE = {
-    "method": "Protein",
-    "metric": "score",
-    "metric_distribution": "linear",
-    "goal": "maximize",
-    "downsample": DOWNSAMPLE_POINTS,
-    "use_gpu": False,
-    "prune_pareto": True,
-    "early_stop_quantile": 0.3,
-}
-
-SWEEP_CONFIGS = {
-    "breakout": {
-        **_SWEEP_BASE,
-        "max_suggestion_cost": 1800,
-        "train": {
-            "total_timesteps": {"distribution": "log_normal", "min": 60_000_000, "max": 200_000_000, "scale": "time"},
-            "horizon": {"distribution": "uniform_pow2", "min": 16, "max": 64, "scale": "auto"},
-            "min_lr_ratio": {"distribution": "uniform", "min": 0.0, "max": 0.25, "scale": "auto"},
-            "learning_rate": {"distribution": "log_normal", "min": 0.01, "max": 0.3, "scale": 0.5},
-            "beta1": {"distribution": "uniform", "min": 0.5, "max": 0.95, "scale": "auto"},
-            "beta2": {"distribution": "logit_normal", "min": 0.95, "max": 0.99999, "scale": "auto"},
-            "eps": {"distribution": "log_normal", "min": 1e-6, "max": 1e-3, "scale": "auto"},
-            "ent_coef": {"distribution": "log_normal", "min": 0.0005, "max": 0.02, "scale": "auto"},
-            "gamma": {"distribution": "logit_normal", "min": 0.88, "max": 0.998, "scale": "auto"},
-            "gae_lambda": {"distribution": "logit_normal", "min": 0.8, "max": 0.995, "scale": "auto"},
-            "vtrace_rho_clip": {"distribution": "uniform", "min": 1.0, "max": 4.0, "scale": "auto"},
-            "vtrace_c_clip": {"distribution": "uniform", "min": 1.0, "max": 3.0, "scale": "auto"},
-            "prio_alpha": {"distribution": "logit_normal", "min": 0.01, "max": 0.95, "scale": "auto"},
-            "prio_beta0": {"distribution": "logit_normal", "min": 0.5, "max": 0.99, "scale": "auto"},
-            "clip_coef": {"distribution": "uniform", "min": 0.1, "max": 1.5, "scale": "auto"},
-            "vf_coef": {"distribution": "uniform", "min": 0.5, "max": 8.0, "scale": "auto"},
-            "vf_clip_coef": {"distribution": "uniform", "min": 0.3, "max": 6.0, "scale": "auto"},
-            "max_grad_norm": {"distribution": "uniform", "min": 0.5, "max": 4.0, "scale": "auto"},
-            "replay_ratio": {"distribution": "uniform", "min": 0.5, "max": 4.0, "scale": "auto"},
-            "minibatch_size": {"distribution": "uniform_pow2", "min": 16384, "max": 131072, "scale": "auto"},
-            "total_agents": {"distribution": "uniform_pow2", "min": 2048, "max": 8192, "scale": "auto"},
-            "num_buffers": {"distribution": "uniform_pow2", "min": 2, "max": 8, "scale": "auto"},
-            "ns_iters": {"distribution": "uniform", "min": 3, "max": 5.99, "scale": "auto"},
-        },
-        "policy": {
-            "num_layers": {"distribution": "uniform", "min": 2, "max": 3.5, "scale": "auto"},
-        },
-    },
-    "g2048": {
-        **_SWEEP_BASE,
-        "max_suggestion_cost": 7200,  # g2048 needs longer runs
-        "train": {
-            "total_timesteps": {"distribution": "log_normal", "min": 300_000_000, "max": 1_000_000_000, "scale": "time"},
-            "horizon": {"distribution": "uniform_pow2", "min": 16, "max": 64, "scale": "auto"},
-            "min_lr_ratio": {"distribution": "uniform", "min": 0.0, "max": 0.25, "scale": "auto"},
-            "learning_rate": {"distribution": "log_normal", "min": 0.0005, "max": 0.02, "scale": 0.5},
-            "beta1": {"distribution": "uniform", "min": 0.5, "max": 0.95, "scale": "auto"},
-            "beta2": {"distribution": "logit_normal", "min": 0.95, "max": 0.99999, "scale": "auto"},
-            "eps": {"distribution": "log_normal", "min": 1e-6, "max": 1e-3, "scale": "auto"},
-            "ent_coef": {"distribution": "log_normal", "min": 0.0005, "max": 0.05, "scale": "auto"},
-            "gamma": {"distribution": "logit_normal", "min": 0.97, "max": 0.9999, "scale": "auto"},
-            "gae_lambda": {"distribution": "logit_normal", "min": 0.5, "max": 0.995, "scale": "auto"},
-            "vtrace_rho_clip": {"distribution": "uniform", "min": 1.0, "max": 4.0, "scale": "auto"},
-            "vtrace_c_clip": {"distribution": "uniform", "min": 1.0, "max": 3.0, "scale": "auto"},
-            "prio_alpha": {"distribution": "logit_normal", "min": 0.01, "max": 0.95, "scale": "auto"},
-            "prio_beta0": {"distribution": "logit_normal", "min": 0.5, "max": 0.99, "scale": "auto"},
-            "clip_coef": {"distribution": "uniform", "min": 0.05, "max": 0.5, "scale": "auto"},
-            "vf_coef": {"distribution": "uniform", "min": 0.1, "max": 8.0, "scale": "auto"},
-            "vf_clip_coef": {"distribution": "uniform", "min": 0.05, "max": 6.0, "scale": "auto"},
-            "max_grad_norm": {"distribution": "uniform", "min": 0.2, "max": 6.0, "scale": "auto"},
-            "replay_ratio": {"distribution": "uniform", "min": 0.25, "max": 4.0, "scale": "auto"},
-            "minibatch_size": {"distribution": "uniform_pow2", "min": 4096, "max": 65536, "scale": "auto"},
-            "total_agents": {"distribution": "uniform_pow2", "min": 2048, "max": 16384, "scale": "auto"},
-            "num_buffers": {"distribution": "uniform_pow2", "min": 2, "max": 8, "scale": "auto"},
-            "ns_iters": {"distribution": "uniform", "min": 3, "max": 5.99, "scale": "auto"},
-            "scaffolding_ratio": {"distribution": "uniform", "min": 0.0, "max": 0.9, "scale": "auto"},
-        },
-        "policy": {
-            "hidden_size": {"distribution": "uniform_pow2", "min": 64, "max": 256, "scale": "auto"},
-            "num_layers": {"distribution": "uniform", "min": 2, "max": 5.5, "scale": "auto"},
-        },
-    },
-    "osrs_pvp": {
-        **_SWEEP_BASE,
-        "metric": "episode_return",
-        "metric_distribution": "linear",
-        "max_suggestion_cost": 3600,  # PFSP needs longer trials, 100M+ steps
-        "train": {
-            # ranges centered on storm proven config with generous room
-            "total_timesteps": {"distribution": "log_normal", "min": 50_000_000, "max": 200_000_000, "scale": "time"},
-            "horizon": {"distribution": "uniform_pow2", "min": 16, "max": 256, "scale": "auto"},
-            "learning_rate": {"distribution": "log_normal", "min": 0.0003, "max": 0.03, "scale": 0.5},
-            "ent_coef": {"distribution": "log_normal", "min": 0.00005, "max": 0.01, "scale": "auto"},
-            "gamma": {"distribution": "logit_normal", "min": 0.98, "max": 0.9999, "scale": "auto"},
-            "min_lr_ratio": {"distribution": "uniform", "min": 0.02, "max": 0.3, "scale": "auto"},
-            "beta2": {"distribution": "logit_normal", "min": 0.99, "max": 0.9999, "scale": "auto"},
-            "gae_lambda": {"distribution": "logit_normal", "min": 0.1, "max": 0.99, "scale": "auto"},
-            "beta1": {"distribution": "uniform", "min": 0.8, "max": 0.99, "scale": "auto"},
-            "eps": {"distribution": "log_normal", "min": 1e-6, "max": 1e-3, "scale": "auto"},
-            "vtrace_c_clip": {"distribution": "uniform", "min": 1.0, "max": 3.0, "scale": "auto"},
-            "prio_alpha": {"distribution": "logit_normal", "min": 0.5, "max": 0.99, "scale": "auto"},
-            "prio_beta0": {"distribution": "logit_normal", "min": 0.05, "max": 0.8, "scale": "auto"},
-            "clip_coef": {"distribution": "uniform", "min": 0.1, "max": 0.6, "scale": "auto"},
-            "vf_coef": {"distribution": "log_normal", "min": 0.5, "max": 10.0, "scale": "auto"},
-            "vf_clip_coef": {"distribution": "uniform", "min": 0.1, "max": 2.0, "scale": "auto"},
-            "max_grad_norm": {"distribution": "uniform", "min": 0.5, "max": 5.0, "scale": "auto"},
-            "replay_ratio": {"distribution": "uniform", "min": 0.1, "max": 2.0, "scale": "auto"},
-            "minibatch_size": {"distribution": "uniform_pow2", "min": 2048, "max": 8192, "scale": "auto"},
-            "num_buffers": {"distribution": "uniform_pow2", "min": 1, "max": 4, "scale": "auto"},
-        },
-        "policy": {
-            "hidden_size": {"distribution": "uniform_pow2", "min": 256, "max": 1024, "scale": "auto"},
-            "num_layers": {"distribution": "uniform", "min": 2.0, "max": 6.0, "scale": "auto"},
-        },
-    },
-    "osrs_zulrah": {
-        **_SWEEP_BASE,
-        "metric": "score",
-        "metric_distribution": "linear",
-        "max_suggestion_cost": 1800,
-        "train": {
-            # wide ranges — we have no idea what works for zulrah with reward shaping
-            "total_timesteps": {"distribution": "log_normal", "min": 20_000_000, "max": 200_000_000, "scale": "time"},
-            "horizon": {"distribution": "uniform_pow2", "min": 16, "max": 256, "scale": "auto"},
-            "learning_rate": {"distribution": "log_normal", "min": 0.0005, "max": 0.05, "scale": 0.5},
-            "ent_coef": {"distribution": "log_normal", "min": 0.0001, "max": 0.01, "scale": "auto"},
-            "gamma": {"distribution": "logit_normal", "min": 0.98, "max": 0.9999, "scale": "auto"},
-            "min_lr_ratio": {"distribution": "uniform", "min": 0.0, "max": 0.5, "scale": "auto"},
-            "beta1": {"distribution": "uniform", "min": 0.7, "max": 0.99, "scale": "auto"},
-            "beta2": {"distribution": "logit_normal", "min": 0.99, "max": 0.9999, "scale": "auto"},
-            "eps": {"distribution": "log_normal", "min": 1e-6, "max": 1e-3, "scale": "auto"},
-            "gae_lambda": {"distribution": "logit_normal", "min": 0.1, "max": 0.999, "scale": "auto"},
-            "vtrace_rho_clip": {"distribution": "uniform", "min": 1.0, "max": 4.0, "scale": "auto"},
-            "vtrace_c_clip": {"distribution": "uniform", "min": 1.0, "max": 3.0, "scale": "auto"},
-            "prio_alpha": {"distribution": "logit_normal", "min": 0.0, "max": 0.99, "scale": "auto"},
-            "prio_beta0": {"distribution": "logit_normal", "min": 0.01, "max": 0.95, "scale": "auto"},
-            "clip_coef": {"distribution": "uniform", "min": 0.05, "max": 0.6, "scale": "auto"},
-            "vf_coef": {"distribution": "log_normal", "min": 0.1, "max": 10.0, "scale": "auto"},
-            "vf_clip_coef": {"distribution": "uniform", "min": 0.05, "max": 4.0, "scale": "auto"},
-            "max_grad_norm": {"distribution": "uniform", "min": 0.3, "max": 8.0, "scale": "auto"},
-            "replay_ratio": {"distribution": "uniform", "min": 0.1, "max": 4.0, "scale": "auto"},
-            "minibatch_size": {"distribution": "uniform_pow2", "min": 2048, "max": 16384, "scale": "auto"},
-            "num_buffers": {"distribution": "uniform_pow2", "min": 1, "max": 4, "scale": "auto"},
-        },
-        "policy": {
-            "hidden_size": {"distribution": "uniform_pow2", "min": 128, "max": 1024, "scale": "auto"},
-            "num_layers": {"distribution": "uniform", "min": 1, "max": 6.0, "scale": "auto"},
-        },
-    },
-    "osrs_inferno": {
-        **_SWEEP_BASE,
-        "metric": "episode_return",
-        "metric_distribution": "linear",
-        "max_suggestion_cost": 1800,
-        "train": {
-            # wide ranges — inferno is very different from pvp/zulrah (long episodes,
-            # large action space, needs high entropy to explore, long horizon for credit
-            # assignment through multi-tick combat sequences)
-            "total_timesteps": {"distribution": "log_normal", "min": 50_000_000, "max": 500_000_000, "scale": "time"},
-            "horizon": {"distribution": "uniform_pow2", "min": 16, "max": 256, "scale": "auto"},
-            "learning_rate": {"distribution": "log_normal", "min": 0.0003, "max": 0.02, "scale": 0.5},
-            "ent_coef": {"distribution": "log_normal", "min": 0.001, "max": 0.05, "scale": "auto"},
-            "gamma": {"distribution": "logit_normal", "min": 0.99, "max": 0.9999, "scale": "auto"},
-            "min_lr_ratio": {"distribution": "uniform", "min": 0.0, "max": 0.3, "scale": "auto"},
-            "beta1": {"distribution": "uniform", "min": 0.7, "max": 0.99, "scale": "auto"},
-            "beta2": {"distribution": "logit_normal", "min": 0.99, "max": 0.9999, "scale": "auto"},
-            "eps": {"distribution": "log_normal", "min": 1e-6, "max": 1e-3, "scale": "auto"},
-            "gae_lambda": {"distribution": "logit_normal", "min": 0.5, "max": 0.999, "scale": "auto"},
-            "vtrace_rho_clip": {"distribution": "uniform", "min": 1.0, "max": 4.0, "scale": "auto"},
-            "vtrace_c_clip": {"distribution": "uniform", "min": 1.0, "max": 3.0, "scale": "auto"},
-            "prio_alpha": {"distribution": "logit_normal", "min": 0.0, "max": 0.99, "scale": "auto"},
-            "prio_beta0": {"distribution": "logit_normal", "min": 0.01, "max": 0.95, "scale": "auto"},
-            "clip_coef": {"distribution": "uniform", "min": 0.05, "max": 0.5, "scale": "auto"},
-            "vf_coef": {"distribution": "log_normal", "min": 0.1, "max": 5.0, "scale": "auto"},
-            "vf_clip_coef": {"distribution": "uniform", "min": 0.05, "max": 4.0, "scale": "auto"},
-            "max_grad_norm": {"distribution": "uniform", "min": 0.3, "max": 5.0, "scale": "auto"},
-            "replay_ratio": {"distribution": "uniform", "min": 0.1, "max": 3.0, "scale": "auto"},
-            "minibatch_size": {"distribution": "uniform_pow2", "min": 2048, "max": 16384, "scale": "auto"},
-            "num_buffers": {"distribution": "uniform_pow2", "min": 1, "max": 4, "scale": "auto"},
-        },
-        "policy": {
-            "hidden_size": {"distribution": "uniform_pow2", "min": 128, "max": 512, "scale": "auto"},
-            "num_layers": {"distribution": "uniform", "min": 1, "max": 5.0, "scale": "auto"},
-        },
-    },
-}
-
-DEFAULT_PARAMS_PER_ENV = {
-    # best known Metal breakout config (trial #203, score 854, tensor_ops NT)
-    "breakout": {
-        "train": {
-            "total_timesteps": 176_000_000,
-            "horizon": 32,
-            "min_lr_ratio": 0.113,
-            "learning_rate": 0.0669,
-            "beta1": 0.523,
-            "beta2": 0.993,
-            "eps": 6e-6,
-            "ent_coef": 0.0081,
-            "gamma": 0.920,
-            "gae_lambda": 0.931,
-            "vtrace_rho_clip": 1.828,
-            "vtrace_c_clip": 1.000,
-            "prio_alpha": 0.010,
-            "prio_beta0": 0.976,
-            "clip_coef": 0.756,
-            "vf_coef": 2.956,
-            "vf_clip_coef": 2.824,
-            "max_grad_norm": 2.046,
-            "replay_ratio": 2.10,
-            "minibatch_size": 65536,
-            "total_agents": 2048,
-            "num_buffers": 8,
-            "num_threads": 8,
-            "ns_iters": 5,
-        },
-        "policy": {
-            "hidden_size": 64,
-            "num_layers": 2,
-        },
-    },
-    # g2048 anchor: upstream-ish config adapted for Metal (hs=128 L=3 as baseline)
-    "g2048": {
-        "train": {
-            "total_timesteps": 200_000_000,
-            "horizon": 32,
-            "min_lr_ratio": 0.0,
-            "learning_rate": 0.003,
-            "beta1": 0.9,
-            "beta2": 0.999,
-            "eps": 1e-5,
-            "ent_coef": 0.01,
-            "gamma": 0.998,
-            "gae_lambda": 0.95,
-            "vtrace_rho_clip": 1.0,
-            "vtrace_c_clip": 1.0,
-            "prio_alpha": 0.01,
-            "prio_beta0": 0.4,
-            "clip_coef": 0.2,
-            "vf_coef": 1.0,
-            "vf_clip_coef": 0.1,
-            "max_grad_norm": 0.5,
-            "replay_ratio": 1.5,
-            "minibatch_size": 8192,
-            "total_agents": 4096,
-            "num_buffers": 4,
-            "num_threads": 4,
-            "ns_iters": 5,
-            "scaffolding_ratio": 0.5,
-        },
-        "policy": {
-            "hidden_size": 128,
-            "num_layers": 3,
-        },
-    },
-    # osrs_pvp anchor: from storm PufferLib 3.0+MPS proven config (95.5% winrate)
-    "osrs_pvp": {
-        "train": {
-            "total_timesteps": 100_000_000,
-            "horizon": 128,
-            "min_lr_ratio": 0.1,
-            "learning_rate": 0.00112,
-            "beta1": 0.95,
-            "beta2": 0.999,
-            "eps": 1e-5,
-            "ent_coef": 0.0016,
-            "gamma": 0.991,
-            "gae_lambda": 0.845,
-            "vtrace_rho_clip": 1.0,
-            "vtrace_c_clip": 1.5,
-            "prio_alpha": 0.914,
-            "prio_beta0": 0.218,
-            "clip_coef": 0.32,
-            "vf_coef": 2.5,
-            "vf_clip_coef": 0.5,
-            "max_grad_norm": 2.0,
-            "replay_ratio": 0.25,
-            "minibatch_size": 4096,
-            "total_agents": 2048,
-            "num_buffers": 2,
-            "num_threads": 2,
-            "ns_iters": 5,
-        },
-        "policy": {
-            "hidden_size": 512,
-            "num_layers": 3,
-        },
-    },
-    # osrs_inferno anchor: lr=0.002 confirmed stable at 10M steps (ret 0.76→1.57)
-    "osrs_inferno": {
-        "train": {
-            "total_timesteps": 100_000_000,
-            "horizon": 32,
-            "min_lr_ratio": 0.1,
-            "learning_rate": 0.002,
-            "beta1": 0.9,
-            "beta2": 0.999,
-            "eps": 1e-5,
-            "ent_coef": 0.005,
-            "gamma": 0.997,
-            "gae_lambda": 0.85,
-            "vtrace_rho_clip": 1.0,
-            "vtrace_c_clip": 1.5,
-            "prio_alpha": 0.5,
-            "prio_beta0": 0.3,
-            "clip_coef": 0.2,
-            "vf_coef": 0.5,
-            "vf_clip_coef": 0.5,
-            "max_grad_norm": 2.0,
-            "replay_ratio": 0.25,
-            "minibatch_size": 2048,
-            "total_agents": 2048,
-            "num_buffers": 2,
-            "num_threads": 2,
-            "ns_iters": 5,
-        },
-        "policy": {
-            "hidden_size": 256,
-            "num_layers": 2,
-        },
-    },
-    # osrs_zulrah anchor: sweep trial 601, fastest positive (score=0.88, 702K SPS)
-    "osrs_zulrah": {
-        "train": {
-            "total_timesteps": 26_000_000,
-            "horizon": 16,
-            "min_lr_ratio": 0.35,
-            "learning_rate": 0.015,
-            "beta1": 0.962,
-            "beta2": 0.999,
-            "eps": 6.3e-4,
-            "ent_coef": 0.0056,
-            "gamma": 0.997,
-            "gae_lambda": 0.824,
-            "vtrace_rho_clip": 1.25,
-            "vtrace_c_clip": 2.69,
-            "prio_alpha": 0.93,
-            "prio_beta0": 0.01,
-            "clip_coef": 0.256,
-            "vf_coef": 0.418,
-            "vf_clip_coef": 0.1,
-            "max_grad_norm": 4.64,
-            "replay_ratio": 0.25,
-            "minibatch_size": 2048,
-            "total_agents": 2048,
-            "num_buffers": 4,
-            "num_threads": 4,
-            "ns_iters": 5,
-        },
-        "policy": {
-            "hidden_size": 512,
-            "num_layers": 1,
-        },
-    },
-}
-
-
-
-
-# per-env score metric: which env_stats key to use as the optimization target.
-# defaults to "score" (which falls back to "episode_return") for most envs.
-SCORE_METRIC_PER_ENV = {
-    "osrs_pvp": "episode_return",  # denser signal than wins (which averages across PFSP pool)
-    "osrs_zulrah": "score",
-    "osrs_inferno": "episode_return",  # wave completion shaping + terminal ±1
-}
-
-# per-env metric distribution for Protein (how scores are transformed).
-# "linear" for unbounded scores, "percentile" for [0,1] rates.
-METRIC_DIST_PER_ENV = {
-    "osrs_pvp": "linear",
-    "osrs_inferno": "linear",
-    "osrs_zulrah": "linear",
-}
-
-
-# PFSP (prioritized fictitious self-play) config for osrs_pvp.
-# opponent name -> enum value (from osrs_pvp_types.h OpponentType)
-OPP_PFSP = 16  # special opponent type that samples from the pool
-PFSP_POOL = {
-    "true_random": 1, "panicking": 2, "weak_random": 3, "semi_random": 4,
-    "sticky_prayer": 5, "random_eater": 6, "prayer_rookie": 7, "improved": 8,
-    "onetick": 11, "unpredictable_improved": 12, "unpredictable_onetick": 13,
-    "novice_nh": 17, "apprentice_nh": 18, "competent_nh": 19,
-    "intermediate_nh": 20, "advanced_nh": 21, "proficient_nh": 22,
-    "expert_nh": 23, "master_nh": 24, "savant_nh": 25,
-    "nightmare_nh": 26, "veng_fighter": 27, "blood_healer": 28,
-    "gmaul_combo": 29,
-}
-PFSP_POOL_NAMES = list(PFSP_POOL.keys())
-PFSP_POOL_TYPES = list(PFSP_POOL.values())
-PFSP_P = 1.5  # weight exponent: (1-winrate)^p
-PFSP_WEIGHT_FLOOR = 0.02
-PFSP_UPDATE_INTERVAL = 2_000_000  # steps between weight recomputation
-PFSP_WARMUP_EPISODES = 50  # min episodes per opponent before reweighting
-
-
-# shared sweep config skeleton (overridden per env)
-_SWEEP_BASE = {
-    "method": "Protein",
-    "metric": "score",
-    "metric_distribution": "linear",
-    "goal": "maximize",
-    "downsample": DOWNSAMPLE_POINTS,
-    "use_gpu": False,
-    "prune_pareto": True,
-    "early_stop_quantile": 0.3,
-}
-
-SWEEP_CONFIGS = {
-    "breakout": {
-        **_SWEEP_BASE,
-        "max_suggestion_cost": 1800,
-        "train": {
-            "total_timesteps": {"distribution": "log_normal", "min": 60_000_000, "max": 200_000_000, "scale": "time"},
-            "horizon": {"distribution": "uniform_pow2", "min": 16, "max": 64, "scale": "auto"},
-            "min_lr_ratio": {"distribution": "uniform", "min": 0.0, "max": 0.25, "scale": "auto"},
-            "learning_rate": {"distribution": "log_normal", "min": 0.01, "max": 0.3, "scale": 0.5},
-            "beta1": {"distribution": "uniform", "min": 0.5, "max": 0.95, "scale": "auto"},
-            "beta2": {"distribution": "logit_normal", "min": 0.95, "max": 0.99999, "scale": "auto"},
-            "eps": {"distribution": "log_normal", "min": 1e-6, "max": 1e-3, "scale": "auto"},
-            "ent_coef": {"distribution": "log_normal", "min": 0.0005, "max": 0.02, "scale": "auto"},
-            "gamma": {"distribution": "logit_normal", "min": 0.88, "max": 0.998, "scale": "auto"},
-            "gae_lambda": {"distribution": "logit_normal", "min": 0.8, "max": 0.995, "scale": "auto"},
-            "vtrace_rho_clip": {"distribution": "uniform", "min": 1.0, "max": 4.0, "scale": "auto"},
-            "vtrace_c_clip": {"distribution": "uniform", "min": 1.0, "max": 3.0, "scale": "auto"},
-            "prio_alpha": {"distribution": "logit_normal", "min": 0.01, "max": 0.95, "scale": "auto"},
-            "prio_beta0": {"distribution": "logit_normal", "min": 0.5, "max": 0.99, "scale": "auto"},
-            "clip_coef": {"distribution": "uniform", "min": 0.1, "max": 1.5, "scale": "auto"},
-            "vf_coef": {"distribution": "uniform", "min": 0.5, "max": 8.0, "scale": "auto"},
-            "vf_clip_coef": {"distribution": "uniform", "min": 0.3, "max": 6.0, "scale": "auto"},
-            "max_grad_norm": {"distribution": "uniform", "min": 0.5, "max": 4.0, "scale": "auto"},
-            "replay_ratio": {"distribution": "uniform", "min": 0.5, "max": 4.0, "scale": "auto"},
-            "minibatch_size": {"distribution": "uniform_pow2", "min": 16384, "max": 131072, "scale": "auto"},
-            "total_agents": {"distribution": "uniform_pow2", "min": 2048, "max": 8192, "scale": "auto"},
-            "num_buffers": {"distribution": "uniform_pow2", "min": 2, "max": 8, "scale": "auto"},
-            "ns_iters": {"distribution": "uniform", "min": 3, "max": 5.99, "scale": "auto"},
-        },
-        "policy": {
-            "num_layers": {"distribution": "uniform", "min": 2, "max": 3.5, "scale": "auto"},
-        },
-    },
-    "g2048": {
-        **_SWEEP_BASE,
-        "max_suggestion_cost": 7200,  # g2048 needs longer runs
-        "train": {
-            "total_timesteps": {"distribution": "log_normal", "min": 300_000_000, "max": 1_000_000_000, "scale": "time"},
-            "horizon": {"distribution": "uniform_pow2", "min": 16, "max": 64, "scale": "auto"},
-            "min_lr_ratio": {"distribution": "uniform", "min": 0.0, "max": 0.25, "scale": "auto"},
-            "learning_rate": {"distribution": "log_normal", "min": 0.0005, "max": 0.02, "scale": 0.5},
-            "beta1": {"distribution": "uniform", "min": 0.5, "max": 0.95, "scale": "auto"},
-            "beta2": {"distribution": "logit_normal", "min": 0.95, "max": 0.99999, "scale": "auto"},
-            "eps": {"distribution": "log_normal", "min": 1e-6, "max": 1e-3, "scale": "auto"},
-            "ent_coef": {"distribution": "log_normal", "min": 0.0005, "max": 0.05, "scale": "auto"},
-            "gamma": {"distribution": "logit_normal", "min": 0.97, "max": 0.9999, "scale": "auto"},
-            "gae_lambda": {"distribution": "logit_normal", "min": 0.5, "max": 0.995, "scale": "auto"},
-            "vtrace_rho_clip": {"distribution": "uniform", "min": 1.0, "max": 4.0, "scale": "auto"},
-            "vtrace_c_clip": {"distribution": "uniform", "min": 1.0, "max": 3.0, "scale": "auto"},
-            "prio_alpha": {"distribution": "logit_normal", "min": 0.01, "max": 0.95, "scale": "auto"},
-            "prio_beta0": {"distribution": "logit_normal", "min": 0.5, "max": 0.99, "scale": "auto"},
-            "clip_coef": {"distribution": "uniform", "min": 0.05, "max": 0.5, "scale": "auto"},
-            "vf_coef": {"distribution": "uniform", "min": 0.1, "max": 8.0, "scale": "auto"},
-            "vf_clip_coef": {"distribution": "uniform", "min": 0.05, "max": 6.0, "scale": "auto"},
-            "max_grad_norm": {"distribution": "uniform", "min": 0.2, "max": 6.0, "scale": "auto"},
-            "replay_ratio": {"distribution": "uniform", "min": 0.25, "max": 4.0, "scale": "auto"},
-            "minibatch_size": {"distribution": "uniform_pow2", "min": 4096, "max": 65536, "scale": "auto"},
-            "total_agents": {"distribution": "uniform_pow2", "min": 2048, "max": 16384, "scale": "auto"},
-            "num_buffers": {"distribution": "uniform_pow2", "min": 2, "max": 8, "scale": "auto"},
-            "ns_iters": {"distribution": "uniform", "min": 3, "max": 5.99, "scale": "auto"},
-            "scaffolding_ratio": {"distribution": "uniform", "min": 0.0, "max": 0.9, "scale": "auto"},
-        },
-        "policy": {
-            "hidden_size": {"distribution": "uniform_pow2", "min": 64, "max": 256, "scale": "auto"},
-            "num_layers": {"distribution": "uniform", "min": 2, "max": 5.5, "scale": "auto"},
-        },
-    },
-    "osrs_pvp": {
-        **_SWEEP_BASE,
-        "metric": "episode_return",
-        "metric_distribution": "linear",
-        "max_suggestion_cost": 3600,  # PFSP needs longer trials, 100M+ steps
-        "train": {
-            # ranges centered on storm proven config with generous room
-            "total_timesteps": {"distribution": "log_normal", "min": 50_000_000, "max": 200_000_000, "scale": "time"},
-            "horizon": {"distribution": "uniform_pow2", "min": 16, "max": 256, "scale": "auto"},
-            "learning_rate": {"distribution": "log_normal", "min": 0.0003, "max": 0.03, "scale": 0.5},
-            "ent_coef": {"distribution": "log_normal", "min": 0.00005, "max": 0.01, "scale": "auto"},
-            "gamma": {"distribution": "logit_normal", "min": 0.98, "max": 0.9999, "scale": "auto"},
-            "min_lr_ratio": {"distribution": "uniform", "min": 0.02, "max": 0.3, "scale": "auto"},
-            "beta2": {"distribution": "logit_normal", "min": 0.99, "max": 0.9999, "scale": "auto"},
-            "gae_lambda": {"distribution": "logit_normal", "min": 0.1, "max": 0.99, "scale": "auto"},
-            "beta1": {"distribution": "uniform", "min": 0.8, "max": 0.99, "scale": "auto"},
-            "eps": {"distribution": "log_normal", "min": 1e-6, "max": 1e-3, "scale": "auto"},
-            "vtrace_c_clip": {"distribution": "uniform", "min": 1.0, "max": 3.0, "scale": "auto"},
-            "prio_alpha": {"distribution": "logit_normal", "min": 0.5, "max": 0.99, "scale": "auto"},
-            "prio_beta0": {"distribution": "logit_normal", "min": 0.05, "max": 0.8, "scale": "auto"},
-            "clip_coef": {"distribution": "uniform", "min": 0.1, "max": 0.6, "scale": "auto"},
-            "vf_coef": {"distribution": "log_normal", "min": 0.5, "max": 10.0, "scale": "auto"},
-            "vf_clip_coef": {"distribution": "uniform", "min": 0.1, "max": 2.0, "scale": "auto"},
-            "max_grad_norm": {"distribution": "uniform", "min": 0.5, "max": 5.0, "scale": "auto"},
-            "replay_ratio": {"distribution": "uniform", "min": 0.1, "max": 2.0, "scale": "auto"},
-            "minibatch_size": {"distribution": "uniform_pow2", "min": 2048, "max": 8192, "scale": "auto"},
-            "num_buffers": {"distribution": "uniform_pow2", "min": 1, "max": 4, "scale": "auto"},
-        },
-        "policy": {
-            "hidden_size": {"distribution": "uniform_pow2", "min": 256, "max": 1024, "scale": "auto"},
-            "num_layers": {"distribution": "uniform", "min": 2.0, "max": 6.0, "scale": "auto"},
-        },
-    },
-    "osrs_zulrah": {
-        **_SWEEP_BASE,
-        "metric": "score",
-        "metric_distribution": "linear",
-        "max_suggestion_cost": 1800,
-        "train": {
-            # wide ranges — we have no idea what works for zulrah with reward shaping
-            "total_timesteps": {"distribution": "log_normal", "min": 20_000_000, "max": 200_000_000, "scale": "time"},
-            "horizon": {"distribution": "uniform_pow2", "min": 16, "max": 256, "scale": "auto"},
-            "learning_rate": {"distribution": "log_normal", "min": 0.0005, "max": 0.05, "scale": 0.5},
-            "ent_coef": {"distribution": "log_normal", "min": 0.0001, "max": 0.01, "scale": "auto"},
-            "gamma": {"distribution": "logit_normal", "min": 0.98, "max": 0.9999, "scale": "auto"},
-            "min_lr_ratio": {"distribution": "uniform", "min": 0.0, "max": 0.5, "scale": "auto"},
-            "beta1": {"distribution": "uniform", "min": 0.7, "max": 0.99, "scale": "auto"},
-            "beta2": {"distribution": "logit_normal", "min": 0.99, "max": 0.9999, "scale": "auto"},
-            "eps": {"distribution": "log_normal", "min": 1e-6, "max": 1e-3, "scale": "auto"},
-            "gae_lambda": {"distribution": "logit_normal", "min": 0.1, "max": 0.999, "scale": "auto"},
-            "vtrace_rho_clip": {"distribution": "uniform", "min": 1.0, "max": 4.0, "scale": "auto"},
-            "vtrace_c_clip": {"distribution": "uniform", "min": 1.0, "max": 3.0, "scale": "auto"},
-            "prio_alpha": {"distribution": "logit_normal", "min": 0.0, "max": 0.99, "scale": "auto"},
-            "prio_beta0": {"distribution": "logit_normal", "min": 0.01, "max": 0.95, "scale": "auto"},
-            "clip_coef": {"distribution": "uniform", "min": 0.05, "max": 0.6, "scale": "auto"},
-            "vf_coef": {"distribution": "log_normal", "min": 0.1, "max": 10.0, "scale": "auto"},
-            "vf_clip_coef": {"distribution": "uniform", "min": 0.05, "max": 4.0, "scale": "auto"},
-            "max_grad_norm": {"distribution": "uniform", "min": 0.3, "max": 8.0, "scale": "auto"},
-            "replay_ratio": {"distribution": "uniform", "min": 0.1, "max": 4.0, "scale": "auto"},
-            "minibatch_size": {"distribution": "uniform_pow2", "min": 2048, "max": 16384, "scale": "auto"},
-            "num_buffers": {"distribution": "uniform_pow2", "min": 1, "max": 4, "scale": "auto"},
-        },
-        "policy": {
-            "hidden_size": {"distribution": "uniform_pow2", "min": 128, "max": 1024, "scale": "auto"},
-            "num_layers": {"distribution": "uniform", "min": 1, "max": 6.0, "scale": "auto"},
-        },
-    },
-    "osrs_inferno": {
-        **_SWEEP_BASE,
-        "metric": "episode_return",
-        "metric_distribution": "linear",
-        "max_suggestion_cost": 1800,
-        "train": {
-            # wide ranges — inferno is very different from pvp/zulrah (long episodes,
-            # large action space, needs high entropy to explore, long horizon for credit
-            # assignment through multi-tick combat sequences)
-            "total_timesteps": {"distribution": "log_normal", "min": 50_000_000, "max": 500_000_000, "scale": "time"},
-            "horizon": {"distribution": "uniform_pow2", "min": 16, "max": 256, "scale": "auto"},
-            "learning_rate": {"distribution": "log_normal", "min": 0.0003, "max": 0.02, "scale": 0.5},
-            "ent_coef": {"distribution": "log_normal", "min": 0.001, "max": 0.05, "scale": "auto"},
-            "gamma": {"distribution": "logit_normal", "min": 0.99, "max": 0.9999, "scale": "auto"},
-            "min_lr_ratio": {"distribution": "uniform", "min": 0.0, "max": 0.3, "scale": "auto"},
-            "beta1": {"distribution": "uniform", "min": 0.7, "max": 0.99, "scale": "auto"},
-            "beta2": {"distribution": "logit_normal", "min": 0.99, "max": 0.9999, "scale": "auto"},
-            "eps": {"distribution": "log_normal", "min": 1e-6, "max": 1e-3, "scale": "auto"},
-            "gae_lambda": {"distribution": "logit_normal", "min": 0.5, "max": 0.999, "scale": "auto"},
-            "vtrace_rho_clip": {"distribution": "uniform", "min": 1.0, "max": 4.0, "scale": "auto"},
-            "vtrace_c_clip": {"distribution": "uniform", "min": 1.0, "max": 3.0, "scale": "auto"},
-            "prio_alpha": {"distribution": "logit_normal", "min": 0.0, "max": 0.99, "scale": "auto"},
-            "prio_beta0": {"distribution": "logit_normal", "min": 0.01, "max": 0.95, "scale": "auto"},
-            "clip_coef": {"distribution": "uniform", "min": 0.05, "max": 0.5, "scale": "auto"},
-            "vf_coef": {"distribution": "log_normal", "min": 0.1, "max": 5.0, "scale": "auto"},
-            "vf_clip_coef": {"distribution": "uniform", "min": 0.05, "max": 4.0, "scale": "auto"},
-            "max_grad_norm": {"distribution": "uniform", "min": 0.3, "max": 5.0, "scale": "auto"},
-            "replay_ratio": {"distribution": "uniform", "min": 0.1, "max": 3.0, "scale": "auto"},
-            "minibatch_size": {"distribution": "uniform_pow2", "min": 2048, "max": 16384, "scale": "auto"},
-            "num_buffers": {"distribution": "uniform_pow2", "min": 1, "max": 4, "scale": "auto"},
-        },
-        "policy": {
-            "hidden_size": {"distribution": "uniform_pow2", "min": 128, "max": 512, "scale": "auto"},
-            "num_layers": {"distribution": "uniform", "min": 1, "max": 5.0, "scale": "auto"},
-        },
-    },
-}
-
-DEFAULT_PARAMS_PER_ENV = {
-    # best known Metal breakout config (trial #203, score 854, tensor_ops NT)
-    "breakout": {
-        "train": {
-            "total_timesteps": 176_000_000,
-            "horizon": 32,
-            "min_lr_ratio": 0.113,
-            "learning_rate": 0.0669,
-            "beta1": 0.523,
-            "beta2": 0.993,
-            "eps": 6e-6,
-            "ent_coef": 0.0081,
-            "gamma": 0.920,
-            "gae_lambda": 0.931,
-            "vtrace_rho_clip": 1.828,
-            "vtrace_c_clip": 1.000,
-            "prio_alpha": 0.010,
-            "prio_beta0": 0.976,
-            "clip_coef": 0.756,
-            "vf_coef": 2.956,
-            "vf_clip_coef": 2.824,
-            "max_grad_norm": 2.046,
-            "replay_ratio": 2.10,
-            "minibatch_size": 65536,
-            "total_agents": 2048,
-            "num_buffers": 8,
-            "num_threads": 8,
-            "ns_iters": 5,
-        },
-        "policy": {
-            "hidden_size": 64,
-            "num_layers": 2,
-        },
-    },
-    # g2048 anchor: upstream-ish config adapted for Metal (hs=128 L=3 as baseline)
-    "g2048": {
-        "train": {
-            "total_timesteps": 200_000_000,
-            "horizon": 32,
-            "min_lr_ratio": 0.0,
-            "learning_rate": 0.003,
-            "beta1": 0.9,
-            "beta2": 0.999,
-            "eps": 1e-5,
-            "ent_coef": 0.01,
-            "gamma": 0.998,
-            "gae_lambda": 0.95,
-            "vtrace_rho_clip": 1.0,
-            "vtrace_c_clip": 1.0,
-            "prio_alpha": 0.01,
-            "prio_beta0": 0.4,
-            "clip_coef": 0.2,
-            "vf_coef": 1.0,
-            "vf_clip_coef": 0.1,
-            "max_grad_norm": 0.5,
-            "replay_ratio": 1.5,
-            "minibatch_size": 8192,
-            "total_agents": 4096,
-            "num_buffers": 4,
-            "num_threads": 4,
-            "ns_iters": 5,
-            "scaffolding_ratio": 0.5,
-        },
-        "policy": {
-            "hidden_size": 128,
-            "num_layers": 3,
-        },
-    },
-    # osrs_pvp anchor: from storm PufferLib 3.0+MPS proven config (95.5% winrate)
-    "osrs_pvp": {
-        "train": {
-            "total_timesteps": 100_000_000,
-            "horizon": 128,
-            "min_lr_ratio": 0.1,
-            "learning_rate": 0.00112,
-            "beta1": 0.95,
-            "beta2": 0.999,
-            "eps": 1e-5,
-            "ent_coef": 0.0016,
-            "gamma": 0.991,
-            "gae_lambda": 0.845,
-            "vtrace_rho_clip": 1.0,
-            "vtrace_c_clip": 1.5,
-            "prio_alpha": 0.914,
-            "prio_beta0": 0.218,
-            "clip_coef": 0.32,
-            "vf_coef": 2.5,
-            "vf_clip_coef": 0.5,
-            "max_grad_norm": 2.0,
-            "replay_ratio": 0.25,
-            "minibatch_size": 4096,
-            "total_agents": 2048,
-            "num_buffers": 2,
-            "num_threads": 2,
-            "ns_iters": 5,
-        },
-        "policy": {
-            "hidden_size": 512,
-            "num_layers": 3,
-        },
-    },
-    # osrs_inferno anchor: lr=0.002 confirmed stable at 10M steps (ret 0.76→1.57)
-    "osrs_inferno": {
-        "train": {
-            "total_timesteps": 100_000_000,
-            "horizon": 32,
-            "min_lr_ratio": 0.1,
-            "learning_rate": 0.002,
-            "beta1": 0.9,
-            "beta2": 0.999,
-            "eps": 1e-5,
-            "ent_coef": 0.005,
-            "gamma": 0.997,
-            "gae_lambda": 0.85,
-            "vtrace_rho_clip": 1.0,
-            "vtrace_c_clip": 1.5,
-            "prio_alpha": 0.5,
-            "prio_beta0": 0.3,
-            "clip_coef": 0.2,
-            "vf_coef": 0.5,
-            "vf_clip_coef": 0.5,
-            "max_grad_norm": 2.0,
-            "replay_ratio": 0.25,
-            "minibatch_size": 2048,
-            "total_agents": 2048,
-            "num_buffers": 2,
-            "num_threads": 2,
-            "ns_iters": 5,
-        },
-        "policy": {
-            "hidden_size": 256,
-            "num_layers": 2,
-        },
-    },
-    # osrs_zulrah anchor: sweep trial 601, fastest positive (score=0.88, 702K SPS)
-    "osrs_zulrah": {
-        "train": {
-            "total_timesteps": 26_000_000,
-            "horizon": 16,
-            "min_lr_ratio": 0.35,
-            "learning_rate": 0.015,
-            "beta1": 0.962,
-            "beta2": 0.999,
-            "eps": 6.3e-4,
-            "ent_coef": 0.0056,
-            "gamma": 0.997,
-            "gae_lambda": 0.824,
-            "vtrace_rho_clip": 1.25,
-            "vtrace_c_clip": 2.69,
-            "prio_alpha": 0.93,
-            "prio_beta0": 0.01,
-            "clip_coef": 0.256,
-            "vf_coef": 0.418,
-            "vf_clip_coef": 0.1,
-            "max_grad_norm": 4.64,
-            "replay_ratio": 0.25,
-            "minibatch_size": 2048,
-            "total_agents": 2048,
-            "num_buffers": 4,
-            "num_threads": 4,
-            "ns_iters": 5,
-        },
-        "policy": {
-            "hidden_size": 512,
-            "num_layers": 1,
-        },
-    },
-}
-
-
-
 # ============================================================================
 # sweep functions
 # ============================================================================
@@ -1102,45 +393,33 @@ def load_observations(path: Path) -> list[dict]:
     return records
 
 
-
-
-
-def _init_pfsp(pufferl: object, total_agents: int) -> dict:
-    """Initialize PFSP pool with uniform weights. Returns PFSP state dict."""
-    pool_size = len(PFSP_POOL_TYPES)
-    cum_weights = [int((i + 1) / pool_size * 1000) for i in range(pool_size)]
-    cum_weights[-1] = 1000
-    pufferl.set_pfsp_weights(PFSP_POOL_TYPES, cum_weights)
-    return {
-        "cum_episodes": [0.0] * pool_size,
-        "last_update_step": 0,
+def _build_sweep_config(config: dict) -> dict:
+    """Extract Protein sweep config from loaded config dict."""
+    sweep = config.get("sweep", {})
+    sweep_config = {
+        "method": sweep.get("method", "Protein"),
+        "metric": config.get("base", {}).get("score_metric", "score"),
+        "metric_distribution": sweep.get("metric_distribution", "linear"),
+        "goal": sweep.get("goal", "maximize"),
+        "downsample": int(sweep.get("downsample", 5)),
+        "use_gpu": False,
+        "prune_pareto": sweep.get("prune_pareto", True),
+        "early_stop_quantile": float(sweep.get("early_stop_quantile", 0.3)),
+        "max_suggestion_cost": int(sweep.get("max_suggestion_cost", 1800)),
     }
+    # add sweep param ranges
+    for group in ("train", "policy", "env"):
+        if group in sweep and isinstance(sweep[group], dict):
+            sweep_config[group] = sweep[group]
+    return sweep_config
 
 
-def _update_pfsp(pufferl: object, pfsp_state: dict, global_step: int) -> None:
-    """Recompute PFSP weights based on per-opponent win rates."""
-    if (global_step - pfsp_state["last_update_step"]) < PFSP_UPDATE_INTERVAL:
-        return
-
-    wins_delta, episodes_delta = pufferl.get_pfsp_stats()
-    pool_size = len(PFSP_POOL_TYPES)
-
-    for i in range(pool_size):
-        pfsp_state["cum_episodes"][i] += episodes_delta[i]
-
-    if min(pfsp_state["cum_episodes"]) < PFSP_WARMUP_EPISODES:
-        pfsp_state["last_update_step"] = global_step
-        return
-
-    raw_weights = []
-    for i in range(pool_size):
-        wr = wins_delta[i] / max(episodes_delta[i], 1)
-        raw_weights.append(max((1.0 - wr) ** PFSP_P, PFSP_WEIGHT_FLOOR))
-    total_w = sum(raw_weights)
-    cum_weights = [int(sum(raw_weights[:i + 1]) / total_w * 1000) for i in range(pool_size)]
-    cum_weights[-1] = 1000
-    pufferl.set_pfsp_weights(PFSP_POOL_TYPES, cum_weights)
-    pfsp_state["last_update_step"] = global_step
+def _build_default_params(config: dict) -> dict:
+    """Extract default params (train + policy) from loaded config dict."""
+    return {
+        "train": dict(config.get("train", {})),
+        "policy": dict(config.get("policy", {})),
+    }
 
 
 def run_trial(
@@ -1149,11 +428,15 @@ def run_trial(
     params: dict,
     protein: Protein,
     sweep_dir: Path,
+    config: dict,
 ) -> dict | None:
     """Run a single training trial using the shared training loop."""
+    from pufferlib.ocean.osrs_pvp.pfsp import (
+        OPP_PFSP, POOL_TYPES, init_pfsp, update_pfsp,
+    )
+
     flat = dict(pufferlib.unroll_nested_dict(params))
     total_steps = int(flat.get("train/total_timesteps", 0))
-    total_agents = int(flat.get("train/total_agents", 4096))
 
     print(f"\n{'='*70}")
     print(f"trial {trial_idx}  ({total_steps/1e6:.1f}M steps, muon)")
@@ -1168,7 +451,21 @@ def run_trial(
     with (log_dir / "config.json").open("w") as f:
         json.dump({"params": params}, f, indent=2)
 
-    config, vec_config, env_config, policy_config = build_configs(env_name, params)
+    # merge trial params into full config for build_configs
+    trial_config = {
+        "train": params.get("train", {}),
+        "policy": params.get("policy", {}),
+        "vec": {
+            "total_agents": params.get("train", {}).get("total_agents",
+                config.get("vec", {}).get("total_agents", 2048)),
+            "num_buffers": params.get("train", {}).get("num_buffers",
+                config.get("vec", {}).get("num_buffers", 1)),
+        },
+        "env": config.get("env", {}),
+    }
+    c, vec_config, env_config, policy_config = build_configs(env_name, trial_config)
+
+    total_agents = int(vec_config["total_agents"])
 
     # PFSP setup for osrs_pvp
     pfsp_state = None
@@ -1177,7 +474,9 @@ def run_trial(
 
     last_report_time = time.time()
     log_count = 0
-    score_key = SCORE_METRIC_PER_ENV.get(env_name, "score")
+    score_key = config.get("base", {}).get("score_metric", "score")
+    min_sps = int(config.get("sweep", {}).get("min_sps", 100_000))
+    downsample_points = int(config.get("sweep", {}).get("downsample", 5))
 
     def on_log(iteration, global_step, sps, losses, env_stats):
         nonlocal last_report_time, log_count
@@ -1193,10 +492,8 @@ def run_trial(
             last_report_time = now
 
     def should_stop(score, elapsed):
-        # SPS abort: check first 2 log points
         if log_count <= 2 and result_ref[0] and result_ref[0].entries:
             recent_sps = result_ref[0].entries[-1]["sps"]
-            min_sps = MIN_SPS_PER_ENV.get(env_name, 100_000)
             if recent_sps < min_sps:
                 print(f"  ABORT: SPS={recent_sps:.0f} < {min_sps}")
                 return True
@@ -1207,20 +504,19 @@ def run_trial(
     def on_iteration(pufferl, global_step):
         if pfsp_state is not None:
             if not pfsp_initialized[0]:
-                _init_pfsp(pufferl, total_agents)
-                pfsp_state["cum_episodes"] = [0.0] * len(PFSP_POOL_TYPES)
+                init_pfsp(pufferl, total_agents)
+                pfsp_state["cum_episodes"] = [0.0] * len(POOL_TYPES)
                 pfsp_state["last_update_step"] = 0
                 pfsp_initialized[0] = True
-                print(f"  PFSP: {len(PFSP_POOL_TYPES)} opponents, uniform initial weights")
-            _update_pfsp(pufferl, pfsp_state, global_step)
+                print(f"  PFSP: {len(POOL_TYPES)} opponents, uniform initial weights")
+            update_pfsp(pufferl, pfsp_state, global_step)
 
     result_ref = [None]
     start_time = time.time()
 
     try:
-
         result = run_training(
-            config, vec_config, env_config, policy_config,
+            c, vec_config, env_config, policy_config,
             log_interval=LOG_INTERVAL,
             score_key=score_key,
             on_log=on_log,
@@ -1242,8 +538,8 @@ def run_trial(
     scores = [e["score"] for e in entries]
     steps = [e["step"] for e in entries]
 
-    downsampled_scores = downsample(scores, DOWNSAMPLE_POINTS)
-    downsampled_steps = downsample(steps, DOWNSAMPLE_POINTS)
+    downsampled_scores = downsample(scores, downsample_points)
+    downsampled_steps = downsample(steps, downsample_points)
 
     observations = []
     for score, step in zip(downsampled_scores, downsampled_steps):
@@ -1369,17 +665,14 @@ def print_results(obs_path: Path) -> None:
         )
 
 
-def run_sweep(env_name: str, max_trials: int | None, timeout_h: float) -> None:
-    """Run the Protein sweep for a simple env."""
+def run_sweep(env_name: str, config: dict, max_trials: int | None, timeout_h: float) -> None:
+    """Run the Protein sweep for a Metal env."""
     sweep_dir = SWEEP_DIR_BASE / env_name
     sweep_dir.mkdir(parents=True, exist_ok=True)
     obs_path = sweep_dir / "observations.jsonl"
 
-    sweep_config = deepcopy(SWEEP_CONFIGS[env_name])
-    # override metric distribution per env if specified
-    if env_name in METRIC_DIST_PER_ENV:
-        sweep_config["metric_distribution"] = METRIC_DIST_PER_ENV[env_name]
-    default_params = DEFAULT_PARAMS_PER_ENV[env_name]
+    sweep_config = _build_sweep_config(config)
+    default_params = _build_default_params(config)
 
     protein = Protein(sweep_config, use_gpu=False, prune_pareto=True)
 
@@ -1388,7 +681,6 @@ def run_sweep(env_name: str, max_trials: int | None, timeout_h: float) -> None:
     if existing_records:
         for r in existing_records:
             existing_trials.add(r["trial"])
-            # backfill params added after old sweep runs
             if "train" in r["params"]:
                 r["params"]["train"].setdefault("ns_iters", 5)
             score = r.get("score", r.get("episode_return", 0))
@@ -1403,7 +695,7 @@ def run_sweep(env_name: str, max_trials: int | None, timeout_h: float) -> None:
         {k: v for k, v in sweep_config.items() if isinstance(v, dict)}
     )))
 
-    score_key = SCORE_METRIC_PER_ENV.get(env_name, "score")
+    score_key = config.get("base", {}).get("score_metric", "score")
     metric_dist = sweep_config.get("metric_distribution", "linear")
     print(f"protein sweep ({env_name}, metal, in-process)")
     print(f"  metric: {score_key} ({metric_dist} distribution)")
@@ -1432,7 +724,7 @@ def run_sweep(env_name: str, max_trials: int | None, timeout_h: float) -> None:
                 pred_score = info.get("score", 0)
                 print(f"\nprotein prediction: score={pred_score:.3f}, cost={pred_cost:.0f}s")
 
-        result = run_trial(trial_idx, env_name, params, protein, sweep_dir)
+        result = run_trial(trial_idx, env_name, params, protein, sweep_dir, config)
 
         if result is not None:
             for obs in result["observations"]:
@@ -1462,125 +754,44 @@ def run_sweep(env_name: str, max_trials: int | None, timeout_h: float) -> None:
     print_results(obs_path)
 
 
-
-
 # ============================================================================
-# CLI: train mode (single run)
+# CLI: train mode
 # ============================================================================
 
-def parse_args():
-    p = argparse.ArgumentParser(description="Metal training for simple envs")
-    p.add_argument("--env", type=str, required=True,
-                   choices=list(ENV_DEFAULTS.keys()))
-    p.add_argument("--total-agents", type=int, default=2048)
-    p.add_argument("--hidden-size", type=int, default=128)
-    p.add_argument("--num-layers", type=int, default=1)
-    p.add_argument("--horizon", type=int, default=32)
-    p.add_argument("--total-timesteps", type=int, default=5_000_000)
-    p.add_argument("--learning-rate", type=float, default=0.001)
-    p.add_argument("--beta1", type=float, default=0.95)
-    p.add_argument("--beta2", type=float, default=0.999)
-    p.add_argument("--eps", type=float, default=1e-12)
-    p.add_argument("--minibatch-size", type=int, default=4096)
-    p.add_argument("--replay-ratio", type=float, default=0.25,
-                   help="minibatch replays per rollout. values above ~0.5 cause catastrophic "
-                        "policy drift in multi-head action spaces (7+ heads). breakout (1 head) "
-                        "tolerates 1.9+, osrs_pvp (7 heads) needs 0.25-0.5.")
-    p.add_argument("--ent-coef", type=float, default=0.01)
-    p.add_argument("--gamma", type=float, default=0.99)
-    p.add_argument("--gae-lambda", type=float, default=0.95)
-    p.add_argument("--vtrace-rho-clip", type=float, default=1.0)
-    p.add_argument("--vtrace-c-clip", type=float, default=1.0)
-    p.add_argument("--prio-alpha", type=float, default=0.0)
-    p.add_argument("--prio-beta0", type=float, default=0.4)
-    p.add_argument("--clip-coef", type=float, default=0.2)
-    p.add_argument("--vf-coef", type=float, default=0.5)
-    p.add_argument("--vf-clip-coef", type=float, default=0.1)
-    p.add_argument("--max-grad-norm", type=float, default=0.5)
-    p.add_argument("--no-overlap", action="store_true")
-    p.add_argument("--log-interval", type=int, default=10)
-    p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--trace-path", type=str, default="",
-                   help="optional jsonl trace output path for parity debugging")
-    p.add_argument("--trace-every", type=int, default=1,
-                   help="write one trace row every N training iterations")
-    p.add_argument("--num-buffers", type=int, default=1)
-    p.add_argument("--profile", action="store_true",
-                   help="GPU sync after each training phase for accurate per-kernel profiling")
-    p.add_argument("--cpu-inference", action="store_true",
-                   help="CPU forward pass during rollout (no GPU sync, uses Accelerate cblas)")
-    p.add_argument("--fp16", action="store_true",
-                   help="fp16 training activations/grads (rollout stays fp32)")
-    p.add_argument("--ns-iters", type=int, default=5,
-                   help="Newton-Schulz iterations in muon optimizer (1-5, default 5)")
-    p.add_argument("--scaffolding-ratio", type=float, default=None,
-                   help="Override env scaffolding_ratio (g2048 only)")
-    p.add_argument("--min-lr-ratio", type=float, default=0.0,
-                   help="minimum LR as ratio of initial (upstream default: 0.0)")
-    return p.parse_args()
+def train_cli(env_name: str):
+    config = load_config(env_name)
+    config = apply_cli_overrides(config, env_name)
+    cli = config.pop("_cli", {})
 
+    c, vec_config, env_config, policy_config = build_configs(env_name, config)
 
+    total_agents = int(vec_config["total_agents"])
+    hidden_size = int(policy_config["hidden_size"])
+    num_layers = int(policy_config["num_layers"])
+    horizon = int(c["horizon"])
+    overlap = bool(int(c["overlap"]))
+    cpu_infer = bool(int(c["cpu_inference"]))
+    fp16 = bool(int(c["train_fp16"]))
+    seed = int(c["seed"])
 
-def train_cli():
-    args = parse_args()
-
-    params = {
-        "train": {
-            "horizon": args.horizon,
-            "learning_rate": args.learning_rate,
-            "min_lr_ratio": args.min_lr_ratio,
-            "beta1": args.beta1,
-            "beta2": args.beta2,
-            "eps": args.eps,
-            "minibatch_size": args.minibatch_size,
-            "replay_ratio": args.replay_ratio,
-            "total_timesteps": args.total_timesteps,
-            "max_grad_norm": args.max_grad_norm,
-            "clip_coef": args.clip_coef,
-            "vf_clip_coef": args.vf_clip_coef,
-            "vf_coef": args.vf_coef,
-            "ent_coef": args.ent_coef,
-            "gamma": args.gamma,
-            "gae_lambda": args.gae_lambda,
-            "vtrace_rho_clip": args.vtrace_rho_clip,
-            "vtrace_c_clip": args.vtrace_c_clip,
-            "prio_alpha": args.prio_alpha,
-            "prio_beta0": args.prio_beta0,
-            "total_agents": args.total_agents,
-            "num_buffers": args.num_buffers,
-            "profile": 1 if args.profile else 0,
-            "overlap": 0 if args.no_overlap else 1,
-            "cpu_inference": 1 if args.cpu_inference else 0,
-            "train_fp16": 1 if args.fp16 else 0,
-            "ns_iters": args.ns_iters,
-            "seed": args.seed,
-        },
-        "policy": {
-            "hidden_size": args.hidden_size,
-            "num_layers": args.num_layers,
-        },
-    }
-    if args.scaffolding_ratio is not None:
-        params["train"]["scaffolding_ratio"] = args.scaffolding_ratio
-
-    config, vec_config, env_config, policy_config = build_configs(args.env, params)
-
-    print(f"env={args.env}, agents={args.total_agents}, hidden={args.hidden_size}, "
-          f"layers={args.num_layers}, horizon={args.horizon}, overlap={not args.no_overlap}, "
-          f"cpu_infer={args.cpu_inference}, fp16={args.fp16}, seed={args.seed}")
+    print(f"env={env_name}, agents={total_agents}, hidden={hidden_size}, "
+          f"layers={num_layers}, horizon={horizon}, overlap={overlap}, "
+          f"cpu_infer={cpu_infer}, fp16={fp16}, seed={seed}")
 
     # optional trace output
     trace_file = None
-    trace_every = max(int(args.trace_every), 1)
-    if args.trace_path:
-        trace_path = Path(args.trace_path).expanduser().resolve()
-        trace_path.parent.mkdir(parents=True, exist_ok=True)
-        trace_file = trace_path.open("w", encoding="utf-8")
+    trace_every = max(int(cli.get("trace_every", 1)), 1)
+    trace_path = cli.get("trace_path", "")
+    if trace_path:
+        tp = Path(trace_path).expanduser().resolve()
+        tp.parent.mkdir(parents=True, exist_ok=True)
+        trace_file = tp.open("w", encoding="utf-8")
         trace_file.write(json.dumps({
-            "event": "meta", "env": args.env, "seed": args.seed,
-            "total_agents": args.total_agents, "hidden_size": args.hidden_size,
-            "num_layers": args.num_layers, "horizon": args.horizon,
-            "total_timesteps": args.total_timesteps, "learning_rate": args.learning_rate,
+            "event": "meta", "env": env_name, "seed": seed,
+            "total_agents": total_agents, "hidden_size": hidden_size,
+            "num_layers": num_layers, "horizon": horizon,
+            "total_timesteps": int(c["total_timesteps"]),
+            "learning_rate": c["learning_rate"],
             "optimizer": "muon", "trace_every": trace_every,
         }) + "\n")
         trace_file.flush()
@@ -1597,7 +808,6 @@ def train_cli():
               f"ent={ent:.3f} pg={pg:.4f} vf={vf:.4f}]")
 
         if trace_file and iteration % trace_every == 0:
-            from pufferlib import _C as _c
             trace_row = {
                 "event": "tick", "iteration": iteration, "step": global_step,
                 "sps": sps, "score": score, "episode_return": ep_ret,
@@ -1606,11 +816,12 @@ def train_cli():
             }
             trace_file.write(json.dumps(trace_row) + "\n")
 
-    print(f"model params: {int(config.get('total_timesteps', 0)):,} steps target")
+    log_interval = int(cli.get("log_interval", 10))
+    print(f"model params: {int(c.get('total_timesteps', 0)):,} steps target")
 
     result = run_training(
-        config, vec_config, env_config, policy_config,
-        log_interval=args.log_interval,
+        c, vec_config, env_config, policy_config,
+        log_interval=log_interval,
         on_log=on_log,
     )
 
@@ -1628,52 +839,44 @@ def train_cli():
         trace_file.close()
 
 
-
-
 # ============================================================================
-# CLI: sweep mode (Protein optimization)
+# CLI: sweep mode
 # ============================================================================
 
-def sweep_cli():
-    parser = argparse.ArgumentParser(description="protein sweep for Metal simple envs")
-    parser.add_argument("--env", type=str, required=True,
-                        choices=list(SWEEP_CONFIGS.keys()))
-    parser.add_argument("--timeout", type=float, default=4.0,
-                        help="max hours (default: 4)")
-    parser.add_argument("--max-trials", type=int, default=None)
-    parser.add_argument("--results", action="store_true",
-                        help="print results and exit")
-    args = parser.parse_args()
+def sweep_cli(env_name: str):
+    config = load_config(env_name)
+    config = apply_cli_overrides(config, env_name)
+    cli = config.pop("_cli", {})
 
-    if args.results:
-        print_results(SWEEP_DIR_BASE / args.env / "observations.jsonl")
+    if cli.get("results"):
+        print_results(SWEEP_DIR_BASE / env_name / "observations.jsonl")
         return
 
-    run_sweep(args.env, max_trials=args.max_trials, timeout_h=args.timeout)
-
+    run_sweep(
+        env_name, config,
+        max_trials=cli.get("max_trials"),
+        timeout_h=cli.get("timeout", 4.0),
+    )
 
 
 # ============================================================================
 # CLI dispatcher
 # ============================================================================
 
-
 def main():
-    if len(sys.argv) < 2:
+    if len(sys.argv) < 3:
         print("usage: python pufferl.py [train|sweep|results] <env> [args]")
         sys.exit(1)
 
     mode = sys.argv.pop(1)
+    env_name = sys.argv.pop(1)
+
     if mode == "train":
-        train_cli()
+        train_cli(env_name)
     elif mode == "sweep":
-        sweep_cli()
+        sweep_cli(env_name)
     elif mode == "results":
-        if len(sys.argv) < 2:
-            print("usage: python pufferl.py results <env>")
-            sys.exit(1)
-        env = sys.argv.pop(1)
-        print_results(SWEEP_DIR_BASE / env / "observations.jsonl")
+        print_results(SWEEP_DIR_BASE / env_name / "observations.jsonl")
     else:
         print(f"unknown mode: {mode}. use train, sweep, or results.")
         sys.exit(1)

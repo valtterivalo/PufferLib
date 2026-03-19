@@ -6,10 +6,11 @@ targets Apple Silicon (M4 Pro). upstream reference: PufferAI/PufferLib static-na
 ## build
 
 ```bash
-python setup.py build_breakout --force    # breakout env
-python setup.py build_g2048 --force       # 2048 env
-python setup.py build_osrs_pvp --force    # osrs pvp env
-python setup.py build_osrs_zulrah --force # osrs zulrah env
+python setup.py build_breakout --force      # breakout env
+python setup.py build_g2048 --force         # 2048 env
+python setup.py build_osrs_pvp --force      # osrs pvp env
+python setup.py build_osrs_zulrah --force   # osrs zulrah env
+python setup.py build_osrs_inferno --force  # osrs inferno env
 ```
 
 output: `pufferlib/_C.cpython-312-darwin.so`
@@ -17,10 +18,28 @@ output: `pufferlib/_C.cpython-312-darwin.so`
 ## run training
 
 ```bash
-python bench.py --env breakout
-python bench.py --env osrs_pvp --cpu-inference
-python sweep_bench.py --env osrs_pvp --timeout 8
+python pufferl.py train breakout                              # uses .ini defaults
+python pufferl.py train breakout --total-timesteps 2000000    # CLI override
+python pufferl.py train osrs_pvp --replay-ratio 0.25          # multi-head envs need low replay
+python pufferl.py sweep breakout --timeout 4                  # Protein hyperparameter sweep
+python pufferl.py results breakout                            # print sweep results
 ```
+
+## config system
+
+configs live in `pufferlib/config/metal/`:
+- `default.ini` -- shared Metal defaults for all envs
+- `ocean/<env>.ini` -- per-env overrides: `[base]`, `[env]`, `[vec]`, `[train]`, `[policy]`, `[sweep.*]`
+
+`pufferl.py` reads default.ini + env .ini via configparser, merges them, then builds argparse
+dynamically from all keys. any .ini key is available as a CLI flag (e.g. `--learning-rate 0.05`).
+sweep ranges use `[sweep.train.learning_rate]` sections with `distribution`, `min`, `max`, `scale`.
+
+to add a new env: create `pufferlib/config/metal/ocean/<env>.ini` with the relevant sections.
+pufferl.py is completely env-agnostic -- zero env-specific code.
+
+PFSP (prioritized fictitious self-play) logic for osrs_pvp lives in
+`pufferlib/ocean/osrs_pvp/pfsp.py`, imported conditionally during sweep trials.
 
 ## research tracking with flywheel
 

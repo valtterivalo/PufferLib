@@ -1,5 +1,5 @@
 #!/bin/bash
-# benchmark matrix: 3 envs × 3 configs, ~5min each
+# benchmark matrix: 3 envs x 3 configs, ~5min each
 # usage: ./benchmark_matrix.sh [label]
 # output: benchmark_results_[label].txt
 
@@ -18,7 +18,7 @@ run_bench() {
     echo "" | tee -a "$OUT"
     echo "--- $env / $label ---" | tee -a "$OUT"
     python setup.py "build_${env}" --force 2>/dev/null
-    result=$(python pufferl.py train --env "$env" "$@" 2>&1 | grep -E "avg SPS|done\.")
+    result=$(python pufferl.py train "$env" "$@" 2>&1 | grep -E "avg SPS|done\.")
     echo "$result" | tee -a "$OUT"
 }
 
