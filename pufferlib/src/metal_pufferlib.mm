@@ -598,8 +598,8 @@ void train_impl(PuffeRL& pufferl) {
         uint64_t tp6 = mach_absolute_time();
 
         PufTensor& gc = pufferl.muon->gc_puf;
+        mtl_barrier((MetalStream*)s);  // policy_backward writes grads, copy/cast reads them
         if (pufferl.grad_fp16_puf.dtype_size == 2) {
-            mtl_barrier((MetalStream*)s);
             mtl_cast_f16_to_f32((float*)gc.bytes,
                                 pufferl.grad_fp16_puf.bytes,
                                 (int)pufferl.grad_fp16_puf.numel(), s);

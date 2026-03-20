@@ -1453,6 +1453,8 @@ static PufTensor decoder_backward(void *w, void *activations,
   int B_TT = (int)a->saved_input.shape[0];
   int od = dw->output_dim, od1 = od + 1;
 
+  MetalStream *ms = mtl_resolve_stream(stream);
+
   // assemble gradient: concat [grad_logits, grad_value] per row
   if (a->grad_out.dtype_size == 2)
     mtl_assemble_decoder_grad_f32_to_f16(a->grad_out.bytes,
@@ -1464,6 +1466,7 @@ static PufTensor decoder_backward(void *w, void *activations,
                                   (const float *)grad_logits.bytes,
                                   (const float *)grad_value.bytes, B_TT, od,
                                   od1, stream);
+  mtl_barrier(ms);  // assemble writes grad_out, GEMMs read it
 
   // weight grad: grad_out^T @ saved_input
   puf_mm_tn(a->grad_out, a->saved_input, a->wgrad, stream);
@@ -1476,6 +1479,7 @@ static PufTensor decoder_backward(void *w, void *activations,
 
   // grad → hidden: grad_out @ weight
   puf_mm_nn(a->grad_out, dw->weight, a->grad_input, stream);
+  mtl_barrier(ms);  // grad_input consumed by mingru_backward
   return a->grad_input;
 }
 
@@ -1666,9 +1670,8 @@ static PufTensor mingru_forward_train(void *w, PufTensor x, PufTensor state,
       mtl_fused_scan_forward_fp16(a->scan_bufs[i], stream);
     else
       mtl_fused_scan_forward(a->scan_bufs[i], stream);
-    // Cross-layer dependency: next layer consumes this layer's scan output.
-    if (i + 1 < m->num_layers)
-      mtl_barrier(ms);
+    // barrier: next layer or decoder consumes this layer's scan output.
+    mtl_barrier(ms);
     x = a->scan_bufs[i].out;
   }
   return x;
@@ -1701,10 +1704,10 @@ static PufTensor mingru_backward(void *w, PufTensor grad, void *activations,
     puf_mm_tn(scan.grad_combined, a->saved_inputs[i], a->wgrad_scratch[i],
               stream);
     puf_mm_nn(scan.grad_combined, m->weights[i], a->grad_input_buf, stream);
+    mtl_barrier(ms);  // mm_nn writes grad_input_buf, puf_add reads+writes it
     puf_add(a->grad_input_buf, scan.grad_input, stream);
-    // Next iteration consumes grad_input_buf as "grad".
-    if (i > 0)
-      mtl_barrier(ms);
+    // barrier: next layer or encoder_backward consumes grad_input_buf.
+    mtl_barrier(ms);
     grad = a->grad_input_buf;
   }
   return grad;
