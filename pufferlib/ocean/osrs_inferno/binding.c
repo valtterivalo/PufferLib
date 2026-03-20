@@ -29,6 +29,12 @@ typedef struct {
 
     int acts_staging[INF_NUM_ACTION_HEADS];
     unsigned char term_staging;
+
+    /* replay recording: env 0 writes actions to this file during c_step.
+       binary format matches run_visual's replay loader:
+       header: int32 num_ticks (patched at close), then num_heads int32 per tick. */
+    FILE* record_fp;
+    int record_ticks;
 } InfernoEnv;
 
 #define OBS_SIZE INF_TOTAL_OBS
@@ -41,6 +47,20 @@ typedef struct {
 void c_step(Env* env) {
     for (int i = 0; i < NUM_ATNS; i++)
         env->acts_staging[i] = (int)env->actions[i];
+
+    /* record actions for replay (env 0 only, when recording is active) */
+    if (env->record_fp) {
+        fwrite(env->acts_staging, sizeof(int), NUM_ATNS, env->record_fp);
+        env->record_ticks++;
+        /* update header + flush every 1000 ticks so data survives kills */
+        if (env->record_ticks % 1000 == 0) {
+            long pos = ftell(env->record_fp);
+            fseek(env->record_fp, 0, SEEK_SET);
+            fwrite(&env->record_ticks, sizeof(int), 1, env->record_fp);
+            fseek(env->record_fp, pos, SEEK_SET);
+            fflush(env->record_fp);
+        }
+    }
 
     ENCOUNTER_INFERNO.step(env->enc_state, env->acts_staging);
 
@@ -86,6 +106,14 @@ void c_reset(Env* env) {
 }
 
 void c_close(Env* env) {
+    /* finalize replay recording: patch the tick count in the header */
+    if (env->record_fp) {
+        fseek(env->record_fp, 0, SEEK_SET);
+        fwrite(&env->record_ticks, sizeof(int), 1, env->record_fp);
+        fclose(env->record_fp);
+        env->record_fp = NULL;
+        fprintf(stderr, "replay: recorded %d ticks\n", env->record_ticks);
+    }
     if (env->enc_state) {
         ENCOUNTER_INFERNO.destroy(env->enc_state);
         env->enc_state = NULL;
@@ -96,10 +124,15 @@ void c_render(Env* env) { (void)env; }
 
 #include "vecenv.h"
 
+/* global: only env 0 records. set by first my_init if RECORD_REPLAY is set. */
+static int g_record_claimed = 0;
+
 void my_init(Env* env, Dict* kwargs) {
     env->num_agents = 1;
     env->enc_state = ENCOUNTER_INFERNO.create();
     memset(&env->log, 0, sizeof(Log));
+    env->record_fp = NULL;
+    env->record_ticks = 0;
 
     DictItem* start_wave = dict_get_unsafe(kwargs, "start_wave");
     if (start_wave)
@@ -107,6 +140,20 @@ void my_init(Env* env, Dict* kwargs) {
 
     DictItem* mask_in_obs = dict_get_unsafe(kwargs, "mask_in_obs");
     (void)mask_in_obs;  /* always embedded for inferno */
+
+    /* env 0 records actions when RECORD_REPLAY env var is set */
+    if (!g_record_claimed) {
+        g_record_claimed = 1;
+        const char* rpath = getenv("RECORD_REPLAY");
+        if (rpath && rpath[0]) {
+            env->record_fp = fopen(rpath, "wb");
+            if (env->record_fp) {
+                int placeholder = 0;
+                fwrite(&placeholder, sizeof(int), 1, env->record_fp);
+                fprintf(stderr, "replay: recording env 0 to %s\n", rpath);
+            }
+        }
+    }
 }
 
 void my_log(Log* log, Dict* out) {
