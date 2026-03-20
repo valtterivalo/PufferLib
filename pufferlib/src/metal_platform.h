@@ -346,6 +346,5 @@ void mtl_cast_f16_to_f32(float *dst, const void *src, int count,
 // Symmetric eigendecomposition (divide-and-conquer).
 // A is (N,N) float, overwritten with eigenvectors on output.
 // eigenvalues is (N,) float output.
-void mtl_syevd(float *A, float *eigenvalues, int N);
 
 #endif // PUFFERLIB_METAL_PLATFORM_H

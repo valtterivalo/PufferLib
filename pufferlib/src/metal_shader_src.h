@@ -859,7 +859,7 @@ kernel void ppo_loss_fwd_bwd_kernel(
                 total_entropy += ent;
             }
 
-            logratio = clamp(total_log_prob - old_logp, -5.0f, 5.0f);
+            logratio = total_log_prob - old_logp;
             ratio = exp(logratio);
             out_ratio[nt] = ratio;
             float ratio_clipped = clamp(ratio, 1.0f - pp.clip_coef, 1.0f + pp.clip_coef);
@@ -911,7 +911,7 @@ kernel void ppo_loss_fwd_bwd_kernel(
                 logits_offset += A;
             }
 
-            logratio = clamp(total_log_prob - old_logp, -5.0f, 5.0f);
+            logratio = total_log_prob - old_logp;
             ratio = exp(logratio);
             out_ratio[nt] = ratio;
             float ratio_clipped = clamp(ratio, 1.0f - pp.clip_coef, 1.0f + pp.clip_coef);

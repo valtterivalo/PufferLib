@@ -1295,34 +1295,4 @@ const char *cudaGetErrorString(int /*error*/) { return "metal-compat-stub"; }
 
 } // extern "C"
 
-// ============================================================================
-// LAPACK via Accelerate — symmetric eigendecomposition (divide-and-conquer)
-// Used by Muon optimizer's Newton-Schulz normalization.
-// ============================================================================
 
-void mtl_syevd(float *A, float *eigenvalues, int N) {
-  char jobz = 'V'; // compute eigenvalues AND eigenvectors
-  char uplo = 'U'; // upper triangle
-  int n = N, lda = N;
-  int lwork = -1, liwork = -1, info;
-  float work_query;
-  int iwork_query;
-
-  // Query optimal workspace sizes
-  ssyevd_(&jobz, &uplo, &n, A, &lda, eigenvalues, &work_query, &lwork,
-           &iwork_query, &liwork, &info);
-  assert(info == 0 && "ssyevd workspace query failed");
-
-  lwork = (int)work_query;
-  liwork = iwork_query;
-  float *work = (float *)malloc(lwork * sizeof(float));
-  int *iwork = (int *)malloc(liwork * sizeof(int));
-
-  // Compute eigendecomposition
-  ssyevd_(&jobz, &uplo, &n, A, &lda, eigenvalues, work, &lwork, iwork,
-           &liwork, &info);
-  assert(info == 0 && "ssyevd failed");
-
-  free(work);
-  free(iwork);
-}
