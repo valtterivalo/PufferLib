@@ -561,7 +561,6 @@ void mtl_mingru_gate(float *out, float *next_state, const float *combined,
   mtl_dispatch_1d(ms, pso, B * H);
 }
 
-// NEON fast sigmoid: rational approximation, ~2 ULP max error.
 // ============================================================================
 // MinGRU training scan kernels
 // ============================================================================
@@ -918,7 +917,7 @@ void mtl_scatter_ppo_outputs(TrainGraph& graph, RolloutBuf& rollouts,
 // Advantage computation
 // ============================================================================
 
-void puff_advantage_cuda(PufTensor &values, PufTensor &rewards,
+void puff_advantage(PufTensor &values, PufTensor &rewards,
                           PufTensor &dones, PufTensor &importance,
                           PufTensor &advantages, float gamma, float lambda,
                           float rho_clip, float c_clip, cudaStream_t stream) {

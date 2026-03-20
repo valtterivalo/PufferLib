@@ -186,11 +186,9 @@ static void cpu_mingru_gate(float *out, float *next_state,
 // CPU discrete action sampling — matches MSL sample_logits_kernel
 // ============================================================================
 
-// Masked logit preprocessing: matches MSL nan_to_num + mask logic.
+// Apply action mask: invalid actions get -1e9.
 static inline float cpu_mask_logit(float logit, float mask) {
     if (mask < 0.5f) logit = -1e9f;
-    if (std::isnan(logit)) logit = 0.0f;
-    if (std::isinf(logit)) logit = (logit > 0) ? 3.4028e+38f : -3.4028e+38f;
     return logit;
 }
 

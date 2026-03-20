@@ -519,7 +519,7 @@ void train_impl(PuffeRL& pufferl) {
         uint64_t tp0 = mach_absolute_time();
 
         puf_zero(pufferl.advantages_puf, s);
-        puff_advantage_cuda(rollouts.values, rollouts.rewards, rollouts.terminals,
+        puff_advantage(rollouts.values, rollouts.rewards, rollouts.terminals,
             rollouts.ratio, pufferl.advantages_puf, hypers.gamma, hypers.gae_lambda,
             hypers.vtrace_rho_clip, hypers.vtrace_c_clip, s);
         prio_precompute(pufferl.advantages_puf, prio_alpha, pufferl.prio_bufs, s);

@@ -98,7 +98,7 @@ struct PufTensor {
     case 1:
       return "i8";
     case 2:
-      return "bf16";
+      return "f16";
     case 4:
       return "f32";
     case 8:

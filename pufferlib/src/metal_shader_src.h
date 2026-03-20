@@ -6,11 +6,10 @@
  *   1. Math ops (sigmoid, fast_tanh, tilde_relu, lerp, softplus, log_coeffs_and_values)
  *   2. Philox RNG (counter-based PRNG matching cuRAND)
  *   3. MinGRU inference (mingru_gate_inference)
- *   4. MinGRU training (fused_scan_forward/backward_checkpointed, logcumsumexp)
+ *   4. MinGRU training (fused_scan_forward/backward_checkpointed)
  *   5. Sample logits (discrete + continuous, with action mask support)
- *   6. PPO loss — fused forward+backward + reduce (new for static-native)
- *   7. PPO loss — separate forward/backward (4.0 alternative)
- *   8. Advantage (puff_advantage)
+ *   6. PPO loss — fused forward+backward + reduce
+ *   7. Advantage (puff_advantage)
  *   9. Priority replay (prio_adv_reduction, prio_normalize, prio_imp_weights)
  *  10. Element-wise ops (fill, clamp, scale, axpy, add, nesterov, etc.)
  *  11. Optimizer kernels (compute_lr_scalars, muon_weight_update)
@@ -22,7 +21,7 @@
  *  17. Select/copy + index copy (minibatch assembly)
  *  18. Cast (cast_u8_to_f32, cast_f64_to_f32)
  *
- * Float32 only — no bf16 variants.
+ * Float32 + fp16 variants. No bf16 (Metal has no bf16 compute).
  */
 
 #ifndef PUFFERLIB_METAL_SHADER_SRC_H
@@ -452,78 +451,7 @@ kernel void fused_scan_backward_checkpointed(
     grad_state[state_idx] = (state[state_idx] > 0.0f) ? (grad_z_0 / state[state_idx]) : 0.0f;
 }
 
-// logcumsumexp: uses Kahan compensated summation (fp32) instead of fp64
-struct LogcumsumexpParams {
-    int T_total;
-    int H;
-    int B;
-};
 
-kernel void logcumsumexp_forward_kernel(
-    device float* out               [[buffer(0)]],
-    device float* s_buf             [[buffer(1)]],
-    const device float* x           [[buffer(2)]],
-    constant LogcumsumexpParams& p  [[buffer(3)]],
-    uint idx [[thread_position_in_grid]]
-) {
-    if ((int)idx >= p.B * p.H) return;
-
-    int b = (int)idx / p.H;
-    int h = (int)idx % p.H;
-    int base_off = b * p.T_total * p.H + h;
-
-    // Kahan compensated accumulation in log-space
-    float s = -INFINITY;
-    float compensation = 0.0f;
-
-    for (int t = 0; t < p.T_total; t++) {
-        int curr = base_off + t * p.H;
-        float x_val = x[curr];
-
-        if (s == -INFINITY) {
-            s = x_val;
-        } else {
-            float min_v = fmin(s, x_val);
-            float max_v = fmax(s, x_val);
-            float y = log1p_f(exp(min_v - max_v)) - compensation;
-            float t_val = max_v + y;
-            compensation = (t_val - max_v) - y;
-            s = t_val;
-        }
-
-        out[curr] = s;
-        s_buf[curr] = s;
-    }
-}
-
-kernel void logcumsumexp_backward_kernel(
-    device float* grad_x                [[buffer(0)]],
-    const device float* grad_out        [[buffer(1)]],
-    const device float* x               [[buffer(2)]],
-    const device float* s_buf           [[buffer(3)]],
-    constant LogcumsumexpParams& p      [[buffer(4)]],
-    uint idx [[thread_position_in_grid]]
-) {
-    if ((int)idx >= p.B * p.H) return;
-
-    int b = (int)idx / p.H;
-    int h = (int)idx % p.H;
-    int base_off = b * p.T_total * p.H + h;
-
-    float acc_val = 0.0f;
-    float s_val_next = 0.0f;
-
-    for (int t = p.T_total - 1; t >= 0; t--) {
-        int curr = base_off + t * p.H;
-        float x_val = x[curr];
-        float s_val = s_buf[curr];
-        float g_val = grad_out[curr];
-
-        acc_val = g_val + acc_val * exp(s_val - s_val_next);
-        s_val_next = s_val;
-        grad_x[curr] = acc_val * exp(x_val - s_val);
-    }
-}
 
 // ============================================================================
 // Section 5: Sample logits kernel
@@ -542,11 +470,9 @@ struct SampleParams {
     int mask_stride;    // stride between rows in mask buffer (may differ from num_atns_total)
 };
 
-// Apply action mask to a logit: invalid actions get -1e9, NaN/inf sanitized.
+// Apply action mask to a logit: invalid actions get -1e9.
 inline float masked_logit(float l, float m) {
     if (m < 0.5f) l = -1e9f;
-    if (isnan(l)) l = 0.0f;
-    if (isinf(l)) l = (l > 0) ? 3.4028e+38f : -3.4028e+38f;
     return l;
 }
 
@@ -1158,7 +1084,6 @@ kernel void prio_adv_reduction_kernel(
 
     if (simd_lane == 0 && tx < 32) {
         float pw = pow(local_sum, pp.prio_alpha);
-        if (isnan(pw) || isinf(pw)) pw = 0.0f;
         prio_weights[row] = pw;
     }
 }
@@ -2050,182 +1975,6 @@ kernel void cast_f16_to_f32(
 }
 
 // ============================================================================
-// Section 24: FP16 GEMM — half inputs, float accumulation, half output
-// Same tile strategy as sgemm_reg (BM=BN=32, BK=16, TM=TN=4).
-// ============================================================================
-
-kernel void hgemm_reg(
-    device const half* A       [[buffer(0)]],
-    device const half* B       [[buffer(1)]],
-    device half* C             [[buffer(2)]],
-    constant GemmParams& p     [[buffer(3)]],
-    uint2 group_id    [[threadgroup_position_in_grid]],
-    uint2 local_id    [[thread_position_in_threadgroup]]
-) {
-    threadgroup half sA[BM][BK];
-    threadgroup half sB[BK][BN];
-
-    int trow = (int)local_id.y;
-    int tcol = (int)local_id.x;
-    int tid = trow * (BN / TN) + tcol;
-
-    float acc[TM][TN];
-    for (int m = 0; m < TM; m++)
-        for (int n = 0; n < TN; n++)
-            acc[m][n] = 0.0f;
-
-    int num_k_tiles = (p.K + BK - 1) / BK;
-
-    for (int kt = 0; kt < num_k_tiles; kt++) {
-        int k_base = kt * BK;
-
-        for (int i = 0; i < (BM * BK) / 64; i++) {
-            int idx = tid + i * 64;
-            int r = idx / BK;
-            int c = idx % BK;
-            int gr = (int)group_id.y * BM + r;
-            int gc = k_base + c;
-            sA[r][c] = (gr < p.M && gc < p.K)
-                ? (p.trans_a ? A[gc * p.lda + gr] : A[gr * p.lda + gc])
-                : half(0.0h);
-        }
-
-        for (int i = 0; i < (BK * BN) / 64; i++) {
-            int idx = tid + i * 64;
-            int r = idx / BN;
-            int c = idx % BN;
-            int gr = k_base + r;
-            int gc = (int)group_id.x * BN + c;
-            sB[r][c] = (gr < p.K && gc < p.N)
-                ? (p.trans_b ? B[gc * p.ldb + gr] : B[gr * p.ldb + gc])
-                : half(0.0h);
-        }
-
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-
-        for (int k = 0; k < BK; k++) {
-            float a_reg[TM];
-            float b_reg[TN];
-            for (int m = 0; m < TM; m++) a_reg[m] = float(sA[trow * TM + m][k]);
-            for (int n = 0; n < TN; n++) b_reg[n] = float(sB[k][tcol * TN + n]);
-            for (int m = 0; m < TM; m++)
-                for (int n = 0; n < TN; n++)
-                    acc[m][n] += a_reg[m] * b_reg[n];
-        }
-
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-    }
-
-    int row_base = (int)group_id.y * BM + trow * TM;
-    int col_base = (int)group_id.x * BN + tcol * TN;
-    for (int m = 0; m < TM; m++) {
-        for (int n = 0; n < TN; n++) {
-            int r = row_base + m;
-            int c = col_base + n;
-            if (r < p.M && c < p.N) {
-                int idx = r * p.ldc + c;
-                C[idx] = half(p.alpha * acc[m][n] + p.beta * float(C[idx]));
-            }
-        }
-    }
-}
-
-// FP16 K-split GEMM — half inputs, float partials (same reduce step)
-kernel void hgemm_ksplit(
-    device const half* A       [[buffer(0)]],
-    device const half* B       [[buffer(1)]],
-    device float* partials     [[buffer(2)]],
-    constant GemmParams& p     [[buffer(3)]],
-    constant int& k_per_split  [[buffer(4)]],
-    uint3 group_id    [[threadgroup_position_in_grid]],
-    uint3 local_id    [[thread_position_in_threadgroup]]
-) {
-    threadgroup half sA[BM][BK];
-    threadgroup half sB[BK][BN];
-
-    int trow = (int)local_id.y;
-    int tcol = (int)local_id.x;
-    int tid = trow * (BN / TN) + tcol;
-
-    float acc[TM][TN];
-    for (int m = 0; m < TM; m++)
-        for (int n = 0; n < TN; n++)
-            acc[m][n] = 0.0f;
-
-    int k_start = (int)group_id.z * k_per_split;
-    int k_end = min(k_start + k_per_split, p.K);
-    int num_k_tiles = (k_end - k_start + BK - 1) / BK;
-
-    for (int kt = 0; kt < num_k_tiles; kt++) {
-        int k_base = k_start + kt * BK;
-
-        for (int i = 0; i < (BM * BK) / 64; i++) {
-            int idx = tid + i * 64;
-            int r = idx / BK;
-            int c = idx % BK;
-            int gr = (int)group_id.y * BM + r;
-            int gc = k_base + c;
-            sA[r][c] = (gr < p.M && gc < k_end)
-                ? (p.trans_a ? A[gc * p.lda + gr] : A[gr * p.lda + gc])
-                : half(0.0h);
-        }
-
-        for (int i = 0; i < (BK * BN) / 64; i++) {
-            int idx = tid + i * 64;
-            int r = idx / BN;
-            int c = idx % BN;
-            int gr = k_base + r;
-            int gc = (int)group_id.x * BN + c;
-            sB[r][c] = (gr < k_end && gc < p.N)
-                ? (p.trans_b ? B[gc * p.ldb + gr] : B[gr * p.ldb + gc])
-                : half(0.0h);
-        }
-
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-
-        for (int k = 0; k < BK; k++) {
-            float a_reg[TM];
-            float b_reg[TN];
-            for (int m = 0; m < TM; m++) a_reg[m] = float(sA[trow * TM + m][k]);
-            for (int n = 0; n < TN; n++) b_reg[n] = float(sB[k][tcol * TN + n]);
-            for (int m = 0; m < TM; m++)
-                for (int n = 0; n < TN; n++)
-                    acc[m][n] += a_reg[m] * b_reg[n];
-        }
-
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-    }
-
-    int split_offset = (int)group_id.z * p.M * p.N;
-    int row_base = (int)group_id.y * BM + trow * TM;
-    int col_base = (int)group_id.x * BN + tcol * TN;
-    for (int m = 0; m < TM; m++) {
-        for (int n = 0; n < TN; n++) {
-            int r = row_base + m;
-            int c = col_base + n;
-            if (r < p.M && c < p.N) {
-                partials[split_offset + r * p.N + c] = acc[m][n];
-            }
-        }
-    }
-}
-
-// Reduce K-split partials to fp16 output
-kernel void reduce_ksplit_fp16(
-    device const float* partials   [[buffer(0)]],
-    device half* C                 [[buffer(1)]],
-    constant ReduceKsplitParams& p [[buffer(2)]],
-    uint gid [[thread_position_in_grid]]
-) {
-    if ((int)gid >= p.MN) return;
-    float sum = 0.0f;
-    for (int s = 0; s < p.num_splits; s++) {
-        sum += partials[s * p.MN + (int)gid];
-    }
-    C[gid] = half(p.alpha * sum + p.beta * float(C[gid]));
-}
-
-// ============================================================================
 // Section 25: FP16 MinGRU scan kernels — half I/O, float internal computation
 // ============================================================================
 
@@ -2299,7 +2048,7 @@ kernel void fused_scan_forward_checkpointed_fp16(
     }
 
     float next_state_val = exp(a_star + s);
-    next_state[bH + h] = half(clamp(next_state_val, 1.0e-6f, 65000.0f));
+    next_state[bH + h] = half(min(next_state_val, 65000.0f));
 }
 
 kernel void fused_scan_backward_checkpointed_fp16(
@@ -2427,8 +2176,8 @@ kernel void fused_scan_backward_checkpointed_fp16(
     acc = acc * exp(s_0 - s_val_next);
     float grad_z_0 = acc * exp((log_value_0 - a_star_0) - s_0);
 
-    float denom = max(float(state[state_idx]), 1.0e-6f);
-    float grad_state_val = grad_z_0 / denom;
+    float state_val = float(state[state_idx]);
+    float grad_state_val = (state_val > 0.0f) ? (grad_z_0 / state_val) : 0.0f;
     grad_state[state_idx] = half(clamp(grad_state_val, -65000.0f, 65000.0f));
 }
 

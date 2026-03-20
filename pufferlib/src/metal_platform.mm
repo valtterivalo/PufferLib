@@ -555,7 +555,7 @@ MetalContext *mtl_ctx() { return &g_ctx; }
 static char *g_addmm_temp_base;
 static int64_t g_addmm_temp_size;
 
-// (TF32 scratch buffers removed — in-place rounding avoids buffer visibility issues)
+
 
 void *mtl_stream() { return &g_ctx.stream; }
 
@@ -621,7 +621,7 @@ void mtl_destroy() {
     g_addmm_temp_base = nullptr;
     g_addmm_temp_size = 0;
   }
-  // (TF32 scratch buffer cleanup removed — using in-place rounding now)
+
 
   // 3. Release all Metal objects inside @autoreleasepool to force immediate
   //    deallocation. Device released LAST — MTLBuffers/pipelines reference it.
@@ -1020,15 +1020,6 @@ static void small_gemm_nt_dispatch(const float *A, const float *B, float *C,
   ms->pending_work = true;
   g_gemm_dispatch_count++;
 }
-
-// ============================================================================
-// TF32 GEMM simulation — in-place rounding.
-// Rounds GEMM input buffers to 10-bit mantissa IN-PLACE before each GEMM.
-// Avoids scratch buffers entirely (Metal 4 buffer visibility issues with
-// scratch buffers degrade training even with correct barriers).
-// In-place is safe because: (1) TF32 rounding is idempotent, (2) GEMM output
-// is full fp32, (3) optimizer writes fresh fp32 each step.
-// ============================================================================
 
 // out(...,N) = a(...,K) @ b(N,K)^T — leading dims folded into M
 void puf_mm(PufTensor &a, PufTensor &b, PufTensor &out,
