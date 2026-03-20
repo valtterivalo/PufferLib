@@ -139,6 +139,12 @@ def apply_cli_overrides(config: dict, env_name: str) -> dict:
     parser.add_argument("--fp16", action="store_true",
                         help="fp16 training activations/grads (rollout stays fp32)")
     parser.add_argument("--log-interval", type=int, default=10)
+    parser.add_argument("--checkpoint-interval", type=int, default=200,
+                        help="save weights every N iterations")
+    parser.add_argument("--checkpoint-dir", type=str, default="",
+                        help="checkpoint directory (default: checkpoints/<env>/<run_id>)")
+    parser.add_argument("--load-model-path", type=str, default="latest",
+                        help="path to checkpoint for eval mode (default: latest)")
     parser.add_argument("--trace-path", type=str, default="")
     parser.add_argument("--trace-every", type=int, default=1)
     parser.add_argument("--timeout", type=float, default=4.0,
@@ -164,6 +170,9 @@ def apply_cli_overrides(config: dict, env_name: str) -> dict:
 
     config["_cli"] = {
         "log_interval": args.log_interval,
+        "checkpoint_interval": args.checkpoint_interval,
+        "checkpoint_dir": args.checkpoint_dir,
+        "load_model_path": args.load_model_path,
         "trace_path": args.trace_path,
         "trace_every": args.trace_every,
         "timeout": args.timeout,
@@ -897,6 +906,8 @@ def eval_cli(env_name: str):
     c, vec_config, env_config, policy_config = build_configs(env_name, config)
 
     pufferl = _C.create_pufferl(c, vec_config, env_config, policy_config)
+
+    cli = config.pop("_cli", {})
 
     # resolve load path: explicit path, "latest", or search
     load_path = cli.get("load_model_path", "latest")
