@@ -21,27 +21,17 @@ using std::vector;
 // Platform abstraction
 // ============================================================================
 
-#ifdef __CUDACC__
-#define PUF_HD __host__ __device__
-#include <cuda_runtime.h>
-#else
 #define PUF_HD
 typedef void *cudaStream_t;
 #define CUDA_STREAM_T_DEFINED
-#endif
 
 // ============================================================================
 // Compile-time precision: default bf16, pass -DPRECISION_FLOAT for float32.
 // Metal always uses PRECISION_FLOAT (MPS has no bf16 compute).
 // ============================================================================
 
-#ifdef PRECISION_FLOAT
 constexpr bool USE_BF16 = false;
-constexpr int PRECISION_SIZE = 4; // bytes per element
-#else
-constexpr bool USE_BF16 = true;
-constexpr int PRECISION_SIZE = 2; // bytes per element
-#endif
+constexpr int PRECISION_SIZE = 4; // bytes per element (Metal: always fp32)
 
 // ============================================================================
 // PufTensor — minimal tensor view (no torch dependency)
@@ -268,7 +258,7 @@ inline void register_prio_buffers(PrioBuffers &bufs, Allocator &alloc, int S,
 }
 
 struct PPOBuffersPuf {
-  PufTensor loss_output, saved_for_bwd, grad_loss;
+  PufTensor loss_output;
   PufTensor grad_logits, grad_values, grad_logstd, adv_scratch;
 };
 
@@ -278,16 +268,12 @@ inline void register_ppo_buffers(PPOBuffersPuf &bufs, Allocator &alloc, int N,
   int f = sizeof(float);
   bufs = (PPOBuffersPuf){
       .loss_output = {.shape = {1}, .dtype_size = f},
-      .saved_for_bwd = {.shape = {total, 5}, .dtype_size = (int)sizeof(double)},
-      .grad_loss = {.shape = {1}, .dtype_size = f},
       .grad_logits = {.shape = {N, T, A_total}, .dtype_size = f},
       .grad_values = {.shape = {N, T, 1}, .dtype_size = f},
       .grad_logstd = {.shape = {N, T, A_total}, .dtype_size = f},
       .adv_scratch = {.shape = {2}, .dtype_size = f},
   };
   alloc.reg(&bufs.loss_output);
-  alloc.reg(&bufs.saved_for_bwd);
-  alloc.reg(&bufs.grad_loss);
   alloc.reg(&bufs.grad_logits);
   alloc.reg(&bufs.grad_values);
   if (is_continuous)
@@ -468,8 +454,6 @@ struct MinGRUActivations {
 struct MinGRUWeights {
   int hidden, num_layers, horizon;
   vector<PufTensor> weights;
-  PufTensor fused_enc_layer0;   // (3*H, obs_dim) — fused encoder+layer0 (NT layout for puf_mm)
-  int fused_obs_dim;            // obs_dim for the fused weight
 };
 
 // ============================================================================

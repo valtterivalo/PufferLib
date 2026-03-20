@@ -349,8 +349,7 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
             pufferl->act_sizes_puf, act_f32_buf,
             (float *)lp_slice.bytes, (float *)val_slice.bytes,
             mask_ptr, mask_stride,
-            buf_rng_seed, buf_rng_offset,
-            mw->fused_enc_layer0.bytes != nullptr);
+            buf_rng_seed, buf_rng_offset);
 
         // Store decoder logits + f32 actions for GPU logprob recompute at
         // training start. CPU sampling uses IEEE expf, PPO uses GPU fast::exp.
@@ -364,9 +363,7 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
                                  (double*)act_slice.bytes, block_size * num_atns);
     } else {
         // GPU path: Metal dispatch + sync (original behavior)
-        PufTensor mingru_input = mw->fused_enc_layer0.bytes
-            ? obs_dst
-            : p->encoder.forward(infer_weights.encoder, acts.encoder, obs_dst, stream);
+        PufTensor mingru_input = p->encoder.forward(infer_weights.encoder, acts.encoder, obs_dst, stream);
         PufTensor h = p->network.forward(infer_weights.network, mingru_input, state_puf, acts.network, stream);
         PufTensor dec_puf = p->decoder.forward(infer_weights.decoder, acts.decoder, h, stream);
 
@@ -1064,8 +1061,6 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
         for (int i = 0; i < act_n; i++) ones[i] = 1.0f;
     }
 
-    // post_create_ppo_buffers: write 1.0f to grad_loss (unified memory)
-    *(float*)pufferl->ppo_bufs_puf.grad_loss.bytes = 1.0f;
 
     // muon_post_create: write lr and zero momentum (unified memory)
     pufferl->muon->lr_ptr = (float*)pufferl->muon->lr_puf.bytes;

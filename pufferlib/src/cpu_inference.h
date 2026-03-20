@@ -291,8 +291,7 @@ static void cpu_forward_and_sample(
         float *logprobs_out,        // (B,)
         float *values_out,          // (B,)
         const float *action_mask, int mask_stride,
-        uint64_t rng_seed, uint32_t *rng_offset_ptr,
-        bool has_fused_enc_layer0) {
+        uint64_t rng_seed, uint32_t *rng_offset_ptr) {
 
     int B = (int)obs.shape[0];
     int obs_dim = (int)obs.shape[1];
@@ -305,30 +304,17 @@ static void cpu_forward_and_sample(
     DecoderActivations *da = (DecoderActivations *)acts.decoder;
 
     // --- Encoder ---
-    float *layer_input;
-    if (has_fused_enc_layer0) {
-        layer_input = (float *)obs.bytes;
-    } else {
-        EncoderActivations *ea = (EncoderActivations *)acts.encoder;
-        cpu_mm_nt((const float *)obs.bytes, (const float *)ew->weight.bytes,
-                  (float *)ea->out.bytes, B, obs_dim, ew->out_dim);
-        layer_input = (float *)ea->out.bytes;
-    }
+    EncoderActivations *ea = (EncoderActivations *)acts.encoder;
+    cpu_mm_nt((const float *)obs.bytes, (const float *)ew->weight.bytes,
+              (float *)ea->out.bytes, B, obs_dim, ew->out_dim);
+    float *layer_input = (float *)ea->out.bytes;
 
     // --- MinGRU layers ---
     for (int i = 0; i < mw->num_layers; i++) {
         float *state_i = (float *)state.bytes + i * B * H;
-        int input_K;
-
-        if (i == 0 && has_fused_enc_layer0) {
-            input_K = mw->fused_obs_dim;
-            cpu_mm_nt(layer_input, (const float *)mw->fused_enc_layer0.bytes,
-                      (float *)ma->combined[i].bytes, B, input_K, 3 * H);
-        } else {
-            input_K = H;
-            cpu_mm_nt(layer_input, (const float *)mw->weights[i].bytes,
-                      (float *)ma->combined[i].bytes, B, input_K, 3 * H);
-        }
+        int input_K = H;
+        cpu_mm_nt(layer_input, (const float *)mw->weights[i].bytes,
+                  (float *)ma->combined[i].bytes, B, input_K, 3 * H);
 
         cpu_mingru_gate((float *)ma->out.bytes, (float *)ma->next_state.bytes,
                         (const float *)ma->combined[i].bytes,

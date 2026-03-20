@@ -24,8 +24,8 @@ struct FloatStats {
 };
 
 static FloatStats compute_float_stats(const float* data, int64_t count) {
+    assert(data && count > 0);
     FloatStats stats;
-    if (data == nullptr || count <= 0) return stats;
 
     double sum = 0.0;
     double sum_sq = 0.0;
@@ -55,7 +55,7 @@ static FloatStats compute_float_stats(const float* data, int64_t count) {
 }
 
 static double compute_clipfrac(const float* data, int64_t count, double clip_coef) {
-    if (data == nullptr || count <= 0) return 0.0;
+    assert(data && count > 0);
     int64_t clipped = 0;
     for (int64_t i = 0; i < count; i++) {
         if (std::fabs((double)data[i] - 1.0) > clip_coef) clipped++;
@@ -64,7 +64,7 @@ static double compute_clipfrac(const float* data, int64_t count, double clip_coe
 }
 
 static double compute_frac_gt(const float* data, int64_t count, double threshold) {
-    if (data == nullptr || count <= 0) return 0.0;
+    assert(data && count > 0);
     int64_t matched = 0;
     for (int64_t i = 0; i < count; i++) {
         if ((double)data[i] > threshold) matched++;
@@ -73,7 +73,7 @@ static double compute_frac_gt(const float* data, int64_t count, double threshold
 }
 
 static double compute_frac_lt(const float* data, int64_t count, double threshold) {
-    if (data == nullptr || count <= 0) return 0.0;
+    assert(data && count > 0);
     int64_t matched = 0;
     for (int64_t i = 0; i < count; i++) {
         if ((double)data[i] < threshold) matched++;
@@ -82,7 +82,7 @@ static double compute_frac_lt(const float* data, int64_t count, double threshold
 }
 
 static double compute_frac_abs_gt(const float* data, int64_t count, double threshold) {
-    if (data == nullptr || count <= 0) return 0.0;
+    assert(data && count > 0);
     int64_t matched = 0;
     for (int64_t i = 0; i < count; i++) {
         if (std::fabs((double)data[i]) > threshold) matched++;
@@ -101,7 +101,7 @@ struct DistributionStats {
 
 static DistributionStats compute_distribution_stats(const float* data, int64_t count) {
     DistributionStats stats;
-    if (data == nullptr || count <= 0) return stats;
+    assert(data && count > 0);
 
     double sum = 0.0;
     double sum_sq = 0.0;
@@ -194,7 +194,7 @@ void rollouts(pybind11::object pufferl_obj) {
     mtl_sync_stats(&pufferl.rollout_sync_count, &pufferl.rollout_sync_ms);
 }
 
-pybind11::dict train(pybind11::object pufferl_obj) {
+void train(pybind11::object pufferl_obj) {
     PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
     // Reset sync stats before train to capture train-only syncs
     { int _c; double _m; mtl_sync_stats(&_c, &_m); }
@@ -204,8 +204,6 @@ pybind11::dict train(pybind11::object pufferl_obj) {
     }
     // Capture train sync stats
     mtl_sync_stats(&pufferl.train_sync_count, &pufferl.train_sync_ms);
-    pybind11::dict losses;
-    return losses;
 }
 
 pybind11::dict log_losses(pybind11::object pufferl_obj) {

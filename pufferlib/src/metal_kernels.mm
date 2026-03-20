@@ -1630,10 +1630,7 @@ static PufTensor mingru_forward(void *w, PufTensor x, PufTensor state,
 
   for (int i = 0; i < m->num_layers; i++) {
     PufTensor state_i = mingru_state_layer(m, state, i);
-    if (i == 0 && m->fused_enc_layer0.bytes)
-      puf_mm(x, m->fused_enc_layer0, a->combined[i], stream);
-    else
-      puf_mm(x, m->weights[i], a->combined[i], stream);
+    puf_mm(x, m->weights[i], a->combined[i], stream);
     mtl_barrier(ms);
     mtl_mingru_gate((float *)a->out.bytes, (float *)a->next_state.bytes,
                     (const float *)a->combined[i].bytes,

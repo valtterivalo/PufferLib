@@ -1226,11 +1226,6 @@ void puf_addmm_nn(PufTensor &a, PufTensor &b, PufTensor &out, float alpha,
 }
 
 // ============================================================================
-// LAPACK via Accelerate — symmetric eigendecomposition (divide-and-conquer)
-// Used by Muon optimizer's Newton-Schulz normalization.
-// ============================================================================
-
-// ============================================================================
 // CUDA compatibility stubs for vecenv.h
 //
 // vecenv.h declares extern CUDA functions (cudaMemcpy, cudaMalloc, etc.) that
