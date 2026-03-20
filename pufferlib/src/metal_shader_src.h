@@ -447,7 +447,7 @@ kernel void fused_scan_backward_checkpointed(
     acc = acc * fast::exp(s_0 - s_val_next);
     float grad_z_0 = acc * fast::exp((log_value_0 - a_star_0) - s_0);
 
-    grad_state[state_idx] = grad_z_0 / state[state_idx];
+    grad_state[state_idx] = (state[state_idx] > 0.0f) ? (grad_z_0 / state[state_idx]) : 0.0f;
 }
 
 // logcumsumexp: uses Kahan compensated summation (fp32) instead of fp64
