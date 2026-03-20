@@ -257,16 +257,15 @@ static void cpu_sample_logits(
                 }
             }
 
-            // Log probability of sampled action
+            // Log probability of sampled action (stored per-head)
             float sl = cpu_mask_logit(logits[logits_offset + sampled],
                                        mask[logits_offset + sampled]);
-            total_log_prob += sl - logsumexp_val;
+            float head_lp = sl - logsumexp_val;
+            logprobs[idx * num_atns + h] = head_lp;
 
             action_out_f32[idx * num_atns + h] = (float)sampled;
             logits_offset += A;
         }
-
-        logprobs[idx] = total_log_prob;
         value_out[idx] = dec_out[idx * fused_cols + (fused_cols - 1)];
     }
 }
