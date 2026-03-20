@@ -28,12 +28,6 @@
 // ============================================================================
 
 static MetalContext g_ctx = {};
-static bool g_no_tensor_ops = false; // cached getenv("PUFFERLIB_NO_TENSOR_OPS")
-static bool g_no_tensor_ops_nt = false;
-static bool g_no_tensor_ops_nn = false;
-static bool g_no_tensor_ops_tn = false;
-static bool g_no_tensor_ops_addmm = false;
-static bool g_tf32_sim = false;  // TF32 GEMM simulation: round inputs to 10-bit mantissa
 static std::mutex g_pipeline_mutex;
 
 // ============================================================================
@@ -422,9 +416,8 @@ void mtl_gpu_timing_stats(double *gpu_exec_ms, double *sched_wait_ms) {
 
 static int g_gemm_dispatch_count = 0;
 
-void mtl_gemm_stats(int *tensor_ops_count, int *mps_count) {
+void mtl_gemm_stats(int *tensor_ops_count) {
   *tensor_ops_count = g_gemm_dispatch_count;
-  *mps_count = 0;  // MPS eliminated — all GEMMs on compute encoder
   g_gemm_dispatch_count = 0;
 }
 
@@ -546,14 +539,6 @@ void mtl_init() {
     [g_ctx.residency_set requestResidency];
     [g_ctx.queue addResidencySet:g_ctx.residency_set];
     [g_ctx.train_queue addResidencySet:g_ctx.residency_set];
-
-    g_no_tensor_ops = (getenv("PUFFERLIB_NO_TENSOR_OPS") != nullptr);
-    g_no_tensor_ops_nt = (getenv("PUFFERLIB_NO_TENSOR_OPS_NT") != nullptr);
-    g_no_tensor_ops_nn = (getenv("PUFFERLIB_NO_TENSOR_OPS_NN") != nullptr);
-    g_no_tensor_ops_tn = (getenv("PUFFERLIB_NO_TENSOR_OPS_TN") != nullptr);
-    g_no_tensor_ops_addmm = (getenv("PUFFERLIB_NO_TENSOR_OPS_ADDMM") != nullptr);
-    g_tf32_sim = (getenv("PUFFERLIB_TF32_SIM") != nullptr);
-    if (g_tf32_sim) printf("[metal] TF32 GEMM simulation enabled\n");
 
     // Start the default stream (rollout) and training stream
     g_ctx.stream.begin();
@@ -1046,17 +1031,6 @@ static void small_gemm_nt_dispatch(const float *A, const float *B, float *C,
 // is full fp32, (3) optimizer writes fresh fp32 each step.
 // ============================================================================
 
-void mtl_tf32_round_inplace(float *buf, int count, cudaStream_t stream);
-
-static void tf32_round_gemm_inputs(float *a_ptr, int a_elems,
-                                    float *b_ptr, int b_elems,
-                                    cudaStream_t stream) {
-  mtl_tf32_round_inplace(a_ptr, a_elems, stream);
-  mtl_tf32_round_inplace(b_ptr, b_elems, stream);
-  // Barrier: ensure in-place rounding writes are visible to the GEMM dispatch.
-  mtl_barrier(mtl_resolve_stream(stream));
-}
-
 // out(...,N) = a(...,K) @ b(N,K)^T — leading dims folded into M
 void puf_mm(PufTensor &a, PufTensor &b, PufTensor &out,
             cudaStream_t stream) {
@@ -1064,17 +1038,12 @@ void puf_mm(PufTensor &a, PufTensor &b, PufTensor &out,
   int M = (int)(a.batch_size() * a.shape[na - 2]);
   int K = (int)a.shape[na - 1];
   int N = (int)b.shape[nb - 2];
-  bool no_tensor = g_no_tensor_ops || g_no_tensor_ops_nt;
   bool aligned = (N % 32 == 0) && (M % 64 == 0);
-
-  // TF32 simulation: round fp32 inputs to 10-bit mantissa in-place before GEMM
   float *a_f32 = (float *)a.bytes;
   float *b_f32 = (float *)b.bytes;
-  if (g_tf32_sim && a.dtype_size == 4)
-    tf32_round_gemm_inputs(a_f32, M * K, b_f32, N * K, stream);
 
   if (a.dtype_size == 2) {
-    if (aligned && !no_tensor &&
+    if (aligned &&
         tensor_ops_gemm_nt_f16(a.bytes, b.bytes, out.bytes, M, N, K, stream)) {
       // fp16 tensor_ops (aligned)
     } else {
@@ -1083,7 +1052,7 @@ void puf_mm(PufTensor &a, PufTensor &b, PufTensor &out,
                        /*trans_a=*/false, /*trans_b=*/true,
                        K, K, N, 1.0f, 0.0f, stream);
     }
-  } else if (aligned && !no_tensor &&
+  } else if (aligned &&
              tensor_ops_gemm_nt(a_f32, b_f32,
                                 (float *)out.bytes, M, N, K, stream)) {
     // fp32 tensor_ops (aligned)
@@ -1108,17 +1077,12 @@ void puf_mm_tn(PufTensor &a, PufTensor &b, PufTensor &out,
   int M = (int)a.shape[na - 1];
   int N = (int)b.shape[nb - 1];
 
-  bool no_tensor = g_no_tensor_ops || g_no_tensor_ops_tn;
   bool aligned = (M % 64 == 0) && (N % 32 == 0);
-
-  // TF32 simulation: A is (K,M) stored column-major, B is (K,N)
   float *a_f32 = (float *)a.bytes;
   float *b_f32 = (float *)b.bytes;
-  if (g_tf32_sim && a.dtype_size == 4)
-    tf32_round_gemm_inputs(a_f32, K * M, b_f32, K * N, stream);
 
   if (a.dtype_size == 2) {
-    if (aligned && !no_tensor &&
+    if (aligned &&
         tensor_ops_gemm_tn_f16(a.bytes, b.bytes, out.bytes, M, N, K, stream)) {
       // fp16 tensor_ops TN on compute encoder
     } else {
@@ -1133,7 +1097,7 @@ void puf_mm_tn(PufTensor &a, PufTensor &b, PufTensor &out,
     compute_gemm_ksplit_tn(a_f32, b_f32,
                            (float *)out.bytes, M, N, K,
                            M, N, N, stream);
-  } else if (aligned && !no_tensor &&
+  } else if (aligned &&
              tensor_ops_gemm_tn(a_f32, b_f32,
                                 (float *)out.bytes, M, N, K, stream)) {
     // fp32 tensor_ops TN on compute encoder
@@ -1154,17 +1118,12 @@ void puf_mm_nn(PufTensor &a, PufTensor &b, PufTensor &out,
   int K = (int)a.shape[na - 1];
   int N = (int)b.shape[nb - 1];
 
-  bool no_tensor = g_no_tensor_ops || g_no_tensor_ops_nn;
   bool aligned = (M % 64 == 0) && (N % 32 == 0);
-
-  // TF32 simulation: A is (M,K), B is (K,N)
   float *a_f32 = (float *)a.bytes;
   float *b_f32 = (float *)b.bytes;
-  if (g_tf32_sim && a.dtype_size == 4)
-    tf32_round_gemm_inputs(a_f32, M * K, b_f32, K * N, stream);
 
   if (a.dtype_size == 2) {
-    if (aligned && !no_tensor &&
+    if (aligned &&
         tensor_ops_gemm_nn_f16(a.bytes, b.bytes, out.bytes, M, N, K, stream)) {
       // fp16 tensor_ops NN on compute encoder
     } else {
@@ -1173,7 +1132,7 @@ void puf_mm_nn(PufTensor &a, PufTensor &b, PufTensor &out,
                        /*trans_a=*/false, /*trans_b=*/false,
                        K, N, N, 1.0f, 0.0f, stream);
     }
-  } else if (aligned && !no_tensor &&
+  } else if (aligned &&
              tensor_ops_gemm_nn(a_f32, b_f32,
                                 (float *)out.bytes, M, N, K, stream)) {
     // fp32 tensor_ops NN (aligned)
@@ -1218,16 +1177,10 @@ void puf_addmm_nn(PufTensor &a, PufTensor &b, PufTensor &out, float alpha,
   int K = (int)a.shape[na - 1];
   int N = (int)b.shape[nb - 1];
 
-  // Skip TF32 for addmm: Muon Newton-Schulz iterations are sensitive to
-  // precision loss — TF32 rounding destabilizes the iterative solver.
   const float *a_f32 = (const float *)a.bytes;
   const float *b_f32 = (const float *)b.bytes;
 
-  if ((M % 64 == 0) && (N % 32 == 0) &&
-             !g_no_tensor_ops &&
-             !g_no_tensor_ops_addmm &&
-             !g_no_tensor_ops_nn &&
-             g_ctx.tensor_ops_gemm_nn_f32) {
+  if ((M % 64 == 0) && (N % 32 == 0) && g_ctx.tensor_ops_gemm_nn_f32) {
     // Decompose: out = beta*out + alpha*(a@b)
     // Step 1: temp = a @ b via tensor_ops NN (compute encoder)
     float *temp = addmm_temp_buf(M * N);

@@ -78,13 +78,10 @@ void mtl_assemble_decoder_grad_f32_to_f16(void *grad_out,
 // Memory operations — CPU-side on unified memory (synced), or GPU when training
 // ============================================================================
 
-static const bool g_no_gpu_copy = (getenv("PUFFERLIB_NO_GPU_COPY") != nullptr);
-
 void puf_copy(PufTensor &dst, const PufTensor &src, cudaStream_t stream) {
   assert(dst.numel() == src.numel() && "puf_copy: size mismatch");
   assert(dst.dtype_size == src.dtype_size && "puf_copy: dtype mismatch");
-  bool gpu = puf_is_gpu_training() ||
-             (!g_no_gpu_copy && puf_stream_has_encoder(stream));
+  bool gpu = puf_is_gpu_training() || puf_stream_has_encoder(stream);
   if (gpu && dst.dtype_size == 4) {
     mtl_copy_f32((float *)dst.bytes, (const float *)src.bytes,
                  (int)dst.numel(), stream);
@@ -294,18 +291,6 @@ void mtl_copy_f32(float *dst, const float *src, int count,
   mtl_set_ptr(ms, dst, 0);
   mtl_set_ptr(ms, src, 1);
   mtl_set_params(ms, count, 2);
-  mtl_dispatch_1d(ms, pso, count);
-}
-
-// TF32 in-place rounding: buf[i] = tf32_round(buf[i]) for TF32 GEMM simulation.
-// Avoids scratch buffer visibility issues by modifying the original buffer.
-void mtl_tf32_round_inplace(float *buf, int count, cudaStream_t stream) {
-  MetalStream *ms = mtl_resolve_stream(stream);
-  ms->compute_encoder();
-  auto pso = mtl_pipeline("tf32_round_inplace_kernel");
-  mtl_set_pso(ms, pso);
-  mtl_set_ptr(ms, buf, 0);
-  mtl_set_params(ms, count, 1);
   mtl_dispatch_1d(ms, pso, count);
 }
 
@@ -552,15 +537,6 @@ void mtl_sum_rows_to_f32(float *dst, const float *src, int rows, int cols,
 // CPU inference mode flag — when true, mingru_forward uses CPU gate + memcpy
 // instead of Metal dispatch + puf_copy, eliminating all rollout syncs.
 // ============================================================================
-
-static PufTensor alloc_metal_tensor(int dim0, int dim1) {
-  PufTensor t = {};
-  t.shape[0] = dim0;
-  t.shape[1] = dim1;
-  t.dtype_size = sizeof(float);
-  t.bytes = (char *)mtl_alloc_scratch((int64_t)dim0 * dim1 * sizeof(float));
-  return t;
-}
 
 // ============================================================================
 // MinGRU inference kernel
@@ -1054,16 +1030,6 @@ void prio_sample(int minibatch_segments, int total_agents,
   }
 }
 
-// Legacy combined API (kept for CUDA compat, calls both phases)
-void prio_replay_cuda(PufTensor &advantages, float prio_alpha,
-                       int minibatch_segments, int total_agents,
-                       float anneal_beta, PrioBuffers &bufs, uint64_t seed,
-                       uint32_t *offset_ptr, cudaStream_t stream) {
-  prio_precompute(advantages, prio_alpha, bufs, stream);
-  prio_sample(minibatch_segments, total_agents, anneal_beta, bufs,
-              seed, offset_ptr, stream);
-}
-
 // ============================================================================
 // Select copy (minibatch assembly)
 // ============================================================================
@@ -1141,9 +1107,6 @@ void mtl_muon_weight_update(float *weights, const float *updates,
 // Post-create for PPO buffers (unified memory — direct write)
 // ============================================================================
 
-void post_create_ppo_buffers(PPOBuffersPuf &bufs) {
-  *(float *)bufs.grad_loss.bytes = 1.0f;
-}
 
 // ============================================================================
 // Orthogonal init via Accelerate LAPACK (CPU-side)

@@ -525,8 +525,8 @@ void train_impl(PuffeRL& pufferl) {
         puff_advantage_cuda(rollouts.values, rollouts.rewards, rollouts.terminals,
             rollouts.ratio, pufferl.advantages_puf, hypers.gamma, hypers.gae_lambda,
             hypers.vtrace_rho_clip, hypers.vtrace_c_clip, s);
-        prio_replay_cuda(pufferl.advantages_puf, prio_alpha, minibatch_segments,
-            hypers.total_agents, anneal_beta,
+        prio_precompute(pufferl.advantages_puf, prio_alpha, pufferl.prio_bufs, s);
+        prio_sample(minibatch_segments, hypers.total_agents, anneal_beta,
             pufferl.prio_bufs, pufferl.rng_seed, rng_offset, s);
         mtl_barrier((MetalStream*)s);
 

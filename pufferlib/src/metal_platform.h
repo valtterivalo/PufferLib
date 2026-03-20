@@ -316,7 +316,7 @@ void mtl_enable_gpu_timing(bool enable);
 void mtl_gpu_timing_stats(double *gpu_exec_ms, double *sched_wait_ms);
 
 // Read and reset GEMM dispatch counts.
-void mtl_gemm_stats(int *tensor_ops_count, int *mps_count);
+void mtl_gemm_stats(int *tensor_ops_count);
 
 // Check if a stream has an active compute encoder (work pending on GPU).
 // Used by puf_copy to avoid flushing the encoder chain during rollout.
