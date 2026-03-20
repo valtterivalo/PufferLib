@@ -271,8 +271,10 @@ kernel void fused_scan_forward_checkpointed(
 
     float a_star = 0.0f;
     float log_value = 0.0f;
-    // fast:: math matches CUDA's __logf/__expf fast intrinsics in the scan loop.
-    float s = fast::log(state[bH + h]);
+    // precise:: for numerical stability — fast:: accumulated errors over the
+    // sequence that occasionally produced large scan_result values, triggering
+    // gradient amplification and NaN divergence in the backward pass.
+    float s = precise::log(state[bH + h]);
     log_value = s;
 
     int T_out = p.T_seq + 1;
@@ -298,9 +300,9 @@ kernel void fused_scan_forward_checkpointed(
 
         float z = log_value - a_star;
         float max_val = fmax(s, z);
-        s = max_val + log1p_f(fast::exp(-abs(s - z)));
+        s = max_val + log1p_f(precise::exp(-abs(s - z)));
 
-        float scan_result = fast::exp(a_star + s);
+        float scan_result = precise::exp(a_star + s);
         float proj_sigmoid = sigmoid_f(proj_val);
 
         out[out_curr] = proj_sigmoid * scan_result + (1.0f - proj_sigmoid) * x_val;
@@ -316,7 +318,7 @@ kernel void fused_scan_forward_checkpointed(
         }
     }
 
-    next_state[bH + h] = fast::exp(a_star + s);
+    next_state[bH + h] = precise::exp(a_star + s);
 }
 
 kernel void fused_scan_backward_checkpointed(
@@ -381,7 +383,7 @@ kernel void fused_scan_backward_checkpointed(
 
             float z = recomp_log_value - recomp_a_star;
             float mv = fmax(recomp_s, z);
-            recomp_s = mv + log1p_f(fast::exp(-abs(recomp_s - z)));
+            recomp_s = mv + log1p_f(precise::exp(-abs(recomp_s - z)));
 
             chunk_a_star[i] = recomp_a_star;
             chunk_s[i] = recomp_s;
@@ -404,7 +406,7 @@ kernel void fused_scan_backward_checkpointed(
             int input_idx = out_base + (t - 1) * p.H;
             float x_val = input[input_idx];
 
-            float scan_result = fast::exp(a_star_t + s_t);
+            float scan_result = precise::exp(a_star_t + s_t);
             float z = log_value_t - a_star_t;
 
             float grad_out_val = grad_out[input_idx];
@@ -421,9 +423,9 @@ kernel void fused_scan_backward_checkpointed(
             if (t == p.T_seq) {
                 acc = grad_s;
             } else {
-                acc = grad_s + acc * fast::exp(s_t - s_val_next);
+                acc = grad_s + acc * precise::exp(s_t - s_val_next);
             }
-            float grad_z = acc * fast::exp(z - s_t);
+            float grad_z = acc * precise::exp(z - s_t);
             s_val_next = s_t;
 
             float grad_a = grad_log_h + carry_grad_a - grad_z;
@@ -444,8 +446,8 @@ kernel void fused_scan_backward_checkpointed(
     float s_0 = s_buf[ckpt_0_idx];
     float log_value_0 = log_values_buf[ckpt_0_idx];
 
-    acc = acc * fast::exp(s_0 - s_val_next);
-    float grad_z_0 = acc * fast::exp((log_value_0 - a_star_0) - s_0);
+    acc = acc * precise::exp(s_0 - s_val_next);
+    float grad_z_0 = acc * precise::exp((log_value_0 - a_star_0) - s_0);
 
     grad_state[state_idx] = (state[state_idx] > 0.0f) ? (grad_z_0 / state[state_idx]) : 0.0f;
 }
