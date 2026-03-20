@@ -55,7 +55,7 @@ struct MetalStream {
   void begin();
 
   // Get the current compute encoder (creates one lazily).
-  id<MTLComputeCommandEncoder> compute_encoder();
+  void compute_encoder();
 
   // End the current compute encoder. Must call before sync.
   void end_compute();

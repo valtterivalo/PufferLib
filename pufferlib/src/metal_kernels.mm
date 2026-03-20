@@ -1248,8 +1248,7 @@ void muon_init(Muon *m, Allocator *param_alloc, PufTensor weight_buffer,
 }
 
 void muon_step(Muon *m, cudaStream_t stream) {
-  if (m->wb_puf.bytes == nullptr)
-    return;
+  assert(m->wb_puf.bytes != nullptr && "muon_step: weights not initialized");
   MetalStream *ms = mtl_resolve_stream(stream);
 
   // No NCCL on Metal (single GPU)

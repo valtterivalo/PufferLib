@@ -1279,21 +1279,6 @@ kernel void copy_f32(
     if ((int)idx < n) dst[idx] = src[idx];
 }
 
-// TF32 in-place rounding: rounds buffer values to 10-bit mantissa in-place.
-// Used instead of scratch-copy to avoid Metal 4 buffer visibility issues.
-kernel void tf32_round_inplace_kernel(
-    device float* buf               [[buffer(0)]],
-    constant int& n                 [[buffer(1)]],
-    uint idx [[thread_position_in_grid]]
-) {
-    if ((int)idx >= n) return;
-    uint bits = as_type<uint>(buf[idx]);
-    uint exp = bits & 0x7F800000u;
-    bits = (exp != 0x7F800000u) ? ((bits + 0x1000u) & 0xFFFFE000u)
-                                : (bits & 0xFFFFE000u);
-    buf[idx] = as_type<float>(bits);
-}
-
 struct ClampParams {
     float lo;
     float hi;
@@ -1898,98 +1883,11 @@ struct GemmParams {
     int trans_b;
 };
 
-// ============================================================================
-// Section 21: Register-tiled GEMM — C = alpha * op(A) @ op(B) + beta * C
-//
-// 32x32 output tiles, 8x8 threadgroup (64 threads), each thread computes
-// a TM×TN (4×4) sub-tile via register blocking. BK=16 for K-dimension tiling.
-// ============================================================================
-
-constant int BM = 32;   // tile rows
+constant int BM = 32;   // tile rows (shared by ksplit and fp16 register GEMMs)
 constant int BN = 32;   // tile cols
 constant int BK = 16;   // tile K dimension
 constant int TM = 4;    // per-thread tile rows
 constant int TN = 4;    // per-thread tile cols
-
-kernel void sgemm_reg(
-    device const float* A      [[buffer(0)]],
-    device const float* B      [[buffer(1)]],
-    device float* C            [[buffer(2)]],
-    constant GemmParams& p     [[buffer(3)]],
-    uint2 group_id    [[threadgroup_position_in_grid]],
-    uint2 local_id    [[thread_position_in_threadgroup]]
-) {
-    threadgroup float sA[BM][BK];   // 32x16 = 2 KB
-    threadgroup float sB[BK][BN];   // 16x32 = 2 KB
-
-    int trow = (int)local_id.y;  // 0..7
-    int tcol = (int)local_id.x;  // 0..7
-    int tid = trow * (BN / TN) + tcol;  // 0..63
-
-    float acc[TM][TN];
-    for (int m = 0; m < TM; m++)
-        for (int n = 0; n < TN; n++)
-            acc[m][n] = 0.0f;
-
-    int num_k_tiles = (p.K + BK - 1) / BK;
-
-    for (int kt = 0; kt < num_k_tiles; kt++) {
-        int k_base = kt * BK;
-
-        // Cooperatively load sA[BM][BK]: 512 floats / 64 threads = 8 per thread
-        for (int i = 0; i < (BM * BK) / 64; i++) {
-            int idx = tid + i * 64;
-            int r = idx / BK;
-            int c = idx % BK;
-            int gr = (int)group_id.y * BM + r;
-            int gc = k_base + c;
-            sA[r][c] = (gr < p.M && gc < p.K)
-                ? (p.trans_a ? A[gc * p.lda + gr] : A[gr * p.lda + gc])
-                : 0.0f;
-        }
-
-        // Cooperatively load sB[BK][BN]: 512 floats / 64 threads = 8 per thread
-        for (int i = 0; i < (BK * BN) / 64; i++) {
-            int idx = tid + i * 64;
-            int r = idx / BN;
-            int c = idx % BN;
-            int gr = k_base + r;
-            int gc = (int)group_id.x * BN + c;
-            sB[r][c] = (gr < p.K && gc < p.N)
-                ? (p.trans_b ? B[gc * p.ldb + gr] : B[gr * p.ldb + gc])
-                : 0.0f;
-        }
-
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-
-        // Register-blocked multiply: each thread does TM*TN FMAs per k step
-        for (int k = 0; k < BK; k++) {
-            float a_reg[TM];
-            float b_reg[TN];
-            for (int m = 0; m < TM; m++) a_reg[m] = sA[trow * TM + m][k];
-            for (int n = 0; n < TN; n++) b_reg[n] = sB[k][tcol * TN + n];
-            for (int m = 0; m < TM; m++)
-                for (int n = 0; n < TN; n++)
-                    acc[m][n] += a_reg[m] * b_reg[n];
-        }
-
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-    }
-
-    // Write TM*TN results
-    int row_base = (int)group_id.y * BM + trow * TM;
-    int col_base = (int)group_id.x * BN + tcol * TN;
-    for (int m = 0; m < TM; m++) {
-        for (int n = 0; n < TN; n++) {
-            int r = row_base + m;
-            int c = col_base + n;
-            if (r < p.M && c < p.N) {
-                int idx = r * p.ldc + c;
-                C[idx] = p.alpha * acc[m][n] + p.beta * C[idx];
-            }
-        }
-    }
-}
 
 // ============================================================================
 // Section 22: K-split GEMM — for tall-K backward weight-gradient GEMMs
@@ -2384,8 +2282,6 @@ kernel void fused_scan_forward_checkpointed_fp16(
         float scan_result = exp(a_star + s);
         float proj_sigmoid = sigmoid_f(proj_val);
         float out_val = proj_sigmoid * scan_result + (1.0f - proj_sigmoid) * x_val;
-        if (!isfinite(out_val)) out_val = 0.0f;
-        if (!isfinite(scan_result)) scan_result = 1.0f;
 
         out[out_curr] = half(clamp(out_val, -65000.0f, 65000.0f));
 
@@ -2401,7 +2297,6 @@ kernel void fused_scan_forward_checkpointed_fp16(
     }
 
     float next_state_val = exp(a_star + s);
-    if (!isfinite(next_state_val)) next_state_val = 1.0f;
     next_state[bH + h] = half(clamp(next_state_val, 1.0e-6f, 65000.0f));
 }
 
@@ -2496,7 +2391,6 @@ kernel void fused_scan_backward_checkpointed_fp16(
             float grad_scan_result = grad_scan_from_next + grad_out_val * proj_sigmoid;
             float grad_proj = grad_out_val * (scan_result - x_val) * proj_sigmoid * (1.0f - proj_sigmoid);
             float grad_input_val = grad_out_val * (1.0f - proj_sigmoid);
-            if (!isfinite(grad_input_val)) grad_input_val = 0.0f;
             grad_input[input_idx] = half(clamp(grad_input_val, -65000.0f, 65000.0f));
 
             float grad_log_h = grad_scan_result * scan_result;
@@ -2531,11 +2425,8 @@ kernel void fused_scan_backward_checkpointed_fp16(
     acc = acc * exp(s_0 - s_val_next);
     float grad_z_0 = acc * exp((log_value_0 - a_star_0) - s_0);
 
-    float denom = float(state[state_idx]);
-    if (!isfinite(denom) || denom < 1.0e-6f) denom = 1.0e-6f;
+    float denom = max(float(state[state_idx]), 1.0e-6f);
     float grad_state_val = grad_z_0 / denom;
-    if (!isfinite(grad_state_val)) grad_state_val = 0.0f;
-    // Clamp to fp16 range to prevent inf (Metal fp16 max ~65504)
     grad_state[state_idx] = half(clamp(grad_state_val, -65000.0f, 65000.0f));
 }
 

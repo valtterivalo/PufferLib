@@ -272,14 +272,13 @@ void MetalStream::begin() {
   const_ring_offset = 0;
 }
 
-id<MTLComputeCommandEncoder> MetalStream::compute_encoder() {
+void MetalStream::compute_encoder() {
   if (!enc_active) {
     enc = [cmd computeCommandEncoder];
     [enc setArgumentTable:arg_table];
     enc_active = true;
     pending_work = true;
   }
-  return nil; // callers use enc via helpers, not this return value
 }
 
 void MetalStream::end_compute() {
@@ -588,7 +587,7 @@ void *mtl_create_stream() {
 }
 
 void mtl_destroy_stream(void *stream) {
-  if (!stream) return;
+  assert(stream && "mtl_destroy_stream: null stream");
   MetalStream *ms = (MetalStream *)stream;
   if (ms->flushed) {
     ms->wait_completed();
