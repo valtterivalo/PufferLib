@@ -1680,6 +1680,13 @@ static PufTensor mingru_backward(void *w, PufTensor grad, void *activations,
   MinGRUActivations *a = (MinGRUActivations *)activations;
   MetalStream *ms = mtl_resolve_stream(stream);
 
+  // grad_next_state must be zero — no downstream consumer of the final
+  // hidden state during training (state is reset each minibatch).
+  // without this, stale values from the previous backward pass inject
+  // garbage gradients at the last timestep of the scan.
+  puf_zero(a->grad_next_state, stream);
+  mtl_barrier(ms);
+
   for (int i = m->num_layers - 1; i >= 0; i--) {
     PrefixScan &scan = a->scan_bufs[i];
     // Dispatch fp16 or fp32 scan backward based on activation dtype
