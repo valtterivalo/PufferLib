@@ -1233,19 +1233,16 @@ void puf_orthogonal_init(PufTensor &dst, float gain, uint64_t seed,
 // ============================================================================
 
 void muon_init(Muon *m, Allocator *param_alloc, PufTensor weight_buffer,
-               double lr_val, double momentum, double eps, double weight_decay,
+               double lr_val, double momentum, double weight_decay,
                int ns_iters, Allocator &alloc) {
   m->momentum = momentum;
   m->weight_decay = weight_decay;
-  m->eps = eps;
   m->ns_iters = (ns_iters > 0 && ns_iters <= 5) ? ns_iters : 5;
   m->lr_val_init = (float)lr_val;
   m->lr_ptr = nullptr;
   m->lr_derived_ptr = nullptr;
   m->wb_puf = weight_buffer;
   m->param_alloc = param_alloc;
-  m->nccl_comm = nullptr;
-  m->world_size = 1;
   m->ns = {};
   int64_t n = m->wb_puf.numel();
   int f = sizeof(float);

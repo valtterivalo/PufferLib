@@ -489,10 +489,8 @@ std::unique_ptr<PuffeRL> create_pufferl(pybind11::dict kwargs,
     hypers.lr = get_config(kwargs, "learning_rate");
     hypers.min_lr_ratio = get_config(kwargs, "min_lr_ratio");
     hypers.anneal_lr = get_config(kwargs, "anneal_lr");
-    // Optimizer
+    // Optimizer (Muon only)
     hypers.beta1 = get_config(kwargs, "beta1");
-    hypers.beta2 = get_config(kwargs, "beta2");
-    hypers.eps = get_config(kwargs, "eps");
     // Training
     hypers.minibatch_size = get_config(kwargs, "minibatch_size");
     hypers.replay_ratio = get_config(kwargs, "replay_ratio");
@@ -513,9 +511,6 @@ std::unique_ptr<PuffeRL> create_pufferl(pybind11::dict kwargs,
     hypers.prio_alpha = get_config(kwargs, "prio_alpha");
     hypers.prio_beta0 = get_config(kwargs, "prio_beta0");
     // Flags
-    hypers.use_rnn = get_config(kwargs, "use_rnn");
-    hypers.cudagraphs = -1;  // always disabled on Metal
-    hypers.kernels = true;   // always use Metal kernels
     hypers.profile = get_config(kwargs, "profile");
     mtl_enable_gpu_timing(hypers.profile);
     hypers.overlap = kwargs.contains("overlap") && get_config(kwargs, "overlap") > 0;
@@ -571,8 +566,6 @@ PYBIND11_MODULE(_C, m) {
         .def_readwrite("min_lr_ratio", &HypersT::min_lr_ratio)
         .def_readwrite("anneal_lr", &HypersT::anneal_lr)
         .def_readwrite("beta1", &HypersT::beta1)
-        .def_readwrite("beta2", &HypersT::beta2)
-        .def_readwrite("eps", &HypersT::eps)
         .def_readwrite("total_timesteps", &HypersT::total_timesteps)
         .def_readwrite("max_grad_norm", &HypersT::max_grad_norm)
         .def_readwrite("clip_coef", &HypersT::clip_coef)
@@ -585,9 +578,6 @@ PYBIND11_MODULE(_C, m) {
         .def_readwrite("vtrace_c_clip", &HypersT::vtrace_c_clip)
         .def_readwrite("prio_alpha", &HypersT::prio_alpha)
         .def_readwrite("prio_beta0", &HypersT::prio_beta0)
-        .def_readwrite("use_rnn", &HypersT::use_rnn)
-        .def_readwrite("cudagraphs", &HypersT::cudagraphs)
-        .def_readwrite("kernels", &HypersT::kernels)
         .def_readwrite("profile", &HypersT::profile)
         .def_readwrite("overlap", &HypersT::overlap)
         .def_readwrite("train_fp16", &HypersT::train_fp16)

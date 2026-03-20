@@ -564,7 +564,7 @@ inline PufTensor ns_slice(PufTensor &buf, int64_t rows, int64_t cols) {
 }
 
 struct Muon {
-  double momentum, weight_decay, eps;
+  double momentum, weight_decay;
   float lr_val_init;
   int ns_iters;  // Newton-Schulz iterations (default 5, sweepable)
   float *lr_ptr;
@@ -572,13 +572,7 @@ struct Muon {
   PufTensor lr_puf, lr_derived_puf, ns_norm_puf;
   PufTensor wb_puf, mb_puf, gc_puf, up_puf;
   NSScratch ns;
-  Allocator *param_alloc; // fp32 params allocator — shapes used by muon_step
-#ifdef __CUDACC__
-  ncclComm_t nccl_comm;
-#else
-  void *nccl_comm; // unused on non-CUDA (single GPU)
-#endif
-  int world_size;
+  Allocator *param_alloc; // fp32 params allocator -- shapes used by muon_step
 };
 
 // ============================================================================

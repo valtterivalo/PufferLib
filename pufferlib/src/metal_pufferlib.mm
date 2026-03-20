@@ -88,10 +88,8 @@ typedef struct {
     float lr;
     float min_lr_ratio;
     bool anneal_lr;
-    // Optimizer
+    // Optimizer (Muon only — Adam removed)
     float beta1;
-    float beta2;
-    float eps;
     // Training
     int minibatch_size;
     float replay_ratio;
@@ -112,9 +110,6 @@ typedef struct {
     float prio_alpha;
     float prio_beta0;
     // Flags
-    bool use_rnn;
-    int cudagraphs;  // kept for API compat, always -1 (ignored)
-    bool kernels;
     bool profile;
     bool overlap;  // async training overlap: train on separate GPU queue
     bool cpu_inference;  // CPU forward pass during rollout (no GPU sync)
@@ -975,8 +970,6 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
 
     float lr = hypers.lr;
     float beta1 = hypers.beta1;
-    float beta2 = hypers.beta2;
-    float eps = hypers.eps;
     pufferl->muon = new Muon{};
     int horizon = hypers.horizon;
     int total_agents = vec->total_agents;
@@ -1053,9 +1046,7 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
 
     // Optimizer init (register buffers with shared allocator)
     muon_init(pufferl->muon, &fp32_params,
-        pufferl->param_fp32_puf, lr, beta1, eps, 0.0, hypers.ns_iters, alloc);
-    pufferl->muon->nccl_comm = nullptr;
-    pufferl->muon->world_size = 1;
+        pufferl->param_fp32_puf, lr, beta1, 0.0, hypers.ns_iters, alloc);
     // Single allocation for all registered buffers
     alloc.create();
 
