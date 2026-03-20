@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import ast
 import configparser
+import glob
 import json
 import math
 import os
@@ -266,7 +267,8 @@ class TrainingResult:
 def run_training(config, vec_config, env_config, policy_config, *,
                  log_interval=5, score_key="score",
                  on_log=None, should_stop=None, on_iteration=None,
-                 keep_alive=False):
+                 keep_alive=False,
+                 checkpoint_dir=None, checkpoint_interval=200):
     """Run the Metal training loop.
 
     on_log(iteration, global_step, sps, losses, env_stats):
@@ -277,6 +279,8 @@ def run_training(config, vec_config, env_config, policy_config, *,
         called every iteration (for PFSP weight updates etc.)
     keep_alive:
         if True, don't close pufferl -- caller gets it via result.pufferl.
+    checkpoint_dir:
+        if set, save weights every checkpoint_interval iterations.
     """
     total_agents = int(vec_config["total_agents"])
     horizon = int(config["horizon"])
@@ -300,10 +304,17 @@ def run_training(config, vec_config, env_config, policy_config, *,
         start_time = time.time()
         t_last_log = start_time
 
+        if checkpoint_dir:
+            os.makedirs(checkpoint_dir, exist_ok=True)
+
         for iteration in range(1, total_iters + 1):
             _C.rollouts(pufferl)
             _C.train(pufferl)
             global_step += steps_per_iter
+
+            if checkpoint_dir and (iteration % checkpoint_interval == 0 or iteration == total_iters):
+                path = os.path.join(checkpoint_dir, f"{global_step:016d}.bin")
+                _C.save_weights(pufferl, path)
 
             if on_iteration:
                 on_iteration(pufferl, global_step)
@@ -822,12 +833,21 @@ def train_cli(env_name: str):
             trace_file.write(json.dumps(trace_row) + "\n")
 
     log_interval = int(cli.get("log_interval", 10))
+    checkpoint_interval = int(cli.get("checkpoint_interval", 200))
+    checkpoint_dir = cli.get("checkpoint_dir", "")
+    if not checkpoint_dir:
+        run_id = str(int(1000 * time.time()))
+        checkpoint_dir = os.path.join("checkpoints", env_name, run_id)
+
     print(f"model params: {int(c.get('total_timesteps', 0)):,} steps target")
+    print(f"checkpoints: {checkpoint_dir} (every {checkpoint_interval} iters)")
 
     result = run_training(
         c, vec_config, env_config, policy_config,
         log_interval=log_interval,
         on_log=on_log,
+        checkpoint_dir=checkpoint_dir,
+        checkpoint_interval=checkpoint_interval,
     )
 
     print(f"\ndone. {result.steps:,} steps in {result.elapsed:.1f}s")
@@ -865,12 +885,51 @@ def sweep_cli(env_name: str):
 
 
 # ============================================================================
+# CLI: eval mode (load checkpoint, render env 0)
+# ============================================================================
+
+def eval_cli(env_name: str):
+    """Load a trained checkpoint and render the agent. Follows upstream pufferl.eval."""
+    config = load_config(env_name)
+    config = apply_cli_overrides(config, env_name)
+    cli = config.pop("_cli", {})
+
+    c, vec_config, env_config, policy_config = build_configs(env_name, config)
+
+    pufferl = _C.create_pufferl(c, vec_config, env_config, policy_config)
+
+    # resolve load path: explicit path, "latest", or search
+    load_path = cli.get("load_model_path", "latest")
+    if load_path == "latest":
+        pattern = os.path.join("checkpoints", env_name, "**", "*.bin")
+        candidates = glob.glob(pattern, recursive=True)
+        if not candidates:
+            print(f"no checkpoints found in checkpoints/{env_name}/")
+            _C.close(pufferl)
+            return
+        load_path = max(candidates, key=os.path.getctime)
+
+    _C.load_weights(pufferl, load_path)
+    print(f"loaded weights from {load_path}")
+    print(f"rendering env 0. ctrl+c to stop.")
+
+    try:
+        while True:
+            _C.render(pufferl, 0)
+            _C.rollouts(pufferl)
+    except KeyboardInterrupt:
+        print("\nstopped.")
+    finally:
+        _C.close(pufferl)
+
+
+# ============================================================================
 # CLI dispatcher
 # ============================================================================
 
 def main():
     if len(sys.argv) < 3:
-        print("usage: python pufferl.py [train|sweep|results] <env> [args]")
+        print("usage: python pufferl.py [train|sweep|eval|results] <env> [args]")
         sys.exit(1)
 
     mode = sys.argv.pop(1)
@@ -880,10 +939,12 @@ def main():
         train_cli(env_name)
     elif mode == "sweep":
         sweep_cli(env_name)
+    elif mode == "eval":
+        eval_cli(env_name)
     elif mode == "results":
         print_results(SWEEP_DIR_BASE / env_name / "observations.jsonl")
     else:
-        print(f"unknown mode: {mode}. use train, sweep, or results.")
+        print(f"unknown mode: {mode}. use train, sweep, eval, or results.")
         sys.exit(1)
 
 
