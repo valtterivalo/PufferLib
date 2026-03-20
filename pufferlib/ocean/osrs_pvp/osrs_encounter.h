@@ -195,6 +195,7 @@ typedef struct {
     int hit_landed_this_tick;
     int hit_damage;
     int hit_was_successful;
+    int hit_spell_type;  /* ENCOUNTER_SPELL_* for barrage impact effects on NPCs */
     int cast_veng_this_tick;
     int ate_food_this_tick;
     int ate_karambwan_this_tick;

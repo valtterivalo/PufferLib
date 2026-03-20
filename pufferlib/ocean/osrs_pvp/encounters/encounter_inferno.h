@@ -449,6 +449,7 @@ typedef struct {
     int moved_this_tick;     /* 1 when NPC moves this tick */
     int hit_landed_this_tick; /* 1 when this NPC was hit by player */
     int hit_damage;          /* damage dealt to this NPC this tick */
+    int hit_spell_type;      /* ENCOUNTER_SPELL_* from the pending hit that just landed */
 } InfNPC;
 
 /* ======================================================================== */
@@ -1203,28 +1204,32 @@ static void inf_npc_attack(InfernoState* s, int idx) {
                                       npc->x, npc->y, npc->size);
     if (dist == 0 || dist > stats->attack_range) return;
 
-    /* blob prayer reading: 2-phase attack cycle */
+    /* blob prayer reading: 2-phase attack cycle.
+       phase 1 (3 ticks): scan player prayer.
+       phase 2: fire attack with opposite style, fall through to common attack code.
+       ref: InfernoTrainer JalAk.ts — 6 tick cycle = 3 tick scan + 3 tick cooldown. */
     if (npc->type == INF_NPC_BLOB) {
         if (npc->blob_scan_timer > 0) {
-            /* still in scan phase, waiting */
             npc->blob_scan_timer--;
-            if (npc->blob_scan_timer == 0) {
-                /* scan complete, determine attack style based on prayer read */
-                OverheadPrayer read_prayer = (OverheadPrayer)npc->blob_scanned_prayer;
-                if (read_prayer == PRAYER_PROTECT_MAGIC)
-                    npc->attack_style = ATTACK_STYLE_RANGED;
-                else if (read_prayer == PRAYER_PROTECT_RANGED)
-                    npc->attack_style = ATTACK_STYLE_MAGIC;
-                else
-                    npc->attack_style = (encounter_rand_int(&s->rng_state, 2) == 0)
-                        ? ATTACK_STYLE_MAGIC : ATTACK_STYLE_RANGED;
-            }
+            if (npc->blob_scan_timer > 0) return;  /* still scanning */
+            /* scan complete — determine attack style, fall through to fire */
+            OverheadPrayer read_prayer = (OverheadPrayer)npc->blob_scanned_prayer;
+            if (read_prayer == PRAYER_PROTECT_MAGIC)
+                npc->attack_style = ATTACK_STYLE_RANGED;
+            else if (read_prayer == PRAYER_PROTECT_RANGED)
+                npc->attack_style = ATTACK_STYLE_MAGIC;
+            else
+                npc->attack_style = (encounter_rand_int(&s->rng_state, 2) == 0)
+                    ? ATTACK_STYLE_MAGIC : ATTACK_STYLE_RANGED;
+            /* fall through to attack code below */
+        } else {
+            /* start scan phase: read current prayer, wait 3 ticks */
+            npc->blob_scanned_prayer = (int)s->active_prayer;
+            npc->blob_scan_timer = 3;
+            npc->attacked_this_tick = 1;
+            npc->attack_timer = stats->attack_speed;
             return;
         }
-        /* start scan phase: read current prayer, wait 3 ticks */
-        npc->blob_scanned_prayer = (int)s->active_prayer;
-        npc->blob_scan_timer = 3;
-        return;
     }
 
     /* determine actual attack style */
@@ -1670,7 +1675,8 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
 
     /* brew (INF_HEAD_EAT): heals 16 HP, can overcap to base+16 */
     int eat_act = actions[INF_HEAD_EAT];
-    if (eat_act == 1 && s->player_brew_doses > 0 && s->player_potion_timer == 0) {
+    if (eat_act == 1 && s->player_brew_doses > 0 && s->player_potion_timer == 0
+        && s->player.current_hitpoints < s->player.base_hitpoints) {
         s->player.current_hitpoints += INF_BREW_HEAL;
         if (s->player.current_hitpoints > s->player.base_hitpoints + 16)
             s->player.current_hitpoints = s->player.base_hitpoints + 16;
@@ -1938,6 +1944,7 @@ static void inf_step(EncounterState* state, const int* actions) {
         s->npcs[i].moved_this_tick = 0;
         s->npcs[i].hit_landed_this_tick = 0;
         s->npcs[i].hit_damage = 0;
+        s->npcs[i].hit_spell_type = 0;
     }
     s->tick++;
 
@@ -1965,11 +1972,15 @@ static void inf_step(EncounterState* state, const int* actions) {
         int blood_heal_acc = 0;
         for (int i = 0; i < INF_MAX_NPCS; i++) {
             if (!s->npcs[i].active || s->npcs[i].death_ticks > 0) continue;
+            int spell = s->npcs[i].pending_hit.spell_type;
             int landed = encounter_resolve_npc_pending_hit(
                 &s->npcs[i].pending_hit,
                 &s->npcs[i].hp, &s->npcs[i].hit_landed_this_tick, &s->npcs[i].hit_damage,
                 &s->npcs[i].frozen_ticks, &blood_heal_acc, &s->damage_dealt_this_tick);
-            if (landed) inf_apply_npc_death(s, i);
+            if (landed) {
+                s->npcs[i].hit_spell_type = spell;
+                inf_apply_npc_death(s, i);
+            }
         }
         if (blood_heal_acc > 0) {
             s->player.current_hitpoints += blood_heal_acc / 4;
@@ -2125,13 +2136,10 @@ static void inf_write_mask(EncounterState* state, float* mask) {
 
     /* HEAD_EAT (2): none, brew */
     mask[offset++] = 1.0f;  /* none always valid */
-    {
-        int brew_hp_room = (s->player.base_hitpoints + 16) - s->player.current_hitpoints;
-        mask[offset++] = (s->player_brew_doses > 0 &&
-                          s->player_potion_timer == 0 &&
-                          brew_hp_room >= INF_BREW_HEAL / 2)
-                         ? 1.0f : 0.0f;
-    }
+    mask[offset++] = (s->player_brew_doses > 0 &&
+                      s->player_potion_timer == 0 &&
+                      s->player.current_hitpoints < s->player.base_hitpoints)
+                     ? 1.0f : 0.0f;
 
     /* HEAD_POTION (4): none, restore, bastion, stamina */
     mask[offset++] = 1.0f;  /* none always valid */
@@ -2243,6 +2251,7 @@ static void inf_fill_render_entities(EncounterState* state, RenderEntity* out, i
         /* barrage hits that pass accuracy are queued; splashes never enter the queue.
            so any NPC with hit_landed_this_tick from a pending hit was a successful hit. */
         re->hit_was_successful = npc->hit_landed_this_tick;
+        re->hit_spell_type = npc->hit_spell_type;
     }
 
     encounter_resolve_attack_target(out, n, s->player_attack_target);
