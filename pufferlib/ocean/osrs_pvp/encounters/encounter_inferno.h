@@ -93,9 +93,9 @@ static const int INF_NPC_DEF_IDS[INF_NUM_NPC_TYPES] = {
     [INF_NPC_NIBBLER]    = 7691,  /* Jal-Nib */
     [INF_NPC_BAT]        = 7692,  /* Jal-MejRah */
     [INF_NPC_BLOB]       = 7693,  /* Jal-Ak */
-    [INF_NPC_BLOB_MELEE] = 7694,  /* Jal-AkRek-Mej */
-    [INF_NPC_BLOB_RANGE] = 7695,  /* Jal-AkRek-Xil */
-    [INF_NPC_BLOB_MAGE]  = 7696,  /* Jal-AkRek-Ket */
+    [INF_NPC_BLOB_MELEE] = 7694,  /* Jal-AkRek-Ket (melee split) */
+    [INF_NPC_BLOB_RANGE] = 7695,  /* Jal-AkRek-Xil (range split) */
+    [INF_NPC_BLOB_MAGE]  = 7696,  /* Jal-AkRek-Mej (mage split) */
     [INF_NPC_MELEER]     = 7697,  /* Jal-ImKot */
     [INF_NPC_RANGER]     = 7698,  /* Jal-Xil */
     [INF_NPC_MAGER]      = 7699,  /* Jal-Zek */
@@ -162,8 +162,10 @@ static const InfNPCStats INF_NPC_STATS[INF_NUM_NPC_TYPES] = {
         .stab_def = 30, .slash_def = 30, .crush_def = 30, .magic_def_bonus = -20, .ranged_def_bonus = 45,
         .stun_on_spawn = 0, .can_move = 1 },
 
-    /* BLOB (JalAk): prayer reader, can melee if close. computed max hit = 29 */
-    [INF_NPC_BLOB] = { .hp = 40, .attack_speed = 6, .attack_range = 15, .size = 3,
+    /* BLOB (JalAk): prayer reader, can melee if close. computed max hit = 29.
+       attack_speed = 3: InfernoTrainer JalAk.ts — "6 tick cycle = scan exits early,
+       so it always is double the cooldown between actual attacks." */
+    [INF_NPC_BLOB] = { .hp = 40, .attack_speed = 3, .attack_range = 15, .size = 3,
         .default_style = ATTACK_STYLE_MAGIC, .can_melee = 1,
         .att_level = 160, .str_level = 160, .def_level = 95, .range_level = 160, .magic_level = 160,
         .melee_att_bonus = 0, .range_att_bonus = 40, .magic_att_bonus = 45,
@@ -825,6 +827,7 @@ static void inf_init_npc(InfernoState* s, int idx, InfNPCType type, int x, int y
     npc->target_y = y;
     npc->heal_target = -1;
     npc->jad_owner_idx = -1;
+    npc->blob_scanned_prayer = -1;
     npc->stun_timer = stats->stun_on_spawn;
 }
 
@@ -1204,32 +1207,30 @@ static void inf_npc_attack(InfernoState* s, int idx) {
                                       npc->x, npc->y, npc->size);
     if (dist == 0 || dist > stats->attack_range) return;
 
-    /* blob prayer reading: 2-phase attack cycle.
-       phase 1 (3 ticks): scan player prayer.
-       phase 2: fire attack with opposite style, fall through to common attack code.
-       ref: InfernoTrainer JalAk.ts — 6 tick cycle = 3 tick scan + 3 tick cooldown. */
+    /* blob prayer reading: 2-phase attack with attack_speed = 3.
+       scan tick: read player prayer, set timer, return (shows scan animation).
+       fire tick: determine style from scanned prayer, fall through to common attack.
+       total cycle = 6 ticks (3 scan + 3 cooldown).
+       ref: InfernoTrainer JalAk.ts attackIfPossible() */
     if (npc->type == INF_NPC_BLOB) {
-        if (npc->blob_scan_timer > 0) {
-            npc->blob_scan_timer--;
-            if (npc->blob_scan_timer > 0) return;  /* still scanning */
-            /* scan complete — determine attack style, fall through to fire */
-            OverheadPrayer read_prayer = (OverheadPrayer)npc->blob_scanned_prayer;
-            if (read_prayer == PRAYER_PROTECT_MAGIC)
-                npc->attack_style = ATTACK_STYLE_RANGED;
-            else if (read_prayer == PRAYER_PROTECT_RANGED)
-                npc->attack_style = ATTACK_STYLE_MAGIC;
-            else
-                npc->attack_style = (encounter_rand_int(&s->rng_state, 2) == 0)
-                    ? ATTACK_STYLE_MAGIC : ATTACK_STYLE_RANGED;
-            /* fall through to attack code below */
-        } else {
-            /* start scan phase: read current prayer, wait 3 ticks */
+        if (npc->blob_scanned_prayer < 0) {
+            /* no pending scan → start scan phase */
             npc->blob_scanned_prayer = (int)s->active_prayer;
-            npc->blob_scan_timer = 3;
-            npc->attacked_this_tick = 1;
-            npc->attack_timer = stats->attack_speed;
+            npc->attacked_this_tick = 1;  /* triggers scan animation */
+            npc->attack_timer = stats->attack_speed;  /* 3 */
             return;
         }
+        /* has pending scan → determine style and fall through to fire */
+        OverheadPrayer read_prayer = (OverheadPrayer)npc->blob_scanned_prayer;
+        if (read_prayer == PRAYER_PROTECT_MAGIC)
+            npc->attack_style = ATTACK_STYLE_RANGED;
+        else if (read_prayer == PRAYER_PROTECT_RANGED)
+            npc->attack_style = ATTACK_STYLE_MAGIC;
+        else
+            npc->attack_style = (encounter_rand_int(&s->rng_state, 2) == 0)
+                ? ATTACK_STYLE_MAGIC : ATTACK_STYLE_RANGED;
+        npc->blob_scanned_prayer = -1;
+        /* fall through to common attack code */
     }
 
     /* determine actual attack style */
@@ -2030,6 +2031,20 @@ static void inf_step(EncounterState* state, const int* actions) {
         s->winner = 1;
     }
 
+    /* idle penalty counter: consecutive ticks where player could attack but didn't */
+    {
+        int has_alive_npc = 0;
+        for (int i = 0; i < INF_MAX_NPCS; i++) {
+            if (s->npcs[i].active && s->npcs[i].death_ticks == 0) {
+                has_alive_npc = 1; break;
+            }
+        }
+        if (has_alive_npc && s->player_attack_timer == 0 && !s->player_attacked_this_tick)
+            s->ticks_without_action++;
+        else
+            s->ticks_without_action = 0;
+    }
+
     s->reward = inf_compute_reward(s);
     s->episode_return += s->reward;
 }
@@ -2038,8 +2053,8 @@ static void inf_step(EncounterState* state, const int* actions) {
 /* observations                                                              */
 /* ======================================================================== */
 
-/* obs layout: 19 player + 6 pillar + 32 NPCs * 11 = 377. round up to 380. */
-#define INF_NUM_OBS 380
+/* obs layout: 20 player + 6 pillar + 32 NPCs * 11 = 378. round up to 381. */
+#define INF_NUM_OBS 381
 
 static void inf_write_obs(EncounterState* state, float* obs) {
     InfernoState* s = (InfernoState*)state;
@@ -2070,6 +2085,8 @@ static void inf_write_obs(EncounterState* state, float* obs) {
     obs[i++] = (s->stamina_active_ticks > 0) ? 1.0f : 0.0f;
     /* potion cooldown */
     obs[i++] = (float)s->player_potion_timer / 3.0f;
+    /* attack readiness: 0 = ready to fire, >0 = on cooldown */
+    obs[i++] = (float)s->player_attack_timer / 8.0f;
 
     /* pillars (6 features) */
     for (int p = 0; p < INF_NUM_PILLARS; p++) {
@@ -2222,7 +2239,10 @@ static void inf_fill_render_entities(EncounterState* state, RenderEntity* out, i
         re->entity_type = ENTITY_NPC;
         re->npc_def_id = INF_NPC_DEF_IDS[npc->type];
         re->npc_slot = i;
-        re->attack_target_entity_idx = -1;
+        /* non-nibbler NPCs target the player (entity 0) for facing.
+           nibblers target pillars (not an entity) — leave at -1 so the
+           renderer falls back to dest-based facing toward the pillar. */
+        re->attack_target_entity_idx = (npc->type == INF_NPC_NIBBLER) ? -1 : 0;
         re->npc_visible = npc->active;
         re->npc_size = npc->size;
         {
@@ -2232,16 +2252,30 @@ static void inf_fill_render_entities(EncounterState* state, RenderEntity* out, i
                 re->npc_anim_id = nm ? (int)nm->idle_anim : -1;
             } else if (npc->attacked_this_tick && nm && nm->attack_anim != 65535) {
                 re->npc_anim_id = (int)nm->attack_anim;
-            } else if (npc->moved_this_tick && nm && nm->walk_anim != 65535) {
-                re->npc_anim_id = (int)nm->walk_anim;
             } else {
-                re->npc_anim_id = nm ? (int)nm->idle_anim : -1;
+                /* walk/idle handled by secondary track in render_client_tick.
+                   setting walk as primary causes stall (interleave_count==0)
+                   which freezes movement and creates tile-to-tile teleporting. */
+                re->npc_anim_id = -1;
             }
         }
         re->x = npc->x;
         re->y = npc->y;
-        re->dest_x = npc->target_x;
-        re->dest_y = npc->target_y;
+        /* nibblers: set dest to pillar center so renderer faces them toward
+           the pillar instead of the player when idle/attacking */
+        if (npc->type == INF_NPC_NIBBLER) {
+            int tp = s->nibbler_target_pillar;
+            if (tp >= 0 && tp < INF_NUM_PILLARS && s->pillars[tp].active) {
+                re->dest_x = s->pillars[tp].x + INF_PILLAR_SIZE / 2;
+                re->dest_y = s->pillars[tp].y + INF_PILLAR_SIZE / 2;
+            } else {
+                re->dest_x = npc->x;
+                re->dest_y = npc->y;
+            }
+        } else {
+            re->dest_x = npc->target_x;
+            re->dest_y = npc->target_y;
+        }
         re->current_hitpoints = npc->hp;
         re->base_hitpoints = npc->max_hp;
         re->attack_style_this_tick = npc->attacked_this_tick
@@ -2316,8 +2350,16 @@ static void inf_render_post_tick(EncounterState* state, EncounterOverlay* ov) {
         /* nibblers attack pillars, not worth showing as projectile */
         if (npc->type == INF_NPC_NIBBLER) continue;
 
+        /* blob scan animation (no projectile) — only emit on the actual fire tick.
+           blob_scanned_prayer >= 0 means scan just happened, -1 means fire. */
+        if (npc->type == INF_NPC_BLOB && npc->blob_scanned_prayer >= 0) continue;
+
         const InfNPCStats* stats = &INF_NPC_STATS[npc->type];
         int actual_style = stats->default_style;
+
+        /* blob uses per-attack style from prayer reading (ranged vs magic) */
+        if (npc->type == INF_NPC_BLOB)
+            actual_style = npc->attack_style;
 
         /* jad uses its per-attack random style */
         if (npc->type == INF_NPC_JAD)
@@ -2326,6 +2368,9 @@ static void inf_render_post_tick(EncounterState* state, EncounterOverlay* ov) {
         /* zuk is typeless — show as magic for visual purposes */
         if (npc->type == INF_NPC_ZUK)
             actual_style = ATTACK_STYLE_MAGIC;
+
+        /* melee attacks are instant — no in-flight projectile */
+        if (actual_style == ATTACK_STYLE_MELEE) continue;
 
         int proj_style = encounter_attack_style_to_proj_style(actual_style);
         int npc_size = stats->size;

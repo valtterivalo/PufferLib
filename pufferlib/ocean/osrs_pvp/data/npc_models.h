@@ -117,7 +117,7 @@ static const NpcModelMapping NPC_MODEL_MAP_INFERNO[] = {
 #define INF_GFX_1382_ANIM   7614
 #define INF_GFX_1383_MODEL  26293  /* Blob ranged */
 #define INF_GFX_1383_ANIM   366
-#define INF_GFX_1384_MODEL  3136  /* Blob magic */
+#define INF_GFX_1384_MODEL  0  /* Blob magic: use style fallback (3136 = rune arrow without spotanim recolor) */
 #define INF_GFX_1385_MODEL  3142  /* Healer magic attack */
 #define INF_GFX_1385_ANIM   366
 

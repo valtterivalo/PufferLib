@@ -1216,6 +1216,18 @@ static void render_post_tick(RenderClient* rc, OsrsPvp* env) {
             rc->anim[i].secondary_frame_idx = 0;
             rc->anim[i].secondary_ticks = 0;
             rc->composites[i].needs_rebuild = 1;
+            /* flush hitsplat state so dying NPC's splats don't transfer
+               to the NPC that shifts into this slot after death compaction */
+            for (int s = 0; s < RENDER_SPLATS_PER_PLAYER; s++)
+                rc->splats[i][s].active = 0;
+            rc->hp_bar_visible_until[i] = 0;
+            /* reset interpolation state — zeroed sub triggers the teleport-snap
+               guard below, which cleanly snaps to the new entity's actual tile */
+            rc->sub_x[i] = 0;
+            rc->sub_y[i] = 0;
+            rc->dest_x[i] = 0;
+            rc->dest_y[i] = 0;
+            rc->step_tracker[i] = 0;
         }
         rc->prev_npc_slot[i] = rc->entities[i].npc_slot;
     }
@@ -1254,16 +1266,11 @@ static void render_post_tick(RenderClient* rc, OsrsPvp* env) {
         /* detect if player moved this tick (destination changed) */
         int moved = (new_dest_x != rc->dest_x[i] || new_dest_y != rc->dest_y[i]);
 
-        /* when destination changes and no stall is active, snap visual to
-           previous destination. this prevents visual lag at fast tick rates.
-           when a stall IS active (step_tracker > 0), do NOT snap — let the
-           catch-up mechanism smoothly recover. snapping during stall causes
-           the teleport artifact (ref: Client.java nextStep stall gate). */
-        if (moved && rc->step_tracker[i] == 0) {
-            rc->sub_x[i] = rc->dest_x[i];
-            rc->sub_y[i] = rc->dest_y[i];
-        }
-
+        /* update destination — NO snap-to-previous-dest. the real OSRS client
+           (Canvas.java:165-188) simply advances actor.x toward dest by speed
+           each client tick with no snap. sub smoothly interpolates from wherever
+           it currently is toward the new dest. the dynamic walk speed in
+           render_client_tick ensures arrival within one game tick. */
         rc->dest_x[i] = new_dest_x;
         rc->dest_y[i] = new_dest_y;
 
@@ -1279,7 +1286,18 @@ static void render_post_tick(RenderClient* rc, OsrsPvp* env) {
            idle → face opponent (recalculated every client tick) */
         if (p->attack_style_this_tick != ATTACK_STYLE_NONE ||
             p->current_hitpoints <= 0) {
-            rc->facing_opponent[i] = 1;
+            if (p->attack_target_entity_idx >= 0 || p->current_hitpoints <= 0) {
+                rc->facing_opponent[i] = 1;
+            } else {
+                /* attacking non-entity target (nibbler → pillar): face dest tile */
+                int face_x = p->dest_x * 128 + 64;
+                int face_y = p->dest_y * 128 + 64;
+                float dx = (float)(face_x - rc->sub_x[i]);
+                float dy = (float)(face_y - rc->sub_y[i]);
+                if (dx != 0.0f || dy != 0.0f)
+                    rc->target_yaw[i] = atan2f(-dx, dy);
+                rc->facing_opponent[i] = 0;
+            }
         } else if (moved) {
             float dx = (float)(new_dest_x - rc->sub_x[i]);
             float dy = (float)(new_dest_y - rc->sub_y[i]);
@@ -1288,7 +1306,18 @@ static void render_post_tick(RenderClient* rc, OsrsPvp* env) {
             }
             rc->facing_opponent[i] = 0;
         } else {
-            rc->facing_opponent[i] = 1;
+            if (p->attack_target_entity_idx >= 0) {
+                rc->facing_opponent[i] = 1;
+            } else {
+                /* idle, no entity target: face dest tile (nibblers near pillars) */
+                int face_x = p->dest_x * 128 + 64;
+                int face_y = p->dest_y * 128 + 64;
+                float dx = (float)(face_x - rc->sub_x[i]);
+                float dy = (float)(face_y - rc->sub_y[i]);
+                if (dx != 0.0f || dy != 0.0f)
+                    rc->target_yaw[i] = atan2f(-dx, dy);
+                rc->facing_opponent[i] = 0;
+            }
         }
 
         /* HP bar + hitsplat: triggered once per game tick when a hit lands.
@@ -1507,15 +1536,20 @@ static void render_client_tick(RenderClient* rc, int player_idx) {
         } else {
             rc->visual_moving[player_idx] = 1;
 
-            /* base speed: walk=4, run=8 sub-tile units per client tick */
-            int speed = rc->visual_running[player_idx] ? 8 : 4;
+            /* base speed scaled to playback rate so NPCs always arrive within
+               one game tick. at OSRS speed (1.667 t/s, 30 client ticks): ceil(128/30)=5.
+               at 5 t/s (10 ticks): 13. at unlimited: 128 (instant). */
+            float tps = rc->ticks_per_second > 0.0f ? rc->ticks_per_second : 50.0f;
+            int ct_per_gt = (int)(50.0f / tps);
+            if (ct_per_gt < 1) ct_per_gt = 1;
+            int base_walk = (128 + ct_per_gt - 1) / ct_per_gt;
+            if (base_walk < 4) base_walk = 4;
+            int speed = rc->visual_running[player_idx] ? base_walk * 2 : base_walk;
 
-            /* catch-up: force run speed while step_tracker > 0 (one stalled
-               frame recovered per catch-up frame). if running, double speed
-               further to 16 per ref Client.java:13155-13172 where
-               doubleSpeed[waypointIndex] left-shifts moveSpeed by 1. */
+            /* catch-up: double speed while step_tracker > 0 (one stalled
+               frame recovered per catch-up frame). */
             if (rc->step_tracker[player_idx] > 0) {
-                speed = rc->visual_running[player_idx] ? 16 : 8;
+                speed *= 2;
                 rc->step_tracker[player_idx]--;
             }
 
@@ -1585,12 +1619,20 @@ static void render_client_tick(RenderClient* rc, int player_idx) {
     /* --- updateAnimation: advance both animation tracks --- */
 
     /* secondary (pose): select based on visual movement state.
-       NPCs use their own idle animation from the NPC model mapping. */
+       NPCs switch between idle and walk animations on the secondary track
+       (matching real OSRS client — walk/idle are secondary, attacks are primary).
+       this prevents the stall mechanism from freezing movement during walk. */
     int new_secondary;
     if (rc->entities[player_idx].entity_type == ENTITY_NPC) {
         const NpcModelMapping* nm = npc_model_lookup(
             (uint16_t)rc->entities[player_idx].npc_def_id);
-        new_secondary = nm ? (int)nm->idle_anim : -1;
+        if (nm) {
+            new_secondary = rc->visual_moving[player_idx]
+                ? (nm->walk_anim != 65535 ? (int)nm->walk_anim : (int)nm->idle_anim)
+                : (int)nm->idle_anim;
+        } else {
+            new_secondary = -1;
+        }
     } else {
         new_secondary = render_select_secondary(rc, player_idx);
     }
