@@ -1388,16 +1388,17 @@ static void render_post_tick(RenderClient* rc, OsrsPvp* env) {
                         p->x, p->y, ct, rc->anim_cache, rc->model_cache);
                 }
             } else {
-                int attacker_magic = att->magic_type_this_tick;
-                if (attacker_magic > 0) {
+                /* barrage impact: use hit_spell_type (set when pending hit resolves)
+                   instead of magic_type_this_tick (stale by deferred hit landing).
+                   ENCOUNTER_SPELL_ICE=1 -> ice barrage, ENCOUNTER_SPELL_BLOOD=2 -> blood. */
+                int spell = p->hit_spell_type ? p->hit_spell_type : att->magic_type_this_tick;
+                if (spell > 0) {
                     if (p->hit_was_successful) {
-                        /* spell hit: spawn impact GFX */
-                        int gfx = (attacker_magic == 1)
+                        int gfx = (spell == 1)  /* ENCOUNTER_SPELL_ICE */
                             ? GFX_ICE_BARRAGE_HIT : GFX_BLOOD_BARRAGE_HIT;
                         effect_spawn_spotanim(rc->effects, gfx,
                             p->x, p->y, ct, rc->anim_cache, rc->model_cache);
                     } else {
-                        /* spell missed: blue splash */
                         effect_spawn_spotanim(rc->effects, GFX_SPLASH,
                             p->x, p->y, ct, rc->anim_cache, rc->model_cache);
                     }
