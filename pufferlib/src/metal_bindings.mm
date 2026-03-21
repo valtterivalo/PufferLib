@@ -381,6 +381,46 @@ pybind11::dict log_train_debug(pybind11::object pufferl_obj) {
 
     float current_lr = *pufferl.muon->lr_ptr;
     out["optimizer_lr"] = current_lr;
+
+    // Decoder weight stats: policy rows vs value row
+    {
+        DecoderWeights* dw = (DecoderWeights*)pufferl.weights_fp32.decoder;
+        int od = dw->output_dim;
+        int H = dw->hidden_dim;
+        const float* pw = (const float*)dw->policy_weight.bytes;
+        const float* vw = (const float*)dw->value_weight.bytes;
+        if (pw && vw) {
+            FloatStats pw_stats = compute_float_stats(pw, (int64_t)od * H);
+            FloatStats vw_stats = compute_float_stats(vw, (int64_t)H);
+            out["dec_policy_abs_mean"] = pw_stats.abs_mean;
+            out["dec_policy_abs_max"] = std::max(std::fabs(pw_stats.min), std::fabs(pw_stats.max));
+            out["dec_policy_std"] = pw_stats.stddev;
+            out["dec_value_abs_mean"] = vw_stats.abs_mean;
+            out["dec_value_abs_max"] = std::max(std::fabs(vw_stats.min), std::fabs(vw_stats.max));
+            out["dec_value_std"] = vw_stats.stddev;
+        }
+
+        // Muon momentum buffer stats for decoder
+        Muon* mu = pufferl.muon;
+        if (mu && mu->mb_puf.bytes) {
+            // Find decoder momentum offset: same layout as param allocator
+            // encoder weight comes first, then policy_weight, then value_weight
+            EncoderWeights* ew = (EncoderWeights*)pufferl.weights_fp32.encoder;
+            int64_t enc_elems = ew ? ew->weight.numel() : 0;
+            int64_t dec_policy_elems = (int64_t)od * H;
+            int64_t dec_value_elems = (int64_t)H;
+            const float* mb_all = (const float*)mu->mb_puf.bytes;
+            const float* mb_policy = mb_all + enc_elems;
+            const float* mb_value = mb_policy + dec_policy_elems;
+            FloatStats mb_p_stats = compute_float_stats(mb_policy, dec_policy_elems);
+            FloatStats mb_v_stats = compute_float_stats(mb_value, dec_value_elems);
+            out["mom_policy_abs_mean"] = mb_p_stats.abs_mean;
+            out["mom_policy_abs_max"] = std::max(std::fabs(mb_p_stats.min), std::fabs(mb_p_stats.max));
+            out["mom_value_abs_mean"] = mb_v_stats.abs_mean;
+            out["mom_value_abs_max"] = std::max(std::fabs(mb_v_stats.min), std::fabs(mb_v_stats.max));
+        }
+    }
+
     return out;
 }
 

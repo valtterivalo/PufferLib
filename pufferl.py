@@ -345,6 +345,7 @@ def run_training(config, vec_config, env_config, policy_config, *,
 
                 losses = _C.log_losses(pufferl)
                 env_stats = _C.log_environments(pufferl)
+                debug_stats = _C.log_train_debug(pufferl)
 
                 # NaN guard -- surfaces data integrity bugs immediately
                 for loss_name in ("entropy", "pg_loss", "vf_loss"):
@@ -371,7 +372,7 @@ def run_training(config, vec_config, env_config, policy_config, *,
                 result.entries.append(entry)
 
                 if on_log:
-                    on_log(iteration, global_step, sps, losses, env_stats)
+                    on_log(iteration, global_step, sps, losses, env_stats, debug_stats)
 
                 elapsed = now - start_time
                 if should_stop and should_stop(score, elapsed):
@@ -532,7 +533,7 @@ def run_trial(
             reinit=True,
         )
 
-    def on_log(iteration, global_step, sps, losses, env_stats):
+    def on_log(iteration, global_step, sps, losses, env_stats, debug_stats=None):
         nonlocal last_report_time, log_count
         log_count += 1
         score = env_stats.get(score_key, env_stats.get("episode_return", 0))
@@ -546,7 +547,7 @@ def run_trial(
             last_report_time = now
 
         if wandb_run:
-            wandb_run.log({
+            log_dict = {
                 "sps": sps, "score": score,
                 "episode_return": env_stats.get("episode_return", 0),
                 "episode_length": env_stats.get("episode_length", 0),
@@ -555,7 +556,10 @@ def run_trial(
                 "vf_loss": losses.get("vf_loss", 0),
                 **{k: v for k, v in env_stats.items()
                    if k not in ("episode_return", "episode_length", "score")},
-            }, step=global_step)
+            }
+            if debug_stats:
+                log_dict.update({f"debug/{k}": v for k, v in debug_stats.items()})
+            wandb_run.log(log_dict, step=global_step)
 
     def should_stop(score, elapsed):
         if log_count <= 2 and result_ref[0] and result_ref[0].entries:
@@ -884,7 +888,7 @@ def train_cli(env_name: str):
         }) + "\n")
         trace_file.flush()
 
-    def on_log(iteration, global_step, sps, losses, env_stats):
+    def on_log(iteration, global_step, sps, losses, env_stats, debug_stats=None):
         ent = losses.get("entropy", 0)
         pg = losses.get("pg_loss", 0)
         vf = losses.get("vf_loss", 0)
@@ -894,13 +898,16 @@ def train_cli(env_name: str):
         wave = env_stats.get("wave", 0)
         prayer = env_stats.get("prayer_correct_rate", 0)
         idle = env_stats.get("idle_ticks", 0)
+        grad_l2 = debug_stats.get("grad_l2", 0) if debug_stats else 0
+        dec_p_max = debug_stats.get("dec_policy_abs_max", 0) if debug_stats else 0
+        dec_v_max = debug_stats.get("dec_value_abs_max", 0) if debug_stats else 0
         print(f"[step={global_step:>10,} | SPS={sps:>10,.0f} | "
-              f"ret={ep_ret:>8.2f} score={score:>8.2f} len={ep_len:>6.0f} "
-              f"wave={wave:>4.1f} pray={prayer:.0%} idle={idle:>4.0f} | "
-              f"ent={ent:.3f} pg={pg:.4f} vf={vf:.4f}]")
+              f"ret={ep_ret:>8.2f} wave={wave:>4.1f} pray={prayer:.0%} idle={idle:>4.0f} | "
+              f"ent={ent:.3f} vf={vf:.4f} grad={grad_l2:.1f} "
+              f"dec_p={dec_p_max:.1f} dec_v={dec_v_max:.1f}]")
 
         if wandb_run:
-            wandb_run.log({
+            log_dict = {
                 "sps": sps,
                 "score": score,
                 "episode_return": ep_ret,
@@ -910,7 +917,10 @@ def train_cli(env_name: str):
                 "vf_loss": vf,
                 **{k: v for k, v in env_stats.items()
                    if k not in ("episode_return", "episode_length", "score")},
-            }, step=global_step)
+            }
+            if debug_stats:
+                log_dict.update({f"debug/{k}": v for k, v in debug_stats.items()})
+            wandb_run.log(log_dict, step=global_step)
 
         if trace_file and iteration % trace_every == 0:
             trace_row = {
