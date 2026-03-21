@@ -618,7 +618,8 @@ PYBIND11_MODULE(_C, m) {
         .def_readwrite("profile", &HypersT::profile)
         .def_readwrite("overlap", &HypersT::overlap)
         .def_readwrite("train_fp16", &HypersT::train_fp16)
-        .def_readwrite("ns_iters", &HypersT::ns_iters);
+        .def_readwrite("ns_iters", &HypersT::ns_iters)
+        .def_readwrite("weight_decay", &HypersT::weight_decay);
 
     py::class_<PufTensor>(m, "PufTensor")
         .def("__repr__", &PufTensor::repr)

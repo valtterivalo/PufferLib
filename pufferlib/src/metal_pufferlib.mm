@@ -115,6 +115,7 @@ typedef struct {
     bool cpu_inference;  // CPU forward pass during rollout (no GPU sync)
     bool train_fp16;     // fp16 activations/grads during training (rollout stays fp32)
     int ns_iters;        // Newton-Schulz iterations in muon optimizer (1-5, default 5)
+    float weight_decay;  // Muon weight decay (L2 regularization, prevents weight blowup)
     // Threading
     int num_threads;
     // RNG seed
@@ -622,6 +623,37 @@ void train_impl(PuffeRL& pufferl) {
         mtl_barrier((MetalStream*)s);
         muon_step(pufferl.muon, s);
 
+        // single-element trace: track the max-abs decoder policy weight
+        {
+            static int trace_count = 0;
+            trace_count++;
+            DecoderWeights* dw = (DecoderWeights*)pufferl.weights_fp32.decoder;
+            if (dw && dw->policy_weight.bytes) {
+                mtl_ensure_stream_synced(s);
+                int od = dw->output_dim, H = dw->hidden_dim;
+                int n = od * H;
+                const float* pw = (const float*)dw->policy_weight.bytes;
+                float max_val = 0; int max_idx = 0;
+                for (int i = 0; i < n; i++) {
+                    float a = fabsf(pw[i]);
+                    if (a > max_val) { max_val = a; max_idx = i; }
+                }
+                // also read momentum and gradient at that index
+                Muon* mu = pufferl.muon;
+                EncoderWeights* ew = (EncoderWeights*)pufferl.weights_fp32.encoder;
+                int64_t enc_elems = ew ? ew->weight.numel() : 0;
+                float mb_val = 0, gc_val = 0;
+                if (mu->mb_puf.bytes)
+                    mb_val = ((const float*)mu->mb_puf.bytes)[enc_elems + max_idx];
+                if (mu->gc_puf.bytes)
+                    gc_val = ((const float*)mu->gc_puf.bytes)[enc_elems + max_idx];
+                if (max_val > 5.0f || trace_count % 1000 == 0) {
+                    fprintf(stderr, "[weight-trace] step=%d idx=%d/%d w=%.4f mb=%.6f gc=%.6f row=%d col=%d\n",
+                        trace_count, max_idx, n, max_val, mb_val, gc_val, max_idx/H, max_idx%H);
+                }
+            }
+        }
+
         if (pufferl.train_fp16) {
             mtl_cast_f32_to_f16(pufferl.param_fp16_puf.bytes,
                                 (const float*)pufferl.alloc_fp32.params.mem,
@@ -1066,7 +1098,8 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
 
     // Optimizer init (register buffers with shared allocator)
     muon_init(pufferl->muon, &fp32_params,
-        pufferl->param_fp32_puf, lr, beta1, 0.0, hypers.ns_iters, alloc);
+        pufferl->param_fp32_puf, lr, beta1, (double)hypers.weight_decay,
+        hypers.ns_iters, alloc);
     // Single allocation for all registered buffers
     alloc.create();
 
