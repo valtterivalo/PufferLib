@@ -2,7 +2,7 @@
  * @file binding.c
  * @brief Static-native binding for OSRS Inferno encounter.
  *
- * Bridges vecenv.h's contract (double actions, float terminals) with the
+ * Bridges vecenv.h's contract (float actions, float terminals) with the
  * Inferno encounter's vtable interface.
  */
 
@@ -18,7 +18,7 @@
 
 typedef struct {
     void* observations;
-    double* actions;
+    float* actions;
     float* rewards;
     float* terminals;
     int num_agents;
@@ -40,8 +40,7 @@ typedef struct {
 #define OBS_SIZE INF_TOTAL_OBS
 #define NUM_ATNS INF_NUM_ACTION_HEADS
 #define ACT_SIZES { ENCOUNTER_MOVE_ACTIONS, 5, INF_MAX_NPCS+1, 5, 2, 4, 2 }
-#define OBS_TYPE FLOAT
-#define ACT_TYPE DOUBLE
+#define OBS_TENSOR_T FloatTensor
 #define Env InfernoEnv
 
 void c_step(Env* env) {

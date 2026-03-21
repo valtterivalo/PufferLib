@@ -773,27 +773,9 @@ void ppo_loss_fwd_bwd(PufTensor &dec_out, PufTensor &logstd, TrainGraph &graph,
   // with reduce kernel's *loss += sum from the previous minibatch).
   puf_zero(bufs.loss_output, stream);
 
-  // MSL doesn't support double — convert actions from f64 to f32 on GPU.
-  // Uses cast_f64_to_f32 kernel (IEEE 754 bit manipulation via uint2) to
-  // avoid flushing the GPU encoder for a CPU conversion loop.
-  int act_count = (int)graph.mb_actions.numel();
-  if (!ppo_act_f32 || act_count > ppo_act_f32_capacity) {
-    if (ppo_act_f32) {
-      mtl_unwrap_ptr(ppo_act_f32);
-      free(ppo_act_f32);
-    }
-    ppo_act_f32_capacity = act_count;
-    ppo_act_f32 = (float *)mtl_alloc_scratch(ppo_act_f32_capacity * sizeof(float));
-  }
-  {
-    ms->compute_encoder();
-    auto pso = mtl_pipeline("cast_f64_to_f32");
-    mtl_set_pso(ms, pso);
-    mtl_set_ptr(ms, graph.mb_actions.bytes, 0);  // src: f64 as uint2*
-    mtl_set_ptr(ms, ppo_act_f32, 1);             // dst: f32
-    mtl_set_params(ms, act_count, 2);
-    mtl_dispatch_1d(ms, pso, act_count);
-  }
+  // Actions are already float* (upstream 4.0 switched from double to float).
+  // Point directly at the actions buffer — no conversion needed.
+  ppo_act_f32 = (float *)graph.mb_actions.bytes;
 
   // Action mask: either from external all-ones buffer (no mask) or embedded in obs.
   int input_size = (int)graph.mb_obs.shape[2];

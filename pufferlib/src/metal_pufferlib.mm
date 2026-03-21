@@ -36,20 +36,6 @@ static inline float prof_ms(uint64_t t0, uint64_t t1) {
 }
 
 // ============================================================================
-// Observation dtype size
-// ============================================================================
-
-int obs_dtype_size(int dtype) {
-    if (dtype == FLOAT || dtype == INT) {
-        return sizeof(float);
-    }
-    if (dtype == DOUBLE) {
-        return sizeof(double);
-    }
-    return sizeof(char);  // UNSIGNED_CHAR, CHAR
-}
-
-// ============================================================================
 // Environment creation — unified memory, no GPU copy needed
 // ============================================================================
 
@@ -59,12 +45,11 @@ StaticVec* create_environments(int num_buffers, int total_agents,
 
     int obs_size = get_obs_size();
     int num_atns = get_num_atns();
-    int obs_type = get_obs_type();
+    int obs_esz = (int)get_obs_elem_size();
 
     // Unified memory: env obs/actions/rewards/terminals point directly at vecenv buffers
-    env.obs = {.bytes = (char*)vec->gpu_observations, .shape = {total_agents, obs_size}, .dtype_size = obs_dtype_size(obs_type)};
-    env.obs_raw_dtype = obs_type;
-    env.actions = {.bytes = (char*)vec->gpu_actions, .shape = {total_agents, num_atns}, .dtype_size = (int)sizeof(double)};
+    env.obs = {.bytes = (char*)vec->gpu_observations, .shape = {total_agents, obs_size}, .dtype_size = obs_esz};
+    env.actions = {.bytes = (char*)vec->gpu_actions, .shape = {total_agents, num_atns}, .dtype_size = (int)sizeof(float)};
     env.rewards = {.bytes = (char*)vec->gpu_rewards, .shape = {total_agents}, .dtype_size = (int)sizeof(float)};
     env.terminals = {.bytes = (char*)vec->gpu_terminals, .shape = {total_agents}, .dtype_size = (int)sizeof(float)};
 

@@ -27,8 +27,24 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import pufferlib
 from pufferlib import _C
-from pufferlib.pufferl import downsample
 from pufferlib.sweep import Protein, pareto_points, prune_pareto_front
+
+
+def downsample(data_list, num_points):
+    if not data_list or num_points <= 0:
+        return []
+    if num_points == 1:
+        return [data_list[-1]]
+    if len(data_list) <= num_points:
+        return data_list
+    last = data_list[-1]
+    data_list = data_list[:-1]
+    data_np = np.array(data_list)
+    num_points -= 1
+    n = (len(data_np) // num_points) * num_points
+    data_np = data_np[-n:] if n > 0 else data_np
+    downsampled = data_np.reshape(num_points, -1).mean(axis=1)
+    return downsampled.tolist() + [last]
 
 # keep logs live when piping through tee
 if hasattr(sys.stdout, "reconfigure"):
