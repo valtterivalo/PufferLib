@@ -18,7 +18,7 @@ BRANCH = "inferno-encounter"
 # CUDA 12.4 devel has nvcc + headers for compiling kernels.cu
 image = (
     modal.Image.from_registry(
-        "nvidia/cuda:12.4.1-devel-ubuntu22.04",
+        "nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04",
         add_python="3.12",
     )
     .apt_install("git", "clang", "make", "wget", "tar", "binutils", "libomp-dev")
