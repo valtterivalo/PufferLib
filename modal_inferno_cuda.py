@@ -36,6 +36,9 @@ image = (
         "gymnasium>=0.29.1",
         "pettingzoo>=1.24.1",
         "gym==0.23",
+        "torch",
+        "gpytorch",
+        "scikit-learn",
     )
     .run_commands(
         f"git clone --branch {BRANCH} {REPO_URL} /root/pufferlib",
