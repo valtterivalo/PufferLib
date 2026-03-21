@@ -81,7 +81,7 @@ def train_inferno(sweep: bool = False, steps: int = 1_000_000, gpus: int = 4):
             "sweep", "puffer_osrs_inferno",
             "--sweep.gpus", str(gpus),
             "--wandb",
-            "--wandb-project", "inferno-cuda-stability",
+            "--wandb-project", "inferno-cuda-sweep",
             "--wandb-group", "l4x4-sweep",
         ]
     else:
@@ -90,7 +90,7 @@ def train_inferno(sweep: bool = False, steps: int = 1_000_000, gpus: int = 4):
             "train", "puffer_osrs_inferno",
             "--train.total-timesteps", str(steps),
             "--wandb",
-            "--wandb-project", "inferno-cuda-stability",
+            "--wandb-project", "inferno-cuda-sweep",
             "--wandb-group", "l4-train",
             "--tag", f"vanilla-cuda-{steps // 1_000_000}m",
         ]
