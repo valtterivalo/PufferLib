@@ -86,6 +86,7 @@ def train_inferno(sweep: bool = False, steps: int = 1_000_000):
         cmd = [
             "python", "-m", "pufferlib.pufferl",
             "sweep", "puffer_osrs_inferno",
+            "--sweep.gpus", "1",
             "--wandb",
             "--wandb-project", "inferno-cuda-stability",
             "--wandb-group", "a100-sweep",
