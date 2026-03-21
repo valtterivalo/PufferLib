@@ -1367,7 +1367,10 @@ kernel void muon_weight_update_kernel(
     if ((int)idx >= p.n) return;
     float lr = *lr_ptr;
     float wd_scale = 1.0f - lr * p.wd;
-    wb[idx] = wb[idx] * wd_scale - lr * up[idx];
+    float update = up[idx];
+    // NS can diverge for rank-deficient gradients, producing inf in the update.
+    // Zero non-finite updates to prevent weight corruption.
+    wb[idx] = wb[idx] * wd_scale - lr * (isfinite(update) ? update : 0.0f);
 }
 
 // ============================================================================
