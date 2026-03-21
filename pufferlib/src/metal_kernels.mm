@@ -430,7 +430,7 @@ void mtl_clip_by_norm_f32(float *data, const float *norm_ptr,
 }
 
 void mtl_normalize_f32(float *data, const float *norm_ptr, float eps,
-                        int count, cudaStream_t stream) {
+                        float max_inv_norm, int count, cudaStream_t stream) {
   MetalStream *ms = mtl_resolve_stream(stream);
   ms->compute_encoder();
   auto pso = mtl_pipeline("normalize_f32");
@@ -439,8 +439,9 @@ void mtl_normalize_f32(float *data, const float *norm_ptr, float eps,
   mtl_set_ptr(ms, norm_ptr, 1);
   struct {
     float eps;
+    float max_inv_norm;
     int count;
-  } params = {eps, count};
+  } params = {eps, max_inv_norm, count};
   mtl_set_params(ms, params, 2);
   mtl_dispatch_1d(ms, pso, count);
 }
@@ -1301,30 +1302,12 @@ void muon_step(Muon *m, cudaStream_t stream) {
         mtl_norm_reduce(m->ns.norm_ptr, norm_partials_buf, nblk, stream);
         mtl_barrier(ms);
       }
-      // Skip NS when gradient is near-zero (e.g. per-head PPO clipping
-      // zeroed all policy gradients). normalizing a near-zero matrix by
-      // 1/(norm+1e-7) amplifies noise by up to 10^7, producing catastrophic
-      // weight updates. this is not a fallback — orthogonalizing noise is
-      // mathematically meaningless.
-      {
-        mtl_ensure_stream_synced(stream);
-        float norm_sq;
-        memcpy(&norm_sq, m->ns.norm_ptr, sizeof(float));
-        float norm = sqrtf(norm_sq > 0 ? norm_sq : 0);
-        if (norm < 1e-5f) {
-          // no meaningful gradient — skip this tensor entirely
-          static int skip_count = 0;
-          skip_count++;
-          if (skip_count <= 20 || skip_count % 100 == 0)
-            fprintf(stderr, "[ns-skip] #%d: shape=(%lld,%lld) norm=%.2e\n",
-                    skip_count, R, C, norm);
-          offset += t->numel();
-          continue;
-        }
-      }
-
+      // Cap inv_norm at sqrt(M*N) so normalized matrix has per-element values O(1).
+      // Prevents catastrophic amplification when gradient norm is near-zero
+      // (e.g., when per-head PPO clipping zeros most policy gradients).
+      float max_inv_norm = std::sqrt((float)(M * N));
       mtl_normalize_f32((float *)x.bytes, m->ns.norm_ptr, 1e-7f,
-                        (int)x.numel(), stream);
+                        max_inv_norm, (int)x.numel(), stream);
       mtl_barrier(ms);
 
       // Newton-Schulz iterations (all GEMM — synced internally)
