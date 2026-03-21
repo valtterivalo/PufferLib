@@ -1333,17 +1333,32 @@ void muon_step(Muon *m, cudaStream_t stream) {
       }
 
       PufTensor &result_precision = (m->ns_iters % 2 == 0) ? x : tmp;
-      float scale =
-          (float)std::sqrt(std::max(1.0, (double)M / (double)N));
+
+      // Re-normalize NS output: normalize to unit norm, then scale to sqrt(max(M,N)).
+      // NS iterations can diverge for rank-deficient inputs (e.g., when per-head
+      // clipping zeros most policy gradients). re-normalization bounds per-element
+      // values regardless of NS behavior. the target norm sqrt(max(M,N)) matches
+      // the expected Frobenius norm of an orthogonal M×N matrix.
+      {
+        int nblk = std::min((int)((result_precision.numel() + 255) / 256), 256);
+        mtl_norm_f32(norm_partials_buf, (const float *)result_precision.bytes,
+                     (int)result_precision.numel(), nblk, stream);
+        mtl_barrier(ms);
+        mtl_norm_reduce(m->ns.norm_ptr, norm_partials_buf, nblk, stream);
+        mtl_barrier(ms);
+        float max_inv = (float)std::sqrt((double)(M * N));  // cap for near-zero norm
+        mtl_normalize_f32((float *)result_precision.bytes, m->ns.norm_ptr,
+                          1e-7f, max_inv, (int)result_precision.numel(), stream);
+        mtl_barrier(ms);
+      }
+      float scale = (float)std::sqrt(std::max((double)M, (double)N));
+      mtl_scale_f32((float *)result_precision.bytes, scale,
+                    (int)result_precision.numel(), stream);
+      mtl_barrier(ms);
 
       PufTensor out_f32 = {.bytes = (char *)up_ptr,
                            .shape = {R, C},
                            .dtype_size = 4};
-
-      // Result is already f32 — scale and transpose if needed
-      if (scale != 1.0f)
-        mtl_scale_f32((float *)result_precision.bytes, scale,
-                      (int)result_precision.numel(), stream);
       if (transposed_flag) {
         mtl_transpose_f32((float *)out_f32.bytes,
                           (const float *)result_precision.bytes, (int)M,
