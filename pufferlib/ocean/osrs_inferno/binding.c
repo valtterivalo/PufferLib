@@ -87,6 +87,8 @@ void c_step(Env* env) {
         env->log.prayer_correct = (float)s->total_prayer_correct;
         env->log.prayer_total = (float)s->total_npc_attacks;
         env->log.idle_ticks = (float)s->total_idle_ticks;
+        env->log.brews_used = (float)s->total_brews_used;
+        env->log.blood_healed = (float)s->total_blood_healed;
         env->log.n = 1.0f;  /* always report so sweep has continuous signal */
     }
 
@@ -145,6 +147,16 @@ void my_init(Env* env, Dict* kwargs) {
     DictItem* mask_in_obs = dict_get_unsafe(kwargs, "mask_in_obs");
     (void)mask_in_obs;  /* always embedded for inferno */
 
+    /* reward shaping config (sweepable via [env] section) */
+    static const char* reward_keys[] = {
+        "wave_reward_base", "wave_reward_scale", "brew_penalty",
+        "brew_penalty_midpoint", "brew_penalty_width", "blood_heal_reward"
+    };
+    for (int i = 0; i < 6; i++) {
+        DictItem* item = dict_get_unsafe(kwargs, reward_keys[i]);
+        if (item) ENCOUNTER_INFERNO.put_float(env->enc_state, reward_keys[i], item->value);
+    }
+
     /* env 0 records actions when RECORD_REPLAY env var is set */
     if (!g_record_claimed) {
         g_record_claimed = 1;
@@ -168,6 +180,8 @@ void my_log(Log* log, Dict* out) {
     dict_set(out, "wins", log->wins);
     dict_set(out, "wave", log->wave);
     dict_set(out, "idle_ticks", log->idle_ticks);
+    dict_set(out, "brews_used", log->brews_used);
+    dict_set(out, "blood_healed", log->blood_healed);
 
     /* prayer correct rate: fraction of NPC attacks blocked by correct prayer */
     float prayer_rate = (log->prayer_total > 0.0f)

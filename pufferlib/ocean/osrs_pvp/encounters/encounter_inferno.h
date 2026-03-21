@@ -593,6 +593,12 @@ typedef struct {
     int total_prayer_correct;  /* times prayer blocked an NPC attack */
     int total_npc_attacks;     /* total NPC attacks on player (for prayer_correct_rate) */
     int total_idle_ticks;      /* cumulative ticks of ticks_without_action > 0 */
+    int total_brews_used;      /* brew doses consumed this episode */
+    int total_blood_healed;    /* HP healed via blood barrage this episode */
+
+    /* per-tick reward event flags (cleared each tick) */
+    int brewed_this_tick;      /* 1 if player drank a brew this tick */
+    int blood_heal_this_tick;  /* HP healed from blood barrage this tick */
 
     /* player combat state */
     OverheadPrayer active_prayer;
@@ -638,6 +644,14 @@ typedef struct {
     /* config */
     int start_wave;        /* for curriculum: start from a later wave */
     uint32_t rng_state;
+
+    /* reward shaping config (sweepable via env kwargs) */
+    float wave_reward_base;      /* base multiplier for exponential wave reward (default 0.001) */
+    float wave_reward_scale;     /* exponential base: reward = base * scale^wave (default 1.1) */
+    float brew_penalty;          /* penalty per brew dose in early waves (default 0.03) */
+    float brew_penalty_midpoint; /* sigmoid midpoint wave (default 35) */
+    float brew_penalty_width;    /* sigmoid transition width (default 5.0) */
+    float blood_heal_reward;     /* reward per 20 HP healed via blood barrage (default 0.01) */
 
     Log log;
 } InfernoState;
@@ -729,6 +743,13 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
     const CollisionMap* saved_cmap = s->collision_map;
     int saved_wox = s->world_offset_x;
     int saved_woy = s->world_offset_y;
+    /* save reward shaping config across reset (set once via put_float) */
+    float saved_wrb = s->wave_reward_base;
+    float saved_wrs = s->wave_reward_scale;
+    float saved_bp = s->brew_penalty;
+    float saved_bpm = s->brew_penalty_midpoint;
+    float saved_bpw = s->brew_penalty_width;
+    float saved_bhr = s->blood_heal_reward;
     memset(s, 0, sizeof(InfernoState));
     s->log = saved_log;
     s->start_wave = saved_start;
@@ -736,6 +757,12 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
     s->world_offset_x = saved_wox;
     s->world_offset_y = saved_woy;
     s->rng_state = encounter_resolve_seed(saved_rng, seed);
+    s->wave_reward_base = saved_wrb;
+    s->wave_reward_scale = saved_wrs;
+    s->brew_penalty = saved_bp;
+    s->brew_penalty_midpoint = saved_bpm;
+    s->brew_penalty_width = saved_bpw;
+    s->blood_heal_reward = saved_bhr;
 
     /* human click-to-move: no destination after reset */
     s->player_dest_x = -1;
@@ -1687,6 +1714,7 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
         s->player_brew_doses--;
         s->player_potion_timer = 3;
         s->player.ate_food_this_tick = 1;
+        s->brewed_this_tick = 1;
     }
 
     /* potions (INF_HEAD_POTION): 1=restore, 2=bastion, 3=stamina */
@@ -1894,16 +1922,16 @@ static float inf_compute_reward(InfernoState* s) {
 
     float r = 0.0f;
 
-    /* wave completion: scales with wave number.
-     * wave 1 = 0.01, wave 69 = 0.69. total ≈ 24 if all cleared. */
+    /* wave completion: exponential scaling so later waves matter much more.
+     * with defaults (base=0.001, scale=1.1): wave 1≈0.001, wave 30≈0.017,
+     * wave 50≈0.117, wave 69≈0.786. total if all cleared ≈ 5.7. */
     if (s->wave_completed_this_tick) {
-        r += 0.01f * (float)(s->wave + 1);
+        r += s->wave_reward_base * powf(s->wave_reward_scale, (float)(s->wave + 1));
         s->total_waves_cleared = s->wave + 1;
     }
 
-    /* damage dealt: reward for hitting monsters.
-     * a 45-damage hit gives 0.045. this is the primary learning signal
-     * since the agent needs to discover that targeting + attacking = good. */
+    /* damage dealt: flat reward for hitting monsters.
+     * a 45-damage hit gives 0.018. discovery signal that teaches attacking. */
     if (s->damage_dealt_this_tick > 0.0f)
         r += 0.02f * (s->damage_dealt_this_tick / 50.0f);
 
@@ -1911,6 +1939,20 @@ static float inf_compute_reward(InfernoState* s) {
      * pushes the agent toward combat rather than hiding behind pillars. */
     if (s->ticks_without_action > 10)
         r -= 0.005f;
+
+    /* brew penalty: penalize drinking saradomin brews in early waves where
+     * blood barrage should suffice. decays via sigmoid so late-wave brews are fine.
+     * sigmoid: ~1.0 at wave 0, ~0.5 at midpoint, ~0 at wave 60+. */
+    if (s->brewed_this_tick) {
+        float wave_factor = 1.0f / (1.0f + expf(
+            ((float)s->wave - s->brew_penalty_midpoint) / s->brew_penalty_width));
+        r -= s->brew_penalty * wave_factor;
+    }
+
+    /* blood barrage healing: reward the correct sustain mechanic (no supply cost).
+     * encourages learning mage gear → barrage → AoE heal loop. */
+    if (s->blood_heal_this_tick > 0)
+        r += s->blood_heal_reward * (float)s->blood_heal_this_tick / 20.0f;
 
     /* pillar destroyed: north pillar (idx 2, highest Y) is the most important
      * safespot, south (0) and west (1) are less critical. total = -0.8 for all. */
@@ -1941,6 +1983,8 @@ static void inf_step(EncounterState* state, const int* actions) {
     s->wave_completed_this_tick = 0;
     s->pillar_lost_this_tick = -1;
     s->player_attacked_this_tick = 0;
+    s->brewed_this_tick = 0;
+    s->blood_heal_this_tick = 0;
     /* clear NPC per-tick flags BEFORE player actions, so hit flags set by
        inf_tick_player survive through inf_tick_npcs into render_post_tick */
     for (int i = 0; i < INF_MAX_NPCS; i++) {
@@ -1987,9 +2031,11 @@ static void inf_step(EncounterState* state, const int* actions) {
             }
         }
         if (blood_heal_acc > 0) {
-            s->player.current_hitpoints += blood_heal_acc / 4;
+            int healed = blood_heal_acc / 4;
+            s->player.current_hitpoints += healed;
             if (s->player.current_hitpoints > s->player.base_hitpoints)
                 s->player.current_hitpoints = s->player.base_hitpoints;
+            s->blood_heal_this_tick = healed;
         }
     }
 
@@ -2057,6 +2103,8 @@ static void inf_step(EncounterState* state, const int* actions) {
             s->total_npc_attacks++;
     }
     if (s->ticks_without_action > 0) s->total_idle_ticks++;
+    s->total_brews_used += s->brewed_this_tick;
+    s->total_blood_healed += s->blood_heal_this_tick;
 
     s->reward = inf_compute_reward(s);
     s->episode_return += s->reward;
@@ -2316,7 +2364,13 @@ static void inf_put_int(EncounterState* state, const char* key, int value) {
 }
 
 static void inf_put_float(EncounterState* state, const char* key, float value) {
-    (void)state; (void)key; (void)value;
+    InfernoState* s = (InfernoState*)state;
+    if (strcmp(key, "wave_reward_base") == 0) s->wave_reward_base = value;
+    else if (strcmp(key, "wave_reward_scale") == 0) s->wave_reward_scale = value;
+    else if (strcmp(key, "brew_penalty") == 0) s->brew_penalty = value;
+    else if (strcmp(key, "brew_penalty_midpoint") == 0) s->brew_penalty_midpoint = value;
+    else if (strcmp(key, "brew_penalty_width") == 0) s->brew_penalty_width = value;
+    else if (strcmp(key, "blood_heal_reward") == 0) s->blood_heal_reward = value;
 }
 
 static void inf_put_ptr(EncounterState* state, const char* key, void* value) {
@@ -2344,6 +2398,8 @@ static void* inf_get_log(EncounterState* state) {
         s->log.prayer_correct += (float)s->total_prayer_correct;
         s->log.prayer_total += (float)s->total_npc_attacks;
         s->log.idle_ticks += (float)s->total_idle_ticks;
+        s->log.brews_used += (float)s->total_brews_used;
+        s->log.blood_healed += (float)s->total_blood_healed;
         s->log.n += 1.0f;
     }
     return &s->log;

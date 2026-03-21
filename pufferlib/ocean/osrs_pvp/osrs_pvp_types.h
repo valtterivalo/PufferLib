@@ -756,6 +756,8 @@ typedef struct {
     float prayer_correct;
     float prayer_total;
     float idle_ticks;
+    float brews_used;
+    float blood_healed;
     float n;
 } Log;
 
