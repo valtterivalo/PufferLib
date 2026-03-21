@@ -1301,6 +1301,23 @@ void muon_step(Muon *m, cudaStream_t stream) {
         mtl_norm_reduce(m->ns.norm_ptr, norm_partials_buf, nblk, stream);
         mtl_barrier(ms);
       }
+      // Skip NS when gradient is near-zero (e.g. per-head PPO clipping
+      // zeroed all policy gradients). normalizing a near-zero matrix by
+      // 1/(norm+1e-7) amplifies noise by up to 10^7, producing catastrophic
+      // weight updates. this is not a fallback — orthogonalizing noise is
+      // mathematically meaningless.
+      {
+        mtl_ensure_stream_synced(stream);
+        float norm_sq;
+        memcpy(&norm_sq, m->ns.norm_ptr, sizeof(float));
+        float norm = sqrtf(norm_sq > 0 ? norm_sq : 0);
+        if (norm < 1e-5f) {
+          // no meaningful gradient — skip this tensor entirely
+          offset += t->numel();
+          continue;
+        }
+      }
+
       mtl_normalize_f32((float *)x.bytes, m->ns.norm_ptr, 1e-7f,
                         (int)x.numel(), stream);
       mtl_barrier(ms);
