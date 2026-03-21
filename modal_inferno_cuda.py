@@ -44,7 +44,7 @@ image = (
     .run_commands(
         f"git clone --branch {BRANCH} {REPO_URL} /root/pufferlib",
         # build _C.so with inferno env linked in (nvcc available in this image)
-        "cd /root/pufferlib && python setup.py build_osrs_inferno --force",
+        "cd /root/pufferlib && python setup.py build_osrs_inferno --force 2>&1",
     )
     .env({"PYTHONPATH": "/root/pufferlib"})
 )
