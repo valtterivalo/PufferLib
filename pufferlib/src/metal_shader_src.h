@@ -1367,10 +1367,12 @@ kernel void muon_weight_update_kernel(
     if ((int)idx >= p.n) return;
     float lr = *lr_ptr;
     float wd_scale = 1.0f - lr * p.wd;
-    float update = up[idx];
-    // NS can diverge for rank-deficient gradients, producing inf in the update.
-    // Zero non-finite updates to prevent weight corruption.
-    wb[idx] = wb[idx] * wd_scale - lr * (isfinite(update) ? update : 0.0f);
+    // Clamp update to prevent NS divergence from corrupting weights.
+    // Normal NS output is O(sqrt(M)) ≈ 8.7. Cap at 100 gives 10x headroom.
+    // NS diverges on rank-deficient gradients (from per-head PPO clipping),
+    // producing elements of 10^18+ that overflow the Gram matrix GEMMs.
+    float update = clamp(up[idx], -100.0f, 100.0f);
+    wb[idx] = wb[idx] * wd_scale - lr * update;
 }
 
 // ============================================================================
