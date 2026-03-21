@@ -56,6 +56,7 @@ def train_inferno(sweep: bool = False, steps: int = 1_000_000, worker_id: int = 
     """Run inferno training or sweep on L4."""
     import os
     import subprocess
+    import time
 
     os.chdir("/root/pufferlib")
 
@@ -77,6 +78,11 @@ def train_inferno(sweep: bool = False, steps: int = 1_000_000, worker_id: int = 
     print(f"worker {worker_id}: using {so_files}")
 
     if sweep:
+        # worker 0 runs normal sweep (2 baseline trials then suggestions).
+        # workers 1+ randomize hyperparams from the start to avoid duplicates.
+        import random as _rng
+        _rng.seed(worker_id * 7919 + int(time.time()))
+
         cmd = [
             "python", "-m", "pufferlib.pufferl",
             "sweep", "puffer_osrs_inferno",
@@ -86,6 +92,25 @@ def train_inferno(sweep: bool = False, steps: int = 1_000_000, worker_id: int = 
             "--wandb-group", "l4-sweep",
             "--tag", f"sweep-worker-{worker_id}",
         ]
+
+        if worker_id > 0:
+            # override key hyperparams so each worker starts differently
+            lr = 10 ** _rng.uniform(-4, -1)
+            ent = 10 ** _rng.uniform(-4, -1)
+            vf = _rng.uniform(0.1, 5.0)
+            hs = _rng.choice([64, 128, 256, 512])
+            nl = _rng.randint(1, 6)
+            rr = _rng.uniform(0.1, 4.0)
+            gamma = 1.0 - 10 ** _rng.uniform(-4, -1)
+            cmd += [
+                "--train.learning-rate", f"{lr:.6f}",
+                "--train.ent-coef", f"{ent:.6f}",
+                "--train.vf-coef", f"{vf:.4f}",
+                "--policy.hidden-size", str(hs),
+                "--policy.num-layers", str(nl),
+                "--train.replay-ratio", f"{rr:.4f}",
+                "--train.gamma", f"{gamma:.6f}",
+            ]
     else:
         cmd = [
             "python", "-m", "pufferlib.pufferl",
