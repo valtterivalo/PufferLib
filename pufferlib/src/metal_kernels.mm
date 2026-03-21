@@ -430,7 +430,7 @@ void mtl_clip_by_norm_f32(float *data, const float *norm_ptr,
 }
 
 void mtl_normalize_f32(float *data, const float *norm_ptr, float eps,
-                        float max_inv_norm, int count, cudaStream_t stream) {
+                        int count, cudaStream_t stream) {
   MetalStream *ms = mtl_resolve_stream(stream);
   ms->compute_encoder();
   auto pso = mtl_pipeline("normalize_f32");
@@ -439,9 +439,8 @@ void mtl_normalize_f32(float *data, const float *norm_ptr, float eps,
   mtl_set_ptr(ms, norm_ptr, 1);
   struct {
     float eps;
-    float max_inv_norm;
     int count;
-  } params = {eps, max_inv_norm, count};
+  } params = {eps, count};
   mtl_set_params(ms, params, 2);
   mtl_dispatch_1d(ms, pso, count);
 }
@@ -1302,12 +1301,8 @@ void muon_step(Muon *m, cudaStream_t stream) {
         mtl_norm_reduce(m->ns.norm_ptr, norm_partials_buf, nblk, stream);
         mtl_barrier(ms);
       }
-      // Cap inv_norm at sqrt(M*N) so normalized matrix has per-element values O(1).
-      // Prevents catastrophic amplification when gradient norm is near-zero
-      // (e.g., when per-head PPO clipping zeros most policy gradients).
-      float max_inv_norm = std::sqrt((float)(M * N));
       mtl_normalize_f32((float *)x.bytes, m->ns.norm_ptr, 1e-7f,
-                        max_inv_norm, (int)x.numel(), stream);
+                        (int)x.numel(), stream);
       mtl_barrier(ms);
 
       // Newton-Schulz iterations (all GEMM — synced internally)
@@ -1333,32 +1328,17 @@ void muon_step(Muon *m, cudaStream_t stream) {
       }
 
       PufTensor &result_precision = (m->ns_iters % 2 == 0) ? x : tmp;
-
-      // Re-normalize NS output: normalize to unit norm, then scale to sqrt(max(M,N)).
-      // NS iterations can diverge for rank-deficient inputs (e.g., when per-head
-      // clipping zeros most policy gradients). re-normalization bounds per-element
-      // values regardless of NS behavior. the target norm sqrt(max(M,N)) matches
-      // the expected Frobenius norm of an orthogonal M×N matrix.
-      {
-        int nblk = std::min((int)((result_precision.numel() + 255) / 256), 256);
-        mtl_norm_f32(norm_partials_buf, (const float *)result_precision.bytes,
-                     (int)result_precision.numel(), nblk, stream);
-        mtl_barrier(ms);
-        mtl_norm_reduce(m->ns.norm_ptr, norm_partials_buf, nblk, stream);
-        mtl_barrier(ms);
-        float max_inv = (float)std::sqrt((double)(M * N));  // cap for near-zero norm
-        mtl_normalize_f32((float *)result_precision.bytes, m->ns.norm_ptr,
-                          1e-7f, max_inv, (int)result_precision.numel(), stream);
-        mtl_barrier(ms);
-      }
-      float scale = (float)std::sqrt(std::max((double)M, (double)N));
-      mtl_scale_f32((float *)result_precision.bytes, scale,
-                    (int)result_precision.numel(), stream);
-      mtl_barrier(ms);
+      float scale =
+          (float)std::sqrt(std::max(1.0, (double)M / (double)N));
 
       PufTensor out_f32 = {.bytes = (char *)up_ptr,
                            .shape = {R, C},
                            .dtype_size = 4};
+
+      // Result is already f32 — scale and transpose if needed
+      if (scale != 1.0f)
+        mtl_scale_f32((float *)result_precision.bytes, scale,
+                      (int)result_precision.numel(), stream);
       if (transposed_flag) {
         mtl_transpose_f32((float *)out_f32.bytes,
                           (const float *)result_precision.bytes, (int)M,

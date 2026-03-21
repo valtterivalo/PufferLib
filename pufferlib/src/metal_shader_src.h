@@ -1519,7 +1519,6 @@ kernel void clip_by_norm_f32(
 
 struct NormalizeParams {
     float eps;
-    float max_inv_norm;  // cap amplification to prevent NS explosion on near-zero gradients
     int n;
 };
 
@@ -1530,7 +1529,7 @@ kernel void normalize_f32(
     constant NormalizeParams& p             [[buffer(2)]],
     uint idx [[thread_position_in_grid]]
 ) {
-    float inv_norm = min(1.0f / max(sqrt(*norm_ptr), p.eps), p.max_inv_norm);
+    float inv_norm = 1.0f / max(sqrt(*norm_ptr), p.eps);
     if ((int)idx < p.n) dst[idx] = dst[idx] * inv_norm;
 }
 
