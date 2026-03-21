@@ -652,6 +652,7 @@ typedef struct {
     float brew_penalty_midpoint; /* sigmoid midpoint wave (default 35) */
     float brew_penalty_width;    /* sigmoid transition width (default 5.0) */
     float blood_heal_reward;     /* reward per 20 HP healed via blood barrage (default 0.01) */
+    float prayer_reward;         /* reward per NPC attack blocked by correct prayer (default 0.01) */
 
     Log log;
 } InfernoState;
@@ -750,6 +751,7 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
     float saved_bpm = s->brew_penalty_midpoint;
     float saved_bpw = s->brew_penalty_width;
     float saved_bhr = s->blood_heal_reward;
+    float saved_pr = s->prayer_reward;
     memset(s, 0, sizeof(InfernoState));
     s->log = saved_log;
     s->start_wave = saved_start;
@@ -763,6 +765,7 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
     s->brew_penalty_midpoint = saved_bpm;
     s->brew_penalty_width = saved_bpw;
     s->blood_heal_reward = saved_bhr;
+    s->prayer_reward = saved_pr;
 
     /* human click-to-move: no destination after reset */
     s->player_dest_x = -1;
@@ -1954,6 +1957,11 @@ static float inf_compute_reward(InfernoState* s) {
     if (s->blood_heal_this_tick > 0)
         r += s->blood_heal_reward * (float)s->blood_heal_this_tick / 20.0f;
 
+    /* correct prayer: reward for blocking NPC attacks with the right overhead.
+     * prayer_correct_this_tick counts per-attack (multiple NPCs can hit same tick). */
+    if (s->prayer_correct_this_tick > 0)
+        r += s->prayer_reward * (float)s->prayer_correct_this_tick;
+
     /* pillar destroyed: north pillar (idx 2, highest Y) is the most important
      * safespot, south (0) and west (1) are less critical. total = -0.8 for all. */
     if (s->pillar_lost_this_tick >= 0) {
@@ -2371,6 +2379,7 @@ static void inf_put_float(EncounterState* state, const char* key, float value) {
     else if (strcmp(key, "brew_penalty_midpoint") == 0) s->brew_penalty_midpoint = value;
     else if (strcmp(key, "brew_penalty_width") == 0) s->brew_penalty_width = value;
     else if (strcmp(key, "blood_heal_reward") == 0) s->blood_heal_reward = value;
+    else if (strcmp(key, "prayer_reward") == 0) s->prayer_reward = value;
 }
 
 static void inf_put_ptr(EncounterState* state, const char* key, void* value) {

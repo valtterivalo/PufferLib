@@ -150,9 +150,10 @@ void my_init(Env* env, Dict* kwargs) {
     /* reward shaping config (sweepable via [env] section) */
     static const char* reward_keys[] = {
         "wave_reward_base", "wave_reward_scale", "brew_penalty",
-        "brew_penalty_midpoint", "brew_penalty_width", "blood_heal_reward"
+        "brew_penalty_midpoint", "brew_penalty_width", "blood_heal_reward",
+        "prayer_reward"
     };
-    for (int i = 0; i < 6; i++) {
+    for (int i = 0; i < 7; i++) {
         DictItem* item = dict_get_unsafe(kwargs, reward_keys[i]);
         if (item) ENCOUNTER_INFERNO.put_float(env->enc_state, reward_keys[i], item->value);
     }
