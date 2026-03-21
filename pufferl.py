@@ -152,6 +152,11 @@ def apply_cli_overrides(config: dict, env_name: str) -> dict:
     parser.add_argument("--max-trials", type=int, default=None)
     parser.add_argument("--results", action="store_true",
                         help="print sweep results and exit")
+    parser.add_argument("--wandb", action="store_true",
+                        help="log to wandb")
+    parser.add_argument("--wandb-project", type=str, default="pufferlib-metal")
+    parser.add_argument("--wandb-group", type=str, default="debug")
+    parser.add_argument("--tag", type=str, default=None)
 
     args = parser.parse_args()
 
@@ -178,6 +183,10 @@ def apply_cli_overrides(config: dict, env_name: str) -> dict:
         "timeout": args.timeout,
         "max_trials": args.max_trials,
         "results": args.results,
+        "wandb": args.wandb,
+        "wandb_project": args.wandb_project,
+        "wandb_group": args.wandb_group,
+        "tag": args.tag,
     }
 
     return config
@@ -803,6 +812,19 @@ def train_cli(env_name: str):
           f"layers={num_layers}, horizon={horizon}, overlap={overlap}, "
           f"cpu_infer={cpu_infer}, fp16={fp16}, seed={seed}")
 
+    # wandb init
+    wandb_run = None
+    if cli.get("wandb"):
+        import wandb
+        run_id = wandb.util.generate_id()
+        wandb_run = wandb.init(
+            id=run_id, config={**c, **vec_config, **env_config, **policy_config},
+            project=cli.get("wandb_project", "pufferlib-metal"),
+            group=cli.get("wandb_group", "debug"),
+            tags=[cli["tag"]] if cli.get("tag") else [env_name],
+            settings=wandb.Settings(console="off"),
+        )
+
     # optional trace output
     trace_file = None
     trace_every = max(int(cli.get("trace_every", 1)), 1)
@@ -828,9 +850,26 @@ def train_cli(env_name: str):
         ep_ret = env_stats.get("episode_return", 0)
         score = env_stats.get("score", ep_ret)
         ep_len = env_stats.get("episode_length", 0)
+        wave = env_stats.get("wave", 0)
+        prayer = env_stats.get("prayer_correct_rate", 0)
+        idle = env_stats.get("idle_ticks", 0)
         print(f"[step={global_step:>10,} | SPS={sps:>10,.0f} | "
-              f"ret={ep_ret:>8.2f} score={score:>8.2f} len={ep_len:>6.0f} | "
+              f"ret={ep_ret:>8.2f} score={score:>8.2f} len={ep_len:>6.0f} "
+              f"wave={wave:>4.1f} pray={prayer:.0%} idle={idle:>4.0f} | "
               f"ent={ent:.3f} pg={pg:.4f} vf={vf:.4f}]")
+
+        if wandb_run:
+            wandb_run.log({
+                "sps": sps,
+                "score": score,
+                "episode_return": ep_ret,
+                "episode_length": ep_len,
+                "entropy": ent,
+                "pg_loss": pg,
+                "vf_loss": vf,
+                **{k: v for k, v in env_stats.items()
+                   if k not in ("episode_return", "episode_length", "score")},
+            }, step=global_step)
 
         if trace_file and iteration % trace_every == 0:
             trace_row = {
@@ -871,6 +910,16 @@ def train_cli(env_name: str):
             "profile": result.profile,
         }) + "\n")
         trace_file.close()
+
+    if wandb_run:
+        import wandb
+        # upload final checkpoint as artifact
+        final_ckpt = os.path.join(checkpoint_dir, "latest.bin")
+        if os.path.exists(final_ckpt):
+            artifact = wandb.Artifact(f"{env_name}-model", type="model")
+            artifact.add_file(final_ckpt)
+            wandb_run.log_artifact(artifact)
+        wandb_run.finish()
 
 
 # ============================================================================

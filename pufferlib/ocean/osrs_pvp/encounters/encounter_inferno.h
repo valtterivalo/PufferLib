@@ -590,6 +590,9 @@ typedef struct {
     float total_damage_received;
     int total_waves_cleared;
     int ticks_without_action;  /* consecutive ticks with no attack or movement */
+    int total_prayer_correct;  /* times prayer blocked an NPC attack */
+    int total_npc_attacks;     /* total NPC attacks on player (for prayer_correct_rate) */
+    int total_idle_ticks;      /* cumulative ticks of ticks_without_action > 0 */
 
     /* player combat state */
     OverheadPrayer active_prayer;
@@ -2045,6 +2048,14 @@ static void inf_step(EncounterState* state, const int* actions) {
             s->ticks_without_action = 0;
     }
 
+    /* accumulate diagnostic counters */
+    if (s->prayer_correct_this_tick) s->total_prayer_correct++;
+    for (int i = 0; i < INF_MAX_NPCS; i++) {
+        if (s->npcs[i].attacked_this_tick && s->npcs[i].type != INF_NPC_NIBBLER)
+            s->total_npc_attacks++;
+    }
+    if (s->ticks_without_action > 0) s->total_idle_ticks++;
+
     s->reward = inf_compute_reward(s);
     s->episode_return += s->reward;
 }
@@ -2327,6 +2338,10 @@ static void* inf_get_log(EncounterState* state) {
         s->log.wins += (s->winner == 0) ? 1.0f : 0.0f;
         s->log.damage_dealt += s->total_damage_dealt;
         s->log.damage_received += s->total_damage_received;
+        s->log.wave += (float)s->wave;
+        s->log.prayer_correct += (float)s->total_prayer_correct;
+        s->log.prayer_total += (float)s->total_npc_attacks;
+        s->log.idle_ticks += (float)s->total_idle_ticks;
         s->log.n += 1.0f;
     }
     return &s->log;

@@ -752,6 +752,10 @@ typedef struct {
     float wins;
     float damage_dealt;
     float damage_received;
+    float wave;
+    float prayer_correct;
+    float prayer_total;
+    float idle_ticks;
     float n;
 } Log;
 

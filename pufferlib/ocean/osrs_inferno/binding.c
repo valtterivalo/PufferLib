@@ -162,6 +162,13 @@ void my_log(Log* log, Dict* out) {
     dict_set(out, "damage_received", log->damage_received);
     dict_set(out, "episode_length", log->episode_length);
     dict_set(out, "wins", log->wins);
+    dict_set(out, "wave", log->wave);
+    dict_set(out, "idle_ticks", log->idle_ticks);
+
+    /* prayer correct rate: fraction of NPC attacks blocked by correct prayer */
+    float prayer_rate = (log->prayer_total > 0.0f)
+        ? log->prayer_correct / log->prayer_total : 0.0f;
+    dict_set(out, "prayer_correct_rate", prayer_rate);
 
     float wr = log->wins;
     float wave_progress = log->episode_length / (float)INF_MAX_TICKS;
