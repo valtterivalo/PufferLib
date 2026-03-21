@@ -1,13 +1,10 @@
-"""Modal script to test upstream CUDA backend with OSRS Inferno on A100.
-
-Tests whether vanilla CUDA path (bf16, joint-ratio clipping, no stability fixes)
-can train the 7-head inferno action space at scale without entropy collapse or NaN.
+"""Modal script to test upstream CUDA backend with OSRS Inferno.
 
 Usage:
-    pip install modal && python3 -m modal setup   # one-time auth
-    modal run modal_inferno_cuda.py                # smoke test (1M steps)
-    modal run modal_inferno_cuda.py --steps 50000000  # medium run
-    modal run modal_inferno_cuda.py --sweep        # Protein sweep
+    modal run modal_inferno_cuda.py                        # smoke test (1M steps)
+    modal run modal_inferno_cuda.py --steps 1000000000     # 1B run
+    modal run modal_inferno_cuda.py --sweep                # single sweep
+    modal run modal_inferno_cuda.py --sweep --parallel 4   # 4 parallel sweeps
 """
 
 import modal
@@ -15,7 +12,6 @@ import modal
 REPO_URL = "https://github.com/valtterivalo/PufferLib.git"
 BRANCH = "inferno-encounter"
 
-# CUDA 12.4 devel has nvcc + headers for compiling kernels.cu
 image = (
     modal.Image.from_registry(
         "nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04",
@@ -43,7 +39,6 @@ image = (
     )
     .run_commands(
         f"git clone --branch {BRANCH} {REPO_URL} /root/pufferlib",
-        # build _C.so with inferno env linked in (nvcc available in this image)
         "cd /root/pufferlib && python setup.py build_osrs_inferno --force 2>&1",
     )
     .env({"PYTHONPATH": "/root/pufferlib"})
@@ -53,12 +48,12 @@ app = modal.App("inferno-cuda-test", image=image)
 
 
 @app.function(
-    gpu="A100-40GB",
+    gpu="L4",
     timeout=7200,
     secrets=[modal.Secret.from_name("wandb-secret")],
 )
-def train_inferno(sweep: bool = False, steps: int = 1_000_000):
-    """Run inferno training on A100."""
+def train_inferno(sweep: bool = False, steps: int = 1_000_000, worker_id: int = 0):
+    """Run inferno training or sweep on L4."""
     import os
     import subprocess
 
@@ -76,11 +71,10 @@ def train_inferno(sweep: bool = False, steps: int = 1_000_000):
             check=True,
         )
 
-    # verify _C.so exists
     import glob as g
     so_files = g.glob("pufferlib/_C*.so")
     assert so_files, "no _C.so found"
-    print(f"using: {so_files}")
+    print(f"worker {worker_id}: using {so_files}")
 
     if sweep:
         cmd = [
@@ -89,7 +83,8 @@ def train_inferno(sweep: bool = False, steps: int = 1_000_000):
             "--sweep.gpus", "1",
             "--wandb",
             "--wandb-project", "inferno-cuda-stability",
-            "--wandb-group", "a100-sweep",
+            "--wandb-group", "l4-sweep",
+            "--tag", f"sweep-worker-{worker_id}",
         ]
     else:
         cmd = [
@@ -98,14 +93,23 @@ def train_inferno(sweep: bool = False, steps: int = 1_000_000):
             "--train.total-timesteps", str(steps),
             "--wandb",
             "--wandb-project", "inferno-cuda-stability",
-            "--wandb-group", "a100-stability-test",
+            "--wandb-group", "l4-stability-test",
             "--tag", f"vanilla-cuda-{steps // 1_000_000}m",
         ]
 
-    print(f"=== {' '.join(cmd)} ===")
+    print(f"worker {worker_id}: {' '.join(cmd)}")
     subprocess.run(cmd, check=True)
 
 
 @app.local_entrypoint()
-def main(sweep: bool = False, steps: int = 1_000_000):
-    train_inferno.remote(sweep=sweep, steps=steps)
+def main(sweep: bool = False, steps: int = 1_000_000, parallel: int = 1):
+    if parallel > 1 and sweep:
+        # fan out parallel independent sweeps
+        handles = []
+        for i in range(parallel):
+            handles.append(train_inferno.spawn(sweep=True, worker_id=i))
+        # wait for all to complete
+        for h in handles:
+            h.get()
+    else:
+        train_inferno.remote(sweep=sweep, steps=steps, worker_id=0)
