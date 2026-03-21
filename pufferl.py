@@ -450,10 +450,14 @@ def _build_default_params(config: dict) -> dict:
     for k, v in config.get("vec", {}).items():
         if k not in train:
             train[k] = v
-    return {
+    result = {
         "train": train,
         "policy": dict(config.get("policy", {})),
     }
+    # env params (reward shaping coefficients etc.) are sweepable too
+    if config.get("env"):
+        result["env"] = dict(config["env"])
+    return result
 
 
 def run_trial(
@@ -463,6 +467,7 @@ def run_trial(
     protein: Protein,
     sweep_dir: Path,
     config: dict,
+    wandb_config: dict | None = None,
 ) -> dict | None:
     """Run a single training trial using the shared training loop."""
     from pufferlib.ocean.osrs_pvp.pfsp import (
@@ -512,6 +517,21 @@ def run_trial(
     min_sps = int(config.get("sweep", {}).get("min_sps", 100_000))
     downsample_points = int(config.get("sweep", {}).get("downsample", 5))
 
+    # per-trial wandb run (each sweep trial is a separate wandb run)
+    wandb_run = None
+    if wandb_config:
+        import wandb
+        flat_params = dict(pufferlib.unroll_nested_dict(params))
+        wandb_run = wandb.init(
+            config=flat_params,
+            project=wandb_config["project"],
+            group=wandb_config["group"],
+            tags=[wandb_config["tag"], f"trial-{trial_idx}"] if wandb_config.get("tag") else [f"trial-{trial_idx}"],
+            name=f"trial-{trial_idx}",
+            settings=wandb.Settings(console="off"),
+            reinit=True,
+        )
+
     def on_log(iteration, global_step, sps, losses, env_stats):
         nonlocal last_report_time, log_count
         log_count += 1
@@ -524,6 +544,18 @@ def run_trial(
                 f"elapsed={now - start_time:.0f}s"
             )
             last_report_time = now
+
+        if wandb_run:
+            wandb_run.log({
+                "sps": sps, "score": score,
+                "episode_return": env_stats.get("episode_return", 0),
+                "episode_length": env_stats.get("episode_length", 0),
+                "entropy": losses.get("entropy", 0),
+                "pg_loss": losses.get("pg_loss", 0),
+                "vf_loss": losses.get("vf_loss", 0),
+                **{k: v for k, v in env_stats.items()
+                   if k not in ("episode_return", "episode_length", "score")},
+            }, step=global_step)
 
     def should_stop(score, elapsed):
         if log_count <= 2 and result_ref[0] and result_ref[0].entries:
@@ -560,6 +592,8 @@ def run_trial(
         result_ref[0] = result
     except Exception as e:
         print(f"  FAILED: {e}")
+        if wandb_run:
+            wandb_run.finish(exit_code=1)
         return None
 
     entries = result.entries
@@ -567,6 +601,8 @@ def run_trial(
 
     if not entries:
         print(f"  FAILED: no metric entries ({elapsed:.0f}s)")
+        if wandb_run:
+            wandb_run.finish(exit_code=1)
         return None
 
     scores = [e["score"] for e in entries]
@@ -600,6 +636,9 @@ def run_trial(
         f"sps={mean_sps:.0f}  steps={steps[-1]/1e6:.1f}M  "
         f"wall={elapsed:.0f}s{stop_label}"
     )
+
+    if wandb_run:
+        wandb_run.finish()
 
     return {
         "trial": trial_idx,
@@ -699,7 +738,8 @@ def print_results(obs_path: Path) -> None:
         )
 
 
-def run_sweep(env_name: str, config: dict, max_trials: int | None, timeout_h: float) -> None:
+def run_sweep(env_name: str, config: dict, max_trials: int | None, timeout_h: float,
+              wandb_config: dict | None = None) -> None:
     """Run the Protein sweep for a Metal env."""
     sweep_dir = SWEEP_DIR_BASE / env_name
     sweep_dir.mkdir(parents=True, exist_ok=True)
@@ -758,7 +798,8 @@ def run_sweep(env_name: str, config: dict, max_trials: int | None, timeout_h: fl
                 pred_score = info.get("score", 0)
                 print(f"\nprotein prediction: score={pred_score:.3f}, cost={pred_cost:.0f}s")
 
-        result = run_trial(trial_idx, env_name, params, protein, sweep_dir, config)
+        result = run_trial(trial_idx, env_name, params, protein, sweep_dir, config,
+                           wandb_config=wandb_config)
 
         if result is not None:
             for obs in result["observations"]:
@@ -935,10 +976,19 @@ def sweep_cli(env_name: str):
         print_results(SWEEP_DIR_BASE / env_name / "observations.jsonl")
         return
 
+    wandb_config = None
+    if cli.get("wandb"):
+        wandb_config = {
+            "project": cli.get("wandb_project", "pufferlib-metal"),
+            "group": cli.get("wandb_group", "debug"),
+            "tag": cli.get("tag"),
+        }
+
     run_sweep(
         env_name, config,
         max_trials=cli.get("max_trials"),
         timeout_h=cli.get("timeout", 4.0),
+        wandb_config=wandb_config,
     )
 
 
