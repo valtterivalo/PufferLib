@@ -586,6 +586,76 @@ void train_impl(PuffeRL& pufferl) {
             s);
         mtl_barrier((MetalStream*)s);
 
+        // per-minibatch NaN trap: detect NaN in loss accumulator immediately
+        {
+            static int mb_count = 0;
+            mb_count++;
+            mtl_ensure_stream_synced(s);
+            const float* loss_buf = (const float*)pufferl.losses_puf.bytes;
+            int n_losses = (int)pufferl.losses_puf.numel();
+            bool has_nan = false;
+            for (int li = 0; li < n_losses; li++) {
+                if (!std::isfinite(loss_buf[li])) { has_nan = true; break; }
+            }
+            if (has_nan) {
+                fprintf(stderr, "\n[NaN-TRAP] minibatch %d: NaN detected in loss accumulator!\n", mb_count);
+                fprintf(stderr, "  losses:");
+                for (int li = 0; li < n_losses; li++)
+                    fprintf(stderr, " [%d]=%.6g", li, loss_buf[li]);
+                fprintf(stderr, "\n");
+
+                // dump decoder output stats
+                const float* dec = (const float*)dec_puf_f32.bytes;
+                int64_t dec_n = dec_puf_f32.numel();
+                float dec_max = -1e30f, dec_min = 1e30f;
+                int nan_count = 0, inf_count = 0;
+                for (int64_t i = 0; i < dec_n; i++) {
+                    if (std::isnan(dec[i])) nan_count++;
+                    else if (std::isinf(dec[i])) inf_count++;
+                    else { dec_max = std::max(dec_max, dec[i]); dec_min = std::min(dec_min, dec[i]); }
+                }
+                fprintf(stderr, "  decoder output: n=%lld min=%.4f max=%.4f nan=%d inf=%d\n",
+                        dec_n, dec_min, dec_max, nan_count, inf_count);
+
+                // dump advantage stats
+                const float* adv = (const float*)pufferl.train_buf.mb_advantages.bytes;
+                int64_t adv_n = pufferl.train_buf.mb_advantages.numel();
+                float adv_max = -1e30f, adv_min = 1e30f;
+                int adv_nan = 0, adv_inf = 0;
+                for (int64_t i = 0; i < adv_n; i++) {
+                    if (std::isnan(adv[i])) adv_nan++;
+                    else if (std::isinf(adv[i])) adv_inf++;
+                    else { adv_max = std::max(adv_max, adv[i]); adv_min = std::min(adv_min, adv[i]); }
+                }
+                fprintf(stderr, "  advantages: n=%lld min=%.4f max=%.4f nan=%d inf=%d\n",
+                        adv_n, adv_min, adv_max, adv_nan, adv_inf);
+
+                // dump ratio stats
+                const float* rat = (const float*)pufferl.train_buf.mb_ratio.bytes;
+                int64_t rat_n = pufferl.train_buf.mb_ratio.numel();
+                float rat_max = -1e30f, rat_min = 1e30f;
+                int rat_nan = 0, rat_inf = 0;
+                for (int64_t i = 0; i < rat_n; i++) {
+                    if (std::isnan(rat[i])) rat_nan++;
+                    else if (std::isinf(rat[i])) rat_inf++;
+                    else { rat_max = std::max(rat_max, rat[i]); rat_min = std::min(rat_min, rat[i]); }
+                }
+                fprintf(stderr, "  ratios: n=%lld min=%.4f max=%.4f nan=%d inf=%d\n",
+                        rat_n, rat_min, rat_max, rat_nan, rat_inf);
+
+                // dump weight stats at NaN time
+                DecoderWeights* dw = (DecoderWeights*)pufferl.weights_fp32.decoder;
+                if (dw && dw->policy_weight.bytes) {
+                    const float* pw = (const float*)dw->policy_weight.bytes;
+                    int pn = dw->output_dim * dw->hidden_dim;
+                    float pw_max = 0;
+                    for (int i = 0; i < pn; i++) pw_max = std::max(pw_max, std::fabs(pw[i]));
+                    fprintf(stderr, "  dec_policy_abs_max: %.4f\n", pw_max);
+                }
+                fprintf(stderr, "[NaN-TRAP] end dump\n\n");
+            }
+        }
+
         if (gpu_profile) mtl_ensure_stream_synced(s);
         uint64_t tp5 = mach_absolute_time();
 
