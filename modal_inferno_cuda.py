@@ -32,15 +32,17 @@ image = (
         "setuptools>=77",
         "wheel",
         "Cython",
+        "shimmy[gym-v21]",
+        "gymnasium>=0.29.1",
+        "pettingzoo>=1.24.1",
+        "gym==0.23",
     )
     .run_commands(
         f"git clone --branch {BRANCH} {REPO_URL} /root/pufferlib",
-        # install pufferlib without building _C.so (needs nvcc at correct path)
-        "cd /root/pufferlib && NO_TRAIN=1 pip install -e . --no-build-isolation",
-        # find nvcc and set CUDA_HOME, then build
-        "export CUDA_HOME=$(dirname $(dirname $(which nvcc))) && "
+        # build _C.so with inferno env linked in (nvcc available in this image)
         "cd /root/pufferlib && python setup.py build_osrs_inferno --force",
     )
+    .env({"PYTHONPATH": "/root/pufferlib"})
 )
 
 app = modal.App("inferno-cuda-test", image=image)
