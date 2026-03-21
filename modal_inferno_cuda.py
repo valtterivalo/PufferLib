@@ -15,8 +15,12 @@ import modal
 REPO_URL = "https://github.com/valtterivalo/PufferLib.git"
 BRANCH = "inferno-encounter"
 
+# CUDA 12.4 devel has nvcc + headers for compiling kernels.cu
 image = (
-    modal.Image.debian_slim(python_version="3.12")
+    modal.Image.from_registry(
+        "nvidia/cuda:12.4.1-devel-ubuntu22.04",
+        add_python="3.12",
+    )
     .apt_install("git", "clang", "make", "wget", "tar", "binutils", "libomp-dev")
     .pip_install(
         "pybind11",
@@ -30,10 +34,12 @@ image = (
         "Cython",
     )
     .run_commands(
-        # clone repo — setup.py downloads raylib/box2d at import time
         f"git clone --branch {BRANCH} {REPO_URL} /root/pufferlib",
-        # install pufferlib (this runs setup.py which downloads raylib + box2d)
-        "cd /root/pufferlib && pip install -e . --no-build-isolation",
+        # install pufferlib without building _C.so (needs nvcc at correct path)
+        "cd /root/pufferlib && NO_TRAIN=1 pip install -e . --no-build-isolation",
+        # find nvcc and set CUDA_HOME, then build
+        "export CUDA_HOME=$(dirname $(dirname $(which nvcc))) && "
+        "cd /root/pufferlib && python setup.py build_osrs_inferno --force",
     )
 )
 
@@ -46,29 +52,30 @@ app = modal.App("inferno-cuda-test", image=image)
     secrets=[modal.Secret.from_name("wandb-secret")],
 )
 def train_inferno(sweep: bool = False, steps: int = 1_000_000):
-    """Build inferno env and run training on A100."""
+    """Run inferno training on A100."""
     import os
     import subprocess
 
     os.chdir("/root/pufferlib")
 
-    # pull latest in case the image is cached
-    subprocess.run(["git", "pull", "origin", BRANCH], check=True)
-
-    # build osrs_inferno (static lib + _C.so with CUDA)
-    print("=== building osrs_inferno ===")
-    subprocess.run(
-        ["python", "setup.py", "build_osrs_inferno", "--force"],
-        check=True,
+    # pull latest and rebuild if code changed
+    result = subprocess.run(
+        ["git", "pull", "origin", BRANCH],
+        capture_output=True, text=True,
     )
+    if "Already up to date" not in result.stdout:
+        print("code updated, rebuilding...")
+        subprocess.run(
+            ["python", "setup.py", "build_osrs_inferno", "--force"],
+            check=True,
+        )
 
     # verify _C.so exists
     import glob as g
     so_files = g.glob("pufferlib/_C*.so")
-    assert so_files, "build failed: no _C.so found"
-    print(f"built: {so_files}")
+    assert so_files, "no _C.so found"
+    print(f"using: {so_files}")
 
-    # run training or sweep
     if sweep:
         cmd = [
             "python", "-m", "pufferlib.pufferl",
@@ -88,7 +95,7 @@ def train_inferno(sweep: bool = False, steps: int = 1_000_000):
             "--tag", f"vanilla-cuda-{steps // 1_000_000}m",
         ]
 
-    print(f"=== running: {' '.join(cmd)} ===")
+    print(f"=== {' '.join(cmd)} ===")
     subprocess.run(cmd, check=True)
 
 
