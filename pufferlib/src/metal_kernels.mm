@@ -430,7 +430,7 @@ void mtl_clip_by_norm_f32(float *data, const float *norm_ptr,
 }
 
 void mtl_normalize_f32(float *data, const float *norm_ptr, float eps,
-                        int count, cudaStream_t stream) {
+                        float max_inv_norm, int count, cudaStream_t stream) {
   MetalStream *ms = mtl_resolve_stream(stream);
   ms->compute_encoder();
   auto pso = mtl_pipeline("normalize_f32");
@@ -439,8 +439,9 @@ void mtl_normalize_f32(float *data, const float *norm_ptr, float eps,
   mtl_set_ptr(ms, norm_ptr, 1);
   struct {
     float eps;
+    float max_inv_norm;
     int count;
-  } params = {eps, count};
+  } params = {eps, max_inv_norm, count};
   mtl_set_params(ms, params, 2);
   mtl_dispatch_1d(ms, pso, count);
 }
@@ -1301,8 +1302,12 @@ void muon_step(Muon *m, cudaStream_t stream) {
         mtl_norm_reduce(m->ns.norm_ptr, norm_partials_buf, nblk, stream);
         mtl_barrier(ms);
       }
+      // Cap inv_norm at sqrt(M*N) so normalized matrix has per-element values O(1).
+      // Prevents catastrophic amplification when gradient norm is near-zero
+      // (e.g., when per-head PPO clipping zeros most policy gradients).
+      float max_inv_norm = std::sqrt((float)(M * N));
       mtl_normalize_f32((float *)x.bytes, m->ns.norm_ptr, 1e-7f,
-                        (int)x.numel(), stream);
+                        max_inv_norm, (int)x.numel(), stream);
       mtl_barrier(ms);
 
       // Newton-Schulz iterations (all GEMM — synced internally)
