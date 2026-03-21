@@ -177,7 +177,7 @@ static void cpu_mingru_gate(float *out, float *next_state,
         float mingru_out = cpu_lerp(state, hidden_tilde, gate_sig);
         float proj_sig = cpu_sigmoid(proj);
 
-        next_state[idx] = mingru_out;
+        next_state[idx] = fmaxf(mingru_out, 1e-30f);
         out[idx] = proj_sig * mingru_out + (1.0f - proj_sig) * x;
     }
 }

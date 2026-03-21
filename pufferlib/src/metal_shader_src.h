@@ -230,7 +230,7 @@ kernel void mingru_gate_inference(
     float mingru_out = lerp_f(state, hidden_tilde, gate_sig);
     float proj_sig = sigmoid_f(proj);
 
-    next_state[idx] = mingru_out;
+    next_state[idx] = max(mingru_out, 1e-30f);
     out[idx] = proj_sig * mingru_out + (1.0f - proj_sig) * x;
 }
 
@@ -317,7 +317,12 @@ kernel void fused_scan_forward_checkpointed(
         }
     }
 
-    next_state[bH + h] = precise::exp(a_star + s);
+    // Floor at 1e-30 to prevent log(0)=-inf on the next forward pass.
+    // exp(a_star+s) underflows to exactly 0.0f in fp32 when a_star+s < -87.3.
+    // A zero state causes log(0)=-inf → permanent -inf propagation through
+    // all subsequent scan steps. 1e-30 is well above fp32 denormal range
+    // and below any meaningful state value.
+    next_state[bH + h] = max(precise::exp(a_star + s), 1e-30f);
 }
 
 kernel void fused_scan_backward_checkpointed(
@@ -2043,7 +2048,7 @@ kernel void fused_scan_forward_checkpointed_fp16(
         }
     }
 
-    float next_state_val = exp(a_star + s);
+    float next_state_val = max(exp(a_star + s), 1e-30f);
     next_state[bH + h] = half(min(next_state_val, 65000.0f));
 }
 
