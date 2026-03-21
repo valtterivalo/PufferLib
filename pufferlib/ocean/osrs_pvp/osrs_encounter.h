@@ -613,11 +613,12 @@ static inline int encounter_resolve_npc_pending_hit(
     ticks down each hit, applies damage when it lands, handles deferred
     prayer checks (jad-style: check_prayer=1 re-checks at land time).
     encounters MUST call this each tick for projectile-based NPC attacks.
-    prayer_correct_flag: set to 1 when a deferred prayer check succeeds. */
+    prayer_correct_count: incremented for each deferred prayer check that succeeds.
+    multiple hits can land on the same tick (e.g. mager + ranger). */
 static inline void encounter_resolve_player_pending_hits(
     EncounterPendingHit* hits, int* hit_count,
     Player* player, OverheadPrayer active_prayer,
-    float* damage_received_acc, int* prayer_correct_flag
+    float* damage_received_acc, int* prayer_correct_count
 ) {
     for (int i = 0; i < *hit_count; i++) {
         hits[i].ticks_remaining--;
@@ -626,7 +627,7 @@ static inline void encounter_resolve_player_pending_hits(
             if (hits[i].check_prayer) {
                 if (encounter_prayer_correct_for_style(active_prayer, hits[i].attack_style)) {
                     dmg = 0;
-                    if (prayer_correct_flag) *prayer_correct_flag = 1;
+                    if (prayer_correct_count) (*prayer_correct_count)++;
                 }
             }
             encounter_damage_player(player, dmg, damage_received_acc);

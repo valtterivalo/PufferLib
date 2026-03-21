@@ -581,7 +581,7 @@ typedef struct {
     float episode_return;  /* accumulated reward over entire episode */
     float damage_dealt_this_tick;
     float damage_received_this_tick;
-    int prayer_correct_this_tick;
+    int prayer_correct_this_tick;  /* count of NPC attacks blocked by prayer this tick */
     int wave_completed_this_tick;
     int pillar_lost_this_tick;     /* -1 = none, 0-2 = which pillar was destroyed */
 
@@ -1331,7 +1331,7 @@ static void inf_npc_attack(InfernoState* s, int idx) {
     if (hit_delay == 0) {
         /* melee: instant damage, check prayer now */
         int prayer_matches = encounter_prayer_correct_for_style(s->active_prayer, actual_style);
-        if (prayer_matches) { dmg = 0; s->prayer_correct_this_tick = 1; }
+        if (prayer_matches) { dmg = 0; s->prayer_correct_this_tick++; }
         encounter_damage_player(&s->player, dmg, &s->damage_received_this_tick);
     } else {
         /* ranged/magic: queue pending hit on player */
@@ -1341,7 +1341,7 @@ static void inf_npc_attack(InfernoState* s, int idx) {
             int is_jad = (npc->type == INF_NPC_JAD);
             if (!is_jad) {
                 int prayer_matches = encounter_prayer_correct_for_style(s->active_prayer, actual_style);
-                if (prayer_matches) { dmg = 0; s->prayer_correct_this_tick = 1; }
+                if (prayer_matches) { dmg = 0; s->prayer_correct_this_tick++; }
             }
             EncounterPendingHit* ph = &s->player_pending_hits[s->player_pending_hit_count++];
             ph->active = 1;
@@ -2048,8 +2048,10 @@ static void inf_step(EncounterState* state, const int* actions) {
             s->ticks_without_action = 0;
     }
 
-    /* accumulate diagnostic counters */
-    if (s->prayer_correct_this_tick) s->total_prayer_correct++;
+    /* accumulate diagnostic counters.
+       prayer_correct_this_tick is a count (multiple NPCs can attack same tick).
+       total_npc_attacks counts attacks directed at the player (not nibbler→pillar). */
+    s->total_prayer_correct += s->prayer_correct_this_tick;
     for (int i = 0; i < INF_MAX_NPCS; i++) {
         if (s->npcs[i].attacked_this_tick && s->npcs[i].type != INF_NPC_NIBBLER)
             s->total_npc_attacks++;

@@ -83,6 +83,10 @@ void c_step(Env* env) {
         env->log.damage_dealt = s->total_damage_dealt;
         env->log.damage_received = s->total_damage_received;
         env->log.wins = (is_term && s->winner == 0) ? 1.0f : 0.0f;
+        env->log.wave = (float)s->wave;
+        env->log.prayer_correct = (float)s->total_prayer_correct;
+        env->log.prayer_total = (float)s->total_npc_attacks;
+        env->log.idle_ticks = (float)s->total_idle_ticks;
         env->log.n = 1.0f;  /* always report so sweep has continuous signal */
     }
 
