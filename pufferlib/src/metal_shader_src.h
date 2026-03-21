@@ -1075,6 +1075,7 @@ kernel void prio_adv_reduction_kernel(
 
     if (simd_lane == 0 && tx < 32) {
         float pw = pow(local_sum, pp.prio_alpha);
+        if (isnan(pw) || isinf(pw)) pw = 0.0f;  // match upstream CUDA guard
         prio_weights[row] = pw;
     }
 }
