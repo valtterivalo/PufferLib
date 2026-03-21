@@ -1493,6 +1493,7 @@ struct ClipByNormParams {
 };
 
 // Clip gradient by global norm: dst[i] *= min(max_norm / (sqrt(sum_sq) + eps), 1.0)
+// When clip_coef is 0 (norm overflow), zero directly to avoid inf*0=NaN.
 kernel void clip_by_norm_f32(
     device float* dst                       [[buffer(0)]],
     const device float* sum_sq_ptr          [[buffer(1)]],
@@ -1500,7 +1501,9 @@ kernel void clip_by_norm_f32(
     uint idx [[thread_position_in_grid]]
 ) {
     float clip_coef = min(p.max_norm / (sqrt(*sum_sq_ptr) + p.eps), 1.0f);
-    if ((int)idx < p.n) dst[idx] *= clip_coef;
+    if ((int)idx < p.n) {
+        dst[idx] = (clip_coef > 0.0f) ? dst[idx] * clip_coef : 0.0f;
+    }
 }
 
 struct NormalizeParams {
