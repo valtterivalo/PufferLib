@@ -38,7 +38,7 @@ app = modal.App("inferno-cuda-test", image=image)
 
 
 @app.function(
-    gpu="H200",
+    gpu="A100-40GB",
     timeout=7200,
     secrets=[modal.Secret.from_name("wandb-secret")],
 )
@@ -73,7 +73,7 @@ def train_inferno(sweep: bool = False):
             "sweep", "puffer_osrs_inferno",
             "--wandb",
             "--wandb-project", "inferno-cuda-stability",
-            "--wandb-group", "h200-sweep",
+            "--wandb-group", "a100-sweep",
         ]
     else:
         cmd = [
@@ -81,7 +81,7 @@ def train_inferno(sweep: bool = False):
             "train", "puffer_osrs_inferno",
             "--wandb",
             "--wandb-project", "inferno-cuda-stability",
-            "--wandb-group", "h200-stability-test",
+            "--wandb-group", "a100-stability-test",
             "--tag", "vanilla-cuda-500m",
         ]
 
