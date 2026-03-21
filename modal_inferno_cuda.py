@@ -3,8 +3,8 @@
 Usage:
     modal run modal_inferno_cuda.py                        # smoke test (1M steps)
     modal run modal_inferno_cuda.py --steps 1000000000     # 1B run
-    modal run modal_inferno_cuda.py --sweep                # single sweep
-    modal run modal_inferno_cuda.py --sweep --parallel 4   # 4 parallel sweeps
+    modal run modal_inferno_cuda.py --sweep                # 4-GPU parallel Protein sweep
+    modal run modal_inferno_cuda.py --sweep --gpus 2       # 2-GPU sweep
 """
 
 import modal
@@ -48,19 +48,17 @@ app = modal.App("inferno-cuda-test", image=image)
 
 
 @app.function(
-    gpu="L4",
+    gpu="L4:4",
     timeout=7200,
     secrets=[modal.Secret.from_name("wandb-secret")],
 )
-def train_inferno(sweep: bool = False, steps: int = 1_000_000, worker_id: int = 0):
-    """Run inferno training or sweep on L4."""
+def train_inferno(sweep: bool = False, steps: int = 1_000_000, gpus: int = 4):
+    """Run inferno training or sweep."""
     import os
     import subprocess
-    import time
 
     os.chdir("/root/pufferlib")
 
-    # pull latest and rebuild if code changed
     result = subprocess.run(
         ["git", "pull", "origin", BRANCH],
         capture_output=True, text=True,
@@ -75,42 +73,17 @@ def train_inferno(sweep: bool = False, steps: int = 1_000_000, worker_id: int = 
     import glob as g
     so_files = g.glob("pufferlib/_C*.so")
     assert so_files, "no _C.so found"
-    print(f"worker {worker_id}: using {so_files}")
+    print(f"using: {so_files}")
 
     if sweep:
-        # worker 0 runs normal sweep (2 baseline trials then suggestions).
-        # workers 1+ randomize hyperparams from the start to avoid duplicates.
-        import random as _rng
-        _rng.seed(worker_id * 7919 + int(time.time()))
-
         cmd = [
             "python", "-m", "pufferlib.pufferl",
             "sweep", "puffer_osrs_inferno",
-            "--sweep.gpus", "1",
+            "--sweep.gpus", str(gpus),
             "--wandb",
             "--wandb-project", "inferno-cuda-stability",
-            "--wandb-group", "l4-sweep",
-            "--tag", f"sweep-worker-{worker_id}",
+            "--wandb-group", "l4x4-sweep",
         ]
-
-        if worker_id > 0:
-            # override key hyperparams so each worker starts differently
-            lr = 10 ** _rng.uniform(-4, -1)
-            ent = 10 ** _rng.uniform(-4, -1)
-            vf = _rng.uniform(0.1, 5.0)
-            hs = _rng.choice([64, 128, 256, 512])
-            nl = _rng.randint(1, 6)
-            rr = _rng.uniform(0.1, 4.0)
-            gamma = 1.0 - 10 ** _rng.uniform(-4, -1)
-            cmd += [
-                "--train.learning-rate", f"{lr:.6f}",
-                "--train.ent-coef", f"{ent:.6f}",
-                "--train.vf-coef", f"{vf:.4f}",
-                "--policy.hidden-size", str(hs),
-                "--policy.num-layers", str(nl),
-                "--train.replay-ratio", f"{rr:.4f}",
-                "--train.gamma", f"{gamma:.6f}",
-            ]
     else:
         cmd = [
             "python", "-m", "pufferlib.pufferl",
@@ -118,23 +91,14 @@ def train_inferno(sweep: bool = False, steps: int = 1_000_000, worker_id: int = 
             "--train.total-timesteps", str(steps),
             "--wandb",
             "--wandb-project", "inferno-cuda-stability",
-            "--wandb-group", "l4-stability-test",
+            "--wandb-group", "l4-train",
             "--tag", f"vanilla-cuda-{steps // 1_000_000}m",
         ]
 
-    print(f"worker {worker_id}: {' '.join(cmd)}")
+    print(f"=== {' '.join(cmd)} ===")
     subprocess.run(cmd, check=True)
 
 
 @app.local_entrypoint()
-def main(sweep: bool = False, steps: int = 1_000_000, parallel: int = 1):
-    if parallel > 1 and sweep:
-        # fan out parallel independent sweeps
-        handles = []
-        for i in range(parallel):
-            handles.append(train_inferno.spawn(sweep=True, worker_id=i))
-        # wait for all to complete
-        for h in handles:
-            h.get()
-    else:
-        train_inferno.remote(sweep=sweep, steps=steps, worker_id=0)
+def main(sweep: bool = False, steps: int = 1_000_000, gpus: int = 4):
+    train_inferno.remote(sweep=sweep, steps=steps, gpus=gpus)
