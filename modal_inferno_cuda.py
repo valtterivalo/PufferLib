@@ -29,7 +29,7 @@ image = (
         "rich",
         "rich-argparse",
         "wandb",
-        "setuptools",
+        "setuptools>=77",
         "wheel",
         "Cython",
     )
