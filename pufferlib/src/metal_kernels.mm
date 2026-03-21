@@ -1313,6 +1313,11 @@ void muon_step(Muon *m, cudaStream_t stream) {
         float norm = sqrtf(norm_sq > 0 ? norm_sq : 0);
         if (norm < 1e-5f) {
           // no meaningful gradient — skip this tensor entirely
+          static int skip_count = 0;
+          skip_count++;
+          if (skip_count <= 20 || skip_count % 100 == 0)
+            fprintf(stderr, "[ns-skip] #%d: shape=(%lld,%lld) norm=%.2e\n",
+                    skip_count, R, C, norm);
           offset += t->numel();
           continue;
         }

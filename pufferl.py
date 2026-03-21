@@ -862,10 +862,12 @@ def train_cli(env_name: str):
     if cli.get("wandb"):
         import wandb
         run_id = wandb.util.generate_id()
+        run_name = cli.get("tag") or f"{env_name}-{run_id[:6]}"
         wandb_run = wandb.init(
             id=run_id, config={**c, **vec_config, **env_config, **policy_config},
             project=cli.get("wandb_project", "pufferlib-metal"),
             group=cli.get("wandb_group", "debug"),
+            name=run_name,
             tags=[cli["tag"]] if cli.get("tag") else [env_name],
             settings=wandb.Settings(console="off"),
         )
