@@ -1267,7 +1267,9 @@ void muon_step(Muon *m, cudaStream_t stream) {
     float *up_ptr = (float *)m->up_puf.bytes + offset;
     int64_t R = t->shape[0];
     int64_t C = t->numel() / std::max<int64_t>(1, R);
-    if (t->ndim() >= 2) {
+    // NS orthogonalization for 2D+ params with M >= 2.
+    // 1-row tensors (e.g. value weight) use direct gradient update.
+    if (t->ndim() >= 2 && std::min(R, C) >= 2) {
       bool transposed_flag = R > C;
       int64_t M = transposed_flag ? C : R;
       int64_t N = transposed_flag ? R : C;
@@ -1494,11 +1496,19 @@ static void decoder_init_weights(void *w, uint64_t *seed,
 
 static void decoder_reg_params(void *w, Allocator *alloc, int esz) {
   DecoderWeights *dw = (DecoderWeights *)w;
-  int od1 = dw->output_dim + 1;
-  dw->weight = {.shape = {od1, dw->hidden_dim}, .dtype_size = esz};
-  alloc->reg(&dw->weight);
+  int od = dw->output_dim;
+  int H = dw->hidden_dim;
+  // Register policy and value weights separately so Muon treats them differently:
+  // policy_weight (od, H) -> NS orthogonalization (2D path)
+  // value_weight (1, H) -> direct gradient update (1D path, no NS)
+  // The fused weight view spans both for forward/backward.
+  dw->policy_weight = {.shape = {od, H}, .dtype_size = esz};
+  dw->value_weight = {.shape = {1, H}, .dtype_size = esz};
+  alloc->reg(&dw->policy_weight);
+  alloc->reg(&dw->value_weight);
+  // fused weight view: set after allocation in decoder_post_alloc
   if (dw->continuous) {
-    dw->logstd = {.shape = {1, dw->output_dim}, .dtype_size = esz};
+    dw->logstd = {.shape = {1, od}, .dtype_size = esz};
     alloc->reg(&dw->logstd);
   }
 }

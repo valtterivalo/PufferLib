@@ -422,8 +422,10 @@ struct EncoderActivations {
 
 // Decoder: single linear projection (hidden → logits+value), matching upstream CUDA
 struct DecoderWeights {
-  PufTensor weight; // (output_dim+1, hidden_dim)
-  PufTensor logstd; // continuous only: (1, output_dim)
+  PufTensor weight;       // (output_dim+1, hidden_dim) — full fused weight (forward/backward use this)
+  PufTensor policy_weight; // (output_dim, hidden_dim) — policy rows (Muon NS orthogonalization)
+  PufTensor value_weight;  // (1, hidden_dim) — value row (Muon direct gradient, no NS)
+  PufTensor logstd;       // continuous only: (1, output_dim)
   int hidden_dim, output_dim;
   bool continuous;
 };
