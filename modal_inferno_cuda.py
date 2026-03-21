@@ -39,6 +39,7 @@ image = (
         "torch",
         "gpytorch",
         "scikit-learn",
+        "psutil",
     )
     .run_commands(
         f"git clone --branch {BRANCH} {REPO_URL} /root/pufferlib",
