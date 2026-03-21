@@ -1325,7 +1325,7 @@ void muon_step(Muon *m, cudaStream_t stream) {
         mtl_barrier(ms);
       }
 
-      PufTensor &result_precision = tmp;
+      PufTensor &result_precision = (m->ns_iters % 2 == 0) ? x : tmp;
       float scale =
           (float)std::sqrt(std::max(1.0, (double)M / (double)N));
 
