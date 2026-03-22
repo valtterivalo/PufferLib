@@ -139,6 +139,8 @@ typedef struct {
 
     int stun_on_spawn;   /* ticks of stun when first spawned */
     int can_move;        /* 0 = cannot move (zuk, zuk healers) */
+    int consumes_space;  /* 1 = blocks other NPCs from occupying same tiles.
+                            0 = transparent (nibblers). ref: JalNib.ts consumesSpace=null */
 } InfNPCStats;
 
 /* stats from InfernoTrainer TypeScript reference + OSRS wiki.
@@ -151,7 +153,7 @@ static const InfNPCStats INF_NPC_STATS[INF_NUM_NPC_TYPES] = {
         .melee_att_bonus = 0, .range_att_bonus = 0, .magic_att_bonus = 0,
         .melee_str_bonus = 0, .ranged_str_bonus = 0, .magic_base_dmg = 0, .magic_dmg_pct = 0,
         .stab_def = -20, .slash_def = -20, .crush_def = -20, .magic_def_bonus = -20, .ranged_def_bonus = -20,
-        .stun_on_spawn = 1, .can_move = 1 },
+        .stun_on_spawn = 1, .can_move = 1, .consumes_space = 0 },
 
     /* BAT (JalMejRah): ranged, drains run energy on hit. computed max hit = 19 */
     [INF_NPC_BAT] = { .hp = 25, .attack_speed = 3, .attack_range = 4, .size = 2,
@@ -160,7 +162,7 @@ static const InfNPCStats INF_NPC_STATS[INF_NUM_NPC_TYPES] = {
         .melee_att_bonus = 0, .range_att_bonus = 25, .magic_att_bonus = 0,
         .melee_str_bonus = 0, .ranged_str_bonus = 30, .magic_base_dmg = 0, .magic_dmg_pct = 0,
         .stab_def = 30, .slash_def = 30, .crush_def = 30, .magic_def_bonus = -20, .ranged_def_bonus = 45,
-        .stun_on_spawn = 1, .can_move = 1 },
+        .stun_on_spawn = 1, .can_move = 1, .consumes_space = 1 },
 
     /* BLOB (JalAk): prayer reader, can melee if close. computed max hit = 29.
        attack_speed = 3: InfernoTrainer JalAk.ts — "6 tick cycle = scan exits early,
@@ -171,7 +173,7 @@ static const InfNPCStats INF_NPC_STATS[INF_NUM_NPC_TYPES] = {
         .melee_att_bonus = 0, .range_att_bonus = 40, .magic_att_bonus = 45,
         .melee_str_bonus = 45, .ranged_str_bonus = 45, .magic_base_dmg = 29, .magic_dmg_pct = 100,
         .stab_def = 25, .slash_def = 25, .crush_def = 25, .magic_def_bonus = 25, .ranged_def_bonus = 25,
-        .stun_on_spawn = 1, .can_move = 1 },
+        .stun_on_spawn = 1, .can_move = 1, .consumes_space = 1 },
 
     /* BLOB_MELEE (JalAkRekKet): melee split. computed max hit = 18 */
     [INF_NPC_BLOB_MELEE] = { .hp = 15, .attack_speed = 4, .attack_range = 1, .size = 1,
@@ -180,7 +182,7 @@ static const InfNPCStats INF_NPC_STATS[INF_NUM_NPC_TYPES] = {
         .melee_att_bonus = 0, .range_att_bonus = 25, .magic_att_bonus = 0,
         .melee_str_bonus = 25, .ranged_str_bonus = 0, .magic_base_dmg = 0, .magic_dmg_pct = 0,
         .stab_def = 25, .slash_def = 25, .crush_def = 25, .magic_def_bonus = 0, .ranged_def_bonus = 0,
-        .stun_on_spawn = 0, .can_move = 1 },
+        .stun_on_spawn = 0, .can_move = 1, .consumes_space = 1 },
 
     /* BLOB_RANGE (JalAkRekXil): ranged split. computed max hit = 18 */
     [INF_NPC_BLOB_RANGE] = { .hp = 15, .attack_speed = 4, .attack_range = 15, .size = 1,
@@ -189,7 +191,7 @@ static const InfNPCStats INF_NPC_STATS[INF_NUM_NPC_TYPES] = {
         .melee_att_bonus = 0, .range_att_bonus = 25, .magic_att_bonus = 0,
         .melee_str_bonus = 0, .ranged_str_bonus = 25, .magic_base_dmg = 0, .magic_dmg_pct = 0,
         .stab_def = 0, .slash_def = 0, .crush_def = 0, .magic_def_bonus = 0, .ranged_def_bonus = 25,
-        .stun_on_spawn = 0, .can_move = 1 },
+        .stun_on_spawn = 0, .can_move = 1, .consumes_space = 1 },
 
     /* BLOB_MAGE (JalAkRekMej): magic split. wiki max hit = 25. InfernoTrainer has
        magicMaxHit()=0 (base Mob) but wiki clearly shows max hit 25 — use wiki value. */
@@ -199,7 +201,7 @@ static const InfNPCStats INF_NPC_STATS[INF_NUM_NPC_TYPES] = {
         .melee_att_bonus = 0, .range_att_bonus = 0, .magic_att_bonus = 25,
         .melee_str_bonus = 0, .ranged_str_bonus = 0, .magic_base_dmg = 25, .magic_dmg_pct = 100,
         .stab_def = 0, .slash_def = 0, .crush_def = 0, .magic_def_bonus = 25, .ranged_def_bonus = 0,
-        .stun_on_spawn = 0, .can_move = 1 },
+        .stun_on_spawn = 0, .can_move = 1, .consumes_space = 1 },
 
     /* MELEER (JalImKot): melee slash, dig mechanic. computed max hit = 48 (wiki: 49) */
     [INF_NPC_MELEER] = { .hp = 75, .attack_speed = 4, .attack_range = 1, .size = 4,
@@ -208,7 +210,7 @@ static const InfNPCStats INF_NPC_STATS[INF_NUM_NPC_TYPES] = {
         .melee_att_bonus = 0, .range_att_bonus = 0, .magic_att_bonus = 0,
         .melee_str_bonus = 40, .ranged_str_bonus = 0, .magic_base_dmg = 0, .magic_dmg_pct = 0,
         .stab_def = 65, .slash_def = 65, .crush_def = 65, .magic_def_bonus = 30, .ranged_def_bonus = 5,
-        .stun_on_spawn = 1, .can_move = 1 },
+        .stun_on_spawn = 1, .can_move = 1, .consumes_space = 1 },
 
     /* RANGER (JalXil): ranged, can melee if close. computed max hit = 46 */
     [INF_NPC_RANGER] = { .hp = 125, .attack_speed = 4, .attack_range = 15, .size = 3,
@@ -217,7 +219,7 @@ static const InfNPCStats INF_NPC_STATS[INF_NUM_NPC_TYPES] = {
         .melee_att_bonus = 0, .range_att_bonus = 40, .magic_att_bonus = 0,
         .melee_str_bonus = 0, .ranged_str_bonus = 50, .magic_base_dmg = 0, .magic_dmg_pct = 0,
         .stab_def = 0, .slash_def = 0, .crush_def = 0, .magic_def_bonus = 0, .ranged_def_bonus = 0,
-        .stun_on_spawn = 1, .can_move = 1 },
+        .stun_on_spawn = 1, .can_move = 1, .consumes_space = 1 },
 
     /* MAGER (JalZek): magic, resurrects dead mobs, can melee. computed max hit = 70 */
     [INF_NPC_MAGER] = { .hp = 220, .attack_speed = 4, .attack_range = 15, .size = 4,
@@ -226,7 +228,7 @@ static const InfNPCStats INF_NPC_STATS[INF_NUM_NPC_TYPES] = {
         .melee_att_bonus = 0, .range_att_bonus = 0, .magic_att_bonus = 80,
         .melee_str_bonus = 0, .ranged_str_bonus = 0, .magic_base_dmg = 70, .magic_dmg_pct = 100,
         .stab_def = 0, .slash_def = 0, .crush_def = 0, .magic_def_bonus = 0, .ranged_def_bonus = 0,
-        .stun_on_spawn = 1, .can_move = 1 },
+        .stun_on_spawn = 1, .can_move = 1, .consumes_space = 1 },
 
     /* JAD (JalTokJad): 50/50 range/mage, can melee (stab) if close.
        wiki max hit = 113. formula gives 231 ranged (high range level + bonus),
@@ -238,7 +240,7 @@ static const InfNPCStats INF_NPC_STATS[INF_NUM_NPC_TYPES] = {
         .melee_str_bonus = 0, .ranged_str_bonus = 80, .magic_base_dmg = 113, .magic_dmg_pct = 100,
         .stab_def = 0, .slash_def = 0, .crush_def = 0, .magic_def_bonus = 0, .ranged_def_bonus = 0,
         .max_hit_cap = 113,
-        .stun_on_spawn = 1, .can_move = 1 },
+        .stun_on_spawn = 1, .can_move = 1, .consumes_space = 1 },
 
     /* ZUK (TzKalZuk): typeless attacks, wiki max hit = 148 */
     [INF_NPC_ZUK] = { .hp = 1200, .attack_speed = 10, .attack_range = 99, .size = 7,
@@ -247,7 +249,7 @@ static const InfNPCStats INF_NPC_STATS[INF_NUM_NPC_TYPES] = {
         .melee_att_bonus = 0, .range_att_bonus = 550, .magic_att_bonus = 550,
         .melee_str_bonus = 200, .ranged_str_bonus = 200, .magic_base_dmg = 148, .magic_dmg_pct = 100,
         .stab_def = 0, .slash_def = 0, .crush_def = 0, .magic_def_bonus = 350, .ranged_def_bonus = 100,
-        .stun_on_spawn = 8, .can_move = 0 },
+        .stun_on_spawn = 8, .can_move = 0, .consumes_space = 1 },
 
     /* HEALER_JAD (YtHurKot): melee, heals its Jad.
        ref: InfernoTrainer YtHurKot.ts — has significant ranged def + att bonuses. */
@@ -257,7 +259,7 @@ static const InfNPCStats INF_NPC_STATS[INF_NUM_NPC_TYPES] = {
         .melee_att_bonus = 0, .range_att_bonus = 80, .magic_att_bonus = 100,
         .melee_str_bonus = 0, .ranged_str_bonus = 0, .magic_base_dmg = 0, .magic_dmg_pct = 0,
         .stab_def = 0, .slash_def = 0, .crush_def = 0, .magic_def_bonus = 130, .ranged_def_bonus = 130,
-        .stun_on_spawn = 1, .can_move = 1 },
+        .stun_on_spawn = 1, .can_move = 1, .consumes_space = 1 },
 
     /* HEALER_ZUK (JalMejJak): AOE magic sparks, cannot move.
        ref: InfernoTrainer JalMejJak.ts — attack_speed = 3 (not 4). */
@@ -267,7 +269,7 @@ static const InfNPCStats INF_NPC_STATS[INF_NUM_NPC_TYPES] = {
         .melee_att_bonus = 0, .range_att_bonus = 0, .magic_att_bonus = 0,
         .melee_str_bonus = 0, .ranged_str_bonus = 0, .magic_base_dmg = 24, .magic_dmg_pct = 100,
         .stab_def = 0, .slash_def = 0, .crush_def = 0, .magic_def_bonus = 0, .ranged_def_bonus = 0,
-        .stun_on_spawn = 1, .can_move = 0 },
+        .stun_on_spawn = 1, .can_move = 0, .consumes_space = 1 },
 
     /* ZUK_SHIELD: no attacks, oscillates left-right */
     [INF_NPC_ZUK_SHIELD] = { .hp = 600, .attack_speed = 0, .attack_range = 0, .size = 5,
@@ -276,7 +278,7 @@ static const InfNPCStats INF_NPC_STATS[INF_NUM_NPC_TYPES] = {
         .melee_att_bonus = 0, .range_att_bonus = 0, .magic_att_bonus = 0,
         .melee_str_bonus = 0, .ranged_str_bonus = 0, .magic_base_dmg = 0, .magic_dmg_pct = 0,
         .stab_def = 0, .slash_def = 0, .crush_def = 0, .magic_def_bonus = 0, .ranged_def_bonus = 0,
-        .stun_on_spawn = 1, .can_move = 0 },
+        .stun_on_spawn = 1, .can_move = 0, .consumes_space = 1 },
 };
 
 /* ======================================================================== */
@@ -996,15 +998,20 @@ static int inf_npc_blocked(void* ctx, int x, int y, int size) {
         !collision_tile_walkable(s->collision_map, 0,
             x + s->world_offset_x, y + s->world_offset_y))
         return 1;
-    /* NPC-vs-NPC collision: check all active NPCs except self and nibblers
-       (nibblers don't consume space — other mobs walk through them) */
-    for (int i = 0; i < INF_MAX_NPCS; i++) {
-        if (i == mc->self_idx) continue;
-        InfNPC* other = &s->npcs[i];
-        if (!other->active) continue;
-        if (other->type == INF_NPC_NIBBLER) continue;  /* nibblers transparent */
-        if (los_aabb_overlap(x, y, size, other->x, other->y, other->size))
-            return 1;
+    /* NPC-vs-NPC collision: NPCs that don't consume space (nibblers) skip
+       this entirely — they walk through everything. for space-consuming NPCs,
+       check overlap with all other space-consuming NPCs.
+       ref: InfernoTrainer JalNib.ts consumesSpace = null. */
+    InfNPC* self = &s->npcs[mc->self_idx];
+    if (INF_NPC_STATS[self->type].consumes_space) {
+        for (int i = 0; i < INF_MAX_NPCS; i++) {
+            if (i == mc->self_idx) continue;
+            InfNPC* other = &s->npcs[i];
+            if (!other->active) continue;
+            if (!INF_NPC_STATS[other->type].consumes_space) continue;
+            if (los_aabb_overlap(x, y, size, other->x, other->y, other->size))
+                return 1;
+        }
     }
     return 0;
 }
@@ -1035,10 +1042,10 @@ static void inf_npc_move(InfernoState* s, int idx) {
         }
     }
 
-    /* ranged/magic NPCs stop moving when they have LOS to the player.
-       this is the core OSRS mechanic: NPCs only walk toward their target
-       while they cannot see it. once LOS is established, they attack. */
-    if (npc->type != INF_NPC_NIBBLER && stats->attack_range > 1) {
+    /* ALL NPCs (except nibblers) stop moving when they have LOS to the player.
+       ref: InfernoTrainer Unit.ts canMove() — applies to melee NPCs too.
+       melee NPCs with LOS stop and wait for the player to come into melee range. */
+    if (npc->type != INF_NPC_NIBBLER) {
         if (inf_npc_has_los(s, idx)) return;
     }
 
@@ -1219,7 +1226,7 @@ static void inf_npc_attack(InfernoState* s, int idx) {
             int def_roll = osrs_player_def_roll_vs_npc(99, 99, def_bonus, ATTACK_STYLE_MELEE);
             if (encounter_rand_float(&s->rng_state) >= osrs_hit_chance(att_roll, def_roll)) dmg = 0;
             int prayer_matches = (s->active_prayer == PRAYER_PROTECT_MELEE);
-            if (prayer_matches) { dmg = 0; s->prayer_correct_this_tick = 1; }
+            if (prayer_matches) { dmg = 0; s->prayer_correct_this_tick++; }
             encounter_damage_player(&s->player, dmg, &s->damage_received_this_tick);
         }
         npc->attacked_this_tick = 1;
@@ -1702,6 +1709,7 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
         &s->prayer_drain_counter, encounter_prayer_drain_effect(s->active_prayer));
     s->player.prayer = s->active_prayer;
 
+
     /* gear switching */
     int gear_act = actions[INF_HEAD_GEAR];
     if (gear_act >= 1 && gear_act <= 3) {
@@ -1830,7 +1838,8 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
             chase_npc->x, chase_npc->y, INF_NPC_STATS[chase_npc->type].size,
             ls->attack_range,
             s->collision_map, s->world_offset_x, s->world_offset_y,
-            inf_tile_walkable, s, inf_pathfind_blocked, s);
+            inf_tile_walkable, s, inf_pathfind_blocked, s,
+            s->los_blockers, s->los_blocker_count);
     }
 
     /* player attacks targeted NPC */
@@ -1840,11 +1849,14 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
         if (target_npc->active) {
             const EncounterLoadoutStats* ls = &s->loadout_stats[s->weapon_set];
 
-            /* range check: compute distance to target NPC, skip if out of range */
+            /* range + LOS check: must be in range AND have clear LOS through pillars.
+               ref: InfernoTrainer Player.ts:846-854 attackIfPossible → setHasLOS. */
             int target_dist = encounter_dist_to_npc(s->player.x, s->player.y,
                 target_npc->x, target_npc->y, target_npc->size);
 
-            if (target_dist >= 1 && target_dist <= ls->attack_range) {
+            if (encounter_player_can_attack(s->player.x, s->player.y,
+                    target_npc->x, target_npc->y, target_npc->size,
+                    ls->attack_range, s->los_blockers, s->los_blocker_count)) {
                 /* compute hit delay for projectile flight */
                 int hit_delay;
                 if (ls->style == ATTACK_STYLE_MAGIC)
@@ -2099,6 +2111,18 @@ static void inf_step(EncounterState* state, const int* actions) {
         &s->player, s->active_prayer,
         &s->damage_received_this_tick, &s->prayer_correct_this_tick);
 
+    /* accumulate diagnostic counters BEFORE death/completion checks so the
+       final tick's data is never lost to an early return.
+       prayer_correct_this_tick is a count (multiple NPCs can attack same tick).
+       total_npc_attacks counts attacks directed at the player (not nibbler→pillar). */
+    s->total_prayer_correct += s->prayer_correct_this_tick;
+    for (int i = 0; i < INF_MAX_NPCS; i++) {
+        if (s->npcs[i].attacked_this_tick && s->npcs[i].type != INF_NPC_NIBBLER)
+            s->total_npc_attacks++;
+    }
+    s->total_brews_used += s->brewed_this_tick;
+    s->total_blood_healed += s->blood_heal_this_tick;
+
     /* check player death */
     if (s->player.current_hitpoints <= 0) {
         s->episode_over = 1;
@@ -2153,18 +2177,7 @@ static void inf_step(EncounterState* state, const int* actions) {
         else
             s->ticks_without_action = 0;
     }
-
-    /* accumulate diagnostic counters.
-       prayer_correct_this_tick is a count (multiple NPCs can attack same tick).
-       total_npc_attacks counts attacks directed at the player (not nibbler→pillar). */
-    s->total_prayer_correct += s->prayer_correct_this_tick;
-    for (int i = 0; i < INF_MAX_NPCS; i++) {
-        if (s->npcs[i].attacked_this_tick && s->npcs[i].type != INF_NPC_NIBBLER)
-            s->total_npc_attacks++;
-    }
     if (s->ticks_without_action > 0) s->total_idle_ticks++;
-    s->total_brews_used += s->brewed_this_tick;
-    s->total_blood_healed += s->blood_heal_this_tick;
 
     s->reward = inf_compute_reward(s);
     s->episode_return += s->reward;
@@ -2174,9 +2187,9 @@ static void inf_step(EncounterState* state, const int* actions) {
 /* observations                                                              */
 /* ======================================================================== */
 
-/* obs layout: temporarily reverted to 381 for isolation test.
-   full layout: 26 player + 6 pillar + 32 NPCs * 14 = 480.
-   old layout:  20 player + 6 pillar + 32 NPCs * 11 = 381. */
+/* obs layout: 20 player + 6 pillar + 32 NPCs * 11 = 381.
+   define INF_OBS_FULL to enable 480-obs layout with new features. */
+#define INF_OBS_FULL
 #ifdef INF_OBS_FULL
 #define INF_NUM_OBS 480
 #define INF_OBS_NPC_FEATURES 14

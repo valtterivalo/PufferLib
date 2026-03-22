@@ -417,29 +417,89 @@ static inline int encounter_move_toward_dest(
 /* shared attack-target chase (auto-walk toward out-of-range NPC)            */
 /* ======================================================================== */
 
-/* auto-walk toward attack target when out of range.
-   OSRS: player pathfinds toward NPC every tick until in weapon range.
-   extra_blocked/blocked_ctx: optional dynamic obstacle callback for BFS.
-   returns 1 if player moved (chasing), 0 if already in range or stuck. */
+/* check if player can attack: in range AND has LOS (if blockers present).
+   returns 1 if ready to attack, 0 if blocked or out of range.
+   encounters without LOS blockers pass NULL/0 for unconditional range check. */
+static inline int encounter_player_can_attack(
+    int player_x, int player_y,
+    int target_x, int target_y, int target_size, int attack_range,
+    const LOSBlocker* los_blockers, int los_blocker_count
+) {
+    int dist = encounter_dist_to_npc(player_x, player_y, target_x, target_y, target_size);
+    if (dist < 1 || dist > attack_range) return 0;
+    if (!los_blockers || los_blocker_count == 0) return 1;
+    return npc_has_line_of_sight(los_blockers, los_blocker_count,
+                                 target_x, target_y, target_size,
+                                 player_x, player_y, attack_range);
+}
+
+/* auto-walk toward attack target: handles out-of-range, blocked LOS, and under-NPC.
+   OSRS: player pathfinds toward NPC every tick until in weapon range AND has LOS.
+   when player is under the NPC (dist=0), scans for nearest walkable tile outside
+   the NPC footprint and pathfinds there.
+   ref: InfernoTrainer Player.ts determineDestination + attackIfPossible.
+   los_blockers/los_blocker_count: LOS blocking entities (pillars). NULL/0 = no LOS check.
+   returns 1 if player moved (chasing), 0 if ready to attack or stuck. */
 static inline int encounter_chase_attack_target(
     Player* p, int target_x, int target_y, int target_size, int attack_range,
     const CollisionMap* cmap, int world_offset_x, int world_offset_y,
     encounter_walkable_fn is_walkable, void* ctx,
-    pathfind_blocked_fn extra_blocked, void* blocked_ctx
+    pathfind_blocked_fn extra_blocked, void* blocked_ctx,
+    const LOSBlocker* los_blockers, int los_blocker_count
 ) {
     int dist = encounter_dist_to_npc(p->x, p->y, target_x, target_y, target_size);
-    if (dist >= 1 && dist <= attack_range) return 0;
 
-    /* nearest tile of the NPC to pathfind toward */
+    /* player under NPC (dist=0): walk to nearest tile outside NPC footprint.
+       ref: InfernoTrainer Player.ts:447-468 isUnderAggrodMob. */
+    if (dist == 0) {
+        int max_r = (target_size + 1) / 2 + 1;
+        int best_dsq = 9999, bx = -1, by = -1;
+        for (int dy = -max_r; dy <= max_r; dy++) {
+            for (int dx = -max_r; dx <= max_r; dx++) {
+                if (dx == 0 && dy == 0) continue;
+                int nx = p->x + dx, ny = p->y + dy;
+                if (!is_walkable(ctx, nx, ny)) continue;
+                if (nx >= target_x && nx < target_x + target_size &&
+                    ny >= target_y && ny < target_y + target_size) continue;
+                int d = dx * dx + dy * dy;
+                if (d < best_dsq) { best_dsq = d; bx = nx; by = ny; }
+            }
+        }
+        if (bx < 0) return 0;
+        int steps = 0;
+        for (int step = 0; step < 2; step++) {
+            if (p->x == bx && p->y == by) break;
+            PathResult pr = encounter_pathfind(cmap, world_offset_x, world_offset_y,
+                                               p->x, p->y, bx, by,
+                                               extra_blocked, blocked_ctx);
+            if (!pr.found || (pr.next_dx == 0 && pr.next_dy == 0)) break;
+            int nx = p->x + pr.next_dx, ny = p->y + pr.next_dy;
+            if (!is_walkable(ctx, nx, ny)) break;
+            p->x = nx; p->y = ny;
+            steps++;
+        }
+        p->is_running = (steps == 2);
+        p->dest_x = p->x; p->dest_y = p->y;
+        return steps > 0 ? 1 : 0;
+    }
+
+    /* in range + LOS: ready to attack, no movement needed */
+    if (encounter_player_can_attack(p->x, p->y, target_x, target_y,
+                                     target_size, attack_range,
+                                     los_blockers, los_blocker_count))
+        return 0;
+
+    /* out of range or blocked LOS: pathfind toward nearest NPC tile */
     int cx = p->x < target_x ? target_x :
              (p->x > target_x + target_size - 1 ? target_x + target_size - 1 : p->x);
     int cy = p->y < target_y ? target_y :
              (p->y > target_y + target_size - 1 ? target_y + target_size - 1 : p->y);
 
-    /* BFS up to 2 steps (run) toward closest NPC tile */
     int steps = 0;
     for (int step = 0; step < 2; step++) {
-        if (encounter_dist_to_npc(p->x, p->y, target_x, target_y, target_size) <= attack_range)
+        if (encounter_player_can_attack(p->x, p->y, target_x, target_y,
+                                         target_size, attack_range,
+                                         los_blockers, los_blocker_count))
             break;
         PathResult pr = encounter_pathfind(cmap, world_offset_x, world_offset_y,
                                            p->x, p->y, cx, cy,
