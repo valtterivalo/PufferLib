@@ -303,7 +303,7 @@ inline void register_rollout_buffers(RolloutBuf &bufs, Allocator &alloc, int H,
       .observations = {.shape = {H, S, input_size}, .dtype_size = p},
       .actions = {.shape = {H, S, num_atns}, .dtype_size = (int)sizeof(double)},
       .values = {.shape = {H, S}, .dtype_size = p},
-      .logprobs = {.shape = {H, S, num_atns}, .dtype_size = p},
+      .logprobs = {.shape = {H, S, 1}, .dtype_size = p},
       .rewards = {.shape = {H, S}, .dtype_size = p},
       .terminals = {.shape = {H, S}, .dtype_size = p},
       .ratio = {.shape = {H, S}, .dtype_size = p},
@@ -316,7 +316,7 @@ struct TrainGraph {
   PufTensor mb_obs;        // (S, H, input_size) PRECISION
   PufTensor mb_state;      // (L, S, 1, hidden) PRECISION
   PufTensor mb_actions;    // (S, H, num_atns) f64
-  PufTensor mb_logprobs;   // (S, H, num_atns) PRECISION — per-head
+  PufTensor mb_logprobs;   // (S, H, 1) PRECISION — joint logprob (sum of per-head)
   PufTensor mb_advantages; // (S, H) f32
   PufTensor mb_prio;       // (S, 1) PRECISION
   PufTensor mb_values;     // (S, H) PRECISION
@@ -334,7 +334,7 @@ inline void register_train_buffers(TrainGraph &bufs, Allocator &alloc, int S,
       .mb_state = {.shape = {num_layers, S, 1, hidden_size}, .dtype_size = p},
       .mb_actions = {.shape = {S, H, num_atns},
                      .dtype_size = (int)sizeof(double)},
-      .mb_logprobs = {.shape = {S, H, num_atns}, .dtype_size = p},
+      .mb_logprobs = {.shape = {S, H, 1}, .dtype_size = p},
       .mb_advantages = {.shape = {S, H}, .dtype_size = (int)sizeof(float)},
       .mb_prio = {.shape = {S, 1}, .dtype_size = p},
       .mb_values = {.shape = {S, H}, .dtype_size = p},
@@ -420,12 +420,13 @@ struct EncoderActivations {
   PufTensor wgrad;       // (out_dim, in_dim) — training only
 };
 
-// Decoder: single linear projection (hidden → logits+value), matching upstream CUDA
+// Decoder: split into policy_weight (NS orthogonalized) + value_weight (direct gradient).
+// Forward/backward use the fused `weight` view spanning both.
 struct DecoderWeights {
-  PufTensor weight;       // (output_dim+1, hidden_dim) — full fused weight (forward/backward use this)
-  PufTensor policy_weight; // (output_dim, hidden_dim) — policy rows (Muon NS orthogonalization)
-  PufTensor value_weight;  // (1, hidden_dim) — value row (Muon direct gradient, no NS)
-  PufTensor logstd;       // continuous only: (1, output_dim)
+  PufTensor weight;         // (output_dim+1, hidden_dim) — fused view for forward/backward
+  PufTensor policy_weight;  // (output_dim, hidden_dim) — Muon NS path
+  PufTensor value_weight;   // (1, hidden_dim) — Muon direct gradient, higher wd
+  PufTensor logstd;         // continuous only: (1, output_dim)
   int hidden_dim, output_dim;
   bool continuous;
 };

@@ -630,12 +630,12 @@ void train_impl(PuffeRL& pufferl) {
 
                 // dump weight stats at NaN time
                 DecoderWeights* dw = (DecoderWeights*)pufferl.weights_fp32.decoder;
-                if (dw && dw->policy_weight.bytes) {
-                    const float* pw = (const float*)dw->policy_weight.bytes;
-                    int pn = dw->output_dim * dw->hidden_dim;
+                if (dw && dw->weight.bytes) {
+                    const float* pw = (const float*)dw->weight.bytes;
+                    int pn = (dw->output_dim + 1) * dw->hidden_dim;
                     float pw_max = 0;
                     for (int i = 0; i < pn; i++) pw_max = std::max(pw_max, std::fabs(pw[i]));
-                    fprintf(stderr, "  dec_policy_abs_max: %.4f\n", pw_max);
+                    fprintf(stderr, "  dec_abs_max: %.4f\n", pw_max);
                 }
                 fprintf(stderr, "[NaN-TRAP] end dump\n\n");
             }
@@ -678,33 +678,25 @@ void train_impl(PuffeRL& pufferl) {
         mtl_barrier((MetalStream*)s);
         muon_step(pufferl.muon, s);
 
-        // single-element trace: track the max-abs decoder policy weight
+        // per-tensor weight magnitude trace
         {
             static int trace_count = 0;
             trace_count++;
-            DecoderWeights* dw = (DecoderWeights*)pufferl.weights_fp32.decoder;
-            if (dw && dw->policy_weight.bytes) {
+            if (trace_count % 1000 == 0) {
                 mtl_ensure_stream_synced(s);
-                int od = dw->output_dim, H = dw->hidden_dim;
-                int n = od * H;
-                const float* pw = (const float*)dw->policy_weight.bytes;
-                float max_val = 0; int max_idx = 0;
-                for (int i = 0; i < n; i++) {
-                    float a = fabsf(pw[i]);
-                    if (a > max_val) { max_val = a; max_idx = i; }
-                }
-                // also read momentum and gradient at that index
                 Muon* mu = pufferl.muon;
-                EncoderWeights* ew = (EncoderWeights*)pufferl.weights_fp32.encoder;
-                int64_t enc_elems = ew ? ew->weight.numel() : 0;
-                float mb_val = 0, gc_val = 0;
-                if (mu->mb_puf.bytes)
-                    mb_val = ((const float*)mu->mb_puf.bytes)[enc_elems + max_idx];
-                if (mu->gc_puf.bytes)
-                    gc_val = ((const float*)mu->gc_puf.bytes)[enc_elems + max_idx];
-                if (max_val > 5.0f || trace_count % 1000 == 0) {
-                    fprintf(stderr, "[weight-trace] step=%d idx=%d/%d w=%.4f mb=%.6f gc=%.6f row=%d col=%d\n",
-                        trace_count, max_idx, n, max_val, mb_val, gc_val, max_idx/H, max_idx%H);
+                int64_t off = 0;
+                int idx = 0;
+                const char* names[] = {"enc", "dec", "gru0", "gru1", "gru2", "gru3"};
+                for (auto* t : mu->param_alloc->regs) {
+                    const float* w = (const float*)mu->wb_puf.bytes + off;
+                    int64_t n = t->numel();
+                    float abs_max = 0;
+                    for (int64_t i = 0; i < n; i++) abs_max = std::max(abs_max, std::fabs(w[i]));
+                    const char* name = (idx < 6) ? names[idx] : "unk";
+                    fprintf(stderr, "[weight-trace] step=%d %s abs_max=%.4f\n", trace_count, name, abs_max);
+                    off += n;
+                    idx++;
                 }
             }
         }

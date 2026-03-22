@@ -323,6 +323,18 @@ void mtl_scale_f32(float *ptr, float scale, int count, cudaStream_t stream) {
   mtl_dispatch_1d(ms, pso, count);
 }
 
+// Add eps to diagonal of M×M row-major matrix (regularize Gram matrix for NS)
+void mtl_add_diag_f32(float *ptr, float eps, int m, cudaStream_t stream) {
+  MetalStream *ms = mtl_resolve_stream(stream);
+  ms->compute_encoder();
+  auto pso = mtl_pipeline("add_diag_f32");
+  mtl_set_pso(ms, pso);
+  mtl_set_ptr(ms, ptr, 0);
+  struct { float eps; int m; int stride; } params = {eps, m, m};
+  mtl_set_params(ms, params, 1);
+  mtl_dispatch_1d(ms, pso, m);
+}
+
 // dst += alpha * src
 void mtl_axpy_f32(float *dst, const float *src, float alpha, int count,
                    cudaStream_t stream) {
@@ -1172,6 +1184,26 @@ void puf_orthogonal_init(PufTensor &dst, float gain, uint64_t seed,
   free(work);
 }
 
+// Kaiming uniform init (CPU-side) — matches CUDA's puf_kaiming_init.
+// Uniform(-bound, bound) where bound = gain / sqrt(fan_in).
+void puf_kaiming_init(PufTensor &dst, float gain, uint64_t seed,
+                        cudaStream_t stream) {
+  mtl_ensure_stream_synced(stream);
+
+  assert(dst.ndim() == 2);
+  int64_t rows = dst.shape[0], cols = dst.shape[1];
+  assert(rows > 0 && cols > 0);
+
+  float bound = gain / std::sqrt((float)cols);
+  int64_t n = rows * cols;
+  float *dst_f = (float *)dst.bytes;
+
+  std::mt19937_64 rng(seed);
+  std::uniform_real_distribution<float> dist(-bound, bound);
+  for (int64_t i = 0; i < n; i++)
+    dst_f[i] = dist(rng);
+}
+
 // ============================================================================
 // Muon optimizer
 // ============================================================================
@@ -1244,13 +1276,15 @@ void muon_step(Muon *m, cudaStream_t stream) {
   mtl_barrier(ms);
 
   int64_t offset = 0;
+  int tensor_idx = 0;
   for (auto *t : m->param_alloc->regs) {
     float *gc_ptr = (float *)m->gc_puf.bytes + offset;
     float *up_ptr = (float *)m->up_puf.bytes + offset;
     int64_t R = t->shape[0];
     int64_t C = t->numel() / std::max<int64_t>(1, R);
     // NS orthogonalization for 2D+ params with M >= 2.
-    // 1-row tensors (e.g. value weight) use direct gradient update.
+    // value_weight (1×128) naturally skips NS since min(R,C)=1.
+    // policy_weight (76×128) gets full NS (proven stable: dec_p=0.2 over 700M+).
     if (t->ndim() >= 2 && std::min(R, C) >= 2) {
       bool transposed_flag = R > C;
       int64_t M = transposed_flag ? C : R;
@@ -1287,10 +1321,7 @@ void muon_step(Muon *m, cudaStream_t stream) {
                         (int)x.numel(), stream);
       mtl_barrier(ms);
 
-      // Newton-Schulz iterations (all GEMM — synced internally)
-      // When ns_iters < 5, space out coefficient indices evenly across the
-      // full 5-step schedule (e.g. ns_iters=3 uses coeffs {0,2,4}) so we
-      // get both aggressive early corrections and conservative polishing.
+      // Newton-Schulz iterations
       for (int i = 0; i < m->ns_iters; ++i) {
         int ci = i * 4 / (m->ns_iters - 1 + (m->ns_iters == 1));
         float a = (float)ns_coeffs[ci][0], b = (float)ns_coeffs[ci][1],
@@ -1341,6 +1372,7 @@ void muon_step(Muon *m, cudaStream_t stream) {
       mtl_barrier(ms);
     }
     offset += t->numel();
+    tensor_idx++;
   }
 
   // Apply weight update: w -= lr * up + weight_decay * w
@@ -1348,6 +1380,31 @@ void muon_step(Muon *m, cudaStream_t stream) {
                          m->lr_ptr, (float)m->weight_decay,
                          (int)m->wb_puf.numel(), stream);
   mtl_barrier(ms);
+
+  // Extra weight decay for value_weight (tensor_idx==2): wd=0.1 vs global 0.01.
+  // The value head has no NS orthogonalization (1-row matrix) and its gradient
+  // drives monotonic weight growth. The extra decay counteracts this.
+  // Also clamp to [-5, 5] as a safety net.
+  {
+    int64_t val_offset = 0;
+    int idx = 0;
+    for (auto *t : m->param_alloc->regs) {
+      if (idx == 2) {  // value_weight tensor
+        float *val_ptr = (float *)m->wb_puf.bytes + val_offset;
+        float extra_wd = 0.1f - (float)m->weight_decay;  // additional wd on top of global
+        float lr = *(m->lr_ptr);
+        // Apply extra decay: w *= (1 - lr * extra_wd)
+        float extra_scale = 1.0f - lr * extra_wd;
+        mtl_scale_f32(val_ptr, extra_scale, (int)t->numel(), stream);
+        mtl_barrier(ms);
+        mtl_clamp_f32(val_ptr, -5.0f, 5.0f, (int)t->numel(), stream);
+        mtl_barrier(ms);
+        break;
+      }
+      val_offset += t->numel();
+      idx++;
+    }
+  }
 }
 
 // ============================================================================
@@ -1380,7 +1437,7 @@ static void encoder_init_weights(void *w, uint64_t *seed,
   PufTensor wt = {.bytes = ew->weight.bytes,
                   .shape = {ew->out_dim, ew->in_dim},
                   .dtype_size = ew->weight.dtype_size};
-  puf_orthogonal_init(wt, std::sqrt(2.0f), (*seed)++, stream);
+  puf_kaiming_init(wt, std::sqrt(2.0f), (*seed)++, stream);
 }
 
 static void encoder_reg_params(void *w, Allocator *alloc, int esz) {
@@ -1469,26 +1526,25 @@ static PufTensor decoder_backward(void *w, void *activations,
 static void decoder_init_weights(void *w, uint64_t *seed,
                                           cudaStream_t stream) {
   DecoderWeights *dw = (DecoderWeights *)w;
+  // Init via fused weight view (spans policy_weight + value_weight)
   int od1 = dw->output_dim + 1;
   PufTensor wt = {.bytes = dw->weight.bytes,
                   .shape = {od1, dw->hidden_dim},
                   .dtype_size = dw->weight.dtype_size};
-  puf_orthogonal_init(wt, 0.01f, (*seed)++, stream);
+  puf_kaiming_init(wt, 1.0f, (*seed)++, stream);
 }
 
 static void decoder_reg_params(void *w, Allocator *alloc, int esz) {
   DecoderWeights *dw = (DecoderWeights *)w;
   int od = dw->output_dim;
   int H = dw->hidden_dim;
-  // Register policy and value weights separately so Muon treats them differently:
-  // policy_weight (od, H) -> NS orthogonalization (2D path)
-  // value_weight (1, H) -> direct gradient update (1D path, no NS)
-  // The fused weight view spans both for forward/backward.
+  // Split registration: policy_weight gets NS, value_weight gets direct gradient.
+  // Allocator places them contiguously so the fused weight view works.
   dw->policy_weight = {.shape = {od, H}, .dtype_size = esz};
   dw->value_weight = {.shape = {1, H}, .dtype_size = esz};
   alloc->reg(&dw->policy_weight);
   alloc->reg(&dw->value_weight);
-  // fused weight view: set after allocation in decoder_post_alloc
+  // fused weight view set after allocation in decoder_post_alloc
   if (dw->continuous) {
     dw->logstd = {.shape = {1, od}, .dtype_size = esz};
     alloc->reg(&dw->logstd);
@@ -1540,7 +1596,7 @@ static void mingru_init_weights(void *w, uint64_t *seed, cudaStream_t stream) {
     PufTensor w2d = {.bytes = m->weights[i].bytes,
                      .shape = {3 * m->hidden, m->hidden},
                      .dtype_size = m->weights[i].dtype_size};
-    puf_orthogonal_init(w2d, 1.0f, (*seed)++, stream);
+    puf_kaiming_init(w2d, 1.0f, (*seed)++, stream);
   }
 }
 
