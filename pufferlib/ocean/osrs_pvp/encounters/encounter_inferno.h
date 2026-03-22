@@ -280,7 +280,7 @@ static const InfNPCStats INF_NPC_STATS[INF_NUM_NPC_TYPES] = {
 /* wave compositions                                                         */
 /* ======================================================================== */
 
-#define INF_MAX_NPCS_PER_WAVE 9  /* wave 62: NNN BB BL M R MA = 9 */
+#define INF_MAX_NPCS_PER_WAVE 9  /* wave 62: MA R M BL BB NNN = 9 */
 
 typedef struct {
     uint8_t types[INF_MAX_NPCS_PER_WAVE];
@@ -298,79 +298,83 @@ static const InfWaveDef INF_WAVES[INF_NUM_WAVES] = {
     #define Z INF_NPC_ZUK
     #define W(...) { .types = { __VA_ARGS__ }, .count = sizeof((uint8_t[]){__VA_ARGS__}) }
 
+    /* spawn order: magers -> rangers -> meleers -> blobs -> bats -> nibblers
+       matches InfernoTrainer (InfernoWaves.ts:49-86): highest-tier first so they
+       tick-process first in each pass, matching OSRS NPC processing order. */
+
     /* waves 1-8: bats + nibblers introduction */
-    [0]  = W(N,N,N, B),
-    [1]  = W(N,N,N, B,B),
+    [0]  = W(B, N,N,N),
+    [1]  = W(B,B, N,N,N),
     [2]  = W(N,N,N, N,N,N),
-    [3]  = W(N,N,N, BL),
-    [4]  = W(N,N,N, B,BL),
-    [5]  = W(N,N,N, B,B,BL),
-    [6]  = W(N,N,N, BL,BL),
+    [3]  = W(BL, N,N,N),
+    [4]  = W(BL,B, N,N,N),
+    [5]  = W(BL,B,B, N,N,N),
+    [6]  = W(BL,BL, N,N,N),
     [7]  = W(N,N,N, N,N,N),
 
     /* waves 9-17: meleer introduction */
-    [8]  = W(N,N,N, M),
-    [9]  = W(N,N,N, B,M),
-    [10] = W(N,N,N, B,B,M),
-    [11] = W(N,N,N, BL,M),
-    [12] = W(N,N,N, B,BL,M),
-    [13] = W(N,N,N, B,B,BL,M),
-    [14] = W(N,N,N, BL,BL,M),
-    [15] = W(N,N,N, M,M),
+    [8]  = W(M, N,N,N),
+    [9]  = W(M,B, N,N,N),
+    [10] = W(M,B,B, N,N,N),
+    [11] = W(M,BL, N,N,N),
+    [12] = W(M,BL,B, N,N,N),
+    [13] = W(M,BL,B,B, N,N,N),
+    [14] = W(M,BL,BL, N,N,N),
+    [15] = W(M,M, N,N,N),
     [16] = W(N,N,N, N,N,N),
 
     /* waves 18-34: ranger introduction */
-    [17] = W(N,N,N, R),
-    [18] = W(N,N,N, B,R),
-    [19] = W(N,N,N, B,B,R),
-    [20] = W(N,N,N, BL,R),
-    [21] = W(N,N,N, B,BL,R),
-    [22] = W(N,N,N, B,B,BL,R),
-    [23] = W(N,N,N, BL,BL,R),
-    [24] = W(N,N,N, M,R),
-    [25] = W(N,N,N, B,M,R),
-    [26] = W(N,N,N, B,B,M,R),
-    [27] = W(N,N,N, BL,M,R),
-    [28] = W(N,N,N, B,BL,M,R),
-    [29] = W(N,N,N, B,B,BL,M,R),
-    [30] = W(N,N,N, BL,BL,M,R),
-    [31] = W(N,N,N, M,M,R),
-    [32] = W(N,N,N, R,R),
+    [17] = W(R, N,N,N),
+    [18] = W(R,B, N,N,N),
+    [19] = W(R,B,B, N,N,N),
+    [20] = W(R,BL, N,N,N),
+    [21] = W(R,BL,B, N,N,N),
+    [22] = W(R,BL,B,B, N,N,N),
+    [23] = W(R,BL,BL, N,N,N),
+    [24] = W(R,M, N,N,N),
+    [25] = W(R,M,B, N,N,N),
+    [26] = W(R,M,B,B, N,N,N),
+    [27] = W(R,M,BL, N,N,N),
+    [28] = W(R,M,BL,B, N,N,N),
+    [29] = W(R,M,BL,B,B, N,N,N),
+    [30] = W(R,M,BL,BL, N,N,N),
+    [31] = W(R,M,M, N,N,N),
+    [32] = W(R,R, N,N,N),
     [33] = W(N,N,N, N,N,N),
 
     /* waves 35-66: mager introduction (all combinations) */
-    [34] = W(N,N,N, MA),
-    [35] = W(N,N,N, B,MA),
-    [36] = W(N,N,N, B,B,MA),
-    [37] = W(N,N,N, BL,MA),
-    [38] = W(N,N,N, B,BL,MA),
-    [39] = W(N,N,N, B,B,BL,MA),
-    [40] = W(N,N,N, BL,BL,MA),
-    [41] = W(N,N,N, M,MA),
-    [42] = W(N,N,N, B,M,MA),
-    [43] = W(N,N,N, B,B,M,MA),
-    [44] = W(N,N,N, BL,M,MA),
-    [45] = W(N,N,N, B,BL,M,MA),
-    [46] = W(N,N,N, B,B,BL,M,MA),
-    [47] = W(N,N,N, BL,BL,M,MA),
-    [48] = W(N,N,N, M,M,MA),
-    [49] = W(N,N,N, R,MA),
-    [50] = W(N,N,N, B,R,MA),
-    [51] = W(N,N,N, B,B,R,MA),
-    [52] = W(N,N,N, BL,R,MA),
-    [53] = W(N,N,N, B,BL,R,MA),
-    [54] = W(N,N,N, B,B,BL,R,MA),
-    [55] = W(N,N,N, BL,BL,R,MA),
-    [56] = W(N,N,N, M,R,MA),
-    [57] = W(N,N,N, B,M,R,MA),
-    [58] = W(N,N,N, B,B,M,R,MA),
-    [59] = W(N,N,N, BL,M,R,MA),
-    [60] = W(N,N,N, B,BL,M,R,MA),
-    [61] = W(N,N,N, B,B,BL,M,R,MA),
-    [62] = W(N,N,N, BL,BL,M,R,MA),
-    [63] = W(N,N,N, M,M,R,MA),
-    [64] = W(N,N,N, R,R,MA),
-    [65] = W(N,N,N, MA,MA),
+    [34] = W(MA, N,N,N),
+    [35] = W(MA,B, N,N,N),
+    [36] = W(MA,B,B, N,N,N),
+    [37] = W(MA,BL, N,N,N),
+    [38] = W(MA,BL,B, N,N,N),
+    [39] = W(MA,BL,B,B, N,N,N),
+    [40] = W(MA,BL,BL, N,N,N),
+    [41] = W(MA,M, N,N,N),
+    [42] = W(MA,M,B, N,N,N),
+    [43] = W(MA,M,B,B, N,N,N),
+    [44] = W(MA,M,BL, N,N,N),
+    [45] = W(MA,M,BL,B, N,N,N),
+    [46] = W(MA,M,BL,B,B, N,N,N),
+    [47] = W(MA,M,BL,BL, N,N,N),
+    [48] = W(MA,M,M, N,N,N),
+    [49] = W(MA,R, N,N,N),
+    [50] = W(MA,R,B, N,N,N),
+    [51] = W(MA,R,B,B, N,N,N),
+    [52] = W(MA,R,BL, N,N,N),
+    [53] = W(MA,R,BL,B, N,N,N),
+    [54] = W(MA,R,BL,B,B, N,N,N),
+    [55] = W(MA,R,BL,BL, N,N,N),
+    [56] = W(MA,R,M, N,N,N),
+    [57] = W(MA,R,M,B, N,N,N),
+    [58] = W(MA,R,M,B,B, N,N,N),
+    [59] = W(MA,R,M,BL, N,N,N),
+    [60] = W(MA,R,M,BL,B, N,N,N),
+    [61] = W(MA,R,M,BL,B,B, N,N,N),
+    [62] = W(MA,R,M,BL,BL, N,N,N),
+    [63] = W(MA,R,M,M, N,N,N),
+    [64] = W(MA,R,R, N,N,N),
+    [65] = W(MA,MA, N,N,N),
 
     /* waves 67-69: jads + zuk */
     [66] = W(J),
@@ -1072,26 +1076,14 @@ static void inf_npc_move(InfernoState* s, int idx) {
 /* NPC AI: meleer dig mechanic                                               */
 /* ======================================================================== */
 
-/* meleer digs when no LOS for 38+ ticks, 10% per tick, forced at 50 */
+/* meleer digs when no LOS for 38+ ticks, 10% per tick, forced at 50.
+   timer decrements (dig_freeze_timer, dig_attack_delay, emerge logic) handled
+   in inf_tick_npcs pass 1. this function only does LOS tracking + dig trigger. */
 static void inf_meleer_dig_check(InfernoState* s, int idx) {
     InfNPC* npc = &s->npcs[idx];
     if (npc->type != INF_NPC_MELEER || !npc->active) return;
-    if (npc->dig_freeze_timer > 0) {
-        npc->dig_freeze_timer--;
-        if (npc->dig_freeze_timer == 0 && npc->dig_attack_delay == 0) {
-            /* emerge: place near player */
-            npc->x = s->player.x + (encounter_rand_int(&s->rng_state, 3) - 1);
-            npc->y = s->player.y + (encounter_rand_int(&s->rng_state, 3) - 1);
-            npc->stun_timer = 2;  /* 2-tick freeze after emerging */
-            npc->dig_attack_delay = 6;  /* 6-tick delay before attacking */
-            npc->no_los_ticks = 0;
-        }
-        return;
-    }
-    if (npc->dig_attack_delay > 0) {
-        npc->dig_attack_delay--;
-        return;
-    }
+    if (npc->dig_freeze_timer > 0) return;
+    if (npc->dig_attack_delay > 0) return;
 
     /* track LOS absence */
     if (!inf_npc_has_los(s, idx)) {
@@ -1103,10 +1095,8 @@ static void inf_meleer_dig_check(InfernoState* s, int idx) {
 
     /* check dig trigger */
     if (npc->no_los_ticks >= 50) {
-        /* forced dig */
         npc->dig_freeze_timer = 6;
     } else if (npc->no_los_ticks >= 38) {
-        /* 10% chance per tick */
         if (encounter_rand_int(&s->rng_state, 10) == 0) {
             npc->dig_freeze_timer = 6;
         }
@@ -1120,10 +1110,10 @@ static void inf_meleer_dig_check(InfernoState* s, int idx) {
 static void inf_npc_attack(InfernoState* s, int idx) {
     InfNPC* npc = &s->npcs[idx];
     if (!npc->active) return;
-    if (npc->stun_timer > 0) { npc->stun_timer--; return; }
+    if (npc->stun_timer > 0) return;
     if (npc->dig_freeze_timer > 0) return;
     if (npc->dig_attack_delay > 0) return;
-    if (npc->attack_timer > 0) { npc->attack_timer--; return; }
+    if (npc->attack_timer > 0) return;
 
     const InfNPCStats* stats = &INF_NPC_STATS[npc->type];
 
@@ -1564,6 +1554,15 @@ static void inf_tick_npcs(InfernoState* s) {
     /* zuk-specific phases first */
     inf_zuk_tick(s);
 
+    /* three-pass tick architecture matching InfernoTrainer (osrs-sdk Region).
+       OSRS processes ALL NPCs through each phase before moving to the next:
+       pass 1: timer decrements (stun, attack, freeze, dig)
+       pass 2: movement
+       pass 3: attacks + AI checks
+       this prevents interleaved timing bugs (e.g. mager flicker 2-tick delay,
+       timer expiry off-by-one where NPCs can't act on the tick timers hit 0). */
+
+    /* PASS 1: ALL NPCs decrement timers */
     for (int i = 0; i < INF_MAX_NPCS; i++) {
         if (!s->npcs[i].active) continue;
 
@@ -1571,20 +1570,50 @@ static void inf_tick_npcs(InfernoState* s) {
         if (s->npcs[i].death_ticks > 0) {
             s->npcs[i].death_ticks--;
             if (s->npcs[i].death_ticks == 0) s->npcs[i].active = 0;
-            continue;  /* dying NPCs don't move or attack */
+            continue;  /* dying NPCs don't get timer updates */
         }
 
-        /* decrement ice barrage freeze timer */
         if (s->npcs[i].frozen_ticks > 0) s->npcs[i].frozen_ticks--;
+        if (s->npcs[i].stun_timer > 0) s->npcs[i].stun_timer--;
+        if (s->npcs[i].attack_timer > 0) s->npcs[i].attack_timer--;
 
-        /* meleer dig check */
+        /* meleer dig timers: emerge when dig_freeze_timer expires.
+           else if prevents dig_attack_delay from decrementing on the
+           same tick emerge sets it to 6. stun_timer-- above won't
+           touch the fresh stun_timer=2 set by emerge (it was 0 before). */
+        if (s->npcs[i].type == INF_NPC_MELEER) {
+            if (s->npcs[i].dig_freeze_timer > 0) {
+                s->npcs[i].dig_freeze_timer--;
+                if (s->npcs[i].dig_freeze_timer == 0 && s->npcs[i].dig_attack_delay == 0) {
+                    s->npcs[i].x = s->player.x + (encounter_rand_int(&s->rng_state, 3) - 1);
+                    s->npcs[i].y = s->player.y + (encounter_rand_int(&s->rng_state, 3) - 1);
+                    s->npcs[i].stun_timer = 2;
+                    s->npcs[i].dig_attack_delay = 6;
+                    s->npcs[i].no_los_ticks = 0;
+                }
+            } else if (s->npcs[i].dig_attack_delay > 0) {
+                s->npcs[i].dig_attack_delay--;
+            }
+        }
+    }
+
+    /* PASS 2: ALL NPCs move */
+    for (int i = 0; i < INF_MAX_NPCS; i++) {
+        if (!s->npcs[i].active) continue;
+        if (s->npcs[i].death_ticks > 0) continue;
+        inf_npc_move(s, i);
+    }
+
+    /* PASS 3: ALL NPCs attack + AI checks */
+    for (int i = 0; i < INF_MAX_NPCS; i++) {
+        if (!s->npcs[i].active) continue;
+        if (s->npcs[i].death_ticks > 0) continue;
+
         if (s->npcs[i].type == INF_NPC_MELEER)
             inf_meleer_dig_check(s, i);
 
-        inf_npc_move(s, i);
         inf_npc_attack(s, i);
 
-        /* jad healer spawning */
         if (s->npcs[i].type == INF_NPC_JAD)
             inf_jad_check_healers(s, i);
     }
