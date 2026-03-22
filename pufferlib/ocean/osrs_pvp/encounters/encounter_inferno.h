@@ -2141,8 +2141,8 @@ static void inf_step(EncounterState* state, const int* actions) {
 /* observations                                                              */
 /* ======================================================================== */
 
-/* obs layout: 24 player + 6 pillar + 32 NPCs * 14 = 478. */
-#define INF_NUM_OBS 478
+/* obs layout: 26 player + 6 pillar + 32 NPCs * 14 = 480. */
+#define INF_NUM_OBS 480
 #define INF_OBS_NPC_FEATURES 14
 
 static void inf_write_obs(EncounterState* state, float* obs) {
@@ -2150,7 +2150,7 @@ static void inf_write_obs(EncounterState* state, float* obs) {
     memset(obs, 0, INF_NUM_OBS * sizeof(float));
     int i = 0;
 
-    /* player state (24 features) */
+    /* player state (26 features) */
     obs[i++] = (float)s->player.current_hitpoints / 99.0f;
     obs[i++] = (float)(s->player.x - INF_ARENA_MIN_X) / (float)INF_ARENA_WIDTH;
     obs[i++] = (float)(s->player.y - INF_ARENA_MIN_Y) / (float)INF_ARENA_HEIGHT;
@@ -2177,26 +2177,72 @@ static void inf_write_obs(EncounterState* state, float* obs) {
     /* attack readiness: 0 = ready to fire, >0 = on cooldown */
     obs[i++] = (float)s->player_attack_timer / 8.0f;
 
-    /* pending hits on player: projectiles in flight from NPC attacks.
-       critical for prayer decisions — the agent needs to see incoming damage
-       and its style to switch prayer in time (especially jad's 3-tick window). */
+    /* imminent threat styles: aggregated from per-NPC attack readiness.
+       OSRS prayer timing: for all NPCs except jad, prayer is checked at ATTACK
+       TIME (when the animation starts), not when the projectile lands. so the
+       agent needs to have the correct prayer ON before the NPC fires.
+       these flags tell the agent "a ranger/mager/meleer is about to attack next
+       tick — switch prayer now." computed from NPC attack_timer + LOS + style. */
+    {
+        int threat_melee = 0, threat_ranged = 0, threat_magic = 0;
+        for (int n = 0; n < INF_MAX_NPCS; n++) {
+            InfNPC* npc = &s->npcs[n];
+            if (!npc->active || npc->death_ticks > 0) continue;
+            if (npc->type == INF_NPC_NIBBLER) continue;
+            if (npc->stun_timer > 0 || npc->frozen_ticks > 0) continue;
+            if (npc->attack_timer > 1) continue;
+            const InfNPCStats* ns = &INF_NPC_STATS[npc->type];
+            int can_fire = 0;
+            if (ns->attack_range <= 1) can_fire = 1;
+            else if (inf_npc_has_los(s, n)) can_fire = 1;
+            else if (npc->type == INF_NPC_BLOB && npc->blob_scanned_prayer >= 0)
+                can_fire = 1;
+            if (!can_fire) continue;
+            int style = npc->attack_style;
+            /* blob fire tick: style determined by scanned prayer */
+            if (npc->type == INF_NPC_BLOB && npc->blob_scanned_prayer >= 0) {
+                OverheadPrayer rp = (OverheadPrayer)npc->blob_scanned_prayer;
+                if (rp == PRAYER_PROTECT_MAGIC) style = ATTACK_STYLE_RANGED;
+                else if (rp == PRAYER_PROTECT_RANGED) style = ATTACK_STYLE_MAGIC;
+                /* else random 50/50 — report both as threats */
+                else { threat_magic = 1; threat_ranged = 1; continue; }
+            }
+            if (style == ATTACK_STYLE_MELEE) threat_melee = 1;
+            else if (style == ATTACK_STYLE_RANGED) threat_ranged = 1;
+            else if (style == ATTACK_STYLE_MAGIC) threat_magic = 1;
+        }
+        obs[i++] = threat_melee ? 1.0f : 0.0f;
+        obs[i++] = threat_ranged ? 1.0f : 0.0f;
+        obs[i++] = threat_magic ? 1.0f : 0.0f;
+    }
+
+    /* pending hit count: general pressure indicator for brew/positioning decisions.
+       how many projectiles are in flight toward the player (not prayer-actionable
+       for most NPCs — damage already determined — but signals incoming damage). */
     {
         int pending_count = 0;
-        int ranged_imminent = 0, magic_imminent = 0, melee_imminent = 0;
+        for (int h = 0; h < s->player_pending_hit_count; h++)
+            if (s->player_pending_hits[h].active) pending_count++;
+        obs[i++] = (float)pending_count / (float)ENCOUNTER_MAX_PENDING_HITS;
+    }
+
+    /* jad deferred prayer check: ONLY jad checks prayer at hit landing time
+       (3-tick window). these flags fire when a jad projectile is about to land,
+       telling the agent which prayer to switch to before impact.
+       ref: InfernoTrainer JalTokJad.ts — JadMagicWeapon/JadRangeWeapon use
+       DelayedAction(JAD_PROJECTILE_DELAY=3) to defer prayer check. */
+    {
+        int jad_ranged = 0, jad_magic = 0;
         for (int h = 0; h < s->player_pending_hit_count; h++) {
             EncounterPendingHit* ph = &s->player_pending_hits[h];
-            if (!ph->active) continue;
-            pending_count++;
-            if (ph->ticks_remaining <= 1) {
-                if (ph->attack_style == ATTACK_STYLE_RANGED) ranged_imminent = 1;
-                else if (ph->attack_style == ATTACK_STYLE_MAGIC) magic_imminent = 1;
-                else if (ph->attack_style == ATTACK_STYLE_MELEE) melee_imminent = 1;
+            if (!ph->active || !ph->check_prayer) continue;
+            if (ph->ticks_remaining <= 2) {
+                if (ph->attack_style == ATTACK_STYLE_RANGED) jad_ranged = 1;
+                else if (ph->attack_style == ATTACK_STYLE_MAGIC) jad_magic = 1;
             }
         }
-        obs[i++] = (float)pending_count / (float)ENCOUNTER_MAX_PENDING_HITS;
-        obs[i++] = ranged_imminent ? 1.0f : 0.0f;
-        obs[i++] = magic_imminent ? 1.0f : 0.0f;
-        obs[i++] = melee_imminent ? 1.0f : 0.0f;
+        obs[i++] = jad_ranged ? 1.0f : 0.0f;
+        obs[i++] = jad_magic ? 1.0f : 0.0f;
     }
 
     /* pillars (6 features) */
