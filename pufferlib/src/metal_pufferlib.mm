@@ -370,11 +370,14 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
 
     uint64_t tp2 = mach_absolute_time();
 
+    // Copy f32 actions to env (CUDA uses cast_kernel f64→f32; we copy f32 directly).
+    // act_f32_buf holds the sampled float actions; act_slice holds doubled f64 copies
+    // for the rollout buffer. The env expects float, so copy from act_f32_buf.
     int64_t act_cols = env.actions.shape[1];
     memcpy(
         env.actions.bytes + start * act_cols * env.actions.dtype_size,
-        act_slice.bytes,
-        act_slice.numel() * act_slice.dtype_size);
+        act_f32_buf.bytes,
+        block_size * act_cols * (int)sizeof(float));
 
     uint64_t tp3 = mach_absolute_time();
 

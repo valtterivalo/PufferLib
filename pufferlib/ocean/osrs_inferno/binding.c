@@ -39,7 +39,7 @@ typedef struct {
 
 #define OBS_SIZE INF_TOTAL_OBS
 #define NUM_ATNS INF_NUM_ACTION_HEADS
-#define ACT_SIZES { ENCOUNTER_MOVE_ACTIONS, 5, INF_MAX_NPCS+1, 5, 2, 4, 2 }
+#define ACT_SIZES { ENCOUNTER_MOVE_ACTIONS, 5, INF_MAX_NPCS+1, 6, 2, 4, 2 }
 #define OBS_TENSOR_T FloatTensor
 #define Env InfernoEnv
 

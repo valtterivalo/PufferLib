@@ -2268,7 +2268,7 @@ static void inf_step(EncounterState* state, const int* actions) {
 
 /* obs layout: 20 player + 6 pillar + 32 NPCs * 11 = 381.
    define INF_OBS_FULL to enable 480-obs layout with new features. */
-#define INF_OBS_FULL
+/* #define INF_OBS_FULL */
 #ifdef INF_OBS_FULL
 #define INF_NUM_OBS 480
 #define INF_OBS_NPC_FEATURES 14
