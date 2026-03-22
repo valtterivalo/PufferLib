@@ -2190,6 +2190,7 @@ static void inf_write_obs(EncounterState* state, float* obs) {
             if (!npc->active || npc->death_ticks > 0) continue;
             if (npc->type == INF_NPC_NIBBLER) continue;
             if (npc->stun_timer > 0 || npc->frozen_ticks > 0) continue;
+            if (npc->dig_freeze_timer > 0 || npc->dig_attack_delay > 0) continue;
             if (npc->attack_timer > 1) continue;
             const InfNPCStats* ns = &INF_NPC_STATS[npc->type];
             int can_fire = 0;
@@ -2269,11 +2270,12 @@ static void inf_write_obs(EncounterState* state, float* obs) {
 
             /* NEW: attack imminent — 1.0 when this NPC will attack within 1 tick.
                combines attack_timer check with LOS (ranged/magic need LOS to fire).
-               meleers: always imminent at timer<=1 (they're already adjacent).
-               blob fire tick: imminent if has scan (bypasses LOS). */
+               must also exclude stunned, frozen, and digging meleers. */
             {
                 int has_los_n = inf_npc_has_los(s, n);
-                int can_fire = (npc->attack_timer <= 1);
+                int can_fire = (npc->attack_timer <= 1 &&
+                    npc->stun_timer == 0 && npc->frozen_ticks == 0 &&
+                    npc->dig_freeze_timer == 0 && npc->dig_attack_delay == 0);
                 int imminent = 0;
                 if (can_fire) {
                     const InfNPCStats* ns = &INF_NPC_STATS[npc->type];
