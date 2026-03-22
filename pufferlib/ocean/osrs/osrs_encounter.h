@@ -611,7 +611,13 @@ static inline int encounter_npc_step_out_from_under(
     for (int i = 0; i < 4; i++) {
         int nx = *npc_x + dirs[order[i]][0];
         int ny = *npc_y + dirs[order[i]][1];
-        if (is_walkable(ctx, nx, ny)) {
+        /* validate all tiles in the NPC's new footprint (not just anchor).
+           for size>1 NPCs, a 1-tile shuffle can overlap pillars on non-anchor tiles. */
+        int blocked = 0;
+        for (int ty = 0; ty < npc_size && !blocked; ty++)
+            for (int tx = 0; tx < npc_size && !blocked; tx++)
+                if (!is_walkable(ctx, nx + tx, ny + ty)) blocked = 1;
+        if (!blocked) {
             *npc_x = nx;
             *npc_y = ny;
             return 1;

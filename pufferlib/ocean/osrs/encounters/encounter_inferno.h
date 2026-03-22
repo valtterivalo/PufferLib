@@ -1598,8 +1598,34 @@ static void inf_tick_npcs(InfernoState* s) {
             if (s->npcs[i].dig_freeze_timer > 0) {
                 s->npcs[i].dig_freeze_timer--;
                 if (s->npcs[i].dig_freeze_timer == 0 && s->npcs[i].dig_attack_delay == 0) {
-                    s->npcs[i].x = s->player.x + (encounter_rand_int(&s->rng_state, 3) - 1);
-                    s->npcs[i].y = s->player.y + (encounter_rand_int(&s->rng_state, 3) - 1);
+                    /* dig emerge placement: try 4 positions around the player
+                       where the NPC footprint doesn't overlap pillars.
+                       ref: InfernoTrainer JalImKot.ts startDig(). */
+                    int px = s->player.x, py = s->player.y;
+                    int sz = s->npcs[i].size;
+                    int dig_x = px - 1, dig_y = py + 1;  /* fallback */
+                    struct { int x, y; } dig_candidates[4] = {
+                        { px - sz + 1, py + sz - 1 },  /* player at SE of NPC */
+                        { px,          py          },   /* NPC on player */
+                        { px - sz + 1, py          },   /* player at E of NPC */
+                        { px,          py + sz - 1 },   /* player at S of NPC */
+                    };
+                    for (int c = 0; c < 4; c++) {
+                        int cx = dig_candidates[c].x;
+                        int cy = dig_candidates[c].y;
+                        /* check arena bounds for full footprint */
+                        int valid = 1;
+                        for (int ty = 0; ty < sz && valid; ty++)
+                            for (int tx = 0; tx < sz && valid; tx++)
+                                if (!inf_in_arena(cx + tx, cy + ty)) valid = 0;
+                        if (!valid) continue;
+                        /* check pillar collision for full footprint */
+                        if (inf_blocked_by_pillar(s, cx, cy, sz)) continue;
+                        dig_x = cx; dig_y = cy;
+                        break;
+                    }
+                    s->npcs[i].x = dig_x;
+                    s->npcs[i].y = dig_y;
                     s->npcs[i].stun_timer = 2;
                     s->npcs[i].dig_attack_delay = 6;
                     s->npcs[i].no_los_ticks = 0;
