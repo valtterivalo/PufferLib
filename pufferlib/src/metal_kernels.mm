@@ -729,8 +729,6 @@ void mtl_recompute_logprobs(
 // PPO scratch buffers — file-scope so mtl_kernels_reset() can free them.
 static float *ppo_partials_buf = nullptr;
 static int ppo_partials_capacity = 0;
-static float *ppo_act_f32 = nullptr;
-static int ppo_act_f32_capacity = 0;
 
 void ppo_loss_fwd_bwd(PufTensor &dec_out, PufTensor &logstd, TrainGraph &graph,
                        PufTensor &act_sizes, PufTensor &losses_acc,
@@ -784,10 +782,6 @@ void ppo_loss_fwd_bwd(PufTensor &dec_out, PufTensor &logstd, TrainGraph &graph,
   // with reduce kernel's *loss += sum from the previous minibatch).
   puf_zero(bufs.loss_output, stream);
 
-  // Actions are already float* (upstream 4.0 switched from double to float).
-  // Point directly at the actions buffer — no conversion needed.
-  ppo_act_f32 = (float *)graph.mb_actions.bytes;
-
   // Action mask: either from external all-ones buffer (no mask) or embedded in obs.
   int input_size = (int)graph.mb_obs.shape[2];
   const float *mask_ptr;
@@ -820,7 +814,7 @@ void ppo_loss_fwd_bwd(PufTensor &dec_out, PufTensor &logstd, TrainGraph &graph,
     mtl_set_ptr(ms, dec_out.bytes, 4);                   // logits
     mtl_set_ptr(ms, is_continuous ? logstd.bytes : dec_out.bytes, 5); // logstd
     mtl_set_ptr(ms, (float *)dec_out.bytes + A_total, 6); // values_pred (last column of fused decoder output)
-    mtl_set_ptr(ms, ppo_act_f32, 7);  // f32 actions (converted from f64)
+    mtl_set_ptr(ms, graph.mb_actions.bytes, 7);  // f32 actions
     mtl_set_ptr(ms, graph.mb_logprobs.bytes, 8);
     mtl_set_ptr(ms, graph.mb_advantages.bytes, 9);
     mtl_set_ptr(ms, graph.mb_prio.bytes, 10);
@@ -1777,11 +1771,5 @@ void mtl_kernels_reset() {
     free(ppo_partials_buf);
     ppo_partials_buf = nullptr;
     ppo_partials_capacity = 0;
-  }
-  if (ppo_act_f32) {
-    mtl_unwrap_ptr(ppo_act_f32);
-    free(ppo_act_f32);
-    ppo_act_f32 = nullptr;
-    ppo_act_f32_capacity = 0;
   }
 }
