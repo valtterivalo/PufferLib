@@ -1045,7 +1045,7 @@ kernel void puff_advantage_kernel(
         float nextnonterminal = 1.0f - d[t_next];
         float rho_t = min(imp[t], p.rho_clip);
         float c_t = min(imp[t], p.c_clip);
-        float delta = rho_t * r[t_next] + p.gamma * v[t_next] * nextnonterminal - v[t];
+        float delta = rho_t * (r[t_next] + p.gamma * v[t_next] * nextnonterminal - v[t]);
         lastpufferlam = delta + p.gamma * p.lambda * c_t * lastpufferlam * nextnonterminal;
         adv[t] = lastpufferlam;
     }
