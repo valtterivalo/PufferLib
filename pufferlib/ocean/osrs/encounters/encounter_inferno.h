@@ -626,7 +626,6 @@ typedef struct {
     InfWeaponSet weapon_set;
     EncounterLoadoutStats loadout_stats[INF_NUM_WEAPON_SETS];
     int armor_tank;            /* 1 = justiciar overlay active */
-    int spec_queued;           /* 1 = next BP attack uses special (100% acc, 50% heal) */
     int stamina_active_ticks;  /* countdown for stamina effect */
     int spell_choice;          /* 0 = blood barrage, 1 = ice barrage */
 
@@ -1755,7 +1754,7 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
         InfWeaponSet new_set = (InfWeaponSet)(gear_act - 1);
         s->weapon_set = new_set;
         s->armor_tank = 0;
-        s->spec_queued = 0;
+        s->player.spec_queued = 0;
         GearSet gs = (new_set == INF_GEAR_MAGE) ? GEAR_MAGE : GEAR_RANGED;
         encounter_apply_loadout(&s->player, INF_LOADOUTS[new_set], gs);
     } else if (gear_act == 4) {
@@ -1771,7 +1770,7 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
         s->weapon_set = INF_GEAR_BP;
         s->armor_tank = 0;
         encounter_apply_loadout(&s->player, INF_LOADOUTS[INF_GEAR_BP], GEAR_RANGED);
-        s->spec_queued = 1;
+        s->player.spec_queued = 1;
     }
 
     /* auto-detect gear switch from direct inventory equip (human mode).
@@ -1994,11 +1993,11 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
                        spec (50% energy): 100% accuracy, heals player 50% of damage.
                        ref: OSRS wiki Toxic blowpipe special attack. */
                     const InfNPCStats* ns = &INF_NPC_STATS[target_npc->type];
-                    int using_spec = s->spec_queued && encounter_use_spec(&s->player, 50);
+                    int using_spec = s->player.spec_queued && encounter_use_spec(&s->player, 50);
                     if (using_spec) {
                         /* spec: 100% accuracy (auto-hit), double max hit */
                         total_dmg = encounter_rand_int(&s->rng_state, ls->max_hit * 2 + 1);
-                        s->spec_queued = 0;
+                        s->player.spec_queued = 0;
                         s->player.used_special_this_tick = 1;
                     } else {
                         /* normal attack: standard accuracy roll */
@@ -2007,7 +2006,7 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
                         if (encounter_rand_float(&s->rng_state) < osrs_hit_chance(att_roll, def_roll)) {
                             total_dmg = encounter_rand_int(&s->rng_state, ls->max_hit + 1);
                         }
-                        s->spec_queued = 0;
+                        s->player.spec_queued = 0;
                     }
                     EncounterPendingHit* ph = &target_npc->pending_hit;
                     ph->active = 1;
@@ -2539,6 +2538,7 @@ static void inf_fill_render_entities(EncounterState* state, RenderEntity* out, i
     s->player.gui_attack_speed = active_ls->attack_speed;
     s->player.gui_attack_range = active_ls->attack_range;
     s->player.gui_strength_bonus = active_ls->strength_bonus;
+    s->player.special_active = s->player.spec_queued;
 
     /* index 0: the player */
     if (n < max_entities) {
@@ -2830,8 +2830,13 @@ static void inf_translate_human_input(HumanInput* hi, int* actions, EncounterSta
     encounter_translate_prayer(hi, actions, INF_HEAD_PRAYER);
     encounter_translate_target(hi, actions, INF_HEAD_TARGET);
 
-    /* gear switch */
-    if (hi->pending_gear > 0) actions[INF_HEAD_GEAR] = hi->pending_gear;
+    /* gear switch + spec: pending_spec maps to bp_spec (gear action 5).
+       if spec clicked, switch to BP + queue spec in one action. */
+    if (hi->pending_spec) {
+        actions[INF_HEAD_GEAR] = 5;  /* bp_spec */
+    } else if (hi->pending_gear > 0) {
+        actions[INF_HEAD_GEAR] = hi->pending_gear;
+    }
 
     /* brew on eat head */
     if (hi->pending_food || hi->pending_potion == POTION_BREW)

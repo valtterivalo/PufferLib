@@ -535,6 +535,7 @@ typedef struct {
     int spec_regen_active;
     int was_lightbearer_equipped;
     int special_active;
+    int spec_queued;           /* 1 = next attack uses special (shared across encounters) */
 
     // Gear
     GearSet current_gear;       // tracks active combat style for visible_gear and style checks
