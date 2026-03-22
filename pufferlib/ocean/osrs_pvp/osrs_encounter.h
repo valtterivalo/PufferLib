@@ -507,6 +507,8 @@ typedef int (*encounter_npc_blocked_fn)(void* ctx, int x, int y, int size);
 
 /** greedy NPC step toward target. tries diagonal first, then x-only, then y-only.
     this is the standard OSRS NPC movement algorithm — 99.9% of NPCs use this.
+    corner safespot: if diagonal would land NPC on player, cancel Y component.
+    ref: InfernoTrainer Mob.ts:143-146.
     returns 1 if moved, 0 if blocked or already at target. */
 static inline int encounter_npc_step_toward(
     int* x, int* y, int tx, int ty, int size,
@@ -518,6 +520,17 @@ static inline int encounter_npc_step_toward(
     if (ty > *y) dy = 1;
     else if (ty < *y) dy = -1;
     if (dx == 0 && dy == 0) return 0;
+
+    /* corner safespot cancellation: if a diagonal step would place the NPC
+       on top of the target (player), cancel the Y component and take X-only.
+       this enables pillar corner safespotting in inferno.
+       ref: InfernoTrainer Mob.ts:143-146. */
+    if (dx != 0 && dy != 0) {
+        int nx = *x + dx, ny = *y + dy;
+        if (tx >= nx && tx < nx + size && ty >= ny && ty < ny + size) {
+            dy = 0;
+        }
+    }
 
     /* try diagonal */
     if (dx != 0 && dy != 0) {
@@ -708,15 +721,13 @@ static inline void encounter_drain_prayer(
     int drain_effect = encounter_prayer_drain_effect(*active_prayer);
     if (drain_effect == 0) return;
 
-    /* OSRS: drain interval = floor((18 + floor(bonus/4)) / drain_effect) seconds
-       converted to ticks (1 tick = 0.6s): multiply by 5/3.
-       but OSRS actually uses a point-based counter system, not seconds.
-       the drain_effect is subtracted from a counter each tick, and when the
-       counter goes below 0, a prayer point is drained and counter is reset
-       to (60 + prayer_bonus * 15). this is the actual OSRS implementation. */
+    /* OSRS prayer drain: counter-based system. each tick, drain_effect is subtracted
+       from a counter. when it goes below 0, a prayer point drains and the counter
+       resets to (2 * prayer_bonus + 60).
+       ref: RuneLite PrayerPlugin.java:387, osrs-sdk Player.ts:286. */
     *drain_counter -= drain_effect;
     if (*drain_counter <= 0) {
-        *drain_counter += 60 + prayer_bonus * 15;
+        *drain_counter += 60 + prayer_bonus * 2;
         (*current_prayer)--;
         if (*current_prayer <= 0) {
             *current_prayer = 0;

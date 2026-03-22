@@ -196,17 +196,20 @@ static inline int osrs_npc_attack_roll(int att_level, int att_bonus) {
 }
 
 /* player defence roll against NPC attack.
-   vs melee/ranged: (def_level + 9) * (def_bonus + 64).
-   vs magic: (floor(magic_level * 0.7 + def_level * 0.3) + 9) * (def_bonus + 64).
-   the magic formula uses 70% magic + 30% defence per OSRS standard. */
+   OSRS formula: eff_def = level + stance_bonus + 8. players don't have the
+   hidden +1 that NPCs get (that's why NPC attack roll uses +9).
+   our sim doesn't model stance bonuses, so stance_bonus = 0.
+   vs melee/ranged: (def_level + 8) * (def_bonus + 64).
+   vs magic: (floor(magic_level * 0.7 + def_level * 0.3) + 8) * (def_bonus + 64).
+   ref: osrs-sdk MeleeWeapon.ts:164, OSRS wiki combat formulas. */
 static inline int osrs_player_def_roll_vs_npc(
     int def_level, int magic_level, int def_bonus, int attack_style
 ) {
     int eff_def;
     if (attack_style == 3) {  /* ATTACK_STYLE_MAGIC = 3 */
-        eff_def = (int)(magic_level * 0.7 + def_level * 0.3) + 9;
+        eff_def = (int)(magic_level * 0.7 + def_level * 0.3) + 8;
     } else {
-        eff_def = def_level + 9;
+        eff_def = def_level + 8;
     }
     return eff_def * (def_bonus + 64);
 }
