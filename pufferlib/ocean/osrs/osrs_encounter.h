@@ -610,11 +610,13 @@ static inline int encounter_npc_step_out_from_under(
     for (int i = 0; i < 4; i++) {
         int nx = *npc_x + dirs[order[i]][0];
         int ny = *npc_y + dirs[order[i]][1];
-        if (is_walkable(ctx, nx, ny)) {
-            *npc_x = nx;
-            *npc_y = ny;
-            return 1;
-        }
+        if (!is_walkable(ctx, nx, ny)) continue;
+        /* don't shuffle onto the player — new footprint must not overlap player tile */
+        if (!(nx >= player_x + 1 || nx + npc_size <= player_x ||
+              ny >= player_y + 1 || ny + npc_size <= player_y)) continue;
+        *npc_x = nx;
+        *npc_y = ny;
+        return 1;
     }
     return 0;
 }
