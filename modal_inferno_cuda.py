@@ -49,7 +49,7 @@ app = modal.App("inferno-cuda-test", image=image)
 
 @app.function(
     gpu="L4:4",
-    timeout=7200,
+    timeout=21600,
     secrets=[modal.Secret.from_name("wandb-secret")],
 )
 def train_inferno(sweep: bool = False, steps: int = 1_000_000, gpus: int = 4):
