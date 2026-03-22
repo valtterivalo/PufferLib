@@ -1600,15 +1600,17 @@ static void inf_tick_npcs(InfernoState* s) {
                 if (s->npcs[i].dig_freeze_timer == 0 && s->npcs[i].dig_attack_delay == 0) {
                     /* dig emerge placement: try 4 positions around the player
                        where the NPC footprint doesn't overlap pillars.
-                       ref: InfernoTrainer JalImKot.ts startDig(). */
+                       ref: InfernoTrainer JalImKot.ts:124-166 startDig().
+                       coords translated from InfernoTrainer Y-down/NW-anchor
+                       to our Y-up/SW-anchor: y offsets inverted. */
                     int px = s->player.x, py = s->player.y;
                     int sz = s->npcs[i].size;
-                    int dig_x = px - 1, dig_y = py + 1;  /* fallback */
+                    int dig_x = px - 1, dig_y = py - 1;  /* fallback */
                     struct { int x, y; } dig_candidates[4] = {
-                        { px - sz + 1, py + sz - 1 },  /* player at SE of NPC */
-                        { px,          py          },   /* NPC on player */
-                        { px - sz + 1, py          },   /* player at E of NPC */
-                        { px,          py + sz - 1 },   /* player at S of NPC */
+                        { px - sz + 1, py - sz + 1 },  /* player at NE corner */
+                        { px,          py          },   /* player at SW corner */
+                        { px - sz + 1, py          },   /* player at SE corner */
+                        { px,          py - sz + 1 },   /* player at NW corner */
                     };
                     for (int c = 0; c < 4; c++) {
                         int cx = dig_candidates[c].x;

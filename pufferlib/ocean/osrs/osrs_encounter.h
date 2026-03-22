@@ -611,13 +611,11 @@ static inline int encounter_npc_step_out_from_under(
     for (int i = 0; i < 4; i++) {
         int nx = *npc_x + dirs[order[i]][0];
         int ny = *npc_y + dirs[order[i]][1];
-        /* validate all tiles in the NPC's new footprint (not just anchor).
-           for size>1 NPCs, a 1-tile shuffle can overlap pillars on non-anchor tiles. */
-        int blocked = 0;
-        for (int ty = 0; ty < npc_size && !blocked; ty++)
-            for (int tx = 0; tx < npc_size && !blocked; tx++)
-                if (!is_walkable(ctx, nx + tx, ny + ty)) blocked = 1;
-        if (!blocked) {
+        /* InfernoTrainer Mob.ts:128-142: 1-tile shuffle per tick, validated
+           via normal edge-tile movement system. for size>1 NPCs, full escape
+           takes multiple ticks. anchor walkability matches InfernoTrainer's
+           canTileBePathedTo check on the leading edge. */
+        if (is_walkable(ctx, nx, ny)) {
             *npc_x = nx;
             *npc_y = ny;
             return 1;
