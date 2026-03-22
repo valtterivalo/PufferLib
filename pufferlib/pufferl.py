@@ -349,10 +349,9 @@ def sweep(env_name, args=None, pareto=False):
                 sweep_obj.observe(done_args, 0, 0, is_failure=True)
             else:
                 completed += 1
-
-            for s, c, t in zip(scores, costs, timesteps):
-                done_args['train']['total_timesteps'] = t
-                sweep_obj.observe(done_args, s, c, is_failure=False)
+                for s, c, t in zip(scores, costs, timesteps):
+                    done_args['train']['total_timesteps'] = t
+                    sweep_obj.observe(done_args, s, c, is_failure=False)
 
         idx = completed + len(active)
         if idx >= num_experiments:
