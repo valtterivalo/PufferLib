@@ -1000,12 +1000,13 @@ static int inf_npc_blocked(void* ctx, int x, int y, int size) {
         return 1;
     /* NPC-vs-player and NPC-vs-NPC collision: NPCs that don't consume space
        (nibblers) skip this entirely — they walk through everything.
-       for space-consuming NPCs, prevent stepping onto the player tile and
+       for space-consuming NPCs, prevent overlapping the player and
        check overlap with all other space-consuming NPCs.
+       ref: InfernoTrainer Mob.ts:113-126 collisionMath (AABB overlap).
        ref: InfernoTrainer JalNib.ts consumesSpace = null. */
     InfNPC* self = &s->npcs[mc->self_idx];
     if (INF_NPC_STATS[self->type].consumes_space) {
-        if (x == s->player.x && y == s->player.y) return 1;
+        if (los_aabb_overlap(x, y, size, s->player.x, s->player.y, 1)) return 1;
         for (int i = 0; i < INF_MAX_NPCS; i++) {
             if (i == mc->self_idx) continue;
             InfNPC* other = &s->npcs[i];
