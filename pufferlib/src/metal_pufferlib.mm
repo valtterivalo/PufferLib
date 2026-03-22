@@ -444,25 +444,12 @@ void train_impl(PuffeRL& pufferl) {
         int fused_cols = (int)pufferl.train_logits.shape[2];
         int num_atns = (int)pufferl.train_actions_f32.shape[2];
 
-        // Mask: embedded in obs or all-ones fallback
-        const float *mask_ptr;
-        int mask_stride;
-        if (pufferl.has_mask) {
-            int obs_cols = (int)rollouts.observations.shape[2];
-            int mask_offset = obs_cols - (fused_cols - 1);
-            mask_ptr = (const float *)rollouts.observations.bytes + mask_offset;
-            mask_stride = obs_cols;
-        } else {
-            mask_ptr = (const float *)pufferl.ones_mask.bytes;
-            mask_stride = 0;
-        }
-
+        // Recompute logprobs from raw logits (no mask — matching CUDA PPO)
         mtl_recompute_logprobs(
             (float *)rollouts.logprobs.bytes,
             (const float *)pufferl.train_logits.bytes,
             (const float *)pufferl.train_actions_f32.bytes,
             (const int *)pufferl.act_sizes_puf.bytes,
-            mask_ptr, mask_stride,
             total_samples, num_atns, fused_cols, train_stream);
     }
 

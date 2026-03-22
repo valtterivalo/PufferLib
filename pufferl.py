@@ -371,6 +371,18 @@ def run_training(config, vec_config, env_config, policy_config, *,
                             f"invalid loss metric {loss_name}={v} "
                             f"at step={global_step}")
 
+                # zombie guard: detect entropy collapse or vf explosion
+                # (finite values that indicate training has diverged)
+                if global_step > steps_per_iter * 50:
+                    ent = losses.get("entropy", 99)
+                    vf = losses.get("vf_loss", 0)
+                    if ent < 1.0:
+                        raise RuntimeError(
+                            f"entropy collapse: {ent:.3f} at step={global_step}")
+                    if vf > 10000:
+                        raise RuntimeError(
+                            f"vf explosion: {vf:.0f} at step={global_step}")
+
                 score = env_stats.get(score_key, env_stats.get("episode_return", 0))
                 ep_ret = env_stats.get("episode_return", 0)
                 ep_len = env_stats.get("episode_length", 0)

@@ -701,7 +701,7 @@ void mtl_sample_logits_expand(const float *f32, double *f64, int count) {
 // completes in ~1us and ensures old_logp matches PPO training precision.
 void mtl_recompute_logprobs(
     float *logprobs, const float *logits, const float *actions_f32,
-    const int *act_sizes, const float *action_mask, int mask_stride,
+    const int *act_sizes,
     int B, int num_atns, int fused_cols, cudaStream_t stream) {
 
   MetalStream *ms = mtl_resolve_stream(stream);
@@ -713,12 +713,11 @@ void mtl_recompute_logprobs(
   mtl_set_ptr(ms, (void *)logits, 1);
   mtl_set_ptr(ms, (void *)actions_f32, 2);
   mtl_set_ptr(ms, (void *)act_sizes, 3);
-  mtl_set_ptr(ms, (void *)action_mask, 4);
 
   struct {
-    int B, num_atns, logits_stride, mask_stride;
-  } params = {B, num_atns, fused_cols, mask_stride};
-  mtl_set_params(ms, params, 5);
+    int B, num_atns, logits_stride;
+  } params = {B, num_atns, fused_cols};
+  mtl_set_params(ms, params, 4);
 
   mtl_dispatch_1d(ms, pso, B);
 }
@@ -1342,7 +1341,7 @@ void muon_step(Muon *m, cudaStream_t stream) {
 
       PufTensor &result_precision = (m->ns_iters % 2 == 0) ? x : tmp;
       float scale =
-          (float)std::sqrt(std::max(1.0, (double)M / (double)N));
+          (float)std::sqrt(std::max(1.0, (double)R / (double)C));
 
       PufTensor out_f32 = {.bytes = (char *)up_ptr,
                            .shape = {R, C},
@@ -1381,9 +1380,9 @@ void muon_step(Muon *m, cudaStream_t stream) {
                          (int)m->wb_puf.numel(), stream);
   mtl_barrier(ms);
 
-  // Extra weight decay for value_weight (tensor_idx==2): wd=0.1 vs global 0.01.
+  // Extra weight decay for value_weight (tensor_idx==2): 50x global wd.
   // The value head has no NS orthogonalization (1-row matrix) and its gradient
-  // drives monotonic weight growth. The extra decay counteracts this.
+  // drives monotonic weight growth. The 50x multiplier counteracts this.
   // Also clamp to [-5, 5] as a safety net.
   {
     int64_t val_offset = 0;
@@ -1391,7 +1390,7 @@ void muon_step(Muon *m, cudaStream_t stream) {
     for (auto *t : m->param_alloc->regs) {
       if (idx == 2) {  // value_weight tensor
         float *val_ptr = (float *)m->wb_puf.bytes + val_offset;
-        float extra_wd = 0.1f - (float)m->weight_decay;  // additional wd on top of global
+        float extra_wd = 49.0f * (float)m->weight_decay;  // 50x total = global + 49x extra
         float lr = *(m->lr_ptr);
         // Apply extra decay: w *= (1 - lr * extra_wd)
         float extra_scale = 1.0f - lr * extra_wd;
