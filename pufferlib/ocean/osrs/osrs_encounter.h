@@ -942,7 +942,9 @@ static inline void encounter_drain_prayer(
 /* ======================================================================== */
 
 /** combat stats derived from a gear loadout + prayer + style.
-    computed once at reset, read during combat. */
+    computed once at reset, read during combat.
+    prayer multipliers and style_bonus are stored for dynamic recomputation
+    when stats change (brew drain, potion boost). */
 typedef struct {
     int attack_bonus;     /* primary attack bonus for the style */
     int strength_bonus;   /* ranged_strength, magic_damage %, or melee_strength */
@@ -953,6 +955,11 @@ typedef struct {
     AttackStyle style;
     /* defence bonuses from gear */
     int def_stab, def_slash, def_crush, def_magic, def_ranged;
+    /* stored for dynamic max hit recomputation after brew drain / potion boost */
+    float att_prayer_mult;
+    float str_prayer_mult;
+    int style_bonus;
+    int spell_base_damage;
 } EncounterLoadoutStats;
 
 /** overhead prayer multipliers for effective level computation. */
@@ -1057,6 +1064,12 @@ static void encounter_compute_loadout_stats(
             break;
     }
 
+    /* store for dynamic recomputation after brew drain / potion boost */
+    out->att_prayer_mult = att_prayer_mult;
+    out->str_prayer_mult = str_prayer_mult;
+    out->style_bonus = style_bonus;
+    out->spell_base_damage = spell_base_damage;
+
     /* effective attack level: floor(base * prayer_mult) + style_bonus + 8 */
     out->eff_level = (int)(base_level * att_prayer_mult) + style_bonus + 8;
 
@@ -1074,6 +1087,125 @@ static void encounter_compute_loadout_stats(
     } else {
         out->strength_bonus = sum_melee_strength;
         out->max_hit = (int)(0.5 + eff_str_level * (sum_melee_strength + 64) / 640.0);
+    }
+}
+
+/* ======================================================================== */
+/* dynamic max hit recomputation (after brew drain / potion boost)            */
+/*                                                                           */
+/* ENCOUNTERS: call encounter_update_loadout_level() whenever the player's   */
+/* current combat level changes (brew drain, restore, bastion boost).        */
+/* this recomputes eff_level and max_hit using the stored prayer multiplier  */
+/* and strength bonus from the initial encounter_compute_loadout_stats().    */
+/* ======================================================================== */
+
+/** recompute eff_level and max_hit for a loadout using a (possibly drained/boosted)
+    current combat level. call after brew drain, super restore, or bastion boost.
+    current_att_level: the player's current attack/ranged/magic level (for accuracy).
+    current_str_level: the player's current strength/ranged/magic level (for max hit).
+    for ranged: both are current_ranged. for melee: att=current_attack, str=current_strength.
+    for magic: max hit doesn't depend on level (spell base damage), but eff_level does. */
+static inline void encounter_update_loadout_level(
+    EncounterLoadoutStats* ls, int current_att_level, int current_str_level
+) {
+    ls->eff_level = (int)(current_att_level * ls->att_prayer_mult) + ls->style_bonus + 8;
+    if (ls->style == ATTACK_STYLE_MAGIC) {
+        ls->max_hit = (int)(ls->spell_base_damage * (1.0 + ls->strength_bonus / 100.0));
+    } else {
+        int eff_str = (int)(current_str_level * ls->str_prayer_mult) + ls->style_bonus + 8;
+        ls->max_hit = (int)(0.5 + eff_str * (ls->strength_bonus + 64) / 640.0);
+    }
+}
+
+/* ======================================================================== */
+/* shared potion stat effects (brew drain, restore, bastion boost)           */
+/*                                                                           */
+/* ENCOUNTERS: call these when the player drinks a potion. they modify the   */
+/* player's current combat levels and recompute max hit for affected loadouts.*/
+/* these implement the real OSRS formulas for stat modification.             */
+/*                                                                           */
+/* sara brew:     heals HP, boosts def, drains att/str/ranged/magic          */
+/* super restore: restores all drained stats toward base (caps at base)      */
+/* bastion:       boosts ranged above base, boosts def                       */
+/* ======================================================================== */
+
+/** sara brew stat drain. call AFTER healing HP (which is encounter-specific).
+    drains attack, strength, ranged, magic by 5 + floor(base * 0.10) each.
+    boosts defence by 5 + floor(base * 0.20), capped at base + that amount.
+    floors at 0 for drained stats.
+    ref: OSRS wiki Saradomin brew. */
+static inline void encounter_brew_drain_stats(Player* p) {
+    int att_drain = 5 + p->base_attack / 10;
+    int str_drain = 5 + p->base_strength / 10;
+    int rng_drain = 5 + p->base_ranged / 10;
+    int mag_drain = 5 + p->base_magic / 10;
+    int def_boost = 5 + p->base_defence / 5;
+
+    p->current_attack -= att_drain;
+    if (p->current_attack < 0) p->current_attack = 0;
+    p->current_strength -= str_drain;
+    if (p->current_strength < 0) p->current_strength = 0;
+    p->current_ranged -= rng_drain;
+    if (p->current_ranged < 0) p->current_ranged = 0;
+    p->current_magic -= mag_drain;
+    if (p->current_magic < 0) p->current_magic = 0;
+
+    p->current_defence += def_boost;
+    int def_cap = p->base_defence + def_boost;
+    if (p->current_defence > def_cap) p->current_defence = def_cap;
+}
+
+/** super restore stat recovery. restores all combat stats toward base level.
+    each dose restores floor(base * 0.25) + 8 per stat. caps at base level.
+    ref: OSRS wiki Super restore. */
+static inline void encounter_restore_stats(Player* p) {
+    int restore = 8 + p->base_attack / 4;  /* same formula for all stats at 99 base */
+    p->current_attack += restore;
+    if (p->current_attack > p->base_attack) p->current_attack = p->base_attack;
+    restore = 8 + p->base_strength / 4;
+    p->current_strength += restore;
+    if (p->current_strength > p->base_strength) p->current_strength = p->base_strength;
+    restore = 8 + p->base_defence / 4;
+    p->current_defence += restore;
+    if (p->current_defence > p->base_defence) p->current_defence = p->base_defence;
+    restore = 8 + p->base_ranged / 4;
+    p->current_ranged += restore;
+    if (p->current_ranged > p->base_ranged) p->current_ranged = p->base_ranged;
+    restore = 8 + p->base_magic / 4;
+    p->current_magic += restore;
+    if (p->current_magic > p->base_magic) p->current_magic = p->base_magic;
+}
+
+/** bastion potion boost. boosts ranged by floor(base * 0.10) + 4. can exceed base.
+    also boosts defence by floor(base * 0.15) + 5. can exceed base.
+    ref: OSRS wiki Bastion potion. */
+static inline void encounter_bastion_boost(Player* p) {
+    int rng_boost = 4 + p->base_ranged / 10;
+    int def_boost = 5 + p->base_defence * 15 / 100;
+    p->current_ranged += rng_boost;
+    int rng_cap = p->base_ranged + rng_boost;
+    if (p->current_ranged > rng_cap) p->current_ranged = rng_cap;
+    p->current_defence += def_boost;
+    int def_cap = p->base_defence + def_boost;
+    if (p->current_defence > def_cap) p->current_defence = def_cap;
+}
+
+/** recompute max hit for all loadouts after a stat change.
+    encounters should call this after brew_drain_stats, restore_stats, or bastion_boost.
+    ranged loadouts use current_ranged, magic uses current_magic, melee uses
+    current_attack/current_strength. */
+static inline void encounter_recompute_loadout_max_hits(
+    EncounterLoadoutStats* loadouts, int num_loadouts, Player* p
+) {
+    for (int i = 0; i < num_loadouts; i++) {
+        EncounterLoadoutStats* ls = &loadouts[i];
+        if (ls->style == ATTACK_STYLE_RANGED) {
+            encounter_update_loadout_level(ls, p->current_ranged, p->current_ranged);
+        } else if (ls->style == ATTACK_STYLE_MAGIC) {
+            encounter_update_loadout_level(ls, p->current_magic, p->current_magic);
+        } else {
+            encounter_update_loadout_level(ls, p->current_attack, p->current_strength);
+        }
     }
 }
 

@@ -1787,13 +1787,16 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
     if (s->player_potion_timer > 0) s->player_potion_timer--;
     if (s->stamina_active_ticks > 0) s->stamina_active_ticks--;
 
-    /* brew (INF_HEAD_EAT): heals 16 HP, can overcap to base+16 */
+    /* brew (INF_HEAD_EAT): heals 16 HP (overcap to base+16), drains combat stats.
+       ref: OSRS wiki Saradomin brew — drain att/str/ranged/magic, boost def. */
     int eat_act = actions[INF_HEAD_EAT];
     if (eat_act == 1 && s->player_brew_doses > 0 && s->player_potion_timer == 0
         && s->player.current_hitpoints < s->player.base_hitpoints) {
         s->player.current_hitpoints += INF_BREW_HEAL;
         if (s->player.current_hitpoints > s->player.base_hitpoints + 16)
             s->player.current_hitpoints = s->player.base_hitpoints + 16;
+        encounter_brew_drain_stats(&s->player);
+        encounter_recompute_loadout_max_hits(s->loadout_stats, INF_NUM_WEAPON_SETS, &s->player);
         s->player_brew_doses--;
         s->player_potion_timer = 3;
         s->player.ate_food_this_tick = 1;
@@ -1806,10 +1809,13 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
         s->player.current_prayer += INF_RESTORE_PRAY;
         if (s->player.current_prayer > s->player.base_prayer)
             s->player.current_prayer = s->player.base_prayer;
+        encounter_restore_stats(&s->player);
+        encounter_recompute_loadout_max_hits(s->loadout_stats, INF_NUM_WEAPON_SETS, &s->player);
         s->player_restore_doses--;
         s->player_potion_timer = 3;
     } else if (pot_act == 2 && s->player_bastion_doses > 0 && s->player_potion_timer == 0) {
-        /* bastion potion: simplified as flat +6 effective range level (handled in combat) */
+        encounter_bastion_boost(&s->player);
+        encounter_recompute_loadout_max_hits(s->loadout_stats, INF_NUM_WEAPON_SETS, &s->player);
         s->player_bastion_doses--;
         s->player_potion_timer = 3;
     } else if (pot_act == 3 && s->player_stamina_doses > 0 && s->player_potion_timer == 0) {
@@ -2486,6 +2492,13 @@ static void inf_fill_render_entities(EncounterState* state, RenderEntity* out, i
     s->player.restore_doses = s->player_restore_doses;
     s->player.combat_potion_doses = s->player_bastion_doses;
     s->player.ranged_potion_doses = s->player_stamina_doses;
+
+    /* sync active loadout stats to Player struct for GUI stats panel */
+    const EncounterLoadoutStats* active_ls = &s->loadout_stats[s->weapon_set];
+    s->player.gui_max_hit = active_ls->max_hit;
+    s->player.gui_attack_speed = active_ls->attack_speed;
+    s->player.gui_attack_range = active_ls->attack_range;
+    s->player.gui_strength_bonus = active_ls->strength_bonus;
 
     /* index 0: the player */
     if (n < max_entities) {

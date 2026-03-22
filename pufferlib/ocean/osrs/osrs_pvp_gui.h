@@ -1725,6 +1725,117 @@ static void gui_draw_spellbook(GuiState* gs, Player* p) {
 }
 
 /* ======================================================================== */
+/* stats panel — player combat stats for debugging                           */
+/* ======================================================================== */
+
+static const char* gui_prayer_name(OverheadPrayer p) {
+    switch (p) {
+        case PRAYER_PROTECT_MAGIC:  return "Protect Magic";
+        case PRAYER_PROTECT_RANGED: return "Protect Ranged";
+        case PRAYER_PROTECT_MELEE:  return "Protect Melee";
+        case PRAYER_SMITE:          return "Smite";
+        case PRAYER_REDEMPTION:     return "Redemption";
+        default:                    return "None";
+    }
+}
+
+static const char* gui_gear_name(GearSet g) {
+    switch (g) {
+        case GEAR_MAGE:   return "Mage";
+        case GEAR_RANGED: return "Ranged";
+        case GEAR_MELEE:  return "Melee";
+        case GEAR_SPEC:   return "Spec";
+        case GEAR_TANK:   return "Tank";
+        default:          return "???";
+    }
+}
+
+static void gui_draw_stats(GuiState* gs, Player* p) {
+    int ox = gs->panel_x + 10;
+    int oy = gui_content_y(gs) + 8;
+    int lh = 18;  /* line height */
+
+    /* HP bar */
+    int bar_w = gs->panel_w - 20;
+    int bar_h = 16;
+    float hp_pct = (p->base_hitpoints > 0) ?
+        (float)p->current_hitpoints / (float)p->base_hitpoints : 0.0f;
+    if (hp_pct > 1.0f) hp_pct = 1.0f;
+    DrawRectangle(ox, oy, bar_w, bar_h, GUI_HP_RED);
+    DrawRectangle(ox, oy, (int)(bar_w * hp_pct), bar_h, GUI_HP_GREEN);
+    DrawRectangleLines(ox, oy, bar_w, bar_h, GUI_BORDER);
+    gui_text_shadow(TextFormat("HP: %d / %d", p->current_hitpoints, p->base_hitpoints),
+                    ox + 4, oy + 2, 10, GUI_TEXT_WHITE);
+    oy += bar_h + 6;
+
+    /* prayer bar */
+    float pray_pct = (p->base_prayer > 0) ?
+        (float)p->current_prayer / (float)p->base_prayer : 0.0f;
+    if (pray_pct > 1.0f) pray_pct = 1.0f;
+    DrawRectangle(ox, oy, bar_w, bar_h, GUI_SPEC_DARK);
+    DrawRectangle(ox, oy, (int)(bar_w * pray_pct), bar_h, GUI_TEXT_CYAN);
+    DrawRectangleLines(ox, oy, bar_w, bar_h, GUI_BORDER);
+    gui_text_shadow(TextFormat("Prayer: %d / %d", p->current_prayer, p->base_prayer),
+                    ox + 4, oy + 2, 10, GUI_TEXT_WHITE);
+    oy += bar_h + 10;
+
+    /* stat lines */
+    gui_text_shadow(TextFormat("Ranged: %d / %d", p->current_ranged, p->base_ranged),
+                    ox, oy, 10, (p->current_ranged < p->base_ranged) ? GUI_TEXT_RED :
+                                (p->current_ranged > p->base_ranged) ? GUI_TEXT_GREEN : GUI_TEXT_YELLOW);
+    oy += lh;
+    gui_text_shadow(TextFormat("Magic:  %d / %d", p->current_magic, p->base_magic),
+                    ox, oy, 10, (p->current_magic < p->base_magic) ? GUI_TEXT_RED :
+                                (p->current_magic > p->base_magic) ? GUI_TEXT_GREEN : GUI_TEXT_YELLOW);
+    oy += lh;
+    gui_text_shadow(TextFormat("Attack: %d / %d", p->current_attack, p->base_attack),
+                    ox, oy, 10, (p->current_attack < p->base_attack) ? GUI_TEXT_RED :
+                                (p->current_attack > p->base_attack) ? GUI_TEXT_GREEN : GUI_TEXT_YELLOW);
+    oy += lh;
+    gui_text_shadow(TextFormat("Str:    %d / %d", p->current_strength, p->base_strength),
+                    ox, oy, 10, (p->current_strength < p->base_strength) ? GUI_TEXT_RED :
+                                (p->current_strength > p->base_strength) ? GUI_TEXT_GREEN : GUI_TEXT_YELLOW);
+    oy += lh;
+    gui_text_shadow(TextFormat("Def:    %d / %d", p->current_defence, p->base_defence),
+                    ox, oy, 10, (p->current_defence < p->base_defence) ? GUI_TEXT_RED :
+                                (p->current_defence > p->base_defence) ? GUI_TEXT_GREEN : GUI_TEXT_YELLOW);
+    oy += lh + 6;
+
+    /* separator */
+    DrawLine(ox, oy, ox + bar_w, oy, GUI_BORDER);
+    oy += 8;
+
+    /* combat info */
+    gui_text_shadow(TextFormat("Gear: %s", gui_gear_name(p->current_gear)),
+                    ox, oy, 10, GUI_TEXT_ORANGE);
+    oy += lh;
+    gui_text_shadow(TextFormat("Max Hit: %d", p->gui_max_hit),
+                    ox, oy, 10, GUI_TEXT_YELLOW);
+    oy += lh;
+    gui_text_shadow(TextFormat("Str Bonus: %d", p->gui_strength_bonus),
+                    ox, oy, 10, GUI_TEXT_WHITE);
+    oy += lh;
+    gui_text_shadow(TextFormat("Atk Speed: %d  Range: %d", p->gui_attack_speed, p->gui_attack_range),
+                    ox, oy, 10, GUI_TEXT_WHITE);
+    oy += lh;
+    gui_text_shadow(TextFormat("Prayer: %s", gui_prayer_name(p->prayer)),
+                    ox, oy, 10, GUI_TEXT_CYAN);
+    oy += lh + 6;
+
+    /* separator */
+    DrawLine(ox, oy, ox + bar_w, oy, GUI_BORDER);
+    oy += 8;
+
+    /* consumables */
+    gui_text_shadow(TextFormat("Brews: %d   Restores: %d", p->brew_doses, p->restore_doses),
+                    ox, oy, 10, GUI_TEXT_WHITE);
+    oy += lh;
+    gui_text_shadow(TextFormat("Bastion: %d  Stamina: %d",
+                    p->combat_potion_doses, p->ranged_potion_doses),
+                    ox, oy, 10, GUI_TEXT_WHITE);
+}
+
+/* ======================================================================== */
 /* main GUI draw (dispatches to active tab)                                  */
 /* ======================================================================== */
 
@@ -1771,7 +1882,7 @@ static void gui_draw(GuiState* gs, Player* p) {
         case GUI_TAB_EQUIPMENT: gui_draw_equipment(gs, p); break;
         case GUI_TAB_PRAYER:    gui_draw_prayer(gs, p);    break;
         case GUI_TAB_SPELLBOOK: gui_draw_spellbook(gs, p); break;
-        case GUI_TAB_STATS:     /* empty tab */ break;
+        case GUI_TAB_STATS:     gui_draw_stats(gs, p);  break;
         case GUI_TAB_QUESTS:    /* empty tab */ break;
         default: break;
     }

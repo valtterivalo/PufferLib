@@ -740,6 +740,12 @@ typedef struct {
 
     // Previous tick HP percent for reward shaping (premature/wasted eat checks)
     float prev_hp_percent;
+
+    // GUI stats panel fields (synced from encounter state each render tick)
+    int gui_max_hit;
+    int gui_attack_speed;
+    int gui_attack_range;
+    int gui_strength_bonus;
 } Player;
 
 // ============================================================================
