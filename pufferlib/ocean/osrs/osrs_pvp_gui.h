@@ -254,6 +254,11 @@ typedef struct {
     Texture2D orb_frame;           /* 1071: minimap orb frame */
     int chrome_loaded;
 
+    /* skill icons for stats tab (25x25 from RuneLite skill_icons) */
+    #define GUI_NUM_SKILL_ICONS 7
+    Texture2D skill_icons[7];  /* attack, strength, defence, ranged, prayer, magic, hitpoints */
+    int skill_icons_loaded;
+
     /* item sprites: keyed by OSRS item ID (from data/sprites/items/{id}.png) */
     #define GUI_MAX_ITEM_SPRITES 256
     int item_sprite_ids[GUI_MAX_ITEM_SPRITES];     /* OSRS item ID, 0 = empty */
@@ -339,7 +344,7 @@ static void gui_load_sprites(GuiState* gs) {
     /* tab icons: mapped to GuiTab enum order (7 tabs) */
     static const char* tab_files[] = {
         "data/sprites/gui/tab_combat.png",    /* GUI_TAB_COMBAT */
-        "data/sprites/gui/898.png",           /* GUI_TAB_STATS */
+        "data/sprites/gui/tab_stats.png",     /* GUI_TAB_STATS */
         "data/sprites/gui/tab_quests.png",    /* GUI_TAB_QUESTS */
         "data/sprites/gui/tab_inventory.png", /* GUI_TAB_INVENTORY */
         "data/sprites/gui/tab_equipment.png", /* GUI_TAB_EQUIPMENT */
@@ -348,6 +353,21 @@ static void gui_load_sprites(GuiState* gs) {
     };
     for (int i = 0; i < GUI_TAB_COUNT; i++) {
         ok &= gui_try_load(&gs->tab_icons[i], tab_files[i]);
+    }
+
+    /* skill icons for stats tab (OSRS skill_icons from RuneLite resources) */
+    static const char* skill_icon_files[] = {
+        "data/sprites/gui/skill_attack.png",
+        "data/sprites/gui/skill_strength.png",
+        "data/sprites/gui/skill_defence.png",
+        "data/sprites/gui/skill_ranged.png",
+        "data/sprites/gui/skill_prayer.png",
+        "data/sprites/gui/skill_magic.png",
+        "data/sprites/gui/skill_hitpoints.png",
+    };
+    gs->skill_icons_loaded = 1;
+    for (int i = 0; i < 7; i++) {
+        gs->skill_icons_loaded &= gui_try_load(&gs->skill_icons[i], skill_icon_files[i]);
     }
 
     /* prayer icons: enabled (base sprite) and disabled (+20 for base range).
@@ -1725,18 +1745,63 @@ static void gui_draw_spellbook(GuiState* gs, Player* p) {
 }
 
 /* ======================================================================== */
-/* stats panel — player combat stats for debugging                           */
+/* stats panel — OSRS-authentic skills tab layout                            */
+/*                                                                           */
+/* matches the real OSRS fixed-mode skills interface: 3-column grid,         */
+/* skill icon on left, current level center, base level right.               */
+/* only combat skills are shown; non-combat rows are empty.                  */
+/* below the skill grid: combat info (max hit, gear, prayer, consumables).   */
+/*                                                                           */
+/* OSRS skill grid order (3 columns, 8 rows):                                */
+/*   col 0: Attack, Strength, Defence, Ranged, Prayer, Magic, RC, Constr    */
+/*   col 1: Hitpoints, Agility, Herblore, Thieving, Crafting, Fletch, ...   */
+/*   col 2: Mining, Smithing, Fishing, Cooking, Firemaking, WC, ...          */
+/* we show rows 0-5 (the 7 combat skills) and leave col 2 empty.            */
 /* ======================================================================== */
 
-static const char* gui_prayer_name(OverheadPrayer p) {
-    switch (p) {
-        case PRAYER_PROTECT_MAGIC:  return "Protect Magic";
-        case PRAYER_PROTECT_RANGED: return "Protect Ranged";
-        case PRAYER_PROTECT_MELEE:  return "Protect Melee";
-        case PRAYER_SMITE:          return "Smite";
-        case PRAYER_REDEMPTION:     return "Redemption";
-        default:                    return "None";
+/* skill icon indices (matches skill_icon_files load order) */
+#define SKILL_ICON_ATTACK    0
+#define SKILL_ICON_STRENGTH  1
+#define SKILL_ICON_DEFENCE   2
+#define SKILL_ICON_RANGED    3
+#define SKILL_ICON_PRAYER    4
+#define SKILL_ICON_MAGIC     5
+#define SKILL_ICON_HITPOINTS 6
+
+/* draw one skill cell: icon + current level (left) + base level (right).
+   OSRS style: yellow if current == base, green if boosted, red if drained.
+   cell dimensions match the real client scaled to our panel width. */
+static void gui_draw_skill_cell(GuiState* gs, int cx, int cy, int cw, int ch,
+                                 int icon_idx, int current, int base) {
+    /* dark cell background with border (matches OSRS skill cell) */
+    DrawRectangle(cx, cy, cw, ch, (Color){30, 27, 20, 255});
+    DrawRectangleLines(cx, cy, cw, ch, (Color){60, 54, 42, 255});
+
+    /* skill icon (scaled to fit cell height with padding) */
+    int icon_sz = ch - 6;
+    int icon_x = cx + 3;
+    int icon_y = cy + 3;
+    if (gs->skill_icons_loaded && icon_idx >= 0 && icon_idx < 7 &&
+        gs->skill_icons[icon_idx].id != 0) {
+        Texture2D tex = gs->skill_icons[icon_idx];
+        Rectangle src = { 0, 0, (float)tex.width, (float)tex.height };
+        Rectangle dst = { (float)icon_x, (float)icon_y, (float)icon_sz, (float)icon_sz };
+        DrawTexturePro(tex, src, dst, (Vector2){0,0}, 0.0f, WHITE);
     }
+
+    /* level color: yellow=normal, green=boosted, red=drained */
+    Color lvl_color = GUI_TEXT_YELLOW;
+    if (current > base) lvl_color = GUI_TEXT_GREEN;
+    else if (current < base) lvl_color = (Color){255, 60, 60, 255};
+
+    /* current level (left side, after icon) */
+    int text_y = cy + ch / 2 - 5;
+    gui_text_shadow(TextFormat("%d", current), icon_x + icon_sz + 4, text_y, 10, lvl_color);
+
+    /* base level (right-aligned) */
+    const char* base_str = TextFormat("%d", base);
+    int bw = MeasureText(base_str, 10);
+    gui_text_shadow(base_str, cx + cw - bw - 4, text_y, 10, lvl_color);
 }
 
 static const char* gui_gear_name(GearSet g) {
@@ -1750,89 +1815,98 @@ static const char* gui_gear_name(GearSet g) {
     }
 }
 
+static const char* gui_prayer_name(OverheadPrayer pr) {
+    switch (pr) {
+        case PRAYER_PROTECT_MAGIC:  return "Protect Magic";
+        case PRAYER_PROTECT_RANGED: return "Protect Ranged";
+        case PRAYER_PROTECT_MELEE:  return "Protect Melee";
+        case PRAYER_SMITE:          return "Smite";
+        case PRAYER_REDEMPTION:     return "Redemption";
+        default:                    return "None";
+    }
+}
+
 static void gui_draw_stats(GuiState* gs, Player* p) {
-    int ox = gs->panel_x + 10;
-    int oy = gui_content_y(gs) + 8;
-    int lh = 18;  /* line height */
+    int ox = gs->panel_x + 4;
+    int oy = gui_content_y(gs) + 4;
 
-    /* HP bar */
-    int bar_w = gs->panel_w - 20;
-    int bar_h = 16;
-    float hp_pct = (p->base_hitpoints > 0) ?
-        (float)p->current_hitpoints / (float)p->base_hitpoints : 0.0f;
-    if (hp_pct > 1.0f) hp_pct = 1.0f;
-    DrawRectangle(ox, oy, bar_w, bar_h, GUI_HP_RED);
-    DrawRectangle(ox, oy, (int)(bar_w * hp_pct), bar_h, GUI_HP_GREEN);
-    DrawRectangleLines(ox, oy, bar_w, bar_h, GUI_BORDER);
-    gui_text_shadow(TextFormat("HP: %d / %d", p->current_hitpoints, p->base_hitpoints),
-                    ox + 4, oy + 2, 10, GUI_TEXT_WHITE);
-    oy += bar_h + 6;
+    /* OSRS skill grid: 3 columns, 6 visible rows for combat skills.
+       cell dimensions scale to panel width. OSRS original: 62x32 in 190px panel. */
+    int gap = 2;
+    int cols = 3;
+    int cw = (gs->panel_w - 8 - gap * (cols - 1)) / cols;
+    int ch = 32;
 
-    /* prayer bar */
-    float pray_pct = (p->base_prayer > 0) ?
-        (float)p->current_prayer / (float)p->base_prayer : 0.0f;
-    if (pray_pct > 1.0f) pray_pct = 1.0f;
-    DrawRectangle(ox, oy, bar_w, bar_h, GUI_SPEC_DARK);
-    DrawRectangle(ox, oy, (int)(bar_w * pray_pct), bar_h, GUI_TEXT_CYAN);
-    DrawRectangleLines(ox, oy, bar_w, bar_h, GUI_BORDER);
-    gui_text_shadow(TextFormat("Prayer: %d / %d", p->current_prayer, p->base_prayer),
-                    ox + 4, oy + 2, 10, GUI_TEXT_WHITE);
-    oy += bar_h + 10;
+    /* OSRS grid: row x col → (icon_idx, current, base) or -1 for empty.
+       col 0: attack, strength, defence, ranged, prayer, magic
+       col 1: hitpoints, then empty
+       col 2: empty (non-combat) */
+    int grid_icon[6][3];
+    int grid_cur[6][3];
+    int grid_base[6][3];
+    memset(grid_icon, -1, sizeof(grid_icon));
+    memset(grid_cur, 0, sizeof(grid_cur));
+    memset(grid_base, 0, sizeof(grid_base));
 
-    /* stat lines */
-    gui_text_shadow(TextFormat("Ranged: %d / %d", p->current_ranged, p->base_ranged),
-                    ox, oy, 10, (p->current_ranged < p->base_ranged) ? GUI_TEXT_RED :
-                                (p->current_ranged > p->base_ranged) ? GUI_TEXT_GREEN : GUI_TEXT_YELLOW);
-    oy += lh;
-    gui_text_shadow(TextFormat("Magic:  %d / %d", p->current_magic, p->base_magic),
-                    ox, oy, 10, (p->current_magic < p->base_magic) ? GUI_TEXT_RED :
-                                (p->current_magic > p->base_magic) ? GUI_TEXT_GREEN : GUI_TEXT_YELLOW);
-    oy += lh;
-    gui_text_shadow(TextFormat("Attack: %d / %d", p->current_attack, p->base_attack),
-                    ox, oy, 10, (p->current_attack < p->base_attack) ? GUI_TEXT_RED :
-                                (p->current_attack > p->base_attack) ? GUI_TEXT_GREEN : GUI_TEXT_YELLOW);
-    oy += lh;
-    gui_text_shadow(TextFormat("Str:    %d / %d", p->current_strength, p->base_strength),
-                    ox, oy, 10, (p->current_strength < p->base_strength) ? GUI_TEXT_RED :
-                                (p->current_strength > p->base_strength) ? GUI_TEXT_GREEN : GUI_TEXT_YELLOW);
-    oy += lh;
-    gui_text_shadow(TextFormat("Def:    %d / %d", p->current_defence, p->base_defence),
-                    ox, oy, 10, (p->current_defence < p->base_defence) ? GUI_TEXT_RED :
-                                (p->current_defence > p->base_defence) ? GUI_TEXT_GREEN : GUI_TEXT_YELLOW);
-    oy += lh + 6;
+    /* col 0: combat stats in OSRS order */
+    grid_icon[0][0] = SKILL_ICON_ATTACK;    grid_cur[0][0] = p->current_attack;    grid_base[0][0] = p->base_attack;
+    grid_icon[1][0] = SKILL_ICON_STRENGTH;  grid_cur[1][0] = p->current_strength;  grid_base[1][0] = p->base_strength;
+    grid_icon[2][0] = SKILL_ICON_DEFENCE;   grid_cur[2][0] = p->current_defence;   grid_base[2][0] = p->base_defence;
+    grid_icon[3][0] = SKILL_ICON_RANGED;    grid_cur[3][0] = p->current_ranged;    grid_base[3][0] = p->base_ranged;
+    grid_icon[4][0] = SKILL_ICON_PRAYER;    grid_cur[4][0] = p->current_prayer;    grid_base[4][0] = p->base_prayer;
+    grid_icon[5][0] = SKILL_ICON_MAGIC;     grid_cur[5][0] = p->current_magic;     grid_base[5][0] = p->base_magic;
+
+    /* col 1: hitpoints at row 0, rest stays -1 (empty) */
+    grid_icon[0][1] = SKILL_ICON_HITPOINTS; grid_cur[0][1] = p->current_hitpoints; grid_base[0][1] = p->base_hitpoints;
+
+    /* draw the grid */
+    for (int r = 0; r < 6; r++) {
+        for (int c = 0; c < cols; c++) {
+            int cx = ox + c * (cw + gap);
+            int cy = oy + r * (ch + gap);
+            if (grid_icon[r][c] >= 0) {
+                gui_draw_skill_cell(gs, cx, cy, cw, ch,
+                    grid_icon[r][c], grid_cur[r][c], grid_base[r][c]);
+            } else {
+                /* empty cell: just dark bg */
+                DrawRectangle(cx, cy, cw, ch, (Color){20, 18, 14, 255});
+                DrawRectangleLines(cx, cy, cw, ch, (Color){40, 36, 28, 255});
+            }
+        }
+    }
+    oy += 6 * (ch + gap) + 6;
 
     /* separator */
+    int bar_w = gs->panel_w - 8;
     DrawLine(ox, oy, ox + bar_w, oy, GUI_BORDER);
-    oy += 8;
+    oy += 6;
 
-    /* combat info */
+    /* combat info below the skill grid */
+    int lh = 17;
     gui_text_shadow(TextFormat("Gear: %s", gui_gear_name(p->current_gear)),
-                    ox, oy, 10, GUI_TEXT_ORANGE);
+                    ox + 2, oy, 10, GUI_TEXT_ORANGE);
     oy += lh;
-    gui_text_shadow(TextFormat("Max Hit: %d", p->gui_max_hit),
-                    ox, oy, 10, GUI_TEXT_YELLOW);
+    gui_text_shadow(TextFormat("Max Hit: %d   Str Bonus: %d", p->gui_max_hit, p->gui_strength_bonus),
+                    ox + 2, oy, 10, GUI_TEXT_YELLOW);
     oy += lh;
-    gui_text_shadow(TextFormat("Str Bonus: %d", p->gui_strength_bonus),
-                    ox, oy, 10, GUI_TEXT_WHITE);
-    oy += lh;
-    gui_text_shadow(TextFormat("Atk Speed: %d  Range: %d", p->gui_attack_speed, p->gui_attack_range),
-                    ox, oy, 10, GUI_TEXT_WHITE);
+    gui_text_shadow(TextFormat("Speed: %d   Range: %d", p->gui_attack_speed, p->gui_attack_range),
+                    ox + 2, oy, 10, GUI_TEXT_WHITE);
     oy += lh;
     gui_text_shadow(TextFormat("Prayer: %s", gui_prayer_name(p->prayer)),
-                    ox, oy, 10, GUI_TEXT_CYAN);
-    oy += lh + 6;
+                    ox + 2, oy, 10, GUI_TEXT_CYAN);
+    oy += lh + 4;
 
     /* separator */
     DrawLine(ox, oy, ox + bar_w, oy, GUI_BORDER);
-    oy += 8;
+    oy += 6;
 
     /* consumables */
-    gui_text_shadow(TextFormat("Brews: %d   Restores: %d", p->brew_doses, p->restore_doses),
-                    ox, oy, 10, GUI_TEXT_WHITE);
+    gui_text_shadow(TextFormat("Brews: %d  Restores: %d", p->brew_doses, p->restore_doses),
+                    ox + 2, oy, 10, GUI_TEXT_WHITE);
     oy += lh;
     gui_text_shadow(TextFormat("Bastion: %d  Stamina: %d",
                     p->combat_potion_doses, p->ranged_potion_doses),
-                    ox, oy, 10, GUI_TEXT_WHITE);
+                    ox + 2, oy, 10, GUI_TEXT_WHITE);
 }
 
 /* ======================================================================== */
