@@ -188,6 +188,7 @@ typedef struct {
     RolloutBuf train_rollouts;
     EnvBuf env;
     TrainGraph train_buf;
+    PufTensor old_values_puf;
     PufTensor advantages_puf;
     PufTensor act_sizes_puf;
     PufTensor losses_puf;
@@ -471,6 +472,8 @@ void train_impl(PuffeRL& pufferl) {
     mtl_fill_f32((float*)rollouts.ratio.bytes, 1.0f,
                  (int)rollouts.ratio.numel(), train_stream);
 
+    // old_values = values.clone()
+    puf_copy(pufferl.old_values_puf, rollouts.values, train_stream);
     // Metal 4 visibility boundary before minibatch loop consumes transposed rollouts.
     mtl_barrier((MetalStream*)train_stream);
 
@@ -516,6 +519,7 @@ void train_impl(PuffeRL& pufferl) {
         puf_zero(pufferl.train_buf.mb_state, s);
         {
             RolloutBuf sel_src = rollouts;
+            sel_src.values = pufferl.old_values_puf;
             mtl_select_copy(sel_src, pufferl.train_buf,
                 (const int64_t*)pufferl.prio_bufs.idx.bytes,
                 (const float*)pufferl.advantages_puf.bytes,
@@ -565,11 +569,6 @@ void train_impl(PuffeRL& pufferl) {
             pufferl.has_mask ? nullptr : (const float*)pufferl.ones_mask.bytes,  // nullptr = mask embedded in obs
             0,  // ext_mask_stride: 0 = broadcast single row (only used when ext_mask_ptr != nullptr)
             s);
-        mtl_barrier((MetalStream*)s);
-
-        // Scatter mb_ratio and mb_newvalue back into rollout buffers (match CUDA)
-        mtl_scatter_ppo_outputs(pufferl.train_buf, rollouts,
-            (const int64_t*)pufferl.prio_bufs.idx.bytes, s);
         mtl_barrier((MetalStream*)s);
 
         // per-minibatch NaN trap: detect NaN in loss accumulator immediately
@@ -1120,7 +1119,9 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     register_rollout_buffers(pufferl->train_rollouts, alloc, total_agents, horizon, input_size, num_action_heads);
 
     // Pre-allocated train temporaries
+    pufferl->old_values_puf = {.shape = {total_agents, horizon}, .dtype_size = p};
     pufferl->advantages_puf = {.shape = {total_agents, horizon}, .dtype_size = (int)sizeof(float)};
+    alloc.reg(&pufferl->old_values_puf);
     alloc.reg(&pufferl->advantages_puf);
 
     // PPO loss buffers
