@@ -2725,6 +2725,34 @@ static void inf_render_post_tick(EncounterState* state, EncounterOverlay* ov) {
 }
 
 /* ======================================================================== */
+/* human input translator                                                    */
+/* ======================================================================== */
+
+static void inf_translate_human_input(HumanInput* hi, int* actions, EncounterState* state) {
+    for (int h = 0; h < INF_NUM_ACTION_HEADS; h++) actions[h] = 0;
+
+    encounter_translate_movement(hi, actions, INF_HEAD_MOVE,
+                                  (void*(*)(void*,int))inf_get_entity, state);
+    encounter_translate_prayer(hi, actions, INF_HEAD_PRAYER);
+    encounter_translate_target(hi, actions, INF_HEAD_TARGET);
+
+    /* gear switch */
+    if (hi->pending_gear > 0) actions[INF_HEAD_GEAR] = hi->pending_gear;
+
+    /* brew on eat head */
+    if (hi->pending_food || hi->pending_potion == POTION_BREW)
+        actions[INF_HEAD_EAT] = 1;
+
+    /* potions: 1=restore, 2=bastion, 3=stamina */
+    if (hi->pending_potion == POTION_RESTORE) actions[INF_HEAD_POTION] = 1;
+
+    /* spell selection (blood/ice barrage) */
+    if (hi->pending_spell >= 0) actions[INF_HEAD_SPELL] = hi->pending_spell;
+
+    (void)state;
+}
+
+/* ======================================================================== */
 /* encounter definition                                                      */
 /* ======================================================================== */
 
@@ -2763,15 +2791,10 @@ static const EncounterDef ENCOUNTER_INFERNO = {
     .get_tick = inf_get_tick,
     .get_winner = inf_get_winner,
 
+    .translate_human_input = inf_translate_human_input,
     .head_move = INF_HEAD_MOVE,
     .head_prayer = INF_HEAD_PRAYER,
     .head_target = INF_HEAD_TARGET,
-    .head_gear = INF_HEAD_GEAR,
-    .head_eat = INF_HEAD_EAT,
-    .head_potion = INF_HEAD_POTION,
-    .head_spell = INF_HEAD_SPELL,
-    .head_spec = -1,
-    .head_attack = -1,
 };
 
 __attribute__((constructor))

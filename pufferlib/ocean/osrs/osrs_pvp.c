@@ -353,9 +353,10 @@ static void run_visual(OsrsPvp* env, const char* encounter_name, const char* rep
             int enc_actions[16] = {0};
 
             if (rc->human_input.enabled) {
-                /* human control: translate staged clicks to encounter actions */
-                human_to_encounter_actions_generic(&rc->human_input, enc_actions,
-                                                    edef, env->encounter_state);
+                /* human control: per-encounter translator */
+                if (edef->translate_human_input)
+                    edef->translate_human_input(&rc->human_input, enc_actions,
+                                                env->encounter_state);
                 /* set encounter destination from human click for proper pathfinding.
                    attacking an NPC cancels movement (OSRS: server stops walking
                    to old dest and auto-walks toward target instead). */

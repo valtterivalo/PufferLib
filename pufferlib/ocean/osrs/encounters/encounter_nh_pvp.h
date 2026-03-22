@@ -213,17 +213,11 @@ static const EncounterDef ENCOUNTER_NH_PVP = {
     .get_tick = nh_pvp_get_tick,
     .get_winner = nh_pvp_get_winner,
 
-    /* NH PvP uses its own human_to_pvp_actions translator, not the generic one.
-       head indices set to -1 since PvP action layout doesn't map to encounter heads. */
+    /* NH PvP uses its own human_to_pvp_actions translator via the PvP code path. */
+    .translate_human_input = NULL,
     .head_move = -1,
     .head_prayer = -1,
     .head_target = -1,
-    .head_gear = -1,
-    .head_eat = -1,
-    .head_potion = -1,
-    .head_spell = -1,
-    .head_spec = -1,
-    .head_attack = -1,
 };
 
 /* auto-register on include */

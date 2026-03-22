@@ -60,6 +60,7 @@
 #include "osrs_items.h"
 #include "osrs_pathfinding.h"
 #include "osrs_combat_shared.h"
+#include "osrs_pvp_human_input_types.h"
 
 /* opaque encounter state — each encounter defines its own struct */
 typedef struct EncounterState EncounterState;
@@ -1117,6 +1118,53 @@ static void encounter_populate_inventory(
 }
 
 /* ======================================================================== */
+/* shared human input translate helpers                                      */
+/* ======================================================================== */
+
+/** translate movement: convert absolute tile to 8-directional walk action.
+    writes to actions[head_move]. head_move < 0 = skip. */
+static inline void encounter_translate_movement(HumanInput* hi, int* actions,
+                                                 int head_move,
+                                                 void* (*get_entity)(void*, int),
+                                                 void* state) {
+    if (hi->pending_move_x < 0 || hi->pending_move_y < 0 || head_move < 0) return;
+    Player* player = (Player*)get_entity(state, 0);
+    if (!player) return;
+    int dx = hi->pending_move_x - player->x;
+    int dy = hi->pending_move_y - player->y;
+    int sx = (dx > 0) ? 1 : (dx < 0) ? -1 : 0;
+    int sy = (dy > 0) ? 1 : (dy < 0) ? -1 : 0;
+    static const int DX8[9] = { 0, 0, 1, 1, 1, 0, -1, -1, -1 };
+    static const int DY8[9] = { 0, 1, 1, 0, -1, -1, -1, 0, 1 };
+    for (int m = 1; m < 9; m++) {
+        if (DX8[m] == sx && DY8[m] == sy) {
+            actions[head_move] = m;
+            break;
+        }
+    }
+}
+
+/** translate prayer: 0=no change, 1=off, 2=melee, 3=ranged, 4=magic.
+    writes to actions[head_prayer]. head_prayer < 0 = skip. */
+static inline void encounter_translate_prayer(HumanInput* hi, int* actions, int head_prayer) {
+    if (hi->pending_prayer < 0 || head_prayer < 0) return;
+    switch (hi->pending_prayer) {
+        case OVERHEAD_NONE:   actions[head_prayer] = 1; break;
+        case OVERHEAD_MELEE:  actions[head_prayer] = 2; break;
+        case OVERHEAD_RANGED: actions[head_prayer] = 3; break;
+        case OVERHEAD_MAGE:   actions[head_prayer] = 4; break;
+        default: break;
+    }
+}
+
+/** translate NPC target: 0=none, 1+=NPC index.
+    writes to actions[head_target]. head_target < 0 = skip. */
+static inline void encounter_translate_target(HumanInput* hi, int* actions, int head_target) {
+    if (hi->pending_target_idx < 0 || head_target < 0) return;
+    actions[head_target] = hi->pending_target_idx + 1;
+}
+
+/* ======================================================================== */
 /* encounter definition (vtable)                                             */
 /* ======================================================================== */
 
@@ -1161,18 +1209,16 @@ typedef struct {
     int arena_base_x, arena_base_y;
     int arena_width, arena_height;
 
-    /* named action head indices for human mode input translation.
-       set to -1 if the encounter doesn't have that action head.
-       the generic human input translator uses these instead of hardcoded indices. */
+    /* human mode input translation (per-encounter, NULL = no human mode).
+       translates semantic HumanInput intents to encounter-specific action arrays.
+       each encounter owns its own mapping since action head layouts differ. */
+    void (*translate_human_input)(struct HumanInput* hi, int* actions, EncounterState* state);
+
+    /* action head indices used by shared translate helpers and renderer.
+       set to -1 if the encounter doesn't have that action head. */
     int head_move;     /* movement (walk/run) */
     int head_prayer;   /* prayer switching */
     int head_target;   /* NPC target selection (index into NPC array) */
-    int head_gear;     /* gear/loadout switching */
-    int head_eat;      /* eat food/brew */
-    int head_potion;   /* drink potion (restore, bastion, stamina) */
-    int head_spell;    /* spell selection (blood/ice barrage) */
-    int head_spec;     /* special attack */
-    int head_attack;   /* attack style (mage/range -- zulrah) */
 
     /* render hooks (optional — NULL if not implemented).
        populates visual overlay data for the renderer. */

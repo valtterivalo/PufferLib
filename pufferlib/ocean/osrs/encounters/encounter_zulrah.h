@@ -2296,6 +2296,39 @@ static void zul_render_post_tick(EncounterState* state, EncounterOverlay* ov) {
 static int zul_get_winner(EncounterState* state) { return ((ZulrahState*)state)->winner; }
 
 /* ======================================================================== */
+/* human input translator                                                    */
+/* ======================================================================== */
+
+static void zul_translate_human_input(HumanInput* hi, int* actions, EncounterState* state) {
+    for (int h = 0; h < ZUL_NUM_ACTION_HEADS; h++) actions[h] = 0;
+
+    encounter_translate_movement(hi, actions, ZUL_HEAD_MOVE,
+                                  (void*(*)(void*,int))zul_get_entity, state);
+    encounter_translate_prayer(hi, actions, ZUL_HEAD_PRAYER);
+
+    /* attack style: mage or range */
+    if (hi->pending_attack) {
+        if (hi->pending_spell == ATTACK_ICE || hi->pending_spell == ATTACK_BLOOD)
+            actions[ZUL_HEAD_ATTACK] = 1;  /* mage */
+        else
+            actions[ZUL_HEAD_ATTACK] = 2;  /* range */
+    }
+
+    /* food: shark on food head */
+    if (hi->pending_food) actions[ZUL_HEAD_FOOD] = 1;
+
+    /* potions: brew→food head, restore→potion 1, antivenom→potion 2 */
+    if (hi->pending_potion == POTION_BREW) actions[ZUL_HEAD_FOOD] = 1;
+    else if (hi->pending_potion == POTION_RESTORE) actions[ZUL_HEAD_POTION] = 1;
+    else if (hi->pending_potion == POTION_ANTIVENOM) actions[ZUL_HEAD_POTION] = 2;
+
+    /* spec */
+    if (hi->pending_spec) actions[ZUL_HEAD_SPEC] = 1;
+
+    (void)state;
+}
+
+/* ======================================================================== */
 /* encounter definition                                                      */
 /* ======================================================================== */
 
@@ -2328,15 +2361,10 @@ static const EncounterDef ENCOUNTER_ZULRAH = {
     .get_tick = zul_get_tick,
     .get_winner = zul_get_winner,
 
+    .translate_human_input = zul_translate_human_input,
     .head_move = ZUL_HEAD_MOVE,
     .head_prayer = ZUL_HEAD_PRAYER,
     .head_target = -1,
-    .head_gear = -1,
-    .head_eat = ZUL_HEAD_FOOD,
-    .head_potion = ZUL_HEAD_POTION,
-    .head_spell = -1,
-    .head_spec = ZUL_HEAD_SPEC,
-    .head_attack = ZUL_HEAD_ATTACK,
 };
 
 __attribute__((constructor))

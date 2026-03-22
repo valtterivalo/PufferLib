@@ -15,6 +15,16 @@ python setup.py build_osrs_inferno --force  # osrs inferno env
 
 output: `pufferlib/_C.cpython-312-darwin.so`
 
+IMPORTANT: `setup.py` builds the TRAINING .so only. the standalone visual binary
+(`osrs_pvp_visual`) is built SEPARATELY via the Makefile:
+```bash
+cd pufferlib/ocean/osrs && make visual   # rebuilds osrs_pvp_visual
+```
+if you change encounter/shared code, you MUST rebuild BOTH:
+1. `python setup.py build_osrs_inferno --force`  (training)
+2. `cd pufferlib/ocean/osrs && make visual`       (visual testing)
+testing with a stale visual binary will show none of your code changes!
+
 ## run training
 
 ```bash
@@ -24,6 +34,15 @@ python pufferl.py train osrs --replay-ratio 0.25               # multi-head envs
 python pufferl.py sweep breakout --timeout 4                  # Protein hyperparameter sweep
 python pufferl.py results breakout                            # print sweep results
 ```
+
+## visual testing (human mode)
+
+```bash
+cd pufferlib/ocean/osrs && make visual      # rebuild visual binary
+./osrs_pvp_visual --visual --encounter inferno  # run inferno in human mode
+```
+
+IMPORTANT: always rebuild the visual binary after code changes. `setup.py` does NOT rebuild it.
 
 ## config system
 
