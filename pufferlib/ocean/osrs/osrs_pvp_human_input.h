@@ -473,11 +473,15 @@ static void human_to_encounter_actions_generic(HumanInput* hi, int* actions,
     if (hi->pending_food && edef->head_eat >= 0)
         actions[edef->head_eat] = 1;
 
-    /* potion */
-    if (hi->pending_potion > 0 && edef->head_potion >= 0) {
-        if (hi->pending_potion == POTION_BREW) actions[edef->head_potion] = 1;
-        else if (hi->pending_potion == POTION_RESTORE) actions[edef->head_potion] = 2;
-        else if (hi->pending_potion == POTION_ANTIVENOM) actions[edef->head_potion] = 3;
+    /* potion: brew maps to eat head (inferno/zulrah have separate eat+potion heads),
+       restore and antivenom map to potion head actions 1 and 2 respectively. */
+    if (hi->pending_potion > 0) {
+        if (hi->pending_potion == POTION_BREW && edef->head_eat >= 0)
+            actions[edef->head_eat] = 1;
+        else if (hi->pending_potion == POTION_RESTORE && edef->head_potion >= 0)
+            actions[edef->head_potion] = 1;
+        else if (hi->pending_potion == POTION_ANTIVENOM && edef->head_potion >= 0)
+            actions[edef->head_potion] = 2;
     }
 
     /* spec */
