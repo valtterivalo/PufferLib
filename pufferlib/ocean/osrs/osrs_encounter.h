@@ -505,10 +505,49 @@ static inline int encounter_npc_step_out_from_under(
 /* callback: returns 1 if tile (x, y) is blocked for an NPC of given size */
 typedef int (*encounter_npc_blocked_fn)(void* ctx, int x, int y, int size);
 
+/** check if the leading edge tiles are clear for an NPC moving in direction (dx, dy).
+    for size>1 NPCs, OSRS checks the tiles along the leading edge that the NPC
+    sweeps through — not the full destination footprint. for diagonal moves, each
+    edge strip extends by 1 tile to cover the corner.
+    ref: InfernoTrainer Mob.ts:229-270 getXMovementTiles/getYMovementTiles.
+    is_blocked is called with size=1 for each individual edge tile. */
+static inline int encounter_npc_x_edge_clear(
+    int x, int y, int size, int dx, int dy,
+    encounter_npc_blocked_fn is_blocked, void* ctx
+) {
+    if (dx == 0) return 1;
+    int ex = (dx == 1) ? x + size : x - 1;
+    int y_start = (dy == -1) ? y - 1 : y;
+    int y_end = (dy == 1) ? y + size : y + size - 1;
+    for (int ey = y_start; ey <= y_end; ey++)
+        if (is_blocked(ctx, ex, ey, 1)) return 0;
+    return 1;
+}
+
+static inline int encounter_npc_y_edge_clear(
+    int x, int y, int size, int dx, int dy,
+    encounter_npc_blocked_fn is_blocked, void* ctx
+) {
+    if (dy == 0) return 1;
+    int ey = (dy == 1) ? y + size : y - 1;
+    int x_start = (dx == -1) ? x - 1 : x;
+    int x_end = (dx == 1) ? x + size : x + size - 1;
+    for (int ex = x_start; ex <= x_end; ex++)
+        if (is_blocked(ctx, ex, ey, 1)) return 0;
+    return 1;
+}
+
 /** greedy NPC step toward target. tries diagonal first, then x-only, then y-only.
     this is the standard OSRS NPC movement algorithm — 99.9% of NPCs use this.
+
+    for size>1 NPCs, validates movement by checking EDGE TILES the NPC sweeps
+    through, not just the destination footprint. for diagonal moves, both the
+    x-edge and y-edge must be clear (each extended by 1 tile for the corner).
+    ref: InfernoTrainer Mob.ts:160-270 movementStep + getX/YMovementTiles.
+
     corner safespot: if diagonal would land NPC on player, cancel Y component.
     ref: InfernoTrainer Mob.ts:143-146.
+
     returns 1 if moved, 0 if blocked or already at target. */
 static inline int encounter_npc_step_toward(
     int* x, int* y, int tx, int ty, int size,
@@ -532,18 +571,37 @@ static inline int encounter_npc_step_toward(
         }
     }
 
-    /* try diagonal */
-    if (dx != 0 && dy != 0) {
-        if (!is_blocked(ctx, *x + dx, *y + dy, size)) {
+    /* size-1 NPCs: simple destination check (edge tiles = destination tile) */
+    if (size <= 1) {
+        if (dx != 0 && dy != 0 && !is_blocked(ctx, *x + dx, *y + dy, 1)) {
             *x += dx; *y += dy; return 1;
         }
+        if (dx != 0 && !is_blocked(ctx, *x + dx, *y, 1)) {
+            *x += dx; return 1;
+        }
+        if (dy != 0 && !is_blocked(ctx, *x, *y + dy, 1)) {
+            *y += dy; return 1;
+        }
+        return 0;
     }
-    /* try x-only */
-    if (dx != 0 && !is_blocked(ctx, *x + dx, *y, size)) {
+
+    /* size>1 NPCs: edge-tile validation per InfernoTrainer.
+       diagonal: both x-edge AND y-edge must be clear (each extended by 1 for corner).
+       cardinal: just the leading edge (size tiles). */
+    if (dx != 0 && dy != 0) {
+        int x_clear = encounter_npc_x_edge_clear(*x, *y, size, dx, dy, is_blocked, ctx);
+        int y_clear = encounter_npc_y_edge_clear(*x, *y, size, dx, dy, is_blocked, ctx);
+        if (x_clear && y_clear) {
+            *x += dx; *y += dy; return 1;
+        }
+        /* diagonal failed — fall through to try cardinal with dy=0 edge strips */
+    }
+    /* x-only: check leading x-edge (size tiles, no diagonal extension) */
+    if (dx != 0 && encounter_npc_x_edge_clear(*x, *y, size, dx, 0, is_blocked, ctx)) {
         *x += dx; return 1;
     }
-    /* try y-only */
-    if (dy != 0 && !is_blocked(ctx, *x, *y + dy, size)) {
+    /* y-only: check leading y-edge (size tiles, no diagonal extension) */
+    if (dy != 0 && encounter_npc_y_edge_clear(*x, *y, size, 0, dy, is_blocked, ctx)) {
         *y += dy; return 1;
     }
     return 0;
