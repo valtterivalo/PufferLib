@@ -441,7 +441,7 @@ def _build_sweep_config(config: dict) -> dict:
     sweep = config.get("sweep", {})
     sweep_config = {
         "method": sweep.get("method", "Protein"),
-        "metric": config.get("base", {}).get("score_metric", "score"),
+        "metric": sweep.get("metric", config.get("base", {}).get("score_metric", "score")),
         "metric_distribution": sweep.get("metric_distribution", "linear"),
         "goal": sweep.get("goal", "maximize"),
         "downsample": int(sweep.get("downsample", 5)),
@@ -530,7 +530,7 @@ def run_trial(
 
     last_report_time = time.time()
     log_count = 0
-    score_key = config.get("base", {}).get("score_metric", "score")
+    score_key = config.get("sweep", {}).get("metric", config.get("base", {}).get("score_metric", "score"))
     min_sps = int(config.get("sweep", {}).get("min_sps", 100_000))
     downsample_points = int(config.get("sweep", {}).get("downsample", 5))
 
@@ -789,7 +789,7 @@ def run_sweep(env_name: str, config: dict, max_trials: int | None, timeout_h: fl
         {k: v for k, v in sweep_config.items() if isinstance(v, dict)}
     )))
 
-    score_key = config.get("base", {}).get("score_metric", "score")
+    score_key = config.get("sweep", {}).get("metric", config.get("base", {}).get("score_metric", "score"))
     metric_dist = sweep_config.get("metric_distribution", "linear")
     print(f"protein sweep ({env_name}, metal, in-process)")
     print(f"  metric: {score_key} ({metric_dist} distribution)")
