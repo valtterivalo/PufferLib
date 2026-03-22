@@ -998,12 +998,14 @@ static int inf_npc_blocked(void* ctx, int x, int y, int size) {
         !collision_tile_walkable(s->collision_map, 0,
             x + s->world_offset_x, y + s->world_offset_y))
         return 1;
-    /* NPC-vs-NPC collision: NPCs that don't consume space (nibblers) skip
-       this entirely — they walk through everything. for space-consuming NPCs,
+    /* NPC-vs-player and NPC-vs-NPC collision: NPCs that don't consume space
+       (nibblers) skip this entirely — they walk through everything.
+       for space-consuming NPCs, prevent stepping onto the player tile and
        check overlap with all other space-consuming NPCs.
        ref: InfernoTrainer JalNib.ts consumesSpace = null. */
     InfNPC* self = &s->npcs[mc->self_idx];
     if (INF_NPC_STATS[self->type].consumes_space) {
+        if (x == s->player.x && y == s->player.y) return 1;
         for (int i = 0; i < INF_MAX_NPCS; i++) {
             if (i == mc->self_idx) continue;
             InfNPC* other = &s->npcs[i];
@@ -1234,10 +1236,10 @@ static void inf_npc_attack(InfernoState* s, int idx) {
         return;
     }
 
-    /* check LOS for ranged/magic attackers.
+    /* check LOS for all attackers (melee uses cardinal adjacency, ranged uses ray-trace).
        blob bypass: blobs can fire through pillars after getting a scan.
        ref: InfernoTrainer JalAk.ts:152 — "Blobs can hit through LoS if they got a scan." */
-    int has_los = (stats->attack_range <= 1) || inf_npc_has_los(s, idx);
+    int has_los = inf_npc_has_los(s, idx);
     int blob_has_scan = (npc->type == INF_NPC_BLOB && npc->blob_scanned_prayer >= 0);
     if (!has_los && !blob_has_scan) return;
 

@@ -485,13 +485,6 @@ static int has_line_of_sight(const LOSBlocker* blockers, int blocker_count,
     /* self-overlap check */
     if (los_aabb_overlap(x1, y1, src_size, x2, y2, 1)) return 0;
 
-    /* melee range = adjacency only, no ray tracing */
-    if (range == 1) {
-        int adx = dx < 0 ? -dx : dx;
-        int ady = dy < 0 ? -dy : dy;
-        return (adx <= 1 && ady <= 1 && (adx + ady) > 0);
-    }
-
     /* range check */
     if (range > 0) {
         int adx = dx < 0 ? -dx : dx;
@@ -557,11 +550,29 @@ static int has_line_of_sight(const LOSBlocker* blockers, int blocker_count,
 }
 
 /* NPC LOS: for size>1 NPCs, check from target's closest point back to NPC.
- * npc is at (nx,ny) with npc_size. target is at (tx,ty) size 1. */
+ * npc is at (nx,ny) SW corner with npc_size. target is at (tx,ty) size 1.
+ * for melee (range==1): pure cardinal adjacency — no ray-trace, no pillar check.
+ * ref: osrs-sdk LineOfSight.ts:88-89 (translated to our SW-anchor, Y-up coords). */
 static int npc_has_line_of_sight(const LOSBlocker* blockers, int blocker_count,
                                   int nx, int ny, int npc_size,
                                   int tx, int ty, int range) {
-    /* find closest point on NPC footprint to the target */
+    /* melee range: player must be on a cardinal side of the NPC bounding box
+       (north/south/east/west edge tiles). diagonal corners do NOT count.
+       NPC occupies [nx, nx+s-1] x [ny, ny+s-1]. cardinal-adjacent tiles:
+         north: y = ny+s,   x in [nx, nx+s-1]
+         south: y = ny-1,   x in [nx, nx+s-1]
+         east:  x = nx+s,   y in [ny, ny+s-1]
+         west:  x = nx-1,   y in [ny, ny+s-1] */
+    if (range == 1) {
+        if (los_check_tile(blockers, blocker_count, tx, ty)) return 0;
+        if (los_aabb_overlap(nx, ny, npc_size, tx, ty, 1)) return 0;
+        int dx = tx - nx;
+        int dy = ty - ny;
+        return (dx >= 0 && dx < npc_size && (dy == npc_size || dy == -1)) ||
+               (dy >= 0 && dy < npc_size && (dx == npc_size || dx == -1));
+    }
+
+    /* ranged/magic: find closest point on NPC footprint, ray-trace */
     int cx = tx;
     if (cx < nx) cx = nx;
     if (cx >= nx + npc_size) cx = nx + npc_size - 1;
@@ -569,7 +580,6 @@ static int npc_has_line_of_sight(const LOSBlocker* blockers, int blocker_count,
     if (cy < ny) cy = ny;
     if (cy >= ny + npc_size) cy = ny + npc_size - 1;
 
-    /* trace from target to closest NPC point (reversed perspective) */
     return has_line_of_sight(blockers, blocker_count, tx, ty, cx, cy, 1, range);
 }
 

@@ -489,11 +489,72 @@ static inline int encounter_chase_attack_target(
                                      los_blockers, los_blocker_count))
         return 0;
 
-    /* out of range or blocked LOS: pathfind toward nearest NPC tile */
-    int cx = p->x < target_x ? target_x :
+    /* pathfind target selection: when in range but LOS blocked by a pillar,
+       seek nearest melee-adjacent tile around the NPC that isn't inside a blocker.
+       ref: InfernoTrainer Player.ts:469-504 seekingTiles.
+       when out of range, path toward closest NPC tile (standard OSRS behavior).
+       the per-step can_attack check (below) stops the player as soon as LOS + range. */
+    int cx, cy;
+    int dist_now = encounter_dist_to_npc(p->x, p->y, target_x, target_y, target_size);
+    if (dist_now > 0 && dist_now <= attack_range &&
+        los_blockers && los_blocker_count > 0) {
+        /* in range but no LOS — scan melee-adjacent tiles (cardinal sides of NPC).
+           NPC occupies [target_x, target_x+s-1] x [target_y, target_y+s-1].
+           adjacent tiles: N/S rows + E/W columns, excluding corners. */
+        int best_dsq = 999999;
+        cx = -1; cy = -1;
+        for (int xx = 0; xx < target_size; xx++) {
+            int px = target_x + xx;
+            /* north side: y = target_y + target_size */
+            int py = target_y + target_size;
+            if (is_walkable(ctx, px, py) &&
+                !los_check_tile(los_blockers, los_blocker_count, px, py)) {
+                int ddx = px - p->x, ddy = py - p->y;
+                int dsq = ddx * ddx + ddy * ddy;
+                if (dsq < best_dsq) { best_dsq = dsq; cx = px; cy = py; }
+            }
+            /* south side: y = target_y - 1 */
+            py = target_y - 1;
+            if (is_walkable(ctx, px, py) &&
+                !los_check_tile(los_blockers, los_blocker_count, px, py)) {
+                int ddx = px - p->x, ddy = py - p->y;
+                int dsq = ddx * ddx + ddy * ddy;
+                if (dsq < best_dsq) { best_dsq = dsq; cx = px; cy = py; }
+            }
+        }
+        for (int yy = 0; yy < target_size; yy++) {
+            int py = target_y + yy;
+            /* east side: x = target_x + target_size */
+            int px = target_x + target_size;
+            if (is_walkable(ctx, px, py) &&
+                !los_check_tile(los_blockers, los_blocker_count, px, py)) {
+                int ddx = px - p->x, ddy = py - p->y;
+                int dsq = ddx * ddx + ddy * ddy;
+                if (dsq < best_dsq) { best_dsq = dsq; cx = px; cy = py; }
+            }
+            /* west side: x = target_x - 1 */
+            px = target_x - 1;
+            if (is_walkable(ctx, px, py) &&
+                !los_check_tile(los_blockers, los_blocker_count, px, py)) {
+                int ddx = px - p->x, ddy = py - p->y;
+                int dsq = ddx * ddx + ddy * ddy;
+                if (dsq < best_dsq) { best_dsq = dsq; cx = px; cy = py; }
+            }
+        }
+        /* fallback: no unblocked adjacent tile, path toward closest NPC tile */
+        if (cx < 0) {
+            cx = p->x < target_x ? target_x :
+                 (p->x > target_x + target_size - 1 ? target_x + target_size - 1 : p->x);
+            cy = p->y < target_y ? target_y :
+                 (p->y > target_y + target_size - 1 ? target_y + target_size - 1 : p->y);
+        }
+    } else {
+        /* out of range: path toward closest NPC tile */
+        cx = p->x < target_x ? target_x :
              (p->x > target_x + target_size - 1 ? target_x + target_size - 1 : p->x);
-    int cy = p->y < target_y ? target_y :
+        cy = p->y < target_y ? target_y :
              (p->y > target_y + target_size - 1 ? target_y + target_size - 1 : p->y);
+    }
 
     int steps = 0;
     for (int step = 0; step < 2; step++) {
