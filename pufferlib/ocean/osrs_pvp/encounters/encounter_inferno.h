@@ -429,8 +429,10 @@ typedef struct {
     int jad_healer_spawned; /* jad: 1 if healers have been spawned */
     int jad_owner_idx;     /* healer: which jad this healer belongs to (-1 = none) */
 
-    /* mager resurrection state */
-    int resurrect_cooldown; /* mager: ticks until next resurrection attempt */
+    /* mager flicker state — 1-tick wind-up delay before attacking.
+       ref: InfernoTrainer JalZek.ts:248-254 — mager "flickers" for 1 tick
+       after gaining LOS, then either attacks or resurrects (10% chance). */
+    int flicker_ticks;      /* mager: >0 = in flicker wind-up, counts down to 0 */
 
     /* freeze state (ice barrage) */
     int frozen_ticks;       /* ticks remaining in ice barrage freeze */
@@ -1232,22 +1234,63 @@ static void inf_npc_attack(InfernoState* s, int idx) {
         return;
     }
 
-    /* check LOS for ranged/magic attackers */
-    if (stats->attack_range > 1 && !inf_npc_has_los(s, idx)) return;
+    /* check LOS for ranged/magic attackers.
+       blob bypass: blobs can fire through pillars after getting a scan.
+       ref: InfernoTrainer JalAk.ts:152 — "Blobs can hit through LoS if they got a scan." */
+    int has_los = (stats->attack_range <= 1) || inf_npc_has_los(s, idx);
+    int blob_has_scan = (npc->type == INF_NPC_BLOB && npc->blob_scanned_prayer >= 0);
+    if (!has_los && !blob_has_scan) return;
 
     /* compute distance to player */
     int dist = encounter_dist_to_npc(s->player.x, s->player.y,
                                       npc->x, npc->y, npc->size);
     if (dist == 0 || dist > stats->attack_range) return;
 
+    /* mager flicker: 1-tick wind-up delay before attacking when gaining LOS.
+       ref: InfernoTrainer JalZek.ts:247-256 — on LOS gain, set flicker for 1 tick.
+       resolution (lines 192-223): 10% chance to resurrect INSTEAD of attacking
+       (only on waves before Zuk, and only if dead mobs exist).
+       resurrection replaces the attack for that cycle; attack_timer resets normally. */
+    if (npc->type == INF_NPC_MAGER && has_los && dist > 0) {
+        if (npc->flicker_ticks == 0) {
+            /* enter flicker: 1-tick delay before actual attack */
+            npc->flicker_ticks = 1;
+            npc->attack_timer = 1;
+            return;
+        }
+        /* flicker resolving — check resurrect before falling through to attack */
+        npc->flicker_ticks = 0;
+        if (s->wave < 68 && encounter_rand_int(&s->rng_state, 10) == 0 &&
+            s->dead_mob_count > 0) {
+            /* resurrect a dead mob instead of attacking */
+            int di = encounter_rand_int(&s->rng_state, s->dead_mob_count);
+            InfDeadMob* dm = &s->dead_mobs[di];
+            int slot = inf_find_free_npc(s);
+            if (slot >= 0) {
+                int rx = npc->x + encounter_rand_int(&s->rng_state, 3) - 1;
+                int ry = npc->y + encounter_rand_int(&s->rng_state, 3) - 1;
+                inf_init_npc(s, slot, dm->type, rx, ry);
+                s->npcs[slot].hp = dm->hp;
+                s->npcs[slot].max_hp = dm->max_hp;
+                s->dead_mobs[di] = s->dead_mobs[s->dead_mob_count - 1];
+                s->dead_mob_count--;
+            }
+            npc->attacked_this_tick = 1;
+            npc->attack_timer = stats->attack_speed;
+            return;
+        }
+        /* 90% (or no dead mobs): fall through to normal attack */
+    }
+
     /* blob prayer reading: 2-phase attack with attack_speed = 3.
-       scan tick: read player prayer, set timer, return (shows scan animation).
-       fire tick: determine style from scanned prayer, fall through to common attack.
+       scan tick: requires LOS. read player prayer, set timer, return.
+       fire tick: does NOT require LOS — bypasses pillar cover.
        total cycle = 6 ticks (3 scan + 3 cooldown).
        ref: InfernoTrainer JalAk.ts attackIfPossible() */
     if (npc->type == INF_NPC_BLOB) {
         if (npc->blob_scanned_prayer < 0) {
-            /* no pending scan → start scan phase */
+            /* no pending scan → start scan phase (requires LOS) */
+            if (!has_los) return;
             npc->blob_scanned_prayer = (int)s->active_prayer;
             npc->attacked_this_tick = 1;  /* triggers scan animation */
             npc->attack_timer = stats->attack_speed;  /* 3 */
@@ -1396,44 +1439,6 @@ static void inf_npc_attack(InfernoState* s, int idx) {
 }
 
 /* ======================================================================== */
-/* NPC AI: mager resurrection                                                */
-/* ======================================================================== */
-
-/* mager resurrects dead mobs: 10% chance per attack, 8-tick cooldown.
-   only on waves 1-68 (indices 0-67), NOT during Zuk wave. */
-static void inf_mager_resurrect(InfernoState* s, int idx) {
-    InfNPC* npc = &s->npcs[idx];
-    if (npc->type != INF_NPC_MAGER || !npc->active) return;
-    if (s->wave >= 68) return;  /* no resurrection during Zuk wave */
-    if (npc->resurrect_cooldown > 0) { npc->resurrect_cooldown--; return; }
-    if (s->dead_mob_count == 0) return;
-
-    /* 10% chance per attack tick */
-    if (encounter_rand_int(&s->rng_state, 10) != 0) return;
-
-    /* pick a random dead mob */
-    int di = encounter_rand_int(&s->rng_state, s->dead_mob_count);
-    InfDeadMob* dm = &s->dead_mobs[di];
-
-    int slot = inf_find_free_npc(s);
-    if (slot < 0) return;
-
-    /* spawn near mager */
-    int rx = npc->x + encounter_rand_int(&s->rng_state, 3) - 1;
-    int ry = npc->y + encounter_rand_int(&s->rng_state, 3) - 1;
-    inf_init_npc(s, slot, dm->type, rx, ry);
-    s->npcs[slot].hp = dm->hp;      /* 50% of max HP */
-    s->npcs[slot].max_hp = dm->max_hp;
-
-    /* remove from dead store (swap with last) */
-    s->dead_mobs[di] = s->dead_mobs[s->dead_mob_count - 1];
-    s->dead_mob_count--;
-
-    /* 8-tick cooldown */
-    npc->resurrect_cooldown = 8;
-}
-
-/* ======================================================================== */
 /* NPC AI: jad healer spawning                                               */
 /* ======================================================================== */
 
@@ -1578,10 +1583,6 @@ static void inf_tick_npcs(InfernoState* s) {
 
         inf_npc_move(s, i);
         inf_npc_attack(s, i);
-
-        /* mager resurrection */
-        if (s->npcs[i].type == INF_NPC_MAGER)
-            inf_mager_resurrect(s, i);
 
         /* jad healer spawning */
         if (s->npcs[i].type == INF_NPC_JAD)
