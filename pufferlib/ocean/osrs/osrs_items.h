@@ -872,7 +872,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
     // --- tier 2 spec ---
     [ITEM_TOXIC_BLOWPIPE] = {
         .item_id = 12926, .name = "Toxic blowpipe", .slot = SLOT_WEAPON,
-        .attack_speed = 3, .attack_range = 5,
+        .attack_speed = 2, .attack_range = 5,  /* rapid style (base 3, -1 for rapid) */
         .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
         .attack_magic = 0, .attack_ranged = 30,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
