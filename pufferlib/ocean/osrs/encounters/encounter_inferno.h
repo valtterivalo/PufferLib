@@ -1048,19 +1048,7 @@ static void inf_npc_move(InfernoState* s, int idx) {
        ref: InfernoTrainer Unit.ts canMove() — applies to melee NPCs too.
        melee NPCs with LOS stop and wait for the player to come into melee range. */
     if (npc->type != INF_NPC_NIBBLER) {
-        int los = inf_npc_has_los(s, idx);
-        if (npc->type == INF_NPC_BLOB_MELEE) {
-            const InfNPCStats* st = &INF_NPC_STATS[npc->type];
-            int dx = s->player.x - npc->x;
-            int dy = s->player.y - npc->y;
-            int dist = encounter_dist_to_npc(s->player.x, s->player.y,
-                                              npc->x, npc->y, npc->size);
-            printf("[BLOB_MELEE idx=%d] pos=(%d,%d) player=(%d,%d) dx=%d dy=%d "
-                   "dist=%d size=%d range=%d los=%d\n",
-                   idx, npc->x, npc->y, s->player.x, s->player.y,
-                   dx, dy, dist, npc->size, st->attack_range, los);
-        }
-        if (los) return;
+        if (inf_npc_has_los(s, idx)) return;
     }
 
     /* target selection */
@@ -1697,11 +1685,6 @@ static void inf_apply_npc_death(InfernoState* s, int npc_idx) {
             int slot = inf_find_free_npc(s);
             if (slot < 0) break;
             inf_init_npc(s, slot, split_types[sp], npc->x + split_dx[sp], npc->y + split_dy[sp]);
-            /* if split spawns on the player tile, shuffle it off immediately */
-            encounter_npc_step_out_from_under(
-                &s->npcs[slot].x, &s->npcs[slot].y, s->npcs[slot].size,
-                s->player.x, s->player.y,
-                inf_tile_walkable, s, &s->rng_state);
         }
     } else {
         inf_store_dead_mob(s, npc);
