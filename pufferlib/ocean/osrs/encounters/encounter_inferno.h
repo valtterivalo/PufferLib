@@ -784,10 +784,14 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
 
     /* player */
     s->player.entity_type = ENTITY_PLAYER;
-    s->player.base_hitpoints = 99;
-    s->player.current_hitpoints = 99;
-    s->player.base_prayer = 99;
-    s->player.current_prayer = 99;
+    s->player.base_attack = 99;     s->player.current_attack = 99;
+    s->player.base_strength = 99;   s->player.current_strength = 99;
+    s->player.base_defence = 99;    s->player.current_defence = 99;
+    s->player.base_ranged = 99;     s->player.current_ranged = 99;
+    s->player.base_magic = 99;      s->player.current_magic = 99;
+    s->player.base_hitpoints = 99;  s->player.current_hitpoints = 99;
+    s->player.base_prayer = 99;     s->player.current_prayer = 99;
+    s->player.special_energy = 100;
     /* start in mage gear (kodai + crystal shield + ancestral) */
     s->weapon_set = INF_GEAR_MAGE;
     s->armor_tank = 0;
