@@ -160,7 +160,7 @@ static const InfNPCStats INF_NPC_STATS[INF_NUM_NPC_TYPES] = {
         .melee_att_bonus = 0, .range_att_bonus = 25, .magic_att_bonus = 0,
         .melee_str_bonus = 0, .ranged_str_bonus = 30, .magic_base_dmg = 0, .magic_dmg_pct = 0,
         .stab_def = 30, .slash_def = 30, .crush_def = 30, .magic_def_bonus = -20, .ranged_def_bonus = 45,
-        .stun_on_spawn = 0, .can_move = 1 },
+        .stun_on_spawn = 1, .can_move = 1 },
 
     /* BLOB (JalAk): prayer reader, can melee if close. computed max hit = 29.
        attack_speed = 3: InfernoTrainer JalAk.ts — "6 tick cycle = scan exits early,
@@ -171,7 +171,7 @@ static const InfNPCStats INF_NPC_STATS[INF_NUM_NPC_TYPES] = {
         .melee_att_bonus = 0, .range_att_bonus = 40, .magic_att_bonus = 45,
         .melee_str_bonus = 45, .ranged_str_bonus = 45, .magic_base_dmg = 29, .magic_dmg_pct = 100,
         .stab_def = 25, .slash_def = 25, .crush_def = 25, .magic_def_bonus = 25, .ranged_def_bonus = 25,
-        .stun_on_spawn = 0, .can_move = 1 },
+        .stun_on_spawn = 1, .can_move = 1 },
 
     /* BLOB_MELEE (JalAkRekKet): melee split. computed max hit = 18 */
     [INF_NPC_BLOB_MELEE] = { .hp = 15, .attack_speed = 4, .attack_range = 1, .size = 1,
@@ -207,8 +207,8 @@ static const InfNPCStats INF_NPC_STATS[INF_NUM_NPC_TYPES] = {
         .att_level = 210, .str_level = 290, .def_level = 120, .range_level = 220, .magic_level = 120,
         .melee_att_bonus = 0, .range_att_bonus = 0, .magic_att_bonus = 0,
         .melee_str_bonus = 40, .ranged_str_bonus = 0, .magic_base_dmg = 0, .magic_dmg_pct = 0,
-        .stab_def = 65, .slash_def = 65, .crush_def = 65, .magic_def_bonus = 30, .ranged_def_bonus = 50,
-        .stun_on_spawn = 0, .can_move = 1 },
+        .stab_def = 65, .slash_def = 65, .crush_def = 65, .magic_def_bonus = 30, .ranged_def_bonus = 5,
+        .stun_on_spawn = 1, .can_move = 1 },
 
     /* RANGER (JalXil): ranged, can melee if close. computed max hit = 46 */
     [INF_NPC_RANGER] = { .hp = 125, .attack_speed = 4, .attack_range = 15, .size = 3,
@@ -217,7 +217,7 @@ static const InfNPCStats INF_NPC_STATS[INF_NUM_NPC_TYPES] = {
         .melee_att_bonus = 0, .range_att_bonus = 40, .magic_att_bonus = 0,
         .melee_str_bonus = 0, .ranged_str_bonus = 50, .magic_base_dmg = 0, .magic_dmg_pct = 0,
         .stab_def = 0, .slash_def = 0, .crush_def = 0, .magic_def_bonus = 0, .ranged_def_bonus = 0,
-        .stun_on_spawn = 0, .can_move = 1 },
+        .stun_on_spawn = 1, .can_move = 1 },
 
     /* MAGER (JalZek): magic, resurrects dead mobs, can melee. computed max hit = 70 */
     [INF_NPC_MAGER] = { .hp = 220, .attack_speed = 4, .attack_range = 15, .size = 4,
@@ -226,7 +226,7 @@ static const InfNPCStats INF_NPC_STATS[INF_NUM_NPC_TYPES] = {
         .melee_att_bonus = 0, .range_att_bonus = 0, .magic_att_bonus = 80,
         .melee_str_bonus = 0, .ranged_str_bonus = 0, .magic_base_dmg = 70, .magic_dmg_pct = 100,
         .stab_def = 0, .slash_def = 0, .crush_def = 0, .magic_def_bonus = 0, .ranged_def_bonus = 0,
-        .stun_on_spawn = 0, .can_move = 1 },
+        .stun_on_spawn = 1, .can_move = 1 },
 
     /* JAD (JalTokJad): 50/50 range/mage. wiki max hit = 113. formula gives 231 ranged
        (due to very high range level + bonus), capped to wiki value. */
@@ -237,7 +237,7 @@ static const InfNPCStats INF_NPC_STATS[INF_NUM_NPC_TYPES] = {
         .melee_str_bonus = 0, .ranged_str_bonus = 80, .magic_base_dmg = 113, .magic_dmg_pct = 100,
         .stab_def = 0, .slash_def = 0, .crush_def = 0, .magic_def_bonus = 0, .ranged_def_bonus = 0,
         .max_hit_cap = 113,
-        .stun_on_spawn = 0, .can_move = 1 },
+        .stun_on_spawn = 1, .can_move = 1 },
 
     /* ZUK (TzKalZuk): typeless attacks, wiki max hit = 148 */
     [INF_NPC_ZUK] = { .hp = 1200, .attack_speed = 10, .attack_range = 99, .size = 7,
@@ -255,7 +255,7 @@ static const InfNPCStats INF_NPC_STATS[INF_NUM_NPC_TYPES] = {
         .melee_att_bonus = 0, .range_att_bonus = 0, .magic_att_bonus = 0,
         .melee_str_bonus = 0, .ranged_str_bonus = 0, .magic_base_dmg = 0, .magic_dmg_pct = 0,
         .stab_def = 0, .slash_def = 0, .crush_def = 0, .magic_def_bonus = 130, .ranged_def_bonus = 0,
-        .stun_on_spawn = 0, .can_move = 1 },
+        .stun_on_spawn = 1, .can_move = 1 },
 
     /* HEALER_ZUK (JalMejJak): AOE magic sparks, cannot move */
     [INF_NPC_HEALER_ZUK] = { .hp = 75, .attack_speed = 4, .attack_range = 99, .size = 1,
@@ -264,7 +264,7 @@ static const InfNPCStats INF_NPC_STATS[INF_NUM_NPC_TYPES] = {
         .melee_att_bonus = 0, .range_att_bonus = 0, .magic_att_bonus = 0,
         .melee_str_bonus = 0, .ranged_str_bonus = 0, .magic_base_dmg = 24, .magic_dmg_pct = 100,
         .stab_def = 0, .slash_def = 0, .crush_def = 0, .magic_def_bonus = 0, .ranged_def_bonus = 0,
-        .stun_on_spawn = 0, .can_move = 0 },
+        .stun_on_spawn = 1, .can_move = 0 },
 
     /* ZUK_SHIELD: no attacks, oscillates left-right */
     [INF_NPC_ZUK_SHIELD] = { .hp = 600, .attack_speed = 0, .attack_range = 0, .size = 5,
@@ -1309,8 +1309,10 @@ static void inf_npc_attack(InfernoState* s, int idx) {
         return;
     }
 
-    /* melee switchover for ranger/mager: when close */
-    if (stats->can_melee && dist == 1) {
+    /* melee switchover for ranger/mager: 50% chance when adjacent.
+       ref: InfernoTrainer Mob.ts:340 — Random.get() < 0.5 */
+    if (stats->can_melee && dist == 1 &&
+        encounter_rand_int(&s->rng_state, 2) == 0) {
         actual_style = ATTACK_STYLE_MELEE;
     }
 
@@ -1629,13 +1631,18 @@ static void inf_apply_npc_death(InfernoState* s, int npc_idx) {
     npc->death_ticks = 2;
 
     if (npc->type == INF_NPC_BLOB) {
+        /* InfernoTrainer JalAk.ts removedFromWorld(): Ket at blob loc,
+           Xil at (x+1, y-1), Mej at (x+2, y-2) — diagonal SE layout.
+           affects AoE barrage catch patterns vs old horizontal layout. */
         InfNPCType split_types[3] = {
             INF_NPC_BLOB_MELEE, INF_NPC_BLOB_RANGE, INF_NPC_BLOB_MAGE
         };
+        static const int split_dx[3] = { 0, 1, 2 };
+        static const int split_dy[3] = { 0, -1, -2 };
         for (int sp = 0; sp < 3; sp++) {
             int slot = inf_find_free_npc(s);
             if (slot < 0) break;
-            inf_init_npc(s, slot, split_types[sp], npc->x + (sp - 1), npc->y);
+            inf_init_npc(s, slot, split_types[sp], npc->x + split_dx[sp], npc->y + split_dy[sp]);
         }
     } else {
         inf_store_dead_mob(s, npc);
@@ -2088,7 +2095,9 @@ static void inf_step(EncounterState* state, const int* actions) {
         s->winner = 1;
     }
 
-    /* idle penalty counter: consecutive ticks where player could attack but didn't */
+    /* idle penalty counter: consecutive ticks where player could attack but didn't.
+       exclude ticks where the player is chasing an out-of-range target — that's
+       active engagement, not idling. check: has target + target out of weapon range. */
     {
         int has_alive_npc = 0;
         for (int i = 0; i < INF_MAX_NPCS; i++) {
@@ -2096,7 +2105,16 @@ static void inf_step(EncounterState* state, const int* actions) {
                 has_alive_npc = 1; break;
             }
         }
-        if (has_alive_npc && s->player_attack_timer == 0 && !s->player_attacked_this_tick)
+        int is_chasing = 0;
+        if (s->player_attack_target >= 0 && s->npcs[s->player_attack_target].active) {
+            InfNPC* chase_npc = &s->npcs[s->player_attack_target];
+            int dist = encounter_dist_to_npc(s->player.x, s->player.y,
+                chase_npc->x, chase_npc->y, chase_npc->size);
+            int range = s->loadout_stats[s->weapon_set].attack_range;
+            if (dist > range) is_chasing = 1;
+        }
+        if (has_alive_npc && s->player_attack_timer == 0 &&
+            !s->player_attacked_this_tick && !is_chasing)
             s->ticks_without_action++;
         else
             s->ticks_without_action = 0;
