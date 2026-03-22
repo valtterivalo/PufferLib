@@ -539,7 +539,7 @@ static const uint8_t INF_RANGE_BP_LOADOUT[NUM_GEAR_SLOTS] = {
     [GEAR_SLOT_HEAD]   = ITEM_MASORI_MASK_F,
     [GEAR_SLOT_CAPE]   = ITEM_DIZANAS_QUIVER,
     [GEAR_SLOT_NECK]   = ITEM_NECKLACE_OF_ANGUISH,
-    [GEAR_SLOT_AMMO]   = ITEM_DRAGON_ARROWS,  /* arrows persist across all switches */
+    [GEAR_SLOT_AMMO]   = ITEM_NONE,  /* bp includes dart stats (ranged_str=55) */
     [GEAR_SLOT_WEAPON] = ITEM_TOXIC_BLOWPIPE,
     [GEAR_SLOT_SHIELD] = ITEM_NONE,  /* bp is 2h */
     [GEAR_SLOT_BODY]   = ITEM_MASORI_BODY_F,
