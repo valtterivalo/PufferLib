@@ -2141,15 +2141,16 @@ static void inf_step(EncounterState* state, const int* actions) {
 /* observations                                                              */
 /* ======================================================================== */
 
-/* obs layout: 20 player + 6 pillar + 32 NPCs * 11 = 378. round up to 381. */
-#define INF_NUM_OBS 381
+/* obs layout: 24 player + 6 pillar + 32 NPCs * 14 = 478. */
+#define INF_NUM_OBS 478
+#define INF_OBS_NPC_FEATURES 14
 
 static void inf_write_obs(EncounterState* state, float* obs) {
     InfernoState* s = (InfernoState*)state;
     memset(obs, 0, INF_NUM_OBS * sizeof(float));
     int i = 0;
 
-    /* player state (19 features) */
+    /* player state (24 features) */
     obs[i++] = (float)s->player.current_hitpoints / 99.0f;
     obs[i++] = (float)(s->player.x - INF_ARENA_MIN_X) / (float)INF_ARENA_WIDTH;
     obs[i++] = (float)(s->player.y - INF_ARENA_MIN_Y) / (float)INF_ARENA_HEIGHT;
@@ -2176,34 +2177,84 @@ static void inf_write_obs(EncounterState* state, float* obs) {
     /* attack readiness: 0 = ready to fire, >0 = on cooldown */
     obs[i++] = (float)s->player_attack_timer / 8.0f;
 
+    /* pending hits on player: projectiles in flight from NPC attacks.
+       critical for prayer decisions — the agent needs to see incoming damage
+       and its style to switch prayer in time (especially jad's 3-tick window). */
+    {
+        int pending_count = 0;
+        int ranged_imminent = 0, magic_imminent = 0, melee_imminent = 0;
+        for (int h = 0; h < s->player_pending_hit_count; h++) {
+            EncounterPendingHit* ph = &s->player_pending_hits[h];
+            if (!ph->active) continue;
+            pending_count++;
+            if (ph->ticks_remaining <= 1) {
+                if (ph->attack_style == ATTACK_STYLE_RANGED) ranged_imminent = 1;
+                else if (ph->attack_style == ATTACK_STYLE_MAGIC) magic_imminent = 1;
+                else if (ph->attack_style == ATTACK_STYLE_MELEE) melee_imminent = 1;
+            }
+        }
+        obs[i++] = (float)pending_count / (float)ENCOUNTER_MAX_PENDING_HITS;
+        obs[i++] = ranged_imminent ? 1.0f : 0.0f;
+        obs[i++] = magic_imminent ? 1.0f : 0.0f;
+        obs[i++] = melee_imminent ? 1.0f : 0.0f;
+    }
+
     /* pillars (6 features) */
     for (int p = 0; p < INF_NUM_PILLARS; p++) {
         obs[i++] = s->pillars[p].active ? 1.0f : 0.0f;
         obs[i++] = (float)s->pillars[p].hp / (float)INF_PILLAR_HP;
     }
 
-    /* NPCs: 11 features each, up to INF_MAX_NPCS */
-    for (int n = 0; n < INF_MAX_NPCS && (i + 11) <= INF_NUM_OBS; n++) {
+    /* NPCs: INF_OBS_NPC_FEATURES (14) features each, up to INF_MAX_NPCS */
+    for (int n = 0; n < INF_MAX_NPCS && (i + INF_OBS_NPC_FEATURES) <= INF_NUM_OBS; n++) {
         InfNPC* npc = &s->npcs[n];
-        if (npc->active) {
-            obs[i++] = 1.0f;
-            obs[i++] = (float)npc->type / (float)INF_NUM_NPC_TYPES;
-            obs[i++] = (float)npc->hp / (float)npc->max_hp;
-            obs[i++] = (float)(npc->x - INF_ARENA_MIN_X) / (float)INF_ARENA_WIDTH;
-            obs[i++] = (float)(npc->y - INF_ARENA_MIN_Y) / (float)INF_ARENA_HEIGHT;
-            obs[i++] = (float)npc->attack_timer / 10.0f;
-            obs[i++] = (npc->attack_style == ATTACK_STYLE_MELEE) ? 1.0f : 0.0f;
-            obs[i++] = (npc->attack_style == ATTACK_STYLE_RANGED) ? 1.0f : 0.0f;
-            obs[i++] = (npc->attack_style == ATTACK_STYLE_MAGIC) ? 1.0f : 0.0f;
-            obs[i++] = inf_npc_has_los(s, n) ? 1.0f : 0.0f;
-            obs[i++] = (float)npc->frozen_ticks / 32.0f;
+        if (npc->active && npc->death_ticks == 0) {
+            obs[i++] = 1.0f;                                                     /* 0: active */
+            obs[i++] = (float)npc->type / (float)INF_NUM_NPC_TYPES;              /* 1: type */
+            obs[i++] = (float)npc->hp / (float)npc->max_hp;                      /* 2: hp ratio */
+            obs[i++] = (float)(npc->x - INF_ARENA_MIN_X) / (float)INF_ARENA_WIDTH;  /* 3: x */
+            obs[i++] = (float)(npc->y - INF_ARENA_MIN_Y) / (float)INF_ARENA_HEIGHT; /* 4: y */
+            obs[i++] = (float)npc->attack_timer / 10.0f;                         /* 5: attack timer */
+            obs[i++] = (npc->attack_style == ATTACK_STYLE_MELEE) ? 1.0f : 0.0f;  /* 6: style melee */
+            obs[i++] = (npc->attack_style == ATTACK_STYLE_RANGED) ? 1.0f : 0.0f; /* 7: style ranged */
+            obs[i++] = (npc->attack_style == ATTACK_STYLE_MAGIC) ? 1.0f : 0.0f;  /* 8: style magic */
+            obs[i++] = inf_npc_has_los(s, n) ? 1.0f : 0.0f;                      /* 9: has LOS */
+            obs[i++] = (float)npc->frozen_ticks / 32.0f;                         /* 10: frozen */
+
+            /* NEW: attack imminent — 1.0 when this NPC will attack within 1 tick.
+               combines attack_timer check with LOS (ranged/magic need LOS to fire).
+               meleers: always imminent at timer<=1 (they're already adjacent).
+               blob fire tick: imminent if has scan (bypasses LOS). */
+            {
+                int has_los_n = inf_npc_has_los(s, n);
+                int can_fire = (npc->attack_timer <= 1);
+                int imminent = 0;
+                if (can_fire) {
+                    const InfNPCStats* ns = &INF_NPC_STATS[npc->type];
+                    if (ns->attack_range <= 1) imminent = 1;  /* melee: always */
+                    else if (has_los_n) imminent = 1;          /* ranged/magic with LOS */
+                    else if (npc->type == INF_NPC_BLOB && npc->blob_scanned_prayer >= 0)
+                        imminent = 1;                          /* blob fire bypasses LOS */
+                }
+                obs[i++] = imminent ? 1.0f : 0.0f;            /* 11: attack imminent */
+            }
+
+            /* NEW: distance to player — chebyshev distance normalized by arena max.
+               saves the network from learning distance from two coordinate pairs. */
+            {
+                int dist = encounter_dist_to_npc(s->player.x, s->player.y,
+                    npc->x, npc->y, npc->size);
+                obs[i++] = (float)dist / 32.0f;               /* 12: distance to player */
+            }
+
+            /* NEW: blob scan active — 1.0 when blob has completed scan and is about
+               to fire (prayer-reading attack incoming). zero for non-blobs. */
+            obs[i++] = (npc->type == INF_NPC_BLOB && npc->blob_scanned_prayer >= 0)
+                        ? 1.0f : 0.0f;                        /* 13: blob scan active */
         } else {
-            for (int j = 0; j < 11; j++) obs[i++] = 0.0f;
+            for (int j = 0; j < INF_OBS_NPC_FEATURES; j++) obs[i++] = 0.0f;
         }
     }
-
-    /* pad to INF_NUM_OBS */
-    while (i < INF_NUM_OBS) obs[i++] = 0.0f;
 }
 
 static void inf_write_mask(EncounterState* state, float* mask) {
