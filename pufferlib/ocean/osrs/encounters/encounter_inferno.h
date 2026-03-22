@@ -1888,10 +1888,14 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
             if (encounter_player_can_attack(s->player.x, s->player.y,
                     target_npc->x, target_npc->y, target_npc->size,
                     ls->attack_range, s->los_blockers, s->los_blocker_count)) {
-                /* compute hit delay for projectile flight */
+                /* compute hit delay for projectile flight.
+                   blowpipe uses a faster formula: floor(dist/6)+1 vs generic floor((3+dist)/6)+1.
+                   ref: InfernoTrainer Blowpipe.ts:56-58. */
                 int hit_delay;
                 if (ls->style == ATTACK_STYLE_MAGIC)
                     hit_delay = encounter_magic_hit_delay(target_dist, 1);
+                else if (s->weapon_set == INF_GEAR_BP)
+                    hit_delay = encounter_blowpipe_hit_delay(target_dist, 1);
                 else
                     hit_delay = encounter_ranged_hit_delay(target_dist, 1);
 
@@ -2725,18 +2729,27 @@ static void inf_render_post_tick(EncounterState* state, EncounterOverlay* ov) {
             int p_tracks = 0;  /* don't track — tracking loop targets entity 0 (player) */
             int p_duration;
 
+            /* visual projectile duration: OSRS projectiles visually arrive FASTER
+               than the hit delay. each weapon has visualDelayTicks (invisible wind-up)
+               and visualHitEarlyTicks (arrive before damage lands).
+               visual flight = hitDelay - visualDelay - visualHitEarly.
+               ref: InfernoTrainer Projectile.ts getPercent(), Blowpipe.ts, TwistedBow.ts. */
             uint32_t player_proj_model = 0;
             if (s->weapon_set == INF_GEAR_MAGE) {
-                p_duration = encounter_magic_hit_delay(p_dist, 1) * 30;
+                int hd = encounter_magic_hit_delay(p_dist, 1);
+                p_duration = (hd > 1 ? hd - 1 : 1) * 30;  /* ~1 tick visual delay */
                 p_arc = 0.0f;
                 /* barrage: no projectile model (effect system handles it) */
             } else if (s->weapon_set == INF_GEAR_TBOW) {
-                p_duration = encounter_ranged_hit_delay(p_dist, 1) * 30;
+                /* tbow: visualDelayTicks=1, visualHitEarlyTicks=1 → flight = hd-2 */
+                int hd = encounter_ranged_hit_delay(p_dist, 1);
+                p_duration = (hd > 2 ? hd - 2 : 1) * 30;
                 p_arc = 1.0f;
                 player_proj_model = 3136;  /* rune arrow (GFX 15) — dragon arrow visually similar */
             } else {
-                /* blowpipe */
-                p_duration = encounter_ranged_hit_delay(p_dist, 1) * 30;
+                /* blowpipe: visualDelayTicks=1, visualHitEarlyTicks=0 → flight = hd-1 */
+                int hd = encounter_blowpipe_hit_delay(p_dist, 1);
+                p_duration = (hd > 1 ? hd - 1 : 1) * 30;
                 p_arc = 0.5f;
                 player_proj_model = 26379;  /* dragon dart */
             }

@@ -267,6 +267,13 @@ static inline int encounter_ranged_hit_delay(int distance, int is_player) {
     return (3 + distance) / 6 + 1 + (is_player ? 1 : 0);
 }
 
+/* blowpipe hit delay: floor(distance / 6) + 1, +1 if attacker is player.
+   blowpipe overrides the generic ranged formula — faster at longer range.
+   ref: InfernoTrainer Blowpipe.ts:56-58. */
+static inline int encounter_blowpipe_hit_delay(int distance, int is_player) {
+    return distance / 6 + 1 + (is_player ? 1 : 0);
+}
+
 /* chebyshev distance from point (px,py) to nearest tile of NPC footprint
    at (nx,ny) with given npc_size. accounts for multi-tile NPCs. */
 static inline int encounter_dist_to_npc(int px, int py, int nx, int ny, int npc_size) {
