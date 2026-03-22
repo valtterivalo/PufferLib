@@ -8,7 +8,7 @@ targets Apple Silicon (M4 Pro). upstream reference: PufferAI/PufferLib static-na
 ```bash
 python setup.py build_breakout --force      # breakout env
 python setup.py build_g2048 --force         # 2048 env
-python setup.py build_osrs_pvp --force      # osrs pvp env
+python setup.py build_osrs --force            # osrs pvp env
 python setup.py build_osrs_zulrah --force   # osrs zulrah env
 python setup.py build_osrs_inferno --force  # osrs inferno env
 ```
@@ -20,7 +20,7 @@ output: `pufferlib/_C.cpython-312-darwin.so`
 ```bash
 python pufferl.py train breakout                              # uses .ini defaults
 python pufferl.py train breakout --total-timesteps 2000000    # CLI override
-python pufferl.py train osrs_pvp --replay-ratio 0.25          # multi-head envs need low replay
+python pufferl.py train osrs --replay-ratio 0.25               # multi-head envs need low replay
 python pufferl.py sweep breakout --timeout 4                  # Protein hyperparameter sweep
 python pufferl.py results breakout                            # print sweep results
 ```
@@ -39,7 +39,7 @@ to add a new env: create `pufferlib/config/metal/ocean/<env>.ini` with the relev
 pufferl.py is completely env-agnostic -- zero env-specific code.
 
 PFSP (prioritized fictitious self-play) logic for osrs_pvp lives in
-`pufferlib/ocean/osrs_pvp/pfsp.py`, imported conditionally during sweep trials.
+`pufferlib/ocean/osrs/pfsp.py`, imported conditionally during sweep trials.
 
 ## research tracking with flywheel
 

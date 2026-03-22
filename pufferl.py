@@ -487,7 +487,7 @@ def run_trial(
     wandb_config: dict | None = None,
 ) -> dict | None:
     """Run a single training trial using the shared training loop."""
-    from pufferlib.ocean.osrs_pvp.pfsp import (
+    from pufferlib.ocean.osrs.pfsp import (
         OPP_PFSP, POOL_TYPES, init_pfsp, update_pfsp,
     )
 
@@ -525,7 +525,7 @@ def run_trial(
 
     # PFSP setup for osrs_pvp
     pfsp_state = None
-    if env_name == "osrs_pvp" and env_config.get("opponent_type", 0) == float(OPP_PFSP):
+    if env_name == "osrs" and env_config.get("opponent_type", 0) == float(OPP_PFSP):
         pfsp_state = {"total_agents": total_agents}
 
     last_report_time = time.time()
