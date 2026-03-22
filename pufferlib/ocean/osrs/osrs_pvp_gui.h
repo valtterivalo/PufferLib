@@ -1907,6 +1907,17 @@ static void gui_draw_stats(GuiState* gs, Player* p) {
     gui_text_shadow(TextFormat("Bastion: %d  Stamina: %d",
                     p->combat_potion_doses, p->ranged_potion_doses),
                     ox + 2, oy, 10, GUI_TEXT_WHITE);
+    oy += lh;
+
+    /* special attack energy bar */
+    int spec_bar_w = bar_w;
+    int spec_bar_h = 14;
+    float spec_pct = (float)p->special_energy / 100.0f;
+    DrawRectangle(ox, oy, spec_bar_w, spec_bar_h, GUI_SPEC_DARK);
+    DrawRectangle(ox, oy, (int)(spec_bar_w * spec_pct), spec_bar_h, GUI_SPEC_GREEN);
+    DrawRectangleLines(ox, oy, spec_bar_w, spec_bar_h, GUI_BORDER);
+    gui_text_shadow(TextFormat("Spec: %d%%", p->special_energy),
+                    ox + 4, oy + 1, 10, GUI_TEXT_WHITE);
 }
 
 /* ======================================================================== */

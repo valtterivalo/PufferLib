@@ -626,6 +626,7 @@ typedef struct {
     InfWeaponSet weapon_set;
     EncounterLoadoutStats loadout_stats[INF_NUM_WEAPON_SETS];
     int armor_tank;            /* 1 = justiciar overlay active */
+    int spec_queued;           /* 1 = next BP attack uses special (100% acc, 50% heal) */
     int stamina_active_ticks;  /* countdown for stamina effect */
     int spell_choice;          /* 0 = blood barrage, 1 = ice barrage */
 
@@ -1671,14 +1672,14 @@ static void inf_tick_npcs(InfernoState* s) {
 #define INF_HEAD_MOVE    0   /* 25: idle + 8 walk + 16 run */
 #define INF_HEAD_PRAYER  1   /* 5: no_change, off, melee, range, mage (ENCOUNTER_PRAYER_DIM) */
 #define INF_HEAD_TARGET  2   /* INF_MAX_NPCS+1: none or NPC index */
-#define INF_HEAD_GEAR    3   /* 5: no_switch, mage, tbow, bp, tank */
+#define INF_HEAD_GEAR    3   /* 6: no_switch, mage, tbow, bp, tank, bp_spec */
 #define INF_HEAD_EAT     4   /* 2: none, brew */
 #define INF_HEAD_POTION  5   /* 4: none, restore, bastion, stamina */
 #define INF_HEAD_SPELL   6   /* 2: blood_barrage, ice_barrage */
 #define INF_NUM_ACTION_HEADS 7
 
-static const int INF_ACTION_DIMS[INF_NUM_ACTION_HEADS] = { ENCOUNTER_MOVE_ACTIONS, 5, INF_MAX_NPCS+1, 5, 2, 4, 2 };
-#define INF_ACTION_MASK_SIZE (ENCOUNTER_MOVE_ACTIONS + 5 + INF_MAX_NPCS+1 + 5 + 2 + 4 + 2)
+static const int INF_ACTION_DIMS[INF_NUM_ACTION_HEADS] = { ENCOUNTER_MOVE_ACTIONS, 5, INF_MAX_NPCS+1, 6, 2, 4, 2 };
+#define INF_ACTION_MASK_SIZE (ENCOUNTER_MOVE_ACTIONS + 5 + INF_MAX_NPCS+1 + 6 + 2 + 4 + 2)
 
 /* movement uses shared encounter_move_to_target from osrs_encounter.h */
 
@@ -1744,14 +1745,17 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
         &s->prayer_drain_counter, encounter_prayer_drain_effect(s->active_prayer));
     s->player.prayer = s->active_prayer;
 
+    /* special attack energy regeneration: +10% every 50 ticks (no lightbearer in inferno) */
+    encounter_tick_spec_regen(&s->player, 0);
 
-    /* gear switching */
+    /* gear switching: 0=no_switch, 1=mage, 2=tbow, 3=bp, 4=tank, 5=bp_spec */
     int gear_act = actions[INF_HEAD_GEAR];
     if (gear_act >= 1 && gear_act <= 3) {
         /* 1=mage, 2=tbow, 3=bp */
         InfWeaponSet new_set = (InfWeaponSet)(gear_act - 1);
         s->weapon_set = new_set;
         s->armor_tank = 0;
+        s->spec_queued = 0;
         GearSet gs = (new_set == INF_GEAR_MAGE) ? GEAR_MAGE : GEAR_RANGED;
         encounter_apply_loadout(&s->player, INF_LOADOUTS[new_set], gs);
     } else if (gear_act == 4) {
@@ -1760,6 +1764,14 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
         s->player.equipped[GEAR_SLOT_HEAD] = INF_TANK_HEAD;
         s->player.equipped[GEAR_SLOT_BODY] = INF_TANK_BODY;
         s->player.equipped[GEAR_SLOT_LEGS] = INF_TANK_LEGS;
+    } else if (gear_act == 5) {
+        /* bp + spec: switch to blowpipe and queue special attack.
+           BP spec costs 50% energy, 100% accuracy, heals 50% of damage.
+           ref: OSRS wiki Toxic blowpipe (special attack). */
+        s->weapon_set = INF_GEAR_BP;
+        s->armor_tank = 0;
+        encounter_apply_loadout(&s->player, INF_LOADOUTS[INF_GEAR_BP], GEAR_RANGED);
+        s->spec_queued = 1;
     }
 
     /* auto-detect gear switch from direct inventory equip (human mode).
@@ -1978,12 +1990,24 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
                     ph->check_prayer = 0;
 
                 } else {
-                    /* blowpipe: single target */
+                    /* blowpipe: single target.
+                       spec (50% energy): 100% accuracy, heals player 50% of damage.
+                       ref: OSRS wiki Toxic blowpipe special attack. */
                     const InfNPCStats* ns = &INF_NPC_STATS[target_npc->type];
-                    int att_roll = ls->eff_level * (ls->attack_bonus + 64);
-                    int def_roll = (ns->def_level + 8) * (ns->ranged_def_bonus + 64);
-                    if (encounter_rand_float(&s->rng_state) < osrs_hit_chance(att_roll, def_roll)) {
-                        total_dmg = encounter_rand_int(&s->rng_state, ls->max_hit + 1);
+                    int using_spec = s->spec_queued && encounter_use_spec(&s->player, 50);
+                    if (using_spec) {
+                        /* spec: 100% accuracy (auto-hit), double max hit */
+                        total_dmg = encounter_rand_int(&s->rng_state, ls->max_hit * 2 + 1);
+                        s->spec_queued = 0;
+                        s->player.used_special_this_tick = 1;
+                    } else {
+                        /* normal attack: standard accuracy roll */
+                        int att_roll = ls->eff_level * (ls->attack_bonus + 64);
+                        int def_roll = (ns->def_level + 8) * (ns->ranged_def_bonus + 64);
+                        if (encounter_rand_float(&s->rng_state) < osrs_hit_chance(att_roll, def_roll)) {
+                            total_dmg = encounter_rand_int(&s->rng_state, ls->max_hit + 1);
+                        }
+                        s->spec_queued = 0;
                     }
                     EncounterPendingHit* ph = &target_npc->pending_hit;
                     ph->active = 1;
@@ -1991,6 +2015,17 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
                     ph->ticks_remaining = hit_delay;
                     ph->attack_style = ATTACK_STYLE_RANGED;
                     ph->check_prayer = 0;
+
+                    /* BP spec heal: player heals 50% of damage dealt.
+                       applied immediately (OSRS heals on hit, but BP delay is 1 tick). */
+                    if (using_spec && total_dmg > 0) {
+                        int heal = total_dmg / 2;
+                        if (heal > 0) {
+                            s->player.current_hitpoints += heal;
+                            if (s->player.current_hitpoints > s->player.base_hitpoints)
+                                s->player.current_hitpoints = s->player.base_hitpoints;
+                        }
+                    }
                 }
 
                 s->player_attack_timer = ls->attack_speed;
@@ -2418,12 +2453,13 @@ static void inf_write_mask(EncounterState* state, float* mask) {
         mask[offset++] = (s->npcs[n].active && s->npcs[n].death_ticks == 0) ? 1.0f : 0.0f;
     }
 
-    /* HEAD_GEAR (5): no_switch, mage, tbow, bp, tank */
+    /* HEAD_GEAR (6): no_switch, mage, tbow, bp, tank, bp_spec */
     mask[offset++] = 1.0f;  /* no_switch always valid */
     mask[offset++] = (s->weapon_set != INF_GEAR_MAGE || s->armor_tank) ? 1.0f : 0.0f;
     mask[offset++] = (s->weapon_set != INF_GEAR_TBOW || s->armor_tank) ? 1.0f : 0.0f;
     mask[offset++] = (s->weapon_set != INF_GEAR_BP || s->armor_tank) ? 1.0f : 0.0f;
     mask[offset++] = 1.0f;  /* tank toggle always allowed */
+    mask[offset++] = (s->player.special_energy >= 50) ? 1.0f : 0.0f;  /* bp_spec: need 50% energy */
 
     /* HEAD_EAT (2): none, brew */
     mask[offset++] = 1.0f;  /* none always valid */

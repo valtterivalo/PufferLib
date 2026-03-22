@@ -1210,6 +1210,43 @@ static inline void encounter_recompute_loadout_max_hits(
 }
 
 /* ======================================================================== */
+/* shared special attack energy                                              */
+/*                                                                           */
+/* ENCOUNTERS: call encounter_tick_spec_regen() every game tick. call         */
+/* encounter_use_spec() when the player activates a special attack.          */
+/* OSRS: energy 0-100, starts at 100, regens +10 every 50 ticks (30s).      */
+/* lightbearer halves regen interval to 25 ticks.                            */
+/* ======================================================================== */
+
+#define SPEC_REGEN_INTERVAL     50   /* ticks between +10% regen (normal) */
+#define SPEC_REGEN_LIGHTBEARER  25   /* with lightbearer equipped */
+#define SPEC_REGEN_AMOUNT       10   /* energy restored per regen tick */
+
+/** tick special attack energy regeneration. call once per game tick.
+    lightbearer: set to 1 if player has lightbearer ring equipped. */
+static inline void encounter_tick_spec_regen(Player* p, int has_lightbearer) {
+    if (p->special_energy >= 100) {
+        p->special_regen_ticks = 0;
+        return;
+    }
+    int interval = has_lightbearer ? SPEC_REGEN_LIGHTBEARER : SPEC_REGEN_INTERVAL;
+    p->special_regen_ticks++;
+    if (p->special_regen_ticks >= interval) {
+        p->special_energy += SPEC_REGEN_AMOUNT;
+        if (p->special_energy > 100) p->special_energy = 100;
+        p->special_regen_ticks = 0;
+    }
+}
+
+/** attempt to use special attack energy. returns 1 if successful (enough energy),
+    0 if not enough energy. drains on success. */
+static inline int encounter_use_spec(Player* p, int cost) {
+    if (p->special_energy < cost) return 0;
+    p->special_energy -= cost;
+    return 1;
+}
+
+/* ======================================================================== */
 /* shared gear switching helpers for encounters                              */
 /* ======================================================================== */
 
