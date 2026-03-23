@@ -615,6 +615,7 @@ typedef struct {
     float rw_blood;
     float rw_prayer;
     float rw_pillar;
+    float rw_dmg_taken;
     float rw_terminal;
 
     /* per-tick reward event flags (cleared each tick) */
@@ -673,7 +674,8 @@ typedef struct {
     float brew_penalty_midpoint; /* sigmoid midpoint wave (default 35) */
     float brew_penalty_width;    /* sigmoid transition width (default 5.0) */
     float blood_heal_reward;     /* reward per 20 HP healed via blood barrage (default 0.01) */
-    float prayer_reward;         /* reward per NPC attack blocked by correct prayer (default 0.01) */
+    float prayer_reward;         /* reward per NPC attack blocked by correct prayer (DISABLED) */
+    float damage_taken_coef;     /* penalty per HP taken: -coef * (dmg/50). default 0.01 */
 
     Log log;
 } InfernoState;
@@ -773,6 +775,7 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
     float saved_bpw = s->brew_penalty_width;
     float saved_bhr = s->blood_heal_reward;
     float saved_pr = s->prayer_reward;
+    float saved_dtc = s->damage_taken_coef;
     memset(s, 0, sizeof(InfernoState));
     s->log = saved_log;
     s->start_wave = saved_start;
@@ -787,6 +790,7 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
     s->brew_penalty_width = saved_bpw;
     s->blood_heal_reward = saved_bhr;
     s->prayer_reward = saved_pr;
+    s->damage_taken_coef = saved_dtc;
 
     /* human click-to-move: no destination after reset */
     s->player_dest_x = -1;
@@ -2113,11 +2117,20 @@ static float inf_compute_reward(InfernoState* s) {
         r += c; s->rw_blood += c;
     }
 
-    /* correct prayer: reward for blocking NPC attacks with the right overhead.
-     * prayer_correct_this_tick counts per-attack (multiple NPCs can hit same tick). */
-    if (s->prayer_correct_this_tick > 0) {
-        c = s->prayer_reward * (float)s->prayer_correct_this_tick;
-        r += c; s->rw_prayer += c;
+    /* prayer reward disabled — creates a prayer-camping exploit where the agent
+     * learns to stand still and pray correctly without attacking. prayer is now
+     * implicitly rewarded via the damage_taken penalty (correct prayer = no damage). */
+    // if (s->prayer_correct_this_tick > 0) {
+    //     c = s->prayer_reward * (float)s->prayer_correct_this_tick;
+    //     r += c; s->rw_prayer += c;
+    // }
+
+    /* damage taken penalty: penalize HP lost. correct prayer prevents damage,
+     * so prayer is implicitly rewarded. 2:1 ratio with damage_dealt (+0.02 vs -0.01)
+     * favors aggression — the agent should engage even at cost of taking some hits. */
+    if (s->damage_received_this_tick > 0.0f) {
+        c = -(s->damage_taken_coef * (s->damage_received_this_tick / 50.0f));
+        r += c; s->rw_dmg_taken += c;
     }
 
     /* pillar destroyed: north pillar (idx 2, highest Y) is the most important
@@ -2655,6 +2668,7 @@ static void inf_put_float(EncounterState* state, const char* key, float value) {
     else if (strcmp(key, "brew_penalty_width") == 0) s->brew_penalty_width = value;
     else if (strcmp(key, "blood_heal_reward") == 0) s->blood_heal_reward = value;
     else if (strcmp(key, "prayer_reward") == 0) s->prayer_reward = value;
+    else if (strcmp(key, "damage_taken_coef") == 0) s->damage_taken_coef = value;
 }
 
 static void inf_put_ptr(EncounterState* state, const char* key, void* value) {
@@ -2691,6 +2705,7 @@ static void* inf_get_log(EncounterState* state) {
         s->log.rw_blood += s->rw_blood;
         s->log.rw_prayer += s->rw_prayer;
         s->log.rw_pillar += s->rw_pillar;
+        s->log.rw_dmg_taken += s->rw_dmg_taken;
         s->log.rw_terminal += s->rw_terminal;
         s->log.n += 1.0f;
     }

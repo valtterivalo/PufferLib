@@ -929,7 +929,7 @@ def train_cli(env_name: str):
         dec_p_max = debug_stats.get("dec_policy_abs_max", 0) if debug_stats else 0
         dec_v_max = debug_stats.get("dec_value_abs_max", 0) if debug_stats else 0
         rw_parts = ""
-        rw_keys = ["rw_wave", "rw_damage", "rw_idle", "rw_brew", "rw_blood", "rw_prayer", "rw_pillar", "rw_terminal"]
+        rw_keys = ["rw_wave", "rw_damage", "rw_idle", "rw_brew", "rw_blood", "rw_prayer", "rw_pillar", "rw_dmg_taken", "rw_terminal"]
         rw_vals = {k: env_stats.get(k, 0) for k in rw_keys}
         if any(v != 0 for v in rw_vals.values()):
             rw_parts = " | " + " ".join(f"{k[3:]}={v:+.4f}" for k, v in rw_vals.items())

@@ -773,6 +773,7 @@ typedef struct {
     float rw_blood;
     float rw_prayer;
     float rw_pillar;
+    float rw_dmg_taken;
     float rw_terminal;
     float n;
 } Log;
