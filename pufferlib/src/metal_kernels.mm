@@ -1519,12 +1519,18 @@ static PufTensor decoder_backward(void *w, void *activations,
 static void decoder_init_weights(void *w, uint64_t *seed,
                                           cudaStream_t stream) {
   DecoderWeights *dw = (DecoderWeights *)w;
-  // Init via fused weight view (spans policy_weight + value_weight)
-  int od1 = dw->output_dim + 1;
-  PufTensor wt = {.bytes = dw->weight.bytes,
-                  .shape = {od1, dw->hidden_dim},
-                  .dtype_size = dw->weight.dtype_size};
-  puf_kaiming_init(wt, 1.0f, (*seed)++, stream);
+  int od = dw->output_dim;
+  int H = dw->hidden_dim;
+  // Policy head: small gain (0.01) → near-uniform softmax at init → good exploration.
+  // Value head: normal gain (1.0) → meaningful value predictions from the start.
+  PufTensor policy_wt = {.bytes = dw->policy_weight.bytes,
+                         .shape = {od, H},
+                         .dtype_size = dw->policy_weight.dtype_size};
+  puf_kaiming_init(policy_wt, 0.01f, (*seed)++, stream);
+  PufTensor value_wt = {.bytes = dw->value_weight.bytes,
+                        .shape = {1, H},
+                        .dtype_size = dw->value_weight.dtype_size};
+  puf_kaiming_init(value_wt, 1.0f, (*seed)++, stream);
 }
 
 static void decoder_reg_params(void *w, Allocator *alloc, int esz) {
