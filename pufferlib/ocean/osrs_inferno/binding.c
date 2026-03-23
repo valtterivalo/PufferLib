@@ -2,7 +2,7 @@
  * @file binding.c
  * @brief Static-native binding for OSRS Inferno encounter.
  *
- * Bridges vecenv.h's contract (float actions, float terminals) with the
+ * Bridges vecenv.h's contract (double actions, float terminals) with the
  * Inferno encounter's vtable interface.
  */
 
@@ -11,14 +11,14 @@
 #include <stdio.h>
 
 #include "osrs_encounter.h"
-#include "osrs_types.h"
+#include "osrs_pvp_types.h"
 #include "encounters/encounter_inferno.h"
 
 #define INF_TOTAL_OBS (INF_NUM_OBS + INF_ACTION_MASK_SIZE)
 
 typedef struct {
     void* observations;
-    float* actions;
+    double* actions;
     float* rewards;
     float* terminals;
     int num_agents;
@@ -39,8 +39,9 @@ typedef struct {
 
 #define OBS_SIZE INF_TOTAL_OBS
 #define NUM_ATNS INF_NUM_ACTION_HEADS
-#define ACT_SIZES { ENCOUNTER_MOVE_ACTIONS, 5, INF_MAX_NPCS+1, 6, 2, 4, 2 }
-#define OBS_TENSOR_T FloatTensor
+#define ACT_SIZES { ENCOUNTER_MOVE_ACTIONS, 5, INF_MAX_NPCS+1, 5, 2, 4, 2 }
+#define OBS_TYPE FLOAT
+#define ACT_TYPE DOUBLE
 #define Env InfernoEnv
 
 void c_step(Env* env) {
@@ -88,15 +89,6 @@ void c_step(Env* env) {
         env->log.idle_ticks = (float)s->total_idle_ticks;
         env->log.brews_used = (float)s->total_brews_used;
         env->log.blood_healed = (float)s->total_blood_healed;
-        env->log.rw_wave = s->rw_wave;
-        env->log.rw_damage = s->rw_damage;
-        env->log.rw_idle = s->rw_idle;
-        env->log.rw_brew = s->rw_brew;
-        env->log.rw_blood = s->rw_blood;
-        env->log.rw_prayer = s->rw_prayer;
-        env->log.rw_pillar = s->rw_pillar;
-        env->log.rw_dmg_taken = s->rw_dmg_taken;
-        env->log.rw_terminal = s->rw_terminal;
         env->log.n = 1.0f;  /* always report so sweep has continuous signal */
     }
 
@@ -196,17 +188,6 @@ void my_log(Log* log, Dict* out) {
     float prayer_rate = (log->prayer_total > 0.0f)
         ? log->prayer_correct / log->prayer_total : 0.0f;
     dict_set(out, "prayer_correct_rate", prayer_rate);
-
-    /* per-component reward breakdown */
-    dict_set(out, "rw_wave", log->rw_wave);
-    dict_set(out, "rw_damage", log->rw_damage);
-    dict_set(out, "rw_idle", log->rw_idle);
-    dict_set(out, "rw_brew", log->rw_brew);
-    dict_set(out, "rw_blood", log->rw_blood);
-    dict_set(out, "rw_prayer", log->rw_prayer);
-    dict_set(out, "rw_pillar", log->rw_pillar);
-    dict_set(out, "rw_dmg_taken", log->rw_dmg_taken);
-    dict_set(out, "rw_terminal", log->rw_terminal);
 
     float wr = log->wins;
     float wave_progress = log->episode_length / (float)INF_MAX_TICKS;

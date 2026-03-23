@@ -1,7 +1,6 @@
 import random
 import math
 import warnings
-from collections import deque
 from copy import deepcopy
 from contextlib import contextmanager
 
@@ -118,7 +117,9 @@ class Logit(Space):
         super().__init__(min, max, scale, is_integer)
 
     def normalize(self, value):
-        value = max(self.min, min(value, self.max))
+        #assert isinstance(value, (int, float))
+        #assert value != 0.0
+        #assert value != 1.0
         zero_one = (math.log(1-value, self.base) - math.log(1-self.min, self.base))/(math.log(1-self.max, self.base) - math.log(1-self.min, self.base))
         return 2*zero_one - 1
 
@@ -135,7 +136,7 @@ def _params_from_puffer_sweep(sweep_config, only_include=None):
 
     for name, param in sweep_config.items():
         if name in ('method', 'metric', 'metric_distribution', 'goal', 'downsample', 'use_gpu', 'prune_pareto',
-                    'sweep_only', 'max_suggestion_cost', 'early_stop_quantile', 'gpus', 'max_runs'):
+                    'sweep_only', 'max_suggestion_cost', 'early_stop_quantile'):
             continue
 
         assert isinstance(param, dict), f'Param {name} is not a dict'
@@ -307,7 +308,7 @@ class Random:
         self.random_suggestions = random_suggestions
         self.success_observations = []
 
-    def suggest(self, fill=None, fixed_total_timesteps=None):
+    def suggest(self, fill=None):
         suggestions = self.hyperparameters.sample(self.random_suggestions)
         self.suggestion = random.choice(suggestions)
         return self.hyperparameters.to_dict(self.suggestion, fill), {}
@@ -320,12 +321,6 @@ class Random:
             cost=cost,
             is_failure=is_failure,
         ))
-
-    def early_stop(self, logs, target_key):
-        if any("loss/" in k and np.isnan(v) for k, v in logs.items()):
-            logs['is_loss_nan'] = True
-            return True
-        return False
 
 
 class ParetoGenetic:
@@ -344,7 +339,7 @@ class ParetoGenetic:
         self.log_bias = log_bias
         self.success_observations = []
 
-    def suggest(self, fill=None, fixed_total_timesteps=None):
+    def suggest(self, fill=None):
         if len(self.success_observations) == 0:
             suggestion = self.hyperparameters.search_centers
             return self.hyperparameters.to_dict(suggestion, fill), {}
@@ -377,12 +372,6 @@ class ParetoGenetic:
             cost=cost,
             is_failure=is_failure,
         ))
-
-    def early_stop(self, logs, target_key):
-        if any("loss/" in k and np.isnan(v) for k, v in logs.items()):
-            logs['is_loss_nan'] = True
-            return True
-        return False
 
 
 class ExactGPModel(ExactGP):
@@ -562,13 +551,10 @@ class Protein:
         # self.num_random_samples = 3 * points_per_run * self.hyperparameters.num
 
         self.cost_param_idx = self.hyperparameters.get_flat_idx(cost_param)
-        self.cost_space = None
         self.cost_random_suggestion = None
         if self.cost_param_idx is not None:
-            self.cost_space = list(self.hyperparameters.flat_spaces.values())[self.cost_param_idx]
             self.cost_random_suggestion = -0.8  # In norm cost space. Make arg if necessary
         self.target_cost_ratio = []
-        self._running_target_buffer = deque(maxlen=30)
 
         self.gp_max_obs = gp_max_obs  # train time bumps after 800?
         self.infer_batch_size = infer_batch_size
@@ -725,13 +711,10 @@ class Protein:
         target_ratio = np.clip(self.target_cost_ratio.pop() + 0.1 * np.random.randn(), 0, 1)
         return (1 + expansion_rate) * target_ratio
 
-    def suggest(self, fill, fixed_total_timesteps=None):
+    def suggest(self, fill):
         info = {}
         self.suggestion_idx += 1
-        fixed_cost_norm = None
-        if fixed_total_timesteps is not None and self.cost_space is not None:
-            fixed_cost_norm = self.cost_space.normalize(fixed_total_timesteps)
-
+        
         # NOTE: Changed pufferl to use the train args, NOT the sweep hyperparam search center
         # if len(self.success_observations) == 0 and self.seed_with_search_center:
         #     suggestion = self.hyperparameters.search_centers
@@ -741,9 +724,7 @@ class Protein:
             # Suggest the next point in the Sobol sequence
             zero_one = self.sobol.random(1)[0]
             suggestion = 2*zero_one - 1  # Scale from [0, 1) to [-1, 1)
-            if fixed_cost_norm is not None:
-                suggestion[self.cost_param_idx] = fixed_cost_norm
-            elif self.cost_param_idx is not None:
+            if self.cost_param_idx is not None:
                 cost_suggestion = self.cost_random_suggestion + 0.1 * np.random.randn()
                 suggestion[self.cost_param_idx] = np.clip(cost_suggestion, -1, 1)  # limit the cost
             return self.hyperparameters.to_dict(suggestion, fill), info
@@ -767,9 +748,6 @@ class Protein:
         pareto_observations = pruned_front if self.prune_pareto else pareto_front
 
         # Use the max cost from the pruned pareto to avoid inefficiently long runs
-        if not pruned_front:
-            # all trials failed — can't compute threshold, use default
-            pruned_front = [{'cost': 300.0, 'score': 0.0}]
         if self.upper_cost_threshold < 0:
             self.upper_cost_threshold = pruned_front[-1]['cost']
         # Try to change the threshold slowly
@@ -785,9 +763,6 @@ class Protein:
 
         suggestions = self.hyperparameters.sample(
             len(search_centers)*self.suggestions_per_pareto, mu=search_centers)
-
-        if fixed_cost_norm is not None:
-            suggestions[:, self.cost_param_idx] = fixed_cost_norm
 
         dedup_indices = self._filter_near_duplicates(suggestions)
         suggestions = suggestions[dedup_indices]
@@ -837,12 +812,11 @@ class Protein:
         # Maximize score. (Tried upper confidence bounds, but it did more harm because gp was noisy)
         suggestion_scores = self.hyperparameters.optimize_direction * gp_y_norm
 
-        # When cost is fixed (pareto mode), skip cost-based weighting
-        if fixed_cost_norm is None:
-            max_c_mask = gp_c < self.max_suggestion_cost
-            target_cost = self._sample_target_cost_ratio(self.expansion_rate)
-            weight = 1 - abs(target_cost - gp_log_c_norm)
-            suggestion_scores *= max_c_mask * weight
+        # Then, decide the budget for this session and favor closer suggestions
+        max_c_mask = gp_c < self.max_suggestion_cost
+        target_cost = self._sample_target_cost_ratio(self.expansion_rate)
+        weight = 1 - abs(target_cost - gp_log_c_norm)
+        suggestion_scores *= max_c_mask * weight
 
         # Then, consider the prob of training success, only when downsample = 1
         # NOTE: Useful only in limited scenarios, where each data point is expensive. So turn it off by default.
@@ -936,22 +910,3 @@ class Protein:
             score = self.logit_transform(score)
 
         return score < threshold
-
-    def early_stop(self, logs, target_key):
-        for k, v in logs['loss'].items():
-            if np.isnan(v):
-                logs['is_loss_nan'] = True
-                return True
-
-        if 'uptime' not in logs or target_key not in logs:
-            return False
-
-        metric_val, cost = logs['env'][target_key], logs['uptime']
-        self._running_target_buffer.append(metric_val)
-        target_running_mean = np.mean(self._running_target_buffer)
-        threshold = self.get_early_stop_threshold(cost)
-        logs['early_stop_threshold'] = max(threshold, -5)
-        if self.should_stop(max(target_running_mean, metric_val), cost):
-            logs['is_loss_nan'] = False
-            return True
-        return False

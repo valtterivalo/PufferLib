@@ -17,7 +17,6 @@ import configparser
 import glob
 import json
 import math
-import numpy as np
 import os
 import sys
 import time
@@ -28,24 +27,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import pufferlib
 from pufferlib import _C
+from pufferlib.pufferl import downsample
 from pufferlib.sweep import Protein, pareto_points, prune_pareto_front
-
-
-def downsample(data_list, num_points):
-    if not data_list or num_points <= 0:
-        return []
-    if num_points == 1:
-        return [data_list[-1]]
-    if len(data_list) <= num_points:
-        return data_list
-    last = data_list[-1]
-    data_list = data_list[:-1]
-    data_np = np.array(data_list)
-    num_points -= 1
-    n = (len(data_np) // num_points) * num_points
-    data_np = data_np[-n:] if n > 0 else data_np
-    downsampled = data_np.reshape(num_points, -1).mean(axis=1)
-    return downsampled.tolist() + [last]
 
 # keep logs live when piping through tee
 if hasattr(sys.stdout, "reconfigure"):
@@ -372,14 +355,6 @@ def run_training(config, vec_config, env_config, policy_config, *,
                             f"invalid loss metric {loss_name}={v} "
                             f"at step={global_step}")
 
-                # zombie guard: vf explosion only (entropy guard removed —
-                # let Protein explore low-entropy regions naturally via LR/ent_coef)
-                if global_step > steps_per_iter * 50:
-                    vf = losses.get("vf_loss", 0)
-                    if vf > 10000:
-                        raise RuntimeError(
-                            f"vf explosion: {vf:.0f} at step={global_step}")
-
                 score = env_stats.get(score_key, env_stats.get("episode_return", 0))
                 ep_ret = env_stats.get("episode_return", 0)
                 ep_len = env_stats.get("episode_length", 0)
@@ -450,7 +425,7 @@ def _build_sweep_config(config: dict) -> dict:
     sweep = config.get("sweep", {})
     sweep_config = {
         "method": sweep.get("method", "Protein"),
-        "metric": sweep.get("metric", config.get("base", {}).get("score_metric", "score")),
+        "metric": config.get("base", {}).get("score_metric", "score"),
         "metric_distribution": sweep.get("metric_distribution", "linear"),
         "goal": sweep.get("goal", "maximize"),
         "downsample": int(sweep.get("downsample", 5)),
@@ -496,7 +471,7 @@ def run_trial(
     wandb_config: dict | None = None,
 ) -> dict | None:
     """Run a single training trial using the shared training loop."""
-    from pufferlib.ocean.osrs.pfsp import (
+    from pufferlib.ocean.osrs_pvp.pfsp import (
         OPP_PFSP, POOL_TYPES, init_pfsp, update_pfsp,
     )
 
@@ -534,12 +509,12 @@ def run_trial(
 
     # PFSP setup for osrs_pvp
     pfsp_state = None
-    if env_name == "osrs" and env_config.get("opponent_type", 0) == float(OPP_PFSP):
+    if env_name == "osrs_pvp" and env_config.get("opponent_type", 0) == float(OPP_PFSP):
         pfsp_state = {"total_agents": total_agents}
 
     last_report_time = time.time()
     log_count = 0
-    score_key = config.get("sweep", {}).get("metric", config.get("base", {}).get("score_metric", "score"))
+    score_key = config.get("base", {}).get("score_metric", "score")
     min_sps = int(config.get("sweep", {}).get("min_sps", 100_000))
     downsample_points = int(config.get("sweep", {}).get("downsample", 5))
 
@@ -798,7 +773,7 @@ def run_sweep(env_name: str, config: dict, max_trials: int | None, timeout_h: fl
         {k: v for k, v in sweep_config.items() if isinstance(v, dict)}
     )))
 
-    score_key = config.get("sweep", {}).get("metric", config.get("base", {}).get("score_metric", "score"))
+    score_key = config.get("base", {}).get("score_metric", "score")
     metric_dist = sweep_config.get("metric_distribution", "linear")
     print(f"protein sweep ({env_name}, metal, in-process)")
     print(f"  metric: {score_key} ({metric_dist} distribution)")
@@ -928,15 +903,10 @@ def train_cli(env_name: str):
         grad_l2 = debug_stats.get("grad_l2", 0) if debug_stats else 0
         dec_p_max = debug_stats.get("dec_policy_abs_max", 0) if debug_stats else 0
         dec_v_max = debug_stats.get("dec_value_abs_max", 0) if debug_stats else 0
-        rw_parts = ""
-        rw_keys = ["rw_wave", "rw_damage", "rw_idle", "rw_brew", "rw_blood", "rw_prayer", "rw_pillar", "rw_dmg_taken", "rw_terminal"]
-        rw_vals = {k: env_stats.get(k, 0) for k in rw_keys}
-        if any(v != 0 for v in rw_vals.values()):
-            rw_parts = " | " + " ".join(f"{k[3:]}={v:+.4f}" for k, v in rw_vals.items())
         print(f"[step={global_step:>10,} | SPS={sps:>10,.0f} | "
               f"ret={ep_ret:>8.2f} wave={wave:>4.1f} pray={prayer:.0%} idle={idle:>4.0f} | "
               f"ent={ent:.3f} vf={vf:.4f} grad={grad_l2:.1f} "
-              f"dec_p={dec_p_max:.1f} dec_v={dec_v_max:.1f}{rw_parts}]")
+              f"dec_p={dec_p_max:.1f} dec_v={dec_v_max:.1f}]")
 
         if wandb_run:
             log_dict = {

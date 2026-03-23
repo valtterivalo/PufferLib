@@ -8,41 +8,22 @@ targets Apple Silicon (M4 Pro). upstream reference: PufferAI/PufferLib static-na
 ```bash
 python setup.py build_breakout --force      # breakout env
 python setup.py build_g2048 --force         # 2048 env
-python setup.py build_osrs --force            # osrs pvp env
+python setup.py build_osrs_pvp --force      # osrs pvp env
 python setup.py build_osrs_zulrah --force   # osrs zulrah env
 python setup.py build_osrs_inferno --force  # osrs inferno env
 ```
 
 output: `pufferlib/_C.cpython-312-darwin.so`
 
-IMPORTANT: `setup.py` builds the TRAINING .so only. the standalone visual binary
-(`osrs_pvp_visual`) is built SEPARATELY via the Makefile:
-```bash
-cd pufferlib/ocean/osrs && make visual   # rebuilds osrs_pvp_visual
-```
-if you change encounter/shared code, you MUST rebuild BOTH:
-1. `python setup.py build_osrs_inferno --force`  (training)
-2. `cd pufferlib/ocean/osrs && make visual`       (visual testing)
-testing with a stale visual binary will show none of your code changes!
-
 ## run training
 
 ```bash
 python pufferl.py train breakout                              # uses .ini defaults
 python pufferl.py train breakout --total-timesteps 2000000    # CLI override
-python pufferl.py train osrs --replay-ratio 0.25               # multi-head envs need low replay
+python pufferl.py train osrs_pvp --replay-ratio 0.25          # multi-head envs need low replay
 python pufferl.py sweep breakout --timeout 4                  # Protein hyperparameter sweep
 python pufferl.py results breakout                            # print sweep results
 ```
-
-## visual testing (human mode)
-
-```bash
-cd pufferlib/ocean/osrs && make visual      # rebuild visual binary
-./osrs_pvp_visual --visual --encounter inferno  # run inferno in human mode
-```
-
-IMPORTANT: always rebuild the visual binary after code changes. `setup.py` does NOT rebuild it.
 
 ## config system
 
@@ -58,7 +39,7 @@ to add a new env: create `pufferlib/config/metal/ocean/<env>.ini` with the relev
 pufferl.py is completely env-agnostic -- zero env-specific code.
 
 PFSP (prioritized fictitious self-play) logic for osrs_pvp lives in
-`pufferlib/ocean/osrs/pfsp.py`, imported conditionally during sweep trials.
+`pufferlib/ocean/osrs_pvp/pfsp.py`, imported conditionally during sweep trials.
 
 ## research tracking with flywheel
 

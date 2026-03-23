@@ -1,0 +1,593 @@
+/**
+ * @fileoverview Standalone demo for OSRS PvP C Environment
+ *
+ * Demonstrates environment initialization, stepping, and basic performance.
+ * Compile: make
+ * Run: ./osrs_pvp
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#include "osrs_pvp.h"
+#include "osrs_encounter.h"
+#include "encounters/encounter_nh_pvp.h"
+#include "encounters/encounter_zulrah.h"
+#include "encounters/encounter_inferno.h"
+
+#ifdef OSRS_PVP_VISUAL
+#include "osrs_pvp_render.h"
+#endif
+
+static void print_player_state(Player* p, int idx) {
+    printf("Player %d: HP=%d/%d Prayer=%d Gear=%d Pos=(%d,%d) Frozen=%d\n",
+           idx, p->current_hitpoints, p->base_hitpoints,
+           p->current_prayer, p->current_gear, p->x, p->y, p->frozen_ticks);
+}
+
+static void print_env_state(OsrsPvp* env) {
+    printf("\n=== Tick %d ===\n", env->tick);
+    print_player_state(&env->players[0], 0);
+    print_player_state(&env->players[1], 1);
+    printf("PID holder: %d\n", env->pid_holder);
+}
+
+static void run_random_episode(OsrsPvp* env, int verbose) {
+    pvp_reset(env);
+
+    while (!env->episode_over) {
+        for (int agent = 0; agent < NUM_AGENTS; agent++) {
+            int* actions = env->actions + agent * NUM_ACTION_HEADS;
+            for (int h = 0; h < NUM_ACTION_HEADS; h++) {
+                actions[h] = rand() % ACTION_HEAD_DIMS[h];
+            }
+        }
+
+        pvp_step(env);
+
+        if (verbose && env->tick % 50 == 0) {
+            print_env_state(env);
+        }
+    }
+
+    if (verbose) {
+        printf("\n=== Episode End ===\n");
+        printf("Winner: Player %d\n", env->winner);
+        printf("Length: %d ticks\n", env->tick);
+        printf("P0 damage dealt: %.0f\n", env->players[0].total_damage_dealt);
+        printf("P1 damage dealt: %.0f\n", env->players[1].total_damage_dealt);
+    }
+}
+
+static void benchmark(OsrsPvp* env, int num_steps) {
+    printf("Benchmarking %d steps...\n", num_steps);
+
+    clock_t start = clock();
+    int episodes = 0;
+    int total_steps = 0;
+
+    while (total_steps < num_steps) {
+        pvp_reset(env);
+        episodes++;
+
+        while (!env->episode_over && total_steps < num_steps) {
+            for (int agent = 0; agent < NUM_AGENTS; agent++) {
+                int* actions = env->actions + agent * NUM_ACTION_HEADS;
+                for (int h = 0; h < NUM_ACTION_HEADS; h++) {
+                    actions[h] = rand() % ACTION_HEAD_DIMS[h];
+                }
+            }
+
+            pvp_step(env);
+            total_steps++;
+        }
+    }
+
+    clock_t end = clock();
+    double elapsed = (double)(end - start) / CLOCKS_PER_SEC;
+
+    printf("Results:\n");
+    printf("  Total steps: %d\n", total_steps);
+    printf("  Episodes: %d\n", episodes);
+    printf("  Time: %.3f seconds\n", elapsed);
+    printf("  Steps/sec: %.0f\n", total_steps / elapsed);
+    printf("  Avg episode length: %.1f ticks\n", (float)total_steps / episodes);
+}
+
+#ifdef OSRS_PVP_VISUAL
+/* replay file: binary format for pre-recorded actions.
+   header: int32 num_ticks, then num_ticks * num_heads int32 values. */
+typedef struct {
+    int* actions;      /* flat array: actions[tick * num_heads + head] */
+    int  num_ticks;
+    int  num_heads;
+    int  current_tick;
+} ReplayFile;
+
+static ReplayFile* replay_load(const char* path, int num_heads) {
+    FILE* f = fopen(path, "rb");
+    if (!f) { fprintf(stderr, "replay: can't open %s\n", path); return NULL; }
+    int num_ticks = 0;
+    if (fread(&num_ticks, 4, 1, f) != 1) { fclose(f); return NULL; }
+    ReplayFile* rf = (ReplayFile*)malloc(sizeof(ReplayFile));
+    rf->num_ticks = num_ticks;
+    rf->num_heads = num_heads;
+    rf->current_tick = 0;
+    rf->actions = (int*)malloc(num_ticks * num_heads * sizeof(int));
+    size_t n = fread(rf->actions, sizeof(int), num_ticks * num_heads, f);
+    fclose(f);
+    if ((int)n != num_ticks * num_heads) {
+        fprintf(stderr, "replay: short read (%d/%d)\n", (int)n, num_ticks * num_heads);
+        free(rf->actions); free(rf); return NULL;
+    }
+    fprintf(stderr, "replay loaded: %d ticks from %s\n", num_ticks, path);
+    return rf;
+}
+
+static int replay_get_actions(ReplayFile* rf, int* out) {
+    if (rf->current_tick >= rf->num_ticks) return 0;
+    int base = rf->current_tick * rf->num_heads;
+    for (int h = 0; h < rf->num_heads; h++) out[h] = rf->actions[base + h];
+    rf->current_tick++;
+    return 1;
+}
+
+static void replay_free(ReplayFile* rf) {
+    if (rf) { free(rf->actions); free(rf); }
+}
+
+static void run_visual(OsrsPvp* env, const char* encounter_name, const char* replay_path) {
+    env->client = NULL;
+
+    /* set up encounter if specified, otherwise default to PvP */
+    if (encounter_name) {
+        const EncounterDef* edef = encounter_find(encounter_name);
+        if (!edef) {
+            fprintf(stderr, "unknown encounter: %s\n", encounter_name);
+            return;
+        }
+        env->encounter_def = (void*)edef;
+        env->encounter_state = edef->create();
+        edef->put_int(env->encounter_state, "seed", 42);
+
+        /* load encounter-specific collision map.
+           world offset translates encounter-local (0,0) → world coords for cmap lookup.
+           the Zulrah island collision data has ~69 walkable tiles forming the
+           irregular island shape (narrow south, wide north, pillar alcoves). */
+        if (strcmp(encounter_name, "zulrah") == 0) {
+            CollisionMap* cmap = collision_map_load("data/zulrah.cmap");
+            if (cmap) {
+                edef->put_ptr(env->encounter_state, "collision_map", cmap);
+                edef->put_int(env->encounter_state, "world_offset_x", 2256);
+                edef->put_int(env->encounter_state, "world_offset_y", 3061);
+                env->collision_map = cmap;
+                fprintf(stderr, "zulrah collision map: %d regions, offset (2256, 3061)\n",
+                        cmap->count);
+            }
+        } else if (strcmp(encounter_name, "inferno") == 0) {
+            CollisionMap* cmap = collision_map_load("data/inferno.cmap");
+            if (cmap) {
+                edef->put_ptr(env->encounter_state, "collision_map", cmap);
+                edef->put_int(env->encounter_state, "world_offset_x", 2246);
+                edef->put_int(env->encounter_state, "world_offset_y", 5315);
+                env->collision_map = cmap;
+                fprintf(stderr, "inferno collision map: %d regions, offset (2246, 5315)\n",
+                        cmap->count);
+            }
+        }
+
+        edef->reset(env->encounter_state, 42);
+        fprintf(stderr, "encounter: %s (obs=%d, heads=%d)\n",
+                edef->name, edef->obs_size, edef->num_action_heads);
+    } else {
+        env->use_c_opponent = 1;
+        env->opponent.type = OPP_IMPROVED;
+        env->is_lms = 1;
+        pvp_reset(env);
+    }
+
+    /* load collision map from env var if set */
+    const char* cmap_path = getenv("OSRS_COLLISION_MAP");
+    if (cmap_path && cmap_path[0]) {
+        env->collision_map = collision_map_load(cmap_path);
+        if (env->collision_map) {
+            fprintf(stderr, "collision map loaded: %d regions\n",
+                    ((CollisionMap*)env->collision_map)->count);
+        }
+    }
+
+    /* init window before main loop (WindowShouldClose needs a window) */
+    pvp_render(env);
+    RenderClient* rc = (RenderClient*)env->client;
+
+    /* share collision map pointer with renderer for overlays */
+    if (env->collision_map) {
+        rc->collision_map = (const CollisionMap*)env->collision_map;
+    }
+
+    /* load 3D assets if available */
+    rc->model_cache = model_cache_load("data/equipment.models");
+    if (rc->model_cache) {
+        rc->show_models = 1;
+    }
+    rc->anim_cache = anim_cache_load("data/equipment.anims");
+    render_init_overlay_models(rc);
+    /* load terrain/objects per encounter */
+    if (!encounter_name) {
+        rc->terrain = terrain_load("data/wilderness.terrain");
+        rc->objects = objects_load("data/wilderness.objects");
+        rc->npcs = objects_load("data/wilderness.npcs");
+    } else if (strcmp(encounter_name, "zulrah") == 0) {
+        rc->terrain = terrain_load("data/zulrah.terrain");
+        rc->objects = objects_load("data/zulrah.objects");
+
+        /* Zulrah coordinate alignment
+           ============================
+           three coordinate spaces are in play:
+
+           1. OSRS world coords: absolute tile positions (e.g. 2256, 3061).
+              terrain, objects, and collision maps are all authored in this space.
+
+           2. encounter-local coords: the encounter arena uses (0,0) as origin.
+              the encounter state, entity positions, and arena bounds all use this.
+
+           3. raylib world coords: X = east, Y = up, Z = -north (right-handed).
+              terrain_offset/objects_offset subtract the world origin so that
+              encounter-local (0,0) maps to raylib (0,0).
+
+           terrain/objects offset: subtract (2256, 3061) from world coords.
+             regions (35,47)+(35,48) start at world (2240, 3008).
+             the island platform is at world ~(2256, 3061), so offset = 2240+16, 3008+53.
+
+           collision map offset: ADD (2254, 3060) to encounter-local coords.
+             collision_get_flags expects world coords, so when the renderer or
+             encounter queries tile (x, y) in local space, it looks up
+             (x + 2254, y + 3060) in the collision map. */
+        int zul_off_x = 2240 + 16;
+        int zul_off_y = 3008 + 53;
+        if (rc->terrain)
+            terrain_offset(rc->terrain, zul_off_x, zul_off_y);
+        if (rc->objects)
+            objects_offset(rc->objects, zul_off_x, zul_off_y);
+
+        rc->collision_map = (const CollisionMap*)env->collision_map;
+        rc->collision_world_offset_x = 2256;
+        rc->collision_world_offset_y = 3061;
+    } else if (encounter_name && strcmp(encounter_name, "inferno") == 0) {
+        rc->terrain = terrain_load("data/inferno.terrain");
+        rc->objects = objects_load("data/inferno.objects");
+        /* inferno region (35,83) starts at world (2240, 5312).
+           encounter uses region-local coords (10-40, 13-44).
+           offset terrain/objects so local coord 0 maps to world 2240. */
+        if (rc->terrain)
+            terrain_offset(rc->terrain, 2246, 5315);
+        if (rc->objects)
+            objects_offset(rc->objects, 2246, 5315);
+
+        rc->npc_model_cache = model_cache_load("data/inferno_npcs.models");
+        rc->npc_anim_cache = anim_cache_load("data/inferno_npcs.anims");
+
+        /* collision map for debug overlay (C key) */
+        if (env->collision_map) {
+            rc->collision_map = (const CollisionMap*)env->collision_map;
+            rc->collision_world_offset_x = 2246;
+            rc->collision_world_offset_y = 5315;
+        }
+
+        fprintf(stderr, "inferno: terrain=%s, cmap=%s, npc_models=%d, npc_anims=%d seqs\n",
+                rc->terrain ? "loaded" : "MISSING",
+                rc->collision_map ? "loaded" : "MISSING",
+                rc->npc_model_cache ? rc->npc_model_cache->count : 0,
+                rc->npc_anim_cache ? rc->npc_anim_cache->seq_count : 0);
+    }
+
+    /* populate entity pointers (also sets arena bounds from encounter) */
+    render_populate_entities(rc, env);
+
+    /* update camera target to center on the (possibly new) arena */
+    rc->cam_target_x = (float)rc->arena_base_x + (float)rc->arena_width / 2.0f;
+    rc->cam_target_z = -((float)rc->arena_base_y + (float)rc->arena_height / 2.0f);
+
+    for (int i = 0; i < rc->entity_count; i++) {
+        int size = rc->entities[i].npc_size > 1 ? rc->entities[i].npc_size : 1;
+        rc->sub_x[i] = rc->entities[i].x * 128 + size * 64;
+        rc->sub_y[i] = rc->entities[i].y * 128 + size * 64;
+        rc->dest_x[i] = rc->sub_x[i];
+        rc->dest_y[i] = rc->sub_y[i];
+    }
+
+    /* load replay file if specified */
+    ReplayFile* replay = NULL;
+    if (replay_path && env->encounter_def) {
+        const EncounterDef* edef = (const EncounterDef*)env->encounter_def;
+        replay = replay_load(replay_path, edef->num_action_heads);
+    }
+
+    /* save initial state as first snapshot */
+    render_save_snapshot(rc, env);
+
+    while (!WindowShouldClose()) {
+
+        /* rewind: restore historical state and re-render */
+        if (rc->step_back) {
+            rc->step_back = 0;
+            render_restore_snapshot(rc, env);
+            /* if we restored the latest snapshot, exit rewind mode */
+            if (rc->history_cursor >= rc->history_count - 1) {
+                rc->history_cursor = -1;
+            }
+            pvp_render(env);
+            continue;
+        }
+
+        /* in rewind mode viewing history: just render, don't step */
+        if (rc->history_cursor >= 0) {
+            pvp_render(env);
+            continue;
+        }
+
+        /* paused: render but don't step */
+        if (rc->is_paused && !rc->step_once) {
+            pvp_render(env);
+            continue;
+        }
+        rc->step_once = 0;
+
+        /* tick pacing: keep rendering while waiting */
+        if (rc->ticks_per_second > 0.0f) {
+            double interval = 1.0 / rc->ticks_per_second;
+            while (GetTime() - rc->last_tick_time < interval) {
+                pvp_render(env);
+                if (WindowShouldClose()) return;
+            }
+        }
+        rc->last_tick_time = GetTime();
+
+        /* step the simulation */
+        render_pre_tick(rc, env);
+
+        if (env->encounter_def && env->encounter_state) {
+            /* encounter mode */
+            const EncounterDef* edef = (const EncounterDef*)env->encounter_def;
+            int enc_actions[16] = {0};
+
+            if (rc->human_input.enabled) {
+                /* human control: translate staged clicks to encounter actions */
+                human_to_encounter_actions_generic(&rc->human_input, enc_actions,
+                                                    edef, env->encounter_state);
+                /* set encounter destination from human click for proper pathfinding.
+                   attacking an NPC cancels movement (OSRS: server stops walking
+                   to old dest and auto-walks toward target instead). */
+                if (rc->human_input.pending_move_x >= 0 && edef->put_int) {
+                    edef->put_int(env->encounter_state, "player_dest_x",
+                                  rc->human_input.pending_move_x);
+                    edef->put_int(env->encounter_state, "player_dest_y",
+                                  rc->human_input.pending_move_y);
+                } else if (rc->human_input.pending_attack && edef->put_int) {
+                    edef->put_int(env->encounter_state, "player_dest_x", -1);
+                    edef->put_int(env->encounter_state, "player_dest_y", -1);
+                }
+                human_input_clear_pending(&rc->human_input);
+            } else if (replay && replay_get_actions(replay, enc_actions)) {
+                /* replay mode: actions come from pre-recorded file */
+            } else if (strcmp(edef->name, "zulrah") == 0) {
+                zul_heuristic_actions((ZulrahState*)env->encounter_state, enc_actions);
+            } else {
+                for (int h = 0; h < edef->num_action_heads; h++) {
+                    enc_actions[h] = rand() % edef->action_head_dims[h];
+                }
+            }
+            edef->step(env->encounter_state, enc_actions);
+            /* sync env->tick so renderer HP bars/splats use correct tick */
+            env->tick = edef->get_tick(env->encounter_state);
+
+            /* clear human move when player arrived at clicked destination */
+            if (rc->human_input.enabled && rc->human_input.pending_move_x >= 0) {
+                Player* ply = edef->get_entity(env->encounter_state, 0);
+                if (ply && ply->x == rc->human_input.pending_move_x &&
+                    ply->y == rc->human_input.pending_move_y) {
+                    human_input_clear_move(&rc->human_input);
+                }
+            }
+
+        } else {
+            /* PvP mode */
+            if (rc->human_input.enabled) {
+                /* human control: translate staged clicks to PvP actions for agent 0 */
+                human_to_pvp_actions(&rc->human_input,
+                                      env->actions, &env->players[0], &env->players[1]);
+                /* opponent still gets random actions */
+                int* opp = env->actions + NUM_ACTION_HEADS;
+                for (int h = 0; h < NUM_ACTION_HEADS; h++) {
+                    opp[h] = rand() % ACTION_HEAD_DIMS[h];
+                }
+                human_input_clear_pending(&rc->human_input);
+            } else {
+                for (int agent = 0; agent < NUM_AGENTS; agent++) {
+                    int* actions = env->actions + agent * NUM_ACTION_HEADS;
+                    for (int h = 0; h < NUM_ACTION_HEADS; h++) {
+                        actions[h] = rand() % ACTION_HEAD_DIMS[h];
+                    }
+                }
+            }
+            pvp_step(env);
+
+            /* clear human move when player arrived at clicked destination */
+            if (rc->human_input.enabled && rc->human_input.pending_move_x >= 0) {
+                Player* p0 = &env->players[0];
+                if (p0->x == rc->human_input.pending_move_x &&
+                    p0->y == rc->human_input.pending_move_y) {
+                    human_input_clear_move(&rc->human_input);
+                }
+            }
+        }
+
+        render_post_tick(rc, env);
+        render_save_snapshot(rc, env);
+        pvp_render(env);
+
+        /* auto-reset on episode end */
+        int is_over = env->encounter_def
+            ? ((const EncounterDef*)env->encounter_def)->is_terminal(env->encounter_state)
+            : env->episode_over;
+        if (is_over) {
+            /* hold final frame for 2 seconds */
+            double end_time = GetTime();
+            while (GetTime() - end_time < 2.0 && !WindowShouldClose()) {
+                pvp_render(env);
+            }
+            render_clear_history(rc);
+            effect_clear_all(rc->effects);
+            rc->gui.inv_grid_dirty = 1;
+            if (env->encounter_def) {
+                ((const EncounterDef*)env->encounter_def)->reset(
+                    env->encounter_state, (uint32_t)rand());
+            } else {
+                pvp_reset(env);
+            }
+            render_populate_entities(rc, env);
+            for (int i = 0; i < rc->entity_count; i++) {
+                rc->sub_x[i] = rc->entities[i].x * 128 + 64;
+                rc->sub_y[i] = rc->entities[i].y * 128 + 64;
+                rc->dest_x[i] = rc->sub_x[i];
+                rc->dest_y[i] = rc->sub_y[i];
+            }
+            render_save_snapshot(rc, env);
+        }
+    }
+
+    replay_free(replay);
+
+    if (env->client) {
+        render_destroy_client((RenderClient*)env->client);
+        env->client = NULL;
+    }
+    if (env->encounter_def && env->encounter_state) {
+        ((const EncounterDef*)env->encounter_def)->destroy(env->encounter_state);
+        env->encounter_state = NULL;
+    }
+}
+#endif
+
+int main(int argc, char** argv) {
+    int use_visual = 0;
+    int gear_tier = -1;  /* -1 = random (default LMS distribution) */
+    const char* encounter_name __attribute__((unused)) = NULL;
+    const char* replay_path __attribute__((unused)) = NULL;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--visual") == 0) use_visual = 1;
+        else if (strcmp(argv[i], "--encounter") == 0 && i + 1 < argc)
+            encounter_name = argv[++i];
+        else if (strcmp(argv[i], "--replay") == 0 && i + 1 < argc)
+            replay_path = argv[++i];
+        else if (strcmp(argv[i], "--tier") == 0 && i + 1 < argc)
+            gear_tier = atoi(argv[++i]);
+    }
+
+    srand((unsigned int)time(NULL));
+
+    /* verify encounter registry + lifecycle */
+    {
+        const EncounterDef* nh = encounter_find("nh_pvp");
+        if (!nh) { fprintf(stderr, "FATAL: nh_pvp encounter not registered\n"); return 1; }
+        printf("encounter registry: '%s' (obs=%d, heads=%d, mask=%d)\n",
+               nh->name, nh->obs_size, nh->num_action_heads, nh->mask_size);
+
+        /* smoke test: create → reset → step → check terminal → destroy */
+        EncounterState* es = nh->create();
+        nh->put_int(es, "use_c_opponent", 1);
+        nh->put_int(es, "opponent_type", OPP_IMPROVED);
+        nh->reset(es, 42);
+        int actions[7] = {0};
+        for (int t = 0; t < 300 && !nh->is_terminal(es); t++) {
+            nh->step(es, actions);
+        }
+        printf("encounter smoke test: tick=%d, terminal=%d, winner=%d\n",
+               nh->get_tick(es), nh->is_terminal(es), nh->get_winner(es));
+        nh->destroy(es);
+    }
+
+    OsrsPvp env;
+    memset(&env, 0, sizeof(OsrsPvp));
+
+    if (use_visual) {
+#ifdef OSRS_PVP_VISUAL
+        /* pvp_init uses internal buffers — no malloc needed */
+        pvp_init(&env);
+        /* set gear tier: --tier N forces both players to tier N,
+           otherwise default LMS distribution (mostly tier 0) */
+        if (gear_tier >= 0 && gear_tier <= 3) {
+            for (int t = 0; t < 4; t++) env.gear_tier_weights[t] = 0.0f;
+            env.gear_tier_weights[gear_tier] = 1.0f;
+        } else {
+            /* default LMS: 60% tier 0, 25% tier 1, 10% tier 2, 5% tier 3 */
+            env.gear_tier_weights[0] = 0.60f;
+            env.gear_tier_weights[1] = 0.25f;
+            env.gear_tier_weights[2] = 0.10f;
+            env.gear_tier_weights[3] = 0.05f;
+        }
+        env.ocean_acts = env.actions;
+        env.ocean_obs = env._obs_buf;
+        env.ocean_rew = env.rewards;
+        env.ocean_term = env.terminals;
+        run_visual(&env, encounter_name, replay_path);
+        pvp_close(&env);
+#else
+        fprintf(stderr, "not compiled with visual support (use: make visual)\n");
+        return 1;
+#endif
+    } else {
+        /* headless: allocate external buffers (matches original demo) */
+        env.observations = (float*)calloc(NUM_AGENTS * SLOT_NUM_OBSERVATIONS, sizeof(float));
+        env.actions = (int*)calloc(NUM_AGENTS * NUM_ACTION_HEADS, sizeof(int));
+        env.rewards = (float*)calloc(NUM_AGENTS, sizeof(float));
+        env.terminals = (unsigned char*)calloc(NUM_AGENTS, sizeof(unsigned char));
+        env.action_masks = (unsigned char*)calloc(NUM_AGENTS * ACTION_MASK_SIZE, sizeof(unsigned char));
+        env.action_masks_agents = (1 << NUM_AGENTS) - 1;
+        env.ocean_acts = env.actions;
+        env.ocean_obs = (float*)calloc(OCEAN_OBS_SIZE, sizeof(float));
+        env.ocean_rew = env.rewards;
+        env.ocean_term = env.terminals;
+
+        printf("OSRS PvP C Environment Demo\n");
+        printf("===========================\n\n");
+
+        printf("Running single verbose episode...\n");
+        run_random_episode(&env, 1);
+
+        printf("\n");
+        benchmark(&env, 100000);
+
+        printf("\nVerifying observations...\n");
+        pvp_reset(&env);
+        printf("Observation count per agent: %d\n", SLOT_NUM_OBSERVATIONS);
+        printf("First 10 observations (agent 0): ");
+        for (int i = 0; i < 10; i++) {
+            printf("%.2f ", env.observations[i]);
+        }
+        printf("\n");
+
+        printf("\nAction heads: %d\n", NUM_ACTION_HEADS);
+        printf("Action dims: [");
+        for (int i = 0; i < NUM_ACTION_HEADS; i++) {
+            printf("%d", ACTION_HEAD_DIMS[i]);
+            if (i < NUM_ACTION_HEADS - 1) {
+                printf(", ");
+            }
+        }
+        printf("]\n");
+
+        printf("\nDemo complete.\n");
+
+        free(env.observations);
+        free(env.actions);
+        free(env.rewards);
+        free(env.terminals);
+        free(env.action_masks);
+        free(env.ocean_obs);
+        pvp_close(&env);
+    }
+
+    return 0;
+}

@@ -2509,12 +2509,16 @@ static void inf_write_mask(EncounterState* state, float* mask) {
 
     /* HEAD_POTION (4): none, restore, bastion, stamina */
     mask[offset++] = 1.0f;  /* none always valid */
-    /* restore: mask if no doses, timer active, or would waste more than half */
+    /* restore: unmask when prayer is low OR any combat stat is drained (from brews).
+       without the stat drain check, the agent can't recover after brewing. */
     {
         int pray_missing = s->player.base_prayer - s->player.current_prayer;
+        int stats_drained = (s->player.current_ranged < s->player.base_ranged ||
+                             s->player.current_attack < s->player.base_attack ||
+                             s->player.current_magic < s->player.base_magic);
         mask[offset++] = (s->player_restore_doses > 0 &&
                           s->player_potion_timer == 0 &&
-                          pray_missing >= (INF_RESTORE_PRAY + 1) / 2)
+                          (pray_missing >= (INF_RESTORE_PRAY + 1) / 2 || stats_drained))
                          ? 1.0f : 0.0f;
     }
     /* bastion: mask if no doses or timer active */

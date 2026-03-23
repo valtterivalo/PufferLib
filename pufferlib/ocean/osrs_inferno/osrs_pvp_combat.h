@@ -1,1 +1,1 @@
-../osrs/osrs_pvp_combat.h
+../osrs_pvp/osrs_pvp_combat.h

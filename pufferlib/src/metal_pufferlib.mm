@@ -36,6 +36,20 @@ static inline float prof_ms(uint64_t t0, uint64_t t1) {
 }
 
 // ============================================================================
+// Observation dtype size
+// ============================================================================
+
+int obs_dtype_size(int dtype) {
+    if (dtype == FLOAT || dtype == INT) {
+        return sizeof(float);
+    }
+    if (dtype == DOUBLE) {
+        return sizeof(double);
+    }
+    return sizeof(char);  // UNSIGNED_CHAR, CHAR
+}
+
+// ============================================================================
 // Environment creation — unified memory, no GPU copy needed
 // ============================================================================
 
@@ -45,11 +59,12 @@ StaticVec* create_environments(int num_buffers, int total_agents,
 
     int obs_size = get_obs_size();
     int num_atns = get_num_atns();
-    int obs_esz = (int)get_obs_elem_size();
+    int obs_type = get_obs_type();
 
     // Unified memory: env obs/actions/rewards/terminals point directly at vecenv buffers
-    env.obs = {.bytes = (char*)vec->gpu_observations, .shape = {total_agents, obs_size}, .dtype_size = obs_esz};
-    env.actions = {.bytes = (char*)vec->gpu_actions, .shape = {total_agents, num_atns}, .dtype_size = (int)sizeof(float)};
+    env.obs = {.bytes = (char*)vec->gpu_observations, .shape = {total_agents, obs_size}, .dtype_size = obs_dtype_size(obs_type)};
+    env.obs_raw_dtype = obs_type;
+    env.actions = {.bytes = (char*)vec->gpu_actions, .shape = {total_agents, num_atns}, .dtype_size = (int)sizeof(double)};
     env.rewards = {.bytes = (char*)vec->gpu_rewards, .shape = {total_agents}, .dtype_size = (int)sizeof(float)};
     env.terminals = {.bytes = (char*)vec->gpu_terminals, .shape = {total_agents}, .dtype_size = (int)sizeof(float)};
 
@@ -345,8 +360,8 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
         PufTensor acts_f32_dst = puf_slice(pufferl->rollout_actions_f32, t, start, block_size);
         memcpy(acts_f32_dst.bytes, act_f32_buf.bytes, block_size * num_atns * sizeof(float));
 
-        // Write float actions directly to rollout buffer (no double expansion).
-        memcpy(act_slice.bytes, act_f32_buf.bytes, block_size * num_atns * sizeof(float));
+        mtl_sample_logits_expand((const float*)act_f32_buf.bytes,
+                                 (double*)act_slice.bytes, block_size * num_atns);
     } else {
         // GPU path: Metal dispatch + sync (original behavior)
         PufTensor mingru_input = p->encoder.forward(infer_weights.encoder, acts.encoder, obs_dst, stream);
@@ -360,8 +375,8 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
             buf_rng_seed, buf_rng_offset, stream);
 
         mtl_ensure_stream_synced(stream);
-        // Write float actions directly to rollout buffer (no double expansion).
-        memcpy(act_slice.bytes, act_f32_buf.bytes, block_size * num_atns * sizeof(float));
+        mtl_sample_logits_expand((const float*)act_f32_buf.bytes,
+                                 (double*)act_slice.bytes, block_size * num_atns);
     }
 
     // RNN state NOT zeroed on terminal — matches CUDA upstream behavior.
@@ -370,12 +385,11 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
 
     uint64_t tp2 = mach_absolute_time();
 
-    // Copy f32 actions to env. Both act_f32_buf and act_slice are float now.
     int64_t act_cols = env.actions.shape[1];
     memcpy(
         env.actions.bytes + start * act_cols * env.actions.dtype_size,
-        act_f32_buf.bytes,
-        block_size * act_cols * (int)sizeof(float));
+        act_slice.bytes,
+        act_slice.numel() * act_slice.dtype_size);
 
     uint64_t tp3 = mach_absolute_time();
 
@@ -445,12 +459,25 @@ void train_impl(PuffeRL& pufferl) {
         int fused_cols = (int)pufferl.train_logits.shape[2];
         int num_atns = (int)pufferl.train_actions_f32.shape[2];
 
-        // Recompute logprobs from raw logits (no mask — matching CUDA PPO)
+        // Mask: embedded in obs or all-ones fallback
+        const float *mask_ptr;
+        int mask_stride;
+        if (pufferl.has_mask) {
+            int obs_cols = (int)rollouts.observations.shape[2];
+            int mask_offset = obs_cols - (fused_cols - 1);
+            mask_ptr = (const float *)rollouts.observations.bytes + mask_offset;
+            mask_stride = obs_cols;
+        } else {
+            mask_ptr = (const float *)pufferl.ones_mask.bytes;
+            mask_stride = 0;
+        }
+
         mtl_recompute_logprobs(
             (float *)rollouts.logprobs.bytes,
             (const float *)pufferl.train_logits.bytes,
             (const float *)pufferl.train_actions_f32.bytes,
             (const int *)pufferl.act_sizes_puf.bytes,
+            mask_ptr, mask_stride,
             total_samples, num_atns, fused_cols, train_stream);
     }
 
@@ -507,6 +534,7 @@ void train_impl(PuffeRL& pufferl) {
         puf_zero(pufferl.train_buf.mb_state, s);
         {
             RolloutBuf sel_src = rollouts;
+            sel_src.values = pufferl.old_values_puf;
             mtl_select_copy(sel_src, pufferl.train_buf,
                 (const int64_t*)pufferl.prio_bufs.idx.bytes,
                 (const float*)pufferl.advantages_puf.bytes,
@@ -617,12 +645,12 @@ void train_impl(PuffeRL& pufferl) {
 
                 // dump weight stats at NaN time
                 DecoderWeights* dw = (DecoderWeights*)pufferl.weights_fp32.decoder;
-                if (dw && dw->weight.bytes) {
-                    const float* pw = (const float*)dw->weight.bytes;
-                    int pn = (dw->output_dim + 1) * dw->hidden_dim;
+                if (dw && dw->policy_weight.bytes) {
+                    const float* pw = (const float*)dw->policy_weight.bytes;
+                    int pn = dw->output_dim * dw->hidden_dim;
                     float pw_max = 0;
                     for (int i = 0; i < pn; i++) pw_max = std::max(pw_max, std::fabs(pw[i]));
-                    fprintf(stderr, "  dec_abs_max: %.4f\n", pw_max);
+                    fprintf(stderr, "  dec_policy_abs_max: %.4f\n", pw_max);
                 }
                 fprintf(stderr, "[NaN-TRAP] end dump\n\n");
             }
@@ -665,25 +693,33 @@ void train_impl(PuffeRL& pufferl) {
         mtl_barrier((MetalStream*)s);
         muon_step(pufferl.muon, s);
 
-        // per-tensor weight magnitude trace
+        // single-element trace: track the max-abs decoder policy weight
         {
             static int trace_count = 0;
             trace_count++;
-            if (trace_count % 1000 == 0) {
+            DecoderWeights* dw = (DecoderWeights*)pufferl.weights_fp32.decoder;
+            if (dw && dw->policy_weight.bytes) {
                 mtl_ensure_stream_synced(s);
+                int od = dw->output_dim, H = dw->hidden_dim;
+                int n = od * H;
+                const float* pw = (const float*)dw->policy_weight.bytes;
+                float max_val = 0; int max_idx = 0;
+                for (int i = 0; i < n; i++) {
+                    float a = fabsf(pw[i]);
+                    if (a > max_val) { max_val = a; max_idx = i; }
+                }
+                // also read momentum and gradient at that index
                 Muon* mu = pufferl.muon;
-                int64_t off = 0;
-                int idx = 0;
-                const char* names[] = {"enc", "dec", "gru0", "gru1", "gru2", "gru3"};
-                for (auto* t : mu->param_alloc->regs) {
-                    const float* w = (const float*)mu->wb_puf.bytes + off;
-                    int64_t n = t->numel();
-                    float abs_max = 0;
-                    for (int64_t i = 0; i < n; i++) abs_max = std::max(abs_max, std::fabs(w[i]));
-                    const char* name = (idx < 6) ? names[idx] : "unk";
-                    fprintf(stderr, "[weight-trace] step=%d %s abs_max=%.4f\n", trace_count, name, abs_max);
-                    off += n;
-                    idx++;
+                EncoderWeights* ew = (EncoderWeights*)pufferl.weights_fp32.encoder;
+                int64_t enc_elems = ew ? ew->weight.numel() : 0;
+                float mb_val = 0, gc_val = 0;
+                if (mu->mb_puf.bytes)
+                    mb_val = ((const float*)mu->mb_puf.bytes)[enc_elems + max_idx];
+                if (mu->gc_puf.bytes)
+                    gc_val = ((const float*)mu->gc_puf.bytes)[enc_elems + max_idx];
+                if (max_val > 5.0f || trace_count % 1000 == 0) {
+                    fprintf(stderr, "[weight-trace] step=%d idx=%d/%d w=%.4f mb=%.6f gc=%.6f row=%d col=%d\n",
+                        trace_count, max_idx, n, max_val, mb_val, gc_val, max_idx/H, max_idx%H);
                 }
             }
         }
@@ -694,13 +730,6 @@ void train_impl(PuffeRL& pufferl) {
                                 (int)pufferl.alloc_fp32.params.total_elems, s);
         }
 
-        mtl_barrier((MetalStream*)s);
-
-        // Scatter updated ratio and newvalue back to rollout buffers so
-        // subsequent minibatches see fresh importance weights and values
-        // (matches CUDA index_copy_kernel at pufferlib.cu:1433-1446).
-        mtl_scatter_ppo_outputs(pufferl.train_buf, rollouts,
-            (const int64_t*)pufferl.prio_bufs.idx.bytes, s);
         mtl_barrier((MetalStream*)s);
 
         if (gpu_profile) mtl_ensure_stream_synced(s);

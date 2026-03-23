@@ -1,1 +1,1 @@
-../osrs/osrs_encounter.h
+../osrs_pvp/osrs_encounter.h

@@ -382,99 +382,42 @@ pybind11::dict log_train_debug(pybind11::object pufferl_obj) {
     float current_lr = *pufferl.muon->lr_ptr;
     out["optimizer_lr"] = current_lr;
 
-    // Per-component weight, gradient, and momentum stats
+    // Decoder weight stats: policy rows vs value row
     {
-        EncoderWeights* ew = (EncoderWeights*)pufferl.weights_fp32.encoder;
         DecoderWeights* dw = (DecoderWeights*)pufferl.weights_fp32.decoder;
-        MinGRUWeights* mw = (MinGRUWeights*)pufferl.weights_fp32.network;
-        Muon* mu = pufferl.muon;
+        int od = dw->output_dim;
         int H = dw->hidden_dim;
-        int od1 = dw->output_dim + 1;
-
-        // Encoder weights
-        if (ew && ew->weight.bytes) {
-            FloatStats s = compute_float_stats((const float*)ew->weight.bytes, ew->weight.numel());
-            out["enc_w_abs_max"] = std::max(std::fabs(s.min), std::fabs(s.max));
-            out["enc_w_abs_mean"] = s.abs_mean;
+        const float* pw = (const float*)dw->policy_weight.bytes;
+        const float* vw = (const float*)dw->value_weight.bytes;
+        if (pw && vw) {
+            FloatStats pw_stats = compute_float_stats(pw, (int64_t)od * H);
+            FloatStats vw_stats = compute_float_stats(vw, (int64_t)H);
+            out["dec_policy_abs_mean"] = pw_stats.abs_mean;
+            out["dec_policy_abs_max"] = std::max(std::fabs(pw_stats.min), std::fabs(pw_stats.max));
+            out["dec_policy_std"] = pw_stats.stddev;
+            out["dec_value_abs_mean"] = vw_stats.abs_mean;
+            out["dec_value_abs_max"] = std::max(std::fabs(vw_stats.min), std::fabs(vw_stats.max));
+            out["dec_value_std"] = vw_stats.stddev;
         }
 
-        // Decoder weights (policy rows + value row)
-        if (dw && dw->weight.bytes) {
-            const float* w = (const float*)dw->weight.bytes;
-            FloatStats pw = compute_float_stats(w, (int64_t)dw->output_dim * H);
-            FloatStats vw = compute_float_stats(w + (int64_t)dw->output_dim * H, (int64_t)H);
-            out["dec_policy_abs_max"] = std::max(std::fabs(pw.min), std::fabs(pw.max));
-            out["dec_policy_abs_mean"] = pw.abs_mean;
-            out["dec_value_abs_max"] = std::max(std::fabs(vw.min), std::fabs(vw.max));
-            out["dec_value_abs_mean"] = vw.abs_mean;
-        }
-
-        // MinGRU weights (per-layer)
-        if (mw) {
-            float gru_abs_max = 0;
-            for (int i = 0; i < mw->num_layers; i++) {
-                if (!mw->weights[i].bytes) continue;
-                FloatStats s = compute_float_stats((const float*)mw->weights[i].bytes, mw->weights[i].numel());
-                float layer_max = std::max(std::fabs(s.min), std::fabs(s.max));
-                gru_abs_max = std::max(gru_abs_max, layer_max);
-                // per-layer detail
-                std::string prefix = "gru_L" + std::to_string(i) + "_w_";
-                out[pybind11::cast(prefix + "abs_max")] = layer_max;
-                out[pybind11::cast(prefix + "abs_mean")] = s.abs_mean;
-            }
-            out["gru_w_abs_max"] = gru_abs_max;
-        }
-
-        // Per-tensor gradient norms (from Muon's gradient buffer)
-        if (mu && mu->gc_puf.bytes) {
-            int64_t off = 0;
-            int idx = 0;
-            for (auto* t : mu->param_alloc->regs) {
-                const float* g = (const float*)mu->gc_puf.bytes + off;
-                int64_t n = t->numel();
-                float sum_sq = 0;
-                for (int64_t i = 0; i < n; i++) sum_sq += g[i] * g[i];
-                float norm = std::sqrt(sum_sq);
-                const char* names[] = {"enc", "dec_pol", "dec_val", "gru_L0", "gru_L1", "gru_L2", "gru_L3"};
-                const char* name = (idx < 7) ? names[idx] : "unk";
-                out[pybind11::cast(std::string(name) + "_grad_norm")] = norm;
-                off += n;
-                idx++;
-            }
-        }
-
-        // Per-tensor momentum norms
+        // Muon momentum buffer stats for decoder
+        Muon* mu = pufferl.muon;
         if (mu && mu->mb_puf.bytes) {
-            int64_t off = 0;
-            int idx = 0;
-            for (auto* t : mu->param_alloc->regs) {
-                const float* m = (const float*)mu->mb_puf.bytes + off;
-                int64_t n = t->numel();
-                float abs_max = 0;
-                for (int64_t i = 0; i < n; i++) abs_max = std::max(abs_max, std::fabs(m[i]));
-                const char* names[] = {"enc", "dec_pol", "dec_val", "gru_L0", "gru_L1", "gru_L2", "gru_L3"};
-                const char* name = (idx < 7) ? names[idx] : "unk";
-                out[pybind11::cast(std::string(name) + "_mom_abs_max")] = abs_max;
-                off += n;
-                idx++;
-            }
-        }
-
-        // NS update norm (from Muon's update buffer — post-NS, pre-weight-update)
-        if (mu && mu->up_puf.bytes) {
-            int64_t off = 0;
-            int idx = 0;
-            for (auto* t : mu->param_alloc->regs) {
-                const float* u = (const float*)mu->up_puf.bytes + off;
-                int64_t n = t->numel();
-                float abs_max = 0;
-                for (int64_t i = 0; i < n; i++) abs_max = std::max(abs_max, std::fabs(u[i]));
-                const char* names[] = {"enc", "dec_pol", "dec_val", "gru_L0", "gru_L1", "gru_L2", "gru_L3"};
-                const char* name = (idx < 7) ? names[idx] : "unk";
-                out[pybind11::cast(std::string(name) + "_update_abs_max")] = abs_max;
-                off += n;
-                idx++;
-            }
+            // Find decoder momentum offset: same layout as param allocator
+            // encoder weight comes first, then policy_weight, then value_weight
+            EncoderWeights* ew = (EncoderWeights*)pufferl.weights_fp32.encoder;
+            int64_t enc_elems = ew ? ew->weight.numel() : 0;
+            int64_t dec_policy_elems = (int64_t)od * H;
+            int64_t dec_value_elems = (int64_t)H;
+            const float* mb_all = (const float*)mu->mb_puf.bytes;
+            const float* mb_policy = mb_all + enc_elems;
+            const float* mb_value = mb_policy + dec_policy_elems;
+            FloatStats mb_p_stats = compute_float_stats(mb_policy, dec_policy_elems);
+            FloatStats mb_v_stats = compute_float_stats(mb_value, dec_value_elems);
+            out["mom_policy_abs_mean"] = mb_p_stats.abs_mean;
+            out["mom_policy_abs_max"] = std::max(std::fabs(mb_p_stats.min), std::fabs(mb_p_stats.max));
+            out["mom_value_abs_mean"] = mb_v_stats.abs_mean;
+            out["mom_value_abs_max"] = std::max(std::fabs(mb_v_stats.min), std::fabs(mb_v_stats.max));
         }
     }
 

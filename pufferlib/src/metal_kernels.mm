@@ -323,18 +323,6 @@ void mtl_scale_f32(float *ptr, float scale, int count, cudaStream_t stream) {
   mtl_dispatch_1d(ms, pso, count);
 }
 
-// Add eps to diagonal of M×M row-major matrix (regularize Gram matrix for NS)
-void mtl_add_diag_f32(float *ptr, float eps, int m, cudaStream_t stream) {
-  MetalStream *ms = mtl_resolve_stream(stream);
-  ms->compute_encoder();
-  auto pso = mtl_pipeline("add_diag_f32");
-  mtl_set_pso(ms, pso);
-  mtl_set_ptr(ms, ptr, 0);
-  struct { float eps; int m; int stride; } params = {eps, m, m};
-  mtl_set_params(ms, params, 1);
-  mtl_dispatch_1d(ms, pso, m);
-}
-
 // dst += alpha * src
 void mtl_axpy_f32(float *dst, const float *src, float alpha, int count,
                    cudaStream_t stream) {
@@ -442,7 +430,7 @@ void mtl_clip_by_norm_f32(float *data, const float *norm_ptr,
 }
 
 void mtl_normalize_f32(float *data, const float *norm_ptr, float eps,
-                        int count, cudaStream_t stream) {
+                        float max_inv_norm, int count, cudaStream_t stream) {
   MetalStream *ms = mtl_resolve_stream(stream);
   ms->compute_encoder();
   auto pso = mtl_pipeline("normalize_f32");
@@ -451,8 +439,9 @@ void mtl_normalize_f32(float *data, const float *norm_ptr, float eps,
   mtl_set_ptr(ms, norm_ptr, 1);
   struct {
     float eps;
+    float max_inv_norm;
     int count;
-  } params = {eps, count};
+  } params = {eps, max_inv_norm, count};
   mtl_set_params(ms, params, 2);
   mtl_dispatch_1d(ms, pso, count);
 }
@@ -701,7 +690,7 @@ void mtl_sample_logits_expand(const float *f32, double *f64, int count) {
 // completes in ~1us and ensures old_logp matches PPO training precision.
 void mtl_recompute_logprobs(
     float *logprobs, const float *logits, const float *actions_f32,
-    const int *act_sizes,
+    const int *act_sizes, const float *action_mask, int mask_stride,
     int B, int num_atns, int fused_cols, cudaStream_t stream) {
 
   MetalStream *ms = mtl_resolve_stream(stream);
@@ -713,11 +702,12 @@ void mtl_recompute_logprobs(
   mtl_set_ptr(ms, (void *)logits, 1);
   mtl_set_ptr(ms, (void *)actions_f32, 2);
   mtl_set_ptr(ms, (void *)act_sizes, 3);
+  mtl_set_ptr(ms, (void *)action_mask, 4);
 
   struct {
-    int B, num_atns, logits_stride;
-  } params = {B, num_atns, fused_cols};
-  mtl_set_params(ms, params, 4);
+    int B, num_atns, logits_stride, mask_stride;
+  } params = {B, num_atns, fused_cols, mask_stride};
+  mtl_set_params(ms, params, 5);
 
   mtl_dispatch_1d(ms, pso, B);
 }
@@ -729,6 +719,8 @@ void mtl_recompute_logprobs(
 // PPO scratch buffers — file-scope so mtl_kernels_reset() can free them.
 static float *ppo_partials_buf = nullptr;
 static int ppo_partials_capacity = 0;
+static float *ppo_act_f32 = nullptr;
+static int ppo_act_f32_capacity = 0;
 
 void ppo_loss_fwd_bwd(PufTensor &dec_out, PufTensor &logstd, TrainGraph &graph,
                        PufTensor &act_sizes, PufTensor &losses_acc,
@@ -782,6 +774,28 @@ void ppo_loss_fwd_bwd(PufTensor &dec_out, PufTensor &logstd, TrainGraph &graph,
   // with reduce kernel's *loss += sum from the previous minibatch).
   puf_zero(bufs.loss_output, stream);
 
+  // MSL doesn't support double — convert actions from f64 to f32 on GPU.
+  // Uses cast_f64_to_f32 kernel (IEEE 754 bit manipulation via uint2) to
+  // avoid flushing the GPU encoder for a CPU conversion loop.
+  int act_count = (int)graph.mb_actions.numel();
+  if (!ppo_act_f32 || act_count > ppo_act_f32_capacity) {
+    if (ppo_act_f32) {
+      mtl_unwrap_ptr(ppo_act_f32);
+      free(ppo_act_f32);
+    }
+    ppo_act_f32_capacity = act_count;
+    ppo_act_f32 = (float *)mtl_alloc_scratch(ppo_act_f32_capacity * sizeof(float));
+  }
+  {
+    ms->compute_encoder();
+    auto pso = mtl_pipeline("cast_f64_to_f32");
+    mtl_set_pso(ms, pso);
+    mtl_set_ptr(ms, graph.mb_actions.bytes, 0);  // src: f64 as uint2*
+    mtl_set_ptr(ms, ppo_act_f32, 1);             // dst: f32
+    mtl_set_params(ms, act_count, 2);
+    mtl_dispatch_1d(ms, pso, act_count);
+  }
+
   // Action mask: either from external all-ones buffer (no mask) or embedded in obs.
   int input_size = (int)graph.mb_obs.shape[2];
   const float *mask_ptr;
@@ -814,7 +828,7 @@ void ppo_loss_fwd_bwd(PufTensor &dec_out, PufTensor &logstd, TrainGraph &graph,
     mtl_set_ptr(ms, dec_out.bytes, 4);                   // logits
     mtl_set_ptr(ms, is_continuous ? logstd.bytes : dec_out.bytes, 5); // logstd
     mtl_set_ptr(ms, (float *)dec_out.bytes + A_total, 6); // values_pred (last column of fused decoder output)
-    mtl_set_ptr(ms, graph.mb_actions.bytes, 7);  // f32 actions
+    mtl_set_ptr(ms, ppo_act_f32, 7);  // f32 actions (converted from f64)
     mtl_set_ptr(ms, graph.mb_logprobs.bytes, 8);
     mtl_set_ptr(ms, graph.mb_advantages.bytes, 9);
     mtl_set_ptr(ms, graph.mb_prio.bytes, 10);
@@ -1177,26 +1191,6 @@ void puf_orthogonal_init(PufTensor &dst, float gain, uint64_t seed,
   free(work);
 }
 
-// Kaiming uniform init (CPU-side) — matches CUDA's puf_kaiming_init.
-// Uniform(-bound, bound) where bound = gain / sqrt(fan_in).
-void puf_kaiming_init(PufTensor &dst, float gain, uint64_t seed,
-                        cudaStream_t stream) {
-  mtl_ensure_stream_synced(stream);
-
-  assert(dst.ndim() == 2);
-  int64_t rows = dst.shape[0], cols = dst.shape[1];
-  assert(rows > 0 && cols > 0);
-
-  float bound = gain / std::sqrt((float)cols);
-  int64_t n = rows * cols;
-  float *dst_f = (float *)dst.bytes;
-
-  std::mt19937_64 rng(seed);
-  std::uniform_real_distribution<float> dist(-bound, bound);
-  for (int64_t i = 0; i < n; i++)
-    dst_f[i] = dist(rng);
-}
-
 // ============================================================================
 // Muon optimizer
 // ============================================================================
@@ -1269,15 +1263,13 @@ void muon_step(Muon *m, cudaStream_t stream) {
   mtl_barrier(ms);
 
   int64_t offset = 0;
-  int tensor_idx = 0;
   for (auto *t : m->param_alloc->regs) {
     float *gc_ptr = (float *)m->gc_puf.bytes + offset;
     float *up_ptr = (float *)m->up_puf.bytes + offset;
     int64_t R = t->shape[0];
     int64_t C = t->numel() / std::max<int64_t>(1, R);
     // NS orthogonalization for 2D+ params with M >= 2.
-    // value_weight (1×128) naturally skips NS since min(R,C)=1.
-    // policy_weight (76×128) gets full NS (proven stable: dec_p=0.2 over 700M+).
+    // 1-row tensors (e.g. value weight) use direct gradient update.
     if (t->ndim() >= 2 && std::min(R, C) >= 2) {
       bool transposed_flag = R > C;
       int64_t M = transposed_flag ? C : R;
@@ -1310,11 +1302,18 @@ void muon_step(Muon *m, cudaStream_t stream) {
         mtl_norm_reduce(m->ns.norm_ptr, norm_partials_buf, nblk, stream);
         mtl_barrier(ms);
       }
+      // Cap inv_norm at sqrt(M*N) so normalized matrix has per-element values O(1).
+      // Prevents catastrophic amplification when gradient norm is near-zero
+      // (e.g., when per-head PPO clipping zeros most policy gradients).
+      float max_inv_norm = std::sqrt((float)(M * N));
       mtl_normalize_f32((float *)x.bytes, m->ns.norm_ptr, 1e-7f,
-                        (int)x.numel(), stream);
+                        max_inv_norm, (int)x.numel(), stream);
       mtl_barrier(ms);
 
-      // Newton-Schulz iterations
+      // Newton-Schulz iterations (all GEMM — synced internally)
+      // When ns_iters < 5, space out coefficient indices evenly across the
+      // full 5-step schedule (e.g. ns_iters=3 uses coeffs {0,2,4}) so we
+      // get both aggressive early corrections and conservative polishing.
       for (int i = 0; i < m->ns_iters; ++i) {
         int ci = i * 4 / (m->ns_iters - 1 + (m->ns_iters == 1));
         float a = (float)ns_coeffs[ci][0], b = (float)ns_coeffs[ci][1],
@@ -1334,17 +1333,32 @@ void muon_step(Muon *m, cudaStream_t stream) {
       }
 
       PufTensor &result_precision = (m->ns_iters % 2 == 0) ? x : tmp;
-      float scale =
-          (float)std::sqrt(std::max(1.0, (double)R / (double)C));
+
+      // Re-normalize NS output: normalize to unit norm, then scale to sqrt(max(M,N)).
+      // NS iterations can diverge for rank-deficient inputs (e.g., when per-head
+      // clipping zeros most policy gradients). re-normalization bounds per-element
+      // values regardless of NS behavior. the target norm sqrt(max(M,N)) matches
+      // the expected Frobenius norm of an orthogonal M×N matrix.
+      {
+        int nblk = std::min((int)((result_precision.numel() + 255) / 256), 256);
+        mtl_norm_f32(norm_partials_buf, (const float *)result_precision.bytes,
+                     (int)result_precision.numel(), nblk, stream);
+        mtl_barrier(ms);
+        mtl_norm_reduce(m->ns.norm_ptr, norm_partials_buf, nblk, stream);
+        mtl_barrier(ms);
+        float max_inv = (float)std::sqrt((double)(M * N));  // cap for near-zero norm
+        mtl_normalize_f32((float *)result_precision.bytes, m->ns.norm_ptr,
+                          1e-7f, max_inv, (int)result_precision.numel(), stream);
+        mtl_barrier(ms);
+      }
+      float scale = (float)std::sqrt(std::max((double)M, (double)N));
+      mtl_scale_f32((float *)result_precision.bytes, scale,
+                    (int)result_precision.numel(), stream);
+      mtl_barrier(ms);
 
       PufTensor out_f32 = {.bytes = (char *)up_ptr,
                            .shape = {R, C},
                            .dtype_size = 4};
-
-      // Result is already f32 — scale and transpose if needed
-      if (scale != 1.0f)
-        mtl_scale_f32((float *)result_precision.bytes, scale,
-                      (int)result_precision.numel(), stream);
       if (transposed_flag) {
         mtl_transpose_f32((float *)out_f32.bytes,
                           (const float *)result_precision.bytes, (int)M,
@@ -1365,7 +1379,6 @@ void muon_step(Muon *m, cudaStream_t stream) {
       mtl_barrier(ms);
     }
     offset += t->numel();
-    tensor_idx++;
   }
 
   // Apply weight update: w -= lr * up + weight_decay * w
@@ -1373,31 +1386,6 @@ void muon_step(Muon *m, cudaStream_t stream) {
                          m->lr_ptr, (float)m->weight_decay,
                          (int)m->wb_puf.numel(), stream);
   mtl_barrier(ms);
-
-  // Extra weight decay for value_weight (tensor_idx==2): 50x global wd.
-  // The value head has no NS orthogonalization (1-row matrix) and its gradient
-  // drives monotonic weight growth. The 50x multiplier counteracts this.
-  // Also clamp to [-5, 5] as a safety net.
-  {
-    int64_t val_offset = 0;
-    int idx = 0;
-    for (auto *t : m->param_alloc->regs) {
-      if (idx == 2) {  // value_weight tensor
-        float *val_ptr = (float *)m->wb_puf.bytes + val_offset;
-        float extra_wd = 49.0f * (float)m->weight_decay;  // 50x total = global + 49x extra
-        float lr = *(m->lr_ptr);
-        // Apply extra decay: w *= (1 - lr * extra_wd)
-        float extra_scale = 1.0f - lr * extra_wd;
-        mtl_scale_f32(val_ptr, extra_scale, (int)t->numel(), stream);
-        mtl_barrier(ms);
-        mtl_clamp_f32(val_ptr, -5.0f, 5.0f, (int)t->numel(), stream);
-        mtl_barrier(ms);
-        break;
-      }
-      val_offset += t->numel();
-      idx++;
-    }
-  }
 }
 
 // ============================================================================
@@ -1430,7 +1418,7 @@ static void encoder_init_weights(void *w, uint64_t *seed,
   PufTensor wt = {.bytes = ew->weight.bytes,
                   .shape = {ew->out_dim, ew->in_dim},
                   .dtype_size = ew->weight.dtype_size};
-  puf_kaiming_init(wt, std::sqrt(2.0f), (*seed)++, stream);
+  puf_orthogonal_init(wt, std::sqrt(2.0f), (*seed)++, stream);
 }
 
 static void encoder_reg_params(void *w, Allocator *alloc, int esz) {
@@ -1519,31 +1507,26 @@ static PufTensor decoder_backward(void *w, void *activations,
 static void decoder_init_weights(void *w, uint64_t *seed,
                                           cudaStream_t stream) {
   DecoderWeights *dw = (DecoderWeights *)w;
-  int od = dw->output_dim;
-  int H = dw->hidden_dim;
-  // Policy head: small gain (0.01) → near-uniform softmax at init → good exploration.
-  // Value head: normal gain (1.0) → meaningful value predictions from the start.
-  PufTensor policy_wt = {.bytes = dw->policy_weight.bytes,
-                         .shape = {od, H},
-                         .dtype_size = dw->policy_weight.dtype_size};
-  puf_kaiming_init(policy_wt, 0.01f, (*seed)++, stream);
-  PufTensor value_wt = {.bytes = dw->value_weight.bytes,
-                        .shape = {1, H},
-                        .dtype_size = dw->value_weight.dtype_size};
-  puf_kaiming_init(value_wt, 1.0f, (*seed)++, stream);
+  int od1 = dw->output_dim + 1;
+  PufTensor wt = {.bytes = dw->weight.bytes,
+                  .shape = {od1, dw->hidden_dim},
+                  .dtype_size = dw->weight.dtype_size};
+  puf_orthogonal_init(wt, 0.01f, (*seed)++, stream);
 }
 
 static void decoder_reg_params(void *w, Allocator *alloc, int esz) {
   DecoderWeights *dw = (DecoderWeights *)w;
   int od = dw->output_dim;
   int H = dw->hidden_dim;
-  // Split registration: policy_weight gets NS, value_weight gets direct gradient.
-  // Allocator places them contiguously so the fused weight view works.
+  // Register policy and value weights separately so Muon treats them differently:
+  // policy_weight (od, H) -> NS orthogonalization (2D path)
+  // value_weight (1, H) -> direct gradient update (1D path, no NS)
+  // The fused weight view spans both for forward/backward.
   dw->policy_weight = {.shape = {od, H}, .dtype_size = esz};
   dw->value_weight = {.shape = {1, H}, .dtype_size = esz};
   alloc->reg(&dw->policy_weight);
   alloc->reg(&dw->value_weight);
-  // fused weight view set after allocation in decoder_post_alloc
+  // fused weight view: set after allocation in decoder_post_alloc
   if (dw->continuous) {
     dw->logstd = {.shape = {1, od}, .dtype_size = esz};
     alloc->reg(&dw->logstd);
@@ -1595,7 +1578,7 @@ static void mingru_init_weights(void *w, uint64_t *seed, cudaStream_t stream) {
     PufTensor w2d = {.bytes = m->weights[i].bytes,
                      .shape = {3 * m->hidden, m->hidden},
                      .dtype_size = m->weights[i].dtype_size};
-    puf_kaiming_init(w2d, 1.0f, (*seed)++, stream);
+    puf_orthogonal_init(w2d, 1.0f, (*seed)++, stream);
   }
 }
 
@@ -1777,5 +1760,11 @@ void mtl_kernels_reset() {
     free(ppo_partials_buf);
     ppo_partials_buf = nullptr;
     ppo_partials_capacity = 0;
+  }
+  if (ppo_act_f32) {
+    mtl_unwrap_ptr(ppo_act_f32);
+    free(ppo_act_f32);
+    ppo_act_f32 = nullptr;
+    ppo_act_f32_capacity = 0;
   }
 }

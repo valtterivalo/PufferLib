@@ -2,7 +2,7 @@
  * @file binding.c
  * @brief Static-native binding for OSRS Zulrah encounter.
  *
- * Bridges vecenv.h's contract (float actions, float terminals) with the
+ * Bridges vecenv.h's contract (double actions, float terminals) with the
  * Zulrah encounter's vtable interface. Uses the encounter system (EncounterDef)
  * rather than OsrsPvp directly.
  */
@@ -12,7 +12,7 @@
 #include <stdio.h>
 
 #include "osrs_encounter.h"
-#include "osrs_types.h"
+#include "osrs_pvp_types.h"
 #include "encounters/encounter_zulrah.h"
 
 /* total obs = raw obs + action mask */
@@ -23,7 +23,7 @@
  * env->rewards, env->terminals directly. */
 typedef struct {
     void* observations;
-    float* actions;
+    double* actions;
     float* rewards;
     float* terminals;
     int num_agents;
@@ -40,13 +40,14 @@ typedef struct {
 #define OBS_SIZE ZUL_TOTAL_OBS
 #define NUM_ATNS ZUL_NUM_ACTION_HEADS
 #define ACT_SIZES {ZUL_MOVE_DIM, ZUL_ATTACK_DIM, ZUL_PRAYER_DIM, ZUL_FOOD_DIM, ZUL_POTION_DIM, ZUL_SPEC_DIM}
-#define OBS_TENSOR_T FloatTensor
+#define OBS_TYPE FLOAT
+#define ACT_TYPE DOUBLE
 #define Env ZulrahEnv
 
 /* c_step/c_reset/c_close/c_render must be defined BEFORE including vecenv.h */
 
 void c_step(Env* env) {
-    /* float actions -> int staging */
+    /* double actions -> int staging */
     for (int i = 0; i < NUM_ATNS; i++) {
         env->acts_staging[i] = (int)env->actions[i];
     }

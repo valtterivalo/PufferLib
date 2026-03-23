@@ -8,12 +8,21 @@
 #include <string.h>
 #include <stdio.h>
 #include <assert.h>
+#ifdef __APPLE__
+#include <dispatch/dispatch.h>
+#include <pthread/qos.h>
+#endif
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#include "tensor.h"
+// Type constants
+#define FLOAT 1
+#define INT 2
+#define UNSIGNED_CHAR 3
+#define DOUBLE 4
+#define CHAR 5
 
 // Dict types
 typedef struct {
@@ -63,7 +72,7 @@ static inline void dict_set(Dict* dict, const char* key, double value) {
     dict->size++;
 }
 
-// Forward declare CUDA stream type (Metal defines it as void* in puf_types.h)
+// Forward declare CUDA stream type (guarded: puf_types.h may define it first)
 #ifndef CUDA_STREAM_T_DEFINED
 typedef struct CUstream_st* cudaStream_t;
 #endif
@@ -81,11 +90,11 @@ typedef struct StaticVec {
     int* buffer_env_starts;
     int* buffer_env_counts;
     void* observations;
-    float* actions;
+    double* actions;
     float* rewards;
     float* terminals;
     void* gpu_observations;
-    float* gpu_actions;
+    double* gpu_actions;
     float* gpu_rewards;
     float* gpu_terminals;
     cudaStream_t* streams;
@@ -110,7 +119,6 @@ StaticVec* create_static_vec(int total_agents, int num_buffers, Dict* vec_kwargs
 void static_vec_reset(StaticVec* vec);
 void static_vec_close(StaticVec* vec);
 void static_vec_log(StaticVec* vec, Dict* out);
-void static_vec_eval_log(StaticVec* vec, Dict* out);
 void create_static_threads(StaticVec* vec, int num_threads, int horizon,
     void* ctx, net_callback_fn net_callback, thread_init_fn thread_init);
 void static_vec_omp_step(StaticVec* vec);
@@ -120,14 +128,9 @@ void static_vec_read_profile(StaticVec* vec, float out[NUM_EVAL_PROF]);
 
 // Env info
 int get_obs_size(void);
+int get_obs_type(void);
 int get_num_atns(void);
 int* get_act_sizes(void);
-int get_num_act_sizes(void);
-const char* get_obs_dtype(void);
-size_t get_obs_elem_size(void);
-
-// Synchronous single-step (no threads/callback): D2H actions, OMP env step, H2D obs/rewards/terminals
-void static_vec_step(StaticVec* vec);
 
 // Optional shared state functions
 void* my_shared(void* env, Dict* kwargs);
@@ -144,16 +147,6 @@ int my_put(void* env, Dict* kwargs);
 // ============================================================================
 
 #ifdef OBS_SIZE
-
-static inline size_t obs_element_size(void) {
-    OBS_TENSOR_T t;
-    return sizeof(*t.data);
-}
-
-// Usually near the top, after any #includes
-#define _STRINGIFY(x)   #x
-#define  STRINGIFY(x)  _STRINGIFY(x)
-const char dtype_symbol[] = STRINGIFY(OBS_TENSOR_T);
 
 #include <omp.h>
 #include <stdatomic.h>
@@ -191,14 +184,33 @@ extern const char* cudaGetErrorString(cudaError_t);
 void my_init(Env* env, Dict* kwargs);
 void my_log(Log* log, Dict* out);
 
+// Helper to get observation element size based on OBS_TYPE
+static inline size_t obs_element_size(void) {
+    switch (OBS_TYPE) {
+        case FLOAT: return sizeof(float);
+        case INT: return sizeof(int);
+        case UNSIGNED_CHAR: return sizeof(unsigned char);
+        case DOUBLE: return sizeof(double);
+        case CHAR: return sizeof(char);
+        default: return sizeof(float);
+    }
+}
 
 struct StaticThreading {
-    atomic_int* buffer_states;
     atomic_int shutdown;
     int num_threads;
     int num_buffers;
     pthread_t* threads;
     float* accum;  // [num_buffers * NUM_EVAL_PROF] per-buffer timing in ms
+#ifdef __APPLE__
+    // dispatch_semaphore replaces spin-wait on buffer_states.
+    // each buffer has a "ready" semaphore (main→worker) and "done" semaphore (worker→main).
+    // this eliminates busy-wait CPU contention that caused 20-67% SPS variance.
+    dispatch_semaphore_t* buf_ready;  // main signals → worker wakes
+    dispatch_semaphore_t* buf_done;   // worker signals → main wakes
+#else
+    atomic_int* buffer_states;  // fallback for non-Apple platforms
+#endif
 };
 
 typedef struct StaticOMPArg {
@@ -225,11 +237,15 @@ static void* static_omp_threadmanager(void* arg) {
         thread_init(ctx, buf);
     }
 
+#ifdef __APPLE__
+    // pin rollout threads to P-cores for deterministic scheduling
+    pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+#endif
+
     int agents_per_buffer = vec->agents_per_buffer;
     int agent_start = buf * agents_per_buffer;
     int env_start = vec->buffer_env_starts[buf];
     int env_count = vec->buffer_env_counts[buf];
-    atomic_int* buffer_states = threading->buffer_states;
     int num_workers = threading->num_threads / vec->buffers;
     if (num_workers < 1) num_workers = 1;
 
@@ -237,11 +253,15 @@ static void* static_omp_threadmanager(void* arg) {
 
     printf("Num workers: %d\n", num_workers);
     while (true) {
+#ifdef __APPLE__
+        dispatch_semaphore_wait(threading->buf_ready[buf], DISPATCH_TIME_FOREVER);
+        if (atomic_load(&threading->shutdown)) return NULL;
+#else
+        atomic_int* buffer_states = threading->buffer_states;
         while (atomic_load(&buffer_states[buf]) != OMP_RUNNING) {
-            if (atomic_load(&threading->shutdown)) {
-                return NULL;
-            }
+            if (atomic_load(&threading->shutdown)) return NULL;
         }
+#endif
         cudaStream_t stream = vec->streams[buf];
 
         float* my_accum = &threading->accum[buf * NUM_EVAL_PROF];
@@ -254,18 +274,20 @@ static void* static_omp_threadmanager(void* arg) {
             cudaMemcpyAsync(
                 &vec->actions[agent_start * NUM_ATNS],
                 &vec->gpu_actions[agent_start * NUM_ATNS],
-                agents_per_buffer * NUM_ATNS * sizeof(float),
+                agents_per_buffer * NUM_ATNS * sizeof(double),
                 cudaMemcpyDeviceToHost, stream);
             cudaStreamSynchronize(stream);
             clock_gettime(CLOCK_MONOTONIC, &t1);
             my_accum[EVAL_GPU] += (t1.tv_sec - t0.tv_sec) * 1000.0f + (t1.tv_nsec - t0.tv_nsec) / 1e6f;
 
-            memset(&vec->rewards[agent_start], 0, agents_per_buffer * sizeof(float));
-            memset(&vec->terminals[agent_start], 0, agents_per_buffer * sizeof(float));
             clock_gettime(CLOCK_MONOTONIC, &t0);
-            #pragma omp parallel for schedule(static) num_threads(num_workers)
-            for (int i = env_start; i < env_start + env_count; i++) {
-                c_step(&envs[i]);
+            if (num_workers <= 1) {
+                for (int i = env_start; i < env_start + env_count; i++)
+                    c_step(&envs[i]);
+            } else {
+                #pragma omp parallel for schedule(static) num_threads(num_workers)
+                for (int i = env_start; i < env_start + env_count; i++)
+                    c_step(&envs[i]);
             }
             clock_gettime(CLOCK_MONOTONIC, &t1);
             my_accum[EVAL_ENV_STEP] += (t1.tv_sec - t0.tv_sec) * 1000.0f + (t1.tv_nsec - t0.tv_nsec) / 1e6f;
@@ -287,34 +309,47 @@ static void* static_omp_threadmanager(void* arg) {
                 cudaMemcpyHostToDevice, stream);
         }
         cudaStreamSynchronize(stream);
+#ifdef __APPLE__
+        dispatch_semaphore_signal(threading->buf_done[buf]);
+#else
         atomic_store(&buffer_states[buf], OMP_WAITING);
+#endif
     }
 }
 
 void static_vec_omp_step(StaticVec* vec) {
     StaticThreading* threading = vec->threading;
-    for (int buf = 0; buf < vec->buffers; buf++) {
+#ifdef __APPLE__
+    for (int buf = 0; buf < vec->buffers; buf++)
+        dispatch_semaphore_signal(threading->buf_ready[buf]);
+    for (int buf = 0; buf < vec->buffers; buf++)
+        dispatch_semaphore_wait(threading->buf_done[buf], DISPATCH_TIME_FOREVER);
+#else
+    for (int buf = 0; buf < vec->buffers; buf++)
         atomic_store(&threading->buffer_states[buf], OMP_RUNNING);
-    }
-    for (int buf = 0; buf < vec->buffers; buf++) {
+    for (int buf = 0; buf < vec->buffers; buf++)
         while (atomic_load(&threading->buffer_states[buf]) != OMP_WAITING) {}
-    }
+#endif
 }
 
 void static_vec_seq_step(StaticVec* vec) {
     StaticThreading* threading = vec->threading;
+#ifdef __APPLE__
+    for (int buf = 0; buf < vec->buffers; buf++) {
+        dispatch_semaphore_signal(threading->buf_ready[buf]);
+        dispatch_semaphore_wait(threading->buf_done[buf], DISPATCH_TIME_FOREVER);
+    }
+#else
     for (int buf = 0; buf < vec->buffers; buf++) {
         atomic_store(&threading->buffer_states[buf], OMP_RUNNING);
         while (atomic_load(&threading->buffer_states[buf]) != OMP_WAITING) {}
     }
+#endif
 }
 
 // Optional: Initialize all envs at once (for shared state, variable agents per env, etc.)
 // Default implementation creates envs until total_agents is reached
-#ifdef MY_VEC_INIT
-Env* my_vec_init(int* num_envs_out, int* buffer_env_starts, int* buffer_env_counts,
-                 Dict* vec_kwargs, Dict* env_kwargs);
-#else
+#ifndef MY_VEC_INIT
 Env* my_vec_init(int* num_envs_out, int* buffer_env_starts, int* buffer_env_counts,
                  Dict* vec_kwargs, Dict* env_kwargs) {
 
@@ -359,14 +394,6 @@ Env* my_vec_init(int* num_envs_out, int* buffer_env_starts, int* buffer_env_coun
 }
 #endif
 
-#ifdef MY_VEC_CLOSE
-void my_vec_close(Env* envs);
-#else
-void my_vec_close(Env* envs) {
-    return;
-}
-#endif
-
 StaticVec* create_static_vec(int total_agents, int num_buffers, Dict* vec_kwargs, Dict* env_kwargs) {
     StaticVec* vec = (StaticVec*)calloc(1, sizeof(StaticVec));
     vec->total_agents = total_agents;
@@ -386,17 +413,17 @@ StaticVec* create_static_vec(int total_agents, int num_buffers, Dict* vec_kwargs
 
     size_t obs_elem_size = obs_element_size();
     cudaHostAlloc((void**)&vec->observations, total_agents * OBS_SIZE * obs_elem_size, cudaHostAllocPortable);
-    cudaHostAlloc((void**)&vec->actions, total_agents * NUM_ATNS * sizeof(float), cudaHostAllocPortable);
+    cudaHostAlloc((void**)&vec->actions, total_agents * NUM_ATNS * sizeof(double), cudaHostAllocPortable);
     cudaHostAlloc((void**)&vec->rewards, total_agents * sizeof(float), cudaHostAllocPortable);
     cudaHostAlloc((void**)&vec->terminals, total_agents * sizeof(float), cudaHostAllocPortable);
 
     cudaMalloc((void**)&vec->gpu_observations, total_agents * OBS_SIZE * obs_elem_size);
-    cudaMalloc((void**)&vec->gpu_actions, total_agents * NUM_ATNS * sizeof(float));
+    cudaMalloc((void**)&vec->gpu_actions, total_agents * NUM_ATNS * sizeof(double));
     cudaMalloc((void**)&vec->gpu_rewards, total_agents * sizeof(float));
     cudaMalloc((void**)&vec->gpu_terminals, total_agents * sizeof(float));
 
     cudaMemset(vec->gpu_observations, 0, total_agents * OBS_SIZE * obs_elem_size);
-    cudaMemset(vec->gpu_actions, 0, total_agents * NUM_ATNS * sizeof(float));
+    cudaMemset(vec->gpu_actions, 0, total_agents * NUM_ATNS * sizeof(double));
     cudaMemset(vec->gpu_rewards, 0, total_agents * sizeof(float));
     cudaMemset(vec->gpu_terminals, 0, total_agents * sizeof(float));
 
@@ -432,8 +459,10 @@ void static_vec_reset(StaticVec* vec) {
     }
     cudaMemcpy(vec->gpu_observations, vec->observations,
         vec->total_agents * OBS_SIZE * obs_element_size(), cudaMemcpyHostToDevice);
-    cudaMemset(vec->gpu_rewards,   0, vec->total_agents * sizeof(float));
-    cudaMemset(vec->gpu_terminals, 0, vec->total_agents * sizeof(float));
+    cudaMemcpy(vec->gpu_rewards, vec->rewards,
+        vec->total_agents * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(vec->gpu_terminals, vec->terminals,
+        vec->total_agents * sizeof(float), cudaMemcpyHostToDevice);
     cudaDeviceSynchronize();
 }
 
@@ -442,9 +471,18 @@ void create_static_threads(StaticVec* vec, int num_threads, int horizon,
     vec->threading = (StaticThreading*)calloc(1, sizeof(StaticThreading));
     vec->threading->num_threads = num_threads;
     vec->threading->num_buffers = vec->buffers;
-    vec->threading->buffer_states = (atomic_int*)calloc(vec->buffers, sizeof(atomic_int));
     vec->threading->threads = (pthread_t*)calloc(vec->buffers, sizeof(pthread_t));
     vec->threading->accum = (float*)calloc(vec->buffers * NUM_EVAL_PROF, sizeof(float));
+#ifdef __APPLE__
+    vec->threading->buf_ready = (dispatch_semaphore_t*)calloc(vec->buffers, sizeof(dispatch_semaphore_t));
+    vec->threading->buf_done = (dispatch_semaphore_t*)calloc(vec->buffers, sizeof(dispatch_semaphore_t));
+    for (int i = 0; i < vec->buffers; i++) {
+        vec->threading->buf_ready[i] = dispatch_semaphore_create(0);
+        vec->threading->buf_done[i] = dispatch_semaphore_create(0);
+    }
+#else
+    vec->threading->buffer_states = (atomic_int*)calloc(vec->buffers, sizeof(atomic_int));
+#endif
 
     // Streams are now created by pufferlib.cu (PyTorch-managed streams)
     // Do NOT create streams here - they've already been set up
@@ -464,11 +502,25 @@ void create_static_threads(StaticVec* vec, int num_threads, int horizon,
 void static_vec_close(StaticVec* vec) {
     Env* envs = (Env*)vec->envs;
 
-    // Ask threads to stop. todo: robustify
+    // Signal threads to stop.
     atomic_store(&vec->threading->shutdown, 1);
-    for (int i = 0; i < vec->buffers; i++) {
+#ifdef __APPLE__
+    // Wake all waiting workers so they can check shutdown flag and exit.
+    for (int i = 0; i < vec->buffers; i++)
+        dispatch_semaphore_signal(vec->threading->buf_ready[i]);
+#endif
+    for (int i = 0; i < vec->buffers; i++)
         pthread_join(vec->threading->threads[i], NULL);
+#ifdef __APPLE__
+    for (int i = 0; i < vec->buffers; i++) {
+        dispatch_release(vec->threading->buf_ready[i]);
+        dispatch_release(vec->threading->buf_done[i]);
     }
+    free(vec->threading->buf_ready);
+    free(vec->threading->buf_done);
+#else
+    free(vec->threading->buffer_states);
+#endif
 
     for (int i = 0; i < vec->size; i++) {
         Env* env = &envs[i];
@@ -476,7 +528,6 @@ void static_vec_close(StaticVec* vec) {
     }
 
     free(vec->envs);
-    free(vec->threading->buffer_states);
     free(vec->threading->threads);
     free(vec->threading->accum);
     free(vec->threading);
@@ -485,7 +536,7 @@ void static_vec_close(StaticVec* vec) {
 
     cudaDeviceSynchronize();
     size_t obs_bytes = vec->total_agents * OBS_SIZE * obs_element_size();
-    size_t act_bytes = vec->total_agents * NUM_ATNS * sizeof(float);
+    size_t act_bytes = vec->total_agents * NUM_ATNS * sizeof(double);
     size_t rew_bytes = vec->total_agents * sizeof(float);
     size_t term_bytes = vec->total_agents * sizeof(float);
     cudaFree(vec->gpu_observations);
@@ -501,9 +552,9 @@ void static_vec_close(StaticVec* vec) {
     free(vec);
 }
 
-static inline float static_vec_aggregate_logs(StaticVec* vec, Log* out) {
+void static_vec_log(StaticVec* vec, Dict* out) {
     Env* envs = (Env*)vec->envs;
-    memset(out, 0, sizeof(Log));
+    Log aggregate = {0};
     int num_keys = sizeof(Log) / sizeof(float);
     for (int i = 0; i < vec->size; i++) {
         Env* env = &envs[i];
@@ -511,38 +562,16 @@ static inline float static_vec_aggregate_logs(StaticVec* vec, Log* out) {
             continue;
         }
         for (int j = 0; j < num_keys; j++) {
-            ((float*)out)[j] += ((float*)&env->log)[j];
+            ((float*)&aggregate)[j] += ((float*)&env->log)[j];
         }
+        memset(&env->log, 0, sizeof(Log));
     }
-    float n = out->n;
+    float n = aggregate.n;
     if (n == 0.0f) {
-        return 0;
+        return;
     }
     for (int i = 0; i < num_keys; i++) {
-        ((float*)out)[i] /= n;
-    }
-    return n;
-}
-
-void static_vec_log(StaticVec* vec, Dict* out) {
-    Env* envs = (Env*)vec->envs;
-    Log aggregate;
-    float n = static_vec_aggregate_logs(vec, &aggregate);
-    if (n == 0) {
-        return;
-    }
-    for (int i = 0; i < vec->size; i++) {
-        memset(&envs[i].log, 0, sizeof(Log));
-    }
-    my_log(&aggregate, out);
-    dict_set(out, "n", n);
-}
-
-void static_vec_eval_log(StaticVec* vec, Dict* out) {
-    Log aggregate;
-    float n = static_vec_aggregate_logs(vec, &aggregate);
-    if (n == 0) {
-        return;
+        ((float*)&aggregate)[i] /= n;
     }
     my_log(&aggregate, out);
     dict_set(out, "n", n);
@@ -570,38 +599,10 @@ void static_vec_render(StaticVec* vec, int env_id) {
 }
 
 int get_obs_size(void) { return OBS_SIZE; }
+int get_obs_type(void) { return OBS_TYPE; }
 int get_num_atns(void) { return NUM_ATNS; }
 static int _act_sizes[] = ACT_SIZES;
 int* get_act_sizes(void) { return _act_sizes; }
-int get_num_act_sizes(void) { return (int)(sizeof(_act_sizes) / sizeof(_act_sizes[0])); }
-const char* get_obs_dtype(void) { return dtype_symbol; }
-size_t get_obs_elem_size(void) { return obs_element_size(); }
-
-void static_vec_step(StaticVec* vec) {
-    // D2H: copy GPU actions to CPU pinned memory so envs can read them
-    cudaMemcpy(vec->actions, vec->gpu_actions,
-        (size_t)vec->total_agents * NUM_ATNS * sizeof(float),
-        cudaMemcpyDeviceToHost);
-
-    memset(vec->rewards, 0, vec->total_agents * sizeof(float));
-    memset(vec->terminals, 0, vec->total_agents * sizeof(float));
-
-    // OMP-parallel env step across all envs
-    Env* envs = (Env*)vec->envs;
-    #pragma omp parallel for schedule(static)
-    for (int i = 0; i < vec->size; i++) {
-        c_step(&envs[i]);
-    }
-
-    // H2D: copy obs/rewards/terminals back to GPU
-    cudaMemcpy(vec->gpu_observations, vec->observations,
-        (size_t)vec->total_agents * OBS_SIZE * obs_element_size(),
-        cudaMemcpyHostToDevice);
-    cudaMemcpy(vec->gpu_rewards, vec->rewards,
-        vec->total_agents * sizeof(float), cudaMemcpyHostToDevice);
-    cudaMemcpy(vec->gpu_terminals, vec->terminals,
-        vec->total_agents * sizeof(float), cudaMemcpyHostToDevice);
-}
 
 // Optional shared state functions - default implementations
 #ifndef MY_SHARED

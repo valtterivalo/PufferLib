@@ -1,0 +1,11 @@
+# all binary assets — regenerated from OSRS cache via scripts/
+# run: scripts/export_all.sh <cache_path>
+*.models
+*.anims
+*.objects
+*.terrain
+*.atlas
+*.npcs
+*.cmap
+*.bin
+sprites/

@@ -1,1 +1,1 @@
-../osrs/osrs_pvp_gear.h
+../osrs_pvp/osrs_pvp_gear.h

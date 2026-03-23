@@ -230,7 +230,7 @@ kernel void mingru_gate_inference(
     float mingru_out = lerp_f(state, hidden_tilde, gate_sig);
     float proj_sig = sigmoid_f(proj);
 
-    next_state[idx] = clamp(mingru_out, 1e-30f, 65504.0f);
+    next_state[idx] = max(mingru_out, 1e-30f);
     out[idx] = proj_sig * mingru_out + (1.0f - proj_sig) * x;
 }
 
@@ -304,7 +304,7 @@ kernel void fused_scan_forward_checkpointed(
         float scan_result = precise::exp(a_star + s);
         float proj_sigmoid = sigmoid_f(proj_val);
 
-        out[out_curr] = min(proj_sigmoid * scan_result + (1.0f - proj_sigmoid) * x_val, 65504.0f);
+        out[out_curr] = proj_sigmoid * scan_result + (1.0f - proj_sigmoid) * x_val;
 
         buf_curr += p.H;
         out_curr += p.H;
@@ -322,7 +322,7 @@ kernel void fused_scan_forward_checkpointed(
     // A zero state causes log(0)=-inf → permanent -inf propagation through
     // all subsequent scan steps. 1e-30 is well above fp32 denormal range
     // and below any meaningful state value.
-    next_state[bH + h] = clamp(precise::exp(a_star + s), 1e-30f, 65504.0f);
+    next_state[bH + h] = max(precise::exp(a_star + s), 1e-30f);
 }
 
 kernel void fused_scan_backward_checkpointed(
@@ -579,19 +579,17 @@ kernel void sample_logits_kernel(
                 }
             }
 
-            // Accumulate joint log probability
+            // Per-head log probability
             float log_prob = masked_logit(
                 logits[logits_base + logits_offset + sampled_action],
                 action_mask[mask_base + logits_offset + sampled_action]) - logsumexp_val;
-            total_log_prob += log_prob;
 
             actions[(int)idx * sp.num_atns + h] = float(sampled_action);
+            logprobs[(int)idx * sp.num_atns + h] = log_prob;
 
             logits_offset += A;
         }
     }
-    // Store joint logprob (sum of per-head) as single scalar, matching CUDA
-    logprobs[idx] = total_log_prob;
     value_out[idx] = value[(int)idx * sp.value_stride];
 }
 
@@ -608,6 +606,7 @@ struct RecomputeLogprobsParams {
     int B;
     int num_atns;
     int logits_stride;   // fused_cols per row
+    int mask_stride;     // 0 = broadcast (all-ones)
 };
 
 kernel void recompute_logprobs_kernel(
@@ -615,12 +614,14 @@ kernel void recompute_logprobs_kernel(
     const device float* logits          [[buffer(1)]],
     const device float* actions_f32     [[buffer(2)]],
     const device int* act_sizes         [[buffer(3)]],
-    constant RecomputeLogprobsParams& rp [[buffer(4)]],
+    const device float* action_mask     [[buffer(4)]],
+    constant RecomputeLogprobsParams& rp [[buffer(5)]],
     uint idx [[thread_position_in_grid]]
 ) {
     if ((int)idx >= rp.B) return;
 
     int logits_base = (int)idx * rp.logits_stride;
+    int mask_base = (rp.mask_stride == 0) ? 0 : (int)idx * rp.mask_stride;
 
     float total_log_prob = 0.0f;
     int logits_offset = 0;
@@ -629,25 +630,28 @@ kernel void recompute_logprobs_kernel(
         int A = act_sizes[h];
         int act = int(actions_f32[(int)idx * rp.num_atns + h]);
 
-        // Max + logsumexp (raw logits, no mask — matching CUDA PPO)
+        // Max + logsumexp (with mask)
         float max_val = -INFINITY;
         for (int a = 0; a < A; a++) {
-            float l = logits[logits_base + logits_offset + a];
-            max_val = fmax(max_val, l);
+            max_val = fmax(max_val, masked_logit(
+                logits[logits_base + logits_offset + a],
+                action_mask[mask_base + logits_offset + a]));
         }
         float sum_exp = 0.0f;
         for (int a = 0; a < A; a++) {
-            sum_exp += exp(logits[logits_base + logits_offset + a] - max_val);
+            sum_exp += exp(masked_logit(
+                logits[logits_base + logits_offset + a],
+                action_mask[mask_base + logits_offset + a]) - max_val);
         }
         float logsumexp_val = max_val + log(sum_exp);
 
-        float head_lp = logits[logits_base + logits_offset + act] - logsumexp_val;
-        total_log_prob += head_lp;
+        float head_lp = masked_logit(
+            logits[logits_base + logits_offset + act],
+            action_mask[mask_base + logits_offset + act]) - logsumexp_val;
+        logprobs[(int)idx * rp.num_atns + h] = head_lp;
 
         logits_offset += A;
     }
-    // Store joint logprob as single scalar, matching CUDA
-    logprobs[idx] = total_log_prob;
 }
 
 // ============================================================================
@@ -679,12 +683,14 @@ inline void atomic_add_float(device atomic_uint* addr, float val) {
     }
 }
 
-// PPO helper: compute logsumexp, entropy, log_prob for a single discrete head.
-// Uses raw unmasked logits (matching CUDA). Masks only affect sampling, not PPO loss.
+// PPO helper: compute logsumexp, entropy, log_prob for a single discrete head with masks.
+// mask pointer + mask_offset index into the action mask for this head.
+// Invalid actions (mask < 0.5) get logit = -1e9, matching rollout sampling.
 inline void ppo_discrete_head(
     const device float* logits,
     int logits_base, int logits_stride_a, int logits_offset,
     int A, int act,
+    const device float* mask, int mask_offset,
     thread float& out_logsumexp, thread float& out_entropy, thread float& out_logp
 ) {
     float max_logit = -INFINITY;
@@ -693,6 +699,7 @@ inline void ppo_discrete_head(
 
     for (int a = 0; a < A; a++) {
         float l = logits[logits_base + (logits_offset + a) * logits_stride_a];
+        if (mask[mask_offset + a] < 0.5f) l = -1e9f;
         if (a == act) act_logit = l;
         if (l > max_logit) {
             sum *= exp(max_logit - l);
@@ -714,6 +721,7 @@ inline void ppo_discrete_head(
     float ent = 0.0f;
     for (int a = 0; a < A; a++) {
         float l = logits[logits_base + (logits_offset + a) * logits_stride_a];
+        if (mask[mask_offset + a] < 0.5f) l = -1e9f;
         float logp = l - lse;
         float p = exp(clamp(logp, -80.0f, 80.0f));
         ent -= p * logp;
@@ -840,8 +848,10 @@ kernel void ppo_loss_fwd_bwd_kernel(
         float pg_loss, total_entropy, logratio, ratio;
 
         if (pp.is_continuous) {
-            // Joint logprob stored as single scalar (matching CUDA)
-            float old_logp = old_logprobs[nt];
+            // Continuous: reconstruct scalar old_logp from per-head storage
+            float old_logp = 0.0f;
+            for (int h = 0; h < pp.num_atns; h++)
+                old_logp += old_logprobs[nt * pp.num_atns + h];
             float total_log_prob = 0.0f;
             total_entropy = 0.0f;
             for (int h = 0; h < pp.num_atns; h++) {
@@ -855,7 +865,7 @@ kernel void ppo_loss_fwd_bwd_kernel(
             }
 
             logratio = total_log_prob - old_logp;
-            ratio = min(exp(logratio), 65504.0f);
+            ratio = exp(logratio);
             out_ratio[nt] = ratio;
             float ratio_clipped = clamp(ratio, 1.0f - pp.clip_coef, 1.0f + pp.clip_coef);
             float wa = -w * adv_normalized;
@@ -881,69 +891,59 @@ kernel void ppo_loss_fwd_bwd_kernel(
                 grad_logstd[grad_logits_base + h] = d_new_logp * (diff * diff / var - 1.0f) + d_entropy_term;
             }
         } else {
-            // Discrete joint-ratio clipping (matches CUDA): compute joint logprob
-            // across all heads, then clip a single scalar ratio.
-
-            // Forward: compute per-head logprobs, sum into joint logprob
-            float total_log_prob = 0.0f;
-            total_entropy = 0.0f;
-            // Joint logprob stored as single scalar (matching CUDA)
-            float old_logp = old_logprobs[nt];
-
-            // Store per-head logsumexp, entropy, action for backward pass
-            float head_lse[MAX_ATN_HEADS];
-            float head_ent[MAX_ATN_HEADS];
-            int head_act[MAX_ATN_HEADS];
+            // Discrete per-head clipping (DISC-style): each head gets its own
+            // importance ratio and clip, preventing multi-head logratio explosion.
+            // head_eps = (1 + clip_coef)^(1/N) - 1 keeps the joint trust region bounded.
+            float head_eps = pow(1.0f + pp.clip_coef, 1.0f / (float)pp.num_atns) - 1.0f;
+            float wa = -w * adv_normalized;
+            int mask_base = (int)idx * pp.mask_stride;
 
             int logits_offset = 0;
+            pg_loss = 0.0f;
+            total_entropy = 0.0f;
+            logratio = 0.0f;
+            ratio = 1.0f;
+
             for (int h = 0; h < pp.num_atns; h++) {
                 int A = act_sizes[h];
                 int act = int(actions[nt * pp.num_atns + h]);
-                head_act[h] = act;
                 float lse, ent, lp;
                 ppo_discrete_head(logits, logits_base, pp.logits_stride_a, logits_offset,
-                    A, act, lse, ent, lp);
-                head_lse[h] = lse;
-                head_ent[h] = ent;
-                total_log_prob += lp;
+                    A, act, action_mask, mask_base + logits_offset, lse, ent, lp);
                 total_entropy += ent;
-                logits_offset += A;
-            }
 
-            // Joint ratio and clip
-            logratio = total_log_prob - old_logp;
-            ratio = min(exp(logratio), 65504.0f);
-            out_ratio[nt] = ratio;
-            float ratio_clipped = clamp(ratio, 1.0f - pp.clip_coef, 1.0f + pp.clip_coef);
-            float wa = -w * adv_normalized;
-            pg_loss = fmax(wa * ratio, wa * ratio_clipped);
+                // Per-head importance ratio and clip
+                float old_lp_h = old_logprobs[nt * pp.num_atns + h];
+                float logratio_h = lp - old_lp_h;
+                float ratio_h = exp(logratio_h);
+                float ratio_h_clipped = clamp(ratio_h, 1.0f - head_eps, 1.0f + head_eps);
+                pg_loss += fmax(wa * ratio_h, wa * ratio_h_clipped);
+                logratio += logratio_h;
+                ratio *= ratio_h;
 
-            // Backward: single d_new_logp distributed to all heads
-            float d_ratio = wa * d_pg_loss;
-            if (wa * ratio_clipped > wa * ratio) {
-                if (ratio <= (1.0f - pp.clip_coef) || ratio >= (1.0f + pp.clip_coef))
-                    d_ratio = 0.0f;
-            }
-            float d_new_logp = d_ratio * ratio;
-
-            logits_offset = 0;
-            for (int h = 0; h < pp.num_atns; h++) {
-                int A = act_sizes[h];
-                int act = head_act[h];
-                float lse = head_lse[h];
-                float ent = head_ent[h];
+                // Per-head backward: gradient driven by this head's own ratio
+                float d_ratio_h = wa * d_pg_loss;
+                if (wa * ratio_h_clipped > wa * ratio_h) {
+                    if (ratio_h <= (1.0f - head_eps) || ratio_h >= (1.0f + head_eps))
+                        d_ratio_h = 0.0f;
+                }
+                float d_new_logp_h = d_ratio_h * ratio_h;
 
                 for (int a = 0; a < A; a++) {
-                    float l = logits[logits_base + (logits_offset + a) * pp.logits_stride_a];
+                    float raw_l = logits[logits_base + (logits_offset + a) * pp.logits_stride_a];
+                    float m = action_mask[mask_base + logits_offset + a];
+                    float l = (m < 0.5f) ? -1e9f : raw_l;
                     float logp = l - lse;
                     float p = exp(logp);
-                    float d_logit = (a == act) ? d_new_logp : 0.0f;
-                    d_logit -= p * d_new_logp;
+                    float d_logit = (a == act) ? d_new_logp_h : 0.0f;
+                    d_logit -= p * d_new_logp_h;
                     d_logit += d_entropy_term * p * (-ent - logp);
+                    if (m < 0.5f) d_logit = 0.0f;
                     grad_logits[grad_logits_base + logits_offset + a] = d_logit;
                 }
                 logits_offset += A;
             }
+            out_ratio[nt] = ratio;
         }
 
         // Shared loss accumulation (both branches produce pg_loss, total_entropy, logratio, ratio)
@@ -1228,21 +1228,6 @@ kernel void scale_f32(
     uint idx [[thread_position_in_grid]]
 ) {
     if ((int)idx < p.n) dst[idx] *= p.alpha;
-}
-
-// Add epsilon to diagonal of an M×M row-major matrix: dst[i*stride+i] += eps
-struct AddDiagParams {
-    float eps;
-    int m;      // matrix dimension
-    int stride; // row stride (== m for row-major)
-};
-
-kernel void add_diag_f32(
-    device float* dst               [[buffer(0)]],
-    constant AddDiagParams& p       [[buffer(1)]],
-    uint idx [[thread_position_in_grid]]
-) {
-    if ((int)idx < p.m) dst[idx * p.stride + idx] += p.eps;
 }
 
 struct AxpyParams {
@@ -1534,6 +1519,7 @@ kernel void clip_by_norm_f32(
 
 struct NormalizeParams {
     float eps;
+    float max_inv_norm;  // cap amplification to prevent NS explosion on near-zero gradients
     int n;
 };
 
@@ -1544,7 +1530,7 @@ kernel void normalize_f32(
     constant NormalizeParams& p             [[buffer(2)]],
     uint idx [[thread_position_in_grid]]
 ) {
-    float inv_norm = 1.0f / max(sqrt(*norm_ptr), p.eps);
+    float inv_norm = min(1.0f / max(sqrt(*norm_ptr), p.eps), p.max_inv_norm);
     if ((int)idx < p.n) dst[idx] = dst[idx] * inv_norm;
 }
 
