@@ -607,6 +607,16 @@ typedef struct {
     int total_brews_used;      /* brew doses consumed this episode */
     int total_blood_healed;    /* HP healed via blood barrage this episode */
 
+    /* per-component reward accumulators (sum across episode, logged at end) */
+    float rw_wave;
+    float rw_damage;
+    float rw_idle;
+    float rw_brew;
+    float rw_blood;
+    float rw_prayer;
+    float rw_pillar;
+    float rw_terminal;
+
     /* per-tick reward event flags (cleared each tick) */
     int brewed_this_tick;      /* 1 if player drank a brew this tick */
     int blood_heal_this_tick;  /* HP healed from blood barrage this tick */
@@ -2052,28 +2062,39 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
 
 static float inf_compute_reward(InfernoState* s) {
     /* terminal: +1 zuk kill (win), -1 death (fail) */
-    if (s->episode_over)
-        return (s->winner == 0) ? 1.0f : -1.0f;
+    if (s->episode_over) {
+        float t = (s->winner == 0) ? 1.0f : -1.0f;
+        s->rw_terminal += t;
+        return t;
+    }
 
     float r = 0.0f;
+    float c;
 
     /* wave completion: exponential scaling so later waves matter much more.
      * with defaults (base=0.001, scale=1.1): wave 1≈0.001, wave 30≈0.017,
      * wave 50≈0.117, wave 69≈0.786. total if all cleared ≈ 5.7. */
     if (s->wave_completed_this_tick) {
-        r += s->wave_reward_base * powf(s->wave_reward_scale, (float)(s->wave + 1));
+        c = s->wave_reward_base * powf(s->wave_reward_scale, (float)(s->wave + 1));
+        r += c; s->rw_wave += c;
         s->total_waves_cleared = s->wave + 1;
     }
 
     /* damage dealt: flat reward for hitting monsters.
      * a 45-damage hit gives 0.018. discovery signal that teaches attacking. */
-    if (s->damage_dealt_this_tick > 0.0f)
-        r += 0.02f * (s->damage_dealt_this_tick / 50.0f);
+    if (s->damage_dealt_this_tick > 0.0f) {
+        c = 0.02f * (s->damage_dealt_this_tick / 50.0f);
+        r += c; s->rw_damage += c;
+    }
 
-    /* idle penalty: if not attacking anything for 10+ ticks, small penalty.
-     * pushes the agent toward combat rather than hiding behind pillars. */
-    if (s->ticks_without_action > 10)
-        r -= 0.005f;
+    /* idle penalty disabled — too harsh for untrained agents, creates a vicious cycle
+     * where the agent learns to stop acting. may revisit in a different form later.
+     * the concern: without it, the agent might tank in a corner collecting prayer rewards
+     * instead of attacking. monitor for this behavior. */
+    // if (s->ticks_without_action > 10) {
+    //     c = -0.005f;
+    //     r += c; s->rw_idle += c;
+    // }
 
     /* brew penalty: penalize drinking saradomin brews in early waves where
      * blood barrage should suffice. decays via sigmoid so late-wave brews are fine.
@@ -2081,23 +2102,29 @@ static float inf_compute_reward(InfernoState* s) {
     if (s->brewed_this_tick) {
         float wave_factor = 1.0f / (1.0f + expf(
             ((float)s->wave - s->brew_penalty_midpoint) / s->brew_penalty_width));
-        r -= s->brew_penalty * wave_factor;
+        c = -(s->brew_penalty * wave_factor);
+        r += c; s->rw_brew += c;
     }
 
     /* blood barrage healing: reward the correct sustain mechanic (no supply cost).
      * encourages learning mage gear → barrage → AoE heal loop. */
-    if (s->blood_heal_this_tick > 0)
-        r += s->blood_heal_reward * (float)s->blood_heal_this_tick / 20.0f;
+    if (s->blood_heal_this_tick > 0) {
+        c = s->blood_heal_reward * (float)s->blood_heal_this_tick / 20.0f;
+        r += c; s->rw_blood += c;
+    }
 
     /* correct prayer: reward for blocking NPC attacks with the right overhead.
      * prayer_correct_this_tick counts per-attack (multiple NPCs can hit same tick). */
-    if (s->prayer_correct_this_tick > 0)
-        r += s->prayer_reward * (float)s->prayer_correct_this_tick;
+    if (s->prayer_correct_this_tick > 0) {
+        c = s->prayer_reward * (float)s->prayer_correct_this_tick;
+        r += c; s->rw_prayer += c;
+    }
 
     /* pillar destroyed: north pillar (idx 2, highest Y) is the most important
      * safespot, south (0) and west (1) are less critical. total = -0.8 for all. */
     if (s->pillar_lost_this_tick >= 0) {
-        r -= (s->pillar_lost_this_tick == 2) ? 0.4f : 0.2f;
+        c = -((s->pillar_lost_this_tick == 2) ? 0.4f : 0.2f);
+        r += c; s->rw_pillar += c;
     }
 
     /* accumulate diagnostic stats */
@@ -2657,6 +2684,14 @@ static void* inf_get_log(EncounterState* state) {
         s->log.idle_ticks += (float)s->total_idle_ticks;
         s->log.brews_used += (float)s->total_brews_used;
         s->log.blood_healed += (float)s->total_blood_healed;
+        s->log.rw_wave += s->rw_wave;
+        s->log.rw_damage += s->rw_damage;
+        s->log.rw_idle += s->rw_idle;
+        s->log.rw_brew += s->rw_brew;
+        s->log.rw_blood += s->rw_blood;
+        s->log.rw_prayer += s->rw_prayer;
+        s->log.rw_pillar += s->rw_pillar;
+        s->log.rw_terminal += s->rw_terminal;
         s->log.n += 1.0f;
     }
     return &s->log;
