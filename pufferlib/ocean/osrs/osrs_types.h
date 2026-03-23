@@ -765,6 +765,15 @@ typedef struct {
     float idle_ticks;
     float brews_used;
     float blood_healed;
+    /* per-component reward accumulators (sum across episodes, divide by n) */
+    float rw_wave;
+    float rw_damage;
+    float rw_idle;
+    float rw_brew;
+    float rw_blood;
+    float rw_prayer;
+    float rw_pillar;
+    float rw_terminal;
     float n;
 } Log;
 
@@ -992,11 +1001,6 @@ typedef struct {
     unsigned char _terms_buf[NUM_AGENTS];
     unsigned char _masks_buf[NUM_AGENTS * ACTION_MASK_SIZE];
 
-    // 4.0 static build bridge fields (unused by 3.0 path)
-    double* _4_0_actions;                     // 4.0's shared action buffer (double*)
-    float* _4_0_terminals;                    // 4.0's shared terminal buffer (float*)
-    int _ocean_acts_4_0[NUM_ACTION_HEADS];    // int action staging (converted from double)
-    unsigned char _ocean_term_4_0;            // terminal staging byte
 } OsrsPvp;
 
 // ============================================================================
