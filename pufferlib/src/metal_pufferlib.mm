@@ -507,7 +507,6 @@ void train_impl(PuffeRL& pufferl) {
         puf_zero(pufferl.train_buf.mb_state, s);
         {
             RolloutBuf sel_src = rollouts;
-            sel_src.values = pufferl.old_values_puf;
             mtl_select_copy(sel_src, pufferl.train_buf,
                 (const int64_t*)pufferl.prio_bufs.idx.bytes,
                 (const float*)pufferl.advantages_puf.bytes,
@@ -695,6 +694,13 @@ void train_impl(PuffeRL& pufferl) {
                                 (int)pufferl.alloc_fp32.params.total_elems, s);
         }
 
+        mtl_barrier((MetalStream*)s);
+
+        // Scatter updated ratio and newvalue back to rollout buffers so
+        // subsequent minibatches see fresh importance weights and values
+        // (matches CUDA index_copy_kernel at pufferlib.cu:1433-1446).
+        mtl_scatter_ppo_outputs(pufferl.train_buf, rollouts,
+            (const int64_t*)pufferl.prio_bufs.idx.bytes, s);
         mtl_barrier((MetalStream*)s);
 
         if (gpu_profile) mtl_ensure_stream_synced(s);
