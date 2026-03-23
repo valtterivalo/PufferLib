@@ -299,9 +299,16 @@ struct RolloutBuf {
 inline void register_rollout_buffers(RolloutBuf &bufs, Allocator &alloc, int H,
                                      int S, int input_size, int num_atns) {
   int p = PRECISION_SIZE;
+  // Metal: actions stored as float (matching CUDA's actual pointer arithmetic).
+  // CUDA: dtype_size=sizeof(double) but precision_t* pointer gives 4-byte strides.
+#ifdef WITH_METAL
+  int act_dtype = (int)sizeof(float);
+#else
+  int act_dtype = (int)sizeof(double);
+#endif
   bufs = (RolloutBuf){
       .observations = {.shape = {H, S, input_size}, .dtype_size = p},
-      .actions = {.shape = {H, S, num_atns}, .dtype_size = (int)sizeof(double)},
+      .actions = {.shape = {H, S, num_atns}, .dtype_size = act_dtype},
       .values = {.shape = {H, S}, .dtype_size = p},
       .logprobs = {.shape = {H, S, 1}, .dtype_size = p},
       .rewards = {.shape = {H, S}, .dtype_size = p},
@@ -315,7 +322,7 @@ inline void register_rollout_buffers(RolloutBuf &bufs, Allocator &alloc, int H,
 struct TrainGraph {
   PufTensor mb_obs;        // (S, H, input_size) PRECISION
   PufTensor mb_state;      // (L, S, 1, hidden) PRECISION
-  PufTensor mb_actions;    // (S, H, num_atns) f64
+  PufTensor mb_actions;    // (S, H, num_atns) f64 (CUDA) / f32 (Metal)
   PufTensor mb_logprobs;   // (S, H, 1) PRECISION — joint logprob (sum of per-head)
   PufTensor mb_advantages; // (S, H) f32
   PufTensor mb_prio;       // (S, 1) PRECISION
@@ -332,8 +339,13 @@ inline void register_train_buffers(TrainGraph &bufs, Allocator &alloc, int S,
   bufs = (TrainGraph){
       .mb_obs = {.shape = {S, H, input_size}, .dtype_size = p},
       .mb_state = {.shape = {num_layers, S, 1, hidden_size}, .dtype_size = p},
+#ifdef WITH_METAL
+      .mb_actions = {.shape = {S, H, num_atns},
+                     .dtype_size = (int)sizeof(float)},
+#else
       .mb_actions = {.shape = {S, H, num_atns},
                      .dtype_size = (int)sizeof(double)},
+#endif
       .mb_logprobs = {.shape = {S, H, 1}, .dtype_size = p},
       .mb_advantages = {.shape = {S, H}, .dtype_size = (int)sizeof(float)},
       .mb_prio = {.shape = {S, 1}, .dtype_size = p},

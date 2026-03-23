@@ -345,8 +345,8 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
         PufTensor acts_f32_dst = puf_slice(pufferl->rollout_actions_f32, t, start, block_size);
         memcpy(acts_f32_dst.bytes, act_f32_buf.bytes, block_size * num_atns * sizeof(float));
 
-        mtl_sample_logits_expand((const float*)act_f32_buf.bytes,
-                                 (double*)act_slice.bytes, block_size * num_atns);
+        // Write float actions directly to rollout buffer (no double expansion).
+        memcpy(act_slice.bytes, act_f32_buf.bytes, block_size * num_atns * sizeof(float));
     } else {
         // GPU path: Metal dispatch + sync (original behavior)
         PufTensor mingru_input = p->encoder.forward(infer_weights.encoder, acts.encoder, obs_dst, stream);
@@ -360,8 +360,8 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
             buf_rng_seed, buf_rng_offset, stream);
 
         mtl_ensure_stream_synced(stream);
-        mtl_sample_logits_expand((const float*)act_f32_buf.bytes,
-                                 (double*)act_slice.bytes, block_size * num_atns);
+        // Write float actions directly to rollout buffer (no double expansion).
+        memcpy(act_slice.bytes, act_f32_buf.bytes, block_size * num_atns * sizeof(float));
     }
 
     // RNN state NOT zeroed on terminal — matches CUDA upstream behavior.
@@ -370,9 +370,7 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
 
     uint64_t tp2 = mach_absolute_time();
 
-    // Copy f32 actions to env (CUDA uses cast_kernel f64→f32; we copy f32 directly).
-    // act_f32_buf holds the sampled float actions; act_slice holds doubled f64 copies
-    // for the rollout buffer. The env expects float, so copy from act_f32_buf.
+    // Copy f32 actions to env. Both act_f32_buf and act_slice are float now.
     int64_t act_cols = env.actions.shape[1];
     memcpy(
         env.actions.bytes + start * act_cols * env.actions.dtype_size,
