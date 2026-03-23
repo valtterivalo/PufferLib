@@ -372,14 +372,10 @@ def run_training(config, vec_config, env_config, policy_config, *,
                             f"invalid loss metric {loss_name}={v} "
                             f"at step={global_step}")
 
-                # zombie guard: detect entropy collapse or vf explosion
-                # (finite values that indicate training has diverged)
+                # zombie guard: vf explosion only (entropy guard removed —
+                # let Protein explore low-entropy regions naturally via LR/ent_coef)
                 if global_step > steps_per_iter * 50:
-                    ent = losses.get("entropy", 99)
                     vf = losses.get("vf_loss", 0)
-                    if ent < 1.0:
-                        raise RuntimeError(
-                            f"entropy collapse: {ent:.3f} at step={global_step}")
                     if vf > 10000:
                         raise RuntimeError(
                             f"vf explosion: {vf:.0f} at step={global_step}")
@@ -932,10 +928,15 @@ def train_cli(env_name: str):
         grad_l2 = debug_stats.get("grad_l2", 0) if debug_stats else 0
         dec_p_max = debug_stats.get("dec_policy_abs_max", 0) if debug_stats else 0
         dec_v_max = debug_stats.get("dec_value_abs_max", 0) if debug_stats else 0
+        rw_parts = ""
+        rw_keys = ["rw_wave", "rw_damage", "rw_idle", "rw_brew", "rw_blood", "rw_prayer", "rw_pillar", "rw_terminal"]
+        rw_vals = {k: env_stats.get(k, 0) for k in rw_keys}
+        if any(v != 0 for v in rw_vals.values()):
+            rw_parts = " | " + " ".join(f"{k[3:]}={v:+.4f}" for k, v in rw_vals.items())
         print(f"[step={global_step:>10,} | SPS={sps:>10,.0f} | "
               f"ret={ep_ret:>8.2f} wave={wave:>4.1f} pray={prayer:.0%} idle={idle:>4.0f} | "
               f"ent={ent:.3f} vf={vf:.4f} grad={grad_l2:.1f} "
-              f"dec_p={dec_p_max:.1f} dec_v={dec_v_max:.1f}]")
+              f"dec_p={dec_p_max:.1f} dec_v={dec_v_max:.1f}{rw_parts}]")
 
         if wandb_run:
             log_dict = {

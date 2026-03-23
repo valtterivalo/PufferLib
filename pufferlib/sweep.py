@@ -767,6 +767,9 @@ class Protein:
         pareto_observations = pruned_front if self.prune_pareto else pareto_front
 
         # Use the max cost from the pruned pareto to avoid inefficiently long runs
+        if not pruned_front:
+            # all trials failed — can't compute threshold, use default
+            pruned_front = [{'cost': 300.0, 'score': 0.0}]
         if self.upper_cost_threshold < 0:
             self.upper_cost_threshold = pruned_front[-1]['cost']
         # Try to change the threshold slowly
