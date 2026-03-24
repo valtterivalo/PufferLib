@@ -2363,7 +2363,7 @@ static void inf_write_obs(EncounterState* state, float* obs) {
     memset(obs, 0, INF_NUM_OBS * sizeof(float));
     int i = 0;
 
-    /* player state (26 features) */
+    /* player state (20 base features, 26 with INF_OBS_FULL) */
     obs[i++] = (float)s->player.current_hitpoints / 99.0f;
     obs[i++] = (float)(s->player.x - INF_ARENA_MIN_X) / (float)INF_ARENA_WIDTH;
     obs[i++] = (float)(s->player.y - INF_ARENA_MIN_Y) / (float)INF_ARENA_HEIGHT;
@@ -2390,7 +2390,7 @@ static void inf_write_obs(EncounterState* state, float* obs) {
     /* attack readiness: 0 = ready to fire, >0 = on cooldown */
     obs[i++] = (float)s->player_attack_timer / 8.0f;
 
-    /* new player features (only in 480-obs layout) */
+    /* additional player features (only in INF_OBS_FULL / 515-obs layout) */
 #ifdef INF_OBS_FULL
     /* imminent threat styles: aggregated from per-NPC attack readiness. */
     {
@@ -2457,7 +2457,7 @@ static void inf_write_obs(EncounterState* state, float* obs) {
         obs[i++] = (float)(s->pillars[p].y - INF_ARENA_MIN_Y) / (float)INF_ARENA_HEIGHT;
     }
 
-    /* NPCs: INF_OBS_NPC_FEATURES (14) features each, up to INF_MAX_NPCS */
+    /* NPCs: INF_OBS_NPC_FEATURES (12 base, 15 FULL) features each, up to INF_MAX_NPCS */
     for (int n = 0; n < INF_MAX_NPCS && (i + INF_OBS_NPC_FEATURES) <= INF_NUM_OBS; n++) {
         InfNPC* npc = &s->npcs[n];
         if (npc->active && npc->death_ticks == 0) {
@@ -2490,19 +2490,19 @@ static void inf_write_obs(EncounterState* state, float* obs) {
                     else if (npc->type == INF_NPC_BLOB && npc->blob_scanned_prayer >= 0)
                         imminent = 1;
                 }
-                obs[i++] = imminent ? 1.0f : 0.0f;            /* 11: attack imminent */
+                obs[i++] = imminent ? 1.0f : 0.0f;            /* 12: attack imminent */
             }
 
             /* distance to player */
             {
                 int dist = encounter_dist_to_npc(s->player.x, s->player.y,
                     npc->x, npc->y, npc->size);
-                obs[i++] = (float)dist / 32.0f;               /* 12: distance to player */
+                obs[i++] = (float)dist / 32.0f;               /* 13: distance to player */
             }
 
             /* blob scan active */
             obs[i++] = (npc->type == INF_NPC_BLOB && npc->blob_scanned_prayer >= 0)
-                        ? 1.0f : 0.0f;                        /* 13: blob scan active */
+                        ? 1.0f : 0.0f;                        /* 14: blob scan active */
 #endif
         } else {
             for (int j = 0; j < INF_OBS_NPC_FEATURES; j++) obs[i++] = 0.0f;
