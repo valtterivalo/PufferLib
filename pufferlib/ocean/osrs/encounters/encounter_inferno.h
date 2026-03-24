@@ -618,6 +618,7 @@ typedef struct {
     float rw_prayer;
     float rw_pillar;
     float rw_dmg_taken;
+    float rw_efficiency;
     float rw_terminal;
 
     /* per-tick reward event flags (cleared each tick) */
@@ -678,6 +679,8 @@ typedef struct {
     float blood_heal_reward;     /* reward per 20 HP healed via blood barrage (default 0.01) */
     float prayer_reward;         /* reward per NPC attack blocked by correct prayer (DISABLED) */
     float damage_taken_coef;     /* penalty per HP taken: -coef * (dmg/50). default 0.01 */
+    float damage_dealt_coef;     /* reward per HP dealt: coef * (dmg/50). default 0.05 */
+    float efficiency_coef;       /* wave efficiency reward: coef * (wave/tick) on completion. default 1.0 */
 
     Log log;
 } InfernoState;
@@ -778,6 +781,8 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
     float saved_bhr = s->blood_heal_reward;
     float saved_pr = s->prayer_reward;
     float saved_dtc = s->damage_taken_coef;
+    float saved_ddc = s->damage_dealt_coef;
+    float saved_eff = s->efficiency_coef;
     memset(s, 0, sizeof(InfernoState));
     s->log = saved_log;
     s->start_wave = saved_start;
@@ -793,6 +798,8 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
     s->blood_heal_reward = saved_bhr;
     s->prayer_reward = saved_pr;
     s->damage_taken_coef = saved_dtc;
+    s->damage_dealt_coef = saved_ddc;
+    s->efficiency_coef = saved_eff;
 
     /* human click-to-move: no destination after reset */
     s->player_dest_x = -1;
@@ -2089,12 +2096,20 @@ static float inf_compute_reward(InfernoState* s) {
         c = s->wave_reward_base * powf(s->wave_reward_scale, (float)(s->wave + 1));
         r += c; s->rw_wave += c;
         s->total_waves_cleared = s->wave + 1;
+
+        /* wave efficiency bonus: rewards progressing quickly through waves.
+         * clearing wave 10 at tick 500 → 10/500=0.02, at tick 2000 → 0.005.
+         * fast agent gets 4x more. scales later waves naturally (wave 50 > wave 5). */
+        if (s->tick > 0 && s->efficiency_coef > 0.0f) {
+            c = s->efficiency_coef * (float)(s->wave + 1) / (float)s->tick;
+            r += c; s->rw_efficiency += c;
+        }
     }
 
-    /* damage dealt: flat reward for hitting monsters.
-     * a 45-damage hit gives 0.018. discovery signal that teaches attacking. */
+    /* damage dealt: reward for hitting monsters. discovery signal that teaches attacking.
+     * configurable coefficient (default 0.05). a 45-damage hit gives coef*0.9. */
     if (s->damage_dealt_this_tick > 0.0f) {
-        c = 0.02f * (s->damage_dealt_this_tick / 50.0f);
+        c = s->damage_dealt_coef * (s->damage_dealt_this_tick / 50.0f);
         r += c; s->rw_damage += c;
     }
 
@@ -2702,6 +2717,8 @@ static void inf_put_float(EncounterState* state, const char* key, float value) {
     else if (strcmp(key, "blood_heal_reward") == 0) s->blood_heal_reward = value;
     else if (strcmp(key, "prayer_reward") == 0) s->prayer_reward = value;
     else if (strcmp(key, "damage_taken_coef") == 0) s->damage_taken_coef = value;
+    else if (strcmp(key, "damage_dealt_coef") == 0) s->damage_dealt_coef = value;
+    else if (strcmp(key, "efficiency_coef") == 0) s->efficiency_coef = value;
 }
 
 static void inf_put_ptr(EncounterState* state, const char* key, void* value) {
@@ -2739,6 +2756,7 @@ static void* inf_get_log(EncounterState* state) {
         s->log.rw_prayer += s->rw_prayer;
         s->log.rw_pillar += s->rw_pillar;
         s->log.rw_dmg_taken += s->rw_dmg_taken;
+        s->log.rw_efficiency += s->rw_efficiency;
         s->log.rw_terminal += s->rw_terminal;
         s->log.n += 1.0f;
     }
