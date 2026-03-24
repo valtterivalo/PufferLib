@@ -2,7 +2,7 @@
  * @file binding.c
  * @brief Static-native binding for OSRS Inferno encounter.
  *
- * Bridges vecenv.h's contract (float actions, float terminals) with the
+ * Bridges vecenv.h's contract (double actions, float terminals) with the
  * Inferno encounter's vtable interface.
  */
 
@@ -18,7 +18,7 @@
 
 typedef struct {
     void* observations;
-    float* actions;
+    double* actions;
     float* rewards;
     float* terminals;
     int num_agents;
@@ -41,7 +41,7 @@ typedef struct {
 #define NUM_ATNS INF_NUM_ACTION_HEADS
 #define ACT_SIZES { ENCOUNTER_MOVE_ACTIONS, 5, INF_MAX_NPCS+1, 5, 2, 4, 2 }
 #define OBS_TYPE FLOAT
-#define ACT_TYPE FLOAT
+#define ACT_TYPE DOUBLE
 #define Env InfernoEnv
 
 void c_step(Env* env) {
@@ -89,11 +89,11 @@ void c_step(Env* env) {
         env->log.idle_ticks = (float)s->total_idle_ticks;
         env->log.brews_used = (float)s->total_brews_used;
         env->log.blood_healed = (float)s->total_blood_healed;
+        env->log.n = 1.0f;  /* always report so sweep has continuous signal */
         env->log.npc_kills = (float)s->total_npc_kills;
         env->log.gear_switches = (float)s->total_gear_switches;
         env->log.current_ranged = (float)s->player.current_ranged;
         env->log.current_magic = (float)s->player.current_magic;
-        env->log.n = 1.0f;  /* always report so sweep has continuous signal */
     }
 
     if (is_term) {
@@ -187,20 +187,19 @@ void my_log(Log* log, Dict* out) {
     dict_set(out, "idle_ticks", log->idle_ticks);
     dict_set(out, "brews_used", log->brews_used);
     dict_set(out, "blood_healed", log->blood_healed);
-    dict_set(out, "npc_kills", log->npc_kills);
-    dict_set(out, "gear_switches", log->gear_switches);
-    dict_set(out, "current_ranged", log->current_ranged);
-    dict_set(out, "current_magic", log->current_magic);
-
-    /* gear switch rate: switches per tick */
-    float gear_switch_rate = (log->episode_length > 0.0f)
-        ? log->gear_switches / log->episode_length : 0.0f;
-    dict_set(out, "gear_switch_rate", gear_switch_rate);
 
     /* prayer correct rate: fraction of NPC attacks blocked by correct prayer */
     float prayer_rate = (log->prayer_total > 0.0f)
         ? log->prayer_correct / log->prayer_total : 0.0f;
     dict_set(out, "prayer_correct_rate", prayer_rate);
+
+    dict_set(out, "npc_kills", log->npc_kills);
+    dict_set(out, "gear_switches", log->gear_switches);
+    dict_set(out, "current_ranged", log->current_ranged);
+    dict_set(out, "current_magic", log->current_magic);
+    float gear_switch_rate = (log->episode_length > 0.0f)
+        ? log->gear_switches / log->episode_length : 0.0f;
+    dict_set(out, "gear_switch_rate", gear_switch_rate);
 
     float wr = log->wins;
     float wave_progress = log->episode_length / (float)INF_MAX_TICKS;

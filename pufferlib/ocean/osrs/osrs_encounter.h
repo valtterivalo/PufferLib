@@ -1130,16 +1130,16 @@ static inline void encounter_update_loadout_level(
 /* ======================================================================== */
 
 /** sara brew stat drain. call AFTER healing HP (which is encounter-specific).
-    drains attack, strength, ranged, magic by 5 + floor(base * 0.10) each.
-    boosts defence by 5 + floor(base * 0.20), capped at base + that amount.
+    drains att/str/ranged/magic by floor(current/10)+2 each (uses CURRENT level).
+    boosts defence by floor(current_def/5)+2, capped at base + max boost from base.
     floors at 0 for drained stats.
     ref: OSRS wiki Saradomin brew. */
 static inline void encounter_brew_drain_stats(Player* p) {
-    int att_drain = 5 + p->base_attack / 10;
-    int str_drain = 5 + p->base_strength / 10;
-    int rng_drain = 5 + p->base_ranged / 10;
-    int mag_drain = 5 + p->base_magic / 10;
-    int def_boost = 5 + p->base_defence / 5;
+    int att_drain = p->current_attack / 10 + 2;
+    int str_drain = p->current_strength / 10 + 2;
+    int rng_drain = p->current_ranged / 10 + 2;
+    int mag_drain = p->current_magic / 10 + 2;
+    int def_boost = p->current_defence / 5 + 2;
 
     p->current_attack -= att_drain;
     if (p->current_attack < 0) p->current_attack = 0;
@@ -1151,7 +1151,7 @@ static inline void encounter_brew_drain_stats(Player* p) {
     if (p->current_magic < 0) p->current_magic = 0;
 
     p->current_defence += def_boost;
-    int def_cap = p->base_defence + def_boost;
+    int def_cap = p->base_defence + (p->base_defence / 5 + 2);
     if (p->current_defence > def_cap) p->current_defence = def_cap;
 }
 

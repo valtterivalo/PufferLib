@@ -759,6 +759,11 @@ typedef struct {
     float brews_used;
     float blood_healed;
     float n;
+    /* behavioral metrics (appended at end to preserve offset compatibility) */
+    float npc_kills;
+    float gear_switches;
+    float current_ranged;
+    float current_magic;
 } Log;
 
 // ============================================================================

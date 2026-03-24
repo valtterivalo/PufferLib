@@ -595,6 +595,8 @@ typedef struct {
     int total_idle_ticks;      /* cumulative ticks of ticks_without_action > 0 */
     int total_brews_used;      /* brew doses consumed this episode */
     int total_blood_healed;    /* HP healed via blood barrage this episode */
+    int total_npc_kills;       /* NPCs killed this episode */
+    int total_gear_switches;   /* gear switch actions this episode */
 
     /* per-tick reward event flags (cleared each tick) */
     int brewed_this_tick;      /* 1 if player drank a brew this tick */
@@ -777,6 +779,16 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
     s->player.current_hitpoints = 99;
     s->player.base_prayer = 99;
     s->player.current_prayer = 99;
+    s->player.base_attack = 99;
+    s->player.base_strength = 99;
+    s->player.base_defence = 99;
+    s->player.base_ranged = 99;
+    s->player.base_magic = 99;
+    s->player.current_ranged = 99;
+    s->player.current_magic = 99;
+    s->player.current_attack = 99;
+    s->player.current_strength = 99;
+    s->player.current_defence = 99;
     /* start in mage gear (kodai + crystal shield + ancestral) */
     s->weapon_set = INF_GEAR_MAGE;
     s->armor_tank = 0;
@@ -1617,7 +1629,7 @@ static int inf_tile_walkable(void* ctx, int x, int y) {
 }
 
 #define INF_BREW_HEAL     16   /* sara brew heals 16, can overcap to base+16 */
-#define INF_RESTORE_PRAY  (7 + 99/4)  /* 31 points */
+#define INF_RESTORE_AMOUNT  (99/4 + 8)  /* floor(base/4)+8 = 32 points per stat */
 
 /* apply NPC death: blob split, mager resurrection store, jad healer cleanup.
    call after reducing npc->hp. checks if hp <= 0 and handles death effects. */
@@ -1627,6 +1639,7 @@ static void inf_apply_npc_death(InfernoState* s, int npc_idx) {
     /* keep active=1 for death_ticks so renderer shows final hitsplat + death anim.
        inf_tick_npcs decrements death_ticks and sets active=0 when it reaches 0. */
     npc->death_ticks = 2;
+    s->total_npc_kills++;
 
     if (npc->type == INF_NPC_BLOB) {
         InfNPCType split_types[3] = {
@@ -1663,6 +1676,7 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
 
     /* gear switching */
     int gear_act = actions[INF_HEAD_GEAR];
+    if (gear_act >= 1) s->total_gear_switches++;
     if (gear_act >= 1 && gear_act <= 3) {
         /* 1=mage, 2=tbow, 3=bp */
         InfWeaponSet new_set = (InfWeaponSet)(gear_act - 1);
@@ -1703,6 +1717,24 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
     else
         s->spell_choice = ENCOUNTER_SPELL_BLOOD;
 
+    /* stat decay/restore: every 60 ticks, boosted stats decay by 1 toward base,
+       drained stats restore by 1 toward base. core OSRS mechanic. */
+    if (s->tick > 0 && s->tick % 60 == 0) {
+        int* stats[] = { &s->player.current_ranged, &s->player.current_magic,
+                         &s->player.current_attack, &s->player.current_strength,
+                         &s->player.current_defence };
+        int bases[] = { 99, 99, 99, 99, 99 };
+        for (int si = 0; si < 5; si++) {
+            if (*stats[si] > bases[si]) (*stats[si])--;
+            else if (*stats[si] < bases[si]) (*stats[si])++;
+        }
+        /* recompute max hit after stat change */
+        encounter_compute_loadout_stats(INF_RANGE_TBOW_LOADOUT, ATTACK_STYLE_RANGED,
+            ENCOUNTER_PRAYER_RIGOUR, s->player.current_ranged, 0, 0, &s->loadout_stats[INF_GEAR_TBOW]);
+        encounter_compute_loadout_stats(INF_RANGE_BP_LOADOUT, ATTACK_STYLE_RANGED,
+            ENCOUNTER_PRAYER_RIGOUR, s->player.current_ranged, 0, 0, &s->loadout_stats[INF_GEAR_BP]);
+    }
+
     /* consumables — shared 3-tick potion timer */
     if (s->player_potion_timer > 0) s->player_potion_timer--;
     if (s->stamina_active_ticks > 0) s->stamina_active_ticks--;
@@ -1718,20 +1750,81 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
         s->player_potion_timer = 3;
         s->player.ate_food_this_tick = 1;
         s->brewed_this_tick = 1;
+        /* sara brew stat drain: floor(current/10)+2 per stat, floor(def/5)+2 def boost.
+           drain uses CURRENT level (not base), so boosted stats drain more.
+           ref: OSRS wiki Saradomin brew */
+        {
+            int att_drain = s->player.current_attack / 10 + 2;
+            int str_drain = s->player.current_strength / 10 + 2;
+            int rng_drain = s->player.current_ranged / 10 + 2;
+            int mag_drain = s->player.current_magic / 10 + 2;
+            s->player.current_attack -= att_drain;
+            if (s->player.current_attack < 0) s->player.current_attack = 0;
+            s->player.current_strength -= str_drain;
+            if (s->player.current_strength < 0) s->player.current_strength = 0;
+            s->player.current_ranged -= rng_drain;
+            if (s->player.current_ranged < 0) s->player.current_ranged = 0;
+            s->player.current_magic -= mag_drain;
+            if (s->player.current_magic < 0) s->player.current_magic = 0;
+            int def_boost = s->player.current_defence / 5 + 2;
+            s->player.current_defence += def_boost;
+            int def_cap = 99 + (99 / 5 + 2);  /* cap at base + max boost from base */
+            if (s->player.current_defence > def_cap) s->player.current_defence = def_cap;
+        }
+        /* recompute loadout stats with drained levels */
+        encounter_compute_loadout_stats(INF_RANGE_TBOW_LOADOUT, ATTACK_STYLE_RANGED,
+            ENCOUNTER_PRAYER_RIGOUR, s->player.current_ranged, 0, 0, &s->loadout_stats[INF_GEAR_TBOW]);
+        encounter_compute_loadout_stats(INF_RANGE_BP_LOADOUT, ATTACK_STYLE_RANGED,
+            ENCOUNTER_PRAYER_RIGOUR, s->player.current_ranged, 0, 0, &s->loadout_stats[INF_GEAR_BP]);
+        encounter_compute_loadout_stats(INF_MAGE_LOADOUT, ATTACK_STYLE_MAGIC,
+            ENCOUNTER_PRAYER_AUGURY, s->player.current_magic, 0, 30, &s->loadout_stats[INF_GEAR_MAGE]);
     }
 
     /* potions (INF_HEAD_POTION): 1=restore, 2=bastion, 3=stamina */
     int pot_act = actions[INF_HEAD_POTION];
     if (pot_act == 1 && s->player_restore_doses > 0 && s->player_potion_timer == 0) {
-        s->player.current_prayer += INF_RESTORE_PRAY;
+        /* super restore: floor(base/4)+8 per stat, caps at base. restores all combat stats + prayer.
+           ref: OSRS wiki Super restore */
+        s->player.current_prayer += INF_RESTORE_AMOUNT;
         if (s->player.current_prayer > s->player.base_prayer)
             s->player.current_prayer = s->player.base_prayer;
+        s->player.current_attack += INF_RESTORE_AMOUNT;
+        if (s->player.current_attack > 99) s->player.current_attack = 99;
+        s->player.current_strength += INF_RESTORE_AMOUNT;
+        if (s->player.current_strength > 99) s->player.current_strength = 99;
+        s->player.current_defence += INF_RESTORE_AMOUNT;
+        if (s->player.current_defence > 99) s->player.current_defence = 99;
+        s->player.current_ranged += INF_RESTORE_AMOUNT;
+        if (s->player.current_ranged > 99) s->player.current_ranged = 99;
+        s->player.current_magic += INF_RESTORE_AMOUNT;
+        if (s->player.current_magic > 99) s->player.current_magic = 99;
         s->player_restore_doses--;
         s->player_potion_timer = 3;
+        /* recompute loadout stats with restored levels */
+        encounter_compute_loadout_stats(INF_RANGE_TBOW_LOADOUT, ATTACK_STYLE_RANGED,
+            ENCOUNTER_PRAYER_RIGOUR, s->player.current_ranged, 0, 0, &s->loadout_stats[INF_GEAR_TBOW]);
+        encounter_compute_loadout_stats(INF_RANGE_BP_LOADOUT, ATTACK_STYLE_RANGED,
+            ENCOUNTER_PRAYER_RIGOUR, s->player.current_ranged, 0, 0, &s->loadout_stats[INF_GEAR_BP]);
+        encounter_compute_loadout_stats(INF_MAGE_LOADOUT, ATTACK_STYLE_MAGIC,
+            ENCOUNTER_PRAYER_AUGURY, s->player.current_magic, 0, 30, &s->loadout_stats[INF_GEAR_MAGE]);
     } else if (pot_act == 2 && s->player_bastion_doses > 0 && s->player_potion_timer == 0) {
-        /* bastion potion: simplified as flat +6 effective range level (handled in combat) */
+        /* bastion potion: boosts ranged by 4 + floor(base/10) = 13 at base 99.
+           also boosts defence by 5 + floor(base*15/100) = 19. can exceed base. */
+        int rng_boost = 4 + s->player.current_ranged / 10;
+        s->player.current_ranged += rng_boost;
+        int max_rng = 99 + (4 + 99 / 10);  /* cap at base + max boost = 112 */
+        if (s->player.current_ranged > max_rng) s->player.current_ranged = max_rng;
+        int def_boost = 5 + s->player.current_defence * 15 / 100;
+        s->player.current_defence += def_boost;
+        int max_def = 99 + (5 + 99 * 15 / 100);
+        if (s->player.current_defence > max_def) s->player.current_defence = max_def;
         s->player_bastion_doses--;
         s->player_potion_timer = 3;
+        /* recompute ranged loadout stats with boosted level */
+        encounter_compute_loadout_stats(INF_RANGE_TBOW_LOADOUT, ATTACK_STYLE_RANGED,
+            ENCOUNTER_PRAYER_RIGOUR, s->player.current_ranged, 0, 0, &s->loadout_stats[INF_GEAR_TBOW]);
+        encounter_compute_loadout_stats(INF_RANGE_BP_LOADOUT, ATTACK_STYLE_RANGED,
+            ENCOUNTER_PRAYER_RIGOUR, s->player.current_ranged, 0, 0, &s->loadout_stats[INF_GEAR_BP]);
     } else if (pot_act == 3 && s->player_stamina_doses > 0 && s->player_potion_timer == 0) {
         s->stamina_active_ticks = 200;
         s->player_stamina_doses--;
@@ -2123,7 +2216,25 @@ static void inf_step(EncounterState* state, const int* actions) {
 /* ======================================================================== */
 
 /* obs layout: 20 player + 6 pillar + 32 NPCs * 11 = 378. round up to 381. */
-#define INF_NUM_OBS 381
+#define INF_NUM_OBS 448
+
+/* max hit per NPC type, normalized by mager max (70). for prayer priority obs. */
+static const float INF_NPC_MAX_HIT_NORM[INF_NUM_NPC_TYPES] = {
+    [INF_NPC_NIBBLER]    = 0.0f,
+    [INF_NPC_BAT]        = 19.0f / 70.0f,
+    [INF_NPC_BLOB]       = 29.0f / 70.0f,
+    [INF_NPC_BLOB_MELEE] = 18.0f / 70.0f,
+    [INF_NPC_BLOB_RANGE] = 18.0f / 70.0f,
+    [INF_NPC_BLOB_MAGE]  = 25.0f / 70.0f,
+    [INF_NPC_MELEER]     = 49.0f / 70.0f,
+    [INF_NPC_RANGER]     = 46.0f / 70.0f,
+    [INF_NPC_MAGER]      = 70.0f / 70.0f,
+    [INF_NPC_JAD]        = 113.0f / 70.0f,
+    [INF_NPC_ZUK]        = 148.0f / 70.0f,
+    [INF_NPC_HEALER_JAD] = 13.0f / 70.0f,
+    [INF_NPC_HEALER_ZUK] = 24.0f / 70.0f,
+    [INF_NPC_ZUK_SHIELD] = 0.0f,
+};
 
 static void inf_write_obs(EncounterState* state, float* obs) {
     InfernoState* s = (InfernoState*)state;
@@ -2157,14 +2268,16 @@ static void inf_write_obs(EncounterState* state, float* obs) {
     /* attack readiness: 0 = ready to fire, >0 = on cooldown */
     obs[i++] = (float)s->player_attack_timer / 8.0f;
 
-    /* pillars (6 features) */
+    /* pillars (12 features: active, hp, x, y per pillar) */
     for (int p = 0; p < INF_NUM_PILLARS; p++) {
         obs[i++] = s->pillars[p].active ? 1.0f : 0.0f;
         obs[i++] = (float)s->pillars[p].hp / (float)INF_PILLAR_HP;
+        obs[i++] = (float)(s->pillars[p].x - INF_ARENA_MIN_X) / (float)INF_ARENA_WIDTH;
+        obs[i++] = (float)(s->pillars[p].y - INF_ARENA_MIN_Y) / (float)INF_ARENA_HEIGHT;
     }
 
-    /* NPCs: 11 features each, up to INF_MAX_NPCS */
-    for (int n = 0; n < INF_MAX_NPCS && (i + 11) <= INF_NUM_OBS; n++) {
+    /* NPCs: 13 features each, up to INF_MAX_NPCS */
+    for (int n = 0; n < INF_MAX_NPCS && (i + 13) <= INF_NUM_OBS; n++) {
         InfNPC* npc = &s->npcs[n];
         if (npc->active) {
             obs[i++] = 1.0f;
@@ -2178,8 +2291,23 @@ static void inf_write_obs(EncounterState* state, float* obs) {
             obs[i++] = (npc->attack_style == ATTACK_STYLE_MAGIC) ? 1.0f : 0.0f;
             obs[i++] = inf_npc_has_los(s, n) ? 1.0f : 0.0f;
             obs[i++] = (float)npc->frozen_ticks / 32.0f;
+            obs[i++] = INF_NPC_MAX_HIT_NORM[npc->type];  /* max hit for prayer priority */
+            /* blob scan state: what style the blob will fire next.
+               0 = no scan (idle or non-blob), 1 = will fire ranged, -1 = will fire magic.
+               this is the ONLY way the agent can know what to pray against blobs. */
+            if (npc->type == INF_NPC_BLOB && npc->blob_scanned_prayer >= 0) {
+                OverheadPrayer scanned = (OverheadPrayer)npc->blob_scanned_prayer;
+                if (scanned == PRAYER_PROTECT_MAGIC)
+                    obs[i++] = 1.0f;   /* scanned magic → will fire ranged */
+                else if (scanned == PRAYER_PROTECT_RANGED)
+                    obs[i++] = -1.0f;  /* scanned ranged → will fire magic */
+                else
+                    obs[i++] = 0.5f;   /* scanned neither → 50/50 */
+            } else {
+                obs[i++] = 0.0f;
+            }
         } else {
-            for (int j = 0; j < 11; j++) obs[i++] = 0.0f;
+            for (int j = 0; j < 13; j++) obs[i++] = 0.0f;
         }
     }
 
@@ -2229,16 +2357,22 @@ static void inf_write_mask(EncounterState* state, float* mask) {
 
     /* HEAD_POTION (4): none, restore, bastion, stamina */
     mask[offset++] = 1.0f;  /* none always valid */
-    /* restore: mask if no doses, timer active, or would waste more than half */
+    /* restore: unmask if any stat is drained or prayer is low enough to not waste.
+       "stats drained" = any combat stat below base 99. */
     {
         int pray_missing = s->player.base_prayer - s->player.current_prayer;
+        int stats_drained = s->player.current_attack < 99 || s->player.current_strength < 99 ||
+                            s->player.current_defence < 99 || s->player.current_ranged < 99 ||
+                            s->player.current_magic < 99;
+        int pray_worth = pray_missing >= (INF_RESTORE_AMOUNT + 1) / 2;
         mask[offset++] = (s->player_restore_doses > 0 &&
                           s->player_potion_timer == 0 &&
-                          pray_missing >= (INF_RESTORE_PRAY + 1) / 2)
+                          (stats_drained || pray_worth))
                          ? 1.0f : 0.0f;
     }
-    /* bastion: mask if no doses or timer active */
-    mask[offset++] = (s->player_bastion_doses > 0 && s->player_potion_timer == 0)
+    /* bastion: only worth drinking at 99-105 ranged (drained = restore first, >105 = still boosted) */
+    mask[offset++] = (s->player_bastion_doses > 0 && s->player_potion_timer == 0 &&
+                      s->player.current_ranged >= 99 && s->player.current_ranged <= 105)
                      ? 1.0f : 0.0f;
     /* stamina: mask if no doses, timer active, or already active */
     mask[offset++] = (s->player_stamina_doses > 0 &&
@@ -2246,8 +2380,10 @@ static void inf_write_mask(EncounterState* state, float* mask) {
                       s->stamina_active_ticks == 0)
                      ? 1.0f : 0.0f;
 
-    /* HEAD_SPELL (2): blood_barrage, ice_barrage — masked when not in mage gear */
-    mask[offset++] = (s->weapon_set == INF_GEAR_MAGE) ? 1.0f : 0.0f;
+    /* HEAD_SPELL (2): blood_barrage, ice_barrage — masked when not in mage gear.
+       blood barrage also masked at full HP since it can't overheal. */
+    mask[offset++] = (s->weapon_set == INF_GEAR_MAGE &&
+                      s->player.current_hitpoints < s->player.base_hitpoints) ? 1.0f : 0.0f;
     mask[offset++] = (s->weapon_set == INF_GEAR_MAGE) ? 1.0f : 0.0f;
 }
 
@@ -2410,6 +2546,10 @@ static void* inf_get_log(EncounterState* state) {
         s->log.brews_used += (float)s->total_brews_used;
         s->log.blood_healed += (float)s->total_blood_healed;
         s->log.n += 1.0f;
+        s->log.npc_kills += (float)s->total_npc_kills;
+        s->log.gear_switches += (float)s->total_gear_switches;
+        s->log.current_ranged += (float)s->player.current_ranged;
+        s->log.current_magic += (float)s->player.current_magic;
     }
     return &s->log;
 }
