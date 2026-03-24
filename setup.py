@@ -494,6 +494,7 @@ def _build_static_lib(env_name, force=False):
         "-I.",
         "-Ipufferlib/src",
         f"-Ipufferlib/ocean/{env_name}",
+        "-Ipufferlib/ocean/osrs",
         f"-I./{RAYLIB_NAME}/include",
         "-DPLATFORM_DESKTOP",
         "-fno-semantic-interposition",
