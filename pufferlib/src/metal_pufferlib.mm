@@ -717,7 +717,7 @@ void train_impl(PuffeRL& pufferl) {
                     mb_val = ((const float*)mu->mb_puf.bytes)[enc_elems + max_idx];
                 if (mu->gc_puf.bytes)
                     gc_val = ((const float*)mu->gc_puf.bytes)[enc_elems + max_idx];
-                if (max_val > 5.0f || trace_count % 1000 == 0) {
+                if (max_val > 5.0f || trace_count % 10000 == 0) {
                     fprintf(stderr, "[weight-trace] step=%d idx=%d/%d w=%.4f mb=%.6f gc=%.6f row=%d col=%d\n",
                         trace_count, max_idx, n, max_val, mb_val, gc_val, max_idx/H, max_idx%H);
                 }

@@ -765,6 +765,11 @@ typedef struct {
     float idle_ticks;
     float brews_used;
     float blood_healed;
+    /* behavioral metrics */
+    float npc_kills;
+    float gear_switches;
+    float current_ranged;
+    float current_magic;
     /* per-component reward accumulators (sum across episodes, divide by n) */
     float rw_wave;
     float rw_damage;

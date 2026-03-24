@@ -333,56 +333,19 @@ pybind11::dict log_train_debug(pybind11::object pufferl_obj) {
     double param_abs_max = std::max(std::fabs(param_stats.min), std::fabs(param_stats.max));
 
     pybind11::dict out;
-    out["mb_adv_mean"] = adv_stats.mean;
-    out["mb_adv_std"] = adv_stats.stddev;
-    out["mb_adv_abs_mean"] = adv_stats.abs_mean;
-    out["mb_adv_min"] = adv_stats.min;
-    out["mb_adv_max"] = adv_stats.max;
 
-    out["mb_prio_mean"] = prio_stats.mean;
-    out["mb_prio_std"] = prio_stats.stddev;
-    out["mb_prio_abs_mean"] = prio_stats.abs_mean;
-    out["mb_prio_min"] = prio_stats.min;
-    out["mb_prio_max"] = prio_stats.max;
-    out["sampled_prio_mean"] = sampled_prio_stats.mean;
-    out["sampled_prio_std"] = sampled_prio_stats.stddev;
-    out["sampled_prio_min"] = sampled_prio_stats.min;
-    out["sampled_prio_max"] = sampled_prio_stats.max;
-
-    out["mb_ratio_mean"] = ratio_stats.mean;
-    out["mb_ratio_std"] = ratio_stats.stddev;
+    /* 10 essential metrics — training health + weight health */
     out["mb_ratio_abs_mean"] = ratio_stats.abs_mean;
-    out["mb_ratio_min"] = ratio_stats.min;
-    out["mb_ratio_max"] = ratio_stats.max;
     out["mb_ratio_clipfrac_raw"] = compute_clipfrac(
         mb_ratio, mb_ratio_n, pufferl.hypers.clip_coef);
-    out["mb_ratio_gt_2_frac"] = compute_frac_gt(mb_ratio, mb_ratio_n, 2.0);
-    out["mb_ratio_lt_0_5_frac"] = compute_frac_lt(mb_ratio, mb_ratio_n, 0.5);
-
-    out["roll_ratio_mean"] = roll_ratio_stats.mean;
-    out["roll_ratio_std"] = roll_ratio_stats.stddev;
-    out["roll_ratio_abs_mean"] = roll_ratio_stats.abs_mean;
-    out["roll_ratio_min"] = roll_ratio_stats.min;
-    out["roll_ratio_max"] = roll_ratio_stats.max;
-    out["roll_ratio_clipfrac_raw"] = compute_clipfrac(
-        roll_ratio, roll_ratio_n, pufferl.hypers.clip_coef);
-    out["prio_prob_sum"] = prio_prob_stats.sum;
-    out["prio_prob_min"] = prio_prob_stats.min;
-    out["prio_prob_max"] = prio_prob_stats.max;
-    out["prio_prob_entropy"] = prio_prob_stats.entropy;
-    out["prio_prob_ess"] = prio_prob_stats.ess;
-    out["prio_prob_ess_frac"] = prio_prob_stats.ess_fraction;
-    out["param_abs_max"] = param_abs_max;
-    out["param_abs_gt_100"] = compute_frac_abs_gt(param_fp32, param_fp32_n, 100.0);
-    out["param_abs_gt_1k"] = compute_frac_abs_gt(param_fp32, param_fp32_n, 1000.0);
-    out["param_abs_gt_60k"] = compute_frac_abs_gt(param_fp32, param_fp32_n, 60000.0);
     out["grad_l2"] = grad_l2;
     out["grad_clip_coef"] = grad_clip_coef;
+    out["param_abs_max"] = param_abs_max;
 
     float current_lr = *pufferl.muon->lr_ptr;
     out["optimizer_lr"] = current_lr;
 
-    // Decoder weight stats: policy rows vs value row
+    // Decoder + encoder + GRU weight stats
     {
         DecoderWeights* dw = (DecoderWeights*)pufferl.weights_fp32.decoder;
         int od = dw->output_dim;
@@ -392,32 +355,35 @@ pybind11::dict log_train_debug(pybind11::object pufferl_obj) {
         if (pw && vw) {
             FloatStats pw_stats = compute_float_stats(pw, (int64_t)od * H);
             FloatStats vw_stats = compute_float_stats(vw, (int64_t)H);
-            out["dec_policy_abs_mean"] = pw_stats.abs_mean;
             out["dec_policy_abs_max"] = std::max(std::fabs(pw_stats.min), std::fabs(pw_stats.max));
-            out["dec_policy_std"] = pw_stats.stddev;
-            out["dec_value_abs_mean"] = vw_stats.abs_mean;
             out["dec_value_abs_max"] = std::max(std::fabs(vw_stats.min), std::fabs(vw_stats.max));
-            out["dec_value_std"] = vw_stats.stddev;
         }
 
-        // Muon momentum buffer stats for decoder
-        Muon* mu = pufferl.muon;
-        if (mu && mu->mb_puf.bytes) {
-            // Find decoder momentum offset: same layout as param allocator
-            // encoder weight comes first, then policy_weight, then value_weight
-            EncoderWeights* ew = (EncoderWeights*)pufferl.weights_fp32.encoder;
-            int64_t enc_elems = ew ? ew->weight.numel() : 0;
-            int64_t dec_policy_elems = (int64_t)od * H;
-            int64_t dec_value_elems = (int64_t)H;
-            const float* mb_all = (const float*)mu->mb_puf.bytes;
-            const float* mb_policy = mb_all + enc_elems;
-            const float* mb_value = mb_policy + dec_policy_elems;
-            FloatStats mb_p_stats = compute_float_stats(mb_policy, dec_policy_elems);
-            FloatStats mb_v_stats = compute_float_stats(mb_value, dec_value_elems);
-            out["mom_policy_abs_mean"] = mb_p_stats.abs_mean;
-            out["mom_policy_abs_max"] = std::max(std::fabs(mb_p_stats.min), std::fabs(mb_p_stats.max));
-            out["mom_value_abs_mean"] = mb_v_stats.abs_mean;
-            out["mom_value_abs_max"] = std::max(std::fabs(mb_v_stats.min), std::fabs(mb_v_stats.max));
+        EncoderWeights* ew = (EncoderWeights*)pufferl.weights_fp32.encoder;
+        if (ew && ew->weight.bytes) {
+            FloatStats ew_stats = compute_float_stats(
+                (const float*)ew->weight.bytes, ew->weight.numel());
+            out["enc_w_abs_max"] = std::max(std::fabs(ew_stats.min), std::fabs(ew_stats.max));
+        }
+    }
+
+    // Per-layer GRU weight abs_max
+    {
+        MinGRUWeights* gw = (MinGRUWeights*)pufferl.weights_fp32.network;
+        if (gw) {
+            float gru_max = 0;
+            for (int l = 0; l < gw->num_layers; l++) {
+                int64_t n = gw->weights[l].numel();
+                const float* w = (const float*)gw->weights[l].bytes;
+                if (!w) continue;
+                FloatStats s = compute_float_stats(w, n);
+                float lmax = std::max(std::fabs(s.min), std::fabs(s.max));
+                char key[32];
+                snprintf(key, sizeof(key), "gru_L%d_w_abs_max", l);
+                out[key] = lmax;
+                if (lmax > gru_max) gru_max = lmax;
+            }
+            out["gru_w_abs_max"] = gru_max;
         }
     }
 

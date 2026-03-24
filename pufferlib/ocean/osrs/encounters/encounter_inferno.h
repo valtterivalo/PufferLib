@@ -606,6 +606,8 @@ typedef struct {
     int total_idle_ticks;      /* cumulative ticks of ticks_without_action > 0 */
     int total_brews_used;      /* brew doses consumed this episode */
     int total_blood_healed;    /* HP healed via blood barrage this episode */
+    int total_npc_kills;       /* NPCs killed this episode */
+    int total_gear_switches;   /* gear switch actions this episode */
 
     /* per-component reward accumulators (sum across episode, logged at end) */
     float rw_wave;
@@ -1718,6 +1720,7 @@ static void inf_apply_npc_death(InfernoState* s, int npc_idx) {
     /* keep active=1 for death_ticks so renderer shows final hitsplat + death anim.
        inf_tick_npcs decrements death_ticks and sets active=0 when it reaches 0. */
     npc->death_ticks = 2;
+    s->total_npc_kills++;
 
     if (npc->type == INF_NPC_BLOB) {
         /* InfernoTrainer JalAk.ts removedFromWorld(): Ket at blob loc,
@@ -1763,6 +1766,7 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
 
     /* gear switching: 0=no_switch, 1=mage, 2=tbow, 3=bp, 4=tank, 5=bp_spec */
     int gear_act = actions[INF_HEAD_GEAR];
+    if (gear_act >= 1) s->total_gear_switches++;
     if (gear_act >= 1 && gear_act <= 3) {
         /* 1=mage, 2=tbow, 3=bp */
         InfWeaponSet new_set = (InfWeaponSet)(gear_act - 1);
