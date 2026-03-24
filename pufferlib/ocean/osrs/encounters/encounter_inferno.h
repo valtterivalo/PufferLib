@@ -2310,14 +2310,14 @@ static void inf_step(EncounterState* state, const int* actions) {
 /* observations                                                              */
 /* ======================================================================== */
 
-/* obs layout: 20 player + 6 pillar + 32 NPCs * 11 = 381.
-   define INF_OBS_FULL to enable 480-obs layout with new features. */
+/* obs layout: 20 player + 12 pillar + 32 NPCs * 11 = 387.
+   define INF_OBS_FULL to enable 486-obs layout with threat+imminent features. */
 /* #define INF_OBS_FULL */
 #ifdef INF_OBS_FULL
-#define INF_NUM_OBS 480
+#define INF_NUM_OBS 486
 #define INF_OBS_NPC_FEATURES 14
 #else
-#define INF_NUM_OBS 381
+#define INF_NUM_OBS 387
 #define INF_OBS_NPC_FEATURES 11
 #endif
 
@@ -2412,10 +2412,12 @@ static void inf_write_obs(EncounterState* state, float* obs) {
     }
 #endif
 
-    /* pillars (6 features) */
+    /* pillars (12 features: 3 pillars × active + hp + x + y) */
     for (int p = 0; p < INF_NUM_PILLARS; p++) {
         obs[i++] = s->pillars[p].active ? 1.0f : 0.0f;
         obs[i++] = (float)s->pillars[p].hp / (float)INF_PILLAR_HP;
+        obs[i++] = (float)(s->pillars[p].x - INF_ARENA_MIN_X) / (float)INF_ARENA_WIDTH;
+        obs[i++] = (float)(s->pillars[p].y - INF_ARENA_MIN_Y) / (float)INF_ARENA_HEIGHT;
     }
 
     /* NPCs: INF_OBS_NPC_FEATURES (14) features each, up to INF_MAX_NPCS */
