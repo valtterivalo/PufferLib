@@ -1878,13 +1878,15 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
             has_new_target = 1;
         }
     }
-    /* explicit movement (ground click or RL move) cancels attack target,
-       but only if no new target was set this tick. auto-chase movement
-       does NOT cancel — only explicit user actions do. */
-    int has_explicit_move = (actions[INF_HEAD_MOVE] > 0 || s->player_dest_x >= 0);
-    if (!has_new_target && has_explicit_move) {
+    /* human ground click cancels attack target (OSRS behavior: clicking
+       ground to walk away interrupts combat). RL movement actions do NOT
+       cancel — the agent uses HEAD_MOVE for positioning while attacking.
+       without this distinction, the agent must re-select the target every
+       tick it moves, which is nearly impossible to learn and causes idling. */
+    if (!has_new_target && s->player_dest_x >= 0) {
         s->player_attack_target = -1;
     }
+    int has_explicit_move = (actions[INF_HEAD_MOVE] > 0 || s->player_dest_x >= 0);
     /* clear target if NPC died or is dying */
     if (s->player_attack_target >= 0 &&
         (!s->npcs[s->player_attack_target].active ||
@@ -2079,88 +2081,57 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
 /* ======================================================================== */
 
 static float inf_compute_reward(InfernoState* s) {
-    /* terminal: +1 zuk kill (win), -1 death (fail) */
+    /* simplified per Joseph Suarez — damage dealt + completion only.
+     * all shaping signals removed. the agent learns from:
+     * 1. +0.01 per point of damage dealt (raw)
+     * 2. +1.0 for completing the inferno (all 69 waves cleared)
+     * everything else is implicitly learned through survival. */
+
     if (s->episode_over) {
-        float t = (s->winner == 0) ? 1.0f : -1.0f;
+        float t = (s->winner == 0) ? 1.0f : 0.0f;
         s->rw_terminal += t;
+        /* accumulate diagnostic stats before returning */
+        s->total_damage_dealt += s->damage_dealt_this_tick;
+        s->total_damage_received += s->damage_received_this_tick;
         return t;
     }
 
     float r = 0.0f;
-    float c;
 
-    /* wave completion: exponential scaling so later waves matter much more.
-     * with defaults (base=0.001, scale=1.1): wave 1≈0.001, wave 30≈0.017,
-     * wave 50≈0.117, wave 69≈0.786. total if all cleared ≈ 5.7. */
-    if (s->wave_completed_this_tick) {
-        c = s->wave_reward_base * powf(s->wave_reward_scale, (float)(s->wave + 1));
-        r += c; s->rw_wave += c;
-        s->total_waves_cleared = s->wave + 1;
-
-        /* wave efficiency bonus: rewards progressing quickly through waves.
-         * clearing wave 10 at tick 500 → 10/500=0.02, at tick 2000 → 0.005.
-         * fast agent gets 4x more. scales later waves naturally (wave 50 > wave 5). */
-        if (s->tick > 0 && s->efficiency_coef > 0.0f) {
-            c = s->efficiency_coef * (float)(s->wave + 1) / (float)s->tick;
-            r += c; s->rw_efficiency += c;
-        }
-    }
-
-    /* damage dealt: reward for hitting monsters. discovery signal that teaches attacking.
-     * configurable coefficient (default 0.05). a 45-damage hit gives coef*0.9. */
+    /* damage dealt: +0.01 per HP of damage */
     if (s->damage_dealt_this_tick > 0.0f) {
-        c = s->damage_dealt_coef * (s->damage_dealt_this_tick / 50.0f);
+        float c = 0.01f * s->damage_dealt_this_tick;
         r += c; s->rw_damage += c;
     }
 
-    /* idle penalty disabled — too harsh for untrained agents, creates a vicious cycle
-     * where the agent learns to stop acting. may revisit in a different form later.
-     * the concern: without it, the agent might tank in a corner collecting prayer rewards
-     * instead of attacking. monitor for this behavior. */
-    // if (s->ticks_without_action > 10) {
-    //     c = -0.005f;
-    //     r += c; s->rw_idle += c;
+    /* --- everything below is DISABLED per Joseph Suarez's suggestion ---
+     * rationale: shaping rewards create exploits (prayer camping, risk aversion,
+     * idle loops). let the agent discover prayer/positioning/potions through
+     * the natural consequence of survival → more damage dealt → more reward. */
+
+    // wave completion (exponential scaling)
+    // if (s->wave_completed_this_tick) {
+    //     c = s->wave_reward_base * powf(s->wave_reward_scale, (float)(s->wave + 1));
+    //     r += c; s->rw_wave += c;
+    //     s->total_waves_cleared = s->wave + 1;
+    //     if (s->tick > 0 && s->efficiency_coef > 0.0f) {
+    //         c = s->efficiency_coef * (float)(s->wave + 1) / (float)s->tick;
+    //         r += c; s->rw_efficiency += c;
+    //     }
     // }
 
-    /* brew penalty: penalize drinking saradomin brews in early waves where
-     * blood barrage should suffice. decays via sigmoid so late-wave brews are fine.
-     * sigmoid: ~1.0 at wave 0, ~0.5 at midpoint, ~0 at wave 60+. */
-    if (s->brewed_this_tick) {
-        float wave_factor = 1.0f / (1.0f + expf(
-            ((float)s->wave - s->brew_penalty_midpoint) / s->brew_penalty_width));
-        c = -(s->brew_penalty * wave_factor);
-        r += c; s->rw_brew += c;
-    }
+    // brew penalty
+    // if (s->brewed_this_tick) { ... }
 
-    /* blood barrage healing: reward the correct sustain mechanic (no supply cost).
-     * encourages learning mage gear → barrage → AoE heal loop. */
-    if (s->blood_heal_this_tick > 0) {
-        c = s->blood_heal_reward * (float)s->blood_heal_this_tick / 20.0f;
-        r += c; s->rw_blood += c;
-    }
+    // blood barrage healing
+    // if (s->blood_heal_this_tick > 0) { ... }
 
-    /* prayer reward disabled — creates a prayer-camping exploit where the agent
-     * learns to stand still and pray correctly without attacking. prayer is now
-     * implicitly rewarded via the damage_taken penalty (correct prayer = no damage). */
-    // if (s->prayer_correct_this_tick > 0) {
-    //     c = s->prayer_reward * (float)s->prayer_correct_this_tick;
-    //     r += c; s->rw_prayer += c;
-    // }
+    // pillar destroyed penalty
+    // if (s->pillar_lost_this_tick >= 0) { ... }
 
-    /* damage taken penalty DISABLED — creates risk-aversion where the agent
-     * prefers inaction over fighting. prayer correctness is better learned
-     * via wave completion reward (survive = clear waves = get reward). */
-    // if (s->damage_received_this_tick > 0.0f) {
-    //     c = -(s->damage_taken_coef * (s->damage_received_this_tick / 50.0f));
-    //     r += c; s->rw_dmg_taken += c;
-    // }
-
-    /* pillar destroyed: north pillar (idx 2, highest Y) is the most important
-     * safespot, south (0) and west (1) are less critical. total = -0.8 for all. */
-    if (s->pillar_lost_this_tick >= 0) {
-        c = -((s->pillar_lost_this_tick == 2) ? 0.4f : 0.2f);
-        r += c; s->rw_pillar += c;
-    }
+    /* track wave cleared for logging (even without reward) */
+    if (s->wave_completed_this_tick)
+        s->total_waves_cleared = s->wave + 1;
 
     /* accumulate diagnostic stats */
     s->total_damage_dealt += s->damage_dealt_this_tick;
