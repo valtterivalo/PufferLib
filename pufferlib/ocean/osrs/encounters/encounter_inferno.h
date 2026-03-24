@@ -2017,54 +2017,13 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
 /* ======================================================================== */
 
 static float inf_compute_reward(InfernoState* s) {
-    /* terminal: +1 zuk kill (win), -1 death (fail) */
     if (s->episode_over)
-        return (s->winner == 0) ? 1.0f : -1.0f;
+        return (s->winner == 0) ? 1.0f : 0.0f;
 
     float r = 0.0f;
 
-    /* wave completion: exponential scaling so later waves matter much more.
-     * with defaults (base=0.001, scale=1.1): wave 1≈0.001, wave 30≈0.017,
-     * wave 50≈0.117, wave 69≈0.786. total if all cleared ≈ 5.7. */
-    if (s->wave_completed_this_tick) {
-        r += s->wave_reward_base * powf(s->wave_reward_scale, (float)(s->wave + 1));
-        s->total_waves_cleared = s->wave + 1;
-    }
-
-    /* damage dealt: flat reward for hitting monsters.
-     * a 45-damage hit gives 0.018. discovery signal that teaches attacking. */
     if (s->damage_dealt_this_tick > 0.0f)
-        r += 0.02f * (s->damage_dealt_this_tick / 50.0f);
-
-    /* idle penalty: if not attacking anything for 10+ ticks, small penalty.
-     * pushes the agent toward combat rather than hiding behind pillars. */
-    if (s->ticks_without_action > 10)
-        r -= 0.005f;
-
-    /* brew penalty: penalize drinking saradomin brews in early waves where
-     * blood barrage should suffice. decays via sigmoid so late-wave brews are fine.
-     * sigmoid: ~1.0 at wave 0, ~0.5 at midpoint, ~0 at wave 60+. */
-    if (s->brewed_this_tick) {
-        float wave_factor = 1.0f / (1.0f + expf(
-            ((float)s->wave - s->brew_penalty_midpoint) / s->brew_penalty_width));
-        r -= s->brew_penalty * wave_factor;
-    }
-
-    /* blood barrage healing: reward the correct sustain mechanic (no supply cost).
-     * encourages learning mage gear → barrage → AoE heal loop. */
-    if (s->blood_heal_this_tick > 0)
-        r += s->blood_heal_reward * (float)s->blood_heal_this_tick / 20.0f;
-
-    /* correct prayer: reward for blocking NPC attacks with the right overhead.
-     * prayer_correct_this_tick counts per-attack (multiple NPCs can hit same tick). */
-    if (s->prayer_correct_this_tick > 0)
-        r += s->prayer_reward * (float)s->prayer_correct_this_tick;
-
-    /* pillar destroyed: north pillar (idx 2, highest Y) is the most important
-     * safespot, south (0) and west (1) are less critical. total = -0.8 for all. */
-    if (s->pillar_lost_this_tick >= 0) {
-        r -= (s->pillar_lost_this_tick == 2) ? 0.4f : 0.2f;
-    }
+        r += 0.01f * s->damage_dealt_this_tick;
 
     /* accumulate diagnostic stats */
     s->total_damage_dealt += s->damage_dealt_this_tick;
@@ -2220,8 +2179,10 @@ static void inf_step(EncounterState* state, const int* actions) {
 /* observations                                                              */
 /* ======================================================================== */
 
-/* obs layout: 20 player + 6 pillar + 32 NPCs * 11 = 378. round up to 381. */
-#define INF_NUM_OBS 448
+/* obs layout: 26 player + 12 pillar + 27*32 NPC + 5*8 pending hits = 942 */
+#define INF_FEATURES_PER_NPC 28
+#define INF_FEATURES_PER_HIT 5
+#define INF_NUM_OBS (31 + 12 + INF_FEATURES_PER_NPC * INF_MAX_NPCS + INF_FEATURES_PER_HIT * ENCOUNTER_MAX_PENDING_HITS)
 
 /* max hit per NPC type, normalized by mager max (70). for prayer priority obs. */
 static const float INF_NPC_MAX_HIT_NORM[INF_NUM_NPC_TYPES] = {
@@ -2245,11 +2206,12 @@ static void inf_write_obs(EncounterState* state, float* obs) {
     InfernoState* s = (InfernoState*)state;
     memset(obs, 0, INF_NUM_OBS * sizeof(float));
     int i = 0;
+    int px = s->player.x, py = s->player.y;
 
-    /* player state (19 features) */
+    /* player state (26 features) */
     obs[i++] = (float)s->player.current_hitpoints / 99.0f;
-    obs[i++] = (float)(s->player.x - INF_ARENA_MIN_X) / (float)INF_ARENA_WIDTH;
-    obs[i++] = (float)(s->player.y - INF_ARENA_MIN_Y) / (float)INF_ARENA_HEIGHT;
+    obs[i++] = (float)(px - INF_ARENA_MIN_X) / (float)INF_ARENA_WIDTH;
+    obs[i++] = (float)(py - INF_ARENA_MIN_Y) / (float)INF_ARENA_HEIGHT;
     obs[i++] = (s->active_prayer == PRAYER_PROTECT_MELEE) ? 1.0f : 0.0f;
     obs[i++] = (s->active_prayer == PRAYER_PROTECT_RANGED) ? 1.0f : 0.0f;
     obs[i++] = (s->active_prayer == PRAYER_PROTECT_MAGIC) ? 1.0f : 0.0f;
@@ -2258,66 +2220,105 @@ static void inf_write_obs(EncounterState* state, float* obs) {
     obs[i++] = (float)s->player.current_prayer / 99.0f;
     obs[i++] = (float)s->wave / (float)INF_NUM_WAVES;
     obs[i++] = (float)s->tick / (float)INF_MAX_TICKS;
-    /* weapon_set one-hot (3 floats) */
     obs[i++] = (s->weapon_set == INF_GEAR_MAGE) ? 1.0f : 0.0f;
     obs[i++] = (s->weapon_set == INF_GEAR_TBOW) ? 1.0f : 0.0f;
     obs[i++] = (s->weapon_set == INF_GEAR_BP) ? 1.0f : 0.0f;
-    /* armor_tank */
     obs[i++] = s->armor_tank ? 1.0f : 0.0f;
-    /* consumable doses */
     obs[i++] = (float)s->player_bastion_doses / 4.0f;
     obs[i++] = (float)s->player_stamina_doses / 4.0f;
     obs[i++] = (s->stamina_active_ticks > 0) ? 1.0f : 0.0f;
-    /* potion cooldown */
     obs[i++] = (float)s->player_potion_timer / 3.0f;
-    /* attack readiness: 0 = ready to fire, >0 = on cooldown */
     obs[i++] = (float)s->player_attack_timer / 8.0f;
+    /* new: combat stats, target, weapon range, dead mob pool */
+    obs[i++] = (float)s->player.current_defence / 99.0f;
+    obs[i++] = (float)s->player.current_ranged / 99.0f;
+    obs[i++] = (float)s->player.current_magic / 99.0f;
+    obs[i++] = (s->player_attack_target >= 0)
+               ? (float)(s->player_attack_target + 1) / (float)INF_MAX_NPCS : 0.0f;
+    obs[i++] = (float)s->loadout_stats[s->weapon_set].attack_range / 15.0f;
+    obs[i++] = (float)s->dead_mob_count / (float)INF_MAX_DEAD_MOBS;
+    /* gear stats: current loadout combat performance */
+    obs[i++] = (float)s->loadout_stats[s->weapon_set].max_hit / 80.0f;
+    obs[i++] = (float)s->loadout_stats[s->weapon_set].attack_speed / 6.0f;
+    obs[i++] = (float)s->loadout_stats[s->weapon_set].def_stab / 300.0f;
+    obs[i++] = (float)s->loadout_stats[s->weapon_set].def_magic / 300.0f;
+    obs[i++] = (float)s->loadout_stats[s->weapon_set].def_ranged / 300.0f;
 
-    /* pillars (12 features: active, hp, x, y per pillar) */
+    /* pillars (12 features: active, hp, relative dx, relative dy per pillar) */
     for (int p = 0; p < INF_NUM_PILLARS; p++) {
         obs[i++] = s->pillars[p].active ? 1.0f : 0.0f;
         obs[i++] = (float)s->pillars[p].hp / (float)INF_PILLAR_HP;
-        obs[i++] = (float)(s->pillars[p].x - INF_ARENA_MIN_X) / (float)INF_ARENA_WIDTH;
-        obs[i++] = (float)(s->pillars[p].y - INF_ARENA_MIN_Y) / (float)INF_ARENA_HEIGHT;
+        obs[i++] = (float)(s->pillars[p].x - px) / (float)INF_ARENA_WIDTH;
+        obs[i++] = (float)(s->pillars[p].y - py) / (float)INF_ARENA_HEIGHT;
     }
 
-    /* NPCs: 13 features each, up to INF_MAX_NPCS */
-    for (int n = 0; n < INF_MAX_NPCS && (i + 13) <= INF_NUM_OBS; n++) {
+    /* NPCs: INF_FEATURES_PER_NPC (27) features each, up to INF_MAX_NPCS */
+    for (int n = 0; n < INF_MAX_NPCS; n++) {
         InfNPC* npc = &s->npcs[n];
         if (npc->active) {
             obs[i++] = 1.0f;
-            obs[i++] = (float)npc->type / (float)INF_NUM_NPC_TYPES;
+            /* type one-hot (14 features) */
+            for (int t = 0; t < INF_NUM_NPC_TYPES; t++)
+                obs[i++] = (npc->type == t) ? 1.0f : 0.0f;
             obs[i++] = (float)npc->hp / (float)npc->max_hp;
-            obs[i++] = (float)(npc->x - INF_ARENA_MIN_X) / (float)INF_ARENA_WIDTH;
-            obs[i++] = (float)(npc->y - INF_ARENA_MIN_Y) / (float)INF_ARENA_HEIGHT;
+            /* relative position to player */
+            obs[i++] = (float)(npc->x - px) / (float)INF_ARENA_WIDTH;
+            obs[i++] = (float)(npc->y - py) / (float)INF_ARENA_HEIGHT;
             obs[i++] = (float)npc->attack_timer / 10.0f;
-            obs[i++] = (npc->attack_style == ATTACK_STYLE_MELEE) ? 1.0f : 0.0f;
-            obs[i++] = (npc->attack_style == ATTACK_STYLE_RANGED) ? 1.0f : 0.0f;
-            obs[i++] = (npc->attack_style == ATTACK_STYLE_MAGIC) ? 1.0f : 0.0f;
+            /* attack style: for jad, use jad_attack_style (the actual per-attack style)
+               since npc->attack_style stays at the default forever */
+            {
+                int style = (npc->type == INF_NPC_JAD) ? npc->jad_attack_style : npc->attack_style;
+                obs[i++] = (style == ATTACK_STYLE_MELEE) ? 1.0f : 0.0f;
+                obs[i++] = (style == ATTACK_STYLE_RANGED) ? 1.0f : 0.0f;
+                obs[i++] = (style == ATTACK_STYLE_MAGIC) ? 1.0f : 0.0f;
+            }
             obs[i++] = inf_npc_has_los(s, n) ? 1.0f : 0.0f;
             obs[i++] = (float)npc->frozen_ticks / 32.0f;
-            obs[i++] = INF_NPC_MAX_HIT_NORM[npc->type];  /* max hit for prayer priority */
-            /* blob scan state: what style the blob will fire next.
-               0 = no scan (idle or non-blob), 1 = will fire ranged, -1 = will fire magic.
-               this is the ONLY way the agent can know what to pray against blobs. */
+            obs[i++] = INF_NPC_MAX_HIT_NORM[npc->type];
+            /* blob scan state */
             if (npc->type == INF_NPC_BLOB && npc->blob_scanned_prayer >= 0) {
                 OverheadPrayer scanned = (OverheadPrayer)npc->blob_scanned_prayer;
                 if (scanned == PRAYER_PROTECT_MAGIC)
-                    obs[i++] = 1.0f;   /* scanned magic → will fire ranged */
+                    obs[i++] = 1.0f;
                 else if (scanned == PRAYER_PROTECT_RANGED)
-                    obs[i++] = -1.0f;  /* scanned ranged → will fire magic */
+                    obs[i++] = -1.0f;
                 else
-                    obs[i++] = 0.5f;   /* scanned neither → 50/50 */
+                    obs[i++] = 0.5f;
             } else {
                 obs[i++] = 0.0f;
             }
+            obs[i++] = (float)INF_NPC_STATS[npc->type].attack_range / 15.0f;
+            obs[i++] = (float)INF_NPC_STATS[npc->type].magic_def_bonus / 100.0f;
+            /* barrage AoE count: how many other active NPCs have SW corner within 1 tile */
+            {
+                int aoe_count = 0;
+                for (int j = 0; j < INF_MAX_NPCS; j++) {
+                    if (j == n || !s->npcs[j].active) continue;
+                    int dx = s->npcs[j].x - npc->x;
+                    int dy = s->npcs[j].y - npc->y;
+                    if (dx >= -1 && dx <= 1 && dy >= -1 && dy <= 1) aoe_count++;
+                }
+                obs[i++] = (float)aoe_count / 8.0f;
+            }
         } else {
-            for (int j = 0; j < 13; j++) obs[i++] = 0.0f;
+            for (int j = 0; j < INF_FEATURES_PER_NPC; j++) obs[i++] = 0.0f;
         }
     }
 
-    /* pad to INF_NUM_OBS */
-    while (i < INF_NUM_OBS) obs[i++] = 0.0f;
+    /* pending hits on player (INF_FEATURES_PER_HIT * ENCOUNTER_MAX_PENDING_HITS) */
+    for (int h = 0; h < ENCOUNTER_MAX_PENDING_HITS; h++) {
+        if (h < s->player_pending_hit_count) {
+            EncounterPendingHit* ph = &s->player_pending_hits[h];
+            obs[i++] = 1.0f;  /* active */
+            obs[i++] = (ph->attack_style == ATTACK_STYLE_RANGED) ? 1.0f : 0.0f;
+            obs[i++] = (ph->attack_style == ATTACK_STYLE_MAGIC) ? 1.0f : 0.0f;
+            obs[i++] = (float)ph->ticks_remaining / 10.0f;
+            obs[i++] = (ph->damage > 0) ? 1.0f : 0.0f;  /* unprotected hit incoming */
+        } else {
+            for (int j = 0; j < INF_FEATURES_PER_HIT; j++) obs[i++] = 0.0f;
+        }
+    }
 }
 
 static void inf_write_mask(EncounterState* state, float* mask) {
