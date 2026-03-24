@@ -11,7 +11,7 @@
 #include <stdio.h>
 
 #include "osrs_encounter.h"
-#include "osrs_pvp_types.h"
+#include "osrs_types.h"
 #include "encounters/encounter_inferno.h"
 
 #define INF_TOTAL_OBS (INF_NUM_OBS + INF_ACTION_MASK_SIZE)

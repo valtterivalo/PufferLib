@@ -12,7 +12,7 @@
 #include <stdio.h>
 
 #include "osrs_encounter.h"
-#include "osrs_pvp_types.h"
+#include "osrs_types.h"
 #include "encounters/encounter_zulrah.h"
 
 /* total obs = raw obs + action mask */

@@ -1,1 +1,0 @@
-../osrs_pvp/osrs_pvp_items.h
