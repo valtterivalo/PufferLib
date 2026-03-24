@@ -1315,21 +1315,24 @@ static void inf_npc_attack(InfernoState* s, int idx) {
             /* no pending scan → start scan phase (requires LOS) */
             if (!has_los) return;
             npc->blob_scanned_prayer = (int)s->active_prayer;
+            /* determine counter style NOW so obs shows it during cooldown.
+               the agent can see the blob's attack style and switch prayer
+               during the 3-tick cooldown before the fire tick. */
+            OverheadPrayer scanned = s->active_prayer;
+            if (scanned == PRAYER_PROTECT_MAGIC)
+                npc->attack_style = ATTACK_STYLE_RANGED;
+            else if (scanned == PRAYER_PROTECT_RANGED)
+                npc->attack_style = ATTACK_STYLE_MAGIC;
+            else
+                npc->attack_style = (encounter_rand_int(&s->rng_state, 2) == 0)
+                    ? ATTACK_STYLE_MAGIC : ATTACK_STYLE_RANGED;
             npc->attacked_this_tick = 1;  /* triggers scan animation */
             npc->attack_timer = stats->attack_speed;  /* 3 */
             return;
         }
-        /* has pending scan → determine style and fall through to fire */
-        OverheadPrayer read_prayer = (OverheadPrayer)npc->blob_scanned_prayer;
-        if (read_prayer == PRAYER_PROTECT_MAGIC)
-            npc->attack_style = ATTACK_STYLE_RANGED;
-        else if (read_prayer == PRAYER_PROTECT_RANGED)
-            npc->attack_style = ATTACK_STYLE_MAGIC;
-        else
-            npc->attack_style = (encounter_rand_int(&s->rng_state, 2) == 0)
-                ? ATTACK_STYLE_MAGIC : ATTACK_STYLE_RANGED;
+        /* has pending scan → fire with the style already determined at scan time */
         npc->blob_scanned_prayer = -1;
-        /* fall through to common attack code */
+        /* fall through to common attack code with npc->attack_style already set */
     }
 
     /* determine actual attack style */
@@ -2129,13 +2132,13 @@ static float inf_compute_reward(InfernoState* s) {
     //     r += c; s->rw_prayer += c;
     // }
 
-    /* damage taken penalty: penalize HP lost. correct prayer prevents damage,
-     * so prayer is implicitly rewarded. 2:1 ratio with damage_dealt (+0.02 vs -0.01)
-     * favors aggression — the agent should engage even at cost of taking some hits. */
-    if (s->damage_received_this_tick > 0.0f) {
-        c = -(s->damage_taken_coef * (s->damage_received_this_tick / 50.0f));
-        r += c; s->rw_dmg_taken += c;
-    }
+    /* damage taken penalty DISABLED — creates risk-aversion where the agent
+     * prefers inaction over fighting. prayer correctness is better learned
+     * via wave completion reward (survive = clear waves = get reward). */
+    // if (s->damage_received_this_tick > 0.0f) {
+    //     c = -(s->damage_taken_coef * (s->damage_received_this_tick / 50.0f));
+    //     r += c; s->rw_dmg_taken += c;
+    // }
 
     /* pillar destroyed: north pillar (idx 2, highest Y) is the most important
      * safespot, south (0) and west (1) are less critical. total = -0.8 for all. */
@@ -2310,16 +2313,35 @@ static void inf_step(EncounterState* state, const int* actions) {
 /* observations                                                              */
 /* ======================================================================== */
 
-/* obs layout: 20 player + 12 pillar + 32 NPCs * 11 = 387.
-   define INF_OBS_FULL to enable 486-obs layout with threat+imminent features. */
+/* obs layout: 20 player + 12 pillar + 32 NPCs * 12 = 416.
+   define INF_OBS_FULL to enable 515-obs layout with threat+imminent features. */
 /* #define INF_OBS_FULL */
 #ifdef INF_OBS_FULL
-#define INF_NUM_OBS 486
-#define INF_OBS_NPC_FEATURES 14
+#define INF_NUM_OBS 515
+#define INF_OBS_NPC_FEATURES 15
 #else
-#define INF_NUM_OBS 387
-#define INF_OBS_NPC_FEATURES 11
+#define INF_NUM_OBS 416
+#define INF_OBS_NPC_FEATURES 12
 #endif
+
+/* per-type max hit for obs priority signal. values from wiki/comments in INF_NPC_STATS.
+   normalized by 70.0 (mager max hit — highest non-boss). */
+static const float INF_NPC_MAX_HIT_NORM[INF_NUM_NPC_TYPES] = {
+    [INF_NPC_NIBBLER]    = 0.0f,    /* attacks pillars, not player */
+    [INF_NPC_BAT]        = 19.0f / 70.0f,
+    [INF_NPC_BLOB]       = 29.0f / 70.0f,
+    [INF_NPC_BLOB_MELEE] = 18.0f / 70.0f,
+    [INF_NPC_BLOB_RANGE] = 18.0f / 70.0f,
+    [INF_NPC_BLOB_MAGE]  = 25.0f / 70.0f,
+    [INF_NPC_MELEER]     = 49.0f / 70.0f,  /* wiki: 49 (str=290, melee_str=40) */
+    [INF_NPC_RANGER]     = 46.0f / 70.0f,
+    [INF_NPC_MAGER]      = 70.0f / 70.0f,
+    [INF_NPC_JAD]        = 113.0f / 70.0f,  /* >1.0 — jad hits HARD */
+    [INF_NPC_ZUK]        = 148.0f / 70.0f,
+    [INF_NPC_HEALER_JAD] = 13.0f / 70.0f,  /* melee only, str=125 bonus=0 */
+    [INF_NPC_HEALER_ZUK] = 24.0f / 70.0f,
+    [INF_NPC_ZUK_SHIELD] = 0.0f,
+};
 
 static void inf_write_obs(EncounterState* state, float* obs) {
     InfernoState* s = (InfernoState*)state;
@@ -2435,8 +2457,9 @@ static void inf_write_obs(EncounterState* state, float* obs) {
             obs[i++] = (npc->attack_style == ATTACK_STYLE_MAGIC) ? 1.0f : 0.0f;  /* 8: style magic */
             obs[i++] = inf_npc_has_los(s, n) ? 1.0f : 0.0f;                      /* 9: has LOS */
             obs[i++] = (float)npc->frozen_ticks / 32.0f;                         /* 10: frozen */
+            obs[i++] = INF_NPC_MAX_HIT_NORM[npc->type];                          /* 11: max hit (prayer priority) */
 
-            /* new NPC features (only in 480-obs layout) */
+            /* new NPC features (only in FULL obs layout) */
 #ifdef INF_OBS_FULL
             /* attack imminent */
             {
