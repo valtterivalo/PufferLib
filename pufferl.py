@@ -25,9 +25,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+import rich
+import rich.box
+from rich.table import Table
+from rich.console import Console
+
 import pufferlib
 from pufferlib import _C
-from pufferlib.pufferl import downsample
+from pufferlib.pufferl import downsample, abbreviate, duration
 from pufferlib.sweep import Protein, pareto_points, prune_pareto_front
 
 # keep logs live when piping through tee
@@ -346,6 +351,10 @@ def run_training(config, vec_config, env_config, policy_config, *,
                 losses = _C.log_losses(pufferl)
                 env_stats = _C.log_environments(pufferl)
                 debug_stats = _C.log_train_debug(pufferl)
+                try:
+                    debug_stats.update(_C.log_utilization(pufferl))
+                except Exception:
+                    pass
 
                 # NaN guard -- surfaces data integrity bugs immediately
                 for loss_name in ("entropy", "pg_loss", "vf_loss"):
@@ -890,6 +899,12 @@ def train_cli(env_name: str):
         }) + "\n")
         trace_file.flush()
 
+    console = Console()
+    console.clear()
+    _dash_idx = [0]
+    _start_time = time.time()
+    _utilization = {}
+
     def on_log(iteration, global_step, sps, losses, env_stats, debug_stats=None):
         ent = losses.get("entropy", 0)
         pg = losses.get("pg_loss", 0)
@@ -903,10 +918,101 @@ def train_cli(env_name: str):
         grad_l2 = debug_stats.get("grad_l2", 0) if debug_stats else 0
         dec_p_max = debug_stats.get("dec_policy_abs_max", 0) if debug_stats else 0
         dec_v_max = debug_stats.get("dec_value_abs_max", 0) if debug_stats else 0
-        print(f"[step={global_step:>10,} | SPS={sps:>10,.0f} | "
-              f"ret={ep_ret:>8.2f} wave={wave:>4.1f} pray={prayer:.0%} idle={idle:>4.0f} | "
-              f"ent={ent:.3f} vf={vf:.4f} grad={grad_l2:.1f} "
-              f"dec_p={dec_p_max:.1f} dec_v={dec_v_max:.1f}]")
+
+        # utilization comes from debug_stats (added in run_training)
+        if debug_stats:
+            _utilization.update({k: debug_stats[k] for k in
+                ("vram_used_gb", "vram_total_gb", "gpu_mem", "cpu_mem_gb")
+                if k in debug_stats})
+
+        c1, c2, b1, b2 = '[cyan]', '[white]', '[bright_cyan]', '[bright_white]'
+        total_ts = int(c.get("total_timesteps", 0))
+        uptime = time.time() - _start_time
+        remaining = duration((total_ts - global_step) / sps, b2, c2) if sps > 0 else f'{b2}--{c2}'
+
+        dashboard = Table(box=rich.box.ROUNDED, expand=True,
+                          show_header=False, border_style='bright_cyan')
+
+        # header row
+        header = Table(box=None, expand=True, show_header=False)
+        header.add_column(justify="left", width=30)
+        header.add_column(justify="center", width=16)
+        header.add_column(justify="center", width=18)
+        header.add_column(justify="right", width=12)
+        header.add_row(
+            f'{b1}PufferLib Metal {b2}{env_name} {_dash_idx[0]*" "}:blowfish:',
+            f'{c1}VRAM: {b2}{_utilization.get("vram_used_gb", 0):.1f}{c2}/{b2}{_utilization.get("vram_total_gb", 0):.0f}{c2}G',
+            f'{c1}RAM: {b2}{_utilization.get("cpu_mem_gb", 0):.1f}{c2}G',
+            f'{c1}GPU Mem: {b2}{_utilization.get("gpu_mem", 0):.0f}{c2}%',
+        )
+        _dash_idx[0] = (_dash_idx[0] - 1) % 10
+        dashboard.add_row(header)
+
+        # summary + losses + env stats
+        s = Table(box=None, expand=True)
+        s.add_column(f"{c1}Summary", justify='left', width=10)
+        s.add_column(f"{c1}Value", justify='right', width=14)
+        s.add_row(f'{c2}Steps', abbreviate(global_step, b2, c2))
+        s.add_row(f'{c2}SPS', abbreviate(sps, b2, c2))
+        s.add_row(f'{c2}Uptime', duration(uptime, b2, c2))
+        s.add_row(f'{c2}Remaining', remaining)
+        s.add_row(f'{c2}Epoch', f'{b2}{iteration}')
+        s.add_row(f'{c2}Score', f'{b2}{score:.2f}')
+
+        l = Table(box=None, expand=True)
+        l.add_column(f'{c1}Training', justify='left', width=14)
+        l.add_column(f'{c1}Value', justify='right', width=8)
+        l.add_row(f'{c2}entropy', f'{b2}{ent:.3f}')
+        l.add_row(f'{c2}pg_loss', f'{b2}{pg:.4f}')
+        l.add_row(f'{c2}vf_loss', f'{b2}{vf:.4f}')
+        l.add_row(f'{c2}grad_l2', f'{b2}{grad_l2:.2f}')
+        l.add_row(f'{c2}dec_policy', f'{b2}{dec_p_max:.2f}')
+        l.add_row(f'{c2}dec_value', f'{b2}{dec_v_max:.2f}')
+
+        e = Table(box=None, expand=True)
+        e.add_column(f'{c1}Environment', justify='left', width=14)
+        e.add_column(f'{c1}Value', justify='right', width=8)
+        e.add_row(f'{c2}return', f'{b2}{ep_ret:.2f}')
+        e.add_row(f'{c2}wave', f'{b2}{wave:.1f}')
+        e.add_row(f'{c2}prayer', f'{b2}{prayer:.0%}')
+        e.add_row(f'{c2}ep_length', f'{b2}{ep_len:.0f}')
+        e.add_row(f'{c2}idle', f'{b2}{idle:.0f}')
+        e.add_row(f'{c2}brews', f'{b2}{env_stats.get("brews_used", 0):.1f}')
+
+        monitor = Table(box=None, expand=True, pad_edge=False)
+        monitor.add_row(s, l, e)
+        dashboard.add_row(monitor)
+
+        # extra env stats (npc_kills, gear_switches, current_ranged, etc.)
+        extras = Table(box=None, expand=True, pad_edge=False)
+        left = Table(box=None, expand=True)
+        right = Table(box=None, expand=True)
+        extras.add_row(left, right)
+        left.add_column(f"{c1}Behavioral", justify="left", width=18)
+        left.add_column(f"{c1}Value", justify="right", width=8)
+        right.add_column(f"{c1}Debug", justify="left", width=18)
+        right.add_column(f"{c1}Value", justify="right", width=8)
+
+        behavioral_keys = ["npc_kills", "gear_switches", "gear_switch_rate",
+                           "current_ranged", "current_magic", "damage_dealt",
+                           "damage_received", "blood_healed"]
+        for k in behavioral_keys:
+            v = env_stats.get(k, 0)
+            left.add_row(f'{b2}{k}', f'{b2}{v:.1f}')
+
+        if debug_stats:
+            debug_keys = ["mb_ratio_clipfrac_raw", "mb_ratio_abs_mean",
+                          "enc_w_abs_max", "gru_w_abs_max",
+                          "optimizer_lr", "param_abs_max"]
+            for k in debug_keys:
+                v = debug_stats.get(k, 0)
+                right.add_row(f'{b2}{k}', f'{b2}{v:.4f}')
+
+        dashboard.add_row(extras)
+
+        with console.capture() as capture:
+            console.print(dashboard)
+        print('\033[0;0H' + capture.get())
 
         if wandb_run:
             log_dict = {
