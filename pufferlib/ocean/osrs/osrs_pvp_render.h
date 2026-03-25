@@ -1427,16 +1427,18 @@ static void render_post_tick(RenderClient* rc, OsrsPvp* env) {
                    fallback caused blood/ice effects on tbow hits when barrage fired same tick. */
                 int spell = p->hit_spell_type;
                 if (spell > 0) {
-                    /* center effect on NPC footprint, not SW corner */
-                    int fx = p->x + (p->npc_size > 1 ? p->npc_size / 2 : 0);
-                    int fy = p->y + (p->npc_size > 1 ? p->npc_size / 2 : 0);
+                    /* center effect on NPC footprint center using sub-tile precision.
+                       for size 2: center at (x*128 + 128, y*128 + 128) = between 4 tiles.
+                       for size 3: center at (x*128 + 192, y*128 + 192) = middle tile center. */
+                    float fx = (float)p->x * 128.0f + (float)p->npc_size * 64.0f;
+                    float fy = (float)p->y * 128.0f + (float)p->npc_size * 64.0f;
                     if (p->hit_was_successful) {
                         int gfx = (spell == 1)  /* ENCOUNTER_SPELL_ICE */
                             ? GFX_ICE_BARRAGE_HIT : GFX_BLOOD_BARRAGE_HIT;
-                        effect_spawn_spotanim(rc->effects, gfx,
+                        effect_spawn_spotanim_subtile(rc->effects, gfx,
                             fx, fy, ct, rc->anim_cache, rc->model_cache);
                     } else {
-                        effect_spawn_spotanim(rc->effects, GFX_SPLASH,
+                        effect_spawn_spotanim_subtile(rc->effects, GFX_SPLASH,
                             fx, fy, ct, rc->anim_cache, rc->model_cache);
                     }
                 }

@@ -1989,6 +1989,7 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
                     ph->ticks_remaining = hit_delay;
                     ph->attack_style = ATTACK_STYLE_RANGED;
                     ph->check_prayer = 0;
+                    ph->spell_type = 0;
 
                 } else {
                     /* blowpipe: single target */
@@ -2004,6 +2005,7 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
                     ph->ticks_remaining = hit_delay;
                     ph->attack_style = ATTACK_STYLE_RANGED;
                     ph->check_prayer = 0;
+                    ph->spell_type = 0;
                 }
 
                 s->player_attack_timer = ls->attack_speed;

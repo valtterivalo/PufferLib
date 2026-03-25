@@ -173,10 +173,10 @@ static void effect_init_anim_state(
  * Duration is determined by the animation length, or a fixed 30 client ticks
  * for static models.
  */
-static int effect_spawn_spotanim(
+static int effect_spawn_spotanim_subtile(
     ActiveEffect effects[MAX_ACTIVE_EFFECTS],
     int gfx_id,
-    int world_x, int world_y,
+    float subtile_x, float subtile_y,
     int current_client_tick,
     AnimCache* anim_cache,
     ModelCache* model_cache
@@ -191,8 +191,8 @@ static int effect_spawn_spotanim(
     e->gfx_id = gfx_id;
     e->meta = meta;
 
-    e->cur_x = world_x * 128.0 + 64.0;
-    e->cur_y = world_y * 128.0 + 64.0;
+    e->cur_x = subtile_x;
+    e->cur_y = subtile_y;
     e->height = 0;
 
     e->start_tick = current_client_tick;
@@ -212,6 +212,17 @@ static int effect_spawn_spotanim(
 
     effect_init_anim_state(e, model_cache);
     return slot;
+}
+
+/* convenience wrapper: integer tile coords → sub-tile center */
+static int effect_spawn_spotanim(
+    ActiveEffect effects[MAX_ACTIVE_EFFECTS],
+    int gfx_id, int world_x, int world_y,
+    int current_client_tick, AnimCache* anim_cache, ModelCache* model_cache
+) {
+    return effect_spawn_spotanim_subtile(effects, gfx_id,
+        world_x * 128.0f + 64.0f, world_y * 128.0f + 64.0f,
+        current_client_tick, anim_cache, model_cache);
 }
 
 /**
