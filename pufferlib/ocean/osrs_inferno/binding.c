@@ -30,11 +30,12 @@ typedef struct {
     int acts_staging[INF_NUM_ACTION_HEADS];
     unsigned char term_staging;
 
-    /* replay recording: env 0 writes actions to this file during c_step.
-       binary format matches run_visual's replay loader:
-       header: int32 num_ticks (patched at close), then num_heads int32 per tick. */
-    FILE* record_fp;
-    int record_ticks;
+    /* best-episode replay recording: all envs buffer their current episode's actions.
+       on terminal, if the episode reached a new global best wave, flush to disk.
+       binary format: int32 num_ticks header, then num_heads int32 per tick. */
+    int* episode_actions;    /* circular buffer: episode_len * NUM_ATNS ints */
+    int episode_action_cap;  /* max ticks we can buffer */
+    int episode_action_len;  /* ticks buffered so far this episode */
 } InfernoEnv;
 
 #define OBS_SIZE INF_TOTAL_OBS
@@ -44,22 +45,19 @@ typedef struct {
 #define ACT_TYPE DOUBLE
 #define Env InfernoEnv
 
+/* global best episode tracking — save if higher wave, or same wave but fewer ticks */
+static int g_best_wave = 0;
+static int g_best_ticks = 999999;
+
 void c_step(Env* env) {
     for (int i = 0; i < NUM_ATNS; i++)
         env->acts_staging[i] = (int)env->actions[i];
 
-    /* record actions for replay (env 0 only, when recording is active) */
-    if (env->record_fp) {
-        fwrite(env->acts_staging, sizeof(int), NUM_ATNS, env->record_fp);
-        env->record_ticks++;
-        /* update header + flush every 1000 ticks so data survives kills */
-        if (env->record_ticks % 1000 == 0) {
-            long pos = ftell(env->record_fp);
-            fseek(env->record_fp, 0, SEEK_SET);
-            fwrite(&env->record_ticks, sizeof(int), 1, env->record_fp);
-            fseek(env->record_fp, pos, SEEK_SET);
-            fflush(env->record_fp);
-        }
+    /* buffer actions for best-episode recording */
+    if (env->episode_actions && env->episode_action_len < env->episode_action_cap) {
+        memcpy(&env->episode_actions[env->episode_action_len * NUM_ATNS],
+               env->acts_staging, NUM_ATNS * sizeof(int));
+        env->episode_action_len++;
     }
 
     ENCOUNTER_INFERNO.step(env->enc_state, env->acts_staging);
@@ -97,6 +95,30 @@ void c_step(Env* env) {
     }
 
     if (is_term) {
+        /* check if this episode is a new global best — if so, flush replay to disk */
+        if (env->episode_actions && env->episode_action_len > 0) {
+            InfernoState* st = (InfernoState*)env->enc_state;
+            int wave = st->wave;
+            int ticks = env->episode_action_len;
+            if (wave > g_best_wave || (wave == g_best_wave && ticks < g_best_ticks)) {
+                g_best_wave = wave;
+                g_best_ticks = ticks;
+                const char* rpath = getenv("RECORD_REPLAY");
+                if (rpath && rpath[0]) {
+                    FILE* fp = fopen(rpath, "wb");
+                    if (fp) {
+                        fwrite(&env->episode_action_len, sizeof(int), 1, fp);
+                        fwrite(env->episode_actions, sizeof(int),
+                               env->episode_action_len * NUM_ATNS, fp);
+                        fclose(fp);
+                        fprintf(stderr, "replay: new best wave %d (%d ticks) saved to %s\n",
+                                wave, env->episode_action_len, rpath);
+                    }
+                }
+            }
+        }
+        env->episode_action_len = 0;
+
         ENCOUNTER_INFERNO.reset(env->enc_state, 0);
         ENCOUNTER_INFERNO.write_obs(env->enc_state, obs);
         ENCOUNTER_INFERNO.write_mask(env->enc_state, obs + INF_NUM_OBS);
@@ -116,14 +138,8 @@ void c_reset(Env* env) {
 }
 
 void c_close(Env* env) {
-    /* finalize replay recording: patch the tick count in the header */
-    if (env->record_fp) {
-        fseek(env->record_fp, 0, SEEK_SET);
-        fwrite(&env->record_ticks, sizeof(int), 1, env->record_fp);
-        fclose(env->record_fp);
-        env->record_fp = NULL;
-        fprintf(stderr, "replay: recorded %d ticks\n", env->record_ticks);
-    }
+    free(env->episode_actions);
+    env->episode_actions = NULL;
     if (env->enc_state) {
         ENCOUNTER_INFERNO.destroy(env->enc_state);
         env->enc_state = NULL;
@@ -134,47 +150,27 @@ void c_render(Env* env) { (void)env; }
 
 #include "vecenv.h"
 
-/* global: only env 0 records. set by first my_init if RECORD_REPLAY is set. */
-static int g_record_claimed = 0;
+/* max episode length for action buffer (INF_MAX_TICKS from encounter) */
+#define REPLAY_MAX_TICKS INF_MAX_TICKS
 
 void my_init(Env* env, Dict* kwargs) {
     env->num_agents = 1;
     env->enc_state = ENCOUNTER_INFERNO.create();
     memset(&env->log, 0, sizeof(Log));
-    env->record_fp = NULL;
-    env->record_ticks = 0;
 
     DictItem* start_wave = dict_get_unsafe(kwargs, "start_wave");
     if (start_wave)
         ENCOUNTER_INFERNO.put_int(env->enc_state, "start_wave", (int)start_wave->value);
 
-    DictItem* mask_in_obs = dict_get_unsafe(kwargs, "mask_in_obs");
-    (void)mask_in_obs;  /* always embedded for inferno */
-
-    /* reward shaping config (sweepable via [env] section) */
-    static const char* reward_keys[] = {
-        "wave_reward_base", "wave_reward_scale", "brew_penalty",
-        "brew_penalty_midpoint", "brew_penalty_width", "blood_heal_reward",
-        "prayer_reward"
-    };
-    for (int i = 0; i < 7; i++) {
-        DictItem* item = dict_get_unsafe(kwargs, reward_keys[i]);
-        if (item) ENCOUNTER_INFERNO.put_float(env->enc_state, reward_keys[i], item->value);
+    /* allocate action buffer for best-episode recording (all envs buffer) */
+    if (getenv("RECORD_REPLAY") && getenv("RECORD_REPLAY")[0]) {
+        env->episode_actions = (int*)malloc(REPLAY_MAX_TICKS * NUM_ATNS * sizeof(int));
+        env->episode_action_cap = REPLAY_MAX_TICKS;
+    } else {
+        env->episode_actions = NULL;
+        env->episode_action_cap = 0;
     }
-
-    /* env 0 records actions when RECORD_REPLAY env var is set */
-    if (!g_record_claimed) {
-        g_record_claimed = 1;
-        const char* rpath = getenv("RECORD_REPLAY");
-        if (rpath && rpath[0]) {
-            env->record_fp = fopen(rpath, "wb");
-            if (env->record_fp) {
-                int placeholder = 0;
-                fwrite(&placeholder, sizeof(int), 1, env->record_fp);
-                fprintf(stderr, "replay: recording env 0 to %s\n", rpath);
-            }
-        }
-    }
+    env->episode_action_len = 0;
 }
 
 void my_log(Log* log, Dict* out) {

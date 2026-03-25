@@ -149,7 +149,7 @@ static void run_visual(OsrsPvp* env, const char* encounter_name, const char* rep
         }
         env->encounter_def = (void*)edef;
         env->encounter_state = edef->create();
-        edef->put_int(env->encounter_state, "seed", 42);
+        /* seed=0 matches training binding (uses default RNG, not explicit seed) */
 
         /* load encounter-specific collision map.
            world offset translates encounter-local (0,0) → world coords for cmap lookup.
@@ -177,7 +177,7 @@ static void run_visual(OsrsPvp* env, const char* encounter_name, const char* rep
             }
         }
 
-        edef->reset(env->encounter_state, 42);
+        edef->reset(env->encounter_state, 0);
         fprintf(stderr, "encounter: %s (obs=%d, heads=%d)\n",
                 edef->name, edef->obs_size, edef->num_action_heads);
     } else {
@@ -472,7 +472,7 @@ static void run_visual(OsrsPvp* env, const char* encounter_name, const char* rep
 #endif
 
 int main(int argc, char** argv) {
-    int use_visual = 0;
+    int use_visual = 1;  /* default to visual mode */
     int gear_tier = -1;  /* -1 = random (default LMS distribution) */
     const char* encounter_name __attribute__((unused)) = NULL;
     const char* replay_path __attribute__((unused)) = NULL;
