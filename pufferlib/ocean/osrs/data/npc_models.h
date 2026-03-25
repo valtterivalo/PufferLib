@@ -57,19 +57,19 @@ static const NpcModelMapping NPC_MODEL_MAP_ZULRAH[] = {
 
 static const NpcModelMapping NPC_MODEL_MAP_INFERNO[] = {
     {7691, 0xC1E0B, 7573, 7574, 7572},   /* Jal-Nib (nibbler) */
-    {7692, 0xC1E0C, 7577, 7578, 7577},   /* Jal-MejRah (bat) — walk = idle */
+    {7692, 0xC1E0C, 7577, 7578, 7577},   /* Jal-MejRah (bat) */
     {7693, 0xC1E0D, 7586, 7581, 7587},   /* Jal-Ak (blob) */
-    {7694, 0xC1E0E, 7586, 65535, 7587},  /* Jal-Ak-Rek-Ket (blob melee split) */
-    {7695, 0xC1E0F, 7586, 65535, 7587},  /* Jal-Ak-Rek-Xil (blob range split) */
-    {7696, 0xC1E10, 7586, 65535, 7587},  /* Jal-Ak-Rek-Mej (blob mage split) */
+    {7694, 0xC1E0E, 7586, 65535, 7587},   /* Jal-Ak-Rek-Ket (blob melee split) */
+    {7695, 0xC1E0F, 7586, 65535, 7587},   /* Jal-Ak-Rek-Xil (blob range split) */
+    {7696, 0xC1E10, 7586, 65535, 7587},   /* Jal-Ak-Rek-Mej (blob mage split) */
     {7697, 0xC1E11, 7595, 7597, 7596},   /* Jal-ImKot (meleer) */
     {7698, 0xC1E12, 7602, 7605, 7603},   /* Jal-Xil (ranger) */
     {7699, 0xC1E13, 7609, 7610, 7608},   /* Jal-Zek (mager) */
     {7700, 0xC1E14, 7589, 7593, 7588},   /* JalTok-Jad */
-    {7701, 0xC1E15, 2636, 65535, 2634},  /* Yt-HurKot (jad healer) */
-    {7706, 0xC1E1A, 7564, 7566, 65535},  /* TzKal-Zuk — no walk */
-    {7707, 0xC1E1B, 7567, 65535, 7567},  /* Zuk shield */
-    {7708, 0xC1E1C, 2867, 65535, 2863},  /* Jal-MejJak (zuk healer) */
+    {7701, 0xC1E15, 2636, 65535, 2634},   /* Yt-HurKot (jad healer) */
+    {7706, 0xC1E1A, 7564, 7566, 65535},   /* TzKal-Zuk */
+    {7707, 0xC1E1B, 7567, 65535, 7567},   /* Zuk shield */
+    {7708, 0xC1E1C, 2867, 65535, 2863},   /* Jal-MejJak (zuk healer) */
 };
 
 /* inferno NPC walk animation IDs */
@@ -98,7 +98,7 @@ static const NpcModelMapping NPC_MODEL_MAP_INFERNO[] = {
 #define INF_GFX_451_ANIM   2660
 #define INF_GFX_942_MODEL  19374  /* Dragon arrow projectile (twisted bow) */
 #define INF_GFX_942_ANIM   5233
-#define INF_GFX_1374_MODEL  3082  /* Bat ranged projectile */
+#define INF_GFX_1374_MODEL  853342  /* Bat ranged projectile */
 #define INF_GFX_1374_ANIM   660
 #define INF_GFX_1375_MODEL  33006  /* Zuk magic projectile */
 #define INF_GFX_1375_ANIM   7571
@@ -115,13 +115,13 @@ static const NpcModelMapping NPC_MODEL_MAP_INFERNO[] = {
 #define INF_GFX_1381_ANIM   7616
 #define INF_GFX_1382_MODEL  33017  /* Blob melee */
 #define INF_GFX_1382_ANIM   7614
-#define INF_GFX_1383_MODEL  26293  /* Blob ranged */
+#define INF_GFX_1383_MODEL  853351  /* Blob ranged */
 #define INF_GFX_1383_ANIM   366
-#define INF_GFX_1384_MODEL  3136  /* Blob magic: model 3136, recolor [57,61]->[58690,58690] */
-#define INF_GFX_1385_MODEL  3142  /* Healer magic attack */
+#define INF_GFX_1384_MODEL  853352  /* Blob magic */
+#define INF_GFX_1385_MODEL  853353  /* Healer magic attack */
 #define INF_GFX_1385_ANIM   366
 
-/* inferno pillar models — "Rocky support" objects 30284-30287, 4 HP levels */
+/* inferno pillar models — Rocky support objects 30284-30287 */
 #define INF_PILLAR_MODEL_100  33044  /* object 30284 — full health */
 #define INF_PILLAR_MODEL_75   33043  /* object 30285 — 75% HP */
 #define INF_PILLAR_MODEL_50   33042  /* object 30286 — 50% HP */

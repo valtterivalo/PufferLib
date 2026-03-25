@@ -77,6 +77,25 @@ INFERNO_NPC_IDS = {
     7708: "Jal-MejJak (zuk healer)",
 }
 
+# attack anims are NOT in cache NPC config — they come from CombatAnimationData
+# which is a separate client table. hardcoded from wiki/runelite/deob client.
+INFERNO_ATTACK_ANIMS: dict[int, int] = {
+    7691: 7574,   # nibbler
+    7692: 7578,   # bat
+    7693: 7581,   # blob
+    7694: 65535,   # blob melee split (no attack anim)
+    7695: 65535,   # blob range split (no attack anim)
+    7696: 65535,   # blob mage split (no attack anim)
+    7697: 7597,    # meleer
+    7698: 7605,    # ranger
+    7699: 7610,    # mager
+    7700: 7593,    # jad
+    7701: 65535,   # healer jad (no attack anim)
+    7706: 7566,    # zuk
+    7707: 65535,   # zuk shield (no attack anim)
+    7708: 65535,   # zuk healer (no attack anim)
+}
+
 # known inferno projectile/effect GFX IDs to check
 # from OSRS wiki inferno page and runelite inferno plugin
 INFERNO_SPOTANIM_IDS = {
@@ -561,23 +580,31 @@ def main() -> None:
         all_models.append(merged)
         print(f"  NPC {npc_id} ({npc.name}): {merged.vertex_count} verts, {merged.face_count} faces")
 
-    # also export raw model IDs for GFX projectiles (no recolor for now, keep raw)
-    gfx_model_ids = set()
-    for gfx_id, sa in spotanim_defs.items():
-        if sa.model_id >= 0:
-            gfx_model_ids.add(sa.model_id)
-
-    for mid in sorted(gfx_model_ids):
-        raw = load_model_modern(reader, mid)
+    # export GFX projectile models, applying spotanim recolors where needed.
+    # recolored models get synthetic IDs (0xD0000 | gfx_id) so the cache binary
+    # can hold both the raw and recolored variants of the same base model.
+    exported_gfx_models: set[int] = set()
+    for gfx_id, sa in sorted(spotanim_defs.items()):
+        if sa.model_id < 0:
+            continue
+        raw = load_model_modern(reader, sa.model_id)
         if raw is None:
-            print(f"  warning: GFX model {mid} not found")
+            print(f"  warning: GFX {gfx_id} model {sa.model_id} not found")
             continue
-        md = decode_model(mid, raw)
+        md = decode_model(sa.model_id, raw)
         if md is None:
-            print(f"  warning: failed to decode GFX model {mid}")
+            print(f"  warning: failed to decode GFX {gfx_id} model {sa.model_id}")
             continue
+        if sa.recolor_src:
+            apply_recolors(md, sa.recolor_src, sa.recolor_dst)
+            md.model_id = 0xD0000 | gfx_id
+            print(f"  GFX {gfx_id} model {sa.model_id} -> 0x{md.model_id:X} (recolored): {md.vertex_count} verts")
+        else:
+            if sa.model_id in exported_gfx_models:
+                continue  # already exported this raw model
+            print(f"  GFX {gfx_id} model {sa.model_id}: {md.vertex_count} verts")
+        exported_gfx_models.add(md.model_id)
         all_models.append(md)
-        print(f"  GFX model {mid}: {md.vertex_count} verts, {md.face_count} faces")
 
     # write models binary
     models_path = output_dir / "inferno_npcs.models"
@@ -671,20 +698,25 @@ def main() -> None:
     # build NPC model mapping entries
     npc_entries = []
     for npc_id, npc in sorted(npc_defs.items()):
-        # use the synthetic model ID we assigned (0xC0000 + npc_id)
         synth_model = 0xC0000 + npc_id
         idle = npc.idle_anim if npc.idle_anim >= 0 else 0xFFFF
-        # we don't have attack anims from the def directly; set to 0xFFFF (unknown)
-        attack = 0xFFFF
+        attack = INFERNO_ATTACK_ANIMS.get(npc_id, 0xFFFF)
+        walk = npc.walk_anim if npc.walk_anim >= 0 else 0xFFFF
         label = INFERNO_NPC_IDS.get(npc_id, npc.name)
-        npc_entries.append((npc_id, synth_model, idle, attack, label))
+        npc_entries.append((npc_id, synth_model, idle, attack, walk, label))
 
-    # build spotanim entries for C header
+    # build spotanim entries for C header.
+    # recolored spotanims get synthetic model IDs (0xD0000 | gfx_id) so the
+    # recolored variant is distinct from the raw model in the binary cache.
     spotanim_entries = []
     for gfx_id, sa in sorted(spotanim_defs.items()):
         if sa.model_id >= 0:
             label = INFERNO_SPOTANIM_IDS.get(gfx_id, "unknown")
-            spotanim_entries.append((gfx_id, sa.model_id, sa.seq_id, label))
+            if sa.recolor_src:
+                emit_model_id = 0xD0000 | gfx_id
+            else:
+                emit_model_id = sa.model_id
+            spotanim_entries.append((gfx_id, emit_model_id, sa.seq_id, label))
 
     # write C header
     with open(header_path, "w") as f:
@@ -703,14 +735,15 @@ def main() -> None:
         f.write("    uint32_t model_id;\n")
         f.write("    uint32_t idle_anim;\n")
         f.write("    uint32_t attack_anim;\n")
+        f.write("    uint32_t walk_anim;    /* walk cycle animation; 65535 = use idle_anim */\n")
         f.write("} NpcModelMapping;\n\n")
 
-        # zulrah entries (keep existing)
+        # zulrah entries
         f.write("/* zulrah forms + snakeling */\n")
         f.write("static const NpcModelMapping NPC_MODEL_MAP_ZULRAH[] = {\n")
-        f.write("    {2042, 14408, 5069, 5068},  /* green zulrah (ranged) */\n")
-        f.write("    {2043, 14409, 5069, 5068},  /* red zulrah (melee) */\n")
-        f.write("    {2044, 14407, 5069, 5068},  /* blue zulrah (magic) */\n")
+        f.write("    {2042, 14408, 5069, 5068, 65535},  /* green zulrah (ranged) */\n")
+        f.write("    {2043, 14409, 5069, 5068, 65535},  /* red zulrah (melee) */\n")
+        f.write("    {2044, 14407, 5069, 5068, 65535},  /* blue zulrah (magic) */\n")
         f.write("};\n\n")
 
         # snakeling defines (keep existing)
@@ -748,8 +781,8 @@ def main() -> None:
         f.write("/* ================================================================ */\n\n")
 
         f.write("static const NpcModelMapping NPC_MODEL_MAP_INFERNO[] = {\n")
-        for npc_id, synth_model, idle, attack, label in npc_entries:
-            f.write(f"    {{{npc_id}, 0x{synth_model:X}, {idle}, {attack}}},  /* {label} */\n")
+        for npc_id, synth_model, idle, attack, walk, label in npc_entries:
+            f.write(f"    {{{npc_id}, 0x{synth_model:X}, {idle}, {attack}, {walk}}},   /* {label} */\n")
         f.write("};\n\n")
 
         # inferno NPC defines for walk anims and other useful data
@@ -769,6 +802,13 @@ def main() -> None:
             if seq_id >= 0:
                 f.write(f"#define INF_GFX_{gfx_id}_ANIM   {seq_id}\n")
         f.write("\n")
+
+        # inferno pillar models — "Rocky support" objects 30284-30287, 4 HP levels
+        f.write("/* inferno pillar models — Rocky support objects 30284-30287 */\n")
+        f.write("#define INF_PILLAR_MODEL_100  33044  /* object 30284 — full health */\n")
+        f.write("#define INF_PILLAR_MODEL_75   33043  /* object 30285 — 75% HP */\n")
+        f.write("#define INF_PILLAR_MODEL_50   33042  /* object 30286 — 50% HP */\n")
+        f.write("#define INF_PILLAR_MODEL_25   33045  /* object 30287 — 25% HP */\n\n")
 
         # combined lookup function that searches both zulrah and inferno tables
         f.write("static const NpcModelMapping* npc_model_lookup(uint16_t npc_id) {\n")
