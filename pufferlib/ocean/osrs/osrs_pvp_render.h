@@ -913,8 +913,11 @@ static void render_handle_input(RenderClient* rc, OsrsPvp* env) {
             if (eidx < rc->entity_count) {
                 float tx = (float)rc->sub_x[eidx] / 128.0f;
                 float tz = -(float)rc->sub_y[eidx] / 128.0f;
-                /* smooth follow with lerp to avoid jarring snaps */
-                float lerp = 0.15f;
+                /* smooth follow: time-normalized exponential decay so camera
+                   feel is consistent regardless of frame rate. decay rate
+                   tuned for 0.15 per frame at 60fps baseline. */
+                float dt = GetFrameTime();
+                float lerp = 1.0f - powf(0.85f, dt * 60.0f);
                 rc->cam_target_x += (tx - rc->cam_target_x) * lerp;
                 rc->cam_target_z += (tz - rc->cam_target_z) * lerp;
             }
@@ -1541,14 +1544,15 @@ static void render_client_tick(RenderClient* rc, int player_idx) {
         } else {
             rc->visual_moving[player_idx] = 1;
 
-            /* base speed scaled to playback rate so NPCs always arrive within
-               one game tick. at OSRS speed (1.667 t/s, 30 client ticks): ceil(128/30)=5.
-               at 5 t/s (10 ticks): 13. at unlimited: 128 (instant). */
+            /* base speed: floor division so entities NEVER arrive early.
+               real OSRS uses constant speed 4 (walk) / 8 (run) su/ct at 30 ct/gt.
+               floor(128/30)=4 means 32 ticks to traverse — entity is always in motion
+               and never stalls at tile center waiting for next game tick. */
             float tps = rc->ticks_per_second > 0.0f ? rc->ticks_per_second : 50.0f;
-            int ct_per_gt = (int)(50.0f / tps);
+            int ct_per_gt = (int)(50.0f / tps + 0.5f);  /* round, not truncate */
             if (ct_per_gt < 1) ct_per_gt = 1;
-            int base_walk = (128 + ct_per_gt - 1) / ct_per_gt;
-            if (base_walk < 4) base_walk = 4;
+            int base_walk = 128 / ct_per_gt;  /* floor, not ceil */
+            if (base_walk < 1) base_walk = 1;
             int speed = rc->visual_running[player_idx] ? base_walk * 2 : base_walk;
 
             /* catch-up: double speed while step_tracker > 0 (one stalled
@@ -3787,10 +3791,10 @@ void pvp_render(OsrsPvp* env) {
         if (rc->human_input.enabled && rc->entity_count > 0) {
             int eidx = rc->gui.gui_entity_idx;
             if (eidx < rc->entity_count) {
-                float px = (float)(rc->sub_x[eidx] / 128 - rc->arena_base_x) *
+                float px = ((float)rc->sub_x[eidx] / 128.0f - (float)rc->arena_base_x) *
                            RENDER_TILE_SIZE + RENDER_TILE_SIZE / 2.0f;
-                float py = (float)(rc->arena_height - 1 -
-                           (rc->sub_y[eidx] / 128 - rc->arena_base_y)) *
+                float py = ((float)(rc->arena_height - 1) -
+                           ((float)rc->sub_y[eidx] / 128.0f - (float)rc->arena_base_y)) *
                            RENDER_TILE_SIZE + RENDER_HEADER_HEIGHT + RENDER_TILE_SIZE / 2.0f;
                 cam2d.target = (Vector2){ px, py };
             }
