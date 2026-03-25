@@ -1067,6 +1067,12 @@ static void inf_npc_move(InfernoState* s, int idx) {
     } else {
         tx = s->player.x;
         ty = s->player.y;
+        /* melee NPCs: stop if already at attack range (dist=1 from footprint) */
+        if (stats->attack_range == 1) {
+            int dist = encounter_dist_to_npc(s->player.x, s->player.y,
+                                              npc->x, npc->y, npc->size);
+            if (dist == 1) return;
+        }
     }
 
     /* greedy step toward target using shared helper */
@@ -1897,11 +1903,13 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
         if (target_npc->active) {
             const EncounterLoadoutStats* ls = &s->loadout_stats[s->weapon_set];
 
-            /* range check: compute distance to target NPC, skip if out of range */
+            /* range + LOS check: must have line of sight through pillars */
             int target_dist = encounter_dist_to_npc(s->player.x, s->player.y,
                 target_npc->x, target_npc->y, target_npc->size);
 
-            if (target_dist >= 1 && target_dist <= ls->attack_range) {
+            if (encounter_player_can_attack(s->player.x, s->player.y,
+                    target_npc->x, target_npc->y, target_npc->size,
+                    ls->attack_range, s->los_blockers, s->los_blocker_count)) {
                 /* compute hit delay for projectile flight */
                 int hit_delay;
                 if (ls->style == ATTACK_STYLE_MAGIC)

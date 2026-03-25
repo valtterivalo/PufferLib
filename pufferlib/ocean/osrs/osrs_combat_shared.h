@@ -50,8 +50,11 @@ static inline float osrs_hit_chance(int att_roll, int def_roll) {
    formula from RuneLite TwistedBow._accuracyMultiplier. */
 static inline float osrs_tbow_acc_mult(int target_magic) {
     int m = target_magic < 250 ? target_magic : 250;
-    float t = (float)(3 * m) / 10.0f;
-    float mult = (140.0f + (t - 10.0f) / 100.0f - (t - 100.0f) * (t - 100.0f) / 100.0f) / 100.0f;
+    /* ref: osrs-sdk TwistedBow.ts _accuracyMultiplier
+       linear term uses 3*magic, quadratic uses 3*magic/10 */
+    float lin = (float)(3 * m);
+    float quad = lin / 10.0f;
+    float mult = (140.0f + (lin - 10.0f) / 100.0f - (quad - 100.0f) * (quad - 100.0f) / 100.0f) / 100.0f;
     if (mult > 1.4f) mult = 1.4f;
     if (mult < 0.0f) mult = 0.0f;
     return mult;
@@ -59,11 +62,12 @@ static inline float osrs_tbow_acc_mult(int target_magic) {
 
 /* twisted bow damage multiplier.
    same input as accuracy multiplier.
-   formula from RuneLite TwistedBow._damageMultiplier. */
+   ref: osrs-sdk TwistedBow.ts _damageMultiplier */
 static inline float osrs_tbow_dmg_mult(int target_magic) {
     int m = target_magic < 250 ? target_magic : 250;
-    float t = (float)(3 * m) / 10.0f;
-    float mult = (250.0f + (t - 14.0f) / 100.0f - (t - 140.0f) * (t - 140.0f) / 100.0f) / 100.0f;
+    float lin = (float)(3 * m);
+    float quad = lin / 10.0f;
+    float mult = (250.0f + (lin - 14.0f) / 100.0f - (quad - 140.0f) * (quad - 140.0f) / 100.0f) / 100.0f;
     if (mult > 2.5f) mult = 2.5f;
     if (mult < 0.0f) mult = 0.0f;
     return mult;
