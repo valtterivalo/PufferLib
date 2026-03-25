@@ -110,6 +110,7 @@ typedef struct {
     int def_level;       /* in: NPC defence level */
     int magic_def_bonus; /* in: NPC magic defence bonus */
     int npc_idx;         /* in: index into caller's NPC array (for callbacks) */
+    int* frozen_ticks;   /* in: pointer to NPC's frozen_ticks (NULL = no freeze tracking) */
     int hit;             /* out: 1 = accuracy passed, 0 = splashed */
     int damage;          /* out: damage rolled (0 if splashed) */
 } BarrageTarget;
@@ -130,13 +131,16 @@ typedef struct {
    - rng_state: pointer to RNG state for rolls
    - max_targets: size of targets array
 
-   the function sets hit/damage on each target. caller is responsible for
-   applying damage, freeze, death effects based on the results.
+   the function sets hit/damage on each target. if spell_type is ICE and
+   a target's frozen_ticks pointer is set, freeze is applied immediately
+   at cast time (ref: osrs-sdk IceBarrageSpell.ts). caller is responsible
+   for queueing damage as pending hits with appropriate delay.
 
    returns aggregate result for reward/heal calculations. */
 static inline BarrageResult osrs_barrage_resolve(
     BarrageTarget* targets, int max_targets,
-    int att_roll, int max_hit, uint32_t* rng_state
+    int att_roll, int max_hit, uint32_t* rng_state,
+    int spell_type
 ) {
     BarrageResult result = { 0, 0, 0 };
 
@@ -151,7 +155,12 @@ static inline BarrageResult osrs_barrage_resolve(
         targets[0].damage = targets[0].hit ? encounter_rand_int(rng_state, max_hit + 1) : 0;
         result.total_damage += targets[0].damage;
         result.num_hits++;
-        if (targets[0].hit) result.num_successful++;
+        if (targets[0].hit) {
+            result.num_successful++;
+            /* ice barrage: freeze immediately at cast time */
+            if (spell_type == 1 /* ENCOUNTER_SPELL_ICE */ && targets[0].frozen_ticks)
+                *targets[0].frozen_ticks = BARRAGE_FREEZE_TICKS;
+        }
     }
 
     /* AoE: roll against all other active targets within 1 tile of primary */
@@ -167,7 +176,11 @@ static inline BarrageResult osrs_barrage_resolve(
         targets[i].damage = targets[i].hit ? encounter_rand_int(rng_state, max_hit + 1) : 0;
         result.total_damage += targets[i].damage;
         result.num_hits++;
-        if (targets[i].hit) result.num_successful++;
+        if (targets[i].hit) {
+            result.num_successful++;
+            if (spell_type == 1 /* ENCOUNTER_SPELL_ICE */ && targets[i].frozen_ticks)
+                *targets[i].frozen_ticks = BARRAGE_FREEZE_TICKS;
+        }
     }
 
     return result;

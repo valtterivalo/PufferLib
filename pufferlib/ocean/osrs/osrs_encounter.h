@@ -801,12 +801,10 @@ static inline int encounter_resolve_npc_pending_hit(
     encounter_damage_npc(npc_hp, hit_landed, hit_damage, dmg);
     if (damage_dealt_acc) *damage_dealt_acc += dmg;
 
-    /* ice barrage: freeze on hit (including 0 dmg — only splashes don't freeze,
-       and splashes never enter the pending hit queue) */
-    if (ph->spell_type == ENCOUNTER_SPELL_ICE && frozen_ticks)
-        *frozen_ticks = BARRAGE_FREEZE_TICKS;
+    /* ice barrage freeze: applied at CAST TIME in the encounter (not here at land time).
+       ref: osrs-sdk IceBarrageSpell.ts — to.freeze() called immediately after attack(). */
 
-    /* blood barrage: accumulate damage for 25% heal */
+    /* blood barrage: accumulate damage for 25% heal (at land time — heal depends on damage) */
     if (ph->spell_type == ENCOUNTER_SPELL_BLOOD && blood_heal_acc)
         *blood_heal_acc += dmg;
 

@@ -1420,16 +1420,21 @@ static void render_post_tick(RenderClient* rc, OsrsPvp* env) {
                 /* barrage impact: use hit_spell_type (set when pending hit resolves)
                    instead of magic_type_this_tick (stale by deferred hit landing).
                    ENCOUNTER_SPELL_ICE=1 -> ice barrage, ENCOUNTER_SPELL_BLOOD=2 -> blood. */
-                int spell = p->hit_spell_type ? p->hit_spell_type : att->magic_type_this_tick;
+                /* use hit_spell_type from pending hit resolution only. the magic_type_this_tick
+                   fallback caused blood/ice effects on tbow hits when barrage fired same tick. */
+                int spell = p->hit_spell_type;
                 if (spell > 0) {
+                    /* center effect on NPC footprint, not SW corner */
+                    int fx = p->x + (p->npc_size > 1 ? p->npc_size / 2 : 0);
+                    int fy = p->y + (p->npc_size > 1 ? p->npc_size / 2 : 0);
                     if (p->hit_was_successful) {
                         int gfx = (spell == 1)  /* ENCOUNTER_SPELL_ICE */
                             ? GFX_ICE_BARRAGE_HIT : GFX_BLOOD_BARRAGE_HIT;
                         effect_spawn_spotanim(rc->effects, gfx,
-                            p->x, p->y, ct, rc->anim_cache, rc->model_cache);
+                            fx, fy, ct, rc->anim_cache, rc->model_cache);
                     } else {
                         effect_spawn_spotanim(rc->effects, GFX_SPLASH,
-                            p->x, p->y, ct, rc->anim_cache, rc->model_cache);
+                            fx, fy, ct, rc->anim_cache, rc->model_cache);
                     }
                 }
             }

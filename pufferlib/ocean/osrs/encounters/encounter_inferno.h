@@ -1931,7 +1931,9 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
                         btargets[bt_count++] = (BarrageTarget){
                             .active = 1, .x = target_npc->x, .y = target_npc->y,
                             .def_level = ns->def_level, .magic_def_bonus = ns->magic_def_bonus,
-                            .npc_idx = s->player_attack_target, .hit = 0, .damage = 0
+                            .npc_idx = s->player_attack_target,
+                            .frozen_ticks = &s->npcs[s->player_attack_target].frozen_ticks,
+                            .hit = 0, .damage = 0
                         };
                     }
                     for (int i = 0; i < INF_MAX_NPCS; i++) {
@@ -1940,15 +1942,20 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
                         btargets[bt_count++] = (BarrageTarget){
                             .active = 1, .x = s->npcs[i].x, .y = s->npcs[i].y,
                             .def_level = ns2->def_level, .magic_def_bonus = ns2->magic_def_bonus,
-                            .npc_idx = i, .hit = 0, .damage = 0
+                            .npc_idx = i,
+                            .frozen_ticks = &s->npcs[i].frozen_ticks,
+                            .hit = 0, .damage = 0
                         };
                     }
 
+                    /* resolve barrage: accuracy/damage rolls + instant freeze for ice.
+                       freeze is applied by the shared function at cast time. */
                     BarrageResult br = osrs_barrage_resolve(
-                        btargets, bt_count, mage_att_roll, ls->max_hit, &s->rng_state);
+                        btargets, bt_count, mage_att_roll, ls->max_hit,
+                        &s->rng_state, s->spell_choice);
                     total_dmg = br.total_damage;
 
-                    /* queue pending hits on each AoE target (all get same delay from primary distance) */
+                    /* queue pending hits for delayed damage */
                     for (int i = 0; i < bt_count; i++) {
                         if (!btargets[i].active || !btargets[i].hit) continue;
                         int nidx = btargets[i].npc_idx;
@@ -1958,7 +1965,7 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
                         ph->ticks_remaining = hit_delay;
                         ph->attack_style = ATTACK_STYLE_MAGIC;
                         ph->check_prayer = 0;
-                        ph->spell_type = s->spell_choice;  /* ENCOUNTER_SPELL_ICE or _BLOOD */
+                        ph->spell_type = s->spell_choice;
                     }
 
                 } else if (s->weapon_set == INF_GEAR_TBOW) {
