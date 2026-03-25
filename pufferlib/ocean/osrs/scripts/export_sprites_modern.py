@@ -226,6 +226,10 @@ SPRITE_IDS: dict[str, list[int]] = {
     ],
     # click cross animations (4 yellow move + 4 red attack, 16x16 each)
     "click_cross": [515, 516, 517, 518, 519, 520, 521, 522],
+    # overhead prayer headicons (multi-frame: 0=melee, 1=ranged, 2=magic, 3=retribution, 4=smite, 5=redemption)
+    "headicons_prayer": [440],
+    # hitsplat sprites (each is a single-frame sprite group)
+    "hitmarks": [1358, 1359, 1360, 1361, 1362],
 }
 
 # human-readable names for specific sprite IDs
@@ -271,6 +275,11 @@ SPRITE_NAMES: dict[int, str] = {
     517: "cross_yellow_3", 518: "cross_yellow_4",
     519: "cross_red_1", 520: "cross_red_2",
     521: "cross_red_3", 522: "cross_red_4",
+    # overhead prayer headicons (group 440, 6 frames)
+    440: "headicons_prayer",
+    # hitsplats: 0=blue miss, 1=red damage, 2=green poison, 3=disease, 4=venom
+    1358: "hitmarks_0", 1359: "hitmarks_1",
+    1360: "hitmarks_2", 1361: "hitmarks_3", 1362: "hitmarks_4",
 }
 
 

@@ -500,12 +500,12 @@ static RenderClient* render_make_client(void) {
        OSRS headIcon index: 0=melee, 1=ranged, 2=magic, 3=retribution, 4=smite, 5=redemption */
     {
         const char* paths[] = {
-            "data/sprites/headicons_prayer_0.png",
-            "data/sprites/headicons_prayer_1.png",
-            "data/sprites/headicons_prayer_2.png",
-            "data/sprites/headicons_prayer_3.png",
-            "data/sprites/headicons_prayer_4.png",
-            "data/sprites/headicons_prayer_5.png",
+            "data/sprites/gui/headicons_prayer_0.png",
+            "data/sprites/gui/headicons_prayer_1.png",
+            "data/sprites/gui/headicons_prayer_2.png",
+            "data/sprites/gui/headicons_prayer_3.png",
+            "data/sprites/gui/headicons_prayer_4.png",
+            "data/sprites/gui/headicons_prayer_5.png",
         };
         rc->prayer_icons_loaded = 1;
         for (int i = 0; i < 6; i++) {
@@ -521,7 +521,7 @@ static RenderClient* render_make_client(void) {
     {
         rc->hitmark_sprites_loaded = 1;
         for (int i = 0; i < 5; i++) {
-            const char* path = TextFormat("data/sprites/hitmarks_%d.png", i);
+            const char* path = TextFormat("data/sprites/gui/hitmarks_%d.png", i);
             if (FileExists(path)) {
                 rc->hitmark_sprites[i] = LoadTexture(path);
             } else {
