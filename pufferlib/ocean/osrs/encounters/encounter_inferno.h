@@ -2195,7 +2195,7 @@ static void inf_step(EncounterState* state, const int* actions) {
 /* ======================================================================== */
 
 /* obs layout: 26 player + 12 pillar + 27*32 NPC + 5*8 pending hits = 942 */
-#define INF_FEATURES_PER_NPC 28
+#define INF_FEATURES_PER_NPC 30
 #define INF_FEATURES_PER_HIT 5
 #define INF_NUM_OBS (31 + 12 + INF_FEATURES_PER_NPC * INF_MAX_NPCS + INF_FEATURES_PER_HIT * ENCOUNTER_MAX_PENDING_HITS)
 
@@ -2267,7 +2267,7 @@ static void inf_write_obs(EncounterState* state, float* obs) {
         obs[i++] = (float)(s->pillars[p].y - py) / (float)INF_ARENA_HEIGHT;
     }
 
-    /* NPCs: INF_FEATURES_PER_NPC (27) features each, up to INF_MAX_NPCS */
+    /* NPCs: INF_FEATURES_PER_NPC (30) features each, up to INF_MAX_NPCS */
     for (int n = 0; n < INF_MAX_NPCS; n++) {
         InfNPC* npc = &s->npcs[n];
         if (npc->active && npc->death_ticks == 0) {
@@ -2303,8 +2303,8 @@ static void inf_write_obs(EncounterState* state, float* obs) {
             } else {
                 obs[i++] = 0.0f;
             }
-            obs[i++] = (float)INF_NPC_STATS[npc->type].attack_range / 15.0f;
-            obs[i++] = (float)INF_NPC_STATS[npc->type].magic_def_bonus / 100.0f;
+            obs[i++] = (float)INF_NPC_STATS[npc->type].attack_range / 100.0f;
+            obs[i++] = (float)INF_NPC_STATS[npc->type].magic_def_bonus / 350.0f;
             /* barrage AoE count: how many other active NPCs have SW corner within 1 tile */
             {
                 int aoe_count = 0;
