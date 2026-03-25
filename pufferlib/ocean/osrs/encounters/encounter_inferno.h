@@ -2268,7 +2268,7 @@ static void inf_write_obs(EncounterState* state, float* obs) {
     /* NPCs: INF_FEATURES_PER_NPC (27) features each, up to INF_MAX_NPCS */
     for (int n = 0; n < INF_MAX_NPCS; n++) {
         InfNPC* npc = &s->npcs[n];
-        if (npc->active) {
+        if (npc->active && npc->death_ticks == 0) {
             obs[i++] = 1.0f;
             /* type one-hot (14 features) */
             for (int t = 0; t < INF_NUM_NPC_TYPES; t++)
