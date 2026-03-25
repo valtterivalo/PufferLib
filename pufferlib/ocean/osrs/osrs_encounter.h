@@ -501,44 +501,25 @@ static inline int encounter_chase_attack_target(
     int dist_now = encounter_dist_to_npc(p->x, p->y, target_x, target_y, target_size);
     if (dist_now > 0 && dist_now <= attack_range &&
         los_blockers && los_blocker_count > 0) {
-        /* in range but no LOS — scan melee-adjacent tiles (cardinal sides of NPC).
-           NPC occupies [target_x, target_x+s-1] x [target_y, target_y+s-1].
-           adjacent tiles: N/S rows + E/W columns, excluding corners. */
+        /* in range but no LOS — scan NPC-adjacent tiles that have ACTUAL LOS to
+           the NPC. only tiles where encounter_player_can_attack would return true
+           are valid candidates. BFS then pathfinds to the nearest one.
+           ref: osrs-sdk Player.ts "seekingTiles" — filters by LOS, not just pillar overlap. */
         int best_dsq = 999999;
         cx = -1; cy = -1;
-        for (int xx = 0; xx < target_size; xx++) {
-            int px = target_x + xx;
-            /* north side: y = target_y + target_size */
-            int py = target_y + target_size;
-            if (is_walkable(ctx, px, py) &&
-                !los_check_tile(los_blockers, los_blocker_count, px, py)) {
-                int ddx = px - p->x, ddy = py - p->y;
-                int dsq = ddx * ddx + ddy * ddy;
-                if (dsq < best_dsq) { best_dsq = dsq; cx = px; cy = py; }
-            }
-            /* south side: y = target_y - 1 */
-            py = target_y - 1;
-            if (is_walkable(ctx, px, py) &&
-                !los_check_tile(los_blockers, los_blocker_count, px, py)) {
-                int ddx = px - p->x, ddy = py - p->y;
-                int dsq = ddx * ddx + ddy * ddy;
-                if (dsq < best_dsq) { best_dsq = dsq; cx = px; cy = py; }
-            }
-        }
-        for (int yy = 0; yy < target_size; yy++) {
-            int py = target_y + yy;
-            /* east side: x = target_x + target_size */
-            int px = target_x + target_size;
-            if (is_walkable(ctx, px, py) &&
-                !los_check_tile(los_blockers, los_blocker_count, px, py)) {
-                int ddx = px - p->x, ddy = py - p->y;
-                int dsq = ddx * ddx + ddy * ddy;
-                if (dsq < best_dsq) { best_dsq = dsq; cx = px; cy = py; }
-            }
-            /* west side: x = target_x - 1 */
-            px = target_x - 1;
-            if (is_walkable(ctx, px, py) &&
-                !los_check_tile(los_blockers, los_blocker_count, px, py)) {
+        /* scan cardinal-adjacent tiles (N/S rows + E/W columns of NPC footprint) */
+        for (int xx = -1; xx <= target_size; xx++) {
+            for (int yy = -1; yy <= target_size; yy++) {
+                /* skip interior tiles (inside NPC footprint) */
+                if (xx >= 0 && xx < target_size && yy >= 0 && yy < target_size) continue;
+                /* skip far corners (only cardinal adjacency matters for melee/range) */
+                int px = target_x + xx;
+                int py = target_y + yy;
+                if (!is_walkable(ctx, px, py)) continue;
+                /* check if this tile has actual LOS + range to the NPC */
+                if (!encounter_player_can_attack(px, py, target_x, target_y,
+                        target_size, attack_range, los_blockers, los_blocker_count))
+                    continue;
                 int ddx = px - p->x, ddy = py - p->y;
                 int dsq = ddx * ddx + ddy * ddy;
                 if (dsq < best_dsq) { best_dsq = dsq; cx = px; cy = py; }
