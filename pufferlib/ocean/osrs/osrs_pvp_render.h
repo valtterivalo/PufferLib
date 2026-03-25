@@ -3573,6 +3573,56 @@ static void render_draw_overhead_status(RenderClient* rc, OsrsPvp* env) {
                 DrawTextureEx(tex, (Vector2){ draw_x, draw_y }, 0.0f, scale, WHITE);
             }
         }
+
+        /* debug: per-NPC combat state below the entity (only for NPCs) */
+        if (rc->show_debug && p->entity_type == ENTITY_NPC && rc->gui.encounter_state) {
+            InfernoState* is = (InfernoState*)rc->gui.encounter_state;
+            int slot = p->npc_slot;
+            if (slot >= 0 && slot < INF_MAX_NPCS && is->npcs[slot].active) {
+                InfNPC* npc = &is->npcs[slot];
+                int dy = (int)screen_head.y + 10;
+                int dx = (int)screen_head.x;
+                int fs = 10;
+
+                /* attack timer + style */
+                const char* style_str = "???";
+                Color style_col = WHITE;
+                int style = (npc->type == INF_NPC_JAD) ? npc->jad_attack_style : npc->attack_style;
+                if (style == ATTACK_STYLE_MAGIC)  { style_str = "MAG"; style_col = BLUE; }
+                if (style == ATTACK_STYLE_RANGED) { style_str = "RNG"; style_col = GREEN; }
+                if (style == ATTACK_STYLE_MELEE)  { style_str = "MEL"; style_col = RED; }
+
+                const char* atk_txt = TextFormat("ATK:%d %s", npc->attack_timer, style_str);
+                int tw = MeasureText(atk_txt, fs);
+                DrawText(atk_txt, dx - tw/2, dy, fs, style_col);
+                dy += fs + 1;
+
+                /* frozen ticks */
+                if (npc->frozen_ticks > 0) {
+                    const char* frz_txt = TextFormat("FRZ:%d", npc->frozen_ticks);
+                    int fw = MeasureText(frz_txt, fs);
+                    DrawText(frz_txt, dx - fw/2, dy, fs, (Color){100, 200, 255, 255});
+                    dy += fs + 1;
+                }
+
+                /* LOS */
+                int has_los = inf_npc_has_los(is, slot);
+                const char* los_txt = has_los ? "LOS" : "NO LOS";
+                Color los_col = has_los ? GREEN : RED;
+                int lw = MeasureText(los_txt, fs);
+                DrawText(los_txt, dx - lw/2, dy, fs, los_col);
+                dy += fs + 1;
+
+                /* blob scan state */
+                if (npc->type == INF_NPC_BLOB && npc->blob_scanned_prayer >= 0) {
+                    const char* scan = "SCAN:???";
+                    if (npc->blob_scanned_prayer == PRAYER_PROTECT_MAGIC) scan = "SCAN>RNG";
+                    else if (npc->blob_scanned_prayer == PRAYER_PROTECT_RANGED) scan = "SCAN>MAG";
+                    int sw = MeasureText(scan, fs);
+                    DrawText(scan, dx - sw/2, dy, fs, YELLOW);
+                }
+            }
+        }
     }
 }
 
@@ -3637,6 +3687,60 @@ void pvp_render(OsrsPvp* env) {
 
         /* overhead prayer icons (2D overlay after 3D scene) */
         render_draw_overhead_status(rc, env);
+
+        /* debug: player/global state panel (bottom-left) */
+        if (rc->show_debug && env->encounter_state) {
+            InfernoState* is = (InfernoState*)env->encounter_state;
+            int dy = RENDER_WINDOW_H - 160;
+            int dx = 10;
+            int fs = 12;
+            Color dc = (Color){220, 220, 220, 255};
+
+            /* target */
+            if (is->player_attack_target >= 0 && is->player_attack_target < INF_MAX_NPCS) {
+                InfNPC* tn = &is->npcs[is->player_attack_target];
+                const char* tname = inferno_npc_name(INF_NPC_DEF_IDS[tn->type]);
+                DrawText(TextFormat("TARGET: %s [#%d]", tname, is->player_attack_target), dx, dy, fs, dc);
+            } else {
+                DrawText("TARGET: none", dx, dy, fs, (Color){180, 80, 80, 255});
+            }
+            dy += fs + 2;
+
+            /* weapon + attack timer */
+            const char* gear = is->weapon_set == INF_GEAR_MAGE ? "mage" :
+                               is->weapon_set == INF_GEAR_TBOW ? "tbow" : "bp";
+            const char* spell = is->spell_choice == ENCOUNTER_SPELL_ICE ? "ice" :
+                                is->spell_choice == ENCOUNTER_SPELL_BLOOD ? "blood" : "none";
+            DrawText(TextFormat("GEAR: %s  ATK: %d/%d  SPELL: %s", gear,
+                is->player_attack_timer, is->loadout_stats[is->weapon_set].attack_speed, spell),
+                dx, dy, fs, dc);
+            dy += fs + 2;
+
+            /* stats */
+            DrawText(TextFormat("RNG:%d MAG:%d DEF:%d",
+                is->player.current_ranged, is->player.current_magic, is->player.current_defence),
+                dx, dy, fs, dc);
+            dy += fs + 2;
+
+            /* consumables */
+            DrawText(TextFormat("BREW:%d REST:%d BAST:%d STAM:%d",
+                is->player_brew_doses, is->player_restore_doses,
+                is->player_bastion_doses, is->player_stamina_doses),
+                dx, dy, fs, dc);
+            dy += fs + 2;
+
+            /* pending hits */
+            int mag_hits = 0, rng_hits = 0;
+            for (int h = 0; h < is->player_pending_hit_count; h++) {
+                if (is->player_pending_hits[h].attack_style == ATTACK_STYLE_MAGIC) mag_hits++;
+                else rng_hits++;
+            }
+            if (is->player_pending_hit_count > 0) {
+                DrawText(TextFormat("INCOMING: %d (%dM %dR)",
+                    is->player_pending_hit_count, mag_hits, rng_hits),
+                    dx, dy, fs, (Color){255, 150, 150, 255});
+            }
+        }
 
         /* debug: draw entity convex hulls as 2D outlines */
         if (rc->show_debug) {
