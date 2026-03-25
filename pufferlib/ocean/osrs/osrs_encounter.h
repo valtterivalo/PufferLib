@@ -676,9 +676,15 @@ static inline int encounter_npc_y_edge_clear(
 
     returns 1 if moved, 0 if blocked or already at target. */
 static inline int encounter_npc_step_toward(
-    int* x, int* y, int tx, int ty, int size,
+    int* x, int* y, int tx, int ty, int npc_size,
+    int target_size, int attack_range,
     encounter_npc_blocked_fn is_blocked, void* ctx
 ) {
+    /* stop if already within attack range of target */
+    int dist = encounter_dist_to_npc(*x, *y, tx, ty, target_size);
+    if (dist >= 1 && dist <= attack_range) return 0;
+
+    int size = npc_size;
     int dx = 0, dy = 0;
     if (tx > *x) dx = 1;
     else if (tx < *x) dx = -1;

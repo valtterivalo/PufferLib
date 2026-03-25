@@ -1067,18 +1067,16 @@ static void inf_npc_move(InfernoState* s, int idx) {
     } else {
         tx = s->player.x;
         ty = s->player.y;
-        /* melee NPCs: stop if already at attack range (dist=1 from footprint) */
-        if (stats->attack_range == 1) {
-            int dist = encounter_dist_to_npc(s->player.x, s->player.y,
-                                              npc->x, npc->y, npc->size);
-            if (dist == 1) return;
-        }
     }
 
-    /* greedy step toward target using shared helper */
+    /* greedy step toward target using shared helper.
+       target_size=1 for player, attack_range from NPC stats.
+       the shared function stops automatically when within attack range. */
     int ox = npc->x, oy = npc->y;
     InfMoveCtx mc = { s, idx };
+    int target_size = (npc->type == INF_NPC_NIBBLER) ? INF_PILLAR_SIZE : 1;
     encounter_npc_step_toward(&npc->x, &npc->y, tx, ty, npc->size,
+                              target_size, stats->attack_range,
                               inf_npc_blocked, &mc);
     if (npc->x != ox || npc->y != oy)
         npc->moved_this_tick = 1;
