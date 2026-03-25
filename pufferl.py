@@ -653,6 +653,37 @@ def run_trial(
     if wandb_run:
         wandb_run.finish()
 
+    # write constellation-compatible JSON (matches upstream pufferl.py format)
+    constellation_dir = Path("logs") / f"puffer_{env_name}"
+    constellation_dir.mkdir(parents=True, exist_ok=True)
+    n_bins = min(200, len(entries))
+    if n_bins > 0:
+        metrics_raw = {}
+        for e in entries:
+            for k, v in e.items():
+                if isinstance(v, (int, float)):
+                    metrics_raw.setdefault(k, []).append(float(v))
+        # rename to match upstream metric keys
+        if "step" in metrics_raw:
+            metrics_raw["agent_steps"] = metrics_raw.pop("step")
+        if "score" in metrics_raw:
+            metrics_raw["env/score"] = metrics_raw.pop("score")
+        if "sps" in metrics_raw:
+            metrics_raw["SPS"] = metrics_raw.pop("sps")
+        # add uptime (wall clock per data point)
+        n = len(metrics_raw.get("agent_steps", []))
+        metrics_raw["uptime"] = [elapsed * (i + 1) / n for i in range(n)]
+        # downsample to n_bins
+        metrics_ds = {}
+        for k, v in metrics_raw.items():
+            metrics_ds[k] = [float(x) for x in downsample(v, n_bins)]
+        # build the full config dict matching upstream {**args, metrics, sweep}
+        sweep_config_out = config.get("sweep", {})
+        trial_json = {**params, "sweep": sweep_config_out, "metrics": metrics_ds,
+                      "env_name": env_name, "log_dir": str(constellation_dir)}
+        with (constellation_dir / f"trial_{trial_idx}.json").open("w") as f:
+            json.dump(trial_json, f)
+
     return {
         "trial": trial_idx,
         "params": params,
