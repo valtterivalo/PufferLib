@@ -3425,6 +3425,32 @@ static void render_draw_3d_world(RenderClient* rc) {
 
     /* click cross is now drawn as 2D overlay in pvp_render, not in 3D world */
 
+    /* debug: player→NPC LOS lines (green=can attack, red=blocked/out of range) */
+    if (rc->show_debug && rc->gui.encounter_state) {
+        InfernoState* is = (InfernoState*)rc->gui.encounter_state;
+        float plat_y = 2.0f;
+        float ph = plat_y + 1.0f;  /* player line height */
+        float player_wx = (float)is->player.x + 0.5f;
+        float player_wz = -(float)is->player.y - 0.5f;
+        const EncounterLoadoutStats* ls = &is->loadout_stats[is->weapon_set];
+        for (int ni = 0; ni < INF_MAX_NPCS; ni++) {
+            InfNPC* npc = &is->npcs[ni];
+            if (!npc->active || npc->death_ticks > 0) continue;
+            float half = (float)(npc->size - 1) / 2.0f;
+            float npc_wx = (float)npc->x + half + 0.5f;
+            float npc_wz = -(float)npc->y - half - 0.5f;
+            int can_atk = encounter_player_can_attack(
+                is->player.x, is->player.y,
+                npc->x, npc->y, npc->size,
+                ls->attack_range, is->los_blockers, is->los_blocker_count);
+            Color lc = can_atk ? GREEN : RED;
+            DrawLine3D(
+                (Vector3){ player_wx, ph, player_wz },
+                (Vector3){ npc_wx, ph, npc_wz },
+                lc);
+        }
+    }
+
     EndMode3D();
 }
 
@@ -3609,13 +3635,29 @@ static void render_draw_overhead_status(RenderClient* rc, OsrsPvp* env) {
                     dy += fs + 1;
                 }
 
-                /* LOS */
-                int has_los = inf_npc_has_los(is, slot);
-                const char* los_txt = has_los ? "LOS" : "NO LOS";
-                Color los_col = has_los ? GREEN : RED;
-                int lw = MeasureText(los_txt, fs);
-                DrawText(los_txt, dx - lw/2, dy, fs, los_col);
-                dy += fs + 1;
+                /* NPC→player LOS (skip nibblers — they target pillars, not player) */
+                if (npc->type != INF_NPC_NIBBLER) {
+                    int npc_los = inf_npc_has_los(is, slot);
+                    const char* los_txt = npc_los ? "NPC>P" : "NPC>P X";
+                    Color los_col = npc_los ? GREEN : RED;
+                    int lw = MeasureText(los_txt, fs);
+                    DrawText(los_txt, dx - lw/2, dy, fs, los_col);
+                    dy += fs + 1;
+                }
+
+                /* player→NPC LOS + range */
+                {
+                    const EncounterLoadoutStats* ls = &is->loadout_stats[is->weapon_set];
+                    int can_atk = encounter_player_can_attack(
+                        is->player.x, is->player.y,
+                        npc->x, npc->y, npc->size,
+                        ls->attack_range, is->los_blockers, is->los_blocker_count);
+                    const char* patk_txt = can_atk ? "P>NPC" : "P>NPC X";
+                    Color patk_col = can_atk ? GREEN : RED;
+                    int pw = MeasureText(patk_txt, fs);
+                    DrawText(patk_txt, dx - pw/2, dy, fs, patk_col);
+                    dy += fs + 1;
+                }
 
                 /* blob scan state */
                 if (npc->type == INF_NPC_BLOB && npc->blob_scanned_prayer >= 0) {
