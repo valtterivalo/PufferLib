@@ -369,15 +369,10 @@ static inline PathResult encounter_pathfind(
     int src_x, int src_y, int dst_x, int dst_y,
     pathfind_blocked_fn extra_blocked, void* blocked_ctx
 ) {
-    if (!cmap) {
-        /* no collision map: greedy direction */
-        PathResult pr = {0, 0, 0, 0, 0};
-        pr.found = 1;
-        int dx = dst_x - src_x, dy = dst_y - src_y;
-        pr.next_dx = dx > 0 ? 1 : (dx < 0 ? -1 : 0);
-        pr.next_dy = dy > 0 ? 1 : (dy < 0 ? -1 : 0);
-        return pr;
-    }
+    /* always run BFS, even without a collision map. when cmap is NULL,
+       pathfind_step treats all static tiles as traversable — dynamic obstacles
+       (pillars) are still handled by extra_blocked. matches real OSRS where
+       pillars are entities checked separately from the static collision map. */
     return pathfind_step(cmap, 0,
         src_x + world_offset_x, src_y + world_offset_y,
         dst_x + world_offset_x, dst_y + world_offset_y,
