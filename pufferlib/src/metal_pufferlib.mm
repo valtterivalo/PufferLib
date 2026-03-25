@@ -693,36 +693,6 @@ void train_impl(PuffeRL& pufferl) {
         mtl_barrier((MetalStream*)s);
         muon_step(pufferl.muon, s);
 
-        // single-element trace: track the max-abs decoder policy weight
-        {
-            static int trace_count = 0;
-            trace_count++;
-            DecoderWeights* dw = (DecoderWeights*)pufferl.weights_fp32.decoder;
-            if (dw && dw->policy_weight.bytes) {
-                mtl_ensure_stream_synced(s);
-                int od = dw->output_dim, H = dw->hidden_dim;
-                int n = od * H;
-                const float* pw = (const float*)dw->policy_weight.bytes;
-                float max_val = 0; int max_idx = 0;
-                for (int i = 0; i < n; i++) {
-                    float a = fabsf(pw[i]);
-                    if (a > max_val) { max_val = a; max_idx = i; }
-                }
-                // also read momentum and gradient at that index
-                Muon* mu = pufferl.muon;
-                EncoderWeights* ew = (EncoderWeights*)pufferl.weights_fp32.encoder;
-                int64_t enc_elems = ew ? ew->weight.numel() : 0;
-                float mb_val = 0, gc_val = 0;
-                if (mu->mb_puf.bytes)
-                    mb_val = ((const float*)mu->mb_puf.bytes)[enc_elems + max_idx];
-                if (mu->gc_puf.bytes)
-                    gc_val = ((const float*)mu->gc_puf.bytes)[enc_elems + max_idx];
-                if (max_val > 5.0f || trace_count % 10000 == 0) {
-                    fprintf(stderr, "[weight-trace] step=%d idx=%d/%d w=%.4f mb=%.6f gc=%.6f row=%d col=%d\n",
-                        trace_count, max_idx, n, max_val, mb_val, gc_val, max_idx/H, max_idx%H);
-                }
-            }
-        }
 
         if (pufferl.train_fp16) {
             mtl_cast_f32_to_f16(pufferl.param_fp16_puf.bytes,

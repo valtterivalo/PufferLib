@@ -2217,8 +2217,6 @@ static const float INF_NPC_MAX_HIT_NORM[INF_NUM_NPC_TYPES] = {
     [INF_NPC_ZUK_SHIELD] = 0.0f,
 };
 
-static void inf_debug_dump_obs(InfernoState* s, float* obs);  /* forward decl */
-
 static void inf_write_obs(EncounterState* state, float* obs) {
     InfernoState* s = (InfernoState*)state;
     memset(obs, 0, INF_NUM_OBS * sizeof(float));
@@ -2385,89 +2383,6 @@ static void inf_write_obs(EncounterState* state, float* obs) {
         }
     }
 
-    inf_debug_dump_obs(s, obs);
-}
-
-/* one-time obs dump for debugging prayer decisions. fires once when a ranged/magic
-   NPC fires during wave 5+, printing the full obs with human-readable labels. */
-static void inf_debug_dump_obs(InfernoState* s, float* obs) {
-    static int dump_done = 0;
-    if (dump_done || s->wave < 5) return;
-
-    /* check if any ranged/magic NPC just fired (attack_timer == attack_speed) */
-    int firing_npc = -1;
-    for (int n = 0; n < INF_MAX_NPCS; n++) {
-        if (!s->npcs[n].active || s->npcs[n].death_ticks > 0) continue;
-        const InfNPCStats* st = &INF_NPC_STATS[s->npcs[n].type];
-        if (st->attack_range > 1 && s->npcs[n].attack_timer == st->attack_speed)
-            { firing_npc = n; break; }
-    }
-    if (firing_npc < 0) return;
-    dump_done = 1;
-
-    static const char* npc_names[] = {
-        "nibbler","bat","blob","blob_mel","blob_rng","blob_mag",
-        "meleer","ranger","mager","jad","zuk","heal_jad","heal_zuk","shield"
-    };
-    static const char* pray_names[] = {"NONE","MAGIC","RANGED","MELEE","SMITE","REDEMP"};
-
-    fprintf(stderr, "\n=== OBS DUMP (wave %d, tick %d, NPC #%d [%s] just fired) ===\n",
-            s->wave, s->tick, firing_npc, npc_names[s->npcs[firing_npc].type]);
-    fprintf(stderr, "agent prayer: %s\n", pray_names[s->active_prayer]);
-
-    int idx = 0;
-    fprintf(stderr, "\n-- PLAYER (31 features) --\n");
-    fprintf(stderr, "  hp=%.2f pos=(%.2f,%.2f) pray_mel=%.0f pray_rng=%.0f pray_mag=%.0f\n",
-            obs[idx], obs[idx+1], obs[idx+2], obs[idx+3], obs[idx+4], obs[idx+5]);
-    fprintf(stderr, "  brew=%.2f rest=%.2f prayer=%.2f wave=%.2f tick=%.2f\n",
-            obs[idx+6], obs[idx+7], obs[idx+8], obs[idx+9], obs[idx+10]);
-    fprintf(stderr, "  gear_mage=%.0f gear_tbow=%.0f gear_bp=%.0f tank=%.0f\n",
-            obs[idx+11], obs[idx+12], obs[idx+13], obs[idx+14]);
-    fprintf(stderr, "  bastion=%.2f stam=%.2f stam_act=%.0f pot_timer=%.2f atk_timer=%.2f\n",
-            obs[idx+15], obs[idx+16], obs[idx+17], obs[idx+18], obs[idx+19]);
-    fprintf(stderr, "  def=%.2f rng=%.2f mag=%.2f target=%.2f wpn_range=%.2f dead_mobs=%.2f\n",
-            obs[idx+20], obs[idx+21], obs[idx+22], obs[idx+23], obs[idx+24], obs[idx+25]);
-    fprintf(stderr, "  max_hit=%.2f atk_speed=%.2f def_stab=%.2f def_mag=%.2f def_rng=%.2f\n",
-            obs[idx+26], obs[idx+27], obs[idx+28], obs[idx+29], obs[idx+30]);
-    fprintf(stderr, "  PRAYER>> next_atk_in=%.2f style_mel=%.0f style_rng=%.0f style_mag=%.0f conflict=%.2f\n",
-            obs[idx+31], obs[idx+32], obs[idx+33], obs[idx+34], obs[idx+35]);
-    idx = 36;
-
-    fprintf(stderr, "\n-- PILLARS (12 features) --\n");
-    for (int p = 0; p < 3; p++) {
-        fprintf(stderr, "  [%d] active=%.0f hp=%.2f dx=%.2f dy=%.2f\n",
-                p, obs[idx], obs[idx+1], obs[idx+2], obs[idx+3]);
-        idx += 4;
-    }
-
-    fprintf(stderr, "\n-- NPCs (29 features each, showing active only) --\n");
-    for (int n = 0; n < INF_MAX_NPCS; n++) {
-        int base = 48 + n * INF_FEATURES_PER_NPC;  /* 36 player + 12 pillar */
-        if (obs[base] < 0.5f) continue;  /* inactive */
-        /* find type from one-hot */
-        int type = -1;
-        for (int t = 0; t < INF_NUM_NPC_TYPES; t++)
-            if (obs[base + 1 + t] > 0.5f) { type = t; break; }
-        const char* name = (type >= 0 && type < INF_NUM_NPC_TYPES) ? npc_names[type] : "???";
-        int si = base + 1 + INF_NUM_NPC_TYPES;  /* skip active + one-hot */
-        fprintf(stderr, "  [%d] %s hp=%.2f dx=%.2f dy=%.2f atk_t=%.2f "
-                "mel=%.0f rng=%.0f mag=%.0f los=%.0f frz=%.2f max_hit=%.2f "
-                "blob=%.1f range=%.2f mdef=%.2f aoe=%.2f%s\n",
-                n, name, obs[si], obs[si+1], obs[si+2], obs[si+3],
-                obs[si+4], obs[si+5], obs[si+6], obs[si+7], obs[si+8],
-                obs[si+9], obs[si+10], obs[si+11], obs[si+12], obs[si+13],
-                n == firing_npc ? " <<< FIRING" : "");
-    }
-
-    fprintf(stderr, "\n-- PENDING HITS (5 features each) --\n");
-    int ph_base = 48 + INF_FEATURES_PER_NPC * INF_MAX_NPCS;
-    for (int h = 0; h < ENCOUNTER_MAX_PENDING_HITS; h++) {
-        int hb = ph_base + h * INF_FEATURES_PER_HIT;
-        if (obs[hb] < 0.5f) continue;
-        fprintf(stderr, "  [%d] rng=%.0f mag=%.0f ticks=%.2f unprotected=%.0f\n",
-                h, obs[hb+1], obs[hb+2], obs[hb+3], obs[hb+4]);
-    }
-    fprintf(stderr, "=== END OBS DUMP ===\n\n");
 }
 
 static void inf_write_mask(EncounterState* state, float* mask) {
