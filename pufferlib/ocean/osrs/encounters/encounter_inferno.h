@@ -2195,7 +2195,7 @@ static void inf_step(EncounterState* state, const int* actions) {
 /* ======================================================================== */
 
 /* obs layout: 26 player + 12 pillar + 27*32 NPC + 5*8 pending hits = 942 */
-#define INF_FEATURES_PER_NPC 30
+#define INF_FEATURES_PER_NPC 29
 #define INF_FEATURES_PER_HIT 5
 #define INF_NUM_OBS (31 + 12 + INF_FEATURES_PER_NPC * INF_MAX_NPCS + INF_FEATURES_PER_HIT * ENCOUNTER_MAX_PENDING_HITS)
 
@@ -2318,6 +2318,19 @@ static void inf_write_obs(EncounterState* state, float* obs) {
             }
         } else {
             for (int j = 0; j < INF_FEATURES_PER_NPC; j++) obs[i++] = 0.0f;
+        }
+    }
+
+    /* assert NPC section wrote exactly the right number of features.
+       if this fires, INF_FEATURES_PER_NPC doesn't match the actual feature count. */
+    {
+        int expected_npc_end = 31 + 12 + INF_FEATURES_PER_NPC * INF_MAX_NPCS;
+        if (i != expected_npc_end) {
+            fprintf(stderr, "FATAL: obs misaligned after NPC section: i=%d expected=%d "
+                    "(INF_FEATURES_PER_NPC=%d, actual=%d per slot)\n",
+                    i, expected_npc_end, INF_FEATURES_PER_NPC,
+                    (i - 31 - 12) / INF_MAX_NPCS);
+            abort();
         }
     }
 
