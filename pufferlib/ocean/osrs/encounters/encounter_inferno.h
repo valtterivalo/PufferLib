@@ -2721,6 +2721,37 @@ static void inf_render_post_tick(EncounterState* state, EncounterOverlay* ov) {
 }
 
 /* ======================================================================== */
+/* human input translator                                                    */
+/* ======================================================================== */
+
+static void* inf_get_player_for_input(void* state, int idx) {
+    InfernoState* s = (InfernoState*)state;
+    return (idx == 0) ? (void*)&s->player : NULL;
+}
+
+static void inf_translate_human_input(HumanInput* hi, int* actions, EncounterState* state) {
+    for (int h = 0; h < INF_NUM_ACTION_HEADS; h++) actions[h] = 0;
+
+    encounter_translate_movement(hi, actions, INF_HEAD_MOVE, inf_get_player_for_input, state);
+    encounter_translate_prayer(hi, actions, INF_HEAD_PRAYER);
+    encounter_translate_target(hi, actions, INF_HEAD_TARGET);
+
+    /* gear switch */
+    if (hi->pending_gear > 0) actions[INF_HEAD_GEAR] = hi->pending_gear;
+
+    /* eat: brew */
+    if (hi->pending_food || hi->pending_potion == POTION_BREW)
+        actions[INF_HEAD_EAT] = 1;
+
+    /* potions: restore=1, bastion=2, stamina=3 */
+    if (hi->pending_potion == POTION_RESTORE) actions[INF_HEAD_POTION] = 1;
+
+    /* spell: blood=0, ice=1 */
+    if (hi->pending_spell == ATTACK_BLOOD) actions[INF_HEAD_SPELL] = 0;
+    else if (hi->pending_spell == ATTACK_ICE) actions[INF_HEAD_SPELL] = 1;
+}
+
+/* ======================================================================== */
 /* encounter definition                                                      */
 /* ======================================================================== */
 
@@ -2759,7 +2790,7 @@ static const EncounterDef ENCOUNTER_INFERNO = {
     .get_tick = inf_get_tick,
     .get_winner = inf_get_winner,
 
-    .translate_human_input = NULL,  /* TODO: add inferno human input translator */
+    .translate_human_input = inf_translate_human_input,
     .head_move = INF_HEAD_MOVE,
     .head_prayer = INF_HEAD_PRAYER,
     .head_target = INF_HEAD_TARGET,
