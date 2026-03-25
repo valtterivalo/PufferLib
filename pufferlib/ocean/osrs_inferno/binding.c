@@ -32,10 +32,11 @@ typedef struct {
 
     /* best-episode replay recording: all envs buffer their current episode's actions.
        on terminal, if the episode reached a new global best wave, flush to disk.
-       binary format: int32 num_ticks header, then num_heads int32 per tick. */
-    int* episode_actions;    /* circular buffer: episode_len * NUM_ATNS ints */
+       binary format: [int32 num_ticks] [uint32 rng_state] [num_heads int32 per tick] */
+    int* episode_actions;    /* buffer: episode_len * NUM_ATNS ints */
     int episode_action_cap;  /* max ticks we can buffer */
     int episode_action_len;  /* ticks buffered so far this episode */
+    uint32_t episode_rng_start; /* RNG state at start of current episode */
 } InfernoEnv;
 
 #define OBS_SIZE INF_TOTAL_OBS
@@ -54,10 +55,15 @@ void c_step(Env* env) {
         env->acts_staging[i] = (int)env->actions[i];
 
     /* buffer actions for best-episode recording */
-    if (env->episode_actions && env->episode_action_len < env->episode_action_cap) {
-        memcpy(&env->episode_actions[env->episode_action_len * NUM_ATNS],
-               env->acts_staging, NUM_ATNS * sizeof(int));
-        env->episode_action_len++;
+    if (env->episode_actions) {
+        /* capture RNG state at the very start of the episode (before first action) */
+        if (env->episode_action_len == 0)
+            env->episode_rng_start = ((InfernoState*)env->enc_state)->rng_state;
+        if (env->episode_action_len < env->episode_action_cap) {
+            memcpy(&env->episode_actions[env->episode_action_len * NUM_ATNS],
+                   env->acts_staging, NUM_ATNS * sizeof(int));
+            env->episode_action_len++;
+        }
     }
 
     ENCOUNTER_INFERNO.step(env->enc_state, env->acts_staging);
@@ -108,11 +114,12 @@ void c_step(Env* env) {
                     FILE* fp = fopen(rpath, "wb");
                     if (fp) {
                         fwrite(&env->episode_action_len, sizeof(int), 1, fp);
+                        fwrite(&env->episode_rng_start, sizeof(uint32_t), 1, fp);
                         fwrite(env->episode_actions, sizeof(int),
                                env->episode_action_len * NUM_ATNS, fp);
                         fclose(fp);
-                        fprintf(stderr, "replay: new best wave %d (%d ticks) saved to %s\n",
-                                wave, env->episode_action_len, rpath);
+                        fprintf(stderr, "replay: new best wave %d (%d ticks, rng=%u) saved to %s\n",
+                                wave, env->episode_action_len, env->episode_rng_start, rpath);
                     }
                 }
             }

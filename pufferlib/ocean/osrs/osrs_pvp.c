@@ -97,23 +97,27 @@ static void benchmark(OsrsPvp* env, int num_steps) {
 
 #ifdef OSRS_PVP_VISUAL
 /* replay file: binary format for pre-recorded actions.
-   header: int32 num_ticks, then num_ticks * num_heads int32 values. */
+   header: [int32 num_ticks] [uint32 rng_state], then num_ticks * num_heads int32 values. */
 typedef struct {
     int* actions;      /* flat array: actions[tick * num_heads + head] */
     int  num_ticks;
     int  num_heads;
     int  current_tick;
+    uint32_t rng_seed; /* RNG state at episode start — needed for deterministic replay */
 } ReplayFile;
 
 static ReplayFile* replay_load(const char* path, int num_heads) {
     FILE* f = fopen(path, "rb");
     if (!f) { fprintf(stderr, "replay: can't open %s\n", path); return NULL; }
     int num_ticks = 0;
+    uint32_t rng_seed = 12345;
     if (fread(&num_ticks, 4, 1, f) != 1) { fclose(f); return NULL; }
+    if (fread(&rng_seed, 4, 1, f) != 1) { fclose(f); return NULL; }
     ReplayFile* rf = (ReplayFile*)malloc(sizeof(ReplayFile));
     rf->num_ticks = num_ticks;
     rf->num_heads = num_heads;
     rf->current_tick = 0;
+    rf->rng_seed = rng_seed;
     rf->actions = (int*)malloc(num_ticks * num_heads * sizeof(int));
     size_t n = fread(rf->actions, sizeof(int), num_ticks * num_heads, f);
     fclose(f);
@@ -121,7 +125,7 @@ static ReplayFile* replay_load(const char* path, int num_heads) {
         fprintf(stderr, "replay: short read (%d/%d)\n", (int)n, num_ticks * num_heads);
         free(rf->actions); free(rf); return NULL;
     }
-    fprintf(stderr, "replay loaded: %d ticks from %s\n", num_ticks, path);
+    fprintf(stderr, "replay loaded: %d ticks, rng=%u from %s\n", num_ticks, rng_seed, path);
     return rf;
 }
 
@@ -302,6 +306,19 @@ static void run_visual(OsrsPvp* env, const char* encounter_name, const char* rep
     if (replay_path && env->encounter_def) {
         const EncounterDef* edef = (const EncounterDef*)env->encounter_def;
         replay = replay_load(replay_path, edef->num_action_heads);
+        /* restore RNG state from replay so sim matches training exactly */
+        if (replay && edef->put_int) {
+            edef->reset(env->encounter_state, 0);
+            edef->put_int(env->encounter_state, "seed", (int)replay->rng_seed);
+            render_populate_entities(rc, env);
+            for (int i = 0; i < rc->entity_count; i++) {
+                int size = rc->entities[i].npc_size > 1 ? rc->entities[i].npc_size : 1;
+                rc->sub_x[i] = rc->entities[i].x * 128 + size * 64;
+                rc->sub_y[i] = rc->entities[i].y * 128 + size * 64;
+                rc->dest_x[i] = rc->sub_x[i];
+                rc->dest_y[i] = rc->sub_y[i];
+            }
+        }
     }
 
     /* save initial state as first snapshot */

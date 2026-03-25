@@ -29,12 +29,12 @@
 /* arena constants                                                           */
 /* ======================================================================== */
 
-#define INF_ARENA_MIN_X    10
-#define INF_ARENA_MAX_X    40
-#define INF_ARENA_MIN_Y    13
-#define INF_ARENA_MAX_Y    44
-#define INF_ARENA_WIDTH    (INF_ARENA_MAX_X - INF_ARENA_MIN_X + 1)  /* 31 */
-#define INF_ARENA_HEIGHT   (INF_ARENA_MAX_Y - INF_ARENA_MIN_Y + 1)  /* 32 */
+#define INF_ARENA_MIN_X    11
+#define INF_ARENA_MAX_X    39
+#define INF_ARENA_MIN_Y    14
+#define INF_ARENA_MAX_Y    43
+#define INF_ARENA_WIDTH    (INF_ARENA_MAX_X - INF_ARENA_MIN_X + 1)  /* 29 */
+#define INF_ARENA_HEIGHT   (INF_ARENA_MAX_Y - INF_ARENA_MIN_Y + 1)  /* 30 */
 
 #define INF_PLAYER_START_X 25
 #define INF_PLAYER_START_Y 16
