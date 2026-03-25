@@ -2270,7 +2270,7 @@ static void zul_render_post_tick(EncounterState* state, EncounterOverlay* ov) {
                 s->attack_events[i].src_x, s->attack_events[i].src_y,
                 s->attack_events[i].dst_x, s->attack_events[i].dst_y,
                 4, 0,
-                40, 100, 0, 12, 0.0f, 0, ZUL_NPC_SIZE, 0);
+                40, 100, 0, 12, 0.0f, 0, ZUL_NPC_SIZE, 1, 0);
         } else {
             /* ranged/magic attack: tracks player, zulrah height → player height */
             uint32_t zul_proj_model = (s->attack_events[i].style == 0)
@@ -2279,7 +2279,7 @@ static void zul_render_post_tick(EncounterState* state, EncounterOverlay* ov) {
                 s->attack_events[i].src_x, s->attack_events[i].src_y,
                 s->attack_events[i].dst_x, s->attack_events[i].dst_y,
                 s->attack_events[i].style, s->attack_events[i].damage,
-                35, 480, 64, 16, 0.0f, 1, ZUL_NPC_SIZE, zul_proj_model);
+                35, 480, 64, 16, 0.0f, 1, ZUL_NPC_SIZE, 1, zul_proj_model);
         }
     }
     for (int i = 0; i < s->cloud_event_count && ov->projectile_count < ENCOUNTER_MAX_OVERLAY_PROJECTILES; i++) {
@@ -2289,7 +2289,7 @@ static void zul_render_post_tick(EncounterState* state, EncounterOverlay* ov) {
             3, 0,  /* style=cloud, damage=0 */
             /* duration from flight_ticks * 30, high arc start, ground end,
                curve=10, arc_height=3.0 (high sinusoidal), no tracking, src_size=5 */
-            s->cloud_events[i].flight_ticks * 30, 200, 0, 10, 3.0f, 0, ZUL_NPC_SIZE,
+            s->cloud_events[i].flight_ticks * 30, 200, 0, 10, 3.0f, 0, ZUL_NPC_SIZE, 1,
             GFX_CLOUD_PROJ_MODEL);
     }
 }

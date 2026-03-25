@@ -1447,12 +1447,12 @@ static void render_post_tick(RenderClient* rc, OsrsPvp* env) {
             EncounterOverlay* ov = &rc->encounter_overlay;
             for (int i = 0; i < ov->projectile_count; i++) {
                 if (!ov->projectiles[i].active) continue;
-                int sz = ov->projectiles[i].src_size > 0 ? ov->projectiles[i].src_size : ov->boss_size;
-                float half_sz = (float)sz / 2.0f;
-                float sx = (float)ov->projectiles[i].src_x + half_sz;
-                float sy = (float)ov->projectiles[i].src_y + half_sz;
-                float dx = (float)ov->projectiles[i].dst_x;
-                float dy = (float)ov->projectiles[i].dst_y;
+                int src_sz = ov->projectiles[i].src_size > 0 ? ov->projectiles[i].src_size : ov->boss_size;
+                int dst_sz = ov->projectiles[i].dst_size > 0 ? ov->projectiles[i].dst_size : 1;
+                float sx = (float)ov->projectiles[i].src_x + (float)(src_sz - 1) / 2.0f + 0.5f;
+                float sy = (float)ov->projectiles[i].src_y + (float)(src_sz - 1) / 2.0f + 0.5f;
+                float dx = (float)ov->projectiles[i].dst_x + (float)(dst_sz - 1) / 2.0f + 0.5f;
+                float dy = (float)ov->projectiles[i].dst_y + (float)(dst_sz - 1) / 2.0f + 0.5f;
 
                 /* use per-projectile params, with defaults for backward compat */
                 int dur = ov->projectiles[i].duration_ticks > 0 ? ov->projectiles[i].duration_ticks : 35;

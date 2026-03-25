@@ -122,6 +122,7 @@ typedef struct {
         float arc_height;    /* sinusoidal arc peak in tiles (0 = quadratic/straight) */
         int tracks_target;   /* 1 = re-aim toward target each tick */
         int src_size;        /* source entity size for center offset (0 = use boss_size) */
+        int dst_size;        /* target entity size for center offset (1 = player) */
         uint32_t model_id;   /* GFX model from cache (0 = style-based fallback) */
     } projectiles[ENCOUNTER_MAX_OVERLAY_PROJECTILES];
     int projectile_count;
@@ -149,7 +150,7 @@ static inline int encounter_emit_projectile(
     int src_x, int src_y, int dst_x, int dst_y,
     int style, int damage,
     int duration_ticks, int start_h, int end_h, int curve,
-    float arc_height, int tracks_target, int src_size,
+    float arc_height, int tracks_target, int src_size, int dst_size,
     uint32_t model_id
 ) {
     if (ov->projectile_count >= ENCOUNTER_MAX_OVERLAY_PROJECTILES) return -1;
@@ -168,6 +169,7 @@ static inline int encounter_emit_projectile(
     ov->projectiles[i].arc_height = arc_height;
     ov->projectiles[i].tracks_target = tracks_target;
     ov->projectiles[i].src_size = src_size;
+    ov->projectiles[i].dst_size = dst_size;
     ov->projectiles[i].model_id = model_id;
     return i;
 }

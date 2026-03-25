@@ -2666,7 +2666,7 @@ static void inf_render_post_tick(EncounterState* state, EncounterOverlay* ov) {
         encounter_emit_projectile(ov,
             npc->x, npc->y, s->player.x, s->player.y,
             proj_style, (int)s->damage_received_this_tick,
-            duration, start_h, end_h, curve, arc, tracks, npc_size, proj_model_id);
+            duration, start_h, end_h, curve, arc, tracks, npc_size, 1, proj_model_id);
     }
 
     /* player attack projectile (ranged/magic only — melee has no projectile) */
@@ -2707,7 +2707,7 @@ static void inf_render_post_tick(EncounterState* state, EncounterOverlay* ov) {
                 encounter_emit_projectile(ov,
                     s->player.x, s->player.y, target->x, target->y,
                     p_style, s->player_attack_dmg,
-                    p_duration, p_start_h, p_end_h, 16, p_arc, p_tracks, 1, player_proj_model);
+                    p_duration, p_start_h, p_end_h, 16, p_arc, p_tracks, 1, target_size, player_proj_model);
             }
         }
     }
