@@ -2267,7 +2267,7 @@ static void inf_write_obs(EncounterState* state, float* obs) {
         obs[i++] = (float)(s->pillars[p].y - py) / (float)INF_ARENA_HEIGHT;
     }
 
-    /* NPCs: INF_FEATURES_PER_NPC (30) features each, up to INF_MAX_NPCS */
+    /* NPCs: INF_FEATURES_PER_NPC (29) features each, up to INF_MAX_NPCS */
     for (int n = 0; n < INF_MAX_NPCS; n++) {
         InfNPC* npc = &s->npcs[n];
         if (npc->active && npc->death_ticks == 0) {
