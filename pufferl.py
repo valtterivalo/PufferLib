@@ -1026,8 +1026,7 @@ def train_cli(env_name: str):
         right.add_column(f"{c1}Debug", justify="left", width=18)
         right.add_column(f"{c1}Value", justify="right", width=8)
 
-        behavioral_keys = ["npc_kills", "gear_switches", "gear_switch_rate",
-                           "current_ranged", "current_magic", "damage_dealt",
+        behavioral_keys = ["npc_kills", "gear_switches", "damage_dealt",
                            "damage_received", "blood_healed",
                            "brews_remaining", "restores_remaining", "prayer_at_death"]
         for k in behavioral_keys:

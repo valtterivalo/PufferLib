@@ -784,6 +784,10 @@ typedef struct {
     float brews_remaining;         /* brew doses left at end of episode */
     float restores_remaining;      /* restore doses left at end of episode */
     float prayer_at_death;         /* prayer points at end of episode */
+    /* per-NPC-type stats (14 types each, for wandb only — not shown on dashboard) */
+    float prayer_correct_by_type[14];
+    float attacks_by_type[14];
+    float dmg_from_type[14];
     float n;
 } Log;
 

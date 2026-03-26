@@ -97,6 +97,11 @@ void c_step(Env* env) {
         env->log.brews_remaining = (float)s->player_brew_doses;
         env->log.restores_remaining = (float)s->player_restore_doses;
         env->log.prayer_at_death = (float)s->player.current_prayer;
+        for (int t = 0; t < 14; t++) {
+            env->log.prayer_correct_by_type[t] = (float)s->prayer_correct_by_type[t];
+            env->log.attacks_by_type[t] = (float)s->attacks_by_type[t];
+            env->log.dmg_from_type[t] = s->dmg_from_type[t];
+        }
         env->log.n = 1.0f;  /* always report so sweep has continuous signal */
         env->log.npc_kills = (float)s->total_npc_kills;
         env->log.gear_switches = (float)s->total_gear_switches;
@@ -222,4 +227,19 @@ void my_log(Log* log, Dict* out) {
     float wave_progress = log->episode_length / (float)INF_MAX_TICKS;
     float score = wr + (1.0f - wr) * wave_progress * 0.5f - (1.0f - wr);
     dict_set(out, "score", score);
+
+    /* per-NPC-type prayer rates and damage (wandb only) */
+    static const char* type_names[] = {
+        "nibbler","bat","blob","blob_mel","blob_rng","blob_mag",
+        "meleer","ranger","mager","jad","zuk","heal_jad","heal_zuk","shield"
+    };
+    for (int t = 0; t < 14; t++) {
+        if (log->attacks_by_type[t] > 0.0f) {
+            char key[64];
+            snprintf(key, sizeof(key), "pray_%s", type_names[t]);
+            dict_set(out, key, log->prayer_correct_by_type[t] / log->attacks_by_type[t]);
+            snprintf(key, sizeof(key), "dmg_from_%s", type_names[t]);
+            dict_set(out, key, log->dmg_from_type[t]);
+        }
+    }
 }

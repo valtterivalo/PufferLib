@@ -596,6 +596,10 @@ typedef struct {
     /* per-tick tracking for multi-style analysis */
     int tick_styles_fired;     /* bitmask of styles that fired this tick (bit0=mel,1=rng,2=mag) */
     int tick_attacks_fired;    /* count of NPC attacks that fired this tick */
+    /* per-NPC-type prayer and damage tracking (for wandb, not dashboard) */
+    int prayer_correct_by_type[INF_NUM_NPC_TYPES];
+    int attacks_by_type[INF_NUM_NPC_TYPES];
+    float dmg_from_type[INF_NUM_NPC_TYPES];
     int total_idle_ticks;      /* cumulative ticks of ticks_without_action > 0 */
     int total_brews_used;      /* brew doses consumed this episode */
     int total_blood_healed;    /* HP healed via blood barrage this episode */
@@ -1388,11 +1392,13 @@ static void inf_npc_attack(InfernoState* s, int idx) {
     else if (actual_style == ATTACK_STYLE_RANGED) s->tick_styles_fired |= 2;
     else if (actual_style == ATTACK_STYLE_MAGIC) s->tick_styles_fired |= 4;
     s->tick_attacks_fired++;
+    s->attacks_by_type[npc->type]++;
 
     if (hit_delay == 0) {
         /* melee: instant damage, check prayer now */
         int prayer_matches = encounter_prayer_correct_for_style(s->active_prayer, actual_style);
-        if (prayer_matches) { dmg = 0; s->prayer_correct_this_tick++; }
+        if (prayer_matches) { dmg = 0; s->prayer_correct_this_tick++; s->prayer_correct_by_type[npc->type]++; }
+        s->dmg_from_type[npc->type] += (float)dmg;
         encounter_damage_player(&s->player, dmg, &s->damage_received_this_tick);
     } else {
         /* ranged/magic: queue pending hit on player */
@@ -1400,8 +1406,9 @@ static void inf_npc_attack(InfernoState* s, int idx) {
             int is_jad = (npc->type == INF_NPC_JAD);
             if (!is_jad) {
                 int prayer_matches = encounter_prayer_correct_for_style(s->active_prayer, actual_style);
-                if (prayer_matches) { dmg = 0; s->prayer_correct_this_tick++; }
+                if (prayer_matches) { dmg = 0; s->prayer_correct_this_tick++; s->prayer_correct_by_type[npc->type]++; }
             }
+            s->dmg_from_type[npc->type] += (float)dmg;
             EncounterPendingHit* ph = &s->player_pending_hits[s->player_pending_hit_count++];
             ph->active = 1;
             ph->damage = dmg;
