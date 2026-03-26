@@ -1395,8 +1395,8 @@ static void inf_npc_attack(InfernoState* s, int idx) {
     s->tick_attacks_fired++;
     s->attacks_by_type[npc->type]++;
 
-    /* bat (JalMejRah): drains 300 run energy on every attack, including misses.
-       ref: InfernoTrainer JalMejRah.ts — player.currentStats.run -= 300 */
+    /* bat (JalMejRah): drain 3 run energy (300 internal) on every attack.
+       ref: OSRS wiki Jal-MejRah, InfernoTrainer JalMejRah.ts */
     if (npc->type == INF_NPC_BAT) {
         s->player.run_energy -= 300;
         if (s->player.run_energy < 0) s->player.run_energy = 0;
@@ -1417,6 +1417,15 @@ static void inf_npc_attack(InfernoState* s, int idx) {
                 if (prayer_matches) { dmg = 0; s->prayer_correct_this_tick++; s->prayer_correct_by_type[npc->type]++; }
             }
             s->dmg_from_type[npc->type] += (float)dmg;
+            /* bat stat drain: on successful hit when not praying protect from missiles,
+               drain all combat stats by 1. ref: OSRS wiki Jal-MejRah */
+            if (npc->type == INF_NPC_BAT && dmg > 0) {
+                if (s->player.current_attack > 0) s->player.current_attack--;
+                if (s->player.current_strength > 0) s->player.current_strength--;
+                if (s->player.current_defence > 0) s->player.current_defence--;
+                if (s->player.current_ranged > 0) s->player.current_ranged--;
+                if (s->player.current_magic > 0) s->player.current_magic--;
+            }
             EncounterPendingHit* ph = &s->player_pending_hits[s->player_pending_hit_count++];
             ph->active = 1;
             ph->damage = dmg;
