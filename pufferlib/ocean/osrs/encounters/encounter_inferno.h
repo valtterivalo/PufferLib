@@ -1624,7 +1624,7 @@ static void inf_tick_npcs(InfernoState* s) {
 #define INF_HEAD_GEAR    3   /* 5: no_switch, mage, tbow, bp, tank */
 #define INF_HEAD_EAT     4   /* 2: none, brew */
 #define INF_HEAD_POTION  5   /* 4: none, restore, bastion, stamina */
-#define INF_HEAD_SPELL   6   /* 2: blood_barrage, ice_barrage */
+#define INF_HEAD_SPELL   6   /* 3: no_change, blood_barrage, ice_barrage */
 #define INF_NUM_ACTION_HEADS 7
 
 static const int INF_ACTION_DIMS[INF_NUM_ACTION_HEADS] = { ENCOUNTER_MOVE_ACTIONS, 5, INF_MAX_NPCS+1, 5, 2, 4, 2 };
@@ -1730,10 +1730,11 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
 
     /* spell choice for mage attacks — normalize to ENCOUNTER_SPELL_*.
        human sends ATTACK_ICE=2 / ATTACK_BLOOD=3, RL sends 0=blood / 1=ice. */
+    /* spell: 0=no change, 1=blood barrage, 2=ice barrage */
     int spell_act = actions[INF_HEAD_SPELL];
-    if (spell_act == ATTACK_ICE || spell_act == 1)
+    if (spell_act == 2)
         s->spell_choice = ENCOUNTER_SPELL_ICE;
-    else
+    else if (spell_act == 1)
         s->spell_choice = ENCOUNTER_SPELL_BLOOD;
 
     /* stat decay/restore: every 60 ticks, boosted stats decay by 1 toward base,
@@ -2485,8 +2486,9 @@ static void inf_write_mask(EncounterState* state, float* mask) {
                       s->stamina_active_ticks == 0)
                      ? 1.0f : 0.0f;
 
-    /* HEAD_SPELL (2): blood_barrage, ice_barrage — masked when not in mage gear.
-       blood barrage also masked at full HP since it can't overheal. */
+    /* HEAD_SPELL (3): no_change, blood_barrage, ice_barrage.
+       noop always valid. blood masked at full HP. both spells masked when not in mage gear. */
+    mask[offset++] = 1.0f;  /* no_change always valid */
     mask[offset++] = (s->weapon_set == INF_GEAR_MAGE &&
                       s->player.current_hitpoints < s->player.base_hitpoints) ? 1.0f : 0.0f;
     mask[offset++] = (s->weapon_set == INF_GEAR_MAGE) ? 1.0f : 0.0f;
@@ -2832,9 +2834,9 @@ static void inf_translate_human_input(HumanInput* hi, int* actions, EncounterSta
     /* potions: restore=1, bastion=2, stamina=3 */
     if (hi->pending_potion == POTION_RESTORE) actions[INF_HEAD_POTION] = 1;
 
-    /* spell: blood=0, ice=1 */
-    if (hi->pending_spell == ATTACK_BLOOD) actions[INF_HEAD_SPELL] = 0;
-    else if (hi->pending_spell == ATTACK_ICE) actions[INF_HEAD_SPELL] = 1;
+    /* spell: 0=no change, 1=blood, 2=ice */
+    if (hi->pending_spell == ATTACK_BLOOD) actions[INF_HEAD_SPELL] = 1;
+    else if (hi->pending_spell == ATTACK_ICE) actions[INF_HEAD_SPELL] = 2;
 }
 
 /* ======================================================================== */
