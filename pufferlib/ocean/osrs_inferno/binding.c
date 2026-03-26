@@ -230,18 +230,20 @@ void my_log(Log* log, Dict* out) {
     float score = wr + (1.0f - wr) * wave_progress * 0.5f - (1.0f - wr);
     dict_set(out, "score", score);
 
-    /* per-NPC-type prayer rates and damage (wandb only) */
-    static const char* type_names[] = {
-        "nibbler","bat","blob","blob_mel","blob_rng","blob_mag",
-        "meleer","ranger","mager","jad","zuk","heal_jad","heal_zuk","shield"
+    /* per-NPC-type prayer rates and damage (wandb only).
+       keys must be string literals — dict_set stores the pointer, not a copy. */
+    static const char* pray_keys[] = {
+        "pray_nibbler","pray_bat","pray_blob","pray_blob_mel","pray_blob_rng","pray_blob_mag",
+        "pray_meleer","pray_ranger","pray_mager","pray_jad","pray_zuk","pray_heal_jad","pray_heal_zuk","pray_shield"
+    };
+    static const char* dmg_keys[] = {
+        "dmg_from_nibbler","dmg_from_bat","dmg_from_blob","dmg_from_blob_mel","dmg_from_blob_rng","dmg_from_blob_mag",
+        "dmg_from_meleer","dmg_from_ranger","dmg_from_mager","dmg_from_jad","dmg_from_zuk","dmg_from_heal_jad","dmg_from_heal_zuk","dmg_from_shield"
     };
     for (int t = 0; t < 14; t++) {
         if (log->attacks_by_type[t] > 0.0f) {
-            char key[64];
-            snprintf(key, sizeof(key), "pray_%s", type_names[t]);
-            dict_set(out, key, log->prayer_correct_by_type[t] / log->attacks_by_type[t]);
-            snprintf(key, sizeof(key), "dmg_from_%s", type_names[t]);
-            dict_set(out, key, log->dmg_from_type[t]);
+            dict_set(out, pray_keys[t], log->prayer_correct_by_type[t] / log->attacks_by_type[t]);
+            dict_set(out, dmg_keys[t], log->dmg_from_type[t]);
         }
     }
 }
