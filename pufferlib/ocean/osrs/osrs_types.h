@@ -788,6 +788,7 @@ typedef struct {
     float prayer_correct_by_type[14];
     float attacks_by_type[14];
     float dmg_from_type[14];
+    float killed_by_type[14];
     float n;
 } Log;
 

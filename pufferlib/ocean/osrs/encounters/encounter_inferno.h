@@ -600,6 +600,8 @@ typedef struct {
     int prayer_correct_by_type[INF_NUM_NPC_TYPES];
     int attacks_by_type[INF_NUM_NPC_TYPES];
     float dmg_from_type[INF_NUM_NPC_TYPES];
+    int last_hit_by_type;      /* NPC type that last dealt damage to player (-1=none) */
+    int killed_by_type[INF_NUM_NPC_TYPES];  /* count of deaths caused by each NPC type */
     int total_idle_ticks;      /* cumulative ticks of ticks_without_action > 0 */
     int total_brews_used;      /* brew doses consumed this episode */
     int total_blood_healed;    /* HP healed via blood barrage this episode */
@@ -818,7 +820,8 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
     s->player_attack_target = -1;
     s->player.special_energy = 100;
     s->player.special_regen_ticks = 0;
-    s->player.run_energy = 10000;  /* full run energy (OSRS stores as 0-10000) */
+    s->player.run_energy = 10000;
+    s->last_hit_by_type = -1;  /* full run energy (OSRS stores as 0-10000) */
 
     /* compute loadout stats from item database (replaces old hardcoded INF_WEAPON_STATS) */
     encounter_compute_loadout_stats(INF_MAGE_LOADOUT, ATTACK_STYLE_MAGIC,
@@ -1407,6 +1410,7 @@ static void inf_npc_attack(InfernoState* s, int idx) {
         int prayer_matches = encounter_prayer_correct_for_style(s->active_prayer, actual_style);
         if (prayer_matches) { dmg = 0; s->prayer_correct_this_tick++; s->prayer_correct_by_type[npc->type]++; }
         s->dmg_from_type[npc->type] += (float)dmg;
+        if (dmg > 0) s->last_hit_by_type = npc->type;
         encounter_damage_player(&s->player, dmg, &s->damage_received_this_tick);
     } else {
         /* ranged/magic: queue pending hit on player */
@@ -1417,6 +1421,7 @@ static void inf_npc_attack(InfernoState* s, int idx) {
                 if (prayer_matches) { dmg = 0; s->prayer_correct_this_tick++; s->prayer_correct_by_type[npc->type]++; }
             }
             s->dmg_from_type[npc->type] += (float)dmg;
+            if (dmg > 0) s->last_hit_by_type = npc->type;
             /* bat stat drain: 50% chance on successful hit when not praying protect
                from missiles, drain all combat stats by 1. ref: OSRS wiki Jal-MejRah */
             if (npc->type == INF_NPC_BAT && dmg > 0 &&
@@ -2220,6 +2225,8 @@ static void inf_step(EncounterState* state, const int* actions) {
 
     /* check player death */
     if (s->player.current_hitpoints <= 0) {
+        if (s->last_hit_by_type >= 0 && s->last_hit_by_type < INF_NUM_NPC_TYPES)
+            s->killed_by_type[s->last_hit_by_type]++;
         s->episode_over = 1;
         s->winner = 1;
         s->reward = inf_compute_reward(s);
