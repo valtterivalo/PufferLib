@@ -174,9 +174,20 @@ void my_init(Env* env, Dict* kwargs) {
     env->enc_state = ENCOUNTER_INFERNO.create();
     memset(&env->log, 0, sizeof(Log));
 
-    DictItem* start_wave = dict_get_unsafe(kwargs, "start_wave");
-    if (start_wave)
-        ENCOUNTER_INFERNO.put_int(env->enc_state, "start_wave", (int)start_wave->value);
+    /* curriculum: randomize start_wave per env.
+       65% wave 0 (full run), 20% wave 20, 10% wave 40, 5% wave 60.
+       gives direct exposure to harder waves without losing ability to play from start. */
+    {
+        int sw = 0;
+        int r = rand() % 100;
+        if (r >= 95) sw = 60;
+        else if (r >= 85) sw = 40;
+        else if (r >= 65) sw = 20;
+        DictItem* cfg_sw = dict_get_unsafe(kwargs, "start_wave");
+        if (cfg_sw && (int)cfg_sw->value > 0)
+            sw = (int)cfg_sw->value;  /* explicit config overrides curriculum */
+        ENCOUNTER_INFERNO.put_int(env->enc_state, "start_wave", sw);
+    }
 
     /* allocate action buffer for best-episode recording (all envs buffer) */
     if (getenv("RECORD_REPLAY") && getenv("RECORD_REPLAY")[0]) {
