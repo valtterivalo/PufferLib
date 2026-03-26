@@ -2741,7 +2741,11 @@ static void inf_render_post_tick(EncounterState* state, EncounterOverlay* ov) {
                 duration += 60;  /* visual delay ~2 ticks */
                 break;
             case INF_NPC_RANGER:
-                duration += 60;  /* visual delay ~2 ticks + slower travel */
+                /* SDK: reduceDelay=-2 (adds 2 ticks to hit), visualDelayTicks=3
+                   (projectile invisible for first 3 ticks). net visual effect:
+                   +2 ticks to flight - 3 ticks hidden = -1 tick visual duration. */
+                duration += 60 - 90;  /* +2 ticks hit delay, -3 ticks visual delay */
+                if (duration < 30) duration = 30;  /* minimum 1 game tick visible */
                 break;
             case INF_NPC_JAD:
                 if (actual_style == ATTACK_STYLE_MAGIC) {

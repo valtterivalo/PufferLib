@@ -1251,14 +1251,15 @@ static void render_post_tick(RenderClient* rc, OsrsPvp* env) {
 
         /* NPC teleport: snap position when entity appears far from tracked position.
            this handles Zulrah dive→surface, new NPC spawns, and entity slot reuse.
-           only snap if distance > 1 tile — normal 1-tile-per-tick movement should
-           interpolate smoothly via the dest/sub system. */
+           snap if distance > 2 tiles (matching deob client Canvas.method334 which
+           snaps at >256 sub-units = 2 tiles). the 1-tile threshold was too aggressive
+           and caused snapping during normal attack-anim stall catch-up. */
         if (p->entity_type == ENTITY_NPC && p->npc_visible) {
             int tile_dx = (rc->sub_x[i] / 128) - p->x;
             int tile_dy = (rc->sub_y[i] / 128) - p->y;
             if (tile_dx < 0) tile_dx = -tile_dx;
             if (tile_dy < 0) tile_dy = -tile_dy;
-            if (tile_dx > 1 || tile_dy > 1 || (rc->sub_x[i] == 0 && rc->sub_y[i] == 0)) {
+            if (tile_dx > 2 || tile_dy > 2 || (rc->sub_x[i] == 0 && rc->sub_y[i] == 0)) {
                 rc->sub_x[i] = new_dest_x;
                 rc->sub_y[i] = new_dest_y;
                 rc->dest_x[i] = new_dest_x;
