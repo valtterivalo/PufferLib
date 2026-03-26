@@ -94,6 +94,9 @@ void c_step(Env* env) {
         env->log.brews_used = (float)s->total_brews_used;
         env->log.blood_healed = (float)s->total_blood_healed;
         env->log.unavoidable_off_prayer = (float)s->total_unavoidable_off;
+        env->log.brews_remaining = (float)s->player_brew_doses;
+        env->log.restores_remaining = (float)s->player_restore_doses;
+        env->log.prayer_at_death = (float)s->player.current_prayer;
         env->log.n = 1.0f;  /* always report so sweep has continuous signal */
         env->log.npc_kills = (float)s->total_npc_kills;
         env->log.gear_switches = (float)s->total_gear_switches;
@@ -202,6 +205,10 @@ void my_log(Log* log, Dict* out) {
         ? log->unavoidable_off_prayer / off_prayer : 0.0f;
     dict_set(out, "unavoidable_off_prayer_rate", unavoidable_rate);
     dict_set(out, "unavoidable_off_prayer", log->unavoidable_off_prayer);
+
+    dict_set(out, "brews_remaining", log->brews_remaining);
+    dict_set(out, "restores_remaining", log->restores_remaining);
+    dict_set(out, "prayer_at_death", log->prayer_at_death);
 
     dict_set(out, "npc_kills", log->npc_kills);
     dict_set(out, "gear_switches", log->gear_switches);

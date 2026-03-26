@@ -781,6 +781,9 @@ typedef struct {
     float rw_dmg_taken;
     float rw_terminal;
     float unavoidable_off_prayer;  /* off-prayer hits where correct prayer was on a different style */
+    float brews_remaining;         /* brew doses left at end of episode */
+    float restores_remaining;      /* restore doses left at end of episode */
+    float prayer_at_death;         /* prayer points at end of episode */
     float n;
 } Log;
 

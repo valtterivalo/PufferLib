@@ -1028,7 +1028,8 @@ def train_cli(env_name: str):
 
         behavioral_keys = ["npc_kills", "gear_switches", "gear_switch_rate",
                            "current_ranged", "current_magic", "damage_dealt",
-                           "damage_received", "blood_healed"]
+                           "damage_received", "blood_healed",
+                           "brews_remaining", "restores_remaining", "prayer_at_death"]
         for k in behavioral_keys:
             v = env_stats.get(k, 0)
             left.add_row(f'{b2}{k}', f'{b2}{v:.1f}')

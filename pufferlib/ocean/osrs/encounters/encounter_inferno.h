@@ -2528,12 +2528,19 @@ static void inf_fill_render_entities(EncounterState* state, RenderEntity* out, i
     InfernoState* s = (InfernoState*)state;
     int n = 0;
 
-    /* sync all consumable counts to Player struct so GUI inventory can read them */
+    /* sync all consumable counts + GUI stats to Player struct */
     s->player.food_count = 0;
     s->player.brew_doses = s->player_brew_doses;
     s->player.restore_doses = s->player_restore_doses;
     s->player.combat_potion_doses = s->player_bastion_doses;
     s->player.ranged_potion_doses = s->player_stamina_doses;
+    {
+        const EncounterLoadoutStats* ls = &s->loadout_stats[s->weapon_set];
+        s->player.gui_max_hit = ls->max_hit;
+        s->player.gui_attack_speed = ls->attack_speed;
+        s->player.gui_attack_range = ls->attack_range;
+        s->player.gui_strength_bonus = ls->strength_bonus;
+    }
 
     /* index 0: the player */
     if (n < max_entities) {

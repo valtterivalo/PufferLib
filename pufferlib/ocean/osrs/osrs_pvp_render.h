@@ -3338,6 +3338,7 @@ static void render_draw_3d_world(RenderClient* rc) {
     if (rc->model_cache) {
         rlDisableBackfaceCulling();
         float eff_scale = 1.0f / 128.0f;
+        int eff_ct = rc->effect_client_tick_counter;
 
         for (int i = 0; i < MAX_ACTIVE_EFFECTS; i++) {
             ActiveEffect* e = &rc->effects[i];
@@ -3402,7 +3403,21 @@ static void render_draw_3d_world(RenderClient* rc) {
 
             t = MatrixMultiply(t, MatrixTranslate(ex, ey, ez));
             om->model.transform = t;
-            DrawModel(om->model, (Vector3){ 0, 0, 0 }, 1.0f, WHITE);
+
+            /* spotanim fade: 20% fade in, 60% full, 20% fade out */
+            Color tint = WHITE;
+            if (e->type == EFFECT_SPOTANIM && e->stop_tick > e->start_tick) {
+                int total = e->stop_tick - e->start_tick;
+                int elapsed = eff_ct - e->start_tick;
+                float progress = (float)elapsed / (float)total;
+                float alpha = 1.0f;
+                if (progress < 0.2f) alpha = progress / 0.2f;
+                else if (progress > 0.8f) alpha = (1.0f - progress) / 0.2f;
+                if (alpha < 0.0f) alpha = 0.0f;
+                if (alpha > 1.0f) alpha = 1.0f;
+                tint = (Color){ 255, 255, 255, (unsigned char)(alpha * 255) };
+            }
+            DrawModel(om->model, (Vector3){ 0, 0, 0 }, 1.0f, tint);
         }
         rlEnableBackfaceCulling();
     }
