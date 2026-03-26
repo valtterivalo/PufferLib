@@ -818,6 +818,7 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
     s->player_attack_target = -1;
     s->player.special_energy = 100;
     s->player.special_regen_ticks = 0;
+    s->player.run_energy = 10000;  /* full run energy (OSRS stores as 0-10000) */
 
     /* compute loadout stats from item database (replaces old hardcoded INF_WEAPON_STATS) */
     encounter_compute_loadout_stats(INF_MAGE_LOADOUT, ATTACK_STYLE_MAGIC,
@@ -1393,6 +1394,13 @@ static void inf_npc_attack(InfernoState* s, int idx) {
     else if (actual_style == ATTACK_STYLE_MAGIC) s->tick_styles_fired |= 4;
     s->tick_attacks_fired++;
     s->attacks_by_type[npc->type]++;
+
+    /* bat (JalMejRah): drains 300 run energy on every attack, including misses.
+       ref: InfernoTrainer JalMejRah.ts — player.currentStats.run -= 300 */
+    if (npc->type == INF_NPC_BAT) {
+        s->player.run_energy -= 300;
+        if (s->player.run_energy < 0) s->player.run_energy = 0;
+    }
 
     if (hit_delay == 0) {
         /* melee: instant damage, check prayer now */
