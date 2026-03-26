@@ -93,6 +93,7 @@ void c_step(Env* env) {
         env->log.idle_ticks = (float)s->total_idle_ticks;
         env->log.brews_used = (float)s->total_brews_used;
         env->log.blood_healed = (float)s->total_blood_healed;
+        env->log.unavoidable_off_prayer = (float)s->total_unavoidable_off;
         env->log.n = 1.0f;  /* always report so sweep has continuous signal */
         env->log.npc_kills = (float)s->total_npc_kills;
         env->log.gear_switches = (float)s->total_gear_switches;
@@ -191,10 +192,16 @@ void my_log(Log* log, Dict* out) {
     dict_set(out, "brews_used", log->brews_used);
     dict_set(out, "blood_healed", log->blood_healed);
 
-    /* prayer correct rate: fraction of NPC attacks blocked by correct prayer */
+    /* prayer analysis: correct rate + unavoidable breakdown */
     float prayer_rate = (log->prayer_total > 0.0f)
         ? log->prayer_correct / log->prayer_total : 0.0f;
     dict_set(out, "prayer_correct_rate", prayer_rate);
+    /* what fraction of off-prayer hits were unavoidable (multi-style same tick) */
+    float off_prayer = log->prayer_total - log->prayer_correct;
+    float unavoidable_rate = (off_prayer > 0.0f)
+        ? log->unavoidable_off_prayer / off_prayer : 0.0f;
+    dict_set(out, "unavoidable_off_prayer_rate", unavoidable_rate);
+    dict_set(out, "unavoidable_off_prayer", log->unavoidable_off_prayer);
 
     dict_set(out, "npc_kills", log->npc_kills);
     dict_set(out, "gear_switches", log->gear_switches);

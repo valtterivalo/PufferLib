@@ -592,6 +592,10 @@ typedef struct {
     int ticks_without_action;  /* consecutive ticks with no attack or movement */
     int total_prayer_correct;  /* times prayer blocked an NPC attack */
     int total_npc_attacks;     /* total NPC attacks on player (for prayer_correct_rate) */
+    int total_unavoidable_off; /* off-prayer hits where a different style was correctly prayed */
+    /* per-tick tracking for multi-style analysis */
+    int tick_styles_fired;     /* bitmask of styles that fired this tick (bit0=mel,1=rng,2=mag) */
+    int tick_attacks_fired;    /* count of NPC attacks that fired this tick */
     int total_idle_ticks;      /* cumulative ticks of ticks_without_action > 0 */
     int total_brews_used;      /* brew doses consumed this episode */
     int total_blood_healed;    /* HP healed via blood barrage this episode */
@@ -1377,6 +1381,12 @@ static void inf_npc_attack(InfernoState* s, int idx) {
         hit_delay = encounter_ranged_hit_delay(dist, 0);
     /* melee: delay = 0 */
 
+    /* track which styles fired this tick for multi-style analysis */
+    if (actual_style == ATTACK_STYLE_MELEE) s->tick_styles_fired |= 1;
+    else if (actual_style == ATTACK_STYLE_RANGED) s->tick_styles_fired |= 2;
+    else if (actual_style == ATTACK_STYLE_MAGIC) s->tick_styles_fired |= 4;
+    s->tick_attacks_fired++;
+
     if (hit_delay == 0) {
         /* melee: instant damage, check prayer now */
         int prayer_matches = encounter_prayer_correct_for_style(s->active_prayer, actual_style);
@@ -1385,8 +1395,6 @@ static void inf_npc_attack(InfernoState* s, int idx) {
     } else {
         /* ranged/magic: queue pending hit on player */
         if (s->player_pending_hit_count < ENCOUNTER_MAX_PENDING_HITS) {
-            /* for non-jad NPCs, check prayer at queue time (standard OSRS behavior).
-               for jad, check prayer at hit time (gives 3-tick reaction window). */
             int is_jad = (npc->type == INF_NPC_JAD);
             if (!is_jad) {
                 int prayer_matches = encounter_prayer_correct_for_style(s->active_prayer, actual_style);
@@ -2065,6 +2073,8 @@ static void inf_step(EncounterState* state, const int* actions) {
     s->damage_dealt_this_tick = 0.0f;
     s->damage_received_this_tick = 0.0f;
     s->prayer_correct_this_tick = 0;
+    s->tick_styles_fired = 0;
+    s->tick_attacks_fired = 0;
     s->wave_completed_this_tick = 0;
     s->pillar_lost_this_tick = -1;
     s->player_attacked_this_tick = 0;
@@ -2186,6 +2196,20 @@ static void inf_step(EncounterState* state, const int* actions) {
     for (int i = 0; i < INF_MAX_NPCS; i++) {
         if (s->npcs[i].attacked_this_tick && s->npcs[i].type != INF_NPC_NIBBLER)
             s->total_npc_attacks++;
+    }
+    /* multi-style analysis: count off-prayer hits that were unavoidable because
+       a different style was correctly prayed on the same tick. popcount of
+       tick_styles_fired tells us how many distinct styles fired. if 2+, the
+       off-prayer hits from non-prayed styles are "unavoidable" (can only pray one). */
+    if (s->tick_attacks_fired > 0) {
+        int styles = s->tick_styles_fired;
+        int n_styles = ((styles >> 0) & 1) + ((styles >> 1) & 1) + ((styles >> 2) & 1);
+        if (n_styles >= 2 && s->prayer_correct_this_tick > 0) {
+            /* we prayed correctly against at least one style, but other styles
+               also fired — those off-prayer hits were unavoidable */
+            int off_prayer = s->tick_attacks_fired - s->prayer_correct_this_tick;
+            s->total_unavoidable_off += off_prayer;
+        }
     }
     if (s->ticks_without_action > 0) s->total_idle_ticks++;
     s->total_brews_used += s->brewed_this_tick;

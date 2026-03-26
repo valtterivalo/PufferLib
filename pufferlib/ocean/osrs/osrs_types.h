@@ -780,6 +780,7 @@ typedef struct {
     float rw_pillar;
     float rw_dmg_taken;
     float rw_terminal;
+    float unavoidable_off_prayer;  /* off-prayer hits where correct prayer was on a different style */
     float n;
 } Log;
 
