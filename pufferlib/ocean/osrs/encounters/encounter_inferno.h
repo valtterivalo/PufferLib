@@ -1137,7 +1137,10 @@ static void inf_npc_attack(InfernoState* s, int idx) {
     if (npc->stun_timer > 0) { npc->stun_timer--; return; }
     if (npc->dig_freeze_timer > 0) return;
     if (npc->dig_attack_delay > 0) return;
-    if (npc->attack_timer > 0) { npc->attack_timer--; return; }
+    /* decrement first, then check — matches SDK (Unit.ts:237 attackDelay-- then
+       Mob.ts:326 attackDelay <= 0). without this, NPCs attack 1 tick slower. */
+    if (npc->attack_timer > 0) npc->attack_timer--;
+    if (npc->attack_timer > 0) return;
 
     const InfNPCStats* stats = &INF_NPC_STATS[npc->type];
 
@@ -1237,7 +1240,7 @@ static void inf_npc_attack(InfernoState* s, int idx) {
             int att_roll = osrs_npc_attack_roll(stats->att_level, stats->melee_att_bonus);
             const EncounterLoadoutStats* ls = &s->loadout_stats[s->weapon_set];
             int def_bonus = ls->def_stab;  /* melee: use stab def as approximation */
-            int def_roll = osrs_player_def_roll_vs_npc(99, 99, def_bonus, ATTACK_STYLE_MELEE);
+            int def_roll = osrs_player_def_roll_vs_npc(s->player.current_defence, s->player.current_magic, def_bonus, ATTACK_STYLE_MELEE);
             if (encounter_rand_float(&s->rng_state) >= osrs_hit_chance(att_roll, def_roll)) dmg = 0;
             int prayer_matches = (s->active_prayer == PRAYER_PROTECT_MELEE);
             if (prayer_matches) { dmg = 0; s->prayer_correct_this_tick = 1; }
@@ -1355,7 +1358,7 @@ static void inf_npc_attack(InfernoState* s, int idx) {
         if (actual_style == ATTACK_STYLE_RANGED) def_bonus = ls->def_ranged;
         else if (actual_style == ATTACK_STYLE_MAGIC) def_bonus = ls->def_magic;
         else def_bonus = ls->def_stab;  /* melee: stab as approximation */
-        int def_roll = osrs_player_def_roll_vs_npc(99, 99, def_bonus, actual_style);
+        int def_roll = osrs_player_def_roll_vs_npc(s->player.current_defence, s->player.current_magic, def_bonus, actual_style);
         if (encounter_rand_float(&s->rng_state) >= osrs_hit_chance(att_roll, def_roll))
             dmg = 0;  /* missed */
     }
@@ -1912,6 +1915,8 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
                 int hit_delay;
                 if (ls->style == ATTACK_STYLE_MAGIC)
                     hit_delay = encounter_magic_hit_delay(target_dist, 1);
+                else if (s->weapon_set == INF_GEAR_BP)
+                    hit_delay = encounter_blowpipe_hit_delay(target_dist, 1);
                 else
                     hit_delay = encounter_ranged_hit_delay(target_dist, 1);
 
@@ -2272,6 +2277,12 @@ static void inf_write_obs(EncounterState* state, float* obs) {
             if (!npc->active || npc->death_ticks > 0) continue;
             const InfNPCStats* st = &INF_NPC_STATS[npc->type];
             if (st->attack_range <= 1 && npc->type != INF_NPC_MELEER) continue;  /* skip nibblers */
+            /* only count NPCs that can actually attack: has LOS, in range, not frozen/stunned */
+            if (npc->frozen_ticks > 0 || npc->stun_timer > 0) continue;
+            if (st->attack_range > 1 && !inf_npc_has_los(s, n)) continue;
+            int dist = encounter_dist_to_npc(s->player.x, s->player.y,
+                                              npc->x, npc->y, npc->size);
+            if (dist == 0 || dist > st->attack_range) continue;
             int style = (npc->type == INF_NPC_JAD) ? npc->jad_attack_style : npc->attack_style;
             if (npc->attack_timer < min_timer) {
                 min_timer = npc->attack_timer;
