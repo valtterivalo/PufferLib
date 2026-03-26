@@ -115,7 +115,9 @@ void c_step(Env* env) {
             InfernoState* st = (InfernoState*)env->enc_state;
             int wave = st->wave;
             int ticks = env->episode_action_len;
-            if (wave > g_best_wave || (wave == g_best_wave && ticks < g_best_ticks)) {
+            /* only save replays from full runs (wave 0 start), not curriculum skips */
+            if (st->start_wave == 0 &&
+                (wave > g_best_wave || (wave == g_best_wave && ticks < g_best_ticks))) {
                 g_best_wave = wave;
                 g_best_ticks = ticks;
                 const char* rpath = getenv("RECORD_REPLAY");
