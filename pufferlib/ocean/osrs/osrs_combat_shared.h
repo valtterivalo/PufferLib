@@ -291,6 +291,28 @@ static inline int encounter_blowpipe_hit_delay(int distance, int is_player) {
     return distance / 6 + 1 + (is_player ? 1 : 0);
 }
 
+/* blowpipe special attack: 2x accuracy, 1.5x max hit.
+   ref: osrs-sdk Blowpipe.ts _accuracyMultiplier=2, _damageMultiplier=1.5.
+   returns damage dealt. caller applies heal (50% of dmg) and queues pending hit. */
+#define BLOWPIPE_SPEC_ACC_MULT  2
+#define BLOWPIPE_SPEC_DMG_NUM   3   /* 1.5x = 3/2 */
+#define BLOWPIPE_SPEC_DMG_DEN   2
+#define BLOWPIPE_SPEC_HEAL_PCT  50
+#define BLOWPIPE_SPEC_COST      50
+
+static inline int osrs_blowpipe_spec_resolve(
+    int base_att_roll, int base_max_hit,
+    int target_def_level, int target_ranged_def_bonus,
+    uint32_t* rng_state
+) {
+    int att_roll = base_att_roll * BLOWPIPE_SPEC_ACC_MULT;
+    int def_roll = (target_def_level + 8) * (target_ranged_def_bonus + 64);
+    int spec_max = base_max_hit * BLOWPIPE_SPEC_DMG_NUM / BLOWPIPE_SPEC_DMG_DEN;
+    if (encounter_rand_float(rng_state) < osrs_hit_chance(att_roll, def_roll))
+        return encounter_rand_int(rng_state, spec_max + 1);
+    return 0;
+}
+
 /* chebyshev distance from point (px,py) to nearest tile of NPC footprint
    at (nx,ny) with given npc_size. accounts for multi-tile NPCs. */
 static inline int encounter_dist_to_npc(int px, int py, int nx, int ny, int npc_size) {

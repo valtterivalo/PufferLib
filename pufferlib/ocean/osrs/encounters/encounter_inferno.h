@@ -812,6 +812,8 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
     s->stamina_active_ticks = 0;
     s->active_prayer = PRAYER_NONE;
     s->player_attack_target = -1;
+    s->player.special_energy = 100;
+    s->player.special_regen_ticks = 0;
 
     /* compute loadout stats from item database (replaces old hardcoded INF_WEAPON_STATS) */
     encounter_compute_loadout_stats(INF_MAGE_LOADOUT, ATTACK_STYLE_MAGIC,
@@ -1625,10 +1627,11 @@ static void inf_tick_npcs(InfernoState* s) {
 #define INF_HEAD_EAT     4   /* 2: none, brew */
 #define INF_HEAD_POTION  5   /* 4: none, restore, bastion, stamina */
 #define INF_HEAD_SPELL   6   /* 3: no_change, blood_barrage, ice_barrage */
-#define INF_NUM_ACTION_HEADS 7
+#define INF_HEAD_SPEC    7   /* 2: no_spec, spec (blowpipe only) */
+#define INF_NUM_ACTION_HEADS 8
 
-static const int INF_ACTION_DIMS[INF_NUM_ACTION_HEADS] = { ENCOUNTER_MOVE_ACTIONS, 5, INF_MAX_NPCS+1, 5, 2, 4, 3 };
-#define INF_ACTION_MASK_SIZE (ENCOUNTER_MOVE_ACTIONS + 5 + INF_MAX_NPCS+1 + 5 + 2 + 4 + 3)
+static const int INF_ACTION_DIMS[INF_NUM_ACTION_HEADS] = { ENCOUNTER_MOVE_ACTIONS, 5, INF_MAX_NPCS+1, 5, 2, 4, 3, 2 };
+#define INF_ACTION_MASK_SIZE (ENCOUNTER_MOVE_ACTIONS + 5 + INF_MAX_NPCS+1 + 5 + 2 + 4 + 3 + 2)
 
 /* movement uses shared encounter_move_to_target from osrs_encounter.h */
 
@@ -1736,6 +1739,50 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
         s->spell_choice = ENCOUNTER_SPELL_ICE;
     else if (spell_act == 1)
         s->spell_choice = ENCOUNTER_SPELL_BLOOD;
+
+    /* special energy regen: 10 energy every 50 ticks (30 seconds) */
+    encounter_tick_spec_regen(&s->player, 0);
+
+    /* blowpipe special attack: 2x accuracy, 1.5x max hit, heal 50% of damage.
+       only available in BP gear with 50+ spec energy and an active target. */
+    {
+        int spec_act = actions[INF_HEAD_SPEC];
+        if (spec_act == 1 && s->weapon_set == INF_GEAR_BP &&
+            s->player_attack_target >= 0 && s->player_attack_timer == 0 &&
+            encounter_use_spec(&s->player, BLOWPIPE_SPEC_COST)) {
+            InfNPC* target_npc = &s->npcs[s->player_attack_target];
+            if (target_npc->active && target_npc->death_ticks == 0) {
+                const EncounterLoadoutStats* ls = &s->loadout_stats[INF_GEAR_BP];
+                const InfNPCStats* ns = &INF_NPC_STATS[target_npc->type];
+                int base_att_roll = ls->eff_level * (ls->attack_bonus + 64);
+                int dmg = osrs_blowpipe_spec_resolve(
+                    base_att_roll, ls->max_hit,
+                    ns->def_level, ns->ranged_def_bonus, &s->rng_state);
+                /* heal 50% of damage dealt */
+                int heal = dmg * BLOWPIPE_SPEC_HEAL_PCT / 100;
+                s->player.current_hitpoints += heal;
+                if (s->player.current_hitpoints > s->player.base_hitpoints)
+                    s->player.current_hitpoints = s->player.base_hitpoints;
+                /* queue pending hit */
+                int target_dist = encounter_dist_to_npc(s->player.x, s->player.y,
+                    target_npc->x, target_npc->y, target_npc->size);
+                EncounterPendingHit* ph = &target_npc->pending_hit;
+                ph->active = 1;
+                ph->damage = dmg;
+                ph->ticks_remaining = encounter_blowpipe_hit_delay(target_dist, 1);
+                ph->attack_style = ATTACK_STYLE_RANGED;
+                ph->check_prayer = 0;
+                ph->spell_type = 0;
+                s->player_attack_timer = ls->attack_speed;
+                s->damage_dealt_this_tick += (float)dmg;
+                s->player_attacked_this_tick = 1;
+                s->player_attack_npc_idx = s->player_attack_target;
+                s->player_attack_dmg = dmg;
+                s->player_attack_style_id = ATTACK_STYLE_RANGED;
+                s->total_blood_healed += heal;
+            }
+        }
+    }
 
     /* stat decay/restore: every 60 ticks, boosted stats decay by 1 toward base,
        drained stats restore by 1 toward base. core OSRS mechanic. */
@@ -2227,7 +2274,7 @@ static void inf_step(EncounterState* state, const int* actions) {
 /* obs layout: 26 player + 12 pillar + 27*32 NPC + 5*8 pending hits = 942 */
 #define INF_FEATURES_PER_NPC 29
 #define INF_FEATURES_PER_HIT 5
-#define INF_NUM_OBS (36 + 12 + INF_FEATURES_PER_NPC * INF_MAX_NPCS + INF_FEATURES_PER_HIT * ENCOUNTER_MAX_PENDING_HITS)
+#define INF_NUM_OBS (37 + 12 + INF_FEATURES_PER_NPC * INF_MAX_NPCS + INF_FEATURES_PER_HIT * ENCOUNTER_MAX_PENDING_HITS)
 
 /* max hit per NPC type, normalized by mager max (70). for prayer priority obs. */
 static const float INF_NPC_MAX_HIT_NORM[INF_NUM_NPC_TYPES] = {
@@ -2288,6 +2335,7 @@ static void inf_write_obs(EncounterState* state, float* obs) {
     obs[i++] = (float)s->loadout_stats[s->weapon_set].def_stab / 300.0f;
     obs[i++] = (float)s->loadout_stats[s->weapon_set].def_magic / 300.0f;
     obs[i++] = (float)s->loadout_stats[s->weapon_set].def_ranged / 300.0f;
+    obs[i++] = (float)s->player.special_energy / 100.0f;
 
     /* prayer-critical: distilled from NPC array so the agent doesn't have to
        scan 32 slots to figure out what to pray. these directly answer:
@@ -2395,7 +2443,7 @@ static void inf_write_obs(EncounterState* state, float* obs) {
     /* assert NPC section wrote exactly the right number of features.
        if this fires, INF_FEATURES_PER_NPC doesn't match the actual feature count. */
     {
-        int expected_npc_end = 36 + 12 + INF_FEATURES_PER_NPC * INF_MAX_NPCS;
+        int expected_npc_end = 37 + 12 + INF_FEATURES_PER_NPC * INF_MAX_NPCS;
         if (i != expected_npc_end) {
             fprintf(stderr, "FATAL: obs misaligned after NPC section: i=%d expected=%d "
                     "(INF_FEATURES_PER_NPC=%d, actual=%d per slot)\n",
@@ -2492,6 +2540,14 @@ static void inf_write_mask(EncounterState* state, float* mask) {
     mask[offset++] = (s->weapon_set == INF_GEAR_MAGE &&
                       s->player.current_hitpoints < s->player.base_hitpoints) ? 1.0f : 0.0f;
     mask[offset++] = (s->weapon_set == INF_GEAR_MAGE) ? 1.0f : 0.0f;
+
+    /* HEAD_SPEC (2): no_spec, spec. spec only when in BP gear with enough energy. */
+    mask[offset++] = 1.0f;  /* no_spec always valid */
+    mask[offset++] = (s->weapon_set == INF_GEAR_BP &&
+                      s->player.special_energy >= BLOWPIPE_SPEC_COST &&
+                      s->player_attack_timer == 0 &&
+                      s->player_attack_target >= 0)
+                     ? 1.0f : 0.0f;
 }
 
 /* ======================================================================== */
@@ -2848,6 +2904,9 @@ static void inf_translate_human_input(HumanInput* hi, int* actions, EncounterSta
     /* spell: 0=no change, 1=blood, 2=ice */
     if (hi->pending_spell == ATTACK_BLOOD) actions[INF_HEAD_SPELL] = 1;
     else if (hi->pending_spell == ATTACK_ICE) actions[INF_HEAD_SPELL] = 2;
+
+    /* spec */
+    if (hi->pending_spec) actions[INF_HEAD_SPEC] = 1;
 }
 
 /* ======================================================================== */

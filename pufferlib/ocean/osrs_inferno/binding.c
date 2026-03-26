@@ -41,7 +41,7 @@ typedef struct {
 
 #define OBS_SIZE INF_TOTAL_OBS
 #define NUM_ATNS INF_NUM_ACTION_HEADS
-#define ACT_SIZES { ENCOUNTER_MOVE_ACTIONS, 5, INF_MAX_NPCS+1, 5, 2, 4, 3 }
+#define ACT_SIZES { ENCOUNTER_MOVE_ACTIONS, 5, INF_MAX_NPCS+1, 5, 2, 4, 3, 2 }
 #define OBS_TYPE FLOAT
 #define ACT_TYPE DOUBLE
 #define Env InfernoEnv
