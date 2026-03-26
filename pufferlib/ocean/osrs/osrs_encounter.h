@@ -658,8 +658,10 @@ static inline int encounter_npc_step_toward(
     int target_size, int attack_range,
     encounter_npc_blocked_fn is_blocked, void* ctx
 ) {
-    /* stop if already within attack range of target */
-    int dist = encounter_dist_to_npc(*x, *y, tx, ty, target_size);
+    /* stop if NPC's nearest footprint edge is within attack range of target.
+       measure from target TO NPC footprint (not from NPC SW corner to target),
+       so multi-tile NPCs stop when their edge is adjacent. */
+    int dist = encounter_dist_to_npc(tx, ty, *x, *y, npc_size);
     if (dist >= 1 && dist <= attack_range) return 0;
 
     int size = npc_size;
