@@ -945,6 +945,7 @@ def train_cli(env_name: str):
         ep_len = env_stats.get("episode_length", 0)
         wave = env_stats.get("wave", 0)
         prayer = env_stats.get("prayer_correct_rate", 0)
+        unavoid = env_stats.get("unavoidable_off_prayer_rate", 0)
         idle = env_stats.get("idle_ticks", 0)
         grad_l2 = debug_stats.get("grad_l2", 0) if debug_stats else 0
         dec_p_max = debug_stats.get("dec_policy_abs_max", 0) if debug_stats else 0
@@ -1006,6 +1007,7 @@ def train_cli(env_name: str):
         e.add_row(f'{c2}return', f'{b2}{ep_ret:.2f}')
         e.add_row(f'{c2}wave', f'{b2}{wave:.1f}')
         e.add_row(f'{c2}prayer', f'{b2}{prayer:.0%}')
+        e.add_row(f'{c2}unavoidable', f'{b2}{unavoid:.0%}')
         e.add_row(f'{c2}ep_length', f'{b2}{ep_len:.0f}')
         e.add_row(f'{c2}idle', f'{b2}{idle:.0f}')
         e.add_row(f'{c2}brews', f'{b2}{env_stats.get("brews_used", 0):.1f}')
