@@ -1417,9 +1417,10 @@ static void inf_npc_attack(InfernoState* s, int idx) {
                 if (prayer_matches) { dmg = 0; s->prayer_correct_this_tick++; s->prayer_correct_by_type[npc->type]++; }
             }
             s->dmg_from_type[npc->type] += (float)dmg;
-            /* bat stat drain: on successful hit when not praying protect from missiles,
-               drain all combat stats by 1. ref: OSRS wiki Jal-MejRah */
-            if (npc->type == INF_NPC_BAT && dmg > 0) {
+            /* bat stat drain: 50% chance on successful hit when not praying protect
+               from missiles, drain all combat stats by 1. ref: OSRS wiki Jal-MejRah */
+            if (npc->type == INF_NPC_BAT && dmg > 0 &&
+                encounter_rand_int(&s->rng_state, 2) == 0) {
                 if (s->player.current_attack > 0) s->player.current_attack--;
                 if (s->player.current_strength > 0) s->player.current_strength--;
                 if (s->player.current_defence > 0) s->player.current_defence--;
