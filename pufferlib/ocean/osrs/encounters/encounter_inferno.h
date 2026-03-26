@@ -1627,8 +1627,8 @@ static void inf_tick_npcs(InfernoState* s) {
 #define INF_HEAD_SPELL   6   /* 3: no_change, blood_barrage, ice_barrage */
 #define INF_NUM_ACTION_HEADS 7
 
-static const int INF_ACTION_DIMS[INF_NUM_ACTION_HEADS] = { ENCOUNTER_MOVE_ACTIONS, 5, INF_MAX_NPCS+1, 5, 2, 4, 2 };
-#define INF_ACTION_MASK_SIZE (ENCOUNTER_MOVE_ACTIONS + 5 + INF_MAX_NPCS+1 + 5 + 2 + 4 + 2)
+static const int INF_ACTION_DIMS[INF_NUM_ACTION_HEADS] = { ENCOUNTER_MOVE_ACTIONS, 5, INF_MAX_NPCS+1, 5, 2, 4, 3 };
+#define INF_ACTION_MASK_SIZE (ENCOUNTER_MOVE_ACTIONS + 5 + INF_MAX_NPCS+1 + 5 + 2 + 4 + 3)
 
 /* movement uses shared encounter_move_to_target from osrs_encounter.h */
 
