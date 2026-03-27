@@ -493,6 +493,7 @@ std::unique_ptr<PuffeRL> create_pufferl(pybind11::dict kwargs,
     hypers.cpu_inference = kwargs.contains("cpu_inference") && get_config(kwargs, "cpu_inference") > 0;
     hypers.train_fp16 = kwargs.contains("train_fp16") && get_config(kwargs, "train_fp16") > 0;
     hypers.ns_iters = kwargs.contains("ns_iters") ? (int)get_config(kwargs, "ns_iters") : 5;
+    hypers.weight_decay = kwargs.contains("weight_decay") ? get_config(kwargs, "weight_decay") : 0.0;
 
     std::string env_name = kwargs["env_name"].cast<std::string>();
     Dict* vec_dict = py_dict_to_c_dict(vec_kwargs.cast<py::dict>());

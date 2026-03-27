@@ -1942,16 +1942,13 @@ kernel void assemble_decoder_grad_f32_to_f16(
     device half* grad_out                   [[buffer(0)]],
     const device float* grad_logits         [[buffer(1)]],
     const device float* grad_value          [[buffer(2)]],
-    constant int& B_TT                      [[buffer(3)]],
-    constant int& od                        [[buffer(4)]],
-    constant int& od1                       [[buffer(5)]],
+    constant AssembleDecoderGradParams& p   [[buffer(3)]],
     uint gid [[thread_position_in_grid]]
 ) {
-    int total = B_TT * od1;
-    if ((int)gid >= total) return;
-    int row = (int)gid / od1;
-    int col = (int)gid % od1;
-    float val = (col < od) ? grad_logits[row * od + col] : grad_value[row];
+    if ((int)gid >= p.B_TT * p.od_plus_1) return;
+    int row = (int)gid / p.od_plus_1;
+    int col = (int)gid % p.od_plus_1;
+    float val = (col < p.od) ? grad_logits[row * p.od + col] : grad_value[row];
     // Clamp to fp16 range to prevent inf (Metal fp16 max ~65504, unlike CUDA bf16)
     grad_out[gid] = half(clamp(val, -65000.0f, 65000.0f));
 }

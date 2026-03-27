@@ -218,7 +218,6 @@ static void cpu_sample_logits(
             ? action_mask
             : action_mask + idx * mask_stride;
 
-        float total_log_prob = 0.0f;
         int logits_offset = 0;
 
         for (int h = 0; h < num_atns; h++) {

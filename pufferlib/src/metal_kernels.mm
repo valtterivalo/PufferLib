@@ -234,14 +234,13 @@ void mtl_cast_f16_to_f32(float *dst, const void *src, int count,
 // ============================================================================
 
 void mtl_fill_f16(void *ptr, int count, cudaStream_t stream) {
-  // Fill fp16 buffer with zeros (the only fill value needed for fp16)
+  assert(count % 2 == 0 && "mtl_fill_f16: odd count would overwrite adjacent memory");
   MetalStream *ms = mtl_resolve_stream(stream);
   ms->compute_encoder();
   auto pso = mtl_pipeline("fill_f32");
   mtl_set_pso(ms, pso);
   mtl_set_ptr(ms, ptr, 0);
-  // Fill count/2 fp32 words with 0.0f — zeros in fp16 are also 0x0000
-  int f32_count = (count + 1) / 2;
+  int f32_count = count / 2;
   struct {
     float value;
     int count;
@@ -252,14 +251,14 @@ void mtl_fill_f16(void *ptr, int count, cudaStream_t stream) {
 
 void mtl_copy_f16(void *dst, const void *src, int count,
                    cudaStream_t stream) {
-  // Copy fp16 data — reuse copy_f32 by treating pairs of fp16 as fp32
+  assert(count % 2 == 0 && "mtl_copy_f16: odd count would over-read/write adjacent memory");
   MetalStream *ms = mtl_resolve_stream(stream);
   ms->compute_encoder();
   auto pso = mtl_pipeline("copy_f32");
   mtl_set_pso(ms, pso);
   mtl_set_ptr(ms, dst, 0);
   mtl_set_ptr(ms, src, 1);
-  int f32_count = (count + 1) / 2;
+  int f32_count = count / 2;
   mtl_set_params(ms, f32_count, 2);
   mtl_dispatch_1d(ms, pso, f32_count);
 }
@@ -497,9 +496,8 @@ void mtl_assemble_decoder_grad_f32_to_f16(void *grad_out,
   mtl_set_ptr(ms, grad_out, 0);
   mtl_set_ptr(ms, grad_logits, 1);
   mtl_set_ptr(ms, grad_value, 2);
-  mtl_set_params(ms, B_TT, 3);
-  mtl_set_params(ms, od, 4);
-  mtl_set_params(ms, od1, 5);
+  struct { int B_TT, od, od_plus_1; } params = {B_TT, od, od1};
+  mtl_set_params(ms, params, 3);
   mtl_dispatch_1d(ms, pso, B_TT * od1);
 }
 

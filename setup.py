@@ -541,7 +541,6 @@ _BINDINGS_CU_DEPS = [
     "pufferlib/src/models.cu",
     "pufferlib/src/kernels.cu",
     "pufferlib/src/vecenv.h",
-    "pufferlib/src/puffernet.h",
 ]
 
 
@@ -651,7 +650,6 @@ _METAL_BINDINGS_DEPS = _METAL_SOURCES + [
     "pufferlib/src/metal_platform.h",
     "pufferlib/src/puf_types.h",
     "pufferlib/src/vecenv.h",
-    "pufferlib/src/puffernet.h",
 ]
 
 METAL_FRAMEWORKS = [

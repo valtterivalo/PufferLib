@@ -19,8 +19,10 @@ __pycache__/
 *.npy
 cy_*.c
 
-# C extensions
+# C extensions and build artifacts
 *.so
+*.a
+*.o
 
 # Distribution / packaging
 .Python

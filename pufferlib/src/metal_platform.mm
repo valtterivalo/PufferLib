@@ -1146,8 +1146,13 @@ static float *addmm_temp_buf(int count) {
   int64_t size = (needed + page - 1) & ~(page - 1);
   if (size <= g_addmm_temp_size) return (float *)g_addmm_temp_base;
 
-  // Old buffer stays in residency set (in-flight commands may reference it).
-  // mtl_alloc_scratch registers the new one.
+  if (g_addmm_temp_base) {
+    auto &bufs = g_ctx.buffers;
+    bufs.erase(std::remove_if(bufs.begin(), bufs.end(),
+        [](const WrappedBuffer &wb) { return wb.base == g_addmm_temp_base; }),
+        bufs.end());
+    free(g_addmm_temp_base);
+  }
   g_addmm_temp_base = (char *)mtl_alloc_scratch(size);
   g_addmm_temp_size = size;
   return (float *)g_addmm_temp_base;
