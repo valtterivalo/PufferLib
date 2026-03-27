@@ -1377,12 +1377,6 @@ static void inf_npc_attack(InfernoState* s, int idx) {
             dmg = 0;  /* missed */
     }
 
-    /* bat special: drain run energy on every hit */
-    if (npc->type == INF_NPC_BAT && dmg > 0) {
-        s->player.run_energy -= 300;
-        if (s->player.run_energy < 0) s->player.run_energy = 0;
-    }
-
     /* compute hit delay based on attack style */
     int hit_delay = 0;
     if (actual_style == ATTACK_STYLE_MAGIC)
