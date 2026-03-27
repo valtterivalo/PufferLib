@@ -167,3 +167,14 @@ pufferlib/ocean/impulse_wars/*-release/
 pufferlib/ocean/impulse_wars/debug-*/
 pufferlib/ocean/impulse_wars/release-*/
 pufferlib/ocean/impulse_wars/benchmark/
+
+# Local OSRS viewer binaries
+pufferlib/ocean/osrs/osrs_pvp
+pufferlib/ocean/osrs/osrs_pvp_debug
+pufferlib/ocean/osrs/osrs_pvp_visual
+
+# Local experiment artifacts
+/.claude/worktrees/
+/logs/
+/runs/
+/*.bin
