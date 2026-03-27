@@ -820,8 +820,8 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
     s->player_attack_target = -1;
     s->player.special_energy = 100;
     s->player.special_regen_ticks = 0;
-    s->player.run_energy = 10000;
-    s->last_hit_by_type = -1;  /* full run energy (OSRS stores as 0-10000) */
+    s->player.run_energy = 10000;  /* full run energy (OSRS stores as 0-10000) */
+    s->last_hit_by_type = -1;
 
     /* compute loadout stats from item database (replaces old hardcoded INF_WEAPON_STATS) */
     encounter_compute_loadout_stats(INF_MAGE_LOADOUT, ATTACK_STYLE_MAGIC,
@@ -1803,7 +1803,6 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
                 s->player_attack_npc_idx = s->player_attack_target;
                 s->player_attack_dmg = dmg;
                 s->player_attack_style_id = ATTACK_STYLE_RANGED;
-                s->total_blood_healed += heal;
             }
         }
     }
@@ -2297,7 +2296,7 @@ static void inf_step(EncounterState* state, const int* actions) {
 /* observations                                                              */
 /* ======================================================================== */
 
-/* obs layout: 26 player + 12 pillar + 27*32 NPC + 5*8 pending hits = 942 */
+/* obs layout: 37 player + 12 pillar + 29*32 NPC + 5*8 pending hits = 1017 */
 #define INF_FEATURES_PER_NPC 29
 #define INF_FEATURES_PER_HIT 5
 #define INF_NUM_OBS (37 + 12 + INF_FEATURES_PER_NPC * INF_MAX_NPCS + INF_FEATURES_PER_HIT * ENCOUNTER_MAX_PENDING_HITS)
@@ -2474,7 +2473,7 @@ static void inf_write_obs(EncounterState* state, float* obs) {
             fprintf(stderr, "FATAL: obs misaligned after NPC section: i=%d expected=%d "
                     "(INF_FEATURES_PER_NPC=%d, actual=%d per slot)\n",
                     i, expected_npc_end, INF_FEATURES_PER_NPC,
-                    (i - 31 - 12) / INF_MAX_NPCS);
+                    (i - 37 - 12) / INF_MAX_NPCS);
             abort();
         }
     }

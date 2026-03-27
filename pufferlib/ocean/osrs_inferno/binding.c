@@ -97,7 +97,7 @@ void c_step(Env* env) {
         env->log.brews_remaining = (float)s->player_brew_doses;
         env->log.restores_remaining = (float)s->player_restore_doses;
         env->log.prayer_at_death = (float)s->player.current_prayer;
-        for (int t = 0; t < 14; t++) {
+        for (int t = 0; t < INF_NUM_NPC_TYPES; t++) {
             env->log.prayer_correct_by_type[t] = (float)s->prayer_correct_by_type[t];
             env->log.attacks_by_type[t] = (float)s->attacks_by_type[t];
             env->log.dmg_from_type[t] = s->dmg_from_type[t];
@@ -245,7 +245,7 @@ void my_log(Log* log, Dict* out) {
         "killed_by_nibbler","killed_by_bat","killed_by_blob","killed_by_blob_mel","killed_by_blob_rng","killed_by_blob_mag",
         "killed_by_meleer","killed_by_ranger","killed_by_mager","killed_by_jad","killed_by_zuk","killed_by_heal_jad","killed_by_heal_zuk","killed_by_shield"
     };
-    for (int t = 0; t < 14; t++) {
+    for (int t = 0; t < INF_NUM_NPC_TYPES; t++) {
         if (log->attacks_by_type[t] > 0.0f) {
             dict_set(out, pray_keys[t], log->prayer_correct_by_type[t] / log->attacks_by_type[t]);
             dict_set(out, dmg_keys[t], log->dmg_from_type[t]);
