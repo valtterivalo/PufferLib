@@ -15,7 +15,6 @@ import zipfile
 from distutils.sysconfig import get_config_vars
 
 import numpy
-import pybind11
 from setuptools import Extension, find_namespace_packages, find_packages, setup
 from setuptools.command.build_ext import build_ext
 
@@ -68,10 +67,6 @@ def download_raylib(platform, ext):
         urllib.request.urlretrieve(RLIGHTS_URL, platform + "/include/rlights.h")  # noqa: S310
 
 
-if not NO_OCEAN:
-    download_raylib("raylib-5.5_webassembly", ".zip")
-    download_raylib(RAYLIB_NAME, ".tar.gz")
-
 BOX2D_URL = "https://github.com/capnspacehook/box2d/releases/latest/download/"
 BOX2D_NAME = "box2d-macos-arm64" if platform.system() == "Darwin" else "box2d-linux-amd64"
 
@@ -93,10 +88,22 @@ def download_box2d(platform):
 
         os.remove(platform + ext)
 
+def ensure_ocean_build_assets():
+    """Download native build assets only when a build command actually runs."""
+    if NO_OCEAN:
+        return
 
-if not NO_OCEAN:
+    download_raylib("raylib-5.5_webassembly", ".zip")
+    download_raylib(RAYLIB_NAME, ".tar.gz")
     download_box2d("box2d-web")
     download_box2d(BOX2D_NAME)
+
+
+def get_pybind_include():
+    """Resolve the pybind11 include dir only when native builds need it."""
+    import pybind11
+
+    return pybind11.get_include()
 
 # Shared compile args for all platforms
 extra_compile_args = [
@@ -219,6 +226,8 @@ class BuildExt(build_ext):
         if build_ext_opts:
             self.distribution.command_options["build_c"] = build_ext_opts.copy()
 
+        ensure_ocean_build_assets()
+
         # Build _C.so (always torch-free)
         if not NO_TRAIN:
             if BUILD_METAL:
@@ -234,6 +243,7 @@ class CBuildExt(build_ext):
     def run(self, *args, **kwargs):
         """Run build, filtering out extensions already built by BuildExt."""
         self.extensions = [e for e in self.extensions if e.name not in extnames]
+        ensure_ocean_build_assets()
         super().run(*args, **kwargs)
 
 
@@ -568,7 +578,7 @@ def _build_notorch_C(static_lib=None, force=False, precision="bf16"):
         return
 
     python_include = sysconfig.get_path("include")
-    pybind_include = pybind11.get_include()
+    pybind_include = get_pybind_include()
     nvcc_cmd = [
         nvcc,
         "-c",
@@ -678,7 +688,7 @@ def _build_metal_C(static_lib=None, force=False):
         return
 
     python_include = sysconfig.get_path("include")
-    pybind_include = pybind11.get_include()
+    pybind_include = get_pybind_include()
 
     obj_files = []
     for src in metal_sources:
@@ -818,6 +828,7 @@ def create_static_env_build_class(env_name):
             super().finalize_options()
 
         def run(self):
+            ensure_ocean_build_assets()
             static_lib = _build_static_lib(env_name, force=self.force)
             if BUILD_METAL:
                 _build_metal_C(static_lib, force=self.force)
@@ -838,6 +849,7 @@ if not NO_OCEAN:
 
         class EnvBuildExt(build_ext):
             def run(self):
+                ensure_ocean_build_assets()
                 self.extensions = [e for e in self.extensions if e.name == full_name]
                 super().run()
 
