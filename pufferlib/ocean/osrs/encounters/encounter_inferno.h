@@ -1807,22 +1807,16 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
         }
     }
 
-    /* stat decay/restore: every 60 ticks, boosted stats decay by 1 toward base,
-       drained stats restore by 1 toward base. core OSRS mechanic. */
+    /* stat decay: every 60 ticks, boosted/drained stats move 1 toward base */
     if (s->tick > 0 && s->tick % 60 == 0) {
         int* stats[] = { &s->player.current_ranged, &s->player.current_magic,
                          &s->player.current_attack, &s->player.current_strength,
                          &s->player.current_defence };
-        int bases[] = { 99, 99, 99, 99, 99 };
         for (int si = 0; si < 5; si++) {
-            if (*stats[si] > bases[si]) (*stats[si])--;
-            else if (*stats[si] < bases[si]) (*stats[si])++;
+            if (*stats[si] > 99) (*stats[si])--;
+            else if (*stats[si] < 99) (*stats[si])++;
         }
-        /* recompute max hit after stat change */
-        encounter_compute_loadout_stats(INF_RANGE_TBOW_LOADOUT, ATTACK_STYLE_RANGED,
-            ENCOUNTER_PRAYER_RIGOUR, s->player.current_ranged, 0, 0, &s->loadout_stats[INF_GEAR_TBOW]);
-        encounter_compute_loadout_stats(INF_RANGE_BP_LOADOUT, ATTACK_STYLE_RANGED,
-            ENCOUNTER_PRAYER_RIGOUR, s->player.current_ranged, 0, 0, &s->loadout_stats[INF_GEAR_BP]);
+        encounter_recompute_loadout_max_hits(s->loadout_stats, INF_NUM_WEAPON_SETS, &s->player);
     }
 
     /* consumables — shared 3-tick potion timer */
@@ -1834,87 +1828,32 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
     if (eat_act == 1 && s->player_brew_doses > 0 && s->player_potion_timer == 0
         && s->player.current_hitpoints < s->player.base_hitpoints) {
         s->player.current_hitpoints += INF_BREW_HEAL;
-        if (s->player.current_hitpoints > s->player.base_hitpoints + 16)
-            s->player.current_hitpoints = s->player.base_hitpoints + 16;
+        if (s->player.current_hitpoints > s->player.base_hitpoints + INF_BREW_HEAL)
+            s->player.current_hitpoints = s->player.base_hitpoints + INF_BREW_HEAL;
         s->player_brew_doses--;
         s->player_potion_timer = 3;
         s->player.ate_food_this_tick = 1;
         s->brewed_this_tick = 1;
-        /* sara brew stat drain: floor(current/10)+2 per stat, floor(def/5)+2 def boost.
-           drain uses CURRENT level (not base), so boosted stats drain more.
-           ref: OSRS wiki Saradomin brew */
-        {
-            int att_drain = s->player.current_attack / 10 + 2;
-            int str_drain = s->player.current_strength / 10 + 2;
-            int rng_drain = s->player.current_ranged / 10 + 2;
-            int mag_drain = s->player.current_magic / 10 + 2;
-            s->player.current_attack -= att_drain;
-            if (s->player.current_attack < 0) s->player.current_attack = 0;
-            s->player.current_strength -= str_drain;
-            if (s->player.current_strength < 0) s->player.current_strength = 0;
-            s->player.current_ranged -= rng_drain;
-            if (s->player.current_ranged < 0) s->player.current_ranged = 0;
-            s->player.current_magic -= mag_drain;
-            if (s->player.current_magic < 0) s->player.current_magic = 0;
-            int def_boost = s->player.current_defence / 5 + 2;
-            s->player.current_defence += def_boost;
-            int def_cap = 99 + (99 / 5 + 2);  /* cap at base + max boost from base */
-            if (s->player.current_defence > def_cap) s->player.current_defence = def_cap;
-        }
-        /* recompute loadout stats with drained levels */
-        encounter_compute_loadout_stats(INF_RANGE_TBOW_LOADOUT, ATTACK_STYLE_RANGED,
-            ENCOUNTER_PRAYER_RIGOUR, s->player.current_ranged, 0, 0, &s->loadout_stats[INF_GEAR_TBOW]);
-        encounter_compute_loadout_stats(INF_RANGE_BP_LOADOUT, ATTACK_STYLE_RANGED,
-            ENCOUNTER_PRAYER_RIGOUR, s->player.current_ranged, 0, 0, &s->loadout_stats[INF_GEAR_BP]);
-        encounter_compute_loadout_stats(INF_MAGE_LOADOUT, ATTACK_STYLE_MAGIC,
-            ENCOUNTER_PRAYER_AUGURY, s->player.current_magic, 0, 30, &s->loadout_stats[INF_GEAR_MAGE]);
+        encounter_brew_drain_stats(&s->player);
+        encounter_recompute_loadout_max_hits(s->loadout_stats, INF_NUM_WEAPON_SETS, &s->player);
     }
 
     /* potions (INF_HEAD_POTION): 1=restore, 2=bastion, 3=stamina */
     int pot_act = actions[INF_HEAD_POTION];
     if (pot_act == 1 && s->player_restore_doses > 0 && s->player_potion_timer == 0) {
-        /* super restore: floor(base/4)+8 per stat, caps at base. restores all combat stats + prayer.
-           ref: OSRS wiki Super restore */
+        /* super restore: restores prayer + all combat stats */
         s->player.current_prayer += INF_RESTORE_AMOUNT;
         if (s->player.current_prayer > s->player.base_prayer)
             s->player.current_prayer = s->player.base_prayer;
-        s->player.current_attack += INF_RESTORE_AMOUNT;
-        if (s->player.current_attack > 99) s->player.current_attack = 99;
-        s->player.current_strength += INF_RESTORE_AMOUNT;
-        if (s->player.current_strength > 99) s->player.current_strength = 99;
-        s->player.current_defence += INF_RESTORE_AMOUNT;
-        if (s->player.current_defence > 99) s->player.current_defence = 99;
-        s->player.current_ranged += INF_RESTORE_AMOUNT;
-        if (s->player.current_ranged > 99) s->player.current_ranged = 99;
-        s->player.current_magic += INF_RESTORE_AMOUNT;
-        if (s->player.current_magic > 99) s->player.current_magic = 99;
+        encounter_restore_stats(&s->player);
         s->player_restore_doses--;
         s->player_potion_timer = 3;
-        /* recompute loadout stats with restored levels */
-        encounter_compute_loadout_stats(INF_RANGE_TBOW_LOADOUT, ATTACK_STYLE_RANGED,
-            ENCOUNTER_PRAYER_RIGOUR, s->player.current_ranged, 0, 0, &s->loadout_stats[INF_GEAR_TBOW]);
-        encounter_compute_loadout_stats(INF_RANGE_BP_LOADOUT, ATTACK_STYLE_RANGED,
-            ENCOUNTER_PRAYER_RIGOUR, s->player.current_ranged, 0, 0, &s->loadout_stats[INF_GEAR_BP]);
-        encounter_compute_loadout_stats(INF_MAGE_LOADOUT, ATTACK_STYLE_MAGIC,
-            ENCOUNTER_PRAYER_AUGURY, s->player.current_magic, 0, 30, &s->loadout_stats[INF_GEAR_MAGE]);
+        encounter_recompute_loadout_max_hits(s->loadout_stats, INF_NUM_WEAPON_SETS, &s->player);
     } else if (pot_act == 2 && s->player_bastion_doses > 0 && s->player_potion_timer == 0) {
-        /* bastion potion: boosts ranged by 4 + floor(base/10) = 13 at base 99.
-           also boosts defence by 5 + floor(base*15/100) = 19. can exceed base. */
-        int rng_boost = 4 + s->player.current_ranged / 10;
-        s->player.current_ranged += rng_boost;
-        int max_rng = 99 + (4 + 99 / 10);  /* cap at base + max boost = 112 */
-        if (s->player.current_ranged > max_rng) s->player.current_ranged = max_rng;
-        int def_boost = 5 + s->player.current_defence * 15 / 100;
-        s->player.current_defence += def_boost;
-        int max_def = 99 + (5 + 99 * 15 / 100);
-        if (s->player.current_defence > max_def) s->player.current_defence = max_def;
+        encounter_bastion_boost(&s->player);
         s->player_bastion_doses--;
         s->player_potion_timer = 3;
-        /* recompute ranged loadout stats with boosted level */
-        encounter_compute_loadout_stats(INF_RANGE_TBOW_LOADOUT, ATTACK_STYLE_RANGED,
-            ENCOUNTER_PRAYER_RIGOUR, s->player.current_ranged, 0, 0, &s->loadout_stats[INF_GEAR_TBOW]);
-        encounter_compute_loadout_stats(INF_RANGE_BP_LOADOUT, ATTACK_STYLE_RANGED,
-            ENCOUNTER_PRAYER_RIGOUR, s->player.current_ranged, 0, 0, &s->loadout_stats[INF_GEAR_BP]);
+        encounter_recompute_loadout_max_hits(s->loadout_stats, INF_NUM_WEAPON_SETS, &s->player);
     } else if (pot_act == 3 && s->player_stamina_doses > 0 && s->player_potion_timer == 0) {
         s->stamina_active_ticks = 200;
         s->player_stamina_doses--;
