@@ -258,6 +258,12 @@ typedef enum {
 } AttackStyle;
 
 typedef enum {
+    MELEE_STYLE_STAB = 0,
+    MELEE_STYLE_SLASH,
+    MELEE_STYLE_CRUSH,
+} MeleeStyle;
+
+typedef enum {
     PRAYER_NONE = 0,
     PRAYER_PROTECT_MAGIC,
     PRAYER_PROTECT_RANGED,
@@ -420,7 +426,7 @@ typedef enum {
     POTION_RESTORE,
     POTION_COMBAT,
     POTION_RANGED,
-    POTION_ANTIVENOM,
+    POTION_ANTIVENOM,  /* zulrah only — outside PvP action space (POTION_DIM=5) */
 } PotionAction;
 
 /** Karambwan action head options. */
@@ -770,16 +776,6 @@ typedef struct {
     float gear_switches;
     float current_ranged;
     float current_magic;
-    /* per-component reward accumulators (sum across episodes, divide by n) */
-    float rw_wave;
-    float rw_damage;
-    float rw_idle;
-    float rw_brew;
-    float rw_blood;
-    float rw_prayer;
-    float rw_pillar;
-    float rw_dmg_taken;
-    float rw_terminal;
     float unavoidable_off_prayer;  /* off-prayer hits where correct prayer was on a different style */
     float brews_remaining;         /* brew doses left at end of episode */
     float restores_remaining;      /* restore doses left at end of episode */

@@ -965,7 +965,7 @@ typedef enum {
     @param style_bonus      +0 for rapid/autocast, +3 for accurate, +1 for controlled
     @param spell_base_damage 0 for ranged/melee, 30 for ice/blood barrage
     @param out              output struct to fill */
-static void encounter_compute_loadout_stats(
+static inline void encounter_compute_loadout_stats(
     const uint8_t loadout[NUM_GEAR_SLOTS],
     AttackStyle style,
     EncounterPrayer prayer,
@@ -1400,15 +1400,17 @@ typedef struct {
     int count;
 } EncounterRegistry;
 
+/* WARNING: static in header — each TU gets its own copy. only works correctly
+   when all encounter headers are included from a single compilation unit. */
 static EncounterRegistry g_encounter_registry = { .count = 0 };
 
-static void encounter_register(const EncounterDef* def) {
+static inline void encounter_register(const EncounterDef* def) {
     if (g_encounter_registry.count < MAX_ENCOUNTERS) {
         g_encounter_registry.defs[g_encounter_registry.count++] = def;
     }
 }
 
-static const EncounterDef* encounter_find(const char* name) {
+static inline const EncounterDef* encounter_find(const char* name) {
     for (int i = 0; i < g_encounter_registry.count; i++) {
         if (strcmp(g_encounter_registry.defs[i]->name, name) == 0) {
             return g_encounter_registry.defs[i];

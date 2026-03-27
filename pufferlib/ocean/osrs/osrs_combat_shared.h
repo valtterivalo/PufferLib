@@ -231,6 +231,21 @@ static inline int osrs_player_def_roll_vs_npc(
     return eff_def * (def_bonus + 64);
 }
 
+/* pick the correct player defence bonus for an incoming NPC attack.
+   attack_style: 1=melee, 2=ranged, 3=magic.
+   melee_style: 0=stab, 1=slash, 2=crush (only used when attack_style == 1). */
+static inline int encounter_player_def_bonus(
+    int def_stab, int def_slash, int def_crush, int def_magic, int def_ranged,
+    int attack_style, int melee_style
+) {
+    if (attack_style == 2) return def_ranged;  /* ATTACK_STYLE_RANGED */
+    if (attack_style == 3) return def_magic;   /* ATTACK_STYLE_MAGIC */
+    /* melee: select by sub-style */
+    if (melee_style == 1) return def_slash;    /* MELEE_STYLE_SLASH */
+    if (melee_style == 2) return def_crush;    /* MELEE_STYLE_CRUSH */
+    return def_stab;                           /* MELEE_STYLE_STAB */
+}
+
 /* NPC max hit by style: dispatches to melee/ranged/magic formula.
    for magic, uses magic_base_dmg * magic_dmg_pct / 100. */
 static inline int osrs_npc_max_hit(

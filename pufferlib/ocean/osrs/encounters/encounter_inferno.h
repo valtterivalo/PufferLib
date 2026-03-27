@@ -112,6 +112,7 @@ typedef struct {
     int attack_range;
     int size;
     int default_style;   /* ATTACK_STYLE_* */
+    int melee_style;     /* MELEE_STYLE_STAB/SLASH/CRUSH for incoming defence bonus selection */
     int can_melee;       /* 1 if can switch to melee when close */
 
     /* combat levels (used for attack rolls and max hit computation) */
@@ -146,7 +147,7 @@ typedef struct {
 static const InfNPCStats INF_NPC_STATS[INF_NUM_NPC_TYPES] = {
     /* NIBBLER (JalNib): attacks pillars not player, bypasses combat formula (hardcoded 0-4) */
     [INF_NPC_NIBBLER] = { .hp = 10, .attack_speed = 4, .attack_range = 1, .size = 1,
-        .default_style = ATTACK_STYLE_MELEE, .can_melee = 0,
+        .default_style = ATTACK_STYLE_MELEE, .melee_style = MELEE_STYLE_CRUSH, .can_melee = 0,
         .att_level = 1, .str_level = 1, .def_level = 15, .range_level = 0, .magic_level = 15,
         .melee_att_bonus = 0, .range_att_bonus = 0, .magic_att_bonus = 0,
         .melee_str_bonus = 0, .ranged_str_bonus = 0, .magic_base_dmg = 0, .magic_dmg_pct = 0,
@@ -155,7 +156,7 @@ static const InfNPCStats INF_NPC_STATS[INF_NUM_NPC_TYPES] = {
 
     /* BAT (JalMejRah): ranged, drains run energy on hit. computed max hit = 19 */
     [INF_NPC_BAT] = { .hp = 25, .attack_speed = 3, .attack_range = 4, .size = 2,
-        .default_style = ATTACK_STYLE_RANGED, .can_melee = 0,
+        .default_style = ATTACK_STYLE_RANGED, .melee_style = MELEE_STYLE_STAB, .can_melee = 0,
         .att_level = 0, .str_level = 0, .def_level = 55, .range_level = 120, .magic_level = 120,
         .melee_att_bonus = 0, .range_att_bonus = 25, .magic_att_bonus = 0,
         .melee_str_bonus = 0, .ranged_str_bonus = 30, .magic_base_dmg = 0, .magic_dmg_pct = 0,
@@ -166,7 +167,7 @@ static const InfNPCStats INF_NPC_STATS[INF_NUM_NPC_TYPES] = {
        attack_speed = 3: InfernoTrainer JalAk.ts — "6 tick cycle = scan exits early,
        so it always is double the cooldown between actual attacks." */
     [INF_NPC_BLOB] = { .hp = 40, .attack_speed = 3, .attack_range = 15, .size = 3,
-        .default_style = ATTACK_STYLE_MAGIC, .can_melee = 1,
+        .default_style = ATTACK_STYLE_MAGIC, .melee_style = MELEE_STYLE_CRUSH, .can_melee = 1,
         .att_level = 160, .str_level = 160, .def_level = 95, .range_level = 160, .magic_level = 160,
         .melee_att_bonus = 0, .range_att_bonus = 40, .magic_att_bonus = 45,
         .melee_str_bonus = 45, .ranged_str_bonus = 45, .magic_base_dmg = 29, .magic_dmg_pct = 100,
@@ -175,7 +176,7 @@ static const InfNPCStats INF_NPC_STATS[INF_NUM_NPC_TYPES] = {
 
     /* BLOB_MELEE (JalAkRekKet): melee split. computed max hit = 18 */
     [INF_NPC_BLOB_MELEE] = { .hp = 15, .attack_speed = 4, .attack_range = 1, .size = 1,
-        .default_style = ATTACK_STYLE_MELEE, .can_melee = 0,
+        .default_style = ATTACK_STYLE_MELEE, .melee_style = MELEE_STYLE_CRUSH, .can_melee = 0,
         .att_level = 120, .str_level = 120, .def_level = 95, .range_level = 0, .magic_level = 0,
         .melee_att_bonus = 0, .range_att_bonus = 25, .magic_att_bonus = 0,
         .melee_str_bonus = 25, .ranged_str_bonus = 0, .magic_base_dmg = 0, .magic_dmg_pct = 0,
@@ -184,7 +185,7 @@ static const InfNPCStats INF_NPC_STATS[INF_NUM_NPC_TYPES] = {
 
     /* BLOB_RANGE (JalAkRekXil): ranged split. computed max hit = 18 */
     [INF_NPC_BLOB_RANGE] = { .hp = 15, .attack_speed = 4, .attack_range = 15, .size = 1,
-        .default_style = ATTACK_STYLE_RANGED, .can_melee = 0,
+        .default_style = ATTACK_STYLE_RANGED, .melee_style = MELEE_STYLE_STAB, .can_melee = 0,
         .att_level = 0, .str_level = 0, .def_level = 95, .range_level = 120, .magic_level = 0,
         .melee_att_bonus = 0, .range_att_bonus = 25, .magic_att_bonus = 0,
         .melee_str_bonus = 0, .ranged_str_bonus = 25, .magic_base_dmg = 0, .magic_dmg_pct = 0,
@@ -194,7 +195,7 @@ static const InfNPCStats INF_NPC_STATS[INF_NUM_NPC_TYPES] = {
     /* BLOB_MAGE (JalAkRekMej): magic split. wiki max hit = 25. InfernoTrainer has
        magicMaxHit()=0 (base Mob) but wiki clearly shows max hit 25 — use wiki value. */
     [INF_NPC_BLOB_MAGE] = { .hp = 15, .attack_speed = 4, .attack_range = 15, .size = 1,
-        .default_style = ATTACK_STYLE_MAGIC, .can_melee = 0,
+        .default_style = ATTACK_STYLE_MAGIC, .melee_style = MELEE_STYLE_STAB, .can_melee = 0,
         .att_level = 0, .str_level = 0, .def_level = 95, .range_level = 0, .magic_level = 120,
         .melee_att_bonus = 0, .range_att_bonus = 0, .magic_att_bonus = 25,
         .melee_str_bonus = 0, .ranged_str_bonus = 0, .magic_base_dmg = 25, .magic_dmg_pct = 100,
@@ -203,7 +204,7 @@ static const InfNPCStats INF_NPC_STATS[INF_NUM_NPC_TYPES] = {
 
     /* MELEER (JalImKot): melee slash, dig mechanic. computed max hit = 48 (wiki: 49) */
     [INF_NPC_MELEER] = { .hp = 75, .attack_speed = 4, .attack_range = 1, .size = 4,
-        .default_style = ATTACK_STYLE_MELEE, .can_melee = 0,
+        .default_style = ATTACK_STYLE_MELEE, .melee_style = MELEE_STYLE_SLASH, .can_melee = 0,
         .att_level = 210, .str_level = 290, .def_level = 120, .range_level = 220, .magic_level = 120,
         .melee_att_bonus = 0, .range_att_bonus = 0, .magic_att_bonus = 0,
         .melee_str_bonus = 40, .ranged_str_bonus = 0, .magic_base_dmg = 0, .magic_dmg_pct = 0,
@@ -212,7 +213,7 @@ static const InfNPCStats INF_NPC_STATS[INF_NUM_NPC_TYPES] = {
 
     /* RANGER (JalXil): ranged, can melee if close. computed max hit = 46 */
     [INF_NPC_RANGER] = { .hp = 125, .attack_speed = 4, .attack_range = 15, .size = 3,
-        .default_style = ATTACK_STYLE_RANGED, .can_melee = 1,
+        .default_style = ATTACK_STYLE_RANGED, .melee_style = MELEE_STYLE_CRUSH, .can_melee = 1,
         .att_level = 140, .str_level = 180, .def_level = 60, .range_level = 250, .magic_level = 90,
         .melee_att_bonus = 0, .range_att_bonus = 40, .magic_att_bonus = 0,
         .melee_str_bonus = 0, .ranged_str_bonus = 50, .magic_base_dmg = 0, .magic_dmg_pct = 0,
@@ -221,7 +222,7 @@ static const InfNPCStats INF_NPC_STATS[INF_NUM_NPC_TYPES] = {
 
     /* MAGER (JalZek): magic, resurrects dead mobs, can melee. computed max hit = 70 */
     [INF_NPC_MAGER] = { .hp = 220, .attack_speed = 4, .attack_range = 15, .size = 4,
-        .default_style = ATTACK_STYLE_MAGIC, .can_melee = 1,
+        .default_style = ATTACK_STYLE_MAGIC, .melee_style = MELEE_STYLE_STAB, .can_melee = 1,
         .att_level = 370, .str_level = 510, .def_level = 260, .range_level = 510, .magic_level = 300,
         .melee_att_bonus = 0, .range_att_bonus = 0, .magic_att_bonus = 80,
         .melee_str_bonus = 0, .ranged_str_bonus = 0, .magic_base_dmg = 70, .magic_dmg_pct = 100,
@@ -231,7 +232,7 @@ static const InfNPCStats INF_NPC_STATS[INF_NUM_NPC_TYPES] = {
     /* JAD (JalTokJad): 50/50 range/mage. wiki max hit = 113. formula gives 231 ranged
        (due to very high range level + bonus), capped to wiki value. */
     [INF_NPC_JAD] = { .hp = 350, .attack_speed = 8, .attack_range = 50, .size = 5,
-        .default_style = ATTACK_STYLE_RANGED, .can_melee = 0,
+        .default_style = ATTACK_STYLE_RANGED, .melee_style = MELEE_STYLE_STAB, .can_melee = 0,
         .att_level = 750, .str_level = 1020, .def_level = 480, .range_level = 1020, .magic_level = 510,
         .melee_att_bonus = 0, .range_att_bonus = 80, .magic_att_bonus = 100,
         .melee_str_bonus = 0, .ranged_str_bonus = 80, .magic_base_dmg = 113, .magic_dmg_pct = 100,
@@ -241,7 +242,7 @@ static const InfNPCStats INF_NPC_STATS[INF_NUM_NPC_TYPES] = {
 
     /* ZUK (TzKalZuk): typeless attacks, wiki max hit = 148 */
     [INF_NPC_ZUK] = { .hp = 1200, .attack_speed = 10, .attack_range = 99, .size = 7,
-        .default_style = ATTACK_STYLE_MAGIC, .can_melee = 0,
+        .default_style = ATTACK_STYLE_MAGIC, .melee_style = MELEE_STYLE_STAB, .can_melee = 0,
         .att_level = 350, .str_level = 600, .def_level = 260, .range_level = 400, .magic_level = 150,
         .melee_att_bonus = 0, .range_att_bonus = 550, .magic_att_bonus = 550,
         .melee_str_bonus = 200, .ranged_str_bonus = 200, .magic_base_dmg = 148, .magic_dmg_pct = 100,
@@ -250,7 +251,7 @@ static const InfNPCStats INF_NPC_STATS[INF_NUM_NPC_TYPES] = {
 
     /* HEALER_JAD (YtHurKot): melee, heals its Jad */
     [INF_NPC_HEALER_JAD] = { .hp = 90, .attack_speed = 4, .attack_range = 1, .size = 1,
-        .default_style = ATTACK_STYLE_MELEE, .can_melee = 0,
+        .default_style = ATTACK_STYLE_MELEE, .melee_style = MELEE_STYLE_CRUSH, .can_melee = 0,
         .att_level = 165, .str_level = 125, .def_level = 100, .range_level = 0, .magic_level = 150,
         .melee_att_bonus = 0, .range_att_bonus = 0, .magic_att_bonus = 0,
         .melee_str_bonus = 0, .ranged_str_bonus = 0, .magic_base_dmg = 0, .magic_dmg_pct = 0,
@@ -259,7 +260,7 @@ static const InfNPCStats INF_NPC_STATS[INF_NUM_NPC_TYPES] = {
 
     /* HEALER_ZUK (JalMejJak): AOE magic sparks, cannot move */
     [INF_NPC_HEALER_ZUK] = { .hp = 75, .attack_speed = 4, .attack_range = 99, .size = 1,
-        .default_style = ATTACK_STYLE_MAGIC, .can_melee = 0,
+        .default_style = ATTACK_STYLE_MAGIC, .melee_style = MELEE_STYLE_STAB, .can_melee = 0,
         .att_level = 0, .str_level = 0, .def_level = 100, .range_level = 0, .magic_level = 0,
         .melee_att_bonus = 0, .range_att_bonus = 0, .magic_att_bonus = 0,
         .melee_str_bonus = 0, .ranged_str_bonus = 0, .magic_base_dmg = 24, .magic_dmg_pct = 100,
@@ -268,7 +269,7 @@ static const InfNPCStats INF_NPC_STATS[INF_NUM_NPC_TYPES] = {
 
     /* ZUK_SHIELD: no attacks, oscillates left-right */
     [INF_NPC_ZUK_SHIELD] = { .hp = 600, .attack_speed = 0, .attack_range = 0, .size = 5,
-        .default_style = ATTACK_STYLE_NONE, .can_melee = 0,
+        .default_style = ATTACK_STYLE_NONE, .melee_style = MELEE_STYLE_STAB, .can_melee = 0,
         .att_level = 0, .str_level = 0, .def_level = 0, .range_level = 0, .magic_level = 0,
         .melee_att_bonus = 0, .range_att_bonus = 0, .magic_att_bonus = 0,
         .melee_str_bonus = 0, .ranged_str_bonus = 0, .magic_base_dmg = 0, .magic_dmg_pct = 0,
@@ -657,15 +658,6 @@ typedef struct {
     int start_wave;        /* for curriculum: start from a later wave */
     uint32_t rng_state;
 
-    /* reward shaping config (sweepable via env kwargs) */
-    float wave_reward_base;      /* base multiplier for exponential wave reward (default 0.001) */
-    float wave_reward_scale;     /* exponential base: reward = base * scale^wave (default 1.1) */
-    float brew_penalty;          /* penalty per brew dose in early waves (default 0.03) */
-    float brew_penalty_midpoint; /* sigmoid midpoint wave (default 35) */
-    float brew_penalty_width;    /* sigmoid transition width (default 5.0) */
-    float blood_heal_reward;     /* reward per 20 HP healed via blood barrage (default 0.01) */
-    float prayer_reward;         /* reward per NPC attack blocked by correct prayer (default 0.01) */
-
     Log log;
 } InfernoState;
 
@@ -756,14 +748,6 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
     const CollisionMap* saved_cmap = s->collision_map;
     int saved_wox = s->world_offset_x;
     int saved_woy = s->world_offset_y;
-    /* save reward shaping config across reset (set once via put_float) */
-    float saved_wrb = s->wave_reward_base;
-    float saved_wrs = s->wave_reward_scale;
-    float saved_bp = s->brew_penalty;
-    float saved_bpm = s->brew_penalty_midpoint;
-    float saved_bpw = s->brew_penalty_width;
-    float saved_bhr = s->blood_heal_reward;
-    float saved_pr = s->prayer_reward;
     memset(s, 0, sizeof(InfernoState));
     s->log = saved_log;
     s->start_wave = saved_start;
@@ -771,13 +755,6 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
     s->world_offset_x = saved_wox;
     s->world_offset_y = saved_woy;
     s->rng_state = encounter_resolve_seed(saved_rng, seed);
-    s->wave_reward_base = saved_wrb;
-    s->wave_reward_scale = saved_wrs;
-    s->brew_penalty = saved_bp;
-    s->brew_penalty_midpoint = saved_bpm;
-    s->brew_penalty_width = saved_bpw;
-    s->blood_heal_reward = saved_bhr;
-    s->prayer_reward = saved_pr;
 
     /* human click-to-move: no destination after reset */
     s->player_dest_x = -1;
@@ -1191,8 +1168,7 @@ static void inf_npc_attack(InfernoState* s, int idx) {
                         int pdx = s->player.x - s->pillars[p].x;
                         int pdy = s->player.y - s->pillars[p].y;
                         if (pdx >= -1 && pdx <= INF_PILLAR_SIZE && pdy >= -1 && pdy <= INF_PILLAR_SIZE) {
-                            /* TODO: find actual pillar collapse damage formula (server-side).
-                               49 observed in-game, likely scales with something. */
+                            /* pillar collapse: 49 damage (observed in-game, server-side formula unknown) */
                             encounter_damage_player(&s->player, 49, &s->damage_received_this_tick);
                         }
                     }
@@ -1368,10 +1344,9 @@ static void inf_npc_attack(InfernoState* s, int idx) {
         }
         int att_roll = osrs_npc_attack_roll(att_lvl, att_bonus);
         const EncounterLoadoutStats* ls = &s->loadout_stats[s->weapon_set];
-        int def_bonus;
-        if (actual_style == ATTACK_STYLE_RANGED) def_bonus = ls->def_ranged;
-        else if (actual_style == ATTACK_STYLE_MAGIC) def_bonus = ls->def_magic;
-        else def_bonus = ls->def_stab;  /* melee: stab as approximation */
+        int def_bonus = encounter_player_def_bonus(
+            ls->def_stab, ls->def_slash, ls->def_crush, ls->def_magic, ls->def_ranged,
+            actual_style, stats->melee_style);
         int def_roll = osrs_player_def_roll_vs_npc(s->player.current_defence, s->player.current_magic, def_bonus, actual_style);
         if (encounter_rand_float(&s->rng_state) >= osrs_hit_chance(att_roll, def_roll))
             dmg = 0;  /* missed */
@@ -2642,14 +2617,7 @@ static void inf_put_int(EncounterState* state, const char* key, int value) {
 }
 
 static void inf_put_float(EncounterState* state, const char* key, float value) {
-    InfernoState* s = (InfernoState*)state;
-    if (strcmp(key, "wave_reward_base") == 0) s->wave_reward_base = value;
-    else if (strcmp(key, "wave_reward_scale") == 0) s->wave_reward_scale = value;
-    else if (strcmp(key, "brew_penalty") == 0) s->brew_penalty = value;
-    else if (strcmp(key, "brew_penalty_midpoint") == 0) s->brew_penalty_midpoint = value;
-    else if (strcmp(key, "brew_penalty_width") == 0) s->brew_penalty_width = value;
-    else if (strcmp(key, "blood_heal_reward") == 0) s->blood_heal_reward = value;
-    else if (strcmp(key, "prayer_reward") == 0) s->prayer_reward = value;
+    (void)state; (void)key; (void)value;
 }
 
 static void inf_put_ptr(EncounterState* state, const char* key, void* value) {
