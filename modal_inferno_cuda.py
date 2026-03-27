@@ -1,10 +1,10 @@
-"""Modal script to test upstream CUDA backend with OSRS Inferno.
+"""Modal script for OSRS Inferno CUDA training and sweeps.
 
 Usage:
-    modal run modal_inferno_cuda.py                        # smoke test (1M steps)
-    modal run modal_inferno_cuda.py --steps 1000000000     # 1B run
-    modal run modal_inferno_cuda.py --sweep                # 4-GPU parallel Protein sweep
-    modal run modal_inferno_cuda.py --sweep --gpus 2       # 2-GPU sweep
+    modal run modal_inferno_cuda.py                        # smoke test (1M steps, single L4)
+    modal run modal_inferno_cuda.py --steps 1000000000     # 1B training run
+    modal run modal_inferno_cuda.py --sweep                # single-GPU Protein sweep
+    modal run modal_inferno_cuda.py --sweep --gpus 4       # 4-GPU parallel sweep
 """
 
 import modal
@@ -27,12 +27,6 @@ image = (
         "wandb",
         "setuptools>=77",
         "wheel",
-        "Cython",
-        "shimmy[gym-v21]",
-        "gymnasium>=0.29.1",
-        "pettingzoo>=1.24.1",
-        "gym==0.23",
-        "torch",
         "gpytorch",
         "scikit-learn",
         "psutil",
@@ -44,16 +38,16 @@ image = (
     .env({"PYTHONPATH": "/root/pufferlib"})
 )
 
-app = modal.App("inferno-cuda-test", image=image)
+app = modal.App("inferno-cuda", image=image)
 
 
 @app.function(
-    gpu="L4:4",
+    gpu="L4",
     timeout=21600,
     secrets=[modal.Secret.from_name("wandb-secret")],
 )
-def train_inferno(sweep: bool = False, steps: int = 1_000_000, gpus: int = 4):
-    """Run inferno training or sweep."""
+def train_inferno(sweep: bool = False, steps: int = 1_000_000, gpus: int = 1):
+    """Run inferno training or sweep on a single L4."""
     import os
     import subprocess
 
@@ -79,10 +73,10 @@ def train_inferno(sweep: bool = False, steps: int = 1_000_000, gpus: int = 4):
         cmd = [
             "python", "-m", "pufferlib.pufferl",
             "sweep", "puffer_osrs_inferno",
-            "--sweep.gpus", str(gpus),
+            "--sweep-gpus", str(gpus),
             "--wandb",
             "--wandb-project", "inferno-cuda-sweep",
-            "--wandb-group", "l4x4-sweep",
+            "--wandb-group", "l4-sweep",
         ]
     else:
         cmd = [
@@ -92,7 +86,7 @@ def train_inferno(sweep: bool = False, steps: int = 1_000_000, gpus: int = 4):
             "--wandb",
             "--wandb-project", "inferno-cuda-sweep",
             "--wandb-group", "l4-train",
-            "--tag", f"vanilla-cuda-{steps // 1_000_000}m",
+            "--tag", f"cuda-{steps // 1_000_000}m",
         ]
 
     print(f"=== {' '.join(cmd)} ===")
@@ -100,5 +94,5 @@ def train_inferno(sweep: bool = False, steps: int = 1_000_000, gpus: int = 4):
 
 
 @app.local_entrypoint()
-def main(sweep: bool = False, steps: int = 1_000_000, gpus: int = 4):
+def main(sweep: bool = False, steps: int = 1_000_000, gpus: int = 1):
     train_inferno.remote(sweep=sweep, steps=steps, gpus=gpus)
