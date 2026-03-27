@@ -63,33 +63,6 @@ static double compute_clipfrac(const float* data, int64_t count, double clip_coe
     return (double)clipped / (double)count;
 }
 
-static double compute_frac_gt(const float* data, int64_t count, double threshold) {
-    assert(data && count > 0);
-    int64_t matched = 0;
-    for (int64_t i = 0; i < count; i++) {
-        if ((double)data[i] > threshold) matched++;
-    }
-    return (double)matched / (double)count;
-}
-
-static double compute_frac_lt(const float* data, int64_t count, double threshold) {
-    assert(data && count > 0);
-    int64_t matched = 0;
-    for (int64_t i = 0; i < count; i++) {
-        if ((double)data[i] < threshold) matched++;
-    }
-    return (double)matched / (double)count;
-}
-
-static double compute_frac_abs_gt(const float* data, int64_t count, double threshold) {
-    assert(data && count > 0);
-    int64_t matched = 0;
-    for (int64_t i = 0; i < count; i++) {
-        if (std::fabs((double)data[i]) > threshold) matched++;
-    }
-    return (double)matched / (double)count;
-}
-
 struct DistributionStats {
     double sum = 0.0;
     double min = 0.0;

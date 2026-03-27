@@ -9,7 +9,7 @@
  * - Unified memory: memcpy/memset for host<->device (same physical memory)
  * - MetalStream passed as cudaStream_t (void*) through vtable function pointers
  * - Per-buffer Metal streams for rollout callback threads
- * - CPU timing via std::chrono instead of CUDA events
+ * - CPU timing via mach_absolute_time instead of CUDA events
  */
 
 #import "metal_platform.h"
@@ -18,7 +18,6 @@
 #include "vecenv.h"
 
 
-#include <chrono>
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -27,12 +26,11 @@
 static thread_local cudaStream_t tl_rollout_stream = 0;
 static std::mutex g_rollout_profile_mutex;
 
-// Mach-time to milliseconds for profiling
-static mach_timebase_info_data_t g_prof_tb = {0, 0};
 static inline float prof_ms(uint64_t t0, uint64_t t1) {
-    static std::once_flag g_prof_tb_once;
-    std::call_once(g_prof_tb_once, []() { mach_timebase_info(&g_prof_tb); });
-    return (float)((double)(t1 - t0) * g_prof_tb.numer / g_prof_tb.denom / 1e6);
+    static mach_timebase_info_data_t tb;
+    static std::once_flag tb_once;
+    std::call_once(tb_once, []() { mach_timebase_info(&tb); });
+    return (float)((double)(t1 - t0) * tb.numer / tb.denom / 1e6);
 }
 
 // ============================================================================
@@ -123,7 +121,7 @@ typedef struct {
 } HypersT;
 
 // ============================================================================
-// Profiling — CPU-based timing via std::chrono
+// Profiling — CPU-based timing via mach_absolute_time
 // ============================================================================
 
 enum ProfileIdx {
@@ -261,9 +259,7 @@ extern "C" void thread_init_metal(void* ctx, int buf) {
     assert(buf >= 0 && buf < (int)pufferl->rollout_streams.size());
     tl_rollout_stream = pufferl->rollout_streams[buf];
     assert(tl_rollout_stream && "thread_init_metal requires per-buffer stream");
-
 }
-
 
 // ============================================================================
 // Rollout callback — called per buffer per horizon step
@@ -586,76 +582,6 @@ void train_impl(PuffeRL& pufferl) {
             s);
         mtl_barrier((MetalStream*)s);
 
-        // per-minibatch NaN trap: detect NaN in loss accumulator immediately
-        {
-            static int mb_count = 0;
-            mb_count++;
-            mtl_ensure_stream_synced(s);
-            const float* loss_buf = (const float*)pufferl.losses_puf.bytes;
-            int n_losses = (int)pufferl.losses_puf.numel();
-            bool has_nan = false;
-            for (int li = 0; li < n_losses; li++) {
-                if (!std::isfinite(loss_buf[li])) { has_nan = true; break; }
-            }
-            if (has_nan) {
-                fprintf(stderr, "\n[NaN-TRAP] minibatch %d: NaN detected in loss accumulator!\n", mb_count);
-                fprintf(stderr, "  losses:");
-                for (int li = 0; li < n_losses; li++)
-                    fprintf(stderr, " [%d]=%.6g", li, loss_buf[li]);
-                fprintf(stderr, "\n");
-
-                // dump decoder output stats
-                const float* dec = (const float*)dec_puf_f32.bytes;
-                int64_t dec_n = dec_puf_f32.numel();
-                float dec_max = -1e30f, dec_min = 1e30f;
-                int nan_count = 0, inf_count = 0;
-                for (int64_t i = 0; i < dec_n; i++) {
-                    if (std::isnan(dec[i])) nan_count++;
-                    else if (std::isinf(dec[i])) inf_count++;
-                    else { dec_max = std::max(dec_max, dec[i]); dec_min = std::min(dec_min, dec[i]); }
-                }
-                fprintf(stderr, "  decoder output: n=%lld min=%.4f max=%.4f nan=%d inf=%d\n",
-                        dec_n, dec_min, dec_max, nan_count, inf_count);
-
-                // dump advantage stats
-                const float* adv = (const float*)pufferl.train_buf.mb_advantages.bytes;
-                int64_t adv_n = pufferl.train_buf.mb_advantages.numel();
-                float adv_max = -1e30f, adv_min = 1e30f;
-                int adv_nan = 0, adv_inf = 0;
-                for (int64_t i = 0; i < adv_n; i++) {
-                    if (std::isnan(adv[i])) adv_nan++;
-                    else if (std::isinf(adv[i])) adv_inf++;
-                    else { adv_max = std::max(adv_max, adv[i]); adv_min = std::min(adv_min, adv[i]); }
-                }
-                fprintf(stderr, "  advantages: n=%lld min=%.4f max=%.4f nan=%d inf=%d\n",
-                        adv_n, adv_min, adv_max, adv_nan, adv_inf);
-
-                // dump ratio stats
-                const float* rat = (const float*)pufferl.train_buf.mb_ratio.bytes;
-                int64_t rat_n = pufferl.train_buf.mb_ratio.numel();
-                float rat_max = -1e30f, rat_min = 1e30f;
-                int rat_nan = 0, rat_inf = 0;
-                for (int64_t i = 0; i < rat_n; i++) {
-                    if (std::isnan(rat[i])) rat_nan++;
-                    else if (std::isinf(rat[i])) rat_inf++;
-                    else { rat_max = std::max(rat_max, rat[i]); rat_min = std::min(rat_min, rat[i]); }
-                }
-                fprintf(stderr, "  ratios: n=%lld min=%.4f max=%.4f nan=%d inf=%d\n",
-                        rat_n, rat_min, rat_max, rat_nan, rat_inf);
-
-                // dump weight stats at NaN time
-                DecoderWeights* dw = (DecoderWeights*)pufferl.weights_fp32.decoder;
-                if (dw && dw->policy_weight.bytes) {
-                    const float* pw = (const float*)dw->policy_weight.bytes;
-                    int pn = dw->output_dim * dw->hidden_dim;
-                    float pw_max = 0;
-                    for (int i = 0; i < pn; i++) pw_max = std::max(pw_max, std::fabs(pw[i]));
-                    fprintf(stderr, "  dec_policy_abs_max: %.4f\n", pw_max);
-                }
-                fprintf(stderr, "[NaN-TRAP] end dump\n\n");
-            }
-        }
-
         if (gpu_profile) mtl_ensure_stream_synced(s);
         uint64_t tp5 = mach_absolute_time();
 
@@ -779,6 +705,18 @@ static void sync_pending_train(PuffeRL& pufferl) {
     pufferl.train_pending = false;
 }
 
+// Fused decoder weight: policy_weight and value_weight are contiguous in memory,
+// so we create a single (output_dim+1, hidden_dim) view spanning both.
+// Must be called after allocator.create() places the underlying memory.
+static void setup_fused_decoder_weight(PolicyWeights& w) {
+    DecoderWeights *dw = (DecoderWeights *)w.decoder;
+    assert(dw->policy_weight.bytes && "setup_fused_decoder_weight: allocator not yet created");
+    int od1 = dw->output_dim + 1;
+    dw->weight = {.bytes = dw->policy_weight.bytes,
+                  .shape = {od1, dw->hidden_dim},
+                  .dtype_size = dw->policy_weight.dtype_size};
+}
+
 // ============================================================================
 // Initialization
 // ============================================================================
@@ -816,11 +754,10 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     memset(pufferl->profile.accum, 0, sizeof(pufferl->profile.accum));
 
     // Determine action space type
-    int* act_sizes_ptr = get_act_sizes();
     int num_continuous = 0;
     int num_discrete = 0;
     for (int i = 0; i < num_action_heads; i++) {
-        if (act_sizes_ptr[i] == 1) {
+        if (raw_act_sizes[i] == 1) {
             num_continuous++;
         } else {
             num_discrete++;
@@ -839,11 +776,7 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     int hidden_size = hypers.hidden_size;
     int num_layers = hypers.num_layers;
 
-    // Auto-detect action masks: if obs_size > act_n, the env likely embeds
-    // a mask in the last act_n columns (e.g. PVP: 373 = 334 features + 39 mask).
-    // When obs_size <= act_n or there's no room, use an all-ones fallback mask.
-    // Action mask: if env_config contains "mask_in_obs" > 0, the env embeds a mask
-    // in the last act_n columns of observations. Otherwise use all-ones (no masking).
+    // Action mask: env_config "mask_in_obs" > 0 means mask is embedded in obs.
     {
         DictItem* mask_entry = dict_get_unsafe(env_kwargs, "mask_in_obs");
         pufferl->has_mask = (mask_entry && mask_entry->value > 0.0f);
@@ -904,7 +837,7 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     pufferl->policy = policy;
 
     // fp32 master weights
-    auto new_weights = [&](int esz) -> PolicyWeights {
+    auto new_weights = [&]() -> PolicyWeights {
         PolicyWeights w;
         w.encoder = new EncoderWeights{.in_dim = input_size, .out_dim = hidden_size};
         w.decoder = new DecoderWeights{.hidden_dim = hidden_size, .output_dim = decoder_output_size, .continuous = is_continuous};
@@ -913,7 +846,7 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
         return w;
     };
 
-    pufferl->weights_fp32 = new_weights(esz_fp32);
+    pufferl->weights_fp32 = new_weights();
     PolicyWeights& wfp32 = pufferl->weights_fp32;
     encoder.reg_params(wfp32.encoder, &fp32_params, esz_fp32);
     decoder.reg_params(wfp32.decoder, &fp32_params, esz_fp32);
@@ -921,14 +854,7 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
 
     pufferl->alloc_fp32.create();
 
-    // Set up fused decoder weight view after allocator places policy_weight + value_weight
-    {
-        DecoderWeights *dw = (DecoderWeights *)wfp32.decoder;
-        int od1 = dw->output_dim + 1;
-        dw->weight = {.bytes = dw->policy_weight.bytes,
-                      .shape = {od1, dw->hidden_dim},
-                      .dtype_size = dw->policy_weight.dtype_size};
-    }
+    setup_fused_decoder_weight(wfp32);
 
     // Wrap fp32 params allocator for Metal GPU access
     mtl_wrap_allocator(&fp32_params);
@@ -955,19 +881,13 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
 
     {
         Allocator& infer_alloc = pufferl->infer_params_alloc;
-        pufferl->weights_infer = new_weights(esz_fp32);
+        pufferl->weights_infer = new_weights();
         PolicyWeights& wi = pufferl->weights_infer;
         encoder.reg_params(wi.encoder, &infer_alloc, esz_fp32);
         decoder.reg_params(wi.decoder, &infer_alloc, esz_fp32);
         network.reg_params(wi.network, &infer_alloc, esz_fp32);
         infer_alloc.create();
-        {
-            DecoderWeights *dw = (DecoderWeights *)wi.decoder;
-            int od1 = dw->output_dim + 1;
-            dw->weight = {.bytes = dw->policy_weight.bytes,
-                          .shape = {od1, dw->hidden_dim},
-                          .dtype_size = dw->policy_weight.dtype_size};
-        }
+        setup_fused_decoder_weight(wi);
         mtl_wrap_allocator(&infer_alloc);
         // Initial copy: weights_fp32 → weights_infer
         copy_weights_to_infer(*pufferl);
@@ -994,7 +914,7 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     Allocator& acts = pufferl->alloc_fp16.acts;
     Allocator& grads = pufferl->alloc_fp16.grads;
 
-    pufferl->weights_fp16 = new_weights(esz_fp16);
+    pufferl->weights_fp16 = new_weights();
     PolicyWeights& wfp16 = pufferl->weights_fp16;
 
     encoder.reg_params(wfp16.encoder, &fp16_params, esz_fp16);
@@ -1014,13 +934,7 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     network.reg_train(wfp16.network, tb.network, &acts, &grads, B_TT, train_precision);
 
     pufferl->alloc_fp16.create();
-    {
-        DecoderWeights *dw = (DecoderWeights *)wfp16.decoder;
-        int od1 = dw->output_dim + 1;
-        dw->weight = {.bytes = dw->policy_weight.bytes,
-                      .shape = {od1, dw->hidden_dim},
-                      .dtype_size = dw->policy_weight.dtype_size};
-    }
+    setup_fused_decoder_weight(wfp16);
 
     // Wrap fp16 allocators for Metal GPU access
     mtl_wrap_allocator(&fp16_params);

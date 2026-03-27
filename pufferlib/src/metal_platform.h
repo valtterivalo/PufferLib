@@ -260,22 +260,13 @@ inline void mtl_set_threadgroup_memory(MetalStream *ms, NSUInteger length,
   [ms->enc setThreadgroupMemoryLength:length atIndex:index];
 }
 
-// Memory barrier between dependent compute dispatches.
-// On Metal 4, use explicit intrapass barrier for dispatch->dispatch visibility.
-// Fallback to encoder boundary when the API isn't available.
+// Memory barrier between dependent compute dispatches (Metal 4 intrapass barrier).
 inline void mtl_barrier(MetalStream *ms) {
   if (ms->enc_active) {
-#if __OBJC__
-    if (__builtin_available(macOS 15.0, *)) {
-      [ms->enc barrierAfterEncoderStages:MTLStageDispatch
-                      beforeEncoderStages:MTLStageDispatch
-                        visibilityOptions:MTL4VisibilityOptionDevice];
-      ms->pending_work = true;
-      return;
-    }
-#endif
-    ms->end_compute();
-    ms->compute_encoder();
+    [ms->enc barrierAfterEncoderStages:MTLStageDispatch
+                    beforeEncoderStages:MTLStageDispatch
+                      visibilityOptions:MTL4VisibilityOptionDevice];
+    ms->pending_work = true;
   }
 }
 

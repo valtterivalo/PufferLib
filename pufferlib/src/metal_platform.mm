@@ -551,7 +551,7 @@ void mtl_init() {
 
 MetalContext *mtl_ctx() { return &g_ctx; }
 
-// Forward declarations for lazily-allocated temp buffers (defined below)
+// Lazy-init scratch buffer for addmm temp workspace
 static char *g_addmm_temp_base;
 static int64_t g_addmm_temp_size;
 

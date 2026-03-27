@@ -356,22 +356,6 @@ void mtl_nesterov_f32(float *momentum, const float *grad, float mu, int count,
   mtl_dispatch_1d(ms, pso, count);
 }
 
-// sum_rows: dst[c] = sum over rows of src[:, c] (dtype-aware)
-void mtl_sum_rows(void *dst, const void *src, int rows, int cols,
-                   int dtype_size, cudaStream_t stream) {
-  MetalStream *ms = mtl_resolve_stream(stream);
-  ms->compute_encoder();
-  const char *name = (dtype_size == 2) ? "sum_rows_f16_kernel"
-                                       : "sum_rows_to_f32_kernel";
-  auto pso = mtl_pipeline(name);
-  mtl_set_pso(ms, pso);
-  mtl_set_ptr(ms, dst, 0);
-  mtl_set_ptr(ms, src, 1);
-  struct { int R; int C; } params = {rows, cols};
-  mtl_set_params(ms, params, 2);
-  mtl_dispatch_1d(ms, pso, cols);
-}
-
 // ============================================================================
 // Norm and clip kernels
 // ============================================================================
@@ -533,11 +517,6 @@ void mtl_sum_rows_to_f32(float *dst, const float *src, int rows, int cols,
   mtl_set_params(ms, params, 2);
   mtl_dispatch_1d(ms, pso, cols);
 }
-
-// ============================================================================
-// CPU inference mode flag — when true, mingru_forward uses CPU gate + memcpy
-// instead of Metal dispatch + puf_copy, eliminating all rollout syncs.
-// ============================================================================
 
 // ============================================================================
 // MinGRU inference kernel
@@ -1102,11 +1081,6 @@ void mtl_muon_weight_update(float *weights, const float *updates,
   mtl_set_params(ms, params, 3);
   mtl_dispatch_1d(ms, pso, count);
 }
-
-// ============================================================================
-// Post-create for PPO buffers (unified memory — direct write)
-// ============================================================================
-
 
 // ============================================================================
 // Orthogonal init via Accelerate LAPACK (CPU-side)
