@@ -781,6 +781,29 @@ def paretosweep(args=None, env_name=None):
 
     print('Done')
 
+def _save_observation(obs_path, trial_idx, params, score, cost, is_failure=False):
+    """Append one observation to the sweep persistence file."""
+    import json as _json
+    with open(obs_path, 'a') as f:
+        f.write(_json.dumps({
+            "trial": trial_idx, "params": params,
+            "score": float(score), "cost": float(cost),
+            "is_failure": is_failure,
+        }) + "\n")
+
+def _load_observations(obs_path):
+    """Load all observations from the sweep persistence file."""
+    import json as _json
+    if not os.path.exists(obs_path):
+        return []
+    records = []
+    with open(obs_path) as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                records.append(_json.loads(line))
+    return records
+
 def sweep(args=None, env_name=None):
     args = args or load_config(env_name)
     args['no_model_upload'] = True  # Uploading trained model during sweep crashed wandb
@@ -795,6 +818,16 @@ def sweep(args=None, env_name=None):
     points_per_run = args['sweep']['downsample']
     target_key = f'environment/{args["sweep"]["metric"]}'
     running_target_buffer = deque(maxlen=30)
+
+    # replay previous observations for sweep continuation
+    obs_path = f'sweep_observations_{env_name}.jsonl'
+    existing = _load_observations(obs_path)
+    existing_trials = set()
+    if existing:
+        for r in existing:
+            existing_trials.add(r["trial"])
+            sweep_obj.observe(r["params"], r["score"], r["cost"], r.get("is_failure", False))
+        print(f"replayed {len(existing)} observations from {len(existing_trials)} previous trials")
 
     def stop_if_perf_below(logs):
         if any("losses/" in k and np.isnan(v) for k, v in logs.items()):
@@ -819,6 +852,8 @@ def sweep(args=None, env_name=None):
                 return True
         return False
 
+    trial_idx = max(existing_trials) + 1 if existing_trials else 0
+
     for i in range(args['max_runs']):
         seed = time.time_ns() & 0xFFFFFFFF
         random.seed(seed)
@@ -829,8 +864,8 @@ def sweep(args=None, env_name=None):
         except ImportError:
             pass
 
-        # In the first run, skip sweep and use the train args specified in the config
-        if i > 0:
+        # In the first run (and no replayed data), use the train args as anchor
+        if i > 0 or existing:
             sweep_obj.suggest(args)
 
         all_logs = train(env_name, args=args, early_stop_fn=stop_if_perf_below)
@@ -838,6 +873,8 @@ def sweep(args=None, env_name=None):
 
         if not all_logs:
             sweep_obj.observe(args, 0, 0, is_failure=True)
+            _save_observation(obs_path, trial_idx, args, 0, 0, is_failure=True)
+            trial_idx += 1
             continue
 
         total_timesteps = args['train']['total_timesteps']
@@ -852,10 +889,14 @@ def sweep(args=None, env_name=None):
             c = costs.pop()
             args['train']['total_timesteps'] = timesteps.pop()
             sweep_obj.observe(args, s, c, is_failure=True)
+            _save_observation(obs_path, trial_idx, args, s, c, is_failure=True)
 
         for score, cost, timestep in zip(scores, costs, timesteps):
             args['train']['total_timesteps'] = timestep
             sweep_obj.observe(args, score, cost)
+            _save_observation(obs_path, trial_idx, args, score, cost)
+
+        trial_idx += 1
 
         # Prevent logging final eval steps as training steps
         args['train']['total_timesteps'] = total_timesteps
