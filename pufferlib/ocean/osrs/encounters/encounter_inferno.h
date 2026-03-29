@@ -654,10 +654,10 @@ typedef struct {
     /* human click-to-move destination (-1 = no dest) */
     int player_dest_x, player_dest_y;
 
-    /* per-tick LOS cache: computed once after NPC movement, reused by attack/obs.
-       -1 = not yet computed this tick, 0 = no LOS, 1 = has LOS. */
+    /* per-tick LOS cache: lazy — computed on first access, reused for rest of tick.
+       -1 = not yet computed, 0 = no LOS, 1 = has LOS. invalidated at tick start
+       and on pillar collapse. */
     int8_t npc_los_cache[INF_MAX_NPCS];
-    int npc_los_cache_valid;  /* 0 = needs recompute, 1 = valid */
 
     /* NPC occupancy grid: tile -> NPC index+1 (0 = empty).
        covers the 29x30 arena. nibblers excluded (transparent to movement). */
@@ -706,29 +706,19 @@ static int inf_npc_has_los_direct(InfernoState* s, int i) {
                                  stats->attack_range);
 }
 
-/* cached LOS check — returns cached result if valid, otherwise computes and caches */
+/* cached LOS check — lazy: computes on first access per tick, caches for reuse.
+   cache entries: -1 = not yet computed, 0 = no LOS, 1 = has LOS. */
 static int inf_npc_has_los(InfernoState* s, int i) {
-    if (s->npc_los_cache_valid && s->npc_los_cache[i] >= 0)
+    if (s->npc_los_cache[i] >= 0)
         return s->npc_los_cache[i];
     int result = inf_npc_has_los_direct(s, i);
     s->npc_los_cache[i] = (int8_t)result;
     return result;
 }
 
-/* invalidate LOS cache (call when pillars change or player moves significantly) */
+/* invalidate entire LOS cache (call at start of tick and on pillar collapse) */
 static inline void inf_invalidate_los_cache(InfernoState* s) {
-    s->npc_los_cache_valid = 0;
-}
-
-/* rebuild LOS cache for all active NPCs */
-static void inf_rebuild_los_cache(InfernoState* s) {
-    for (int i = 0; i < INF_MAX_NPCS; i++) {
-        if (s->npcs[i].active && s->npcs[i].death_ticks == 0)
-            s->npc_los_cache[i] = (int8_t)inf_npc_has_los_direct(s, i);
-        else
-            s->npc_los_cache[i] = 0;
-    }
-    s->npc_los_cache_valid = 1;
+    memset(s->npc_los_cache, -1, sizeof(s->npc_los_cache));
 }
 
 /* ======================================================================== */
@@ -899,6 +889,18 @@ static void inf_init_npc(InfernoState* s, int idx, InfNPCType type, int x, int y
     npc->jad_owner_idx = -1;
     npc->blob_scanned_prayer = -1;
     npc->stun_timer = stats->stun_on_spawn;
+
+    /* stamp occupancy grid (nibblers excluded — transparent to movement) */
+    if (type != INF_NPC_NIBBLER) {
+        for (int dx = 0; dx < stats->size; dx++) {
+            for (int dy = 0; dy < stats->size; dy++) {
+                int gx = x + dx - INF_ARENA_MIN_X;
+                int gy = y + dy - INF_ARENA_MIN_Y;
+                if (gx >= 0 && gx < INF_ARENA_WIDTH && gy >= 0 && gy < INF_ARENA_HEIGHT)
+                    s->npc_occupancy[gx][gy] = (uint8_t)(idx + 1);
+            }
+        }
+    }
 }
 
 static void inf_spawn_wave(InfernoState* s) {
@@ -1101,12 +1103,14 @@ static void inf_npc_move(InfernoState* s, int idx) {
     /* OSRS: NPC shuffles off player tile when overlapping (Mob.ts:109-153).
        if the NPC steps out, skip further movement this tick. */
     if (npc->type != INF_NPC_NIBBLER) {
+        int ox = npc->x, oy = npc->y;
         int stepped = encounter_npc_step_out_from_under(
             &npc->x, &npc->y, npc->size,
             s->player.x, s->player.y,
             inf_tile_walkable, s, &s->rng_state);
         if (stepped) {
             npc->moved_this_tick = 1;
+            inf_update_occupancy(s, idx, ox, oy, npc->x, npc->y, npc->size);
             return;
         }
     }
@@ -1240,6 +1244,7 @@ static void inf_npc_attack(InfernoState* s, int idx) {
                     s->pillars[p].active = 0;
                     s->pillar_lost_this_tick = p;
                     inf_rebuild_los(s);
+                    inf_invalidate_los_cache(s);
                     /* pillar death AOE: deals damage to all mobs + player within 1 tile */
                     for (int n = 0; n < INF_MAX_NPCS; n++) {
                         if (!s->npcs[n].active) continue;
@@ -2213,8 +2218,6 @@ static void inf_step(EncounterState* state, const int* actions) {
     /* NPC AI: runs after pending hits so ice barrage freeze is already active */
     inf_tick_npcs(s);
 
-    /* rebuild LOS cache after NPC movement for obs/mask phases */
-    inf_rebuild_los_cache(s);
 
     /* ------------------------------------------------------------------ */
     /* process pending hits: player pending hits (NPC attacks landing)     */
@@ -2457,9 +2460,10 @@ static void inf_write_obs(EncounterState* state, float* obs) {
             }
             obs[i++] = (float)INF_NPC_STATS[npc->type].attack_range / 100.0f;
             obs[i++] = (float)INF_NPC_STATS[npc->type].magic_def_bonus / 350.0f;
-            /* barrage AoE count: how many other NPCs in 3x3 area via occupancy grid */
+            /* barrage AoE count: unique NPCs in 3x3 area via occupancy grid */
             {
                 int aoe_count = 0;
+                uint32_t seen = 0;  /* bitmask of NPC indices already counted */
                 int cx = npc->x - INF_ARENA_MIN_X;
                 int cy = npc->y - INF_ARENA_MIN_Y;
                 for (int dx = -1; dx <= 1; dx++) {
@@ -2467,7 +2471,13 @@ static void inf_write_obs(EncounterState* state, float* obs) {
                         int gx = cx + dx, gy = cy + dy;
                         if (gx >= 0 && gx < INF_ARENA_WIDTH && gy >= 0 && gy < INF_ARENA_HEIGHT) {
                             uint8_t occ = s->npc_occupancy[gx][gy];
-                            if (occ != 0 && (int)(occ - 1) != n) aoe_count++;
+                            if (occ != 0) {
+                                int oidx = (int)(occ - 1);
+                                if (oidx != n && !(seen & (1u << oidx))) {
+                                    seen |= (1u << oidx);
+                                    aoe_count++;
+                                }
+                            }
                         }
                     }
                 }
