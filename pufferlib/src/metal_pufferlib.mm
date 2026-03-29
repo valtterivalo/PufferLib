@@ -228,7 +228,14 @@ typedef struct {
     // Action mask: true if obs embeds a mask in the last act_n columns.
     // When false, a static all-ones buffer is used instead.
     bool has_mask = false;
-    PufTensor ones_mask;  // (total_agents * obs_cols) all 1.0f, fallback mask
+    int env_obs_width = 0;  // raw obs width from env (e.g. 1096 = features + mask)
+    PufTensor ones_mask;  // (act_n) all 1.0f, fallback mask when !has_mask
+    // External mask path: when has_mask, masks are split from obs at rollout time.
+    // rollout_masks: (horizon, total_agents, act_n), train_masks: (total_agents, horizon, act_n)
+    // mb_masks: (minibatch_segments, horizon, act_n)
+    PufTensor rollout_masks;
+    PufTensor train_masks;
+    PufTensor mb_masks;
     bool cpu_inference = false;  // CPU forward pass for rollout (no GPU sync)
     bool train_fp16 = false;     // fp16 training activations/grads
     // Decoder logits + f32 actions for GPU logprob recompute (cpu_inference only).
@@ -279,23 +286,45 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
 
     uint64_t tp0 = mach_absolute_time();
 
-    // Copy env obs to rollout buffer — CPU only, no GPU dispatch
+    // Copy env obs to rollout buffer, splitting features and mask.
+    // env writes [features | mask] at env_obs_width stride.
+    // rollout obs stores only features at input_size stride.
+    // rollout masks stores only mask at act_n stride.
     PufTensor& obs_env = env.obs;
-    PufTensor obs_src = {
-        .bytes = obs_env.bytes + (int64_t)start * obs_env.shape[1] * obs_env.dtype_size,
-        .shape = {block_size, obs_env.shape[1]},
-        .dtype_size = obs_env.dtype_size
-    };
+    int env_obs_width = pufferl->env_obs_width;
+    int input_size = (int)rollouts.observations.shape[2];
+    int act_n = (int)pufferl->act_sizes_puf.numel();
 
     PufTensor obs_dst = puf_slice(rollouts.observations, t, start, block_size);
 
-    if (obs_env.dtype_size == sizeof(char)) {
-        cpu_cast_u8_to_f32((float*)obs_dst.bytes, (const uint8_t*)obs_src.bytes,
-                           (int)obs_src.numel());
-    } else if (obs_env.dtype_size == sizeof(float)) {
-        memcpy(obs_dst.bytes, obs_src.bytes, obs_src.numel() * obs_src.dtype_size);
+    if (pufferl->has_mask) {
+        // split copy: features prefix + mask suffix, row by row
+        PufTensor mask_dst = puf_slice(pufferl->rollout_masks, t, start, block_size);
+        assert(obs_env.dtype_size == sizeof(float) && "mask split only supports float32 obs");
+        const float* src_base = (const float*)(obs_env.bytes + (int64_t)start * env_obs_width * sizeof(float));
+        float* feat_base = (float*)obs_dst.bytes;
+        float* mask_base = (float*)mask_dst.bytes;
+        for (int b = 0; b < block_size; b++) {
+            memcpy(feat_base + b * input_size, src_base + b * env_obs_width,
+                   input_size * sizeof(float));
+            memcpy(mask_base + b * act_n, src_base + b * env_obs_width + input_size,
+                   act_n * sizeof(float));
+        }
     } else {
-        assert(false && "Unsupported obs dtype: only uint8 and float32 are supported");
+        // no mask: copy full obs (env_obs_width == input_size)
+        PufTensor obs_src = {
+            .bytes = obs_env.bytes + (int64_t)start * env_obs_width * obs_env.dtype_size,
+            .shape = {block_size, env_obs_width},
+            .dtype_size = obs_env.dtype_size
+        };
+        if (obs_env.dtype_size == sizeof(char)) {
+            cpu_cast_u8_to_f32((float*)obs_dst.bytes, (const uint8_t*)obs_src.bytes,
+                               (int)obs_src.numel());
+        } else if (obs_env.dtype_size == sizeof(float)) {
+            memcpy(obs_dst.bytes, obs_src.bytes, obs_src.numel() * obs_src.dtype_size);
+        } else {
+            assert(false && "Unsupported obs dtype: only uint8 and float32 are supported");
+        }
     }
 
     // Rewards + terminals — direct memcpy, no sync check needed
@@ -325,15 +354,14 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
     PufTensor& act_f32_buf = pufferl->sample_act_f32_buffers[buf];
     MinGRUWeights *mw = (MinGRUWeights *)infer_weights.network;
 
-    // Decoder output width needed for mask setup (derived from weights, not GPU output)
+    // Mask pointer setup for sampling
     int fused_cols = ((DecoderWeights *)infer_weights.decoder)->output_dim + 1;
-    int obs_cols = (int)obs_dst.shape[1];
     const float* mask_ptr;
     int mask_stride;
     if (pufferl->has_mask) {
-        int mask_offset = obs_cols - (fused_cols - 1);
-        mask_ptr = (const float*)obs_dst.bytes + mask_offset;
-        mask_stride = obs_cols;
+        PufTensor mask_slice = puf_slice(pufferl->rollout_masks, t, start, block_size);
+        mask_ptr = (const float*)mask_slice.bytes;
+        mask_stride = act_n;
     } else {
         mask_ptr = (const float*)pufferl->ones_mask.bytes;
         mask_stride = 0;
@@ -438,9 +466,10 @@ void train_impl(PuffeRL& pufferl) {
     puf_transpose_01(rollouts.terminals, src.terminals, train_stream);
     puf_transpose_01(rollouts.ratio, src.ratio, train_stream);
     puf_transpose_01(rollouts.values, src.values, train_stream);
+    if (pufferl.has_mask)
+        puf_transpose_01(pufferl.train_masks, pufferl.rollout_masks, train_stream);
 
     // Metal 4: ensure all rollout transposes are visible before consumers read them.
-    // recompute_logprobs reads mask from transposed obs, clamp reads transposed rewards.
     mtl_barrier((MetalStream*)train_stream);
 
     // CPU inference: recompute logprobs on GPU using fast::exp to match PPO.
@@ -459,10 +488,8 @@ void train_impl(PuffeRL& pufferl) {
         const float *mask_ptr;
         int mask_stride;
         if (pufferl.has_mask) {
-            int obs_cols = (int)rollouts.observations.shape[2];
-            int mask_offset = obs_cols - (fused_cols - 1);
-            mask_ptr = (const float *)rollouts.observations.bytes + mask_offset;
-            mask_stride = obs_cols;
+            mask_ptr = (const float *)pufferl.train_masks.bytes;
+            mask_stride = num_atns;
         } else {
             mask_ptr = (const float *)pufferl.ones_mask.bytes;
             mask_stride = 0;
@@ -537,6 +564,22 @@ void train_impl(PuffeRL& pufferl) {
                 (const float*)pufferl.prio_bufs.mb_prio.bytes,
                 minibatch_segments,
                 pufferl.fp16_obs_buf.bytes, s);
+            // gather masks from train_masks into mb_masks using same priority indices.
+            // reuses index_copy_kernel as a gather: dst[i] = src[idx[i]].
+            if (pufferl.has_mask) {
+                MetalStream *ms2 = mtl_resolve_stream(s);
+                ms2->compute_encoder();
+                auto pso = mtl_pipeline("index_gather_kernel");
+                mtl_set_pso(ms2, pso);
+                int act_n = (int)pufferl.act_sizes_puf.numel();
+                int mask_seg_bytes = hypers.horizon * act_n * (int)sizeof(float);
+                mtl_set_ptr(ms2, pufferl.mb_masks.bytes, 0);
+                mtl_set_ptr(ms2, (void*)pufferl.prio_bufs.idx.bytes, 1);
+                mtl_set_ptr(ms2, pufferl.train_masks.bytes, 2);
+                struct { int num_idx; int row_bytes; } mp = {minibatch_segments, mask_seg_bytes};
+                mtl_set_params(ms2, mp, 3);
+                mtl_dispatch_groups(ms2, pso, (minibatch_segments + 255) / 256, 256);
+            }
         }
         mtl_barrier((MetalStream*)s);
 
@@ -573,13 +616,22 @@ void train_impl(PuffeRL& pufferl) {
             p_logstd = ((DecoderWeights*)pufferl.weights_fp32.decoder)->logstd;
         }
 
-        ppo_loss_fwd_bwd(dec_puf_f32, p_logstd, pufferl.train_buf,
-            pufferl.act_sizes_puf, pufferl.losses_puf,
-            hypers.clip_coef, hypers.vf_clip_coef, hypers.vf_coef, hypers.ent_coef,
-            pufferl.ppo_bufs_puf, pufferl.is_continuous,
-            pufferl.has_mask ? nullptr : (const float*)pufferl.ones_mask.bytes,  // nullptr = mask embedded in obs
-            0,  // ext_mask_stride: 0 = broadcast single row (only used when ext_mask_ptr != nullptr)
-            s);
+        {
+            const float* ppo_mask_ptr;
+            int ppo_mask_stride;
+            if (pufferl.has_mask) {
+                ppo_mask_ptr = (const float*)pufferl.mb_masks.bytes;
+                ppo_mask_stride = (int)pufferl.act_sizes_puf.numel();
+            } else {
+                ppo_mask_ptr = (const float*)pufferl.ones_mask.bytes;
+                ppo_mask_stride = 0;
+            }
+            ppo_loss_fwd_bwd(dec_puf_f32, p_logstd, pufferl.train_buf,
+                pufferl.act_sizes_puf, pufferl.losses_puf,
+                hypers.clip_coef, hypers.vf_clip_coef, hypers.vf_coef, hypers.ent_coef,
+                pufferl.ppo_bufs_puf, pufferl.is_continuous,
+                ppo_mask_ptr, ppo_mask_stride, s);
+        }
         mtl_barrier((MetalStream*)s);
 
         if (gpu_profile) mtl_ensure_stream_synced(s);
@@ -772,7 +824,7 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
         printf("Detected discrete action space with %d heads\n", num_action_heads);
     }
 
-    int input_size = pufferl->env.obs.shape[1];
+    int env_obs_width = pufferl->env.obs.shape[1];
     int hidden_size = hypers.hidden_size;
     int num_layers = hypers.num_layers;
 
@@ -781,12 +833,14 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
         DictItem* mask_entry = dict_get_unsafe(env_kwargs, "mask_in_obs");
         pufferl->has_mask = (mask_entry && mask_entry->value > 0.0f);
     }
+    pufferl->env_obs_width = env_obs_width;
+    // when mask is embedded, split it: encoder sees only the feature prefix
+    int input_size = pufferl->has_mask ? (env_obs_width - act_n) : env_obs_width;
     if (!pufferl->has_mask) {
-        fprintf(stderr, "[metal] init: no action mask in obs (obs=%d, act_n=%d), using all-ones\n",
-            input_size, act_n);
+        fprintf(stderr, "[metal] init: no action mask (obs=%d), using all-ones\n", input_size);
     } else {
-        fprintf(stderr, "[metal] init: action mask in obs (obs=%d, act_n=%d)\n",
-            input_size, act_n);
+        fprintf(stderr, "[metal] init: external mask path (env_obs=%d, features=%d, mask=%d)\n",
+            env_obs_width, input_size, act_n);
     }
 
     bool is_continuous = pufferl->is_continuous;
@@ -1029,9 +1083,15 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     // Priority replay buffers
     register_prio_buffers(pufferl->prio_bufs, alloc, hypers.total_agents, minibatch_segments);
 
-    // All-ones mask fallback for envs without embedded action masks.
-    // With mask_stride=0, all rows read the same act_n floats, so we only need act_n elements.
-    if (!pufferl->has_mask) {
+    // Mask buffers: when has_mask, masks are split from obs at rollout time.
+    if (pufferl->has_mask) {
+        pufferl->rollout_masks = {.shape = {horizon, total_agents, act_n}, .dtype_size = (int)sizeof(float)};
+        pufferl->train_masks = {.shape = {total_agents, horizon, act_n}, .dtype_size = (int)sizeof(float)};
+        pufferl->mb_masks = {.shape = {minibatch_segments, hypers.horizon, act_n}, .dtype_size = (int)sizeof(float)};
+        alloc.reg(&pufferl->rollout_masks);
+        alloc.reg(&pufferl->train_masks);
+        alloc.reg(&pufferl->mb_masks);
+    } else {
         pufferl->ones_mask = {.shape = {act_n}, .dtype_size = (int)sizeof(float)};
         alloc.reg(&pufferl->ones_mask);
     }

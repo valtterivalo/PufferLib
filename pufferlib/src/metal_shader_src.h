@@ -1753,6 +1753,25 @@ kernel void index_copy_kernel(
     for (int b = words * 4; b < p.row_bytes; b++) d[b] = s[b];
 }
 
+// index_gather_kernel: dst[i] = src[idx[i]] (gather, inverse of index_copy)
+kernel void index_gather_kernel(
+    device char* dst                    [[buffer(0)]],
+    const device int64_t* idx           [[buffer(1)]],
+    const device char* src              [[buffer(2)]],
+    constant IndexCopyParams& p         [[buffer(3)]],
+    uint i [[thread_position_in_grid]]
+) {
+    if ((int)i >= p.num_idx) return;
+    int64_t src_row = idx[i];
+    const device char* s = src + src_row * p.row_bytes;
+    device char* d = dst + (int64_t)i * p.row_bytes;
+    int words = p.row_bytes / 4;
+    const device uint* s4 = (const device uint*)s;
+    device uint* d4 = (device uint*)d;
+    for (int b = 0; b < words; b++) d4[b] = s4[b];
+    for (int b = words * 4; b < p.row_bytes; b++) d[b] = s[b];
+}
+
 // ============================================================================
 // Section 18: Cast u8 to f32
 // ============================================================================
