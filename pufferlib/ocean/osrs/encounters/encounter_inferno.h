@@ -2173,6 +2173,8 @@ static void inf_step(EncounterState* state, const int* actions) {
         s->wave_spawn_delay--;
         if (s->wave_spawn_delay == 0) {
             inf_spawn_wave(s);
+            inf_rebuild_occupancy(s);
+            inf_invalidate_los_cache(s);
         }
         /* player can still move/pray during delay */
         inf_tick_player(s, actions);
