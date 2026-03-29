@@ -654,6 +654,15 @@ typedef struct {
     /* human click-to-move destination (-1 = no dest) */
     int player_dest_x, player_dest_y;
 
+    /* per-tick LOS cache: computed once after NPC movement, reused by attack/obs.
+       -1 = not yet computed this tick, 0 = no LOS, 1 = has LOS. */
+    int8_t npc_los_cache[INF_MAX_NPCS];
+    int npc_los_cache_valid;  /* 0 = needs recompute, 1 = valid */
+
+    /* NPC occupancy grid: tile -> NPC index+1 (0 = empty).
+       covers the 29x30 arena. nibblers excluded (transparent to movement). */
+    uint8_t npc_occupancy[INF_ARENA_WIDTH][INF_ARENA_HEIGHT];
+
     /* config */
     int start_wave;        /* for curriculum: start from a later wave */
     uint32_t rng_state;
@@ -687,14 +696,39 @@ static void inf_rebuild_los(InfernoState* s) {
     }
 }
 
-/* check if NPC at index i has LOS to player */
-static int inf_npc_has_los(InfernoState* s, int i) {
+/* check if NPC at index i has LOS to player (uncached — direct ray-trace) */
+static int inf_npc_has_los_direct(InfernoState* s, int i) {
     InfNPC* npc = &s->npcs[i];
     const InfNPCStats* stats = &INF_NPC_STATS[npc->type];
     return npc_has_line_of_sight(s->los_blockers, s->los_blocker_count,
                                  npc->x, npc->y, npc->size,
                                  s->player.x, s->player.y,
                                  stats->attack_range);
+}
+
+/* cached LOS check — returns cached result if valid, otherwise computes and caches */
+static int inf_npc_has_los(InfernoState* s, int i) {
+    if (s->npc_los_cache_valid && s->npc_los_cache[i] >= 0)
+        return s->npc_los_cache[i];
+    int result = inf_npc_has_los_direct(s, i);
+    s->npc_los_cache[i] = (int8_t)result;
+    return result;
+}
+
+/* invalidate LOS cache (call when pillars change or player moves significantly) */
+static inline void inf_invalidate_los_cache(InfernoState* s) {
+    s->npc_los_cache_valid = 0;
+}
+
+/* rebuild LOS cache for all active NPCs */
+static void inf_rebuild_los_cache(InfernoState* s) {
+    for (int i = 0; i < INF_MAX_NPCS; i++) {
+        if (s->npcs[i].active && s->npcs[i].death_ticks == 0)
+            s->npc_los_cache[i] = (int8_t)inf_npc_has_los_direct(s, i);
+        else
+            s->npc_los_cache[i] = 0;
+    }
+    s->npc_los_cache_valid = 1;
 }
 
 /* ======================================================================== */
@@ -976,9 +1010,67 @@ static int inf_pathfind_blocked(void* ctx, int abs_x, int abs_y) {
     return inf_blocked_by_pillar(s, lx, ly, 1);
 }
 
+/* rebuild NPC occupancy grid from scratch.
+   marks each non-nibbler active NPC's footprint on the 29x30 arena grid.
+   value = NPC index + 1 (0 = empty). call at start of NPC tick phase. */
+static void inf_rebuild_occupancy(InfernoState* s) {
+    memset(s->npc_occupancy, 0, sizeof(s->npc_occupancy));
+    for (int i = 0; i < INF_MAX_NPCS; i++) {
+        InfNPC* npc = &s->npcs[i];
+        if (!npc->active) continue;
+        if (npc->type == INF_NPC_NIBBLER) continue;
+        int sz = INF_NPC_STATS[npc->type].size;
+        for (int dx = 0; dx < sz; dx++) {
+            for (int dy = 0; dy < sz; dy++) {
+                int gx = npc->x + dx - INF_ARENA_MIN_X;
+                int gy = npc->y + dy - INF_ARENA_MIN_Y;
+                if (gx >= 0 && gx < INF_ARENA_WIDTH && gy >= 0 && gy < INF_ARENA_HEIGHT)
+                    s->npc_occupancy[gx][gy] = (uint8_t)(i + 1);
+            }
+        }
+    }
+}
+
+/* update occupancy grid after a single NPC moves from (ox,oy) to (nx,ny). */
+static void inf_update_occupancy(InfernoState* s, int idx, int ox, int oy, int nx, int ny, int sz) {
+    /* clear old footprint */
+    for (int dx = 0; dx < sz; dx++) {
+        for (int dy = 0; dy < sz; dy++) {
+            int gx = ox + dx - INF_ARENA_MIN_X;
+            int gy = oy + dy - INF_ARENA_MIN_Y;
+            if (gx >= 0 && gx < INF_ARENA_WIDTH && gy >= 0 && gy < INF_ARENA_HEIGHT)
+                s->npc_occupancy[gx][gy] = 0;
+        }
+    }
+    /* stamp new footprint */
+    for (int dx = 0; dx < sz; dx++) {
+        for (int dy = 0; dy < sz; dy++) {
+            int gx = nx + dx - INF_ARENA_MIN_X;
+            int gy = ny + dy - INF_ARENA_MIN_Y;
+            if (gx >= 0 && gx < INF_ARENA_WIDTH && gy >= 0 && gy < INF_ARENA_HEIGHT)
+                s->npc_occupancy[gx][gy] = (uint8_t)(idx + 1);
+        }
+    }
+}
+
+/* check if an NPC footprint at (x,y) with given size overlaps another NPC via occupancy grid */
+static int inf_occupancy_blocked(InfernoState* s, int self_idx, int x, int y, int size) {
+    for (int dx = 0; dx < size; dx++) {
+        for (int dy = 0; dy < size; dy++) {
+            int gx = x + dx - INF_ARENA_MIN_X;
+            int gy = y + dy - INF_ARENA_MIN_Y;
+            if (gx >= 0 && gx < INF_ARENA_WIDTH && gy >= 0 && gy < INF_ARENA_HEIGHT) {
+                uint8_t occ = s->npc_occupancy[gx][gy];
+                if (occ != 0 && (int)(occ - 1) != self_idx)
+                    return 1;
+            }
+        }
+    }
+    return 0;
+}
+
 /* NPC movement blocked callback for encounter_npc_step_toward.
-   checks arena bounds, pillars, collision map, and NPC-vs-NPC collision.
-   ctx is a temporary struct with state + current NPC index. */
+   checks arena bounds, pillars, collision map, and NPC-vs-NPC collision via occupancy grid. */
 typedef struct { InfernoState* s; int self_idx; } InfMoveCtx;
 
 static int inf_npc_blocked(void* ctx, int x, int y, int size) {
@@ -990,17 +1082,7 @@ static int inf_npc_blocked(void* ctx, int x, int y, int size) {
         !collision_tile_walkable(s->collision_map, 0,
             x + s->world_offset_x, y + s->world_offset_y))
         return 1;
-    /* NPC-vs-NPC collision: check all active NPCs except self and nibblers
-       (nibblers don't consume space — other mobs walk through them) */
-    for (int i = 0; i < INF_MAX_NPCS; i++) {
-        if (i == mc->self_idx) continue;
-        InfNPC* other = &s->npcs[i];
-        if (!other->active) continue;
-        if (other->type == INF_NPC_NIBBLER) continue;  /* nibblers transparent */
-        if (los_aabb_overlap(x, y, size, other->x, other->y, other->size))
-            return 1;
-    }
-    return 0;
+    return inf_occupancy_blocked(s, mc->self_idx, x, y, size);
 }
 
 /* forward declaration — defined after potions/food section */
@@ -1069,8 +1151,11 @@ static void inf_npc_move(InfernoState* s, int idx) {
     encounter_npc_step_toward(&npc->x, &npc->y, tx, ty, npc->size,
                               target_size, stats->attack_range,
                               inf_npc_blocked, &mc);
-    if (npc->x != ox || npc->y != oy)
+    if (npc->x != ox || npc->y != oy) {
         npc->moved_this_tick = 1;
+        if (npc->type != INF_NPC_NIBBLER)
+            inf_update_occupancy(s, idx, ox, oy, npc->x, npc->y, npc->size);
+    }
 }
 
 /* ======================================================================== */
@@ -1085,8 +1170,10 @@ static void inf_meleer_dig_check(InfernoState* s, int idx) {
         npc->dig_freeze_timer--;
         if (npc->dig_freeze_timer == 0 && npc->dig_attack_delay == 0) {
             /* emerge: place near player */
+            int ox = npc->x, oy = npc->y;
             npc->x = s->player.x + (encounter_rand_int(&s->rng_state, 3) - 1);
             npc->y = s->player.y + (encounter_rand_int(&s->rng_state, 3) - 1);
+            inf_update_occupancy(s, idx, ox, oy, npc->x, npc->y, npc->size);
             npc->stun_timer = 2;  /* 2-tick freeze after emerging */
             npc->dig_attack_delay = 6;  /* 6-tick delay before attacking */
             npc->no_los_ticks = 0;
@@ -2119,8 +2206,15 @@ static void inf_step(EncounterState* state, const int* actions) {
         }
     }
 
+    /* rebuild occupancy grid before NPC movement, invalidate LOS cache */
+    inf_rebuild_occupancy(s);
+    inf_invalidate_los_cache(s);
+
     /* NPC AI: runs after pending hits so ice barrage freeze is already active */
     inf_tick_npcs(s);
+
+    /* rebuild LOS cache after NPC movement for obs/mask phases */
+    inf_rebuild_los_cache(s);
 
     /* ------------------------------------------------------------------ */
     /* process pending hits: player pending hits (NPC attacks landing)     */
@@ -2363,14 +2457,19 @@ static void inf_write_obs(EncounterState* state, float* obs) {
             }
             obs[i++] = (float)INF_NPC_STATS[npc->type].attack_range / 100.0f;
             obs[i++] = (float)INF_NPC_STATS[npc->type].magic_def_bonus / 350.0f;
-            /* barrage AoE count: how many other active NPCs have SW corner within 1 tile */
+            /* barrage AoE count: how many other NPCs in 3x3 area via occupancy grid */
             {
                 int aoe_count = 0;
-                for (int j = 0; j < INF_MAX_NPCS; j++) {
-                    if (j == n || !s->npcs[j].active) continue;
-                    int dx = s->npcs[j].x - npc->x;
-                    int dy = s->npcs[j].y - npc->y;
-                    if (dx >= -1 && dx <= 1 && dy >= -1 && dy <= 1) aoe_count++;
+                int cx = npc->x - INF_ARENA_MIN_X;
+                int cy = npc->y - INF_ARENA_MIN_Y;
+                for (int dx = -1; dx <= 1; dx++) {
+                    for (int dy = -1; dy <= 1; dy++) {
+                        int gx = cx + dx, gy = cy + dy;
+                        if (gx >= 0 && gx < INF_ARENA_WIDTH && gy >= 0 && gy < INF_ARENA_HEIGHT) {
+                            uint8_t occ = s->npc_occupancy[gx][gy];
+                            if (occ != 0 && (int)(occ - 1) != n) aoe_count++;
+                        }
+                    }
                 }
                 obs[i++] = (float)aoe_count / 8.0f;
             }
