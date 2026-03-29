@@ -1,7 +1,7 @@
 # pufferlib-metal
 
 custom Metal (Apple GPU) backend for the PufferLib RL training framework.
-targets Apple Silicon (M4 Pro). upstream reference: PufferAI/PufferLib static-native branch (CUDA).
+targets Apple Silicon (M4 Pro). current upstream source of truth: PufferAI/PufferLib `4.0`.
 
 ## build
 
@@ -64,7 +64,7 @@ node kinds:
 
 ## key architecture notes
 
-- MinGRU scan kernel uses highway/residual connection (matches upstream static-native, NOT storm fork)
+- MinGRU scan kernel uses highway/residual connection (matches upstream `4.0`, not storm fork)
 - scan kernel uses fast::exp/fast::log in fp32 path (matches upstream __expf/__logf)
 - CPU inference for rollouts (cblas_sgemm), GPU for training
 - Muon optimizer only (adam removed)
