@@ -257,7 +257,7 @@ def build_configs(env_name: str, config: dict):
     vec_config = {
         "total_agents": float(total_agents),
         "num_buffers": float(num_buffers),
-        "num_threads": float(num_buffers),  # structural: must match
+        "num_threads": float(vec.get("num_threads", num_buffers)),
     }
     policy_config = {
         "hidden_size": float(int(policy.get("hidden_size", 64))),
