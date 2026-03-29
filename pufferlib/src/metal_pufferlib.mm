@@ -229,6 +229,7 @@ typedef struct {
     // When false, a static all-ones buffer is used instead.
     bool has_mask = false;
     int env_obs_width = 0;  // raw obs width from env (e.g. 1096 = features + mask)
+    int mask_width = 0;     // total action mask width = sum of all action head sizes (e.g. 79)
     PufTensor ones_mask;  // (act_n) all 1.0f, fallback mask when !has_mask
     // External mask path: when has_mask, masks are split from obs at rollout time.
     // rollout_masks: (horizon, total_agents, act_n), train_masks: (total_agents, horizon, act_n)
@@ -293,7 +294,7 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
     PufTensor& obs_env = env.obs;
     int env_obs_width = pufferl->env_obs_width;
     int input_size = (int)rollouts.observations.shape[2];
-    int act_n = (int)pufferl->act_sizes_puf.numel();
+    int mask_w = pufferl->mask_width;
 
     PufTensor obs_dst = puf_slice(rollouts.observations, t, start, block_size);
 
@@ -307,8 +308,8 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
         for (int b = 0; b < block_size; b++) {
             memcpy(feat_base + b * input_size, src_base + b * env_obs_width,
                    input_size * sizeof(float));
-            memcpy(mask_base + b * act_n, src_base + b * env_obs_width + input_size,
-                   act_n * sizeof(float));
+            memcpy(mask_base + b * mask_w, src_base + b * env_obs_width + input_size,
+                   mask_w * sizeof(float));
         }
     } else {
         // no mask: copy full obs (env_obs_width == input_size)
@@ -361,7 +362,7 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
     if (pufferl->has_mask) {
         PufTensor mask_slice = puf_slice(pufferl->rollout_masks, t, start, block_size);
         mask_ptr = (const float*)mask_slice.bytes;
-        mask_stride = act_n;
+        mask_stride = pufferl->mask_width;
     } else {
         mask_ptr = (const float*)pufferl->ones_mask.bytes;
         mask_stride = 0;
@@ -489,7 +490,7 @@ void train_impl(PuffeRL& pufferl) {
         int mask_stride;
         if (pufferl.has_mask) {
             mask_ptr = (const float *)pufferl.train_masks.bytes;
-            mask_stride = num_atns;
+            mask_stride = pufferl.mask_width;
         } else {
             mask_ptr = (const float *)pufferl.ones_mask.bytes;
             mask_stride = 0;
@@ -571,8 +572,8 @@ void train_impl(PuffeRL& pufferl) {
                 ms2->compute_encoder();
                 auto pso = mtl_pipeline("index_gather_kernel");
                 mtl_set_pso(ms2, pso);
-                int act_n = (int)pufferl.act_sizes_puf.numel();
-                int mask_seg_bytes = hypers.horizon * act_n * (int)sizeof(float);
+                int mw = pufferl.mask_width;
+                int mask_seg_bytes = hypers.horizon * mw * (int)sizeof(float);
                 mtl_set_ptr(ms2, pufferl.mb_masks.bytes, 0);
                 mtl_set_ptr(ms2, (void*)pufferl.prio_bufs.idx.bytes, 1);
                 mtl_set_ptr(ms2, pufferl.train_masks.bytes, 2);
@@ -621,7 +622,7 @@ void train_impl(PuffeRL& pufferl) {
             int ppo_mask_stride;
             if (pufferl.has_mask) {
                 ppo_mask_ptr = (const float*)pufferl.mb_masks.bytes;
-                ppo_mask_stride = (int)pufferl.act_sizes_puf.numel();
+                ppo_mask_stride = pufferl.mask_width;
             } else {
                 ppo_mask_ptr = (const float*)pufferl.ones_mask.bytes;
                 ppo_mask_stride = 0;
@@ -834,6 +835,7 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
         pufferl->has_mask = (mask_entry && mask_entry->value > 0.0f);
     }
     pufferl->env_obs_width = env_obs_width;
+    pufferl->mask_width = act_n;  // total mask width = sum of action head sizes
     // when mask is embedded, split it: encoder sees only the feature prefix
     int input_size = pufferl->has_mask ? (env_obs_width - act_n) : env_obs_width;
     if (!pufferl->has_mask) {
