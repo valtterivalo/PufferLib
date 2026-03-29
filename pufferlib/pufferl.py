@@ -127,7 +127,7 @@ class PuffeRL:
             self.last_log_time = time.time()
             self.last_log_step = self.global_step
 
-        if self.epoch % self.config['checkpoint_interval'] == 0 or done_training:
+        if self.config['checkpoint_interval'] > 0 and (self.epoch % self.config['checkpoint_interval'] == 0 or done_training):
             self.save_checkpoint()
             self.msg = f'Checkpoint saved at update {self.epoch}'
 
