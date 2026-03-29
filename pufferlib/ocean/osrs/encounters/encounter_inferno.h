@@ -1960,7 +1960,8 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
         if (s->player_dest_x >= 0) {
             encounter_move_toward_dest(&s->player, &s->player_dest_x, &s->player_dest_y,
                 s->collision_map, s->world_offset_x, s->world_offset_y,
-                inf_tile_walkable, s, inf_pathfind_blocked, s);
+                inf_tile_walkable, s, inf_pathfind_blocked, s,
+                INF_ARENA_MIN_X, INF_ARENA_MIN_Y, INF_ARENA_WIDTH, INF_ARENA_HEIGHT);
         } else {
             int move_act = actions[INF_HEAD_MOVE];
             s->player.is_running = 0;
@@ -1979,7 +1980,8 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
             ls->attack_range,
             s->collision_map, s->world_offset_x, s->world_offset_y,
             inf_tile_walkable, s, inf_pathfind_blocked, s,
-            s->los_blockers, s->los_blocker_count);
+            s->los_blockers, s->los_blocker_count,
+            INF_ARENA_MIN_X, INF_ARENA_MIN_Y, INF_ARENA_WIDTH, INF_ARENA_HEIGHT);
     }
 
     /* player attacks targeted NPC */

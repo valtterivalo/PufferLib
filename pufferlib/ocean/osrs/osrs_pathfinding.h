@@ -3,14 +3,11 @@
  * @brief BFS pathfinder for OSRS tile-based movement
  *
  * BFS pathfinder (OSRS uses BFS despite some implementations naming it "Dijkstra").
- * Operates on a 104x104 local grid (OSRS client scene size).
- * Uses collision_traversable_step() from osrs_collision.h for wall/block checks.
+ * Default grid is 104x104 (OSRS client scene size). Encounters with smaller arenas
+ * can use pathfind_step_arena() with custom dimensions to reduce stack/memset cost.
  *
  * Returns the next step direction for the agent to take. Full path reconstruction
  * is not needed since agents re-plan every tick.
- *
- * All working arrays are stack-allocated (no malloc per query).
- * Worst case: ~10k tiles visited for 104x104 grid = fast enough at ~1M steps/sec.
  */
 
 #ifndef OSRS_PATHFINDING_H
@@ -19,7 +16,9 @@
 #include "osrs_collision.h"
 
 #define PATHFIND_GRID_SIZE 104
-#define PATHFIND_MAX_QUEUE 9000
+#define PATHFIND_ARENA_MAX 48   /* max arena dimension for pathfind_step_arena */
+#define PATHFIND_MAX_QUEUE_FULL 9000
+#define PATHFIND_MAX_QUEUE_ARENA 2500  /* 48*48 + margin */
 #define PATHFIND_MAX_FALLBACK_RADIUS 10
 
 /**
@@ -121,8 +120,8 @@ static inline PathResult pathfind_step(const CollisionMap* map, int height,
     memset(cost, 0, sizeof(cost));
 
     /* BFS queue (circular buffer) */
-    int queue_x[PATHFIND_MAX_QUEUE];
-    int queue_y[PATHFIND_MAX_QUEUE];
+    int queue_x[PATHFIND_MAX_QUEUE_FULL];
+    int queue_y[PATHFIND_MAX_QUEUE_FULL];
     int head = 0;
     int tail = 0;
 
@@ -137,7 +136,7 @@ static inline PathResult pathfind_step(const CollisionMap* map, int height,
     int cur_x, cur_y;
 
     /* BFS expansion */
-    while (head < tail && tail < PATHFIND_MAX_QUEUE) {
+    while (head < tail && tail < PATHFIND_MAX_QUEUE_FULL) {
         cur_x = queue_x[head];
         cur_y = queue_y[head];
         head++;
@@ -321,6 +320,193 @@ static inline PathResult pathfind_step(const CollisionMap* map, int height,
         if (via[cur_x][cur_y] == VIA_NONE || via[cur_x][cur_y] == VIA_START) {
             break;
         }
+    }
+
+    return result;
+}
+
+/**
+ * Arena-scoped BFS: same algorithm as pathfind_step but with a smaller grid.
+ * Caller provides the arena origin and dimensions. All coordinates are in the
+ * same world-space as the full pathfinder — the function subtracts the origin
+ * internally.
+ *
+ * Stack cost: ~2 * W * H * 4 + 2 * QUEUE * 4 bytes.
+ * For a 32x32 arena: ~8KB + ~20KB queue = ~28KB (vs ~155KB for 104x104).
+ */
+static inline PathResult pathfind_step_arena(
+    const CollisionMap* map, int height,
+    int src_x, int src_y, int dest_x, int dest_y,
+    pathfind_blocked_fn extra_blocked, void* blocked_ctx,
+    int arena_origin_x, int arena_origin_y, int arena_w, int arena_h
+) {
+    PathResult result = {0, 0, 0, dest_x, dest_y};
+
+    if (src_x == dest_x && src_y == dest_y) {
+        result.found = 1;
+        return result;
+    }
+
+    /* convert to arena-local coordinates */
+    int local_src_x = src_x - arena_origin_x;
+    int local_src_y = src_y - arena_origin_y;
+    int local_dest_x = dest_x - arena_origin_x;
+    int local_dest_y = dest_y - arena_origin_y;
+
+    /* bounds check */
+    if (local_src_x < 0 || local_src_x >= arena_w ||
+        local_src_y < 0 || local_src_y >= arena_h ||
+        local_dest_x < 0 || local_dest_x >= arena_w ||
+        local_dest_y < 0 || local_dest_y >= arena_h) {
+        return result;
+    }
+
+    /* BFS working arrays — arena-sized (48x48 max = ~9KB each vs 104x104 = ~43KB) */
+    int via[PATHFIND_ARENA_MAX][PATHFIND_ARENA_MAX];
+    int cost[PATHFIND_ARENA_MAX][PATHFIND_ARENA_MAX];
+    memset(via, 0, sizeof(via));
+    memset(cost, 0, sizeof(cost));
+
+    int queue_x[PATHFIND_MAX_QUEUE_ARENA];
+    int queue_y[PATHFIND_MAX_QUEUE_ARENA];
+    int head = 0, tail = 0;
+
+    via[local_src_x][local_src_y] = VIA_START;
+    cost[local_src_x][local_src_y] = 1;
+    queue_x[tail] = local_src_x;
+    queue_y[tail] = local_src_y;
+    tail++;
+
+    int found_path = 0;
+    int cur_x, cur_y;
+
+    while (head < tail && tail < PATHFIND_MAX_QUEUE_ARENA) {
+        cur_x = queue_x[head];
+        cur_y = queue_y[head];
+        head++;
+
+        if (cur_x == local_dest_x && cur_y == local_dest_y) {
+            found_path = 1;
+            break;
+        }
+
+        int abs_x = arena_origin_x + cur_x;
+        int abs_y = arena_origin_y + cur_y;
+        int next_cost = cost[cur_x][cur_y] + 1;
+
+        #define EB(ax, ay) (extra_blocked && extra_blocked(blocked_ctx, (ax), (ay)))
+
+        /* south */
+        if (cur_y > 0 && via[cur_x][cur_y - 1] == 0
+            && collision_traversable_south(map, height, abs_x, abs_y)
+            && !EB(abs_x, abs_y - 1)) {
+            queue_x[tail] = cur_x; queue_y[tail] = cur_y - 1; tail++;
+            via[cur_x][cur_y - 1] = VIA_S; cost[cur_x][cur_y - 1] = next_cost;
+        }
+        /* west */
+        if (cur_x > 0 && via[cur_x - 1][cur_y] == 0
+            && collision_traversable_west(map, height, abs_x, abs_y)
+            && !EB(abs_x - 1, abs_y)) {
+            queue_x[tail] = cur_x - 1; queue_y[tail] = cur_y; tail++;
+            via[cur_x - 1][cur_y] = VIA_W; cost[cur_x - 1][cur_y] = next_cost;
+        }
+        /* north */
+        if (cur_y < arena_h - 1 && via[cur_x][cur_y + 1] == 0
+            && collision_traversable_north(map, height, abs_x, abs_y)
+            && !EB(abs_x, abs_y + 1)) {
+            queue_x[tail] = cur_x; queue_y[tail] = cur_y + 1; tail++;
+            via[cur_x][cur_y + 1] = VIA_N; cost[cur_x][cur_y + 1] = next_cost;
+        }
+        /* east */
+        if (cur_x < arena_w - 1 && via[cur_x + 1][cur_y] == 0
+            && collision_traversable_east(map, height, abs_x, abs_y)
+            && !EB(abs_x + 1, abs_y)) {
+            queue_x[tail] = cur_x + 1; queue_y[tail] = cur_y; tail++;
+            via[cur_x + 1][cur_y] = VIA_E; cost[cur_x + 1][cur_y] = next_cost;
+        }
+        /* south-west */
+        if (cur_x > 0 && cur_y > 0 && via[cur_x - 1][cur_y - 1] == 0
+            && collision_traversable_south_west(map, height, abs_x, abs_y)
+            && collision_traversable_south(map, height, abs_x, abs_y)
+            && collision_traversable_west(map, height, abs_x, abs_y)
+            && !EB(abs_x - 1, abs_y - 1) && !EB(abs_x, abs_y - 1) && !EB(abs_x - 1, abs_y)) {
+            queue_x[tail] = cur_x - 1; queue_y[tail] = cur_y - 1; tail++;
+            via[cur_x - 1][cur_y - 1] = VIA_SW; cost[cur_x - 1][cur_y - 1] = next_cost;
+        }
+        /* north-west */
+        if (cur_x > 0 && cur_y < arena_h - 1 && via[cur_x - 1][cur_y + 1] == 0
+            && collision_traversable_north_west(map, height, abs_x, abs_y)
+            && collision_traversable_north(map, height, abs_x, abs_y)
+            && collision_traversable_west(map, height, abs_x, abs_y)
+            && !EB(abs_x - 1, abs_y + 1) && !EB(abs_x, abs_y + 1) && !EB(abs_x - 1, abs_y)) {
+            queue_x[tail] = cur_x - 1; queue_y[tail] = cur_y + 1; tail++;
+            via[cur_x - 1][cur_y + 1] = VIA_NW; cost[cur_x - 1][cur_y + 1] = next_cost;
+        }
+        /* south-east */
+        if (cur_x < arena_w - 1 && cur_y > 0 && via[cur_x + 1][cur_y - 1] == 0
+            && collision_traversable_south_east(map, height, abs_x, abs_y)
+            && collision_traversable_south(map, height, abs_x, abs_y)
+            && collision_traversable_east(map, height, abs_x, abs_y)
+            && !EB(abs_x + 1, abs_y - 1) && !EB(abs_x, abs_y - 1) && !EB(abs_x + 1, abs_y)) {
+            queue_x[tail] = cur_x + 1; queue_y[tail] = cur_y - 1; tail++;
+            via[cur_x + 1][cur_y - 1] = VIA_SE; cost[cur_x + 1][cur_y - 1] = next_cost;
+        }
+        /* north-east */
+        if (cur_x < arena_w - 1 && cur_y < arena_h - 1 && via[cur_x + 1][cur_y + 1] == 0
+            && collision_traversable_north_east(map, height, abs_x, abs_y)
+            && collision_traversable_north(map, height, abs_x, abs_y)
+            && collision_traversable_east(map, height, abs_x, abs_y)
+            && !EB(abs_x + 1, abs_y + 1) && !EB(abs_x, abs_y + 1) && !EB(abs_x + 1, abs_y)) {
+            queue_x[tail] = cur_x + 1; queue_y[tail] = cur_y + 1; tail++;
+            via[cur_x + 1][cur_y + 1] = VIA_NE; cost[cur_x + 1][cur_y + 1] = next_cost;
+        }
+
+        #undef EB
+    }
+
+    /* fallback: closest reachable tile near dest */
+    if (!found_path) {
+        int best_dist_sq = PATHFIND_MAX_FALLBACK_RADIUS * PATHFIND_MAX_FALLBACK_RADIUS + 1;
+        int best_cost = 999999;
+        int best_x = -1, best_y = -1;
+        int r = PATHFIND_MAX_FALLBACK_RADIUS;
+
+        for (int fx = local_dest_x - r; fx <= local_dest_x + r; fx++) {
+            for (int fy = local_dest_y - r; fy <= local_dest_y + r; fy++) {
+                if (fx < 0 || fx >= arena_w || fy < 0 || fy >= arena_h) continue;
+                if (cost[fx][fy] == 0) continue;
+                int ddx = fx - local_dest_x, ddy = fy - local_dest_y;
+                int dist_sq = ddx * ddx + ddy * ddy;
+                if (dist_sq < best_dist_sq ||
+                    (dist_sq == best_dist_sq && cost[fx][fy] < best_cost)) {
+                    best_dist_sq = dist_sq;
+                    best_cost = cost[fx][fy];
+                    best_x = fx; best_y = fy;
+                }
+            }
+        }
+
+        if (best_x == -1) return result;
+        cur_x = best_x; cur_y = best_y;
+        found_path = 1;
+        result.dest_x = arena_origin_x + best_x;
+        result.dest_y = arena_origin_y + best_y;
+    }
+
+    /* backtrack to find first step */
+    while (1) {
+        int v = via[cur_x][cur_y];
+        int prev_x = cur_x, prev_y = cur_y;
+        if (v & VIA_W) prev_x++; else if (v & VIA_E) prev_x--;
+        if (v & VIA_S) prev_y++; else if (v & VIA_N) prev_y--;
+        if (prev_x == local_src_x && prev_y == local_src_y) {
+            result.found = 1;
+            result.next_dx = cur_x - local_src_x;
+            result.next_dy = cur_y - local_src_y;
+            return result;
+        }
+        cur_x = prev_x; cur_y = prev_y;
+        if (via[cur_x][cur_y] == VIA_NONE || via[cur_x][cur_y] == VIA_START) break;
     }
 
     return result;

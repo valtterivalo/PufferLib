@@ -1630,7 +1630,8 @@ static void zul_process_movement(ZulrahState* s) {
     /* shared BFS click-to-move: runs (2 steps) when dest > 1 tile away */
     encounter_move_toward_dest(&s->player, &s->player_dest_x, &s->player_dest_y,
         (const CollisionMap*)s->collision_map, s->world_offset_x, s->world_offset_y,
-        zul_tile_walkable, s, NULL, NULL);
+        zul_tile_walkable, s, NULL, NULL,
+        0, 0, 0, 0);
 }
 
 static void zul_process_prayer(ZulrahState* s, int p) {

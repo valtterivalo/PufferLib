@@ -369,14 +369,27 @@ static inline PathResult encounter_pathfind(
     int src_x, int src_y, int dst_x, int dst_y,
     pathfind_blocked_fn extra_blocked, void* blocked_ctx
 ) {
-    /* always run BFS, even without a collision map. when cmap is NULL,
-       pathfind_step treats all static tiles as traversable — dynamic obstacles
-       (pillars) are still handled by extra_blocked. matches real OSRS where
-       pillars are entities checked separately from the static collision map. */
     return pathfind_step(cmap, 0,
         src_x + world_offset_x, src_y + world_offset_y,
         dst_x + world_offset_x, dst_y + world_offset_y,
         extra_blocked, blocked_ctx);
+}
+
+/* arena-scoped BFS: same as encounter_pathfind but uses a smaller grid.
+   arena_base_x/y: world-space origin of the arena.
+   arena_w/h: arena dimensions in tiles (must be <= PATHFIND_ARENA_MAX). */
+static inline PathResult encounter_pathfind_arena(
+    const CollisionMap* cmap, int world_offset_x, int world_offset_y,
+    int src_x, int src_y, int dst_x, int dst_y,
+    pathfind_blocked_fn extra_blocked, void* blocked_ctx,
+    int arena_base_x, int arena_base_y, int arena_w, int arena_h
+) {
+    return pathfind_step_arena(cmap, 0,
+        src_x + world_offset_x, src_y + world_offset_y,
+        dst_x + world_offset_x, dst_y + world_offset_y,
+        extra_blocked, blocked_ctx,
+        arena_base_x + world_offset_x, arena_base_y + world_offset_y,
+        arena_w, arena_h);
 }
 
 /* shared click-to-move: BFS toward destination, take up to 2 steps (run).
@@ -387,7 +400,8 @@ static inline int encounter_move_toward_dest(
     Player* p, int* dest_x, int* dest_y,
     const CollisionMap* cmap, int world_offset_x, int world_offset_y,
     encounter_walkable_fn is_walkable, void* ctx,
-    pathfind_blocked_fn extra_blocked, void* blocked_ctx
+    pathfind_blocked_fn extra_blocked, void* blocked_ctx,
+    int arena_base_x, int arena_base_y, int arena_w, int arena_h
 ) {
     if (*dest_x < 0 || *dest_y < 0) return 0;
     if (p->x == *dest_x && p->y == *dest_y) {
@@ -397,9 +411,14 @@ static inline int encounter_move_toward_dest(
     int steps = 0;
     for (int step = 0; step < 2; step++) {
         if (p->x == *dest_x && p->y == *dest_y) break;
-        PathResult pr = encounter_pathfind(cmap, world_offset_x, world_offset_y,
-                                            p->x, p->y, *dest_x, *dest_y,
-                                            extra_blocked, blocked_ctx);
+        PathResult pr = (arena_w > 0)
+            ? encounter_pathfind_arena(cmap, world_offset_x, world_offset_y,
+                                       p->x, p->y, *dest_x, *dest_y,
+                                       extra_blocked, blocked_ctx,
+                                       arena_base_x, arena_base_y, arena_w, arena_h)
+            : encounter_pathfind(cmap, world_offset_x, world_offset_y,
+                                  p->x, p->y, *dest_x, *dest_y,
+                                  extra_blocked, blocked_ctx);
         if (!pr.found || (pr.next_dx == 0 && pr.next_dy == 0)) break;
         int nx = p->x + pr.next_dx, ny = p->y + pr.next_dy;
         if (!is_walkable(ctx, nx, ny)) break;
@@ -443,7 +462,8 @@ static inline int encounter_chase_attack_target(
     const CollisionMap* cmap, int world_offset_x, int world_offset_y,
     encounter_walkable_fn is_walkable, void* ctx,
     pathfind_blocked_fn extra_blocked, void* blocked_ctx,
-    const LOSBlocker* los_blockers, int los_blocker_count
+    const LOSBlocker* los_blockers, int los_blocker_count,
+    int arena_base_x, int arena_base_y, int arena_w, int arena_h
 ) {
     int dist = encounter_dist_to_npc(p->x, p->y, target_x, target_y, target_size);
 
@@ -467,9 +487,14 @@ static inline int encounter_chase_attack_target(
         int steps = 0;
         for (int step = 0; step < 2; step++) {
             if (p->x == bx && p->y == by) break;
-            PathResult pr = encounter_pathfind(cmap, world_offset_x, world_offset_y,
-                                               p->x, p->y, bx, by,
-                                               extra_blocked, blocked_ctx);
+            PathResult pr = (arena_w > 0)
+                ? encounter_pathfind_arena(cmap, world_offset_x, world_offset_y,
+                                           p->x, p->y, bx, by,
+                                           extra_blocked, blocked_ctx,
+                                           arena_base_x, arena_base_y, arena_w, arena_h)
+                : encounter_pathfind(cmap, world_offset_x, world_offset_y,
+                                      p->x, p->y, bx, by,
+                                      extra_blocked, blocked_ctx);
             if (!pr.found || (pr.next_dx == 0 && pr.next_dy == 0)) break;
             int nx = p->x + pr.next_dx, ny = p->y + pr.next_dy;
             if (!is_walkable(ctx, nx, ny)) break;
@@ -541,9 +566,14 @@ static inline int encounter_chase_attack_target(
                                          target_size, attack_range,
                                          los_blockers, los_blocker_count))
             break;
-        PathResult pr = encounter_pathfind(cmap, world_offset_x, world_offset_y,
-                                           p->x, p->y, cx, cy,
-                                           extra_blocked, blocked_ctx);
+        PathResult pr = (arena_w > 0)
+            ? encounter_pathfind_arena(cmap, world_offset_x, world_offset_y,
+                                       p->x, p->y, cx, cy,
+                                       extra_blocked, blocked_ctx,
+                                       arena_base_x, arena_base_y, arena_w, arena_h)
+            : encounter_pathfind(cmap, world_offset_x, world_offset_y,
+                                  p->x, p->y, cx, cy,
+                                  extra_blocked, blocked_ctx);
         if (!pr.found || (pr.next_dx == 0 && pr.next_dy == 0)) break;
         int nx = p->x + pr.next_dx, ny = p->y + pr.next_dy;
         if (!is_walkable(ctx, nx, ny)) break;
