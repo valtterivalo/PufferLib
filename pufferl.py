@@ -509,6 +509,9 @@ def run_trial(
                 config.get("vec", {}).get("total_agents", 2048)),
             "num_buffers": params.get("train", {}).get("num_buffers",
                 config.get("vec", {}).get("num_buffers", 1)),
+            "num_threads": config.get("vec", {}).get("num_threads",
+                params.get("train", {}).get("num_buffers",
+                    config.get("vec", {}).get("num_buffers", 1))),
         },
         "env": config.get("env", {}),
     }
