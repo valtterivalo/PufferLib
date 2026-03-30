@@ -323,11 +323,11 @@ pybind11::dict log_train_debug(pybind11::object pufferl_obj) {
         DecoderWeights* dw = (DecoderWeights*)pufferl.weights_fp32.decoder;
         int od = dw->output_dim;
         int H = dw->hidden_dim;
-        const float* pw = (const float*)dw->policy_weight.bytes;
-        const float* vw = (const float*)dw->value_weight.bytes;
-        if (pw && vw) {
-            FloatStats pw_stats = compute_float_stats(pw, (int64_t)od * H);
-            FloatStats vw_stats = compute_float_stats(vw, (int64_t)H);
+        const float* w = (const float*)dw->weight.bytes;
+        if (w) {
+            // Policy rows = first od rows, value row = last row of fused weight
+            FloatStats pw_stats = compute_float_stats(w, (int64_t)od * H);
+            FloatStats vw_stats = compute_float_stats(w + (int64_t)od * H, (int64_t)H);
             out["dec_policy_abs_max"] = std::max(std::fabs(pw_stats.min), std::fabs(pw_stats.max));
             out["dec_value_abs_max"] = std::max(std::fabs(vw_stats.min), std::fabs(vw_stats.max));
         }
@@ -493,7 +493,6 @@ std::unique_ptr<PuffeRL> create_pufferl(pybind11::dict kwargs,
     hypers.cpu_inference = kwargs.contains("cpu_inference") && get_config(kwargs, "cpu_inference") > 0;
     hypers.train_fp16 = kwargs.contains("train_fp16") && get_config(kwargs, "train_fp16") > 0;
     hypers.ns_iters = kwargs.contains("ns_iters") ? (int)get_config(kwargs, "ns_iters") : 5;
-    hypers.weight_decay = kwargs.contains("weight_decay") ? get_config(kwargs, "weight_decay") : 0.0;
 
     std::string env_name = kwargs["env_name"].cast<std::string>();
     Dict* vec_dict = py_dict_to_c_dict(vec_kwargs.cast<py::dict>());
@@ -558,8 +557,7 @@ PYBIND11_MODULE(_C, m) {
         .def_readwrite("profile", &HypersT::profile)
         .def_readwrite("overlap", &HypersT::overlap)
         .def_readwrite("train_fp16", &HypersT::train_fp16)
-        .def_readwrite("ns_iters", &HypersT::ns_iters)
-        .def_readwrite("weight_decay", &HypersT::weight_decay);
+        .def_readwrite("ns_iters", &HypersT::ns_iters);
 
     py::class_<PufTensor>(m, "PufTensor")
         .def("__repr__", &PufTensor::repr)

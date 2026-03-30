@@ -270,10 +270,8 @@ kernel void fused_scan_forward_checkpointed(
 
     float a_star = 0.0f;
     float log_value = 0.0f;
-    // precise:: for numerical stability — fast:: accumulated errors over the
-    // sequence that occasionally produced large scan_result values, triggering
-    // gradient amplification and NaN divergence in the backward pass.
-    float s = precise::log(state[bH + h]);
+    // fast:: matches CUDA __expf/__logf (kernels.cu:270-305)
+    float s = fast::log(state[bH + h]);
     log_value = s;
 
     int T_out = p.T_seq + 1;
@@ -299,9 +297,9 @@ kernel void fused_scan_forward_checkpointed(
 
         float z = log_value - a_star;
         float max_val = fmax(s, z);
-        s = max_val + log1p_f(precise::exp(-abs(s - z)));
+        s = max_val + log1p_f(fast::exp(-abs(s - z)));
 
-        float scan_result = precise::exp(a_star + s);
+        float scan_result = fast::exp(a_star + s);
         float proj_sigmoid = sigmoid_f(proj_val);
 
         out[out_curr] = proj_sigmoid * scan_result + (1.0f - proj_sigmoid) * x_val;
@@ -322,7 +320,7 @@ kernel void fused_scan_forward_checkpointed(
     // A zero state causes log(0)=-inf → permanent -inf propagation through
     // all subsequent scan steps. 1e-30 is well above fp32 denormal range
     // and below any meaningful state value.
-    next_state[bH + h] = max(precise::exp(a_star + s), 1e-30f);
+    next_state[bH + h] = max(fast::exp(a_star + s), 1e-30f);
 }
 
 kernel void fused_scan_backward_checkpointed(
@@ -387,7 +385,7 @@ kernel void fused_scan_backward_checkpointed(
 
             float z = recomp_log_value - recomp_a_star;
             float mv = fmax(recomp_s, z);
-            recomp_s = mv + log1p_f(precise::exp(-abs(recomp_s - z)));
+            recomp_s = mv + log1p_f(fast::exp(-abs(recomp_s - z)));
 
             chunk_a_star[i] = recomp_a_star;
             chunk_s[i] = recomp_s;
@@ -410,7 +408,7 @@ kernel void fused_scan_backward_checkpointed(
             int input_idx = out_base + (t - 1) * p.H;
             float x_val = input[input_idx];
 
-            float scan_result = precise::exp(a_star_t + s_t);
+            float scan_result = fast::exp(a_star_t + s_t);
             float z = log_value_t - a_star_t;
 
             float grad_out_val = grad_out[input_idx];
@@ -427,9 +425,9 @@ kernel void fused_scan_backward_checkpointed(
             if (t == p.T_seq) {
                 acc = grad_s;
             } else {
-                acc = grad_s + acc * precise::exp(s_t - s_val_next);
+                acc = grad_s + acc * fast::exp(s_t - s_val_next);
             }
-            float grad_z = acc * precise::exp(z - s_t);
+            float grad_z = acc * fast::exp(z - s_t);
             s_val_next = s_t;
 
             float grad_a = grad_log_h + carry_grad_a - grad_z;
@@ -450,8 +448,8 @@ kernel void fused_scan_backward_checkpointed(
     float s_0 = s_buf[ckpt_0_idx];
     float log_value_0 = log_values_buf[ckpt_0_idx];
 
-    acc = acc * precise::exp(s_0 - s_val_next);
-    float grad_z_0 = acc * precise::exp((log_value_0 - a_star_0) - s_0);
+    acc = acc * fast::exp(s_0 - s_val_next);
+    float grad_z_0 = acc * fast::exp((log_value_0 - a_star_0) - s_0);
 
     grad_state[state_idx] = (state[state_idx] > 0.0f) ? (grad_z_0 / state[state_idx]) : 0.0f;
 }
@@ -534,6 +532,7 @@ kernel void sample_logits_kernel(
         }
     } else {
         // Discrete action sampling (multinomial)
+        // CUDA joint-ratio: accumulate scalar total_log_prob across heads
         int logits_offset = 0;
 
         for (int h = 0; h < sp.num_atns; h++) {
@@ -579,17 +578,18 @@ kernel void sample_logits_kernel(
                 }
             }
 
-            // Per-head log probability
             float log_prob = masked_logit(
                 logits[logits_base + logits_offset + sampled_action],
                 action_mask[mask_base + logits_offset + sampled_action]) - logsumexp_val;
 
             actions[(int)idx * sp.num_atns + h] = float(sampled_action);
-            logprobs[(int)idx * sp.num_atns + h] = log_prob;
+            total_log_prob += log_prob;
 
             logits_offset += A;
         }
     }
+    // Scalar joint logprob (matches CUDA kernels.cu:995)
+    logprobs[(int)idx] = total_log_prob;
     value_out[idx] = value[(int)idx * sp.value_stride];
 }
 
@@ -648,10 +648,12 @@ kernel void recompute_logprobs_kernel(
         float head_lp = masked_logit(
             logits[logits_base + logits_offset + act],
             action_mask[mask_base + logits_offset + act]) - logsumexp_val;
-        logprobs[(int)idx * rp.num_atns + h] = head_lp;
+        total_log_prob += head_lp;
 
         logits_offset += A;
     }
+    // Scalar joint logprob (matches CUDA kernels.cu:995)
+    logprobs[(int)idx] = total_log_prob;
 }
 
 // ============================================================================
@@ -848,10 +850,8 @@ kernel void ppo_loss_fwd_bwd_kernel(
         float pg_loss, total_entropy, logratio, ratio;
 
         if (pp.is_continuous) {
-            // Continuous: reconstruct scalar old_logp from per-head storage
-            float old_logp = 0.0f;
-            for (int h = 0; h < pp.num_atns; h++)
-                old_logp += old_logprobs[nt * pp.num_atns + h];
+            // Continuous: old_logprobs is scalar (matches CUDA)
+            float old_logp = old_logprobs[nt];
             float total_log_prob = 0.0f;
             total_entropy = 0.0f;
             for (int h = 0; h < pp.num_atns; h++) {
@@ -891,43 +891,54 @@ kernel void ppo_loss_fwd_bwd_kernel(
                 grad_logstd[grad_logits_base + h] = d_new_logp * (diff * diff / var - 1.0f) + d_entropy_term;
             }
         } else {
-            // Discrete per-head clipping (DISC-style): each head gets its own
-            // importance ratio and clip, preventing multi-head logratio explosion.
-            // head_eps = (1 + clip_coef)^(1/N) - 1 keeps the joint trust region bounded.
-            float head_eps = pow(1.0f + pp.clip_coef, 1.0f / (float)pp.num_atns) - 1.0f;
-            float wa = -w * adv_normalized;
+            // Discrete joint-ratio clipping (matches CUDA kernels.cu:738-807).
+            // Sum per-head logprobs into scalar, compute single joint ratio, clip once.
+            float head_logsumexp[MAX_ATN_HEADS];
+            float head_entropy[MAX_ATN_HEADS];
+            int head_act[MAX_ATN_HEADS];
             int mask_base = (int)idx * pp.mask_stride;
 
             int logits_offset = 0;
-            pg_loss = 0.0f;
+            float total_log_prob = 0.0f;
             total_entropy = 0.0f;
-            logratio = 0.0f;
-            ratio = 1.0f;
 
             for (int h = 0; h < pp.num_atns; h++) {
                 int A = act_sizes[h];
                 int act = int(actions[nt * pp.num_atns + h]);
+                head_act[h] = act;
                 float lse, ent, lp;
                 ppo_discrete_head(logits, logits_base, pp.logits_stride_a, logits_offset,
                     A, act, action_mask, mask_base + logits_offset, lse, ent, lp);
+                head_logsumexp[h] = lse;
+                head_entropy[h] = ent;
+                total_log_prob += lp;
                 total_entropy += ent;
+                logits_offset += A;
+            }
 
-                // Per-head importance ratio and clip
-                float old_lp_h = old_logprobs[nt * pp.num_atns + h];
-                float logratio_h = lp - old_lp_h;
-                float ratio_h = exp(logratio_h);
-                float ratio_h_clipped = clamp(ratio_h, 1.0f - head_eps, 1.0f + head_eps);
-                pg_loss += fmax(wa * ratio_h, wa * ratio_h_clipped);
-                logratio += logratio_h;
-                ratio *= ratio_h;
+            float old_logp = old_logprobs[nt];
+            logratio = total_log_prob - old_logp;
+            ratio = exp(logratio);
+            out_ratio[nt] = ratio;
+            float ratio_clipped = clamp(ratio, 1.0f - pp.clip_coef, 1.0f + pp.clip_coef);
+            float wa = -w * adv_normalized;
+            pg_loss = fmax(wa * ratio, wa * ratio_clipped);
 
-                // Per-head backward: gradient driven by this head's own ratio
-                float d_ratio_h = wa * d_pg_loss;
-                if (wa * ratio_h_clipped > wa * ratio_h) {
-                    if (ratio_h <= (1.0f - head_eps) || ratio_h >= (1.0f + head_eps))
-                        d_ratio_h = 0.0f;
-                }
-                float d_new_logp_h = d_ratio_h * ratio_h;
+            // Backward: single joint d_new_logp shared across all heads
+            float d_ratio = wa * d_pg_loss;
+            if (wa * ratio_clipped > wa * ratio) {
+                if (ratio <= (1.0f - pp.clip_coef) || ratio >= (1.0f + pp.clip_coef))
+                    d_ratio = 0.0f;
+            }
+            float d_new_logp = d_ratio * ratio;
+
+            // Gradient pass over logits (reuses head_logsumexp, head_entropy)
+            logits_offset = 0;
+            for (int h = 0; h < pp.num_atns; h++) {
+                int A = act_sizes[h];
+                int act = head_act[h];
+                float lse = head_logsumexp[h];
+                float ent = head_entropy[h];
 
                 for (int a = 0; a < A; a++) {
                     float raw_l = logits[logits_base + (logits_offset + a) * pp.logits_stride_a];
@@ -935,15 +946,14 @@ kernel void ppo_loss_fwd_bwd_kernel(
                     float l = (m < 0.5f) ? -1e9f : raw_l;
                     float logp = l - lse;
                     float p = exp(logp);
-                    float d_logit = (a == act) ? d_new_logp_h : 0.0f;
-                    d_logit -= p * d_new_logp_h;
+                    float d_logit = (a == act) ? d_new_logp : 0.0f;
+                    d_logit -= p * d_new_logp;
                     d_logit += d_entropy_term * p * (-ent - logp);
                     if (m < 0.5f) d_logit = 0.0f;
                     grad_logits[grad_logits_base + logits_offset + a] = d_logit;
                 }
                 logits_offset += A;
             }
-            out_ratio[nt] = ratio;
         }
 
         // Shared loss accumulation (both branches produce pg_loss, total_entropy, logratio, ratio)
@@ -1333,30 +1343,22 @@ kernel void add_scalar(
 // Section 11: Optimizer kernels
 // ============================================================================
 
-struct LrScalarsParams {
-    float wd;
-};
-
-// Reads LR from device, computes neg_lr = -lr, wd_scale = 1 - lr*wd
+// Reads LR from device, computes neg_lr = -lr
 kernel void compute_lr_scalars_kernel(
     const device float* lr          [[buffer(0)]],
     device float* neg_lr            [[buffer(1)]],
-    device float* wd_scale          [[buffer(2)]],
-    constant LrScalarsParams& p     [[buffer(3)]],
     uint idx [[thread_position_in_grid]]
 ) {
     if (idx == 0) {
         *neg_lr = -(*lr);
-        *wd_scale = 1.0f - (*lr) * p.wd;
     }
 }
 
 struct MuonParams {
-    float wd;
     int n;
 };
 
-// Fused weight update + fp16 cast: wb = wb * (1 - lr*wd) - lr * up, param_fp16 = half(wb)
+// Weight update: wb -= lr * up
 kernel void muon_weight_update_kernel(
     device float* wb                    [[buffer(0)]],
     const device float* up              [[buffer(1)]],
@@ -1366,13 +1368,8 @@ kernel void muon_weight_update_kernel(
 ) {
     if ((int)idx >= p.n) return;
     float lr = *lr_ptr;
-    float wd_scale = 1.0f - lr * p.wd;
-    // Clamp update to prevent NS divergence from corrupting weights.
-    // Normal NS output is O(sqrt(M)) ≈ 8.7. Cap at 100 gives 10x headroom.
-    // NS diverges on rank-deficient gradients (from per-head PPO clipping),
-    // producing elements of 10^18+ that overflow the Gram matrix GEMMs.
     float update = clamp(up[idx], -100.0f, 100.0f);
-    wb[idx] = wb[idx] * wd_scale - lr * update;
+    wb[idx] = wb[idx] - lr * update;
 }
 
 // ============================================================================
@@ -1519,18 +1516,17 @@ kernel void clip_by_norm_f32(
 
 struct NormalizeParams {
     float eps;
-    float max_inv_norm;  // cap amplification to prevent NS explosion on near-zero gradients
     int n;
 };
 
-// dst[i] /= max(sqrt(*norm), eps)
+// dst[i] /= max(sqrt(*norm), eps) — matches CUDA normalize_f32_kernel (no cap)
 kernel void normalize_f32(
     device float* dst                       [[buffer(0)]],
     const device float* norm_ptr            [[buffer(1)]],
     constant NormalizeParams& p             [[buffer(2)]],
     uint idx [[thread_position_in_grid]]
 ) {
-    float inv_norm = min(1.0f / max(sqrt(*norm_ptr), p.eps), p.max_inv_norm);
+    float inv_norm = 1.0f / max(sqrt(*norm_ptr), p.eps);
     if ((int)idx < p.n) dst[idx] = dst[idx] * inv_norm;
 }
 

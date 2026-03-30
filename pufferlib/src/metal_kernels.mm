@@ -412,8 +412,9 @@ void mtl_clip_by_norm_f32(float *data, const float *norm_ptr,
   mtl_dispatch_1d(ms, pso, count);
 }
 
+// Matches CUDA normalize_f32_kernel: inv_norm = 1/max(sqrt(norm), eps), no cap.
 void mtl_normalize_f32(float *data, const float *norm_ptr, float eps,
-                        float max_inv_norm, int count, cudaStream_t stream) {
+                        int count, cudaStream_t stream) {
   MetalStream *ms = mtl_resolve_stream(stream);
   ms->compute_encoder();
   auto pso = mtl_pipeline("normalize_f32");
@@ -422,9 +423,8 @@ void mtl_normalize_f32(float *data, const float *norm_ptr, float eps,
   mtl_set_ptr(ms, norm_ptr, 1);
   struct {
     float eps;
-    float max_inv_norm;
     int count;
-  } params = {eps, max_inv_norm, count};
+  } params = {eps, count};
   mtl_set_params(ms, params, 2);
   mtl_dispatch_1d(ms, pso, count);
 }
@@ -1063,7 +1063,7 @@ void mtl_select_copy(RolloutBuf &rollouts, TrainGraph &graph,
 // ============================================================================
 
 void mtl_muon_weight_update(float *weights, const float *updates,
-                              const float *lr_ptr, float weight_decay, int count,
+                              const float *lr_ptr, int count,
                               cudaStream_t stream) {
   MetalStream *ms = mtl_resolve_stream(stream);
   ms->compute_encoder();
@@ -1073,9 +1073,8 @@ void mtl_muon_weight_update(float *weights, const float *updates,
   mtl_set_ptr(ms, updates, 1);
   mtl_set_ptr(ms, lr_ptr, 2);
   struct {
-    float weight_decay;
     int count;
-  } params = {weight_decay, count};
+  } params = {count};
   mtl_set_params(ms, params, 3);
   mtl_dispatch_1d(ms, pso, count);
 }
@@ -1168,10 +1167,9 @@ void puf_orthogonal_init(PufTensor &dst, float gain, uint64_t seed,
 // ============================================================================
 
 void muon_init(Muon *m, Allocator *param_alloc, PufTensor weight_buffer,
-               double lr_val, double momentum, double weight_decay,
+               double lr_val, double momentum,
                int ns_iters, Allocator &alloc) {
   m->momentum = momentum;
-  m->weight_decay = weight_decay;
   m->ns_iters = (ns_iters > 0 && ns_iters <= 5) ? ns_iters : 5;
   m->lr_val_init = (float)lr_val;
   m->lr_ptr = nullptr;
@@ -1264,7 +1262,7 @@ void muon_step(Muon *m, cudaStream_t stream) {
       }
       mtl_barrier(ms);
 
-      // Normalize x
+      // Normalize x (matches CUDA models.cu:1219 — no inv_norm cap)
       ensure_norm_partials();
       {
         int nblk = std::min((int)((x.numel() + 255) / 256), 256);
@@ -1274,12 +1272,8 @@ void muon_step(Muon *m, cudaStream_t stream) {
         mtl_norm_reduce(m->ns.norm_ptr, norm_partials_buf, nblk, stream);
         mtl_barrier(ms);
       }
-      // Cap inv_norm at sqrt(M*N) so normalized matrix has per-element values O(1).
-      // Prevents catastrophic amplification when gradient norm is near-zero
-      // (e.g., when per-head PPO clipping zeros most policy gradients).
-      float max_inv_norm = std::sqrt((float)(M * N));
       mtl_normalize_f32((float *)x.bytes, m->ns.norm_ptr, 1e-7f,
-                        max_inv_norm, (int)x.numel(), stream);
+                        (int)x.numel(), stream);
       mtl_barrier(ms);
 
       // Newton-Schulz iterations (all GEMM — synced internally)
@@ -1306,27 +1300,14 @@ void muon_step(Muon *m, cudaStream_t stream) {
 
       PufTensor &result_precision = (m->ns_iters % 2 == 0) ? x : tmp;
 
-      // Re-normalize NS output: normalize to unit norm, then scale to sqrt(max(M,N)).
-      // NS iterations can diverge for rank-deficient inputs (e.g., when per-head
-      // clipping zeros most policy gradients). re-normalization bounds per-element
-      // values regardless of NS behavior. the target norm sqrt(max(M,N)) matches
-      // the expected Frobenius norm of an orthogonal M×N matrix.
-      {
-        int nblk = std::min((int)((result_precision.numel() + 255) / 256), 256);
-        mtl_norm_f32(norm_partials_buf, (const float *)result_precision.bytes,
-                     (int)result_precision.numel(), nblk, stream);
-        mtl_barrier(ms);
-        mtl_norm_reduce(m->ns.norm_ptr, norm_partials_buf, nblk, stream);
-        mtl_barrier(ms);
-        float max_inv = (float)std::sqrt((double)(M * N));  // cap for near-zero norm
-        mtl_normalize_f32((float *)result_precision.bytes, m->ns.norm_ptr,
-                          1e-7f, max_inv, (int)result_precision.numel(), stream);
+      // Scale matches CUDA models.cu:1233: sqrt(max(1.0, M/N)).
+      // No post-NS re-normalization — CUDA doesn't do it.
+      float scale = (float)std::sqrt(std::max(1.0, (double)M / (double)N));
+      if (scale != 1.0f) {
+        mtl_scale_f32((float *)result_precision.bytes, scale,
+                      (int)result_precision.numel(), stream);
         mtl_barrier(ms);
       }
-      float scale = (float)std::sqrt(std::max((double)M, (double)N));
-      mtl_scale_f32((float *)result_precision.bytes, scale,
-                    (int)result_precision.numel(), stream);
-      mtl_barrier(ms);
 
       PufTensor out_f32 = {.bytes = (char *)up_ptr,
                            .shape = {R, C},
@@ -1353,10 +1334,9 @@ void muon_step(Muon *m, cudaStream_t stream) {
     offset += t->numel();
   }
 
-  // Apply weight update: w -= lr * up + weight_decay * w
+  // Apply weight update: w -= lr * up
   mtl_muon_weight_update((float *)m->wb_puf.bytes, (const float *)m->up_puf.bytes,
-                         m->lr_ptr, (float)m->weight_decay,
-                         (int)m->wb_puf.numel(), stream);
+                         m->lr_ptr, (int)m->wb_puf.numel(), stream);
   mtl_barrier(ms);
 }
 
@@ -1490,15 +1470,10 @@ static void decoder_reg_params(void *w, Allocator *alloc, int esz) {
   DecoderWeights *dw = (DecoderWeights *)w;
   int od = dw->output_dim;
   int H = dw->hidden_dim;
-  // Register policy and value weights separately so Muon treats them differently:
-  // policy_weight (od, H) -> NS orthogonalization (2D path)
-  // value_weight (1, H) -> direct gradient update (1D path, no NS)
-  // The fused weight view spans both for forward/backward.
-  dw->policy_weight = {.shape = {od, H}, .dtype_size = esz};
-  dw->value_weight = {.shape = {1, H}, .dtype_size = esz};
-  alloc->reg(&dw->policy_weight);
-  alloc->reg(&dw->value_weight);
-  // fused weight view: set after allocation in decoder_post_alloc
+  // Single fused weight {od+1, H} — value row participates in NS orthogonalization,
+  // matching CUDA models.cu:792-795.
+  dw->weight = {.shape = {od + 1, H}, .dtype_size = esz};
+  alloc->reg(&dw->weight);
   if (dw->continuous) {
     dw->logstd = {.shape = {1, od}, .dtype_size = esz};
     alloc->reg(&dw->logstd);

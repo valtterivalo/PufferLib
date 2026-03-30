@@ -196,7 +196,7 @@ static inline float cpu_mask_logit(float logit, float mask) {
 // dec_out: (B, fused_cols) — logits + value in last column
 // act_sizes: (num_atns,) — number of discrete actions per head
 // action_out_f32: (B, num_atns) — sampled action indices
-// logprobs: (B,) — sum of log probs across heads
+// logprobs: (B,) — scalar joint log-probability (sum across heads, matches CUDA)
 // value_out: (B,) — value head output
 static void cpu_sample_logits(
         const float *dec_out, int fused_cols,
@@ -219,6 +219,8 @@ static void cpu_sample_logits(
             : action_mask + idx * mask_stride;
 
         int logits_offset = 0;
+        // CUDA joint-ratio: accumulate scalar total_log_prob across heads
+        float total_log_prob = 0.0f;
 
         for (int h = 0; h < num_atns; h++) {
             int A = act_sizes[h];
@@ -256,15 +258,15 @@ static void cpu_sample_logits(
                 }
             }
 
-            // Log probability of sampled action (stored per-head)
             float sl = cpu_mask_logit(logits[logits_offset + sampled],
                                        mask[logits_offset + sampled]);
-            float head_lp = sl - logsumexp_val;
-            logprobs[idx * num_atns + h] = head_lp;
+            total_log_prob += sl - logsumexp_val;
 
             action_out_f32[idx * num_atns + h] = (float)sampled;
             logits_offset += A;
         }
+        // Scalar joint logprob matching CUDA: logprobs[idx] = sum of per-head log probs
+        logprobs[idx] = total_log_prob;
         value_out[idx] = dec_out[idx * fused_cols + (fused_cols - 1)];
     }
 }

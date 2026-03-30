@@ -113,7 +113,6 @@ typedef struct {
     bool cpu_inference;  // CPU forward pass during rollout (no GPU sync)
     bool train_fp16;     // fp16 activations/grads during training (rollout stays fp32)
     int ns_iters;        // Newton-Schulz iterations in muon optimizer (1-5, default 5)
-    float weight_decay;  // Muon weight decay (L2 regularization, prevents weight blowup)
     // Threading
     int num_threads;
     // RNG seed
@@ -758,18 +757,6 @@ static void sync_pending_train(PuffeRL& pufferl) {
     pufferl.train_pending = false;
 }
 
-// Fused decoder weight: policy_weight and value_weight are contiguous in memory,
-// so we create a single (output_dim+1, hidden_dim) view spanning both.
-// Must be called after allocator.create() places the underlying memory.
-static void setup_fused_decoder_weight(PolicyWeights& w) {
-    DecoderWeights *dw = (DecoderWeights *)w.decoder;
-    assert(dw->policy_weight.bytes && "setup_fused_decoder_weight: allocator not yet created");
-    int od1 = dw->output_dim + 1;
-    dw->weight = {.bytes = dw->policy_weight.bytes,
-                  .shape = {od1, dw->hidden_dim},
-                  .dtype_size = dw->policy_weight.dtype_size};
-}
-
 // ============================================================================
 // Initialization
 // ============================================================================
@@ -910,8 +897,6 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
 
     pufferl->alloc_fp32.create();
 
-    setup_fused_decoder_weight(wfp32);
-
     // Wrap fp32 params allocator for Metal GPU access
     mtl_wrap_allocator(&fp32_params);
 
@@ -943,7 +928,6 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
         decoder.reg_params(wi.decoder, &infer_alloc, esz_fp32);
         network.reg_params(wi.network, &infer_alloc, esz_fp32);
         infer_alloc.create();
-        setup_fused_decoder_weight(wi);
         mtl_wrap_allocator(&infer_alloc);
         // Initial copy: weights_fp32 → weights_infer
         copy_weights_to_infer(*pufferl);
@@ -990,7 +974,6 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     network.reg_train(wfp16.network, tb.network, &acts, &grads, B_TT, train_precision);
 
     pufferl->alloc_fp16.create();
-    setup_fused_decoder_weight(wfp16);
 
     // Wrap fp16 allocators for Metal GPU access
     mtl_wrap_allocator(&fp16_params);
@@ -1114,7 +1097,7 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
 
     // Optimizer init (register buffers with shared allocator)
     muon_init(pufferl->muon, &fp32_params,
-        pufferl->param_fp32_puf, lr, beta1, (double)hypers.weight_decay,
+        pufferl->param_fp32_puf, lr, beta1,
         hypers.ns_iters, alloc);
     // Single allocation for all registered buffers
     alloc.create();

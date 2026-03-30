@@ -289,7 +289,7 @@ struct RolloutBuf {
   PufTensor observations; // (horizon, segments, input_size) PRECISION
   PufTensor actions;      // (horizon, segments, num_atns) f64
   PufTensor values;       // (horizon, segments) PRECISION
-  PufTensor logprobs;     // (horizon, segments, num_atns) PRECISION — per-head
+  PufTensor logprobs;     // (horizon, segments) PRECISION — scalar joint logprob (matches CUDA)
   PufTensor rewards;      // (horizon, segments) PRECISION
   PufTensor terminals;    // (horizon, segments) PRECISION
   PufTensor ratio;        // (horizon, segments) PRECISION
@@ -303,7 +303,7 @@ inline void register_rollout_buffers(RolloutBuf &bufs, Allocator &alloc, int H,
       .observations = {.shape = {H, S, input_size}, .dtype_size = p},
       .actions = {.shape = {H, S, num_atns}, .dtype_size = (int)sizeof(double)},
       .values = {.shape = {H, S}, .dtype_size = p},
-      .logprobs = {.shape = {H, S, num_atns}, .dtype_size = p},
+      .logprobs = {.shape = {H, S}, .dtype_size = p},
       .rewards = {.shape = {H, S}, .dtype_size = p},
       .terminals = {.shape = {H, S}, .dtype_size = p},
       .ratio = {.shape = {H, S}, .dtype_size = p},
@@ -316,7 +316,7 @@ struct TrainGraph {
   PufTensor mb_obs;        // (S, H, input_size) PRECISION
   PufTensor mb_state;      // (L, S, 1, hidden) PRECISION
   PufTensor mb_actions;    // (S, H, num_atns) f64
-  PufTensor mb_logprobs;   // (S, H, num_atns) PRECISION — per-head
+  PufTensor mb_logprobs;   // (S, H) PRECISION — scalar joint logprob (matches CUDA)
   PufTensor mb_advantages; // (S, H) f32
   PufTensor mb_prio;       // (S, 1) PRECISION
   PufTensor mb_values;     // (S, H) PRECISION
@@ -334,7 +334,7 @@ inline void register_train_buffers(TrainGraph &bufs, Allocator &alloc, int S,
       .mb_state = {.shape = {num_layers, S, 1, hidden_size}, .dtype_size = p},
       .mb_actions = {.shape = {S, H, num_atns},
                      .dtype_size = (int)sizeof(double)},
-      .mb_logprobs = {.shape = {S, H, num_atns}, .dtype_size = p},
+      .mb_logprobs = {.shape = {S, H}, .dtype_size = p},
       .mb_advantages = {.shape = {S, H}, .dtype_size = (int)sizeof(float)},
       .mb_prio = {.shape = {S, 1}, .dtype_size = p},
       .mb_values = {.shape = {S, H}, .dtype_size = p},
@@ -420,11 +420,11 @@ struct EncoderActivations {
   PufTensor wgrad;       // (out_dim, in_dim) — training only
 };
 
-// Decoder: single linear projection (hidden → logits+value), matching upstream CUDA
+// Decoder: single linear projection (hidden → logits+value), matching upstream CUDA.
+// Single fused weight {od+1, H} registered with Muon — value row participates
+// in NS orthogonalization, matching CUDA models.cu:792-795.
 struct DecoderWeights {
-  PufTensor weight;       // (output_dim+1, hidden_dim) — full fused weight (forward/backward use this)
-  PufTensor policy_weight; // (output_dim, hidden_dim) — policy rows (Muon NS orthogonalization)
-  PufTensor value_weight;  // (1, hidden_dim) — value row (Muon direct gradient, no NS)
+  PufTensor weight;       // (output_dim+1, hidden_dim) — fused policy+value weight
   PufTensor logstd;       // continuous only: (1, output_dim)
   int hidden_dim, output_dim;
   bool continuous;
@@ -550,7 +550,7 @@ inline PufTensor ns_slice(PufTensor &buf, int64_t rows, int64_t cols) {
 }
 
 struct Muon {
-  double momentum, weight_decay;
+  double momentum;
   float lr_val_init;
   int ns_iters;  // Newton-Schulz iterations (default 5, sweepable)
   float *lr_ptr;

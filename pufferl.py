@@ -444,27 +444,23 @@ def _build_sweep_config(config: dict) -> dict:
         "max_suggestion_cost": int(sweep.get("max_suggestion_cost", 1800)),
     }
     # add sweep param ranges
-    for group in ("train", "policy", "env"):
+    for group in ("train", "policy", "env", "vec"):
         if group in sweep and isinstance(sweep[group], dict):
             sweep_config[group] = sweep[group]
     return sweep_config
 
 
 def _build_default_params(config: dict) -> dict:
-    """Extract default params (train + policy) from loaded config dict.
+    """Extract default params (train + policy + vec) from loaded config dict.
 
-    Protein's sweep config nests vec params (total_agents, num_buffers) under
-    train/, so we merge vec into train here to match the sweep key paths."""
-    train = dict(config.get("train", {}))
-    # vec params are sweepable under train/ in the sweep config
-    for k, v in config.get("vec", {}).items():
-        if k not in train:
-            train[k] = v
+    Each group matches the sweep config key paths so Protein sees consistent
+    namespaces (train/, policy/, vec/, env/)."""
     result = {
-        "train": train,
+        "train": dict(config.get("train", {})),
         "policy": dict(config.get("policy", {})),
     }
-    # env params (reward shaping coefficients etc.) are sweepable too
+    if config.get("vec"):
+        result["vec"] = dict(config["vec"])
     if config.get("env"):
         result["env"] = dict(config["env"])
     return result
@@ -500,18 +496,23 @@ def run_trial(
     with (log_dir / "config.json").open("w") as f:
         json.dump({"params": params}, f, indent=2)
 
-    # merge trial params into full config for build_configs
+    # merge trial params into full config for build_configs.
+    # Protein may place vec params under params["vec"] or params["train"] depending
+    # on sweep config structure — check both, preferring params["vec"] over train.
+    p_vec = params.get("vec", {})
+    p_train = params.get("train", {})
+    cfg_vec = config.get("vec", {})
     trial_config = {
-        "train": params.get("train", {}),
+        "train": p_train,
         "policy": params.get("policy", {}),
         "vec": {
-            "total_agents": params.get("train", {}).get("total_agents",
-                config.get("vec", {}).get("total_agents", 2048)),
-            "num_buffers": params.get("train", {}).get("num_buffers",
-                config.get("vec", {}).get("num_buffers", 1)),
-            "num_threads": config.get("vec", {}).get("num_threads",
-                params.get("train", {}).get("num_buffers",
-                    config.get("vec", {}).get("num_buffers", 1))),
+            "total_agents": p_vec.get("total_agents",
+                p_train.get("total_agents", cfg_vec.get("total_agents", 2048))),
+            "num_buffers": p_vec.get("num_buffers",
+                p_train.get("num_buffers", cfg_vec.get("num_buffers", 1))),
+            "num_threads": cfg_vec.get("num_threads",
+                p_vec.get("num_buffers",
+                    p_train.get("num_buffers", cfg_vec.get("num_buffers", 1)))),
         },
         "env": config.get("env", {}),
     }
