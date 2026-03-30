@@ -1516,17 +1516,18 @@ kernel void clip_by_norm_f32(
 
 struct NormalizeParams {
     float eps;
+    float max_inv_norm;
     int n;
 };
 
-// dst[i] /= max(sqrt(*norm), eps) — matches CUDA normalize_f32_kernel (no cap)
+// dst[i] /= max(sqrt(*norm), eps), capped at max_inv_norm
 kernel void normalize_f32(
     device float* dst                       [[buffer(0)]],
     const device float* norm_ptr            [[buffer(1)]],
     constant NormalizeParams& p             [[buffer(2)]],
     uint idx [[thread_position_in_grid]]
 ) {
-    float inv_norm = 1.0f / max(sqrt(*norm_ptr), p.eps);
+    float inv_norm = min(1.0f / max(sqrt(*norm_ptr), p.eps), p.max_inv_norm);
     if ((int)idx < p.n) dst[idx] = dst[idx] * inv_norm;
 }
 
