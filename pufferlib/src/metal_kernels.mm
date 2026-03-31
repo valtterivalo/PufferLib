@@ -412,8 +412,9 @@ void mtl_clip_by_norm_f32(float *data, const float *norm_ptr,
   mtl_dispatch_1d(ms, pso, count);
 }
 
+// Matches CUDA normalize_f32_kernel: inv_norm = 1/max(sqrt(norm), eps), no cap.
 void mtl_normalize_f32(float *data, const float *norm_ptr, float eps,
-                        float max_inv_norm, int count, cudaStream_t stream) {
+                        int count, cudaStream_t stream) {
   MetalStream *ms = mtl_resolve_stream(stream);
   ms->compute_encoder();
   auto pso = mtl_pipeline("normalize_f32");
@@ -422,9 +423,8 @@ void mtl_normalize_f32(float *data, const float *norm_ptr, float eps,
   mtl_set_ptr(ms, norm_ptr, 1);
   struct {
     float eps;
-    float max_inv_norm;
     int count;
-  } params = {eps, max_inv_norm, count};
+  } params = {eps, count};
   mtl_set_params(ms, params, 2);
   mtl_dispatch_1d(ms, pso, count);
 }
@@ -1262,7 +1262,7 @@ void muon_step(Muon *m, cudaStream_t stream) {
       }
       mtl_barrier(ms);
 
-      // Normalize x (with inv_norm cap at sqrt(M*N) for stability)
+      // Normalize x to unit Frobenius norm (matches CUDA models.cu:1219, no cap)
       ensure_norm_partials();
       {
         int nblk = std::min((int)((x.numel() + 255) / 256), 256);
@@ -1272,9 +1272,8 @@ void muon_step(Muon *m, cudaStream_t stream) {
         mtl_norm_reduce(m->ns.norm_ptr, norm_partials_buf, nblk, stream);
         mtl_barrier(ms);
       }
-      float max_inv_norm = std::sqrt((float)(M * N));
       mtl_normalize_f32((float *)x.bytes, m->ns.norm_ptr, 1e-7f,
-                        max_inv_norm, (int)x.numel(), stream);
+                        (int)x.numel(), stream);
       mtl_barrier(ms);
 
       // Newton-Schulz iterations
@@ -1298,25 +1297,15 @@ void muon_step(Muon *m, cudaStream_t stream) {
 
       PufTensor &result_precision = (m->ns_iters % 2 == 0) ? x : tmp;
 
-      // Re-normalize NS output to unit norm, then scale to sqrt(max(M,N)).
-      // Metal's GEMM precision differs from CUDA — NS convergence isn't guaranteed,
-      // so re-normalization ensures bounded update magnitude regardless.
-      {
-        int nblk = std::min((int)((result_precision.numel() + 255) / 256), 256);
-        mtl_norm_f32(norm_partials_buf, (const float *)result_precision.bytes,
-                     (int)result_precision.numel(), nblk, stream);
-        mtl_barrier(ms);
-        mtl_norm_reduce(m->ns.norm_ptr, norm_partials_buf, nblk, stream);
-        mtl_barrier(ms);
-        float max_inv = (float)std::sqrt((double)(M * N));
-        mtl_normalize_f32((float *)result_precision.bytes, m->ns.norm_ptr,
-                          1e-7f, max_inv, (int)result_precision.numel(), stream);
+      // Scale matches CUDA models.cu:1233: sqrt(max(1.0, M/N)).
+      // No post-NS re-normalization — NS output norm scales naturally with
+      // gradient magnitude, giving a wider viable lr range than fixed-norm updates.
+      float scale = (float)std::sqrt(std::max(1.0, (double)M / (double)N));
+      if (scale != 1.0f) {
+        mtl_scale_f32((float *)result_precision.bytes, scale,
+                      (int)result_precision.numel(), stream);
         mtl_barrier(ms);
       }
-      float scale = (float)std::sqrt(std::max((double)M, (double)N));
-      mtl_scale_f32((float *)result_precision.bytes, scale,
-                    (int)result_precision.numel(), stream);
-      mtl_barrier(ms);
 
       PufTensor out_f32 = {.bytes = (char *)up_ptr,
                            .shape = {R, C},

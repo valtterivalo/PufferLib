@@ -1368,8 +1368,7 @@ kernel void muon_weight_update_kernel(
 ) {
     if ((int)idx >= p.n) return;
     float lr = *lr_ptr;
-    float update = clamp(up[idx], -100.0f, 100.0f);
-    wb[idx] = wb[idx] - lr * update;
+    wb[idx] = wb[idx] - lr * up[idx];
 }
 
 // ============================================================================
@@ -1516,18 +1515,17 @@ kernel void clip_by_norm_f32(
 
 struct NormalizeParams {
     float eps;
-    float max_inv_norm;
     int n;
 };
 
-// dst[i] /= max(sqrt(*norm), eps), capped at max_inv_norm
+// dst[i] /= max(sqrt(*norm), eps) — matches CUDA (no cap)
 kernel void normalize_f32(
     device float* dst                       [[buffer(0)]],
     const device float* norm_ptr            [[buffer(1)]],
     constant NormalizeParams& p             [[buffer(2)]],
     uint idx [[thread_position_in_grid]]
 ) {
-    float inv_norm = min(1.0f / max(sqrt(*norm_ptr), p.eps), p.max_inv_norm);
+    float inv_norm = 1.0f / max(sqrt(*norm_ptr), p.eps);
     if ((int)idx < p.n) dst[idx] = dst[idx] * inv_norm;
 }
 
