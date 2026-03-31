@@ -103,7 +103,9 @@ void c_step(Env* env) {
             env->log.dmg_from_type[t] = s->dmg_from_type[t];
             env->log.killed_by_type[t] = (float)s->killed_by_type[t];
         }
-        env->log.n = 1.0f;  /* always report so sweep has continuous signal */
+        /* only wave-0 agents contribute to sweep metric; curriculum agents
+           (start_wave > 0) still train but their scores are excluded from the log */
+        env->log.n = (s->start_wave == 0) ? 1.0f : 0.0f;
         env->log.npc_kills = (float)s->total_npc_kills;
         env->log.gear_switches = (float)s->total_gear_switches;
         env->log.current_ranged = (float)s->player.current_ranged;
@@ -167,6 +169,7 @@ void c_close(Env* env) {
 
 void c_render(Env* env) { (void)env; }
 
+#define MY_VEC_INIT
 #include "vecenv.h"
 
 /* max episode length for action buffer (INF_MAX_TICKS from encounter) */
@@ -190,6 +193,92 @@ void my_init(Env* env, Dict* kwargs) {
         env->episode_action_cap = 0;
     }
     env->episode_action_len = 0;
+}
+
+/* curriculum wave mixing: start some agents at later waves for late-game gradient signal.
+   wave-0 agents are scored normally; curriculum agents train but don't affect sweep metric. */
+#define MAX_CURRICULUM_TIERS 4
+
+Env* my_vec_init(int* num_envs_out, int* buffer_env_starts, int* buffer_env_counts,
+                 Dict* vec_kwargs, Dict* env_kwargs) {
+    int total_agents = (int)dict_get(vec_kwargs, "total_agents")->value;
+    int num_buffers = (int)dict_get(vec_kwargs, "num_buffers")->value;
+    int agents_per_buffer = total_agents / num_buffers;
+
+    /* parse curriculum tiers from env config */
+    static const char* wave_keys[] = {
+        "curriculum_wave_1","curriculum_wave_2","curriculum_wave_3","curriculum_wave_4"
+    };
+    static const char* frac_keys[] = {
+        "curriculum_frac_1","curriculum_frac_2","curriculum_frac_3","curriculum_frac_4"
+    };
+    int curriculum_waves[MAX_CURRICULUM_TIERS];
+    float curriculum_fracs[MAX_CURRICULUM_TIERS];
+    int num_tiers = 0;
+    for (int i = 0; i < MAX_CURRICULUM_TIERS; i++) {
+        DictItem* w = dict_get_unsafe(env_kwargs, wave_keys[i]);
+        DictItem* f = dict_get_unsafe(env_kwargs, frac_keys[i]);
+        if (w && f && f->value > 0.0) {
+            curriculum_waves[num_tiers] = (int)w->value;
+            curriculum_fracs[num_tiers] = (float)f->value;
+            num_tiers++;
+        }
+    }
+
+    /* allocate and init all envs (same as default my_vec_init) */
+    Env* envs = (Env*)calloc(total_agents, sizeof(Env));
+    int num_envs = 0;
+    int agents_created = 0;
+    while (agents_created < total_agents) {
+        srand(num_envs);
+        envs[num_envs].rng = num_envs;
+        my_init(&envs[num_envs], env_kwargs);
+        agents_created += envs[num_envs].num_agents;
+        num_envs++;
+    }
+    envs = (Env*)realloc(envs, num_envs * sizeof(Env));
+
+    /* assign curriculum start_waves to agents at the end of the array */
+    if (num_tiers > 0) {
+        int tier_counts[MAX_CURRICULUM_TIERS];
+        int curriculum_total = 0;
+        for (int t = 0; t < num_tiers; t++) {
+            tier_counts[t] = (int)(curriculum_fracs[t] * num_envs);
+            if (tier_counts[t] < 1) tier_counts[t] = 1;
+            curriculum_total += tier_counts[t];
+        }
+        int wave0_count = num_envs - curriculum_total;
+        int cursor = wave0_count;
+        for (int t = 0; t < num_tiers; t++) {
+            for (int i = 0; i < tier_counts[t] && cursor < num_envs; i++, cursor++) {
+                ENCOUNTER_INFERNO.put_int(envs[cursor].enc_state,
+                    "start_wave", curriculum_waves[t]);
+            }
+        }
+        fprintf(stderr, "curriculum: %d wave-0", wave0_count);
+        for (int t = 0; t < num_tiers; t++)
+            fprintf(stderr, ", %d wave-%d", tier_counts[t], curriculum_waves[t]);
+        fprintf(stderr, " (%d total)\n", num_envs);
+    }
+
+    /* fill buffer info (same as default) */
+    int buf = 0;
+    int buf_agents = 0;
+    buffer_env_starts[0] = 0;
+    buffer_env_counts[0] = 0;
+    for (int i = 0; i < num_envs; i++) {
+        buf_agents += envs[i].num_agents;
+        buffer_env_counts[buf]++;
+        if (buf_agents >= agents_per_buffer && buf < num_buffers - 1) {
+            buf++;
+            buffer_env_starts[buf] = i + 1;
+            buffer_env_counts[buf] = 0;
+            buf_agents = 0;
+        }
+    }
+
+    *num_envs_out = num_envs;
+    return envs;
 }
 
 void my_log(Log* log, Dict* out) {
