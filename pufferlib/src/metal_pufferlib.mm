@@ -399,6 +399,18 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
             buf_rng_seed, buf_rng_offset, stream);
 
         mtl_ensure_stream_synced(stream);
+
+        // Stash logits + f32 actions for logprob recompute when train_fp16=1.
+        // Rollout uses fp32 weights; training uses fp16 → precision mismatch in
+        // PPO ratio unless we recompute old_logprobs in fp16 at training start.
+        if (pufferl->train_fp16 && pufferl->rollout_logits.bytes) {
+            DecoderActivations *da = (DecoderActivations *)acts.decoder;
+            PufTensor logits_dst = puf_slice(pufferl->rollout_logits, t, start, block_size);
+            memcpy(logits_dst.bytes, da->out.bytes, block_size * fused_cols * sizeof(float));
+            PufTensor acts_f32_dst = puf_slice(pufferl->rollout_actions_f32, t, start, block_size);
+            memcpy(acts_f32_dst.bytes, act_f32_buf.bytes, block_size * num_atns * sizeof(float));
+        }
+
         mtl_sample_logits_expand((const float*)act_f32_buf.bytes,
                                  (double*)act_slice.bytes, block_size * num_atns);
     }
@@ -472,10 +484,11 @@ void train_impl(PuffeRL& pufferl) {
     // Metal 4: ensure all rollout transposes are visible before consumers read them.
     mtl_barrier((MetalStream*)train_stream);
 
-    // CPU inference: recompute logprobs on GPU using fast::exp to match PPO.
-    // Transpose stored logits + f32 actions, then batch-recompute logprobs
-    // for all (total_agents * horizon) samples in one kernel dispatch.
-    if (pufferl.cpu_inference) {
+    // Recompute logprobs when rollout and training use different precision:
+    //   cpu_inference: rollout uses IEEE expf, training uses GPU fast::exp
+    //   train_fp16: rollout uses fp32 weights, training uses fp16 weights
+    // Both cause PPO ratio != 1.0 at start of training without recompute.
+    if (pufferl.cpu_inference || pufferl.train_fp16) {
         puf_transpose_01(pufferl.train_logits, pufferl.rollout_logits, train_stream);
         puf_transpose_01(pufferl.train_actions_f32, pufferl.rollout_actions_f32, train_stream);
         mtl_barrier((MetalStream*)train_stream);
@@ -1081,8 +1094,11 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
         alloc.reg(&pufferl->ones_mask);
     }
 
-    // Decoder logits + f32 actions for GPU logprob recompute (cpu_inference only).
-    if (pufferl->cpu_inference) {
+    // Decoder logits + f32 actions for logprob recompute at training start.
+    // Needed when rollout and training use different precision:
+    //   cpu_inference: rollout uses IEEE expf, training uses GPU fast::exp
+    //   train_fp16: rollout uses fp32 weights, training uses fp16 weights
+    if (pufferl->cpu_inference || hypers.train_fp16) {
         int fused = decoder_output_size + 1;
         int na = num_action_heads;
         pufferl->rollout_logits = {.shape = {horizon, total_agents, fused}, .dtype_size = (int)sizeof(float)};
