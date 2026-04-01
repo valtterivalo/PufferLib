@@ -1081,6 +1081,12 @@ def _build_and_write(
     for t in sorted(type_counts):
         print(f"    type {t:2d}: {type_counts[t]}")
 
+    # filter excluded object IDs
+    if args.exclude_id_set:
+        before = len(all_placements)
+        all_placements = [p for p in all_placements if p.obj_id not in args.exclude_id_set]
+        print(f"  excluded {before - len(all_placements)} placements ({len(args.exclude_id_set)} object IDs filtered)")
+
     # process placements into expanded vertex data
     print("decoding models and building geometry...")
     model_geom_cache: dict[int, ModelData] = {}
@@ -1337,7 +1343,18 @@ def main() -> None:
         default=3,
         help="number of regions around the fight area center to export (default: 3)",
     )
+    parser.add_argument(
+        "--exclude-ids",
+        type=str,
+        default=None,
+        help="comma-separated object IDs to exclude from export (e.g. 30327,30328,...)",
+    )
     args = parser.parse_args()
+
+    # parse exclude IDs into a set
+    args.exclude_id_set = set()
+    if args.exclude_ids:
+        args.exclude_id_set = {int(x.strip()) for x in args.exclude_ids.split(",")}
 
     if args.modern_cache:
         _main_modern(args)

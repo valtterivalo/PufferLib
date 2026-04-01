@@ -266,6 +266,7 @@ static void run_visual(OsrsPvp* env, const char* encounter_name, const char* rep
     } else if (encounter_name && strcmp(encounter_name, "inferno") == 0) {
         rc->terrain = terrain_load("data/inferno.terrain");
         rc->objects = objects_load("data/inferno.objects");
+        rc->objects_zuk = objects_load("data/inferno_zuk.objects");
         /* inferno region (35,83) starts at world (2240, 5312).
            encounter uses region-local coords (10-40, 13-44).
            offset terrain/objects so local coord 0 maps to world 2240. */
@@ -273,6 +274,8 @@ static void run_visual(OsrsPvp* env, const char* encounter_name, const char* rep
             terrain_offset(rc->terrain, 2246, 5315);
         if (rc->objects)
             objects_offset(rc->objects, 2246, 5315);
+        if (rc->objects_zuk)
+            objects_offset(rc->objects_zuk, 2246, 5315);
 
         rc->npc_model_cache = model_cache_load("data/inferno_npcs.models");
         rc->npc_anim_cache = anim_cache_load("data/inferno_npcs.anims");

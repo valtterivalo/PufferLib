@@ -309,6 +309,8 @@ typedef struct {
 
     /* placed objects (walls, buildings, trees) */
     ObjectMesh* objects;
+    ObjectMesh* objects_zuk;  /* post-Zuk variant (prison walls removed) */
+    int zuk_active;           /* set when Zuk NPC (7706) is present */
 
     /* NPC models at spawn positions */
     ObjectMesh* npcs;
@@ -833,6 +835,10 @@ static void render_destroy_client(RenderClient* rc) {
         objects_free(rc->objects);
         rc->objects = NULL;
     }
+    if (rc->objects_zuk) {
+        objects_free(rc->objects_zuk);
+        rc->objects_zuk = NULL;
+    }
     if (rc->npcs) {
         objects_free(rc->npcs);
         rc->npcs = NULL;
@@ -1143,6 +1149,11 @@ static void render_populate_entities(RenderClient* rc, OsrsPvp* env) {
             int count = 0;
             def->fill_render_entities(env->encounter_state, rc->entities, MAX_RENDER_ENTITIES, &count);
             rc->entity_count = count;
+            /* detect Zuk presence for object variant swap */
+            rc->zuk_active = 0;
+            for (int zi = 0; zi < count; zi++) {
+                if (rc->entities[zi].npc_def_id == 7706) { rc->zuk_active = 1; break; }
+            }
             /* debug: print entity info on first populate */
             static int debug_once = 1;
             if (debug_once && count > 0) {
@@ -1255,10 +1266,10 @@ static void render_post_tick(RenderClient* rc, OsrsPvp* env) {
            snaps at >256 sub-units = 2 tiles). the 1-tile threshold was too aggressive
            and caused snapping during normal attack-anim stall catch-up. */
         if (p->entity_type == ENTITY_NPC && p->npc_visible) {
-            int tile_dx = (rc->sub_x[i] / 128) - p->x;
-            int tile_dy = (rc->sub_y[i] / 128) - p->y;
-            if (tile_dx < 0) tile_dx = -tile_dx;
-            if (tile_dy < 0) tile_dy = -tile_dy;
+            /* distance to destination in tiles — uses dest center, not SW anchor,
+               so large NPCs (size 5 shield) don't false-trigger the snap. */
+            int tile_dx = abs(rc->sub_x[i] - new_dest_x) / 128;
+            int tile_dy = abs(rc->sub_y[i] - new_dest_y) / 128;
             if (tile_dx > 2 || tile_dy > 2 || (rc->sub_x[i] == 0 && rc->sub_y[i] == 0)) {
                 rc->sub_x[i] = new_dest_x;
                 rc->sub_y[i] = new_dest_y;
@@ -1580,7 +1591,7 @@ static void render_client_tick(RenderClient* rc, int player_idx) {
             /* when walking (not facing opponent), update target_yaw to movement
                direction each client tick, matching nextStep's turnDirection
                assignment from step delta. */
-            if (!rc->facing_opponent[player_idx]) {
+            if (!rc->facing_opponent[player_idx] && rc->entities[player_idx].npc_def_id != 7707) {
                 float fdx = (float)dx;
                 float fdy = (float)dy;
                 if (fdx != 0.0f || fdy != 0.0f) {
@@ -3273,10 +3284,15 @@ static void render_draw_3d_world(RenderClient* rc) {
 
     /* placed objects — disable backface culling since OSRS uses flat
        billboard-style quads for trees/plants (two crossing planes) */
-    if (rc->objects && rc->objects->loaded) {
-        rlDisableBackfaceCulling();
-        DrawModel(rc->objects->model, (Vector3){ 0, 0, 0 }, 1.0f, WHITE);
-        rlEnableBackfaceCulling();
+    {
+        /* use post-Zuk objects (prison walls removed) when Zuk is present */
+        ObjectMesh* obj = (rc->objects_zuk && rc->objects_zuk->loaded && rc->zuk_active)
+            ? rc->objects_zuk : rc->objects;
+        if (obj && obj->loaded) {
+            rlDisableBackfaceCulling();
+            DrawModel(obj->model, (Vector3){ 0, 0, 0 }, 1.0f, WHITE);
+            rlEnableBackfaceCulling();
+        }
     }
 
     /* NPC models at spawn positions */
