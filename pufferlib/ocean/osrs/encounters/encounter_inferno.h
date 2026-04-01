@@ -845,12 +845,17 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
     s->player.x = is_zuk_wave ? INF_ZUK_PLAYER_START_X : INF_PLAYER_START_X;
     s->player.y = is_zuk_wave ? INF_ZUK_PLAYER_START_Y : INF_PLAYER_START_Y;
 
-    /* pillars */
+    /* pillars: all destroyed at end of wave 66 (index 65), so waves 66+ have none */
     for (int i = 0; i < INF_NUM_PILLARS; i++) {
         s->pillars[i].x = INF_PILLAR_POS[i][0];
         s->pillars[i].y = INF_PILLAR_POS[i][1];
-        s->pillars[i].hp = INF_PILLAR_HP;
-        s->pillars[i].active = 1;
+        if (saved_start >= 66) {
+            s->pillars[i].hp = 0;
+            s->pillars[i].active = 0;
+        } else {
+            s->pillars[i].hp = INF_PILLAR_HP;
+            s->pillars[i].active = 1;
+        }
     }
     inf_rebuild_los(s);
 
@@ -963,6 +968,8 @@ static void inf_spawn_wave(InfernoState* s) {
         s->zuk.enraged = 0;
         s->zuk.healer_spawned = 0;
         s->zuk.jad_spawned = 0;
+        s->zuk.timer_paused = 0;
+        s->zuk.has_paused = 0;
 
         /* player starts at zuk position */
         s->player.x = INF_ZUK_PLAYER_START_X;
@@ -1991,7 +1998,8 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
     int has_new_target = 0;
     if (target > 0 && target <= INF_MAX_NPCS) {
         int npc_idx = target - 1;
-        if (s->npcs[npc_idx].active && s->npcs[npc_idx].death_ticks == 0) {
+        if (s->npcs[npc_idx].active && s->npcs[npc_idx].death_ticks == 0 &&
+            s->npcs[npc_idx].type != INF_NPC_ZUK_SHIELD) {
             s->player_attack_target = npc_idx;
             has_new_target = 1;
             /* tagging: redirect NPC aggro from shield/zuk to player */
@@ -2784,7 +2792,8 @@ static void inf_fill_render_entities(EncounterState* state, RenderEntity* out, i
 
 static void inf_put_int(EncounterState* state, const char* key, int value) {
     InfernoState* s = (InfernoState*)state;
-    if (strcmp(key, "start_wave") == 0) s->start_wave = value;
+    /* wave is 1-indexed externally (wave 1 = first, wave 69 = Zuk), 0-indexed internally */
+    if (strcmp(key, "start_wave") == 0) s->start_wave = (value > 0) ? value - 1 : 0;
     else if (strcmp(key, "seed") == 0) s->rng_state = (uint32_t)value;
     else if (strcmp(key, "world_offset_x") == 0) s->world_offset_x = value;
     else if (strcmp(key, "world_offset_y") == 0) s->world_offset_y = value;

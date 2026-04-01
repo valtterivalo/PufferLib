@@ -1324,6 +1324,12 @@ static void render_post_tick(RenderClient* rc, OsrsPvp* env) {
             }
         }
 
+        /* shield always faces south (yaw = PI) */
+        if (p->npc_def_id == 7707) {
+            rc->target_yaw[i] = 3.14159265f;
+            rc->facing_opponent[i] = 0;
+        }
+
         /* HP bar + hitsplat: triggered once per game tick when a hit lands.
            HP bar: OSRS cycleStatus = clientTick + 300 (6s = 10 game ticks).
            hitsplat: one splat per hit, fills the next available slot (0-3). */

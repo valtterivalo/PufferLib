@@ -141,7 +141,7 @@ static void replay_free(ReplayFile* rf) {
     if (rf) { free(rf->actions); free(rf); }
 }
 
-static void run_visual(OsrsPvp* env, const char* encounter_name, const char* replay_path) {
+static void run_visual(OsrsPvp* env, const char* encounter_name, const char* replay_path, int start_wave) {
     env->client = NULL;
 
     /* set up encounter if specified, otherwise default to PvP */
@@ -181,9 +181,14 @@ static void run_visual(OsrsPvp* env, const char* encounter_name, const char* rep
             }
         }
 
+        if (start_wave >= 0 && edef->put_int)
+            edef->put_int(env->encounter_state, "start_wave", start_wave);
         edef->reset(env->encounter_state, 0);
-        fprintf(stderr, "encounter: %s (obs=%d, heads=%d)\n",
-                edef->name, edef->obs_size, edef->num_action_heads);
+        fprintf(stderr, "encounter: %s (obs=%d, heads=%d)%s\n",
+                edef->name, edef->obs_size, edef->num_action_heads,
+                start_wave >= 0 ? "" : "");
+        if (start_wave >= 0)
+            fprintf(stderr, "start_wave: %d\n", start_wave);
     } else {
         env->use_c_opponent = 1;
         env->opponent.type = OPP_IMPROVED;
@@ -491,6 +496,7 @@ static void run_visual(OsrsPvp* env, const char* encounter_name, const char* rep
 int main(int argc, char** argv) {
     int use_visual = 1;  /* default to visual mode */
     int gear_tier = -1;  /* -1 = random (default LMS distribution) */
+    int start_wave = -1; /* -1 = default (wave 0) */
     const char* encounter_name __attribute__((unused)) = NULL;
     const char* replay_path __attribute__((unused)) = NULL;
     for (int i = 1; i < argc; i++) {
@@ -501,6 +507,8 @@ int main(int argc, char** argv) {
             replay_path = argv[++i];
         else if (strcmp(argv[i], "--tier") == 0 && i + 1 < argc)
             gear_tier = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--wave") == 0 && i + 1 < argc)
+            start_wave = atoi(argv[++i]);
     }
 
     srand((unsigned int)time(NULL));
@@ -549,7 +557,7 @@ int main(int argc, char** argv) {
         env.ocean_obs = env._obs_buf;
         env.ocean_rew = env.rewards;
         env.ocean_term = env.terminals;
-        run_visual(&env, encounter_name, replay_path);
+        run_visual(&env, encounter_name, replay_path, start_wave);
         pvp_close(&env);
 #else
         fprintf(stderr, "not compiled with visual support (use: make visual)\n");
