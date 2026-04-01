@@ -560,6 +560,8 @@ def run_trial(
             last_report_time = now
 
         if wandb_run:
+            approx_kl = losses.get("approx_kl", 0)
+            batch_size = total_agents * int(c["horizon"])
             log_dict = {
                 "sps": sps, "score": score,
                 "episode_return": env_stats.get("episode_return", 0),
@@ -567,6 +569,9 @@ def run_trial(
                 "entropy": losses.get("entropy", 0),
                 "pg_loss": losses.get("pg_loss", 0),
                 "vf_loss": losses.get("vf_loss", 0),
+                "approx_kl": approx_kl,
+                "clipfrac": losses.get("clipfrac", 0),
+                "ddr": batch_size / approx_kl if approx_kl > 1e-8 else 0,
                 **{k: v for k, v in env_stats.items()
                    if k not in ("episode_return", "episode_length", "score")},
             }
@@ -1052,6 +1057,8 @@ def train_cli(env_name: str):
         print('\033[0;0H' + capture.get())
 
         if wandb_run:
+            approx_kl = losses.get("approx_kl", 0)
+            batch_size = total_agents * horizon
             log_dict = {
                 "sps": sps,
                 "score": score,
@@ -1060,6 +1067,9 @@ def train_cli(env_name: str):
                 "entropy": ent,
                 "pg_loss": pg,
                 "vf_loss": vf,
+                "approx_kl": approx_kl,
+                "clipfrac": losses.get("clipfrac", 0),
+                "ddr": batch_size / approx_kl if approx_kl > 1e-8 else 0,
                 **{k: v for k, v in env_stats.items()
                    if k not in ("episode_return", "episode_length", "score")},
             }
