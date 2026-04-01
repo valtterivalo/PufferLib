@@ -259,7 +259,7 @@ static const InfNPCStats INF_NPC_STATS[INF_NUM_NPC_TYPES] = {
         .stun_on_spawn = 0, .can_move = 1 },
 
     /* HEALER_ZUK (JalMejJak): AOE magic sparks, cannot move */
-    [INF_NPC_HEALER_ZUK] = { .hp = 75, .attack_speed = 4, .attack_range = 99, .size = 1,
+    [INF_NPC_HEALER_ZUK] = { .hp = 75, .attack_speed = 3, .attack_range = 99, .size = 1,
         .default_style = ATTACK_STYLE_MAGIC, .melee_style = MELEE_STYLE_STAB, .can_melee = 0,
         .att_level = 0, .str_level = 0, .def_level = 100, .range_level = 0, .magic_level = 0,
         .melee_att_bonus = 0, .range_att_bonus = 0, .magic_att_bonus = 0,
@@ -447,6 +447,10 @@ typedef struct {
        >0 means dying (decremented each tick), 0 = alive or fully removed. */
     int death_ticks;
 
+    /* aggro target: -1 = player (default), >= 0 = NPC index.
+       used for set→shield targeting and healer→zuk healing. */
+    int aggro_target;
+
     /* per-tick render flags (cleared at start of each tick) */
     int attacked_this_tick;  /* 1 when NPC attacks this tick */
     int moved_this_tick;     /* 1 when NPC moves this tick */
@@ -483,6 +487,10 @@ typedef struct {
 
     int healer_spawned;    /* 1 when healers have been spawned */
     int jad_spawned;       /* 1 when jad has been spawned during shield phase */
+
+    /* set timer pause: pauses between HP 600→480, resumes with +175 when jad spawns */
+    int timer_paused;
+    int has_paused;
 } InfZukState;
 
 /* ======================================================================== */
@@ -887,6 +895,7 @@ static void inf_init_npc(InfernoState* s, int idx, InfNPCType type, int x, int y
     npc->target_y = y;
     npc->heal_target = -1;
     npc->jad_owner_idx = -1;
+    npc->aggro_target = -1;
     npc->blob_scanned_prayer = -1;
     npc->stun_timer = stats->stun_on_spawn;
 
@@ -1119,7 +1128,9 @@ static void inf_npc_move(InfernoState* s, int idx) {
        this is the core OSRS mechanic: NPCs only walk toward their target
        while they cannot see it. once LOS is established, they attack. */
     if (npc->type != INF_NPC_NIBBLER && stats->attack_range > 1) {
-        if (inf_npc_has_los(s, idx)) return;
+        /* NPCs targeting another NPC (set→shield) skip player LOS check —
+           they always have clear LOS to the shield in the Zuk arena. */
+        if (npc->aggro_target < 0 && inf_npc_has_los(s, idx)) return;
     }
 
     /* target selection */
@@ -1141,7 +1152,14 @@ static void inf_npc_move(InfernoState* s, int idx) {
             }
             if (!found) { tx = s->player.x; ty = s->player.y; }
         }
+    } else if (npc->aggro_target >= 0 && npc->aggro_target < INF_MAX_NPCS &&
+               s->npcs[npc->aggro_target].active) {
+        /* targeting another NPC (set→shield, jad→shield) */
+        tx = s->npcs[npc->aggro_target].x;
+        ty = s->npcs[npc->aggro_target].y;
     } else {
+        /* default: target player. clear stale aggro if target died. */
+        if (npc->aggro_target >= 0) npc->aggro_target = -1;
         tx = s->player.x;
         ty = s->player.y;
     }
@@ -1226,8 +1244,36 @@ static void inf_npc_attack(InfernoState* s, int idx) {
 
     const InfNPCStats* stats = &INF_NPC_STATS[npc->type];
 
-    /* shield and zuk healers don't attack normally (handled separately) */
+    /* shield doesn't attack */
     if (npc->type == INF_NPC_ZUK_SHIELD) return;
+
+    /* NPC targeting another NPC (set/jad → shield): always hit, random damage */
+    if (npc->aggro_target >= 0 && npc->aggro_target < INF_MAX_NPCS) {
+        InfNPC* target = &s->npcs[npc->aggro_target];
+        if (target->active) {
+            int max_hit = osrs_npc_magic_max_hit(stats->magic_base_dmg, stats->magic_dmg_pct);
+            if (stats->can_melee) {
+                max_hit = osrs_npc_melee_max_hit(stats->str_level, stats->melee_str_bonus);
+            }
+            int dmg = encounter_rand_int(&s->rng_state, max_hit + 1);
+            encounter_damage_npc(&target->hp, &target->hit_landed_this_tick,
+                                 &target->hit_damage, dmg);
+            /* shield death: redirect all NPCs targeting it to the player */
+            if (target->hp <= 0 && target->type == INF_NPC_ZUK_SHIELD) {
+                target->active = 0;
+                s->zuk.shield_idx = -1;
+                for (int i = 0; i < INF_MAX_NPCS; i++) {
+                    if (s->npcs[i].aggro_target == npc->aggro_target)
+                        s->npcs[i].aggro_target = -1;
+                }
+            }
+            npc->attacked_this_tick = 1;
+            npc->attack_timer = stats->attack_speed;
+            return;
+        } else {
+            npc->aggro_target = -1;  /* target died, fall through to player attack */
+        }
+    }
 
     /* nibbler attacks pillars, not player */
     if (npc->type == INF_NPC_NIBBLER) {
@@ -1273,29 +1319,31 @@ static void inf_npc_attack(InfernoState* s, int idx) {
         return;
     }
 
-    /* zuk healer: heals zuk + AOE sparks on player (instant, no projectile delay) */
+    /* zuk healer: heals Zuk when aggro_target >= 0 (untouched by player),
+       fires AoE sparks at player when aggro_target == -1 (tagged by player). */
     if (npc->type == INF_NPC_HEALER_ZUK) {
-        /* heal Zuk */
-        for (int i = 0; i < INF_MAX_NPCS; i++) {
-            if (s->npcs[i].active && s->npcs[i].type == INF_NPC_ZUK) {
-                int heal = encounter_rand_int(&s->rng_state, 25);  /* 0-24 HP */
-                s->npcs[i].hp += heal;
-                if (s->npcs[i].hp > s->npcs[i].max_hp)
-                    s->npcs[i].hp = s->npcs[i].max_hp;
-                break;
+        if (npc->aggro_target >= 0) {
+            /* heal Zuk */
+            int ti = npc->aggro_target;
+            if (ti >= 0 && ti < INF_MAX_NPCS && s->npcs[ti].active && s->npcs[ti].type == INF_NPC_ZUK) {
+                int heal = encounter_rand_int(&s->rng_state, 25);
+                s->npcs[ti].hp += heal;
+                if (s->npcs[ti].hp > s->npcs[ti].max_hp)
+                    s->npcs[ti].hp = s->npcs[ti].max_hp;
             }
-        }
-        /* AOE sparks on player — queue as pending hit with magic delay */
-        int max_hit = osrs_npc_magic_max_hit(stats->magic_base_dmg, stats->magic_dmg_pct);
-        int dmg = encounter_rand_int(&s->rng_state, max_hit + 1);
-        if (s->player_pending_hit_count < ENCOUNTER_MAX_PENDING_HITS) {
-            int d = encounter_dist_to_npc(npc->x, npc->y, s->player.x, s->player.y, 1);
-            EncounterPendingHit* ph = &s->player_pending_hits[s->player_pending_hit_count++];
-            ph->active = 1;
-            ph->damage = dmg;
-            ph->ticks_remaining = encounter_magic_hit_delay(d, 0);
-            ph->attack_style = ATTACK_STYLE_MAGIC;
-            ph->check_prayer = 0;
+        } else {
+            /* AoE sparks on player */
+            int max_hit = osrs_npc_magic_max_hit(stats->magic_base_dmg, stats->magic_dmg_pct);
+            int dmg = encounter_rand_int(&s->rng_state, max_hit + 1);
+            if (s->player_pending_hit_count < ENCOUNTER_MAX_PENDING_HITS) {
+                int d = encounter_dist_to_npc(npc->x, npc->y, s->player.x, s->player.y, 1);
+                EncounterPendingHit* ph = &s->player_pending_hits[s->player_pending_hit_count++];
+                ph->active = 1;
+                ph->damage = dmg;
+                ph->ticks_remaining = encounter_magic_hit_delay(d, 0);
+                ph->attack_style = ATTACK_STYLE_MAGIC;
+                ph->check_prayer = 0;
+            }
         }
         npc->attacked_this_tick = 1;
         npc->attack_timer = stats->attack_speed;
@@ -1376,25 +1424,17 @@ static void inf_npc_attack(InfernoState* s, int idx) {
         npc->jad_attack_style = actual_style;
     }
 
-    /* zuk: typeless attack (not blockable by prayer) */
+    /* zuk: typeless attack (not blockable by prayer).
+       shield blocks with zero damage — only sets/jad can damage the shield. */
     if (npc->type == INF_NPC_ZUK) {
-        /* check if shield blocks the attack */
         int shield_idx = s->zuk.shield_idx;
         if (shield_idx >= 0 && s->npcs[shield_idx].active) {
             InfNPC* shield = &s->npcs[shield_idx];
             int shield_left = shield->x;
             int shield_right = shield->x + shield->size;
-            /* shield blocks if player within shield x range AND y >= 41 */
             if (s->player.x >= shield_left && s->player.x < shield_right &&
                 s->player.y >= 41) {
-                /* shield absorbs the hit (typeless — no accuracy roll) */
-                int max_hit = osrs_npc_magic_max_hit(stats->magic_base_dmg, stats->magic_dmg_pct);
-                int dmg = encounter_rand_int(&s->rng_state, max_hit + 1);
-                encounter_damage_npc(&shield->hp, &shield->hit_landed_this_tick, &shield->hit_damage, dmg);
-                if (shield->hp <= 0) {
-                    shield->active = 0;
-                    s->zuk.shield_idx = -1;
-                }
+                /* shield absorbs — no damage to shield or player */
                 npc->attacked_this_tick = 1;
                 npc->attack_timer = s->zuk.enraged ? 7 : stats->attack_speed;
                 return;
@@ -1618,31 +1658,48 @@ static void inf_zuk_tick(InfernoState* s) {
         }
     }
 
-    /* set timer: spawns JalZek + JalXil periodically */
-    if (s->zuk.set_timer > 0) {
-        s->zuk.set_timer--;
-    } else {
-        /* spawn mager at {20,36} and ranger at {29,36} */
-        int m_slot = inf_find_free_npc(s);
-        if (m_slot >= 0) inf_init_npc(s, m_slot, INF_NPC_MAGER, 20, 36);
-        int r_slot = inf_find_free_npc(s);
-        if (r_slot >= 0) inf_init_npc(s, r_slot, INF_NPC_RANGER, 29, 36);
-
-        /* when shield dies, these switch aggro to player (default behavior) */
-        s->zuk.set_timer = s->zuk.set_interval;
+    /* set timer pause: freeze at HP < 600, resume at HP < 480 with +175 ticks */
+    if (!s->zuk.has_paused && zuk->hp < 600) {
+        s->zuk.timer_paused = 1;
+        s->zuk.has_paused = 1;
     }
 
-    /* jad spawn at HP < 480 (with shield still alive) */
-    if (!s->zuk.jad_spawned && zuk->hp < 480 &&
+    /* jad spawn at HP < 480 (with shield alive, timer paused) */
+    if (!s->zuk.jad_spawned && s->zuk.timer_paused && zuk->hp < 480 &&
         si >= 0 && s->npcs[si].active) {
         s->zuk.jad_spawned = 1;
+        s->zuk.timer_paused = 0;
+        s->zuk.set_timer += 175;
         int j_slot = inf_find_free_npc(s);
         if (j_slot >= 0) {
             inf_init_npc(s, j_slot, INF_NPC_JAD, 24, 32);
+            s->npcs[j_slot].aggro_target = si;  /* target shield */
+            s->npcs[j_slot].stun_timer = 7;     /* spawn delay */
         }
     }
 
-    /* healer spawn at HP < 240: 4 JalMejJak, sets enraged */
+    /* set timer: spawns JalZek + JalXil targeting the shield */
+    if (!s->zuk.timer_paused) {
+        if (s->zuk.set_timer > 0) {
+            s->zuk.set_timer--;
+        } else {
+            int m_slot = inf_find_free_npc(s);
+            if (m_slot >= 0) {
+                inf_init_npc(s, m_slot, INF_NPC_MAGER, 20, 36);
+                if (si >= 0) s->npcs[m_slot].aggro_target = si;
+                s->npcs[m_slot].stun_timer = 7;  /* spawn delay */
+            }
+            int r_slot = inf_find_free_npc(s);
+            if (r_slot >= 0) {
+                inf_init_npc(s, r_slot, INF_NPC_RANGER, 29, 36);
+                if (si >= 0) s->npcs[r_slot].aggro_target = si;
+                s->npcs[r_slot].stun_timer = 9;  /* spawn delay */
+            }
+            s->zuk.set_timer = s->zuk.set_interval;
+        }
+    }
+
+    /* healer spawn at HP < 240: 4 JalMejJak targeting Zuk, sets enraged */
     if (!s->zuk.healer_spawned && zuk->hp < 240) {
         s->zuk.healer_spawned = 1;
         s->zuk.enraged = 1;
@@ -1654,6 +1711,7 @@ static void inf_zuk_tick(InfernoState* s) {
             if (slot >= 0) {
                 inf_init_npc(s, slot, INF_NPC_HEALER_ZUK,
                              healer_pos[h][0], healer_pos[h][1]);
+                s->npcs[slot].aggro_target = zuk_idx;  /* heal Zuk until tagged */
             }
         }
     }
@@ -1936,6 +1994,11 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
         if (s->npcs[npc_idx].active && s->npcs[npc_idx].death_ticks == 0) {
             s->player_attack_target = npc_idx;
             has_new_target = 1;
+            /* tagging: redirect NPC aggro from shield/zuk to player */
+            if (s->npcs[npc_idx].aggro_target != -1) {
+                s->npcs[npc_idx].aggro_target = -1;
+                s->npcs[npc_idx].stun_timer = 2;  /* 2-tick delay on aggro switch */
+            }
         }
     }
     /* explicit movement (ground click or RL move) cancels attack target,
