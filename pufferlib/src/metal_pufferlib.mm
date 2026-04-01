@@ -542,8 +542,6 @@ void train_impl(PuffeRL& pufferl) {
         *lr_ptr = lr;
     }
 
-    // Standard PER beta annealing: beta0 → 1.0 over training, independent of alpha.
-    // Full IS correction (beta=1.0) is reached at the end of training.
     float anneal_beta = hypers.prio_beta0 + (1.0f - hypers.prio_beta0)
         * (float)current_epoch / (float)total_epochs;
 
@@ -561,23 +559,6 @@ void train_impl(PuffeRL& pufferl) {
         puff_advantage(rollouts.values, rollouts.rewards, rollouts.terminals,
             rollouts.ratio, pufferl.advantages_puf, hypers.gamma, hypers.gae_lambda,
             hypers.vtrace_rho_clip, hypers.vtrace_c_clip, s);
-
-        // When using priority replay: compute advantage var/mean on the FULL batch
-        // before biased minibatch selection, so PPO normalization uses unbiased stats.
-        // Without this, priority-sampled minibatch stats double-correct the IS weights.
-        pufferl.ppo_bufs_puf.adv_precomputed = (prio_alpha > 0.0f);
-        if (pufferl.ppo_bufs_puf.adv_precomputed) {
-            MetalStream *ms2 = mtl_resolve_stream(s);
-            ms2->compute_encoder();
-            auto pso = mtl_pipeline("var_mean_kernel");
-            mtl_set_pso(ms2, pso);
-            mtl_set_ptr(ms2, pufferl.advantages_puf.bytes, 0);
-            mtl_set_ptr(ms2, pufferl.ppo_bufs_puf.adv_scratch.bytes, 1);
-            mtl_set_ptr(ms2, (float *)pufferl.ppo_bufs_puf.adv_scratch.bytes + 1, 2);
-            struct { int count; } params = {(int)pufferl.advantages_puf.numel()};
-            mtl_set_params(ms2, params, 3);
-            mtl_dispatch_groups(ms2, pso, 1, 256);
-        }
 
         prio_precompute(pufferl.advantages_puf, prio_alpha, pufferl.prio_bufs, s);
         prio_sample(minibatch_segments, hypers.total_agents, anneal_beta,
@@ -659,11 +640,13 @@ void train_impl(PuffeRL& pufferl) {
                 ppo_mask_ptr = (const float*)pufferl.ones_mask.bytes;
                 ppo_mask_stride = 0;
             }
+            // When PER is active, pass full-batch advantages for unbiased var/mean.
+            const PufTensor *full_adv = (prio_alpha > 0.0f) ? &pufferl.advantages_puf : nullptr;
             ppo_loss_fwd_bwd(dec_puf_f32, p_logstd, pufferl.train_buf,
                 pufferl.act_sizes_puf, pufferl.losses_puf,
                 hypers.clip_coef, hypers.vf_clip_coef, hypers.vf_coef, hypers.ent_coef,
                 pufferl.ppo_bufs_puf, pufferl.is_continuous,
-                ppo_mask_ptr, ppo_mask_stride, s);
+                ppo_mask_ptr, ppo_mask_stride, full_adv, s);
         }
         mtl_barrier((MetalStream*)s);
 

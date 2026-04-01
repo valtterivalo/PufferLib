@@ -843,7 +843,6 @@ kernel void ppo_loss_fwd_bwd_kernel(
         } else {
             d_val_pred = val_pred - ret;
         }
-        // importance-weight value gradient same as policy (consistent IS correction)
         grad_values_pred[nt] = dL * w * pp.vf_coef * d_val_pred;
 
         // Policy loss + gradients. Both branches produce pg_loss, total_entropy,

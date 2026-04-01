@@ -260,7 +260,6 @@ inline void register_prio_buffers(PrioBuffers &bufs, Allocator &alloc, int S,
 struct PPOBuffersPuf {
   PufTensor loss_output;
   PufTensor grad_logits, grad_values, grad_logstd, adv_scratch;
-  bool adv_precomputed;  // true = adv_scratch already has full-batch var/mean (PER mode)
 };
 
 inline void register_ppo_buffers(PPOBuffersPuf &bufs, Allocator &alloc, int N,

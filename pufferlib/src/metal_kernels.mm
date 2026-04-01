@@ -699,11 +699,14 @@ static int ppo_partials_capacity = 0;
 static float *ppo_act_f32 = nullptr;
 static int ppo_act_f32_capacity = 0;
 
+// full_batch_adv: when non-null, use this buffer for advantage var/mean instead of
+// the minibatch (avoids biased stats from priority-sampled minibatch).
 void ppo_loss_fwd_bwd(PufTensor &dec_out, PufTensor &logstd, TrainGraph &graph,
                        PufTensor &act_sizes, PufTensor &losses_acc,
                        float clip_coef, float vf_clip_coef, float vf_coef,
                        float ent_coef, PPOBuffersPuf &bufs, bool is_continuous,
                        const float *ext_mask_ptr, int ext_mask_stride,
+                       const PufTensor *full_batch_adv,
                        cudaStream_t stream) {
   int N = (int)dec_out.shape[0], T = (int)dec_out.shape[1];
   int fused_cols = (int)dec_out.shape[2];
@@ -719,19 +722,17 @@ void ppo_loss_fwd_bwd(PufTensor &dec_out, PufTensor &logstd, TrainGraph &graph,
 
   MetalStream *ms = mtl_resolve_stream(stream);
 
-  // Advantage var_mean: use pre-computed full-batch stats if available (avoids
-  // biased stats from priority-sampled minibatch). Falls back to minibatch stats
-  // when adv_precomputed is false (prio_alpha=0, uniform sampling → no bias).
-  if (!bufs.adv_precomputed) {
+  // Advantage var_mean: full-batch when PER is active (unbiased stats),
+  // minibatch when uniform sampling (no bias concern).
+  {
+    const PufTensor &adv_src = full_batch_adv ? *full_batch_adv : graph.mb_advantages;
     ms->compute_encoder();
     auto pso = mtl_pipeline("var_mean_kernel");
     mtl_set_pso(ms, pso);
-    mtl_set_ptr(ms, graph.mb_advantages.bytes, 0);
-    mtl_set_ptr(ms, bufs.adv_scratch.bytes, 1); // var
-    mtl_set_ptr(ms, (float *)bufs.adv_scratch.bytes + 1, 2); // mean
-    struct {
-      int count;
-    } params = {(int)graph.mb_advantages.numel()};
+    mtl_set_ptr(ms, adv_src.bytes, 0);
+    mtl_set_ptr(ms, bufs.adv_scratch.bytes, 1);
+    mtl_set_ptr(ms, (float *)bufs.adv_scratch.bytes + 1, 2);
+    struct { int count; } params = {(int)adv_src.numel()};
     mtl_set_params(ms, params, 3);
     mtl_dispatch_groups(ms, pso, 1, 256);
   }
@@ -1005,7 +1006,8 @@ void prio_sample(int minibatch_segments, int total_agents,
       int minibatch_segments;
     } params = {total_agents, anneal_beta, minibatch_segments};
     mtl_set_params(ms, params, 3);
-    mtl_dispatch_1d(ms, pso, minibatch_segments);
+    // single threadgroup — max-reduction assumes all threads share threadgroup memory
+    mtl_dispatch_groups(ms, pso, 1, 256);
   }
 }
 
