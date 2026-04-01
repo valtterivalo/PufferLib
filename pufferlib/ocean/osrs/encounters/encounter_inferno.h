@@ -948,7 +948,7 @@ static void inf_spawn_wave(InfernoState* s) {
         /* spawn Zuk — fixed position, cannot move */
         int zuk_idx = inf_find_free_npc(s);
         if (zuk_idx >= 0) {
-            inf_init_npc(s, zuk_idx, INF_NPC_ZUK, 20, 52);
+            inf_init_npc(s, zuk_idx, INF_NPC_ZUK, 22, 50);
             s->npcs[zuk_idx].stun_timer = 14;  /* initial delay */
         }
 
