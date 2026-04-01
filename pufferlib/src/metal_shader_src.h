@@ -843,7 +843,8 @@ kernel void ppo_loss_fwd_bwd_kernel(
         } else {
             d_val_pred = val_pred - ret;
         }
-        grad_values_pred[nt] = dL * pp.vf_coef * d_val_pred;
+        // importance-weight value gradient same as policy (consistent IS correction)
+        grad_values_pred[nt] = dL * w * pp.vf_coef * d_val_pred;
 
         // Policy loss + gradients. Both branches produce pg_loss, total_entropy,
         // logratio, ratio — the block-loss accumulation is shared after the if/else.
@@ -1089,8 +1090,10 @@ kernel void prio_adv_reduction_kernel(
     local_sum = simd_sum(local_sum);
 
     if (simd_lane == 0 && tx < 32) {
-        float pw = pow(local_sum, pp.prio_alpha);
-        if (isnan(pw) || isinf(pw)) pw = 0.0f;  // match upstream CUDA guard
+        // epsilon floor prevents pow(0, alpha>0) = 0 which would permanently
+        // exclude zero-advantage segments from sampling in sparse-reward envs
+        float pw = pow(local_sum + 1e-6f, pp.prio_alpha);
+        if (isnan(pw) || isinf(pw)) pw = 1e-6f;
         prio_weights[row] = pw;
     }
 }
@@ -1126,7 +1129,9 @@ kernel void prio_normalize_kernel(
     if (simd_id == 0) {
         float val = (simd_lane < NUM_WARPS) ? shmem[simd_lane] : 0.0f;
         val = simd_sum(val);
-        if (tx == 0) block_sum = val + eps;
+        // add eps * length so numerator and denominator are consistent:
+        // sum((w_i + eps)) = sum(w_i) + eps*length
+        if (tx == 0) block_sum = val + eps * float(pp.length);
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
@@ -1179,11 +1184,36 @@ kernel void prio_imp_weights_kernel(
     const device float* prio_probs      [[buffer(1)]],
     device float* mb_prio               [[buffer(2)]],
     constant PrioImpParams& pp          [[buffer(3)]],
-    uint tx [[thread_position_in_grid]]
+    uint tx [[thread_position_in_grid]],
+    uint tid [[thread_index_in_threadgroup]],
+    uint simd_lane [[thread_index_in_simdgroup]],
+    uint simd_id [[simdgroup_index_in_threadgroup]]
 ) {
+    // Compute raw importance weights
+    float w = 1.0f;
     if ((int)tx < pp.minibatch_segments) {
         float value = prio_probs[indices[tx]] * float(pp.total_agents);
-        mb_prio[tx] = pow(value, -pp.anneal_beta);
+        w = pow(value, -pp.anneal_beta);
+    }
+
+    // Max-normalize: w_i /= max(w_j) so all weights are in [0, 1].
+    // Prevents gradient amplification from undersampled segments.
+    constexpr int NUM_WARPS = 8;
+    threadgroup float shmem[NUM_WARPS];
+    float local_max = ((int)tx < pp.minibatch_segments) ? w : 0.0f;
+    local_max = simd_max(local_max);
+    if (simd_lane == 0) shmem[simd_id] = local_max;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (simd_id == 0) {
+        float val = (simd_lane < NUM_WARPS) ? shmem[simd_lane] : 0.0f;
+        val = simd_max(val);
+        if (simd_lane == 0) shmem[0] = val;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    float w_max = max(shmem[0], 1e-8f);
+
+    if ((int)tx < pp.minibatch_segments) {
+        mb_prio[tx] = w / w_max;
     }
 }
 

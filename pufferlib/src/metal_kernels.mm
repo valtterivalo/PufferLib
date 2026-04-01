@@ -719,8 +719,10 @@ void ppo_loss_fwd_bwd(PufTensor &dec_out, PufTensor &logstd, TrainGraph &graph,
 
   MetalStream *ms = mtl_resolve_stream(stream);
 
-  // var_mean of advantages
-  {
+  // Advantage var_mean: use pre-computed full-batch stats if available (avoids
+  // biased stats from priority-sampled minibatch). Falls back to minibatch stats
+  // when adv_precomputed is false (prio_alpha=0, uniform sampling → no bias).
+  if (!bufs.adv_precomputed) {
     ms->compute_encoder();
     auto pso = mtl_pipeline("var_mean_kernel");
     mtl_set_pso(ms, pso);
