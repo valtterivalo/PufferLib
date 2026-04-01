@@ -420,12 +420,15 @@ struct EncoderActivations {
   PufTensor wgrad;       // (out_dim, in_dim) — training only
 };
 
-// Decoder: single linear projection (hidden → logits+value), matching upstream CUDA.
-// Single fused weight {od+1, H} registered with Muon — value row participates
-// in NS orthogonalization, matching CUDA models.cu:792-795.
+// Decoder: single linear projection (hidden → logits+value).
+// Policy and value weights registered separately with Muon so value row (1, H)
+// gets direct gradient update (skips NS orthogonalization via min(R,C) >= 2 guard).
+// This prevents value gradients from dominating the shared NS update direction.
 struct DecoderWeights {
-  PufTensor weight;       // (output_dim+1, hidden_dim) — fused policy+value weight
-  PufTensor logstd;       // continuous only: (1, output_dim)
+  PufTensor policy_weight; // (output_dim, hidden_dim) — policy logit rows, NS-optimized
+  PufTensor value_weight;  // (1, hidden_dim) — value row, direct gradient update
+  PufTensor weight;        // (output_dim+1, hidden_dim) — fused view for forward/backward
+  PufTensor logstd;        // continuous only: (1, output_dim)
   int hidden_dim, output_dim;
   bool continuous;
 };

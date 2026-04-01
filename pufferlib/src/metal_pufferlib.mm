@@ -913,6 +913,14 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
 
     pufferl->alloc_fp32.create();
 
+    // Set up fused decoder weight view (policy_weight + value_weight contiguous)
+    {
+        DecoderWeights *dw = (DecoderWeights *)wfp32.decoder;
+        dw->weight = {.bytes = dw->policy_weight.bytes,
+                      .shape = {dw->output_dim + 1, dw->hidden_dim},
+                      .dtype_size = dw->policy_weight.dtype_size};
+    }
+
     // Wrap fp32 params allocator for Metal GPU access
     mtl_wrap_allocator(&fp32_params);
 
@@ -944,6 +952,13 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
         decoder.reg_params(wi.decoder, &infer_alloc, esz_fp32);
         network.reg_params(wi.network, &infer_alloc, esz_fp32);
         infer_alloc.create();
+        // Set up fused decoder weight view for inference weights
+        {
+            DecoderWeights *dw = (DecoderWeights *)wi.decoder;
+            dw->weight = {.bytes = dw->policy_weight.bytes,
+                          .shape = {dw->output_dim + 1, dw->hidden_dim},
+                          .dtype_size = dw->policy_weight.dtype_size};
+        }
         mtl_wrap_allocator(&infer_alloc);
         // Initial copy: weights_fp32 → weights_infer
         copy_weights_to_infer(*pufferl);
@@ -990,6 +1005,14 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     network.reg_train(wfp16.network, tb.network, &acts, &grads, B_TT, train_precision);
 
     pufferl->alloc_fp16.create();
+
+    // Set up fused decoder weight view for fp16 weights
+    {
+        DecoderWeights *dw = (DecoderWeights *)wfp16.decoder;
+        dw->weight = {.bytes = dw->policy_weight.bytes,
+                      .shape = {dw->output_dim + 1, dw->hidden_dim},
+                      .dtype_size = dw->policy_weight.dtype_size};
+    }
 
     // Wrap fp16 allocators for Metal GPU access
     mtl_wrap_allocator(&fp16_params);
