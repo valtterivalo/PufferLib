@@ -1472,15 +1472,8 @@ static void decoder_reg_params(void *w, Allocator *alloc, int esz) {
   DecoderWeights *dw = (DecoderWeights *)w;
   int od = dw->output_dim;
   int H = dw->hidden_dim;
-  // Register policy and value weights separately so Muon treats them differently:
-  // policy_weight (od, H) → NS orthogonalization (2D, min(R,C) >= 2)
-  // value_weight (1, H) → direct gradient update (fails min(R,C) >= 2 guard)
-  // This prevents value gradients from dominating the shared NS update direction.
-  dw->policy_weight = {.shape = {od, H}, .dtype_size = esz};
-  dw->value_weight = {.shape = {1, H}, .dtype_size = esz};
-  alloc->reg(&dw->policy_weight);
-  alloc->reg(&dw->value_weight);
-  // fused view set after allocation in decoder_post_alloc
+  dw->weight = {.shape = {od + 1, H}, .dtype_size = esz};
+  alloc->reg(&dw->weight);
   if (dw->continuous) {
     dw->logstd = {.shape = {1, od}, .dtype_size = esz};
     alloc->reg(&dw->logstd);
