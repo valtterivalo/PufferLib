@@ -31,7 +31,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from export_terrain import RegionTerrain, build_heightmap, parse_terrain_full
 from export_models import (
-    MODEL_INDEX,
     ModelData,
     decode_model,
     expand_model,
