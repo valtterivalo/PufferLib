@@ -1,6 +1,5 @@
-"""Export terrain mesh from OSRS cache to a binary .terrain file.
+"""Export terrain mesh from modern OpenRS2 OSRS cache to a binary .terrain file.
 
-Supports both 317-format (tarnish) and modern OpenRS2 flat file caches.
 For each region in the export area:
   1. Parse terrain data: heightmap, underlay IDs, overlay IDs, shapes, settings
   2. Decode floor definitions (underlays/overlays) for tile colors
@@ -10,12 +9,7 @@ For each region in the export area:
 
 The terrain binary is loaded by osrs_pvp_terrain.h into raylib meshes.
 
-Usage (317 cache):
-    uv run python scripts/export_terrain.py \
-        --cache ../reference/tarnish/game-server/data/cache \
-        --output data/wilderness.terrain
-
-Usage (modern cache):
+Usage:
     uv run python scripts/export_terrain.py \
         --modern-cache ../reference/osrs-cache-modern \
         --keys ../reference/osrs-cache-modern/keys.json \
@@ -24,7 +18,6 @@ Usage (modern cache):
 """
 
 import argparse
-import gzip
 import io
 import math
 import struct
@@ -33,16 +26,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from export_collision_map import (
-    CONFIG_INDEX,
-    MAP_INDEX,
-    MANIFEST_ARCHIVE,
-    CacheReader,
-    _read_string,
-    decode_archive,
-    hash_archive_name,
-    load_map_index,
-)
 from modern_cache_reader import ModernCacheReader
 
 # --- OSRS noise functions (from MapRegion.java) ---
@@ -189,103 +172,6 @@ def _hsl24to16(h: int, s: int, l: int) -> int:
         s //= 2
     return ((h // 4) << 10) + ((s // 32) << 7) + l // 2
 
-
-def decode_floor_definitions(cache: CacheReader) -> tuple[dict[int, FloorDef], dict[int, FloorDef]]:
-    """Decode underlay and overlay floor definitions from cache."""
-    raw = cache.get(CONFIG_INDEX, 2)  # CONFIG_ARCHIVE
-    if raw is None:
-        sys.exit("could not read config archive")
-
-    archive = decode_archive(raw)
-
-    underlays: dict[int, FloorDef] = {}
-    overlays: dict[int, FloorDef] = {}
-
-    # decode underlays
-    ukey = hash_archive_name("underlays.dat") & 0xFFFFFFFF
-    udata = archive.get(ukey) or archive.get(hash_archive_name("underlays.dat"))
-    if udata:
-        buf = io.BytesIO(udata)
-        count = struct.unpack(">H", buf.read(2))[0]
-        for _ in range(count + 1):
-            raw_id = buf.read(2)
-            if len(raw_id) < 2:
-                break
-            fid = struct.unpack(">H", raw_id)[0]
-            if fid == 0xFFFF:
-                continue
-            raw_len = buf.read(2)
-            if len(raw_len) < 2:
-                break
-            length = struct.unpack(">H", raw_len)[0]
-            entry_data = buf.read(length)
-
-            flo = FloorDef(floor_id=fid)
-            # parse underlay opcodes
-            ebuf = io.BytesIO(entry_data)
-            while True:
-                op = ebuf.read(1)
-                if not op:
-                    break
-                op = op[0]
-                if op == 0:
-                    break
-                elif op == 1:
-                    flo.rgb = (ebuf.read(1)[0] << 16) + (ebuf.read(1)[0] << 8) + ebuf.read(1)[0]
-
-            # generate HSL + blend fields
-            if flo.secondary_rgb != -1:
-                _rgb_to_hsl(flo.secondary_rgb, flo)
-            _rgb_to_hsl(flo.rgb, flo)
-            underlays[fid] = flo
-
-    # decode overlays
-    okey = hash_archive_name("overlays.dat") & 0xFFFFFFFF
-    odata = archive.get(okey) or archive.get(hash_archive_name("overlays.dat"))
-    if odata:
-        buf = io.BytesIO(odata)
-        count = struct.unpack(">H", buf.read(2))[0]
-        for _ in range(count + 1):
-            raw_id = buf.read(2)
-            if len(raw_id) < 2:
-                break
-            fid = struct.unpack(">H", raw_id)[0]
-            if fid == 0xFFFF:
-                continue
-            raw_len = buf.read(2)
-            if len(raw_len) < 2:
-                break
-            length = struct.unpack(">H", raw_len)[0]
-            entry_data = buf.read(length)
-
-            flo = FloorDef(floor_id=fid)
-            ebuf = io.BytesIO(entry_data)
-            while True:
-                op = ebuf.read(1)
-                if not op:
-                    break
-                op = op[0]
-                if op == 0:
-                    break
-                elif op == 1:
-                    flo.rgb = (ebuf.read(1)[0] << 16) + (ebuf.read(1)[0] << 8) + ebuf.read(1)[0]
-                elif op == 2:
-                    flo.texture = ebuf.read(1)[0]
-                elif op == 5:
-                    flo.hide_underlay = False
-                elif op == 7:
-                    flo.secondary_rgb = (ebuf.read(1)[0] << 16) + (ebuf.read(1)[0] << 8) + ebuf.read(1)[0]
-
-            # post-decode HSL
-            if flo.secondary_rgb != -1:
-                _rgb_to_hsl(flo.secondary_rgb, flo)
-                flo.secondary_hue = flo.hue
-                flo.secondary_saturation = flo.saturation
-                flo.secondary_lightness = flo.lightness
-            _rgb_to_hsl(flo.rgb, flo)
-            overlays[fid] = flo
-
-    return underlays, overlays
 
 
 # --- modern cache floor definition + texture color decoders ---
@@ -912,79 +798,6 @@ def write_terrain_binary(
 # --- main ---
 
 
-def _main_317(args: argparse.Namespace) -> None:
-    """Export terrain from 317-format cache."""
-    if not args.cache.exists():
-        sys.exit(f"cache directory not found: {args.cache}")
-
-    print(f"reading cache from {args.cache}")
-    cache = CacheReader(args.cache)
-
-    print("loading floor definitions...")
-    underlays, overlays_defs = decode_floor_definitions(cache)
-    print(f"  {len(underlays)} underlays, {len(overlays_defs)} overlays")
-
-    print("loading texture average colors...")
-    from export_models import load_texture_average_colors
-    tex_colors = load_texture_average_colors(cache)
-    print(f"  {len(tex_colors)} texture colors")
-
-    print("loading map index...")
-    region_defs = load_map_index(cache)
-    print(f"  {len(region_defs)} regions in map index")
-
-    # determine target regions
-    if args.regions:
-        target_coords = set()
-        for coord in args.regions.split():
-            parts = coord.split(",")
-            target_coords.add((int(parts[0]), int(parts[1])))
-        target_regions = {
-            (rd.region_x, rd.region_y): rd
-            for rd in region_defs
-            if (rd.region_x, rd.region_y) in target_coords
-        }
-        print(f"  exporting {len(target_regions)} specified regions")
-    else:
-        # fight area center: world (3071, 3544) -> regionX=47, regionY=55
-        center_rx, center_ry = 47, 55
-        r = args.radius
-        target_regions = {
-            (rd.region_x, rd.region_y): rd
-            for rd in region_defs
-            if center_rx - r <= rd.region_x <= center_rx + r
-            and center_ry - r <= rd.region_y <= center_ry + r
-        }
-        print(f"  exporting {len(target_regions)} regions around ({center_rx}, {center_ry})")
-
-    # parse terrain for each region
-    parsed: dict[tuple[int, int], RegionTerrain] = {}
-    errors = 0
-
-    for (rx, ry), rd in sorted(target_regions.items()):
-        terrain_data = cache.get(MAP_INDEX, rd.terrain_file)
-        if terrain_data is None:
-            errors += 1
-            continue
-
-        try:
-            terrain_data = gzip.decompress(terrain_data)
-        except Exception:
-            errors += 1
-            continue
-
-        region_chunk_x = rx * 64
-        region_chunk_y = ry * 64
-
-        rt = parse_terrain_full(terrain_data, region_chunk_x, region_chunk_y)
-        rt.region_x = rx
-        rt.region_y = ry
-        parsed[(rx, ry)] = rt
-
-    print(f"  parsed {len(parsed)} regions, {errors} errors")
-    _build_and_write(args, parsed, underlays, overlays_defs, tex_colors)
-
-
 def _main_modern(args: argparse.Namespace) -> None:
     """Export terrain from modern OpenRS2 cache."""
     if not args.modern_cache.exists():
@@ -1082,18 +895,12 @@ def _build_and_write(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="export OSRS terrain mesh from cache")
-    parser.add_argument(
-        "--cache",
-        type=Path,
-        default=Path("../reference/tarnish/game-server/data/cache"),
-        help="path to 317-format cache directory",
-    )
+    parser = argparse.ArgumentParser(description="export OSRS terrain mesh from modern OpenRS2 cache")
     parser.add_argument(
         "--modern-cache",
         type=Path,
-        default=None,
-        help="path to modern OpenRS2 cache directory (overrides --cache)",
+        required=True,
+        help="path to modern OpenRS2 cache directory",
     )
     parser.add_argument(
         "--keys",
@@ -1114,12 +921,6 @@ def main() -> None:
         help="output .terrain binary file",
     )
     parser.add_argument(
-        "--radius",
-        type=int,
-        default=2,
-        help="regions around wilderness center to export (317 mode only, default: 2)",
-    )
-    parser.add_argument(
         "--brightness",
         type=float,
         default=1.0,
@@ -1127,10 +928,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    if args.modern_cache:
-        _main_modern(args)
-    else:
-        _main_317(args)
+    _main_modern(args)
 
 
 if __name__ == "__main__":

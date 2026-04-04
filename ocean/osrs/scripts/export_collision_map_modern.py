@@ -4,12 +4,6 @@ Reads modern cache (flat file format from OpenRS2), parses terrain and object
 data for specified regions, and outputs collision flags compatible with
 osrs_collision.h's collision_map_load().
 
-Modern cache differences from 317:
-  - Map data in index 5, groups identified by djb2 name hash
-  - Object data (l_X_Y) is XTEA encrypted, keys from OpenRS2 archive
-  - Object IDs in map data use read_big_smart (2 or 4 bytes) instead of read_smart
-  - Object definitions in index 2 group 6, modern opcode set
-
 Usage:
     uv run python scripts/export_collision_map_modern.py \
         --cache ../reference/osrs-cache-modern \
@@ -43,20 +37,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from export_collision_map import (
-    BLOCKED,
-    IMPENETRABLE_BLOCKED,
-    WALL_EAST,
-    WALL_NORTH,
-    WALL_SOUTH,
-    WALL_WEST,
-    CollisionFlags,
-    mark_occupant,
-    mark_wall,
-    new_collision_flags,
-    parse_terrain,
-    write_cmap,
-)
 from modern_cache_reader import (
     ModernCacheReader,
     read_big_smart,
@@ -66,7 +46,261 @@ from modern_cache_reader import (
     read_u8,
 )
 
-# object type IDs (same as 317)
+# --- collision flag constants (from TraversalConstants.java) ---
+
+WALL_NORTH_WEST = 0x000001
+WALL_NORTH = 0x000002
+WALL_NORTH_EAST = 0x000004
+WALL_EAST = 0x000008
+WALL_SOUTH_EAST = 0x000010
+WALL_SOUTH = 0x000020
+WALL_SOUTH_WEST = 0x000040
+WALL_WEST = 0x000080
+
+IMPENETRABLE_WALL_NORTH_WEST = 0x000200
+IMPENETRABLE_WALL_NORTH = 0x000400
+IMPENETRABLE_WALL_NORTH_EAST = 0x000800
+IMPENETRABLE_WALL_EAST = 0x001000
+IMPENETRABLE_WALL_SOUTH_EAST = 0x002000
+IMPENETRABLE_WALL_SOUTH = 0x004000
+IMPENETRABLE_WALL_SOUTH_WEST = 0x008000
+IMPENETRABLE_WALL_WEST = 0x010000
+
+IMPENETRABLE_BLOCKED = 0x020000
+BLOCKED = 0x200000
+
+# collision flag storage: flags[height][local_x][local_y]
+CollisionFlags = list[list[list[int]]]  # [4][64][64]
+
+
+def new_collision_flags() -> CollisionFlags:
+    return [[[0 for _ in range(64)] for _ in range(64)] for _ in range(4)]
+
+
+def parse_terrain(data: bytes) -> tuple[CollisionFlags, set[tuple[int, int, int]]]:
+    """Parse terrain data, return (collision_flags, down_heights_set).
+
+    Terrain attribute & 1 marks tiles as BLOCKED.
+    Terrain attribute & 2 marks tiles for height-plane adjustment (downHeights).
+    """
+    flags = new_collision_flags()
+    down_heights: set[tuple[int, int, int]] = set()
+    attributes = [[[0 for _ in range(64)] for _ in range(64)] for _ in range(4)]
+
+    buf = io.BytesIO(data)
+
+    # phase 1: read attributes
+    for height in range(4):
+        for local_x in range(64):
+            for local_y in range(64):
+                while True:
+                    raw = buf.read(2)
+                    if len(raw) < 2:
+                        break
+                    attr_id = struct.unpack(">H", raw)[0]
+
+                    if attr_id == 0:
+                        break
+                    elif attr_id == 1:
+                        buf.read(1)  # tile height
+                        break
+                    elif attr_id <= 49:
+                        buf.read(2)  # overlay id
+                    elif attr_id <= 81:
+                        attributes[height][local_x][local_y] = attr_id - 49
+
+    # phase 2: apply terrain flags
+    for height in range(4):
+        for local_x in range(64):
+            for local_y in range(64):
+                attr = attributes[height][local_x][local_y]
+
+                if attr & 2:
+                    down_heights.add((local_x, local_y, height))
+
+                if attr & 1:
+                    plane = height
+                    if attributes[1][local_x][local_y] & 2:
+                        down_heights.add((local_x, local_y, 1))
+                        plane -= 1
+                    if plane >= 0:
+                        flags[plane][local_x][local_y] |= BLOCKED
+
+    return flags, down_heights
+
+
+def _flag(flags: CollisionFlags, height: int, lx: int, ly: int, flag: int) -> None:
+    """Set flag bits on a local tile (no bounds check)."""
+    flags[height][lx][ly] |= flag
+
+
+def _flag_safe(flags: CollisionFlags, height: int, lx: int, ly: int, flag: int) -> None:
+    """Set flag bits with bounds check (neighbor might be outside 64x64 region)."""
+    if 0 <= lx < 64 and 0 <= ly < 64 and 0 <= height < 4:
+        flags[height][lx][ly] |= flag
+
+
+def mark_wall(
+    flags: CollisionFlags,
+    direction: int,
+    height: int,
+    lx: int,
+    ly: int,
+    obj_type: int,
+    impenetrable: bool,
+) -> None:
+    """Mark wall collision flags on the tile and its neighbor (from TraversalMap.markWall)."""
+    if obj_type == OBJ_STRAIGHT_WALL:
+        if direction == DIR_WEST:
+            _flag(flags, height, lx, ly, WALL_WEST)
+            _flag_safe(flags, height, lx - 1, ly, WALL_EAST)
+            if impenetrable:
+                _flag(flags, height, lx, ly, IMPENETRABLE_WALL_WEST)
+                _flag_safe(flags, height, lx - 1, ly, IMPENETRABLE_WALL_EAST)
+        elif direction == DIR_NORTH:
+            _flag(flags, height, lx, ly, WALL_NORTH)
+            _flag_safe(flags, height, lx, ly + 1, WALL_SOUTH)
+            if impenetrable:
+                _flag(flags, height, lx, ly, IMPENETRABLE_WALL_NORTH)
+                _flag_safe(flags, height, lx, ly + 1, IMPENETRABLE_WALL_SOUTH)
+        elif direction == DIR_EAST:
+            _flag(flags, height, lx, ly, WALL_EAST)
+            _flag_safe(flags, height, lx + 1, ly, WALL_WEST)
+            if impenetrable:
+                _flag(flags, height, lx, ly, IMPENETRABLE_WALL_EAST)
+                _flag_safe(flags, height, lx + 1, ly, IMPENETRABLE_WALL_WEST)
+        elif direction == DIR_SOUTH:
+            _flag(flags, height, lx, ly, WALL_SOUTH)
+            _flag_safe(flags, height, lx, ly - 1, WALL_NORTH)
+            if impenetrable:
+                _flag(flags, height, lx, ly, IMPENETRABLE_WALL_SOUTH)
+                _flag_safe(flags, height, lx, ly - 1, IMPENETRABLE_WALL_NORTH)
+
+    elif obj_type == OBJ_ENTIRE_WALL:
+        if direction == DIR_WEST:
+            _flag(flags, height, lx, ly, WALL_WEST | WALL_NORTH)
+            _flag_safe(flags, height, lx - 1, ly, WALL_EAST)
+            _flag_safe(flags, height, lx, ly + 1, WALL_SOUTH)
+            if impenetrable:
+                _flag(flags, height, lx, ly, IMPENETRABLE_WALL_WEST | IMPENETRABLE_WALL_NORTH)
+                _flag_safe(flags, height, lx - 1, ly, IMPENETRABLE_WALL_EAST)
+                _flag_safe(flags, height, lx, ly + 1, IMPENETRABLE_WALL_SOUTH)
+        elif direction == DIR_NORTH:
+            _flag(flags, height, lx, ly, WALL_EAST | WALL_NORTH)
+            _flag_safe(flags, height, lx, ly + 1, WALL_SOUTH)
+            _flag_safe(flags, height, lx + 1, ly, WALL_WEST)
+            if impenetrable:
+                _flag(flags, height, lx, ly, IMPENETRABLE_WALL_EAST | IMPENETRABLE_WALL_NORTH)
+                _flag_safe(flags, height, lx, ly + 1, IMPENETRABLE_WALL_SOUTH)
+                _flag_safe(flags, height, lx + 1, ly, IMPENETRABLE_WALL_WEST)
+        elif direction == DIR_EAST:
+            _flag(flags, height, lx, ly, WALL_EAST | WALL_SOUTH)
+            _flag_safe(flags, height, lx + 1, ly, WALL_WEST)
+            _flag_safe(flags, height, lx, ly - 1, WALL_NORTH)
+            if impenetrable:
+                _flag(flags, height, lx, ly, IMPENETRABLE_WALL_EAST | IMPENETRABLE_WALL_SOUTH)
+                _flag_safe(flags, height, lx + 1, ly, IMPENETRABLE_WALL_WEST)
+                _flag_safe(flags, height, lx, ly - 1, IMPENETRABLE_WALL_NORTH)
+        elif direction == DIR_SOUTH:
+            _flag(flags, height, lx, ly, WALL_WEST | WALL_SOUTH)
+            _flag_safe(flags, height, lx - 1, ly, WALL_EAST)
+            _flag_safe(flags, height, lx, ly - 1, WALL_NORTH)
+            if impenetrable:
+                _flag(flags, height, lx, ly, IMPENETRABLE_WALL_WEST | IMPENETRABLE_WALL_SOUTH)
+                _flag_safe(flags, height, lx - 1, ly, IMPENETRABLE_WALL_EAST)
+                _flag_safe(flags, height, lx, ly - 1, IMPENETRABLE_WALL_NORTH)
+
+    elif obj_type == OBJ_DIAGONAL_CORNER:
+        if direction == DIR_WEST:
+            _flag(flags, height, lx, ly, WALL_NORTH_WEST)
+            _flag_safe(flags, height, lx - 1, ly + 1, WALL_SOUTH_EAST)
+            if impenetrable:
+                _flag(flags, height, lx, ly, IMPENETRABLE_WALL_NORTH_WEST)
+                _flag_safe(flags, height, lx - 1, ly + 1, IMPENETRABLE_WALL_SOUTH_EAST)
+        elif direction == DIR_NORTH:
+            _flag(flags, height, lx, ly, WALL_NORTH_EAST)
+            _flag_safe(flags, height, lx + 1, ly + 1, WALL_SOUTH_WEST)
+            if impenetrable:
+                _flag(flags, height, lx, ly, IMPENETRABLE_WALL_NORTH_EAST)
+                _flag_safe(flags, height, lx + 1, ly + 1, IMPENETRABLE_WALL_SOUTH_WEST)
+        elif direction == DIR_EAST:
+            _flag(flags, height, lx, ly, WALL_SOUTH_EAST)
+            _flag_safe(flags, height, lx + 1, ly - 1, WALL_NORTH_WEST)
+            if impenetrable:
+                _flag(flags, height, lx, ly, IMPENETRABLE_WALL_SOUTH_EAST)
+                _flag_safe(flags, height, lx + 1, ly - 1, IMPENETRABLE_WALL_NORTH_WEST)
+        elif direction == DIR_SOUTH:
+            _flag(flags, height, lx, ly, WALL_SOUTH_WEST)
+            _flag_safe(flags, height, lx - 1, ly - 1, WALL_NORTH_EAST)
+            if impenetrable:
+                _flag(flags, height, lx, ly, IMPENETRABLE_WALL_SOUTH_WEST)
+                _flag_safe(flags, height, lx - 1, ly - 1, IMPENETRABLE_WALL_NORTH_EAST)
+
+    elif obj_type == OBJ_WALL_CORNER:
+        if direction == DIR_WEST:
+            _flag(flags, height, lx, ly, WALL_WEST)
+            _flag_safe(flags, height, lx - 1, ly, WALL_EAST)
+            if impenetrable:
+                _flag(flags, height, lx, ly, IMPENETRABLE_WALL_WEST)
+                _flag_safe(flags, height, lx - 1, ly, IMPENETRABLE_WALL_EAST)
+        elif direction == DIR_NORTH:
+            _flag(flags, height, lx, ly, WALL_NORTH)
+            _flag_safe(flags, height, lx, ly + 1, WALL_SOUTH)
+            if impenetrable:
+                _flag(flags, height, lx, ly, IMPENETRABLE_WALL_NORTH)
+                _flag_safe(flags, height, lx, ly + 1, IMPENETRABLE_WALL_SOUTH)
+        elif direction == DIR_EAST:
+            _flag(flags, height, lx, ly, WALL_EAST)
+            _flag_safe(flags, height, lx + 1, ly, WALL_WEST)
+            if impenetrable:
+                _flag(flags, height, lx, ly, IMPENETRABLE_WALL_EAST)
+                _flag_safe(flags, height, lx + 1, ly, IMPENETRABLE_WALL_WEST)
+        elif direction == DIR_SOUTH:
+            _flag(flags, height, lx, ly, WALL_SOUTH)
+            _flag_safe(flags, height, lx, ly - 1, WALL_NORTH)
+            if impenetrable:
+                _flag(flags, height, lx, ly, IMPENETRABLE_WALL_SOUTH)
+                _flag_safe(flags, height, lx, ly - 1, IMPENETRABLE_WALL_NORTH)
+
+
+def mark_occupant(
+    flags: CollisionFlags,
+    height: int,
+    lx: int,
+    ly: int,
+    width: int,
+    length: int,
+    impenetrable: bool,
+) -> None:
+    """Mark a multi-tile occupant as BLOCKED + optionally IMPENETRABLE_BLOCKED."""
+    flag = BLOCKED
+    if impenetrable:
+        flag |= IMPENETRABLE_BLOCKED
+    for xi in range(lx, lx + width):
+        for yi in range(ly, ly + length):
+            _flag_safe(flags, height, xi, yi, flag)
+
+
+# --- .cmap binary writer ---
+
+CMAP_MAGIC = 0x50414D43  # "CMAP" little-endian
+CMAP_VERSION = 1
+
+
+def write_cmap(output_path: "Path", regions: dict[int, CollisionFlags]) -> None:
+    """Write regions to our binary .cmap format."""
+    with open(output_path, "wb") as f:
+        f.write(struct.pack("<III", CMAP_MAGIC, CMAP_VERSION, len(regions)))
+
+        for key, flags in sorted(regions.items()):
+            f.write(struct.pack("<i", key))
+            for h in range(4):
+                for x in range(64):
+                    for y in range(64):
+                        f.write(struct.pack("<i", flags[h][x][y]))
+
+
+# object type IDs
 OBJ_STRAIGHT_WALL = 0
 OBJ_DIAGONAL_CORNER = 1
 OBJ_ENTIRE_WALL = 2

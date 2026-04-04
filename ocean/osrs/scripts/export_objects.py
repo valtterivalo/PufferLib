@@ -1,6 +1,5 @@
-"""Export placed map objects (walls, props, trees) from OSRS cache.
+"""Export placed map objects (walls, props, trees) from modern OpenRS2 OSRS cache.
 
-Supports both 317-format (tarnish) and modern OpenRS2 flat file caches.
 Reads object placements from each region's object file, resolves their 3D models
 from object definitions, decodes model geometry, applies rotation and
 positioning, and outputs a binary .objects file for the raylib viewer.
@@ -12,12 +11,7 @@ Object types exported:
   - Roofing (types 12-21): roof pieces
   - Ground decorations (type 22): flowers, grass patches, paving, dirt marks
 
-Usage (317 cache):
-    uv run python scripts/export_objects.py \
-        --cache ../reference/tarnish/game-server/data/cache \
-        --output data/wilderness.objects
-
-Usage (modern cache):
+Usage:
     uv run python scripts/export_objects.py \
         --modern-cache ../reference/osrs-cache-modern \
         --keys ../reference/osrs-cache-modern/keys.json \
@@ -26,7 +20,6 @@ Usage (modern cache):
 """
 
 import argparse
-import gzip
 import io
 import math
 import struct
@@ -36,16 +29,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from export_collision_map import (
-    CONFIG_INDEX,
-    MAP_INDEX,
-    CacheReader,
-    _read_string,
-    decode_archive,
-    hash_archive_name,
-    load_map_index,
-    read_smart,
-)
 from export_terrain import RegionTerrain, build_heightmap, parse_terrain_full
 from export_models import (
     MODEL_INDEX,
@@ -54,25 +37,17 @@ from export_models import (
     expand_model,
     hsl15_to_rgb,
     load_model_modern,
-    load_texture_average_colors,
 )
-from export_textures import (
-    TextureAtlas,
-    build_atlas,
-    load_all_texture_sprites,
-    write_atlas_binary,
-)
+from export_textures import TextureAtlas
 from export_collision_map_modern import (
     _read_extended_smart,
     find_map_groups,
     load_xtea_keys,
 )
 from export_terrain import stitch_region_edges
-from modern_cache_reader import ModernCacheReader
+from modern_cache_reader import ModernCacheReader, read_smart
 
 # --- object definition with model IDs ---
-
-CONFIG_ARCHIVE = 2
 
 # object types we want to render
 WALL_TYPES = {0, 1, 2, 3, 9}
@@ -110,206 +85,6 @@ class LocDef:
     # color remapping
     recolor_from: list[int] = field(default_factory=list)
     recolor_to: list[int] = field(default_factory=list)
-
-
-def decode_loc_definitions(cache: CacheReader) -> dict[int, LocDef]:
-    """Decode object definitions from loc.dat/loc.idx, capturing model IDs.
-
-    Uses the idx file to build an offset table for each definition (matching
-    the Java client's streamIndices approach). Each definition is read from
-    its own slice of loc.dat, preventing any opcode parsing bug from
-    corrupting subsequent definitions.
-    """
-    raw = cache.get(CONFIG_INDEX, CONFIG_ARCHIVE)
-    if raw is None:
-        sys.exit("could not read config archive")
-
-    archive = decode_archive(raw)
-    loc_hash = hash_archive_name("loc.dat") & 0xFFFFFFFF
-    idx_hash = hash_archive_name("loc.idx") & 0xFFFFFFFF
-
-    loc_data = archive.get(loc_hash) or archive.get(hash_archive_name("loc.dat"))
-    loc_idx = archive.get(idx_hash) or archive.get(hash_archive_name("loc.idx"))
-
-    if loc_data is None or loc_idx is None:
-        sys.exit("loc.dat/loc.idx not found in config archive")
-
-    idx_buf = io.BytesIO(loc_idx)
-    total = struct.unpack(">H", idx_buf.read(2))[0]
-
-    # build offset table from idx (each entry is uint16 size)
-    offsets: list[int] = []
-    pos = 0
-    for _ in range(total):
-        size_bytes = idx_buf.read(2)
-        if len(size_bytes) < 2:
-            break
-        size = struct.unpack(">H", size_bytes)[0]
-        if size == 0xFFFF:
-            break
-        offsets.append(pos)
-        pos += size
-
-    defs: dict[int, LocDef] = {}
-
-    for obj_id in range(len(offsets)):
-        # read this definition's slice from loc.dat
-        start = offsets[obj_id]
-        end = offsets[obj_id + 1] if obj_id + 1 < len(offsets) else len(loc_data)
-        buf = io.BytesIO(loc_data[start:end])
-
-        d = LocDef(obj_id=obj_id)
-
-        while True:
-            opcode = buf.read(1)
-            if not opcode:
-                break
-            opcode = opcode[0]
-
-            if opcode == 0:
-                break
-            elif opcode == 1:
-                # model IDs with type contexts (first opcode wins, skip if already set)
-                count = buf.read(1)[0]
-                if not d.model_ids:
-                    d.has_typed_models = True
-                    for _ in range(count):
-                        mid = struct.unpack(">H", buf.read(2))[0]
-                        mtype = buf.read(1)[0]
-                        d.model_ids.append(mid)
-                        d.model_types.append(mtype)
-                else:
-                    buf.read(count * 3)  # skip
-            elif opcode == 2:
-                d.name = _read_string(buf)
-            elif opcode == 3:
-                pass  # description: Java reads 0 bytes for this opcode
-            elif opcode == 5:
-                # model IDs without types (first opcode wins, skip if already set)
-                count = buf.read(1)[0]
-                if not d.model_ids:
-                    d.has_typed_models = False
-                    for _ in range(count):
-                        mid = struct.unpack(">H", buf.read(2))[0]
-                        d.model_ids.append(mid)
-                        d.model_types.append(10)
-                else:
-                    buf.read(count * 2)  # skip
-            elif opcode == 14:
-                d.width = buf.read(1)[0]
-            elif opcode == 15:
-                d.length = buf.read(1)[0]
-            elif opcode == 17:
-                d.solid = False
-            elif opcode == 18:
-                pass  # impenetrable
-            elif opcode == 19:
-                buf.read(1)  # hasActions
-            elif opcode == 21:
-                d.contoured_ground = True
-            elif opcode == 22:
-                pass  # nonFlatShading
-            elif opcode == 23:
-                pass  # modelClipped
-            elif opcode == 24:
-                buf.read(2)  # animation id
-            elif opcode == 28:
-                d.decor_offset = buf.read(1)[0]
-            elif opcode == 29:
-                buf.read(1)  # ambient
-            elif opcode == 39:
-                buf.read(1)  # contrast
-            elif 30 <= opcode <= 34:
-                _read_string(buf)  # actions
-            elif opcode == 40:
-                # recolors: first short = modifiedModelColors (color to FIND in model)
-                # second short = originalModelColors (color to REPLACE WITH)
-                # naming is backwards in the OSRS client — "modified" is the source,
-                # "original" is the replacement. confirmed via Model.recolor(found, replace)
-                # call: model.recolor(modifiedModelColors[i], originalModelColors[i])
-                count = buf.read(1)[0]
-                for _ in range(count):
-                    d.recolor_from.append(struct.unpack(">H", buf.read(2))[0])
-                    d.recolor_to.append(struct.unpack(">H", buf.read(2))[0])
-            elif opcode == 41:
-                count = buf.read(1)[0]
-                for _ in range(count):
-                    buf.read(2)  # texture from
-                    buf.read(2)  # texture to
-            elif opcode == 60:
-                buf.read(2)  # mapAreaId
-            elif opcode == 61:
-                buf.read(2)  # category
-            elif opcode == 62:
-                d.rotated = True
-            elif opcode == 64:
-                pass  # shadow=false
-            elif opcode == 65:
-                d.model_size_x = struct.unpack(">H", buf.read(2))[0]
-            elif opcode == 66:
-                d.model_size_h = struct.unpack(">H", buf.read(2))[0]
-            elif opcode == 67:
-                d.model_size_y = struct.unpack(">H", buf.read(2))[0]
-            elif opcode == 68:
-                buf.read(2)  # mapscene
-            elif opcode == 69:
-                buf.read(1)  # surroundings
-            elif opcode == 70:
-                d.offset_x = struct.unpack(">H", buf.read(2))[0]
-            elif opcode == 71:
-                d.offset_h = struct.unpack(">H", buf.read(2))[0]
-            elif opcode == 72:
-                d.offset_y = struct.unpack(">H", buf.read(2))[0]
-            elif opcode == 73:
-                pass  # obstructsGround
-            elif opcode == 74:
-                d.solid = False
-            elif opcode == 75:
-                buf.read(1)  # supportItems
-            elif opcode == 77:
-                buf.read(2)  # varbit
-                buf.read(2)  # varp
-                count = buf.read(1)[0]
-                for _ in range(count + 1):
-                    buf.read(2)
-            elif opcode == 78:
-                buf.read(2)  # ambient sound
-                buf.read(1)
-            elif opcode == 79:
-                buf.read(2)
-                buf.read(2)
-                buf.read(1)
-                count = buf.read(1)[0]
-                for _ in range(count):
-                    buf.read(2)
-            elif opcode == 81:
-                buf.read(1)  # contoured ground percent
-            elif opcode == 82:
-                buf.read(2)  # map icon
-            elif opcode == 89:
-                pass  # randomize animation
-            elif opcode == 92:
-                buf.read(2)  # varbit
-                buf.read(2)  # varp
-                buf.read(2)  # default
-                count = buf.read(1)[0]
-                for _ in range(count + 1):
-                    buf.read(2)
-            elif opcode == 249:
-                count = buf.read(1)[0]
-                for _ in range(count):
-                    is_string = buf.read(1)[0] == 1
-                    buf.read(3)  # 3-byte medium
-                    if is_string:
-                        _read_string(buf)
-                    else:
-                        buf.read(4)
-            # unknown opcodes: skip (read 0 bytes), matching Java behavior
-
-        if d.model_ids:
-            defs[obj_id] = d
-
-    return defs
 
 
 def _read_modern_obj_string(buf: io.BytesIO) -> str:
@@ -509,65 +284,6 @@ class PlacedObject:
     height: int = 0
     obj_type: int = 0  # 0-22
     rotation: int = 0  # 0-3 (W/N/E/S = 0/90/180/270 degrees)
-
-
-def parse_object_placements(
-    data: bytes,
-    base_x: int,
-    base_y: int,
-) -> list[PlacedObject]:
-    """Parse object placement binary for one region."""
-    buf = io.BytesIO(data)
-    obj_id = -1
-    placements: list[PlacedObject] = []
-
-    while True:
-        obj_id_offset = read_smart(buf)
-        if obj_id_offset == 0:
-            break
-        obj_id += obj_id_offset
-        obj_pos_info = 0
-
-        while True:
-            pos_offset = read_smart(buf)
-            if pos_offset == 0:
-                break
-            obj_pos_info += pos_offset - 1
-
-            raw_byte = buf.read(1)
-            if not raw_byte:
-                return placements
-            info = raw_byte[0]
-
-            local_y = obj_pos_info & 0x3F
-            local_x = (obj_pos_info >> 6) & 0x3F
-            height = (obj_pos_info >> 12) & 0x3
-
-            obj_type = info >> 2
-            rotation = info & 0x3
-
-            if obj_type not in EXPORTED_TYPES:
-                continue
-
-            # only export plane 0 for now — plane 1+ objects (upper floors, roofing)
-            # need corresponding floor/ceiling geometry to look right.
-            # the heightmaps dict already supports multi-plane; just widen this
-            # filter when floor rendering is added.
-            if height != 0:
-                continue
-
-            placements.append(
-                PlacedObject(
-                    obj_id=obj_id,
-                    world_x=base_x + local_x,
-                    world_y=base_y + local_y,
-                    height=height,
-                    obj_type=obj_type,
-                    rotation=rotation,
-                )
-            )
-
-    return placements
 
 
 def parse_object_placements_modern(
@@ -839,17 +555,6 @@ def sample_height_bilinear(
     return h_south * (1.0 - frac_y) + h_north * frac_y
 
 
-def _load_model_317(cache: CacheReader, model_id: int) -> bytes | None:
-    """Load raw model bytes from 317 cache."""
-    raw = cache.get(MODEL_INDEX, model_id)
-    if raw is None:
-        return None
-    try:
-        return gzip.decompress(raw)
-    except Exception:
-        return None
-
-
 def process_placements(
     placements: list[PlacedObject],
     loc_defs: dict[int, LocDef],
@@ -1111,96 +816,6 @@ def _build_and_write(
     print(f"\nwrote {file_size:,} bytes to {args.output}")
 
 
-def _main_317(args: argparse.Namespace) -> None:
-    """Export objects from 317-format cache."""
-    if not args.cache.exists():
-        sys.exit(f"cache directory not found: {args.cache}")
-
-    print(f"reading cache from {args.cache}")
-    cache_reader = CacheReader(args.cache)
-
-    print("loading object definitions...")
-    loc_defs = decode_loc_definitions(cache_reader)
-    print(f"  {len(loc_defs)} definitions with models")
-
-    print("loading map index...")
-    region_defs = load_map_index(cache_reader)
-    print(f"  {len(region_defs)} regions in map index")
-
-    # fight area center: region (47, 55)
-    center_rx, center_ry = 47, 55
-    r = args.radius
-
-    target_regions = {
-        (rd.region_x, rd.region_y): rd
-        for rd in region_defs
-        if center_rx - r <= rd.region_x <= center_rx + r
-        and center_ry - r <= rd.region_y <= center_ry + r
-    }
-    print(f"  exporting {len(target_regions)} regions around ({center_rx}, {center_ry})")
-
-    # parse all object placements
-    all_placements: list[PlacedObject] = []
-    errors = 0
-
-    for (rx, ry), rd in sorted(target_regions.items()):
-        obj_data = cache_reader.get(MAP_INDEX, rd.object_file)
-        if obj_data is None:
-            errors += 1
-            continue
-
-        try:
-            obj_data = gzip.decompress(obj_data)
-        except Exception:
-            errors += 1
-            continue
-
-        base_x = rx * 64
-        base_y = ry * 64
-        placements = parse_object_placements(obj_data, base_x, base_y)
-        all_placements.extend(placements)
-
-    print(f"  {len(all_placements)} placements parsed, {errors} region errors")
-
-    # parse terrain for heightmap (same regions)
-    print("parsing terrain for ground heights...")
-    terrain_parsed: dict[tuple[int, int], RegionTerrain] = {}
-    for (rx, ry), rd in sorted(target_regions.items()):
-        terrain_data = cache_reader.get(MAP_INDEX, rd.terrain_file)
-        if terrain_data is None:
-            continue
-        try:
-            terrain_data = gzip.decompress(terrain_data)
-        except Exception:
-            continue
-        rt = parse_terrain_full(terrain_data, rx * 64, ry * 64)
-        rt.region_x = rx
-        rt.region_y = ry
-        terrain_parsed[(rx, ry)] = rt
-
-    # load texture average colors for textured face rendering (fallback)
-    tex_colors = load_texture_average_colors(cache_reader)
-    print(f"  loaded {len(tex_colors)} texture average colors")
-
-    # load texture sprites and build atlas
-    print("loading texture sprites...")
-    sprites = load_all_texture_sprites(cache_reader)
-    print(f"  loaded {len(sprites)} texture sprites from cache")
-
-    atlas = None
-    atlas_path = args.output.with_suffix(".atlas")
-    if sprites:
-        atlas = build_atlas(sprites)
-        print(f"  atlas: {atlas.width}x{atlas.height}, {len(atlas.uv_map)} textures mapped")
-        write_atlas_binary(atlas_path, atlas)
-        atlas_size = atlas_path.stat().st_size
-        print(f"  wrote {atlas_size:,} bytes to {atlas_path}")
-
-    loader_317 = lambda mid: _load_model_317(cache_reader, mid)
-    _build_and_write(args, all_placements, loc_defs, loader_317, terrain_parsed,
-                     tex_colors, atlas)
-
-
 def _main_modern(args: argparse.Namespace) -> None:
     """Export objects from modern OpenRS2 cache."""
     if not args.modern_cache.exists():
@@ -1306,18 +921,12 @@ def _main_modern(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="export OSRS placed objects from cache")
-    parser.add_argument(
-        "--cache",
-        type=Path,
-        default=Path("../reference/tarnish/game-server/data/cache"),
-        help="path to 317-format cache directory",
-    )
+    parser = argparse.ArgumentParser(description="export OSRS placed objects from modern OpenRS2 cache")
     parser.add_argument(
         "--modern-cache",
         type=Path,
-        default=None,
-        help="path to modern OpenRS2 cache directory (overrides --cache)",
+        required=True,
+        help="path to modern OpenRS2 cache directory",
     )
     parser.add_argument(
         "--keys",
@@ -1338,12 +947,6 @@ def main() -> None:
         help="output .objects binary file",
     )
     parser.add_argument(
-        "--radius",
-        type=int,
-        default=3,
-        help="number of regions around the fight area center to export (default: 3)",
-    )
-    parser.add_argument(
         "--exclude-ids",
         type=str,
         default=None,
@@ -1356,10 +959,7 @@ def main() -> None:
     if args.exclude_ids:
         args.exclude_id_set = {int(x.strip()) for x in args.exclude_ids.split(",")}
 
-    if args.modern_cache:
-        _main_modern(args)
-    else:
-        _main_317(args)
+    _main_modern(args)
 
 
 if __name__ == "__main__":
