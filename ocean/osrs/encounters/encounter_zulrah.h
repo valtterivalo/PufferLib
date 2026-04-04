@@ -504,6 +504,7 @@ typedef struct {
 
     /* player combat */
     ZulrahGearStyle player_gear;
+    int player_attack_target;     /* 1 = targeting zulrah, 0 = no target. cleared on food/potion/gear/move */
     int player_attack_timer;
     int player_food_count;        /* sharks */
     int player_karambwan_count;
@@ -1843,33 +1844,67 @@ static void zul_step(EncounterState* state, const int* actions) {
         if (s->melee_stare_timer <= 0) zul_melee_hit(s);
     }
 
-    /* player actions */
+    /* player actions — prayer doesn't interrupt interactions (per OSRS docs) */
     zul_process_prayer(s, actions[ZUL_HEAD_PRAYER]);
+
+    /* inventory actions interrupt the attack interaction (per OSRS docs:
+       "all item interactions within inventory" cancel entity interactions) */
+    if (actions[ZUL_HEAD_FOOD] > 0 || actions[ZUL_HEAD_POTION] > 0) {
+        s->player_attack_target = 0;
+    }
     zul_process_food(s, actions[ZUL_HEAD_FOOD]);
     zul_process_potion(s, actions[ZUL_HEAD_POTION]);
-    zul_process_gear(s, actions[ZUL_HEAD_ATTACK]);
 
-    /* set dest: explicit (human click or heuristic) takes priority,
-       then RL action offset, then idle (action 0) clears dest. */
+    /* gear switch is also an inventory action — interrupts target */
+    int atk_action = actions[ZUL_HEAD_ATTACK];
+    if (atk_action == ZUL_ATK_MAGE && s->player_gear != ZUL_GEAR_MAGE) {
+        s->player_attack_target = 0;  /* gear switch cancels interaction */
+    } else if (atk_action == ZUL_ATK_RANGE && s->player_gear != ZUL_GEAR_RANGE) {
+        s->player_attack_target = 0;
+    }
+    zul_process_gear(s, atk_action);
+
+    /* attack action sets persistent target (interaction persists until interrupted) */
+    if (atk_action == ZUL_ATK_MAGE || atk_action == ZUL_ATK_RANGE) {
+        s->player_attack_target = 1;
+    }
+    /* spec also sets target */
+    if (actions[ZUL_HEAD_SPEC] == 1) {
+        s->player_attack_target = 1;
+    }
+
+    /* explicit movement (ground click) interrupts interaction.
+       idle (action 0) does NOT interrupt — player keeps facing target. */
+    int has_explicit_move = 0;
     if (s->player_dest_explicit) {
         s->player_dest_explicit = 0;
+        has_explicit_move = 1;
     } else {
         int m = actions[ZUL_HEAD_MOVE];
         if (m > 0 && m < ZUL_MOVE_DIM) {
             s->player_dest_x = s->player.x + ENCOUNTER_MOVE_TARGET_DX[m];
             s->player_dest_y = s->player.y + ENCOUNTER_MOVE_TARGET_DY[m];
+            has_explicit_move = 1;
         } else {
-            /* idle: clear destination */
             s->player_dest_x = -1;
             s->player_dest_y = -1;
         }
     }
+    if (has_explicit_move && s->player_attack_target == 0) {
+        /* movement without an active target — just move */
+    }
+    /* note: movement WITH an active target is auto-chase (handled by process_movement) */
     zul_process_movement(s);
+
+    /* clear target if zulrah not visible (dived/dead) */
+    if (s->player_attack_target && (!s->zulrah_visible || s->is_diving)) {
+        s->player_attack_target = 0;
+    }
 
     /* spec takes priority over normal attack if requested */
     if (actions[ZUL_HEAD_SPEC] == 1) zul_player_spec(s);
-    else if (actions[ZUL_HEAD_ATTACK] == ZUL_ATK_MAGE) zul_player_attack(s, 1);
-    else if (actions[ZUL_HEAD_ATTACK] == ZUL_ATK_RANGE) zul_player_attack(s, 0);
+    else if (atk_action == ZUL_ATK_MAGE) zul_player_attack(s, 1);
+    else if (atk_action == ZUL_ATK_RANGE) zul_player_attack(s, 0);
 
     if (s->zulrah.current_hitpoints <= 0) {
         s->episode_over = 1; s->winner = 0;
@@ -2031,12 +2066,19 @@ static void zul_fill_render_entities(EncounterState* state, RenderEntity* out, i
     for (int i = 0; i < ZUL_MAX_SNAKELINGS && n < max_entities; i++) {
         if (s->snakelings[i].active) {
             render_entity_from_player(&s->snakelings[i].entity, &out[n++]);
-            out[n - 1].attack_target_entity_idx = 0;  /* snakelings face player */
+            /* snakelings face player when in attack range */
+            int adx = abs(s->snakelings[i].entity.x - s->player.x);
+            int ady = abs(s->snakelings[i].entity.y - s->player.y);
+            if (adx <= 1 && ady <= 1)
+                out[n - 1].attack_target_entity_idx = 0;
         }
     }
-    /* player faces zulrah, zulrah faces player */
-    out[0].attack_target_entity_idx = 1;
-    out[1].attack_target_entity_idx = 0;
+    /* player faces zulrah when interaction is active (persistent until interrupted) */
+    if (s->player_attack_target)
+        out[0].attack_target_entity_idx = 1;
+    /* zulrah faces player during attack phases */
+    if (s->zulrah_attacking && s->zulrah_visible && !s->is_diving)
+        out[1].attack_target_entity_idx = 0;
     *count = n;
 }
 
