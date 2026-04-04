@@ -14,7 +14,7 @@
 #define ENCOUNTER_NH_PVP_H
 
 #include "../osrs_encounter.h"
-#include "../osrs_pvp.h"
+#include "../osrs_env.h"
 
 /* obs/action dimensions from osrs_types.h */
 static const int NH_PVP_ACTION_DIMS[] = {

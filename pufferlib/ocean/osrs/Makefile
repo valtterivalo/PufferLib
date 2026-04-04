@@ -1,4 +1,4 @@
-# OSRS PvP C Environment Makefile
+# OSRS environment Makefile
 #
 # standalone targets (no PufferLib dependency):
 #   make           — headless benchmark binary
@@ -12,9 +12,9 @@ CFLAGS = -Wall -Wextra -O3 -ffast-math -flto -fPIC -std=c11
 DEBUG_FLAGS = -Wall -Wextra -g -O0 -fPIC -std=c11 -DDEBUG
 LDFLAGS = -lm
 
-TARGET = osrs_pvp
-DEMO_SRC = osrs_pvp.c
-HEADERS = osrs_pvp.h
+TARGET = osrs_visual
+DEMO_SRC = osrs_visual.c
+HEADERS = osrs_env.h
 
 # Raylib (for visual target). download from https://github.com/raysan5/raylib/releases
 RAYLIB_DIR = raylib-5.5_macos
@@ -33,11 +33,11 @@ all: $(TARGET)
 $(TARGET): $(DEMO_SRC) $(HEADERS)
 	$(CC) $(CFLAGS) -o $@ $(DEMO_SRC) $(LDFLAGS)
 
-visual: $(DEMO_SRC) $(HEADERS) osrs_pvp_render.h osrs_pvp_gui.h
-	$(CC) $(CFLAGS) -DOSRS_PVP_VISUAL $(RAYLIB_FLAGS) -o $(TARGET)_visual $(DEMO_SRC) $(LDFLAGS)
+visual: $(DEMO_SRC) $(HEADERS) osrs_render.h osrs_gui.h
+	$(CC) $(CFLAGS) -DOSRS_PVP_VISUAL $(RAYLIB_FLAGS) -o $(TARGET) $(DEMO_SRC) $(LDFLAGS)
 
 debug: $(DEMO_SRC) $(HEADERS)
 	$(CC) $(DEBUG_FLAGS) -o $(TARGET)_debug $(DEMO_SRC) $(LDFLAGS)
 
 clean:
-	rm -f $(TARGET) $(TARGET)_debug $(TARGET)_visual *.o
+	rm -f $(TARGET) $(TARGET)_debug *.o

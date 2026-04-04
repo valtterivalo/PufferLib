@@ -16,8 +16,8 @@
  *   framebases section, sequences section with inlined frame data.
  */
 
-#ifndef OSRS_PVP_ANIM_H
-#define OSRS_PVP_ANIM_H
+#ifndef OSRS_ANIM_H
+#define OSRS_ANIM_H
 
 #include <math.h>
 #include <stdint.h>
@@ -678,4 +678,4 @@ static void anim_cache_free(AnimCache* cache) {
     free(cache);
 }
 
-#endif /* OSRS_PVP_ANIM_H */
+#endif /* OSRS_ANIM_H */

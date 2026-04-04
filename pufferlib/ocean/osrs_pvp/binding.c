@@ -7,7 +7,7 @@
  * struct. PVP source headers are untouched.
  */
 
-#include "osrs_pvp.h"
+#include "osrs_env.h"
 
 /* Wrapper struct: vecenv-compatible fields at top + embedded OsrsPvp.
  * vecenv.h's create_static_vec assigns to env->observations, env->actions,

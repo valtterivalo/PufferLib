@@ -20,8 +20,8 @@
  *   - spellbook: grid layout (interface 218)
  */
 
-#ifndef OSRS_PVP_GUI_H
-#define OSRS_PVP_GUI_H
+#ifndef OSRS_GUI_H
+#define OSRS_GUI_H
 
 #include "osrs_pvp_human_input_types.h"
 
@@ -1980,4 +1980,4 @@ static void gui_draw(GuiState* gs, Player* p) {
     }
 }
 
-#endif /* OSRS_PVP_GUI_H */
+#endif /* OSRS_GUI_H */

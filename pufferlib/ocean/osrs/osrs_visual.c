@@ -10,14 +10,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include "osrs_pvp.h"
+#include "osrs_env.h"
 #include "osrs_encounter.h"
 #include "encounters/encounter_nh_pvp.h"
 #include "encounters/encounter_zulrah.h"
 #include "encounters/encounter_inferno.h"
 
 #ifdef OSRS_PVP_VISUAL
-#include "osrs_pvp_render.h"
+#include "osrs_render.h"
 #endif
 
 static void print_player_state(Player* p, int idx) {

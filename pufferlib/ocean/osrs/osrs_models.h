@@ -19,8 +19,8 @@
  * transform the original geometry and re-expand for GPU upload.
  */
 
-#ifndef OSRS_PVP_MODELS_H
-#define OSRS_PVP_MODELS_H
+#ifndef OSRS_MODELS_H
+#define OSRS_MODELS_H
 
 #include "raylib.h"
 #include "data/item_models.h"
@@ -210,4 +210,4 @@ static void model_cache_free(ModelCache* cache) {
     free(cache);
 }
 
-#endif /* OSRS_PVP_MODELS_H */
+#endif /* OSRS_MODELS_H */

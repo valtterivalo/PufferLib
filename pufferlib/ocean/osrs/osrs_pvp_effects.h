@@ -13,8 +13,8 @@
 #ifndef OSRS_PVP_EFFECTS_H
 #define OSRS_PVP_EFFECTS_H
 
-#include "osrs_pvp_models.h"
-#include "osrs_pvp_anim.h"
+#include "osrs_models.h"
+#include "osrs_anim.h"
 #include <math.h>
 
 #define MAX_ACTIVE_EFFECTS 16

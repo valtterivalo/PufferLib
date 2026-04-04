@@ -8,20 +8,20 @@
  * Follows PufferLib's Client + make_client + c_render pattern.
  */
 
-#ifndef OSRS_PVP_RENDER_H
-#define OSRS_PVP_RENDER_H
+#ifndef OSRS_RENDER_H
+#define OSRS_RENDER_H
 
 #include "raylib.h"
 #include "rlgl.h"
 #include "raymath.h"
-#include "osrs_pvp_models.h"
-#include "osrs_pvp_anim.h"
+#include "osrs_models.h"
+#include "osrs_anim.h"
 #include "osrs_pvp_effects.h"
 #include "data/player_models.h"
 #include "data/npc_models.h"
 #include "osrs_pvp_terrain.h"
 #include "osrs_pvp_objects.h"
-#include "osrs_pvp_gui.h"
+#include "osrs_gui.h"
 #include "osrs_pvp_human_input.h"
 #include <stdio.h>
 #include <string.h>
@@ -3949,4 +3949,4 @@ void pvp_render(OsrsPvp* env) {
     EndDrawing();
 }
 
-#endif /* OSRS_PVP_RENDER_H */
+#endif /* OSRS_RENDER_H */

@@ -807,24 +807,24 @@ static void test_ranged_spec_hit_delays(void) {
 
     /* dragon knife: always 1 tick delay */
     ASSERT_INT_EQ("dragon knife delay",
-        ranged_hit_delay(distance, 1, RANGED_SPEC_DRAGON_KNIFE), 1);
+        pvp_ranged_hit_delay_for_weapon(distance, 1, RANGED_SPEC_DRAGON_KNIFE), 1);
 
     /* morrigan's: always 1 tick delay */
     ASSERT_INT_EQ("morrigan's delay",
-        ranged_hit_delay(distance, 1, RANGED_SPEC_MORRIGANS), 1);
+        pvp_ranged_hit_delay_for_weapon(distance, 1, RANGED_SPEC_MORRIGANS), 1);
 
     /* ballista: always 3 ticks delay */
     ASSERT_INT_EQ("ballista delay",
-        ranged_hit_delay(distance, 1, RANGED_SPEC_BALLISTA), 3);
+        pvp_ranged_hit_delay_for_weapon(distance, 1, RANGED_SPEC_BALLISTA), 3);
 
     /* dark bow spec: uses default ranged formula */
     int expected_default = (3 + distance) / 6 + 1;
     ASSERT_INT_EQ("dark bow delay",
-        ranged_hit_delay(distance, 1, RANGED_SPEC_DARK_BOW), expected_default);
+        pvp_ranged_hit_delay_for_weapon(distance, 1, RANGED_SPEC_DARK_BOW), expected_default);
 
     /* non-special: always uses default formula regardless of weapon */
     ASSERT_INT_EQ("non-special delay",
-        ranged_hit_delay(distance, 0, RANGED_SPEC_DRAGON_KNIFE), expected_default);
+        pvp_ranged_hit_delay_for_weapon(distance, 0, RANGED_SPEC_DRAGON_KNIFE), expected_default);
 }
 
 /* ======================================================================== */
@@ -899,33 +899,39 @@ static void test_max_hit_with_spec_mult(void) {
     int base_max = calculate_max_hit(&p, ATTACK_STYLE_MELEE, 1.0f, 30);
     ASSERT_INT_EQ("base melee max hit (str=99, bonus=100)", base_max, 27);
 
-    /* AGS: 1.375x -> floor(27.919 * 1.375) = floor(38.389) = 38 */
+    /* base max hit = floor((107 * 164 + 320) / 640) = floor(17868 / 640) = 27.
+       spec multipliers now apply to the truncated base (matching dps-calc Math.trunc).
+       osrs_resolve_spec uses integer multipliers (e.g. max*11/8 for AGS) which is
+       the correct OSRS formula. calculate_max_hit with float str_mult truncates
+       floor(27 * mult). */
+
+    /* AGS: 1.375x -> floor(27 * 1.375) = floor(37.125) = 37 */
     int ags_max = calculate_max_hit(&p, ATTACK_STYLE_MELEE, 1.375f, 30);
-    ASSERT_INT_EQ("AGS max hit (1.375x)", ags_max, 38);
+    ASSERT_INT_EQ("AGS max hit (1.375x)", ags_max, 37);
 
-    /* DDS: 1.15x -> floor(27.919 * 1.15) = floor(32.107) = 32 */
+    /* DDS: 1.15x -> floor(27 * 1.15) = floor(31.05) = 31 */
     int dds_max = calculate_max_hit(&p, ATTACK_STYLE_MELEE, 1.15f, 30);
-    ASSERT_INT_EQ("DDS max hit (1.15x)", dds_max, 32);
+    ASSERT_INT_EQ("DDS max hit (1.15x)", dds_max, 31);
 
-    /* BGS: 1.21x -> floor(27.919 * 1.21) = floor(33.781) = 33 */
+    /* BGS: 1.21x -> floor(27 * 1.21) = floor(32.67) = 32 */
     int bgs_max = calculate_max_hit(&p, ATTACK_STYLE_MELEE, 1.21f, 30);
-    ASSERT_INT_EQ("BGS max hit (1.21x)", bgs_max, 33);
+    ASSERT_INT_EQ("BGS max hit (1.21x)", bgs_max, 32);
 
-    /* DWH/statius: 1.25x -> floor(27.919 * 1.25) = floor(34.899) = 34 */
+    /* DWH/statius: 1.25x -> floor(27 * 1.25) = floor(33.75) = 33 */
     int dwh_max = calculate_max_hit(&p, ATTACK_STYLE_MELEE, 1.25f, 30);
-    ASSERT_INT_EQ("DWH max hit (1.25x)", dwh_max, 34);
+    ASSERT_INT_EQ("DWH max hit (1.25x)", dwh_max, 33);
 
-    /* ZGS/SGS: 1.1x -> floor(27.919 * 1.1) = floor(30.710) = 30 */
+    /* ZGS/SGS: 1.1x -> floor(27 * 1.1) = floor(29.7) = 29 */
     int zgs_max = calculate_max_hit(&p, ATTACK_STYLE_MELEE, 1.1f, 30);
-    ASSERT_INT_EQ("ZGS max hit (1.1x)", zgs_max, 30);
+    ASSERT_INT_EQ("ZGS max hit (1.1x)", zgs_max, 29);
 
-    /* abyssal dagger: 0.85x -> floor(27.919 * 0.85) = floor(23.731) = 23 */
+    /* abyssal dagger: 0.85x -> floor(27 * 0.85) = floor(22.95) = 22 */
     int abd_max = calculate_max_hit(&p, ATTACK_STYLE_MELEE, 0.85f, 30);
-    ASSERT_INT_EQ("abyssal dagger max hit (0.85x)", abd_max, 23);
+    ASSERT_INT_EQ("abyssal dagger max hit (0.85x)", abd_max, 22);
 
-    /* dragon mace: 1.5x -> floor(27.919 * 1.5) = floor(41.878) = 41 */
+    /* dragon mace: 1.5x -> floor(27 * 1.5) = floor(40.5) = 40 */
     int dmace_max = calculate_max_hit(&p, ATTACK_STYLE_MELEE, 1.5f, 30);
-    ASSERT_INT_EQ("dragon mace max hit (1.5x)", dmace_max, 41);
+    ASSERT_INT_EQ("dragon mace max hit (1.5x)", dmace_max, 40);
 
     /* ranged: with str_bonus=80, eff_str = floor(99*1.0) + 0 + 8 = 107
        base = floor((107 * (80+64) + 320) / 640) = floor((15408+320)/640) = floor(24.575) = 24 */
