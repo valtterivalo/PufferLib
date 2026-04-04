@@ -19,6 +19,8 @@ Input:
 Output:
     osrs_monsters_generated.h — generated monster database
 
+Generated types: MonsterIndex enum, MonsterStats struct, MONSTER_DATABASE array.
+
 Stat field mapping (monsters.json -> MonsterStats struct):
     id                  -> npc_id
     name                -> name
@@ -125,9 +127,9 @@ def generate_header(manifest: list[dict], by_id: dict[int, list[dict]]) -> str:
     for i, entry in enumerate(manifest):
         comment = entry.get("comment", "")
         suffix = f"  /* {comment} */" if comment else ""
-        lines.append(f"    GEN_{entry['index']} = {i},{suffix}")
-    lines.append(f"    GEN_NUM_MONSTERS = {len(manifest)}")
-    lines.append("} GenMonsterIndex;")
+        lines.append(f"    {entry['index']} = {i},{suffix}")
+    lines.append(f"    NUM_MONSTERS = {len(manifest)}")
+    lines.append("} MonsterIndex;")
     lines.append("")
 
     # monster struct
@@ -156,11 +158,11 @@ def generate_header(manifest: list[dict], by_id: dict[int, list[dict]]) -> str:
     lines.append("    int16_t crush_def;")
     lines.append("    int16_t magic_def;")
     lines.append("    int16_t ranged_def;")
-    lines.append("} GenMonster;")
+    lines.append("} MonsterStats;")
     lines.append("")
 
     # monster database
-    lines.append(f"static const GenMonster GEN_MONSTER_DATABASE[GEN_NUM_MONSTERS] = {{")
+    lines.append(f"static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {{")
     warnings = []
 
     for entry in manifest:
@@ -175,7 +177,7 @@ def generate_header(manifest: list[dict], by_id: dict[int, list[dict]]) -> str:
             if manual:
                 comment = entry.get("comment", f"id={npc_id}")
                 name = manual.get("name", comment)[:31]
-                lines.append(f"    [GEN_{idx_name}] = {{ /* {comment} (manual) */")
+                lines.append(f"    [{idx_name}] = {{ /* {comment} (manual) */")
                 lines.append(f"        .npc_id = {npc_id}, .name = \"{name}\",")
                 lines.append(f"        .hp = {manual.get('hp', 0)}, "
                              f".att_level = {manual.get('att_level', 0)}, "
@@ -196,7 +198,7 @@ def generate_header(manifest: list[dict], by_id: dict[int, list[dict]]) -> str:
 
             warnings.append(f"WARNING: {idx_name} (id={npc_id}) not found in monsters.json")
             lines.append(f"    /* WARNING: {idx_name} (id={npc_id}) NOT FOUND */")
-            lines.append(f"    [GEN_{idx_name}] = {{ .npc_id = {npc_id}, .name = \"MISSING\" }},")
+            lines.append(f"    [{idx_name}] = {{ .npc_id = {npc_id}, .name = \"MISSING\" }},")
             continue
 
         name = m["name"][:31]
@@ -206,7 +208,7 @@ def generate_header(manifest: list[dict], by_id: dict[int, list[dict]]) -> str:
         max_hit = parse_max_hit(m.get("max_hit", 0))
         comment = entry.get("comment", name)
 
-        lines.append(f"    [GEN_{idx_name}] = {{ /* {comment} */")
+        lines.append(f"    [{idx_name}] = {{ /* {comment} */")
         lines.append(f"        .npc_id = {npc_id}, .name = \"{name}\",")
         lines.append(f"        .hp = {skills.get('hp', 0)}, "
                      f".att_level = {skills.get('atk', 0)}, "

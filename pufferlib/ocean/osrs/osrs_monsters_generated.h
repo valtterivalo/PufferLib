@@ -12,22 +12,22 @@
 #include <stdint.h>
 
 typedef enum {
-    GEN_MON_JAL_NIB = 0,  /* Nibbler */
-    GEN_MON_JAL_MEJRAH = 1,  /* Bat */
-    GEN_MON_JAL_AK = 2,  /* Blob */
-    GEN_MON_JAL_AKREK_MEJ = 3,  /* Blob mage split */
-    GEN_MON_JAL_AKREK_XIL = 4,  /* Blob range split */
-    GEN_MON_JAL_AKREK_KET = 5,  /* Blob melee split */
-    GEN_MON_JAL_IMKOT = 6,  /* Meleer */
-    GEN_MON_JAL_XIL = 7,  /* Ranger */
-    GEN_MON_JAL_ZEK = 8,  /* Mager */
-    GEN_MON_JALTOK_JAD = 9,  /* Jad */
-    GEN_MON_YT_HURKOT = 10,  /* Jad healer */
-    GEN_MON_TZKAL_ZUK = 11,  /* Zuk */
-    GEN_MON_ZUK_SHIELD = 12,  /* Ancestral Glyph */
-    GEN_MON_JAL_MEJJAK = 13,  /* Zuk healer */
-    GEN_NUM_MONSTERS = 14
-} GenMonsterIndex;
+    MON_JAL_NIB = 0,  /* Nibbler */
+    MON_JAL_MEJRAH = 1,  /* Bat */
+    MON_JAL_AK = 2,  /* Blob */
+    MON_JAL_AKREK_MEJ = 3,  /* Blob mage split */
+    MON_JAL_AKREK_XIL = 4,  /* Blob range split */
+    MON_JAL_AKREK_KET = 5,  /* Blob melee split */
+    MON_JAL_IMKOT = 6,  /* Meleer */
+    MON_JAL_XIL = 7,  /* Ranger */
+    MON_JAL_ZEK = 8,  /* Mager */
+    MON_JALTOK_JAD = 9,  /* Jad */
+    MON_YT_HURKOT = 10,  /* Jad healer */
+    MON_TZKAL_ZUK = 11,  /* Zuk */
+    MON_ZUK_SHIELD = 12,  /* Ancestral Glyph */
+    MON_JAL_MEJJAK = 13,  /* Zuk healer */
+    NUM_MONSTERS = 14
+} MonsterIndex;
 
 typedef struct {
     uint16_t npc_id;
@@ -54,10 +54,10 @@ typedef struct {
     int16_t crush_def;
     int16_t magic_def;
     int16_t ranged_def;
-} GenMonster;
+} MonsterStats;
 
-static const GenMonster GEN_MONSTER_DATABASE[GEN_NUM_MONSTERS] = {
-    [GEN_MON_JAL_NIB] = { /* Nibbler */
+static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
+    [MON_JAL_NIB] = { /* Nibbler */
         .npc_id = 7691, .name = "Jal-Nib",
         .hp = 10, .att_level = 1, .str_level = 1, .def_level = 15,
         .magic_level = 15, .range_level = 1,
@@ -67,7 +67,7 @@ static const GenMonster GEN_MONSTER_DATABASE[GEN_NUM_MONSTERS] = {
         .stab_def = -20, .slash_def = -20, .crush_def = -20,
         .magic_def = -20, .ranged_def = -20
     },
-    [GEN_MON_JAL_MEJRAH] = { /* Bat */
+    [MON_JAL_MEJRAH] = { /* Bat */
         .npc_id = 7692, .name = "Jal-MejRah",
         .hp = 25, .att_level = 0, .str_level = 0, .def_level = 55,
         .magic_level = 120, .range_level = 120,
@@ -77,7 +77,7 @@ static const GenMonster GEN_MONSTER_DATABASE[GEN_NUM_MONSTERS] = {
         .stab_def = 30, .slash_def = 30, .crush_def = 30,
         .magic_def = -20, .ranged_def = 45
     },
-    [GEN_MON_JAL_AK] = { /* Blob */
+    [MON_JAL_AK] = { /* Blob */
         .npc_id = 7693, .name = "Jal-Ak",
         .hp = 40, .att_level = 160, .str_level = 160, .def_level = 95,
         .magic_level = 160, .range_level = 160,
@@ -87,7 +87,7 @@ static const GenMonster GEN_MONSTER_DATABASE[GEN_NUM_MONSTERS] = {
         .stab_def = 25, .slash_def = 25, .crush_def = 25,
         .magic_def = 25, .ranged_def = 25
     },
-    [GEN_MON_JAL_AKREK_MEJ] = { /* Blob mage split */
+    [MON_JAL_AKREK_MEJ] = { /* Blob mage split */
         .npc_id = 7694, .name = "Jal-AkRek-Mej",
         .hp = 15, .att_level = 1, .str_level = 1, .def_level = 95,
         .magic_level = 120, .range_level = 1,
@@ -97,7 +97,7 @@ static const GenMonster GEN_MONSTER_DATABASE[GEN_NUM_MONSTERS] = {
         .stab_def = 0, .slash_def = 0, .crush_def = 0,
         .magic_def = 25, .ranged_def = 0
     },
-    [GEN_MON_JAL_AKREK_XIL] = { /* Blob range split */
+    [MON_JAL_AKREK_XIL] = { /* Blob range split */
         .npc_id = 7695, .name = "Jal-AkRek-Xil",
         .hp = 15, .att_level = 1, .str_level = 1, .def_level = 95,
         .magic_level = 1, .range_level = 120,
@@ -107,7 +107,7 @@ static const GenMonster GEN_MONSTER_DATABASE[GEN_NUM_MONSTERS] = {
         .stab_def = 0, .slash_def = 0, .crush_def = 0,
         .magic_def = 0, .ranged_def = 25
     },
-    [GEN_MON_JAL_AKREK_KET] = { /* Blob melee split */
+    [MON_JAL_AKREK_KET] = { /* Blob melee split */
         .npc_id = 7696, .name = "Jal-AkRek-Ket",
         .hp = 15, .att_level = 120, .str_level = 120, .def_level = 95,
         .magic_level = 1, .range_level = 1,
@@ -117,7 +117,7 @@ static const GenMonster GEN_MONSTER_DATABASE[GEN_NUM_MONSTERS] = {
         .stab_def = 25, .slash_def = 25, .crush_def = 25,
         .magic_def = 0, .ranged_def = 0
     },
-    [GEN_MON_JAL_IMKOT] = { /* Meleer */
+    [MON_JAL_IMKOT] = { /* Meleer */
         .npc_id = 7697, .name = "Jal-ImKot",
         .hp = 75, .att_level = 210, .str_level = 290, .def_level = 120,
         .magic_level = 120, .range_level = 220,
@@ -127,7 +127,7 @@ static const GenMonster GEN_MONSTER_DATABASE[GEN_NUM_MONSTERS] = {
         .stab_def = 65, .slash_def = 65, .crush_def = 65,
         .magic_def = 30, .ranged_def = 50
     },
-    [GEN_MON_JAL_XIL] = { /* Ranger */
+    [MON_JAL_XIL] = { /* Ranger */
         .npc_id = 7698, .name = "Jal-Xil",
         .hp = 125, .att_level = 140, .str_level = 180, .def_level = 60,
         .magic_level = 90, .range_level = 250,
@@ -137,7 +137,7 @@ static const GenMonster GEN_MONSTER_DATABASE[GEN_NUM_MONSTERS] = {
         .stab_def = 0, .slash_def = 0, .crush_def = 0,
         .magic_def = 0, .ranged_def = 0
     },
-    [GEN_MON_JAL_ZEK] = { /* Mager */
+    [MON_JAL_ZEK] = { /* Mager */
         .npc_id = 7699, .name = "Jal-Zek",
         .hp = 220, .att_level = 370, .str_level = 510, .def_level = 260,
         .magic_level = 300, .range_level = 510,
@@ -147,7 +147,7 @@ static const GenMonster GEN_MONSTER_DATABASE[GEN_NUM_MONSTERS] = {
         .stab_def = 0, .slash_def = 0, .crush_def = 0,
         .magic_def = 0, .ranged_def = 0
     },
-    [GEN_MON_JALTOK_JAD] = { /* Jad */
+    [MON_JALTOK_JAD] = { /* Jad */
         .npc_id = 7700, .name = "JalTok-Jad",
         .hp = 350, .att_level = 750, .str_level = 1020, .def_level = 480,
         .magic_level = 510, .range_level = 1020,
@@ -157,7 +157,7 @@ static const GenMonster GEN_MONSTER_DATABASE[GEN_NUM_MONSTERS] = {
         .stab_def = 0, .slash_def = 0, .crush_def = 0,
         .magic_def = 0, .ranged_def = 0
     },
-    [GEN_MON_YT_HURKOT] = { /* Jad healer */
+    [MON_YT_HURKOT] = { /* Jad healer */
         .npc_id = 7701, .name = "Yt-HurKot",
         .hp = 90, .att_level = 165, .str_level = 125, .def_level = 100,
         .magic_level = 150, .range_level = 150,
@@ -167,7 +167,7 @@ static const GenMonster GEN_MONSTER_DATABASE[GEN_NUM_MONSTERS] = {
         .stab_def = 0, .slash_def = 0, .crush_def = 0,
         .magic_def = 130, .ranged_def = 130
     },
-    [GEN_MON_TZKAL_ZUK] = { /* Zuk */
+    [MON_TZKAL_ZUK] = { /* Zuk */
         .npc_id = 7706, .name = "TzKal-Zuk",
         .hp = 1200, .att_level = 350, .str_level = 600, .def_level = 260,
         .magic_level = 150, .range_level = 400,
@@ -177,7 +177,7 @@ static const GenMonster GEN_MONSTER_DATABASE[GEN_NUM_MONSTERS] = {
         .stab_def = 0, .slash_def = 0, .crush_def = 0,
         .magic_def = 350, .ranged_def = 100
     },
-    [GEN_MON_ZUK_SHIELD] = { /* Ancestral Glyph (manual) */
+    [MON_ZUK_SHIELD] = { /* Ancestral Glyph (manual) */
         .npc_id = 7707, .name = "Ancestral Glyph",
         .hp = 600, .att_level = 0, .str_level = 0, .def_level = 0,
         .magic_level = 0, .range_level = 0,
@@ -185,7 +185,7 @@ static const GenMonster GEN_MONSTER_DATABASE[GEN_NUM_MONSTERS] = {
         .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 0, .magic_str_bonus = 0, .range_att_bonus = 0, .ranged_str_bonus = 0,
         .stab_def = 0, .slash_def = 0, .crush_def = 0, .magic_def = 0, .ranged_def = 0
     },
-    [GEN_MON_JAL_MEJJAK] = { /* Zuk healer */
+    [MON_JAL_MEJJAK] = { /* Zuk healer */
         .npc_id = 7708, .name = "Jal-MejJak",
         .hp = 75, .att_level = 1, .str_level = 1, .def_level = 100,
         .magic_level = 1, .range_level = 1,

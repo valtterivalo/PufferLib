@@ -176,61 +176,21 @@ def generate_header(
     lines.append("#ifndef OSRS_ITEMS_GENERATED_H")
     lines.append("#define OSRS_ITEMS_GENERATED_H")
     lines.append("")
-    lines.append("#include <stdint.h>")
-    lines.append("#include <stddef.h>")
-    lines.append("")
 
-    # slot enum
-    lines.append("typedef enum {")
-    for slot_name, enum_val in [
-        ("SLOT_HEAD", 0), ("SLOT_CAPE", 1), ("SLOT_NECK", 2),
-        ("SLOT_WEAPON", 3), ("SLOT_BODY", 4), ("SLOT_SHIELD", 5),
-        ("SLOT_LEGS", 6), ("SLOT_HANDS", 7), ("SLOT_FEET", 8),
-        ("SLOT_RING", 9), ("SLOT_AMMO", 10),
-    ]:
-        lines.append(f"    GEN_{slot_name} = {enum_val},")
-    lines.append("    GEN_NUM_EQUIPMENT_SLOTS = 11")
-    lines.append("} GenEquipmentSlot;")
-    lines.append("")
-
-    # item index enum
+    # item index enum (EquipmentSlot enum and Item struct live in osrs_items.h)
     lines.append("typedef enum {")
     for i, entry in enumerate(manifest):
         comment = entry.get("comment", "")
         suffix = f"  /* {comment} */" if comment else ""
-        lines.append(f"    GEN_{entry['index']} = {i},{suffix}")
-    lines.append(f"    GEN_NUM_ITEMS = {len(manifest)},")
-    lines.append("    GEN_ITEM_NONE = 255")
-    lines.append("} GenItemIndex;")
-    lines.append("")
-
-    # item struct (same layout as osrs_items.h)
-    lines.append("typedef struct {")
-    lines.append("    uint16_t item_id;")
-    lines.append("    char name[32];")
-    lines.append("    uint8_t slot;")
-    lines.append("    uint8_t attack_speed;")
-    lines.append("    uint8_t attack_range;")
-    lines.append("    int16_t attack_stab;")
-    lines.append("    int16_t attack_slash;")
-    lines.append("    int16_t attack_crush;")
-    lines.append("    int16_t attack_magic;")
-    lines.append("    int16_t attack_ranged;")
-    lines.append("    int16_t defence_stab;")
-    lines.append("    int16_t defence_slash;")
-    lines.append("    int16_t defence_crush;")
-    lines.append("    int16_t defence_magic;")
-    lines.append("    int16_t defence_ranged;")
-    lines.append("    int16_t melee_strength;")
-    lines.append("    int16_t ranged_strength;")
-    lines.append("    int16_t magic_damage;")
-    lines.append("    int16_t prayer;")
-    lines.append("} GenItem;")
+        lines.append(f"    {entry['index']} = {i},{suffix}")
+    lines.append(f"    NUM_ITEMS = {len(manifest)},")
+    lines.append("    ITEM_NONE = 255")
+    lines.append("} ItemIndex;")
     lines.append("")
 
     # item database
     lines.append(
-        f"static const GenItem GEN_ITEM_DATABASE[GEN_NUM_ITEMS] = {{"
+        f"static const Item ITEM_DATABASE[NUM_ITEMS] = {{"
     )
     warnings = []
 
@@ -249,11 +209,11 @@ def generate_header(
                 comment = entry.get("comment", f"id={item_id}")
                 name = manual.get("name", comment)[:31]
                 slot_enum = SLOT_MAP.get(manual.get("slot", "weapon"), "0")
-                lines.append(f"    [GEN_{idx_name}] = {{ /* {comment} (manual) */")
+                lines.append(f"    [{idx_name}] = {{ /* {comment} (manual) */")
                 lines.append(
                     f"        .item_id = {item_id}, "
                     f'.name = "{name}", '
-                    f".slot = GEN_{slot_enum},"
+                    f".slot = {slot_enum},"
                 )
                 lines.append(
                     f"        .attack_speed = {manual.get('attack_speed', 0)}, "
@@ -291,7 +251,7 @@ def generate_header(
                 f"and no manual_stats in manifest"
             )
             lines.append(f"    /* WARNING: {idx_name} (id={item_id}) NOT FOUND */")
-            lines.append(f"    [GEN_{idx_name}] = {{")
+            lines.append(f"    [{idx_name}] = {{")
             lines.append(f"        .item_id = {item_id}, "
                          f'.name = "MISSING", .slot = 0,')
             lines.append("        .attack_speed = 0, .attack_range = 0,")
@@ -335,11 +295,11 @@ def generate_header(
         magic_damage_pct = (raw_magic_str + 5) // 10 if raw_magic_str > 0 else 0
 
         comment = entry.get("comment", name)
-        lines.append(f"    [GEN_{idx_name}] = {{ /* {comment} */")
+        lines.append(f"    [{idx_name}] = {{ /* {comment} */")
         lines.append(
             f"        .item_id = {item_id}, "
             f'.name = "{name}", '
-            f".slot = GEN_{slot_enum},"
+            f".slot = {slot_enum},"
         )
         lines.append(
             f"        .attack_speed = {speed}, .attack_range = {attack_range},"
