@@ -1,5 +1,5 @@
 /**
- * @fileoverview osrs_combat_shared.h — pure combat math shared by all encounters.
+ * @fileoverview osrs_combat.h — pure combat math shared by all encounters.
  *
  * stateless functions with no dependencies beyond <math.h>. use these instead
  * of reimplementing combat formulas per encounter.
@@ -29,8 +29,8 @@
  *   osrs_pvp_combat.h   PvP-specific combat (prayer, veng, recoil, pending hits)
  */
 
-#ifndef OSRS_COMBAT_SHARED_H
-#define OSRS_COMBAT_SHARED_H
+#ifndef OSRS_COMBAT_H
+#define OSRS_COMBAT_H
 
 #include <math.h>
 #include <stdint.h>
@@ -347,4 +347,4 @@ static inline void encounter_shuffle(int* arr, int n, uint32_t* rng) {
     }
 }
 
-#endif /* OSRS_COMBAT_SHARED_H */
+#endif /* OSRS_COMBAT_H */

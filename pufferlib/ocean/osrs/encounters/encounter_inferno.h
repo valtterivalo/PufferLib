@@ -20,7 +20,7 @@
 #include "../osrs_items.h"
 #include "../osrs_monsters_generated.h"
 #include "../osrs_collision.h"
-#include "../osrs_combat_shared.h"
+#include "../osrs_combat.h"
 #include "../osrs_encounter.h"
 #include "../data/npc_models.h"
 #include <string.h>
@@ -637,7 +637,7 @@ typedef struct {
 } InfernoState;
 
 /* prayer check and RNG: use shared encounter_prayer_correct_for_style(),
-   encounter_rand_int(), encounter_rand_float() from osrs_combat_shared.h */
+   encounter_rand_int(), encounter_rand_float() from osrs_combat.h */
 
 static void inf_shuffle_spawns(InfernoState* s) {
     for (int i = 0; i < INF_NUM_SPAWN_POS; i++)

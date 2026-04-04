@@ -35,7 +35,7 @@
 #include "../osrs_encounter.h"
 #include "../osrs_types.h"
 #include "../osrs_items.h"
-#include "../osrs_combat_shared.h"
+#include "../osrs_combat.h"
 #include "../osrs_collision.h"
 #include "../data/npc_models.h"
 #include <stdlib.h>
@@ -664,7 +664,7 @@ typedef struct {
     Log log;
 } ZulrahState;
 
-/* RNG: use shared encounter_rand_int(), encounter_rand_float() from osrs_combat_shared.h */
+/* RNG: use shared encounter_rand_int(), encounter_rand_float() from osrs_combat.h */
 
 /** Sync encounter consumable counts into Player struct for GUI display.
     The GUI reads Player.food_count/brew_doses/etc — encounters that track
@@ -775,7 +775,7 @@ static void zul_try_envenom(ZulrahState* s) {
 /* ======================================================================== */
 
 /* OSRS accuracy formula: if att > def: 1 - (def+2)/(2*(att+1)), else att/(2*(def+1)) */
-/* hit chance: use shared OSRS accuracy formula from osrs_combat_shared.h */
+/* hit chance: use shared OSRS accuracy formula from osrs_combat.h */
 
 /* confliction gauntlets double accuracy roll (same formula as osmumten's fang).
  * on a primed magic attack, accuracy is rolled twice — hitting if either roll succeeds. */

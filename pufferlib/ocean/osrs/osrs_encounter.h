@@ -47,7 +47,7 @@
  *     EncounterPendingHit              queued damage with tick countdown
  *
  * ALSO SEE:
- *   osrs_combat_shared.h              hit chance, tbow formula, barrage AoE, delay formulas
+ *   osrs_combat.h                     hit chance, tbow formula, barrage AoE, delay formulas
  *   osrs_pvp_combat.h                 PvP-specific damage (prayer, veng, recoil, smite)
  */
 
@@ -59,7 +59,7 @@
 #include "osrs_types.h"
 #include "osrs_items.h"
 #include "osrs_pathfinding.h"
-#include "osrs_combat_shared.h"
+#include "osrs_combat.h"
 #include "osrs_pvp_human_input_types.h"
 
 /* opaque encounter state — each encounter defines its own struct */
