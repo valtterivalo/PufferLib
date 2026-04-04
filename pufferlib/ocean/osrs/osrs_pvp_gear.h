@@ -11,6 +11,8 @@
 
 #include "osrs_types.h"
 #include "osrs_items.h"
+#include "osrs_inventory.h"
+#include "osrs_combat.h"
 
 // ============================================================================
 // MELEE SPEC WEAPON BONUS TYPES
@@ -158,39 +160,29 @@ static const uint8_t MAGE_RING_PRIORITY[] = {ITEM_LIGHTBEARER, ITEM_SEERS_RING_I
 
 /**
  * Compute total gear bonuses from equipped[] array.
- * Sums all equipped item bonuses using the Item database.
+ * Delegates to osrs_sum_equipment_bonuses() from osrs_combat.h, then maps
+ * EquipmentBonuses field names to GearBonuses field names.
  */
 static inline GearBonuses compute_slot_gear_bonuses(Player* p) {
+    EquipmentBonuses eb;
+    osrs_sum_equipment_bonuses(p->equipped, &eb);
+
     GearBonuses total = {0};
-
-    for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
-        uint8_t item_idx = p->equipped[slot];
-        if (item_idx >= NUM_ITEMS) continue;
-
-        const Item* item = &ITEM_DATABASE[item_idx];
-
-        total.stab_attack += item->attack_stab;
-        total.slash_attack += item->attack_slash;
-        total.crush_attack += item->attack_crush;
-        total.magic_attack += item->attack_magic;
-        total.ranged_attack += item->attack_ranged;
-
-        total.stab_defence += item->defence_stab;
-        total.slash_defence += item->defence_slash;
-        total.crush_defence += item->defence_crush;
-        total.magic_defence += item->defence_magic;
-        total.ranged_defence += item->defence_ranged;
-
-        total.melee_strength += item->melee_strength;
-        total.ranged_strength += item->ranged_strength;
-        total.magic_strength += item->magic_damage;
-
-        if (item->slot == SLOT_WEAPON) {
-            total.attack_speed = item->attack_speed;
-            total.attack_range = item->attack_range;
-        }
-    }
-
+    total.stab_attack     = eb.attack_stab;
+    total.slash_attack    = eb.attack_slash;
+    total.crush_attack    = eb.attack_crush;
+    total.magic_attack    = eb.attack_magic;
+    total.ranged_attack   = eb.attack_ranged;
+    total.stab_defence    = eb.defence_stab;
+    total.slash_defence   = eb.defence_slash;
+    total.crush_defence   = eb.defence_crush;
+    total.magic_defence   = eb.defence_magic;
+    total.ranged_defence  = eb.defence_ranged;
+    total.melee_strength  = eb.melee_strength;
+    total.ranged_strength = eb.ranged_strength;
+    total.magic_strength  = eb.magic_damage;
+    total.attack_speed    = eb.attack_speed;
+    total.attack_range    = eb.attack_range;
     return total;
 }
 
@@ -280,6 +272,10 @@ static inline int item_is_spec_weapon(uint8_t weapon_item) {
 /**
  * Equip item in slot-based mode.
  * Returns 1 if equipment changed, 0 if already equipped.
+ *
+ * NOT using osrs_equip_from_inventory(): PvP uses per-slot arrays (each gear
+ * slot has its own item pool for the LMS upgrade system), not the flat 28-slot
+ * bag model that osrs_inventory.h provides.
  */
 static inline int slot_equip_item(Player* p, int gear_slot, uint8_t item_idx) {
     if (gear_slot < 0 || gear_slot >= NUM_GEAR_SLOTS) return 0;
@@ -813,26 +809,9 @@ static inline int remove_item_from_inventory(Player* p, int gear_slot, uint8_t i
     return 0;
 }
 
-/**
- * Map item database index to the correct GearSlotIndex.
- * Returns -1 if item not found or slot not mapped.
- */
+/** Map item database index to GearSlotIndex. Thin wrapper over osrs_item_gear_slot(). */
 static inline int item_to_gear_slot(uint8_t item_idx) {
-    if (item_idx >= NUM_ITEMS) return -1;
-    switch (ITEM_DATABASE[item_idx].slot) {
-        case SLOT_HEAD:   return GEAR_SLOT_HEAD;
-        case SLOT_CAPE:   return GEAR_SLOT_CAPE;
-        case SLOT_NECK:   return GEAR_SLOT_NECK;
-        case SLOT_WEAPON: return GEAR_SLOT_WEAPON;
-        case SLOT_BODY:   return GEAR_SLOT_BODY;
-        case SLOT_SHIELD: return GEAR_SLOT_SHIELD;
-        case SLOT_LEGS:   return GEAR_SLOT_LEGS;
-        case SLOT_HANDS:  return GEAR_SLOT_HANDS;
-        case SLOT_FEET:   return GEAR_SLOT_FEET;
-        case SLOT_RING:   return GEAR_SLOT_RING;
-        case SLOT_AMMO:   return GEAR_SLOT_AMMO;
-        default: return -1;
-    }
+    return osrs_item_gear_slot(item_idx);
 }
 
 // ============================================================================
