@@ -1,6 +1,5 @@
-"""Export OSRS 3D models from cache to a binary .models file.
+"""Export OSRS 3D models from modern OpenRS2 flat file cache to a binary .models file.
 
-Supports both 317-format (tarnish) and modern OpenRS2 flat file caches.
 Reads item definitions to find model IDs (inventory + male wield), then
 decodes model geometry. Outputs a binary file consumable by osrs_pvp_models.h
 and a generated C header mapping item IDs to model IDs.
@@ -10,19 +9,13 @@ Three model format variants are supported:
   - decodeType2: 23-byte footer, magic 0xFF,0xFE at end-2
   - decodeType3: 26-byte footer, magic 0xFF,0xFD at end-2
 
-Usage (317 cache):
-    uv run python scripts/export_models.py \
-        --cache ../reference/tarnish/game-server/data/cache \
-        --output data/equipment.models
-
-Usage (modern cache):
+Usage:
     uv run python scripts/export_models.py \
         --modern-cache ../reference/osrs-cache-modern \
         --output data/equipment.models
 """
 
 import argparse
-import gzip
 import io
 import math
 import struct
@@ -30,57 +23,16 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-# reuse cache reader from collision exporter
 sys.path.insert(0, str(Path(__file__).parent))
-from export_collision_map import (
-    CONFIG_INDEX,
-    CacheReader,
-    _read_string,
-    decode_archive,
-    hash_archive_name,
-)
-from modern_cache_reader import ModernCacheReader, decompress_container
+from modern_cache_reader import ModernCacheReader, decompress_container, read_string
+
+_read_string = read_string
 
 # --- constants ---
 
-CONFIG_ARCHIVE = 2
-MODEL_INDEX = 1
 MODERN_MODEL_INDEX = 7
 MODERN_CONFIG_OBJ_GROUP = 10
 MODERN_CONFIG_IDK_GROUP = 3
-
-
-def load_texture_average_colors(cache: CacheReader) -> dict[int, int]:
-    """Load per-texture averageRGB (15-bit HSL) from textures.dat.
-
-    Mirrors TextureProvider constructor: reads textures.dat from config archive,
-    then for each texture reads its averageRGB (first ushort in entry data).
-    Used as solid-color fallback for textured model faces.
-    """
-    raw = cache.get(CONFIG_INDEX, CONFIG_ARCHIVE)
-    if raw is None:
-        return {}
-    archive = decode_archive(raw)
-    key = hash_archive_name("textures.dat")
-    tex_dat = archive.get(key)
-    if tex_dat is None:
-        return {}
-
-    buf = io.BytesIO(tex_dat)
-    highest_id = struct.unpack(">H", buf.read(2))[0]
-    result: dict[int, int] = {}
-
-    for _ in range(highest_id + 1):
-        tex_id = struct.unpack(">H", buf.read(2))[0]
-        size = struct.unpack(">H", buf.read(2))[0]
-        entry_data = buf.read(size)
-        if len(entry_data) >= 2:
-            average_rgb = struct.unpack(">H", entry_data[:2])[0]
-            result[tex_id] = average_rgb
-        if tex_id >= highest_id:
-            break
-
-    return result
 
 
 @dataclass
@@ -126,53 +78,6 @@ DEFAULT_MALE_KITS = {
 
 # body part name labels for C header
 BODY_PART_NAMES = ["HEAD", "JAW", "TORSO", "ARMS", "HANDS", "LEGS", "FEET"]
-
-
-def decode_identity_kits(cache: CacheReader) -> dict[int, IdentityKitDef]:
-    """Decode identity kit definitions from idk.dat in the config archive."""
-    raw = cache.get(CONFIG_INDEX, CONFIG_ARCHIVE)
-    if raw is None:
-        sys.exit("could not read config archive")
-
-    archive = decode_archive(raw)
-    idk_hash = hash_archive_name("idk.dat") & 0xFFFFFFFF
-    idk_data = archive.get(idk_hash) or archive.get(hash_archive_name("idk.dat"))
-
-    if idk_data is None:
-        sys.exit("idk.dat not found in config archive")
-
-    buf = io.BytesIO(idk_data)
-    count = struct.unpack(">H", buf.read(2))[0]
-    kits: dict[int, IdentityKitDef] = {}
-
-    for kit_id in range(count):
-        kit = IdentityKitDef(kit_id=kit_id)
-        while True:
-            opcode = buf.read(1)
-            if not opcode:
-                break
-            op = opcode[0]
-            if op == 0:
-                break
-            elif op == 1:
-                kit.body_part_id = buf.read(1)[0]
-            elif op == 2:
-                n = buf.read(1)[0]
-                kit.body_models = [
-                    struct.unpack(">H", buf.read(2))[0] for _ in range(n)
-                ]
-            elif op == 3:
-                kit.valid_style = True
-            elif 40 <= op < 50:
-                kit.original_colors[op - 40] = struct.unpack(">H", buf.read(2))[0]
-            elif 50 <= op < 60:
-                kit.replacement_colors[op - 50] = struct.unpack(">H", buf.read(2))[0]
-            elif 60 <= op < 70:
-                buf.read(2)  # head model (not needed for body rendering)
-
-        kits[kit_id] = kit
-
-    return kits
 
 
 def decode_identity_kits_modern(reader: ModernCacheReader) -> dict[int, IdentityKitDef]:
@@ -224,178 +129,6 @@ def decode_identity_kits_modern(reader: ModernCacheReader) -> dict[int, Identity
         kits[kit_id] = kit
 
     return kits
-
-
-def decode_item_definitions(cache: CacheReader) -> dict[int, ItemDef]:
-    """Decode item definitions from cache config archive (obj.dat/obj.idx)."""
-    raw = cache.get(CONFIG_INDEX, CONFIG_ARCHIVE)
-    if raw is None:
-        sys.exit("could not read config archive")
-
-    archive = decode_archive(raw)
-
-    # the archive keys are stored as uint32 from struct.unpack(">I", ...),
-    # but hash_archive_name returns signed int. convert to unsigned for lookup.
-    obj_hash = hash_archive_name("obj.dat") & 0xFFFFFFFF
-    idx_hash = hash_archive_name("obj.idx") & 0xFFFFFFFF
-
-    obj_data = archive.get(obj_hash)
-    obj_idx = archive.get(idx_hash)
-
-    if obj_data is None or obj_idx is None:
-        # try signed keys as fallback
-        obj_data = obj_data or archive.get(hash_archive_name("obj.dat"))
-        obj_idx = obj_idx or archive.get(hash_archive_name("obj.idx"))
-
-    if obj_data is None or obj_idx is None:
-        print("archive keys present:", list(archive.keys()), file=sys.stderr)
-        sys.exit("obj.dat/obj.idx not found in config archive")
-
-    buf = io.BytesIO(obj_data)
-    idx_buf = io.BytesIO(obj_idx)
-
-    total = struct.unpack(">H", idx_buf.read(2))[0]
-    defs: dict[int, ItemDef] = {}
-
-    for item_id in range(total):
-        d = ItemDef(item_id=item_id)
-
-        while True:
-            opcode_byte = buf.read(1)
-            if not opcode_byte:
-                break
-            opcode = opcode_byte[0]
-
-            if opcode == 0:
-                break
-            elif opcode == 1:
-                d.inv_model = struct.unpack(">H", buf.read(2))[0]
-            elif opcode == 2:
-                d.name = _read_string(buf)
-            elif opcode == 3:
-                _read_string(buf)  # description
-            elif opcode == 4:
-                buf.read(2)  # modelZoom
-            elif opcode == 5:
-                buf.read(2)  # modelRotationY
-            elif opcode == 6:
-                buf.read(2)  # modelRotationX
-            elif opcode == 7:
-                buf.read(2)  # modelOffset1
-            elif opcode == 8:
-                buf.read(2)  # modelOffset2
-            elif opcode == 9:
-                _read_string(buf)  # unknown
-            elif opcode == 10:
-                buf.read(2)  # unknown
-            elif opcode == 11:
-                pass  # stackable
-            elif opcode == 12:
-                buf.read(4)  # value (int)
-            elif opcode == 13:
-                buf.read(1)  # wearPos1
-            elif opcode == 14:
-                buf.read(1)  # wearPos2
-            elif opcode == 16:
-                pass  # membersObject
-            elif opcode == 23:
-                d.male_wield = struct.unpack(">H", buf.read(2))[0]
-                d.male_offset = struct.unpack(">b", buf.read(1))[0]
-            elif opcode == 24:
-                d.male_wield2 = struct.unpack(">H", buf.read(2))[0]
-            elif opcode == 25:
-                buf.read(2)  # femaleWield
-                buf.read(1)  # femaleOffset
-            elif opcode == 26:
-                buf.read(2)  # femaleWield2
-            elif opcode == 27:
-                buf.read(1)  # wearPos3
-            elif 30 <= opcode < 35:
-                _read_string(buf)  # groundActions
-            elif 35 <= opcode < 40:
-                _read_string(buf)  # itemActions
-            elif opcode == 40:
-                count = buf.read(1)[0]
-                for _ in range(count):
-                    src = struct.unpack(">H", buf.read(2))[0]
-                    dst = struct.unpack(">H", buf.read(2))[0]
-                    d.recolor_src.append(src)
-                    d.recolor_dst.append(dst)
-            elif opcode == 41:
-                count = buf.read(1)[0]
-                for _ in range(count):
-                    buf.read(4)  # retextureFrom + retextureTo
-            elif opcode == 42:
-                buf.read(1)  # shiftClickDropIndex
-            elif opcode == 65:
-                pass  # isTradeable
-            elif opcode == 75:
-                buf.read(2)  # weight (short)
-            elif opcode == 78:
-                buf.read(2)  # maleModel2
-            elif opcode == 79:
-                buf.read(2)  # femaleModel2
-            elif opcode == 90:
-                buf.read(2)  # maleHeadModel
-            elif opcode == 91:
-                buf.read(2)  # femaleHeadModel
-            elif opcode == 92:
-                buf.read(2)  # maleHeadModel2
-            elif opcode == 93:
-                buf.read(2)  # femaleHeadModel2
-            elif opcode == 94:
-                buf.read(2)  # category
-            elif opcode == 95:
-                buf.read(2)  # zan2d
-            elif opcode == 97:
-                buf.read(2)  # certID
-            elif opcode == 98:
-                buf.read(2)  # certTemplateID
-            elif 100 <= opcode < 110:
-                buf.read(4)  # stackIDs + stackAmounts (2+2)
-            elif opcode == 110:
-                buf.read(2)  # resizeX
-            elif opcode == 111:
-                buf.read(2)  # resizeY
-            elif opcode == 112:
-                buf.read(2)  # resizeZ
-            elif opcode == 113:
-                buf.read(1)  # brightness
-            elif opcode == 114:
-                buf.read(1)  # contrast
-            elif opcode == 115:
-                buf.read(1)  # team
-            elif opcode == 139:
-                buf.read(2)  # unnotedId
-            elif opcode == 140:
-                buf.read(2)  # notedId
-            elif opcode == 148:
-                buf.read(2)  # placeholderId
-            elif opcode == 149:
-                buf.read(2)  # placeholderTemplateId
-            elif opcode == 249:
-                # params map
-                count = buf.read(1)[0]
-                for _ in range(count):
-                    is_string = buf.read(1)[0]
-                    buf.read(3)  # key (medium)
-                    if is_string:
-                        _read_string(buf)
-                    else:
-                        buf.read(4)  # int value
-            else:
-                # unknown opcode — can't safely skip
-                print(
-                    f"  warning: unknown item opcode {opcode} at item {item_id}, "
-                    f"pos {buf.tell()}",
-                    file=sys.stderr,
-                )
-                break
-
-        if d.inv_model >= 0 or d.name:
-            defs[item_id] = d
-
-    return defs
 
 
 def _parse_modern_item_entry(item_id: int, data: bytes) -> ItemDef:
@@ -1861,17 +1594,12 @@ SIM_ITEM_IDS = [
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="export OSRS 3D models from cache"
+        description="export OSRS 3D models from modern OpenRS2 cache"
     )
-    cache_group = parser.add_mutually_exclusive_group(required=True)
-    cache_group.add_argument(
-        "--cache",
-        type=Path,
-        help="path to 317 tarnish cache directory",
-    )
-    cache_group.add_argument(
+    parser.add_argument(
         "--modern-cache",
         type=Path,
+        required=True,
         help="path to modern OpenRS2 flat file cache directory",
     )
     parser.add_argument(
@@ -1894,26 +1622,15 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    use_modern = args.modern_cache is not None
-    cache_path = args.modern_cache if use_modern else args.cache
-
+    cache_path = args.modern_cache
     if not cache_path.exists():
         sys.exit(f"cache directory not found: {cache_path}")
 
-    print(f"reading {'modern' if use_modern else '317'} cache from {cache_path}")
-
-    if use_modern:
-        modern_reader = ModernCacheReader(cache_path)
-        cache = None  # not used in modern path
-    else:
-        cache = CacheReader(cache_path)
-        modern_reader = None  # not used in 317 path
+    print(f"reading modern cache from {cache_path}")
+    modern_reader = ModernCacheReader(cache_path)
 
     print("loading item definitions...")
-    if use_modern:
-        item_defs = decode_item_definitions_modern(modern_reader)
-    else:
-        item_defs = decode_item_definitions(cache)
+    item_defs = decode_item_definitions_modern(modern_reader)
     print(f"  loaded {len(item_defs)} item definitions")
 
     # build per-item wield models with recolors + maleWield2 merged
@@ -1923,15 +1640,7 @@ def main() -> None:
     wield_models: list[ModelData] = []  # recolored + merged wield models
 
     def _load_model(mid: int) -> ModelData | None:
-        if use_modern:
-            raw_m = load_model_modern(modern_reader, mid)
-        else:
-            raw_m = cache.get(MODEL_INDEX, mid)
-            if raw_m is not None:
-                try:
-                    raw_m = gzip.decompress(raw_m)
-                except Exception:
-                    pass
+        raw_m = load_model_modern(modern_reader, mid)
         if raw_m is None:
             return None
         return decode_model(mid, raw_m)
@@ -1985,10 +1694,7 @@ def main() -> None:
 
     # decode identity kits for player body parts
     print("loading identity kits...")
-    if use_modern:
-        idk_defs = decode_identity_kits_modern(modern_reader)
-    else:
-        idk_defs = decode_identity_kits(cache)
+    idk_defs = decode_identity_kits_modern(modern_reader)
     print(f"  loaded {len(idk_defs)} identity kits")
 
     # merge body part sub-models into single models for each default kit
@@ -2094,15 +1800,7 @@ def main() -> None:
     errors = 0
 
     for model_id in sorted(needed_models):
-        if use_modern:
-            raw = load_model_modern(modern_reader, model_id)
-        else:
-            raw = cache.get(MODEL_INDEX, model_id)
-            if raw is not None:
-                try:
-                    raw = gzip.decompress(raw)
-                except Exception:
-                    pass
+        raw = load_model_modern(modern_reader, model_id)
 
         if raw is None:
             print(f"  warning: model {model_id} not in cache")

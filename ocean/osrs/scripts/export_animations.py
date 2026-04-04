@@ -1,32 +1,21 @@
 """Export OSRS animation data from cache to a binary .anims file.
 
-Supports both 317-format (tarnish) and modern OpenRS2 flat file caches.
-Reads framebases, frame archives, and sequence (animation) definitions.
-Outputs a compact binary consumable by osrs_pvp_anim.h.
-
-317 cache sources:
-  - framebases.dat: from config archive (index 0, file 2)
-  - seq.dat: from config archive
-  - frame archives: from cache index 2
+Reads framebases, frame archives, and sequence (animation) definitions
+from a modern OpenRS2 flat file cache. Outputs a compact binary
+consumable by osrs_pvp_anim.h.
 
 Modern cache sources:
   - frame bases: index 1 (each group is a framebase)
   - sequences: config index 2, group 12
   - frame archives: index 0
 
-Usage (317 cache):
-    uv run python scripts/export_animations.py \
-        --cache ../reference/tarnish/game-server/data/cache \
-        --output data/equipment.anims
-
-Usage (modern cache):
+Usage:
     uv run python scripts/export_animations.py \
         --modern-cache ../reference/osrs-cache-modern \
         --output data/equipment.anims
 """
 
 import argparse
-import gzip
 import io
 import struct
 import sys
@@ -34,20 +23,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from export_collision_map import (
-    CONFIG_INDEX,
-    CacheReader,
-    decode_archive,
-    hash_archive_name,
-)
 from modern_cache_reader import (
     ModernCacheReader,
-    decompress_container,
     parse_sequence as parse_modern_sequence,
 )
 
-CONFIG_ARCHIVE = 2
-FRAME_CACHE_INDEX = 2  # cache index for animation frame archives (317)
 MODERN_FRAME_INDEX = 0  # modern cache: frame archives
 MODERN_FRAMEBASE_INDEX = 1  # modern cache: frame bases
 MODERN_SEQ_CONFIG_GROUP = 12  # modern cache: config index 2, group 12
@@ -88,25 +68,6 @@ def read_short_smart(buf: io.BytesIO) -> int:
     buf.seek(pos)
     raw = struct.unpack(">H", buf.read(2))[0]
     return raw - 0xC000
-
-
-def read_medium(buf: io.BytesIO) -> int:
-    """Read 3-byte big-endian medium int."""
-    b = buf.read(3)
-    if len(b) < 3:
-        return 0
-    return (b[0] << 16) | (b[1] << 8) | b[2]
-
-
-def read_int(buf: io.BytesIO) -> int:
-    """Read big-endian signed 32-bit int."""
-    b = buf.read(4)
-    if len(b) < 4:
-        return 0
-    val = (b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3]
-    if val >= 0x80000000:
-        val -= 0x100000000
-    return val
 
 
 # --- data structures ---
@@ -163,69 +124,6 @@ class SequenceDef:
 
 
 # --- parsing ---
-
-
-def parse_framebases(data: bytes) -> dict[int, FrameBaseDef]:
-    """Parse framebases.dat from config archive.
-
-    Format: u16 count, then for each: u16 id, u16 size, [size bytes of framebase data].
-    """
-    buf = io.BytesIO(data)
-    count = read_ushort(buf)
-    bases: dict[int, FrameBaseDef] = {}
-
-    for _ in range(count):
-        base_id = read_ushort(buf)
-        file_size = read_ushort(buf)
-        file_data = buf.read(file_size)
-
-        fb = FrameBaseDef(base_id=base_id)
-        fbuf = io.BytesIO(file_data)
-
-        fb.slot_count = read_ubyte(fbuf)
-        fb.types = [read_ubyte(fbuf) for _ in range(fb.slot_count)]
-
-        map_lengths = [read_ubyte(fbuf) for _ in range(fb.slot_count)]
-        fb.frame_maps = []
-        for length in map_lengths:
-            fb.frame_maps.append([read_ubyte(fbuf) for _ in range(length)])
-
-        bases[base_id] = fb
-
-    return bases
-
-
-def parse_frame_archive(
-    group_id: int, data: bytes, framebases: dict[int, FrameBaseDef],
-) -> dict[int, FrameDef]:
-    """Parse a frame archive from cache index 2.
-
-    Format: u16 highestFileId, then for each: u16 fileId, u24 fileSize, [fileSize bytes].
-    Each frame is a NormalFrame referencing a FrameBase.
-    """
-    buf = io.BytesIO(data)
-    highest_file_id = read_ushort(buf)
-    frames: dict[int, FrameDef] = {}
-
-    for _ in range(highest_file_id + 1):
-        if buf.tell() >= len(data):
-            break
-
-        file_id = read_ushort(buf)
-        file_size = read_medium(buf)
-
-        if file_size <= 0 or buf.tell() + file_size > len(data):
-            break
-
-        file_data = buf.read(file_size)
-        frame = _parse_normal_frame(group_id, file_id, file_data, framebases)
-        if frame is not None:
-            frames[file_id] = frame
-
-        if file_id >= highest_file_id:
-            break
-
-    return frames
 
 
 def _parse_normal_frame(
@@ -296,107 +194,6 @@ def _parse_normal_frame(
         dz=dz_list,
     )
     return frame
-
-
-def parse_sequences(data: bytes) -> dict[int, SequenceDef]:
-    """Parse seq.dat from config archive. Mirrors Java Animation.unpackConfig."""
-    buf = io.BytesIO(data)
-    highest_file_id = read_ushort(buf)
-    seqs: dict[int, SequenceDef] = {}
-
-    for _ in range(highest_file_id):
-        if buf.tell() >= len(data):
-            break
-
-        seq_id = read_ushort(buf)
-        if seq_id == 0xFFFF or seq_id >= 32767:
-            continue
-
-        anim_length = read_ushort(buf)
-        anim_data = buf.read(anim_length)
-
-        seq = _parse_sequence(seq_id, anim_data)
-        if seq is not None:
-            seqs[seq_id] = seq
-
-        if seq_id >= highest_file_id:
-            break
-
-    return seqs
-
-
-def _parse_sequence(seq_id: int, data: bytes) -> SequenceDef | None:
-    """Parse a single animation sequence from opcode stream."""
-    seq = SequenceDef(seq_id=seq_id)
-    buf = io.BytesIO(data)
-
-    while True:
-        opcode = read_ubyte(buf)
-        if opcode == 0:
-            break
-        elif opcode == 1:
-            seq.frame_count = read_ushort(buf)
-            seq.frame_delays = [read_ushort(buf) for _ in range(seq.frame_count)]
-            file_ids = [read_ushort(buf) for _ in range(seq.frame_count)]
-            group_ids = [read_ushort(buf) for _ in range(seq.frame_count)]
-            seq.primary_frame_ids = [
-                (group_ids[i] << 16) | file_ids[i] for i in range(seq.frame_count)
-            ]
-        elif opcode == 2:
-            seq.frame_step = read_ushort(buf)
-        elif opcode == 3:
-            n = read_ubyte(buf)
-            seq.interleave_order = [read_ubyte(buf) for _ in range(n)]
-        elif opcode == 4:
-            pass  # allowsRotation = true
-        elif opcode == 5:
-            seq.priority = read_ubyte(buf)
-        elif opcode == 6:
-            read_ushort(buf)  # shield
-        elif opcode == 7:
-            read_ushort(buf)  # weapon
-        elif opcode == 8:
-            seq.loop_count = read_ubyte(buf)
-        elif opcode == 9:
-            seq.run_flag = read_ubyte(buf)
-        elif opcode == 10:
-            seq.walk_flag = read_ubyte(buf)
-        elif opcode == 11:
-            read_ubyte(buf)  # type
-        elif opcode == 12:
-            n = read_ubyte(buf)
-            for _ in range(n):
-                read_ushort(buf)
-            for _ in range(n):
-                read_ushort(buf)
-        elif opcode == 13:
-            n = read_ubyte(buf)
-            for _ in range(n):
-                read_medium(buf)
-        elif opcode == 14:
-            read_int(buf)  # skeletalFrameId
-        elif opcode == 15:
-            n = read_ushort(buf)
-            for _ in range(n):
-                read_ushort(buf)
-                read_medium(buf)
-        elif opcode == 16:
-            read_ushort(buf)  # rangeBegin
-            read_ushort(buf)  # rangeEnd
-        elif opcode == 17:
-            n = read_ubyte(buf)
-            for _ in range(n):
-                read_ubyte(buf)
-        else:
-            print(f"  warning: unknown seq opcode {opcode} for id {seq_id}", file=sys.stderr)
-            break
-
-    if seq.frame_count == 0:
-        seq.frame_count = 1
-        seq.primary_frame_ids = [-1]
-        seq.frame_delays = [-1]
-
-    return seq
 
 
 # --- binary output ---
@@ -723,60 +520,39 @@ def load_modern_frame_archive(
 
 
 def main() -> None:
-    """Export animation data from OSRS cache."""
+    """Export animation data from modern OpenRS2 cache."""
     parser = argparse.ArgumentParser(description="export OSRS animations from cache")
-    cache_group = parser.add_mutually_exclusive_group(required=True)
-    cache_group.add_argument("--cache", type=Path, help="path to 317 tarnish cache directory")
-    cache_group.add_argument("--modern-cache", type=Path, help="path to modern OpenRS2 cache directory")
+    parser.add_argument("--modern-cache", type=Path, required=True, help="path to modern OpenRS2 cache directory")
     parser.add_argument("--output", required=True, help="output .anims file path")
     args = parser.parse_args()
 
     output_path = Path(args.output)
-    use_modern = args.modern_cache is not None
-    cache_path = args.modern_cache if use_modern else args.cache
+    cache_path = args.modern_cache
 
-    print(f"reading {'modern' if use_modern else '317'} cache from {cache_path}")
-
-    if use_modern:
-        modern_reader = ModernCacheReader(cache_path)
-    else:
-        cache = CacheReader(cache_path)
+    print(f"reading modern cache from {cache_path}")
+    reader = ModernCacheReader(cache_path)
 
     # 1. load sequences
     print("loading sequences...")
-    if use_modern:
-        seq_files = modern_reader.read_group(2, MODERN_SEQ_CONFIG_GROUP)
-        sequences: dict[int, SequenceDef] = {}
-        for seq_id, entry_data in seq_files.items():
-            modern_seq = parse_modern_sequence(seq_id, entry_data)
-            # convert modern SequenceDef to our local SequenceDef
-            seq = SequenceDef(
-                seq_id=modern_seq.seq_id,
-                frame_count=modern_seq.frame_count,
-                frame_delays=modern_seq.frame_delays,
-                primary_frame_ids=modern_seq.primary_frame_ids,
-                frame_step=modern_seq.frame_step,
-                interleave_order=modern_seq.interleave_order,
-                priority=modern_seq.forced_priority,
-                loop_count=modern_seq.max_loops,
-                walk_flag=modern_seq.priority,  # modern opcode 10 = priority (walk_flag equivalent)
-                run_flag=modern_seq.precedence_animating,  # modern opcode 9
-            )
-            sequences[seq_id] = seq
-        print(f"  loaded {len(sequences)} sequences")
-    else:
-        raw = cache.get(CONFIG_INDEX, CONFIG_ARCHIVE)
-        if raw is None:
-            sys.exit("could not read config archive")
-
-        archive = decode_archive(raw)
-        seq_hash = hash_archive_name("seq.dat") & 0xFFFFFFFF
-        seq_data = archive.get(seq_hash) or archive.get(hash_archive_name("seq.dat"))
-        if seq_data is None:
-            sys.exit("seq.dat not found in config archive")
-
-        sequences = parse_sequences(seq_data)
-        print(f"  loaded {len(sequences)} sequences")
+    seq_files = reader.read_group(2, MODERN_SEQ_CONFIG_GROUP)
+    sequences: dict[int, SequenceDef] = {}
+    for seq_id, entry_data in seq_files.items():
+        modern_seq = parse_modern_sequence(seq_id, entry_data)
+        # convert modern SequenceDef to our local SequenceDef
+        seq = SequenceDef(
+            seq_id=modern_seq.seq_id,
+            frame_count=modern_seq.frame_count,
+            frame_delays=modern_seq.frame_delays,
+            primary_frame_ids=modern_seq.primary_frame_ids,
+            frame_step=modern_seq.frame_step,
+            interleave_order=modern_seq.interleave_order,
+            priority=modern_seq.forced_priority,
+            loop_count=modern_seq.max_loops,
+            walk_flag=modern_seq.priority,  # modern opcode 10 = priority (walk_flag equivalent)
+            run_flag=modern_seq.precedence_animating,  # modern opcode 9
+        )
+        sequences[seq_id] = seq
+    print(f"  loaded {len(sequences)} sequences")
 
     # filter to needed animations
     available = NEEDED_ANIMATIONS & set(sequences.keys())
@@ -795,86 +571,49 @@ def main() -> None:
 
     print(f"loading {len(needed_groups)} frame archives from cache...")
 
-    if use_modern:
-        # 3a. modern path: first load frame archives to discover needed framebases,
-        #     then load framebases, then re-parse frames with framebases available
+    # 3. load frame archives to discover needed framebases,
+    #    then load framebases, then re-parse frames with framebases available
 
-        # first pass: discover framebase IDs from frame data headers
-        needed_base_ids: set[int] = set()
-        raw_frame_data: dict[int, dict[int, bytes]] = {}
-        for group_id in sorted(needed_groups):
-            try:
-                files = modern_reader.read_group(MODERN_FRAME_INDEX, group_id)
-            except (KeyError, FileNotFoundError):
-                print(f"  warning: frame archive group {group_id} not found in index {MODERN_FRAME_INDEX}")
+    # first pass: discover framebase IDs from frame data headers
+    needed_base_ids: set[int] = set()
+    raw_frame_data: dict[int, dict[int, bytes]] = {}
+    for group_id in sorted(needed_groups):
+        try:
+            files = reader.read_group(MODERN_FRAME_INDEX, group_id)
+        except (KeyError, FileNotFoundError):
+            print(f"  warning: frame archive group {group_id} not found in index {MODERN_FRAME_INDEX}")
+            continue
+        raw_frame_data[group_id] = files
+        # each frame file starts with u16 framebase_id
+        for file_data in files.values():
+            if len(file_data) >= 2:
+                fb_id = (file_data[0] << 8) | file_data[1]
+                needed_base_ids.add(fb_id)
+
+    print(f"  discovered {len(needed_base_ids)} needed framebases")
+    print("loading framebases from modern cache index 1...")
+    framebases = load_modern_framebases(reader, needed_base_ids)
+    print(f"  loaded {len(framebases)} framebases")
+
+    # second pass: parse frames with framebases available
+    all_frames: dict[int, dict[int, FrameDef]] = {}
+    loaded = 0
+    errors = 0
+    for group_id, files in raw_frame_data.items():
+        frames: dict[int, FrameDef] = {}
+        for file_id, file_data in files.items():
+            if len(file_data) < 3:
                 continue
-            raw_frame_data[group_id] = files
-            # each frame file starts with u16 framebase_id
-            for file_data in files.values():
-                if len(file_data) >= 2:
-                    fb_id = (file_data[0] << 8) | file_data[1]
-                    needed_base_ids.add(fb_id)
-
-        print(f"  discovered {len(needed_base_ids)} needed framebases")
-        print("loading framebases from modern cache index 1...")
-        framebases = load_modern_framebases(modern_reader, needed_base_ids)
-        print(f"  loaded {len(framebases)} framebases")
-
-        # second pass: parse frames with framebases available
-        all_frames: dict[int, dict[int, FrameDef]] = {}
-        loaded = 0
-        errors = 0
-        for group_id, files in raw_frame_data.items():
-            frames: dict[int, FrameDef] = {}
-            for file_id, file_data in files.items():
-                if len(file_data) < 3:
-                    continue
-                frame = _parse_normal_frame(group_id, file_id, file_data, framebases)
-                if frame is not None:
-                    frames[file_id] = frame
-            if frames:
-                all_frames[group_id] = frames
-                loaded += 1
-
-    else:
-        # 3b. 317 path: load framebases from config archive first
-        print("loading framebases...")
-        raw = cache.get(CONFIG_INDEX, CONFIG_ARCHIVE)
-        if raw is None:
-            sys.exit("could not read config archive")
-
-        archive = decode_archive(raw)
-        fb_hash = hash_archive_name("framebases.dat") & 0xFFFFFFFF
-        fb_data = archive.get(fb_hash) or archive.get(hash_archive_name("framebases.dat"))
-        if fb_data is None:
-            sys.exit("framebases.dat not found in config archive")
-
-        framebases = parse_framebases(fb_data)
-        print(f"  loaded {len(framebases)} framebases")
-
-        # 4. load frame archives
-        all_frames = {}
-        loaded = 0
-        errors = 0
-        for group_id in sorted(needed_groups):
-            raw = cache.get(FRAME_CACHE_INDEX, group_id)
-            if raw is None:
-                print(f"  warning: frame archive group {group_id} not found in cache index {FRAME_CACHE_INDEX}")
-                errors += 1
-                continue
-
-            # frame archives are gzip-compressed in the cache
-            if raw[:2] == b"\x1f\x8b":
-                raw = gzip.decompress(raw)
-
-            frames = parse_frame_archive(group_id, raw, framebases)
-            if frames:
-                all_frames[group_id] = frames
-                loaded += 1
+            frame = _parse_normal_frame(group_id, file_id, file_data, framebases)
+            if frame is not None:
+                frames[file_id] = frame
+        if frames:
+            all_frames[group_id] = frames
+            loaded += 1
 
     print(f"  loaded {loaded} frame archives ({sum(len(v) for v in all_frames.values())} total frames), {errors} errors")
 
-    # 5. write output
+    # 4. write output
     write_animations_binary(output_path, framebases, all_frames, sequences, available)
 
 
