@@ -215,7 +215,7 @@ ls -la data/zulrah.models data/zulrah.anims
 grep NPC_MODEL_MAP_ZULRAH data/npc_models.h
 
 # build visual binary
-cd pufferlib/ocean/osrs && make visual
+cd ocean/osrs && make visual
 
 # build training env (should not break)
 cd ../../.. && python setup.py build_osrs_zulrah --force

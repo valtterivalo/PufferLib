@@ -35,11 +35,11 @@ configs live in `pufferlib/config/metal/`:
 dynamically from all keys. any .ini key is available as a CLI flag (e.g. `--learning-rate 0.05`).
 sweep ranges use `[sweep.train.learning_rate]` sections with `distribution`, `min`, `max`, `scale`.
 
-to add a new env: create `pufferlib/config/metal/ocean/<env>.ini` with the relevant sections.
+to add a new env: create `config/metal/ocean/<env>.ini` with the relevant sections.
 pufferl.py is completely env-agnostic -- zero env-specific code.
 
 PFSP (prioritized fictitious self-play) logic for osrs_pvp lives in
-`pufferlib/ocean/osrs_pvp/pfsp.py`, imported conditionally during sweep trials.
+`ocean/osrs_pvp/pfsp.py`, imported conditionally during sweep trials.
 
 ## research tracking with flywheel
 

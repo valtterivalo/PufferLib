@@ -14,7 +14,7 @@ python setup.py build_osrs_pvp --force
 
 visual binary (standalone, uses raylib):
 ```bash
-cd pufferlib/ocean/osrs && make visual
+cd ocean/osrs && make visual
 ./osrs_visual --encounter inferno
 ./osrs_visual --encounter zulrah
 ./osrs_visual                          # default: PvP

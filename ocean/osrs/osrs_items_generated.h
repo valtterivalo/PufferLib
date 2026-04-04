@@ -3,7 +3,7 @@
  * @brief AUTO-GENERATED item database from equipment.json
  *
  * DO NOT EDIT — regenerate with:
- *   python pufferlib/ocean/osrs/tools/generate_items.py
+ *   python ocean/osrs/tools/generate_items.py
  */
 
 #ifndef OSRS_ITEMS_GENERATED_H

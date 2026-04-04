@@ -40,7 +40,7 @@ when implementing a formula, the authority order is:
 
 ## module 1: osrs_combat.h
 
-**file**: `pufferlib/ocean/osrs/osrs_combat.h` (rename from osrs_combat_shared.h)
+**file**: `ocean/osrs/osrs_combat.h` (rename from osrs_combat_shared.h)
 
 pure math, zero state, zero encounter dependencies. any C file can include it
 and compute any OSRS combat number.
@@ -123,7 +123,7 @@ void osrs_sum_equipment_bonuses(const uint8_t loadout[NUM_GEAR_SLOTS],
 
 ### test file
 
-`pufferlib/ocean/osrs/tests/test_player_combat.c` — verify every new function against
+`ocean/osrs/tests/test_player_combat.c` — verify every new function against
 osrs-dps-calc reference values. test cases:
 - effective level with each prayer (none, augury, rigour, piety) + style bonuses
 - attack roll computation with known loadouts
@@ -134,7 +134,7 @@ osrs-dps-calc reference values. test cases:
 
 ## module 2: osrs_consumables.h
 
-**file**: `pufferlib/ocean/osrs/osrs_consumables.h`
+**file**: `ocean/osrs/osrs_consumables.h`
 
 shared food, potion, and brew consumption. pure functions that take player state
 and return effects. encounters call these instead of inlining eat/drink logic.
@@ -220,7 +220,7 @@ if (actions[FOOD_HEAD] == FOOD_ACTION_SHARK) {
 
 ### test file
 
-`pufferlib/ocean/osrs/tests/test_consumables.c`:
+`ocean/osrs/tests/test_consumables.c`:
 - each food type heals correct amount
 - food timer blocks eating
 - combo eat timing (food + karambwan in same tick)
@@ -231,7 +231,7 @@ if (actions[FOOD_HEAD] == FOOD_ACTION_SHARK) {
 
 ## module 3: osrs_special_attacks.h
 
-**file**: `pufferlib/ocean/osrs/osrs_special_attacks.h`
+**file**: `ocean/osrs/osrs_special_attacks.h`
 
 weapon-specific special attack mechanics. dispatch by item index, return a result
 struct that the encounter applies to game state.
@@ -310,7 +310,7 @@ not in scope for the initial implementation but the architecture supports it.
 
 ## module 4: monster manifest expansion
 
-**file**: `pufferlib/ocean/osrs/tools/monsters_manifest.json`
+**file**: `ocean/osrs/tools/monsters_manifest.json`
 
 add 5 new entries:
 
@@ -338,7 +338,7 @@ note: red form max_hit corrects from 41 (current hardcode) to 30 (wiki-accurate)
 
 ## zulrah migration (workstream D)
 
-**file**: `pufferlib/ocean/osrs/encounters/encounter_zulrah.h`
+**file**: `ocean/osrs/encounters/encounter_zulrah.h`
 
 blocked by modules 1-3. consumes all shared systems.
 
@@ -416,17 +416,17 @@ A, B, C have zero file overlap and can run fully in parallel.
 after all workstreams complete:
 
 ```bash
-python pufferlib/ocean/osrs/tools/generate_monsters.py
-python pufferlib/ocean/osrs/tools/generate_items.py
+python ocean/osrs/tools/generate_monsters.py
+python ocean/osrs/tools/generate_items.py
 python setup.py build_osrs_inferno --force
 python setup.py build_osrs_zulrah --force
 python setup.py build_osrs_pvp --force
 # all test suites:
-cc -std=c11 -O0 -g -I. -o test_combat_math pufferlib/ocean/osrs/tests/test_combat_math.c -lm && ./test_combat_math
-cc -std=c11 -O0 -g -I. -o test_item_effects pufferlib/ocean/osrs/tests/test_item_effects.c -lm && ./test_item_effects
-cc -std=c11 -O0 -g -I. -o test_special_attacks pufferlib/ocean/osrs/tests/test_special_attacks.c -lm && ./test_special_attacks
-cc -std=c11 -O0 -g -I. -o test_consumables pufferlib/ocean/osrs/tests/test_consumables.c -lm && ./test_consumables
-cc -std=c11 -O0 -g -I. -o test_player_combat pufferlib/ocean/osrs/tests/test_player_combat.c -lm && ./test_player_combat
+cc -std=c11 -O0 -g -I. -o test_combat_math ocean/osrs/tests/test_combat_math.c -lm && ./test_combat_math
+cc -std=c11 -O0 -g -I. -o test_item_effects ocean/osrs/tests/test_item_effects.c -lm && ./test_item_effects
+cc -std=c11 -O0 -g -I. -o test_special_attacks ocean/osrs/tests/test_special_attacks.c -lm && ./test_special_attacks
+cc -std=c11 -O0 -g -I. -o test_consumables ocean/osrs/tests/test_consumables.c -lm && ./test_consumables
+cc -std=c11 -O0 -g -I. -o test_player_combat ocean/osrs/tests/test_player_combat.c -lm && ./test_player_combat
 ```
 
 all 3 env builds + all test suites must pass.

@@ -6,7 +6,7 @@ an NPC, categorizes them by purpose, and prints a suggested manifest visual
 section.
 
 Usage:
-    cd pufferlib/ocean/osrs
+    cd ocean/osrs
     uv run python tools/discover_npc_assets.py --npc-id 2042
     uv run python tools/discover_npc_assets.py --npc-ids 2042,2043,2044
     uv run python tools/discover_npc_assets.py --search zulrah

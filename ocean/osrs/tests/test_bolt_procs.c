@@ -8,7 +8,7 @@
  * BUILD:
  *   cd pufferlib-metal
  *   cc -std=c11 -O0 -g -I. -o test_bolt_procs \
- *       pufferlib/ocean/osrs/tests/test_bolt_procs.c -lm
+ *       ocean/osrs/tests/test_bolt_procs.c -lm
  *   ./test_bolt_procs
  */
 
@@ -16,7 +16,7 @@
 #include <stdlib.h>
 #include <math.h>
 
-#include "pufferlib/ocean/osrs/osrs_bolt_procs.h"
+#include "ocean/osrs/osrs_bolt_procs.h"
 
 /* ======================================================================== */
 /* test harness                                                              */

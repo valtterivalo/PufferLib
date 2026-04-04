@@ -9,7 +9,7 @@
  * BUILD:
  *   cd pufferlib-metal
  *   cc -std=c11 -O0 -g -I. -o test_combat_math \
- *       pufferlib/ocean/osrs/tests/test_combat_math.c -lm
+ *       ocean/osrs/tests/test_combat_math.c -lm
  *   ./test_combat_math
  *
  * REFERENCE FILES:
@@ -25,8 +25,8 @@
 #include <math.h>
 #include <string.h>
 
-#include "pufferlib/ocean/osrs/osrs_encounter.h"
-#include "pufferlib/ocean/osrs/osrs_special_attacks.h"
+#include "ocean/osrs/osrs_encounter.h"
+#include "ocean/osrs/osrs_special_attacks.h"
 
 /* ======================================================================== */
 /* test harness                                                              */

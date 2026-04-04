@@ -10,14 +10,14 @@ all commands run from the repo root (`pufferlib-metal/`):
 
 ```bash
 # build + run all tests (copy-paste block):
-cc -std=c11 -O0 -g -I. -o test_combat_math pufferlib/ocean/osrs/tests/test_combat_math.c -lm && ./test_combat_math
-cc -std=c11 -O0 -g -I. -o test_item_effects pufferlib/ocean/osrs/tests/test_item_effects.c -lm && ./test_item_effects
-cc -std=c11 -O0 -g -I. -o test_special_attacks pufferlib/ocean/osrs/tests/test_special_attacks.c -lm && ./test_special_attacks
-cc -std=c11 -O0 -g -I. -o test_player_combat pufferlib/ocean/osrs/tests/test_player_combat.c -lm && ./test_player_combat
-cc -std=c11 -O0 -g -I. -o test_consumables pufferlib/ocean/osrs/tests/test_consumables.c -lm && ./test_consumables
-cc -std=c11 -O0 -g -I. -o test_bolt_procs pufferlib/ocean/osrs/tests/test_bolt_procs.c -lm && ./test_bolt_procs
-cc -std=c11 -O0 -g -I. -o test_damage pufferlib/ocean/osrs/tests/test_damage.c -lm && ./test_damage
-cc -std=c11 -O0 -g -I. -o test_inventory pufferlib/ocean/osrs/tests/test_inventory.c -lm && ./test_inventory
+cc -std=c11 -O0 -g -I. -o test_combat_math ocean/osrs/tests/test_combat_math.c -lm && ./test_combat_math
+cc -std=c11 -O0 -g -I. -o test_item_effects ocean/osrs/tests/test_item_effects.c -lm && ./test_item_effects
+cc -std=c11 -O0 -g -I. -o test_special_attacks ocean/osrs/tests/test_special_attacks.c -lm && ./test_special_attacks
+cc -std=c11 -O0 -g -I. -o test_player_combat ocean/osrs/tests/test_player_combat.c -lm && ./test_player_combat
+cc -std=c11 -O0 -g -I. -o test_consumables ocean/osrs/tests/test_consumables.c -lm && ./test_consumables
+cc -std=c11 -O0 -g -I. -o test_bolt_procs ocean/osrs/tests/test_bolt_procs.c -lm && ./test_bolt_procs
+cc -std=c11 -O0 -g -I. -o test_damage ocean/osrs/tests/test_damage.c -lm && ./test_damage
+cc -std=c11 -O0 -g -I. -o test_inventory ocean/osrs/tests/test_inventory.c -lm && ./test_inventory
 ```
 
 each binary prints `=== results: N/N passed ===` on the last line. exit code 0 = all passed.

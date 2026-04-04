@@ -226,12 +226,12 @@ python setup.py build_osrs_pvp --force
 python setup.py build_osrs_inferno --force
 python setup.py build_osrs_zulrah --force
 # all test suites:
-cc -std=c11 -O0 -g -I. -o test_combat_math pufferlib/ocean/osrs/tests/test_combat_math.c -lm && ./test_combat_math
-cc -std=c11 -O0 -g -I. -o test_item_effects pufferlib/ocean/osrs/tests/test_item_effects.c -lm && ./test_item_effects
-cc -std=c11 -O0 -g -I. -o test_special_attacks pufferlib/ocean/osrs/tests/test_special_attacks.c -lm && ./test_special_attacks
-cc -std=c11 -O0 -g -I. -o test_player_combat pufferlib/ocean/osrs/tests/test_player_combat.c -lm && ./test_player_combat
-cc -std=c11 -O0 -g -I. -o test_consumables pufferlib/ocean/osrs/tests/test_consumables.c -lm && ./test_consumables
-cc -std=c11 -O0 -g -I. -o test_bolt_procs pufferlib/ocean/osrs/tests/test_bolt_procs.c -lm && ./test_bolt_procs
+cc -std=c11 -O0 -g -I. -o test_combat_math ocean/osrs/tests/test_combat_math.c -lm && ./test_combat_math
+cc -std=c11 -O0 -g -I. -o test_item_effects ocean/osrs/tests/test_item_effects.c -lm && ./test_item_effects
+cc -std=c11 -O0 -g -I. -o test_special_attacks ocean/osrs/tests/test_special_attacks.c -lm && ./test_special_attacks
+cc -std=c11 -O0 -g -I. -o test_player_combat ocean/osrs/tests/test_player_combat.c -lm && ./test_player_combat
+cc -std=c11 -O0 -g -I. -o test_consumables ocean/osrs/tests/test_consumables.c -lm && ./test_consumables
+cc -std=c11 -O0 -g -I. -o test_bolt_procs ocean/osrs/tests/test_bolt_procs.c -lm && ./test_bolt_procs
 ```
 
 all 3 builds + 6 test suites must pass. PvP training should produce same reward curves.

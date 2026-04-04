@@ -19,22 +19,22 @@
 This is a pure mechanical rename — no logic changes. Every file that includes the old name must be updated.
 
 **Files:**
-- Rename: `pufferlib/ocean/osrs/osrs_combat_shared.h` → `pufferlib/ocean/osrs/osrs_combat.h`
-- Modify: `pufferlib/ocean/osrs/osrs_encounter.h` (line 62: `#include "osrs_combat_shared.h"` → `#include "osrs_combat.h"`)
-- Modify: `pufferlib/ocean/osrs/encounters/encounter_inferno.h` (line 23: `#include "../osrs_combat_shared.h"` → `#include "../osrs_combat.h"`)
-- Modify: `pufferlib/ocean/osrs/encounters/encounter_zulrah.h` (line 38: `#include "../osrs_combat_shared.h"` → `#include "../osrs_combat.h"`)
-- Modify: `pufferlib/ocean/osrs/tests/test_special_attacks.c` (line 29: `#include "pufferlib/ocean/osrs/osrs_combat_shared.h"` → `#include "pufferlib/ocean/osrs/osrs_combat.h"`)
+- Rename: `ocean/osrs/osrs_combat_shared.h` → `ocean/osrs/osrs_combat.h`
+- Modify: `ocean/osrs/osrs_encounter.h` (line 62: `#include "osrs_combat_shared.h"` → `#include "osrs_combat.h"`)
+- Modify: `ocean/osrs/encounters/encounter_inferno.h` (line 23: `#include "../osrs_combat_shared.h"` → `#include "../osrs_combat.h"`)
+- Modify: `ocean/osrs/encounters/encounter_zulrah.h` (line 38: `#include "../osrs_combat_shared.h"` → `#include "../osrs_combat.h"`)
+- Modify: `ocean/osrs/tests/test_special_attacks.c` (line 29: `#include "ocean/osrs/osrs_combat_shared.h"` → `#include "ocean/osrs/osrs_combat.h"`)
 - Modify: all comments referencing the old filename in the above files
 
 - [ ] **Step 1: Rename the file**
 
 ```bash
-git mv pufferlib/ocean/osrs/osrs_combat_shared.h pufferlib/ocean/osrs/osrs_combat.h
+git mv ocean/osrs/osrs_combat_shared.h ocean/osrs/osrs_combat.h
 ```
 
 - [ ] **Step 2: Update include in osrs_encounter.h**
 
-In `pufferlib/ocean/osrs/osrs_encounter.h`, change line 62:
+In `ocean/osrs/osrs_encounter.h`, change line 62:
 ```c
 // old:
 #include "osrs_combat_shared.h"
@@ -52,7 +52,7 @@ Also update the comment at line 50:
 
 - [ ] **Step 3: Update include in encounter_inferno.h**
 
-In `pufferlib/ocean/osrs/encounters/encounter_inferno.h`, change line 23:
+In `ocean/osrs/encounters/encounter_inferno.h`, change line 23:
 ```c
 // old:
 #include "../osrs_combat_shared.h"
@@ -64,7 +64,7 @@ Also update any comments referencing the old filename (line 640).
 
 - [ ] **Step 4: Update include in encounter_zulrah.h**
 
-In `pufferlib/ocean/osrs/encounters/encounter_zulrah.h`, change line 38:
+In `ocean/osrs/encounters/encounter_zulrah.h`, change line 38:
 ```c
 // old:
 #include "../osrs_combat_shared.h"
@@ -76,19 +76,19 @@ Also update comments at lines 667 and 778.
 
 - [ ] **Step 5: Update include in test_special_attacks.c**
 
-In `pufferlib/ocean/osrs/tests/test_special_attacks.c`, change line 29:
+In `ocean/osrs/tests/test_special_attacks.c`, change line 29:
 ```c
 // old:
-#include "pufferlib/ocean/osrs/osrs_combat_shared.h"
+#include "ocean/osrs/osrs_combat_shared.h"
 // new:
-#include "pufferlib/ocean/osrs/osrs_combat.h"
+#include "ocean/osrs/osrs_combat.h"
 ```
 
 Also update the comment at line 20.
 
 - [ ] **Step 6: Update the file's own header**
 
-In `pufferlib/ocean/osrs/osrs_combat.h`, update:
+In `ocean/osrs/osrs_combat.h`, update:
 ```c
 // old:
  * @fileoverview osrs_combat_shared.h — pure combat math shared by all encounters.
@@ -120,9 +120,9 @@ Expected: all print `Built: pufferlib/_C.cpython-312-darwin.so`
 - [ ] **Step 8: Verify all existing tests pass**
 
 ```bash
-cc -std=c11 -O0 -g -I. -o test_combat_math pufferlib/ocean/osrs/tests/test_combat_math.c -lm && ./test_combat_math 2>&1 | tail -1
-cc -std=c11 -O0 -g -I. -o test_item_effects pufferlib/ocean/osrs/tests/test_item_effects.c -lm && ./test_item_effects 2>&1 | tail -1
-cc -std=c11 -O0 -g -I. -o test_special_attacks pufferlib/ocean/osrs/tests/test_special_attacks.c -lm && ./test_special_attacks 2>&1 | tail -1
+cc -std=c11 -O0 -g -I. -o test_combat_math ocean/osrs/tests/test_combat_math.c -lm && ./test_combat_math 2>&1 | tail -1
+cc -std=c11 -O0 -g -I. -o test_item_effects ocean/osrs/tests/test_item_effects.c -lm && ./test_item_effects 2>&1 | tail -1
+cc -std=c11 -O0 -g -I. -o test_special_attacks ocean/osrs/tests/test_special_attacks.c -lm && ./test_special_attacks 2>&1 | tail -1
 ```
 
 Expected: `155/155 passed`, `164/164 passed`, `222/222 passed`
@@ -140,12 +140,12 @@ Reference: `.refs/osrs-dps-calc/src/lib/BaseCalc.ts:105-110` for max hit formula
 `.refs/osrs-dps-calc/src/lib/PlayerVsNPCCalc.ts:191-212` for effective level + attack roll.
 
 **Files:**
-- Modify: `pufferlib/ocean/osrs/osrs_combat.h` (append before `#endif`)
-- Create: `pufferlib/ocean/osrs/tests/test_player_combat.c`
+- Modify: `ocean/osrs/osrs_combat.h` (append before `#endif`)
+- Create: `ocean/osrs/tests/test_player_combat.c`
 
 - [ ] **Step 1: Write test file with effective level tests**
 
-Create `pufferlib/ocean/osrs/tests/test_player_combat.c`:
+Create `ocean/osrs/tests/test_player_combat.c`:
 
 ```c
 /**
@@ -156,14 +156,14 @@ Create `pufferlib/ocean/osrs/tests/test_player_combat.c`:
  * double accuracy, and equipment bonus summation against osrs-dps-calc
  * reference values.
  *
- * Build: cc -std=c11 -O0 -g -I. -o test_player_combat pufferlib/ocean/osrs/tests/test_player_combat.c -lm
+ * Build: cc -std=c11 -O0 -g -I. -o test_player_combat ocean/osrs/tests/test_player_combat.c -lm
  */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
-#include "pufferlib/ocean/osrs/osrs_combat.h"
-#include "pufferlib/ocean/osrs/osrs_items.h"
+#include "ocean/osrs/osrs_combat.h"
+#include "ocean/osrs/osrs_items.h"
 
 static int total_tests = 0;
 static int passed_tests = 0;
@@ -386,14 +386,14 @@ int main(void) {
 - [ ] **Step 2: Run tests to verify they fail (functions don't exist yet)**
 
 ```bash
-cc -std=c11 -O0 -g -I. -o test_player_combat pufferlib/ocean/osrs/tests/test_player_combat.c -lm 2>&1 | head -5
+cc -std=c11 -O0 -g -I. -o test_player_combat ocean/osrs/tests/test_player_combat.c -lm 2>&1 | head -5
 ```
 
 Expected: compile errors about undefined functions.
 
 - [ ] **Step 3: Implement player combat primitives in osrs_combat.h**
 
-Append before the final `#endif` in `pufferlib/ocean/osrs/osrs_combat.h`:
+Append before the final `#endif` in `ocean/osrs/osrs_combat.h`:
 
 ```c
 /* ======================================================================== */
@@ -516,7 +516,7 @@ Update the `@fileoverview` to list the new functions.
 - [ ] **Step 4: Run tests to verify they pass**
 
 ```bash
-cc -std=c11 -O0 -g -I. -o test_player_combat pufferlib/ocean/osrs/tests/test_player_combat.c -lm && ./test_player_combat
+cc -std=c11 -O0 -g -I. -o test_player_combat ocean/osrs/tests/test_player_combat.c -lm && ./test_player_combat
 ```
 
 Expected: all tests pass.
@@ -524,9 +524,9 @@ Expected: all tests pass.
 - [ ] **Step 5: Run existing test suites to verify no regressions**
 
 ```bash
-cc -std=c11 -O0 -g -I. -o test_combat_math pufferlib/ocean/osrs/tests/test_combat_math.c -lm && ./test_combat_math 2>&1 | tail -1
-cc -std=c11 -O0 -g -I. -o test_item_effects pufferlib/ocean/osrs/tests/test_item_effects.c -lm && ./test_item_effects 2>&1 | tail -1
-cc -std=c11 -O0 -g -I. -o test_special_attacks pufferlib/ocean/osrs/tests/test_special_attacks.c -lm && ./test_special_attacks 2>&1 | tail -1
+cc -std=c11 -O0 -g -I. -o test_combat_math ocean/osrs/tests/test_combat_math.c -lm && ./test_combat_math 2>&1 | tail -1
+cc -std=c11 -O0 -g -I. -o test_item_effects ocean/osrs/tests/test_item_effects.c -lm && ./test_item_effects 2>&1 | tail -1
+cc -std=c11 -O0 -g -I. -o test_special_attacks ocean/osrs/tests/test_special_attacks.c -lm && ./test_special_attacks 2>&1 | tail -1
 ```
 
 Expected: `155/155`, `164/164`, `222/222`
@@ -542,7 +542,7 @@ python setup.py build_osrs_pvp --force 2>&1 | tail -1
 - [ ] **Step 7: Commit**
 
 ```bash
-git add pufferlib/ocean/osrs/osrs_combat.h pufferlib/ocean/osrs/tests/test_player_combat.c
+git add ocean/osrs/osrs_combat.h ocean/osrs/tests/test_player_combat.c
 git commit -m "add player-side combat primitives to osrs_combat.h with tests"
 ```
 
@@ -558,24 +558,24 @@ parameters, returns result struct. Encounters apply the result to their state.
 Reference: OSRS wiki food/potion articles, `.refs/osrs-dps-calc/` for brew formulas.
 
 **Files:**
-- Create: `pufferlib/ocean/osrs/osrs_consumables.h`
-- Create: `pufferlib/ocean/osrs/tests/test_consumables.c`
+- Create: `ocean/osrs/osrs_consumables.h`
+- Create: `ocean/osrs/tests/test_consumables.c`
 
 - [ ] **Step 1: Write test file**
 
-Create `pufferlib/ocean/osrs/tests/test_consumables.c`:
+Create `ocean/osrs/tests/test_consumables.c`:
 
 ```c
 /**
  * @file test_consumables.c
  * @brief Tests for shared food/potion/brew functions in osrs_consumables.h.
  *
- * Build: cc -std=c11 -O0 -g -I. -o test_consumables pufferlib/ocean/osrs/tests/test_consumables.c -lm
+ * Build: cc -std=c11 -O0 -g -I. -o test_consumables ocean/osrs/tests/test_consumables.c -lm
  */
 
 #include <stdio.h>
 #include <stdlib.h>
-#include "pufferlib/ocean/osrs/osrs_consumables.h"
+#include "ocean/osrs/osrs_consumables.h"
 
 static int total_tests = 0;
 static int passed_tests = 0;
@@ -695,14 +695,14 @@ int main(void) {
 - [ ] **Step 2: Run tests to verify they fail**
 
 ```bash
-cc -std=c11 -O0 -g -I. -o test_consumables pufferlib/ocean/osrs/tests/test_consumables.c -lm 2>&1 | head -5
+cc -std=c11 -O0 -g -I. -o test_consumables ocean/osrs/tests/test_consumables.c -lm 2>&1 | head -5
 ```
 
 Expected: compile errors (header doesn't exist yet).
 
 - [ ] **Step 3: Implement osrs_consumables.h**
 
-Create `pufferlib/ocean/osrs/osrs_consumables.h`:
+Create `ocean/osrs/osrs_consumables.h`:
 
 ```c
 /**
@@ -883,7 +883,7 @@ static inline BrewResult osrs_brew_effect(int base_hp, int base_att,
 - [ ] **Step 4: Run tests to verify they pass**
 
 ```bash
-cc -std=c11 -O0 -g -I. -o test_consumables pufferlib/ocean/osrs/tests/test_consumables.c -lm && ./test_consumables
+cc -std=c11 -O0 -g -I. -o test_consumables ocean/osrs/tests/test_consumables.c -lm && ./test_consumables
 ```
 
 Expected: all tests pass.
@@ -891,7 +891,7 @@ Expected: all tests pass.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add pufferlib/ocean/osrs/osrs_consumables.h pufferlib/ocean/osrs/tests/test_consumables.c
+git add ocean/osrs/osrs_consumables.h ocean/osrs/tests/test_consumables.c
 git commit -m "add osrs_consumables.h: shared food, potion, brew functions with tests"
 ```
 
@@ -904,12 +904,12 @@ Reference: `.refs/osrs-dps-calc/src/lib/`, `.refs/osrs-sdk/src/weapons/`,
 current implementations in `osrs_pvp_combat.h` (lines 830-1000+) and `encounter_zulrah.h` (lines 1031-1130).
 
 **Files:**
-- Create: `pufferlib/ocean/osrs/osrs_special_attacks.h`
-- Modify: `pufferlib/ocean/osrs/tests/test_special_attacks.c` (extend with new dispatch tests)
+- Create: `ocean/osrs/osrs_special_attacks.h`
+- Modify: `ocean/osrs/tests/test_special_attacks.c` (extend with new dispatch tests)
 
 - [ ] **Step 1: Write tests for spec dispatch**
 
-Extend `pufferlib/ocean/osrs/tests/test_special_attacks.c` by adding a new test section
+Extend `ocean/osrs/tests/test_special_attacks.c` by adding a new test section
 at the end (before `main`'s return). The existing 222 tests must remain untouched.
 Add tests for the new `osrs_resolve_spec()` function:
 
@@ -954,19 +954,19 @@ static void test_spec_dispatch(void) {
 
 Add a call to `test_spec_dispatch()` in the test file's `main()`.
 
-The test file will need a new include: `#include "pufferlib/ocean/osrs/osrs_special_attacks.h"`.
+The test file will need a new include: `#include "ocean/osrs/osrs_special_attacks.h"`.
 
 - [ ] **Step 2: Run tests to verify new tests fail (header doesn't exist)**
 
 ```bash
-cc -std=c11 -O0 -g -I. -o test_special_attacks pufferlib/ocean/osrs/tests/test_special_attacks.c -lm 2>&1 | head -5
+cc -std=c11 -O0 -g -I. -o test_special_attacks ocean/osrs/tests/test_special_attacks.c -lm 2>&1 | head -5
 ```
 
 Expected: compile error about missing header.
 
 - [ ] **Step 3: Implement osrs_special_attacks.h**
 
-Create `pufferlib/ocean/osrs/osrs_special_attacks.h`. This file implements `osrs_spec_cost()` and `osrs_resolve_spec()` with a switch dispatch over weapon item indices.
+Create `ocean/osrs/osrs_special_attacks.h`. This file implements `osrs_spec_cost()` and `osrs_resolve_spec()` with a switch dispatch over weapon item indices.
 
 The implementation should:
 - include `osrs_combat.h` for `osrs_hit_chance`, `encounter_rand_int`, `encounter_rand_float`
@@ -1042,7 +1042,7 @@ Close with `#endif`.
 - [ ] **Step 4: Run tests to verify all pass (old 222 + new dispatch tests)**
 
 ```bash
-cc -std=c11 -O0 -g -I. -o test_special_attacks pufferlib/ocean/osrs/tests/test_special_attacks.c -lm && ./test_special_attacks
+cc -std=c11 -O0 -g -I. -o test_special_attacks ocean/osrs/tests/test_special_attacks.c -lm && ./test_special_attacks
 ```
 
 Expected: all tests pass (222 + new tests).
@@ -1064,15 +1064,15 @@ Check what currently uses it:
 python setup.py build_osrs_inferno --force 2>&1 | tail -1
 python setup.py build_osrs_zulrah --force 2>&1 | tail -1
 python setup.py build_osrs_pvp --force 2>&1 | tail -1
-cc -std=c11 -O0 -g -I. -o test_combat_math pufferlib/ocean/osrs/tests/test_combat_math.c -lm && ./test_combat_math 2>&1 | tail -1
-cc -std=c11 -O0 -g -I. -o test_item_effects pufferlib/ocean/osrs/tests/test_item_effects.c -lm && ./test_item_effects 2>&1 | tail -1
-cc -std=c11 -O0 -g -I. -o test_special_attacks pufferlib/ocean/osrs/tests/test_special_attacks.c -lm && ./test_special_attacks 2>&1 | tail -1
+cc -std=c11 -O0 -g -I. -o test_combat_math ocean/osrs/tests/test_combat_math.c -lm && ./test_combat_math 2>&1 | tail -1
+cc -std=c11 -O0 -g -I. -o test_item_effects ocean/osrs/tests/test_item_effects.c -lm && ./test_item_effects 2>&1 | tail -1
+cc -std=c11 -O0 -g -I. -o test_special_attacks ocean/osrs/tests/test_special_attacks.c -lm && ./test_special_attacks 2>&1 | tail -1
 ```
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add pufferlib/ocean/osrs/osrs_special_attacks.h pufferlib/ocean/osrs/tests/test_special_attacks.c pufferlib/ocean/osrs/osrs_combat.h
+git add ocean/osrs/osrs_special_attacks.h ocean/osrs/tests/test_special_attacks.c ocean/osrs/osrs_combat.h
 git commit -m "add osrs_special_attacks.h: weapon spec dispatch with tests, move blowpipe spec from combat.h"
 ```
 
@@ -1086,13 +1086,13 @@ Pure data task — add 5 NPC entries to the manifest, regenerate the header.
 Zero code logic changes.
 
 **Files:**
-- Modify: `pufferlib/ocean/osrs/tools/monsters_manifest.json`
-- Regenerate: `pufferlib/ocean/osrs/osrs_monsters_generated.h`
+- Modify: `ocean/osrs/tools/monsters_manifest.json`
+- Regenerate: `ocean/osrs/osrs_monsters_generated.h`
 
 - [ ] **Step 1: Add zulrah entries to manifest**
 
 Append these 5 entries to the end of the JSON array in
-`pufferlib/ocean/osrs/tools/monsters_manifest.json` (before the closing `]`):
+`ocean/osrs/tools/monsters_manifest.json` (before the closing `]`):
 
 ```json
   {
@@ -1130,7 +1130,7 @@ Append these 5 entries to the end of the JSON array in
 - [ ] **Step 2: Regenerate the header**
 
 ```bash
-python pufferlib/ocean/osrs/tools/generate_monsters.py
+python ocean/osrs/tools/generate_monsters.py
 ```
 
 Expected output includes: `manifest: 19 monsters` (14 existing + 5 new).
@@ -1140,9 +1140,9 @@ Expected output includes: `manifest: 19 monsters` (14 existing + 5 new).
 Check the generated header for correct zulrah stats:
 
 ```bash
-grep -A5 "MON_ZULRAH_GREEN" pufferlib/ocean/osrs/osrs_monsters_generated.h | head -8
-grep -A5 "MON_ZULRAH_RED" pufferlib/ocean/osrs/osrs_monsters_generated.h | head -8
-grep -A5 "MON_ZULRAH_BLUE" pufferlib/ocean/osrs/osrs_monsters_generated.h | head -8
+grep -A5 "MON_ZULRAH_GREEN" ocean/osrs/osrs_monsters_generated.h | head -8
+grep -A5 "MON_ZULRAH_RED" ocean/osrs/osrs_monsters_generated.h | head -8
+grep -A5 "MON_ZULRAH_BLUE" ocean/osrs/osrs_monsters_generated.h | head -8
 ```
 
 Expected values:
@@ -1161,7 +1161,7 @@ python setup.py build_osrs_pvp --force 2>&1 | tail -1
 - [ ] **Step 5: Commit**
 
 ```bash
-git add pufferlib/ocean/osrs/tools/monsters_manifest.json pufferlib/ocean/osrs/osrs_monsters_generated.h
+git add ocean/osrs/tools/monsters_manifest.json ocean/osrs/osrs_monsters_generated.h
 git commit -m "add zulrah forms and snakelings to monster manifest (5 NPCs: 2042-2046)"
 ```
 
@@ -1175,7 +1175,7 @@ The most impactful single change: delete the 100+ lines of precomputed gear tier
 constants and derive them from ITEM_DATABASE at reset time.
 
 **Files:**
-- Modify: `pufferlib/ocean/osrs/encounters/encounter_zulrah.h`
+- Modify: `ocean/osrs/encounters/encounter_zulrah.h`
 
 - [ ] **Step 1: Add EncounterLoadoutStats fields to ZulrahState**
 
@@ -1241,14 +1241,14 @@ Expected: builds successfully.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add pufferlib/ocean/osrs/encounters/encounter_zulrah.h
+git add ocean/osrs/encounters/encounter_zulrah.h
 git commit -m "zulrah: replace precomputed gear tier stats with encounter_compute_loadout_stats"
 ```
 
 ### Task D2: Replace hardcoded NPC stats with MONSTER_DATABASE lookups
 
 **Files:**
-- Modify: `pufferlib/ocean/osrs/encounters/encounter_zulrah.h`
+- Modify: `ocean/osrs/encounters/encounter_zulrah.h`
 
 - [ ] **Step 1: Add monster index includes and form-to-monster mapping**
 
@@ -1345,14 +1345,14 @@ python setup.py build_osrs_zulrah --force 2>&1 | tail -1
 - [ ] **Step 4: Commit**
 
 ```bash
-git add pufferlib/ocean/osrs/encounters/encounter_zulrah.h
+git add ocean/osrs/encounters/encounter_zulrah.h
 git commit -m "zulrah: replace hardcoded NPC stats with MONSTER_DATABASE lookups"
 ```
 
 ### Task D3: Replace duplicated combat functions with osrs_combat.h calls
 
 **Files:**
-- Modify: `pufferlib/ocean/osrs/encounters/encounter_zulrah.h`
+- Modify: `ocean/osrs/encounters/encounter_zulrah.h`
 
 - [ ] **Step 1: Replace zul_hit_chance_double with osrs_hit_chance_double**
 
@@ -1395,21 +1395,21 @@ int has_recoil = (ring == ITEM_RING_OF_RECOIL || ring == ITEM_RING_OF_SUFFERING_
 python setup.py build_osrs_zulrah --force 2>&1 | tail -1
 python setup.py build_osrs_inferno --force 2>&1 | tail -1
 python setup.py build_osrs_pvp --force 2>&1 | tail -1
-cc -std=c11 -O0 -g -I. -o test_combat_math pufferlib/ocean/osrs/tests/test_combat_math.c -lm && ./test_combat_math 2>&1 | tail -1
-cc -std=c11 -O0 -g -I. -o test_player_combat pufferlib/ocean/osrs/tests/test_player_combat.c -lm && ./test_player_combat 2>&1 | tail -1
+cc -std=c11 -O0 -g -I. -o test_combat_math ocean/osrs/tests/test_combat_math.c -lm && ./test_combat_math 2>&1 | tail -1
+cc -std=c11 -O0 -g -I. -o test_player_combat ocean/osrs/tests/test_player_combat.c -lm && ./test_player_combat 2>&1 | tail -1
 ```
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add pufferlib/ocean/osrs/encounters/encounter_zulrah.h
+git add ocean/osrs/encounters/encounter_zulrah.h
 git commit -m "zulrah: replace duplicated combat functions with osrs_combat.h calls"
 ```
 
 ### Task D4: Replace zul_player_spec with osrs_resolve_spec
 
 **Files:**
-- Modify: `pufferlib/ocean/osrs/encounters/encounter_zulrah.h`
+- Modify: `ocean/osrs/encounters/encounter_zulrah.h`
 
 - [ ] **Step 1: Replace the ~90-line zul_player_spec function**
 
@@ -1485,14 +1485,14 @@ python setup.py build_osrs_zulrah --force 2>&1 | tail -1
 - [ ] **Step 3: Commit**
 
 ```bash
-git add pufferlib/ocean/osrs/encounters/encounter_zulrah.h
+git add ocean/osrs/encounters/encounter_zulrah.h
 git commit -m "zulrah: replace per-tier spec logic with osrs_resolve_spec dispatch"
 ```
 
 ### Task D5: Replace food/potion logic with osrs_consumables.h calls
 
 **Files:**
-- Modify: `pufferlib/ocean/osrs/encounters/encounter_zulrah.h`
+- Modify: `ocean/osrs/encounters/encounter_zulrah.h`
 
 - [ ] **Step 1: Add consumables include**
 
@@ -1557,7 +1557,7 @@ python setup.py build_osrs_zulrah --force 2>&1 | tail -1
 - [ ] **Step 5: Commit**
 
 ```bash
-git add pufferlib/ocean/osrs/encounters/encounter_zulrah.h
+git add ocean/osrs/encounters/encounter_zulrah.h
 git commit -m "zulrah: replace inline food/potion logic with osrs_consumables.h calls"
 ```
 
@@ -1568,8 +1568,8 @@ git commit -m "zulrah: replace inline food/potion logic with osrs_consumables.h 
 - [ ] **Step 1: Regenerate both databases**
 
 ```bash
-python pufferlib/ocean/osrs/tools/generate_monsters.py
-python pufferlib/ocean/osrs/tools/generate_items.py
+python ocean/osrs/tools/generate_monsters.py
+python ocean/osrs/tools/generate_items.py
 ```
 
 - [ ] **Step 2: Build all 3 environments**
@@ -1585,11 +1585,11 @@ Expected: all 3 print `Built: pufferlib/_C.cpython-312-darwin.so`
 - [ ] **Step 3: Run all test suites**
 
 ```bash
-cc -std=c11 -O0 -g -I. -o test_combat_math pufferlib/ocean/osrs/tests/test_combat_math.c -lm && ./test_combat_math 2>&1 | tail -1
-cc -std=c11 -O0 -g -I. -o test_item_effects pufferlib/ocean/osrs/tests/test_item_effects.c -lm && ./test_item_effects 2>&1 | tail -1
-cc -std=c11 -O0 -g -I. -o test_special_attacks pufferlib/ocean/osrs/tests/test_special_attacks.c -lm && ./test_special_attacks 2>&1 | tail -1
-cc -std=c11 -O0 -g -I. -o test_consumables pufferlib/ocean/osrs/tests/test_consumables.c -lm && ./test_consumables 2>&1 | tail -1
-cc -std=c11 -O0 -g -I. -o test_player_combat pufferlib/ocean/osrs/tests/test_player_combat.c -lm && ./test_player_combat 2>&1 | tail -1
+cc -std=c11 -O0 -g -I. -o test_combat_math ocean/osrs/tests/test_combat_math.c -lm && ./test_combat_math 2>&1 | tail -1
+cc -std=c11 -O0 -g -I. -o test_item_effects ocean/osrs/tests/test_item_effects.c -lm && ./test_item_effects 2>&1 | tail -1
+cc -std=c11 -O0 -g -I. -o test_special_attacks ocean/osrs/tests/test_special_attacks.c -lm && ./test_special_attacks 2>&1 | tail -1
+cc -std=c11 -O0 -g -I. -o test_consumables ocean/osrs/tests/test_consumables.c -lm && ./test_consumables 2>&1 | tail -1
+cc -std=c11 -O0 -g -I. -o test_player_combat ocean/osrs/tests/test_player_combat.c -lm && ./test_player_combat 2>&1 | tail -1
 ```
 
 Expected: all pass.
@@ -1597,7 +1597,7 @@ Expected: all pass.
 - [ ] **Step 4: Verify encounter_zulrah.h line count reduced**
 
 ```bash
-wc -l pufferlib/ocean/osrs/encounters/encounter_zulrah.h
+wc -l ocean/osrs/encounters/encounter_zulrah.h
 ```
 
 Expected: ~1200-1400 lines (down from 2364).

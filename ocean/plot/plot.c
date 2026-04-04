@@ -462,7 +462,7 @@ void compute_boxplot_data(KeyValue *hypers, float *box_mmin, float *box_mmax, in
 
 
 int main(void) {
-    FILE *file = fopen("pufferlib/ocean/plot/data.json", "r");
+    FILE *file = fopen("ocean/plot/data.json", "r");
     if (!file) {
         printf("Error opening file\n");
         return 1;

@@ -3,7 +3,7 @@
  * @brief AUTO-GENERATED monster database from monsters.json
  *
  * DO NOT EDIT — regenerate with:
- *   python pufferlib/ocean/osrs/tools/generate_monsters.py
+ *   python ocean/osrs/tools/generate_monsters.py
  */
 
 #ifndef OSRS_MONSTERS_GENERATED_H

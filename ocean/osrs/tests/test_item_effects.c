@@ -8,15 +8,15 @@
  * BUILD:
  *   cd pufferlib-metal
  *   cc -std=c11 -O0 -g -I. -o test_item_effects \
- *       pufferlib/ocean/osrs/tests/test_item_effects.c -lm
+ *       ocean/osrs/tests/test_item_effects.c -lm
  *   ./test_item_effects
  *
  * REFERENCE FILES:
  *   .refs/osrs-dps-calc/src/lib/PlayerVsNPCCalc.ts — tbow scaling, specific bonuses
  *   .refs/osrs-dps-calc/src/tests/calc/DefenceRolls.test.ts — NPC defence values
  *   .refs/osrs-dps-calc/src/tests/calc/Prayers.test.ts — prayer mechanics
- *   pufferlib/ocean/osrs/osrs_pvp_combat.h — PvP prayer 40% reduction
- *   pufferlib/ocean/osrs/encounters/encounter_inferno.h — PvE prayer full block
+ *   ocean/osrs/osrs_pvp_combat.h — PvP prayer 40% reduction
+ *   ocean/osrs/encounters/encounter_inferno.h — PvE prayer full block
  */
 
 #include <stdio.h>
@@ -24,7 +24,7 @@
 #include <math.h>
 #include <string.h>
 
-#include "pufferlib/ocean/osrs/osrs_encounter.h"
+#include "ocean/osrs/osrs_encounter.h"
 
 /* ======================================================================== */
 /* test harness (same macros as test_combat_math.c)                          */

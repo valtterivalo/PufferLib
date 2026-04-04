@@ -7,10 +7,10 @@ are auto-populated from wiki data.
 
 Usage:
     cd pufferlib-metal
-    python pufferlib/ocean/osrs/tools/generate_monsters.py
+    python ocean/osrs/tools/generate_monsters.py
 
     # bootstrap manifest from encounter_inferno.h:
-    python pufferlib/ocean/osrs/tools/generate_monsters.py --bootstrap
+    python ocean/osrs/tools/generate_monsters.py --bootstrap
 
 Input:
     monsters.json       — wiki-sourced monster stats from osrs-dps-calc
@@ -113,7 +113,7 @@ def generate_header(manifest: list[dict], by_id: dict[int, list[dict]]) -> str:
     lines.append(" * @brief AUTO-GENERATED monster database from monsters.json")
     lines.append(" *")
     lines.append(" * DO NOT EDIT — regenerate with:")
-    lines.append(" *   python pufferlib/ocean/osrs/tools/generate_monsters.py")
+    lines.append(" *   python ocean/osrs/tools/generate_monsters.py")
     lines.append(" */")
     lines.append("")
     lines.append("#ifndef OSRS_MONSTERS_GENERATED_H")
@@ -275,12 +275,12 @@ def main():
     )
     parser.add_argument(
         "--manifest", type=Path,
-        default=Path("pufferlib/ocean/osrs/tools/monsters_manifest.json"),
+        default=Path("ocean/osrs/tools/monsters_manifest.json"),
         help="path to monster manifest JSON",
     )
     parser.add_argument(
         "--output", type=Path,
-        default=Path("pufferlib/ocean/osrs/osrs_monsters_generated.h"),
+        default=Path("ocean/osrs/osrs_monsters_generated.h"),
         help="output header file",
     )
     parser.add_argument(

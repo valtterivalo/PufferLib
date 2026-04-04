@@ -73,7 +73,7 @@ fields:
 ### 4. export visual assets
 
 ```bash
-cd pufferlib/ocean/osrs
+cd ocean/osrs
 uv run python tools/export_encounter_npcs.py \
     --group my_encounter \
     --modern-cache ../../../.refs/osrs-cache-modern \
@@ -100,7 +100,7 @@ the header provides:
 ### 6. build
 
 ```bash
-cd pufferlib/ocean/osrs && make visual    # visual binary
+cd ocean/osrs && make visual    # visual binary
 cd ../../.. && python setup.py build_osrs_my_encounter --force  # training env
 ```
 

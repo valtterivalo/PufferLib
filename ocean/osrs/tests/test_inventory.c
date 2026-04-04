@@ -5,7 +5,7 @@
  * BUILD:
  *   cd pufferlib-metal
  *   cc -std=c11 -O0 -g -I. -o test_inventory \
- *       pufferlib/ocean/osrs/tests/test_inventory.c -lm
+ *       ocean/osrs/tests/test_inventory.c -lm
  *   ./test_inventory
  */
 
@@ -13,7 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "pufferlib/ocean/osrs/osrs_inventory.h"
+#include "ocean/osrs/osrs_inventory.h"
 
 /* ======================================================================== */
 /* test harness                                                              */

@@ -7,13 +7,13 @@ and all stats are auto-populated from wiki data.
 
 Usage:
     cd pufferlib-metal
-    python pufferlib/ocean/osrs/tools/generate_items.py
+    python ocean/osrs/tools/generate_items.py
 
     # with custom paths:
-    python pufferlib/ocean/osrs/tools/generate_items.py \
+    python ocean/osrs/tools/generate_items.py \
         --json .refs/osrs-dps-calc/cdn/json/equipment.json \
-        --manifest pufferlib/ocean/osrs/tools/items_manifest.json \
-        --output pufferlib/ocean/osrs/osrs_items_generated.h
+        --manifest ocean/osrs/tools/items_manifest.json \
+        --output ocean/osrs/osrs_items_generated.h
 
 Input:
     equipment.json  — wiki-sourced item stats from osrs-dps-calc
@@ -169,7 +169,7 @@ def generate_header(
         " * DO NOT EDIT — regenerate with:"
     )
     lines.append(
-        " *   python pufferlib/ocean/osrs/tools/generate_items.py"
+        " *   python ocean/osrs/tools/generate_items.py"
     )
     lines.append(" */")
     lines.append("")
@@ -349,12 +349,12 @@ def main():
     )
     parser.add_argument(
         "--manifest",
-        default="pufferlib/ocean/osrs/tools/items_manifest.json",
+        default="ocean/osrs/tools/items_manifest.json",
         help="path to items manifest JSON",
     )
     parser.add_argument(
         "--output",
-        default="pufferlib/ocean/osrs/osrs_items_generated.h",
+        default="ocean/osrs/osrs_items_generated.h",
         help="output C header path",
     )
     parser.add_argument(
@@ -364,7 +364,7 @@ def main():
     )
     parser.add_argument(
         "--items-h",
-        default="pufferlib/ocean/osrs/osrs_items.h",
+        default="ocean/osrs/osrs_items.h",
         help="path to existing osrs_items.h (for --bootstrap)",
     )
     args = parser.parse_args()

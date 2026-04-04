@@ -17,7 +17,7 @@
 Create a reusable Python module that parses RuneLite gameval Java constant files into Python dicts.
 
 **Files:**
-- Create: pufferlib/ocean/osrs/tools/gameval_parser.py
+- Create: ocean/osrs/tools/gameval_parser.py
 
 - [ ] **Step 1: Create the parser module**
 
@@ -35,14 +35,14 @@ Read the spec for full context.
 
 - [ ] **Step 2: Verify it parses correctly**
 
-Run from pufferlib/ocean/osrs:
+Run from ocean/osrs:
     uv run python -c "from tools.gameval_parser import load_gameval; a,n,s = load_gameval(); print(f'anims:{len(a)} npcs:{len(n)} spots:{len(s)}'); print(a['SNAKEBOSS_ATTACK_ACIDX3'], n['SNAKEBOSS_BOSS_RANGED'], s['SNAKEBOSS_ORB'])"
 
 Expected: prints counts + correct values (5068, 2042, 1044).
 
 - [ ] **Step 3: Commit**
 
-    git add pufferlib/ocean/osrs/tools/gameval_parser.py
+    git add ocean/osrs/tools/gameval_parser.py
     git commit -m "add gameval_parser.py: parse RuneLite gameval Java constants"
 
 ---
@@ -52,7 +52,7 @@ Expected: prints counts + correct values (5068, 2042, 1044).
 Create the tool that helps manifest authors find gameval constants for an NPC.
 
 **Files:**
-- Create: pufferlib/ocean/osrs/tools/discover_npc_assets.py
+- Create: ocean/osrs/tools/discover_npc_assets.py
 
 - [ ] **Step 1: Create the discovery tool**
 
@@ -70,7 +70,7 @@ Read the spec for the full output format.
 
 - [ ] **Step 2: Test the discovery tool**
 
-    cd pufferlib/ocean/osrs
+    cd ocean/osrs
     uv run python tools/discover_npc_assets.py --npc-ids 2042,2043,2044
     uv run python tools/discover_npc_assets.py --search zulrah
 
@@ -78,7 +78,7 @@ Expected: prints NPC names, categorized animations, spotanims, suggested manifes
 
 - [ ] **Step 3: Commit**
 
-    git add pufferlib/ocean/osrs/tools/discover_npc_assets.py
+    git add ocean/osrs/tools/discover_npc_assets.py
     git commit -m "add discover_npc_assets.py: gameval-based NPC visual asset discovery tool"
 
 ---
@@ -88,7 +88,7 @@ Expected: prints NPC names, categorized animations, spotanims, suggested manifes
 Add visual sections to the 5 zulrah NPC entries in the manifest.
 
 **Files:**
-- Modify: pufferlib/ocean/osrs/tools/monsters_manifest.json
+- Modify: ocean/osrs/tools/monsters_manifest.json
 
 - [ ] **Step 1: Add visual sections to zulrah manifest entries**
 
@@ -106,13 +106,13 @@ MON_ZULRAH_SNAKELING_MAGIC (2046): group=zulrah, attack_anims=[], extra_anims=[]
 
 - [ ] **Step 2: Verify generate_monsters.py still works (ignores visual section)**
 
-    python pufferlib/ocean/osrs/tools/generate_monsters.py
+    python ocean/osrs/tools/generate_monsters.py
 
 Expected: manifest: 19 monsters, no errors.
 
 - [ ] **Step 3: Commit**
 
-    git add pufferlib/ocean/osrs/tools/monsters_manifest.json
+    git add ocean/osrs/tools/monsters_manifest.json
     git commit -m "add visual sections to zulrah manifest entries (gameval anim + spotanim names)"
 
 ---
@@ -122,7 +122,7 @@ Expected: manifest: 19 monsters, no errors.
 The main export script. Reads manifest visual sections, resolves gameval names, reads cache, produces .models + .anims + npc_models header.
 
 **Files:**
-- Create: pufferlib/ocean/osrs/tools/export_encounter_npcs.py
+- Create: ocean/osrs/tools/export_encounter_npcs.py
 
 - [ ] **Step 1: Create the export script**
 
@@ -131,7 +131,7 @@ The script follows the same patterns as scripts/export_inferno_npcs.py (READ IT 
 - Attack anims come from gameval_parser.resolve_names() instead of INFERNO_ATTACK_ANIMS dict
 - Spotanim GFX IDs come from gameval_parser.resolve_names() instead of INFERNO_SPOTANIM_IDS
 
-Imports from existing infrastructure (these are in pufferlib/ocean/osrs/scripts/):
+Imports from existing infrastructure (these are in ocean/osrs/scripts/):
 - modern_cache_reader.py: ModernCacheReader, read_big_smart, read_u8, read_u16, etc.
 - export_models.py: decode_model, expand_model, write_models_binary, ModelData, _merge_models
 - export_animations.py: write_animations_binary, FrameBaseDef, FrameDef, SequenceDef, load_modern_framebases, _parse_normal_frame
@@ -149,7 +149,7 @@ Output files per group:
 The C header is a standalone includeable file (not modifying the main npc_models.h). The main npc_models.h includes it. This avoids any risk to inferno data.
 
 Usage:
-    cd pufferlib/ocean/osrs
+    cd ocean/osrs
     uv run python tools/export_encounter_npcs.py --group zulrah --modern-cache ../../../.refs/osrs-cache-modern --output-dir data
 
 - [ ] **Step 2: Test on zulrah group**
@@ -161,7 +161,7 @@ Run the export and verify:
 
 - [ ] **Step 3: Verify the C header compiles**
 
-    echo '#include "pufferlib/ocean/osrs/data/npc_models_zulrah.h"' > /tmp/th.c
+    echo '#include "ocean/osrs/data/npc_models_zulrah.h"' > /tmp/th.c
     echo 'int main(void){return 0;}' >> /tmp/th.c
     cc -std=c11 -I. -o /tmp/th /tmp/th.c
 
@@ -173,7 +173,7 @@ Run the export and verify:
 
 - [ ] **Step 5: Commit**
 
-    git add pufferlib/ocean/osrs/tools/export_encounter_npcs.py pufferlib/ocean/osrs/data/zulrah.models pufferlib/ocean/osrs/data/zulrah.anims pufferlib/ocean/osrs/data/npc_models_zulrah.h
+    git add ocean/osrs/tools/export_encounter_npcs.py ocean/osrs/data/zulrah.models ocean/osrs/data/zulrah.anims ocean/osrs/data/npc_models_zulrah.h
     git commit -m "add export_encounter_npcs.py: manifest-driven visual export, test on zulrah"
 
 ---
@@ -181,7 +181,7 @@ Run the export and verify:
 ## Task 5: Documentation
 
 **Files:**
-- Create: pufferlib/ocean/osrs/tools/README.md
+- Create: ocean/osrs/tools/README.md
 
 - [ ] **Step 1: Write the pipeline documentation**
 
@@ -195,7 +195,7 @@ Cover:
 
 - [ ] **Step 2: Commit**
 
-    git add pufferlib/ocean/osrs/tools/README.md
+    git add ocean/osrs/tools/README.md
     git commit -m "add tools README: visual asset pipeline documentation"
 
 ---
@@ -214,12 +214,12 @@ All 8 test suites: combat_math, item_effects, special_attacks, player_combat, co
 
 - [ ] **Step 3: Verify zulrah assets are valid**
 
-    ls -la pufferlib/ocean/osrs/data/zulrah.models pufferlib/ocean/osrs/data/zulrah.anims
+    ls -la ocean/osrs/data/zulrah.models ocean/osrs/data/zulrah.anims
 
 - [ ] **Step 4: Verify inferno assets are untouched**
 
-    git diff pufferlib/ocean/osrs/data/inferno_npcs.models
-    git diff pufferlib/ocean/osrs/data/inferno_npcs.anims
-    git diff pufferlib/ocean/osrs/data/npc_models.h
+    git diff ocean/osrs/data/inferno_npcs.models
+    git diff ocean/osrs/data/inferno_npcs.anims
+    git diff ocean/osrs/data/npc_models.h
 
 Expected: no changes to inferno files.

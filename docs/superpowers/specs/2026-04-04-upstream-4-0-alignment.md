@@ -12,8 +12,8 @@ cherry-picking upstream changes harder and complicates the OSRS env review for 4
 ## directory moves
 
 ```
-pufferlib/ocean/*              → ocean/*          (all envs)
-pufferlib/src/*                → src/*            (CUDA + Metal files)
+ocean/*              → ocean/*          (all envs)
+src/*                → src/*            (CUDA + Metal files)
 pufferlib/config/metal/        → config/metal/    (training configs)
 ```
 

@@ -6,13 +6,13 @@
  * double accuracy, and equipment bonus summation against osrs-dps-calc
  * reference values.
  *
- * Build: cc -std=c11 -O0 -g -I. -o test_player_combat pufferlib/ocean/osrs/tests/test_player_combat.c -lm
+ * Build: cc -std=c11 -O0 -g -I. -o test_player_combat ocean/osrs/tests/test_player_combat.c -lm
  */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
-#include "pufferlib/ocean/osrs/osrs_combat.h"
+#include "ocean/osrs/osrs_combat.h"
 
 static int total_tests = 0;
 static int passed_tests = 0;

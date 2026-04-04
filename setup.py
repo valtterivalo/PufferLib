@@ -267,7 +267,7 @@ extension_kwargs = dict(
 c_extensions = []
 c_extension_paths = []
 if not NO_OCEAN:
-    c_extension_paths = glob.glob("pufferlib/ocean/**/binding.c", recursive=True)
+    c_extension_paths = glob.glob("ocean/**/binding.c", recursive=True)
     c_extensions = [
         Extension(
             path.rstrip(".c").replace("/", "."),
@@ -284,7 +284,7 @@ if not NO_OCEAN:
             print(f"Adding {c_ext.name} to extra objects")
             c_ext.extra_objects.append(f"{BOX2D_NAME}/libbox2d.a")
             # TODO: Figure out why this is necessary for some users
-            impulse_include = "pufferlib/ocean/impulse_wars/include"
+            impulse_include = "ocean/impulse_wars/include"
             if impulse_include not in c_ext.include_dirs:
                 c_ext.include_dirs.append(impulse_include)
 
@@ -333,7 +333,7 @@ class ProfileTorchBuildExt(build_ext):
             "-DUSE_TORCH",
             "-DPUFFERLIB_TORCH",
             "-I.",
-            "-Ipufferlib/src",
+            "-Isrc",
             "-Xcompiler",
             "-fPIC",
         ]
@@ -416,14 +416,14 @@ class ProfilerBuildExt(build_ext):
                 "-DUSE_TORCH",
                 "-DPUFFERLIB_TORCH",
                 "-I.",
-                "-Ipufferlib/src",
+                "-Isrc",
             ]
             if precision_flag:
                 cmd.append(precision_flag)
 
             # Optional static env for envspeed profiling
             if self.env:
-                static_lib = f"pufferlib/src/libstatic_{self.env}.a"
+                static_lib = f"src/libstatic_{self.env}.a"
                 if not os.path.exists(static_lib):
                     raise RuntimeError(
                         f"Static library not found: {static_lib}\nBuild it first with: python setup.py build_{self.env}"
@@ -459,7 +459,7 @@ class ProfilerBuildExt(build_ext):
             cmd += ["-Xlinker", "--unresolved-symbols=ignore-in-shared-libs"]
             cmd += ["-Xlinker", "--allow-multiple-definition"]
             if self.env:
-                static_lib = f"pufferlib/src/libstatic_{self.env}.a"
+                static_lib = f"src/libstatic_{self.env}.a"
                 cmd += [static_lib, f"./{RAYLIB_NAME}/lib/libraylib.a", "-lGL"]
             cmd += ["-lomp5"]
             cmd += ["-o", out]
@@ -472,14 +472,14 @@ class ProfilerBuildExt(build_ext):
 cmdclass["build_profiler"] = ProfilerBuildExt
 
 # Static env builds: clang-compiled env + gcc/nvcc torch extension
-# Discover envs by listing folders in pufferlib/ocean
-OCEAN_DIR = "pufferlib/ocean"
+# Discover envs by listing folders in ocean
+OCEAN_DIR = "ocean"
 STATIC_ENVS = [
     name
     for name in os.listdir(OCEAN_DIR)
     if os.path.isdir(os.path.join(OCEAN_DIR, name))
     and not name.startswith("__")
-    and os.path.exists(f"pufferlib/ocean/{name}/binding.c")
+    and os.path.exists(f"ocean/{name}/binding.c")
 ]
 
 
@@ -487,11 +487,11 @@ def _build_static_lib(env_name, force=False):
     """Build a static .a library for a given env using clang."""
     import subprocess
 
-    env_binding_src = f"pufferlib/ocean/{env_name}/binding.c"
-    static_lib = f"pufferlib/src/libstatic_{env_name}.a"
-    static_obj = f"pufferlib/src/libstatic_{env_name}.o"
+    env_binding_src = f"ocean/{env_name}/binding.c"
+    static_lib = f"src/libstatic_{env_name}.a"
+    static_obj = f"src/libstatic_{env_name}.o"
 
-    env_deps = [env_binding_src, "pufferlib/src/vecenv.h"]
+    env_deps = [env_binding_src, "src/vecenv.h"]
     if not force and not _needs_rebuild(static_lib, env_deps):
         print(f"Static env up to date: {static_lib}")
         return static_lib
@@ -502,9 +502,9 @@ def _build_static_lib(env_name, force=False):
         "-O2",
         "-DNDEBUG",
         "-I.",
-        "-Ipufferlib/src",
-        f"-Ipufferlib/ocean/{env_name}",
-        "-Ipufferlib/ocean/osrs",
+        "-Isrc",
+        f"-Iocean/{env_name}",
+        "-Iocean/osrs",
         f"-I./{RAYLIB_NAME}/include",
         "-DPLATFORM_DESKTOP",
         "-fno-semantic-interposition",
@@ -546,11 +546,11 @@ def _needs_rebuild(output, sources):
 
 # Headers that affect the single compilation unit (for incremental builds)
 _BINDINGS_CU_DEPS = [
-    "pufferlib/src/bindings.cu",
-    "pufferlib/src/pufferlib.cu",
-    "pufferlib/src/models.cu",
-    "pufferlib/src/kernels.cu",
-    "pufferlib/src/vecenv.h",
+    "src/bindings.cu",
+    "src/pufferlib.cu",
+    "src/models.cu",
+    "src/kernels.cu",
+    "src/vecenv.h",
 ]
 
 
@@ -564,8 +564,8 @@ def _build_notorch_C(static_lib=None, force=False, precision="bf16"):
     ext_suffix = sysconfig.get_config_var("EXT_SUFFIX")
     output = f"pufferlib/_C{ext_suffix}"
 
-    bindings_cu = "pufferlib/src/bindings.cu"
-    bindings_o = "pufferlib/src/bindings.o"
+    bindings_cu = "src/bindings.cu"
+    bindings_o = "src/bindings.o"
 
     precision_flag = "-DPRECISION_FLOAT" if precision == "float" else ""
 
@@ -589,7 +589,7 @@ def _build_notorch_C(static_lib=None, force=False, precision="bf16"):
         "-Xcompiler=-DPLATFORM_DESKTOP",
         "-std=c++17",
         "-I.",
-        "-Ipufferlib/src",
+        "-Isrc",
         f"-I{python_include}",
         f"-I{pybind_include}",
         f"-I{numpy.get_include()}",
@@ -648,18 +648,18 @@ def _build_notorch_C(static_lib=None, force=False, precision="bf16"):
 # metal_bindings.mm includes metal_pufferlib.mm which includes metal_kernels.mm
 # metal_platform.mm is standalone (Metal infra, GEMM, CUDA compat stubs)
 _METAL_SOURCES = [
-    "pufferlib/src/metal_bindings.mm",
-    "pufferlib/src/metal_platform.mm",
+    "src/metal_bindings.mm",
+    "src/metal_platform.mm",
 ]
 
 # All files that affect the Metal build (for incremental rebuild checks)
 _METAL_BINDINGS_DEPS = _METAL_SOURCES + [
-    "pufferlib/src/metal_pufferlib.mm",
-    "pufferlib/src/metal_kernels.mm",
-    "pufferlib/src/metal_shader_src.h",
-    "pufferlib/src/metal_platform.h",
-    "pufferlib/src/puf_types.h",
-    "pufferlib/src/vecenv.h",
+    "src/metal_pufferlib.mm",
+    "src/metal_kernels.mm",
+    "src/metal_shader_src.h",
+    "src/metal_platform.h",
+    "src/puf_types.h",
+    "src/vecenv.h",
 ]
 
 METAL_FRAMEWORKS = [
@@ -711,7 +711,7 @@ def _build_metal_C(static_lib=None, force=False):
             "-DNPY_NO_DEPRECATED_API=NPY_1_7_API_VERSION",
             "-DPLATFORM_DESKTOP",
             "-I.",
-            "-Ipufferlib/src",
+            "-Isrc",
             f"-I{python_include}",
             f"-I{pybind_include}",
             f"-I{numpy.get_include()}",
@@ -904,7 +904,7 @@ if not NO_TRAIN:
 
 setup(
     version="3.0.0",
-    packages=find_namespace_packages() + find_packages() + c_extension_paths + ["pufferlib/src"],
+    packages=find_namespace_packages() + find_packages() + c_extension_paths + ["src"],
     package_data={"pufferlib": [RAYLIB_NAME + "/lib/libraylib.a"]},
     include_package_data=True,
     install_requires=install_requires,

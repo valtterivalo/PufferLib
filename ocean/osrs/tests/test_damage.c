@@ -6,14 +6,14 @@
  * BUILD:
  *   cd pufferlib-metal
  *   cc -std=c11 -O0 -g -I. -o test_damage \
- *       pufferlib/ocean/osrs/tests/test_damage.c -lm
+ *       ocean/osrs/tests/test_damage.c -lm
  *   ./test_damage
  *
  * REFERENCE FILES:
- *   pufferlib/ocean/osrs/osrs_damage.h — shared damage pipeline
- *   pufferlib/ocean/osrs/osrs_combat.h — osrs_prayer_reduce_damage
- *   pufferlib/ocean/osrs/osrs_pvp_combat.h:570-691 — original PvP apply_damage
- *   pufferlib/ocean/osrs/encounters/encounter_zulrah.h:651-675 — original zulrah recoil
+ *   ocean/osrs/osrs_damage.h — shared damage pipeline
+ *   ocean/osrs/osrs_combat.h — osrs_prayer_reduce_damage
+ *   ocean/osrs/osrs_pvp_combat.h:570-691 — original PvP apply_damage
+ *   ocean/osrs/encounters/encounter_zulrah.h:651-675 — original zulrah recoil
  */
 
 #include <stdio.h>
@@ -21,7 +21,7 @@
 #include <math.h>
 #include <string.h>
 
-#include "pufferlib/ocean/osrs/osrs_damage.h"
+#include "ocean/osrs/osrs_damage.h"
 
 /* ======================================================================== */
 /* test harness                                                              */

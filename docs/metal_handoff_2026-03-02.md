@@ -35,8 +35,8 @@ see `docs/metal_breakout_reference.md` for the exact numbers and command shape.
 
 ## in-progress experimental changes that were reverted before this handoff
 - uncommitted prioritized replay cdf/binary-search sampling patch in:
-  - `pufferlib/src/metal_shader_src.h`
-  - `pufferlib/src/metal_kernels.mm`
+  - `src/metal_shader_src.h`
+  - `src/metal_kernels.mm`
 - this patch was not validated enough to hand off as stable, so it was reverted.
 
 ## recommended immediate next pass

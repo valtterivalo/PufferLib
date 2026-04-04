@@ -10,14 +10,14 @@
  * BUILD:
  *   cd pufferlib-metal
  *   cc -std=c11 -O0 -g -I. -o test_special_attacks \
- *       pufferlib/ocean/osrs/tests/test_special_attacks.c -lm
+ *       ocean/osrs/tests/test_special_attacks.c -lm
  *   ./test_special_attacks
  *
  * REFERENCE FILES:
  *   .refs/osrs-dps-calc/src/lib/PlayerVsNPCCalc.ts   -- spec accuracy/damage mults
  *   .refs/osrs-dps-calc/src/lib/dists/claws.ts        -- dragon claws cascade dist
- *   pufferlib/ocean/osrs/osrs_pvp_combat.h            -- our spec implementations
- *   pufferlib/ocean/osrs/osrs_combat.h                -- blowpipe spec
+ *   ocean/osrs/osrs_pvp_combat.h            -- our spec implementations
+ *   ocean/osrs/osrs_combat.h                -- blowpipe spec
  */
 
 #include <stdio.h>
@@ -25,9 +25,9 @@
 #include <math.h>
 #include <string.h>
 
-#include "pufferlib/ocean/osrs/osrs_pvp_combat.h"
-#include "pufferlib/ocean/osrs/osrs_combat.h"
-#include "pufferlib/ocean/osrs/osrs_special_attacks.h"
+#include "ocean/osrs/osrs_pvp_combat.h"
+#include "ocean/osrs/osrs_combat.h"
+#include "ocean/osrs/osrs_special_attacks.h"
 
 /* ======================================================================== */
 /* test harness (same pattern as test_combat_math.c)                        */
