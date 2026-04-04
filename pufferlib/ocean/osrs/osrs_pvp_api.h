@@ -223,7 +223,7 @@ static void init_player(Player* p) {
  *
  * @param env Environment
  */
-static void set_fight_positions(OsrsPvp* env) {
+static void set_fight_positions(OsrsEnv* env) {
     if (env->has_rng_seed) {
         int x0 = FIGHT_AREA_BASE_X;
         int y0 = FIGHT_AREA_BASE_Y;
@@ -286,7 +286,7 @@ static void set_fight_positions(OsrsPvp* env) {
  *
  * @param env Environment to initialize
  */
-void pvp_init(OsrsPvp* env) {
+void pvp_init(OsrsEnv* env) {
     env->observations = env->_obs_buf;
     env->actions = env->_acts_buf;
     env->rewards = env->_rews_buf;
@@ -322,7 +322,7 @@ void pvp_init(OsrsPvp* env) {
  * When OSRS_PVP_VISUAL is defined, osrs_pvp_render.h provides the real implementation.
  */
 #ifndef OSRS_PVP_VISUAL
-void pvp_render(OsrsPvp* env) {
+void pvp_render(OsrsEnv* env) {
     (void)env;
 }
 #endif
@@ -335,7 +335,7 @@ void pvp_render(OsrsPvp* env) {
  *
  * @param env Environment to reset
  */
-void pvp_reset(OsrsPvp* env) {
+void pvp_reset(OsrsEnv* env) {
     if (env->has_rng_seed) {
         if (env->rng_seed == 0) {
             fprintf(stderr, "Error: seed must be non-zero (use seed=1 or higher in reset())\n");
@@ -453,7 +453,7 @@ void pvp_reset(OsrsPvp* env) {
  *
  * @param env Environment
  */
-void pvp_step(OsrsPvp* env) {
+void pvp_step(OsrsEnv* env) {
     memset(env->rewards, 0, NUM_AGENTS * sizeof(float));
     memset(env->terminals, 0, NUM_AGENTS);
 
@@ -756,7 +756,7 @@ void pvp_step(OsrsPvp* env) {
  * @param env  Environment
  * @param seed Seed value (must be non-zero)
  */
-void pvp_seed(OsrsPvp* env, uint32_t seed) {
+void pvp_seed(OsrsEnv* env, uint32_t seed) {
     env->rng_seed = seed;
     env->has_rng_seed = 1;
 }
@@ -768,7 +768,7 @@ void pvp_seed(OsrsPvp* env, uint32_t seed) {
  *
  * @param env Environment
  */
-void pvp_close(OsrsPvp* env) {
+void pvp_close(OsrsEnv* env) {
     (void)env;
 }
 

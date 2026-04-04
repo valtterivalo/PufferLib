@@ -15,7 +15,7 @@
 #include "encounters/encounter_nh_pvp.h"
 #include "encounters/encounter_zulrah.h"
 
-#define Env OsrsPvp
+#define Env OsrsEnv
 
 /* shared collision map: loaded once, read-only, shared across all envs */
 static CollisionMap* g_collision_map = NULL;

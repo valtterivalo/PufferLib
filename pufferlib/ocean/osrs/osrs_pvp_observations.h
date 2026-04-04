@@ -130,7 +130,7 @@ static inline int is_protected_prayer_action_available(Player* p, Player* target
 }
 
 /** Check if smite prayer is available (not in LMS). */
-static inline int is_smite_available(OsrsPvp* env, Player* p) {
+static inline int is_smite_available(OsrsEnv* env, Player* p) {
     if (!ALLOW_SMITE || env->is_lms) {
         return 0;
     }
@@ -141,7 +141,7 @@ static inline int is_smite_available(OsrsPvp* env, Player* p) {
 }
 
 /** Check if redemption prayer is available (no supplies left). */
-static inline int is_redemption_available(OsrsPvp* env, Player* p, Player* target) {
+static inline int is_redemption_available(OsrsEnv* env, Player* p, Player* target) {
     if (!ALLOW_REDEMPTION || env->is_lms) {
         return 0;
     }
@@ -296,7 +296,7 @@ static void ensure_obs_norm_initialized(void) {
  *
  * Output layout: [normalized_obs(334), action_mask_as_float(40)] = 374 floats.
  */
-static void ocean_write_obs(OsrsPvp* env) {
+static void ocean_write_obs(OsrsEnv* env) {
     ensure_obs_norm_initialized();
     float* dst = env->ocean_obs;
     float* src = env->observations;  // agent 0 obs (internal buffer)
@@ -319,7 +319,7 @@ static void ocean_write_obs(OsrsPvp* env) {
  * Mirrors ocean_write_obs() but reads from agent 1's internal buffer offsets.
  * Only called when ocean_obs_p1 is set (self-play enabled).
  */
-static void ocean_write_obs_p1(OsrsPvp* env) {
+static void ocean_write_obs_p1(OsrsEnv* env) {
     ensure_obs_norm_initialized();
     float* dst = env->ocean_obs_p1;
     float* src = env->observations + SLOT_NUM_OBSERVATIONS;  // agent 1 offset
@@ -350,7 +350,7 @@ static void ocean_write_obs_p1(OsrsPvp* env) {
  *   [326]     Voidwaker magic damage flag
  *   [327-333] Reward shaping signals
  */
-static void generate_slot_observations(OsrsPvp* env, int agent_idx) {
+static void generate_slot_observations(OsrsEnv* env, int agent_idx) {
     Player* p = &env->players[agent_idx];
     Player* t = &env->players[1 - agent_idx];
 
@@ -671,7 +671,7 @@ static void generate_slot_observations(OsrsPvp* env, int agent_idx) {
  * Writes ACTION_MASK_SIZE (40) bytes: one per action value across all heads.
  * mask[i] = 1 if action is valid, 0 if invalid.
  */
-static void compute_action_masks(OsrsPvp* env, int agent_idx) {
+static void compute_action_masks(OsrsEnv* env, int agent_idx) {
     Player* p = &env->players[agent_idx];
     Player* t = &env->players[1 - agent_idx];
 

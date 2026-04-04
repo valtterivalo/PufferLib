@@ -4,7 +4,7 @@
  *
  * Bridges vecenv.h's contract (double actions, float terminals) with the
  * Zulrah encounter's vtable interface. Uses the encounter system (EncounterDef)
- * rather than OsrsPvp directly.
+ * rather than OsrsEnv directly.
  */
 
 #include <stdlib.h>

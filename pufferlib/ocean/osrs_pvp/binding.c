@@ -9,10 +9,10 @@
 
 #include "osrs_env.h"
 
-/* Wrapper struct: vecenv-compatible fields at top + embedded OsrsPvp.
+/* Wrapper struct: vecenv-compatible fields at top + embedded OsrsEnv.
  * vecenv.h's create_static_vec assigns to env->observations, env->actions,
  * env->rewards, env->terminals directly. These fields must match vecenv's
- * expected types (void*, double*, float*, float*). The embedded OsrsPvp has
+ * expected types (void*, double*, float*, float*). The embedded OsrsEnv has
  * its own identically-named fields with different types — pvp_init sets those
  * to internal inline buffers, so there's no conflict. */
 typedef struct {
@@ -24,7 +24,7 @@ typedef struct {
     int rng;
     Log log;
 
-    OsrsPvp pvp;
+    OsrsEnv pvp;
 
     /* staging buffers for type conversion */
     int ocean_acts_staging[NUM_ACTION_HEADS];

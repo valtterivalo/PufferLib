@@ -148,7 +148,7 @@ static inline int opp_get_off_prayer_mask(Player* self, Player* target) {
     return mask;
 }
 
-static inline int opp_pick_from_mask(OsrsPvp* env, int mask) {
+static inline int opp_pick_from_mask(OsrsEnv* env, int mask) {
     /* Count set bits and pick random */
     int choices[3];
     int count = 0;
@@ -240,13 +240,13 @@ static const OpponentRandRanges OPP_RAND_RANGES[OPP_RANGE_KITER + 1] = {
 
 #undef RR
 
-static inline float rand_range(OsrsPvp* env, RandRange r) {
+static inline float rand_range(OsrsEnv* env, RandRange r) {
     float v = r.base + (rand_float(env) * 2.0f - 1.0f) * r.variance;
     return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
 }
 
 /* Tick-level action delay: skip prayer/attack/movement this tick (keep eating) */
-static inline int opp_should_skip_offensive(OsrsPvp* env, OpponentState* opp) {
+static inline int opp_should_skip_offensive(OsrsEnv* env, OpponentState* opp) {
     return rand_float(env) < opp->action_delay_chance;
 }
 
@@ -255,7 +255,7 @@ static inline int opp_should_skip_offensive(OsrsPvp* env, OpponentState* opp) {
  * Uses style_bias[3] (mage/ranged/melee weights) to sample from the off-prayer mask.
  * Falls back to uniform random if no bias styles are available off-prayer.
  */
-static inline int opp_pick_off_prayer_style_biased(OsrsPvp* env, OpponentState* opp,
+static inline int opp_pick_off_prayer_style_biased(OsrsEnv* env, OpponentState* opp,
                                                     Player* self, Player* target) {
     int off_mask = opp_get_off_prayer_mask(self, target);
     float weights[3] = {0};
@@ -278,7 +278,7 @@ static inline int opp_pick_off_prayer_style_biased(OsrsPvp* env, OpponentState* 
 }
 
 /* Prayer mistake: small chance to pick random prayer instead of optimal */
-static inline int opp_apply_prayer_mistake(OsrsPvp* env, OpponentState* opp, int correct_prayer) {
+static inline int opp_apply_prayer_mistake(OsrsEnv* env, OpponentState* opp, int correct_prayer) {
     if (rand_float(env) < opp->mistake_rate) {
         int prayers[] = {OVERHEAD_MELEE, OVERHEAD_RANGED, OVERHEAD_MAGE};
         return prayers[rand_int(env, 3)];
@@ -317,7 +317,7 @@ static const float UNPREDICTABLE_OT_ACTION_CUM[] = {0.90f, 0.98f, 1.00f};
  * ========================================================================= */
 
 /* Weighted delay sampling from cumulative weight array */
-static inline int opp_sample_delay(OsrsPvp* env, const float* cum_weights, int num_weights) {
+static inline int opp_sample_delay(OsrsEnv* env, const float* cum_weights, int num_weights) {
     float r = rand_float(env);
     for (int i = 0; i < num_weights; i++) {
         if (r < cum_weights[i]) return i;
@@ -357,7 +357,7 @@ static inline int opp_get_mage_attack(Player* self, Player* target) {
 /* (opp_apply_tank_gear is defined above as inline loadout assignment) */
 
 /* Boost/restore potion logic (before attack, used by onetick+ opponents) */
-static void opp_apply_boost_potion(OsrsPvp* env, OpponentState* opp, int* actions,
+static void opp_apply_boost_potion(OsrsEnv* env, OpponentState* opp, int* actions,
                                     Player* self, int attack_style, int potion_used) {
     if (potion_used) return;
     if (opp->potion_cooldown > 0) return;
@@ -394,7 +394,7 @@ static inline int opp_check_eating_queued(int* actions) {
 }
 
 /* Improved-style consumable logic. Returns 1 if potion was used (for restore/boost tracking) */
-static int opp_apply_consumables(OsrsPvp* env, OpponentState* opp, int* actions,
+static int opp_apply_consumables(OsrsEnv* env, OpponentState* opp, int* actions,
                                   Player* self) {
     float hp_pct = (float)self->current_hitpoints / (float)self->base_hitpoints;
     float prayer_pct = (float)self->current_prayer / (float)self->base_prayer;
@@ -467,7 +467,7 @@ static inline int opp_process_pending_prayer(OpponentState* opp, int* actions) {
 /* Handle prayer switch with delay for unpredictable policies.
  * Detects target gear changes, samples delay, stores in pending state.
  * include_spec: if 1, also detect spec weapon (onetick/unpredictable_onetick). */
-static void opp_handle_delayed_prayer(OsrsPvp* env, OpponentState* opp, int* actions,
+static void opp_handle_delayed_prayer(OsrsEnv* env, OpponentState* opp, int* actions,
                                        Player* self, Player* target,
                                        const float* cum_weights, int cum_len,
                                        float wrong_prayer_prob, int include_spec) {
@@ -512,14 +512,14 @@ static void opp_handle_delayed_prayer(OsrsPvp* env, OpponentState* opp, int* act
  * ========================================================================= */
 
 /* --- TrueRandom: random value per action head --- */
-static void opp_true_random(OsrsPvp* env, int* actions) {
+static void opp_true_random(OsrsEnv* env, int* actions) {
     for (int i = 0; i < NUM_ACTION_HEADS; i++) {
         actions[i] = rand_int(env, ACTION_HEAD_DIMS[i]);
     }
 }
 
 /* --- Panicking: fixed prayer, fixed style, 30% attack chance, panic eat --- */
-static void opp_panicking(OsrsPvp* env, OpponentState* opp, int* actions) {
+static void opp_panicking(OsrsEnv* env, OpponentState* opp, int* actions) {
     Player* self = &env->players[1];
     float hp_pct = (float)self->current_hitpoints / (float)self->base_hitpoints;
 
@@ -562,7 +562,7 @@ static void opp_panicking(OsrsPvp* env, OpponentState* opp, int* actions) {
 }
 
 /* --- WeakRandom: random style, unreliable eating (50% skip) --- */
-static void opp_weak_random(OsrsPvp* env, OpponentState* opp, int* actions) {
+static void opp_weak_random(OsrsEnv* env, OpponentState* opp, int* actions) {
     Player* self = &env->players[1];
     float hp_pct = (float)self->current_hitpoints / (float)self->base_hitpoints;
 
@@ -604,7 +604,7 @@ static void opp_weak_random(OsrsPvp* env, OpponentState* opp, int* actions) {
 }
 
 /* --- SemiRandom: reliable eating at 30%, random everything else --- */
-static void opp_semi_random(OsrsPvp* env, OpponentState* opp, int* actions) {
+static void opp_semi_random(OsrsEnv* env, OpponentState* opp, int* actions) {
     Player* self = &env->players[1];
     float hp_pct = (float)self->current_hitpoints / (float)self->base_hitpoints;
 
@@ -646,7 +646,7 @@ static void opp_semi_random(OsrsPvp* env, OpponentState* opp, int* actions) {
 }
 
 /* --- StickyPrayer: sticky prayer (~12 tick avg), simple eating --- */
-static void opp_sticky_prayer(OsrsPvp* env, OpponentState* opp, int* actions) {
+static void opp_sticky_prayer(OsrsEnv* env, OpponentState* opp, int* actions) {
     Player* self = &env->players[1];
     float hp_pct = (float)self->current_hitpoints / (float)self->base_hitpoints;
 
@@ -694,7 +694,7 @@ static void opp_sticky_prayer(OsrsPvp* env, OpponentState* opp, int* actions) {
 }
 
 /* --- Beginner: sticky prayer, multi-threshold eating, random spec --- */
-static void opp_random_eater(OsrsPvp* env, OpponentState* opp, int* actions) {
+static void opp_random_eater(OsrsEnv* env, OpponentState* opp, int* actions) {
     Player* self = &env->players[1];
     Player* target = &env->players[0];
     float hp_pct = (float)self->current_hitpoints / (float)self->base_hitpoints;
@@ -779,7 +779,7 @@ static void opp_random_eater(OsrsPvp* env, OpponentState* opp, int* actions) {
 }
 
 /* --- BetterRandom: multi-threshold eating, random prayers, random spec --- */
-static void opp_prayer_rookie(OsrsPvp* env, OpponentState* opp, int* actions) {
+static void opp_prayer_rookie(OsrsEnv* env, OpponentState* opp, int* actions) {
     Player* self = &env->players[1];
     Player* target = &env->players[0];
     float hp_pct = (float)self->current_hitpoints / (float)self->base_hitpoints;
@@ -851,7 +851,7 @@ static void opp_prayer_rookie(OsrsPvp* env, OpponentState* opp, int* actions) {
 
 /* --- Improved: full NH (correct prayer, off-prayer attacks, combo eating,
        spec timing, offensive prayer, movement) --- */
-static void opp_improved(OsrsPvp* env, OpponentState* opp, int* actions) {
+static void opp_improved(OsrsEnv* env, OpponentState* opp, int* actions) {
     Player* self = &env->players[1];
     Player* target = &env->players[0];
     float hp_pct = (float)self->current_hitpoints / (float)self->base_hitpoints;
@@ -993,7 +993,7 @@ static void opp_improved(OsrsPvp* env, OpponentState* opp, int* actions) {
  * prayers, no movement. Just consistent attacking and sometimes-correct prayer.
  * ========================================================================= */
 
-static void opp_novice_nh(OsrsPvp* env, OpponentState* opp, int* actions) {
+static void opp_novice_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
     Player* self = &env->players[1];
     Player* target = &env->players[0];
     float hp_pct = (float)self->current_hitpoints / (float)self->base_hitpoints;
@@ -1104,7 +1104,7 @@ static void opp_novice_nh(OsrsPvp* env, OpponentState* opp, int* actions) {
  * prayer, random 30% spec, drain restore. Bridges novice_nh to competent_nh.
  * ========================================================================= */
 
-static void opp_apprentice_nh(OsrsPvp* env, OpponentState* opp, int* actions) {
+static void opp_apprentice_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
     Player* self = &env->players[1];
     Player* target = &env->players[0];
     float hp_pct = (float)self->current_hitpoints / (float)self->base_hitpoints;
@@ -1217,7 +1217,7 @@ static void opp_apprentice_nh(OsrsPvp* env, OpponentState* opp, int* actions) {
  * prayers, 50% conditional spec. Bridges apprentice_nh to intermediate_nh.
  * ========================================================================= */
 
-static void opp_competent_nh(OsrsPvp* env, OpponentState* opp, int* actions) {
+static void opp_competent_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
     Player* self = &env->players[1];
     Player* target = &env->players[0];
     float hp_pct = (float)self->current_hitpoints / (float)self->base_hitpoints;
@@ -1354,7 +1354,7 @@ static void opp_competent_nh(OsrsPvp* env, OpponentState* opp, int* actions) {
  * to improved.
  * ========================================================================= */
 
-static void opp_intermediate_nh(OsrsPvp* env, OpponentState* opp, int* actions) {
+static void opp_intermediate_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
     Player* self = &env->players[1];
     Player* target = &env->players[0];
     float hp_pct = (float)self->current_hitpoints / (float)self->base_hitpoints;
@@ -1490,7 +1490,7 @@ static void opp_intermediate_nh(OsrsPvp* env, OpponentState* opp, int* actions) 
  * Bridges intermediate_nh to improved.
  * ========================================================================= */
 
-static void opp_advanced_nh(OsrsPvp* env, OpponentState* opp, int* actions) {
+static void opp_advanced_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
     Player* self = &env->players[1];
     Player* target = &env->players[0];
     float hp_pct = (float)self->current_hitpoints / (float)self->base_hitpoints;
@@ -1631,7 +1631,7 @@ static void opp_advanced_nh(OsrsPvp* env, OpponentState* opp, int* actions) {
  * and expert_nh (50% step under).
  * ========================================================================= */
 
-static void opp_proficient_nh(OsrsPvp* env, OpponentState* opp, int* actions) {
+static void opp_proficient_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
     Player* self = &env->players[1];
     Player* target = &env->players[0];
     float hp_pct = (float)self->current_hitpoints / (float)self->base_hitpoints;
@@ -1775,7 +1775,7 @@ static void opp_proficient_nh(OsrsPvp* env, OpponentState* opp, int* actions) {
  * parameters between advanced_nh and improved.
  * ========================================================================= */
 
-static void opp_expert_nh(OsrsPvp* env, OpponentState* opp, int* actions) {
+static void opp_expert_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
     Player* self = &env->players[1];
     Player* target = &env->players[0];
     float hp_pct = (float)self->current_hitpoints / (float)self->base_hitpoints;
@@ -1918,7 +1918,7 @@ static void opp_expert_nh(OsrsPvp* env, OpponentState* opp, int* actions) {
  * Fake switches, tank gear, smart spec, boost pots, 1-tick attacks.
  * ========================================================================= */
 
-static void opp_onetick(OsrsPvp* env, OpponentState* opp, int* actions) {
+static void opp_onetick(OsrsEnv* env, OpponentState* opp, int* actions) {
     Player* self = &env->players[1];
     Player* target = &env->players[0];
     float hp_pct = (float)self->current_hitpoints / (float)self->base_hitpoints;
@@ -2133,7 +2133,7 @@ static void opp_onetick(OsrsPvp* env, OpponentState* opp, int* actions) {
  * Improved with prayer delays, wrong prayer chance, attack delays.
  * ========================================================================= */
 
-static void opp_unpredictable_improved(OsrsPvp* env, OpponentState* opp, int* actions) {
+static void opp_unpredictable_improved(OsrsEnv* env, OpponentState* opp, int* actions) {
     Player* self = &env->players[1];
     Player* target = &env->players[0];
     float hp_pct = (float)self->current_hitpoints / (float)self->base_hitpoints;
@@ -2238,7 +2238,7 @@ static void opp_unpredictable_improved(OsrsPvp* env, OpponentState* opp, int* ac
  * Onetick + prayer delays + fake execution failures + wrong prediction.
  * ========================================================================= */
 
-static void opp_unpredictable_onetick(OsrsPvp* env, OpponentState* opp, int* actions) {
+static void opp_unpredictable_onetick(OsrsEnv* env, OpponentState* opp, int* actions) {
     Player* self = &env->players[1];
     Player* target = &env->players[0];
     float hp_pct = (float)self->current_hitpoints / (float)self->base_hitpoints;
@@ -2439,7 +2439,7 @@ static void opp_unpredictable_onetick(OsrsPvp* env, OpponentState* opp, int* act
  * Used by boss opponents (master_nh, savant_nh) for "reading" ability.
  * ========================================================================= */
 
-static void opp_read_agent_action(OsrsPvp* env, OpponentState* opp) {
+static void opp_read_agent_action(OsrsEnv* env, OpponentState* opp) {
     opp->has_read_this_tick = 0;
     opp->read_agent_style = ATTACK_STYLE_NONE;
     opp->read_agent_prayer = PRAYER_NONE;
@@ -2519,7 +2519,7 @@ static inline int opp_style_off_read_prayer(OpponentState* opp, int style) {
  * When read succeeds: prays correctly against incoming attack, attacks off-prayer.
  * ========================================================================= */
 
-static void opp_master_nh(OsrsPvp* env, OpponentState* opp, int* actions) {
+static void opp_master_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
     Player* self = &env->players[1];
     Player* target = &env->players[0];
     float hp_pct = (float)self->current_hitpoints / (float)self->base_hitpoints;
@@ -2737,7 +2737,7 @@ static void opp_master_nh(OsrsPvp* env, OpponentState* opp, int* actions) {
  * Same as master_nh but with higher read chance.
  * ========================================================================= */
 
-static void opp_savant_nh(OsrsPvp* env, OpponentState* opp, int* actions) {
+static void opp_savant_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
     /* Savant uses the same logic as master, just with higher read_chance (set in reset) */
     opp_master_nh(env, opp, actions);
 }
@@ -2747,7 +2747,7 @@ static void opp_savant_nh(OsrsPvp* env, OpponentState* opp, int* actions) {
  * Same as master/savant but with 50% read chance - extremely difficult.
  * ========================================================================= */
 
-static void opp_nightmare_nh(OsrsPvp* env, OpponentState* opp, int* actions) {
+static void opp_nightmare_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
     /* Nightmare uses the same logic as master, just with 50% read_chance (set in reset) */
     opp_master_nh(env, opp, actions);
 }
@@ -2757,7 +2757,7 @@ static void opp_nightmare_nh(OsrsPvp* env, OpponentState* opp, int* actions) {
  * Expert-level prayer/eating, veng on cooldown, melee spec only.
  * ========================================================================= */
 
-static void opp_veng_fighter(OsrsPvp* env, OpponentState* opp, int* actions) {
+static void opp_veng_fighter(OsrsEnv* env, OpponentState* opp, int* actions) {
     Player* self = &env->players[1];
     Player* target = &env->players[0];
     float hp_pct = (float)self->current_hitpoints / (float)self->base_hitpoints;
@@ -2880,7 +2880,7 @@ static void opp_veng_fighter(OsrsPvp* env, OpponentState* opp, int* actions) {
  * Farcast-5, reduced food reliance, blood barrage heavy when damaged.
  * ========================================================================= */
 
-static void opp_blood_healer(OsrsPvp* env, OpponentState* opp, int* actions) {
+static void opp_blood_healer(OsrsEnv* env, OpponentState* opp, int* actions) {
     Player* self = &env->players[1];
     Player* target = &env->players[0];
     float hp_pct = (float)self->current_hitpoints / (float)self->base_hitpoints;
@@ -3030,7 +3030,7 @@ static void opp_blood_healer(OsrsPvp* env, OpponentState* opp, int* actions) {
 #define COMBO_IDLE       0
 #define COMBO_SPEC_FIRED 1
 
-static void opp_gmaul_combo(OsrsPvp* env, OpponentState* opp, int* actions) {
+static void opp_gmaul_combo(OsrsEnv* env, OpponentState* opp, int* actions) {
     Player* self = &env->players[1];
     Player* target = &env->players[0];
     float hp_pct = (float)self->current_hitpoints / (float)self->base_hitpoints;
@@ -3199,7 +3199,7 @@ static void opp_gmaul_combo(OsrsPvp* env, OpponentState* opp, int* actions) {
  * Maintains farcast-5, ice barrage to freeze, ranged primary (~60-70%).
  * ========================================================================= */
 
-static void opp_range_kiter(OsrsPvp* env, OpponentState* opp, int* actions) {
+static void opp_range_kiter(OsrsEnv* env, OpponentState* opp, int* actions) {
     Player* self = &env->players[1];
     Player* target = &env->players[0];
     float hp_pct = (float)self->current_hitpoints / (float)self->base_hitpoints;
@@ -3399,7 +3399,7 @@ static const int MIXED_HARD_BALANCED_CUM_WEIGHTS[] = {25, 55, 75, 90, 100};
 #define MIXED_HARD_BALANCED_POOL_SIZE 5
 
 static OpponentType opp_select_from_pool(
-    OsrsPvp* env, const OpponentType* pool, const int* cum_weights, int pool_size
+    OsrsEnv* env, const OpponentType* pool, const int* cum_weights, int pool_size
 ) {
     int r = rand_int(env, 100);
     for (int i = 0; i < pool_size; i++) {
@@ -3412,7 +3412,7 @@ static OpponentType opp_select_from_pool(
  * Main entry point: generate opponent action
  * ========================================================================= */
 
-static void opponent_reset(OsrsPvp* env, OpponentState* opp) {
+static void opponent_reset(OsrsEnv* env, OpponentState* opp) {
     opp->food_cooldown = 0;
     opp->potion_cooldown = 0;
     opp->karambwan_cooldown = 0;
@@ -3538,7 +3538,7 @@ static void opponent_reset(OsrsPvp* env, OpponentState* opp) {
     }
 }
 
-static void generate_opponent_action(OsrsPvp* env, OpponentState* opp) {
+static void generate_opponent_action(OsrsEnv* env, OpponentState* opp) {
     int* actions = &env->pending_actions[1 * NUM_ACTION_HEADS];
 
     /* Clear actions to zero (KEEP/NONE for all heads) */
@@ -3638,7 +3638,7 @@ static void generate_opponent_action(OsrsPvp* env, OpponentState* opp) {
     }
 }
 
-static void swap_players_and_pending(OsrsPvp* env) {
+static void swap_players_and_pending(OsrsEnv* env) {
     Player tmp_player = env->players[0];
     env->players[0] = env->players[1];
     env->players[1] = tmp_player;
@@ -3657,7 +3657,7 @@ static void swap_players_and_pending(OsrsPvp* env) {
     );
 }
 
-static void generate_opponent_action_for_player0(OsrsPvp* env, OpponentState* opp) {
+static void generate_opponent_action_for_player0(OsrsEnv* env, OpponentState* opp) {
     swap_players_and_pending(env);
     generate_opponent_action(env, opp);
     swap_players_and_pending(env);

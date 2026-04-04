@@ -26,14 +26,14 @@ static void print_player_state(Player* p, int idx) {
            p->current_prayer, p->current_gear, p->x, p->y, p->frozen_ticks);
 }
 
-static void print_env_state(OsrsPvp* env) {
+static void print_env_state(OsrsEnv* env) {
     printf("\n=== Tick %d ===\n", env->tick);
     print_player_state(&env->players[0], 0);
     print_player_state(&env->players[1], 1);
     printf("PID holder: %d\n", env->pid_holder);
 }
 
-static void run_random_episode(OsrsPvp* env, int verbose) {
+static void run_random_episode(OsrsEnv* env, int verbose) {
     pvp_reset(env);
 
     while (!env->episode_over) {
@@ -60,7 +60,7 @@ static void run_random_episode(OsrsPvp* env, int verbose) {
     }
 }
 
-static void benchmark(OsrsPvp* env, int num_steps) {
+static void benchmark(OsrsEnv* env, int num_steps) {
     printf("Benchmarking %d steps...\n", num_steps);
 
     clock_t start = clock();
@@ -141,7 +141,7 @@ static void replay_free(ReplayFile* rf) {
     if (rf) { free(rf->actions); free(rf); }
 }
 
-static void run_visual(OsrsPvp* env, const char* encounter_name, const char* replay_path, int start_wave) {
+static void run_visual(OsrsEnv* env, const char* encounter_name, const char* replay_path, int start_wave) {
     env->client = NULL;
 
     /* set up encounter if specified, otherwise default to PvP */
@@ -543,8 +543,8 @@ int main(int argc, char** argv) {
         nh->destroy(es);
     }
 
-    OsrsPvp env;
-    memset(&env, 0, sizeof(OsrsPvp));
+    OsrsEnv env;
+    memset(&env, 0, sizeof(OsrsEnv));
 
     if (use_visual) {
 #ifdef OSRS_PVP_VISUAL

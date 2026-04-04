@@ -965,8 +965,8 @@ static void test_max_hit_with_spec_mult(void) {
 static void test_hit_chance_with_spec_acc(void) {
     printf("--- hit chance with spec accuracy ---\n");
 
-    /* set up minimal OsrsPvp env + attacker/defender */
-    OsrsPvp env;
+    /* set up minimal OsrsEnv env + attacker/defender */
+    OsrsEnv env;
     memset(&env, 0, sizeof(env));
 
     Player attacker;

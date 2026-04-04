@@ -1011,7 +1011,7 @@ typedef struct {
     unsigned char _terms_buf[NUM_AGENTS];
     unsigned char _masks_buf[NUM_AGENTS * ACTION_MASK_SIZE];
 
-} OsrsPvp;
+} OsrsEnv;
 
 // ============================================================================
 // HELPER FUNCTIONS
@@ -1080,12 +1080,12 @@ static inline uint32_t xorshift32(uint32_t* state) {
     return x;
 }
 
-static inline int rand_int(OsrsPvp* env, int max) {
+static inline int rand_int(OsrsEnv* env, int max) {
     if (max <= 0) return 0;
     return xorshift32(&env->rng_state) % max;
 }
 
-static inline float rand_float(OsrsPvp* env) {
+static inline float rand_float(OsrsEnv* env) {
     return (float)xorshift32(&env->rng_state) / (float)UINT32_MAX;
 }
 

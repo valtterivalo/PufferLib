@@ -35,7 +35,7 @@ static inline int has_recoil_effect(Player* p) {
 // FORWARD DECLARATIONS
 // ============================================================================
 
-static void register_hit_calculated(OsrsPvp* env, int attacker_idx, int defender_idx,
+static void register_hit_calculated(OsrsEnv* env, int attacker_idx, int defender_idx,
                                      AttackStyle style, int total_damage);
 
 // ============================================================================
@@ -386,7 +386,7 @@ static int get_strength_bonus(Player* p, AttackStyle style) {
 // HIT CHANCE AND MAX HIT (delegate to shared formulas)
 // ============================================================================
 
-static float calculate_hit_chance(OsrsPvp* env, Player* attacker, Player* defender,
+static float calculate_hit_chance(OsrsEnv* env, Player* attacker, Player* defender,
                                    AttackStyle style, float acc_mult) {
     (void)env;
     int eff_attack = calculate_effective_attack(attacker, style);
@@ -531,7 +531,7 @@ static void queue_hit(Player* attacker, Player* defender, int damage,
 // DAMAGE APPLICATION (uses osrs_apply_damage_pipeline for core pipeline)
 // ============================================================================
 
-static void apply_damage(OsrsPvp* env, int attacker_idx, int defender_idx,
+static void apply_damage(OsrsEnv* env, int attacker_idx, int defender_idx,
                          PendingHit* hit) {
     Player* attacker = &env->players[attacker_idx];
     Player* defender = &env->players[defender_idx];
@@ -637,7 +637,7 @@ static void apply_damage(OsrsPvp* env, int attacker_idx, int defender_idx,
     }
 }
 
-static void process_pending_hits(OsrsPvp* env, int attacker_idx, int defender_idx) {
+static void process_pending_hits(OsrsEnv* env, int attacker_idx, int defender_idx) {
     Player* attacker = &env->players[attacker_idx];
 
     for (int i = 0; i < attacker->num_pending_hits; i++) {
@@ -681,7 +681,7 @@ static inline void push_recent_bool(int* buffer, int* index, int value) {
 }
 
 static void register_hit_calculated(
-    OsrsPvp* env,
+    OsrsEnv* env,
     int attacker_idx,
     int defender_idx,
     AttackStyle style,
@@ -965,7 +965,7 @@ static inline int get_attack_range(Player* p, AttackStyle style) {
 // ATTACK EXECUTION (uses osrs_resolve_spec + osrs_resolve_bolt_proc)
 // ============================================================================
 
-static void perform_attack(OsrsPvp* env, int attacker_idx, int defender_idx,
+static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
                            AttackStyle style, int is_special, int magic_type, int distance) {
     Player* attacker = &env->players[attacker_idx];
     Player* defender = &env->players[defender_idx];

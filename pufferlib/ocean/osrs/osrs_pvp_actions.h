@@ -330,8 +330,8 @@ static void reset_tick_flags(Player* p) {
 // ============================================================================
 
 // Forward declarations for phased execution
-static void execute_switches(OsrsPvp* env, int agent_idx, int* actions);
-static void execute_attacks(OsrsPvp* env, int agent_idx, int* actions);
+static void execute_switches(OsrsEnv* env, int agent_idx, int* actions);
+static void execute_attacks(OsrsEnv* env, int agent_idx, int* actions);
 
 /** Resolve attack style from attack action value. */
 static inline AttackStyle resolve_attack_style_for_action(Player* p, int attack_action) {
@@ -356,7 +356,7 @@ static inline AttackStyle resolve_attack_style_for_action(Player* p, int attack_
  * any attacks are processed. This ensures attacks check the correct
  * prayer state (the state after this tick's switches, not before).
  */
-static void execute_switches(OsrsPvp* env, int agent_idx, int* actions) {
+static void execute_switches(OsrsEnv* env, int agent_idx, int* actions) {
     Player* p = &env->players[agent_idx];
     Player* t = &env->players[1 - agent_idx];
     const CollisionMap* cmap = (const CollisionMap*)env->collision_map;
@@ -556,7 +556,7 @@ static void execute_switches(OsrsPvp* env, int agent_idx, int* actions) {
  * Called for ALL players before any attack combat checks, so positions are
  * fully resolved before range checks happen (matches OSRS tick processing).
  */
-static void execute_attack_movement(OsrsPvp* env, int agent_idx, int* actions) {
+static void execute_attack_movement(OsrsEnv* env, int agent_idx, int* actions) {
     Player* p = &env->players[agent_idx];
     Player* t = &env->players[1 - agent_idx];
     const CollisionMap* cmap = (const CollisionMap*)env->collision_map;
@@ -631,7 +631,7 @@ static void execute_attack_movement(OsrsPvp* env, int agent_idx, int* actions) {
  * Called for ALL players AFTER all attack movements have resolved, so
  * dist is computed from final positions (fixes PID-dependent same-tile bug).
  */
-static void execute_attack_combat(OsrsPvp* env, int agent_idx, int* actions) {
+static void execute_attack_combat(OsrsEnv* env, int agent_idx, int* actions) {
     Player* p = &env->players[agent_idx];
     Player* t = &env->players[1 - agent_idx];
     const CollisionMap* cmap = (const CollisionMap*)env->collision_map;
@@ -764,7 +764,7 @@ static void execute_attack_combat(OsrsPvp* env, int agent_idx, int* actions) {
  * For correct PID-independent behavior in pvp_step, call execute_attack_movement
  * for ALL players first, then execute_attack_combat for ALL players.
  */
-static void execute_attacks(OsrsPvp* env, int agent_idx, int* actions) {
+static void execute_attacks(OsrsEnv* env, int agent_idx, int* actions) {
     execute_attack_movement(env, agent_idx, actions);
     execute_attack_combat(env, agent_idx, actions);
 }
@@ -774,7 +774,7 @@ static void execute_attacks(OsrsPvp* env, int agent_idx, int* actions) {
  * For correct prayer timing, c_step calls execute_switches for both
  * players FIRST, then execute_attacks for both players.
  */
-static void execute_actions(OsrsPvp* env, int agent_idx, int* actions) {
+static void execute_actions(OsrsEnv* env, int agent_idx, int* actions) {
     execute_switches(env, agent_idx, actions);
     execute_attacks(env, agent_idx, actions);
 }
@@ -800,7 +800,7 @@ static void execute_actions(OsrsPvp* env, int agent_idx, int* actions) {
  * - Bad behavior penalties (melee frozen, magic no staff)
  * - Terminal shaping (KO bonus, wasted resources penalty)
  */
-static float calculate_reward(OsrsPvp* env, int agent_idx) {
+static float calculate_reward(OsrsEnv* env, int agent_idx) {
     float reward = 0.0f;
     Player* p = &env->players[agent_idx];
     Player* t = &env->players[1 - agent_idx];

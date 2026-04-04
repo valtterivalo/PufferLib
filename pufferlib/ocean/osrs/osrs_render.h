@@ -388,7 +388,7 @@ typedef struct {
     double last_tick_time;
 
     /* rewind history: ring buffer of env snapshots */
-    OsrsPvp* history;     /* heap-allocated array of RENDER_HISTORY_SIZE snapshots */
+    OsrsEnv* history;     /* heap-allocated array of RENDER_HISTORY_SIZE snapshots */
     int history_count;    /* how many snapshots stored (up to RENDER_HISTORY_SIZE) */
     int history_cursor;   /* current position when rewinding (-1 = live) */
 
@@ -405,7 +405,7 @@ static Camera3D render_build_3d_camera(RenderClient* rc);
 /** Get the raw Player* for a given entity index (for GUI functions that need full Player state).
     Returns the Player* from get_entity for encounters that use Player structs (PvP, Zulrah).
     Returns NULL if no encounter or index is out of range. GUI code must NULL-check. */
-static Player* render_get_player_ptr(OsrsPvp* env, int index) {
+static Player* render_get_player_ptr(OsrsEnv* env, int index) {
     if (env->encounter_def && env->encounter_state) {
         const EncounterDef* def = (const EncounterDef*)env->encounter_def;
         return (Player*)def->get_entity(env->encounter_state, index);
@@ -484,7 +484,7 @@ static RenderClient* render_make_client(void) {
     /* fight area center (Z negated: OSRS +Y = north maps to -Z) */
     rc->cam_target_x = (float)rc->arena_base_x + (float)rc->arena_width / 2.0f;
     rc->cam_target_z = -((float)rc->arena_base_y + (float)rc->arena_height / 2.0f);
-    rc->history = (OsrsPvp*)calloc(RENDER_HISTORY_SIZE, sizeof(OsrsPvp));
+    rc->history = (OsrsEnv*)calloc(RENDER_HISTORY_SIZE, sizeof(OsrsEnv));
     rc->history_count = 0;
     rc->history_cursor = -1;  /* -1 = live (not rewinding) */
     rc->entity_count = 0;  /* populated by render_populate_entities */
@@ -852,7 +852,7 @@ static void render_destroy_client(RenderClient* rc) {
 /* input                                                                     */
 /* ======================================================================== */
 
-static void render_handle_input(RenderClient* rc, OsrsPvp* env) {
+static void render_handle_input(RenderClient* rc, OsrsEnv* env) {
     if (IsKeyPressed(KEY_SPACE))  rc->is_paused = !rc->is_paused;
 
     if (IsKeyPressed(KEY_RIGHT) && rc->is_paused) {
@@ -1097,7 +1097,7 @@ static void render_handle_input(RenderClient* rc, OsrsPvp* env) {
 /* ======================================================================== */
 
 /* save current env state to history ring buffer (call after each pvp_step) */
-static void render_save_snapshot(RenderClient* rc, OsrsPvp* env) {
+static void render_save_snapshot(RenderClient* rc, OsrsEnv* env) {
     if (rc->history_count < RENDER_HISTORY_SIZE) {
         rc->history[rc->history_count] = *env;
         rc->history_count++;
@@ -1106,7 +1106,7 @@ static void render_save_snapshot(RenderClient* rc, OsrsPvp* env) {
 }
 
 /* restore env state from history snapshot, preserving render-side pointers */
-static void render_restore_snapshot(RenderClient* rc, OsrsPvp* env) {
+static void render_restore_snapshot(RenderClient* rc, OsrsEnv* env) {
     if (rc->history_cursor < 0 || rc->history_cursor >= rc->history_count) return;
 
     void* saved_client = env->client;
@@ -1142,7 +1142,7 @@ static void render_push_splat(RenderClient* rc, int damage, int pidx);
 /* populate rc->entities from env->players (legacy) or encounter vtable.
    call before render_post_tick and pvp_render so all draw code uses rc->entities.
    uses fill_render_entities when available, falls back to get_entity + cast. */
-static void render_populate_entities(RenderClient* rc, OsrsPvp* env) {
+static void render_populate_entities(RenderClient* rc, OsrsEnv* env) {
     if (env->encounter_def && env->encounter_state) {
         const EncounterDef* def = (const EncounterDef*)env->encounter_def;
         if (def->fill_render_entities) {
@@ -1199,7 +1199,7 @@ static void render_populate_entities(RenderClient* rc, OsrsPvp* env) {
 /**
  * Call BEFORE pvp_step to record pre-tick positions for movement direction.
  */
-static void render_pre_tick(RenderClient* rc, OsrsPvp* env) {
+static void render_pre_tick(RenderClient* rc, OsrsEnv* env) {
     (void)rc; (void)env;
     /* destination is updated in post_tick after positions change */
 }
@@ -1214,7 +1214,7 @@ static void render_pre_tick(RenderClient* rc, OsrsPvp* env) {
  * - if distance > 256 sub-units (2 tiles), snap instantly (teleport)
  * - animation stalls (walkFlag=0) pause movement, then catch up at double speed
  */
-static void render_post_tick(RenderClient* rc, OsrsPvp* env) {
+static void render_post_tick(RenderClient* rc, OsrsEnv* env) {
     render_populate_entities(rc, env);
 
     /* detect entity identity changes from slot compaction (NPC deaths cause
@@ -1787,7 +1787,7 @@ static void render_push_splat(RenderClient* rc, int damage, int pidx) {
 /* drawing: grid                                                             */
 /* ======================================================================== */
 
-static void render_draw_grid(RenderClient* rc, OsrsPvp* env) {
+static void render_draw_grid(RenderClient* rc, OsrsEnv* env) {
     const CollisionMap* cmap = rc->collision_map;
     int ts = RENDER_TILE_SIZE;
 
@@ -1962,7 +1962,7 @@ static const char* render_gear_label(GearSet g) {
 /* draw zulrah safe spot markers on the 2D grid.
    S key toggles. shows all 15 stand locations as colored diamonds,
    with the current phase's active stand/stall highlighted. */
-static void render_draw_safe_spots(RenderClient* rc, OsrsPvp* env) {
+static void render_draw_safe_spots(RenderClient* rc, OsrsEnv* env) {
     if (!env->encounter_def || !env->encounter_state) return;
     const EncounterDef* edef = (const EncounterDef*)env->encounter_def;
     if (strcmp(edef->name, "zulrah") != 0) return;
@@ -2160,7 +2160,7 @@ static void render_draw_splats_2d(RenderClient* rc) {
 /* drawing: header                                                           */
 /* ======================================================================== */
 
-static void render_draw_header(RenderClient* rc, OsrsPvp* env) {
+static void render_draw_header(RenderClient* rc, OsrsEnv* env) {
     DrawRectangle(0, 0, RENDER_WINDOW_W, RENDER_HEADER_HEIGHT, COLOR_HEADER_BG);
 
     /* left: tick + speed + pause/rewind */
@@ -2225,7 +2225,7 @@ static const char* inferno_npc_name(int npc_def_id) {
     }
 }
 
-static void render_draw_panel_npc(int x, int y, RenderEntity* p, OsrsPvp* env) {
+static void render_draw_panel_npc(int x, int y, RenderEntity* p, OsrsEnv* env) {
     int line_h = 14;
 
     /* determine NPC display name and color from npc_def_id */
@@ -3565,7 +3565,7 @@ static void render_draw_models_2d_overlay(RenderClient* rc) {
  *
  * Both are 2D sprites/rects drawn at screen-projected head position.
  */
-static void render_draw_overhead_status(RenderClient* rc, OsrsPvp* env) {
+static void render_draw_overhead_status(RenderClient* rc, OsrsEnv* env) {
     Camera3D cam = render_build_3d_camera(rc);
 
     /* map our OverheadPrayer enum → OSRS headIcon sprite index */
@@ -3716,7 +3716,7 @@ static void render_draw_overhead_status(RenderClient* rc, OsrsPvp* env) {
 /* main render entry point                                                   */
 /* ======================================================================== */
 
-void pvp_render(OsrsPvp* env) {
+void pvp_render(OsrsEnv* env) {
     RenderClient* rc = (RenderClient*)env->client;
     if (rc == NULL) {
         rc = render_make_client();

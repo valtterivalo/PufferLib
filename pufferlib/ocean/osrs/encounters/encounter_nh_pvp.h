@@ -23,11 +23,11 @@ static const int NH_PVP_ACTION_DIMS[] = {
 };
 
 /* ======================================================================== */
-/* encounter state: just wraps OsrsPvp                                       */
+/* encounter state: just wraps OsrsEnv                                       */
 /* ======================================================================== */
 
 typedef struct {
-    OsrsPvp env;
+    OsrsEnv env;
 } NhPvpState;
 
 /* ======================================================================== */
