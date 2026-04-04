@@ -93,9 +93,9 @@ static const int INF_NPC_DEF_IDS[INF_NUM_NPC_TYPES] = {
     [INF_NPC_NIBBLER]    = 7691,  /* Jal-Nib */
     [INF_NPC_BAT]        = 7692,  /* Jal-MejRah */
     [INF_NPC_BLOB]       = 7693,  /* Jal-Ak */
-    [INF_NPC_BLOB_MELEE] = 7694,  /* Jal-AkRek-Ket (melee split) */
+    [INF_NPC_BLOB_MELEE] = 7696,  /* Jal-AkRek-Ket (melee split) */
     [INF_NPC_BLOB_RANGE] = 7695,  /* Jal-AkRek-Xil (range split) */
-    [INF_NPC_BLOB_MAGE]  = 7696,  /* Jal-AkRek-Mej (mage split) */
+    [INF_NPC_BLOB_MAGE]  = 7694,  /* Jal-AkRek-Mej (mage split) */
     [INF_NPC_MELEER]     = 7697,  /* Jal-ImKot */
     [INF_NPC_RANGER]     = 7698,  /* Jal-Xil */
     [INF_NPC_MAGER]      = 7699,  /* Jal-Zek */
@@ -248,13 +248,13 @@ static const InfNPCStats INF_NPC_STATS[INF_NUM_NPC_TYPES] = {
         .stab_def = 0, .slash_def = 0, .crush_def = 0, .magic_def_bonus = 350, .ranged_def_bonus = 100,
         .stun_on_spawn = 8, .can_move = 0 },
 
-    /* HEALER_JAD (YtHurKot): melee, heals its Jad. wiki max hit = 14 */
-    [INF_NPC_HEALER_JAD] = { .hp = 60, .attack_speed = 4, .attack_range = 1, .size = 1,
+    /* HEALER_JAD (YtHurKot): melee, heals its Jad. wiki max hit = 18 */
+    [INF_NPC_HEALER_JAD] = { .hp = 90, .attack_speed = 4, .attack_range = 1, .size = 1,
         .default_style = ATTACK_STYLE_MELEE, .melee_style = MELEE_STYLE_CRUSH, .can_melee = 0,
-        .att_level = 140, .str_level = 100, .def_level = 60, .range_level = 120, .magic_level = 120,
-        .melee_att_bonus = 0, .range_att_bonus = 0, .magic_att_bonus = 0,
+        .att_level = 165, .str_level = 125, .def_level = 100, .range_level = 150, .magic_level = 150,
+        .melee_att_bonus = 0, .range_att_bonus = 80, .magic_att_bonus = 100,
         .melee_str_bonus = 0, .ranged_str_bonus = 0, .magic_base_dmg = 0, .magic_dmg_pct = 0,
-        .stab_def = 0, .slash_def = 0, .crush_def = 0, .magic_def_bonus = 100, .ranged_def_bonus = 100,
+        .stab_def = 0, .slash_def = 0, .crush_def = 0, .magic_def_bonus = 130, .ranged_def_bonus = 130,
         .stun_on_spawn = 0, .can_move = 1 },
 
     /* HEALER_ZUK (JalMejJak): AOE magic sparks, cannot move. wiki max hit = 10 */

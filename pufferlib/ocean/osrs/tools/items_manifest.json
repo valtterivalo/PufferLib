@@ -1,0 +1,618 @@
+[
+  {
+    "index": "ITEM_HELM_NEITIZNOT",
+    "item_id": 10828,
+    "attack_range": 0,
+    "comment": "Helm of Neitiznot"
+  },
+  {
+    "index": "ITEM_GOD_CAPE",
+    "item_id": 21795,
+    "attack_range": 0,
+    "comment": "Imbued god cape"
+  },
+  {
+    "index": "ITEM_GLORY",
+    "item_id": 1712,
+    "attack_range": 0,
+    "comment": "Amulet of glory"
+  },
+  {
+    "index": "ITEM_BLACK_DHIDE_BODY",
+    "item_id": 2503,
+    "attack_range": 0,
+    "comment": "Black d'hide body"
+  },
+  {
+    "index": "ITEM_MYSTIC_TOP",
+    "item_id": 4091,
+    "attack_range": 0,
+    "comment": "Mystic robe top"
+  },
+  {
+    "index": "ITEM_RUNE_PLATELEGS",
+    "item_id": 1079,
+    "attack_range": 0,
+    "comment": "Rune platelegs"
+  },
+  {
+    "index": "ITEM_MYSTIC_BOTTOM",
+    "item_id": 4093,
+    "attack_range": 0,
+    "comment": "Mystic robe bottom"
+  },
+  {
+    "index": "ITEM_WHIP",
+    "item_id": 4151,
+    "attack_range": 1,
+    "comment": "Abyssal whip"
+  },
+  {
+    "index": "ITEM_RUNE_CROSSBOW",
+    "item_id": 9185,
+    "attack_range": 7,
+    "comment": "Rune crossbow"
+  },
+  {
+    "index": "ITEM_AHRIM_STAFF",
+    "item_id": 4710,
+    "attack_range": 10,
+    "comment": "Ahrim's staff"
+  },
+  {
+    "index": "ITEM_DRAGON_DAGGER",
+    "item_id": 5698,
+    "attack_range": 1,
+    "comment": "Dragon dagger"
+  },
+  {
+    "index": "ITEM_DRAGON_DEFENDER",
+    "item_id": 12954,
+    "attack_range": 0,
+    "comment": "Dragon defender"
+  },
+  {
+    "index": "ITEM_SPIRIT_SHIELD",
+    "item_id": 12829,
+    "attack_range": 0,
+    "comment": "Spirit shield"
+  },
+  {
+    "index": "ITEM_BARROWS_GLOVES",
+    "item_id": 7462,
+    "attack_range": 0,
+    "comment": "Barrows gloves"
+  },
+  {
+    "index": "ITEM_CLIMBING_BOOTS",
+    "item_id": 3105,
+    "attack_range": 0,
+    "comment": "Climbing boots"
+  },
+  {
+    "index": "ITEM_BERSERKER_RING",
+    "item_id": 6737,
+    "attack_range": 0,
+    "comment": "Berserker ring"
+  },
+  {
+    "index": "ITEM_DIAMOND_BOLTS_E",
+    "item_id": 9243,
+    "attack_range": 0,
+    "comment": "Diamond bolts (e)"
+  },
+  {
+    "index": "ITEM_GHRAZI_RAPIER",
+    "item_id": 22324,
+    "attack_range": 1,
+    "comment": "Ghrazi rapier"
+  },
+  {
+    "index": "ITEM_INQUISITORS_MACE",
+    "item_id": 24417,
+    "attack_range": 1,
+    "comment": "Inquisitor's mace"
+  },
+  {
+    "index": "ITEM_STAFF_OF_DEAD",
+    "item_id": 11791,
+    "attack_range": 10,
+    "comment": "Staff of the dead"
+  },
+  {
+    "index": "ITEM_KODAI_WAND",
+    "item_id": 21006,
+    "attack_range": 10,
+    "comment": "Kodai wand"
+  },
+  {
+    "index": "ITEM_VOLATILE_STAFF",
+    "item_id": 24424,
+    "attack_range": 10,
+    "comment": "Volatile nightmare staff"
+  },
+  {
+    "index": "ITEM_ZURIELS_STAFF",
+    "item_id": 13867,
+    "attack_range": 10,
+    "comment": "Zuriel's staff (LMS-only, not in wiki equipment.json)",
+    "manual_stats": {
+      "name": "Zuriel's staff",
+      "slot": "weapon",
+      "attack_speed": 5,
+      "attack_stab": 13, "attack_slash": -1, "attack_crush": 65,
+      "attack_magic": 18, "attack_ranged": 0,
+      "defence_stab": 5, "defence_slash": 7, "defence_crush": 4,
+      "defence_magic": 18, "defence_ranged": 0,
+      "melee_strength": 72, "ranged_strength": 0, "magic_damage": 10, "prayer": 0
+    }
+  },
+  {
+    "index": "ITEM_ARMADYL_CROSSBOW",
+    "item_id": 11785,
+    "attack_range": 7,
+    "comment": "Armadyl crossbow"
+  },
+  {
+    "index": "ITEM_ZARYTE_CROSSBOW",
+    "item_id": 26374,
+    "attack_range": 7,
+    "comment": "Zaryte crossbow"
+  },
+  {
+    "index": "ITEM_DRAGON_CLAWS",
+    "item_id": 13652,
+    "attack_range": 1,
+    "comment": "Dragon claws"
+  },
+  {
+    "index": "ITEM_AGS",
+    "item_id": 11802,
+    "attack_range": 1,
+    "comment": "Armadyl godsword"
+  },
+  {
+    "index": "ITEM_ANCIENT_GS",
+    "item_id": 26233,
+    "attack_range": 1,
+    "comment": "Ancient godsword"
+  },
+  {
+    "index": "ITEM_GRANITE_MAUL",
+    "item_id": 4153,
+    "attack_range": 1,
+    "comment": "Granite maul"
+  },
+  {
+    "index": "ITEM_ELDER_MAUL",
+    "item_id": 21003,
+    "attack_range": 1,
+    "comment": "Elder maul"
+  },
+  {
+    "index": "ITEM_DARK_BOW",
+    "item_id": 11235,
+    "attack_range": 10,
+    "comment": "Dark bow"
+  },
+  {
+    "index": "ITEM_HEAVY_BALLISTA",
+    "item_id": 19481,
+    "attack_range": 10,
+    "comment": "Heavy ballista"
+  },
+  {
+    "index": "ITEM_VESTAS",
+    "item_id": 22613,
+    "attack_range": 1,
+    "comment": "Vesta's longsword"
+  },
+  {
+    "index": "ITEM_VOIDWAKER",
+    "item_id": 27690,
+    "attack_range": 1,
+    "comment": "Voidwaker"
+  },
+  {
+    "index": "ITEM_STATIUS_WARHAMMER",
+    "item_id": 22622,
+    "attack_range": 1,
+    "comment": "Statius's warhammer"
+  },
+  {
+    "index": "ITEM_MORRIGANS_JAVELIN",
+    "item_id": 22636,
+    "attack_range": 5,
+    "comment": "Morrigan's javelin"
+  },
+  {
+    "index": "ITEM_ANCESTRAL_HAT",
+    "item_id": 21018,
+    "attack_range": 0,
+    "comment": "Ancestral hat"
+  },
+  {
+    "index": "ITEM_ANCESTRAL_TOP",
+    "item_id": 21021,
+    "attack_range": 0,
+    "comment": "Ancestral robe top"
+  },
+  {
+    "index": "ITEM_ANCESTRAL_BOTTOM",
+    "item_id": 21024,
+    "attack_range": 0,
+    "comment": "Ancestral robe bottom"
+  },
+  {
+    "index": "ITEM_AHRIMS_ROBETOP",
+    "item_id": 4712,
+    "attack_range": 0,
+    "comment": "Ahrim's robetop"
+  },
+  {
+    "index": "ITEM_AHRIMS_ROBESKIRT",
+    "item_id": 4714,
+    "attack_range": 0,
+    "comment": "Ahrim's robeskirt"
+  },
+  {
+    "index": "ITEM_KARILS_TOP",
+    "item_id": 4736,
+    "attack_range": 0,
+    "comment": "Karil's leathertop"
+  },
+  {
+    "index": "ITEM_BANDOS_TASSETS",
+    "item_id": 11834,
+    "attack_range": 0,
+    "comment": "Bandos tassets"
+  },
+  {
+    "index": "ITEM_BLESSED_SPIRIT_SHIELD",
+    "item_id": 12831,
+    "attack_range": 0,
+    "comment": "Blessed spirit shield"
+  },
+  {
+    "index": "ITEM_FURY",
+    "item_id": 6585,
+    "attack_range": 0,
+    "comment": "Amulet of fury"
+  },
+  {
+    "index": "ITEM_OCCULT_NECKLACE",
+    "item_id": 12002,
+    "attack_range": 0,
+    "comment": "Occult necklace"
+  },
+  {
+    "index": "ITEM_INFERNAL_CAPE",
+    "item_id": 21295,
+    "attack_range": 0,
+    "comment": "Infernal cape"
+  },
+  {
+    "index": "ITEM_ETERNAL_BOOTS",
+    "item_id": 13235,
+    "attack_range": 0,
+    "comment": "Eternal boots"
+  },
+  {
+    "index": "ITEM_SEERS_RING_I",
+    "item_id": 11770,
+    "attack_range": 0,
+    "comment": "Seers ring (i)"
+  },
+  {
+    "index": "ITEM_LIGHTBEARER",
+    "item_id": 25975,
+    "attack_range": 0,
+    "comment": "Lightbearer"
+  },
+  {
+    "index": "ITEM_MAGES_BOOK",
+    "item_id": 6889,
+    "attack_range": 0,
+    "comment": "Mage's book"
+  },
+  {
+    "index": "ITEM_DRAGON_ARROWS",
+    "item_id": 11212,
+    "attack_range": 0,
+    "comment": "Dragon arrows"
+  },
+  {
+    "index": "ITEM_TORAGS_PLATELEGS",
+    "item_id": 4751,
+    "attack_range": 0,
+    "comment": "Torag's platelegs"
+  },
+  {
+    "index": "ITEM_DHAROKS_PLATELEGS",
+    "item_id": 4722,
+    "attack_range": 0,
+    "comment": "Dharok's platelegs"
+  },
+  {
+    "index": "ITEM_VERACS_PLATESKIRT",
+    "item_id": 4759,
+    "attack_range": 0,
+    "comment": "Verac's plateskirt"
+  },
+  {
+    "index": "ITEM_TORAGS_HELM",
+    "item_id": 4745,
+    "attack_range": 0,
+    "comment": "Torag's helm"
+  },
+  {
+    "index": "ITEM_DHAROKS_HELM",
+    "item_id": 4716,
+    "attack_range": 0,
+    "comment": "Dharok's helm"
+  },
+  {
+    "index": "ITEM_VERACS_HELM",
+    "item_id": 4753,
+    "attack_range": 0,
+    "comment": "Verac's helm"
+  },
+  {
+    "index": "ITEM_GUTHANS_HELM",
+    "item_id": 4724,
+    "attack_range": 0,
+    "comment": "Guthan's helm"
+  },
+  {
+    "index": "ITEM_OPAL_DRAGON_BOLTS",
+    "item_id": 21932,
+    "attack_range": 0,
+    "comment": "Opal dragon bolts (e)"
+  },
+  {
+    "index": "ITEM_IMBUED_SARA_CAPE",
+    "item_id": 21791,
+    "attack_range": 0,
+    "comment": "Imbued saradomin cape"
+  },
+  {
+    "index": "ITEM_EYE_OF_AYAK",
+    "item_id": 31113,
+    "attack_range": 6,
+    "comment": "Eye of ayak"
+  },
+  {
+    "index": "ITEM_ELIDINIS_WARD_F",
+    "item_id": 27251,
+    "attack_range": 0,
+    "comment": "Elidinis' ward (f)"
+  },
+  {
+    "index": "ITEM_CONFLICTION_GAUNTLETS",
+    "item_id": 31106,
+    "attack_range": 0,
+    "comment": "Confliction gauntlets"
+  },
+  {
+    "index": "ITEM_AVERNIC_TREADS",
+    "item_id": 31097,
+    "attack_range": 0,
+    "comment": "Avernic treads (max)"
+  },
+  {
+    "index": "ITEM_RING_OF_SUFFERING_RI",
+    "item_id": 20657,
+    "attack_range": 0,
+    "comment": "Ring of suffering (ri)"
+  },
+  {
+    "index": "ITEM_TWISTED_BOW",
+    "item_id": 20997,
+    "attack_range": 10,
+    "comment": "Twisted bow"
+  },
+  {
+    "index": "ITEM_MASORI_MASK_F",
+    "item_id": 27235,
+    "attack_range": 0,
+    "comment": "Masori mask (f)"
+  },
+  {
+    "index": "ITEM_MASORI_BODY_F",
+    "item_id": 27238,
+    "attack_range": 0,
+    "comment": "Masori body (f)"
+  },
+  {
+    "index": "ITEM_MASORI_CHAPS_F",
+    "item_id": 27241,
+    "attack_range": 0,
+    "comment": "Masori chaps (f)"
+  },
+  {
+    "index": "ITEM_NECKLACE_OF_ANGUISH",
+    "item_id": 19547,
+    "attack_range": 0,
+    "comment": "Necklace of anguish"
+  },
+  {
+    "index": "ITEM_DIZANAS_QUIVER",
+    "item_id": 28947,
+    "attack_range": 0,
+    "comment": "Dizana's quiver"
+  },
+  {
+    "index": "ITEM_ZARYTE_VAMBRACES",
+    "item_id": 26235,
+    "attack_range": 0,
+    "comment": "Zaryte vambraces"
+  },
+  {
+    "index": "ITEM_TOXIC_BLOWPIPE",
+    "item_id": 12926,
+    "attack_range": 5,
+    "comment": "Toxic blowpipe"
+  },
+  {
+    "index": "ITEM_AHRIMS_HOOD",
+    "item_id": 4708,
+    "attack_range": 0,
+    "comment": "Ahrim's hood"
+  },
+  {
+    "index": "ITEM_TORMENTED_BRACELET",
+    "item_id": 19544,
+    "attack_range": 0,
+    "comment": "Tormented bracelet"
+  },
+  {
+    "index": "ITEM_SANGUINESTI_STAFF",
+    "item_id": 22481,
+    "attack_range": 7,
+    "comment": "Sanguinesti staff"
+  },
+  {
+    "index": "ITEM_INFINITY_BOOTS",
+    "item_id": 6920,
+    "attack_range": 0,
+    "comment": "Infinity boots"
+  },
+  {
+    "index": "ITEM_GOD_BLESSING",
+    "item_id": 20220,
+    "attack_range": 0,
+    "comment": "Holy blessing"
+  },
+  {
+    "index": "ITEM_RING_OF_RECOIL",
+    "item_id": 2550,
+    "attack_range": 0,
+    "comment": "Ring of recoil"
+  },
+  {
+    "index": "ITEM_CRYSTAL_HELM",
+    "item_id": 23971,
+    "attack_range": 0,
+    "comment": "Crystal helm"
+  },
+  {
+    "index": "ITEM_AVAS_ASSEMBLER",
+    "item_id": 22109,
+    "attack_range": 0,
+    "comment": "Ava's assembler"
+  },
+  {
+    "index": "ITEM_CRYSTAL_BODY",
+    "item_id": 23975,
+    "attack_range": 0,
+    "comment": "Crystal body"
+  },
+  {
+    "index": "ITEM_CRYSTAL_LEGS",
+    "item_id": 23979,
+    "attack_range": 0,
+    "comment": "Crystal legs"
+  },
+  {
+    "index": "ITEM_BOW_OF_FAERDHINEN",
+    "item_id": 25865,
+    "attack_range": 10,
+    "comment": "Bow of faerdhinen (c)"
+  },
+  {
+    "index": "ITEM_BLESSED_DHIDE_BOOTS",
+    "item_id": 19921,
+    "attack_range": 0,
+    "comment": "Blessed d'hide boots"
+  },
+  {
+    "index": "ITEM_MYSTIC_HAT",
+    "item_id": 4089,
+    "attack_range": 0,
+    "comment": "Mystic hat"
+  },
+  {
+    "index": "ITEM_TRIDENT_OF_SWAMP",
+    "item_id": 12899,
+    "attack_range": 7,
+    "comment": "Trident of the swamp"
+  },
+  {
+    "index": "ITEM_BOOK_OF_DARKNESS",
+    "item_id": 12612,
+    "attack_range": 0,
+    "comment": "Book of darkness"
+  },
+  {
+    "index": "ITEM_AMETHYST_ARROW",
+    "item_id": 21326,
+    "attack_range": 0,
+    "comment": "Amethyst arrow"
+  },
+  {
+    "index": "ITEM_MYSTIC_BOOTS",
+    "item_id": 4097,
+    "attack_range": 0,
+    "comment": "Mystic boots"
+  },
+  {
+    "index": "ITEM_BLESSED_COIF",
+    "item_id": 10382,
+    "attack_range": 0,
+    "comment": "Blessed coif"
+  },
+  {
+    "index": "ITEM_BLACK_DHIDE_CHAPS",
+    "item_id": 2497,
+    "attack_range": 0,
+    "comment": "Black d'hide chaps"
+  },
+  {
+    "index": "ITEM_MAGIC_SHORTBOW_I",
+    "item_id": 12788,
+    "attack_range": 7,
+    "comment": "Magic shortbow (i)"
+  },
+  {
+    "index": "ITEM_AVAS_ACCUMULATOR",
+    "item_id": 10499,
+    "attack_range": 0,
+    "comment": "Ava's accumulator"
+  },
+  {
+    "index": "ITEM_CRYSTAL_SHIELD",
+    "item_id": 4224,
+    "attack_range": 0,
+    "comment": "Crystal shield"
+  },
+  {
+    "index": "ITEM_PEGASIAN_BOOTS",
+    "item_id": 13237,
+    "attack_range": 0,
+    "comment": "Pegasian boots"
+  },
+  {
+    "index": "ITEM_JUSTICIAR_FACEGUARD",
+    "item_id": 22326,
+    "attack_range": 0,
+    "comment": "Justiciar faceguard"
+  },
+  {
+    "index": "ITEM_JUSTICIAR_CHESTGUARD",
+    "item_id": 22327,
+    "attack_range": 0,
+    "comment": "Justiciar chestguard"
+  },
+  {
+    "index": "ITEM_JUSTICIAR_LEGGUARDS",
+    "item_id": 22328,
+    "attack_range": 0,
+    "comment": "Justiciar legguards"
+  },
+  {
+    "index": "ITEM_DRAGON_DART",
+    "item_id": 11230,
+    "attack_range": 0,
+    "comment": "Dragon dart"
+  }
+]
