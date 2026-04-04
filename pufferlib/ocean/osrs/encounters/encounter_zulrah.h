@@ -37,6 +37,7 @@
 #include "../osrs_items.h"
 #include "../osrs_combat.h"
 #include "../osrs_special_attacks.h"
+#include "../osrs_consumables.h"
 #include "../osrs_collision.h"
 #include "../osrs_monsters_generated.h"
 #include "../data/npc_models.h"
@@ -130,7 +131,6 @@ static const int ZUL_POSITIONS[ZUL_NUM_POSITIONS][2] = {
 
 /* blowpipe spec */
 #define ZUL_SPEC_COST            50     /* 50% special energy */
-#define ZUL_SPEC_HEAL_PCT        50     /* heal 50% of damage dealt */
 
 /* thrall: greater ghost (arceuus spellbook, always hits, ignores armour).
  * max hit 3, attack speed 4 ticks. duration = 0.6 * magic_level seconds
@@ -146,9 +146,6 @@ static const int ZUL_POSITIONS[ZUL_NUM_POSITIONS][2] = {
 #define ZUL_PLAYER_FOOD       10     /* sharks */
 #define ZUL_PLAYER_KARAMBWAN  4
 #define ZUL_PLAYER_RESTORE_DOSES 8   /* prayer potion doses (4 per pot = 2 pots) */
-#define ZUL_FOOD_HEAL         20     /* shark heals 20 */
-#define ZUL_KARAMBWAN_HEAL    18
-#define ZUL_PRAYER_RESTORE    (7 + (77 * 25) / 100)  /* prayer pot: 7 + floor(prayer_lvl/4) = 26 */
 #define ZUL_MAX_TICKS         600
 
 /* ======================================================================== */
@@ -1488,44 +1485,43 @@ static void zul_process_prayer(ZulrahState* s, int p) {
 }
 
 static void zul_process_food(ZulrahState* s, int a) {
-    if (a == 0 || s->player_food_timer > 0) return;
-    if (a == 1) {
-        /* shark */
-        if (s->player_food_count <= 0) return;
-        s->player_food_count--;
-        s->player_food_timer = 3;
-        s->player.current_hitpoints += ZUL_FOOD_HEAL;
-        if (s->player.current_hitpoints > s->player.base_hitpoints)
-            s->player.current_hitpoints = s->player.base_hitpoints;
-    } else if (a == 2) {
-        /* karambwan */
-        if (s->player_karambwan_count <= 0) return;
-        s->player_karambwan_count--;
-        s->player_food_timer = 3;
-        s->player.current_hitpoints += ZUL_KARAMBWAN_HEAL;
-        if (s->player.current_hitpoints > s->player.base_hitpoints)
-            s->player.current_hitpoints = s->player.base_hitpoints;
-    }
+    if (a == 0) return;
+    FoodType type = (a == 1) ? FOOD_SHARK : FOOD_KARAMBWAN;
+    int* count = (a == 1) ? &s->player_food_count : &s->player_karambwan_count;
+    if (*count <= 0) return;
+    EatResult r = osrs_eat_food(type, s->player.current_hitpoints,
+                                 s->player.base_hitpoints, s->player_food_timer);
+    if (!r.consumed) return;
+    (*count)--;
+    s->player_food_timer = 3;
+    s->player.current_hitpoints += r.hp_healed;
+    if (s->player.current_hitpoints > s->player.base_hitpoints)
+        s->player.current_hitpoints = s->player.base_hitpoints;
 }
 
 static void zul_process_potion(ZulrahState* s, int a) {
-    if (a == 0 || s->player_potion_timer > 0) return;
+    if (a == 0) return;
     if (a == 1) {
         /* prayer potion */
         if (s->player_restore_doses <= 0) return;
+        DrinkResult r = osrs_drink_potion(POTION_PRAYER_RESTORE, s->player.current_prayer,
+                                           s->player.base_prayer, s->player_potion_timer);
+        if (!r.consumed) return;
         s->player_restore_doses--;
         s->player_potion_timer = 3;
-        s->player.current_prayer += ZUL_PRAYER_RESTORE;
+        s->player.current_prayer += r.prayer_restored;
         if (s->player.current_prayer > s->player.base_prayer)
             s->player.current_prayer = s->player.base_prayer;
     } else if (a == 2) {
         /* antivenom: cures venom + grants immunity */
         if (s->antivenom_doses <= 0) return;
+        DrinkResult r = osrs_drink_potion(POTION_ANTIVENOM_PLUS, 0, 0, s->player_potion_timer);
+        if (!r.consumed) return;
         s->antivenom_doses--;
         s->player_potion_timer = 3;
         s->venom_counter = 0;
         s->venom_timer = 0;
-        s->antivenom_timer = ZUL_ANTIVENOM_DURATION;
+        s->antivenom_timer = r.antivenom_ticks;
     }
 }
 
@@ -1672,12 +1668,12 @@ static void zul_write_mask(EncounterState* state, float* mask) {
     off++;  /* none always valid */
     /* shark: masked if no food, food timer active, or would overheal (HP > 79) */
     if (s->player_food_count <= 0 || s->player_food_timer > 0 ||
-        s->player.current_hitpoints > s->player.base_hitpoints - ZUL_FOOD_HEAL)
+        s->player.current_hitpoints > s->player.base_hitpoints - osrs_food_heal_amount(FOOD_SHARK))
         mask[off] = 0.0f;
     off++;
     /* karambwan: masked if no karambwan, food timer active, or would overheal (HP > 81) */
     if (s->player_karambwan_count <= 0 || s->player_food_timer > 0 ||
-        s->player.current_hitpoints > s->player.base_hitpoints - ZUL_KARAMBWAN_HEAL)
+        s->player.current_hitpoints > s->player.base_hitpoints - osrs_food_heal_amount(FOOD_KARAMBWAN))
         mask[off] = 0.0f;
     off++;
     /* potion (none=0, prayer_pot=1, antivenom=2) */
@@ -1941,12 +1937,12 @@ static void zul_heuristic_actions(ZulrahState* s, int* actions) {
 
     /* eat shark at <60 HP (only if won't overheal) */
     if (hp < 60 && s->player_food_timer <= 0 && s->player_food_count > 0 &&
-        hp <= s->player.base_hitpoints - ZUL_FOOD_HEAL) {
+        hp <= s->player.base_hitpoints - osrs_food_heal_amount(FOOD_SHARK)) {
         actions[ZUL_HEAD_FOOD] = 1;  /* shark */
     }
     /* karambwan combo eat at <40 HP (emergency) */
     else if (hp < 40 && s->player_food_timer <= 0 && s->player_karambwan_count > 0 &&
-             hp <= s->player.base_hitpoints - ZUL_KARAMBWAN_HEAL) {
+             hp <= s->player.base_hitpoints - osrs_food_heal_amount(FOOD_KARAMBWAN)) {
         actions[ZUL_HEAD_FOOD] = 2;  /* karambwan */
     }
 
