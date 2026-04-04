@@ -413,7 +413,9 @@ static inline float osrs_hit_chance_double(int att_roll, int def_roll) {
 /* sum equipment bonuses from a gear loadout using ITEM_DATABASE.
    iterates all slots, sums all offensive + defensive bonuses.
    attack_speed and attack_range come from the weapon slot only.
-   ITEM_NONE (255) slots are skipped. */
+   ITEM_NONE (255) slots are skipped.
+   same data as GearBonuses (osrs_types.h) but with different field naming
+   convention (attack_stab vs stab_attack). see osrs_pvp_gear.h adapter. */
 typedef struct {
     int attack_stab, attack_slash, attack_crush, attack_magic, attack_ranged;
     int defence_stab, defence_slash, defence_crush, defence_magic, defence_ranged;

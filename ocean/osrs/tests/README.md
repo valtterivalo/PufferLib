@@ -18,6 +18,7 @@ cc -std=c11 -O0 -g -I. -o test_consumables ocean/osrs/tests/test_consumables.c -
 cc -std=c11 -O0 -g -I. -o test_bolt_procs ocean/osrs/tests/test_bolt_procs.c -lm && ./test_bolt_procs
 cc -std=c11 -O0 -g -I. -o test_damage ocean/osrs/tests/test_damage.c -lm && ./test_damage
 cc -std=c11 -O0 -g -I. -o test_inventory ocean/osrs/tests/test_inventory.c -lm && ./test_inventory
+cc -std=c11 -O0 -g -I. -o test_interaction ocean/osrs/tests/test_interaction.c -lm && ./test_interaction
 ```
 
 each binary prints `=== results: N/N passed ===` on the last line. exit code 0 = all passed.
@@ -34,6 +35,7 @@ each binary prints `=== results: N/N passed ===` on the last line. exit code 0 =
 | `test_bolt_procs.c` | 131 | diamond/opal/ruby bolt proc chances, effect formulas, ZCB guaranteed procs, miss behavior, caps, edge cases |
 | `test_damage.c` | 66 | damage pipeline (prayer reduction, vengeance reflect, recoil, smite drain), full PvP/PvE pipeline, edge cases, osrs_has_recoil_ring helper |
 | `test_inventory.c` | 148 | inventory add/remove/find, equip from inventory, equip swap, two-handed weapon logic, unequip, gear slot mapping |
+| `test_interaction.c` | — | entity interaction system (attack/follow/spec toggle), shared across encounters |
 | `test_collision.c` | — | collision map loading, tile walkability, BFS pathfinding (moved from osrs/ root) |
 
 ## reference data
