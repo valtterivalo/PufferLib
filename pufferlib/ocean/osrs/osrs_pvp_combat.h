@@ -104,7 +104,7 @@ static float get_melee_spec_str_mult(MeleeSpecWeapon weapon) {
 static float get_melee_spec_acc_mult(MeleeSpecWeapon weapon) {
     switch (weapon) {
         case MELEE_SPEC_AGS:             return 2.0f;
-        case MELEE_SPEC_DRAGON_CLAWS:    return 1.35f;
+        case MELEE_SPEC_DRAGON_CLAWS:    return 1.0f;  /* no acc mult — cascade rolls 4x at base acc */
         case MELEE_SPEC_GRANITE_MAUL:    return 1.0f;
         case MELEE_SPEC_DRAGON_DAGGER:   return 1.15f;  /* [23,20] per dps-calc */
         case MELEE_SPEC_VOIDWAKER:       return 1.0f;
@@ -857,7 +857,16 @@ static void perform_dragon_claws_spec(OsrsPvp* env, int attacker_idx, int defend
     float acc_mult = get_melee_spec_acc_mult(MELEE_SPEC_DRAGON_CLAWS);
     float hit_chance = calculate_hit_chance(env, attacker, defender, ATTACK_STYLE_MELEE, acc_mult);
     int max_hit = calculate_max_hit(attacker, ATTACK_STYLE_MELEE, 1.0f, 30);
-    /* prayer reduction is handled uniformly in apply_damage() for all attacks */
+
+    /* dragon claws cascade: 4 accuracy rolls at base hit chance. each successive
+       roll that hits uses a lower total damage range, split into 4 hitsplats.
+       ref: osrs-dps-calc src/lib/dists/claws.ts dClawDist()
+       generateTotals: low = floor(max * (4-accRoll) / 4), high = max + low - 1
+       roll 0: total in [max, 2*max-1], split [total/2, total/4, total/8, total/8+1]
+       roll 1: total in [3*max/4, 7*max/4-1], split [total/2, total/4, total/4+1, 0]
+       roll 2: total in [max/2, 3*max/2-1], split [total/2, total/2+1, 0, 0]
+       roll 3: total in [max/4, 5*max/4-1], split [total+1, 0, 0, 0]
+       all miss: 2/3 chance [1,1,0,0], 1/3 chance [0,0,0,0] */
 
     int first, second, third, fourth;
 
@@ -867,37 +876,44 @@ static void perform_dragon_claws_spec(OsrsPvp* env, int attacker_idx, int defend
     int roll4 = rand_float(env) < hit_chance;
 
     if (roll1) {
-        int min_first = (int)(max_hit * 0.5f);
-        first = min_first + rand_int(env, max_hit - min_first);
-        second = first / 2;
-        third = second / 2;
-        fourth = third + rand_int(env, 2);
+        int low = max_hit;
+        int high = max_hit + low - 1;
+        int total = low + rand_int(env, high - low + 1);
+        first = total / 2;
+        second = total / 4;
+        third = total / 8;
+        fourth = total / 8 + 1;
     } else if (roll2) {
-        first = 0;
-        int min_second = (int)(max_hit * 0.375f);
-        int max_second = (int)(max_hit * 0.875f);
-        second = min_second + rand_int(env, max_second - min_second + 1);
-        third = second / 2;
-        fourth = third + rand_int(env, 2);
+        int low = max_hit * 3 / 4;
+        int high = max_hit + low - 1;
+        int total = low + rand_int(env, high - low + 1);
+        first = total / 2;
+        second = total / 4;
+        third = total / 4 + 1;
+        fourth = 0;
     } else if (roll3) {
-        first = 0;
-        second = 0;
-        int min_third = (int)(max_hit * 0.25f);
-        int max_third = (int)(max_hit * 0.75f);
-        third = min_third + rand_int(env, max_third - min_third + 1);
-        fourth = third + rand_int(env, 2);
+        int low = max_hit / 2;
+        int high = max_hit + low - 1;
+        int total = low + rand_int(env, high - low + 1);
+        first = total / 2;
+        second = total / 2 + 1;
+        third = 0;
+        fourth = 0;
     } else if (roll4) {
-        first = 0;
+        int low = max_hit / 4;
+        int high = max_hit + low - 1;
+        int total = low + rand_int(env, high - low + 1);
+        first = total + 1;
         second = 0;
         third = 0;
-        int min_fourth = (int)(max_hit * 0.25f);
-        int max_fourth = (int)(max_hit * 1.25f);
-        fourth = min_fourth + rand_int(env, max_fourth - min_fourth + 1);
+        fourth = 0;
     } else {
-        first = 0;
-        second = 0;
-        third = rand_int(env, 2);
-        fourth = third;
+        /* all 4 rolls miss: 2/3 chance [1,1,0,0], 1/3 chance [0,0,0,0] */
+        if (rand_int(env, 3) < 2) {
+            first = 1; second = 1; third = 0; fourth = 0;
+        } else {
+            first = 0; second = 0; third = 0; fourth = 0;
+        }
     }
 
     queue_hit(attacker, defender, first, ATTACK_STYLE_MELEE, 0, 1, first > 0, 0, 0, 0, 0, 0);

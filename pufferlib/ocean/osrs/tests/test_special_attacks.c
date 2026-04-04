@@ -125,7 +125,9 @@ static void test_melee_spec_acc_multipliers(void) {
     ASSERT_FLOAT_EQ("AGS acc mult",    get_melee_spec_acc_mult(MELEE_SPEC_AGS),    2.0f, 1e-5f);
     /* dragon claws: not listed in PvNPC (custom cascade), our impl uses 1.35x
        this is the PvP value from OSRS wiki (not in ref calc for PvNPC) */
-    ASSERT_FLOAT_EQ("claws acc mult",  get_melee_spec_acc_mult(MELEE_SPEC_DRAGON_CLAWS), 1.35f, 1e-5f);
+    /* claws: no accuracy multiplier — cascade rolls 4x at base acc.
+       ref: osrs-dps-calc dists/claws.ts (no acc mult in PlayerVsNPCCalc.ts:292-309) */
+    ASSERT_FLOAT_EQ("claws acc mult",  get_melee_spec_acc_mult(MELEE_SPEC_DRAGON_CLAWS), 1.0f, 1e-5f);
     /* granite maul: no accuracy bonus */
     ASSERT_FLOAT_EQ("gmaul acc mult",  get_melee_spec_acc_mult(MELEE_SPEC_GRANITE_MAUL), 1.0f, 1e-5f);
     /* DDS: [23,20] = 1.15x. ref: dps-calc PlayerVsNPCCalc.ts:300 */
@@ -334,29 +336,31 @@ static void test_dragon_claws_cascade(void) {
     printf("--- dragon claws cascade ---\n");
 
     /* verify the multiplier table values */
-    ASSERT_FLOAT_EQ("claws acc_mult", get_melee_spec_acc_mult(MELEE_SPEC_DRAGON_CLAWS), 1.35f, 1e-5f);
+    ASSERT_FLOAT_EQ("claws acc_mult", get_melee_spec_acc_mult(MELEE_SPEC_DRAGON_CLAWS), 1.0f, 1e-5f);
     ASSERT_FLOAT_EQ("claws str_mult", get_melee_spec_str_mult(MELEE_SPEC_DRAGON_CLAWS), 1.0f,  1e-5f);
     ASSERT_INT_EQ("claws cost", get_melee_spec_cost(MELEE_SPEC_DRAGON_CLAWS), 50);
 
-    /* verify cascade ranges with a known max hit.
+    /* verify cascade total damage ranges from dps-calc dClawDist.
+       generateTotals: low = floor(max * (4-accRoll) / 4), high = max + low - 1
        with max_hit = 40:
-         roll1 hit: first in [20, 40), second = first/2, third = second/2, fourth = third + rand(0-1)
-         all miss: third = rand(0-1), fourth = third */
-
-    /* verify the min/max bounds for each cascade path.
-       these match our impl in perform_dragon_claws_spec:
-         roll1: min_first = floor(max * 0.5) = 20
-         roll2: min_second = floor(max * 0.375) = 15, max_second = floor(max * 0.875) = 35
-         roll3: min_third = floor(max * 0.25) = 10, max_third = floor(max * 0.75) = 30
-         roll4: min_fourth = floor(max * 0.25) = 10, max_fourth = floor(max * 1.25) = 50 */
+         roll 0: low=40, high=79. total in [40, 79], split [t/2, t/4, t/8, t/8+1]
+         roll 1: low=30, high=69. total in [30, 69], split [t/2, t/4, t/4+1, 0]
+         roll 2: low=20, high=59. total in [20, 59], split [t/2, t/2+1, 0, 0]
+         roll 3: low=10, high=49. total in [10, 49], split [t+1, 0, 0, 0]
+         all miss: 2/3 chance [1,1,0,0], 1/3 chance [0,0,0,0] */
     int max_hit = 40;
-    ASSERT_INT_EQ("claws roll1 min_first",  (int)(max_hit * 0.5f),   20);
-    ASSERT_INT_EQ("claws roll2 min_second", (int)(max_hit * 0.375f), 15);
-    ASSERT_INT_EQ("claws roll2 max_second", (int)(max_hit * 0.875f), 35);
-    ASSERT_INT_EQ("claws roll3 min_third",  (int)(max_hit * 0.25f),  10);
-    ASSERT_INT_EQ("claws roll3 max_third",  (int)(max_hit * 0.75f),  30);
-    ASSERT_INT_EQ("claws roll4 min_fourth", (int)(max_hit * 0.25f),  10);
-    ASSERT_INT_EQ("claws roll4 max_fourth", (int)(max_hit * 1.25f),  50);
+    /* roll 0 total range */
+    ASSERT_INT_EQ("claws roll0 low",  max_hit * 4 / 4, 40);
+    ASSERT_INT_EQ("claws roll0 high", max_hit + max_hit * 4 / 4 - 1, 79);
+    /* roll 1 total range */
+    ASSERT_INT_EQ("claws roll1 low",  max_hit * 3 / 4, 30);
+    ASSERT_INT_EQ("claws roll1 high", max_hit + max_hit * 3 / 4 - 1, 69);
+    /* roll 2 total range */
+    ASSERT_INT_EQ("claws roll2 low",  max_hit * 2 / 4, 20);
+    ASSERT_INT_EQ("claws roll2 high", max_hit + max_hit * 2 / 4 - 1, 59);
+    /* roll 3 total range */
+    ASSERT_INT_EQ("claws roll3 low",  max_hit * 1 / 4, 10);
+    ASSERT_INT_EQ("claws roll3 high", max_hit + max_hit * 1 / 4 - 1, 49);
 }
 
 /* ======================================================================== */

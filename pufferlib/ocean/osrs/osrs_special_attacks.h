@@ -130,10 +130,17 @@ static inline SpecResult osrs_resolve_spec(
         break;
     }
 
-    /* dragon claws: 4-hit cascade, 1.35x accuracy, 1.0x base max hit.
-       ref: osrs-dps-calc dists/claws.ts, osrs_pvp_combat.h:852-910 */
+    /* dragon claws: 4-hit cascade at BASE accuracy (no multiplier).
+       each successive roll uses a lower total damage range, split into 4 hitsplats.
+       ref: osrs-dps-calc src/lib/dists/claws.ts dClawDist()
+       generateTotals: low = floor(max * (4-accRoll) / 4), high = max + low - 1
+       roll 0: total in [max, 2*max-1], split [total/2, total/4, total/8, total/8+1]
+       roll 1: total in [3*max/4, 7*max/4-1], split [total/2, total/4, total/4+1, 0]
+       roll 2: total in [max/2, 3*max/2-1], split [total/2, total/2+1, 0, 0]
+       roll 3: total in [max/4, 5*max/4-1], split [total+1, 0, 0, 0]
+       all miss: 2/3 chance [1,1,0,0], 1/3 chance [0,0,0,0] */
     case ITEM_DRAGON_CLAWS: {
-        float hit_chance = osrs_hit_chance(att_roll * 135 / 100, def_roll);
+        float hit_chance = osrs_hit_chance(att_roll, def_roll);  /* no acc mult */
         r.spec_cost = 50;
         r.num_hits = 4;
 
@@ -143,37 +150,43 @@ static inline SpecResult osrs_resolve_spec(
         int roll4 = encounter_rand_float(rng_state) < hit_chance;
 
         if (roll1) {
-            int min_first = (int)(max_hit * 0.5f);
-            r.damage[0] = min_first + encounter_rand_int(rng_state, max_hit - min_first);
-            r.damage[1] = r.damage[0] / 2;
-            r.damage[2] = r.damage[1] / 2;
-            r.damage[3] = r.damage[2] + encounter_rand_int(rng_state, 2);
+            int low = max_hit;
+            int high = max_hit + low - 1;
+            int total = low + encounter_rand_int(rng_state, high - low + 1);
+            r.damage[0] = total / 2;
+            r.damage[1] = total / 4;
+            r.damage[2] = total / 8;
+            r.damage[3] = total / 8 + 1;
         } else if (roll2) {
-            r.damage[0] = 0;
-            int min_second = (int)(max_hit * 0.375f);
-            int max_second = (int)(max_hit * 0.875f);
-            r.damage[1] = min_second + encounter_rand_int(rng_state, max_second - min_second + 1);
-            r.damage[2] = r.damage[1] / 2;
-            r.damage[3] = r.damage[2] + encounter_rand_int(rng_state, 2);
+            int low = max_hit * 3 / 4;
+            int high = max_hit + low - 1;
+            int total = low + encounter_rand_int(rng_state, high - low + 1);
+            r.damage[0] = total / 2;
+            r.damage[1] = total / 4;
+            r.damage[2] = total / 4 + 1;
+            r.damage[3] = 0;
         } else if (roll3) {
-            r.damage[0] = 0;
-            r.damage[1] = 0;
-            int min_third = (int)(max_hit * 0.25f);
-            int max_third = (int)(max_hit * 0.75f);
-            r.damage[2] = min_third + encounter_rand_int(rng_state, max_third - min_third + 1);
-            r.damage[3] = r.damage[2] + encounter_rand_int(rng_state, 2);
+            int low = max_hit / 2;
+            int high = max_hit + low - 1;
+            int total = low + encounter_rand_int(rng_state, high - low + 1);
+            r.damage[0] = total / 2;
+            r.damage[1] = total / 2 + 1;
+            r.damage[2] = 0;
+            r.damage[3] = 0;
         } else if (roll4) {
-            r.damage[0] = 0;
+            int low = max_hit / 4;
+            int high = max_hit + low - 1;
+            int total = low + encounter_rand_int(rng_state, high - low + 1);
+            r.damage[0] = total + 1;
             r.damage[1] = 0;
             r.damage[2] = 0;
-            int min_fourth = (int)(max_hit * 0.25f);
-            int max_fourth = (int)(max_hit * 1.25f);
-            r.damage[3] = min_fourth + encounter_rand_int(rng_state, max_fourth - min_fourth + 1);
+            r.damage[3] = 0;
         } else {
-            r.damage[0] = 0;
-            r.damage[1] = 0;
-            r.damage[2] = encounter_rand_int(rng_state, 2);
-            r.damage[3] = r.damage[2];
+            /* all 4 rolls miss: 2/3 chance [1,1,0,0], 1/3 chance [0,0,0,0] */
+            if (encounter_rand_int(rng_state, 3) < 2) {
+                r.damage[0] = 1; r.damage[1] = 1;
+            }
+            r.damage[2] = 0; r.damage[3] = 0;
         }
         r.total_damage = r.damage[0] + r.damage[1] + r.damage[2] + r.damage[3];
         break;
