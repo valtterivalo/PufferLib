@@ -127,7 +127,15 @@ static const NpcModelMapping NPC_MODEL_MAP_INFERNO[] = {
 #define INF_PILLAR_MODEL_50   33042  /* object 30286 — 50% HP */
 #define INF_PILLAR_MODEL_25   33045  /* object 30287 — 25% HP */
 
+/* include pipeline-generated NPC model maps */
+#include "npc_models_zulrah.h"
+
 static const NpcModelMapping* npc_model_lookup(uint16_t npc_id) {
+    /* search pipeline-generated maps first (preferred over legacy hardcoded) */
+    for (int i = 0; i < (int)(sizeof(NPC_MODEL_MAP_ZULRAH_GEN) / sizeof(NPC_MODEL_MAP_ZULRAH_GEN[0])); i++) {
+        if (NPC_MODEL_MAP_ZULRAH_GEN[i].npc_id == npc_id) return &NPC_MODEL_MAP_ZULRAH_GEN[i];
+    }
+    /* legacy hardcoded maps */
     for (int i = 0; i < (int)(sizeof(NPC_MODEL_MAP_ZULRAH) / sizeof(NPC_MODEL_MAP_ZULRAH[0])); i++) {
         if (NPC_MODEL_MAP_ZULRAH[i].npc_id == npc_id) return &NPC_MODEL_MAP_ZULRAH[i];
     }

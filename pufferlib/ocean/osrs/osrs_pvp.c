@@ -263,6 +263,12 @@ static void run_visual(OsrsPvp* env, const char* encounter_name, const char* rep
         rc->collision_map = (const CollisionMap*)env->collision_map;
         rc->collision_world_offset_x = 2256;
         rc->collision_world_offset_y = 3061;
+
+        rc->npc_model_cache = model_cache_load("data/zulrah.models");
+        rc->npc_anim_cache = anim_cache_load("data/zulrah.anims");
+        fprintf(stderr, "zulrah: npc_models=%d, npc_anims=%d seqs\n",
+                rc->npc_model_cache ? rc->npc_model_cache->count : 0,
+                rc->npc_anim_cache ? rc->npc_anim_cache->seq_count : 0);
     } else if (encounter_name && strcmp(encounter_name, "inferno") == 0) {
         rc->terrain = terrain_load("data/inferno.terrain");
         rc->objects = objects_load("data/inferno.objects");
