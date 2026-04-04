@@ -81,30 +81,60 @@
     "index": "MON_ZULRAH_GREEN",
     "npc_id": 2042,
     "version": "Serpentine",
-    "comment": "Zulrah green/ranged form"
+    "comment": "Zulrah green/ranged form",
+    "visual": {
+      "group": "zulrah",
+      "attack_anims": ["SNAKEBOSS_ATTACK_ACIDX3", "SNAKEBOSS_ATTACK_ACIDX1"],
+      "extra_anims": ["SNAKEBOSS_SPAWN", "SNAKEBOSS_SINKFAST", "SNAKEBOSS_EMERGEFAST", "SNAKEBOSS_DEATH", "SNAKEBOSS_DEFEND"],
+      "spotanims": ["SNAKEBOSS_ORB", "SNAKEBOSS_DOUBLE_ORB", "SNAKEBOSS_FIREBALL", "SNAKEBOSS_EGG", "SNAKEBOSS_MINION_SPELL"]
+    }
   },
   {
     "index": "MON_ZULRAH_RED",
     "npc_id": 2043,
     "version": "Magma",
-    "comment": "Zulrah red/melee form"
+    "comment": "Zulrah red/melee form",
+    "visual": {
+      "group": "zulrah",
+      "attack_anims": ["SNAKEBOSS_ATTACK_TAIL_LEFT", "SNAKEBOSS_ATTACK_TAIL_RIGHT"],
+      "extra_anims": ["SNAKEBOSS_DEATH", "SNAKEBOSS_DEFEND"],
+      "spotanims": []
+    }
   },
   {
     "index": "MON_ZULRAH_BLUE",
     "npc_id": 2044,
     "version": "Tanzanite",
-    "comment": "Zulrah blue/magic form"
+    "comment": "Zulrah blue/magic form",
+    "visual": {
+      "group": "zulrah",
+      "attack_anims": ["SNAKEBOSS_ATTACK_ACIDX3"],
+      "extra_anims": ["SNAKEBOSS_DEATH", "SNAKEBOSS_DEFEND"],
+      "spotanims": ["SNAKEBOSS_ORB", "SNAKEBOSS_FIREBALL"]
+    }
   },
   {
     "index": "MON_ZULRAH_SNAKELING_MELEE",
     "npc_id": 2045,
     "version": "Melee",
-    "comment": "Snakeling melee variant"
+    "comment": "Snakeling melee variant",
+    "visual": {
+      "group": "zulrah",
+      "attack_anims": [],
+      "extra_anims": [],
+      "spotanims": []
+    }
   },
   {
     "index": "MON_ZULRAH_SNAKELING_MAGIC",
     "npc_id": 2046,
     "version": "Magic",
-    "comment": "Snakeling magic variant"
+    "comment": "Snakeling magic variant",
+    "visual": {
+      "group": "zulrah",
+      "attack_anims": [],
+      "extra_anims": [],
+      "spotanims": ["SNAKEBOSS_MINION_SPELL"]
+    }
   }
 ]
