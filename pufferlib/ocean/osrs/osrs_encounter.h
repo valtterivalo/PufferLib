@@ -1084,12 +1084,22 @@ static inline void encounter_compute_loadout_stats(
     out->style_bonus = style_bonus;
     out->spell_base_damage = spell_base_damage;
 
-    /* effective attack level: floor(base * prayer_mult) + style_bonus + 8 */
-    out->eff_level = (int)(base_level * att_prayer_mult) + style_bonus + 8;
+    /* effective attack level: floor(base * prayer_mult) + style_bonus + 8.
+       magic uses +9 (OSRS invisible +1 boost) instead of +style_bonus+8.
+       ref: OSRS wiki "magic effective level = floor(base * prayer) + 9". */
+    if (style == ATTACK_STYLE_MAGIC) {
+        out->eff_level = (int)(base_level * att_prayer_mult) + 9;
+    } else {
+        out->eff_level = (int)(base_level * att_prayer_mult) + style_bonus + 8;
+    }
 
     /* effective strength level (for max hit): floor(base * str_prayer_mult) + style_bonus + 8
        note: style_bonus for strength is typically 0 for rapid/autocast, +3 for aggressive */
     int eff_str_level = (int)(base_level * str_prayer_mult) + style_bonus + 8;
+
+    /* augury magic damage multiplier: +4% (matches PvP calculate_max_hit). */
+    float magic_dmg_prayer_mult = 1.0f;
+    if (prayer == ENCOUNTER_PRAYER_AUGURY) magic_dmg_prayer_mult = 1.04f;
 
     /* max hit and strength bonus depend on combat style */
     if (style == ATTACK_STYLE_RANGED) {
@@ -1097,7 +1107,7 @@ static inline void encounter_compute_loadout_stats(
         out->max_hit = (int)(0.5 + eff_str_level * (sum_ranged_strength + 64) / 640.0);
     } else if (style == ATTACK_STYLE_MAGIC) {
         out->strength_bonus = sum_magic_damage;
-        out->max_hit = (int)(spell_base_damage * (1.0 + sum_magic_damage / 100.0));
+        out->max_hit = (int)(spell_base_damage * (1.0 + sum_magic_damage / 100.0) * magic_dmg_prayer_mult);
     } else {
         out->strength_bonus = sum_melee_strength;
         out->max_hit = (int)(0.5 + eff_str_level * (sum_melee_strength + 64) / 640.0);
@@ -1122,10 +1132,14 @@ static inline void encounter_compute_loadout_stats(
 static inline void encounter_update_loadout_level(
     EncounterLoadoutStats* ls, int current_att_level, int current_str_level
 ) {
-    ls->eff_level = (int)(current_att_level * ls->att_prayer_mult) + ls->style_bonus + 8;
+    /* magic uses +9 invisible boost (matches encounter_compute_loadout_stats) */
     if (ls->style == ATTACK_STYLE_MAGIC) {
-        ls->max_hit = (int)(ls->spell_base_damage * (1.0 + ls->strength_bonus / 100.0));
+        ls->eff_level = (int)(current_att_level * ls->att_prayer_mult) + 9;
+        /* augury +4% magic damage. att_prayer_mult == 1.25 iff augury. */
+        float magic_dmg_mult = (ls->att_prayer_mult > 1.24f) ? 1.04f : 1.0f;
+        ls->max_hit = (int)(ls->spell_base_damage * (1.0 + ls->strength_bonus / 100.0) * magic_dmg_mult);
     } else {
+        ls->eff_level = (int)(current_att_level * ls->att_prayer_mult) + ls->style_bonus + 8;
         int eff_str = (int)(current_str_level * ls->str_prayer_mult) + ls->style_bonus + 8;
         ls->max_hit = (int)(0.5 + eff_str * (ls->strength_bonus + 64) / 640.0);
     }

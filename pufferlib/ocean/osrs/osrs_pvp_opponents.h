@@ -507,8 +507,6 @@ static void opp_handle_delayed_prayer(OsrsPvp* env, OpponentState* opp, int* act
     opp_process_pending_prayer(opp, actions);
 }
 
-/* (click budget no longer needed — direct action heads have fixed count) */
-
 /* =========================================================================
  * Policy implementations
  * ========================================================================= */

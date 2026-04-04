@@ -393,7 +393,6 @@ void pvp_reset(OsrsPvp* env) {
     // This gives OSRS-correct 1-tick delay: action at tick N → effects at tick N+1.
     memset(env->pending_actions, 0, sizeof(env->pending_actions));
     memset(env->last_executed_actions, 0, sizeof(env->last_executed_actions));
-    env->has_pending_actions = 0;  // Not used with immediate application
 
     // Initialize slot mode equipment with correlated per-episode gear randomization
     // LMS tier distribution: 80% same, 15% ±1 tier, 5% ±2 tiers
@@ -670,7 +669,6 @@ void pvp_step(OsrsPvp* env) {
     // Keep pending in sync for compatibility (not used for timing anymore)
     memcpy(env->pending_actions, env->actions,
            NUM_AGENTS * NUM_ACTION_HEADS * sizeof(int));
-    env->has_pending_actions = 1;
 
     // ========================================================================
     // PHASE 4: Check win conditions

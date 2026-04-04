@@ -157,8 +157,9 @@ typedef enum {
     ITEM_JUSTICIAR_FACEGUARD = 97,
     ITEM_JUSTICIAR_CHESTGUARD = 98,
     ITEM_JUSTICIAR_LEGGUARDS = 99,
+    ITEM_DRAGON_DART = 100,
 
-    NUM_ITEMS = 100,
+    NUM_ITEMS = 101,
     ITEM_NONE = 255
 } ItemIndex;
 
@@ -221,15 +222,15 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 10, .attack_ranged = 10,
         .defence_stab = 3, .defence_slash = 3, .defence_crush = 3,
         .defence_magic = 3, .defence_ranged = 3,
-        .melee_strength = 6, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .melee_strength = 6, .ranged_strength = 0, .magic_damage = 0, .prayer = 3
     },
     [ITEM_BLACK_DHIDE_BODY] = {
         .item_id = 2503, .name = "Black d'hide body", .slot = SLOT_BODY,
         .attack_speed = 0, .attack_range = 0,
         .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
         .attack_magic = -15, .attack_ranged = 30,
-        .defence_stab = 55, .defence_slash = 47, .defence_crush = 62,
-        .defence_magic = 50, .defence_ranged = 57,
+        .defence_stab = 30, .defence_slash = 38, .defence_crush = 45,
+        .defence_magic = 45, .defence_ranged = 50,
         .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
     },
     [ITEM_MYSTIC_TOP] = {
@@ -301,7 +302,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_stab = 25, .attack_slash = 24, .attack_crush = 23,
         .attack_magic = -3, .attack_ranged = -2,
         .defence_stab = 25, .defence_slash = 24, .defence_crush = 23,
-        .defence_magic = -3, .defence_ranged = 24,
+        .defence_magic = -3, .defence_ranged = -2,
         .melee_strength = 6, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
     },
     [ITEM_SPIRIT_SHIELD] = {
@@ -364,7 +365,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
     [ITEM_INQUISITORS_MACE] = {
         .item_id = 24417, .name = "Inquisitor's mace", .slot = SLOT_WEAPON,
         .attack_speed = 4, .attack_range = 1,
-        .attack_stab = 0, .attack_slash = 0, .attack_crush = 95,
+        .attack_stab = 52, .attack_slash = -4, .attack_crush = 95,
         .attack_magic = 0, .attack_ranged = 0,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = 0,
@@ -373,10 +374,10 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
     [ITEM_STAFF_OF_DEAD] = {
         .item_id = 11791, .name = "Staff of the dead", .slot = SLOT_WEAPON,
         .attack_speed = 5, .attack_range = 10,
-        .attack_stab = 55, .attack_slash = -1, .attack_crush = 70,
-        .attack_magic = 15, .attack_ranged = 0,
-        .defence_stab = 3, .defence_slash = 1, .defence_crush = 0,
-        .defence_magic = 15, .defence_ranged = 0,
+        .attack_stab = 55, .attack_slash = 70, .attack_crush = 0,
+        .attack_magic = 17, .attack_ranged = 0,
+        .defence_stab = 0, .defence_slash = 3, .defence_crush = 3,
+        .defence_magic = 17, .defence_ranged = 0,
         .melee_strength = 72, .ranged_strength = 0, .magic_damage = 15, .prayer = 0
     },
     [ITEM_KODAI_WAND] = {
@@ -384,7 +385,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_speed = 5, .attack_range = 10,
         .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
         .attack_magic = 28, .attack_ranged = 0,
-        .defence_stab = 3, .defence_slash = 3, .defence_crush = 3,
+        .defence_stab = 0, .defence_slash = 3, .defence_crush = 3,
         .defence_magic = 20, .defence_ranged = 0,
         .melee_strength = 0, .ranged_strength = 0, .magic_damage = 15, .prayer = 0
     },
@@ -393,8 +394,8 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_speed = 5, .attack_range = 10,
         .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
         .attack_magic = 16, .attack_ranged = 0,
-        .defence_stab = 5, .defence_slash = 5, .defence_crush = 5,
-        .defence_magic = 15, .defence_ranged = 0,
+        .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
+        .defence_magic = 14, .defence_ranged = 0,
         .melee_strength = 0, .ranged_strength = 0, .magic_damage = 15, .prayer = 0
     },
     [ITEM_ZURIELS_STAFF] = {
@@ -413,23 +414,23 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 100,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 1
     },
     [ITEM_ZARYTE_CROSSBOW] = {
         .item_id = 26374, .name = "Zaryte crossbow", .slot = SLOT_WEAPON,
         .attack_speed = 5, .attack_range = 7,
         .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
         .attack_magic = 0, .attack_ranged = 110,
-        .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
-        .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .defence_stab = 14, .defence_slash = 14, .defence_crush = 12,
+        .defence_magic = 15, .defence_ranged = 16,
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 1
     },
     [ITEM_DRAGON_CLAWS] = {
         .item_id = 13652, .name = "Dragon claws", .slot = SLOT_WEAPON,
         .attack_speed = 4, .attack_range = 1,
         .attack_stab = 41, .attack_slash = 57, .attack_crush = -4,
         .attack_magic = 0, .attack_ranged = 0,
-        .defence_stab = 13, .defence_slash = 26, .defence_crush = -1,
+        .defence_stab = 13, .defence_slash = 26, .defence_crush = 7,
         .defence_magic = 0, .defence_ranged = 0,
         .melee_strength = 56, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
     },
@@ -485,7 +486,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 125,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 15, .magic_damage = 0, .prayer = 0
     },
     [ITEM_VESTAS] = {
         .item_id = 22613, .name = "Vesta's longsword", .slot = SLOT_WEAPON,
@@ -530,53 +531,53 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .item_id = 21018, .name = "Ancestral hat", .slot = SLOT_HEAD,
         .attack_speed = 0, .attack_range = 0,
         .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
-        .attack_magic = 8, .attack_ranged = 0,
-        .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
-        .defence_magic = 8, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 2, .prayer = 0
+        .attack_magic = 8, .attack_ranged = -2,
+        .defence_stab = 12, .defence_slash = 11, .defence_crush = 13,
+        .defence_magic = 5, .defence_ranged = 0,
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 3, .prayer = 0
     },
     [ITEM_ANCESTRAL_TOP] = {
         .item_id = 21021, .name = "Ancestral robe top", .slot = SLOT_BODY,
         .attack_speed = 0, .attack_range = 0,
         .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
-        .attack_magic = 35, .attack_ranged = 0,
-        .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
-        .defence_magic = 35, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 2, .prayer = 0
+        .attack_magic = 35, .attack_ranged = -8,
+        .defence_stab = 42, .defence_slash = 31, .defence_crush = 51,
+        .defence_magic = 28, .defence_ranged = 0,
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 3, .prayer = 0
     },
     [ITEM_ANCESTRAL_BOTTOM] = {
         .item_id = 21024, .name = "Ancestral robe bottom", .slot = SLOT_LEGS,
         .attack_speed = 0, .attack_range = 0,
         .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
-        .attack_magic = 26, .attack_ranged = 0,
-        .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
-        .defence_magic = 26, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 2, .prayer = 0
+        .attack_magic = 26, .attack_ranged = -7,
+        .defence_stab = 27, .defence_slash = 24, .defence_crush = 30,
+        .defence_magic = 20, .defence_ranged = 0,
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 3, .prayer = 0
     },
     [ITEM_AHRIMS_ROBETOP] = {
         .item_id = 4712, .name = "Ahrim's robetop", .slot = SLOT_BODY,
         .attack_speed = 0, .attack_range = 0,
         .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
-        .attack_magic = 30, .attack_ranged = 0,
+        .attack_magic = 30, .attack_ranged = -10,
         .defence_stab = 52, .defence_slash = 37, .defence_crush = 63,
         .defence_magic = 30, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 1, .prayer = 0
     },
     [ITEM_AHRIMS_ROBESKIRT] = {
         .item_id = 4714, .name = "Ahrim's robeskirt", .slot = SLOT_LEGS,
         .attack_speed = 0, .attack_range = 0,
         .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
-        .attack_magic = 22, .attack_ranged = 0,
+        .attack_magic = 22, .attack_ranged = -7,
         .defence_stab = 33, .defence_slash = 30, .defence_crush = 36,
         .defence_magic = 22, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 1, .prayer = 0
     },
     [ITEM_KARILS_TOP] = {
         .item_id = 4736, .name = "Karil's leathertop", .slot = SLOT_BODY,
         .attack_speed = 0, .attack_range = 0,
         .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
         .attack_magic = -15, .attack_ranged = 30,
-        .defence_stab = 57, .defence_slash = 48, .defence_crush = 63,
+        .defence_stab = 47, .defence_slash = 42, .defence_crush = 50,
         .defence_magic = 65, .defence_ranged = 57,
         .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
     },
@@ -614,7 +615,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 12, .attack_ranged = 0,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 10, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 5, .prayer = 2
     },
     [ITEM_INFERNAL_CAPE] = {
         .item_id = 21295, .name = "Infernal cape", .slot = SLOT_CAPE,
@@ -622,7 +623,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_stab = 4, .attack_slash = 4, .attack_crush = 4,
         .attack_magic = 1, .attack_ranged = 1,
         .defence_stab = 12, .defence_slash = 12, .defence_crush = 12,
-        .defence_magic = 1, .defence_ranged = 12,
+        .defence_magic = 12, .defence_ranged = 12,
         .melee_strength = 8, .ranged_strength = 0, .magic_damage = 0, .prayer = 2
     },
     [ITEM_ETERNAL_BOOTS] = {
@@ -631,8 +632,8 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
         .attack_magic = 8, .attack_ranged = 0,
         .defence_stab = 5, .defence_slash = 5, .defence_crush = 5,
-        .defence_magic = 8, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .defence_magic = 8, .defence_ranged = 5,
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 1, .prayer = 0
     },
     [ITEM_SEERS_RING_I] = {
         .item_id = 11770, .name = "Seers ring (i)", .slot = SLOT_RING,
@@ -877,8 +878,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 30,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = 0,
-        /* ranged_strength = 20 (blowpipe) + 35 (dragon darts, hardcoded for now) */
-        .melee_strength = 0, .ranged_strength = 55, .magic_damage = 0, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 20, .magic_damage = 0, .prayer = 0
     },
 
     // --- tier 1 (mid) mage ---
@@ -1081,7 +1081,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .item_id = 4224, .name = "Crystal shield", .slot = SLOT_SHIELD,
         .attack_speed = 0, .attack_range = 0,
         .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
-        .attack_magic = 0, .attack_ranged = 0,
+        .attack_magic = -10, .attack_ranged = -10,
         .defence_stab = 51, .defence_slash = 54, .defence_crush = 53,
         .defence_magic = 0, .defence_ranged = 80,
         .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
@@ -1091,8 +1091,8 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_speed = 0, .attack_range = 0,
         .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
         .attack_magic = -12, .attack_ranged = 12,
-        .defence_stab = 5, .defence_slash = 3, .defence_crush = 5,
-        .defence_magic = -3, .defence_ranged = 5,
+        .defence_stab = 5, .defence_slash = 5, .defence_crush = 5,
+        .defence_magic = 5, .defence_ranged = 5,
         .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
     },
     [ITEM_JUSTICIAR_FACEGUARD] = {
@@ -1100,27 +1100,36 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_speed = 0, .attack_range = 0,
         .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
         .attack_magic = -6, .attack_ranged = -2,
-        .defence_stab = 56, .defence_slash = 59, .defence_crush = 63,
-        .defence_magic = -4, .defence_ranged = 59,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 1
+        .defence_stab = 60, .defence_slash = 63, .defence_crush = 59,
+        .defence_magic = -6, .defence_ranged = 67,
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 2
     },
     [ITEM_JUSTICIAR_CHESTGUARD] = {
         .item_id = 22327, .name = "Justiciar chestguard", .slot = SLOT_BODY,
         .attack_speed = 0, .attack_range = 0,
         .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
-        .attack_magic = -16, .attack_ranged = -7,
-        .defence_stab = 132, .defence_slash = 130, .defence_crush = 107,
-        .defence_magic = -16, .defence_ranged = 69,
+        .attack_magic = -40, .attack_ranged = -20,
+        .defence_stab = 132, .defence_slash = 130, .defence_crush = 117,
+        .defence_magic = -16, .defence_ranged = 142,
         .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 4
     },
     [ITEM_JUSTICIAR_LEGGUARDS] = {
         .item_id = 22328, .name = "Justiciar legguards", .slot = SLOT_LEGS,
         .attack_speed = 0, .attack_range = 0,
         .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
-        .attack_magic = -21, .attack_ranged = -14,
-        .defence_stab = 95, .defence_slash = 92, .defence_crush = 83,
-        .defence_magic = -9, .defence_ranged = 65,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 3
+        .attack_magic = -31, .attack_ranged = -17,
+        .defence_stab = 95, .defence_slash = 92, .defence_crush = 93,
+        .defence_magic = -14, .defence_ranged = 102,
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 4
+    },
+    [ITEM_DRAGON_DART] = {
+        .item_id = 11230, .name = "Dragon dart", .slot = SLOT_AMMO,
+        .attack_speed = 0, .attack_range = 0,
+        .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
+        .attack_magic = 0, .attack_ranged = 0,
+        .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
+        .defence_magic = 0, .defence_ranged = 0,
+        .melee_strength = 0, .ranged_strength = 35, .magic_damage = 0, .prayer = 0
     },
 };
 

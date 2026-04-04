@@ -285,6 +285,9 @@ static int calculate_effective_defence(Player* p, AttackStyle incoming_style) {
     }
 
     if (incoming_style == ATTACK_STYLE_MAGIC) {
+        /* magic defence: floor(magic * 0.7 + def * 0.3) + style_bonus + 8.
+           the +8 is added AFTER the blend, not inside the 30% component.
+           ref: OSRS wiki "magic defence effective level", osrs_player_def_roll_vs_npc. */
         float magic_prayer_mult = 1.0f;
         if (p->offensive_prayer == OFFENSIVE_PRAYER_AUGURY) {
             magic_prayer_mult = 1.25f;
@@ -292,10 +295,8 @@ static int calculate_effective_defence(Player* p, AttackStyle incoming_style) {
             magic_prayer_mult = 1.15f;
         }
         int magic_level = (int)floorf(p->current_magic * magic_prayer_mult);
-        int def_level = (int)floorf(p->current_defence * prayer_mult) + style_bonus + 8;
-        int magic_part = (int)floorf(magic_level * 0.7f);
-        int def_part = (int)floorf(def_level * 0.3f);
-        return magic_part + def_part;
+        int def_level = (int)floorf(p->current_defence * prayer_mult);
+        return (int)(magic_level * 0.7f + def_level * 0.3f) + style_bonus + 8;
     }
 
     float effective = floorf(base_level * prayer_mult);
@@ -310,7 +311,15 @@ static MeleeBonusType get_melee_bonus_type(Player* p) {
     if (p->current_gear == GEAR_SPEC) {
         return MELEE_SPEC_BONUS_TYPES[p->melee_spec_weapon];
     }
-    return MELEE_BONUS_SLASH;
+    /* pick the weapon's best melee attack bonus type.
+       rapier is stab (94), whip is slash (82), mace is crush (95).
+       matches encounter_compute_loadout_stats() which also picks best. */
+    GearBonuses* g = get_slot_gear_bonuses(p);
+    MeleeBonusType best = MELEE_BONUS_STAB;
+    int best_val = g->stab_attack;
+    if (g->slash_attack > best_val) { best = MELEE_BONUS_SLASH; best_val = g->slash_attack; }
+    if (g->crush_attack > best_val) { best = MELEE_BONUS_CRUSH; }
+    return best;
 }
 
 static int get_attack_bonus(Player* p, AttackStyle style) {

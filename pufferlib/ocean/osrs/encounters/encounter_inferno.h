@@ -158,7 +158,7 @@ static const InfNPCStats INF_NPC_STATS[INF_NUM_NPC_TYPES] = {
     [INF_NPC_BAT] = { .hp = 25, .attack_speed = 3, .attack_range = 4, .size = 2,
         .default_style = ATTACK_STYLE_RANGED, .melee_style = MELEE_STYLE_STAB, .can_melee = 0,
         .att_level = 0, .str_level = 0, .def_level = 55, .range_level = 120, .magic_level = 120,
-        .melee_att_bonus = 0, .range_att_bonus = 25, .magic_att_bonus = 0,
+        .melee_att_bonus = 0, .range_att_bonus = 30, .magic_att_bonus = 0,
         .melee_str_bonus = 0, .ranged_str_bonus = 30, .magic_base_dmg = 0, .magic_dmg_pct = 0,
         .stab_def = 30, .slash_def = 30, .crush_def = 30, .magic_def_bonus = -20, .ranged_def_bonus = 45,
         .stun_on_spawn = 0, .can_move = 1 },
@@ -169,7 +169,7 @@ static const InfNPCStats INF_NPC_STATS[INF_NUM_NPC_TYPES] = {
     [INF_NPC_BLOB] = { .hp = 40, .attack_speed = 3, .attack_range = 15, .size = 3,
         .default_style = ATTACK_STYLE_MAGIC, .melee_style = MELEE_STYLE_CRUSH, .can_melee = 1,
         .att_level = 160, .str_level = 160, .def_level = 95, .range_level = 160, .magic_level = 160,
-        .melee_att_bonus = 0, .range_att_bonus = 40, .magic_att_bonus = 45,
+        .melee_att_bonus = 0, .range_att_bonus = 45, .magic_att_bonus = 45,
         .melee_str_bonus = 45, .ranged_str_bonus = 45, .magic_base_dmg = 29, .magic_dmg_pct = 100,
         .stab_def = 25, .slash_def = 25, .crush_def = 25, .magic_def_bonus = 25, .ranged_def_bonus = 25,
         .stun_on_spawn = 0, .can_move = 1 },
@@ -178,7 +178,7 @@ static const InfNPCStats INF_NPC_STATS[INF_NUM_NPC_TYPES] = {
     [INF_NPC_BLOB_MELEE] = { .hp = 15, .attack_speed = 4, .attack_range = 1, .size = 1,
         .default_style = ATTACK_STYLE_MELEE, .melee_style = MELEE_STYLE_CRUSH, .can_melee = 0,
         .att_level = 120, .str_level = 120, .def_level = 95, .range_level = 0, .magic_level = 0,
-        .melee_att_bonus = 0, .range_att_bonus = 25, .magic_att_bonus = 0,
+        .melee_att_bonus = 0, .range_att_bonus = 0, .magic_att_bonus = 0,
         .melee_str_bonus = 25, .ranged_str_bonus = 0, .magic_base_dmg = 0, .magic_dmg_pct = 0,
         .stab_def = 25, .slash_def = 25, .crush_def = 25, .magic_def_bonus = 0, .ranged_def_bonus = 0,
         .stun_on_spawn = 0, .can_move = 1 },
@@ -192,13 +192,12 @@ static const InfNPCStats INF_NPC_STATS[INF_NUM_NPC_TYPES] = {
         .stab_def = 0, .slash_def = 0, .crush_def = 0, .magic_def_bonus = 0, .ranged_def_bonus = 25,
         .stun_on_spawn = 0, .can_move = 1 },
 
-    /* BLOB_MAGE (JalAkRekMej): magic split. wiki max hit = 25. InfernoTrainer has
-       magicMaxHit()=0 (base Mob) but wiki clearly shows max hit 25 — use wiki value. */
+    /* BLOB_MAGE (JalAkRekMej): magic split. wiki max hit = 18. */
     [INF_NPC_BLOB_MAGE] = { .hp = 15, .attack_speed = 4, .attack_range = 15, .size = 1,
         .default_style = ATTACK_STYLE_MAGIC, .melee_style = MELEE_STYLE_STAB, .can_melee = 0,
         .att_level = 0, .str_level = 0, .def_level = 95, .range_level = 0, .magic_level = 120,
         .melee_att_bonus = 0, .range_att_bonus = 0, .magic_att_bonus = 25,
-        .melee_str_bonus = 0, .ranged_str_bonus = 0, .magic_base_dmg = 25, .magic_dmg_pct = 100,
+        .melee_str_bonus = 0, .ranged_str_bonus = 0, .magic_base_dmg = 18, .magic_dmg_pct = 100,
         .stab_def = 0, .slash_def = 0, .crush_def = 0, .magic_def_bonus = 25, .ranged_def_bonus = 0,
         .stun_on_spawn = 0, .can_move = 1 },
 
@@ -235,7 +234,7 @@ static const InfNPCStats INF_NPC_STATS[INF_NUM_NPC_TYPES] = {
         .default_style = ATTACK_STYLE_RANGED, .melee_style = MELEE_STYLE_STAB, .can_melee = 0,
         .att_level = 750, .str_level = 1020, .def_level = 480, .range_level = 1020, .magic_level = 510,
         .melee_att_bonus = 0, .range_att_bonus = 80, .magic_att_bonus = 100,
-        .melee_str_bonus = 0, .ranged_str_bonus = 80, .magic_base_dmg = 113, .magic_dmg_pct = 100,
+        .melee_str_bonus = 0, .ranged_str_bonus = 0, .magic_base_dmg = 113, .magic_dmg_pct = 100,
         .stab_def = 0, .slash_def = 0, .crush_def = 0, .magic_def_bonus = 0, .ranged_def_bonus = 0,
         .max_hit_cap = 113,
         .stun_on_spawn = 0, .can_move = 1 },
@@ -249,21 +248,21 @@ static const InfNPCStats INF_NPC_STATS[INF_NUM_NPC_TYPES] = {
         .stab_def = 0, .slash_def = 0, .crush_def = 0, .magic_def_bonus = 350, .ranged_def_bonus = 100,
         .stun_on_spawn = 8, .can_move = 0 },
 
-    /* HEALER_JAD (YtHurKot): melee, heals its Jad */
-    [INF_NPC_HEALER_JAD] = { .hp = 90, .attack_speed = 4, .attack_range = 1, .size = 1,
+    /* HEALER_JAD (YtHurKot): melee, heals its Jad. wiki max hit = 14 */
+    [INF_NPC_HEALER_JAD] = { .hp = 60, .attack_speed = 4, .attack_range = 1, .size = 1,
         .default_style = ATTACK_STYLE_MELEE, .melee_style = MELEE_STYLE_CRUSH, .can_melee = 0,
-        .att_level = 165, .str_level = 125, .def_level = 100, .range_level = 0, .magic_level = 150,
+        .att_level = 140, .str_level = 100, .def_level = 60, .range_level = 120, .magic_level = 120,
         .melee_att_bonus = 0, .range_att_bonus = 0, .magic_att_bonus = 0,
         .melee_str_bonus = 0, .ranged_str_bonus = 0, .magic_base_dmg = 0, .magic_dmg_pct = 0,
-        .stab_def = 0, .slash_def = 0, .crush_def = 0, .magic_def_bonus = 130, .ranged_def_bonus = 0,
+        .stab_def = 0, .slash_def = 0, .crush_def = 0, .magic_def_bonus = 100, .ranged_def_bonus = 100,
         .stun_on_spawn = 0, .can_move = 1 },
 
-    /* HEALER_ZUK (JalMejJak): AOE magic sparks, cannot move */
+    /* HEALER_ZUK (JalMejJak): AOE magic sparks, cannot move. wiki max hit = 10 */
     [INF_NPC_HEALER_ZUK] = { .hp = 75, .attack_speed = 3, .attack_range = 99, .size = 1,
         .default_style = ATTACK_STYLE_MAGIC, .melee_style = MELEE_STYLE_STAB, .can_melee = 0,
         .att_level = 0, .str_level = 0, .def_level = 100, .range_level = 0, .magic_level = 0,
         .melee_att_bonus = 0, .range_att_bonus = 0, .magic_att_bonus = 0,
-        .melee_str_bonus = 0, .ranged_str_bonus = 0, .magic_base_dmg = 24, .magic_dmg_pct = 100,
+        .melee_str_bonus = 0, .ranged_str_bonus = 0, .magic_base_dmg = 10, .magic_dmg_pct = 100,
         .stab_def = 0, .slash_def = 0, .crush_def = 0, .magic_def_bonus = 0, .ranged_def_bonus = 0,
         .stun_on_spawn = 0, .can_move = 0 },
 
@@ -537,7 +536,7 @@ static const uint8_t INF_RANGE_BP_LOADOUT[NUM_GEAR_SLOTS] = {
     [GEAR_SLOT_HEAD]   = ITEM_MASORI_MASK_F,
     [GEAR_SLOT_CAPE]   = ITEM_DIZANAS_QUIVER,
     [GEAR_SLOT_NECK]   = ITEM_NECKLACE_OF_ANGUISH,
-    [GEAR_SLOT_AMMO]   = ITEM_NONE,  /* bp uses darts (baked into weapon ranged_strength=55) */
+    [GEAR_SLOT_AMMO]   = ITEM_DRAGON_DART,
     [GEAR_SLOT_WEAPON] = ITEM_TOXIC_BLOWPIPE,
     [GEAR_SLOT_SHIELD] = ITEM_NONE,  /* bp is 2h */
     [GEAR_SLOT_BODY]   = ITEM_MASORI_BODY_F,

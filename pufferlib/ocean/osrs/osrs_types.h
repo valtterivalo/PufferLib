@@ -968,7 +968,6 @@ typedef struct {
     // Actions submitted on tick N take effect at START of tick N+1
     int pending_actions[NUM_AGENTS * NUM_ACTION_HEADS];
     int last_executed_actions[NUM_AGENTS * NUM_ACTION_HEADS];
-    int has_pending_actions;  // 0 on first step after reset
 
     // Reward shaping configuration (coefficients + annealing scale)
     RewardShapingConfig shaping;

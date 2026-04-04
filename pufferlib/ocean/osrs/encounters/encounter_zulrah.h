@@ -37,7 +37,6 @@
 #include "../osrs_items.h"
 #include "../osrs_combat_shared.h"
 #include "../osrs_collision.h"
-#include "../osrs_pathfinding.h"
 #include "../data/npc_models.h"
 #include <stdlib.h>
 #include <string.h>
