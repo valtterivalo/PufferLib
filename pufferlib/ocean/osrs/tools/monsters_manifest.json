@@ -76,5 +76,35 @@
     "index": "MON_JAL_MEJJAK",
     "npc_id": 7708,
     "comment": "Zuk healer"
+  },
+  {
+    "index": "MON_ZULRAH_GREEN",
+    "npc_id": 2042,
+    "version": "Serpentine",
+    "comment": "Zulrah green/ranged form"
+  },
+  {
+    "index": "MON_ZULRAH_RED",
+    "npc_id": 2043,
+    "version": "Magma",
+    "comment": "Zulrah red/melee form"
+  },
+  {
+    "index": "MON_ZULRAH_BLUE",
+    "npc_id": 2044,
+    "version": "Tanzanite",
+    "comment": "Zulrah blue/magic form"
+  },
+  {
+    "index": "MON_ZULRAH_SNAKELING_MELEE",
+    "npc_id": 2045,
+    "version": "Melee",
+    "comment": "Snakeling melee variant"
+  },
+  {
+    "index": "MON_ZULRAH_SNAKELING_MAGIC",
+    "npc_id": 2046,
+    "version": "Magic",
+    "comment": "Snakeling magic variant"
   }
 ]

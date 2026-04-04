@@ -26,7 +26,12 @@ typedef enum {
     MON_TZKAL_ZUK = 11,  /* Zuk */
     MON_ZUK_SHIELD = 12,  /* Ancestral Glyph */
     MON_JAL_MEJJAK = 13,  /* Zuk healer */
-    NUM_MONSTERS = 14
+    MON_ZULRAH_GREEN = 14,  /* Zulrah green/ranged form */
+    MON_ZULRAH_RED = 15,  /* Zulrah red/melee form */
+    MON_ZULRAH_BLUE = 16,  /* Zulrah blue/magic form */
+    MON_ZULRAH_SNAKELING_MELEE = 17,  /* Snakeling melee variant */
+    MON_ZULRAH_SNAKELING_MAGIC = 18,  /* Snakeling magic variant */
+    NUM_MONSTERS = 19
 } MonsterIndex;
 
 typedef struct {
@@ -194,6 +199,56 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .range_att_bonus = 0, .ranged_str_bonus = 0,
         .stab_def = 0, .slash_def = 0, .crush_def = 0,
         .magic_def = 0, .ranged_def = 0
+    },
+    [MON_ZULRAH_GREEN] = { /* Zulrah green/ranged form */
+        .npc_id = 2042, .name = "Zulrah",
+        .hp = 500, .att_level = 1, .str_level = 1, .def_level = 300,
+        .magic_level = 300, .range_level = 300,
+        .attack_speed = 3, .size = 5, .max_hit = 41,
+        .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 50, .magic_str_bonus = 20,
+        .range_att_bonus = 50, .ranged_str_bonus = 20,
+        .stab_def = 0, .slash_def = 0, .crush_def = 0,
+        .magic_def = -45, .ranged_def = 50
+    },
+    [MON_ZULRAH_RED] = { /* Zulrah red/melee form */
+        .npc_id = 2043, .name = "Zulrah",
+        .hp = 500, .att_level = 1, .str_level = 1, .def_level = 300,
+        .magic_level = 300, .range_level = 300,
+        .attack_speed = 3, .size = 5, .max_hit = 30,
+        .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 50, .magic_str_bonus = 20,
+        .range_att_bonus = 50, .ranged_str_bonus = 20,
+        .stab_def = 0, .slash_def = 0, .crush_def = 0,
+        .magic_def = 0, .ranged_def = 300
+    },
+    [MON_ZULRAH_BLUE] = { /* Zulrah blue/magic form */
+        .npc_id = 2044, .name = "Zulrah",
+        .hp = 500, .att_level = 1, .str_level = 1, .def_level = 300,
+        .magic_level = 300, .range_level = 300,
+        .attack_speed = 3, .size = 5, .max_hit = 41,
+        .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 50, .magic_str_bonus = 20,
+        .range_att_bonus = 50, .ranged_str_bonus = 20,
+        .stab_def = 0, .slash_def = 0, .crush_def = 0,
+        .magic_def = 300, .ranged_def = 0
+    },
+    [MON_ZULRAH_SNAKELING_MELEE] = { /* Snakeling melee variant */
+        .npc_id = 2045, .name = "Snakeling",
+        .hp = 1, .att_level = 140, .str_level = 138, .def_level = 1,
+        .magic_level = 1, .range_level = 1,
+        .attack_speed = 3, .size = 1, .max_hit = 15,
+        .melee_att_bonus = 120, .melee_str_bonus = 0, .magic_att_bonus = 0, .magic_str_bonus = 0,
+        .range_att_bonus = 0, .ranged_str_bonus = 0,
+        .stab_def = -40, .slash_def = -40, .crush_def = -40,
+        .magic_def = -40, .ranged_def = -40
+    },
+    [MON_ZULRAH_SNAKELING_MAGIC] = { /* Snakeling magic variant */
+        .npc_id = 2046, .name = "Snakeling",
+        .hp = 1, .att_level = 1, .str_level = 1, .def_level = 1,
+        .magic_level = 185, .range_level = 1,
+        .attack_speed = 3, .size = 1, .max_hit = 13,
+        .melee_att_bonus = 0, .melee_str_bonus = 0, .magic_att_bonus = 80, .magic_str_bonus = -20,
+        .range_att_bonus = 0, .ranged_str_bonus = 0,
+        .stab_def = -40, .slash_def = -40, .crush_def = -40,
+        .magic_def = -40, .ranged_def = -40
     },
 };
 
