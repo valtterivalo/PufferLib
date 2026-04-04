@@ -506,12 +506,6 @@ typedef struct {
     /* player combat */
     ZulrahGearStyle player_gear;
     OsrsInteraction interaction;  /* shared interaction state (persistent entity targeting) */
-    int player_food_count;        /* sharks */
-    int player_karambwan_count;
-    int player_restore_doses;     /* prayer potion doses */
-    OverheadPrayer player_prayer;
-    int prayer_drain_counter;  /* shared drain system counter (see encounter_drain_prayer) */
-    int player_special_energy;
     int player_dest_x, player_dest_y;   /* click destination for 2-tile run clamping */
     int player_dest_explicit;            /* 1 = dest set via put_int (human click), skip direction-based override */
 
@@ -519,7 +513,6 @@ typedef struct {
     int venom_counter;
     int venom_timer;
     int antivenom_timer;          /* ticks remaining of anti-venom immunity */
-    int antivenom_doses;          /* doses remaining (4 per potion) */
 
     /* gear tier */
     int gear_tier;                /* 0=budget, 1=mid, 2=BIS */
@@ -582,17 +575,6 @@ typedef struct {
 } ZulrahState;
 
 /* RNG: use shared encounter_rand_int(), encounter_rand_float() from osrs_combat.h */
-
-/** Sync encounter consumable counts into Player struct for GUI display.
-    The GUI reads Player.food_count/brew_doses/etc — encounters that track
-    these separately must call this after reset and each step. */
-static void zul_sync_player_consumables(ZulrahState* s) {
-    s->player.food_count = s->player_food_count;
-    s->player.karambwan_count = s->player_karambwan_count;
-    s->player.prayer_pot_doses = s->player_restore_doses;
-    s->player.special_energy = s->player_special_energy;
-    s->player.antivenom_doses = s->antivenom_doses;
-}
 
 /* ======================================================================== */
 /* helpers                                                                   */
@@ -732,7 +714,7 @@ static void zul_attack_ranged(ZulrahState* s) {
     int npc_att_roll = osrs_npc_attack_roll(m->range_level, m->range_att_bonus);
     int dmg = 0;
     int did_hit = 0;
-    if (encounter_prayer_correct_for_style(s->player_prayer, ATTACK_STYLE_RANGED)) {
+    if (encounter_prayer_correct_for_style(s->player.prayer, ATTACK_STYLE_RANGED)) {
         /* prayer blocks damage but venom still applies (unless miss) */
         int def_roll = zul_player_def_roll(s, ATTACK_STYLE_RANGED);
         float chance = osrs_hit_chance(npc_att_roll, def_roll);
@@ -759,7 +741,7 @@ static void zul_attack_ranged(ZulrahState* s) {
    even if blocked by a protection prayer." magic never misses → always envenoms. */
 static void zul_attack_magic(ZulrahState* s) {
     int dmg = 0;
-    if (encounter_prayer_correct_for_style(s->player_prayer, ATTACK_STYLE_MAGIC)) {
+    if (encounter_prayer_correct_for_style(s->player.prayer, ATTACK_STYLE_MAGIC)) {
         s->prayer_blocked_this_tick = 1;
     } else {
         dmg = encounter_rand_int(&s->rng_state, MONSTER_DATABASE[MON_ZULRAH_BLUE].max_hit + 1);
@@ -807,7 +789,7 @@ static void zul_melee_hit(ZulrahState* s) {
     int dmg = 0;
     if (s->player.x == s->melee_target_x && s->player.y == s->melee_target_y
         && !zul_on_pillar_safespot(s->player.x, s->player.y)) {
-        if (encounter_prayer_correct_for_style(s->player_prayer, ATTACK_STYLE_MELEE)) {
+        if (encounter_prayer_correct_for_style(s->player.prayer, ATTACK_STYLE_MELEE)) {
             s->prayer_blocked_this_tick = 1;
         } else {
             dmg = 20 + encounter_rand_int(&s->rng_state, 11);  /* 20-30 per wiki */
@@ -927,7 +909,7 @@ static void zul_player_spec(ZulrahState* s) {
 
     int cost = osrs_spec_cost(weapon);
     if (cost == 0) return;  /* weapon has no spec (e.g. bowfa) */
-    if (s->player_special_energy < cost) return;
+    if (s->player.special_energy < cost) return;
 
     /* compute defence roll for current form */
     const MonsterStats* m = &MONSTER_DATABASE[ZUL_FORM_MONSTER_IDX[s->current_form]];
@@ -940,8 +922,8 @@ static void zul_player_spec(ZulrahState* s) {
     SpecResult sr = osrs_resolve_spec(weapon, att_roll, ls->max_hit,
                                        def_roll, m->def_level, &s->rng_state);
 
-    s->player_special_energy -= sr.spec_cost;
-    s->player.special_energy = s->player_special_energy;
+    s->player.special_energy -= sr.spec_cost;
+    s->player.special_energy = s->player.special_energy;
     s->player.just_attacked = 1;
     s->player.used_special_this_tick = 1;
     s->player.last_attack_style = is_mage ? ATTACK_STYLE_MAGIC : ATTACK_STYLE_RANGED;
@@ -1065,7 +1047,7 @@ static void zul_snakeling_tick(ZulrahState* s) {
         sn->attack_timer = ZUL_SNAKELING_SPEED;
         sn->entity.npc_anim_id = sn->is_magic ? SNAKELING_ANIM_MAGIC : SNAKELING_ANIM_MELEE;
         AttackStyle sn_style = sn->is_magic ? ATTACK_STYLE_MAGIC : ATTACK_STYLE_MELEE;
-        if (encounter_prayer_correct_for_style(s->player_prayer, sn_style)) {
+        if (encounter_prayer_correct_for_style(s->player.prayer, sn_style)) {
             s->prayer_blocked_this_tick = 1; continue;
         }
         int sn_max = sn->is_magic ? MONSTER_DATABASE[MON_ZULRAH_SNAKELING_MAGIC].max_hit
@@ -1479,14 +1461,13 @@ static void zul_process_movement(ZulrahState* s) {
 }
 
 static void zul_process_prayer(ZulrahState* s, int p) {
-    encounter_apply_prayer_action(&s->player_prayer, p);
-    s->player.prayer = s->player_prayer;
+    encounter_apply_prayer_action(&s->player.prayer, p);
 }
 
 static void zul_process_food(ZulrahState* s, int a) {
     if (a == 0) return;
     FoodType type = (a == 1) ? FOOD_SHARK : FOOD_KARAMBWAN;
-    int* count = (a == 1) ? &s->player_food_count : &s->player_karambwan_count;
+    int* count = (a == 1) ? &s->player.food_count : &s->player.karambwan_count;
     if (*count <= 0) return;
     EatResult r = osrs_eat_food(type, s->player.current_hitpoints,
                                  s->player.base_hitpoints, s->player.food_timer);
@@ -1502,21 +1483,21 @@ static void zul_process_potion(ZulrahState* s, int a) {
     if (a == 0) return;
     if (a == 1) {
         /* prayer potion */
-        if (s->player_restore_doses <= 0) return;
+        if (s->player.prayer_pot_doses <= 0) return;
         DrinkResult r = osrs_drink_potion(POTION_PRAYER_RESTORE, s->player.current_prayer,
                                            s->player.base_prayer, s->player.potion_timer);
         if (!r.consumed) return;
-        s->player_restore_doses--;
+        s->player.prayer_pot_doses--;
         s->player.potion_timer = 3;
         s->player.current_prayer += r.prayer_restored;
         if (s->player.current_prayer > s->player.base_prayer)
             s->player.current_prayer = s->player.base_prayer;
     } else if (a == 2) {
         /* antivenom: cures venom + grants immunity */
-        if (s->antivenom_doses <= 0) return;
+        if (s->player.antivenom_doses <= 0) return;
         DrinkResult r = osrs_drink_potion(POTION_ANTIVENOM_PLUS, 0, 0, s->player.potion_timer);
         if (!r.consumed) return;
-        s->antivenom_doses--;
+        s->player.antivenom_doses--;
         s->player.potion_timer = 3;
         s->venom_counter = 0;
         s->venom_timer = 0;
@@ -1550,16 +1531,16 @@ static void zul_write_obs(EncounterState* state, float* obs) {
     obs[i++] = (float)s->player.x / ZUL_ARENA_SIZE;
     obs[i++] = (float)s->player.y / ZUL_ARENA_SIZE;
     obs[i++] = (float)s->player.attack_timer / 5.0f;
-    obs[i++] = (float)s->player_food_count / ZUL_PLAYER_FOOD;
-    obs[i++] = (float)s->player_karambwan_count / ZUL_PLAYER_KARAMBWAN;
-    obs[i++] = (float)s->player_restore_doses / ZUL_PLAYER_RESTORE_DOSES;
+    obs[i++] = (float)s->player.food_count / ZUL_PLAYER_FOOD;
+    obs[i++] = (float)s->player.karambwan_count / ZUL_PLAYER_KARAMBWAN;
+    obs[i++] = (float)s->player.prayer_pot_doses / ZUL_PLAYER_RESTORE_DOSES;
     obs[i++] = (float)s->player.food_timer / 3.0f;
     obs[i++] = (float)s->player.potion_timer / 3.0f;
     obs[i++] = (s->player_gear == ZUL_GEAR_MAGE) ? 1.0f : 0.0f;
     obs[i++] = (s->player_gear == ZUL_GEAR_RANGE) ? 1.0f : 0.0f;
-    obs[i++] = (s->player_prayer == PRAYER_PROTECT_MAGIC) ? 1.0f : 0.0f;
-    obs[i++] = (s->player_prayer == PRAYER_PROTECT_RANGED) ? 1.0f : 0.0f;
-    obs[i++] = (s->player_prayer == PRAYER_PROTECT_MELEE) ? 1.0f : 0.0f;
+    obs[i++] = (s->player.prayer == PRAYER_PROTECT_MAGIC) ? 1.0f : 0.0f;
+    obs[i++] = (s->player.prayer == PRAYER_PROTECT_RANGED) ? 1.0f : 0.0f;
+    obs[i++] = (s->player.prayer == PRAYER_PROTECT_MELEE) ? 1.0f : 0.0f;
     obs[i++] = (float)s->player_stunned_ticks / ZUL_MELEE_STUN_TICKS;
 
     /* zulrah (16-29) */
@@ -1606,7 +1587,7 @@ static void zul_write_obs(EncounterState* state, float* obs) {
     obs[i++] = s->total_damage_dealt / MONSTER_DATABASE[MON_ZULRAH_GREEN].hp;
 
     /* new features (64-67) */
-    obs[i++] = (float)s->player_special_energy / 100.0f;
+    obs[i++] = (float)s->player.special_energy / 100.0f;
     obs[i++] = (s->antivenom_timer > 0) ? 1.0f : 0.0f;
     obs[i++] = (float)s->antivenom_timer / ZUL_ANTIVENOM_DURATION;
     obs[i++] = (float)s->gear_tier / (ZUL_NUM_GEAR_TIERS - 1);
@@ -1666,24 +1647,24 @@ static void zul_write_mask(EncounterState* state, float* mask) {
     /* food (none=0, shark=1, karambwan=2) */
     off++;  /* none always valid */
     /* shark: masked if no food, food timer active, or would overheal (HP > 79) */
-    if (s->player_food_count <= 0 || s->player.food_timer > 0 ||
+    if (s->player.food_count <= 0 || s->player.food_timer > 0 ||
         s->player.current_hitpoints > s->player.base_hitpoints - osrs_food_heal_amount(FOOD_SHARK))
         mask[off] = 0.0f;
     off++;
     /* karambwan: masked if no karambwan, food timer active, or would overheal (HP > 81) */
-    if (s->player_karambwan_count <= 0 || s->player.food_timer > 0 ||
+    if (s->player.karambwan_count <= 0 || s->player.food_timer > 0 ||
         s->player.current_hitpoints > s->player.base_hitpoints - osrs_food_heal_amount(FOOD_KARAMBWAN))
         mask[off] = 0.0f;
     off++;
     /* potion (none=0, prayer_pot=1, antivenom=2) */
     off++;  /* none always valid */
     /* prayer pot: masked if no doses, potion timer active, or prayer already full */
-    if (s->player_restore_doses <= 0 || s->player.potion_timer > 0 ||
+    if (s->player.prayer_pot_doses <= 0 || s->player.potion_timer > 0 ||
         s->player.current_prayer >= s->player.base_prayer)
         mask[off] = 0.0f;
     off++;
     /* antivenom: masked if no doses, potion timer active, or already immune */
-    if (s->antivenom_doses <= 0 || s->player.potion_timer > 0 ||
+    if (s->player.antivenom_doses <= 0 || s->player.potion_timer > 0 ||
         s->antivenom_timer > 0)
         mask[off] = 0.0f;
     off++;
@@ -1766,11 +1747,11 @@ static void zul_reset(EncounterState* state, uint32_t seed) {
     s->player.current_prayer = ZUL_PLAYER_PRAYER;
     s->player.x = ZUL_PLAYER_START_X;
     s->player.y = ZUL_PLAYER_START_Y;
-    s->player_food_count = ZUL_PLAYER_FOOD;
-    s->player_karambwan_count = ZUL_PLAYER_KARAMBWAN;
-    s->player_restore_doses = ZUL_PLAYER_RESTORE_DOSES;
-    s->player_special_energy = 100;
-    s->antivenom_doses = ZUL_ANTIVENOM_DOSES;
+    s->player.food_count = ZUL_PLAYER_FOOD;
+    s->player.karambwan_count = ZUL_PLAYER_KARAMBWAN;
+    s->player.prayer_pot_doses = ZUL_PLAYER_RESTORE_DOSES;
+    s->player.special_energy = 100;
+    s->player.antivenom_doses = ZUL_ANTIVENOM_DOSES;
     /* thrall: tier 1+ only (budget gear doesn't have arceuus access) */
     if (s->gear_tier >= 1) {
         s->thrall_active = 1;
@@ -1806,7 +1787,6 @@ static void zul_reset(EncounterState* state, uint32_t seed) {
     s->phase_index = 0;
 
     zul_enter_phase(s);
-    zul_sync_player_consumables(s);
 }
 
 static void zul_step(EncounterState* state, const int* actions) {
@@ -1903,7 +1883,7 @@ static void zul_step(EncounterState* state, const int* actions) {
         s->player.attack_timer == 0 && s->zulrah_visible && !s->is_diving &&
         s->player_stunned_ticks == 0) {
 
-        if (s->player.spec_armed && s->player_special_energy >= osrs_spec_cost(s->player.equipped[GEAR_SLOT_WEAPON])) {
+        if (s->player.spec_armed && s->player.special_energy >= osrs_spec_cost(s->player.equipped[GEAR_SLOT_WEAPON])) {
             zul_player_spec(s);
             osrs_spec_disarm(&s->player.spec_armed);
         } else {
@@ -1938,9 +1918,8 @@ static void zul_step(EncounterState* state, const int* actions) {
     zul_venom_tick(s);
 
     /* prayer drain (shared OSRS formula) */
-    encounter_drain_prayer(&s->player.current_prayer, &s->player_prayer, 0,
-        &s->prayer_drain_counter, encounter_prayer_drain_effect(s->player_prayer));
-    s->player.prayer = s->player_prayer;
+    encounter_drain_prayer(&s->player.current_prayer, &s->player.prayer, 0,
+        &s->player.prayer_drain_counter, encounter_prayer_drain_effect(s->player.prayer));
 
     if (s->player.current_hitpoints <= 0) {
         s->episode_over = 1; s->winner = 1;
@@ -1952,8 +1931,6 @@ static void zul_step(EncounterState* state, const int* actions) {
     }
     s->reward = zul_compute_reward(s);
     s->episode_return += s->reward;
-    zul_sync_player_consumables(s);
-
 }
 
 /* ======================================================================== */
@@ -1976,26 +1953,26 @@ static void zul_heuristic_actions(ZulrahState* s, int* actions) {
     }
 
     /* antivenom on first tick or when timer about to expire */
-    if (s->player.potion_timer <= 0 && s->antivenom_doses > 0 &&
+    if (s->player.potion_timer <= 0 && s->player.antivenom_doses > 0 &&
         s->antivenom_timer <= 5 && (s->tick <= 1 || s->antivenom_timer <= 5)) {
         actions[ZUL_HEAD_POTION] = 2;  /* antivenom */
         return;  /* potion consumes the tick */
     }
 
     /* eat shark at <60 HP (only if won't overheal) */
-    if (hp < 60 && s->player.food_timer <= 0 && s->player_food_count > 0 &&
+    if (hp < 60 && s->player.food_timer <= 0 && s->player.food_count > 0 &&
         hp <= s->player.base_hitpoints - osrs_food_heal_amount(FOOD_SHARK)) {
         actions[ZUL_HEAD_FOOD] = 1;  /* shark */
     }
     /* karambwan combo eat at <40 HP (emergency) */
-    else if (hp < 40 && s->player.food_timer <= 0 && s->player_karambwan_count > 0 &&
+    else if (hp < 40 && s->player.food_timer <= 0 && s->player.karambwan_count > 0 &&
              hp <= s->player.base_hitpoints - osrs_food_heal_amount(FOOD_KARAMBWAN)) {
         actions[ZUL_HEAD_FOOD] = 2;  /* karambwan */
     }
 
     /* restore prayer if getting low (and not already full) */
     if (s->player.current_prayer < 30 && s->player.potion_timer <= 0 &&
-        s->player_restore_doses > 0 && s->player.current_prayer < s->player.base_prayer) {
+        s->player.prayer_pot_doses > 0 && s->player.current_prayer < s->player.base_prayer) {
         actions[ZUL_HEAD_POTION] = 1;  /* prayer pot */
     }
 
@@ -2021,7 +1998,7 @@ static void zul_heuristic_actions(ZulrahState* s, int* actions) {
             actions[ZUL_HEAD_ATTACK] = ZUL_ATK_RANGE;
             /* arm spec when energy available and not already armed */
             int spec_cost = osrs_spec_cost(ZUL_RANGE_LOADOUT[s->gear_tier][GEAR_SLOT_WEAPON]);
-            if (spec_cost > 0 && s->player_special_energy >= spec_cost && !s->player.spec_armed) {
+            if (spec_cost > 0 && s->player.special_energy >= spec_cost && !s->player.spec_armed) {
                 actions[ZUL_HEAD_SPEC] = 1;  /* toggle arm */
             }
         } else {

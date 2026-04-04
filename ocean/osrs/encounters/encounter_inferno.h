@@ -582,13 +582,7 @@ typedef struct {
     int blood_heal_this_tick;  /* HP healed from blood barrage this tick */
 
     /* player combat state */
-    OverheadPrayer active_prayer;
-    int prayer_drain_counter;  /* shared drain system counter (see encounter_drain_prayer) */
     OsrsInteraction interaction;  /* shared interaction state */
-    int player_brew_doses;
-    int player_restore_doses;
-    int player_bastion_doses;
-    int player_stamina_doses;
 
     /* gear state */
     InfWeaponSet weapon_set;
@@ -779,12 +773,12 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
         tank_extra[GEAR_SLOT_LEGS] = INF_TANK_LEGS;
         encounter_populate_inventory(&s->player, INF_LOADOUTS, INF_NUM_WEAPON_SETS, tank_extra);
     }
-    s->player_brew_doses = 32;     /* 8 pots x 4 doses */
-    s->player_restore_doses = 40;  /* 10 pots x 4 doses */
-    s->player_bastion_doses = 4;   /* 1 pot x 4 doses */
-    s->player_stamina_doses = 4;   /* 1 pot x 4 doses */
+    s->player.brew_doses = 32;     /* 8 pots x 4 doses */
+    s->player.restore_doses = 40;  /* 10 pots x 4 doses */
+    s->player.bastion_doses = 4;   /* 1 pot x 4 doses */
+    s->player.stamina_doses = 4;   /* 1 pot x 4 doses */
     s->stamina_active_ticks = 0;
-    s->active_prayer = PRAYER_NONE;
+    s->player.prayer = PRAYER_NONE;
     osrs_interaction_init(&s->interaction);
     s->player.spec_armed = 0;
     s->player.special_energy = 100;
@@ -1339,7 +1333,7 @@ static void inf_npc_attack(InfernoState* s, int idx) {
             int def_bonus = ls->def_stab;  /* melee: use stab def as approximation */
             int def_roll = osrs_player_def_roll_vs_npc(s->player.current_defence, s->player.current_magic, def_bonus, ATTACK_STYLE_MELEE);
             if (encounter_rand_float(&s->rng_state) >= osrs_hit_chance(att_roll, def_roll)) dmg = 0;
-            int prayer_matches = (s->active_prayer == PRAYER_PROTECT_MELEE);
+            int prayer_matches = (s->player.prayer == PRAYER_PROTECT_MELEE);
             if (prayer_matches) { dmg = 0; s->prayer_correct_this_tick = 1; }
             encounter_damage_player(&s->player, dmg, &s->damage_received_this_tick);
         }
@@ -1364,7 +1358,7 @@ static void inf_npc_attack(InfernoState* s, int idx) {
     if (npc->type == INF_NPC_BLOB) {
         if (npc->blob_scanned_prayer < 0) {
             /* no pending scan → start scan phase */
-            npc->blob_scanned_prayer = (int)s->active_prayer;
+            npc->blob_scanned_prayer = (int)s->player.prayer;
             npc->attacked_this_tick = 1;  /* triggers scan animation */
             npc->attack_timer = stats->attack_speed;  /* 3 */
             return;
@@ -1475,7 +1469,7 @@ static void inf_npc_attack(InfernoState* s, int idx) {
 
     if (hit_delay == 0) {
         /* melee: instant damage, check prayer now */
-        int prayer_matches = encounter_prayer_correct_for_style(s->active_prayer, actual_style);
+        int prayer_matches = encounter_prayer_correct_for_style(s->player.prayer, actual_style);
         if (prayer_matches) { dmg = 0; s->prayer_correct_this_tick++; s->prayer_correct_by_type[npc->type]++; }
         s->dmg_from_type[npc->type] += (float)dmg;
         if (dmg > 0) s->last_hit_by_type = npc->type;
@@ -1485,7 +1479,7 @@ static void inf_npc_attack(InfernoState* s, int idx) {
         if (s->player_pending_hit_count < ENCOUNTER_MAX_PENDING_HITS) {
             int is_jad = (npc->type == INF_NPC_JAD);
             if (!is_jad) {
-                int prayer_matches = encounter_prayer_correct_for_style(s->active_prayer, actual_style);
+                int prayer_matches = encounter_prayer_correct_for_style(s->player.prayer, actual_style);
                 if (prayer_matches) { dmg = 0; s->prayer_correct_this_tick++; s->prayer_correct_by_type[npc->type]++; }
             }
             s->dmg_from_type[npc->type] += (float)dmg;
@@ -1805,14 +1799,13 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
     encounter_clear_tick_flags(&s->player);
 
     /* prayer: uses shared 5-value encoding from osrs_encounter.h */
-    encounter_apply_prayer_action(&s->active_prayer, actions[INF_HEAD_PRAYER]);
+    encounter_apply_prayer_action(&s->player.prayer, actions[INF_HEAD_PRAYER]);
     /* drain prayer at OSRS rate. drain_effect = overhead (12) + offensive prayer (24 for rigour/augury).
        inferno players always have an offensive prayer active. prayer_bonus = 0 (no prayer bonus gear). */
     {
-        int drain = encounter_prayer_drain_effect(s->active_prayer) + 24;
-        encounter_drain_prayer(&s->player.current_prayer, &s->active_prayer, 0, &s->prayer_drain_counter, drain);
+        int drain = encounter_prayer_drain_effect(s->player.prayer) + 24;
+        encounter_drain_prayer(&s->player.current_prayer, &s->player.prayer, 0, &s->player.prayer_drain_counter, drain);
     }
-    s->player.prayer = s->active_prayer;
 
     /* gear switching */
     int gear_act = actions[INF_HEAD_GEAR];
@@ -1883,12 +1876,12 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
 
     /* brew (INF_HEAD_EAT): heals 16 HP, can overcap to base+16 */
     int eat_act = actions[INF_HEAD_EAT];
-    if (eat_act == 1 && s->player_brew_doses > 0 && s->player.potion_timer == 0
+    if (eat_act == 1 && s->player.brew_doses > 0 && s->player.potion_timer == 0
         && s->player.current_hitpoints < s->player.base_hitpoints) {
         s->player.current_hitpoints += INF_BREW_HEAL;
         if (s->player.current_hitpoints > s->player.base_hitpoints + INF_BREW_HEAL)
             s->player.current_hitpoints = s->player.base_hitpoints + INF_BREW_HEAL;
-        s->player_brew_doses--;
+        s->player.brew_doses--;
         s->player.potion_timer = 3;
         s->player.ate_food_this_tick = 1;
         s->brewed_this_tick = 1;
@@ -1898,23 +1891,23 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
 
     /* potions (INF_HEAD_POTION): 1=restore, 2=bastion, 3=stamina */
     int pot_act = actions[INF_HEAD_POTION];
-    if (pot_act == 1 && s->player_restore_doses > 0 && s->player.potion_timer == 0) {
+    if (pot_act == 1 && s->player.restore_doses > 0 && s->player.potion_timer == 0) {
         /* super restore: restores prayer + all combat stats */
         s->player.current_prayer += INF_RESTORE_AMOUNT;
         if (s->player.current_prayer > s->player.base_prayer)
             s->player.current_prayer = s->player.base_prayer;
         encounter_restore_stats(&s->player);
-        s->player_restore_doses--;
+        s->player.restore_doses--;
         s->player.potion_timer = 3;
         encounter_recompute_loadout_max_hits(s->loadout_stats, INF_NUM_WEAPON_SETS, &s->player);
-    } else if (pot_act == 2 && s->player_bastion_doses > 0 && s->player.potion_timer == 0) {
+    } else if (pot_act == 2 && s->player.bastion_doses > 0 && s->player.potion_timer == 0) {
         encounter_bastion_boost(&s->player);
-        s->player_bastion_doses--;
+        s->player.bastion_doses--;
         s->player.potion_timer = 3;
         encounter_recompute_loadout_max_hits(s->loadout_stats, INF_NUM_WEAPON_SETS, &s->player);
-    } else if (pot_act == 3 && s->player_stamina_doses > 0 && s->player.potion_timer == 0) {
+    } else if (pot_act == 3 && s->player.stamina_doses > 0 && s->player.potion_timer == 0) {
         s->stamina_active_ticks = 200;
-        s->player_stamina_doses--;
+        s->player.stamina_doses--;
         s->player.potion_timer = 3;
     }
 
@@ -2251,7 +2244,7 @@ static void inf_step(EncounterState* state, const int* actions) {
     /* ------------------------------------------------------------------ */
     encounter_resolve_player_pending_hits(
         s->player_pending_hits, &s->player_pending_hit_count,
-        &s->player, s->active_prayer,
+        &s->player, s->player.prayer,
         &s->damage_received_this_tick, &s->prayer_correct_this_tick);
 
     /* check player death */
@@ -2367,11 +2360,11 @@ static void inf_write_obs(EncounterState* state, float* obs) {
     obs[i++] = (float)s->player.current_hitpoints / 99.0f;
     obs[i++] = (float)(px - INF_ARENA_MIN_X) / (float)INF_ARENA_WIDTH;
     obs[i++] = (float)(py - INF_ARENA_MIN_Y) / (float)INF_ARENA_HEIGHT;
-    obs[i++] = (s->active_prayer == PRAYER_PROTECT_MELEE) ? 1.0f : 0.0f;
-    obs[i++] = (s->active_prayer == PRAYER_PROTECT_RANGED) ? 1.0f : 0.0f;
-    obs[i++] = (s->active_prayer == PRAYER_PROTECT_MAGIC) ? 1.0f : 0.0f;
-    obs[i++] = (float)s->player_brew_doses / 32.0f;
-    obs[i++] = (float)s->player_restore_doses / 40.0f;
+    obs[i++] = (s->player.prayer == PRAYER_PROTECT_MELEE) ? 1.0f : 0.0f;
+    obs[i++] = (s->player.prayer == PRAYER_PROTECT_RANGED) ? 1.0f : 0.0f;
+    obs[i++] = (s->player.prayer == PRAYER_PROTECT_MAGIC) ? 1.0f : 0.0f;
+    obs[i++] = (float)s->player.brew_doses / 32.0f;
+    obs[i++] = (float)s->player.restore_doses / 40.0f;
     obs[i++] = (float)s->player.current_prayer / 99.0f;
     obs[i++] = (float)s->wave / (float)INF_NUM_WAVES;
     obs[i++] = (float)s->tick / (float)INF_MAX_TICKS;
@@ -2379,8 +2372,8 @@ static void inf_write_obs(EncounterState* state, float* obs) {
     obs[i++] = (s->weapon_set == INF_GEAR_TBOW) ? 1.0f : 0.0f;
     obs[i++] = (s->weapon_set == INF_GEAR_BP) ? 1.0f : 0.0f;
     obs[i++] = s->armor_tank ? 1.0f : 0.0f;
-    obs[i++] = (float)s->player_bastion_doses / 4.0f;
-    obs[i++] = (float)s->player_stamina_doses / 4.0f;
+    obs[i++] = (float)s->player.bastion_doses / 4.0f;
+    obs[i++] = (float)s->player.stamina_doses / 4.0f;
     obs[i++] = (s->stamina_active_ticks > 0) ? 1.0f : 0.0f;
     obs[i++] = (float)s->player.potion_timer / 3.0f;
     obs[i++] = (float)s->player.attack_timer / 8.0f;
@@ -2559,10 +2552,10 @@ static void inf_write_mask(EncounterState* state, float* mask) {
 
     /* HEAD_PRAYER (5): 0=no change (always valid), 1-4=switch (mask out current) */
     mask[offset++] = 1.0f;  /* no change — always valid */
-    mask[offset++] = (s->active_prayer != PRAYER_NONE) ? 1.0f : 0.0f;
-    mask[offset++] = (s->active_prayer != PRAYER_PROTECT_MELEE) ? 1.0f : 0.0f;
-    mask[offset++] = (s->active_prayer != PRAYER_PROTECT_RANGED) ? 1.0f : 0.0f;
-    mask[offset++] = (s->active_prayer != PRAYER_PROTECT_MAGIC) ? 1.0f : 0.0f;
+    mask[offset++] = (s->player.prayer != PRAYER_NONE) ? 1.0f : 0.0f;
+    mask[offset++] = (s->player.prayer != PRAYER_PROTECT_MELEE) ? 1.0f : 0.0f;
+    mask[offset++] = (s->player.prayer != PRAYER_PROTECT_RANGED) ? 1.0f : 0.0f;
+    mask[offset++] = (s->player.prayer != PRAYER_PROTECT_MAGIC) ? 1.0f : 0.0f;
 
     /* HEAD_TARGET (INF_MAX_NPCS+1): none always valid, NPC valid only if alive (not dying) */
     mask[offset++] = 1.0f;  /* no target */
@@ -2579,7 +2572,7 @@ static void inf_write_mask(EncounterState* state, float* mask) {
 
     /* HEAD_EAT (2): none, brew */
     mask[offset++] = 1.0f;  /* none always valid */
-    mask[offset++] = (s->player_brew_doses > 0 &&
+    mask[offset++] = (s->player.brew_doses > 0 &&
                       s->player.potion_timer == 0 &&
                       s->player.current_hitpoints < s->player.base_hitpoints)
                      ? 1.0f : 0.0f;
@@ -2594,17 +2587,17 @@ static void inf_write_mask(EncounterState* state, float* mask) {
                             s->player.current_defence < 99 || s->player.current_ranged < 99 ||
                             s->player.current_magic < 99;
         int pray_worth = pray_missing >= (INF_RESTORE_AMOUNT + 1) / 2;
-        mask[offset++] = (s->player_restore_doses > 0 &&
+        mask[offset++] = (s->player.restore_doses > 0 &&
                           s->player.potion_timer == 0 &&
                           (stats_drained || pray_worth))
                          ? 1.0f : 0.0f;
     }
     /* bastion: only worth drinking at 99-105 ranged (drained = restore first, >105 = still boosted) */
-    mask[offset++] = (s->player_bastion_doses > 0 && s->player.potion_timer == 0 &&
+    mask[offset++] = (s->player.bastion_doses > 0 && s->player.potion_timer == 0 &&
                       s->player.current_ranged >= 99 && s->player.current_ranged <= 105)
                      ? 1.0f : 0.0f;
     /* stamina: mask if no doses, timer active, or already active */
-    mask[offset++] = (s->player_stamina_doses > 0 &&
+    mask[offset++] = (s->player.stamina_doses > 0 &&
                       s->player.potion_timer == 0 &&
                       s->stamina_active_ticks == 0)
                      ? 1.0f : 0.0f;
@@ -2657,12 +2650,10 @@ static void inf_fill_render_entities(EncounterState* state, RenderEntity* out, i
     InfernoState* s = (InfernoState*)state;
     int n = 0;
 
-    /* sync all consumable counts + GUI stats to Player struct */
-    s->player.food_count = 0;
-    s->player.brew_doses = s->player_brew_doses;
-    s->player.restore_doses = s->player_restore_doses;
-    s->player.combat_potion_doses = s->player_bastion_doses;
-    s->player.ranged_potion_doses = s->player_stamina_doses;
+    /* GUI reads combat_potion_doses/ranged_potion_doses generically;
+       inferno uses bastion/stamina, so map them for the GUI display */
+    s->player.combat_potion_doses = s->player.bastion_doses;
+    s->player.ranged_potion_doses = s->player.stamina_doses;
     {
         const EncounterLoadoutStats* ls = &s->loadout_stats[s->weapon_set];
         s->player.gui_max_hit = ls->max_hit;
