@@ -27,6 +27,7 @@
 
 #include "pufferlib/ocean/osrs/osrs_pvp_combat.h"
 #include "pufferlib/ocean/osrs/osrs_combat.h"
+#include "pufferlib/ocean/osrs/osrs_special_attacks.h"
 
 /* ======================================================================== */
 /* test harness (same pattern as test_combat_math.c)                        */
@@ -1035,6 +1036,121 @@ static void test_hit_chance_with_spec_acc(void) {
 }
 
 /* ======================================================================== */
+/* test: osrs_resolve_spec dispatch                                         */
+/*                                                                          */
+/* verifies the shared spec dispatch returns correct costs and sensible     */
+/* damage values for each weapon category.                                  */
+/* ======================================================================== */
+
+static void test_spec_dispatch(void) {
+    printf("--- osrs_resolve_spec dispatch ---\n");
+    uint32_t rng = 12345;
+
+    /* spec costs via osrs_spec_cost() */
+    ASSERT_INT_EQ("AGS cost (dispatch)",       osrs_spec_cost(ITEM_AGS),                  50);
+    ASSERT_INT_EQ("claws cost (dispatch)",     osrs_spec_cost(ITEM_DRAGON_CLAWS),         50);
+    ASSERT_INT_EQ("DWH cost (dispatch)",       osrs_spec_cost(ITEM_STATIUS_WARHAMMER),    35);
+    ASSERT_INT_EQ("BGS cost (dispatch)",       osrs_spec_cost(ITEM_BGS),                  100);
+    ASSERT_INT_EQ("ZGS cost (dispatch)",       osrs_spec_cost(ITEM_ZGS),                  50);
+    ASSERT_INT_EQ("SGS cost (dispatch)",       osrs_spec_cost(ITEM_SGS),                  50);
+    ASSERT_INT_EQ("ancient GS cost (dispatch)",osrs_spec_cost(ITEM_ANCIENT_GS),           50);
+    ASSERT_INT_EQ("VLS cost (dispatch)",       osrs_spec_cost(ITEM_VESTAS),               25);
+    ASSERT_INT_EQ("VW cost (dispatch)",        osrs_spec_cost(ITEM_VOIDWAKER),            50);
+    ASSERT_INT_EQ("gmaul cost (dispatch)",     osrs_spec_cost(ITEM_GRANITE_MAUL),         50);
+    ASSERT_INT_EQ("DDS cost (dispatch)",       osrs_spec_cost(ITEM_DRAGON_DAGGER),        25);
+    ASSERT_INT_EQ("elder maul cost (dispatch)",osrs_spec_cost(ITEM_ELDER_MAUL),           50);
+    ASSERT_INT_EQ("blowpipe cost (dispatch)",  osrs_spec_cost(ITEM_TOXIC_BLOWPIPE),       50);
+    ASSERT_INT_EQ("MSB cost (dispatch)",       osrs_spec_cost(ITEM_MAGIC_SHORTBOW_I),     55);
+    ASSERT_INT_EQ("dark bow cost (dispatch)",  osrs_spec_cost(ITEM_DARK_BOW),             55);
+    ASSERT_INT_EQ("ACB cost (dispatch)",       osrs_spec_cost(ITEM_ARMADYL_CROSSBOW),     50);
+    ASSERT_INT_EQ("ballista cost (dispatch)",  osrs_spec_cost(ITEM_HEAVY_BALLISTA),       65);
+    ASSERT_INT_EQ("morr cost (dispatch)",      osrs_spec_cost(ITEM_MORRIGANS_JAVELIN),    50);
+    ASSERT_INT_EQ("volatile cost (dispatch)",  osrs_spec_cost(ITEM_VOLATILE_STAFF),       55);
+    ASSERT_INT_EQ("eye of ayak cost (dispatch)", osrs_spec_cost(ITEM_EYE_OF_AYAK),        50);
+    ASSERT_INT_EQ("zuriel cost (dispatch)",    osrs_spec_cost(ITEM_ZURIELS_STAFF),        55);
+    ASSERT_INT_EQ("non-weapon cost",           osrs_spec_cost(ITEM_BARROWS_GLOVES),       0);
+
+    /* resolve AGS with guaranteed hit (huge att vs tiny def) */
+    rng = 42;
+    SpecResult sr = osrs_resolve_spec(ITEM_AGS, 100000, 50, 100, 99, &rng);
+    ASSERT_INT_EQ("AGS num_hits", sr.num_hits, 1);
+    tests_run++;
+    if (sr.total_damage >= 0 && sr.total_damage <= 50 * 11 / 8) { tests_passed++; }
+    else { tests_failed++; printf("  FAIL: AGS damage %d out of range [0, %d]\n", sr.total_damage, 50 * 11 / 8); }
+
+    /* resolve blowpipe spec with guaranteed hit */
+    rng = 99;
+    sr = osrs_resolve_spec(ITEM_TOXIC_BLOWPIPE, 100000, 30, 100, 99, &rng);
+    ASSERT_INT_EQ("blowpipe num_hits", sr.num_hits, 1);
+    ASSERT_INT_EQ("blowpipe heal", sr.heal, sr.total_damage / 2);
+
+    /* resolve dragon claws — always 4 hits */
+    rng = 777;
+    sr = osrs_resolve_spec(ITEM_DRAGON_CLAWS, 100000, 40, 100, 99, &rng);
+    ASSERT_INT_EQ("claws num_hits", sr.num_hits, 4);
+    ASSERT_INT_EQ("claws total = sum", sr.total_damage,
+                  sr.damage[0] + sr.damage[1] + sr.damage[2] + sr.damage[3]);
+
+    /* resolve DDS — always 2 hits */
+    rng = 555;
+    sr = osrs_resolve_spec(ITEM_DRAGON_DAGGER, 100000, 40, 100, 99, &rng);
+    ASSERT_INT_EQ("DDS num_hits", sr.num_hits, 2);
+
+    /* resolve SGS — heals half of damage */
+    rng = 333;
+    sr = osrs_resolve_spec(ITEM_SGS, 100000, 50, 100, 99, &rng);
+    ASSERT_INT_EQ("SGS heal", sr.heal, sr.total_damage / 2);
+
+    /* resolve ZGS — freezes on hit */
+    rng = 111;
+    sr = osrs_resolve_spec(ITEM_ZGS, 100000, 50, 100, 99, &rng);
+    if (sr.total_damage > 0) {
+        ASSERT_INT_EQ("ZGS freeze", sr.freeze_ticks, 32);
+    }
+
+    /* resolve DWH — drains def on hit */
+    rng = 222;
+    sr = osrs_resolve_spec(ITEM_STATIUS_WARHAMMER, 100000, 50, 100, 70, &rng);
+    if (sr.total_damage > 0) {
+        ASSERT_INT_EQ("DWH def drain", sr.def_drain, 70 * 30 / 100);
+    }
+
+    /* resolve BGS — drains def by damage */
+    rng = 444;
+    sr = osrs_resolve_spec(ITEM_BGS, 100000, 50, 100, 99, &rng);
+    if (sr.total_damage > 0) {
+        ASSERT_INT_EQ("BGS drain = dmg", sr.def_drain, sr.total_damage);
+    }
+
+    /* resolve dark bow — 2 hits, each >= 8 */
+    rng = 888;
+    sr = osrs_resolve_spec(ITEM_DARK_BOW, 100000, 30, 100, 99, &rng);
+    ASSERT_INT_EQ("dbow num_hits", sr.num_hits, 2);
+    ASSERT_INT_EQ("dbow hit1 >= 8", sr.damage[0] >= 8, 1);
+    ASSERT_INT_EQ("dbow hit2 >= 8", sr.damage[1] >= 8, 1);
+
+    /* resolve MSB — 2 hits */
+    rng = 666;
+    sr = osrs_resolve_spec(ITEM_MAGIC_SHORTBOW_I, 100000, 20, 100, 99, &rng);
+    ASSERT_INT_EQ("MSB num_hits", sr.num_hits, 2);
+
+    /* resolve eye of ayak — magic def drain */
+    rng = 1234;
+    sr = osrs_resolve_spec(ITEM_EYE_OF_AYAK, 100000, 40, 100, 99, &rng);
+    ASSERT_INT_EQ("ayak num_hits", sr.num_hits, 1);
+    if (sr.total_damage > 0) {
+        ASSERT_INT_EQ("ayak magic drain = dmg", sr.magic_def_drain, sr.total_damage);
+    }
+    ASSERT_INT_EQ("ayak speed override", sr.attack_speed_override, 5);
+
+    /* resolve non-spec weapon — empty result */
+    rng = 9999;
+    sr = osrs_resolve_spec(ITEM_BARROWS_GLOVES, 100000, 50, 100, 99, &rng);
+    ASSERT_INT_EQ("non-weapon num_hits", sr.num_hits, 0);
+    ASSERT_INT_EQ("non-weapon damage", sr.total_damage, 0);
+}
+
+/* ======================================================================== */
 /* main                                                                     */
 /* ======================================================================== */
 
@@ -1085,6 +1201,9 @@ int main(void) {
     /* integration: max hit + hit chance with spec multipliers */
     test_max_hit_with_spec_mult();
     test_hit_chance_with_spec_acc();
+
+    /* shared spec dispatch */
+    test_spec_dispatch();
 
     printf("\n=== results: %d/%d passed", tests_passed, tests_run);
     if (tests_failed > 0) {
