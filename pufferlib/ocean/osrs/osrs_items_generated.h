@@ -111,7 +111,39 @@ typedef enum {
     ITEM_JUSTICIAR_CHESTGUARD = 98,  /* Justiciar chestguard */
     ITEM_JUSTICIAR_LEGGUARDS = 99,  /* Justiciar legguards */
     ITEM_DRAGON_DART = 100,  /* Dragon dart */
-    NUM_ITEMS = 101,
+    ITEM_SCYTHE_OF_VITUR = 101,  /* Scythe of vitur */
+    ITEM_BLADE_OF_SAELDOR = 102,  /* Blade of saeldor (c) */
+    ITEM_OSMUMTENS_FANG = 103,  /* Osmumten's fang */
+    ITEM_SOULREAPER_AXE = 104,  /* Soulreaper axe */
+    ITEM_TORVA_FULL_HELM = 105,  /* Torva full helm */
+    ITEM_TORVA_PLATEBODY = 106,  /* Torva platebody */
+    ITEM_TORVA_PLATELEGS = 107,  /* Torva platelegs */
+    ITEM_BANDOS_CHESTPLATE = 108,  /* Bandos chestplate */
+    ITEM_BANDOS_BOOTS = 109,  /* Bandos boots */
+    ITEM_PRIMORDIAL_BOOTS = 110,  /* Primordial boots */
+    ITEM_FEROCIOUS_GLOVES = 111,  /* Ferocious gloves */
+    ITEM_AMULET_OF_TORTURE = 112,  /* Amulet of torture */
+    ITEM_BERSERKER_RING_I = 113,  /* Berserker ring (i) */
+    ITEM_ULTOR_RING = 114,  /* Ultor ring */
+    ITEM_AVERNIC_DEFENDER = 115,  /* Avernic defender */
+    ITEM_VENATOR_RING = 116,  /* Venator ring */
+    ITEM_VIRTUS_MASK = 117,  /* Virtus mask */
+    ITEM_VIRTUS_ROBE_TOP = 118,  /* Virtus robe top */
+    ITEM_VIRTUS_ROBE_BOTTOM = 119,  /* Virtus robe bottom */
+    ITEM_MAGUS_RING = 120,  /* Magus ring */
+    ITEM_TUMEKENS_SHADOW = 121,  /* Tumeken's shadow */
+    ITEM_BGS = 122,  /* Bandos godsword */
+    ITEM_SGS = 123,  /* Saradomin godsword */
+    ITEM_ZGS = 124,  /* Zamorak godsword */
+    ITEM_CRYSTAL_HALBERD = 125,  /* Crystal halberd */
+    ITEM_DRAGON_BATTLEAXE = 126,  /* Dragon battleaxe */
+    ITEM_RUBY_DRAGON_BOLTS_E = 127,  /* Ruby dragon bolts (e) */
+    ITEM_DIAMOND_DRAGON_BOLTS_E = 128,  /* Diamond dragon bolts (e) */
+    ITEM_RUNE_ARROW = 129,  /* Rune arrow */
+    ITEM_DRAGON_JAVELIN = 130,  /* Dragon javelin */
+    ITEM_SPECTRAL_SPIRIT_SHIELD = 131,  /* Spectral spirit shield */
+    ITEM_DRAGONFIRE_SHIELD = 132,  /* Dragonfire shield */
+    NUM_ITEMS = 133,
     ITEM_NONE = 255
 } ItemIndex;
 
@@ -1024,6 +1056,294 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = 0,
         .melee_strength = 0, .ranged_strength = 35, .magic_damage = 0, .prayer = 0
+    },
+    [ITEM_SCYTHE_OF_VITUR] = { /* Scythe of vitur */
+        .item_id = 22325, .name = "Scythe of vitur", .slot = SLOT_WEAPON,
+        .attack_speed = 5, .attack_range = 2,
+        .attack_stab = 70, .attack_slash = 125, .attack_crush = 30,
+        .attack_magic = -6, .attack_ranged = 0,
+        .defence_stab = -2, .defence_slash = 8, .defence_crush = 10,
+        .defence_magic = 0, .defence_ranged = 0,
+        .melee_strength = 75, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+    },
+    [ITEM_BLADE_OF_SAELDOR] = { /* Blade of saeldor (c) */
+        .item_id = 24551, .name = "Blade of saeldor (c)", .slot = SLOT_WEAPON,
+        .attack_speed = 4, .attack_range = 1,
+        .attack_stab = 55, .attack_slash = 94, .attack_crush = 0,
+        .attack_magic = 0, .attack_ranged = 0,
+        .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
+        .defence_magic = 0, .defence_ranged = 0,
+        .melee_strength = 89, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+    },
+    [ITEM_OSMUMTENS_FANG] = { /* Osmumten's fang */
+        .item_id = 26219, .name = "Osmumten's fang", .slot = SLOT_WEAPON,
+        .attack_speed = 5, .attack_range = 1,
+        .attack_stab = 105, .attack_slash = 75, .attack_crush = 0,
+        .attack_magic = 0, .attack_ranged = 0,
+        .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
+        .defence_magic = 0, .defence_ranged = 0,
+        .melee_strength = 103, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+    },
+    [ITEM_SOULREAPER_AXE] = { /* Soulreaper axe */
+        .item_id = 28338, .name = "Soulreaper axe", .slot = SLOT_WEAPON,
+        .attack_speed = 5, .attack_range = 1,
+        .attack_stab = 28, .attack_slash = 134, .attack_crush = 66,
+        .attack_magic = 0, .attack_ranged = 0,
+        .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
+        .defence_magic = 0, .defence_ranged = 0,
+        .melee_strength = 121, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+    },
+    [ITEM_TORVA_FULL_HELM] = { /* Torva full helm */
+        .item_id = 26382, .name = "Torva full helm", .slot = SLOT_HEAD,
+        .attack_speed = 0, .attack_range = 0,
+        .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
+        .attack_magic = -5, .attack_ranged = -5,
+        .defence_stab = 59, .defence_slash = 60, .defence_crush = 62,
+        .defence_magic = -2, .defence_ranged = 57,
+        .melee_strength = 8, .ranged_strength = 0, .magic_damage = 0, .prayer = 1
+    },
+    [ITEM_TORVA_PLATEBODY] = { /* Torva platebody */
+        .item_id = 26384, .name = "Torva platebody", .slot = SLOT_BODY,
+        .attack_speed = 0, .attack_range = 0,
+        .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
+        .attack_magic = -18, .attack_ranged = -14,
+        .defence_stab = 117, .defence_slash = 111, .defence_crush = 117,
+        .defence_magic = -11, .defence_ranged = 142,
+        .melee_strength = 6, .ranged_strength = 0, .magic_damage = 0, .prayer = 1
+    },
+    [ITEM_TORVA_PLATELEGS] = { /* Torva platelegs */
+        .item_id = 26386, .name = "Torva platelegs", .slot = SLOT_LEGS,
+        .attack_speed = 0, .attack_range = 0,
+        .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
+        .attack_magic = -24, .attack_ranged = -11,
+        .defence_stab = 87, .defence_slash = 78, .defence_crush = 79,
+        .defence_magic = -9, .defence_ranged = 102,
+        .melee_strength = 4, .ranged_strength = 0, .magic_damage = 0, .prayer = 1
+    },
+    [ITEM_BANDOS_CHESTPLATE] = { /* Bandos chestplate */
+        .item_id = 11832, .name = "Bandos chestplate", .slot = SLOT_BODY,
+        .attack_speed = 0, .attack_range = 0,
+        .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
+        .attack_magic = -15, .attack_ranged = -10,
+        .defence_stab = 98, .defence_slash = 93, .defence_crush = 105,
+        .defence_magic = -6, .defence_ranged = 133,
+        .melee_strength = 4, .ranged_strength = 0, .magic_damage = 0, .prayer = 1
+    },
+    [ITEM_BANDOS_BOOTS] = { /* Bandos boots */
+        .item_id = 11836, .name = "Bandos boots", .slot = SLOT_FEET,
+        .attack_speed = 0, .attack_range = 0,
+        .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
+        .attack_magic = -5, .attack_ranged = -3,
+        .defence_stab = 17, .defence_slash = 18, .defence_crush = 19,
+        .defence_magic = 0, .defence_ranged = 15,
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 1
+    },
+    [ITEM_PRIMORDIAL_BOOTS] = { /* Primordial boots */
+        .item_id = 13239, .name = "Primordial boots", .slot = SLOT_FEET,
+        .attack_speed = 0, .attack_range = 0,
+        .attack_stab = 2, .attack_slash = 2, .attack_crush = 2,
+        .attack_magic = -4, .attack_ranged = -1,
+        .defence_stab = 22, .defence_slash = 22, .defence_crush = 22,
+        .defence_magic = 0, .defence_ranged = 0,
+        .melee_strength = 5, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+    },
+    [ITEM_FEROCIOUS_GLOVES] = { /* Ferocious gloves */
+        .item_id = 22981, .name = "Ferocious gloves", .slot = SLOT_HANDS,
+        .attack_speed = 0, .attack_range = 0,
+        .attack_stab = 16, .attack_slash = 16, .attack_crush = 16,
+        .attack_magic = -16, .attack_ranged = -16,
+        .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
+        .defence_magic = 0, .defence_ranged = 0,
+        .melee_strength = 14, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+    },
+    [ITEM_AMULET_OF_TORTURE] = { /* Amulet of torture */
+        .item_id = 19553, .name = "Amulet of torture", .slot = SLOT_NECK,
+        .attack_speed = 0, .attack_range = 0,
+        .attack_stab = 15, .attack_slash = 15, .attack_crush = 15,
+        .attack_magic = 0, .attack_ranged = 0,
+        .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
+        .defence_magic = 0, .defence_ranged = 0,
+        .melee_strength = 10, .ranged_strength = 0, .magic_damage = 0, .prayer = 2
+    },
+    [ITEM_BERSERKER_RING_I] = { /* Berserker ring (i) */
+        .item_id = 11773, .name = "Berserker ring (i)", .slot = SLOT_RING,
+        .attack_speed = 0, .attack_range = 0,
+        .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
+        .attack_magic = 0, .attack_ranged = 0,
+        .defence_stab = 0, .defence_slash = 0, .defence_crush = 8,
+        .defence_magic = 0, .defence_ranged = 0,
+        .melee_strength = 8, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+    },
+    [ITEM_ULTOR_RING] = { /* Ultor ring */
+        .item_id = 28307, .name = "Ultor ring", .slot = SLOT_RING,
+        .attack_speed = 0, .attack_range = 0,
+        .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
+        .attack_magic = 0, .attack_ranged = 0,
+        .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
+        .defence_magic = 0, .defence_ranged = 0,
+        .melee_strength = 12, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+    },
+    [ITEM_AVERNIC_DEFENDER] = { /* Avernic defender */
+        .item_id = 22322, .name = "Avernic defender", .slot = SLOT_SHIELD,
+        .attack_speed = 0, .attack_range = 0,
+        .attack_stab = 30, .attack_slash = 29, .attack_crush = 28,
+        .attack_magic = -5, .attack_ranged = -4,
+        .defence_stab = 30, .defence_slash = 29, .defence_crush = 28,
+        .defence_magic = -5, .defence_ranged = -4,
+        .melee_strength = 8, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+    },
+    [ITEM_VENATOR_RING] = { /* Venator ring */
+        .item_id = 28310, .name = "Venator ring", .slot = SLOT_RING,
+        .attack_speed = 0, .attack_range = 0,
+        .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
+        .attack_magic = 0, .attack_ranged = 10,
+        .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
+        .defence_magic = 0, .defence_ranged = 0,
+        .melee_strength = 0, .ranged_strength = 2, .magic_damage = 0, .prayer = 0
+    },
+    [ITEM_VIRTUS_MASK] = { /* Virtus mask */
+        .item_id = 26241, .name = "Virtus mask", .slot = SLOT_HEAD,
+        .attack_speed = 0, .attack_range = 0,
+        .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
+        .attack_magic = 8, .attack_ranged = -3,
+        .defence_stab = 15, .defence_slash = 14, .defence_crush = 16,
+        .defence_magic = 6, .defence_ranged = 0,
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 2, .prayer = 1
+    },
+    [ITEM_VIRTUS_ROBE_TOP] = { /* Virtus robe top */
+        .item_id = 26243, .name = "Virtus robe top", .slot = SLOT_BODY,
+        .attack_speed = 0, .attack_range = 0,
+        .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
+        .attack_magic = 35, .attack_ranged = -11,
+        .defence_stab = 47, .defence_slash = 36, .defence_crush = 56,
+        .defence_magic = 31, .defence_ranged = 0,
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 2, .prayer = 2
+    },
+    [ITEM_VIRTUS_ROBE_BOTTOM] = { /* Virtus robe bottom */
+        .item_id = 26245, .name = "Virtus robe bottom", .slot = SLOT_LEGS,
+        .attack_speed = 0, .attack_range = 0,
+        .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
+        .attack_magic = 26, .attack_ranged = -9,
+        .defence_stab = 31, .defence_slash = 28, .defence_crush = 34,
+        .defence_magic = 22, .defence_ranged = 0,
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 2, .prayer = 1
+    },
+    [ITEM_MAGUS_RING] = { /* Magus ring */
+        .item_id = 28313, .name = "Magus ring", .slot = SLOT_RING,
+        .attack_speed = 0, .attack_range = 0,
+        .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
+        .attack_magic = 15, .attack_ranged = 0,
+        .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
+        .defence_magic = 0, .defence_ranged = 0,
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 2, .prayer = 0
+    },
+    [ITEM_TUMEKENS_SHADOW] = { /* Tumeken's shadow */
+        .item_id = 27275, .name = "Tumeken's shadow", .slot = SLOT_WEAPON,
+        .attack_speed = 5, .attack_range = 10,
+        .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
+        .attack_magic = 35, .attack_ranged = 0,
+        .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
+        .defence_magic = 20, .defence_ranged = 0,
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 1
+    },
+    [ITEM_BGS] = { /* Bandos godsword */
+        .item_id = 11804, .name = "Bandos godsword", .slot = SLOT_WEAPON,
+        .attack_speed = 6, .attack_range = 1,
+        .attack_stab = 0, .attack_slash = 132, .attack_crush = 80,
+        .attack_magic = 0, .attack_ranged = 0,
+        .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
+        .defence_magic = 0, .defence_ranged = 0,
+        .melee_strength = 132, .ranged_strength = 0, .magic_damage = 0, .prayer = 8
+    },
+    [ITEM_SGS] = { /* Saradomin godsword */
+        .item_id = 11806, .name = "Saradomin godsword", .slot = SLOT_WEAPON,
+        .attack_speed = 6, .attack_range = 1,
+        .attack_stab = 0, .attack_slash = 132, .attack_crush = 80,
+        .attack_magic = 0, .attack_ranged = 0,
+        .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
+        .defence_magic = 0, .defence_ranged = 0,
+        .melee_strength = 132, .ranged_strength = 0, .magic_damage = 0, .prayer = 8
+    },
+    [ITEM_ZGS] = { /* Zamorak godsword */
+        .item_id = 11808, .name = "Zamorak godsword", .slot = SLOT_WEAPON,
+        .attack_speed = 6, .attack_range = 1,
+        .attack_stab = 0, .attack_slash = 132, .attack_crush = 80,
+        .attack_magic = 0, .attack_ranged = 0,
+        .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
+        .defence_magic = 0, .defence_ranged = 0,
+        .melee_strength = 132, .ranged_strength = 0, .magic_damage = 0, .prayer = 8
+    },
+    [ITEM_CRYSTAL_HALBERD] = { /* Crystal halberd */
+        .item_id = 23987, .name = "Crystal halberd", .slot = SLOT_WEAPON,
+        .attack_speed = 7, .attack_range = 2,
+        .attack_stab = 85, .attack_slash = 110, .attack_crush = 5,
+        .attack_magic = -4, .attack_ranged = 0,
+        .defence_stab = -1, .defence_slash = 4, .defence_crush = 5,
+        .defence_magic = 0, .defence_ranged = 0,
+        .melee_strength = 118, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+    },
+    [ITEM_DRAGON_BATTLEAXE] = { /* Dragon battleaxe */
+        .item_id = 1377, .name = "Dragon battleaxe", .slot = SLOT_WEAPON,
+        .attack_speed = 6, .attack_range = 1,
+        .attack_stab = -2, .attack_slash = 70, .attack_crush = 65,
+        .attack_magic = 0, .attack_ranged = 0,
+        .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
+        .defence_magic = 0, .defence_ranged = -1,
+        .melee_strength = 85, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+    },
+    [ITEM_RUBY_DRAGON_BOLTS_E] = { /* Ruby dragon bolts (e) */
+        .item_id = 21944, .name = "Ruby dragon bolts (e)", .slot = SLOT_AMMO,
+        .attack_speed = 0, .attack_range = 0,
+        .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
+        .attack_magic = 0, .attack_ranged = 0,
+        .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
+        .defence_magic = 0, .defence_ranged = 0,
+        .melee_strength = 0, .ranged_strength = 122, .magic_damage = 0, .prayer = 0
+    },
+    [ITEM_DIAMOND_DRAGON_BOLTS_E] = { /* Diamond dragon bolts (e) */
+        .item_id = 21946, .name = "Diamond dragon bolts (e)", .slot = SLOT_AMMO,
+        .attack_speed = 0, .attack_range = 0,
+        .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
+        .attack_magic = 0, .attack_ranged = 0,
+        .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
+        .defence_magic = 0, .defence_ranged = 0,
+        .melee_strength = 0, .ranged_strength = 122, .magic_damage = 0, .prayer = 0
+    },
+    [ITEM_RUNE_ARROW] = { /* Rune arrow */
+        .item_id = 892, .name = "Rune arrow", .slot = SLOT_AMMO,
+        .attack_speed = 0, .attack_range = 0,
+        .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
+        .attack_magic = 0, .attack_ranged = 0,
+        .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
+        .defence_magic = 0, .defence_ranged = 0,
+        .melee_strength = 0, .ranged_strength = 49, .magic_damage = 0, .prayer = 0
+    },
+    [ITEM_DRAGON_JAVELIN] = { /* Dragon javelin */
+        .item_id = 19484, .name = "Dragon javelin", .slot = SLOT_AMMO,
+        .attack_speed = 0, .attack_range = 0,
+        .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
+        .attack_magic = 0, .attack_ranged = 0,
+        .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
+        .defence_magic = 0, .defence_ranged = 0,
+        .melee_strength = 0, .ranged_strength = 150, .magic_damage = 0, .prayer = 0
+    },
+    [ITEM_SPECTRAL_SPIRIT_SHIELD] = { /* Spectral spirit shield */
+        .item_id = 12821, .name = "Spectral spirit shield", .slot = SLOT_SHIELD,
+        .attack_speed = 0, .attack_range = 0,
+        .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
+        .attack_magic = 0, .attack_ranged = 0,
+        .defence_stab = 53, .defence_slash = 55, .defence_crush = 73,
+        .defence_magic = 30, .defence_ranged = 52,
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 3
+    },
+    [ITEM_DRAGONFIRE_SHIELD] = { /* Dragonfire shield */
+        .item_id = 11283, .name = "Dragonfire shield", .slot = SLOT_SHIELD,
+        .attack_speed = 0, .attack_range = 0,
+        .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
+        .attack_magic = -10, .attack_ranged = -5,
+        .defence_stab = 70, .defence_slash = 75, .defence_crush = 72,
+        .defence_magic = 10, .defence_ranged = 72,
+        .melee_strength = 7, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
     },
 };
 

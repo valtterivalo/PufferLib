@@ -614,5 +614,207 @@
     "item_id": 11230,
     "attack_range": 0,
     "comment": "Dragon dart"
+  },
+  {
+    "index": "ITEM_SCYTHE_OF_VITUR",
+    "item_id": 22325,
+    "version": "Charged",
+    "attack_range": 2,
+    "comment": "Scythe of vitur"
+  },
+  {
+    "index": "ITEM_BLADE_OF_SAELDOR",
+    "item_id": 24551,
+    "attack_range": 1,
+    "comment": "Blade of saeldor (c)"
+  },
+  {
+    "index": "ITEM_OSMUMTENS_FANG",
+    "item_id": 26219,
+    "attack_range": 1,
+    "comment": "Osmumten's fang"
+  },
+  {
+    "index": "ITEM_SOULREAPER_AXE",
+    "item_id": 28338,
+    "attack_range": 1,
+    "comment": "Soulreaper axe"
+  },
+  {
+    "index": "ITEM_TORVA_FULL_HELM",
+    "item_id": 26382,
+    "version": "Restored",
+    "attack_range": 0,
+    "comment": "Torva full helm"
+  },
+  {
+    "index": "ITEM_TORVA_PLATEBODY",
+    "item_id": 26384,
+    "version": "Restored",
+    "attack_range": 0,
+    "comment": "Torva platebody"
+  },
+  {
+    "index": "ITEM_TORVA_PLATELEGS",
+    "item_id": 26386,
+    "version": "Restored",
+    "attack_range": 0,
+    "comment": "Torva platelegs"
+  },
+  {
+    "index": "ITEM_BANDOS_CHESTPLATE",
+    "item_id": 11832,
+    "attack_range": 0,
+    "comment": "Bandos chestplate"
+  },
+  {
+    "index": "ITEM_BANDOS_BOOTS",
+    "item_id": 11836,
+    "attack_range": 0,
+    "comment": "Bandos boots"
+  },
+  {
+    "index": "ITEM_PRIMORDIAL_BOOTS",
+    "item_id": 13239,
+    "attack_range": 0,
+    "comment": "Primordial boots"
+  },
+  {
+    "index": "ITEM_FEROCIOUS_GLOVES",
+    "item_id": 22981,
+    "attack_range": 0,
+    "comment": "Ferocious gloves"
+  },
+  {
+    "index": "ITEM_AMULET_OF_TORTURE",
+    "item_id": 19553,
+    "attack_range": 0,
+    "comment": "Amulet of torture"
+  },
+  {
+    "index": "ITEM_BERSERKER_RING_I",
+    "item_id": 11773,
+    "attack_range": 0,
+    "comment": "Berserker ring (i)"
+  },
+  {
+    "index": "ITEM_ULTOR_RING",
+    "item_id": 28307,
+    "attack_range": 0,
+    "comment": "Ultor ring"
+  },
+  {
+    "index": "ITEM_AVERNIC_DEFENDER",
+    "item_id": 22322,
+    "version": "Normal",
+    "attack_range": 0,
+    "comment": "Avernic defender"
+  },
+  {
+    "index": "ITEM_VENATOR_RING",
+    "item_id": 28310,
+    "attack_range": 0,
+    "comment": "Venator ring"
+  },
+  {
+    "index": "ITEM_VIRTUS_MASK",
+    "item_id": 26241,
+    "attack_range": 0,
+    "comment": "Virtus mask"
+  },
+  {
+    "index": "ITEM_VIRTUS_ROBE_TOP",
+    "item_id": 26243,
+    "attack_range": 0,
+    "comment": "Virtus robe top"
+  },
+  {
+    "index": "ITEM_VIRTUS_ROBE_BOTTOM",
+    "item_id": 26245,
+    "attack_range": 0,
+    "comment": "Virtus robe bottom"
+  },
+  {
+    "index": "ITEM_MAGUS_RING",
+    "item_id": 28313,
+    "attack_range": 0,
+    "comment": "Magus ring"
+  },
+  {
+    "index": "ITEM_TUMEKENS_SHADOW",
+    "item_id": 27275,
+    "version": "Charged",
+    "attack_range": 10,
+    "comment": "Tumeken's shadow"
+  },
+  {
+    "index": "ITEM_BGS",
+    "item_id": 11804,
+    "attack_range": 1,
+    "comment": "Bandos godsword"
+  },
+  {
+    "index": "ITEM_SGS",
+    "item_id": 11806,
+    "attack_range": 1,
+    "comment": "Saradomin godsword"
+  },
+  {
+    "index": "ITEM_ZGS",
+    "item_id": 11808,
+    "attack_range": 1,
+    "comment": "Zamorak godsword"
+  },
+  {
+    "index": "ITEM_CRYSTAL_HALBERD",
+    "item_id": 23987,
+    "version": "Active",
+    "attack_range": 2,
+    "comment": "Crystal halberd"
+  },
+  {
+    "index": "ITEM_DRAGON_BATTLEAXE",
+    "item_id": 1377,
+    "attack_range": 1,
+    "comment": "Dragon battleaxe"
+  },
+  {
+    "index": "ITEM_RUBY_DRAGON_BOLTS_E",
+    "item_id": 21944,
+    "attack_range": 0,
+    "comment": "Ruby dragon bolts (e)"
+  },
+  {
+    "index": "ITEM_DIAMOND_DRAGON_BOLTS_E",
+    "item_id": 21946,
+    "attack_range": 0,
+    "comment": "Diamond dragon bolts (e)"
+  },
+  {
+    "index": "ITEM_RUNE_ARROW",
+    "item_id": 892,
+    "version": "Unpoisoned",
+    "attack_range": 0,
+    "comment": "Rune arrow"
+  },
+  {
+    "index": "ITEM_DRAGON_JAVELIN",
+    "item_id": 19484,
+    "version": "Unpoisoned",
+    "attack_range": 0,
+    "comment": "Dragon javelin"
+  },
+  {
+    "index": "ITEM_SPECTRAL_SPIRIT_SHIELD",
+    "item_id": 12821,
+    "attack_range": 0,
+    "comment": "Spectral spirit shield"
+  },
+  {
+    "index": "ITEM_DRAGONFIRE_SHIELD",
+    "item_id": 11283,
+    "version": "Charged",
+    "attack_range": 0,
+    "comment": "Dragonfire shield"
   }
 ]
