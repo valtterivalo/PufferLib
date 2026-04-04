@@ -23,6 +23,7 @@
 #include "../osrs_combat.h"
 #include "../osrs_special_attacks.h"
 #include "../osrs_encounter.h"
+#include "../osrs_interaction.h"
 #include "../data/npc_models.h"
 #include <string.h>
 #include <stdio.h>
@@ -584,7 +585,8 @@ typedef struct {
     OverheadPrayer active_prayer;
     int prayer_drain_counter;  /* shared drain system counter (see encounter_drain_prayer) */
     int player_attack_timer;
-    int player_attack_target; /* NPC index or -1 */
+    OsrsInteraction interaction;  /* shared interaction state */
+    int spec_armed;               /* 1 = next attack uses special */
     int player_brew_doses;
     int player_restore_doses;
     int player_bastion_doses;
@@ -786,7 +788,8 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
     s->player_stamina_doses = 4;   /* 1 pot x 4 doses */
     s->stamina_active_ticks = 0;
     s->active_prayer = PRAYER_NONE;
-    s->player_attack_target = -1;
+    osrs_interaction_init(&s->interaction);
+    s->spec_armed = 0;
     s->player.special_energy = 100;
     s->player.special_regen_ticks = 0;
     s->player.run_energy = 10000;  /* full run energy (OSRS stores as 0-10000) */
@@ -1743,7 +1746,7 @@ static void inf_tick_npcs(InfernoState* s) {
 #define INF_HEAD_EAT     4   /* 2: none, brew */
 #define INF_HEAD_POTION  5   /* 4: none, restore, bastion, stamina */
 #define INF_HEAD_SPELL   6   /* 3: no_change, blood_barrage, ice_barrage */
-#define INF_HEAD_SPEC    7   /* 2: no_spec, spec (blowpipe only) */
+#define INF_HEAD_SPEC    7   /* 2: no_change, toggle (arm/disarm blowpipe spec) */
 #define INF_NUM_ACTION_HEADS 8
 
 static const int INF_ACTION_DIMS[INF_NUM_ACTION_HEADS] = { ENCOUNTER_MOVE_ACTIONS, 5, INF_MAX_NPCS+1, 5, 2, 4, 3, 2 };
@@ -1861,45 +1864,9 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
     /* special energy regen: 10 energy every 50 ticks (30 seconds) */
     encounter_tick_spec_regen(&s->player, 0);
 
-    /* blowpipe special attack: 2x accuracy, 1.5x max hit, heal 50% of damage.
-       only available in BP gear with 50+ spec energy and an active target. */
-    {
-        int spec_act = actions[INF_HEAD_SPEC];
-        if (spec_act == 1 && s->weapon_set == INF_GEAR_BP &&
-            s->player_attack_target >= 0 && s->player_attack_timer == 0 &&
-            encounter_use_spec(&s->player, BLOWPIPE_SPEC_COST)) {
-            InfNPC* target_npc = &s->npcs[s->player_attack_target];
-            if (target_npc->active && target_npc->death_ticks == 0) {
-                const EncounterLoadoutStats* ls = &s->loadout_stats[INF_GEAR_BP];
-                const InfNPCStats* ns = &INF_NPC_STATS[target_npc->type];
-                int base_att_roll = ls->eff_level * (ls->attack_bonus + 64);
-                int dmg = osrs_blowpipe_spec_resolve(
-                    base_att_roll, ls->max_hit,
-                    ns->def_level, ns->ranged_def_bonus, &s->rng_state);
-                /* heal 50% of damage dealt */
-                int heal = dmg * BLOWPIPE_SPEC_HEAL_PCT / 100;
-                s->player.current_hitpoints += heal;
-                if (s->player.current_hitpoints > s->player.base_hitpoints)
-                    s->player.current_hitpoints = s->player.base_hitpoints;
-                /* queue pending hit */
-                int target_dist = encounter_dist_to_npc(s->player.x, s->player.y,
-                    target_npc->x, target_npc->y, target_npc->size);
-                EncounterPendingHit* ph = &target_npc->pending_hit;
-                ph->active = 1;
-                ph->damage = dmg;
-                ph->ticks_remaining = encounter_blowpipe_hit_delay(target_dist, 1);
-                ph->attack_style = ATTACK_STYLE_RANGED;
-                ph->check_prayer = 0;
-                ph->spell_type = 0;
-                s->player_attack_timer = ls->attack_speed;
-                s->damage_dealt_this_tick += (float)dmg;
-                s->player_attacked_this_tick = 1;
-                s->player_attack_npc_idx = s->player_attack_target;
-                s->player_attack_dmg = dmg;
-                s->player_attack_style_id = ATTACK_STYLE_RANGED;
-            }
-        }
-    }
+    /* spec toggle: arm/disarm (does NOT interrupt interaction) */
+    if (actions[INF_HEAD_SPEC] == 1)
+        osrs_spec_toggle(&s->spec_armed);
 
     /* stat decay: every 60 ticks, boosted/drained stats move 1 toward base */
     if (s->tick > 0 && s->tick % 60 == 0) {
@@ -1954,6 +1921,12 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
         s->player_potion_timer = 3;
     }
 
+    /* inventory actions interrupt interaction (per OSRS entity interaction rules) */
+    if (eat_act > 0)
+        osrs_interaction_check_interrupt(&s->interaction, OSRS_IACT_EAT);
+    if (pot_act > 0)
+        osrs_interaction_check_interrupt(&s->interaction, OSRS_IACT_DRINK);
+
     /* attack target selection: persistent until NPC dies or player clicks ground.
        target=0 means "no new target this tick" (preserves existing target). */
     int target = actions[INF_HEAD_TARGET];
@@ -1962,7 +1935,7 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
         int npc_idx = target - 1;
         if (s->npcs[npc_idx].active && s->npcs[npc_idx].death_ticks == 0 &&
             s->npcs[npc_idx].type != INF_NPC_ZUK_SHIELD) {
-            s->player_attack_target = npc_idx;
+            osrs_interaction_set(&s->interaction, npc_idx);
             has_new_target = 1;
             /* tagging: redirect NPC aggro from shield/zuk to player */
             if (s->npcs[npc_idx].aggro_target != -1) {
@@ -1975,20 +1948,19 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
        but only if no new target was set this tick. auto-chase movement
        does NOT cancel — only explicit user actions do. */
     int has_explicit_move = (actions[INF_HEAD_MOVE] > 0 || s->player_dest_x >= 0);
-    if (!has_new_target && has_explicit_move) {
-        s->player_attack_target = -1;
-    }
+    if (!has_new_target && has_explicit_move)
+        osrs_interaction_check_interrupt(&s->interaction, OSRS_IACT_MOVE);
     /* clear target if NPC died or is dying */
-    if (s->player_attack_target >= 0 &&
-        (!s->npcs[s->player_attack_target].active ||
-         s->npcs[s->player_attack_target].death_ticks > 0)) {
-        s->player_attack_target = -1;
+    if (osrs_interaction_active(&s->interaction) &&
+        (!s->npcs[s->interaction.target_slot].active ||
+         s->npcs[s->interaction.target_slot].death_ticks > 0)) {
+        osrs_interaction_clear(&s->interaction);
     }
 
     /* movement: explicit move, auto-chase toward target, or idle.
        OSRS order: target selection → movement → attack check. */
     int chasing = 0;
-    if (has_explicit_move && s->player_attack_target < 0) {
+    if (has_explicit_move && !osrs_interaction_active(&s->interaction)) {
         /* explicit movement (ground click or RL agent) — no attack target */
         if (s->player_dest_x >= 0) {
             encounter_move_toward_dest(&s->player, &s->player_dest_x, &s->player_dest_y,
@@ -2004,9 +1976,9 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
                     inf_tile_walkable, s);
             }
         }
-    } else if (s->player_attack_target >= 0) {
+    } else if (osrs_interaction_active(&s->interaction)) {
         /* auto-chase: pathfind toward attack target when out of range */
-        InfNPC* chase_npc = &s->npcs[s->player_attack_target];
+        InfNPC* chase_npc = &s->npcs[s->interaction.target_slot];
         const EncounterLoadoutStats* ls = &s->loadout_stats[s->weapon_set];
         chasing = encounter_chase_attack_target(&s->player,
             chase_npc->x, chase_npc->y, INF_NPC_STATS[chase_npc->type].size,
@@ -2019,8 +1991,8 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
 
     /* player attacks targeted NPC */
     if (s->player_attack_timer > 0) s->player_attack_timer--;
-    if (s->player_attack_target >= 0 && s->player_attack_timer == 0) {
-        InfNPC* target_npc = &s->npcs[s->player_attack_target];
+    if (osrs_interaction_active(&s->interaction) && s->player_attack_timer == 0) {
+        InfNPC* target_npc = &s->npcs[s->interaction.target_slot];
         if (target_npc->active) {
             const EncounterLoadoutStats* ls = &s->loadout_stats[s->weapon_set];
 
@@ -2056,13 +2028,13 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
                         btargets[bt_count++] = (BarrageTarget){
                             .active = 1, .x = target_npc->x, .y = target_npc->y,
                             .def_level = ns->def_level, .magic_def_bonus = ns->magic_def_bonus,
-                            .npc_idx = s->player_attack_target,
-                            .frozen_ticks = &s->npcs[s->player_attack_target].frozen_ticks,
+                            .npc_idx = s->interaction.target_slot,
+                            .frozen_ticks = &s->npcs[s->interaction.target_slot].frozen_ticks,
                             .hit = 0, .damage = 0
                         };
                     }
                     for (int i = 0; i < INF_MAX_NPCS; i++) {
-                        if (i == s->player_attack_target || !s->npcs[i].active) continue;
+                        if (i == s->interaction.target_slot || !s->npcs[i].active) continue;
                         const InfNPCStats* ns2 = &INF_NPC_STATS[s->npcs[i].type];
                         btargets[bt_count++] = (BarrageTarget){
                             .active = 1, .x = s->npcs[i].x, .y = s->npcs[i].y,
@@ -2116,8 +2088,29 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
                     ph->check_prayer = 0;
                     ph->spell_type = 0;
 
+                } else if (s->spec_armed &&
+                           encounter_use_spec(&s->player, BLOWPIPE_SPEC_COST)) {
+                    /* blowpipe spec: 2x accuracy, 1.5x max hit, heal 50% of damage */
+                    osrs_spec_disarm(&s->spec_armed);
+                    const InfNPCStats* ns = &INF_NPC_STATS[target_npc->type];
+                    int base_att_roll = ls->eff_level * (ls->attack_bonus + 64);
+                    total_dmg = osrs_blowpipe_spec_resolve(
+                        base_att_roll, ls->max_hit,
+                        ns->def_level, ns->ranged_def_bonus, &s->rng_state);
+                    int heal = total_dmg * BLOWPIPE_SPEC_HEAL_PCT / 100;
+                    s->player.current_hitpoints += heal;
+                    if (s->player.current_hitpoints > s->player.base_hitpoints)
+                        s->player.current_hitpoints = s->player.base_hitpoints;
+                    EncounterPendingHit* ph = &target_npc->pending_hit;
+                    ph->active = 1;
+                    ph->damage = total_dmg;
+                    ph->ticks_remaining = hit_delay;
+                    ph->attack_style = ATTACK_STYLE_RANGED;
+                    ph->check_prayer = 0;
+                    ph->spell_type = 0;
+
                 } else {
-                    /* blowpipe: single target */
+                    /* blowpipe: single target, normal attack */
                     const InfNPCStats* ns = &INF_NPC_STATS[target_npc->type];
                     int att_roll = ls->eff_level * (ls->attack_bonus + 64);
                     int def_roll = (ns->def_level + 8) * (ns->ranged_def_bonus + 64);
@@ -2137,7 +2130,7 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
 
                 /* player projectile event for renderer */
                 s->player_attacked_this_tick = 1;
-                s->player_attack_npc_idx = s->player_attack_target;
+                s->player_attack_npc_idx = s->interaction.target_slot;
                 s->player_attack_dmg = total_dmg;
                 s->player_attack_style_id = ls->style;
 
@@ -2398,8 +2391,8 @@ static void inf_write_obs(EncounterState* state, float* obs) {
     obs[i++] = (float)s->player.current_defence / 99.0f;
     obs[i++] = (float)s->player.current_ranged / 99.0f;
     obs[i++] = (float)s->player.current_magic / 99.0f;
-    obs[i++] = (s->player_attack_target >= 0)
-               ? (float)(s->player_attack_target + 1) / (float)INF_MAX_NPCS : 0.0f;
+    obs[i++] = osrs_interaction_active(&s->interaction)
+               ? (float)(s->interaction.target_slot + 1) / (float)INF_MAX_NPCS : 0.0f;
     obs[i++] = (float)s->loadout_stats[s->weapon_set].attack_range / 15.0f;
     obs[i++] = (float)s->dead_mob_count / (float)INF_MAX_DEAD_MOBS;
     /* gear stats: current loadout combat performance */
@@ -2626,12 +2619,10 @@ static void inf_write_mask(EncounterState* state, float* mask) {
                       s->player.current_hitpoints < s->player.base_hitpoints) ? 1.0f : 0.0f;
     mask[offset++] = (s->weapon_set == INF_GEAR_MAGE) ? 1.0f : 0.0f;
 
-    /* HEAD_SPEC (2): no_spec, spec. spec only when in BP gear with enough energy. */
-    mask[offset++] = 1.0f;  /* no_spec always valid */
+    /* HEAD_SPEC (2): no_change, toggle. allow when blowpipe equipped + enough energy. */
+    mask[offset++] = 1.0f;  /* no_change always valid */
     mask[offset++] = (s->weapon_set == INF_GEAR_BP &&
-                      s->player.special_energy >= BLOWPIPE_SPEC_COST &&
-                      s->player_attack_timer == 0 &&
-                      s->player_attack_target >= 0)
+                      s->player.special_energy >= BLOWPIPE_SPEC_COST)
                      ? 1.0f : 0.0f;
 }
 
@@ -2748,7 +2739,7 @@ static void inf_fill_render_entities(EncounterState* state, RenderEntity* out, i
         re->hit_spell_type = npc->hit_spell_type;
     }
 
-    encounter_resolve_attack_target(out, n, s->player_attack_target);
+    encounter_resolve_attack_target(out, n, s->interaction.target_slot);
     *count = n;
 }
 
