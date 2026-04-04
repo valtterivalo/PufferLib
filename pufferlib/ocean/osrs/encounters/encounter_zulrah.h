@@ -37,6 +37,7 @@
 #include "../osrs_items.h"
 #include "../osrs_combat.h"
 #include "../osrs_collision.h"
+#include "../osrs_monsters_generated.h"
 #include "../data/npc_models.h"
 #include <stdlib.h>
 #include <string.h>
@@ -72,19 +73,10 @@ static const int ZUL_POSITIONS[ZUL_NUM_POSITIONS][2] = {
 #define ZUL_PLAYER_START_X  11
 #define ZUL_PLAYER_START_Y  7
 
-/* zulrah combat stats (from monster JSON 2042/2043/2044) */
-#define ZUL_BASE_HP        500
-#define ZUL_MAX_HIT        41
-#define ZUL_ATTACK_SPEED   3
-#define ZUL_DEF_LEVEL      300
-
-/* per-form defence (from monster JSON) */
-#define ZUL_GREEN_DEF_MAGIC   (-45)
-#define ZUL_GREEN_DEF_RANGED  50
-#define ZUL_RED_DEF_MAGIC     0
-#define ZUL_RED_DEF_RANGED    300
-#define ZUL_BLUE_DEF_MAGIC    300
-#define ZUL_BLUE_DEF_RANGED   0
+/* zulrah combat stats sourced from MONSTER_DATABASE (osrs_monsters_generated.h).
+   all three forms share: hp=500, def_level=300, attack_speed=3.
+   per-form defence: green magic_def=-45 ranged_def=50, red 0/300, blue 300/0. */
+#define ZUL_BASE_HP  MONSTER_DATABASE[MON_ZULRAH_GREEN].hp  /* convenience alias for binding.c */
 
 /* melee form: stares then whips. accuracy roll + max hit 41. stun if hit.
    wiki: melee attack speed 6. RuneLite plugin sets attackTicks=8 on melee anims
@@ -114,10 +106,8 @@ static const int ZUL_POSITIONS[ZUL_NUM_POSITIONS][2] = {
 #define ZUL_CLOUD_DAMAGE_MIN 1
 #define ZUL_CLOUD_DAMAGE_MAX 5    /* wiki: 1-5 per tick */
 
-/* snakelings — differentiated max hit by type (wiki) */
+/* snakelings: stats from MONSTER_DATABASE (MON_ZULRAH_SNAKELING_MELEE/MAGIC) */
 #define ZUL_SNAKELING_HP       1
-#define ZUL_SNAKELING_MELEE_MAX_HIT 15  /* NPC 2045 */
-#define ZUL_SNAKELING_MAGIC_MAX_HIT 13  /* NPC 2046 */
 #define ZUL_SNAKELING_SPEED    3
 #define ZUL_SNAKELING_LIFESPAN 67  /* ~40 seconds = 40/0.6 ticks */
 
@@ -126,9 +116,7 @@ static const int ZUL_POSITIONS[ZUL_NUM_POSITIONS][2] = {
 #define ZUL_VENOM_START     6
 #define ZUL_VENOM_MAX       20
 
-/* NPC attack rolls — precomputed from wiki NPC stats.
-   formula: (npc_level + 8) * (npc_att_bonus + 64) */
-#define ZUL_NPC_RANGED_ATT_ROLL  35112  /* (300+8) * (50+64) */
+/* NPC attack rolls: computed from MONSTER_DATABASE via osrs_npc_attack_roll() */
 
 /* spawn timing for clouds/snakelings during phase actions */
 #define ZUL_SPAWN_INTERVAL  3  /* ticks between each cloud/snakeling spit (same as attack speed) */
@@ -200,6 +188,13 @@ typedef enum {
     ZUL_FORM_RED,        /* 2043: magma, melee */
     ZUL_FORM_BLUE,       /* 2044: tanzanite, magic+ranged */
 } ZulrahForm;
+
+/* map zulrah form to MONSTER_DATABASE index */
+static const int ZUL_FORM_MONSTER_IDX[] = {
+    [ZUL_FORM_GREEN] = MON_ZULRAH_GREEN,
+    [ZUL_FORM_RED]   = MON_ZULRAH_RED,
+    [ZUL_FORM_BLUE]  = MON_ZULRAH_BLUE,
+};
 
 typedef enum {
     ZUL_GEAR_MAGE = 0,
@@ -637,7 +632,7 @@ static inline int zul_player_in_cloud(int cx, int cy, int px, int py) {
 
 
 static int zul_form_npc_id(ZulrahForm f) {
-    return (f == ZUL_FORM_GREEN) ? 2042 : (f == ZUL_FORM_RED) ? 2043 : 2044;
+    return MONSTER_DATABASE[ZUL_FORM_MONSTER_IDX[f]].npc_id;
 }
 
 /* apply damage cap: hits over 50 → random 45-50 */
@@ -752,24 +747,24 @@ static void zul_record_attack(ZulrahState* s, int src_x, int src_y,
    even if blocked by a protection prayer." so venom only on hit. */
 /* known sim gap: ranged/magic attacks ignore LOS (no pillar blocking for projectiles). */
 static void zul_attack_ranged(ZulrahState* s) {
+    const MonsterStats* m = &MONSTER_DATABASE[MON_ZULRAH_GREEN];
+    int npc_att_roll = osrs_npc_attack_roll(m->range_level, m->range_att_bonus);
     int dmg = 0;
     int did_hit = 0;
     if (encounter_prayer_correct_for_style(s->player_prayer, ATTACK_STYLE_RANGED)) {
         /* prayer blocks damage but venom still applies (unless miss) */
         int def_roll = zul_player_def_roll(s, ATTACK_STYLE_RANGED);
-        float chance = osrs_hit_chance(ZUL_NPC_RANGED_ATT_ROLL, def_roll);
+        float chance = osrs_hit_chance(npc_att_roll, def_roll);
         did_hit = (encounter_rand_float(&s->rng_state) < chance);
         if (did_hit) {
             s->prayer_blocked_this_tick = 1;
-            /* damage blocked by prayer, but attack didn't "miss" */
         }
     } else {
-        /* accuracy roll: NPC ranged att vs player ranged def */
         int def_roll = zul_player_def_roll(s, ATTACK_STYLE_RANGED);
-        float chance = osrs_hit_chance(ZUL_NPC_RANGED_ATT_ROLL, def_roll);
+        float chance = osrs_hit_chance(npc_att_roll, def_roll);
         if (encounter_rand_float(&s->rng_state) < chance) {
             did_hit = 1;
-            dmg = encounter_rand_int(&s->rng_state, ZUL_MAX_HIT + 1);
+            dmg = encounter_rand_int(&s->rng_state, m->max_hit + 1);
             zul_apply_player_damage(s, dmg, ATTACK_STYLE_RANGED, &s->zulrah);
         }
     }
@@ -786,7 +781,7 @@ static void zul_attack_magic(ZulrahState* s) {
     if (encounter_prayer_correct_for_style(s->player_prayer, ATTACK_STYLE_MAGIC)) {
         s->prayer_blocked_this_tick = 1;
     } else {
-        dmg = encounter_rand_int(&s->rng_state, ZUL_MAX_HIT + 1);
+        dmg = encounter_rand_int(&s->rng_state, MONSTER_DATABASE[MON_ZULRAH_BLUE].max_hit + 1);
         zul_apply_player_damage(s, dmg, ATTACK_STYLE_MAGIC, &s->zulrah);
     }
     /* magic always hits → always try envenom (even if prayer blocked damage) */
@@ -857,13 +852,11 @@ static void zul_attack_jad(ZulrahState* s) {
 /* player attacks zulrah                                                     */
 /* ======================================================================== */
 
-/* per-form defence bonuses — called from normal attacks and spec handler */
+/* per-form defence bonuses from MONSTER_DATABASE */
 static inline void zul_form_def_bonuses(ZulrahForm form, int* def_magic, int* def_ranged) {
-    switch (form) {
-        case ZUL_FORM_GREEN: *def_magic = ZUL_GREEN_DEF_MAGIC; *def_ranged = ZUL_GREEN_DEF_RANGED; break;
-        case ZUL_FORM_RED:   *def_magic = ZUL_RED_DEF_MAGIC;   *def_ranged = ZUL_RED_DEF_RANGED;   break;
-        case ZUL_FORM_BLUE:  *def_magic = ZUL_BLUE_DEF_MAGIC;  *def_ranged = ZUL_BLUE_DEF_RANGED;  break;
-    }
+    const MonsterStats* m = &MONSTER_DATABASE[ZUL_FORM_MONSTER_IDX[form]];
+    *def_magic = m->magic_def;
+    *def_ranged = m->ranged_def;
 }
 
 static int zul_player_attack_hits(ZulrahState* s, int is_mage) {
@@ -881,7 +874,7 @@ static int zul_player_attack_hits(ZulrahState* s, int is_mage) {
         if (def_magic < -64) def_magic = -64;  /* can't go below -64 (makes def_roll 0) */
     }
     int def_bonus = is_mage ? def_magic : def_ranged;
-    int def_roll = (ZUL_DEF_LEVEL + 8) * (def_bonus + 64);
+    int def_roll = (MONSTER_DATABASE[ZUL_FORM_MONSTER_IDX[s->current_form]].def_level + 8) * (def_bonus + 64);
     if (def_roll < 0) def_roll = 0;
 
     /* confliction gauntlets: double accuracy roll on primed magic attacks (tier 2 only).
@@ -969,7 +962,7 @@ static void zul_player_spec(ZulrahState* s) {
 
         int _dm1 = 0, def_ranged = 0;
         zul_form_def_bonuses(s->current_form, &_dm1, &def_ranged);
-        int def_roll = (ZUL_DEF_LEVEL + 8) * (def_ranged + 64);
+        int def_roll = (MONSTER_DATABASE[ZUL_FORM_MONSTER_IDX[s->current_form]].def_level + 8) * (def_ranged + 64);
         if (def_roll < 0) def_roll = 0;
 
         int msb_max_hit = (int)(0.5f + (float)(99 + 10) * (55 + 64) / 640.0f);
@@ -993,7 +986,7 @@ static void zul_player_spec(ZulrahState* s) {
 
         int _dm2 = 0, def_ranged = 0;
         zul_form_def_bonuses(s->current_form, &_dm2, &def_ranged);
-        int def_roll = (ZUL_DEF_LEVEL + 8) * (def_ranged + 64);
+        int def_roll = (MONSTER_DATABASE[ZUL_FORM_MONSTER_IDX[s->current_form]].def_level + 8) * (def_ranged + 64);
         if (def_roll < 0) def_roll = 0;
 
         int bp_att_bonus = 80;   /* blowpipe ranged attack bonus in tier 1 gear */
@@ -1020,7 +1013,7 @@ static void zul_player_spec(ZulrahState* s) {
         zul_form_def_bonuses(s->current_form, &def_magic, &_dr3);
         def_magic -= s->magic_def_drain;
         if (def_magic < -64) def_magic = -64;
-        int def_roll = (ZUL_DEF_LEVEL + 8) * (def_magic + 64);
+        int def_roll = (MONSTER_DATABASE[ZUL_FORM_MONSTER_IDX[s->current_form]].def_level + 8) * (def_magic + 64);
         if (def_roll < 0) def_roll = 0;
 
         int att_roll = osrs_player_att_roll(s->mage_stats.eff_level, s->mage_stats.attack_bonus) * 2;
@@ -1138,7 +1131,8 @@ static void zul_snakeling_tick(ZulrahState* s) {
         if (encounter_prayer_correct_for_style(s->player_prayer, sn_style)) {
             s->prayer_blocked_this_tick = 1; continue;
         }
-        int sn_max = sn->is_magic ? ZUL_SNAKELING_MAGIC_MAX_HIT : ZUL_SNAKELING_MELEE_MAX_HIT;
+        int sn_max = sn->is_magic ? MONSTER_DATABASE[MON_ZULRAH_SNAKELING_MAGIC].max_hit
+                                   : MONSTER_DATABASE[MON_ZULRAH_SNAKELING_MELEE].max_hit;
         int dmg = encounter_rand_int(&s->rng_state, sn_max + 1);
         AttackStyle st = sn->is_magic ? ATTACK_STYLE_MAGIC : ATTACK_STYLE_MELEE;
         zul_apply_player_damage(s, dmg, st, &sn->entity);
@@ -1369,7 +1363,7 @@ static int zul_action_interval(ZulActionType type) {
         case ZA_RANGED:
         case ZA_MAGIC_RANGED:
         case ZA_JAD_RM:
-        case ZA_JAD_MR:        return ZUL_ATTACK_SPEED;
+        case ZA_JAD_MR:        return MONSTER_DATABASE[MON_ZULRAH_GREEN].attack_speed;
         case ZA_MELEE:         return ZUL_MELEE_INTERVAL;
         case ZA_CLOUDS:
         case ZA_SNAKELINGS:
@@ -1633,7 +1627,7 @@ static void zul_write_obs(EncounterState* state, float* obs) {
     obs[i++] = (float)s->player_stunned_ticks / ZUL_MELEE_STUN_TICKS;
 
     /* zulrah (16-29) */
-    obs[i++] = (float)s->zulrah.current_hitpoints / ZUL_BASE_HP;
+    obs[i++] = (float)s->zulrah.current_hitpoints / MONSTER_DATABASE[MON_ZULRAH_GREEN].hp;
     obs[i++] = (float)s->zulrah.x / ZUL_ARENA_SIZE;
     obs[i++] = (float)s->zulrah.y / ZUL_ARENA_SIZE;
     obs[i++] = (s->current_form == ZUL_FORM_GREEN) ? 1.0f : 0.0f;
@@ -1642,7 +1636,7 @@ static void zul_write_obs(EncounterState* state, float* obs) {
     obs[i++] = s->zulrah_visible ? 1.0f : 0.0f;
     obs[i++] = s->is_diving ? 1.0f : 0.0f;
     obs[i++] = s->zulrah_attacking ? 1.0f : 0.0f;
-    obs[i++] = (float)s->action_timer / ZUL_ATTACK_SPEED;
+    obs[i++] = (float)s->action_timer / MONSTER_DATABASE[MON_ZULRAH_GREEN].attack_speed;
     obs[i++] = (float)encounter_dist_to_npc(s->player.x, s->player.y, s->zulrah.x, s->zulrah.y, ZUL_NPC_SIZE) / ZUL_ARENA_SIZE;
     obs[i++] = (float)s->rotation_index / (ZUL_NUM_ROTATIONS - 1);
     obs[i++] = (float)s->phase_index / 12.0f;
@@ -1673,7 +1667,7 @@ static void zul_write_obs(EncounterState* state, float* obs) {
     obs[i++] = (float)s->tick / ZUL_MAX_TICKS;
     obs[i++] = s->damage_dealt_this_tick / 50.0f;
     obs[i++] = s->damage_received_this_tick / 50.0f;
-    obs[i++] = s->total_damage_dealt / ZUL_BASE_HP;
+    obs[i++] = s->total_damage_dealt / MONSTER_DATABASE[MON_ZULRAH_GREEN].hp;
 
     /* new features (64-67) */
     obs[i++] = (float)s->player_special_energy / 100.0f;
@@ -1862,8 +1856,8 @@ static void zul_reset(EncounterState* state, uint32_t seed) {
     s->zulrah.npc_def_id = 2042;
     s->zulrah.npc_size = ZUL_NPC_SIZE;
     s->zulrah.npc_anim_id = ZULRAH_ANIM_IDLE;
-    s->zulrah.base_hitpoints = ZUL_BASE_HP;
-    s->zulrah.current_hitpoints = ZUL_BASE_HP;
+    s->zulrah.base_hitpoints = MONSTER_DATABASE[MON_ZULRAH_GREEN].hp;
+    s->zulrah.current_hitpoints = MONSTER_DATABASE[MON_ZULRAH_GREEN].hp;
 
     /* pick random rotation, start at phase 0 (cloud-only intro) */
     s->rotation_index = encounter_rand_int(&s->rng_state, ZUL_NUM_ROTATIONS);
