@@ -138,7 +138,7 @@ static inline DrinkResult osrs_drink_potion(PotionType type, int current_prayer,
             break;
         case POTION_RANGING:
             r.consumed = 1;
-            r.level_boost = 5 + prayer_level / 10;  /* +5 + 10% of level */
+            r.level_boost = 4 + prayer_level / 10;  /* +4 + 10% of level. ref: osrs wiki "ranging potion" */
             break;
         case POTION_SUPER_COMBAT:
             r.consumed = 1;
