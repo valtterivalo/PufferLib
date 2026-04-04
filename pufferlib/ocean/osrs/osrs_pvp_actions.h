@@ -14,6 +14,7 @@
 
 #include "osrs_types.h"
 #include "osrs_items.h"
+#include "osrs_consumables.h"
 #include "osrs_pvp_gear.h"
 #include "osrs_pvp_combat.h"
 #include "osrs_pvp_movement.h"
@@ -62,7 +63,7 @@ static void eat_food(Player* p, int is_karambwan) {
         if (p->karambwan_count <= 0 || p->karambwan_timer > 0) return;
         p->karambwan_count--;
         int hp_before = p->current_hitpoints;
-        int heal_amount = 18;
+        int heal_amount = osrs_food_heal_amount(FOOD_KARAMBWAN);
         int max_hp = p->base_hitpoints;
         int actual_heal = max_int(0, min_int(heal_amount, max_hp - hp_before));
         int waste = heal_amount - actual_heal;
@@ -81,8 +82,7 @@ static void eat_food(Player* p, int is_karambwan) {
     } else {
         if (p->food_count <= 0 || p->food_timer > 0) return;
         p->food_count--;
-        // Sharks heal 20, capped by missing HP
-        int heal_amount = 20;
+        int heal_amount = osrs_food_heal_amount(FOOD_SHARK);
         int hp_before = p->current_hitpoints;
         int max_hp = p->base_hitpoints;
         int actual_heal = min_int(heal_amount, max_hp - hp_before);
@@ -119,26 +119,24 @@ static void drink_potion(Player* p, int potion_type) {
         case 1: {
             if (p->brew_doses <= 0) return;
             p->brew_doses--;
-            int def_boost = (int)floorf(2.0f + (0.20f * p->base_defence));
-            int hp_boost = (int)floorf(2.0f + (0.15f * p->base_hitpoints));
+            // pass current levels for drain params — brew drains 10% of CURRENT not base
+            BrewResult br = osrs_brew_effect(p->base_hitpoints, p->current_attack,
+                                             p->current_strength, p->current_ranged,
+                                             p->current_magic);
             int hp_before = p->current_hitpoints;
-            int max_hp = p->base_hitpoints + hp_boost;
-            int actual_heal = max_int(0, min_int(hp_boost, max_hp - hp_before));
-            int waste = hp_boost - actual_heal;
+            int max_hp = p->base_hitpoints + br.hp_healed;
+            int actual_heal = max_int(0, min_int(br.hp_healed, max_hp - hp_before));
+            int waste = br.hp_healed - actual_heal;
             int def_before = p->current_defence;
-            int max_def = p->is_lms ? p->base_defence : p->base_defence + def_boost;
-            p->current_defence = clamp(def_before + def_boost, 0, max_def);
-            p->current_hitpoints = clamp(hp_before + hp_boost, 0, max_hp);
+            int max_def = p->is_lms ? p->base_defence : p->base_defence + br.def_boost;
+            p->current_defence = clamp(def_before + br.def_boost, 0, max_def);
+            p->current_hitpoints = clamp(hp_before + br.hp_healed, 0, max_hp);
             p->last_brew_heal = actual_heal;
             p->last_brew_waste = waste;
-            int att_down = (int)floorf(0.10f * p->current_attack) + 2;
-            int str_down = (int)floorf(0.10f * p->current_strength) + 2;
-            int mag_down = (int)floorf(0.10f * p->current_magic) + 2;
-            int rng_down = (int)floorf(0.10f * p->current_ranged) + 2;
-            p->current_attack = clamp(p->current_attack - att_down, 0, 255);
-            p->current_strength = clamp(p->current_strength - str_down, 0, 255);
-            p->current_magic = clamp(p->current_magic - mag_down, 0, 255);
-            p->current_ranged = clamp(p->current_ranged - rng_down, 0, 255);
+            p->current_attack = clamp(p->current_attack - br.att_drain, 0, 255);
+            p->current_strength = clamp(p->current_strength - br.str_drain, 0, 255);
+            p->current_magic = clamp(p->current_magic - br.magic_drain, 0, 255);
+            p->current_ranged = clamp(p->current_ranged - br.range_drain, 0, 255);
             p->last_potion_type = potion_type;
             p->ate_brew_this_tick = 1;  // Track for reward shaping
             break;
@@ -155,13 +153,14 @@ static void drink_potion(Player* p, int potion_type) {
                 p->current_magic < p->base_magic ||
                 p->current_prayer < p->base_prayer
             );
-            int prayer_restore = 8 + (p->base_prayer / 4);
-            p->current_prayer = clamp(p->current_prayer + prayer_restore, 0, p->base_prayer);
-            int atk_restore = 8 + (p->base_attack / 4);
-            int str_restore = 8 + (p->base_strength / 4);
-            int def_restore = 8 + (p->base_defence / 4);
-            int rng_restore = 8 + (p->base_ranged / 4);
-            int mag_restore = 8 + (p->base_magic / 4);
+            // super restore: 8 + floor(level/4) for prayer and all stats
+            DrinkResult dr = osrs_drink_potion(POTION_SUPER_RESTORE, 0, p->base_prayer, 0);
+            p->current_prayer = clamp(p->current_prayer + dr.prayer_restored, 0, p->base_prayer);
+            int atk_restore = osrs_drink_potion(POTION_SUPER_RESTORE, 0, p->base_attack, 0).prayer_restored;
+            int str_restore = osrs_drink_potion(POTION_SUPER_RESTORE, 0, p->base_strength, 0).prayer_restored;
+            int def_restore = osrs_drink_potion(POTION_SUPER_RESTORE, 0, p->base_defence, 0).prayer_restored;
+            int rng_restore = osrs_drink_potion(POTION_SUPER_RESTORE, 0, p->base_ranged, 0).prayer_restored;
+            int mag_restore = osrs_drink_potion(POTION_SUPER_RESTORE, 0, p->base_magic, 0).prayer_restored;
             if (p->current_attack < p->base_attack) {
                 p->current_attack = clamp(p->current_attack + atk_restore, 0, p->base_attack);
             }
@@ -185,9 +184,9 @@ static void drink_potion(Player* p, int potion_type) {
         case 3: {
             if (p->combat_potion_doses <= 0) return;
             p->combat_potion_doses--;
-            int atk_boost = (int)floorf(p->base_attack * 0.15f) + 5;
-            int str_boost = (int)floorf(p->base_strength * 0.15f) + 5;
-            int def_boost = (int)floorf(p->base_defence * 0.15f) + 5;
+            int atk_boost = osrs_drink_potion(POTION_SUPER_COMBAT, 0, p->base_attack, 0).level_boost;
+            int str_boost = osrs_drink_potion(POTION_SUPER_COMBAT, 0, p->base_strength, 0).level_boost;
+            int def_boost = osrs_drink_potion(POTION_SUPER_COMBAT, 0, p->base_defence, 0).level_boost;
             int atk_cap = p->base_attack + atk_boost;
             int str_cap = p->base_strength + str_boost;
             int def_cap = p->is_lms ? p->base_defence : p->base_defence + def_boost;
@@ -213,7 +212,7 @@ static void drink_potion(Player* p, int potion_type) {
         case 4: {
             if (p->ranged_potion_doses <= 0) return;
             p->ranged_potion_doses--;
-            int rng_boost = (int)floorf(p->base_ranged * 0.10f) + 4;
+            int rng_boost = osrs_drink_potion(POTION_RANGING, 0, p->base_ranged, 0).level_boost;
             int rng_cap = p->base_ranged + rng_boost;
             int had_boost_need = p->current_ranged < rng_cap;
             if (p->current_ranged < rng_cap) {
