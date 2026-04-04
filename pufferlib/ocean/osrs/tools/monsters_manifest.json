@@ -1,0 +1,80 @@
+[
+  {
+    "index": "MON_JAL_NIB",
+    "npc_id": 7691,
+    "comment": "Nibbler"
+  },
+  {
+    "index": "MON_JAL_MEJRAH",
+    "npc_id": 7692,
+    "comment": "Bat"
+  },
+  {
+    "index": "MON_JAL_AK",
+    "npc_id": 7693,
+    "comment": "Blob"
+  },
+  {
+    "index": "MON_JAL_AKREK_MEJ",
+    "npc_id": 7694,
+    "comment": "Blob mage split"
+  },
+  {
+    "index": "MON_JAL_AKREK_XIL",
+    "npc_id": 7695,
+    "comment": "Blob range split"
+  },
+  {
+    "index": "MON_JAL_AKREK_KET",
+    "npc_id": 7696,
+    "comment": "Blob melee split"
+  },
+  {
+    "index": "MON_JAL_IMKOT",
+    "npc_id": 7697,
+    "comment": "Meleer"
+  },
+  {
+    "index": "MON_JAL_XIL",
+    "npc_id": 7698,
+    "comment": "Ranger"
+  },
+  {
+    "index": "MON_JAL_ZEK",
+    "npc_id": 7699,
+    "comment": "Mager"
+  },
+  {
+    "index": "MON_JALTOK_JAD",
+    "npc_id": 7700,
+    "comment": "Jad"
+  },
+  {
+    "index": "MON_YT_HURKOT",
+    "npc_id": 7701,
+    "comment": "Jad healer"
+  },
+  {
+    "index": "MON_TZKAL_ZUK",
+    "npc_id": 7706,
+    "comment": "Zuk",
+    "version": "Normal"
+  },
+  {
+    "index": "MON_ZUK_SHIELD",
+    "npc_id": 7707,
+    "comment": "Ancestral Glyph",
+    "manual_stats": {
+      "name": "Ancestral Glyph",
+      "hp": 600,
+      "size": 5,
+      "attack_speed": 0,
+      "max_hit": 0
+    }
+  },
+  {
+    "index": "MON_JAL_MEJJAK",
+    "npc_id": 7708,
+    "comment": "Zuk healer"
+  }
+]
