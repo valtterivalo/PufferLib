@@ -1011,7 +1011,6 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
         if (attacker->special_energy < spec_cost) {
             is_special = 0;
             spec_item_idx = ITEM_NONE;
-            attacker->special_active = 0;
         } else {
             /* spec energy deducted here, not via encounter_use_spec (PvP manages its own step loop) */
             attacker->special_energy -= spec_cost;
@@ -1019,7 +1018,6 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
                 attacker->spec_regen_active = 1;
                 attacker->special_regen_ticks = 0;
             }
-            attacker->special_active = 0;
         }
     }
 

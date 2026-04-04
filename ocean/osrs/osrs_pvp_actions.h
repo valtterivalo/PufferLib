@@ -402,7 +402,6 @@ static void execute_switches(OsrsEnv* env, int agent_idx, int* actions) {
     if (loadout_action == LOADOUT_SPEC_MELEE || loadout_action == LOADOUT_SPEC_RANGE ||
         loadout_action == LOADOUT_SPEC_MAGIC || loadout_action == LOADOUT_GMAUL) {
         p->spec_queued = 1;
-        p->special_active = 1;
     }
 
     // =========================================================================
@@ -743,10 +742,8 @@ static void execute_attack_combat(OsrsEnv* env, int agent_idx, int* actions) {
                     /* spec check: use spec_queued toggle instead of loadout-based */
                     int is_special = p->spec_queued && is_special_ready(p, actual_style);
                     perform_attack(env, agent_idx, 1 - agent_idx, actual_style, is_special, 0, dist);
-                    if (is_special) {
+                    if (is_special)
                         osrs_spec_disarm(&p->spec_queued);
-                        p->special_active = 0;
-                    }
                     p->clicks_this_tick++;
                 }
             }

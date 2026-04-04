@@ -541,7 +541,6 @@ typedef struct {
     int special_regen_ticks;
     int spec_regen_active;
     int was_lightbearer_equipped;
-    int special_active;
     int spec_queued;           /* 1 = next attack uses special (shared across encounters) */
     OsrsInteraction interaction;  /* shared entity interaction state */
 

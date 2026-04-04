@@ -58,7 +58,6 @@ static void init_player(Player* p) {
     p->special_regen_ticks = 0;
     p->spec_regen_active = 0;
     p->was_lightbearer_equipped = 0;
-    p->special_active = 0;
     p->spec_queued = 0;
     osrs_interaction_init(&p->interaction);
 
