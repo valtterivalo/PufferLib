@@ -26,6 +26,7 @@
 #include <string.h>
 
 #include "pufferlib/ocean/osrs/osrs_encounter.h"
+#include "pufferlib/ocean/osrs/osrs_special_attacks.h"
 
 /* ======================================================================== */
 /* test harness                                                              */

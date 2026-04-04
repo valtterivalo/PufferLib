@@ -21,6 +21,7 @@
 #include "../osrs_monsters_generated.h"
 #include "../osrs_collision.h"
 #include "../osrs_combat.h"
+#include "../osrs_special_attacks.h"
 #include "../osrs_encounter.h"
 #include "../data/npc_models.h"
 #include <string.h>

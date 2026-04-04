@@ -451,9 +451,4 @@ static inline void osrs_sum_equipment_bonuses(const uint8_t loadout[NUM_GEAR_SLO
     }
 }
 
-/* blowpipe spec + SpecResult dispatch moved to osrs_special_attacks.h.
-   included here so downstream consumers (encounter_inferno.h etc.) still
-   get the symbols without needing their own include update. */
-#include "osrs_special_attacks.h"
-
 #endif /* OSRS_COMBAT_H */
