@@ -36,6 +36,7 @@
 #include "../osrs_types.h"
 #include "../osrs_items.h"
 #include "../osrs_combat.h"
+#include "../osrs_special_attacks.h"
 #include "../osrs_collision.h"
 #include "../osrs_monsters_generated.h"
 #include "../data/npc_models.h"
@@ -913,106 +914,61 @@ static void zul_player_attack(ZulrahState* s, int is_mage) {
     s->zulrah.hit_was_successful = (dmg > 0);
 }
 
-/* special attack: weapon-dependent, all cost 50% spec energy.
-   tier 0: MSB(i) "Snapshot" — 2 arrows, ~43% accuracy boost, ranged only.
-   tier 1: blowpipe — 1 hit, heals 50% of damage dealt, ranged only.
-   tier 2: eye of ayak "Soul Rend" — 5-tick mage attack, 2x accuracy, 1.3x max hit,
-           drains target magic defence by damage dealt. mage gear only. */
+/* special attack: dispatched via osrs_resolve_spec based on equipped weapon.
+   tier 0: MSB(i) from ranged gear. tier 1: bowfa has no spec (osrs_spec_cost=0).
+   tier 2: eye of ayak from mage gear. */
 static void zul_player_spec(ZulrahState* s) {
     if (!s->zulrah_visible || s->is_diving) return;
     if (s->player_attack_timer > 0) return;
     if (s->player_stunned_ticks > 0) return;
-    if (s->player_special_energy < ZUL_SPEC_COST) return;
 
-    /* tier 2 specs from mage gear (eye of ayak), tier 0-1 from ranged gear */
-    if (s->gear_tier == 2) {
-        if (s->player_gear != ZUL_GEAR_MAGE) return;
-    } else {
-        if (s->player_gear != ZUL_GEAR_RANGE) return;
-    }
+    /* determine weapon and stats from current gear */
+    int is_mage = (s->player_gear == ZUL_GEAR_MAGE);
+    const EncounterLoadoutStats* ls = is_mage ? &s->mage_stats : &s->range_stats;
+    const uint8_t* loadout = is_mage
+        ? ZUL_MAGE_LOADOUT[s->gear_tier]
+        : ZUL_RANGE_LOADOUT[s->gear_tier];
+    int weapon = loadout[GEAR_SLOT_WEAPON];
 
-    s->player_special_energy -= ZUL_SPEC_COST;
+    int cost = osrs_spec_cost(weapon);
+    if (cost == 0) return;  /* weapon has no spec (e.g. bowfa) */
+    if (s->player_special_energy < cost) return;
+
+    /* compute defence roll for current form */
+    const MonsterStats* m = &MONSTER_DATABASE[ZUL_FORM_MONSTER_IDX[s->current_form]];
+    int def_bonus = is_mage ? (m->magic_def - s->magic_def_drain) : m->ranged_def;
+    if (is_mage && def_bonus < -64) def_bonus = -64;
+    int def_roll = (m->def_level + 8) * (def_bonus + 64);
+    if (def_roll < 0) def_roll = 0;
+
+    int att_roll = osrs_player_att_roll(ls->eff_level, ls->attack_bonus);
+    SpecResult sr = osrs_resolve_spec(weapon, att_roll, ls->max_hit,
+                                       def_roll, m->def_level, &s->rng_state);
+
+    s->player_special_energy -= sr.spec_cost;
     s->player.just_attacked = 1;
     s->player.used_special_this_tick = 1;
+    s->player.last_attack_style = is_mage ? ATTACK_STYLE_MAGIC : ATTACK_STYLE_RANGED;
+    s->player.attack_style_this_tick = s->player.last_attack_style;
+    s->player_attack_timer = sr.attack_speed_override ? sr.attack_speed_override : ls->attack_speed;
 
+    /* apply damage with per-hit capping */
     int total_dmg = 0;
-
-    if (s->gear_tier == 0) {
-        /* MSB(i) Snapshot: 2 arrows, 10/7 accuracy boost.
-           max hit = floor(0.5 + (visible_level + 10) * (ammo_str + 64) / 640)
-           with amethyst arrows (str 55): floor(0.5 + 109*119/640) = 20 */
-        s->player.last_attack_style = ATTACK_STYLE_RANGED;
-        s->player.attack_style_this_tick = ATTACK_STYLE_RANGED;
-        s->player_attack_timer = 3;
-
-        int _dm1 = 0, def_ranged = 0;
-        zul_form_def_bonuses(s->current_form, &_dm1, &def_ranged);
-        int def_roll = (MONSTER_DATABASE[ZUL_FORM_MONSTER_IDX[s->current_form]].def_level + 8) * (def_ranged + 64);
-        if (def_roll < 0) def_roll = 0;
-
-        int msb_max_hit = (int)(0.5f + (float)(99 + 10) * (55 + 64) / 640.0f);
-        int att_roll_base = osrs_player_att_roll(s->range_stats.eff_level, s->range_stats.attack_bonus);
-        int att_roll_spec = att_roll_base * 10 / 7;
-
-        for (int arrow = 0; arrow < 2; arrow++) {
-            if (encounter_rand_float(&s->rng_state) < osrs_hit_chance(att_roll_spec, def_roll)) {
-                int dmg = encounter_rand_int(&s->rng_state, msb_max_hit + 1);
-                dmg = zul_cap_damage(s, dmg);
-                encounter_damage_player(&s->zulrah, dmg, NULL);
-                total_dmg += dmg;
-            }
-        }
-    } else if (s->gear_tier == 1) {
-        /* blowpipe spec: 1 hit, heals 50% of damage dealt.
-           blowpipe not in range loadout — hardcoded stats until D4 replaces with osrs_resolve_spec */
-        s->player.last_attack_style = ATTACK_STYLE_RANGED;
-        s->player.attack_style_this_tick = ATTACK_STYLE_RANGED;
-        s->player_attack_timer = 3;
-
-        int _dm2 = 0, def_ranged = 0;
-        zul_form_def_bonuses(s->current_form, &_dm2, &def_ranged);
-        int def_roll = (MONSTER_DATABASE[ZUL_FORM_MONSTER_IDX[s->current_form]].def_level + 8) * (def_ranged + 64);
-        if (def_roll < 0) def_roll = 0;
-
-        int bp_att_bonus = 80;   /* blowpipe ranged attack bonus in tier 1 gear */
-        int bp_max_hit = 28;     /* blowpipe max hit with amethyst darts */
-        int att_roll = osrs_player_att_roll(s->range_stats.eff_level, bp_att_bonus);
-        if (encounter_rand_float(&s->rng_state) < osrs_hit_chance(att_roll, def_roll)) {
-            int dmg = encounter_rand_int(&s->rng_state, bp_max_hit + 1);
-            dmg = zul_cap_damage(s, dmg);
-            encounter_damage_player(&s->zulrah, dmg, NULL);
-            total_dmg = dmg;
-            int heal = dmg * ZUL_SPEC_HEAL_PCT / 100;
-            s->player.current_hitpoints += heal;
-            if (s->player.current_hitpoints > s->player.base_hitpoints)
-                s->player.current_hitpoints = s->player.base_hitpoints;
-        }
-    } else {
-        /* eye of ayak Soul Rend: 5-tick mage attack, 2x accuracy, 1.3x max hit.
-           on hit: drain target magic defence by damage dealt (carries across forms). */
-        s->player.last_attack_style = ATTACK_STYLE_MAGIC;
-        s->player.attack_style_this_tick = ATTACK_STYLE_MAGIC;
-        s->player_attack_timer = 5;  /* slower than normal 3-tick */
-
-        int def_magic = 0, _dr3 = 0;
-        zul_form_def_bonuses(s->current_form, &def_magic, &_dr3);
-        def_magic -= s->magic_def_drain;
-        if (def_magic < -64) def_magic = -64;
-        int def_roll = (MONSTER_DATABASE[ZUL_FORM_MONSTER_IDX[s->current_form]].def_level + 8) * (def_magic + 64);
-        if (def_roll < 0) def_roll = 0;
-
-        int att_roll = osrs_player_att_roll(s->mage_stats.eff_level, s->mage_stats.attack_bonus) * 2;
-        int spec_max_hit = s->mage_stats.max_hit * 130 / 100;  /* 1.3x max hit */
-
-        if (encounter_rand_float(&s->rng_state) < osrs_hit_chance(att_roll, def_roll)) {
-            int dmg = encounter_rand_int(&s->rng_state, spec_max_hit + 1);
-            dmg = zul_cap_damage(s, dmg);
-            encounter_damage_player(&s->zulrah, dmg, NULL);
-            total_dmg = dmg;
-            /* drain target magic defence by damage dealt */
-            s->magic_def_drain += dmg;
-        }
+    for (int i = 0; i < sr.num_hits; i++) {
+        int dmg = zul_cap_damage(s, sr.damage[i]);
+        encounter_damage_player(&s->zulrah, dmg, NULL);
+        total_dmg += dmg;
     }
+
+    /* apply heal (blowpipe, SGS) */
+    if (sr.heal > 0) {
+        s->player.current_hitpoints += sr.heal;
+        if (s->player.current_hitpoints > s->player.base_hitpoints)
+            s->player.current_hitpoints = s->player.base_hitpoints;
+    }
+
+    /* apply magic def drain (eye of ayak) */
+    s->magic_def_drain += sr.magic_def_drain;
 
     s->damage_dealt_this_tick += total_dmg;
     s->total_damage_dealt += total_dmg;
