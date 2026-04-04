@@ -2031,8 +2031,12 @@ static void zul_fill_render_entities(EncounterState* state, RenderEntity* out, i
     for (int i = 0; i < ZUL_MAX_SNAKELINGS && n < max_entities; i++) {
         if (s->snakelings[i].active) {
             render_entity_from_player(&s->snakelings[i].entity, &out[n++]);
+            out[n - 1].attack_target_entity_idx = 0;  /* snakelings face player */
         }
     }
+    /* player faces zulrah, zulrah faces player */
+    out[0].attack_target_entity_idx = 1;
+    out[1].attack_target_entity_idx = 0;
     *count = n;
 }
 
