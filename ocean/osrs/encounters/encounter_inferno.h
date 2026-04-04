@@ -190,7 +190,7 @@ static const InfNPCOverlay INF_NPC_OVERLAY[INF_NUM_NPC_TYPES] = {
     [INF_NPC_JAD]        = { 50, ATTACK_STYLE_RANGED, MELEE_STYLE_STAB,  0, 113, 100, 113, 0, 1 },
     [INF_NPC_ZUK]        = { 99, ATTACK_STYLE_MAGIC,  MELEE_STYLE_STAB,  0, 148, 100, 0, 8, 0 },
     [INF_NPC_HEALER_JAD] = { 1,  ATTACK_STYLE_MELEE,  MELEE_STYLE_CRUSH, 0,   0,   0, 0, 0, 1 },
-    [INF_NPC_HEALER_ZUK] = { 99, ATTACK_STYLE_MAGIC,  MELEE_STYLE_STAB,  0,  10, 100, 0, 0, 0 },
+    [INF_NPC_HEALER_ZUK] = { 99, ATTACK_STYLE_MAGIC,  MELEE_STYLE_STAB,  0,  10, 100, 0, 2, 0 },  /* stun_on_spawn=2 per InfernoTrainer TzKalZuk.ts:168 */
     [INF_NPC_ZUK_SHIELD] = { 0,  ATTACK_STYLE_NONE,   MELEE_STYLE_STAB,  0,   0,   0, 0, 1, 0 },
 };
 
