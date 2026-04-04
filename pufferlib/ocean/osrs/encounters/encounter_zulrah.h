@@ -647,11 +647,6 @@ static inline int zul_cap_damage(ZulrahState* s, int damage) {
 /* damage application                                                        */
 /* ======================================================================== */
 
-static inline int zul_has_recoil_effect(Player* p) {
-    int ring = p->equipped[GEAR_SLOT_RING];
-    return ring == ITEM_RING_OF_RECOIL || ring == ITEM_RING_OF_SUFFERING_RI;
-}
-
 /** Apply damage to the player. If attacker is non-NULL and player has a recoil
     ring equipped, reflects floor(damage * 0.1) + 1 back to the attacker.
     Pass NULL for environmental damage (clouds, venom) where recoil doesn't apply. */
@@ -663,7 +658,9 @@ static void zul_apply_player_damage(ZulrahState* s, int damage, AttackStyle styl
     s->player.hit_style = style;
 
     /* ring of recoil / ring of suffering (i) */
-    if (attacker && zul_has_recoil_effect(&s->player) && s->player.recoil_charges > 0) {
+    int ring = s->player.equipped[GEAR_SLOT_RING];
+    int has_recoil = (ring == ITEM_RING_OF_RECOIL || ring == ITEM_RING_OF_SUFFERING_RI);
+    if (attacker && has_recoil && s->player.recoil_charges > 0) {
         int recoil = damage / 10 + 1;
         if (recoil > s->player.recoil_charges) {
             recoil = s->player.recoil_charges;
@@ -696,18 +693,6 @@ static void zul_try_envenom(ZulrahState* s) {
 
 /* OSRS accuracy formula: if att > def: 1 - (def+2)/(2*(att+1)), else att/(2*(def+1)) */
 /* hit chance: use shared OSRS accuracy formula from osrs_combat.h */
-
-/* confliction gauntlets double accuracy roll (same formula as osmumten's fang).
- * on a primed magic attack, accuracy is rolled twice — hitting if either roll succeeds. */
-static float zul_hit_chance_double(int a, int d) {
-    float fa = (float)a, fd = (float)d;
-    if (a >= d) {
-        float num = (fd + 2.0f) * (2.0f * fd + 3.0f);
-        float den = 6.0f * (fa + 1.0f) * (fa + 1.0f);
-        return 1.0f - num / den;
-    }
-    return fa * (4.0f * fa + 5.0f) / (6.0f * (fa + 1.0f) * (fd + 1.0f));
-}
 
 /* compute player's defence roll against a specific NPC attack style.
    uses current gear loadout stats (derived from ITEM_DATABASE).
@@ -881,7 +866,7 @@ static int zul_player_attack_hits(ZulrahState* s, int is_mage) {
      * primed = previous magic attack missed. eye of ayak is one-handed so effect applies. */
     if (is_mage && s->confliction_primed && s->gear_tier == 2) {
         s->confliction_primed = 0;
-        return encounter_rand_float(&s->rng_state) < zul_hit_chance_double(att_roll, def_roll);
+        return encounter_rand_float(&s->rng_state) < osrs_hit_chance_double(att_roll, def_roll);
     }
 
     return encounter_rand_float(&s->rng_state) < osrs_hit_chance(att_roll, def_roll);
@@ -1848,8 +1833,9 @@ static void zul_reset(EncounterState* state, uint32_t seed) {
         mage_prayer, 99, 0, 30, &s->mage_stats);
     encounter_compute_loadout_stats(ZUL_RANGE_LOADOUT[s->gear_tier], ATTACK_STYLE_RANGED,
         range_prayer, 99, 0, 0, &s->range_stats);
+    int r = s->player.equipped[GEAR_SLOT_RING];
     s->player.recoil_charges =
-        zul_has_recoil_effect(&s->player) ? RECOIL_MAX_CHARGES : 0;
+        (r == ITEM_RING_OF_RECOIL || r == ITEM_RING_OF_SUFFERING_RI) ? RECOIL_MAX_CHARGES : 0;
 
     /* zulrah */
     s->zulrah.entity_type = ENTITY_NPC;
