@@ -3811,8 +3811,8 @@ void pvp_render(OsrsEnv* env) {
 
             /* consumables */
             DrawText(TextFormat("BREW:%d REST:%d BAST:%d STAM:%d",
-                is->player_brew_doses, is->player_restore_doses,
-                is->player_bastion_doses, is->player_stamina_doses),
+                is->player.brew_doses, is->player.restore_doses,
+                is->player.bastion_doses, is->player.stamina_doses),
                 dx, dy, fs, dc);
             dy += fs + 2;
 

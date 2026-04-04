@@ -94,8 +94,8 @@ void c_step(Env* env) {
         env->log.brews_used = (float)s->total_brews_used;
         env->log.blood_healed = (float)s->total_blood_healed;
         env->log.unavoidable_off_prayer = (float)s->total_unavoidable_off;
-        env->log.brews_remaining = (float)s->player_brew_doses;
-        env->log.restores_remaining = (float)s->player_restore_doses;
+        env->log.brews_remaining = (float)s->player.brew_doses;
+        env->log.restores_remaining = (float)s->player.restore_doses;
         env->log.prayer_at_death = (float)s->player.current_prayer;
         for (int t = 0; t < INF_NUM_NPC_TYPES; t++) {
             env->log.prayer_correct_by_type[t] = (float)s->prayer_correct_by_type[t];

@@ -1,6 +1,6 @@
 /**
  * @file osrs_types.h
- * @brief Core type definitions for OSRS PvP environment
+ * @brief Core type definitions for OSRS environment (shared by all encounters)
  *
  * Contains all enums, structs, and constants used throughout the simulation.
  * This is the base header - all other headers depend on this.
@@ -446,6 +446,9 @@ typedef enum {
 // GEAR BONUS STRUCTS
 // ============================================================================
 
+/* PvP-era gear bonus struct. same data as EquipmentBonuses (osrs_combat.h)
+   but with different field naming convention (stab_attack vs attack_stab).
+   the adapter compute_slot_gear_bonuses() in osrs_pvp_gear.h bridges them. */
 typedef struct {
     int stab_attack;
     int slash_attack;
@@ -556,6 +559,8 @@ typedef struct {
     int prayer_pot_doses;
     int combat_potion_doses;
     int ranged_potion_doses;
+    int bastion_doses;
+    int stamina_doses;
     int antivenom_doses;
 
     // Timers
