@@ -46,7 +46,7 @@ if hasattr(sys.stderr, "reconfigure"):
 # config loading (reads .ini files, builds argparse dynamically)
 # ============================================================================
 
-METAL_CONFIG_DIR = Path(__file__).parent / "pufferlib" / "config" / "metal"
+METAL_CONFIG_DIR = Path(__file__).parent / "config"
 SWEEP_DIR_BASE = Path("runs/sweep_bench")
 LOG_INTERVAL = 5
 
