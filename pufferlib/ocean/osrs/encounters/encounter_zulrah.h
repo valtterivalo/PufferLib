@@ -376,87 +376,8 @@ static const int ZUL_ACTION_HEAD_DIMS[ZUL_NUM_ACTION_HEADS] = {
 
 /* movement uses shared encounter_move_to_target + ENCOUNTER_MOVE_TARGET_DX/DY from osrs_encounter.h */
 
-/* ======================================================================== */
-/* gear tier precomputed stats — from wiki strategy guide loadouts           */
-/* ======================================================================== */
-
+/* number of gear tiers for validation (used in put_int) */
 #define ZUL_NUM_GEAR_TIERS 3
-
-typedef struct {
-    /* player attacking zulrah (offensive) */
-    int mage_att_bonus;         /* total magic attack bonus in mage gear */
-    int range_att_bonus;        /* total ranged attack bonus in range gear (tbow for BIS) */
-    int bp_att_bonus;           /* ranged attack bonus when using blowpipe (for spec) */
-    int mage_max_hit;           /* max hit with mage weapon */
-    int range_max_hit;          /* max hit with ranged weapon (tbow scaled at zulrah) */
-    int bp_max_hit;             /* blowpipe max hit (for spec) */
-    int eff_mage_level;         /* effective magic level: floor((99+boost)*prayer) + 8 */
-    int eff_range_level;        /* effective range level: floor((99+boost)*prayer) + 8 */
-    int range_speed;            /* ranged weapon attack speed: tbow=5, blowpipe=3 */
-    /* player defending vs zulrah (per active gear style) */
-    int def_level;              /* defence level (99) */
-    int magic_def_eff;          /* precomputed: floor(0.7*(magic+8) + 0.3*(def*prayer+8)) */
-    int mage_def_melee;         /* melee def bonus in mage gear */
-    int mage_def_ranged;        /* ranged def bonus in mage gear */
-    int mage_def_magic;         /* magic def bonus in mage gear */
-    int range_def_melee;        /* melee def bonus in range gear */
-    int range_def_ranged;       /* ranged def bonus in range gear */
-    int range_def_magic;        /* magic def bonus in range gear */
-} ZulGearTierStats;
-
-/* tier 0: trident + mystic + god d'hide + blowpipe, no rigour/augury
-   tier 1: sang staff + ahrim's + blessed d'hide + blowpipe, rigour/augury
-   tier 2 (BIS from wiki): eye of ayak + ancestral + tbow + masori + rigour/augury
-   all values computed from exact wiki item stats (march 2026) */
-static const ZulGearTierStats ZUL_GEAR_TIERS[ZUL_NUM_GEAR_TIERS] = {
-    /* tier 0 (budget): trident + mystic + god d'hide + blowpipe, no rigour/augury
-       eff levels: floor(99*1.0)+8 = 107 (no prayer boost)
-       magic_def_eff: floor(0.7*(99+8) + 0.3*(99+8)) = floor(107) = 107 */
-    {
-        .mage_att_bonus = 68,   .range_att_bonus = 42,  .bp_att_bonus = 42,
-        .mage_max_hit = 28,     .range_max_hit = 25,    .bp_max_hit = 25,
-        .eff_mage_level = 107,  .eff_range_level = 107, .range_speed = 3,
-        .def_level = 99,        .magic_def_eff = 107,
-        .mage_def_melee = 20,   .mage_def_ranged = 25,  .mage_def_magic = 65,
-        .range_def_melee = 60,  .range_def_ranged = 70,  .range_def_magic = -10,
-    },
-    /* tier 1 (mid): sang staff + ahrim's + bowfa + crystal armor, rigour/augury
-       eff mage: floor(112*1.25)+8 = 148, eff range: floor(112*1.20)+8 = 142
-       magic_def_eff: floor(0.7*(112+8) + 0.3*(floor(99*1.25)+8))
-                    = floor(0.7*120 + 0.3*131) = floor(84+39.3) = 123
-       sang max: floor(112/3)-1 = 36, * 1.15 (occult+tormented) = floor(41.4) = 41
-       bowfa: +128 att, +106 str. crystal set: +30% acc (applied in code), +15% dmg.
-       range att: 128+9+31+18+15+8+12+7 = 228. range str: 106+5+2 = 113.
-       base range max: floor(0.5 + 142*(113+64)/640) = 39, *1.15 = floor(44.85) = 44
-       bp_att/max for blowpipe spec (amethyst darts) */
-    {
-        .mage_att_bonus = 105,  .range_att_bonus = 228, .bp_att_bonus = 80,
-        .mage_max_hit = 41,     .range_max_hit = 44,    .bp_max_hit = 28,
-        .eff_mage_level = 148,  .eff_range_level = 142, .range_speed = 4,
-        .def_level = 99,        .magic_def_eff = 123,
-        .mage_def_melee = 40,   .mage_def_ranged = 50,  .mage_def_magic = 95,
-        .range_def_melee = 75,  .range_def_ranged = 95,  .range_def_magic = 5,
-    },
-    /* tier 2 (BIS): eye of ayak + ancestral + confliction + elidinis ward +
-       tbow + masori + zaryte + dizana's quiver + dragon arrows
-       mage att: 30+8+35+26+12+20+15+25+0+11 = 182, mag dmg +30%
-       range att: 70+12+43+27+15+18+18 = 203 (with tbow)
-       bp att: 203 - 70 (tbow) + 30 (blowpipe) = 163
-       range str: 20+2+4+2+5+2+3+60 = 98 (dragon arrows)
-       eff mage: floor(112*1.25)+8 = 148, eff range: floor(112*1.20)+8 = 142
-       mage max: floor(floor(112/3)-6)*1.30) = floor(31*1.30) = 40
-       range max: floor(37*2.1385) = 79 (tbow at magic 250 cap, 213.85% dmg mult)
-       bp max: floor((145*(55+64)+320)/640) = 27 (dragon darts)
-       magic_def_eff: same as tier 1 = 123 (same prayers/boosts) */
-    {
-        .mage_att_bonus = 182,  .range_att_bonus = 203, .bp_att_bonus = 163,
-        .mage_max_hit = 40,     .range_max_hit = 79,    .bp_max_hit = 27,
-        .eff_mage_level = 148,  .eff_range_level = 142, .range_speed = 5,
-        .def_level = 99,        .magic_def_eff = 123,
-        .mage_def_melee = 194,  .mage_def_ranged = 87,  .mage_def_magic = 115,
-        .range_def_melee = 151, .range_def_ranged = 144, .range_def_magic = 167,
-    },
-};
 
 /* per-tier equipped item loadouts: [tier][slot] = ItemIndex.
    mage_loadout is worn while casting mage. range_loadout while ranging.
@@ -610,6 +531,10 @@ typedef struct {
 
     /* gear tier */
     int gear_tier;                /* 0=budget, 1=mid, 2=BIS */
+
+    /* derived combat stats (computed from ITEM_DATABASE + loadout in zul_reset) */
+    EncounterLoadoutStats mage_stats;
+    EncounterLoadoutStats range_stats;
 
     /* eye of ayak soul rend: cumulative magic defence drain on zulrah.
      * carries over between forms (magic defence is a stat, not a level). */
@@ -790,27 +715,16 @@ static float zul_hit_chance_double(int a, int d) {
 }
 
 /* compute player's defence roll against a specific NPC attack style.
-   uses current gear (mage/range) and gear tier for defence bonuses.
+   uses current gear loadout stats (derived from ITEM_DATABASE).
    magic defence uses 70% magic level + 30% defence level per OSRS formula. */
 static int zul_player_def_roll(ZulrahState* s, int attack_style) {
-    const ZulGearTierStats* t = &ZUL_GEAR_TIERS[s->gear_tier];
-    int in_mage = (s->player_gear == ZUL_GEAR_MAGE);
-    int def_bonus;
-    int eff_level;
-
-    if (attack_style == ATTACK_STYLE_MAGIC) {
-        /* magic defence: precomputed floor(0.7*(magic+8) + 0.3*(def*prayer+8)) */
-        eff_level = t->magic_def_eff;
-        def_bonus = in_mage ? t->mage_def_magic : t->range_def_magic;
-    } else if (attack_style == ATTACK_STYLE_RANGED) {
-        eff_level = t->def_level + 8;
-        def_bonus = in_mage ? t->mage_def_ranged : t->range_def_ranged;
-    } else {
-        /* melee */
-        eff_level = t->def_level + 8;
-        def_bonus = in_mage ? t->mage_def_melee : t->range_def_melee;
-    }
-    int roll = eff_level * (def_bonus + 64);
+    const EncounterLoadoutStats* ls = (s->player_gear == ZUL_GEAR_MAGE)
+        ? &s->mage_stats : &s->range_stats;
+    /* melee_style=2 (crush) for zulrah tail whip */
+    int def_bonus = encounter_player_def_bonus(
+        ls->def_stab, ls->def_slash, ls->def_crush, ls->def_magic, ls->def_ranged,
+        attack_style, 2);
+    int roll = osrs_player_def_roll_vs_npc(99, 99, def_bonus, attack_style);
     return roll > 0 ? roll : 0;
 }
 
@@ -953,10 +867,8 @@ static inline void zul_form_def_bonuses(ZulrahForm form, int* def_magic, int* de
 }
 
 static int zul_player_attack_hits(ZulrahState* s, int is_mage) {
-    const ZulGearTierStats* t = &ZUL_GEAR_TIERS[s->gear_tier];
-    int eff_level = is_mage ? t->eff_mage_level : t->eff_range_level;
-    int att_bonus = is_mage ? t->mage_att_bonus : t->range_att_bonus;
-    int att_roll = eff_level * (att_bonus + 64);
+    const EncounterLoadoutStats* ls = is_mage ? &s->mage_stats : &s->range_stats;
+    int att_roll = osrs_player_att_roll(ls->eff_level, ls->attack_bonus);
     /* crystal armor set bonus: +30% ranged accuracy with bowfa (tier 1 only) */
     if (!is_mage && s->gear_tier == 1)
         att_roll = att_roll * 130 / 100;
@@ -989,11 +901,11 @@ static void zul_player_attack(ZulrahState* s, int is_mage) {
 
     int gear_ok = (is_mage && s->player_gear == ZUL_GEAR_MAGE) ||
                   (!is_mage && s->player_gear == ZUL_GEAR_RANGE);
-    const ZulGearTierStats* t = &ZUL_GEAR_TIERS[s->gear_tier];
-    s->player_attack_timer = is_mage ? 4 : t->range_speed;
+    const EncounterLoadoutStats* ls = is_mage ? &s->mage_stats : &s->range_stats;
+    s->player_attack_timer = is_mage ? 4 : ls->attack_speed;
     if (!gear_ok) return;
 
-    int max_hit = is_mage ? t->mage_max_hit : t->range_max_hit;
+    int max_hit = ls->max_hit;
     int dmg = 0;
     int hit = zul_player_attack_hits(s, is_mage);
     if (hit) {
@@ -1045,7 +957,6 @@ static void zul_player_spec(ZulrahState* s) {
     s->player.just_attacked = 1;
     s->player.used_special_this_tick = 1;
 
-    const ZulGearTierStats* t = &ZUL_GEAR_TIERS[s->gear_tier];
     int total_dmg = 0;
 
     if (s->gear_tier == 0) {
@@ -1062,7 +973,7 @@ static void zul_player_spec(ZulrahState* s) {
         if (def_roll < 0) def_roll = 0;
 
         int msb_max_hit = (int)(0.5f + (float)(99 + 10) * (55 + 64) / 640.0f);
-        int att_roll_base = t->eff_range_level * (t->range_att_bonus + 64);
+        int att_roll_base = osrs_player_att_roll(s->range_stats.eff_level, s->range_stats.attack_bonus);
         int att_roll_spec = att_roll_base * 10 / 7;
 
         for (int arrow = 0; arrow < 2; arrow++) {
@@ -1074,7 +985,8 @@ static void zul_player_spec(ZulrahState* s) {
             }
         }
     } else if (s->gear_tier == 1) {
-        /* blowpipe spec: 1 hit, heals 50% of damage dealt */
+        /* blowpipe spec: 1 hit, heals 50% of damage dealt.
+           blowpipe not in range loadout — hardcoded stats until D4 replaces with osrs_resolve_spec */
         s->player.last_attack_style = ATTACK_STYLE_RANGED;
         s->player.attack_style_this_tick = ATTACK_STYLE_RANGED;
         s->player_attack_timer = 3;
@@ -1084,9 +996,11 @@ static void zul_player_spec(ZulrahState* s) {
         int def_roll = (ZUL_DEF_LEVEL + 8) * (def_ranged + 64);
         if (def_roll < 0) def_roll = 0;
 
-        int att_roll = t->eff_range_level * (t->bp_att_bonus + 64);
+        int bp_att_bonus = 80;   /* blowpipe ranged attack bonus in tier 1 gear */
+        int bp_max_hit = 28;     /* blowpipe max hit with amethyst darts */
+        int att_roll = osrs_player_att_roll(s->range_stats.eff_level, bp_att_bonus);
         if (encounter_rand_float(&s->rng_state) < osrs_hit_chance(att_roll, def_roll)) {
-            int dmg = encounter_rand_int(&s->rng_state, t->bp_max_hit + 1);
+            int dmg = encounter_rand_int(&s->rng_state, bp_max_hit + 1);
             dmg = zul_cap_damage(s, dmg);
             encounter_damage_player(&s->zulrah, dmg, NULL);
             total_dmg = dmg;
@@ -1109,8 +1023,8 @@ static void zul_player_spec(ZulrahState* s) {
         int def_roll = (ZUL_DEF_LEVEL + 8) * (def_magic + 64);
         if (def_roll < 0) def_roll = 0;
 
-        int att_roll = t->eff_mage_level * (t->mage_att_bonus + 64) * 2;  /* 2x accuracy */
-        int spec_max_hit = t->mage_max_hit * 130 / 100;  /* 1.3x max hit */
+        int att_roll = osrs_player_att_roll(s->mage_stats.eff_level, s->mage_stats.attack_bonus) * 2;
+        int spec_max_hit = s->mage_stats.max_hit * 130 / 100;  /* 1.3x max hit */
 
         if (encounter_rand_float(&s->rng_state) < osrs_hit_chance(att_roll, def_roll)) {
             int dmg = encounter_rand_int(&s->rng_state, spec_max_hit + 1);
@@ -1933,6 +1847,13 @@ static void zul_reset(EncounterState* state, uint32_t seed) {
     s->player_gear = ZUL_GEAR_MAGE;
     encounter_apply_loadout(&s->player, ZUL_MAGE_LOADOUT[s->gear_tier], GEAR_MAGE);
     zul_populate_player_inventory(&s->player, s->gear_tier);
+    /* derive combat stats from ITEM_DATABASE */
+    EncounterPrayer mage_prayer = (s->gear_tier >= 1) ? ENCOUNTER_PRAYER_AUGURY : ENCOUNTER_PRAYER_NONE;
+    EncounterPrayer range_prayer = (s->gear_tier >= 1) ? ENCOUNTER_PRAYER_RIGOUR : ENCOUNTER_PRAYER_NONE;
+    encounter_compute_loadout_stats(ZUL_MAGE_LOADOUT[s->gear_tier], ATTACK_STYLE_MAGIC,
+        mage_prayer, 99, 0, 30, &s->mage_stats);
+    encounter_compute_loadout_stats(ZUL_RANGE_LOADOUT[s->gear_tier], ATTACK_STYLE_RANGED,
+        range_prayer, 99, 0, 0, &s->range_stats);
     s->player.recoil_charges =
         zul_has_recoil_effect(&s->player) ? RECOIL_MAX_CHARGES : 0;
 
