@@ -128,12 +128,12 @@ static void test_melee_spec_acc_multipliers(void) {
     ASSERT_FLOAT_EQ("claws acc mult",  get_melee_spec_acc_mult(MELEE_SPEC_DRAGON_CLAWS), 1.35f, 1e-5f);
     /* granite maul: no accuracy bonus */
     ASSERT_FLOAT_EQ("gmaul acc mult",  get_melee_spec_acc_mult(MELEE_SPEC_GRANITE_MAUL), 1.0f, 1e-5f);
-    /* DDS: [23,20] = 1.15x. note: ref uses 23/20 for both acc and dmg */
-    ASSERT_FLOAT_EQ("DDS acc mult",    get_melee_spec_acc_mult(MELEE_SPEC_DRAGON_DAGGER), 1.20f, 1e-5f);
+    /* DDS: [23,20] = 1.15x. ref: dps-calc PlayerVsNPCCalc.ts:300 */
+    ASSERT_FLOAT_EQ("DDS acc mult",    get_melee_spec_acc_mult(MELEE_SPEC_DRAGON_DAGGER), 1.15f, 1e-5f);
     /* voidwaker: guaranteed hit in PvNPC; PvP uses normal accuracy */
     ASSERT_FLOAT_EQ("VW acc mult",     get_melee_spec_acc_mult(MELEE_SPEC_VOIDWAKER),     1.0f, 1e-5f);
-    /* DWH: no accuracy bonus (damage-focused) */
-    ASSERT_FLOAT_EQ("DWH acc mult",    get_melee_spec_acc_mult(MELEE_SPEC_DWH),           1.0f, 1e-5f);
+    /* DWH: [3,2] = 1.5x. ref: dps-calc PlayerVsNPCCalc.ts, wiki "+50% accuracy" */
+    ASSERT_FLOAT_EQ("DWH acc mult",    get_melee_spec_acc_mult(MELEE_SPEC_DWH),           1.5f, 1e-5f);
     /* BGS: godsword family but ref says separate [3,2]=1.5x for BGS
        our code: 1.5x for BGS */
     ASSERT_FLOAT_EQ("BGS acc mult",    get_melee_spec_acc_mult(MELEE_SPEC_BGS),           1.5f, 1e-5f);
@@ -431,7 +431,7 @@ static void test_statius_warhammer_mechanics(void) {
     printf("--- statius warhammer (DWH) spec ---\n");
 
     ASSERT_INT_EQ("DWH cost",   get_melee_spec_cost(MELEE_SPEC_DWH),   35);
-    ASSERT_FLOAT_EQ("DWH acc",  get_melee_spec_acc_mult(MELEE_SPEC_DWH), 1.0f, 1e-5f);
+    ASSERT_FLOAT_EQ("DWH acc",  get_melee_spec_acc_mult(MELEE_SPEC_DWH), 1.5f, 1e-5f);
     ASSERT_FLOAT_EQ("DWH str",  get_melee_spec_str_mult(MELEE_SPEC_DWH), 1.25f, 1e-3f);
 
     /* statius uses 25% min of max hit. with str_mult=1.25x, if calculate_max_hit
@@ -690,7 +690,7 @@ static void test_double_hit_specs(void) {
 
     /* DDS */
     ASSERT_INT_EQ("DDS cost",       get_melee_spec_cost(MELEE_SPEC_DRAGON_DAGGER),     25);
-    ASSERT_FLOAT_EQ("DDS acc",      get_melee_spec_acc_mult(MELEE_SPEC_DRAGON_DAGGER),  1.20f, 1e-3f);
+    ASSERT_FLOAT_EQ("DDS acc",      get_melee_spec_acc_mult(MELEE_SPEC_DRAGON_DAGGER),  1.15f, 1e-3f);
     ASSERT_FLOAT_EQ("DDS str",      get_melee_spec_str_mult(MELEE_SPEC_DRAGON_DAGGER),  1.15f, 1e-3f);
 
     /* abyssal dagger */

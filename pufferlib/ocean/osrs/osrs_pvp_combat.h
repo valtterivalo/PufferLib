@@ -106,9 +106,9 @@ static float get_melee_spec_acc_mult(MeleeSpecWeapon weapon) {
         case MELEE_SPEC_AGS:             return 2.0f;
         case MELEE_SPEC_DRAGON_CLAWS:    return 1.35f;
         case MELEE_SPEC_GRANITE_MAUL:    return 1.0f;
-        case MELEE_SPEC_DRAGON_DAGGER:   return 1.20f;
+        case MELEE_SPEC_DRAGON_DAGGER:   return 1.15f;  /* [23,20] per dps-calc */
         case MELEE_SPEC_VOIDWAKER:       return 1.0f;
-        case MELEE_SPEC_DWH:             return 1.0f;
+        case MELEE_SPEC_DWH:             return 1.5f;  /* [3,2] per dps-calc */
         case MELEE_SPEC_BGS:             return 1.5f;
         case MELEE_SPEC_ZGS:             return 2.0f;
         case MELEE_SPEC_SGS:             return 1.5f;

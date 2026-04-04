@@ -179,14 +179,15 @@ static inline SpecResult osrs_resolve_spec(
         break;
     }
 
-    /* DWH / statius warhammer: 1.0x accuracy, 1.25x str, 30% def drain on hit.
-       ref: osrs_pvp_combat.h:965-986 */
+    /* DWH / statius warhammer: [3,2] = 1.5x accuracy, 1.25x str, 30% def drain on hit.
+       ref: osrs-dps-calc PlayerVsNPCCalc.ts, osrs wiki "+50% accuracy" */
     case ITEM_STATIUS_WARHAMMER: {
-        int spec_max = max_hit * 5 / 4;  /* 1.25x */
+        int spec_att = att_roll * 3 / 2;  /* 1.5x per dps-calc */
+        int spec_max = max_hit * 5 / 4;   /* 1.25x */
         int min_hit = spec_max / 4;
         r.spec_cost = 35;
         r.num_hits = 1;
-        if (encounter_rand_float(rng_state) < osrs_hit_chance(att_roll, def_roll)) {
+        if (encounter_rand_float(rng_state) < osrs_hit_chance(spec_att, def_roll)) {
             r.damage[0] = min_hit + encounter_rand_int(rng_state, spec_max - min_hit + 1);
             r.def_drain = target_def_level * 30 / 100;  /* 30% of current def */
         }
@@ -291,10 +292,10 @@ static inline SpecResult osrs_resolve_spec(
         break;
     }
 
-    /* dragon dagger: 1.2x accuracy, 1.15x str, 2 independent hits.
-       ref: osrs-dps-calc DDS [23,20] acc=(actually 1.15 per ref), our PvP uses 1.2x */
+    /* dragon dagger: [23,20] = 1.15x accuracy and 1.15x str, 2 independent hits.
+       ref: osrs-dps-calc PlayerVsNPCCalc.ts:300 */
     case ITEM_DRAGON_DAGGER: {
-        int spec_att = att_roll * 6 / 5;    /* 1.2x (matches PvP) */
+        int spec_att = att_roll * 23 / 20;  /* 1.15x per dps-calc */
         int spec_max = max_hit * 23 / 20;   /* 1.15x */
         r.spec_cost = 25;
         r.num_hits = 2;
