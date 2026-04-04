@@ -1762,8 +1762,10 @@ static int inf_tile_walkable(void* ctx, int x, int y) {
     return 1;
 }
 
-#define INF_BREW_HEAL     16   /* sara brew heals 16, can overcap to base+16 */
-#define INF_RESTORE_AMOUNT  (99/4 + 8)  /* floor(base/4)+8 = 32 points per stat */
+/* sara brew heal at base HP 99: floor(99*0.15)+2 = 16. ref: osrs_consumables.h osrs_brew_effect */
+#define INF_BREW_HEAL       (99 * 15 / 100 + 2)
+/* super restore at base prayer 99: 8 + floor(99/4) = 32. ref: osrs_consumables.h osrs_drink_potion */
+#define INF_RESTORE_AMOUNT  (8 + 99 / 4)
 
 /* apply NPC death: blob split, mager resurrection store, jad healer cleanup.
    call after reducing npc->hp. checks if hp <= 0 and handles death effects. */

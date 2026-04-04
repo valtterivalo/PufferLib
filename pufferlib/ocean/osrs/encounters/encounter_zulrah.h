@@ -130,8 +130,7 @@ static const int ZUL_POSITIONS[ZUL_NUM_POSITIONS][2] = {
 #define ZUL_ANTIVENOM_DURATION   300    /* extended anti-venom+: 3 minutes = 300 ticks */
 #define ZUL_ANTIVENOM_DOSES      4
 
-/* blowpipe spec */
-#define ZUL_SPEC_COST            50     /* 50% special energy */
+/* blowpipe spec — cost looked up via osrs_spec_cost(weapon) at runtime */
 
 /* thrall: greater ghost (arceuus spellbook, always hits, ignores armour).
  * max hit 3, attack speed 4 ticks. duration = 0.6 * magic_level seconds
@@ -943,6 +942,7 @@ static void zul_player_spec(ZulrahState* s) {
                                        def_roll, m->def_level, &s->rng_state);
 
     s->player_special_energy -= sr.spec_cost;
+    s->player.special_energy = s->player_special_energy;
     s->player.just_attacked = 1;
     s->player.used_special_this_tick = 1;
     s->player.last_attack_style = is_mage ? ATTACK_STYLE_MAGIC : ATTACK_STYLE_RANGED;
@@ -1690,9 +1690,15 @@ static void zul_write_mask(EncounterState* state, float* mask) {
     off++;
     /* spec: only when in range gear with enough energy */
     off++;  /* none always valid */
-    if (s->player_special_energy < ZUL_SPEC_COST || s->player_gear != ZUL_GEAR_RANGE ||
-        !s->zulrah_visible || s->is_diving || s->player_attack_timer > 0 || s->player_stunned_ticks > 0)
-        mask[off] = 0.0f;
+    {
+        int range_weapon = ZUL_RANGE_LOADOUT[s->gear_tier][GEAR_SLOT_WEAPON];
+        int spec_cost = osrs_spec_cost(range_weapon);
+        if (spec_cost <= 0 || s->player_special_energy < spec_cost ||
+            s->player_gear != ZUL_GEAR_RANGE ||
+            !s->zulrah_visible || s->is_diving ||
+            s->player_attack_timer > 0 || s->player_stunned_ticks > 0)
+            mask[off] = 0.0f;
+    }
     off++;
 }
 
@@ -1974,7 +1980,7 @@ static void zul_heuristic_actions(ZulrahState* s, int* actions) {
         if (s->current_form == ZUL_FORM_BLUE) {
             actions[ZUL_HEAD_ATTACK] = ZUL_ATK_RANGE;
             /* use spec when in range gear with enough energy */
-            if (s->player_special_energy >= ZUL_SPEC_COST) {
+            if (s->player_special_energy >= osrs_spec_cost(ZUL_RANGE_LOADOUT[s->gear_tier][GEAR_SLOT_WEAPON])) {
                 actions[ZUL_HEAD_SPEC] = 1;
             }
         } else {
