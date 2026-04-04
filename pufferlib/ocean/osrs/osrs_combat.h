@@ -24,6 +24,16 @@
  *   encounter_ranged_hit_delay(dist, is_p)    ranged projectile flight delay (ticks)
  *   encounter_dist_to_npc(px,py,nx,ny,sz)     chebyshev dist to multi-tile NPC
  *
+ * PLAYER COMBAT:
+ *   osrs_player_eff_level(base,prayer,style)  effective level calculation
+ *   osrs_player_att_roll(eff,bonus)           attack roll
+ *   osrs_player_melee_max_hit(eff,str)        melee max hit
+ *   osrs_player_ranged_max_hit(eff,str)       ranged max hit
+ *   osrs_player_magic_max_hit(base,pct)       magic max hit
+ *   osrs_prayer_reduce_damage(dmg,pr,st,pvp)  PvE 100% block vs PvP 40% reduction
+ *   osrs_hit_chance_double(att,def)           osmumten/confliction double roll
+ *   osrs_sum_equipment_bonuses(loadout,out)   sum gear stats from ITEM_DATABASE
+ *
  * SEE ALSO:
  *   osrs_encounter.h    encounter-level abstractions (damage, movement, gear, etc.)
  *   osrs_pvp_combat.h   PvP-specific combat (prayer, veng, recoil, pending hits)
@@ -34,6 +44,9 @@
 
 #include <math.h>
 #include <stdint.h>
+#include <string.h>
+#include "osrs_types.h"
+#include "osrs_items.h"
 
 /* standard OSRS accuracy formula.
    att_roll and def_roll are pre-computed: eff_level * (bonus + 64).
@@ -344,6 +357,118 @@ static inline void encounter_shuffle(int* arr, int n, uint32_t* rng) {
     for (int i = n - 1; i > 0; i--) {
         int j = encounter_rand_int(rng, i + 1);
         int tmp = arr[i]; arr[i] = arr[j]; arr[j] = tmp;
+    }
+}
+
+/* ======================================================================== */
+/* player-side combat primitives                                             */
+/*                                                                           */
+/* pure math for player effective levels, attack rolls, and max hits.        */
+/* ref: .refs/osrs-dps-calc/src/lib/PlayerVsNPCCalc.ts                      */
+/*      .refs/osrs-dps-calc/src/lib/BaseCalc.ts:105-110                     */
+/* ======================================================================== */
+
+/* player effective level: floor(base * prayer_mult) + style_bonus + 8.
+   prayer_mult: 1.0 (none), 1.20 (piety/rigour att), 1.23 (piety/rigour str),
+   1.25 (augury). style_bonus: 0 (rapid/autocast), +3 (accurate), +1 (controlled).
+   ref: PlayerVsNPCCalc.ts lines 191-208 */
+static inline int osrs_player_eff_level(int base_level, float prayer_mult, int style_bonus) {
+    return (int)(base_level * prayer_mult) + style_bonus + 8;
+}
+
+/* player attack roll: eff_level * (equipment_bonus + 64).
+   ref: PlayerVsNPCCalc.ts line 212 */
+static inline int osrs_player_att_roll(int eff_level, int equipment_bonus) {
+    return eff_level * (equipment_bonus + 64);
+}
+
+/* player melee max hit: floor((eff_str * (str_bonus + 64) + 320) / 640).
+   ref: BaseCalc.ts:107 trackMaxHitFromEffective */
+static inline int osrs_player_melee_max_hit(int eff_str_level, int str_bonus) {
+    return (eff_str_level * (str_bonus + 64) + 320) / 640;
+}
+
+/* player ranged max hit: same formula as melee, different input stats.
+   ref: BaseCalc.ts:107 (same formula, ranged strength bonus instead of melee) */
+static inline int osrs_player_ranged_max_hit(int eff_range_level, int ranged_str_bonus) {
+    return (eff_range_level * (ranged_str_bonus + 64) + 320) / 640;
+}
+
+/* player magic max hit: floor(spell_base_dmg * (100 + magic_dmg_pct) / 100).
+   magic_dmg_pct is the total % bonus from gear (e.g. 30 = +30%).
+   spell_base_dmg: 30 for ice/blood barrage, floor(magic/3)-6 for trident, etc.
+   ref: PlayerVsNPCCalc.ts lines 622-667 */
+static inline int osrs_player_magic_max_hit(int spell_base_dmg, int magic_dmg_pct) {
+    return spell_base_dmg * (100 + magic_dmg_pct) / 100;
+}
+
+/* prayer damage reduction.
+   PvE (is_pvp=0): correct overhead prayer blocks 100% of damage → returns 0.
+   PvP (is_pvp=1): correct overhead prayer reduces by 40% → returns floor(dmg * 0.6).
+   wrong prayer or no prayer: returns damage unchanged.
+   ref: osrs wiki "protection prayers", osrs-dps-calc */
+static inline int osrs_prayer_reduce_damage(int damage, int prayer, int attack_style, int is_pvp) {
+    if (damage <= 0) return 0;
+    if (!encounter_prayer_correct_for_style(prayer, attack_style)) return damage;
+    if (is_pvp) return (int)(damage * 0.6f);
+    return 0;  /* PvE: full block */
+}
+
+/* double accuracy roll (osmumten's fang, confliction gauntlets).
+   rolls accuracy twice — hit if EITHER roll succeeds.
+   effective chance: 1 - (1-p)^2 where p = single roll hit chance.
+   closed-form from wiki:
+     if att >= def: 1 - (def+2)(2*def+3) / (6*(att+1)^2)
+     if att < def:  att*(4*att+5) / (6*(att+1)*(def+1))
+   ref: osrs wiki "osmumten's fang", encounter_zulrah.h:782-789 */
+static inline float osrs_hit_chance_double(int att_roll, int def_roll) {
+    float fa = (float)att_roll, fd = (float)def_roll;
+    if (att_roll >= def_roll) {
+        float num = (fd + 2.0f) * (2.0f * fd + 3.0f);
+        float den = 6.0f * (fa + 1.0f) * (fa + 1.0f);
+        return 1.0f - num / den;
+    }
+    return fa * (4.0f * fa + 5.0f) / (6.0f * (fa + 1.0f) * (fd + 1.0f));
+}
+
+/* sum equipment bonuses from a gear loadout using ITEM_DATABASE.
+   iterates all slots, sums all offensive + defensive bonuses.
+   attack_speed and attack_range come from the weapon slot only.
+   ITEM_NONE (255) slots are skipped. */
+typedef struct {
+    int attack_stab, attack_slash, attack_crush, attack_magic, attack_ranged;
+    int defence_stab, defence_slash, defence_crush, defence_magic, defence_ranged;
+    int melee_strength, ranged_strength, magic_damage, prayer;
+    int attack_speed, attack_range;
+} EquipmentBonuses;
+
+static inline void osrs_sum_equipment_bonuses(const uint8_t loadout[NUM_GEAR_SLOTS],
+                                               EquipmentBonuses* out) {
+    memset(out, 0, sizeof(*out));
+    for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
+        uint8_t idx = loadout[slot];
+        if (idx == 255) continue;  /* ITEM_NONE */
+        const Item* item = &ITEM_DATABASE[idx];
+        out->attack_stab += item->attack_stab;
+        out->attack_slash += item->attack_slash;
+        out->attack_crush += item->attack_crush;
+        out->attack_magic += item->attack_magic;
+        out->attack_ranged += item->attack_ranged;
+        out->defence_stab += item->defence_stab;
+        out->defence_slash += item->defence_slash;
+        out->defence_crush += item->defence_crush;
+        out->defence_magic += item->defence_magic;
+        out->defence_ranged += item->defence_ranged;
+        out->melee_strength += item->melee_strength;
+        out->ranged_strength += item->ranged_strength;
+        out->magic_damage += item->magic_damage;
+        out->prayer += item->prayer;
+    }
+    /* weapon slot determines speed + range */
+    uint8_t weapon = loadout[GEAR_SLOT_WEAPON];
+    if (weapon != 255) {
+        out->attack_speed = ITEM_DATABASE[weapon].attack_speed;
+        out->attack_range = ITEM_DATABASE[weapon].attack_range;
     }
 }
 
