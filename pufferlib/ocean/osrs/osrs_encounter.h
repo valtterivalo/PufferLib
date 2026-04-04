@@ -1007,56 +1007,28 @@ static inline void encounter_compute_loadout_stats(
     memset(out, 0, sizeof(*out));
     out->style = style;
 
-    /* sum equipment bonuses from all gear slots */
-    int sum_attack_stab = 0, sum_attack_slash = 0, sum_attack_crush = 0;
-    int sum_attack_magic = 0, sum_attack_ranged = 0;
-    int sum_melee_strength = 0, sum_ranged_strength = 0, sum_magic_damage = 0;
-    int sum_def_stab = 0, sum_def_slash = 0, sum_def_crush = 0;
-    int sum_def_magic = 0, sum_def_ranged = 0;
+    /* sum equipment bonuses using shared function */
+    EquipmentBonuses eb;
+    osrs_sum_equipment_bonuses(loadout, &eb);
 
-    for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
-        uint8_t item_idx = loadout[slot];
-        if (item_idx == 255) continue;  /* ITEM_NONE */
-        const Item* item = &ITEM_DATABASE[item_idx];
-        sum_attack_stab += item->attack_stab;
-        sum_attack_slash += item->attack_slash;
-        sum_attack_crush += item->attack_crush;
-        sum_attack_magic += item->attack_magic;
-        sum_attack_ranged += item->attack_ranged;
-        sum_melee_strength += item->melee_strength;
-        sum_ranged_strength += item->ranged_strength;
-        sum_magic_damage += item->magic_damage;
-        sum_def_stab += item->defence_stab;
-        sum_def_slash += item->defence_slash;
-        sum_def_crush += item->defence_crush;
-        sum_def_magic += item->defence_magic;
-        sum_def_ranged += item->defence_ranged;
-    }
-
-    out->def_stab = sum_def_stab;
-    out->def_slash = sum_def_slash;
-    out->def_crush = sum_def_crush;
-    out->def_magic = sum_def_magic;
-    out->def_ranged = sum_def_ranged;
-
-    /* weapon slot determines attack_speed and attack_range */
-    uint8_t weapon_idx = loadout[GEAR_SLOT_WEAPON];
-    if (weapon_idx != 255) {
-        const Item* weapon = &ITEM_DATABASE[weapon_idx];
-        out->attack_speed = weapon->attack_speed;
-        out->attack_range = weapon->attack_range;
-    }
+    out->def_stab = eb.defence_stab;
+    out->def_slash = eb.defence_slash;
+    out->def_crush = eb.defence_crush;
+    out->def_magic = eb.defence_magic;
+    out->def_ranged = eb.defence_ranged;
+    out->attack_speed = eb.attack_speed;
+    out->attack_range = eb.attack_range;
 
     /* primary attack bonus based on style */
     if (style == ATTACK_STYLE_MAGIC) {
-        out->attack_bonus = sum_attack_magic;
+        out->attack_bonus = eb.attack_magic;
     } else if (style == ATTACK_STYLE_RANGED) {
-        out->attack_bonus = sum_attack_ranged;
+        out->attack_bonus = eb.attack_ranged;
     } else {
         /* melee: best of stab/slash/crush */
-        out->attack_bonus = sum_attack_stab;
-        if (sum_attack_slash > out->attack_bonus) out->attack_bonus = sum_attack_slash;
-        if (sum_attack_crush > out->attack_bonus) out->attack_bonus = sum_attack_crush;
+        out->attack_bonus = eb.attack_stab;
+        if (eb.attack_slash > out->attack_bonus) out->attack_bonus = eb.attack_slash;
+        if (eb.attack_crush > out->attack_bonus) out->attack_bonus = eb.attack_crush;
     }
 
     /* prayer multipliers */
@@ -1103,14 +1075,14 @@ static inline void encounter_compute_loadout_stats(
 
     /* max hit and strength bonus depend on combat style */
     if (style == ATTACK_STYLE_RANGED) {
-        out->strength_bonus = sum_ranged_strength;
-        out->max_hit = (int)(0.5 + eff_str_level * (sum_ranged_strength + 64) / 640.0);
+        out->strength_bonus = eb.ranged_strength;
+        out->max_hit = (int)(0.5 + eff_str_level * (eb.ranged_strength + 64) / 640.0);
     } else if (style == ATTACK_STYLE_MAGIC) {
-        out->strength_bonus = sum_magic_damage;
-        out->max_hit = (int)(spell_base_damage * (1.0 + sum_magic_damage / 100.0) * magic_dmg_prayer_mult);
+        out->strength_bonus = eb.magic_damage;
+        out->max_hit = (int)(spell_base_damage * (1.0 + eb.magic_damage / 100.0) * magic_dmg_prayer_mult);
     } else {
-        out->strength_bonus = sum_melee_strength;
-        out->max_hit = (int)(0.5 + eff_str_level * (sum_melee_strength + 64) / 640.0);
+        out->strength_bonus = eb.melee_strength;
+        out->max_hit = (int)(0.5 + eff_str_level * (eb.melee_strength + 64) / 640.0);
     }
 }
 

@@ -305,77 +305,6 @@ static void test_full_pipeline_pve(void) {
 }
 
 /* ======================================================================== */
-/* pending hit queue                                                         */
-/* ======================================================================== */
-
-static void test_pending_hit_queue(void) {
-    printf("--- pending hit queue ---\n");
-
-    OsrsPendingHit queue[OSRS_MAX_PENDING_HITS];
-    memset(queue, 0, sizeof(queue));
-
-    /* queue a hit with 2 tick delay */
-    int slot = osrs_queue_pending_hit(queue, OSRS_MAX_PENDING_HITS,
-        25, 2, ATTACK_STYLE_MELEE, 0, ENCOUNTER_SPELL_NONE, 1, 1);
-    ASSERT_INT_EQ("queue slot 0", slot, 0);
-    ASSERT_INT_EQ("slot 0 active", queue[0].active, 1);
-    ASSERT_INT_EQ("slot 0 damage", queue[0].damage, 25);
-    ASSERT_INT_EQ("slot 0 ticks", queue[0].ticks_remaining, 2);
-    ASSERT_INT_EQ("slot 0 style", queue[0].attack_style, ATTACK_STYLE_MELEE);
-    ASSERT_INT_EQ("slot 0 is_pvp", queue[0].is_pvp, 1);
-    ASSERT_INT_EQ("slot 0 source_is_player", queue[0].source_is_player, 1);
-
-    /* queue a second hit with 1 tick delay */
-    slot = osrs_queue_pending_hit(queue, OSRS_MAX_PENDING_HITS,
-        10, 1, ATTACK_STYLE_RANGED, 1, ENCOUNTER_SPELL_ICE, 0, 0);
-    ASSERT_INT_EQ("queue slot 1", slot, 1);
-    ASSERT_INT_EQ("slot 1 check_prayer", queue[1].check_prayer, 1);
-    ASSERT_INT_EQ("slot 1 spell_type", queue[1].spell_type, ENCOUNTER_SPELL_ICE);
-
-    /* tick 1: hit 1 has 1 tick left, hit 0 has 1 tick left → hit 1 lands */
-    int landed = osrs_tick_pending_hits(queue, OSRS_MAX_PENDING_HITS);
-    ASSERT_INT_EQ("tick 1 landed count", landed, 1);
-    ASSERT_INT_EQ("tick 1 slot 0 ticks", queue[0].ticks_remaining, 1);
-    ASSERT_INT_EQ("tick 1 slot 1 ticks", queue[1].ticks_remaining, 0);
-
-    /* clear landed hit */
-    queue[1].active = 0;
-
-    /* tick 2: hit 0 lands */
-    landed = osrs_tick_pending_hits(queue, OSRS_MAX_PENDING_HITS);
-    ASSERT_INT_EQ("tick 2 landed count", landed, 1);
-    ASSERT_INT_EQ("tick 2 slot 0 ticks", queue[0].ticks_remaining, 0);
-
-    /* clear landed hit */
-    queue[0].active = 0;
-
-    /* tick 3: nothing active */
-    landed = osrs_tick_pending_hits(queue, OSRS_MAX_PENDING_HITS);
-    ASSERT_INT_EQ("tick 3 landed count", landed, 0);
-}
-
-static void test_queue_full(void) {
-    printf("--- queue full ---\n");
-
-    /* use a small queue to test overflow */
-    OsrsPendingHit queue[2];
-    memset(queue, 0, sizeof(queue));
-
-    int s0 = osrs_queue_pending_hit(queue, 2, 10, 1, ATTACK_STYLE_MELEE, 0, 0, 0, 0);
-    int s1 = osrs_queue_pending_hit(queue, 2, 20, 1, ATTACK_STYLE_MELEE, 0, 0, 0, 0);
-    int s2 = osrs_queue_pending_hit(queue, 2, 30, 1, ATTACK_STYLE_MELEE, 0, 0, 0, 0);
-    ASSERT_INT_EQ("queue full slot 0", s0, 0);
-    ASSERT_INT_EQ("queue full slot 1", s1, 1);
-    ASSERT_INT_EQ("queue full overflow -1", s2, -1);
-
-    /* clear slot 0, should reuse it */
-    queue[0].active = 0;
-    int s3 = osrs_queue_pending_hit(queue, 2, 40, 3, ATTACK_STYLE_MAGIC, 0, 0, 0, 0);
-    ASSERT_INT_EQ("queue reuse slot 0", s3, 0);
-    ASSERT_INT_EQ("queue reuse damage", queue[0].damage, 40);
-}
-
-/* ======================================================================== */
 /* edge cases                                                                */
 /* ======================================================================== */
 
@@ -451,8 +380,6 @@ int main(void) {
     test_smite();
     test_full_pipeline_pvp();
     test_full_pipeline_pve();
-    test_pending_hit_queue();
-    test_queue_full();
     test_edge_cases();
     test_has_recoil_ring();
 

@@ -1,13 +1,9 @@
 /**
  * @fileoverview osrs_damage.h — shared OSRS damage application pipeline.
  *
- * unified pending hit queue and damage pipeline used by all encounters (PvE)
- * and PvP. replaces duplicated logic across osrs_pvp_combat.h, osrs_encounter.h,
- * and encounter_zulrah.h with a single source of truth.
- *
- * PENDING HITS:
- *   osrs_queue_pending_hit(queue, ...)         queue a hit with delay
- *   osrs_tick_pending_hits(queue, max)         tick all, return landed count
+ * pure function that computes the full damage chain: prayer reduction, vengeance
+ * reflect, recoil reflect, smite drain. used by PvP (osrs_pvp_combat.h) and
+ * available for any encounter that needs the full pipeline.
  *
  * DAMAGE PIPELINE:
  *   osrs_apply_damage_pipeline(...)            prayer -> veng -> recoil -> smite
@@ -18,9 +14,14 @@
  * the pipeline is a pure function — computes damage chain without modifying state.
  * callers apply the returned DamageResult to their own game state.
  *
+ * pending hits: each encounter manages its own pending hit queue since the queue
+ * struct varies by encounter (PvP needs drain/heal/morr fields, PvE needs
+ * spell_type/check_prayer). the damage pipeline runs when a hit lands, regardless
+ * of how it was queued.
+ *
  * ref: osrs wiki "protection prayers", "vengeance", "ring of recoil", "smite"
- * ref: osrs_pvp_combat.h:570-691 (original PvP apply_damage)
- * ref: encounter_zulrah.h:651-675 (original zulrah recoil)
+ * ref: osrs_pvp_combat.h:570-691 (PvP apply_damage)
+ * ref: encounter_zulrah.h:651-675 (zulrah recoil)
  */
 
 #ifndef OSRS_DAMAGE_H
@@ -28,68 +29,6 @@
 
 #include "osrs_combat.h"
 #include "osrs_items.h"
-
-/* ======================================================================== */
-/* pending hit queue                                                         */
-/* ======================================================================== */
-
-/* spell types for barrage freeze/heal effects on pending hits.
-   duplicated from osrs_encounter.h — these live here because osrs_damage.h
-   owns the pending hit struct. osrs_encounter.h will migrate to use these. */
-#ifndef ENCOUNTER_SPELL_NONE
-#define ENCOUNTER_SPELL_NONE  0
-#define ENCOUNTER_SPELL_ICE   1   /* ice barrage: freeze on hit */
-#define ENCOUNTER_SPELL_BLOOD 2   /* blood barrage: heal 25% of AoE damage */
-#endif
-
-#define OSRS_MAX_PENDING_HITS 16
-
-typedef struct {
-    int active;
-    int damage;
-    int ticks_remaining;      /* countdown to landing */
-    int attack_style;         /* ATTACK_STYLE_* for prayer check */
-    int check_prayer;         /* 1 = re-check prayer when hit lands (jad) */
-    int spell_type;           /* ENCOUNTER_SPELL_* for freeze/heal effects */
-    int is_pvp;               /* 1 = 40% prayer reduction, 0 = 100% block */
-    int source_is_player;     /* 1 = attacker is a player (for veng/recoil) */
-} OsrsPendingHit;
-
-/* queue a new pending hit. returns slot index or -1 if full. */
-static inline int osrs_queue_pending_hit(OsrsPendingHit* queue, int max_hits,
-                                         int damage, int ticks, int attack_style,
-                                         int check_prayer, int spell_type,
-                                         int is_pvp, int source_is_player) {
-    for (int i = 0; i < max_hits; i++) {
-        if (!queue[i].active) {
-            queue[i].active = 1;
-            queue[i].damage = damage;
-            queue[i].ticks_remaining = ticks;
-            queue[i].attack_style = attack_style;
-            queue[i].check_prayer = check_prayer;
-            queue[i].spell_type = spell_type;
-            queue[i].is_pvp = is_pvp;
-            queue[i].source_is_player = source_is_player;
-            return i;
-        }
-    }
-    return -1;  /* queue full */
-}
-
-/* tick all pending hits: decrement ticks_remaining, return count of hits that
-   landed this tick (reached ticks_remaining == 0). landed hits remain active
-   so the caller can iterate and process them, then clear active = 0. */
-static inline int osrs_tick_pending_hits(OsrsPendingHit* queue, int max_hits) {
-    int landed = 0;
-    for (int i = 0; i < max_hits; i++) {
-        if (!queue[i].active) continue;
-        queue[i].ticks_remaining--;
-        if (queue[i].ticks_remaining <= 0) {
-            landed++;
-        }
-    }
-    return landed;
-}
 
 /* ======================================================================== */
 /* damage pipeline result                                                    */

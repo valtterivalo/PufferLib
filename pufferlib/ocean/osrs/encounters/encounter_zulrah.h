@@ -38,6 +38,7 @@
 #include "../osrs_combat.h"
 #include "../osrs_special_attacks.h"
 #include "../osrs_consumables.h"
+#include "../osrs_damage.h"
 #include "../osrs_collision.h"
 #include "../osrs_monsters_generated.h"
 #include "../data/npc_models.h"
@@ -656,8 +657,7 @@ static void zul_apply_player_damage(ZulrahState* s, int damage, AttackStyle styl
     s->player.hit_style = style;
 
     /* ring of recoil / ring of suffering (i) */
-    int ring = s->player.equipped[GEAR_SLOT_RING];
-    int has_recoil = (ring == ITEM_RING_OF_RECOIL || ring == ITEM_RING_OF_SUFFERING_RI);
+    int has_recoil = osrs_has_recoil_ring(s->player.equipped);
     if (attacker && has_recoil && s->player.recoil_charges > 0) {
         int recoil = damage / 10 + 1;
         if (recoil > s->player.recoil_charges) {
