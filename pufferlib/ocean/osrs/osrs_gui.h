@@ -23,7 +23,7 @@
 #ifndef OSRS_GUI_H
 #define OSRS_GUI_H
 
-#include "osrs_pvp_human_input_types.h"
+#include "osrs_human_input_types.h"
 
 #include "raylib.h"
 #include "osrs_types.h"

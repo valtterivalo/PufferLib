@@ -19,10 +19,10 @@
 #include "osrs_pvp_effects.h"
 #include "data/player_models.h"
 #include "data/npc_models.h"
-#include "osrs_pvp_terrain.h"
-#include "osrs_pvp_objects.h"
+#include "osrs_terrain.h"
+#include "osrs_objects.h"
 #include "osrs_gui.h"
-#include "osrs_pvp_human_input.h"
+#include "osrs_human_input.h"
 #include <stdio.h>
 #include <string.h>
 

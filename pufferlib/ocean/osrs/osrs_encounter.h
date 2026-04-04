@@ -60,7 +60,7 @@
 #include "osrs_items.h"
 #include "osrs_pathfinding.h"
 #include "osrs_combat.h"
-#include "osrs_pvp_human_input_types.h"
+#include "osrs_human_input_types.h"
 
 /* opaque encounter state — each encounter defines its own struct */
 typedef struct EncounterState EncounterState;

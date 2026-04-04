@@ -10,11 +10,11 @@
  * translator at tick rate → int[] action array fed to step().
  */
 
-#ifndef OSRS_PVP_HUMAN_INPUT_H
-#define OSRS_PVP_HUMAN_INPUT_H
+#ifndef OSRS_HUMAN_INPUT_H
+#define OSRS_HUMAN_INPUT_H
 
 #include "osrs_types.h"
-#include "osrs_pvp_human_input_types.h"
+#include "osrs_human_input_types.h"
 #include "osrs_encounter.h"
 
 /* forward declare — full struct lives in osrs_pvp_render.h */
@@ -483,4 +483,4 @@ static void human_tick_visuals(HumanInput* hi) {
     }
 }
 
-#endif /* OSRS_PVP_HUMAN_INPUT_H */
+#endif /* OSRS_HUMAN_INPUT_H */

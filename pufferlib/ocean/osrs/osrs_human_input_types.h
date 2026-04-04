@@ -5,8 +5,8 @@
  *        human_input.h needs gui.h for prayer/spell grid constants).
  */
 
-#ifndef OSRS_PVP_HUMAN_INPUT_TYPES_H
-#define OSRS_PVP_HUMAN_INPUT_TYPES_H
+#ifndef OSRS_HUMAN_INPUT_TYPES_H
+#define OSRS_HUMAN_INPUT_TYPES_H
 
 typedef enum {
     CURSOR_NORMAL = 0,
@@ -40,4 +40,4 @@ typedef struct HumanInput {
     int click_is_attack;                   /* 1 = red cross (attack), 0 = yellow cross (move) */
 } HumanInput;
 
-#endif /* OSRS_PVP_HUMAN_INPUT_TYPES_H */
+#endif /* OSRS_HUMAN_INPUT_TYPES_H */

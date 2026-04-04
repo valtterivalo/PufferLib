@@ -11,8 +11,8 @@
  * non-textured faces use HSL vertex color + white atlas pixel.
  */
 
-#ifndef OSRS_PVP_OBJECTS_H
-#define OSRS_PVP_OBJECTS_H
+#ifndef OSRS_OBJECTS_H
+#define OSRS_OBJECTS_H
 
 #include "raylib.h"
 #include "rlgl.h"
@@ -224,4 +224,4 @@ static void objects_free(ObjectMesh* om) {
     free(om);
 }
 
-#endif /* OSRS_PVP_OBJECTS_H */
+#endif /* OSRS_OBJECTS_H */

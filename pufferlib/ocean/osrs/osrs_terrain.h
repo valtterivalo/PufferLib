@@ -11,8 +11,8 @@
  *   colors: uint8[vertex_count * 4]
  */
 
-#ifndef OSRS_PVP_TERRAIN_H
-#define OSRS_PVP_TERRAIN_H
+#ifndef OSRS_TERRAIN_H
+#define OSRS_TERRAIN_H
 
 #include "raylib.h"
 #include <stdio.h>
@@ -183,4 +183,4 @@ static void terrain_free(TerrainMesh* tm) {
     free(tm);
 }
 
-#endif /* OSRS_PVP_TERRAIN_H */
+#endif /* OSRS_TERRAIN_H */
