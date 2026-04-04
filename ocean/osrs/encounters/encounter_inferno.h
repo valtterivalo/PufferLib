@@ -584,14 +584,11 @@ typedef struct {
     /* player combat state */
     OverheadPrayer active_prayer;
     int prayer_drain_counter;  /* shared drain system counter (see encounter_drain_prayer) */
-    int player_attack_timer;
     OsrsInteraction interaction;  /* shared interaction state */
-    int spec_armed;               /* 1 = next attack uses special */
     int player_brew_doses;
     int player_restore_doses;
     int player_bastion_doses;
     int player_stamina_doses;
-    int player_potion_timer;
 
     /* gear state */
     InfWeaponSet weapon_set;
@@ -789,7 +786,7 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
     s->stamina_active_ticks = 0;
     s->active_prayer = PRAYER_NONE;
     osrs_interaction_init(&s->interaction);
-    s->spec_armed = 0;
+    s->player.spec_armed = 0;
     s->player.special_energy = 100;
     s->player.special_regen_ticks = 0;
     s->player.run_energy = 10000;  /* full run energy (OSRS stores as 0-10000) */
@@ -1866,7 +1863,7 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
 
     /* spec toggle: arm/disarm (does NOT interrupt interaction) */
     if (actions[INF_HEAD_SPEC] == 1)
-        osrs_spec_toggle(&s->spec_armed);
+        osrs_spec_toggle(&s->player.spec_armed);
 
     /* stat decay: every 60 ticks, boosted/drained stats move 1 toward base */
     if (s->tick > 0 && s->tick % 60 == 0) {
@@ -1881,18 +1878,18 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
     }
 
     /* consumables — shared 3-tick potion timer */
-    if (s->player_potion_timer > 0) s->player_potion_timer--;
+    if (s->player.potion_timer > 0) s->player.potion_timer--;
     if (s->stamina_active_ticks > 0) s->stamina_active_ticks--;
 
     /* brew (INF_HEAD_EAT): heals 16 HP, can overcap to base+16 */
     int eat_act = actions[INF_HEAD_EAT];
-    if (eat_act == 1 && s->player_brew_doses > 0 && s->player_potion_timer == 0
+    if (eat_act == 1 && s->player_brew_doses > 0 && s->player.potion_timer == 0
         && s->player.current_hitpoints < s->player.base_hitpoints) {
         s->player.current_hitpoints += INF_BREW_HEAL;
         if (s->player.current_hitpoints > s->player.base_hitpoints + INF_BREW_HEAL)
             s->player.current_hitpoints = s->player.base_hitpoints + INF_BREW_HEAL;
         s->player_brew_doses--;
-        s->player_potion_timer = 3;
+        s->player.potion_timer = 3;
         s->player.ate_food_this_tick = 1;
         s->brewed_this_tick = 1;
         encounter_brew_drain_stats(&s->player);
@@ -1901,24 +1898,24 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
 
     /* potions (INF_HEAD_POTION): 1=restore, 2=bastion, 3=stamina */
     int pot_act = actions[INF_HEAD_POTION];
-    if (pot_act == 1 && s->player_restore_doses > 0 && s->player_potion_timer == 0) {
+    if (pot_act == 1 && s->player_restore_doses > 0 && s->player.potion_timer == 0) {
         /* super restore: restores prayer + all combat stats */
         s->player.current_prayer += INF_RESTORE_AMOUNT;
         if (s->player.current_prayer > s->player.base_prayer)
             s->player.current_prayer = s->player.base_prayer;
         encounter_restore_stats(&s->player);
         s->player_restore_doses--;
-        s->player_potion_timer = 3;
+        s->player.potion_timer = 3;
         encounter_recompute_loadout_max_hits(s->loadout_stats, INF_NUM_WEAPON_SETS, &s->player);
-    } else if (pot_act == 2 && s->player_bastion_doses > 0 && s->player_potion_timer == 0) {
+    } else if (pot_act == 2 && s->player_bastion_doses > 0 && s->player.potion_timer == 0) {
         encounter_bastion_boost(&s->player);
         s->player_bastion_doses--;
-        s->player_potion_timer = 3;
+        s->player.potion_timer = 3;
         encounter_recompute_loadout_max_hits(s->loadout_stats, INF_NUM_WEAPON_SETS, &s->player);
-    } else if (pot_act == 3 && s->player_stamina_doses > 0 && s->player_potion_timer == 0) {
+    } else if (pot_act == 3 && s->player_stamina_doses > 0 && s->player.potion_timer == 0) {
         s->stamina_active_ticks = 200;
         s->player_stamina_doses--;
-        s->player_potion_timer = 3;
+        s->player.potion_timer = 3;
     }
 
     /* inventory actions interrupt interaction (per OSRS entity interaction rules) */
@@ -1990,8 +1987,8 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
     }
 
     /* player attacks targeted NPC */
-    if (s->player_attack_timer > 0) s->player_attack_timer--;
-    if (osrs_interaction_active(&s->interaction) && s->player_attack_timer == 0) {
+    if (s->player.attack_timer > 0) s->player.attack_timer--;
+    if (osrs_interaction_active(&s->interaction) && s->player.attack_timer == 0) {
         InfNPC* target_npc = &s->npcs[s->interaction.target_slot];
         if (target_npc->active) {
             const EncounterLoadoutStats* ls = &s->loadout_stats[s->weapon_set];
@@ -2088,10 +2085,10 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
                     ph->check_prayer = 0;
                     ph->spell_type = 0;
 
-                } else if (s->spec_armed &&
+                } else if (s->player.spec_armed &&
                            encounter_use_spec(&s->player, BLOWPIPE_SPEC_COST)) {
                     /* blowpipe spec: 2x accuracy, 1.5x max hit, heal 50% of damage */
-                    osrs_spec_disarm(&s->spec_armed);
+                    osrs_spec_disarm(&s->player.spec_armed);
                     const InfNPCStats* ns = &INF_NPC_STATS[target_npc->type];
                     int base_att_roll = ls->eff_level * (ls->attack_bonus + 64);
                     total_dmg = osrs_blowpipe_spec_resolve(
@@ -2126,7 +2123,7 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
                     ph->spell_type = 0;
                 }
 
-                s->player_attack_timer = ls->attack_speed;
+                s->player.attack_timer = ls->attack_speed;
 
                 /* player projectile event for renderer */
                 s->player_attacked_this_tick = 1;
@@ -2297,7 +2294,7 @@ static void inf_step(EncounterState* state, const int* actions) {
                 has_alive_npc = 1; break;
             }
         }
-        if (has_alive_npc && s->player_attack_timer == 0 && !s->player_attacked_this_tick)
+        if (has_alive_npc && s->player.attack_timer == 0 && !s->player_attacked_this_tick)
             s->ticks_without_action++;
         else
             s->ticks_without_action = 0;
@@ -2385,8 +2382,8 @@ static void inf_write_obs(EncounterState* state, float* obs) {
     obs[i++] = (float)s->player_bastion_doses / 4.0f;
     obs[i++] = (float)s->player_stamina_doses / 4.0f;
     obs[i++] = (s->stamina_active_ticks > 0) ? 1.0f : 0.0f;
-    obs[i++] = (float)s->player_potion_timer / 3.0f;
-    obs[i++] = (float)s->player_attack_timer / 8.0f;
+    obs[i++] = (float)s->player.potion_timer / 3.0f;
+    obs[i++] = (float)s->player.attack_timer / 8.0f;
     /* new: combat stats, target, weapon range, dead mob pool */
     obs[i++] = (float)s->player.current_defence / 99.0f;
     obs[i++] = (float)s->player.current_ranged / 99.0f;
@@ -2583,7 +2580,7 @@ static void inf_write_mask(EncounterState* state, float* mask) {
     /* HEAD_EAT (2): none, brew */
     mask[offset++] = 1.0f;  /* none always valid */
     mask[offset++] = (s->player_brew_doses > 0 &&
-                      s->player_potion_timer == 0 &&
+                      s->player.potion_timer == 0 &&
                       s->player.current_hitpoints < s->player.base_hitpoints)
                      ? 1.0f : 0.0f;
 
@@ -2598,17 +2595,17 @@ static void inf_write_mask(EncounterState* state, float* mask) {
                             s->player.current_magic < 99;
         int pray_worth = pray_missing >= (INF_RESTORE_AMOUNT + 1) / 2;
         mask[offset++] = (s->player_restore_doses > 0 &&
-                          s->player_potion_timer == 0 &&
+                          s->player.potion_timer == 0 &&
                           (stats_drained || pray_worth))
                          ? 1.0f : 0.0f;
     }
     /* bastion: only worth drinking at 99-105 ranged (drained = restore first, >105 = still boosted) */
-    mask[offset++] = (s->player_bastion_doses > 0 && s->player_potion_timer == 0 &&
+    mask[offset++] = (s->player_bastion_doses > 0 && s->player.potion_timer == 0 &&
                       s->player.current_ranged >= 99 && s->player.current_ranged <= 105)
                      ? 1.0f : 0.0f;
     /* stamina: mask if no doses, timer active, or already active */
     mask[offset++] = (s->player_stamina_doses > 0 &&
-                      s->player_potion_timer == 0 &&
+                      s->player.potion_timer == 0 &&
                       s->stamina_active_ticks == 0)
                      ? 1.0f : 0.0f;
 

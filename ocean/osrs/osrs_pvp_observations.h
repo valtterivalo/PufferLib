@@ -363,7 +363,7 @@ static void generate_slot_observations(OsrsEnv* env, int agent_idx) {
     obs[0] = (p->visible_gear == GEAR_MELEE) ? 1.0f : 0.0f;
     obs[1] = (p->visible_gear == GEAR_RANGED) ? 1.0f : 0.0f;
     obs[2] = (p->visible_gear == GEAR_MAGE) ? 1.0f : 0.0f;
-    obs[3] = (float)p->spec_queued;  /* 1 = spec armed for next attack */
+    obs[3] = (float)p->spec_armed;  /* 1 = spec armed for next attack */
     obs[4] = (float)p->special_energy;
 
     obs[5] = (p->prayer == PRAYER_PROTECT_MELEE) ? 1.0f : 0.0f;

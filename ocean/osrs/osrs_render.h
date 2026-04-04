@@ -3799,7 +3799,7 @@ void pvp_render(OsrsEnv* env) {
             const char* spell = is->spell_choice == ENCOUNTER_SPELL_ICE ? "ice" :
                                 is->spell_choice == ENCOUNTER_SPELL_BLOOD ? "blood" : "none";
             DrawText(TextFormat("GEAR: %s  ATK: %d/%d  SPELL: %s", gear,
-                is->player_attack_timer, is->loadout_stats[is->weapon_set].attack_speed, spell),
+                is->player.attack_timer, is->loadout_stats[is->weapon_set].attack_speed, spell),
                 dx, dy, fs, dc);
             dy += fs + 2;
 
