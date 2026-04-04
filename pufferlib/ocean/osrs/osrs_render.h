@@ -3,7 +3,7 @@
  *
  * Top-down 2D tile grid with full debug overlay: player state, HP bars,
  * prayer icons, gear labels, hit splats, collision map visualization.
- * Included conditionally via OSRS_PVP_VISUAL define.
+ * Included conditionally via OSRS_VISUAL define.
  *
  * Follows PufferLib's Client + make_client + c_render pattern.
  */

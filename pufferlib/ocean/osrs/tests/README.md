@@ -15,6 +15,9 @@ cc -std=c11 -O0 -g -I. -o test_item_effects pufferlib/ocean/osrs/tests/test_item
 cc -std=c11 -O0 -g -I. -o test_special_attacks pufferlib/ocean/osrs/tests/test_special_attacks.c -lm && ./test_special_attacks
 cc -std=c11 -O0 -g -I. -o test_player_combat pufferlib/ocean/osrs/tests/test_player_combat.c -lm && ./test_player_combat
 cc -std=c11 -O0 -g -I. -o test_consumables pufferlib/ocean/osrs/tests/test_consumables.c -lm && ./test_consumables
+cc -std=c11 -O0 -g -I. -o test_bolt_procs pufferlib/ocean/osrs/tests/test_bolt_procs.c -lm && ./test_bolt_procs
+cc -std=c11 -O0 -g -I. -o test_damage pufferlib/ocean/osrs/tests/test_damage.c -lm && ./test_damage
+cc -std=c11 -O0 -g -I. -o test_inventory pufferlib/ocean/osrs/tests/test_inventory.c -lm && ./test_inventory
 ```
 
 each binary prints `=== results: N/N passed ===` on the last line. exit code 0 = all passed.
@@ -28,6 +31,10 @@ each binary prints `=== results: N/N passed ===` on the last line. exit code 0 =
 | `test_special_attacks.c` | 222+ | spec weapon costs, accuracy/strength multipliers, dragon claws cascade, DWH/BGS defence drain, dark bow double-hit clamping, morrigan's bleed, voidwaker magic hit, VLS reduced defence, volatile staff, godsword variants, blowpipe spec |
 | `test_player_combat.c` | ~30+ | player effective level (all prayers + style bonuses), player attack roll, player melee/ranged/magic max hit, prayer damage reduction (PvE vs PvP), osmumten's fang double accuracy roll, equipment bonus summation |
 | `test_consumables.c` | ~25+ | food healing amounts, eat timing/clamping, anglerfish overheal, potion restore formulas, antivenom immunity, saradomin brew effects, combo eat timing |
+| `test_bolt_procs.c` | 131 | diamond/opal/ruby bolt proc chances, effect formulas, ZCB guaranteed procs, miss behavior, caps, edge cases |
+| `test_damage.c` | 66 | damage pipeline (prayer reduction, vengeance reflect, recoil, smite drain), full PvP/PvE pipeline, edge cases, osrs_has_recoil_ring helper |
+| `test_inventory.c` | 148 | inventory add/remove/find, equip from inventory, equip swap, two-handed weapon logic, unequip, gear slot mapping |
+| `test_collision.c` | — | collision map loading, tile walkability, BFS pathfinding (moved from osrs/ root) |
 
 ## reference data
 

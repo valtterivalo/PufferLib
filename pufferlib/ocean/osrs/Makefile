@@ -34,7 +34,7 @@ $(TARGET): $(DEMO_SRC) $(HEADERS)
 	$(CC) $(CFLAGS) -o $@ $(DEMO_SRC) $(LDFLAGS)
 
 visual: $(DEMO_SRC) $(HEADERS) osrs_render.h osrs_gui.h
-	$(CC) $(CFLAGS) -DOSRS_PVP_VISUAL $(RAYLIB_FLAGS) -o $(TARGET) $(DEMO_SRC) $(LDFLAGS)
+	$(CC) $(CFLAGS) -DOSRS_VISUAL $(RAYLIB_FLAGS) -o $(TARGET) $(DEMO_SRC) $(LDFLAGS)
 
 debug: $(DEMO_SRC) $(HEADERS)
 	$(CC) $(DEBUG_FLAGS) -o $(TARGET)_debug $(DEMO_SRC) $(LDFLAGS)

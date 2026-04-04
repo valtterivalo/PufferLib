@@ -16,7 +16,7 @@
 #include "encounters/encounter_zulrah.h"
 #include "encounters/encounter_inferno.h"
 
-#ifdef OSRS_PVP_VISUAL
+#ifdef OSRS_VISUAL
 #include "osrs_render.h"
 #endif
 
@@ -95,7 +95,7 @@ static void benchmark(OsrsEnv* env, int num_steps) {
     printf("  Avg episode length: %.1f ticks\n", (float)total_steps / episodes);
 }
 
-#ifdef OSRS_PVP_VISUAL
+#ifdef OSRS_VISUAL
 /* replay file: binary format for pre-recorded actions.
    header: [int32 num_ticks] [uint32 rng_state], then num_ticks * num_heads int32 values. */
 typedef struct {
@@ -547,7 +547,7 @@ int main(int argc, char** argv) {
     memset(&env, 0, sizeof(OsrsEnv));
 
     if (use_visual) {
-#ifdef OSRS_PVP_VISUAL
+#ifdef OSRS_VISUAL
         /* pvp_init uses internal buffers — no malloc needed */
         pvp_init(&env);
         /* set gear tier: --tier N forces both players to tier N,

@@ -319,9 +319,9 @@ void pvp_init(OsrsEnv* env) {
 
 /**
  * Render stub (required by PufferLib ocean template).
- * When OSRS_PVP_VISUAL is defined, osrs_pvp_render.h provides the real implementation.
+ * When OSRS_VISUAL is defined, osrs_pvp_render.h provides the real implementation.
  */
-#ifndef OSRS_PVP_VISUAL
+#ifndef OSRS_VISUAL
 void pvp_render(OsrsEnv* env) {
     (void)env;
 }
