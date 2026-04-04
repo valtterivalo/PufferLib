@@ -33,6 +33,7 @@
 #define ENCOUNTER_ZULRAH_H
 
 #include "../osrs_encounter.h"
+#include "../osrs_interaction.h"
 #include "../osrs_types.h"
 #include "../osrs_items.h"
 #include "../osrs_combat.h"
@@ -504,7 +505,8 @@ typedef struct {
 
     /* player combat */
     ZulrahGearStyle player_gear;
-    int player_attack_target;     /* 1 = targeting zulrah, 0 = no target. cleared on food/potion/gear/move */
+    OsrsInteraction interaction;  /* shared interaction state (persistent entity targeting) */
+    int spec_armed;               /* 1 = next attack uses special */
     int player_attack_timer;
     int player_food_count;        /* sharks */
     int player_karambwan_count;
@@ -1689,16 +1691,13 @@ static void zul_write_mask(EncounterState* state, float* mask) {
         s->antivenom_timer > 0)
         mask[off] = 0.0f;
     off++;
-    /* spec: only when in range gear with enough energy */
+    /* spec toggle: allow when player has a spec weapon with cost > 0 */
     off++;  /* none always valid */
     {
-        int range_weapon = ZUL_RANGE_LOADOUT[s->gear_tier][GEAR_SLOT_WEAPON];
-        int spec_cost = osrs_spec_cost(range_weapon);
-        if (spec_cost <= 0 || s->player_special_energy < spec_cost ||
-            s->player_gear != ZUL_GEAR_RANGE ||
-            !s->zulrah_visible || s->is_diving ||
-            s->player_attack_timer > 0 || s->player_stunned_ticks > 0)
-            mask[off] = 0.0f;
+        int weapon = s->player.equipped[GEAR_SLOT_WEAPON];
+        int spec_cost = osrs_spec_cost(weapon);
+        if (spec_cost <= 0)
+            mask[off] = 0.0f;  /* weapon has no spec */
     }
     off++;
 }
@@ -1782,6 +1781,8 @@ static void zul_reset(EncounterState* state, uint32_t seed) {
         s->thrall_duration_remaining = ZUL_THRALL_DURATION;
         s->thrall_attack_timer = ZUL_THRALL_SPEED;
     }
+    osrs_interaction_init(&s->interaction);
+    s->spec_armed = 0;
     s->player_gear = ZUL_GEAR_MAGE;
     encounter_apply_loadout(&s->player, ZUL_MAGE_LOADOUT[s->gear_tier], GEAR_MAGE);
     zul_populate_player_inventory(&s->player, s->gear_tier);
@@ -1844,37 +1845,36 @@ static void zul_step(EncounterState* state, const int* actions) {
         if (s->melee_stare_timer <= 0) zul_melee_hit(s);
     }
 
-    /* player actions — prayer doesn't interrupt interactions (per OSRS docs) */
+    /* prayer doesn't interrupt interactions */
     zul_process_prayer(s, actions[ZUL_HEAD_PRAYER]);
 
-    /* inventory actions interrupt the attack interaction (per OSRS docs:
-       "all item interactions within inventory" cancel entity interactions) */
-    if (actions[ZUL_HEAD_FOOD] > 0 || actions[ZUL_HEAD_POTION] > 0) {
-        s->player_attack_target = 0;
+    /* spec toggle: arm/disarm (does NOT interrupt interaction) */
+    if (actions[ZUL_HEAD_SPEC] == 1) {
+        osrs_spec_toggle(&s->spec_armed);
     }
+
+    /* inventory actions interrupt interaction */
+    if (actions[ZUL_HEAD_FOOD] > 0)
+        osrs_interaction_check_interrupt(&s->interaction, OSRS_IACT_EAT);
+    if (actions[ZUL_HEAD_POTION] > 0)
+        osrs_interaction_check_interrupt(&s->interaction, OSRS_IACT_DRINK);
     zul_process_food(s, actions[ZUL_HEAD_FOOD]);
     zul_process_potion(s, actions[ZUL_HEAD_POTION]);
 
-    /* gear switch is also an inventory action — interrupts target */
+    /* gear switch from attack action — interrupts if actually switching */
     int atk_action = actions[ZUL_HEAD_ATTACK];
-    if (atk_action == ZUL_ATK_MAGE && s->player_gear != ZUL_GEAR_MAGE) {
-        s->player_attack_target = 0;  /* gear switch cancels interaction */
-    } else if (atk_action == ZUL_ATK_RANGE && s->player_gear != ZUL_GEAR_RANGE) {
-        s->player_attack_target = 0;
+    if ((atk_action == ZUL_ATK_MAGE && s->player_gear != ZUL_GEAR_MAGE) ||
+        (atk_action == ZUL_ATK_RANGE && s->player_gear != ZUL_GEAR_RANGE)) {
+        osrs_interaction_check_interrupt(&s->interaction, OSRS_IACT_EQUIP);
     }
     zul_process_gear(s, atk_action);
 
-    /* attack action sets persistent target (interaction persists until interrupted) */
+    /* attack action sets interaction target (zulrah is always entity slot 0) */
     if (atk_action == ZUL_ATK_MAGE || atk_action == ZUL_ATK_RANGE) {
-        s->player_attack_target = 1;
-    }
-    /* spec also sets target */
-    if (actions[ZUL_HEAD_SPEC] == 1) {
-        s->player_attack_target = 1;
+        osrs_interaction_set(&s->interaction, 0);
     }
 
-    /* explicit movement (ground click) interrupts interaction.
-       idle (action 0) does NOT interrupt — player keeps facing target. */
+    /* explicit movement interrupts interaction */
     int has_explicit_move = 0;
     if (s->player_dest_explicit) {
         s->player_dest_explicit = 0;
@@ -1890,21 +1890,31 @@ static void zul_step(EncounterState* state, const int* actions) {
             s->player_dest_y = -1;
         }
     }
-    if (has_explicit_move && s->player_attack_target == 0) {
-        /* movement without an active target — just move */
+    if (has_explicit_move && !osrs_interaction_active(&s->interaction)) {
+        /* pure movement, no target */
     }
-    /* note: movement WITH an active target is auto-chase (handled by process_movement) */
+    /* note: movement with active interaction = auto-chase */
     zul_process_movement(s);
 
-    /* clear target if zulrah not visible (dived/dead) */
-    if (s->player_attack_target && (!s->zulrah_visible || s->is_diving)) {
-        s->player_attack_target = 0;
+    /* clear interaction if target not available */
+    if (osrs_interaction_active(&s->interaction) &&
+        (!s->zulrah_visible || s->is_diving)) {
+        osrs_interaction_clear(&s->interaction);
     }
 
-    /* spec takes priority over normal attack if requested */
-    if (actions[ZUL_HEAD_SPEC] == 1) zul_player_spec(s);
-    else if (atk_action == ZUL_ATK_MAGE) zul_player_attack(s, 1);
-    else if (atk_action == ZUL_ATK_RANGE) zul_player_attack(s, 0);
+    /* auto-attack: fires when interaction is active + timer ready + target visible */
+    if (osrs_interaction_active(&s->interaction) &&
+        s->player_attack_timer == 0 && s->zulrah_visible && !s->is_diving &&
+        s->player_stunned_ticks == 0) {
+
+        if (s->spec_armed && s->player_special_energy >= osrs_spec_cost(s->player.equipped[GEAR_SLOT_WEAPON])) {
+            zul_player_spec(s);
+            osrs_spec_disarm(&s->spec_armed);
+        } else {
+            if (s->player_gear == ZUL_GEAR_MAGE) zul_player_attack(s, 1);
+            else zul_player_attack(s, 0);
+        }
+    }
 
     if (s->zulrah.current_hitpoints <= 0) {
         s->episode_over = 1; s->winner = 0;
@@ -2010,13 +2020,13 @@ static void zul_heuristic_actions(ZulrahState* s, int* actions) {
     }
 
     /* attack: mage vs green/red (weak to magic), range vs blue (weak to range) */
-    if (s->zulrah_visible && !s->is_diving &&
-        s->player_attack_timer <= 0 && s->player_stunned_ticks <= 0) {
+    if (s->zulrah_visible && !s->is_diving) {
         if (s->current_form == ZUL_FORM_BLUE) {
             actions[ZUL_HEAD_ATTACK] = ZUL_ATK_RANGE;
-            /* use spec when in range gear with enough energy */
-            if (s->player_special_energy >= osrs_spec_cost(ZUL_RANGE_LOADOUT[s->gear_tier][GEAR_SLOT_WEAPON])) {
-                actions[ZUL_HEAD_SPEC] = 1;
+            /* arm spec when energy available and not already armed */
+            int spec_cost = osrs_spec_cost(ZUL_RANGE_LOADOUT[s->gear_tier][GEAR_SLOT_WEAPON]);
+            if (spec_cost > 0 && s->player_special_energy >= spec_cost && !s->spec_armed) {
+                actions[ZUL_HEAD_SPEC] = 1;  /* toggle arm */
             }
         } else {
             actions[ZUL_HEAD_ATTACK] = ZUL_ATK_MAGE;
@@ -2074,7 +2084,7 @@ static void zul_fill_render_entities(EncounterState* state, RenderEntity* out, i
         }
     }
     /* player faces zulrah when interaction is active (persistent until interrupted) */
-    if (s->player_attack_target)
+    if (osrs_interaction_active(&s->interaction))
         out[0].attack_target_entity_idx = 1;
     /* zulrah faces player during attack phases */
     if (s->zulrah_attacking && s->zulrah_visible && !s->is_diving)

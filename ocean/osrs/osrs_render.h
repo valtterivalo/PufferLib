@@ -3783,10 +3783,11 @@ void pvp_render(OsrsEnv* env) {
             Color dc = (Color){220, 220, 220, 255};
 
             /* target */
-            if (is->player_attack_target >= 0 && is->player_attack_target < INF_MAX_NPCS) {
-                InfNPC* tn = &is->npcs[is->player_attack_target];
+            int tgt = is->interaction.target_slot;
+            if (tgt >= 0 && tgt < INF_MAX_NPCS) {
+                InfNPC* tn = &is->npcs[tgt];
                 const char* tname = inferno_npc_name(INF_NPC_DEF_IDS[tn->type]);
-                DrawText(TextFormat("TARGET: %s [#%d]", tname, is->player_attack_target), dx, dy, fs, dc);
+                DrawText(TextFormat("TARGET: %s [#%d]", tname, tgt), dx, dy, fs, dc);
             } else {
                 DrawText("TARGET: none", dx, dy, fs, (Color){180, 80, 80, 255});
             }
