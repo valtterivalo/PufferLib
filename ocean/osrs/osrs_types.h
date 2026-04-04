@@ -98,6 +98,7 @@
 #include <stdint.h>
 #include <math.h>
 #include <stdio.h>
+#include "osrs_interaction.h"
 
 // ============================================================================
 // ENVIRONMENT CONSTANTS
@@ -542,6 +543,7 @@ typedef struct {
     int was_lightbearer_equipped;
     int special_active;
     int spec_queued;           /* 1 = next attack uses special (shared across encounters) */
+    OsrsInteraction interaction;  /* shared entity interaction state */
 
     // Gear
     GearSet current_gear;       // tracks active combat style for visible_gear and style checks

@@ -1645,7 +1645,7 @@ static void gui_draw_combat(GuiState* gs, Player* p) {
     oy += 2 * (btn_h + btn_gap) + 10;
 
     /* special attack bar — clickable. yellow border when spec is queued (OSRS-style). */
-    Color spec_label_color = p->special_active ? GUI_TEXT_YELLOW : GUI_TEXT_WHITE;
+    Color spec_label_color = p->spec_queued ? GUI_TEXT_YELLOW : GUI_TEXT_WHITE;
     gui_text_shadow("Special Attack", ox, oy, 11, spec_label_color);
     oy += 16;
 
@@ -1667,7 +1667,7 @@ static void gui_draw_combat(GuiState* gs, Player* p) {
         DrawRectangle(ox, oy, (int)(spec_w * spec_pct), spec_h, GUI_SPEC_GREEN);
     }
     /* active highlight: bright yellow-green border when spec is queued */
-    if (p->special_active) {
+    if (p->spec_queued) {
         DrawRectangle(ox, oy, spec_w, spec_h, CLITERAL(Color){ 200, 200, 50, 60 });
         DrawRectangleLines(ox, oy, spec_w, spec_h, GUI_TEXT_YELLOW);
     } else {

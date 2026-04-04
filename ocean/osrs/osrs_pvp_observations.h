@@ -363,7 +363,7 @@ static void generate_slot_observations(OsrsEnv* env, int agent_idx) {
     obs[0] = (p->visible_gear == GEAR_MELEE) ? 1.0f : 0.0f;
     obs[1] = (p->visible_gear == GEAR_RANGED) ? 1.0f : 0.0f;
     obs[2] = (p->visible_gear == GEAR_MAGE) ? 1.0f : 0.0f;
-    obs[3] = 0.0f;  // was GEAR_SPEC, now unused (visible_gear is always MELEE/RANGED/MAGE)
+    obs[3] = (float)p->spec_queued;  /* 1 = spec armed for next attack */
     obs[4] = (float)p->special_energy;
 
     obs[5] = (p->prayer == PRAYER_PROTECT_MELEE) ? 1.0f : 0.0f;
@@ -688,24 +688,25 @@ static void compute_action_masks(OsrsEnv* env, int agent_idx) {
     int attack_timer_ready = (remaining_ticks(p->attack_timer) == 0);
     int frozen_no_melee = !can_move(p) && !is_in_melee_range(p, t);
 
-    // SPEC_MELEE: available if melee spec weapon exists + enough energy + timer ready
+    /* SPEC_MELEE: available if melee spec weapon exists + enough energy.
+       no timer check — spec is a toggle (arm now, fires on next attack). */
     uint8_t best_melee_spec = find_best_melee_spec(p);
-    int melee_spec_cost = 25; // Most melee specs cost 25% (DDS, claws, VLS, etc.)
+    int melee_spec_cost = 25;
     if (best_melee_spec == ITEM_AGS || best_melee_spec == ITEM_ANCIENT_GS) melee_spec_cost = 50;
     if (best_melee_spec == ITEM_STATIUS_WARHAMMER) melee_spec_cost = 35;
     mask[offset + LOADOUT_SPEC_MELEE] = (best_melee_spec != ITEM_NONE) &&
-        (p->special_energy >= melee_spec_cost) && attack_timer_ready && !frozen_no_melee;
+        (p->special_energy >= melee_spec_cost) && !frozen_no_melee;
 
-    // SPEC_RANGE: available if ranged spec weapon exists + enough energy + timer ready
+    /* SPEC_RANGE: available if ranged spec weapon exists + enough energy */
     uint8_t best_range_spec = find_best_ranged_spec(p);
-    int range_spec_cost = 50; // Most ranged specs cost 50-60%
+    int range_spec_cost = 50;
     mask[offset + LOADOUT_SPEC_RANGE] = (best_range_spec != ITEM_NONE) &&
-        (p->special_energy >= range_spec_cost) && attack_timer_ready;
+        (p->special_energy >= range_spec_cost);
 
-    // SPEC_MAGIC: available if magic spec weapon (volatile) exists + enough energy + timer ready
+    /* SPEC_MAGIC: available if magic spec weapon (volatile) exists + enough energy */
     uint8_t best_magic_spec = find_best_magic_spec(p);
     mask[offset + LOADOUT_SPEC_MAGIC] = (best_magic_spec != ITEM_NONE) &&
-        (p->special_energy >= 55) && attack_timer_ready;  // Volatile costs 55%
+        (p->special_energy >= 55);
 
     // GMAUL: available if granite maul in inventory + enough energy, NO timer requirement (instant)
     mask[offset + LOADOUT_GMAUL] = player_has_gmaul(p) &&

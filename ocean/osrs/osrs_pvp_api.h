@@ -59,6 +59,8 @@ static void init_player(Player* p) {
     p->spec_regen_active = 0;
     p->was_lightbearer_equipped = 0;
     p->special_active = 0;
+    p->spec_queued = 0;
+    osrs_interaction_init(&p->interaction);
 
     p->current_gear = GEAR_MAGE;
     p->visible_gear = GEAR_MAGE;

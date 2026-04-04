@@ -393,7 +393,17 @@ static void execute_switches(OsrsEnv* env, int agent_idx, int* actions) {
     // =========================================================================
 
     int loadout_action = actions[HEAD_LOADOUT];
-    p->clicks_this_tick += apply_loadout(p, loadout_action);
+    int loadout_switches = apply_loadout(p, loadout_action);
+    p->clicks_this_tick += loadout_switches;
+    if (loadout_switches > 0)
+        osrs_interaction_check_interrupt(&p->interaction, OSRS_IACT_EQUIP);
+
+    /* spec toggle: LOADOUT_SPEC_* arms spec for next attack */
+    if (loadout_action == LOADOUT_SPEC_MELEE || loadout_action == LOADOUT_SPEC_RANGE ||
+        loadout_action == LOADOUT_SPEC_MAGIC || loadout_action == LOADOUT_GMAUL) {
+        p->spec_queued = 1;
+        p->special_active = 1;
+    }
 
     // =========================================================================
     // PHASE 3: AUTO-OFFENSIVE PRAYER
@@ -447,6 +457,7 @@ static void execute_switches(OsrsEnv* env, int agent_idx, int* actions) {
         eat_food(p, 0);
         p->consumable_used_this_tick = 1;
         p->clicks_this_tick++;
+        osrs_interaction_check_interrupt(&p->interaction, OSRS_IACT_EAT);
     }
 
     int potion_action = actions[HEAD_POTION];
@@ -456,6 +467,7 @@ static void execute_switches(OsrsEnv* env, int agent_idx, int* actions) {
                 drink_potion(p, 1);
                 p->consumable_used_this_tick = 1;
                 p->clicks_this_tick++;
+                osrs_interaction_check_interrupt(&p->interaction, OSRS_IACT_DRINK);
             }
             break;
         case POTION_RESTORE:
@@ -463,6 +475,7 @@ static void execute_switches(OsrsEnv* env, int agent_idx, int* actions) {
                 drink_potion(p, 2);
                 p->consumable_used_this_tick = 1;
                 p->clicks_this_tick++;
+                osrs_interaction_check_interrupt(&p->interaction, OSRS_IACT_DRINK);
             }
             break;
         case POTION_COMBAT:
@@ -470,6 +483,7 @@ static void execute_switches(OsrsEnv* env, int agent_idx, int* actions) {
                 drink_potion(p, 3);
                 p->consumable_used_this_tick = 1;
                 p->clicks_this_tick++;
+                osrs_interaction_check_interrupt(&p->interaction, OSRS_IACT_DRINK);
             }
             break;
         case POTION_RANGED:
@@ -477,6 +491,7 @@ static void execute_switches(OsrsEnv* env, int agent_idx, int* actions) {
                 drink_potion(p, 4);
                 p->consumable_used_this_tick = 1;
                 p->clicks_this_tick++;
+                osrs_interaction_check_interrupt(&p->interaction, OSRS_IACT_DRINK);
             }
             break;
         default:
@@ -488,6 +503,7 @@ static void execute_switches(OsrsEnv* env, int agent_idx, int* actions) {
         eat_food(p, 1);
         p->consumable_used_this_tick = 1;
         p->clicks_this_tick++;
+        osrs_interaction_check_interrupt(&p->interaction, OSRS_IACT_EAT);
     }
 
     // =========================================================================
@@ -529,6 +545,8 @@ static void execute_switches(OsrsEnv* env, int agent_idx, int* actions) {
         default:
             break;
     }
+    if (move_action != MOVE_NONE)
+        osrs_interaction_check_interrupt(&p->interaction, OSRS_IACT_MOVE);
 
     // =========================================================================
     // PHASE 6: VENGEANCE
@@ -566,11 +584,9 @@ static void execute_attack_movement(OsrsEnv* env, int agent_idx, int* actions) {
     int attack_action = is_attack_action(combat_action) ? combat_action : ATTACK_NONE;
     int move_action = is_move_action(combat_action) ? combat_action : MOVE_NONE;
 
-    int is_spec_attack = (loadout_action == LOADOUT_SPEC_MELEE ||
-                          loadout_action == LOADOUT_SPEC_RANGE ||
-                          loadout_action == LOADOUT_SPEC_MAGIC ||
-                          loadout_action == LOADOUT_GMAUL);
-    if (is_spec_attack) {
+    /* GMAUL is instant: forces attack (spec armed by execute_switches) */
+    int is_gmaul = (loadout_action == LOADOUT_GMAUL);
+    if (is_gmaul) {
         attack_action = ATTACK_ATK;
         move_action = MOVE_NONE;
     }
@@ -578,26 +594,37 @@ static void execute_attack_movement(OsrsEnv* env, int agent_idx, int* actions) {
     int current_loadout = get_current_loadout(p);
     int in_mage_loadout = (current_loadout == LOADOUT_MAGE);
     int in_tank_loadout = (current_loadout == LOADOUT_TANK);
-    if (attack_action == ATTACK_ATK && (in_mage_loadout || in_tank_loadout) && !is_spec_attack) {
+    if (attack_action == ATTACK_ATK && (in_mage_loadout || in_tank_loadout) && !is_gmaul) {
         attack_action = ATTACK_NONE;
     }
 
-    int has_attack = (attack_action != ATTACK_NONE);
+    /* set interaction target when explicit attack action is issued */
+    if (attack_action != ATTACK_NONE)
+        osrs_interaction_set(&p->interaction, 1 - agent_idx);
+
+    /* has_attack: explicit attack OR persistent interaction (auto-walk) */
+    int has_attack = (attack_action != ATTACK_NONE) || osrs_interaction_active(&p->interaction);
     int dist = chebyshev_distance(p->x, p->y, t->x, t->y);
 
+    /* resolve attack style for movement range checks */
     AttackStyle attack_style = ATTACK_STYLE_NONE;
-    switch (attack_action) {
-        case ATTACK_ATK:
-            attack_style = get_slot_weapon_attack_style(p);
-            break;
-        case ATTACK_ICE:
-            attack_style = ATTACK_STYLE_MAGIC;
-            break;
-        case ATTACK_BLOOD:
-            attack_style = ATTACK_STYLE_MAGIC;
-            break;
-        default:
-            break;
+    if (attack_action != ATTACK_NONE) {
+        switch (attack_action) {
+            case ATTACK_ATK:
+                attack_style = get_slot_weapon_attack_style(p);
+                break;
+            case ATTACK_ICE:
+                attack_style = ATTACK_STYLE_MAGIC;
+                break;
+            case ATTACK_BLOOD:
+                attack_style = ATTACK_STYLE_MAGIC;
+                break;
+            default:
+                break;
+        }
+    } else if (osrs_interaction_active(&p->interaction)) {
+        /* auto-attack: use current weapon style for movement */
+        attack_style = get_slot_weapon_attack_style(p);
     }
     if (attack_action == ATTACK_ICE && !can_cast_ice_spell(p)) {
         attack_style = ATTACK_STYLE_NONE;
@@ -608,7 +635,7 @@ static void execute_attack_movement(OsrsEnv* env, int agent_idx, int* actions) {
 
     p->did_attack_auto_move = 0;
 
-    // Auto-move into melee range if melee attack queued
+    /* auto-move into melee range if melee attack/interaction active */
     if (has_attack && move_action == MOVE_NONE && can_move(p)) {
         if (attack_style == ATTACK_STYLE_MELEE && !is_in_melee_range(p, t)) {
             int adj_x, adj_y;
@@ -620,7 +647,7 @@ static void execute_attack_movement(OsrsEnv* env, int agent_idx, int* actions) {
         }
     }
 
-    // Step out from same tile (OSRS behavior: can't attack from same tile)
+    /* step out from same tile (OSRS: can't attack from same tile) */
     if (has_attack && dist == 0 && can_move(p)) {
         step_out_from_same_tile(p, t, cmap);
     }
@@ -641,11 +668,9 @@ static void execute_attack_combat(OsrsEnv* env, int agent_idx, int* actions) {
     int attack_action = is_attack_action(combat_action) ? combat_action : ATTACK_NONE;
     int move_action = is_move_action(combat_action) ? combat_action : MOVE_NONE;
 
-    int is_spec_attack = (loadout_action == LOADOUT_SPEC_MELEE ||
-                          loadout_action == LOADOUT_SPEC_RANGE ||
-                          loadout_action == LOADOUT_SPEC_MAGIC ||
-                          loadout_action == LOADOUT_GMAUL);
-    if (is_spec_attack) {
+    /* GMAUL is instant: forces attack (spec armed by execute_switches) */
+    int is_gmaul = (loadout_action == LOADOUT_GMAUL);
+    if (is_gmaul) {
         attack_action = ATTACK_ATK;
         move_action = MOVE_NONE;
     }
@@ -653,13 +678,22 @@ static void execute_attack_combat(OsrsEnv* env, int agent_idx, int* actions) {
     int current_loadout = get_current_loadout(p);
     int in_mage_loadout = (current_loadout == LOADOUT_MAGE);
     int in_tank_loadout = (current_loadout == LOADOUT_TANK);
-    if (attack_action == ATTACK_ATK && (in_mage_loadout || in_tank_loadout) && !is_spec_attack) {
+    if (attack_action == ATTACK_ATK && (in_mage_loadout || in_tank_loadout) && !is_gmaul) {
         attack_action = ATTACK_NONE;
+    }
+
+    /* auto-attack: if interaction active and no explicit attack, use weapon style.
+       mage/tank auto-attack is filtered above (no autocast modeled). */
+    if (attack_action == ATTACK_NONE && osrs_interaction_active(&p->interaction)) {
+        AttackStyle weapon_style = get_slot_weapon_attack_style(p);
+        if (weapon_style != ATTACK_STYLE_MAGIC) {
+            attack_action = ATTACK_ATK;
+        }
     }
 
     int attack_ready = can_attack_now(p);
     int has_attack = (attack_action != ATTACK_NONE);
-    // Recompute dist from CURRENT positions (after all movements resolved)
+    /* recompute dist from CURRENT positions (after all movements resolved) */
     int dist = chebyshev_distance(p->x, p->y, t->x, t->y);
 
     AttackStyle attack_style = ATTACK_STYLE_NONE;
@@ -687,18 +721,17 @@ static void execute_attack_combat(OsrsEnv* env, int agent_idx, int* actions) {
         attack_style = ATTACK_STYLE_NONE;
     }
 
-    // Gmaul is instant: bypasses attack timer
-    int is_gmaul = (loadout_action == LOADOUT_GMAUL);
+    /* gmaul is instant: bypasses attack timer */
     int can_attack = attack_ready || (is_gmaul && is_granite_maul_attack_available(p));
 
     switch (attack_action) {
         case ATTACK_ATK:
             if (can_attack && attack_style != ATTACK_STYLE_NONE) {
-                // ATK with magic staff uses melee (staff bash)
+                /* ATK with magic staff uses melee (staff bash) */
                 AttackStyle actual_style = (attack_style == ATTACK_STYLE_MAGIC)
                     ? ATTACK_STYLE_MELEE
                     : attack_style;
-                // Melee uses cardinal adjacency check; ranged uses Chebyshev range
+                /* melee uses cardinal adjacency check; ranged uses Chebyshev range */
                 int in_attack_range = 0;
                 if (actual_style == ATTACK_STYLE_MELEE) {
                     in_attack_range = is_in_melee_range(p, t);
@@ -707,8 +740,13 @@ static void execute_attack_combat(OsrsEnv* env, int agent_idx, int* actions) {
                     in_attack_range = (dist > 0 && dist <= range);
                 }
                 if (in_attack_range) {
-                    int is_special = is_spec_attack && is_special_ready(p, actual_style);
+                    /* spec check: use spec_queued toggle instead of loadout-based */
+                    int is_special = p->spec_queued && is_special_ready(p, actual_style);
                     perform_attack(env, agent_idx, 1 - agent_idx, actual_style, is_special, 0, dist);
+                    if (is_special) {
+                        osrs_spec_disarm(&p->spec_queued);
+                        p->special_active = 0;
+                    }
                     p->clicks_this_tick++;
                 }
             }
@@ -731,7 +769,7 @@ static void execute_attack_combat(OsrsEnv* env, int agent_idx, int* actions) {
             break;
     }
 
-    // Auto-walk to target if attack queued but out of range (post-attack chase)
+    /* auto-walk to target if attack/interaction active but out of range */
     if (has_attack && move_action == MOVE_NONE && can_move(p) && !p->did_attack_auto_move) {
         int in_range = 0;
         switch (attack_style) {
