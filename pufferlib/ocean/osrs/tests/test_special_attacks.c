@@ -74,7 +74,7 @@ static void test_melee_spec_costs(void) {
     ASSERT_INT_EQ("dragon dagger cost",     get_melee_spec_cost(MELEE_SPEC_DRAGON_DAGGER),    25);
     ASSERT_INT_EQ("voidwaker cost",         get_melee_spec_cost(MELEE_SPEC_VOIDWAKER),        50);
     ASSERT_INT_EQ("DWH cost",              get_melee_spec_cost(MELEE_SPEC_DWH),              35);
-    ASSERT_INT_EQ("BGS cost",              get_melee_spec_cost(MELEE_SPEC_BGS),              100);
+    ASSERT_INT_EQ("BGS cost",              get_melee_spec_cost(MELEE_SPEC_BGS),              50);
     ASSERT_INT_EQ("ZGS cost",              get_melee_spec_cost(MELEE_SPEC_ZGS),              50);
     ASSERT_INT_EQ("SGS cost",              get_melee_spec_cost(MELEE_SPEC_SGS),              50);
     ASSERT_INT_EQ("ancient GS cost",       get_melee_spec_cost(MELEE_SPEC_ANCIENT_GS),       50);
@@ -94,10 +94,9 @@ static void test_ranged_spec_costs(void) {
 
     ASSERT_INT_EQ("dark bow cost",     get_ranged_spec_cost(RANGED_SPEC_DARK_BOW),     55);
     ASSERT_INT_EQ("ballista cost",     get_ranged_spec_cost(RANGED_SPEC_BALLISTA),     65);
-    ASSERT_INT_EQ("ACB cost",          get_ranged_spec_cost(RANGED_SPEC_ACB),          50);
     ASSERT_INT_EQ("ZCB cost",          get_ranged_spec_cost(RANGED_SPEC_ZCB),          75);
     ASSERT_INT_EQ("dragon knife cost", get_ranged_spec_cost(RANGED_SPEC_DRAGON_KNIFE), 25);
-    ASSERT_INT_EQ("MSB cost",          get_ranged_spec_cost(RANGED_SPEC_MSB),          55);
+    ASSERT_INT_EQ("MSB cost",          get_ranged_spec_cost(RANGED_SPEC_MSB),          50);
     ASSERT_INT_EQ("morrigan's cost",   get_ranged_spec_cost(RANGED_SPEC_MORRIGANS),    50);
 }
 
@@ -134,15 +133,14 @@ static void test_melee_spec_acc_multipliers(void) {
     ASSERT_FLOAT_EQ("DDS acc mult",    get_melee_spec_acc_mult(MELEE_SPEC_DRAGON_DAGGER), 1.15f, 1e-5f);
     /* voidwaker: guaranteed hit in PvNPC; PvP uses normal accuracy */
     ASSERT_FLOAT_EQ("VW acc mult",     get_melee_spec_acc_mult(MELEE_SPEC_VOIDWAKER),     1.0f, 1e-5f);
-    /* DWH: [3,2] = 1.5x. ref: dps-calc PlayerVsNPCCalc.ts, wiki "+50% accuracy" */
-    ASSERT_FLOAT_EQ("DWH acc mult",    get_melee_spec_acc_mult(MELEE_SPEC_DWH),           1.5f, 1e-5f);
-    /* BGS: godsword family but ref says separate [3,2]=1.5x for BGS
-       our code: 1.5x for BGS */
-    ASSERT_FLOAT_EQ("BGS acc mult",    get_melee_spec_acc_mult(MELEE_SPEC_BGS),           1.5f, 1e-5f);
+    /* statius warhammer (LMS): [5,4] = 1.25x */
+    ASSERT_FLOAT_EQ("DWH acc mult",    get_melee_spec_acc_mult(MELEE_SPEC_DWH),           1.25f, 1e-5f);
+    /* BGS: [2,1] = 2.0x per dps-calc */
+    ASSERT_FLOAT_EQ("BGS acc mult",    get_melee_spec_acc_mult(MELEE_SPEC_BGS),           2.0f, 1e-5f);
     /* ZGS: godsword family [2,1] = 2.0x */
     ASSERT_FLOAT_EQ("ZGS acc mult",    get_melee_spec_acc_mult(MELEE_SPEC_ZGS),           2.0f, 1e-5f);
-    /* SGS: godsword accuracy but with separate [3,2]=1.5x in code */
-    ASSERT_FLOAT_EQ("SGS acc mult",    get_melee_spec_acc_mult(MELEE_SPEC_SGS),           1.5f, 1e-5f);
+    /* SGS: [2,1] = 2.0x per dps-calc */
+    ASSERT_FLOAT_EQ("SGS acc mult",    get_melee_spec_acc_mult(MELEE_SPEC_SGS),           2.0f, 1e-5f);
     /* ancient GS: godsword [2,1] = 2.0x */
     ASSERT_FLOAT_EQ("ancient GS acc",  get_melee_spec_acc_mult(MELEE_SPEC_ANCIENT_GS),    2.0f, 1e-5f);
     /* VLS: no acc mult (uses reduced def roll instead) */
@@ -165,7 +163,7 @@ static void test_melee_spec_acc_multipliers(void) {
 /*   AGS: [5,4]=1.25x total => 1.1*1.25 = 1.375x                          */
 /*   BGS: [11,10]=1.21x total => 1.1*1.1 = 1.21x                          */
 /*   ZGS/SGS: [11,10] only => 1.1x (no additional)                         */
-/*   DDS: [23,20] = 1.15x; DWH/dmace: [3,2] = 1.5x                       */
+/*   DDS: [23,20] = 1.15x; statius: [5,4] = 1.25x; dmace: [3,2] = 1.5x  */
 /* ======================================================================== */
 
 static void test_melee_spec_str_multipliers(void) {
@@ -181,7 +179,7 @@ static void test_melee_spec_str_multipliers(void) {
     ASSERT_FLOAT_EQ("DDS str mult",    get_melee_spec_str_mult(MELEE_SPEC_DRAGON_DAGGER), 1.15f, 1e-3f);
     /* voidwaker: 1.0x (50-150% range handled in perform_voidwaker_spec) */
     ASSERT_FLOAT_EQ("VW str mult",     get_melee_spec_str_mult(MELEE_SPEC_VOIDWAKER), 1.0f, 1e-5f);
-    /* DWH: [3,2] = 1.5x. note: our code says 1.25 for DWH+statius combined path */
+    /* statius warhammer (LMS): 1.25x str */
     ASSERT_FLOAT_EQ("DWH str mult",    get_melee_spec_str_mult(MELEE_SPEC_DWH),   1.25f, 1e-3f);
     /* BGS: godsword 1.1x * [11,10]=1.1x = 1.21x */
     ASSERT_FLOAT_EQ("BGS str mult",    get_melee_spec_str_mult(MELEE_SPEC_BGS),   1.21f, 1e-3f);
@@ -208,7 +206,7 @@ static void test_melee_spec_str_multipliers(void) {
 /*                                                                          */
 /* ref: PlayerVsNPCCalc.ts:579-589                                          */
 /*   dark bow: no acc bonus. ballista: [5,4]=1.25x.                        */
-/*   ACB/ZCB: [2,1]=2.0x. MSB: [10,7]~1.43x. dragon knife: none.         */
+/*   ZCB: [2,1]=2.0x. MSB: [10,7]~1.43x. dragon knife: none.             */
 /* ======================================================================== */
 
 static void test_ranged_spec_acc_multipliers(void) {
@@ -216,7 +214,6 @@ static void test_ranged_spec_acc_multipliers(void) {
 
     ASSERT_FLOAT_EQ("dark bow acc",     get_ranged_spec_acc_mult(RANGED_SPEC_DARK_BOW),     1.0f, 1e-5f);
     ASSERT_FLOAT_EQ("ballista acc",     get_ranged_spec_acc_mult(RANGED_SPEC_BALLISTA),     1.25f, 1e-3f);
-    ASSERT_FLOAT_EQ("ACB acc",          get_ranged_spec_acc_mult(RANGED_SPEC_ACB),          2.0f, 1e-5f);
     ASSERT_FLOAT_EQ("ZCB acc",          get_ranged_spec_acc_mult(RANGED_SPEC_ZCB),          2.0f, 1e-5f);
     ASSERT_FLOAT_EQ("dragon knife acc", get_ranged_spec_acc_mult(RANGED_SPEC_DRAGON_KNIFE), 1.0f, 1e-5f);
     ASSERT_FLOAT_EQ("MSB acc",          get_ranged_spec_acc_mult(RANGED_SPEC_MSB),          1.0f, 1e-5f);
@@ -236,7 +233,6 @@ static void test_ranged_spec_str_multipliers(void) {
 
     ASSERT_FLOAT_EQ("dark bow str",     get_ranged_spec_str_mult(RANGED_SPEC_DARK_BOW),     1.5f,  1e-3f);
     ASSERT_FLOAT_EQ("ballista str",     get_ranged_spec_str_mult(RANGED_SPEC_BALLISTA),     1.25f, 1e-3f);
-    ASSERT_FLOAT_EQ("ACB str",          get_ranged_spec_str_mult(RANGED_SPEC_ACB),          1.0f,  1e-5f);
     ASSERT_FLOAT_EQ("ZCB str",          get_ranged_spec_str_mult(RANGED_SPEC_ZCB),          1.0f,  1e-5f);
     ASSERT_FLOAT_EQ("dragon knife str", get_ranged_spec_str_mult(RANGED_SPEC_DRAGON_KNIFE), 1.0f,  1e-5f);
     ASSERT_FLOAT_EQ("MSB str",          get_ranged_spec_str_mult(RANGED_SPEC_MSB),          1.0f,  1e-5f);
@@ -424,25 +420,18 @@ static void test_vls_mechanics(void) {
 }
 
 /* ======================================================================== */
-/* test: statius warhammer spec (DWH path in our code)                      */
+/* test: statius warhammer spec (LMS, DWH path in our code)                 */
 /*                                                                          */
-/* "Smash": 35% cost, 1.25x str, 1.0x acc, 25-125% of max hit,           */
-/* 30% defence drain on hit > 0.                                            */
-/* our code: osrs_pvp_combat.h:965-986                                      */
+/* statius warhammer (LMS): 35% cost, 1.25x acc, 1.25x str,               */
+/* 30% defence drain on hit. no minimum hit floor.                          */
 /* ======================================================================== */
 
 static void test_statius_warhammer_mechanics(void) {
-    printf("--- statius warhammer (DWH) spec ---\n");
+    printf("--- statius warhammer (LMS) spec ---\n");
 
     ASSERT_INT_EQ("DWH cost",   get_melee_spec_cost(MELEE_SPEC_DWH),   35);
-    ASSERT_FLOAT_EQ("DWH acc",  get_melee_spec_acc_mult(MELEE_SPEC_DWH), 1.5f, 1e-5f);
+    ASSERT_FLOAT_EQ("DWH acc",  get_melee_spec_acc_mult(MELEE_SPEC_DWH), 1.25f, 1e-5f);
     ASSERT_FLOAT_EQ("DWH str",  get_melee_spec_str_mult(MELEE_SPEC_DWH), 1.25f, 1e-3f);
-
-    /* statius uses 25% min of max hit. with str_mult=1.25x, if calculate_max_hit
-       returns max_hit=50, then min_hit = floor(50 * 0.25) = 12 */
-    int max_hit = 50;
-    int min_hit = (int)(max_hit * 0.25f);
-    ASSERT_INT_EQ("statius min (max=50)", min_hit, 12);
 
     /* 30% defence drain: if current_def = 70, drain = floor(70 * 0.30) = 21, new def = 49 */
     int current_def = 70;
@@ -464,15 +453,15 @@ static void test_statius_warhammer_mechanics(void) {
 /* test: BGS spec mechanics                                                 */
 /*                                                                          */
 /* BGS drains defence by the damage dealt (drain_type=2).                  */
-/* cost=100%, acc=1.5x, str=1.21x (godsword 1.1 * bgs 1.1).              */
+/* cost=50%, acc=2.0x, str=1.21x (godsword 1.1 * bgs 1.1).               */
 /* ref: PlayerVsNPCCalc.ts:458-459 [11,10] for godsword + BGS damage.     */
 /* ======================================================================== */
 
 static void test_bgs_mechanics(void) {
     printf("--- BGS spec ---\n");
 
-    ASSERT_INT_EQ("BGS cost",    get_melee_spec_cost(MELEE_SPEC_BGS),      100);
-    ASSERT_FLOAT_EQ("BGS acc",   get_melee_spec_acc_mult(MELEE_SPEC_BGS),  1.5f,  1e-3f);
+    ASSERT_INT_EQ("BGS cost",    get_melee_spec_cost(MELEE_SPEC_BGS),      50);
+    ASSERT_FLOAT_EQ("BGS acc",   get_melee_spec_acc_mult(MELEE_SPEC_BGS),  2.0f,  1e-3f);
     ASSERT_FLOAT_EQ("BGS str",   get_melee_spec_str_mult(MELEE_SPEC_BGS),  1.21f, 1e-3f);
 
     /* drain_type=2: defence reduced by damage dealt.
@@ -508,14 +497,14 @@ static void test_zgs_mechanics(void) {
 /* ======================================================================== */
 /* test: SGS spec mechanics                                                 */
 /*                                                                          */
-/* SGS: 50% cost, 1.5x acc, 1.1x str, heals 50% of damage dealt.         */
+/* SGS: 50% cost, 2.0x acc, 1.1x str, heals 50% of damage dealt.         */
 /* ======================================================================== */
 
 static void test_sgs_mechanics(void) {
     printf("--- SGS spec ---\n");
 
     ASSERT_INT_EQ("SGS cost",    get_melee_spec_cost(MELEE_SPEC_SGS),      50);
-    ASSERT_FLOAT_EQ("SGS acc",   get_melee_spec_acc_mult(MELEE_SPEC_SGS),  1.5f, 1e-3f);
+    ASSERT_FLOAT_EQ("SGS acc",   get_melee_spec_acc_mult(MELEE_SPEC_SGS),  2.0f, 1e-3f);
     ASSERT_FLOAT_EQ("SGS str",   get_melee_spec_str_mult(MELEE_SPEC_SGS),  1.1f, 1e-3f);
     /* heal_percent=50 set in perform_attack when heals_attacker=1 (line 1505-1506) */
 }
@@ -708,7 +697,7 @@ static void test_double_hit_specs(void) {
     ASSERT_FLOAT_EQ("dragon knife str", get_ranged_spec_str_mult(RANGED_SPEC_DRAGON_KNIFE), 1.0f, 1e-5f);
 
     /* MSB (magic shortbow i) */
-    ASSERT_INT_EQ("MSB cost",  get_ranged_spec_cost(RANGED_SPEC_MSB), 55);
+    ASSERT_INT_EQ("MSB cost",  get_ranged_spec_cost(RANGED_SPEC_MSB), 50);
     ASSERT_FLOAT_EQ("MSB acc", get_ranged_spec_acc_mult(RANGED_SPEC_MSB), 1.0f, 1e-5f);
     ASSERT_FLOAT_EQ("MSB str", get_ranged_spec_str_mult(RANGED_SPEC_MSB), 1.0f, 1e-5f);
 }
@@ -743,19 +732,16 @@ static void test_ballista_mechanics(void) {
 }
 
 /* ======================================================================== */
-/* test: ACB and ZCB spec                                                   */
+/* test: ZCB spec (ACB removed — non-DPS bolt proc spec, UNIMPLEMENTED_SPECS) */
 /*                                                                          */
-/* ACB: 50% cost, 2.0x acc, 1.0x str.                                     */
 /* ZCB: 75% cost, 2.0x acc, 1.0x str.                                     */
 /* ref: PlayerVsNPCCalc.ts:580 [2,1]=2.0x acc for ZCB.                    */
 /* ======================================================================== */
 
 static void test_crossbow_specs(void) {
-    printf("--- crossbow specs (ACB/ZCB) ---\n");
+    printf("--- crossbow specs (ZCB) ---\n");
 
-    ASSERT_INT_EQ("ACB cost",    get_ranged_spec_cost(RANGED_SPEC_ACB),       50);
-    ASSERT_FLOAT_EQ("ACB acc",   get_ranged_spec_acc_mult(RANGED_SPEC_ACB),    2.0f, 1e-5f);
-    ASSERT_FLOAT_EQ("ACB str",   get_ranged_spec_str_mult(RANGED_SPEC_ACB),    1.0f, 1e-5f);
+    /* ACB removed: non-DPS spec (bolt proc related, dps-calc UNIMPLEMENTED_SPECS) */
 
     ASSERT_INT_EQ("ZCB cost",    get_ranged_spec_cost(RANGED_SPEC_ZCB),       75);
     ASSERT_FLOAT_EQ("ZCB acc",   get_ranged_spec_acc_mult(RANGED_SPEC_ZCB),    2.0f, 1e-5f);
@@ -811,7 +797,7 @@ static void test_melee_spec_bonus_types(void) {
 /*                                                                          */
 /* ref: osrs_pvp_combat.h:497-513                                           */
 /* dragon knife / morrigan's: 1 tick. ballista: 3 ticks.                   */
-/* dark bow / MSB / ACB / ZCB: default ranged formula.                     */
+/* dark bow / MSB / ZCB: default ranged formula.                           */
 /* ======================================================================== */
 
 static void test_ranged_spec_hit_delays(void) {
@@ -859,9 +845,9 @@ static void test_spec_energy_checks(void) {
     ASSERT_INT_EQ("DDS: 25 >= 25",  25 >= get_melee_spec_cost(MELEE_SPEC_DRAGON_DAGGER), 1);
     ASSERT_INT_EQ("DDS: 24 >= 25",  24 >= get_melee_spec_cost(MELEE_SPEC_DRAGON_DAGGER), 0);
 
-    /* BGS needs 100: only at full energy */
-    ASSERT_INT_EQ("BGS: 100 >= 100", 100 >= get_melee_spec_cost(MELEE_SPEC_BGS), 1);
-    ASSERT_INT_EQ("BGS: 99 >= 100",  99 >= get_melee_spec_cost(MELEE_SPEC_BGS),  0);
+    /* BGS needs 50 */
+    ASSERT_INT_EQ("BGS: 50 >= 50", 50 >= get_melee_spec_cost(MELEE_SPEC_BGS), 1);
+    ASSERT_INT_EQ("BGS: 49 >= 50", 49 >= get_melee_spec_cost(MELEE_SPEC_BGS), 0);
 
     /* DWH needs 35 */
     ASSERT_INT_EQ("DWH: 35 >= 35",  35 >= get_melee_spec_cost(MELEE_SPEC_DWH), 1);
@@ -1054,7 +1040,7 @@ static void test_spec_dispatch(void) {
     ASSERT_INT_EQ("AGS cost (dispatch)",       osrs_spec_cost(ITEM_AGS),                  50);
     ASSERT_INT_EQ("claws cost (dispatch)",     osrs_spec_cost(ITEM_DRAGON_CLAWS),         50);
     ASSERT_INT_EQ("DWH cost (dispatch)",       osrs_spec_cost(ITEM_STATIUS_WARHAMMER),    35);
-    ASSERT_INT_EQ("BGS cost (dispatch)",       osrs_spec_cost(ITEM_BGS),                  100);
+    ASSERT_INT_EQ("BGS cost (dispatch)",       osrs_spec_cost(ITEM_BGS),                  50);
     ASSERT_INT_EQ("ZGS cost (dispatch)",       osrs_spec_cost(ITEM_ZGS),                  50);
     ASSERT_INT_EQ("SGS cost (dispatch)",       osrs_spec_cost(ITEM_SGS),                  50);
     ASSERT_INT_EQ("ancient GS cost (dispatch)",osrs_spec_cost(ITEM_ANCIENT_GS),           50);
@@ -1064,14 +1050,15 @@ static void test_spec_dispatch(void) {
     ASSERT_INT_EQ("DDS cost (dispatch)",       osrs_spec_cost(ITEM_DRAGON_DAGGER),        25);
     ASSERT_INT_EQ("elder maul cost (dispatch)",osrs_spec_cost(ITEM_ELDER_MAUL),           50);
     ASSERT_INT_EQ("blowpipe cost (dispatch)",  osrs_spec_cost(ITEM_TOXIC_BLOWPIPE),       50);
-    ASSERT_INT_EQ("MSB cost (dispatch)",       osrs_spec_cost(ITEM_MAGIC_SHORTBOW_I),     55);
+    ASSERT_INT_EQ("MSB cost (dispatch)",       osrs_spec_cost(ITEM_MAGIC_SHORTBOW_I),     50);
     ASSERT_INT_EQ("dark bow cost (dispatch)",  osrs_spec_cost(ITEM_DARK_BOW),             55);
-    ASSERT_INT_EQ("ACB cost (dispatch)",       osrs_spec_cost(ITEM_ARMADYL_CROSSBOW),     50);
+    ASSERT_INT_EQ("ZCB cost (dispatch)",       osrs_spec_cost(ITEM_ZARYTE_CROSSBOW),      75);
     ASSERT_INT_EQ("ballista cost (dispatch)",  osrs_spec_cost(ITEM_HEAVY_BALLISTA),       65);
     ASSERT_INT_EQ("morr cost (dispatch)",      osrs_spec_cost(ITEM_MORRIGANS_JAVELIN),    50);
     ASSERT_INT_EQ("volatile cost (dispatch)",  osrs_spec_cost(ITEM_VOLATILE_STAFF),       55);
     ASSERT_INT_EQ("eye of ayak cost (dispatch)", osrs_spec_cost(ITEM_EYE_OF_AYAK),        50);
-    ASSERT_INT_EQ("zuriel cost (dispatch)",    osrs_spec_cost(ITEM_ZURIELS_STAFF),        55);
+    ASSERT_INT_EQ("zuriel cost (no spec)",     osrs_spec_cost(ITEM_ZURIELS_STAFF),        0);
+    ASSERT_INT_EQ("ACB cost (no spec)",        osrs_spec_cost(ITEM_ARMADYL_CROSSBOW),     0);
     ASSERT_INT_EQ("non-weapon cost",           osrs_spec_cost(ITEM_BARROWS_GLOVES),       0);
 
     /* resolve AGS with guaranteed hit (huge att vs tiny def) */

@@ -43,7 +43,7 @@ static int get_melee_spec_cost(MeleeSpecWeapon weapon) {
         case MELEE_SPEC_DRAGON_DAGGER:   return 25;
         case MELEE_SPEC_VOIDWAKER:       return 50;
         case MELEE_SPEC_DWH:             return 35;
-        case MELEE_SPEC_BGS:             return 100;
+        case MELEE_SPEC_BGS:             return 50;
         case MELEE_SPEC_ZGS:             return 50;
         case MELEE_SPEC_SGS:             return 50;
         case MELEE_SPEC_ANCIENT_GS:      return 50;
@@ -63,7 +63,7 @@ static int get_ranged_spec_cost(RangedSpecWeapon weapon) {
         case RANGED_SPEC_ACB:         return 50;
         case RANGED_SPEC_ZCB:         return 75;
         case RANGED_SPEC_DRAGON_KNIFE:return 25;
-        case RANGED_SPEC_MSB:         return 55;
+        case RANGED_SPEC_MSB:         return 50;
         case RANGED_SPEC_MORRIGANS:   return 50;
         default:                      return 50;
     }
@@ -108,10 +108,10 @@ static float get_melee_spec_acc_mult(MeleeSpecWeapon weapon) {
         case MELEE_SPEC_GRANITE_MAUL:    return 1.0f;
         case MELEE_SPEC_DRAGON_DAGGER:   return 1.15f;  /* [23,20] per dps-calc */
         case MELEE_SPEC_VOIDWAKER:       return 1.0f;
-        case MELEE_SPEC_DWH:             return 1.5f;  /* [3,2] per dps-calc */
-        case MELEE_SPEC_BGS:             return 1.5f;
+        case MELEE_SPEC_DWH:             return 1.25f;  /* statius warhammer (LMS) [5,4] */
+        case MELEE_SPEC_BGS:             return 2.0f;  /* [2,1] per dps-calc */
         case MELEE_SPEC_ZGS:             return 2.0f;
-        case MELEE_SPEC_SGS:             return 1.5f;
+        case MELEE_SPEC_SGS:             return 2.0f;  /* [2,1] per dps-calc */
         case MELEE_SPEC_ANCIENT_GS:      return 2.0f;
         case MELEE_SPEC_VESTAS:          return 1.0f;
         case MELEE_SPEC_ABYSSAL_DAGGER:  return 1.25f;
