@@ -58,6 +58,7 @@ typedef struct {
     int heal;                   /* HP healed (blowpipe, SGS) */
     int def_drain;              /* def levels to drain (DWH=30%, BGS=dmg) */
     int magic_def_drain;        /* magic def bonus drained (eye of ayak) */
+    int prayer_restore;         /* prayer points restored (SGS) */
     int freeze_ticks;           /* freeze duration (ZGS) */
     int spec_cost;              /* energy consumed */
     int attack_speed_override;  /* 0 = use weapon speed, >0 = override */
@@ -89,6 +90,7 @@ static inline int osrs_spec_cost(int weapon_item_idx) {
         case ITEM_ZARYTE_CROSSBOW:      return 75;
         case ITEM_HEAVY_BALLISTA:       return 65;
         case ITEM_MORRIGANS_JAVELIN:    return 50;
+        case ITEM_ARMADYL_CROSSBOW:    return 50;
         /* magic */
         case ITEM_VOLATILE_STAFF:       return 55;
         case ITEM_EYE_OF_AYAK:          return 50;
@@ -110,7 +112,7 @@ static inline SpecResult osrs_resolve_spec(
     int weapon_item_idx, int att_roll, int max_hit,
     int def_roll, int target_def_level, uint32_t* rng_state
 ) {
-    SpecResult r = {0, {0, 0, 0, 0}, 0, 0, 0, 0, 0, 0, 0};
+    SpecResult r = {0, {0, 0, 0, 0}, 0, 0, 0, 0, 0, 0, 0, 0};
 
     switch (weapon_item_idx) {
 
@@ -237,8 +239,8 @@ static inline SpecResult osrs_resolve_spec(
         break;
     }
 
-    /* SGS: 2.0x accuracy, 1.1x str (godsword), heals floor(dmg/2) HP.
-       also restores floor(dmg/4) prayer (not yet in SpecResult).
+    /* SGS: 2.0x accuracy, 1.1x str (godsword), heals floor(dmg/2) HP,
+       restores floor(dmg/4) prayer.
        ref: osrs-dps-calc [2,1] acc, [11,10] str */
     case ITEM_SGS: {
         int spec_att = att_roll * 2;
@@ -249,6 +251,7 @@ static inline SpecResult osrs_resolve_spec(
             r.damage[0] = encounter_rand_int(rng_state, spec_max + 1);
         r.total_damage = r.damage[0];
         r.heal = r.total_damage / 2;
+        r.prayer_restore = r.total_damage / 4;
         break;
     }
 
@@ -424,6 +427,18 @@ static inline SpecResult osrs_resolve_spec(
         r.num_hits = 1;
         if (encounter_rand_float(rng_state) < osrs_hit_chance(att_roll, reduced_def))
             r.damage[0] = morr_min + encounter_rand_int(rng_state, morr_max - morr_min + 1);
+        r.total_damage = r.damage[0];
+        break;
+    }
+
+    /* ACB: 2x accuracy, normal damage, no special effect.
+       ref: osrs wiki "armadyl crossbow", PvP-only spec (dps-calc marks UNIMPLEMENTED for PvNPC) */
+    case ITEM_ARMADYL_CROSSBOW: {
+        int spec_att = att_roll * 2;
+        r.spec_cost = 50;
+        r.num_hits = 1;
+        if (encounter_rand_float(rng_state) < osrs_hit_chance(spec_att, def_roll))
+            r.damage[0] = encounter_rand_int(rng_state, max_hit + 1);
         r.total_damage = r.damage[0];
         break;
     }

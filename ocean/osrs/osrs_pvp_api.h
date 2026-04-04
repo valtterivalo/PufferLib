@@ -416,7 +416,7 @@ void pvp_reset(OsrsEnv* env) {
         init_player_gear_randomized(&env->players[i], tiers[i], &env->rng_state);
         env->players[i].food_count = compute_food_count(&env->players[i]);
         env->players[i].recoil_charges =
-            has_recoil_effect(&env->players[i]) ? RECOIL_MAX_CHARGES : 0;
+            osrs_has_recoil_ring(env->players[i].equipped) ? RECOIL_MAX_CHARGES : 0;
     }
 
     // Reset C-side opponent state for new episode

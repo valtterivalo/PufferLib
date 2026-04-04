@@ -1064,7 +1064,7 @@ static void test_spec_dispatch(void) {
     ASSERT_INT_EQ("volatile cost (dispatch)",  osrs_spec_cost(ITEM_VOLATILE_STAFF),       55);
     ASSERT_INT_EQ("eye of ayak cost (dispatch)", osrs_spec_cost(ITEM_EYE_OF_AYAK),        50);
     ASSERT_INT_EQ("zuriel cost (no spec)",     osrs_spec_cost(ITEM_ZURIELS_STAFF),        0);
-    ASSERT_INT_EQ("ACB cost (no spec)",        osrs_spec_cost(ITEM_ARMADYL_CROSSBOW),     0);
+    ASSERT_INT_EQ("ACB cost (dispatch)",        osrs_spec_cost(ITEM_ARMADYL_CROSSBOW),     50);
     ASSERT_INT_EQ("non-weapon cost",           osrs_spec_cost(ITEM_BARROWS_GLOVES),       0);
 
     /* resolve AGS with guaranteed hit (huge att vs tiny def) */

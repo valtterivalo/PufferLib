@@ -26,10 +26,6 @@
 #include "osrs_bolt_procs.h"
 #include "osrs_pvp_gear.h"
 
-/* thin wrapper kept for osrs_pvp_api.h compatibility — delegates to osrs_has_recoil_ring */
-static inline int has_recoil_effect(Player* p) {
-    return osrs_has_recoil_ring(p->equipped);
-}
 
 // ============================================================================
 // FORWARD DECLARATIONS
