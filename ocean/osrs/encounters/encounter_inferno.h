@@ -2150,15 +2150,18 @@ static float inf_compute_reward(InfernoState* s) {
 
     float r = 0.0f;
 
-    /* survival: small per-tick bonus for staying alive.
-       gives gradient signal to learn shield-dancing before the agent
-       can deal damage. kept smaller than damage reward so dealing
-       damage is always preferred over just surviving. */
+    /* survival: small per-tick bonus for staying alive */
     if (s->wave >= 68)  /* zuk wave (0-indexed) */
         r += 0.001f;
 
     if (s->damage_dealt_this_tick > 0.0f)
         r += 0.01f * s->damage_dealt_this_tick;
+
+    /* damage taken penalty: immediate signal that being hit is bad.
+       smaller than damage dealt reward so attacking is still preferred.
+       a Zuk hit of 100 = -0.5 penalty, a tbow hit of 50 = +0.5 reward. */
+    if (s->damage_received_this_tick > 0.0f)
+        r -= 0.005f * s->damage_received_this_tick;
 
     return r;
 }
