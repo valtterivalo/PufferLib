@@ -2327,10 +2327,11 @@ static void inf_step(EncounterState* state, const int* actions) {
 /* observations                                                              */
 /* ======================================================================== */
 
-/* obs layout: 37 player + 12 pillar + 29*32 NPC + 5*8 pending hits = 1017 */
-#define INF_FEATURES_PER_NPC 29
+/* obs layout: 46 player + 12 pillar + 30*32 NPC + 5*8 pending hits = 1058 */
+#define INF_PLAYER_OBS_SIZE 46
+#define INF_FEATURES_PER_NPC 30
 #define INF_FEATURES_PER_HIT 5
-#define INF_NUM_OBS (37 + 12 + INF_FEATURES_PER_NPC * INF_MAX_NPCS + INF_FEATURES_PER_HIT * ENCOUNTER_MAX_PENDING_HITS)
+#define INF_NUM_OBS (INF_PLAYER_OBS_SIZE + 12 + INF_FEATURES_PER_NPC * INF_MAX_NPCS + INF_FEATURES_PER_HIT * ENCOUNTER_MAX_PENDING_HITS)
 
 /* max hit per NPC type, normalized by mager max (70). for prayer priority obs. */
 static const float INF_NPC_MAX_HIT_NORM[INF_NUM_NPC_TYPES] = {
@@ -2434,6 +2435,40 @@ static void inf_write_obs(EncounterState* state, float* obs) {
         obs[i++] = (float)conflict_count / 3.0f;
     }
 
+    /* Zuk-phase features (9 features: 1 flag + 8 Zuk-specific) */
+    {
+        int is_zuk = (s->wave == 68);
+        obs[i++] = is_zuk ? 1.0f : 0.0f;
+
+        if (is_zuk) {
+            /* shield direction: +1 east, -1 west, 0 frozen */
+            obs[i++] = (s->zuk.shield_freeze > 0) ? 0.0f : (float)s->zuk.shield_dir;
+            /* shield freeze ticks remaining / 5 */
+            obs[i++] = (float)s->zuk.shield_freeze / 5.0f;
+            /* am I behind the shield right now? */
+            int behind = 0;
+            int si = s->zuk.shield_idx;
+            if (si >= 0 && s->npcs[si].active) {
+                int sx = s->npcs[si].x;
+                int sz = INF_NPC_STATS[INF_NPC_ZUK_SHIELD].size;
+                behind = (px >= sx && px < sx + sz && py >= 41);
+            }
+            obs[i++] = behind ? 1.0f : 0.0f;
+            /* Zuk enraged (attack speed 7 instead of 8) */
+            obs[i++] = s->zuk.enraged ? 1.0f : 0.0f;
+            /* set spawn timer / 350 */
+            obs[i++] = (float)s->zuk.set_timer / 350.0f;
+            /* set timer paused (Jad spawn phase) */
+            obs[i++] = s->zuk.timer_paused ? 1.0f : 0.0f;
+            /* Jad has spawned during Zuk fight */
+            obs[i++] = s->zuk.jad_spawned ? 1.0f : 0.0f;
+            /* Zuk healers have spawned */
+            obs[i++] = s->zuk.healer_spawned ? 1.0f : 0.0f;
+        } else {
+            for (int z = 0; z < 8; z++) obs[i++] = 0.0f;
+        }
+    }
+
     /* pillars (12 features: active, hp, relative dx, relative dy per pillar) */
     for (int p = 0; p < INF_NUM_PILLARS; p++) {
         obs[i++] = s->pillars[p].active ? 1.0f : 0.0f;
@@ -2442,7 +2477,7 @@ static void inf_write_obs(EncounterState* state, float* obs) {
         obs[i++] = (float)(s->pillars[p].y - py) / (float)INF_ARENA_HEIGHT;
     }
 
-    /* NPCs: INF_FEATURES_PER_NPC (29) features each, up to INF_MAX_NPCS */
+    /* NPCs: INF_FEATURES_PER_NPC (30) features each, up to INF_MAX_NPCS */
     for (int n = 0; n < INF_MAX_NPCS; n++) {
         InfNPC* npc = &s->npcs[n];
         if (npc->active && npc->death_ticks == 0) {
@@ -2503,6 +2538,9 @@ static void inf_write_obs(EncounterState* state, float* obs) {
                 }
                 obs[i++] = (float)aoe_count / 8.0f;
             }
+            /* NPC aggro target: 1.0 if targeting player, 0.0 if targeting another NPC
+               (pillar/shield/Zuk). tells agent which NPCs need tagging off pillars/shield. */
+            obs[i++] = (npc->aggro_target < 0) ? 1.0f : 0.0f;
         } else {
             for (int j = 0; j < INF_FEATURES_PER_NPC; j++) obs[i++] = 0.0f;
         }
@@ -2511,12 +2549,12 @@ static void inf_write_obs(EncounterState* state, float* obs) {
     /* assert NPC section wrote exactly the right number of features.
        if this fires, INF_FEATURES_PER_NPC doesn't match the actual feature count. */
     {
-        int expected_npc_end = 37 + 12 + INF_FEATURES_PER_NPC * INF_MAX_NPCS;
+        int expected_npc_end = INF_PLAYER_OBS_SIZE + 12 + INF_FEATURES_PER_NPC * INF_MAX_NPCS;
         if (i != expected_npc_end) {
             fprintf(stderr, "FATAL: obs misaligned after NPC section: i=%d expected=%d "
                     "(INF_FEATURES_PER_NPC=%d, actual=%d per slot)\n",
                     i, expected_npc_end, INF_FEATURES_PER_NPC,
-                    (i - 37 - 12) / INF_MAX_NPCS);
+                    (i - INF_PLAYER_OBS_SIZE - 12) / INF_MAX_NPCS);
             abort();
         }
     }
@@ -2535,6 +2573,11 @@ static void inf_write_obs(EncounterState* state, float* obs) {
         }
     }
 
+    /* sanity: verify we wrote exactly INF_NUM_OBS features */
+    if (i != INF_NUM_OBS) {
+        fprintf(stderr, "BUG: inf_write_obs wrote %d features, expected %d\n", i, INF_NUM_OBS);
+        abort();
+    }
 }
 
 static void inf_write_mask(EncounterState* state, float* mask) {
