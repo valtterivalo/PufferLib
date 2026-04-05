@@ -225,6 +225,31 @@ inline void mtl_set_tensor(MetalStream *ms, const PufTensor &t,
   }
 }
 
+// Typed tensor overloads for mtl_set_tensor (upstream 4.0 migration).
+// Use mtl_buffer_for_ptr to find the MTLBuffer containing the data pointer.
+id<MTLBuffer> mtl_buffer_for_ptr(const void *ptr, NSUInteger *out_offset);
+
+inline void mtl_set_tensor(MetalStream *ms, const FloatTensor &t,
+                           uint32_t index) {
+  NSUInteger offset;
+  id<MTLBuffer> buf = mtl_buffer_for_ptr(t.data, &offset);
+  uint64_t addr = buf.gpuAddress + offset;
+  if (ms->bound_addresses[index] != addr) {
+    [ms->arg_table setAddress:addr atIndex:index];
+    ms->bound_addresses[index] = addr;
+  }
+}
+inline void mtl_set_tensor(MetalStream *ms, const PrecisionTensor &t,
+                           uint32_t index) {
+  NSUInteger offset;
+  id<MTLBuffer> buf = mtl_buffer_for_ptr(t.data, &offset);
+  uint64_t addr = buf.gpuAddress + offset;
+  if (ms->bound_addresses[index] != addr) {
+    [ms->arg_table setAddress:addr atIndex:index];
+    ms->bound_addresses[index] = addr;
+  }
+}
+
 // Bind constant data via ring buffer (replaces setBytes).
 template <typename T>
 inline void mtl_set_params(MetalStream *ms, const T &params, uint32_t index) {

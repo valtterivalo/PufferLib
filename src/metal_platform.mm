@@ -659,7 +659,13 @@ id<MTLBuffer> mtl_wrap_allocator(Allocator *alloc) {
 
   // Find the highest byte offset used by any registered tensor
   int64_t max_end = 0;
-  for (auto *t : alloc->regs) {
+  for (auto &e : alloc->regs) {
+    int64_t end =
+        ((char *)*e.data_ptr - (char *)alloc->mem) + puf_numel(e.shape) * e.elem_size;
+    if (end > max_end)
+      max_end = end;
+  }
+  for (auto *t : alloc->legacy_regs) {
     int64_t end =
         (t->bytes - (char *)alloc->mem) + t->numel() * t->dtype_size;
     if (end > max_end)
@@ -700,6 +706,19 @@ id<MTLBuffer> mtl_buffer_for(const PufTensor &t, NSUInteger *out_offset) {
     }
   }
   assert(false && "PufTensor not in any wrapped allocator buffer");
+  __builtin_unreachable();
+}
+
+// Typed tensor variant: look up buffer by raw pointer.
+id<MTLBuffer> mtl_buffer_for_ptr(const void *ptr, NSUInteger *out_offset) {
+  const char *p = (const char *)ptr;
+  for (auto &wb : g_ctx.buffers) {
+    if (p >= wb.base && p < wb.base + wb.size) {
+      *out_offset = (NSUInteger)(p - wb.base);
+      return wb.buffer;
+    }
+  }
+  assert(false && "pointer not in any wrapped allocator buffer");
   __builtin_unreachable();
 }
 

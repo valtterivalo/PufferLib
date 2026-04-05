@@ -184,7 +184,7 @@ pybind11::dict log_losses(pybind11::object pufferl_obj) {
     // Sync pending training — losses are written by GPU training
     sync_pending_train(pufferl);
     mtl_ensure_stream_synced((cudaStream_t)mtl_stream());
-    float* losses_host = (float*)pufferl.losses_puf.bytes;
+    float* losses_host = pufferl.losses_puf.data;
     float n = losses_host[LOSS_N];
     pybind11::dict result;
     if (n > 0) {
@@ -200,7 +200,7 @@ pybind11::dict log_losses(pybind11::object pufferl_obj) {
     cudaStream_t loss_stream = pufferl.overlap_enabled
         ? (cudaStream_t)mtl_train_stream()
         : (cudaStream_t)mtl_stream();
-    mtl_fill_f32(losses_host, 0.0f, (int)pufferl.losses_puf.numel(), loss_stream);
+    mtl_fill_f32(losses_host, 0.0f, (int)puf_numel(pufferl.losses_puf.shape), loss_stream);
     return result;
 }
 
@@ -276,21 +276,21 @@ pybind11::dict log_train_debug(pybind11::object pufferl_obj) {
     sync_pending_train(pufferl);
     mtl_ensure_stream_synced((cudaStream_t)mtl_stream());
 
-    const float* mb_adv = (const float*)pufferl.train_buf.mb_advantages.bytes;
-    int64_t mb_adv_n = pufferl.train_buf.mb_advantages.numel();
-    const float* mb_prio = (const float*)pufferl.train_buf.mb_prio.bytes;
-    int64_t mb_prio_n = pufferl.train_buf.mb_prio.numel();
-    const float* mb_ratio = (const float*)pufferl.train_buf.mb_ratio.bytes;
-    int64_t mb_ratio_n = pufferl.train_buf.mb_ratio.numel();
-    const float* roll_ratio = (const float*)pufferl.train_rollouts.ratio.bytes;
-    int64_t roll_ratio_n = pufferl.train_rollouts.ratio.numel();
-    const float* param_fp32 = (const float*)pufferl.param_fp32_puf.bytes;
-    int64_t param_fp32_n = pufferl.param_fp32_puf.numel();
-    const float* prio_probs = (const float*)pufferl.prio_bufs.prio_probs.bytes;
-    int64_t prio_probs_n = pufferl.prio_bufs.prio_probs.numel();
-    const float* sampled_prio = (const float*)pufferl.prio_bufs.mb_prio.bytes;
-    int64_t sampled_prio_n = pufferl.prio_bufs.mb_prio.numel();
-    const float* grad_sum_sq = (const float*)pufferl.grad_norm_puf.bytes;
+    const float* mb_adv = pufferl.train_buf.mb_advantages.data;
+    int64_t mb_adv_n = puf_numel(pufferl.train_buf.mb_advantages.shape);
+    const float* mb_prio = pufferl.train_buf.mb_prio.data;
+    int64_t mb_prio_n = puf_numel(pufferl.train_buf.mb_prio.shape);
+    const float* mb_ratio = pufferl.train_buf.mb_ratio.data;
+    int64_t mb_ratio_n = puf_numel(pufferl.train_buf.mb_ratio.shape);
+    const float* roll_ratio = pufferl.train_rollouts.ratio.data;
+    int64_t roll_ratio_n = puf_numel(pufferl.train_rollouts.ratio.shape);
+    const float* param_fp32 = pufferl.param_fp32_puf.data;
+    int64_t param_fp32_n = puf_numel(pufferl.param_fp32_puf.shape);
+    const float* prio_probs = pufferl.prio_bufs.prio_probs.data;
+    int64_t prio_probs_n = puf_numel(pufferl.prio_bufs.prio_probs.shape);
+    const float* sampled_prio = pufferl.prio_bufs.mb_prio.data;
+    int64_t sampled_prio_n = puf_numel(pufferl.prio_bufs.mb_prio.shape);
+    const float* grad_sum_sq = pufferl.grad_norm_puf.data;
 
     FloatStats adv_stats = compute_float_stats(mb_adv, mb_adv_n);
     FloatStats prio_stats = compute_float_stats(mb_prio, mb_prio_n);

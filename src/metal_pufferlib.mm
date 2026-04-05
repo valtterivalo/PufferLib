@@ -63,8 +63,8 @@ StaticVec* create_environments(int num_buffers, int total_agents,
     env.obs = {.bytes = (char*)vec->gpu_observations, .shape = {total_agents, obs_size}, .dtype_size = obs_dtype_size(obs_type)};
     env.obs_raw_dtype = obs_type;
     env.actions = {.bytes = (char*)vec->gpu_actions, .shape = {total_agents, num_atns}, .dtype_size = (int)sizeof(double)};
-    env.rewards = {.bytes = (char*)vec->gpu_rewards, .shape = {total_agents}, .dtype_size = (int)sizeof(float)};
-    env.terminals = {.bytes = (char*)vec->gpu_terminals, .shape = {total_agents}, .dtype_size = (int)sizeof(float)};
+    env.rewards = {.data = vec->gpu_rewards, .shape = {total_agents}};
+    env.terminals = {.data = vec->gpu_terminals, .shape = {total_agents}};
 
     return vec;
 }
@@ -196,25 +196,25 @@ typedef struct {
     bool is_continuous;
     std::vector<cudaStream_t> rollout_streams;
     std::vector<PufTensor> buffer_states;
-    std::vector<PufTensor> sample_act_f32_buffers;
+    std::vector<FloatTensor> sample_act_f32_buffers;
     std::vector<PolicyActivations> buffer_activations;
     std::vector<Allocator> buffer_allocs;
     RolloutBuf rollouts;
     RolloutBuf train_rollouts;
     EnvBuf env;
     TrainGraph train_buf;
-    PufTensor old_values_puf;
-    PufTensor advantages_puf;
-    PufTensor act_sizes_puf;
-    PufTensor losses_puf;
+    FloatTensor old_values_puf;
+    FloatTensor advantages_puf;
+    IntTensor act_sizes_puf;
+    FloatTensor losses_puf;
     PPOBuffersPuf ppo_bufs_puf;
     PrioBuffers prio_bufs;
-    PufTensor param_fp32_puf;
+    FloatTensor param_fp32_puf;
     PufTensor param_fp16_puf;   // fp16 weight buffer (flat view)
     PufTensor grad_fp16_puf;  // gradient buffer (fp16 when train_fp16, else fp32)
-    PufTensor grad_norm_puf;
-    PufTensor rng_offset_puf;
-    // fp16 boundary buffers: obs cast (fp32→fp16), dec_out cast (fp16→fp32),
+    FloatTensor grad_norm_puf;
+    LongTensor rng_offset_puf;
+    // fp16 boundary buffers: obs cast (fp32->fp16), dec_out cast (fp16->fp32),
     // state (zeroed fp16 for scan initial state)
     PufTensor fp16_obs_buf;
     PufTensor fp32_dec_out_buf;
@@ -232,22 +232,18 @@ typedef struct {
     bool has_mask = false;
     int env_obs_width = 0;  // raw obs width from env (e.g. 1096 = features + mask)
     int mask_width = 0;     // total action mask width = sum of all action head sizes (e.g. 79)
-    PufTensor ones_mask;  // (act_n) all 1.0f, fallback mask when !has_mask
+    FloatTensor ones_mask;  // (act_n) all 1.0f, fallback mask when !has_mask
     // External mask path: when has_mask, masks are split from obs at rollout time.
-    // rollout_masks: (horizon, total_agents, act_n), train_masks: (total_agents, horizon, act_n)
-    // mb_masks: (minibatch_segments, horizon, act_n)
-    PufTensor rollout_masks;
-    PufTensor train_masks;
-    PufTensor mb_masks;
+    FloatTensor rollout_masks;
+    FloatTensor train_masks;
+    FloatTensor mb_masks;
     bool cpu_inference = false;  // CPU forward pass for rollout (no GPU sync)
     bool train_fp16 = false;     // fp16 training activations/grads
     // Decoder logits + f32 actions for GPU logprob recompute (cpu_inference only).
-    // Stored during CPU rollout, transposed at training start, then a batched GPU
-    // kernel recomputes logprobs using fast::exp to match PPO training precision.
-    PufTensor rollout_logits;    // (horizon, total_agents, fused_cols)
-    PufTensor train_logits;      // (total_agents, horizon, fused_cols)
-    PufTensor rollout_actions_f32; // (horizon, total_agents, num_atns)
-    PufTensor train_actions_f32;   // (total_agents, horizon, num_atns)
+    FloatTensor rollout_logits;    // (horizon, total_agents, fused_cols)
+    FloatTensor train_logits;      // (total_agents, horizon, fused_cols)
+    FloatTensor rollout_actions_f32; // (horizon, total_agents, num_atns)
+    FloatTensor train_actions_f32;   // (total_agents, horizon, num_atns)
 } PuffeRL;
 
 // ============================================================================
@@ -298,15 +294,15 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
     int input_size = (int)rollouts.observations.shape[2];
     int mask_w = pufferl->mask_width;
 
-    PufTensor obs_dst = puf_slice(rollouts.observations, t, start, block_size);
+    FloatTensor obs_dst = puf_slice(rollouts.observations, t, start, block_size);
 
     if (pufferl->has_mask) {
         // split copy: features prefix + mask suffix, row by row
-        PufTensor mask_dst = puf_slice(pufferl->rollout_masks, t, start, block_size);
+        FloatTensor mask_dst = puf_slice(pufferl->rollout_masks, t, start, block_size);
         assert(obs_env.dtype_size == sizeof(float) && "mask split only supports float32 obs");
         const float* src_base = (const float*)(obs_env.bytes + (int64_t)start * env_obs_width * sizeof(float));
-        float* feat_base = (float*)obs_dst.bytes;
-        float* mask_base = (float*)mask_dst.bytes;
+        float* feat_base = obs_dst.data;
+        float* mask_base = mask_dst.data;
         for (int b = 0; b < block_size; b++) {
             memcpy(feat_base + b * input_size, src_base + b * env_obs_width,
                    input_size * sizeof(float));
@@ -321,32 +317,30 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
             .dtype_size = obs_env.dtype_size
         };
         if (obs_env.dtype_size == sizeof(char)) {
-            cpu_cast_u8_to_f32((float*)obs_dst.bytes, (const uint8_t*)obs_src.bytes,
+            cpu_cast_u8_to_f32(obs_dst.data, (const uint8_t*)obs_src.bytes,
                                (int)obs_src.numel());
         } else if (obs_env.dtype_size == sizeof(float)) {
-            memcpy(obs_dst.bytes, obs_src.bytes, obs_src.numel() * obs_src.dtype_size);
+            memcpy(obs_dst.data, obs_src.bytes, obs_src.numel() * obs_src.dtype_size);
         } else {
             assert(false && "Unsupported obs dtype: only uint8 and float32 are supported");
         }
     }
 
-    // Rewards + terminals — direct memcpy, no sync check needed
-    PufTensor rew_dst = puf_slice(rollouts.rewards, t, start, block_size);
-    memcpy(rew_dst.bytes, env.rewards.bytes + start * (int)sizeof(float),
-           block_size * sizeof(float));
+    // Rewards + terminals -- direct memcpy, no sync check needed
+    FloatTensor rew_dst = puf_slice(rollouts.rewards, t, start, block_size);
+    memcpy(rew_dst.data, env.rewards.data + start, block_size * sizeof(float));
 
-    PufTensor term_dst = puf_slice(rollouts.terminals, t, start, block_size);
-    memcpy(term_dst.bytes, env.terminals.bytes + start * (int)sizeof(float),
-           block_size * sizeof(float));
+    FloatTensor term_dst = puf_slice(rollouts.terminals, t, start, block_size);
+    memcpy(term_dst.data, env.terminals.data + start, block_size * sizeof(float));
 
     uint64_t tp1 = mach_absolute_time();
 
     // Forward pass + sampling
     PufTensor act_slice = puf_slice(rollouts.actions, t, start, block_size);
-    PufTensor lp_slice = puf_slice(rollouts.logprobs, t, start, block_size);
-    PufTensor val_slice = puf_slice(rollouts.values, t, start, block_size);
-    int num_atns = (int)pufferl->act_sizes_puf.numel();
-    uint32_t* buf_rng_offset = (uint32_t*)((int64_t*)pufferl->rng_offset_puf.bytes + buf);
+    FloatTensor lp_slice = puf_slice(rollouts.logprobs, t, start, block_size);
+    FloatTensor val_slice = puf_slice(rollouts.values, t, start, block_size);
+    int num_atns = (int)puf_numel(pufferl->act_sizes_puf.shape);
+    uint32_t* buf_rng_offset = (uint32_t*)(pufferl->rng_offset_puf.data + buf);
     uint64_t buf_rng_seed = pufferl->rng_seed + buf;
 
     PufTensor state_puf = pufferl->buffer_states[buf];
@@ -354,7 +348,7 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
         ? pufferl->weights_infer : pufferl->weights_fp32;
     Policy* p = pufferl->policy;
     PolicyActivations& acts = pufferl->buffer_activations[buf];
-    PufTensor& act_f32_buf = pufferl->sample_act_f32_buffers[buf];
+    FloatTensor& act_f32_buf = pufferl->sample_act_f32_buffers[buf];
     MinGRUWeights *mw = (MinGRUWeights *)infer_weights.network;
 
     // Mask pointer setup for sampling
@@ -362,42 +356,45 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
     const float* mask_ptr;
     int mask_stride;
     if (pufferl->has_mask) {
-        PufTensor mask_slice = puf_slice(pufferl->rollout_masks, t, start, block_size);
-        mask_ptr = (const float*)mask_slice.bytes;
+        FloatTensor mask_slice = puf_slice(pufferl->rollout_masks, t, start, block_size);
+        mask_ptr = mask_slice.data;
         mask_stride = pufferl->mask_width;
     } else {
-        mask_ptr = (const float*)pufferl->ones_mask.bytes;
+        mask_ptr = pufferl->ones_mask.data;
         mask_stride = 0;
     }
 
     if (pufferl->cpu_inference) {
         // CPU path: cblas_sgemm + scalar gate + CPU sampling. No GPU, no sync.
+        // cpu_forward_and_sample still takes PufTensor for obs_dst -- wrap FloatTensor
+        PufTensor obs_puf = {.bytes = (char*)obs_dst.data, .shape = {obs_dst.shape[0], obs_dst.shape[1]}, .dtype_size = (int)sizeof(float)};
         cpu_forward_and_sample(
-            obs_dst, state_puf, infer_weights, hypers.hidden_size, acts,
+            obs_puf, state_puf, infer_weights, hypers.hidden_size, acts,
             pufferl->act_sizes_puf, act_f32_buf,
-            (float *)lp_slice.bytes, (float *)val_slice.bytes,
+            lp_slice.data, val_slice.data,
             mask_ptr, mask_stride,
             buf_rng_seed, buf_rng_offset);
 
         // Store decoder logits + f32 actions for GPU logprob recompute at
         // training start. CPU sampling uses IEEE expf, PPO uses GPU fast::exp.
         DecoderActivations *da = (DecoderActivations *)acts.decoder;
-        PufTensor logits_dst = puf_slice(pufferl->rollout_logits, t, start, block_size);
-        memcpy(logits_dst.bytes, da->out.bytes, block_size * fused_cols * sizeof(float));
-        PufTensor acts_f32_dst = puf_slice(pufferl->rollout_actions_f32, t, start, block_size);
-        memcpy(acts_f32_dst.bytes, act_f32_buf.bytes, block_size * num_atns * sizeof(float));
+        FloatTensor logits_dst = puf_slice(pufferl->rollout_logits, t, start, block_size);
+        memcpy(logits_dst.data, da->out.bytes, block_size * fused_cols * sizeof(float));
+        FloatTensor acts_f32_dst = puf_slice(pufferl->rollout_actions_f32, t, start, block_size);
+        memcpy(acts_f32_dst.data, act_f32_buf.data, block_size * num_atns * sizeof(float));
 
-        mtl_sample_logits_expand((const float*)act_f32_buf.bytes,
+        mtl_sample_logits_expand(act_f32_buf.data,
                                  (double*)act_slice.bytes, block_size * num_atns);
     } else {
         // GPU path: Metal dispatch + sync (original behavior)
-        PufTensor mingru_input = p->encoder.forward(infer_weights.encoder, acts.encoder, obs_dst, stream);
+        PufTensor obs_puf = {.bytes = (char*)obs_dst.data, .shape = {obs_dst.shape[0], obs_dst.shape[1]}, .dtype_size = (int)sizeof(float)};
+        PufTensor mingru_input = p->encoder.forward(infer_weights.encoder, acts.encoder, obs_puf, stream);
         PufTensor h = p->network.forward(infer_weights.network, mingru_input, state_puf, acts.network, stream);
         PufTensor dec_puf = p->decoder.forward(infer_weights.decoder, acts.decoder, h, stream);
 
         mtl_sample_logits_dispatch_to(
             dec_puf, pufferl->act_sizes_puf,
-            (float*)act_f32_buf.bytes, (float*)lp_slice.bytes, (float*)val_slice.bytes,
+            act_f32_buf.data, lp_slice.data, val_slice.data,
             mask_ptr, mask_stride,
             buf_rng_seed, buf_rng_offset, stream);
 
@@ -406,15 +403,15 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
         // Stash logits + f32 actions for logprob recompute when train_fp16=1.
         // Rollout uses fp32 weights; training uses fp16 → precision mismatch in
         // PPO ratio unless we recompute old_logprobs in fp16 at training start.
-        if (pufferl->train_fp16 && pufferl->rollout_logits.bytes) {
+        if (pufferl->train_fp16 && pufferl->rollout_logits.data) {
             DecoderActivations *da = (DecoderActivations *)acts.decoder;
-            PufTensor logits_dst = puf_slice(pufferl->rollout_logits, t, start, block_size);
-            memcpy(logits_dst.bytes, da->out.bytes, block_size * fused_cols * sizeof(float));
-            PufTensor acts_f32_dst = puf_slice(pufferl->rollout_actions_f32, t, start, block_size);
-            memcpy(acts_f32_dst.bytes, act_f32_buf.bytes, block_size * num_atns * sizeof(float));
+            FloatTensor logits_dst = puf_slice(pufferl->rollout_logits, t, start, block_size);
+            memcpy(logits_dst.data, da->out.bytes, block_size * fused_cols * sizeof(float));
+            FloatTensor acts_f32_dst = puf_slice(pufferl->rollout_actions_f32, t, start, block_size);
+            memcpy(acts_f32_dst.data, act_f32_buf.data, block_size * num_atns * sizeof(float));
         }
 
-        mtl_sample_logits_expand((const float*)act_f32_buf.bytes,
+        mtl_sample_logits_expand(act_f32_buf.data,
                                  (double*)act_slice.bytes, block_size * num_atns);
     }
 
@@ -504,27 +501,27 @@ void train_impl(PuffeRL& pufferl) {
         const float *mask_ptr;
         int mask_stride;
         if (pufferl.has_mask) {
-            mask_ptr = (const float *)pufferl.train_masks.bytes;
+            mask_ptr = pufferl.train_masks.data;
             mask_stride = pufferl.mask_width;
         } else {
-            mask_ptr = (const float *)pufferl.ones_mask.bytes;
+            mask_ptr = pufferl.ones_mask.data;
             mask_stride = 0;
         }
 
         mtl_recompute_logprobs(
-            (float *)rollouts.logprobs.bytes,
-            (const float *)pufferl.train_logits.bytes,
-            (const float *)pufferl.train_actions_f32.bytes,
-            (const int *)pufferl.act_sizes_puf.bytes,
+            rollouts.logprobs.data,
+            pufferl.train_logits.data,
+            pufferl.train_actions_f32.data,
+            pufferl.act_sizes_puf.data,
             mask_ptr, mask_stride,
             total_samples, num_atns, fused_cols, train_stream);
     }
 
     // Clamp rewards and fill ratio (f32 path only, no bf16)
-    mtl_clamp_f32((float*)rollouts.rewards.bytes, -1.0f, 1.0f,
-                  (int)rollouts.rewards.numel(), train_stream);
-    mtl_fill_f32((float*)rollouts.ratio.bytes, 1.0f,
-                 (int)rollouts.ratio.numel(), train_stream);
+    mtl_clamp_f32(rollouts.rewards.data, -1.0f, 1.0f,
+                  (int)puf_numel(rollouts.rewards.shape), train_stream);
+    mtl_fill_f32(rollouts.ratio.data, 1.0f,
+                 (int)puf_numel(rollouts.ratio.shape), train_stream);
 
     // old_values = values.clone()
     puf_copy(pufferl.old_values_puf, rollouts.values, train_stream);
@@ -576,9 +573,9 @@ void train_impl(PuffeRL& pufferl) {
             RolloutBuf sel_src = rollouts;
             sel_src.values = pufferl.old_values_puf;
             mtl_select_copy(sel_src, pufferl.train_buf,
-                (const int64_t*)pufferl.prio_bufs.idx.bytes,
-                (const float*)pufferl.advantages_puf.bytes,
-                (const float*)pufferl.prio_bufs.mb_prio.bytes,
+                (const int64_t*)pufferl.prio_bufs.idx.data,
+                pufferl.advantages_puf.data,
+                pufferl.prio_bufs.mb_prio.data,
                 minibatch_segments,
                 pufferl.fp16_obs_buf.bytes, s);
             // gather masks from train_masks into mb_masks using same priority indices.
@@ -590,9 +587,9 @@ void train_impl(PuffeRL& pufferl) {
                 mtl_set_pso(ms2, pso);
                 int mw = pufferl.mask_width;
                 int mask_seg_bytes = hypers.horizon * mw * (int)sizeof(float);
-                mtl_set_ptr(ms2, pufferl.mb_masks.bytes, 0);
-                mtl_set_ptr(ms2, (void*)pufferl.prio_bufs.idx.bytes, 1);
-                mtl_set_ptr(ms2, pufferl.train_masks.bytes, 2);
+                mtl_set_ptr(ms2, pufferl.mb_masks.data, 0);
+                mtl_set_ptr(ms2, (void*)pufferl.prio_bufs.idx.data, 1);
+                mtl_set_ptr(ms2, pufferl.train_masks.data, 2);
                 struct { int num_idx; int row_bytes; } mp = {minibatch_segments, mask_seg_bytes};
                 mtl_set_params(ms2, mp, 3);
                 mtl_dispatch_groups(ms2, pso, (minibatch_segments + 255) / 256, 256);
@@ -604,12 +601,21 @@ void train_impl(PuffeRL& pufferl) {
         uint64_t tp3 = mach_absolute_time();
 
         PolicyWeights& train_weights = pufferl.train_fp16 ? pufferl.weights_fp16 : pufferl.weights_fp32;
-        PufTensor obs_puf = pufferl.train_fp16 ? pufferl.fp16_obs_buf : pufferl.train_buf.mb_obs;
-        PufTensor state_puf = pufferl.train_fp16 ? pufferl.fp16_state_buf : pufferl.train_buf.mb_state;
+        PufTensor obs_puf;
+        PufTensor state_puf_train;
+        if (pufferl.train_fp16) {
+            obs_puf = pufferl.fp16_obs_buf;
+            state_puf_train = pufferl.fp16_state_buf;
+        } else {
+            FloatTensor &mo = pufferl.train_buf.mb_obs;
+            obs_puf = {.bytes = (char*)mo.data, .shape = {mo.shape[0], mo.shape[1], mo.shape[2]}, .dtype_size = (int)sizeof(float)};
+            FloatTensor &ms = pufferl.train_buf.mb_state;
+            state_puf_train = {.bytes = (char*)ms.data, .shape = {ms.shape[0], ms.shape[1], ms.shape[2], ms.shape[3]}, .dtype_size = (int)sizeof(float)};
+        }
         if (pufferl.train_fp16 && hypers.reset_state) puf_zero(pufferl.fp16_state_buf, s);
 
         PufTensor dec_puf = policy_forward_train(pufferl.policy, train_weights,
-            pufferl.train_activations, obs_puf, state_puf, s);
+            pufferl.train_activations, obs_puf, state_puf_train, s);
 
         if (gpu_profile) mtl_ensure_stream_synced(s);
         uint64_t tp4 = mach_absolute_time();
@@ -637,14 +643,14 @@ void train_impl(PuffeRL& pufferl) {
             const float* ppo_mask_ptr;
             int ppo_mask_stride;
             if (pufferl.has_mask) {
-                ppo_mask_ptr = (const float*)pufferl.mb_masks.bytes;
+                ppo_mask_ptr = pufferl.mb_masks.data;
                 ppo_mask_stride = pufferl.mask_width;
             } else {
-                ppo_mask_ptr = (const float*)pufferl.ones_mask.bytes;
+                ppo_mask_ptr = pufferl.ones_mask.data;
                 ppo_mask_stride = 0;
             }
             // When PER is active, pass full-batch advantages for unbiased var/mean.
-            const PufTensor *full_adv = (prio_alpha > 0.0f) ? &pufferl.advantages_puf : nullptr;
+            const FloatTensor *full_adv = (prio_alpha > 0.0f) ? &pufferl.advantages_puf : nullptr;
             ppo_loss_fwd_bwd(dec_puf_f32, p_logstd, pufferl.train_buf,
                 pufferl.act_sizes_puf, pufferl.losses_puf,
                 hypers.clip_coef, hypers.vf_clip_coef, hypers.vf_coef, hypers.ent_coef,
@@ -656,23 +662,31 @@ void train_impl(PuffeRL& pufferl) {
         if (gpu_profile) mtl_ensure_stream_synced(s);
         uint64_t tp5 = mach_absolute_time();
 
-        PufTensor grad_logits_puf = pufferl.ppo_bufs_puf.grad_logits;
-        PufTensor grad_logstd_puf = pufferl.is_continuous ? pufferl.ppo_bufs_puf.grad_logstd : PufTensor();
-        PufTensor grad_values_puf = pufferl.ppo_bufs_puf.grad_values;
+        // Wrap FloatTensor grads as PufTensor for vtable policy_backward call
+        auto ft_to_puf = [](FloatTensor &ft) -> PufTensor {
+            PufTensor p; p.bytes = (char*)ft.data; p.dtype_size = sizeof(float);
+            for (int i = 0; i < PUF_MAX_DIMS; i++) p.shape[i] = ft.shape[i];
+            return p;
+        };
+        PufTensor grad_logits_puf = ft_to_puf(pufferl.ppo_bufs_puf.grad_logits);
+        PufTensor grad_logstd_puf = pufferl.is_continuous ? ft_to_puf(pufferl.ppo_bufs_puf.grad_logstd) : PufTensor();
+        PufTensor grad_values_puf = ft_to_puf(pufferl.ppo_bufs_puf.grad_values);
         policy_backward(pufferl.policy, train_weights, pufferl.train_activations,
             grad_logits_puf, grad_logstd_puf, grad_values_puf, s);
 
         if (gpu_profile) mtl_ensure_stream_synced(s);
         uint64_t tp6 = mach_absolute_time();
 
-        PufTensor& gc = pufferl.muon->gc_puf;
+        FloatTensor& gc = pufferl.muon->gc_puf;
         mtl_barrier((MetalStream*)s);  // policy_backward writes grads, copy/cast reads them
         if (pufferl.grad_fp16_puf.dtype_size == 2) {
-            mtl_cast_f16_to_f32((float*)gc.bytes,
+            mtl_cast_f16_to_f32(gc.data,
                                 pufferl.grad_fp16_puf.bytes,
                                 (int)pufferl.grad_fp16_puf.numel(), s);
         } else {
-            puf_copy(gc, pufferl.grad_fp16_puf, s);
+            // grad_fp16_puf is fp32 when !train_fp16, copy to gc
+            mtl_copy_f32(gc.data, (const float*)pufferl.grad_fp16_puf.bytes,
+                         (int)pufferl.grad_fp16_puf.numel(), s);
         }
 
         if (gpu_profile) mtl_ensure_stream_synced(s);
@@ -680,7 +694,7 @@ void train_impl(PuffeRL& pufferl) {
 
         mtl_barrier((MetalStream*)s);
         {
-            float* scratch = (float*)pufferl.grad_norm_puf.bytes;
+            float* scratch = pufferl.grad_norm_puf.data;
             clip_grad_norm_f32(gc, scratch, hypers.max_grad_norm, 1e-6f, s);
         }
 
@@ -712,7 +726,7 @@ void train_impl(PuffeRL& pufferl) {
         pufferl.profile.accum[PROF_TRAIN_MUON] += prof_ms(tp8, tp9);
     };
 
-    uint32_t* train_rng_offset = (uint32_t*)((int64_t*)pufferl.rng_offset_puf.bytes + hypers.num_buffers);
+    uint32_t* train_rng_offset = (uint32_t*)(pufferl.rng_offset_puf.data + hypers.num_buffers);
 
     puf_set_gpu_training(false);
 
@@ -919,7 +933,7 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     // Wrap fp32 params allocator for Metal GPU access
     mtl_wrap_allocator(&fp32_params);
 
-    pufferl->param_fp32_puf = {.bytes = (char*)fp32_params.mem, .shape = {fp32_params.total_elems}, .dtype_size = esz_fp32};
+    pufferl->param_fp32_puf = {.data = (float*)fp32_params.mem, .shape = {fp32_params.total_elems}};
 
     // Init weights on fp32 master
     {
@@ -1021,9 +1035,9 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
         pufferl->fp16_obs_buf = {.shape = {minibatch_segments, hypers.horizon, input_size}, .dtype_size = esz_fp16};
         pufferl->fp32_dec_out_buf = {.shape = {minibatch_segments, hypers.horizon, dec_fused}, .dtype_size = esz_fp32};
         pufferl->fp16_state_buf = {.shape = {num_layers, minibatch_segments, 1, hidden_size}, .dtype_size = esz_fp16};
-        pufferl->fp16_boundary_alloc.reg(&pufferl->fp16_obs_buf);
-        pufferl->fp16_boundary_alloc.reg(&pufferl->fp32_dec_out_buf);
-        pufferl->fp16_boundary_alloc.reg(&pufferl->fp16_state_buf);
+        alloc_register_legacy(&pufferl->fp16_boundary_alloc, &pufferl->fp16_obs_buf);
+        alloc_register_legacy(&pufferl->fp16_boundary_alloc, &pufferl->fp32_dec_out_buf);
+        alloc_register_legacy(&pufferl->fp16_boundary_alloc, &pufferl->fp16_state_buf);
         pufferl->fp16_boundary_alloc.create();
         mtl_wrap_allocator(&pufferl->fp16_boundary_alloc);
     }
@@ -1046,23 +1060,23 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     Allocator& alloc = pufferl->pufferl_alloc;
 
     int p = PRECISION_SIZE;
-    pufferl->rng_offset_puf = {.shape = {num_buffers + 1}, .dtype_size = (int)sizeof(int64_t)};
-    pufferl->act_sizes_puf = {.shape = {num_action_heads}, .dtype_size = (int)sizeof(int32_t)};
-    pufferl->losses_puf = {.shape = {NUM_LOSSES}, .dtype_size = (int)sizeof(float)};
-    pufferl->grad_norm_puf = {.shape = {1}, .dtype_size = (int)sizeof(float)};
-    alloc.reg(&pufferl->rng_offset_puf);
-    alloc.reg(&pufferl->act_sizes_puf);
-    alloc.reg(&pufferl->losses_puf);
-    alloc.reg(&pufferl->grad_norm_puf);
+    pufferl->rng_offset_puf = {.shape = {num_buffers + 1}};
+    pufferl->act_sizes_puf = {.shape = {num_action_heads}};
+    pufferl->losses_puf = {.shape = {NUM_LOSSES}};
+    pufferl->grad_norm_puf = {.shape = {1}};
+    alloc_register(&alloc, &pufferl->rng_offset_puf);
+    alloc_register(&alloc, &pufferl->act_sizes_puf);
+    alloc_register(&alloc, &pufferl->losses_puf);
+    alloc_register(&alloc, &pufferl->grad_norm_puf);
 
     // Per-buffer RNN states
     pufferl->buffer_states.resize(num_buffers);
     pufferl->sample_act_f32_buffers.resize(num_buffers);
     for (int i = 0; i < num_buffers; i++) {
         pufferl->buffer_states[i] = {.shape = {num_layers, batch, hidden_size}, .dtype_size = p};
-        alloc.reg(&pufferl->buffer_states[i]);
-        pufferl->sample_act_f32_buffers[i] = {.shape = {batch, num_action_heads}, .dtype_size = (int)sizeof(float)};
-        alloc.reg(&pufferl->sample_act_f32_buffers[i]);
+        alloc_register_legacy(&alloc, &pufferl->buffer_states[i]);
+        pufferl->sample_act_f32_buffers[i] = {.shape = {batch, num_action_heads}};
+        alloc_register(&alloc, &pufferl->sample_act_f32_buffers[i]);
     }
 
     // Rollout buffers (horizon, total_agents, ...)
@@ -1076,10 +1090,10 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     register_rollout_buffers(pufferl->train_rollouts, alloc, total_agents, horizon, input_size, num_action_heads);
 
     // Pre-allocated train temporaries
-    pufferl->old_values_puf = {.shape = {total_agents, horizon}, .dtype_size = p};
-    pufferl->advantages_puf = {.shape = {total_agents, horizon}, .dtype_size = (int)sizeof(float)};
-    alloc.reg(&pufferl->old_values_puf);
-    alloc.reg(&pufferl->advantages_puf);
+    pufferl->old_values_puf = {.shape = {total_agents, horizon}};
+    pufferl->advantages_puf = {.shape = {total_agents, horizon}};
+    alloc_register(&alloc, &pufferl->old_values_puf);
+    alloc_register(&alloc, &pufferl->advantages_puf);
 
     // PPO loss buffers
     register_ppo_buffers(pufferl->ppo_bufs_puf, alloc, minibatch_segments, hypers.horizon, decoder_output_size, is_continuous);
@@ -1089,32 +1103,29 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
 
     // Mask buffers: when has_mask, masks are split from obs at rollout time.
     if (pufferl->has_mask) {
-        pufferl->rollout_masks = {.shape = {horizon, total_agents, act_n}, .dtype_size = (int)sizeof(float)};
-        pufferl->train_masks = {.shape = {total_agents, horizon, act_n}, .dtype_size = (int)sizeof(float)};
-        pufferl->mb_masks = {.shape = {minibatch_segments, hypers.horizon, act_n}, .dtype_size = (int)sizeof(float)};
-        alloc.reg(&pufferl->rollout_masks);
-        alloc.reg(&pufferl->train_masks);
-        alloc.reg(&pufferl->mb_masks);
+        pufferl->rollout_masks = {.shape = {horizon, total_agents, act_n}};
+        pufferl->train_masks = {.shape = {total_agents, horizon, act_n}};
+        pufferl->mb_masks = {.shape = {minibatch_segments, hypers.horizon, act_n}};
+        alloc_register(&alloc, &pufferl->rollout_masks);
+        alloc_register(&alloc, &pufferl->train_masks);
+        alloc_register(&alloc, &pufferl->mb_masks);
     } else {
-        pufferl->ones_mask = {.shape = {act_n}, .dtype_size = (int)sizeof(float)};
-        alloc.reg(&pufferl->ones_mask);
+        pufferl->ones_mask = {.shape = {act_n}};
+        alloc_register(&alloc, &pufferl->ones_mask);
     }
 
     // Decoder logits + f32 actions for logprob recompute at training start.
-    // Needed when rollout and training use different precision:
-    //   cpu_inference: rollout uses IEEE expf, training uses GPU fast::exp
-    //   train_fp16: rollout uses fp32 weights, training uses fp16 weights
     if (pufferl->cpu_inference || hypers.train_fp16) {
         int fused = decoder_output_size + 1;
         int na = num_action_heads;
-        pufferl->rollout_logits = {.shape = {horizon, total_agents, fused}, .dtype_size = (int)sizeof(float)};
-        pufferl->train_logits = {.shape = {total_agents, horizon, fused}, .dtype_size = (int)sizeof(float)};
-        pufferl->rollout_actions_f32 = {.shape = {horizon, total_agents, na}, .dtype_size = (int)sizeof(float)};
-        pufferl->train_actions_f32 = {.shape = {total_agents, horizon, na}, .dtype_size = (int)sizeof(float)};
-        alloc.reg(&pufferl->rollout_logits);
-        alloc.reg(&pufferl->train_logits);
-        alloc.reg(&pufferl->rollout_actions_f32);
-        alloc.reg(&pufferl->train_actions_f32);
+        pufferl->rollout_logits = {.shape = {horizon, total_agents, fused}};
+        pufferl->train_logits = {.shape = {total_agents, horizon, fused}};
+        pufferl->rollout_actions_f32 = {.shape = {horizon, total_agents, na}};
+        pufferl->train_actions_f32 = {.shape = {total_agents, horizon, na}};
+        alloc_register(&alloc, &pufferl->rollout_logits);
+        alloc_register(&alloc, &pufferl->train_logits);
+        alloc_register(&alloc, &pufferl->rollout_actions_f32);
+        alloc_register(&alloc, &pufferl->train_actions_f32);
     }
 
     // Optimizer init (register buffers with shared allocator)
@@ -1128,25 +1139,25 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     mtl_wrap_allocator(&alloc);
 
     // Post-create initialization: unified memory, write directly
-    memset(pufferl->rng_offset_puf.bytes, 0, (num_buffers + 1) * sizeof(int64_t));
-    memcpy(pufferl->act_sizes_puf.bytes, raw_act_sizes, num_action_heads * sizeof(int32_t));
-    memset(pufferl->losses_puf.bytes, 0, NUM_LOSSES * sizeof(float));
+    memset(pufferl->rng_offset_puf.data, 0, (num_buffers + 1) * sizeof(long));
+    memcpy(pufferl->act_sizes_puf.data, raw_act_sizes, num_action_heads * sizeof(int32_t));
+    memset(pufferl->losses_puf.data, 0, NUM_LOSSES * sizeof(float));
 
     // Fill all-ones mask (after alloc.create + mtl_wrap)
     if (!pufferl->has_mask) {
-        float* ones = (float*)pufferl->ones_mask.bytes;
+        float* ones = pufferl->ones_mask.data;
         for (int i = 0; i < act_n; i++) ones[i] = 1.0f;
     }
 
 
     // muon_post_create: write lr and zero momentum (unified memory)
-    pufferl->muon->lr_ptr = (float*)pufferl->muon->lr_puf.bytes;
-    pufferl->muon->lr_derived_ptr = (float*)pufferl->muon->lr_derived_puf.bytes;
-    if (pufferl->muon->ns_norm_puf.bytes)
-        pufferl->muon->ns.norm_ptr = (float*)pufferl->muon->ns_norm_puf.bytes;
+    pufferl->muon->lr_ptr = pufferl->muon->lr_puf.data;
+    pufferl->muon->lr_derived_ptr = pufferl->muon->lr_derived_puf.data;
+    if (pufferl->muon->ns_norm_puf.data)
+        pufferl->muon->ns.norm_ptr = pufferl->muon->ns_norm_puf.data;
     *pufferl->muon->lr_ptr = pufferl->muon->lr_val_init;
     memset(pufferl->muon->lr_derived_ptr, 0, 2 * sizeof(float));
-    memset(pufferl->muon->mb_puf.bytes, 0, pufferl->muon->mb_puf.numel() * sizeof(float));
+    memset(pufferl->muon->mb_puf.data, 0, puf_numel(pufferl->muon->mb_puf.shape) * sizeof(float));
 
     // Per-buffer inference activations (separate allocators)
     pufferl->buffer_activations.resize(num_buffers);

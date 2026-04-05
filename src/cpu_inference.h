@@ -284,8 +284,8 @@ static void cpu_forward_and_sample(
         PolicyWeights &weights,
         int hidden_dim,
         PolicyActivations &acts,
-        PufTensor &act_sizes_puf,
-        PufTensor &act_f32_buf,     // (B, num_atns) scratch
+        IntTensor &act_sizes_puf,
+        FloatTensor &act_f32_buf,   // (B, num_atns) scratch
         float *logprobs_out,        // (B,)
         float *values_out,          // (B,)
         const float *action_mask, int mask_stride,
@@ -332,8 +332,8 @@ static void cpu_forward_and_sample(
     // --- Sampling ---
     cpu_sample_logits(
         (const float *)da->out.bytes, fused_cols,
-        (const int *)act_sizes_puf.bytes, (int)act_sizes_puf.numel(),
-        (float *)act_f32_buf.bytes, logprobs_out, values_out,
+        act_sizes_puf.data, (int)puf_numel(act_sizes_puf.shape),
+        act_f32_buf.data, logprobs_out, values_out,
         action_mask, mask_stride,
         rng_seed, rng_offset_ptr, B);
 }

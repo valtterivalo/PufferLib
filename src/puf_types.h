@@ -1,7 +1,9 @@
-// Shared type definitions for PufferLib static-native.
-// Included by both CUDA (models.cu) and Metal (metal_models.mm) paths.
-// No platform-specific kernel code lives here — only data structures,
-// buffer registration, and vtable interfaces.
+// Shared type definitions for PufferLib Metal backend.
+// Uses upstream 4.0 typed tensor system (FloatTensor, PrecisionTensor, etc.)
+// instead of runtime-typed PufTensor.
+//
+// Only included by Metal path (metal_platform.h). CUDA path has its own
+// type definitions in models.cu / kernels.cu.
 
 #ifndef PUFFERLIB_PUF_TYPES_H
 #define PUFFERLIB_PUF_TYPES_H
@@ -15,6 +17,8 @@
 #include <string>
 #include <vector>
 
+#include "tensor.h"
+
 using std::vector;
 
 // ============================================================================
@@ -26,21 +30,19 @@ typedef void *cudaStream_t;
 #define CUDA_STREAM_T_DEFINED
 
 // ============================================================================
-// Compile-time precision: default bf16, pass -DPRECISION_FLOAT for float32.
-// Metal always uses PRECISION_FLOAT (MPS has no bf16 compute).
+// Compile-time precision: Metal always uses fp32 (no bf16 compute).
 // ============================================================================
 
 constexpr bool USE_BF16 = false;
 constexpr int PRECISION_SIZE = 4; // bytes per element (Metal: always fp32)
 
 // ============================================================================
-// PufTensor — minimal tensor view (no torch dependency)
+// PufTensor — legacy runtime-typed tensor view (kept for transition code).
+// New code should use FloatTensor, PrecisionTensor, IntTensor, LongTensor.
 // ============================================================================
 
-#define PUF_MAX_DIMS 8
-
-// Minimal tensor: raw pointer + shape, no torch dependency in the struct
-// itself. Memory is owned by an Allocator buffer — PufTensor is just a view.
+// Minimal tensor: raw pointer + shape + runtime dtype_size.
+// Being phased out in favor of statically typed tensors from tensor.h.
 struct PufTensor {
   char *bytes = nullptr;
   int64_t shape[PUF_MAX_DIMS] = {};
@@ -48,19 +50,11 @@ struct PufTensor {
       0; // bytes per element (2 for bf16/f16, 4 for f32, 8 for f64)
 
   PUF_HD int ndim() const {
-    int n = 0;
-    while (n < PUF_MAX_DIMS && shape[n] != 0) {
-      n++;
-    }
-    return n;
+    return puf_ndim(shape);
   }
 
   PUF_HD int64_t numel() const {
-    int64_t n = 1;
-    for (int i = 0; i < PUF_MAX_DIMS && shape[i] != 0; i++) {
-      n *= shape[i];
-    }
-    return n;
+    return puf_numel(shape);
   }
 
   // Merge shape[dim] into shape[dim+1]: {B, TT, H} -> {B*TT, H}
@@ -86,11 +80,7 @@ struct PufTensor {
 
   // Product of all dims except the last two (1 if ndim <= 2)
   int64_t batch_size() const {
-    int n = ndim();
-    int64_t b = 1;
-    for (int i = 0; i < n - 2; i++)
-      b *= shape[i];
-    return b;
+    return puf_batch_size(shape);
   }
 
   const char *dtype_name() const {
@@ -120,7 +110,7 @@ struct PufTensor {
                       (long long)shape[i]);
     }
     snprintf(buf + pos, sizeof(buf) - pos, "], %lld elems)",
-             (long long)numel());
+             (long long)puf_numel(shape));
     return buf;
   }
 };
@@ -156,35 +146,42 @@ struct PrefixScan {
 };
 
 // ============================================================================
-// Allocator — single contiguous buffer with PufTensor views.
-// On CUDA: cudaMalloc. On CPU/Metal: calloc (unified memory).
+// Allocator — single contiguous buffer with typed tensor views.
+// On Metal: page-aligned calloc (unified memory).
+// Registers heterogeneous tensor types via alloc_register overloads.
 // ============================================================================
 
+struct AllocEntry {
+  void **data_ptr;
+  int64_t *shape;
+  int elem_size;
+};
+
 struct Allocator {
-  std::vector<PufTensor *> regs;
+  std::vector<AllocEntry> regs;
+  // Legacy PufTensor registrations (being phased out)
+  std::vector<PufTensor *> legacy_regs;
   void *mem = nullptr;
   int64_t total_elems = 0;
-
-  void reg(PufTensor *ptr) { regs.push_back(ptr); }
-
-  // Register all PufTensors in a struct laid out as consecutive PufTensors.
-  // Only use on plain buffer structs (RolloutBuf, TrainGraph, etc.), not on
-  // network structs with non-PufTensor members.
-  template <typename T> void dangerously_register(T *s) {
-    int n = sizeof(T) / sizeof(PufTensor);
-    PufTensor *first = (PufTensor *)s;
-    for (int i = 0; i < n; i++)
-      regs.push_back(&first[i]);
-  }
 
   void create() {
     int64_t total_bytes = 0;
     total_elems = 0;
-    for (auto *t : regs) {
-      total_bytes = (total_bytes + 15) & ~15; // align each tensor to 16 bytes
+
+    // Typed tensor entries
+    for (auto &e : regs) {
+      total_bytes = (total_bytes + 15) & ~15;
+      int64_t n = puf_numel(e.shape);
+      total_bytes += n * e.elem_size;
+      total_elems += n;
+    }
+    // Legacy PufTensor entries
+    for (auto *t : legacy_regs) {
+      total_bytes = (total_bytes + 15) & ~15;
       total_bytes += t->numel() * t->dtype_size;
       total_elems += t->numel();
     }
+
     if (total_bytes > 0) {
 #ifdef __CUDACC__
       cudaMalloc(&mem, total_bytes);
@@ -197,8 +194,15 @@ struct Allocator {
       mem = calloc(1, total_bytes);
 #endif
       int64_t offset = 0;
-      for (auto *t : regs) {
-        offset = (offset + 15) & ~15; // align each tensor to 16 bytes
+      // Assign typed tensor data pointers
+      for (auto &e : regs) {
+        offset = (offset + 15) & ~15;
+        *e.data_ptr = (char *)mem + offset;
+        offset += puf_numel(e.shape) * e.elem_size;
+      }
+      // Assign legacy PufTensor byte pointers
+      for (auto *t : legacy_regs) {
+        offset = (offset + 15) & ~15;
         t->bytes = (char *)mem + offset;
         offset += t->numel() * t->dtype_size;
       }
@@ -220,6 +224,25 @@ struct Allocator {
   }
 };
 
+// Typed tensor registration (upstream 4.0 pattern)
+inline void alloc_register(Allocator *a, FloatTensor *t) {
+  a->regs.push_back({(void **)&t->data, t->shape, (int)sizeof(float)});
+}
+inline void alloc_register(Allocator *a, PrecisionTensor *t) {
+  a->regs.push_back({(void **)&t->data, t->shape, PRECISION_SIZE});
+}
+inline void alloc_register(Allocator *a, IntTensor *t) {
+  a->regs.push_back({(void **)&t->data, t->shape, (int)sizeof(int)});
+}
+inline void alloc_register(Allocator *a, LongTensor *t) {
+  a->regs.push_back({(void **)&t->data, t->shape, (int)sizeof(long)});
+}
+
+// Legacy PufTensor registration (for code not yet migrated)
+inline void alloc_register_legacy(Allocator *a, PufTensor *t) {
+  a->legacy_regs.push_back(t);
+}
+
 // Groups 3 allocators for policy: params, grads, activations
 struct AllocSet {
   Allocator params, grads, acts;
@@ -238,47 +261,47 @@ struct AllocSet {
 
 // ============================================================================
 // Pre-allocated buffer structs and registration functions.
-// Registration is pure CPU (shape setup + alloc.reg), no platform deps.
 // ============================================================================
 
 struct PrioBuffers {
-  PufTensor prio_probs, cdf, idx, mb_prio;
+  FloatTensor prio_probs, cdf, mb_prio;
+  LongTensor idx;
 };
 
 inline void register_prio_buffers(PrioBuffers &bufs, Allocator &alloc, int S,
                                   int minibatch_segments) {
   bufs = (PrioBuffers){
-      .prio_probs = {.shape = {S}, .dtype_size = sizeof(float)},
-      .cdf = {.shape = {S}, .dtype_size = sizeof(float)},
-      .idx = {.shape = {minibatch_segments}, .dtype_size = sizeof(int64_t)},
-      .mb_prio = {.shape = {minibatch_segments, 1},
-                  .dtype_size = sizeof(float)},
+      .prio_probs = {.shape = {S}},
+      .cdf = {.shape = {S}},
+      .mb_prio = {.shape = {minibatch_segments, 1}},
+      .idx = {.shape = {minibatch_segments}},
   };
-  alloc.dangerously_register(&bufs);
+  alloc_register(&alloc, &bufs.prio_probs);
+  alloc_register(&alloc, &bufs.cdf);
+  alloc_register(&alloc, &bufs.mb_prio);
+  alloc_register(&alloc, &bufs.idx);
 }
 
 struct PPOBuffersPuf {
-  PufTensor loss_output;
-  PufTensor grad_logits, grad_values, grad_logstd, adv_scratch;
+  FloatTensor loss_output;
+  FloatTensor grad_logits, grad_values, grad_logstd, adv_scratch;
 };
 
 inline void register_ppo_buffers(PPOBuffersPuf &bufs, Allocator &alloc, int N,
                                  int T, int A_total, bool is_continuous) {
-  int64_t total = (int64_t)N * T;
-  int f = sizeof(float);
   bufs = (PPOBuffersPuf){
-      .loss_output = {.shape = {1}, .dtype_size = f},
-      .grad_logits = {.shape = {N, T, A_total}, .dtype_size = f},
-      .grad_values = {.shape = {N, T, 1}, .dtype_size = f},
-      .grad_logstd = {.shape = {N, T, A_total}, .dtype_size = f},
-      .adv_scratch = {.shape = {2}, .dtype_size = f},
+      .loss_output = {.shape = {1}},
+      .grad_logits = {.shape = {N, T, A_total}},
+      .grad_values = {.shape = {N, T, 1}},
+      .grad_logstd = {.shape = {N, T, A_total}},
+      .adv_scratch = {.shape = {2}},
   };
-  alloc.reg(&bufs.loss_output);
-  alloc.reg(&bufs.grad_logits);
-  alloc.reg(&bufs.grad_values);
+  alloc_register(&alloc, &bufs.loss_output);
+  alloc_register(&alloc, &bufs.grad_logits);
+  alloc_register(&alloc, &bufs.grad_values);
   if (is_continuous)
-    alloc.reg(&bufs.grad_logstd);
-  alloc.reg(&bufs.adv_scratch);
+    alloc_register(&alloc, &bufs.grad_logstd);
+  alloc_register(&alloc, &bufs.adv_scratch);
 }
 
 // ============================================================================
@@ -286,63 +309,72 @@ inline void register_ppo_buffers(PPOBuffersPuf &bufs, Allocator &alloc, int N,
 // ============================================================================
 
 struct RolloutBuf {
-  PufTensor observations; // (horizon, segments, input_size) PRECISION
-  PufTensor actions;      // (horizon, segments, num_atns) f64
-  PufTensor values;       // (horizon, segments) PRECISION
-  PufTensor logprobs;     // (horizon, segments) PRECISION — scalar joint logprob (matches CUDA)
-  PufTensor rewards;      // (horizon, segments) PRECISION
-  PufTensor terminals;    // (horizon, segments) PRECISION
-  PufTensor ratio;        // (horizon, segments) PRECISION
-  PufTensor importance;   // (horizon, segments) PRECISION
+  FloatTensor observations; // (horizon, segments, input_size) fp32
+  PufTensor actions;        // (horizon, segments, num_atns) f64 — legacy, needs double
+  FloatTensor values;       // (horizon, segments) fp32
+  FloatTensor logprobs;     // (horizon, segments) fp32
+  FloatTensor rewards;      // (horizon, segments) fp32
+  FloatTensor terminals;    // (horizon, segments) fp32
+  FloatTensor ratio;        // (horizon, segments) fp32
+  FloatTensor importance;   // (horizon, segments) fp32
 };
 
 inline void register_rollout_buffers(RolloutBuf &bufs, Allocator &alloc, int H,
                                      int S, int input_size, int num_atns) {
-  int p = PRECISION_SIZE;
-  bufs = (RolloutBuf){
-      .observations = {.shape = {H, S, input_size}, .dtype_size = p},
-      .actions = {.shape = {H, S, num_atns}, .dtype_size = (int)sizeof(double)},
-      .values = {.shape = {H, S}, .dtype_size = p},
-      .logprobs = {.shape = {H, S}, .dtype_size = p},
-      .rewards = {.shape = {H, S}, .dtype_size = p},
-      .terminals = {.shape = {H, S}, .dtype_size = p},
-      .ratio = {.shape = {H, S}, .dtype_size = p},
-      .importance = {.shape = {H, S}, .dtype_size = p},
-  };
-  alloc.dangerously_register(&bufs);
+  bufs.observations = {.shape = {H, S, input_size}};
+  bufs.actions = {.shape = {H, S, num_atns}, .dtype_size = (int)sizeof(double)};
+  bufs.values = {.shape = {H, S}};
+  bufs.logprobs = {.shape = {H, S}};
+  bufs.rewards = {.shape = {H, S}};
+  bufs.terminals = {.shape = {H, S}};
+  bufs.ratio = {.shape = {H, S}};
+  bufs.importance = {.shape = {H, S}};
+  alloc_register(&alloc, &bufs.observations);
+  alloc_register_legacy(&alloc, &bufs.actions);
+  alloc_register(&alloc, &bufs.values);
+  alloc_register(&alloc, &bufs.logprobs);
+  alloc_register(&alloc, &bufs.rewards);
+  alloc_register(&alloc, &bufs.terminals);
+  alloc_register(&alloc, &bufs.ratio);
+  alloc_register(&alloc, &bufs.importance);
 }
 
 struct TrainGraph {
-  PufTensor mb_obs;        // (S, H, input_size) PRECISION
-  PufTensor mb_state;      // (L, S, 1, hidden) PRECISION
-  PufTensor mb_actions;    // (S, H, num_atns) f64
-  PufTensor mb_logprobs;   // (S, H) PRECISION — scalar joint logprob (matches CUDA)
-  PufTensor mb_advantages; // (S, H) f32
-  PufTensor mb_prio;       // (S, 1) PRECISION
-  PufTensor mb_values;     // (S, H) PRECISION
-  PufTensor mb_returns;    // (S, H) PRECISION
-  PufTensor mb_ratio;      // (S, H) PRECISION
-  PufTensor mb_newvalue;   // (S, H, 1) PRECISION
+  FloatTensor mb_obs;        // (S, H, input_size) fp32
+  FloatTensor mb_state;      // (L, S, 1, hidden) fp32
+  PufTensor mb_actions;      // (S, H, num_atns) f64 — legacy, needs double
+  FloatTensor mb_logprobs;   // (S, H) fp32
+  FloatTensor mb_advantages; // (S, H) f32
+  FloatTensor mb_prio;       // (S, 1) fp32
+  FloatTensor mb_values;     // (S, H) fp32
+  FloatTensor mb_returns;    // (S, H) fp32
+  FloatTensor mb_ratio;      // (S, H) fp32
+  FloatTensor mb_newvalue;   // (S, H, 1) fp32
 };
 
 inline void register_train_buffers(TrainGraph &bufs, Allocator &alloc, int S,
                                    int H, int input_size, int hidden_size,
                                    int num_atns, int num_layers) {
-  int p = PRECISION_SIZE;
-  bufs = (TrainGraph){
-      .mb_obs = {.shape = {S, H, input_size}, .dtype_size = p},
-      .mb_state = {.shape = {num_layers, S, 1, hidden_size}, .dtype_size = p},
-      .mb_actions = {.shape = {S, H, num_atns},
-                     .dtype_size = (int)sizeof(double)},
-      .mb_logprobs = {.shape = {S, H}, .dtype_size = p},
-      .mb_advantages = {.shape = {S, H}, .dtype_size = (int)sizeof(float)},
-      .mb_prio = {.shape = {S, 1}, .dtype_size = p},
-      .mb_values = {.shape = {S, H}, .dtype_size = p},
-      .mb_returns = {.shape = {S, H}, .dtype_size = p},
-      .mb_ratio = {.shape = {S, H}, .dtype_size = p},
-      .mb_newvalue = {.shape = {S, H, 1}, .dtype_size = p},
-  };
-  alloc.dangerously_register(&bufs);
+  bufs.mb_obs = {.shape = {S, H, input_size}};
+  bufs.mb_state = {.shape = {num_layers, S, 1, hidden_size}};
+  bufs.mb_actions = {.shape = {S, H, num_atns}, .dtype_size = (int)sizeof(double)};
+  bufs.mb_logprobs = {.shape = {S, H}};
+  bufs.mb_advantages = {.shape = {S, H}};
+  bufs.mb_prio = {.shape = {S, 1}};
+  bufs.mb_values = {.shape = {S, H}};
+  bufs.mb_returns = {.shape = {S, H}};
+  bufs.mb_ratio = {.shape = {S, H}};
+  bufs.mb_newvalue = {.shape = {S, H, 1}};
+  alloc_register(&alloc, &bufs.mb_obs);
+  alloc_register(&alloc, &bufs.mb_state);
+  alloc_register_legacy(&alloc, &bufs.mb_actions);
+  alloc_register(&alloc, &bufs.mb_logprobs);
+  alloc_register(&alloc, &bufs.mb_advantages);
+  alloc_register(&alloc, &bufs.mb_prio);
+  alloc_register(&alloc, &bufs.mb_values);
+  alloc_register(&alloc, &bufs.mb_returns);
+  alloc_register(&alloc, &bufs.mb_ratio);
+  alloc_register(&alloc, &bufs.mb_newvalue);
 }
 
 // ============================================================================
@@ -409,19 +441,19 @@ struct Network {
 // Weight and activation structs for encoder, decoder, MinGRU
 // ============================================================================
 
-// Encoder: single linear projection (obs → hidden), matching upstream CUDA
+// Encoder: single linear projection (obs -> hidden), matching upstream CUDA
 struct EncoderWeights {
   PufTensor weight; // (out_dim, in_dim)
   int in_dim, out_dim;
 };
 struct EncoderActivations {
   PufTensor out;         // (B, out_dim)
-  PufTensor saved_input; // (B, in_dim) — training only
-  PufTensor wgrad;       // (out_dim, in_dim) — training only
+  PufTensor saved_input; // (B, in_dim) -- training only
+  PufTensor wgrad;       // (out_dim, in_dim) -- training only
 };
 
-// Decoder: single linear projection (hidden → logits+value).
-// Fused weight (od+1, H) registered with Muon — value row participates in NS.
+// Decoder: single linear projection (hidden -> logits+value).
+// Fused weight (od+1, H) registered with Muon -- value row participates in NS.
 struct DecoderWeights {
   PufTensor weight;       // (output_dim+1, hidden_dim)
   PufTensor logstd;       // continuous only: (1, output_dim)
@@ -554,18 +586,18 @@ struct Muon {
   int ns_iters;  // Newton-Schulz iterations (default 5, sweepable)
   float *lr_ptr;
   float *lr_derived_ptr;
-  PufTensor lr_puf, lr_derived_puf, ns_norm_puf;
-  PufTensor wb_puf, mb_puf, gc_puf, up_puf;
+  FloatTensor lr_puf, lr_derived_puf;
+  FloatTensor ns_norm_puf;
+  FloatTensor wb_puf, mb_puf, gc_puf, up_puf;
   NSScratch ns;
   Allocator *param_alloc; // fp32 params allocator -- shapes used by muon_step
 };
 
 // ============================================================================
-// Utility functions (pure PufTensor operations, no platform deps)
+// Utility functions
 // ============================================================================
 
-// Slice a PufTensor: select dim0 index t, then narrow dim0 from start for
-// count.
+// Slice a PufTensor: select dim0 index t, then narrow dim0 from start for count.
 inline PufTensor puf_slice(PufTensor &p, int t, int start, int count) {
   if (p.ndim() == 3) {
     int64_t S = p.shape[1], F = p.shape[2];
@@ -580,6 +612,17 @@ inline PufTensor puf_slice(PufTensor &p, int t, int start, int count) {
   }
 }
 
+// Slice a FloatTensor: select dim0 index t, then narrow dim0 from start for count.
+inline FloatTensor puf_slice(FloatTensor &p, int t, int start, int count) {
+  if (puf_ndim(p.shape) == 3) {
+    int64_t S = p.shape[1], F = p.shape[2];
+    return {.data = p.data + (t * S + start) * F, .shape = {count, F}};
+  } else {
+    int64_t S = p.shape[1];
+    return {.data = p.data + (t * S + start), .shape = {count}};
+  }
+}
+
 // Extract per-layer state view from (num_layers, B, H) state tensor
 inline PufTensor mingru_state_layer(MinGRUWeights *m, PufTensor &state, int i) {
   int64_t B = state.shape[1], H = state.shape[2];
@@ -590,11 +633,11 @@ inline PufTensor mingru_state_layer(MinGRUWeights *m, PufTensor &state, int i) {
 
 // Environment observation/action buffer
 struct EnvBuf {
-  PufTensor obs;       // (total_agents, obs_size)
+  PufTensor obs;       // (total_agents, obs_size) -- runtime dtype
   int obs_raw_dtype;   // raw env dtype (FLOAT, INT, UNSIGNED_CHAR, etc.)
   PufTensor actions;   // (total_agents, num_atns) f64
-  PufTensor rewards;   // (total_agents,) f32
-  PufTensor terminals; // (total_agents,) f32
+  FloatTensor rewards;   // (total_agents,) f32
+  FloatTensor terminals; // (total_agents,) f32
 };
 
 #endif // PUFFERLIB_PUF_TYPES_H
