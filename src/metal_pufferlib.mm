@@ -383,20 +383,21 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
         // training start. CPU sampling uses IEEE expf, PPO uses GPU fast::exp.
         DecoderActivations *da = (DecoderActivations *)acts.decoder;
         FloatTensor logits_dst = puf_slice(pufferl->rollout_logits, t, start, block_size);
-        memcpy(logits_dst.data, da->out.bytes, block_size * fused_cols * sizeof(float));
+        memcpy(logits_dst.data, da->out.data, block_size * fused_cols * sizeof(float));
         FloatTensor acts_f32_dst = puf_slice(pufferl->rollout_actions_f32, t, start, block_size);
         memcpy(acts_f32_dst.data, act_f32_buf.data, block_size * num_atns * sizeof(float));
 
         memcpy(act_slice.data, act_f32_buf.data, block_size * num_atns * sizeof(float));
     } else {
         // GPU path: Metal dispatch + sync (original behavior)
-        PufTensor obs_puf = {.bytes = (char*)obs_dst.data, .shape = {obs_dst.shape[0], obs_dst.shape[1]}, .dtype_size = (int)sizeof(float)};
-        PufTensor mingru_input = p->encoder.forward(infer_weights.encoder, acts.encoder, obs_puf, stream);
-        PufTensor h = p->network.forward(infer_weights.network, mingru_input, state_puf, acts.network, stream);
-        PufTensor dec_puf = p->decoder.forward(infer_weights.decoder, acts.decoder, h, stream);
+        PrecisionTensor obs_pt = {.data = obs_dst.data, .shape = {obs_dst.shape[0], obs_dst.shape[1]}};
+        PrecisionTensor state_pt = {.data = (float*)state_puf.bytes, .shape = {state_puf.shape[0], state_puf.shape[1], state_puf.shape[2]}};
+        PrecisionTensor mingru_input = p->encoder.forward(infer_weights.encoder, acts.encoder, obs_pt, stream);
+        PrecisionTensor h = p->network.forward(infer_weights.network, mingru_input, state_pt, acts.network, stream);
+        PrecisionTensor dec_pt = p->decoder.forward(infer_weights.decoder, acts.decoder, h, stream);
 
         mtl_sample_logits_dispatch_to(
-            dec_puf, pufferl->act_sizes_puf,
+            dec_pt, pufferl->act_sizes_puf,
             act_f32_buf.data, lp_slice.data, val_slice.data,
             mask_ptr, mask_stride,
             buf_rng_seed, buf_rng_offset, stream);
@@ -409,7 +410,7 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
         if (pufferl->train_fp16 && pufferl->rollout_logits.data) {
             DecoderActivations *da = (DecoderActivations *)acts.decoder;
             FloatTensor logits_dst = puf_slice(pufferl->rollout_logits, t, start, block_size);
-            memcpy(logits_dst.data, da->out.bytes, block_size * fused_cols * sizeof(float));
+            memcpy(logits_dst.data, da->out.data, block_size * fused_cols * sizeof(float));
             FloatTensor acts_f32_dst = puf_slice(pufferl->rollout_actions_f32, t, start, block_size);
             memcpy(acts_f32_dst.data, act_f32_buf.data, block_size * num_atns * sizeof(float));
         }
@@ -605,40 +606,29 @@ void train_impl(PuffeRL& pufferl) {
         uint64_t tp3 = mach_absolute_time();
 
         PolicyWeights& train_weights = pufferl.train_fp16 ? pufferl.weights_fp16 : pufferl.weights_fp32;
-        PufTensor obs_puf;
-        PufTensor state_puf_train;
+        PrecisionTensor obs_pt;
+        PrecisionTensor state_pt;
         if (pufferl.train_fp16) {
-            obs_puf = pufferl.fp16_obs_buf;
-            state_puf_train = pufferl.fp16_state_buf;
+            obs_pt = {.data = (float*)pufferl.fp16_obs_buf.bytes, .shape = {pufferl.fp16_obs_buf.shape[0], pufferl.fp16_obs_buf.shape[1], pufferl.fp16_obs_buf.shape[2]}};
+            state_pt = {.data = (float*)pufferl.fp16_state_buf.bytes, .shape = {pufferl.fp16_state_buf.shape[0], pufferl.fp16_state_buf.shape[1], pufferl.fp16_state_buf.shape[2], pufferl.fp16_state_buf.shape[3]}};
         } else {
             FloatTensor &mo = pufferl.train_buf.mb_obs;
-            obs_puf = {.bytes = (char*)mo.data, .shape = {mo.shape[0], mo.shape[1], mo.shape[2]}, .dtype_size = (int)sizeof(float)};
+            obs_pt = {.data = mo.data, .shape = {mo.shape[0], mo.shape[1], mo.shape[2]}};
             FloatTensor &ms = pufferl.train_buf.mb_state;
-            state_puf_train = {.bytes = (char*)ms.data, .shape = {ms.shape[0], ms.shape[1], ms.shape[2], ms.shape[3]}, .dtype_size = (int)sizeof(float)};
+            state_pt = {.data = ms.data, .shape = {ms.shape[0], ms.shape[1], ms.shape[2], ms.shape[3]}};
         }
         if (pufferl.train_fp16 && hypers.reset_state) puf_zero(&pufferl.fp16_state_buf, s);
 
-        PufTensor dec_puf = policy_forward_train(pufferl.policy, train_weights,
-            pufferl.train_activations, obs_puf, state_puf_train, s);
+        PrecisionTensor dec_pt = policy_forward_train(pufferl.policy, train_weights,
+            pufferl.train_activations, obs_pt, state_pt, s);
 
         if (gpu_profile) mtl_ensure_stream_synced(s);
         uint64_t tp4 = mach_absolute_time();
 
-        PufTensor dec_puf_f32;
-        if (pufferl.train_fp16) {
-            mtl_barrier((MetalStream*)s);
-            mtl_cast_f16_to_f32((float*)pufferl.fp32_dec_out_buf.bytes,
-                                dec_puf.bytes, (int)dec_puf.numel(), s);
-            mtl_barrier((MetalStream*)s);
-            dec_puf_f32 = pufferl.fp32_dec_out_buf;
-            dec_puf_f32.shape[0] = dec_puf.shape[0];
-            dec_puf_f32.shape[1] = dec_puf.shape[1];
-            dec_puf_f32.shape[2] = dec_puf.shape[2];
-        } else {
-            dec_puf_f32 = dec_puf;
-        }
+        // dec_pt is PrecisionTensor (FloatTensor on Metal); use directly as f32
+        PufTensor dec_puf_f32 = to_puf(dec_pt);
 
-        PufTensor p_logstd;
+        PrecisionTensor p_logstd = {};
         if (pufferl.is_continuous) {
             p_logstd = ((DecoderWeights*)pufferl.weights_fp32.decoder)->logstd;
         }
@@ -655,7 +645,8 @@ void train_impl(PuffeRL& pufferl) {
             }
             // When PER is active, pass full-batch advantages for unbiased var/mean.
             const FloatTensor *full_adv = (prio_alpha > 0.0f) ? &pufferl.advantages_puf : nullptr;
-            ppo_loss_fwd_bwd(dec_puf_f32, p_logstd, pufferl.train_buf,
+            PufTensor logstd_puf = to_puf(p_logstd);
+            ppo_loss_fwd_bwd(dec_puf_f32, logstd_puf, pufferl.train_buf,
                 pufferl.act_sizes_puf, pufferl.losses_puf,
                 hypers.clip_coef, hypers.vf_clip_coef, hypers.vf_coef, hypers.ent_coef,
                 pufferl.ppo_bufs_puf, pufferl.is_continuous,
@@ -666,17 +657,11 @@ void train_impl(PuffeRL& pufferl) {
         if (gpu_profile) mtl_ensure_stream_synced(s);
         uint64_t tp5 = mach_absolute_time();
 
-        // Wrap FloatTensor grads as PufTensor for vtable policy_backward call
-        auto ft_to_puf = [](FloatTensor &ft) -> PufTensor {
-            PufTensor p; p.bytes = (char*)ft.data; p.dtype_size = sizeof(float);
-            for (int i = 0; i < PUF_MAX_DIMS; i++) p.shape[i] = ft.shape[i];
-            return p;
-        };
-        PufTensor grad_logits_puf = ft_to_puf(pufferl.ppo_bufs_puf.grad_logits);
-        PufTensor grad_logstd_puf = pufferl.is_continuous ? ft_to_puf(pufferl.ppo_bufs_puf.grad_logstd) : PufTensor();
-        PufTensor grad_values_puf = ft_to_puf(pufferl.ppo_bufs_puf.grad_values);
+        // policy_backward now takes FloatTensor grads directly (matching upstream)
+        FloatTensor grad_logstd_ft = pufferl.is_continuous ? pufferl.ppo_bufs_puf.grad_logstd : FloatTensor();
         policy_backward(pufferl.policy, train_weights, pufferl.train_activations,
-            grad_logits_puf, grad_logstd_puf, grad_values_puf, s);
+            pufferl.ppo_bufs_puf.grad_logits, grad_logstd_ft,
+            pufferl.ppo_bufs_puf.grad_values, s);
 
         if (gpu_profile) mtl_ensure_stream_synced(s);
         uint64_t tp6 = mach_absolute_time();

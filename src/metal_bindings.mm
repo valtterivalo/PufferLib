@@ -334,7 +334,7 @@ pybind11::dict log_train_debug(pybind11::object pufferl_obj) {
         DecoderWeights* dw = (DecoderWeights*)pufferl.weights_fp32.decoder;
         int od = dw->output_dim;
         int H = dw->hidden_dim;
-        const float* w = (const float*)dw->weight.bytes;
+        const float* w = dw->weight.data;
         if (w) {
             // Policy rows = first od rows, value row = last row of fused weight
             FloatStats pw_stats = compute_float_stats(w, (int64_t)od * H);
@@ -344,9 +344,9 @@ pybind11::dict log_train_debug(pybind11::object pufferl_obj) {
         }
 
         EncoderWeights* ew = (EncoderWeights*)pufferl.weights_fp32.encoder;
-        if (ew && ew->weight.bytes) {
+        if (ew && ew->weight.data) {
             FloatStats ew_stats = compute_float_stats(
-                (const float*)ew->weight.bytes, ew->weight.numel());
+                ew->weight.data, puf_numel(ew->weight.shape));
             out["enc_w_abs_max"] = std::max(std::fabs(ew_stats.min), std::fabs(ew_stats.max));
         }
     }
@@ -357,8 +357,8 @@ pybind11::dict log_train_debug(pybind11::object pufferl_obj) {
         if (gw) {
             float gru_max = 0;
             for (int l = 0; l < gw->num_layers; l++) {
-                int64_t n = gw->weights[l].numel();
-                const float* w = (const float*)gw->weights[l].bytes;
+                int64_t n = puf_numel(gw->weights[l].shape);
+                const float* w = gw->weights[l].data;
                 if (!w) continue;
                 FloatStats s = compute_float_stats(w, n);
                 float lmax = std::max(std::fabs(s.min), std::fabs(s.max));

@@ -239,16 +239,8 @@ inline void mtl_set_tensor(MetalStream *ms, const FloatTensor &t,
     ms->bound_addresses[index] = addr;
   }
 }
-inline void mtl_set_tensor(MetalStream *ms, const PrecisionTensor &t,
-                           uint32_t index) {
-  NSUInteger offset;
-  id<MTLBuffer> buf = mtl_buffer_for_ptr(t.data, &offset);
-  uint64_t addr = buf.gpuAddress + offset;
-  if (ms->bound_addresses[index] != addr) {
-    [ms->arg_table setAddress:addr atIndex:index];
-    ms->bound_addresses[index] = addr;
-  }
-}
+// PrecisionTensor == FloatTensor on Metal; no separate overload needed.
+// On CUDA, PrecisionTensor is a distinct type and would need its own overload.
 
 // Bind constant data via ring buffer (replaces setBytes).
 template <typename T>
@@ -293,6 +285,23 @@ inline void mtl_barrier(MetalStream *ms) {
                       visibilityOptions:MTL4VisibilityOptionDevice];
     ms->pending_work = true;
   }
+}
+
+// ============================================================================
+// PrecisionTensor → PufTensor conversion for GEMM/memops (Metal platform
+// functions take PufTensor&; model layer uses PrecisionTensor after migration).
+// ============================================================================
+
+inline PufTensor to_puf(PrecisionTensor &t) {
+  return {.bytes = (char *)t.data,
+          .shape = {t.shape[0], t.shape[1], t.shape[2], t.shape[3]},
+          .dtype_size = PRECISION_SIZE};
+}
+
+inline PufTensor to_puf(const PrecisionTensor &t) {
+  return {.bytes = (char *)t.data,
+          .shape = {t.shape[0], t.shape[1], t.shape[2], t.shape[3]},
+          .dtype_size = PRECISION_SIZE};
 }
 
 // ============================================================================

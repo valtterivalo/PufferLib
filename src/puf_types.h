@@ -39,15 +39,6 @@ inline int64_t puf_batch_size(const int64_t* shape) {
     return b;
 }
 
-// PrecisionTensor: Metal uses void* (fp16 data handled as opaque bytes).
-// CUDA defines this in tensor.h with precision_t*.
-#ifndef __CUDACC__
-typedef struct {
-    void* data;
-    int64_t shape[PUF_MAX_DIMS];
-} PrecisionTensor;
-#endif
-
 using std::vector;
 
 // ============================================================================
@@ -63,7 +54,6 @@ typedef void *cudaStream_t;
 // ============================================================================
 
 constexpr bool USE_BF16 = false;
-constexpr int PRECISION_SIZE = 4; // bytes per element (Metal: always fp32)
 
 // ============================================================================
 // PufTensor — legacy runtime-typed tensor view (kept for transition code).
@@ -169,9 +159,9 @@ struct PrefixScan {
   void *state_ptr = nullptr;
   void *input_ptr = nullptr;
   int B = 0, T = 0, H = 0;
-  PufTensor a_star, s_vals, log_values_buf;
-  PufTensor out, next_state;
-  PufTensor grad_combined, grad_state, grad_input;
+  FloatTensor a_star, s_vals, log_values_buf;
+  PrecisionTensor out, next_state;
+  PrecisionTensor grad_combined, grad_state, grad_input;
 };
 
 // ============================================================================
@@ -257,20 +247,18 @@ struct Allocator {
 inline void alloc_register(Allocator *a, FloatTensor *t) {
   a->regs.push_back({(void **)&t->data, t->shape, (int)sizeof(float)});
 }
+// PrecisionTensor == FloatTensor on Metal, so no separate overload needed.
+// On CUDA, PrecisionTensor is a distinct type and needs its own overload.
+#ifdef __CUDACC__
 inline void alloc_register(Allocator *a, PrecisionTensor *t) {
   a->regs.push_back({(void **)&t->data, t->shape, PRECISION_SIZE});
 }
+#endif
 inline void alloc_register(Allocator *a, IntTensor *t) {
   a->regs.push_back({(void **)&t->data, t->shape, (int)sizeof(int)});
 }
 inline void alloc_register(Allocator *a, LongTensor *t) {
   a->regs.push_back({(void **)&t->data, t->shape, (int)sizeof(long)});
-}
-
-// PufTensor registration into typed regs (Metal weights use PufTensor but
-// need to appear in regs for Muon iteration, matching upstream's AllocEntry path)
-inline void alloc_register(Allocator *a, PufTensor *t) {
-  a->regs.push_back({(void **)&t->bytes, t->shape, t->dtype_size});
 }
 
 // Legacy PufTensor registration (for activations/grads not yet migrated)
@@ -424,25 +412,25 @@ typedef void (*reg_train_fn)(void *weights, void *buf, Allocator *acts,
                              Allocator *grads, int B_TT, int precision);
 typedef void (*reg_rollout_fn)(void *weights, void *buf, Allocator *alloc,
                                int B);
-typedef PufTensor (*forward_fn)(void *weights, void *activations,
-                                PufTensor input, cudaStream_t stream);
+typedef PrecisionTensor (*forward_fn)(void *weights, void *activations,
+                                      PrecisionTensor input, cudaStream_t stream);
 typedef void (*encoder_backward_fn)(void *weights, void *activations,
-                                    PufTensor grad, cudaStream_t stream);
-typedef PufTensor (*decoder_backward_fn)(void *weights, void *activations,
-                                         PufTensor grad_logits,
-                                         PufTensor grad_logstd,
-                                         PufTensor grad_value,
-                                         cudaStream_t stream);
-typedef PufTensor (*network_forward_fn)(void *weights, PufTensor x,
-                                        PufTensor state, void *activations,
-                                        cudaStream_t stream);
-typedef PufTensor (*network_forward_train_fn)(void *weights, PufTensor x,
-                                              PufTensor state,
-                                              void *activations,
+                                    PrecisionTensor grad, cudaStream_t stream);
+typedef PrecisionTensor (*decoder_backward_fn)(void *weights, void *activations,
+                                               FloatTensor grad_logits,
+                                               FloatTensor grad_logstd,
+                                               FloatTensor grad_value,
+                                               cudaStream_t stream);
+typedef PrecisionTensor (*network_forward_fn)(void *weights, PrecisionTensor x,
+                                              PrecisionTensor state, void *activations,
                                               cudaStream_t stream);
-typedef PufTensor (*network_backward_fn)(void *weights, PufTensor grad,
-                                         void *activations,
-                                         cudaStream_t stream);
+typedef PrecisionTensor (*network_forward_train_fn)(void *weights, PrecisionTensor x,
+                                                    PrecisionTensor state,
+                                                    void *activations,
+                                                    cudaStream_t stream);
+typedef PrecisionTensor (*network_backward_fn)(void *weights, PrecisionTensor grad,
+                                               void *activations,
+                                               cudaStream_t stream);
 
 struct Encoder {
   forward_fn forward;
@@ -478,50 +466,50 @@ struct Network {
 
 // Encoder: single linear projection (obs -> hidden), matching upstream CUDA
 struct EncoderWeights {
-  PufTensor weight; // (out_dim, in_dim)
+  PrecisionTensor weight; // (out_dim, in_dim)
   int in_dim, out_dim;
 };
 struct EncoderActivations {
-  PufTensor out;         // (B, out_dim)
-  PufTensor saved_input; // (B, in_dim) -- training only
-  PufTensor wgrad;       // (out_dim, in_dim) -- training only
+  PrecisionTensor out;         // (B, out_dim)
+  PrecisionTensor saved_input; // (B, in_dim) -- training only
+  PrecisionTensor wgrad;       // (out_dim, in_dim) -- training only
 };
 
 // Decoder: single linear projection (hidden -> logits+value).
 // Fused weight (od+1, H) registered with Muon -- value row participates in NS.
 struct DecoderWeights {
-  PufTensor weight;       // (output_dim+1, hidden_dim)
-  PufTensor logstd;       // continuous only: (1, output_dim)
+  PrecisionTensor weight;       // (output_dim+1, hidden_dim)
+  PrecisionTensor logstd;       // continuous only: (1, output_dim)
   int hidden_dim, output_dim;
   bool continuous;
 };
 struct DecoderActivations {
-  PufTensor out;            // (B, output_dim+1)
-  PufTensor grad_out;       // (B_TT, output_dim+1)
-  PufTensor saved_input;    // (B_TT, hidden_dim)
-  PufTensor grad_input;     // (B_TT, hidden_dim)
-  PufTensor wgrad;          // (output_dim+1, hidden_dim)
-  PufTensor logstd_scratch; // continuous: (1, output_dim)
+  PrecisionTensor out;            // (B, output_dim+1)
+  PrecisionTensor grad_out;       // (B_TT, output_dim+1)
+  PrecisionTensor saved_input;    // (B_TT, hidden_dim)
+  PrecisionTensor grad_input;     // (B_TT, hidden_dim)
+  PrecisionTensor wgrad;          // (output_dim+1, hidden_dim)
+  PrecisionTensor logstd_scratch; // continuous: (1, output_dim)
 };
 
 struct MinGRUActivations {
   int num_layers;
   // Rollout
-  vector<PufTensor> combined; // per-layer (B_inf, 3*H)
-  PufTensor out;              // (B_inf, H)
-  PufTensor next_state;       // (B_inf, H)
+  vector<PrecisionTensor> combined; // per-layer (B_inf, 3*H)
+  PrecisionTensor out;              // (B_inf, H)
+  PrecisionTensor next_state;       // (B_inf, H)
   // Training
-  vector<PufTensor> saved_inputs;  // per-layer (B, TT, H)
-  vector<PrefixScan> scan_bufs;    // per-layer scan state
-  vector<PufTensor> combined_bufs; // per-layer (B_TT, 3*H)
-  vector<PufTensor> wgrad_scratch; // per-layer (3*H, H) weight grad output
-  PufTensor grad_input_buf;        // (B_TT, H)
-  PufTensor grad_next_state;       // (B, 1, H)
+  vector<PrecisionTensor> saved_inputs;  // per-layer (B, TT, H)
+  vector<PrefixScan> scan_bufs;          // per-layer scan state
+  vector<PrecisionTensor> combined_bufs; // per-layer (B_TT, 3*H)
+  vector<PrecisionTensor> wgrad_scratch; // per-layer (3*H, H) weight grad output
+  PrecisionTensor grad_input_buf;        // (B_TT, H)
+  PrecisionTensor grad_next_state;       // (B, 1, H)
 };
 
 struct MinGRUWeights {
   int hidden, num_layers, horizon;
-  vector<PufTensor> weights;
+  vector<PrecisionTensor> weights;
 };
 
 // ============================================================================
@@ -547,40 +535,62 @@ struct PolicyWeights {
   void *network;
 };
 
-// Policy dispatch through vtable pointers (no platform deps)
-inline PufTensor policy_forward(Policy *p, PolicyWeights &w,
-                                PolicyActivations &activations, PufTensor obs,
-                                PufTensor state, cudaStream_t stream) {
-  PufTensor enc_out =
+// Policy dispatch through vtable pointers (no platform deps).
+// PrecisionTensor is FloatTensor on Metal (fp32 always).
+// puf_squeeze / puf_unsqueeze operate on PrecisionTensor* in-place (matching upstream).
+
+inline PrecisionTensor *puf_squeeze(PrecisionTensor *t, int dim) {
+  int n = puf_ndim(t->shape);
+  t->shape[dim + 1] *= t->shape[dim];
+  for (int i = dim; i < n - 1; i++) t->shape[i] = t->shape[i + 1];
+  t->shape[n - 1] = 0;
+  return t;
+}
+
+inline PrecisionTensor *puf_unsqueeze(PrecisionTensor *t, int dim, int64_t d0, int64_t d1) {
+  int n = puf_ndim(t->shape);
+  for (int i = n; i > dim; i--) t->shape[i] = t->shape[i - 1];
+  t->shape[dim] = d0;
+  t->shape[dim + 1] = d1;
+  return t;
+}
+
+inline PrecisionTensor policy_forward(Policy *p, PolicyWeights &w,
+                                      PolicyActivations &activations,
+                                      PrecisionTensor obs,
+                                      PrecisionTensor state,
+                                      cudaStream_t stream) {
+  PrecisionTensor enc_out =
       p->encoder.forward(w.encoder, activations.encoder, obs, stream);
-  PufTensor h = p->network.forward(w.network, enc_out, state,
-                                   activations.network, stream);
+  PrecisionTensor h = p->network.forward(w.network, enc_out, state,
+                                         activations.network, stream);
   return p->decoder.forward(w.decoder, activations.decoder, h, stream);
 }
 
-inline PufTensor policy_forward_train(Policy *p, PolicyWeights &w,
-                                      PolicyActivations &activations,
-                                      PufTensor x, PufTensor state,
-                                      cudaStream_t stream) {
+inline PrecisionTensor policy_forward_train(Policy *p, PolicyWeights &w,
+                                            PolicyActivations &activations,
+                                            PrecisionTensor x,
+                                            PrecisionTensor state,
+                                            cudaStream_t stream) {
   int B = x.shape[0], TT = x.shape[1];
-  PufTensor h =
-      p->encoder.forward(w.encoder, activations.encoder, x.squeeze(0), stream);
-  h = p->network.forward_train(w.network, h.unsqueeze(0, B, TT), state,
+  PrecisionTensor h =
+      p->encoder.forward(w.encoder, activations.encoder, *puf_squeeze(&x, 0), stream);
+  h = p->network.forward_train(w.network, *puf_unsqueeze(&h, 0, B, TT), state,
                                activations.network, stream);
-  PufTensor dec_out =
-      p->decoder.forward(w.decoder, activations.decoder, h.squeeze(0), stream);
-  return dec_out.unsqueeze(0, B, TT);
+  PrecisionTensor dec_out =
+      p->decoder.forward(w.decoder, activations.decoder, *puf_squeeze(&h, 0), stream);
+  return *puf_unsqueeze(&dec_out, 0, B, TT);
 }
 
 inline void policy_backward(Policy *p, PolicyWeights &w,
                             PolicyActivations &activations,
-                            PufTensor grad_logits, PufTensor grad_logstd,
-                            PufTensor grad_value, cudaStream_t stream) {
+                            FloatTensor grad_logits, FloatTensor grad_logstd,
+                            FloatTensor grad_value, cudaStream_t stream) {
   int B = grad_logits.shape[0], TT = grad_logits.shape[1];
-  PufTensor grad_h = p->decoder.backward(w.decoder, activations.decoder,
-                                         grad_logits.squeeze(0), grad_logstd,
-                                         grad_value.squeeze(0), stream);
-  grad_h = p->network.backward(w.network, grad_h.unsqueeze(0, B, TT),
+  PrecisionTensor grad_h = p->decoder.backward(w.decoder, activations.decoder,
+                                               *puf_squeeze(&grad_logits, 0), grad_logstd,
+                                               *puf_squeeze(&grad_value, 0), stream);
+  grad_h = p->network.backward(w.network, *puf_unsqueeze(&grad_h, 0, B, TT),
                                activations.network, stream);
   p->encoder.backward(w.encoder, activations.encoder, grad_h, stream);
 }
@@ -659,11 +669,9 @@ inline FloatTensor puf_slice(FloatTensor &p, int t, int start, int count) {
 }
 
 // Extract per-layer state view from (num_layers, B, H) state tensor
-inline PufTensor mingru_state_layer(MinGRUWeights *m, PufTensor &state, int i) {
+inline PrecisionTensor mingru_state_layer(MinGRUWeights *m, PrecisionTensor &state, int i) {
   int64_t B = state.shape[1], H = state.shape[2];
-  return {.bytes = state.bytes + i * B * H * state.dtype_size,
-          .shape = {B, H},
-          .dtype_size = state.dtype_size};
+  return {.data = state.data + i * B * H, .shape = {B, H}};
 }
 
 // Environment observation/action buffer

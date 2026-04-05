@@ -303,35 +303,35 @@ static void cpu_forward_and_sample(
 
     // --- Encoder ---
     EncoderActivations *ea = (EncoderActivations *)acts.encoder;
-    cpu_mm_nt((const float *)obs.bytes, (const float *)ew->weight.bytes,
-              (float *)ea->out.bytes, B, obs_dim, ew->out_dim);
-    float *layer_input = (float *)ea->out.bytes;
+    cpu_mm_nt((const float *)obs.bytes, ew->weight.data,
+              ea->out.data, B, obs_dim, ew->out_dim);
+    float *layer_input = ea->out.data;
 
     // --- MinGRU layers ---
     for (int i = 0; i < mw->num_layers; i++) {
         float *state_i = (float *)state.bytes + i * B * H;
         int input_K = H;
-        cpu_mm_nt(layer_input, (const float *)mw->weights[i].bytes,
-                  (float *)ma->combined[i].bytes, B, input_K, 3 * H);
+        cpu_mm_nt(layer_input, mw->weights[i].data,
+                  ma->combined[i].data, B, input_K, 3 * H);
 
-        cpu_mingru_gate((float *)ma->out.bytes, (float *)ma->next_state.bytes,
-                        (const float *)ma->combined[i].bytes,
+        cpu_mingru_gate(ma->out.data, ma->next_state.data,
+                        ma->combined[i].data,
                         state_i, layer_input, H, B);
 
         // Update RNN state
-        memcpy(state_i, ma->next_state.bytes, B * H * sizeof(float));
+        memcpy(state_i, ma->next_state.data, B * H * sizeof(float));
 
-        layer_input = (float *)ma->out.bytes;
+        layer_input = ma->out.data;
     }
 
     // --- Decoder ---
     int fused_cols = dw->output_dim + 1;
-    cpu_mm_nt(layer_input, (const float *)dw->weight.bytes,
-              (float *)da->out.bytes, B, H, fused_cols);
+    cpu_mm_nt(layer_input, dw->weight.data,
+              da->out.data, B, H, fused_cols);
 
     // --- Sampling ---
     cpu_sample_logits(
-        (const float *)da->out.bytes, fused_cols,
+        da->out.data, fused_cols,
         act_sizes_puf.data, (int)puf_numel(act_sizes_puf.shape),
         act_f32_buf.data, logprobs_out, values_out,
         action_mask, mask_stride,
