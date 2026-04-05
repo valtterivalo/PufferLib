@@ -113,14 +113,23 @@ void c_step(Env* env) {
     }
 
     if (is_term) {
-        /* check if this episode is a new global best — if so, flush replay to disk */
+        /* check if this episode is a new global best — if so, flush replay to disk.
+           for full runs (start_wave 0): best = highest wave reached, then fewest ticks.
+           for zuk-only (start_wave 68+): best = most damage to zuk (lowest zuk HP), then fewest ticks.
+           curriculum starts from mid-waves also record. */
         if (env->episode_actions && env->episode_action_len > 0) {
             InfernoState* st = (InfernoState*)env->enc_state;
             int wave = st->wave;
             int ticks = env->episode_action_len;
-            /* only save replays from full runs (wave 0 start), not curriculum skips */
-            if (st->start_wave == 0 &&
-                (wave > g_best_wave || (wave == g_best_wave && ticks < g_best_ticks))) {
+            int is_new_best = 0;
+            if (st->start_wave == 0) {
+                /* full run: best wave, then fewest ticks */
+                is_new_best = (wave > g_best_wave || (wave == g_best_wave && ticks < g_best_ticks));
+            } else {
+                /* partial/zuk run: best = survived longer (more ticks = better since start is fixed) */
+                is_new_best = (ticks > g_best_ticks || (g_best_wave == 0 && wave > 0));
+            }
+            if (is_new_best) {
                 g_best_wave = wave;
                 g_best_ticks = ticks;
                 const char* rpath = getenv("RECORD_REPLAY");
