@@ -2305,7 +2305,9 @@ static void inf_step(EncounterState* state, const int* actions) {
             s->killed_by_type[s->last_hit_by_type]++;
         s->episode_over = 1;
         s->winner = 1;
-        s->reward = inf_compute_reward(s);
+        /* terminal reward: override the per-tick reward already computed above.
+           do NOT call inf_compute_reward again (would double-count damage stats). */
+        s->reward = 0.0f;  /* player died */
         return;
     }
 
@@ -2320,6 +2322,7 @@ static void inf_step(EncounterState* state, const int* actions) {
         if (s->wave >= INF_NUM_WAVES) {
             s->episode_over = 1;
             s->winner = 0;
+            s->reward = 1.0f;  /* player won */
         } else {
             s->wave_spawn_delay = 5;
         }
