@@ -80,57 +80,63 @@ void c_step(Env* env) {
     env->term_staging = (unsigned char)is_term;
     env->terminals[0] = (float)is_term;
 
-    /* continuously update log with running stats so the sweep always has signal,
-       even mid-episode. vecenv clears env->log periodically via memset. */
-    {
+    /* terminal-only logging: accumulate completed episode stats into env->log.
+       vecenv polls with static_vec_log() which sums across agents, divides by
+       total n, then clears. this gives proper per-completed-episode averages
+       instead of noisy mid-episode snapshots. */
+    if (is_term) {
         InfernoState* s = (InfernoState*)env->enc_state;
-        env->log.episode_return = s->episode_return;
-        env->log.episode_length = (float)s->tick;
-        env->log.damage_dealt = s->total_damage_dealt;
-        env->log.damage_received = s->total_damage_received;
-        env->log.wins = (is_term && s->winner == 0) ? 1.0f : 0.0f;
-        env->log.wave = (float)s->wave;
-        env->log.prayer_correct = (float)s->total_prayer_correct;
-        env->log.prayer_total = (float)s->total_npc_attacks;
-        env->log.idle_ticks = (float)s->total_idle_ticks;
-        env->log.brews_used = (float)s->total_brews_used;
-        env->log.blood_healed = (float)s->total_blood_healed;
-        env->log.unavoidable_off_prayer = (float)s->total_unavoidable_off;
-        env->log.brews_remaining = (float)s->player.brew_doses;
-        env->log.restores_remaining = (float)s->player.restore_doses;
-        env->log.prayer_at_death = (float)s->player.current_prayer;
+
+        /* only count episodes that match the configured start_wave.
+           curriculum agents (overridden wave) are excluded from metrics. */
+        if (s->start_wave != env->config_start_wave) goto skip_log;
+
+        env->log.episode_return += s->episode_return;
+        env->log.episode_length += (float)s->tick;
+        env->log.damage_dealt += s->total_damage_dealt;
+        env->log.damage_received += s->total_damage_received;
+        env->log.wins += (s->winner == 0) ? 1.0f : 0.0f;
+        env->log.wave += (float)s->wave;
+        env->log.prayer_correct += (float)s->total_prayer_correct;
+        env->log.prayer_total += (float)s->total_npc_attacks;
+        env->log.idle_ticks += (float)s->total_idle_ticks;
+        env->log.brews_used += (float)s->total_brews_used;
+        env->log.blood_healed += (float)s->total_blood_healed;
+        env->log.unavoidable_off_prayer += (float)s->total_unavoidable_off;
+        env->log.brews_remaining += (float)s->player.brew_doses;
+        env->log.restores_remaining += (float)s->player.restore_doses;
+        env->log.prayer_at_death += (float)s->player.current_prayer;
+        env->log.npc_kills += (float)s->total_npc_kills;
+        env->log.gear_switches += (float)s->total_gear_switches;
+        env->log.current_ranged += (float)s->player.current_ranged;
+        env->log.current_magic += (float)s->player.current_magic;
+
         for (int t = 0; t < INF_NUM_NPC_TYPES; t++) {
-            env->log.prayer_correct_by_type[t] = (float)s->prayer_correct_by_type[t];
-            env->log.attacks_by_type[t] = (float)s->attacks_by_type[t];
-            env->log.dmg_from_type[t] = s->dmg_from_type[t];
-            env->log.killed_by_type[t] = (float)s->killed_by_type[t];
+            env->log.prayer_correct_by_type[t] += (float)s->prayer_correct_by_type[t];
+            env->log.attacks_by_type[t] += (float)s->attacks_by_type[t];
+            env->log.dmg_from_type[t] += s->dmg_from_type[t];
+            env->log.killed_by_type[t] += (float)s->killed_by_type[t];
         }
-        /* agents report to log if their start_wave matches the config's start_wave.
-           curriculum agents (overridden to a different wave) are excluded from metrics
-           so they don't pollute the sweep score. when training Zuk-only (config start_wave=69),
-           all agents start at 69 and all report. */
-        env->log.n = (s->start_wave == env->config_start_wave) ? 1.0f : 0.0f;
-        env->log.npc_kills = (float)s->total_npc_kills;
-        env->log.gear_switches = (float)s->total_gear_switches;
-        env->log.current_ranged = (float)s->player.current_ranged;
-        env->log.current_magic = (float)s->player.current_magic;
 
         /* Zuk shield tracking */
-        env->log.behind_shield_pct = (s->total_zuk_ticks > 0)
+        env->log.behind_shield_pct += (s->total_zuk_ticks > 0)
             ? (float)s->behind_shield_ticks / (float)s->total_zuk_ticks : 0.0f;
 
-        /* action noop rates */
+        /* action noop rates (per-episode ratios, averaged across episodes by aggregator) */
         float at = (float)s->action_total_count;
         if (at > 0.0f) {
-            env->log.noop_move   = (float)s->action_noop_count[0] / at;
-            env->log.noop_prayer = (float)s->action_noop_count[1] / at;
-            env->log.noop_target = (float)s->action_noop_count[2] / at;
-            env->log.noop_gear   = (float)s->action_noop_count[3] / at;
-            env->log.noop_eat    = (float)s->action_noop_count[4] / at;
-            env->log.noop_potion = (float)s->action_noop_count[5] / at;
-            env->log.noop_spell  = (float)s->action_noop_count[6] / at;
-            env->log.noop_spec   = (float)s->action_noop_count[7] / at;
+            env->log.noop_move   += (float)s->action_noop_count[0] / at;
+            env->log.noop_prayer += (float)s->action_noop_count[1] / at;
+            env->log.noop_target += (float)s->action_noop_count[2] / at;
+            env->log.noop_gear   += (float)s->action_noop_count[3] / at;
+            env->log.noop_eat    += (float)s->action_noop_count[4] / at;
+            env->log.noop_potion += (float)s->action_noop_count[5] / at;
+            env->log.noop_spell  += (float)s->action_noop_count[6] / at;
+            env->log.noop_spec   += (float)s->action_noop_count[7] / at;
         }
+
+        env->log.n += 1.0f;
+    skip_log:;
     }
 
     if (is_term) {
