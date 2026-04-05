@@ -55,12 +55,12 @@ void c_step(Env* env) {
 
     /* copy PVP log to wrapper log on episode end */
     if (env->ocean_term_staging) {
-        env->log.episode_return = env->pvp.log.episode_return;
-        env->log.episode_length = env->pvp.log.episode_length;
-        env->log.wins = env->pvp.log.wins;
-        env->log.damage_dealt = env->pvp.log.damage_dealt;
-        env->log.damage_received = env->pvp.log.damage_received;
-        env->log.n = env->pvp.log.n;
+        env->log.episode_return += env->pvp.log.episode_return;
+        env->log.episode_length += env->pvp.log.episode_length;
+        env->log.wins += env->pvp.log.wins;
+        env->log.damage_dealt += env->pvp.log.damage_dealt;
+        env->log.damage_received += env->pvp.log.damage_received;
+        env->log.n += env->pvp.log.n;
         memset(&env->pvp.log, 0, sizeof(env->pvp.log));
     }
 

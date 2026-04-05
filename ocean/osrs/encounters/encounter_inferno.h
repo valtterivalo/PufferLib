@@ -2204,6 +2204,7 @@ static void inf_step(EncounterState* state, const int* actions) {
         }
         /* player can still move/pray during delay */
         inf_tick_player(s, actions);
+        s->total_brews_used += s->brewed_this_tick;
         s->reward = inf_compute_reward(s);
         return;
     }
@@ -2255,38 +2256,6 @@ static void inf_step(EncounterState* state, const int* actions) {
         &s->player, s->player.prayer,
         &s->damage_received_this_tick, &s->prayer_correct_this_tick);
 
-    /* check player death */
-    if (s->player.current_hitpoints <= 0) {
-        if (s->last_hit_by_type >= 0 && s->last_hit_by_type < INF_NUM_NPC_TYPES)
-            s->killed_by_type[s->last_hit_by_type]++;
-        s->episode_over = 1;
-        s->winner = 1;
-        s->reward = inf_compute_reward(s);
-        return;
-    }
-
-    /* check wave completion */
-    int all_dead = 1;
-    for (int i = 0; i < INF_MAX_NPCS; i++) {
-        if (s->npcs[i].active) { all_dead = 0; break; }
-    }
-    if (all_dead) {
-        s->wave++;
-        s->wave_completed_this_tick = 1;
-        if (s->wave >= INF_NUM_WAVES) {
-            s->episode_over = 1;
-            s->winner = 0;
-        } else {
-            s->wave_spawn_delay = 5;
-        }
-    }
-
-    /* timeout */
-    if (s->tick >= INF_MAX_TICKS) {
-        s->episode_over = 1;
-        s->winner = 1;
-    }
-
     /* idle penalty counter: consecutive ticks where player could attack but didn't */
     {
         int has_alive_npc = 0;
@@ -2329,6 +2298,38 @@ static void inf_step(EncounterState* state, const int* actions) {
 
     s->reward = inf_compute_reward(s);
     s->episode_return += s->reward;
+
+    /* check player death */
+    if (s->player.current_hitpoints <= 0) {
+        if (s->last_hit_by_type >= 0 && s->last_hit_by_type < INF_NUM_NPC_TYPES)
+            s->killed_by_type[s->last_hit_by_type]++;
+        s->episode_over = 1;
+        s->winner = 1;
+        s->reward = inf_compute_reward(s);
+        return;
+    }
+
+    /* check wave completion */
+    int all_dead = 1;
+    for (int i = 0; i < INF_MAX_NPCS; i++) {
+        if (s->npcs[i].active) { all_dead = 0; break; }
+    }
+    if (all_dead) {
+        s->wave++;
+        s->wave_completed_this_tick = 1;
+        if (s->wave >= INF_NUM_WAVES) {
+            s->episode_over = 1;
+            s->winner = 0;
+        } else {
+            s->wave_spawn_delay = 5;
+        }
+    }
+
+    /* timeout */
+    if (s->tick >= INF_MAX_TICKS) {
+        s->episode_over = 1;
+        s->winner = 1;
+    }
 }
 
 /* ======================================================================== */
