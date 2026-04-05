@@ -53,7 +53,7 @@ int obs_dtype_size(int dtype) {
 
 StaticVec* create_environments(int num_buffers, int total_agents,
         const std::string& env_name, Dict* vec_kwargs, Dict* env_kwargs, EnvBuf& env) {
-    StaticVec* vec = create_static_vec(total_agents, num_buffers, vec_kwargs, env_kwargs);
+    StaticVec* vec = create_static_vec(total_agents, num_buffers, /*gpu=*/0, vec_kwargs, env_kwargs);
 
     int obs_size = get_obs_size();
     int num_atns = get_num_atns();

@@ -17,7 +17,10 @@
 extern "C" {
 #endif
 
-// Type constants
+#include "tensor.h"
+
+// Legacy OBS_TYPE constants (upstream 4.0 uses OBS_TENSOR_T instead, but our
+// Metal bindings still use OBS_TYPE). Kept for backward compat.
 #define FLOAT 1
 #define INT 2
 #define UNSIGNED_CHAR 3
@@ -72,7 +75,7 @@ static inline void dict_set(Dict* dict, const char* key, double value) {
     dict->size++;
 }
 
-// Forward declare CUDA stream type (guarded: puf_types.h may define it first)
+// Forward declare CUDA stream type (guarded: puf_types.h may define it first on Metal)
 #ifndef CUDA_STREAM_T_DEFINED
 typedef struct CUstream_st* cudaStream_t;
 #endif
@@ -101,6 +104,7 @@ typedef struct StaticVec {
     StaticThreading* threading;
     int obs_size;
     int num_atns;
+    int gpu;
 } StaticVec;
 
 // Callback types
@@ -115,10 +119,11 @@ enum EvalProfileIdx {
 };
 
 // Functions implemented by env's static library
-StaticVec* create_static_vec(int total_agents, int num_buffers, Dict* vec_kwargs, Dict* env_kwargs);
+StaticVec* create_static_vec(int total_agents, int num_buffers, int gpu, Dict* vec_kwargs, Dict* env_kwargs);
 void static_vec_reset(StaticVec* vec);
 void static_vec_close(StaticVec* vec);
 void static_vec_log(StaticVec* vec, Dict* out);
+void static_vec_eval_log(StaticVec* vec, Dict* out);
 void create_static_threads(StaticVec* vec, int num_threads, int horizon,
     void* ctx, net_callback_fn net_callback, thread_init_fn thread_init);
 void static_vec_omp_step(StaticVec* vec);
@@ -128,9 +133,17 @@ void static_vec_read_profile(StaticVec* vec, float out[NUM_EVAL_PROF]);
 
 // Env info
 int get_obs_size(void);
-int get_obs_type(void);
+int get_obs_type(void);  // legacy compat (Metal path)
 int get_num_atns(void);
 int* get_act_sizes(void);
+int get_num_act_sizes(void);
+const char* get_obs_dtype(void);
+size_t get_obs_elem_size(void);
+
+// Synchronous single-step
+void static_vec_step(StaticVec* vec);
+void gpu_vec_step(StaticVec* vec);
+void cpu_vec_step(StaticVec* vec);
 
 // Optional shared state functions
 void* my_shared(void* env, Dict* kwargs);
@@ -147,6 +160,31 @@ int my_put(void* env, Dict* kwargs);
 // ============================================================================
 
 #ifdef OBS_SIZE
+
+// Compat shim: derive OBS_TENSOR_T from legacy OBS_TYPE if not already defined.
+// Upstream 4.0 bindings define OBS_TENSOR_T directly; our Metal bindings still
+// use the old OBS_TYPE enum. This bridge keeps both working.
+#ifndef OBS_TENSOR_T
+  #if OBS_TYPE == FLOAT
+    #define OBS_TENSOR_T FloatTensor
+  #elif OBS_TYPE == UNSIGNED_CHAR
+    #define OBS_TENSOR_T ByteTensor
+  #elif OBS_TYPE == INT
+    #define OBS_TENSOR_T IntTensor
+  #else
+    #define OBS_TENSOR_T FloatTensor
+  #endif
+#endif
+
+static inline size_t obs_element_size(void) {
+    OBS_TENSOR_T t;
+    return sizeof(*t.data);
+}
+
+// Usually near the top, after any #includes
+#define _STRINGIFY(x)   #x
+#define  STRINGIFY(x)  _STRINGIFY(x)
+const char dtype_symbol[] = STRINGIFY(OBS_TENSOR_T);
 
 #include <omp.h>
 #include <stdatomic.h>
@@ -184,17 +222,6 @@ extern const char* cudaGetErrorString(cudaError_t);
 void my_init(Env* env, Dict* kwargs);
 void my_log(Log* log, Dict* out);
 
-// Helper to get observation element size based on OBS_TYPE
-static inline size_t obs_element_size(void) {
-    switch (OBS_TYPE) {
-        case FLOAT: return sizeof(float);
-        case INT: return sizeof(int);
-        case UNSIGNED_CHAR: return sizeof(unsigned char);
-        case DOUBLE: return sizeof(double);
-        case CHAR: return sizeof(char);
-        default: return sizeof(float);
-    }
-}
 
 struct StaticThreading {
     atomic_int shutdown;
@@ -204,12 +231,12 @@ struct StaticThreading {
     float* accum;  // [num_buffers * NUM_EVAL_PROF] per-buffer timing in ms
 #ifdef __APPLE__
     // dispatch_semaphore replaces spin-wait on buffer_states.
-    // each buffer has a "ready" semaphore (main→worker) and "done" semaphore (worker→main).
-    // this eliminates busy-wait CPU contention that caused 20-67% SPS variance.
-    dispatch_semaphore_t* buf_ready;  // main signals → worker wakes
-    dispatch_semaphore_t* buf_done;   // worker signals → main wakes
+    // each buffer has a "ready" semaphore (main->worker) and "done" semaphore (worker->main).
+    // this eliminates busy-wait CPU contention that caused 20-67% SPS variance on macOS.
+    dispatch_semaphore_t* buf_ready;  // main signals -> worker wakes
+    dispatch_semaphore_t* buf_done;   // worker signals -> main wakes
 #else
-    atomic_int* buffer_states;  // fallback for non-Apple platforms
+    atomic_int* buffer_states;  // spin-wait fallback for Linux/CUDA
 #endif
 };
 
@@ -259,7 +286,9 @@ static void* static_omp_threadmanager(void* arg) {
 #else
         atomic_int* buffer_states = threading->buffer_states;
         while (atomic_load(&buffer_states[buf]) != OMP_RUNNING) {
-            if (atomic_load(&threading->shutdown)) return NULL;
+            if (atomic_load(&threading->shutdown)) {
+                return NULL;
+            }
         }
 #endif
         cudaStream_t stream = vec->streams[buf];
@@ -280,14 +309,12 @@ static void* static_omp_threadmanager(void* arg) {
             clock_gettime(CLOCK_MONOTONIC, &t1);
             my_accum[EVAL_GPU] += (t1.tv_sec - t0.tv_sec) * 1000.0f + (t1.tv_nsec - t0.tv_nsec) / 1e6f;
 
+            memset(&vec->rewards[agent_start], 0, agents_per_buffer * sizeof(float));
+            memset(&vec->terminals[agent_start], 0, agents_per_buffer * sizeof(float));
             clock_gettime(CLOCK_MONOTONIC, &t0);
-            if (num_workers <= 1) {
-                for (int i = env_start; i < env_start + env_count; i++)
-                    c_step(&envs[i]);
-            } else {
-                #pragma omp parallel for schedule(static) num_threads(num_workers)
-                for (int i = env_start; i < env_start + env_count; i++)
-                    c_step(&envs[i]);
+            #pragma omp parallel for schedule(static) num_threads(num_workers)
+            for (int i = env_start; i < env_start + env_count; i++) {
+                c_step(&envs[i]);
             }
             clock_gettime(CLOCK_MONOTONIC, &t1);
             my_accum[EVAL_ENV_STEP] += (t1.tv_sec - t0.tv_sec) * 1000.0f + (t1.tv_nsec - t0.tv_nsec) / 1e6f;
@@ -350,7 +377,6 @@ void static_vec_seq_step(StaticVec* vec) {
 // Optional: Initialize all envs at once (for shared state, variable agents per env, etc.)
 // Default implementation creates envs until total_agents is reached
 #ifdef MY_VEC_INIT
-/* binding provides its own my_vec_init — just declare the prototype here */
 Env* my_vec_init(int* num_envs_out, int* buffer_env_starts, int* buffer_env_counts,
                  Dict* vec_kwargs, Dict* env_kwargs);
 #else
@@ -398,13 +424,22 @@ Env* my_vec_init(int* num_envs_out, int* buffer_env_starts, int* buffer_env_coun
 }
 #endif
 
-StaticVec* create_static_vec(int total_agents, int num_buffers, Dict* vec_kwargs, Dict* env_kwargs) {
+#ifdef MY_VEC_CLOSE
+void my_vec_close(Env* envs);
+#else
+void my_vec_close(Env* envs) {
+    return;
+}
+#endif
+
+StaticVec* create_static_vec(int total_agents, int num_buffers, int gpu, Dict* vec_kwargs, Dict* env_kwargs) {
     StaticVec* vec = (StaticVec*)calloc(1, sizeof(StaticVec));
     vec->total_agents = total_agents;
     vec->buffers = num_buffers;
     vec->agents_per_buffer = total_agents / num_buffers;
     vec->obs_size = OBS_SIZE;
     vec->num_atns = NUM_ATNS;
+    vec->gpu = gpu;
 
     vec->buffer_env_starts = (int*)calloc(num_buffers, sizeof(int));
     vec->buffer_env_counts = (int*)calloc(num_buffers, sizeof(int));
@@ -416,20 +451,32 @@ StaticVec* create_static_vec(int total_agents, int num_buffers, Dict* vec_kwargs
     vec->size = num_envs;
 
     size_t obs_elem_size = obs_element_size();
-    cudaHostAlloc((void**)&vec->observations, total_agents * OBS_SIZE * obs_elem_size, cudaHostAllocPortable);
-    cudaHostAlloc((void**)&vec->actions, total_agents * NUM_ATNS * sizeof(float), cudaHostAllocPortable);
-    cudaHostAlloc((void**)&vec->rewards, total_agents * sizeof(float), cudaHostAllocPortable);
-    cudaHostAlloc((void**)&vec->terminals, total_agents * sizeof(float), cudaHostAllocPortable);
+    if (gpu) {
+        cudaHostAlloc((void**)&vec->observations, total_agents * OBS_SIZE * obs_elem_size, cudaHostAllocPortable);
+        cudaHostAlloc((void**)&vec->actions, total_agents * NUM_ATNS * sizeof(float), cudaHostAllocPortable);
+        cudaHostAlloc((void**)&vec->rewards, total_agents * sizeof(float), cudaHostAllocPortable);
+        cudaHostAlloc((void**)&vec->terminals, total_agents * sizeof(float), cudaHostAllocPortable);
 
-    cudaMalloc((void**)&vec->gpu_observations, total_agents * OBS_SIZE * obs_elem_size);
-    cudaMalloc((void**)&vec->gpu_actions, total_agents * NUM_ATNS * sizeof(float));
-    cudaMalloc((void**)&vec->gpu_rewards, total_agents * sizeof(float));
-    cudaMalloc((void**)&vec->gpu_terminals, total_agents * sizeof(float));
+        cudaMalloc((void**)&vec->gpu_observations, total_agents * OBS_SIZE * obs_elem_size);
+        cudaMalloc((void**)&vec->gpu_actions, total_agents * NUM_ATNS * sizeof(float));
+        cudaMalloc((void**)&vec->gpu_rewards, total_agents * sizeof(float));
+        cudaMalloc((void**)&vec->gpu_terminals, total_agents * sizeof(float));
 
-    cudaMemset(vec->gpu_observations, 0, total_agents * OBS_SIZE * obs_elem_size);
-    cudaMemset(vec->gpu_actions, 0, total_agents * NUM_ATNS * sizeof(float));
-    cudaMemset(vec->gpu_rewards, 0, total_agents * sizeof(float));
-    cudaMemset(vec->gpu_terminals, 0, total_agents * sizeof(float));
+        cudaMemset(vec->gpu_observations, 0, total_agents * OBS_SIZE * obs_elem_size);
+        cudaMemset(vec->gpu_actions, 0, total_agents * NUM_ATNS * sizeof(float));
+        cudaMemset(vec->gpu_rewards, 0, total_agents * sizeof(float));
+        cudaMemset(vec->gpu_terminals, 0, total_agents * sizeof(float));
+    } else {
+        vec->observations = calloc(total_agents * OBS_SIZE, obs_elem_size);
+        vec->actions = (float*)calloc(total_agents * NUM_ATNS, sizeof(float));
+        vec->rewards = (float*)calloc(total_agents, sizeof(float));
+        vec->terminals = (float*)calloc(total_agents, sizeof(float));
+        // CPU mode: gpu pointers alias the same buffers (no copy needed)
+        vec->gpu_observations = vec->observations;
+        vec->gpu_actions = vec->actions;
+        vec->gpu_rewards = vec->rewards;
+        vec->gpu_terminals = vec->terminals;
+    }
 
     // Streams allocated here, created in create_static_threads
     vec->streams = (cudaStream_t*)calloc(num_buffers, sizeof(cudaStream_t));
@@ -461,13 +508,16 @@ void static_vec_reset(StaticVec* vec) {
     for (int i = 0; i < vec->size; i++) {
         c_reset(&envs[i]);
     }
-    cudaMemcpy(vec->gpu_observations, vec->observations,
-        vec->total_agents * OBS_SIZE * obs_element_size(), cudaMemcpyHostToDevice);
-    cudaMemcpy(vec->gpu_rewards, vec->rewards,
-        vec->total_agents * sizeof(float), cudaMemcpyHostToDevice);
-    cudaMemcpy(vec->gpu_terminals, vec->terminals,
-        vec->total_agents * sizeof(float), cudaMemcpyHostToDevice);
-    cudaDeviceSynchronize();
+    if (vec->gpu) {
+        cudaMemcpy(vec->gpu_observations, vec->observations,
+            vec->total_agents * OBS_SIZE * obs_element_size(), cudaMemcpyHostToDevice);
+        cudaMemset(vec->gpu_rewards,   0, vec->total_agents * sizeof(float));
+        cudaMemset(vec->gpu_terminals, 0, vec->total_agents * sizeof(float));
+        cudaDeviceSynchronize();
+    } else {
+        memset(vec->rewards, 0, vec->total_agents * sizeof(float));
+        memset(vec->terminals, 0, vec->total_agents * sizeof(float));
+    }
 }
 
 void create_static_threads(StaticVec* vec, int num_threads, int horizon,
@@ -506,59 +556,67 @@ void create_static_threads(StaticVec* vec, int num_threads, int horizon,
 void static_vec_close(StaticVec* vec) {
     Env* envs = (Env*)vec->envs;
 
-    // Signal threads to stop.
-    atomic_store(&vec->threading->shutdown, 1);
+    if (vec->threading != NULL) {
+        atomic_store(&vec->threading->shutdown, 1);
 #ifdef __APPLE__
-    // Wake all waiting workers so they can check shutdown flag and exit.
-    for (int i = 0; i < vec->buffers; i++)
-        dispatch_semaphore_signal(vec->threading->buf_ready[i]);
+        // Wake all waiting workers so they can check shutdown flag and exit.
+        for (int i = 0; i < vec->buffers; i++)
+            dispatch_semaphore_signal(vec->threading->buf_ready[i]);
 #endif
-    for (int i = 0; i < vec->buffers; i++)
-        pthread_join(vec->threading->threads[i], NULL);
-#ifdef __APPLE__
-    for (int i = 0; i < vec->buffers; i++) {
-        dispatch_release(vec->threading->buf_ready[i]);
-        dispatch_release(vec->threading->buf_done[i]);
+        for (int i = 0; i < vec->buffers; i++) {
+            pthread_join(vec->threading->threads[i], NULL);
+        }
     }
-    free(vec->threading->buf_ready);
-    free(vec->threading->buf_done);
-#else
-    free(vec->threading->buffer_states);
-#endif
 
     for (int i = 0; i < vec->size; i++) {
         Env* env = &envs[i];
         c_close(env);
     }
 
+    my_vec_close(envs);
     free(vec->envs);
-    free(vec->threading->threads);
-    free(vec->threading->accum);
-    free(vec->threading);
+    if (vec->threading != NULL) {
+#ifdef __APPLE__
+        for (int i = 0; i < vec->buffers; i++) {
+            dispatch_release(vec->threading->buf_ready[i]);
+            dispatch_release(vec->threading->buf_done[i]);
+        }
+        free(vec->threading->buf_ready);
+        free(vec->threading->buf_done);
+#else
+        free(vec->threading->buffer_states);
+#endif
+        free(vec->threading->threads);
+        free(vec->threading->accum);
+        free(vec->threading);
+    }
     free(vec->buffer_env_starts);
     free(vec->buffer_env_counts);
 
-    cudaDeviceSynchronize();
-    size_t obs_bytes = vec->total_agents * OBS_SIZE * obs_element_size();
-    size_t act_bytes = vec->total_agents * NUM_ATNS * sizeof(float);
-    size_t rew_bytes = vec->total_agents * sizeof(float);
-    size_t term_bytes = vec->total_agents * sizeof(float);
-    cudaFree(vec->gpu_observations);
-    cudaFree(vec->gpu_actions);
-    cudaFree(vec->gpu_rewards);
-    cudaFree(vec->gpu_terminals);
-    cudaFreeHost(vec->observations);
-    cudaFreeHost(vec->actions);
-    cudaFreeHost(vec->rewards);
-    cudaFreeHost(vec->terminals);
+    if (vec->gpu) {
+        cudaDeviceSynchronize();
+        cudaFree(vec->gpu_observations);
+        cudaFree(vec->gpu_actions);
+        cudaFree(vec->gpu_rewards);
+        cudaFree(vec->gpu_terminals);
+        cudaFreeHost(vec->observations);
+        cudaFreeHost(vec->actions);
+        cudaFreeHost(vec->rewards);
+        cudaFreeHost(vec->terminals);
+    } else {
+        free(vec->observations);
+        free(vec->actions);
+        free(vec->rewards);
+        free(vec->terminals);
+    }
 
     free(vec->streams);
     free(vec);
 }
 
-void static_vec_log(StaticVec* vec, Dict* out) {
+static inline float static_vec_aggregate_logs(StaticVec* vec, Log* out) {
     Env* envs = (Env*)vec->envs;
-    Log aggregate = {0};
+    memset(out, 0, sizeof(Log));
     int num_keys = sizeof(Log) / sizeof(float);
     for (int i = 0; i < vec->size; i++) {
         Env* env = &envs[i];
@@ -566,16 +624,38 @@ void static_vec_log(StaticVec* vec, Dict* out) {
             continue;
         }
         for (int j = 0; j < num_keys; j++) {
-            ((float*)&aggregate)[j] += ((float*)&env->log)[j];
+            ((float*)out)[j] += ((float*)&env->log)[j];
         }
-        memset(&env->log, 0, sizeof(Log));
     }
-    float n = aggregate.n;
+    float n = out->n;
     if (n == 0.0f) {
-        return;
+        return 0;
     }
     for (int i = 0; i < num_keys; i++) {
-        ((float*)&aggregate)[i] /= n;
+        ((float*)out)[i] /= n;
+    }
+    return n;
+}
+
+void static_vec_log(StaticVec* vec, Dict* out) {
+    Env* envs = (Env*)vec->envs;
+    Log aggregate;
+    float n = static_vec_aggregate_logs(vec, &aggregate);
+    if (n == 0) {
+        return;
+    }
+    for (int i = 0; i < vec->size; i++) {
+        memset(&envs[i].log, 0, sizeof(Log));
+    }
+    my_log(&aggregate, out);
+    dict_set(out, "n", n);
+}
+
+void static_vec_eval_log(StaticVec* vec, Dict* out) {
+    Log aggregate;
+    float n = static_vec_aggregate_logs(vec, &aggregate);
+    if (n == 0) {
+        return;
     }
     my_log(&aggregate, out);
     dict_set(out, "n", n);
@@ -603,10 +683,52 @@ void static_vec_render(StaticVec* vec, int env_id) {
 }
 
 int get_obs_size(void) { return OBS_SIZE; }
-int get_obs_type(void) { return OBS_TYPE; }
+#ifdef OBS_TYPE
+int get_obs_type(void) { return OBS_TYPE; }  // legacy compat (Metal path)
+#else
+int get_obs_type(void) { return FLOAT; }
+#endif
 int get_num_atns(void) { return NUM_ATNS; }
 static int _act_sizes[] = ACT_SIZES;
 int* get_act_sizes(void) { return _act_sizes; }
+int get_num_act_sizes(void) { return (int)(sizeof(_act_sizes) / sizeof(_act_sizes[0])); }
+const char* get_obs_dtype(void) { return dtype_symbol; }
+size_t get_obs_elem_size(void) { return obs_element_size(); }
+
+static inline void _static_vec_env_step(StaticVec* vec) {
+    memset(vec->rewards, 0, vec->total_agents * sizeof(float));
+    memset(vec->terminals, 0, vec->total_agents * sizeof(float));
+    Env* envs = (Env*)vec->envs;
+    #pragma omp parallel for schedule(static)
+    for (int i = 0; i < vec->size; i++) {
+        c_step(&envs[i]);
+    }
+}
+
+void gpu_vec_step(StaticVec* vec) {
+    assert(vec->buffers == 1);
+    cudaMemcpy(vec->actions, vec->gpu_actions,
+        (size_t)vec->total_agents * NUM_ATNS * sizeof(float),
+        cudaMemcpyDeviceToHost);
+    _static_vec_env_step(vec);
+    cudaMemcpy(vec->gpu_observations, vec->observations,
+        (size_t)vec->total_agents * OBS_SIZE * obs_element_size(),
+        cudaMemcpyHostToDevice);
+    cudaMemcpy(vec->gpu_rewards, vec->rewards,
+        vec->total_agents * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(vec->gpu_terminals, vec->terminals,
+        vec->total_agents * sizeof(float), cudaMemcpyHostToDevice);
+}
+
+void cpu_vec_step(StaticVec* vec) {
+    assert(vec->buffers == 1);
+    _static_vec_env_step(vec);
+}
+
+void static_vec_step(StaticVec* vec) {
+    if (vec->gpu) gpu_vec_step(vec);
+    else cpu_vec_step(vec);
+}
 
 // Optional shared state functions - default implementations
 #ifndef MY_SHARED

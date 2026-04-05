@@ -19,6 +19,35 @@
 
 #include "tensor.h"
 
+// Shape utility functions (upstream has these in kernels.cu; Metal needs them here)
+inline int puf_ndim(const int64_t* shape) {
+    int n = 0;
+    while (n < PUF_MAX_DIMS && shape[n] != 0) n++;
+    return n;
+}
+
+inline int64_t puf_numel(const int64_t* shape) {
+    int64_t n = 1;
+    for (int i = 0; i < PUF_MAX_DIMS && shape[i] != 0; i++) n *= shape[i];
+    return n;
+}
+
+inline int64_t puf_batch_size(const int64_t* shape) {
+    int n = puf_ndim(shape);
+    int64_t b = 1;
+    for (int i = 0; i < n - 2; i++) b *= shape[i];
+    return b;
+}
+
+// PrecisionTensor: Metal uses void* (fp16 data handled as opaque bytes).
+// CUDA defines this in tensor.h with precision_t*.
+#ifndef __CUDACC__
+typedef struct {
+    void* data;
+    int64_t shape[PUF_MAX_DIMS];
+} PrecisionTensor;
+#endif
+
 using std::vector;
 
 // ============================================================================
