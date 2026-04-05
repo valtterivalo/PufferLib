@@ -108,11 +108,14 @@ typedef struct {
     float prio_alpha;
     float prio_beta0;
     // Flags
+    bool reset_state;
     bool profile;
     bool overlap;  // async training overlap: train on separate GPU queue
     bool cpu_inference;  // CPU forward pass during rollout (no GPU sync)
     bool train_fp16;     // fp16 activations/grads during training (rollout stays fp32)
     int ns_iters;        // Newton-Schulz iterations in muon optimizer (1-5, default 5)
+    // Single GPU (Metal has no multi-GPU, but kept for upstream compat)
+    int gpu_id;
     // Threading
     int num_threads;
     // RNG seed
@@ -568,7 +571,7 @@ void train_impl(PuffeRL& pufferl) {
         if (gpu_profile) mtl_ensure_stream_synced(s);
         uint64_t tp2 = mach_absolute_time();
 
-        puf_zero(pufferl.train_buf.mb_state, s);
+        if (hypers.reset_state) puf_zero(pufferl.train_buf.mb_state, s);
         {
             RolloutBuf sel_src = rollouts;
             sel_src.values = pufferl.old_values_puf;
@@ -603,7 +606,7 @@ void train_impl(PuffeRL& pufferl) {
         PolicyWeights& train_weights = pufferl.train_fp16 ? pufferl.weights_fp16 : pufferl.weights_fp32;
         PufTensor obs_puf = pufferl.train_fp16 ? pufferl.fp16_obs_buf : pufferl.train_buf.mb_obs;
         PufTensor state_puf = pufferl.train_fp16 ? pufferl.fp16_state_buf : pufferl.train_buf.mb_state;
-        if (pufferl.train_fp16) puf_zero(pufferl.fp16_state_buf, s);
+        if (pufferl.train_fp16 && hypers.reset_state) puf_zero(pufferl.fp16_state_buf, s);
 
         PufTensor dec_puf = policy_forward_train(pufferl.policy, train_weights,
             pufferl.train_activations, obs_puf, state_puf, s);

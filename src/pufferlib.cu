@@ -136,15 +136,18 @@ typedef struct {
     float prio_beta0;
     // Flags
     bool use_rnn;
+    bool reset_state;
     int cudagraphs;  // epoch at which to capture graph, -1 to disable
     bool kernels;
     bool profile;
     // Multi-GPU
     int rank;
     int world_size;
-    std::string nccl_id_path;
+    int gpu_id;
+    std::string nccl_id;  // raw bytes of ncclUniqueId (empty for single-GPU)
     // Threading
     int num_threads;
+    int seed;
 } HypersT;
 
 enum ProfileIdx {
@@ -478,7 +481,7 @@ void train_impl(PuffeRL& pufferl) {
         profile_end(hypers.profile);
 
         profile_begin("train_select_and_copy", hypers.profile);
-        puf_zero(graph.mb_state, train_stream);
+        if (hypers.reset_state) puf_zero(graph.mb_state, train_stream);
         {
             // Build a RolloutBuf view with old_values and advantages swapped in
             RolloutBuf sel_src = rollouts;
@@ -615,40 +618,21 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     auto pufferl = std::make_unique<PuffeRL>();
     pufferl->hypers = hypers;
     pufferl->nccl_comm = nullptr;
+    pufferl->default_stream = 0;
 
-    // Multi-GPU: initialize NCCL (device already set by Python)
+    cudaSetDevice(hypers.gpu_id);
+
+    // Multi-GPU: initialize NCCL
     if (hypers.world_size > 1) {
+        if (hypers.nccl_id.size() != sizeof(ncclUniqueId))
+            throw std::runtime_error("nccl_id must be " + std::to_string(sizeof(ncclUniqueId)) + " bytes");
         ncclUniqueId nccl_id;
-        if (hypers.rank == 0) {
-            ncclGetUniqueId(&nccl_id);
-            FILE* f = fopen(hypers.nccl_id_path.c_str(), "wb");
-            fwrite(&nccl_id, sizeof(nccl_id), 1, f);
-            fclose(f);
-        }
-        // Wait for rank 0 to write the ID file
-        while (access(hypers.nccl_id_path.c_str(), F_OK) != 0) {
-            usleep(10000);  // 10ms
-        }
-        if (hypers.rank != 0) {
-            // Small delay to ensure file is fully written
-            usleep(50000);
-            FILE* f = fopen(hypers.nccl_id_path.c_str(), "rb");
-            if (fread(&nccl_id, sizeof(nccl_id), 1, f) != 1) {
-                fclose(f);
-                throw std::runtime_error("Failed to read NCCL ID file");
-            }
-            fclose(f);
-        }
-
+        memcpy(&nccl_id, hypers.nccl_id.data(), sizeof(nccl_id));
         ncclCommInitRank(&pufferl->nccl_comm, hypers.world_size, nccl_id, hypers.rank);
         printf("Rank %d/%d: NCCL initialized\n", hypers.rank, hypers.world_size);
     }
 
-    // Use CUDA default stream (stream 0) for main-thread work
-    pufferl->default_stream = 0;
-
-    // TODO: Base seed should come from train config
-    int seed = 42 + hypers.rank;
+    uint64_t seed = hypers.seed + hypers.rank;
     pufferl->rng_seed = seed;
 
     // Load environment first to get input_size and action info from env
@@ -767,10 +751,10 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
 
     // Init weights on fp32 master
     {
-        uint64_t seed = 42;
-        encoder.init_weights(wfp32.encoder, &seed, pufferl->default_stream);
-        decoder.init_weights(wfp32.decoder, &seed, pufferl->default_stream);
-        network.init_weights(wfp32.network, &seed, pufferl->default_stream);
+        uint64_t init_seed = hypers.seed;
+        encoder.init_weights(wfp32.encoder, &init_seed, pufferl->default_stream);
+        decoder.init_weights(wfp32.decoder, &init_seed, pufferl->default_stream);
+        network.init_weights(wfp32.network, &init_seed, pufferl->default_stream);
     }
 
     // ========================================================================

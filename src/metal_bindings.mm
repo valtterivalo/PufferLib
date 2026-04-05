@@ -487,12 +487,14 @@ std::unique_ptr<PuffeRL> create_pufferl(pybind11::dict kwargs,
     hypers.prio_alpha = get_config(kwargs, "prio_alpha");
     hypers.prio_beta0 = get_config(kwargs, "prio_beta0");
     // Flags
+    hypers.reset_state = kwargs.contains("reset_state") && get_config(kwargs, "reset_state") > 0;
     hypers.profile = get_config(kwargs, "profile");
     mtl_enable_gpu_timing(hypers.profile);
     hypers.overlap = kwargs.contains("overlap") && get_config(kwargs, "overlap") > 0;
     hypers.cpu_inference = kwargs.contains("cpu_inference") && get_config(kwargs, "cpu_inference") > 0;
     hypers.train_fp16 = kwargs.contains("train_fp16") && get_config(kwargs, "train_fp16") > 0;
     hypers.ns_iters = kwargs.contains("ns_iters") ? (int)get_config(kwargs, "ns_iters") : 5;
+    hypers.gpu_id = kwargs.contains("gpu_id") ? (int)get_config(kwargs, "gpu_id") : 0;
 
     std::string env_name = kwargs["env_name"].cast<std::string>();
     Dict* vec_dict = py_dict_to_c_dict(vec_kwargs.cast<py::dict>());
@@ -554,10 +556,12 @@ PYBIND11_MODULE(_C, m) {
         .def_readwrite("vtrace_c_clip", &HypersT::vtrace_c_clip)
         .def_readwrite("prio_alpha", &HypersT::prio_alpha)
         .def_readwrite("prio_beta0", &HypersT::prio_beta0)
+        .def_readwrite("reset_state", &HypersT::reset_state)
         .def_readwrite("profile", &HypersT::profile)
         .def_readwrite("overlap", &HypersT::overlap)
         .def_readwrite("train_fp16", &HypersT::train_fp16)
-        .def_readwrite("ns_iters", &HypersT::ns_iters);
+        .def_readwrite("ns_iters", &HypersT::ns_iters)
+        .def_readwrite("gpu_id", &HypersT::gpu_id);
 
     py::class_<PufTensor>(m, "PufTensor")
         .def("__repr__", &PufTensor::repr)
