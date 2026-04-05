@@ -1215,10 +1215,10 @@ void muon_init(Muon *m, Allocator *param_alloc, FloatTensor weight_buffer,
   alloc_register(&alloc, &m->up_puf);
 
   int64_t max_M = 0, max_N = 0;
-  for (auto *t : param_alloc->legacy_regs) {
-    int nd = puf_ndim(t->shape);
+  for (auto &e : param_alloc->regs) {
+    int nd = puf_ndim(e.shape);
     if (nd >= 2) {
-      int64_t R = t->shape[0], C = puf_numel(t->shape) / R;
+      int64_t R = e.shape[0], C = puf_numel(e.shape) / R;
       max_M = std::max(max_M, std::min(R, C));
       max_N = std::max(max_N, std::max(R, C));
     }
@@ -1258,14 +1258,14 @@ void muon_step(Muon *m, cudaStream_t stream) {
   mtl_barrier(ms);
 
   int64_t offset = 0;
-  for (auto *t : m->param_alloc->legacy_regs) {
+  for (auto &e : m->param_alloc->regs) {
     float *gc_ptr = m->gc_puf.data + offset;
     float *up_ptr = m->up_puf.data + offset;
-    int64_t R = t->shape[0];
-    int64_t C = puf_numel(t->shape) / std::max<int64_t>(1, R);
+    int64_t R = e.shape[0];
+    int64_t C = puf_numel(e.shape) / std::max<int64_t>(1, R);
     // NS orthogonalization for 2D+ params with M >= 2.
     // 1-row tensors (e.g. value weight) use direct gradient update.
-    if (puf_ndim(t->shape) >= 2 && std::min(R, C) >= 2) {
+    if (puf_ndim(e.shape) >= 2 && std::min(R, C) >= 2) {
       bool transposed_flag = R > C;
       int64_t M = transposed_flag ? C : R;
       int64_t N = transposed_flag ? R : C;
@@ -1345,7 +1345,7 @@ void muon_step(Muon *m, cudaStream_t stream) {
       mtl_barrier(ms);
     } else {
       // 1D and tiny matrix params: use direct gradient update.
-      int64_t n = t->numel();
+      int64_t n = puf_numel(e.shape);
       PufTensor src_puf = {.bytes = (char *)gc_ptr,
                            .shape = {n},
                            .dtype_size = 4};
@@ -1355,7 +1355,7 @@ void muon_step(Muon *m, cudaStream_t stream) {
       puf_copy(dst_puf, src_puf, stream);
       mtl_barrier(ms);
     }
-    offset += t->numel();
+    offset += puf_numel(e.shape);
   }
 
   // Apply weight update: w -= lr * up
@@ -1400,7 +1400,7 @@ static void encoder_init_weights(void *w, uint64_t *seed,
 static void encoder_reg_params(void *w, Allocator *alloc, int esz) {
   EncoderWeights *ew = (EncoderWeights *)w;
   ew->weight = {.shape = {ew->out_dim, ew->in_dim}, .dtype_size = esz};
-  alloc_register_legacy(alloc, &ew->weight);
+  alloc_register(alloc, &ew->weight);
 }
 
 static void encoder_reg_train(void *w, void *activations,
@@ -1495,10 +1495,10 @@ static void decoder_reg_params(void *w, Allocator *alloc, int esz) {
   int od = dw->output_dim;
   int H = dw->hidden_dim;
   dw->weight = {.shape = {od + 1, H}, .dtype_size = esz};
-  alloc_register_legacy(alloc, &dw->weight);
+  alloc_register(alloc, &dw->weight);
   if (dw->continuous) {
     dw->logstd = {.shape = {1, od}, .dtype_size = esz};
-    alloc_register_legacy(alloc, &dw->logstd);
+    alloc_register(alloc, &dw->logstd);
   }
 }
 
@@ -1555,7 +1555,7 @@ static void mingru_reg_params(void *w, Allocator *alloc, int esz) {
   MinGRUWeights *m = (MinGRUWeights *)w;
   for (int i = 0; i < m->num_layers; i++) {
     m->weights[i] = {.shape = {3 * m->hidden, m->hidden}, .dtype_size = esz};
-    alloc_register_legacy(alloc, &m->weights[i]);
+    alloc_register(alloc, &m->weights[i]);
   }
 }
 

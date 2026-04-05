@@ -267,7 +267,13 @@ inline void alloc_register(Allocator *a, LongTensor *t) {
   a->regs.push_back({(void **)&t->data, t->shape, (int)sizeof(long)});
 }
 
-// Legacy PufTensor registration (for code not yet migrated)
+// PufTensor registration into typed regs (Metal weights use PufTensor but
+// need to appear in regs for Muon iteration, matching upstream's AllocEntry path)
+inline void alloc_register(Allocator *a, PufTensor *t) {
+  a->regs.push_back({(void **)&t->bytes, t->shape, t->dtype_size});
+}
+
+// Legacy PufTensor registration (for activations/grads not yet migrated)
 inline void alloc_register_legacy(Allocator *a, PufTensor *t) {
   a->legacy_regs.push_back(t);
 }

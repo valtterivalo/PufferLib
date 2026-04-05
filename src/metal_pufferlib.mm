@@ -717,6 +717,13 @@ void train_impl(PuffeRL& pufferl) {
 
         mtl_barrier((MetalStream*)s);
 
+        // Scatter mb_ratio and mb_newvalue back into rollout buffers so
+        // subsequent minibatches see updated importance weights and values.
+        // Matches CUDA upstream (pufferlib.cu:1416-1428).
+        mtl_scatter_ppo_outputs(pufferl.train_buf, rollouts,
+            (const int64_t*)pufferl.prio_bufs.idx.data, s);
+        mtl_barrier((MetalStream*)s);
+
         if (gpu_profile) mtl_ensure_stream_synced(s);
         uint64_t tp9 = mach_absolute_time();
 
