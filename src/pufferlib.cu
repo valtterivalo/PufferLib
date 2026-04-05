@@ -111,10 +111,8 @@ typedef struct {
     float lr;
     float min_lr_ratio;
     bool anneal_lr;
-    // Optimizer
+    // Optimizer (Muon only — Adam removed)
     float beta1;
-    float beta2;
-    float eps;
     // Training
     int minibatch_size;
     float replay_ratio;
@@ -135,10 +133,8 @@ typedef struct {
     float prio_alpha;
     float prio_beta0;
     // Flags
-    bool use_rnn;
     bool reset_state;
     int cudagraphs;  // epoch at which to capture graph, -1 to disable
-    bool kernels;
     bool profile;
     // Multi-GPU
     int rank;
@@ -462,7 +458,7 @@ void train_impl(PuffeRL& pufferl) {
 
     for (int mb = 0; mb < total_minibatches; ++mb) {
         cudaEventRecord(pufferl.profile.events[2]);  // start of misc (overwritten each iter)
-        puf_zero(advantages_puf, train_stream);
+        puf_zero(&advantages_puf, train_stream);
 
         profile_begin("compute_advantage", hypers.profile);
         puff_advantage_cuda(rollouts.values, rollouts.rewards, rollouts.terminals,
@@ -481,7 +477,7 @@ void train_impl(PuffeRL& pufferl) {
         profile_end(hypers.profile);
 
         profile_begin("train_select_and_copy", hypers.profile);
-        if (hypers.reset_state) puf_zero(graph.mb_state, train_stream);
+        if (hypers.reset_state) puf_zero(&graph.mb_state, train_stream);
         {
             // Build a RolloutBuf view with old_values and advantages swapped in
             RolloutBuf sel_src = rollouts;
@@ -679,8 +675,6 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     int input_size = pufferl->env.obs.shape[1];
     int hidden_size = hypers.hidden_size;
     int num_layers = hypers.num_layers;
-    bool kernels = hypers.kernels;
-
     // Decoder output size: discrete = act_n (sum of action sizes), continuous = num_action_heads
     bool is_continuous = pufferl->is_continuous;
     int decoder_output_size = is_continuous ? num_action_heads : act_n;
@@ -820,7 +814,6 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
 
     float lr = hypers.lr;
     float beta1 = hypers.beta1;
-    float eps = hypers.eps;
     pufferl->muon = new Muon{};
     printf("DEBUG: Contiguous weight buffer: %ld elements\n", pufferl->muon->wb_puf.numel());
 
@@ -879,7 +872,7 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
 
     // Muon optimizer (init + register buffers)
     muon_init(pufferl->muon, &fp32_params,
-        pufferl->param_fp32_puf, lr, beta1, eps, 0.0, 5, alloc);
+        pufferl->param_fp32_puf, lr, beta1, 0.0, 5, alloc);
     pufferl->muon->nccl_comm = pufferl->nccl_comm;
     pufferl->muon->world_size = hypers.world_size;
     printf("DEBUG: Contiguous weight buffer: %ld elements\n", pufferl->muon->wb_puf.numel());

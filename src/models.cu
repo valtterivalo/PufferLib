@@ -511,8 +511,8 @@ void puf_copy(PufTensor& dst, const PufTensor& src, cudaStream_t stream) {
     cudaMemcpyAsync(dst.bytes, src.bytes, dst.numel() * dst.dtype_size, cudaMemcpyDeviceToDevice, stream);
 }
 
-void puf_zero(PufTensor& dst, cudaStream_t stream) {
-    cudaMemsetAsync(dst.bytes, 0, dst.numel() * dst.dtype_size, stream);
+void puf_zero(PufTensor* dst, cudaStream_t stream) {
+    cudaMemsetAsync(dst->bytes, 0, dst->numel() * dst->dtype_size, stream);
 }
 
 void puf_add(PufTensor& dst, const PufTensor& src, cudaStream_t stream) {
@@ -998,7 +998,7 @@ static PufTensor mingru_forward_train(void* w, PufTensor x, PufTensor state, voi
         a->scan_bufs[i].combined_ptr = a->combined_bufs[i].bytes;
         a->scan_bufs[i].state_ptr = state_i.bytes;
         a->scan_bufs[i].input_ptr = a->saved_inputs[i].bytes;
-        fused_scan_forward<<<grid_size(B*m->hidden), BLOCK_SIZE, 0, stream>>>(a->scan_bufs[i]);
+        mingru_scan_forward<<<grid_size(B*m->hidden), BLOCK_SIZE, 0, stream>>>(a->scan_bufs[i]);
         CHECK_LAST_KERNEL();
         x = a->scan_bufs[i].out;
     }
@@ -1010,7 +1010,7 @@ static PufTensor mingru_backward(void* w, PufTensor grad, void* activations, cud
     MinGRUActivations* a = (MinGRUActivations*)activations;
     for (int i = m->num_layers - 1; i >= 0; i--) {
         PrefixScan& scan = a->scan_bufs[i];
-        fused_scan_backward<<<grid_size(scan.B*scan.H), BLOCK_SIZE, 0, stream>>>(
+        mingru_scan_backward<<<grid_size(scan.B*scan.H), BLOCK_SIZE, 0, stream>>>(
             scan, (const precision_t*)grad.bytes, (const precision_t*)a->grad_next_state.bytes);
         CHECK_LAST_KERNEL();
         puf_mm_tn(scan.grad_combined, a->saved_inputs[i], a->wgrad_scratch[i], stream);
@@ -1086,7 +1086,7 @@ PufTensor ns_slice(PufTensor& buf, int64_t rows, int64_t cols) {
 }
 
 struct Muon {
-    double momentum, weight_decay, eps;
+    double momentum, weight_decay;
     int ns_iters;
     float lr_val_init;
     float* lr_ptr;
@@ -1100,11 +1100,10 @@ struct Muon {
 };
 
 void muon_init(Muon* m, Allocator* param_alloc, PufTensor weight_buffer,
-               double lr_val, double momentum, double eps, double weight_decay,
+               double lr_val, double momentum, double weight_decay,
                int ns_iters, Allocator& alloc) {
     m->momentum = momentum;
     m->weight_decay = weight_decay;
-    m->eps = eps;
     m->ns_iters = (ns_iters > 0 && ns_iters <= 5) ? ns_iters : 5;
     m->lr_val_init = (float)lr_val;
     m->lr_ptr = nullptr;
@@ -1170,7 +1169,7 @@ void muon_step(Muon* m, cudaStream_t stream = 0) {
     nesterov_f32_kernel<<<grid_size(m->mb_puf.numel()), BLOCK_SIZE, 0, stream>>>(
         (float*)m->mb_puf.bytes, (float*)m->gc_puf.bytes, (float)m->momentum, m->mb_puf.numel());
     CHECK_LAST_KERNEL();
-    puf_zero(m->up_puf, stream);
+    puf_zero(&m->up_puf, stream);
     int64_t offset = 0;
     for (auto* t : m->param_alloc->regs) {
         float* gc_ptr = (float*)m->gc_puf.bytes + offset;

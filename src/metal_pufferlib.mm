@@ -555,7 +555,7 @@ void train_impl(PuffeRL& pufferl) {
         if (gpu_profile) mtl_ensure_stream_synced(s);
         uint64_t tp0 = mach_absolute_time();
 
-        puf_zero(pufferl.advantages_puf, s);
+        puf_zero(&pufferl.advantages_puf, s);
         puff_advantage(rollouts.values, rollouts.rewards, rollouts.terminals,
             rollouts.ratio, pufferl.advantages_puf, hypers.gamma, hypers.gae_lambda,
             hypers.vtrace_rho_clip, hypers.vtrace_c_clip, s);
@@ -568,7 +568,7 @@ void train_impl(PuffeRL& pufferl) {
         if (gpu_profile) mtl_ensure_stream_synced(s);
         uint64_t tp2 = mach_absolute_time();
 
-        if (hypers.reset_state) puf_zero(pufferl.train_buf.mb_state, s);
+        if (hypers.reset_state) puf_zero(&pufferl.train_buf.mb_state, s);
         {
             RolloutBuf sel_src = rollouts;
             sel_src.values = pufferl.old_values_puf;
@@ -612,7 +612,7 @@ void train_impl(PuffeRL& pufferl) {
             FloatTensor &ms = pufferl.train_buf.mb_state;
             state_puf_train = {.bytes = (char*)ms.data, .shape = {ms.shape[0], ms.shape[1], ms.shape[2], ms.shape[3]}, .dtype_size = (int)sizeof(float)};
         }
-        if (pufferl.train_fp16 && hypers.reset_state) puf_zero(pufferl.fp16_state_buf, s);
+        if (pufferl.train_fp16 && hypers.reset_state) puf_zero(&pufferl.fp16_state_buf, s);
 
         PufTensor dec_puf = policy_forward_train(pufferl.policy, train_weights,
             pufferl.train_activations, obs_puf, state_puf_train, s);

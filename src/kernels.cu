@@ -239,7 +239,7 @@ __device__ __forceinline__ double logcumsumexp_backward(double x, double* acc, d
 // Optimized forward kernel with checkpointing
 // Writes checkpoints only every CHECKPOINT_INTERVAL timesteps (vs every time)
 // Uses fast math intrinsics for better performance
-__global__ void fused_scan_forward(PrefixScan scan) {
+__global__ void mingru_scan_forward(PrefixScan scan) {
     int T_seq = scan.T, H = scan.H, B = scan.B;
     precision_t* __restrict__ out = (precision_t*)scan.out.bytes;
     precision_t* __restrict__ next_state = (precision_t*)scan.next_state.bytes;
@@ -325,7 +325,7 @@ __global__ void fused_scan_forward(PrefixScan scan) {
 // Optimized backward kernel with sparse checkpoint loading
 // Reads sparse checkpoints from forward pass, recomputes intermediate values in chunks
 // Uses fast math intrinsics for better performance
-__global__ void fused_scan_backward(
+__global__ void mingru_scan_backward(
     PrefixScan scan,
     const precision_t* __restrict__ grad_out,        // (B, T, H)
     const precision_t* __restrict__ grad_next_state  // (B, 1, H)

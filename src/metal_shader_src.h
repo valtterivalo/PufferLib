@@ -6,7 +6,7 @@
  *   1. Math ops (sigmoid, fast_tanh, tilde_relu, lerp, softplus, log_coeffs_and_values)
  *   2. Philox RNG (counter-based PRNG matching cuRAND)
  *   3. MinGRU inference (mingru_gate_inference)
- *   4. MinGRU training (fused_scan_forward/backward_checkpointed)
+ *   4. MinGRU training (mingru_scan_forward/backward_checkpointed)
  *   5. Sample logits (discrete + continuous, with action mask support)
  *   6. PPO loss — fused forward+backward + reduce
  *   7. Advantage (puff_advantage)
@@ -246,7 +246,7 @@ struct ScanParams {
     int B;
 };
 
-kernel void fused_scan_forward_checkpointed(
+kernel void mingru_scan_forward_checkpointed(
     device float* out               [[buffer(0)]],
     device float* next_state        [[buffer(1)]],
     device float* a_star_buf        [[buffer(2)]],
@@ -323,7 +323,7 @@ kernel void fused_scan_forward_checkpointed(
     next_state[bH + h] = max(fast::exp(a_star + s), 1e-30f);
 }
 
-kernel void fused_scan_backward_checkpointed(
+kernel void mingru_scan_backward_checkpointed(
     device float* grad_combined          [[buffer(0)]],
     device float* grad_state             [[buffer(1)]],
     device float* grad_input             [[buffer(2)]],
@@ -2024,7 +2024,7 @@ kernel void cast_f16_to_f32(
 // Section 25: FP16 MinGRU scan kernels — half I/O, float internal computation
 // ============================================================================
 
-kernel void fused_scan_forward_checkpointed_fp16(
+kernel void mingru_scan_forward_checkpointed_fp16(
     device half* out                [[buffer(0)]],
     device half* next_state         [[buffer(1)]],
     device float* a_star_buf        [[buffer(2)]],
@@ -2097,7 +2097,7 @@ kernel void fused_scan_forward_checkpointed_fp16(
     next_state[bH + h] = half(min(next_state_val, 65000.0f));
 }
 
-kernel void fused_scan_backward_checkpointed_fp16(
+kernel void mingru_scan_backward_checkpointed_fp16(
     device half* grad_combined            [[buffer(0)]],
     device half* grad_state               [[buffer(1)]],
     device half* grad_input               [[buffer(2)]],

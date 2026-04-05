@@ -64,8 +64,8 @@ void mtl_fill_f32(float *ptr, float value, int count, cudaStream_t stream);
 void mtl_copy_f32(float *dst, const float *src, int count, cudaStream_t stream);
 void mtl_fill_f16(void *ptr, int count, cudaStream_t stream);
 void mtl_copy_f16(void *dst, const void *src, int count, cudaStream_t stream);
-void mtl_fused_scan_forward_fp16(PrefixScan &scan, cudaStream_t stream);
-void mtl_fused_scan_backward_fp16(PrefixScan &scan, const void *grad,
+void mtl_mingru_scan_forward_fp16(PrefixScan &scan, cudaStream_t stream);
+void mtl_mingru_scan_backward_fp16(PrefixScan &scan, const void *grad,
                                     const void *grad_next_state,
                                     cudaStream_t stream);
 void mtl_assemble_decoder_grad_f32_to_f16(void *grad_out,
@@ -93,14 +93,14 @@ void puf_copy(PufTensor &dst, const PufTensor &src, cudaStream_t stream) {
   }
 }
 
-void puf_zero(PufTensor &dst, cudaStream_t stream) {
-  if (puf_is_gpu_training() && dst.dtype_size == 4) {
-    mtl_fill_f32((float *)dst.bytes, 0.0f, (int)dst.numel(), stream);
-  } else if (puf_is_gpu_training() && dst.dtype_size == 2) {
-    mtl_fill_f16(dst.bytes, (int)dst.numel(), stream);
+void puf_zero(PufTensor *dst, cudaStream_t stream) {
+  if (puf_is_gpu_training() && dst->dtype_size == 4) {
+    mtl_fill_f32((float *)dst->bytes, 0.0f, (int)dst->numel(), stream);
+  } else if (puf_is_gpu_training() && dst->dtype_size == 2) {
+    mtl_fill_f16(dst->bytes, (int)dst->numel(), stream);
   } else {
     mtl_ensure_stream_synced(stream);
-    memset(dst.bytes, 0, dst.numel() * dst.dtype_size);
+    memset(dst->bytes, 0, dst->numel() * dst->dtype_size);
   }
 }
 
@@ -116,12 +116,12 @@ void puf_copy(FloatTensor &dst, const FloatTensor &src, cudaStream_t stream) {
   }
 }
 
-void puf_zero(FloatTensor &dst, cudaStream_t stream) {
+void puf_zero(FloatTensor *dst, cudaStream_t stream) {
   if (puf_is_gpu_training()) {
-    mtl_fill_f32(dst.data, 0.0f, (int)puf_numel(dst.shape), stream);
+    mtl_fill_f32(dst->data, 0.0f, (int)puf_numel(dst->shape), stream);
   } else {
     mtl_ensure_stream_synced(stream);
-    memset(dst.data, 0, puf_numel(dst.shape) * sizeof(float));
+    memset(dst->data, 0, puf_numel(dst->shape) * sizeof(float));
   }
 }
 
@@ -625,19 +625,19 @@ static void dispatch_scan_backward(const char *kernel_name, PrefixScan &scan,
   mtl_dispatch_1d(ms, pso, scan.B * scan.H);
 }
 
-void mtl_fused_scan_forward(PrefixScan &scan, cudaStream_t stream) {
-  dispatch_scan_forward("fused_scan_forward_checkpointed", scan, stream);
+void mtl_mingru_scan_forward(PrefixScan &scan, cudaStream_t stream) {
+  dispatch_scan_forward("mingru_scan_forward_checkpointed", scan, stream);
 }
-void mtl_fused_scan_backward(PrefixScan &scan, const float *grad,
+void mtl_mingru_scan_backward(PrefixScan &scan, const float *grad,
                                const float *grad_next_state, cudaStream_t stream) {
-  dispatch_scan_backward("fused_scan_backward_checkpointed", scan, grad, grad_next_state, stream);
+  dispatch_scan_backward("mingru_scan_backward_checkpointed", scan, grad, grad_next_state, stream);
 }
-void mtl_fused_scan_forward_fp16(PrefixScan &scan, cudaStream_t stream) {
-  dispatch_scan_forward("fused_scan_forward_checkpointed_fp16", scan, stream);
+void mtl_mingru_scan_forward_fp16(PrefixScan &scan, cudaStream_t stream) {
+  dispatch_scan_forward("mingru_scan_forward_checkpointed_fp16", scan, stream);
 }
-void mtl_fused_scan_backward_fp16(PrefixScan &scan, const void *grad,
+void mtl_mingru_scan_backward_fp16(PrefixScan &scan, const void *grad,
                                     const void *grad_next_state, cudaStream_t stream) {
-  dispatch_scan_backward("fused_scan_backward_checkpointed_fp16", scan, grad, grad_next_state, stream);
+  dispatch_scan_backward("mingru_scan_backward_checkpointed_fp16", scan, grad, grad_next_state, stream);
 }
 
 // ============================================================================
@@ -792,7 +792,7 @@ void ppo_loss_fwd_bwd(PufTensor &dec_out, PufTensor &logstd, TrainGraph &graph,
 
   // Zero loss output on GPU (CUDA uses cudaMemsetAsync here — CPU write races
   // with reduce kernel's *loss += sum from the previous minibatch).
-  puf_zero(bufs.loss_output, stream);
+  puf_zero(&bufs.loss_output, stream);
 
   // MSL doesn't support double — convert actions from f64 to f32 on GPU.
   // Uses cast_f64_to_f32 kernel (IEEE 754 bit manipulation via uint2) to
@@ -1272,7 +1272,7 @@ void muon_step(Muon *m, cudaStream_t stream) {
   mtl_barrier(ms);
 
   // Zero update buffer
-  puf_zero(m->up_puf, stream);
+  puf_zero(&m->up_puf, stream);
   mtl_barrier(ms);
 
   int64_t offset = 0;
@@ -1682,9 +1682,9 @@ static PufTensor mingru_forward_train(void *w, PufTensor x, PufTensor state,
     a->scan_bufs[i].input_ptr = a->saved_inputs[i].bytes;
     // Dispatch fp16 or fp32 scan based on activation dtype
     if (a->combined_bufs[i].dtype_size == 2)
-      mtl_fused_scan_forward_fp16(a->scan_bufs[i], stream);
+      mtl_mingru_scan_forward_fp16(a->scan_bufs[i], stream);
     else
-      mtl_fused_scan_forward(a->scan_bufs[i], stream);
+      mtl_mingru_scan_forward(a->scan_bufs[i], stream);
     // barrier: next layer or decoder consumes this layer's scan output.
     mtl_barrier(ms);
     x = a->scan_bufs[i].out;
@@ -1702,17 +1702,17 @@ static PufTensor mingru_backward(void *w, PufTensor grad, void *activations,
   // hidden state during training (state is reset each minibatch).
   // without this, stale values from the previous backward pass inject
   // garbage gradients at the last timestep of the scan.
-  puf_zero(a->grad_next_state, stream);
+  puf_zero(&a->grad_next_state, stream);
   mtl_barrier(ms);
 
   for (int i = m->num_layers - 1; i >= 0; i--) {
     PrefixScan &scan = a->scan_bufs[i];
     // Dispatch fp16 or fp32 scan backward based on activation dtype
     if (grad.dtype_size == 2)
-      mtl_fused_scan_backward_fp16(scan, grad.bytes,
+      mtl_mingru_scan_backward_fp16(scan, grad.bytes,
                                    a->grad_next_state.bytes, stream);
     else
-      mtl_fused_scan_backward(scan, (const float *)grad.bytes,
+      mtl_mingru_scan_backward(scan, (const float *)grad.bytes,
                               (const float *)a->grad_next_state.bytes, stream);
     // scan.grad_combined is consumed by the GEMMs below.
     mtl_barrier(ms);
