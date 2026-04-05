@@ -492,7 +492,7 @@ def run_trial(
     wandb_config: dict | None = None,
 ) -> dict | None:
     """Run a single training trial using the shared training loop."""
-    from pufferlib.ocean.osrs_pvp.pfsp import (
+    from ocean.osrs_pvp.pfsp import (
         OPP_PFSP, POOL_TYPES, init_pfsp, update_pfsp,
     )
 
