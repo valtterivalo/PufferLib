@@ -2145,6 +2145,13 @@ static float inf_compute_reward(InfernoState* s) {
 
     float r = 0.0f;
 
+    /* survival: small per-tick bonus for staying alive.
+       gives gradient signal to learn shield-dancing before the agent
+       can deal damage. kept smaller than damage reward so dealing
+       damage is always preferred over just surviving. */
+    if (s->wave >= 68)  /* zuk wave (0-indexed) */
+        r += 0.001f;
+
     if (s->damage_dealt_this_tick > 0.0f)
         r += 0.01f * s->damage_dealt_this_tick;
 
