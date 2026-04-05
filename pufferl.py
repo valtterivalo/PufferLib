@@ -351,7 +351,7 @@ def run_training(args, *,
             _C.train(pufferl)
             global_step += steps_per_iter
 
-            if checkpoint_dir and (iteration % checkpoint_interval == 0 or iteration == total_iters):
+            if checkpoint_dir and checkpoint_interval > 0 and (iteration % checkpoint_interval == 0 or iteration == total_iters):
                 path = os.path.join(checkpoint_dir, f"{global_step:016d}.bin")
                 _C.save_weights(pufferl, path)
 
