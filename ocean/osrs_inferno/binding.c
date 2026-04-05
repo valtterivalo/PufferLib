@@ -212,7 +212,9 @@ void my_init(Env* env, Dict* kwargs) {
     DictItem* start_wave = dict_get_unsafe(kwargs, "start_wave");
     if (start_wave)
         ENCOUNTER_INFERNO.put_int(env->enc_state, "start_wave", (int)start_wave->value);
-    env->config_start_wave = start_wave ? (int)start_wave->value : 0;
+    /* match the 1-indexed → 0-indexed conversion done by encounter's put_int */
+    int sw = start_wave ? (int)start_wave->value : 0;
+    env->config_start_wave = (sw > 0) ? sw - 1 : 0;
 
     /* allocate action buffer for best-episode recording (all envs buffer) */
     if (getenv("RECORD_REPLAY") && getenv("RECORD_REPLAY")[0]) {
