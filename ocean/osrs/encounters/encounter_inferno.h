@@ -577,6 +577,15 @@ typedef struct {
     int total_npc_kills;       /* NPCs killed this episode */
     int total_gear_switches;   /* gear switch actions this episode */
 
+    /* Zuk-specific diagnostics */
+    int behind_shield_ticks;   /* ticks spent behind shield during Zuk wave */
+    int total_zuk_ticks;       /* total ticks during Zuk wave (for behind_shield_pct) */
+
+    /* action distribution: count of action-0 (noop) per head.
+       high noop_rate = policy collapsed to doing nothing on that head. */
+    int action_noop_count[8];  /* 8 = INF_NUM_ACTION_HEADS (defined later in file) */
+    int action_total_count;    /* total ticks (denominator for noop rates) */
+
     /* per-tick reward event flags (cleared each tick) */
     int brewed_this_tick;      /* 1 if player drank a brew this tick */
     int blood_heal_this_tick;  /* HP healed from blood barrage this tick */
@@ -2298,6 +2307,24 @@ static void inf_step(EncounterState* state, const int* actions) {
     if (s->ticks_without_action > 0) s->total_idle_ticks++;
     s->total_brews_used += s->brewed_this_tick;
     s->total_blood_healed += s->blood_heal_this_tick;
+
+    /* Zuk shield tracking: are we behind the shield this tick? */
+    if (s->wave == 68) {
+        s->total_zuk_ticks++;
+        int si = s->zuk.shield_idx;
+        if (si >= 0 && s->npcs[si].active) {
+            int sx = s->npcs[si].x;
+            int sz = INF_NPC_STATS[INF_NPC_ZUK_SHIELD].size;
+            if (s->player.x >= sx && s->player.x < sx + sz && s->player.y >= 41)
+                s->behind_shield_ticks++;
+        }
+    }
+
+    /* action noop tracking */
+    s->action_total_count++;
+    for (int h = 0; h < INF_NUM_ACTION_HEADS; h++) {
+        if (actions[h] == 0) s->action_noop_count[h]++;
+    }
 
     s->reward = inf_compute_reward(s);
     s->episode_return += s->reward;

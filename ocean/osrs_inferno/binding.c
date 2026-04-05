@@ -114,6 +114,23 @@ void c_step(Env* env) {
         env->log.gear_switches = (float)s->total_gear_switches;
         env->log.current_ranged = (float)s->player.current_ranged;
         env->log.current_magic = (float)s->player.current_magic;
+
+        /* Zuk shield tracking */
+        env->log.behind_shield_pct = (s->total_zuk_ticks > 0)
+            ? (float)s->behind_shield_ticks / (float)s->total_zuk_ticks : 0.0f;
+
+        /* action noop rates */
+        float at = (float)s->action_total_count;
+        if (at > 0.0f) {
+            env->log.noop_move   = (float)s->action_noop_count[0] / at;
+            env->log.noop_prayer = (float)s->action_noop_count[1] / at;
+            env->log.noop_target = (float)s->action_noop_count[2] / at;
+            env->log.noop_gear   = (float)s->action_noop_count[3] / at;
+            env->log.noop_eat    = (float)s->action_noop_count[4] / at;
+            env->log.noop_potion = (float)s->action_noop_count[5] / at;
+            env->log.noop_spell  = (float)s->action_noop_count[6] / at;
+            env->log.noop_spec   = (float)s->action_noop_count[7] / at;
+        }
     }
 
     if (is_term) {
@@ -343,6 +360,15 @@ void my_log(Log* log, Dict* out) {
     dict_set(out, "gear_switches", log->gear_switches);
     dict_set(out, "current_ranged", log->current_ranged);
     dict_set(out, "current_magic", log->current_magic);
+    dict_set(out, "behind_shield_pct", log->behind_shield_pct);
+    dict_set(out, "noop_move", log->noop_move);
+    dict_set(out, "noop_prayer", log->noop_prayer);
+    dict_set(out, "noop_target", log->noop_target);
+    dict_set(out, "noop_gear", log->noop_gear);
+    dict_set(out, "noop_eat", log->noop_eat);
+    dict_set(out, "noop_potion", log->noop_potion);
+    dict_set(out, "noop_spell", log->noop_spell);
+    dict_set(out, "noop_spec", log->noop_spec);
     float gear_switch_rate = (log->episode_length > 0.0f)
         ? log->gear_switches / log->episode_length : 0.0f;
     dict_set(out, "gear_switch_rate", gear_switch_rate);

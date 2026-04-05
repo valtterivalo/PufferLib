@@ -786,6 +786,17 @@ typedef struct {
     float brews_remaining;         /* brew doses left at end of episode */
     float restores_remaining;      /* restore doses left at end of episode */
     float prayer_at_death;         /* prayer points at end of episode */
+    /* Zuk diagnostics */
+    float behind_shield_pct;   /* fraction of Zuk ticks behind shield */
+    /* action noop rates per head (0=move,1=prayer,2=target,3=gear,4=eat,5=pot,6=spell,7=spec) */
+    float noop_move;
+    float noop_prayer;
+    float noop_target;
+    float noop_gear;
+    float noop_eat;
+    float noop_potion;
+    float noop_spell;
+    float noop_spec;
     /* per-NPC-type stats (14 types each, for wandb only — not shown on dashboard) */
     float prayer_correct_by_type[14];
     float attacks_by_type[14];
