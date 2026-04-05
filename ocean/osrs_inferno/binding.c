@@ -26,6 +26,7 @@ typedef struct {
     Log log;
 
     EncounterState* enc_state;
+    int config_start_wave;  /* the start_wave from config (not curriculum override) */
 
     int acts_staging[INF_NUM_ACTION_HEADS];
     unsigned char term_staging;
@@ -104,10 +105,11 @@ void c_step(Env* env) {
             env->log.dmg_from_type[t] = s->dmg_from_type[t];
             env->log.killed_by_type[t] = (float)s->killed_by_type[t];
         }
-        /* all agents contribute to log. curriculum agents with mixed start_waves
-           used to be excluded, but that breaks Zuk-only training where all agents
-           start at wave 69. sweeps use episode_return directly anyway. */
-        env->log.n = 1.0f;
+        /* agents report to log if their start_wave matches the config's start_wave.
+           curriculum agents (overridden to a different wave) are excluded from metrics
+           so they don't pollute the sweep score. when training Zuk-only (config start_wave=69),
+           all agents start at 69 and all report. */
+        env->log.n = (s->start_wave == env->config_start_wave) ? 1.0f : 0.0f;
         env->log.npc_kills = (float)s->total_npc_kills;
         env->log.gear_switches = (float)s->total_gear_switches;
         env->log.current_ranged = (float)s->player.current_ranged;
@@ -210,6 +212,7 @@ void my_init(Env* env, Dict* kwargs) {
     DictItem* start_wave = dict_get_unsafe(kwargs, "start_wave");
     if (start_wave)
         ENCOUNTER_INFERNO.put_int(env->enc_state, "start_wave", (int)start_wave->value);
+    env->config_start_wave = start_wave ? (int)start_wave->value : 0;
 
     /* allocate action buffer for best-episode recording (all envs buffer) */
     if (getenv("RECORD_REPLAY") && getenv("RECORD_REPLAY")[0]) {
