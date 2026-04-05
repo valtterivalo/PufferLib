@@ -2342,8 +2342,8 @@ static void inf_step(EncounterState* state, const int* actions) {
 /* observations                                                              */
 /* ======================================================================== */
 
-/* obs layout: 46 player + 12 pillar + 30*32 NPC + 5*8 pending hits = 1058 */
-#define INF_PLAYER_OBS_SIZE 46
+/* obs layout: 47 player + 12 pillar + 30*32 NPC + 5*8 pending hits = 1059 */
+#define INF_PLAYER_OBS_SIZE 47
 #define INF_FEATURES_PER_NPC 30
 #define INF_FEATURES_PER_HIT 5
 #define INF_NUM_OBS (INF_PLAYER_OBS_SIZE + 12 + INF_FEATURES_PER_NPC * INF_MAX_NPCS + INF_FEATURES_PER_HIT * ENCOUNTER_MAX_PENDING_HITS)
@@ -2450,7 +2450,7 @@ static void inf_write_obs(EncounterState* state, float* obs) {
         obs[i++] = (float)conflict_count / 3.0f;
     }
 
-    /* Zuk-phase features (9 features: 1 flag + 8 Zuk-specific) */
+    /* Zuk-phase features (10 features: 1 flag + 9 Zuk-specific) */
     {
         int is_zuk = (s->wave == 68);
         obs[i++] = is_zuk ? 1.0f : 0.0f;
@@ -2460,15 +2460,21 @@ static void inf_write_obs(EncounterState* state, float* obs) {
             obs[i++] = (s->zuk.shield_freeze > 0) ? 0.0f : (float)s->zuk.shield_dir;
             /* shield freeze ticks remaining / 5 */
             obs[i++] = (float)s->zuk.shield_freeze / 5.0f;
-            /* am I behind the shield right now? */
+            /* am I behind the shield right now? + signed distance to shield center.
+               the binary tells the agent if it's safe. the signed distance gives a
+               gradient: negative = move east, positive = move west, 0 = centered. */
             int behind = 0;
+            float shield_offset = 0.0f;
             int si = s->zuk.shield_idx;
             if (si >= 0 && s->npcs[si].active) {
                 int sx = s->npcs[si].x;
                 int sz = INF_NPC_STATS[INF_NPC_ZUK_SHIELD].size;
+                int shield_center = sx + sz / 2;
+                shield_offset = (float)(px - shield_center) / 15.0f;  /* normalized, ~[-1,1] range */
                 behind = (px >= sx && px < sx + sz && py >= 41);
             }
             obs[i++] = behind ? 1.0f : 0.0f;
+            obs[i++] = shield_offset;
             /* Zuk enraged (attack speed 7 instead of 8) */
             obs[i++] = s->zuk.enraged ? 1.0f : 0.0f;
             /* set spawn timer / 350 */
@@ -2480,7 +2486,7 @@ static void inf_write_obs(EncounterState* state, float* obs) {
             /* Zuk healers have spawned */
             obs[i++] = s->zuk.healer_spawned ? 1.0f : 0.0f;
         } else {
-            for (int z = 0; z < 8; z++) obs[i++] = 0.0f;
+            for (int z = 0; z < 9; z++) obs[i++] = 0.0f;
         }
     }
 
