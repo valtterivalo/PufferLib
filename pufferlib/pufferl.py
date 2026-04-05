@@ -47,15 +47,19 @@ signal.signal(signal.SIGINT, lambda sig, frame: os._exit(0))
 #import torch; torch._dynamo.config.capture_scalar_outputs = True
 
 class PuffeRL:
-    def __init__(self, config, vec_config, env_config, policy_config, logger=None, verbose=True):
+    def __init__(self, args, logger=None, verbose=True):
+        """args: single nested dict {"train": {...}, "vec": {...}, "env": {...}, "policy": {...}}"""
+        train_cfg = args["train"]
+        vec_cfg = args["vec"]
+
         # Reproducibility
-        seed = config['seed']
+        seed = train_cfg['seed']
         random.seed(seed)
         np.random.seed(seed)
 
-        minibatch_size = config['minibatch_size']
-        horizon = config['horizon']
-        total_agents = vec_config['total_agents']
+        minibatch_size = train_cfg['minibatch_size']
+        horizon = train_cfg['horizon']
+        total_agents = vec_cfg['total_agents']
         batch_size = horizon * total_agents
         self.batch_size = batch_size
 
@@ -69,11 +73,11 @@ class PuffeRL:
 
         # Logging
         self.logger = logger
-        self.pufferl_cpp = _C.create_pufferl(config, vec_config, env_config, policy_config)
+        self.pufferl_cpp = _C.create_pufferl(args)
         self.rollouts = self.pufferl_cpp.rollouts
 
         # Initializations
-        self.config = config
+        self.config = train_cfg
         self.epoch = 0
         self.global_step = 0
         self.last_log_step = 0
@@ -430,19 +434,14 @@ def _train_rank(env_name, args=None, logger=None, verbose=True, early_stop_fn=No
     """Worker function for multi-GPU training. Runs on each GPU."""
     args = args or load_config(env_name)
 
-    train_config = dict(**args['train'])
-    train_config['env_name'] = args['env_name']
-
-    vec_config = args['vec']
-    env_config = args['env']
-    policy_config = args['policy']
-    pufferl = PuffeRL(train_config, vec_config, env_config, policy_config, logger, verbose)
+    pufferl = PuffeRL(args, logger, verbose)
 
     # Sweep needs data for early stopped runs, so send data when steps > 100M
-    logging_threshold = min(0.20*train_config['total_timesteps'], 100_000_000)
+    train_cfg = args['train']
+    logging_threshold = min(0.20*train_cfg['total_timesteps'], 100_000_000)
     all_logs = []
 
-    while pufferl.global_step < train_config['total_timesteps']:
+    while pufferl.global_step < train_cfg['total_timesteps']:
         pufferl.evaluate()
         logs = pufferl.train()
 
@@ -553,22 +552,19 @@ def eval(env_name, args=None, load_path=None):
     runs rollouts in a loop with rendering on env 0.'''
     args = args or load_config(env_name)
 
-    train_config = dict(**args['train'])
-    train_config['env_name'] = args['env_name']
-    train_config.setdefault('world_size', 1)
-    train_config.setdefault('rank', 0)
-    train_config.setdefault('nccl_id_path', '')
+    # Ensure top-level keys expected by upstream bindings.cu
+    args.setdefault('world_size', 1)
+    args.setdefault('rank', 0)
+    args.setdefault('nccl_id', '')
+    args['train'].setdefault('world_size', 1)
+    args['train'].setdefault('rank', 0)
 
-    vec_config = args['vec']
-    env_config = args['env']
-    policy_config = args['policy']
-
-    pufferl_cpp = _C.create_pufferl(train_config, vec_config, env_config, policy_config)
+    pufferl_cpp = _C.create_pufferl(args)
 
     # Resolve load path
     load_path = load_path or args.get('load_model_path')
     if load_path == 'latest':
-        data_dir = train_config.get('data_dir', 'experiments')
+        data_dir = args.get('train', {}).get('data_dir', 'experiments')
         pattern = os.path.join(data_dir, args['env_name'], '**', '*.bin')
         candidates = glob.glob(pattern, recursive=True)
         if not candidates:

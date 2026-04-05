@@ -12,8 +12,15 @@
 #include <pybind11/stl.h>
 #include <cmath>
 #include <mach/mach.h>
+#include <sys/time.h>
 
 namespace py = pybind11;
+
+static double wall_clock() {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return tv.tv_sec + tv.tv_usec * 1e-6;
+}
 
 struct FloatStats {
     double mean = 0.0;
@@ -165,6 +172,10 @@ void rollouts(pybind11::object pufferl_obj) {
 
     // Capture rollout sync stats
     mtl_sync_stats(&pufferl.rollout_sync_count, &pufferl.rollout_sync_ms);
+
+    // Track global_step and start_time (matching upstream PuffeRL fields)
+    pufferl.global_step += pufferl.hypers.horizon * pufferl.hypers.total_agents;
+    if (pufferl.start_time == 0) pufferl.start_time = wall_clock();
 }
 
 void train(pybind11::object pufferl_obj) {
@@ -390,6 +401,112 @@ pybind11::dict log_utilization(pybind11::object pufferl_obj) {
     return result;
 }
 
+// ============================================================================
+// Unified log functions (upstream-compatible API)
+// ============================================================================
+
+pybind11::dict puf_log(pybind11::object pufferl_obj) {
+    auto& pufferl = pufferl_obj.cast<PuffeRL&>();
+    pybind11::dict result;
+
+    // Summary (matches upstream puf_log in bindings.cu)
+    long global_step = pufferl.global_step;
+    int epoch = pufferl.epoch;
+    double now = wall_clock();
+    double dt = now - pufferl.last_log_time;
+    long sps = dt > 0 ? (long)((global_step - pufferl.last_log_step) / dt) : 0;
+    pufferl.last_log_time = now;
+    pufferl.last_log_step = global_step;
+
+    result["SPS"] = sps;
+    result["agent_steps"] = global_step;
+    result["uptime"] = now - pufferl.start_time;
+    result["epoch"] = epoch;
+
+    // Environment stats
+    pybind11::dict env_dict;
+    Dict* env_out = log_environments_impl(pufferl);
+    for (int i = 0; i < env_out->size; i++) {
+        env_dict[env_out->items[i].key] = env_out->items[i].value;
+    }
+    result["env"] = env_dict;
+
+    // Losses — sync pending training, read from unified memory
+    sync_pending_train(pufferl);
+    mtl_ensure_stream_synced((cudaStream_t)mtl_stream());
+    float* losses_host = pufferl.losses_puf.data;
+    float n = losses_host[LOSS_N];
+    pybind11::dict losses_dict;
+    if (n > 0) {
+        float inv_n = 1.0f / n;
+        // Map to upstream key names: policy, value, entropy, total, old_kl, kl, clipfrac
+        losses_dict["policy"] = losses_host[LOSS_PG] * inv_n;
+        losses_dict["value"] = losses_host[LOSS_VF] * inv_n;
+        losses_dict["entropy"] = losses_host[LOSS_ENT] * inv_n;
+        losses_dict["total"] = losses_host[LOSS_TOTAL] * inv_n;
+        losses_dict["old_kl"] = losses_host[LOSS_OLD_APPROX_KL] * inv_n;
+        losses_dict["kl"] = losses_host[LOSS_APPROX_KL] * inv_n;
+        losses_dict["clipfrac"] = losses_host[LOSS_CLIPFRAC] * inv_n;
+    }
+    cudaStream_t loss_stream = pufferl.overlap_enabled
+        ? (cudaStream_t)mtl_train_stream()
+        : (cudaStream_t)mtl_stream();
+    mtl_fill_f32(losses_host, 0.0f, (int)puf_numel(pufferl.losses_puf.shape), loss_stream);
+    result["loss"] = losses_dict;
+
+    // Profile
+    pybind11::dict perf_dict;
+    for (int i = 0; i < NUM_PROF; i++) {
+        perf_dict[PROF_NAMES[i]] = pufferl.profile.accum[i] / 1000.0f;
+    }
+    float* a = pufferl.profile.accum;
+    float train_ms = a[PROF_TRAIN_PRELOOP] + a[PROF_TRAIN_SYNC];
+    for (int i = PROF_TRAIN_PRIO; i <= PROF_TRAIN_MUON; i++) train_ms += a[i];
+    perf_dict["train"] = train_ms / 1000.0f;
+    memset(pufferl.profile.accum, 0, sizeof(pufferl.profile.accum));
+    result["perf"] = perf_dict;
+
+    // Utilization (Metal / macOS)
+    pybind11::dict util_dict;
+    MetalContext* ctx = mtl_ctx();
+    if (ctx->device) {
+        uint64_t gpu_budget = [ctx->device recommendedMaxWorkingSetSize];
+        uint64_t gpu_current = [ctx->device currentAllocatedSize];
+        util_dict["gpu_percent"] = 0.0f;
+        util_dict["gpu_mem"] = 100.0f * (float)gpu_current / (float)gpu_budget;
+        util_dict["vram_used_gb"] = (float)gpu_current / (1024.0f * 1024.0f * 1024.0f);
+        util_dict["vram_total_gb"] = (float)gpu_budget / (1024.0f * 1024.0f * 1024.0f);
+    }
+    struct mach_task_basic_info info;
+    mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
+    if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO,
+                  (task_info_t)&info, &count) == KERN_SUCCESS) {
+        util_dict["cpu_mem_gb"] = (float)info.resident_size / (1024.0f * 1024.0f * 1024.0f);
+    }
+    result["util"] = util_dict;
+
+    return result;
+}
+
+pybind11::dict puf_eval_log(pybind11::object pufferl_obj) {
+    auto& pufferl = pufferl_obj.cast<PuffeRL&>();
+    pybind11::dict result;
+
+    double now = wall_clock();
+    pufferl.last_log_time = now;
+    pufferl.last_log_step = pufferl.global_step;
+
+    pybind11::dict env_dict;
+    Dict* env_out = create_dict(32);
+    static_vec_eval_log(pufferl.vec, env_out);
+    for (int i = 0; i < env_out->size; i++) {
+        env_dict[env_out->items[i].key] = env_out->items[i].value;
+    }
+    result["env"] = env_dict;
+
+    return result;
+}
+
 void puf_close(pybind11::object pufferl_obj) {
     PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
     close_impl(pufferl);
@@ -448,57 +565,67 @@ Dict* py_dict_to_c_dict(py::dict py_dict) {
     return c_dict;
 }
 
-std::unique_ptr<PuffeRL> create_pufferl(pybind11::dict kwargs,
-        pybind11::dict vec_kwargs, pybind11::dict env_kwargs,
-        pybind11::dict policy_kwargs) {
+std::unique_ptr<PuffeRL> create_pufferl(py::dict args) {
+    py::dict train_kwargs = args["train"].cast<py::dict>();
+    py::dict vec_kwargs = args["vec"].cast<py::dict>();
+    py::dict env_kwargs = args["env"].cast<py::dict>();
+    py::dict policy_kwargs = args["policy"].cast<py::dict>();
+
     HypersT hypers;
-    // Layout
+    // Layout (total_agents and num_buffers come from vec config)
     hypers.total_agents = get_config(vec_kwargs, "total_agents");
     hypers.num_buffers = get_config(vec_kwargs, "num_buffers");
     hypers.num_threads = get_config(vec_kwargs, "num_threads");
-    hypers.horizon = get_config(kwargs, "horizon");
+    hypers.horizon = get_config(train_kwargs, "horizon");
     // Model architecture
     hypers.hidden_size = get_config(policy_kwargs, "hidden_size");
     hypers.num_layers = get_config(policy_kwargs, "num_layers");
-    hypers.seed = kwargs.contains("seed") ? (uint64_t)get_config(kwargs, "seed") : 42;
+    hypers.seed = args.contains("seed") ? (uint64_t)get_config(args, "seed")
+        : train_kwargs.contains("seed") ? (uint64_t)get_config(train_kwargs, "seed") : 42;
     // Learning rate
-    hypers.lr = get_config(kwargs, "learning_rate");
-    hypers.min_lr_ratio = get_config(kwargs, "min_lr_ratio");
-    hypers.anneal_lr = get_config(kwargs, "anneal_lr");
+    hypers.lr = get_config(train_kwargs, "learning_rate");
+    hypers.min_lr_ratio = get_config(train_kwargs, "min_lr_ratio");
+    hypers.anneal_lr = get_config(train_kwargs, "anneal_lr");
     // Optimizer (Muon only)
-    hypers.beta1 = get_config(kwargs, "beta1");
+    hypers.beta1 = get_config(train_kwargs, "beta1");
     // Training
-    hypers.minibatch_size = get_config(kwargs, "minibatch_size");
-    hypers.replay_ratio = get_config(kwargs, "replay_ratio");
-    hypers.total_timesteps = get_config(kwargs, "total_timesteps");
-    hypers.max_grad_norm = get_config(kwargs, "max_grad_norm");
+    hypers.minibatch_size = get_config(train_kwargs, "minibatch_size");
+    hypers.replay_ratio = get_config(train_kwargs, "replay_ratio");
+    hypers.total_timesteps = get_config(train_kwargs, "total_timesteps");
+    hypers.max_grad_norm = get_config(train_kwargs, "max_grad_norm");
     // PPO
-    hypers.clip_coef = get_config(kwargs, "clip_coef");
-    hypers.vf_clip_coef = get_config(kwargs, "vf_clip_coef");
-    hypers.vf_coef = get_config(kwargs, "vf_coef");
-    hypers.ent_coef = get_config(kwargs, "ent_coef");
+    hypers.clip_coef = get_config(train_kwargs, "clip_coef");
+    hypers.vf_clip_coef = get_config(train_kwargs, "vf_clip_coef");
+    hypers.vf_coef = get_config(train_kwargs, "vf_coef");
+    hypers.ent_coef = get_config(train_kwargs, "ent_coef");
     // GAE
-    hypers.gamma = get_config(kwargs, "gamma");
-    hypers.gae_lambda = get_config(kwargs, "gae_lambda");
+    hypers.gamma = get_config(train_kwargs, "gamma");
+    hypers.gae_lambda = get_config(train_kwargs, "gae_lambda");
     // VTrace
-    hypers.vtrace_rho_clip = get_config(kwargs, "vtrace_rho_clip");
-    hypers.vtrace_c_clip = get_config(kwargs, "vtrace_c_clip");
+    hypers.vtrace_rho_clip = get_config(train_kwargs, "vtrace_rho_clip");
+    hypers.vtrace_c_clip = get_config(train_kwargs, "vtrace_c_clip");
     // Priority
-    hypers.prio_alpha = get_config(kwargs, "prio_alpha");
-    hypers.prio_beta0 = get_config(kwargs, "prio_beta0");
-    // Flags
-    hypers.reset_state = kwargs.contains("reset_state") && get_config(kwargs, "reset_state") > 0;
-    hypers.profile = get_config(kwargs, "profile");
+    hypers.prio_alpha = get_config(train_kwargs, "prio_alpha");
+    hypers.prio_beta0 = get_config(train_kwargs, "prio_beta0");
+    // Flags — check both top-level args and train sub-dict
+    hypers.reset_state = (args.contains("reset_state") && get_config(args, "reset_state") > 0)
+        || (train_kwargs.contains("reset_state") && get_config(train_kwargs, "reset_state") > 0);
+    hypers.profile = train_kwargs.contains("profile") ? get_config(train_kwargs, "profile")
+        : args.contains("profile") ? get_config(args, "profile") : 0;
     mtl_enable_gpu_timing(hypers.profile);
-    hypers.overlap = kwargs.contains("overlap") && get_config(kwargs, "overlap") > 0;
-    hypers.cpu_inference = kwargs.contains("cpu_inference") && get_config(kwargs, "cpu_inference") > 0;
-    hypers.train_fp16 = kwargs.contains("train_fp16") && get_config(kwargs, "train_fp16") > 0;
-    hypers.ns_iters = kwargs.contains("ns_iters") ? (int)get_config(kwargs, "ns_iters") : 5;
-    hypers.gpu_id = kwargs.contains("gpu_id") ? (int)get_config(kwargs, "gpu_id") : 0;
+    hypers.overlap = (train_kwargs.contains("overlap") && get_config(train_kwargs, "overlap") > 0)
+        || (args.contains("overlap") && get_config(args, "overlap") > 0);
+    hypers.cpu_inference = (train_kwargs.contains("cpu_inference") && get_config(train_kwargs, "cpu_inference") > 0)
+        || (args.contains("cpu_inference") && get_config(args, "cpu_inference") > 0);
+    hypers.train_fp16 = (train_kwargs.contains("train_fp16") && get_config(train_kwargs, "train_fp16") > 0)
+        || (args.contains("train_fp16") && get_config(args, "train_fp16") > 0);
+    hypers.ns_iters = train_kwargs.contains("ns_iters") ? (int)get_config(train_kwargs, "ns_iters")
+        : args.contains("ns_iters") ? (int)get_config(args, "ns_iters") : 5;
+    hypers.gpu_id = args.contains("gpu_id") ? (int)get_config(args, "gpu_id") : 0;
 
-    std::string env_name = kwargs["env_name"].cast<std::string>();
-    Dict* vec_dict = py_dict_to_c_dict(vec_kwargs.cast<py::dict>());
-    Dict* env_dict = py_dict_to_c_dict(env_kwargs.cast<py::dict>());
+    std::string env_name = args["env_name"].cast<std::string>();
+    Dict* vec_dict = py_dict_to_c_dict(vec_kwargs);
+    Dict* env_dict = py_dict_to_c_dict(env_kwargs);
 
     std::unique_ptr<PuffeRL> pufferl;
     {
@@ -514,11 +641,26 @@ std::unique_ptr<PuffeRL> create_pufferl(pybind11::dict kwargs,
 // ============================================================================
 
 PYBIND11_MODULE(_C, m) {
+    // Module attributes (upstream compat)
+    m.attr("gpu") = 0;  // Metal uses unified memory, not discrete GPU
+
+    // Unified log functions (upstream API)
+    m.def("log", &puf_log);
+    m.def("eval_log", &puf_eval_log);
+    m.def("uptime", [](py::object pufferl_obj) -> double {
+        PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
+        double now = wall_clock();
+        return now - pufferl.start_time;
+    });
+
+    // Metal-specific granular log functions (kept for backward compat)
     m.def("log_environments", &log_environments);
     m.def("log_losses", &log_losses);
     m.def("log_profile", &log_profile);
     m.def("log_train_debug", &log_train_debug);
     m.def("log_utilization", &log_utilization);
+
+    // Core functions
     m.def("render", &render);
     m.def("rollouts", &rollouts);
     m.def("train", &train);
@@ -585,6 +727,9 @@ PYBIND11_MODULE(_C, m) {
         .def_readwrite("muon", &PuffeRL::muon)
         .def_readwrite("hypers", &PuffeRL::hypers)
         .def_readwrite("rollouts", &PuffeRL::rollouts)
+        .def_readonly("epoch", &PuffeRL::epoch)
+        .def_readonly("global_step", &PuffeRL::global_step)
+        .def_readonly("last_log_time", &PuffeRL::last_log_time)
         .def("num_params", [](PuffeRL& self) -> int64_t {
             return self.alloc_fp32.params.total_elems;
         })

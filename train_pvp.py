@@ -108,46 +108,6 @@ def main():
         args.opponent_type = OPP_PFSP
 
     # Hyperparams matching osrs_pvp.ini production config
-    config = {
-        "horizon": args.horizon,
-        "learning_rate": args.learning_rate,
-        "min_lr_ratio": args.min_lr_ratio,
-        "anneal_lr": 1.0,
-        "beta1": args.beta1,
-        "beta2": args.beta2,
-        "eps": args.eps,
-        "minibatch_size": args.minibatch_size,
-        "replay_ratio": args.replay_ratio,
-        "total_timesteps": args.total_timesteps,
-        "max_grad_norm": args.max_grad_norm,
-        "clip_coef": args.clip_coef,
-        "vf_clip_coef": args.vf_clip_coef,
-        "vf_coef": args.vf_coef,
-        "ent_coef": args.ent_coef,
-        "gamma": args.gamma,
-        "gae_lambda": args.gae_lambda,
-        "vtrace_rho_clip": args.vtrace_rho_clip,
-        "vtrace_c_clip": args.vtrace_c_clip,
-        "prio_alpha": args.prio_alpha,
-        "prio_beta0": args.prio_beta0,
-        "use_rnn": 1.0,
-        "cudagraphs": -1.0,
-        "kernels": 1.0,
-        "profile": 0.0,
-        "overlap": 0.0 if args.no_overlap else 1.0,
-        "cpu_inference": 1.0 if args.cpu_inference else 0.0,
-        "ns_iters": float(args.ns_iters),
-        "env_name": args.env,
-    }
-    vec_config = {
-        "total_agents": float(args.total_agents),
-        "num_buffers": float(args.num_buffers),
-        "num_threads": float(args.num_threads),
-    }
-    policy_config = {
-        "hidden_size": float(args.hidden_size),
-        "num_layers": float(args.num_layers),
-    }
     env_configs = {
         "osrs_pvp": {
             "opponent_type": float(args.opponent_type),
@@ -160,7 +120,46 @@ def main():
             "mask_in_obs": 1.0,
         },
     }
-    env_config = env_configs[args.env]
+    pufferl_args = {
+        "train": {
+            "horizon": args.horizon,
+            "learning_rate": args.learning_rate,
+            "min_lr_ratio": args.min_lr_ratio,
+            "anneal_lr": 1.0,
+            "beta1": args.beta1,
+            "beta2": args.beta2,
+            "eps": args.eps,
+            "minibatch_size": args.minibatch_size,
+            "replay_ratio": args.replay_ratio,
+            "total_timesteps": args.total_timesteps,
+            "max_grad_norm": args.max_grad_norm,
+            "clip_coef": args.clip_coef,
+            "vf_clip_coef": args.vf_clip_coef,
+            "vf_coef": args.vf_coef,
+            "ent_coef": args.ent_coef,
+            "gamma": args.gamma,
+            "gae_lambda": args.gae_lambda,
+            "vtrace_rho_clip": args.vtrace_rho_clip,
+            "vtrace_c_clip": args.vtrace_c_clip,
+            "prio_alpha": args.prio_alpha,
+            "prio_beta0": args.prio_beta0,
+            "profile": 0.0,
+            "overlap": 0.0 if args.no_overlap else 1.0,
+            "cpu_inference": 1.0 if args.cpu_inference else 0.0,
+            "ns_iters": float(args.ns_iters),
+        },
+        "vec": {
+            "total_agents": float(args.total_agents),
+            "num_buffers": float(args.num_buffers),
+            "num_threads": float(args.num_threads),
+        },
+        "env": env_configs[args.env],
+        "policy": {
+            "hidden_size": float(args.hidden_size),
+            "num_layers": float(args.num_layers),
+        },
+        "env_name": args.env,
+    }
 
     # wandb
     if args.env == "osrs_pvp":
@@ -187,14 +186,14 @@ def main():
                 "opponent_name": opponent_label,
                 "pfsp_pool": args.pfsp,
                 "pfsp_p": args.pfsp_p,
-                **{k: v for k, v in config.items() if k not in ("env_name",)},
+                **pufferl_args["train"],
             },
         )
 
     # Create pufferl
     print(f"creating pufferl: agents={args.total_agents}, hidden={args.hidden_size}, "
           f"layers={args.num_layers}, horizon={args.horizon}")
-    pufferl = _C.create_pufferl(config, vec_config, env_config, policy_config)
+    pufferl = _C.create_pufferl(pufferl_args)
     print(f"model params: {pufferl.num_params():,}")
 
     # PFSP init: push pool types + uniform cumulative weights

@@ -201,8 +201,11 @@ def apply_cli_overrides(config: dict, env_name: str) -> dict:
 # training engine
 # ============================================================================
 
-def build_configs(env_name: str, config: dict):
-    """Convert loaded config dict to the 4 config dicts for _C.create_pufferl.
+def build_config(env_name: str, config: dict) -> dict:
+    """Convert loaded config dict to the single nested dict for _C.create_pufferl.
+
+    Returns {"train": {...}, "vec": {...}, "env": {...}, "policy": {...}, "env_name": ...}
+    matching upstream bindings.cu API (single dict with sub-dicts).
 
     Accepts either:
       - full config from load_config: {"train": {...}, "policy": {...}, "vec": {...}, ...}
@@ -223,7 +226,7 @@ def build_configs(env_name: str, config: dict):
     if minibatch_size > batch_size:
         minibatch_size = batch_size
 
-    c = {
+    train_config = {
         "horizon": horizon,
         "learning_rate": train.get("learning_rate", 0.1),
         "min_lr_ratio": train.get("min_lr_ratio", 0.0),
@@ -252,7 +255,6 @@ def build_configs(env_name: str, config: dict):
         "train_fp16": float(int(train.get("train_fp16", 0))),
         "ns_iters": float(int(train.get("ns_iters", 5))),
         "seed": float(int(train.get("seed", 42))),
-        "env_name": env_name,
     }
     vec_config = {
         "total_agents": float(total_agents),
@@ -268,7 +270,13 @@ def build_configs(env_name: str, config: dict):
     if "scaffolding_ratio" in train:
         env_config["scaffolding_ratio"] = train["scaffolding_ratio"]
 
-    return c, vec_config, env_config, policy_config
+    return {
+        "train": train_config,
+        "vec": vec_config,
+        "env": env_config,
+        "policy": policy_config,
+        "env_name": env_name,
+    }
 
 
 class TrainingResult:
@@ -287,13 +295,15 @@ class TrainingResult:
         self.pufferl = None
 
 
-def run_training(config, vec_config, env_config, policy_config, *,
+def run_training(args, *,
                  log_interval=5, score_key="score",
                  on_log=None, should_stop=None, on_iteration=None,
                  keep_alive=False,
                  checkpoint_dir=None, checkpoint_interval=200):
     """Run the Metal training loop.
 
+    args: single nested dict {"train": {...}, "vec": {...}, "env": {...}, "policy": {...}, "env_name": ...}
+        as returned by build_config(). Matches upstream bindings.cu create_pufferl API.
     on_log(iteration, global_step, sps, losses, env_stats):
         called every log_interval iterations. return value ignored.
     should_stop(score, elapsed):
@@ -305,9 +315,9 @@ def run_training(config, vec_config, env_config, policy_config, *,
     checkpoint_dir:
         if set, save weights every checkpoint_interval iterations.
     """
-    total_agents = int(vec_config["total_agents"])
-    horizon = int(config["horizon"])
-    total_steps = int(config["total_timesteps"])
+    total_agents = int(args["vec"]["total_agents"])
+    horizon = int(args["train"]["horizon"])
+    total_steps = int(args["train"]["total_timesteps"])
     steps_per_iter = total_agents * horizon
     total_iters = total_steps // steps_per_iter
 
@@ -315,7 +325,7 @@ def run_training(config, vec_config, env_config, policy_config, *,
     pufferl = None
 
     try:
-        pufferl = _C.create_pufferl(config, vec_config, env_config, policy_config)
+        pufferl = _C.create_pufferl(args)
         result.pufferl = pufferl
 
         # warmup
@@ -496,7 +506,7 @@ def run_trial(
     with (log_dir / "config.json").open("w") as f:
         json.dump({"params": params}, f, indent=2)
 
-    # merge trial params into full config for build_configs.
+    # merge trial params into full config for build_config.
     # Protein may place vec params under params["vec"] or params["train"] depending
     # on sweep config structure — check both, preferring params["vec"] over train.
     p_vec = params.get("vec", {})
@@ -516,13 +526,13 @@ def run_trial(
         },
         "env": config.get("env", {}),
     }
-    c, vec_config, env_config, policy_config = build_configs(env_name, trial_config)
+    args = build_config(env_name, trial_config)
 
-    total_agents = int(vec_config["total_agents"])
+    total_agents = int(args["vec"]["total_agents"])
 
     # PFSP setup for osrs_pvp
     pfsp_state = None
-    if env_name == "osrs_pvp" and env_config.get("opponent_type", 0) == float(OPP_PFSP):
+    if env_name == "osrs_pvp" and args["env"].get("opponent_type", 0) == float(OPP_PFSP):
         pfsp_state = {"total_agents": total_agents}
 
     last_report_time = time.time()
@@ -561,7 +571,7 @@ def run_trial(
 
         if wandb_run:
             approx_kl = losses.get("approx_kl", 0)
-            batch_size = total_agents * int(c["horizon"])
+            batch_size = total_agents * int(args["train"]["horizon"])
             log_dict = {
                 "sps": sps, "score": score,
                 "episode_return": env_stats.get("episode_return", 0),
@@ -604,7 +614,7 @@ def run_trial(
 
     try:
         result = run_training(
-            c, vec_config, env_config, policy_config,
+            args,
             log_interval=LOG_INTERVAL,
             score_key=score_key,
             on_log=on_log,
@@ -891,16 +901,16 @@ def train_cli(env_name: str):
     config = apply_cli_overrides(config, env_name)
     cli = config.pop("_cli", {})
 
-    c, vec_config, env_config, policy_config = build_configs(env_name, config)
+    args = build_config(env_name, config)
 
-    total_agents = int(vec_config["total_agents"])
-    hidden_size = int(policy_config["hidden_size"])
-    num_layers = int(policy_config["num_layers"])
-    horizon = int(c["horizon"])
-    overlap = bool(int(c["overlap"]))
-    cpu_infer = bool(int(c["cpu_inference"]))
-    fp16 = bool(int(c["train_fp16"]))
-    seed = int(c["seed"])
+    total_agents = int(args["vec"]["total_agents"])
+    hidden_size = int(args["policy"]["hidden_size"])
+    num_layers = int(args["policy"]["num_layers"])
+    horizon = int(args["train"]["horizon"])
+    overlap = bool(int(args["train"]["overlap"]))
+    cpu_infer = bool(int(args["train"]["cpu_inference"]))
+    fp16 = bool(int(args["train"]["train_fp16"]))
+    seed = int(args["train"]["seed"])
 
     print(f"env={env_name}, agents={total_agents}, hidden={hidden_size}, "
           f"layers={num_layers}, horizon={horizon}, overlap={overlap}, "
@@ -913,7 +923,7 @@ def train_cli(env_name: str):
         run_id = wandb.util.generate_id()
         run_name = cli.get("tag") or f"{env_name}-{run_id[:6]}"
         wandb_run = wandb.init(
-            id=run_id, config={**c, **vec_config, **env_config, **policy_config},
+            id=run_id, config={**args["train"], **args["vec"], **args["env"], **args["policy"]},
             project=cli.get("wandb_project", "pufferlib-metal"),
             group=cli.get("wandb_group", "debug"),
             name=run_name,
@@ -967,7 +977,7 @@ def train_cli(env_name: str):
                 if k in debug_stats})
 
         c1, c2, b1, b2 = '[cyan]', '[white]', '[bright_cyan]', '[bright_white]'
-        total_ts = int(c.get("total_timesteps", 0))
+        total_ts = int(args["train"].get("total_timesteps", 0))
         uptime = time.time() - _start_time
         remaining = duration((total_ts - global_step) / sps, b2, c2) if sps > 0 else f'{b2}--{c2}'
 
@@ -1093,11 +1103,11 @@ def train_cli(env_name: str):
         run_id = str(int(1000 * time.time()))
         checkpoint_dir = os.path.join("checkpoints", env_name, run_id)
 
-    print(f"model params: {int(c.get('total_timesteps', 0)):,} steps target")
+    print(f"model params: {int(args['train'].get('total_timesteps', 0)):,} steps target")
     print(f"checkpoints: {checkpoint_dir} (every {checkpoint_interval} iters)")
 
     result = run_training(
-        c, vec_config, env_config, policy_config,
+        args,
         log_interval=log_interval,
         on_log=on_log,
         checkpoint_dir=checkpoint_dir,
@@ -1167,11 +1177,7 @@ def eval_cli(env_name: str):
     config = apply_cli_overrides(config, env_name)
     cli = config.pop("_cli", {})
 
-    c, vec_config, env_config, policy_config = build_configs(env_name, config)
-
-    pufferl = _C.create_pufferl(c, vec_config, env_config, policy_config)
-
-    cli = config.pop("_cli", {})
+    args = build_config(env_name, config)
 
     # resolve load path: explicit path, "latest", or search
     load_path = cli.get("load_model_path", "latest")
@@ -1180,10 +1186,10 @@ def eval_cli(env_name: str):
         candidates = glob.glob(pattern, recursive=True)
         if not candidates:
             print(f"no checkpoints found in checkpoints/{env_name}/")
-            _C.close(pufferl)
             return
         load_path = max(candidates, key=os.path.getctime)
 
+    pufferl = _C.create_pufferl(args)
     _C.load_weights(pufferl, load_path)
     print(f"loaded weights from {load_path}")
     print(f"rendering env 0. ctrl+c to stop.")

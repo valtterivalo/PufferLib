@@ -226,6 +226,10 @@ typedef struct {
     int train_sync_count;
     double train_sync_ms;
     int epoch;
+    long global_step;
+    double start_time;
+    double last_log_time;
+    long last_log_step;
     uint64_t rng_seed;
     // Action mask: true if obs embeds a mask in the last act_n columns.
     // When false, a static all-ones buffer is used instead.
@@ -1193,6 +1197,10 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     static_vec_reset(vec);
 
     pufferl->epoch = 0;
+    pufferl->global_step = 0;
+    pufferl->start_time = 0;  // set by first rollouts() call
+    pufferl->last_log_time = 0;
+    pufferl->last_log_step = 0;
 
     return pufferl;
 }

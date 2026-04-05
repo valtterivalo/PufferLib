@@ -59,48 +59,46 @@ def parse_args():
 def main():
     args = parse_args()
 
-    config = {
-        "horizon": args.horizon,
-        "learning_rate": args.learning_rate,
-        "min_lr_ratio": 0.1,
-        "anneal_lr": 1.0,
-        "beta1": 0.95,
-        "beta2": 0.999,
-        "eps": 1e-12,
-        "minibatch_size": args.minibatch_size,
-        "replay_ratio": args.replay_ratio,
-        "total_timesteps": args.total_timesteps,
-        "max_grad_norm": args.max_grad_norm,
-        "clip_coef": args.clip_coef,
-        "vf_clip_coef": args.vf_clip_coef,
-        "vf_coef": args.vf_coef,
-        "ent_coef": args.ent_coef,
-        "gamma": args.gamma,
-        "gae_lambda": args.gae_lambda,
-        "vtrace_rho_clip": 1.0,
-        "vtrace_c_clip": 1.0,
-        "prio_alpha": args.prio_alpha,
-        "prio_beta0": args.prio_beta0,
-        "use_rnn": 1.0,
-        "cudagraphs": -1.0,
-        "kernels": 1.0,
-        "profile": 0.0,
-        "overlap": 0.0 if args.no_overlap else 1.0,
+    pufferl_args = {
+        "train": {
+            "horizon": args.horizon,
+            "learning_rate": args.learning_rate,
+            "min_lr_ratio": 0.1,
+            "anneal_lr": 1.0,
+            "beta1": 0.95,
+            "beta2": 0.999,
+            "eps": 1e-12,
+            "minibatch_size": args.minibatch_size,
+            "replay_ratio": args.replay_ratio,
+            "total_timesteps": args.total_timesteps,
+            "max_grad_norm": args.max_grad_norm,
+            "clip_coef": args.clip_coef,
+            "vf_clip_coef": args.vf_clip_coef,
+            "vf_coef": args.vf_coef,
+            "ent_coef": args.ent_coef,
+            "gamma": args.gamma,
+            "gae_lambda": args.gae_lambda,
+            "vtrace_rho_clip": 1.0,
+            "vtrace_c_clip": 1.0,
+            "prio_alpha": args.prio_alpha,
+            "prio_beta0": args.prio_beta0,
+            "profile": 0.0,
+            "overlap": 0.0 if args.no_overlap else 1.0,
+        },
+        "vec": {
+            "total_agents": float(args.total_agents),
+            "num_buffers": float(args.num_buffers),
+            "num_threads": float(args.num_threads),
+        },
+        "env": {
+            "gear_tier": float(args.gear_tier),
+            "mask_in_obs": 1.0,
+        },
+        "policy": {
+            "hidden_size": float(args.hidden_size),
+            "num_layers": float(args.num_layers),
+        },
         "env_name": "osrs_zulrah",
-    }
-    vec_config = {
-        "total_agents": float(args.total_agents),
-        "num_buffers": float(args.num_buffers),
-        "num_threads": float(args.num_threads),
-    }
-    policy_config = {
-        "hidden_size": float(args.hidden_size),
-        "num_layers": float(args.num_layers),
-        "arch": 1.0 if args.arch == "simple" else 0.0,
-    }
-    env_config = {
-        "gear_tier": float(args.gear_tier),
-        "mask_in_obs": 1.0,
     }
 
     # wandb
@@ -122,14 +120,14 @@ def main():
                 "learning_rate": args.learning_rate,
                 "minibatch_size": args.minibatch_size,
                 "gear_tier": args.gear_tier,
-                **{k: v for k, v in config.items() if k not in ("env_name",)},
+                **pufferl_args["train"],
             },
         )
 
     # Create pufferl
     print(f"creating pufferl: agents={args.total_agents}, hidden={args.hidden_size}, "
           f"layers={args.num_layers}, horizon={args.horizon}")
-    pufferl = _C.create_pufferl(config, vec_config, env_config, policy_config)
+    pufferl = _C.create_pufferl(pufferl_args)
     print(f"model params: {pufferl.num_params():,}")
 
     # Save dir

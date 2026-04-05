@@ -20,7 +20,7 @@ from pufferlib import _C
 ENV_NAME = "breakout"
 ENV_CONFIG = ENV_DEFAULTS[ENV_NAME]
 
-BASE_CONFIG = {
+BASE_TRAIN = {
     "total_timesteps": 1_000_000.0,
     "horizon": 32.0,
     "learning_rate": 0.001,
@@ -42,12 +42,8 @@ BASE_CONFIG = {
     "vtrace_c_clip": 1.0,
     "prio_alpha": 0.8,
     "prio_beta0": 0.2,
-    "use_rnn": 1.0,
-    "cudagraphs": -1.0,
-    "kernels": 1.0,
     "profile": 0.0,
     "overlap": 1.0,
-    "env_name": ENV_NAME,
 }
 
 VEC_CONFIG = {
@@ -57,10 +53,10 @@ VEC_CONFIG = {
 }
 
 POLICY_CONFIGS = [
-    {"hidden_size": 128.0, "num_layers": 1.0, "arch": 1.0},
-    {"hidden_size": 512.0, "num_layers": 2.0, "arch": 1.0},
-    {"hidden_size": 256.0, "num_layers": 3.0, "arch": 1.0},
-    {"hidden_size": 1024.0, "num_layers": 1.0, "arch": 1.0},
+    {"hidden_size": 128.0, "num_layers": 1.0},
+    {"hidden_size": 512.0, "num_layers": 2.0},
+    {"hidden_size": 256.0, "num_layers": 3.0},
+    {"hidden_size": 1024.0, "num_layers": 1.0},
 ]
 
 
@@ -73,7 +69,14 @@ def run_single_trial(trial_id: int, policy_config: dict[str, float]) -> None:
         f"\n=== trial {trial_id} (hidden={hidden_size}, layers={num_layers}) ===\n".encode(),
     )
 
-    pufferl = _C.create_pufferl(BASE_CONFIG, VEC_CONFIG, ENV_CONFIG, policy_config)
+    args = {
+        "train": BASE_TRAIN,
+        "vec": VEC_CONFIG,
+        "env": ENV_CONFIG,
+        "policy": policy_config,
+        "env_name": ENV_NAME,
+    }
+    pufferl = _C.create_pufferl(args)
     os.write(2, f"  created ({pufferl.num_params():,} params)\n".encode())
 
     for iteration_index in range(3):
