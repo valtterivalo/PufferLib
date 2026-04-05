@@ -5,8 +5,11 @@ usage:
     python pufferl.py train <env> [args]     single training run
     python pufferl.py sweep <env> [args]     Protein hyperparameter sweep
     python pufferl.py results <env>          print sweep results
+    python pufferl.py eval <env> [args]      render trained agent
 
-requires building the env first: python setup.py build_<env> --force
+structure mirrors upstream PufferLib 4.0 pufferl.py: PuffeRL class wrapping
+_C, _train_rank loop, train/sweep/eval entry points. Metal additions marked
+with # --- Metal addition --- comments.
 """
 
 from __future__ import annotations
@@ -18,10 +21,13 @@ import glob
 import json
 import math
 import os
+import signal
 import sys
 import time
 from copy import deepcopy
 from pathlib import Path
+
+import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -35,6 +41,8 @@ from pufferlib import _C
 from pufferlib.pufferl import downsample, abbreviate, duration
 from pufferlib.sweep import Protein, pareto_points, prune_pareto_front
 
+signal.signal(signal.SIGINT, lambda sig, frame: os._exit(0))
+
 # keep logs live when piping through tee
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(line_buffering=True, write_through=True)
@@ -43,20 +51,38 @@ if hasattr(sys.stderr, "reconfigure"):
 
 
 # ============================================================================
+# helpers (matches upstream pufferl.py formatting utilities)
+# ============================================================================
+
+def unroll_nested_dict(d):
+    if not isinstance(d, dict):
+        return d
+    for k, v in d.items():
+        if isinstance(v, dict):
+            for k2, v2 in unroll_nested_dict(v):
+                yield f"{k}/{k2}", v2
+        else:
+            yield k, v
+
+
+def fmt_perf(name, color, delta_ref, elapsed, b2, c2):
+    percent = 0 if delta_ref == 0 else int(100 * elapsed / delta_ref - 1e-5)
+    return f'{color}{name}', duration(elapsed, b2, c2), f'{b2}{percent:2d}{c2}%'
+
+
+# ============================================================================
 # config loading (reads .ini files, builds argparse dynamically)
 # ============================================================================
 
 METAL_CONFIG_DIR = Path(__file__).parent / "config"
 SWEEP_DIR_BASE = Path("runs/sweep_bench")
-LOG_INTERVAL = 5
 
 
 def _parse_ini_value(raw: str):
-    """Parse a single .ini value into its Python type.
+    """Parse a single .ini value into its Python type via ast.literal_eval.
 
-    Uses ast.literal_eval (safe: only parses Python literals like strings,
-    numbers, booleans, None — no arbitrary code execution). Falls back to
-    returning the raw string if literal_eval can't parse it.
+    Safe: only parses Python literals (strings, numbers, booleans, None).
+    Falls back to returning the raw string.
     """
     try:
         return ast.literal_eval(raw)
@@ -92,7 +118,7 @@ def load_config(env_name: str) -> dict:
     sweep_sections_to_remove = []
     for section_name, section_data in list(config.items()):
         if section_name.startswith("sweep."):
-            parts = section_name.split(".", 2)  # sweep.train.learning_rate
+            parts = section_name.split(".", 2)
             if len(parts) == 3:
                 group, param = parts[1], parts[2]
                 sweep_params.setdefault(group, {})[param] = section_data
@@ -100,7 +126,6 @@ def load_config(env_name: str) -> dict:
     for key in sweep_sections_to_remove:
         config.pop(key)
 
-    # merge sweep metadata + param ranges
     sweep_params = {k: v for k, v in sweep_params.items() if v}
     config["sweep"] = {**sweep, **sweep_params}
 
@@ -108,18 +133,13 @@ def load_config(env_name: str) -> dict:
 
 
 def apply_cli_overrides(config: dict, env_name: str) -> dict:
-    """Build argparse from config keys, parse CLI, apply overrides.
-
-    Mutates and returns config. CLI args like --learning-rate override
-    config["train"]["learning_rate"].
-    """
+    """Build argparse from config keys, parse CLI, apply overrides."""
     parser = argparse.ArgumentParser(
         description=f"Metal training for {env_name}",
         add_help=True,
     )
 
-    # register all config keys as CLI args (skip sweep sections)
-    arg_registry = {}  # maps cli_name -> (section, key)
+    arg_registry = {}
     for section in ("train", "policy", "vec", "env", "base"):
         section_data = config.get(section, {})
         for key, value in section_data.items():
@@ -139,53 +159,50 @@ def apply_cli_overrides(config: dict, env_name: str) -> dict:
             else:
                 parser.add_argument(cli_name, type=type(value), default=value)
 
-    # extra CLI-only args (skip if already defined by .ini auto-generation)
     def _add_if_new(name, **kwargs):
         try:
             parser.add_argument(name, **kwargs)
         except argparse.ArgumentError:
-            pass  # already defined from .ini config
+            pass
 
     _add_if_new("--no-overlap", action="store_true")
     _add_if_new("--fp16", action="store_true",
                 help="fp16 training activations/grads (rollout stays fp32)")
-    _add_if_new("--log-interval", type=int, default=10)
     _add_if_new("--checkpoint-interval", type=int, default=200,
                 help="save weights every N iterations")
     _add_if_new("--checkpoint-dir", type=str, default="",
                 help="checkpoint directory (default: checkpoints/<env>/<run_id>)")
     _add_if_new("--load-model-path", type=str, default="latest",
                 help="path to checkpoint for eval mode (default: latest)")
+    # --- Metal addition ---
     _add_if_new("--trace-path", type=str, default="")
     _add_if_new("--trace-every", type=int, default=1)
+    # sweep CLI
     _add_if_new("--timeout", type=float, default=4.0,
                 help="max sweep hours (default: 4)")
     _add_if_new("--max-trials", type=int, default=None)
     _add_if_new("--results", action="store_true",
                 help="print sweep results and exit")
-    parser.add_argument("--wandb", action="store_true",
-                        help="log to wandb")
+    # wandb
+    parser.add_argument("--wandb", action="store_true", help="log to wandb")
     parser.add_argument("--wandb-project", type=str, default="pufferlib-metal")
     parser.add_argument("--wandb-group", type=str, default="debug")
     parser.add_argument("--tag", type=str, default=None)
 
     args = parser.parse_args()
 
-    # apply overrides back into config
     parsed = vars(args)
     for cli_name, (section, key) in arg_registry.items():
         attr = cli_name.lstrip("-").replace("-", "_")
         if attr in parsed:
             config.setdefault(section, {})[key] = parsed[attr]
 
-    # handle special flags
     if args.no_overlap:
         config.setdefault("train", {})["overlap"] = 0
     if args.fp16:
         config.setdefault("train", {})["train_fp16"] = 1
 
     config["_cli"] = {
-        "log_interval": args.log_interval,
         "checkpoint_interval": args.checkpoint_interval,
         "checkpoint_dir": args.checkpoint_dir,
         "load_model_path": args.load_model_path,
@@ -203,19 +220,11 @@ def apply_cli_overrides(config: dict, env_name: str) -> dict:
     return config
 
 
-# ============================================================================
-# training engine
-# ============================================================================
-
 def build_config(env_name: str, config: dict) -> dict:
     """Convert loaded config dict to the single nested dict for _C.create_pufferl.
 
     Returns {"train": {...}, "vec": {...}, "env": {...}, "policy": {...}, "env_name": ...}
-    matching upstream bindings.cu API (single dict with sub-dicts).
-
-    Accepts either:
-      - full config from load_config: {"train": {...}, "policy": {...}, "vec": {...}, ...}
-      - nested Protein format: {"train": {...}, "policy": {...}}
+    matching the bindings create_pufferl API.
     """
     train = config.get("train", {})
     policy = config.get("policy", {})
@@ -227,7 +236,6 @@ def build_config(env_name: str, config: dict) -> dict:
     num_buffers = int(vec.get("num_buffers", train.get("num_buffers", 1)))
     minibatch_size = int(train.get("minibatch_size", 8192))
 
-    # structural: minibatch can't exceed batch size
     batch_size = total_agents * horizon
     if minibatch_size > batch_size:
         minibatch_size = batch_size
@@ -285,154 +293,362 @@ def build_config(env_name: str, config: dict) -> dict:
     }
 
 
-class TrainingResult:
-    """Return value from run_training."""
-    __slots__ = ("score", "episode_return", "sps", "steps", "elapsed",
-                 "entries", "profile", "pufferl")
-
-    def __init__(self):
-        self.score = 0.0
-        self.episode_return = 0.0
-        self.sps = 0.0
-        self.steps = 0
-        self.elapsed = 0.0
-        self.entries = []
-        self.profile = {}
-        self.pufferl = None
+def validate_config(args):
+    minibatch_size = int(args['train']['minibatch_size'])
+    horizon = int(args['train']['horizon'])
+    total_agents = int(args['vec']['total_agents'])
+    assert (minibatch_size % horizon) == 0, \
+        f'minibatch_size {minibatch_size} must be divisible by horizon {horizon}'
+    assert minibatch_size <= horizon * total_agents, \
+        f'minibatch_size {minibatch_size} > total_agents {total_agents} * horizon {horizon}'
 
 
-def run_training(args, *,
-                 log_interval=5, score_key="score",
-                 on_log=None, should_stop=None, on_iteration=None,
-                 keep_alive=False,
-                 checkpoint_dir=None, checkpoint_interval=200):
-    """Run the Metal training loop.
+# ============================================================================
+# PuffeRL class (mirrors upstream _C pufferl lifecycle)
+# ============================================================================
 
-    args: single nested dict {"train": {...}, "vec": {...}, "env": {...}, "policy": {...}, "env_name": ...}
-        as returned by build_config(). Matches upstream bindings.cu create_pufferl API.
-    on_log(iteration, global_step, sps, losses, env_stats):
-        called every log_interval iterations. return value ignored.
-    should_stop(score, elapsed):
-        called every log_interval iterations. return True to early-stop.
-    on_iteration(pufferl, global_step):
-        called every iteration (for PFSP weight updates etc.)
-    keep_alive:
-        if True, don't close pufferl -- caller gets it via result.pufferl.
-    checkpoint_dir:
-        if set, save weights every checkpoint_interval iterations.
+class PuffeRL:
+    """Wraps _C.create_pufferl and owns the training loop lifecycle.
+
+    Methods mirror upstream: evaluate, train, write_logs, print_dashboard,
+    save_checkpoint, close. Single-GPU Metal only (no DDP).
     """
-    total_agents = int(args["vec"]["total_agents"])
-    horizon = int(args["train"]["horizon"])
-    total_steps = int(args["train"]["total_timesteps"])
-    steps_per_iter = total_agents * horizon
-    total_iters = total_steps // steps_per_iter
 
-    result = TrainingResult()
-    pufferl = None
+    def __init__(self, args):
+        self.args = args
+        self._pufferl = _C.create_pufferl(args)
+        self.model_size = self._pufferl.num_params()
+        self._flat_logs = {}
+        self._console = Console()
+        self._dash_idx = 0
 
-    try:
-        pufferl = _C.create_pufferl(args)
-        result.pufferl = pufferl
+    @property
+    def global_step(self):
+        return self._pufferl.global_step
 
-        # warmup
-        _C.rollouts(pufferl)
-        _C.train(pufferl)
-        _C.log_losses(pufferl)
+    @property
+    def epoch(self):
+        return self._pufferl.epoch
 
-        global_step = 0
-        start_time = time.time()
-        t_last_log = start_time
+    @property
+    def last_log_time(self):
+        return self._pufferl.last_log_time
 
-        if checkpoint_dir:
-            os.makedirs(checkpoint_dir, exist_ok=True)
+    def evaluate(self):
+        _C.rollouts(self._pufferl)
 
-        for iteration in range(1, total_iters + 1):
-            _C.rollouts(pufferl)
-            _C.train(pufferl)
-            global_step += steps_per_iter
+    def train(self):
+        _C.train(self._pufferl)
 
-            if checkpoint_dir and checkpoint_interval > 0 and (iteration % checkpoint_interval == 0 or iteration == total_iters):
-                path = os.path.join(checkpoint_dir, f"{global_step:016d}.bin")
-                _C.save_weights(pufferl, path)
+    def write_logs(self):
+        """Collect logs from _C.log() and merge into flat_logs. Returns flat dict."""
+        logs = _C.log(self._pufferl)
+        flat = dict(unroll_nested_dict(logs))
 
-            if on_iteration:
-                on_iteration(pufferl, global_step)
+        # --- Metal addition: merge debug stats ---
+        try:
+            debug = _C.log_train_debug(self._pufferl)
+            for k, v in debug.items():
+                flat[f'debug/{k}'] = v
+        except Exception:
+            pass
 
-            if iteration % log_interval == 0:
-                now = time.time()
-                elapsed_since_log = now - t_last_log
-                sps = (log_interval * steps_per_iter) / elapsed_since_log
-                t_last_log = now
+        self._flat_logs = {**self._flat_logs, **flat}
+        return self._flat_logs
 
-                losses = _C.log_losses(pufferl)
-                env_stats = _C.log_environments(pufferl)
-                debug_stats = _C.log_train_debug(pufferl)
-                try:
-                    debug_stats.update(_C.log_utilization(pufferl))
-                except Exception:
-                    pass
+    def print_dashboard(self, clear=False,
+            c1='[cyan]', c2='[white]', b1='[bright_cyan]', b2='[bright_white]'):
+        """Render Rich dashboard. Generic env stats (not hardcoded per env)."""
+        g = lambda k, d=0: self._flat_logs.get(k, d)
+        args = self.args
 
-                # NaN guard -- surfaces data integrity bugs immediately
-                for loss_name in ("entropy", "pg_loss", "vf_loss"):
-                    v = losses.get(loss_name)
-                    if v is None or not math.isfinite(float(v)):
-                        raise RuntimeError(
-                            f"invalid loss metric {loss_name}={v} "
-                            f"at step={global_step}")
+        dashboard = Table(box=rich.box.ROUNDED, expand=True,
+            show_header=False, border_style='bright_cyan')
+        table = Table(box=None, expand=True, show_header=False)
+        dashboard.add_row(table)
 
-                score = env_stats.get(score_key, env_stats.get("episode_return", 0))
-                ep_ret = env_stats.get("episode_return", 0)
-                ep_len = env_stats.get("episode_length", 0)
+        table.add_column(justify="left", width=30)
+        table.add_column(justify="center", width=12)
+        table.add_column(justify="center", width=18)
+        table.add_column(justify="right", width=12)
 
-                entry = {
-                    "step": global_step,
-                    "sps": sps,
-                    "score": score,
-                    "episode_return": ep_ret,
-                    "episode_length": ep_len,
-                    "entropy": losses.get("entropy", 0),
-                    "pg_loss": losses.get("pg_loss", 0),
-                    "vf_loss": losses.get("vf_loss", 0),
-                }
-                result.entries.append(entry)
+        table.add_row(
+            f'{b1}PufferLib Metal {b2}{args["env_name"]} {self._dash_idx * " "}:blowfish:',
+            f'{c1}GPU: {b2}{g("util/gpu_percent"):.0f}{c2}%',
+            f'{c1}VRAM: {b2}{g("util/vram_used_gb"):.1f}{c2}/{b2}{g("util/vram_total_gb"):.0f}{c2}G',
+            f'{c1}RAM: {b2}{g("util/cpu_mem_gb"):.1f}{c2}G',
+        )
+        self._dash_idx = (self._dash_idx - 1) % 10
 
-                if on_log:
-                    on_log(iteration, global_step, sps, losses, env_stats, debug_stats)
+        # summary
+        agent_steps = g('agent_steps')
+        sps = g('SPS')
+        total_ts = int(args['train']['total_timesteps'])
+        remaining = duration((total_ts - agent_steps) / sps, b2, c2) if sps > 0 else f'{b2}--{c2}'
 
-                elapsed = now - start_time
-                if should_stop and should_stop(score, elapsed):
+        s = Table(box=None, expand=True)
+        s.add_column(f"{c1}Summary", justify='left', vertical='top', width=10)
+        s.add_column(f"{c1}Value", justify='right', vertical='top', width=14)
+        s.add_row(f'{c2}Env', f'{b2}{args["env_name"]}')
+        s.add_row(f'{c2}Params', abbreviate(self.model_size, b2, c2))
+        s.add_row(f'{c2}Steps', abbreviate(agent_steps, b2, c2))
+        s.add_row(f'{c2}SPS', abbreviate(sps, b2, c2))
+        s.add_row(f'{c2}Epoch', f'{b2}{g("epoch")}')
+        s.add_row(f'{c2}Uptime', duration(g('uptime'), b2, c2))
+        s.add_row(f'{c2}Remaining', remaining)
+
+        # perf
+        rollout_t = g('perf/rollout')
+        train_t = g('perf/train')
+        delta = rollout_t + train_t
+        p = Table(box=None, expand=True, show_header=False)
+        p.add_column(f"{c1}Performance", justify="left", width=10)
+        p.add_column(f"{c1}Time", justify="right", width=8)
+        p.add_column(f"{c1}%", justify="right", width=4)
+        p.add_row(*fmt_perf('Evaluate', b1, delta, rollout_t, b2, c2))
+        p.add_row(*fmt_perf('  GPU', b2, delta, g('perf/eval_gpu'), b2, c2))
+        p.add_row(*fmt_perf('  Env', b2, delta, g('perf/eval_env'), b2, c2))
+        p.add_row(*fmt_perf('Train', b1, delta, train_t, b2, c2))
+        p.add_row(*fmt_perf('  Misc', b2, delta, g('perf/train_misc'), b2, c2))
+        p.add_row(*fmt_perf('  Forward', b2, delta, g('perf/train_forward'), b2, c2))
+
+        # losses
+        l = Table(box=None, expand=True)
+        l.add_column(f'{c1}Losses', justify="left", width=16)
+        l.add_column(f'{c1}Value', justify="right", width=8)
+        for k, v in self._flat_logs.items():
+            if k.startswith('loss/'):
+                l.add_row(f'{b2}{k[5:]}', f'{b2}{v:.3f}')
+        # --- Metal addition: debug stats in losses column ---
+        for dk in ('debug/grad_l2', 'debug/dec_policy_abs_max', 'debug/dec_value_abs_max'):
+            if dk in self._flat_logs:
+                l.add_row(f'{b2}{dk.split("/")[1]}', f'{b2}{self._flat_logs[dk]:.3f}')
+
+        monitor = Table(box=None, expand=True, pad_edge=False)
+        monitor.add_row(s, p, l)
+        dashboard.add_row(monitor)
+
+        # env stats (generic -- iterate all env/ keys)
+        table = Table(box=None, expand=True, pad_edge=False)
+        dashboard.add_row(table)
+        left = Table(box=None, expand=True)
+        right = Table(box=None, expand=True)
+        table.add_row(left, right)
+        left.add_column(f"{c1}User Stats", justify="left", width=20)
+        left.add_column(f"{c1}Value", justify="right", width=10)
+        right.add_column(f"{c1}User Stats", justify="left", width=20)
+        right.add_column(f"{c1}Value", justify="right", width=10)
+
+        i = 0
+        for k, v in self._flat_logs.items():
+            if k.startswith('env/') and k != 'env/n':
+                u = left if i % 2 == 0 else right
+                u.add_row(f'{b2}{k[4:]}', f'{b2}{v:.3f}')
+                i += 1
+                if i == 30:
                     break
 
-        result.elapsed = time.time() - start_time
-        result.steps = global_step
-        result.sps = global_step / result.elapsed if result.elapsed > 0 else 0
+        if clear:
+            self._console.clear()
+        with self._console.capture() as capture:
+            self._console.print(dashboard)
+        print('\033[0;0H' + capture.get())
 
-        if result.entries:
-            result.score = result.entries[-1]["score"]
-            result.episode_return = result.entries[-1]["episode_return"]
+    def save_checkpoint(self, path):
+        _C.save_weights(self._pufferl, path)
 
-        result.profile = _C.log_profile(pufferl)
+    def load_checkpoint(self, path):
+        _C.load_weights(self._pufferl, path)
 
-    finally:
-        if pufferl is not None and not keep_alive:
-            _C.close(pufferl)
-            result.pufferl = None
-
-    return result
+    def close(self):
+        _C.close(self._pufferl)
 
 
 # ============================================================================
-# sweep functions
+# _train_rank: single training run (matches upstream _train)
 # ============================================================================
 
-def save_observation(obs: dict, path: Path) -> None:
+def _train_rank(args, sweep_obj=None, verbose=True):
+    """Single-GPU training rank. Creates PuffeRL, loops evaluate+train.
+
+    Returns (pufferl_instance, all_flat_logs). Caller must close pufferl.
+    """
+    validate_config(args)
+    pufferl = PuffeRL(args)
+
+    target_key = f'env/{args.get("sweep", {}).get("metric", "score")}'
+    total_timesteps = int(args['train']['total_timesteps'])
+    all_logs = []
+
+    # --- Metal addition: PFSP callback ---
+    on_iteration = args.get('_metal', {}).get('on_iteration')
+
+    # --- Metal addition: trace logging ---
+    trace_file = None
+    trace_every = max(int(args.get('_metal', {}).get('trace_every', 1)), 1)
+    trace_path = args.get('_metal', {}).get('trace_path', '')
+    if trace_path:
+        tp = Path(trace_path).expanduser().resolve()
+        tp.parent.mkdir(parents=True, exist_ok=True)
+        trace_file = tp.open("w", encoding="utf-8")
+        trace_file.write(json.dumps({"event": "meta", "env": args["env_name"]}) + "\n")
+        trace_file.flush()
+
+    # checkpoint setup
+    checkpoint_dir = args.get('_metal', {}).get('checkpoint_dir', '')
+    checkpoint_interval = int(args.get('_metal', {}).get('checkpoint_interval', 200))
+    if not checkpoint_dir and sweep_obj is None:
+        run_id = str(int(1000 * time.time()))
+        checkpoint_dir = os.path.join("checkpoints", args["env_name"], run_id)
+    if checkpoint_dir:
+        os.makedirs(checkpoint_dir, exist_ok=True)
+
+    # wandb
+    wandb_run = None
+    wandb_cfg = args.get('_metal', {}).get('wandb')
+    if wandb_cfg:
+        import wandb
+        run_id = wandb.util.generate_id()
+        run_name = wandb_cfg.get("tag") or f"{args['env_name']}-{run_id[:6]}"
+        wandb_run = wandb.init(
+            id=run_id, config=args,
+            project=wandb_cfg.get("project", "pufferlib-metal"),
+            group=wandb_cfg.get("group", "debug"),
+            name=run_name,
+            tags=[wandb_cfg["tag"]] if wandb_cfg.get("tag") else [args['env_name']],
+            settings=wandb.Settings(console="off"),
+        )
+
+    if verbose:
+        flat = pufferl.write_logs()
+        pufferl.print_dashboard(clear=True)
+
+    epoch = 0
+    while pufferl.global_step < total_timesteps:
+        pufferl.evaluate()
+        pufferl.train()
+        epoch += 1
+
+        # checkpoint
+        if checkpoint_dir and checkpoint_interval > 0 and (epoch % checkpoint_interval == 0):
+            path = os.path.join(checkpoint_dir, f"{pufferl.global_step:016d}.bin")
+            pufferl.save_checkpoint(path)
+
+        # --- Metal addition: PFSP callback ---
+        if on_iteration:
+            on_iteration(pufferl._pufferl, pufferl.global_step)
+
+        # rate-limit logging (upstream uses 0.6s)
+        if time.time() < pufferl.last_log_time + 0.6:
+            continue
+
+        flat = pufferl.write_logs()
+
+        # NaN guard
+        for loss_name in ('loss/entropy', 'loss/policy', 'loss/value'):
+            v = flat.get(loss_name)
+            if v is not None and not math.isfinite(float(v)):
+                raise RuntimeError(f"invalid loss {loss_name}={v} at step={pufferl.global_step}")
+
+        if verbose:
+            pufferl.print_dashboard()
+
+        if target_key in flat:
+            all_logs.append(dict(flat))
+
+            if wandb_run:
+                wandb_run.log(flat, step=flat.get('agent_steps', 0))
+
+            # --- Metal addition: trace logging ---
+            if trace_file and epoch % trace_every == 0:
+                trace_file.write(json.dumps({
+                    "event": "tick", "epoch": epoch,
+                    "step": flat.get("agent_steps", 0),
+                    "sps": flat.get("SPS", 0),
+                }) + "\n")
+
+            # sweep early stopping
+            if (sweep_obj is not None
+                    and pufferl.global_step > min(0.20 * total_timesteps, 100_000_000)):
+                score = flat.get(target_key, 0)
+                elapsed = flat.get('uptime', 0)
+                if sweep_obj.should_stop(score, elapsed):
+                    break
+
+    # final log + dashboard
+    flat = pufferl.write_logs()
+    if verbose:
+        pufferl.print_dashboard()
+
+    # final checkpoint
+    if checkpoint_dir and sweep_obj is None:
+        path = os.path.join(checkpoint_dir, f"{pufferl.global_step:016d}.bin")
+        pufferl.save_checkpoint(path)
+
+    if trace_file:
+        trace_file.write(json.dumps({
+            "event": "final", "step": pufferl.global_step,
+            "uptime": flat.get("uptime", 0),
+        }) + "\n")
+        trace_file.close()
+
+    if wandb_run:
+        import wandb as _wandb
+        if checkpoint_dir:
+            final_ckpt = os.path.join(checkpoint_dir, f"{pufferl.global_step:016d}.bin")
+            if os.path.exists(final_ckpt):
+                artifact = _wandb.Artifact(f"{args['env_name']}-model", type="model")
+                artifact.add_file(final_ckpt)
+                wandb_run.log_artifact(artifact)
+        wandb_run.finish()
+
+    return pufferl, all_logs
+
+
+def train(env_name, args=None):
+    """Train entry point. Upstream does DDP here; we're single GPU Metal."""
+    config = args or load_config(env_name)
+    if args is None:
+        config = apply_cli_overrides(config, env_name)
+    cli = config.pop("_cli", {})
+
+    built = build_config(env_name, config)
+
+    # pack Metal additions into _metal key
+    built['_metal'] = {
+        'checkpoint_dir': cli.get('checkpoint_dir', ''),
+        'checkpoint_interval': cli.get('checkpoint_interval', 200),
+        'trace_path': cli.get('trace_path', ''),
+        'trace_every': cli.get('trace_every', 1),
+    }
+    if cli.get('wandb'):
+        built['_metal']['wandb'] = {
+            'project': cli.get('wandb_project', 'pufferlib-metal'),
+            'group': cli.get('wandb_group', 'debug'),
+            'tag': cli.get('tag'),
+        }
+
+    # keep sweep config for target_key resolution
+    built['sweep'] = config.get('sweep', {})
+
+    pufferl, _ = _train_rank(built, verbose=True)
+    pufferl.close()
+
+
+# ============================================================================
+# sweep (Protein hyperparameter optimization)
+# ============================================================================
+
+# --- Metal addition: JSONL sweep persistence ---
+
+def _save_observation(obs: dict, path: Path) -> None:
     """Append observation to JSONL persistence file."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a") as f:
         f.write(json.dumps(obs) + "\n")
 
 
-def load_observations(path: Path) -> list[dict]:
+def _load_observations(path: Path) -> list[dict]:
     """Load all observations from JSONL persistence file."""
     if not path.exists():
         return []
@@ -445,287 +661,238 @@ def load_observations(path: Path) -> list[dict]:
     return records
 
 
-def _build_sweep_config(config: dict) -> dict:
-    """Extract Protein sweep config from loaded config dict."""
-    sweep = config.get("sweep", {})
+def sweep(env_name, args=None):
+    """Protein sweep orchestrator. Calls _train_rank() per trial, collects results."""
+    config = args or load_config(env_name)
+    if args is None:
+        config = apply_cli_overrides(config, env_name)
+    cli = config.pop("_cli", {})
+
+    if cli.get("results"):
+        _print_results(SWEEP_DIR_BASE / env_name / "observations.jsonl")
+        return
+
+    sweep_dir = SWEEP_DIR_BASE / env_name
+    sweep_dir.mkdir(parents=True, exist_ok=True)
+    obs_path = sweep_dir / "observations.jsonl"
+
+    # build Protein sweep config
+    sweep_cfg = config.get("sweep", {})
     sweep_config = {
-        "method": sweep.get("method", "Protein"),
+        "method": sweep_cfg.get("method", "Protein"),
         "metric": config.get("base", {}).get("score_metric", "score"),
-        "metric_distribution": sweep.get("metric_distribution", "linear"),
-        "goal": sweep.get("goal", "maximize"),
-        "downsample": int(sweep.get("downsample", 5)),
+        "metric_distribution": sweep_cfg.get("metric_distribution", "linear"),
+        "goal": sweep_cfg.get("goal", "maximize"),
+        "downsample": int(sweep_cfg.get("downsample", 5)),
         "use_gpu": False,
-        "prune_pareto": sweep.get("prune_pareto", True),
-        "early_stop_quantile": float(sweep.get("early_stop_quantile", 0.3)),
-        "max_suggestion_cost": int(sweep.get("max_suggestion_cost", 1800)),
+        "prune_pareto": sweep_cfg.get("prune_pareto", True),
+        "early_stop_quantile": float(sweep_cfg.get("early_stop_quantile", 0.3)),
+        "max_suggestion_cost": int(sweep_cfg.get("max_suggestion_cost", 1800)),
     }
-    # add sweep param ranges
     for group in ("train", "policy", "env", "vec"):
-        if group in sweep and isinstance(sweep[group], dict):
-            sweep_config[group] = sweep[group]
-    return sweep_config
+        if group in sweep_cfg and isinstance(sweep_cfg[group], dict):
+            sweep_config[group] = sweep_cfg[group]
 
-
-def _build_default_params(config: dict) -> dict:
-    """Extract default params (train + policy + vec) from loaded config dict.
-
-    Each group matches the sweep config key paths so Protein sees consistent
-    namespaces (train/, policy/, vec/, env/)."""
-    result = {
+    default_params = {
         "train": dict(config.get("train", {})),
         "policy": dict(config.get("policy", {})),
     }
     if config.get("vec"):
-        result["vec"] = dict(config["vec"])
+        default_params["vec"] = dict(config["vec"])
     if config.get("env"):
-        result["env"] = dict(config["env"])
-    return result
+        default_params["env"] = dict(config["env"])
 
+    protein = Protein(sweep_config, use_gpu=False, prune_pareto=True)
 
-def run_trial(
-    trial_idx: int,
-    env_name: str,
-    params: dict,
-    protein: Protein,
-    sweep_dir: Path,
-    config: dict,
-    wandb_config: dict | None = None,
-) -> dict | None:
-    """Run a single training trial using the shared training loop."""
-    from ocean.osrs_pvp.pfsp import (
-        OPP_PFSP, POOL_TYPES, init_pfsp, update_pfsp,
-    )
+    # replay existing observations
+    existing_records = _load_observations(obs_path)
+    existing_trials: set[int] = set()
+    if existing_records:
+        for r in existing_records:
+            existing_trials.add(r["trial"])
+            if "train" in r["params"]:
+                r["params"]["train"].setdefault("ns_iters", 5)
+            score = r.get("score", r.get("episode_return", 0))
+            protein.observe(r["params"], score, r["cost"])
+        print(f"replayed {len(existing_records)} observations from {len(existing_trials)} previous trials")
 
-    flat = dict(pufferlib.unroll_nested_dict(params))
-    total_steps = int(flat.get("train/total_timesteps", 0))
+    # wandb config
+    wandb_config = None
+    if cli.get("wandb"):
+        wandb_config = {
+            "project": cli.get("wandb_project", "pufferlib-metal"),
+            "group": cli.get("wandb_group", "debug"),
+            "tag": cli.get("tag"),
+        }
 
-    print(f"\n{'='*70}")
-    print(f"trial {trial_idx}  ({total_steps/1e6:.1f}M steps, muon)")
-    for key, value in sorted(flat.items()):
-        short_key = key.split("/")[-1]
-        fmt = f"{value:.6f}" if isinstance(value, float) else str(value)
-        print(f"  {short_key:20s} = {fmt}")
-    print(f"{'='*70}")
-
-    log_dir = sweep_dir / f"trial_{trial_idx}"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    with (log_dir / "config.json").open("w") as f:
-        json.dump({"params": params}, f, indent=2)
-
-    # merge trial params into full config for build_config.
-    # Protein may place vec params under params["vec"] or params["train"] depending
-    # on sweep config structure — check both, preferring params["vec"] over train.
-    p_vec = params.get("vec", {})
-    p_train = params.get("train", {})
-    cfg_vec = config.get("vec", {})
-    trial_config = {
-        "train": p_train,
-        "policy": params.get("policy", {}),
-        "vec": {
-            "total_agents": p_vec.get("total_agents",
-                p_train.get("total_agents", cfg_vec.get("total_agents", 2048))),
-            "num_buffers": p_vec.get("num_buffers",
-                p_train.get("num_buffers", cfg_vec.get("num_buffers", 1))),
-            "num_threads": cfg_vec.get("num_threads",
-                p_vec.get("num_buffers",
-                    p_train.get("num_buffers", cfg_vec.get("num_buffers", 1)))),
-        },
-        "env": config.get("env", {}),
-    }
-    args = build_config(env_name, trial_config)
-
-    total_agents = int(args["vec"]["total_agents"])
-
-    # PFSP setup for osrs_pvp
-    pfsp_state = None
-    if env_name == "osrs_pvp" and args["env"].get("opponent_type", 0) == float(OPP_PFSP):
-        pfsp_state = {"total_agents": total_agents}
-
-    last_report_time = time.time()
-    log_count = 0
+    trial_idx = max(existing_trials) + 1 if existing_trials else 0
+    sweep_start = time.time()
+    timeout_s = cli.get("timeout", 4.0) * 3600
+    max_trials = cli.get("max_trials")
     score_key = config.get("base", {}).get("score_metric", "score")
-    min_sps = int(config.get("sweep", {}).get("min_sps", 100_000))
-    downsample_points = int(config.get("sweep", {}).get("downsample", 5))
+    downsample_points = int(sweep_cfg.get("downsample", 5))
 
-    # per-trial wandb run (each sweep trial is a separate wandb run)
-    wandb_run = None
-    if wandb_config:
-        import wandb
-        flat_params = dict(pufferlib.unroll_nested_dict(params))
-        wandb_run = wandb.init(
-            config=flat_params,
-            project=wandb_config["project"],
-            group=wandb_config["group"],
-            tags=[wandb_config["tag"], f"trial-{trial_idx}"] if wandb_config.get("tag") else [f"trial-{trial_idx}"],
-            name=f"trial-{trial_idx}",
-            settings=wandb.Settings(console="off"),
-            reinit=True,
-        )
+    n_params = len(dict(pufferlib.unroll_nested_dict(
+        {k: v for k, v in sweep_config.items() if isinstance(v, dict)}
+    )))
+    print(f"protein sweep ({env_name}, metal)")
+    print(f"  metric: {score_key}, {n_params} params, timeout: {cli.get('timeout', 4.0):.1f}h")
 
-    def on_log(iteration, global_step, sps, losses, env_stats, debug_stats=None):
-        nonlocal last_report_time, log_count
-        log_count += 1
-        score = env_stats.get(score_key, env_stats.get("episode_return", 0))
-        now = time.time()
-        if now - last_report_time > 30:
-            ep_ret = env_stats.get("episode_return", 0)
-            ep_len = env_stats.get("episode_length", 0)
-            print(
-                f"  [{global_step/1e6:.1f}M / {total_steps/1e6:.0f}M]  "
-                f"return={ep_ret:.3f}  ep_len={ep_len:.0f}  sps={sps:.0f}  "
-                f"elapsed={now - start_time:.0f}s"
-            )
-            last_report_time = now
+    trials_run = 0
+    while True:
+        if max_trials is not None and trials_run >= max_trials:
+            print(f"\nreached max trials ({max_trials})")
+            break
+        if (time.time() - sweep_start) > timeout_s:
+            print(f"\ntimeout reached ({cli.get('timeout', 4.0):.1f}h)")
+            break
 
-        if wandb_run:
-            approx_kl = losses.get("approx_kl", 0)
-            batch_size = total_agents * int(args["train"]["horizon"])
-            log_dict = {
-                "sps": sps, "score": score,
-                "episode_return": env_stats.get("episode_return", 0),
-                "episode_length": env_stats.get("episode_length", 0),
-                "entropy": losses.get("entropy", 0),
-                "pg_loss": losses.get("pg_loss", 0),
-                "vf_loss": losses.get("vf_loss", 0),
-                "approx_kl": approx_kl,
-                "clipfrac": losses.get("clipfrac", 0),
-                "ddr": batch_size / approx_kl if approx_kl > 1e-8 else 0,
-                **{k: v for k, v in env_stats.items()
-                   if k not in ("episode_return", "episode_length", "score")},
+        if trial_idx == 0:
+            params = deepcopy(default_params)
+            print("\ntrial 0: default hyperparameters")
+        else:
+            fill = deepcopy(default_params)
+            params, info = protein.suggest(fill)
+            if info:
+                print(f"\nprotein prediction: score={info.get('score', 0):.3f}, cost={info.get('cost', 0):.0f}s")
+
+        # build trial args
+        p_vec = params.get("vec", {})
+        p_train = params.get("train", {})
+        cfg_vec = config.get("vec", {})
+        trial_config = {
+            "train": p_train,
+            "policy": params.get("policy", {}),
+            "vec": {
+                "total_agents": p_vec.get("total_agents",
+                    p_train.get("total_agents", cfg_vec.get("total_agents", 2048))),
+                "num_buffers": p_vec.get("num_buffers",
+                    p_train.get("num_buffers", cfg_vec.get("num_buffers", 1))),
+                "num_threads": cfg_vec.get("num_threads",
+                    p_vec.get("num_buffers",
+                        p_train.get("num_buffers", cfg_vec.get("num_buffers", 1)))),
+            },
+            "env": config.get("env", {}),
+        }
+        trial_args = build_config(env_name, trial_config)
+        trial_args['sweep'] = sweep_config
+
+        # --- Metal addition: PFSP callback for osrs_pvp ---
+        pfsp_state = None
+        try:
+            from ocean.osrs_pvp.pfsp import OPP_PFSP, POOL_TYPES, init_pfsp, update_pfsp
+            if env_name == "osrs_pvp" and trial_args["env"].get("opponent_type", 0) == float(OPP_PFSP):
+                total_agents = int(trial_args["vec"]["total_agents"])
+                pfsp_initialized = [False]
+                pfsp_state = {"total_agents": total_agents}
+
+                def _pfsp_callback(pufferl_c, global_step):
+                    if not pfsp_initialized[0]:
+                        init_pfsp(pufferl_c, total_agents)
+                        pfsp_state["cum_episodes"] = [0.0] * len(POOL_TYPES)
+                        pfsp_state["last_update_step"] = 0
+                        pfsp_initialized[0] = True
+                    update_pfsp(pufferl_c, pfsp_state, global_step)
+
+                trial_args['_metal'] = {'on_iteration': _pfsp_callback}
+        except ImportError:
+            pass
+
+        if wandb_config:
+            trial_args.setdefault('_metal', {})['wandb'] = {
+                **wandb_config,
+                'tag': f"trial-{trial_idx}",
             }
-            if debug_stats:
-                log_dict.update({f"debug/{k}": v for k, v in debug_stats.items()})
-            wandb_run.log(log_dict, step=global_step)
 
-    def should_stop(score, elapsed):
-        if log_count <= 2 and result_ref[0] and result_ref[0].entries:
-            recent_sps = result_ref[0].entries[-1]["sps"]
-            if recent_sps < min_sps:
-                print(f"  ABORT: SPS={recent_sps:.0f} < {min_sps}")
-                return True
-        return protein.should_stop(score, elapsed)
+        # print trial header
+        flat = dict(pufferlib.unroll_nested_dict(params))
+        total_steps = int(flat.get("train/total_timesteps", 0))
+        print(f"\n{'='*70}")
+        print(f"trial {trial_idx}  ({total_steps/1e6:.1f}M steps)")
+        for key, value in sorted(flat.items()):
+            short_key = key.split("/")[-1]
+            fmt = f"{value:.6f}" if isinstance(value, float) else str(value)
+            print(f"  {short_key:20s} = {fmt}")
+        print(f"{'='*70}")
 
-    pfsp_initialized = [False]
+        # run trial
+        trial_start = time.time()
+        try:
+            validate_config(trial_args)
+            pufferl, all_logs = _train_rank(trial_args, sweep_obj=protein, verbose=False)
+            elapsed = time.time() - trial_start
+        except (AssertionError, ValueError, RuntimeError) as e:
+            print(f"  FAILED: {e}")
+            protein.observe(params, 0.0, 1.0, is_failure=True)
+            _save_observation({
+                "trial": trial_idx, "params": params,
+                "score": 0.0, "cost": 1.0, "step": 0,
+                "is_failure": True, "mean_sps": 0,
+            }, obs_path)
+            trial_idx += 1
+            trials_run += 1
+            continue
 
-    def on_iteration(pufferl, global_step):
-        if pfsp_state is not None:
-            if not pfsp_initialized[0]:
-                init_pfsp(pufferl, total_agents)
-                pfsp_state["cum_episodes"] = [0.0] * len(POOL_TYPES)
-                pfsp_state["last_update_step"] = 0
-                pfsp_initialized[0] = True
-                print(f"  PFSP: {len(POOL_TYPES)} opponents, uniform initial weights")
-            update_pfsp(pufferl, pfsp_state, global_step)
+        # extract scores from logs, observe into Protein
+        if not all_logs or f'env/{score_key}' not in all_logs[-1]:
+            print(f"  FAILED: no metric entries ({elapsed:.0f}s)")
+            protein.observe(params, 0.0, 1.0, is_failure=True)
+            _save_observation({
+                "trial": trial_idx, "params": params,
+                "score": 0.0, "cost": 1.0, "step": 0,
+                "is_failure": True, "mean_sps": 0,
+            }, obs_path)
+        else:
+            scores = [lg.get(f'env/{score_key}', lg.get('env/episode_return', 0)) for lg in all_logs]
+            steps = [lg.get('agent_steps', 0) for lg in all_logs]
+            sps_vals = [lg.get('SPS', 0) for lg in all_logs]
 
-    result_ref = [None]
-    start_time = time.time()
+            ds_scores = downsample(scores, downsample_points)
+            ds_steps = downsample(steps, downsample_points)
 
-    try:
-        result = run_training(
-            args,
-            log_interval=LOG_INTERVAL,
-            score_key=score_key,
-            on_log=on_log,
-            should_stop=should_stop,
-            on_iteration=on_iteration,
-        )
-        result_ref[0] = result
-    except Exception as e:
-        print(f"  FAILED: {e}")
-        if wandb_run:
-            wandb_run.finish(exit_code=1)
-        return None
+            for score, step in zip(ds_scores, ds_steps):
+                obs_params = deepcopy(params)
+                obs_params["train"]["total_timesteps"] = step
+                cost = elapsed * (step / max(steps[-1], 1))
+                protein.observe(obs_params, score, cost)
+                _save_observation({
+                    "trial": trial_idx, "params": obs_params,
+                    "score": score, "cost": cost, "step": step,
+                    "mean_sps": sum(sps_vals) / len(sps_vals) if sps_vals else 0,
+                }, obs_path)
 
-    entries = result.entries
-    elapsed = result.elapsed
+            final_score = scores[-1]
+            mean_sps = sum(sps_vals) / len(sps_vals) if sps_vals else 0
+            print(f"  DONE  score={final_score:.2f}  sps={mean_sps:.0f}  "
+                  f"steps={steps[-1]/1e6:.1f}M  wall={elapsed:.0f}s")
 
-    if not entries:
-        print(f"  FAILED: no metric entries ({elapsed:.0f}s)")
-        if wandb_run:
-            wandb_run.finish(exit_code=1)
-        return None
+            # write constellation-compatible JSON
+            constellation_dir = Path("logs") / f"puffer_{env_name}"
+            constellation_dir.mkdir(parents=True, exist_ok=True)
+            n_bins = min(200, len(all_logs))
+            if n_bins > 0:
+                metrics_raw = {}
+                for lg in all_logs:
+                    for k, v in lg.items():
+                        if isinstance(v, (int, float)):
+                            metrics_raw.setdefault(k, []).append(float(v))
+                metrics_ds = {k: [float(x) for x in downsample(v, n_bins)]
+                              for k, v in metrics_raw.items()}
+                trial_json = {**params, "sweep": sweep_config, "metrics": metrics_ds,
+                              "env_name": env_name, "log_dir": str(constellation_dir)}
+                with (constellation_dir / f"trial_{trial_idx}.json").open("w") as f:
+                    json.dump(trial_json, f)
 
-    scores = [e["score"] for e in entries]
-    steps = [e["step"] for e in entries]
+        pufferl.close()
+        trial_idx += 1
+        trials_run += 1
 
-    downsampled_scores = downsample(scores, downsample_points)
-    downsampled_steps = downsample(steps, downsample_points)
-
-    observations = []
-    for score, step in zip(downsampled_scores, downsampled_steps):
-        obs_params = deepcopy(params)
-        obs_params["train"]["total_timesteps"] = step
-        cost = elapsed * (step / max(steps[-1], 1))
-        protein.observe(obs_params, score, cost)
-        observations.append({
-            "params": obs_params,
-            "score": score,
-            "cost": cost,
-            "step": step,
-        })
-
-    final_score = scores[-1]
-    tail_start = int(len(scores) * 0.75)
-    tail_score = sum(scores[tail_start:]) / max(len(scores[tail_start:]), 1)
-    mean_sps = sum(e["sps"] for e in entries) / len(entries)
-    early_stopped = result.steps < int(params.get("train", {}).get("total_timesteps", 0))
-    stop_label = "  (early)" if early_stopped else ""
-
-    print(
-        f"  DONE  score={final_score:.2f}  tail={tail_score:.2f}  "
-        f"sps={mean_sps:.0f}  steps={steps[-1]/1e6:.1f}M  "
-        f"wall={elapsed:.0f}s{stop_label}"
-    )
-
-    if wandb_run:
-        wandb_run.finish()
-
-    # write constellation-compatible JSON (matches upstream pufferl.py format)
-    constellation_dir = Path("logs") / f"puffer_{env_name}"
-    constellation_dir.mkdir(parents=True, exist_ok=True)
-    n_bins = min(200, len(entries))
-    if n_bins > 0:
-        metrics_raw = {}
-        for e in entries:
-            for k, v in e.items():
-                if isinstance(v, (int, float)):
-                    metrics_raw.setdefault(k, []).append(float(v))
-        # rename to match upstream metric keys
-        if "step" in metrics_raw:
-            metrics_raw["agent_steps"] = metrics_raw.pop("step")
-        if "score" in metrics_raw:
-            metrics_raw["env/score"] = metrics_raw.pop("score")
-        if "sps" in metrics_raw:
-            metrics_raw["SPS"] = metrics_raw.pop("sps")
-        # add uptime (wall clock per data point)
-        n = len(metrics_raw.get("agent_steps", []))
-        metrics_raw["uptime"] = [elapsed * (i + 1) / n for i in range(n)]
-        # downsample to n_bins
-        metrics_ds = {}
-        for k, v in metrics_raw.items():
-            metrics_ds[k] = [float(x) for x in downsample(v, n_bins)]
-        # build the full config dict matching upstream {**args, metrics, sweep}
-        sweep_config_out = config.get("sweep", {})
-        trial_json = {**params, "sweep": sweep_config_out, "metrics": metrics_ds,
-                      "env_name": env_name, "log_dir": str(constellation_dir)}
-        with (constellation_dir / f"trial_{trial_idx}.json").open("w") as f:
-            json.dump(trial_json, f)
-
-    return {
-        "trial": trial_idx,
-        "params": params,
-        "final_score": final_score,
-        "tail_score": tail_score,
-        "mean_sps": mean_sps,
-        "total_steps": steps[-1],
-        "wall_seconds": elapsed,
-        "observations": observations,
-    }
+    _print_results(obs_path)
 
 
-def print_results(obs_path: Path) -> None:
+def _print_results(obs_path: Path) -> None:
     """Print sweep results from persisted observations."""
-    records = load_observations(obs_path)
+    records = _load_observations(obs_path)
     if not records:
         print("no observations found")
         return
@@ -739,13 +906,9 @@ def print_results(obs_path: Path) -> None:
         best = max(obs_list, key=lambda o: o["step"])
         score = best.get("score", best.get("episode_return", 0))
         trial_summaries.append({
-            "trial": tid,
-            "score": score,
-            "cost": best["cost"],
-            "step": best["step"],
-            "params": best["params"],
-            "mean_sps": best.get("mean_sps", 0),
-            "output": score,
+            "trial": tid, "score": score, "cost": best["cost"],
+            "step": best["step"], "params": best["params"],
+            "mean_sps": best.get("mean_sps", 0), "output": score,
         })
 
     print(f"\n{'='*70}")
@@ -753,7 +916,6 @@ def print_results(obs_path: Path) -> None:
     print(f"{'='*70}")
 
     valid = [t for t in trial_summaries if t["step"] > 0]
-
     pareto, _ = pareto_points(valid)
     pruned = prune_pareto_front(pareto)
     pareto_ids = {t["trial"] for t in pruned}
@@ -763,7 +925,6 @@ def print_results(obs_path: Path) -> None:
         print(f"\nbest on pareto front: #{best['trial']}")
         print(f"  score: {best['score']:.2f}")
         print(f"  steps: {best['step']/1e6:.1f}M")
-        print(f"  wall: {best['cost']:.0f}s")
         flat = dict(pufferlib.unroll_nested_dict(best["params"]))
         print("\n  hyperparameters:")
         for key, value in sorted(flat.items()):
@@ -772,7 +933,7 @@ def print_results(obs_path: Path) -> None:
             print(f"    {short_key:20s} = {fmt}")
 
     if len(pruned) > 1:
-        print(f"\npareto frontier ({len(pruned)} points, best first):")
+        print(f"\npareto frontier ({len(pruned)} points):")
         for t in reversed(pruned):
             flat = dict(pufferlib.unroll_nested_dict(t["params"]))
             hz = int(flat.get("train/horizon", 0))
@@ -780,14 +941,11 @@ def print_results(obs_path: Path) -> None:
             ent = flat.get("train/ent_coef", 0)
             hs = int(flat.get("policy/hidden_size", 0))
             nl = int(flat.get("policy/num_layers", 0))
-            steps_m = t["step"] / 1e6
             sps = t.get("mean_sps", 0)
             sps_str = f"  sps={sps/1e6:.2f}M" if sps > 0 else ""
-            print(
-                f"  #{t['trial']:3d}  score={t['score']:>8.2f}  "
-                f"steps={steps_m:>5.1f}M  wall={t['cost']:>5.0f}s{sps_str}  "
-                f"hz={hz:>3}  lr={lr:.4f}  ent={ent:.4f}  hs={hs}  L{nl}"
-            )
+            print(f"  #{t['trial']:3d}  score={t['score']:>8.2f}  "
+                  f"steps={t['step']/1e6:>5.1f}M  wall={t['cost']:>5.0f}s{sps_str}  "
+                  f"hz={hz:>3}  lr={lr:.4f}  ent={ent:.4f}  hs={hs}  L{nl}")
 
     by_score = sorted(trial_summaries, key=lambda t: t["score"], reverse=True)
     print("\ntop 15 by score:")
@@ -798,423 +956,44 @@ def print_results(obs_path: Path) -> None:
         ent = flat.get("train/ent_coef", 0)
         hs = int(flat.get("policy/hidden_size", 0))
         nl = int(flat.get("policy/num_layers", 0))
-        steps_m = t["step"] / 1e6
         sps = t.get("mean_sps", 0)
         sps_str = f"  sps={sps/1e6:.2f}M" if sps > 0 else ""
         is_pareto = " *" if t["trial"] in pareto_ids else ""
-        print(
-            f"  #{t['trial']:3d}  score={t['score']:>8.2f}  "
-            f"steps={steps_m:>5.1f}M  wall={t['cost']:>5.0f}s{sps_str}  "
-            f"hz={hz:>3}  lr={lr:.4f}  ent={ent:.4f}  hs={hs}  L{nl}{is_pareto}"
-        )
-
-
-def run_sweep(env_name: str, config: dict, max_trials: int | None, timeout_h: float,
-              wandb_config: dict | None = None) -> None:
-    """Run the Protein sweep for a Metal env."""
-    sweep_dir = SWEEP_DIR_BASE / env_name
-    sweep_dir.mkdir(parents=True, exist_ok=True)
-    obs_path = sweep_dir / "observations.jsonl"
-
-    sweep_config = _build_sweep_config(config)
-    default_params = _build_default_params(config)
-
-    protein = Protein(sweep_config, use_gpu=False, prune_pareto=True)
-
-    existing_records = load_observations(obs_path)
-    existing_trials: set[int] = set()
-    if existing_records:
-        for r in existing_records:
-            existing_trials.add(r["trial"])
-            if "train" in r["params"]:
-                r["params"]["train"].setdefault("ns_iters", 5)
-            score = r.get("score", r.get("episode_return", 0))
-            protein.observe(r["params"], score, r["cost"])
-        print(f"replayed {len(existing_records)} observations from {len(existing_trials)} previous trials")
-
-    trial_idx = max(existing_trials) + 1 if existing_trials else 0
-    sweep_start = time.time()
-    timeout_s = timeout_h * 3600
-
-    n_params = len(dict(pufferlib.unroll_nested_dict(
-        {k: v for k, v in sweep_config.items() if isinstance(v, dict)}
-    )))
-
-    score_key = config.get("base", {}).get("score_metric", "score")
-    metric_dist = sweep_config.get("metric_distribution", "linear")
-    print(f"protein sweep ({env_name}, metal, in-process)")
-    print(f"  metric: {score_key} ({metric_dist} distribution)")
-    print(f"  {n_params} searchable hyperparameters")
-    print(f"  timeout: {timeout_h:.1f}h")
-    print(f"  max trials: {max_trials or 'unlimited'}")
-    print(f"  existing trials: {len(existing_trials)}")
-
-    trials_run = 0
-    while True:
-        if max_trials is not None and trials_run >= max_trials:
-            print(f"\nreached max trials ({max_trials})")
-            break
-        if (time.time() - sweep_start) > timeout_s:
-            print(f"\ntimeout reached ({timeout_h:.1f}h)")
-            break
-
-        if trial_idx == 0:
-            params = deepcopy(default_params)
-            print("\ntrial 0: using default hyperparameters as anchor")
-        else:
-            fill = deepcopy(default_params)
-            params, info = protein.suggest(fill)
-            if info:
-                pred_cost = info.get("cost", 0)
-                pred_score = info.get("score", 0)
-                print(f"\nprotein prediction: score={pred_score:.3f}, cost={pred_cost:.0f}s")
-
-        result = run_trial(trial_idx, env_name, params, protein, sweep_dir, config,
-                           wandb_config=wandb_config)
-
-        if result is not None:
-            for obs in result["observations"]:
-                save_observation({
-                    "trial": trial_idx,
-                    "params": obs["params"],
-                    "score": obs["score"],
-                    "cost": obs["cost"],
-                    "step": obs["step"],
-                    "mean_sps": result["mean_sps"],
-                }, obs_path)
-        else:
-            protein.observe(params, 0.0, 1.0, is_failure=True)
-            save_observation({
-                "trial": trial_idx,
-                "params": params,
-                "score": 0.0,
-                "cost": 1.0,
-                "step": 0,
-                "is_failure": True,
-                "mean_sps": 0,
-            }, obs_path)
-
-        trial_idx += 1
-        trials_run += 1
-
-    print_results(obs_path)
+        print(f"  #{t['trial']:3d}  score={t['score']:>8.2f}  "
+              f"steps={t['step']/1e6:>5.1f}M  wall={t['cost']:>5.0f}s{sps_str}  "
+              f"hz={hz:>3}  lr={lr:.4f}  ent={ent:.4f}  hs={hs}  L{nl}{is_pareto}")
 
 
 # ============================================================================
-# CLI: train mode
+# eval + CLI dispatcher
 # ============================================================================
 
-def train_cli(env_name: str):
-    config = load_config(env_name)
-    config = apply_cli_overrides(config, env_name)
+def run_eval(env_name, args=None):
+    """Load a trained checkpoint and render the agent."""
+    config = args or load_config(env_name)
+    if args is None:
+        config = apply_cli_overrides(config, env_name)
     cli = config.pop("_cli", {})
 
-    args = build_config(env_name, config)
+    built = build_config(env_name, config)
 
-    total_agents = int(args["vec"]["total_agents"])
-    hidden_size = int(args["policy"]["hidden_size"])
-    num_layers = int(args["policy"]["num_layers"])
-    horizon = int(args["train"]["horizon"])
-    overlap = bool(int(args["train"]["overlap"]))
-    cpu_infer = bool(int(args["train"]["cpu_inference"]))
-    fp16 = bool(int(args["train"]["train_fp16"]))
-    seed = int(args["train"]["seed"])
-
-    print(f"env={env_name}, agents={total_agents}, hidden={hidden_size}, "
-          f"layers={num_layers}, horizon={horizon}, overlap={overlap}, "
-          f"cpu_infer={cpu_infer}, fp16={fp16}, seed={seed}")
-
-    # wandb init
-    wandb_run = None
-    if cli.get("wandb"):
-        import wandb
-        run_id = wandb.util.generate_id()
-        run_name = cli.get("tag") or f"{env_name}-{run_id[:6]}"
-        wandb_run = wandb.init(
-            id=run_id, config={**args["train"], **args["vec"], **args["env"], **args["policy"]},
-            project=cli.get("wandb_project", "pufferlib-metal"),
-            group=cli.get("wandb_group", "debug"),
-            name=run_name,
-            tags=[cli["tag"]] if cli.get("tag") else [env_name],
-            settings=wandb.Settings(console="off"),
-        )
-
-    # optional trace output
-    trace_file = None
-    trace_every = max(int(cli.get("trace_every", 1)), 1)
-    trace_path = cli.get("trace_path", "")
-    if trace_path:
-        tp = Path(trace_path).expanduser().resolve()
-        tp.parent.mkdir(parents=True, exist_ok=True)
-        trace_file = tp.open("w", encoding="utf-8")
-        trace_file.write(json.dumps({
-            "event": "meta", "env": env_name, "seed": seed,
-            "total_agents": total_agents, "hidden_size": hidden_size,
-            "num_layers": num_layers, "horizon": horizon,
-            "total_timesteps": int(c["total_timesteps"]),
-            "learning_rate": c["learning_rate"],
-            "optimizer": "muon", "trace_every": trace_every,
-        }) + "\n")
-        trace_file.flush()
-
-    console = Console()
-    console.clear()
-    _dash_idx = [0]
-    _start_time = time.time()
-    _utilization = {}
-
-    def on_log(iteration, global_step, sps, losses, env_stats, debug_stats=None):
-        ent = losses.get("entropy", 0)
-        pg = losses.get("pg_loss", 0)
-        vf = losses.get("vf_loss", 0)
-        ep_ret = env_stats.get("episode_return", 0)
-        score = env_stats.get("score", ep_ret)
-        ep_len = env_stats.get("episode_length", 0)
-        wave = env_stats.get("wave", 0)
-        prayer = env_stats.get("prayer_correct_rate", 0)
-        unavoid = env_stats.get("unavoidable_off_prayer_rate", 0)
-        idle = env_stats.get("idle_ticks", 0)
-        grad_l2 = debug_stats.get("grad_l2", 0) if debug_stats else 0
-        dec_p_max = debug_stats.get("dec_policy_abs_max", 0) if debug_stats else 0
-        dec_v_max = debug_stats.get("dec_value_abs_max", 0) if debug_stats else 0
-
-        # utilization comes from debug_stats (added in run_training)
-        if debug_stats:
-            _utilization.update({k: debug_stats[k] for k in
-                ("vram_used_gb", "vram_total_gb", "gpu_mem", "cpu_mem_gb")
-                if k in debug_stats})
-
-        c1, c2, b1, b2 = '[cyan]', '[white]', '[bright_cyan]', '[bright_white]'
-        total_ts = int(args["train"].get("total_timesteps", 0))
-        uptime = time.time() - _start_time
-        remaining = duration((total_ts - global_step) / sps, b2, c2) if sps > 0 else f'{b2}--{c2}'
-
-        dashboard = Table(box=rich.box.ROUNDED, expand=True,
-                          show_header=False, border_style='bright_cyan')
-
-        # header row
-        header = Table(box=None, expand=True, show_header=False)
-        header.add_column(justify="left", width=30)
-        header.add_column(justify="center", width=16)
-        header.add_column(justify="center", width=18)
-        header.add_column(justify="right", width=12)
-        header.add_row(
-            f'{b1}PufferLib Metal {b2}{env_name} {_dash_idx[0]*" "}:blowfish:',
-            f'{c1}VRAM: {b2}{_utilization.get("vram_used_gb", 0):.1f}{c2}/{b2}{_utilization.get("vram_total_gb", 0):.0f}{c2}G',
-            f'{c1}RAM: {b2}{_utilization.get("cpu_mem_gb", 0):.1f}{c2}G',
-            f'{c1}GPU Mem: {b2}{_utilization.get("gpu_mem", 0):.0f}{c2}%',
-        )
-        _dash_idx[0] = (_dash_idx[0] - 1) % 10
-        dashboard.add_row(header)
-
-        # summary + losses + env stats
-        s = Table(box=None, expand=True)
-        s.add_column(f"{c1}Summary", justify='left', width=10)
-        s.add_column(f"{c1}Value", justify='right', width=14)
-        s.add_row(f'{c2}Steps', abbreviate(global_step, b2, c2))
-        s.add_row(f'{c2}SPS', abbreviate(sps, b2, c2))
-        s.add_row(f'{c2}Uptime', duration(uptime, b2, c2))
-        s.add_row(f'{c2}Remaining', remaining)
-        s.add_row(f'{c2}Epoch', f'{b2}{iteration}')
-        s.add_row(f'{c2}Score', f'{b2}{score:.2f}')
-
-        l = Table(box=None, expand=True)
-        l.add_column(f'{c1}Training', justify='left', width=14)
-        l.add_column(f'{c1}Value', justify='right', width=8)
-        l.add_row(f'{c2}entropy', f'{b2}{ent:.3f}')
-        l.add_row(f'{c2}pg_loss', f'{b2}{pg:.4f}')
-        l.add_row(f'{c2}vf_loss', f'{b2}{vf:.4f}')
-        l.add_row(f'{c2}grad_l2', f'{b2}{grad_l2:.2f}')
-        l.add_row(f'{c2}dec_policy', f'{b2}{dec_p_max:.2f}')
-        l.add_row(f'{c2}dec_value', f'{b2}{dec_v_max:.2f}')
-
-        e = Table(box=None, expand=True)
-        e.add_column(f'{c1}Environment', justify='left', width=14)
-        e.add_column(f'{c1}Value', justify='right', width=8)
-        e.add_row(f'{c2}return', f'{b2}{ep_ret:.2f}')
-        e.add_row(f'{c2}wave', f'{b2}{wave:.1f}')
-        e.add_row(f'{c2}prayer', f'{b2}{prayer:.0%}')
-        e.add_row(f'{c2}unavoidable', f'{b2}{unavoid:.0%}')
-        e.add_row(f'{c2}ep_length', f'{b2}{ep_len:.0f}')
-        e.add_row(f'{c2}idle', f'{b2}{idle:.0f}')
-        e.add_row(f'{c2}brews', f'{b2}{env_stats.get("brews_used", 0):.1f}')
-
-        monitor = Table(box=None, expand=True, pad_edge=False)
-        monitor.add_row(s, l, e)
-        dashboard.add_row(monitor)
-
-        # extra env stats (npc_kills, gear_switches, current_ranged, etc.)
-        extras = Table(box=None, expand=True, pad_edge=False)
-        left = Table(box=None, expand=True)
-        right = Table(box=None, expand=True)
-        extras.add_row(left, right)
-        left.add_column(f"{c1}Behavioral", justify="left", width=18)
-        left.add_column(f"{c1}Value", justify="right", width=8)
-        right.add_column(f"{c1}Debug", justify="left", width=18)
-        right.add_column(f"{c1}Value", justify="right", width=8)
-
-        behavioral_keys = ["npc_kills", "gear_switches", "damage_dealt",
-                           "damage_received", "blood_healed",
-                           "brews_remaining", "restores_remaining", "prayer_at_death"]
-        for k in behavioral_keys:
-            v = env_stats.get(k, 0)
-            left.add_row(f'{b2}{k}', f'{b2}{v:.1f}')
-
-        if debug_stats:
-            debug_keys = ["mb_ratio_clipfrac_raw", "mb_ratio_abs_mean",
-                          "enc_w_abs_max", "gru_w_abs_max",
-                          "optimizer_lr", "param_abs_max"]
-            for k in debug_keys:
-                v = debug_stats.get(k, 0)
-                right.add_row(f'{b2}{k}', f'{b2}{v:.4f}')
-
-        dashboard.add_row(extras)
-
-        with console.capture() as capture:
-            console.print(dashboard)
-        print('\033[0;0H' + capture.get())
-
-        if wandb_run:
-            approx_kl = losses.get("approx_kl", 0)
-            batch_size = total_agents * horizon
-            log_dict = {
-                "sps": sps,
-                "score": score,
-                "episode_return": ep_ret,
-                "episode_length": ep_len,
-                "entropy": ent,
-                "pg_loss": pg,
-                "vf_loss": vf,
-                "approx_kl": approx_kl,
-                "clipfrac": losses.get("clipfrac", 0),
-                "ddr": batch_size / approx_kl if approx_kl > 1e-8 else 0,
-                **{k: v for k, v in env_stats.items()
-                   if k not in ("episode_return", "episode_length", "score")},
-            }
-            if debug_stats:
-                log_dict.update({f"debug/{k}": v for k, v in debug_stats.items()})
-            wandb_run.log(log_dict, step=global_step)
-
-        if trace_file and iteration % trace_every == 0:
-            trace_row = {
-                "event": "tick", "iteration": iteration, "step": global_step,
-                "sps": sps, "score": score, "episode_return": ep_ret,
-                "episode_length": ep_len, "entropy": ent,
-                "pg_loss": pg, "vf_loss": vf,
-            }
-            trace_file.write(json.dumps(trace_row) + "\n")
-
-    log_interval = int(cli.get("log_interval", 10))
-    checkpoint_interval = int(cli.get("checkpoint_interval", 200))
-    checkpoint_dir = cli.get("checkpoint_dir", "")
-    if not checkpoint_dir:
-        run_id = str(int(1000 * time.time()))
-        checkpoint_dir = os.path.join("checkpoints", env_name, run_id)
-
-    print(f"model params: {int(args['train'].get('total_timesteps', 0)):,} steps target")
-    print(f"checkpoints: {checkpoint_dir} (every {checkpoint_interval} iters)")
-
-    result = run_training(
-        args,
-        log_interval=log_interval,
-        on_log=on_log,
-        checkpoint_dir=checkpoint_dir,
-        checkpoint_interval=checkpoint_interval,
-    )
-
-    print(f"\ndone. {result.steps:,} steps in {result.elapsed:.1f}s")
-    print(f"avg SPS: {result.sps:,.0f}")
-    for k, v in sorted(result.profile.items()):
-        print(f"  {k}: {v:.3f}")
-
-    if trace_file:
-        trace_file.write(json.dumps({
-            "event": "final", "step": result.steps,
-            "total_time_seconds": result.elapsed, "avg_sps": result.sps,
-            "profile": result.profile,
-        }) + "\n")
-        trace_file.close()
-
-    if wandb_run:
-        import wandb
-        # upload final checkpoint as artifact
-        final_ckpt = os.path.join(checkpoint_dir, "latest.bin")
-        if os.path.exists(final_ckpt):
-            artifact = wandb.Artifact(f"{env_name}-model", type="model")
-            artifact.add_file(final_ckpt)
-            wandb_run.log_artifact(artifact)
-        wandb_run.finish()
-
-
-# ============================================================================
-# CLI: sweep mode
-# ============================================================================
-
-def sweep_cli(env_name: str):
-    config = load_config(env_name)
-    config = apply_cli_overrides(config, env_name)
-    cli = config.pop("_cli", {})
-
-    if cli.get("results"):
-        print_results(SWEEP_DIR_BASE / env_name / "observations.jsonl")
-        return
-
-    wandb_config = None
-    if cli.get("wandb"):
-        wandb_config = {
-            "project": cli.get("wandb_project", "pufferlib-metal"),
-            "group": cli.get("wandb_group", "debug"),
-            "tag": cli.get("tag"),
-        }
-
-    run_sweep(
-        env_name, config,
-        max_trials=cli.get("max_trials"),
-        timeout_h=cli.get("timeout", 4.0),
-        wandb_config=wandb_config,
-    )
-
-
-# ============================================================================
-# CLI: eval mode (load checkpoint, render env 0)
-# ============================================================================
-
-def eval_cli(env_name: str):
-    """Load a trained checkpoint and render the agent. Follows upstream pufferl.eval."""
-    config = load_config(env_name)
-    config = apply_cli_overrides(config, env_name)
-    cli = config.pop("_cli", {})
-
-    args = build_config(env_name, config)
-
-    # resolve load path: explicit path, "latest", or search
     load_path = cli.get("load_model_path", "latest")
     if load_path == "latest":
         pattern = os.path.join("checkpoints", env_name, "**", "*.bin")
         candidates = glob.glob(pattern, recursive=True)
         if not candidates:
-            print(f"no checkpoints found in checkpoints/{env_name}/")
-            return
+            raise FileNotFoundError(f"no checkpoints found in checkpoints/{env_name}/")
         load_path = max(candidates, key=os.path.getctime)
 
-    pufferl = _C.create_pufferl(args)
-    _C.load_weights(pufferl, load_path)
+    pufferl = PuffeRL(built)
+    pufferl.load_checkpoint(load_path)
     print(f"loaded weights from {load_path}")
     print(f"rendering env 0. ctrl+c to stop.")
 
-    try:
-        while True:
-            _C.render(pufferl, 0)
-            _C.rollouts(pufferl)
-    except KeyboardInterrupt:
-        print("\nstopped.")
-    finally:
-        _C.close(pufferl)
+    while True:
+        _C.render(pufferl._pufferl, 0)
+        pufferl.evaluate()
 
-
-# ============================================================================
-# CLI dispatcher
-# ============================================================================
 
 def main():
     if len(sys.argv) < 3:
@@ -1225,13 +1004,13 @@ def main():
     env_name = sys.argv.pop(1)
 
     if mode == "train":
-        train_cli(env_name)
+        train(env_name)
     elif mode == "sweep":
-        sweep_cli(env_name)
+        sweep(env_name)
     elif mode == "eval":
-        eval_cli(env_name)
+        run_eval(env_name)
     elif mode == "results":
-        print_results(SWEEP_DIR_BASE / env_name / "observations.jsonl")
+        _print_results(SWEEP_DIR_BASE / env_name / "observations.jsonl")
     else:
         print(f"unknown mode: {mode}. use train, sweep, eval, or results.")
         sys.exit(1)
