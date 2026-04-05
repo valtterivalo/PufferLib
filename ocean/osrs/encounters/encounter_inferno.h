@@ -2140,6 +2140,11 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
 /* ======================================================================== */
 
 static float inf_compute_reward(InfernoState* s) {
+    /* accumulate diagnostic stats BEFORE terminal check so the killing
+       blow's damage is counted in total_damage_received */
+    s->total_damage_dealt += s->damage_dealt_this_tick;
+    s->total_damage_received += s->damage_received_this_tick;
+
     if (s->episode_over)
         return (s->winner == 0) ? 1.0f : 0.0f;
 
@@ -2154,10 +2159,6 @@ static float inf_compute_reward(InfernoState* s) {
 
     if (s->damage_dealt_this_tick > 0.0f)
         r += 0.01f * s->damage_dealt_this_tick;
-
-    /* accumulate diagnostic stats */
-    s->total_damage_dealt += s->damage_dealt_this_tick;
-    s->total_damage_received += s->damage_received_this_tick;
 
     return r;
 }
