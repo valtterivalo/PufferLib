@@ -71,7 +71,7 @@ void c_step(Env* env) {
        bypass get_log vtable to avoid double-counting from encounter's own += */
     if (is_term) {
         ZulrahState* zs = (ZulrahState*)env->enc_state;
-        env->log.episode_return += zs->reward;
+        env->log.episode_return += zs->episode_return;
         env->log.episode_length += (float)zs->tick;
         env->log.wins += (zs->winner == 0) ? 1.0f : 0.0f;
         env->log.damage_dealt += zs->total_damage_dealt;

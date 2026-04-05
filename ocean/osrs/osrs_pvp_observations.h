@@ -294,7 +294,7 @@ static void ensure_obs_norm_initialized(void) {
 /**
  * Write normalized agent 0 observations + action mask to ocean buffer.
  *
- * Output layout: [normalized_obs(334), action_mask_as_float(40)] = 374 floats.
+ * Output layout: [normalized_obs(334), action_mask_as_float(39)] = 373 floats.
  */
 static void ocean_write_obs(OsrsEnv* env) {
     ensure_obs_norm_initialized();
