@@ -20,6 +20,10 @@
 #include "osrs_render.h"
 #endif
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten/emscripten.h>
+#endif
+
 static void print_player_state(Player* p, int idx) {
     printf("Player %d: HP=%d/%d Prayer=%d Gear=%d Pos=(%d,%d) Frozen=%d\n",
            idx, p->current_hitpoints, p->base_hitpoints,
@@ -139,6 +143,176 @@ static int replay_get_actions(ReplayFile* rf, int* out) {
 
 static void replay_free(ReplayFile* rf) {
     if (rf) { free(rf->actions); free(rf); }
+}
+
+typedef struct {
+    OsrsEnv* env;
+    const char* encounter_name;
+    ReplayFile* replay;
+    int start_wave;
+    /* per-frame state */
+    double episode_end_time;  /* >0 when holding final frame */
+    int episode_ended;
+} VisualState;
+
+static void visual_frame(void* arg) {
+    VisualState* vs = (VisualState*)arg;
+    OsrsEnv* env = vs->env;
+    RenderClient* rc = (RenderClient*)env->client;
+
+    /* rewind: restore historical state and re-render */
+    if (rc->step_back) {
+        rc->step_back = 0;
+        render_restore_snapshot(rc, env);
+        /* if we restored the latest snapshot, exit rewind mode */
+        if (rc->history_cursor >= rc->history_count - 1) {
+            rc->history_cursor = -1;
+        }
+        pvp_render(env);
+        return;
+    }
+
+    /* in rewind mode viewing history: just render, don't step */
+    if (rc->history_cursor >= 0) {
+        pvp_render(env);
+        return;
+    }
+
+    /* episode ended: hold final frame for 2 seconds then reset */
+    if (vs->episode_ended) {
+        pvp_render(env);
+        if (GetTime() - vs->episode_end_time >= 2.0) {
+            vs->episode_ended = 0;
+            render_clear_history(rc);
+            effect_clear_all(rc->effects);
+            rc->gui.inv_grid_dirty = 1;
+            if (env->encounter_def) {
+                ((const EncounterDef*)env->encounter_def)->reset(
+                    env->encounter_state, (uint32_t)rand());
+            } else {
+                pvp_reset(env);
+            }
+            render_populate_entities(rc, env);
+            for (int i = 0; i < rc->entity_count; i++) {
+                rc->sub_x[i] = rc->entities[i].x * 128 + 64;
+                rc->sub_y[i] = rc->entities[i].y * 128 + 64;
+                rc->dest_x[i] = rc->sub_x[i];
+                rc->dest_y[i] = rc->sub_y[i];
+            }
+            render_save_snapshot(rc, env);
+        }
+        return;
+    }
+
+    /* paused: render but don't step */
+    if (rc->is_paused && !rc->step_once) {
+        pvp_render(env);
+        return;
+    }
+    rc->step_once = 0;
+
+    /* tick pacing: keep rendering while waiting */
+    if (rc->ticks_per_second > 0.0f) {
+        double interval = 1.0 / rc->ticks_per_second;
+        if (GetTime() - rc->last_tick_time < interval) {
+            pvp_render(env);
+            return;
+        }
+    }
+    rc->last_tick_time = GetTime();
+
+    /* step the simulation */
+    render_pre_tick(rc, env);
+
+    if (env->encounter_def && env->encounter_state) {
+        /* encounter mode */
+        const EncounterDef* edef = (const EncounterDef*)env->encounter_def;
+        int enc_actions[16] = {0};
+
+        if (rc->human_input.enabled) {
+            /* human control: per-encounter translator */
+            if (edef->translate_human_input)
+                edef->translate_human_input(&rc->human_input, enc_actions,
+                                            env->encounter_state);
+            /* set encounter destination from human click for proper pathfinding.
+               attacking an NPC cancels movement (OSRS: server stops walking
+               to old dest and auto-walks toward target instead). */
+            if (rc->human_input.pending_move_x >= 0 && edef->put_int) {
+                edef->put_int(env->encounter_state, "player_dest_x",
+                              rc->human_input.pending_move_x);
+                edef->put_int(env->encounter_state, "player_dest_y",
+                              rc->human_input.pending_move_y);
+            } else if (rc->human_input.pending_attack && edef->put_int) {
+                edef->put_int(env->encounter_state, "player_dest_x", -1);
+                edef->put_int(env->encounter_state, "player_dest_y", -1);
+            }
+            human_input_clear_pending(&rc->human_input);
+        } else if (vs->replay && replay_get_actions(vs->replay, enc_actions)) {
+            /* replay mode: actions come from pre-recorded file */
+        } else if (strcmp(edef->name, "zulrah") == 0) {
+            zul_heuristic_actions((ZulrahState*)env->encounter_state, enc_actions);
+        } else {
+            for (int h = 0; h < edef->num_action_heads; h++) {
+                enc_actions[h] = rand() % edef->action_head_dims[h];
+            }
+        }
+        edef->step(env->encounter_state, enc_actions);
+        /* sync env->tick so renderer HP bars/splats use correct tick */
+        env->tick = edef->get_tick(env->encounter_state);
+
+        /* clear human move when player arrived at clicked destination */
+        if (rc->human_input.enabled && rc->human_input.pending_move_x >= 0) {
+            Player* ply = edef->get_entity(env->encounter_state, 0);
+            if (ply && ply->x == rc->human_input.pending_move_x &&
+                ply->y == rc->human_input.pending_move_y) {
+                human_input_clear_move(&rc->human_input);
+            }
+        }
+
+    } else {
+        /* PvP mode */
+        if (rc->human_input.enabled) {
+            /* human control: translate staged clicks to PvP actions for agent 0 */
+            human_to_pvp_actions(&rc->human_input,
+                                  env->actions, &env->players[0], &env->players[1]);
+            /* opponent still gets random actions */
+            int* opp = env->actions + NUM_ACTION_HEADS;
+            for (int h = 0; h < NUM_ACTION_HEADS; h++) {
+                opp[h] = rand() % ACTION_HEAD_DIMS[h];
+            }
+            human_input_clear_pending(&rc->human_input);
+        } else {
+            for (int agent = 0; agent < NUM_AGENTS; agent++) {
+                int* actions = env->actions + agent * NUM_ACTION_HEADS;
+                for (int h = 0; h < NUM_ACTION_HEADS; h++) {
+                    actions[h] = rand() % ACTION_HEAD_DIMS[h];
+                }
+            }
+        }
+        pvp_step(env);
+
+        /* clear human move when player arrived at clicked destination */
+        if (rc->human_input.enabled && rc->human_input.pending_move_x >= 0) {
+            Player* p0 = &env->players[0];
+            if (p0->x == rc->human_input.pending_move_x &&
+                p0->y == rc->human_input.pending_move_y) {
+                human_input_clear_move(&rc->human_input);
+            }
+        }
+    }
+
+    render_post_tick(rc, env);
+    render_save_snapshot(rc, env);
+    pvp_render(env);
+
+    /* auto-reset on episode end */
+    int is_over = env->encounter_def
+        ? ((const EncounterDef*)env->encounter_def)->is_terminal(env->encounter_state)
+        : env->episode_over;
+    if (is_over) {
+        vs->episode_ended = 1;
+        vs->episode_end_time = GetTime();
+    }
 }
 
 static void run_visual(OsrsEnv* env, const char* encounter_name, const char* replay_path, int start_wave) {
@@ -338,156 +512,22 @@ static void run_visual(OsrsEnv* env, const char* encounter_name, const char* rep
     /* save initial state as first snapshot */
     render_save_snapshot(rc, env);
 
+    VisualState vs = {
+        .env = env,
+        .encounter_name = encounter_name,
+        .replay = replay,
+        .start_wave = start_wave,
+        .episode_end_time = 0,
+        .episode_ended = 0,
+    };
+
+#ifdef __EMSCRIPTEN__
+    emscripten_set_main_loop_arg(visual_frame, &vs, 0, 1);
+#else
     while (!WindowShouldClose()) {
-
-        /* rewind: restore historical state and re-render */
-        if (rc->step_back) {
-            rc->step_back = 0;
-            render_restore_snapshot(rc, env);
-            /* if we restored the latest snapshot, exit rewind mode */
-            if (rc->history_cursor >= rc->history_count - 1) {
-                rc->history_cursor = -1;
-            }
-            pvp_render(env);
-            continue;
-        }
-
-        /* in rewind mode viewing history: just render, don't step */
-        if (rc->history_cursor >= 0) {
-            pvp_render(env);
-            continue;
-        }
-
-        /* paused: render but don't step */
-        if (rc->is_paused && !rc->step_once) {
-            pvp_render(env);
-            continue;
-        }
-        rc->step_once = 0;
-
-        /* tick pacing: keep rendering while waiting */
-        if (rc->ticks_per_second > 0.0f) {
-            double interval = 1.0 / rc->ticks_per_second;
-            while (GetTime() - rc->last_tick_time < interval) {
-                pvp_render(env);
-                if (WindowShouldClose()) return;
-            }
-        }
-        rc->last_tick_time = GetTime();
-
-        /* step the simulation */
-        render_pre_tick(rc, env);
-
-        if (env->encounter_def && env->encounter_state) {
-            /* encounter mode */
-            const EncounterDef* edef = (const EncounterDef*)env->encounter_def;
-            int enc_actions[16] = {0};
-
-            if (rc->human_input.enabled) {
-                /* human control: per-encounter translator */
-                if (edef->translate_human_input)
-                    edef->translate_human_input(&rc->human_input, enc_actions,
-                                                env->encounter_state);
-                /* set encounter destination from human click for proper pathfinding.
-                   attacking an NPC cancels movement (OSRS: server stops walking
-                   to old dest and auto-walks toward target instead). */
-                if (rc->human_input.pending_move_x >= 0 && edef->put_int) {
-                    edef->put_int(env->encounter_state, "player_dest_x",
-                                  rc->human_input.pending_move_x);
-                    edef->put_int(env->encounter_state, "player_dest_y",
-                                  rc->human_input.pending_move_y);
-                } else if (rc->human_input.pending_attack && edef->put_int) {
-                    edef->put_int(env->encounter_state, "player_dest_x", -1);
-                    edef->put_int(env->encounter_state, "player_dest_y", -1);
-                }
-                human_input_clear_pending(&rc->human_input);
-            } else if (replay && replay_get_actions(replay, enc_actions)) {
-                /* replay mode: actions come from pre-recorded file */
-            } else if (strcmp(edef->name, "zulrah") == 0) {
-                zul_heuristic_actions((ZulrahState*)env->encounter_state, enc_actions);
-            } else {
-                for (int h = 0; h < edef->num_action_heads; h++) {
-                    enc_actions[h] = rand() % edef->action_head_dims[h];
-                }
-            }
-            edef->step(env->encounter_state, enc_actions);
-            /* sync env->tick so renderer HP bars/splats use correct tick */
-            env->tick = edef->get_tick(env->encounter_state);
-
-            /* clear human move when player arrived at clicked destination */
-            if (rc->human_input.enabled && rc->human_input.pending_move_x >= 0) {
-                Player* ply = edef->get_entity(env->encounter_state, 0);
-                if (ply && ply->x == rc->human_input.pending_move_x &&
-                    ply->y == rc->human_input.pending_move_y) {
-                    human_input_clear_move(&rc->human_input);
-                }
-            }
-
-        } else {
-            /* PvP mode */
-            if (rc->human_input.enabled) {
-                /* human control: translate staged clicks to PvP actions for agent 0 */
-                human_to_pvp_actions(&rc->human_input,
-                                      env->actions, &env->players[0], &env->players[1]);
-                /* opponent still gets random actions */
-                int* opp = env->actions + NUM_ACTION_HEADS;
-                for (int h = 0; h < NUM_ACTION_HEADS; h++) {
-                    opp[h] = rand() % ACTION_HEAD_DIMS[h];
-                }
-                human_input_clear_pending(&rc->human_input);
-            } else {
-                for (int agent = 0; agent < NUM_AGENTS; agent++) {
-                    int* actions = env->actions + agent * NUM_ACTION_HEADS;
-                    for (int h = 0; h < NUM_ACTION_HEADS; h++) {
-                        actions[h] = rand() % ACTION_HEAD_DIMS[h];
-                    }
-                }
-            }
-            pvp_step(env);
-
-            /* clear human move when player arrived at clicked destination */
-            if (rc->human_input.enabled && rc->human_input.pending_move_x >= 0) {
-                Player* p0 = &env->players[0];
-                if (p0->x == rc->human_input.pending_move_x &&
-                    p0->y == rc->human_input.pending_move_y) {
-                    human_input_clear_move(&rc->human_input);
-                }
-            }
-        }
-
-        render_post_tick(rc, env);
-        render_save_snapshot(rc, env);
-        pvp_render(env);
-
-        /* auto-reset on episode end */
-        int is_over = env->encounter_def
-            ? ((const EncounterDef*)env->encounter_def)->is_terminal(env->encounter_state)
-            : env->episode_over;
-        if (is_over) {
-            /* hold final frame for 2 seconds */
-            double end_time = GetTime();
-            while (GetTime() - end_time < 2.0 && !WindowShouldClose()) {
-                pvp_render(env);
-            }
-            render_clear_history(rc);
-            effect_clear_all(rc->effects);
-            rc->gui.inv_grid_dirty = 1;
-            if (env->encounter_def) {
-                ((const EncounterDef*)env->encounter_def)->reset(
-                    env->encounter_state, (uint32_t)rand());
-            } else {
-                pvp_reset(env);
-            }
-            render_populate_entities(rc, env);
-            for (int i = 0; i < rc->entity_count; i++) {
-                rc->sub_x[i] = rc->entities[i].x * 128 + 64;
-                rc->sub_y[i] = rc->entities[i].y * 128 + 64;
-                rc->dest_x[i] = rc->sub_x[i];
-                rc->dest_y[i] = rc->sub_y[i];
-            }
-            render_save_snapshot(rc, env);
-        }
+        visual_frame(&vs);
     }
+#endif
 
     replay_free(replay);
 
@@ -519,6 +559,10 @@ int main(int argc, char** argv) {
         else if (strcmp(argv[i], "--wave") == 0 && i + 1 < argc)
             start_wave = atoi(argv[++i]);
     }
+
+#ifdef __EMSCRIPTEN__
+    if (!encounter_name) encounter_name = "inferno";
+#endif
 
     srand((unsigned int)time(NULL));
 

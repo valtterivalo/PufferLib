@@ -136,22 +136,34 @@ find_omp_include() {
 if [ "$MODE" = "web" ]; then
     [ ! -f "minshell.html" ] && \
         curl -sL "https://raw.githubusercontent.com/raysan5/raylib/master/src/minshell.html" -o minshell.html
+
+    # OSRS envs use ocean/osrs/osrs_visual.c as the web entry point
+    WEB_SRC="$SRC_DIR/$ENV.c"
+    WEB_EXTRA=""
+    PRELOAD="--preload-file resources/$ENV@resources/$ENV --preload-file resources/shared@resources/shared"
+    WEB_DEFINES="-DNDEBUG -DPLATFORM_WEB -DGRAPHICS_API_OPENGL_ES3"
+    if [[ "$SRC_DIR" == *osrs* ]]; then
+        WEB_SRC="ocean/osrs/osrs_visual.c"
+        WEB_EXTRA="-Iocean/osrs"
+        PRELOAD="--preload-file ocean/osrs/data@data"
+        WEB_DEFINES="$WEB_DEFINES -DOSRS_VISUAL"
+    fi
+
     mkdir -p "build_web/$ENV"
     echo "Building $ENV for web..."
     emcc \
         -o "build_web/$ENV/game.html" \
-        "$SRC_DIR/$ENV.c" $EXTRA_SRC \
+        "$WEB_SRC" $EXTRA_SRC \
         -O3 -Wall \
         $LINK_ARCHIVES \
-        "${INCLUDES[@]}" \
+        "${INCLUDES[@]}" $WEB_EXTRA \
         -L. -L./$RAYLIB_NAME/lib \
         -sASSERTIONS=2 -gsource-map \
         -sUSE_GLFW=3 -sUSE_WEBGL2=1 -sASYNCIFY -sFILESYSTEM -sFORCE_FILESYSTEM=1 \
         --shell-file ./minshell.html \
         -sINITIAL_MEMORY=512MB -sALLOW_MEMORY_GROWTH -sSTACK_SIZE=512KB \
-        -DNDEBUG -DPLATFORM_WEB -DGRAPHICS_API_OPENGL_ES3 \
-        --preload-file resources/$ENV@resources/$ENV \
-        --preload-file resources/shared@resources/shared
+        $WEB_DEFINES \
+        $PRELOAD
     echo "Built: build_web/$ENV/game.html"
     exit 0
 fi
