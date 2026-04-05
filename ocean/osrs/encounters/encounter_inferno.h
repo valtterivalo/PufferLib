@@ -578,8 +578,9 @@ typedef struct {
     int total_gear_switches;   /* gear switch actions this episode */
 
     /* Zuk-specific diagnostics */
-    int behind_shield_ticks;   /* ticks spent behind shield during Zuk wave */
-    int total_zuk_ticks;       /* total ticks during Zuk wave (for behind_shield_pct) */
+    int behind_shield_ticks;       /* ticks spent behind shield during Zuk wave */
+    int behind_shield_this_tick;   /* 1 if behind shield this tick (for reward) */
+    int total_zuk_ticks;           /* total ticks during Zuk wave (for behind_shield_pct) */
 
     /* action distribution: count of action-0 (noop) per head.
        high noop_rate = policy collapsed to doing nothing on that head. */
@@ -2155,22 +2156,25 @@ static float inf_compute_reward(InfernoState* s) {
     s->total_damage_received += s->damage_received_this_tick;
 
     if (s->episode_over)
-        return (s->winner == 0) ? 1.0f : 0.0f;
+        return (s->winner == 0) ? 10.0f : 0.0f;
 
     float r = 0.0f;
 
-    /* survival: small per-tick bonus for staying alive */
-    if (s->wave >= 68)  /* zuk wave (0-indexed) */
-        r += 0.001f;
+    /* survival: per-tick bonus for staying alive */
+    if (s->wave >= 68)
+        r += 0.01f;
+
+    /* shield positioning: strong signal for the core Zuk mechanic.
+       this is THE thing we need the agent to learn first. */
+    if (s->behind_shield_this_tick)
+        r += 0.05f;
 
     if (s->damage_dealt_this_tick > 0.0f)
-        r += 0.01f * s->damage_dealt_this_tick;
+        r += 0.1f * s->damage_dealt_this_tick;
 
-    /* damage taken penalty: immediate signal that being hit is bad.
-       smaller than damage dealt reward so attacking is still preferred.
-       a Zuk hit of 100 = -0.5 penalty, a tbow hit of 50 = +0.5 reward. */
+    /* damage taken penalty */
     if (s->damage_received_this_tick > 0.0f)
-        r -= 0.005f * s->damage_received_this_tick;
+        r -= 0.05f * s->damage_received_this_tick;
 
     return r;
 }
@@ -2309,14 +2313,17 @@ static void inf_step(EncounterState* state, const int* actions) {
     s->total_blood_healed += s->blood_heal_this_tick;
 
     /* Zuk shield tracking: are we behind the shield this tick? */
+    s->behind_shield_this_tick = 0;
     if (s->wave == 68) {
         s->total_zuk_ticks++;
         int si = s->zuk.shield_idx;
         if (si >= 0 && s->npcs[si].active) {
             int sx = s->npcs[si].x;
             int sz = INF_NPC_STATS[INF_NPC_ZUK_SHIELD].size;
-            if (s->player.x >= sx && s->player.x < sx + sz && s->player.y >= 41)
+            if (s->player.x >= sx && s->player.x < sx + sz && s->player.y >= 41) {
                 s->behind_shield_ticks++;
+                s->behind_shield_this_tick = 1;
+            }
         }
     }
 
