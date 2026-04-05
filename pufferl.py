@@ -568,9 +568,11 @@ def run_trial(
         score = env_stats.get(score_key, env_stats.get("episode_return", 0))
         now = time.time()
         if now - last_report_time > 30:
+            ep_ret = env_stats.get("episode_return", 0)
+            ep_len = env_stats.get("episode_length", 0)
             print(
                 f"  [{global_step/1e6:.1f}M / {total_steps/1e6:.0f}M]  "
-                f"score={score:.2f}  sps={sps:.0f}  "
+                f"return={ep_ret:.3f}  ep_len={ep_len:.0f}  sps={sps:.0f}  "
                 f"elapsed={now - start_time:.0f}s"
             )
             last_report_time = now
