@@ -53,7 +53,7 @@ typedef struct Log {
 typedef struct Game {
     Log log;                        // Required
     unsigned char* observations;    // Cheaper in memory if encoded in uint_8
-    double* actions;                // Required
+    float* actions;                 // Required
     float* rewards;                 // Required
     float* terminals;               // Required
     int num_agents;                 // Required for env_binding
@@ -373,13 +373,14 @@ void c_step(Game* game) {
 
     if (did_move) {
         game->moves_made++;
-        game->score += score_add;
+        // Refresh empty_count after merges so spawning uses the correct count.
         update_stats(game);
         place_tile_at_random_cell(game, get_new_tile(game));
+        game->score += score_add;
 
         // Observations only change if the grid changes
         update_observations(game);
-
+        
         // This is to limit infinite invalid moves during eval (happens for noob agents)
         // Don't need to be tight. Don't need to show to human player.
         int tick_multiplier = max(1, game->lifetime_max_tile - 8); // practically no limit for competent agent
@@ -417,9 +418,12 @@ void step_without_reset(Game* game) {
 
     if (did_move) {
         game->moves_made++;
-        game->score += score_add;
+
+        // Refresh empty_count after merges so spawning uses the correct count.
         update_stats(game);
         place_tile_at_random_cell(game, get_new_tile(game));
+        game->score += score_add;
+
         // Observations only change if the grid changes
         update_observations(game);
     }
@@ -436,7 +440,7 @@ void c_render(Game* game) {
     
     if (!window_initialized) {
         InitWindow(px * SIZE, px * SIZE + 50, "2048");
-        SetTargetFPS(30); // Increased for smoother rendering
+        SetTargetFPS(30);
         window_initialized = true;
     }
     
