@@ -374,6 +374,65 @@ pybind11::dict log_train_debug(pybind11::object pufferl_obj) {
     return out;
 }
 
+/* diagnostic: dump rollout buffer stats to find PPO ratio=0 bug */
+pybind11::dict dump_rollout_debug(pybind11::object pufferl_obj) {
+    auto& pufferl = pufferl_obj.cast<PuffeRL&>();
+    sync_pending_train(pufferl);
+    mtl_ensure_stream_synced((cudaStream_t)mtl_stream());
+    pybind11::dict out;
+
+    /* rollout logprobs */
+    int64_t lp_n = puf_numel(pufferl.rollouts.logprobs.shape);
+    float* lp = pufferl.rollouts.logprobs.data;
+    float lp_sum = 0, lp_abssum = 0;
+    int lp_zero = 0, lp_neginf = 0;
+    for (int64_t i = 0; i < lp_n; i++) {
+        lp_sum += lp[i];
+        lp_abssum += fabsf(lp[i]);
+        if (lp[i] == 0.0f) lp_zero++;
+        if (lp[i] < -1e6f) lp_neginf++;
+    }
+    out["lp_count"] = (int)lp_n;
+    out["lp_mean"] = lp_n > 0 ? lp_sum / lp_n : 0;
+    out["lp_abs_mean"] = lp_n > 0 ? lp_abssum / lp_n : 0;
+    out["lp_zeros"] = lp_zero;
+    out["lp_neginf"] = lp_neginf;
+    out["lp_first5"] = pybind11::make_tuple(
+        lp_n > 0 ? lp[0] : 0, lp_n > 1 ? lp[1] : 0, lp_n > 2 ? lp[2] : 0,
+        lp_n > 3 ? lp[3] : 0, lp_n > 4 ? lp[4] : 0);
+
+    /* rollout rewards */
+    int64_t rew_n = puf_numel(pufferl.rollouts.rewards.shape);
+    float* rew = pufferl.rollouts.rewards.data;
+    float rew_sum = 0;
+    for (int64_t i = 0; i < rew_n; i++) rew_sum += rew[i];
+    out["rew_count"] = (int)rew_n;
+    out["rew_mean"] = rew_n > 0 ? rew_sum / rew_n : 0;
+
+    /* rollout actions */
+    int64_t act_n = puf_numel(pufferl.rollouts.actions.shape);
+    float* act = pufferl.rollouts.actions.data;
+    float act_sum = 0;
+    int act_zero = 0;
+    for (int64_t i = 0; i < act_n; i++) {
+        act_sum += act[i];
+        if (act[i] == 0.0f) act_zero++;
+    }
+    out["act_count"] = (int)act_n;
+    out["act_mean"] = act_n > 0 ? act_sum / act_n : 0;
+    out["act_zeros"] = act_zero;
+
+    /* losses buffer */
+    float* loss = pufferl.losses_puf.data;
+    int loss_n = (int)puf_numel(pufferl.losses_puf.shape);
+    out["loss_N"] = loss_n > LOSS_N ? loss[LOSS_N] : -1;
+    out["loss_PG"] = loss_n > LOSS_PG ? loss[LOSS_PG] : -1;
+    out["loss_VF"] = loss_n > LOSS_VF ? loss[LOSS_VF] : -1;
+    out["loss_ENT"] = loss_n > LOSS_ENT ? loss[LOSS_ENT] : -1;
+
+    return out;
+}
+
 pybind11::dict log_utilization(pybind11::object pufferl_obj) {
     (void)pufferl_obj;
     pybind11::dict result;
@@ -658,6 +717,7 @@ PYBIND11_MODULE(_C, m) {
     m.def("log_losses", &log_losses);
     m.def("log_profile", &log_profile);
     m.def("log_train_debug", &log_train_debug);
+    m.def("dump_rollout_debug", &dump_rollout_debug);
     m.def("log_utilization", &log_utilization);
 
     // Core functions
