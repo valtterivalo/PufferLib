@@ -46,9 +46,10 @@ typedef struct {
 #define ACT_TYPE FLOAT
 #define Env InfernoEnv
 
-/* global best episode tracking — save if higher wave, or same wave but fewer ticks */
+/* global best episode tracking */
 static int g_best_wave = 0;
 static int g_best_ticks = 999999;
+static int g_best_zuk_hp = 999999;  /* lowest Zuk HP seen (for Zuk-only training) */
 
 void c_step(Env* env) {
     for (int i = 0; i < NUM_ATNS; i++)
@@ -126,8 +127,19 @@ void c_step(Env* env) {
                 /* full run: best wave, then fewest ticks */
                 is_new_best = (wave > g_best_wave || (wave == g_best_wave && ticks < g_best_ticks));
             } else {
-                /* partial/zuk run: best = survived longer (more ticks = better since start is fixed) */
-                is_new_best = (ticks > g_best_ticks || (g_best_wave == 0 && wave > 0));
+                /* partial/zuk run: best = most damage to zuk (lowest HP remaining).
+                   if zuk is dead (winner==0), fastest kill (fewest ticks) wins. */
+                int zuk_hp = 999999;
+                for (int n = 0; n < INF_MAX_NPCS; n++) {
+                    if (st->npcs[n].active && st->npcs[n].type == INF_NPC_ZUK) {
+                        zuk_hp = st->npcs[n].hp;
+                        break;
+                    }
+                }
+                if (st->winner == 0) zuk_hp = 0;  /* zuk dead */
+                is_new_best = (zuk_hp < g_best_zuk_hp ||
+                              (zuk_hp == g_best_zuk_hp && zuk_hp == 0 && ticks < g_best_ticks));
+                if (is_new_best) g_best_zuk_hp = zuk_hp;
             }
             if (is_new_best) {
                 g_best_wave = wave;
@@ -141,8 +153,13 @@ void c_step(Env* env) {
                         fwrite(env->episode_actions, sizeof(int),
                                env->episode_action_len * NUM_ATNS, fp);
                         fclose(fp);
-                        fprintf(stderr, "replay: new best wave %d (%d ticks, rng=%u) saved to %s\n",
-                                wave, env->episode_action_len, env->episode_rng_start, rpath);
+                        if (st->start_wave >= 68) {
+                            fprintf(stderr, "replay: new best zuk hp=%d (%d ticks, rng=%u) saved to %s\n",
+                                    g_best_zuk_hp, env->episode_action_len, env->episode_rng_start, rpath);
+                        } else {
+                            fprintf(stderr, "replay: new best wave %d (%d ticks, rng=%u) saved to %s\n",
+                                    wave, env->episode_action_len, env->episode_rng_start, rpath);
+                        }
                     }
                 }
             }
