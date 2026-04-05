@@ -62,7 +62,7 @@ StaticVec* create_environments(int num_buffers, int total_agents,
     // Unified memory: env obs/actions/rewards/terminals point directly at vecenv buffers
     env.obs = {.bytes = (char*)vec->gpu_observations, .shape = {total_agents, obs_size}, .dtype_size = obs_dtype_size(obs_type)};
     env.obs_raw_dtype = obs_type;
-    env.actions = {.bytes = (char*)vec->gpu_actions, .shape = {total_agents, num_atns}, .dtype_size = (int)sizeof(double)};
+    env.actions = {.bytes = (char*)vec->gpu_actions, .shape = {total_agents, num_atns}, .dtype_size = (int)sizeof(float)};
     env.rewards = {.data = vec->gpu_rewards, .shape = {total_agents}};
     env.terminals = {.data = vec->gpu_terminals, .shape = {total_agents}};
 

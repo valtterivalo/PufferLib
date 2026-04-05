@@ -2,7 +2,7 @@
  * @file binding.c
  * @brief Metal static-native binding for OSRS PVP environment
  *
- * Bridges vecenv.h's contract (double actions, float terminals) with the PVP
+ * Bridges vecenv.h's contract (float actions, float terminals) with the PVP
  * env's internal types (int actions, unsigned char terminals) using a wrapper
  * struct. PVP source headers are untouched.
  */
@@ -12,12 +12,12 @@
 /* Wrapper struct: vecenv-compatible fields at top + embedded OsrsEnv.
  * vecenv.h's create_static_vec assigns to env->observations, env->actions,
  * env->rewards, env->terminals directly. These fields must match vecenv's
- * expected types (void*, double*, float*, float*). The embedded OsrsEnv has
+ * expected types (void*, float*, float*, float*). The embedded OsrsEnv has
  * its own identically-named fields with different types — pvp_init sets those
  * to internal inline buffers, so there's no conflict. */
 typedef struct {
     void* observations;
-    double* actions;
+    float* actions;
     float* rewards;
     float* terminals;
     int num_agents;
@@ -35,7 +35,7 @@ typedef struct {
 #define NUM_ATNS NUM_ACTION_HEADS
 #define ACT_SIZES {LOADOUT_DIM, COMBAT_DIM, OVERHEAD_DIM, FOOD_DIM, POTION_DIM, KARAMBWAN_DIM, VENG_DIM}
 #define OBS_TYPE FLOAT
-#define ACT_TYPE DOUBLE
+#define ACT_TYPE FLOAT
 #define Env MetalPvpEnv
 
 /* c_step/c_reset/c_close/c_render must be defined BEFORE including vecenv.h
@@ -43,7 +43,7 @@ typedef struct {
  * forward-declaring them (they're expected to come from the env header). */
 
 void c_step(Env* env) {
-    /* double actions from vecenv → int staging for PVP */
+    /* float actions from vecenv → int staging for PVP */
     for (int i = 0; i < NUM_ATNS; i++) {
         env->ocean_acts_staging[i] = (int)env->actions[i];
     }
