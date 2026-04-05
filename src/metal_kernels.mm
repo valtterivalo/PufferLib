@@ -1215,10 +1215,10 @@ void muon_init(Muon *m, Allocator *param_alloc, FloatTensor weight_buffer,
   alloc_register(&alloc, &m->up_puf);
 
   int64_t max_M = 0, max_N = 0;
-  for (auto &e : param_alloc->regs) {
-    int nd = puf_ndim(e.shape);
+  for (auto *t : param_alloc->legacy_regs) {
+    int nd = puf_ndim(t->shape);
     if (nd >= 2) {
-      int64_t R = e.shape[0], C = puf_numel(e.shape) / R;
+      int64_t R = t->shape[0], C = puf_numel(t->shape) / R;
       max_M = std::max(max_M, std::min(R, C));
       max_N = std::max(max_N, std::max(R, C));
     }
@@ -1258,14 +1258,14 @@ void muon_step(Muon *m, cudaStream_t stream) {
   mtl_barrier(ms);
 
   int64_t offset = 0;
-  for (auto &e : m->param_alloc->regs) {
+  for (auto *t : m->param_alloc->legacy_regs) {
     float *gc_ptr = m->gc_puf.data + offset;
     float *up_ptr = m->up_puf.data + offset;
-    int64_t R = e.shape[0];
-    int64_t C = puf_numel(e.shape) / std::max<int64_t>(1, R);
+    int64_t R = t->shape[0];
+    int64_t C = puf_numel(t->shape) / std::max<int64_t>(1, R);
     // NS orthogonalization for 2D+ params with M >= 2.
     // 1-row tensors (e.g. value weight) use direct gradient update.
-    if (puf_ndim(e.shape) >= 2 && std::min(R, C) >= 2) {
+    if (puf_ndim(t->shape) >= 2 && std::min(R, C) >= 2) {
       bool transposed_flag = R > C;
       int64_t M = transposed_flag ? C : R;
       int64_t N = transposed_flag ? R : C;
@@ -1322,10 +1322,10 @@ void muon_step(Muon *m, cudaStream_t stream) {
 
       PufTensor &result_precision = (m->ns_iters % 2 == 0) ? x : tmp;
 
-      // Scale matches CUDA models.cu:1233: sqrt(max(1.0, M/N)).
-      // No post-NS re-normalization — NS output norm scales naturally with
-      // gradient magnitude, giving a wider viable lr range than fixed-norm updates.
-      float scale = (float)std::sqrt(std::max(1.0, (double)M / (double)N));
+      // Scale matches CUDA models.cu:1233: sqrt(max(1.0, R/C)).
+      // For tall matrices (R>C), scale up by sqrt(R/C) to compensate for
+      // the transposition used in NS iteration.
+      float scale = (float)std::sqrt(std::max(1.0, (double)R / (double)C));
       if (scale != 1.0f) {
         mtl_scale_f32((float *)result_precision.bytes, scale,
                       (int)result_precision.numel(), stream);
@@ -1345,16 +1345,17 @@ void muon_step(Muon *m, cudaStream_t stream) {
       mtl_barrier(ms);
     } else {
       // 1D and tiny matrix params: use direct gradient update.
+      int64_t n = t->numel();
       PufTensor src_puf = {.bytes = (char *)gc_ptr,
-                           .shape = {puf_numel(e.shape)},
+                           .shape = {n},
                            .dtype_size = 4};
       PufTensor dst_puf = {.bytes = (char *)up_ptr,
-                           .shape = {puf_numel(e.shape)},
+                           .shape = {n},
                            .dtype_size = 4};
       puf_copy(dst_puf, src_puf, stream);
       mtl_barrier(ms);
     }
-    offset += puf_numel(e.shape);
+    offset += t->numel();
   }
 
   // Apply weight update: w -= lr * up
