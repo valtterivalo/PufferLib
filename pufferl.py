@@ -139,24 +139,30 @@ def apply_cli_overrides(config: dict, env_name: str) -> dict:
             else:
                 parser.add_argument(cli_name, type=type(value), default=value)
 
-    # extra CLI-only args
-    parser.add_argument("--no-overlap", action="store_true")
-    parser.add_argument("--fp16", action="store_true",
-                        help="fp16 training activations/grads (rollout stays fp32)")
-    parser.add_argument("--log-interval", type=int, default=10)
-    parser.add_argument("--checkpoint-interval", type=int, default=200,
-                        help="save weights every N iterations")
-    parser.add_argument("--checkpoint-dir", type=str, default="",
-                        help="checkpoint directory (default: checkpoints/<env>/<run_id>)")
-    parser.add_argument("--load-model-path", type=str, default="latest",
-                        help="path to checkpoint for eval mode (default: latest)")
-    parser.add_argument("--trace-path", type=str, default="")
-    parser.add_argument("--trace-every", type=int, default=1)
-    parser.add_argument("--timeout", type=float, default=4.0,
-                        help="max sweep hours (default: 4)")
-    parser.add_argument("--max-trials", type=int, default=None)
-    parser.add_argument("--results", action="store_true",
-                        help="print sweep results and exit")
+    # extra CLI-only args (skip if already defined by .ini auto-generation)
+    def _add_if_new(name, **kwargs):
+        try:
+            parser.add_argument(name, **kwargs)
+        except argparse.ArgumentError:
+            pass  # already defined from .ini config
+
+    _add_if_new("--no-overlap", action="store_true")
+    _add_if_new("--fp16", action="store_true",
+                help="fp16 training activations/grads (rollout stays fp32)")
+    _add_if_new("--log-interval", type=int, default=10)
+    _add_if_new("--checkpoint-interval", type=int, default=200,
+                help="save weights every N iterations")
+    _add_if_new("--checkpoint-dir", type=str, default="",
+                help="checkpoint directory (default: checkpoints/<env>/<run_id>)")
+    _add_if_new("--load-model-path", type=str, default="latest",
+                help="path to checkpoint for eval mode (default: latest)")
+    _add_if_new("--trace-path", type=str, default="")
+    _add_if_new("--trace-every", type=int, default=1)
+    _add_if_new("--timeout", type=float, default=4.0,
+                help="max sweep hours (default: 4)")
+    _add_if_new("--max-trials", type=int, default=None)
+    _add_if_new("--results", action="store_true",
+                help="print sweep results and exit")
     parser.add_argument("--wandb", action="store_true",
                         help="log to wandb")
     parser.add_argument("--wandb-project", type=str, default="pufferlib-metal")
