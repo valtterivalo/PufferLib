@@ -104,9 +104,10 @@ void c_step(Env* env) {
             env->log.dmg_from_type[t] = s->dmg_from_type[t];
             env->log.killed_by_type[t] = (float)s->killed_by_type[t];
         }
-        /* only wave-0 agents contribute to sweep metric; curriculum agents
-           (start_wave > 0) still train but their scores are excluded from the log */
-        env->log.n = (s->start_wave == 0) ? 1.0f : 0.0f;
+        /* all agents contribute to log. curriculum agents with mixed start_waves
+           used to be excluded, but that breaks Zuk-only training where all agents
+           start at wave 69. sweeps use episode_return directly anyway. */
+        env->log.n = 1.0f;
         env->log.npc_kills = (float)s->total_npc_kills;
         env->log.gear_switches = (float)s->total_gear_switches;
         env->log.current_ranged = (float)s->player.current_ranged;
