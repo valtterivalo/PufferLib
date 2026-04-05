@@ -819,7 +819,7 @@ def sweep(env_name, args=None):
         trial_start = time.time()
         try:
             validate_config(trial_args)
-            pufferl, all_logs = _train_rank(trial_args, sweep_obj=protein, verbose=False)
+            pufferl, all_logs = _train_rank(trial_args, sweep_obj=protein, verbose=True)
             elapsed = time.time() - trial_start
         except (AssertionError, ValueError, RuntimeError) as e:
             print(f"  FAILED: {e}")
