@@ -340,7 +340,7 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
     uint64_t tp1 = mach_absolute_time();
 
     // Forward pass + sampling
-    PufTensor act_slice = puf_slice(rollouts.actions, t, start, block_size);
+    FloatTensor act_slice = puf_slice(rollouts.actions, t, start, block_size);
     FloatTensor lp_slice = puf_slice(rollouts.logprobs, t, start, block_size);
     FloatTensor val_slice = puf_slice(rollouts.values, t, start, block_size);
     int num_atns = (int)puf_numel(pufferl->act_sizes_puf.shape);
@@ -387,8 +387,7 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
         FloatTensor acts_f32_dst = puf_slice(pufferl->rollout_actions_f32, t, start, block_size);
         memcpy(acts_f32_dst.data, act_f32_buf.data, block_size * num_atns * sizeof(float));
 
-        mtl_sample_logits_expand(act_f32_buf.data,
-                                 (double*)act_slice.bytes, block_size * num_atns);
+        memcpy(act_slice.data, act_f32_buf.data, block_size * num_atns * sizeof(float));
     } else {
         // GPU path: Metal dispatch + sync (original behavior)
         PufTensor obs_puf = {.bytes = (char*)obs_dst.data, .shape = {obs_dst.shape[0], obs_dst.shape[1]}, .dtype_size = (int)sizeof(float)};
@@ -415,8 +414,7 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
             memcpy(acts_f32_dst.data, act_f32_buf.data, block_size * num_atns * sizeof(float));
         }
 
-        mtl_sample_logits_expand(act_f32_buf.data,
-                                 (double*)act_slice.bytes, block_size * num_atns);
+        memcpy(act_slice.data, act_f32_buf.data, block_size * num_atns * sizeof(float));
     }
 
     // RNN state NOT zeroed on terminal — matches CUDA upstream behavior.
@@ -425,11 +423,13 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
 
     uint64_t tp2 = mach_absolute_time();
 
+    /* copy float32 actions to env buffer (actions are float after upstream 4.0 migration).
+       use act_f32_buf (already float) instead of act_slice (which stores doubles in rollout buf). */
     int64_t act_cols = env.actions.shape[1];
     memcpy(
-        env.actions.bytes + start * act_cols * env.actions.dtype_size,
-        act_slice.bytes,
-        act_slice.numel() * act_slice.dtype_size);
+        env.actions.bytes + start * act_cols * sizeof(float),
+        act_f32_buf.data,
+        block_size * act_cols * sizeof(float));
 
     uint64_t tp3 = mach_absolute_time();
 

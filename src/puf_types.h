@@ -339,7 +339,7 @@ inline void register_ppo_buffers(PPOBuffersPuf &bufs, Allocator &alloc, int N,
 
 struct RolloutBuf {
   FloatTensor observations; // (horizon, segments, input_size) fp32
-  PufTensor actions;        // (horizon, segments, num_atns) f64 — legacy, needs double
+  FloatTensor actions;      // (horizon, segments, num_atns) fp32 — float since upstream 4.0
   FloatTensor values;       // (horizon, segments) fp32
   FloatTensor logprobs;     // (horizon, segments) fp32
   FloatTensor rewards;      // (horizon, segments) fp32
@@ -351,7 +351,7 @@ struct RolloutBuf {
 inline void register_rollout_buffers(RolloutBuf &bufs, Allocator &alloc, int H,
                                      int S, int input_size, int num_atns) {
   bufs.observations = {.shape = {H, S, input_size}};
-  bufs.actions = {.shape = {H, S, num_atns}, .dtype_size = (int)sizeof(double)};
+  bufs.actions = {.shape = {H, S, num_atns}};
   bufs.values = {.shape = {H, S}};
   bufs.logprobs = {.shape = {H, S}};
   bufs.rewards = {.shape = {H, S}};
@@ -359,7 +359,7 @@ inline void register_rollout_buffers(RolloutBuf &bufs, Allocator &alloc, int H,
   bufs.ratio = {.shape = {H, S}};
   bufs.importance = {.shape = {H, S}};
   alloc_register(&alloc, &bufs.observations);
-  alloc_register_legacy(&alloc, &bufs.actions);
+  alloc_register(&alloc, &bufs.actions);
   alloc_register(&alloc, &bufs.values);
   alloc_register(&alloc, &bufs.logprobs);
   alloc_register(&alloc, &bufs.rewards);
@@ -371,7 +371,7 @@ inline void register_rollout_buffers(RolloutBuf &bufs, Allocator &alloc, int H,
 struct TrainGraph {
   FloatTensor mb_obs;        // (S, H, input_size) fp32
   FloatTensor mb_state;      // (L, S, 1, hidden) fp32
-  PufTensor mb_actions;      // (S, H, num_atns) f64 — legacy, needs double
+  FloatTensor mb_actions;    // (S, H, num_atns) fp32 — float since upstream 4.0
   FloatTensor mb_logprobs;   // (S, H) fp32
   FloatTensor mb_advantages; // (S, H) f32
   FloatTensor mb_prio;       // (S, 1) fp32
@@ -386,7 +386,7 @@ inline void register_train_buffers(TrainGraph &bufs, Allocator &alloc, int S,
                                    int num_atns, int num_layers) {
   bufs.mb_obs = {.shape = {S, H, input_size}};
   bufs.mb_state = {.shape = {num_layers, S, 1, hidden_size}};
-  bufs.mb_actions = {.shape = {S, H, num_atns}, .dtype_size = (int)sizeof(double)};
+  bufs.mb_actions = {.shape = {S, H, num_atns}};
   bufs.mb_logprobs = {.shape = {S, H}};
   bufs.mb_advantages = {.shape = {S, H}};
   bufs.mb_prio = {.shape = {S, 1}};
@@ -396,7 +396,7 @@ inline void register_train_buffers(TrainGraph &bufs, Allocator &alloc, int S,
   bufs.mb_newvalue = {.shape = {S, H, 1}};
   alloc_register(&alloc, &bufs.mb_obs);
   alloc_register(&alloc, &bufs.mb_state);
-  alloc_register_legacy(&alloc, &bufs.mb_actions);
+  alloc_register(&alloc, &bufs.mb_actions);
   alloc_register(&alloc, &bufs.mb_logprobs);
   alloc_register(&alloc, &bufs.mb_advantages);
   alloc_register(&alloc, &bufs.mb_prio);

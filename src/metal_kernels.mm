@@ -794,27 +794,9 @@ void ppo_loss_fwd_bwd(PufTensor &dec_out, PufTensor &logstd, TrainGraph &graph,
   // with reduce kernel's *loss += sum from the previous minibatch).
   puf_zero(&bufs.loss_output, stream);
 
-  // MSL doesn't support double — convert actions from f64 to f32 on GPU.
-  // Uses cast_f64_to_f32 kernel (IEEE 754 bit manipulation via uint2) to
-  // avoid flushing the GPU encoder for a CPU conversion loop.
-  int act_count = (int)graph.mb_actions.numel();
-  if (!ppo_act_f32 || act_count > ppo_act_f32_capacity) {
-    if (ppo_act_f32) {
-      mtl_unwrap_ptr(ppo_act_f32);
-      free(ppo_act_f32);
-    }
-    ppo_act_f32_capacity = act_count;
-    ppo_act_f32 = (float *)mtl_alloc_scratch(ppo_act_f32_capacity * sizeof(float));
-  }
-  {
-    ms->compute_encoder();
-    auto pso = mtl_pipeline("cast_f64_to_f32");
-    mtl_set_pso(ms, pso);
-    mtl_set_ptr(ms, graph.mb_actions.bytes, 0);  // src: f64 as uint2* (legacy PufTensor)
-    mtl_set_ptr(ms, ppo_act_f32, 1);             // dst: f32
-    mtl_set_params(ms, act_count, 2);
-    mtl_dispatch_1d(ms, pso, act_count);
-  }
+  /* actions are already float32 (upstream 4.0 migration). no conversion needed.
+     the old f64→f32 cast_f64_to_f32 kernel is removed. */
+  float *ppo_act_f32 = graph.mb_actions.data;
 
   // Action mask: either from external all-ones buffer (no mask) or embedded in obs.
   int input_size = (int)graph.mb_obs.shape[2];
@@ -1061,9 +1043,9 @@ void mtl_select_copy(RolloutBuf &rollouts, TrainGraph &graph,
   int obs_row_bytes = (int)(puf_numel(rollouts.observations.shape) /
                             rollouts.observations.shape[0]) *
                       (int)sizeof(float);
-  int act_row_bytes = (int)(rollouts.actions.numel() /
+  int act_row_bytes = (int)(puf_numel(rollouts.actions.shape) /
                             rollouts.actions.shape[0]) *
-                      rollouts.actions.dtype_size;
+                      (int)sizeof(float);
   int lp_row_bytes = (int)(puf_numel(rollouts.logprobs.shape) /
                            rollouts.logprobs.shape[0]) *
                      (int)sizeof(float);
@@ -1075,14 +1057,14 @@ void mtl_select_copy(RolloutBuf &rollouts, TrainGraph &graph,
   mtl_set_pso(ms, pso);
 
   mtl_set_ptr(ms, graph.mb_obs.data, 0);
-  mtl_set_ptr(ms, graph.mb_actions.bytes, 1);
+  mtl_set_ptr(ms, graph.mb_actions.data, 1);
   mtl_set_ptr(ms, graph.mb_logprobs.data, 2);
   mtl_set_ptr(ms, graph.mb_values.data, 3);
   mtl_set_ptr(ms, graph.mb_advantages.data, 4);
   mtl_set_ptr(ms, graph.mb_returns.data, 5);
   mtl_set_ptr(ms, graph.mb_prio.data, 6);
   mtl_set_ptr(ms, rollouts.observations.data, 7);
-  mtl_set_ptr(ms, rollouts.actions.bytes, 8);
+  mtl_set_ptr(ms, rollouts.actions.data, 8);
   mtl_set_ptr(ms, rollouts.logprobs.data, 9);
   mtl_set_ptr(ms, rollouts.values.data, 10);
   mtl_set_ptr(ms, advantages, 11);
