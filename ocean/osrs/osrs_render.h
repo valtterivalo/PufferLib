@@ -398,6 +398,10 @@ typedef struct {
 
     /* interactive human control (H key toggle) */
     HumanInput human_input;
+
+    /* cursor hover tile: tile under mouse cursor, updated every frame.
+       -1 = no valid tile under cursor (off-arena or off-screen). */
+    int hover_tile_x, hover_tile_y;
 } RenderClient;
 
 /* forward declarations */
@@ -946,11 +950,28 @@ static void render_handle_input(RenderClient* rc, OsrsEnv* env) {
         }
     }
 
-    if (IsKeyPressed(KEY_ONE))    rc->ticks_per_second = 1.0f;
-    if (IsKeyPressed(KEY_TWO))    rc->ticks_per_second = 1.667f;  /* OSRS speed (600ms) */
-    if (IsKeyPressed(KEY_THREE))  rc->ticks_per_second = 5.0f;
-    if (IsKeyPressed(KEY_FOUR))   rc->ticks_per_second = 15.0f;
-    if (IsKeyPressed(KEY_FIVE))   rc->ticks_per_second = 0.0f; /* unlimited */
+    /* number keys 1-5: GUI tab switching */
+    if (IsKeyPressed(KEY_ONE))    rc->gui.active_tab = GUI_TAB_INVENTORY;
+    if (IsKeyPressed(KEY_TWO))    rc->gui.active_tab = GUI_TAB_COMBAT;
+    if (IsKeyPressed(KEY_THREE))  rc->gui.active_tab = GUI_TAB_PRAYER;
+    if (IsKeyPressed(KEY_FOUR))   rc->gui.active_tab = GUI_TAB_SPELLBOOK;
+    if (IsKeyPressed(KEY_FIVE))   rc->gui.active_tab = GUI_TAB_EQUIPMENT;
+
+    /* 9/0: replay speed control (discrete steps) */
+    {
+        static const float speed_steps[] = { 0.5f, 1.0f, 1.667f, 5.0f, 15.0f, 50.0f, 0.0f };
+        static const int num_steps = sizeof(speed_steps) / sizeof(speed_steps[0]);
+        if (IsKeyPressed(KEY_NINE) || IsKeyPressed(KEY_ZERO)) {
+            /* find current step index */
+            int cur = -1;
+            for (int i = 0; i < num_steps; i++) {
+                if (speed_steps[i] == rc->ticks_per_second) { cur = i; break; }
+            }
+            if (cur < 0) cur = 2; /* default to OSRS speed if not on a step */
+            if (IsKeyPressed(KEY_NINE) && cur > 0)             rc->ticks_per_second = speed_steps[cur - 1];
+            if (IsKeyPressed(KEY_ZERO) && cur < num_steps - 1) rc->ticks_per_second = speed_steps[cur + 1];
+        }
+    }
 
     /* H key: toggle human control */
     if (IsKeyPressed(KEY_H)) {
@@ -2174,9 +2195,10 @@ static void render_draw_header(RenderClient* rc, OsrsEnv* env) {
     DrawRectangle(0, 0, RENDER_WINDOW_W, RENDER_HEADER_HEIGHT, COLOR_HEADER_BG);
 
     /* left: tick + speed + pause/rewind */
-    const char* speed_txt = (rc->ticks_per_second > 0.0f)
-        ? TextFormat("%.0f t/s", rc->ticks_per_second)
-        : "max";
+    const char* speed_txt;
+    if (rc->ticks_per_second <= 0.0f)         speed_txt = "max";
+    else if (rc->ticks_per_second < 1.0f)     speed_txt = TextFormat("%.1f t/s", rc->ticks_per_second);
+    else                                      speed_txt = TextFormat("%.0f t/s", rc->ticks_per_second);
     const char* mode_txt = "";
     if (rc->history_cursor >= 0) {
         mode_txt = TextFormat("  [REWIND %d/%d]", rc->history_cursor + 1, rc->history_count);
