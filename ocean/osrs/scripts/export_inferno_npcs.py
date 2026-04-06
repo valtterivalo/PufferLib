@@ -509,6 +509,10 @@ def main() -> None:
         for anim_id in [npc.idle_anim, npc.walk_anim, npc.turn_180_anim, npc.turn_cw_anim, npc.turn_ccw_anim]:
             if anim_id >= 0:
                 all_anim_ids.add(anim_id)
+        # attack anims come from INFERNO_ATTACK_ANIMS (not in cache NPC config)
+        attack_anim = INFERNO_ATTACK_ANIMS.get(npc_id, 65535)
+        if attack_anim != 65535:
+            all_anim_ids.add(attack_anim)
 
     # ================================================================
     # step 2: read SpotAnim/GFX definitions
