@@ -102,6 +102,7 @@ typedef struct {
     float pitch;                /* current vertical tilt (radians) */
     float arc_height;           /* sinusoidal arc peak in tiles (0 = use quadratic) */
     int tracks_target;          /* 1 = re-aim toward target each tick */
+    int start_delay;            /* client ticks before projectile becomes visible/moves */
     uint32_t model_id;          /* GFX model from cache (0 = style-based fallback) */
 } FlightProjectile;
 
@@ -674,7 +675,8 @@ static void flight_spawn(RenderClient* rc,
                          float src_x, float src_y, float dst_x, float dst_y,
                          int style, int damage,
                          int duration_ticks, int start_h, int end_h, int curve,
-                         float arc_height, int tracks_target, uint32_t model_id) {
+                         float arc_height, int tracks_target, uint32_t model_id,
+                         int start_delay) {
     int slot = -1;
     for (int i = 0; i < MAX_FLIGHT_PROJECTILES; i++) {
         if (!rc->flights[i].active) { slot = i; break; }
@@ -700,6 +702,7 @@ static void flight_spawn(RenderClient* rc,
     fp->arc_height = arc_height;
     fp->tracks_target = tracks_target;
     fp->model_id = model_id;
+    fp->start_delay = start_delay;
 
     /* height arc: OSRS SceneProjectile.calculateIncrements
        skip quadratic computation when using sinusoidal arc */
@@ -732,6 +735,12 @@ static void flight_client_tick(RenderClient* rc) {
     for (int i = 0; i < MAX_FLIGHT_PROJECTILES; i++) {
         FlightProjectile* fp = &rc->flights[i];
         if (!fp->active) continue;
+
+        /* start delay: count down before projectile becomes visible/moves */
+        if (fp->start_delay > 0) {
+            fp->start_delay--;
+            continue;
+        }
 
         /* remaining sub-ticks (avoid div by zero) */
         float remaining = (1.0f - fp->progress) / fp->speed;
@@ -1498,7 +1507,8 @@ static void render_post_tick(RenderClient* rc, OsrsEnv* env) {
 
                 flight_spawn(rc, sx, sy, dx, dy,
                     ov->projectiles[i].style, ov->projectiles[i].damage,
-                    dur, sh, eh, cv, arc, trk, ov->projectiles[i].model_id);
+                    dur, sh, eh, cv, arc, trk, ov->projectiles[i].model_id,
+                    ov->projectiles[i].start_delay);
             }
 
             /* update tracking projectile targets to player's current position */
@@ -3197,7 +3207,7 @@ static void render_draw_3d_world(RenderClient* rc) {
            flight_client_tick() advances progress at 50Hz, we just draw here. */
         for (int i = 0; i < MAX_FLIGHT_PROJECTILES; i++) {
             FlightProjectile* fp = &rc->flights[i];
-            if (!fp->active) continue;
+            if (!fp->active || fp->start_delay > 0) continue;
 
             float src_ground = OV_GROUND((int)fp->src_x, (int)fp->src_y);
             float dst_ground = OV_GROUND((int)fp->dst_x, (int)fp->dst_y);

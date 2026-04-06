@@ -121,6 +121,7 @@ typedef struct {
         int curve;           /* OSRS slope param (0 = use default 16) */
         float arc_height;    /* sinusoidal arc peak in tiles (0 = quadratic/straight) */
         int tracks_target;   /* 1 = re-aim toward target each tick */
+        int start_delay;     /* ticks before projectile becomes visible (0 = immediate) */
         int src_size;        /* source entity size for center offset (0 = use boss_size) */
         int dst_size;        /* target entity size for center offset (1 = player) */
         uint32_t model_id;   /* GFX model from cache (0 = style-based fallback) */
@@ -167,6 +168,7 @@ static inline int encounter_emit_projectile(
     ov->projectiles[i].end_h = end_h;
     ov->projectiles[i].curve = curve;
     ov->projectiles[i].arc_height = arc_height;
+    ov->projectiles[i].start_delay = 0;
     ov->projectiles[i].tracks_target = tracks_target;
     ov->projectiles[i].src_size = src_size;
     ov->projectiles[i].dst_size = dst_size;

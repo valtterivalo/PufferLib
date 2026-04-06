@@ -3017,15 +3017,21 @@ static void inf_render_post_tick(EncounterState* state, EncounterOverlay* ov) {
                 duration = 4 * 30;  /* fixed 4 tick delay */
                 break;
             case INF_NPC_ZUK:
-                duration = 4 * 30;  /* fixed 4 tick delay */
+                /* InfernoTrainer: setDelay=4, visualDelayTicks=2.
+                   projectile invisible for 2 ticks, visible for 2 ticks. */
+                duration = 2 * 30;  /* 2-tick visible flight */
                 break;
             default: break;
         }
 
-        encounter_emit_projectile(ov,
+        int pi = encounter_emit_projectile(ov,
             npc->x, npc->y, target_x, target_y,
             proj_style, (int)s->damage_received_this_tick,
             duration, start_h, end_h, curve, arc, tracks, npc_size, 1, proj_model_id);
+
+        /* Zuk: 2-tick visual delay (projectile invisible until tick N+2) */
+        if (pi >= 0 && npc->type == INF_NPC_ZUK)
+            ov->projectiles[pi].start_delay = 2 * 30;
     }
 
     /* player attack projectile (ranged/magic only — melee has no projectile) */
