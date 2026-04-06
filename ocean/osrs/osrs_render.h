@@ -3595,11 +3595,14 @@ static void render_draw_overhead_status(RenderClient* rc, OsrsEnv* env) {
         if (p->entity_type == ENTITY_NPC && !p->npc_visible) continue;
 
         /* project entity positions to screen coordinates.
-           OSRS draws splats at entity.height/2 (abdomen), HP bar + prayer at top. */
+           OSRS draws splats at entity.height/2 (abdomen), HP bar + prayer at top.
+           head height scales with NPC size — larger models need higher overhead bars.
+           approximate: model height in tiles ~ 1.5 + 0.5*size (player=2.0, zuk=5.0). */
         float px, pz, ground;
         render_get_visual_pos(rc, i, &px, &pz, &ground);
-        float head_y = ground + 2.0f;
-        float abdomen_y = ground + 1.0f;
+        int ent_size = (p->entity_type == ENTITY_NPC && p->npc_size > 1) ? p->npc_size : 1;
+        float head_y = ground + 1.5f + 0.5f * (float)ent_size;
+        float abdomen_y = ground + 0.75f + 0.25f * (float)ent_size;
         Vector2 screen_head = GetWorldToScreen((Vector3){ px, head_y, pz }, cam);
         Vector2 screen_abdomen = GetWorldToScreen((Vector3){ px, abdomen_y, pz }, cam);
 
@@ -3624,10 +3627,18 @@ static void render_draw_overhead_status(RenderClient* rc, OsrsEnv* env) {
            screen Y increases downward, so we go negative to go up. */
         float cursor_y = screen_head.y;
 
-        /* HP bar: 30px wide, 5px tall, green + red (Client.java:6032-6034)
-           only visible for 6s after taking damage (cycleStatus timer) */
+        /* HP bar: width scales with NPC size, matching OSRS HealthBarDefinition
+           widths (30 for size 1, up to ~160 for size 7). plain colored rectangle
+           matches the no-sprite fallback path in the engine. */
         if (env->tick < rc->hp_bar_visible_until[i]) {
-            int bar_w = 30;
+            /* OSRS bar widths by common NPC sizes (from cache HealthBarDefinitions):
+               size 1→30, 2→40, 3→50, 4→60, 5→80, 7→120 */
+            static const int BAR_WIDTH_BY_SIZE[] = {
+                30, 30, 40, 50, 60, 80, 100, 120
+            };
+            int bw_idx = ent_size;
+            if (bw_idx > 7) bw_idx = 7;
+            int bar_w = BAR_WIDTH_BY_SIZE[bw_idx];
             int bar_h = 5;
             float hp_frac = (float)p->current_hitpoints / (float)p->base_hitpoints;
             if (hp_frac < 0.0f) hp_frac = 0.0f;
