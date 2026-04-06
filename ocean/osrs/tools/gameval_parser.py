@@ -18,7 +18,7 @@ _CONST_PATTERN = re.compile(
 )
 
 DEFAULT_GAMEVAL_DIR = (
-    Path(__file__).resolve().parents[4]
+    Path(__file__).resolve().parents[3]
     / ".refs"
     / "osrs-client-deob"
     / "runelite-api"

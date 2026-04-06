@@ -52,74 +52,47 @@ static const NpcModelMapping NPC_MODEL_MAP_ZULRAH[] = {
 #define GFX_SNAKELING_SPAWN_ANIM 5358
 
 /* ================================================================ */
-/* inferno NPC model/animation mappings                              */
-/* ================================================================ */
+/* inferno NPC model/animation mappings (generated) */
+#include "npc_models_inferno.h"
 
-static const NpcModelMapping NPC_MODEL_MAP_INFERNO[] = {
-    {7691, 0xC1E0B, 7573, 7574, 7572},   /* Jal-Nib (nibbler) */
-    {7692, 0xC1E0C, 7577, 7578, 7577},   /* Jal-MejRah (bat) */
-    {7693, 0xC1E0D, 7586, 7581, 7587},   /* Jal-Ak (blob) */
-    {7694, 0xC1E0E, 7586, 65535, 7587},   /* Jal-Ak-Rek-Ket (blob melee split) */
-    {7695, 0xC1E0F, 7586, 65535, 7587},   /* Jal-Ak-Rek-Xil (blob range split) */
-    {7696, 0xC1E10, 7586, 65535, 7587},   /* Jal-Ak-Rek-Mej (blob mage split) */
-    {7697, 0xC1E11, 7595, 7597, 7596},   /* Jal-ImKot (meleer) */
-    {7698, 0xC1E12, 7602, 7605, 7603},   /* Jal-Xil (ranger) */
-    {7699, 0xC1E13, 7609, 7610, 7608},   /* Jal-Zek (mager) */
-    {7700, 0xC1E14, 7589, 7593, 7588},   /* JalTok-Jad */
-    {7701, 0xC1E15, 2636, 65535, 2634},   /* Yt-HurKot (jad healer) */
-    {7706, 0xC1E1A, 7564, 7566, 65535},   /* TzKal-Zuk */
-    {7707, 0xC1E1B, 7567, 65535, 7567},   /* Zuk shield */
-    {7708, 0xC1E1C, 2867, 65535, 2863},   /* Jal-MejJak (zuk healer) */
-};
+/* alias: encounter code uses NPC_MODEL_MAP_INFERNO, generated uses _GEN suffix */
+#define NPC_MODEL_MAP_INFERNO NPC_MODEL_MAP_INFERNO_GEN
 
-/* inferno NPC walk animation IDs */
-#define INF_WALK_ANIM_NIBBLER  7572
-#define INF_WALK_ANIM_BAT  7577
-#define INF_WALK_ANIM_BLOB  7587
-#define INF_WALK_ANIM_BLOB_MELEE_SPLIT  7587
-#define INF_WALK_ANIM_BLOB_RANGE_SPLIT  7587
-#define INF_WALK_ANIM_BLOB_MAGE_SPLIT  7587
-#define INF_WALK_ANIM_MELEER  7596
-#define INF_WALK_ANIM_RANGER  7603
-#define INF_WALK_ANIM_MAGER  7608
-#define INF_WALK_ANIM_JALTOK_JAD  7588
-#define INF_WALK_ANIM_JAD_HEALER  2634
-#define INF_WALK_ANIM_ZUK_SHIELD  7567
-#define INF_WALK_ANIM_ZUK_HEALER  2863
+/* alias: encounter code uses INF_GFX_*, generated uses INF_GEN_GFX_* */
+#define INF_GFX_157_MODEL   INF_GEN_GFX_157_MODEL
+#define INF_GFX_157_ANIM    INF_GEN_GFX_157_ANIM
+#define INF_GFX_447_MODEL   INF_GEN_GFX_447_MODEL
+#define INF_GFX_447_ANIM    INF_GEN_GFX_447_ANIM
+#define INF_GFX_448_MODEL   INF_GEN_GFX_448_MODEL
+#define INF_GFX_448_ANIM    INF_GEN_GFX_448_ANIM
+#define INF_GFX_451_MODEL   INF_GEN_GFX_451_MODEL
+#define INF_GFX_451_ANIM    INF_GEN_GFX_451_ANIM
+#define INF_GFX_1374_MODEL  INF_GEN_GFX_1374_MODEL
+#define INF_GFX_1374_ANIM   INF_GEN_GFX_1374_ANIM
+#define INF_GFX_1375_MODEL  INF_GEN_GFX_1375_MODEL
+#define INF_GFX_1375_ANIM   INF_GEN_GFX_1375_ANIM
+#define INF_GFX_1376_MODEL  INF_GEN_GFX_1376_MODEL
+#define INF_GFX_1376_ANIM   INF_GEN_GFX_1376_ANIM
+#define INF_GFX_1377_MODEL  INF_GEN_GFX_1377_MODEL
+#define INF_GFX_1378_MODEL  INF_GEN_GFX_1378_MODEL
+#define INF_GFX_1378_ANIM   INF_GEN_GFX_1378_ANIM
+#define INF_GFX_1379_MODEL  INF_GEN_GFX_1379_MODEL
+#define INF_GFX_1379_ANIM   INF_GEN_GFX_1379_ANIM
+#define INF_GFX_1380_MODEL  INF_GEN_GFX_1380_MODEL
+#define INF_GFX_1380_ANIM   INF_GEN_GFX_1380_ANIM
+#define INF_GFX_1381_MODEL  INF_GEN_GFX_1381_MODEL
+#define INF_GFX_1381_ANIM   INF_GEN_GFX_1381_ANIM
+#define INF_GFX_1382_MODEL  INF_GEN_GFX_1382_MODEL
+#define INF_GFX_1382_ANIM   INF_GEN_GFX_1382_ANIM
+#define INF_GFX_1383_MODEL  INF_GEN_GFX_1383_MODEL
+#define INF_GFX_1383_ANIM   INF_GEN_GFX_1383_ANIM
+#define INF_GFX_1384_MODEL  INF_GEN_GFX_1384_MODEL
+#define INF_GFX_1385_MODEL  INF_GEN_GFX_1385_MODEL
+#define INF_GFX_1385_ANIM   INF_GEN_GFX_1385_ANIM
 
-/* inferno spotanim (projectile/effect) model + animation IDs */
-#define INF_GFX_157_MODEL  3116  /* Jad magic hit */
-#define INF_GFX_157_ANIM   693
-#define INF_GFX_447_MODEL  9334  /* Jad ranged projectile (fireball) */
-#define INF_GFX_447_ANIM   2658
-#define INF_GFX_448_MODEL  9337  /* Jad magic projectile */
-#define INF_GFX_448_ANIM   2659
-#define INF_GFX_451_MODEL  9342  /* Jad ranged hit */
-#define INF_GFX_451_ANIM   2660
-#define INF_GFX_942_MODEL  19374  /* Dragon arrow projectile (twisted bow) */
+/* tbow projectile — not in inferno group, keep hardcoded */
+#define INF_GFX_942_MODEL  19374
 #define INF_GFX_942_ANIM   5233
-#define INF_GFX_1374_MODEL  853342  /* Bat ranged projectile */
-#define INF_GFX_1374_ANIM   660
-#define INF_GFX_1375_MODEL  33006  /* Zuk magic projectile */
-#define INF_GFX_1375_ANIM   7571
-#define INF_GFX_1376_MODEL  33007  /* Zuk ranged projectile */
-#define INF_GFX_1376_ANIM   7571
-#define INF_GFX_1377_MODEL  33013  /* Ranger ranged projectile */
-#define INF_GFX_1378_MODEL  33015  /* Ranger ranged hit */
-#define INF_GFX_1378_ANIM   7615
-#define INF_GFX_1379_MODEL  33016  /* Mager magic projectile */
-#define INF_GFX_1379_ANIM   7614
-#define INF_GFX_1380_MODEL  33008  /* Mager magic hit */
-#define INF_GFX_1380_ANIM   7616
-#define INF_GFX_1381_MODEL  33009  /* Zuk typeless hit (falling rocks?) */
-#define INF_GFX_1381_ANIM   7616
-#define INF_GFX_1382_MODEL  33017  /* Blob melee */
-#define INF_GFX_1382_ANIM   7614
-#define INF_GFX_1383_MODEL  853351  /* Blob ranged */
-#define INF_GFX_1383_ANIM   366
-#define INF_GFX_1384_MODEL  853352  /* Blob magic */
-#define INF_GFX_1385_MODEL  853353  /* Healer magic attack */
-#define INF_GFX_1385_ANIM   366
 
 /* inferno pillar models — Rocky support objects 30284-30287 */
 #define INF_PILLAR_MODEL_100  33044  /* object 30284 — full health */
@@ -131,8 +104,8 @@ static const NpcModelMapping* npc_model_lookup(uint16_t npc_id) {
     for (int i = 0; i < (int)(sizeof(NPC_MODEL_MAP_ZULRAH) / sizeof(NPC_MODEL_MAP_ZULRAH[0])); i++) {
         if (NPC_MODEL_MAP_ZULRAH[i].npc_id == npc_id) return &NPC_MODEL_MAP_ZULRAH[i];
     }
-    for (int i = 0; i < (int)(sizeof(NPC_MODEL_MAP_INFERNO) / sizeof(NPC_MODEL_MAP_INFERNO[0])); i++) {
-        if (NPC_MODEL_MAP_INFERNO[i].npc_id == npc_id) return &NPC_MODEL_MAP_INFERNO[i];
+    for (int i = 0; i < (int)(sizeof(NPC_MODEL_MAP_INFERNO_GEN) / sizeof(NPC_MODEL_MAP_INFERNO_GEN[0])); i++) {
+        if (NPC_MODEL_MAP_INFERNO_GEN[i].npc_id == npc_id) return &NPC_MODEL_MAP_INFERNO_GEN[i];
     }
     return NULL;
 }

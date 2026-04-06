@@ -457,8 +457,8 @@ static void run_visual(OsrsEnv* env, const char* encounter_name, const char* rep
         if (rc->objects_zuk)
             objects_offset(rc->objects_zuk, 2246, 5315);
 
-        rc->npc_model_cache = model_cache_load("data/inferno_npcs.models");
-        rc->npc_anim_cache = anim_cache_load("data/inferno_npcs.anims");
+        rc->npc_model_cache = model_cache_load("data/inferno.models");
+        rc->npc_anim_cache = anim_cache_load("data/inferno.anims");
 
         /* collision map for debug overlay (C key) */
         if (env->collision_map) {
