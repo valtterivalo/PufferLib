@@ -412,8 +412,9 @@ typedef struct {
     int aggro_target;
 
     /* per-tick render flags (cleared at start of each tick) */
-    int attacked_this_tick;  /* 1 when NPC attacks this tick */
-    int moved_this_tick;     /* 1 when NPC moves this tick */
+    int attacked_this_tick;     /* 1 when NPC attacks this tick */
+    int attack_visual_target;   /* NPC index this attack visually targets (-1 = player) */
+    int moved_this_tick;        /* 1 when NPC moves this tick */
     int hit_landed_this_tick; /* 1 when this NPC was hit by player */
     int hit_damage;          /* damage dealt to this NPC this tick */
     int hit_spell_type;      /* ENCOUNTER_SPELL_* from the pending hit that just landed */
@@ -1239,6 +1240,7 @@ static void inf_npc_attack(InfernoState* s, int idx) {
                 }
             }
             npc->attacked_this_tick = 1;
+            npc->attack_visual_target = npc->aggro_target;
             npc->attack_timer = stats->attack_speed;
             return;
         } else {
@@ -1407,6 +1409,7 @@ static void inf_npc_attack(InfernoState* s, int idx) {
                 s->player.y >= 41) {
                 /* shield absorbs — no damage to shield or player */
                 npc->attacked_this_tick = 1;
+                npc->attack_visual_target = shield_idx;
                 npc->attack_timer = s->zuk.enraged ? 7 : stats->attack_speed;
                 return;
             }
@@ -2203,6 +2206,7 @@ static void inf_step(EncounterState* state, const int* actions) {
        inf_tick_player survive through inf_tick_npcs into render_post_tick */
     for (int i = 0; i < INF_MAX_NPCS; i++) {
         s->npcs[i].attacked_this_tick = 0;
+        s->npcs[i].attack_visual_target = -1;
         s->npcs[i].moved_this_tick = 0;
         s->npcs[i].hit_landed_this_tick = 0;
         s->npcs[i].hit_damage = 0;
@@ -2776,10 +2780,17 @@ static void inf_fill_render_entities(EncounterState* state, RenderEntity* out, i
         re->entity_type = ENTITY_NPC;
         re->npc_def_id = INF_NPC_DEF_IDS[npc->type];
         re->npc_slot = i;
-        /* non-nibbler NPCs target the player (entity 0) for facing.
-           nibblers target pillars (not an entity) — leave at -1 so the
-           renderer falls back to dest-based facing toward the pillar. */
-        re->attack_target_entity_idx = (npc->type == INF_NPC_NIBBLER) ? -1 : 0;
+        /* facing: nibblers → pillar (dest-based), NPCs attacking shield → shield
+           (dest-based), all others → player (entity 0). */
+        if (npc->type == INF_NPC_NIBBLER) {
+            re->attack_target_entity_idx = -1;
+        } else if (npc->aggro_target >= 0 && npc->aggro_target < INF_MAX_NPCS &&
+                   s->npcs[npc->aggro_target].active) {
+            /* attacking another NPC (e.g. shield) — use dest-based facing */
+            re->attack_target_entity_idx = -1;
+        } else {
+            re->attack_target_entity_idx = 0;  /* player */
+        }
         re->npc_visible = npc->active;
         re->npc_size = npc->size;
         {
@@ -2809,6 +2820,12 @@ static void inf_fill_render_entities(EncounterState* state, RenderEntity* out, i
                 re->dest_x = npc->x;
                 re->dest_y = npc->y;
             }
+        } else if (npc->aggro_target >= 0 && npc->aggro_target < INF_MAX_NPCS &&
+                   s->npcs[npc->aggro_target].active) {
+            /* attacking shield/other NPC — face toward target NPC center */
+            InfNPC* at = &s->npcs[npc->aggro_target];
+            re->dest_x = at->x + at->size / 2;
+            re->dest_y = at->y + at->size / 2;
         } else {
             re->dest_x = npc->target_x;
             re->dest_y = npc->target_y;
@@ -2923,8 +2940,20 @@ static void inf_render_post_tick(EncounterState* state, EncounterOverlay* ov) {
         int proj_style = encounter_attack_style_to_proj_style(actual_style);
         int npc_size = stats->size;
         int start_h = (int)(npc_size * 0.75f * 128);
-        int end_h = 64;  /* player: size 1 * 0.5 * 128 */
-        int dist = encounter_dist_to_npc(s->player.x, s->player.y,
+        int end_h = 64;  /* default: player size 1 * 0.5 * 128 */
+        int curve = 16;
+        float arc = 0.0f;
+        int tracks = 1;
+
+        /* projectile target: shield or player */
+        int target_x = s->player.x, target_y = s->player.y;
+        if (npc->attack_visual_target >= 0 && npc->attack_visual_target < INF_MAX_NPCS) {
+            InfNPC* vt = &s->npcs[npc->attack_visual_target];
+            target_x = vt->x + vt->size / 2;
+            target_y = vt->y + vt->size / 2;
+            end_h = (int)(vt->size * 0.5f * 128);
+        }
+        int dist = encounter_dist_to_npc(target_x, target_y,
             npc->x, npc->y, npc_size);
         int hit_delay;
         if (actual_style == ATTACK_STYLE_MAGIC)
@@ -2932,9 +2961,6 @@ static void inf_render_post_tick(EncounterState* state, EncounterOverlay* ov) {
         else
             hit_delay = encounter_ranged_hit_delay(dist, 0);
         int duration = hit_delay * 30;
-        int curve = 16;
-        float arc = 0.0f;
-        int tracks = 1;
 
         /* per-NPC-type projectile GFX model ID */
         uint32_t proj_model_id = 0;
@@ -2982,7 +3008,7 @@ static void inf_render_post_tick(EncounterState* state, EncounterOverlay* ov) {
         }
 
         encounter_emit_projectile(ov,
-            npc->x, npc->y, s->player.x, s->player.y,
+            npc->x, npc->y, target_x, target_y,
             proj_style, (int)s->damage_received_this_tick,
             duration, start_h, end_h, curve, arc, tracks, npc_size, 1, proj_model_id);
     }
