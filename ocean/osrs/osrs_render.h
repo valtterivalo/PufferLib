@@ -232,6 +232,38 @@ typedef struct {
     int ticks_remaining;   /* counts down from 70 client ticks */
 } HitSplat;
 
+/* ======================================================================== */
+/* right-click context menu (OSRS-style)                                    */
+/* ======================================================================== */
+
+#define CONTEXT_MENU_MAX_ITEMS 8
+#define CONTEXT_MENU_ROW_H     15
+#define CONTEXT_MENU_PADDING    4
+#define CONTEXT_MENU_MIN_W    150
+
+typedef enum {
+    CMENU_ACTION_NONE = 0,
+    CMENU_ACTION_WALK_HERE,
+    CMENU_ACTION_ATTACK,
+    CMENU_ACTION_CANCEL,
+} ContextMenuAction;
+
+typedef struct {
+    ContextMenuAction action;
+    int entity_idx;         /* render entity index for ATTACK, -1 for walk/cancel */
+    char label[64];         /* display text, e.g. "Attack Jal-Zek" */
+} ContextMenuItem;
+
+typedef struct {
+    int visible;
+    int screen_x, screen_y; /* top-left of the menu popup */
+    int width;               /* computed from widest label */
+    int item_count;
+    ContextMenuItem items[CONTEXT_MENU_MAX_ITEMS];
+    int walk_tile_x, walk_tile_y;  /* world tile for "Walk here" */
+    int hover_idx;           /* item currently hovered, -1 = none */
+} ContextMenu;
+
 typedef struct {
     /* viewer state */
     int is_paused;
@@ -402,6 +434,9 @@ typedef struct {
     /* cursor hover tile: tile under mouse cursor, updated every frame.
        -1 = no valid tile under cursor (off-arena or off-screen). */
     int hover_tile_x, hover_tile_y;
+
+    /* right-click context menu (OSRS-style popup) */
+    ContextMenu context_menu;
 } RenderClient;
 
 /* forward declarations */
@@ -466,6 +501,245 @@ static inline int render_world_to_screen_y(int world_y) {
 static void composite_free(PlayerComposite* comp);
 static int render_select_secondary(RenderClient* rc, int player_idx);
 
+/* forward declaration: inferno_npc_name is defined later in drawing section */
+static const char* inferno_npc_name(int npc_def_id);
+
+/* ======================================================================== */
+/* right-click context menu helpers                                          */
+/* ======================================================================== */
+
+/** Resolve display name for a render entity (NPC or player).
+    Uses the same lookup chain as render_draw_panel_npc: zulrah forms,
+    inferno NPCs, then fallback to "NPC <def_id>". */
+static const char* render_entity_display_name(RenderEntity* ent) {
+    if (ent->entity_type == ENTITY_PLAYER) return "Player";
+
+    /* zulrah forms */
+    if (ent->npc_def_id == 2042) return "Zulrah";
+    if (ent->npc_def_id == 2043) return "Zulrah";
+    if (ent->npc_def_id == 2044) return "Zulrah";
+
+    /* inferno NPCs */
+    const char* inf = inferno_npc_name(ent->npc_def_id);
+    if (inf) return inf;
+
+    return TextFormat("NPC %d", ent->npc_def_id);
+}
+
+/** Clear/hide the context menu. */
+static void context_menu_dismiss(ContextMenu* cm) {
+    cm->visible = 0;
+    cm->item_count = 0;
+    cm->hover_idx = -1;
+}
+
+/** Add an item to the context menu. */
+static void context_menu_add(ContextMenu* cm, ContextMenuAction action,
+                              int entity_idx, const char* label) {
+    if (cm->item_count >= CONTEXT_MENU_MAX_ITEMS) return;
+    ContextMenuItem* item = &cm->items[cm->item_count++];
+    item->action = action;
+    item->entity_idx = entity_idx;
+    snprintf(item->label, sizeof(item->label), "%s", label);
+}
+
+/** Build context menu from a right-click at screen position (mx, my).
+    Performs entity hull hit-testing (3D) or tile hit-testing (2D),
+    then builds the appropriate menu items. */
+static void context_menu_build(RenderClient* rc, int mx, int my) {
+    ContextMenu* cm = &rc->context_menu;
+    cm->item_count = 0;
+    cm->hover_idx = -1;
+    cm->walk_tile_x = -1;
+    cm->walk_tile_y = -1;
+
+    /* collect all NPCs/entities under cursor (3D hull test or 2D tile test) */
+    int hit_entities[MAX_RENDER_ENTITIES];
+    int hit_count = 0;
+
+    if (rc->mode_3d) {
+        /* 3D: test against convex hulls */
+        for (int ei = 0; ei < rc->entity_count; ei++) {
+            if (ei == rc->gui.gui_entity_idx) continue;  /* skip self */
+            RenderEntity* ent = &rc->entities[ei];
+            if (ent->entity_type == ENTITY_NPC && !ent->npc_visible) continue;
+            if (hull_contains(&rc->entity_hulls[ei], mx, my)) {
+                if (hit_count < MAX_RENDER_ENTITIES)
+                    hit_entities[hit_count++] = ei;
+            }
+        }
+
+        /* resolve ground tile under cursor via ray-box intersection */
+        Camera3D cam = render_build_3d_camera(rc);
+        Ray ray = GetScreenToWorldRay((Vector2){ (float)mx, (float)my }, cam);
+        float best_dist = 1e30f;
+        for (int dy = 0; dy < rc->arena_height; dy++) {
+            for (int dx = 0; dx < rc->arena_width; dx++) {
+                int wx = rc->arena_base_x + dx;
+                int wy = rc->arena_base_y + dy;
+                float tx = (float)wx;
+                float tz = -(float)(wy + 1);
+                float ground_y = rc->terrain
+                    ? terrain_height_avg(rc->terrain, wx, wy) : 2.0f;
+                BoundingBox box = {
+                    .min = { tx, ground_y - 0.1f, tz },
+                    .max = { tx + 1.0f, ground_y, tz + 1.0f },
+                };
+                RayCollision col = GetRayCollisionBox(ray, box);
+                if (col.hit && col.distance < best_dist) {
+                    best_dist = col.distance;
+                    cm->walk_tile_x = wx;
+                    cm->walk_tile_y = wy;
+                }
+            }
+        }
+    } else {
+        /* 2D: check tile under cursor, then check entities on that tile */
+        if (my >= RENDER_HEADER_HEIGHT) {
+            int grid_pixel_w = rc->arena_width * RENDER_TILE_SIZE;
+            int grid_pixel_h = rc->arena_height * RENDER_TILE_SIZE;
+            if (mx >= 0 && mx < grid_pixel_w &&
+                my < RENDER_HEADER_HEIGHT + grid_pixel_h) {
+                int wx = human_screen_to_world_x(mx, rc->arena_base_x, RENDER_TILE_SIZE);
+                int wy = human_screen_to_world_y(my, rc->arena_base_y, rc->arena_height,
+                                                  RENDER_HEADER_HEIGHT, RENDER_TILE_SIZE);
+                cm->walk_tile_x = wx;
+                cm->walk_tile_y = wy;
+
+                for (int ei = 0; ei < rc->entity_count; ei++) {
+                    if (ei == rc->gui.gui_entity_idx) continue;
+                    RenderEntity* ent = &rc->entities[ei];
+                    if (ent->entity_type == ENTITY_NPC && !ent->npc_visible) continue;
+                    if (human_tile_hits_entity(ent, wx, wy)) {
+                        if (hit_count < MAX_RENDER_ENTITIES)
+                            hit_entities[hit_count++] = ei;
+                    }
+                }
+            }
+        }
+    }
+
+    /* build menu items: "Attack <NPC>" for each hit entity, then "Walk here" */
+    for (int i = 0; i < hit_count; i++) {
+        int ei = hit_entities[i];
+        RenderEntity* ent = &rc->entities[ei];
+        const char* name = render_entity_display_name(ent);
+        char label[64];
+        snprintf(label, sizeof(label), "Attack %s", name);
+        context_menu_add(cm, CMENU_ACTION_ATTACK, ei, label);
+    }
+
+    if (cm->walk_tile_x >= 0)
+        context_menu_add(cm, CMENU_ACTION_WALK_HERE, -1, "Walk here");
+
+    context_menu_add(cm, CMENU_ACTION_CANCEL, -1, "Cancel");
+
+    /* compute menu width from widest label */
+    int max_w = CONTEXT_MENU_MIN_W;
+    for (int i = 0; i < cm->item_count; i++) {
+        int w = MeasureText(cm->items[i].label, 10) + CONTEXT_MENU_PADDING * 2 + 4;
+        if (w > max_w) max_w = w;
+    }
+    cm->width = max_w;
+
+    /* position: at cursor, clamped to screen bounds */
+    int menu_h = cm->item_count * CONTEXT_MENU_ROW_H + CONTEXT_MENU_PADDING * 2;
+    cm->screen_x = mx;
+    cm->screen_y = my;
+    if (cm->screen_x + cm->width > RENDER_WINDOW_W)
+        cm->screen_x = RENDER_WINDOW_W - cm->width;
+    if (cm->screen_y + menu_h > RENDER_WINDOW_H)
+        cm->screen_y = RENDER_WINDOW_H - menu_h;
+    if (cm->screen_x < 0) cm->screen_x = 0;
+    if (cm->screen_y < 0) cm->screen_y = 0;
+
+    cm->visible = (cm->item_count > 0);
+}
+
+/** Execute a context menu item action on the HumanInput staging buffer. */
+static void context_menu_execute(RenderClient* rc, int item_idx) {
+    ContextMenu* cm = &rc->context_menu;
+    if (item_idx < 0 || item_idx >= cm->item_count) return;
+    ContextMenuItem* item = &cm->items[item_idx];
+
+    switch (item->action) {
+        case CMENU_ACTION_WALK_HERE:
+            rc->human_input.pending_move_x = cm->walk_tile_x;
+            rc->human_input.pending_move_y = cm->walk_tile_y;
+            rc->human_input.pending_attack = 0;
+            human_set_click_cross(&rc->human_input, cm->screen_x, cm->screen_y, 0);
+            break;
+
+        case CMENU_ACTION_ATTACK: {
+            int ei = item->entity_idx;
+            if (ei >= 0 && ei < rc->entity_count) {
+                rc->human_input.pending_attack = 1;
+                rc->human_input.pending_target_idx = rc->entities[ei].npc_slot;
+                rc->human_input.pending_move_x = -1;
+                rc->human_input.pending_move_y = -1;
+                if (rc->human_input.cursor_mode == CURSOR_SPELL_TARGET) {
+                    rc->human_input.pending_spell = rc->human_input.selected_spell;
+                    rc->human_input.cursor_mode = CURSOR_NORMAL;
+                }
+                human_set_click_cross(&rc->human_input, cm->screen_x, cm->screen_y, 1);
+            }
+            break;
+        }
+
+        case CMENU_ACTION_CANCEL:
+        case CMENU_ACTION_NONE:
+            break;
+    }
+
+    context_menu_dismiss(cm);
+}
+
+/** Draw the context menu as a 2D overlay. Call just before EndDrawing().
+    OSRS style: dark brown/black rectangle, white text, yellow highlight on hover. */
+static void context_menu_draw(RenderClient* rc) {
+    ContextMenu* cm = &rc->context_menu;
+    if (!cm->visible || cm->item_count == 0) return;
+
+    int mx = GetMouseX();
+    int my = GetMouseY();
+    int menu_h = cm->item_count * CONTEXT_MENU_ROW_H + CONTEXT_MENU_PADDING * 2;
+
+    /* update hover state */
+    cm->hover_idx = -1;
+    if (mx >= cm->screen_x && mx < cm->screen_x + cm->width &&
+        my >= cm->screen_y && my < cm->screen_y + menu_h) {
+        int row = (my - cm->screen_y - CONTEXT_MENU_PADDING) / CONTEXT_MENU_ROW_H;
+        if (row >= 0 && row < cm->item_count)
+            cm->hover_idx = row;
+    }
+
+    /* OSRS menu colors */
+    Color bg     = (Color){ 57, 49, 35, 240 };
+    Color border = (Color){ 90, 80, 60, 255 };
+    Color text_normal = (Color){ 255, 255, 255, 255 };
+    Color text_hover  = (Color){ 255, 255, 0, 255 };
+    Color hover_bg    = (Color){ 80, 70, 50, 200 };
+
+    /* draw background with border */
+    DrawRectangle(cm->screen_x - 1, cm->screen_y - 1,
+                  cm->width + 2, menu_h + 2, border);
+    DrawRectangle(cm->screen_x, cm->screen_y, cm->width, menu_h, bg);
+
+    /* draw items */
+    for (int i = 0; i < cm->item_count; i++) {
+        int iy = cm->screen_y + CONTEXT_MENU_PADDING + i * CONTEXT_MENU_ROW_H;
+
+        if (i == cm->hover_idx) {
+            DrawRectangle(cm->screen_x + 1, iy, cm->width - 2, CONTEXT_MENU_ROW_H, hover_bg);
+        }
+
+        Color tc = (i == cm->hover_idx) ? text_hover : text_normal;
+        DrawText(cm->items[i].label,
+                 cm->screen_x + CONTEXT_MENU_PADDING + 2,
+                 iy + 2, 10, tc);
+    }
+}
+
 /* ======================================================================== */
 /* lifecycle                                                                 */
 /* ======================================================================== */
@@ -494,6 +768,8 @@ static RenderClient* render_make_client(void) {
     rc->history_cursor = -1;  /* -1 = live (not rewinding) */
     rc->entity_count = 0;  /* populated by render_populate_entities */
     rc->prev_entity_count = 0;
+    rc->hover_tile_x = -1;
+    rc->hover_tile_y = -1;
     for (int i = 0; i < MAX_RENDER_ENTITIES; i++) {
         rc->anim[i].primary_seq_id = -1;
         rc->anim[i].secondary_seq_id = 808; /* ANIM_SEQ_IDLE */
@@ -905,15 +1181,17 @@ static void render_handle_input(RenderClient* rc, OsrsEnv* env) {
     float wheel = GetMouseWheelMove();
 
     if (rc->mode_3d) {
-        /* 3D camera controls: right-drag to orbit, scroll to zoom */
-        if (IsMouseButtonDown(MOUSE_BUTTON_RIGHT)) {
+        /* 3D camera controls: right-drag to orbit (disabled in human mode where
+           right-click opens context menu — use middle-drag for camera instead),
+           scroll to zoom */
+        if (!rc->human_input.enabled && IsMouseButtonDown(MOUSE_BUTTON_RIGHT)) {
             Vector2 delta = GetMouseDelta();
             rc->cam_yaw -= delta.x * 0.005f;
             rc->cam_pitch -= delta.y * 0.005f;
             if (rc->cam_pitch < 0.1f) rc->cam_pitch = 0.1f;
             if (rc->cam_pitch > 1.4f) rc->cam_pitch = 1.4f;
         }
-        /* middle-drag to pan (disabled during human camera follow) */
+        /* middle-drag to orbit in human mode, pan in non-human mode */
         if (!rc->human_input.enabled &&
             IsMouseButtonDown(MOUSE_BUTTON_MIDDLE)) {
             Vector2 delta = GetMouseDelta();
@@ -982,9 +1260,13 @@ static void render_handle_input(RenderClient* rc, OsrsEnv* env) {
         fprintf(stderr, "human control: %s\n", rc->human_input.enabled ? "ON" : "OFF");
     }
 
-    /* ESC: cancel spell targeting */
-    if (IsKeyPressed(KEY_ESCAPE) && rc->human_input.cursor_mode == CURSOR_SPELL_TARGET) {
-        rc->human_input.cursor_mode = CURSOR_NORMAL;
+    /* ESC: dismiss context menu first, then cancel spell targeting */
+    if (IsKeyPressed(KEY_ESCAPE)) {
+        if (rc->context_menu.visible) {
+            context_menu_dismiss(&rc->context_menu);
+        } else if (rc->human_input.cursor_mode == CURSOR_SPELL_TARGET) {
+            rc->human_input.cursor_mode = CURSOR_NORMAL;
+        }
     }
 
     /* GUI: G cycles viewed entity, tab clicks switch panels */
@@ -994,8 +1276,26 @@ static void render_handle_input(RenderClient* rc, OsrsEnv* env) {
         int my = GetMouseY();
         int handled = 0;
 
+        /* 0. context menu: if visible, intercept click for item selection or dismissal */
+        if (rc->context_menu.visible) {
+            ContextMenu* cm = &rc->context_menu;
+            int menu_h = cm->item_count * CONTEXT_MENU_ROW_H + CONTEXT_MENU_PADDING * 2;
+            if (mx >= cm->screen_x && mx < cm->screen_x + cm->width &&
+                my >= cm->screen_y && my < cm->screen_y + menu_h) {
+                int row = (my - cm->screen_y - CONTEXT_MENU_PADDING) / CONTEXT_MENU_ROW_H;
+                if (row >= 0 && row < cm->item_count)
+                    context_menu_execute(rc, row);
+                else
+                    context_menu_dismiss(cm);
+            } else {
+                context_menu_dismiss(cm);
+            }
+            handled = 1;
+        }
+
         /* 1. tab bar click */
-        handled = gui_handle_tab_click(&rc->gui, mx, my);
+        if (!handled)
+            handled = gui_handle_tab_click(&rc->gui, mx, my);
 
         /* 2. panel content area (when human control is on) */
         if (!handled && rc->human_input.enabled &&
@@ -1119,6 +1419,44 @@ static void render_handle_input(RenderClient* rc, OsrsEnv* env) {
     if (IsMouseButtonPressed(MOUSE_BUTTON_RIGHT) &&
         rc->human_input.cursor_mode == CURSOR_SPELL_TARGET) {
         rc->human_input.cursor_mode = CURSOR_NORMAL;
+    }
+
+    /* hover tile: raycast from cursor to ground every frame (3D mode only).
+       uses the same ray-box intersection as the click handler so the highlighted
+       tile always matches what a click would select. */
+    rc->hover_tile_x = -1;
+    rc->hover_tile_y = -1;
+    if (rc->mode_3d) {
+        int hmx = GetMouseX();
+        int hmy = GetMouseY();
+        /* only raycast inside the game area (left of GUI panel) */
+        if (hmx >= 0 && hmx < rc->gui.panel_x &&
+            hmy >= 0 && hmy < RENDER_WINDOW_H) {
+            Camera3D hcam = render_build_3d_camera(rc);
+            Ray hray = GetScreenToWorldRay((Vector2){ (float)hmx, (float)hmy }, hcam);
+            float best_dist = 1e30f;
+            for (int dy = 0; dy < rc->arena_height; dy++) {
+                for (int dx = 0; dx < rc->arena_width; dx++) {
+                    int wx = rc->arena_base_x + dx;
+                    int wy = rc->arena_base_y + dy;
+                    float tx = (float)wx;
+                    float tz = -(float)(wy + 1);
+                    float ground_y = rc->terrain
+                        ? terrain_height_avg(rc->terrain, wx, wy)
+                        : 2.0f;
+                    BoundingBox box = {
+                        .min = { tx, ground_y - 0.1f, tz },
+                        .max = { tx + 1.0f, ground_y, tz + 1.0f },
+                    };
+                    RayCollision col = GetRayCollisionBox(hray, box);
+                    if (col.hit && col.distance < best_dist) {
+                        best_dist = col.distance;
+                        rc->hover_tile_x = wx;
+                        rc->hover_tile_y = wy;
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -3521,6 +3859,23 @@ static void render_draw_3d_world(RenderClient* rc) {
                 (Vector3){ npc_wx, ph, npc_wz },
                 lc);
         }
+    }
+
+    /* hover tile outline: semi-transparent cyan border on the tile under cursor.
+       similar to RuneLite's "Tile Indicators" plugin. drawn as 4 lines slightly
+       above ground to avoid z-fighting with terrain/floor. */
+    if (rc->hover_tile_x >= 0) {
+        float htx = (float)rc->hover_tile_x;
+        float htz = -(float)(rc->hover_tile_y + 1);
+        float hgy = rc->terrain
+            ? terrain_height_avg(rc->terrain, rc->hover_tile_x, rc->hover_tile_y)
+            : 2.0f;
+        float hy = hgy + 0.03f;  /* slight offset above ground */
+        Color hcol = CLITERAL(Color){ 0, 220, 220, 180 };
+        DrawLine3D((Vector3){ htx,       hy, htz },       (Vector3){ htx + 1.0f, hy, htz },       hcol);
+        DrawLine3D((Vector3){ htx + 1.0f, hy, htz },       (Vector3){ htx + 1.0f, hy, htz + 1.0f }, hcol);
+        DrawLine3D((Vector3){ htx + 1.0f, hy, htz + 1.0f }, (Vector3){ htx,       hy, htz + 1.0f }, hcol);
+        DrawLine3D((Vector3){ htx,       hy, htz + 1.0f }, (Vector3){ htx,       hy, htz },       hcol);
     }
 
     EndMode3D();
