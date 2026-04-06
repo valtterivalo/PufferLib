@@ -359,6 +359,7 @@ static inline int opp_get_mage_attack(Player* self, Player* target) {
 /* Boost/restore potion logic (before attack, used by onetick+ opponents) */
 static void opp_apply_boost_potion(OsrsEnv* env, OpponentState* opp, int* actions,
                                     Player* self, int attack_style, int potion_used) {
+    (void)env;
     if (potion_used) return;
     if (opp->potion_cooldown > 0) return;
     float hp_pct = (float)self->current_hitpoints / (float)self->base_hitpoints;
@@ -2522,7 +2523,6 @@ static inline int opp_style_off_read_prayer(OpponentState* opp, int style) {
 static void opp_master_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
     Player* self = &env->players[1];
     Player* target = &env->players[0];
-    float hp_pct = (float)self->current_hitpoints / (float)self->base_hitpoints;
     float prayer_pct = (float)self->current_prayer / (float)self->base_prayer;
 
     opp_tick_cooldowns(opp);

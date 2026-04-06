@@ -809,6 +809,7 @@ static void execute_attacks(OsrsEnv* env, int agent_idx, int* actions) {
  * For correct prayer timing, c_step calls execute_switches for both
  * players FIRST, then execute_attacks for both players.
  */
+__attribute__((unused))
 static void execute_actions(OsrsEnv* env, int agent_idx, int* actions) {
     execute_switches(env, agent_idx, actions);
     execute_attacks(env, agent_idx, actions);

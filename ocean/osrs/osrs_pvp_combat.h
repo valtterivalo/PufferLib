@@ -192,6 +192,7 @@ static float get_ranged_spec_acc_mult(RangedSpecWeapon weapon) {
     }
 }
 
+__attribute__((unused))
 static float get_magic_spec_acc_mult(MagicSpecWeapon weapon) {
     switch (weapon) {
         case MAGIC_SPEC_VOLATILE_STAFF: return 1.5f;
@@ -1136,7 +1137,6 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
         }
 
         int total_damage = 0;
-        int any_hit_success = 0;
         int apply_magic_freeze_on_calc = (style == ATTACK_STYLE_MAGIC && magic_type == 1);
 
         /* bolt proc setup */
@@ -1150,7 +1150,6 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
 
             if (rand_float(env) < hit_chance) {
                 hit_success = 1;
-                any_hit_success = 1;
                 damage = rand_int(env, max_hit + 1);
             }
 
@@ -1165,7 +1164,6 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
                 if (bp.proc_triggered) {
                     damage = bp.modified_damage;
                     hit_success = 1;
-                    any_hit_success = 1;
                 }
             }
 

@@ -690,9 +690,7 @@ static inline int encounter_npc_step_toward(
     int target_size, int attack_range,
     encounter_npc_blocked_fn is_blocked, void* ctx
 ) {
-    /* stop if NPC's nearest footprint edge is within attack range of target.
-       measure from target TO NPC footprint (not from NPC SW corner to target),
-       so multi-tile NPCs stop when their edge is adjacent. */
+    (void)target_size;  /* TODO: use for multi-tile target distance check */
     int dist = encounter_dist_to_npc(tx, ty, *x, *y, npc_size);
     if (dist >= 1 && dist <= attack_range) return 0;
 
@@ -802,6 +800,7 @@ static inline int encounter_resolve_npc_pending_hit(
     int* npc_hp, int* hit_landed, int* hit_damage,
     int* frozen_ticks, int* blood_heal_acc, float* damage_dealt_acc
 ) {
+    (void)frozen_ticks;  /* freeze applied at cast time, not land time */
     if (!ph->active) return 0;
     ph->ticks_remaining--;
     if (ph->ticks_remaining > 0) return 0;
@@ -810,9 +809,6 @@ static inline int encounter_resolve_npc_pending_hit(
     int dmg = ph->damage;
     encounter_damage_npc(npc_hp, hit_landed, hit_damage, dmg);
     if (damage_dealt_acc) *damage_dealt_acc += dmg;
-
-    /* ice barrage freeze: applied at CAST TIME in the encounter (not here at land time).
-       ref: osrs-sdk IceBarrageSpell.ts — to.freeze() called immediately after attack(). */
 
     /* blood barrage: accumulate damage for 25% heal (at land time — heal depends on damage) */
     if (ph->spell_type == ENCOUNTER_SPELL_BLOOD && blood_heal_acc)

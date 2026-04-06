@@ -1977,7 +1977,6 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
 
     /* movement: explicit move, auto-chase toward target, or idle.
        OSRS order: target selection → movement → attack check. */
-    int chasing = 0;
     if (has_explicit_move && !osrs_interaction_active(&s->interaction)) {
         /* explicit movement (ground click or RL agent) — no attack target */
         if (s->player_dest_x >= 0) {
@@ -1998,7 +1997,7 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
         /* auto-chase: pathfind toward attack target when out of range */
         InfNPC* chase_npc = &s->npcs[s->interaction.target_slot];
         const EncounterLoadoutStats* ls = &s->loadout_stats[s->weapon_set];
-        chasing = encounter_chase_attack_target(&s->player,
+        encounter_chase_attack_target(&s->player,
             chase_npc->x, chase_npc->y, INF_NPC_STATS[chase_npc->type].size,
             ls->attack_range,
             s->collision_map, s->world_offset_x, s->world_offset_y,
@@ -2468,7 +2467,6 @@ static void inf_write_obs(EncounterState* state, float* obs) {
     {
         int min_timer = 999;
         int min_style = 0;  /* style of the NPC with lowest timer */
-        int styles_within_2 = 0;  /* bitmask of styles firing within 2 ticks */
         int has_melee_2 = 0, has_ranged_2 = 0, has_magic_2 = 0;
         for (int n = 0; n < INF_MAX_NPCS; n++) {
             InfNPC* npc = &s->npcs[n];
@@ -2558,7 +2556,7 @@ static void inf_write_obs(EncounterState* state, float* obs) {
             obs[i++] = 1.0f;
             /* type one-hot (14 features) */
             for (int t = 0; t < INF_NUM_NPC_TYPES; t++)
-                obs[i++] = (npc->type == t) ? 1.0f : 0.0f;
+                obs[i++] = ((int)npc->type == t) ? 1.0f : 0.0f;
             obs[i++] = (float)npc->hp / (float)npc->max_hp;
             /* relative position to player */
             obs[i++] = (float)(npc->x - px) / (float)INF_ARENA_WIDTH;

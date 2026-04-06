@@ -685,7 +685,6 @@ static void compute_action_masks(OsrsEnv* env, int agent_idx) {
         mask[offset + l] = is_loadout_active(p, l) ? 0 : 1;
     }
 
-    int attack_timer_ready = (remaining_ticks(p->attack_timer) == 0);
     int frozen_no_melee = !can_move(p) && !is_in_melee_range(p, t);
 
     /* SPEC_MELEE: available if melee spec weapon exists + enough energy.

@@ -482,6 +482,7 @@ static void resolve_same_tile(Player* mover, Player* blocker, const CollisionMap
  *
  * @param p Player to continue moving
  */
+__attribute__((unused))
 static void continue_movement(Player* p, const CollisionMap* cmap) {
     if (!p->is_moving) {
         return;
