@@ -566,27 +566,6 @@ int main(int argc, char** argv) {
 
     srand((unsigned int)time(NULL));
 
-    /* verify encounter registry + lifecycle */
-    {
-        const EncounterDef* nh = encounter_find("nh_pvp");
-        if (!nh) { fprintf(stderr, "FATAL: nh_pvp encounter not registered\n"); return 1; }
-        printf("encounter registry: '%s' (obs=%d, heads=%d, mask=%d)\n",
-               nh->name, nh->obs_size, nh->num_action_heads, nh->mask_size);
-
-        /* smoke test: create → reset → step → check terminal → destroy */
-        EncounterState* es = nh->create();
-        nh->put_int(es, "use_c_opponent", 1);
-        nh->put_int(es, "opponent_type", OPP_IMPROVED);
-        nh->reset(es, 42);
-        int actions[7] = {0};
-        for (int t = 0; t < 300 && !nh->is_terminal(es); t++) {
-            nh->step(es, actions);
-        }
-        printf("encounter smoke test: tick=%d, terminal=%d, winner=%d\n",
-               nh->get_tick(es), nh->is_terminal(es), nh->get_winner(es));
-        nh->destroy(es);
-    }
-
     OsrsEnv env;
     memset(&env, 0, sizeof(OsrsEnv));
 
