@@ -854,6 +854,9 @@ static RenderClient* render_make_client(void) {
     /* human input control */
     human_input_init(&rc->human_input);
 
+    /* context menu (calloc zeroes everything, just set hover_idx sentinel) */
+    rc->context_menu.hover_idx = -1;
+
     /* load GUI sprites from exported cache data */
     gui_load_sprites(&rc->gui);
 
@@ -1191,13 +1194,22 @@ static void render_handle_input(RenderClient* rc, OsrsEnv* env) {
             if (rc->cam_pitch < 0.1f) rc->cam_pitch = 0.1f;
             if (rc->cam_pitch > 1.4f) rc->cam_pitch = 1.4f;
         }
-        /* middle-drag to orbit in human mode, pan in non-human mode */
-        if (!rc->human_input.enabled &&
-            IsMouseButtonDown(MOUSE_BUTTON_MIDDLE)) {
+        /* middle-drag: orbit in human mode (since right-click opens menu),
+           pan in non-human mode */
+        if (IsMouseButtonDown(MOUSE_BUTTON_MIDDLE)) {
             Vector2 delta = GetMouseDelta();
-            float cs = cosf(rc->cam_yaw), sn = sinf(rc->cam_yaw);
-            rc->cam_target_x -= (delta.x * cs - delta.y * sn) * 0.05f;
-            rc->cam_target_z -= (delta.x * sn + delta.y * cs) * 0.05f;
+            if (rc->human_input.enabled) {
+                /* orbit */
+                rc->cam_yaw -= delta.x * 0.005f;
+                rc->cam_pitch -= delta.y * 0.005f;
+                if (rc->cam_pitch < 0.1f) rc->cam_pitch = 0.1f;
+                if (rc->cam_pitch > 1.4f) rc->cam_pitch = 1.4f;
+            } else {
+                /* pan */
+                float cs = cosf(rc->cam_yaw), sn = sinf(rc->cam_yaw);
+                rc->cam_target_x -= (delta.x * cs - delta.y * sn) * 0.05f;
+                rc->cam_target_z -= (delta.x * sn + delta.y * cs) * 0.05f;
+            }
         }
         if (wheel != 0.0f) {
             rc->cam_dist *= (wheel > 0) ? (1.0f / 1.15f) : 1.15f;
@@ -1256,6 +1268,7 @@ static void render_handle_input(RenderClient* rc, OsrsEnv* env) {
         rc->human_input.enabled = !rc->human_input.enabled;
         if (!rc->human_input.enabled) {
             rc->human_input.cursor_mode = CURSOR_NORMAL;
+            context_menu_dismiss(&rc->context_menu);
         }
         fprintf(stderr, "human control: %s\n", rc->human_input.enabled ? "ON" : "OFF");
     }
@@ -1415,10 +1428,23 @@ static void render_handle_input(RenderClient* rc, OsrsEnv* env) {
         }
     }
 
-    /* right-click cancels spell targeting */
-    if (IsMouseButtonPressed(MOUSE_BUTTON_RIGHT) &&
-        rc->human_input.cursor_mode == CURSOR_SPELL_TARGET) {
-        rc->human_input.cursor_mode = CURSOR_NORMAL;
+    /* right-click: open context menu (human mode) or cancel spell targeting */
+    if (IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) {
+        if (rc->human_input.enabled) {
+            int rmx = GetMouseX();
+            int rmy = GetMouseY();
+            /* only open menu in game area (left of GUI panel) */
+            if (rmx < rc->gui.panel_x) {
+                /* cancel spell targeting on right-click (OSRS behavior) */
+                if (rc->human_input.cursor_mode == CURSOR_SPELL_TARGET)
+                    rc->human_input.cursor_mode = CURSOR_NORMAL;
+                context_menu_build(rc, rmx, rmy);
+            } else {
+                context_menu_dismiss(&rc->context_menu);
+            }
+        } else if (rc->human_input.cursor_mode == CURSOR_SPELL_TARGET) {
+            rc->human_input.cursor_mode = CURSOR_NORMAL;
+        }
     }
 
     /* hover tile: raycast from cursor to ground every frame (3D mode only).
@@ -4344,6 +4370,9 @@ void pvp_render(OsrsEnv* env) {
             }
         }
     }
+
+    /* right-click context menu: drawn last so it renders on top of everything */
+    context_menu_draw(rc);
 
     EndDrawing();
 }
