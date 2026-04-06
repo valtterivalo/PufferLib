@@ -788,6 +788,7 @@ typedef struct {
     float prayer_at_death;         /* prayer points at end of episode */
     /* Zuk diagnostics */
     float behind_shield_pct;   /* fraction of Zuk ticks behind shield */
+    float zuk_hp_remaining;    /* Zuk HP at episode end (0 if killed) */
     /* action noop rates per head (0=move,1=prayer,2=target,3=gear,4=eat,5=pot,6=spell,7=spec) */
     float noop_move;
     float noop_prayer;

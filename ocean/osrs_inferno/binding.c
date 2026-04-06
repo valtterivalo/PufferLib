@@ -122,6 +122,19 @@ void c_step(Env* env) {
         env->log.behind_shield_pct += (s->total_zuk_ticks > 0)
             ? (float)s->behind_shield_ticks / (float)s->total_zuk_ticks : 0.0f;
 
+        /* Zuk HP remaining at episode end */
+        {
+            float zhp = 1200.0f;
+            for (int n = 0; n < INF_MAX_NPCS; n++) {
+                if (s->npcs[n].type == INF_NPC_ZUK) {
+                    zhp = (float)s->npcs[n].hp;
+                    break;
+                }
+            }
+            if (s->winner == 0) zhp = 0.0f;
+            env->log.zuk_hp_remaining += zhp;
+        }
+
         /* action noop rates (per-episode ratios, averaged across episodes by aggregator) */
         float at = (float)s->action_total_count;
         if (at > 0.0f) {
@@ -367,6 +380,7 @@ void my_log(Log* log, Dict* out) {
     dict_set(out, "current_ranged", log->current_ranged);
     dict_set(out, "current_magic", log->current_magic);
     dict_set(out, "behind_shield_pct", log->behind_shield_pct);
+    dict_set(out, "zuk_hp_remaining", log->zuk_hp_remaining);
     dict_set(out, "noop_move", log->noop_move);
     dict_set(out, "noop_prayer", log->noop_prayer);
     dict_set(out, "noop_target", log->noop_target);

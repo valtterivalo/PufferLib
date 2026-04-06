@@ -2189,10 +2189,6 @@ static float inf_compute_reward(InfernoState* s) {
     if (s->damage_dealt_this_tick > 0.0f)
         r += 0.1f * s->damage_dealt_this_tick;
 
-    /* damage taken penalty */
-    if (s->damage_received_this_tick > 0.0f)
-        r -= 0.05f * s->damage_received_this_tick;
-
     return r;
 }
 
@@ -2394,9 +2390,9 @@ static void inf_step(EncounterState* state, const int* actions) {
 /* observations                                                              */
 /* ======================================================================== */
 
-/* obs layout: 47 player + 12 pillar + 30*32 NPC + 5*8 pending hits = 1059 */
-#define INF_PLAYER_OBS_SIZE 47
-#define INF_FEATURES_PER_NPC 30
+/* obs layout: 49 player + 12 pillar + 33*32 NPC + 5*8 pending hits = 1157 */
+#define INF_PLAYER_OBS_SIZE 49
+#define INF_FEATURES_PER_NPC 33
 #define INF_FEATURES_PER_HIT 5
 #define INF_NUM_OBS (INF_PLAYER_OBS_SIZE + 12 + INF_FEATURES_PER_NPC * INF_MAX_NPCS + INF_FEATURES_PER_HIT * ENCOUNTER_MAX_PENDING_HITS)
 
@@ -2426,8 +2422,10 @@ static void inf_write_obs(EncounterState* state, float* obs) {
 
     /* player state (26 features) */
     obs[i++] = (float)s->player.current_hitpoints / 99.0f;
-    obs[i++] = (float)(px - INF_ARENA_MIN_X) / (float)INF_ARENA_WIDTH;
-    obs[i++] = (float)(py - INF_ARENA_MIN_Y) / (float)INF_ARENA_HEIGHT;
+    obs[i++] = (float)(px - INF_ARENA_MIN_X) / (float)INF_ARENA_WIDTH;   /* dist to west wall */
+    obs[i++] = (float)(INF_ARENA_MAX_X - px) / (float)INF_ARENA_WIDTH;  /* dist to east wall */
+    obs[i++] = (float)(py - INF_ARENA_MIN_Y) / (float)INF_ARENA_HEIGHT; /* dist to south wall */
+    obs[i++] = (float)(INF_ARENA_MAX_Y - py) / (float)INF_ARENA_HEIGHT; /* dist to north wall */
     obs[i++] = (s->player.prayer == PRAYER_PROTECT_MELEE) ? 1.0f : 0.0f;
     obs[i++] = (s->player.prayer == PRAYER_PROTECT_RANGED) ? 1.0f : 0.0f;
     obs[i++] = (s->player.prayer == PRAYER_PROTECT_MAGIC) ? 1.0f : 0.0f;
@@ -2435,7 +2433,7 @@ static void inf_write_obs(EncounterState* state, float* obs) {
     obs[i++] = (float)s->player.restore_doses / 40.0f;
     obs[i++] = (float)s->player.current_prayer / 99.0f;
     obs[i++] = (float)s->wave / (float)INF_NUM_WAVES;
-    obs[i++] = (float)s->tick / (float)INF_MAX_TICKS;
+    obs[i++] = (float)s->tick / 500.0f;  /* Zuk episodes ~30-300 ticks, realistic range */
     obs[i++] = (s->weapon_set == INF_GEAR_MAGE) ? 1.0f : 0.0f;
     obs[i++] = (s->weapon_set == INF_GEAR_TBOW) ? 1.0f : 0.0f;
     obs[i++] = (s->weapon_set == INF_GEAR_BP) ? 1.0f : 0.0f;
@@ -2449,8 +2447,7 @@ static void inf_write_obs(EncounterState* state, float* obs) {
     obs[i++] = (float)s->player.current_defence / 99.0f;
     obs[i++] = (float)s->player.current_ranged / 99.0f;
     obs[i++] = (float)s->player.current_magic / 99.0f;
-    obs[i++] = osrs_interaction_active(&s->interaction)
-               ? (float)(s->interaction.target_slot + 1) / (float)INF_MAX_NPCS : 0.0f;
+    obs[i++] = osrs_interaction_active(&s->interaction) ? 1.0f : 0.0f;
     obs[i++] = (float)s->loadout_stats[s->weapon_set].attack_range / 15.0f;
     obs[i++] = (float)s->dead_mob_count / (float)INF_MAX_DEAD_MOBS;
     /* gear stats: current loadout combat performance */
@@ -2549,7 +2546,7 @@ static void inf_write_obs(EncounterState* state, float* obs) {
         obs[i++] = (float)(s->pillars[p].y - py) / (float)INF_ARENA_HEIGHT;
     }
 
-    /* NPCs: INF_FEATURES_PER_NPC (30) features each, up to INF_MAX_NPCS */
+    /* NPCs: INF_FEATURES_PER_NPC (33) features each, up to INF_MAX_NPCS */
     for (int n = 0; n < INF_MAX_NPCS; n++) {
         InfNPC* npc = &s->npcs[n];
         if (npc->active && npc->death_ticks == 0) {
@@ -2573,16 +2570,15 @@ static void inf_write_obs(EncounterState* state, float* obs) {
             obs[i++] = inf_npc_has_los(s, n) ? 1.0f : 0.0f;
             obs[i++] = (float)npc->frozen_ticks / 32.0f;
             obs[i++] = INF_NPC_MAX_HIT_NORM[npc->type];
-            /* blob scan state */
+            /* blob scan state (3-feature one-hot: magic / ranged / other) */
             if (npc->type == INF_NPC_BLOB && npc->blob_scanned_prayer >= 0) {
                 OverheadPrayer scanned = (OverheadPrayer)npc->blob_scanned_prayer;
-                if (scanned == PRAYER_PROTECT_MAGIC)
-                    obs[i++] = 1.0f;
-                else if (scanned == PRAYER_PROTECT_RANGED)
-                    obs[i++] = -1.0f;
-                else
-                    obs[i++] = 0.5f;
+                obs[i++] = (scanned == PRAYER_PROTECT_MAGIC) ? 1.0f : 0.0f;
+                obs[i++] = (scanned == PRAYER_PROTECT_RANGED) ? 1.0f : 0.0f;
+                obs[i++] = (scanned != PRAYER_PROTECT_MAGIC && scanned != PRAYER_PROTECT_RANGED) ? 1.0f : 0.0f;
             } else {
+                obs[i++] = 0.0f;
+                obs[i++] = 0.0f;
                 obs[i++] = 0.0f;
             }
             obs[i++] = (float)INF_NPC_STATS[npc->type].attack_range / 100.0f;
@@ -2613,6 +2609,9 @@ static void inf_write_obs(EncounterState* state, float* obs) {
             /* NPC aggro target: 1.0 if targeting player, 0.0 if targeting another NPC
                (pillar/shield/Zuk). tells agent which NPCs need tagging off pillars/shield. */
             obs[i++] = (npc->aggro_target < 0) ? 1.0f : 0.0f;
+            /* is this NPC the player's current attack target? */
+            obs[i++] = (osrs_interaction_active(&s->interaction) &&
+                        s->interaction.target_slot == n) ? 1.0f : 0.0f;
         } else {
             for (int j = 0; j < INF_FEATURES_PER_NPC; j++) obs[i++] = 0.0f;
         }
@@ -2639,7 +2638,7 @@ static void inf_write_obs(EncounterState* state, float* obs) {
             obs[i++] = (ph->attack_style == ATTACK_STYLE_RANGED) ? 1.0f : 0.0f;
             obs[i++] = (ph->attack_style == ATTACK_STYLE_MAGIC) ? 1.0f : 0.0f;
             obs[i++] = (float)ph->ticks_remaining / 10.0f;
-            obs[i++] = (ph->damage > 0) ? 1.0f : 0.0f;  /* unprotected hit incoming */
+            obs[i++] = (float)ph->damage / 150.0f;  /* normalized damage magnitude (Zuk max ~148) */
         } else {
             for (int j = 0; j < INF_FEATURES_PER_HIT; j++) obs[i++] = 0.0f;
         }
