@@ -58,7 +58,10 @@
     "index": "MON_TZKAL_ZUK",
     "npc_id": 7706,
     "comment": "Zuk",
-    "version": "Normal"
+    "version": "Normal",
+    "visual": {
+      "attack_anims": ["ZUK_ATTACK"]
+    }
   },
   {
     "index": "MON_ZUK_SHIELD",

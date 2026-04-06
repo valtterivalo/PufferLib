@@ -914,7 +914,10 @@ static void inf_spawn_wave(InfernoState* s) {
         int zuk_idx = inf_find_free_npc(s);
         if (zuk_idx >= 0) {
             inf_init_npc(s, zuk_idx, INF_NPC_ZUK, 22, 50);
-            s->npcs[zuk_idx].stun_timer = 14;  /* initial delay */
+            /* InfernoTrainer: stunned=8, attackDelay=14. stun counts down first,
+               then attackDelay ticks down to 0 before first attack fires. */
+            s->npcs[zuk_idx].stun_timer = 8;
+            s->npcs[zuk_idx].attack_timer = 14;
         }
 
         /* spawn shield */
@@ -1398,28 +1401,40 @@ static void inf_npc_attack(InfernoState* s, int idx) {
     }
 
     /* zuk: typeless attack (not blockable by prayer).
-       shield blocks with zero damage — only sets/jad can damage the shield. */
+       InfernoTrainer TzKalZuk.ts: Zuk always fires at the shield if the player is
+       behind it (shield absorbs, 0 damage). otherwise fires at the player.
+       hit delay = 4 ticks (ZukWeapon: setDelay=4). */
     if (npc->type == INF_NPC_ZUK) {
-        int shield_idx = s->zuk.shield_idx;
-        if (shield_idx >= 0 && s->npcs[shield_idx].active) {
-            InfNPC* shield = &s->npcs[shield_idx];
-            int shield_left = shield->x;
-            int shield_right = shield->x + shield->size;
-            if (s->player.x >= shield_left && s->player.x < shield_right &&
-                s->player.y >= 41) {
-                /* shield absorbs — no damage to shield or player */
-                npc->attacked_this_tick = 1;
-                npc->attack_visual_target = shield_idx;
-                npc->attack_timer = s->zuk.enraged ? 7 : stats->attack_speed;
-                return;
-            }
+        int si = s->zuk.shield_idx;
+        int player_behind_shield = 0;
+        if (si >= 0 && s->npcs[si].active) {
+            InfNPC* shield = &s->npcs[si];
+            player_behind_shield = (s->player.x >= shield->x &&
+                                    s->player.x < shield->x + shield->size &&
+                                    s->player.y >= 41);
         }
 
-        /* typeless hit — not blockable by prayer, no accuracy roll, instant */
-        int max_hit = osrs_npc_magic_max_hit(stats->magic_base_dmg, stats->magic_dmg_pct);
-        int dmg = encounter_rand_int(&s->rng_state, max_hit + 1);
-        encounter_damage_player(&s->player, dmg, &s->damage_received_this_tick);
-        npc->attacked_this_tick = 1;
+        if (player_behind_shield) {
+            /* shield absorbs — Zuk fires at shield, 0 damage */
+            npc->attacked_this_tick = 1;
+            npc->attack_visual_target = si;
+        } else {
+            /* typeless hit on player — not blockable by prayer, no accuracy roll.
+               queued as pending hit with 4-tick delay (InfernoTrainer: setDelay=4). */
+            int max_hit = osrs_npc_magic_max_hit(stats->magic_base_dmg, stats->magic_dmg_pct);
+            int dmg = encounter_rand_int(&s->rng_state, max_hit + 1);
+            if (s->player_pending_hit_count < ENCOUNTER_MAX_PENDING_HITS) {
+                EncounterPendingHit* ph = &s->player_pending_hits[s->player_pending_hit_count++];
+                ph->active = 1;
+                ph->damage = dmg;
+                ph->ticks_remaining = 4;
+                ph->attack_style = ATTACK_STYLE_NONE;  /* typeless — not blockable */
+                ph->check_prayer = 0;
+            }
+            s->last_hit_by_type = INF_NPC_ZUK;
+            npc->attacked_this_tick = 1;
+            /* attack_visual_target = -1 (player), already default */
+        }
         npc->attack_timer = s->zuk.enraged ? 7 : stats->attack_speed;
         return;
     }
