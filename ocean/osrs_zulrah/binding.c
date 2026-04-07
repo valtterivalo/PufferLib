@@ -76,6 +76,13 @@ void c_step(Env* env) {
         env->log.wins += (zs->winner == 0) ? 1.0f : 0.0f;
         env->log.damage_dealt += zs->total_damage_dealt;
         env->log.damage_received += zs->total_damage_received;
+        env->log.prayer_correct += (float)zs->total_prayer_correct;
+        env->log.prayer_total += (float)zs->total_prayer_total;
+        env->log.gear_switches += (float)zs->total_gear_switches;
+        env->log.npc_kills += (float)zs->total_food_eaten;
+        env->log.idle_ticks += (float)zs->total_potions_used;
+        env->log.brews_used += (float)zs->total_venom_ticks;
+        env->log.wave += (float)zs->total_phases_completed;
         env->log.n += 1.0f;
 
         /* auto-reset */
@@ -127,16 +134,24 @@ void my_log(Log* log, Dict* out) {
     dict_set(out, "damage_dealt", log->damage_dealt);
     dict_set(out, "damage_received", log->damage_received);
 
-    /* composite score: winrate-gated efficiency.
-     * must win to score positive. among winners, faster kills and less
-     * damage taken score higher. winrate always dominates (~1.0 scale
-     * vs ~0.3 efficiency). vecenv divides all log fields by n before
-     * calling my_log, so log->wins is already a winrate in [0, 1]. */
+    /* prayer correctness rate */
+    float prayer_rate = (log->prayer_total > 0.0f)
+        ? log->prayer_correct / log->prayer_total : 0.0f;
+    dict_set(out, "prayer_correct_rate", prayer_rate);
+
+    /* behavioral metrics (stored in reused Log fields) */
+    dict_set(out, "gear_switches", log->gear_switches);
+    dict_set(out, "food_eaten", log->npc_kills);      /* reused field */
+    dict_set(out, "potions_used", log->idle_ticks);    /* reused field */
+    dict_set(out, "venom_ticks", log->brews_used);     /* reused field */
+    dict_set(out, "phases_completed", log->wave);      /* reused field */
+
+    /* composite score: winrate-gated efficiency */
     float wr = log->wins;
     float speed_bonus = (wr > 0.1f)
         ? (1.0f - log->episode_length / (float)ZUL_MAX_TICKS) * 0.3f : 0.0f;
     float dmg_penalty = (wr > 0.1f)
         ? (log->damage_received / (float)ZUL_BASE_HP) * 0.2f : 0.0f;
-    float score = wr + speed_bonus - dmg_penalty - (1.0f - wr);
+    float score = wr + speed_bonus - dmg_penalty;
     dict_set(out, "score", score);
 }

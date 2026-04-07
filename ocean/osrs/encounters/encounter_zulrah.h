@@ -555,6 +555,13 @@ typedef struct {
     int prayer_blocked_this_tick;
     float total_damage_dealt;
     float total_damage_received;
+    int total_prayer_correct;
+    int total_prayer_total;
+    int total_gear_switches;
+    int total_food_eaten;
+    int total_potions_used;
+    int total_venom_ticks;        /* ticks spent venomed */
+    int total_phases_completed;
 
     /* visual: attack events this tick for projectile rendering */
     struct {
@@ -714,7 +721,9 @@ static void zul_attack_ranged(ZulrahState* s) {
     int npc_att_roll = osrs_npc_attack_roll(m->range_level, m->range_att_bonus);
     int dmg = 0;
     int did_hit = 0;
+    s->total_prayer_total++;
     if (encounter_prayer_correct_for_style(s->player.prayer, ATTACK_STYLE_RANGED)) {
+        s->total_prayer_correct++;
         /* prayer blocks damage but venom still applies (unless miss) */
         int def_roll = zul_player_def_roll(s, ATTACK_STYLE_RANGED);
         float chance = osrs_hit_chance(npc_att_roll, def_roll);
@@ -741,7 +750,9 @@ static void zul_attack_ranged(ZulrahState* s) {
    even if blocked by a protection prayer." magic never misses → always envenoms. */
 static void zul_attack_magic(ZulrahState* s) {
     int dmg = 0;
+    s->total_prayer_total++;
     if (encounter_prayer_correct_for_style(s->player.prayer, ATTACK_STYLE_MAGIC)) {
+        s->total_prayer_correct++;
         s->prayer_blocked_this_tick = 1;
     } else {
         dmg = encounter_rand_int(&s->rng_state, MONSTER_DATABASE[MON_ZULRAH_BLUE].max_hit + 1);
@@ -789,7 +800,9 @@ static void zul_melee_hit(ZulrahState* s) {
     int dmg = 0;
     if (s->player.x == s->melee_target_x && s->player.y == s->melee_target_y
         && !zul_on_pillar_safespot(s->player.x, s->player.y)) {
+        s->total_prayer_total++;
         if (encounter_prayer_correct_for_style(s->player.prayer, ATTACK_STYLE_MELEE)) {
+            s->total_prayer_correct++;
             s->prayer_blocked_this_tick = 1;
         } else {
             dmg = 20 + encounter_rand_int(&s->rng_state, 11);  /* 20-30 per wiki */
@@ -1208,6 +1221,7 @@ static void zul_venom_tick(ZulrahState* s) {
 
     if (s->venom_counter == 0) return;
     if (s->antivenom_timer > 0) return;  /* immune while antivenom active */
+    s->total_venom_ticks++;
     if (s->venom_timer > 0) { s->venom_timer--; return; }
     int dmg = ZUL_VENOM_START + 2 * (s->venom_counter - 1);
     if (dmg > ZUL_VENOM_MAX) dmg = ZUL_VENOM_MAX;
@@ -1360,6 +1374,7 @@ static void zul_enter_dive(ZulrahState* s) {
 static void zul_next_phase(ZulrahState* s) {
     int rot_len = ZUL_ROT_LENGTHS[s->rotation_index];
     s->phase_index++;
+    s->total_phases_completed++;
 
     if (s->phase_index >= rot_len) {
         /* rotation complete — pick new random rotation, start from phase 1.
@@ -1477,6 +1492,7 @@ static void zul_process_food(ZulrahState* s, int a) {
     s->player.current_hitpoints += r.hp_healed;
     if (s->player.current_hitpoints > s->player.base_hitpoints)
         s->player.current_hitpoints = s->player.base_hitpoints;
+    s->total_food_eaten++;
 }
 
 static void zul_process_potion(ZulrahState* s, int a) {
@@ -1492,6 +1508,7 @@ static void zul_process_potion(ZulrahState* s, int a) {
         s->player.current_prayer += r.prayer_restored;
         if (s->player.current_prayer > s->player.base_prayer)
             s->player.current_prayer = s->player.base_prayer;
+        s->total_potions_used++;
     } else if (a == 2) {
         /* antivenom: cures venom + grants immunity */
         if (s->player.antivenom_doses <= 0) return;
@@ -1502,6 +1519,7 @@ static void zul_process_potion(ZulrahState* s, int a) {
         s->venom_counter = 0;
         s->venom_timer = 0;
         s->antivenom_timer = r.antivenom_ticks;
+        s->total_potions_used++;
     }
 }
 
@@ -1509,9 +1527,11 @@ static void zul_process_gear(ZulrahState* s, int atk) {
     if (atk == ZUL_ATK_MAGE && s->player_gear != ZUL_GEAR_MAGE) {
         s->player_gear = ZUL_GEAR_MAGE;
         encounter_apply_loadout(&s->player, ZUL_MAGE_LOADOUT[s->gear_tier], GEAR_MAGE);
+        s->total_gear_switches++;
     } else if (atk == ZUL_ATK_RANGE && s->player_gear != ZUL_GEAR_RANGE) {
         s->player_gear = ZUL_GEAR_RANGE;
         encounter_apply_loadout(&s->player, ZUL_RANGE_LOADOUT[s->gear_tier], GEAR_RANGED);
+        s->total_gear_switches++;
     }
 }
 
@@ -1528,8 +1548,9 @@ static void zul_write_obs(EncounterState* state, float* obs) {
     /* player (0-15) */
     obs[i++] = (float)s->player.current_hitpoints / s->player.base_hitpoints;
     obs[i++] = (float)s->player.current_prayer / s->player.base_prayer;
-    obs[i++] = (float)s->player.x / ZUL_ARENA_SIZE;
-    obs[i++] = (float)s->player.y / ZUL_ARENA_SIZE;
+    /* egocentric: distance to arena edges, normalized to [0,1] */
+    obs[i++] = (float)s->player.x / ZUL_ARENA_SIZE;             /* dist to west edge */
+    obs[i++] = (float)s->player.y / ZUL_ARENA_SIZE;             /* dist to south edge */
     obs[i++] = (float)s->player.attack_timer / 5.0f;
     obs[i++] = (float)s->player.food_count / ZUL_PLAYER_FOOD;
     obs[i++] = (float)s->player.karambwan_count / ZUL_PLAYER_KARAMBWAN;
@@ -1545,8 +1566,9 @@ static void zul_write_obs(EncounterState* state, float* obs) {
 
     /* zulrah (16-29) */
     obs[i++] = (float)s->zulrah.current_hitpoints / MONSTER_DATABASE[MON_ZULRAH_GREEN].hp;
-    obs[i++] = (float)s->zulrah.x / ZUL_ARENA_SIZE;
-    obs[i++] = (float)s->zulrah.y / ZUL_ARENA_SIZE;
+    /* egocentric: zulrah position relative to player */
+    obs[i++] = (float)(s->zulrah.x - s->player.x) / ZUL_ARENA_SIZE;
+    obs[i++] = (float)(s->zulrah.y - s->player.y) / ZUL_ARENA_SIZE;
     obs[i++] = (s->current_form == ZUL_FORM_GREEN) ? 1.0f : 0.0f;
     obs[i++] = (s->current_form == ZUL_FORM_RED) ? 1.0f : 0.0f;
     obs[i++] = (s->current_form == ZUL_FORM_BLUE) ? 1.0f : 0.0f;
@@ -1565,16 +1587,16 @@ static void zul_write_obs(EncounterState* state, float* obs) {
 
     /* clouds (32-52): 7 clouds * 3 */
     for (int c = 0; c < ZUL_MAX_CLOUDS; c++) {
-        obs[i++] = s->clouds[c].active ? (float)s->clouds[c].x / ZUL_ARENA_SIZE : 0.0f;
-        obs[i++] = s->clouds[c].active ? (float)s->clouds[c].y / ZUL_ARENA_SIZE : 0.0f;
+        obs[i++] = s->clouds[c].active ? (float)(s->clouds[c].x - s->player.x) / ZUL_ARENA_SIZE : 0.0f;
+        obs[i++] = s->clouds[c].active ? (float)(s->clouds[c].y - s->player.y) / ZUL_ARENA_SIZE : 0.0f;
         obs[i++] = s->clouds[c].active ? 1.0f : 0.0f;
     }
 
     /* snakelings (44-59): 4 * 4 */
     for (int n = 0; n < ZUL_MAX_SNAKELINGS; n++) {
         ZulrahSnakeling* sn = &s->snakelings[n];
-        obs[i++] = sn->active ? (float)sn->entity.x / ZUL_ARENA_SIZE : 0.0f;
-        obs[i++] = sn->active ? (float)sn->entity.y / ZUL_ARENA_SIZE : 0.0f;
+        obs[i++] = sn->active ? (float)(sn->entity.x - s->player.x) / ZUL_ARENA_SIZE : 0.0f;
+        obs[i++] = sn->active ? (float)(sn->entity.y - s->player.y) / ZUL_ARENA_SIZE : 0.0f;
         obs[i++] = sn->active ? 1.0f : 0.0f;
         obs[i++] = sn->active ? (float)chebyshev_distance(
             s->player.x, s->player.y, sn->entity.x, sn->entity.y) / ZUL_ARENA_SIZE : 0.0f;
@@ -1595,14 +1617,14 @@ static void zul_write_obs(EncounterState* state, float* obs) {
     /* safe tile positions for this phase (68-71) */
     const ZulRotationPhase* phase = zul_current_phase(s);
     if (phase->stand < ZUL_NUM_STAND_LOCATIONS) {
-        obs[i++] = (float)ZUL_STAND_COORDS[phase->stand][0] / ZUL_ARENA_SIZE;
-        obs[i++] = (float)ZUL_STAND_COORDS[phase->stand][1] / ZUL_ARENA_SIZE;
+        obs[i++] = (float)(ZUL_STAND_COORDS[phase->stand][0] - s->player.x) / ZUL_ARENA_SIZE;
+        obs[i++] = (float)(ZUL_STAND_COORDS[phase->stand][1] - s->player.y) / ZUL_ARENA_SIZE;
     } else {
         obs[i++] = 0.0f; obs[i++] = 0.0f;
     }
     if (phase->stall < ZUL_NUM_STAND_LOCATIONS) {
-        obs[i++] = (float)ZUL_STAND_COORDS[phase->stall][0] / ZUL_ARENA_SIZE;
-        obs[i++] = (float)ZUL_STAND_COORDS[phase->stall][1] / ZUL_ARENA_SIZE;
+        obs[i++] = (float)(ZUL_STAND_COORDS[phase->stall][0] - s->player.x) / ZUL_ARENA_SIZE;
+        obs[i++] = (float)(ZUL_STAND_COORDS[phase->stall][1] - s->player.y) / ZUL_ARENA_SIZE;
     } else {
         obs[i++] = 0.0f; obs[i++] = 0.0f;
     }
@@ -1684,9 +1706,9 @@ static void zul_write_mask(EncounterState* state, float* mask) {
 /* ======================================================================== */
 
 static float zul_compute_reward(ZulrahState* s) {
-    /* terminal: +1 kill, -1 death */
+    /* terminal: +1 kill, 0 death (forfeiting future rewards is the penalty) */
     if (s->episode_over)
-        return (s->winner == 0) ? 1.0f : -1.0f;
+        return (s->winner == 0) ? 1.0f : 0.0f;
 
     /* per-tick shaping (small signals to bootstrap learning).
      * rewards are clamped to [-1, 1] by the training backend,
