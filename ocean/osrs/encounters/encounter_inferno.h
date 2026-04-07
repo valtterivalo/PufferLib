@@ -2173,21 +2173,21 @@ static float inf_compute_reward(InfernoState* s) {
     s->total_damage_received += s->damage_received_this_tick;
 
     if (s->episode_over)
-        return (s->winner == 0) ? 10.0f : 0.0f;
+        return (s->winner == 0) ? 1.0f : 0.0f;
 
     float r = 0.0f;
 
     /* survival: per-tick bonus for staying alive */
     if (s->wave >= 68)
-        r += 0.01f;
+        r += 0.001f;
 
     /* shield positioning: strong signal for the core Zuk mechanic.
        this is THE thing we need the agent to learn first. */
     if (s->behind_shield_this_tick)
-        r += 0.05f;
+        r += 0.005f;
 
     if (s->damage_dealt_this_tick > 0.0f)
-        r += 0.1f * s->damage_dealt_this_tick;
+        r += 0.01f * s->damage_dealt_this_tick;
 
     return r;
 }
@@ -2379,10 +2379,11 @@ static void inf_step(EncounterState* state, const int* actions) {
         }
     }
 
-    /* timeout */
+    /* timeout — zero reward so agent isn't rewarded/penalized for running out of time */
     if (s->tick >= INF_MAX_TICKS) {
         s->episode_over = 1;
         s->winner = 1;
+        s->reward = 0.0f;
     }
 }
 
@@ -2433,7 +2434,9 @@ static void inf_write_obs(EncounterState* state, float* obs) {
     obs[i++] = (float)s->player.restore_doses / 40.0f;
     obs[i++] = (float)s->player.current_prayer / 99.0f;
     obs[i++] = (float)s->wave / (float)INF_NUM_WAVES;
-    obs[i++] = (float)s->tick / 500.0f;  /* Zuk episodes ~30-300 ticks, realistic range */
+    /* tick normalization: Zuk-only (~300 ticks) vs full runs (~18000 ticks) */
+    obs[i++] = (s->start_wave >= 68) ? (float)s->tick / 500.0f
+                                     : (float)s->tick / (float)INF_MAX_TICKS;
     obs[i++] = (s->weapon_set == INF_GEAR_MAGE) ? 1.0f : 0.0f;
     obs[i++] = (s->weapon_set == INF_GEAR_TBOW) ? 1.0f : 0.0f;
     obs[i++] = (s->weapon_set == INF_GEAR_BP) ? 1.0f : 0.0f;

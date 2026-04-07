@@ -110,6 +110,7 @@ void c_step(Env* env) {
         env->log.gear_switches += (float)s->total_gear_switches;
         env->log.current_ranged += (float)s->player.current_ranged;
         env->log.current_magic += (float)s->player.current_magic;
+        env->log.start_wave = (float)env->config_start_wave;
 
         for (int t = 0; t < INF_NUM_NPC_TYPES; t++) {
             env->log.prayer_correct_by_type[t] += (float)s->prayer_correct_by_type[t];
@@ -394,8 +395,15 @@ void my_log(Log* log, Dict* out) {
     dict_set(out, "gear_switch_rate", gear_switch_rate);
 
     float wr = log->wins;
-    float wave_progress = log->episode_length / (float)INF_MAX_TICKS;
-    float score = wr + (1.0f - wr) * wave_progress * 0.5f - (1.0f - wr);
+    float score;
+    if (log->start_wave >= 68) {
+        /* Zuk-only: score = fraction of Zuk HP removed (0..1), wins = 1.0 */
+        score = (1200.0f - log->zuk_hp_remaining) / 1200.0f;
+    } else {
+        /* full runs: wave progress (0..0.5) + win bonus (0..1) */
+        float wave_frac = log->wave / (float)INF_NUM_WAVES;
+        score = wr + (1.0f - wr) * wave_frac * 0.5f;
+    }
     dict_set(out, "score", score);
 
     /* per-NPC-type prayer rates and damage (wandb only).

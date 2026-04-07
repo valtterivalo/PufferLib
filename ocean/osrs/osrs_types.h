@@ -803,6 +803,7 @@ typedef struct {
     float attacks_by_type[14];
     float dmg_from_type[14];
     float killed_by_type[14];
+    float start_wave;   /* config start_wave (for score formula branching) */
     float n;
 } Log;
 
