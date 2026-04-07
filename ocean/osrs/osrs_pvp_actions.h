@@ -842,12 +842,10 @@ static float calculate_reward(OsrsEnv* env, int agent_idx) {
     Player* t = &env->players[1 - agent_idx];
     const RewardShapingConfig* cfg = &env->shaping;
 
-    // Sparse terminal reward: +1 win, -1 loss
+    // Sparse terminal reward: +1 win, 0 loss (forfeiting future rewards is the penalty)
     if (env->episode_over) {
         if (env->winner == agent_idx) {
             reward += 1.0f;
-        } else if (env->winner == (1 - agent_idx)) {
-            reward += -1.0f;
         }
     }
 
@@ -865,6 +863,15 @@ static float calculate_reward(OsrsEnv* env, int agent_idx) {
     if (cfg->click_penalty_enabled && p->clicks_this_tick > cfg->click_penalty_threshold) {
         int excess = p->clicks_this_tick - cfg->click_penalty_threshold;
         reward += cfg->click_penalty_coef * (float)excess;
+    }
+
+    // Always-on positive signals (dense reward for bootstrapping learning)
+    float base_hp = (float)p->base_hitpoints;
+    if (p->damage_dealt_scale > 0.0f) {
+        reward += p->damage_dealt_scale * base_hp * 0.005f;
+    }
+    if (t->just_attacked && p->player_prayed_correct) {
+        reward += 0.01f;
     }
 
     if (!cfg->enabled) {
@@ -890,7 +897,6 @@ static float calculate_reward(OsrsEnv* env, int agent_idx) {
     // Per-tick reward shaping
     // ==========================================================================
     float tick_shaping = 0.0f;
-    float base_hp = (float)p->base_hitpoints;
 
     // Damage dealt: reward aggression
     if (p->damage_dealt_scale > 0.0f) {

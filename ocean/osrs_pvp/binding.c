@@ -60,6 +60,13 @@ void c_step(Env* env) {
         env->log.wins += env->pvp.log.wins;
         env->log.damage_dealt += env->pvp.log.damage_dealt;
         env->log.damage_received += env->pvp.log.damage_received;
+        env->log.prayer_correct += env->pvp.log.prayer_correct;
+        env->log.prayer_total += env->pvp.log.prayer_total;
+        env->log.idle_ticks += env->pvp.log.idle_ticks;
+        env->log.brews_used += env->pvp.log.brews_used;
+        env->log.wave += env->pvp.log.wave;
+        env->log.npc_kills += env->pvp.log.npc_kills;
+        env->log.blood_healed += env->pvp.log.blood_healed;
         env->log.n += env->pvp.log.n;
         memset(&env->pvp.log, 0, sizeof(env->pvp.log));
     }
@@ -166,6 +173,29 @@ void my_log(Log* log, Dict* out) {
     dict_set(out, "wins", log->wins);
     dict_set(out, "damage_dealt", log->damage_dealt);
     dict_set(out, "damage_received", log->damage_received);
+
+    /* prayer correctness rate */
+    float prayer_rate = (log->prayer_total > 0.0f)
+        ? log->prayer_correct / log->prayer_total : 0.0f;
+    dict_set(out, "prayer_correct_rate", prayer_rate);
+
+    /* combat stats (stored in reused Log fields) */
+    dict_set(out, "food_remaining", log->idle_ticks);
+    dict_set(out, "brews_remaining", log->brews_used);
+    dict_set(out, "spec_remaining", log->wave);
+    dict_set(out, "attacks_landed", log->npc_kills);
+    dict_set(out, "off_prayer_hits", log->blood_healed);
+
+    /* damage per hit */
+    float dph = (log->npc_kills > 0.0f)
+        ? log->damage_dealt / log->npc_kills : 0.0f;
+    dict_set(out, "damage_per_hit", dph);
+
+    /* composite score: winrate + damage fraction */
+    float wr = log->wins;
+    float dmg_frac = log->damage_dealt / 99.0f;  /* normalized to max HP */
+    float score = wr + (1.0f - wr) * dmg_frac * 0.5f;
+    dict_set(out, "score", score);
 }
 
 /* ========================================================================

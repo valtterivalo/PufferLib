@@ -276,9 +276,6 @@ static void init_obs_norm_divisors(float* d) {
     // Veng cooldowns (139-140)
     d[139] = 50.0f;
     d[140] = 50.0f;
-
-    // Dynamic slot item stats (182-325): 8 slots * 18 stats
-    for (int i = 182; i <= 325; i++) d[i] = 170.0f;
 }
 
 static float OBS_NORM_DIVISORS[SLOT_NUM_OBSERVATIONS];
@@ -341,14 +338,13 @@ static void ocean_write_obs_p1(OsrsEnv* env) {
 /**
  * Generate slot-mode observations with per-slot item stats.
  *
- * Observation layout (334 features):
+ * Observation layout (190 features):
  *   [0-118]   Core observations (gear/prayer/hp/consumables/timers/combat history/stats)
  *   [119-132] Gear bonuses (player + target visible defences)
  *   [133-149] Game mode flags, ability checks, attack_timer_ready
  *   [150-181] Slot-specific features (weapon/style/prayer/equipped per slot)
- *   [182-325] Dynamic slot item stats (8 slots * 18 stats = 144 features)
- *   [326]     Voidwaker magic damage flag
- *   [327-333] Reward shaping signals
+ *   [182]     Voidwaker magic damage flag
+ *   [183-189] Reward shaping signals
  */
 static void generate_slot_observations(OsrsEnv* env, int agent_idx) {
     Player* p = &env->players[agent_idx];
@@ -635,34 +631,22 @@ static void generate_slot_observations(OsrsEnv* env, int agent_idx) {
         obs[171 + slot] = (float)t->equipped[slot] / 63.0f;
     }
 
-    // Per-slot item stats for DYNAMIC gear slots (182-325)
-    // 8 dynamic slots (weapon, shield, body, legs, head, cape, neck, ring) x 18 stats = 144 features
-    int obs_idx = 182;
-    for (int i = 0; i < NUM_DYNAMIC_GEAR_SLOTS; i++) {
-        int slot = DYNAMIC_GEAR_SLOTS[i];
-        uint8_t item = p->equipped[slot];
-        float item_stats[NUM_ITEM_STATS];
-        get_item_stats_normalized(item, item_stats);
-        memcpy(&obs[obs_idx], item_stats, NUM_ITEM_STATS * sizeof(float));
-        obs_idx += NUM_ITEM_STATS;
-    }
+    // Per-slot item stats removed: 144 features (8 slots x 18 stats) were redundant
+    // with gear bonuses (obs 119-132) and per-slot equipped indices (obs 160-181)
 
-    // Voidwaker magic damage flag (326)
-    // Tells agent: "my best melee spec bypasses melee prayer — hit when they're NOT praying magic"
+    // Voidwaker magic damage flag (182)
     uint8_t best_mspec = find_best_melee_spec(p);
-    obs[326] = (best_mspec == ITEM_VOIDWAKER) ? 1.0f : 0.0f;
+    obs[182] = (best_mspec == ITEM_VOIDWAKER) ? 1.0f : 0.0f;
 
-    // Reward shaping signals (327-333)
-    // These track actions that happened THIS tick for accurate reward attribution
-    obs[327] = p->used_special_this_tick ? 1.0f : 0.0f;
-    obs[328] = p->ate_food_this_tick ? 1.0f : 0.0f;
-    obs[329] = p->ate_karambwan_this_tick ? 1.0f : 0.0f;
-    // Current weapon style (for magic-without-staff penalty)
+    // Reward shaping signals (183-189)
+    obs[183] = p->used_special_this_tick ? 1.0f : 0.0f;
+    obs[184] = p->ate_food_this_tick ? 1.0f : 0.0f;
+    obs[185] = p->ate_karambwan_this_tick ? 1.0f : 0.0f;
     AttackStyle current_weapon_style = get_slot_weapon_attack_style(p);
-    obs[330] = (current_weapon_style == ATTACK_STYLE_MAGIC) ? 1.0f : 0.0f;
-    obs[331] = (current_weapon_style == ATTACK_STYLE_RANGED) ? 1.0f : 0.0f;
-    obs[332] = (current_weapon_style == ATTACK_STYLE_MELEE) ? 1.0f : 0.0f;
-    obs[333] = p->ate_brew_this_tick ? 1.0f : 0.0f;
+    obs[186] = (current_weapon_style == ATTACK_STYLE_MAGIC) ? 1.0f : 0.0f;
+    obs[187] = (current_weapon_style == ATTACK_STYLE_RANGED) ? 1.0f : 0.0f;
+    obs[188] = (current_weapon_style == ATTACK_STYLE_MELEE) ? 1.0f : 0.0f;
+    obs[189] = p->ate_brew_this_tick ? 1.0f : 0.0f;
 }
 
 /**

@@ -219,8 +219,8 @@ static const int ACTION_HEAD_DIMS[NUM_ACTION_HEADS] = {
 // 8 slots: weapon, shield, body, legs, head, cape, neck, ring
 #define NUM_DYNAMIC_GEAR_SLOTS 8
 
-// Observation size: 182 base + (8 dynamic slots * 18 stats) + 7 reward signals + 1 voidwaker flag = 334
-#define SLOT_NUM_OBSERVATIONS 334
+//* Observation size: 182 base + 1 voidwaker flag + 7 reward signals = 190 */
+#define SLOT_NUM_OBSERVATIONS 190
 
 // ============================================================================
 // PLAYER BASE STATS (NH maxed accounts - 99 all combat)
