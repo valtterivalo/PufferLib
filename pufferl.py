@@ -267,6 +267,7 @@ def build_config(env_name: str, config: dict) -> dict:
         "cpu_inference": float(int(train.get("cpu_inference",
             1 if env_name in ("breakout", "g2048") else 0))),
         "train_fp16": float(int(train.get("train_fp16", 0))),
+        "weight_decay": train.get("weight_decay", 0.0),
         "ns_iters": float(int(train.get("ns_iters", 5))),
         "seed": float(int(train.get("seed", 42))),
     }

@@ -647,6 +647,7 @@ std::unique_ptr<PuffeRL> create_pufferl(py::dict args) {
     hypers.anneal_lr = get_config(train_kwargs, "anneal_lr");
     // Optimizer (Muon only)
     hypers.beta1 = get_config(train_kwargs, "beta1");
+    hypers.weight_decay = get_config(train_kwargs, "weight_decay");
     // Training
     hypers.minibatch_size = get_config(train_kwargs, "minibatch_size");
     hypers.replay_ratio = get_config(train_kwargs, "replay_ratio");
@@ -746,6 +747,7 @@ PYBIND11_MODULE(_C, m) {
         .def_readwrite("min_lr_ratio", &HypersT::min_lr_ratio)
         .def_readwrite("anneal_lr", &HypersT::anneal_lr)
         .def_readwrite("beta1", &HypersT::beta1)
+        .def_readwrite("weight_decay", &HypersT::weight_decay)
         .def_readwrite("total_timesteps", &HypersT::total_timesteps)
         .def_readwrite("max_grad_norm", &HypersT::max_grad_norm)
         .def_readwrite("clip_coef", &HypersT::clip_coef)

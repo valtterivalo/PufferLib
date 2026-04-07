@@ -627,6 +627,7 @@ inline PufTensor ns_slice(PufTensor &buf, int64_t rows, int64_t cols) {
 
 struct Muon {
   double momentum;
+  double weight_decay;
   float lr_val_init;
   int ns_iters;  // Newton-Schulz iterations (default 5, sweepable)
   float *lr_ptr;

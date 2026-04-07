@@ -88,6 +88,7 @@ typedef struct {
     bool anneal_lr;
     // Optimizer (Muon only — Adam removed)
     float beta1;
+    float weight_decay;
     // Training
     int minibatch_size;
     float replay_ratio;
@@ -1126,7 +1127,7 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
 
     // Optimizer init (register buffers with shared allocator)
     muon_init(pufferl->muon, &fp32_params,
-        pufferl->param_fp32_puf, lr, beta1,
+        pufferl->param_fp32_puf, lr, beta1, (double)hypers.weight_decay,
         hypers.ns_iters, alloc);
     // Single allocation for all registered buffers
     alloc.create();

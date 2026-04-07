@@ -1088,7 +1088,8 @@ void mtl_select_copy(RolloutBuf &rollouts, TrainGraph &graph,
 // ============================================================================
 
 void mtl_muon_weight_update(float *weights, const float *updates,
-                              const float *lr_ptr, int count,
+                              const float *lr_ptr, float weight_decay,
+                              float scale, int count,
                               cudaStream_t stream) {
   MetalStream *ms = mtl_resolve_stream(stream);
   ms->compute_encoder();
@@ -1099,92 +1100,37 @@ void mtl_muon_weight_update(float *weights, const float *updates,
   mtl_set_ptr(ms, lr_ptr, 2);
   struct {
     int count;
-  } params = {count};
+    float weight_decay;
+    float scale;
+  } params = {count, weight_decay, scale};
   mtl_set_params(ms, params, 3);
   mtl_dispatch_1d(ms, pso, count);
 }
 
 // ============================================================================
-// Orthogonal init via Accelerate LAPACK (CPU-side)
+// Kaiming uniform init (CPU-side, matches CUDA puf_kaiming_init)
 //
-// Replaces cuSOLVER + cuRAND from models.cu. Uses sgeqrf (QR) + sorgqr
-// from Accelerate. Runs once at model init — not perf-critical.
+// U(-bound, bound) where bound = gain / sqrt(fan_in).
+// For 2D weight [rows, cols], fan_in = cols.
+// Runs once at model init — not perf-critical.
 // ============================================================================
 
-void puf_orthogonal_init(PufTensor &dst, float gain, uint64_t seed,
-                          cudaStream_t stream) {
+void puf_kaiming_init(PufTensor &dst, float gain, uint64_t seed,
+                      cudaStream_t stream) {
   mtl_ensure_stream_synced(stream);
 
   assert(dst.ndim() == 2);
   int64_t rows = dst.shape[0], cols = dst.shape[1];
   assert(rows > 0 && cols > 0);
 
-  bool transposed = rows < cols;
-  int m = transposed ? (int)cols : (int)rows;
-  int n = transposed ? (int)rows : (int)cols;
-
-  // Generate random normal matrix on CPU
-  int64_t mn = (int64_t)m * n;
-  float *A = (float *)malloc(mn * sizeof(float));
-  float *tau = (float *)malloc(n * sizeof(float));
+  float bound = gain / std::sqrt((float)cols);
+  int64_t n = rows * cols;
+  float *dst_f = (float *)dst.bytes;
 
   std::mt19937_64 rng(seed);
-  std::normal_distribution<float> normal(0.0f, 1.0f);
-  for (int64_t i = 0; i < mn; i++)
-    A[i] = normal(rng);
-
-  // QR decomposition via Accelerate LAPACK
-  int lda = m, info;
-  int lwork = -1;
-  float work_query;
-  sgeqrf_(&m, &n, A, &lda, tau, &work_query, &lwork, &info);
-  assert(info == 0);
-  lwork = (int)work_query;
-  float *work = (float *)malloc(lwork * sizeof(float));
-  sgeqrf_(&m, &n, A, &lda, tau, work, &lwork, &info);
-  assert(info == 0);
-
-  // Extract diagonal signs for sign correction
-  float *signs = (float *)malloc(n * sizeof(float));
-  for (int i = 0; i < n; i++)
-    signs[i] = (A[i * lda + i] >= 0.0f) ? 1.0f : -1.0f;
-
-  // Generate Q from QR
-  int lwork2 = -1;
-  float work_query2;
-  sorgqr_(&m, &n, &n, A, &lda, tau, &work_query2, &lwork2, &info);
-  assert(info == 0);
-  lwork2 = (int)work_query2;
-  if (lwork2 > lwork) {
-    free(work);
-    work = (float *)malloc(lwork2 * sizeof(float));
-  }
-  sorgqr_(&m, &n, &n, A, &lda, tau, work, &lwork2, &info);
-  assert(info == 0);
-
-  // Apply sign correction: Q[:,j] *= signs[j]
-  for (int j = 0; j < n; j++)
-    for (int i = 0; i < m; i++)
-      A[j * m + i] *= signs[j];
-
-  // Copy result to dst with optional transpose and gain scaling
-  // LAPACK outputs column-major Q, dst is row-major
-  float *dst_f = (float *)dst.bytes;
-  if (transposed) {
-    // Q is (cols, rows) col-major = (rows, cols) row-major → direct copy
-    for (int64_t i = 0; i < rows * cols; i++)
-      dst_f[i] = A[i] * gain;
-  } else {
-    // Q is (rows, cols) col-major → transpose to row-major
-    for (int r = 0; r < (int)rows; r++)
-      for (int c = 0; c < (int)cols; c++)
-        dst_f[r * cols + c] = A[c * m + r] * gain;
-  }
-
-  free(A);
-  free(tau);
-  free(signs);
-  free(work);
+  std::uniform_real_distribution<float> uniform(-bound, bound);
+  for (int64_t i = 0; i < n; i++)
+    dst_f[i] = uniform(rng);
 }
 
 // ============================================================================
@@ -1192,9 +1138,10 @@ void puf_orthogonal_init(PufTensor &dst, float gain, uint64_t seed,
 // ============================================================================
 
 void muon_init(Muon *m, Allocator *param_alloc, FloatTensor weight_buffer,
-               double lr_val, double momentum,
+               double lr_val, double momentum, double weight_decay,
                int ns_iters, Allocator &alloc) {
   m->momentum = momentum;
+  m->weight_decay = weight_decay;
   m->ns_iters = (ns_iters > 0 && ns_iters <= 5) ? ns_iters : 5;
   m->lr_val_init = (float)lr_val;
   m->lr_ptr = nullptr;
@@ -1358,9 +1305,11 @@ void muon_step(Muon *m, cudaStream_t stream) {
     offset += puf_numel(e.shape);
   }
 
-  // Apply weight update: w -= lr * up
+  // Apply weight update: w = w * (1 - lr*wd) - lr * up
+  // Scale is already baked into up_puf during NS loop, so pass scale=1.0 here.
   mtl_muon_weight_update(m->wb_puf.data, m->up_puf.data,
-                         m->lr_ptr, (int)puf_numel(m->wb_puf.shape), stream);
+                         m->lr_ptr, (float)m->weight_decay, 1.0f,
+                         (int)puf_numel(m->wb_puf.shape), stream);
   mtl_barrier(ms);
 }
 
@@ -1398,7 +1347,7 @@ static void encoder_init_weights(void *w, uint64_t *seed,
   PufTensor wt = {.bytes = (char *)ew->weight.data,
                   .shape = {ew->out_dim, ew->in_dim},
                   .dtype_size = PRECISION_SIZE};
-  puf_orthogonal_init(wt, std::sqrt(2.0f), (*seed)++, stream);
+  puf_kaiming_init(wt, std::sqrt(2.0f), (*seed)++, stream);
 }
 
 static void encoder_reg_params(void *w, Allocator *alloc, int esz) {
@@ -1489,7 +1438,7 @@ static void decoder_init_weights(void *w, uint64_t *seed,
   PufTensor wt = {.bytes = (char *)dw->weight.data,
                   .shape = {od1, dw->hidden_dim},
                   .dtype_size = PRECISION_SIZE};
-  puf_orthogonal_init(wt, 0.01f, (*seed)++, stream);
+  puf_kaiming_init(wt, 1.0f, (*seed)++, stream);
 }
 
 static void decoder_reg_params(void *w, Allocator *alloc, int esz) {
@@ -1548,7 +1497,7 @@ static void mingru_init_weights(void *w, uint64_t *seed, cudaStream_t stream) {
     PufTensor w2d = {.bytes = (char *)m->weights[i].data,
                      .shape = {3 * m->hidden, m->hidden},
                      .dtype_size = PRECISION_SIZE};
-    puf_orthogonal_init(w2d, 1.0f, (*seed)++, stream);
+    puf_kaiming_init(w2d, 1.0f, (*seed)++, stream);
   }
 }
 

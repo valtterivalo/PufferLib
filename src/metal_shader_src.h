@@ -1385,9 +1385,11 @@ kernel void compute_lr_scalars_kernel(
 
 struct MuonParams {
     int n;
+    float weight_decay;
+    float scale;
 };
 
-// Weight update: wb -= lr * up
+// Weight update: wb = wb * (1 - lr * wd) - lr * scale * up  (matches CUDA muon.cu)
 kernel void muon_weight_update_kernel(
     device float* wb                    [[buffer(0)]],
     const device float* up              [[buffer(1)]],
@@ -1397,7 +1399,8 @@ kernel void muon_weight_update_kernel(
 ) {
     if ((int)idx >= p.n) return;
     float lr = *lr_ptr;
-    wb[idx] = wb[idx] - lr * up[idx];
+    float wd_scale = 1.0f - lr * p.weight_decay;
+    wb[idx] = wb[idx] * wd_scale - lr * p.scale * up[idx];
 }
 
 // ============================================================================
