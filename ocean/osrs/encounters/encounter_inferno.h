@@ -2969,6 +2969,7 @@ static void inf_render_post_tick(EncounterState* state, EncounterOverlay* ov) {
             target_x = vt->x + vt->size / 2;
             target_y = vt->y + vt->size / 2;
             end_h = (int)(vt->size * 0.5f * 128);
+            tracks = 0;  /* don't track player — projectile targets shield/NPC */
         }
         int dist = encounter_dist_to_npc(target_x, target_y,
             npc->x, npc->y, npc_size);
@@ -2983,17 +2984,17 @@ static void inf_render_post_tick(EncounterState* state, EncounterOverlay* ov) {
         uint32_t proj_model_id = 0;
         switch (npc->type) {
             case INF_NPC_BAT:        proj_model_id = INF_GFX_1374_MODEL; break;
-            case INF_NPC_BLOB:       proj_model_id = (actual_style == ATTACK_STYLE_RANGED) ? INF_GFX_1383_MODEL : INF_GFX_1384_MODEL; break;
-            case INF_NPC_BLOB_RANGE: proj_model_id = INF_GFX_1383_MODEL; break;
-            case INF_NPC_BLOB_MAGE:  proj_model_id = INF_GFX_1384_MODEL; break;
+            case INF_NPC_BLOB:       proj_model_id = (actual_style == ATTACK_STYLE_RANGED) ? INF_GFX_1378_MODEL : INF_GFX_1380_MODEL; break;
+            case INF_NPC_BLOB_RANGE: proj_model_id = INF_GFX_1379_MODEL; break;
+            case INF_NPC_BLOB_MAGE:  proj_model_id = INF_GFX_1381_MODEL; break;
             case INF_NPC_BLOB_MELEE: proj_model_id = INF_GFX_1382_MODEL; break;
             case INF_NPC_RANGER:     proj_model_id = INF_GFX_1377_MODEL; break;
-            case INF_NPC_MAGER:      proj_model_id = INF_GFX_1379_MODEL; break;
+            case INF_NPC_MAGER:      proj_model_id = INF_GFX_1376_MODEL; break;
             case INF_NPC_JAD:
                 proj_model_id = (actual_style == ATTACK_STYLE_MAGIC) ? INF_GFX_448_MODEL : INF_GFX_447_MODEL;
                 break;
             case INF_NPC_ZUK:        proj_model_id = INF_GFX_1375_MODEL; break;
-            case INF_NPC_HEALER_ZUK: proj_model_id = INF_GFX_1385_MODEL; break;
+            case INF_NPC_HEALER_ZUK: proj_model_id = INF_GFX_1375_MODEL; break;  /* same model as zuk fireball, differentiated by arc */
             default: break;
         }
 
@@ -3013,6 +3014,10 @@ static void inf_render_post_tick(EncounterState* state, EncounterOverlay* ov) {
                 if (actual_style == ATTACK_STYLE_MAGIC) {
                     arc = 1.0f;  /* arcing magic projectile */
                 }
+                /* InfernoTrainer JAD_PROJECTILE_DELAY=3: projectile invisible
+                   for first 3 ticks, shorter visible flight. */
+                duration -= 3 * 30;
+                if (duration < 30) duration = 30;
                 break;
             case INF_NPC_HEALER_ZUK:
                 arc = 3.0f;      /* high arcing spark */
@@ -3034,6 +3039,10 @@ static void inf_render_post_tick(EncounterState* state, EncounterOverlay* ov) {
         /* Zuk: 2-tick visual delay (projectile invisible until tick N+2) */
         if (pi >= 0 && npc->type == INF_NPC_ZUK)
             ov->projectiles[pi].start_delay = 2 * 30;
+
+        /* Jad: 3-tick visual delay (InfernoTrainer JAD_PROJECTILE_DELAY=3) */
+        if (pi >= 0 && npc->type == INF_NPC_JAD)
+            ov->projectiles[pi].start_delay = 3 * 30;
     }
 
     /* player attack projectile (ranged/magic only — melee has no projectile) */
