@@ -94,7 +94,7 @@ struct WrappedBuffer {
 // Must hold all params pushed between begin() and sync()/flush().
 // High replay_ratio (e.g. 2-4x) encodes 32+ minibatches per command buffer,
 // each with ~2-3KB of params (forward + PPO + backward + optimizer GEMMs).
-static const NSUInteger MTL_CONST_RING_SIZE = 16 * 1024 * 1024;
+static const NSUInteger MTL_CONST_RING_SIZE = 2 * 1024 * 1024;
 
 struct MetalContext {
   id<MTLDevice> device;
