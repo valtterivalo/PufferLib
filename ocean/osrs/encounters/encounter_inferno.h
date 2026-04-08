@@ -1222,8 +1222,10 @@ static void inf_npc_attack(InfernoState* s, int idx) {
     /* shield doesn't attack */
     if (npc->type == INF_NPC_ZUK_SHIELD) return;
 
-    /* NPC targeting another NPC (set/jad → shield): always hit, random damage */
-    if (npc->aggro_target >= 0 && npc->aggro_target < INF_MAX_NPCS) {
+    /* NPC targeting another NPC (set/jad → shield): always hit, random damage.
+       zuk healers excluded — they have their own handler below that HEALS instead of damages. */
+    if (npc->aggro_target >= 0 && npc->aggro_target < INF_MAX_NPCS
+        && npc->type != INF_NPC_HEALER_ZUK) {
         InfNPC* target = &s->npcs[npc->aggro_target];
         if (target->active) {
             int max_hit = osrs_npc_magic_max_hit(stats->magic_base_dmg, stats->magic_dmg_pct);
