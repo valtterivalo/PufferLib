@@ -91,9 +91,9 @@ struct WrappedBuffer {
 // ============================================================================
 
 // Constants ring buffer size for Metal 4 setBytes replacement.
-// Must hold all params pushed between begin() and sync()/flush().
-// High replay_ratio (e.g. 2-4x) encodes 32+ minibatches per command buffer,
-// each with ~2-3KB of params (forward + PPO + backward + optimizer GEMMs).
+// train_impl calls commit_chunk() when the ring exceeds 75% capacity,
+// splitting work across command buffers. 2MB comfortably fits many
+// minibatches before a commit is needed (~15-20KB per minibatch).
 static const NSUInteger MTL_CONST_RING_SIZE = 2 * 1024 * 1024;
 
 struct MetalContext {
