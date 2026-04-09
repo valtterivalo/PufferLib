@@ -301,7 +301,7 @@ static mach_timebase_info_data_t g_timebase = {0, 0};
 static bool g_gpu_timing_enabled = false;
 static double g_gpu_exec_ns = 0.0;
 static double g_sched_wait_ns = 0.0;
-static constexpr NSUInteger kMetalSyncTimeoutMs = 30000; // fail fast on stalled GPU sync
+static constexpr NSUInteger kMetalSyncTimeoutMs = 300000; // 5 min — worst-case sweep configs push 3K+ minibatches per epoch
 
 static double mach_to_ns(uint64_t ticks) {
   if (g_timebase.denom == 0) mach_timebase_info(&g_timebase);
