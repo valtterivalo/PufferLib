@@ -124,7 +124,7 @@ elif [[ "$ENV" == osrs_* ]]; then
     # for any osrs build, not just --local.
     if [ ! -f "data/equipment.models" ]; then
         echo "Downloading OSRS visual assets..."
-        OSRS_ASSETS_URL="https://github.com/valtterivalo/PufferLib/releases/download/osrs-assets-v4/osrs-assets-v4.tar.gz"
+        OSRS_ASSETS_URL="https://github.com/valtterivalo/PufferLib/releases/download/osrs-assets-v5/osrs-assets-v5.tar.gz"
         mkdir -p data
         curl -sL "$OSRS_ASSETS_URL" | tar xz -C data
     fi

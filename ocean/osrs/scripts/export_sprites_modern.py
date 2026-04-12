@@ -199,12 +199,16 @@ SPRITE_IDS: dict[str, list[int]] = {
     ],
     # tab icons (combat, stats, quests, inventory, equipment, prayer, magic)
     "tab": [168, 776, 779, 780, 898, 899, 900, 901],
-    # ancient spell icons (enabled + disabled)
+    # ancient spell icons (enabled + disabled) — full book (smoke/shadow/blood/ice)
     "spell_ancient": [
         325, 326, 327, 328,  # ice rush/burst/blitz/barrage
+        329, 330, 331, 332,  # smoke rush/burst/blitz/barrage
         333, 334, 335, 336,  # blood rush/burst/blitz/barrage
+        337, 338, 339, 340,  # shadow rush/burst/blitz/barrage
         375, 376, 377, 378,  # ice disabled
+        379, 380, 381, 382,  # smoke disabled
         383, 384, 385, 386,  # blood disabled
+        387, 388, 389, 390,  # shadow disabled
     ],
     # lunar spell icons
     "spell_lunar": [557, 561, 564, 607, 611, 614],
