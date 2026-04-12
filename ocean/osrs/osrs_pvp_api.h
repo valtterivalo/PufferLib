@@ -304,16 +304,18 @@ void pvp_init(OsrsEnv* env) {
     env->_episode_return = 0.0f;
     env->has_rng_seed = 0;
     env->is_lms = 1;
-    env->is_pvp_arena = 0;
+    env->pvp_runtime.is_pvp_arena = 0;
     env->auto_reset = 1;
-    env->use_c_opponent = 0;
-    env->use_c_opponent_p0 = 0;
-    env->use_external_opponent_actions = 0;
-    env->ocean_obs_p1 = NULL;
-    env->ocean_selfplay_mask = NULL;
-    memset(env->external_opponent_actions, 0, sizeof(env->external_opponent_actions));
-    memset(&env->opponent, 0, sizeof(env->opponent));
-    memset(&env->opponent_p0, 0, sizeof(env->opponent_p0));
+    env->pvp_runtime.use_c_opponent = 0;
+    env->pvp_runtime.use_c_opponent_p0 = 0;
+    env->pvp_runtime.use_external_opponent_actions = 0;
+    env->ocean_io.agent_obs_p1 = NULL;
+    env->ocean_io.selfplay_mask = NULL;
+    memset(env->pvp_runtime.external_opponent_actions, 0, sizeof(env->pvp_runtime.external_opponent_actions));
+    memset(&env->pvp_runtime.opponent, 0, sizeof(env->pvp_runtime.opponent));
+    memset(&env->pvp_runtime.opponent_p0, 0, sizeof(env->pvp_runtime.opponent_p0));
+    memset(&env->pvp_runtime.pfsp, 0, sizeof(env->pvp_runtime.pfsp));
+    memset(env->pvp_runtime.gear_tier_weights, 0, sizeof(env->pvp_runtime.gear_tier_weights));
     memset(&env->shaping, 0, sizeof(env->shaping));
     memset(&env->log, 0, sizeof(env->log));
 }
@@ -382,7 +384,7 @@ void pvp_reset(OsrsEnv* env) {
 
     // NOTE: is_lms is NOT reset here - it's controlled by set_lms() from Python
     // env->is_lms = 0;
-    env->is_pvp_arena = 0;
+    env->pvp_runtime.is_pvp_arena = 0;
 
     env->_episode_return = 0.0f;
 
@@ -397,7 +399,7 @@ void pvp_reset(OsrsEnv* env) {
 
     // Initialize slot mode equipment with correlated per-episode gear randomization
     // LMS tier distribution: 80% same, 15% ±1 tier, 5% ±2 tiers
-    int base_tier = sample_gear_tier(env->gear_tier_weights, &env->rng_state);
+    int base_tier = sample_gear_tier(env->pvp_runtime.gear_tier_weights, &env->rng_state);
     int p1_tier = base_tier;
 
     float tier_roll = (float)xorshift32(&env->rng_state) / (float)UINT32_MAX;
@@ -421,11 +423,11 @@ void pvp_reset(OsrsEnv* env) {
 
     // Reset C-side opponent state for new episode
     // Always reset when PFSP is configured (selfplay toggle happens inside opponent_reset)
-    if (env->use_c_opponent || env->opponent.type == OPP_PFSP) {
-        opponent_reset(env, &env->opponent);
+    if (env->pvp_runtime.use_c_opponent || env->pvp_runtime.opponent.type == OPP_PFSP) {
+        opponent_reset(env, &env->pvp_runtime.opponent);
     }
-    if (env->use_c_opponent_p0) {
-        opponent_reset(env, &env->opponent_p0);
+    if (env->pvp_runtime.use_c_opponent_p0) {
+        opponent_reset(env, &env->pvp_runtime.opponent_p0);
     }
 
     for (int i = 0; i < NUM_AGENTS; i++) {
@@ -478,17 +480,17 @@ void pvp_step(OsrsEnv* env) {
     // ========================================================================
 
     // Copy model's actions (player 0) or clear if C opponent controls p0
-    if (env->use_c_opponent_p0) {
+    if (env->pvp_runtime.use_c_opponent_p0) {
         memset(env->actions, 0, NUM_ACTION_HEADS * sizeof(int));
     } else {
-        memcpy(env->actions, env->ocean_acts, NUM_ACTION_HEADS * sizeof(int));
+        memcpy(env->actions, env->ocean_io.agent_actions, NUM_ACTION_HEADS * sizeof(int));
     }
 
     // Copy external opponent actions (player 1) or clear for C opponent
-    if (env->use_external_opponent_actions) {
+    if (env->pvp_runtime.use_external_opponent_actions) {
         memcpy(
             env->actions + NUM_ACTION_HEADS,
-            env->external_opponent_actions,
+            env->pvp_runtime.external_opponent_actions,
             NUM_ACTION_HEADS * sizeof(int)
         );
     } else {
@@ -496,8 +498,8 @@ void pvp_step(OsrsEnv* env) {
     }
 
     // Generate C opponent actions (writes to pending_actions, then copy to actions)
-    if (env->use_c_opponent && !env->use_external_opponent_actions) {
-        generate_opponent_action(env, &env->opponent);
+    if (env->pvp_runtime.use_c_opponent && !env->pvp_runtime.use_external_opponent_actions) {
+        generate_opponent_action(env, &env->pvp_runtime.opponent);
         // Copy C opponent's action from pending to actions buffer
         memcpy(
             env->actions + NUM_ACTION_HEADS,
@@ -505,8 +507,8 @@ void pvp_step(OsrsEnv* env) {
             NUM_ACTION_HEADS * sizeof(int)
         );
     }
-    if (env->use_c_opponent_p0) {
-        generate_opponent_action_for_player0(env, &env->opponent_p0);
+    if (env->pvp_runtime.use_c_opponent_p0) {
+        generate_opponent_action_for_player0(env, &env->pvp_runtime.opponent_p0);
         // Copy C opponent's action from pending to actions buffer
         memcpy(
             env->actions,
@@ -716,21 +718,21 @@ void pvp_step(OsrsEnv* env) {
 
     // Write observations to PufferLib shared buffer
     ocean_write_obs(env);
-    if (env->ocean_obs_p1 != NULL) {
+    if (env->ocean_io.agent_obs_p1 != NULL) {
         ocean_write_obs_p1(env);
     }
-    env->ocean_rew[0] = env->rewards[0];
+    env->ocean_io.agent_rewards[0] = env->rewards[0];
 
     if (env->episode_over) {
-        env->ocean_term[0] = 1;
+        env->ocean_io.agent_terminals[0] = 1;
 
         // PFSP win tracking (all in C, zero Python overhead).
         // Skip if pool_idx is -1 (sentinel for pre-pool-config first episode).
-        if (env->opponent.type == OPP_PFSP && env->pfsp.active_pool_idx >= 0) {
-            int idx = env->pfsp.active_pool_idx;
-            env->pfsp.episodes[idx] += 1.0f;
+        if (env->pvp_runtime.opponent.type == OPP_PFSP && env->pvp_runtime.pfsp.active_pool_idx >= 0) {
+            int idx = env->pvp_runtime.pfsp.active_pool_idx;
+            env->pvp_runtime.pfsp.episodes[idx] += 1.0f;
             if (env->winner == 0) {
-                env->pfsp.wins[idx] += 1.0f;
+                env->pvp_runtime.pfsp.wins[idx] += 1.0f;
             }
         }
 
@@ -756,7 +758,7 @@ void pvp_step(OsrsEnv* env) {
             pvp_reset(env);
         }
     } else {
-        env->ocean_term[0] = 0;
+        env->ocean_io.agent_terminals[0] = 0;
     }
 }
 

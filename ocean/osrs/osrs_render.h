@@ -1505,19 +1505,19 @@ static void render_restore_snapshot(RenderClient* rc, OsrsEnv* env) {
 
     void* saved_client = env->client;
     void* saved_cmap = env->collision_map;
-    float* saved_ocean_obs = env->ocean_obs;
-    int* saved_ocean_acts = env->ocean_acts;
-    float* saved_ocean_rew = env->ocean_rew;
-    unsigned char* saved_ocean_term = env->ocean_term;
+    float* saved_ocean_obs = env->ocean_io.agent_obs;
+    int* saved_ocean_acts = env->ocean_io.agent_actions;
+    float* saved_ocean_rew = env->ocean_io.agent_rewards;
+    unsigned char* saved_ocean_term = env->ocean_io.agent_terminals;
 
     *env = rc->history[rc->history_cursor];
 
     env->client = saved_client;
     env->collision_map = saved_cmap;
-    env->ocean_obs = saved_ocean_obs;
-    env->ocean_acts = saved_ocean_acts;
-    env->ocean_rew = saved_ocean_rew;
-    env->ocean_term = saved_ocean_term;
+    env->ocean_io.agent_obs = saved_ocean_obs;
+    env->ocean_io.agent_actions = saved_ocean_acts;
+    env->ocean_io.agent_rewards = saved_ocean_rew;
+    env->ocean_io.agent_terminals = saved_ocean_term;
 }
 
 /* reset history (call on episode reset) */
@@ -2242,17 +2242,17 @@ static void render_draw_grid(RenderClient* rc, OsrsEnv* env) {
         }
     }
 
-    /* encounter overlay: toxic clouds in 2D */
+    /* encounter overlay: area hazards and encounter adds in 2D */
     if (env->encounter_def) {
         EncounterOverlay* ov = &rc->encounter_overlay;
 
-        /* toxic clouds: 3x3 venom overlay per cloud (x,y = SW corner of 3x3 area) */
-        for (int i = 0; i < ov->cloud_count; i++) {
-            if (!ov->clouds[i].active) continue;
+        /* current hazard renderer: 3x3 poison cloud footprint from the SW tile. */
+        for (int i = 0; i < ov->hazard_count; i++) {
+            if (!ov->hazards[i].active) continue;
             for (int cdx = 0; cdx < 3; cdx++) {
                 for (int cdy = 0; cdy < 3; cdy++) {
-                    int cx = ov->clouds[i].x + cdx;
-                    int cy = ov->clouds[i].y + cdy;
+                    int cx = ov->hazards[i].x + cdx;
+                    int cy = ov->hazards[i].y + cdy;
                     int csx = render_world_to_screen_x_rc(rc, cx);
                     int csy = render_world_to_screen_y_rc(rc, cy);
                     DrawRectangle(csx, csy, ts, ts, CLITERAL(Color){ 60, 140, 40, 120 });
@@ -2293,12 +2293,12 @@ static void render_draw_grid(RenderClient* rc, OsrsEnv* env) {
             DrawRectangleLines(msx, msy, ts, ts, CLITERAL(Color){ 255, 50, 50, 220 });
         }
 
-        /* snakelings: small colored squares */
-        for (int i = 0; i < ov->snakeling_count; i++) {
-            if (!ov->snakelings[i].active) continue;
-            int ssx = render_world_to_screen_x_rc(rc, ov->snakelings[i].x);
-            int ssy = render_world_to_screen_y_rc(rc, ov->snakelings[i].y);
-            Color sc = ov->snakelings[i].is_magic
+        /* encounter adds: current renderer uses Zulrah snakeling colors. */
+        for (int i = 0; i < ov->add_count; i++) {
+            if (!ov->adds[i].active) continue;
+            int ssx = render_world_to_screen_x_rc(rc, ov->adds[i].x);
+            int ssy = render_world_to_screen_y_rc(rc, ov->adds[i].y);
+            Color sc = ov->adds[i].variant
                 ? CLITERAL(Color){ 100, 150, 255, 200 }
                 : CLITERAL(Color){ 255, 150, 50, 200 };
             DrawRectangle(ssx + 3, ssy + 3, ts - 6, ts - 6, sc);
@@ -3491,15 +3491,15 @@ static void render_draw_3d_world(RenderClient* rc) {
         #define OV_GROUND(tile_x, tile_y) \
             (has_terrain ? terrain_height_avg(rc->terrain, (tile_x), (tile_y)) : 2.0f)
 
-        /* toxic clouds: object 11700 model at center of 3x3 damage area */
+        /* current hazard renderer: object 11700 centered on a 3x3 damage area */
         float ms = 1.0f / 128.0f;
-        for (int i = 0; i < ov->cloud_count; i++) {
-            if (!ov->clouds[i].active) continue;
-            float ground = OV_GROUND(ov->clouds[i].x + 1, ov->clouds[i].y + 1);
+        for (int i = 0; i < ov->hazard_count; i++) {
+            if (!ov->hazards[i].active) continue;
+            float ground = OV_GROUND(ov->hazards[i].x + 1, ov->hazards[i].y + 1);
 
             if (rc->cloud_model_ready) {
-                float cx = (float)ov->clouds[i].x + 1.5f;
-                float cz = -(float)(ov->clouds[i].y + 2) + 0.5f;
+                float cx = (float)ov->hazards[i].x + 1.5f;
+                float cz = -(float)(ov->hazards[i].y + 2) + 0.5f;
                 rlDisableBackfaceCulling();
                 rc->cloud_model.transform = MatrixMultiply(
                     MatrixScale(ms, ms, ms),
@@ -3510,9 +3510,9 @@ static void render_draw_3d_world(RenderClient* rc) {
                 /* fallback: semi-transparent tiles if model not loaded */
                 for (int cdx = 0; cdx < 3; cdx++) {
                     for (int cdy = 0; cdy < 3; cdy++) {
-                        float fx = (float)(ov->clouds[i].x + cdx);
-                        float fz = -(float)(ov->clouds[i].y + cdy + 1);
-                        float tg = OV_GROUND(ov->clouds[i].x + cdx, ov->clouds[i].y + cdy);
+                        float fx = (float)(ov->hazards[i].x + cdx);
+                        float fz = -(float)(ov->hazards[i].y + cdy + 1);
+                        float tg = OV_GROUND(ov->hazards[i].x + cdx, ov->hazards[i].y + cdy);
                         DrawCube((Vector3){ fx + 0.5f, tg + 0.08f, fz + 0.5f },
                                  0.95f, 0.06f, 0.95f,
                                  CLITERAL(Color){ 80, 180, 50, 100 });
@@ -3566,12 +3566,12 @@ static void render_draw_3d_world(RenderClient* rc) {
                      CLITERAL(Color){ 255, 50, 50, 150 });
         }
 
-        /* snakelings: render 3D model or fallback to cubes */
-        for (int i = 0; i < ov->snakeling_count; i++) {
-            if (!ov->snakelings[i].active) continue;
-            float ground = OV_GROUND(ov->snakelings[i].x, ov->snakelings[i].y);
-            float sx = (float)ov->snakelings[i].x + 0.5f;
-            float sz = -(float)(ov->snakelings[i].y + 1) + 0.5f;
+        /* encounter adds: current renderer uses the snakeling model or cubes. */
+        for (int i = 0; i < ov->add_count; i++) {
+            if (!ov->adds[i].active) continue;
+            float ground = OV_GROUND(ov->adds[i].x, ov->adds[i].y);
+            float sx = (float)ov->adds[i].x + 0.5f;
+            float sz = -(float)(ov->adds[i].y + 1) + 0.5f;
             if (rc->snakeling_model_ready) {
                 rlDisableBackfaceCulling();
                 rc->snakeling_model.transform = MatrixMultiply(
@@ -3580,7 +3580,7 @@ static void render_draw_3d_world(RenderClient* rc) {
                 DrawModel(rc->snakeling_model, (Vector3){0,0,0}, 1.0f, WHITE);
                 rlEnableBackfaceCulling();
             } else {
-                Color sc = ov->snakelings[i].is_magic
+                Color sc = ov->adds[i].variant
                     ? CLITERAL(Color){ 100, 150, 255, 200 }
                     : CLITERAL(Color){ 255, 150, 50, 200 };
                 DrawCube((Vector3){ sx, ground + 0.2f, sz },

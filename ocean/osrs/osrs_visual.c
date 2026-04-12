@@ -364,8 +364,8 @@ static void run_visual(OsrsEnv* env, const char* encounter_name, const char* rep
         if (start_wave >= 0)
             fprintf(stderr, "start_wave: %d\n", start_wave);
     } else {
-        env->use_c_opponent = 1;
-        env->opponent.type = OPP_IMPROVED;
+        env->pvp_runtime.use_c_opponent = 1;
+        env->pvp_runtime.opponent.type = OPP_IMPROVED;
         env->is_lms = 1;
         pvp_reset(env);
     }
@@ -576,19 +576,19 @@ int main(int argc, char** argv) {
         /* set gear tier: --tier N forces both players to tier N,
            otherwise default LMS distribution (mostly tier 0) */
         if (gear_tier >= 0 && gear_tier <= 3) {
-            for (int t = 0; t < 4; t++) env.gear_tier_weights[t] = 0.0f;
-            env.gear_tier_weights[gear_tier] = 1.0f;
+            for (int t = 0; t < 4; t++) env.pvp_runtime.gear_tier_weights[t] = 0.0f;
+            env.pvp_runtime.gear_tier_weights[gear_tier] = 1.0f;
         } else {
             /* default LMS: 60% tier 0, 25% tier 1, 10% tier 2, 5% tier 3 */
-            env.gear_tier_weights[0] = 0.60f;
-            env.gear_tier_weights[1] = 0.25f;
-            env.gear_tier_weights[2] = 0.10f;
-            env.gear_tier_weights[3] = 0.05f;
+            env.pvp_runtime.gear_tier_weights[0] = 0.60f;
+            env.pvp_runtime.gear_tier_weights[1] = 0.25f;
+            env.pvp_runtime.gear_tier_weights[2] = 0.10f;
+            env.pvp_runtime.gear_tier_weights[3] = 0.05f;
         }
-        env.ocean_acts = env.actions;
-        env.ocean_obs = env._obs_buf;
-        env.ocean_rew = env.rewards;
-        env.ocean_term = env.terminals;
+        env.ocean_io.agent_actions = env.actions;
+        env.ocean_io.agent_obs = env._obs_buf;
+        env.ocean_io.agent_rewards = env.rewards;
+        env.ocean_io.agent_terminals = env.terminals;
         run_visual(&env, encounter_name, replay_path, start_wave);
         pvp_close(&env);
 #else
@@ -603,10 +603,10 @@ int main(int argc, char** argv) {
         env.terminals = (unsigned char*)calloc(NUM_AGENTS, sizeof(unsigned char));
         env.action_masks = (unsigned char*)calloc(NUM_AGENTS * ACTION_MASK_SIZE, sizeof(unsigned char));
         env.action_masks_agents = (1 << NUM_AGENTS) - 1;
-        env.ocean_acts = env.actions;
-        env.ocean_obs = (float*)calloc(OCEAN_OBS_SIZE, sizeof(float));
-        env.ocean_rew = env.rewards;
-        env.ocean_term = env.terminals;
+        env.ocean_io.agent_actions = env.actions;
+        env.ocean_io.agent_obs = (float*)calloc(OCEAN_OBS_SIZE, sizeof(float));
+        env.ocean_io.agent_rewards = env.rewards;
+        env.ocean_io.agent_terminals = env.terminals;
 
         printf("OSRS PvP C Environment Demo\n");
         printf("===========================\n\n");
@@ -643,7 +643,7 @@ int main(int argc, char** argv) {
         free(env.rewards);
         free(env.terminals);
         free(env.action_masks);
-        free(env.ocean_obs);
+        free(env.ocean_io.agent_obs);
         pvp_close(&env);
     }
 

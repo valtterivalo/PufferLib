@@ -2124,14 +2124,14 @@ static int zul_get_tick(EncounterState* state) { return ((ZulrahState*)state)->t
 static void zul_render_post_tick(EncounterState* state, EncounterOverlay* ov) {
     ZulrahState* s = (ZulrahState*)state;
 
-    /* clouds */
-    ov->cloud_count = 0;
-    for (int i = 0; i < ZUL_MAX_CLOUDS && ov->cloud_count < ENCOUNTER_MAX_OVERLAY_TILES; i++) {
+    /* hazards */
+    ov->hazard_count = 0;
+    for (int i = 0; i < ZUL_MAX_CLOUDS && ov->hazard_count < ENCOUNTER_MAX_OVERLAY_TILES; i++) {
         if (!s->clouds[i].active) continue;
-        ov->clouds[ov->cloud_count].x = s->clouds[i].x;
-        ov->clouds[ov->cloud_count].y = s->clouds[i].y;
-        ov->clouds[ov->cloud_count].active = 1;
-        ov->cloud_count++;
+        ov->hazards[ov->hazard_count].x = s->clouds[i].x;
+        ov->hazards[ov->hazard_count].y = s->clouds[i].y;
+        ov->hazards[ov->hazard_count].active = 1;
+        ov->hazard_count++;
     }
 
     /* boss state: zulrah.x/y is the SW anchor tile of the NxN footprint.
@@ -2143,15 +2143,15 @@ static void zul_render_post_tick(EncounterState* state, EncounterOverlay* ov) {
     ov->boss_form = (int)s->current_form;
     ov->boss_size = ZUL_NPC_SIZE;
 
-    /* snakelings */
-    ov->snakeling_count = 0;
-    for (int i = 0; i < ZUL_MAX_SNAKELINGS && ov->snakeling_count < ENCOUNTER_MAX_OVERLAY_SNAKES; i++) {
+    /* adds */
+    ov->add_count = 0;
+    for (int i = 0; i < ZUL_MAX_SNAKELINGS && ov->add_count < ENCOUNTER_MAX_OVERLAY_ADDS; i++) {
         if (!s->snakelings[i].active) continue;
-        int si = ov->snakeling_count++;
-        ov->snakelings[si].x = s->snakelings[i].entity.x;
-        ov->snakelings[si].y = s->snakelings[i].entity.y;
-        ov->snakelings[si].active = 1;
-        ov->snakelings[si].is_magic = s->snakelings[i].is_magic;
+        int si = ov->add_count++;
+        ov->adds[si].x = s->snakelings[i].entity.x;
+        ov->adds[si].y = s->snakelings[i].entity.y;
+        ov->adds[si].active = 1;
+        ov->adds[si].variant = s->snakelings[i].is_magic;
     }
 
     /* melee targeting indicator */

@@ -40,10 +40,10 @@ static EncounterState* nh_pvp_create(void) {
     /* pvp_init sets internal buf pointers for game logic (observations, actions, etc.).
        also wire the ocean pointers to internal buffers so pvp_step can write obs/rewards
        without needing the PufferLib binding. */
-    s->env.ocean_obs = s->env._obs_buf;
-    s->env.ocean_acts = s->env._acts_buf;
-    s->env.ocean_rew = s->env._rews_buf;
-    s->env.ocean_term = s->env._terms_buf;
+    s->env.ocean_io.agent_obs = s->env._obs_buf;
+    s->env.ocean_io.agent_actions = s->env._acts_buf;
+    s->env.ocean_io.agent_rewards = s->env._rews_buf;
+    s->env.ocean_io.agent_terminals = s->env._terms_buf;
     return (EncounterState*)s;
 }
 
@@ -64,8 +64,8 @@ static void nh_pvp_reset(EncounterState* state, uint32_t seed) {
 
 static void nh_pvp_step(EncounterState* state, const int* actions) {
     NhPvpState* s = (NhPvpState*)state;
-    /* pvp_step reads agent 0 actions from ocean_acts (line 481 of osrs_pvp_api.h) */
-    memcpy(s->env.ocean_acts, actions, NUM_ACTION_HEADS * sizeof(int));
+    /* pvp_step reads agent 0 actions from ocean_io.agent_actions. */
+    memcpy(s->env.ocean_io.agent_actions, actions, NUM_ACTION_HEADS * sizeof(int));
     pvp_step(&s->env);
 }
 
@@ -133,11 +133,11 @@ static void nh_pvp_fill_render_entities(EncounterState* state, RenderEntity* out
 static void nh_pvp_put_int(EncounterState* state, const char* key, int value) {
     NhPvpState* s = (NhPvpState*)state;
     if (strcmp(key, "opponent_type") == 0) {
-        s->env.opponent.type = (OpponentType)value;
+        s->env.pvp_runtime.opponent.type = (OpponentType)value;
     } else if (strcmp(key, "is_lms") == 0) {
         s->env.is_lms = value;
     } else if (strcmp(key, "use_c_opponent") == 0) {
-        s->env.use_c_opponent = value;
+        s->env.pvp_runtime.use_c_opponent = value;
     } else if (strcmp(key, "auto_reset") == 0) {
         s->env.auto_reset = value;
     } else if (strcmp(key, "seed") == 0) {

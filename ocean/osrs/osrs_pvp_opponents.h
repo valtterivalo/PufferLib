@@ -3462,31 +3462,31 @@ static void opponent_reset(OsrsEnv* env, OpponentState* opp) {
         opp->active_sub_policy = opp_select_from_pool(
             env, MIXED_HARD_BALANCED_POOL, MIXED_HARD_BALANCED_CUM_WEIGHTS,
             MIXED_HARD_BALANCED_POOL_SIZE);
-    } else if (opp->type == OPP_PFSP && env->pfsp.pool_size > 0) {
+    } else if (opp->type == OPP_PFSP && env->pvp_runtime.pfsp.pool_size > 0) {
         int idx = 0;
         int r = rand_int(env, 1000);
-        for (int i = 0; i < env->pfsp.pool_size; i++) {
-            if (r < env->pfsp.cum_weights[i]) { idx = i; break; }
+        for (int i = 0; i < env->pvp_runtime.pfsp.pool_size; i++) {
+            if (r < env->pvp_runtime.pfsp.cum_weights[i]) { idx = i; break; }
         }
-        env->pfsp.active_pool_idx = idx;
-        opp->active_sub_policy = env->pfsp.pool[idx];
+        env->pvp_runtime.pfsp.active_pool_idx = idx;
+        opp->active_sub_policy = env->pvp_runtime.pfsp.pool[idx];
 
         // Toggle opponent mode: selfplay uses external Python actions,
         // scripted opponents use C-generated actions
         if (opp->active_sub_policy == OPP_SELFPLAY) {
-            env->use_c_opponent = 0;
-            env->use_external_opponent_actions = 1;
-            if (env->ocean_selfplay_mask) *env->ocean_selfplay_mask = 1;
+            env->pvp_runtime.use_c_opponent = 0;
+            env->pvp_runtime.use_external_opponent_actions = 1;
+            if (env->ocean_io.selfplay_mask) *env->ocean_io.selfplay_mask = 1;
         } else {
-            env->use_c_opponent = 1;
-            env->use_external_opponent_actions = 0;
-            if (env->ocean_selfplay_mask) *env->ocean_selfplay_mask = 0;
+            env->pvp_runtime.use_c_opponent = 1;
+            env->pvp_runtime.use_external_opponent_actions = 0;
+            if (env->ocean_io.selfplay_mask) *env->ocean_io.selfplay_mask = 0;
         }
     } else if (opp->type == OPP_PFSP) {
         // PFSP pool not yet configured (set_pfsp_weights called after env creation).
         // Fall back to OPP_IMPROVED so the first episode isn't against a no-op opponent.
         opp->active_sub_policy = OPP_IMPROVED;
-        env->pfsp.active_pool_idx = -1;  // sentinel: don't track in PFSP stats
+        env->pvp_runtime.pfsp.active_pool_idx = -1;  // sentinel: don't track in PFSP stats
     }
 
     /* Per-episode randomized decision parameters — resolved from sub-policy

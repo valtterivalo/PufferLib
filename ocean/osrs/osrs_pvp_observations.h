@@ -295,7 +295,7 @@ static void ensure_obs_norm_initialized(void) {
  */
 static void ocean_write_obs(OsrsEnv* env) {
     ensure_obs_norm_initialized();
-    float* dst = env->ocean_obs;
+    float* dst = env->ocean_io.agent_obs;
     float* src = env->observations;  // agent 0 obs (internal buffer)
 
     // Normalize observations
@@ -314,11 +314,11 @@ static void ocean_write_obs(OsrsEnv* env) {
  * Write normalized agent 1 observations + action mask to self-play buffer.
  *
  * Mirrors ocean_write_obs() but reads from agent 1's internal buffer offsets.
- * Only called when ocean_obs_p1 is set (self-play enabled).
+ * Only called when ocean_io.agent_obs_p1 is set (self-play enabled).
  */
 static void ocean_write_obs_p1(OsrsEnv* env) {
     ensure_obs_norm_initialized();
-    float* dst = env->ocean_obs_p1;
+    float* dst = env->ocean_io.agent_obs_p1;
     float* src = env->observations + SLOT_NUM_OBSERVATIONS;  // agent 1 offset
 
     for (int i = 0; i < SLOT_NUM_OBSERVATIONS; i++) {
@@ -586,7 +586,7 @@ static void generate_slot_observations(OsrsEnv* env, int agent_idx) {
 
     // Game mode flags and ability checks (133-148)
     obs[133] = env->is_lms ? 1.0f : 0.0f;
-    obs[134] = env->is_pvp_arena ? 1.0f : 0.0f;
+    obs[134] = env->pvp_runtime.is_pvp_arena ? 1.0f : 0.0f;
     obs[135] = p->veng_active ? 1.0f : 0.0f;
     obs[136] = t->veng_active ? 1.0f : 0.0f;
     obs[137] = p->is_lunar_spellbook ? 1.0f : 0.0f;

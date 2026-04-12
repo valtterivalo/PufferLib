@@ -71,15 +71,15 @@ void c_step(Env* env) {
 void c_reset(Env* env) {
     /* Wire ocean pointers to vecenv shared buffers (deferred from my_init because
      * create_static_vec assigns env->observations/rewards AFTER my_vec_init). */
-    env->pvp.ocean_obs = (float*)env->observations;
-    env->pvp.ocean_rew = env->rewards;
-    env->pvp.ocean_term = &env->ocean_term_staging;
-    env->pvp.ocean_acts = env->ocean_acts_staging;
+    env->pvp.ocean_io.agent_obs = (float*)env->observations;
+    env->pvp.ocean_io.agent_rewards = env->rewards;
+    env->pvp.ocean_io.agent_terminals = &env->ocean_term_staging;
+    env->pvp.ocean_io.agent_actions = env->ocean_acts_staging;
 
     pvp_reset(&env->pvp);
     ocean_write_obs(&env->pvp);
-    env->pvp.ocean_rew[0] = 0.0f;
-    env->pvp.ocean_term[0] = 0;
+    env->pvp.ocean_io.agent_rewards[0] = 0.0f;
+    env->pvp.ocean_io.agent_terminals[0] = 0;
     env->terminals[0] = 0.0f;
 }
 
@@ -100,20 +100,20 @@ void my_init(Env* env, Dict* kwargs) {
      *
      * For now, point ocean pointers at internal staging so pvp_reset doesn't
      * crash on writes to ocean_term/ocean_rew. */
-    env->pvp.ocean_obs = NULL;
-    env->pvp.ocean_rew = env->pvp._rews_buf;
-    env->pvp.ocean_term = &env->ocean_term_staging;
-    env->pvp.ocean_acts = env->ocean_acts_staging;
-    env->pvp.ocean_obs_p1 = NULL;
-    env->pvp.ocean_selfplay_mask = NULL;
+    env->pvp.ocean_io.agent_obs = NULL;
+    env->pvp.ocean_io.agent_rewards = env->pvp._rews_buf;
+    env->pvp.ocean_io.agent_terminals = &env->ocean_term_staging;
+    env->pvp.ocean_io.agent_actions = env->ocean_acts_staging;
+    env->pvp.ocean_io.agent_obs_p1 = NULL;
+    env->pvp.ocean_io.selfplay_mask = NULL;
 
     /* config from Dict (all values are double) */
-    env->pvp.use_c_opponent = 1;
+    env->pvp.pvp_runtime.use_c_opponent = 1;
     env->pvp.auto_reset = 1;
     env->pvp.is_lms = 1;
 
     DictItem* opp = dict_get_unsafe(kwargs, "opponent_type");
-    env->pvp.opponent.type = opp ? (OpponentType)(int)opp->value : OPP_IMPROVED;
+    env->pvp.pvp_runtime.opponent.type = opp ? (OpponentType)(int)opp->value : OPP_IMPROVED;
 
     DictItem* shaping_scale = dict_get_unsafe(kwargs, "shaping_scale");
     env->pvp.shaping.shaping_scale = shaping_scale ? (float)shaping_scale->value : 0.0f;
@@ -149,10 +149,10 @@ void my_init(Env* env, Dict* kwargs) {
     env->pvp.shaping.click_penalty_coef = -0.003f;
 
     /* gear: default tier 0 (basic LMS) */
-    env->pvp.gear_tier_weights[0] = 1.0f;
-    env->pvp.gear_tier_weights[1] = 0.0f;
-    env->pvp.gear_tier_weights[2] = 0.0f;
-    env->pvp.gear_tier_weights[3] = 0.0f;
+    env->pvp.pvp_runtime.gear_tier_weights[0] = 1.0f;
+    env->pvp.pvp_runtime.gear_tier_weights[1] = 0.0f;
+    env->pvp.pvp_runtime.gear_tier_weights[2] = 0.0f;
+    env->pvp.pvp_runtime.gear_tier_weights[3] = 0.0f;
 
     /* pvp_reset sets up game state (players, positions, gear, etc.)
      * but does NOT write to ocean buffers — that happens in c_reset. */
@@ -176,11 +176,11 @@ void binding_set_pfsp_weights(StaticVec* vec, int* pool, int* cum_weights, int p
     Env* envs = (Env*)vec->envs;
     if (pool_size > MAX_OPPONENT_POOL) pool_size = MAX_OPPONENT_POOL;
     for (int e = 0; e < vec->size; e++) {
-        int was_unconfigured = (envs[e].pvp.pfsp.pool_size == 0);
-        envs[e].pvp.pfsp.pool_size = pool_size;
+        int was_unconfigured = (envs[e].pvp.pvp_runtime.pfsp.pool_size == 0);
+        envs[e].pvp.pvp_runtime.pfsp.pool_size = pool_size;
         for (int i = 0; i < pool_size; i++) {
-            envs[e].pvp.pfsp.pool[i] = (OpponentType)pool[i];
-            envs[e].pvp.pfsp.cum_weights[i] = cum_weights[i];
+            envs[e].pvp.pvp_runtime.pfsp.pool[i] = (OpponentType)pool[i];
+            envs[e].pvp.pvp_runtime.pfsp.cum_weights[i] = cum_weights[i];
         }
         /* Only reset on first configuration — restarts the episode that was started
          * during env creation before the pool was set (would have used fallback opponent).
@@ -196,8 +196,8 @@ void binding_get_pfsp_stats(StaticVec* vec, float* out_wins, float* out_episodes
     int pool_size = 0;
 
     for (int e = 0; e < vec->size; e++) {
-        if (envs[e].pvp.pfsp.pool_size > pool_size)
-            pool_size = envs[e].pvp.pfsp.pool_size;
+        if (envs[e].pvp.pvp_runtime.pfsp.pool_size > pool_size)
+            pool_size = envs[e].pvp.pvp_runtime.pfsp.pool_size;
     }
     *out_pool_size = pool_size;
     for (int i = 0; i < pool_size; i++) {
@@ -207,11 +207,11 @@ void binding_get_pfsp_stats(StaticVec* vec, float* out_wins, float* out_episodes
 
     /* Aggregate and reset (read-and-reset pattern) */
     for (int e = 0; e < vec->size; e++) {
-        for (int i = 0; i < envs[e].pvp.pfsp.pool_size; i++) {
-            out_wins[i] += envs[e].pvp.pfsp.wins[i];
-            out_episodes[i] += envs[e].pvp.pfsp.episodes[i];
+        for (int i = 0; i < envs[e].pvp.pvp_runtime.pfsp.pool_size; i++) {
+            out_wins[i] += envs[e].pvp.pvp_runtime.pfsp.wins[i];
+            out_episodes[i] += envs[e].pvp.pvp_runtime.pfsp.episodes[i];
         }
-        memset(envs[e].pvp.pfsp.wins, 0, sizeof(envs[e].pvp.pfsp.wins));
-        memset(envs[e].pvp.pfsp.episodes, 0, sizeof(envs[e].pvp.pfsp.episodes));
+        memset(envs[e].pvp.pvp_runtime.pfsp.wins, 0, sizeof(envs[e].pvp.pvp_runtime.pfsp.wins));
+        memset(envs[e].pvp.pvp_runtime.pfsp.episodes, 0, sizeof(envs[e].pvp.pvp_runtime.pfsp.episodes));
     }
 }

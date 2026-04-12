@@ -1,9 +1,9 @@
 /**
- * @fileoverview osrs_encounter.h — shared encounter interface and core game mechanics.
+ * @fileoverview osrs_encounter.h — shared encounter mechanics for the current ocean OSRS envs.
  *
- * this is the single source of truth for shared OSRS mechanics. all encounters
- * MUST use these abstractions instead of reimplementing their own. adding a
- * new encounter = one header file that calls into these shared systems.
+ * this header holds reusable mechanics that current encounters build on.
+ * encounter-specific policy should stay in the encounter header; shared helpers
+ * here should stay generic enough to be reused by future envs.
  *
  * SHARED SYSTEMS (in order of appearance in this file):
  *
@@ -11,7 +11,7 @@
  *     RenderEntity                     value struct for renderer (not Player*)
  *     render_entity_from_player()      copy Player fields to RenderEntity
  *     encounter_resolve_attack_target() match npc_slot to render entity index
- *     EncounterOverlay                 visual overlay (clouds, projectiles, boss)
+ *     EncounterOverlay                 visual overlay (hazards, projectiles, boss)
  *
  *   prayer:
  *     ENCOUNTER_PRAYER_*               canonical 5-value prayer action encoding
@@ -25,7 +25,7 @@
  *
  *   NPC pathfinding:
  *     encounter_npc_step_out_from_under()  shuffle NPC off player tile (OSRS overlap rule)
- *     encounter_npc_step_toward()      greedy 1-tile step (diagonal > x > y)
+ *     encounter_npc_step_toward()      greedy size-aware chase step (diagonal > x > y)
  *
  *   damage:
  *     encounter_damage_player()        apply damage to player (HP, clamp, splat, tracker)
@@ -88,22 +88,22 @@ typedef struct {
 /* visual overlay data: shared between encounter and renderer.
    encounter's render_post_tick populates this, renderer reads it. */
 #define ENCOUNTER_MAX_OVERLAY_TILES 16
-#define ENCOUNTER_MAX_OVERLAY_SNAKES 4
+#define ENCOUNTER_MAX_OVERLAY_ADDS 4
 #define ENCOUNTER_MAX_OVERLAY_PROJECTILES 8
 
 typedef struct {
-    /* venom clouds */
-    struct { int x, y, active; } clouds[ENCOUNTER_MAX_OVERLAY_TILES];
-    int cloud_count;
+    /* encounter-defined area hazards. current users write 3x3 poison clouds. */
+    struct { int x, y, active; } hazards[ENCOUNTER_MAX_OVERLAY_TILES];
+    int hazard_count;
 
     /* boss state */
     int boss_x, boss_y, boss_visible;
     int boss_form;  /* encounter-specific form/phase index */
     int boss_size;  /* NPC size in tiles (e.g. 5 for Zulrah) */
 
-    /* snakelings / adds */
-    struct { int x, y, active, is_magic; } snakelings[ENCOUNTER_MAX_OVERLAY_SNAKES];
-    int snakeling_count;
+    /* encounter adds or secondary mobs. variant is encounter-defined. */
+    struct { int x, y, active, variant; } adds[ENCOUNTER_MAX_OVERLAY_ADDS];
+    int add_count;
 
     /* visual projectiles: brief flash from source to target.
        encounters fire attacks instantly, but we show a 1-tick projectile
@@ -210,7 +210,7 @@ typedef struct {
     int attack_target_entity_idx;  /* render entity index of attack target, -1 = none */
 } RenderEntity;
 
-/** Fill a RenderEntity from a Player struct (PvP, Zulrah, snakelings). */
+/** Fill a RenderEntity from a Player struct. */
 static inline void render_entity_from_player(const Player* p, RenderEntity* out) {
     out->entity_type = p->entity_type;
     out->npc_def_id = p->npc_def_id;
@@ -433,8 +433,37 @@ static inline int encounter_move_toward_dest(
 }
 
 /* ======================================================================== */
-/* shared attack-target chase (auto-walk toward out-of-range NPC)            */
+/* shared attack-target chase (auto-walk toward out-of-range target)         */
 /* ======================================================================== */
+
+/* footprint helpers for player-vs-target chase and range checks. */
+static inline int encounter_entity_footprint_distance(
+    int ax, int ay, int a_size,
+    int bx, int by, int b_size
+) {
+    int ax1 = ax + a_size - 1;
+    int ay1 = ay + a_size - 1;
+    int bx1 = bx + b_size - 1;
+    int by1 = by + b_size - 1;
+
+    int dx = 0;
+    if (ax1 < bx) dx = bx - ax1;
+    else if (bx1 < ax) dx = ax - bx1;
+
+    int dy = 0;
+    if (ay1 < by) dy = by - ay1;
+    else if (by1 < ay) dy = ay - by1;
+
+    return dx > dy ? dx : dy;
+}
+
+static inline int encounter_entity_footprints_overlap(
+    int ax, int ay, int a_size,
+    int bx, int by, int b_size
+) {
+    return !(ax + a_size <= bx || bx + b_size <= ax ||
+             ay + a_size <= by || by + b_size <= ay);
+}
 
 /* check if player can attack: in range AND has LOS (if blockers present).
    returns 1 if ready to attack, 0 if blocked or out of range.
@@ -444,7 +473,8 @@ static inline int encounter_player_can_attack(
     int target_x, int target_y, int target_size, int attack_range,
     const LOSBlocker* los_blockers, int los_blocker_count
 ) {
-    int dist = encounter_dist_to_npc(player_x, player_y, target_x, target_y, target_size);
+    int dist = encounter_entity_footprint_distance(player_x, player_y, 1,
+                                                   target_x, target_y, target_size);
     if (dist < 1 || dist > attack_range) return 0;
     if (!los_blockers || los_blocker_count == 0) return 1;
     return npc_has_line_of_sight(los_blockers, los_blocker_count,
@@ -453,10 +483,7 @@ static inline int encounter_player_can_attack(
 }
 
 /* auto-walk toward attack target: handles out-of-range, blocked LOS, and under-NPC.
-   OSRS: player pathfinds toward NPC every tick until in weapon range AND has LOS.
-   when player is under the NPC (dist=0), scans for nearest walkable tile outside
-   the NPC footprint and pathfinds there.
-   ref: InfernoTrainer Player.ts determineDestination + attackIfPossible.
+   the caller owns the policy; this helper only computes the chase step.
    los_blockers/los_blocker_count: LOS blocking entities (pillars). NULL/0 = no LOS check.
    returns 1 if player moved (chasing), 0 if ready to attack or stuck. */
 static inline int encounter_chase_attack_target(
@@ -467,10 +494,10 @@ static inline int encounter_chase_attack_target(
     const LOSBlocker* los_blockers, int los_blocker_count,
     int arena_base_x, int arena_base_y, int arena_w, int arena_h
 ) {
-    int dist = encounter_dist_to_npc(p->x, p->y, target_x, target_y, target_size);
+    int dist = encounter_entity_footprint_distance(p->x, p->y, 1,
+                                                   target_x, target_y, target_size);
 
-    /* player under NPC (dist=0): walk to nearest tile outside NPC footprint.
-       ref: InfernoTrainer Player.ts:447-468 isUnderAggrodMob. */
+    /* player under NPC (dist=0): walk to nearest tile outside the target footprint. */
     if (dist == 0) {
         int max_r = (target_size + 1) / 2 + 1;
         int best_dsq = 9999, bx = -1, by = -1;
@@ -479,8 +506,9 @@ static inline int encounter_chase_attack_target(
                 if (dx == 0 && dy == 0) continue;
                 int nx = p->x + dx, ny = p->y + dy;
                 if (!is_walkable(ctx, nx, ny)) continue;
-                if (nx >= target_x && nx < target_x + target_size &&
-                    ny >= target_y && ny < target_y + target_size) continue;
+                if (encounter_entity_footprints_overlap(nx, ny, 1,
+                                                        target_x, target_y, target_size))
+                    continue;
                 int d = dx * dx + dy * dy;
                 if (d < best_dsq) { best_dsq = d; bx = nx; by = ny; }
             }
@@ -520,7 +548,8 @@ static inline int encounter_chase_attack_target(
        when out of range, path toward closest NPC tile (standard OSRS behavior).
        the per-step can_attack check (below) stops the player as soon as LOS + range. */
     int cx, cy;
-    int dist_now = encounter_dist_to_npc(p->x, p->y, target_x, target_y, target_size);
+    int dist_now = encounter_entity_footprint_distance(p->x, p->y, 1,
+                                                       target_x, target_y, target_size);
     if (dist_now > 0 && dist_now <= attack_range &&
         los_blockers && los_blocker_count > 0) {
         /* in range but no LOS — scan NPC-adjacent tiles that have ACTUAL LOS to
@@ -674,7 +703,7 @@ static inline int encounter_npc_y_edge_clear(
 }
 
 /** greedy NPC step toward target. tries diagonal first, then x-only, then y-only.
-    this is the standard OSRS NPC movement algorithm — 99.9% of NPCs use this.
+    this is the current generic NPC chase policy used by the ocean envs.
 
     for size>1 NPCs, validates movement by checking EDGE TILES the NPC sweeps
     through, not just the destination footprint. for diagonal moves, both the
@@ -690,8 +719,8 @@ static inline int encounter_npc_step_toward(
     int target_size, int attack_range,
     encounter_npc_blocked_fn is_blocked, void* ctx
 ) {
-    (void)target_size;  /* TODO: use for multi-tile target distance check */
-    int dist = encounter_dist_to_npc(tx, ty, *x, *y, npc_size);
+    int dist = encounter_entity_footprint_distance(*x, *y, npc_size,
+                                                   tx, ty, target_size);
     if (dist >= 1 && dist <= attack_range) return 0;
 
     int size = npc_size;
@@ -702,13 +731,11 @@ static inline int encounter_npc_step_toward(
     else if (ty < *y) dy = -1;
     if (dx == 0 && dy == 0) return 0;
 
-    /* corner safespot cancellation: if a diagonal step would place the NPC
-       on top of the target (player), cancel the Y component and take X-only.
-       this enables pillar corner safespotting in inferno.
-       ref: InfernoTrainer Mob.ts:143-146. */
+    /* corner safespot cancellation: if a diagonal step would overlap the target,
+       cancel the Y component and take X-only. */
     if (dx != 0 && dy != 0) {
         int nx = *x + dx, ny = *y + dy;
-        if (tx >= nx && tx < nx + size && ty >= ny && ty < ny + size) {
+        if (encounter_entity_footprints_overlap(nx, ny, size, tx, ty, target_size)) {
             dy = 0;
         }
     }
@@ -928,7 +955,7 @@ static inline void encounter_drain_prayer(
        ref: osrs-sdk PrayerController.ts:50-53, RuneLite PrayerPlugin.java:387. */
     int drain_resistance = 60 + prayer_bonus * 2;
     *drain_counter += drain_effect;
-    while (*drain_counter >= drain_resistance) {
+    while (*drain_counter > drain_resistance) {
         (*current_prayer)--;
         *drain_counter -= drain_resistance;
         if (*current_prayer <= 0) {

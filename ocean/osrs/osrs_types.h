@@ -1,9 +1,9 @@
 /**
- * @file osrs_types.h
- * @brief Core type definitions for OSRS environment (shared by all encounters)
+ * @fileoverview osrs_types.h — shared core types for the current ocean OSRS envs.
  *
- * Contains all enums, structs, and constants used throughout the simulation.
- * This is the base header - all other headers depend on this.
+ * Contains the enums, structs, and constants used by the current simulation
+ * layer. Not every field is meaningful for every encounter; treat this as a
+ * shared ABI, not universal game truth.
  */
 
 /* ============================================================================
@@ -12,8 +12,9 @@
  *
  * READ THIS BEFORE MODIFYING ANY COMBAT OR MOVEMENT CODE.
  *
- * OSRS runs on a 600ms tick cycle. ALL actions are queued and execute on the
- * NEXT tick, not immediately. This has major implications for how combat works.
+ * The current simulation models a 600ms tick cycle. actions are queued and
+ * execute on the NEXT tick, not immediately. encounter-specific ordering can
+ * still layer on top of that shared queue.
  *
  * ---------------------------------------------------------------------------
  * TICK TIMING OVERVIEW
@@ -58,7 +59,7 @@
  * dist=0 (from explicit movement). Explicit actions override implicit ones.
  *
  * ---------------------------------------------------------------------------
- * STEP UNDER STRATEGY (NH PVP)
+ * STEP UNDER STRATEGY (current NH/PvP model)
  * ---------------------------------------------------------------------------
  *
  * Common tactic when opponent is frozen:
@@ -169,16 +170,16 @@
 #define NUM_GEAR_SLOTS 11
 
 // ============================================================================
-// LOADOUT-BASED ACTION SPACE
+// CURRENT LOADOUT-BASED ACTION SPACE
 // ============================================================================
 // 8 action heads: one decision per head per tick. no click encoding.
-// the agent picks a loadout preset + independent decisions for attack/prayer/etc.
+// current ocean envs use a loadout preset plus separate combat/prayer/etc. heads.
 
 #define NUM_ACTION_HEADS 7
 
 // Action head indices
 #define HEAD_LOADOUT    0
-#define HEAD_COMBAT     1   // merged attack + movement (mutually exclusive per tick)
+#define HEAD_COMBAT     1   // current combined attack + movement head for loadout-backed envs
 #define HEAD_OVERHEAD   2
 #define HEAD_FOOD       3
 #define HEAD_POTION     4
@@ -446,9 +447,10 @@ typedef enum {
 // GEAR BONUS STRUCTS
 // ============================================================================
 
-/* PvP-era gear bonus struct. same data as EquipmentBonuses (osrs_combat.h)
-   but with different field naming convention (stab_attack vs attack_stab).
-   the adapter compute_slot_gear_bonuses() in osrs_pvp_gear.h bridges them. */
+/* Slot-based gear bonus struct used by the current ocean envs. same data as
+   EquipmentBonuses (osrs_combat.h) but with a different naming convention
+   (stab_attack vs attack_stab). the adapter compute_slot_gear_bonuses()
+   in osrs_pvp_gear.h bridges them. */
 typedef struct {
     int stab_attack;
     int slash_attack;
@@ -949,6 +951,27 @@ typedef struct {
     float style_bias[3];
 } OpponentState;
 
+typedef struct {
+    int is_pvp_arena;
+    int use_c_opponent;  /* 1 = generate opponent actions in C */
+    int use_c_opponent_p0;
+    int use_external_opponent_actions;  /* 1 = use external actions for player 1 */
+    int external_opponent_actions[NUM_ACTION_HEADS];
+    OpponentState opponent;
+    OpponentState opponent_p0;
+    PFSPState pfsp;
+    float gear_tier_weights[4];  /* 4 tiers, sum to 1.0 */
+} OsrsPvpRuntime;
+
+typedef struct {
+    float* agent_obs;               /* OCEAN_OBS_SIZE floats (normalized obs + mask) */
+    float* agent_obs_p1;            /* player 1 obs when self-play is enabled */
+    unsigned char* selfplay_mask;   /* 1 byte: 1 when this env is in self-play */
+    int* agent_actions;             /* NUM_ACTION_HEADS ints (agent 0 actions) */
+    float* agent_rewards;           /* 1 float (agent 0 reward) */
+    unsigned char* agent_terminals; /* 1 byte (agent 0 terminal) */
+} OsrsOceanBuffers;
+
 // Combined observation size: raw obs + action masks (for ocean mode)
 #define OCEAN_OBS_SIZE (SLOT_NUM_OBSERVATIONS + ACTION_MASK_SIZE)
 
@@ -977,7 +1000,6 @@ typedef struct {
     int pid_shuffle_countdown;  // ticks until next PID swap (100-150)
 
     int is_lms;
-    int is_pvp_arena;
 
     uint32_t rng_state;
     uint32_t rng_seed;
@@ -991,36 +1013,22 @@ typedef struct {
     // Reward shaping configuration (coefficients + annealing scale)
     RewardShapingConfig shaping;
 
-    // C-side opponent configuration
-    int use_c_opponent;  // 1 = generate opponent actions in C
-    int use_c_opponent_p0;
-    int use_external_opponent_actions;  // 1 = use external actions for player 1
-    int external_opponent_actions[NUM_ACTION_HEADS];
-    OpponentState opponent;
-    OpponentState opponent_p0;
-    PFSPState pfsp;  // PFSP dynamic opponent pool (used when opponent.type == OPP_PFSP)
+    // PvP-only runtime state. encounters that bypass the PvP stack can ignore this.
+    OsrsPvpRuntime pvp_runtime;
 
-    // Gear tier randomization weights (4 tiers, sum to 1.0)
-    float gear_tier_weights[4];
-
-    // Encounter dispatch (NULL = legacy pvp_step path for backwards compat).
-    // When set, c_step/c_reset dispatch through these instead of pvp_step/pvp_reset.
+    // Encounter dispatch (NULL = legacy step/reset path for backwards compat).
+    // When set, c_step/c_reset dispatch through these instead of the default path.
     const void* encounter_def;     /* EncounterDef* — void* to avoid include dependency */
     void* encounter_state;          /* EncounterState* — owned by this env */
 
     // Collision map (shared across envs, read-only after init). NULL = flat arena.
     void* collision_map;  /* CollisionMap* — void* to avoid forward-decl dependency */
 
-    // Raylib render client (NULL = headless). Initialized on first pvp_render() call.
+    // Raylib render client (NULL = headless). Initialized on first render call.
     void* client;
 
-    // PufferLib shared buffer pointers (single-agent, set by ocean binding)
-    float* ocean_obs;              // OCEAN_OBS_SIZE floats (normalized obs + mask)
-    float* ocean_obs_p1;           // OCEAN_OBS_SIZE floats for player 1 (self-play, NULL when disabled)
-    unsigned char* ocean_selfplay_mask;  // 1 byte: 1 if this env is in selfplay mode this episode
-    int* ocean_acts;               // NUM_ACTION_HEADS ints (agent 0 actions)
-    float* ocean_rew;              // 1 float (agent 0 reward)
-    unsigned char* ocean_term;     // 1 byte (agent 0 terminal)
+    // PufferLib / ocean-side agent buffers.
+    OsrsOceanBuffers ocean_io;
     float _episode_return;         // Running episode return accumulator
 
     // Internal 2-agent buffers for game logic
