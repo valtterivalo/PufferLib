@@ -264,6 +264,16 @@ void c_render(Env* env) {
         rc->npc_model_cache = model_cache_load("data/inferno.models");
         rc->npc_anim_cache = anim_cache_load("data/inferno.anims");
     }
+
+    /* eval pacing: sleep to match tick rate so rollouts don't blaze through.
+       use 9/0 keys to slow/speed while viewing. defaults to OSRS speed. */
+    RenderClient* rc = (RenderClient*)re->client;
+    if (rc && rc->ticks_per_second > 0.0f) {
+        double interval = 1.0 / rc->ticks_per_second;
+        double elapsed = GetTime() - rc->last_tick_time;
+        if (elapsed < interval) WaitTime(interval - elapsed);
+        rc->last_tick_time = GetTime();
+    }
 }
 
 #define MY_VEC_INIT

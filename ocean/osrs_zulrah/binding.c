@@ -136,6 +136,15 @@ void c_render(Env* env) {
         rc->npc_model_cache = model_cache_load("data/zulrah.models");
         rc->npc_anim_cache = anim_cache_load("data/zulrah.anims");
     }
+
+    /* eval pacing: sleep to match tick rate (9/0 keys slow/speed up) */
+    RenderClient* rc = (RenderClient*)re->client;
+    if (rc && rc->ticks_per_second > 0.0f) {
+        double interval = 1.0 / rc->ticks_per_second;
+        double elapsed = GetTime() - rc->last_tick_time;
+        if (elapsed < interval) WaitTime(interval - elapsed);
+        rc->last_tick_time = GetTime();
+    }
 }
 
 #include "vecenv.h"

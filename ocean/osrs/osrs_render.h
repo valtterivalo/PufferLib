@@ -1407,14 +1407,14 @@ static void render_handle_input(RenderClient* rc, OsrsEnv* env) {
                 rc->debug_plane_wx = -1;
                 rc->debug_plane_wy = -1;
                 if (best_wx >= 0) {
-                    /* ground click: only movement, skip entity check (hull handles that) */
+                    /* ground click while spell-targeting: walk AND cancel
+                       (matches OSRS — clicking ground doesn't just cancel) */
                     if (rc->human_input.cursor_mode == CURSOR_SPELL_TARGET) {
                         rc->human_input.cursor_mode = CURSOR_NORMAL;
-                    } else {
-                        rc->human_input.pending_move_x = best_wx;
-                        rc->human_input.pending_move_y = best_wy;
-                        human_set_click_cross(&rc->human_input, mx, my, 0);
                     }
+                    rc->human_input.pending_move_x = best_wx;
+                    rc->human_input.pending_move_y = best_wy;
+                    human_set_click_cross(&rc->human_input, mx, my, 0);
                 }
                 } /* end else (ground click) */
             } else {
