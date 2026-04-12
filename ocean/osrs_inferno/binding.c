@@ -10,9 +10,10 @@
 #include <string.h>
 #include <stdio.h>
 
-#include "osrs_encounter.h"
-#include "osrs_types.h"
+#include "osrs_env.h"  /* pulls in osrs_types, encounter, pvp stack */
 #include "encounters/encounter_inferno.h"
+#include "encounters/encounter_zulrah.h"  /* render.h references ZulrahState */
+#include "osrs_render.h"
 
 #define INF_TOTAL_OBS (INF_NUM_OBS + INF_ACTION_MASK_SIZE)
 
@@ -38,6 +39,8 @@ typedef struct {
     int episode_action_cap;  /* max ticks we can buffer */
     int episode_action_len;  /* ticks buffered so far this episode */
     uint32_t episode_rng_start; /* RNG state at start of current episode */
+
+    OsrsEnv render_env; /* minimal env wrapper for pvp_render() */
 } InfernoEnv;
 
 #define OBS_SIZE INF_TOTAL_OBS
@@ -232,7 +235,12 @@ void c_close(Env* env) {
     }
 }
 
-void c_render(Env* env) { (void)env; }
+void c_render(Env* env) {
+    OsrsEnv* re = &env->render_env;
+    re->encounter_def = (void*)&ENCOUNTER_INFERNO;
+    re->encounter_state = env->enc_state;
+    pvp_render(re);
+}
 
 #define MY_VEC_INIT
 #include "vecenv.h"

@@ -11,9 +11,10 @@
 #include <string.h>
 #include <stdio.h>
 
-#include "osrs_encounter.h"
-#include "osrs_types.h"
+#include "osrs_env.h"  /* pulls in osrs_types, encounter, pvp stack */
 #include "encounters/encounter_zulrah.h"
+#include "encounters/encounter_inferno.h"  /* render.h references InfernoState */
+#include "osrs_render.h"
 
 /* total obs = raw obs + action mask */
 #define ZUL_TOTAL_OBS (ZUL_NUM_OBS + ZUL_ACTION_MASK_SIZE)
@@ -35,6 +36,8 @@ typedef struct {
     /* staging buffer for action type conversion */
     int acts_staging[ZUL_NUM_ACTION_HEADS];
     unsigned char term_staging;
+
+    OsrsEnv render_env;
 } ZulrahEnv;
 
 #define OBS_SIZE ZUL_TOTAL_OBS
@@ -110,7 +113,12 @@ void c_close(Env* env) {
     }
 }
 
-void c_render(Env* env) { (void)env; }
+void c_render(Env* env) {
+    OsrsEnv* re = &env->render_env;
+    re->encounter_def = (void*)&ENCOUNTER_ZULRAH;
+    re->encounter_state = env->enc_state;
+    pvp_render(re);
+}
 
 #include "vecenv.h"
 
