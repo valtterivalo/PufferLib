@@ -186,12 +186,29 @@ echo "=== wilderness objects (skipped, 685MB+) ==="
 echo "  run manually: python scripts/export_objects.py --modern-cache \$CACHE --keys \$KEYS --output data/wilderness.objects --wilderness"
 
 # ============================================================================
+# item sprites (inventory icons) — uses Java + runelite-cache
+# ============================================================================
+
+# default item IDs: the loadout items used by inferno + zulrah + pvp.
+# add more here as needed. comma-separated.
+ITEM_IDS="11230,22461,22464,22467,22470,12625,12627,12629,12631"
+ITEM_IDS+=",4151,22325,26374,12926,27277,28254"  # weapons (whip/scythe/bp/tbow/scb)
+ITEM_IDS+=",10828,21018,13239,27235,27238,27229"  # gear (helm/body/legs/torva etc.)
+ITEM_IDS+=",6685,6687,6689,6691,3024,3026,3028,3030"  # brew + restore
+ITEM_IDS+=",385,3144,2434,139,141,143"  # food + prayer pot
+
+echo "=== item inventory sprites (needs Java + runelite-cache, auto-fetched) ==="
+if ! command -v javac >/dev/null 2>&1; then
+    echo "  skip: javac not found. install openjdk-11+ to export item sprites."
+else
+    if ! skip_if_exists "$DATA_DIR/sprites/items/11230.png"; then
+        "$SCRIPT_DIR/export_items.sh" "$CACHE" "$ITEM_IDS"
+    fi
+fi
+
+# ============================================================================
 # done
 # ============================================================================
 
 echo ""
 echo "done. assets exported to $DATA_DIR/"
-echo ""
-echo "note: item sprites (inventory icons) require the Java exporter:"
-echo "  javac -cp <runelite-cache-jar> scripts/ExportItemSprites.java"
-echo "  java -cp .:scripts:<runelite-cache-jar> ExportItemSprites <cache_dir> data/sprites/items/"
