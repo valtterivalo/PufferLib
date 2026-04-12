@@ -240,16 +240,8 @@ SPRITE_NAMES: dict[int, str] = {
     168: "tab_combat", 776: "tab_quests", 779: "tab_prayer",
     780: "tab_magic", 898: "tab_stats", 899: "tab_quests2",
     900: "tab_inventory", 901: "tab_equipment",
-    127: "pray_mage", 128: "pray_range", 129: "pray_melee",
-    130: "pray_redemption", 131: "pray_retribution", 132: "pray_smite",
-    504: "pray_eagle_eye", 505: "pray_mystic_might",
-    945: "pray_chivalry", 946: "pray_piety", 947: "pray_preserve",
-    1420: "pray_rigour", 1421: "pray_augury",
-    325: "spell_ice_rush", 326: "spell_ice_burst",
-    327: "spell_ice_blitz", 328: "spell_ice_barrage",
-    333: "spell_blood_rush", 334: "spell_blood_burst",
-    335: "spell_blood_blitz", 336: "spell_blood_barrage",
-    564: "spell_vengeance",
+    # prayer/spell icons are loaded BY NUMERIC ID in osrs_gui.h, so keep them
+    # as numeric filenames (no names here → fallback to str(sprite_id)).
     657: "special_attack",
     # interface chrome
     1031: "side_panel_bg",

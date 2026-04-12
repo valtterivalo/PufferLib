@@ -245,7 +245,25 @@ void c_render(Env* env) {
     OsrsEnv* re = &env->render_env;
     re->encounter_def = (void*)&ENCOUNTER_INFERNO;
     re->encounter_state = env->enc_state;
+
+    /* first pvp_render creates the RenderClient via lazy init. after that,
+       load encounter-specific terrain/objects/models (standalone viewer does
+       this in run_visual before the render loop). */
+    int first_call = (re->client == NULL);
     pvp_render(re);
+
+    if (first_call) {
+        RenderClient* rc = (RenderClient*)re->client;
+        rc->terrain = terrain_load("data/inferno.terrain");
+        rc->objects = objects_load("data/inferno.objects");
+        rc->objects_zuk = objects_load("data/inferno_zuk.objects");
+        /* inferno region (35,83) starts at world (2246, 5315) */
+        if (rc->terrain) terrain_offset(rc->terrain, 2246, 5315);
+        if (rc->objects) objects_offset(rc->objects, 2246, 5315);
+        if (rc->objects_zuk) objects_offset(rc->objects_zuk, 2246, 5315);
+        rc->npc_model_cache = model_cache_load("data/inferno.models");
+        rc->npc_anim_cache = anim_cache_load("data/inferno.anims");
+    }
 }
 
 #define MY_VEC_INIT

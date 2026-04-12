@@ -121,7 +121,21 @@ void c_render(Env* env) {
     OsrsEnv* re = &env->render_env;
     re->encounter_def = (void*)&ENCOUNTER_ZULRAH;
     re->encounter_state = env->enc_state;
+
+    int first_call = (re->client == NULL);
     pvp_render(re);
+
+    if (first_call) {
+        RenderClient* rc = (RenderClient*)re->client;
+        rc->terrain = terrain_load("data/zulrah.terrain");
+        rc->objects = objects_load("data/zulrah.objects");
+        /* zulrah regions (35,47)+(35,48) start at world (2240, 3008);
+           island platform at world ~(2256, 3061) → offset by (2256, 3061). */
+        if (rc->terrain) terrain_offset(rc->terrain, 2256, 3061);
+        if (rc->objects) objects_offset(rc->objects, 2256, 3061);
+        rc->npc_model_cache = model_cache_load("data/zulrah.models");
+        rc->npc_anim_cache = anim_cache_load("data/zulrah.anims");
+    }
 }
 
 #include "vecenv.h"
