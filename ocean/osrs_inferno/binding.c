@@ -46,6 +46,13 @@ typedef struct {
     int episode_action_len;  /* ticks buffered so far this episode */
     uint32_t episode_rng_start; /* RNG state at start of current episode */
 
+    /* replay playback: when PLAY_REPLAY=path is set, override the policy's
+       actions with the recorded ones. first env only (env 0). */
+    int* replay_actions;     /* full action buffer: num_ticks * NUM_ATNS */
+    int replay_num_ticks;
+    int replay_cursor;       /* ticks consumed so far */
+    uint32_t replay_rng_seed;
+
     OsrsEnv render_env; /* minimal env wrapper for pvp_render() */
 } InfernoEnv;
 
@@ -61,8 +68,16 @@ static int g_best_ticks = 999999;
 static int g_best_zuk_hp = 999999;  /* lowest Zuk HP seen (for Zuk-only training) */
 
 void c_step(Env* env) {
-    for (int i = 0; i < NUM_ATNS; i++)
-        env->acts_staging[i] = (int)env->actions[i];
+    /* replay playback: if this env has a loaded replay, override policy actions */
+    if (env->replay_actions && env->replay_cursor < env->replay_num_ticks) {
+        int off = env->replay_cursor * NUM_ATNS;
+        for (int i = 0; i < NUM_ATNS; i++)
+            env->acts_staging[i] = env->replay_actions[off + i];
+        env->replay_cursor++;
+    } else {
+        for (int i = 0; i < NUM_ATNS; i++)
+            env->acts_staging[i] = (int)env->actions[i];
+    }
 
     /* buffer actions for best-episode recording */
     if (env->episode_actions) {
@@ -221,7 +236,10 @@ void c_step(Env* env) {
 }
 
 void c_reset(Env* env) {
-    ENCOUNTER_INFERNO.reset(env->enc_state, 0);
+    /* if replaying, seed the encounter RNG to match the recording */
+    uint32_t seed = env->replay_actions ? env->replay_rng_seed : 0;
+    ENCOUNTER_INFERNO.reset(env->enc_state, seed);
+    env->replay_cursor = 0;
 
     float* obs = (float*)env->observations;
     ENCOUNTER_INFERNO.write_obs(env->enc_state, obs);
@@ -235,6 +253,8 @@ void c_reset(Env* env) {
 void c_close(Env* env) {
     free(env->episode_actions);
     env->episode_actions = NULL;
+    free(env->replay_actions);
+    env->replay_actions = NULL;
     if (env->enc_state) {
         ENCOUNTER_INFERNO.destroy(env->enc_state);
         env->enc_state = NULL;
@@ -303,6 +323,43 @@ void my_init(Env* env, Dict* kwargs) {
         env->episode_action_cap = 0;
     }
     env->episode_action_len = 0;
+
+    /* playback: first env (env 0) loads the replay if PLAY_REPLAY is set.
+       we use g_play_replay_loaded to ensure only one env loads it. */
+    env->replay_actions = NULL;
+    env->replay_num_ticks = 0;
+    env->replay_cursor = 0;
+    env->replay_rng_seed = 0;
+    static int g_play_replay_loaded = 0;
+    const char* play_path = getenv("PLAY_REPLAY");
+    if (play_path && play_path[0] && !g_play_replay_loaded) {
+        FILE* fp = fopen(play_path, "rb");
+        if (!fp) {
+            fprintf(stderr, "PLAY_REPLAY: cannot open %s\n", play_path);
+        } else {
+            int num_ticks = 0;
+            uint32_t rng_seed = 0;
+            if (fread(&num_ticks, sizeof(int), 1, fp) == 1 &&
+                fread(&rng_seed, sizeof(uint32_t), 1, fp) == 1 &&
+                num_ticks > 0 && num_ticks <= REPLAY_MAX_TICKS) {
+                int* buf = (int*)malloc(num_ticks * NUM_ATNS * sizeof(int));
+                if (fread(buf, sizeof(int), num_ticks * NUM_ATNS, fp) == (size_t)(num_ticks * NUM_ATNS)) {
+                    env->replay_actions = buf;
+                    env->replay_num_ticks = num_ticks;
+                    env->replay_rng_seed = rng_seed;
+                    g_play_replay_loaded = 1;
+                    fprintf(stderr, "PLAY_REPLAY: loaded %d ticks, rng=%u from %s\n",
+                            num_ticks, rng_seed, play_path);
+                    /* seed the encounter to match the recording */
+                    ENCOUNTER_INFERNO.reset(env->enc_state, rng_seed);
+                } else {
+                    free(buf);
+                    fprintf(stderr, "PLAY_REPLAY: short read from %s\n", play_path);
+                }
+            }
+            fclose(fp);
+        }
+    }
 }
 
 /* curriculum wave mixing: start some agents at later waves for late-game gradient signal.
