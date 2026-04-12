@@ -118,16 +118,15 @@ elif [ "$ENV" = "impulse_wars" ]; then
     LINK_ARCHIVES+=("./$BOX2D_NAME/libbox2d.a")
 elif [[ "$ENV" == osrs_* ]]; then
     SRC_DIR="ocean/$ENV"
-    INCLUDES+=(-I./src/osrs)
-    # download visual assets for standalone builds (training doesn't need them).
-    # standalone binary loads data/ relative to CWD, so extract at repo root.
-    if [ "$MODE" = "local" ] || [ "$MODE" = "fast" ] || [ "$MODE" = "web" ]; then
-        if [ ! -f "data/equipment.models" ]; then
-            echo "Downloading OSRS visual assets..."
-            OSRS_ASSETS_URL="https://github.com/valtterivalo/PufferLib/releases/download/osrs-assets-v1/osrs-assets.tar.gz"
-            mkdir -p data
-            curl -sL "$OSRS_ASSETS_URL" | tar xz -C data
-        fi
+    INCLUDES+=(-I./ocean/osrs)
+    # download visual assets to data/ at repo root (where the binary looks).
+    # eval via puffer renders through the same _C.so, so assets must be present
+    # for any osrs build, not just --local.
+    if [ ! -f "data/equipment.models" ]; then
+        echo "Downloading OSRS visual assets..."
+        OSRS_ASSETS_URL="https://github.com/valtterivalo/PufferLib/releases/download/osrs-assets-v1/osrs-assets.tar.gz"
+        mkdir -p data
+        curl -sL "$OSRS_ASSETS_URL" | tar xz -C data
     fi
 elif [ -d "ocean/$ENV" ]; then
     SRC_DIR="ocean/$ENV"
