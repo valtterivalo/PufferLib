@@ -199,7 +199,6 @@ void my_log(Log* log, Dict* out) {
 
 /* ========================================================================
  * PFSP: set/get opponent pool weights across all envs
- * Called from Python via pybind11 wrappers in metal_bindings.mm
  * ======================================================================== */
 
 void binding_set_pfsp_weights(StaticVec* vec, int* pool, int* cum_weights, int pool_size) {

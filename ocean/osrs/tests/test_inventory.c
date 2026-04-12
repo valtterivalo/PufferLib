@@ -3,8 +3,8 @@
  * @brief tests for osrs_inventory.h: 28-slot inventory + equipment management
  *
  * BUILD:
- *   cd pufferlib-metal
- *   cc -std=c11 -O0 -g -I. -o test_inventory \
+ *   cd PufferLib
+ *   cc -std=c11 -O0 -g -Isrc/osrs -o test_inventory \
  *       ocean/osrs/tests/test_inventory.c -lm
  *   ./test_inventory
  */
@@ -13,7 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "ocean/osrs/osrs_inventory.h"
+#include "osrs_inventory.h"
 
 /* ======================================================================== */
 /* test harness                                                              */

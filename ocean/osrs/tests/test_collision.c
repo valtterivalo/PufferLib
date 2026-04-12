@@ -5,7 +5,7 @@
  * Validates that collision flags block movement correctly, that the pathfinder
  * routes around obstacles, and that NULL collision map preserves flat arena behavior.
  *
- * Compile: cc -O2 -o test_collision test_collision.c -lm
+ * Compile: cd PufferLib && cc -O2 -Isrc/osrs -o test_collision ocean/osrs/tests/test_collision.c -lm
  * Run: ./test_collision
  */
 

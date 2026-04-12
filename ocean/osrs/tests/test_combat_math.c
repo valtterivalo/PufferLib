@@ -7,8 +7,8 @@
  * derived from the TypeScript reference (.refs/osrs-dps-calc/).
  *
  * BUILD:
- *   cd pufferlib-metal
- *   cc -std=c11 -O0 -g -I. -o test_combat_math \
+ *   cd PufferLib
+ *   cc -std=c11 -O0 -g -Isrc/osrs -o test_combat_math \
  *       ocean/osrs/tests/test_combat_math.c -lm
  *   ./test_combat_math
  *
@@ -25,8 +25,8 @@
 #include <math.h>
 #include <string.h>
 
-#include "ocean/osrs/osrs_encounter.h"
-#include "ocean/osrs/osrs_special_attacks.h"
+#include "osrs_encounter.h"
+#include "osrs_special_attacks.h"
 
 /* ======================================================================== */
 /* test harness                                                              */

@@ -3,8 +3,8 @@
  * @brief tests for osrs_interaction.h: entity interaction system + spec toggle
  *
  * BUILD:
- *   cd pufferlib-metal
- *   cc -std=c11 -O0 -g -I. -o test_interaction \
+ *   cd PufferLib
+ *   cc -std=c11 -O0 -g -Isrc/osrs -o test_interaction \
  *       ocean/osrs/tests/test_interaction.c -lm
  *   ./test_interaction
  */
@@ -12,7 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#include "ocean/osrs/osrs_interaction.h"
+#include "osrs_interaction.h"
 
 /* ======================================================================== */
 /* test harness                                                              */

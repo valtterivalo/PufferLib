@@ -6,8 +6,8 @@
  * cross-referenced against osrs-dps-calc reference and OSRS wiki formulas.
  *
  * BUILD:
- *   cd pufferlib-metal
- *   cc -std=c11 -O0 -g -I. -o test_item_effects \
+ *   cd PufferLib
+ *   cc -std=c11 -O0 -g -Isrc/osrs -o test_item_effects \
  *       ocean/osrs/tests/test_item_effects.c -lm
  *   ./test_item_effects
  *
@@ -24,7 +24,7 @@
 #include <math.h>
 #include <string.h>
 
-#include "ocean/osrs/osrs_encounter.h"
+#include "osrs_encounter.h"
 
 /* ======================================================================== */
 /* test harness (same macros as test_combat_math.c)                          */
