@@ -4359,6 +4359,12 @@ void pvp_render(OsrsEnv* env) {
         /* gui_draw needs full Player* for inventory/stats/prayers.
            render_get_player_ptr fetches from encounter vtable. */
         Player* gui_player = render_get_player_ptr(env, rc->gui.gui_entity_idx);
+        /* plumb spell-targeting state into GUI so the selected spell shows a
+           highlight border while awaiting enemy click */
+        rc->gui.pending_spell_highlight = -1;
+        if (rc->human_input.cursor_mode == CURSOR_SPELL_TARGET) {
+            rc->gui.pending_spell_highlight = rc->human_input.selected_spell_gui_idx;
+        }
         if (gui_player) gui_draw(&rc->gui, gui_player);
 
         /* boss/NPC info: top-left overlay (instead of below panel) */

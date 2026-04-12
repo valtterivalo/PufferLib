@@ -265,10 +265,12 @@ static void human_handle_spell_click(HumanInput* hi, GuiState* gs,
         /* ice spell — enter targeting mode */
         hi->cursor_mode = CURSOR_SPELL_TARGET;
         hi->selected_spell = ATTACK_ICE;
+        hi->selected_spell_gui_idx = (int)sidx;
     } else if (sidx >= GUI_SPELL_BLOOD_RUSH && sidx <= GUI_SPELL_BLOOD_BARRAGE) {
         /* blood spell — enter targeting mode */
         hi->cursor_mode = CURSOR_SPELL_TARGET;
         hi->selected_spell = ATTACK_BLOOD;
+        hi->selected_spell_gui_idx = (int)sidx;
     }
 }
 

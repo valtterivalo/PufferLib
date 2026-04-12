@@ -311,6 +311,10 @@ typedef struct {
     int inv_drag_start_y;
     int inv_drag_mouse_x;     /* current mouse position during drag */
     int inv_drag_mouse_y;
+
+    /* spell targeting: GuiSpellIdx of the spell awaiting an enemy click, or
+       -1 when not targeting. render code sets this before calling gui_draw. */
+    int pending_spell_highlight;
 } GuiState;
 
 /* ======================================================================== */
@@ -1717,15 +1721,18 @@ typedef struct {
     GuiSpellIdx idx;
 } GuiSpellEntry;
 
+/* real OSRS ancient book ordering within each row: Rush, Blitz, Burst, Barrage
+   (ascending level, widget IDs 79-82 for ice). we list blood first then ice
+   because that's the actual top-down order in the Ancient tab. */
 static const GuiSpellEntry GUI_SPELL_GRID[] = {
-    { "Ice Rush",      GUI_SPELL_ICE_RUSH },
-    { "Ice Burst",     GUI_SPELL_ICE_BURST },
-    { "Ice Blitz",     GUI_SPELL_ICE_BLITZ },
-    { "Ice Barrage",   GUI_SPELL_ICE_BARRAGE },
     { "Blood Rush",    GUI_SPELL_BLOOD_RUSH },
-    { "Blood Burst",   GUI_SPELL_BLOOD_BURST },
     { "Blood Blitz",   GUI_SPELL_BLOOD_BLITZ },
+    { "Blood Burst",   GUI_SPELL_BLOOD_BURST },
     { "Blood Barrage", GUI_SPELL_BLOOD_BARRAGE },
+    { "Ice Rush",      GUI_SPELL_ICE_RUSH },
+    { "Ice Blitz",     GUI_SPELL_ICE_BLITZ },
+    { "Ice Burst",     GUI_SPELL_ICE_BURST },
+    { "Ice Barrage",   GUI_SPELL_ICE_BARRAGE },
     { "Vengeance",     GUI_SPELL_VENGEANCE },
 };
 #define GUI_SPELL_GRID_COUNT 9
@@ -1748,8 +1755,12 @@ static void gui_draw_spellbook(GuiState* gs, Player* p) {
         int ix = gx + col * (icon_sz + gap);
         int iy = oy + row * (icon_sz + gap);
 
+        GuiSpellIdx sidx_here = GUI_SPELL_GRID[i].idx;
         /* active highlight for vengeance */
-        int active = (i == 8 && p->veng_active);
+        int active = (sidx_here == GUI_SPELL_VENGEANCE && p->veng_active);
+        /* spell-targeting mode: highlight the pending spell cell */
+        int targeting = (gs->pending_spell_highlight >= 0 &&
+                         (int)sidx_here == gs->pending_spell_highlight);
 
         /* slot_tile background */
         if (gs->slot_tile.id != 0) {
@@ -1760,6 +1771,10 @@ static void gui_draw_spellbook(GuiState* gs, Player* p) {
 
         if (active) {
             DrawRectangle(ix, iy, icon_sz, icon_sz, GUI_PRAYER_ON);
+        }
+        if (targeting) {
+            /* yellow 2px border around the targeted spell */
+            DrawRectangleLinesEx((Rectangle){(float)ix, (float)iy, (float)icon_sz, (float)icon_sz}, 2.0f, YELLOW);
         }
 
         /* draw spell sprite (scaled to cell) */
