@@ -12,9 +12,13 @@
 #include <stdio.h>
 
 #include "osrs_env.h"  /* pulls in osrs_types, encounter, pvp stack */
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
 #include "encounters/encounter_zulrah.h"
 #include "encounters/encounter_inferno.h"  /* render.h references InfernoState */
 #include "osrs_render.h"
+#pragma GCC diagnostic pop
 
 /* total obs = raw obs + action mask */
 #define ZUL_TOTAL_OBS (ZUL_NUM_OBS + ZUL_ACTION_MASK_SIZE)

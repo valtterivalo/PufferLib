@@ -11,9 +11,15 @@
 #include <stdio.h>
 
 #include "osrs_env.h"  /* pulls in osrs_types, encounter, pvp stack */
+
+/* encounter headers + render.h have many static helpers only used by the
+   standalone viewer (not c_render) — suppress unused-function noise. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
 #include "encounters/encounter_inferno.h"
 #include "encounters/encounter_zulrah.h"  /* render.h references ZulrahState */
 #include "osrs_render.h"
+#pragma GCC diagnostic pop
 
 #define INF_TOTAL_OBS (INF_NUM_OBS + INF_ACTION_MASK_SIZE)
 

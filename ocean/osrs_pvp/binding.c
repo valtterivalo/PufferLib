@@ -8,9 +8,13 @@
  */
 
 #include "osrs_env.h"
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
 #include "encounters/encounter_inferno.h"  /* render.h references InfernoState */
 #include "encounters/encounter_zulrah.h"   /* render.h references ZulrahState */
 #include "osrs_render.h"
+#pragma GCC diagnostic pop
 
 /* Wrapper struct: vecenv-compatible fields at top + embedded OsrsEnv.
  * vecenv.h's create_static_vec assigns to env->observations, env->actions,
