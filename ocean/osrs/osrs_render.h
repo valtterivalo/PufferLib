@@ -31,16 +31,19 @@
 /* ======================================================================== */
 
 #define RENDER_TILE_SIZE       20
-#define RENDER_PANEL_WIDTH     320
-#define RENDER_HEADER_HEIGHT   40
-#define RENDER_SPLATS_PER_PLAYER 4  /* OSRS max: 4 simultaneous splats per entity */
+/* window sized to match the OSRS fixed-client layout (765x503).
+   3D viewport projects into the area left of the side panel; the tile
+   grid is a game-logic unit only, decoupled from window pixels. */
+#define RENDER_WINDOW_W        765
+#define RENDER_WINDOW_H        503
+#define RENDER_PANEL_WIDTH     190   /* OSRS side panel width */
+#define RENDER_HEADER_HEIGHT   0     /* OSRS client has no top header strip */
+#define RENDER_SPLATS_PER_PLAYER 4   /* OSRS max: 4 simultaneous splats per entity */
 #define RENDER_HISTORY_SIZE    2000  /* max ticks of rewind history */
-#define MAX_RENDER_ENTITIES    64   /* max entities rendered (players + NPCs/bosses/adds) */
+#define MAX_RENDER_ENTITIES    64    /* max entities rendered (players + NPCs/bosses/adds) */
 
-#define RENDER_GRID_W (FIGHT_AREA_WIDTH * RENDER_TILE_SIZE)
-#define RENDER_GRID_H (FIGHT_AREA_HEIGHT * RENDER_TILE_SIZE)
-#define RENDER_WINDOW_W (RENDER_GRID_W + RENDER_PANEL_WIDTH)
-#define RENDER_WINDOW_H (RENDER_GRID_H + RENDER_HEADER_HEIGHT)
+#define RENDER_GRID_W (RENDER_WINDOW_W - RENDER_PANEL_WIDTH)  /* = 575, OSRS ≈ 512 */
+#define RENDER_GRID_H (RENDER_WINDOW_H - RENDER_HEADER_HEIGHT)  /* = 503, OSRS ≈ 334 */
 
 /* colors */
 #define COLOR_BG          CLITERAL(Color){ 20, 20, 25, 255 }

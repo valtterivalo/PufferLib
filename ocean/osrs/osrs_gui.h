@@ -152,6 +152,8 @@ typedef enum {
     INV_SLOT_RANGED_POT,    /* ranging potion (OSRS IDs 2444/169/171/173) */
     INV_SLOT_ANTIVENOM,     /* anti-venom+ (OSRS IDs 12913/12915/12917/12919) */
     INV_SLOT_PRAYER_POT,    /* prayer potion (OSRS IDs 2434/139/141/143 for 4/3/2/1 dose) */
+    INV_SLOT_BASTION_POT,   /* bastion potion (OSRS IDs 22461/22464/22467/22470) */
+    INV_SLOT_STAMINA_POT,   /* stamina potion (OSRS IDs 12625/12627/12629/12631) */
 } InvSlotType;
 
 /* OSRS item IDs for consumable sprites (4-dose shown by default) */
@@ -181,6 +183,14 @@ typedef enum {
 #define OSRS_ID_PRAYER_POT_3  139
 #define OSRS_ID_PRAYER_POT_2  141
 #define OSRS_ID_PRAYER_POT_1  143
+#define OSRS_ID_BASTION_4     22461
+#define OSRS_ID_BASTION_3     22464
+#define OSRS_ID_BASTION_2     22467
+#define OSRS_ID_BASTION_1     22470
+#define OSRS_ID_STAMINA_4     12625
+#define OSRS_ID_STAMINA_3     12627
+#define OSRS_ID_STAMINA_2     12629
+#define OSRS_ID_STAMINA_1     12631
 
 #define INV_GRID_SLOTS 28  /* 4 columns x 7 rows */
 
@@ -281,6 +291,8 @@ typedef struct {
     int inv_prev_prayer_pot_doses;
     int inv_prev_combat_doses;
     int inv_prev_ranged_doses;
+    int inv_prev_bastion_doses;
+    int inv_prev_stamina_doses;
     int inv_prev_antivenom_doses;
 
     /* human-clicked inventory slot: when a human clicks a consumable, this records
@@ -808,10 +820,11 @@ static int gui_content_y(GuiState* gs) {
    the 4-column grid (304px) fills the panel with 8px padding each side. */
 #define INV_COLS 4
 #define INV_ROWS 7
-#define INV_CELL_W 76
-#define INV_CELL_H 65
-#define INV_SPRITE_W 65   /* 36 * 76/42 */
-#define INV_SPRITE_H 57   /* 32 * 76/42 */
+/* OSRS native inventory cell pitch is ~42x36, sprite 36x32. */
+#define INV_CELL_W 42
+#define INV_CELL_H 36
+#define INV_SPRITE_W 36
+#define INV_SPRITE_H 32
 
 /** Get the OSRS item ID for a consumable based on remaining doses/count. */
 static int gui_consumable_osrs_id(InvSlotType type, int doses) {
@@ -848,6 +861,16 @@ static int gui_consumable_osrs_id(InvSlotType type, int doses) {
             if (doses == 3) return OSRS_ID_PRAYER_POT_3;
             if (doses == 2) return OSRS_ID_PRAYER_POT_2;
             return OSRS_ID_PRAYER_POT_1;
+        case INV_SLOT_BASTION_POT:
+            if (doses >= 4) return OSRS_ID_BASTION_4;
+            if (doses == 3) return OSRS_ID_BASTION_3;
+            if (doses == 2) return OSRS_ID_BASTION_2;
+            return OSRS_ID_BASTION_1;
+        case INV_SLOT_STAMINA_POT:
+            if (doses >= 4) return OSRS_ID_STAMINA_4;
+            if (doses == 3) return OSRS_ID_STAMINA_3;
+            if (doses == 2) return OSRS_ID_STAMINA_2;
+            return OSRS_ID_STAMINA_1;
         default: return 0;
     }
 }
@@ -962,6 +985,8 @@ static void gui_populate_inventory(GuiState* gs, Player* p) {
     ADD_POTION_VIALS(p->restore_doses, INV_SLOT_RESTORE);
     ADD_POTION_VIALS(p->combat_potion_doses, INV_SLOT_COMBAT_POT);
     ADD_POTION_VIALS(p->ranged_potion_doses, INV_SLOT_RANGED_POT);
+    ADD_POTION_VIALS(p->bastion_doses, INV_SLOT_BASTION_POT);
+    ADD_POTION_VIALS(p->stamina_doses, INV_SLOT_STAMINA_POT);
     ADD_POTION_VIALS(p->antivenom_doses, INV_SLOT_ANTIVENOM);
     ADD_POTION_VIALS(p->prayer_pot_doses, INV_SLOT_PRAYER_POT);
     #undef ADD_POTION_VIALS
@@ -1170,6 +1195,12 @@ static void gui_update_inventory(GuiState* gs, Player* p) {
     }
     if (p->ranged_potion_doses != gs->inv_prev_ranged_doses) {
         gui_inv_update_potion_doses(gs, INV_SLOT_RANGED_POT, p->ranged_potion_doses);
+    }
+    if (p->bastion_doses != gs->inv_prev_bastion_doses) {
+        gui_inv_update_potion_doses(gs, INV_SLOT_BASTION_POT, p->bastion_doses);
+    }
+    if (p->stamina_doses != gs->inv_prev_stamina_doses) {
+        gui_inv_update_potion_doses(gs, INV_SLOT_STAMINA_POT, p->stamina_doses);
     }
     if (p->antivenom_doses != gs->inv_prev_antivenom_doses) {
         gui_inv_update_potion_doses(gs, INV_SLOT_ANTIVENOM, p->antivenom_doses);
