@@ -119,14 +119,14 @@ elif [ "$ENV" = "impulse_wars" ]; then
 elif [[ "$ENV" == osrs_* ]]; then
     SRC_DIR="ocean/$ENV"
     INCLUDES+=(-I./src/osrs)
-    # download visual assets for standalone builds (training doesn't need them)
+    # download visual assets for standalone builds (training doesn't need them).
+    # standalone binary loads data/ relative to CWD, so extract at repo root.
     if [ "$MODE" = "local" ] || [ "$MODE" = "fast" ] || [ "$MODE" = "web" ]; then
-        OSRS_DATA="ocean/osrs/data"
-        if [ ! -f "$OSRS_DATA/equipment.models" ]; then
+        if [ ! -f "data/equipment.models" ]; then
             echo "Downloading OSRS visual assets..."
             OSRS_ASSETS_URL="https://github.com/valtterivalo/PufferLib/releases/download/osrs-assets-v1/osrs-assets.tar.gz"
-            mkdir -p "$OSRS_DATA"
-            curl -sL "$OSRS_ASSETS_URL" | tar xz -C "$OSRS_DATA"
+            mkdir -p data
+            curl -sL "$OSRS_ASSETS_URL" | tar xz -C data
         fi
     fi
 elif [ -d "ocean/$ENV" ]; then
