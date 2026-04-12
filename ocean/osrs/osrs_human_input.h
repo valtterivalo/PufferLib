@@ -192,7 +192,7 @@ static void human_handle_prayer_click(HumanInput* hi, GuiState* gs, Player* p,
     int cell_y = oy + row * (icon_sz + gap);
     if (mouse_x > cell_x + icon_sz || mouse_y > cell_y + icon_sz) return;
 
-    GuiPrayerIdx pidx = GUI_PRAYER_GRID[idx];
+    GuiPrayerIdx pidx = (GuiPrayerIdx)idx;
 
     /* map prayer to action — only actionable prayers */
     switch (pidx) {
@@ -258,16 +258,19 @@ static void human_handle_spell_click(HumanInput* hi, GuiState* gs,
 
     GuiSpellIdx sidx = GUI_SPELL_GRID[idx].idx;
 
+    /* only castable spells respond to clicks (Smoke/Shadow are greyed out) */
+    if (!gui_spell_castable(sidx)) return;
+
     if (sidx == GUI_SPELL_VENGEANCE) {
         /* vengeance is instant — no targeting needed */
         hi->pending_veng = 1;
-    } else if (sidx >= GUI_SPELL_ICE_RUSH && sidx <= GUI_SPELL_ICE_BARRAGE) {
-        /* ice spell — enter targeting mode */
+    } else if (sidx == GUI_SPELL_ICE_RUSH || sidx == GUI_SPELL_ICE_BURST ||
+               sidx == GUI_SPELL_ICE_BLITZ || sidx == GUI_SPELL_ICE_BARRAGE) {
         hi->cursor_mode = CURSOR_SPELL_TARGET;
         hi->selected_spell = ATTACK_ICE;
         hi->selected_spell_gui_idx = (int)sidx;
-    } else if (sidx >= GUI_SPELL_BLOOD_RUSH && sidx <= GUI_SPELL_BLOOD_BARRAGE) {
-        /* blood spell — enter targeting mode */
+    } else if (sidx == GUI_SPELL_BLOOD_RUSH || sidx == GUI_SPELL_BLOOD_BURST ||
+               sidx == GUI_SPELL_BLOOD_BLITZ || sidx == GUI_SPELL_BLOOD_BARRAGE) {
         hi->cursor_mode = CURSOR_SPELL_TARGET;
         hi->selected_spell = ATTACK_BLOOD;
         hi->selected_spell_gui_idx = (int)sidx;
