@@ -31,16 +31,19 @@
 /* ======================================================================== */
 
 #define RENDER_TILE_SIZE       20
-#define RENDER_PANEL_WIDTH     320
-#define RENDER_HEADER_HEIGHT   40
-#define RENDER_SPLATS_PER_PLAYER 4  /* OSRS max: 4 simultaneous splats per entity */
+/* window sized to match the OSRS fixed-client layout (765x503).
+   3D viewport projects into the area left of the side panel; the tile
+   grid is a game-logic unit only, decoupled from window pixels. */
+#define RENDER_WINDOW_W        765
+#define RENDER_WINDOW_H        503
+#define RENDER_PANEL_WIDTH     190   /* OSRS side panel width */
+#define RENDER_HEADER_HEIGHT   0     /* OSRS client has no top header strip */
+#define RENDER_SPLATS_PER_PLAYER 4   /* OSRS max: 4 simultaneous splats per entity */
 #define RENDER_HISTORY_SIZE    2000  /* max ticks of rewind history */
-#define MAX_RENDER_ENTITIES    64   /* max entities rendered (players + NPCs/bosses/adds) */
+#define MAX_RENDER_ENTITIES    64    /* max entities rendered (players + NPCs/bosses/adds) */
 
-#define RENDER_GRID_W (FIGHT_AREA_WIDTH * RENDER_TILE_SIZE)
-#define RENDER_GRID_H (FIGHT_AREA_HEIGHT * RENDER_TILE_SIZE)
-#define RENDER_WINDOW_W (RENDER_GRID_W + RENDER_PANEL_WIDTH)
-#define RENDER_WINDOW_H (RENDER_GRID_H + RENDER_HEADER_HEIGHT)
+#define RENDER_GRID_W (RENDER_WINDOW_W - RENDER_PANEL_WIDTH)  /* = 575, OSRS ≈ 512 */
+#define RENDER_GRID_H (RENDER_WINDOW_H - RENDER_HEADER_HEIGHT)  /* = 503, OSRS ≈ 334 */
 
 /* colors */
 #define COLOR_BG          CLITERAL(Color){ 20, 20, 25, 255 }
@@ -1205,10 +1208,10 @@ static void render_handle_input(RenderClient* rc, OsrsEnv* env) {
                 if (rc->cam_pitch < 0.1f) rc->cam_pitch = 0.1f;
                 if (rc->cam_pitch > 1.4f) rc->cam_pitch = 1.4f;
             } else {
-                /* pan */
+                /* pan: world drags with the mouse (grab-and-drag convention) */
                 float cs = cosf(rc->cam_yaw), sn = sinf(rc->cam_yaw);
-                rc->cam_target_x -= (delta.x * cs - delta.y * sn) * 0.05f;
-                rc->cam_target_z -= (delta.x * sn + delta.y * cs) * 0.05f;
+                rc->cam_target_x += (delta.x * cs - delta.y * sn) * 0.05f;
+                rc->cam_target_z += (delta.x * sn + delta.y * cs) * 0.05f;
             }
         }
         if (wheel != 0.0f) {
@@ -1407,14 +1410,14 @@ static void render_handle_input(RenderClient* rc, OsrsEnv* env) {
                 rc->debug_plane_wx = -1;
                 rc->debug_plane_wy = -1;
                 if (best_wx >= 0) {
-                    /* ground click: only movement, skip entity check (hull handles that) */
+                    /* ground click while spell-targeting: walk AND cancel
+                       (matches OSRS — clicking ground doesn't just cancel) */
                     if (rc->human_input.cursor_mode == CURSOR_SPELL_TARGET) {
                         rc->human_input.cursor_mode = CURSOR_NORMAL;
-                    } else {
-                        rc->human_input.pending_move_x = best_wx;
-                        rc->human_input.pending_move_y = best_wy;
-                        human_set_click_cross(&rc->human_input, mx, my, 0);
                     }
+                    rc->human_input.pending_move_x = best_wx;
+                    rc->human_input.pending_move_y = best_wy;
+                    human_set_click_cross(&rc->human_input, mx, my, 0);
                 }
                 } /* end else (ground click) */
             } else {
@@ -4356,6 +4359,12 @@ void pvp_render(OsrsEnv* env) {
         /* gui_draw needs full Player* for inventory/stats/prayers.
            render_get_player_ptr fetches from encounter vtable. */
         Player* gui_player = render_get_player_ptr(env, rc->gui.gui_entity_idx);
+        /* plumb spell-targeting state into GUI so the selected spell shows a
+           highlight border while awaiting enemy click */
+        rc->gui.pending_spell_highlight = -1;
+        if (rc->human_input.cursor_mode == CURSOR_SPELL_TARGET) {
+            rc->gui.pending_spell_highlight = rc->human_input.selected_spell_gui_idx;
+        }
         if (gui_player) gui_draw(&rc->gui, gui_player);
 
         /* boss/NPC info: top-left overlay (instead of below panel) */

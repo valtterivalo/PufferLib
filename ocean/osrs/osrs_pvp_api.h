@@ -320,15 +320,9 @@ void pvp_init(OsrsEnv* env) {
     memset(&env->log, 0, sizeof(env->log));
 }
 
-/**
- * Render stub (required by PufferLib ocean template).
- * When OSRS_VISUAL is defined, osrs_pvp_render.h provides the real implementation.
- */
-#ifndef OSRS_VISUAL
-void pvp_render(OsrsEnv* env) {
-    (void)env;
-}
-#endif
+/* pvp_render: forward declaration only.
+   binding.c provides the stub, or osrs_render.h provides the real impl. */
+void pvp_render(OsrsEnv* env);
 
 /**
  * Reset the environment to initial state.

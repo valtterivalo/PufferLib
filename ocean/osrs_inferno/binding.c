@@ -10,9 +10,16 @@
 #include <string.h>
 #include <stdio.h>
 
-#include "osrs_encounter.h"
-#include "osrs_types.h"
+#include "osrs_env.h"  /* pulls in osrs_types, encounter, pvp stack */
+
+/* encounter headers + render.h have many static helpers only used by the
+   standalone viewer (not c_render) — suppress unused-function noise. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
 #include "encounters/encounter_inferno.h"
+#include "encounters/encounter_zulrah.h"  /* render.h references ZulrahState */
+#include "osrs_render.h"
+#pragma GCC diagnostic pop
 
 #define INF_TOTAL_OBS (INF_NUM_OBS + INF_ACTION_MASK_SIZE)
 
@@ -38,13 +45,21 @@ typedef struct {
     int episode_action_cap;  /* max ticks we can buffer */
     int episode_action_len;  /* ticks buffered so far this episode */
     uint32_t episode_rng_start; /* RNG state at start of current episode */
+
+    /* replay playback: when PLAY_REPLAY=path is set, override the policy's
+       actions with the recorded ones. first env only (env 0). */
+    int* replay_actions;     /* full action buffer: num_ticks * NUM_ATNS */
+    int replay_num_ticks;
+    int replay_cursor;       /* ticks consumed so far */
+    uint32_t replay_rng_seed;
+
+    OsrsEnv render_env; /* minimal env wrapper for pvp_render() */
 } InfernoEnv;
 
 #define OBS_SIZE INF_TOTAL_OBS
 #define NUM_ATNS INF_NUM_ACTION_HEADS
 #define ACT_SIZES { ENCOUNTER_MOVE_ACTIONS, 5, INF_MAX_NPCS+1, 5, 2, 4, 3, 2 }
-#define OBS_TYPE FLOAT
-#define ACT_TYPE FLOAT
+#define OBS_TENSOR_T FloatTensor
 #define Env InfernoEnv
 
 /* global best episode tracking */
@@ -53,8 +68,16 @@ static int g_best_ticks = 999999;
 static int g_best_zuk_hp = 999999;  /* lowest Zuk HP seen (for Zuk-only training) */
 
 void c_step(Env* env) {
-    for (int i = 0; i < NUM_ATNS; i++)
-        env->acts_staging[i] = (int)env->actions[i];
+    /* replay playback: if this env has a loaded replay, override policy actions */
+    if (env->replay_actions && env->replay_cursor < env->replay_num_ticks) {
+        int off = env->replay_cursor * NUM_ATNS;
+        for (int i = 0; i < NUM_ATNS; i++)
+            env->acts_staging[i] = env->replay_actions[off + i];
+        env->replay_cursor++;
+    } else {
+        for (int i = 0; i < NUM_ATNS; i++)
+            env->acts_staging[i] = (int)env->actions[i];
+    }
 
     /* buffer actions for best-episode recording */
     if (env->episode_actions) {
@@ -213,7 +236,10 @@ void c_step(Env* env) {
 }
 
 void c_reset(Env* env) {
-    ENCOUNTER_INFERNO.reset(env->enc_state, 0);
+    /* if replaying, seed the encounter RNG to match the recording */
+    uint32_t seed = env->replay_actions ? env->replay_rng_seed : 0;
+    ENCOUNTER_INFERNO.reset(env->enc_state, seed);
+    env->replay_cursor = 0;
 
     float* obs = (float*)env->observations;
     ENCOUNTER_INFERNO.write_obs(env->enc_state, obs);
@@ -227,13 +253,48 @@ void c_reset(Env* env) {
 void c_close(Env* env) {
     free(env->episode_actions);
     env->episode_actions = NULL;
+    free(env->replay_actions);
+    env->replay_actions = NULL;
     if (env->enc_state) {
         ENCOUNTER_INFERNO.destroy(env->enc_state);
         env->enc_state = NULL;
     }
 }
 
-void c_render(Env* env) { (void)env; }
+void c_render(Env* env) {
+    OsrsEnv* re = &env->render_env;
+    re->encounter_def = (void*)&ENCOUNTER_INFERNO;
+    re->encounter_state = env->enc_state;
+
+    /* first pvp_render creates the RenderClient via lazy init. after that,
+       load encounter-specific terrain/objects/models (standalone viewer does
+       this in run_visual before the render loop). */
+    int first_call = (re->client == NULL);
+    pvp_render(re);
+
+    if (first_call) {
+        RenderClient* rc = (RenderClient*)re->client;
+        rc->terrain = terrain_load("data/inferno.terrain");
+        rc->objects = objects_load("data/inferno.objects");
+        rc->objects_zuk = objects_load("data/inferno_zuk.objects");
+        /* inferno region (35,83) starts at world (2246, 5315) */
+        if (rc->terrain) terrain_offset(rc->terrain, 2246, 5315);
+        if (rc->objects) objects_offset(rc->objects, 2246, 5315);
+        if (rc->objects_zuk) objects_offset(rc->objects_zuk, 2246, 5315);
+        rc->npc_model_cache = model_cache_load("data/inferno.models");
+        rc->npc_anim_cache = anim_cache_load("data/inferno.anims");
+    }
+
+    /* eval pacing: sleep to match tick rate so rollouts don't blaze through.
+       use 9/0 keys to slow/speed while viewing. defaults to OSRS speed. */
+    RenderClient* rc = (RenderClient*)re->client;
+    if (rc && rc->ticks_per_second > 0.0f) {
+        double interval = 1.0 / rc->ticks_per_second;
+        double elapsed = GetTime() - rc->last_tick_time;
+        if (elapsed < interval) WaitTime(interval - elapsed);
+        rc->last_tick_time = GetTime();
+    }
+}
 
 #define MY_VEC_INIT
 #include "vecenv.h"
@@ -262,6 +323,43 @@ void my_init(Env* env, Dict* kwargs) {
         env->episode_action_cap = 0;
     }
     env->episode_action_len = 0;
+
+    /* playback: first env (env 0) loads the replay if PLAY_REPLAY is set.
+       we use g_play_replay_loaded to ensure only one env loads it. */
+    env->replay_actions = NULL;
+    env->replay_num_ticks = 0;
+    env->replay_cursor = 0;
+    env->replay_rng_seed = 0;
+    static int g_play_replay_loaded = 0;
+    const char* play_path = getenv("PLAY_REPLAY");
+    if (play_path && play_path[0] && !g_play_replay_loaded) {
+        FILE* fp = fopen(play_path, "rb");
+        if (!fp) {
+            fprintf(stderr, "PLAY_REPLAY: cannot open %s\n", play_path);
+        } else {
+            int num_ticks = 0;
+            uint32_t rng_seed = 0;
+            if (fread(&num_ticks, sizeof(int), 1, fp) == 1 &&
+                fread(&rng_seed, sizeof(uint32_t), 1, fp) == 1 &&
+                num_ticks > 0 && num_ticks <= REPLAY_MAX_TICKS) {
+                int* buf = (int*)malloc(num_ticks * NUM_ATNS * sizeof(int));
+                if (fread(buf, sizeof(int), num_ticks * NUM_ATNS, fp) == (size_t)(num_ticks * NUM_ATNS)) {
+                    env->replay_actions = buf;
+                    env->replay_num_ticks = num_ticks;
+                    env->replay_rng_seed = rng_seed;
+                    g_play_replay_loaded = 1;
+                    fprintf(stderr, "PLAY_REPLAY: loaded %d ticks, rng=%u from %s\n",
+                            num_ticks, rng_seed, play_path);
+                    /* seed the encounter to match the recording */
+                    ENCOUNTER_INFERNO.reset(env->enc_state, rng_seed);
+                } else {
+                    free(buf);
+                    fprintf(stderr, "PLAY_REPLAY: short read from %s\n", play_path);
+                }
+            }
+            fclose(fp);
+        }
+    }
 }
 
 /* curriculum wave mixing: start some agents at later waves for late-game gradient signal.

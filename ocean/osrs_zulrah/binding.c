@@ -11,9 +11,14 @@
 #include <string.h>
 #include <stdio.h>
 
-#include "osrs_encounter.h"
-#include "osrs_types.h"
+#include "osrs_env.h"  /* pulls in osrs_types, encounter, pvp stack */
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
 #include "encounters/encounter_zulrah.h"
+#include "encounters/encounter_inferno.h"  /* render.h references InfernoState */
+#include "osrs_render.h"
+#pragma GCC diagnostic pop
 
 /* total obs = raw obs + action mask */
 #define ZUL_TOTAL_OBS (ZUL_NUM_OBS + ZUL_ACTION_MASK_SIZE)
@@ -35,13 +40,14 @@ typedef struct {
     /* staging buffer for action type conversion */
     int acts_staging[ZUL_NUM_ACTION_HEADS];
     unsigned char term_staging;
+
+    OsrsEnv render_env;
 } ZulrahEnv;
 
 #define OBS_SIZE ZUL_TOTAL_OBS
 #define NUM_ATNS ZUL_NUM_ACTION_HEADS
 #define ACT_SIZES {ZUL_MOVE_DIM, ZUL_ATTACK_DIM, ZUL_PRAYER_DIM, ZUL_FOOD_DIM, ZUL_POTION_DIM, ZUL_SPEC_DIM}
-#define OBS_TYPE FLOAT
-#define ACT_TYPE FLOAT
+#define OBS_TENSOR_T FloatTensor
 #define Env ZulrahEnv
 
 /* c_step/c_reset/c_close/c_render must be defined BEFORE including vecenv.h */
@@ -111,7 +117,35 @@ void c_close(Env* env) {
     }
 }
 
-void c_render(Env* env) { (void)env; }
+void c_render(Env* env) {
+    OsrsEnv* re = &env->render_env;
+    re->encounter_def = (void*)&ENCOUNTER_ZULRAH;
+    re->encounter_state = env->enc_state;
+
+    int first_call = (re->client == NULL);
+    pvp_render(re);
+
+    if (first_call) {
+        RenderClient* rc = (RenderClient*)re->client;
+        rc->terrain = terrain_load("data/zulrah.terrain");
+        rc->objects = objects_load("data/zulrah.objects");
+        /* zulrah regions (35,47)+(35,48) start at world (2240, 3008);
+           island platform at world ~(2256, 3061) → offset by (2256, 3061). */
+        if (rc->terrain) terrain_offset(rc->terrain, 2256, 3061);
+        if (rc->objects) objects_offset(rc->objects, 2256, 3061);
+        rc->npc_model_cache = model_cache_load("data/zulrah.models");
+        rc->npc_anim_cache = anim_cache_load("data/zulrah.anims");
+    }
+
+    /* eval pacing: sleep to match tick rate (9/0 keys slow/speed up) */
+    RenderClient* rc = (RenderClient*)re->client;
+    if (rc && rc->ticks_per_second > 0.0f) {
+        double interval = 1.0 / rc->ticks_per_second;
+        double elapsed = GetTime() - rc->last_tick_time;
+        if (elapsed < interval) WaitTime(interval - elapsed);
+        rc->last_tick_time = GetTime();
+    }
+}
 
 #include "vecenv.h"
 

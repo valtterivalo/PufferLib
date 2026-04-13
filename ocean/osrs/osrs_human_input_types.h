@@ -32,6 +32,7 @@ typedef struct HumanInput {
 
     CursorMode cursor_mode;
     int selected_spell;                    /* ATTACK_ICE or ATTACK_BLOOD for targeting */
+    int selected_spell_gui_idx;            /* GuiSpellIdx of the exact spell cell clicked, for UI highlight. -1 = none */
 
     /* visual feedback: click cross at screen-space position (like real OSRS client) */
     int click_screen_x, click_screen_y;    /* screen pixel where click occurred */

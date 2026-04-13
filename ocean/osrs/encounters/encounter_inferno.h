@@ -800,6 +800,15 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
         tank_extra[GEAR_SLOT_BODY] = INF_TANK_BODY;
         tank_extra[GEAR_SLOT_LEGS] = INF_TANK_LEGS;
         encounter_populate_inventory(&s->player, INF_LOADOUTS, INF_NUM_WEAPON_SETS, tank_extra);
+
+        /* Ammo slot items (dragon darts, dragon arrows) should NOT appear as
+           swappable inventory items — in real OSRS darts live inside the
+           blowpipe and arrows inside dizana's quiver. Clear them here; the
+           equipment panel still shows the correct ammo for the active weapon. */
+        for (int i = 0; i < MAX_ITEMS_PER_SLOT; i++) {
+            s->player.inventory[GEAR_SLOT_AMMO][i] = ITEM_NONE;
+        }
+        s->player.num_items_in_slot[GEAR_SLOT_AMMO] = 0;
     }
     s->player.brew_doses = 32;     /* 8 pots x 4 doses */
     s->player.restore_doses = 40;  /* 10 pots x 4 doses */

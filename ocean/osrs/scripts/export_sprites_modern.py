@@ -199,12 +199,16 @@ SPRITE_IDS: dict[str, list[int]] = {
     ],
     # tab icons (combat, stats, quests, inventory, equipment, prayer, magic)
     "tab": [168, 776, 779, 780, 898, 899, 900, 901],
-    # ancient spell icons (enabled + disabled)
+    # ancient spell icons (enabled + disabled) — full book (smoke/shadow/blood/ice)
     "spell_ancient": [
         325, 326, 327, 328,  # ice rush/burst/blitz/barrage
+        329, 330, 331, 332,  # smoke rush/burst/blitz/barrage
         333, 334, 335, 336,  # blood rush/burst/blitz/barrage
+        337, 338, 339, 340,  # shadow rush/burst/blitz/barrage
         375, 376, 377, 378,  # ice disabled
+        379, 380, 381, 382,  # smoke disabled
         383, 384, 385, 386,  # blood disabled
+        387, 388, 389, 390,  # shadow disabled
     ],
     # lunar spell icons
     "spell_lunar": [557, 561, 564, 607, 611, 614],
@@ -240,16 +244,8 @@ SPRITE_NAMES: dict[int, str] = {
     168: "tab_combat", 776: "tab_quests", 779: "tab_prayer",
     780: "tab_magic", 898: "tab_stats", 899: "tab_quests2",
     900: "tab_inventory", 901: "tab_equipment",
-    127: "pray_mage", 128: "pray_range", 129: "pray_melee",
-    130: "pray_redemption", 131: "pray_retribution", 132: "pray_smite",
-    504: "pray_eagle_eye", 505: "pray_mystic_might",
-    945: "pray_chivalry", 946: "pray_piety", 947: "pray_preserve",
-    1420: "pray_rigour", 1421: "pray_augury",
-    325: "spell_ice_rush", 326: "spell_ice_burst",
-    327: "spell_ice_blitz", 328: "spell_ice_barrage",
-    333: "spell_blood_rush", 334: "spell_blood_burst",
-    335: "spell_blood_blitz", 336: "spell_blood_barrage",
-    564: "spell_vengeance",
+    # prayer/spell icons are loaded BY NUMERIC ID in osrs_gui.h, so keep them
+    # as numeric filenames (no names here → fallback to str(sprite_id)).
     657: "special_attack",
     # interface chrome
     1031: "side_panel_bg",

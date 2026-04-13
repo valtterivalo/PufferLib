@@ -85,52 +85,72 @@ typedef enum {
 /* prayer icon indices                                                       */
 /* ======================================================================== */
 
-/* prayer icons relevant to PvP/PvE. indices into gui prayer sprite arrays.
-   ordered to match the real OSRS prayer book (5 cols, top-to-bottom). */
+/* prayer icons — authoritative 29-entry standard book.
+   enum order IS display order (left→right, top→bottom) in the 5×6 grid.
+   sprite IDs match the real OSRS SpriteID.Prayeron / Prayeroff mapping. */
 typedef enum {
-    GUI_PRAY_THICK_SKIN = 0,      /* sprite 115 / 135 */
-    GUI_PRAY_BURST_STR,           /* 116 / 136 */
-    GUI_PRAY_CLARITY,             /* 117 / 137 */
-    GUI_PRAY_SHARP_EYE,           /* 118 / 138 */
-    GUI_PRAY_MYSTIC_WILL,         /* 119 / 139 */
-    GUI_PRAY_ROCK_SKIN,           /* 120 / 140 */
-    GUI_PRAY_SUPERHUMAN,          /* 121 / 141 */
-    GUI_PRAY_IMPROVED_REFLEX,     /* 122 / 142 */
-    GUI_PRAY_RAPID_RESTORE,       /* 123 / 143 */
-    GUI_PRAY_RAPID_HEAL,          /* 124 / 144 */
-    GUI_PRAY_PROTECT_ITEM,        /* 125 / 145 */
-    GUI_PRAY_HAWK_EYE,            /* 126 / 146 — actually sprite 502/506 */
-    GUI_PRAY_PROTECT_MAGIC,       /* 127 / 147 */
-    GUI_PRAY_PROTECT_MISSILES,    /* 128 / 148 */
-    GUI_PRAY_PROTECT_MELEE,       /* 129 / 149 */
-    GUI_PRAY_REDEMPTION,          /* 130 / 150 */
-    GUI_PRAY_RETRIBUTION,         /* 131 / 151 */
-    GUI_PRAY_SMITE,               /* 132 / 152 */
-    GUI_PRAY_CHIVALRY,            /* 133 / 153 — actually sprite 945/949 */
-    GUI_PRAY_PIETY,               /* 134 / 154 — actually sprite 946/950 */
-    /* additional prayers with non-contiguous sprite IDs */
-    GUI_PRAY_EAGLE_EYE,           /* sprite 504 / 508 */
-    GUI_PRAY_MYSTIC_MIGHT,        /* sprite 505 / 509 */
-    GUI_PRAY_PRESERVE,            /* sprite 947 / 951 */
-    GUI_PRAY_RIGOUR,              /* sprite 1420 / 1424 */
-    GUI_PRAY_AUGURY,              /* sprite 1421 / 1425 */
-    GUI_NUM_PRAYERS
+    GUI_PRAY_THICK_SKIN = 0,      /* row 0: sprite 115 / 135 */
+    GUI_PRAY_BURST_STR,           /*        sprite 116 / 136 */
+    GUI_PRAY_CLARITY,             /*        sprite 117 / 137 */
+    GUI_PRAY_SHARP_EYE,           /*        sprite 133 / 153 */
+    GUI_PRAY_MYSTIC_WILL,         /*        sprite 134 / 154 */
+    GUI_PRAY_ROCK_SKIN,           /* row 1: sprite 118 / 138 */
+    GUI_PRAY_SUPERHUMAN,          /*        sprite 119 / 139 */
+    GUI_PRAY_IMPROVED_REFLEX,     /*        sprite 120 / 140 */
+    GUI_PRAY_RAPID_RESTORE,       /*        sprite 121 / 141 */
+    GUI_PRAY_RAPID_HEAL,          /*        sprite 122 / 142 */
+    GUI_PRAY_PROTECT_ITEM,        /* row 2: sprite 123 / 143 */
+    GUI_PRAY_HAWK_EYE,            /*        sprite 502 / 506 */
+    GUI_PRAY_MYSTIC_LORE,         /*        sprite 503 / 507 */
+    GUI_PRAY_STEEL_SKIN,          /*        sprite 124 / 144 */
+    GUI_PRAY_ULTIMATE_STR,        /*        sprite 125 / 145 */
+    GUI_PRAY_INCREDIBLE_REFLEX,   /* row 3: sprite 126 / 146 */
+    GUI_PRAY_PROTECT_MAGIC,       /*        sprite 127 / 147 */
+    GUI_PRAY_PROTECT_MISSILES,    /*        sprite 128 / 148 */
+    GUI_PRAY_PROTECT_MELEE,       /*        sprite 129 / 149 */
+    GUI_PRAY_EAGLE_EYE,           /*        sprite 504 / 508 */
+    GUI_PRAY_MYSTIC_MIGHT,        /* row 4: sprite 505 / 509 */
+    GUI_PRAY_RETRIBUTION,         /*        sprite 131 / 151 */
+    GUI_PRAY_REDEMPTION,          /*        sprite 130 / 150 */
+    GUI_PRAY_SMITE,               /*        sprite 132 / 152 */
+    GUI_PRAY_PRESERVE,            /*        sprite 947 / 951 */
+    GUI_PRAY_CHIVALRY,            /* row 5: sprite 945 / 949 */
+    GUI_PRAY_PIETY,               /*        sprite 946 / 950 */
+    GUI_PRAY_RIGOUR,              /*        sprite 1420 / 1424 */
+    GUI_PRAY_AUGURY,              /*        sprite 1421 / 1425 */
+    GUI_NUM_PRAYERS               /* = 29 */
 } GuiPrayerIdx;
 
 /* ======================================================================== */
 /* spell icon indices                                                        */
 /* ======================================================================== */
 
+/* Ancient spellbook sorted by level (Smoke→Shadow→Blood→Ice per row,
+   Rush→Burst→Blitz→Barrage per family). Only Ice/Blood/Vengeance are
+   castable in this env; Smoke/Shadow render greyed-out for authenticity. */
 typedef enum {
-    GUI_SPELL_ICE_RUSH = 0,       /* sprite 325 / 375 */
-    GUI_SPELL_ICE_BURST,          /* 326 / 376 */
-    GUI_SPELL_ICE_BLITZ,          /* 327 / 377 */
-    GUI_SPELL_ICE_BARRAGE,        /* 328 / 378 */
-    GUI_SPELL_BLOOD_RUSH,         /* 333 / 383 */
-    GUI_SPELL_BLOOD_BURST,        /* 334 / 384 */
-    GUI_SPELL_BLOOD_BLITZ,        /* 335 / 385 */
-    GUI_SPELL_BLOOD_BARRAGE,      /* 336 / 386 */
-    GUI_SPELL_VENGEANCE,          /* 564 */
+    /* row 0: Rush spells (level 50/52/56/58) */
+    GUI_SPELL_SMOKE_RUSH = 0,     /* sprite 329 / 379 */
+    GUI_SPELL_SHADOW_RUSH,        /* sprite 337 / 387 */
+    GUI_SPELL_BLOOD_RUSH,         /* sprite 333 / 383 */
+    GUI_SPELL_ICE_RUSH,           /* sprite 325 / 375 */
+    /* row 1: Burst spells (62/64/68/70) */
+    GUI_SPELL_SMOKE_BURST,        /* sprite 330 / 380 */
+    GUI_SPELL_SHADOW_BURST,       /* sprite 338 / 388 */
+    GUI_SPELL_BLOOD_BURST,        /* sprite 334 / 384 */
+    GUI_SPELL_ICE_BURST,          /* sprite 326 / 376 */
+    /* row 2: Blitz spells (74/76/80/82) */
+    GUI_SPELL_SMOKE_BLITZ,        /* sprite 331 / 381 */
+    GUI_SPELL_SHADOW_BLITZ,       /* sprite 339 / 389 */
+    GUI_SPELL_BLOOD_BLITZ,        /* sprite 335 / 385 */
+    GUI_SPELL_ICE_BLITZ,          /* sprite 327 / 377 */
+    /* row 3: Barrage spells (86/88/92/94) */
+    GUI_SPELL_SMOKE_BARRAGE,      /* sprite 332 / 382 */
+    GUI_SPELL_SHADOW_BARRAGE,     /* sprite 340 / 390 */
+    GUI_SPELL_BLOOD_BARRAGE,      /* sprite 336 / 386 */
+    GUI_SPELL_ICE_BARRAGE,        /* sprite 328 / 378 */
+    /* lunar spell(s) we use */
+    GUI_SPELL_VENGEANCE,          /* sprite 564 */
     GUI_NUM_SPELLS
 } GuiSpellIdx;
 
@@ -152,6 +172,8 @@ typedef enum {
     INV_SLOT_RANGED_POT,    /* ranging potion (OSRS IDs 2444/169/171/173) */
     INV_SLOT_ANTIVENOM,     /* anti-venom+ (OSRS IDs 12913/12915/12917/12919) */
     INV_SLOT_PRAYER_POT,    /* prayer potion (OSRS IDs 2434/139/141/143 for 4/3/2/1 dose) */
+    INV_SLOT_BASTION_POT,   /* bastion potion (OSRS IDs 22461/22464/22467/22470) */
+    INV_SLOT_STAMINA_POT,   /* stamina potion (OSRS IDs 12625/12627/12629/12631) */
 } InvSlotType;
 
 /* OSRS item IDs for consumable sprites (4-dose shown by default) */
@@ -181,6 +203,14 @@ typedef enum {
 #define OSRS_ID_PRAYER_POT_3  139
 #define OSRS_ID_PRAYER_POT_2  141
 #define OSRS_ID_PRAYER_POT_1  143
+#define OSRS_ID_BASTION_4     22461
+#define OSRS_ID_BASTION_3     22464
+#define OSRS_ID_BASTION_2     22467
+#define OSRS_ID_BASTION_1     22470
+#define OSRS_ID_STAMINA_4     12625
+#define OSRS_ID_STAMINA_3     12627
+#define OSRS_ID_STAMINA_2     12629
+#define OSRS_ID_STAMINA_1     12631
 
 #define INV_GRID_SLOTS 28  /* 4 columns x 7 rows */
 
@@ -281,6 +311,8 @@ typedef struct {
     int inv_prev_prayer_pot_doses;
     int inv_prev_combat_doses;
     int inv_prev_ranged_doses;
+    int inv_prev_bastion_doses;
+    int inv_prev_stamina_doses;
     int inv_prev_antivenom_doses;
 
     /* human-clicked inventory slot: when a human clicks a consumable, this records
@@ -299,6 +331,10 @@ typedef struct {
     int inv_drag_start_y;
     int inv_drag_mouse_x;     /* current mouse position during drag */
     int inv_drag_mouse_y;
+
+    /* spell targeting: GuiSpellIdx of the spell awaiting an enemy click, or
+       -1 when not targeting. render code sets this before calling gui_draw. */
+    int pending_spell_highlight;
 } GuiState;
 
 /* ======================================================================== */
@@ -370,18 +406,22 @@ static void gui_load_sprites(GuiState* gs) {
         gs->skill_icons_loaded &= gui_try_load(&gs->skill_icons[i], skill_icon_files[i]);
     }
 
-    /* prayer icons: enabled (base sprite) and disabled (+20 for base range).
-       base prayers 115-134 (enabled), 135-154 (disabled).
-       then non-contiguous: 502-509, 945-951, 1420-1425. */
-    static const int pray_on_ids[] = {
-        115, 116, 117, 118, 119, 120, 121, 122, 123, 124,
-        125, 126, 127, 128, 129, 130, 131, 132, 133, 134,
-        504, 505, 947, 1420, 1421,
+    /* prayer icons: indexed by GuiPrayerIdx, sprite IDs match real OSRS. */
+    static const int pray_on_ids[GUI_NUM_PRAYERS] = {
+        115, 116, 117, 133, 134,   /* row 0: ThickSkin, Burst, Clarity, SharpEye, MysticWill */
+        118, 119, 120, 121, 122,   /* row 1: RockSkin, Superhuman, ImprovedReflex, RapidRestore, RapidHeal */
+        123, 502, 503, 124, 125,   /* row 2: ProtectItem, HawkEye, MysticLore, SteelSkin, UltimateStr */
+        126, 127, 128, 129, 504,   /* row 3: IncredibleReflex, ProtMagic, ProtMissiles, ProtMelee, EagleEye */
+        505, 131, 130, 132, 947,   /* row 4: MysticMight, Retribution, Redemption, Smite, Preserve */
+        945, 946, 1420, 1421,      /* row 5: Chivalry, Piety, Rigour, Augury (1 empty cell) */
     };
-    static const int pray_off_ids[] = {
-        135, 136, 137, 138, 139, 140, 141, 142, 143, 144,
-        145, 146, 147, 148, 149, 150, 151, 152, 153, 154,
-        508, 509, 951, 1424, 1425,
+    static const int pray_off_ids[GUI_NUM_PRAYERS] = {
+        135, 136, 137, 153, 154,
+        138, 139, 140, 141, 142,
+        143, 506, 507, 144, 145,
+        146, 147, 148, 149, 508,
+        509, 151, 150, 152, 951,
+        949, 950, 1424, 1425,
     };
     for (int i = 0; i < GUI_NUM_PRAYERS; i++) {
         const char* on_path = TextFormat("data/sprites/gui/%d.png", pray_on_ids[i]);
@@ -390,12 +430,20 @@ static void gui_load_sprites(GuiState* gs) {
         gui_try_load(&gs->prayer_off[i], off_path);
     }
 
-    /* spell icons */
-    static const int spell_on_ids[] = {
-        325, 326, 327, 328, 333, 334, 335, 336, 564,
+    /* spell icons — indexed by GuiSpellIdx. full ancient book + vengeance. */
+    static const int spell_on_ids[GUI_NUM_SPELLS] = {
+        329, 337, 333, 325,   /* Rush:    Smoke, Shadow, Blood, Ice */
+        330, 338, 334, 326,   /* Burst:   Smoke, Shadow, Blood, Ice */
+        331, 339, 335, 327,   /* Blitz:   Smoke, Shadow, Blood, Ice */
+        332, 340, 336, 328,   /* Barrage: Smoke, Shadow, Blood, Ice */
+        564,                  /* Vengeance */
     };
-    static const int spell_off_ids[] = {
-        375, 376, 377, 378, 383, 384, 385, 386, 614,
+    static const int spell_off_ids[GUI_NUM_SPELLS] = {
+        379, 387, 383, 375,
+        380, 388, 384, 376,
+        381, 389, 385, 377,
+        382, 390, 386, 378,
+        614,
     };
     for (int i = 0; i < GUI_NUM_SPELLS; i++) {
         const char* on_path = TextFormat("data/sprites/gui/%d.png", spell_on_ids[i]);
@@ -808,10 +856,11 @@ static int gui_content_y(GuiState* gs) {
    the 4-column grid (304px) fills the panel with 8px padding each side. */
 #define INV_COLS 4
 #define INV_ROWS 7
-#define INV_CELL_W 76
-#define INV_CELL_H 65
-#define INV_SPRITE_W 65   /* 36 * 76/42 */
-#define INV_SPRITE_H 57   /* 32 * 76/42 */
+/* OSRS native inventory cell pitch is ~42x36, sprite 36x32. */
+#define INV_CELL_W 42
+#define INV_CELL_H 36
+#define INV_SPRITE_W 36
+#define INV_SPRITE_H 32
 
 /** Get the OSRS item ID for a consumable based on remaining doses/count. */
 static int gui_consumable_osrs_id(InvSlotType type, int doses) {
@@ -848,6 +897,16 @@ static int gui_consumable_osrs_id(InvSlotType type, int doses) {
             if (doses == 3) return OSRS_ID_PRAYER_POT_3;
             if (doses == 2) return OSRS_ID_PRAYER_POT_2;
             return OSRS_ID_PRAYER_POT_1;
+        case INV_SLOT_BASTION_POT:
+            if (doses >= 4) return OSRS_ID_BASTION_4;
+            if (doses == 3) return OSRS_ID_BASTION_3;
+            if (doses == 2) return OSRS_ID_BASTION_2;
+            return OSRS_ID_BASTION_1;
+        case INV_SLOT_STAMINA_POT:
+            if (doses >= 4) return OSRS_ID_STAMINA_4;
+            if (doses == 3) return OSRS_ID_STAMINA_3;
+            if (doses == 2) return OSRS_ID_STAMINA_2;
+            return OSRS_ID_STAMINA_1;
         default: return 0;
     }
 }
@@ -962,6 +1021,8 @@ static void gui_populate_inventory(GuiState* gs, Player* p) {
     ADD_POTION_VIALS(p->restore_doses, INV_SLOT_RESTORE);
     ADD_POTION_VIALS(p->combat_potion_doses, INV_SLOT_COMBAT_POT);
     ADD_POTION_VIALS(p->ranged_potion_doses, INV_SLOT_RANGED_POT);
+    ADD_POTION_VIALS(p->bastion_doses, INV_SLOT_BASTION_POT);
+    ADD_POTION_VIALS(p->stamina_doses, INV_SLOT_STAMINA_POT);
     ADD_POTION_VIALS(p->antivenom_doses, INV_SLOT_ANTIVENOM);
     ADD_POTION_VIALS(p->prayer_pot_doses, INV_SLOT_PRAYER_POT);
     #undef ADD_POTION_VIALS
@@ -1170,6 +1231,12 @@ static void gui_update_inventory(GuiState* gs, Player* p) {
     }
     if (p->ranged_potion_doses != gs->inv_prev_ranged_doses) {
         gui_inv_update_potion_doses(gs, INV_SLOT_RANGED_POT, p->ranged_potion_doses);
+    }
+    if (p->bastion_doses != gs->inv_prev_bastion_doses) {
+        gui_inv_update_potion_doses(gs, INV_SLOT_BASTION_POT, p->bastion_doses);
+    }
+    if (p->stamina_doses != gs->inv_prev_stamina_doses) {
+        gui_inv_update_potion_doses(gs, INV_SLOT_STAMINA_POT, p->stamina_doses);
     }
     if (p->antivenom_doses != gs->inv_prev_antivenom_doses) {
         gui_inv_update_potion_doses(gs, INV_SLOT_ANTIVENOM, p->antivenom_doses);
@@ -1499,21 +1566,9 @@ static void gui_draw_equipment(GuiState* gs, Player* p) {
 /* prayer panel (interface 541) — single 5-column grid, all 25 prayers       */
 /* ======================================================================== */
 
-/* OSRS prayer book order: 5 columns, 5 rows = 25 prayers.
-   each entry maps a grid position to a GuiPrayerIdx. */
-static const GuiPrayerIdx GUI_PRAYER_GRID[25] = {
-    GUI_PRAY_THICK_SKIN,        GUI_PRAY_BURST_STR,        GUI_PRAY_CLARITY,
-    GUI_PRAY_SHARP_EYE,         GUI_PRAY_MYSTIC_WILL,
-    GUI_PRAY_ROCK_SKIN,         GUI_PRAY_SUPERHUMAN,       GUI_PRAY_IMPROVED_REFLEX,
-    GUI_PRAY_RAPID_RESTORE,     GUI_PRAY_RAPID_HEAL,
-    GUI_PRAY_PROTECT_ITEM,      GUI_PRAY_HAWK_EYE,         GUI_PRAY_PROTECT_MAGIC,
-    GUI_PRAY_PROTECT_MISSILES,  GUI_PRAY_PROTECT_MELEE,
-    GUI_PRAY_REDEMPTION,        GUI_PRAY_RETRIBUTION,      GUI_PRAY_SMITE,
-    GUI_PRAY_CHIVALRY,          GUI_PRAY_PIETY,
-    GUI_PRAY_EAGLE_EYE,         GUI_PRAY_MYSTIC_MIGHT,     GUI_PRAY_PRESERVE,
-    GUI_PRAY_RIGOUR,            GUI_PRAY_AUGURY,
-};
-#define GUI_PRAYER_GRID_COUNT 25
+/* enum order is already display order — 5 cols × 6 rows, 29 prayers + 1 empty.
+   grid is just the identity: position i maps to enum value i. */
+#define GUI_PRAYER_GRID_COUNT GUI_NUM_PRAYERS
 
 /** Check if a prayer grid slot is currently active based on player state. */
 static int gui_prayer_is_active(GuiPrayerIdx pidx, Player* p) {
@@ -1560,7 +1615,7 @@ static void gui_draw_prayer(GuiState* gs, Player* p) {
         int ix = gx + col * (icon_sz + gap);
         int iy = oy + row * (icon_sz + gap);
 
-        GuiPrayerIdx pidx = GUI_PRAYER_GRID[i];
+        GuiPrayerIdx pidx = (GuiPrayerIdx)i;
         int active = gui_prayer_is_active(pidx, p);
 
         /* draw slot_tile background */
@@ -1614,13 +1669,36 @@ static void gui_draw_combat(GuiState* gs, Player* p) {
         oy += 22;
     }
 
-    /* 4 attack style buttons (2x2 grid) scaled to fill panel width */
-    static const char* style_names[] = { "Accurate", "Aggressive", "Controlled", "Defensive" };
+    /* 4 attack style buttons (2x2 grid) scaled to fill panel width.
+       style names are weapon-specific in real OSRS (bow=Accurate/Rapid/Longrange,
+       scythe=Chop/Jab/Block, godsword=Chop/Slash/Smash/Block, etc.). */
+    const char* style_names[4] = { "Accurate", "Aggressive", "Controlled", "Defensive" };
+    int num_styles = 4;
+    switch (p->equipped[GEAR_SLOT_WEAPON]) {
+        case ITEM_TOXIC_BLOWPIPE:
+        case ITEM_ZARYTE_CROSSBOW:
+        case ITEM_TWISTED_BOW:
+            style_names[0] = "Accurate"; style_names[1] = "Rapid";
+            style_names[2] = "Longrange"; num_styles = 3; break;
+        case ITEM_SCYTHE_OF_VITUR:
+            style_names[0] = "Chop"; style_names[1] = "Jab";
+            style_names[2] = "Block"; num_styles = 3; break;
+        case ITEM_SGS:
+            style_names[0] = "Chop"; style_names[1] = "Slash";
+            style_names[2] = "Smash"; style_names[3] = "Block"; break;
+        case ITEM_DRAGON_CLAWS:
+            style_names[0] = "Chop"; style_names[1] = "Slash";
+            style_names[2] = "Lunge"; style_names[3] = "Block"; break;
+        case ITEM_KODAI_WAND:
+            style_names[0] = "Bash"; style_names[1] = "Pound";
+            style_names[2] = "Focus"; style_names[3] = "Block"; break;
+        default: break;
+    }
     int btn_gap = 6;
-    int btn_w = (gs->panel_w - 16 - btn_gap) / 2;  /* ~151px */
+    int btn_w = (gs->panel_w - 16 - btn_gap) / 2;
     int btn_h = 60;
 
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < num_styles; i++) {
         int col = i % 2;
         int row = i / 2;
         int bx = ox + col * (btn_w + btn_gap);
@@ -1686,18 +1764,40 @@ typedef struct {
     GuiSpellIdx idx;
 } GuiSpellEntry;
 
+/* Ancient spellbook grid (4 cols × 4 rows = 16 combat spells, + vengeance).
+   sort is by level: rows go Rush/Burst/Blitz/Barrage top-to-bottom, and
+   within each row the order is Smoke / Shadow / Blood / Ice (ascending level).
+   only Ice/Blood/Vengeance are castable in this env — Smoke/Shadow render
+   greyed out with the "off" sprite and don't respond to clicks. */
 static const GuiSpellEntry GUI_SPELL_GRID[] = {
-    { "Ice Rush",      GUI_SPELL_ICE_RUSH },
-    { "Ice Burst",     GUI_SPELL_ICE_BURST },
-    { "Ice Blitz",     GUI_SPELL_ICE_BLITZ },
-    { "Ice Barrage",   GUI_SPELL_ICE_BARRAGE },
+    { "Smoke Rush",    GUI_SPELL_SMOKE_RUSH },
+    { "Shadow Rush",   GUI_SPELL_SHADOW_RUSH },
     { "Blood Rush",    GUI_SPELL_BLOOD_RUSH },
+    { "Ice Rush",      GUI_SPELL_ICE_RUSH },
+    { "Smoke Burst",   GUI_SPELL_SMOKE_BURST },
+    { "Shadow Burst",  GUI_SPELL_SHADOW_BURST },
     { "Blood Burst",   GUI_SPELL_BLOOD_BURST },
+    { "Ice Burst",     GUI_SPELL_ICE_BURST },
+    { "Smoke Blitz",   GUI_SPELL_SMOKE_BLITZ },
+    { "Shadow Blitz",  GUI_SPELL_SHADOW_BLITZ },
     { "Blood Blitz",   GUI_SPELL_BLOOD_BLITZ },
+    { "Ice Blitz",     GUI_SPELL_ICE_BLITZ },
+    { "Smoke Barrage", GUI_SPELL_SMOKE_BARRAGE },
+    { "Shadow Barrage",GUI_SPELL_SHADOW_BARRAGE },
     { "Blood Barrage", GUI_SPELL_BLOOD_BARRAGE },
+    { "Ice Barrage",   GUI_SPELL_ICE_BARRAGE },
     { "Vengeance",     GUI_SPELL_VENGEANCE },
 };
-#define GUI_SPELL_GRID_COUNT 9
+#define GUI_SPELL_GRID_COUNT 17
+
+/* which spells are castable in this env (others render greyed out). */
+static inline int gui_spell_castable(GuiSpellIdx s) {
+    return (s == GUI_SPELL_VENGEANCE)
+        || (s >= GUI_SPELL_ICE_RUSH && s <= GUI_SPELL_ICE_BURST)     /* ice */
+        || (s >= GUI_SPELL_BLOOD_RUSH && s <= GUI_SPELL_BLOOD_BURST) /* blood */
+        || (s == GUI_SPELL_ICE_BLITZ || s == GUI_SPELL_ICE_BARRAGE)
+        || (s == GUI_SPELL_BLOOD_BLITZ || s == GUI_SPELL_BLOOD_BARRAGE);
+}
 
 static void gui_draw_spellbook(GuiState* gs, Player* p) {
     int oy = gui_content_y(gs) + 8;
@@ -1717,8 +1817,12 @@ static void gui_draw_spellbook(GuiState* gs, Player* p) {
         int ix = gx + col * (icon_sz + gap);
         int iy = oy + row * (icon_sz + gap);
 
+        GuiSpellIdx sidx_here = GUI_SPELL_GRID[i].idx;
         /* active highlight for vengeance */
-        int active = (i == 8 && p->veng_active);
+        int active = (sidx_here == GUI_SPELL_VENGEANCE && p->veng_active);
+        /* spell-targeting mode: highlight the pending spell cell */
+        int targeting = (gs->pending_spell_highlight >= 0 &&
+                         (int)sidx_here == gs->pending_spell_highlight);
 
         /* slot_tile background */
         if (gs->slot_tile.id != 0) {
@@ -1730,11 +1834,17 @@ static void gui_draw_spellbook(GuiState* gs, Player* p) {
         if (active) {
             DrawRectangle(ix, iy, icon_sz, icon_sz, GUI_PRAYER_ON);
         }
+        if (targeting) {
+            /* yellow 2px border around the targeted spell */
+            DrawRectangleLinesEx((Rectangle){(float)ix, (float)iy, (float)icon_sz, (float)icon_sz}, 2.0f, YELLOW);
+        }
 
-        /* draw spell sprite (scaled to cell) */
+        /* draw spell sprite. non-castable spells (smoke/shadow in this env)
+           use the greyed "off" sprite so the panel looks authentic. */
         GuiSpellIdx sidx = GUI_SPELL_GRID[i].idx;
         if (gs->sprites_loaded) {
-            Texture2D tex = gs->spell_on[sidx];
+            int castable = gui_spell_castable(sidx);
+            Texture2D tex = castable ? gs->spell_on[sidx] : gs->spell_off[sidx];
             if (tex.id != 0) {
                 Rectangle src = { 0, 0, (float)tex.width, (float)tex.height };
                 Rectangle dst = { (float)ix, (float)iy, (float)icon_sz, (float)icon_sz };
