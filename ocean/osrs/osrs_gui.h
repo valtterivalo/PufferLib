@@ -857,10 +857,10 @@ static int gui_content_y(GuiState* gs) {
 #define INV_COLS 4
 #define INV_ROWS 7
 /* OSRS native inventory cell pitch is ~42x36, sprite 36x32. */
-#define INV_CELL_W 42
-#define INV_CELL_H 36
-#define INV_SPRITE_W 36
-#define INV_SPRITE_H 32
+#define INV_CELL_W 63
+#define INV_CELL_H 54
+#define INV_SPRITE_W 54
+#define INV_SPRITE_H 48
 
 /** Get the OSRS item ID for a consumable based on remaining doses/count. */
 static int gui_consumable_osrs_id(InvSlotType type, int doses) {

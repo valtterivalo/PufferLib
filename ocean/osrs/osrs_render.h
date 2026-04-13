@@ -34,9 +34,9 @@
 /* window sized to match the OSRS fixed-client layout (765x503).
    3D viewport projects into the area left of the side panel; the tile
    grid is a game-logic unit only, decoupled from window pixels. */
-#define RENDER_WINDOW_W        765
-#define RENDER_WINDOW_H        503
-#define RENDER_PANEL_WIDTH     190   /* OSRS side panel width */
+#define RENDER_WINDOW_W        1148
+#define RENDER_WINDOW_H        755
+#define RENDER_PANEL_WIDTH     285   /* 190 * 1.5 */
 #define RENDER_HEADER_HEIGHT   0     /* OSRS client has no top header strip */
 #define RENDER_SPLATS_PER_PLAYER 4   /* OSRS max: 4 simultaneous splats per entity */
 #define RENDER_HISTORY_SIZE    2000  /* max ticks of rewind history */
