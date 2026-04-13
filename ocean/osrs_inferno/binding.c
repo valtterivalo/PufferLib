@@ -53,6 +53,9 @@ typedef struct {
     int replay_cursor;       /* ticks consumed so far */
     uint32_t replay_rng_seed;
 
+    float ticks_per_second;
+    double last_step_time;
+
     OsrsEnv render_env; /* minimal env wrapper for pvp_render() */
 } InfernoEnv;
 
@@ -68,6 +71,23 @@ static int g_best_ticks = 999999;
 static int g_best_zuk_hp = 999999;  /* lowest Zuk HP seen (for Zuk-only training) */
 
 void c_step(Env* env) {
+    RenderClient* rc = (RenderClient*)env->render_env.client;
+    if (rc != NULL) {
+        env->ticks_per_second = rc->ticks_per_second;
+    }
+    if (rc != NULL && env->ticks_per_second > 0.0f) {
+        double interval = 1.0 / env->ticks_per_second;
+        double now = GetTime();
+        if (env->last_step_time > 0.0) {
+            double elapsed = now - env->last_step_time;
+            if (elapsed < interval) {
+                WaitTime(interval - elapsed);
+                now = GetTime();
+            }
+        }
+        env->last_step_time = now;
+    }
+
     /* replay playback: if this env has a loaded replay, override policy actions */
     if (env->replay_actions && env->replay_cursor < env->replay_num_ticks) {
         int off = env->replay_cursor * NUM_ATNS;
@@ -274,6 +294,11 @@ void c_render(Env* env) {
 
     if (first_call) {
         RenderClient* rc = (RenderClient*)re->client;
+        rc->ticks_per_second = env->ticks_per_second;
+        rc->model_cache = model_cache_load("data/equipment.models");
+        if (rc->model_cache) rc->show_models = 1;
+        rc->anim_cache = anim_cache_load("data/equipment.anims");
+        render_init_overlay_models(rc);
         rc->terrain = terrain_load("data/inferno.terrain");
         rc->objects = objects_load("data/inferno.objects");
         rc->objects_zuk = objects_load("data/inferno_zuk.objects");
@@ -283,16 +308,21 @@ void c_render(Env* env) {
         if (rc->objects_zuk) objects_offset(rc->objects_zuk, 2246, 5315);
         rc->npc_model_cache = model_cache_load("data/inferno.models");
         rc->npc_anim_cache = anim_cache_load("data/inferno.anims");
-    }
 
-    /* eval pacing: sleep to match tick rate so rollouts don't blaze through.
-       use 9/0 keys to slow/speed while viewing. defaults to OSRS speed. */
-    RenderClient* rc = (RenderClient*)re->client;
-    if (rc && rc->ticks_per_second > 0.0f) {
-        double interval = 1.0 / rc->ticks_per_second;
-        double elapsed = GetTime() - rc->last_tick_time;
-        if (elapsed < interval) WaitTime(interval - elapsed);
-        rc->last_tick_time = GetTime();
+        /* inferno renders in encounter-local tiles, but render_make_client()
+           initializes the camera to wilderness PvP world coords. mirror the
+           standalone viewer's post-load bootstrap so the first live frame uses
+           inferno arena bounds and entity positions. */
+        render_populate_entities(rc, re);
+        rc->cam_target_x = (float)rc->arena_base_x + (float)rc->arena_width / 2.0f;
+        rc->cam_target_z = -((float)rc->arena_base_y + (float)rc->arena_height / 2.0f);
+        for (int i = 0; i < rc->entity_count; i++) {
+            int size = rc->entities[i].npc_size > 1 ? rc->entities[i].npc_size : 1;
+            rc->sub_x[i] = rc->entities[i].x * 128 + size * 64;
+            rc->sub_y[i] = rc->entities[i].y * 128 + size * 64;
+            rc->dest_x[i] = rc->sub_x[i];
+            rc->dest_y[i] = rc->sub_y[i];
+        }
     }
 }
 
@@ -330,6 +360,8 @@ void my_init(Env* env, Dict* kwargs) {
     env->replay_num_ticks = 0;
     env->replay_cursor = 0;
     env->replay_rng_seed = 0;
+    env->ticks_per_second = 1.667f;
+    env->last_step_time = 0.0;
     static int g_play_replay_loaded = 0;
     const char* play_path = getenv("PLAY_REPLAY");
     if (play_path && play_path[0] && !g_play_replay_loaded) {
