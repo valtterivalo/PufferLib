@@ -361,18 +361,33 @@ static inline PathResult pathfind_step_arena(
         return result;
     }
 
-    /* BFS working arrays — arena-sized (48x48 max = ~9KB each vs 104x104 = ~43KB) */
-    int via[PATHFIND_ARENA_MAX][PATHFIND_ARENA_MAX];
-    int cost[PATHFIND_ARENA_MAX][PATHFIND_ARENA_MAX];
-    memset(via, 0, sizeof(via));
-    memset(cost, 0, sizeof(cost));
+    /* BFS working arrays with generation counter — no memset needed.
+       a cell is "visited" when gen[x][y] == current_gen. via/cost are only
+       valid when gen matches. this eliminates the ~18KB memset that was the
+       dominant cost (651K calls × 18KB = ~11GB of zeroing per training run). */
+    static _Thread_local uint16_t bfs_gen[PATHFIND_ARENA_MAX][PATHFIND_ARENA_MAX];
+    static _Thread_local int8_t   bfs_via[PATHFIND_ARENA_MAX][PATHFIND_ARENA_MAX];
+    static _Thread_local int16_t  bfs_cost[PATHFIND_ARENA_MAX][PATHFIND_ARENA_MAX];
+    static _Thread_local uint16_t bfs_gen_counter = 0;
+    bfs_gen_counter++;
+    if (bfs_gen_counter == 0) {
+        /* wraparound: rare (every 65536 calls), just clear the gen array */
+        memset(bfs_gen, 0, sizeof(bfs_gen));
+        bfs_gen_counter = 1;
+    }
+    uint16_t gen = bfs_gen_counter;
+    #define BFS_VISITED(x, y) (bfs_gen[(x)][(y)] == gen)
+    #define BFS_VISIT(x, y, v, c) do { \
+        bfs_gen[(x)][(y)] = gen; bfs_via[(x)][(y)] = (v); bfs_cost[(x)][(y)] = (c); \
+    } while(0)
+    #define BFS_VIA(x, y)  bfs_via[(x)][(y)]
+    #define BFS_COST(x, y) bfs_cost[(x)][(y)]
 
     int queue_x[PATHFIND_MAX_QUEUE_ARENA];
     int queue_y[PATHFIND_MAX_QUEUE_ARENA];
     int head = 0, tail = 0;
 
-    via[local_src_x][local_src_y] = VIA_START;
-    cost[local_src_x][local_src_y] = 1;
+    BFS_VISIT(local_src_x, local_src_y, VIA_START, 1);
     queue_x[tail] = local_src_x;
     queue_y[tail] = local_src_y;
     tail++;
@@ -392,73 +407,73 @@ static inline PathResult pathfind_step_arena(
 
         int abs_x = arena_origin_x + cur_x;
         int abs_y = arena_origin_y + cur_y;
-        int next_cost = cost[cur_x][cur_y] + 1;
+        int next_cost = BFS_COST(cur_x, cur_y) + 1;
 
         #define EB(ax, ay) (extra_blocked && extra_blocked(blocked_ctx, (ax), (ay)))
 
         /* south */
-        if (cur_y > 0 && via[cur_x][cur_y - 1] == 0
+        if (cur_y > 0 && !BFS_VISITED(cur_x, cur_y - 1)
             && collision_traversable_south(map, height, abs_x, abs_y)
             && !EB(abs_x, abs_y - 1)) {
             queue_x[tail] = cur_x; queue_y[tail] = cur_y - 1; tail++;
-            via[cur_x][cur_y - 1] = VIA_S; cost[cur_x][cur_y - 1] = next_cost;
+            BFS_VISIT(cur_x, cur_y - 1, VIA_S, next_cost);
         }
         /* west */
-        if (cur_x > 0 && via[cur_x - 1][cur_y] == 0
+        if (cur_x > 0 && !BFS_VISITED(cur_x - 1, cur_y)
             && collision_traversable_west(map, height, abs_x, abs_y)
             && !EB(abs_x - 1, abs_y)) {
             queue_x[tail] = cur_x - 1; queue_y[tail] = cur_y; tail++;
-            via[cur_x - 1][cur_y] = VIA_W; cost[cur_x - 1][cur_y] = next_cost;
+            BFS_VISIT(cur_x - 1, cur_y, VIA_W, next_cost);
         }
         /* north */
-        if (cur_y < arena_h - 1 && via[cur_x][cur_y + 1] == 0
+        if (cur_y < arena_h - 1 && !BFS_VISITED(cur_x, cur_y + 1)
             && collision_traversable_north(map, height, abs_x, abs_y)
             && !EB(abs_x, abs_y + 1)) {
             queue_x[tail] = cur_x; queue_y[tail] = cur_y + 1; tail++;
-            via[cur_x][cur_y + 1] = VIA_N; cost[cur_x][cur_y + 1] = next_cost;
+            BFS_VISIT(cur_x, cur_y + 1, VIA_N, next_cost);
         }
         /* east */
-        if (cur_x < arena_w - 1 && via[cur_x + 1][cur_y] == 0
+        if (cur_x < arena_w - 1 && !BFS_VISITED(cur_x + 1, cur_y)
             && collision_traversable_east(map, height, abs_x, abs_y)
             && !EB(abs_x + 1, abs_y)) {
             queue_x[tail] = cur_x + 1; queue_y[tail] = cur_y; tail++;
-            via[cur_x + 1][cur_y] = VIA_E; cost[cur_x + 1][cur_y] = next_cost;
+            BFS_VISIT(cur_x + 1, cur_y, VIA_E, next_cost);
         }
         /* south-west */
-        if (cur_x > 0 && cur_y > 0 && via[cur_x - 1][cur_y - 1] == 0
+        if (cur_x > 0 && cur_y > 0 && !BFS_VISITED(cur_x - 1, cur_y - 1)
             && collision_traversable_south_west(map, height, abs_x, abs_y)
             && collision_traversable_south(map, height, abs_x, abs_y)
             && collision_traversable_west(map, height, abs_x, abs_y)
             && !EB(abs_x - 1, abs_y - 1) && !EB(abs_x, abs_y - 1) && !EB(abs_x - 1, abs_y)) {
             queue_x[tail] = cur_x - 1; queue_y[tail] = cur_y - 1; tail++;
-            via[cur_x - 1][cur_y - 1] = VIA_SW; cost[cur_x - 1][cur_y - 1] = next_cost;
+            BFS_VISIT(cur_x - 1, cur_y - 1, VIA_SW, next_cost);
         }
         /* north-west */
-        if (cur_x > 0 && cur_y < arena_h - 1 && via[cur_x - 1][cur_y + 1] == 0
+        if (cur_x > 0 && cur_y < arena_h - 1 && !BFS_VISITED(cur_x - 1, cur_y + 1)
             && collision_traversable_north_west(map, height, abs_x, abs_y)
             && collision_traversable_north(map, height, abs_x, abs_y)
             && collision_traversable_west(map, height, abs_x, abs_y)
             && !EB(abs_x - 1, abs_y + 1) && !EB(abs_x, abs_y + 1) && !EB(abs_x - 1, abs_y)) {
             queue_x[tail] = cur_x - 1; queue_y[tail] = cur_y + 1; tail++;
-            via[cur_x - 1][cur_y + 1] = VIA_NW; cost[cur_x - 1][cur_y + 1] = next_cost;
+            BFS_VISIT(cur_x - 1, cur_y + 1, VIA_NW, next_cost);
         }
         /* south-east */
-        if (cur_x < arena_w - 1 && cur_y > 0 && via[cur_x + 1][cur_y - 1] == 0
+        if (cur_x < arena_w - 1 && cur_y > 0 && !BFS_VISITED(cur_x + 1, cur_y - 1)
             && collision_traversable_south_east(map, height, abs_x, abs_y)
             && collision_traversable_south(map, height, abs_x, abs_y)
             && collision_traversable_east(map, height, abs_x, abs_y)
             && !EB(abs_x + 1, abs_y - 1) && !EB(abs_x, abs_y - 1) && !EB(abs_x + 1, abs_y)) {
             queue_x[tail] = cur_x + 1; queue_y[tail] = cur_y - 1; tail++;
-            via[cur_x + 1][cur_y - 1] = VIA_SE; cost[cur_x + 1][cur_y - 1] = next_cost;
+            BFS_VISIT(cur_x + 1, cur_y - 1, VIA_SE, next_cost);
         }
         /* north-east */
-        if (cur_x < arena_w - 1 && cur_y < arena_h - 1 && via[cur_x + 1][cur_y + 1] == 0
+        if (cur_x < arena_w - 1 && cur_y < arena_h - 1 && !BFS_VISITED(cur_x + 1, cur_y + 1)
             && collision_traversable_north_east(map, height, abs_x, abs_y)
             && collision_traversable_north(map, height, abs_x, abs_y)
             && collision_traversable_east(map, height, abs_x, abs_y)
             && !EB(abs_x + 1, abs_y + 1) && !EB(abs_x, abs_y + 1) && !EB(abs_x + 1, abs_y)) {
             queue_x[tail] = cur_x + 1; queue_y[tail] = cur_y + 1; tail++;
-            via[cur_x + 1][cur_y + 1] = VIA_NE; cost[cur_x + 1][cur_y + 1] = next_cost;
+            BFS_VISIT(cur_x + 1, cur_y + 1, VIA_NE, next_cost);
         }
 
         #undef EB
@@ -474,13 +489,13 @@ static inline PathResult pathfind_step_arena(
         for (int fx = local_dest_x - r; fx <= local_dest_x + r; fx++) {
             for (int fy = local_dest_y - r; fy <= local_dest_y + r; fy++) {
                 if (fx < 0 || fx >= arena_w || fy < 0 || fy >= arena_h) continue;
-                if (cost[fx][fy] == 0) continue;
+                if (!BFS_VISITED(fx, fy) || BFS_COST(fx, fy) == 0) continue;
                 int ddx = fx - local_dest_x, ddy = fy - local_dest_y;
                 int dist_sq = ddx * ddx + ddy * ddy;
                 if (dist_sq < best_dist_sq ||
-                    (dist_sq == best_dist_sq && cost[fx][fy] < best_cost)) {
+                    (dist_sq == best_dist_sq && BFS_COST(fx, fy) < best_cost)) {
                     best_dist_sq = dist_sq;
-                    best_cost = cost[fx][fy];
+                    best_cost = BFS_COST(fx, fy);
                     best_x = fx; best_y = fy;
                 }
             }
@@ -495,7 +510,7 @@ static inline PathResult pathfind_step_arena(
 
     /* backtrack to find first step */
     while (1) {
-        int v = via[cur_x][cur_y];
+        int v = BFS_VIA(cur_x, cur_y);
         int prev_x = cur_x, prev_y = cur_y;
         if (v & VIA_W) prev_x++; else if (v & VIA_E) prev_x--;
         if (v & VIA_S) prev_y++; else if (v & VIA_N) prev_y--;
@@ -506,7 +521,7 @@ static inline PathResult pathfind_step_arena(
             return result;
         }
         cur_x = prev_x; cur_y = prev_y;
-        if (via[cur_x][cur_y] == VIA_NONE || via[cur_x][cur_y] == VIA_START) break;
+        if (BFS_VIA(cur_x, cur_y) == VIA_NONE || BFS_VIA(cur_x, cur_y) == VIA_START) break;
     }
 
     return result;

@@ -25,6 +25,7 @@ for arg in "$@"; do
         --debug) DEBUG=1 ;;
         --local) MODE=local ;;
         --fast)  MODE=fast ;;
+        --gprof) MODE=fast; GPROF=1 ;;
         --web)   MODE=web ;;
         --profile) MODE=profile ;;
         --cpu)   MODE=cpu; PRECISION="-DPRECISION_FLOAT" ;;
@@ -144,6 +145,9 @@ if [ -n "$DEBUG" ] || [ "$MODE" = "local" ]; then
     LINK_OPT="-g"
 else
     CLANG_OPT=(-O2 -DNDEBUG "${CLANG_WARN[@]}")
+    if [ -n "$GPROF" ]; then
+        CLANG_OPT+=(-pg)
+    fi
     NVCC_OPT="-O2 --threads 0"
     LINK_OPT="-O2"
 fi
