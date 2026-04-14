@@ -500,26 +500,26 @@ void my_log(Log* log, Dict* out) {
     float unavoidable_rate = (off_prayer > 0.0f)
         ? log->unavoidable_off_prayer / off_prayer : 0.0f;
     dict_set(out, "unavoidable_off_prayer_rate", unavoidable_rate);
-    dict_set(out, "unavoidable_off_prayer", log->unavoidable_off_prayer);
+    //dict_set(out, "unavoidable_off_prayer", log->unavoidable_off_prayer);
 
     dict_set(out, "brews_remaining", log->brews_remaining);
     dict_set(out, "restores_remaining", log->restores_remaining);
     dict_set(out, "prayer_at_death", log->prayer_at_death);
 
-    dict_set(out, "npc_kills", log->npc_kills);
-    dict_set(out, "gear_switches", log->gear_switches);
+    //dict_set(out, "npc_kills", log->npc_kills);
+    //dict_set(out, "gear_switches", log->gear_switches);
     dict_set(out, "current_ranged", log->current_ranged);
     dict_set(out, "current_magic", log->current_magic);
     dict_set(out, "behind_shield_pct", log->behind_shield_pct);
     dict_set(out, "zuk_hp_remaining", log->zuk_hp_remaining);
-    dict_set(out, "noop_move", log->noop_move);
-    dict_set(out, "noop_prayer", log->noop_prayer);
-    dict_set(out, "noop_target", log->noop_target);
-    dict_set(out, "noop_gear", log->noop_gear);
-    dict_set(out, "noop_eat", log->noop_eat);
-    dict_set(out, "noop_potion", log->noop_potion);
-    dict_set(out, "noop_spell", log->noop_spell);
-    dict_set(out, "noop_spec", log->noop_spec);
+    //dict_set(out, "noop_move", log->noop_move);
+    //dict_set(out, "noop_prayer", log->noop_prayer);
+    //dict_set(out, "noop_target", log->noop_target);
+    //dict_set(out, "noop_gear", log->noop_gear);
+    //dict_set(out, "noop_eat", log->noop_eat);
+    //dict_set(out, "noop_potion", log->noop_potion);
+    //dict_set(out, "noop_spell", log->noop_spell);
+    //dict_set(out, "noop_spec", log->noop_spec);
     float gear_switch_rate = (log->episode_length > 0.0f)
         ? log->gear_switches / log->episode_length : 0.0f;
     dict_set(out, "gear_switch_rate", gear_switch_rate);
@@ -538,6 +538,7 @@ void my_log(Log* log, Dict* out) {
 
     /* per-NPC-type prayer rates and damage (wandb only).
        keys must be string literals — dict_set stores the pointer, not a copy. */
+    /*
     static const char* pray_keys[] = {
         "pray_nibbler","pray_bat","pray_blob","pray_blob_mel","pray_blob_rng","pray_blob_mag",
         "pray_meleer","pray_ranger","pray_mager","pray_jad","pray_zuk","pray_heal_jad","pray_heal_zuk","pray_shield"
@@ -558,4 +559,5 @@ void my_log(Log* log, Dict* out) {
         if (log->killed_by_type[t] > 0.0f)
             dict_set(out, kill_keys[t], log->killed_by_type[t]);
     }
+    */
 }

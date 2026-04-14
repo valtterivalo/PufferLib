@@ -355,6 +355,7 @@ static const InfWaveDef INF_WAVES[INF_NUM_WAVES] = {
 
 /* max active NPCs: wave 62 has 9 + blob splits (3 per blob, up to 2 blobs = 6) + healers */
 #define INF_MAX_NPCS      32
+#define INF_OBS_NPCS      37
 
 /* dead mob store for mager resurrection */
 #define INF_MAX_DEAD_MOBS 16
@@ -576,6 +577,7 @@ typedef struct {
     int total_prayer_correct;  /* times prayer blocked an NPC attack */
     int total_npc_attacks;     /* total NPC attacks on player (for prayer_correct_rate) */
     int total_unavoidable_off; /* off-prayer hits where a different style was correctly prayed */
+    int off_prayer_hits_this_tick;
     /* per-tick tracking for multi-style analysis */
     int tick_styles_fired;     /* bitmask of styles that fired this tick (bit0=mel,1=rng,2=mag) */
     int tick_attacks_fired;    /* count of NPC attacks that fired this tick */
@@ -1259,6 +1261,10 @@ static void inf_npc_attack(InfernoState* s, int idx) {
         has_los_now &&
         !npc->had_los_last_tick) {
         npc->blob_scanned_prayer = (int)s->player.prayer;
+        /* Pre-determine style for oracle */
+        if (s->player.prayer == PRAYER_PROTECT_MAGIC) npc->attack_style = ATTACK_STYLE_RANGED;
+        else if (s->player.prayer == PRAYER_PROTECT_RANGED) npc->attack_style = ATTACK_STYLE_MAGIC;
+        else npc->attack_style = (encounter_rand_int(&s->rng_state, 2) == 0) ? ATTACK_STYLE_MAGIC : ATTACK_STYLE_RANGED;
         npc->had_los_last_tick = has_los_now;
         npc->attacked_this_tick = 1;
         npc->attack_timer = stats->attack_speed;
@@ -1400,7 +1406,8 @@ static void inf_npc_attack(InfernoState* s, int idx) {
             int def_roll = osrs_player_def_roll_vs_npc(s->player.current_defence, s->player.current_magic, def_bonus, ATTACK_STYLE_MELEE);
             if (encounter_rand_float(&s->rng_state) >= osrs_hit_chance(att_roll, def_roll)) dmg = 0;
             int prayer_matches = (s->player.prayer == PRAYER_PROTECT_MELEE);
-            if (prayer_matches) { dmg = 0; s->prayer_correct_this_tick = 1; }
+              if (prayer_matches) { dmg = 0; s->prayer_correct_this_tick = 1; }
+              else if (dmg > 0) { s->off_prayer_hits_this_tick++; }
             encounter_damage_player(&s->player, dmg, &s->damage_received_this_tick);
         }
         npc->attacked_this_tick = 1;
@@ -1429,19 +1436,15 @@ static void inf_npc_attack(InfernoState* s, int idx) {
         if (npc->blob_scanned_prayer < 0) {
             /* no pending scan → start scan phase */
             npc->blob_scanned_prayer = (int)s->player.prayer;
+        /* Pre-determine style for oracle */
+        if (s->player.prayer == PRAYER_PROTECT_MAGIC) npc->attack_style = ATTACK_STYLE_RANGED;
+        else if (s->player.prayer == PRAYER_PROTECT_RANGED) npc->attack_style = ATTACK_STYLE_MAGIC;
+        else npc->attack_style = (encounter_rand_int(&s->rng_state, 2) == 0) ? ATTACK_STYLE_MAGIC : ATTACK_STYLE_RANGED;
             npc->attacked_this_tick = 1;  /* triggers scan animation */
             npc->attack_timer = stats->attack_speed;  /* 3 */
             return;
         }
         /* has pending scan → determine style and fall through to fire */
-        OverheadPrayer read_prayer = (OverheadPrayer)npc->blob_scanned_prayer;
-        if (read_prayer == PRAYER_PROTECT_MAGIC)
-            npc->attack_style = ATTACK_STYLE_RANGED;
-        else if (read_prayer == PRAYER_PROTECT_RANGED)
-            npc->attack_style = ATTACK_STYLE_MAGIC;
-        else
-            npc->attack_style = (encounter_rand_int(&s->rng_state, 2) == 0)
-                ? ATTACK_STYLE_MAGIC : ATTACK_STYLE_RANGED;
         npc->blob_scanned_prayer = -1;
         /* fall through to common attack code */
     }
@@ -1561,7 +1564,8 @@ static void inf_npc_attack(InfernoState* s, int idx) {
     if (hit_delay == 0) {
         /* melee: instant damage, check prayer now */
         int prayer_matches = encounter_prayer_correct_for_style(s->player.prayer, actual_style);
-        if (prayer_matches) { dmg = 0; s->prayer_correct_this_tick++; s->prayer_correct_by_type[npc->type]++; }
+          if (prayer_matches) { dmg = 0; s->prayer_correct_this_tick++; s->prayer_correct_by_type[npc->type]++; }
+          else if (dmg > 0) { s->off_prayer_hits_this_tick++; }
         s->dmg_from_type[npc->type] += (float)dmg;
         if (dmg > 0) s->last_hit_by_type = npc->type;
         encounter_damage_player(&s->player, dmg, &s->damage_received_this_tick);
@@ -1571,7 +1575,8 @@ static void inf_npc_attack(InfernoState* s, int idx) {
             int is_jad = (npc->type == INF_NPC_JAD);
             if (!is_jad) {
                 int prayer_matches = encounter_prayer_correct_for_style(s->player.prayer, actual_style);
-                if (prayer_matches) { dmg = 0; s->prayer_correct_this_tick++; s->prayer_correct_by_type[npc->type]++; }
+          if (prayer_matches) { dmg = 0; s->prayer_correct_this_tick++; s->prayer_correct_by_type[npc->type]++; }
+          else if (dmg > 0) { s->off_prayer_hits_this_tick++; }
             }
             s->dmg_from_type[npc->type] += (float)dmg;
             if (dmg > 0) s->last_hit_by_type = npc->type;
@@ -1986,10 +1991,51 @@ static void inf_apply_npc_death(InfernoState* s, int npc_idx) {
     }
 }
 
+static OverheadPrayer inf_get_oracle_prayer(InfernoState* s) {
+    int correct_style = -1;
+    for (int h = 0; h < s->player_pending_hit_count; h++) {
+        EncounterPendingHit* ph = &s->player_pending_hits[h];
+        if (ph->check_prayer && ph->ticks_remaining == 1) {
+            correct_style = ph->attack_style;
+            break;
+        }
+    }
+    if (correct_style == -1) {
+        for (int n = 0; n < INF_MAX_NPCS; n++) {
+            InfNPC* npc = &s->npcs[n];
+            if (!npc->active || npc->death_ticks > 0) continue;
+            if (npc->type == INF_NPC_JAD || npc->type == INF_NPC_ZUK || 
+                npc->type == INF_NPC_ZUK_SHIELD || npc->type == INF_NPC_NIBBLER || 
+                npc->type == INF_NPC_HEALER_ZUK) continue;
+            
+            const InfNPCStats* st = &INF_NPC_STATS[npc->type];
+            if (npc->frozen_ticks > 0 || npc->stun_timer > 0) continue;
+            if (st->attack_range > 1 && !inf_npc_has_los(s, n)) continue;
+            
+            int dist = encounter_dist_to_npc(s->player.x, s->player.y, npc->x, npc->y, npc->size);
+            if (dist == 0 || dist > st->attack_range) continue;
+
+            int t = npc->attack_timer;
+            if (t == 0) t = 1;
+            if (t == 1) {
+                int style = npc->attack_style;
+
+                if (st->can_melee && dist == 1) {
+                    style = ATTACK_STYLE_MELEE;
+                }
+                correct_style = style;
+                break;
+            }
+        }
+    }
+    if (correct_style == ATTACK_STYLE_MELEE) return PRAYER_PROTECT_MELEE;
+    if (correct_style == ATTACK_STYLE_RANGED) return PRAYER_PROTECT_RANGED;
+    if (correct_style == ATTACK_STYLE_MAGIC) return PRAYER_PROTECT_MAGIC;
+    return s->player.prayer;
+}
+
 static void inf_player_pretick(InfernoState* s, const int* actions) {
-    /* prayer switches become active in pretick, then drain uses the updated
-       overhead before NPCs act. ref: osrs-sdk World.ts + PrayerController.ts. */
-    encounter_apply_prayer_action(&s->player.prayer, actions[INF_HEAD_PRAYER]);
+    s->player.prayer = inf_get_oracle_prayer(s);
     int drain = encounter_prayer_drain_effect(s->player.prayer) + 24;
     encounter_drain_prayer(&s->player.current_prayer, &s->player.prayer,
                            0, &s->player.prayer_drain_counter, drain);
@@ -2347,6 +2393,8 @@ static float inf_compute_reward(InfernoState* s) {
     if (s->behind_shield_this_tick)
         r += 0.005f;
 
+
+
     if (s->damage_dealt_this_tick > 0.0f)
         r += 0.01f * s->damage_dealt_this_tick;
 
@@ -2366,6 +2414,7 @@ static void inf_step(EncounterState* state, const int* actions) {
     s->damage_dealt_this_tick = 0.0f;
     s->damage_received_this_tick = 0.0f;
     s->prayer_correct_this_tick = 0;
+    s->off_prayer_hits_this_tick = 0;
     s->tick_styles_fired = 0;
     s->tick_attacks_fired = 0;
     s->wave_completed_this_tick = 0;
@@ -2434,7 +2483,7 @@ static void inf_step(EncounterState* state, const int* actions) {
     encounter_resolve_player_pending_hits(
         s->player_pending_hits, &s->player_pending_hit_count,
         &s->player, s->player.prayer,
-        &s->damage_received_this_tick, &s->prayer_correct_this_tick);
+        &s->damage_received_this_tick, &s->prayer_correct_this_tick, &s->off_prayer_hits_this_tick);
     inf_resolve_pending_sparks(s);
 
     /* player actions */
@@ -2461,7 +2510,7 @@ static void inf_step(EncounterState* state, const int* actions) {
        total_npc_attacks counts attacks directed at the player (not nibbler→pillar). */
     s->total_prayer_correct += s->prayer_correct_this_tick;
     for (int i = 0; i < INF_MAX_NPCS; i++) {
-        if (s->npcs[i].attacked_this_tick && s->npcs[i].type != INF_NPC_NIBBLER)
+        if (s->npcs[i].attacked_this_tick && s->npcs[i].aggro_target < 0 && s->npcs[i].type != INF_NPC_NIBBLER && !(s->npcs[i].type == INF_NPC_BLOB && s->npcs[i].blob_scanned_prayer >= 0))
             s->total_npc_attacks++;
     }
     /* multi-style analysis: count off-prayer hits that were unavoidable because
@@ -2502,7 +2551,8 @@ static void inf_step(EncounterState* state, const int* actions) {
         if (actions[h] == 0) s->action_noop_count[h]++;
     }
 
-    s->reward = inf_compute_reward(s);
+    inf_compute_reward(s);
+    s->reward = 0.0f;
     s->episode_return += s->reward;
 
     /* check player death */
@@ -2513,7 +2563,7 @@ static void inf_step(EncounterState* state, const int* actions) {
         s->winner = 1;
         /* terminal reward: override the per-tick reward already computed above.
            do NOT call inf_compute_reward again (would double-count damage stats). */
-        s->reward = 0.0f;  /* player died */
+        s->reward = 0.0f;  /* player died. Do not negative reward to avoid stalling.*/
         return;
     }
 
@@ -2534,10 +2584,11 @@ static void inf_step(EncounterState* state, const int* actions) {
     if (all_dead) {
         s->wave_completed_this_tick = 1;
         s->total_waves_cleared++;
+        s->reward = 1.0f;
+        s->episode_return += 1.0f;
         if (s->wave + 1 >= INF_NUM_WAVES) {
             s->episode_over = 1;
             s->winner = 0;
-            s->reward = 1.0f;  /* player won */
         } else {
             s->wave_spawn_target = s->wave + 1;
             s->wave_spawn_delay = 9;
@@ -2557,10 +2608,10 @@ static void inf_step(EncounterState* state, const int* actions) {
 /* ======================================================================== */
 
 /* obs layout: 49 player + 12 pillar + 33*32 NPC + 5*8 pending hits = 1157 */
-#define INF_PLAYER_OBS_SIZE 49
-#define INF_FEATURES_PER_NPC 33
+#define INF_PLAYER_OBS_SIZE 52
+#define INF_TOTAL_NPC_OBS_SIZE 282
 #define INF_FEATURES_PER_HIT 5
-#define INF_NUM_OBS (INF_PLAYER_OBS_SIZE + 12 + INF_FEATURES_PER_NPC * INF_MAX_NPCS + INF_FEATURES_PER_HIT * ENCOUNTER_MAX_PENDING_HITS)
+#define INF_NUM_OBS (INF_PLAYER_OBS_SIZE + 12 + INF_TOTAL_NPC_OBS_SIZE + INF_FEATURES_PER_HIT * ENCOUNTER_MAX_PENDING_HITS)
 
 /* max hit per NPC type, normalized by mager max (70). for prayer priority obs. */
 static const float INF_NPC_MAX_HIT_NORM[INF_NUM_NPC_TYPES] = {
@@ -2600,8 +2651,9 @@ static void inf_write_obs(EncounterState* state, float* obs) {
     obs[i++] = (float)s->player.current_prayer / 99.0f;
     obs[i++] = (float)s->wave / (float)INF_NUM_WAVES;
     /* tick normalization: Zuk-only (~300 ticks) vs full runs (~18000 ticks) */
-    obs[i++] = (s->start_wave >= 68) ? (float)s->tick / 500.0f
-                                     : (float)s->tick / (float)INF_MAX_TICKS;
+    obs[i++] = 0.0f;
+    //    (s->start_wave >= 68) ? (float)s->tick / 500.0f
+    //                                 : (float)s->tick / (float)INF_MAX_TICKS;
     obs[i++] = (s->weapon_set == INF_GEAR_MAGE) ? 1.0f : 0.0f;
     obs[i++] = (s->weapon_set == INF_GEAR_TBOW) ? 1.0f : 0.0f;
     obs[i++] = (s->weapon_set == INF_GEAR_BP) ? 1.0f : 0.0f;
@@ -2626,44 +2678,89 @@ static void inf_write_obs(EncounterState* state, float* obs) {
     obs[i++] = (float)s->loadout_stats[s->weapon_set].def_ranged / 300.0f;
     obs[i++] = (float)s->player.special_energy / 100.0f;
 
-    /* prayer-critical: distilled from NPC array so the agent doesn't have to
-       scan 32 slots to figure out what to pray. these directly answer:
-       "what style should I pray?" and "how urgent is it?" */
+    /* prayer-critical: distilled from NPC array and pending hits */
     {
         int min_timer = 999;
-        int min_style = 0;  /* style of the NPC with lowest timer */
+        int min_style = 0;
         int has_melee_2 = 0, has_ranged_2 = 0, has_magic_2 = 0;
+        int correct_style_next_tick = -1;
+
+        /* 1. Pending hits (handles Jad, which checks prayer on impact) */
+        for (int h = 0; h < s->player_pending_hit_count; h++) {
+            EncounterPendingHit* ph = &s->player_pending_hits[h];
+            if (ph->check_prayer) {
+                int t = ph->ticks_remaining;
+                if (t < min_timer) {
+                    min_timer = t;
+                    min_style = ph->attack_style;
+                }
+                if (t <= 2) {
+                    if (ph->attack_style == ATTACK_STYLE_MELEE) has_melee_2 = 1;
+                    if (ph->attack_style == ATTACK_STYLE_RANGED) has_ranged_2 = 1;
+                    if (ph->attack_style == ATTACK_STYLE_MAGIC) has_magic_2 = 1;
+                }
+                if (t == 1) {
+                    correct_style_next_tick = ph->attack_style;
+                }
+            }
+        }
+
+        /* 2. NPCs firing (handles non-Jad, which check prayer on launch/firing) */
         for (int n = 0; n < INF_MAX_NPCS; n++) {
             InfNPC* npc = &s->npcs[n];
             if (!npc->active || npc->death_ticks > 0) continue;
+            if (npc->type == INF_NPC_JAD || npc->type == INF_NPC_ZUK || 
+                npc->type == INF_NPC_ZUK_SHIELD || npc->type == INF_NPC_NIBBLER || 
+                npc->type == INF_NPC_HEALER_ZUK) continue;
+                
             const InfNPCStats* st = &INF_NPC_STATS[npc->type];
-            if (st->attack_range <= 1 && npc->type != INF_NPC_MELEER) continue;  /* skip nibblers */
-            /* only count NPCs that can actually attack: has LOS, in range, not frozen/stunned */
             if (npc->frozen_ticks > 0 || npc->stun_timer > 0) continue;
-            if (st->attack_range > 1 && !inf_npc_has_los(s, n)) continue;
-            int dist = encounter_dist_to_npc(s->player.x, s->player.y,
-                                              npc->x, npc->y, npc->size);
-            if (dist == 0 || dist > st->attack_range) continue;
-            int style = (npc->type == INF_NPC_JAD) ? npc->jad_attack_style : npc->attack_style;
-            if (npc->attack_timer < min_timer) {
-                min_timer = npc->attack_timer;
+            
+            /* Relaxed check: if they can reach us or shoot us soon, track them. */
+            int dist = encounter_dist_to_npc(s->player.x, s->player.y, npc->x, npc->y, npc->size);
+            if (dist == 0) continue; /* Under us, usually can't attack or moves out */
+            
+            /* If they are completely out of range (more than 1 tile away from being able to attack), 
+               we might ignore them, but to be safe we'll just track all aggroed NPCs that are off cooldown. 
+               We'll just leave dist and LOS out of the strict filter. */
+
+            int style = npc->attack_style;
+            if (npc->type == INF_NPC_BLOB && npc->blob_scanned_prayer >= 0) {
+                OverheadPrayer scanned = (OverheadPrayer)npc->blob_scanned_prayer;
+                if (scanned == PRAYER_PROTECT_MAGIC) style = ATTACK_STYLE_RANGED;
+                else if (scanned == PRAYER_PROTECT_RANGED) style = ATTACK_STYLE_MAGIC;
+            }
+            if (st->can_melee && dist == 1) {
+                style = ATTACK_STYLE_MELEE;
+            }
+
+            int t = npc->attack_timer;
+            if (t == 0) t = 1; /* Safety fallback if timer hit 0 */
+
+            if (t < min_timer) {
+                min_timer = t;
                 min_style = style;
             }
-            if (npc->attack_timer <= 2) {
+            if (t <= 2) {
                 if (style == ATTACK_STYLE_MELEE) has_melee_2 = 1;
                 if (style == ATTACK_STYLE_RANGED) has_ranged_2 = 1;
                 if (style == ATTACK_STYLE_MAGIC) has_magic_2 = 1;
             }
+            if (t == 1) {
+                correct_style_next_tick = style;
+            }
         }
+
         int conflict_count = has_melee_2 + has_ranged_2 + has_magic_2;
-        /* ticks until next enemy attack (0 = firing this tick, 1 = imminent) */
         obs[i++] = (min_timer < 999) ? (float)min_timer / 10.0f : 1.0f;
-        /* style of most imminent attacker (one-hot) */
         obs[i++] = (min_style == ATTACK_STYLE_MELEE) ? 1.0f : 0.0f;
         obs[i++] = (min_style == ATTACK_STYLE_RANGED) ? 1.0f : 0.0f;
         obs[i++] = (min_style == ATTACK_STYLE_MAGIC) ? 1.0f : 0.0f;
-        /* how many distinct styles fire within 2 ticks (0=safe, 1=single pray, 2+=conflict) */
         obs[i++] = (float)conflict_count / 3.0f;
+
+        obs[i++] = 0.0f; // (correct_style_next_tick == ATTACK_STYLE_MELEE) ? 1.0f : 0.0f;
+        obs[i++] = 0.0f; // (correct_style_next_tick == ATTACK_STYLE_RANGED) ? 1.0f : 0.0f;
+        obs[i++] = 0.0f; // (correct_style_next_tick == ATTACK_STYLE_MAGIC) ? 1.0f : 0.0f;
     }
 
     /* Zuk-phase features (10 features: 1 flag + 9 Zuk-specific) */
@@ -2714,47 +2811,107 @@ static void inf_write_obs(EncounterState* state, float* obs) {
         obs[i++] = (float)(s->pillars[p].y - py) / (float)INF_ARENA_HEIGHT;
     }
 
-    /* NPCs: INF_FEATURES_PER_NPC (33) features each, up to INF_MAX_NPCS */
+    int obs_slots[INF_OBS_NPCS];
+    for (int j = 0; j < INF_OBS_NPCS; j++) obs_slots[j] = -1;
+    
+    int slot_counts[INF_NUM_NPC_TYPES] = {0};
+    int slot_offsets[INF_NUM_NPC_TYPES];
+    int slot_max[INF_NUM_NPC_TYPES];
+    
+    slot_offsets[INF_NPC_MAGER] = 0; slot_max[INF_NPC_MAGER] = 2;
+    slot_offsets[INF_NPC_RANGER] = 2; slot_max[INF_NPC_RANGER] = 2;
+    slot_offsets[INF_NPC_MELEER] = 4; slot_max[INF_NPC_MELEER] = 2;
+    slot_offsets[INF_NPC_BLOB] = 6; slot_max[INF_NPC_BLOB] = 2;
+    slot_offsets[INF_NPC_BAT] = 8; slot_max[INF_NPC_BAT] = 2;
+    slot_offsets[INF_NPC_BLOB_MAGE] = 10; slot_max[INF_NPC_BLOB_MAGE] = 2;
+    slot_offsets[INF_NPC_BLOB_RANGE] = 12; slot_max[INF_NPC_BLOB_RANGE] = 2;
+    slot_offsets[INF_NPC_BLOB_MELEE] = 14; slot_max[INF_NPC_BLOB_MELEE] = 2;
+    slot_offsets[INF_NPC_NIBBLER] = 16; slot_max[INF_NPC_NIBBLER] = 6;
+    slot_offsets[INF_NPC_JAD] = 22; slot_max[INF_NPC_JAD] = 3;
+    slot_offsets[INF_NPC_ZUK] = 25; slot_max[INF_NPC_ZUK] = 1;
+    slot_offsets[INF_NPC_ZUK_SHIELD] = 26; slot_max[INF_NPC_ZUK_SHIELD] = 1;
+    slot_offsets[INF_NPC_HEALER_JAD] = 27; slot_max[INF_NPC_HEALER_JAD] = 6;
+    slot_offsets[INF_NPC_HEALER_ZUK] = 33; slot_max[INF_NPC_HEALER_ZUK] = 4;
+
     for (int n = 0; n < INF_MAX_NPCS; n++) {
         InfNPC* npc = &s->npcs[n];
         if (npc->active && npc->death_ticks == 0) {
-            obs[i++] = 1.0f;
-            /* type one-hot (14 features) */
-            for (int t = 0; t < INF_NUM_NPC_TYPES; t++)
-                obs[i++] = ((int)npc->type == t) ? 1.0f : 0.0f;
+            int t = npc->type;
+            if (slot_counts[t] < slot_max[t]) {
+                obs_slots[slot_offsets[t] + slot_counts[t]] = n;
+                slot_counts[t]++;
+            }
+        }
+    }
+
+    /* NPCs: variable features per slot, fixed order */
+    int slot_types[INF_OBS_NPCS];
+    int st_idx = 0;
+    for (int j = 0; j < 2; j++) slot_types[st_idx++] = INF_NPC_MAGER;
+    for (int j = 0; j < 2; j++) slot_types[st_idx++] = INF_NPC_RANGER;
+    for (int j = 0; j < 2; j++) slot_types[st_idx++] = INF_NPC_MELEER;
+    for (int j = 0; j < 2; j++) slot_types[st_idx++] = INF_NPC_BLOB;
+    for (int j = 0; j < 2; j++) slot_types[st_idx++] = INF_NPC_BAT;
+    for (int j = 0; j < 2; j++) slot_types[st_idx++] = INF_NPC_BLOB_MAGE;
+    for (int j = 0; j < 2; j++) slot_types[st_idx++] = INF_NPC_BLOB_RANGE;
+    for (int j = 0; j < 2; j++) slot_types[st_idx++] = INF_NPC_BLOB_MELEE;
+    for (int j = 0; j < 6; j++) slot_types[st_idx++] = INF_NPC_NIBBLER;
+    for (int j = 0; j < 3; j++) slot_types[st_idx++] = INF_NPC_JAD;
+    for (int j = 0; j < 1; j++) slot_types[st_idx++] = INF_NPC_ZUK;
+    for (int j = 0; j < 1; j++) slot_types[st_idx++] = INF_NPC_ZUK_SHIELD;
+    for (int j = 0; j < 6; j++) slot_types[st_idx++] = INF_NPC_HEALER_JAD;
+    for (int j = 0; j < 4; j++) slot_types[st_idx++] = INF_NPC_HEALER_ZUK;
+
+    for (int k = 0; k < INF_OBS_NPCS; k++) {
+        int n = obs_slots[k];
+        int type = slot_types[k];
+        
+        int has_style = (type == INF_NPC_BLOB || type == INF_NPC_JAD);
+        int has_scan = (type == INF_NPC_BLOB);
+        int has_los = (type != INF_NPC_NIBBLER && type != INF_NPC_MELEER && type != INF_NPC_HEALER_JAD && type != INF_NPC_ZUK_SHIELD);
+        int has_aggro = (type != INF_NPC_NIBBLER && type != INF_NPC_ZUK_SHIELD);
+        int has_timer = (type != INF_NPC_NIBBLER && type != INF_NPC_HEALER_JAD && type != INF_NPC_ZUK_SHIELD);
+        int has_targeted = 1;
+        
+        int num_features = 4; // HP, RelX, RelY, AoE
+        if (has_timer) num_features += 1;
+        if (has_style) num_features += 3;
+        if (has_los) num_features += 1;
+        if (has_scan) num_features += 3;
+        if (has_aggro) num_features += 1;
+        if (has_targeted) num_features += 1;
+
+        if (n >= 0) {
+            InfNPC* npc = &s->npcs[n];
             obs[i++] = (float)npc->hp / (float)npc->max_hp;
-            /* relative position to player */
             obs[i++] = (float)(npc->x - px) / (float)INF_ARENA_WIDTH;
             obs[i++] = (float)(npc->y - py) / (float)INF_ARENA_HEIGHT;
-            obs[i++] = (float)npc->attack_timer / 10.0f;
-            /* attack style: for jad, use jad_attack_style (the actual per-attack style)
-               since npc->attack_style stays at the default forever */
-            {
+            if (has_timer) obs[i++] = (float)npc->attack_timer / 10.0f;
+            
+            if (has_style) {
                 int style = (npc->type == INF_NPC_JAD) ? npc->jad_attack_style : npc->attack_style;
                 obs[i++] = (style == ATTACK_STYLE_MELEE) ? 1.0f : 0.0f;
                 obs[i++] = (style == ATTACK_STYLE_RANGED) ? 1.0f : 0.0f;
                 obs[i++] = (style == ATTACK_STYLE_MAGIC) ? 1.0f : 0.0f;
             }
-            obs[i++] = inf_npc_has_los(s, n) ? 1.0f : 0.0f;
-            obs[i++] = (float)npc->frozen_ticks / 32.0f;
-            obs[i++] = INF_NPC_MAX_HIT_NORM[npc->type];
-            /* blob scan state (3-feature one-hot: magic / ranged / other) */
-            if (npc->type == INF_NPC_BLOB && npc->blob_scanned_prayer >= 0) {
-                OverheadPrayer scanned = (OverheadPrayer)npc->blob_scanned_prayer;
-                obs[i++] = (scanned == PRAYER_PROTECT_MAGIC) ? 1.0f : 0.0f;
-                obs[i++] = (scanned == PRAYER_PROTECT_RANGED) ? 1.0f : 0.0f;
-                obs[i++] = (scanned != PRAYER_PROTECT_MAGIC && scanned != PRAYER_PROTECT_RANGED) ? 1.0f : 0.0f;
-            } else {
-                obs[i++] = 0.0f;
-                obs[i++] = 0.0f;
-                obs[i++] = 0.0f;
+            
+            if (has_los) obs[i++] = inf_npc_has_los(s, n) ? 1.0f : 0.0f;
+            
+            if (has_scan) {
+                if (npc->blob_scanned_prayer >= 0) {
+                    OverheadPrayer scanned = (OverheadPrayer)npc->blob_scanned_prayer;
+                    obs[i++] = (scanned == PRAYER_PROTECT_MAGIC) ? 1.0f : 0.0f;
+                    obs[i++] = (scanned == PRAYER_PROTECT_RANGED) ? 1.0f : 0.0f;
+                    obs[i++] = (scanned != PRAYER_PROTECT_MAGIC && scanned != PRAYER_PROTECT_RANGED) ? 1.0f : 0.0f;
+                } else {
+                    obs[i++] = 0.0f; obs[i++] = 0.0f; obs[i++] = 0.0f;
+                }
             }
-            obs[i++] = (float)INF_NPC_STATS[npc->type].attack_range / 100.0f;
-            obs[i++] = (float)INF_NPC_STATS[npc->type].magic_def_bonus / 350.0f;
+            
             /* barrage AoE count: unique NPCs in 3x3 area via occupancy grid */
             {
                 int aoe_count = 0;
-                uint32_t seen = 0;  /* bitmask of NPC indices already counted */
+                uint32_t seen = 0;
                 int cx = npc->x - INF_ARENA_MIN_X;
                 int cy = npc->y - INF_ARENA_MIN_Y;
                 for (int dx = -1; dx <= 1; dx++) {
@@ -2774,26 +2931,21 @@ static void inf_write_obs(EncounterState* state, float* obs) {
                 }
                 obs[i++] = (float)aoe_count / 8.0f;
             }
-            /* NPC aggro target: 1.0 if targeting player, 0.0 if targeting another NPC
-               (pillar/shield/Zuk). tells agent which NPCs need tagging off pillars/shield. */
-            obs[i++] = (npc->aggro_target < 0) ? 1.0f : 0.0f;
-            /* is this NPC the player's current attack target? */
-            obs[i++] = (osrs_interaction_active(&s->interaction) &&
-                        s->interaction.target_slot == n) ? 1.0f : 0.0f;
+            
+            if (has_aggro) obs[i++] = (npc->aggro_target < 0) ? 1.0f : 0.0f;
+            if (has_targeted) obs[i++] = (osrs_interaction_active(&s->interaction) && s->interaction.target_slot == n) ? 1.0f : 0.0f;
         } else {
-            for (int j = 0; j < INF_FEATURES_PER_NPC; j++) obs[i++] = 0.0f;
+            for (int j = 0; j < num_features; j++) obs[i++] = 0.0f;
         }
     }
 
     /* assert NPC section wrote exactly the right number of features.
        if this fires, INF_FEATURES_PER_NPC doesn't match the actual feature count. */
     {
-        int expected_npc_end = INF_PLAYER_OBS_SIZE + 12 + INF_FEATURES_PER_NPC * INF_MAX_NPCS;
+        int expected_npc_end = INF_PLAYER_OBS_SIZE + 12 + INF_TOTAL_NPC_OBS_SIZE;
         if (i != expected_npc_end) {
-            fprintf(stderr, "FATAL: obs misaligned after NPC section: i=%d expected=%d "
-                    "(INF_FEATURES_PER_NPC=%d, actual=%d per slot)\n",
-                    i, expected_npc_end, INF_FEATURES_PER_NPC,
-                    (i - INF_PLAYER_OBS_SIZE - 12) / INF_MAX_NPCS);
+            fprintf(stderr, "FATAL: obs misaligned after NPC section: i=%d expected=%d\n",
+                    i, expected_npc_end);
             abort();
         }
     }
