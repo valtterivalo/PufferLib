@@ -63,6 +63,12 @@ fi
 OSRS_INCLUDE=""
 if [[ "$SRC_DIR" == *osrs* ]]; then
     OSRS_INCLUDE="-Iocean/osrs"
+    # auto-download visual assets (puffer eval renders through _C.so and needs them)
+    if [ ! -f "data/equipment.models" ]; then
+        echo "Downloading OSRS visual assets..."
+        mkdir -p data
+        curl -sL "https://github.com/valtterivalo/PufferLib/releases/download/osrs-assets-v5/osrs-assets-v5.tar.gz" | tar xz -C data
+    fi
 fi
 
 if [ "$PLATFORM" = "Linux" ]; then
