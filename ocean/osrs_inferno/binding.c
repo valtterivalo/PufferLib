@@ -324,6 +324,17 @@ void c_render(Env* env) {
             rc->dest_y[i] = rc->sub_y[i];
         }
     }
+
+    /* update NPC visual positions every frame (not just first call).
+       render_post_tick snaps sub_x/sub_y/dest_x/dest_y for spawned/moved NPCs
+       and resets composite state on npc_slot changes. the standalone viewer
+       calls this in visual_frame; without it, NPCs that spawn after first
+       render stay at stale/zero positions and are invisible. */
+    RenderClient* rc2 = (RenderClient*)re->client;
+    if (rc2) {
+        render_populate_entities(rc2, re);
+        render_post_tick(rc2, re);
+    }
 }
 
 #define MY_VEC_INIT

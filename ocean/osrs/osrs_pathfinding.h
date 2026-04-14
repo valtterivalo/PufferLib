@@ -489,7 +489,7 @@ static inline PathResult pathfind_step_arena(
         for (int fx = local_dest_x - r; fx <= local_dest_x + r; fx++) {
             for (int fy = local_dest_y - r; fy <= local_dest_y + r; fy++) {
                 if (fx < 0 || fx >= arena_w || fy < 0 || fy >= arena_h) continue;
-                if (BFS_COST(fx, fy) == 0) continue;
+                if (!BFS_VISITED(fx, fy) || BFS_COST(fx, fy) == 0) continue;
                 int ddx = fx - local_dest_x, ddy = fy - local_dest_y;
                 int dist_sq = ddx * ddx + ddy * ddy;
                 if (dist_sq < best_dist_sq ||
