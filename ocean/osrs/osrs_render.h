@@ -31,9 +31,9 @@
 /* ======================================================================== */
 
 #define RENDER_TILE_SIZE       20
-/* window sized to match the OSRS fixed-client layout (765x503).
-   3D viewport projects into the area left of the side panel; the tile
-   grid is a game-logic unit only, decoupled from window pixels. */
+/* window sized at 1.5x the OSRS fixed-client layout (765x503 → 1148x755)
+   so it's comfortable to look at on modern monitors while keeping the
+   same aspect ratio as the real game. */
 #define RENDER_WINDOW_W        1148
 #define RENDER_WINDOW_H        755
 #define RENDER_PANEL_WIDTH     285   /* 190 * 1.5 */

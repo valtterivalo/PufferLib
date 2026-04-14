@@ -856,7 +856,7 @@ static int gui_content_y(GuiState* gs) {
    the 4-column grid (304px) fills the panel with 8px padding each side. */
 #define INV_COLS 4
 #define INV_ROWS 7
-/* OSRS native inventory cell pitch is ~42x36, sprite 36x32. */
+/* OSRS native inventory cell pitch is ~42x36, scaled 1.5x to match window. */
 #define INV_CELL_W 63
 #define INV_CELL_H 54
 #define INV_SPRITE_W 54
