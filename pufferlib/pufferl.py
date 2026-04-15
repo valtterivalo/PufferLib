@@ -233,7 +233,10 @@ def _train(env_name, args, sweep_obj=None, result_queue=None, verbose=False):
         if epoch < train_epochs:
             backend.train(pufferl)
 
-        if (epoch % args['checkpoint_interval'] == 0 or epoch == train_epochs - 1) and sweep_obj is None:
+        # checkpoint_interval <= 0 disables periodic saves (still writes final epoch)
+        interval = args['checkpoint_interval']
+        should_save = (interval > 0 and epoch % interval == 0) or epoch == train_epochs - 1
+        if should_save and sweep_obj is None:
             model_path = os.path.join(checkpoint_dir, f'{pufferl.global_step:016d}.bin')
             backend.save_weights(pufferl, model_path)
 
@@ -407,11 +410,22 @@ def eval(env_name, args=None, load_path=None):
     backend = _resolve_backend(args)
     pufferl = backend.create_pufferl(args)
 
-    # Resolve load path
+    # Resolve load path. If --load-model-path is omitted, auto-resolve the latest
+    # checkpoint for this env so `puffer eval <env>` "just works" after a training
+    # run. Pass --load-model-path latest explicitly if you want a hard error when
+    # no checkpoint exists. Explicit file paths are loaded as-is.
     load_path = load_path or args.get('load_model_path')
-    if load_path == 'latest':
-        checkpoint_dir = args['checkpoint_dir']
-        pattern = os.path.join(checkpoint_dir, args['env_name'], '**', '*.bin')
+    checkpoint_dir = args['checkpoint_dir']
+    pattern = os.path.join(checkpoint_dir, args['env_name'], '**', '*.bin')
+    if load_path is None:
+        candidates = glob.glob(pattern, recursive=True)
+        if candidates:
+            load_path = max(candidates, key=os.path.getctime)
+        else:
+            print(f'WARNING: no checkpoint found in {checkpoint_dir}/{args["env_name"]}/ '
+                  f'— running with random weights. '
+                  f'Train first with `puffer train {args["env_name"]}`.', flush=True)
+    elif load_path == 'latest':
         candidates = glob.glob(pattern, recursive=True)
         if not candidates:
             raise FileNotFoundError(f'No .bin checkpoints found in {checkpoint_dir}/{args["env_name"]}/')
@@ -419,7 +433,7 @@ def eval(env_name, args=None, load_path=None):
 
     if load_path is not None:
         backend.load_weights(pufferl, load_path)
-        print(f'Loaded weights from {load_path}')
+        print(f'Loaded weights from {load_path}', flush=True)
 
     while True:
         backend.render(pufferl, 0)
