@@ -791,6 +791,7 @@ typedef struct {
     /* Zuk diagnostics */
     float behind_shield_pct;   /* fraction of Zuk ticks behind shield */
     float zuk_hp_remaining;    /* Zuk HP at episode end (0 if killed) */
+    float hp_restored;         /* HP restored to enemies (healers + mager) this episode */
     /* action noop rates per head (0=move,1=prayer,2=target,3=gear,4=eat,5=pot,6=spell,7=spec) */
     float noop_move;
     float noop_prayer;
