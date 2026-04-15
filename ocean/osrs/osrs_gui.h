@@ -502,6 +502,8 @@ static void gui_load_sprites(GuiState* gs) {
         OSRS_ID_RANGED_4, OSRS_ID_RANGED_3, OSRS_ID_RANGED_2, OSRS_ID_RANGED_1,
         OSRS_ID_ANTIVENOM_4, OSRS_ID_ANTIVENOM_3, OSRS_ID_ANTIVENOM_2, OSRS_ID_ANTIVENOM_1,
         OSRS_ID_PRAYER_POT_4, OSRS_ID_PRAYER_POT_3, OSRS_ID_PRAYER_POT_2, OSRS_ID_PRAYER_POT_1,
+        OSRS_ID_BASTION_4, OSRS_ID_BASTION_3, OSRS_ID_BASTION_2, OSRS_ID_BASTION_1,
+        OSRS_ID_STAMINA_4, OSRS_ID_STAMINA_3, OSRS_ID_STAMINA_2, OSRS_ID_STAMINA_1,
     };
     for (int i = 0; i < (int)(sizeof(consumable_ids)/sizeof(consumable_ids[0])); i++) {
         if (gs->item_sprite_count >= GUI_MAX_ITEM_SPRITES) break;

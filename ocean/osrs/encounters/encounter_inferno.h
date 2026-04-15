@@ -2958,10 +2958,6 @@ static void inf_fill_render_entities(EncounterState* state, RenderEntity* out, i
     InfernoState* s = (InfernoState*)state;
     int n = 0;
 
-    /* GUI reads combat_potion_doses/ranged_potion_doses generically;
-       inferno uses bastion/stamina, so map them for the GUI display */
-    s->player.combat_potion_doses = s->player.bastion_doses;
-    s->player.ranged_potion_doses = s->player.stamina_doses;
     {
         const EncounterLoadoutStats* ls = &s->loadout_stats[s->weapon_set];
         s->player.gui_max_hit = ls->max_hit;
