@@ -71,22 +71,9 @@ static int g_best_ticks = 999999;
 static int g_best_zuk_hp = 999999;  /* lowest Zuk HP seen (for Zuk-only training) */
 
 void c_step(Env* env) {
-    RenderClient* rc = (RenderClient*)env->render_env.client;
-    if (rc != NULL) {
-        env->ticks_per_second = rc->ticks_per_second;
-    }
-    if (rc != NULL && env->ticks_per_second > 0.0f) {
-        double interval = 1.0 / env->ticks_per_second;
-        double now = GetTime();
-        if (env->last_step_time > 0.0) {
-            double elapsed = now - env->last_step_time;
-            if (elapsed < interval) {
-                WaitTime(interval - elapsed);
-                now = GetTime();
-            }
-        }
-        env->last_step_time = now;
-    }
+    /* tick pacing lives in c_render — it blocks at the tick deadline calling
+       pvp_render at ~60fps so sub-tile interpolation can animate between sim
+       ticks. nothing to do here timing-wise. */
 
     /* replay playback: if this env has a loaded replay, override policy actions */
     if (env->replay_actions && env->replay_cursor < env->replay_num_ticks) {
@@ -324,18 +311,33 @@ void c_render(Env* env) {
             rc->dest_x[i] = rc->sub_x[i];
             rc->dest_y[i] = rc->sub_y[i];
         }
+        env->last_step_time = GetTime();
     }
 
-    /* update NPC visual positions every frame (not just first call).
+    RenderClient* rc = (RenderClient*)re->client;
+    if (!rc) return;
+
+    /* update NPC visual positions once per tick (not per frame).
        render_post_tick snaps sub_x/sub_y/dest_x/dest_y for spawned/moved NPCs
-       and resets composite state on npc_slot changes. the standalone viewer
-       calls this in visual_frame; without it, NPCs that spawn after first
-       render stay at stale/zero positions and are invisible. */
-    RenderClient* rc2 = (RenderClient*)re->client;
-    if (rc2) {
-        render_populate_entities(rc2, re);
-        render_post_tick(rc2, re);
+       and resets composite state on npc_slot changes. */
+    render_populate_entities(rc, re);
+    render_post_tick(rc, re);
+
+    /* match the standalone viewer's visual_frame pattern: spin pvp_render at
+       ~60fps until the next sim tick is due. pvp_render uses GetFrameTime()
+       to accumulate client_tick_accumulator and steps render_client_tick every
+       20ms, which is what animates sub_x/sub_y interpolation smoothly between
+       sim ticks. calling pvp_render only once per 600ms collapses all 30
+       client-ticks into a single frame → entities snap instantly, no motion.
+       so: keep rendering until the tick deadline, then return. c_step's sim
+       step follows immediately and the loop repeats. */
+    float tps = rc->ticks_per_second > 0.0f ? rc->ticks_per_second : 1.667f;
+    double interval = 1.0 / (double)tps;
+    double deadline = env->last_step_time + interval;
+    while (GetTime() < deadline) {
+        pvp_render(re);
     }
+    env->last_step_time = GetTime();
 }
 
 #define MY_VEC_INIT
