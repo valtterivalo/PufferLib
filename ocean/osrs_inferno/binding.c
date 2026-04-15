@@ -138,6 +138,7 @@ void c_step(Env* env) {
         env->log.episode_length += (float)s->tick;
         env->log.damage_dealt += s->total_damage_dealt;
         env->log.damage_received += s->total_damage_received;
+        env->log.hp_restored += s->total_hp_restored;
         env->log.wins += (s->winner == 0) ? 1.0f : 0.0f;
         env->log.wave += (float)s->wave;
         env->log.prayer_correct += (float)s->total_prayer_correct;
@@ -523,6 +524,7 @@ void my_log(Log* log, Dict* out) {
     dict_set(out, "current_magic", log->current_magic);
     dict_set(out, "behind_shield_pct", log->behind_shield_pct);
     dict_set(out, "zuk_hp_remaining", log->zuk_hp_remaining);
+    dict_set(out, "hp_restored", log->hp_restored);
     dict_set(out, "noop_move", log->noop_move);
     dict_set(out, "noop_prayer", log->noop_prayer);
     dict_set(out, "noop_target", log->noop_target);

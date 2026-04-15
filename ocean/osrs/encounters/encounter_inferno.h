@@ -190,7 +190,7 @@ static const InfNPCOverlay INF_NPC_OVERLAY[INF_NUM_NPC_TYPES] = {
     [INF_NPC_JAD]        = { 50, ATTACK_STYLE_RANGED, MELEE_STYLE_STAB,  0, 113, 100, 113, 0, 1 },
     [INF_NPC_ZUK]        = { 99, ATTACK_STYLE_MAGIC,  MELEE_STYLE_STAB,  0, 148, 100, 0, 8, 0 },
     [INF_NPC_HEALER_JAD] = { 1,  ATTACK_STYLE_MELEE,  MELEE_STYLE_CRUSH, 0,   0,   0, 0, 0, 1 },
-    [INF_NPC_HEALER_ZUK] = { 99, ATTACK_STYLE_MAGIC,  MELEE_STYLE_STAB,  0,  10, 100, 0, 2, 0 },  /* stun_on_spawn=2 per InfernoTrainer TzKalZuk.ts:168 */
+    [INF_NPC_HEALER_ZUK] = { 99, ATTACK_STYLE_MAGIC,  MELEE_STYLE_STAB,  0,  10, 100, 0, 1, 0 },  /* stun_on_spawn=1 per InfernoTrainer JalMejJak.ts SPAWN_DELAY */
     [INF_NPC_ZUK_SHIELD] = { 0,  ATTACK_STYLE_NONE,   MELEE_STYLE_STAB,  0,   0,   0, 0, 1, 0 },
 };
 
@@ -365,7 +365,9 @@ typedef struct {
     int hp, max_hp;
 } InfDeadMob;
 
-#define INF_MAX_PENDING_SPARKS 16
+/* 4 zuk healers × 3 sparks per volley × 2 overlapping volleys = 24.
+   cap is 32 for headroom so volleys don't silently drop sparks. */
+#define INF_MAX_PENDING_SPARKS 32
 
 typedef struct {
     int active;
@@ -564,6 +566,11 @@ typedef struct {
     float episode_return;  /* accumulated reward over entire episode */
     float damage_dealt_this_tick;
     float damage_received_this_tick;
+    /* HP restored to the enemy side this tick — subtracted from damage_dealt
+       in inf_compute_reward so the agent gets no credit for damage that's
+       immediately undone. sources: zuk healer heals (landing tick), jad healer
+       heals (landing tick), mager resurrection (the resurrected mob's HP). */
+    float hp_restored_this_tick;
     int prayer_correct_this_tick;  /* count of NPC attacks blocked by prayer this tick */
     int wave_completed_this_tick;
     int pillar_lost_this_tick;     /* -1 = none, 0-2 = which pillar was destroyed */
@@ -571,6 +578,7 @@ typedef struct {
     /* cumulative stats for diagnostics */
     float total_damage_dealt;
     float total_damage_received;
+    float total_hp_restored;   /* cumulative HP restored to enemies this episode */
     int total_waves_cleared;
     int ticks_without_action;  /* consecutive ticks with no attack or movement */
     int total_prayer_correct;  /* times prayer blocked an NPC attack */
@@ -1276,9 +1284,11 @@ static void inf_npc_attack(InfernoState* s, int idx) {
     if (npc->type == INF_NPC_ZUK_SHIELD) return;
 
     /* NPC targeting another NPC (set/jad → shield): always hit, random damage.
-       zuk healers excluded — they have their own handler below that HEALS instead of damages. */
+       both healer types excluded — their heal handlers below RESTORE HP
+       to their target instead of damaging it. */
     if (npc->aggro_target >= 0 && npc->aggro_target < INF_MAX_NPCS
-        && npc->type != INF_NPC_HEALER_ZUK) {
+        && npc->type != INF_NPC_HEALER_ZUK
+        && npc->type != INF_NPC_HEALER_JAD) {
         InfNPC* target = &s->npcs[npc->aggro_target];
         if (target->active) {
             int max_hit = osrs_npc_magic_max_hit(stats->magic_base_dmg, stats->magic_dmg_pct);
@@ -1657,6 +1667,9 @@ static int inf_mager_resurrect(InfernoState* s, int idx) {
     inf_init_npc(s, slot, dm->type, rx, ry);
     s->npcs[slot].hp = dm->hp;      /* 50% of max HP */
     s->npcs[slot].max_hp = dm->max_hp;
+    /* resurrection restores HP the agent already paid to remove — treat like a
+       heal for reward purposes so re-kills don't double-count as progress. */
+    s->hp_restored_this_tick += (float)dm->hp;
 
     /* remove from dead store (swap with last) */
     s->dead_mobs[di] = s->dead_mobs[s->dead_mob_count - 1];
@@ -1811,9 +1824,13 @@ static void inf_healer_apply_landed_heal(InfernoState* s, int idx) {
     if (!s->npcs[target_idx].active) return;
 
     int heal = encounter_rand_int(&s->rng_state, heal_cap);
+    int before = s->npcs[target_idx].hp;
     s->npcs[target_idx].hp += heal;
     if (s->npcs[target_idx].hp > s->npcs[target_idx].max_hp)
         s->npcs[target_idx].hp = s->npcs[target_idx].max_hp;
+    /* effective heal (clamped at max_hp) — feeds hp_restored_this_tick so the
+       agent loses reward on ticks where its damage is being undone. */
+    s->hp_restored_this_tick += (float)(s->npcs[target_idx].hp - before);
 }
 
 static void inf_queue_pending_spark(
@@ -2332,6 +2349,7 @@ static float inf_compute_reward(InfernoState* s) {
        blow's damage is counted in total_damage_received */
     s->total_damage_dealt += s->damage_dealt_this_tick;
     s->total_damage_received += s->damage_received_this_tick;
+    s->total_hp_restored += s->hp_restored_this_tick;
 
     if (s->episode_over)
         return (s->winner == 0) ? 1.0f : 0.0f;
@@ -2347,8 +2365,15 @@ static float inf_compute_reward(InfernoState* s) {
     if (s->behind_shield_this_tick)
         r += 0.005f;
 
-    if (s->damage_dealt_this_tick > 0.0f)
-        r += 0.01f * s->damage_dealt_this_tick;
+    /* net effective damage: gross damage minus HP restored to enemies this tick.
+       zuk/jad healers heal their targets and mager resurrection spawns dead mobs
+       back at 50% HP — without subtracting these the agent has no signal that
+       its damage is being undone and can't learn to prioritize healers/mager.
+       clamped at 0 so a pure-healing tick is zero-reward, never negative (a
+       negative per-tick reward would make dying feel good). */
+    float net_damage = s->damage_dealt_this_tick - s->hp_restored_this_tick;
+    if (net_damage > 0.0f)
+        r += 0.01f * net_damage;
 
     return r;
 }
@@ -2365,6 +2390,7 @@ static void inf_step(EncounterState* state, const int* actions) {
     s->reward = 0.0f;
     s->damage_dealt_this_tick = 0.0f;
     s->damage_received_this_tick = 0.0f;
+    s->hp_restored_this_tick = 0.0f;
     s->prayer_correct_this_tick = 0;
     s->tick_styles_fired = 0;
     s->tick_attacks_fired = 0;
