@@ -541,6 +541,7 @@ typedef struct {
     Player player;
 
     InfNPC npcs[INF_MAX_NPCS];
+    int current_obs_slots[INF_OBS_NPCS];
     InfPillar pillars[INF_NUM_PILLARS];
     InfZukState zuk;
 
@@ -564,6 +565,7 @@ typedef struct {
     float reward;
     float episode_return;  /* accumulated reward over entire episode */
     float damage_dealt_this_tick;
+    float damage_zuk_healers_this_tick;
     float damage_received_this_tick;
     int prayer_correct_this_tick;  /* count of NPC attacks blocked by prayer this tick */
     int wave_completed_this_tick;
@@ -571,6 +573,7 @@ typedef struct {
 
     /* cumulative stats for diagnostics */
     float total_damage_dealt;
+    float total_zuk_healer_damage;
     float total_damage_received;
     int total_waves_cleared;
     int ticks_without_action;  /* consecutive ticks with no attack or movement */
@@ -812,7 +815,7 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
         }
         s->player.num_items_in_slot[GEAR_SLOT_AMMO] = 0;
     }
-    s->player.brew_doses = 32;     /* 8 pots x 4 doses */
+    s->player.brew_doses = 0;     /* 8 pots x 4 doses */
     s->player.restore_doses = 40;  /* 10 pots x 4 doses */
     s->player.bastion_doses = 4;   /* 1 pot x 4 doses */
     s->player.stamina_doses = 4;   /* 1 pot x 4 doses */
@@ -1928,7 +1931,7 @@ static void inf_tick_npcs(InfernoState* s) {
 
 #define INF_HEAD_MOVE    0   /* 25: idle + 8 walk + 16 run */
 #define INF_HEAD_PRAYER  1   /* 5: no_change, off, melee, range, mage (ENCOUNTER_PRAYER_DIM) */
-#define INF_HEAD_TARGET  2   /* INF_MAX_NPCS+1: none or NPC index */
+#define INF_HEAD_TARGET  2   /* INF_OBS_NPCS+1: none or observation slot */
 #define INF_HEAD_GEAR    3   /* 5: no_switch, mage, tbow, bp, tank */
 #define INF_HEAD_EAT     4   /* 2: none, brew */
 #define INF_HEAD_POTION  5   /* 4: none, restore, bastion, stamina */
@@ -1936,8 +1939,8 @@ static void inf_tick_npcs(InfernoState* s) {
 #define INF_HEAD_SPEC    7   /* 2: no_change, toggle (arm/disarm blowpipe spec) */
 #define INF_NUM_ACTION_HEADS 8
 
-static const int INF_ACTION_DIMS[INF_NUM_ACTION_HEADS] = { ENCOUNTER_MOVE_ACTIONS, 5, INF_MAX_NPCS+1, 5, 2, 4, 3, 2 };
-#define INF_ACTION_MASK_SIZE (ENCOUNTER_MOVE_ACTIONS + 5 + INF_MAX_NPCS+1 + 5 + 2 + 4 + 3 + 2)
+static const int INF_ACTION_DIMS[INF_NUM_ACTION_HEADS] = { ENCOUNTER_MOVE_ACTIONS, 5, INF_OBS_NPCS+1, 5, 2, 4, 3, 2 };
+#define INF_ACTION_MASK_SIZE (ENCOUNTER_MOVE_ACTIONS + 5 + INF_OBS_NPCS+1 + 5 + 2 + 4 + 3 + 2)
 
 /* movement uses shared encounter_move_to_target from osrs_encounter.h */
 
@@ -2156,17 +2159,14 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
        target=0 means "no new target this tick" (preserves existing target). */
     int target = actions[INF_HEAD_TARGET];
     int has_new_target = 0;
-    if (target > 0 && target <= INF_MAX_NPCS) {
-        int npc_idx = target - 1;
-        if (s->npcs[npc_idx].active && s->npcs[npc_idx].death_ticks == 0 &&
+    if (target > 0 && target <= INF_OBS_NPCS) {
+        int obs_idx = target - 1;
+        int npc_idx = s->current_obs_slots[obs_idx];
+        if (npc_idx >= 0 && npc_idx < INF_MAX_NPCS && 
+            s->npcs[npc_idx].active && s->npcs[npc_idx].death_ticks == 0 &&
             s->npcs[npc_idx].type != INF_NPC_ZUK_SHIELD) {
             osrs_interaction_set(&s->interaction, npc_idx);
             has_new_target = 1;
-            /* tagging: redirect NPC aggro from shield/zuk to player */
-            if (s->npcs[npc_idx].aggro_target != -1) {
-                s->npcs[npc_idx].aggro_target = -1;
-                s->npcs[npc_idx].stun_timer = 2;  /* 2-tick delay on aggro switch */
-            }
         }
     }
     /* explicit movement (ground click or RL move) cancels attack target,
@@ -2352,6 +2352,12 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
 
                 s->player.attack_timer = ls->attack_speed;
 
+                /* tagging: redirect NPC aggro from shield/zuk to player */
+                if (target_npc->aggro_target != -1) {
+                    target_npc->aggro_target = -1;
+                    target_npc->stun_timer = 2;  /* 2-tick delay on aggro switch */
+                }
+
                 /* player projectile event for renderer */
                 s->player_attacked_this_tick = 1;
                 s->player_attack_npc_idx = s->interaction.target_slot;
@@ -2377,6 +2383,7 @@ static float inf_compute_reward(InfernoState* s) {
     /* accumulate diagnostic stats BEFORE terminal check so the killing
        blow's damage is counted in total_damage_received */
     s->total_damage_dealt += s->damage_dealt_this_tick;
+    s->total_zuk_healer_damage += s->damage_zuk_healers_this_tick;
     s->total_damage_received += s->damage_received_this_tick;
 
     if (s->episode_over)
@@ -2385,18 +2392,32 @@ static float inf_compute_reward(InfernoState* s) {
     float r = 0.0f;
 
     /* survival: per-tick bonus for staying alive */
-    if (s->wave >= 68)
-        r += 0.001f;
+    //if (s->wave >= 68)
+    //    r += 0.001f;
 
     /* shield positioning: strong signal for the core Zuk mechanic.
        this is THE thing we need the agent to learn first. */
-    if (s->behind_shield_this_tick)
-        r += 0.005f;
+    //if (s->behind_shield_this_tick)
+    //    r += 0.005f;
 
+    /* Specialized damage reward for Zuk wave:
+       If Zuk healers are alive, ONLY reward damage to them.
+       Otherwise, reward all damage. */
+    int zuk_healers_alive = 0;
+    for (int i = 0; i < INF_MAX_NPCS; i++) {
+        if (s->npcs[i].active && s->npcs[i].type == INF_NPC_HEALER_ZUK && s->npcs[i].death_ticks == 0) {
+            zuk_healers_alive = 1;
+            break;
+        }
+    }
 
-
-    if (s->damage_dealt_this_tick > 0.0f)
-        r += 0.01f * s->damage_dealt_this_tick;
+    if (zuk_healers_alive) {
+        if (s->damage_zuk_healers_this_tick > 0.0f)
+            r += 0.001f * s->damage_zuk_healers_this_tick;
+    } else {
+        if (s->damage_dealt_this_tick > 0.0f)
+            r += 0.001f * s->damage_dealt_this_tick;
+    }
 
     return r;
 }
@@ -2412,6 +2433,7 @@ static void inf_step(EncounterState* state, const int* actions) {
     /* clear per-tick state */
     s->reward = 0.0f;
     s->damage_dealt_this_tick = 0.0f;
+    s->damage_zuk_healers_this_tick = 0.0f;
     s->damage_received_this_tick = 0.0f;
     s->prayer_correct_this_tick = 0;
     s->off_prayer_hits_this_tick = 0;
@@ -2462,11 +2484,15 @@ static void inf_step(EncounterState* state, const int* actions) {
         for (int i = 0; i < INF_MAX_NPCS; i++) {
             if (!s->npcs[i].active || s->npcs[i].death_ticks > 0) continue;
             int spell = s->npcs[i].pending_hit.spell_type;
+            float dmg_before = s->damage_dealt_this_tick;
             int landed = encounter_resolve_npc_pending_hit(
                 &s->npcs[i].pending_hit,
                 &s->npcs[i].hp, &s->npcs[i].hit_landed_this_tick, &s->npcs[i].hit_damage,
                 &s->npcs[i].frozen_ticks, &blood_heal_acc, &s->damage_dealt_this_tick);
             if (landed) {
+                if (s->npcs[i].type == INF_NPC_HEALER_ZUK) {
+                    s->damage_zuk_healers_this_tick += (s->damage_dealt_this_tick - dmg_before);
+                }
                 s->npcs[i].hit_spell_type = spell;
                 inf_apply_npc_death(s, i);
             }
@@ -2551,8 +2577,7 @@ static void inf_step(EncounterState* state, const int* actions) {
         if (actions[h] == 0) s->action_noop_count[h]++;
     }
 
-    inf_compute_reward(s);
-    s->reward = 0.0f;
+    s->reward = inf_compute_reward(s);
     s->episode_return += s->reward;
 
     /* check player death */
@@ -2608,7 +2633,7 @@ static void inf_step(EncounterState* state, const int* actions) {
 /* ======================================================================== */
 
 /* obs layout: 49 player + 12 pillar + 33*32 NPC + 5*8 pending hits = 1157 */
-#define INF_PLAYER_OBS_SIZE 52
+#define INF_PLAYER_OBS_SIZE 49
 #define INF_TOTAL_NPC_OBS_SIZE 282
 #define INF_FEATURES_PER_HIT 5
 #define INF_NUM_OBS (INF_PLAYER_OBS_SIZE + 12 + INF_TOTAL_NPC_OBS_SIZE + INF_FEATURES_PER_HIT * ENCOUNTER_MAX_PENDING_HITS)
@@ -2683,8 +2708,7 @@ static void inf_write_obs(EncounterState* state, float* obs) {
         int min_timer = 999;
         int min_style = 0;
         int has_melee_2 = 0, has_ranged_2 = 0, has_magic_2 = 0;
-        int correct_style_next_tick = -1;
-
+        
         /* 1. Pending hits (handles Jad, which checks prayer on impact) */
         for (int h = 0; h < s->player_pending_hit_count; h++) {
             EncounterPendingHit* ph = &s->player_pending_hits[h];
@@ -2700,8 +2724,7 @@ static void inf_write_obs(EncounterState* state, float* obs) {
                     if (ph->attack_style == ATTACK_STYLE_MAGIC) has_magic_2 = 1;
                 }
                 if (t == 1) {
-                    correct_style_next_tick = ph->attack_style;
-                }
+                                    }
             }
         }
 
@@ -2746,10 +2769,7 @@ static void inf_write_obs(EncounterState* state, float* obs) {
                 if (style == ATTACK_STYLE_RANGED) has_ranged_2 = 1;
                 if (style == ATTACK_STYLE_MAGIC) has_magic_2 = 1;
             }
-            if (t == 1) {
-                correct_style_next_tick = style;
-            }
-        }
+                    }
 
         int conflict_count = has_melee_2 + has_ranged_2 + has_magic_2;
         obs[i++] = (min_timer < 999) ? (float)min_timer / 10.0f : 1.0f;
@@ -2758,9 +2778,7 @@ static void inf_write_obs(EncounterState* state, float* obs) {
         obs[i++] = (min_style == ATTACK_STYLE_MAGIC) ? 1.0f : 0.0f;
         obs[i++] = (float)conflict_count / 3.0f;
 
-        obs[i++] = 0.0f; // (correct_style_next_tick == ATTACK_STYLE_MELEE) ? 1.0f : 0.0f;
-        obs[i++] = 0.0f; // (correct_style_next_tick == ATTACK_STYLE_RANGED) ? 1.0f : 0.0f;
-        obs[i++] = 0.0f; // (correct_style_next_tick == ATTACK_STYLE_MAGIC) ? 1.0f : 0.0f;
+        /* removed oracle prayer obs */
     }
 
     /* Zuk-phase features (10 features: 1 flag + 9 Zuk-specific) */
@@ -2842,6 +2860,9 @@ static void inf_write_obs(EncounterState* state, float* obs) {
                 slot_counts[t]++;
             }
         }
+    }
+    for (int j = 0; j < INF_OBS_NPCS; j++) {
+        s->current_obs_slots[j] = obs_slots[j];
     }
 
     /* NPCs: variable features per slot, fixed order */
@@ -2991,10 +3012,15 @@ static void inf_write_mask(EncounterState* state, float* mask) {
     mask[offset++] = (s->player.prayer != PRAYER_PROTECT_RANGED) ? 1.0f : 0.0f;
     mask[offset++] = (s->player.prayer != PRAYER_PROTECT_MAGIC) ? 1.0f : 0.0f;
 
-    /* HEAD_TARGET (INF_MAX_NPCS+1): none always valid, NPC valid only if alive (not dying) */
+    /* HEAD_TARGET (INF_OBS_NPCS+1): none always valid, slot valid only if mapped NPC is alive */
     mask[offset++] = 1.0f;  /* no target */
-    for (int n = 0; n < INF_MAX_NPCS; n++) {
-        mask[offset++] = (s->npcs[n].active && s->npcs[n].death_ticks == 0) ? 1.0f : 0.0f;
+    for (int n = 0; n < INF_OBS_NPCS; n++) {
+        int idx = s->current_obs_slots[n];
+        if (idx >= 0 && s->npcs[idx].active && s->npcs[idx].death_ticks == 0 && s->npcs[idx].type != INF_NPC_ZUK_SHIELD) {
+            mask[offset++] = 1.0f;
+        } else {
+            mask[offset++] = 0.0f;
+        }
     }
 
     /* HEAD_GEAR (5): no_switch, mage, tbow, bp, tank */
@@ -3213,6 +3239,7 @@ static void* inf_get_log(EncounterState* state) {
         s->log.episode_length += (float)s->tick;
         s->log.wins += (s->winner == 0) ? 1.0f : 0.0f;
         s->log.damage_dealt += s->total_damage_dealt;
+        s->log.zuk_healer_damage += s->total_zuk_healer_damage;
         s->log.damage_received += s->total_damage_received;
         s->log.wave += (float)s->wave;
         s->log.prayer_correct += (float)s->total_prayer_correct;
@@ -3436,7 +3463,24 @@ static void inf_translate_human_input(HumanInput* hi, int* actions, EncounterSta
 
     encounter_translate_movement(hi, actions, INF_HEAD_MOVE, inf_get_player_for_input, state);
     encounter_translate_prayer(hi, actions, INF_HEAD_PRAYER);
-    encounter_translate_target(hi, actions, INF_HEAD_TARGET);
+    InfernoState* s = (InfernoState*)state;
+    /* map raw pending_target_idx to the observation slot the agent sees */
+    if (hi->pending_target_idx >= 0) {
+        int found_slot = -1;
+        for (int j = 0; j < INF_OBS_NPCS; j++) {
+            if (s->current_obs_slots[j] == hi->pending_target_idx) {
+                found_slot = j;
+                break;
+            }
+        }
+        if (found_slot >= 0) {
+            actions[INF_HEAD_TARGET] = found_slot + 1;
+        } else {
+            actions[INF_HEAD_TARGET] = 0;
+        }
+    } else {
+        actions[INF_HEAD_TARGET] = 0;
+    }
 
     /* gear switch */
     if (hi->pending_gear > 0) actions[INF_HEAD_GEAR] = hi->pending_gear;

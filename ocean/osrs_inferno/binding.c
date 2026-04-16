@@ -137,6 +137,7 @@ void c_step(Env* env) {
         env->log.episode_return += s->episode_return;
         env->log.episode_length += (float)s->tick;
         env->log.damage_dealt += s->total_damage_dealt;
+        env->log.zuk_healer_damage += s->total_zuk_healer_damage;
         env->log.damage_received += s->total_damage_received;
         env->log.wins += (s->winner == 0) ? 1.0f : 0.0f;
         env->log.wave += (float)s->wave;
@@ -523,6 +524,8 @@ void my_log(Log* log, Dict* out) {
     dict_set(out, "current_magic", log->current_magic);
     dict_set(out, "behind_shield_pct", log->behind_shield_pct);
     dict_set(out, "zuk_hp_remaining", log->zuk_hp_remaining);
+    dict_set(out, "zuk_healer_damage", log->zuk_healer_damage);
+    dict_set(out, "deaths_to_jad", log->killed_by_type[INF_NPC_JAD] / log->n);
     //dict_set(out, "noop_move", log->noop_move);
     //dict_set(out, "noop_prayer", log->noop_prayer);
     //dict_set(out, "noop_target", log->noop_target);
