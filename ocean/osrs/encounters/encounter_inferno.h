@@ -720,8 +720,11 @@ static inline void inf_invalidate_los_cache(InfernoState* s) {
 
 static void inf_store_dead_mob(InfernoState* s, InfNPC* npc) {
     if (s->dead_mob_count >= INF_MAX_DEAD_MOBS) return;
-    /* only store resurrectable types (not healers, not shield, not jad/zuk) */
-    if (npc->type == INF_NPC_HEALER_JAD || npc->type == INF_NPC_HEALER_ZUK ||
+    /* only store resurrectable types. matches InfernoTrainer's npcDied()
+       registrations: bat, blob parent, meleer, ranger, mager. nibblers,
+       healers, shield, jad, zuk do NOT register — excluded here. */
+    if (npc->type == INF_NPC_NIBBLER ||
+        npc->type == INF_NPC_HEALER_JAD || npc->type == INF_NPC_HEALER_ZUK ||
         npc->type == INF_NPC_ZUK_SHIELD || npc->type == INF_NPC_ZUK ||
         npc->type == INF_NPC_JAD) return;
 
@@ -2230,6 +2233,10 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
                     }
                     for (int i = 0; i < INF_MAX_NPCS; i++) {
                         if (i == s->interaction.target_slot || !s->npcs[i].active) continue;
+                        /* shield is invulnerable — no damage, no freeze from AoE */
+                        if (s->npcs[i].type == INF_NPC_ZUK_SHIELD) continue;
+                        /* skip dying NPCs (2-tick death anim window) — already logged as killed */
+                        if (s->npcs[i].death_ticks > 0) continue;
                         const InfNPCStats* ns2 = &INF_NPC_STATS[s->npcs[i].type];
                         btargets[bt_count++] = (BarrageTarget){
                             .active = 1, .x = s->npcs[i].x, .y = s->npcs[i].y,
@@ -2865,10 +2872,15 @@ static void inf_write_mask(EncounterState* state, float* mask) {
     mask[offset++] = (s->player.prayer != PRAYER_PROTECT_RANGED) ? 1.0f : 0.0f;
     mask[offset++] = (s->player.prayer != PRAYER_PROTECT_MAGIC) ? 1.0f : 0.0f;
 
-    /* HEAD_TARGET (INF_MAX_NPCS+1): none always valid, NPC valid only if alive (not dying) */
+    /* HEAD_TARGET (INF_MAX_NPCS+1): none always valid, NPC valid only if alive
+       (not dying) and not the Zuk shield. the shield is invulnerable in OSRS
+       and must never be a player target — mask it out at the source. */
     mask[offset++] = 1.0f;  /* no target */
     for (int n = 0; n < INF_MAX_NPCS; n++) {
-        mask[offset++] = (s->npcs[n].active && s->npcs[n].death_ticks == 0) ? 1.0f : 0.0f;
+        int valid = s->npcs[n].active
+                 && s->npcs[n].death_ticks == 0
+                 && s->npcs[n].type != INF_NPC_ZUK_SHIELD;
+        mask[offset++] = valid ? 1.0f : 0.0f;
     }
 
     /* HEAD_GEAR (5): no_switch, mage, tbow, bp, tank */
