@@ -99,6 +99,89 @@ static void benchmark(OsrsEnv* env, int num_steps) {
     printf("  Avg episode length: %.1f ticks\n", (float)total_steps / episodes);
 }
 
+static void run_profile(OsrsEnv* env, const char* encounter_name) {
+    printf("Profiling %s for 10 seconds...\n", encounter_name ? encounter_name : "pvp");
+
+    if (encounter_name) {
+        const EncounterDef* edef = encounter_find(encounter_name);
+        if (!edef) {
+            fprintf(stderr, "unknown encounter: %s\n", encounter_name);
+            return;
+        }
+        env->encounter_def = (void*)edef;
+        env->encounter_state = edef->create();
+
+        if (strcmp(encounter_name, "zulrah") == 0) {
+            CollisionMap* cmap = collision_map_load("data/zulrah.cmap");
+            if (cmap) {
+                edef->put_ptr(env->encounter_state, "collision_map", cmap);
+                edef->put_int(env->encounter_state, "world_offset_x", 2256);
+                edef->put_int(env->encounter_state, "world_offset_y", 3061);
+                env->collision_map = cmap;
+            }
+        } else if (strcmp(encounter_name, "inferno") == 0) {
+            CollisionMap* cmap = collision_map_load("data/inferno.cmap");
+            if (cmap) {
+                edef->put_ptr(env->encounter_state, "collision_map", cmap);
+                edef->put_int(env->encounter_state, "world_offset_x", 2246);
+                edef->put_int(env->encounter_state, "world_offset_y", 5315);
+                env->collision_map = cmap;
+            }
+        }
+        edef->reset(env->encounter_state, 0);
+    } else {
+        env->pvp_runtime.use_c_opponent = 1;
+        env->pvp_runtime.opponent.type = OPP_IMPROVED;
+        env->is_lms = 1;
+        pvp_reset(env);
+    }
+
+    clock_t start = clock();
+    double elapsed = 0;
+    int total_steps = 0;
+    int enc_actions[16] = {0};
+
+    while (elapsed < 10.0) {
+        if (env->encounter_def && env->encounter_state) {
+            const EncounterDef* edef = (const EncounterDef*)env->encounter_def;
+            for (int h = 0; h < edef->num_action_heads; h++) {
+                enc_actions[h] = rand() % edef->action_head_dims[h];
+            }
+            edef->step(env->encounter_state, enc_actions);
+            if (edef->is_terminal(env->encounter_state)) {
+                edef->reset(env->encounter_state, (uint32_t)rand());
+            }
+        } else {
+            for (int agent = 0; agent < NUM_AGENTS; agent++) {
+                int* actions = env->actions + agent * NUM_ACTION_HEADS;
+                for (int h = 0; h < NUM_ACTION_HEADS; h++) {
+                    actions[h] = rand() % ACTION_HEAD_DIMS[h];
+                }
+            }
+            pvp_step(env);
+            if (env->episode_over) {
+                pvp_reset(env);
+            }
+        }
+
+        total_steps++;
+        if (total_steps % 1000 == 0) {
+            clock_t now = clock();
+            elapsed = (double)(now - start) / CLOCKS_PER_SEC;
+        }
+    }
+
+    printf("Results:\n");
+    printf("  Total steps: %d\n", total_steps);
+    printf("  Time: %.3f seconds\n", elapsed);
+    printf("  Steps/sec: %.0f\n", total_steps / elapsed);
+
+    if (env->encounter_def && env->encounter_state) {
+        ((const EncounterDef*)env->encounter_def)->destroy(env->encounter_state);
+        env->encounter_state = NULL;
+    }
+}
+
 #ifdef OSRS_VISUAL
 /* replay file: binary format for pre-recorded actions.
    header: [int32 num_ticks] [uint32 rng_state], then num_ticks * num_heads int32 values. */
@@ -544,12 +627,14 @@ static void run_visual(OsrsEnv* env, const char* encounter_name, const char* rep
 
 int main(int argc, char** argv) {
     int use_visual = 1;  /* default to visual mode */
+    int use_profile = 0;
     int gear_tier = -1;  /* -1 = random (default LMS distribution) */
     int start_wave = -1; /* -1 = default (wave 0) */
     const char* encounter_name __attribute__((unused)) = NULL;
     const char* replay_path __attribute__((unused)) = NULL;
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--visual") == 0) use_visual = 1;
+        else if (strcmp(argv[i], "--profile") == 0) { use_profile = 1; use_visual = 0; }
         else if (strcmp(argv[i], "--encounter") == 0 && i + 1 < argc)
             encounter_name = argv[++i];
         else if (strcmp(argv[i], "--replay") == 0 && i + 1 < argc)
@@ -568,6 +653,30 @@ int main(int argc, char** argv) {
 
     OsrsEnv env;
     memset(&env, 0, sizeof(OsrsEnv));
+
+    if (use_profile) {
+        env.observations = (float*)calloc(NUM_AGENTS * SLOT_NUM_OBSERVATIONS, sizeof(float));
+        env.actions = (int*)calloc(NUM_AGENTS * NUM_ACTION_HEADS, sizeof(int));
+        env.rewards = (float*)calloc(NUM_AGENTS, sizeof(float));
+        env.terminals = (unsigned char*)calloc(NUM_AGENTS, sizeof(unsigned char));
+        env.action_masks = (unsigned char*)calloc(NUM_AGENTS * ACTION_MASK_SIZE, sizeof(unsigned char));
+        env.action_masks_agents = (1 << NUM_AGENTS) - 1;
+        env.ocean_io.agent_actions = env.actions;
+        env.ocean_io.agent_obs = (float*)calloc(OCEAN_OBS_SIZE, sizeof(float));
+        env.ocean_io.agent_rewards = env.rewards;
+        env.ocean_io.agent_terminals = env.terminals;
+
+        run_profile(&env, encounter_name);
+
+        free(env.observations);
+        free(env.actions);
+        free(env.rewards);
+        free(env.terminals);
+        free(env.action_masks);
+        free(env.ocean_io.agent_obs);
+        pvp_close(&env);
+        return 0;
+    }
 
     if (use_visual) {
 #ifdef OSRS_VISUAL
