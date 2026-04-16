@@ -6,37 +6,65 @@ targets Apple Silicon (M4 Pro). current upstream source of truth: PufferAI/Puffe
 ## build
 
 ```bash
-python setup.py build_breakout --force      # breakout env
-python setup.py build_g2048 --force         # 2048 env
-python setup.py build_osrs_pvp --force      # osrs pvp env
-python setup.py build_osrs_zulrah --force   # osrs zulrah env
-python setup.py build_osrs_inferno --force  # osrs inferno env
+./build.sh breakout       # breakout env
+./build.sh g2048          # 2048 env
+./build.sh osrs_pvp       # osrs pvp env
+./build.sh osrs_zulrah    # osrs zulrah env
+./build.sh osrs_inferno   # osrs inferno env
 ```
 
 output: `pufferlib/_C.cpython-312-darwin.so`
 
-## run training
+build.sh auto-detects Darwin and wires the Metal path (`-Xclang -fopenmp`, Metal
+bindings in `src/metal_*.mm`). on Linux the same command builds the CUDA path.
+
+## run training and eval
 
 ```bash
-python pufferl.py train breakout                              # uses .ini defaults
-python pufferl.py train breakout --total-timesteps 2000000    # CLI override
-python pufferl.py train osrs_pvp --replay-ratio 0.25          # multi-head envs need low replay
-python pufferl.py sweep breakout --timeout 4                  # Protein hyperparameter sweep
-python pufferl.py results breakout                            # print sweep results
+puffer train osrs_inferno                                 # uses .ini defaults
+puffer train osrs_inferno --train.total-timesteps 2000000 # CLI override
+puffer train osrs_pvp --train.replay-ratio 0.25           # multi-head envs want low replay
+puffer sweep osrs_inferno --timeout 4                     # Protein hyperparameter sweep
+puffer results osrs_inferno                               # print sweep results
+
+puffer eval osrs_inferno                                  # auto-loads latest checkpoint
+puffer eval osrs_inferno --env.start-wave 69              # jump straight to Zuk
+puffer eval osrs_inferno --load-model-path /path/to.bin   # specific checkpoint
 ```
+
+`puffer eval` with no `--load-model-path` auto-resolves the newest
+`checkpoints/<env>/**/*.bin` (or warns and runs random weights if none exists).
+
+## workflow note: editable install pins pufferlib to one path
+
+the `puffer` CLI is a `pip install -e` entry point that imports pufferlib from
+the path you installed from (see `__editable___pufferlib_4_0_0_finder.py` in
+site-packages). it does NOT follow the current working directory.
+
+consequence: if your main repo is on `pr500-osrs` but you `cd` into a worktree
+on `inferno-encounter`, `puffer eval` still imports main's pufferlib — the
+worktree's code is ignored.
+
+do the active-development branch in the main repo. use worktrees for
+side-by-side diffing, not for long-running work. if you swap long-term
+contexts, re-run `pip install -e .` from the new active directory.
 
 ## config system
 
-configs live in `pufferlib/config/metal/`:
-- `default.ini` -- shared Metal defaults for all envs
-- `ocean/<env>.ini` -- per-env overrides: `[base]`, `[env]`, `[vec]`, `[train]`, `[policy]`, `[sweep.*]`
+configs live in `pufferlib/config/`:
+- `default.ini` — shared defaults for all envs
+- `ocean/<env>.ini` — per-env overrides: `[base]`, `[env]`, `[vec]`, `[train]`, `[policy]`, `[sweep.*]`
 
-`pufferl.py` reads default.ini + env .ini via configparser, merges them, then builds argparse
-dynamically from all keys. any .ini key is available as a CLI flag (e.g. `--learning-rate 0.05`).
-sweep ranges use `[sweep.train.learning_rate]` sections with `distribution`, `min`, `max`, `scale`.
+`config/` at the repo root is a symlink to `pufferlib/config/`.
 
-to add a new env: create `config/metal/ocean/<env>.ini` with the relevant sections.
-pufferl.py is completely env-agnostic -- zero env-specific code.
+`pufferlib/pufferl.py` reads default.ini + env .ini via configparser, merges
+them, then builds argparse dynamically from all keys. any .ini key is
+available as a CLI flag (e.g. `--train.learning-rate 0.05`). sweep ranges use
+`[sweep.train.learning_rate]` sections with `distribution`, `min`, `max`,
+`scale`.
+
+to add a new env: create `pufferlib/config/ocean/<env>.ini` with the relevant
+sections. `pufferl.py` is completely env-agnostic — zero env-specific code.
 
 PFSP (prioritized fictitious self-play) logic for osrs_pvp lives in
 `ocean/osrs_pvp/pfsp.py`, imported conditionally during sweep trials.
