@@ -56,6 +56,10 @@ typedef struct {
     float ticks_per_second;
     double last_step_time;
 
+    /* set by c_step on terminal-reset; consumed by c_render on its next call
+       to mirror the standalone viewer's post-reset cleanup (osrs_visual.c:186). */
+    int pending_render_reset;
+
     OsrsEnv render_env; /* minimal env wrapper for pvp_render() */
 } InfernoEnv;
 
@@ -240,6 +244,10 @@ void c_step(Env* env) {
         ENCOUNTER_INFERNO.reset(env->enc_state, 0);
         ENCOUNTER_INFERNO.write_obs(env->enc_state, obs);
         ENCOUNTER_INFERNO.write_mask(env->enc_state, obs + INF_NUM_OBS);
+
+        /* render-side cleanup needs the RenderClient which lives in c_render.
+           raise a flag so the next c_render call does the cleanup. */
+        env->pending_render_reset = 1;
     }
 }
 
@@ -316,6 +324,25 @@ void c_render(Env* env) {
 
     RenderClient* rc = (RenderClient*)re->client;
     if (!rc) return;
+
+    /* post-reset cleanup: c_step raised the flag after resetting the encounter.
+       mirror osrs_visual.c:186-201 so damage splats, in-flight effects, stale
+       inventory state, and last-frame sub-tile coordinates (from dead-player
+       body) don't leak into the next episode. */
+    if (env->pending_render_reset) {
+        render_clear_history(rc);
+        effect_clear_all(rc->effects);
+        rc->gui.inv_grid_dirty = 1;
+        render_populate_entities(rc, re);
+        for (int i = 0; i < rc->entity_count; i++) {
+            int size = rc->entities[i].npc_size > 1 ? rc->entities[i].npc_size : 1;
+            rc->sub_x[i] = rc->entities[i].x * 128 + size * 64;
+            rc->sub_y[i] = rc->entities[i].y * 128 + size * 64;
+            rc->dest_x[i] = rc->sub_x[i];
+            rc->dest_y[i] = rc->sub_y[i];
+        }
+        env->pending_render_reset = 0;
+    }
 
     /* update NPC visual positions once per tick (not per frame).
        render_post_tick snaps sub_x/sub_y/dest_x/dest_y for spawned/moved NPCs
