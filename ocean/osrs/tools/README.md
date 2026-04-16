@@ -101,7 +101,7 @@ the header provides:
 
 ```bash
 cd ocean/osrs && make visual    # visual binary
-cd ../../.. && python setup.py build_osrs_my_encounter --force  # training env
+cd ../../.. && ./build.sh osrs_my_encounter  # training env
 ```
 
 ## manifest format reference
