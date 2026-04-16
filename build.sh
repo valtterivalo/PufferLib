@@ -25,6 +25,7 @@ for arg in "$@"; do
         --debug) DEBUG=1 ;;
         --local) MODE=local ;;
         --fast)  MODE=fast ;;
+        --gprof) MODE=fast; GPROF=1 ;;
         --web)   MODE=web ;;
         --profile) MODE=profile ;;
         --cpu)   MODE=cpu; PRECISION="-DPRECISION_FLOAT" ;;
@@ -55,7 +56,8 @@ PLATFORM="$(uname -s)"
 if [ "$PLATFORM" = "Linux" ]; then
     RAYLIB_NAME='raylib-5.5_linux_amd64'
     OMP_LIB=-lomp5
-    SANITIZE_FLAGS=(-fsanitize=address,undefined,bounds,pointer-overflow,leak -fno-omit-frame-pointer)
+    # SANITIZE_FLAGS=(-fsanitize=address,undefined,bounds,pointer-overflow,leak -fno-omit-frame-pointer)
+    SANITIZE_FLAGS=()
     STANDALONE_LDFLAGS=(-lGL)
     SHARED_LDFLAGS=(-Bsymbolic-functions)
 else
@@ -143,6 +145,9 @@ if [ -n "$DEBUG" ] || [ "$MODE" = "local" ]; then
     LINK_OPT="-g"
 else
     CLANG_OPT=(-O2 -DNDEBUG "${CLANG_WARN[@]}")
+    if [ -n "$GPROF" ]; then
+        CLANG_OPT+=(-pg)
+    fi
     NVCC_OPT="-O2 --threads 0"
     LINK_OPT="-O2"
 fi

@@ -854,7 +854,8 @@ static inline int encounter_resolve_npc_pending_hit(
 static inline void encounter_resolve_player_pending_hits(
     EncounterPendingHit* hits, int* hit_count,
     Player* player, OverheadPrayer active_prayer,
-    float* damage_received_acc, int* prayer_correct_count
+    float* damage_received_acc, int* prayer_correct_count,
+    int* off_prayer_hit_count
 ) {
     for (int i = 0; i < *hit_count; i++) {
         hits[i].ticks_remaining--;
@@ -864,8 +865,20 @@ static inline void encounter_resolve_player_pending_hits(
                 if (encounter_prayer_correct_for_style(active_prayer, hits[i].attack_style)) {
                     dmg = 0;
                     if (prayer_correct_count) (*prayer_correct_count)++;
+                } else if (dmg > 0 && hits[i].attack_style != ATTACK_STYLE_NONE) {
+                    if (off_prayer_hit_count) (*off_prayer_hit_count)++;
                 }
+            } else if (dmg > 0 && hits[i].attack_style != ATTACK_STYLE_NONE) {
+                /* Even if check_prayer was done at launch (e.g. non-Jad mobs), 
+                   it only zeroed dmg if correctly prayed AT LAUNCH.
+                   Wait, actually, for non-Jad, check_prayer is 0 and dmg is already computed.
+                   If dmg > 0, it means we took a hit. Was it an off-prayer hit? 
+                   Yes, because if we prayed correctly at launch, dmg would be 0.
+                   BUT we don't know if we just missed the pray or if it was typeless.
+                   We assume ATTACK_STYLE_NONE is typeless. */
+                if (off_prayer_hit_count) (*off_prayer_hit_count)++;
             }
+            
             encounter_damage_player(player, dmg, damage_received_acc);
             hits[i] = hits[--(*hit_count)];
             i--;
