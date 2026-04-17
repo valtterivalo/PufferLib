@@ -424,7 +424,7 @@ static void test_player_att_roll_full_mage(void) {
 
     EncounterLoadoutStats stats;
     encounter_compute_loadout_stats(
-        loadout, ATTACK_STYLE_MAGIC, ENCOUNTER_PRAYER_AUGURY,
+        loadout, ATTACK_STYLE_MAGIC, OFFENSIVE_PRAYER_AUGURY,
         99, FIGHT_STYLE_AUTOCAST, 30 /* ice barrage */, &stats);
 
     /* sum attack_magic:
@@ -466,7 +466,7 @@ static void test_player_att_roll_melee_with_defender(void) {
 
     EncounterLoadoutStats stats;
     encounter_compute_loadout_stats(
-        loadout, ATTACK_STYLE_MELEE, ENCOUNTER_PRAYER_PIETY,
+        loadout, ATTACK_STYLE_MELEE, OFFENSIVE_PRAYER_PIETY,
         99, FIGHT_STYLE_AGGRESSIVE, 0, &stats);
 
     /* best melee attack bonus:
@@ -508,7 +508,7 @@ static void test_player_att_roll_ranged_blowpipe(void) {
 
     EncounterLoadoutStats stats;
     encounter_compute_loadout_stats(
-        loadout, ATTACK_STYLE_RANGED, ENCOUNTER_PRAYER_RIGOUR,
+        loadout, ATTACK_STYLE_RANGED, OFFENSIVE_PRAYER_RIGOUR,
         99, FIGHT_STYLE_RAPID, 0, &stats);
 
     /* blowpipe: attack_ranged=30, ranged_strength=20 */
@@ -547,7 +547,7 @@ static void test_loadout_empty_all_styles(void) {
     /* melee, level 99, no prayer, accurate stance (+3 att, +0 str) */
     EncounterLoadoutStats stats;
     encounter_compute_loadout_stats(
-        loadout, ATTACK_STYLE_MELEE, ENCOUNTER_PRAYER_NONE,
+        loadout, ATTACK_STYLE_MELEE, OFFENSIVE_PRAYER_NONE,
         99, FIGHT_STYLE_ACCURATE, 0, &stats);
 
     ASSERT_INT_EQ("empty melee att_bonus", stats.attack_bonus, 0);
@@ -562,7 +562,7 @@ static void test_loadout_empty_all_styles(void) {
 
     /* ranged, no prayer, rapid stance (no level bonus, -1 speed) */
     encounter_compute_loadout_stats(
-        loadout, ATTACK_STYLE_RANGED, ENCOUNTER_PRAYER_NONE,
+        loadout, ATTACK_STYLE_RANGED, OFFENSIVE_PRAYER_NONE,
         99, FIGHT_STYLE_RAPID, 0, &stats);
 
     ASSERT_INT_EQ("empty ranged att_bonus", stats.attack_bonus, 0);
@@ -572,7 +572,7 @@ static void test_loadout_empty_all_styles(void) {
 
     /* magic with ice barrage, autocast (no invisible bonus per wiki) */
     encounter_compute_loadout_stats(
-        loadout, ATTACK_STYLE_MAGIC, ENCOUNTER_PRAYER_NONE,
+        loadout, ATTACK_STYLE_MAGIC, OFFENSIVE_PRAYER_NONE,
         99, FIGHT_STYLE_AUTOCAST, 30, &stats);
 
     ASSERT_INT_EQ("empty magic att_bonus", stats.attack_bonus, 0);
@@ -609,7 +609,7 @@ static void test_loadout_all_slots_filled(void) {
 
     EncounterLoadoutStats stats;
     encounter_compute_loadout_stats(
-        loadout, ATTACK_STYLE_MAGIC, ENCOUNTER_PRAYER_AUGURY,
+        loadout, ATTACK_STYLE_MAGIC, OFFENSIVE_PRAYER_AUGURY,
         99, FIGHT_STYLE_AUTOCAST, 30, &stats);
 
     /* god_blessing has attack_magic=0, so same total as 10-slot mage = 179 */
@@ -653,7 +653,7 @@ static void test_loadout_two_handed_weapon(void) {
 
     EncounterLoadoutStats stats;
     encounter_compute_loadout_stats(
-        loadout, ATTACK_STYLE_MELEE, ENCOUNTER_PRAYER_PIETY,
+        loadout, ATTACK_STYLE_MELEE, OFFENSIVE_PRAYER_PIETY,
         99, FIGHT_STYLE_AGGRESSIVE, 0, &stats);
 
     /* AGS: stab=0, slash=132, crush=80. best = 132 */
@@ -745,7 +745,7 @@ static void test_hit_chance_player_vs_npc(void) {
 
         EncounterLoadoutStats stats;
         encounter_compute_loadout_stats(
-            loadout, ATTACK_STYLE_MAGIC, ENCOUNTER_PRAYER_AUGURY,
+            loadout, ATTACK_STYLE_MAGIC, OFFENSIVE_PRAYER_AUGURY,
             99, FIGHT_STYLE_AUTOCAST, 30, &stats);
 
         int player_att = stats.eff_level * (stats.attack_bonus + 64); /* 32076 */
@@ -767,7 +767,7 @@ static void test_hit_chance_player_vs_npc(void) {
 
         EncounterLoadoutStats stats;
         encounter_compute_loadout_stats(
-            loadout, ATTACK_STYLE_MELEE, ENCOUNTER_PRAYER_PIETY,
+            loadout, ATTACK_STYLE_MELEE, OFFENSIVE_PRAYER_PIETY,
             99, FIGHT_STYLE_ACCURATE, 0, &stats);
 
         /* rapier(94)+defender(25) stab = 119 best */
@@ -787,7 +787,7 @@ static void test_hit_chance_player_vs_npc(void) {
 
         EncounterLoadoutStats stats;
         encounter_compute_loadout_stats(
-            loadout, ATTACK_STYLE_MAGIC, ENCOUNTER_PRAYER_AUGURY,
+            loadout, ATTACK_STYLE_MAGIC, OFFENSIVE_PRAYER_AUGURY,
             99, FIGHT_STYLE_AUTOCAST, 30, &stats);
 
         /* autocast, no invisible bonus. eff=132 (99*1.25 + 0 + 9), bonus=0,
@@ -844,7 +844,7 @@ static void test_loadout_defence_into_def_roll(void) {
 
     EncounterLoadoutStats stats;
     encounter_compute_loadout_stats(
-        loadout, ATTACK_STYLE_MELEE, ENCOUNTER_PRAYER_NONE,
+        loadout, ATTACK_STYLE_MELEE, OFFENSIVE_PRAYER_NONE,
         99, FIGHT_STYLE_ACCURATE, 0, &stats);
 
     /* rapier def: 0,0,0,0,0. defender: 25,24,23,-3,-2. cape: 12,12,12,12,12 */

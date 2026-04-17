@@ -842,12 +842,15 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
     /* compute loadout stats from item database (replaces old hardcoded INF_WEAPON_STATS).
        mage is kodai + barrage — pure autocast, no invisible bonus.
        ranged loadouts run in rapid stance: -1 to attack_speed (BP 3→2, tbow 6→5). */
+    /* offensive prayer is now agent-controlled runtime state (Player.offensive_prayer),
+       not baked into the loadout. pass NONE at reset; inf_player_pretick() calls
+       encounter_update_loadout_level() whenever the agent toggles a prayer. */
     encounter_compute_loadout_stats(INF_MAGE_LOADOUT, ATTACK_STYLE_MAGIC,
-        ENCOUNTER_PRAYER_AUGURY, 99, FIGHT_STYLE_AUTOCAST, 30, &s->loadout_stats[INF_GEAR_MAGE]);
+        OFFENSIVE_PRAYER_NONE, 99, FIGHT_STYLE_AUTOCAST, 30, &s->loadout_stats[INF_GEAR_MAGE]);
     encounter_compute_loadout_stats(INF_RANGE_TBOW_LOADOUT, ATTACK_STYLE_RANGED,
-        ENCOUNTER_PRAYER_RIGOUR, 99, FIGHT_STYLE_RAPID, 0, &s->loadout_stats[INF_GEAR_TBOW]);
+        OFFENSIVE_PRAYER_NONE, 99, FIGHT_STYLE_RAPID, 0, &s->loadout_stats[INF_GEAR_TBOW]);
     encounter_compute_loadout_stats(INF_RANGE_BP_LOADOUT, ATTACK_STYLE_RANGED,
-        ENCOUNTER_PRAYER_RIGOUR, 99, FIGHT_STYLE_RAPID, 0, &s->loadout_stats[INF_GEAR_BP]);
+        OFFENSIVE_PRAYER_NONE, 99, FIGHT_STYLE_RAPID, 0, &s->loadout_stats[INF_GEAR_BP]);
 
     /* spawn position depends on wave */
     int is_zuk_wave = (saved_start >= 68);
@@ -1950,18 +1953,21 @@ static void inf_tick_npcs(InfernoState* s) {
 /* player actions                                                            */
 /* ======================================================================== */
 
-#define INF_HEAD_MOVE    0   /* 25: idle + 8 walk + 16 run */
-#define INF_HEAD_PRAYER  1   /* 5: no_change, off, melee, range, mage (ENCOUNTER_PRAYER_DIM) */
-#define INF_HEAD_TARGET  2   /* INF_OBS_NPCS+1: none or observation slot */
-#define INF_HEAD_GEAR    3   /* 5: no_switch, mage, tbow, bp, tank */
-#define INF_HEAD_EAT     4   /* 2: none, brew */
-#define INF_HEAD_POTION  5   /* 4: none, restore, bastion, stamina */
-#define INF_HEAD_SPELL   6   /* 3: no_change, blood_barrage, ice_barrage */
-#define INF_HEAD_SPEC    7   /* 2: no_change, toggle (arm/disarm blowpipe spec) */
-#define INF_NUM_ACTION_HEADS 8
+#define INF_HEAD_MOVE      0   /* 25: idle + 8 walk + 16 run */
+#define INF_HEAD_PRAYER    1   /* 4: no_change, toggle_melee, toggle_ranged, toggle_magic (ENCOUNTER_OVERHEAD_DIM_PVE) */
+#define INF_HEAD_TARGET    2   /* INF_OBS_NPCS+1: none or observation slot */
+#define INF_HEAD_GEAR      3   /* 5: no_switch, mage, tbow, bp, tank */
+#define INF_HEAD_EAT       4   /* 2: none, brew */
+#define INF_HEAD_POTION    5   /* 4: none, restore, bastion, stamina */
+#define INF_HEAD_SPELL     6   /* 3: no_change, blood_barrage, ice_barrage */
+#define INF_HEAD_SPEC      7   /* 2: no_change, toggle (arm/disarm blowpipe spec) */
+#define INF_HEAD_OFFENSIVE 8   /* 4: no_change, toggle_piety, toggle_rigour, toggle_augury (ENCOUNTER_OFFENSIVE_DIM) */
+#define INF_NUM_ACTION_HEADS 9
 
-static const int INF_ACTION_DIMS[INF_NUM_ACTION_HEADS] = { ENCOUNTER_MOVE_ACTIONS, 5, INF_OBS_NPCS+1, 5, 2, 4, 3, 2 };
-#define INF_ACTION_MASK_SIZE (ENCOUNTER_MOVE_ACTIONS + 5 + INF_OBS_NPCS+1 + 5 + 2 + 4 + 3 + 2)
+static const int INF_ACTION_DIMS[INF_NUM_ACTION_HEADS] = {
+    ENCOUNTER_MOVE_ACTIONS, ENCOUNTER_OVERHEAD_DIM_PVE, INF_OBS_NPCS+1, 5, 2, 4, 3, 2, ENCOUNTER_OFFENSIVE_DIM
+};
+#define INF_ACTION_MASK_SIZE (ENCOUNTER_MOVE_ACTIONS + ENCOUNTER_OVERHEAD_DIM_PVE + INF_OBS_NPCS+1 + 5 + 2 + 4 + 3 + 2 + ENCOUNTER_OFFENSIVE_DIM)
 
 /* movement uses shared encounter_move_to_target from osrs_encounter.h */
 
@@ -2016,10 +2022,22 @@ static void inf_apply_npc_death(InfernoState* s, int npc_idx) {
 }
 
 static void inf_player_pretick(InfernoState* s, const int* actions) {
-    encounter_apply_prayer_action(&s->player.prayer, actions[INF_HEAD_PRAYER]);
-    int drain = encounter_prayer_drain_effect(s->player.prayer) + 24;
-    encounter_drain_prayer(&s->player.current_prayer, &s->player.prayer,
-                           0, &s->player.prayer_drain_counter, drain);
+    /* apply prayer actions. each helper returns 1 on OFF→ON transition so we
+       can skip that slot's drain this tick (wiki: no drain on activation tick). */
+    if (encounter_apply_overhead_action(&s->player.prayer, actions[INF_HEAD_PRAYER])) {
+        s->player.prayer_just_activated = 1;
+    }
+    OffensivePrayer prev_offensive = s->player.offensive_prayer;
+    if (encounter_apply_offensive_action(&s->player.offensive_prayer, actions[INF_HEAD_OFFENSIVE])) {
+        s->player.offensive_prayer_just_activated = 1;
+    }
+    /* offensive prayer is baked into eff_level/max_hit via the loadout cache.
+       recompute all loadouts on any change so combat math reflects current state. */
+    if (s->player.offensive_prayer != prev_offensive) {
+        encounter_recompute_loadout_max_hits(s->loadout_stats, INF_NUM_WEAPON_SETS, &s->player);
+    }
+    /* inferno loadouts have ~0 prayer bonus (armadyl/ancestral/torva); pass 0. */
+    encounter_drain_all_prayers(&s->player, 0);
 }
 
 static void inf_tick_player(InfernoState* s, const int* actions) {
@@ -2622,7 +2640,7 @@ static void inf_step(EncounterState* state, const int* actions) {
 /* ======================================================================== */
 
 /* obs layout: 49 player + 12 pillar + 33*32 NPC + 5*8 pending hits = 1157 */
-#define INF_PLAYER_OBS_SIZE 49
+#define INF_PLAYER_OBS_SIZE 52   /* +3 for offensive prayer one-hot (piety/rigour/augury) */
 #define INF_TOTAL_NPC_OBS_SIZE 282
 #define INF_FEATURES_PER_HIT 5
 #define INF_NUM_OBS (INF_PLAYER_OBS_SIZE + 12 + INF_TOTAL_NPC_OBS_SIZE + INF_FEATURES_PER_HIT * ENCOUNTER_MAX_PENDING_HITS)
@@ -2660,6 +2678,10 @@ static void inf_write_obs(EncounterState* state, float* obs) {
     obs[i++] = (s->player.prayer == PRAYER_PROTECT_MELEE) ? 1.0f : 0.0f;
     obs[i++] = (s->player.prayer == PRAYER_PROTECT_RANGED) ? 1.0f : 0.0f;
     obs[i++] = (s->player.prayer == PRAYER_PROTECT_MAGIC) ? 1.0f : 0.0f;
+    /* offensive prayer one-hot (none implied by all-three-zero). */
+    obs[i++] = (s->player.offensive_prayer == OFFENSIVE_PRAYER_PIETY) ? 1.0f : 0.0f;
+    obs[i++] = (s->player.offensive_prayer == OFFENSIVE_PRAYER_RIGOUR) ? 1.0f : 0.0f;
+    obs[i++] = (s->player.offensive_prayer == OFFENSIVE_PRAYER_AUGURY) ? 1.0f : 0.0f;
     obs[i++] = (float)s->player.brew_doses / 32.0f;
     obs[i++] = (float)s->player.restore_doses / 40.0f;
     obs[i++] = (float)s->player.current_prayer / 99.0f;
@@ -2992,12 +3014,16 @@ static void inf_write_mask(EncounterState* state, float* mask) {
                          ? 1.0f : 0.0f;
     }
 
-    /* HEAD_PRAYER (5): 0=no change (always valid), 1-4=switch (mask out current) */
-    mask[offset++] = 1.0f;  /* no change — always valid */
-    mask[offset++] = (s->player.prayer != PRAYER_NONE) ? 1.0f : 0.0f;
-    mask[offset++] = (s->player.prayer != PRAYER_PROTECT_MELEE) ? 1.0f : 0.0f;
-    mask[offset++] = (s->player.prayer != PRAYER_PROTECT_RANGED) ? 1.0f : 0.0f;
-    mask[offset++] = (s->player.prayer != PRAYER_PROTECT_MAGIC) ? 1.0f : 0.0f;
+    /* HEAD_PRAYER (4): 0=no_change always valid, 1-3=toggle_melee/ranged/magic.
+       toggles are always valid (the env decides on/off based on current state)
+       but require pp > 0 to activate; mask activation paths when pp=0.
+       since the agent can't know if the toggle will activate vs deactivate without
+       additional state, we keep toggles available when pp>0 and when the matching
+       prayer is already active (toggle-off is free). */
+    mask[offset++] = 1.0f;  /* no_change always valid */
+    mask[offset++] = (s->player.current_prayer > 0 || s->player.prayer == PRAYER_PROTECT_MELEE) ? 1.0f : 0.0f;
+    mask[offset++] = (s->player.current_prayer > 0 || s->player.prayer == PRAYER_PROTECT_RANGED) ? 1.0f : 0.0f;
+    mask[offset++] = (s->player.current_prayer > 0 || s->player.prayer == PRAYER_PROTECT_MAGIC) ? 1.0f : 0.0f;
 
     /* HEAD_TARGET (INF_OBS_NPCS+1): none always valid, slot valid only if its
        mapped NPC is alive (not dying) and not the Zuk shield (invulnerable). */
@@ -3062,6 +3088,13 @@ static void inf_write_mask(EncounterState* state, float* mask) {
     mask[offset++] = (s->weapon_set == INF_GEAR_BP &&
                       s->player.special_energy >= BLOWPIPE_SPEC_COST)
                      ? 1.0f : 0.0f;
+
+    /* HEAD_OFFENSIVE (4): 0=no_change always valid, 1-3=toggle_piety/rigour/augury.
+       same rule as overhead — toggles need pp>0 to activate, free to deactivate. */
+    mask[offset++] = 1.0f;  /* no_change always valid */
+    mask[offset++] = (s->player.current_prayer > 0 || s->player.offensive_prayer == OFFENSIVE_PRAYER_PIETY)  ? 1.0f : 0.0f;
+    mask[offset++] = (s->player.current_prayer > 0 || s->player.offensive_prayer == OFFENSIVE_PRAYER_RIGOUR) ? 1.0f : 0.0f;
+    mask[offset++] = (s->player.current_prayer > 0 || s->player.offensive_prayer == OFFENSIVE_PRAYER_AUGURY) ? 1.0f : 0.0f;
 }
 
 /* ======================================================================== */
@@ -3451,6 +3484,7 @@ static void inf_translate_human_input(HumanInput* hi, int* actions, EncounterSta
 
     encounter_translate_movement(hi, actions, INF_HEAD_MOVE, inf_get_player_for_input, state);
     encounter_translate_prayer(hi, actions, INF_HEAD_PRAYER);
+    encounter_translate_offensive_prayer(hi, actions, INF_HEAD_OFFENSIVE);
     InfernoState* s = (InfernoState*)state;
     /* map raw pending_target_idx to the observation slot the agent sees */
     if (hi->pending_target_idx >= 0) {

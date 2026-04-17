@@ -175,7 +175,7 @@
 // 8 action heads: one decision per head per tick. no click encoding.
 // current ocean envs use a loadout preset plus separate combat/prayer/etc. heads.
 
-#define NUM_ACTION_HEADS 7
+#define NUM_ACTION_HEADS 8
 
 // Action head indices
 #define HEAD_LOADOUT    0
@@ -185,19 +185,21 @@
 #define HEAD_POTION     4
 #define HEAD_KARAMBWAN  5
 #define HEAD_VENG       6
+#define HEAD_OFFENSIVE  7   // toggle piety/rigour/augury — agent-controlled, no longer auto-assigned
 
 // Per-head action dimensions
 #define LOADOUT_DIM     9   // KEEP, MELEE, RANGE, MAGE, TANK, SPEC_MELEE, SPEC_RANGE, SPEC_MAGIC, GMAUL
 #define COMBAT_DIM     13   // NONE, ATK, ICE, BLOOD, ADJACENT, UNDER, DIAGONAL, FARCAST_2..7
-#define OVERHEAD_DIM    6   // NONE, MAGE, RANGED, MELEE, SMITE, REDEMPTION
+#define OVERHEAD_DIM    6   // ENCOUNTER_OVERHEAD_DIM_PVP: no_change, toggle_{melee,ranged,magic,smite,redemption}
 #define FOOD_DIM        2   // NONE, EAT
 #define POTION_DIM      5   // NONE, BREW, RESTORE, COMBAT, RANGED
 #define KARAMBWAN_DIM   2   // NONE, EAT
 #define VENG_DIM        2   // NONE, CAST
+#define OFFENSIVE_DIM   4   // ENCOUNTER_OFFENSIVE_DIM: no_change, toggle_{piety,rigour,augury}
 
-// Total action mask size: sum of all head dims = 39
+// Total action mask size: sum of all head dims
 #define ACTION_MASK_SIZE (LOADOUT_DIM + COMBAT_DIM + OVERHEAD_DIM + \
-    FOOD_DIM + POTION_DIM + KARAMBWAN_DIM + VENG_DIM)
+    FOOD_DIM + POTION_DIM + KARAMBWAN_DIM + VENG_DIM + OFFENSIVE_DIM)
 
 // Per-head action dims array
 static const int ACTION_HEAD_DIMS[NUM_ACTION_HEADS] = {
@@ -208,6 +210,7 @@ static const int ACTION_HEAD_DIMS[NUM_ACTION_HEADS] = {
     POTION_DIM,
     KARAMBWAN_DIM,
     VENG_DIM,
+    OFFENSIVE_DIM,
 };
 
 // Number of item stats per item (for observations)
@@ -614,6 +617,13 @@ typedef struct {
     OffensivePrayer offensive_prayer;
     FightStyle fight_style;
     int prayer_drain_counter;  // Accumulates drain, triggers at drain_resistance
+    /* activation-tick bookkeeping: OSRS does not drain a prayer on the tick it
+       was activated (wiki: "the game does not drain prayer for prayers on the
+       tick they are activated"). these flags are set to 1 on OFF→ON transitions
+       in encounter_apply_{overhead,offensive}_action() and cleared by
+       encounter_drain_all_prayers(). required for 1-tick prayer flicking. */
+    uint8_t prayer_just_activated;
+    uint8_t offensive_prayer_just_activated;
 
     // Position
     int x, y;

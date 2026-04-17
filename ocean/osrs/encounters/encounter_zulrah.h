@@ -153,25 +153,27 @@ static const int ZUL_POSITIONS[ZUL_NUM_POSITIONS][2] = {
 /* observation and action space                                              */
 /* ======================================================================== */
 
-#define ZUL_NUM_OBS           81
-#define ZUL_NUM_ACTION_HEADS  6
+#define ZUL_NUM_OBS           84  /* +3 for offensive prayer one-hot (piety/rigour/augury) */
+#define ZUL_NUM_ACTION_HEADS  7
 
-#define ZUL_MOVE_DIM    ENCOUNTER_MOVE_ACTIONS
-#define ZUL_ATTACK_DIM  3
-#define ZUL_PRAYER_DIM  ENCOUNTER_PRAYER_DIM
-#define ZUL_FOOD_DIM    3   /* none, shark, karambwan */
-#define ZUL_POTION_DIM  3   /* none, restore, antivenom */
-#define ZUL_SPEC_DIM    2
+#define ZUL_MOVE_DIM      ENCOUNTER_MOVE_ACTIONS
+#define ZUL_ATTACK_DIM    3
+#define ZUL_PRAYER_DIM    ENCOUNTER_OVERHEAD_DIM_PVE   /* 4: no_change, toggle_melee/ranged/magic */
+#define ZUL_OFFENSIVE_DIM ENCOUNTER_OFFENSIVE_DIM      /* 4: no_change, toggle_piety/rigour/augury */
+#define ZUL_FOOD_DIM      3   /* none, shark, karambwan */
+#define ZUL_POTION_DIM    3   /* none, restore, antivenom */
+#define ZUL_SPEC_DIM      2
 
 #define ZUL_ACTION_MASK_SIZE (ZUL_MOVE_DIM + ZUL_ATTACK_DIM + ZUL_PRAYER_DIM + \
-    ZUL_FOOD_DIM + ZUL_POTION_DIM + ZUL_SPEC_DIM)
+    ZUL_FOOD_DIM + ZUL_POTION_DIM + ZUL_SPEC_DIM + ZUL_OFFENSIVE_DIM)
 
-#define ZUL_HEAD_MOVE    0
-#define ZUL_HEAD_ATTACK  1
-#define ZUL_HEAD_PRAYER  2
-#define ZUL_HEAD_FOOD    3
-#define ZUL_HEAD_POTION  4
-#define ZUL_HEAD_SPEC    5
+#define ZUL_HEAD_MOVE       0
+#define ZUL_HEAD_ATTACK     1
+#define ZUL_HEAD_PRAYER     2
+#define ZUL_HEAD_FOOD       3
+#define ZUL_HEAD_POTION     4
+#define ZUL_HEAD_SPEC       5
+#define ZUL_HEAD_OFFENSIVE  6
 
 #define ZUL_MOVE_STAY 0
 #define ZUL_ATK_NONE  0
@@ -365,7 +367,7 @@ static const int ZUL_ROT_LENGTHS[ZUL_NUM_ROTATIONS] = { 11, 11, 12, 13 };
 
 static const int ZUL_ACTION_HEAD_DIMS[ZUL_NUM_ACTION_HEADS] = {
     ZUL_MOVE_DIM, ZUL_ATTACK_DIM, ZUL_PRAYER_DIM,
-    ZUL_FOOD_DIM, ZUL_POTION_DIM, ZUL_SPEC_DIM,
+    ZUL_FOOD_DIM, ZUL_POTION_DIM, ZUL_SPEC_DIM, ZUL_OFFENSIVE_DIM,
 };
 
 /* movement uses shared encounter_move_to_target + ENCOUNTER_MOVE_TARGET_DX/DY from osrs_encounter.h */
@@ -1475,8 +1477,26 @@ static void zul_process_movement(ZulrahState* s) {
         0, 0, 0, 0);
 }
 
-static void zul_process_prayer(ZulrahState* s, int p) {
-    encounter_apply_prayer_action(&s->player.prayer, p);
+static void zul_process_prayer(ZulrahState* s, int overhead_action, int offensive_action) {
+    if (encounter_apply_overhead_action(&s->player.prayer, overhead_action)) {
+        s->player.prayer_just_activated = 1;
+    }
+    OffensivePrayer prev_offensive = s->player.offensive_prayer;
+    if (encounter_apply_offensive_action(&s->player.offensive_prayer, offensive_action)) {
+        s->player.offensive_prayer_just_activated = 1;
+    }
+    /* zulrah caches eff_level + max_hit in mage_stats / range_stats — recompute
+       whenever offensive prayer changes so subsequent attack rolls use current state. */
+    if (s->player.offensive_prayer != prev_offensive) {
+        if (s->mage_stats.style == ATTACK_STYLE_MAGIC) {
+            encounter_update_loadout_level(&s->mage_stats, s->player.offensive_prayer,
+                s->player.current_magic, s->player.current_magic);
+        }
+        if (s->range_stats.style == ATTACK_STYLE_RANGED) {
+            encounter_update_loadout_level(&s->range_stats, s->player.offensive_prayer,
+                s->player.current_ranged, s->player.current_ranged);
+        }
+    }
 }
 
 static void zul_process_food(ZulrahState* s, int a) {
@@ -1562,6 +1582,10 @@ static void zul_write_obs(EncounterState* state, float* obs) {
     obs[i++] = (s->player.prayer == PRAYER_PROTECT_MAGIC) ? 1.0f : 0.0f;
     obs[i++] = (s->player.prayer == PRAYER_PROTECT_RANGED) ? 1.0f : 0.0f;
     obs[i++] = (s->player.prayer == PRAYER_PROTECT_MELEE) ? 1.0f : 0.0f;
+    /* offensive prayer one-hot: piety, rigour, augury, (none implied by all three = 0) */
+    obs[i++] = (s->player.offensive_prayer == OFFENSIVE_PRAYER_PIETY) ? 1.0f : 0.0f;
+    obs[i++] = (s->player.offensive_prayer == OFFENSIVE_PRAYER_RIGOUR) ? 1.0f : 0.0f;
+    obs[i++] = (s->player.offensive_prayer == OFFENSIVE_PRAYER_AUGURY) ? 1.0f : 0.0f;
     obs[i++] = (float)s->player_stunned_ticks / ZUL_MELEE_STUN_TICKS;
 
     /* zulrah (16-29) */
@@ -1659,10 +1683,11 @@ static void zul_write_mask(EncounterState* state, float* mask) {
             mask[off] = 0.0f;
         off++;
     }
-    /* prayer: 0=no_change (always valid), 1=off (always valid),
-       2-4=melee/ranged/magic (require prayer points) */
+    /* overhead prayer: 0=no_change always valid, 1-3=toggle_melee/ranged/magic
+       require prayer points (deactivation also needs pp>0 because activations
+       are what cost — if pp=0 all prayers auto-clear anyway). */
     for (int p = 0; p < ZUL_PRAYER_DIM; p++) {
-        if (p >= ENCOUNTER_PRAYER_MELEE && s->player.current_prayer <= 0)
+        if (p >= ENCOUNTER_OVERHEAD_TOGGLE_MELEE && s->player.current_prayer <= 0)
             mask[off] = 0.0f;
         off++;
     }
@@ -1699,6 +1724,13 @@ static void zul_write_mask(EncounterState* state, float* mask) {
             mask[off] = 0.0f;  /* weapon has no spec */
     }
     off++;
+    /* offensive prayer: 0=no_change always valid, 1-3=toggle_piety/rigour/augury
+       require prayer points. */
+    for (int o = 0; o < ZUL_OFFENSIVE_DIM; o++) {
+        if (o >= ENCOUNTER_OFFENSIVE_TOGGLE_PIETY && s->player.current_prayer <= 0)
+            mask[off] = 0.0f;
+        off++;
+    }
 }
 
 /* ======================================================================== */
@@ -1786,8 +1818,8 @@ static void zul_reset(EncounterState* state, uint32_t seed) {
     encounter_apply_loadout(&s->player, ZUL_MAGE_LOADOUT[s->gear_tier], GEAR_MAGE);
     zul_populate_player_inventory(&s->player, s->gear_tier);
     /* derive combat stats from ITEM_DATABASE */
-    EncounterPrayer mage_prayer = (s->gear_tier >= 1) ? ENCOUNTER_PRAYER_AUGURY : ENCOUNTER_PRAYER_NONE;
-    EncounterPrayer range_prayer = (s->gear_tier >= 1) ? ENCOUNTER_PRAYER_RIGOUR : ENCOUNTER_PRAYER_NONE;
+    OffensivePrayer mage_prayer = (s->gear_tier >= 1) ? OFFENSIVE_PRAYER_AUGURY : OFFENSIVE_PRAYER_NONE;
+    OffensivePrayer range_prayer = (s->gear_tier >= 1) ? OFFENSIVE_PRAYER_RIGOUR : OFFENSIVE_PRAYER_NONE;
     /* mage loadout is trident / Eye of Ayak — powered staves, accurate stance gets +3 magic eff.
        ranged runs in rapid stance for blowpipe/tbow (-1 attack_speed). */
     encounter_compute_loadout_stats(ZUL_MAGE_LOADOUT[s->gear_tier], ATTACK_STYLE_MAGIC,
@@ -1846,7 +1878,7 @@ static void zul_step(EncounterState* state, const int* actions) {
     }
 
     /* prayer doesn't interrupt interactions */
-    zul_process_prayer(s, actions[ZUL_HEAD_PRAYER]);
+    zul_process_prayer(s, actions[ZUL_HEAD_PRAYER], actions[ZUL_HEAD_OFFENSIVE]);
 
     /* spec toggle: arm/disarm (does NOT interrupt interaction) */
     if (actions[ZUL_HEAD_SPEC] == 1) {
@@ -1941,9 +1973,8 @@ static void zul_step(EncounterState* state, const int* actions) {
     /* venom */
     zul_venom_tick(s);
 
-    /* prayer drain (shared OSRS formula) */
-    encounter_drain_prayer(&s->player.current_prayer, &s->player.prayer, 0,
-        &s->player.prayer_drain_counter, encounter_prayer_drain_effect(s->player.prayer));
+    /* prayer drain — both overhead and offensive, with activation-tick skip. */
+    encounter_drain_all_prayers(&s->player, 0);
 
     if (s->player.current_hitpoints <= 0) {
         s->episode_over = 1; s->winner = 1;
@@ -1967,12 +1998,38 @@ static void zul_heuristic_actions(ZulrahState* s, int* actions) {
 
     int hp = s->player.current_hitpoints;
 
-    /* prayer: match form. GREEN=ranged, BLUE=magic, RED=melee */
+    /* prayer: match form. GREEN=ranged, BLUE=magic, RED=melee.
+       heuristic picks target-prayer; toggle semantic means if target is already
+       on this call is a no-op (since actual state == target), and if wrong one
+       was on it replaces. only emit if player isn't already on target. */
     if (s->zulrah_visible && !s->is_diving) {
         switch (s->current_form) {
-            case ZUL_FORM_GREEN: actions[ZUL_HEAD_PRAYER] = ENCOUNTER_PRAYER_RANGED; break;
-            case ZUL_FORM_BLUE:  actions[ZUL_HEAD_PRAYER] = ENCOUNTER_PRAYER_MAGIC; break;
-            case ZUL_FORM_RED:   actions[ZUL_HEAD_PRAYER] = ENCOUNTER_PRAYER_MELEE; break;
+            case ZUL_FORM_GREEN:
+                if (s->player.prayer != PRAYER_PROTECT_RANGED)
+                    actions[ZUL_HEAD_PRAYER] = ENCOUNTER_OVERHEAD_TOGGLE_RANGED;
+                break;
+            case ZUL_FORM_BLUE:
+                if (s->player.prayer != PRAYER_PROTECT_MAGIC)
+                    actions[ZUL_HEAD_PRAYER] = ENCOUNTER_OVERHEAD_TOGGLE_MAGIC;
+                break;
+            case ZUL_FORM_RED:
+                if (s->player.prayer != PRAYER_PROTECT_MELEE)
+                    actions[ZUL_HEAD_PRAYER] = ENCOUNTER_OVERHEAD_TOGGLE_MELEE;
+                break;
+        }
+        /* offensive prayer: match attack style. green/blue use mage/ranged → piety is wrong.
+           zulrah heuristic normally alternates mage/ranged so use augury when mage, rigour when ranged. */
+        OffensivePrayer target_off = OFFENSIVE_PRAYER_NONE;
+        if (s->current_form == ZUL_FORM_BLUE) target_off = OFFENSIVE_PRAYER_AUGURY;
+        else if (s->current_form == ZUL_FORM_GREEN) target_off = OFFENSIVE_PRAYER_RIGOUR;
+        else if (s->current_form == ZUL_FORM_RED) target_off = OFFENSIVE_PRAYER_PIETY;
+        if (target_off != OFFENSIVE_PRAYER_NONE && s->player.offensive_prayer != target_off) {
+            if (target_off == OFFENSIVE_PRAYER_AUGURY)
+                actions[ZUL_HEAD_OFFENSIVE] = ENCOUNTER_OFFENSIVE_TOGGLE_AUGURY;
+            else if (target_off == OFFENSIVE_PRAYER_RIGOUR)
+                actions[ZUL_HEAD_OFFENSIVE] = ENCOUNTER_OFFENSIVE_TOGGLE_RIGOUR;
+            else if (target_off == OFFENSIVE_PRAYER_PIETY)
+                actions[ZUL_HEAD_OFFENSIVE] = ENCOUNTER_OFFENSIVE_TOGGLE_PIETY;
         }
     }
 
@@ -2206,6 +2263,7 @@ static void zul_translate_human_input(HumanInput* hi, int* actions, EncounterSta
     encounter_translate_movement(hi, actions, ZUL_HEAD_MOVE,
                                   (void*(*)(void*,int))zul_get_entity, state);
     encounter_translate_prayer(hi, actions, ZUL_HEAD_PRAYER);
+    encounter_translate_offensive_prayer(hi, actions, ZUL_HEAD_OFFENSIVE);
 
     /* attack style: mage or range */
     if (hi->pending_attack) {

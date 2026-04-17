@@ -13,9 +13,12 @@
  *     encounter_resolve_attack_target() match npc_slot to render entity index
  *     EncounterOverlay                 visual overlay (hazards, projectiles, boss)
  *
- *   prayer:
- *     ENCOUNTER_PRAYER_*               canonical 5-value prayer action encoding
- *     encounter_apply_prayer_action()  apply prayer action to OverheadPrayer state
+ *   prayer (toggle-semantic, matches real OSRS click behavior):
+ *     ENCOUNTER_OVERHEAD_*                canonical overhead action encoding (4/6 dim)
+ *     ENCOUNTER_OFFENSIVE_*               canonical offensive action encoding (4 dim)
+ *     encounter_apply_overhead_action()   apply overhead action, returns 1 on activation
+ *     encounter_apply_offensive_action()  apply offensive action, returns 1 on activation
+ *     encounter_drain_all_prayers()       drain both slots per tick (activation-tick skip)
  *
  *   movement:
  *     ENCOUNTER_MOVE_TARGET_DX/DY[25]  direction tables (idle + 8 walk + 16 run)
@@ -40,7 +43,7 @@
  *
  *   combat stats:
  *     EncounterLoadoutStats            derived stats (att bonus, max hit, eff level...)
- *     EncounterPrayer                  prayer multiplier enum
+ *     Player.offensive_prayer          runtime state, source of truth for prayer multipliers
  *     encounter_compute_loadout_stats() derive all stats from ITEM_DATABASE + loadout
  *
  *   hit delays:
@@ -260,32 +263,81 @@ static inline void encounter_resolve_attack_target(
 }
 
 /* ======================================================================== */
-/* canonical prayer action encoding                                          */
+/* canonical prayer action encoding (toggle semantics, matches OSRS)         */
+/*                                                                           */
+/* real OSRS has no "turn off" button — clicking an active prayer icon       */
+/* toggles it off. clicking a different prayer in the same slot replaces it. */
+/* our encoding mirrors that exactly: agent action either no-ops or targets  */
+/* a specific prayer; target-already-active → off, otherwise activate.       */
+/*                                                                           */
+/* each encounter chooses its action-head dim based on which prayers it      */
+/* exposes — PvE uses 4 (no smite/redemption), PvP uses 6. new encounters    */
+/* wire up by:                                                               */
+/*   1. declaring two action heads with encounter_overhead_dim /             */
+/*      ENCOUNTER_OFFENSIVE_DIM                                              */
+/*   2. calling encounter_apply_overhead_action()  on pretick                */
+/*   3. calling encounter_apply_offensive_action() on pretick                */
+/*   4. calling encounter_drain_all_prayers() on pretick (handles both slots */
+/*      + activation-tick skip + pp=0 auto-clear)                            */
 /* ======================================================================== */
 
-/* all encounters MUST use this encoding for the prayer action head.
-   0 = no change (prayer persists from previous tick)
-   1 = turn off prayer (PRAYER_NONE)
-   2 = protect melee
-   3 = protect ranged
-   4 = protect magic
-   action dim = 5 for any encounter using this encoding. */
-#define ENCOUNTER_PRAYER_NO_CHANGE  0
-#define ENCOUNTER_PRAYER_OFF        1
-#define ENCOUNTER_PRAYER_MELEE      2
-#define ENCOUNTER_PRAYER_RANGED     3
-#define ENCOUNTER_PRAYER_MAGIC      4
-#define ENCOUNTER_PRAYER_DIM        5
+/* overhead action encoding. dim depends on encounter:
+   - PvE (inferno/zulrah): 4 dim, actions 0-3 only
+   - PvP: 6 dim, full range */
+#define ENCOUNTER_OVERHEAD_NO_CHANGE          0
+#define ENCOUNTER_OVERHEAD_TOGGLE_MELEE       1
+#define ENCOUNTER_OVERHEAD_TOGGLE_RANGED      2
+#define ENCOUNTER_OVERHEAD_TOGGLE_MAGIC       3
+#define ENCOUNTER_OVERHEAD_TOGGLE_SMITE       4
+#define ENCOUNTER_OVERHEAD_TOGGLE_REDEMPTION  5
+#define ENCOUNTER_OVERHEAD_DIM_PVE            4
+#define ENCOUNTER_OVERHEAD_DIM_PVP            6
 
-/* apply a prayer action to the active prayer state. 0=no change. */
-static inline void encounter_apply_prayer_action(OverheadPrayer* prayer, int action) {
+/* offensive action encoding — 4 dim, shared by all encounters. */
+#define ENCOUNTER_OFFENSIVE_NO_CHANGE         0
+#define ENCOUNTER_OFFENSIVE_TOGGLE_PIETY      1
+#define ENCOUNTER_OFFENSIVE_TOGGLE_RIGOUR     2
+#define ENCOUNTER_OFFENSIVE_TOGGLE_AUGURY     3
+#define ENCOUNTER_OFFENSIVE_DIM               4
+
+/** apply an overhead prayer action with toggle semantics.
+    target-already-active → set to PRAYER_NONE (toggle off).
+    target-not-active → activate target (replacing whatever was in the slot).
+    returns 1 on OFF→ON transition (caller should set prayer_just_activated),
+    0 on no-op, toggle-off, or replace. */
+static inline int encounter_apply_overhead_action(OverheadPrayer* overhead, int action) {
+    OverheadPrayer target;
     switch (action) {
-        case ENCOUNTER_PRAYER_NO_CHANGE: break;
-        case ENCOUNTER_PRAYER_OFF:    *prayer = PRAYER_NONE; break;
-        case ENCOUNTER_PRAYER_MELEE:  *prayer = PRAYER_PROTECT_MELEE; break;
-        case ENCOUNTER_PRAYER_RANGED: *prayer = PRAYER_PROTECT_RANGED; break;
-        case ENCOUNTER_PRAYER_MAGIC:  *prayer = PRAYER_PROTECT_MAGIC; break;
+        case ENCOUNTER_OVERHEAD_NO_CHANGE:          return 0;
+        case ENCOUNTER_OVERHEAD_TOGGLE_MELEE:       target = PRAYER_PROTECT_MELEE;  break;
+        case ENCOUNTER_OVERHEAD_TOGGLE_RANGED:      target = PRAYER_PROTECT_RANGED; break;
+        case ENCOUNTER_OVERHEAD_TOGGLE_MAGIC:       target = PRAYER_PROTECT_MAGIC;  break;
+        case ENCOUNTER_OVERHEAD_TOGGLE_SMITE:       target = PRAYER_SMITE;          break;
+        case ENCOUNTER_OVERHEAD_TOGGLE_REDEMPTION:  target = PRAYER_REDEMPTION;     break;
+        default: return 0;
     }
+    if (*overhead == target) { *overhead = PRAYER_NONE; return 0; }
+    int activating = (*overhead == PRAYER_NONE) ? 1 : 0;
+    *overhead = target;
+    return activating;
+}
+
+/** apply an offensive prayer action with toggle semantics.
+    same rules as overhead: target-active → off, target-inactive → activate.
+    returns 1 on OFF→ON transition, 0 otherwise. */
+static inline int encounter_apply_offensive_action(OffensivePrayer* offensive, int action) {
+    OffensivePrayer target;
+    switch (action) {
+        case ENCOUNTER_OFFENSIVE_NO_CHANGE:       return 0;
+        case ENCOUNTER_OFFENSIVE_TOGGLE_PIETY:    target = OFFENSIVE_PRAYER_PIETY;  break;
+        case ENCOUNTER_OFFENSIVE_TOGGLE_RIGOUR:   target = OFFENSIVE_PRAYER_RIGOUR; break;
+        case ENCOUNTER_OFFENSIVE_TOGGLE_AUGURY:   target = OFFENSIVE_PRAYER_AUGURY; break;
+        default: return 0;
+    }
+    if (*offensive == target) { *offensive = OFFENSIVE_PRAYER_NONE; return 0; }
+    int activating = (*offensive == OFFENSIVE_PRAYER_NONE) ? 1 : 0;
+    *offensive = target;
+    return activating;
 }
 
 /* ======================================================================== */
@@ -921,7 +973,7 @@ static inline uint32_t encounter_resolve_seed(uint32_t saved_rng, uint32_t expli
 /* ======================================================================== */
 /* shared prayer drain                                                       */
 /*                                                                           */
-/* ENCOUNTERS: call encounter_drain_prayer() each tick to drain prayer       */
+/* ENCOUNTERS: call encounter_drain_all_prayers() each tick to drain prayer  */
 /* points at the correct OSRS rate. all encounters with overhead prayers     */
 /* MUST use this — do not hand-roll prayer drain logic.                      */
 /*                                                                           */
@@ -937,7 +989,7 @@ static inline uint32_t encounter_resolve_seed(uint32_t saved_rng, uint32_t expli
 /** drain effect values for overhead prayers.
     from the OSRS prayer table — higher values drain faster.
     used by both PvE encounters and PvP. */
-static inline int encounter_prayer_drain_effect(OverheadPrayer prayer) {
+static inline int encounter_overhead_drain_effect(OverheadPrayer prayer) {
     switch (prayer) {
         case PRAYER_PROTECT_MELEE:  return 12;
         case PRAYER_PROTECT_RANGED: return 12;
@@ -948,37 +1000,56 @@ static inline int encounter_prayer_drain_effect(OverheadPrayer prayer) {
     }
 }
 
-/** drain prayer points at the correct OSRS rate. call once per game tick.
-    drain_effect: total drain from all active prayers (overhead + offensive).
-      callers compute this by summing encounter_prayer_drain_effect() for overhead
-      and any offensive prayer drain (piety=24, rigour=24, augury=24, low=6).
-    prayer_bonus: player's total prayer equipment bonus (typically 0-30).
-    drain_counter: persistent state, must be zero-initialized. uses the osrs-sdk
-      incrementing approach (PrayerController.ts:50-53).
-    deactivates overhead prayer when points reach 0. caller is responsible for
-    deactivating offensive prayers if applicable (PvP). */
-static inline void encounter_drain_prayer(
-    int* current_prayer, OverheadPrayer* active_prayer,
-    int prayer_bonus, int* drain_counter, int drain_effect
-) {
-    if (*active_prayer == PRAYER_NONE || drain_effect <= 0) return;
+/** drain effect values for offensive prayers. ref: osrs wiki prayer table. */
+static inline int encounter_offensive_drain_effect(OffensivePrayer prayer) {
+    switch (prayer) {
+        case OFFENSIVE_PRAYER_PIETY:       return 24;
+        case OFFENSIVE_PRAYER_RIGOUR:      return 24;
+        case OFFENSIVE_PRAYER_AUGURY:      return 24;
+        case OFFENSIVE_PRAYER_MELEE_LOW:   return 6;
+        case OFFENSIVE_PRAYER_RANGED_LOW:  return 6;
+        case OFFENSIVE_PRAYER_MAGIC_LOW:   return 6;
+        default: return 0;
+    }
+}
 
-    /* OSRS prayer drain: counter increments by drain_effect each tick.
-       when counter >= drain_resistance, a prayer point drains.
-       ref: osrs-sdk PrayerController.ts:50-53, RuneLite PrayerPlugin.java:387. */
+/** drain both overhead and offensive prayer for one tick.
+    handles activation-tick skip (prayers activated this tick do not drain),
+    the shared drain counter, and pp=0 auto-clear (all prayers off when empty).
+    prayer_bonus: player's total prayer equipment bonus (typically 0-30).
+    ref: osrs-sdk PrayerController.ts:44-59, wiki "Prayer flicking" section. */
+static inline void encounter_drain_all_prayers(Player* p, int prayer_bonus) {
+    /* active-but-not-just-activated prayers contribute to drain this tick.
+       ref: wiki: "the game does not drain prayer for prayers on the tick
+       they are activated". this is what makes 1-tick flicking free. */
+    int overhead_effect  = p->prayer_just_activated
+        ? 0 : encounter_overhead_drain_effect(p->prayer);
+    int offensive_effect = p->offensive_prayer_just_activated
+        ? 0 : encounter_offensive_drain_effect(p->offensive_prayer);
+    int total = overhead_effect + offensive_effect;
+
+    /* clear just-activated flags even on zero-drain paths so they don't leak
+       into next tick. */
+    p->prayer_just_activated = 0;
+    p->offensive_prayer_just_activated = 0;
+
+    if (total <= 0 || p->current_prayer <= 0) return;
+
     int drain_resistance = 60 + prayer_bonus * 2;
-    *drain_counter += drain_effect;
-    while (*drain_counter > drain_resistance) {
-        (*current_prayer)--;
-        *drain_counter -= drain_resistance;
-        if (*current_prayer <= 0) {
-            *current_prayer = 0;
-            *drain_counter = 0;
-            *active_prayer = PRAYER_NONE;
+    p->prayer_drain_counter += total;
+    while (p->prayer_drain_counter > drain_resistance) {
+        p->current_prayer--;
+        p->prayer_drain_counter -= drain_resistance;
+        if (p->current_prayer <= 0) {
+            p->current_prayer = 0;
+            p->prayer_drain_counter = 0;
+            p->prayer = PRAYER_NONE;
+            p->offensive_prayer = OFFENSIVE_PRAYER_NONE;
             break;
         }
     }
 }
+
 
 /* ======================================================================== */
 /* shared loadout stat computation                                           */
@@ -989,7 +1060,7 @@ static inline void encounter_drain_prayer(
 /*                                                                           */
 /* available structs/functions:                                               */
 /*   EncounterLoadoutStats — computed combat stats for one gear loadout      */
-/*   EncounterPrayer       — prayer enum (NONE, AUGURY, RIGOUR, PIETY)      */
+/*   OffensivePrayer       — prayer enum (NONE, PIETY, RIGOUR, AUGURY, low-tiers) */
 /*   encounter_compute_loadout_stats() — derive stats from loadout + prayer  */
 /* ======================================================================== */
 
@@ -1014,13 +1085,32 @@ typedef struct {
     int spell_base_damage;
 } EncounterLoadoutStats;
 
-/** overhead prayer multipliers for effective level computation. */
-typedef enum {
-    ENCOUNTER_PRAYER_NONE = 0,
-    ENCOUNTER_PRAYER_AUGURY,   /* +25% magic attack, +25% magic defence */
-    ENCOUNTER_PRAYER_RIGOUR,   /* +20% ranged attack, +23% ranged strength */
-    ENCOUNTER_PRAYER_PIETY,    /* +20% melee attack, +23% melee strength, +25% defence */
-} EncounterPrayer;
+/** offensive prayer multipliers for effective level computation.
+    single source of truth: the multipliers used in encounter_compute_loadout_stats()
+    and encounter_update_loadout_level(). also used by PvP combat math (via
+    osrs_pvp_combat.h) so all combat paths agree on prayer effects.
+    ref: osrs wiki prayer table. */
+static inline void encounter_offensive_prayer_mults(
+    OffensivePrayer op, float* att_out, float* str_out
+) {
+    float att = 1.0f, str = 1.0f;
+    switch (op) {
+        case OFFENSIVE_PRAYER_PIETY:       att = 1.20f; str = 1.23f; break;
+        case OFFENSIVE_PRAYER_RIGOUR:      att = 1.20f; str = 1.23f; break;
+        case OFFENSIVE_PRAYER_AUGURY:      att = 1.25f; str = 1.00f; break;
+        case OFFENSIVE_PRAYER_MELEE_LOW:   att = 1.15f; str = 1.15f; break;
+        case OFFENSIVE_PRAYER_RANGED_LOW:  att = 1.15f; str = 1.15f; break;
+        case OFFENSIVE_PRAYER_MAGIC_LOW:   att = 1.15f; str = 1.00f; break;
+        default: break;
+    }
+    *att_out = att;
+    *str_out = str;
+}
+
+/** augury adds +4% magic damage on top of its accuracy mult (PvP parity). */
+static inline float encounter_offensive_magic_dmg_mult(OffensivePrayer op) {
+    return (op == OFFENSIVE_PRAYER_AUGURY) ? 1.04f : 1.0f;
+}
 
 /** derive all combat stats from a loadout array + prayer + fight stance.
     sums equipment bonuses from ITEM_DATABASE, applies prayer multiplier,
@@ -1029,15 +1119,18 @@ typedef enum {
 
     @param loadout          gear array indexed by GEAR_SLOT_* (ITEM_NONE=255 for empty)
     @param style            ATTACK_STYLE_MAGIC, ATTACK_STYLE_RANGED, or ATTACK_STYLE_MELEE
-    @param prayer           prayer enum for level multiplier
+    @param offensive_prayer current offensive prayer (piety/rigour/augury/none/low tiers)
     @param base_level       base combat level (usually 99)
     @param fight_style      stance — drives attack/str/def bonuses, attack speed, range
     @param spell_base_damage 0 for ranged/melee, 30 for ice/blood barrage
-    @param out              output struct to fill */
+    @param out              output struct to fill. prayer multipliers are stored so
+                            encounter_update_loadout_level() can recompute eff/max without
+                            needing the prayer arg again (callers must re-call update
+                            whenever offensive prayer changes). */
 static inline void encounter_compute_loadout_stats(
     const uint8_t loadout[NUM_GEAR_SLOTS],
     AttackStyle style,
-    EncounterPrayer prayer,
+    OffensivePrayer offensive_prayer,
     int base_level,
     FightStyle fight_style,
     int spell_base_damage,
@@ -1074,26 +1167,11 @@ static inline void encounter_compute_loadout_stats(
         if (eb.attack_crush > out->attack_bonus) out->attack_bonus = eb.attack_crush;
     }
 
-    /* prayer multipliers */
-    float att_prayer_mult = 1.0f;
-    float str_prayer_mult = 1.0f;
-    switch (prayer) {
-        case ENCOUNTER_PRAYER_AUGURY:
-            att_prayer_mult = 1.25f;
-            break;
-        case ENCOUNTER_PRAYER_RIGOUR:
-            att_prayer_mult = 1.20f;
-            str_prayer_mult = 1.23f;
-            break;
-        case ENCOUNTER_PRAYER_PIETY:
-            att_prayer_mult = 1.20f;
-            str_prayer_mult = 1.23f;
-            break;
-        case ENCOUNTER_PRAYER_NONE:
-            break;
-    }
+    /* prayer multipliers — single source of truth in encounter_offensive_prayer_mults(). */
+    float att_prayer_mult, str_prayer_mult;
+    encounter_offensive_prayer_mults(offensive_prayer, &att_prayer_mult, &str_prayer_mult);
 
-    /* store for dynamic recomputation after brew drain / potion boost */
+    /* store for dynamic recomputation after brew drain / potion boost / prayer toggle */
     out->att_prayer_mult = att_prayer_mult;
     out->str_prayer_mult = str_prayer_mult;
     out->spell_base_damage = spell_base_damage;
@@ -1115,8 +1193,7 @@ static inline void encounter_compute_loadout_stats(
     int eff_str_level = (int)(base_level * str_prayer_mult) + str_stance_bonus + 8;
 
     /* augury magic damage multiplier: +4% (matches PvP calculate_max_hit). */
-    float magic_dmg_prayer_mult = 1.0f;
-    if (prayer == ENCOUNTER_PRAYER_AUGURY) magic_dmg_prayer_mult = 1.04f;
+    float magic_dmg_prayer_mult = encounter_offensive_magic_dmg_mult(offensive_prayer);
 
     /* max hit and strength bonus depend on combat style */
     if (style == ATTACK_STYLE_RANGED) {
@@ -1141,25 +1218,33 @@ static inline void encounter_compute_loadout_stats(
 /* ======================================================================== */
 
 /** recompute eff_level and max_hit for a loadout using a (possibly drained/boosted)
-    current combat level. call after brew drain, super restore, or bastion boost.
+    current combat level AND current offensive prayer. call whenever either changes:
+      - offensive prayer toggle (pretick action)
+      - brew drain / super restore / bastion boost (consumable effects)
     current_att_level: the player's current attack/ranged/magic level (for accuracy).
     current_str_level: the player's current strength/ranged/magic level (for max hit).
     for ranged: both are current_ranged. for melee: att=current_attack, str=current_strength.
-    for magic: max hit doesn't depend on level (spell base damage), but eff_level does. */
+    for magic: max hit doesn't depend on level (spell base damage), but eff_level does.
+    offensive_prayer is the current Player.offensive_prayer — mults are rewritten from it. */
 static inline void encounter_update_loadout_level(
-    EncounterLoadoutStats* ls, int current_att_level, int current_str_level
+    EncounterLoadoutStats* ls, OffensivePrayer offensive_prayer,
+    int current_att_level, int current_str_level
 ) {
+    float att_prayer_mult, str_prayer_mult;
+    encounter_offensive_prayer_mults(offensive_prayer, &att_prayer_mult, &str_prayer_mult);
+    ls->att_prayer_mult = att_prayer_mult;
+    ls->str_prayer_mult = str_prayer_mult;
+
     int att_stance_bonus = osrs_stance_att_bonus(ls->fight_style, ls->style);
     int str_stance_bonus = osrs_stance_str_bonus(ls->fight_style);
     /* magic uses +9 invisible boost (matches encounter_compute_loadout_stats) */
     if (ls->style == ATTACK_STYLE_MAGIC) {
-        ls->eff_level = (int)(current_att_level * ls->att_prayer_mult) + att_stance_bonus + 9;
-        /* augury +4% magic damage. att_prayer_mult == 1.25 iff augury. */
-        float magic_dmg_mult = (ls->att_prayer_mult > 1.24f) ? 1.04f : 1.0f;
+        ls->eff_level = (int)(current_att_level * att_prayer_mult) + att_stance_bonus + 9;
+        float magic_dmg_mult = encounter_offensive_magic_dmg_mult(offensive_prayer);
         ls->max_hit = (int)(ls->spell_base_damage * (1.0 + ls->strength_bonus / 100.0) * magic_dmg_mult);
     } else {
-        ls->eff_level = (int)(current_att_level * ls->att_prayer_mult) + att_stance_bonus + 8;
-        int eff_str = (int)(current_str_level * ls->str_prayer_mult) + str_stance_bonus + 8;
+        ls->eff_level = (int)(current_att_level * att_prayer_mult) + att_stance_bonus + 8;
+        int eff_str = (int)(current_str_level * str_prayer_mult) + str_stance_bonus + 8;
         ls->max_hit = (int)(0.5 + eff_str * (ls->strength_bonus + 64) / 640.0);
     }
 }
@@ -1237,21 +1322,22 @@ static inline void encounter_bastion_boost(Player* p) {
     if (p->current_defence > def_cap) p->current_defence = def_cap;
 }
 
-/** recompute max hit for all loadouts after a stat change.
-    encounters should call this after brew_drain_stats, restore_stats, or bastion_boost.
-    ranged loadouts use current_ranged, magic uses current_magic, melee uses
-    current_attack/current_strength. */
+/** recompute max hit for all loadouts after a stat change or prayer change.
+    encounters should call this after brew_drain_stats, restore_stats, bastion_boost,
+    or when Player.offensive_prayer toggles. ranged loadouts use current_ranged, magic
+    uses current_magic, melee uses current_attack/current_strength. prayer multipliers
+    are rewritten from p->offensive_prayer. */
 static inline void encounter_recompute_loadout_max_hits(
     EncounterLoadoutStats* loadouts, int num_loadouts, Player* p
 ) {
     for (int i = 0; i < num_loadouts; i++) {
         EncounterLoadoutStats* ls = &loadouts[i];
         if (ls->style == ATTACK_STYLE_RANGED) {
-            encounter_update_loadout_level(ls, p->current_ranged, p->current_ranged);
+            encounter_update_loadout_level(ls, p->offensive_prayer, p->current_ranged, p->current_ranged);
         } else if (ls->style == ATTACK_STYLE_MAGIC) {
-            encounter_update_loadout_level(ls, p->current_magic, p->current_magic);
+            encounter_update_loadout_level(ls, p->offensive_prayer, p->current_magic, p->current_magic);
         } else {
-            encounter_update_loadout_level(ls, p->current_attack, p->current_strength);
+            encounter_update_loadout_level(ls, p->offensive_prayer, p->current_attack, p->current_strength);
         }
     }
 }
@@ -1364,17 +1450,22 @@ static inline void encounter_translate_movement(HumanInput* hi, int* actions,
     }
 }
 
-/** translate prayer: 0=no change, 1=off, 2=melee, 3=ranged, 4=magic.
-    writes to actions[head_prayer]. head_prayer < 0 = skip. */
+/** translate overhead prayer: pending_prayer stores the new ENCOUNTER_OVERHEAD_*
+    value directly (set by GUI click handlers). writes to actions[head_prayer].
+    head_prayer < 0 = skip. */
 static inline void encounter_translate_prayer(HumanInput* hi, int* actions, int head_prayer) {
     if (hi->pending_prayer < 0 || head_prayer < 0) return;
-    switch (hi->pending_prayer) {
-        case OVERHEAD_NONE:   actions[head_prayer] = 1; break;
-        case OVERHEAD_MELEE:  actions[head_prayer] = 2; break;
-        case OVERHEAD_RANGED: actions[head_prayer] = 3; break;
-        case OVERHEAD_MAGE:   actions[head_prayer] = 4; break;
-        default: break;
-    }
+    actions[head_prayer] = hi->pending_prayer;
+}
+
+/** translate offensive prayer: pending_offensive_prayer stores the new
+    ENCOUNTER_OFFENSIVE_* value directly. writes to actions[head_offensive].
+    head_offensive < 0 = skip (encounter doesn't expose offensive as an action). */
+static inline void encounter_translate_offensive_prayer(
+    HumanInput* hi, int* actions, int head_offensive
+) {
+    if (hi->pending_offensive_prayer < 0 || head_offensive < 0) return;
+    actions[head_offensive] = hi->pending_offensive_prayer;
 }
 
 /** translate NPC target: 0=none, 1+=NPC index.
