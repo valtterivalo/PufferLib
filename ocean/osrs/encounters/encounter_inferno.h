@@ -846,6 +846,12 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
         ENCOUNTER_PRAYER_RIGOUR, 99, 0, 0, &s->loadout_stats[INF_GEAR_TBOW]);
     encounter_compute_loadout_stats(INF_RANGE_BP_LOADOUT, ATTACK_STYLE_RANGED,
         ENCOUNTER_PRAYER_RIGOUR, 99, 0, 0, &s->loadout_stats[INF_GEAR_BP]);
+    /* rapid stance reduces attack_speed by 1 vs accurate/longrange. equipment.json
+       stores the longrange (base) value — blowpipe 3 → 2, tbow 6 → 5. without
+       this, blowpipe loses its 2t advantage and agent underuses it.
+       ref: osrs-sdk Blowpipe.ts:79-84, TwistedBow.ts:70-75. */
+    s->loadout_stats[INF_GEAR_TBOW].attack_speed -= 1;
+    s->loadout_stats[INF_GEAR_BP].attack_speed -= 1;
 
     /* spawn position depends on wave */
     int is_zuk_wave = (saved_start >= 68);
@@ -2376,12 +2382,6 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
 
                 s->player.attack_timer = ls->attack_speed;
 
-                /* tagging: redirect NPC aggro from shield/zuk to player */
-                if (target_npc->aggro_target != -1) {
-                    target_npc->aggro_target = -1;
-                    target_npc->stun_timer = 2;  /* 2-tick delay on aggro switch */
-                }
-
                 /* player projectile event for renderer */
                 s->player_attacked_this_tick = 1;
                 s->player_attack_npc_idx = s->interaction.target_slot;
@@ -2523,6 +2523,14 @@ static void inf_step(EncounterState* state, const int* actions) {
                     s->damage_zuk_healers_this_tick += (s->damage_dealt_this_tick - dmg_before);
                 }
                 s->npcs[i].hit_spell_type = spell;
+                /* tagging: aggro switches on projectile LAND, not FIRE. matches
+                   osrs-sdk Unit.ts:645 shouldChangeAggro, called post-damage.
+                   without this, healers/set-spawns clear aggro on the fire tick
+                   and never land a heal/shield-hit before switching to player. */
+                if (s->npcs[i].aggro_target != -1) {
+                    s->npcs[i].aggro_target = -1;
+                    s->npcs[i].stun_timer = 2;  /* flinch: 2-tick delay on aggro switch */
+                }
                 inf_apply_npc_death(s, i);
             }
         }
@@ -3366,7 +3374,11 @@ static void inf_render_post_tick(EncounterState* state, EncounterOverlay* ov) {
                 proj_model_id = (actual_style == ATTACK_STYLE_MAGIC) ? INF_GFX_448_MODEL : INF_GFX_447_MODEL;
                 break;
             case INF_NPC_ZUK:        proj_model_id = INF_GFX_1375_MODEL; break;
-            case INF_NPC_HEALER_ZUK: proj_model_id = INF_GFX_1375_MODEL; break;  /* same model as zuk fireball, differentiated by arc */
+            /* InfernoTrainer uses a tekton_meteor-style model for Jal-MejJak.
+               OSRS cache doesn't have a dedicated healer spotanim exported here,
+               so we reuse INFERNO_ZEK_PROJECTILE (orange ball, closest meteor
+               shape) until a proper healer spotanim is added to the manifest. */
+            case INF_NPC_HEALER_ZUK: proj_model_id = INF_GFX_1376_MODEL; break;
             default: break;
         }
 
@@ -3427,7 +3439,7 @@ static void inf_render_post_tick(EncounterState* state, EncounterOverlay* ov) {
             spark->src_x, spark->src_y, spark->x, spark->y,
             encounter_attack_style_to_proj_style(ATTACK_STYLE_MAGIC),
             spark->damage,
-            4 * 30, 96, 64, 16, 3.0f, 0, 1, 1, INF_GFX_1375_MODEL);
+            4 * 30, 96, 64, 16, 3.0f, 0, 1, 1, INF_GFX_1376_MODEL);
         spark->visual_emitted = 1;
     }
 
