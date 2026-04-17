@@ -555,7 +555,7 @@ static void test_loadout_melee_no_prayer(void) {
     encounter_compute_loadout_stats(
         loadout,
         ATTACK_STYLE_MELEE,
-        ENCOUNTER_PRAYER_NONE,
+        OFFENSIVE_PRAYER_NONE,
         99,
         FIGHT_STYLE_AGGRESSIVE,
         0,    /* spell_base_damage */
@@ -595,7 +595,7 @@ static void test_loadout_melee_piety(void) {
     encounter_compute_loadout_stats(
         loadout,
         ATTACK_STYLE_MELEE,
-        ENCOUNTER_PRAYER_PIETY,
+        OFFENSIVE_PRAYER_PIETY,
         99,
         FIGHT_STYLE_AGGRESSIVE,
         0,    /* spell_base_damage */
@@ -630,7 +630,7 @@ static void test_loadout_ranged_rigour(void) {
     encounter_compute_loadout_stats(
         loadout,
         ATTACK_STYLE_RANGED,
-        ENCOUNTER_PRAYER_RIGOUR,
+        OFFENSIVE_PRAYER_RIGOUR,
         99,
         FIGHT_STYLE_RAPID,
         0,    /* spell_base_damage */
@@ -670,7 +670,7 @@ static void test_loadout_magic_augury(void) {
     encounter_compute_loadout_stats(
         loadout,
         ATTACK_STYLE_MAGIC,
-        ENCOUNTER_PRAYER_AUGURY,
+        OFFENSIVE_PRAYER_AUGURY,
         99,
         FIGHT_STYLE_AUTOCAST,
         30,   /* spell_base_damage (ice barrage = 30) */
@@ -709,7 +709,7 @@ static void test_loadout_magic_no_prayer(void) {
     encounter_compute_loadout_stats(
         loadout,
         ATTACK_STYLE_MAGIC,
-        ENCOUNTER_PRAYER_NONE,
+        OFFENSIVE_PRAYER_NONE,
         99,
         FIGHT_STYLE_AUTOCAST,
         30,   /* ice barrage */
@@ -746,7 +746,7 @@ static void test_loadout_full_ranged(void) {
     encounter_compute_loadout_stats(
         loadout,
         ATTACK_STYLE_RANGED,
-        ENCOUNTER_PRAYER_RIGOUR,
+        OFFENSIVE_PRAYER_RIGOUR,
         99,
         FIGHT_STYLE_RAPID,
         0,
@@ -788,7 +788,7 @@ static void test_update_loadout_level(void) {
 
     EncounterLoadoutStats stats;
     encounter_compute_loadout_stats(
-        loadout, ATTACK_STYLE_MELEE, ENCOUNTER_PRAYER_PIETY,
+        loadout, ATTACK_STYLE_MELEE, OFFENSIVE_PRAYER_PIETY,
         99, FIGHT_STYLE_AGGRESSIVE, 0, &stats);
 
     /* base (aggressive: +3 str, +0 att): eff_att=126, max=32 */
@@ -796,7 +796,7 @@ static void test_update_loadout_level(void) {
     ASSERT_INT_EQ("base max", stats.max_hit, 32);
 
     /* simulate brew drain: att drops to 90, str drops to 90 */
-    encounter_update_loadout_level(&stats, 90, 90);
+    encounter_update_loadout_level(&stats, OFFENSIVE_PRAYER_PIETY, 90, 90);
 
     /* eff_att = floor(90 * 1.20) + 0 + 8 = 108 + 8 = 116 */
     ASSERT_INT_EQ("drained eff", stats.eff_level, 116);
@@ -807,7 +807,7 @@ static void test_update_loadout_level(void) {
     ASSERT_INT_EQ("drained max", stats.max_hit, 29);
 
     /* restore back to 99 */
-    encounter_update_loadout_level(&stats, 99, 99);
+    encounter_update_loadout_level(&stats, OFFENSIVE_PRAYER_PIETY, 99, 99);
     ASSERT_INT_EQ("restored eff", stats.eff_level, 126);
     ASSERT_INT_EQ("restored max", stats.max_hit, 32);
 
@@ -815,14 +815,14 @@ static void test_update_loadout_level(void) {
     clear_loadout(loadout);
     loadout[GEAR_SLOT_WEAPON] = ITEM_KODAI_WAND;
     encounter_compute_loadout_stats(
-        loadout, ATTACK_STYLE_MAGIC, ENCOUNTER_PRAYER_AUGURY,
+        loadout, ATTACK_STYLE_MAGIC, OFFENSIVE_PRAYER_AUGURY,
         99, FIGHT_STYLE_AUTOCAST, 30, &stats);
 
     ASSERT_INT_EQ("magic base eff", stats.eff_level, 132);
     ASSERT_INT_EQ("magic base max", stats.max_hit, 35);
 
     /* drain magic to 80: eff changes, max_hit stays (spell-based) */
-    encounter_update_loadout_level(&stats, 80, 80);
+    encounter_update_loadout_level(&stats, OFFENSIVE_PRAYER_AUGURY, 80, 80);
     /* eff = floor(80 * 1.25) + 0 + 9 = 100 + 9 = 109 */
     ASSERT_INT_EQ("magic drained eff", stats.eff_level, 109);
     /* max_hit still = floor(30 * 1.15 * 1.04) = 35 */
@@ -998,7 +998,7 @@ static void test_loadout_def_bonuses(void) {
 
     EncounterLoadoutStats stats;
     encounter_compute_loadout_stats(
-        loadout, ATTACK_STYLE_MELEE, ENCOUNTER_PRAYER_NONE,
+        loadout, ATTACK_STYLE_MELEE, OFFENSIVE_PRAYER_NONE,
         99, FIGHT_STYLE_ACCURATE, 0, &stats);
 
     /* verify defence bonuses sum correctly from ITEM_DATABASE.
@@ -1041,7 +1041,7 @@ static void test_edge_cases(void) {
     /* melee, level 1, no gear, no prayer, accurate stance (+3 att) */
     EncounterLoadoutStats stats;
     encounter_compute_loadout_stats(
-        loadout, ATTACK_STYLE_MELEE, ENCOUNTER_PRAYER_NONE,
+        loadout, ATTACK_STYLE_MELEE, OFFENSIVE_PRAYER_NONE,
         1, FIGHT_STYLE_ACCURATE, 0, &stats);
 
     /* eff = floor(1*1.0) + 3 + 8 = 12 (accurate +3 att) */
@@ -1056,7 +1056,7 @@ static void test_edge_cases(void) {
 
     /* magic, level 1, no gear, barrage, autocast (no invisible bonus) */
     encounter_compute_loadout_stats(
-        loadout, ATTACK_STYLE_MAGIC, ENCOUNTER_PRAYER_NONE,
+        loadout, ATTACK_STYLE_MAGIC, OFFENSIVE_PRAYER_NONE,
         1, FIGHT_STYLE_AUTOCAST, 30, &stats);
 
     /* eff = floor(1*1.0) + 0 + 9 = 10 */

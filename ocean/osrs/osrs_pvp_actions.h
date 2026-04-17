@@ -19,31 +19,18 @@
 #include "osrs_pvp_combat.h"
 #include "osrs_pvp_movement.h"
 #include "osrs_pvp_observations.h"  // For can_eat_food, can_use_potion, etc.
+#include "osrs_encounter.h"         // For ENCOUNTER_OVERHEAD_*, encounter_apply_*_action, encounter_drain_all_prayers
 
 // ============================================================================
 // PRAYER DRAIN
 // ============================================================================
-// overhead drain: use encounter_prayer_drain_effect() from osrs_encounter.h.
-// offensive drain: get_offensive_drain_effect() below.
-// drain math: encounter_drain_prayer() from osrs_encounter.h.
+// prayer drain: encounter_drain_all_prayers() in osrs_encounter.h drives both
+// overhead and offensive drain in a single call with activation-tick skip.
 
 // NH gear prayer bonus: fury amulet +3, neitiznot helm +3 = 6 total.
 // hardcoded because these are always equipped regardless of gear set.
 #define PRAYER_BONUS 6
 
-/** get drain effect for an offensive prayer (PvP only — encounters don't use these yet). */
-static inline int get_offensive_drain_effect(OffensivePrayer prayer) {
-    switch (prayer) {
-        case OFFENSIVE_PRAYER_NONE:       return 0;
-        case OFFENSIVE_PRAYER_MELEE_LOW:  return 6;   /* 1 point per 6 seconds */
-        case OFFENSIVE_PRAYER_RANGED_LOW: return 6;
-        case OFFENSIVE_PRAYER_MAGIC_LOW:  return 6;
-        case OFFENSIVE_PRAYER_PIETY:      return 24;  /* 1 point per 1.5 seconds */
-        case OFFENSIVE_PRAYER_RIGOUR:     return 24;
-        case OFFENSIVE_PRAYER_AUGURY:     return 24;
-        default: return 0;
-    }
-}
 
 // ============================================================================
 // CONSUMABLE ACTIONS
@@ -248,17 +235,15 @@ static void update_timers(Player* p) {
     if (p->freeze_immunity_ticks > 0) p->freeze_immunity_ticks--;
     if (p->veng_cooldown > 0) p->veng_cooldown--;
 
-    /* prayer drain — uses shared encounter_drain_prayer for the counter math.
-       LMS has no prayer drain (prayer points are unlimited). */
-    if (p->current_prayer > 0 && !p->is_lms) {
-        int drain_effect = encounter_prayer_drain_effect(p->prayer)
-                         + get_offensive_drain_effect(p->offensive_prayer);
-        encounter_drain_prayer(&p->current_prayer, &p->prayer,
-            PRAYER_BONUS, &p->prayer_drain_counter, drain_effect);
-        /* shared function deactivates overhead prayer; PvP also needs to
-           deactivate offensive prayer when prayer points run out. */
-        if (p->current_prayer <= 0)
-            p->offensive_prayer = OFFENSIVE_PRAYER_NONE;
+    /* prayer drain — shared encounter_drain_all_prayers handles both overhead
+       and offensive, activation-tick skip, and pp=0 auto-clear of both slots.
+       LMS has no prayer drain (prayer points are unlimited) — still clear
+       just-activated flags so they don't leak to next tick. */
+    if (!p->is_lms) {
+        encounter_drain_all_prayers(p, PRAYER_BONUS);
+    } else {
+        p->prayer_just_activated = 0;
+        p->offensive_prayer_just_activated = 0;
     }
 
     if (p->run_energy < 100 && (!p->is_moving || !p->is_running)) {
@@ -368,25 +353,48 @@ static void execute_switches(OsrsEnv* env, int agent_idx, int* actions) {
     // =========================================================================
 
     int overhead_action = actions[HEAD_OVERHEAD];
-    OverheadPrayer prev_prayer = p->prayer;
-    switch (overhead_action) {
-        case OVERHEAD_MAGE:
-            if (p->current_prayer > 0) p->prayer = PRAYER_PROTECT_MAGIC;
-            break;
-        case OVERHEAD_RANGED:
-            if (p->current_prayer > 0) p->prayer = PRAYER_PROTECT_RANGED;
-            break;
-        case OVERHEAD_MELEE:
-            if (p->current_prayer > 0) p->prayer = PRAYER_PROTECT_MELEE;
-            break;
-        case OVERHEAD_SMITE:
-            if (p->current_prayer > 0 && !env->is_lms) p->prayer = PRAYER_SMITE;
-            break;
-        case OVERHEAD_REDEMPTION:
-            if (p->current_prayer > 0 && !env->is_lms) p->prayer = PRAYER_REDEMPTION;
-            break;
+    int offensive_action = actions[HEAD_OFFENSIVE];
+
+    /* LMS restricts smite/redemption — clear those toggle actions before apply. */
+    if (env->is_lms &&
+        (overhead_action == ENCOUNTER_OVERHEAD_TOGGLE_SMITE ||
+         overhead_action == ENCOUNTER_OVERHEAD_TOGGLE_REDEMPTION)) {
+        overhead_action = ENCOUNTER_OVERHEAD_NO_CHANGE;
     }
-    if (p->prayer != prev_prayer) p->clicks_this_tick++;
+    /* agent cannot activate a prayer with 0 pp. toggle-off (when target already on)
+       is always allowed — but drain will clear it anyway. here we just block pure
+       activations. this is intentionally conservative: if current prayer matches target,
+       the toggle turns it off (allowed); otherwise we check pp. */
+    if (p->current_prayer <= 0) {
+        /* disallow overhead activation when OOC */
+        if (overhead_action > 0) {
+            /* if toggle matches current (would deactivate) still allow */
+            int would_deactivate =
+                (overhead_action == ENCOUNTER_OVERHEAD_TOGGLE_MELEE     && p->prayer == PRAYER_PROTECT_MELEE)  ||
+                (overhead_action == ENCOUNTER_OVERHEAD_TOGGLE_RANGED    && p->prayer == PRAYER_PROTECT_RANGED) ||
+                (overhead_action == ENCOUNTER_OVERHEAD_TOGGLE_MAGIC     && p->prayer == PRAYER_PROTECT_MAGIC)  ||
+                (overhead_action == ENCOUNTER_OVERHEAD_TOGGLE_SMITE     && p->prayer == PRAYER_SMITE)          ||
+                (overhead_action == ENCOUNTER_OVERHEAD_TOGGLE_REDEMPTION && p->prayer == PRAYER_REDEMPTION);
+            if (!would_deactivate) overhead_action = ENCOUNTER_OVERHEAD_NO_CHANGE;
+        }
+        if (offensive_action > 0) {
+            int would_deactivate =
+                (offensive_action == ENCOUNTER_OFFENSIVE_TOGGLE_PIETY  && p->offensive_prayer == OFFENSIVE_PRAYER_PIETY)  ||
+                (offensive_action == ENCOUNTER_OFFENSIVE_TOGGLE_RIGOUR && p->offensive_prayer == OFFENSIVE_PRAYER_RIGOUR) ||
+                (offensive_action == ENCOUNTER_OFFENSIVE_TOGGLE_AUGURY && p->offensive_prayer == OFFENSIVE_PRAYER_AUGURY);
+            if (!would_deactivate) offensive_action = ENCOUNTER_OFFENSIVE_NO_CHANGE;
+        }
+    }
+
+    OverheadPrayer prev_prayer = p->prayer;
+    OffensivePrayer prev_offensive = p->offensive_prayer;
+    if (encounter_apply_overhead_action(&p->prayer, overhead_action)) {
+        p->prayer_just_activated = 1;
+    }
+    if (encounter_apply_offensive_action(&p->offensive_prayer, offensive_action)) {
+        p->offensive_prayer_just_activated = 1;
+    }
+    if (p->prayer != prev_prayer || p->offensive_prayer != prev_offensive) p->clicks_this_tick++;
 
     // =========================================================================
     // PHASE 2: LOADOUT SWITCH - equips dynamic gear slots, returns # changed
@@ -405,47 +413,11 @@ static void execute_switches(OsrsEnv* env, int agent_idx, int* actions) {
     }
 
     // =========================================================================
-    // PHASE 3: AUTO-OFFENSIVE PRAYER
-    // Loadout determines prayer if switching, attack head is fallback for KEEP
+    // PHASE 3: OFFENSIVE PRAYER — agent-controlled via HEAD_OFFENSIVE, already
+    // applied in the overhead block above. auto-assignment based on loadout has
+    // been removed so the agent must manage offensive prayer like a real player
+    // (enabling prayer flicking).
     // =========================================================================
-
-    if (p->current_prayer > 0 && p->base_prayer >= 70) {
-        AttackStyle pray_style = ATTACK_STYLE_NONE;
-        if (loadout_action != LOADOUT_KEEP) {
-            switch (loadout_action) {
-                case LOADOUT_MELEE:
-                case LOADOUT_SPEC_MELEE:
-                case LOADOUT_GMAUL:
-                    pray_style = ATTACK_STYLE_MELEE;
-                    break;
-                case LOADOUT_RANGE:
-                case LOADOUT_SPEC_RANGE:
-                    pray_style = ATTACK_STYLE_RANGED;
-                    break;
-                case LOADOUT_MAGE:
-                case LOADOUT_TANK:
-                case LOADOUT_SPEC_MAGIC:
-                    pray_style = ATTACK_STYLE_MAGIC;
-                    break;
-            }
-        } else {
-            int combat_action_val = actions[HEAD_COMBAT];
-            pray_style = resolve_attack_style_for_action(p, combat_action_val);
-        }
-        switch (pray_style) {
-            case ATTACK_STYLE_MELEE:
-                p->offensive_prayer = OFFENSIVE_PRAYER_PIETY;
-                break;
-            case ATTACK_STYLE_RANGED:
-                p->offensive_prayer = OFFENSIVE_PRAYER_RIGOUR;
-                break;
-            case ATTACK_STYLE_MAGIC:
-                p->offensive_prayer = OFFENSIVE_PRAYER_AUGURY;
-                break;
-            default:
-                break;
-        }
-    }
 
     // =========================================================================
     // PHASE 4: CONSUMABLES - eating delays attack timer

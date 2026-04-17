@@ -13,6 +13,7 @@
 #include "osrs_types.h"
 #include "osrs_pvp_gear.h"
 #include "osrs_pvp_combat.h"
+#include "osrs_encounter.h"  // for ENCOUNTER_OVERHEAD_* / ENCOUNTER_OFFENSIVE_* encoding
 #include "osrs_pvp_movement.h"
 
 /**
@@ -729,14 +730,16 @@ static void compute_action_masks(OsrsEnv* env, int agent_idx) {
     mask[offset + MOVE_FARCAST_7] = can_move_now && can_move_to_farcast(p, t, 7, cmap);
     offset += COMBAT_DIM;
 
-    // OVERHEAD head (6 options)
+    // OVERHEAD head — 6 options in new toggle-semantic encoding:
+    //   0=no_change, 1-5=toggle_{melee,ranged,magic,smite,redemption}
+    // a toggle is valid if pp>0 (activation) OR if it would deactivate the currently-active prayer.
     int has_prayer = p->current_prayer > 0;
-    mask[offset + OVERHEAD_NONE] = 1;
-    mask[offset + OVERHEAD_MAGE] = has_prayer && (p->prayer != PRAYER_PROTECT_MAGIC);
-    mask[offset + OVERHEAD_RANGED] = has_prayer && (p->prayer != PRAYER_PROTECT_RANGED);
-    mask[offset + OVERHEAD_MELEE] = has_prayer && (p->prayer != PRAYER_PROTECT_MELEE);
-    mask[offset + OVERHEAD_SMITE] = has_prayer && !env->is_lms && (p->prayer != PRAYER_SMITE);
-    mask[offset + OVERHEAD_REDEMPTION] = has_prayer && !env->is_lms && (p->prayer != PRAYER_REDEMPTION);
+    mask[offset + ENCOUNTER_OVERHEAD_NO_CHANGE] = 1;
+    mask[offset + ENCOUNTER_OVERHEAD_TOGGLE_MELEE]      = has_prayer || p->prayer == PRAYER_PROTECT_MELEE;
+    mask[offset + ENCOUNTER_OVERHEAD_TOGGLE_RANGED]     = has_prayer || p->prayer == PRAYER_PROTECT_RANGED;
+    mask[offset + ENCOUNTER_OVERHEAD_TOGGLE_MAGIC]      = has_prayer || p->prayer == PRAYER_PROTECT_MAGIC;
+    mask[offset + ENCOUNTER_OVERHEAD_TOGGLE_SMITE]      = (has_prayer || p->prayer == PRAYER_SMITE) && !env->is_lms;
+    mask[offset + ENCOUNTER_OVERHEAD_TOGGLE_REDEMPTION] = (has_prayer || p->prayer == PRAYER_REDEMPTION) && !env->is_lms;
     offset += OVERHEAD_DIM;
 
     // FOOD head (2 options)
@@ -762,6 +765,15 @@ static void compute_action_masks(OsrsEnv* env, int agent_idx) {
     mask[offset + VENG_CAST] = !env->is_lms && p->is_lunar_spellbook && !p->veng_active &&
                                 (remaining_ticks(p->veng_cooldown) == 0) && p->current_magic >= 94;
     offset += VENG_DIM;
+
+    // OFFENSIVE head — 4 options, new toggle-semantic encoding:
+    //   0=no_change, 1-3=toggle_{piety,rigour,augury}
+    // valid if pp>0 (activation) OR toggle would deactivate currently-active offensive.
+    mask[offset + ENCOUNTER_OFFENSIVE_NO_CHANGE] = 1;
+    mask[offset + ENCOUNTER_OFFENSIVE_TOGGLE_PIETY]  = has_prayer || p->offensive_prayer == OFFENSIVE_PRAYER_PIETY;
+    mask[offset + ENCOUNTER_OFFENSIVE_TOGGLE_RIGOUR] = has_prayer || p->offensive_prayer == OFFENSIVE_PRAYER_RIGOUR;
+    mask[offset + ENCOUNTER_OFFENSIVE_TOGGLE_AUGURY] = has_prayer || p->offensive_prayer == OFFENSIVE_PRAYER_AUGURY;
+    offset += OFFENSIVE_DIM;
 }
 
 #endif // OSRS_PVP_OBSERVATIONS_H

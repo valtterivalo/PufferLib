@@ -193,40 +193,34 @@ static void human_handle_prayer_click(HumanInput* hi, GuiState* gs, Player* p,
     if (mouse_x > cell_x + icon_sz || mouse_y > cell_y + icon_sz) return;
 
     GuiPrayerIdx pidx = (GuiPrayerIdx)idx;
+    (void)p;  /* current-state check no longer needed — toggle is handled by env */
 
-    /* map prayer to action — only actionable prayers */
+    /* emit toggle actions directly (new ENCOUNTER_OVERHEAD_* / ENCOUNTER_OFFENSIVE_* encoding).
+       the env handles the target-already-active → off transition. */
     switch (pidx) {
         case GUI_PRAY_PROTECT_MAGIC:
-            hi->pending_prayer = (p->prayer == PRAYER_PROTECT_MAGIC)
-                ? OVERHEAD_NONE : OVERHEAD_MAGE;
+            hi->pending_prayer = ENCOUNTER_OVERHEAD_TOGGLE_MAGIC;
             break;
         case GUI_PRAY_PROTECT_MISSILES:
-            hi->pending_prayer = (p->prayer == PRAYER_PROTECT_RANGED)
-                ? OVERHEAD_NONE : OVERHEAD_RANGED;
+            hi->pending_prayer = ENCOUNTER_OVERHEAD_TOGGLE_RANGED;
             break;
         case GUI_PRAY_PROTECT_MELEE:
-            hi->pending_prayer = (p->prayer == PRAYER_PROTECT_MELEE)
-                ? OVERHEAD_NONE : OVERHEAD_MELEE;
+            hi->pending_prayer = ENCOUNTER_OVERHEAD_TOGGLE_MELEE;
             break;
         case GUI_PRAY_SMITE:
-            hi->pending_prayer = (p->prayer == PRAYER_SMITE)
-                ? OVERHEAD_NONE : OVERHEAD_SMITE;
+            hi->pending_prayer = ENCOUNTER_OVERHEAD_TOGGLE_SMITE;
             break;
         case GUI_PRAY_REDEMPTION:
-            hi->pending_prayer = (p->prayer == PRAYER_REDEMPTION)
-                ? OVERHEAD_NONE : OVERHEAD_REDEMPTION;
+            hi->pending_prayer = ENCOUNTER_OVERHEAD_TOGGLE_REDEMPTION;
             break;
         case GUI_PRAY_PIETY:
-            hi->pending_offensive_prayer = (p->offensive_prayer == OFFENSIVE_PRAYER_PIETY)
-                ? 0 : 1;
+            hi->pending_offensive_prayer = ENCOUNTER_OFFENSIVE_TOGGLE_PIETY;
             break;
         case GUI_PRAY_RIGOUR:
-            hi->pending_offensive_prayer = (p->offensive_prayer == OFFENSIVE_PRAYER_RIGOUR)
-                ? 0 : 2;
+            hi->pending_offensive_prayer = ENCOUNTER_OFFENSIVE_TOGGLE_RIGOUR;
             break;
         case GUI_PRAY_AUGURY:
-            hi->pending_offensive_prayer = (p->offensive_prayer == OFFENSIVE_PRAYER_AUGURY)
-                ? 0 : 3;
+            hi->pending_offensive_prayer = ENCOUNTER_OFFENSIVE_TOGGLE_AUGURY;
             break;
         default:
             break;  /* non-actionable prayer */
@@ -402,19 +396,10 @@ static void human_to_pvp_actions(HumanInput* hi, int* actions,
         }
     }
 
-    /* offensive prayer: set via loadout-aware mechanism.
-       piety/rigour/augury are auto-set by the action system based on loadout,
-       so we handle this by setting the appropriate loadout if prayer changed.
-       for human play we just directly mutate the player's offensive prayer. */
-    if (hi->pending_offensive_prayer >= 0) {
-        switch (hi->pending_offensive_prayer) {
-            case 0: agent->offensive_prayer = OFFENSIVE_PRAYER_NONE; break;
-            case 1: agent->offensive_prayer = OFFENSIVE_PRAYER_PIETY; break;
-            case 2: agent->offensive_prayer = OFFENSIVE_PRAYER_RIGOUR; break;
-            case 3: agent->offensive_prayer = OFFENSIVE_PRAYER_AUGURY; break;
-            default: break;
-        }
-    }
+    /* offensive prayer: encounters wire their HEAD_OFFENSIVE_* in their own translate
+       helper via encounter_translate_offensive_prayer(). PvP's HEAD_OFFENSIVE is
+       routed by pvp_actions.h. nothing to do here — direct mutation was legacy. */
+    (void)agent;
 }
 
 /* shared translate helpers (encounter_translate_movement/prayer/target)

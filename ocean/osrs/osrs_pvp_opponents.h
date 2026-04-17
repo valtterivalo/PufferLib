@@ -452,15 +452,43 @@ static int opp_apply_consumables(OsrsEnv* env, OpponentState* opp, int* actions,
     return potion_used;
 }
 
+/* convert an OverheadAction intent (legacy set-semantic: MAGE/RANGED/MELEE/etc)
+   into a toggle action given the opponent's current prayer state. if already
+   on target, emits NO_CHANGE (no-op). all opponent-AI prayer emissions go
+   through this so the new ENCOUNTER_OVERHEAD_TOGGLE_* encoding is respected. */
+static inline void opp_emit_prayer(int* actions, Player* self, int target_overhead_action) {
+    OverheadPrayer target_prayer = PRAYER_NONE;
+    int toggle = ENCOUNTER_OVERHEAD_NO_CHANGE;
+    switch (target_overhead_action) {
+        case OVERHEAD_MAGE:       target_prayer = PRAYER_PROTECT_MAGIC;  toggle = ENCOUNTER_OVERHEAD_TOGGLE_MAGIC; break;
+        case OVERHEAD_RANGED:     target_prayer = PRAYER_PROTECT_RANGED; toggle = ENCOUNTER_OVERHEAD_TOGGLE_RANGED; break;
+        case OVERHEAD_MELEE:      target_prayer = PRAYER_PROTECT_MELEE;  toggle = ENCOUNTER_OVERHEAD_TOGGLE_MELEE; break;
+        case OVERHEAD_SMITE:      target_prayer = PRAYER_SMITE;          toggle = ENCOUNTER_OVERHEAD_TOGGLE_SMITE; break;
+        case OVERHEAD_REDEMPTION: target_prayer = PRAYER_REDEMPTION;     toggle = ENCOUNTER_OVERHEAD_TOGGLE_REDEMPTION; break;
+        default: return;  /* OVERHEAD_NONE or invalid: no-op */
+    }
+    if (self->prayer != target_prayer) actions[HEAD_OVERHEAD] = toggle;
+}
+
 /* Process pending prayer delay: decrement, apply if ready. Returns 1 if applied. */
-static inline int opp_process_pending_prayer(OpponentState* opp, int* actions) {
+static inline int opp_process_pending_prayer(OpponentState* opp, int* actions, Player* self) {
     if (opp->pending_prayer_value == 0) return 0;
     if (opp->pending_prayer_delay > 0) {
         opp->pending_prayer_delay--;
         if (opp->pending_prayer_delay > 0) return 0;
     }
-    /* Delay reached 0 or was already 0: apply */
-    actions[HEAD_OVERHEAD] = opp->pending_prayer_value;
+    OverheadPrayer target_prayer = PRAYER_NONE;
+    int toggle = ENCOUNTER_OVERHEAD_NO_CHANGE;
+    switch (opp->pending_prayer_value) {
+        case OVERHEAD_MAGE:       target_prayer = PRAYER_PROTECT_MAGIC;  toggle = ENCOUNTER_OVERHEAD_TOGGLE_MAGIC; break;
+        case OVERHEAD_RANGED:     target_prayer = PRAYER_PROTECT_RANGED; toggle = ENCOUNTER_OVERHEAD_TOGGLE_RANGED; break;
+        case OVERHEAD_MELEE:      target_prayer = PRAYER_PROTECT_MELEE;  toggle = ENCOUNTER_OVERHEAD_TOGGLE_MELEE; break;
+        case OVERHEAD_SMITE:      target_prayer = PRAYER_SMITE;          toggle = ENCOUNTER_OVERHEAD_TOGGLE_SMITE; break;
+        case OVERHEAD_REDEMPTION: target_prayer = PRAYER_REDEMPTION;     toggle = ENCOUNTER_OVERHEAD_TOGGLE_REDEMPTION; break;
+        default: break;
+    }
+    /* only emit toggle if we need to change — if already on target, no-op. */
+    if (self->prayer != target_prayer) actions[HEAD_OVERHEAD] = toggle;
     opp->pending_prayer_value = 0;
     return 1;
 }
@@ -505,7 +533,7 @@ static void opp_handle_delayed_prayer(OsrsEnv* env, OpponentState* opp, int* act
     }
 
     /* Process pending prayer (may apply this tick if delay=0) */
-    opp_process_pending_prayer(opp, actions);
+    opp_process_pending_prayer(opp, actions, self);
 }
 
 /* =========================================================================
@@ -529,7 +557,7 @@ static void opp_panicking(OsrsEnv* env, OpponentState* opp, int* actions) {
 
     /* Set prayer if not already active */
     if (!opp_has_prayer_active(self, opp->chosen_prayer)) {
-        actions[HEAD_OVERHEAD] = opp->chosen_prayer;
+        opp_emit_prayer(actions, self, opp->chosen_prayer);
     }
 
     /* Panic eat at 25% HP */
@@ -572,7 +600,7 @@ static void opp_weak_random(OsrsEnv* env, OpponentState* opp, int* actions) {
 
     /* Random prayer each tick (includes NONE) */
     int prayers[] = {OVERHEAD_NONE, OVERHEAD_MELEE, OVERHEAD_RANGED, OVERHEAD_MAGE};
-    actions[HEAD_OVERHEAD] = prayers[rand_int(env, 4)];
+    opp_emit_prayer(actions, self, prayers[rand_int(env, 4)]);
 
     /* Unreliable eating at 30% with 50% skip chance */
     int eating = 0;
@@ -614,7 +642,7 @@ static void opp_semi_random(OsrsEnv* env, OpponentState* opp, int* actions) {
 
     /* Random prayer each tick (no NONE) */
     int prayers[] = {OVERHEAD_MELEE, OVERHEAD_RANGED, OVERHEAD_MAGE};
-    actions[HEAD_OVERHEAD] = prayers[rand_int(env, 3)];
+    opp_emit_prayer(actions, self, prayers[rand_int(env, 3)]);
 
     /* Reliable eating at 30% */
     int eating = 0;
@@ -661,7 +689,7 @@ static void opp_sticky_prayer(OsrsEnv* env, OpponentState* opp, int* actions) {
         opp->current_prayer_set = 1;
     }
     if (!opp_has_prayer_active(self, opp->current_prayer)) {
-        actions[HEAD_OVERHEAD] = opp->current_prayer;
+        opp_emit_prayer(actions, self, opp->current_prayer);
     }
 
     /* Simple eating at 30% */
@@ -711,7 +739,7 @@ static void opp_random_eater(OsrsEnv* env, OpponentState* opp, int* actions) {
         opp->current_prayer_set = 1;
     }
     if (!opp_has_prayer_active(self, opp->current_prayer)) {
-        actions[HEAD_OVERHEAD] = opp->current_prayer;
+        opp_emit_prayer(actions, self, opp->current_prayer);
     }
 
     /* 2. Multi-threshold eating */
@@ -797,7 +825,7 @@ static void opp_prayer_rookie(OsrsEnv* env, OpponentState* opp, int* actions) {
         def_prayer = prayers[rand_int(env, 3)];
     }
     def_prayer = opp_apply_prayer_mistake(env, opp, def_prayer);
-    actions[HEAD_OVERHEAD] = def_prayer;
+    opp_emit_prayer(actions, self, def_prayer);
 
     /* 2. Multi-threshold eating */
     if (hp_pct < 0.35f) {
@@ -871,7 +899,7 @@ static void opp_improved(OsrsEnv* env, OpponentState* opp, int* actions) {
     }
     def_prayer = opp_apply_prayer_mistake(env, opp, def_prayer);
     if (!opp_has_prayer_active(self, def_prayer)) {
-        actions[HEAD_OVERHEAD] = def_prayer;
+        opp_emit_prayer(actions, self, def_prayer);
     }
 
     /* 2. Consumables: triple/double/single eat */
@@ -1013,7 +1041,7 @@ static void opp_novice_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
     }
     def_prayer = opp_apply_prayer_mistake(env, opp, def_prayer);
     if (!opp_has_prayer_active(self, def_prayer)) {
-        actions[HEAD_OVERHEAD] = def_prayer;
+        opp_emit_prayer(actions, self, def_prayer);
     }
 
     /* 2. Multi-threshold eating (same as improved) */
@@ -1124,7 +1152,7 @@ static void opp_apprentice_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
     }
     def_prayer = opp_apply_prayer_mistake(env, opp, def_prayer);
     if (!opp_has_prayer_active(self, def_prayer)) {
-        actions[HEAD_OVERHEAD] = def_prayer;
+        opp_emit_prayer(actions, self, def_prayer);
     }
 
     /* 2. Multi-threshold eating (same as improved) + drain restore */
@@ -1237,7 +1265,7 @@ static void opp_competent_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
     }
     def_prayer = opp_apply_prayer_mistake(env, opp, def_prayer);
     if (!opp_has_prayer_active(self, def_prayer)) {
-        actions[HEAD_OVERHEAD] = def_prayer;
+        opp_emit_prayer(actions, self, def_prayer);
     }
 
     /* 2. Multi-threshold eating (same as improved) + drain restore */
@@ -1374,7 +1402,7 @@ static void opp_intermediate_nh(OsrsEnv* env, OpponentState* opp, int* actions) 
     }
     def_prayer = opp_apply_prayer_mistake(env, opp, def_prayer);
     if (!opp_has_prayer_active(self, def_prayer)) {
-        actions[HEAD_OVERHEAD] = def_prayer;
+        opp_emit_prayer(actions, self, def_prayer);
     }
 
     /* 2. Multi-threshold eating (same as improved) */
@@ -1510,7 +1538,7 @@ static void opp_advanced_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
     }
     def_prayer = opp_apply_prayer_mistake(env, opp, def_prayer);
     if (!opp_has_prayer_active(self, def_prayer)) {
-        actions[HEAD_OVERHEAD] = def_prayer;
+        opp_emit_prayer(actions, self, def_prayer);
     }
 
     /* 2. Multi-threshold eating (same as improved) + drain restore */
@@ -1651,7 +1679,7 @@ static void opp_proficient_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
     }
     def_prayer = opp_apply_prayer_mistake(env, opp, def_prayer);
     if (!opp_has_prayer_active(self, def_prayer)) {
-        actions[HEAD_OVERHEAD] = def_prayer;
+        opp_emit_prayer(actions, self, def_prayer);
     }
 
     /* 2. Multi-threshold eating + drain restore */
@@ -1795,7 +1823,7 @@ static void opp_expert_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
     }
     def_prayer = opp_apply_prayer_mistake(env, opp, def_prayer);
     if (!opp_has_prayer_active(self, def_prayer)) {
-        actions[HEAD_OVERHEAD] = def_prayer;
+        opp_emit_prayer(actions, self, def_prayer);
     }
 
     /* 2. Multi-threshold eating (same as improved) + drain restore */
@@ -1942,7 +1970,7 @@ static void opp_onetick(OsrsEnv* env, OpponentState* opp, int* actions) {
     }
     def_prayer = opp_apply_prayer_mistake(env, opp, def_prayer);
     if (!opp_has_prayer_active(self, def_prayer)) {
-        actions[HEAD_OVERHEAD] = def_prayer;
+        opp_emit_prayer(actions, self, def_prayer);
     }
 
     /* 2. Consumables (same thresholds as improved) */
@@ -2485,13 +2513,17 @@ static void opp_read_agent_action(OsrsEnv* env, OpponentState* opp) {
         opp->has_read_this_tick = 1;
     }
 
-    /* Extract overhead prayer */
+    /* Extract overhead prayer intent from agent's toggle action. since action is
+       a toggle, the "intent" is the agent's target — if the toggle would activate
+       or replace, we read it as intent; if it would deactivate, we read no intent.
+       we approximate by looking up the target based on the toggle id; the agent's
+       actual prayer state is observed separately via Player.prayer by opponent AI. */
     int overhead = agent_actions[HEAD_OVERHEAD];
-    if (overhead == OVERHEAD_MAGE) opp->read_agent_prayer = PRAYER_PROTECT_MAGIC;
-    else if (overhead == OVERHEAD_RANGED) opp->read_agent_prayer = PRAYER_PROTECT_RANGED;
-    else if (overhead == OVERHEAD_MELEE) opp->read_agent_prayer = PRAYER_PROTECT_MELEE;
-    else if (overhead == OVERHEAD_SMITE) opp->read_agent_prayer = PRAYER_SMITE;
-    else if (overhead == OVERHEAD_REDEMPTION) opp->read_agent_prayer = PRAYER_REDEMPTION;
+    if (overhead == ENCOUNTER_OVERHEAD_TOGGLE_MELEE)       opp->read_agent_prayer = PRAYER_PROTECT_MELEE;
+    else if (overhead == ENCOUNTER_OVERHEAD_TOGGLE_RANGED) opp->read_agent_prayer = PRAYER_PROTECT_RANGED;
+    else if (overhead == ENCOUNTER_OVERHEAD_TOGGLE_MAGIC)  opp->read_agent_prayer = PRAYER_PROTECT_MAGIC;
+    else if (overhead == ENCOUNTER_OVERHEAD_TOGGLE_SMITE)  opp->read_agent_prayer = PRAYER_SMITE;
+    else if (overhead == ENCOUNTER_OVERHEAD_TOGGLE_REDEMPTION) opp->read_agent_prayer = PRAYER_REDEMPTION;
 
     /* Extract movement intent */
     opp->read_agent_moving = is_move_action(attack) ? 1 : 0;
@@ -2550,7 +2582,7 @@ static void opp_master_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
     }
     def_prayer = opp_apply_prayer_mistake(env, opp, def_prayer);
     if (!opp_has_prayer_active(self, def_prayer)) {
-        actions[HEAD_OVERHEAD] = def_prayer;
+        opp_emit_prayer(actions, self, def_prayer);
     }
 
     /* 2. Consumables (same as onetick) */
@@ -2775,7 +2807,7 @@ static void opp_veng_fighter(OsrsEnv* env, OpponentState* opp, int* actions) {
     }
     def_prayer = opp_apply_prayer_mistake(env, opp, def_prayer);
     if (!opp_has_prayer_active(self, def_prayer)) {
-        actions[HEAD_OVERHEAD] = def_prayer;
+        opp_emit_prayer(actions, self, def_prayer);
     }
 
     /* 2. Multi-threshold eating (same as expert_nh) */
@@ -2899,7 +2931,7 @@ static void opp_blood_healer(OsrsEnv* env, OpponentState* opp, int* actions) {
     }
     def_prayer = opp_apply_prayer_mistake(env, opp, def_prayer);
     if (!opp_has_prayer_active(self, def_prayer)) {
-        actions[HEAD_OVERHEAD] = def_prayer;
+        opp_emit_prayer(actions, self, def_prayer);
     }
 
     /* 2. Reduced eating — relies on blood barrage for sustain above ~35%.
@@ -3051,7 +3083,7 @@ static void opp_gmaul_combo(OsrsEnv* env, OpponentState* opp, int* actions) {
     }
     def_prayer = opp_apply_prayer_mistake(env, opp, def_prayer);
     if (!opp_has_prayer_active(self, def_prayer)) {
-        actions[HEAD_OVERHEAD] = def_prayer;
+        opp_emit_prayer(actions, self, def_prayer);
     }
 
     /* 2. Multi-threshold eating (same as improved) */
@@ -3220,7 +3252,7 @@ static void opp_range_kiter(OsrsEnv* env, OpponentState* opp, int* actions) {
     }
     def_prayer = opp_apply_prayer_mistake(env, opp, def_prayer);
     if (!opp_has_prayer_active(self, def_prayer)) {
-        actions[HEAD_OVERHEAD] = def_prayer;
+        opp_emit_prayer(actions, self, def_prayer);
     }
 
     /* 2. Multi-threshold eating + emergency blood barrage sustain */
