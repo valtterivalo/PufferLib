@@ -1002,15 +1002,15 @@ typedef struct {
     int strength_bonus;   /* ranged_strength, magic_damage %, or melee_strength */
     int eff_level;        /* effective attack level (floor(base*prayer) + style + 8) */
     int max_hit;          /* base max hit (before tbow/set bonuses) */
-    int attack_speed;     /* ticks between attacks */
-    int attack_range;     /* max chebyshev distance */
+    int attack_speed;     /* ticks between attacks (includes stance speed mod) */
+    int attack_range;     /* max chebyshev distance (includes stance range mod) */
     AttackStyle style;
+    FightStyle fight_style;  /* stance picked for this loadout — drives stance bonuses + speed/range mods */
     /* defence bonuses from gear */
     int def_stab, def_slash, def_crush, def_magic, def_ranged;
     /* stored for dynamic max hit recomputation after brew drain / potion boost */
     float att_prayer_mult;
     float str_prayer_mult;
-    int style_bonus;
     int spell_base_damage;
 } EncounterLoadoutStats;
 
@@ -1022,15 +1022,16 @@ typedef enum {
     ENCOUNTER_PRAYER_PIETY,    /* +20% melee attack, +23% melee strength, +25% defence */
 } EncounterPrayer;
 
-/** derive all combat stats from a loadout array + prayer + style.
+/** derive all combat stats from a loadout array + prayer + fight stance.
     sums equipment bonuses from ITEM_DATABASE, applies prayer multiplier,
-    computes effective level and max hit.
+    computes effective level and max hit. attack_speed and attack_range are
+    also adjusted for the stance (rapid -1 tick, longrange +2 tiles).
 
     @param loadout          gear array indexed by GEAR_SLOT_* (ITEM_NONE=255 for empty)
     @param style            ATTACK_STYLE_MAGIC, ATTACK_STYLE_RANGED, or ATTACK_STYLE_MELEE
     @param prayer           prayer enum for level multiplier
     @param base_level       base combat level (usually 99)
-    @param style_bonus      +0 for rapid/autocast, +3 for accurate, +1 for controlled
+    @param fight_style      stance — drives attack/str/def bonuses, attack speed, range
     @param spell_base_damage 0 for ranged/melee, 30 for ice/blood barrage
     @param out              output struct to fill */
 static inline void encounter_compute_loadout_stats(
@@ -1038,12 +1039,13 @@ static inline void encounter_compute_loadout_stats(
     AttackStyle style,
     EncounterPrayer prayer,
     int base_level,
-    int style_bonus,
+    FightStyle fight_style,
     int spell_base_damage,
     EncounterLoadoutStats* out
 ) {
     memset(out, 0, sizeof(*out));
     out->style = style;
+    out->fight_style = fight_style;
 
     /* sum equipment bonuses using shared function */
     EquipmentBonuses eb;
@@ -1054,8 +1056,11 @@ static inline void encounter_compute_loadout_stats(
     out->def_crush = eb.defence_crush;
     out->def_magic = eb.defence_magic;
     out->def_ranged = eb.defence_ranged;
-    out->attack_speed = eb.attack_speed;
-    out->attack_range = eb.attack_range;
+    /* apply stance modifiers to weapon base speed/range. equipment.json stores
+       the base (accurate/longrange speed, non-longrange range). rapid and
+       longrange shift them. */
+    out->attack_speed = eb.attack_speed + osrs_stance_speed_mod(fight_style);
+    out->attack_range = eb.attack_range + osrs_stance_range_mod(fight_style);
 
     /* primary attack bonus based on style */
     if (style == ATTACK_STYLE_MAGIC) {
@@ -1091,21 +1096,23 @@ static inline void encounter_compute_loadout_stats(
     /* store for dynamic recomputation after brew drain / potion boost */
     out->att_prayer_mult = att_prayer_mult;
     out->str_prayer_mult = str_prayer_mult;
-    out->style_bonus = style_bonus;
     out->spell_base_damage = spell_base_damage;
 
-    /* effective attack level: floor(base * prayer_mult) + style_bonus + 8.
-       magic uses +9 (OSRS invisible +1 boost) instead of +style_bonus+8.
-       ref: OSRS wiki "magic effective level = floor(base * prayer) + 9". */
+    int att_stance_bonus = osrs_stance_att_bonus(fight_style, style);
+    int str_stance_bonus = osrs_stance_str_bonus(fight_style);
+
+    /* effective attack level: floor(base * prayer_mult) + stance_att_bonus + 8.
+       magic uses +9 (OSRS invisible +1 boost) instead of +8. powered-staff stance
+       bonus (accurate +3, longrange +1) is picked up via osrs_stance_att_bonus(MAGIC). */
     if (style == ATTACK_STYLE_MAGIC) {
-        out->eff_level = (int)(base_level * att_prayer_mult) + 9;
+        out->eff_level = (int)(base_level * att_prayer_mult) + att_stance_bonus + 9;
     } else {
-        out->eff_level = (int)(base_level * att_prayer_mult) + style_bonus + 8;
+        out->eff_level = (int)(base_level * att_prayer_mult) + att_stance_bonus + 8;
     }
 
-    /* effective strength level (for max hit): floor(base * str_prayer_mult) + style_bonus + 8
-       note: style_bonus for strength is typically 0 for rapid/autocast, +3 for aggressive */
-    int eff_str_level = (int)(base_level * str_prayer_mult) + style_bonus + 8;
+    /* effective strength level (for max hit): floor(base * str_prayer_mult) + str_stance_bonus + 8.
+       str_stance_bonus is non-zero only for melee (aggressive/controlled). */
+    int eff_str_level = (int)(base_level * str_prayer_mult) + str_stance_bonus + 8;
 
     /* augury magic damage multiplier: +4% (matches PvP calculate_max_hit). */
     float magic_dmg_prayer_mult = 1.0f;
@@ -1142,15 +1149,17 @@ static inline void encounter_compute_loadout_stats(
 static inline void encounter_update_loadout_level(
     EncounterLoadoutStats* ls, int current_att_level, int current_str_level
 ) {
+    int att_stance_bonus = osrs_stance_att_bonus(ls->fight_style, ls->style);
+    int str_stance_bonus = osrs_stance_str_bonus(ls->fight_style);
     /* magic uses +9 invisible boost (matches encounter_compute_loadout_stats) */
     if (ls->style == ATTACK_STYLE_MAGIC) {
-        ls->eff_level = (int)(current_att_level * ls->att_prayer_mult) + 9;
+        ls->eff_level = (int)(current_att_level * ls->att_prayer_mult) + att_stance_bonus + 9;
         /* augury +4% magic damage. att_prayer_mult == 1.25 iff augury. */
         float magic_dmg_mult = (ls->att_prayer_mult > 1.24f) ? 1.04f : 1.0f;
         ls->max_hit = (int)(ls->spell_base_damage * (1.0 + ls->strength_bonus / 100.0) * magic_dmg_mult);
     } else {
-        ls->eff_level = (int)(current_att_level * ls->att_prayer_mult) + ls->style_bonus + 8;
-        int eff_str = (int)(current_str_level * ls->str_prayer_mult) + ls->style_bonus + 8;
+        ls->eff_level = (int)(current_att_level * ls->att_prayer_mult) + att_stance_bonus + 8;
+        int eff_str = (int)(current_str_level * ls->str_prayer_mult) + str_stance_bonus + 8;
         ls->max_hit = (int)(0.5 + eff_str * (ls->strength_bonus + 64) / 640.0);
     }
 }

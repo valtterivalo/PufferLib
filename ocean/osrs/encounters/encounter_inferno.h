@@ -839,19 +839,15 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
     s->player.run_energy = 10000;  /* full run energy (OSRS stores as 0-10000) */
     s->last_hit_by_type = -1;
 
-    /* compute loadout stats from item database (replaces old hardcoded INF_WEAPON_STATS) */
+    /* compute loadout stats from item database (replaces old hardcoded INF_WEAPON_STATS).
+       mage is kodai + barrage — pure autocast, no invisible bonus.
+       ranged loadouts run in rapid stance: -1 to attack_speed (BP 3→2, tbow 6→5). */
     encounter_compute_loadout_stats(INF_MAGE_LOADOUT, ATTACK_STYLE_MAGIC,
-        ENCOUNTER_PRAYER_AUGURY, 99, 0, 30, &s->loadout_stats[INF_GEAR_MAGE]);
+        ENCOUNTER_PRAYER_AUGURY, 99, FIGHT_STYLE_AUTOCAST, 30, &s->loadout_stats[INF_GEAR_MAGE]);
     encounter_compute_loadout_stats(INF_RANGE_TBOW_LOADOUT, ATTACK_STYLE_RANGED,
-        ENCOUNTER_PRAYER_RIGOUR, 99, 0, 0, &s->loadout_stats[INF_GEAR_TBOW]);
+        ENCOUNTER_PRAYER_RIGOUR, 99, FIGHT_STYLE_RAPID, 0, &s->loadout_stats[INF_GEAR_TBOW]);
     encounter_compute_loadout_stats(INF_RANGE_BP_LOADOUT, ATTACK_STYLE_RANGED,
-        ENCOUNTER_PRAYER_RIGOUR, 99, 0, 0, &s->loadout_stats[INF_GEAR_BP]);
-    /* rapid stance reduces attack_speed by 1 vs accurate/longrange. equipment.json
-       stores the longrange (base) value — blowpipe 3 → 2, tbow 6 → 5. without
-       this, blowpipe loses its 2t advantage and agent underuses it.
-       ref: osrs-sdk Blowpipe.ts:79-84, TwistedBow.ts:70-75. */
-    s->loadout_stats[INF_GEAR_TBOW].attack_speed -= 1;
-    s->loadout_stats[INF_GEAR_BP].attack_speed -= 1;
+        ENCOUNTER_PRAYER_RIGOUR, 99, FIGHT_STYLE_RAPID, 0, &s->loadout_stats[INF_GEAR_BP]);
 
     /* spawn position depends on wave */
     int is_zuk_wave = (saved_start >= 68);

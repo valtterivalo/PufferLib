@@ -226,7 +226,6 @@ static inline float get_defence_prayer_mult(Player* p) {
 static int calculate_effective_attack(Player* p, AttackStyle style) {
     int base_level;
     float prayer_mult = 1.0f;
-    int style_bonus = 0;
 
     switch (style) {
         case ATTACK_STYLE_MELEE:
@@ -248,12 +247,7 @@ static int calculate_effective_attack(Player* p, AttackStyle style) {
             return 0;
     }
 
-    if (style == ATTACK_STYLE_MELEE) {
-        if (p->fight_style == FIGHT_STYLE_ACCURATE) style_bonus = 3;
-        else if (p->fight_style == FIGHT_STYLE_CONTROLLED) style_bonus = 1;
-    } else if (style == ATTACK_STYLE_RANGED) {
-        if (p->fight_style == FIGHT_STYLE_ACCURATE) style_bonus = 3;
-    }
+    int style_bonus = osrs_stance_att_bonus(p->fight_style, style);
 
     /* magic uses +9 instead of +8 (invisible +1 for magic attack) */
     if (style == ATTACK_STYLE_MAGIC)
@@ -264,7 +258,6 @@ static int calculate_effective_attack(Player* p, AttackStyle style) {
 static int calculate_effective_strength(Player* p, AttackStyle style) {
     int base_level;
     float prayer_mult = 1.0f;
-    int style_bonus = 0;
 
     switch (style) {
         case ATTACK_STYLE_MELEE:
@@ -284,8 +277,9 @@ static int calculate_effective_strength(Player* p, AttackStyle style) {
             return 0;
     }
 
-    if (style == ATTACK_STYLE_MELEE && p->fight_style == FIGHT_STYLE_AGGRESSIVE) style_bonus = 3;
-    else if (style == ATTACK_STYLE_MELEE && p->fight_style == FIGHT_STYLE_CONTROLLED) style_bonus = 1;
+    /* str bonus only applies to melee (aggressive/controlled); osrs_stance_str_bonus
+       returns 0 for any non-melee stance. */
+    int style_bonus = (style == ATTACK_STYLE_MELEE) ? osrs_stance_str_bonus(p->fight_style) : 0;
 
     return osrs_player_eff_level(base_level, prayer_mult, style_bonus);
 }
@@ -293,10 +287,7 @@ static int calculate_effective_strength(Player* p, AttackStyle style) {
 static int calculate_effective_defence(Player* p, AttackStyle incoming_style) {
     int base_level = p->current_defence;
     float prayer_mult = get_defence_prayer_mult(p);
-    int style_bonus = 0;
-
-    if (p->fight_style == FIGHT_STYLE_DEFENSIVE) style_bonus = 3;
-    else if (p->fight_style == FIGHT_STYLE_CONTROLLED) style_bonus = 1;
+    int style_bonus = osrs_stance_def_bonus(p->fight_style);
 
     if (incoming_style == ATTACK_STYLE_MAGIC) {
         /* PvP magic defence: floor(magic * prayer * 0.7 + def * prayer * 0.3) + style + 8.

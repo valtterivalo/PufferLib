@@ -425,7 +425,7 @@ static void test_player_att_roll_full_mage(void) {
     EncounterLoadoutStats stats;
     encounter_compute_loadout_stats(
         loadout, ATTACK_STYLE_MAGIC, ENCOUNTER_PRAYER_AUGURY,
-        99, 0 /* autocast */, 30 /* ice barrage */, &stats);
+        99, FIGHT_STYLE_AUTOCAST, 30 /* ice barrage */, &stats);
 
     /* sum attack_magic:
        kodai(28) + hat(8) + top(35) + bottom(26) + occult(12) +
@@ -467,7 +467,7 @@ static void test_player_att_roll_melee_with_defender(void) {
     EncounterLoadoutStats stats;
     encounter_compute_loadout_stats(
         loadout, ATTACK_STYLE_MELEE, ENCOUNTER_PRAYER_PIETY,
-        99, 3 /* aggressive */, 0, &stats);
+        99, FIGHT_STYLE_AGGRESSIVE, 0, &stats);
 
     /* best melee attack bonus:
        stab:  rapier(94) + defender(25) + cape(4)  = 123
@@ -479,17 +479,18 @@ static void test_player_att_roll_melee_with_defender(void) {
     /* melee_strength: rapier(89) + defender(6) + cape(8) = 103 */
     ASSERT_INT_EQ("strength_bonus", stats.strength_bonus, 103);
 
-    /* eff_level = floor(99 * 1.20) + 3 + 8 = 118 + 11 = 129 */
-    ASSERT_INT_EQ("eff_level", stats.eff_level, 129);
+    /* aggressive stance: +3 to STR only (not attack, which is accurate's role).
+       eff_level (attack) = floor(99 * 1.20) + 0 + 8 = 118 + 8 = 126 */
+    ASSERT_INT_EQ("eff_level", stats.eff_level, 126);
 
     /* eff_str = floor(99 * 1.23) + 3 + 8 = 121 + 11 = 132
        max_hit = floor(0.5 + 132 * (103+64) / 640) = floor(0.5 + 132*167/640)
        = floor(0.5 + 34.44375) = floor(34.94375) = 34 */
     ASSERT_INT_EQ("max_hit", stats.max_hit, 34);
 
-    /* attack_roll = 129 * (123 + 64) = 129 * 187 = 24123 */
+    /* attack_roll = 126 * (123 + 64) = 126 * 187 = 23562 */
     int att_roll = stats.eff_level * (stats.attack_bonus + 64);
-    ASSERT_INT_EQ("attack_roll", att_roll, 24123);
+    ASSERT_INT_EQ("attack_roll", att_roll, 23562);
 }
 
 /* ======================================================================== */
@@ -508,14 +509,15 @@ static void test_player_att_roll_ranged_blowpipe(void) {
     EncounterLoadoutStats stats;
     encounter_compute_loadout_stats(
         loadout, ATTACK_STYLE_RANGED, ENCOUNTER_PRAYER_RIGOUR,
-        99, 0 /* rapid */, 0, &stats);
+        99, FIGHT_STYLE_RAPID, 0, &stats);
 
     /* blowpipe: attack_ranged=30, ranged_strength=20 */
     ASSERT_INT_EQ("attack_bonus", stats.attack_bonus, 30);
     ASSERT_INT_EQ("strength_bonus", stats.strength_bonus, 20);
 
-    /* blowpipe attack_speed=3 (rapid) */
-    ASSERT_INT_EQ("attack_speed", stats.attack_speed, 3);
+    /* blowpipe attack_speed: equipment.json stores base=3 (accurate/longrange),
+       rapid stance subtracts 1 → 2. ref: osrs-sdk Blowpipe.ts:79-84. */
+    ASSERT_INT_EQ("attack_speed", stats.attack_speed, 2);
 
     /* eff_att = floor(99 * 1.20) + 0 + 8 = 118 + 8 = 126 */
     ASSERT_INT_EQ("eff_level", stats.eff_level, 126);
@@ -542,39 +544,40 @@ static void test_loadout_empty_all_styles(void) {
     uint8_t loadout[NUM_GEAR_SLOTS];
     clear_loadout(loadout);
 
-    /* melee, level 99, no prayer, no stance */
+    /* melee, level 99, no prayer, accurate stance (+3 att, +0 str) */
     EncounterLoadoutStats stats;
     encounter_compute_loadout_stats(
         loadout, ATTACK_STYLE_MELEE, ENCOUNTER_PRAYER_NONE,
-        99, 0, 0, &stats);
+        99, FIGHT_STYLE_ACCURATE, 0, &stats);
 
     ASSERT_INT_EQ("empty melee att_bonus", stats.attack_bonus, 0);
     ASSERT_INT_EQ("empty melee str_bonus", stats.strength_bonus, 0);
-    /* eff = 99 + 0 + 8 = 107 */
-    ASSERT_INT_EQ("empty melee eff", stats.eff_level, 107);
-    /* max_hit = floor(0.5 + 107 * 64 / 640) = floor(0.5 + 10.7) = 11 */
+    /* eff = 99 + 3 + 8 = 110 (accurate +3 to attack) */
+    ASSERT_INT_EQ("empty melee eff", stats.eff_level, 110);
+    /* max_hit uses eff_str = 99 + 0 + 8 = 107 (accurate gives 0 to str).
+       max_hit = floor(0.5 + 107 * 64 / 640) = floor(0.5 + 10.7) = 11 */
     ASSERT_INT_EQ("empty melee max", stats.max_hit, 11);
     ASSERT_INT_EQ("empty melee def_stab", stats.def_stab, 0);
     ASSERT_INT_EQ("empty melee def_magic", stats.def_magic, 0);
 
-    /* ranged, no prayer */
+    /* ranged, no prayer, rapid stance (no level bonus, -1 speed) */
     encounter_compute_loadout_stats(
         loadout, ATTACK_STYLE_RANGED, ENCOUNTER_PRAYER_NONE,
-        99, 0, 0, &stats);
+        99, FIGHT_STYLE_RAPID, 0, &stats);
 
     ASSERT_INT_EQ("empty ranged att_bonus", stats.attack_bonus, 0);
     ASSERT_INT_EQ("empty ranged str_bonus", stats.strength_bonus, 0);
-    /* same eff_level formula: max_hit = floor(0.5 + 107*64/640) = 11 */
+    /* eff_level = 99 + 0 + 8 = 107, max_hit = floor(0.5 + 107*64/640) = 11 */
     ASSERT_INT_EQ("empty ranged max", stats.max_hit, 11);
 
-    /* magic with ice barrage */
+    /* magic with ice barrage, autocast (no invisible bonus per wiki) */
     encounter_compute_loadout_stats(
         loadout, ATTACK_STYLE_MAGIC, ENCOUNTER_PRAYER_NONE,
-        99, 0, 30, &stats);
+        99, FIGHT_STYLE_AUTOCAST, 30, &stats);
 
     ASSERT_INT_EQ("empty magic att_bonus", stats.attack_bonus, 0);
     ASSERT_INT_EQ("empty magic str_bonus", stats.strength_bonus, 0);
-    /* magic eff = 99 + 9 = 108 (invisible +9 boost) */
+    /* magic eff = 99 + 0 + 9 = 108 (autocast has no invisible bonus) */
     ASSERT_INT_EQ("empty magic eff", stats.eff_level, 108);
     /* max_hit = floor(30 * (1.0 + 0/100.0) * 1.0) = 30 */
     ASSERT_INT_EQ("empty magic max", stats.max_hit, 30);
@@ -607,7 +610,7 @@ static void test_loadout_all_slots_filled(void) {
     EncounterLoadoutStats stats;
     encounter_compute_loadout_stats(
         loadout, ATTACK_STYLE_MAGIC, ENCOUNTER_PRAYER_AUGURY,
-        99, 0, 30, &stats);
+        99, FIGHT_STYLE_AUTOCAST, 30, &stats);
 
     /* god_blessing has attack_magic=0, so same total as 10-slot mage = 179 */
     ASSERT_INT_EQ("all_slots attack_bonus", stats.attack_bonus, 179);
@@ -651,7 +654,7 @@ static void test_loadout_two_handed_weapon(void) {
     EncounterLoadoutStats stats;
     encounter_compute_loadout_stats(
         loadout, ATTACK_STYLE_MELEE, ENCOUNTER_PRAYER_PIETY,
-        99, 3 /* aggressive */, 0, &stats);
+        99, FIGHT_STYLE_AGGRESSIVE, 0, &stats);
 
     /* AGS: stab=0, slash=132, crush=80. best = 132 */
     ASSERT_INT_EQ("2h attack_bonus", stats.attack_bonus, 132);
@@ -662,8 +665,9 @@ static void test_loadout_two_handed_weapon(void) {
     /* attack_speed = 6 (AGS is slow) */
     ASSERT_INT_EQ("2h attack_speed", stats.attack_speed, 6);
 
-    /* eff_level = floor(99 * 1.20) + 3 + 8 = 129 */
-    ASSERT_INT_EQ("2h eff_level", stats.eff_level, 129);
+    /* aggressive: +3 str, +0 att.
+       eff_level (attack) = floor(99 * 1.20) + 0 + 8 = 126 */
+    ASSERT_INT_EQ("2h eff_level", stats.eff_level, 126);
 
     /* eff_str = floor(99 * 1.23) + 3 + 8 = 132
        max_hit = floor(0.5 + 132 * (132+64) / 640)
@@ -675,9 +679,9 @@ static void test_loadout_two_handed_weapon(void) {
     ASSERT_INT_EQ("2h def_magic", stats.def_magic, 0);
     ASSERT_INT_EQ("2h def_ranged", stats.def_ranged, 0);
 
-    /* attack_roll = 129 * (132+64) = 129 * 196 = 25284 */
+    /* attack_roll = 126 * (132+64) = 126 * 196 = 24696 */
     int att_roll = stats.eff_level * (stats.attack_bonus + 64);
-    ASSERT_INT_EQ("2h attack_roll", att_roll, 25284);
+    ASSERT_INT_EQ("2h attack_roll", att_roll, 24696);
 }
 
 /* ======================================================================== */
@@ -742,7 +746,7 @@ static void test_hit_chance_player_vs_npc(void) {
         EncounterLoadoutStats stats;
         encounter_compute_loadout_stats(
             loadout, ATTACK_STYLE_MAGIC, ENCOUNTER_PRAYER_AUGURY,
-            99, 0, 30, &stats);
+            99, FIGHT_STYLE_AUTOCAST, 30, &stats);
 
         int player_att = stats.eff_level * (stats.attack_bonus + 64); /* 32076 */
         int npc_def = osrs_npc_attack_roll(300, 300); /* 112476 */
@@ -764,7 +768,7 @@ static void test_hit_chance_player_vs_npc(void) {
         EncounterLoadoutStats stats;
         encounter_compute_loadout_stats(
             loadout, ATTACK_STYLE_MELEE, ENCOUNTER_PRAYER_PIETY,
-            99, 3, 0, &stats);
+            99, FIGHT_STYLE_ACCURATE, 0, &stats);
 
         /* rapier(94)+defender(25) stab = 119 best */
         int player_att = stats.eff_level * (stats.attack_bonus + 64);
@@ -784,9 +788,10 @@ static void test_hit_chance_player_vs_npc(void) {
         EncounterLoadoutStats stats;
         encounter_compute_loadout_stats(
             loadout, ATTACK_STYLE_MAGIC, ENCOUNTER_PRAYER_AUGURY,
-            99, 0, 30, &stats);
+            99, FIGHT_STYLE_AUTOCAST, 30, &stats);
 
-        /* eff=132, bonus=0, att_roll = 132*64 = 8448 */
+        /* autocast, no invisible bonus. eff=132 (99*1.25 + 0 + 9), bonus=0,
+           att_roll = 132*64 = 8448 */
         int player_att = stats.eff_level * (stats.attack_bonus + 64);
         ASSERT_INT_EQ("empty mage att_roll", player_att, 8448);
 
@@ -840,7 +845,7 @@ static void test_loadout_defence_into_def_roll(void) {
     EncounterLoadoutStats stats;
     encounter_compute_loadout_stats(
         loadout, ATTACK_STYLE_MELEE, ENCOUNTER_PRAYER_NONE,
-        99, 0, 0, &stats);
+        99, FIGHT_STYLE_ACCURATE, 0, &stats);
 
     /* rapier def: 0,0,0,0,0. defender: 25,24,23,-3,-2. cape: 12,12,12,12,12 */
     ASSERT_INT_EQ("def_stab",   stats.def_stab,   0 + 25 + 12); /* 37 */
