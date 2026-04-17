@@ -1788,10 +1788,12 @@ static void zul_reset(EncounterState* state, uint32_t seed) {
     /* derive combat stats from ITEM_DATABASE */
     EncounterPrayer mage_prayer = (s->gear_tier >= 1) ? ENCOUNTER_PRAYER_AUGURY : ENCOUNTER_PRAYER_NONE;
     EncounterPrayer range_prayer = (s->gear_tier >= 1) ? ENCOUNTER_PRAYER_RIGOUR : ENCOUNTER_PRAYER_NONE;
+    /* mage loadout is trident / Eye of Ayak — powered staves, accurate stance gets +3 magic eff.
+       ranged runs in rapid stance for blowpipe/tbow (-1 attack_speed). */
     encounter_compute_loadout_stats(ZUL_MAGE_LOADOUT[s->gear_tier], ATTACK_STYLE_MAGIC,
-        mage_prayer, 99, 0, 30, &s->mage_stats);
+        mage_prayer, 99, FIGHT_STYLE_ACCURATE, 30, &s->mage_stats);
     encounter_compute_loadout_stats(ZUL_RANGE_LOADOUT[s->gear_tier], ATTACK_STYLE_RANGED,
-        range_prayer, 99, 0, 0, &s->range_stats);
+        range_prayer, 99, FIGHT_STYLE_RAPID, 0, &s->range_stats);
     int r = s->player.equipped[GEAR_SLOT_RING];
     s->player.recoil_charges =
         (r == ITEM_RING_OF_RECOIL || r == ITEM_RING_OF_SUFFERING_RI) ? RECOIL_MAX_CHARGES : 0;

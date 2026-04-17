@@ -292,11 +292,22 @@ typedef enum {
     OFFENSIVE_PRAYER_AUGURY
 } OffensivePrayer;
 
+/* combat stance — the axis the player picks per-weapon in the OSRS combat tab.
+   orthogonal to AttackStyle (damage category). the stance drives:
+     - invisible level bonuses (att / str / def) per osrs wiki "Combat Options"
+     - attack speed modifier (rapid = base - 1)
+     - attack range modifier (longrange = base + 2)
+   the 4 melee stances come first for backward compatibility with existing code
+   that cast `0` to mean ACCURATE. */
 typedef enum {
-    FIGHT_STYLE_ACCURATE = 0,
-    FIGHT_STYLE_AGGRESSIVE,
-    FIGHT_STYLE_CONTROLLED,
-    FIGHT_STYLE_DEFENSIVE
+    FIGHT_STYLE_ACCURATE = 0,             /* melee: +3 att. ranged: +3 att. powered staff: +3 magic. */
+    FIGHT_STYLE_AGGRESSIVE,                /* melee: +3 str. */
+    FIGHT_STYLE_CONTROLLED,                /* melee: +1 att/str/def. */
+    FIGHT_STYLE_DEFENSIVE,                 /* melee: +3 def. */
+    FIGHT_STYLE_RAPID,                     /* ranged: speed - 1, no bonus. */
+    FIGHT_STYLE_LONGRANGE,                 /* ranged / powered staff: +3 def, +2 range. powered staff also +1 magic. */
+    FIGHT_STYLE_AUTOCAST,                  /* magic (non-powered staff): no invisible bonus. */
+    FIGHT_STYLE_DEFENSIVE_AUTOCAST,        /* magic: no invisible bonus (defence XP split only). */
 } FightStyle;
 
 typedef enum {

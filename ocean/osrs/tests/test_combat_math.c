@@ -556,8 +556,8 @@ static void test_loadout_melee_no_prayer(void) {
         loadout,
         ATTACK_STYLE_MELEE,
         ENCOUNTER_PRAYER_NONE,
-        99,   /* base_level */
-        3,    /* style_bonus (aggressive) */
+        99,
+        FIGHT_STYLE_AGGRESSIVE,
         0,    /* spell_base_damage */
         &stats
     );
@@ -568,17 +568,18 @@ static void test_loadout_melee_no_prayer(void) {
     /* rapier: melee_strength = 89 */
     ASSERT_INT_EQ("strength_bonus", stats.strength_bonus, 89);
 
-    /* eff_level = floor(99 * 1.0) + 3 + 8 = 110 */
-    ASSERT_INT_EQ("eff_level", stats.eff_level, 110);
+    /* aggressive: +3 str only, no att bonus.
+       eff_level (attack) = floor(99 * 1.0) + 0 + 8 = 107 */
+    ASSERT_INT_EQ("eff_level", stats.eff_level, 107);
 
     /* eff_str = floor(99 * 1.0) + 3 + 8 = 110 */
     /* max_hit = floor(0.5 + 110 * (89+64) / 640) = floor(0.5 + 110*153/640) */
     /* = floor(0.5 + 26.296875) = floor(26.796875) = 26 */
     ASSERT_INT_EQ("max_hit", stats.max_hit, 26);
 
-    /* attack_roll = eff_level * (attack_bonus + 64) = 110 * 158 = 17380 */
+    /* attack_roll = eff_level * (attack_bonus + 64) = 107 * 158 = 16906 */
     int att_roll = stats.eff_level * (stats.attack_bonus + 64);
-    ASSERT_INT_EQ("attack_roll", att_roll, 17380);
+    ASSERT_INT_EQ("attack_roll", att_roll, 16906);
 
     ASSERT_INT_EQ("attack_speed", stats.attack_speed, 4);
 }
@@ -595,25 +596,26 @@ static void test_loadout_melee_piety(void) {
         loadout,
         ATTACK_STYLE_MELEE,
         ENCOUNTER_PRAYER_PIETY,
-        99,   /* base_level */
-        3,    /* style_bonus (aggressive) */
+        99,
+        FIGHT_STYLE_AGGRESSIVE,
         0,    /* spell_base_damage */
         &stats
     );
 
-    /* piety: att_mult=1.20, str_mult=1.23 */
+    /* piety: att_mult=1.20, str_mult=1.23.
+       aggressive: +3 str, no att bonus. */
     /* ref: PlayerVsNPCCalc.ts — Piety factorAccuracy=[120,100], factorStrength=[123,100] */
 
-    /* eff_att_level = floor(99 * 1.20) + 3 + 8 = 118 + 11 = 129 */
-    ASSERT_INT_EQ("eff_level", stats.eff_level, 129);
+    /* eff_att_level = floor(99 * 1.20) + 0 + 8 = 126 */
+    ASSERT_INT_EQ("eff_level", stats.eff_level, 126);
 
     /* eff_str = floor(99 * 1.23) + 3 + 8 = 121 + 11 = 132 */
     /* max_hit = floor(0.5 + 132 * 153 / 640) = floor(0.5 + 31.55625) = 32 */
     ASSERT_INT_EQ("max_hit", stats.max_hit, 32);
 
-    /* attack_roll = 129 * (94 + 64) = 129 * 158 = 20382 */
+    /* attack_roll = 126 * (94 + 64) = 126 * 158 = 19908 */
     int att_roll = stats.eff_level * (stats.attack_bonus + 64);
-    ASSERT_INT_EQ("attack_roll", att_roll, 20382);
+    ASSERT_INT_EQ("attack_roll", att_roll, 19908);
 }
 
 static void test_loadout_ranged_rigour(void) {
@@ -629,13 +631,13 @@ static void test_loadout_ranged_rigour(void) {
         loadout,
         ATTACK_STYLE_RANGED,
         ENCOUNTER_PRAYER_RIGOUR,
-        99,   /* base_level */
-        0,    /* style_bonus (rapid = 0) */
+        99,
+        FIGHT_STYLE_RAPID,
         0,    /* spell_base_damage */
         &stats
     );
 
-    /* rigour: att_mult=1.20, str_mult=1.23 */
+    /* rigour: att_mult=1.20, str_mult=1.23. rapid stance: 0 level bonus, -1 attack_speed. */
     /* ref: Prayer.ts — Rigour factorAccuracy=[120,100], factorStrength=[123,100] */
 
     /* attack_bonus = ACB.attack_ranged(100) + bolts.attack_ranged(0) = 100 */
@@ -669,8 +671,8 @@ static void test_loadout_magic_augury(void) {
         loadout,
         ATTACK_STYLE_MAGIC,
         ENCOUNTER_PRAYER_AUGURY,
-        99,   /* base_level */
-        0,    /* style_bonus (autocast = 0) */
+        99,
+        FIGHT_STYLE_AUTOCAST,
         30,   /* spell_base_damage (ice barrage = 30) */
         &stats
     );
@@ -709,7 +711,7 @@ static void test_loadout_magic_no_prayer(void) {
         ATTACK_STYLE_MAGIC,
         ENCOUNTER_PRAYER_NONE,
         99,
-        0,    /* autocast */
+        FIGHT_STYLE_AUTOCAST,
         30,   /* ice barrage */
         &stats
     );
@@ -746,7 +748,7 @@ static void test_loadout_full_ranged(void) {
         ATTACK_STYLE_RANGED,
         ENCOUNTER_PRAYER_RIGOUR,
         99,
-        0,    /* rapid */
+        FIGHT_STYLE_RAPID,
         0,
         &stats
     );
@@ -787,17 +789,17 @@ static void test_update_loadout_level(void) {
     EncounterLoadoutStats stats;
     encounter_compute_loadout_stats(
         loadout, ATTACK_STYLE_MELEE, ENCOUNTER_PRAYER_PIETY,
-        99, 3, 0, &stats);
+        99, FIGHT_STYLE_AGGRESSIVE, 0, &stats);
 
-    /* base: eff=129, max=32 (tested above) */
-    ASSERT_INT_EQ("base eff", stats.eff_level, 129);
+    /* base (aggressive: +3 str, +0 att): eff_att=126, max=32 */
+    ASSERT_INT_EQ("base eff", stats.eff_level, 126);
     ASSERT_INT_EQ("base max", stats.max_hit, 32);
 
     /* simulate brew drain: att drops to 90, str drops to 90 */
     encounter_update_loadout_level(&stats, 90, 90);
 
-    /* eff_att = floor(90 * 1.20) + 3 + 8 = 108 + 11 = 119 */
-    ASSERT_INT_EQ("drained eff", stats.eff_level, 119);
+    /* eff_att = floor(90 * 1.20) + 0 + 8 = 108 + 8 = 116 */
+    ASSERT_INT_EQ("drained eff", stats.eff_level, 116);
 
     /* eff_str = floor(90 * 1.23) + 3 + 8 = 110 + 11 = 121 */
     /* max_hit = floor(0.5 + 121 * 153 / 640) = floor(0.5 + 18513/640) = floor(0.5 + 28.926...) */
@@ -806,7 +808,7 @@ static void test_update_loadout_level(void) {
 
     /* restore back to 99 */
     encounter_update_loadout_level(&stats, 99, 99);
-    ASSERT_INT_EQ("restored eff", stats.eff_level, 129);
+    ASSERT_INT_EQ("restored eff", stats.eff_level, 126);
     ASSERT_INT_EQ("restored max", stats.max_hit, 32);
 
     /* magic loadout: max_hit doesn't depend on level (spell-based) */
@@ -814,14 +816,14 @@ static void test_update_loadout_level(void) {
     loadout[GEAR_SLOT_WEAPON] = ITEM_KODAI_WAND;
     encounter_compute_loadout_stats(
         loadout, ATTACK_STYLE_MAGIC, ENCOUNTER_PRAYER_AUGURY,
-        99, 0, 30, &stats);
+        99, FIGHT_STYLE_AUTOCAST, 30, &stats);
 
     ASSERT_INT_EQ("magic base eff", stats.eff_level, 132);
     ASSERT_INT_EQ("magic base max", stats.max_hit, 35);
 
     /* drain magic to 80: eff changes, max_hit stays (spell-based) */
     encounter_update_loadout_level(&stats, 80, 80);
-    /* eff = floor(80 * 1.25) + 9 = 100 + 9 = 109 */
+    /* eff = floor(80 * 1.25) + 0 + 9 = 100 + 9 = 109 */
     ASSERT_INT_EQ("magic drained eff", stats.eff_level, 109);
     /* max_hit still = floor(30 * 1.15 * 1.04) = 35 */
     ASSERT_INT_EQ("magic drained max", stats.max_hit, 35);
@@ -997,7 +999,7 @@ static void test_loadout_def_bonuses(void) {
     EncounterLoadoutStats stats;
     encounter_compute_loadout_stats(
         loadout, ATTACK_STYLE_MELEE, ENCOUNTER_PRAYER_NONE,
-        99, 0, 0, &stats);
+        99, FIGHT_STYLE_ACCURATE, 0, &stats);
 
     /* verify defence bonuses sum correctly from ITEM_DATABASE.
        exact values depend on item stats — verify against DB directly */
@@ -1036,28 +1038,28 @@ static void test_edge_cases(void) {
     uint8_t loadout[NUM_GEAR_SLOTS];
     clear_loadout(loadout);
 
-    /* melee, level 1, no gear, no prayer */
+    /* melee, level 1, no gear, no prayer, accurate stance (+3 att) */
     EncounterLoadoutStats stats;
     encounter_compute_loadout_stats(
         loadout, ATTACK_STYLE_MELEE, ENCOUNTER_PRAYER_NONE,
-        1, 0, 0, &stats);
+        1, FIGHT_STYLE_ACCURATE, 0, &stats);
 
-    /* eff = floor(1*1.0) + 0 + 8 = 9 */
-    ASSERT_INT_EQ("lv1 melee eff", stats.eff_level, 9);
+    /* eff = floor(1*1.0) + 3 + 8 = 12 (accurate +3 att) */
+    ASSERT_INT_EQ("lv1 melee eff", stats.eff_level, 12);
 
-    /* eff_str = 9, str_bonus = 0 */
+    /* eff_str = 1 + 0 + 8 = 9 (accurate gives 0 to str), str_bonus = 0 */
     /* max_hit = floor(0.5 + 9 * (0+64) / 640) = floor(0.5 + 576/640) = floor(0.5 + 0.9) = 1 */
     ASSERT_INT_EQ("lv1 melee max", stats.max_hit, 1);
 
     /* attack_bonus = 0 (no weapon) */
     ASSERT_INT_EQ("lv1 melee att_bonus", stats.attack_bonus, 0);
 
-    /* magic, level 1, no gear, barrage */
+    /* magic, level 1, no gear, barrage, autocast (no invisible bonus) */
     encounter_compute_loadout_stats(
         loadout, ATTACK_STYLE_MAGIC, ENCOUNTER_PRAYER_NONE,
-        1, 0, 30, &stats);
+        1, FIGHT_STYLE_AUTOCAST, 30, &stats);
 
-    /* eff = floor(1*1.0) + 9 = 10 */
+    /* eff = floor(1*1.0) + 0 + 9 = 10 */
     ASSERT_INT_EQ("lv1 magic eff", stats.eff_level, 10);
 
     /* max_hit = floor(30 * (1.0 + 0/100.0) * 1.0) = 30 */

@@ -355,6 +355,64 @@ static inline int osrs_player_eff_level(int base_level, float prayer_mult, int s
     return (int)(base_level * prayer_mult) + style_bonus + 8;
 }
 
+/* ======================================================================== */
+/* stance (FightStyle) → combat modifiers.                                   */
+/*                                                                           */
+/* single source of truth for "what does this stance do". replaces the raw   */
+/* `int style_bonus` that callers used to pass around — that discarded the   */
+/* why (rapid? autocast? both 0 but speed differs), and forced each caller   */
+/* to re-derive the mapping.                                                 */
+/*                                                                           */
+/* ref: osrs wiki "Combat Options", .refs/osrs-dps-calc PlayerVsNPCCalc.ts   */
+/*      and Equipment.ts:245-270 (rapid speed -1).                           */
+/* ======================================================================== */
+
+/* attack level bonus for the stance.
+   melee: accurate +3, controlled +1.
+   ranged: accurate +3.
+   magic powered staff: accurate +3 (wiki) — passed only when style is MAGIC.
+   all autocast stances and rapid/longrange give 0. */
+static inline int osrs_stance_att_bonus(FightStyle fs, AttackStyle atk) {
+    switch (fs) {
+        case FIGHT_STYLE_ACCURATE:   return 3;
+        case FIGHT_STYLE_CONTROLLED: return atk == ATTACK_STYLE_MELEE ? 1 : 0;
+        case FIGHT_STYLE_LONGRANGE:  return atk == ATTACK_STYLE_MAGIC ? 1 : 0;  /* powered staff longrange = +1 magic */
+        default:                     return 0;
+    }
+}
+
+/* strength level bonus (melee only). aggressive +3, controlled +1. */
+static inline int osrs_stance_str_bonus(FightStyle fs) {
+    switch (fs) {
+        case FIGHT_STYLE_AGGRESSIVE: return 3;
+        case FIGHT_STYLE_CONTROLLED: return 1;
+        default:                     return 0;
+    }
+}
+
+/* defence level bonus. defensive/longrange +3, controlled +1. */
+static inline int osrs_stance_def_bonus(FightStyle fs) {
+    switch (fs) {
+        case FIGHT_STYLE_DEFENSIVE:
+        case FIGHT_STYLE_LONGRANGE:  return 3;
+        case FIGHT_STYLE_CONTROLLED: return 1;
+        default:                     return 0;
+    }
+}
+
+/* attack speed modifier (ticks to add to weapon base speed).
+   rapid is the only stance that changes speed (-1 tick) per dps-calc
+   Equipment.ts:248-249. everything else uses the weapon's base speed. */
+static inline int osrs_stance_speed_mod(FightStyle fs) {
+    return fs == FIGHT_STYLE_RAPID ? -1 : 0;
+}
+
+/* attack range modifier (tiles to add to weapon base range).
+   longrange adds +2 tiles (e.g. blowpipe 5 → 7). */
+static inline int osrs_stance_range_mod(FightStyle fs) {
+    return fs == FIGHT_STYLE_LONGRANGE ? 2 : 0;
+}
+
 /* player attack roll: eff_level * (equipment_bonus + 64).
    ref: PlayerVsNPCCalc.ts line 212 */
 static inline int osrs_player_att_roll(int eff_level, int equipment_bonus) {
