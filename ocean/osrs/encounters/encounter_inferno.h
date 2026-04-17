@@ -1277,7 +1277,7 @@ static void inf_npc_attack(InfernoState* s, int idx) {
         has_los_now &&
         !npc->had_los_last_tick) {
         npc->blob_scanned_prayer = (int)s->player.prayer;
-        /* Pre-determine style for oracle */
+        /* commit to opposite of scanned prayer; random if scanned prayer is neither */
         if (s->player.prayer == PRAYER_PROTECT_MAGIC) npc->attack_style = ATTACK_STYLE_RANGED;
         else if (s->player.prayer == PRAYER_PROTECT_RANGED) npc->attack_style = ATTACK_STYLE_MAGIC;
         else npc->attack_style = (encounter_rand_int(&s->rng_state, 2) == 0) ? ATTACK_STYLE_MAGIC : ATTACK_STYLE_RANGED;
@@ -1452,12 +1452,11 @@ static void inf_npc_attack(InfernoState* s, int idx) {
        ref: InfernoTrainer JalAk.ts attackIfPossible() */
     if (npc->type == INF_NPC_BLOB) {
         if (npc->blob_scanned_prayer < 0) {
-            /* no pending scan → start scan phase */
+            /* no pending scan → start scan phase: read prayer, commit to opposite style */
             npc->blob_scanned_prayer = (int)s->player.prayer;
-        /* Pre-determine style for oracle */
-        if (s->player.prayer == PRAYER_PROTECT_MAGIC) npc->attack_style = ATTACK_STYLE_RANGED;
-        else if (s->player.prayer == PRAYER_PROTECT_RANGED) npc->attack_style = ATTACK_STYLE_MAGIC;
-        else npc->attack_style = (encounter_rand_int(&s->rng_state, 2) == 0) ? ATTACK_STYLE_MAGIC : ATTACK_STYLE_RANGED;
+            if (s->player.prayer == PRAYER_PROTECT_MAGIC) npc->attack_style = ATTACK_STYLE_RANGED;
+            else if (s->player.prayer == PRAYER_PROTECT_RANGED) npc->attack_style = ATTACK_STYLE_MAGIC;
+            else npc->attack_style = (encounter_rand_int(&s->rng_state, 2) == 0) ? ATTACK_STYLE_MAGIC : ATTACK_STYLE_RANGED;
             npc->attacked_this_tick = 1;  /* triggers scan animation */
             npc->attack_timer = stats->attack_speed;  /* 3 */
             return;
@@ -2016,51 +2015,8 @@ static void inf_apply_npc_death(InfernoState* s, int npc_idx) {
     }
 }
 
-static OverheadPrayer inf_get_oracle_prayer(InfernoState* s) {
-    int correct_style = -1;
-    for (int h = 0; h < s->player_pending_hit_count; h++) {
-        EncounterPendingHit* ph = &s->player_pending_hits[h];
-        if (ph->check_prayer && ph->ticks_remaining == 1) {
-            correct_style = ph->attack_style;
-            break;
-        }
-    }
-    if (correct_style == -1) {
-        for (int n = 0; n < INF_MAX_NPCS; n++) {
-            InfNPC* npc = &s->npcs[n];
-            if (!npc->active || npc->death_ticks > 0) continue;
-            if (npc->type == INF_NPC_JAD || npc->type == INF_NPC_ZUK || 
-                npc->type == INF_NPC_ZUK_SHIELD || npc->type == INF_NPC_NIBBLER || 
-                npc->type == INF_NPC_HEALER_ZUK) continue;
-            
-            const InfNPCStats* st = &INF_NPC_STATS[npc->type];
-            if (npc->frozen_ticks > 0 || npc->stun_timer > 0) continue;
-            if (st->attack_range > 1 && !inf_npc_has_los(s, n)) continue;
-            
-            int dist = encounter_dist_to_npc(s->player.x, s->player.y, npc->x, npc->y, npc->size);
-            if (dist == 0 || dist > st->attack_range) continue;
-
-            int t = npc->attack_timer;
-            if (t == 0) t = 1;
-            if (t == 1) {
-                int style = npc->attack_style;
-
-                if (st->can_melee && dist == 1) {
-                    style = ATTACK_STYLE_MELEE;
-                }
-                correct_style = style;
-                break;
-            }
-        }
-    }
-    if (correct_style == ATTACK_STYLE_MELEE) return PRAYER_PROTECT_MELEE;
-    if (correct_style == ATTACK_STYLE_RANGED) return PRAYER_PROTECT_RANGED;
-    if (correct_style == ATTACK_STYLE_MAGIC) return PRAYER_PROTECT_MAGIC;
-    return s->player.prayer;
-}
-
 static void inf_player_pretick(InfernoState* s, const int* actions) {
-    s->player.prayer = inf_get_oracle_prayer(s);
+    encounter_apply_prayer_action(&s->player.prayer, actions[INF_HEAD_PRAYER]);
     int drain = encounter_prayer_drain_effect(s->player.prayer) + 24;
     encounter_drain_prayer(&s->player.current_prayer, &s->player.prayer,
                            0, &s->player.prayer_drain_counter, drain);
@@ -2810,8 +2766,6 @@ static void inf_write_obs(EncounterState* state, float* obs) {
         obs[i++] = (min_style == ATTACK_STYLE_RANGED) ? 1.0f : 0.0f;
         obs[i++] = (min_style == ATTACK_STYLE_MAGIC) ? 1.0f : 0.0f;
         obs[i++] = (float)conflict_count / 3.0f;
-
-        /* removed oracle prayer obs */
     }
 
     /* Zuk-phase features (10 features: 1 flag + 9 Zuk-specific) */
