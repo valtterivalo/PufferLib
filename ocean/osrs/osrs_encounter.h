@@ -765,16 +765,22 @@ static inline int encounter_npc_y_edge_clear(
     corner safespot: if diagonal would land NPC on player, cancel Y component.
     ref: InfernoTrainer Mob.ts:143-146.
 
+    this function does NOT gate on attack range or LOS — the reference's
+    canMove() (Unit.ts:383) is `!hasLOS && !frozen && !stunned && !dying`,
+    with NO range check. caller is responsible for skipping the call when
+    the NPC shouldn't move (hasLOS, frozen, etc). for melee mobs adjacent
+    to the player, the step naturally fails because the player tile is
+    occupied — no explicit range gate needed.
+
+    attack_range param is retained for signature compatibility but unused.
+
     returns 1 if moved, 0 if blocked or already at target. */
 static inline int encounter_npc_step_toward(
     int* x, int* y, int tx, int ty, int npc_size,
     int target_size, int attack_range,
     encounter_npc_blocked_fn is_blocked, void* ctx
 ) {
-    int dist = encounter_entity_footprint_distance(*x, *y, npc_size,
-                                                   tx, ty, target_size);
-    if (dist >= 1 && dist <= attack_range) return 0;
-
+    (void)attack_range;
     int size = npc_size;
     int dx = 0, dy = 0;
     if (tx > *x) dx = 1;
