@@ -1973,8 +1973,21 @@ static void zul_step(EncounterState* state, const int* actions) {
     /* venom */
     zul_venom_tick(s);
 
-    /* prayer drain — both overhead and offensive, with activation-tick skip. */
+    /* prayer drain — both overhead and offensive, with activation-tick skip.
+       drain can clear offensive_prayer at pp<=0; refresh mage/range caches
+       afterwards so subsequent attacks don't use stale prayer-boosted stats. */
+    OffensivePrayer prev_off_drain = s->player.offensive_prayer;
     encounter_drain_all_prayers(&s->player, 0);
+    if (s->player.offensive_prayer != prev_off_drain) {
+        if (s->mage_stats.style == ATTACK_STYLE_MAGIC) {
+            encounter_update_loadout_level(&s->mage_stats, s->player.offensive_prayer,
+                s->player.current_magic, s->player.current_magic);
+        }
+        if (s->range_stats.style == ATTACK_STYLE_RANGED) {
+            encounter_update_loadout_level(&s->range_stats, s->player.offensive_prayer,
+                s->player.current_ranged, s->player.current_ranged);
+        }
+    }
 
     if (s->player.current_hitpoints <= 0) {
         s->episode_over = 1; s->winner = 1;
