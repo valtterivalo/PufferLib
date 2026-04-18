@@ -1949,17 +1949,20 @@ static void inf_queue_zuk_healer_sparks(InfernoState* s, const InfNPC* npc) {
     if (clamped_x < npc->x - 5) clamped_x = npc->x - 5;
     if (clamped_x > npc->x + 4) clamped_x = npc->x + 4;
 
+    /* InfernoTrainer JalMejJak AoeWeapon: 2 random sparks target y=14+rand(0..3)
+       in reference coords. our coord system is Y-flipped (ours_y = 57 - ref_y),
+       so ref y=14..17 maps to ours y=40..43 (near player/zuk band). */
     inf_queue_pending_spark(s, npc->x, npc->y, clamped_x, s->player.y,
                             5 + encounter_rand_int(&s->rng_state, 6), 4);
     inf_queue_pending_spark(s,
                             npc->x, npc->y,
                             npc->x + encounter_rand_int(&s->rng_state, 11) - 5,
-                            14 + encounter_rand_int(&s->rng_state, 4),
+                            40 + encounter_rand_int(&s->rng_state, 4),
                             5 + encounter_rand_int(&s->rng_state, 6), 4);
     inf_queue_pending_spark(s,
                             npc->x, npc->y,
                             npc->x + encounter_rand_int(&s->rng_state, 11) - 5,
-                            14 + encounter_rand_int(&s->rng_state, 4),
+                            40 + encounter_rand_int(&s->rng_state, 4),
                             5 + encounter_rand_int(&s->rng_state, 6), 4);
 }
 
@@ -3505,25 +3508,36 @@ static void inf_render_post_tick(EncounterState* state, EncounterOverlay* ov) {
                 proj_model_id = (actual_style == ATTACK_STYLE_MAGIC) ? INF_GFX_448_MODEL : INF_GFX_447_MODEL;
                 break;
             case INF_NPC_ZUK:        proj_model_id = INF_GFX_1375_MODEL; break;
-            /* InfernoTrainer uses a tekton_meteor-style model for Jal-MejJak.
-               OSRS cache doesn't have a dedicated healer spotanim exported here,
-               so we reuse INFERNO_ZEK_PROJECTILE (orange ball, closest meteor
-               shape) until a proper healer spotanim is added to the manifest. */
-            case INF_NPC_HEALER_ZUK: proj_model_id = INF_GFX_1376_MODEL; break;
+            /* InfernoTrainer uses tekton_meteor.glb for Jal-MejJak projectiles.
+               OSRS cache doesn't have a dedicated meteor spotanim exported here,
+               so we reuse TZHAAR_FIRE_SPIT_TRAVEL (GFX 448) — a fiery orb, the
+               closest meteor-shaped flight model in the current manifest and
+               distinct from mager/zuk projectiles. proper fix: export tekton
+               meteor spotanim into the manifest. */
+            case INF_NPC_HEALER_ZUK: proj_model_id = INF_GFX_448_MODEL; break;
             default: break;
         }
 
         /* NPC-specific flight overrides */
         switch (npc->type) {
             case INF_NPC_MAGER:
-                duration += 60;  /* visual delay ~2 ticks */
+                /* InfernoTrainer JalZek MagicWeapon: visualDelayTicks=2,
+                   visualHitEarlyTicks=-1. projectile invisible for 2 ticks,
+                   then visual flies in and arrives 1 tick AFTER the hit lands.
+                   visible duration = (hit_delay + 1) - 2 = hit_delay - 1 ticks.
+                   start_delay=2 ticks is set after the emit below. */
+                duration = (hit_delay - 1) * 30;
+                if (duration < 30) duration = 30;
                 break;
             case INF_NPC_RANGER:
-                /* SDK: reduceDelay=-2 (adds 2 ticks to hit), visualDelayTicks=3
-                   (projectile invisible for first 3 ticks). net visual effect:
-                   +2 ticks to flight - 3 ticks hidden = -1 tick visual duration. */
-                duration += 60 - 90;  /* +2 ticks hit delay, -3 ticks visual delay */
-                if (duration < 30) duration = 30;  /* minimum 1 game tick visible */
+                /* InfernoTrainer JalXil RangedWeapon: reduceDelay=-2 (hit
+                   delay +2 ticks), visualDelayTicks=3. visible duration =
+                   (hit_delay + 2) - 3 = hit_delay - 1 ticks. start_delay=3
+                   ticks is set after the emit below. NOTE: sim-side hit delay
+                   is currently NOT adjusted by +2 — damage lands 2 ticks
+                   earlier than reference. */
+                duration = (hit_delay - 1) * 30;
+                if (duration < 30) duration = 30;
                 break;
             case INF_NPC_JAD:
                 if (actual_style == ATTACK_STYLE_MAGIC) {
@@ -3558,6 +3572,14 @@ static void inf_render_post_tick(EncounterState* state, EncounterOverlay* ov) {
         /* Jad: 3-tick visual delay (InfernoTrainer JAD_PROJECTILE_DELAY=3) */
         if (pi >= 0 && npc->type == INF_NPC_JAD)
             ov->projectiles[pi].start_delay = 3 * 30;
+
+        /* Mager: 2-tick visualDelayTicks (InfernoTrainer JalZek MagicWeapon) */
+        if (pi >= 0 && npc->type == INF_NPC_MAGER)
+            ov->projectiles[pi].start_delay = 2 * 30;
+
+        /* Ranger: 3-tick visualDelayTicks (InfernoTrainer JalXil RangedWeapon) */
+        if (pi >= 0 && npc->type == INF_NPC_RANGER)
+            ov->projectiles[pi].start_delay = 3 * 30;
     }
 
     for (int i = 0; i < INF_MAX_PENDING_SPARKS; i++) {
@@ -3570,7 +3592,7 @@ static void inf_render_post_tick(EncounterState* state, EncounterOverlay* ov) {
             spark->src_x, spark->src_y, spark->x, spark->y,
             encounter_attack_style_to_proj_style(ATTACK_STYLE_MAGIC),
             spark->damage,
-            4 * 30, 96, 64, 16, 3.0f, 0, 1, 1, INF_GFX_1376_MODEL);
+            4 * 30, 96, 64, 16, 3.0f, 0, 1, 1, INF_GFX_448_MODEL);
         spark->visual_emitted = 1;
     }
 
