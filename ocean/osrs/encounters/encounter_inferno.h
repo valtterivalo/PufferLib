@@ -2464,12 +2464,20 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
 
 /* walk every active NPC, bank any new HP-low-watermark progress, and update
    the min_hp_reached floor. call once per tick, after all damage/heal has
-   resolved. */
+   resolved.
+
+   jad healers (Yt-HurKot) are excluded: in practice you tag them once to
+   switch their aggro from jad to you, then ignore them while you burn jad.
+   killing them outright is wasted DPS. if damage on healers paid reward the
+   agent would learn to finish them off instead of just tagging. the
+   indirect signal — tagged healers stop healing jad, so jad progress stops
+   getting undone — already makes tagging optimal under min-hp progress. */
 static void inf_accrue_min_hp_progress(InfernoState* s) {
     float progress = 0.0f;
     for (int i = 0; i < INF_MAX_NPCS; i++) {
         InfNPC* npc = &s->npcs[i];
         if (!npc->active) continue;
+        if (npc->type == INF_NPC_HEALER_JAD) continue;
         if (npc->hp < npc->min_hp_reached) {
             progress += (float)(npc->min_hp_reached - npc->hp);
             npc->min_hp_reached = npc->hp;
