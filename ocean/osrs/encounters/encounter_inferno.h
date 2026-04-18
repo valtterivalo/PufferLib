@@ -1672,10 +1672,14 @@ static void inf_npc_attack(InfernoState* s, int idx) {
             EncounterPendingHit* ph = &s->player_pending_hits[s->player_pending_hit_count++];
             ph->active = 1;
             ph->damage = dmg;
-            /* jad: reference InfernoTrainer JalTokJad.ts registers the projectile with
-               reduceDelay=3 INSIDE a DelayedAction at T+3, so the hit never lands
-               before T+3 regardless of distance. clamp ticks_remaining to at least 3. */
-            ph->ticks_remaining = is_jad && hit_delay < 3 ? 3 : hit_delay;
+            /* jad: fixed 4-tick land delay regardless of distance. ref
+               JalTokJad registers the projectile inside DelayedAction(T+3) with
+               reduceDelay=3, and Projectile clamps remainingDelay>=1, so the
+               effective land time is T + max(4, formula(dist)). for every
+               realistic fight distance formula(dist) ≤ 4, so land is always
+               exactly T+4. model as a flat constant — matches in-game behavior
+               where jads hit on a predictable tick regardless of position. */
+            ph->ticks_remaining = is_jad ? 4 : hit_delay;
             ph->attack_style = actual_style;
             ph->check_prayer = is_jad ? 1 : 0;
             /* jad prayer check is deferred 3 ticks (the DelayedAction window).
