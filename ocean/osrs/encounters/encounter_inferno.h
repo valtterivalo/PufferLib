@@ -1564,12 +1564,7 @@ static void inf_npc_attack(InfernoState* s, int idx) {
             npc->attack_visual_target = si;
         } else {
             /* typeless hit on player — not blockable by prayer, no accuracy roll.
-               hit lands 4 ticks later like any other projectile, but zuk is the
-               one inferno mob you cannot tick-eat. model it by checkpointing
-               the player's fire-time HP in the pending hit: at land we clamp
-               HP back down to fire_hp - damage, so any eating done between
-               fire and land is undone when the hit resolves. other damage
-               sources are still additive (clamp is a ceiling, not a floor). */
+               rolled 0..max_hit, queued at T and lands at T+4 unchanged. */
             int max_hit = osrs_npc_magic_max_hit(stats->magic_base_dmg, stats->magic_dmg_pct);
             int dmg = encounter_rand_int(&s->rng_state, max_hit + 1);
             if (s->player_pending_hit_count < ENCOUNTER_MAX_PENDING_HITS) {
@@ -1580,7 +1575,6 @@ static void inf_npc_attack(InfernoState* s, int idx) {
                 ph->attack_style = ATTACK_STYLE_NONE;  /* typeless — not blockable */
                 ph->check_prayer = 0;
                 ph->prayer_check_delay = 0;
-                ph->hp_at_fire = s->player.current_hitpoints;  /* zuk-style no-tick-eat */
             }
             s->last_hit_by_type = INF_NPC_ZUK;
             npc->attacked_this_tick = 1;
@@ -1700,7 +1694,6 @@ static void inf_npc_attack(InfernoState* s, int idx) {
                other NPCs had their prayer pre-checked above (damage already zeroed
                if prayer matched), so delay=0 and the deferred path no-ops. */
             ph->prayer_check_delay = is_jad ? 3 : 0;
-            ph->hp_at_fire = 0;  /* no-tick-eat clamp disabled for non-zuk mobs */
         }
     }
 

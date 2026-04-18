@@ -89,10 +89,6 @@ typedef struct {
                               jad uses 3 to model its T+3 DelayedAction — prayer at T+3 decides
                               whether the hit is blocked, independent of projectile flight time.
                               ref: InfernoTrainer JalTokJad.ts:49-57. */
-    int hp_at_fire;        /* player HP at fire tick, >0 enables no-tick-eat clamp.
-                              at land: player HP = min(current, hp_at_fire - damage),
-                              so heals between fire and land are undone. used for zuk
-                              (the one mob that can't be tick-eaten). 0 = disabled. */
     int spell_type;        /* ENCOUNTER_SPELL_* for freeze/heal effects */
 } EncounterPendingHit;
 
@@ -964,17 +960,6 @@ static inline void encounter_resolve_player_pending_hits(
                 if (off_prayer_hit_count) (*off_prayer_hit_count)++;
             }
             
-            /* no-tick-eat clamp (zuk): when hp_at_fire was set at queue time,
-               the hit enforces the fire-tick outcome. we first clamp current
-               HP back down to fire_hp (undoing any eating done while the
-               projectile was in the air), then apply damage as usual. other
-               damage taken between fire and land stays — min() only removes
-               heal, never adds damage. */
-            if (hits[i].hp_at_fire > 0 && player->current_hitpoints > hits[i].hp_at_fire) {
-                int undone = player->current_hitpoints - hits[i].hp_at_fire;
-                player->current_hitpoints = hits[i].hp_at_fire;
-                if (damage_received_acc) *damage_received_acc += (float)undone;
-            }
             encounter_damage_player(player, dmg, damage_received_acc);
             hits[i] = hits[--(*hit_count)];
             i--;
