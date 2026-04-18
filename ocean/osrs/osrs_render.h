@@ -1193,7 +1193,7 @@ static void render_handle_input(RenderClient* rc, OsrsEnv* env) {
         if (!rc->human_input.enabled && IsMouseButtonDown(MOUSE_BUTTON_RIGHT)) {
             Vector2 delta = GetMouseDelta();
             rc->cam_yaw -= delta.x * 0.005f;
-            rc->cam_pitch -= delta.y * 0.005f;
+            rc->cam_pitch += delta.y * 0.005f;
             if (rc->cam_pitch < 0.1f) rc->cam_pitch = 0.1f;
             if (rc->cam_pitch > 1.4f) rc->cam_pitch = 1.4f;
         }
@@ -1204,14 +1204,14 @@ static void render_handle_input(RenderClient* rc, OsrsEnv* env) {
             if (rc->human_input.enabled) {
                 /* orbit */
                 rc->cam_yaw -= delta.x * 0.005f;
-                rc->cam_pitch -= delta.y * 0.005f;
+                rc->cam_pitch += delta.y * 0.005f;
                 if (rc->cam_pitch < 0.1f) rc->cam_pitch = 0.1f;
                 if (rc->cam_pitch > 1.4f) rc->cam_pitch = 1.4f;
             } else {
                 /* pan: world drags with the mouse (grab-and-drag convention) */
                 float cs = cosf(rc->cam_yaw), sn = sinf(rc->cam_yaw);
-                rc->cam_target_x += (delta.x * cs - delta.y * sn) * 0.05f;
-                rc->cam_target_z += (delta.x * sn + delta.y * cs) * 0.05f;
+                rc->cam_target_x += (delta.x * cs + delta.y * sn) * 0.05f;
+                rc->cam_target_z += (-delta.x * sn + delta.y * cs) * 0.05f;
             }
         }
         if (wheel != 0.0f) {
