@@ -404,9 +404,10 @@ static void anim_apply_frame(
                     int rz = (vy * sin_x + vz * cos_x) >> 16;
                     vy = ry; vz = rz;
 
-                    /* Y rotation */
-                    rx = (vx * cos_y - vz * sin_y) >> 16;
-                    rz = (vx * sin_y + vz * cos_y) >> 16;
+                    /* Y rotation — matches Model.java:1074-1080
+                     * new_x = cos_y*x + sin_y*z; new_z = cos_y*z - sin_y*x */
+                    rx = (vx * cos_y + vz * sin_y) >> 16;
+                    rz = (vz * cos_y - vx * sin_y) >> 16;
                     vx = rx; vz = rz;
 
                     state->verts[v * 3]     = (int16_t)(vx + pivot_x);
@@ -502,8 +503,8 @@ static void anim_apply_single_transform(
                 ry = (vy * cos_x - vz * sin_x) >> 16;
                 int rz = (vy * sin_x + vz * cos_x) >> 16;
                 vy = ry; vz = rz;
-                rx = (vx * cos_y - vz * sin_y) >> 16;
-                rz = (vx * sin_y + vz * cos_y) >> 16;
+                rx = (vx * cos_y + vz * sin_y) >> 16;
+                rz = (vz * cos_y - vx * sin_y) >> 16;
                 state->verts[v * 3]     = (int16_t)(rx + *pivot_x);
                 state->verts[v * 3 + 1] = (int16_t)(vy + *pivot_y);
                 state->verts[v * 3 + 2] = (int16_t)(rz + *pivot_z);
