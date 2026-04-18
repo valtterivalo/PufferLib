@@ -189,7 +189,7 @@ static const InfNPCOverlay INF_NPC_OVERLAY[INF_NUM_NPC_TYPES] = {
     [INF_NPC_MAGER]      = { 15, ATTACK_STYLE_MAGIC,  MELEE_STYLE_STAB,  1,  70, 100, 0, 0, 1 },
     [INF_NPC_JAD]        = { 50, ATTACK_STYLE_RANGED, MELEE_STYLE_STAB,  0, 113, 100, 113, 0, 1 },
     [INF_NPC_ZUK]        = { 99, ATTACK_STYLE_MAGIC,  MELEE_STYLE_STAB,  0, 148, 100, 0, 8, 0 },
-    [INF_NPC_HEALER_JAD] = { 1,  ATTACK_STYLE_MELEE,  MELEE_STYLE_CRUSH, 0,   0,   0, 0, 0, 1 },
+    [INF_NPC_HEALER_JAD] = { 1,  ATTACK_STYLE_MELEE,  MELEE_STYLE_CRUSH, 0,   0,   0, 0, 1, 1 },  /* stun_on_spawn=1 per YtHurKot.ts:50 */
     [INF_NPC_HEALER_ZUK] = { 99, ATTACK_STYLE_MAGIC,  MELEE_STYLE_STAB,  0,  10, 100, 0, 1, 0 },  /* stun_on_spawn=1 per InfernoTrainer JalMejJak.ts SPAWN_DELAY */
     [INF_NPC_ZUK_SHIELD] = { 0,  ATTACK_STYLE_NONE,   MELEE_STYLE_STAB,  0,   0,   0, 0, 1, 0 },
 };
@@ -2280,7 +2280,15 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
             int target_dist = encounter_dist_to_npc(s->player.x, s->player.y,
                 target_npc->x, target_npc->y, target_npc->size);
 
-            if (encounter_player_can_attack(s->player.x, s->player.y,
+            /* magic level gate: can't cast a barrage below its required level.
+               real OSRS greys out the spell button; here we skip the entire attack
+               so no damage lands, attack_timer does not reset, and the agent retries
+               next tick (or picks a different spell). */
+            int mage_blocked = (s->weapon_set == INF_GEAR_MAGE) &&
+                (s->player.current_magic < ((s->spell_choice == ENCOUNTER_SPELL_ICE)
+                    ? ICE_BARRAGE_LEVEL : BLOOD_BARRAGE_LEVEL));
+
+            if (!mage_blocked && encounter_player_can_attack(s->player.x, s->player.y,
                     target_npc->x, target_npc->y, target_npc->size,
                     ls->attack_range, s->los_blockers, s->los_blocker_count)) {
                 /* compute hit delay for projectile flight */
@@ -3137,11 +3145,15 @@ static void inf_write_mask(EncounterState* state, float* mask) {
                      ? 1.0f : 0.0f;
 
     /* HEAD_SPELL (3): no_change, blood_barrage, ice_barrage.
-       noop always valid. blood masked at full HP. both spells masked when not in mage gear. */
+       noop always valid. blood masked at full HP or if magic level is too low
+       to cast blood barrage (req 92). ice masked if magic level too low (req 94).
+       both spells masked when not in mage gear. */
     mask[offset++] = 1.0f;  /* no_change always valid */
     mask[offset++] = (s->weapon_set == INF_GEAR_MAGE &&
+                      s->player.current_magic >= BLOOD_BARRAGE_LEVEL &&
                       s->player.current_hitpoints < s->player.base_hitpoints) ? 1.0f : 0.0f;
-    mask[offset++] = (s->weapon_set == INF_GEAR_MAGE) ? 1.0f : 0.0f;
+    mask[offset++] = (s->weapon_set == INF_GEAR_MAGE &&
+                      s->player.current_magic >= ICE_BARRAGE_LEVEL) ? 1.0f : 0.0f;
 
     /* HEAD_SPEC (2): no_change, toggle. allow when blowpipe equipped + enough energy. */
     mask[offset++] = 1.0f;  /* no_change always valid */
