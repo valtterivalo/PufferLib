@@ -2024,20 +2024,22 @@ static void inf_apply_npc_death(InfernoState* s, int npc_idx) {
 static void inf_player_pretick(InfernoState* s, const int* actions) {
     /* apply prayer actions. each helper returns 1 on OFF→ON transition so we
        can skip that slot's drain this tick (wiki: no drain on activation tick). */
+    OffensivePrayer prev_offensive = s->player.offensive_prayer;
     if (encounter_apply_overhead_action(&s->player.prayer, actions[INF_HEAD_PRAYER])) {
         s->player.prayer_just_activated = 1;
     }
-    OffensivePrayer prev_offensive = s->player.offensive_prayer;
     if (encounter_apply_offensive_action(&s->player.offensive_prayer, actions[INF_HEAD_OFFENSIVE])) {
         s->player.offensive_prayer_just_activated = 1;
     }
+    /* inferno loadouts have ~0 prayer bonus (armadyl/ancestral/torva); pass 0.
+       drain can also clear offensive_prayer (pp<=0 auto-clear), so recompute
+       AFTER drain to catch both the apply-side change and the drain-side clear. */
+    encounter_drain_all_prayers(&s->player, 0);
     /* offensive prayer is baked into eff_level/max_hit via the loadout cache.
        recompute all loadouts on any change so combat math reflects current state. */
     if (s->player.offensive_prayer != prev_offensive) {
         encounter_recompute_loadout_max_hits(s->loadout_stats, INF_NUM_WEAPON_SETS, &s->player);
     }
-    /* inferno loadouts have ~0 prayer bonus (armadyl/ancestral/torva); pass 0. */
-    encounter_drain_all_prayers(&s->player, 0);
 }
 
 static void inf_tick_player(InfernoState* s, const int* actions) {
