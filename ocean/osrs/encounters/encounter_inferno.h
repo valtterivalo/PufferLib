@@ -383,6 +383,10 @@ typedef struct {
     InfNPCType type;
     int x, y;
     int hp, max_hp;
+    int min_hp_reached;    /* lowest hp this npc has ever been at; reward accrues only
+                              when current hp drops below this. prevents farming damage
+                              that gets healed back — healing raises current hp but min
+                              stays, so re-damaging up to min gives 0 reward. */
     int size;
     int attack_timer;      /* ticks until next attack */
     int attack_style;      /* current attack style (may differ from default for blobs) */
@@ -569,11 +573,14 @@ typedef struct {
     float damage_dealt_this_tick;
     float damage_zuk_healers_this_tick;
     float damage_received_this_tick;
-    /* HP restored to the enemy side this tick — subtracted from damage_dealt
-       in inf_compute_reward so the agent gets no credit for damage that's
-       immediately undone. sources: zuk healer heals (landing tick), jad healer
-       heals (landing tick), mager resurrection (the resurrected mob's HP). */
+    /* HP restored to the enemy side this tick — kept as diagnostic only.
+       the reward signal now uses min-HP progress, which inherently ignores
+       heals (they raise current hp without touching the min-reached floor). */
     float hp_restored_this_tick;
+    /* irreversible min-HP progress this tick: sum across all NPCs of how much
+       their HP dropped below their previous min_hp_reached. healing and
+       resurrection can't contribute here — only new damage below the floor. */
+    float min_hp_progress_this_tick;
     int prayer_correct_this_tick;  /* count of NPC attacks blocked by prayer this tick */
     int wave_completed_this_tick;
     int pillar_lost_this_tick;     /* -1 = none, 0-2 = which pillar was destroyed */
@@ -903,6 +910,7 @@ static void inf_init_npc(InfernoState* s, int idx, InfNPCType type, int x, int y
     npc->type = type;
     npc->hp = stats->hp;
     npc->max_hp = stats->hp;
+    npc->min_hp_reached = stats->hp;
     npc->size = stats->size;
     npc->attack_timer = stats->attack_speed;
     npc->attack_style = stats->default_style;
@@ -1752,9 +1760,10 @@ static int inf_mager_resurrect(InfernoState* s, int idx) {
     inf_init_npc(s, slot, dm->type, rx, ry);
     s->npcs[slot].hp = dm->hp;      /* 50% of max HP */
     s->npcs[slot].max_hp = dm->max_hp;
-    /* resurrection restores HP the agent already paid to remove — treat like a
-       heal for reward purposes so re-kills don't double-count as progress. */
-    s->hp_restored_this_tick += (float)dm->hp;
+    /* agent already got paid for driving this mob to 0 the first time — lock
+       min_hp_reached at 0 so re-killing the resurrected copy yields no new
+       min-HP-progress reward. encourages killing mager before it can rez. */
+    s->npcs[slot].min_hp_reached = 0;
 
     /* remove from dead store (swap with last) */
     s->dead_mobs[di] = s->dead_mobs[s->dead_mob_count - 1];
@@ -2453,6 +2462,22 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
 /* reward                                                                    */
 /* ======================================================================== */
 
+/* walk every active NPC, bank any new HP-low-watermark progress, and update
+   the min_hp_reached floor. call once per tick, after all damage/heal has
+   resolved. */
+static void inf_accrue_min_hp_progress(InfernoState* s) {
+    float progress = 0.0f;
+    for (int i = 0; i < INF_MAX_NPCS; i++) {
+        InfNPC* npc = &s->npcs[i];
+        if (!npc->active) continue;
+        if (npc->hp < npc->min_hp_reached) {
+            progress += (float)(npc->min_hp_reached - npc->hp);
+            npc->min_hp_reached = npc->hp;
+        }
+    }
+    s->min_hp_progress_this_tick = progress;
+}
+
 static float inf_compute_reward(InfernoState* s) {
     /* accumulate diagnostic stats BEFORE terminal check so the killing
        blow's damage is counted in total_damage_received */
@@ -2475,11 +2500,17 @@ static float inf_compute_reward(InfernoState* s) {
     //if (s->behind_shield_this_tick)
     //    r += 0.005f;
 
-    /* phased damage reward:
-       - Zuk wave with healers alive: only reward damage to healers (priority kill)
-       - otherwise: net damage = dealt - hp_restored, so mager resurrections and
-         any other in-flight healing don't look like free progress. clamp at 0 —
-         a pure-healing tick is zero-reward, never negative. */
+    /* irreversible-progress reward: only new HP below each NPC's low-water
+       mark counts. damage that gets healed back is worth 0 on re-application;
+       farming is impossible because hitting the same HP twice only pays the
+       first time. killing healers gives their full HP as progress since they
+       can't be healed back up. naturally incentivizes: kill healers first,
+       then finish the boss.
+
+       zuk-phase override kept: while zuk healers are alive, zuk progress is
+       zeroed so the agent doesn't learn to race zuk while healers tick him
+       back up. once the healers are cleared, all progress (including zuk's)
+       flows normally. */
     int zuk_healers_alive = 0;
     for (int i = 0; i < INF_MAX_NPCS; i++) {
         if (s->npcs[i].active && s->npcs[i].type == INF_NPC_HEALER_ZUK && s->npcs[i].death_ticks == 0) {
@@ -2488,14 +2519,19 @@ static float inf_compute_reward(InfernoState* s) {
         }
     }
 
+    float progress = s->min_hp_progress_this_tick;
     if (zuk_healers_alive) {
-        if (s->damage_zuk_healers_this_tick > 0.0f)
-            r += 0.001f * s->damage_zuk_healers_this_tick;
-    } else {
-        float net_damage = s->damage_dealt_this_tick - s->hp_restored_this_tick;
-        if (net_damage > 0.0f)
-            r += 0.001f * net_damage;
+        /* recompute progress ignoring zuk itself so only healer damage counts. */
+        progress = 0.0f;
+        /* re-walk the delta we just banked: we no longer have per-npc deltas,
+           so use the already-banked damage_zuk_healers_this_tick which tracks
+           landed damage on zuk-healers specifically. this is a rough match —
+           it overcounts by healers-healing-zuk-healers but that path doesn't
+           exist, so it's effectively equal to the min-hp progress on healers. */
+        progress = s->damage_zuk_healers_this_tick;
     }
+    if (progress > 0.0f)
+        r += 0.001f * progress;
 
     return r;
 }
@@ -2514,6 +2550,7 @@ static void inf_step(EncounterState* state, const int* actions) {
     s->damage_zuk_healers_this_tick = 0.0f;
     s->damage_received_this_tick = 0.0f;
     s->hp_restored_this_tick = 0.0f;
+    s->min_hp_progress_this_tick = 0.0f;
     s->prayer_correct_this_tick = 0;
     s->off_prayer_hits_this_tick = 0;
     s->tick_styles_fired = 0;
@@ -2664,6 +2701,9 @@ static void inf_step(EncounterState* state, const int* actions) {
         if (actions[h] == 0) s->action_noop_count[h]++;
     }
 
+    /* bank the tick's irreversible HP progress before computing reward. all
+       damage landings and healer applies have resolved by this point. */
+    inf_accrue_min_hp_progress(s);
     s->reward = inf_compute_reward(s);
     s->episode_return += s->reward;
 
