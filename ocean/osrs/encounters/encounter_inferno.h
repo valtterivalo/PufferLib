@@ -958,6 +958,64 @@ static void inf_spawn_wave(InfernoState* s) {
             ? active_pillars[encounter_rand_int(&s->rng_state, num_active)] : -1;
     }
 
+    /* waves 67-69 have no pillars — ref InfernoRegion.ts:359
+       (`this.wave < 67 || this.wave >= 70` means pillars exist outside this range).
+       clear on spawn so mid-episode transitions also collapse any survivors. */
+    if (s->wave >= 66) {
+        int pillars_changed = 0;
+        for (int p = 0; p < INF_NUM_PILLARS; p++) {
+            if (s->pillars[p].active) {
+                s->pillars[p].active = 0;
+                s->pillars[p].hp = 0;
+                pillars_changed = 1;
+            }
+        }
+        if (pillars_changed) inf_rebuild_los(s);
+    }
+
+    /* wave 67 (index 66): single jad at fixed position. ref InfernoRegion.ts:441-451.
+       our coord system is Y-flipped vs reference (pillars confirm ours_y = 57 - ref_y).
+       ref: player (18, 25), jad (23, 27), stun=1, attackSpeed=8, healers=5. */
+    if (s->wave == 66) {
+        s->player.x = 18;
+        s->player.y = 32;  /* 57 - 25 */
+        int slot = inf_find_free_npc(s);
+        if (slot >= 0) {
+            inf_init_npc(s, slot, INF_NPC_JAD, 23, 30);  /* 57 - 27 = 30 */
+            s->npcs[slot].stun_timer = 1;
+            s->npcs[slot].attack_timer = 8;
+        }
+        return;
+    }
+
+    /* wave 68 (index 67): three jads at fixed positions with staggered first attacks.
+       ref InfernoRegion.ts:452-479. stunTimers [1,4,7] shuffled across the 3 jads so
+       their first attacks stagger instead of landing on the same tick.
+       ref: player (25, 27), jads (18, 24), (28, 24), (23, 35). attackSpeed=9, healers=3. */
+    if (s->wave == 67) {
+        s->player.x = 25;
+        s->player.y = 30;  /* 57 - 27 */
+        /* shuffle [1, 4, 7] via Fisher-Yates */
+        int stuns[3] = { 1, 4, 7 };
+        for (int i = 2; i > 0; i--) {
+            int j = encounter_rand_int(&s->rng_state, i + 1);
+            int tmp = stuns[i]; stuns[i] = stuns[j]; stuns[j] = tmp;
+        }
+        static const int JAD_POS[3][2] = {
+            {18, 33},  /* 57 - 24 */
+            {28, 33},  /* 57 - 24 */
+            {23, 22},  /* 57 - 35 */
+        };
+        for (int i = 0; i < 3; i++) {
+            int slot = inf_find_free_npc(s);
+            if (slot < 0) break;
+            inf_init_npc(s, slot, INF_NPC_JAD, JAD_POS[i][0], JAD_POS[i][1]);
+            s->npcs[slot].stun_timer = stuns[i];
+            s->npcs[slot].attack_timer = 9;
+        }
+        return;
+    }
+
     /* zuk wave (wave 69, index 68) is special */
     if (s->wave == 68) {
         /* spawn Zuk — fixed position, cannot move */
