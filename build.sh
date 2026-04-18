@@ -187,12 +187,15 @@ if [ "$MODE" = "local" ] || [ "$MODE" = "fast" ]; then
         "$LOCAL_SRC" $EXTRA_SRC -o "${OUTPUT_NAME:-$ENV}"
         $LINK_ARCHIVES
         -DPLATFORM_DESKTOP -DOSRS_VISUAL
-        -lm -fopenmp
+        -lm
     )
     if [ "$PLATFORM" = "Darwin" ]; then
+        OMP_INC=$(find_omp_include)
+        OMP_DIR=$(brew --prefix libomp 2>/dev/null)/lib
+        [ -n "$OMP_INC" ] && FLAGS+=(-I"$OMP_INC" -Xclang -fopenmp -L"$OMP_DIR" -lomp)
         FLAGS+=(-framework Cocoa -framework OpenGL -framework IOKit -framework CoreVideo)
     else
-        FLAGS+=(-lGL -lpthread)
+        FLAGS+=(-fopenmp -lGL -lpthread)
     fi
     clang $CLANG_OPT "${FLAGS[@]}"
     echo "Built: ./${OUTPUT_NAME:-$ENV}"
