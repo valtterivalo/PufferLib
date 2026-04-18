@@ -1033,7 +1033,19 @@ static inline void encounter_drain_all_prayers(Player* p, int prayer_bonus) {
     p->prayer_just_activated = 0;
     p->offensive_prayer_just_activated = 0;
 
-    if (total <= 0 || p->current_prayer <= 0) return;
+    /* pp already at/below 0 entering this tick — force prayers off and skip
+       drain math. covers: external drain (smite), or activation attempted
+       at pp=0 (the pretick apply_*_action helpers don't gate on pp, so the
+       enum may have been set this tick before we arrived). without this,
+       the prayer enum can stay active indefinitely at pp=0. */
+    if (p->current_prayer <= 0) {
+        p->current_prayer = 0;
+        p->prayer_drain_counter = 0;
+        p->prayer = PRAYER_NONE;
+        p->offensive_prayer = OFFENSIVE_PRAYER_NONE;
+        return;
+    }
+    if (total <= 0) return;
 
     int drain_resistance = 60 + prayer_bonus * 2;
     p->prayer_drain_counter += total;

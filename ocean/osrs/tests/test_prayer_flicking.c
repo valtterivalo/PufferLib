@@ -175,6 +175,34 @@ static void test_lazy_flick_partial_cost(void) {
     ASSERT("lazy flick doesn't drain everything", p.current_prayer > 0);
 }
 
+/* --- regression: activating a prayer at pp=0 must not leave enum set ---
+   observed in eval playback: agent's overhead enum stuck on after pp hit 0.
+   root cause: pretick apply_*_action() doesn't gate on pp; drain then returned
+   early on pp<=0 without clearing the enum. */
+static void test_activate_at_zero_pp_clears(void) {
+    printf("--- activation at pp=0 does not persist in enum ---\n");
+    Player p; reset_player(&p, 0);
+    p.current_prayer = 0;
+
+    encounter_apply_overhead_action(&p.prayer, ENCOUNTER_OVERHEAD_TOGGLE_MELEE);
+    encounter_apply_offensive_action(&p.offensive_prayer, ENCOUNTER_OFFENSIVE_TOGGLE_PIETY);
+    p.prayer_just_activated = 1;
+    p.offensive_prayer_just_activated = 1;
+
+    encounter_drain_all_prayers(&p, 0);
+    ASSERT_EQ("overhead cleared after activation at pp=0", p.prayer, PRAYER_NONE);
+    ASSERT_EQ("offensive cleared after activation at pp=0", p.offensive_prayer, OFFENSIVE_PRAYER_NONE);
+    ASSERT_EQ("pp stays 0", p.current_prayer, 0);
+
+    /* second tick: stale enum from before drain=0 path should also be cleared
+       if somehow pp enters at 0 with enum already set. */
+    p.prayer = PRAYER_PROTECT_MAGIC;
+    p.offensive_prayer = OFFENSIVE_PRAYER_AUGURY;
+    encounter_drain_all_prayers(&p, 0);
+    ASSERT_EQ("overhead cleared from stale state", p.prayer, PRAYER_NONE);
+    ASSERT_EQ("offensive cleared from stale state", p.offensive_prayer, OFFENSIVE_PRAYER_NONE);
+}
+
 int main(void) {
     test_overhead_toggle();
     test_offensive_toggle();
@@ -182,6 +210,7 @@ int main(void) {
     test_one_tick_flick_saves_pp();
     test_pp_zero_clears_all();
     test_lazy_flick_partial_cost();
+    test_activate_at_zero_pp_clears();
 
     printf("\n=== results: %d/%d passed ===\n", tests_passed, tests_run);
     return (tests_passed == tests_run) ? 0 : 1;
