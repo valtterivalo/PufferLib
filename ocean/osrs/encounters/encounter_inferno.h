@@ -2644,6 +2644,22 @@ static void inf_step(EncounterState* state, const int* actions) {
         &s->damage_received_this_tick, &s->prayer_correct_this_tick, &s->off_prayer_hits_this_tick);
     inf_resolve_pending_sparks(s);
 
+    /* if npc damage killed the player, stop the tick here — a corpse can't
+       eat, attack, or move. without this check the hp-clamp-at-0 in
+       encounter_damage_player combined with a subsequent brew in
+       inf_tick_player would resurrect lethal hits (observed: zuk 140 lands
+       on 115 hp → clamp to 0 → brew +16 → alive at 16). the episode_return
+       stays valid because inf_compute_reward's episode_over branch returns
+       the end-of-episode shape and no further damage is accrued. */
+    if (s->player.current_hitpoints <= 0) {
+        if (s->last_hit_by_type >= 0 && s->last_hit_by_type < INF_NUM_NPC_TYPES)
+            s->killed_by_type[s->last_hit_by_type]++;
+        s->episode_over = 1;
+        s->winner = 1;
+        s->reward = 0.0f;
+        return;
+    }
+
     /* player actions */
     inf_tick_player(s, actions);
 
