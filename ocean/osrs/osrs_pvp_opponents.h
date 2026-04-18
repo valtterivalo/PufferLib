@@ -452,22 +452,44 @@ static int opp_apply_consumables(OsrsEnv* env, OpponentState* opp, int* actions,
     return potion_used;
 }
 
-/* convert an OverheadAction intent (legacy set-semantic: MAGE/RANGED/MELEE/etc)
-   into a toggle action given the opponent's current prayer state. if already
-   on target, emits NO_CHANGE (no-op). all opponent-AI prayer emissions go
-   through this so the new ENCOUNTER_OVERHEAD_TOGGLE_* encoding is respected. */
-static inline void opp_emit_prayer(int* actions, Player* self, int target_overhead_action) {
-    OverheadPrayer target_prayer = PRAYER_NONE;
-    int toggle = ENCOUNTER_OVERHEAD_NO_CHANGE;
-    switch (target_overhead_action) {
-        case OVERHEAD_MAGE:       target_prayer = PRAYER_PROTECT_MAGIC;  toggle = ENCOUNTER_OVERHEAD_TOGGLE_MAGIC; break;
-        case OVERHEAD_RANGED:     target_prayer = PRAYER_PROTECT_RANGED; toggle = ENCOUNTER_OVERHEAD_TOGGLE_RANGED; break;
-        case OVERHEAD_MELEE:      target_prayer = PRAYER_PROTECT_MELEE;  toggle = ENCOUNTER_OVERHEAD_TOGGLE_MELEE; break;
-        case OVERHEAD_SMITE:      target_prayer = PRAYER_SMITE;          toggle = ENCOUNTER_OVERHEAD_TOGGLE_SMITE; break;
-        case OVERHEAD_REDEMPTION: target_prayer = PRAYER_REDEMPTION;     toggle = ENCOUNTER_OVERHEAD_TOGGLE_REDEMPTION; break;
-        default: return;  /* OVERHEAD_NONE or invalid: no-op */
+/* map an OverheadPrayer to the toggle action that flips it on/off. returns
+   ENCOUNTER_OVERHEAD_NO_CHANGE for PRAYER_NONE (nothing to toggle). */
+static inline int opp_toggle_for_prayer(OverheadPrayer p) {
+    switch (p) {
+        case PRAYER_PROTECT_MAGIC:  return ENCOUNTER_OVERHEAD_TOGGLE_MAGIC;
+        case PRAYER_PROTECT_RANGED: return ENCOUNTER_OVERHEAD_TOGGLE_RANGED;
+        case PRAYER_PROTECT_MELEE:  return ENCOUNTER_OVERHEAD_TOGGLE_MELEE;
+        case PRAYER_SMITE:          return ENCOUNTER_OVERHEAD_TOGGLE_SMITE;
+        case PRAYER_REDEMPTION:     return ENCOUNTER_OVERHEAD_TOGGLE_REDEMPTION;
+        default:                    return ENCOUNTER_OVERHEAD_NO_CHANGE;
     }
-    if (self->prayer != target_prayer) actions[HEAD_OVERHEAD] = toggle;
+}
+
+/* convert an OverheadAction intent (legacy set-semantic: MAGE/RANGED/MELEE/NONE/etc)
+   into a toggle action given the opponent's current prayer state. if already
+   on target, emits NO_CHANGE (no-op). if target is NONE, emits the toggle
+   matching the currently-active prayer to deactivate it. all opponent-AI
+   prayer emissions go through this so the new ENCOUNTER_OVERHEAD_TOGGLE_*
+   encoding is respected. */
+static inline void opp_emit_prayer(int* actions, Player* self, int target_overhead_action) {
+    OverheadPrayer target_prayer;
+    switch (target_overhead_action) {
+        case OVERHEAD_NONE:       target_prayer = PRAYER_NONE;           break;
+        case OVERHEAD_MAGE:       target_prayer = PRAYER_PROTECT_MAGIC;  break;
+        case OVERHEAD_RANGED:     target_prayer = PRAYER_PROTECT_RANGED; break;
+        case OVERHEAD_MELEE:      target_prayer = PRAYER_PROTECT_MELEE;  break;
+        case OVERHEAD_SMITE:      target_prayer = PRAYER_SMITE;          break;
+        case OVERHEAD_REDEMPTION: target_prayer = PRAYER_REDEMPTION;     break;
+        default: return;  /* invalid: no-op */
+    }
+    if (self->prayer == target_prayer) return;
+    /* deactivation path: toggle current-on prayer off. activation/replace path:
+       emit target toggle (toggle semantics replace whatever's currently on). */
+    int toggle = (target_prayer == PRAYER_NONE)
+        ? opp_toggle_for_prayer(self->prayer)
+        : opp_toggle_for_prayer(target_prayer);
+    if (toggle != ENCOUNTER_OVERHEAD_NO_CHANGE)
+        actions[HEAD_OVERHEAD] = toggle;
 }
 
 /* Process pending prayer delay: decrement, apply if ready. Returns 1 if applied. */
