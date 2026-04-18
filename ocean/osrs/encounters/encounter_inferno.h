@@ -1215,15 +1215,9 @@ static void inf_npc_move(InfernoState* s, int idx) {
         }
     }
 
-    /* ranged/magic NPCs stop moving when they have LOS to the player.
-       this is the core OSRS mechanic: NPCs only walk toward their target
-       while they cannot see it. once LOS is established, they attack. */
-    if (npc->type != INF_NPC_NIBBLER && stats->attack_range > 1) {
-        if (npc->aggro_target < 0 && inf_npc_has_los(s, idx)) return;
-    }
-
-    /* target selection */
+    /* target selection: pillar (nibbler), aggroed NPC (shield/jad/zuk), or player */
     int tx, ty;
+    int target_size = 1;
     if (npc->type == INF_NPC_NIBBLER) {
         int p = s->nibbler_target_pillar;
         if (p >= 0 && p < INF_NUM_PILLARS && s->pillars[p].active) {
@@ -1241,11 +1235,13 @@ static void inf_npc_move(InfernoState* s, int idx) {
             }
             if (!found) { tx = s->player.x; ty = s->player.y; }
         }
+        target_size = INF_PILLAR_SIZE;
     } else if (npc->aggro_target >= 0 && npc->aggro_target < INF_MAX_NPCS &&
                s->npcs[npc->aggro_target].active) {
         /* targeting another NPC (set→shield, jad→shield) */
         tx = s->npcs[npc->aggro_target].x;
         ty = s->npcs[npc->aggro_target].y;
+        target_size = s->npcs[npc->aggro_target].size;
     } else {
         /* default: target player. clear stale aggro if target died. */
         if (npc->aggro_target >= 0) npc->aggro_target = -1;
@@ -1255,18 +1251,24 @@ static void inf_npc_move(InfernoState* s, int idx) {
     npc->target_x = tx;
     npc->target_y = ty;
 
-    /* greedy step toward target using shared helper.
-       target_size=1 for player, attack_range from NPC stats.
-       the shared function stops automatically when within attack range. */
+    /* ranged/magic NPCs stop moving once they can see their CURRENT target
+       within attack range — not just the player. the previous gate only
+       triggered when aggro_target was the player, so shield-aggroed
+       mager/ranger in the zuk wave walked right into melee.
+       reference: InfernoTrainer Unit.ts:383 canMove = !hasLOS (where
+       hasLOS is relative to the NPC's current aggro target). */
+    if (stats->attack_range > 1 && npc->type != INF_NPC_NIBBLER) {
+        if (npc_has_line_of_sight(s->los_blockers, s->los_blocker_count,
+                                  npc->x, npc->y, npc->size,
+                                  tx, ty, stats->attack_range)) return;
+    }
+
+    /* greedy step toward target using shared helper. the helper no longer
+       gates on range/LOS (per the commit removing early-return); that's
+       handled above for ranged NPCs and naturally by player-tile blocking
+       for melee NPCs. */
     int ox = npc->x, oy = npc->y;
     InfMoveCtx mc = { s, idx };
-    int target_size = 1;
-    if (npc->type == INF_NPC_NIBBLER) {
-        target_size = INF_PILLAR_SIZE;
-    } else if (npc->aggro_target >= 0 && npc->aggro_target < INF_MAX_NPCS &&
-               s->npcs[npc->aggro_target].active) {
-        target_size = s->npcs[npc->aggro_target].size;
-    }
     encounter_npc_step_toward(&npc->x, &npc->y, tx, ty, npc->size,
                               target_size, stats->attack_range,
                               inf_npc_blocked, &mc);

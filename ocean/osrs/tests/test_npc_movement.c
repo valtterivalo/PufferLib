@@ -16,6 +16,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "osrs_encounter.h"
+#include "osrs_collision.h"
 
 static int tests_run = 0;
 static int tests_passed = 0;
@@ -115,12 +116,66 @@ static void test_far_npc_walks(void) {
     ASSERT_EQ("diagonal step y+1", y, 1);
 }
 
+/* ======================================================================== */
+/* npc_has_line_of_sight: regression for the "ranged NPC walks into melee"  */
+/* bug (inferno-encounter). inf_npc_move must gate movement using LOS to    */
+/* the NPC's CURRENT target (player OR shield/other NPC), not hardcoded to  */
+/* the player. these tests lock in the generic target semantics of the     */
+/* shared LOS helper so any caller can trust it for arbitrary targets.     */
+/* ======================================================================== */
+
+/* --- ranged NPC sees a non-player target (shield-like) in range, clear --- */
+static void test_los_to_npc_target_in_range_clear(void) {
+    printf("--- LOS to non-player target: in range, clear ray ---\n");
+    /* mager at (20, 36) size 4, shield at (23, 44) size 5 (zuk wave layout).
+       no blockers. attack_range=15. closest NPC corner to target (23, 44):
+       cx = clamp(23, [20, 23]) = 23, cy = clamp(44, [36, 39]) = 39.
+       trace (23, 44) -> (23, 39): dy=-5, dx=0, within range, clear. */
+    int has = npc_has_line_of_sight(NULL, 0, 20, 36, 4, 23, 44, 15);
+    ASSERT_EQ("has_los to shield = 1", has, 1);
+}
+
+/* --- ranged NPC sees a non-player target, pillar blocks ray --- */
+static void test_los_to_npc_target_blocked_by_pillar(void) {
+    printf("--- LOS to non-player target: in range, pillar blocks ---\n");
+    /* mager at (10, 40) size 4 (footprint 10..13 × 40..43), target at
+       (23, 40). closest NPC corner to target: (13, 40). horizontal ray.
+       pillar at (15, 40) size 3 (covers 15..17 × 40..42) sits on the ray. */
+    LOSBlocker pillar = { 15, 40, 3, LOS_FULL_MASK };
+    int has = npc_has_line_of_sight(&pillar, 1, 10, 40, 4, 23, 40, 15);
+    ASSERT_EQ("has_los through pillar = 0", has, 0);
+}
+
+/* --- ranged NPC too far from non-player target: out of range --- */
+static void test_los_to_npc_target_out_of_range(void) {
+    printf("--- LOS to non-player target: out of range ---\n");
+    /* mager at (0, 0) size 4, target at (25, 25) size 1. Chebyshev from
+       closest NPC corner (3, 3) to (25, 25) is 22. attack_range=15. */
+    int has = npc_has_line_of_sight(NULL, 0, 0, 0, 4, 25, 25, 15);
+    ASSERT_EQ("out of range = 0", has, 0);
+}
+
+/* --- symmetric check: LOS to player coords same function, same contract --- */
+static void test_los_to_player_target_in_range_clear(void) {
+    printf("--- LOS to player target: in range, clear ray (control) ---\n");
+    /* ranger at (14, 32) size 3, player at (22, 25) size 1.
+       closest NPC corner (16, 32). trace (22, 25) -> (16, 32): dx=-6, dy=7.
+       range=15. clear. */
+    int has = npc_has_line_of_sight(NULL, 0, 14, 32, 3, 22, 25, 15);
+    ASSERT_EQ("has_los to player = 1", has, 1);
+}
+
 int main(void) {
     test_in_range_still_steps();
     test_pillar_stuck();
     test_pillar_diagonal_path();
     test_melee_adjacent_natural_stop();
     test_far_npc_walks();
+
+    test_los_to_npc_target_in_range_clear();
+    test_los_to_npc_target_blocked_by_pillar();
+    test_los_to_npc_target_out_of_range();
+    test_los_to_player_target_in_range_clear();
 
     printf("\n=== results: %d/%d passed ===\n", tests_passed, tests_run);
     return (tests_passed == tests_run) ? 0 : 1;
