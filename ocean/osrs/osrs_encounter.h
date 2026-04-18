@@ -84,7 +84,11 @@ typedef struct {
     int damage;
     int ticks_remaining;   /* countdown to landing */
     int attack_style;      /* ATTACK_STYLE_* for prayer check at land time */
-    int check_prayer;      /* 1 = re-check prayer when hit lands (jad) */
+    int check_prayer;      /* 1 = prayer has NOT been checked yet (deferred) */
+    int prayer_check_delay;/* ticks until prayer is checked (0 = check immediately on next resolve).
+                              jad uses 3 to model its T+3 DelayedAction — prayer at T+3 decides
+                              whether the hit is blocked, independent of projectile flight time.
+                              ref: InfernoTrainer JalTokJad.ts:49-57. */
     int spell_type;        /* ENCOUNTER_SPELL_* for freeze/heal effects */
 } EncounterPendingHit;
 
@@ -916,10 +920,29 @@ static inline void encounter_resolve_player_pending_hits(
     int* off_prayer_hit_count
 ) {
     for (int i = 0; i < *hit_count; i++) {
+        /* deferred prayer check (jad): lock in damage at T + prayer_check_delay.
+           runs BEFORE ticks_remaining decrement so the check happens on the exact
+           tick prayer_check_delay reaches 0, regardless of whether the hit lands
+           same tick or later. after the check, damage is frozen (possibly 0)
+           and further flicks don't affect this hit. */
+        if (hits[i].check_prayer && hits[i].prayer_check_delay > 0) {
+            hits[i].prayer_check_delay--;
+            if (hits[i].prayer_check_delay == 0) {
+                if (encounter_prayer_correct_for_style(active_prayer, hits[i].attack_style)) {
+                    hits[i].damage = 0;
+                    if (prayer_correct_count) (*prayer_correct_count)++;
+                } else if (hits[i].damage > 0 && hits[i].attack_style != ATTACK_STYLE_NONE) {
+                    if (off_prayer_hit_count) (*off_prayer_hit_count)++;
+                }
+                hits[i].check_prayer = 0;
+            }
+        }
         hits[i].ticks_remaining--;
         if (hits[i].ticks_remaining <= 0) {
             int dmg = hits[i].damage;
             if (hits[i].check_prayer) {
+                /* legacy path: delay was 0 and check_prayer never decremented.
+                   happens if encounter sets check_prayer=1 with no delay — check now. */
                 if (encounter_prayer_correct_for_style(active_prayer, hits[i].attack_style)) {
                     dmg = 0;
                     if (prayer_correct_count) (*prayer_correct_count)++;
