@@ -1,18 +1,3 @@
-/**
- * @fileoverview Metal platform implementation — device init, shader
- * compilation, buffer wrapping, GEMM (tensor_ops / steel_gemm on GPU),
- * LAPACK (Accelerate).
- *
- * REQUIRES Metal 4 (macOS 15+, Apple Silicon M3+). Uses MTL4CommandQueue,
- * MTL4CommandBuffer, MTL4ArgumentTable, MTLResidencySet, MTLSharedEvent.
- * No Metal 3 transient command buffer fallback.
- *
- * All GPU memory is allocated via page-aligned posix_memalign (see
- * WITH_METAL path in puf_types.h Allocator::create) and wrapped as
- * MTLBuffer with StorageModeShared for zero-copy GPU access on Apple
- * Silicon unified memory.
- */
-
 #import "metal_platform.h"
 #import <QuartzCore/CABase.h>  // CACurrentMediaTime
 #include "metal_shader_src.h"
@@ -22,10 +7,7 @@
 #include <cstdio>
 #include <cstring>
 #include <mutex>
-
-// ============================================================================
-// Global singleton
-// ============================================================================
+#include <stdexcept>
 
 static MetalContext g_ctx = {};
 static std::mutex g_pipeline_mutex;
@@ -256,10 +238,6 @@ kernel void tensor_ops_gemm_tn_f16(
 )METAL";
 }
 
-// ============================================================================
-// MetalStream implementation
-// ============================================================================
-
 void MetalStream::begin() {
   enc = nil;
   enc_active = false;
@@ -332,7 +310,9 @@ void MetalStream::sync() {
     [q commit:bufs count:1 options:opts];
     [q signalEvent:sync_event value:val];
     BOOL signaled = [sync_event waitUntilSignaledValue:val timeoutMS:kMetalSyncTimeoutMs];
-    assert(signaled && "Metal sync timeout in MetalStream::sync");
+    if (!signaled) {
+      assert(false && "Metal sync timeout in MetalStream::sync");
+    }
     if (gpu_start > 0 && gpu_end > 0) {
       g_gpu_exec_ns += (gpu_end - gpu_start) * 1e9;
       g_sched_wait_ns += (gpu_start - cpu_commit) * 1e9;
@@ -341,7 +321,9 @@ void MetalStream::sync() {
     [q commit:bufs count:1];
     [q signalEvent:sync_event value:val];
     BOOL signaled = [sync_event waitUntilSignaledValue:val timeoutMS:kMetalSyncTimeoutMs];
-    assert(signaled && "Metal sync timeout in MetalStream::sync");
+    if (!signaled) {
+      assert(false && "Metal sync timeout in MetalStream::sync");
+    }
   }
   uint64_t t1 = mach_absolute_time();
   g_sync_count++;
@@ -386,7 +368,9 @@ void MetalStream::wait_completed() {
   if (flushed) {
     uint64_t t0 = mach_absolute_time();
     BOOL signaled = [sync_event waitUntilSignaledValue:flush_event_val timeoutMS:kMetalSyncTimeoutMs];
-    assert(signaled && "Metal sync timeout in MetalStream::wait_completed");
+    if (!signaled) {
+      assert(false && "Metal sync timeout in MetalStream::wait_completed");
+    }
     uint64_t t1 = mach_absolute_time();
     g_sync_count++;
     g_sync_total_ns += mach_to_ns(t1 - t0);
@@ -420,10 +404,6 @@ void mtl_gemm_stats(int *tensor_ops_count) {
   g_gemm_dispatch_count = 0;
 }
 
-// ============================================================================
-// Lifecycle
-// ============================================================================
-
 void mtl_init() {
   @autoreleasepool {
     g_ctx.device = MTLCreateSystemDefaultDevice();
@@ -438,10 +418,9 @@ void mtl_init() {
     opts.languageVersion = MTLLanguageVersion4_0;
     g_ctx.library =
         [g_ctx.device newLibraryWithSource:src options:opts error:&error];
-    if (!g_ctx.library) {
-      NSLog(@"Metal shader compilation failed: %@", error);
-      assert(false && "MSL compilation failed");
-    }
+    if (!g_ctx.library)
+      throw std::runtime_error(error ? error.localizedDescription.UTF8String
+                                     : "MSL compilation failed");
 
     g_ctx.pipelines = [NSMutableDictionary new];
 
@@ -456,7 +435,9 @@ void mtl_init() {
       id<MTLLibrary> tensor_lib = [g_ctx.device newLibraryWithSource:tensor_src
                                                              options:tensor_opts
                                                                error:&tensor_err];
-      assert(tensor_lib && "tensor_ops library compilation failed");
+      if (!tensor_lib)
+        throw std::runtime_error(tensor_err ? tensor_err.localizedDescription.UTF8String
+                                            : "tensor_ops library compilation failed");
 
       // Helper: compile one PSO from the tensor_ops library, assert on failure.
       auto compile_pso = [&](const char *name) -> id<MTLComputePipelineState> {
@@ -472,11 +453,9 @@ void mtl_init() {
                                                        options:0
                                                     reflection:nil
                                                          error:&err];
-        if (!pso) {
-          fprintf(stderr, "[metal] tensor_ops PSO '%s' failed: %s\n",
-                  name, err.localizedDescription.UTF8String);
-          assert(false && "tensor_ops PSO compilation failed");
-        }
+        if (!pso)
+          throw std::runtime_error(err ? err.localizedDescription.UTF8String
+                                       : "tensor_ops PSO compilation failed");
         return pso;
       };
 
@@ -487,7 +466,6 @@ void mtl_init() {
       g_ctx.tensor_ops_gemm_nn_f16  = compile_pso("tensor_ops_gemm_nn_f16");
       g_ctx.tensor_ops_gemm_tn_f16  = compile_pso("tensor_ops_gemm_tn_f16");
 
-      printf("[metal] tensor_ops GEMM: NT=OK NN=OK TN=OK NT16=OK NN16=OK TN16=OK\n");
     }
 
     // Metal 4 reusable command buffer infrastructure
@@ -543,9 +521,6 @@ void mtl_init() {
     g_ctx.stream.begin();
     g_ctx.train_stream.begin();
 
-    printf("[metal] device: %s, unified memory: %s\n",
-           g_ctx.device.name.UTF8String,
-           g_ctx.device.hasUnifiedMemory ? "yes" : "no");
   }
 }
 
@@ -554,8 +529,6 @@ MetalContext *mtl_ctx() { return &g_ctx; }
 // Lazy-init scratch buffer for addmm temp workspace
 static char *g_addmm_temp_base;
 static int64_t g_addmm_temp_size;
-
-
 
 void *mtl_stream() { return &g_ctx.stream; }
 
@@ -606,8 +579,6 @@ void mtl_destroy_stream(void *stream) {
 static void ksplit_reset();  // forward decl — defined near K-split GEMM
 
 void mtl_destroy() {
-  fprintf(stderr, "[metal] destroy: starting teardown\n");
-
   // 1. Drain both command queues — no GPU work in flight.
   g_ctx.stream.end_compute();
   g_ctx.train_stream.end_compute();
@@ -621,7 +592,6 @@ void mtl_destroy() {
     g_addmm_temp_base = nullptr;
     g_addmm_temp_size = 0;
   }
-
 
   // 3. Release all Metal objects inside @autoreleasepool to force immediate
   //    deallocation. Device released LAST — MTLBuffers/pipelines reference it.
@@ -646,13 +616,7 @@ void mtl_destroy() {
     g_ctx.library = nil;
   }
   g_ctx.device = nil;
-
-  fprintf(stderr, "[metal] destroy: teardown complete\n");
 }
-
-// ============================================================================
-// Buffer management
-// ============================================================================
 
 id<MTLBuffer> mtl_wrap_allocator(Allocator *alloc) {
   assert(alloc->mem && "Allocator::create() not called");
@@ -662,12 +626,6 @@ id<MTLBuffer> mtl_wrap_allocator(Allocator *alloc) {
   for (auto &e : alloc->regs) {
     int64_t end =
         ((char *)*e.data_ptr - (char *)alloc->mem) + puf_numel(e.shape) * e.elem_size;
-    if (end > max_end)
-      max_end = end;
-  }
-  for (auto *t : alloc->legacy_regs) {
-    int64_t end =
-        (t->bytes - (char *)alloc->mem) + t->numel() * t->dtype_size;
     if (end > max_end)
       max_end = end;
   }
@@ -722,10 +680,6 @@ id<MTLBuffer> mtl_buffer_for_ptr(const void *ptr, NSUInteger *out_offset) {
   __builtin_unreachable();
 }
 
-// ============================================================================
-// Pipeline cache
-// ============================================================================
-
 id<MTLComputePipelineState> mtl_pipeline(const char *name) {
   std::lock_guard<std::mutex> lock(g_pipeline_mutex);
   NSString *key = [NSString stringWithUTF8String:name];
@@ -738,10 +692,9 @@ id<MTLComputePipelineState> mtl_pipeline(const char *name) {
 
   NSError *error = nil;
   pso = [g_ctx.device newComputePipelineStateWithFunction:fn error:&error];
-  if (!pso) {
-    NSLog(@"Pipeline creation failed for '%@': %@", key, error);
-    assert(false && "Pipeline creation failed");
-  }
+  if (!pso)
+    throw std::runtime_error(error ? error.localizedDescription.UTF8String
+                                   : "Pipeline creation failed");
 
   g_ctx.pipelines[key] = pso;
   return pso;
@@ -754,7 +707,6 @@ id<MTLComputePipelineState> mtl_pipeline(const char *name) {
 // Matches cuBLAS calling conventions in models.cu (row-major data,
 // column-major API trick: swap A/B and transpose flags).
 // ============================================================================
-
 
 // GPU training mode — when true, puf_mm forces GPU GEMM to avoid ensure_gpu_synced.
 // Set by train_impl to keep all training ops on the GPU encoder chain.
@@ -1318,5 +1270,3 @@ int cudaStreamQuery(void * /*stream*/) { return 0; }
 const char *cudaGetErrorString(int /*error*/) { return "metal-compat-stub"; }
 
 } // extern "C"
-
-

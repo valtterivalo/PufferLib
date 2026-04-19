@@ -1,17 +1,4 @@
-/**
- * @fileoverview CPU forward pass + sampling for rollout inference.
- *
- * Replaces the GPU dispatch path in net_callback_wrapper when cpu_inference
- * is enabled. Uses Accelerate cblas_sgemm (AMX/SME on Apple Silicon) for
- * GEMMs and scalar element-wise loops for the MinGRU gate + sampling.
- *
- * Eliminates all GPU syncs during rollout, enabling true CPU/GPU overlap
- * (CPU rollout runs in parallel with GPU training on separate hardware).
- *
- * Single-linear encoder/decoder, matching upstream CUDA.
- *
- * Included from metal_pufferlib.mm — not a standalone translation unit.
- */
+// CPU rollout inference path for Metal.
 
 #ifndef PUFFERLIB_CPU_INFERENCE_H
 #define PUFFERLIB_CPU_INFERENCE_H

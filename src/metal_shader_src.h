@@ -1,29 +1,3 @@
-/**
- * @fileoverview All Metal Shading Language (MSL) kernel sources as embedded
- * C strings, compiled JIT at runtime via [device newLibraryWithSource:...].
- *
- * Sections:
- *   1. Math ops (sigmoid, fast_tanh, tilde_relu, lerp, softplus, log_coeffs_and_values)
- *   2. Philox RNG (counter-based PRNG matching cuRAND)
- *   3. MinGRU inference (mingru_gate_inference)
- *   4. MinGRU training (mingru_scan_forward/backward_checkpointed)
- *   5. Sample logits (discrete + continuous, with action mask support)
- *   6. PPO loss — fused forward+backward + reduce
- *   7. Advantage (puff_advantage)
- *   9. Priority replay (prio_adv_reduction, prio_normalize, prio_imp_weights)
- *  10. Element-wise ops (fill, clamp, scale, axpy, add, nesterov, etc.)
- *  11. Optimizer kernels (compute_lr_scalars, muon_weight_update)
- *  12. Transpose kernels (transpose_f32, transpose_01, transpose_01_u64)
- *  13. Norm and clip (norm_f32, norm_reduce, clip_by_norm, normalize)
- *  14. Variance/mean (var_mean)
- *  15. Sum rows (sum_rows_to_f32)
- *  16. Decoder grad assembly (assemble_decoder_grad_f32)
- *  17. Select/copy + index copy (minibatch assembly)
- *  18. Cast (cast_u8_to_f32, cast_f64_to_f32)
- *
- * Float32 + fp16 variants. No bf16 (Metal has no bf16 compute).
- */
-
 #ifndef PUFFERLIB_METAL_SHADER_SRC_H
 #define PUFFERLIB_METAL_SHADER_SRC_H
 
@@ -35,10 +9,6 @@ static const char *get_all_metal_shader_source() {
 #include <metal_simdgroup_matrix>
 #include <metal_atomic>
 using namespace metal;
-
-// ============================================================================
-// Section 1: Math ops
-// ============================================================================
 
 inline float sigmoid_f(float x) {
     float z = exp(-abs(x));
@@ -141,10 +111,6 @@ inline void log_coeffs_and_values_bwd(float grad_lc, float grad_lv,
 inline float relu_f(float x) { return max(0.0f, x); }
 inline float relu_backward_f(float x, float grad_output) { return (x > 0.0f) ? grad_output : 0.0f; }
 
-// ============================================================================
-// Section 2: Philox RNG (counter-based PRNG matching cuRAND)
-// ============================================================================
-
 struct Philox4x32 {
     uint4 counter;
     uint2 key;
@@ -189,10 +155,6 @@ inline float philox_normal(float u1, float u2) {
     return sqrt(-2.0f * log(u1)) * cos(2.0f * M_PI_F * u2);
 }
 
-// ============================================================================
-// Section 3: MinGRU inference kernel
-// ============================================================================
-
 // mingru_gate_inference: fused chunk + tilde_relu + lerp + highway output gate
 // combined is (B, 3*H) = [hidden, gate, proj], state is (B, H)
 // x_in is (B, H) = input before projection
@@ -233,10 +195,6 @@ kernel void mingru_gate_inference(
     next_state[idx] = max(mingru_out, 1e-30f);
     out[idx] = proj_sig * mingru_out + (1.0f - proj_sig) * x;
 }
-
-// ============================================================================
-// Section 4: MinGRU training kernels (fused scan + logcumsumexp)
-// ============================================================================
 
 constant int CHECKPOINT_INTERVAL = 4;
 
@@ -454,12 +412,6 @@ kernel void mingru_scan_backward_checkpointed(
     grad_state[state_idx] = (state[state_idx] > 0.0f) ? (grad_z_0 / state[state_idx]) : 0.0f;
 }
 
-
-
-// ============================================================================
-// Section 5: Sample logits kernel
-// ============================================================================
-
 struct SampleParams {
     uint64_t seed;
     uint offset;
@@ -593,9 +545,6 @@ kernel void sample_logits_kernel(
     value_out[idx] = value[(int)idx * sp.value_stride];
 }
 
-// ============================================================================
-// Section 5b: Recompute logprobs from logits + sampled actions (GPU fast::exp)
-// ============================================================================
 //
 // Used when CPU inference produces actions but logprobs need GPU-precision
 // exp/log to match PPO training kernels. Without this, the importance ratio
@@ -655,10 +604,6 @@ kernel void recompute_logprobs_kernel(
     // Scalar joint logprob (matches CUDA kernels.cu:995)
     logprobs[(int)idx] = total_log_prob;
 }
-
-// ============================================================================
-// Section 6: PPO loss — fused forward+backward + reduce (static-native)
-// ============================================================================
 
 constant int PPO_THREADS = 256;
 constant int LOSS_PG = 0;
@@ -746,7 +691,6 @@ inline void ppo_continuous_head(
     out_logp = -0.5f * normalized * normalized - HALF_LOG_2PI - log_std;
     out_entropy = HALF_1_PLUS_LOG_2PI + log_std;
 }
-
 
 struct PPOFusedParams {
     int num_atns;
@@ -1018,10 +962,6 @@ kernel void ppo_loss_reduce_kernel(
     }
 }
 
-// ============================================================================
-// Section 8: Advantage kernel
-// ============================================================================
-
 struct AdvantageParams {
     float gamma;
     float lambda;
@@ -1060,10 +1000,6 @@ kernel void puff_advantage_kernel(
         adv[t] = lastpufferlam;
     }
 }
-
-// ============================================================================
-// Section 9: Priority replay kernels
-// ============================================================================
 
 struct PrioParams {
     float prio_alpha;
@@ -1216,10 +1152,6 @@ kernel void prio_imp_weights_kernel(
     }
 }
 
-// ============================================================================
-// Section 10: Element-wise ops
-// ============================================================================
-
 struct FillParams {
     float val;
     int n;
@@ -1368,10 +1300,6 @@ kernel void add_scalar(
     if (idx == 0) *ptr += p.val;
 }
 
-// ============================================================================
-// Section 11: Optimizer kernels
-// ============================================================================
-
 // Reads LR from device, computes neg_lr = -lr
 kernel void compute_lr_scalars_kernel(
     const device float* lr          [[buffer(0)]],
@@ -1385,7 +1313,6 @@ kernel void compute_lr_scalars_kernel(
 
 struct MuonParams {
     int n;
-    float weight_decay;
     float scale;
 };
 
@@ -1399,13 +1326,8 @@ kernel void muon_weight_update_kernel(
 ) {
     if ((int)idx >= p.n) return;
     float lr = *lr_ptr;
-    float wd_scale = 1.0f - lr * p.weight_decay;
-    wb[idx] = wb[idx] * wd_scale - lr * p.scale * up[idx];
+    wb[idx] = wb[idx] - lr * p.scale * up[idx];
 }
-
-// ============================================================================
-// Section 12: Transpose kernels
-// ============================================================================
 
 struct TransposeParams {
     int R;
@@ -1462,10 +1384,6 @@ kernel void transpose_01_u64(
     int c = rem % p.C;
     dst[b * p.A * p.C + a * p.C + c] = src[idx];
 }
-
-// ============================================================================
-// Section 13: Norm and clip
-// ============================================================================
 
 struct NormParams {
     int n;
@@ -1561,10 +1479,6 @@ kernel void normalize_f32(
     if ((int)idx < p.n) dst[idx] = dst[idx] * inv_norm;
 }
 
-// ============================================================================
-// Section 14: Variance / mean
-// ============================================================================
-
 struct VarMeanParams {
     int n;
 };
@@ -1615,10 +1529,6 @@ kernel void var_mean_kernel(
     if (tid == 0) *var_out = sdata[0] / float(p.n - 1);
 }
 
-// ============================================================================
-// Section 15: Sum rows
-// ============================================================================
-
 struct SumRowsParams {
     int R;
     int C;
@@ -1637,7 +1547,6 @@ kernel void sum_rows_to_f32_kernel(
     dst[col] = sum;
 }
 
-
 // --- Sum rows fp16 (for bias/LN param grads) ---
 
 kernel void sum_rows_f16_kernel(
@@ -1651,10 +1560,6 @@ kernel void sum_rows_f16_kernel(
     for (int r = 0; r < p.R; r++) sum += float(src[r * p.C + (int)col]);
     dst[col] = half(sum);
 }
-
-// ============================================================================
-// Section 16: Decoder grad assembly
-// ============================================================================
 
 struct AssembleDecoderGradParams {
     int B_TT;
@@ -1675,10 +1580,6 @@ kernel void assemble_decoder_grad_f32(
     int col = (int)idx % p.od_plus_1;
     dst[idx] = (col < p.od) ? grad_logits[row * p.od + col] : grad_value[row];
 }
-
-// ============================================================================
-// Section 17: Select/copy + index copy
-// ============================================================================
 
 struct SelectCopyParams {
     int obs_row_bytes;
@@ -1798,10 +1699,6 @@ kernel void index_gather_kernel(
     for (int b = 0; b < words; b++) d4[b] = s4[b];
     for (int b = words * 4; b < p.row_bytes; b++) d[b] = s[b];
 }
-
-// ============================================================================
-// Section 18: Cast u8 to f32
-// ============================================================================
 
 struct CastU8Params {
     int n;
@@ -1978,10 +1875,6 @@ kernel void reduce_ksplit(
     C[gid] = p.alpha * sum + p.beta * C[gid];
 }
 
-// ============================================================================
-// Section 22b: FP16 decoder gradient assembly (fp32 PPO grads → fp16 grad_out)
-// ============================================================================
-
 // Reads fp32 grad_logits and grad_value (from PPO kernel), writes fp16 grad_out.
 // grad_out[row * od1 + col] = (col < od) ? grad_logits[row * od + col] : grad_value[row]
 kernel void assemble_decoder_grad_f32_to_f16(
@@ -1998,10 +1891,6 @@ kernel void assemble_decoder_grad_f32_to_f16(
     // Clamp to fp16 range to prevent inf (Metal fp16 max ~65504, unlike CUDA bf16)
     grad_out[gid] = half(clamp(val, -65000.0f, 65000.0f));
 }
-
-// ============================================================================
-// Section 23: FP16 cast kernels
-// ============================================================================
 
 kernel void cast_f32_to_f16(
     device half* dst            [[buffer(0)]],
@@ -2022,10 +1911,6 @@ kernel void cast_f16_to_f32(
     if ((int)gid >= count) return;
     dst[gid] = float(src[gid]);
 }
-
-// ============================================================================
-// Section 25: FP16 MinGRU scan kernels — half I/O, float internal computation
-// ============================================================================
 
 kernel void mingru_scan_forward_checkpointed_fp16(
     device half* out                [[buffer(0)]],
@@ -2421,9 +2306,6 @@ kernel void steel_gemm(
     }
 }
 
-// ============================================================================
-// Section 26: Small GEMM — compute-encoder fallback for unaligned N
-// ============================================================================
 // Used when N doesn't meet tensor_ops alignment (N%32!=0).
 // One threadgroup per output row, threads partition N columns.
 // C(M,N) = A(M,K) @ B(N,K)^T, all row-major.

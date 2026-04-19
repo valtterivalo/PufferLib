@@ -1,17 +1,3 @@
-/**
- * @fileoverview Metal training loop for PufferLib static-native.
- *
- * Port of pufferlib.cu (CUDA) to Apple Silicon Metal. Key differences:
- * - No CUDA graphs (just re-run operations every step)
- * - No NCCL (single GPU only)
- * - No nvml (GPU utilization not reported)
- * - No bf16 (always PRECISION_FLOAT, USE_BF16 = false, PRECISION_SIZE = 4)
- * - Unified memory: memcpy/memset for host<->device (same physical memory)
- * - MetalStream passed as cudaStream_t (void*) through vtable function pointers
- * - Per-buffer Metal streams for rollout callback threads
- * - CPU timing via mach_absolute_time instead of CUDA events
- */
-
 #import "metal_platform.h"
 #include "metal_kernels.mm"
 #include "cpu_inference.h"
@@ -21,6 +7,7 @@
 #include <cstring>
 #include <memory>
 #include <mutex>
+#include <sys/time.h>
 #include <vector>
 
 static thread_local cudaStream_t tl_rollout_stream = 0;
@@ -33,18 +20,28 @@ static inline float prof_ms(uint64_t t0, uint64_t t1) {
     return (float)((double)(t1 - t0) * tb.numer / tb.denom / 1e6);
 }
 
-// ============================================================================
-// Observation dtype size
-// ============================================================================
-
 int obs_dtype_size(int dtype) {
-    if (dtype == FLOAT || dtype == INT) {
+    switch (dtype) {
+    case FLOAT:
         return sizeof(float);
-    }
-    if (dtype == DOUBLE) {
+    case INT:
+        return sizeof(int32_t);
+    case DOUBLE:
         return sizeof(double);
+    case UNSIGNED_CHAR:
+    case CHAR:
+        return sizeof(char);
+    default:
+        assert(false && "Unsupported observation dtype");
+        return 0;
     }
-    return sizeof(char);  // UNSIGNED_CHAR, CHAR
+}
+
+template <typename T>
+static inline void cpu_cast_to_f32(float* dst, const T* src, int count) {
+    for (int i = 0; i < count; i++) {
+        dst[i] = (float)src[i];
+    }
 }
 
 // ============================================================================
@@ -88,7 +85,6 @@ typedef struct {
     bool anneal_lr;
     // Optimizer (Muon only — Adam removed)
     float beta1;
-    float weight_decay;
     // Training
     int minibatch_size;
     float replay_ratio;
@@ -114,7 +110,6 @@ typedef struct {
     bool overlap;  // async training overlap: train on separate GPU queue
     bool cpu_inference;  // CPU forward pass during rollout (no GPU sync)
     bool train_fp16;     // fp16 activations/grads during training (rollout stays fp32)
-    int ns_iters;        // Newton-Schulz iterations in muon optimizer (1-5, default 5)
     // Single GPU (Metal has no multi-GPU, but kept for upstream compat)
     int gpu_id;
     // Threading
@@ -176,7 +171,7 @@ typedef struct {
 // PuffeRL state — Metal version (no CUDA graphs, NCCL, nvml, multi-stream)
 // ============================================================================
 
-typedef struct {
+struct PuffeRL {
     Policy* policy;
     PolicyWeights weights_fp32;
     PolicyWeights weights_fp16;  // fp16 training weights
@@ -249,7 +244,7 @@ typedef struct {
     FloatTensor train_logits;      // (total_agents, horizon, fused_cols)
     FloatTensor rollout_actions_f32; // (horizon, total_agents, num_atns)
     FloatTensor train_actions_f32;   // (total_agents, horizon, num_atns)
-} PuffeRL;
+};
 
 // ============================================================================
 // Logging
@@ -304,7 +299,7 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
     if (pufferl->has_mask) {
         // split copy: features prefix + mask suffix, row by row
         FloatTensor mask_dst = puf_slice(pufferl->rollout_masks, t, start, block_size);
-        assert(obs_env.dtype_size == sizeof(float) && "mask split only supports float32 obs");
+        assert(pufferl->env.obs_raw_dtype == FLOAT && "mask split only supports float32 obs");
         const float* src_base = (const float*)(obs_env.bytes + (int64_t)start * env_obs_width * sizeof(float));
         float* feat_base = obs_dst.data;
         float* mask_base = mask_dst.data;
@@ -321,13 +316,26 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
             .shape = {block_size, env_obs_width},
             .dtype_size = obs_env.dtype_size
         };
-        if (obs_env.dtype_size == sizeof(char)) {
+        int count = (int)obs_src.numel();
+        switch (pufferl->env.obs_raw_dtype) {
+        case UNSIGNED_CHAR:
             cpu_cast_u8_to_f32(obs_dst.data, (const uint8_t*)obs_src.bytes,
-                               (int)obs_src.numel());
-        } else if (obs_env.dtype_size == sizeof(float)) {
+                count);
+            break;
+        case CHAR:
+            cpu_cast_to_f32(obs_dst.data, (const int8_t*)obs_src.bytes, count);
+            break;
+        case FLOAT:
             memcpy(obs_dst.data, obs_src.bytes, obs_src.numel() * obs_src.dtype_size);
-        } else {
-            assert(false && "Unsupported obs dtype: only uint8 and float32 are supported");
+            break;
+        case INT:
+            cpu_cast_to_f32(obs_dst.data, (const int32_t*)obs_src.bytes, count);
+            break;
+        case DOUBLE:
+            cpu_cast_to_f32(obs_dst.data, (const double*)obs_src.bytes, count);
+            break;
+        default:
+            assert(false && "Unsupported observation dtype");
         }
     }
 
@@ -354,8 +362,6 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
     Policy* p = pufferl->policy;
     PolicyActivations& acts = pufferl->buffer_activations[buf];
     FloatTensor& act_f32_buf = pufferl->sample_act_f32_buffers[buf];
-    MinGRUWeights *mw = (MinGRUWeights *)infer_weights.network;
-
     // Mask pointer setup for sampling
     int fused_cols = ((DecoderWeights *)infer_weights.decoder)->output_dim + 1;
     const float* mask_ptr;
@@ -391,8 +397,16 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
         memcpy(act_slice.data, act_f32_buf.data, block_size * num_atns * sizeof(float));
     } else {
         // GPU path: Metal dispatch + sync (original behavior)
-        PrecisionTensor obs_pt = {.data = obs_dst.data, .shape = {obs_dst.shape[0], obs_dst.shape[1]}};
-        PrecisionTensor state_pt = {.data = (float*)state_puf.bytes, .shape = {state_puf.shape[0], state_puf.shape[1], state_puf.shape[2]}};
+        PrecisionTensor obs_pt = {
+            .data = obs_dst.data,
+            .shape = {obs_dst.shape[0], obs_dst.shape[1]},
+            .dtype_size = (int)sizeof(float),
+        };
+        PrecisionTensor state_pt = {
+            .data = (float*)state_puf.bytes,
+            .shape = {state_puf.shape[0], state_puf.shape[1], state_puf.shape[2]},
+            .dtype_size = state_puf.dtype_size,
+        };
         PrecisionTensor mingru_input = p->encoder.forward(infer_weights.encoder, acts.encoder, obs_pt, stream);
         PrecisionTensor h = p->network.forward(infer_weights.network, mingru_input, state_pt, acts.network, stream);
         PrecisionTensor dec_pt = p->decoder.forward(infer_weights.decoder, acts.decoder, h, stream);
@@ -419,9 +433,7 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
         memcpy(act_slice.data, act_f32_buf.data, block_size * num_atns * sizeof(float));
     }
 
-    // RNN state NOT zeroed on terminal — matches CUDA upstream behavior.
-    // CUDA deliberately removed state zeroing (pufferlib.cu:376).
-    // The MinGRU highway gating learns to ignore stale state.
+    // Match upstream: do not zero RNN state on terminal.
 
     uint64_t tp2 = mach_absolute_time();
 
@@ -490,10 +502,7 @@ void train_impl(PuffeRL& pufferl) {
     // Metal 4: ensure all rollout transposes are visible before consumers read them.
     mtl_barrier((MetalStream*)train_stream);
 
-    // Recompute logprobs when rollout and training use different precision:
-    //   cpu_inference: rollout uses IEEE expf, training uses GPU fast::exp
-    //   train_fp16: rollout uses fp32 weights, training uses fp16 weights
-    // Both cause PPO ratio != 1.0 at start of training without recompute.
+    // Recompute old logprobs when rollout and training use different math.
     if (pufferl.cpu_inference || pufferl.train_fp16) {
         puf_transpose_01(pufferl.train_logits, pufferl.rollout_logits, train_stream);
         puf_transpose_01(pufferl.train_actions_f32, pufferl.rollout_actions_f32, train_stream);
@@ -549,14 +558,12 @@ void train_impl(PuffeRL& pufferl) {
     }
 
     float anneal_beta = hypers.prio_beta0 + (1.0f - hypers.prio_beta0)
-        * (float)current_epoch / (float)total_epochs;
+        * prio_alpha * (float)current_epoch / (float)total_epochs;
 
     uint64_t tp_preloop1 = mach_absolute_time();
     pufferl.profile.accum[PROF_TRAIN_PRELOOP] += prof_ms(tp_preloop0, tp_preloop1);
 
-    // Single minibatch step: advantage → prio → select → forward → PPO → backward → muon.
-    // Used by both overlap and non-overlap paths. gpu_profile gates sync-before-timestamp
-    // for accurate per-phase GPU timing (defeats async, so only used in non-overlap + --profile).
+    // Single minibatch step shared by overlap and non-overlap.
     auto run_minibatch = [&](cudaStream_t s, uint32_t* rng_offset, bool gpu_profile) {
         if (gpu_profile) mtl_ensure_stream_synced(s);
         uint64_t tp0 = mach_absolute_time();
@@ -610,13 +617,21 @@ void train_impl(PuffeRL& pufferl) {
         PrecisionTensor obs_pt;
         PrecisionTensor state_pt;
         if (pufferl.train_fp16) {
-            obs_pt = {.data = (float*)pufferl.fp16_obs_buf.bytes, .shape = {pufferl.fp16_obs_buf.shape[0], pufferl.fp16_obs_buf.shape[1], pufferl.fp16_obs_buf.shape[2]}};
-            state_pt = {.data = (float*)pufferl.fp16_state_buf.bytes, .shape = {pufferl.fp16_state_buf.shape[0], pufferl.fp16_state_buf.shape[1], pufferl.fp16_state_buf.shape[2], pufferl.fp16_state_buf.shape[3]}};
+            obs_pt = {
+                .data = (float*)pufferl.fp16_obs_buf.bytes,
+                .shape = {pufferl.fp16_obs_buf.shape[0], pufferl.fp16_obs_buf.shape[1], pufferl.fp16_obs_buf.shape[2]},
+                .dtype_size = pufferl.fp16_obs_buf.dtype_size,
+            };
+            state_pt = {
+                .data = (float*)pufferl.fp16_state_buf.bytes,
+                .shape = {pufferl.fp16_state_buf.shape[0], pufferl.fp16_state_buf.shape[1], pufferl.fp16_state_buf.shape[2], pufferl.fp16_state_buf.shape[3]},
+                .dtype_size = pufferl.fp16_state_buf.dtype_size,
+            };
         } else {
             FloatTensor &mo = pufferl.train_buf.mb_obs;
-            obs_pt = {.data = mo.data, .shape = {mo.shape[0], mo.shape[1], mo.shape[2]}};
+            obs_pt = {.data = mo.data, .shape = {mo.shape[0], mo.shape[1], mo.shape[2]}, .dtype_size = (int)sizeof(float)};
             FloatTensor &ms = pufferl.train_buf.mb_state;
-            state_pt = {.data = ms.data, .shape = {ms.shape[0], ms.shape[1], ms.shape[2], ms.shape[3]}};
+            state_pt = {.data = ms.data, .shape = {ms.shape[0], ms.shape[1], ms.shape[2], ms.shape[3]}, .dtype_size = (int)sizeof(float)};
         }
         if (pufferl.train_fp16 && hypers.reset_state) puf_zero(&pufferl.fp16_state_buf, s);
 
@@ -626,10 +641,16 @@ void train_impl(PuffeRL& pufferl) {
         if (gpu_profile) mtl_ensure_stream_synced(s);
         uint64_t tp4 = mach_absolute_time();
 
-        // dec_pt is PrecisionTensor (FloatTensor on Metal); use directly as f32
-        PufTensor dec_puf_f32 = to_puf(dec_pt);
+        PufTensor dec_puf = to_puf(dec_pt);
+        if (dec_puf.dtype_size == 2) {
+            mtl_cast_f16_to_f32((float*)pufferl.fp32_dec_out_buf.bytes,
+                                dec_puf.bytes,
+                                (int)dec_puf.numel(), s);
+            mtl_barrier((MetalStream*)s);
+            dec_puf = pufferl.fp32_dec_out_buf;
+        }
 
-        PrecisionTensor p_logstd = {};
+        PrecisionTensor p_logstd = {.dtype_size = (int)sizeof(float)};
         if (pufferl.is_continuous) {
             p_logstd = ((DecoderWeights*)pufferl.weights_fp32.decoder)->logstd;
         }
@@ -647,7 +668,7 @@ void train_impl(PuffeRL& pufferl) {
             // When PER is active, pass full-batch advantages for unbiased var/mean.
             const FloatTensor *full_adv = (prio_alpha > 0.0f) ? &pufferl.advantages_puf : nullptr;
             PufTensor logstd_puf = to_puf(p_logstd);
-            ppo_loss_fwd_bwd(dec_puf_f32, logstd_puf, pufferl.train_buf,
+            ppo_loss_fwd_bwd(dec_puf, logstd_puf, pufferl.train_buf,
                 pufferl.act_sizes_puf, pufferl.losses_puf,
                 hypers.clip_coef, hypers.vf_clip_coef, hypers.vf_coef, hypers.ent_coef,
                 pufferl.ppo_bufs_puf, pufferl.is_continuous,
@@ -809,22 +830,13 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     auto pufferl = std::make_unique<PuffeRL>();
     pufferl->hypers = hypers;
 
-    fprintf(stderr, "[metal] init: starting Metal backend...\n");
-    // Initialize Metal backend
     mtl_init();
-    fprintf(stderr, "[metal] init: Metal ready\n");
 
-    // Seed
     pufferl->rng_seed = hypers.seed;
 
-    fprintf(stderr, "[metal] init: creating environments (agents=%d, buffers=%d)...\n",
-        hypers.total_agents, hypers.num_buffers);
-    // Create environments
     StaticVec* vec = create_environments(hypers.num_buffers, hypers.total_agents,
         env_name, vec_kwargs, env_kwargs, pufferl->env);
     pufferl->vec = vec;
-    fprintf(stderr, "[metal] init: environments created (vec=%p, size=%d)\n",
-        (void*)vec, vec->size);
 
     int num_action_heads = pufferl->env.actions.shape[1];
     int* raw_act_sizes = get_act_sizes();
@@ -846,14 +858,12 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
             num_discrete++;
         }
     }
-    assert((num_continuous == 0 || num_discrete == 0) &&
-        "Mixed continuous/discrete action spaces not supported");
-    pufferl->is_continuous = (num_continuous > 0);
-    if (pufferl->is_continuous) {
-        printf("Detected continuous action space with %d dimensions\n", num_action_heads);
-    } else {
-        printf("Detected discrete action space with %d heads\n", num_action_heads);
+    if (num_continuous > 0 && num_discrete > 0) {
+        assert(false && "Mixed continuous/discrete action spaces not supported");
     }
+    pufferl->is_continuous = (num_continuous > 0);
+    assert(!(hypers.train_fp16 && pufferl->is_continuous) &&
+        "train_fp16 currently supports discrete action spaces only");
 
     int env_obs_width = pufferl->env.obs.shape[1];
     int hidden_size = hypers.hidden_size;
@@ -868,12 +878,6 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     pufferl->mask_width = act_n;  // total mask width = sum of action head sizes
     // when mask is embedded, split it: encoder sees only the feature prefix
     int input_size = pufferl->has_mask ? (env_obs_width - act_n) : env_obs_width;
-    if (!pufferl->has_mask) {
-        fprintf(stderr, "[metal] init: no action mask (obs=%d), using all-ones\n", input_size);
-    } else {
-        fprintf(stderr, "[metal] init: external mask path (env_obs=%d, features=%d, mask=%d)\n",
-            env_obs_width, input_size, act_n);
-    }
 
     bool is_continuous = pufferl->is_continuous;
     int decoder_output_size = is_continuous ? num_action_heads : act_n;
@@ -980,13 +984,7 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     pufferl->cpu_inference = hypers.cpu_inference;
     pufferl->train_fp16 = hypers.train_fp16;
 
-    // ========================================================================
-    // fp16 training weights, activations, gradients
-    // Always allocated (fp16 weight copy used by muon regardless of train_fp16).
-    // When train_fp16=true: activations/grads use fp16, GEMM dispatch uses fp16 paths.
-    // When train_fp16=false: activations/grads use fp32, same as before.
-    // Rollout always stays fp32. Muon optimizer operates on fp32 master weights.
-    // ========================================================================
+    // fp16 training weights, activations, and gradients.
 
     int B_TT = minibatch_segments * hypers.horizon;
     int esz_fp16 = 2;
@@ -1045,9 +1043,9 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
         pufferl->fp16_obs_buf = {.shape = {minibatch_segments, hypers.horizon, input_size}, .dtype_size = esz_fp16};
         pufferl->fp32_dec_out_buf = {.shape = {minibatch_segments, hypers.horizon, dec_fused}, .dtype_size = esz_fp32};
         pufferl->fp16_state_buf = {.shape = {num_layers, minibatch_segments, 1, hidden_size}, .dtype_size = esz_fp16};
-        alloc_register_legacy(&pufferl->fp16_boundary_alloc, &pufferl->fp16_obs_buf);
-        alloc_register_legacy(&pufferl->fp16_boundary_alloc, &pufferl->fp32_dec_out_buf);
-        alloc_register_legacy(&pufferl->fp16_boundary_alloc, &pufferl->fp16_state_buf);
+        alloc_register(&pufferl->fp16_boundary_alloc, &pufferl->fp16_obs_buf);
+        alloc_register(&pufferl->fp16_boundary_alloc, &pufferl->fp32_dec_out_buf);
+        alloc_register(&pufferl->fp16_boundary_alloc, &pufferl->fp16_state_buf);
         pufferl->fp16_boundary_alloc.create();
         mtl_wrap_allocator(&pufferl->fp16_boundary_alloc);
     }
@@ -1084,7 +1082,7 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     pufferl->sample_act_f32_buffers.resize(num_buffers);
     for (int i = 0; i < num_buffers; i++) {
         pufferl->buffer_states[i] = {.shape = {num_layers, batch, hidden_size}, .dtype_size = p};
-        alloc_register_legacy(&alloc, &pufferl->buffer_states[i]);
+        alloc_register(&alloc, &pufferl->buffer_states[i]);
         pufferl->sample_act_f32_buffers[i] = {.shape = {batch, num_action_heads}};
         alloc_register(&alloc, &pufferl->sample_act_f32_buffers[i]);
     }
@@ -1140,8 +1138,7 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
 
     // Optimizer init (register buffers with shared allocator)
     muon_init(pufferl->muon, &fp32_params,
-        pufferl->param_fp32_puf, lr, beta1, (double)hypers.weight_decay,
-        hypers.ns_iters, alloc);
+        pufferl->param_fp32_puf, lr, beta1, alloc);
     // Single allocation for all registered buffers
     alloc.create();
 
@@ -1204,8 +1201,11 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
 
     pufferl->epoch = 0;
     pufferl->global_step = 0;
-    pufferl->start_time = 0;  // set by first rollouts() call
-    pufferl->last_log_time = 0;
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    double now = tv.tv_sec + tv.tv_usec * 1e-6;
+    pufferl->start_time = now;
+    pufferl->last_log_time = now;
     pufferl->last_log_step = 0;
 
     return pufferl;
@@ -1216,11 +1216,9 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
 // ============================================================================
 
 void close_impl(PuffeRL& pufferl) {
-    fprintf(stderr, "[metal] close: syncing GPU\n");
     sync_pending_train(pufferl);
     mtl_ensure_stream_synced((cudaStream_t)mtl_stream());
 
-    fprintf(stderr, "[metal] close: deleting structs\n");
     delete pufferl.muon;
 
     auto delete_weights = [](PolicyWeights& w) {
@@ -1241,10 +1239,8 @@ void close_impl(PuffeRL& pufferl) {
     }
     delete pufferl.policy;
 
-    fprintf(stderr, "[metal] close: closing vec env\n");
     static_vec_close(pufferl.vec);
 
-    fprintf(stderr, "[metal] close: destroying rollout streams\n");
     for (cudaStream_t s : pufferl.rollout_streams) {
         mtl_destroy_stream((void*)s);
     }
@@ -1253,10 +1249,8 @@ void close_impl(PuffeRL& pufferl) {
     // Release MTLBuffers BEFORE freeing the underlying memory they reference.
     // MTLBuffers created with newBufferWithBytesNoCopy need their backing pages
     // still mapped when ARC releases them (Metal unmaps the GPU address space).
-    fprintf(stderr, "[metal] close: destroying Metal context\n");
     mtl_destroy();
 
-    fprintf(stderr, "[metal] close: freeing allocators\n");
     pufferl.alloc_fp32.destroy();
     pufferl.alloc_fp16.destroy();
     pufferl.fp16_boundary_alloc.destroy();
@@ -1265,6 +1259,4 @@ void close_impl(PuffeRL& pufferl) {
     for (auto& a : pufferl.buffer_allocs) {
         a.destroy();
     }
-
-    fprintf(stderr, "[metal] close: done\n");
 }

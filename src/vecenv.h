@@ -1,7 +1,3 @@
-// vecenv.h - Static env binding: types + implementation
-// Types/declarations always available (for pufferlib.cu).
-// Implementations compiled only when OBS_SIZE is defined (by binding.c).
-
 #pragma once
 
 #include <stdlib.h>
@@ -19,8 +15,6 @@ extern "C" {
 
 #include "tensor.h"
 
-// Legacy OBS_TYPE constants (upstream 4.0 uses OBS_TENSOR_T instead, but our
-// Metal bindings still use OBS_TYPE). Kept for backward compat.
 #define FLOAT 1
 #define INT 2
 #define UNSIGNED_CHAR 3
@@ -58,7 +52,6 @@ static inline DictItem* dict_get_unsafe(Dict* dict, const char* key) {
 
 static inline DictItem* dict_get(Dict* dict, const char* key) {
     DictItem* item = dict_get_unsafe(dict, key);
-    if (item == NULL) printf("dict_get failed to find key: %s\n", key);
     assert(item != NULL);
     return item;
 }
@@ -75,7 +68,6 @@ static inline void dict_set(Dict* dict, const char* key, double value) {
     dict->size++;
 }
 
-// Forward declare CUDA stream type (guarded: puf_types.h may define it first on Metal)
 #ifndef CUDA_STREAM_T_DEFINED
 typedef struct CUstream_st* cudaStream_t;
 #endif
@@ -161,9 +153,6 @@ int my_put(void* env, Dict* kwargs);
 
 #ifdef OBS_SIZE
 
-// Compat shim: derive OBS_TENSOR_T from legacy OBS_TYPE if not already defined.
-// Upstream 4.0 bindings define OBS_TENSOR_T directly; our Metal bindings still
-// use the old OBS_TYPE enum. This bridge keeps both working.
 #ifndef OBS_TENSOR_T
   #if OBS_TYPE == FLOAT
     #define OBS_TENSOR_T FloatTensor
@@ -181,7 +170,6 @@ static inline size_t obs_element_size(void) {
     return sizeof(*t.data);
 }
 
-// Usually near the top, after any #includes
 #define _STRINGIFY(x)   #x
 #define  STRINGIFY(x)  _STRINGIFY(x)
 const char dtype_symbol[] = STRINGIFY(OBS_TENSOR_T);
@@ -230,9 +218,6 @@ struct StaticThreading {
     pthread_t* threads;
     float* accum;  // [num_buffers * NUM_EVAL_PROF] per-buffer timing in ms
 #ifdef __APPLE__
-    // dispatch_semaphore replaces spin-wait on buffer_states.
-    // each buffer has a "ready" semaphore (main->worker) and "done" semaphore (worker->main).
-    // this eliminates busy-wait CPU contention that caused 20-67% SPS variance on macOS.
     dispatch_semaphore_t* buf_ready;  // main signals -> worker wakes
     dispatch_semaphore_t* buf_done;   // worker signals -> main wakes
 #else
@@ -278,7 +263,6 @@ static void* static_omp_threadmanager(void* arg) {
 
     Env* envs = (Env*)vec->envs;
 
-    printf("Num workers: %d\n", num_workers);
     while (true) {
 #ifdef __APPLE__
         dispatch_semaphore_wait(threading->buf_ready[buf], DISPATCH_TIME_FOREVER);
@@ -684,9 +668,16 @@ void static_vec_render(StaticVec* vec, int env_id) {
 
 int get_obs_size(void) { return OBS_SIZE; }
 #ifdef OBS_TYPE
-int get_obs_type(void) { return OBS_TYPE; }  // legacy compat (Metal path)
+int get_obs_type(void) { return OBS_TYPE; }
 #else
-int get_obs_type(void) { return FLOAT; }
+int get_obs_type(void) {
+    if (strcmp(dtype_symbol, "FloatTensor") == 0) return FLOAT;
+    if (strcmp(dtype_symbol, "ByteTensor") == 0) return UNSIGNED_CHAR;
+    if (strcmp(dtype_symbol, "IntTensor") == 0) return INT;
+    if (strcmp(dtype_symbol, "LongTensor") == 0) return INT;
+    assert(false && "Unsupported observation tensor type");
+    return FLOAT;
+}
 #endif
 int get_num_atns(void) { return NUM_ATNS; }
 static int _act_sizes[] = ACT_SIZES;

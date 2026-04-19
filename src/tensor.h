@@ -29,10 +29,14 @@ typedef struct {
 typedef struct {
     precision_t* data;
     int64_t shape[PUF_MAX_DIMS];
+    int dtype_size;
 } PrecisionTensor;
 #else
-// Metal always uses fp32 — PrecisionTensor is FloatTensor.
-typedef FloatTensor PrecisionTensor;
+typedef struct {
+    float* data;
+    int64_t shape[PUF_MAX_DIMS];
+    int dtype_size;
+} PrecisionTensor;
 #define PRECISION_SIZE ((int)sizeof(float))
 #endif
 
