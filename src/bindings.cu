@@ -248,7 +248,7 @@ Dict* py_dict_to_c_dict(py::dict py_dict) {
 }
 
 // ============================================================================
-// Python-facing VecEnv: wraps StaticVec for use from python_pufferl.py.
+// Python-facing VecEnv wrapper.
 // After vec_step(), GPU buffers are current — Python wraps them zero-copy
 // with torch.from_blob(ptr, shape, dtype, device='cuda').
 // ============================================================================

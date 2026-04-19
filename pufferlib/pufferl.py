@@ -12,6 +12,7 @@ import ast
 import time
 import argparse
 import configparser
+from contextlib import contextmanager
 from collections import defaultdict
 import multiprocessing as mp
 from copy import deepcopy
@@ -175,15 +176,50 @@ def _resolve_backend(args):
         return PuffeRL
     return _C
 
+@contextmanager
+def _inferno_replay_env(args):
+    if args.get('env_name') != 'osrs_inferno':
+        yield
+        return
+
+    env_args = args.get('env', {})
+    record_path = env_args.get('record_best_replay_path', '')
+    play_path = env_args.get('play_replay_path', '')
+    if record_path and play_path:
+        raise ValueError('record_best_replay_path and play_replay_path cannot both be set')
+
+    old_record = os.environ.get('RECORD_REPLAY')
+    old_play = os.environ.get('PLAY_REPLAY')
+    try:
+        if record_path:
+            os.environ['RECORD_REPLAY'] = record_path
+        else:
+            os.environ.pop('RECORD_REPLAY', None)
+        if play_path:
+            os.environ['PLAY_REPLAY'] = play_path
+        else:
+            os.environ.pop('PLAY_REPLAY', None)
+        yield
+    finally:
+        if old_record is None:
+            os.environ.pop('RECORD_REPLAY', None)
+        else:
+            os.environ['RECORD_REPLAY'] = old_record
+        if old_play is None:
+            os.environ.pop('PLAY_REPLAY', None)
+        else:
+            os.environ['PLAY_REPLAY'] = old_play
+
 def _train_worker(args):
     backend = _resolve_backend(args)
-    pufferl = backend.create_pufferl(args)
-    args.pop('nccl_id', None)
-    while pufferl.global_step < args['train']['total_timesteps']:
-        backend.rollouts(pufferl)
-        backend.train(pufferl)
+    with _inferno_replay_env(args):
+        pufferl = backend.create_pufferl(args)
+        args.pop('nccl_id', None)
+        while pufferl.global_step < args['train']['total_timesteps']:
+            backend.rollouts(pufferl)
+            backend.train(pufferl)
 
-    backend.close(pufferl)
+        backend.close(pufferl)
 
 def _train(env_name, args, sweep_obj=None, result_queue=None, verbose=False):
     '''Single-GPU training worker. Process target for both DDP ranks and sweep trials.'''
@@ -209,66 +245,67 @@ def _train(env_name, args, sweep_obj=None, result_queue=None, verbose=False):
     log_dir = os.path.join(args['log_dir'], args['env_name'])
     os.makedirs(log_dir, exist_ok=True)
 
-    try:
-        pufferl = backend.create_pufferl(args)
-    except RuntimeError as e:
-        print(f'WARNING: {e}, skipping')
-        if result_queue is not None:
-            result_queue.put((args['gpu_id'], [], [], []))
-        return
+    with _inferno_replay_env(args):
+        try:
+            pufferl = backend.create_pufferl(args)
+        except RuntimeError as e:
+            print(f'WARNING: {e}, skipping')
+            if result_queue is not None:
+                result_queue.put((args['gpu_id'], [], [], []))
+            return
 
-    args.pop('nccl_id', None)
-    model_size = pufferl.num_params()
-    if verbose:
-        flat_logs = dict(unroll_nested_dict(backend.log(pufferl)))
-        print_dashboard(args, model_size, flat_logs, clear=True)
-
-    model_path = ''
-    flat_logs = {}
-    train_epochs = int(total_timesteps // (args['vec']['total_agents'] * args['train']['horizon']))
-    eval_epochs = train_epochs // 2
-    for epoch in range(train_epochs + eval_epochs):
-        backend.rollouts(pufferl)
-
-        if epoch < train_epochs:
-            backend.train(pufferl)
-
-        # checkpoint_interval <= 0 disables periodic saves (still writes final epoch)
-        interval = args['checkpoint_interval']
-        should_save = (interval > 0 and epoch % interval == 0) or epoch == train_epochs - 1
-        if should_save and sweep_obj is None:
-            model_path = os.path.join(checkpoint_dir, f'{pufferl.global_step:016d}.bin')
-            backend.save_weights(pufferl, model_path)
-
-        # Rate limit, but always log for eval to maintain determinism
-        if time.time() < pufferl.last_log_time + 0.6 and epoch < train_epochs - 1:
-            continue
-
-        logs = backend.eval_log(pufferl) if epoch >= train_epochs else backend.log(pufferl)
-        flat_logs = {**flat_logs, **dict(unroll_nested_dict(logs))}
-
+        args.pop('nccl_id', None)
+        model_size = pufferl.num_params()
         if verbose:
-            print_dashboard(args, model_size, flat_logs)
+            flat_logs = dict(unroll_nested_dict(backend.log(pufferl)))
+            print_dashboard(args, model_size, flat_logs, clear=True)
 
-        if target_key not in flat_logs:
-            continue
+        model_path = ''
+        flat_logs = {}
+        train_epochs = int(total_timesteps // (args['vec']['total_agents'] * args['train']['horizon']))
+        eval_epochs = train_epochs // 2
+        for epoch in range(train_epochs + eval_epochs):
+            backend.rollouts(pufferl)
 
-        if args['wandb']:
-            wandb.log(flat_logs, step=flat_logs['agent_steps'])
+            if epoch < train_epochs:
+                backend.train(pufferl)
 
-        if epoch < train_epochs:
-            all_logs.append(flat_logs)
+            # checkpoint_interval <= 0 disables periodic saves (still writes final epoch)
+            interval = args['checkpoint_interval']
+            should_save = (interval > 0 and epoch % interval == 0) or epoch == train_epochs - 1
+            if should_save and sweep_obj is None:
+                model_path = os.path.join(checkpoint_dir, f'{pufferl.global_step:016d}.bin')
+                backend.save_weights(pufferl, model_path)
 
-            if (sweep_obj is not None
-                    and pufferl.global_step > min(0.20*total_timesteps, 100_000_000) and
-                    sweep_obj.early_stop(logs, target_key)):
+            # Rate limit, but always log for eval to maintain determinism
+            if time.time() < pufferl.last_log_time + 0.6 and epoch < train_epochs - 1:
+                continue
+
+            logs = backend.eval_log(pufferl) if epoch >= train_epochs else backend.log(pufferl)
+            flat_logs = {**flat_logs, **dict(unroll_nested_dict(logs))}
+
+            if verbose:
+                print_dashboard(args, model_size, flat_logs)
+
+            if target_key not in flat_logs:
+                continue
+
+            if args['wandb']:
+                wandb.log(flat_logs, step=flat_logs['agent_steps'])
+
+            if epoch < train_epochs:
+                all_logs.append(flat_logs)
+
+                if (sweep_obj is not None
+                        and pufferl.global_step > min(0.20*total_timesteps, 100_000_000) and
+                        sweep_obj.early_stop(logs, target_key)):
+                    break
+            elif flat_logs['env/n'] > args['eval_episodes']:
                 break
-        elif flat_logs['env/n'] > args['eval_episodes']:
-            break
 
 
-    print_dashboard(args, model_size, flat_logs)
-    backend.close(pufferl)
+        print_dashboard(args, model_size, flat_logs)
+        backend.close(pufferl)
 
     if target_key not in flat_logs:
         if result_queue is not None:
@@ -408,36 +445,37 @@ def eval(env_name, args=None, load_path=None):
     args['train']['horizon'] = 1
 
     backend = _resolve_backend(args)
-    pufferl = backend.create_pufferl(args)
+    with _inferno_replay_env(args):
+        pufferl = backend.create_pufferl(args)
 
-    # Resolve load path. If --load-model-path is omitted, auto-resolve the latest
-    # checkpoint for this env so `puffer eval <env>` "just works" after a training
-    # run. Pass --load-model-path latest explicitly if you want a hard error when
-    # no checkpoint exists. Explicit file paths are loaded as-is.
-    load_path = load_path or args.get('load_model_path')
-    checkpoint_dir = args['checkpoint_dir']
-    pattern = os.path.join(checkpoint_dir, args['env_name'], '**', '*.bin')
-    if load_path is None:
-        candidates = glob.glob(pattern, recursive=True)
-        if candidates:
+        # Resolve load path. If --load-model-path is omitted, auto-resolve the latest
+        # checkpoint for this env so `puffer eval <env>` "just works" after a training
+        # run. Pass --load-model-path latest explicitly if you want a hard error when
+        # no checkpoint exists. Explicit file paths are loaded as-is.
+        load_path = load_path or args.get('load_model_path')
+        checkpoint_dir = args['checkpoint_dir']
+        pattern = os.path.join(checkpoint_dir, args['env_name'], '**', '*.bin')
+        if load_path is None:
+            candidates = glob.glob(pattern, recursive=True)
+            if candidates:
+                load_path = max(candidates, key=os.path.getctime)
+            else:
+                print(f'WARNING: no checkpoint found in {checkpoint_dir}/{args["env_name"]}/ '
+                      f'— running with random weights. '
+                      f'Train first with `puffer train {args["env_name"]}`.', flush=True)
+        elif load_path == 'latest':
+            candidates = glob.glob(pattern, recursive=True)
+            if not candidates:
+                raise FileNotFoundError(f'No .bin checkpoints found in {checkpoint_dir}/{args["env_name"]}/')
             load_path = max(candidates, key=os.path.getctime)
-        else:
-            print(f'WARNING: no checkpoint found in {checkpoint_dir}/{args["env_name"]}/ '
-                  f'— running with random weights. '
-                  f'Train first with `puffer train {args["env_name"]}`.', flush=True)
-    elif load_path == 'latest':
-        candidates = glob.glob(pattern, recursive=True)
-        if not candidates:
-            raise FileNotFoundError(f'No .bin checkpoints found in {checkpoint_dir}/{args["env_name"]}/')
-        load_path = max(candidates, key=os.path.getctime)
 
-    if load_path is not None:
-        backend.load_weights(pufferl, load_path)
-        print(f'Loaded weights from {load_path}', flush=True)
+        if load_path is not None:
+            backend.load_weights(pufferl, load_path)
+            print(f'Loaded weights from {load_path}', flush=True)
 
-    while True:
-        backend.render(pufferl, 0)
-        backend.rollouts(pufferl)
+        while True:
+            backend.render(pufferl, 0)
+            backend.rollouts(pufferl)
 
     backend.close(pufferl)
 
