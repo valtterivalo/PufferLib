@@ -254,6 +254,7 @@ if [ "$PLATFORM" = "Darwin" ]; then
         clang++ -c -fPIC -std=c++17 -ObjC++ -fobjc-arc \
             $PRECISION \
             -DWITH_METAL \
+            -DENV_NAME=$ENV \
             -DNPY_NO_DEPRECATED_API=NPY_1_7_API_VERSION \
             -DPLATFORM_DESKTOP \
             -I. -Isrc \
@@ -305,6 +306,7 @@ if [ "$PLATFORM" = "Darwin" ]; then
     # so _C.so doesn't pin to a different absolute path than torch.
     if [ "$OMP_SOURCE" = "torch" ]; then
         for INSTALL_NAME in \
+            "/opt/llvm-openmp/lib/libomp.dylib" \
             "/opt/homebrew/opt/libomp/lib/libomp.dylib" \
             "/usr/local/opt/libomp/lib/libomp.dylib"; do
             install_name_tool -change "$INSTALL_NAME" "@rpath/libomp.dylib" "$OUTPUT" 2>/dev/null || true
