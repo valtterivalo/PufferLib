@@ -833,9 +833,9 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
         }
         s->player.num_items_in_slot[GEAR_SLOT_AMMO] = 0;
     }
-    s->player.brew_doses = 0;     /* 8 pots x 4 doses */
+    s->player.brew_doses = 24;     /* 8 pots x 4 doses */
     s->player.restore_doses = 40;  /* 10 pots x 4 doses */
-    s->player.bastion_doses = 4;   /* 1 pot x 4 doses */
+    s->player.bastion_doses = 8;   /* 1 pot x 4 doses */
     s->player.stamina_doses = 4;   /* 1 pot x 4 doses */
     s->stamina_active_ticks = 0;
     s->player.prayer = PRAYER_NONE;
@@ -2542,7 +2542,11 @@ static float inf_compute_reward(InfernoState* s) {
            it overcounts by healers-healing-zuk-healers but that path doesn't
            exist, so it's effectively equal to the min-hp progress on healers. */
         progress = s->damage_zuk_healers_this_tick;
+        return 0.01f * s->damage_zuk_healers_this_tick;
+    } else {
+        return 0.01f * fmaxf(0.0f, s->damage_dealt_this_tick - s->hp_restored_this_tick);
     }
+
     if (progress > 0.0f)
         r += 0.001f * progress;
 
