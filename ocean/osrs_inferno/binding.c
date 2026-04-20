@@ -129,6 +129,7 @@ void c_step(Env* env) {
         env->log.episode_length += (float)s->tick;
         env->log.damage_dealt += s->total_damage_dealt;
         env->log.zuk_healer_damage += s->total_zuk_healer_damage;
+        env->log.jad_healer_damage += s->total_jad_healer_damage;
         env->log.damage_received += s->total_damage_received;
         env->log.hp_restored += s->total_hp_restored;
         env->log.wins += (s->winner == 0) ? 1.0f : 0.0f;
@@ -379,6 +380,15 @@ void my_init(Env* env, Dict* kwargs) {
     env->enc_state = ENCOUNTER_INFERNO.create();
     memset(&env->log, 0, sizeof(Log));
 
+    float damage_reward_coeff = dict_get(kwargs, "damage_reward_coeff")->value;
+    ENCOUNTER_INFERNO.put_float(env->enc_state, "damage_reward_coeff", damage_reward_coeff);
+
+    float shield_penalty_coeff = dict_get(kwargs, "shield_penalty_coeff")->value;
+    ENCOUNTER_INFERNO.put_float(env->enc_state, "shield_penalty_coeff", shield_penalty_coeff);
+
+    float tag_reward_coeff = dict_get(kwargs, "tag_reward_coeff")->value;
+    ENCOUNTER_INFERNO.put_float(env->enc_state, "tag_reward_coeff", tag_reward_coeff);
+
     DictItem* start_wave = dict_get_unsafe(kwargs, "start_wave");
     if (start_wave)
         ENCOUNTER_INFERNO.put_int(env->enc_state, "start_wave", (int)start_wave->value);
@@ -555,7 +565,9 @@ void my_log(Log* log, Dict* out) {
     dict_set(out, "behind_shield_pct", log->behind_shield_pct);
     dict_set(out, "zuk_hp_remaining", log->zuk_hp_remaining);
     dict_set(out, "hp_restored", log->hp_restored);
+    dict_set(out, "jad_healer_damage", log->jad_healer_damage);
     dict_set(out, "zuk_healer_damage", log->zuk_healer_damage);
+    dict_set(out, "jad_healer_damage", log->jad_healer_damage);
     dict_set(out, "deaths_to_jad", log->killed_by_type[INF_NPC_JAD] / log->n);
     float gear_switch_rate = (log->episode_length > 0.0f)
         ? log->gear_switches / log->episode_length : 0.0f;

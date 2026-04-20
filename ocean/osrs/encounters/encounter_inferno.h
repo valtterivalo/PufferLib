@@ -27,6 +27,7 @@
 #include "../data/npc_models.h"
 #include <string.h>
 #include <stdio.h>
+#include <assert.h>
 
 /* ======================================================================== */
 /* arena constants                                                           */
@@ -51,7 +52,7 @@
 static const int INF_PILLAR_POS[INF_NUM_PILLARS][2] = {
     { 21, 20 },  /* south pillar */
     { 11, 34 },  /* west pillar */
-    { 28, 36 },  /* north pillar */
+    { 11, 34 },  /* north pillar */
 };
 
 /* 9 mob spawn positions (shuffled per wave) */
@@ -570,8 +571,13 @@ typedef struct {
     /* reward tracking */
     float reward;
     float episode_return;  /* accumulated reward over entire episode */
+    float shield_damage_this_tick;
     float damage_dealt_this_tick;
     float damage_zuk_healers_this_tick;
+    float damage_jad_healers_this_tick;
+    int healer_tags_this_tick;
+    float damage_zuk_healer_tags_this_tick;
+    float damage_jad_healer_tags_this_tick;
     float damage_received_this_tick;
     /* HP restored to the enemy side this tick — kept as diagnostic only.
        the reward signal now uses min-HP progress, which inherently ignores
@@ -585,9 +591,15 @@ typedef struct {
     int wave_completed_this_tick;
     int pillar_lost_this_tick;     /* -1 = none, 0-2 = which pillar was destroyed */
 
+    // Rewards
+    float damage_reward_coeff;
+    float shield_penalty_coeff;
+    float tag_reward_coeff;
+
     /* cumulative stats for diagnostics */
     float total_damage_dealt;
     float total_zuk_healer_damage;
+    float total_jad_healer_damage;
     float total_damage_received;
     float total_hp_restored;   /* cumulative HP restored to enemies this episode */
     int total_waves_cleared;
@@ -784,6 +796,9 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
     const CollisionMap* saved_cmap = s->collision_map;
     int saved_wox = s->world_offset_x;
     int saved_woy = s->world_offset_y;
+    float saved_tag_reward_coeff = s->tag_reward_coeff;
+    float saved_damage_reward_coeff = s->damage_reward_coeff;
+    float saved_shield_penalty_coeff = s->shield_penalty_coeff;
     memset(s, 0, sizeof(InfernoState));
     s->log = saved_log;
     s->start_wave = saved_start;
@@ -791,6 +806,10 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
     s->world_offset_x = saved_wox;
     s->world_offset_y = saved_woy;
     s->rng_state = encounter_resolve_seed(saved_rng, seed);
+
+    s->tag_reward_coeff = saved_tag_reward_coeff;
+    s->damage_reward_coeff = saved_damage_reward_coeff;
+    s->shield_penalty_coeff = saved_shield_penalty_coeff;
 
     /* human click-to-move: no destination after reset */
     s->player_dest_x = -1;
@@ -1381,8 +1400,12 @@ static void inf_npc_attack(InfernoState* s, int idx) {
                 max_hit = osrs_npc_melee_max_hit(stats->str_level, stats->melee_str_bonus);
             }
             int dmg = encounter_rand_int(&s->rng_state, max_hit + 1);
+            int target_hp_before = target->hp;
             encounter_damage_npc(&target->hp, &target->hit_landed_this_tick,
                                  &target->hit_damage, dmg);
+            if (target->type == INF_NPC_ZUK_SHIELD && target_hp_before > target->hp) {
+                s->shield_damage_this_tick += (float)(target_hp_before - target->hp);
+            }
             /* shield death: redirect all NPCs targeting it to the player */
             if (target->hp <= 0 && target->type == INF_NPC_ZUK_SHIELD) {
                 target->active = 0;
@@ -2496,6 +2519,7 @@ static float inf_compute_reward(InfernoState* s) {
        blow's damage is counted in total_damage_received */
     s->total_damage_dealt += s->damage_dealt_this_tick;
     s->total_zuk_healer_damage += s->damage_zuk_healers_this_tick;
+    s->total_jad_healer_damage += s->damage_jad_healers_this_tick;
     s->total_damage_received += s->damage_received_this_tick;
     s->total_hp_restored += s->hp_restored_this_tick;
 
@@ -2524,32 +2548,21 @@ static float inf_compute_reward(InfernoState* s) {
        zeroed so the agent doesn't learn to race zuk while healers tick him
        back up. once the healers are cleared, all progress (including zuk's)
        flows normally. */
-    int zuk_healers_alive = 0;
+    int zuk_healers_healing = 0;
+    int jad_healers_healing = 0;
     for (int i = 0; i < INF_MAX_NPCS; i++) {
-        if (s->npcs[i].active && s->npcs[i].type == INF_NPC_HEALER_ZUK && s->npcs[i].death_ticks == 0) {
-            zuk_healers_alive = 1;
-            break;
+        if (s->npcs[i].active && s->npcs[i].death_ticks == 0) {
+            if (s->npcs[i].type == INF_NPC_HEALER_ZUK && s->npcs[i].aggro_target >= 0) zuk_healers_healing = 1;
+            if (s->npcs[i].type == INF_NPC_HEALER_JAD && s->npcs[i].aggro_target >= 0) jad_healers_healing = 1;
         }
     }
 
-    float progress = s->min_hp_progress_this_tick;
-    if (zuk_healers_alive) {
-        /* recompute progress ignoring zuk itself so only healer damage counts. */
-        progress = 0.0f;
-        /* re-walk the delta we just banked: we no longer have per-npc deltas,
-           so use the already-banked damage_zuk_healers_this_tick which tracks
-           landed damage on zuk-healers specifically. this is a rough match —
-           it overcounts by healers-healing-zuk-healers but that path doesn't
-           exist, so it's effectively equal to the min-hp progress on healers. */
-        progress = s->damage_zuk_healers_this_tick;
-        return 0.01f * s->damage_zuk_healers_this_tick;
+    if (zuk_healers_healing || jad_healers_healing) {
+        r = s->tag_reward_coeff * (float)s->healer_tags_this_tick;
     } else {
-        return 0.01f * fmaxf(0.0f, s->damage_dealt_this_tick - s->hp_restored_this_tick);
+        r = s->damage_reward_coeff * fmaxf(0.0f, s->damage_dealt_this_tick - s->hp_restored_this_tick);
     }
-
-    if (progress > 0.0f)
-        r += 0.001f * progress;
-
+    r -= s->shield_penalty_coeff * s->shield_damage_this_tick;
     return r;
 }
 
@@ -2565,6 +2578,8 @@ static void inf_step(EncounterState* state, const int* actions) {
     s->reward = 0.0f;
     s->damage_dealt_this_tick = 0.0f;
     s->damage_zuk_healers_this_tick = 0.0f;
+    s->damage_jad_healers_this_tick = 0.0f;
+    s->healer_tags_this_tick = 0;
     s->damage_received_this_tick = 0.0f;
     s->hp_restored_this_tick = 0.0f;
     s->min_hp_progress_this_tick = 0.0f;
@@ -2626,12 +2641,19 @@ static void inf_step(EncounterState* state, const int* actions) {
                 if (s->npcs[i].type == INF_NPC_HEALER_ZUK) {
                     s->damage_zuk_healers_this_tick += (s->damage_dealt_this_tick - dmg_before);
                 }
+                if (s->npcs[i].type == INF_NPC_HEALER_JAD) {
+                    s->damage_jad_healers_this_tick += (s->damage_dealt_this_tick - dmg_before);
+                }
                 s->npcs[i].hit_spell_type = spell;
                 /* tagging: aggro switches on projectile LAND, not FIRE. matches
                    osrs-sdk Unit.ts:645 shouldChangeAggro, called post-damage.
                    without this, healers/set-spawns clear aggro on the fire tick
                    and never land a heal/shield-hit before switching to player. */
                 if (s->npcs[i].aggro_target != -1) {
+                    if (s->npcs[i].type == INF_NPC_HEALER_ZUK
+                            || s->npcs[i].type == INF_NPC_HEALER_JAD) {
+                        s->healer_tags_this_tick++;
+                    }
                     s->npcs[i].aggro_target = -1;
                     s->npcs[i].stun_timer = 2;  /* flinch: 2-tick delay on aggro switch */
                 }
@@ -2816,6 +2838,42 @@ static const float INF_NPC_MAX_HIT_NORM[INF_NUM_NPC_TYPES] = {
     [INF_NPC_ZUK_SHIELD] = 0.0f,
 };
 
+static void inf_refresh_obs_slots(InfernoState* s) {
+    int obs_slots[INF_OBS_NPCS];
+    for (int j = 0; j < INF_OBS_NPCS; j++) obs_slots[j] = -1;
+
+    int slot_counts[INF_NUM_NPC_TYPES] = {0};
+    int slot_offsets[INF_NUM_NPC_TYPES];
+    int slot_max[INF_NUM_NPC_TYPES];
+
+    slot_offsets[INF_NPC_MAGER] = 0; slot_max[INF_NPC_MAGER] = 2;
+    slot_offsets[INF_NPC_RANGER] = 2; slot_max[INF_NPC_RANGER] = 2;
+    slot_offsets[INF_NPC_MELEER] = 4; slot_max[INF_NPC_MELEER] = 2;
+    slot_offsets[INF_NPC_BLOB] = 6; slot_max[INF_NPC_BLOB] = 2;
+    slot_offsets[INF_NPC_BAT] = 8; slot_max[INF_NPC_BAT] = 2;
+    slot_offsets[INF_NPC_BLOB_MAGE] = 10; slot_max[INF_NPC_BLOB_MAGE] = 2;
+    slot_offsets[INF_NPC_BLOB_RANGE] = 12; slot_max[INF_NPC_BLOB_RANGE] = 2;
+    slot_offsets[INF_NPC_BLOB_MELEE] = 14; slot_max[INF_NPC_BLOB_MELEE] = 2;
+    slot_offsets[INF_NPC_NIBBLER] = 16; slot_max[INF_NPC_NIBBLER] = 6;
+    slot_offsets[INF_NPC_JAD] = 22; slot_max[INF_NPC_JAD] = 3;
+    slot_offsets[INF_NPC_ZUK] = 25; slot_max[INF_NPC_ZUK] = 1;
+    slot_offsets[INF_NPC_ZUK_SHIELD] = 26; slot_max[INF_NPC_ZUK_SHIELD] = 1;
+    slot_offsets[INF_NPC_HEALER_JAD] = 27; slot_max[INF_NPC_HEALER_JAD] = 6;
+    slot_offsets[INF_NPC_HEALER_ZUK] = 33; slot_max[INF_NPC_HEALER_ZUK] = 4;
+
+    for (int n = 0; n < INF_MAX_NPCS; n++) {
+        InfNPC* npc = &s->npcs[n];
+        if (npc->active && npc->death_ticks == 0) {
+            int t = npc->type;
+            if (slot_counts[t] < slot_max[t]) {
+                obs_slots[slot_offsets[t] + slot_counts[t]] = n;
+                slot_counts[t]++;
+            }
+        }
+    }
+    for (int j = 0; j < INF_OBS_NPCS; j++) s->current_obs_slots[j] = obs_slots[j];
+}
+
 static void inf_write_obs(EncounterState* state, float* obs) {
     InfernoState* s = (InfernoState*)state;
     memset(obs, 0, INF_NUM_OBS * sizeof(float));
@@ -2991,42 +3049,8 @@ static void inf_write_obs(EncounterState* state, float* obs) {
         obs[i++] = (float)(s->pillars[p].y - py) / (float)INF_ARENA_HEIGHT;
     }
 
-    int obs_slots[INF_OBS_NPCS];
-    for (int j = 0; j < INF_OBS_NPCS; j++) obs_slots[j] = -1;
-    
-    int slot_counts[INF_NUM_NPC_TYPES] = {0};
-    int slot_offsets[INF_NUM_NPC_TYPES];
-    int slot_max[INF_NUM_NPC_TYPES];
-    
-    slot_offsets[INF_NPC_MAGER] = 0; slot_max[INF_NPC_MAGER] = 2;
-    slot_offsets[INF_NPC_RANGER] = 2; slot_max[INF_NPC_RANGER] = 2;
-    slot_offsets[INF_NPC_MELEER] = 4; slot_max[INF_NPC_MELEER] = 2;
-    slot_offsets[INF_NPC_BLOB] = 6; slot_max[INF_NPC_BLOB] = 2;
-    slot_offsets[INF_NPC_BAT] = 8; slot_max[INF_NPC_BAT] = 2;
-    slot_offsets[INF_NPC_BLOB_MAGE] = 10; slot_max[INF_NPC_BLOB_MAGE] = 2;
-    slot_offsets[INF_NPC_BLOB_RANGE] = 12; slot_max[INF_NPC_BLOB_RANGE] = 2;
-    slot_offsets[INF_NPC_BLOB_MELEE] = 14; slot_max[INF_NPC_BLOB_MELEE] = 2;
-    slot_offsets[INF_NPC_NIBBLER] = 16; slot_max[INF_NPC_NIBBLER] = 6;
-    slot_offsets[INF_NPC_JAD] = 22; slot_max[INF_NPC_JAD] = 3;
-    slot_offsets[INF_NPC_ZUK] = 25; slot_max[INF_NPC_ZUK] = 1;
-    slot_offsets[INF_NPC_ZUK_SHIELD] = 26; slot_max[INF_NPC_ZUK_SHIELD] = 1;
-    slot_offsets[INF_NPC_HEALER_JAD] = 27; slot_max[INF_NPC_HEALER_JAD] = 6;
-    slot_offsets[INF_NPC_HEALER_ZUK] = 33; slot_max[INF_NPC_HEALER_ZUK] = 4;
-
-    for (int n = 0; n < INF_MAX_NPCS; n++) {
-        InfNPC* npc = &s->npcs[n];
-        if (npc->active && npc->death_ticks == 0) {
-            int t = npc->type;
-            if (slot_counts[t] < slot_max[t]) {
-                obs_slots[slot_offsets[t] + slot_counts[t]] = n;
-                slot_counts[t]++;
-            }
-        }
-    }
-    for (int j = 0; j < INF_OBS_NPCS; j++) {
-        s->current_obs_slots[j] = obs_slots[j];
-    }
-
+    inf_refresh_obs_slots(s);
+   
     /* NPCs: variable features per slot, fixed order */
     int slot_types[INF_OBS_NPCS];
     int st_idx = 0;
@@ -3046,7 +3070,7 @@ static void inf_write_obs(EncounterState* state, float* obs) {
     for (int j = 0; j < 4; j++) slot_types[st_idx++] = INF_NPC_HEALER_ZUK;
 
     for (int k = 0; k < INF_OBS_NPCS; k++) {
-        int n = obs_slots[k];
+        int n = s->current_obs_slots[k];
         int type = slot_types[k];
         
         int has_style = (type == INF_NPC_BLOB || type == INF_NPC_JAD);
@@ -3387,10 +3411,15 @@ static void inf_put_int(EncounterState* state, const char* key, int value) {
     else if (strcmp(key, "world_offset_y") == 0) s->world_offset_y = value;
     else if (strcmp(key, "player_dest_x") == 0) s->player_dest_x = value;
     else if (strcmp(key, "player_dest_y") == 0) s->player_dest_y = value;
+    else assert(false && "unknown int put");
 }
 
 static void inf_put_float(EncounterState* state, const char* key, float value) {
-    (void)state; (void)key; (void)value;
+    InfernoState* s = (InfernoState*)state;
+    if (strcmp(key, "damage_reward_coeff") == 0) s->damage_reward_coeff = value;
+    else if (strcmp(key, "shield_penalty_coeff") == 0) s->shield_penalty_coeff = value;
+    else if (strcmp(key, "tag_reward_coeff") == 0) s->tag_reward_coeff = value;
+    else assert(false && "unknown float put");
 }
 
 static void inf_put_ptr(EncounterState* state, const char* key, void* value) {
@@ -3414,6 +3443,7 @@ static void* inf_get_log(EncounterState* state) {
         s->log.wins += (s->winner == 0) ? 1.0f : 0.0f;
         s->log.damage_dealt += s->total_damage_dealt;
         s->log.zuk_healer_damage += s->total_zuk_healer_damage;
+        s->log.jad_healer_damage += s->total_jad_healer_damage;
         s->log.damage_received += s->total_damage_received;
         s->log.wave += (float)s->wave;
         s->log.prayer_correct += (float)s->total_prayer_correct;
@@ -3662,6 +3692,7 @@ static void inf_translate_human_input(HumanInput* hi, int* actions, EncounterSta
     encounter_translate_prayer(hi, actions, INF_HEAD_PRAYER);
     encounter_translate_offensive_prayer(hi, actions, INF_HEAD_OFFENSIVE);
     InfernoState* s = (InfernoState*)state;
+    inf_refresh_obs_slots(s);
     /* map raw pending_target_idx to the observation slot the agent sees */
     if (hi->pending_target_idx >= 0) {
         int found_slot = -1;
