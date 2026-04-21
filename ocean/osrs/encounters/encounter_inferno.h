@@ -491,12 +491,12 @@ static const uint8_t INF_MAGE_LOADOUT[NUM_GEAR_SLOTS] = {
     [GEAR_SLOT_NECK]   = ITEM_OCCULT_NECKLACE,
     [GEAR_SLOT_AMMO]   = ITEM_DRAGON_ARROWS,
     [GEAR_SLOT_WEAPON] = ITEM_KODAI_WAND,
-    [GEAR_SLOT_SHIELD] = ITEM_CRYSTAL_SHIELD,
-    [GEAR_SLOT_BODY]   = ITEM_ANCESTRAL_TOP,
-    [GEAR_SLOT_LEGS]   = ITEM_ANCESTRAL_BOTTOM,
-    [GEAR_SLOT_HANDS]  = ITEM_ZARYTE_VAMBRACES,
-    [GEAR_SLOT_FEET]   = ITEM_PEGASIAN_BOOTS,
-    [GEAR_SLOT_RING]   = ITEM_RING_OF_SUFFERING_RI,
+    [GEAR_SLOT_SHIELD] = ITEM_ELYSIAN_SPIRIT_SHIELD,
+    [GEAR_SLOT_BODY]   = ITEM_VIRTUS_ROBE_TOP,
+    [GEAR_SLOT_LEGS]   = ITEM_VIRTUS_ROBE_BOTTOM,
+    [GEAR_SLOT_HANDS]  = ITEM_CONFLICTION_GAUNTLETS,
+    [GEAR_SLOT_FEET]   = ITEM_AVERNIC_TREADS,
+    [GEAR_SLOT_RING]   = ITEM_VENATOR_RING,
 };
 
 static const uint8_t INF_RANGE_TBOW_LOADOUT[NUM_GEAR_SLOTS] = {
@@ -509,8 +509,8 @@ static const uint8_t INF_RANGE_TBOW_LOADOUT[NUM_GEAR_SLOTS] = {
     [GEAR_SLOT_BODY]   = ITEM_MASORI_BODY_F,
     [GEAR_SLOT_LEGS]   = ITEM_MASORI_CHAPS_F,
     [GEAR_SLOT_HANDS]  = ITEM_ZARYTE_VAMBRACES,
-    [GEAR_SLOT_FEET]   = ITEM_PEGASIAN_BOOTS,
-    [GEAR_SLOT_RING]   = ITEM_RING_OF_SUFFERING_RI,
+    [GEAR_SLOT_FEET]   = ITEM_AVERNIC_TREADS,
+    [GEAR_SLOT_RING]   = ITEM_VENATOR_RING,
 };
 
 static const uint8_t INF_RANGE_BP_LOADOUT[NUM_GEAR_SLOTS] = {
@@ -523,8 +523,8 @@ static const uint8_t INF_RANGE_BP_LOADOUT[NUM_GEAR_SLOTS] = {
     [GEAR_SLOT_BODY]   = ITEM_MASORI_BODY_F,
     [GEAR_SLOT_LEGS]   = ITEM_MASORI_CHAPS_F,
     [GEAR_SLOT_HANDS]  = ITEM_ZARYTE_VAMBRACES,
-    [GEAR_SLOT_FEET]   = ITEM_PEGASIAN_BOOTS,
-    [GEAR_SLOT_RING]   = ITEM_RING_OF_SUFFERING_RI,
+    [GEAR_SLOT_FEET]   = ITEM_AVERNIC_TREADS,
+    [GEAR_SLOT_RING]   = ITEM_VENATOR_RING,
 };
 
 /* pointer array for loadout switching */
@@ -535,10 +535,6 @@ static const uint8_t* const INF_LOADOUTS[INF_NUM_WEAPON_SETS] = {
 };
 
 /* tank overlay items (justiciar) */
-#define INF_TANK_HEAD ITEM_JUSTICIAR_FACEGUARD
-#define INF_TANK_BODY ITEM_JUSTICIAR_CHESTGUARD
-#define INF_TANK_LEGS ITEM_JUSTICIAR_LEGGUARDS
-
 /* ======================================================================== */
 /* encounter state                                                           */
 /* ======================================================================== */
@@ -631,7 +627,7 @@ typedef struct {
     /* gear state */
     InfWeaponSet weapon_set;
     EncounterLoadoutStats loadout_stats[INF_NUM_WEAPON_SETS];
-    int armor_tank;            /* 1 = justiciar overlay active */
+    int armor_tank;            /* reserved loadout slot; justiciar overlay removed */
     int stamina_active_ticks;  /* countdown for stamina effect */
     int spell_choice;          /* 0 = blood barrage, 1 = ice barrage */
 
@@ -812,17 +808,13 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
     s->player.current_attack = 99;
     s->player.current_strength = 99;
     s->player.current_defence = 99;
-    /* start in mage gear (kodai + crystal shield + ancestral) */
+    osrs_item_effect_state_init(&s->player.item_effect_state);
+    /* start in mage gear */
     s->weapon_set = INF_GEAR_MAGE;
     s->armor_tank = 0;
     encounter_apply_loadout(&s->player, INF_MAGE_LOADOUT, GEAR_MAGE);
     {
-        uint8_t tank_extra[NUM_GEAR_SLOTS];
-        memset(tank_extra, ITEM_NONE, NUM_GEAR_SLOTS);
-        tank_extra[GEAR_SLOT_HEAD] = INF_TANK_HEAD;
-        tank_extra[GEAR_SLOT_BODY] = INF_TANK_BODY;
-        tank_extra[GEAR_SLOT_LEGS] = INF_TANK_LEGS;
-        encounter_populate_inventory(&s->player, INF_LOADOUTS, INF_NUM_WEAPON_SETS, tank_extra);
+        encounter_populate_inventory(&s->player, INF_LOADOUTS, INF_NUM_WEAPON_SETS, NULL);
 
         /* Ammo slot items (dragon darts, dragon arrows) should NOT appear as
            swappable inventory items — in real OSRS darts live inside the
@@ -842,7 +834,6 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
     osrs_interaction_init(&s->interaction);
     s->player.spec_armed = 0;
     s->player.special_energy = 100;
-    s->player.special_regen_ticks = 0;
     s->player.run_energy = 10000;  /* full run energy (OSRS stores as 0-10000) */
     s->last_hit_by_type = -1;
 
@@ -2138,11 +2129,8 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
         GearSet gs = (new_set == INF_GEAR_MAGE) ? GEAR_MAGE : GEAR_RANGED;
         encounter_apply_loadout(&s->player, INF_LOADOUTS[new_set], gs);
     } else if (gear_act == 4) {
-        /* tank overlay: justiciar head/body/legs on current loadout */
-        s->armor_tank = 1;
-        s->player.equipped[GEAR_SLOT_HEAD] = INF_TANK_HEAD;
-        s->player.equipped[GEAR_SLOT_BODY] = INF_TANK_BODY;
-        s->player.equipped[GEAR_SLOT_LEGS] = INF_TANK_LEGS;
+        /* reserved tank slot kept in the action space for compatibility */
+        s->armor_tank = 0;
     }
 
     /* auto-detect gear switch from direct inventory equip (human mode).
@@ -2172,7 +2160,7 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
         s->spell_choice = ENCOUNTER_SPELL_BLOOD;
 
     /* special energy regen: 10 energy every 50 ticks (30 seconds) */
-    encounter_tick_spec_regen(&s->player, 0);
+    encounter_tick_spec_regen(&s->player);
 
     /* spec toggle: arm/disarm (does NOT interrupt interaction) */
     if (actions[INF_HEAD_SPEC] == 1)
@@ -2332,7 +2320,28 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
                     /* barrage spells: 3x3 AoE via shared osrs_barrage_resolve.
                        ice barrage: freeze on hit (including 0 dmg), not on splash.
                        blood barrage: heal 25% of total AoE damage (applied when hits land). */
-                    int mage_att_roll = ls->eff_level * (ls->attack_bonus + 64);
+                    OsrsTargetRef target_ref = {
+                        .kind = OSRS_TARGET_NPC,
+                        .id = s->interaction.target_slot,
+                    };
+                    OsrsMagicAttackKind magic_kind = (s->spell_choice == ENCOUNTER_SPELL_ICE)
+                        ? OSRS_MAGIC_ATTACK_ANCIENT_ICE
+                        : OSRS_MAGIC_ATTACK_ANCIENT_BLOOD;
+                    OsrsPreparedAttackEffects attack_effects = osrs_prepare_attack_effects(
+                        &s->player.equipment_effect_profile,
+                        &s->player.item_effect_state,
+                        s->player.equipped[GEAR_SLOT_WEAPON],
+                        ATTACK_STYLE_MAGIC,
+                        magic_kind,
+                        target_ref,
+                        1,
+                        ls->eff_level * (ls->attack_bonus + 64),
+                        ls->max_hit,
+                        0,
+                        0,
+                        s->player.current_hitpoints,
+                        s->player.base_hitpoints
+                    );
 
                     /* build target array: primary target first, then all other active NPCs */
                     BarrageTarget btargets[INF_MAX_NPCS + 1];
@@ -2366,9 +2375,22 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
                     /* resolve barrage: accuracy/damage rolls + instant freeze for ice.
                        freeze is applied by the shared function at cast time. */
                     BarrageResult br = osrs_barrage_resolve(
-                        btargets, bt_count, mage_att_roll, ls->max_hit,
-                        &s->rng_state, s->spell_choice);
+                        btargets, bt_count, attack_effects.attack_roll, attack_effects.max_hit,
+                        &s->rng_state, s->spell_choice, attack_effects.use_double_accuracy);
                     total_dmg = br.total_damage;
+                    osrs_finalize_attack_effects(
+                        &s->player.equipment_effect_profile,
+                        &s->player.item_effect_state,
+                        s->player.equipped[GEAR_SLOT_WEAPON],
+                        ATTACK_STYLE_MAGIC,
+                        magic_kind,
+                        target_ref,
+                        1,
+                        attack_effects.use_double_accuracy,
+                        btargets[0].hit,
+                        btargets[0].damage,
+                        &s->rng_state
+                    );
 
                     /* queue pending hits for delayed damage */
                     for (int i = 0; i < bt_count; i++) {
@@ -2384,19 +2406,25 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
                     }
 
                 } else if (s->weapon_set == INF_GEAR_TBOW) {
-                    /* tbow: single target, scale by target magic level.
-                       ls->max_hit is BASE max hit before tbow scaling. */
                     const InfNPCStats* ns = &INF_NPC_STATS[target_npc->type];
-                    int tbow_m = ns->magic_level > ns->magic_def_bonus
-                               ? ns->magic_level : ns->magic_def_bonus;
-                    if (tbow_m > 250) tbow_m = 250;
-                    float acc_mult = osrs_tbow_acc_mult(tbow_m);
-                    float dmg_mult = osrs_tbow_dmg_mult(tbow_m);
-                    int att_roll = (int)(ls->eff_level * (ls->attack_bonus + 64) * acc_mult);
+                    OsrsPreparedAttackEffects attack_effects = osrs_prepare_attack_effects(
+                        &s->player.equipment_effect_profile,
+                        &s->player.item_effect_state,
+                        s->player.equipped[GEAR_SLOT_WEAPON],
+                        ATTACK_STYLE_RANGED,
+                        OSRS_MAGIC_ATTACK_NONE,
+                        (OsrsTargetRef){ .kind = OSRS_TARGET_NPC, .id = s->interaction.target_slot },
+                        1,
+                        ls->eff_level * (ls->attack_bonus + 64),
+                        ls->max_hit,
+                        ns->magic_level,
+                        ns->magic_att_bonus,
+                        s->player.current_hitpoints,
+                        s->player.base_hitpoints
+                    );
                     int def_roll = (ns->def_level + 8) * (ns->ranged_def_bonus + 64);
-                    int max_hit = (int)(ls->max_hit * dmg_mult);
-                    if (encounter_rand_float(&s->rng_state) < osrs_hit_chance(att_roll, def_roll)) {
-                        total_dmg = encounter_rand_int(&s->rng_state, max_hit + 1);
+                    if (encounter_rand_float(&s->rng_state) < osrs_hit_chance(attack_effects.attack_roll, def_roll)) {
+                        total_dmg = encounter_rand_int(&s->rng_state, attack_effects.max_hit + 1);
                     }
                     EncounterPendingHit* ph = &target_npc->pending_hit;
                     ph->active = 1;
@@ -3188,10 +3216,10 @@ static void inf_write_mask(EncounterState* state, float* mask) {
 
     /* HEAD_GEAR (5): no_switch, mage, tbow, bp, tank */
     mask[offset++] = 1.0f;  /* no_switch always valid */
-    mask[offset++] = (s->weapon_set != INF_GEAR_MAGE || s->armor_tank) ? 1.0f : 0.0f;
-    mask[offset++] = (s->weapon_set != INF_GEAR_TBOW || s->armor_tank) ? 1.0f : 0.0f;
-    mask[offset++] = (s->weapon_set != INF_GEAR_BP || s->armor_tank) ? 1.0f : 0.0f;
-    mask[offset++] = 1.0f;  /* tank toggle always allowed */
+    mask[offset++] = (s->weapon_set != INF_GEAR_MAGE) ? 1.0f : 0.0f;
+    mask[offset++] = (s->weapon_set != INF_GEAR_TBOW) ? 1.0f : 0.0f;
+    mask[offset++] = (s->weapon_set != INF_GEAR_BP) ? 1.0f : 0.0f;
+    mask[offset++] = 0.0f;  /* tank overlay removed */
 
     /* HEAD_EAT (2): none, brew */
     mask[offset++] = 1.0f;  /* none always valid */

@@ -63,6 +63,7 @@
 #include "osrs_items.h"
 #include "osrs_pathfinding.h"
 #include "osrs_combat.h"
+#include "osrs_item_effects.h"
 #include "osrs_human_input_types.h"
 
 /* opaque encounter state — each encounter defines its own struct */
@@ -1392,24 +1393,9 @@ static inline void encounter_recompute_loadout_max_hits(
 /* lightbearer halves regen interval to 25 ticks.                            */
 /* ======================================================================== */
 
-#define SPEC_REGEN_INTERVAL     50   /* ticks between +10% regen (normal) */
-#define SPEC_REGEN_LIGHTBEARER  25   /* with lightbearer equipped */
-#define SPEC_REGEN_AMOUNT       10   /* energy restored per regen tick */
-
-/** tick special attack energy regeneration. call once per game tick.
-    lightbearer: set to 1 if player has lightbearer ring equipped. */
-static inline void encounter_tick_spec_regen(Player* p, int has_lightbearer) {
-    if (p->special_energy >= 100) {
-        p->special_regen_ticks = 0;
-        return;
-    }
-    int interval = has_lightbearer ? SPEC_REGEN_LIGHTBEARER : SPEC_REGEN_INTERVAL;
-    p->special_regen_ticks++;
-    if (p->special_regen_ticks >= interval) {
-        p->special_energy += SPEC_REGEN_AMOUNT;
-        if (p->special_energy > 100) p->special_energy = 100;
-        p->special_regen_ticks = 0;
-    }
+/** tick special attack energy regeneration from current equipped gear. */
+static inline void encounter_tick_spec_regen(Player* p) {
+    osrs_tick_special_regen(p);
 }
 
 /** attempt to use special attack energy. returns 1 if successful (enough energy),
@@ -1432,6 +1418,7 @@ static inline void encounter_apply_loadout(
     memcpy(p->equipped, loadout, NUM_GEAR_SLOTS);
     p->current_gear = gear_set;
     p->visible_gear = gear_set;
+    osrs_refresh_player_equipment(p);
 }
 
 /** populate player inventory from multiple loadouts (deduped per slot).

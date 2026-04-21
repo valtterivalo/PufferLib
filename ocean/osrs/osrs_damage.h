@@ -40,7 +40,33 @@ typedef struct {
     int recoil_damage;      /* reflected by recoil ring (0 if no ring) */
     int smite_drain;        /* prayer drained from target (0 if no smite) */
     int prayer_blocked;     /* 1 if correct prayer was active */
+    int elysian_reduced;    /* 1 if elysian proc reduced post-prayer damage */
 } DamageResult;
+
+static inline DamageResult osrs_apply_post_mitigation_pipeline(
+    int mitigated_damage,
+    int prayer_blocked,
+    int target_veng_active,
+    int target_has_recoil,
+    int attacker_smite_active
+) {
+    DamageResult r = {0, 0, 0, 0, prayer_blocked, 0};
+    r.final_damage = mitigated_damage;
+
+    if (target_veng_active && r.final_damage > 0) {
+        r.veng_damage = (int)(r.final_damage * 0.75f);
+    }
+
+    if (target_has_recoil && r.final_damage > 0) {
+        r.recoil_damage = r.final_damage / 10 + 1;
+    }
+
+    if (attacker_smite_active && r.final_damage > 0) {
+        r.smite_drain = r.final_damage / 4;
+    }
+
+    return r;
+}
 
 /* apply the full OSRS damage pipeline to a hit.
    pure function — does NOT modify any state. caller applies the result.
@@ -67,34 +93,17 @@ static inline DamageResult osrs_apply_damage_pipeline(
     int target_has_recoil,
     int attacker_smite_active
 ) {
-    DamageResult r = {0, 0, 0, 0, 0};
-
-    /* 1. prayer reduction */
     int prayer_correct = encounter_prayer_correct_for_style(target_prayer, attack_style);
-    r.prayer_blocked = prayer_correct;
-    r.final_damage = osrs_prayer_reduce_damage(raw_damage, target_prayer, attack_style, is_pvp);
-
-    /* 2. vengeance: 75% of post-prayer damage reflected to attacker.
-       ref: osrs_pvp_combat.h:607-618 */
-    if (target_veng_active && r.final_damage > 0) {
-        r.veng_damage = (int)(r.final_damage * 0.75f);
-    }
-
-    /* 3. recoil: floor(damage * 0.1) + 1 reflected to attacker.
-       charge tracking is caller's responsibility (ring of recoil has 40 charges,
-       ring of suffering (i) has infinite).
-       ref: osrs_pvp_combat.h:621-645, encounter_zulrah.h:660-675 */
-    if (target_has_recoil && r.final_damage > 0) {
-        r.recoil_damage = r.final_damage / 10 + 1;
-    }
-
-    /* 4. smite: floor(damage / 4) drained from target prayer.
-       ref: osrs_pvp_combat.h:688-691 */
-    if (attacker_smite_active && r.final_damage > 0) {
-        r.smite_drain = r.final_damage / 4;
-    }
-
-    return r;
+    int post_prayer_damage = osrs_prayer_reduce_damage(
+        raw_damage, target_prayer, attack_style, is_pvp
+    );
+    return osrs_apply_post_mitigation_pipeline(
+        post_prayer_damage,
+        prayer_correct,
+        target_veng_active,
+        target_has_recoil,
+        attacker_smite_active
+    );
 }
 
 /* ======================================================================== */

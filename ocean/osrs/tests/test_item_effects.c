@@ -6,8 +6,8 @@
  * cross-referenced against osrs-dps-calc reference and OSRS wiki formulas.
  *
  * BUILD:
- *   cd PufferLib
- *   cc -std=c11 -O0 -g -Isrc/osrs -o test_item_effects \
+ *   cd pufferlib-metal
+ *   cc -std=c11 -O0 -g -I. -o test_item_effects \
  *       ocean/osrs/tests/test_item_effects.c -lm
  *   ./test_item_effects
  *
@@ -24,7 +24,7 @@
 #include <math.h>
 #include <string.h>
 
-#include "osrs_encounter.h"
+#include "ocean/osrs/osrs_encounter.h"
 
 /* ======================================================================== */
 /* test harness (same macros as test_combat_math.c)                          */
@@ -871,6 +871,90 @@ static void test_loadout_defence_into_def_roll(void) {
 }
 
 /* ======================================================================== */
+/* test: shared attack prep applies virtus ancient bonus only to ancients    */
+/* ======================================================================== */
+
+static void test_shared_prepare_attack_virtus_ancient_bonus(void) {
+    printf("--- shared attack prep: virtus ancient bonus ---\n");
+
+    uint8_t loadout[NUM_GEAR_SLOTS];
+    clear_loadout(loadout);
+    loadout[GEAR_SLOT_WEAPON] = ITEM_KODAI_WAND;
+    loadout[GEAR_SLOT_BODY] = ITEM_VIRTUS_ROBE_TOP;
+    loadout[GEAR_SLOT_LEGS] = ITEM_VIRTUS_ROBE_BOTTOM;
+
+    EncounterLoadoutStats stats;
+    encounter_compute_loadout_stats(
+        loadout, ATTACK_STYLE_MAGIC, OFFENSIVE_PRAYER_NONE,
+        99, FIGHT_STYLE_AUTOCAST, 30, &stats
+    );
+
+    OsrsEquipmentEffectProfile profile;
+    OsrsItemEffectState state;
+    osrs_derive_equipment_effect_profile(loadout, &profile);
+    osrs_item_effect_state_init(&state);
+
+    OsrsPreparedAttackEffects ancient = osrs_prepare_attack_effects(
+        &profile, &state, ITEM_KODAI_WAND, ATTACK_STYLE_MAGIC,
+        OSRS_MAGIC_ATTACK_ANCIENT_ICE, osrs_target_ref_none(), 1,
+        stats.eff_level * (stats.attack_bonus + 64), stats.max_hit,
+        0, 0, 99, 99
+    );
+    OsrsPreparedAttackEffects non_ancient = osrs_prepare_attack_effects(
+        &profile, &state, ITEM_KODAI_WAND, ATTACK_STYLE_MAGIC,
+        OSRS_MAGIC_ATTACK_STANDARD_SPELL, osrs_target_ref_none(), 1,
+        stats.eff_level * (stats.attack_bonus + 64), stats.max_hit,
+        0, 0, 99, 99
+    );
+
+    ASSERT_INT_EQ("virtus ancient adds 6%", ancient.max_hit, stats.max_hit * 106 / 100);
+    ASSERT_INT_EQ("virtus non-ancient unchanged", non_ancient.max_hit, stats.max_hit);
+}
+
+/* ======================================================================== */
+/* test: shared attack prep applies tbow scaling from magic attack bonus     */
+/* ======================================================================== */
+
+static void test_shared_prepare_attack_tbow_scaling(void) {
+    printf("--- shared attack prep: tbow scaling ---\n");
+
+    uint8_t loadout[NUM_GEAR_SLOTS];
+    clear_loadout(loadout);
+    loadout[GEAR_SLOT_WEAPON] = ITEM_TWISTED_BOW;
+
+    EncounterLoadoutStats stats;
+    encounter_compute_loadout_stats(
+        loadout, ATTACK_STYLE_RANGED, OFFENSIVE_PRAYER_RIGOUR,
+        99, FIGHT_STYLE_RAPID, 0, &stats
+    );
+
+    OsrsEquipmentEffectProfile profile;
+    OsrsItemEffectState state;
+    osrs_derive_equipment_effect_profile(loadout, &profile);
+    osrs_item_effect_state_init(&state);
+
+    int base_attack_roll = stats.eff_level * (stats.attack_bonus + 64);
+    OsrsPreparedAttackEffects prepared = osrs_prepare_attack_effects(
+        &profile, &state, ITEM_TWISTED_BOW, ATTACK_STYLE_RANGED,
+        OSRS_MAGIC_ATTACK_NONE, osrs_target_ref_none(), 1,
+        base_attack_roll, stats.max_hit,
+        150, 550, 99, 99
+    );
+
+    int target_magic = max_int(150, 550);
+    ASSERT_INT_EQ(
+        "tbow attack roll scaled",
+        prepared.attack_roll,
+        (int)(base_attack_roll * osrs_tbow_acc_mult(target_magic))
+    );
+    ASSERT_INT_EQ(
+        "tbow max hit scaled",
+        prepared.max_hit,
+        (int)(stats.max_hit * osrs_tbow_dmg_mult(target_magic))
+    );
+}
+
+/* ======================================================================== */
 /* main                                                                      */
 /* ======================================================================== */
 
@@ -905,6 +989,8 @@ int main(void) {
     test_hit_chance_player_vs_npc();
     test_def_bonus_selection();
     test_loadout_defence_into_def_roll();
+    test_shared_prepare_attack_virtus_ancient_bonus();
+    test_shared_prepare_attack_tbow_scaling();
 
     printf("\n=== results: %d/%d passed", tests_passed, tests_run);
     if (tests_failed > 0) {

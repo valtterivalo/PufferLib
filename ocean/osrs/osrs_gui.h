@@ -646,6 +646,7 @@ static const char* gui_item_short_name(uint8_t item_idx) {
         case ITEM_AVERNIC_TREADS:    return "Avernic bt";
         case ITEM_RING_OF_SUFFERING_RI: return "Suff (ri)";
         case ITEM_TWISTED_BOW:       return "T bow";
+        case ITEM_ELYSIAN_SPIRIT_SHIELD: return "Elysian";
         case ITEM_MASORI_MASK_F:     return "Masori msk";
         case ITEM_MASORI_BODY_F:     return "Masori bod";
         case ITEM_MASORI_CHAPS_F:    return "Masori chp";
@@ -659,6 +660,10 @@ static const char* gui_item_short_name(uint8_t item_idx) {
         case ITEM_INFINITY_BOOTS:    return "Inf boots";
         case ITEM_GOD_BLESSING:      return "Blessing";
         case ITEM_RING_OF_RECOIL:    return "Recoil";
+        case ITEM_VENATOR_RING:      return "Venator";
+        case ITEM_VIRTUS_MASK:       return "Virtus msk";
+        case ITEM_VIRTUS_ROBE_TOP:   return "Virtus top";
+        case ITEM_VIRTUS_ROBE_BOTTOM:return "Virtus bot";
         case ITEM_CRYSTAL_HELM:      return "Crystal hm";
         case ITEM_AVAS_ASSEMBLER:    return "Assembler";
         case ITEM_CRYSTAL_BODY:      return "Crystal bd";

@@ -42,6 +42,7 @@ Stat field mapping (equipment.json -> Item struct):
     bonuses.ranged_str -> ranged_strength
     bonuses.magic_str  -> magic_damage
     bonuses.prayer  -> prayer
+    (manifest)       -> effect_mask
 """
 
 import argparse
@@ -80,10 +81,26 @@ CATEGORY_RANGE_DEFAULTS = {
     "Blaster": 8,
 }
 
+EFFECT_TAG_MAP = {
+    "TWISTED_BOW": "OSRS_ITEM_EFFECT_TWISTED_BOW",
+    "VIRTUS_PIECE": "OSRS_ITEM_EFFECT_VIRTUS_PIECE",
+    "CONFLICTION": "OSRS_ITEM_EFFECT_CONFLICTION",
+    "SANG_HEAL": "OSRS_ITEM_EFFECT_SANG_HEAL",
+    "RECOIL_RING": "OSRS_ITEM_EFFECT_RECOIL_RING",
+    "LIGHTBEARER": "OSRS_ITEM_EFFECT_LIGHTBEARER",
+    "DHAROK_PIECE": "OSRS_ITEM_EFFECT_DHAROK_PIECE",
+    "ELYSIAN": "OSRS_ITEM_EFFECT_ELYSIAN",
+}
+
 
 def load_equipment_json(path: str) -> dict[int, dict]:
     """Load equipment.json and index by OSRS item ID."""
-    with open(path) as f:
+    json_path = Path(path)
+    if not json_path.exists():
+        raise FileNotFoundError(
+            f"{json_path} not found. pass --json pointing at osrs-dps-calc/cdn/json/equipment.json"
+        )
+    with open(json_path) as f:
         items = json.load(f)
     by_id: dict[int, list[dict]] = {}
     for item in items:
@@ -199,6 +216,8 @@ def generate_header(
         item_id = entry["item_id"]
         version = entry.get("version", "")
         manual_range = entry.get("attack_range", None)
+        effect_tags = entry.get("effect_tags", [])
+        effect_mask = " | ".join(EFFECT_TAG_MAP[tag] for tag in effect_tags) if effect_tags else "OSRS_ITEM_EFFECT_NONE"
 
         json_item = find_item_in_json(by_id, item_id, version)
 
@@ -241,7 +260,8 @@ def generate_header(
                     f"        .melee_strength = {manual.get('melee_strength', 0)}, "
                     f".ranged_strength = {manual.get('ranged_strength', 0)}, "
                     f".magic_damage = {manual.get('magic_damage', 0)}, "
-                    f".prayer = {manual.get('prayer', 0)}"
+                    f".prayer = {manual.get('prayer', 0)}, "
+                    f".effect_mask = {effect_mask}"
                 )
                 lines.append("    },")
                 continue
@@ -265,7 +285,7 @@ def generate_header(
             lines.append("        .defence_magic = 0, .defence_ranged = 0,")
             lines.append(
                 "        .melee_strength = 0, .ranged_strength = 0, "
-                ".magic_damage = 0, .prayer = 0"
+                f".magic_damage = 0, .prayer = 0, .effect_mask = {effect_mask}"
             )
             lines.append("    },")
             continue
@@ -326,7 +346,8 @@ def generate_header(
             f"        .melee_strength = {bon.get('str', 0)}, "
             f".ranged_strength = {bon.get('ranged_str', 0)}, "
             f".magic_damage = {magic_damage_pct}, "
-            f".prayer = {bon.get('prayer', 0)}"
+            f".prayer = {bon.get('prayer', 0)}, "
+            f".effect_mask = {effect_mask}"
         )
         lines.append("    },")
 

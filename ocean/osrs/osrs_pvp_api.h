@@ -55,11 +55,10 @@ static void init_player(Player* p) {
     p->current_hitpoints = p->base_hitpoints;
 
     p->special_energy = 100;
-    p->special_regen_ticks = 0;
     p->spec_regen_active = 0;
-    p->was_lightbearer_equipped = 0;
     p->spec_armed = 0;
     osrs_interaction_init(&p->interaction);
+    osrs_item_effect_state_init(&p->item_effect_state);
 
     p->current_gear = GEAR_MAGE;
     p->visible_gear = GEAR_MAGE;
@@ -92,7 +91,6 @@ static void init_player(Player* p) {
 
     p->veng_active = 0;
     p->veng_cooldown = 0;
-    p->recoil_charges = 0;
 
     p->prayer = PRAYER_NONE;
     p->offensive_prayer = OFFENSIVE_PRAYER_NONE;
@@ -200,7 +198,6 @@ static void init_player(Player* p) {
     p->is_lunar_spellbook = 0;
     p->observed_target_lunar_spellbook = 0;
     p->has_blood_fury = 1;
-    p->has_dharok = 0;
 
     p->melee_spec_weapon = MELEE_SPEC_NONE;
     p->ranged_spec_weapon = RANGED_SPEC_NONE;
@@ -411,8 +408,7 @@ void pvp_reset(OsrsEnv* env) {
     for (int i = 0; i < NUM_AGENTS; i++) {
         init_player_gear_randomized(&env->players[i], tiers[i], &env->rng_state);
         env->players[i].food_count = compute_food_count(&env->players[i]);
-        env->players[i].recoil_charges =
-            osrs_has_recoil_ring(env->players[i].equipped) ? RECOIL_MAX_CHARGES : 0;
+        osrs_refresh_player_equipment(&env->players[i]);
     }
 
     // Reset C-side opponent state for new episode

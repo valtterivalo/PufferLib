@@ -11,7 +11,7 @@ Three model format variants are supported:
 
 Usage:
     uv run python scripts/export_models.py \
-        --modern-cache ../reference/osrs-cache-modern \
+        --modern-cache ../../../.refs/osrs-cache-modern \
         --output data/equipment.models
 """
 
@@ -1589,6 +1589,10 @@ SIM_ITEM_IDS = [
     22328,  # Justiciar legguards
     4224,   # Crystal shield
     13237,  # Pegasian boots
+    12817,  # Elysian spirit shield
+    26243,  # Virtus robe top
+    26245,  # Virtus robe bottom
+    28310,  # Venator ring
 ]
 
 
