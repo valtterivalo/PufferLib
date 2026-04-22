@@ -384,6 +384,15 @@ void my_init(Env* env, Dict* kwargs) {
     DictItem* start_wave = dict_get_unsafe(kwargs, "start_wave");
     if (start_wave)
         ENCOUNTER_INFERNO.put_int(env->enc_state, "start_wave", (int)start_wave->value);
+    ENCOUNTER_INFERNO.put_float(
+        env->enc_state, "damage_reward_coeff",
+        (float)dict_get_unsafe(kwargs, "damage_reward_coeff")->value);
+    ENCOUNTER_INFERNO.put_float(
+        env->enc_state, "shield_penalty_coeff",
+        (float)dict_get_unsafe(kwargs, "shield_penalty_coeff")->value);
+    ENCOUNTER_INFERNO.put_float(
+        env->enc_state, "tag_reward_coeff",
+        (float)dict_get_unsafe(kwargs, "tag_reward_coeff")->value);
     /* match the 1-indexed → 0-indexed conversion done by encounter's put_int */
     int sw = start_wave ? (int)start_wave->value : 0;
     env->config_start_wave = (sw > 0) ? sw - 1 : 0;

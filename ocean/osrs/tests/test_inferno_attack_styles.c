@@ -104,6 +104,53 @@ static int distance_to_player(const InfernoState* state, const InfNPC* npc) {
         state->player.x, state->player.y, npc->x, npc->y, npc->size);
 }
 
+static void test_reward_switches_between_healer_tags_and_damage(void) {
+    printf("--- inferno reward switches between healer tags and damage ---\n");
+
+    InfernoState healing_state = make_test_state(24, 24);
+    InfernoState damage_state = make_test_state(24, 24);
+
+    inf_put_float((EncounterState*)&healing_state, "damage_reward_coeff", 0.01f);
+    inf_put_float((EncounterState*)&healing_state, "shield_penalty_coeff", 0.01f);
+    inf_put_float((EncounterState*)&healing_state, "tag_reward_coeff", 0.25f);
+    healing_state.damage_dealt_this_tick = 50.0f;
+    healing_state.hp_restored_this_tick = 10.0f;
+    healing_state.shield_damage_this_tick = 7.0f;
+    healing_state.healer_tags_this_tick = 2;
+    healing_state.npcs[0] = make_test_npc(INF_NPC_HEALER_ZUK, 26, 24, 1);
+    healing_state.npcs[0].active = 1;
+    healing_state.npcs[0].aggro_target = 1;
+    healing_state.npcs[1] = make_test_npc(INF_NPC_ZUK, 28, 24, 5);
+    healing_state.npcs[1].active = 1;
+
+    damage_state = healing_state;
+    damage_state.npcs[0].aggro_target = -1;
+
+    ASSERT_FLOAT_NEAR("active healer reward uses tag path",
+        inf_compute_reward(&healing_state), 0.43f, 0.0001f);
+    ASSERT_FLOAT_NEAR("no active healer reward uses damage path",
+        inf_compute_reward(&damage_state), 0.33f, 0.0001f);
+}
+
+static void test_inferno_reset_supplies_match_current_inventory(void) {
+    printf("--- inferno reset supplies match current inventory ---\n");
+
+    EncounterState* raw_state = inf_create();
+    InfernoState* state = (InfernoState*)raw_state;
+
+    inf_put_float(raw_state, "damage_reward_coeff", 0.01f);
+    inf_put_float(raw_state, "shield_penalty_coeff", 0.01f);
+    inf_put_float(raw_state, "tag_reward_coeff", 0.25f);
+    inf_reset(raw_state, 123);
+
+    ASSERT_INT_EQ("inferno reset gives 24 brew doses", state->player.brew_doses, 24);
+    ASSERT_INT_EQ("inferno reset gives 40 restore doses", state->player.restore_doses, 40);
+    ASSERT_INT_EQ("inferno reset gives 8 bastion doses", state->player.bastion_doses, 8);
+    ASSERT_INT_EQ("inferno reset gives 4 stamina doses", state->player.stamina_doses, 4);
+
+    inf_destroy(raw_state);
+}
+
 static void test_tagged_jad_healer_melee_geometry(void) {
     printf("--- tagged jad healer melee geometry ---\n");
 
@@ -799,6 +846,8 @@ int main(void) {
     test_overlap_shuffle_hold_after_recent_target_click();
     test_overlap_shuffle_respects_npc_occupancy();
     test_meleer_dig_landing_order();
+    test_reward_switches_between_healer_tags_and_damage();
+    test_inferno_reset_supplies_match_current_inventory();
     test_dead_mob_store_eligibility();
     test_resurrected_mob_does_not_reenter_dead_store();
     test_double_mager_wave_resurrection_limit();

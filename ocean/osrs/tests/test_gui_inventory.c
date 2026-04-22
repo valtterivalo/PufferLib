@@ -36,6 +36,14 @@ static int find_slot_of_type(const GuiState* gs, InvSlotType type) {
     return -1;
 }
 
+static int count_slots_of_type(const GuiState* gs, InvSlotType type) {
+    int count = 0;
+    for (int i = 0; i < INV_GRID_SLOTS; i++) {
+        if (gs->inv_grid[i].type == type) count++;
+    }
+    return count;
+}
+
 static void test_gui_populate_tracks_bastion_and_stamina(void) {
     printf("--- gui populate tracks inferno potion snapshots ---\n");
 
@@ -44,14 +52,14 @@ static void test_gui_populate_tracks_bastion_and_stamina(void) {
     memset(&gs, 0, sizeof(gs));
     memset(&p, 0, sizeof(p));
 
-    p.bastion_doses = 4;
+    p.bastion_doses = 8;
     p.stamina_doses = 4;
 
     gui_populate_inventory(&gs, &p);
 
-    ASSERT_INT_EQ("snapshot keeps bastion doses", gs.inv_prev_bastion_doses, 4);
+    ASSERT_INT_EQ("snapshot keeps bastion doses", gs.inv_prev_bastion_doses, 8);
     ASSERT_INT_EQ("snapshot keeps stamina doses", gs.inv_prev_stamina_doses, 4);
-    ASSERT_INT_EQ("bastion vial present", find_slot_of_type(&gs, INV_SLOT_BASTION_POT) >= 0, 1);
+    ASSERT_INT_EQ("bastion vials present", count_slots_of_type(&gs, INV_SLOT_BASTION_POT), 2);
     ASSERT_INT_EQ("stamina vial present", find_slot_of_type(&gs, INV_SLOT_STAMINA_POT) >= 0, 1);
 }
 
@@ -63,7 +71,7 @@ static void test_gui_update_tracks_bastion_and_stamina(void) {
     memset(&gs, 0, sizeof(gs));
     memset(&p, 0, sizeof(p));
 
-    p.bastion_doses = 4;
+    p.bastion_doses = 8;
     p.stamina_doses = 4;
     gui_populate_inventory(&gs, &p);
 
@@ -71,11 +79,12 @@ static void test_gui_update_tracks_bastion_and_stamina(void) {
     int stamina_slot = find_slot_of_type(&gs, INV_SLOT_STAMINA_POT);
 
     gs.human_clicked_inv_slot = bastion_slot;
-    p.bastion_doses = 3;
+    p.bastion_doses = 7;
     gui_update_inventory(&gs, &p);
 
     ASSERT_INT_EQ("bastion click latch clears after use", gs.human_clicked_inv_slot, -1);
-    ASSERT_INT_EQ("bastion snapshot updates", gs.inv_prev_bastion_doses, 3);
+    ASSERT_INT_EQ("bastion snapshot updates", gs.inv_prev_bastion_doses, 7);
+    ASSERT_INT_EQ("bastion keeps two vials after one sip", count_slots_of_type(&gs, INV_SLOT_BASTION_POT), 2);
     ASSERT_INT_EQ("bastion sprite downgrades to 3-dose",
         gs.inv_grid[bastion_slot].osrs_id, gui_consumable_osrs_id(INV_SLOT_BASTION_POT, 3));
 
@@ -123,7 +132,7 @@ static void test_gui_reset_rebuild_restores_potions(void) {
     memset(&gs, 0, sizeof(gs));
     memset(&p, 0, sizeof(p));
 
-    p.bastion_doses = 4;
+    p.bastion_doses = 8;
     p.stamina_doses = 4;
     gui_populate_inventory(&gs, &p);
 
@@ -133,7 +142,7 @@ static void test_gui_reset_rebuild_restores_potions(void) {
     ASSERT_INT_EQ("bastion gone after depletion", find_slot_of_type(&gs, INV_SLOT_BASTION_POT), -1);
     ASSERT_INT_EQ("stamina gone after depletion", find_slot_of_type(&gs, INV_SLOT_STAMINA_POT), -1);
 
-    p.bastion_doses = 4;
+    p.bastion_doses = 8;
     p.stamina_doses = 4;
     gui_reset_inventory_ui_state(&gs);
     if (gs.inv_grid_dirty) {
@@ -141,9 +150,9 @@ static void test_gui_reset_rebuild_restores_potions(void) {
         gs.inv_grid_dirty = 0;
     }
 
-    ASSERT_INT_EQ("bastion restored after rebuild", find_slot_of_type(&gs, INV_SLOT_BASTION_POT) >= 0, 1);
+    ASSERT_INT_EQ("bastion restored after rebuild", count_slots_of_type(&gs, INV_SLOT_BASTION_POT), 2);
     ASSERT_INT_EQ("stamina restored after rebuild", find_slot_of_type(&gs, INV_SLOT_STAMINA_POT) >= 0, 1);
-    ASSERT_INT_EQ("bastion snapshot restored", gs.inv_prev_bastion_doses, 4);
+    ASSERT_INT_EQ("bastion snapshot restored", gs.inv_prev_bastion_doses, 8);
     ASSERT_INT_EQ("stamina snapshot restored", gs.inv_prev_stamina_doses, 4);
 }
 

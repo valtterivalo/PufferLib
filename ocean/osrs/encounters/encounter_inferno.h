@@ -25,6 +25,7 @@
 #include "../osrs_encounter.h"
 #include "../osrs_interaction.h"
 #include "../data/npc_models.h"
+#include <assert.h>
 #include <string.h>
 #include <stdio.h>
 
@@ -383,10 +384,6 @@ typedef struct {
     InfNPCType type;
     int x, y;
     int hp, max_hp;
-    int min_hp_reached;    /* lowest hp this npc has ever been at; reward accrues only
-                              when current hp drops below this. prevents farming damage
-                              that gets healed back — healing raises current hp but min
-                              stays, so re-damaging up to min gives 0 reward. */
     int size;
     int attack_timer;      /* ticks until next attack */
     int attack_style;      /* current attack style (may differ from default for blobs) */
@@ -570,15 +567,10 @@ typedef struct {
     float episode_return;  /* accumulated reward over entire episode */
     float damage_dealt_this_tick;
     float damage_zuk_healers_this_tick;
+    float shield_damage_this_tick;
+    int healer_tags_this_tick;
     float damage_received_this_tick;
-    /* HP restored to the enemy side this tick — kept as diagnostic only.
-       the reward signal now uses min-HP progress, which inherently ignores
-       heals (they raise current hp without touching the min-reached floor). */
     float hp_restored_this_tick;
-    /* irreversible min-HP progress this tick: sum across all NPCs of how much
-       their HP dropped below their previous min_hp_reached. healing and
-       resurrection can't contribute here — only new damage below the floor. */
-    float min_hp_progress_this_tick;
     int prayer_correct_this_tick;  /* count of NPC attacks blocked by prayer this tick */
     int wave_completed_this_tick;
     int pillar_lost_this_tick;     /* -1 = none, 0-2 = which pillar was destroyed */
@@ -671,6 +663,9 @@ typedef struct {
     /* config */
     int start_wave;        /* for curriculum: start from a later wave */
     uint32_t rng_state;
+    float damage_reward_coeff;
+    float shield_penalty_coeff;
+    float tag_reward_coeff;
 
     Log log;
 } InfernoState;
@@ -892,6 +887,9 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
     const CollisionMap* saved_cmap = s->collision_map;
     int saved_wox = s->world_offset_x;
     int saved_woy = s->world_offset_y;
+    float saved_damage_reward_coeff = s->damage_reward_coeff;
+    float saved_shield_penalty_coeff = s->shield_penalty_coeff;
+    float saved_tag_reward_coeff = s->tag_reward_coeff;
     memset(s, 0, sizeof(InfernoState));
     s->log = saved_log;
     s->start_wave = saved_start;
@@ -899,6 +897,9 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
     s->world_offset_x = saved_wox;
     s->world_offset_y = saved_woy;
     s->rng_state = encounter_resolve_seed(saved_rng, seed);
+    s->damage_reward_coeff = saved_damage_reward_coeff;
+    s->shield_penalty_coeff = saved_shield_penalty_coeff;
+    s->tag_reward_coeff = saved_tag_reward_coeff;
 
     /* human click-to-move: no destination after reset */
     s->player_dest_x = -1;
@@ -939,9 +940,9 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
         }
         s->player.num_items_in_slot[GEAR_SLOT_AMMO] = 0;
     }
-    s->player.brew_doses = 0;     /* 8 pots x 4 doses */
+    s->player.brew_doses = 24;     /* 6 pots x 4 doses */
     s->player.restore_doses = 40;  /* 10 pots x 4 doses */
-    s->player.bastion_doses = 4;   /* 1 pot x 4 doses */
+    s->player.bastion_doses = 8;   /* 2 pots x 4 doses */
     s->player.stamina_doses = 4;   /* 1 pot x 4 doses */
     s->stamina_active_ticks = 0;
     s->player.prayer = PRAYER_NONE;
@@ -1015,7 +1016,6 @@ static void inf_init_npc(InfernoState* s, int idx, InfNPCType type, int x, int y
     npc->type = type;
     npc->hp = stats->hp;
     npc->max_hp = stats->hp;
-    npc->min_hp_reached = stats->hp;
     npc->size = stats->size;
     npc->attack_timer = stats->attack_speed;
     npc->attack_style = stats->default_style;
@@ -1543,8 +1543,12 @@ static void inf_npc_attack(InfernoState* s, int idx) {
                 max_hit = osrs_npc_melee_max_hit(stats->str_level, stats->melee_str_bonus);
             }
             int dmg = encounter_rand_int(&s->rng_state, max_hit + 1);
+            int target_hp_before = target->hp;
             encounter_damage_npc(&target->hp, &target->hit_landed_this_tick,
                                  &target->hit_damage, dmg);
+            if (target->type == INF_NPC_ZUK_SHIELD) {
+                s->shield_damage_this_tick += (float)(target_hp_before - target->hp);
+            }
             /* shield death: redirect all NPCs targeting it to the player */
             if (target->hp <= 0 && target->type == INF_NPC_ZUK_SHIELD) {
                 target->active = 0;
@@ -1945,10 +1949,6 @@ static int inf_mager_resurrect(InfernoState* s, int idx) {
     s->npcs[slot].hp = dm->hp;      /* 50% of max HP */
     s->npcs[slot].max_hp = dm->max_hp;
     s->npcs[slot].resurrection_count = 1;
-    /* agent already got paid for driving this mob to 0 the first time — lock
-       min_hp_reached at 0 so re-killing the resurrected copy yields no new
-       min-HP-progress reward. encourages killing mager before it can rez. */
-    s->npcs[slot].min_hp_reached = 0;
 
     /* remove from dead store (swap with last) */
     s->dead_mobs[di] = s->dead_mobs[s->dead_mob_count - 1];
@@ -2692,33 +2692,14 @@ static void inf_tick_player(InfernoState* s, const int* actions) {
 /* reward                                                                    */
 /* ======================================================================== */
 
-/* walk every active NPC, bank any new HP-low-watermark progress, and update
-   the min_hp_reached floor. call once per tick, after all damage/heal has
-   resolved.
-
-   jad healers (Yt-HurKot) are excluded: in practice you tag them once to
-   switch their aggro from jad to you, then ignore them while you burn jad.
-   killing them outright is wasted DPS. if damage on healers paid reward the
-   agent would learn to finish them off instead of just tagging. the
-   indirect signal — tagged healers stop healing jad, so jad progress stops
-   getting undone — already makes tagging optimal under min-hp progress. */
-static void inf_accrue_min_hp_progress(InfernoState* s) {
-    float progress = 0.0f;
-    for (int i = 0; i < INF_MAX_NPCS; i++) {
-        InfNPC* npc = &s->npcs[i];
-        if (!npc->active) continue;
-        if (npc->type == INF_NPC_HEALER_JAD) continue;
-        if (npc->hp < npc->min_hp_reached) {
-            progress += (float)(npc->min_hp_reached - npc->hp);
-            npc->min_hp_reached = npc->hp;
-        }
-    }
-    s->min_hp_progress_this_tick = progress;
+static int inf_healer_is_actively_healing(const InfernoState* s, const InfNPC* npc) {
+    if (!npc->active || npc->death_ticks > 0) return 0;
+    if (npc->type != INF_NPC_HEALER_JAD && npc->type != INF_NPC_HEALER_ZUK) return 0;
+    if (npc->aggro_target < 0 || npc->aggro_target >= INF_MAX_NPCS) return 0;
+    return s->npcs[npc->aggro_target].active;
 }
 
 static float inf_compute_reward(InfernoState* s) {
-    /* accumulate diagnostic stats BEFORE terminal check so the killing
-       blow's damage is counted in total_damage_received */
     s->total_damage_dealt += s->damage_dealt_this_tick;
     s->total_zuk_healer_damage += s->damage_zuk_healers_this_tick;
     s->total_damage_received += s->damage_received_this_tick;
@@ -2727,51 +2708,19 @@ static float inf_compute_reward(InfernoState* s) {
     if (s->episode_over)
         return (s->winner == 0) ? 1.0f : 0.0f;
 
-    float r = 0.0f;
-
-    /* survival: per-tick bonus for staying alive */
-    //if (s->wave >= 68)
-    //    r += 0.001f;
-
-    /* shield positioning: strong signal for the core Zuk mechanic.
-       this is THE thing we need the agent to learn first. */
-    //if (s->behind_shield_this_tick)
-    //    r += 0.005f;
-
-    /* irreversible-progress reward: only new HP below each NPC's low-water
-       mark counts. damage that gets healed back is worth 0 on re-application;
-       farming is impossible because hitting the same HP twice only pays the
-       first time. killing healers gives their full HP as progress since they
-       can't be healed back up. naturally incentivizes: kill healers first,
-       then finish the boss.
-
-       zuk-phase override kept: while zuk healers are alive, zuk progress is
-       zeroed so the agent doesn't learn to race zuk while healers tick him
-       back up. once the healers are cleared, all progress (including zuk's)
-       flows normally. */
-    int zuk_healers_alive = 0;
+    int healer_is_actively_healing = 0;
     for (int i = 0; i < INF_MAX_NPCS; i++) {
-        if (s->npcs[i].active && s->npcs[i].type == INF_NPC_HEALER_ZUK && s->npcs[i].death_ticks == 0) {
-            zuk_healers_alive = 1;
+        if (inf_healer_is_actively_healing(s, &s->npcs[i])) {
+            healer_is_actively_healing = 1;
             break;
         }
     }
 
-    float progress = s->min_hp_progress_this_tick;
-    if (zuk_healers_alive) {
-        /* recompute progress ignoring zuk itself so only healer damage counts. */
-        progress = 0.0f;
-        /* re-walk the delta we just banked: we no longer have per-npc deltas,
-           so use the already-banked damage_zuk_healers_this_tick which tracks
-           landed damage on zuk-healers specifically. this is a rough match —
-           it overcounts by healers-healing-zuk-healers but that path doesn't
-           exist, so it's effectively equal to the min-hp progress on healers. */
-        progress = s->damage_zuk_healers_this_tick;
-    }
-    if (progress > 0.0f)
-        r += 0.001f * progress;
-
-    return r;
+    float reward = healer_is_actively_healing
+        ? s->tag_reward_coeff * (float)s->healer_tags_this_tick
+        : s->damage_reward_coeff * fmaxf(0.0f, s->damage_dealt_this_tick - s->hp_restored_this_tick);
+    reward -= s->shield_penalty_coeff * s->shield_damage_this_tick;
+    return reward;
 }
 
 /* ======================================================================== */
@@ -2786,9 +2735,10 @@ static void inf_step(EncounterState* state, const int* actions) {
     s->reward = 0.0f;
     s->damage_dealt_this_tick = 0.0f;
     s->damage_zuk_healers_this_tick = 0.0f;
+    s->shield_damage_this_tick = 0.0f;
+    s->healer_tags_this_tick = 0;
     s->damage_received_this_tick = 0.0f;
     s->hp_restored_this_tick = 0.0f;
-    s->min_hp_progress_this_tick = 0.0f;
     s->prayer_correct_this_tick = 0;
     s->off_prayer_hits_this_tick = 0;
     s->tick_styles_fired = 0;
@@ -2845,8 +2795,9 @@ static void inf_step(EncounterState* state, const int* actions) {
                 &s->npcs[i].hp, &s->npcs[i].hit_landed_this_tick, &s->npcs[i].hit_damage,
                 &s->npcs[i].frozen_ticks, &blood_heal_acc, &s->damage_dealt_this_tick);
             if (landed) {
+                float landed_damage = s->damage_dealt_this_tick - dmg_before;
                 if (s->npcs[i].type == INF_NPC_HEALER_ZUK) {
-                    s->damage_zuk_healers_this_tick += (s->damage_dealt_this_tick - dmg_before);
+                    s->damage_zuk_healers_this_tick += landed_damage;
                 }
                 s->npcs[i].hit_spell_type = spell;
                 /* tagging: aggro switches on projectile LAND, not FIRE. matches
@@ -2854,6 +2805,10 @@ static void inf_step(EncounterState* state, const int* actions) {
                    without this, healers/set-spawns clear aggro on the fire tick
                    and never land a heal/shield-hit before switching to player. */
                 if (s->npcs[i].aggro_target != -1) {
+                    if (s->npcs[i].type == INF_NPC_HEALER_ZUK
+                        || s->npcs[i].type == INF_NPC_HEALER_JAD) {
+                        s->healer_tags_this_tick++;
+                    }
                     s->npcs[i].aggro_target = -1;
                     s->npcs[i].stun_timer = 2;  /* flinch: 2-tick delay on aggro switch */
                 }
@@ -2958,7 +2913,6 @@ static void inf_step(EncounterState* state, const int* actions) {
 
     /* bank the tick's irreversible HP progress before computing reward. all
        damage landings and healer applies have resolved by this point. */
-    inf_accrue_min_hp_progress(s);
     s->reward = inf_compute_reward(s);
     s->episode_return += s->reward;
 
@@ -3057,7 +3011,7 @@ static void inf_write_obs(EncounterState* state, float* obs) {
     obs[i++] = (s->player.offensive_prayer == OFFENSIVE_PRAYER_PIETY) ? 1.0f : 0.0f;
     obs[i++] = (s->player.offensive_prayer == OFFENSIVE_PRAYER_RIGOUR) ? 1.0f : 0.0f;
     obs[i++] = (s->player.offensive_prayer == OFFENSIVE_PRAYER_AUGURY) ? 1.0f : 0.0f;
-    obs[i++] = (float)s->player.brew_doses / 32.0f;
+    obs[i++] = (float)s->player.brew_doses / 24.0f;
     obs[i++] = (float)s->player.restore_doses / 40.0f;
     obs[i++] = (float)s->player.current_prayer / 99.0f;
     obs[i++] = (float)s->wave / (float)INF_NUM_WAVES;
@@ -3069,7 +3023,7 @@ static void inf_write_obs(EncounterState* state, float* obs) {
     obs[i++] = (s->weapon_set == INF_GEAR_TBOW) ? 1.0f : 0.0f;
     obs[i++] = (s->weapon_set == INF_GEAR_BP) ? 1.0f : 0.0f;
     obs[i++] = s->armor_tank ? 1.0f : 0.0f;
-    obs[i++] = (float)s->player.bastion_doses / 4.0f;
+    obs[i++] = (float)s->player.bastion_doses / 8.0f;
     obs[i++] = (float)s->player.stamina_doses / 4.0f;
     obs[i++] = (s->stamina_active_ticks > 0) ? 1.0f : 0.0f;
     obs[i++] = (float)s->player.potion_timer / 3.0f;
@@ -3643,7 +3597,11 @@ static void inf_put_int(EncounterState* state, const char* key, int value) {
 }
 
 static void inf_put_float(EncounterState* state, const char* key, float value) {
-    (void)state; (void)key; (void)value;
+    InfernoState* s = (InfernoState*)state;
+    if (strcmp(key, "damage_reward_coeff") == 0) s->damage_reward_coeff = value;
+    else if (strcmp(key, "shield_penalty_coeff") == 0) s->shield_penalty_coeff = value;
+    else if (strcmp(key, "tag_reward_coeff") == 0) s->tag_reward_coeff = value;
+    else assert(0 && "unknown inferno float config");
 }
 
 static void inf_put_ptr(EncounterState* state, const char* key, void* value) {
