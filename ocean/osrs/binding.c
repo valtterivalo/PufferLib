@@ -1,10 +1,11 @@
 /**
  * @file binding.c
- * @brief Metal static-native binding for OSRS PVP environment
+ * @brief Metal static-native vec binding for the shared OSRS PvP environment.
  *
- * Bridges vecenv.h's contract (float actions, float terminals) with the PVP
+ * Bridges vecenv.h's contract (float actions, float terminals) with the PvP
  * env's internal types (int actions, unsigned char terminals) using a wrapper
- * struct. PVP source headers are untouched.
+ * struct. The file lives under ocean/osrs because it sits on top of the shared
+ * OSRS subsystem stack, even though the bound env here is specifically PvP.
  */
 
 #include "osrs_env.h"

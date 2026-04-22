@@ -791,6 +791,17 @@ static inline int inf_attack_style_obs_preview(int style_mask) {
     return inf_attack_style_from_mask(style_mask);
 }
 
+static inline int inf_attack_style_telegraph_mask(
+    const InfernoState* s, const InfNPC* npc, const InfNPCStats* stats,
+    int planned_style, int dist
+) {
+    /* Jad only telegraphs its ranged/magic branch. Melee is an immediate
+       fallback choice at fire time, not a prayer-switch cue. */
+    if (npc->type == INF_NPC_JAD)
+        return inf_attack_style_mask_bit(planned_style);
+    return inf_attack_style_options_mask(s, npc, stats, planned_style, dist);
+}
+
 static inline int inf_pending_hit_obs_timer(const EncounterPendingHit* ph) {
     if (ph->check_prayer && ph->prayer_check_delay > 0)
         return ph->prayer_check_delay;
@@ -3129,7 +3140,7 @@ static void inf_write_obs(EncounterState* state, float* obs) {
                 style = npc->jad_attack_style;
                 if (style == ATTACK_STYLE_NONE) continue;
             }
-            int style_mask = inf_attack_style_options_mask(
+            int style_mask = inf_attack_style_telegraph_mask(
                 s, npc, st, style, dist);
             int preview_style = inf_attack_style_obs_preview(style_mask);
 
@@ -3546,6 +3557,12 @@ static void inf_fill_render_entities(EncounterState* state, RenderEntity* out, i
             if (npc->death_ticks > 0) {
                 /* dying: hold idle pose while hitsplat + health bar display */
                 re->npc_anim_id = nm ? (int)nm->idle_anim : -1;
+            } else if (npc->type == INF_NPC_MELEER &&
+                       npc->dig_freeze_timer == 6) {
+                re->npc_anim_id = INF_GEN_ANIM_MELEER_DIG_DOWN;
+            } else if (npc->type == INF_NPC_MELEER &&
+                       npc->dig_attack_delay == 6) {
+                re->npc_anim_id = INF_GEN_ANIM_MELEER_DIG_UP;
             } else if (npc->attacked_this_tick && nm && nm->attack_anim != 65535) {
                 re->npc_anim_id = (int)nm->attack_anim;
             } else {
@@ -3721,7 +3738,9 @@ static void inf_render_post_tick(EncounterState* state, EncounterOverlay* ov) {
             case INF_NPC_RANGER:     proj_model_id = INF_GFX_1377_MODEL; break;
             case INF_NPC_MAGER:      proj_model_id = INF_GFX_1376_MODEL; break;
             case INF_NPC_JAD:
-                proj_model_id = (actual_style == ATTACK_STYLE_MAGIC) ? INF_GFX_448_MODEL : INF_GFX_447_MODEL;
+                proj_model_id = (actual_style == ATTACK_STYLE_MAGIC)
+                    ? INF_GFX_448_MODEL
+                    : INF_GFX_451_MODEL;
                 break;
             case INF_NPC_ZUK:        proj_model_id = INF_GFX_1375_MODEL; break;
             case INF_NPC_HEALER_ZUK: proj_model_id = INF_GFX_660_MODEL; break;
@@ -3753,9 +3772,11 @@ static void inf_render_post_tick(EncounterState* state, EncounterOverlay* ov) {
                 if (actual_style == ATTACK_STYLE_MAGIC) {
                     arc = 1.0f;  /* arcing magic projectile */
                 }
-                /* InfernoTrainer JAD_PROJECTILE_DELAY=3: projectile invisible
-                   for first 3 ticks, shorter visible flight. */
-                duration -= 3 * 30;
+                /* InfernoTrainer Jad projectiles use visualDelayTicks=3 and
+                   visualHitEarlyTicks=-1, so the visible segment lasts
+                   hit_delay - 3 + 1 ticks. With Jad's fixed 4-tick land delay
+                   that means a 2-tick visible flight, not 1. */
+                duration = (hit_delay - 2) * 30;
                 if (duration < 30) duration = 30;
                 break;
             case INF_NPC_HEALER_ZUK:
