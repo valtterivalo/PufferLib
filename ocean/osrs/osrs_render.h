@@ -16,6 +16,8 @@
 #include "raymath.h"
 #include "osrs_models.h"
 #include "osrs_anim.h"
+#include "osrs_combat.h"
+#include "osrs_pvp_combat.h"
 #include "osrs_pvp_effects.h"
 #include "data/player_models.h"
 #include "data/npc_models.h"
@@ -23,6 +25,7 @@
 #include "osrs_objects.h"
 #include "osrs_gui.h"
 #include "osrs_human_input.h"
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -81,7 +84,10 @@
  *   1 client tick = 20ms, 1 server tick = 600ms = 30 client ticks.
  */
 
-#define MAX_FLIGHT_PROJECTILES 16
+/* inferno can keep multiple Zuk healer spark volleys and other flights alive
+   at once. size this from the real encounter envelope instead of a tiny demo
+   value so visuals never silently disappear. */
+#define MAX_FLIGHT_PROJECTILES 64
 #define PROJ_OSRS_SLOPE_TO_RAD 0.02454369f  /* pi/128, converts OSRS slope units to radians */
 
 typedef struct {
@@ -107,6 +113,7 @@ typedef struct {
     int tracks_target;          /* 1 = re-aim toward target each tick */
     int start_delay;            /* client ticks before projectile becomes visible/moves */
     uint32_t model_id;          /* GFX model from cache (0 = style-based fallback) */
+    int impact_gfx_id;          /* landing spotanim to spawn on arrival */
 } FlightProjectile;
 
 /* ======================================================================== */
@@ -321,6 +328,8 @@ typedef struct {
     /* per-entity 2D convex hull for click detection (projected model vertices).
        recomputed every frame after 3D rendering, used by click handler. */
     ConvexHull2D entity_hulls[MAX_RENDER_ENTITIES];
+    float entity_visual_top_y[MAX_RENDER_ENTITIES];  /* world-space top of animated mesh */
+    float entity_visual_mid_y[MAX_RENDER_ENTITIES];  /* world-space middle of animated mesh */
 
     /* per-entity two-track animation (matches OSRS primary + secondary system) */
     struct {
@@ -410,7 +419,7 @@ typedef struct {
     FlightProjectile flights[MAX_FLIGHT_PROJECTILES];
 
     /* dynamic projectile model cache: lazily loads per-NPC-type projectile models */
-#define MAX_PROJ_MODELS 16
+#define MAX_PROJ_MODELS 24
     struct { uint32_t id; Model model; int ready; } proj_models[MAX_PROJ_MODELS];
     int proj_model_count;
 
@@ -888,16 +897,21 @@ static int render_build_static_model(ModelCache* cache, uint32_t model_id, Model
     return 1;
 }
 
-/** Lazily load and cache a projectile model by GFX model ID.
- *  Searches both model_cache and npc_model_cache. Returns NULL if not found
- *  or if model_id is 0 (style-based fallback). */
+/** Lazily load and cache an explicit projectile model by GFX model ID.
+ *  Searches both model_cache and npc_model_cache. model_id 0 means the
+ *  caller intentionally wants style-based fallback; missing explicit models
+ *  abort so backend/render drift fails loudly. */
 static Model* render_get_proj_model(RenderClient* rc, uint32_t model_id) {
     if (model_id == 0) return NULL;
     for (int i = 0; i < rc->proj_model_count; i++) {
         if (rc->proj_models[i].id == model_id)
             return rc->proj_models[i].ready ? &rc->proj_models[i].model : NULL;
     }
-    if (rc->proj_model_count >= MAX_PROJ_MODELS) return NULL;
+    if (rc->proj_model_count >= MAX_PROJ_MODELS) {
+        fprintf(stderr, "render: projectile model cache exhausted while loading model %u\n",
+                model_id);
+        abort();
+    }
     int idx = rc->proj_model_count++;
     rc->proj_models[idx].id = model_id;
     rc->proj_models[idx].ready = render_build_static_model(
@@ -906,7 +920,12 @@ static Model* render_get_proj_model(RenderClient* rc, uint32_t model_id) {
         rc->proj_models[idx].ready = render_build_static_model(
             rc->npc_model_cache, model_id, &rc->proj_models[idx].model);
     }
-    return rc->proj_models[idx].ready ? &rc->proj_models[idx].model : NULL;
+    if (!rc->proj_models[idx].ready) {
+        fprintf(stderr, "render: explicit projectile model %u is missing from loaded caches\n",
+                model_id);
+        abort();
+    }
+    return &rc->proj_models[idx].model;
 }
 
 /**
@@ -962,6 +981,7 @@ static void flight_spawn(RenderClient* rc,
                          int style, int damage,
                          int duration_ticks, int start_h, int end_h, int curve,
                          float arc_height, int tracks_target, uint32_t model_id,
+                         int impact_gfx_id,
                          int start_delay) {
     int slot = -1;
     for (int i = 0; i < MAX_FLIGHT_PROJECTILES; i++) {
@@ -988,6 +1008,7 @@ static void flight_spawn(RenderClient* rc,
     fp->arc_height = arc_height;
     fp->tracks_target = tracks_target;
     fp->model_id = model_id;
+    fp->impact_gfx_id = impact_gfx_id;
     fp->start_delay = start_delay;
 
     /* height arc: OSRS SceneProjectile.calculateIncrements
@@ -1006,6 +1027,39 @@ static void flight_spawn(RenderClient* rc,
     /* initial facing */
     fp->yaw = atan2f(dx, dy);
     fp->pitch = (arc_height > 0.0f) ? 0.0f : atan2f(fp->height_vel, dist);
+}
+
+static inline Matrix render_projectile_transform(
+    float scale_x, float scale_y, float scale_z,
+    float yaw, float pitch, Vector3 position
+) {
+    Matrix transform = MatrixScale(-scale_x, scale_y, scale_z);
+    transform = MatrixMultiply(
+        transform,
+        MatrixMultiply(MatrixRotateY(yaw + 1.5707963f), MatrixRotateX(pitch)));
+    transform = MatrixMultiply(transform, MatrixTranslate(position.x, position.y, position.z));
+    return transform;
+}
+
+static inline int render_pvp_ranged_spec_weapon_for_item(uint8_t weapon_db_idx) {
+    switch (weapon_db_idx) {
+        case ITEM_DARK_BOW:           return RANGED_SPEC_DARK_BOW;
+        case ITEM_HEAVY_BALLISTA:     return RANGED_SPEC_BALLISTA;
+        case ITEM_ARMADYL_CROSSBOW:   return RANGED_SPEC_ACB;
+        case ITEM_ZARYTE_CROSSBOW:    return RANGED_SPEC_ZCB;
+        case ITEM_MAGIC_SHORTBOW_I:   return RANGED_SPEC_MSB;
+        case ITEM_MORRIGANS_JAVELIN:  return RANGED_SPEC_MORRIGANS;
+        default:                      return RANGED_SPEC_NONE;
+    }
+}
+
+static inline int render_pvp_distance_to_target(
+    const RenderEntity* attacker, const RenderEntity* target
+) {
+    int target_size = target->entity_type == ENTITY_NPC && target->npc_size > 1
+        ? target->npc_size : 1;
+    return encounter_dist_to_npc(
+        attacker->x, attacker->y, target->x, target->y, target_size);
 }
 
 /**
@@ -1049,6 +1103,13 @@ static void flight_client_tick(RenderClient* rc) {
 
         fp->progress += fp->speed;
         if (fp->progress >= 1.0f) {
+            if (fp->impact_gfx_id > 0) {
+                effect_spawn_spotanim_subtile(
+                    rc->effects, fp->impact_gfx_id,
+                    fp->dst_x * 128.0f, fp->dst_y * 128.0f,
+                    rc->effect_client_tick_counter + 1,
+                    rc->anim_cache, rc->model_cache, rc->npc_model_cache);
+            }
             fp->active = 0;
         }
     }
@@ -1774,18 +1835,22 @@ static void render_post_tick(RenderClient* rc, OsrsEnv* env) {
             /* attacker cast a spell this tick — spawn projectile */
             if (p->attack_style_this_tick == ATTACK_STYLE_MAGIC) {
                 uint8_t wpn = p->equipped[GEAR_SLOT_WEAPON];
+                int dist = render_pvp_distance_to_target(p, t);
+                int duration_ticks = pvp_magic_hit_delay(dist) * 30;
                 if (wpn == ITEM_TRIDENT_OF_SWAMP || wpn == ITEM_SANGUINESTI_STAFF ||
                     wpn == ITEM_EYE_OF_AYAK) {
                     /* trident/sang/ayak: powered staff projectile */
                     effect_spawn_projectile(rc->effects, GFX_TRIDENT_PROJ,
                         p->x, p->y, t->x, t->y,
-                        0, 40, 40 * 4, 30 * 4, 16, ct, rc->model_cache);
+                        0, duration_ticks, 40 * 4, 30 * 4, 16, ct,
+                        rc->model_cache, rc->npc_model_cache);
                 } else if (p->magic_type_this_tick == 1) {
                     /* ice barrage: projectile orb rises from target tile
                        heights *4 per reference (stream.readUnsignedByte() * 4) */
                     effect_spawn_projectile(rc->effects, GFX_ICE_BARRAGE_PROJ,
                         t->x, t->y, t->x, t->y,  /* src=dst (rises in place) */
-                        0, 56, 43 * 4, 0, 16, ct, rc->model_cache);
+                        0, 56, 43 * 4, 0, 16, ct,
+                        rc->model_cache, rc->npc_model_cache);
                 }
                 /* blood barrage: no projectile, impact spawns on hit */
             }
@@ -1793,19 +1858,27 @@ static void render_post_tick(RenderClient* rc, OsrsEnv* env) {
             /* attacker fired a ranged attack this tick */
             if (p->attack_style_this_tick == ATTACK_STYLE_RANGED) {
                 uint8_t wpn = p->equipped[GEAR_SLOT_WEAPON];
+                int dist = render_pvp_distance_to_target(p, t);
                 int gfx;
                 if (wpn == ITEM_TOXIC_BLOWPIPE) {
                     gfx = GFX_DRAGON_DART;
                 } else if (wpn == ITEM_MAGIC_SHORTBOW_I || wpn == ITEM_DARK_BOW ||
-                           wpn == ITEM_BOW_OF_FAERDHINEN || wpn == ITEM_TWISTED_BOW) {
+                           wpn == ITEM_BOW_OF_FAERDHINEN) {
                     gfx = GFX_RUNE_ARROW;
+                } else if (wpn == ITEM_TWISTED_BOW) {
+                    gfx = GFX_DRAGON_ARROW;
                 } else {
                     gfx = GFX_BOLT;  /* crossbows, default */
                 }
+                int duration_ticks = p->used_special_this_tick
+                    ? pvp_ranged_hit_delay_for_weapon(
+                        dist, 1, render_pvp_ranged_spec_weapon_for_item(wpn)) * 30
+                    : pvp_ranged_hit_delay(dist) * 30;
                 /* heights *4 per reference: 43*4=172 start, 31*4=124 end */
                 effect_spawn_projectile(rc->effects, gfx,
                     p->x, p->y, t->x, t->y,
-                    0, 40, 43 * 4, 31 * 4, 16, ct, rc->model_cache);
+                    0, duration_ticks, 43 * 4, 31 * 4, 16, ct,
+                    rc->model_cache, rc->npc_model_cache);
             }
         }
 
@@ -1829,10 +1902,12 @@ static void render_post_tick(RenderClient* rc, OsrsEnv* env) {
                 /* powered staff hit: trident impact splash */
                 if (p->hit_was_successful) {
                     effect_spawn_spotanim(rc->effects, GFX_TRIDENT_IMPACT,
-                        p->x, p->y, ct, rc->anim_cache, rc->model_cache);
+                        p->x, p->y, ct, rc->anim_cache,
+                        rc->model_cache, rc->npc_model_cache);
                 } else {
                     effect_spawn_spotanim(rc->effects, GFX_SPLASH,
-                        p->x, p->y, ct, rc->anim_cache, rc->model_cache);
+                        p->x, p->y, ct, rc->anim_cache,
+                        rc->model_cache, rc->npc_model_cache);
                 }
             } else {
                 /* barrage impact: use hit_spell_type (set when pending hit resolves)
@@ -1851,10 +1926,12 @@ static void render_post_tick(RenderClient* rc, OsrsEnv* env) {
                         int gfx = (spell == 1)  /* ENCOUNTER_SPELL_ICE */
                             ? GFX_ICE_BARRAGE_HIT : GFX_BLOOD_BARRAGE_HIT;
                         effect_spawn_spotanim_subtile(rc->effects, gfx,
-                            fx, fy, ct, rc->anim_cache, rc->model_cache);
+                            fx, fy, ct, rc->anim_cache,
+                            rc->model_cache, rc->npc_model_cache);
                     } else {
                         effect_spawn_spotanim_subtile(rc->effects, GFX_SPLASH,
-                            fx, fy, ct, rc->anim_cache, rc->model_cache);
+                            fx, fy, ct, rc->anim_cache,
+                            rc->model_cache, rc->npc_model_cache);
                     }
                 }
             }
@@ -1895,7 +1972,8 @@ static void render_post_tick(RenderClient* rc, OsrsEnv* env) {
 
                 flight_spawn(rc, sx, sy, dx, dy,
                     ov->projectiles[i].style, ov->projectiles[i].damage,
-                    dur, sh, eh, cv, arc, trk, ov->projectiles[i].model_id,
+                    dur, sh, eh, cv, arc, trk,
+                    ov->projectiles[i].model_id, ov->projectiles[i].impact_gfx_id,
                     ov->projectiles[i].start_delay);
             }
 
@@ -2985,18 +3063,22 @@ static void composite_rebuild_npc(
     /* look up model ID from NPC definition */
     uint32_t model_id = 0;
     const NpcModelMapping* mapping = npc_model_lookup((uint16_t)npc_def_id);
-    if (mapping) {
-        model_id = mapping->model_id;
-    } else {
-        /* snakelings and other NPCs without a mapping — try snakeling */
-        model_id = SNAKELING_MODEL_ID;
+    if (!mapping) {
+        fprintf(stderr, "render: missing NPC model mapping for npc_def_id=%d\n", npc_def_id);
+        abort();
     }
+    model_id = mapping->model_id;
 
     OsrsModel* om = model_cache_get(cache, model_id);
     /* fallback: check secondary NPC model cache (inferno etc.) */
     if (!om && npc_cache)
         om = model_cache_get(npc_cache, model_id);
-    if (om) composite_add_model(comp, om);
+    if (!om) {
+        fprintf(stderr, "render: npc_def_id=%d mapped model %u is missing from loaded caches\n",
+                npc_def_id, model_id);
+        abort();
+    }
+    composite_add_model(comp, om);
 
     /* rebuild animation state */
     if (comp->anim_state) {
@@ -3607,7 +3689,7 @@ static void render_draw_3d_world(RenderClient* rc) {
                 proj_model = render_get_proj_model(rc, fp->model_id);
             }
             if (!proj_model) {
-                /* style-based fallback for backward compatibility */
+                /* model_id 0 intentionally falls back to the generic style mesh */
                 if (fp->style == 0 && rc->ranged_proj_model_ready)
                     proj_model = &rc->ranged_proj_model;
                 else if (fp->style == 1 && rc->magic_proj_model_ready)
@@ -3621,11 +3703,8 @@ static void render_draw_3d_world(RenderClient* rc) {
             if (proj_model) {
                 rlDisableBackfaceCulling();
                 float pms = 1.0f / 128.0f;
-                proj_model->transform = MatrixMultiply(
-                    MatrixMultiply(
-                        MatrixScale(-pms, pms, pms),
-                        MatrixMultiply(MatrixRotateY(fp->yaw + 1.5707963f), MatrixRotateX(fp->pitch))),
-                    MatrixTranslate(pos.x, pos.y, pos.z));
+                proj_model->transform = render_projectile_transform(
+                    pms, pms, pms, fp->yaw, fp->pitch, pos);
                 DrawModel(*proj_model, (Vector3){0,0,0}, 1.0f, WHITE);
                 rlEnableBackfaceCulling();
             }
@@ -3735,8 +3814,24 @@ static void render_draw_3d_world(RenderClient* rc) {
             int nv = comp->face_count * 3;  /* actual used verts, not pre-allocated capacity */
             int stride = (nv > 200) ? (nv / 100) : 1;  /* sample ~100 verts max */
             int hull_n = 0;
+            float min_model_y = 1000000.0f;
+            float max_model_y = -1000000.0f;
             /* stack arrays for projection — max 200 sampled points */
             int hull_xs[256], hull_ys[256];
+            for (int vi = 0; vi < nv; vi++) {
+                float vy = comp->mesh.vertices[vi * 3 + 1];
+                if (vy < min_model_y) min_model_y = vy;
+                if (vy > max_model_y) max_model_y = vy;
+            }
+            if (nv > 0 && min_model_y <= max_model_y) {
+                rc->entity_visual_mid_y[i] = ground + min_model_y * ms
+                    + (max_model_y - min_model_y) * ms * 0.5f;
+                rc->entity_visual_top_y[i] = ground + max_model_y * ms;
+            } else {
+                int ent_size = (ep->entity_type == ENTITY_NPC && ep->npc_size > 1) ? ep->npc_size : 1;
+                rc->entity_visual_mid_y[i] = ground + 0.75f + 0.25f * (float)ent_size;
+                rc->entity_visual_top_y[i] = ground + 1.5f + 0.5f * (float)ent_size;
+            }
             for (int vi = 0; vi < nv && hull_n < 256; vi += stride) {
                 float vx = comp->mesh.vertices[vi * 3 + 0];
                 float vy = comp->mesh.vertices[vi * 3 + 1];
@@ -3768,6 +3863,8 @@ static void render_draw_3d_world(RenderClient* rc) {
 
             /* look up model */
             OsrsModel* om = model_cache_get(rc->model_cache, e->meta->model_id);
+            if (!om && rc->npc_model_cache)
+                om = model_cache_get(rc->npc_model_cache, e->meta->model_id);
             if (!om) continue;
 
             /* position: sub-tile coords -> tile coords -> raylib world */
@@ -3805,7 +3902,7 @@ static void render_draw_3d_world(RenderClient* rc) {
             }
 
             /* build transform */
-            Matrix t = MatrixScale(-sx, sx, sz);  /* negate X for handedness */
+            Matrix t;
 
             /* projectile orientation: yaw + pitch from trajectory direction.
                uses atan2 on the velocity vector (same approach as the flight
@@ -3818,11 +3915,11 @@ static void render_draw_3d_world(RenderClient* rc) {
                 float horiz = sqrtf(dx * dx + dz * dz);
                 float yaw = atan2f(dx, dz);
                 float pitch = atan2f((float)e->height_increment, horiz > 0.001f ? horiz : 0.001f);
-                t = MatrixMultiply(t, MatrixMultiply(
-                    MatrixRotateX(pitch), MatrixRotateY(yaw)));
+                t = render_projectile_transform(sx, sx, sz, yaw, pitch,
+                    (Vector3){ ex, ey, ez });
+            } else {
+                t = MatrixMultiply(MatrixScale(-sx, sx, sz), MatrixTranslate(ex, ey, ez));
             }
-
-            t = MatrixMultiply(t, MatrixTranslate(ex, ey, ez));
             om->model.transform = t;
 
             /* spotanim fade: 20% fade in, 60% full, 20% fade out */
@@ -4007,8 +4104,12 @@ static void render_draw_overhead_status(RenderClient* rc, OsrsEnv* env) {
         float px, pz, ground;
         render_get_visual_pos(rc, i, &px, &pz, &ground);
         int ent_size = (p->entity_type == ENTITY_NPC && p->npc_size > 1) ? p->npc_size : 1;
-        float head_y = ground + 1.5f + 0.5f * (float)ent_size;
-        float abdomen_y = ground + 0.75f + 0.25f * (float)ent_size;
+        float head_y = rc->entity_visual_top_y[i];
+        float abdomen_y = rc->entity_visual_mid_y[i];
+        if (head_y <= abdomen_y) {
+            head_y = ground + 1.5f + 0.5f * (float)ent_size;
+            abdomen_y = ground + 0.75f + 0.25f * (float)ent_size;
+        }
         Vector2 screen_head = GetWorldToScreen((Vector3){ px, head_y, pz }, cam);
         Vector2 screen_abdomen = GetWorldToScreen((Vector3){ px, abdomen_y, pz }, cam);
 

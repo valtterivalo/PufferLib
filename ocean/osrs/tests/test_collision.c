@@ -5,7 +5,7 @@
  * Validates that collision flags block movement correctly, that the pathfinder
  * routes around obstacles, and that NULL collision map preserves flat arena behavior.
  *
- * Compile: cd PufferLib && cc -O2 -Isrc/osrs -o test_collision ocean/osrs/tests/test_collision.c -lm
+ * Compile: cc -O2 -o test_collision test_collision.c -lm
  * Run: ./test_collision
  */
 
@@ -195,21 +195,21 @@ TEST(test_save_and_load) {
  * ========================================================================= */
 
 TEST(test_pathfind_already_at_dest) {
-    PathResult r = pathfind_step(NULL, 0, 100, 100, 100, 100);
+    PathResult r = pathfind_step(NULL, 0, 100, 100, 100, 100, NULL, NULL);
     ASSERT(r.found == 1);
     ASSERT(r.next_dx == 0 && r.next_dy == 0);
 }
 
 TEST(test_pathfind_straight_line_no_obstacles) {
     /* no collision map — straight path east */
-    PathResult r = pathfind_step(NULL, 0, 100, 100, 105, 100);
+    PathResult r = pathfind_step(NULL, 0, 100, 100, 105, 100, NULL, NULL);
     ASSERT(r.found == 1);
     ASSERT(r.next_dx == 1);
     ASSERT(r.next_dy == 0);
 }
 
 TEST(test_pathfind_diagonal_no_obstacles) {
-    PathResult r = pathfind_step(NULL, 0, 100, 100, 105, 105);
+    PathResult r = pathfind_step(NULL, 0, 100, 100, 105, 105, NULL, NULL);
     ASSERT(r.found == 1);
     ASSERT(r.next_dx == 1);
     ASSERT(r.next_dy == 1);
@@ -225,7 +225,7 @@ TEST(test_pathfind_around_wall) {
         collision_mark_blocked(map, 0, 102, y);
     }
 
-    PathResult r = pathfind_step(map, 0, 100, 100, 105, 100);
+    PathResult r = pathfind_step(map, 0, 100, 100, 105, 100, NULL, NULL);
     ASSERT(r.found == 1);
 
     /* first step should NOT be straight east into the wall.
@@ -251,7 +251,7 @@ TEST(test_pathfind_completely_blocked) {
     /* also block the dest tile itself */
     collision_mark_blocked(map, 0, 105, 100);
 
-    PathResult r = pathfind_step(map, 0, 100, 100, 105, 100);
+    PathResult r = pathfind_step(map, 0, 100, 100, 105, 100, NULL, NULL);
     /* should use fallback — find closest reachable tile */
     ASSERT(r.found == 1);
     /* the actual destination should differ from requested since it's blocked */
@@ -268,7 +268,7 @@ TEST(test_pathfind_respects_wall_flags) {
     collision_set_flag(map, 0, 101, 101, COLLISION_WALL_SOUTH);
 
     /* pathfind from (100, 100) to (102, 102) — going NE */
-    PathResult r = pathfind_step(map, 0, 100, 100, 102, 102);
+    PathResult r = pathfind_step(map, 0, 100, 100, 102, 102, NULL, NULL);
     ASSERT(r.found == 1);
 
     /* the BFS should find a path (there are many routes around one wall tile) */

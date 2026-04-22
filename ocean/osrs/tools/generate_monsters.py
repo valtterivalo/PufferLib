@@ -92,16 +92,14 @@ def parse_max_hit(raw: str | int) -> int:
     """Parse max_hit from monsters.json (may contain HTML entities or ranges)."""
     if isinstance(raw, int):
         return raw
-    # strip HTML entities like &thinsp;
-    cleaned = re.sub(r"&\w+;", "", str(raw)).strip()
-    # handle "X (Style)" format
+    cleaned = re.sub(r"&\w+;", " ", str(raw))
     cleaned = re.split(r"\s*\(", cleaned)[0].strip()
-    # handle "X-Y" ranges (take max)
-    if "-" in cleaned:
-        parts = cleaned.split("-")
-        return max(int(p.strip()) for p in parts if p.strip().isdigit())
-    if cleaned.isdigit():
-        return int(cleaned)
+    range_matches = [
+        int(value)
+        for value in re.findall(r"\d+", cleaned.replace("–", "-").replace("—", "-"))
+    ]
+    if range_matches:
+        return max(range_matches)
     return 0
 
 

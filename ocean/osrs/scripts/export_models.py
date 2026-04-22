@@ -1772,6 +1772,7 @@ def main() -> None:
         20824,  # GFX 1042 trident impact
         20823,  # GFX 665 trident casting
         3136,   # GFX 15 rune arrow projectile
+        26377,  # GFX 1120 dragon arrow projectile
         26379,  # GFX 1122 dragon dart projectile (blowpipe)
         3131,   # GFX 231 rune dart projectile
         29421,  # GFX 1043 blowpipe special attack
