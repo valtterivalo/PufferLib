@@ -538,6 +538,34 @@ static const char* render_entity_display_name(RenderEntity* ent) {
     return TextFormat("NPC %d", ent->npc_def_id);
 }
 
+typedef struct {
+    RenderClient* rc;
+    OsrsEnv* env;
+} RenderHumanAttackCtx;
+
+static int render_can_human_attack_entity(
+    void* ctx, const RenderEntity* entity, int entity_idx, int gui_entity_idx
+) {
+    RenderHumanAttackCtx* attack_ctx = (RenderHumanAttackCtx*)ctx;
+    if (entity_idx == gui_entity_idx && entity->entity_type == ENTITY_PLAYER) {
+        return 0;
+    }
+
+    if (entity->entity_type == ENTITY_NPC && !entity->npc_visible) {
+        return 0;
+    }
+
+    if (attack_ctx->env->encounter_def && attack_ctx->env->encounter_state) {
+        const EncounterDef* def = (const EncounterDef*)attack_ctx->env->encounter_def;
+        if (entity->entity_type == ENTITY_NPC && def->is_human_targetable_npc_slot) {
+            return def->is_human_targetable_npc_slot(
+                attack_ctx->env->encounter_state, entity->npc_slot);
+        }
+    }
+
+    return 1;
+}
+
 /** Clear/hide the context menu. */
 static void context_menu_dismiss(ContextMenu* cm) {
     cm->visible = 0;
@@ -558,8 +586,9 @@ static void context_menu_add(ContextMenu* cm, ContextMenuAction action,
 /** Build context menu from a right-click at screen position (mx, my).
     Performs entity hull hit-testing (3D) or tile hit-testing (2D),
     then builds the appropriate menu items. */
-static void context_menu_build(RenderClient* rc, int mx, int my) {
+static void context_menu_build(RenderClient* rc, OsrsEnv* env, int mx, int my) {
     ContextMenu* cm = &rc->context_menu;
+    RenderHumanAttackCtx attack_ctx = { .rc = rc, .env = env };
     cm->item_count = 0;
     cm->hover_idx = -1;
     cm->walk_tile_x = -1;
@@ -572,9 +601,11 @@ static void context_menu_build(RenderClient* rc, int mx, int my) {
     if (rc->mode_3d) {
         /* 3D: test against convex hulls */
         for (int ei = 0; ei < rc->entity_count; ei++) {
-            if (ei == rc->gui.gui_entity_idx) continue;  /* skip self */
             RenderEntity* ent = &rc->entities[ei];
-            if (ent->entity_type == ENTITY_NPC && !ent->npc_visible) continue;
+            if (!render_can_human_attack_entity(
+                    &attack_ctx, ent, ei, rc->gui.gui_entity_idx)) {
+                continue;
+            }
             if (hull_contains(&rc->entity_hulls[ei], mx, my)) {
                 if (hit_count < MAX_RENDER_ENTITIES)
                     hit_entities[hit_count++] = ei;
@@ -619,9 +650,11 @@ static void context_menu_build(RenderClient* rc, int mx, int my) {
                 cm->walk_tile_y = wy;
 
                 for (int ei = 0; ei < rc->entity_count; ei++) {
-                    if (ei == rc->gui.gui_entity_idx) continue;
                     RenderEntity* ent = &rc->entities[ei];
-                    if (ent->entity_type == ENTITY_NPC && !ent->npc_visible) continue;
+                    if (!render_can_human_attack_entity(
+                            &attack_ctx, ent, ei, rc->gui.gui_entity_idx)) {
+                        continue;
+                    }
                     if (human_tile_hits_entity(ent, wx, wy)) {
                         if (hit_count < MAX_RENDER_ENTITIES)
                             hit_entities[hit_count++] = ei;
@@ -1209,6 +1242,7 @@ static void render_destroy_client(RenderClient* rc) {
 /* ======================================================================== */
 
 static void render_handle_input(RenderClient* rc, OsrsEnv* env) {
+    RenderHumanAttackCtx attack_ctx = { .rc = rc, .env = env };
     if (IsKeyPressed(KEY_SPACE))  rc->is_paused = !rc->is_paused;
 
     if (IsKeyPressed(KEY_RIGHT) && rc->is_paused) {
@@ -1410,9 +1444,11 @@ static void render_handle_input(RenderClient* rc, OsrsEnv* env) {
                    check entities FIRST before ground tiles. */
                 int entity_hit = 0;
                 for (int ei = 0; ei < rc->entity_count; ei++) {
-                    if (ei == rc->gui.gui_entity_idx) continue;
                     RenderEntity* ent = &rc->entities[ei];
-                    if (ent->entity_type == ENTITY_NPC && !ent->npc_visible) continue;
+                    if (!render_can_human_attack_entity(
+                            &attack_ctx, ent, ei, rc->gui.gui_entity_idx)) {
+                        continue;
+                    }
                     if (hull_contains(&rc->entity_hulls[ei], mx, my)) {
                         rc->human_input.pending_attack = 1;
                         rc->human_input.pending_target_idx = rc->entities[ei].npc_slot;
@@ -1487,6 +1523,8 @@ static void render_handle_input(RenderClient* rc, OsrsEnv* env) {
                                            rc->arena_width, rc->arena_height,
                                            rc->entities, rc->entity_count,
                                            rc->gui.gui_entity_idx,
+                                           render_can_human_attack_entity,
+                                           &attack_ctx,
                                            RENDER_TILE_SIZE, RENDER_HEADER_HEIGHT);
             }
         }
@@ -1502,7 +1540,7 @@ static void render_handle_input(RenderClient* rc, OsrsEnv* env) {
                 /* cancel spell targeting on right-click (OSRS behavior) */
                 if (rc->human_input.cursor_mode == CURSOR_SPELL_TARGET)
                     rc->human_input.cursor_mode = CURSOR_NORMAL;
-                context_menu_build(rc, rmx, rmy);
+                context_menu_build(rc, env, rmx, rmy);
             } else {
                 context_menu_dismiss(&rc->context_menu);
             }

@@ -94,6 +94,9 @@ static int human_tile_hits_entity(RenderEntity* ent, int wx, int wy) {
            wy >= ent->y && wy < ent->y + size;
 }
 
+typedef int (*human_can_attack_entity_fn)(
+    void* ctx, const RenderEntity* entity, int entity_idx, int gui_entity_idx);
+
 /** Set click cross at screen position (2D overlay, like real OSRS client). */
 static void human_set_click_cross(HumanInput* hi, int screen_x, int screen_y, int is_attack) {
     hi->click_screen_x = screen_x;
@@ -109,12 +112,18 @@ static void human_process_tile_click(HumanInput* hi,
                                       int wx, int wy,
                                       int screen_x, int screen_y,
                                       RenderEntity* entities, int entity_count,
-                                      int gui_entity_idx) {
+                                      int gui_entity_idx,
+                                      human_can_attack_entity_fn can_attack_entity,
+                                      void* can_attack_ctx) {
     /* check if an attackable entity occupies this tile (bounding box) */
     for (int i = 0; i < entity_count; i++) {
-        if (i == gui_entity_idx) continue;  /* can't attack self */
+        if (i == gui_entity_idx && entities[i].entity_type == ENTITY_PLAYER) continue;
         if (!entities[i].npc_visible && entities[i].entity_type == ENTITY_NPC) continue;
         if (human_tile_hits_entity(&entities[i], wx, wy)) {
+            if (can_attack_entity &&
+                !can_attack_entity(can_attack_ctx, &entities[i], i, gui_entity_idx)) {
+                continue;
+            }
             hi->pending_attack = 1;
             hi->pending_target_idx = entities[i].npc_slot;
             /* attack cancels movement — server stops walking to old dest
@@ -149,6 +158,8 @@ static void human_handle_ground_click(HumanInput* hi,
                                        int arena_width, int arena_height,
                                        RenderEntity* entities, int entity_count,
                                        int gui_entity_idx,
+                                       human_can_attack_entity_fn can_attack_entity,
+                                       void* can_attack_ctx,
                                        int tile_size, int header_h) {
     if (mouse_y < header_h) return;
     int grid_pixel_w = arena_width * tile_size;
@@ -160,7 +171,8 @@ static void human_handle_ground_click(HumanInput* hi,
     int wy = human_screen_to_world_y(mouse_y, arena_base_y, arena_height,
                                       header_h, tile_size);
     human_process_tile_click(hi, wx, wy, mouse_x, mouse_y,
-                              entities, entity_count, gui_entity_idx);
+                              entities, entity_count, gui_entity_idx,
+                              can_attack_entity, can_attack_ctx);
 }
 
 /** Handle prayer icon click. Hit-tests the 5-col prayer grid.

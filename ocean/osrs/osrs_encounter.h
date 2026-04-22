@@ -1581,6 +1581,7 @@ typedef struct {
        translates semantic HumanInput intents to encounter-specific action arrays.
        each encounter owns its own mapping since action head layouts differ. */
     void (*translate_human_input)(struct HumanInput* hi, int* actions, EncounterState* state);
+    int (*is_human_targetable_npc_slot)(EncounterState* state, int npc_slot);
 
     /* action head indices used by shared translate helpers and renderer.
        set to -1 if the encounter doesn't have that action head. */

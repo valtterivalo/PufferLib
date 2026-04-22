@@ -1352,7 +1352,13 @@ static InvAction gui_inv_click(GuiState* gs, Player* p, int slot,
             if (human_active) { hi->pending_potion = POTION_ANTIVENOM; gs->human_clicked_inv_slot = slot; }
             return INV_ACTION_DRINK;
         case INV_SLOT_PRAYER_POT:
-            if (human_active) { hi->pending_potion = POTION_RESTORE; gs->human_clicked_inv_slot = slot; }
+            if (human_active) { hi->pending_potion = POTION_PRAYER_POT; gs->human_clicked_inv_slot = slot; }
+            return INV_ACTION_DRINK;
+        case INV_SLOT_BASTION_POT:
+            if (human_active) { hi->pending_potion = POTION_BASTION; gs->human_clicked_inv_slot = slot; }
+            return INV_ACTION_DRINK;
+        case INV_SLOT_STAMINA_POT:
+            if (human_active) { hi->pending_potion = POTION_STAMINA; gs->human_clicked_inv_slot = slot; }
             return INV_ACTION_DRINK;
         default:
             return INV_ACTION_NONE;

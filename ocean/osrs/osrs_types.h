@@ -192,7 +192,7 @@
 #define COMBAT_DIM     13   // NONE, ATK, ICE, BLOOD, ADJACENT, UNDER, DIAGONAL, FARCAST_2..7
 #define OVERHEAD_DIM    6   // ENCOUNTER_OVERHEAD_DIM_PVP: no_change, toggle_{melee,ranged,magic,smite,redemption}
 #define FOOD_DIM        2   // NONE, EAT
-#define POTION_DIM      5   // NONE, BREW, RESTORE, COMBAT, RANGED
+#define POTION_DIM      5   // PvP head only: NONE, BREW, RESTORE, COMBAT, RANGED
 #define KARAMBWAN_DIM   2   // NONE, EAT
 #define VENG_DIM        2   // NONE, CAST
 #define OFFENSIVE_DIM   4   // ENCOUNTER_OFFENSIVE_DIM: no_change, toggle_{piety,rigour,augury}
@@ -435,14 +435,20 @@ typedef enum {
     FOOD_EAT,
 } FoodAction;
 
-/** Potion action head options. */
+/** Potion intent values.
+    The PvP potion action head still only exposes POTION_DIM = 5.
+    Extra values below are human-mode/debug intents for encounters that use
+    different consumable layouts. */
 typedef enum {
     POTION_NONE = 0,
     POTION_BREW,
     POTION_RESTORE,
     POTION_COMBAT,
     POTION_RANGED,
-    POTION_ANTIVENOM,  /* zulrah only — outside PvP action space (POTION_DIM=5) */
+    POTION_ANTIVENOM,   /* zulrah only — outside PvP action space (POTION_DIM=5) */
+    POTION_BASTION,     /* inferno human mode only */
+    POTION_STAMINA,     /* inferno human mode only */
+    POTION_PRAYER_POT,  /* distinct from super restore; not auto-aliased */
 } PotionAction;
 
 /** Karambwan action head options. */

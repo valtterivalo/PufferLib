@@ -76,6 +76,17 @@ static InfNPCStats make_test_stats(int default_style) {
     return stats;
 }
 
+static HumanInput make_human_input(void) {
+    HumanInput input;
+    memset(&input, 0, sizeof(input));
+    input.pending_move_x = -1;
+    input.pending_move_y = -1;
+    input.pending_prayer = -1;
+    input.pending_offensive_prayer = -1;
+    input.pending_target_idx = -1;
+    return input;
+}
+
 static int distance_to_player(const InfernoState* state, const InfNPC* npc) {
     return encounter_dist_to_npc(
         state->player.x, state->player.y, npc->x, npc->y, npc->size);
@@ -579,6 +590,105 @@ static void test_zuk_obs_tracks_shield_and_mager_aggro(void) {
     ASSERT_FLOAT_NEAR("mager aggro bit flips to player", obs[mager_start + 6], 1.0f, 1e-6f);
 }
 
+static void test_human_target_and_potion_translation(void) {
+    printf("--- inferno human target and potion translation ---\n");
+
+    InfernoState state = make_test_state(20, 20);
+    state.player.base_hitpoints = 99;
+    state.player.current_hitpoints = 80;
+    state.player.base_prayer = 99;
+    state.player.current_prayer = 60;
+    state.player.current_attack = 99;
+    state.player.current_strength = 99;
+    state.player.current_defence = 99;
+    state.player.current_ranged = 99;
+    state.player.current_magic = 99;
+
+    state.npcs[0] = make_test_npc(
+        INF_NPC_MAGER, 24, 24, INF_NPC_STATS[INF_NPC_MAGER].size);
+    state.npcs[0].active = 1;
+    state.npcs[0].hp = state.npcs[0].max_hp = INF_NPC_STATS[INF_NPC_MAGER].hp;
+
+    state.npcs[1] = make_test_npc(
+        INF_NPC_MAGER, 26, 24, INF_NPC_STATS[INF_NPC_MAGER].size);
+    state.npcs[1].active = 1;
+    state.npcs[1].hp = state.npcs[1].max_hp = INF_NPC_STATS[INF_NPC_MAGER].hp;
+
+    state.npcs[2] = make_test_npc(
+        INF_NPC_MAGER, 28, 24, INF_NPC_STATS[INF_NPC_MAGER].size);
+    state.npcs[2].active = 1;
+    state.npcs[2].hp = state.npcs[2].max_hp = INF_NPC_STATS[INF_NPC_MAGER].hp;
+
+    state.npcs[3] = make_test_npc(
+        INF_NPC_ZUK_SHIELD, 23, 44, INF_NPC_STATS[INF_NPC_ZUK_SHIELD].size);
+    state.npcs[3].active = 1;
+    state.npcs[3].hp = state.npcs[3].max_hp = INF_NPC_STATS[INF_NPC_ZUK_SHIELD].hp;
+
+    {
+        float obs[INF_NUM_OBS];
+        inf_write_obs((EncounterState*)&state, obs);
+    }
+
+    ASSERT_INT_EQ("first visible mager is targetable",
+        inf_is_human_targetable_npc_slot((EncounterState*)&state, 0), 1);
+    ASSERT_INT_EQ("second visible mager is targetable",
+        inf_is_human_targetable_npc_slot((EncounterState*)&state, 1), 1);
+    ASSERT_INT_EQ("third capped-out mager is not targetable",
+        inf_is_human_targetable_npc_slot((EncounterState*)&state, 2), 0);
+    ASSERT_INT_EQ("shield is never targetable",
+        inf_is_human_targetable_npc_slot((EncounterState*)&state, 3), 0);
+
+    {
+        HumanInput hi;
+        int actions[INF_NUM_ACTION_HEADS];
+
+        hi = make_human_input();
+        hi.pending_target_idx = 0;
+        inf_translate_human_input(&hi, actions, (EncounterState*)&state);
+        ASSERT_INT_EQ("visible mager click maps into target head",
+            actions[INF_HEAD_TARGET], 1);
+
+        hi = make_human_input();
+        hi.pending_target_idx = 2;
+        inf_translate_human_input(&hi, actions, (EncounterState*)&state);
+        ASSERT_INT_EQ("capped-out mager click is rejected",
+            actions[INF_HEAD_TARGET], 0);
+
+        hi = make_human_input();
+        hi.pending_target_idx = 3;
+        inf_translate_human_input(&hi, actions, (EncounterState*)&state);
+        ASSERT_INT_EQ("shield click is rejected",
+            actions[INF_HEAD_TARGET], 0);
+
+        hi = make_human_input();
+        hi.pending_potion = POTION_BREW;
+        inf_translate_human_input(&hi, actions, (EncounterState*)&state);
+        ASSERT_INT_EQ("brew still maps to eat head", actions[INF_HEAD_EAT], 1);
+        ASSERT_INT_EQ("brew does not touch potion head", actions[INF_HEAD_POTION], 0);
+
+        hi = make_human_input();
+        hi.pending_potion = POTION_RESTORE;
+        inf_translate_human_input(&hi, actions, (EncounterState*)&state);
+        ASSERT_INT_EQ("restore maps to potion 1", actions[INF_HEAD_POTION], 1);
+
+        hi = make_human_input();
+        hi.pending_potion = POTION_BASTION;
+        inf_translate_human_input(&hi, actions, (EncounterState*)&state);
+        ASSERT_INT_EQ("bastion maps to potion 2", actions[INF_HEAD_POTION], 2);
+
+        hi = make_human_input();
+        hi.pending_potion = POTION_STAMINA;
+        inf_translate_human_input(&hi, actions, (EncounterState*)&state);
+        ASSERT_INT_EQ("stamina maps to potion 3", actions[INF_HEAD_POTION], 3);
+
+        hi = make_human_input();
+        hi.pending_potion = POTION_PRAYER_POT;
+        inf_translate_human_input(&hi, actions, (EncounterState*)&state);
+        ASSERT_INT_EQ("prayer pot no longer aliases to restore",
+            actions[INF_HEAD_POTION], 0);
+    }
+}
+
 int main(void) {
     inf_build_npc_stats();
 
@@ -594,6 +704,7 @@ int main(void) {
     test_jad_preview_and_obs_timing();
     test_jad_melee_stays_instant_and_untelegraphed();
     test_zuk_obs_tracks_shield_and_mager_aggro();
+    test_human_target_and_potion_translation();
 
     printf("\n%d/%d tests passed", tests_passed, tests_run);
     if (tests_failed > 0) {

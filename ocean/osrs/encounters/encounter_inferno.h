@@ -3381,6 +3381,28 @@ static void inf_write_obs(EncounterState* state, float* obs) {
     }
 }
 
+static int inf_find_target_obs_slot(const InfernoState* s, int npc_slot) {
+    if (npc_slot < 0 || npc_slot >= INF_MAX_NPCS) return -1;
+    for (int j = 0; j < INF_OBS_NPCS; j++) {
+        if (s->current_obs_slots[j] == npc_slot) return j;
+    }
+    return -1;
+}
+
+static int inf_obs_slot_is_targetable(const InfernoState* s, int obs_slot) {
+    if (obs_slot < 0 || obs_slot >= INF_OBS_NPCS) return 0;
+    int npc_slot = s->current_obs_slots[obs_slot];
+    if (npc_slot < 0 || npc_slot >= INF_MAX_NPCS) return 0;
+    return s->npcs[npc_slot].active &&
+        s->npcs[npc_slot].death_ticks == 0 &&
+        s->npcs[npc_slot].type != INF_NPC_ZUK_SHIELD;
+}
+
+static int inf_is_human_targetable_npc_slot(EncounterState* state, int npc_slot) {
+    const InfernoState* s = (const InfernoState*)state;
+    return inf_obs_slot_is_targetable(s, inf_find_target_obs_slot(s, npc_slot));
+}
+
 static void inf_write_mask(EncounterState* state, float* mask) {
     InfernoState* s = (InfernoState*)state;
     int offset = 0;
@@ -3409,12 +3431,7 @@ static void inf_write_mask(EncounterState* state, float* mask) {
        mapped NPC is alive (not dying) and not the Zuk shield (invulnerable). */
     mask[offset++] = 1.0f;  /* no target */
     for (int n = 0; n < INF_OBS_NPCS; n++) {
-        int idx = s->current_obs_slots[n];
-        if (idx >= 0 && s->npcs[idx].active && s->npcs[idx].death_ticks == 0 && s->npcs[idx].type != INF_NPC_ZUK_SHIELD) {
-            mask[offset++] = 1.0f;
-        } else {
-            mask[offset++] = 0.0f;
-        }
+        mask[offset++] = inf_obs_slot_is_targetable(s, n) ? 1.0f : 0.0f;
     }
 
     /* HEAD_GEAR (5): no_switch, mage, tbow, bp, tank */
@@ -3893,14 +3910,8 @@ static void inf_translate_human_input(HumanInput* hi, int* actions, EncounterSta
     InfernoState* s = (InfernoState*)state;
     /* map raw pending_target_idx to the observation slot the agent sees */
     if (hi->pending_target_idx >= 0) {
-        int found_slot = -1;
-        for (int j = 0; j < INF_OBS_NPCS; j++) {
-            if (s->current_obs_slots[j] == hi->pending_target_idx) {
-                found_slot = j;
-                break;
-            }
-        }
-        if (found_slot >= 0) {
+        int found_slot = inf_find_target_obs_slot(s, hi->pending_target_idx);
+        if (inf_obs_slot_is_targetable(s, found_slot)) {
             actions[INF_HEAD_TARGET] = found_slot + 1;
         } else {
             actions[INF_HEAD_TARGET] = 0;
@@ -3918,6 +3929,8 @@ static void inf_translate_human_input(HumanInput* hi, int* actions, EncounterSta
 
     /* potions: restore=1, bastion=2, stamina=3 */
     if (hi->pending_potion == POTION_RESTORE) actions[INF_HEAD_POTION] = 1;
+    else if (hi->pending_potion == POTION_BASTION) actions[INF_HEAD_POTION] = 2;
+    else if (hi->pending_potion == POTION_STAMINA) actions[INF_HEAD_POTION] = 3;
 
     /* spell: 0=no change, 1=blood, 2=ice */
     if (hi->pending_spell == ATTACK_BLOOD) actions[INF_HEAD_SPELL] = 1;
@@ -3967,6 +3980,7 @@ static const EncounterDef ENCOUNTER_INFERNO = {
     .get_winner = inf_get_winner,
 
     .translate_human_input = inf_translate_human_input,
+    .is_human_targetable_npc_slot = inf_is_human_targetable_npc_slot,
     .head_move = INF_HEAD_MOVE,
     .head_prayer = INF_HEAD_PRAYER,
     .head_target = INF_HEAD_TARGET,
