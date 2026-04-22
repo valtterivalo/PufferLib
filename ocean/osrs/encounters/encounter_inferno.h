@@ -411,6 +411,7 @@ typedef struct {
 
     /* mager resurrection state */
     int resurrect_cooldown; /* mager: ticks until next resurrection attempt */
+    int resurrection_count; /* number of times this original mob has been resurrected */
 
     /* freeze state (ice barrage) */
     int frozen_ticks;       /* ticks remaining in ice barrage freeze */
@@ -845,6 +846,7 @@ static void inf_store_dead_mob(InfernoState* s, InfNPC* npc) {
     /* only store the exact types that register with InfernoMobDeathStore in
        the reference: bat, blob parent, meleer, ranger, and mager. */
     if (!inf_dead_mob_is_resurrectable(npc->type)) return;
+    if (npc->resurrection_count != 0) return;
 
     InfDeadMob* dm = &s->dead_mobs[s->dead_mob_count++];
     dm->type = npc->type;
@@ -1942,6 +1944,7 @@ static int inf_mager_resurrect(InfernoState* s, int idx) {
     inf_init_npc(s, slot, dm->type, rx, ry);
     s->npcs[slot].hp = dm->hp;      /* 50% of max HP */
     s->npcs[slot].max_hp = dm->max_hp;
+    s->npcs[slot].resurrection_count = 1;
     /* agent already got paid for driving this mob to 0 the first time — lock
        min_hp_reached at 0 so re-killing the resurrected copy yields no new
        min-HP-progress reward. encourages killing mager before it can rez. */

@@ -335,7 +335,7 @@ void c_render(Env* env) {
     if (env->pending_render_reset) {
         render_clear_history(rc);
         effect_clear_all(rc->effects);
-        rc->gui.inv_grid_dirty = 1;
+        gui_reset_inventory_ui_state(&rc->gui);
         render_populate_entities(rc, re);
         for (int i = 0; i < rc->entity_count; i++) {
             int size = rc->entities[i].npc_size > 1 ? rc->entities[i].npc_size : 1;

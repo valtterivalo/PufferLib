@@ -890,11 +890,7 @@ static RenderClient* render_make_client(void) {
     rc->gui.gui_entity_count = 0;
 
     /* inventory interaction state */
-    rc->gui.inv_dim_slot = -1;
-    rc->gui.inv_drag_src_slot = -1;
-    rc->gui.inv_drag_active = 0;
-    rc->gui.inv_grid_dirty = 1;
-    rc->gui.human_clicked_inv_slot = -1;
+    gui_reset_inventory_ui_state(&rc->gui);
 
     /* human input control */
     human_input_init(&rc->human_input);

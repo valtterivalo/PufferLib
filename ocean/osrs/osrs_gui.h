@@ -964,6 +964,49 @@ static int gui_inv_place_equipment(GuiState* gs, uint8_t item_db_idx) {
     return slot;
 }
 
+/** Copy the player-side inventory snapshot that incremental GUI updates diff against. */
+static void gui_snapshot_inventory_state(GuiState* gs, const Player* p) {
+    memcpy(gs->inv_prev_equipped, p->equipped, NUM_GEAR_SLOTS);
+    gs->inv_prev_food_count = p->food_count;
+    gs->inv_prev_karambwan_count = p->karambwan_count;
+    gs->inv_prev_brew_doses = p->brew_doses;
+    gs->inv_prev_restore_doses = p->restore_doses;
+    gs->inv_prev_prayer_pot_doses = p->prayer_pot_doses;
+    gs->inv_prev_combat_doses = p->combat_potion_doses;
+    gs->inv_prev_ranged_doses = p->ranged_potion_doses;
+    gs->inv_prev_bastion_doses = p->bastion_doses;
+    gs->inv_prev_stamina_doses = p->stamina_doses;
+    gs->inv_prev_antivenom_doses = p->antivenom_doses;
+}
+
+/** Return 1 when any inventory-tracked consumable count changed. */
+static int gui_inventory_consumables_changed(const GuiState* gs, const Player* p) {
+    return p->food_count != gs->inv_prev_food_count
+        || p->karambwan_count != gs->inv_prev_karambwan_count
+        || p->brew_doses != gs->inv_prev_brew_doses
+        || p->restore_doses != gs->inv_prev_restore_doses
+        || p->prayer_pot_doses != gs->inv_prev_prayer_pot_doses
+        || p->combat_potion_doses != gs->inv_prev_combat_doses
+        || p->ranged_potion_doses != gs->inv_prev_ranged_doses
+        || p->bastion_doses != gs->inv_prev_bastion_doses
+        || p->stamina_doses != gs->inv_prev_stamina_doses
+        || p->antivenom_doses != gs->inv_prev_antivenom_doses;
+}
+
+/** Clear inventory-only GUI state that must not leak across resets. */
+static void gui_reset_inventory_ui_state(GuiState* gs) {
+    gs->inv_grid_dirty = 1;
+    gs->human_clicked_inv_slot = -1;
+    gs->inv_dim_slot = -1;
+    gs->inv_dim_timer = 0;
+    gs->inv_drag_active = 0;
+    gs->inv_drag_src_slot = -1;
+    gs->inv_drag_start_x = 0;
+    gs->inv_drag_start_y = 0;
+    gs->inv_drag_mouse_x = 0;
+    gs->inv_drag_mouse_y = 0;
+}
+
 /** Full inventory grid build from player state. Called once at reset.
     Equipment items go first (unequipped gear), then consumables.
     After this, use gui_update_inventory() for incremental changes. */
@@ -1035,15 +1078,7 @@ static void gui_populate_inventory(GuiState* gs, Player* p) {
     #undef ADD_POTION_VIALS
 
     /* snapshot player state for incremental change detection */
-    memcpy(gs->inv_prev_equipped, p->equipped, NUM_GEAR_SLOTS);
-    gs->inv_prev_food_count = p->food_count;
-    gs->inv_prev_karambwan_count = p->karambwan_count;
-    gs->inv_prev_brew_doses = p->brew_doses;
-    gs->inv_prev_restore_doses = p->restore_doses;
-    gs->inv_prev_prayer_pot_doses = p->prayer_pot_doses;
-    gs->inv_prev_combat_doses = p->combat_potion_doses;
-    gs->inv_prev_ranged_doses = p->ranged_potion_doses;
-    gs->inv_prev_antivenom_doses = p->antivenom_doses;
+    gui_snapshot_inventory_state(gs, p);
 }
 
 /** Update potion vial doses in-place when doses change.
@@ -1254,27 +1289,12 @@ static void gui_update_inventory(GuiState* gs, Player* p) {
 
     /* only clear human click when a consumable was actually used this frame.
        if no diff happened yet, keep it for the next tick when the sim processes the action. */
-    int any_consumable_changed = clicked_used
-        || (p->brew_doses != gs->inv_prev_brew_doses)
-        || (p->restore_doses != gs->inv_prev_restore_doses)
-        || (p->prayer_pot_doses != gs->inv_prev_prayer_pot_doses)
-        || (p->combat_potion_doses != gs->inv_prev_combat_doses)
-        || (p->ranged_potion_doses != gs->inv_prev_ranged_doses)
-        || (p->antivenom_doses != gs->inv_prev_antivenom_doses);
-    if (any_consumable_changed) {
+    if (clicked_used || gui_inventory_consumables_changed(gs, p)) {
         gs->human_clicked_inv_slot = -1;
     }
 
     /* update snapshot */
-    memcpy(gs->inv_prev_equipped, p->equipped, NUM_GEAR_SLOTS);
-    gs->inv_prev_food_count = p->food_count;
-    gs->inv_prev_karambwan_count = p->karambwan_count;
-    gs->inv_prev_brew_doses = p->brew_doses;
-    gs->inv_prev_restore_doses = p->restore_doses;
-    gs->inv_prev_prayer_pot_doses = p->prayer_pot_doses;
-    gs->inv_prev_combat_doses = p->combat_potion_doses;
-    gs->inv_prev_ranged_doses = p->ranged_potion_doses;
-    gs->inv_prev_antivenom_doses = p->antivenom_doses;
+    gui_snapshot_inventory_state(gs, p);
 }
 
 /** Get the inventory grid screen position for a slot index. */

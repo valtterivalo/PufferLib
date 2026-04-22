@@ -87,6 +87,18 @@ static HumanInput make_human_input(void) {
     return input;
 }
 
+static int force_mager_resurrect(InfernoState* s, int idx) {
+    for (uint32_t seed = 1; seed < 100000; seed++) {
+        InfernoState probe = *s;
+        probe.rng_state = seed;
+        if (inf_mager_resurrect(&probe, idx)) {
+            s->rng_state = seed;
+            return inf_mager_resurrect(s, idx);
+        }
+    }
+    return 0;
+}
+
 static int distance_to_player(const InfernoState* state, const InfNPC* npc) {
     return encounter_dist_to_npc(
         state->player.x, state->player.y, npc->x, npc->y, npc->size);
@@ -344,6 +356,94 @@ static void test_dead_mob_store_eligibility(void) {
     ASSERT_INT_EQ("blob range split not resurrectable", inf_dead_mob_is_resurrectable(INF_NPC_BLOB_RANGE), 0);
     ASSERT_INT_EQ("blob mage split not resurrectable", inf_dead_mob_is_resurrectable(INF_NPC_BLOB_MAGE), 0);
     ASSERT_INT_EQ("jad not resurrectable", inf_dead_mob_is_resurrectable(INF_NPC_JAD), 0);
+}
+
+static void test_resurrected_mob_does_not_reenter_dead_store(void) {
+    printf("--- resurrected mob does not reenter dead store ---\n");
+
+    InfernoState state = make_test_state(25, 16);
+    state.wave = 35;
+
+    state.npcs[0] = make_test_npc(INF_NPC_MAGER, 20, 20, INF_NPC_STATS[INF_NPC_MAGER].size);
+    state.npcs[0].active = 1;
+    state.npcs[0].hp = state.npcs[0].max_hp = INF_NPC_STATS[INF_NPC_MAGER].hp;
+
+    state.dead_mobs[0].type = INF_NPC_RANGER;
+    state.dead_mobs[0].x = 18;
+    state.dead_mobs[0].y = 18;
+    state.dead_mobs[0].hp = INF_NPC_STATS[INF_NPC_RANGER].hp / 2;
+    state.dead_mobs[0].max_hp = INF_NPC_STATS[INF_NPC_RANGER].hp;
+    state.dead_mob_count = 1;
+
+    ASSERT_INT_EQ("resurrection succeeds", force_mager_resurrect(&state, 0), 1);
+    ASSERT_INT_EQ("dead store consumed", state.dead_mob_count, 0);
+
+    int resurrected_slot = -1;
+    for (int i = 1; i < INF_MAX_NPCS; i++) {
+        if (state.npcs[i].active && state.npcs[i].type == INF_NPC_RANGER) {
+            resurrected_slot = i;
+            break;
+        }
+    }
+    ASSERT_INT_EQ("resurrected ranger spawned", resurrected_slot >= 0, 1);
+    ASSERT_INT_EQ("respawned ranger marked resurrected",
+        state.npcs[resurrected_slot].resurrection_count, 1);
+
+    inf_store_dead_mob(&state, &state.npcs[resurrected_slot]);
+    ASSERT_INT_EQ("resurrected ranger not re-added", state.dead_mob_count, 0);
+}
+
+static void test_double_mager_wave_resurrection_limit(void) {
+    printf("--- double mager wave respects once-only resurrection ---\n");
+
+    InfernoState state = make_test_state(25, 16);
+    state.wave = 65;
+
+    state.npcs[0] = make_test_npc(INF_NPC_MAGER, 18, 18, INF_NPC_STATS[INF_NPC_MAGER].size);
+    state.npcs[0].active = 1;
+    state.npcs[0].hp = state.npcs[0].max_hp = INF_NPC_STATS[INF_NPC_MAGER].hp;
+
+    state.dead_mobs[0].type = INF_NPC_MAGER;
+    state.dead_mobs[0].x = 22;
+    state.dead_mobs[0].y = 22;
+    state.dead_mobs[0].hp = INF_NPC_STATS[INF_NPC_MAGER].hp / 2;
+    state.dead_mobs[0].max_hp = INF_NPC_STATS[INF_NPC_MAGER].hp;
+    state.dead_mob_count = 1;
+
+    ASSERT_INT_EQ("first mage resurrection succeeds", force_mager_resurrect(&state, 0), 1);
+
+    int resurrected_slot = -1;
+    for (int i = 1; i < INF_MAX_NPCS; i++) {
+        if (state.npcs[i].active && state.npcs[i].type == INF_NPC_MAGER) {
+            resurrected_slot = i;
+            break;
+        }
+    }
+    ASSERT_INT_EQ("second mager spawned", resurrected_slot >= 0, 1);
+    ASSERT_INT_EQ("respawned mager marked resurrected",
+        state.npcs[resurrected_slot].resurrection_count, 1);
+
+    inf_store_dead_mob(&state, &state.npcs[0]);
+    ASSERT_INT_EQ("original mage can still enter dead store once", state.dead_mob_count, 1);
+
+    ASSERT_INT_EQ("resurrected mage can resurrect the original once",
+        force_mager_resurrect(&state, resurrected_slot), 1);
+
+    int original_respawn_slot = -1;
+    for (int i = 1; i < INF_MAX_NPCS; i++) {
+        if (i == resurrected_slot) continue;
+        if (state.npcs[i].active && state.npcs[i].type == INF_NPC_MAGER &&
+            state.npcs[i].resurrection_count == 1) {
+            original_respawn_slot = i;
+            break;
+        }
+    }
+    ASSERT_INT_EQ("original mage respawned once", original_respawn_slot >= 0, 1);
+
+    inf_store_dead_mob(&state, &state.npcs[resurrected_slot]);
+    ASSERT_INT_EQ("already-resurrected mage stays out of store", state.dead_mob_count, 0);
+    inf_store_dead_mob(&state, &state.npcs[original_respawn_slot]);
+    ASSERT_INT_EQ("re-resurrected original mage stays out of store", state.dead_mob_count, 0);
 }
 
 static void test_pending_hit_obs_timer_prefers_prayer_window(void) {
@@ -700,6 +800,8 @@ int main(void) {
     test_overlap_shuffle_respects_npc_occupancy();
     test_meleer_dig_landing_order();
     test_dead_mob_store_eligibility();
+    test_resurrected_mob_does_not_reenter_dead_store();
+    test_double_mager_wave_resurrection_limit();
     test_pending_hit_obs_timer_prefers_prayer_window();
     test_jad_preview_and_obs_timing();
     test_jad_melee_stays_instant_and_untelegraphed();
