@@ -6,8 +6,8 @@
  * and edge cases against .refs/osrs-dps-calc/src/lib/dists/bolts.ts.
  *
  * BUILD:
- *   cd PufferLib
- *   cc -std=c11 -O0 -g -Isrc/osrs -o test_bolt_procs \
+ *   cd pufferlib-metal
+ *   cc -std=c11 -O0 -g -I. -o test_bolt_procs \
  *       ocean/osrs/tests/test_bolt_procs.c -lm
  *   ./test_bolt_procs
  */
@@ -16,7 +16,7 @@
 #include <stdlib.h>
 #include <math.h>
 
-#include "osrs_bolt_procs.h"
+#include "ocean/osrs/osrs_bolt_procs.h"
 
 /* ======================================================================== */
 /* test harness                                                              */

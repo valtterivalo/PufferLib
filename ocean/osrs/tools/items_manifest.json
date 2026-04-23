@@ -307,7 +307,8 @@
     "index": "ITEM_LIGHTBEARER",
     "item_id": 25975,
     "attack_range": 0,
-    "comment": "Lightbearer"
+    "comment": "Lightbearer",
+    "effect_tags": ["LIGHTBEARER"]
   },
   {
     "index": "ITEM_MAGES_BOOK",
@@ -331,7 +332,8 @@
     "index": "ITEM_DHAROKS_PLATELEGS",
     "item_id": 4722,
     "attack_range": 0,
-    "comment": "Dharok's platelegs"
+    "comment": "Dharok's platelegs",
+    "effect_tags": ["DHAROK_PIECE"]
   },
   {
     "index": "ITEM_VERACS_PLATESKIRT",
@@ -349,7 +351,8 @@
     "index": "ITEM_DHAROKS_HELM",
     "item_id": 4716,
     "attack_range": 0,
-    "comment": "Dharok's helm"
+    "comment": "Dharok's helm",
+    "effect_tags": ["DHAROK_PIECE"]
   },
   {
     "index": "ITEM_VERACS_HELM",
@@ -391,7 +394,8 @@
     "index": "ITEM_CONFLICTION_GAUNTLETS",
     "item_id": 31106,
     "attack_range": 0,
-    "comment": "Confliction gauntlets"
+    "comment": "Confliction gauntlets",
+    "effect_tags": ["CONFLICTION"]
   },
   {
     "index": "ITEM_AVERNIC_TREADS",
@@ -403,13 +407,15 @@
     "index": "ITEM_RING_OF_SUFFERING_RI",
     "item_id": 20657,
     "attack_range": 0,
-    "comment": "Ring of suffering (ri)"
+    "comment": "Ring of suffering (ri)",
+    "effect_tags": ["RECOIL_RING"]
   },
   {
     "index": "ITEM_TWISTED_BOW",
     "item_id": 20997,
     "attack_range": 10,
-    "comment": "Twisted bow"
+    "comment": "Twisted bow",
+    "effect_tags": ["TWISTED_BOW"]
   },
   {
     "index": "ITEM_MASORI_MASK_F",
@@ -469,7 +475,8 @@
     "index": "ITEM_SANGUINESTI_STAFF",
     "item_id": 22481,
     "attack_range": 7,
-    "comment": "Sanguinesti staff"
+    "comment": "Sanguinesti staff",
+    "effect_tags": ["SANG_HEAL"]
   },
   {
     "index": "ITEM_INFINITY_BOOTS",
@@ -487,7 +494,8 @@
     "index": "ITEM_RING_OF_RECOIL",
     "item_id": 2550,
     "attack_range": 0,
-    "comment": "Ring of recoil"
+    "comment": "Ring of recoil",
+    "effect_tags": ["RECOIL_RING"]
   },
   {
     "index": "ITEM_CRYSTAL_HELM",
@@ -720,19 +728,22 @@
     "index": "ITEM_VIRTUS_MASK",
     "item_id": 26241,
     "attack_range": 0,
-    "comment": "Virtus mask"
+    "comment": "Virtus mask",
+    "effect_tags": ["VIRTUS_PIECE"]
   },
   {
     "index": "ITEM_VIRTUS_ROBE_TOP",
     "item_id": 26243,
     "attack_range": 0,
-    "comment": "Virtus robe top"
+    "comment": "Virtus robe top",
+    "effect_tags": ["VIRTUS_PIECE"]
   },
   {
     "index": "ITEM_VIRTUS_ROBE_BOTTOM",
     "item_id": 26245,
     "attack_range": 0,
-    "comment": "Virtus robe bottom"
+    "comment": "Virtus robe bottom",
+    "effect_tags": ["VIRTUS_PIECE"]
   },
   {
     "index": "ITEM_MAGUS_RING",
@@ -809,6 +820,13 @@
     "item_id": 12821,
     "attack_range": 0,
     "comment": "Spectral spirit shield"
+  },
+  {
+    "index": "ITEM_ELYSIAN_SPIRIT_SHIELD",
+    "item_id": 12817,
+    "attack_range": 0,
+    "comment": "Elysian spirit shield",
+    "effect_tags": ["ELYSIAN"]
   },
   {
     "index": "ITEM_DRAGONFIRE_SHIELD",

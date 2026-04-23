@@ -13,6 +13,7 @@
 #include "osrs_items.h"
 #include "osrs_inventory.h"
 #include "osrs_combat.h"
+#include "osrs_item_effects.h"
 
 // ============================================================================
 // MELEE SPEC WEAPON BONUS TYPES
@@ -166,32 +167,12 @@ static const uint8_t MAGE_RING_PRIORITY[] = {ITEM_LIGHTBEARER, ITEM_SEERS_RING_I
 static inline GearBonuses compute_slot_gear_bonuses(Player* p) {
     EquipmentBonuses eb;
     osrs_sum_equipment_bonuses(p->equipped, &eb);
-
-    GearBonuses total = {0};
-    total.stab_attack     = eb.attack_stab;
-    total.slash_attack    = eb.attack_slash;
-    total.crush_attack    = eb.attack_crush;
-    total.magic_attack    = eb.attack_magic;
-    total.ranged_attack   = eb.attack_ranged;
-    total.stab_defence    = eb.defence_stab;
-    total.slash_defence   = eb.defence_slash;
-    total.crush_defence   = eb.defence_crush;
-    total.magic_defence   = eb.defence_magic;
-    total.ranged_defence  = eb.defence_ranged;
-    total.melee_strength  = eb.melee_strength;
-    total.ranged_strength = eb.ranged_strength;
-    total.magic_strength  = eb.magic_damage;
-    total.attack_speed    = eb.attack_speed;
-    total.attack_range    = eb.attack_range;
-    return total;
+    return osrs_gear_bonuses_from_equipment_bonuses(&eb);
 }
 
 /** Get cached slot-based gear bonuses, recomputing if dirty. */
 static inline GearBonuses* get_slot_gear_bonuses(Player* p) {
-    if (p->slot_gear_dirty) {
-        p->slot_cached_bonuses = compute_slot_gear_bonuses(p);
-        p->slot_gear_dirty = 0;
-    }
+    osrs_ensure_player_equipment(p);
     return &p->slot_cached_bonuses;
 }
 
@@ -318,6 +299,7 @@ static inline int slot_equip_item(Player* p, int gear_slot, uint8_t item_idx) {
         p->equipped[GEAR_SLOT_SHIELD] = ITEM_NONE;
     }
 
+    osrs_refresh_player_equipment(p);
     return 1;
 }
 
@@ -698,7 +680,7 @@ static inline void init_slot_equipment_lms(Player* p) {
     p->inventory[GEAR_SLOT_RING][0] = ITEM_BERSERKER_RING;
     p->num_items_in_slot[GEAR_SLOT_RING] = 1;
 
-    p->slot_gear_dirty = 1;
+    osrs_refresh_player_equipment(p);
     p->current_gear = GEAR_MELEE;
 }
 
@@ -1081,7 +1063,7 @@ static inline void init_player_gear_randomized(Player* p, int tier, uint32_t* rn
         slot_equip_item(p, DYNAMIC_GEAR_SLOTS[i], resolved[i]);
     }
 
-    p->slot_gear_dirty = 1;
+    osrs_refresh_player_equipment(p);
     p->current_gear = GEAR_MELEE;
 }
 

@@ -527,10 +527,6 @@ typedef struct {
      * carries over between forms (magic defence is a stat, not a level). */
     int magic_def_drain;
 
-    /* confliction gauntlets: primed after a magic miss, next magic attack
-     * rolls accuracy twice (like osmumten's fang). cleared on next magic attack. */
-    int confliction_primed;
-
     /* thrall (arceuus greater ghost): auto-attacks zulrah every 4 ticks,
      * always hits 0-3, ignores armour. auto-resummons after expiry + cooldown. */
     int thrall_active;
@@ -645,21 +641,27 @@ static void zul_apply_player_damage(ZulrahState* s, int damage, AttackStyle styl
     s->total_damage_received += damage;
     s->player.hit_style = style;
 
-    /* ring of recoil / ring of suffering (i) */
-    int has_recoil = osrs_has_recoil_ring(s->player.equipped);
-    if (attacker && has_recoil && s->player.recoil_charges > 0) {
-        int recoil = damage / 10 + 1;
-        if (recoil > s->player.recoil_charges) {
-            recoil = s->player.recoil_charges;
-        }
-        encounter_damage_player(attacker, recoil, NULL);
-
-        if (s->player.equipped[GEAR_SLOT_RING] == ITEM_RING_OF_RECOIL) {
-            s->player.recoil_charges -= recoil;
-            if (s->player.recoil_charges <= 0) {
-                s->player.recoil_charges = 0;
-                s->player.equipped[GEAR_SLOT_RING] = ITEM_NONE;
+    if (attacker) {
+        osrs_ensure_player_equipment(&s->player);
+        DamageResult damage_result = osrs_apply_passive_damage_pipeline(
+            damage,
+            style,
+            s->player.prayer,
+            /* is_pvp */ 0,
+            /* target_veng_active */ 0,
+            /* attacker_smite_active */ 0,
+            &s->player.equipment_effect_profile,
+            &s->player.item_effect_state,
+            &s->rng_state
+        );
+        if (damage_result.recoil_damage > 0) {
+            int recoil = damage_result.recoil_damage;
+            if (s->player.equipment_effect_profile.recoil_source == OSRS_RECOIL_SOURCE_RING_OF_RECOIL &&
+                recoil > s->player.item_effect_state.recoil_charges) {
+                recoil = s->player.item_effect_state.recoil_charges;
             }
+            encounter_damage_player(attacker, recoil, NULL);
+            osrs_consume_recoil_charges(&s->player, recoil);
         }
     }
 }
@@ -837,9 +839,10 @@ static inline void zul_form_def_bonuses(ZulrahForm form, int* def_magic, int* de
     *def_ranged = m->ranged_def;
 }
 
-static int zul_player_attack_hits(ZulrahState* s, int is_mage) {
-    const EncounterLoadoutStats* ls = is_mage ? &s->mage_stats : &s->range_stats;
-    int att_roll = osrs_player_att_roll(ls->eff_level, ls->attack_bonus);
+static int zul_player_attack_hits(
+    ZulrahState* s, int is_mage, const OsrsPreparedAttackEffects* attack_effects
+) {
+    int att_roll = attack_effects->attack_roll;
     /* crystal armor set bonus: +30% ranged accuracy with bowfa (tier 1 only) */
     if (!is_mage && s->gear_tier == 1)
         att_roll = att_roll * 130 / 100;
@@ -855,10 +858,7 @@ static int zul_player_attack_hits(ZulrahState* s, int is_mage) {
     int def_roll = (MONSTER_DATABASE[ZUL_FORM_MONSTER_IDX[s->current_form]].def_level + 8) * (def_bonus + 64);
     if (def_roll < 0) def_roll = 0;
 
-    /* confliction gauntlets: double accuracy roll on primed magic attacks (tier 2 only).
-     * primed = previous magic attack missed. eye of ayak is one-handed so effect applies. */
-    if (is_mage && s->confliction_primed && s->gear_tier == 2) {
-        s->confliction_primed = 0;
+    if (attack_effects->use_double_accuracy) {
         return encounter_rand_float(&s->rng_state) < osrs_hit_chance_double(att_roll, def_roll);
     }
 
@@ -873,28 +873,53 @@ static void zul_player_attack(ZulrahState* s, int is_mage) {
     int gear_ok = (is_mage && s->player_gear == ZUL_GEAR_MAGE) ||
                   (!is_mage && s->player_gear == ZUL_GEAR_RANGE);
     const EncounterLoadoutStats* ls = is_mage ? &s->mage_stats : &s->range_stats;
+    const MonsterStats* monster = &MONSTER_DATABASE[ZUL_FORM_MONSTER_IDX[s->current_form]];
+    OsrsMagicAttackKind magic_kind = is_mage ? OSRS_MAGIC_ATTACK_POWERED_STAFF : OSRS_MAGIC_ATTACK_NONE;
+    OsrsPreparedAttackEffects attack_effects = osrs_prepare_attack_effects(
+        &s->player.equipment_effect_profile,
+        &s->player.item_effect_state,
+        s->player.equipped[GEAR_SLOT_WEAPON],
+        is_mage ? ATTACK_STYLE_MAGIC : ATTACK_STYLE_RANGED,
+        magic_kind,
+        (OsrsTargetRef){ .kind = OSRS_TARGET_NPC, .id = 0 },
+        1,
+        osrs_player_att_roll(ls->eff_level, ls->attack_bonus),
+        ls->max_hit,
+        monster->magic_level,
+        monster->magic_att_bonus,
+        s->player.current_hitpoints,
+        s->player.base_hitpoints
+    );
     s->player.attack_timer = is_mage ? 4 : ls->attack_speed;
     if (!gear_ok) return;
 
-    int max_hit = ls->max_hit;
     int dmg = 0;
-    int hit = zul_player_attack_hits(s, is_mage);
+    int hit = zul_player_attack_hits(s, is_mage, &attack_effects);
     if (hit) {
-        dmg = encounter_rand_int(&s->rng_state, max_hit + 1);
+        dmg = encounter_rand_int(&s->rng_state, attack_effects.max_hit + 1);
         dmg = zul_cap_damage(s, dmg);
         encounter_damage_player(&s->zulrah, dmg, &s->damage_dealt_this_tick);
         s->total_damage_dealt += dmg;
-        /* sang staff passive (tier 1 mage): 1/6 chance to heal 50% of damage dealt */
-        if (is_mage && s->gear_tier == 1 && dmg > 0 && encounter_rand_int(&s->rng_state, 6) == 0) {
-            int heal = dmg / 2;
-            s->player.current_hitpoints += heal;
+    }
+    {
+        OsrsPostAttackEffects post_effects = osrs_finalize_attack_effects(
+            &s->player.equipment_effect_profile,
+            &s->player.item_effect_state,
+            s->player.equipped[GEAR_SLOT_WEAPON],
+            is_mage ? ATTACK_STYLE_MAGIC : ATTACK_STYLE_RANGED,
+            magic_kind,
+            (OsrsTargetRef){ .kind = OSRS_TARGET_NPC, .id = 0 },
+            1,
+            attack_effects.use_double_accuracy,
+            hit,
+            dmg,
+            &s->rng_state
+        );
+        if (post_effects.heal_amount > 0) {
+            s->player.current_hitpoints += post_effects.heal_amount;
             if (s->player.current_hitpoints > s->player.base_hitpoints)
                 s->player.current_hitpoints = s->player.base_hitpoints;
         }
-    }
-    /* confliction gauntlets: prime on magic miss, clear on magic hit */
-    if (is_mage && s->gear_tier == 2) {
-        s->confliction_primed = !hit;
     }
     s->player.just_attacked = 1;
     s->player.last_attack_style = is_mage ? ATTACK_STYLE_MAGIC : ATTACK_STYLE_RANGED;
@@ -1826,10 +1851,6 @@ static void zul_reset(EncounterState* state, uint32_t seed) {
         mage_prayer, 99, FIGHT_STYLE_ACCURATE, 30, &s->mage_stats);
     encounter_compute_loadout_stats(ZUL_RANGE_LOADOUT[s->gear_tier], ATTACK_STYLE_RANGED,
         range_prayer, 99, FIGHT_STYLE_RAPID, 0, &s->range_stats);
-    int r = s->player.equipped[GEAR_SLOT_RING];
-    s->player.recoil_charges =
-        (r == ITEM_RING_OF_RECOIL || r == ITEM_RING_OF_SUFFERING_RI) ? RECOIL_MAX_CHARGES : 0;
-
     /* zulrah */
     s->zulrah.entity_type = ENTITY_NPC;
     s->zulrah.npc_def_id = 2042;

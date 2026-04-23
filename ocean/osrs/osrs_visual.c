@@ -268,7 +268,7 @@ static void visual_frame(void* arg) {
             vs->episode_ended = 0;
             render_clear_history(rc);
             effect_clear_all(rc->effects);
-            rc->gui.inv_grid_dirty = 1;
+            gui_reset_inventory_ui_state(&rc->gui);
             if (env->encounter_def) {
                 ((const EncounterDef*)env->encounter_def)->reset(
                     env->encounter_state, (uint32_t)rand());

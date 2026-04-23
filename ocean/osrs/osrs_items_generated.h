@@ -142,8 +142,9 @@ typedef enum {
     ITEM_RUNE_ARROW = 129,  /* Rune arrow */
     ITEM_DRAGON_JAVELIN = 130,  /* Dragon javelin */
     ITEM_SPECTRAL_SPIRIT_SHIELD = 131,  /* Spectral spirit shield */
-    ITEM_DRAGONFIRE_SHIELD = 132,  /* Dragonfire shield */
-    NUM_ITEMS = 133,
+    ITEM_ELYSIAN_SPIRIT_SHIELD = 132,  /* Elysian spirit shield */
+    ITEM_DRAGONFIRE_SHIELD = 133,  /* Dragonfire shield */
+    NUM_ITEMS = 134,
     ITEM_NONE = 255
 } ItemIndex;
 
@@ -155,7 +156,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 0,
         .defence_stab = 31, .defence_slash = 29, .defence_crush = 34,
         .defence_magic = 3, .defence_ranged = 30,
-        .melee_strength = 3, .ranged_strength = 0, .magic_damage = 0, .prayer = 3
+        .melee_strength = 3, .ranged_strength = 0, .magic_damage = 0, .prayer = 3, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_GOD_CAPE] = { /* Imbued god cape */
         .item_id = 21795, .name = "Imbued zamorak cape", .slot = SLOT_CAPE,
@@ -164,7 +165,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 15, .attack_ranged = 0,
         .defence_stab = 3, .defence_slash = 3, .defence_crush = 3,
         .defence_magic = 15, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 2, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 2, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_GLORY] = { /* Amulet of glory */
         .item_id = 1712, .name = "Amulet of glory", .slot = SLOT_NECK,
@@ -173,7 +174,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 10, .attack_ranged = 10,
         .defence_stab = 3, .defence_slash = 3, .defence_crush = 3,
         .defence_magic = 3, .defence_ranged = 3,
-        .melee_strength = 6, .ranged_strength = 0, .magic_damage = 0, .prayer = 3
+        .melee_strength = 6, .ranged_strength = 0, .magic_damage = 0, .prayer = 3, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_BLACK_DHIDE_BODY] = { /* Black d'hide body */
         .item_id = 2503, .name = "Black d'hide body", .slot = SLOT_BODY,
@@ -182,7 +183,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = -15, .attack_ranged = 30,
         .defence_stab = 30, .defence_slash = 38, .defence_crush = 45,
         .defence_magic = 45, .defence_ranged = 50,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_MYSTIC_TOP] = { /* Mystic robe top */
         .item_id = 4091, .name = "Mystic robe top", .slot = SLOT_BODY,
@@ -191,7 +192,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 20, .attack_ranged = 0,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 20, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_RUNE_PLATELEGS] = { /* Rune platelegs */
         .item_id = 1079, .name = "Rune platelegs", .slot = SLOT_LEGS,
@@ -200,7 +201,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = -21, .attack_ranged = -11,
         .defence_stab = 51, .defence_slash = 49, .defence_crush = 47,
         .defence_magic = -4, .defence_ranged = 49,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_MYSTIC_BOTTOM] = { /* Mystic robe bottom */
         .item_id = 4093, .name = "Mystic robe bottom", .slot = SLOT_LEGS,
@@ -209,7 +210,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 15, .attack_ranged = 0,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 15, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_WHIP] = { /* Abyssal whip */
         .item_id = 4151, .name = "Abyssal whip", .slot = SLOT_WEAPON,
@@ -218,7 +219,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 0,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 82, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .melee_strength = 82, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_RUNE_CROSSBOW] = { /* Rune crossbow */
         .item_id = 9185, .name = "Rune crossbow", .slot = SLOT_WEAPON,
@@ -227,7 +228,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 90,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_AHRIM_STAFF] = { /* Ahrim's staff */
         .item_id = 4710, .name = "Ahrim's staff", .slot = SLOT_WEAPON,
@@ -236,7 +237,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 15, .attack_ranged = 0,
         .defence_stab = 3, .defence_slash = 5, .defence_crush = 2,
         .defence_magic = 15, .defence_ranged = 0,
-        .melee_strength = 68, .ranged_strength = 0, .magic_damage = 5, .prayer = 0
+        .melee_strength = 68, .ranged_strength = 0, .magic_damage = 5, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_DRAGON_DAGGER] = { /* Dragon dagger */
         .item_id = 5698, .name = "Dragon dagger", .slot = SLOT_WEAPON,
@@ -245,7 +246,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 1, .attack_ranged = 0,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 1, .defence_ranged = 0,
-        .melee_strength = 40, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .melee_strength = 40, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_DRAGON_DEFENDER] = { /* Dragon defender */
         .item_id = 12954, .name = "Dragon defender", .slot = SLOT_SHIELD,
@@ -254,7 +255,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = -3, .attack_ranged = -2,
         .defence_stab = 25, .defence_slash = 24, .defence_crush = 23,
         .defence_magic = -3, .defence_ranged = -2,
-        .melee_strength = 6, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .melee_strength = 6, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_SPIRIT_SHIELD] = { /* Spirit shield */
         .item_id = 12829, .name = "Spirit shield", .slot = SLOT_SHIELD,
@@ -263,7 +264,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 0,
         .defence_stab = 39, .defence_slash = 41, .defence_crush = 50,
         .defence_magic = 1, .defence_ranged = 45,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 1
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 1, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_BARROWS_GLOVES] = { /* Barrows gloves */
         .item_id = 7462, .name = "Barrows gloves", .slot = SLOT_HANDS,
@@ -272,7 +273,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 6, .attack_ranged = 12,
         .defence_stab = 12, .defence_slash = 12, .defence_crush = 12,
         .defence_magic = 6, .defence_ranged = 12,
-        .melee_strength = 12, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .melee_strength = 12, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_CLIMBING_BOOTS] = { /* Climbing boots */
         .item_id = 3105, .name = "Climbing boots", .slot = SLOT_FEET,
@@ -281,7 +282,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 0,
         .defence_stab = 0, .defence_slash = 2, .defence_crush = 2,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 2, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .melee_strength = 2, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_BERSERKER_RING] = { /* Berserker ring */
         .item_id = 6737, .name = "Berserker ring", .slot = SLOT_RING,
@@ -290,7 +291,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 0,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 4,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 4, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .melee_strength = 4, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_DIAMOND_BOLTS_E] = { /* Diamond bolts (e) */
         .item_id = 9243, .name = "Diamond bolts (e)", .slot = SLOT_AMMO,
@@ -299,7 +300,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 0,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 105, .magic_damage = 0, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 105, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_GHRAZI_RAPIER] = { /* Ghrazi rapier */
         .item_id = 22324, .name = "Ghrazi rapier", .slot = SLOT_WEAPON,
@@ -308,7 +309,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 0,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 89, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .melee_strength = 89, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_INQUISITORS_MACE] = { /* Inquisitor's mace */
         .item_id = 24417, .name = "Inquisitor's mace", .slot = SLOT_WEAPON,
@@ -317,7 +318,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 0,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 89, .ranged_strength = 0, .magic_damage = 0, .prayer = 2
+        .melee_strength = 89, .ranged_strength = 0, .magic_damage = 0, .prayer = 2, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_STAFF_OF_DEAD] = { /* Staff of the dead */
         .item_id = 11791, .name = "Staff of the dead", .slot = SLOT_WEAPON,
@@ -326,7 +327,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 17, .attack_ranged = 0,
         .defence_stab = 0, .defence_slash = 3, .defence_crush = 3,
         .defence_magic = 17, .defence_ranged = 0,
-        .melee_strength = 72, .ranged_strength = 0, .magic_damage = 15, .prayer = 0
+        .melee_strength = 72, .ranged_strength = 0, .magic_damage = 15, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_KODAI_WAND] = { /* Kodai wand */
         .item_id = 21006, .name = "Kodai wand", .slot = SLOT_WEAPON,
@@ -335,7 +336,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 28, .attack_ranged = 0,
         .defence_stab = 0, .defence_slash = 3, .defence_crush = 3,
         .defence_magic = 20, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 15, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 15, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_VOLATILE_STAFF] = { /* Volatile nightmare staff */
         .item_id = 24424, .name = "Volatile nightmare staff", .slot = SLOT_WEAPON,
@@ -344,7 +345,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 16, .attack_ranged = 0,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 14, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 15, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 15, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_ZURIELS_STAFF] = { /* Zuriel's staff (LMS-only, not in wiki equipment.json) (manual) */
         .item_id = 13867, .name = "Zuriel's staff", .slot = SLOT_WEAPON,
@@ -353,7 +354,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 18, .attack_ranged = 0,
         .defence_stab = 5, .defence_slash = 7, .defence_crush = 4,
         .defence_magic = 18, .defence_ranged = 0,
-        .melee_strength = 72, .ranged_strength = 0, .magic_damage = 10, .prayer = 0
+        .melee_strength = 72, .ranged_strength = 0, .magic_damage = 10, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_ARMADYL_CROSSBOW] = { /* Armadyl crossbow */
         .item_id = 11785, .name = "Armadyl crossbow", .slot = SLOT_WEAPON,
@@ -362,7 +363,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 100,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 1
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 1, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_ZARYTE_CROSSBOW] = { /* Zaryte crossbow */
         .item_id = 26374, .name = "Zaryte crossbow", .slot = SLOT_WEAPON,
@@ -371,7 +372,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 110,
         .defence_stab = 14, .defence_slash = 14, .defence_crush = 12,
         .defence_magic = 15, .defence_ranged = 16,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 1
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 1, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_DRAGON_CLAWS] = { /* Dragon claws */
         .item_id = 13652, .name = "Dragon claws", .slot = SLOT_WEAPON,
@@ -380,7 +381,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 0,
         .defence_stab = 13, .defence_slash = 26, .defence_crush = 7,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 56, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .melee_strength = 56, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_AGS] = { /* Armadyl godsword */
         .item_id = 11802, .name = "Armadyl godsword", .slot = SLOT_WEAPON,
@@ -389,7 +390,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 0,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 132, .ranged_strength = 0, .magic_damage = 0, .prayer = 8
+        .melee_strength = 132, .ranged_strength = 0, .magic_damage = 0, .prayer = 8, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_ANCIENT_GS] = { /* Ancient godsword */
         .item_id = 26233, .name = "Ancient godsword", .slot = SLOT_WEAPON,
@@ -398,7 +399,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 0,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 132, .ranged_strength = 0, .magic_damage = 0, .prayer = 8
+        .melee_strength = 132, .ranged_strength = 0, .magic_damage = 0, .prayer = 8, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_GRANITE_MAUL] = { /* Granite maul */
         .item_id = 4153, .name = "Granite maul", .slot = SLOT_WEAPON,
@@ -407,7 +408,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 0,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 79, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .melee_strength = 79, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_ELDER_MAUL] = { /* Elder maul */
         .item_id = 21003, .name = "Elder maul", .slot = SLOT_WEAPON,
@@ -416,7 +417,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 0,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 147, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .melee_strength = 147, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_DARK_BOW] = { /* Dark bow */
         .item_id = 11235, .name = "Dark bow", .slot = SLOT_WEAPON,
@@ -425,7 +426,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 95,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_HEAVY_BALLISTA] = { /* Heavy ballista */
         .item_id = 19481, .name = "Heavy ballista", .slot = SLOT_WEAPON,
@@ -434,7 +435,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 125,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 15, .magic_damage = 0, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 15, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_VESTAS] = { /* Vesta's longsword */
         .item_id = 22613, .name = "Vesta's longsword (Deadman Mode", .slot = SLOT_WEAPON,
@@ -443,7 +444,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 0,
         .defence_stab = 1, .defence_slash = 4, .defence_crush = 3,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 118, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .melee_strength = 118, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_VOIDWAKER] = { /* Voidwaker */
         .item_id = 27690, .name = "Voidwaker", .slot = SLOT_WEAPON,
@@ -452,7 +453,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 5, .attack_ranged = 0,
         .defence_stab = 0, .defence_slash = 1, .defence_crush = 0,
         .defence_magic = 2, .defence_ranged = 0,
-        .melee_strength = 80, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .melee_strength = 80, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_STATIUS_WARHAMMER] = { /* Statius's warhammer */
         .item_id = 22622, .name = "Statius's warhammer (Deadman Mo", .slot = SLOT_WEAPON,
@@ -461,7 +462,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 0,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 114, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .melee_strength = 114, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_MORRIGANS_JAVELIN] = { /* Morrigan's javelin */
         .item_id = 22636, .name = "Morrigan's javelin (Deadman Mod", .slot = SLOT_WEAPON,
@@ -470,7 +471,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 105,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 145, .magic_damage = 0, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 145, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_ANCESTRAL_HAT] = { /* Ancestral hat */
         .item_id = 21018, .name = "Ancestral hat", .slot = SLOT_HEAD,
@@ -479,7 +480,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 8, .attack_ranged = -2,
         .defence_stab = 12, .defence_slash = 11, .defence_crush = 13,
         .defence_magic = 5, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 3, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 3, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_ANCESTRAL_TOP] = { /* Ancestral robe top */
         .item_id = 21021, .name = "Ancestral robe top", .slot = SLOT_BODY,
@@ -488,7 +489,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 35, .attack_ranged = -8,
         .defence_stab = 42, .defence_slash = 31, .defence_crush = 51,
         .defence_magic = 28, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 3, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 3, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_ANCESTRAL_BOTTOM] = { /* Ancestral robe bottom */
         .item_id = 21024, .name = "Ancestral robe bottom", .slot = SLOT_LEGS,
@@ -497,7 +498,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 26, .attack_ranged = -7,
         .defence_stab = 27, .defence_slash = 24, .defence_crush = 30,
         .defence_magic = 20, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 3, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 3, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_AHRIMS_ROBETOP] = { /* Ahrim's robetop */
         .item_id = 4712, .name = "Ahrim's robetop", .slot = SLOT_BODY,
@@ -506,7 +507,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 30, .attack_ranged = -10,
         .defence_stab = 52, .defence_slash = 37, .defence_crush = 63,
         .defence_magic = 30, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 1, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 1, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_AHRIMS_ROBESKIRT] = { /* Ahrim's robeskirt */
         .item_id = 4714, .name = "Ahrim's robeskirt", .slot = SLOT_LEGS,
@@ -515,7 +516,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 22, .attack_ranged = -7,
         .defence_stab = 33, .defence_slash = 30, .defence_crush = 36,
         .defence_magic = 22, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 1, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 1, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_KARILS_TOP] = { /* Karil's leathertop */
         .item_id = 4736, .name = "Karil's leathertop", .slot = SLOT_BODY,
@@ -524,7 +525,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = -15, .attack_ranged = 30,
         .defence_stab = 47, .defence_slash = 42, .defence_crush = 50,
         .defence_magic = 65, .defence_ranged = 57,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_BANDOS_TASSETS] = { /* Bandos tassets */
         .item_id = 11834, .name = "Bandos tassets", .slot = SLOT_LEGS,
@@ -533,7 +534,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = -21, .attack_ranged = -7,
         .defence_stab = 71, .defence_slash = 63, .defence_crush = 66,
         .defence_magic = -4, .defence_ranged = 93,
-        .melee_strength = 2, .ranged_strength = 0, .magic_damage = 0, .prayer = 1
+        .melee_strength = 2, .ranged_strength = 0, .magic_damage = 0, .prayer = 1, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_BLESSED_SPIRIT_SHIELD] = { /* Blessed spirit shield */
         .item_id = 12831, .name = "Blessed spirit shield", .slot = SLOT_SHIELD,
@@ -542,7 +543,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 0,
         .defence_stab = 53, .defence_slash = 55, .defence_crush = 73,
         .defence_magic = 2, .defence_ranged = 52,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 3
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 3, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_FURY] = { /* Amulet of fury */
         .item_id = 6585, .name = "Amulet of fury", .slot = SLOT_NECK,
@@ -551,7 +552,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 10, .attack_ranged = 10,
         .defence_stab = 15, .defence_slash = 15, .defence_crush = 15,
         .defence_magic = 15, .defence_ranged = 15,
-        .melee_strength = 8, .ranged_strength = 0, .magic_damage = 0, .prayer = 5
+        .melee_strength = 8, .ranged_strength = 0, .magic_damage = 0, .prayer = 5, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_OCCULT_NECKLACE] = { /* Occult necklace */
         .item_id = 12002, .name = "Occult necklace", .slot = SLOT_NECK,
@@ -560,7 +561,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 12, .attack_ranged = 0,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 5, .prayer = 2
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 5, .prayer = 2, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_INFERNAL_CAPE] = { /* Infernal cape */
         .item_id = 21295, .name = "Infernal cape", .slot = SLOT_CAPE,
@@ -569,7 +570,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 1, .attack_ranged = 1,
         .defence_stab = 12, .defence_slash = 12, .defence_crush = 12,
         .defence_magic = 12, .defence_ranged = 12,
-        .melee_strength = 8, .ranged_strength = 0, .magic_damage = 0, .prayer = 2
+        .melee_strength = 8, .ranged_strength = 0, .magic_damage = 0, .prayer = 2, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_ETERNAL_BOOTS] = { /* Eternal boots */
         .item_id = 13235, .name = "Eternal boots", .slot = SLOT_FEET,
@@ -578,7 +579,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 8, .attack_ranged = 0,
         .defence_stab = 5, .defence_slash = 5, .defence_crush = 5,
         .defence_magic = 8, .defence_ranged = 5,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 1, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 1, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_SEERS_RING_I] = { /* Seers ring (i) */
         .item_id = 11770, .name = "Seers ring (i)", .slot = SLOT_RING,
@@ -587,7 +588,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 12, .attack_ranged = 0,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 12, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 1, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 1, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_LIGHTBEARER] = { /* Lightbearer */
         .item_id = 25975, .name = "Lightbearer", .slot = SLOT_RING,
@@ -596,7 +597,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 0,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_LIGHTBEARER
     },
     [ITEM_MAGES_BOOK] = { /* Mage's book */
         .item_id = 6889, .name = "Mage's book", .slot = SLOT_SHIELD,
@@ -605,7 +606,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 15, .attack_ranged = 0,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 15, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 2, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 2, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_DRAGON_ARROWS] = { /* Dragon arrows */
         .item_id = 11212, .name = "Dragon arrow", .slot = SLOT_AMMO,
@@ -614,7 +615,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 0,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 60, .magic_damage = 0, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 60, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_TORAGS_PLATELEGS] = { /* Torag's platelegs */
         .item_id = 4751, .name = "Torag's platelegs", .slot = SLOT_LEGS,
@@ -623,7 +624,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = -21, .attack_ranged = -11,
         .defence_stab = 85, .defence_slash = 82, .defence_crush = 83,
         .defence_magic = -4, .defence_ranged = 92,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_DHAROKS_PLATELEGS] = { /* Dharok's platelegs */
         .item_id = 4722, .name = "Dharok's platelegs", .slot = SLOT_LEGS,
@@ -632,7 +633,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = -21, .attack_ranged = -11,
         .defence_stab = 85, .defence_slash = 82, .defence_crush = 83,
         .defence_magic = -4, .defence_ranged = 92,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_DHAROK_PIECE
     },
     [ITEM_VERACS_PLATESKIRT] = { /* Verac's plateskirt */
         .item_id = 4759, .name = "Verac's plateskirt", .slot = SLOT_LEGS,
@@ -641,7 +642,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = -21, .attack_ranged = -11,
         .defence_stab = 85, .defence_slash = 82, .defence_crush = 83,
         .defence_magic = 0, .defence_ranged = 84,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 4
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 4, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_TORAGS_HELM] = { /* Torag's helm */
         .item_id = 4745, .name = "Torag's helm", .slot = SLOT_HEAD,
@@ -650,7 +651,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = -6, .attack_ranged = -2,
         .defence_stab = 55, .defence_slash = 58, .defence_crush = 54,
         .defence_magic = -1, .defence_ranged = 62,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_DHAROKS_HELM] = { /* Dharok's helm */
         .item_id = 4716, .name = "Dharok's helm", .slot = SLOT_HEAD,
@@ -659,7 +660,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = -3, .attack_ranged = -1,
         .defence_stab = 45, .defence_slash = 48, .defence_crush = 44,
         .defence_magic = -1, .defence_ranged = 51,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_DHAROK_PIECE
     },
     [ITEM_VERACS_HELM] = { /* Verac's helm */
         .item_id = 4753, .name = "Verac's helm", .slot = SLOT_HEAD,
@@ -668,7 +669,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = -6, .attack_ranged = -2,
         .defence_stab = 55, .defence_slash = 58, .defence_crush = 54,
         .defence_magic = 0, .defence_ranged = 56,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 3
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 3, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_GUTHANS_HELM] = { /* Guthan's helm */
         .item_id = 4724, .name = "Guthan's helm", .slot = SLOT_HEAD,
@@ -677,7 +678,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = -6, .attack_ranged = -2,
         .defence_stab = 55, .defence_slash = 58, .defence_crush = 54,
         .defence_magic = -1, .defence_ranged = 62,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_OPAL_DRAGON_BOLTS] = { /* Opal dragon bolts (e) */
         .item_id = 21932, .name = "Opal dragon bolts (e)", .slot = SLOT_AMMO,
@@ -686,7 +687,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 0,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 122, .magic_damage = 0, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 122, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_IMBUED_SARA_CAPE] = { /* Imbued saradomin cape */
         .item_id = 21791, .name = "Imbued saradomin cape", .slot = SLOT_CAPE,
@@ -695,7 +696,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 15, .attack_ranged = 0,
         .defence_stab = 3, .defence_slash = 3, .defence_crush = 3,
         .defence_magic = 15, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 2, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 2, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_EYE_OF_AYAK] = { /* Eye of ayak */
         .item_id = 31113, .name = "Eye of ayak", .slot = SLOT_WEAPON,
@@ -704,7 +705,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 30, .attack_ranged = 0,
         .defence_stab = 1, .defence_slash = 5, .defence_crush = 5,
         .defence_magic = 10, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 2
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 2, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_ELIDINIS_WARD_F] = { /* Elidinis' ward (f) */
         .item_id = 27251, .name = "Elidinis' ward (f)", .slot = SLOT_SHIELD,
@@ -713,7 +714,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 25, .attack_ranged = 0,
         .defence_stab = 53, .defence_slash = 55, .defence_crush = 73,
         .defence_magic = 2, .defence_ranged = 52,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 5, .prayer = 4
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 5, .prayer = 4, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_CONFLICTION_GAUNTLETS] = { /* Confliction gauntlets */
         .item_id = 31106, .name = "Confliction gauntlets", .slot = SLOT_HANDS,
@@ -722,7 +723,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 20, .attack_ranged = -4,
         .defence_stab = 15, .defence_slash = 18, .defence_crush = 7,
         .defence_magic = 5, .defence_ranged = 5,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 7, .prayer = 2
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 7, .prayer = 2, .effect_mask = OSRS_ITEM_EFFECT_CONFLICTION
     },
     [ITEM_AVERNIC_TREADS] = { /* Avernic treads (max) */
         .item_id = 31097, .name = "Avernic treads (max)", .slot = SLOT_FEET,
@@ -731,7 +732,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 11, .attack_ranged = 15,
         .defence_stab = 21, .defence_slash = 25, .defence_crush = 25,
         .defence_magic = 10, .defence_ranged = 10,
-        .melee_strength = 6, .ranged_strength = 3, .magic_damage = 2, .prayer = 0
+        .melee_strength = 6, .ranged_strength = 3, .magic_damage = 2, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_RING_OF_SUFFERING_RI] = { /* Ring of suffering (ri) */
         .item_id = 20657, .name = "Ring of suffering (i)", .slot = SLOT_RING,
@@ -740,7 +741,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 0,
         .defence_stab = 20, .defence_slash = 20, .defence_crush = 20,
         .defence_magic = 20, .defence_ranged = 20,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 4
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 4, .effect_mask = OSRS_ITEM_EFFECT_RECOIL_RING
     },
     [ITEM_TWISTED_BOW] = { /* Twisted bow */
         .item_id = 20997, .name = "Twisted bow", .slot = SLOT_WEAPON,
@@ -749,7 +750,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 70,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 20, .magic_damage = 0, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 20, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_TWISTED_BOW
     },
     [ITEM_MASORI_MASK_F] = { /* Masori mask (f) */
         .item_id = 27235, .name = "Masori mask (f)", .slot = SLOT_HEAD,
@@ -758,7 +759,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = -1, .attack_ranged = 12,
         .defence_stab = 8, .defence_slash = 10, .defence_crush = 12,
         .defence_magic = 12, .defence_ranged = 9,
-        .melee_strength = 0, .ranged_strength = 2, .magic_damage = 0, .prayer = 1
+        .melee_strength = 0, .ranged_strength = 2, .magic_damage = 0, .prayer = 1, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_MASORI_BODY_F] = { /* Masori body (f) */
         .item_id = 27238, .name = "Masori body (f)", .slot = SLOT_BODY,
@@ -767,7 +768,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = -4, .attack_ranged = 43,
         .defence_stab = 59, .defence_slash = 52, .defence_crush = 64,
         .defence_magic = 74, .defence_ranged = 60,
-        .melee_strength = 0, .ranged_strength = 4, .magic_damage = 0, .prayer = 1
+        .melee_strength = 0, .ranged_strength = 4, .magic_damage = 0, .prayer = 1, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_MASORI_CHAPS_F] = { /* Masori chaps (f) */
         .item_id = 27241, .name = "Masori chaps (f)", .slot = SLOT_LEGS,
@@ -776,7 +777,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = -2, .attack_ranged = 27,
         .defence_stab = 35, .defence_slash = 30, .defence_crush = 39,
         .defence_magic = 46, .defence_ranged = 37,
-        .melee_strength = 0, .ranged_strength = 2, .magic_damage = 0, .prayer = 1
+        .melee_strength = 0, .ranged_strength = 2, .magic_damage = 0, .prayer = 1, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_NECKLACE_OF_ANGUISH] = { /* Necklace of anguish */
         .item_id = 19547, .name = "Necklace of anguish", .slot = SLOT_NECK,
@@ -785,7 +786,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 15,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 5, .magic_damage = 0, .prayer = 2
+        .melee_strength = 0, .ranged_strength = 5, .magic_damage = 0, .prayer = 2, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_DIZANAS_QUIVER] = { /* Dizana's quiver */
         .item_id = 28947, .name = "Dizana's quiver", .slot = SLOT_CAPE,
@@ -794,7 +795,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 18,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 3, .magic_damage = 0, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 3, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_ZARYTE_VAMBRACES] = { /* Zaryte vambraces */
         .item_id = 26235, .name = "Zaryte vambraces", .slot = SLOT_HANDS,
@@ -803,7 +804,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 18,
         .defence_stab = 8, .defence_slash = 8, .defence_crush = 8,
         .defence_magic = 5, .defence_ranged = 8,
-        .melee_strength = 0, .ranged_strength = 2, .magic_damage = 0, .prayer = 1
+        .melee_strength = 0, .ranged_strength = 2, .magic_damage = 0, .prayer = 1, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_TOXIC_BLOWPIPE] = { /* Toxic blowpipe */
         .item_id = 12926, .name = "Toxic blowpipe", .slot = SLOT_WEAPON,
@@ -812,7 +813,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 30,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 20, .magic_damage = 0, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 20, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_AHRIMS_HOOD] = { /* Ahrim's hood */
         .item_id = 4708, .name = "Ahrim's hood", .slot = SLOT_HEAD,
@@ -821,7 +822,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 6, .attack_ranged = -2,
         .defence_stab = 15, .defence_slash = 13, .defence_crush = 16,
         .defence_magic = 6, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 1, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 1, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_TORMENTED_BRACELET] = { /* Tormented bracelet */
         .item_id = 19544, .name = "Tormented bracelet", .slot = SLOT_HANDS,
@@ -830,7 +831,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 10, .attack_ranged = 0,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 5, .prayer = 2
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 5, .prayer = 2, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_SANGUINESTI_STAFF] = { /* Sanguinesti staff */
         .item_id = 22481, .name = "Sanguinesti staff", .slot = SLOT_WEAPON,
@@ -839,7 +840,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 25, .attack_ranged = -4,
         .defence_stab = 2, .defence_slash = 3, .defence_crush = 1,
         .defence_magic = 15, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_SANG_HEAL
     },
     [ITEM_INFINITY_BOOTS] = { /* Infinity boots */
         .item_id = 6920, .name = "Infinity boots", .slot = SLOT_FEET,
@@ -848,7 +849,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 5, .attack_ranged = 0,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 5, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_GOD_BLESSING] = { /* Holy blessing */
         .item_id = 20220, .name = "Holy blessing", .slot = SLOT_AMMO,
@@ -857,7 +858,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 0,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 1
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 1, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_RING_OF_RECOIL] = { /* Ring of recoil */
         .item_id = 2550, .name = "Ring of recoil", .slot = SLOT_RING,
@@ -866,7 +867,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 0,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_RECOIL_RING
     },
     [ITEM_CRYSTAL_HELM] = { /* Crystal helm */
         .item_id = 23971, .name = "Crystal helm", .slot = SLOT_HEAD,
@@ -875,7 +876,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = -10, .attack_ranged = 9,
         .defence_stab = 12, .defence_slash = 8, .defence_crush = 14,
         .defence_magic = 10, .defence_ranged = 18,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 2
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 2, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_AVAS_ASSEMBLER] = { /* Ava's assembler */
         .item_id = 22109, .name = "Ava's assembler", .slot = SLOT_CAPE,
@@ -884,7 +885,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 8,
         .defence_stab = 1, .defence_slash = 1, .defence_crush = 1,
         .defence_magic = 8, .defence_ranged = 2,
-        .melee_strength = 0, .ranged_strength = 2, .magic_damage = 0, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 2, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_CRYSTAL_BODY] = { /* Crystal body */
         .item_id = 23975, .name = "Crystal body", .slot = SLOT_BODY,
@@ -893,7 +894,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = -18, .attack_ranged = 31,
         .defence_stab = 46, .defence_slash = 38, .defence_crush = 48,
         .defence_magic = 44, .defence_ranged = 68,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 3
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 3, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_CRYSTAL_LEGS] = { /* Crystal legs */
         .item_id = 23979, .name = "Crystal legs", .slot = SLOT_LEGS,
@@ -902,7 +903,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = -12, .attack_ranged = 18,
         .defence_stab = 26, .defence_slash = 21, .defence_crush = 30,
         .defence_magic = 34, .defence_ranged = 38,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 2
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 2, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_BOW_OF_FAERDHINEN] = { /* Bow of faerdhinen (c) */
         .item_id = 25865, .name = "Bow of faerdhinen", .slot = SLOT_WEAPON,
@@ -911,7 +912,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 128,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 106, .magic_damage = 0, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 106, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_BLESSED_DHIDE_BOOTS] = { /* Blessed d'hide boots */
         .item_id = 19921, .name = "Ancient d'hide boots", .slot = SLOT_FEET,
@@ -920,7 +921,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = -10, .attack_ranged = 7,
         .defence_stab = 4, .defence_slash = 4, .defence_crush = 4,
         .defence_magic = 4, .defence_ranged = 4,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 1
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 1, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_MYSTIC_HAT] = { /* Mystic hat */
         .item_id = 4089, .name = "Mystic hat", .slot = SLOT_HEAD,
@@ -929,7 +930,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 4, .attack_ranged = 0,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 4, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_TRIDENT_OF_SWAMP] = { /* Trident of the swamp */
         .item_id = 12899, .name = "Trident of the swamp", .slot = SLOT_WEAPON,
@@ -938,7 +939,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 25, .attack_ranged = 0,
         .defence_stab = 2, .defence_slash = 3, .defence_crush = 1,
         .defence_magic = 15, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_BOOK_OF_DARKNESS] = { /* Book of darkness */
         .item_id = 12612, .name = "Book of darkness", .slot = SLOT_SHIELD,
@@ -947,7 +948,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 10, .attack_ranged = 0,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 5
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 5, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_AMETHYST_ARROW] = { /* Amethyst arrow */
         .item_id = 21326, .name = "Amethyst arrow", .slot = SLOT_AMMO,
@@ -956,7 +957,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 0,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 55, .magic_damage = 0, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 55, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_MYSTIC_BOOTS] = { /* Mystic boots */
         .item_id = 4097, .name = "Mystic boots", .slot = SLOT_FEET,
@@ -965,7 +966,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 3, .attack_ranged = 0,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 3, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_BLESSED_COIF] = { /* Blessed coif */
         .item_id = 10382, .name = "Guthix coif", .slot = SLOT_HEAD,
@@ -974,7 +975,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = -1, .attack_ranged = 7,
         .defence_stab = 4, .defence_slash = 7, .defence_crush = 10,
         .defence_magic = 4, .defence_ranged = 8,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 1
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 1, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_BLACK_DHIDE_CHAPS] = { /* Black d'hide chaps */
         .item_id = 2497, .name = "Black d'hide chaps", .slot = SLOT_LEGS,
@@ -983,7 +984,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = -10, .attack_ranged = 17,
         .defence_stab = 18, .defence_slash = 20, .defence_crush = 26,
         .defence_magic = 23, .defence_ranged = 26,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_MAGIC_SHORTBOW_I] = { /* Magic shortbow (i) */
         .item_id = 12788, .name = "Magic shortbow (i)", .slot = SLOT_WEAPON,
@@ -992,7 +993,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 75,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_AVAS_ACCUMULATOR] = { /* Ava's accumulator */
         .item_id = 10499, .name = "Ava's accumulator", .slot = SLOT_CAPE,
@@ -1001,7 +1002,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 4,
         .defence_stab = 0, .defence_slash = 1, .defence_crush = 0,
         .defence_magic = 4, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_CRYSTAL_SHIELD] = { /* Crystal shield */
         .item_id = 4224, .name = "Crystal shield (historical)", .slot = SLOT_SHIELD,
@@ -1010,7 +1011,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = -10, .attack_ranged = -10,
         .defence_stab = 51, .defence_slash = 54, .defence_crush = 53,
         .defence_magic = 0, .defence_ranged = 80,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_PEGASIAN_BOOTS] = { /* Pegasian boots */
         .item_id = 13237, .name = "Pegasian boots", .slot = SLOT_FEET,
@@ -1019,7 +1020,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = -12, .attack_ranged = 12,
         .defence_stab = 5, .defence_slash = 5, .defence_crush = 5,
         .defence_magic = 5, .defence_ranged = 5,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_JUSTICIAR_FACEGUARD] = { /* Justiciar faceguard */
         .item_id = 22326, .name = "Justiciar faceguard", .slot = SLOT_HEAD,
@@ -1028,7 +1029,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = -6, .attack_ranged = -2,
         .defence_stab = 60, .defence_slash = 63, .defence_crush = 59,
         .defence_magic = -6, .defence_ranged = 67,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 2
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 2, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_JUSTICIAR_CHESTGUARD] = { /* Justiciar chestguard */
         .item_id = 22327, .name = "Justiciar chestguard", .slot = SLOT_BODY,
@@ -1037,7 +1038,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = -40, .attack_ranged = -20,
         .defence_stab = 132, .defence_slash = 130, .defence_crush = 117,
         .defence_magic = -16, .defence_ranged = 142,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 4
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 4, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_JUSTICIAR_LEGGUARDS] = { /* Justiciar legguards */
         .item_id = 22328, .name = "Justiciar legguards", .slot = SLOT_LEGS,
@@ -1046,7 +1047,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = -31, .attack_ranged = -17,
         .defence_stab = 95, .defence_slash = 92, .defence_crush = 93,
         .defence_magic = -14, .defence_ranged = 102,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 4
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 4, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_DRAGON_DART] = { /* Dragon dart */
         .item_id = 11230, .name = "Dragon dart", .slot = SLOT_WEAPON,
@@ -1055,7 +1056,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 0,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 35, .magic_damage = 0, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 35, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_SCYTHE_OF_VITUR] = { /* Scythe of vitur */
         .item_id = 22325, .name = "Scythe of vitur", .slot = SLOT_WEAPON,
@@ -1064,7 +1065,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = -6, .attack_ranged = 0,
         .defence_stab = -2, .defence_slash = 8, .defence_crush = 10,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 75, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .melee_strength = 75, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_BLADE_OF_SAELDOR] = { /* Blade of saeldor (c) */
         .item_id = 24551, .name = "Blade of saeldor (c)", .slot = SLOT_WEAPON,
@@ -1073,7 +1074,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 0,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 89, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .melee_strength = 89, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_OSMUMTENS_FANG] = { /* Osmumten's fang */
         .item_id = 26219, .name = "Osmumten's fang", .slot = SLOT_WEAPON,
@@ -1082,7 +1083,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 0,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 103, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .melee_strength = 103, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_SOULREAPER_AXE] = { /* Soulreaper axe */
         .item_id = 28338, .name = "Soulreaper axe", .slot = SLOT_WEAPON,
@@ -1091,7 +1092,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 0,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 121, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .melee_strength = 121, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_TORVA_FULL_HELM] = { /* Torva full helm */
         .item_id = 26382, .name = "Torva full helm", .slot = SLOT_HEAD,
@@ -1100,7 +1101,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = -5, .attack_ranged = -5,
         .defence_stab = 59, .defence_slash = 60, .defence_crush = 62,
         .defence_magic = -2, .defence_ranged = 57,
-        .melee_strength = 8, .ranged_strength = 0, .magic_damage = 0, .prayer = 1
+        .melee_strength = 8, .ranged_strength = 0, .magic_damage = 0, .prayer = 1, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_TORVA_PLATEBODY] = { /* Torva platebody */
         .item_id = 26384, .name = "Torva platebody", .slot = SLOT_BODY,
@@ -1109,7 +1110,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = -18, .attack_ranged = -14,
         .defence_stab = 117, .defence_slash = 111, .defence_crush = 117,
         .defence_magic = -11, .defence_ranged = 142,
-        .melee_strength = 6, .ranged_strength = 0, .magic_damage = 0, .prayer = 1
+        .melee_strength = 6, .ranged_strength = 0, .magic_damage = 0, .prayer = 1, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_TORVA_PLATELEGS] = { /* Torva platelegs */
         .item_id = 26386, .name = "Torva platelegs", .slot = SLOT_LEGS,
@@ -1118,7 +1119,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = -24, .attack_ranged = -11,
         .defence_stab = 87, .defence_slash = 78, .defence_crush = 79,
         .defence_magic = -9, .defence_ranged = 102,
-        .melee_strength = 4, .ranged_strength = 0, .magic_damage = 0, .prayer = 1
+        .melee_strength = 4, .ranged_strength = 0, .magic_damage = 0, .prayer = 1, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_BANDOS_CHESTPLATE] = { /* Bandos chestplate */
         .item_id = 11832, .name = "Bandos chestplate", .slot = SLOT_BODY,
@@ -1127,7 +1128,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = -15, .attack_ranged = -10,
         .defence_stab = 98, .defence_slash = 93, .defence_crush = 105,
         .defence_magic = -6, .defence_ranged = 133,
-        .melee_strength = 4, .ranged_strength = 0, .magic_damage = 0, .prayer = 1
+        .melee_strength = 4, .ranged_strength = 0, .magic_damage = 0, .prayer = 1, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_BANDOS_BOOTS] = { /* Bandos boots */
         .item_id = 11836, .name = "Bandos boots", .slot = SLOT_FEET,
@@ -1136,7 +1137,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = -5, .attack_ranged = -3,
         .defence_stab = 17, .defence_slash = 18, .defence_crush = 19,
         .defence_magic = 0, .defence_ranged = 15,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 1
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 1, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_PRIMORDIAL_BOOTS] = { /* Primordial boots */
         .item_id = 13239, .name = "Primordial boots", .slot = SLOT_FEET,
@@ -1145,7 +1146,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = -4, .attack_ranged = -1,
         .defence_stab = 22, .defence_slash = 22, .defence_crush = 22,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 5, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .melee_strength = 5, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_FEROCIOUS_GLOVES] = { /* Ferocious gloves */
         .item_id = 22981, .name = "Ferocious gloves", .slot = SLOT_HANDS,
@@ -1154,7 +1155,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = -16, .attack_ranged = -16,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 14, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .melee_strength = 14, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_AMULET_OF_TORTURE] = { /* Amulet of torture */
         .item_id = 19553, .name = "Amulet of torture", .slot = SLOT_NECK,
@@ -1163,7 +1164,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 0,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 10, .ranged_strength = 0, .magic_damage = 0, .prayer = 2
+        .melee_strength = 10, .ranged_strength = 0, .magic_damage = 0, .prayer = 2, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_BERSERKER_RING_I] = { /* Berserker ring (i) */
         .item_id = 11773, .name = "Berserker ring (i)", .slot = SLOT_RING,
@@ -1172,7 +1173,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 0,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 8,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 8, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .melee_strength = 8, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_ULTOR_RING] = { /* Ultor ring */
         .item_id = 28307, .name = "Ultor ring", .slot = SLOT_RING,
@@ -1181,7 +1182,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 0,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 12, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .melee_strength = 12, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_AVERNIC_DEFENDER] = { /* Avernic defender */
         .item_id = 22322, .name = "Avernic defender", .slot = SLOT_SHIELD,
@@ -1190,7 +1191,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = -5, .attack_ranged = -4,
         .defence_stab = 30, .defence_slash = 29, .defence_crush = 28,
         .defence_magic = -5, .defence_ranged = -4,
-        .melee_strength = 8, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .melee_strength = 8, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_VENATOR_RING] = { /* Venator ring */
         .item_id = 28310, .name = "Venator ring", .slot = SLOT_RING,
@@ -1199,7 +1200,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 10,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 2, .magic_damage = 0, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 2, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_VIRTUS_MASK] = { /* Virtus mask */
         .item_id = 26241, .name = "Virtus mask", .slot = SLOT_HEAD,
@@ -1208,7 +1209,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 8, .attack_ranged = -3,
         .defence_stab = 15, .defence_slash = 14, .defence_crush = 16,
         .defence_magic = 6, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 2, .prayer = 1
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 2, .prayer = 1, .effect_mask = OSRS_ITEM_EFFECT_VIRTUS_PIECE
     },
     [ITEM_VIRTUS_ROBE_TOP] = { /* Virtus robe top */
         .item_id = 26243, .name = "Virtus robe top", .slot = SLOT_BODY,
@@ -1217,7 +1218,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 35, .attack_ranged = -11,
         .defence_stab = 47, .defence_slash = 36, .defence_crush = 56,
         .defence_magic = 31, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 2, .prayer = 2
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 2, .prayer = 2, .effect_mask = OSRS_ITEM_EFFECT_VIRTUS_PIECE
     },
     [ITEM_VIRTUS_ROBE_BOTTOM] = { /* Virtus robe bottom */
         .item_id = 26245, .name = "Virtus robe bottom", .slot = SLOT_LEGS,
@@ -1226,7 +1227,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 26, .attack_ranged = -9,
         .defence_stab = 31, .defence_slash = 28, .defence_crush = 34,
         .defence_magic = 22, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 2, .prayer = 1
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 2, .prayer = 1, .effect_mask = OSRS_ITEM_EFFECT_VIRTUS_PIECE
     },
     [ITEM_MAGUS_RING] = { /* Magus ring */
         .item_id = 28313, .name = "Magus ring", .slot = SLOT_RING,
@@ -1235,7 +1236,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 15, .attack_ranged = 0,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 2, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 2, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_TUMEKENS_SHADOW] = { /* Tumeken's shadow */
         .item_id = 27275, .name = "Tumeken's shadow", .slot = SLOT_WEAPON,
@@ -1244,7 +1245,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 35, .attack_ranged = 0,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 20, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 1
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 1, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_BGS] = { /* Bandos godsword */
         .item_id = 11804, .name = "Bandos godsword", .slot = SLOT_WEAPON,
@@ -1253,7 +1254,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 0,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 132, .ranged_strength = 0, .magic_damage = 0, .prayer = 8
+        .melee_strength = 132, .ranged_strength = 0, .magic_damage = 0, .prayer = 8, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_SGS] = { /* Saradomin godsword */
         .item_id = 11806, .name = "Saradomin godsword", .slot = SLOT_WEAPON,
@@ -1262,7 +1263,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 0,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 132, .ranged_strength = 0, .magic_damage = 0, .prayer = 8
+        .melee_strength = 132, .ranged_strength = 0, .magic_damage = 0, .prayer = 8, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_ZGS] = { /* Zamorak godsword */
         .item_id = 11808, .name = "Zamorak godsword", .slot = SLOT_WEAPON,
@@ -1271,7 +1272,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 0,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 132, .ranged_strength = 0, .magic_damage = 0, .prayer = 8
+        .melee_strength = 132, .ranged_strength = 0, .magic_damage = 0, .prayer = 8, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_CRYSTAL_HALBERD] = { /* Crystal halberd */
         .item_id = 23987, .name = "Crystal halberd", .slot = SLOT_WEAPON,
@@ -1280,7 +1281,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = -4, .attack_ranged = 0,
         .defence_stab = -1, .defence_slash = 4, .defence_crush = 5,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 118, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .melee_strength = 118, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_DRAGON_BATTLEAXE] = { /* Dragon battleaxe */
         .item_id = 1377, .name = "Dragon battleaxe", .slot = SLOT_WEAPON,
@@ -1289,7 +1290,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 0,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = -1,
-        .melee_strength = 85, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .melee_strength = 85, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_RUBY_DRAGON_BOLTS_E] = { /* Ruby dragon bolts (e) */
         .item_id = 21944, .name = "Ruby dragon bolts (e)", .slot = SLOT_AMMO,
@@ -1298,7 +1299,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 0,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 122, .magic_damage = 0, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 122, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_DIAMOND_DRAGON_BOLTS_E] = { /* Diamond dragon bolts (e) */
         .item_id = 21946, .name = "Diamond dragon bolts (e)", .slot = SLOT_AMMO,
@@ -1307,7 +1308,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 0,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 122, .magic_damage = 0, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 122, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_RUNE_ARROW] = { /* Rune arrow */
         .item_id = 892, .name = "Rune arrow", .slot = SLOT_AMMO,
@@ -1316,7 +1317,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 0,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 49, .magic_damage = 0, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 49, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_DRAGON_JAVELIN] = { /* Dragon javelin */
         .item_id = 19484, .name = "Dragon javelin", .slot = SLOT_AMMO,
@@ -1325,7 +1326,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 0,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 150, .magic_damage = 0, .prayer = 0
+        .melee_strength = 0, .ranged_strength = 150, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_SPECTRAL_SPIRIT_SHIELD] = { /* Spectral spirit shield */
         .item_id = 12821, .name = "Spectral spirit shield", .slot = SLOT_SHIELD,
@@ -1334,7 +1335,16 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 0,
         .defence_stab = 53, .defence_slash = 55, .defence_crush = 73,
         .defence_magic = 30, .defence_ranged = 52,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 3
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 3, .effect_mask = OSRS_ITEM_EFFECT_NONE
+    },
+    [ITEM_ELYSIAN_SPIRIT_SHIELD] = { /* Elysian spirit shield */
+        .item_id = 12817, .name = "Elysian spirit shield", .slot = SLOT_SHIELD,
+        .attack_speed = 0, .attack_range = 0,
+        .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
+        .attack_magic = 0, .attack_ranged = 0,
+        .defence_stab = 63, .defence_slash = 65, .defence_crush = 75,
+        .defence_magic = 2, .defence_ranged = 57,
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 3, .effect_mask = OSRS_ITEM_EFFECT_ELYSIAN
     },
     [ITEM_DRAGONFIRE_SHIELD] = { /* Dragonfire shield */
         .item_id = 11283, .name = "Dragonfire shield", .slot = SLOT_SHIELD,
@@ -1343,7 +1353,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = -10, .attack_ranged = -5,
         .defence_stab = 70, .defence_slash = 75, .defence_crush = 72,
         .defence_magic = 10, .defence_ranged = 72,
-        .melee_strength = 7, .ranged_strength = 0, .magic_damage = 0, .prayer = 0
+        .melee_strength = 7, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
 };
 

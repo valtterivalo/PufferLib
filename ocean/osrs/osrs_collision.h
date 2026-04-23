@@ -549,38 +549,64 @@ static int has_line_of_sight(const LOSBlocker* blockers, int blocker_count,
     return 1;
 }
 
-/* NPC LOS: for size>1 NPCs, check from target's closest point back to NPC.
- * npc is at (nx,ny) SW corner with npc_size. target is at (tx,ty) size 1.
- * for melee (range==1): pure cardinal adjacency — no ray-trace, no pillar check.
- * ref: osrs-sdk LineOfSight.ts:88-89 (translated to our SW-anchor, Y-up coords). */
-static int npc_has_line_of_sight(const LOSBlocker* blockers, int blocker_count,
-                                  int nx, int ny, int npc_size,
-                                  int tx, int ty, int range) {
-    /* melee range: player must be on a cardinal side of the NPC bounding box
-       (north/south/east/west edge tiles). diagonal corners do NOT count.
-       NPC occupies [nx, nx+s-1] x [ny, ny+s-1]. cardinal-adjacent tiles:
-         north: y = ny+s,   x in [nx, nx+s-1]
-         south: y = ny-1,   x in [nx, nx+s-1]
-         east:  x = nx+s,   y in [ny, ny+s-1]
-         west:  x = nx-1,   y in [ny, ny+s-1] */
+static inline int los_intervals_overlap(int a0, int a1, int b0, int b1) {
+    return !(a1 < b0 || b1 < a0);
+}
+
+/* generic LOS between two entity footprints.
+ * ref: osrs-sdk LineOfSight.ts playerHasLineOfSightOfMob() and
+ * mobHasLineOfSightToMob(). ranged/magic uses closest points on both
+ * footprints. melee is pure cardinal adjacency between footprint edges. */
+static inline int entity_has_line_of_sight(
+    const LOSBlocker* blockers, int blocker_count,
+    int ax, int ay, int a_size,
+    int tx, int ty, int t_size,
+    int range
+) {
     if (range == 1) {
-        if (los_check_tile(blockers, blocker_count, tx, ty)) return 0;
-        if (los_aabb_overlap(nx, ny, npc_size, tx, ty, 1)) return 0;
-        int dx = tx - nx;
-        int dy = ty - ny;
-        return (dx >= 0 && dx < npc_size && (dy == npc_size || dy == -1)) ||
-               (dy >= 0 && dy < npc_size && (dx == npc_size || dx == -1));
+        if (los_aabb_overlap(ax, ay, a_size, tx, ty, t_size)) return 0;
+
+        int a_x0 = ax;
+        int a_x1 = ax + a_size - 1;
+        int a_y0 = ay;
+        int a_y1 = ay + a_size - 1;
+        int t_x0 = tx;
+        int t_x1 = tx + t_size - 1;
+        int t_y0 = ty;
+        int t_y1 = ty + t_size - 1;
+
+        return (a_x1 + 1 == t_x0 && los_intervals_overlap(a_y0, a_y1, t_y0, t_y1)) ||
+               (t_x1 + 1 == a_x0 && los_intervals_overlap(a_y0, a_y1, t_y0, t_y1)) ||
+               (a_y1 + 1 == t_y0 && los_intervals_overlap(a_x0, a_x1, t_x0, t_x1)) ||
+               (t_y1 + 1 == a_y0 && los_intervals_overlap(a_x0, a_x1, t_x0, t_x1));
     }
 
-    /* ranged/magic: find closest point on NPC footprint, ray-trace */
-    int cx = tx;
-    if (cx < nx) cx = nx;
-    if (cx >= nx + npc_size) cx = nx + npc_size - 1;
-    int cy = ty;
-    if (cy < ny) cy = ny;
-    if (cy >= ny + npc_size) cy = ny + npc_size - 1;
+    int a_px = tx;
+    if (a_px < ax) a_px = ax;
+    if (a_px >= ax + a_size) a_px = ax + a_size - 1;
+    int a_py = ty;
+    if (a_py < ay) a_py = ay;
+    if (a_py >= ay + a_size) a_py = ay + a_size - 1;
 
-    return has_line_of_sight(blockers, blocker_count, tx, ty, cx, cy, 1, range);
+    int t_px = ax;
+    if (t_px < tx) t_px = tx;
+    if (t_px >= tx + t_size) t_px = tx + t_size - 1;
+    int t_py = ay;
+    if (t_py < ty) t_py = ty;
+    if (t_py >= ty + t_size) t_py = ty + t_size - 1;
+
+    return has_line_of_sight(blockers, blocker_count, a_px, a_py, t_px, t_py, 1, range);
+}
+
+/* NPC LOS wrapper for the common "NPC footprint to 1x1 target" case. */
+static inline int npc_has_line_of_sight(const LOSBlocker* blockers, int blocker_count,
+                                        int nx, int ny, int npc_size,
+                                        int tx, int ty, int range) {
+    return entity_has_line_of_sight(
+        blockers, blocker_count,
+        nx, ny, npc_size,
+        tx, ty, 1,
+        range);
 }
 
 #endif /* OSRS_COLLISION_H */

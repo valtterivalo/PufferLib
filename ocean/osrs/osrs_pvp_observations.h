@@ -563,7 +563,8 @@ static void generate_slot_observations(OsrsEnv* env, int agent_idx) {
     obs[115] = (p->magic_spec_weapon != MAGIC_SPEC_NONE) ? 1.0f : 0.0f;
     obs[116] = (p->ranged_spec_weapon != RANGED_SPEC_NONE) ? 1.0f : 0.0f;
     obs[117] = p->has_blood_fury ? 1.0f : 0.0f;
-    obs[118] = p->has_dharok ? 1.0f : 0.0f;
+    osrs_ensure_player_equipment(p);
+    obs[118] = (p->equipment_effect_profile.dharok_piece_count >= 4) ? 1.0f : 0.0f;
 
     // Slot-based gear bonuses (119-129) using current equipped items
     GearBonuses* slot_bonuses = get_slot_gear_bonuses(p);

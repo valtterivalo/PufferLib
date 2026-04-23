@@ -4,8 +4,8 @@
  * (prayer reduction, vengeance, recoil, smite).
  *
  * BUILD:
- *   cd PufferLib
- *   cc -std=c11 -O0 -g -Isrc/osrs -o test_damage \
+ *   cd pufferlib-metal
+ *   cc -std=c11 -O0 -g -I. -o test_damage \
  *       ocean/osrs/tests/test_damage.c -lm
  *   ./test_damage
  *
@@ -21,7 +21,7 @@
 #include <math.h>
 #include <string.h>
 
-#include "osrs_damage.h"
+#include "ocean/osrs/osrs_damage.h"
 
 /* ======================================================================== */
 /* test harness                                                              */

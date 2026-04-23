@@ -6,22 +6,22 @@ osrs_collision.h's collision_map_load().
 
 Usage:
     uv run python scripts/export_collision_map_modern.py \
-        --cache ../reference/osrs-cache-modern \
-        --keys ../reference/osrs-cache-modern/keys.json \
+        --cache ../../../.refs/osrs-cache-modern \
+        --keys ../../../.refs/osrs-cache-modern/keys.json \
         --output data/zulrah.cmap \
         --regions 35,48
 
     # export multiple regions
     uv run python scripts/export_collision_map_modern.py \
-        --cache ../reference/osrs-cache-modern \
-        --keys ../reference/osrs-cache-modern/keys.json \
+        --cache ../../../.refs/osrs-cache-modern \
+        --keys ../../../.refs/osrs-cache-modern/keys.json \
         --output data/world.cmap \
         --regions 35,48 34,48 36,48
 
     # export wilderness regions
     uv run python scripts/export_collision_map_modern.py \
-        --cache ../reference/osrs-cache-modern \
-        --keys ../reference/osrs-cache-modern/keys.json \
+        --cache ../../../.refs/osrs-cache-modern \
+        --keys ../../../.refs/osrs-cache-modern/keys.json \
         --output data/wilderness.cmap \
         --wilderness
 """
@@ -45,6 +45,9 @@ from modern_cache_reader import (
     read_u16,
     read_u8,
 )
+
+DEFAULT_MODERN_CACHE = Path(__file__).resolve().parents[3] / ".refs" / "osrs-cache-modern"
+DEFAULT_MODERN_KEYS = DEFAULT_MODERN_CACHE / "keys.json"
 
 # --- collision flag constants (from TraversalConstants.java) ---
 
@@ -767,13 +770,13 @@ def main() -> None:
     parser.add_argument(
         "--cache",
         type=Path,
-        default=Path("../reference/osrs-cache-modern"),
+        default=DEFAULT_MODERN_CACHE,
         help="path to modern cache directory",
     )
     parser.add_argument(
         "--keys",
         type=Path,
-        default=Path("../reference/osrs-cache-modern/keys.json"),
+        default=DEFAULT_MODERN_KEYS,
         help="path to XTEA keys JSON from OpenRS2",
     )
     parser.add_argument(

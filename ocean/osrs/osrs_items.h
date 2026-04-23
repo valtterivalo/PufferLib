@@ -34,6 +34,18 @@ typedef enum {
     NUM_EQUIPMENT_SLOTS = 11
 } EquipmentSlot;
 
+typedef enum {
+    OSRS_ITEM_EFFECT_NONE = 0,
+    OSRS_ITEM_EFFECT_TWISTED_BOW = 1u << 0,
+    OSRS_ITEM_EFFECT_VIRTUS_PIECE = 1u << 1,
+    OSRS_ITEM_EFFECT_CONFLICTION = 1u << 2,
+    OSRS_ITEM_EFFECT_SANG_HEAL = 1u << 3,
+    OSRS_ITEM_EFFECT_RECOIL_RING = 1u << 4,
+    OSRS_ITEM_EFFECT_LIGHTBEARER = 1u << 5,
+    OSRS_ITEM_EFFECT_DHAROK_PIECE = 1u << 6,
+    OSRS_ITEM_EFFECT_ELYSIAN = 1u << 7,
+} OsrsItemEffectMask;
+
 // ============================================================================
 // ITEM STRUCT
 // ============================================================================
@@ -58,6 +70,7 @@ typedef struct {
     int16_t ranged_strength;
     int16_t magic_damage;       // Magic damage % bonus
     int16_t prayer;
+    uint32_t effect_mask;
 } Item;
 
 // ============================================================================
@@ -76,9 +89,9 @@ typedef struct {
 // Items available per slot (for masking and inventory)
 // 255 = end marker (slot has fewer than MAX_ITEMS_PER_SLOT_DB options)
 static const uint8_t ITEMS_BY_SLOT[NUM_EQUIPMENT_SLOTS][MAX_ITEMS_PER_SLOT_DB] = {
-    [SLOT_HEAD]   = {ITEM_HELM_NEITIZNOT, ITEM_ANCESTRAL_HAT,
+    [SLOT_HEAD]   = {ITEM_HELM_NEITIZNOT, ITEM_ANCESTRAL_HAT, ITEM_VIRTUS_MASK,
                      ITEM_TORAGS_HELM, ITEM_DHAROKS_HELM, ITEM_VERACS_HELM, ITEM_GUTHANS_HELM,
-                     ITEM_NONE, ITEM_NONE, ITEM_NONE, ITEM_NONE},
+                     ITEM_NONE, ITEM_NONE, ITEM_NONE},
     [SLOT_CAPE]   = {ITEM_GOD_CAPE, ITEM_INFERNAL_CAPE,
                      ITEM_NONE, ITEM_NONE, ITEM_NONE, ITEM_NONE, ITEM_NONE, ITEM_NONE, ITEM_NONE, ITEM_NONE},
     [SLOT_NECK]   = {ITEM_GLORY, ITEM_FURY, ITEM_OCCULT_NECKLACE,
@@ -86,36 +99,39 @@ static const uint8_t ITEMS_BY_SLOT[NUM_EQUIPMENT_SLOTS][MAX_ITEMS_PER_SLOT_DB] =
     [SLOT_WEAPON] = {ITEM_WHIP, ITEM_RUNE_CROSSBOW, ITEM_AHRIM_STAFF, ITEM_DRAGON_DAGGER,
                      ITEM_GHRAZI_RAPIER, ITEM_INQUISITORS_MACE, ITEM_STAFF_OF_DEAD, ITEM_KODAI_WAND,
                      ITEM_VOLATILE_STAFF, ITEM_ZURIELS_STAFF},
-    [SLOT_BODY]   = {ITEM_BLACK_DHIDE_BODY, ITEM_MYSTIC_TOP, ITEM_ANCESTRAL_TOP, ITEM_AHRIMS_ROBETOP,
-                     ITEM_KARILS_TOP,
-                     ITEM_NONE, ITEM_NONE, ITEM_NONE, ITEM_NONE, ITEM_NONE},
-    [SLOT_SHIELD] = {ITEM_DRAGON_DEFENDER, ITEM_SPIRIT_SHIELD, ITEM_BLESSED_SPIRIT_SHIELD, ITEM_MAGES_BOOK,
-                     ITEM_NONE, ITEM_NONE, ITEM_NONE, ITEM_NONE, ITEM_NONE, ITEM_NONE},
-    [SLOT_LEGS]   = {ITEM_RUNE_PLATELEGS, ITEM_MYSTIC_BOTTOM, ITEM_ANCESTRAL_BOTTOM, ITEM_AHRIMS_ROBESKIRT,
+    [SLOT_BODY]   = {ITEM_BLACK_DHIDE_BODY, ITEM_MYSTIC_TOP, ITEM_ANCESTRAL_TOP, ITEM_VIRTUS_ROBE_TOP,
+                     ITEM_AHRIMS_ROBETOP, ITEM_KARILS_TOP,
+                     ITEM_NONE, ITEM_NONE, ITEM_NONE, ITEM_NONE},
+    [SLOT_SHIELD] = {ITEM_DRAGON_DEFENDER, ITEM_AVERNIC_DEFENDER, ITEM_ELYSIAN_SPIRIT_SHIELD,
+                     ITEM_SPIRIT_SHIELD, ITEM_BLESSED_SPIRIT_SHIELD, ITEM_SPECTRAL_SPIRIT_SHIELD,
+                     ITEM_CRYSTAL_SHIELD, ITEM_MAGES_BOOK, ITEM_ELIDINIS_WARD_F, ITEM_DRAGONFIRE_SHIELD},
+    [SLOT_LEGS]   = {ITEM_RUNE_PLATELEGS, ITEM_MYSTIC_BOTTOM, ITEM_ANCESTRAL_BOTTOM, ITEM_VIRTUS_ROBE_BOTTOM,
+                     ITEM_AHRIMS_ROBESKIRT,
                      ITEM_BANDOS_TASSETS, ITEM_TORAGS_PLATELEGS, ITEM_DHAROKS_PLATELEGS, ITEM_VERACS_PLATESKIRT,
+                     ITEM_NONE},
+    [SLOT_HANDS]  = {ITEM_BARROWS_GLOVES, ITEM_CONFLICTION_GAUNTLETS, ITEM_TORMENTED_BRACELET,
+                     ITEM_ZARYTE_VAMBRACES, ITEM_NONE, ITEM_NONE, ITEM_NONE, ITEM_NONE, ITEM_NONE, ITEM_NONE},
+    [SLOT_FEET]   = {ITEM_CLIMBING_BOOTS, ITEM_ETERNAL_BOOTS, ITEM_AVERNIC_TREADS, ITEM_INFINITY_BOOTS,
+                     ITEM_BLESSED_DHIDE_BOOTS, ITEM_MYSTIC_BOOTS, ITEM_NONE, ITEM_NONE, ITEM_NONE, ITEM_NONE},
+    [SLOT_RING]   = {ITEM_BERSERKER_RING, ITEM_SEERS_RING_I, ITEM_LIGHTBEARER, ITEM_VENATOR_RING,
+                     ITEM_RING_OF_RECOIL, ITEM_RING_OF_SUFFERING_RI, ITEM_MAGUS_RING, ITEM_ULTOR_RING,
                      ITEM_NONE, ITEM_NONE},
-    [SLOT_HANDS]  = {ITEM_BARROWS_GLOVES,
-                     ITEM_NONE, ITEM_NONE, ITEM_NONE, ITEM_NONE, ITEM_NONE, ITEM_NONE, ITEM_NONE, ITEM_NONE, ITEM_NONE},
-    [SLOT_FEET]   = {ITEM_CLIMBING_BOOTS, ITEM_ETERNAL_BOOTS,
-                     ITEM_NONE, ITEM_NONE, ITEM_NONE, ITEM_NONE, ITEM_NONE, ITEM_NONE, ITEM_NONE, ITEM_NONE},
-    [SLOT_RING]   = {ITEM_BERSERKER_RING, ITEM_SEERS_RING_I, ITEM_LIGHTBEARER,
-                     ITEM_NONE, ITEM_NONE, ITEM_NONE, ITEM_NONE, ITEM_NONE, ITEM_NONE, ITEM_NONE},
     [SLOT_AMMO]   = {ITEM_DIAMOND_BOLTS_E, ITEM_DRAGON_ARROWS, ITEM_OPAL_DRAGON_BOLTS,
                      ITEM_NONE, ITEM_NONE, ITEM_NONE, ITEM_NONE, ITEM_NONE, ITEM_NONE, ITEM_NONE},
 };
 
 // Number of items per slot in the static DB table above
 static const uint8_t NUM_ITEMS_IN_SLOT[NUM_EQUIPMENT_SLOTS] = {
-    [SLOT_HEAD]   = 6,   // neitiznot, ancestral hat, torag/dharok/verac/guthan helms
+    [SLOT_HEAD]   = 7,   // neitiznot, ancestral/virtus, torag/dharok/verac/guthan helms
     [SLOT_CAPE]   = 2,   // god cape, infernal
     [SLOT_NECK]   = 3,   // glory, fury, occult
     [SLOT_WEAPON] = 10,  // whip, rcb, ahrim, dds, rapier, inq mace, sotd, kodai, volatile, zuriel
-    [SLOT_BODY]   = 5,   // dhide, mystic, ancestral, ahrim, karil
-    [SLOT_SHIELD] = 4,   // defender, spirit, blessed spirit, mages book
-    [SLOT_LEGS]   = 8,   // rune, mystic, ancestral, ahrim, bandos, torag/dharok/verac legs
-    [SLOT_HANDS]  = 1,   // barrows gloves
-    [SLOT_FEET]   = 2,   // climbing boots, eternal boots
-    [SLOT_RING]   = 3,   // berserker, seers (i), lightbearer
+    [SLOT_BODY]   = 6,   // dhide, mystic, ancestral, virtus, ahrim, karil
+    [SLOT_SHIELD] = 10,  // defenders, spirit variants, crystal, elysian, ward, mages book, dfs
+    [SLOT_LEGS]   = 9,   // rune, mystic, ancestral, virtus, ahrim, bandos, torag/dharok/verac legs
+    [SLOT_HANDS]  = 4,   // barrows, confliction, tormented, zaryte
+    [SLOT_FEET]   = 6,   // climbing, eternal, avernic, infinity, blessed d'hide, mystic
+    [SLOT_RING]   = 8,   // berserker, seers (i), lightbearer, venator, recoil, suffering, magus, ultor
     [SLOT_AMMO]   = 3,   // diamond bolts (e), dragon arrows, opal dragon bolts (e)
 };
 
@@ -165,6 +181,10 @@ static inline int get_item_attack_style(uint8_t item_index) {
         case ITEM_DARK_BOW:
         case ITEM_HEAVY_BALLISTA:
         case ITEM_MORRIGANS_JAVELIN:
+        case ITEM_MAGIC_SHORTBOW_I:
+        case ITEM_BOW_OF_FAERDHINEN:
+        case ITEM_TWISTED_BOW:
+        case ITEM_TOXIC_BLOWPIPE:
             return 2;  // ATTACK_STYLE_RANGED
         // Magic weapons
         case ITEM_AHRIM_STAFF:
@@ -172,6 +192,9 @@ static inline int get_item_attack_style(uint8_t item_index) {
         case ITEM_KODAI_WAND:
         case ITEM_VOLATILE_STAFF:
         case ITEM_ZURIELS_STAFF:
+        case ITEM_TRIDENT_OF_SWAMP:
+        case ITEM_SANGUINESTI_STAFF:
+        case ITEM_EYE_OF_AYAK:
             return 3;  // ATTACK_STYLE_MAGIC
         default:
             return 0;  // ATTACK_STYLE_NONE
@@ -188,6 +211,10 @@ static inline int item_is_two_handed(uint8_t item_index) {
         case ITEM_ELDER_MAUL:
         case ITEM_DARK_BOW:
         case ITEM_HEAVY_BALLISTA:
+        case ITEM_MAGIC_SHORTBOW_I:
+        case ITEM_BOW_OF_FAERDHINEN:
+        case ITEM_TWISTED_BOW:
+        case ITEM_TOXIC_BLOWPIPE:
             return 1;
         default:
             return 0;

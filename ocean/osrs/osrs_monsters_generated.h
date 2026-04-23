@@ -176,7 +176,7 @@ static const MonsterStats MONSTER_DATABASE[NUM_MONSTERS] = {
         .npc_id = 7706, .name = "TzKal-Zuk",
         .hp = 1200, .att_level = 350, .str_level = 600, .def_level = 260,
         .magic_level = 150, .range_level = 400,
-        .attack_speed = 10, .size = 7, .max_hit = 0,
+        .attack_speed = 10, .size = 7, .max_hit = 148,
         .melee_att_bonus = 0, .melee_str_bonus = 200, .magic_att_bonus = 550, .magic_str_bonus = 450,
         .range_att_bonus = 550, .ranged_str_bonus = 200,
         .stab_def = 0, .slash_def = 0, .crush_def = 0,

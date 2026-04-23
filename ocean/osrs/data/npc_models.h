@@ -23,6 +23,8 @@ static const NpcModelMapping NPC_MODEL_MAP_ZULRAH[] = {
     {2042, 14408, 5069, 5068, 65535},  /* green zulrah (ranged) */
     {2043, 14409, 5069, 5068, 65535},  /* red zulrah (melee) */
     {2044, 14407, 5069, 5068, 65535},  /* blue zulrah (magic) */
+    {2045, 10415, 1721, 140, 2405},    /* snakeling melee */
+    {2046, 10415, 1721, 185, 2405},    /* snakeling magic */
 };
 
 /* snakeling model + animations (NPC 2045 melee, 2046 magic — same model) */
@@ -61,10 +63,16 @@ static const NpcModelMapping NPC_MODEL_MAP_ZULRAH[] = {
 /* alias: encounter code uses INF_GFX_*, generated uses INF_GEN_GFX_* */
 #define INF_GFX_157_MODEL   INF_GEN_GFX_157_MODEL
 #define INF_GFX_157_ANIM    INF_GEN_GFX_157_ANIM
-#define INF_GFX_447_MODEL   INF_GEN_GFX_447_MODEL
-#define INF_GFX_447_ANIM    INF_GEN_GFX_447_ANIM
 #define INF_GFX_448_MODEL   INF_GEN_GFX_448_MODEL
 #define INF_GFX_448_ANIM    INF_GEN_GFX_448_ANIM
+#define INF_GFX_449_MODEL   INF_GEN_GFX_449_MODEL
+#define INF_GFX_449_ANIM    INF_GEN_GFX_449_ANIM
+#define INF_GFX_450_MODEL   INF_GEN_GFX_450_MODEL
+#define INF_GFX_450_ANIM    INF_GEN_GFX_450_ANIM
+#define INF_GFX_659_MODEL   INF_GEN_GFX_659_MODEL
+#define INF_GFX_659_ANIM    INF_GEN_GFX_659_ANIM
+#define INF_GFX_660_MODEL   INF_GEN_GFX_660_MODEL
+#define INF_GFX_660_ANIM    INF_GEN_GFX_660_ANIM
 #define INF_GFX_451_MODEL   INF_GEN_GFX_451_MODEL
 #define INF_GFX_451_ANIM    INF_GEN_GFX_451_ANIM
 #define INF_GFX_1374_MODEL  INF_GEN_GFX_1374_MODEL
@@ -89,10 +97,13 @@ static const NpcModelMapping NPC_MODEL_MAP_ZULRAH[] = {
 #define INF_GFX_1384_MODEL  INF_GEN_GFX_1384_MODEL
 #define INF_GFX_1385_MODEL  INF_GEN_GFX_1385_MODEL
 #define INF_GFX_1385_ANIM   INF_GEN_GFX_1385_ANIM
+#define INF_GFX_1120_MODEL  INF_GEN_GFX_1120_MODEL
+#define INF_GFX_1120_ANIM   INF_GEN_GFX_1120_ANIM
 
-/* tbow projectile — not in inferno group, keep hardcoded */
-#define INF_GFX_942_MODEL  19374
-#define INF_GFX_942_ANIM   5233
+/* inferno spotanim ids for shared render/event wiring */
+#define INF_GFX_659_ID  659
+#define INF_GFX_660_ID  660
+#define INF_GFX_1120_ID  1120
 
 /* inferno pillar models — Rocky support objects 30284-30287 */
 #define INF_PILLAR_MODEL_100  33044  /* object 30284 — full health */

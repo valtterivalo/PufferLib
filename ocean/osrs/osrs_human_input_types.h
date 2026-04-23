@@ -23,7 +23,7 @@ typedef struct HumanInput {
     int pending_offensive_prayer;          /* 0=none, 1=piety, 2=rigour, 3=augury, -1=no change */
     int pending_food;                      /* 1 = eat food */
     int pending_karambwan;                 /* 1 = eat karambwan */
-    int pending_potion;                    /* PotionAction value, 0 = none */
+    int pending_potion;                    /* PotionAction-style intent, 0 = none */
     int pending_veng;                      /* 1 = cast vengeance */
     int pending_spec;                      /* 1 = use special attack */
     int pending_spell;                     /* 0=none, ATTACK_ICE or ATTACK_BLOOD */

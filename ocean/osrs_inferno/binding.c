@@ -147,7 +147,7 @@ void c_step(Env* env) {
         env->log.gear_switches += (float)s->total_gear_switches;
         env->log.current_ranged += (float)s->player.current_ranged;
         env->log.current_magic += (float)s->player.current_magic;
-        env->log.start_wave = (float)env->config_start_wave;
+        env->log.start_wave += (float)env->config_start_wave;
 
         for (int t = 0; t < INF_NUM_NPC_TYPES; t++) {
             env->log.prayer_correct_by_type[t] += (float)s->prayer_correct_by_type[t];
@@ -224,19 +224,21 @@ void c_step(Env* env) {
                 const char* rpath = getenv("RECORD_REPLAY");
                 if (rpath && rpath[0]) {
                     FILE* fp = fopen(rpath, "wb");
-                    if (fp) {
-                        fwrite(&env->episode_action_len, sizeof(int), 1, fp);
-                        fwrite(&env->episode_rng_start, sizeof(uint32_t), 1, fp);
-                        fwrite(env->episode_actions, sizeof(int),
-                               env->episode_action_len * NUM_ATNS, fp);
-                        fclose(fp);
-                        if (st->start_wave >= 68) {
-                            fprintf(stderr, "replay: new best zuk hp=%d (%d ticks, rng=%u) saved to %s\n",
-                                    g_best_zuk_hp, env->episode_action_len, env->episode_rng_start, rpath);
-                        } else {
-                            fprintf(stderr, "replay: new best wave %d (%d ticks, rng=%u) saved to %s\n",
-                                    wave, env->episode_action_len, env->episode_rng_start, rpath);
-                        }
+                    if (!fp) {
+                        fprintf(stderr, "record_best_replay_path: cannot open %s\n", rpath);
+                        abort();
+                    }
+                    fwrite(&env->episode_action_len, sizeof(int), 1, fp);
+                    fwrite(&env->episode_rng_start, sizeof(uint32_t), 1, fp);
+                    fwrite(env->episode_actions, sizeof(int),
+                           env->episode_action_len * NUM_ATNS, fp);
+                    fclose(fp);
+                    if (st->start_wave >= 68) {
+                        fprintf(stderr, "replay: new best zuk hp=%d (%d ticks, rng=%u) saved to %s\n",
+                                g_best_zuk_hp, env->episode_action_len, env->episode_rng_start, rpath);
+                    } else {
+                        fprintf(stderr, "replay: new best wave %d (%d ticks, rng=%u) saved to %s\n",
+                                wave, env->episode_action_len, env->episode_rng_start, rpath);
                     }
                 }
             }
@@ -334,7 +336,7 @@ void c_render(Env* env) {
     if (env->pending_render_reset) {
         render_clear_history(rc);
         effect_clear_all(rc->effects);
-        rc->gui.inv_grid_dirty = 1;
+        gui_reset_inventory_ui_state(&rc->gui);
         render_populate_entities(rc, re);
         for (int i = 0; i < rc->entity_count; i++) {
             int size = rc->entities[i].npc_size > 1 ? rc->entities[i].npc_size : 1;
@@ -392,13 +394,32 @@ void my_init(Env* env, Dict* kwargs) {
     DictItem* start_wave = dict_get_unsafe(kwargs, "start_wave");
     if (start_wave)
         ENCOUNTER_INFERNO.put_int(env->enc_state, "start_wave", (int)start_wave->value);
+    ENCOUNTER_INFERNO.put_float(
+        env->enc_state, "damage_reward_coeff",
+        (float)dict_get_unsafe(kwargs, "damage_reward_coeff")->value);
+    ENCOUNTER_INFERNO.put_float(
+        env->enc_state, "shield_penalty_coeff",
+        (float)dict_get_unsafe(kwargs, "shield_penalty_coeff")->value);
+    ENCOUNTER_INFERNO.put_float(
+        env->enc_state, "tag_reward_coeff",
+        (float)dict_get_unsafe(kwargs, "tag_reward_coeff")->value);
     /* match the 1-indexed → 0-indexed conversion done by encounter's put_int */
     int sw = start_wave ? (int)start_wave->value : 0;
     env->config_start_wave = (sw > 0) ? sw - 1 : 0;
 
-    /* allocate action buffer for best-episode recording (all envs buffer) */
-    if (getenv("RECORD_REPLAY") && getenv("RECORD_REPLAY")[0]) {
+    const char* record_path = getenv("RECORD_REPLAY");
+    const char* play_path = getenv("PLAY_REPLAY");
+    if (record_path && record_path[0] && play_path && play_path[0]) {
+        fprintf(stderr, "RECORD_REPLAY and PLAY_REPLAY cannot both be set\n");
+        abort();
+    }
+
+    if (record_path && record_path[0]) {
         env->episode_actions = (int*)malloc(REPLAY_MAX_TICKS * NUM_ATNS * sizeof(int));
+        if (!env->episode_actions) {
+            fprintf(stderr, "RECORD_REPLAY: out of memory\n");
+            abort();
+        }
         env->episode_action_cap = REPLAY_MAX_TICKS;
     } else {
         env->episode_actions = NULL;
@@ -415,34 +436,41 @@ void my_init(Env* env, Dict* kwargs) {
     env->ticks_per_second = 1.667f;
     env->last_step_time = 0.0;
     static int g_play_replay_loaded = 0;
-    const char* play_path = getenv("PLAY_REPLAY");
     if (play_path && play_path[0] && !g_play_replay_loaded) {
         FILE* fp = fopen(play_path, "rb");
         if (!fp) {
             fprintf(stderr, "PLAY_REPLAY: cannot open %s\n", play_path);
-        } else {
-            int num_ticks = 0;
-            uint32_t rng_seed = 0;
-            if (fread(&num_ticks, sizeof(int), 1, fp) == 1 &&
-                fread(&rng_seed, sizeof(uint32_t), 1, fp) == 1 &&
-                num_ticks > 0 && num_ticks <= REPLAY_MAX_TICKS) {
-                int* buf = (int*)malloc(num_ticks * NUM_ATNS * sizeof(int));
-                if (fread(buf, sizeof(int), num_ticks * NUM_ATNS, fp) == (size_t)(num_ticks * NUM_ATNS)) {
-                    env->replay_actions = buf;
-                    env->replay_num_ticks = num_ticks;
-                    env->replay_rng_seed = rng_seed;
-                    g_play_replay_loaded = 1;
-                    fprintf(stderr, "PLAY_REPLAY: loaded %d ticks, rng=%u from %s\n",
-                            num_ticks, rng_seed, play_path);
-                    /* seed the encounter to match the recording */
-                    ENCOUNTER_INFERNO.reset(env->enc_state, rng_seed);
-                } else {
-                    free(buf);
-                    fprintf(stderr, "PLAY_REPLAY: short read from %s\n", play_path);
-                }
-            }
-            fclose(fp);
+            abort();
         }
+        int num_ticks = 0;
+        uint32_t rng_seed = 0;
+        if (fread(&num_ticks, sizeof(int), 1, fp) != 1 ||
+            fread(&rng_seed, sizeof(uint32_t), 1, fp) != 1 ||
+            num_ticks <= 0 || num_ticks > REPLAY_MAX_TICKS) {
+            fprintf(stderr, "PLAY_REPLAY: invalid replay header in %s\n", play_path);
+            fclose(fp);
+            abort();
+        }
+        int* buf = (int*)malloc(num_ticks * NUM_ATNS * sizeof(int));
+        if (!buf) {
+            fprintf(stderr, "PLAY_REPLAY: out of memory\n");
+            fclose(fp);
+            abort();
+        }
+        if (fread(buf, sizeof(int), num_ticks * NUM_ATNS, fp) != (size_t)(num_ticks * NUM_ATNS)) {
+            fprintf(stderr, "PLAY_REPLAY: short read from %s\n", play_path);
+            free(buf);
+            fclose(fp);
+            abort();
+        }
+        fclose(fp);
+        env->replay_actions = buf;
+        env->replay_num_ticks = num_ticks;
+        env->replay_rng_seed = rng_seed;
+        g_play_replay_loaded = 1;
+        fprintf(stderr, "PLAY_REPLAY: loaded %d ticks, rng=%u from %s\n",
+                num_ticks, rng_seed, play_path);
+        ENCOUNTER_INFERNO.reset(env->enc_state, rng_seed);
     }
 }
 
@@ -575,7 +603,8 @@ void my_log(Log* log, Dict* out) {
 
     float wr = log->wins;
     float score;
-    if (log->start_wave >= 68) {
+    int start_wave = (int)(log->start_wave + 0.5f);
+    if (start_wave >= 68) {
         /* Zuk-only: score = fraction of Zuk HP removed (0..1), wins = 1.0 */
         score = (1200.0f - log->zuk_hp_remaining) / 1200.0f;
     } else {

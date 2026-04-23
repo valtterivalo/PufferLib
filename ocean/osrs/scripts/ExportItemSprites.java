@@ -2,14 +2,14 @@
  * Export item inventory sprites from OpenRS2 flat cache using RuneLite's
  * ItemSpriteFactory (3D model → 2D sprite rendering).
  *
- * Reads the modern cache at reference/osrs-cache-modern/ (OpenRS2 flat format:
+ * Reads the modern cache at repo-root .refs/osrs-cache-modern/ (OpenRS2 flat format:
  * {index}/{group}.dat files). Renders each requested item ID to a 36x32 PNG
  * matching the real OSRS inventory icon exactly.
  *
  * Usage:
  *   javac -cp <cache-jar>:<deps> scripts/ExportItemSprites.java
  *   java -cp <cache-jar>:<deps>:scripts ExportItemSprites \
- *     --cache ../reference/osrs-cache-modern \
+ *     --cache .refs/osrs-cache-modern \
  *     --output data/sprites/items \
  *     --ids 4151,10828,21795,...
  */
@@ -117,7 +117,7 @@ class OpenRS2Storage implements Storage {
 
 public class ExportItemSprites {
     public static void main(String[] args) throws Exception {
-        String cachePath = "../reference/osrs-cache-modern";
+        String cachePath = ".refs/osrs-cache-modern";
         String outputPath = "data/sprites/items";
         String idsArg = null;
 

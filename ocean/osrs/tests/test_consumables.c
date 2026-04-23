@@ -2,12 +2,12 @@
  * @file test_consumables.c
  * @brief Tests for shared food/potion/brew functions in osrs_consumables.h.
  *
- * Build: cc -std=c11 -O0 -g -Isrc/osrs -o test_consumables ocean/osrs/tests/test_consumables.c -lm
+ * Build: cc -std=c11 -O0 -g -I. -o test_consumables ocean/osrs/tests/test_consumables.c -lm
  */
 
 #include <stdio.h>
 #include <stdlib.h>
-#include "osrs_consumables.h"
+#include "ocean/osrs/osrs_consumables.h"
 
 static int total_tests = 0;
 static int passed_tests = 0;
