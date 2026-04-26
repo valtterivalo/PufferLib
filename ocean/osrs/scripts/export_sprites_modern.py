@@ -13,7 +13,7 @@ Exports specific sprite IDs needed for the debug viewer GUI:
 
 Usage:
   uv run python scripts/export_sprites_modern.py \
-    --cache ../reference/osrs-cache-modern \
+    --cache ../../../.refs/osrs-cache-modern \
     --output data/sprites/gui
 """
 
@@ -27,6 +27,8 @@ from pathlib import Path
 # add parent for modern_cache_reader import
 sys.path.insert(0, str(Path(__file__).parent))
 from modern_cache_reader import ModernCacheReader
+
+DEFAULT_MODERN_CACHE = Path(__file__).resolve().parents[3] / ".refs" / "osrs-cache-modern"
 
 
 @dataclass
@@ -283,7 +285,7 @@ def main() -> None:
     """Export GUI sprites from modern OSRS cache."""
     parser = argparse.ArgumentParser(description="Export OSRS GUI sprites")
     parser.add_argument(
-        "--cache", default="../reference/osrs-cache-modern",
+        "--cache", default=DEFAULT_MODERN_CACHE,
         help="Path to modern cache directory",
     )
     parser.add_argument(

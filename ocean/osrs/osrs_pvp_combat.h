@@ -404,8 +404,9 @@ static int calculate_max_hit(Player* p, AttackStyle style, float str_mult, int m
         max_hit = (int)(osrs_player_melee_max_hit(eff_strength, strength_bonus) * str_mult);
     }
 
-    /* Dharok set effect: quadratic scaling with missing HP */
-    if (p->has_dharok && style == ATTACK_STYLE_MELEE) {
+    osrs_ensure_player_equipment(p);
+    if (p->equipment_effect_profile.dharok_piece_count >= 4 &&
+        style == ATTACK_STYLE_MELEE) {
         float hp_ratio = 1.0f - ((float)p->current_hitpoints / p->base_hitpoints);
         max_hit = (int)(max_hit * (1.0f + hp_ratio * hp_ratio));
     }
@@ -524,14 +525,19 @@ static void apply_damage(OsrsEnv* env, int attacker_idx, int defender_idx,
     Player* attacker = &env->players[attacker_idx];
     Player* defender = &env->players[defender_idx];
 
-    /* shared damage pipeline: prayer → veng → recoil → smite */
-    DamageResult dr = osrs_apply_damage_pipeline(
+    osrs_ensure_player_equipment(defender);
+
+    /* shared passive pipeline: prayer → elysian → veng → recoil → smite */
+    DamageResult dr = osrs_apply_passive_damage_pipeline(
         hit->damage, hit->attack_type,
         hit->defender_prayer_at_attack,
         /* is_pvp */ 1,
         defender->veng_active,
-        osrs_has_recoil_ring(defender->equipped) && defender->recoil_charges > 0,
         attacker->prayer == PRAYER_SMITE && !defender->is_lms
+        ,
+        &defender->equipment_effect_profile,
+        &defender->item_effect_state,
+        &env->rng_state
     );
 
     int damage = dr.final_damage;
@@ -559,9 +565,12 @@ static void apply_damage(OsrsEnv* env, int attacker_idx, int defender_idx,
     }
 
     /* apply recoil reflection + charge tracking */
-    if (dr.recoil_damage > 0 && defender->recoil_charges > 0) {
+    if (dr.recoil_damage > 0) {
         int recoil = dr.recoil_damage;
-        if (recoil > defender->recoil_charges) recoil = defender->recoil_charges;
+        if (defender->equipment_effect_profile.recoil_source == OSRS_RECOIL_SOURCE_RING_OF_RECOIL &&
+            recoil > defender->item_effect_state.recoil_charges) {
+            recoil = defender->item_effect_state.recoil_charges;
+        }
         attacker->current_hitpoints -= recoil;
         if (attacker->current_hitpoints < 0) attacker->current_hitpoints = 0;
         float recoil_scale = (float)recoil / (float)attacker->base_hitpoints;
@@ -569,15 +578,7 @@ static void apply_damage(OsrsEnv* env, int attacker_idx, int defender_idx,
         defender->total_damage_dealt += recoil_scale;
         attacker->damage_received_scale += recoil_scale;
         defender->damage_dealt_scale += recoil_scale;
-
-        /* ring of suffering (i) has infinite charges; ring of recoil shatters */
-        if (defender->equipped[GEAR_SLOT_RING] == ITEM_RING_OF_RECOIL) {
-            defender->recoil_charges -= recoil;
-            if (defender->recoil_charges <= 0) {
-                defender->recoil_charges = 0;
-                defender->equipped[GEAR_SLOT_RING] = ITEM_NONE;
-            }
-        }
+        osrs_consume_recoil_charges(defender, recoil);
     }
 
     /* apply damage to defender */
@@ -1004,7 +1005,7 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
             attacker->special_energy -= spec_cost;
             if (!attacker->spec_regen_active && attacker->special_energy < 100) {
                 attacker->spec_regen_active = 1;
-                attacker->special_regen_ticks = 0;
+                attacker->item_effect_state.special_regen_ticks = 0;
             }
         }
     }

@@ -21,6 +21,8 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+DEFAULT_MODERN_CACHE = Path(__file__).resolve().parents[3] / ".refs" / "osrs-cache-modern"
+
 
 # --- binary reading helpers ---
 
@@ -609,7 +611,7 @@ def parse_sequence(seq_id: int, data: bytes) -> SequenceDef:
 
 def main() -> None:
     """Test the modern cache reader against a local cache."""
-    cache_path = "../reference/osrs-cache-modern/"
+    cache_path = DEFAULT_MODERN_CACHE
     print(f"opening cache at {cache_path}")
 
     reader = ModernCacheReader(cache_path)

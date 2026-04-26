@@ -29,12 +29,15 @@
 #define GFX_ICE_BARRAGE_PROJ 368
 #define GFX_ICE_BARRAGE_HIT 369
 #define GFX_BLOOD_BARRAGE_HIT 377
+#define GFX_TEKTON_METEOR_SPLAT 659
+#define GFX_TEKTON_METEOR_PROJ  660
 #define GFX_DRAGON_BOLT     1468
 
 /* player weapon projectiles (zulrah encounter) */
 #define GFX_TRIDENT_CAST    665    /* casting effect on player */
 #define GFX_TRIDENT_PROJ    1040   /* trident projectile in flight */
 #define GFX_TRIDENT_IMPACT  1042   /* trident hit splash on target */
+#define GFX_DRAGON_ARROW    1120   /* dragon arrow projectile (tbow) */
 #define GFX_RUNE_ARROW      15     /* rune arrow projectile (MSB) */
 #define GFX_DRAGON_DART     1122   /* dragon dart projectile (blowpipe) */
 #define GFX_RUNE_DART       231    /* rune dart projectile */
@@ -58,11 +61,14 @@ static const SpotAnimMeta SPOTANIM_TABLE[] = {
     { GFX_ICE_BARRAGE_PROJ,  14215, 1964, 128, 128 },
     { GFX_ICE_BARRAGE_HIT,   6381,  1965, 128, 128 },
     { GFX_BLOOD_BARRAGE_HIT, 6375,  1967, 128, 128 },
+    { GFX_TEKTON_METEOR_SPLAT, 14760, 3941, 128, 128 },
+    { GFX_TEKTON_METEOR_PROJ,  14759, 3942, 128, 128 },
     { GFX_DRAGON_BOLT,       0xD0001, -1, 128, 128 }, /* synthetic recolored model */
     /* player weapon projectiles (zulrah encounter) */
     { GFX_TRIDENT_CAST,      20823,  5460, 128, 128 },
     { GFX_TRIDENT_PROJ,      20825,  5462, 128, 128 },
     { GFX_TRIDENT_IMPACT,    20824,  5461, 128, 128 },
+    { GFX_DRAGON_ARROW,      26377,  6622, 128, 128 },
     { GFX_RUNE_ARROW,        3136,   -1,   128, 128 },
     { GFX_DRAGON_DART,       26379,  6622, 128, 128 },
     { GFX_RUNE_DART,         3131,   -1,   128, 128 },
@@ -153,11 +159,14 @@ static int effect_find_slot(ActiveEffect effects[MAX_ACTIVE_EFFECTS]) {
 /** Create AnimModelState for an effect's model (if it has animation data). */
 static void effect_init_anim_state(
     ActiveEffect* e,
-    ModelCache* model_cache
+    ModelCache* model_cache,
+    ModelCache* secondary_model_cache
 ) {
-    if (!e->meta || e->meta->anim_seq_id < 0 || !model_cache) return;
+    if (!e->meta || e->meta->anim_seq_id < 0) return;
 
     OsrsModel* om = model_cache_get(model_cache, e->meta->model_id);
+    if (!om && secondary_model_cache)
+        om = model_cache_get(secondary_model_cache, e->meta->model_id);
     if (!om || !om->vertex_skins || om->base_vert_count == 0) return;
 
     e->anim_state = anim_model_state_create(
@@ -179,7 +188,8 @@ static int effect_spawn_spotanim_subtile(
     float subtile_x, float subtile_y,
     int current_client_tick,
     AnimCache* anim_cache,
-    ModelCache* model_cache
+    ModelCache* model_cache,
+    ModelCache* secondary_model_cache
 ) {
     const SpotAnimMeta* meta = spotanim_lookup(gfx_id);
     if (!meta) return -1;
@@ -210,7 +220,7 @@ static int effect_spawn_spotanim_subtile(
     }
     e->stop_tick = current_client_tick + duration;
 
-    effect_init_anim_state(e, model_cache);
+    effect_init_anim_state(e, model_cache, secondary_model_cache);
     return slot;
 }
 
@@ -218,11 +228,12 @@ static int effect_spawn_spotanim_subtile(
 static int effect_spawn_spotanim(
     ActiveEffect effects[MAX_ACTIVE_EFFECTS],
     int gfx_id, int world_x, int world_y,
-    int current_client_tick, AnimCache* anim_cache, ModelCache* model_cache
+    int current_client_tick, AnimCache* anim_cache,
+    ModelCache* model_cache, ModelCache* secondary_model_cache
 ) {
     return effect_spawn_spotanim_subtile(effects, gfx_id,
         world_x * 128.0f + 64.0f, world_y * 128.0f + 64.0f,
-        current_client_tick, anim_cache, model_cache);
+        current_client_tick, anim_cache, model_cache, secondary_model_cache);
 }
 
 /**
@@ -244,7 +255,8 @@ static int effect_spawn_projectile(
     int end_height_subtile,
     int slope,
     int current_client_tick,
-    ModelCache* model_cache
+    ModelCache* model_cache,
+    ModelCache* secondary_model_cache
 ) {
     const SpotAnimMeta* meta = spotanim_lookup(gfx_id);
     if (!meta) return -1;
@@ -271,7 +283,7 @@ static int effect_spawn_projectile(
     e->start_tick = current_client_tick + delay_client_ticks;
     e->stop_tick = current_client_tick + delay_client_ticks + duration_client_ticks;
 
-    effect_init_anim_state(e, model_cache);
+    effect_init_anim_state(e, model_cache, secondary_model_cache);
     return slot;
 }
 

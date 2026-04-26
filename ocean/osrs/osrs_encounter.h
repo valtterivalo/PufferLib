@@ -28,7 +28,7 @@
  *
  *   NPC pathfinding:
  *     encounter_npc_step_out_from_under()  shuffle NPC off player tile (OSRS overlap rule)
- *     encounter_npc_step_toward()      greedy size-aware chase step (diagonal > x > y)
+ *     encounter_npc_step_toward()      OSRS size-aware chase step
  *
  *   damage:
  *     encounter_damage_player()        apply damage to player (HP, clamp, splat, tracker)
@@ -63,6 +63,7 @@
 #include "osrs_items.h"
 #include "osrs_pathfinding.h"
 #include "osrs_combat.h"
+#include "osrs_item_effects.h"
 #include "osrs_human_input_types.h"
 
 /* opaque encounter state — each encounter defines its own struct */
@@ -90,13 +91,22 @@ typedef struct {
                               whether the hit is blocked, independent of projectile flight time.
                               ref: InfernoTrainer JalTokJad.ts:49-57. */
     int spell_type;        /* ENCOUNTER_SPELL_* for freeze/heal effects */
+    int source_npc_type;   /* encounter-local NPC type for custom delayed rolls */
 } EncounterPendingHit;
 
 /* visual overlay data: shared between encounter and renderer.
    encounter's render_post_tick populates this, renderer reads it. */
 #define ENCOUNTER_MAX_OVERLAY_TILES 16
 #define ENCOUNTER_MAX_OVERLAY_ADDS 4
-#define ENCOUNTER_MAX_OVERLAY_PROJECTILES 8
+/* inferno can legitimately exceed single-digit projectile counts in one tick,
+   especially during Zuk healer spark volleys. size this from real encounter
+   volume so the renderer never silently drops visual events. */
+#define ENCOUNTER_MAX_OVERLAY_PROJECTILES 48
+
+typedef enum {
+    ENCOUNTER_PROJECTILE_MOTION_OSRS_FLIGHT = 0,
+    ENCOUNTER_PROJECTILE_MOTION_TARGET_ANCHORED = 1,
+} EncounterProjectileMotionMode;
 
 typedef struct {
     /* encounter-defined area hazards. current users write 3x3 poison clouds. */
@@ -129,9 +139,13 @@ typedef struct {
         float arc_height;    /* sinusoidal arc peak in tiles (0 = quadratic/straight) */
         int tracks_target;   /* 1 = re-aim toward target each tick */
         int start_delay;     /* ticks before projectile becomes visible (0 = immediate) */
+        int motion_mode;     /* EncounterProjectileMotionMode */
+        float offset_x, offset_y, offset_z; /* local multi-model offset */
         int src_size;        /* source entity size for center offset (0 = use boss_size) */
         int dst_size;        /* target entity size for center offset (1 = player) */
         uint32_t model_id;   /* GFX model from cache (0 = style-based fallback) */
+        int anim_id;         /* spotanim animation sequence (-1 = static model) */
+        int impact_gfx_id;   /* optional landing spotanim to spawn on arrival */
     } projectiles[ENCOUNTER_MAX_OVERLAY_PROJECTILES];
     int projectile_count;
 
@@ -159,7 +173,7 @@ static inline int encounter_emit_projectile(
     int style, int damage,
     int duration_ticks, int start_h, int end_h, int curve,
     float arc_height, int tracks_target, int src_size, int dst_size,
-    uint32_t model_id
+    uint32_t model_id, int impact_gfx_id
 ) {
     if (ov->projectile_count >= ENCOUNTER_MAX_OVERLAY_PROJECTILES) return -1;
     int i = ov->projectile_count++;
@@ -176,11 +190,41 @@ static inline int encounter_emit_projectile(
     ov->projectiles[i].curve = curve;
     ov->projectiles[i].arc_height = arc_height;
     ov->projectiles[i].start_delay = 0;
+    ov->projectiles[i].motion_mode = ENCOUNTER_PROJECTILE_MOTION_OSRS_FLIGHT;
+    ov->projectiles[i].offset_x = 0.0f;
+    ov->projectiles[i].offset_y = 0.0f;
+    ov->projectiles[i].offset_z = 0.0f;
     ov->projectiles[i].tracks_target = tracks_target;
     ov->projectiles[i].src_size = src_size;
     ov->projectiles[i].dst_size = dst_size;
     ov->projectiles[i].model_id = model_id;
+    ov->projectiles[i].anim_id = -1;
+    ov->projectiles[i].impact_gfx_id = impact_gfx_id;
     return i;
+}
+
+static inline void encounter_set_projectile_motion_mode(
+    EncounterOverlay* ov, int projectile_idx, int motion_mode
+) {
+    if (projectile_idx < 0 || projectile_idx >= ov->projectile_count) return;
+    ov->projectiles[projectile_idx].motion_mode = motion_mode;
+}
+
+static inline void encounter_set_projectile_animation(
+    EncounterOverlay* ov, int projectile_idx, int anim_id
+) {
+    if (projectile_idx < 0 || projectile_idx >= ov->projectile_count) return;
+    ov->projectiles[projectile_idx].anim_id = anim_id;
+}
+
+static inline void encounter_set_projectile_offset(
+    EncounterOverlay* ov, int projectile_idx,
+    float offset_x, float offset_y, float offset_z
+) {
+    if (projectile_idx < 0 || projectile_idx >= ov->projectile_count) return;
+    ov->projectiles[projectile_idx].offset_x = offset_x;
+    ov->projectiles[projectile_idx].offset_y = offset_y;
+    ov->projectiles[projectile_idx].offset_z = offset_z;
 }
 
 /* ======================================================================== */
@@ -533,9 +577,10 @@ static inline int encounter_player_can_attack(
                                                    target_x, target_y, target_size);
     if (dist < 1 || dist > attack_range) return 0;
     if (!los_blockers || los_blocker_count == 0) return 1;
-    return npc_has_line_of_sight(los_blockers, los_blocker_count,
-                                 target_x, target_y, target_size,
-                                 player_x, player_y, attack_range);
+    return entity_has_line_of_sight(los_blockers, los_blocker_count,
+                                    player_x, player_y, 1,
+                                    target_x, target_y, target_size,
+                                    attack_range);
 }
 
 /* auto-walk toward attack target: handles out-of-range, blocked LOS, and under-NPC.
@@ -608,28 +653,43 @@ static inline int encounter_chase_attack_target(
                                                        target_x, target_y, target_size);
     if (dist_now > 0 && dist_now <= attack_range &&
         los_blockers && los_blocker_count > 0) {
-        /* in range but no LOS — scan NPC-adjacent tiles that have ACTUAL LOS to
-           the NPC. only tiles where encounter_player_can_attack would return true
-           are valid candidates. BFS then pathfinds to the nearest one.
-           ref: osrs-sdk Player.ts "seekingTiles" — filters by LOS, not just pillar overlap. */
+        /* in range but no LOS — scan NPC-adjacent tiles in the same row-first
+           order as osrs-sdk Player.ts seekingTiles. the destination set is
+           pathability-filtered only; LOS is checked after each movement step. */
         int best_dsq = 999999;
         cx = -1; cy = -1;
-        /* scan cardinal-adjacent tiles (N/S rows + E/W columns of NPC footprint) */
-        for (int xx = -1; xx <= target_size; xx++) {
-            for (int yy = -1; yy <= target_size; yy++) {
-                /* skip interior tiles (inside NPC footprint) */
-                if (xx >= 0 && xx < target_size && yy >= 0 && yy < target_size) continue;
-                /* skip far corners (only cardinal adjacency matters for melee/range) */
-                int px = target_x + xx;
-                int py = target_y + yy;
-                if (!is_walkable(ctx, px, py)) continue;
-                /* check if this tile has actual LOS + range to the NPC */
-                if (!encounter_player_can_attack(px, py, target_x, target_y,
-                        target_size, attack_range, los_blockers, los_blocker_count))
-                    continue;
-                int ddx = px - p->x, ddy = py - p->y;
+        for (int xx = 0; xx < target_size; xx++) {
+            int px = target_x + xx;
+            int north_py = target_y + target_size;
+            int south_py = target_y - 1;
+
+            if (is_walkable(ctx, px, north_py)) {
+                int ddx = px - p->x, ddy = north_py - p->y;
                 int dsq = ddx * ddx + ddy * ddy;
-                if (dsq < best_dsq) { best_dsq = dsq; cx = px; cy = py; }
+                if (dsq < best_dsq) { best_dsq = dsq; cx = px; cy = north_py; }
+            }
+
+            if (is_walkable(ctx, px, south_py)) {
+                int ddx = px - p->x, ddy = south_py - p->y;
+                int dsq = ddx * ddx + ddy * ddy;
+                if (dsq < best_dsq) { best_dsq = dsq; cx = px; cy = south_py; }
+            }
+        }
+        for (int yy = 0; yy < target_size; yy++) {
+            int py = target_y + yy;
+            int west_px = target_x - 1;
+            int east_px = target_x + target_size;
+
+            if (is_walkable(ctx, west_px, py)) {
+                int ddx = west_px - p->x, ddy = py - p->y;
+                int dsq = ddx * ddx + ddy * ddy;
+                if (dsq < best_dsq) { best_dsq = dsq; cx = west_px; cy = py; }
+            }
+
+            if (is_walkable(ctx, east_px, py)) {
+                int ddx = east_px - p->x, ddy = py - p->y;
+                int dsq = ddx * ddx + ddy * ddy;
+                if (dsq < best_dsq) { best_dsq = dsq; cx = east_px; cy = py; }
             }
         }
         /* fallback: no unblocked adjacent tile, path toward closest NPC tile */
@@ -676,19 +736,30 @@ static inline int encounter_chase_attack_target(
 /* shared NPC step-out-from-under (OSRS: NPC shuffles off player tile)       */
 /* ======================================================================== */
 
+typedef int (*encounter_npc_blocked_fn)(void* ctx, int x, int y, int size);
+typedef int (*encounter_npc_overlap_hold_fn)(void* ctx);
+
+#define ENCOUNTER_NPC_UNDER_PLAYER_NONE  0
+#define ENCOUNTER_NPC_UNDER_PLAYER_MOVED 1
+#define ENCOUNTER_NPC_UNDER_PLAYER_HELD  2
+
 /* when an NPC overlaps the player (AABB overlap), it shuffles one tile in a
    random cardinal direction. matches osrs-sdk Mob.ts:109-153 behavior:
    50% pick X-axis vs Y-axis, then 50% +1 or -1 on that axis.
-   returns 1 if the NPC moved, 0 if stuck or no overlap. */
+   hold_overlap lets the caller preserve the one-tick "player just clicked this
+   mob, so it cannot move off" rule. returns MOVED, HELD, or NONE. */
 static inline int encounter_npc_step_out_from_under(
     int* npc_x, int* npc_y, int npc_size,
     int player_x, int player_y,
-    encounter_walkable_fn is_walkable, void* ctx, uint32_t* rng
+    encounter_npc_blocked_fn is_blocked, void* ctx,
+    encounter_npc_overlap_hold_fn hold_overlap,
+    uint32_t* rng
 ) {
     /* AABB overlap check (handles multi-tile NPCs) */
     int overlap = !(*npc_x >= player_x + 1 || *npc_x + npc_size <= player_x ||
                     *npc_y >= player_y + 1 || *npc_y + npc_size <= player_y);
-    if (!overlap) return 0;
+    if (!overlap) return ENCOUNTER_NPC_UNDER_PLAYER_NONE;
+    if (hold_overlap && hold_overlap(ctx)) return ENCOUNTER_NPC_UNDER_PLAYER_HELD;
 
     /* 4 cardinal directions: +x, -x, +y, -y */
     int dirs[4][2] = {{1,0}, {-1,0}, {0,1}, {0,-1}};
@@ -710,21 +781,18 @@ static inline int encounter_npc_step_out_from_under(
            via normal edge-tile movement system. for size>1 NPCs, full escape
            takes multiple ticks. anchor walkability matches InfernoTrainer's
            canTileBePathedTo check on the leading edge. */
-        if (is_walkable(ctx, nx, ny)) {
+        if (!is_blocked(ctx, nx, ny, npc_size)) {
             *npc_x = nx;
             *npc_y = ny;
-            return 1;
+            return ENCOUNTER_NPC_UNDER_PLAYER_MOVED;
         }
     }
-    return 0;
+    return ENCOUNTER_NPC_UNDER_PLAYER_NONE;
 }
 
 /* ======================================================================== */
 /* shared NPC greedy pathfinding                                             */
 /* ======================================================================== */
-
-/* callback: returns 1 if tile (x, y) is blocked for an NPC of given size */
-typedef int (*encounter_npc_blocked_fn)(void* ctx, int x, int y, int size);
 
 /** check if the leading edge tiles are clear for an NPC moving in direction (dx, dy).
     for size>1 NPCs, OSRS checks the tiles along the leading edge that the NPC
@@ -758,83 +826,87 @@ static inline int encounter_npc_y_edge_clear(
     return 1;
 }
 
-/** greedy NPC step toward target. tries diagonal first, then x-only, then y-only.
-    this is the current generic NPC chase policy used by the ocean envs.
+static inline int encounter_npc_axis_gap(int a, int a_size, int b, int b_size) {
+    int a_max = a + a_size - 1;
+    int b_max = b + b_size - 1;
+    if (a_max < b) return b - a_max;
+    if (b_max < a) return a - b_max;
+    return 0;
+}
+
+static inline int encounter_npc_axis_dir(int a, int a_size, int b, int b_size) {
+    int a_max = a + a_size - 1;
+    int b_max = b + b_size - 1;
+    if (a_max < b) return 1;
+    if (b_max < a) return -1;
+    return 0;
+}
+
+static inline int encounter_npc_try_step(
+    int* x, int* y, int size, int dx, int dy,
+    encounter_npc_blocked_fn is_blocked, void* ctx
+) {
+    if (dx == 0 && dy == 0) return 0;
+    if (size <= 1) {
+        if (!is_blocked(ctx, *x + dx, *y + dy, 1)) {
+            *x += dx;
+            *y += dy;
+            return 1;
+        }
+        return 0;
+    }
+
+    int x_clear = encounter_npc_x_edge_clear(*x, *y, size, dx, dy, is_blocked, ctx);
+    int y_clear = encounter_npc_y_edge_clear(*x, *y, size, dx, dy, is_blocked, ctx);
+    if (x_clear && y_clear) {
+        *x += dx;
+        *y += dy;
+        return 1;
+    }
+    return 0;
+}
+
+/** OSRS-shaped NPC step toward target. tries diagonal first, then x-only,
+    then y-only when RuneLite's travel rule allows the y fallback.
 
     for size>1 NPCs, validates movement by checking EDGE TILES the NPC sweeps
     through, not just the destination footprint. for diagonal moves, both the
     x-edge and y-edge must be clear (each extended by 1 tile for the corner).
     ref: InfernoTrainer Mob.ts:160-270 movementStep + getX/YMovementTiles.
 
-    corner safespot: if diagonal would land NPC on player, cancel Y component.
-    ref: InfernoTrainer Mob.ts:143-146.
-
-    this function does NOT gate on attack range or LOS — the reference's
-    canMove() (Unit.ts:383) is `!hasLOS && !frozen && !stunned && !dying`,
-    with NO range check. caller is responsible for skipping the call when
-    the NPC shouldn't move (hasLOS, frozen, etc). for melee mobs adjacent
-    to the player, the step naturally fails because the player tile is
-    occupied — no explicit range gate needed.
-
-    attack_range param is retained for signature compatibility but unused.
+    stop_at_melee_distance matches RuneLite WorldArea.calculateNextTravellingPoint:
+    overlap returns no normal step, cardinal melee contact returns no step,
+    and diagonal contact tries x-only.
 
     returns 1 if moved, 0 if blocked or already at target. */
 static inline int encounter_npc_step_toward(
     int* x, int* y, int tx, int ty, int npc_size,
-    int target_size, int attack_range,
+    int target_size, int stop_at_melee_distance,
     encounter_npc_blocked_fn is_blocked, void* ctx
 ) {
-    (void)attack_range;
     int size = npc_size;
-    int dx = 0, dy = 0;
-    if (tx > *x) dx = 1;
-    else if (tx < *x) dx = -1;
-    if (ty > *y) dy = 1;
-    else if (ty < *y) dy = -1;
+    int x_gap = encounter_npc_axis_gap(*x, size, tx, target_size);
+    int y_gap = encounter_npc_axis_gap(*y, size, ty, target_size);
+    int dx = encounter_npc_axis_dir(*x, size, tx, target_size);
+    int dy = encounter_npc_axis_dir(*y, size, ty, target_size);
+
+    if (stop_at_melee_distance && x_gap == 0 && y_gap == 0) return 0;
+    if (stop_at_melee_distance && x_gap + y_gap == 1) return 0;
     if (dx == 0 && dy == 0) return 0;
 
-    /* corner safespot cancellation: if a diagonal step would overlap the target,
-       cancel the Y component and take X-only. */
-    if (dx != 0 && dy != 0) {
-        int nx = *x + dx, ny = *y + dy;
-        if (encounter_entity_footprints_overlap(nx, ny, size, tx, ty, target_size)) {
-            dy = 0;
-        }
+    if (stop_at_melee_distance && x_gap == 1 && y_gap == 1) {
+        return encounter_npc_try_step(x, y, size, dx, 0, is_blocked, ctx);
     }
 
-    /* size-1 NPCs: simple destination check (edge tiles = destination tile) */
-    if (size <= 1) {
-        if (dx != 0 && dy != 0 && !is_blocked(ctx, *x + dx, *y + dy, 1)) {
-            *x += dx; *y += dy; return 1;
-        }
-        if (dx != 0 && !is_blocked(ctx, *x + dx, *y, 1)) {
-            *x += dx; return 1;
-        }
-        if (dy != 0 && !is_blocked(ctx, *x, *y + dy, 1)) {
-            *y += dy; return 1;
-        }
-        return 0;
-    }
-
-    /* size>1 NPCs: edge-tile validation per InfernoTrainer.
-       diagonal: both x-edge AND y-edge must be clear (each extended by 1 for corner).
-       cardinal: just the leading edge (size tiles). */
-    if (dx != 0 && dy != 0) {
-        int x_clear = encounter_npc_x_edge_clear(*x, *y, size, dx, dy, is_blocked, ctx);
-        int y_clear = encounter_npc_y_edge_clear(*x, *y, size, dx, dy, is_blocked, ctx);
-        if (x_clear && y_clear) {
-            *x += dx; *y += dy; return 1;
-        }
-        /* diagonal failed — fall through to try cardinal with dy=0 edge strips */
-    }
-    /* x-only: check leading x-edge (size tiles, no diagonal extension) */
-    if (dx != 0 && encounter_npc_x_edge_clear(*x, *y, size, dx, 0, is_blocked, ctx)) {
-        *x += dx; return 1;
-    }
-    /* y-only: check leading y-edge (size tiles, no diagonal extension) */
-    if (dy != 0 && encounter_npc_y_edge_clear(*x, *y, size, 0, dy, is_blocked, ctx)) {
-        *y += dy; return 1;
-    }
+    if (dx != 0 && dy != 0 &&
+        encounter_npc_try_step(x, y, size, dx, dy, is_blocked, ctx))
+        return 1;
+    if (dx != 0 && encounter_npc_try_step(x, y, size, dx, 0, is_blocked, ctx))
+        return 1;
+    int max_gap = x_gap > y_gap ? x_gap : y_gap;
+    if (dy != 0 && max_gap > 1 &&
+        encounter_npc_try_step(x, y, size, 0, dy, is_blocked, ctx))
+        return 1;
     return 0;
 }
 
@@ -1290,6 +1362,33 @@ static inline void encounter_update_loadout_level(
     }
 }
 
+static inline void encounter_compute_player_equipped_stats(
+    Player* p,
+    AttackStyle style,
+    FightStyle fight_style,
+    int spell_base_damage,
+    EncounterLoadoutStats* out
+) {
+    int current_att = p->current_attack;
+    int current_str = p->current_strength;
+    if (style == ATTACK_STYLE_RANGED) {
+        current_att = p->current_ranged;
+        current_str = p->current_ranged;
+    } else if (style == ATTACK_STYLE_MAGIC) {
+        current_att = p->current_magic;
+        current_str = p->current_magic;
+    }
+    encounter_compute_loadout_stats(
+        p->equipped,
+        style,
+        p->offensive_prayer,
+        current_att,
+        fight_style,
+        spell_base_damage,
+        out);
+    encounter_update_loadout_level(out, p->offensive_prayer, current_att, current_str);
+}
+
 /* ======================================================================== */
 /* shared potion stat effects (brew drain, restore, bastion boost)           */
 /*                                                                           */
@@ -1392,24 +1491,9 @@ static inline void encounter_recompute_loadout_max_hits(
 /* lightbearer halves regen interval to 25 ticks.                            */
 /* ======================================================================== */
 
-#define SPEC_REGEN_INTERVAL     50   /* ticks between +10% regen (normal) */
-#define SPEC_REGEN_LIGHTBEARER  25   /* with lightbearer equipped */
-#define SPEC_REGEN_AMOUNT       10   /* energy restored per regen tick */
-
-/** tick special attack energy regeneration. call once per game tick.
-    lightbearer: set to 1 if player has lightbearer ring equipped. */
-static inline void encounter_tick_spec_regen(Player* p, int has_lightbearer) {
-    if (p->special_energy >= 100) {
-        p->special_regen_ticks = 0;
-        return;
-    }
-    int interval = has_lightbearer ? SPEC_REGEN_LIGHTBEARER : SPEC_REGEN_INTERVAL;
-    p->special_regen_ticks++;
-    if (p->special_regen_ticks >= interval) {
-        p->special_energy += SPEC_REGEN_AMOUNT;
-        if (p->special_energy > 100) p->special_energy = 100;
-        p->special_regen_ticks = 0;
-    }
+/** tick special attack energy regeneration from current equipped gear. */
+static inline void encounter_tick_spec_regen(Player* p) {
+    osrs_tick_special_regen(p);
 }
 
 /** attempt to use special attack energy. returns 1 if successful (enough energy),
@@ -1432,6 +1516,7 @@ static inline void encounter_apply_loadout(
     memcpy(p->equipped, loadout, NUM_GEAR_SLOTS);
     p->current_gear = gear_set;
     p->visible_gear = gear_set;
+    osrs_refresh_player_equipment(p);
 }
 
 /** populate player inventory from multiple loadouts (deduped per slot).
@@ -1536,6 +1621,7 @@ typedef struct {
     /* episode lifecycle */
     void (*reset)(EncounterState* state, uint32_t seed);
     void (*step)(EncounterState* state, const int* actions);
+    void (*step_human_commands)(EncounterState* state, struct HumanInput* hi);
 
     /* RL interface */
     void (*write_obs)(EncounterState* state, float* obs_out);
@@ -1565,6 +1651,7 @@ typedef struct {
        translates semantic HumanInput intents to encounter-specific action arrays.
        each encounter owns its own mapping since action head layouts differ. */
     void (*translate_human_input)(struct HumanInput* hi, int* actions, EncounterState* state);
+    int (*is_human_targetable_npc_slot)(EncounterState* state, int npc_slot);
 
     /* action head indices used by shared translate helpers and renderer.
        set to -1 if the encounter doesn't have that action head. */

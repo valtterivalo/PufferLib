@@ -38,6 +38,16 @@ static std::string tensor_repr(const FloatTensor& tensor) {
     return std::string(buffer);
 }
 
+static void assert_static_env_name_matches(void) {
+    const char* binding_env_name = PUFFER_STRINGIFY(ENV_NAME);
+    const char* static_env_name = get_static_env_name();
+    if (strcmp(binding_env_name, static_env_name) != 0) {
+        throw std::runtime_error(
+            std::string("compiled _C env mismatch: binding env_name=") +
+            binding_env_name + ", static_env_name=" + static_env_name);
+    }
+}
+
 static py::dict get_utilization(int gpu_id) {
     (void)gpu_id;
     py::dict result;
@@ -452,6 +462,8 @@ static std::unique_ptr<PuffeRL> create_pufferl(py::dict args) {
 }
 
 PYBIND11_MODULE(_C, m) {
+    assert_static_env_name_matches();
+
     m.def("get_nccl_id", []() -> py::bytes {
         throw std::runtime_error("Metal backend does not support multi-GPU");
     });
@@ -459,6 +471,7 @@ PYBIND11_MODULE(_C, m) {
 
     m.attr("precision_bytes") = 4;
     m.attr("env_name") = PUFFER_STRINGIFY(ENV_NAME);
+    m.attr("static_env_name") = get_static_env_name();
     m.attr("gpu") = 0;
 
     m.def("log", &puf_log);

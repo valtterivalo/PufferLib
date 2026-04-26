@@ -879,7 +879,6 @@ static void test_max_hit_with_spec_mult(void) {
     p.current_ranged = 99;
     p.offensive_prayer = OFFENSIVE_PRAYER_NONE;
     p.fight_style = FIGHT_STYLE_ACCURATE;
-    p.has_dharok = 0;
 
     /* need to set up gear bonuses for strength. use a simple approach:
        set the slot gear bonuses array directly. */

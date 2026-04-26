@@ -256,26 +256,10 @@ static void update_timers(Player* p) {
         p->run_recovery_ticks = 0;
     }
 
-    int has_lightbearer = is_lightbearer_equipped(p);
-    if (has_lightbearer != p->was_lightbearer_equipped) {
-        if (has_lightbearer) {
-            if (p->special_regen_ticks > 25) {
-                p->special_regen_ticks = 0;
-            }
-        } else {
-            p->special_regen_ticks = 0;
-        }
-        p->was_lightbearer_equipped = has_lightbearer;
-    }
     if (p->spec_regen_active && p->special_energy < 100) {
-        int regen_interval = has_lightbearer ? 25 : 50;
-        p->special_regen_ticks += 1;
-        if (p->special_regen_ticks >= regen_interval) {
-            p->special_energy = clamp(p->special_energy + 10, 0, 100);
-            p->special_regen_ticks = 0;
-        }
+        encounter_tick_spec_regen(p);
     } else if (p->spec_regen_active) {
-        p->special_regen_ticks = 0;
+        p->item_effect_state.special_regen_ticks = 0;
     }
 }
 

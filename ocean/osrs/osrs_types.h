@@ -192,7 +192,7 @@
 #define COMBAT_DIM     13   // NONE, ATK, ICE, BLOOD, ADJACENT, UNDER, DIAGONAL, FARCAST_2..7
 #define OVERHEAD_DIM    6   // ENCOUNTER_OVERHEAD_DIM_PVP: no_change, toggle_{melee,ranged,magic,smite,redemption}
 #define FOOD_DIM        2   // NONE, EAT
-#define POTION_DIM      5   // NONE, BREW, RESTORE, COMBAT, RANGED
+#define POTION_DIM      5   // PvP head only: NONE, BREW, RESTORE, COMBAT, RANGED
 #define KARAMBWAN_DIM   2   // NONE, EAT
 #define VENG_DIM        2   // NONE, CAST
 #define OFFENSIVE_DIM   4   // ENCOUNTER_OFFENSIVE_DIM: no_change, toggle_{piety,rigour,augury}
@@ -435,14 +435,20 @@ typedef enum {
     FOOD_EAT,
 } FoodAction;
 
-/** Potion action head options. */
+/** Potion intent values.
+    The PvP potion action head still only exposes POTION_DIM = 5.
+    Extra values below are human-mode/debug intents for encounters that use
+    different consumable layouts. */
 typedef enum {
     POTION_NONE = 0,
     POTION_BREW,
     POTION_RESTORE,
     POTION_COMBAT,
     POTION_RANGED,
-    POTION_ANTIVENOM,  /* zulrah only — outside PvP action space (POTION_DIM=5) */
+    POTION_ANTIVENOM,   /* zulrah only — outside PvP action space (POTION_DIM=5) */
+    POTION_BASTION,     /* inferno human mode only */
+    POTION_STAMINA,     /* inferno human mode only */
+    POTION_PRAYER_POT,  /* distinct from super restore; not auto-aliased */
 } PotionAction;
 
 /** Karambwan action head options. */
@@ -523,6 +529,56 @@ typedef enum {
     ENTITY_NPC = 1,
 } EntityType;
 
+typedef enum {
+    OSRS_MAGIC_ATTACK_NONE = 0,
+    OSRS_MAGIC_ATTACK_ANCIENT_ICE,
+    OSRS_MAGIC_ATTACK_ANCIENT_BLOOD,
+    OSRS_MAGIC_ATTACK_STANDARD_SPELL,
+    OSRS_MAGIC_ATTACK_POWERED_STAFF,
+} OsrsMagicAttackKind;
+
+typedef enum {
+    OSRS_TARGET_NONE = 0,
+    OSRS_TARGET_PLAYER,
+    OSRS_TARGET_NPC,
+} OsrsTargetKind;
+
+typedef struct {
+    OsrsTargetKind kind;
+    int id;
+} OsrsTargetRef;
+
+typedef enum {
+    OSRS_RECOIL_SOURCE_NONE = 0,
+    OSRS_RECOIL_SOURCE_RING_OF_RECOIL,
+    OSRS_RECOIL_SOURCE_RING_OF_SUFFERING_RI,
+} OsrsRecoilSource;
+
+typedef enum {
+    OSRS_SPEC_REGEN_MODE_NORMAL = 0,
+    OSRS_SPEC_REGEN_MODE_LIGHTBEARER,
+} OsrsSpecRegenMode;
+
+typedef struct {
+    uint32_t effect_mask;
+    uint8_t weapon_item;
+    uint8_t ring_item;
+    uint8_t shield_item;
+    uint8_t virtus_piece_count;
+    uint8_t dharok_piece_count;
+    OsrsRecoilSource recoil_source;
+    OsrsSpecRegenMode spec_regen_mode;
+} OsrsEquipmentEffectProfile;
+
+typedef struct {
+    int special_regen_ticks;
+    int recoil_charges;
+    uint8_t confliction_is_primed;
+    uint8_t confliction_weapon_item;
+    OsrsMagicAttackKind confliction_magic_kind;
+    OsrsTargetRef confliction_target;
+} OsrsItemEffectState;
+
 // ============================================================================
 // PLAYER / ENTITY STRUCT
 // ============================================================================
@@ -557,11 +613,10 @@ typedef struct {
 
     // Special attack state
     int special_energy;
-    int special_regen_ticks;
     int spec_regen_active;
-    int was_lightbearer_equipped;
     int spec_armed;            /* 1 = next attack uses special (shared across encounters) */
     OsrsInteraction interaction;  /* shared entity interaction state */
+    OsrsItemEffectState item_effect_state;
 
     // Gear
     GearSet current_gear;       // tracks active combat style for visible_gear and style checks
@@ -606,11 +661,6 @@ typedef struct {
     // Vengeance
     int veng_active;
     int veng_cooldown;
-
-    // Ring of recoil: reflects floor(damage * 0.1) + 1 back to attacker.
-    // charges track remaining recoil damage the ring can deal (starts at 40).
-    // at 0 the ring shatters (ring of suffering (i) never shatters).
-    int recoil_charges;
 
     // Prayer and style
     OverheadPrayer prayer;
@@ -737,7 +787,6 @@ typedef struct {
     int is_lunar_spellbook;
     int observed_target_lunar_spellbook;
     int has_blood_fury;
-    int has_dharok;
 
     // Spec weapons
     MeleeSpecWeapon melee_spec_weapon;
@@ -761,6 +810,7 @@ typedef struct {
 
     // Cached bonuses for slot-based mode
     GearBonuses slot_cached_bonuses;
+    OsrsEquipmentEffectProfile equipment_effect_profile;
     int slot_gear_dirty;
 
     // Per-tick action tracking for reward shaping
@@ -812,6 +862,7 @@ typedef struct {
     /* Zuk diagnostics */
     float behind_shield_pct;   /* fraction of Zuk ticks behind shield */
     float zuk_hp_remaining;    /* Zuk HP at episode end (0 if killed) */
+    float min_zuk_hp_seen;     /* lowest Zuk HP reached during the episode */
     float hp_restored;         /* HP restored to enemies (healers + mager) this episode */
     float zuk_healer_damage;   /* total damage dealt to Zuk healers this episode */
     /* action noop rates per head (0=move,1=prayer,2=target,3=gear,4=eat,5=pot,6=spell,7=spec) */
@@ -1184,9 +1235,9 @@ static inline float confidence_scale(int count) {
     return (float)count / 10.0f;
 }
 
-/** Check if lightbearer ring is equipped (ITEM_LIGHTBEARER = 49). */
+/** Check if lightbearer spec regeneration is active from equipped gear. */
 static inline int is_lightbearer_equipped(Player* p) {
-    return p->equipped[GEAR_SLOT_RING] == 49;
+    return p->equipment_effect_profile.spec_regen_mode == OSRS_SPEC_REGEN_MODE_LIGHTBEARER;
 }
 
 #define RECOIL_MAX_CHARGES 40

@@ -932,7 +932,7 @@ static void test_barrage_resolve(void) {
     targets[0].def_level = 100;
     targets[0].magic_def_bonus = 50;
 
-    BarrageResult res = osrs_barrage_resolve(targets, 1, att_roll, max_hit, &rng, 0);
+    BarrageResult res = osrs_barrage_resolve(targets, 1, att_roll, max_hit, &rng, 0, 0);
     ASSERT_INT_EQ("single num_hits", res.num_hits, 1);
     ASSERT_INT_EQ("single dmg range", res.total_damage >= 0 && res.total_damage <= 30, 1);
 
@@ -951,7 +951,7 @@ static void test_barrage_resolve(void) {
     targets[2].x = 10; targets[2].y = 10;  /* far away, NOT in AoE */
     targets[2].def_level = 50; targets[2].magic_def_bonus = 20;
 
-    res = osrs_barrage_resolve(targets, 3, att_roll, max_hit, &rng, 0);
+    res = osrs_barrage_resolve(targets, 3, att_roll, max_hit, &rng, 0, 0);
     /* should roll primary + 1 in-range, skip the far one */
     ASSERT_INT_EQ("aoe num_hits", res.num_hits, 2);
     /* far target should not have been hit */
@@ -971,7 +971,7 @@ static void test_barrage_resolve(void) {
     int freeze_applied = 0;
     for (int i = 0; i < 100 && !freeze_applied; i++) {
         frozen = 0;
-        osrs_barrage_resolve(targets, 1, 50000, max_hit, &rng, 1 /* ICE */);
+        osrs_barrage_resolve(targets, 1, 50000, max_hit, &rng, 1 /* ICE */, 0);
         if (frozen == BARRAGE_FREEZE_TICKS) freeze_applied = 1;
     }
     ASSERT_INT_EQ("ice freeze applied", freeze_applied, 1);

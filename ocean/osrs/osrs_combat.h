@@ -59,6 +59,8 @@ static inline float osrs_hit_chance(int att_roll, int def_roll) {
         return (float)att_roll / (2.0f * (float)(def_roll + 1));
 }
 
+static inline float osrs_hit_chance_double(int att_roll, int def_roll);
+
 /* twisted bow accuracy multiplier.
    target_magic = min(max(npc_magic_level, npc_magic_attack_bonus), 250).
    formula from RuneLite TwistedBow._accuracyMultiplier. */
@@ -154,7 +156,8 @@ typedef struct {
 static inline BarrageResult osrs_barrage_resolve(
     BarrageTarget* targets, int max_targets,
     int att_roll, int max_hit, uint32_t* rng_state,
-    int spell_type
+    int spell_type,
+    int primary_use_double_accuracy
 ) {
     BarrageResult result = { 0, 0, 0 };
 
@@ -164,7 +167,9 @@ static inline BarrageResult osrs_barrage_resolve(
     int px = targets[0].x, py = targets[0].y;
     {
         int def_roll = (targets[0].def_level + 8) * (targets[0].magic_def_bonus + 64);
-        float chance = osrs_hit_chance(att_roll, def_roll);
+        float chance = primary_use_double_accuracy
+            ? osrs_hit_chance_double(att_roll, def_roll)
+            : osrs_hit_chance(att_roll, def_roll);
         targets[0].hit = encounter_rand_float(rng_state) < chance;
         targets[0].damage = targets[0].hit ? encounter_rand_int(rng_state, max_hit + 1) : 0;
         result.total_damage += targets[0].damage;

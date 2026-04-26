@@ -67,7 +67,7 @@ if [[ "$SRC_DIR" == *osrs* ]]; then
     if [ ! -f "data/equipment.models" ]; then
         echo "Downloading OSRS visual assets..."
         mkdir -p data
-        curl -sL "https://github.com/valtterivalo/PufferLib/releases/download/osrs-assets-v5/osrs-assets-v5.tar.gz" | tar xz -C data
+        curl -sL "https://github.com/valtterivalo/PufferLib/releases/download/osrs-assets-v7/osrs-assets-v7.tar.gz" | tar xz -C data
     fi
 fi
 
@@ -232,6 +232,7 @@ fi
 clang -c $CLANG_OPT \
     -I. -Isrc -I$SRC_DIR $OSRS_INCLUDE \
     -I./$RAYLIB_NAME/include \
+    -DENV_NAME=$ENV \
     -DPLATFORM_DESKTOP \
     -fno-semantic-interposition -fvisibility=hidden \
     -fPIC $OMP_INCLUDE_FLAG $OMP_COMPILE_FLAG \
@@ -351,6 +352,7 @@ else
         echo "=== Compiling bindings_cpu.cpp ==="
         g++ -c -fPIC -fopenmp \
             -D_GLIBCXX_USE_CXX11_ABI=1 \
+            -DENV_NAME=$ENV \
             -DPLATFORM_DESKTOP \
             -std=c++17 \
             -I. -Isrc \
@@ -383,6 +385,7 @@ else
         -I$PYTHON_INCLUDE -I$PYBIND_INCLUDE -I$NUMPY_INCLUDE \
         -I$CUDA_HOME/include -I$RAYLIB_NAME/include \
         -Xcompiler=-fopenmp \
+        -DENV_NAME=$ENV \
         -DOBS_TENSOR_T=$OBS_TENSOR_T \
         $PRECISION $NVCC_OPT \
         src/bindings.cu -o src/bindings.o

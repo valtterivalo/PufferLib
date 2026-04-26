@@ -169,8 +169,12 @@ def validate_config(args):
 
 def _resolve_backend(args):
     compiled_env = getattr(_C, 'env_name', None)
-    assert compiled_env is None or compiled_env == args['env_name'], \
-        f'build.sh was run for {compiled_env}, not {args["env_name"]}'
+    static_env = getattr(_C, 'static_env_name', compiled_env)
+    requested_env = args['env_name']
+    if compiled_env is not None and compiled_env != requested_env:
+        raise RuntimeError(f'build.sh was run for {compiled_env}, not {requested_env}')
+    if static_env is not None and static_env != requested_env:
+        raise RuntimeError(f'_C static env is {static_env}, not {requested_env}')
     if args.get('slowly'):
         from pufferlib.torch_pufferl import PuffeRL
         return PuffeRL
@@ -210,6 +214,103 @@ def _inferno_replay_env(args):
         else:
             os.environ['PLAY_REPLAY'] = old_play
 
+def _sweep_metric_key(args):
+    return f'env/{args["sweep"]["metric"]}'
+
+def _wandb_train_payload(fresh_logs, agent_steps):
+    payload = dict(fresh_logs)
+    payload.setdefault('agent_steps', agent_steps)
+    return payload
+
+def _wandb_eval_payload(flat_logs, agent_steps):
+    payload = {'agent_steps': agent_steps}
+    for key, value in flat_logs.items():
+        if key.startswith('env/'):
+            payload[f'eval/{key[4:]}'] = value
+    return payload
+
+def _restore_exact_match_config(args, sweep_obj):
+    flat_args = dict(unroll_nested_dict(args))
+    swept_keys = set(sweep_obj.hyperparameters.flat_spaces)
+    exact_match = {}
+    for key, value in flat_args.items():
+        if key.startswith('sweep/'):
+            continue
+        if key in swept_keys or key in (
+            'train/total_timesteps',
+            'env/record_best_replay_path',
+            'env/play_replay_path',
+        ):
+            continue
+
+        if key in ('env_name', 'policy_name', 'rnn_name', 'score_metric'):
+            exact_match[key] = value
+            continue
+
+        if key.startswith(('env/', 'vec/', 'policy/', 'train/', 'torch/')):
+            exact_match[key] = value
+
+    return exact_match
+
+def _is_sweep_observation_compatible(current_args, observation_args, sweep_obj):
+    current_exact = _restore_exact_match_config(current_args, sweep_obj)
+    observation_exact = _restore_exact_match_config(observation_args, sweep_obj)
+    if current_exact != observation_exact:
+        return False
+
+    flat_args = dict(unroll_nested_dict(observation_args))
+    for key, space in sweep_obj.hyperparameters.flat_spaces.items():
+        if key not in flat_args:
+            return False
+
+        value = flat_args[key]
+        if value < space.min or value > space.max:
+            return False
+
+    return True
+
+def _restore_sweep_observations(env_name, args, sweep_obj):
+    log_dir = os.path.join(args['log_dir'], env_name)
+    if not os.path.isdir(log_dir):
+        return 0, 0
+
+    target_key = _sweep_metric_key(args)
+    restored_runs = 0
+    restored_points = 0
+    pattern = os.path.join(log_dir, '*.json')
+    for path in sorted(glob.glob(pattern)):
+        try:
+            with open(path) as f:
+                logged_args = json.load(f)
+        except (OSError, ValueError):
+            continue
+
+        if logged_args.get('env_name') != env_name:
+            continue
+
+        metrics = logged_args.get('metrics', {})
+        scores = metrics.get(target_key)
+        costs = metrics.get('uptime')
+        timesteps = metrics.get('agent_steps')
+        if not scores or not costs or not timesteps:
+            continue
+
+        restored_from_run = 0
+        for score, cost, timestep in zip(scores, costs, timesteps):
+            observation_args = deepcopy(logged_args)
+            observation_args['train']['total_timesteps'] = timestep
+            if not _is_sweep_observation_compatible(args, observation_args, sweep_obj):
+                continue
+
+            sweep_obj.observe(observation_args, score, cost, is_failure=False)
+            restored_points += 1
+            restored_from_run += 1
+
+        if restored_from_run > 0:
+            restored_runs += 1
+
+    return restored_runs, restored_points
+
 def _train_worker(args):
     backend = _resolve_backend(args)
     with _inferno_replay_env(args):
@@ -235,7 +336,7 @@ def _train(env_name, args, sweep_obj=None, result_queue=None, verbose=False):
             settings=wandb.Settings(console="off"),
         )
 
-    target_key = f'env/{args["sweep"]["metric"]}'
+    target_key = _sweep_metric_key(args)
     total_timesteps = args['train']['total_timesteps']
     all_logs = []
 
@@ -282,16 +383,21 @@ def _train(env_name, args, sweep_obj=None, result_queue=None, verbose=False):
                 continue
 
             logs = backend.eval_log(pufferl) if epoch >= train_epochs else backend.log(pufferl)
-            flat_logs = {**flat_logs, **dict(unroll_nested_dict(logs))}
+            fresh_logs = dict(unroll_nested_dict(logs))
+            flat_logs = {**flat_logs, **fresh_logs}
 
             if verbose:
                 print_dashboard(args, model_size, flat_logs)
 
+            if args['wandb']:
+                if epoch < train_epochs:
+                    wandb.log(
+                        _wandb_train_payload(fresh_logs, pufferl.global_step),
+                        step=pufferl.global_step,
+                    )
+
             if target_key not in flat_logs:
                 continue
-
-            if args['wandb']:
-                wandb.log(flat_logs, step=flat_logs['agent_steps'])
 
             if epoch < train_epochs:
                 all_logs.append(flat_logs)
@@ -301,6 +407,11 @@ def _train(env_name, args, sweep_obj=None, result_queue=None, verbose=False):
                         sweep_obj.early_stop(logs, target_key)):
                     break
             elif flat_logs['env/n'] > args['eval_episodes']:
+                if args['wandb']:
+                    wandb.log(
+                        _wandb_eval_payload(flat_logs, pufferl.global_step),
+                        step=pufferl.global_step,
+                    )
                 break
 
 
@@ -350,7 +461,7 @@ def _train(env_name, args, sweep_obj=None, result_queue=None, verbose=False):
         wandb.run.finish()
 
     if result_queue is not None:
-        result_queue.put((args['gpu_id'], metrics['env/score'], metrics['uptime'], metrics['agent_steps']))
+        result_queue.put((args['gpu_id'], metrics[target_key], metrics['uptime'], metrics['agent_steps']))
 
 def train(env_name, args=None, gpus=None, **kwargs):
     args = args or load_config(env_name)
@@ -381,7 +492,11 @@ def sweep(env_name, args=None, pareto=False):
     args = args or load_config(env_name)
     exp_gpus = args['train']['gpus']
     sweep_gpus = args['sweep']['gpus'] or len(os.listdir('/proc/driver/nvidia/gpus'))
-    args['vec']['num_threads'] //= (sweep_gpus // exp_gpus)
+    concurrent_experiments = sweep_gpus // exp_gpus
+    if concurrent_experiments < 1:
+        raise ValueError(f'sweep.gpus={sweep_gpus} must be >= train.gpus={exp_gpus}')
+
+    args['vec']['num_threads'] //= concurrent_experiments
     args['no_model_upload'] = True
 
     sweep_config = args['sweep']
@@ -393,17 +508,27 @@ def sweep(env_name, args=None, pareto=False):
         raise ValueError(f'Invalid sweep method {method}. See pufferlib.sweep')
 
     sweep_obj = sweep_cls(sweep_config)
-    num_experiments = args['sweep']['max_runs']
+    restored_runs, restored_points = _restore_sweep_observations(env_name, args, sweep_obj)
+    if restored_runs:
+        print(f'Restored {restored_points} observations from {restored_runs} prior sweep runs')
+
+    max_runs = args['sweep']['max_runs']
+    has_run_cap = max_runs > 0
     ts_default = args['train']['total_timesteps']
     ts_config = sweep_config.get('train', {}).get('total_timesteps', {'min': ts_default, 'max': ts_default})
-    
+
     all_timesteps = np.geomspace(ts_config['min'], ts_config['max'], sweep_gpus)
     result_queue = mp.get_context('spawn').Queue()
 
     active = {}
-    completed = 0
-    while completed < num_experiments:
-        if len(active) >= sweep_gpus//exp_gpus: # Collect completed runs
+    completed = restored_runs
+    launched = restored_runs
+    while True:
+        should_collect = active and (
+            len(active) >= concurrent_experiments
+            or (has_run_cap and launched >= max_runs)
+        )
+        if should_collect:
             gpu_id, scores, costs, timesteps = result_queue.get()
             done_args = active.pop(gpu_id)
 
@@ -416,14 +541,14 @@ def sweep(env_name, args=None, pareto=False):
                 done_args['train']['total_timesteps'] = t
                 sweep_obj.observe(done_args, s, c, is_failure=False)
 
-        idx = completed + len(active)
-        if idx >= num_experiments:
-            break # All experiments launched
+        if has_run_cap and launched >= max_runs:
+            if not active:
+                break
+            continue
 
-        # TODO: only 1 per sweep etc
         gpu_id = next(i for i in range(sweep_gpus) if i not in active)
         timestep_total = all_timesteps[gpu_id] if pareto else None
-        if idx > 1: # First experiment uses defaults
+        if launched > 0: # Only the first overall experiment uses defaults
             sweep_obj.suggest(args, fixed_total_timesteps=timestep_total)
 
         try:
@@ -435,6 +560,7 @@ def sweep(env_name, args=None, pareto=False):
 
         exp_args = deepcopy(args)
         active[gpu_id] = exp_args
+        launched += 1
         train(env_name, exp_args, range(gpu_id, gpu_id + exp_gpus),
             sweep_obj=sweep_obj, result_queue=result_queue)
 
