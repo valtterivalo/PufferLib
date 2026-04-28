@@ -10,6 +10,9 @@
 #include "puf_types.h"
 #include <cassert>
 #include <atomic>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <vector>
 
 struct MetalStream {
@@ -123,6 +126,23 @@ inline void mtl_set_tensor(MetalStream *ms, const PufTensor &t,
 
 id<MTLBuffer> mtl_buffer_for_ptr(const void *ptr, NSUInteger *out_offset);
 
+inline bool mtl_const_ring_reserve_range(NSUInteger current_offset,
+                                         NSUInteger raw_size,
+                                         NSUInteger *next_offset) {
+  if (raw_size > MTL_CONST_RING_SIZE ||
+      current_offset > MTL_CONST_RING_SIZE) {
+    return false;
+  }
+
+  NSUInteger aligned = (raw_size + 15) & ~(NSUInteger)15;
+  if (aligned > MTL_CONST_RING_SIZE - current_offset) {
+    return false;
+  }
+
+  *next_offset = current_offset + aligned;
+  return true;
+}
+
 inline void mtl_set_tensor(MetalStream *ms, const FloatTensor &t,
                            uint32_t index) {
   NSUInteger offset;
@@ -135,14 +155,22 @@ inline void mtl_set_tensor(MetalStream *ms, const FloatTensor &t,
 }
 template <typename T>
 inline void mtl_set_params(MetalStream *ms, const T &params, uint32_t index) {
-  NSUInteger aligned = (sizeof(T) + 15) & ~15;
-  assert(ms->const_ring_offset + aligned <= MTL_CONST_RING_SIZE);
+  NSUInteger next_offset = 0;
+  if (!mtl_const_ring_reserve_range(ms->const_ring_offset, sizeof(T),
+                                    &next_offset)) {
+    std::fprintf(stderr,
+                 "mtl_set_params: constant ring overflow: offset=%llu size=%llu capacity=%llu\n",
+                 (unsigned long long)ms->const_ring_offset,
+                 (unsigned long long)sizeof(T),
+                 (unsigned long long)MTL_CONST_RING_SIZE);
+    std::abort();
+  }
   memcpy((char *)[ms->const_ring contents] + ms->const_ring_offset,
          &params, sizeof(T));
   uint64_t addr = ms->const_ring.gpuAddress + ms->const_ring_offset;
   [ms->arg_table setAddress:addr atIndex:index];
   ms->bound_addresses[index] = addr;
-  ms->const_ring_offset += aligned;
+  ms->const_ring_offset = next_offset;
 }
 
 inline void mtl_dispatch_1d(MetalStream *ms, id<MTLComputePipelineState> pso,

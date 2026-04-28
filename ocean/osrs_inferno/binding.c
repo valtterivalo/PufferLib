@@ -9,8 +9,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <pthread.h>
+#include <stdint.h>
 
 #include "osrs_env.h"  /* pulls in osrs_types, encounter, pvp stack */
+#include "replay_best.h"
 
 /* encounter headers + render.h have many static helpers only used by the
    standalone viewer (not c_render) — suppress unused-function noise. */
@@ -70,9 +73,56 @@ typedef struct {
 #define Env InfernoEnv
 
 /* global best episode tracking */
-static int g_best_wave = 0;
-static int g_best_ticks = 999999;
-static int g_best_min_zuk_hp = 999999;  /* lowest Zuk HP reached (for Zuk-only training) */
+static pthread_mutex_t g_best_replay_mutex = PTHREAD_MUTEX_INITIALIZER;
+static InfernoReplayBest g_best_replay = {
+    .wave = 0,
+    .ticks = 999999,
+    .min_zuk_hp = 999999,
+    .rng_seed = UINT32_MAX,
+};
+
+static void inferno_replay_lock_best(void) {
+    if (pthread_mutex_lock(&g_best_replay_mutex) != 0) {
+        fprintf(stderr, "RECORD_REPLAY: cannot lock best replay state\n");
+        abort();
+    }
+}
+
+static void inferno_replay_unlock_best(void) {
+    if (pthread_mutex_unlock(&g_best_replay_mutex) != 0) {
+        fprintf(stderr, "RECORD_REPLAY: cannot unlock best replay state\n");
+        abort();
+    }
+}
+
+static void inferno_replay_write_or_abort(
+    const char* rpath,
+    int episode_action_len,
+    uint32_t episode_rng_start,
+    const int* episode_actions
+) {
+    FILE* fp = fopen(rpath, "wb");
+    if (!fp) {
+        fprintf(stderr, "record_best_replay_path: cannot open %s\n", rpath);
+        abort();
+    }
+
+    size_t expected_actions = (size_t)episode_action_len * NUM_ATNS;
+    int has_written_replay =
+        fwrite(&episode_action_len, sizeof(int), 1, fp) == 1 &&
+        fwrite(&episode_rng_start, sizeof(uint32_t), 1, fp) == 1 &&
+        fwrite(episode_actions, sizeof(int), expected_actions, fp) == expected_actions;
+    if (!has_written_replay) {
+        fprintf(stderr, "RECORD_REPLAY: short write to %s\n", rpath);
+        fclose(fp);
+        abort();
+    }
+
+    if (fclose(fp) != 0) {
+        fprintf(stderr, "RECORD_REPLAY: cannot close %s\n", rpath);
+        abort();
+    }
+}
 
 void c_step(Env* env) {
     int used_human_commands = 0;
@@ -223,44 +273,38 @@ void c_step(Env* env) {
             InfernoState* st = (InfernoState*)env->enc_state;
             int wave = st->wave;
             int ticks = env->episode_action_len;
-            int is_new_best = 0;
-            if (st->start_wave == 0) {
-                /* full run: best wave, then fewest ticks */
-                is_new_best = (wave > g_best_wave || (wave == g_best_wave && ticks < g_best_ticks));
-            } else {
-                /* partial/zuk run: best = lowest Zuk HP reached.
-                   if Zuk is dead (winner==0), fastest kill (fewest ticks) wins. */
-                int min_zuk_hp = (st->winner == 0)
-                    ? 0
-                    : (st->min_zuk_hp_seen > 0.0f ? (int)st->min_zuk_hp_seen : 1200);
-                is_new_best = (min_zuk_hp < g_best_min_zuk_hp ||
-                              (min_zuk_hp == g_best_min_zuk_hp && min_zuk_hp == 0 && ticks < g_best_ticks));
-                if (is_new_best) g_best_min_zuk_hp = min_zuk_hp;
-            }
+            int min_zuk_hp = (st->winner == 0)
+                ? 0
+                : (st->min_zuk_hp_seen > 0.0f ? (int)st->min_zuk_hp_seen : 1200);
+
+            inferno_replay_lock_best();
+            int is_new_best = inferno_replay_is_better(
+                &g_best_replay,
+                st->start_wave,
+                wave,
+                ticks,
+                min_zuk_hp,
+                env->episode_rng_start);
             if (is_new_best) {
-                g_best_wave = wave;
-                g_best_ticks = ticks;
+                inferno_replay_best_apply(
+                    &g_best_replay, wave, ticks, min_zuk_hp, env->episode_rng_start);
                 const char* rpath = getenv("RECORD_REPLAY");
                 if (rpath && rpath[0]) {
-                    FILE* fp = fopen(rpath, "wb");
-                    if (!fp) {
-                        fprintf(stderr, "record_best_replay_path: cannot open %s\n", rpath);
-                        abort();
-                    }
-                    fwrite(&env->episode_action_len, sizeof(int), 1, fp);
-                    fwrite(&env->episode_rng_start, sizeof(uint32_t), 1, fp);
-                    fwrite(env->episode_actions, sizeof(int),
-                           env->episode_action_len * NUM_ATNS, fp);
-                    fclose(fp);
+                    inferno_replay_write_or_abort(
+                        rpath,
+                        env->episode_action_len,
+                        env->episode_rng_start,
+                        env->episode_actions);
                     if (st->start_wave >= 68) {
                         fprintf(stderr, "replay: new best min zuk hp=%d (%d ticks, rng=%u) saved to %s\n",
-                                g_best_min_zuk_hp, env->episode_action_len, env->episode_rng_start, rpath);
+                                g_best_replay.min_zuk_hp, env->episode_action_len, env->episode_rng_start, rpath);
                     } else {
                         fprintf(stderr, "replay: new best wave %d (%d ticks, rng=%u) saved to %s\n",
                                 wave, env->episode_action_len, env->episode_rng_start, rpath);
                     }
                 }
             }
+            inferno_replay_unlock_best();
         }
         env->episode_action_len = 0;
 

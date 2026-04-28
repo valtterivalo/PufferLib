@@ -15,6 +15,10 @@
 #include "osrs_collision.h"
 #include "osrs_pathfinding.h"
 
+#if PATHFIND_MAX_QUEUE_FULL < PATHFIND_GRID_SIZE * PATHFIND_GRID_SIZE
+#error "PATHFIND_MAX_QUEUE_FULL must fit every full-grid cell"
+#endif
+
 static int tests_passed = 0;
 static int tests_failed = 0;
 
