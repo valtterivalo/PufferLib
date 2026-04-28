@@ -1211,7 +1211,7 @@ static int inf_grid_index(int x, int y, int* gx, int* gy) {
 }
 
 static int inf_npc_sets_collision_flag(InfNPCType type) {
-    return type != INF_NPC_NIBBLER;
+    return type != INF_NPC_NIBBLER && type != INF_NPC_ZUK_SHIELD;
 }
 
 static int inf_npc_effective_size(const InfNPC* npc) {
@@ -3458,11 +3458,15 @@ static void inf_step(EncounterState* state, const int* actions) {
 }
 
 
-/* obs layout: 49 player + 12 pillar + 33*32 NPC + 5*8 pending hits = 1157 */
+/* obs layout: player + Zuk phase + pillars + NPC slots + pending hits + pending Zuk healer sparks */
 #define INF_PLAYER_OBS_SIZE 52   /* +3 for offensive prayer one-hot (piety/rigour/augury) */
 #define INF_TOTAL_NPC_OBS_SIZE 282
 #define INF_FEATURES_PER_HIT 5
-#define INF_NUM_OBS (INF_PLAYER_OBS_SIZE + 12 + INF_TOTAL_NPC_OBS_SIZE + INF_FEATURES_PER_HIT * ENCOUNTER_MAX_PENDING_HITS)
+#define INF_SPARK_OBS_SLOTS INF_MAX_PENDING_SPARKS
+#define INF_FEATURES_PER_SPARK 5
+#define INF_PENDING_HIT_OBS_SIZE (INF_FEATURES_PER_HIT * ENCOUNTER_MAX_PENDING_HITS)
+#define INF_PENDING_SPARK_OBS_SIZE (INF_FEATURES_PER_SPARK * INF_SPARK_OBS_SLOTS)
+#define INF_NUM_OBS (INF_PLAYER_OBS_SIZE + 12 + INF_TOTAL_NPC_OBS_SIZE + INF_PENDING_HIT_OBS_SIZE + INF_PENDING_SPARK_OBS_SIZE)
 
 /* max hit per NPC type, normalized by mager max (70). for prayer priority obs. */
 static const float INF_NPC_MAX_HIT_NORM[INF_NUM_NPC_TYPES] = {
@@ -3481,6 +3485,43 @@ static const float INF_NPC_MAX_HIT_NORM[INF_NUM_NPC_TYPES] = {
     [INF_NPC_HEALER_ZUK] = 24.0f / 70.0f,
     [INF_NPC_ZUK_SHIELD] = 0.0f,
 };
+
+static float inf_zuk_attack_timer_obs(const InfernoState* s) {
+    if (!inf_is_final_wave(s)) return 0.0f;
+
+    int min_timer = 999;
+    int zuk_idx = inf_find_live_zuk_idx(s);
+    if (zuk_idx >= 0) {
+        int timer = s->npcs[zuk_idx].attack_timer;
+        if (timer < 0) timer = 0;
+        min_timer = timer;
+    }
+
+    for (int h = 0; h < s->player_pending_hit_count; h++) {
+        const EncounterPendingHit* hit = &s->player_pending_hits[h];
+        if (hit->source_npc_type != INF_NPC_ZUK) continue;
+        if (hit->ticks_remaining < min_timer)
+            min_timer = hit->ticks_remaining;
+    }
+
+    return (min_timer < 999) ? (float)min_timer / 10.0f : 0.0f;
+}
+
+static int inf_spark_obs_less(
+    const InfernoState* s, const InfPendingSpark* a, int ai,
+    const InfPendingSpark* b, int bi
+) {
+    if (a->ticks_remaining != b->ticks_remaining)
+        return a->ticks_remaining < b->ticks_remaining;
+    int adx = abs(a->x - s->player.x);
+    int ady = abs(a->y - s->player.y);
+    int bdx = abs(b->x - s->player.x);
+    int bdy = abs(b->y - s->player.y);
+    int ad = adx > ady ? adx : ady;
+    int bd = bdx > bdy ? bdx : bdy;
+    if (ad != bd) return ad < bd;
+    return ai < bi;
+}
 
 static void inf_write_obs(EncounterState* state, float* obs) {
     InfernoState* s = (InfernoState*)state;
@@ -3507,7 +3548,7 @@ static void inf_write_obs(EncounterState* state, float* obs) {
     obs[i++] = (float)s->player.restore_doses / (float)full_supplies.restore_doses;
     obs[i++] = (float)s->player.current_prayer / 99.0f;
     obs[i++] = (float)s->wave / (float)INF_NUM_WAVES;
-    obs[i++] = 0.0f;
+    obs[i++] = inf_zuk_attack_timer_obs(s);
     obs[i++] = (s->weapon_set == INF_GEAR_MAGE) ? 1.0f : 0.0f;
     obs[i++] = (s->weapon_set == INF_GEAR_TBOW) ? 1.0f : 0.0f;
     obs[i++] = (s->weapon_set == INF_GEAR_BP) ? 1.0f : 0.0f;
@@ -3803,6 +3844,31 @@ static void inf_write_obs(EncounterState* state, float* obs) {
             obs[i++] = (float)ph->damage / 150.0f;  /* normalized damage magnitude (Zuk max ~148) */
         } else {
             for (int j = 0; j < INF_FEATURES_PER_HIT; j++) obs[i++] = 0.0f;
+        }
+    }
+
+    int used_sparks[INF_MAX_PENDING_SPARKS] = {0};
+    for (int slot = 0; slot < INF_SPARK_OBS_SLOTS; slot++) {
+        int best = -1;
+        for (int sp = 0; sp < INF_MAX_PENDING_SPARKS; sp++) {
+            if (used_sparks[sp] || !s->pending_sparks[sp].active) continue;
+            if (best < 0 ||
+                inf_spark_obs_less(s, &s->pending_sparks[sp], sp,
+                                   &s->pending_sparks[best], best)) {
+                best = sp;
+            }
+        }
+
+        if (best >= 0) {
+            const InfPendingSpark* spark = &s->pending_sparks[best];
+            used_sparks[best] = 1;
+            obs[i++] = 1.0f;
+            obs[i++] = (float)(spark->x - px) / (float)INF_ARENA_WIDTH;
+            obs[i++] = (float)(spark->y - py) / (float)INF_ARENA_HEIGHT;
+            obs[i++] = (float)spark->ticks_remaining / 10.0f;
+            obs[i++] = (float)spark->damage / 10.0f;
+        } else {
+            for (int j = 0; j < INF_FEATURES_PER_SPARK; j++) obs[i++] = 0.0f;
         }
     }
 

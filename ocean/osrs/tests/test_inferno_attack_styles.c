@@ -87,6 +87,9 @@ static HumanInput make_human_input(void) {
     return input;
 }
 
+static int inferno_pending_hit_obs_start(void);
+static int inferno_spark_obs_start(void);
+
 static void init_jad_timing_test_state(InfernoState* state, int player_x, int player_y, int jad_x, int jad_y) {
     memset(state, 0, sizeof(*state));
     memset(state->npc_los_cache, -1, sizeof(state->npc_los_cache));
@@ -957,7 +960,7 @@ static void test_jad_fire_tick_exposes_three_tick_prayer_deadline(void) {
     inf_write_obs((EncounterState*)&state, obs);
     ASSERT_FLOAT_NEAR("prayer-critical timer exposes jad fire deadline", obs[37], 0.3f, 1e-6f);
     ASSERT_FLOAT_NEAR("prayer-critical magic style exposed after fire", obs[40], 1.0f, 1e-6f);
-    int pending_start = INF_NUM_OBS - INF_FEATURES_PER_HIT * ENCOUNTER_MAX_PENDING_HITS;
+    int pending_start = inferno_pending_hit_obs_start();
     ASSERT_FLOAT_NEAR("pending hit obs timer uses prayer window", obs[pending_start + 3], 0.3f, 1e-6f);
     ASSERT_FLOAT_NEAR("pending hit pre-check damage exposes max threat", obs[pending_start + 4], 113.0f / 150.0f, 1e-6f);
 }
@@ -1037,8 +1040,8 @@ static void test_jad_long_distance_damage_uses_delayed_projectile_landing(void) 
     ASSERT_INT_EQ("found a seed where long-distance jad damage lands on expected tick", saw_expected_landing, 1);
 }
 
-static void test_triple_jad_pending_threats_preserve_obs_shape(void) {
-    printf("--- triple jad pending threats preserve obs shape ---\n");
+static void test_triple_jad_pending_threats_fit_obs_layout(void) {
+    printf("--- triple jad pending threats fit obs layout ---\n");
 
     InfernoState state;
     init_jad_timing_test_state(&state, 25, 30, 18, 33);
@@ -1061,7 +1064,7 @@ static void test_triple_jad_pending_threats_preserve_obs_shape(void) {
 
     float obs[INF_NUM_OBS];
     inf_write_obs((EncounterState*)&state, obs);
-    ASSERT_INT_EQ("inferno obs shape remains unchanged", INF_NUM_OBS, 386);
+    ASSERT_INT_EQ("inferno obs shape includes spark slots", INF_NUM_OBS, 546);
 }
 
 static void test_jad_special_wave_spawn_cadence_matches_reference(void) {
@@ -1208,6 +1211,15 @@ static int inferno_target_mask_slot_offset(int slot_idx) {
     return ENCOUNTER_MOVE_ACTIONS + ENCOUNTER_OVERHEAD_DIM_PVE + 1 + slot_idx;
 }
 
+static int inferno_pending_hit_obs_start(void) {
+    return INF_PLAYER_OBS_SIZE + 12 + INF_TOTAL_NPC_OBS_SIZE;
+}
+
+static int inferno_spark_obs_start(void) {
+    return inferno_pending_hit_obs_start() +
+        INF_FEATURES_PER_HIT * ENCOUNTER_MAX_PENDING_HITS;
+}
+
 static void test_direct_start_waves_spawn_without_empty_gap(void) {
     printf("--- direct start waves spawn without empty gap ---\n");
 
@@ -1301,6 +1313,92 @@ static void init_zuk_timing_state(InfernoState* state) {
     state->zuk.shield_dir = 1;
     state->zuk.set_timer = 72;
     state->zuk.set_interval = 350;
+}
+
+static void test_zuk_shield_does_not_set_collision_flags(void) {
+    printf("--- zuk shield does not set collision flags ---\n");
+
+    ASSERT_INT_EQ("zuk shield follows reference CollisionType.NONE",
+        inf_npc_sets_collision_flag(INF_NPC_ZUK_SHIELD), 0);
+}
+
+static void test_zuk_obs_exposes_attack_timer_summary(void) {
+    printf("--- zuk obs exposes attack timer summary ---\n");
+
+    InfernoState state;
+    init_zuk_timing_state(&state);
+    state.npcs[0].attack_timer = 3;
+
+    float obs[INF_NUM_OBS];
+    inf_write_obs((EncounterState*)&state, obs);
+
+    ASSERT_FLOAT_NEAR("zuk attack timer uses existing player placeholder",
+        obs[15], 0.3f, 1e-6f);
+}
+
+static void test_zuk_obs_exposes_pending_sparks(void) {
+    printf("--- zuk obs exposes pending sparks ---\n");
+
+    InfernoState state;
+    init_zuk_timing_state(&state);
+    state.pending_sparks[0] = (InfPendingSpark){
+        .active = 1, .x = state.player.x + 4, .y = state.player.y,
+        .damage = 8, .ticks_remaining = 4,
+    };
+    state.pending_sparks[1] = (InfPendingSpark){
+        .active = 1, .x = state.player.x - 1, .y = state.player.y + 2,
+        .damage = 10, .ticks_remaining = 2,
+    };
+
+    int spark_start = inferno_spark_obs_start();
+    int spark_features = 5;
+    int spark_slots = INF_MAX_PENDING_SPARKS;
+    ASSERT_INT_EQ("inferno obs has pending spark section",
+        INF_NUM_OBS >= spark_start + spark_features * spark_slots, 1);
+    if (INF_NUM_OBS < spark_start + spark_features * spark_slots)
+        return;
+
+    float obs[INF_NUM_OBS];
+    inf_write_obs((EncounterState*)&state, obs);
+
+    ASSERT_FLOAT_NEAR("first spark active", obs[spark_start], 1.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("first spark rel x sorted by earliest landing",
+        obs[spark_start + 1], -1.0f / (float)INF_ARENA_WIDTH, 1e-6f);
+    ASSERT_FLOAT_NEAR("first spark rel y",
+        obs[spark_start + 2], 2.0f / (float)INF_ARENA_HEIGHT, 1e-6f);
+    ASSERT_FLOAT_NEAR("first spark timer",
+        obs[spark_start + 3], 0.2f, 1e-6f);
+    ASSERT_FLOAT_NEAR("first spark damage",
+        obs[spark_start + 4], 1.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("second spark active",
+        obs[spark_start + 5], 1.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("second spark timer",
+        obs[spark_start + 8], 0.4f, 1e-6f);
+}
+
+static void test_zuk_spark_render_matches_pending_spark_state(void) {
+    printf("--- zuk spark render matches pending spark state ---\n");
+
+    InfernoState state;
+    init_zuk_timing_state(&state);
+    state.pending_sparks[0] = (InfPendingSpark){
+        .active = 1, .src_x = 16, .src_y = 48,
+        .x = state.player.x, .y = state.player.y,
+        .damage = 9, .ticks_remaining = 4,
+    };
+
+    EncounterOverlay ov;
+    memset(&ov, 0, sizeof(ov));
+    inf_render_post_tick((EncounterState*)&state, &ov);
+
+    ASSERT_INT_EQ("spark render emits one projectile", ov.projectile_count, 1);
+    ASSERT_INT_EQ("spark source x", ov.projectiles[0].src_x, 16);
+    ASSERT_INT_EQ("spark source y", ov.projectiles[0].src_y, 48);
+    ASSERT_INT_EQ("spark target x", ov.projectiles[0].dst_x, state.player.x);
+    ASSERT_INT_EQ("spark target y", ov.projectiles[0].dst_y, state.player.y);
+    ASSERT_INT_EQ("spark visual duration", ov.projectiles[0].duration_ticks, 4 * 30);
+    ASSERT_INT_EQ("spark render marks visual emitted",
+        state.pending_sparks[0].visual_emitted, 1);
 }
 
 static void test_zuk_attack_delay_counts_down_while_stunned(void) {
@@ -1952,11 +2050,12 @@ int main(void) {
     test_jad_prayer_on_third_tick_blocks();
     test_jad_prayer_first_on_fourth_tick_does_not_block();
     test_jad_long_distance_damage_uses_delayed_projectile_landing();
-    test_triple_jad_pending_threats_preserve_obs_shape();
+    test_triple_jad_pending_threats_fit_obs_layout();
     test_jad_special_wave_spawn_cadence_matches_reference();
     test_jad_melee_stays_instant_and_untelegraphed();
     test_direct_start_waves_spawn_without_empty_gap();
     test_zuk_ready_countdown_holds_npcs_then_releases();
+    test_zuk_shield_does_not_set_collision_flags();
     test_zuk_attack_delay_counts_down_while_stunned();
     test_zuk_set_timer_spawns_on_decrement_to_zero();
     test_zuk_hp_threshold_pause_happens_before_set_tick();
@@ -1964,6 +2063,9 @@ int main(void) {
     test_npc_target_projectile_delays_match_reference();
     test_npc_player_projectile_delays_use_reference_options();
     test_player_projectile_timing_uses_reference_options();
+    test_zuk_obs_exposes_attack_timer_summary();
+    test_zuk_obs_exposes_pending_sparks();
+    test_zuk_spark_render_matches_pending_spark_state();
     test_zuk_obs_tracks_shield_and_mager_aggro();
     test_human_target_and_potion_translation();
     test_action_noop_count_matches_action_heads();
