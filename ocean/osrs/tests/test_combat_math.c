@@ -322,6 +322,108 @@ static void test_hit_delays(void) {
     ASSERT_INT_EQ("bp d=6 plr",  encounter_blowpipe_hit_delay(6, 1), 3);
     ASSERT_INT_EQ("bp d=12 npc", encounter_blowpipe_hit_delay(12, 0), 3); /* 2+1=3 */
 }
+
+static void test_projectile_delay_options(void) {
+    printf("--- projectile delay options ---\n");
+
+    ASSERT_INT_EQ("magic projectile delay",
+        encounter_projectile_hit_delay(5, 0, ENCOUNTER_PROJECTILE_DELAY_MAGIC,
+            (EncounterProjectileDelayOptions){0}),
+        encounter_magic_hit_delay(5, 0));
+    ASSERT_INT_EQ("player ranged projectile delay",
+        encounter_projectile_hit_delay(10, 1, ENCOUNTER_PROJECTILE_DELAY_RANGED,
+            (EncounterProjectileDelayOptions){0}),
+        encounter_ranged_hit_delay(10, 1));
+    ASSERT_INT_EQ("blowpipe projectile delay",
+        encounter_projectile_hit_delay(12, 0, ENCOUNTER_PROJECTILE_DELAY_THROWN,
+            (EncounterProjectileDelayOptions){0}),
+        encounter_blowpipe_hit_delay(12, 0));
+    ASSERT_INT_EQ("reduceDelay -2 adds two ticks",
+        encounter_projectile_hit_delay(10, 0, ENCOUNTER_PROJECTILE_DELAY_RANGED,
+            (EncounterProjectileDelayOptions){ .reduce_delay = -2 }),
+        encounter_ranged_hit_delay(10, 0) + 2);
+    ASSERT_INT_EQ("reduceDelay clamps to one tick",
+        encounter_projectile_hit_delay(1, 0, ENCOUNTER_PROJECTILE_DELAY_RANGED,
+            (EncounterProjectileDelayOptions){ .reduce_delay = 10 }),
+        1);
+    ASSERT_INT_EQ("setDelay overrides base and reduceDelay",
+        encounter_projectile_hit_delay(10, 0, ENCOUNTER_PROJECTILE_DELAY_RANGED,
+            (EncounterProjectileDelayOptions){ .set_delay = 4, .reduce_delay = -2 }),
+        4);
+    ASSERT_INT_EQ("thrown delay",
+        encounter_projectile_hit_delay(12, 0, ENCOUNTER_PROJECTILE_DELAY_THROWN,
+            (EncounterProjectileDelayOptions){0}),
+        encounter_thrown_hit_delay(12, 0));
+    ASSERT_INT_EQ("ballista delay",
+        encounter_projectile_hit_delay(11, 0, ENCOUNTER_PROJECTILE_DELAY_BALLISTA,
+            (EncounterProjectileDelayOptions){0}),
+        encounter_ballista_hit_delay(11, 0));
+    ASSERT_INT_EQ("dark bow second delay",
+        encounter_projectile_hit_delay(11, 0, ENCOUNTER_PROJECTILE_DELAY_DARK_BOW_SECOND,
+            (EncounterProjectileDelayOptions){0}),
+        encounter_dark_bow_second_hit_delay(11, 0));
+}
+
+static void test_projectile_distance_modes(void) {
+    printf("--- projectile distance modes ---\n");
+
+    ASSERT_INT_EQ("closest tile distance",
+        encounter_projectile_distance(
+            16, 11, 1, 12, 10, 3,
+            ENCOUNTER_PROJECTILE_DISTANCE_CLOSEST_TILE),
+        2);
+    ASSERT_INT_EQ("target SW tile distance",
+        encounter_projectile_distance(
+            16, 11, 1, 12, 10, 3,
+            ENCOUNTER_PROJECTILE_DISTANCE_TARGET_SW_TILE),
+        4);
+    ASSERT_INT_EQ("rectangle distance",
+        encounter_projectile_distance(
+            10, 10, 3, 14, 12, 2,
+            ENCOUNTER_PROJECTILE_DISTANCE_CLOSEST_TILE),
+        2);
+}
+
+static void test_projectile_visual_timing(void) {
+    printf("--- projectile visual timing ---\n");
+
+    EncounterProjectileTiming mager = encounter_projectile_timing(
+        5, 0, ENCOUNTER_PROJECTILE_DELAY_MAGIC,
+        (EncounterProjectileDelayOptions){
+            .visual_delay_ticks = 2,
+            .visual_hit_early_ticks = -1,
+        });
+    ASSERT_INT_EQ("mager damage delay", mager.damage_delay_ticks, 3);
+    ASSERT_INT_EQ("mager visual start", mager.visual_start_delay_ticks, 2);
+    ASSERT_INT_EQ("mager visual duration", mager.visual_duration_ticks, 2);
+
+    EncounterProjectileTiming ranger = encounter_projectile_timing(
+        10, 0, ENCOUNTER_PROJECTILE_DELAY_RANGED,
+        (EncounterProjectileDelayOptions){
+            .reduce_delay = -2,
+            .visual_delay_ticks = 3,
+        });
+    ASSERT_INT_EQ("ranger damage delay", ranger.damage_delay_ticks, 5);
+    ASSERT_INT_EQ("ranger visual start", ranger.visual_start_delay_ticks, 3);
+    ASSERT_INT_EQ("ranger visual duration", ranger.visual_duration_ticks, 2);
+
+    EncounterProjectileTiming zuk = encounter_projectile_timing(
+        10, 0, ENCOUNTER_PROJECTILE_DELAY_MAGIC,
+        (EncounterProjectileDelayOptions){
+            .set_delay = 4,
+            .visual_delay_ticks = 2,
+        });
+    ASSERT_INT_EQ("zuk set delay", zuk.damage_delay_ticks, 4);
+    ASSERT_INT_EQ("zuk visual duration", zuk.visual_duration_ticks, 2);
+
+    EncounterProjectileTiming short_life = encounter_projectile_timing(
+        1, 0, ENCOUNTER_PROJECTILE_DELAY_RANGED,
+        (EncounterProjectileDelayOptions){
+            .visual_delay_ticks = 1,
+            .visual_hit_early_ticks = 1,
+        });
+    ASSERT_INT_EQ("short visual duration clamps", short_life.visual_duration_ticks, 1);
+}
 /* test: chebyshev distance to multi-tile NPC                                */
 /*                                                                           */
 /* encounter_dist_to_npc(px, py, nx, ny, npc_size)                          */
@@ -994,6 +1096,9 @@ int main(void) {
     test_player_def_bonus();
     test_prayer_correct();
     test_hit_delays();
+    test_projectile_delay_options();
+    test_projectile_distance_modes();
+    test_projectile_visual_timing();
     test_dist_to_npc();
     test_tbow_multipliers();
     test_blowpipe_spec();

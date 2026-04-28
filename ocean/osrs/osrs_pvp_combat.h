@@ -415,23 +415,33 @@ static inline int get_blood_heal_percent(int current_magic) {
    historically did NOT include the +1 player offset. keep these for PvP compat. */
 
 static inline int pvp_magic_hit_delay(int distance) {
-    return 1 + ((1 + distance) / 3);
+    return encounter_projectile_hit_delay(
+        distance, 0, ENCOUNTER_PROJECTILE_DELAY_MAGIC,
+        (EncounterProjectileDelayOptions){0});
 }
 
 static inline int pvp_ranged_hit_delay(int distance) {
-    return 1 + ((3 + distance) / 6);
+    return encounter_projectile_hit_delay(
+        distance, 0, ENCOUNTER_PROJECTILE_DELAY_RANGED,
+        (EncounterProjectileDelayOptions){0});
 }
 
 static inline int pvp_ranged_hit_delay_fast(int distance) {
-    return 1 + (distance / 6);
+    return encounter_projectile_hit_delay(
+        distance, 0, ENCOUNTER_PROJECTILE_DELAY_THROWN,
+        (EncounterProjectileDelayOptions){0});
 }
 
 static inline int pvp_ranged_hit_delay_ballista(int distance) {
-    return 2 + ((1 + distance) / 6);
+    return encounter_projectile_hit_delay(
+        distance, 0, ENCOUNTER_PROJECTILE_DELAY_BALLISTA,
+        (EncounterProjectileDelayOptions){0});
 }
 
 static inline int pvp_ranged_hit_delay_dbow_second(int distance) {
-    return 1 + ((2 + distance) / 3);
+    return encounter_projectile_hit_delay(
+        distance, 0, ENCOUNTER_PROJECTILE_DELAY_DARK_BOW_SECOND,
+        (EncounterProjectileDelayOptions){0});
 }
 
 static inline int pvp_ranged_hit_delay_for_weapon(int distance, int is_special, RangedSpecWeapon weapon) {

@@ -22,6 +22,8 @@
  *   encounter_prayer_correct_for_style(p, s)  prayer blocks attack style check
  *   encounter_magic_hit_delay(dist, is_p)     magic projectile flight delay (ticks)
  *   encounter_ranged_hit_delay(dist, is_p)    ranged projectile flight delay (ticks)
+ *   encounter_projectile_hit_delay(...)       hit delay with setDelay/reduceDelay options
+ *   encounter_projectile_timing(...)          hit and visual projectile timing
  *   encounter_dist_to_npc(px,py,nx,ny,sz)     chebyshev dist to multi-tile NPC
  *
  * PLAYER COMBAT:
@@ -46,6 +48,7 @@
 #include <math.h>
 #include <stdint.h>
 #include <string.h>
+#include <stdlib.h>
 #include "osrs_types.h"
 #include "osrs_items.h"
 
@@ -306,21 +309,140 @@ static inline int encounter_ranged_hit_delay(int distance, int is_player) {
     return (3 + distance) / 6 + 1 + (is_player ? 1 : 0);
 }
 
-/* blowpipe hit delay: floor(distance / 6) + 1, +1 if attacker is player.
-   blowpipe overrides the generic ranged formula — faster at longer range.
-   ref: InfernoTrainer Blowpipe.ts:56-58. */
-static inline int encounter_blowpipe_hit_delay(int distance, int is_player) {
+/* thrown hit delay: floor(distance / 6) + 1, +1 if attacker is player.
+   used by blowpipe, chinchompas, and fast ranged specs. */
+static inline int encounter_thrown_hit_delay(int distance, int is_player) {
     return distance / 6 + 1 + (is_player ? 1 : 0);
+}
+
+static inline int encounter_blowpipe_hit_delay(int distance, int is_player) {
+    return encounter_thrown_hit_delay(distance, is_player);
+}
+
+static inline int encounter_ballista_hit_delay(int distance, int is_player) {
+    return 2 + (1 + distance) / 6 + (is_player ? 1 : 0);
+}
+
+static inline int encounter_dark_bow_second_hit_delay(int distance, int is_player) {
+    return 1 + (2 + distance) / 3 + (is_player ? 1 : 0);
+}
+
+typedef enum {
+    ENCOUNTER_PROJECTILE_DISTANCE_CLOSEST_TILE,
+    ENCOUNTER_PROJECTILE_DISTANCE_TARGET_SW_TILE,
+} EncounterProjectileDistanceMode;
+
+typedef enum {
+    ENCOUNTER_PROJECTILE_DELAY_MELEE,
+    ENCOUNTER_PROJECTILE_DELAY_MAGIC,
+    ENCOUNTER_PROJECTILE_DELAY_RANGED,
+    ENCOUNTER_PROJECTILE_DELAY_THROWN,
+    ENCOUNTER_PROJECTILE_DELAY_BALLISTA,
+    ENCOUNTER_PROJECTILE_DELAY_DARK_BOW_SECOND,
+} EncounterProjectileDelayKind;
+
+typedef struct {
+    int set_delay;
+    int reduce_delay;
+    int visual_delay_ticks;
+    int visual_hit_early_ticks;
+} EncounterProjectileDelayOptions;
+
+typedef struct {
+    int damage_delay_ticks;
+    int visual_start_delay_ticks;
+    int visual_duration_ticks;
+} EncounterProjectileTiming;
+
+static inline int encounter_chebyshev_distance(int ax, int ay, int bx, int by) {
+    int dx = ax - bx; if (dx < 0) dx = -dx;
+    int dy = ay - by; if (dy < 0) dy = -dy;
+    return dx > dy ? dx : dy;
+}
+
+static inline int encounter_rect_distance(
+    int ax, int ay, int asize, int bx, int by, int bsize
+) {
+    int amax_x = ax + asize - 1;
+    int amax_y = ay + asize - 1;
+    int bmax_x = bx + bsize - 1;
+    int bmax_y = by + bsize - 1;
+    int dx = 0;
+    int dy = 0;
+    if (amax_x < bx) dx = bx - amax_x;
+    else if (bmax_x < ax) dx = ax - bmax_x;
+    if (amax_y < by) dy = by - amax_y;
+    else if (bmax_y < ay) dy = ay - bmax_y;
+    return dx > dy ? dx : dy;
+}
+
+static inline int encounter_projectile_distance(
+    int source_x, int source_y, int source_size,
+    int target_x, int target_y, int target_size,
+    EncounterProjectileDistanceMode mode
+) {
+    switch (mode) {
+        case ENCOUNTER_PROJECTILE_DISTANCE_CLOSEST_TILE:
+            return encounter_rect_distance(
+                source_x, source_y, source_size, target_x, target_y, target_size);
+        case ENCOUNTER_PROJECTILE_DISTANCE_TARGET_SW_TILE:
+            return encounter_chebyshev_distance(source_x, source_y, target_x, target_y);
+    }
+    abort();
+}
+
+static inline int encounter_projectile_base_hit_delay(
+    int distance, int is_player, EncounterProjectileDelayKind kind
+) {
+    switch (kind) {
+        case ENCOUNTER_PROJECTILE_DELAY_MELEE:
+            return 0;
+        case ENCOUNTER_PROJECTILE_DELAY_MAGIC:
+            return encounter_magic_hit_delay(distance, is_player);
+        case ENCOUNTER_PROJECTILE_DELAY_RANGED:
+            return encounter_ranged_hit_delay(distance, is_player);
+        case ENCOUNTER_PROJECTILE_DELAY_THROWN:
+            return encounter_thrown_hit_delay(distance, is_player);
+        case ENCOUNTER_PROJECTILE_DELAY_BALLISTA:
+            return encounter_ballista_hit_delay(distance, is_player);
+        case ENCOUNTER_PROJECTILE_DELAY_DARK_BOW_SECOND:
+            return encounter_dark_bow_second_hit_delay(distance, is_player);
+    }
+    abort();
+}
+
+static inline int encounter_projectile_hit_delay(
+    int distance, int is_player, EncounterProjectileDelayKind kind,
+    EncounterProjectileDelayOptions options
+) {
+    int delay = encounter_projectile_base_hit_delay(distance, is_player, kind);
+    if (delay > 0) {
+        delay -= options.reduce_delay;
+        if (delay < 1) delay = 1;
+    }
+    if (options.set_delay > 0)
+        delay = options.set_delay;
+    return delay;
+}
+
+static inline EncounterProjectileTiming encounter_projectile_timing(
+    int distance, int is_player, EncounterProjectileDelayKind kind,
+    EncounterProjectileDelayOptions options
+) {
+    int delay = encounter_projectile_hit_delay(distance, is_player, kind, options);
+    int duration = delay - options.visual_delay_ticks - options.visual_hit_early_ticks;
+    if (duration < 1) duration = 1;
+    return (EncounterProjectileTiming){
+        .damage_delay_ticks = delay,
+        .visual_start_delay_ticks = options.visual_delay_ticks,
+        .visual_duration_ticks = duration,
+    };
 }
 
 /* chebyshev distance from point (px,py) to nearest tile of NPC footprint
    at (nx,ny) with given npc_size. accounts for multi-tile NPCs. */
 static inline int encounter_dist_to_npc(int px, int py, int nx, int ny, int npc_size) {
-    int cx = px < nx ? nx : (px > nx + npc_size - 1 ? nx + npc_size - 1 : px);
-    int cy = py < ny ? ny : (py > ny + npc_size - 1 ? ny + npc_size - 1 : py);
-    int dx = px - cx; if (dx < 0) dx = -dx;
-    int dy = py - cy; if (dy < 0) dy = -dy;
-    return dx > dy ? dx : dy;
+    return encounter_rect_distance(px, py, 1, nx, ny, npc_size);
 }
 
 /* fisher-yates shuffle for int arrays. used for spawn position randomization,

@@ -309,13 +309,9 @@ void c_render(Env* env) {
     re->encounter_def = (void*)&ENCOUNTER_INFERNO;
     re->encounter_state = env->enc_state;
 
-    /* first pvp_render creates the RenderClient via lazy init. after that,
-       load encounter-specific terrain/objects/models (standalone viewer does
-       this in run_visual before the render loop). */
     int first_call = (re->client == NULL);
-    pvp_render(re);
-
     if (first_call) {
+        re->client = render_make_client();
         RenderClient* rc = (RenderClient*)re->client;
         rc->ticks_per_second = env->ticks_per_second;
         rc->model_cache = model_cache_load("data/equipment.models");
@@ -348,6 +344,7 @@ void c_render(Env* env) {
         }
         env->last_step_time = GetTime();
     }
+    pvp_render(re);
 
     RenderClient* rc = (RenderClient*)re->client;
     if (!rc) return;

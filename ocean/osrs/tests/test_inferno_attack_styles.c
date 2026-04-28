@@ -135,6 +135,28 @@ static void step_inferno_with_prayer(InfernoState* state, int prayer_action) {
     inf_step((EncounterState*)state, actions);
 }
 
+static void step_inferno_noop(InfernoState* state) {
+    int actions[INF_NUM_ACTION_HEADS];
+    memset(actions, 0, sizeof(actions));
+    inf_step((EncounterState*)state, actions);
+}
+
+static int find_active_npc_type(const InfernoState* state, InfNPCType type) {
+    for (int i = 0; i < INF_MAX_NPCS; i++) {
+        if (state->npcs[i].active && state->npcs[i].type == type)
+            return i;
+    }
+    return -1;
+}
+
+static int count_active_npcs(const InfernoState* state) {
+    int count = 0;
+    for (int i = 0; i < INF_MAX_NPCS; i++) {
+        if (state->npcs[i].active) count++;
+    }
+    return count;
+}
+
 static int force_mager_resurrect(InfernoState* s, int idx) {
     for (uint32_t seed = 1; seed < 100000; seed++) {
         InfernoState probe = *s;
@@ -993,12 +1015,14 @@ static void test_jad_long_distance_damage_uses_delayed_projectile_landing(void) 
         init_jad_timing_test_state(&state, 10, 10, 36, 10);
         state.rng_state = seed;
 
-        int dist = encounter_dist_to_npc(state.player.x, state.player.y,
-            state.npcs[0].x, state.npcs[0].y, state.npcs[0].size);
-        int hit_delay = encounter_magic_hit_delay(dist, 0);
-        int expected_landing_after_fire = 3 + (hit_delay - 3);
-        if (expected_landing_after_fire < 4)
-            expected_landing_after_fire = 4;
+        int dist = encounter_projectile_distance(
+            state.npcs[0].x, state.npcs[0].y, state.npcs[0].size,
+            state.player.x, state.player.y, 1,
+            ENCOUNTER_PROJECTILE_DISTANCE_CLOSEST_TILE);
+        EncounterProjectileTiming timing =
+            inf_npc_projectile_timing(INF_NPC_JAD, ATTACK_STYLE_MAGIC, dist);
+        int expected_landing_after_fire =
+            INF_JAD_PROJECTILE_DELAY + timing.damage_delay_ticks;
 
         step_inferno_with_prayer(&state, 0);
         for (int t = 1; t < expected_landing_after_fire; t++) {
@@ -1182,6 +1206,278 @@ static int inferno_obs_slot_start(int slot_idx) {
 
 static int inferno_target_mask_slot_offset(int slot_idx) {
     return ENCOUNTER_MOVE_ACTIONS + ENCOUNTER_OVERHEAD_DIM_PVE + 1 + slot_idx;
+}
+
+static void test_direct_start_waves_spawn_without_empty_gap(void) {
+    printf("--- direct start waves spawn without empty gap ---\n");
+
+    EncounterState* raw = inf_create();
+    reset_inferno_at_public_wave(raw, 20, 1.0f);
+    InfernoState* regular = (InfernoState*)raw;
+
+    ASSERT_INT_EQ("late regular start has no empty wave delay",
+        regular->wave_spawn_delay, 0);
+    ASSERT_INT_EQ("late regular start spawns mobs immediately",
+        count_active_npcs(regular) > 0, 1);
+
+    reset_inferno_at_public_wave(raw, 69, 1.0f);
+    InfernoState* zuk = (InfernoState*)raw;
+
+    ASSERT_INT_EQ("zuk start has no empty wave delay", zuk->wave_spawn_delay, 0);
+    ASSERT_INT_EQ("zuk spawned immediately", find_active_npc_type(zuk, INF_NPC_ZUK) >= 0, 1);
+    ASSERT_INT_EQ("zuk shield spawned immediately",
+        find_active_npc_type(zuk, INF_NPC_ZUK_SHIELD) >= 0, 1);
+    ASSERT_INT_EQ("zuk start player x", zuk->player.x, INF_ZUK_PLAYER_START_X);
+    ASSERT_INT_EQ("zuk start player y", zuk->player.y, INF_ZUK_PLAYER_START_Y);
+
+    inf_destroy(raw);
+}
+
+static void test_zuk_ready_countdown_holds_npcs_then_releases(void) {
+    printf("--- zuk ready countdown holds npcs then releases ---\n");
+
+    EncounterState* raw = inf_create();
+    reset_inferno_at_public_wave(raw, 69, 1.0f);
+    InfernoState* state = (InfernoState*)raw;
+    int zuk_idx = find_active_npc_type(state, INF_NPC_ZUK);
+
+    ASSERT_INT_EQ("zuk exists during ready countdown", zuk_idx >= 0, 1);
+    ASSERT_INT_EQ("zuk attack timer starts at reference delay",
+        state->npcs[zuk_idx].attack_timer, 14);
+
+    for (int i = 0; i < 5; i++)
+        step_inferno_noop(state);
+    ASSERT_INT_EQ("ready countdown does not tick zuk early",
+        state->npcs[zuk_idx].attack_timer, 14);
+
+    step_inferno_noop(state);
+    ASSERT_INT_EQ("zuk attack timer starts once ready countdown clears",
+        state->npcs[zuk_idx].attack_timer, 13);
+
+    inf_destroy(raw);
+}
+
+static void init_zuk_timing_state(InfernoState* state) {
+    memset(state, 0, sizeof(*state));
+    memset(state->npc_los_cache, -1, sizeof(state->npc_los_cache));
+    state->rng_state = 7;
+    state->wave = 68;
+    state->player.entity_type = ENTITY_PLAYER;
+    state->player.x = INF_ZUK_PLAYER_START_X;
+    state->player.y = INF_ZUK_PLAYER_START_Y;
+    state->player.base_hitpoints = 99;
+    state->player.current_hitpoints = 99;
+    state->player.base_prayer = 99;
+    state->player.current_prayer = 99;
+    state->player.base_defence = 99;
+    state->player.current_defence = 99;
+    state->player.base_magic = 99;
+    state->player.current_magic = 99;
+    state->player.base_ranged = 99;
+    state->player.current_ranged = 99;
+    state->player_dest_x = -1;
+    state->player_dest_y = -1;
+    state->player_last_interaction_target_slot = -1;
+    state->player_last_interaction_age = 1;
+    state->weapon_set = INF_GEAR_TBOW;
+    osrs_interaction_init(&state->interaction);
+    encounter_compute_loadout_stats(INF_RANGE_TBOW_LOADOUT, ATTACK_STYLE_RANGED,
+        OFFENSIVE_PRAYER_NONE, 99, FIGHT_STYLE_RAPID, 0,
+        &state->loadout_stats[INF_GEAR_TBOW]);
+
+    state->npcs[0] = make_test_npc(
+        INF_NPC_ZUK, 22, 50, INF_NPC_STATS[INF_NPC_ZUK].size);
+    state->npcs[0].active = 1;
+    state->npcs[0].hp = state->npcs[0].max_hp = INF_NPC_STATS[INF_NPC_ZUK].hp;
+    state->npcs[0].attack_timer = 14;
+    state->npcs[0].stun_timer = 8;
+
+    state->npcs[1] = make_test_npc(
+        INF_NPC_ZUK_SHIELD, 23, 44, INF_NPC_STATS[INF_NPC_ZUK_SHIELD].size);
+    state->npcs[1].active = 1;
+    state->npcs[1].hp = state->npcs[1].max_hp = INF_NPC_STATS[INF_NPC_ZUK_SHIELD].hp;
+
+    state->zuk.shield_idx = 1;
+    state->zuk.shield_dir = 1;
+    state->zuk.set_timer = 72;
+    state->zuk.set_interval = 350;
+}
+
+static void test_zuk_attack_delay_counts_down_while_stunned(void) {
+    printf("--- zuk attack delay counts down while stunned ---\n");
+
+    InfernoState state;
+    init_zuk_timing_state(&state);
+
+    inf_npc_attack(&state, 0);
+
+    ASSERT_INT_EQ("zuk stun decremented", state.npcs[0].stun_timer, 7);
+    ASSERT_INT_EQ("zuk attack delay decremented during stun",
+        state.npcs[0].attack_timer, 13);
+    ASSERT_INT_EQ("zuk does not attack while stunned",
+        state.npcs[0].attacked_this_tick, 0);
+}
+
+static void test_zuk_set_timer_spawns_on_decrement_to_zero(void) {
+    printf("--- zuk set timer spawns on decrement to zero ---\n");
+
+    InfernoState state;
+    init_zuk_timing_state(&state);
+    state.zuk.set_timer = 1;
+
+    inf_zuk_tick(&state);
+
+    ASSERT_INT_EQ("mager spawned when set timer reaches zero",
+        find_active_npc_type(&state, INF_NPC_MAGER) >= 0, 1);
+    ASSERT_INT_EQ("ranger spawned when set timer reaches zero",
+        find_active_npc_type(&state, INF_NPC_RANGER) >= 0, 1);
+    ASSERT_INT_EQ("set timer resets to interval", state.zuk.set_timer, 350);
+}
+
+static void test_zuk_hp_threshold_pause_happens_before_set_tick(void) {
+    printf("--- zuk hp threshold pause happens before set tick ---\n");
+
+    InfernoState state;
+    init_zuk_timing_state(&state);
+    state.npcs[0].hp = 601;
+    state.npcs[0].attack_timer = 100;
+    state.npcs[0].stun_timer = 0;
+    state.zuk.set_timer = 10;
+    state.npcs[0].pending_hit.active = 1;
+    state.npcs[0].pending_hit.damage = 2;
+    state.npcs[0].pending_hit.ticks_remaining = 1;
+    state.npcs[0].pending_hit.attack_style = ATTACK_STYLE_RANGED;
+
+    step_inferno_noop(&state);
+
+    ASSERT_INT_EQ("zuk damage landed", state.npcs[0].hp, 599);
+    ASSERT_INT_EQ("zuk set timer paused on same tick", state.zuk.timer_paused, 1);
+    ASSERT_INT_EQ("zuk set timer did not tick after pause", state.zuk.set_timer, 10);
+}
+
+static void test_set_attack_to_shield_is_projectile_delayed(void) {
+    printf("--- set attack to shield is projectile delayed ---\n");
+
+    int found_immediate_damage = 0;
+    for (uint32_t seed = 1; seed < 200; seed++) {
+        InfernoState state;
+        init_zuk_timing_state(&state);
+        state.rng_state = seed;
+        state.npcs[2] = make_test_npc(
+            INF_NPC_MAGER, 20, 36, INF_NPC_STATS[INF_NPC_MAGER].size);
+        state.npcs[2].active = 1;
+        state.npcs[2].hp = state.npcs[2].max_hp = INF_NPC_STATS[INF_NPC_MAGER].hp;
+        state.npcs[2].attack_timer = 0;
+        state.npcs[2].aggro_target = 1;
+
+        inf_npc_attack(&state, 2);
+        if (state.npcs[1].hp < state.npcs[1].max_hp ||
+            state.shield_damage_this_tick > 0.0f) {
+            found_immediate_damage = 1;
+            break;
+        }
+    }
+
+    ASSERT_INT_EQ("set attack does not damage shield on fire tick",
+        found_immediate_damage, 0);
+}
+
+static void test_npc_target_projectile_delays_match_reference(void) {
+    printf("--- npc target projectile delays match reference ---\n");
+
+    InfernoState state;
+    init_zuk_timing_state(&state);
+
+    InfNPC mager = make_test_npc(
+        INF_NPC_MAGER, 20, 36, INF_NPC_STATS[INF_NPC_MAGER].size);
+    InfNPC ranger = make_test_npc(
+        INF_NPC_RANGER, 29, 36, INF_NPC_STATS[INF_NPC_RANGER].size);
+    InfNPC jad = make_test_npc(
+        INF_NPC_JAD, 24, 32, INF_NPC_STATS[INF_NPC_JAD].size);
+    InfNPC* shield = &state.npcs[1];
+
+    int mager_dist = encounter_projectile_distance(
+        mager.x, mager.y, mager.size, shield->x, shield->y, shield->size,
+        ENCOUNTER_PROJECTILE_DISTANCE_CLOSEST_TILE);
+    int ranger_dist = encounter_projectile_distance(
+        ranger.x, ranger.y, ranger.size, shield->x, shield->y, shield->size,
+        ENCOUNTER_PROJECTILE_DISTANCE_CLOSEST_TILE);
+    int jad_dist = encounter_projectile_distance(
+        jad.x, jad.y, jad.size, shield->x, shield->y, shield->size,
+        ENCOUNTER_PROJECTILE_DISTANCE_CLOSEST_TILE);
+
+    ASSERT_INT_EQ("mager shield hit delay",
+        inf_npc_target_hit_delay(&mager, shield, ATTACK_STYLE_MAGIC),
+        inf_npc_projectile_timing(
+            INF_NPC_MAGER, ATTACK_STYLE_MAGIC, mager_dist).damage_delay_ticks);
+    ASSERT_INT_EQ("ranger shield hit delay includes reduceDelay -2",
+        inf_npc_target_hit_delay(&ranger, shield, ATTACK_STYLE_RANGED),
+        inf_npc_projectile_timing(
+            INF_NPC_RANGER, ATTACK_STYLE_RANGED, ranger_dist).damage_delay_ticks);
+    ASSERT_INT_EQ("jad magic shield hit delay uses jad path",
+        inf_npc_target_hit_delay(&jad, shield, ATTACK_STYLE_MAGIC),
+        INF_JAD_PROJECTILE_DELAY + inf_npc_projectile_timing(
+            INF_NPC_JAD, ATTACK_STYLE_MAGIC, jad_dist).damage_delay_ticks);
+    ASSERT_INT_EQ("jad ranged shield hit delay uses jad path",
+        inf_npc_target_hit_delay(&jad, shield, ATTACK_STYLE_RANGED),
+        INF_JAD_PROJECTILE_DELAY + inf_npc_projectile_timing(
+            INF_NPC_JAD, ATTACK_STYLE_RANGED, jad_dist).damage_delay_ticks);
+}
+
+static void test_npc_player_projectile_delays_use_reference_options(void) {
+    printf("--- npc player projectile delays use reference options ---\n");
+
+    InfernoState state = make_test_state(10, 10);
+    InfNPC* ranger = &state.npcs[0];
+    *ranger = make_test_npc(
+        INF_NPC_RANGER, 16, 10, INF_NPC_STATS[INF_NPC_RANGER].size);
+    ranger->active = 1;
+    ranger->attack_timer = 0;
+    ranger->attack_style = ATTACK_STYLE_RANGED;
+    ranger->had_los_last_tick = 1;
+
+    int dist = encounter_projectile_distance(
+        ranger->x, ranger->y, ranger->size, state.player.x, state.player.y, 1,
+        ENCOUNTER_PROJECTILE_DISTANCE_CLOSEST_TILE);
+    EncounterProjectileTiming timing =
+        inf_npc_projectile_timing(INF_NPC_RANGER, ATTACK_STYLE_RANGED, dist);
+
+    inf_npc_attack(&state, 0);
+
+    ASSERT_INT_EQ("ranger queued one pending hit", state.player_pending_hit_count, 1);
+    ASSERT_INT_EQ("ranger pending hit uses reduceDelay -2",
+        state.player_pending_hits[0].ticks_remaining, timing.damage_delay_ticks);
+}
+
+static void test_player_projectile_timing_uses_reference_options(void) {
+    printf("--- player projectile timing uses reference options ---\n");
+
+    int closest = encounter_projectile_distance(
+        16, 11, 1, 12, 10, 3,
+        ENCOUNTER_PROJECTILE_DISTANCE_CLOSEST_TILE);
+    int sw_tile = encounter_projectile_distance(
+        16, 11, 1, 12, 10, 3,
+        ENCOUNTER_PROJECTILE_DISTANCE_TARGET_SW_TILE);
+    ASSERT_INT_EQ("barrage distance uses target SW tile", sw_tile > closest, 1);
+
+    EncounterProjectileTiming barrage =
+        inf_player_projectile_timing(ATTACK_STYLE_MAGIC, ITEM_KODAI_WAND, 0, sw_tile);
+    ASSERT_INT_EQ("barrage damage delay uses SW distance",
+        barrage.damage_delay_ticks, encounter_magic_hit_delay(sw_tile, 1));
+
+    EncounterProjectileTiming blowpipe_spec = inf_player_projectile_timing(
+        ATTACK_STYLE_RANGED, ITEM_TOXIC_BLOWPIPE, 1, 12);
+    ASSERT_INT_EQ("blowpipe spec adds one damage tick",
+        blowpipe_spec.damage_delay_ticks, encounter_blowpipe_hit_delay(12, 1) + 1);
+    ASSERT_INT_EQ("blowpipe spec visual delay", blowpipe_spec.visual_start_delay_ticks, 1);
+    ASSERT_INT_EQ("blowpipe spec visual duration",
+        blowpipe_spec.visual_duration_ticks, encounter_blowpipe_hit_delay(12, 1) - 1);
+
+    EncounterProjectileTiming tbow =
+        inf_player_projectile_timing(ATTACK_STYLE_RANGED, ITEM_TWISTED_BOW, 0, 12);
+    ASSERT_INT_EQ("tbow visual delay", tbow.visual_start_delay_ticks, 1);
+    ASSERT_INT_EQ("tbow visual duration",
+        tbow.visual_duration_ticks, encounter_ranged_hit_delay(12, 1) - 2);
 }
 
 static void test_zuk_obs_tracks_shield_and_mager_aggro(void) {
@@ -1482,14 +1778,15 @@ static void test_jad_projectile_long_distance_visual_duration_uses_reference_for
     memset(&range_ov, 0, sizeof(range_ov));
     inf_render_post_tick((EncounterState*)&range_state, &range_ov);
 
-    int range_dist = encounter_dist_to_npc(
-        range_state.player.x, range_state.player.y,
-        range_state.npcs[0].x, range_state.npcs[0].y,
-        range_state.npcs[0].size);
-    int range_flight_ticks = encounter_ranged_hit_delay(range_dist, 0) - INF_JAD_PROJECTILE_DELAY;
-    if (range_flight_ticks < 1) range_flight_ticks = 1;
+    int range_dist = encounter_projectile_distance(
+        range_state.npcs[0].x, range_state.npcs[0].y, range_state.npcs[0].size,
+        range_state.player.x, range_state.player.y, 1,
+        ENCOUNTER_PROJECTILE_DISTANCE_CLOSEST_TILE);
+    EncounterProjectileTiming range_timing =
+        inf_npc_projectile_timing(INF_NPC_JAD, ATTACK_STYLE_RANGED, range_dist);
     ASSERT_INT_EQ("jad ranged long-distance duration",
-        range_ov.projectiles[0].duration_ticks, (range_flight_ticks + 1) * 30);
+        range_ov.projectiles[0].duration_ticks,
+        range_timing.visual_duration_ticks * 30);
 
     InfernoState magic_state;
     init_jad_timing_test_state(&magic_state, 10, 10, 36, 10);
@@ -1500,14 +1797,129 @@ static void test_jad_projectile_long_distance_visual_duration_uses_reference_for
     memset(&magic_ov, 0, sizeof(magic_ov));
     inf_render_post_tick((EncounterState*)&magic_state, &magic_ov);
 
-    int magic_dist = encounter_dist_to_npc(
-        magic_state.player.x, magic_state.player.y,
-        magic_state.npcs[0].x, magic_state.npcs[0].y,
-        magic_state.npcs[0].size);
-    int magic_flight_ticks = encounter_magic_hit_delay(magic_dist, 0) - INF_JAD_PROJECTILE_DELAY;
-    if (magic_flight_ticks < 1) magic_flight_ticks = 1;
+    int magic_dist = encounter_projectile_distance(
+        magic_state.npcs[0].x, magic_state.npcs[0].y, magic_state.npcs[0].size,
+        magic_state.player.x, magic_state.player.y, 1,
+        ENCOUNTER_PROJECTILE_DISTANCE_CLOSEST_TILE);
+    EncounterProjectileTiming magic_timing =
+        inf_npc_projectile_timing(INF_NPC_JAD, ATTACK_STYLE_MAGIC, magic_dist);
     ASSERT_INT_EQ("jad magic long-distance duration",
-        magic_ov.projectiles[0].duration_ticks, (magic_flight_ticks + 1) * 30);
+        magic_ov.projectiles[0].duration_ticks,
+        magic_timing.visual_duration_ticks * 30);
+}
+
+static void test_inferno_npc_projectile_render_uses_reference_visual_timing(void) {
+    printf("--- inferno npc projectile render uses reference visual timing ---\n");
+
+    InfernoState mager_state = make_test_state(10, 10);
+    mager_state.npcs[0] = make_test_npc(
+        INF_NPC_MAGER, 16, 10, INF_NPC_STATS[INF_NPC_MAGER].size);
+    mager_state.npcs[0].active = 1;
+    mager_state.npcs[0].attacked_this_tick = 1;
+    mager_state.npcs[0].attack_style_this_tick = ATTACK_STYLE_MAGIC;
+
+    EncounterOverlay mager_ov;
+    memset(&mager_ov, 0, sizeof(mager_ov));
+    inf_render_post_tick((EncounterState*)&mager_state, &mager_ov);
+
+    int mager_dist = encounter_projectile_distance(
+        mager_state.npcs[0].x, mager_state.npcs[0].y, mager_state.npcs[0].size,
+        mager_state.player.x, mager_state.player.y, 1,
+        ENCOUNTER_PROJECTILE_DISTANCE_CLOSEST_TILE);
+    EncounterProjectileTiming mager_timing =
+        inf_npc_projectile_timing(INF_NPC_MAGER, ATTACK_STYLE_MAGIC, mager_dist);
+
+    ASSERT_INT_EQ("mager projectile count", mager_ov.projectile_count, 1);
+    ASSERT_INT_EQ("mager visual start delay",
+        mager_ov.projectiles[0].start_delay, mager_timing.visual_start_delay_ticks * 30);
+    ASSERT_INT_EQ("mager visual duration",
+        mager_ov.projectiles[0].duration_ticks, mager_timing.visual_duration_ticks * 30);
+
+    InfernoState ranger_state = make_test_state(10, 10);
+    ranger_state.npcs[0] = make_test_npc(
+        INF_NPC_RANGER, 16, 10, INF_NPC_STATS[INF_NPC_RANGER].size);
+    ranger_state.npcs[0].active = 1;
+    ranger_state.npcs[0].attacked_this_tick = 1;
+    ranger_state.npcs[0].attack_style_this_tick = ATTACK_STYLE_RANGED;
+
+    EncounterOverlay ranger_ov;
+    memset(&ranger_ov, 0, sizeof(ranger_ov));
+    inf_render_post_tick((EncounterState*)&ranger_state, &ranger_ov);
+
+    int ranger_dist = encounter_projectile_distance(
+        ranger_state.npcs[0].x, ranger_state.npcs[0].y, ranger_state.npcs[0].size,
+        ranger_state.player.x, ranger_state.player.y, 1,
+        ENCOUNTER_PROJECTILE_DISTANCE_CLOSEST_TILE);
+    EncounterProjectileTiming ranger_timing =
+        inf_npc_projectile_timing(INF_NPC_RANGER, ATTACK_STYLE_RANGED, ranger_dist);
+
+    ASSERT_INT_EQ("ranger projectile count", ranger_ov.projectile_count, 1);
+    ASSERT_INT_EQ("ranger visual start delay",
+        ranger_ov.projectiles[0].start_delay, ranger_timing.visual_start_delay_ticks * 30);
+    ASSERT_INT_EQ("ranger visual duration",
+        ranger_ov.projectiles[0].duration_ticks, ranger_timing.visual_duration_ticks * 30);
+}
+
+static void test_player_projectile_render_uses_stored_reference_timing(void) {
+    printf("--- player projectile render uses stored reference timing ---\n");
+
+    InfernoState blowpipe_state = make_test_state(10, 10);
+    blowpipe_state.player.equipped[GEAR_SLOT_WEAPON] = ITEM_TOXIC_BLOWPIPE;
+    blowpipe_state.npcs[0] = make_test_npc(
+        INF_NPC_JAD, 18, 10, INF_NPC_STATS[INF_NPC_JAD].size);
+    blowpipe_state.npcs[0].active = 1;
+    blowpipe_state.player_attacked_this_tick = 1;
+    blowpipe_state.player_attack_npc_idx = 0;
+    blowpipe_state.player_attack_style_id = ATTACK_STYLE_RANGED;
+    blowpipe_state.player_attack_dmg = 7;
+
+    int blowpipe_dist = encounter_projectile_distance(
+        blowpipe_state.player.x, blowpipe_state.player.y, 1,
+        blowpipe_state.npcs[0].x, blowpipe_state.npcs[0].y, blowpipe_state.npcs[0].size,
+        ENCOUNTER_PROJECTILE_DISTANCE_CLOSEST_TILE);
+    blowpipe_state.player_attack_timing = inf_player_projectile_timing(
+        ATTACK_STYLE_RANGED, ITEM_TOXIC_BLOWPIPE, 1, blowpipe_dist);
+
+    EncounterOverlay blowpipe_ov;
+    memset(&blowpipe_ov, 0, sizeof(blowpipe_ov));
+    inf_render_post_tick((EncounterState*)&blowpipe_state, &blowpipe_ov);
+
+    ASSERT_INT_EQ("blowpipe spec projectile count", blowpipe_ov.projectile_count, 1);
+    ASSERT_INT_EQ("blowpipe spec visual start delay",
+        blowpipe_ov.projectiles[0].start_delay,
+        blowpipe_state.player_attack_timing.visual_start_delay_ticks * 30);
+    ASSERT_INT_EQ("blowpipe spec visual duration",
+        blowpipe_ov.projectiles[0].duration_ticks,
+        blowpipe_state.player_attack_timing.visual_duration_ticks * 30);
+
+    InfernoState tbow_state = make_test_state(10, 10);
+    tbow_state.player.equipped[GEAR_SLOT_WEAPON] = ITEM_TWISTED_BOW;
+    tbow_state.npcs[0] = make_test_npc(
+        INF_NPC_JAD, 18, 10, INF_NPC_STATS[INF_NPC_JAD].size);
+    tbow_state.npcs[0].active = 1;
+    tbow_state.player_attacked_this_tick = 1;
+    tbow_state.player_attack_npc_idx = 0;
+    tbow_state.player_attack_style_id = ATTACK_STYLE_RANGED;
+    tbow_state.player_attack_dmg = 7;
+
+    int tbow_dist = encounter_projectile_distance(
+        tbow_state.player.x, tbow_state.player.y, 1,
+        tbow_state.npcs[0].x, tbow_state.npcs[0].y, tbow_state.npcs[0].size,
+        ENCOUNTER_PROJECTILE_DISTANCE_CLOSEST_TILE);
+    tbow_state.player_attack_timing = inf_player_projectile_timing(
+        ATTACK_STYLE_RANGED, ITEM_TWISTED_BOW, 0, tbow_dist);
+
+    EncounterOverlay tbow_ov;
+    memset(&tbow_ov, 0, sizeof(tbow_ov));
+    inf_render_post_tick((EncounterState*)&tbow_state, &tbow_ov);
+
+    ASSERT_INT_EQ("tbow projectile count", tbow_ov.projectile_count, 1);
+    ASSERT_INT_EQ("tbow visual start delay",
+        tbow_ov.projectiles[0].start_delay,
+        tbow_state.player_attack_timing.visual_start_delay_ticks * 30);
+    ASSERT_INT_EQ("tbow visual duration",
+        tbow_ov.projectiles[0].duration_ticks,
+        tbow_state.player_attack_timing.visual_duration_ticks * 30);
 }
 
 int main(void) {
@@ -1543,6 +1955,15 @@ int main(void) {
     test_triple_jad_pending_threats_preserve_obs_shape();
     test_jad_special_wave_spawn_cadence_matches_reference();
     test_jad_melee_stays_instant_and_untelegraphed();
+    test_direct_start_waves_spawn_without_empty_gap();
+    test_zuk_ready_countdown_holds_npcs_then_releases();
+    test_zuk_attack_delay_counts_down_while_stunned();
+    test_zuk_set_timer_spawns_on_decrement_to_zero();
+    test_zuk_hp_threshold_pause_happens_before_set_tick();
+    test_set_attack_to_shield_is_projectile_delayed();
+    test_npc_target_projectile_delays_match_reference();
+    test_npc_player_projectile_delays_use_reference_options();
+    test_player_projectile_timing_uses_reference_options();
     test_zuk_obs_tracks_shield_and_mager_aggro();
     test_human_target_and_potion_translation();
     test_action_noop_count_matches_action_heads();
@@ -1551,6 +1972,8 @@ int main(void) {
     test_jad_magic_render_emits_three_offset_projectiles();
     test_jad_ranged_render_uses_target_anchored_two_tick_visual();
     test_jad_projectile_long_distance_visual_duration_uses_reference_formula();
+    test_inferno_npc_projectile_render_uses_reference_visual_timing();
+    test_player_projectile_render_uses_stored_reference_timing();
 
     printf("\n%d/%d tests passed", tests_passed, tests_run);
     if (tests_failed > 0) {
