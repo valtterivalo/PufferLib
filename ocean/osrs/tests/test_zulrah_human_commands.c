@@ -9,7 +9,10 @@
  */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 #include "ocean/osrs/encounters/encounter_zulrah.h"
 
@@ -29,6 +32,51 @@ static int tests_failed = 0;
             (label), _actual, _expected); \
     } \
 } while (0)
+
+static void assert_child_aborts(const char* label, void (*fn)(void)) {
+    fflush(NULL);
+    pid_t pid = fork();
+    if (pid == 0) {
+        fn();
+        _exit(0);
+    }
+
+    int status = 0;
+    waitpid(pid, &status, 0);
+    tests_run++;
+    if (WIFSIGNALED(status) || (WIFEXITED(status) && WEXITSTATUS(status) != 0)) {
+        tests_passed++;
+    } else {
+        tests_failed++;
+        printf("  FAIL: %s: child returned successfully\n", label);
+    }
+}
+
+static void child_zul_put_bad_gear_tier(void) {
+    EncounterState* raw = zul_create();
+    zul_put_int(raw, "gear_tier", ZUL_NUM_GEAR_TIERS);
+    zul_destroy(raw);
+}
+
+static void child_zul_put_unknown_int(void) {
+    EncounterState* raw = zul_create();
+    zul_put_int(raw, "bogus_key", 1);
+    zul_destroy(raw);
+}
+
+static void child_zul_put_unknown_ptr(void) {
+    EncounterState* raw = zul_create();
+    zul_put_ptr(raw, "bogus_ptr", NULL);
+    zul_destroy(raw);
+}
+
+static void test_zulrah_config_rejects_invalid_inputs(void) {
+    printf("--- zulrah config rejects invalid inputs ---\n");
+
+    assert_child_aborts("invalid zulrah gear tier aborts", child_zul_put_bad_gear_tier);
+    assert_child_aborts("unknown zulrah int config aborts", child_zul_put_unknown_int);
+    assert_child_aborts("unknown zulrah ptr config aborts", child_zul_put_unknown_ptr);
+}
 
 static void test_zulrah_human_equip_is_item_by_item(void) {
     printf("--- zulrah human equip is item by item ---\n");
@@ -89,6 +137,7 @@ static void test_zulrah_human_attack_uses_queued_weapon_style(void) {
 }
 
 int main(void) {
+    test_zulrah_config_rejects_invalid_inputs();
     test_zulrah_human_equip_is_item_by_item();
     test_zulrah_human_attack_uses_queued_weapon_style();
 

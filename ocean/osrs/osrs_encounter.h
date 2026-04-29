@@ -58,6 +58,8 @@
 #define OSRS_ENCOUNTER_H
 
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "osrs_types.h"
 #include "osrs_items.h"
@@ -68,6 +70,36 @@
 
 /* opaque encounter state — each encounter defines its own struct */
 typedef struct EncounterState EncounterState;
+
+static inline void encounter_abort_unknown_config(
+    const char* encounter_name, const char* config_type, const char* key
+) {
+    fprintf(stderr, "%s unknown %s config key: %s\n",
+        encounter_name, config_type, key);
+    abort();
+}
+
+static inline int encounter_require_binary_config(
+    const char* encounter_name, const char* key, int value
+) {
+    if (value != 0 && value != 1) {
+        fprintf(stderr, "%s config %s must be 0 or 1, got %d\n",
+            encounter_name, key, value);
+        abort();
+    }
+    return value;
+}
+
+static inline int encounter_require_int_range_config(
+    const char* encounter_name, const char* key, int value, int min_value, int max_value
+) {
+    if (value < min_value || value > max_value) {
+        fprintf(stderr, "%s config %s must be in [%d, %d], got %d\n",
+            encounter_name, key, min_value, max_value, value);
+        abort();
+    }
+    return value;
+}
 
 
 #define ENCOUNTER_MAX_PENDING_HITS 8
@@ -172,7 +204,11 @@ static inline int encounter_emit_projectile(
     float arc_height, int tracks_target, int src_size, int dst_size,
     uint32_t model_id, int impact_gfx_id
 ) {
-    if (ov->projectile_count >= ENCOUNTER_MAX_OVERLAY_PROJECTILES) return -1;
+    if (ov->projectile_count >= ENCOUNTER_MAX_OVERLAY_PROJECTILES) {
+        fprintf(stderr, "encounter overlay projectile capacity exceeded: %d\n",
+            ENCOUNTER_MAX_OVERLAY_PROJECTILES);
+        abort();
+    }
     int i = ov->projectile_count++;
     ov->projectiles[i].active = 1;
     ov->projectiles[i].src_x = src_x;
@@ -200,17 +236,33 @@ static inline int encounter_emit_projectile(
     return i;
 }
 
+static inline void encounter_require_projectile_slots(const EncounterOverlay* ov, int slots) {
+    if (slots < 0 || ov->projectile_count + slots > ENCOUNTER_MAX_OVERLAY_PROJECTILES) {
+        fprintf(stderr, "encounter overlay projectile capacity exceeded: need %d free from %d/%d\n",
+            slots, ov->projectile_count, ENCOUNTER_MAX_OVERLAY_PROJECTILES);
+        abort();
+    }
+}
+
+static inline void encounter_require_projectile_index(const EncounterOverlay* ov, int projectile_idx) {
+    if (projectile_idx < 0 || projectile_idx >= ov->projectile_count) {
+        fprintf(stderr, "encounter projectile index out of range: %d/%d\n",
+            projectile_idx, ov->projectile_count);
+        abort();
+    }
+}
+
 static inline void encounter_set_projectile_motion_mode(
     EncounterOverlay* ov, int projectile_idx, int motion_mode
 ) {
-    if (projectile_idx < 0 || projectile_idx >= ov->projectile_count) return;
+    encounter_require_projectile_index(ov, projectile_idx);
     ov->projectiles[projectile_idx].motion_mode = motion_mode;
 }
 
 static inline void encounter_set_projectile_animation(
     EncounterOverlay* ov, int projectile_idx, int anim_id
 ) {
-    if (projectile_idx < 0 || projectile_idx >= ov->projectile_count) return;
+    encounter_require_projectile_index(ov, projectile_idx);
     ov->projectiles[projectile_idx].anim_id = anim_id;
 }
 
@@ -218,7 +270,7 @@ static inline void encounter_set_projectile_offset(
     EncounterOverlay* ov, int projectile_idx,
     float offset_x, float offset_y, float offset_z
 ) {
-    if (projectile_idx < 0 || projectile_idx >= ov->projectile_count) return;
+    encounter_require_projectile_index(ov, projectile_idx);
     ov->projectiles[projectile_idx].offset_x = offset_x;
     ov->projectiles[projectile_idx].offset_y = offset_y;
     ov->projectiles[projectile_idx].offset_z = offset_z;
@@ -1607,9 +1659,11 @@ typedef struct {
 static EncounterRegistry g_encounter_registry = { .count = 0 };
 
 static inline void encounter_register(const EncounterDef* def) {
-    if (g_encounter_registry.count < MAX_ENCOUNTERS) {
-        g_encounter_registry.defs[g_encounter_registry.count++] = def;
+    if (g_encounter_registry.count >= MAX_ENCOUNTERS) {
+        fprintf(stderr, "encounter registry capacity exceeded: %d\n", MAX_ENCOUNTERS);
+        abort();
     }
+    g_encounter_registry.defs[g_encounter_registry.count++] = def;
 }
 
 static inline const EncounterDef* encounter_find(const char* name) {

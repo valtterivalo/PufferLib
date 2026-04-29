@@ -710,14 +710,65 @@ static void inf_rebuild_los(InfernoState* s) {
     }
 }
 
-/* check if NPC at index i has LOS to player (uncached — direct ray-trace) */
+typedef struct {
+    int x;
+    int y;
+    int size;
+    int is_player;
+} InfTargetArea;
+
+static InfTargetArea inf_npc_current_target_area(const InfernoState* s, const InfNPC* npc) {
+    if (npc->type == INF_NPC_NIBBLER) {
+        int pillar_idx = s->nibbler_target_pillar;
+        if (pillar_idx >= 0 && pillar_idx < INF_NUM_PILLARS &&
+            s->pillars[pillar_idx].active) {
+            return (InfTargetArea){
+                .x = s->pillars[pillar_idx].x,
+                .y = s->pillars[pillar_idx].y,
+                .size = INF_PILLAR_SIZE,
+                .is_player = 0,
+            };
+        }
+        for (int i = 0; i < INF_NUM_PILLARS; i++) {
+            if (s->pillars[i].active) {
+                return (InfTargetArea){
+                    .x = s->pillars[i].x,
+                    .y = s->pillars[i].y,
+                    .size = INF_PILLAR_SIZE,
+                    .is_player = 0,
+                };
+            }
+        }
+    }
+
+    if (npc->aggro_target >= 0 && npc->aggro_target < INF_MAX_NPCS &&
+        s->npcs[npc->aggro_target].active) {
+        const InfNPC* target = &s->npcs[npc->aggro_target];
+        return (InfTargetArea){
+            .x = target->x,
+            .y = target->y,
+            .size = target->size,
+            .is_player = 0,
+        };
+    }
+
+    return (InfTargetArea){
+        .x = s->player.x,
+        .y = s->player.y,
+        .size = 1,
+        .is_player = 1,
+    };
+}
+
+/* check if NPC at index i has LOS to its current target */
 static int inf_npc_has_los_direct(InfernoState* s, int i) {
     InfNPC* npc = &s->npcs[i];
     const InfNPCStats* stats = &INF_NPC_STATS[npc->type];
-    return npc_has_line_of_sight(s->los_blockers, s->los_blocker_count,
-                                 npc->x, npc->y, npc->size,
-                                 s->player.x, s->player.y,
-                                 stats->attack_range);
+    InfTargetArea target = inf_npc_current_target_area(s, npc);
+    return entity_has_line_of_sight(s->los_blockers, s->los_blocker_count,
+                                    npc->x, npc->y, npc->size,
+                                    target.x, target.y, target.size,
+                                    stats->attack_range);
 }
 
 /* cached LOS check — lazy: computes on first access per tick, caches for reuse.
@@ -1590,39 +1641,11 @@ static void inf_npc_move(InfernoState* s, int idx) {
         }
     }
 
-    /* target selection: pillar (nibbler), aggroed NPC (shield/jad/zuk), or player */
-    int tx, ty;
-    int target_size = 1;
-    if (npc->type == INF_NPC_NIBBLER) {
-        int p = s->nibbler_target_pillar;
-        if (p >= 0 && p < INF_NUM_PILLARS && s->pillars[p].active) {
-            tx = s->pillars[p].x;
-            ty = s->pillars[p].y;
-        } else {
-            int found = 0;
-            for (int pp = 0; pp < INF_NUM_PILLARS; pp++) {
-                if (s->pillars[pp].active) {
-                    tx = s->pillars[pp].x;
-                    ty = s->pillars[pp].y;
-                    found = 1;
-                    break;
-                }
-            }
-            if (!found) { tx = s->player.x; ty = s->player.y; }
-        }
-        target_size = INF_PILLAR_SIZE;
-    } else if (npc->aggro_target >= 0 && npc->aggro_target < INF_MAX_NPCS &&
-               s->npcs[npc->aggro_target].active) {
-        /* targeting another NPC (set→shield, jad→shield) */
-        tx = s->npcs[npc->aggro_target].x;
-        ty = s->npcs[npc->aggro_target].y;
-        target_size = s->npcs[npc->aggro_target].size;
-    } else {
-        /* default: target player. clear stale aggro if target died. */
-        if (npc->aggro_target >= 0) npc->aggro_target = -1;
-        tx = s->player.x;
-        ty = s->player.y;
-    }
+    InfTargetArea target = inf_npc_current_target_area(s, npc);
+    if (target.is_player && npc->aggro_target >= 0) npc->aggro_target = -1;
+    int tx = target.x;
+    int ty = target.y;
+    int target_size = target.size;
     npc->target_x = tx;
     npc->target_y = ty;
 
@@ -3614,6 +3637,9 @@ static void inf_write_obs(EncounterState* state, float* obs) {
             const InfNPCStats* st = &INF_NPC_STATS[npc->type];
             if (npc->frozen_ticks > 0 || npc->stun_timer > 0) continue;
 
+            InfTargetArea target = inf_npc_current_target_area(s, npc);
+            if (!target.is_player) continue;
+
             int dist = encounter_dist_to_npc(s->player.x, s->player.y, npc->x, npc->y, npc->size);
             if (dist == 0) continue;
 
@@ -4131,13 +4157,18 @@ static void inf_fill_render_entities(EncounterState* state, RenderEntity* out, i
 static void inf_put_int(EncounterState* state, const char* key, int value) {
     InfernoState* s = (InfernoState*)state;
     /* wave is 1-indexed externally (wave 1 = first, wave 69 = Zuk), 0-indexed internally */
-    if (strcmp(key, "start_wave") == 0) s->start_wave = (value > 0) ? value - 1 : 0;
+    if (strcmp(key, "start_wave") == 0) {
+        inf_require_valid_public_wave(value);
+        s->start_wave = value - 1;
+    }
     else if (strcmp(key, "seed") == 0) s->rng_state = (uint32_t)value;
     else if (strcmp(key, "world_offset_x") == 0) s->world_offset_x = value;
     else if (strcmp(key, "world_offset_y") == 0) s->world_offset_y = value;
     else if (strcmp(key, "player_dest_x") == 0) s->player_dest_x = value;
     else if (strcmp(key, "player_dest_y") == 0) s->player_dest_y = value;
-    else if (strcmp(key, "human_command_mode") == 0) s->human_command_mode = value;
+    else if (strcmp(key, "human_command_mode") == 0)
+        s->human_command_mode = encounter_require_binary_config("inferno", key, value);
+    else encounter_abort_unknown_config("inferno", "int", key);
 }
 
 static void inf_put_float(EncounterState* state, const char* key, float value) {
@@ -4149,12 +4180,13 @@ static void inf_put_float(EncounterState* state, const char* key, float value) {
         inf_require_valid_supply_scale(value);
         s->late_start_supply_profile_scale = value;
     }
-    else assert(0 && "unknown inferno float config");
+    else encounter_abort_unknown_config("inferno", "float", key);
 }
 
 static void inf_put_ptr(EncounterState* state, const char* key, void* value) {
     InfernoState* s = (InfernoState*)state;
     if (strcmp(key, "collision_map") == 0) s->collision_map = (const CollisionMap*)value;
+    else encounter_abort_unknown_config("inferno", "ptr", key);
 }
 
 static int inf_get_tick(EncounterState* state) {
@@ -4202,7 +4234,6 @@ static void inf_render_post_tick(EncounterState* state, EncounterOverlay* ov) {
     for (int i = 0; i < INF_MAX_NPCS; i++) {
         InfNPC* npc = &s->npcs[i];
         if (!npc->active || !npc->attacked_this_tick) continue;
-        if (ov->projectile_count >= ENCOUNTER_MAX_OVERLAY_PROJECTILES) break;
 
         /* nibblers attack pillars, not worth showing as projectile */
         if (npc->type == INF_NPC_NIBBLER) continue;
@@ -4296,7 +4327,7 @@ static void inf_render_post_tick(EncounterState* state, EncounterOverlay* ov) {
         }
 
         if (npc->type == INF_NPC_JAD && actual_style == ATTACK_STYLE_MAGIC) {
-            if (ov->projectile_count + 3 > ENCOUNTER_MAX_OVERLAY_PROJECTILES) break;
+            encounter_require_projectile_slots(ov, 3);
             uint32_t model_ids[3] = {
                 INF_GFX_448_MODEL, INF_GFX_449_MODEL, INF_GFX_450_MODEL
             };
@@ -4310,11 +4341,9 @@ static void inf_render_post_tick(EncounterState* state, EncounterOverlay* ov) {
                     proj_style, (int)s->damage_received_this_tick,
                     duration, start_h, end_h, curve, arc, tracks, npc_size, 1,
                     model_ids[j], 0);
-                if (pi >= 0) {
-                    ov->projectiles[pi].start_delay = start_delay;
-                    encounter_set_projectile_animation(ov, pi, anim_ids[j]);
-                    encounter_set_projectile_offset(ov, pi, 0.0f, offsets[j], 0.0f);
-                }
+                ov->projectiles[pi].start_delay = start_delay;
+                encounter_set_projectile_animation(ov, pi, anim_ids[j]);
+                encounter_set_projectile_offset(ov, pi, 0.0f, offsets[j], 0.0f);
             }
             continue;
         }
@@ -4326,16 +4355,13 @@ static void inf_render_post_tick(EncounterState* state, EncounterOverlay* ov) {
             duration, start_h, end_h, curve, arc, tracks, npc_size, 1,
             proj_model_id, impact_gfx_id);
 
-        if (pi >= 0)
-            ov->projectiles[pi].start_delay = start_delay;
+        ov->projectiles[pi].start_delay = start_delay;
 
-        if (pi >= 0 && npc->type == INF_NPC_JAD &&
-            actual_style == ATTACK_STYLE_RANGED)
+        if (npc->type == INF_NPC_JAD && actual_style == ATTACK_STYLE_RANGED)
             encounter_set_projectile_motion_mode(
                 ov, pi, ENCOUNTER_PROJECTILE_MOTION_TARGET_ANCHORED);
 
-        if (pi >= 0 && npc->type == INF_NPC_JAD &&
-            actual_style == ATTACK_STYLE_RANGED)
+        if (npc->type == INF_NPC_JAD && actual_style == ATTACK_STYLE_RANGED)
             encounter_set_projectile_animation(ov, pi, INF_GFX_451_ANIM);
 
     }
@@ -4343,7 +4369,6 @@ static void inf_render_post_tick(EncounterState* state, EncounterOverlay* ov) {
     for (int i = 0; i < INF_MAX_PENDING_SPARKS; i++) {
         InfPendingSpark* spark = &s->pending_sparks[i];
         if (!spark->active || spark->visual_emitted) continue;
-        if (ov->projectile_count >= ENCOUNTER_MAX_OVERLAY_PROJECTILES) break;
 
         encounter_emit_projectile(
             ov,
@@ -4357,8 +4382,7 @@ static void inf_render_post_tick(EncounterState* state, EncounterOverlay* ov) {
 
     /* player attack projectile (ranged/magic only — melee has no projectile) */
     if (s->player_attacked_this_tick &&
-        s->player_attack_style_id != ATTACK_STYLE_MELEE &&
-        ov->projectile_count < ENCOUNTER_MAX_OVERLAY_PROJECTILES) {
+        s->player_attack_style_id != ATTACK_STYLE_MELEE) {
         int target_idx = s->player_attack_npc_idx;
         if (target_idx >= 0 && target_idx < INF_MAX_NPCS) {
             InfNPC* target = &s->npcs[target_idx];
@@ -4392,8 +4416,7 @@ static void inf_render_post_tick(EncounterState* state, EncounterOverlay* ov) {
                     p_style, s->player_attack_dmg,
                     p_duration, p_start_h, p_end_h, 16, p_arc, p_tracks,
                     1, target_size, player_proj_model, 0);
-                if (pi >= 0)
-                    ov->projectiles[pi].start_delay = p_start_delay;
+                ov->projectiles[pi].start_delay = p_start_delay;
             }
         }
     }

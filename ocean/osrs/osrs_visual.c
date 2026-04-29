@@ -12,6 +12,7 @@
 #include <time.h>
 #include "osrs_env.h"
 #include "osrs_encounter.h"
+#include "osrs_binary_io.h"
 #include "encounters/encounter_nh_pvp.h"
 #include "encounters/encounter_zulrah.h"
 #include "encounters/encounter_inferno.h"
@@ -195,23 +196,35 @@ typedef struct {
 
 static ReplayFile* replay_load(const char* path, int num_heads) {
     FILE* f = fopen(path, "rb");
-    if (!f) { fprintf(stderr, "replay: can't open %s\n", path); return NULL; }
+    if (!f) {
+        fprintf(stderr, "replay: can't open %s\n", path);
+        abort();
+    }
     int num_ticks = 0;
     uint32_t rng_seed = 12345;
-    if (fread(&num_ticks, 4, 1, f) != 1) { fclose(f); return NULL; }
-    if (fread(&rng_seed, 4, 1, f) != 1) { fclose(f); return NULL; }
-    ReplayFile* rf = (ReplayFile*)malloc(sizeof(ReplayFile));
+    osrs_read_exact(f, &num_ticks, 4, 1, path, "replay tick count");
+    osrs_read_exact(f, &rng_seed, 4, 1, path, "replay rng seed");
+    if (num_ticks < 0 || num_heads <= 0) {
+        fprintf(stderr, "replay: invalid shape ticks=%d heads=%d\n",
+            num_ticks, num_heads);
+        abort();
+    }
+    if ((size_t)num_ticks > SIZE_MAX / (size_t)num_heads) {
+        fprintf(stderr, "replay: action count overflow ticks=%d heads=%d\n",
+            num_ticks, num_heads);
+        abort();
+    }
+    ReplayFile* rf = (ReplayFile*)osrs_calloc_or_abort(
+        1, sizeof(ReplayFile), "replay file");
     rf->num_ticks = num_ticks;
     rf->num_heads = num_heads;
     rf->current_tick = 0;
     rf->rng_seed = rng_seed;
-    rf->actions = (int*)malloc(num_ticks * num_heads * sizeof(int));
-    size_t n = fread(rf->actions, sizeof(int), num_ticks * num_heads, f);
+    size_t action_count = (size_t)num_ticks * (size_t)num_heads;
+    rf->actions = (int*)osrs_malloc_or_abort(
+        action_count * sizeof(int), "replay actions");
+    osrs_read_exact(f, rf->actions, sizeof(int), action_count, path, "replay actions");
     fclose(f);
-    if ((int)n != num_ticks * num_heads) {
-        fprintf(stderr, "replay: short read (%d/%d)\n", (int)n, num_ticks * num_heads);
-        free(rf->actions); free(rf); return NULL;
-    }
     fprintf(stderr, "replay loaded: %d ticks, rng=%u from %s\n", num_ticks, rng_seed, path);
     return rf;
 }

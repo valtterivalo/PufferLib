@@ -23,6 +23,7 @@
 #define OSRS_MODELS_H
 
 #include "raylib.h"
+#include "osrs_binary_io.h"
 #include "data/item_models.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -60,33 +61,35 @@ static ModelCache* model_cache_load(const char* path) {
 
     /* read header */
     uint32_t magic, count;
-    fread(&magic, 4, 1, f);
-    fread(&count, 4, 1, f);
+    osrs_read_exact(f, &magic, 4, 1, path, "magic");
+    osrs_read_exact(f, &count, 4, 1, path, "model count");
 
     if (magic != MDL2_MAGIC) {
         fprintf(stderr, "model_cache_load: bad magic 0x%08X (expected MDL2 0x%08X)\n",
                 magic, MDL2_MAGIC);
-        fclose(f);
-        return NULL;
+        abort();
     }
 
     /* read offset table */
-    uint32_t* offsets = (uint32_t*)malloc(count * sizeof(uint32_t));
-    fread(offsets, 4, count, f);
+    uint32_t* offsets = (uint32_t*)osrs_malloc_or_abort(
+        count * sizeof(uint32_t), "model offsets");
+    osrs_read_exact(f, offsets, 4, count, path, "model offsets");
 
-    ModelCache* cache = (ModelCache*)calloc(1, sizeof(ModelCache));
-    cache->models = (OsrsModel*)calloc(count, sizeof(OsrsModel));
+    ModelCache* cache = (ModelCache*)osrs_calloc_or_abort(
+        1, sizeof(ModelCache), "model cache");
+    cache->models = (OsrsModel*)osrs_calloc_or_abort(
+        count, sizeof(OsrsModel), "model entries");
     cache->count = (int)count;
 
     for (uint32_t i = 0; i < count; i++) {
-        fseek(f, (long)offsets[i], SEEK_SET);
+        osrs_seek_or_abort(f, (long)offsets[i], path);
 
         uint32_t model_id;
         uint16_t vert_count, face_count, base_vert_count;
-        fread(&model_id, 4, 1, f);
-        fread(&vert_count, 2, 1, f);
-        fread(&face_count, 2, 1, f);
-        fread(&base_vert_count, 2, 1, f);
+        osrs_read_exact(f, &model_id, 4, 1, path, "model id");
+        osrs_read_exact(f, &vert_count, 2, 1, path, "expanded vertex count");
+        osrs_read_exact(f, &face_count, 2, 1, path, "face count");
+        osrs_read_exact(f, &base_vert_count, 2, 1, path, "base vertex count");
 
         cache->models[i].model_id = model_id;
         cache->models[i].base_vert_count = base_vert_count;
@@ -98,22 +101,35 @@ static ModelCache* model_cache_load(const char* path) {
 
         mesh.vertices = (float*)RL_MALLOC(vert_count * 3 * sizeof(float));
         mesh.colors = (unsigned char*)RL_MALLOC(vert_count * 4);
+        if (!mesh.vertices || !mesh.colors) {
+            fprintf(stderr, "model_cache_load: raylib mesh allocation failed for model %u\n",
+                model_id);
+            abort();
+        }
 
-        fread(mesh.vertices, sizeof(float), vert_count * 3, f);
-        fread(mesh.colors, 1, vert_count * 4, f);
+        osrs_read_exact(f, mesh.vertices, sizeof(float), vert_count * 3, path, "expanded vertices");
+        osrs_read_exact(f, mesh.colors, 1, vert_count * 4, path, "vertex colors");
 
         /* read animation data */
-        cache->models[i].base_vertices = (int16_t*)malloc(base_vert_count * 3 * sizeof(int16_t));
-        fread(cache->models[i].base_vertices, sizeof(int16_t), base_vert_count * 3, f);
+        cache->models[i].base_vertices = (int16_t*)osrs_malloc_or_abort(
+            base_vert_count * 3 * sizeof(int16_t), "model base vertices");
+        osrs_read_exact(f, cache->models[i].base_vertices, sizeof(int16_t),
+            base_vert_count * 3, path, "base vertices");
 
-        cache->models[i].vertex_skins = (uint8_t*)malloc(base_vert_count);
-        fread(cache->models[i].vertex_skins, 1, base_vert_count, f);
+        cache->models[i].vertex_skins = (uint8_t*)osrs_malloc_or_abort(
+            base_vert_count, "model vertex skins");
+        osrs_read_exact(f, cache->models[i].vertex_skins, 1,
+            base_vert_count, path, "vertex skins");
 
-        cache->models[i].face_indices = (uint16_t*)malloc(face_count * 3 * sizeof(uint16_t));
-        fread(cache->models[i].face_indices, sizeof(uint16_t), face_count * 3, f);
+        cache->models[i].face_indices = (uint16_t*)osrs_malloc_or_abort(
+            face_count * 3 * sizeof(uint16_t), "model face indices");
+        osrs_read_exact(f, cache->models[i].face_indices, sizeof(uint16_t),
+            face_count * 3, path, "face indices");
 
-        cache->models[i].face_priorities = (uint8_t*)malloc(face_count);
-        fread(cache->models[i].face_priorities, 1, face_count, f);
+        cache->models[i].face_priorities = (uint8_t*)osrs_malloc_or_abort(
+            face_count, "model face priorities");
+        osrs_read_exact(f, cache->models[i].face_priorities, 1,
+            face_count, path, "face priorities");
 
         /* compute min priority for this model */
         uint8_t min_pri = 255;

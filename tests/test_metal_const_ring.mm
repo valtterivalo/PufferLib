@@ -16,5 +16,24 @@ int main(void) {
 
     if (mtl_const_ring_reserve_range(MTL_CONST_RING_SIZE - 16, 17, &next_offset)) return 5;
 
+    if (mtl_parse_int_config_value("total_agents", 0.0) != 0) return 6;
+    if (mtl_parse_int_config_value("total_agents", 128.0) != 128) return 7;
+
+    bool rejected_fractional = false;
+    try {
+        (void)mtl_parse_int_config_value("horizon", 4.5);
+    } catch (const std::invalid_argument&) {
+        rejected_fractional = true;
+    }
+    if (!rejected_fractional) return 8;
+
+    bool rejected_nondivisible = false;
+    try {
+        mtl_validate_divisible_config_values("total_agents", 10, "num_buffers", 3);
+    } catch (const std::invalid_argument&) {
+        rejected_nondivisible = true;
+    }
+    if (!rejected_nondivisible) return 9;
+
     return 0;
 }

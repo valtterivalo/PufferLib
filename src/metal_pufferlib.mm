@@ -772,9 +772,6 @@ void train_impl(PuffeRL& pufferl) {
         MetalStream* mts = (MetalStream*)ts;
         for (int mb = 0; mb < total_minibatches; ++mb) {
             run_minibatch(ts, train_rng_offset, false);
-            // Commit current command buffer when ring is >75% full to prevent
-            // overflow on high replay_ratio configs. Metal queue serial execution
-            // guarantees the GPU finishes reading ring data before we overwrite it.
             if (mb + 1 < total_minibatches &&
                 mts->const_ring_offset > MTL_CONST_RING_SIZE * 3 / 4) {
                 mts->commit_chunk();

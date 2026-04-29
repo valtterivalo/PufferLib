@@ -124,6 +124,8 @@ static const int ZUL_POSITIONS[ZUL_NUM_POSITIONS][2] = {
 #define ZUL_SPAWN_INTERVAL  3  /* ticks between each cloud/snakeling spit (same as attack speed) */
 #define ZUL_CLOUD_FLIGHT_1  3  /* ticks for first cloud projectile to land */
 #define ZUL_CLOUD_FLIGHT_2  4  /* ticks for second cloud projectile to land */
+#define ZUL_MAX_ATTACK_EVENTS 8
+#define ZUL_MAX_CLOUD_EVENTS 4
 
 /* antivenom */
 #define ZUL_ANTIVENOM_DURATION   300    /* extended anti-venom+: 3 minutes = 300 ticks */
@@ -553,14 +555,14 @@ typedef struct {
         int src_x, src_y, dst_x, dst_y;
         int style;   /* 0=ranged, 1=magic, 2=melee */
         int damage;
-    } attack_events[8];
+    } attack_events[ZUL_MAX_ATTACK_EVENTS];
     int attack_event_count;
 
     /* visual: cloud projectile events this tick (style=3, fly from zulrah to landing) */
     struct {
         int src_x, src_y, dst_x, dst_y;
         int flight_ticks;  /* how many game ticks the projectile flies */
-    } cloud_events[4];
+    } cloud_events[ZUL_MAX_CLOUD_EVENTS];
     int cloud_event_count;
 
     Log log;
@@ -681,7 +683,11 @@ static int zul_player_def_roll(ZulrahState* s, int attack_style) {
 static void zul_record_attack(ZulrahState* s, int src_x, int src_y,
                                int dst_x, int dst_y, int style, int damage) {
     s->zulrah.npc_anim_id = ZULRAH_ANIM_ATTACK;
-    if (s->attack_event_count >= 8) return;
+    if (s->attack_event_count >= ZUL_MAX_ATTACK_EVENTS) {
+        fprintf(stderr, "zulrah attack event capacity exceeded: %d\n",
+            ZUL_MAX_ATTACK_EVENTS);
+        abort();
+    }
     int i = s->attack_event_count++;
     s->attack_events[i].src_x = src_x;
     s->attack_events[i].src_y = src_y;
@@ -1183,7 +1189,11 @@ static void zul_activate_cloud(ZulrahState* s, int x, int y) {
 
 /* emit a cloud projectile event for the renderer */
 static void zul_emit_cloud_event(ZulrahState* s, int dst_x, int dst_y, int flight_ticks) {
-    if (s->cloud_event_count >= 4) return;
+    if (s->cloud_event_count >= ZUL_MAX_CLOUD_EVENTS) {
+        fprintf(stderr, "zulrah cloud event capacity exceeded: %d\n",
+            ZUL_MAX_CLOUD_EVENTS);
+        abort();
+    }
     int i = s->cloud_event_count++;
     s->cloud_events[i].src_x = s->zulrah.x;
     s->cloud_events[i].src_y = s->zulrah.y;
@@ -2204,7 +2214,8 @@ static void zul_put_int(EncounterState* state, const char* key, int value) {
     else if (strcmp(key, "world_offset_x") == 0) s->world_offset_x = value;
     else if (strcmp(key, "world_offset_y") == 0) s->world_offset_y = value;
     else if (strcmp(key, "gear_tier") == 0) {
-        if (value >= 0 && value < ZUL_NUM_GEAR_TIERS) s->gear_tier = value;
+        s->gear_tier = encounter_require_int_range_config(
+            "zulrah", key, value, 0, ZUL_NUM_GEAR_TIERS - 1);
     }
     else if (strcmp(key, "player_dest_x") == 0) {
         s->player_dest_x = value;
@@ -2214,12 +2225,19 @@ static void zul_put_int(EncounterState* state, const char* key, int value) {
         s->player_dest_y = value;
         if (value >= 0) s->player_dest_explicit = 1;
     }
-    else if (strcmp(key, "human_command_mode") == 0) s->human_command_mode = value;
+    else if (strcmp(key, "human_command_mode") == 0)
+        s->human_command_mode = encounter_require_binary_config("zulrah", key, value);
+    else encounter_abort_unknown_config("zulrah", "int", key);
 }
-static void zul_put_float(EncounterState* st, const char* k, float v) { (void)st;(void)k;(void)v; }
+static void zul_put_float(EncounterState* st, const char* k, float v) {
+    (void)st;
+    (void)v;
+    encounter_abort_unknown_config("zulrah", "float", k);
+}
 static void zul_put_ptr(EncounterState* st, const char* k, void* v) {
     ZulrahState* s = (ZulrahState*)st;
     if (strcmp(k, "collision_map") == 0) s->collision_map = v;
+    else encounter_abort_unknown_config("zulrah", "ptr", k);
 }
 
 /* logging */
@@ -2279,7 +2297,7 @@ static void zul_render_post_tick(EncounterState* state, EncounterOverlay* ov) {
     /* projectile events this tick (attacks + cloud spits).
        zulrah is size 5: start_h = 5*0.75*128 = 480, end_h = 64 (player size 1) */
     ov->projectile_count = 0;
-    for (int i = 0; i < s->attack_event_count && ov->projectile_count < ENCOUNTER_MAX_OVERLAY_PROJECTILES; i++) {
+    for (int i = 0; i < s->attack_event_count; i++) {
         if (s->attack_events[i].style == 4) {
             /* snakeling spawn orb: flies to spawn point, no tracking */
             encounter_emit_projectile(ov,
@@ -2298,7 +2316,7 @@ static void zul_render_post_tick(EncounterState* state, EncounterOverlay* ov) {
                 35, 480, 64, 16, 0.0f, 1, ZUL_NPC_SIZE, 1, zul_proj_model, 0);
         }
     }
-    for (int i = 0; i < s->cloud_event_count && ov->projectile_count < ENCOUNTER_MAX_OVERLAY_PROJECTILES; i++) {
+    for (int i = 0; i < s->cloud_event_count; i++) {
         encounter_emit_projectile(ov,
             s->cloud_events[i].src_x, s->cloud_events[i].src_y,
             s->cloud_events[i].dst_x, s->cloud_events[i].dst_y,

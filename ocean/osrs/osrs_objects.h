@@ -16,6 +16,7 @@
 
 #include "raylib.h"
 #include "rlgl.h"
+#include "osrs_binary_io.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -45,29 +46,23 @@ static Texture2D objects_load_atlas(const char* atlas_path) {
     FILE* f = fopen(atlas_path, "rb");
     if (!f) {
         fprintf(stderr, "objects_load_atlas: could not open %s\n", atlas_path);
-        return tex;
+        abort();
     }
 
     uint32_t magic, width, height;
-    fread(&magic, 4, 1, f);
+    osrs_read_exact(f, &magic, 4, 1, atlas_path, "magic");
     if (magic != ATLS_MAGIC) {
         fprintf(stderr, "objects_load_atlas: bad magic %08x (expected ATLS)\n", magic);
-        fclose(f);
-        return tex;
+        abort();
     }
-    fread(&width, 4, 1, f);
-    fread(&height, 4, 1, f);
+    osrs_read_exact(f, &width, 4, 1, atlas_path, "width");
+    osrs_read_exact(f, &height, 4, 1, atlas_path, "height");
 
-    size_t pixel_size = (size_t)width * height * 4;
-    unsigned char* pixels = (unsigned char*)malloc(pixel_size);
-    size_t read = fread(pixels, 1, pixel_size, f);
+    size_t pixel_count = (size_t)width * height;
+    unsigned char* pixels = (unsigned char*)osrs_calloc_or_abort(
+        pixel_count, 4, "object atlas pixels");
+    osrs_read_exact(f, pixels, 4, pixel_count, atlas_path, "pixels");
     fclose(f);
-
-    if (read != pixel_size) {
-        fprintf(stderr, "objects_load_atlas: incomplete read (%zu/%zu)\n", read, pixel_size);
-        free(pixels);
-        return tex;
-    }
 
     /* create raylib Image from raw RGBA, then upload as texture */
     Image img = {
@@ -95,38 +90,41 @@ static ObjectMesh* objects_load(const char* path) {
 
     uint32_t magic, placement_count, total_verts;
     int32_t min_wx, min_wy;
-    fread(&magic, 4, 1, f);
+    osrs_read_exact(f, &magic, 4, 1, path, "magic");
 
     int has_textures = 0;
     if (magic == OBJ2_MAGIC) {
         has_textures = 1;
     } else if (magic != OBJS_MAGIC) {
         fprintf(stderr, "objects_load: bad magic %08x\n", magic);
-        fclose(f);
-        return NULL;
+        abort();
     }
 
-    fread(&placement_count, 4, 1, f);
-    fread(&min_wx, 4, 1, f);
-    fread(&min_wy, 4, 1, f);
-    fread(&total_verts, 4, 1, f);
+    osrs_read_exact(f, &placement_count, 4, 1, path, "placement count");
+    osrs_read_exact(f, &min_wx, 4, 1, path, "min world x");
+    osrs_read_exact(f, &min_wy, 4, 1, path, "min world y");
+    osrs_read_exact(f, &total_verts, 4, 1, path, "vertex count");
 
     fprintf(stderr, "objects_load: %u placements, %u verts, format=%s\n",
             placement_count, total_verts, has_textures ? "OBJ2" : "OBJS");
 
     /* read vertices */
-    float* raw_verts = (float*)malloc(total_verts * 3 * sizeof(float));
-    fread(raw_verts, sizeof(float), total_verts * 3, f);
+    float* raw_verts = (float*)osrs_malloc_or_abort(
+        total_verts * 3 * sizeof(float), "object vertices");
+    osrs_read_exact(f, raw_verts, sizeof(float), total_verts * 3, path, "vertices");
 
     /* read colors */
-    unsigned char* raw_colors = (unsigned char*)malloc(total_verts * 4);
-    fread(raw_colors, 1, total_verts * 4, f);
+    unsigned char* raw_colors = (unsigned char*)osrs_malloc_or_abort(
+        total_verts * 4, "object colors");
+    osrs_read_exact(f, raw_colors, 1, total_verts * 4, path, "colors");
 
     /* read texture coordinates (v2 only) */
     float* raw_texcoords = NULL;
     if (has_textures) {
-        raw_texcoords = (float*)malloc(total_verts * 2 * sizeof(float));
-        fread(raw_texcoords, sizeof(float), total_verts * 2, f);
+        raw_texcoords = (float*)osrs_malloc_or_abort(
+            total_verts * 2 * sizeof(float), "object texture coordinates");
+        osrs_read_exact(f, raw_texcoords, sizeof(float),
+            total_verts * 2, path, "texture coordinates");
     }
     fclose(f);
 
@@ -139,7 +137,8 @@ static ObjectMesh* objects_load(const char* path) {
     mesh.texcoords = raw_texcoords;
 
     /* compute normals */
-    mesh.normals = (float*)calloc(total_verts * 3, sizeof(float));
+    mesh.normals = (float*)osrs_calloc_or_abort(
+        total_verts * 3, sizeof(float), "object normals");
     for (int i = 0; i < mesh.triangleCount; i++) {
         int base = i * 9;
         float ax = raw_verts[base + 0], ay = raw_verts[base + 1], az = raw_verts[base + 2];
@@ -163,7 +162,8 @@ static ObjectMesh* objects_load(const char* path) {
 
     UploadMesh(&mesh, false);
 
-    ObjectMesh* om = (ObjectMesh*)calloc(1, sizeof(ObjectMesh));
+    ObjectMesh* om = (ObjectMesh*)osrs_calloc_or_abort(
+        1, sizeof(ObjectMesh), "object mesh");
     om->model = LoadModelFromMesh(mesh);
     om->placement_count = (int)placement_count;
     om->total_vertex_count = (int)total_verts;

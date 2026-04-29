@@ -12,6 +12,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 #include "ocean/osrs/encounters/encounter_inferno.h"
 
@@ -28,6 +30,25 @@ static int tests_failed = 0;
         printf("  FAIL: %s — got %d, expected %d\n", (label), (actual), (expected)); \
     } \
 } while (0)
+
+static void assert_child_aborts(const char* label, void (*fn)(void)) {
+    fflush(NULL);
+    pid_t pid = fork();
+    if (pid == 0) {
+        fn();
+        _exit(0);
+    }
+
+    int status = 0;
+    waitpid(pid, &status, 0);
+    tests_run++;
+    if (WIFSIGNALED(status) || (WIFEXITED(status) && WEXITSTATUS(status) != 0)) {
+        tests_passed++;
+    } else {
+        tests_failed++;
+        printf("  FAIL: %s - child returned successfully\n", label);
+    }
+}
 
 #define ASSERT_FLOAT_NEAR(label, actual, expected, tol) do { \
     tests_run++; \
@@ -1700,6 +1721,103 @@ static void test_zuk_obs_tracks_shield_and_mager_aggro(void) {
     ASSERT_FLOAT_NEAR("mager aggro bit flips to player", obs[mager_start + 6], 1.0f, 1e-6f);
 }
 
+static void test_zuk_set_obs_los_uses_current_target(void) {
+    printf("--- zuk set obs los uses current target ---\n");
+
+    InfernoState state = make_test_state(11, 14);
+    state.wave = 68;
+    state.player.current_hitpoints = 99;
+    state.player.base_hitpoints = 99;
+    state.player.base_prayer = 99;
+    state.player.current_prayer = 99;
+    state.player.current_defence = 99;
+    state.player.current_magic = 99;
+    state.player.current_ranged = 99;
+    state.weapon_set = INF_GEAR_TBOW;
+
+    state.npcs[0] = make_test_npc(
+        INF_NPC_MAGER, 20, 36, INF_NPC_STATS[INF_NPC_MAGER].size);
+    state.npcs[0].active = 1;
+    state.npcs[0].hp = state.npcs[0].max_hp = INF_NPC_STATS[INF_NPC_MAGER].hp;
+    state.npcs[0].attack_timer = 4;
+    state.npcs[0].aggro_target = 1;
+
+    state.npcs[1] = make_test_npc(
+        INF_NPC_ZUK_SHIELD, 23, 44, INF_NPC_STATS[INF_NPC_ZUK_SHIELD].size);
+    state.npcs[1].active = 1;
+    state.npcs[1].hp = state.npcs[1].max_hp = INF_NPC_STATS[INF_NPC_ZUK_SHIELD].hp;
+    state.zuk.shield_idx = 1;
+
+    float obs[INF_NUM_OBS];
+    inf_write_obs((EncounterState*)&state, obs);
+
+    int mager_start = inferno_obs_slot_start(0);
+    ASSERT_INT_EQ("mager occupies first obs slot", state.current_obs_slots[0], 0);
+    ASSERT_FLOAT_NEAR("mager los follows shield target", obs[mager_start + 4], 1.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("mager aggro bit stays off for shield target", obs[mager_start + 6], 0.0f, 1e-6f);
+}
+
+static void test_zuk_set_prayer_critical_ignores_shield_target(void) {
+    printf("--- zuk set prayer critical ignores shield target ---\n");
+
+    InfernoState state = make_test_state(20, 34);
+    state.wave = 68;
+    state.player.current_hitpoints = 99;
+    state.player.base_hitpoints = 99;
+    state.player.base_prayer = 99;
+    state.player.current_prayer = 99;
+    state.player.current_defence = 99;
+    state.player.current_magic = 99;
+    state.player.current_ranged = 99;
+    state.weapon_set = INF_GEAR_TBOW;
+
+    state.npcs[0] = make_test_npc(
+        INF_NPC_MAGER, 20, 36, INF_NPC_STATS[INF_NPC_MAGER].size);
+    state.npcs[0].active = 1;
+    state.npcs[0].hp = state.npcs[0].max_hp = INF_NPC_STATS[INF_NPC_MAGER].hp;
+    state.npcs[0].attack_timer = 1;
+    state.npcs[0].attack_style = ATTACK_STYLE_MAGIC;
+    state.npcs[0].aggro_target = 1;
+
+    state.npcs[1] = make_test_npc(
+        INF_NPC_ZUK_SHIELD, 23, 44, INF_NPC_STATS[INF_NPC_ZUK_SHIELD].size);
+    state.npcs[1].active = 1;
+    state.npcs[1].hp = state.npcs[1].max_hp = INF_NPC_STATS[INF_NPC_ZUK_SHIELD].hp;
+    state.zuk.shield_idx = 1;
+
+    float obs[INF_NUM_OBS];
+    inf_write_obs((EncounterState*)&state, obs);
+
+    ASSERT_FLOAT_NEAR("shield-targeted mager does not create prayer deadline", obs[37], 1.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("shield-targeted mager has no prayer style", obs[38] + obs[39] + obs[40], 0.0f, 1e-6f);
+}
+
+static void child_inf_put_bad_start_wave(void) {
+    InfernoState state = make_test_state(0, 0);
+    inf_put_int((EncounterState*)&state, "start_wave", 0);
+}
+
+static void child_inf_put_unknown_int(void) {
+    InfernoState state = make_test_state(0, 0);
+    inf_put_int((EncounterState*)&state, "bogus_key", 1);
+}
+
+static void child_encounter_emit_projectile_overflow(void) {
+    EncounterOverlay ov;
+    memset(&ov, 0, sizeof(ov));
+    ov.projectile_count = ENCOUNTER_MAX_OVERLAY_PROJECTILES;
+    encounter_emit_projectile(
+        &ov, 0, 0, 1, 1, 0, 0, 30, 0, 0, 0, 0.0f, 0, 1, 1, 0, 0);
+}
+
+static void test_fail_fast_boundaries(void) {
+    printf("--- fail fast boundaries ---\n");
+
+    assert_child_aborts("invalid inferno start wave aborts", child_inf_put_bad_start_wave);
+    assert_child_aborts("unknown inferno int config aborts", child_inf_put_unknown_int);
+    assert_child_aborts("overlay projectile overflow aborts", child_encounter_emit_projectile_overflow);
+}
+
 static void test_human_target_and_potion_translation(void) {
     printf("--- inferno human target and potion translation ---\n");
 
@@ -2118,6 +2236,9 @@ int main(void) {
     test_zuk_healer_target_action_tags_on_landed_hit();
     test_zuk_spark_render_matches_pending_spark_state();
     test_zuk_obs_tracks_shield_and_mager_aggro();
+    test_zuk_set_obs_los_uses_current_target();
+    test_zuk_set_prayer_critical_ignores_shield_target();
+    test_fail_fast_boundaries();
     test_human_target_and_potion_translation();
     test_action_noop_count_matches_action_heads();
     test_inferno_human_equip_does_not_snap_loadout();

@@ -425,9 +425,8 @@ struct SampleParams {
     int mask_stride;    // stride between rows in mask buffer (may differ from num_atns_total)
 };
 
-// Apply action mask to a logit: invalid actions get -1e9.
 inline float masked_logit(float l, float m) {
-    if (m < 0.5f) l = -1e9f;
+    if (m < 0.5f) l = -INFINITY;
     return l;
 }
 
@@ -495,10 +494,18 @@ kernel void sample_logits_kernel(
 
             // Max + logsumexp (with mask)
             float max_val = -INFINITY;
+            bool has_valid_action = false;
             for (int a = 0; a < A; a++) {
+                has_valid_action = has_valid_action || action_mask[mask_base + logits_offset + a] >= 0.5f;
                 float l = masked_logit(logits[logits_base + logits_offset + a],
                                        action_mask[mask_base + logits_offset + a]);
                 max_val = fmax(max_val, l);
+            }
+            if (!has_valid_action) {
+                actions[(int)idx * sp.num_atns + h] = NAN;
+                total_log_prob = NAN;
+                logits_offset += A;
+                continue;
             }
             float sum_exp = 0.0f;
             for (int a = 0; a < A; a++) {
@@ -581,10 +588,17 @@ kernel void recompute_logprobs_kernel(
 
         // Max + logsumexp (with mask)
         float max_val = -INFINITY;
+        bool has_valid_action = false;
         for (int a = 0; a < A; a++) {
+            has_valid_action = has_valid_action || action_mask[mask_base + logits_offset + a] >= 0.5f;
             max_val = fmax(max_val, masked_logit(
                 logits[logits_base + logits_offset + a],
                 action_mask[mask_base + logits_offset + a]));
+        }
+        if (!has_valid_action) {
+            total_log_prob = NAN;
+            logits_offset += A;
+            continue;
         }
         float sum_exp = 0.0f;
         for (int a = 0; a < A; a++) {
@@ -630,9 +644,6 @@ inline void atomic_add_float(device atomic_uint* addr, float val) {
     }
 }
 
-// PPO helper: compute logsumexp, entropy, log_prob for a single discrete head with masks.
-// mask pointer + mask_offset index into the action mask for this head.
-// Invalid actions (mask < 0.5) get logit = -1e9, matching rollout sampling.
 inline void ppo_discrete_head(
     const device float* logits,
     int logits_base, int logits_stride_a, int logits_offset,
@@ -643,21 +654,21 @@ inline void ppo_discrete_head(
     float max_logit = -INFINITY;
     float sum = 0.0f;
     float act_logit = 0.0f;
+    bool has_valid_action = false;
 
     for (int a = 0; a < A; a++) {
-        float l = logits[logits_base + (logits_offset + a) * logits_stride_a];
-        if (mask[mask_offset + a] < 0.5f) l = -1e9f;
+        float m = mask[mask_offset + a];
+        float l = masked_logit(logits[logits_base + (logits_offset + a) * logits_stride_a], m);
         if (a == act) act_logit = l;
+        if (m < 0.5f) continue;
+        has_valid_action = true;
         if (l > max_logit) {
             sum *= exp(max_logit - l);
             max_logit = l;
         }
         sum += exp(l - max_logit);
     }
-    // Degenerate input (all masked or non-finite model output): propagate NaN
-    // so the corruption surfaces immediately in the PPO loss rather than
-    // silently producing logp=0 (ratio=1) which poisons gradients.
-    if (!isfinite(max_logit) || !isfinite(sum) || sum <= 0.0f) {
+    if (!has_valid_action || !isfinite(max_logit) || !isfinite(sum) || sum <= 0.0f) {
         out_logsumexp = NAN;
         out_entropy = NAN;
         out_logp = NAN;
@@ -667,8 +678,9 @@ inline void ppo_discrete_head(
 
     float ent = 0.0f;
     for (int a = 0; a < A; a++) {
-        float l = logits[logits_base + (logits_offset + a) * logits_stride_a];
-        if (mask[mask_offset + a] < 0.5f) l = -1e9f;
+        if (mask[mask_offset + a] < 0.5f) continue;
+        float l = masked_logit(logits[logits_base + (logits_offset + a) * logits_stride_a],
+                               mask[mask_offset + a]);
         float logp = l - lse;
         float p = exp(clamp(logp, -80.0f, 80.0f));
         ent -= p * logp;
@@ -887,13 +899,16 @@ kernel void ppo_loss_fwd_bwd_kernel(
                 for (int a = 0; a < A; a++) {
                     float raw_l = logits[logits_base + (logits_offset + a) * pp.logits_stride_a];
                     float m = action_mask[mask_base + logits_offset + a];
-                    float l = (m < 0.5f) ? -1e9f : raw_l;
+                    if (m < 0.5f) {
+                        grad_logits[grad_logits_base + logits_offset + a] = 0.0f;
+                        continue;
+                    }
+                    float l = masked_logit(raw_l, m);
                     float logp = l - lse;
                     float p = exp(logp);
                     float d_logit = (a == act) ? d_new_logp : 0.0f;
                     d_logit -= p * d_new_logp;
                     d_logit += d_entropy_term * p * (-ent - logp);
-                    if (m < 0.5f) d_logit = 0.0f;
                     grad_logits[grad_logits_base + logits_offset + a] = d_logit;
                 }
                 logits_offset += A;

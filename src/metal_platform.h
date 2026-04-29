@@ -10,9 +10,13 @@
 #include "puf_types.h"
 #include <cassert>
 #include <atomic>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 struct MetalStream {
@@ -78,7 +82,11 @@ static inline MetalStream *mtl_resolve_stream(cudaStream_t s) {
 
 static inline void mtl_ensure_stream_synced(cudaStream_t s) {
   MetalStream *ms = mtl_resolve_stream(s);
-  if (ms->enc_active || ms->pending_work) ms->sync();
+  if (ms->flushed) {
+    ms->wait_completed();
+  } else if (ms->enc_active || ms->pending_work) {
+    ms->sync();
+  }
 }
 
 void *mtl_create_stream();
@@ -141,6 +149,48 @@ inline bool mtl_const_ring_reserve_range(NSUInteger current_offset,
 
   *next_offset = current_offset + aligned;
   return true;
+}
+
+inline int mtl_parse_int_config_value(const char *key, double value) {
+  if (!std::isfinite(value)) {
+    throw std::invalid_argument(std::string(key) + " must be a finite integer");
+  }
+  if (std::trunc(value) != value) {
+    throw std::invalid_argument(std::string(key) + " must be an integer, got " +
+                                std::to_string(value));
+  }
+  if (value < (double)std::numeric_limits<int>::min() ||
+      value > (double)std::numeric_limits<int>::max()) {
+    throw std::invalid_argument(std::string(key) + " is outside int range");
+  }
+  return (int)value;
+}
+
+inline int mtl_validate_nonzero_config_value(const char *key, int value) {
+  if (value == 0) {
+    throw std::invalid_argument(std::string(key) + " must be nonzero");
+  }
+  return value;
+}
+
+inline int mtl_validate_positive_config_value(const char *key, int value) {
+  if (value <= 0) {
+    throw std::invalid_argument(std::string(key) + " must be positive");
+  }
+  return value;
+}
+
+inline void mtl_validate_divisible_config_values(const char *numerator_key,
+                                                 int numerator,
+                                                 const char *denominator_key,
+                                                 int denominator) {
+  mtl_validate_nonzero_config_value(denominator_key, denominator);
+  if (numerator % denominator != 0) {
+    throw std::invalid_argument(std::string(numerator_key) + " must be divisible by " +
+                                denominator_key + ": " +
+                                std::to_string(numerator) + " % " +
+                                std::to_string(denominator) + " != 0");
+  }
 }
 
 inline void mtl_set_tensor(MetalStream *ms, const FloatTensor &t,

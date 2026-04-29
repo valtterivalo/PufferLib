@@ -15,6 +15,8 @@
 #define OSRS_TERRAIN_H
 
 #include "raylib.h"
+#include "osrs_binary_io.h"
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -45,27 +47,28 @@ static TerrainMesh* terrain_load(const char* path) {
 
     uint32_t magic, vert_count, region_count;
     int32_t min_wx, min_wy;
-    fread(&magic, 4, 1, f);
+    osrs_read_exact(f, &magic, 4, 1, path, "magic");
     if (magic != TERR_MAGIC) {
         fprintf(stderr, "terrain_load: bad magic %08x\n", magic);
-        fclose(f);
-        return NULL;
+        abort();
     }
-    fread(&vert_count, 4, 1, f);
-    fread(&region_count, 4, 1, f);
-    fread(&min_wx, 4, 1, f);
-    fread(&min_wy, 4, 1, f);
+    osrs_read_exact(f, &vert_count, 4, 1, path, "vertex count");
+    osrs_read_exact(f, &region_count, 4, 1, path, "region count");
+    osrs_read_exact(f, &min_wx, 4, 1, path, "min world x");
+    osrs_read_exact(f, &min_wy, 4, 1, path, "min world y");
 
     fprintf(stderr, "terrain_load: %u verts, %u regions, origin (%d, %d)\n",
             vert_count, region_count, min_wx, min_wy);
 
     /* read vertices */
-    float* raw_verts = (float*)malloc(vert_count * 3 * sizeof(float));
-    fread(raw_verts, sizeof(float), vert_count * 3, f);
+    float* raw_verts = (float*)osrs_malloc_or_abort(
+        vert_count * 3 * sizeof(float), "terrain vertices");
+    osrs_read_exact(f, raw_verts, sizeof(float), vert_count * 3, path, "vertices");
 
     /* read colors */
-    unsigned char* raw_colors = (unsigned char*)malloc(vert_count * 4);
-    fread(raw_colors, 1, vert_count * 4, f);
+    unsigned char* raw_colors = (unsigned char*)osrs_malloc_or_abort(
+        vert_count * 4, "terrain colors");
+    osrs_read_exact(f, raw_colors, 1, vert_count * 4, path, "colors");
 
     /* build raylib mesh */
     Mesh mesh = { 0 };
@@ -75,7 +78,8 @@ static TerrainMesh* terrain_load(const char* path) {
     mesh.colors = raw_colors;
 
     /* compute normals for proper lighting */
-    mesh.normals = (float*)calloc(vert_count * 3, sizeof(float));
+    mesh.normals = (float*)osrs_calloc_or_abort(
+        vert_count * 3, sizeof(float), "terrain normals");
     for (int i = 0; i < mesh.triangleCount; i++) {
         int base = i * 9;
         float ax = raw_verts[base + 0], ay = raw_verts[base + 1], az = raw_verts[base + 2];
@@ -99,7 +103,8 @@ static TerrainMesh* terrain_load(const char* path) {
 
     UploadMesh(&mesh, false);
 
-    TerrainMesh* tm = (TerrainMesh*)calloc(1, sizeof(TerrainMesh));
+    TerrainMesh* tm = (TerrainMesh*)osrs_calloc_or_abort(
+        1, sizeof(TerrainMesh), "terrain mesh");
     tm->model = LoadModelFromMesh(mesh);
     tm->vertex_count = (int)vert_count;
     tm->region_count = (int)region_count;
@@ -110,19 +115,29 @@ static TerrainMesh* terrain_load(const char* path) {
     /* read heightmap (appended after colors in the binary) */
     int32_t hm_min_x, hm_min_y;
     uint32_t hm_w, hm_h;
-    if (fread(&hm_min_x, 4, 1, f) == 1 &&
-        fread(&hm_min_y, 4, 1, f) == 1 &&
-        fread(&hm_w, 4, 1, f) == 1 &&
-        fread(&hm_h, 4, 1, f) == 1 &&
-        hm_w > 0 && hm_h > 0 && hm_w <= 4096 && hm_h <= 4096) {
+    size_t has_heightmap = fread(&hm_min_x, 4, 1, f);
+    if (has_heightmap == 1) {
+        osrs_read_exact(f, &hm_min_y, 4, 1, path, "heightmap min y");
+        osrs_read_exact(f, &hm_w, 4, 1, path, "heightmap width");
+        osrs_read_exact(f, &hm_h, 4, 1, path, "heightmap height");
+        if (hm_w == 0 || hm_h == 0 || hm_w > 4096 || hm_h > 4096) {
+            fprintf(stderr, "terrain_load: invalid heightmap dimensions %ux%u\n",
+                hm_w, hm_h);
+            abort();
+        }
         tm->hm_min_x = hm_min_x;
         tm->hm_min_y = hm_min_y;
         tm->hm_width = (int)hm_w;
         tm->hm_height = (int)hm_h;
-        tm->heightmap = (float*)malloc(hm_w * hm_h * sizeof(float));
-        fread(tm->heightmap, sizeof(float), hm_w * hm_h, f);
+        tm->heightmap = (float*)osrs_malloc_or_abort(
+            hm_w * hm_h * sizeof(float), "terrain heightmap");
+        osrs_read_exact(f, tm->heightmap, sizeof(float),
+            hm_w * hm_h, path, "heightmap values");
         fprintf(stderr, "terrain heightmap: %dx%d, origin (%d, %d)\n",
                 tm->hm_width, tm->hm_height, tm->hm_min_x, tm->hm_min_y);
+    } else if (!feof(f)) {
+        fprintf(stderr, "terrain_load: failed probing heightmap header\n");
+        abort();
     }
 
     fclose(f);

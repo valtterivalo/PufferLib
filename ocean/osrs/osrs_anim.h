@@ -19,6 +19,7 @@
 #ifndef OSRS_ANIM_H
 #define OSRS_ANIM_H
 
+#include "osrs_binary_io.h"
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -133,12 +134,14 @@ static AnimCache* anim_cache_load(const char* path) {
         return NULL;
     }
 
-    fseek(f, 0, SEEK_END);
-    long size = ftell(f);
-    fseek(f, 0, SEEK_SET);
+    long size = osrs_file_size_or_abort(f, path);
+    if (size < 8) {
+        fprintf(stderr, "anim_cache_load: file too small: %s (%ld bytes)\n", path, size);
+        abort();
+    }
 
-    uint8_t* buf = (uint8_t*)malloc(size);
-    fread(buf, 1, size, f);
+    uint8_t* buf = (uint8_t*)osrs_malloc_or_abort((size_t)size, "animation file");
+    osrs_read_exact(f, buf, 1, (size_t)size, path, "animation file");
     fclose(f);
 
     const uint8_t* p = buf;
@@ -146,17 +149,19 @@ static AnimCache* anim_cache_load(const char* path) {
     uint32_t magic = anim_read_u32(&p);
     if (magic != ANIM_MAGIC) {
         fprintf(stderr, "anim_cache_load: bad magic 0x%08X\n", magic);
-        free(buf);
-        return NULL;
+        abort();
     }
 
-    AnimCache* cache = (AnimCache*)calloc(1, sizeof(AnimCache));
+    AnimCache* cache = (AnimCache*)osrs_calloc_or_abort(
+        1, sizeof(AnimCache), "animation cache");
     cache->base_count = anim_read_u16(&p);
     cache->seq_count = anim_read_u16(&p);
 
     /* load framebases */
-    cache->bases = (AnimFrameBase*)calloc(cache->base_count, sizeof(AnimFrameBase));
-    cache->base_ids = (uint16_t*)malloc(cache->base_count * sizeof(uint16_t));
+    cache->bases = (AnimFrameBase*)osrs_calloc_or_abort(
+        cache->base_count, sizeof(AnimFrameBase), "animation framebases");
+    cache->base_ids = (uint16_t*)osrs_malloc_or_abort(
+        cache->base_count * sizeof(uint16_t), "animation framebase ids");
 
     for (int i = 0; i < cache->base_count; i++) {
         AnimFrameBase* fb = &cache->bases[i];
@@ -164,17 +169,21 @@ static AnimCache* anim_cache_load(const char* path) {
         cache->base_ids[i] = fb->base_id;
         fb->slot_count = anim_read_u8(&p);
 
-        fb->types = (uint8_t*)malloc(fb->slot_count);
+        fb->types = (uint8_t*)osrs_malloc_or_abort(
+            fb->slot_count, "animation framebase slot types");
         for (int s = 0; s < fb->slot_count; s++) {
             fb->types[s] = anim_read_u8(&p);
         }
 
-        fb->map_lengths = (uint8_t*)malloc(fb->slot_count);
-        fb->frame_maps = (uint8_t**)malloc(fb->slot_count * sizeof(uint8_t*));
+        fb->map_lengths = (uint8_t*)osrs_malloc_or_abort(
+            fb->slot_count, "animation framebase map lengths");
+        fb->frame_maps = (uint8_t**)osrs_malloc_or_abort(
+            fb->slot_count * sizeof(uint8_t*), "animation frame maps");
         for (int s = 0; s < fb->slot_count; s++) {
             uint8_t ml = anim_read_u8(&p);
             fb->map_lengths[s] = ml;
-            fb->frame_maps[s] = (uint8_t*)malloc(ml);
+            fb->frame_maps[s] = (uint8_t*)osrs_malloc_or_abort(
+                ml, "animation frame map labels");
             for (int j = 0; j < ml; j++) {
                 fb->frame_maps[s][j] = anim_read_u8(&p);
             }
@@ -182,7 +191,8 @@ static AnimCache* anim_cache_load(const char* path) {
     }
 
     /* load sequences */
-    cache->sequences = (AnimSequence*)calloc(cache->seq_count, sizeof(AnimSequence));
+    cache->sequences = (AnimSequence*)osrs_calloc_or_abort(
+        cache->seq_count, sizeof(AnimSequence), "animation sequences");
     for (int i = 0; i < cache->seq_count; i++) {
         AnimSequence* seq = &cache->sequences[i];
         seq->seq_id = anim_read_u16(&p);
@@ -190,7 +200,8 @@ static AnimCache* anim_cache_load(const char* path) {
 
         seq->interleave_count = anim_read_u8(&p);
         if (seq->interleave_count > 0) {
-            seq->interleave_order = (uint8_t*)malloc(seq->interleave_count);
+            seq->interleave_order = (uint8_t*)osrs_malloc_or_abort(
+                seq->interleave_count, "animation interleave order");
             for (int j = 0; j < seq->interleave_count; j++) {
                 seq->interleave_order[j] = anim_read_u8(&p);
             }
@@ -198,7 +209,8 @@ static AnimCache* anim_cache_load(const char* path) {
 
         seq->walk_flag = (int8_t)anim_read_u8(&p);
 
-        seq->frames = (AnimSequenceFrame*)calloc(seq->frame_count, sizeof(AnimSequenceFrame));
+        seq->frames = (AnimSequenceFrame*)osrs_calloc_or_abort(
+            seq->frame_count, sizeof(AnimSequenceFrame), "animation sequence frames");
         for (int fi = 0; fi < seq->frame_count; fi++) {
             AnimSequenceFrame* sf = &seq->frames[fi];
             sf->delay = anim_read_u16(&p);
@@ -206,8 +218,9 @@ static AnimCache* anim_cache_load(const char* path) {
             sf->frame.transform_count = anim_read_u8(&p);
 
             if (sf->frame.transform_count > 0) {
-                sf->frame.transforms = (AnimTransform*)malloc(
-                    sf->frame.transform_count * sizeof(AnimTransform));
+                sf->frame.transforms = (AnimTransform*)osrs_malloc_or_abort(
+                    sf->frame.transform_count * sizeof(AnimTransform),
+                    "animation transforms");
                 for (int t = 0; t < sf->frame.transform_count; t++) {
                     sf->frame.transforms[t].slot_index = anim_read_u8(&p);
                     sf->frame.transforms[t].dx = anim_read_i16(&p);
@@ -252,13 +265,17 @@ static AnimModelState* anim_model_state_create(
     const uint8_t* vertex_skins,
     int base_vert_count
 ) {
-    AnimModelState* state = (AnimModelState*)calloc(1, sizeof(AnimModelState));
+    AnimModelState* state = (AnimModelState*)osrs_calloc_or_abort(
+        1, sizeof(AnimModelState), "animation model state");
     state->vert_count = base_vert_count;
-    state->verts = (int16_t*)calloc(base_vert_count * 3, sizeof(int16_t));
+    state->verts = (int16_t*)osrs_calloc_or_abort(
+        base_vert_count * 3, sizeof(int16_t), "animation model vertices");
 
     /* build vertex group lookup from skin labels */
-    state->groups = (int**)calloc(ANIM_MAX_LABELS, sizeof(int*));
-    state->group_counts = (int*)calloc(ANIM_MAX_LABELS, sizeof(int));
+    state->groups = (int**)osrs_calloc_or_abort(
+        ANIM_MAX_LABELS, sizeof(int*), "animation model groups");
+    state->group_counts = (int*)osrs_calloc_or_abort(
+        ANIM_MAX_LABELS, sizeof(int), "animation model group counts");
 
     /* first pass: count vertices per label */
     int label_counts[ANIM_MAX_LABELS] = {0};
@@ -270,7 +287,8 @@ static AnimModelState* anim_model_state_create(
     /* allocate per-label arrays */
     for (int l = 0; l < ANIM_MAX_LABELS; l++) {
         if (label_counts[l] > 0) {
-            state->groups[l] = (int*)malloc(label_counts[l] * sizeof(int));
+            state->groups[l] = (int*)osrs_malloc_or_abort(
+                label_counts[l] * sizeof(int), "animation model group vertices");
             state->group_counts[l] = 0;
         }
     }

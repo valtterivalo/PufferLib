@@ -39,7 +39,7 @@
 #define RENDER_PANEL_WIDTH     285   /* 190 * 1.5 */
 #define RENDER_HEADER_HEIGHT   0     /* OSRS client has no top header strip */
 #define RENDER_SPLATS_PER_PLAYER 4   /* OSRS max: 4 simultaneous splats per entity */
-#define RENDER_HISTORY_SIZE    2000  /* max ticks of rewind history */
+#define RENDER_HISTORY_INITIAL_CAPACITY 2000
 #define MAX_RENDER_ENTITIES    64    /* max entities rendered (players + NPCs/bosses/adds) */
 
 #define RENDER_GRID_W (RENDER_WINDOW_W - RENDER_PANEL_WIDTH)  /* = 575, OSRS ≈ 512 */
@@ -420,9 +420,10 @@ typedef struct {
     /* tick pacing */
     double last_tick_time;
 
-    /* rewind history: ring buffer of env snapshots */
-    OsrsEnv* history;     /* heap-allocated array of RENDER_HISTORY_SIZE snapshots */
-    int history_count;    /* how many snapshots stored (up to RENDER_HISTORY_SIZE) */
+    /* rewind history: env snapshots */
+    OsrsEnv* history;
+    int history_count;
+    int history_capacity;
     int history_cursor;   /* current position when rewinding (-1 = live) */
 
     /* OSRS GUI panel system (inventory, equipment, prayer, combat, spellbook) */
@@ -795,7 +796,12 @@ static RenderClient* render_make_client(void) {
     /* fight area center (Z negated: OSRS +Y = north maps to -Z) */
     rc->cam_target_x = (float)rc->arena_base_x + (float)rc->arena_width / 2.0f;
     rc->cam_target_z = -((float)rc->arena_base_y + (float)rc->arena_height / 2.0f);
-    rc->history = (OsrsEnv*)calloc(RENDER_HISTORY_SIZE, sizeof(OsrsEnv));
+    rc->history_capacity = RENDER_HISTORY_INITIAL_CAPACITY;
+    rc->history = (OsrsEnv*)calloc((size_t)rc->history_capacity, sizeof(OsrsEnv));
+    if (!rc->history) {
+        fprintf(stderr, "render history allocation failed\n");
+        abort();
+    }
     rc->history_count = 0;
     rc->history_cursor = -1;  /* -1 = live (not rewinding) */
     rc->entity_count = 0;  /* populated by render_populate_entities */
@@ -1682,13 +1688,22 @@ static void render_handle_input(RenderClient* rc, OsrsEnv* env) {
 }
 
 
-/* save current env state to history ring buffer (call after each pvp_step) */
+/* save current env state to history (call after each pvp_step) */
 static void render_save_snapshot(RenderClient* rc, OsrsEnv* env) {
-    if (rc->history_count < RENDER_HISTORY_SIZE) {
-        rc->history[rc->history_count] = *env;
-        rc->history_count++;
+    if (rc->history_count >= rc->history_capacity) {
+        int new_capacity = rc->history_capacity * 2;
+        OsrsEnv* next = (OsrsEnv*)realloc(
+            rc->history, (size_t)new_capacity * sizeof(OsrsEnv));
+        if (!next) {
+            fprintf(stderr, "render history growth failed at %d snapshots\n",
+                rc->history_capacity);
+            abort();
+        }
+        rc->history = next;
+        rc->history_capacity = new_capacity;
     }
-    /* if buffer full, stop recording (2000 ticks is plenty for one episode) */
+    rc->history[rc->history_count] = *env;
+    rc->history_count++;
 }
 
 /* restore env state from history snapshot, preserving render-side pointers */
@@ -4373,8 +4388,6 @@ void pvp_render(OsrsEnv* env) {
         int steps = (int)(rc->client_tick_accumulator / client_tick);
         if (steps > 0) {
             rc->client_tick_accumulator -= steps * client_tick;
-            /* cap to avoid spiral if frame rate drops badly */
-            if (steps > 60) steps = 60;
             for (int s = 0; s < steps; s++) {
                 for (int i = 0; i < rc->entity_count; i++) {
                     render_client_tick(rc, i);
