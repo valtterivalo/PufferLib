@@ -210,8 +210,8 @@ static void assert_supply_doses(const char* label,
     ASSERT_INT_EQ(buf, player->stamina_doses, expected.stamina_doses);
 }
 
-static void test_reward_switches_between_healer_tags_and_damage(void) {
-    printf("--- inferno reward switches between healer tags and damage ---\n");
+static void test_final_wave_reward_keeps_progress_during_active_healers(void) {
+    printf("--- final-wave reward keeps progress during active healers ---\n");
 
     InfernoState healing_state = make_test_state(24, 24);
     InfernoState damage_state = make_test_state(24, 24);
@@ -229,14 +229,18 @@ static void test_reward_switches_between_healer_tags_and_damage(void) {
     healing_state.npcs[0].aggro_target = 1;
     healing_state.npcs[1] = make_test_npc(INF_NPC_ZUK, 28, 24, 5);
     healing_state.npcs[1].active = 1;
+    healing_state.npcs[1].hp = 1150;
     healing_state.min_zuk_hp_seen = 1200.0f;
 
     damage_state = healing_state;
     damage_state.wave = 0;
     damage_state.npcs[0].aggro_target = -1;
+    damage_state.healer_tags_this_tick = 0;
 
-    ASSERT_FLOAT_NEAR("final-wave active healer reward uses tag path",
-        inf_compute_reward(&healing_state), 0.43f, 0.0001f);
+    ASSERT_FLOAT_NEAR("active healer reward includes progress, tags, heal cost, and shield penalty",
+        inf_compute_reward(&healing_state), 0.83f, 0.0001f);
+    ASSERT_FLOAT_NEAR("active healer reward updates zuk low watermark",
+        healing_state.min_zuk_hp_seen, 1150.0f, 0.0001f);
     ASSERT_FLOAT_NEAR("non-final-wave reward still uses damage path",
         inf_compute_reward(&damage_state), 0.33f, 0.0001f);
 }
@@ -1376,6 +1380,52 @@ static void test_zuk_obs_exposes_pending_sparks(void) {
         obs[spark_start + 8], 0.4f, 1e-6f);
 }
 
+static void test_zuk_healer_target_action_tags_on_landed_hit(void) {
+    printf("--- zuk healer target action tags on landed hit ---\n");
+
+    InfernoState state;
+    init_zuk_timing_state(&state);
+    state.player.x = 20;
+    state.player.y = 46;
+    encounter_apply_loadout(&state.player, INF_RANGE_TBOW_LOADOUT, GEAR_RANGED);
+
+    state.npcs[2] = make_test_npc(
+        INF_NPC_HEALER_ZUK, 20, 48, INF_NPC_STATS[INF_NPC_HEALER_ZUK].size);
+    state.npcs[2].active = 1;
+    state.npcs[2].hp = state.npcs[2].max_hp = INF_NPC_STATS[INF_NPC_HEALER_ZUK].hp;
+    state.npcs[2].aggro_target = 0;
+
+    float obs[INF_NUM_OBS];
+    float mask[INF_ACTION_MASK_SIZE];
+    inf_write_obs((EncounterState*)&state, obs);
+    inf_write_mask((EncounterState*)&state, mask);
+
+    int healer_slot = 33;
+    ASSERT_INT_EQ("zuk healer occupies first healer slot",
+        state.current_obs_slots[healer_slot], 2);
+    ASSERT_FLOAT_NEAR("zuk healer target mask is valid",
+        mask[inferno_target_mask_slot_offset(healer_slot)], 1.0f, 1e-6f);
+
+    int actions[INF_NUM_ACTION_HEADS];
+    memset(actions, 0, sizeof(actions));
+    actions[INF_HEAD_TARGET] = healer_slot + 1;
+    inf_tick_player(&state, actions, 1);
+
+    ASSERT_INT_EQ("target action selects zuk healer",
+        state.interaction.target_slot, 2);
+    ASSERT_INT_EQ("player attack queues healer hit",
+        state.npcs[2].pending_hit.active, 1);
+
+    state.npcs[2].pending_hit.damage = 0;
+    state.npcs[2].pending_hit.ticks_remaining = 1;
+    inf_resolve_player_projectiles_on_npcs(&state);
+
+    ASSERT_INT_EQ("landed zero-damage hit tags zuk healer",
+        state.npcs[2].aggro_target, -1);
+    ASSERT_INT_EQ("landed zero-damage hit increments tag count",
+        state.healer_tags_this_tick, 1);
+}
+
 static void test_zuk_spark_render_matches_pending_spark_state(void) {
     printf("--- zuk spark render matches pending spark state ---\n");
 
@@ -2035,7 +2085,7 @@ int main(void) {
     test_jad_healer_spawn_offsets_match_wave_67_reference();
     test_jad_healer_spawn_offsets_match_zuk_reference();
     test_meleer_dig_landing_order();
-    test_reward_switches_between_healer_tags_and_damage();
+    test_final_wave_reward_keeps_progress_during_active_healers();
     test_final_wave_reward_uses_zuk_low_watermark_progress();
     test_inferno_reset_supplies_match_current_inventory();
     test_late_start_supply_profile_anchor_waves();
@@ -2065,6 +2115,7 @@ int main(void) {
     test_player_projectile_timing_uses_reference_options();
     test_zuk_obs_exposes_attack_timer_summary();
     test_zuk_obs_exposes_pending_sparks();
+    test_zuk_healer_target_action_tags_on_landed_hit();
     test_zuk_spark_render_matches_pending_spark_state();
     test_zuk_obs_tracks_shield_and_mager_aggro();
     test_human_target_and_potion_translation();

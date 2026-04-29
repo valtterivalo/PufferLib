@@ -3225,6 +3225,18 @@ static int inf_healer_is_actively_healing(const InfernoState* s, const InfNPC* n
     return s->npcs[npc->aggro_target].active;
 }
 
+static float inf_zuk_low_watermark_reward(InfernoState* s) {
+    int zuk_idx = inf_find_live_zuk_idx(s);
+    if (zuk_idx < 0) return 0.0f;
+
+    float zuk_hp = (float)s->npcs[zuk_idx].hp;
+    if (zuk_hp >= s->min_zuk_hp_seen) return 0.0f;
+
+    float reward = s->damage_reward_coeff * (s->min_zuk_hp_seen - zuk_hp);
+    s->min_zuk_hp_seen = zuk_hp;
+    return reward;
+}
+
 static float inf_compute_reward(InfernoState* s) {
     s->total_damage_dealt += s->damage_dealt_this_tick;
     s->total_zuk_healer_damage += s->damage_zuk_healers_this_tick;
@@ -3243,21 +3255,15 @@ static float inf_compute_reward(InfernoState* s) {
     }
 
     float reward = 0.0f;
-    if (healer_is_actively_healing) {
-        reward = s->tag_reward_coeff * (float)s->healer_tags_this_tick;
-    } else if (inf_is_final_wave(s)) {
-        int zuk_idx = inf_find_live_zuk_idx(s);
-        if (zuk_idx >= 0) {
-            float zuk_hp = (float)s->npcs[zuk_idx].hp;
-            if (zuk_hp < s->min_zuk_hp_seen) {
-                reward = s->damage_reward_coeff * (s->min_zuk_hp_seen - zuk_hp);
-                s->min_zuk_hp_seen = zuk_hp;
-            }
-        }
+    if (inf_is_final_wave(s)) {
+        reward = inf_zuk_low_watermark_reward(s);
+        if (healer_is_actively_healing)
+            reward -= s->damage_reward_coeff * s->hp_restored_this_tick;
     } else {
         reward = s->damage_reward_coeff *
             fmaxf(0.0f, s->damage_dealt_this_tick - s->hp_restored_this_tick);
     }
+    reward += s->tag_reward_coeff * (float)s->healer_tags_this_tick;
     reward -= s->shield_penalty_coeff * s->shield_damage_this_tick;
     return reward;
 }
