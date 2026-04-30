@@ -19,6 +19,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdarg.h>
+#include <stdint.h>
 #include <string.h>
 #include <math.h>
 #include <assert.h>
@@ -111,7 +112,10 @@ typedef struct Wordle {
     unsigned char min_count[WORDLE_ALPHABET];
     unsigned char max_count[WORDLE_ALPHABET];
 
-    unsigned char candidate_mask[WORDLE_NUM_WORDS];
+    /* Compact list of surviving word IDs in candidate_list[0..candidate_count).
+     * Recount partitions in place, so each step touches only the live set
+     * (typically <30 by turn 3) rather than scanning all 2315 words. */
+    uint16_t candidate_list[WORDLE_NUM_WORDS];
     int candidate_count;
 
     int total_greens;
@@ -226,17 +230,15 @@ static inline bool wordle_word_satisfies_constraints(const Wordle* env, int word
 }
 
 static inline int wordle_recount_candidates(Wordle* env) {
-    int n = 0;
-    for (int i = 0; i < WORDLE_NUM_WORDS; i++) {
-        if (!env->candidate_mask[i]) continue;
-        if (!wordle_word_satisfies_constraints(env, i)) {
-            env->candidate_mask[i] = 0;
-            continue;
+    int write = 0;
+    for (int read = 0; read < env->candidate_count; read++) {
+        int i = env->candidate_list[read];
+        if (wordle_word_satisfies_constraints(env, i)) {
+            env->candidate_list[write++] = (uint16_t)i;
         }
-        n++;
     }
-    env->candidate_count = n;
-    return n;
+    env->candidate_count = write;
+    return write;
 }
 
 void compute_observations(Wordle* env) {
@@ -302,7 +304,7 @@ void c_reset(Wordle* env) {
     for (int g = 0; g < WORDLE_MAX_GUESSES; g++) env->guess_ids[g] = -1;
 
     wordle_init_constraints(env);
-    memset(env->candidate_mask, 1, sizeof(env->candidate_mask));
+    for (int i = 0; i < WORDLE_NUM_WORDS; i++) env->candidate_list[i] = (uint16_t)i;
     env->candidate_count = WORDLE_NUM_WORDS;
 
     env->total_greens = 0;

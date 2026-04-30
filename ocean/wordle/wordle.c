@@ -40,11 +40,7 @@ static int find_word_id(const char* lower, int len) {
 static int pick_random_candidate(Wordle* env) {
     if (env->candidate_count <= 0) return rand_r(&env->rng) % WORDLE_NUM_WORDS;
     int target = (int)(rand_r(&env->rng) % (unsigned int)env->candidate_count);
-    int seen = 0;
-    for (int i = 0; i < WORDLE_NUM_WORDS; i++) {
-        if (env->candidate_mask[i] && seen++ == target) return i;
-    }
-    return rand_r(&env->rng) % WORDLE_NUM_WORDS;
+    return env->candidate_list[target];
 }
 
 static void demo_capture_typing(Wordle* env, DemoState* st) {
