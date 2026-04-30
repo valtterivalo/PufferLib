@@ -1601,10 +1601,11 @@ struct SelectCopyParams {
     int act_row_bytes;
     int lp_row_bytes;
     int horizon;
+    int train_fp16;  // 1: encoder reads fp16_obs_out (skip mb_obs f32 write); 0: encoder reads mb_obs (skip f16 write)
 };
 
 // Minibatch assembly: copy observations, actions, logprobs, values+advantages+returns, prio
-// Channel 0 fuses obs gather + f32→f16 cast: reads f32 src, writes f16 directly to fp16_obs_out.
+// Channel 0 fuses obs gather + f32→f16 cast. Only the variant the encoder will read gets written.
 // Dispatched as (minibatch_size, 5) threadgroups, each handles one channel for one row.
 kernel void select_copy_kernel(
     device char* mb_obs                 [[buffer(0)]],
@@ -1631,16 +1632,20 @@ kernel void select_copy_kernel(
     int src_row = (int)idx[mb];
 
     if (ch == 0) {
-        // Fused obs gather + f32→f16 cast: copy f32 to mb_obs AND write f16 directly.
-        // mb_obs f32 copy is needed because PPO reads embedded action masks from it.
+        // Fused obs gather + (optional) f32→f16 cast. Encoder reads exactly one variant
+        // depending on train_fp16; the other is dead-on-arrival, so skip writing it.
         const device float* sptr = (const device float*)(src_obs + (int64_t)src_row * p.obs_row_bytes);
-        int count = p.obs_row_bytes / 4;  // number of floats
-        device float* f32ptr = (device float*)(mb_obs + (int64_t)mb * p.obs_row_bytes);
-        device half* f16ptr = fp16_obs_out + (int64_t)mb * count;
-        for (int i = (int)tid; i < count; i += 256) {
-            float val = sptr[i];
-            f32ptr[i] = val;
-            f16ptr[i] = half(val);
+        int count = p.obs_row_bytes / 4;
+        if (p.train_fp16) {
+            device half* f16ptr = fp16_obs_out + (int64_t)mb * count;
+            for (int i = (int)tid; i < count; i += 256) {
+                f16ptr[i] = half(sptr[i]);
+            }
+        } else {
+            device float* f32ptr = (device float*)(mb_obs + (int64_t)mb * p.obs_row_bytes);
+            for (int i = (int)tid; i < count; i += 256) {
+                f32ptr[i] = sptr[i];
+            }
         }
     } else if (ch == 1) {
         // Copy actions
