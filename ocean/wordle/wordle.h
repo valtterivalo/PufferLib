@@ -44,7 +44,9 @@
 #define WORDLE_BUCKETS 16
 #define WORDLE_MAX_COUNT_UNKNOWN (WORDLE_WORD_LEN + 1)
 
-/* Observation layout offsets - keep in sync with WORDLE_OBS_SIZE. */
+/* Observation layout offsets - keep in sync with WORDLE_OBS_SIZE.
+ * letter_state was redundant (pure formula of min_count + max_count) and dropped.
+ */
 #define WORDLE_OBS_GUESS_LETTERS  (WORDLE_MAX_GUESSES * WORDLE_WORD_LEN * (WORDLE_ALPHABET + 1))
 #define WORDLE_OBS_FEEDBACK       (WORDLE_MAX_GUESSES * WORDLE_WORD_LEN * WORDLE_NUM_FB)
 #define WORDLE_OBS_TURN           (WORDLE_MAX_GUESSES + 1)
@@ -52,7 +54,6 @@
 #define WORDLE_OBS_FORBIDDEN_POS  (WORDLE_WORD_LEN * WORDLE_ALPHABET)
 #define WORDLE_OBS_MIN_COUNT      (WORDLE_ALPHABET * (WORDLE_WORD_LEN + 1))
 #define WORDLE_OBS_MAX_COUNT      (WORDLE_ALPHABET * (WORDLE_WORD_LEN + 2))
-#define WORDLE_OBS_LETTER_STATE   (WORDLE_ALPHABET * WORDLE_NUM_LETTER_STATES)
 #define WORDLE_OBS_REMAINING      (WORDLE_BUCKETS)
 
 #define WORDLE_OBS_SIZE ( \
@@ -63,7 +64,6 @@
     + WORDLE_OBS_FORBIDDEN_POS \
     + WORDLE_OBS_MIN_COUNT \
     + WORDLE_OBS_MAX_COUNT \
-    + WORDLE_OBS_LETTER_STATE \
     + WORDLE_OBS_REMAINING \
 )
 
@@ -284,12 +284,6 @@ void compute_observations(Wordle* env) {
         o[off + c * (WORDLE_WORD_LEN + 2) + idx] = 1;
     }
     off += WORDLE_OBS_MAX_COUNT;
-
-    for (int c = 0; c < WORDLE_ALPHABET; c++) {
-        int state = wordle_letter_state(env->min_count[c], env->max_count[c]);
-        o[off + c * WORDLE_NUM_LETTER_STATES + state] = 1;
-    }
-    off += WORDLE_OBS_LETTER_STATE;
 
     int bucket = (int)log2f((float)env->candidate_count);
     if (bucket < 0) bucket = 0;
