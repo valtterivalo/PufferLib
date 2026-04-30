@@ -71,6 +71,11 @@ typedef enum {
     + WORDLE_OBS_REMAINING \
 )
 
+/* Total observation written to the float buffer: feature prefix + action mask
+ * suffix. The training stack splits these at rollout time when mask_in_obs is
+ * set in env config. */
+#define WORDLE_OBS_TOTAL (WORDLE_OBS_SIZE + WORDLE_NUM_WORDS)
+
 typedef struct Log {
     float perf;
     float score;
@@ -90,7 +95,7 @@ typedef struct Client Client;
 
 typedef struct Wordle {
     Log log;
-    unsigned char* observations;
+    float* observations;
     float* actions;
     float* rewards;
     float* terminals;
@@ -244,15 +249,15 @@ static inline int wordle_remaining_bucket(int n) {
 }
 
 void compute_observations(Wordle* env) {
-    unsigned char* o = env->observations;
-    memset(o, 0, WORDLE_OBS_SIZE);
+    float* o = env->observations;
+    memset(o, 0, WORDLE_OBS_TOTAL * sizeof(float));
     int off = 0;
 
     for (int g = 0; g < WORDLE_MAX_GUESSES; g++) {
         for (int p = 0; p < WORDLE_WORD_LEN; p++) {
             int slot_off = off + (g * WORDLE_WORD_LEN + p) * (WORDLE_ALPHABET + 1);
             int letter_idx = (g < env->turn) ? env->guesses[g][p] : WORDLE_ALPHABET;
-            o[slot_off + letter_idx] = 1;
+            o[slot_off + letter_idx] = 1.0f;
         }
     }
     off += WORDLE_OBS_GUESS_LETTERS;
@@ -261,38 +266,55 @@ void compute_observations(Wordle* env) {
         for (int p = 0; p < WORDLE_WORD_LEN; p++) {
             int slot_off = off + (g * WORDLE_WORD_LEN + p) * WORDLE_NUM_FB;
             unsigned char fb = (g < env->turn) ? env->feedback[g][p] : WORDLE_FB_UNKNOWN;
-            o[slot_off + fb] = 1;
+            o[slot_off + fb] = 1.0f;
         }
     }
     off += WORDLE_OBS_FEEDBACK;
 
-    o[off + env->turn] = 1;
+    o[off + env->turn] = 1.0f;
     off += WORDLE_OBS_TURN;
 
-    memcpy(o + off, env->green_pos, sizeof(env->green_pos));
+    for (int i = 0; i < WORDLE_WORD_LEN; i++) {
+        for (int c = 0; c < WORDLE_ALPHABET; c++) {
+            o[off + i * WORDLE_ALPHABET + c] = (float)env->green_pos[i][c];
+        }
+    }
     off += WORDLE_OBS_GREEN_POS;
 
-    memcpy(o + off, env->forbidden_pos, sizeof(env->forbidden_pos));
+    for (int i = 0; i < WORDLE_WORD_LEN; i++) {
+        for (int c = 0; c < WORDLE_ALPHABET; c++) {
+            o[off + i * WORDLE_ALPHABET + c] = (float)env->forbidden_pos[i][c];
+        }
+    }
     off += WORDLE_OBS_FORBIDDEN_POS;
 
     for (int c = 0; c < WORDLE_ALPHABET; c++) {
         unsigned char mn = env->min_count[c];
         if (mn > WORDLE_WORD_LEN) mn = WORDLE_WORD_LEN;
-        o[off + c * (WORDLE_WORD_LEN + 1) + mn] = 1;
+        o[off + c * (WORDLE_WORD_LEN + 1) + mn] = 1.0f;
     }
     off += WORDLE_OBS_MIN_COUNT;
 
     for (int c = 0; c < WORDLE_ALPHABET; c++) {
         unsigned char mx = env->max_count[c];
         int idx = (mx == WORDLE_MAX_COUNT_UNKNOWN) ? (WORDLE_WORD_LEN + 1) : mx;
-        o[off + c * (WORDLE_WORD_LEN + 2) + idx] = 1;
+        o[off + c * (WORDLE_WORD_LEN + 2) + idx] = 1.0f;
     }
     off += WORDLE_OBS_MAX_COUNT;
 
-    o[off + wordle_remaining_bucket(env->candidate_count)] = 1;
+    o[off + wordle_remaining_bucket(env->candidate_count)] = 1.0f;
     off += WORDLE_OBS_REMAINING;
 
     assert(off == WORDLE_OBS_SIZE);
+
+    /* Action mask suffix: 1.0 for words still in the candidate set. The training
+     * stack reads this slice, applies it as logit suppression on non-candidates
+     * (-inf), and the policy can never sample a word that violates known
+     * constraints. */
+    float* mask = o + WORDLE_OBS_SIZE;
+    for (int i = 0; i < env->candidate_count; i++) {
+        mask[env->candidate_list[i]] = 1.0f;
+    }
 }
 
 void c_reset(Wordle* env) {

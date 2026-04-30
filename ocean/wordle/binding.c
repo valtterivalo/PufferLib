@@ -1,9 +1,9 @@
 #include "wordle.h"
 
-#define OBS_SIZE WORDLE_OBS_SIZE
+#define OBS_SIZE WORDLE_OBS_TOTAL
 #define NUM_ATNS 1
 #define ACT_SIZES { WORDLE_NUM_WORDS }
-#define OBS_TENSOR_T ByteTensor
+#define OBS_TENSOR_T FloatTensor
 
 #define Env Wordle
 #include "vecenv.h"

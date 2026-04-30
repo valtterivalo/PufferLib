@@ -98,7 +98,7 @@ int main(void) {
     env.reward_repeat = -0.05f;
     env.rng = (unsigned int)time(NULL);
 
-    unsigned char observations[WORDLE_OBS_SIZE];
+    float observations[WORDLE_OBS_TOTAL];
     float actions[1] = { 0 };
     float rewards[1] = { 0 };
     float terminals[1] = { 0 };

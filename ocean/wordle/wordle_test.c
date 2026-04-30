@@ -109,7 +109,7 @@ static void test_feedback_disjoint_all_gray(void) {
 
 static void test_target_always_satisfies(void) {
     Wordle env = (Wordle){0};
-    unsigned char observations[WORDLE_OBS_SIZE];
+    float observations[WORDLE_OBS_TOTAL];
     float actions[1] = {0}, rewards[1] = {0}, terminals[1] = {0};
     env.num_agents = 1;
     env.observations = observations;
@@ -138,7 +138,7 @@ static void test_target_always_satisfies(void) {
 
 static void test_recount_monotone_and_idempotent(void) {
     Wordle env = (Wordle){0};
-    unsigned char observations[WORDLE_OBS_SIZE];
+    float observations[WORDLE_OBS_TOTAL];
     float actions[1] = {0}, rewards[1] = {0}, terminals[1] = {0};
     env.num_agents = 1;
     env.observations = observations;
@@ -176,7 +176,7 @@ static void test_recount_monotone_and_idempotent(void) {
 
 static void test_solve_yields_reward_one(void) {
     Wordle env = (Wordle){0};
-    unsigned char observations[WORDLE_OBS_SIZE];
+    float observations[WORDLE_OBS_TOTAL];
     float actions[1] = {0}, rewards[1] = {0}, terminals[1] = {0};
     env.num_agents = 1;
     env.observations = observations;
@@ -201,7 +201,7 @@ static void test_solve_yields_reward_one(void) {
 
 static void test_max_guesses_terminates(void) {
     Wordle env = (Wordle){0};
-    unsigned char observations[WORDLE_OBS_SIZE];
+    float observations[WORDLE_OBS_TOTAL];
     float actions[1] = {0}, rewards[1] = {0}, terminals[1] = {0};
     env.num_agents = 1;
     env.observations = observations;
@@ -253,7 +253,7 @@ static void test_obs_size_consistent(void) {
 
 static void test_obs_one_hot_invariants(void) {
     Wordle env = (Wordle){0};
-    unsigned char observations[WORDLE_OBS_SIZE];
+    float observations[WORDLE_OBS_TOTAL];
     float actions[1] = {0}, rewards[1] = {0}, terminals[1] = {0};
     env.num_agents = 1;
     env.observations = observations;
@@ -301,8 +301,8 @@ static void test_obs_one_hot_invariants(void) {
 
 static void test_obs_matches_recompute(void) {
     Wordle env = (Wordle){0};
-    unsigned char observations[WORDLE_OBS_SIZE];
-    unsigned char shadow[WORDLE_OBS_SIZE];
+    float observations[WORDLE_OBS_TOTAL];
+    float shadow[WORDLE_OBS_TOTAL];
     float actions[1] = {0}, rewards[1] = {0}, terminals[1] = {0};
     env.num_agents = 1;
     env.observations = observations;
@@ -316,15 +316,55 @@ static void test_obs_matches_recompute(void) {
     for (int ep = 0; ep < episodes; ep++) {
         c_reset(&env);
         for (int t = 0; t < WORDLE_MAX_GUESSES; t++) {
-            unsigned char* saved = env.observations;
+            float* saved = env.observations;
             env.observations = shadow;
             compute_observations(&env);
             env.observations = saved;
-            for (int i = 0; i < WORDLE_OBS_SIZE; i++) {
+            for (int i = 0; i < WORDLE_OBS_TOTAL; i++) {
                 if (observations[i] != shadow[i]) {
-                    TEST_FAIL("ep %d turn %d: obs[%d]=%d shadow[%d]=%d",
-                              ep, t, i, observations[i], i, shadow[i]);
+                    TEST_FAIL("ep %d turn %d: obs[%d]=%f shadow[%d]=%f",
+                              ep, t, i, (double)observations[i], i, (double)shadow[i]);
                 }
+            }
+            checked++;
+            env.actions[0] = (float)rand_word_id();
+            c_step(&env);
+            if (env.terminals[0] != 0.0f) break;
+        }
+    }
+    TEST_PASS(checked);
+}
+
+static void test_mask_matches_candidate_set(void) {
+    Wordle env = (Wordle){0};
+    float observations[WORDLE_OBS_TOTAL];
+    float actions[1] = {0}, rewards[1] = {0}, terminals[1] = {0};
+    env.num_agents = 1;
+    env.observations = observations;
+    env.actions = actions;
+    env.rewards = rewards;
+    env.terminals = terminals;
+    env.rng = test_seed + 6;
+
+    int episodes = 300;
+    int checked = 0;
+    for (int ep = 0; ep < episodes; ep++) {
+        c_reset(&env);
+        for (int t = 0; t < WORDLE_MAX_GUESSES; t++) {
+            float* mask = observations + WORDLE_OBS_SIZE;
+            int set_count = 0;
+            for (int w = 0; w < WORDLE_NUM_WORDS; w++) {
+                bool is_set = mask[w] >= 0.5f;
+                bool should_be = wordle_word_satisfies_constraints(&env, w);
+                if (is_set != should_be) {
+                    TEST_FAIL("ep %d turn %d word %d: mask=%f satisfies=%d",
+                              ep, t, w, (double)mask[w], (int)should_be);
+                }
+                if (is_set) set_count++;
+            }
+            if (set_count != env.candidate_count) {
+                TEST_FAIL("ep %d turn %d: mask sum %d != candidate_count %d",
+                          ep, t, set_count, env.candidate_count);
             }
             checked++;
             env.actions[0] = (float)rand_word_id();
@@ -346,6 +386,7 @@ int main(void) {
     test_obs_size_consistent();
     test_obs_one_hot_invariants();
     test_obs_matches_recompute();
+    test_mask_matches_candidate_set();
 
     if (g_failures > 0) {
         fprintf(stderr, "\n%d FAILURES\n", g_failures);
