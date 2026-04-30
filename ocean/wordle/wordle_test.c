@@ -174,7 +174,7 @@ static void test_recount_monotone_and_idempotent(void) {
 /* Episode lifecycle                                                   */
 /* ------------------------------------------------------------------ */
 
-static void test_solve_yields_reward_one(void) {
+static void test_solve_yields_score_aligned_reward(void) {
     Wordle env = (Wordle){0};
     float observations[WORDLE_OBS_TOTAL];
     float actions[1] = {0}, rewards[1] = {0}, terminals[1] = {0};
@@ -187,13 +187,14 @@ static void test_solve_yields_reward_one(void) {
     env.rng = test_seed + 2;
 
     int episodes = 200;
+    float expected = 1.0f;
     for (int ep = 0; ep < episodes; ep++) {
         c_reset(&env);
         env.actions[0] = (float)env.target_id;
         c_step(&env);
-        if (env.rewards[0] != 1.0f || env.terminals[0] != 1.0f) {
-            TEST_FAIL("episode %d: target guess gave reward=%f terminal=%f",
-                      ep, (double)env.rewards[0], (double)env.terminals[0]);
+        if (env.rewards[0] != expected || env.terminals[0] != 1.0f) {
+            TEST_FAIL("episode %d: turn-1 solve gave reward=%f (expected %f) terminal=%f",
+                      ep, (double)env.rewards[0], (double)expected, (double)env.terminals[0]);
         }
     }
     TEST_PASS(episodes);
@@ -381,7 +382,7 @@ int main(void) {
     test_feedback_disjoint_all_gray();
     test_target_always_satisfies();
     test_recount_monotone_and_idempotent();
-    test_solve_yields_reward_one();
+    test_solve_yields_score_aligned_reward();
     test_max_guesses_terminates();
     test_obs_size_consistent();
     test_obs_one_hot_invariants();

@@ -7,9 +7,11 @@
  *
  * Action: Discrete(WORDLE_NUM_WORDS) - index into the precompiled word table.
  * Observation: ByteTensor of OBS_SIZE binary features. Layout in compute_observations.
- * Reward: -reward_step + reward_info*(info_bits/log2(NUM_WORDS)) per step,
- * plus reward_repeat if the guess was a repeat, plus reward_win on solve or
- * reward_fail on 6th-guess miss. Original 5-component shaping.
+ * Reward: reward_win * (MAX_GUESSES + 1 - turn) / MAX_GUESSES on solve, 0
+ * otherwise. Sparse, terminal-only, score-aligned (faster solve = more
+ * reward). Normalized so turn-1 solve == reward_win and turn-6 solve ==
+ * reward_win / MAX_GUESSES, keeping per-step reward within the training
+ * stack's [-1, 1] clamp range.
  *
  * The full state of the game (history, derived constraints, candidate set)
  * is recomputed incrementally on each step so that compute_observations and
@@ -101,11 +103,7 @@ typedef struct Wordle {
     float* terminals;
     int num_agents;
 
-    float reward_step;
-    float reward_info;
     float reward_win;
-    float reward_fail;
-    float reward_repeat;
 
     int target_id;
     int turn;
@@ -362,25 +360,18 @@ void c_step(Wordle* env) {
     env->total_greens += greens;
     env->total_yellows += yellows;
 
-    int prev_count = env->candidate_count;
     wordle_apply_constraints(env, guess, fb);
     wordle_recount_candidates(env);
 
-    static const float info_norm = 11.176558f;
-    float info_bits = log2f((float)prev_count) - log2f((float)env->candidate_count);
-    if (info_bits < 0.0f) info_bits = 0.0f;
-
-    float reward = env->reward_step + env->reward_info * (info_bits / info_norm);
-    if (is_repeat) {
-        reward += env->reward_repeat;
-        env->repeats_in_episode++;
-    }
+    if (is_repeat) env->repeats_in_episode++;
 
     env->turn++;
     bool solved = (greens == WORDLE_WORD_LEN);
     bool out_of_guesses = (env->turn >= WORDLE_MAX_GUESSES);
-    if (solved) reward += env->reward_win;
-    else if (out_of_guesses) reward += env->reward_fail;
+    float reward = solved
+        ? env->reward_win * (float)(WORDLE_MAX_GUESSES + 1 - env->turn)
+            / (float)WORDLE_MAX_GUESSES
+        : 0.0f;
 
     env->rewards[0] = reward;
     env->episode_reward += reward;
