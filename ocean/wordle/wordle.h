@@ -107,6 +107,7 @@ typedef struct Wordle {
 
     unsigned char green_pos[WORDLE_WORD_LEN][WORDLE_ALPHABET];
     unsigned char forbidden_pos[WORDLE_WORD_LEN][WORDLE_ALPHABET];
+    unsigned char green_letter[WORDLE_WORD_LEN];  /* 0xFF = unknown; cache for the recount hot path */
     unsigned char min_count[WORDLE_ALPHABET];
     unsigned char max_count[WORDLE_ALPHABET];
 
@@ -167,6 +168,7 @@ static inline int wordle_letter_state(int mn, int mx) {
 static inline void wordle_init_constraints(Wordle* env) {
     memset(env->green_pos, 0, sizeof(env->green_pos));
     memset(env->forbidden_pos, 0, sizeof(env->forbidden_pos));
+    memset(env->green_letter, 0xFF, sizeof(env->green_letter));
     memset(env->min_count, 0, sizeof(env->min_count));
     memset(env->max_count, WORDLE_MAX_COUNT_UNKNOWN, sizeof(env->max_count));
 }
@@ -182,6 +184,7 @@ static inline void wordle_apply_constraints(
         unsigned char c = guess[i];
         if (fb[i] == WORDLE_FB_GREEN) {
             env->green_pos[i][c] = 1;
+            env->green_letter[i] = c;
             colored[c]++;
         } else if (fb[i] == WORDLE_FB_YELLOW) {
             env->forbidden_pos[i][c] = 1;
@@ -208,12 +211,11 @@ static inline bool wordle_word_satisfies_constraints(const Wordle* env, int word
     const unsigned char* w = WORDLE_WORDS[word_id];
     for (int i = 0; i < WORDLE_WORD_LEN; i++) {
         unsigned char c = w[i];
+        unsigned char green = env->green_letter[i];
+        if (green != 0xFF && c != green) return false;
         if (env->forbidden_pos[i][c]) return false;
-        for (int g = 0; g < WORDLE_ALPHABET; g++) {
-            if (env->green_pos[i][g] && g != c) return false;
-        }
     }
-    int counts[WORDLE_ALPHABET] = {0};
+    unsigned char counts[WORDLE_ALPHABET] = {0};
     for (int i = 0; i < WORDLE_WORD_LEN; i++) counts[w[i]]++;
     for (int c = 0; c < WORDLE_ALPHABET; c++) {
         if (counts[c] < env->min_count[c]) return false;
