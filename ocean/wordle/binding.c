@@ -8,19 +8,13 @@
 #define Env Wordle
 #include "vecenv.h"
 
-static inline float kwarg_or(Dict* kwargs, const char* key, float fallback) {
-    DictItem* item = dict_get_unsafe(kwargs, key);
-    return item ? (float)item->value : fallback;
-}
-
 void my_init(Env* env, Dict* kwargs) {
     env->num_agents = 1;
-    env->reward_step   = kwarg_or(kwargs, "reward_step",   -0.01f);
-    env->reward_info   = kwarg_or(kwargs, "reward_info",    0.10f);
-    env->reward_win    = kwarg_or(kwargs, "reward_win",     1.00f);
-    env->reward_fail   = kwarg_or(kwargs, "reward_fail",   -0.20f);
-    env->reward_repeat = kwarg_or(kwargs, "reward_repeat", -0.05f);
-    env->client = NULL;
+    env->reward_step   = (float)dict_get(kwargs, "reward_step")->value;
+    env->reward_info   = (float)dict_get(kwargs, "reward_info")->value;
+    env->reward_win    = (float)dict_get(kwargs, "reward_win")->value;
+    env->reward_fail   = (float)dict_get(kwargs, "reward_fail")->value;
+    env->reward_repeat = (float)dict_get(kwargs, "reward_repeat")->value;
 }
 
 void my_log(Log* log, Dict* out) {
