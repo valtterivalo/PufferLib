@@ -18,7 +18,6 @@
 
 #include <stdlib.h>
 #include <stdio.h>
-#include <stdarg.h>
 #include <stdint.h>
 #include <string.h>
 #include <math.h>
@@ -30,24 +29,26 @@
 
 #define WORDLE_MAX_GUESSES 6
 #define WORDLE_ALPHABET 26
-#define WORDLE_NUM_FB 4
-#define WORDLE_FB_UNKNOWN 0
-#define WORDLE_FB_GRAY 1
-#define WORDLE_FB_YELLOW 2
-#define WORDLE_FB_GREEN 3
 
-#define WORDLE_LETTER_UNKNOWN 0
-#define WORDLE_LETTER_ABSENT 1
-#define WORDLE_LETTER_PRESENT 2
-#define WORDLE_LETTER_EXACT 3
-#define WORDLE_NUM_LETTER_STATES 4
+typedef enum {
+    WORDLE_FB_UNKNOWN = 0,
+    WORDLE_FB_GRAY    = 1,
+    WORDLE_FB_YELLOW  = 2,
+    WORDLE_FB_GREEN   = 3,
+    WORDLE_NUM_FB     = 4,
+} WordleFeedback;
+
+typedef enum {
+    WORDLE_LETTER_UNKNOWN     = 0,
+    WORDLE_LETTER_ABSENT      = 1,
+    WORDLE_LETTER_PRESENT     = 2,
+    WORDLE_LETTER_EXACT       = 3,
+    WORDLE_NUM_LETTER_STATES  = 4,
+} WordleLetterState;
 
 #define WORDLE_BUCKETS 16
 #define WORDLE_MAX_COUNT_UNKNOWN (WORDLE_WORD_LEN + 1)
 
-/* Observation layout offsets - keep in sync with WORDLE_OBS_SIZE.
- * letter_state was redundant (pure formula of min_count + max_count) and dropped.
- */
 #define WORDLE_OBS_GUESS_LETTERS  (WORDLE_MAX_GUESSES * WORDLE_WORD_LEN * (WORDLE_ALPHABET + 1))
 #define WORDLE_OBS_FEEDBACK       (WORDLE_MAX_GUESSES * WORDLE_WORD_LEN * WORDLE_NUM_FB)
 #define WORDLE_OBS_TURN           (WORDLE_MAX_GUESSES + 1)
@@ -102,24 +103,17 @@ typedef struct Wordle {
 
     unsigned char green_pos[WORDLE_WORD_LEN][WORDLE_ALPHABET];
     unsigned char forbidden_pos[WORDLE_WORD_LEN][WORDLE_ALPHABET];
-    unsigned char green_letter[WORDLE_WORD_LEN];  /* 0xFF = unknown; cache for the recount hot path */
+    /* 0xFF = no green known at this position. */
+    unsigned char green_letter[WORDLE_WORD_LEN];
     unsigned char min_count[WORDLE_ALPHABET];
     unsigned char max_count[WORDLE_ALPHABET];
 
-    /* Compact list of surviving word IDs in candidate_list[0..candidate_count).
-     * Recount partitions in place, so each step touches only the live set
-     * (typically <30 by turn 3) rather than scanning all 2315 words. */
     uint16_t candidate_list[WORDLE_NUM_WORDS];
     int candidate_count;
 
     int total_greens;
     int total_yellows;
     int repeats_in_episode;
-    float info_bits_total;
-    float episode_reward;
-
-    float last_info_bits;
-    bool last_was_repeat;
 
     Client* client;
     unsigned int rng;
@@ -281,8 +275,8 @@ void compute_observations(Wordle* env) {
     }
     off += WORDLE_OBS_MAX_COUNT;
 
-    int bucket = (int)log2f((float)env->candidate_count);
-    if (bucket < 0) bucket = 0;
+    int n = env->candidate_count;
+    int bucket = (n <= 1) ? 0 : 31 - __builtin_clz((unsigned int)n);
     if (bucket >= WORDLE_BUCKETS) bucket = WORDLE_BUCKETS - 1;
     o[off + bucket] = 1;
     off += WORDLE_OBS_REMAINING;
@@ -304,10 +298,6 @@ void c_reset(Wordle* env) {
     env->total_greens = 0;
     env->total_yellows = 0;
     env->repeats_in_episode = 0;
-    env->info_bits_total = 0.0f;
-    env->episode_reward = 0.0f;
-    env->last_info_bits = 0.0f;
-    env->last_was_repeat = false;
 
     compute_observations(env);
 }
@@ -338,40 +328,31 @@ void c_step(Wordle* env) {
     env->total_greens += greens;
     env->total_yellows += yellows;
 
-    int prev_count = env->candidate_count;
     wordle_apply_constraints(env, guess, fb);
     wordle_recount_candidates(env);
-
-    float info_bits = log2f((float)prev_count) - log2f((float)env->candidate_count);
-    if (info_bits < 0.0f) info_bits = 0.0f;
-    env->info_bits_total += info_bits;
-    env->last_info_bits = info_bits;
-    env->last_was_repeat = is_repeat;
 
     if (is_repeat) env->repeats_in_episode++;
 
     env->turn++;
     bool solved = (greens == WORDLE_WORD_LEN);
     bool out_of_guesses = (env->turn >= WORDLE_MAX_GUESSES);
-    float reward = solved ? 1.0f : 0.0f;
-
-    env->rewards[0] = reward;
-    env->episode_reward += reward;
+    env->rewards[0] = solved ? 1.0f : 0.0f;
     env->terminals[0] = (solved || out_of_guesses) ? 1.0f : 0.0f;
 
     if (env->terminals[0]) {
-        int gu = env->turn > 0 ? env->turn : 1;
+        float gu = (float)env->turn;
+        float final_log2 = solved ? 0.0f : log2f((float)env->candidate_count);
         env->log.perf                  += solved ? 1.0f : 0.0f;
         env->log.score                 += solved ? (float)(WORDLE_MAX_GUESSES + 1 - env->turn) : 0.0f;
-        env->log.episode_return        += env->episode_reward;
-        env->log.episode_length        += (float)env->turn;
+        env->log.episode_return        += solved ? 1.0f : 0.0f;
+        env->log.episode_length        += gu;
         env->log.win_rate              += solved ? 1.0f : 0.0f;
-        env->log.guesses               += (float)env->turn;
-        env->log.repeat_rate           += (float)env->repeats_in_episode / (float)gu;
-        env->log.info_bits             += env->info_bits_total;
-        env->log.final_log2_candidates += solved ? 0.0f : log2f((float)env->candidate_count);
-        env->log.mean_greens           += (float)env->total_greens / (float)gu;
-        env->log.mean_yellows          += (float)env->total_yellows / (float)gu;
+        env->log.guesses               += gu;
+        env->log.repeat_rate           += (float)env->repeats_in_episode / gu;
+        env->log.info_bits             += log2f((float)WORDLE_NUM_WORDS) - final_log2;
+        env->log.final_log2_candidates += final_log2;
+        env->log.mean_greens           += (float)env->total_greens / gu;
+        env->log.mean_yellows          += (float)env->total_yellows / gu;
         env->log.n                     += 1.0f;
         c_reset(env);
         return;
@@ -420,20 +401,14 @@ static inline Color wordle_feedback_color(unsigned char fb) {
 }
 
 static const Color WORDLE_LETTER_COL[WORDLE_NUM_LETTER_STATES] = {
-    { 140, 160, 160, 255 },  /* UNKNOWN -> dim */
-    {  58,  58,  60, 255 },  /* ABSENT  -> gray */
-    { 181, 159,  59, 255 },  /* PRESENT -> yellow */
-    {  83, 141,  78, 255 },  /* EXACT   -> green */
+    { 140, 160, 160, 255 },
+    {  58,  58,  60, 255 },
+    { 181, 159,  59, 255 },
+    {  83, 141,  78, 255 },
 };
 
-__attribute__((format(printf, 5, 6)))
-static inline void wordle_panel(int x, int* y, int fs, Color col, const char* fmt, ...) {
-    char buf[128];
-    va_list ap;
-    va_start(ap, fmt);
-    vsnprintf(buf, sizeof(buf), fmt, ap);
-    va_end(ap);
-    DrawText(buf, x, *y, fs, col);
+static inline void wordle_panel_line(int x, int* y, int fs, Color col, const char* text) {
+    DrawText(text, x, *y, fs, col);
     *y += fs + 4;
 }
 
@@ -469,8 +444,8 @@ void wordle_draw_frame(Wordle* env) {
 
     int panel_x = WORDLE_RENDER_LEFT + WORDLE_RENDER_BOARD_W + WORDLE_RENDER_LEFT;
     int top_y = 36;
-    wordle_panel(WORDLE_RENDER_LEFT + 200, &top_y, 26, WORDLE_COL_DIM,
-                 "Turn %d / %d", env->turn, WORDLE_MAX_GUESSES);
+    wordle_panel_line(WORDLE_RENDER_LEFT + 200, &top_y, 26, WORDLE_COL_DIM,
+                      TextFormat("Turn %d / %d", env->turn, WORDLE_MAX_GUESSES));
 
     for (int g = 0; g < WORDLE_MAX_GUESSES; g++) {
         for (int p = 0; p < WORDLE_WORD_LEN; p++) {
@@ -485,18 +460,16 @@ void wordle_draw_frame(Wordle* env) {
     int panel_y = WORDLE_RENDER_TOP;
     if (c->reveal_target) {
         const unsigned char* w = WORDLE_WORDS[env->target_id];
-        wordle_panel(panel_x, &panel_y, 22, WORDLE_COL_TEXT,
-                     "Target: %c%c%c%c%c", 'A'+w[0], 'A'+w[1], 'A'+w[2], 'A'+w[3], 'A'+w[4]);
+        wordle_panel_line(panel_x, &panel_y, 22, WORDLE_COL_TEXT,
+            TextFormat("Target: %c%c%c%c%c", 'A'+w[0], 'A'+w[1], 'A'+w[2], 'A'+w[3], 'A'+w[4]));
     } else {
-        wordle_panel(panel_x, &panel_y, 22, WORDLE_COL_DIM, "Target hidden  (R toggles)");
+        wordle_panel_line(panel_x, &panel_y, 22, WORDLE_COL_DIM, "Target hidden  (R toggles)");
     }
-    wordle_panel(panel_x, &panel_y, 20, WORDLE_COL_TEXT, "Candidates: %d", env->candidate_count);
-    wordle_panel(panel_x, &panel_y, 20, WORDLE_COL_DIM, "Last info bits: %.2f", (double)env->last_info_bits);
-    wordle_panel(panel_x, &panel_y, 20, WORDLE_COL_DIM, "Total info: %.2f / 11.18", (double)env->info_bits_total);
-    wordle_panel(panel_x, &panel_y, 20,
-                 env->repeats_in_episode > 0 ? WORDLE_COL_BAD : WORDLE_COL_DIM,
-                 "Repeats: %d", env->repeats_in_episode);
-    wordle_panel(panel_x, &panel_y, 20, WORDLE_COL_TEXT, "Episode reward: %+.3f", (double)env->episode_reward);
+    wordle_panel_line(panel_x, &panel_y, 20, WORDLE_COL_TEXT,
+        TextFormat("Candidates: %d", env->candidate_count));
+    wordle_panel_line(panel_x, &panel_y, 20,
+        env->repeats_in_episode > 0 ? WORDLE_COL_BAD : WORDLE_COL_DIM,
+        TextFormat("Repeats: %d", env->repeats_in_episode));
     panel_y += 8;
 
     DrawText("Letters:", panel_x, panel_y, 20, WORDLE_COL_ACCENT);
@@ -513,18 +486,13 @@ void wordle_draw_frame(Wordle* env) {
             DrawText(letter, cell_x + (20 - tw) / 2, cell_y + 4, 16, WORDLE_COL_TEXT);
         }
     }
-    panel_y += 28 * 2 + 8;
-
-    if (env->last_was_repeat) {
-        DrawText("REPEAT GUESS", panel_x, panel_y, 18, WORDLE_COL_BAD);
-    }
 
     int hud_y = WORDLE_RENDER_TOP + WORDLE_RENDER_BOARD_H + 16;
-    int hud_x = WORDLE_RENDER_LEFT;
-    wordle_panel(hud_x, &hud_y, 18, WORDLE_COL_DIM,
-                 "Episodes: %.0f  Wins: %.0f  Avg score: %.2f",
-                 (double)env->log.n, (double)env->log.win_rate,
-                 (double)(env->log.n > 0 ? env->log.score / env->log.n : 0.0f));
+    float avg_score = env->log.n > 0 ? env->log.score / env->log.n : 0.0f;
+    DrawText(
+        TextFormat("Episodes: %.0f  Wins: %.0f  Avg score: %.2f",
+                   (double)env->log.n, (double)env->log.win_rate, (double)avg_score),
+        WORDLE_RENDER_LEFT, hud_y, 18, WORDLE_COL_DIM);
 }
 
 void c_render(Wordle* env) {

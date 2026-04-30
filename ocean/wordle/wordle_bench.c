@@ -24,10 +24,6 @@ static double now_ns(void) {
     return (double)ts.tv_sec * 1e9 + (double)ts.tv_nsec;
 }
 
-/* Variants of c_step that skip selected work, used for breakdown attribution.
- * Behaviour-equivalent to c_step except for the noted skip — episode lifecycle
- * and reward shape are preserved so the env state distribution we measure is
- * the same one the real c_step sees. */
 typedef enum { BENCH_FULL = 0, BENCH_NO_RECOUNT = 1, BENCH_NO_OBS = 2, BENCH_NO_BOTH = 3 } BenchMode;
 
 static void bench_step(Wordle* env, BenchMode mode) {
@@ -55,27 +51,17 @@ static void bench_step(Wordle* env, BenchMode mode) {
     env->total_greens += greens;
     env->total_yellows += yellows;
 
-    int prev_count = env->candidate_count;
     wordle_apply_constraints(env, guess, fb);
     if (mode == BENCH_FULL || mode == BENCH_NO_OBS) {
         wordle_recount_candidates(env);
     }
-
-    float info_bits = log2f((float)prev_count) - log2f((float)env->candidate_count);
-    if (info_bits < 0.0f) info_bits = 0.0f;
-    env->info_bits_total += info_bits;
-    env->last_info_bits = info_bits;
-    env->last_was_repeat = is_repeat;
 
     if (is_repeat) env->repeats_in_episode++;
 
     env->turn++;
     bool solved = (greens == WORDLE_WORD_LEN);
     bool out_of_guesses = (env->turn >= WORDLE_MAX_GUESSES);
-    float reward = solved ? 1.0f : 0.0f;
-
-    env->rewards[0] = reward;
-    env->episode_reward += reward;
+    env->rewards[0] = solved ? 1.0f : 0.0f;
     env->terminals[0] = (solved || out_of_guesses) ? 1.0f : 0.0f;
 
     if (env->terminals[0]) {
