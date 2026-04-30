@@ -7,7 +7,9 @@
  *
  * Action: Discrete(WORDLE_NUM_WORDS) - index into the precompiled word table.
  * Observation: ByteTensor of OBS_SIZE binary features. Layout in compute_observations.
- * Reward: +1 on solve, 0 otherwise. Sparse, terminal-only.
+ * Reward: +1 on solve, plus reward_info * info_bits / log2(NUM_WORDS) per step.
+ * Per-episode info bonus telescopes to log2(N0) - log2(final_count) and is bounded
+ * by reward_info, keeping the win signal dominant.
  *
  * The full state of the game (history, derived constraints, candidate set)
  * is recomputed incrementally on each step so that compute_observations and
@@ -94,6 +96,8 @@ typedef struct Wordle {
     float* terminals;
     int num_agents;
 
+    float reward_info;
+
     int target_id;
     int turn;
 
@@ -114,6 +118,7 @@ typedef struct Wordle {
     int total_greens;
     int total_yellows;
     int repeats_in_episode;
+    float episode_reward;
 
     Client* client;
     unsigned int rng;
@@ -300,6 +305,7 @@ void c_reset(Wordle* env) {
     env->total_greens = 0;
     env->total_yellows = 0;
     env->repeats_in_episode = 0;
+    env->episode_reward = 0.0f;
 
     compute_observations(env);
 }
@@ -330,15 +336,22 @@ void c_step(Wordle* env) {
     env->total_greens += greens;
     env->total_yellows += yellows;
 
+    int prev_count = env->candidate_count;
     wordle_apply_constraints(env, guess, fb);
     wordle_recount_candidates(env);
+
+    static const float info_norm = 11.176558f;  /* log2(WORDLE_NUM_WORDS = 2315) */
+    float info_bits = log2f((float)prev_count) - log2f((float)env->candidate_count);
+    if (info_bits < 0.0f) info_bits = 0.0f;
 
     if (is_repeat) env->repeats_in_episode++;
 
     env->turn++;
     bool solved = (greens == WORDLE_WORD_LEN);
     bool out_of_guesses = (env->turn >= WORDLE_MAX_GUESSES);
-    env->rewards[0] = solved ? 1.0f : 0.0f;
+    float reward = (solved ? 1.0f : 0.0f) + env->reward_info * (info_bits / info_norm);
+    env->rewards[0] = reward;
+    env->episode_reward += reward;
     env->terminals[0] = (solved || out_of_guesses) ? 1.0f : 0.0f;
 
     if (env->terminals[0]) {
@@ -346,7 +359,7 @@ void c_step(Wordle* env) {
         float final_log2 = solved ? 0.0f : log2f((float)env->candidate_count);
         env->log.perf                  += solved ? 1.0f : 0.0f;
         env->log.score                 += solved ? (float)(WORDLE_MAX_GUESSES + 1 - env->turn) : 0.0f;
-        env->log.episode_return        += solved ? 1.0f : 0.0f;
+        env->log.episode_return        += env->episode_reward;
         env->log.episode_length        += gu;
         env->log.win_rate              += solved ? 1.0f : 0.0f;
         env->log.guesses               += gu;

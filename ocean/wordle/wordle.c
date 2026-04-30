@@ -91,6 +91,7 @@ static void demo_overlay(DemoState* st) {
 int main(void) {
     Wordle env = (Wordle){0};
     env.num_agents = 1;
+    env.reward_info = 0.10f;
     env.rng = (unsigned int)time(NULL);
 
     unsigned char observations[WORDLE_OBS_SIZE];
