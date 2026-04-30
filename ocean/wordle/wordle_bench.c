@@ -91,7 +91,7 @@ int main(int argc, char** argv) {
 
     Wordle env = (Wordle){0};
     env.num_agents = 1;
-    env.reward_info = 0.10f;
+    env.reward_candidate = 0.02f;
     env.rng = 42;
 
     unsigned char observations[WORDLE_OBS_SIZE];
