@@ -67,18 +67,12 @@ static void bench_step(Wordle* env, BenchMode mode) {
     env->last_info_bits = info_bits;
     env->last_was_repeat = is_repeat;
 
-    static const float info_norm = 11.176558f;
-    float reward = env->reward_step + env->reward_info * (info_bits / info_norm);
-    if (is_repeat) {
-        reward += env->reward_repeat;
-        env->repeats_in_episode++;
-    }
+    if (is_repeat) env->repeats_in_episode++;
 
     env->turn++;
     bool solved = (greens == WORDLE_WORD_LEN);
     bool out_of_guesses = (env->turn >= WORDLE_MAX_GUESSES);
-    if (solved) reward += env->reward_win;
-    else if (out_of_guesses) reward += env->reward_fail;
+    float reward = solved ? 1.0f : 0.0f;
 
     env->rewards[0] = reward;
     env->episode_reward += reward;
@@ -111,11 +105,6 @@ int main(int argc, char** argv) {
 
     Wordle env = (Wordle){0};
     env.num_agents = 1;
-    env.reward_step = -0.01f;
-    env.reward_info = 0.10f;
-    env.reward_win = 1.0f;
-    env.reward_fail = -0.20f;
-    env.reward_repeat = -0.05f;
     env.rng = 42;
 
     unsigned char observations[WORDLE_OBS_SIZE];

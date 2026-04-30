@@ -9,12 +9,8 @@
 #include "vecenv.h"
 
 void my_init(Env* env, Dict* kwargs) {
+    (void)kwargs;
     env->num_agents = 1;
-    env->reward_step   = (float)dict_get(kwargs, "reward_step")->value;
-    env->reward_info   = (float)dict_get(kwargs, "reward_info")->value;
-    env->reward_win    = (float)dict_get(kwargs, "reward_win")->value;
-    env->reward_fail   = (float)dict_get(kwargs, "reward_fail")->value;
-    env->reward_repeat = (float)dict_get(kwargs, "reward_repeat")->value;
 }
 
 void my_log(Log* log, Dict* out) {

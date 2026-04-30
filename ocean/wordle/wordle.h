@@ -7,7 +7,7 @@
  *
  * Action: Discrete(WORDLE_NUM_WORDS) - index into the precompiled word table.
  * Observation: ByteTensor of OBS_SIZE binary features. Layout in compute_observations.
- * Reward: -step + info_gain + win - loss - repeat (see hyperparams).
+ * Reward: +1 on solve, 0 otherwise. Sparse, terminal-only.
  *
  * The full state of the game (history, derived constraints, candidate set)
  * is recomputed incrementally on each step so that compute_observations and
@@ -92,12 +92,6 @@ typedef struct Wordle {
     float* rewards;
     float* terminals;
     int num_agents;
-
-    float reward_step;
-    float reward_info;
-    float reward_win;
-    float reward_fail;
-    float reward_repeat;
 
     int target_id;
     int turn;
@@ -354,18 +348,12 @@ void c_step(Wordle* env) {
     env->last_info_bits = info_bits;
     env->last_was_repeat = is_repeat;
 
-    static const float info_norm = 11.176558f;  /* log2(WORDLE_NUM_WORDS=2315); fine for any vocab >= 2 */
-    float reward = env->reward_step + env->reward_info * (info_bits / info_norm);
-    if (is_repeat) {
-        reward += env->reward_repeat;
-        env->repeats_in_episode++;
-    }
+    if (is_repeat) env->repeats_in_episode++;
 
     env->turn++;
     bool solved = (greens == WORDLE_WORD_LEN);
     bool out_of_guesses = (env->turn >= WORDLE_MAX_GUESSES);
-    if (solved) reward += env->reward_win;
-    else if (out_of_guesses) reward += env->reward_fail;
+    float reward = solved ? 1.0f : 0.0f;
 
     env->rewards[0] = reward;
     env->episode_reward += reward;
