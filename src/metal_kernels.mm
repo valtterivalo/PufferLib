@@ -931,7 +931,7 @@ void prio_sample(int minibatch_segments, int total_agents,
 void mtl_select_copy(RolloutBuf &rollouts, TrainGraph &graph,
                       const int64_t *idx, const float *advantages,
                       const float *mb_prio, int mb_segs,
-                      void *fp16_obs_out, cudaStream_t stream) {
+                      void *fp16_obs_out, bool train_fp16, cudaStream_t stream) {
   int obs_row_bytes = (int)(puf_numel(rollouts.observations.shape) /
                             rollouts.observations.shape[0]) *
                       (int)sizeof(float);
@@ -964,8 +964,8 @@ void mtl_select_copy(RolloutBuf &rollouts, TrainGraph &graph,
   mtl_set_ptr(ms, mb_prio, 13);
 
   struct {
-    int obs_row_bytes, act_row_bytes, lp_row_bytes, horizon;
-  } params = {obs_row_bytes, act_row_bytes, lp_row_bytes, horizon};
+    int obs_row_bytes, act_row_bytes, lp_row_bytes, horizon, train_fp16;
+  } params = {obs_row_bytes, act_row_bytes, lp_row_bytes, horizon, train_fp16 ? 1 : 0};
   mtl_set_params(ms, params, 14);
 
   mtl_set_ptr(ms, fp16_obs_out, 15);

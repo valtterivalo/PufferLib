@@ -590,7 +590,7 @@ void train_impl(PuffeRL& pufferl) {
                 pufferl.advantages_puf.data,
                 pufferl.prio_bufs.mb_prio.data,
                 minibatch_segments,
-                pufferl.fp16_obs_buf.bytes, s);
+                pufferl.fp16_obs_buf.bytes, pufferl.train_fp16, s);
             // gather masks from train_masks into mb_masks using same priority indices.
             // reuses index_copy_kernel as a gather: dst[i] = src[idx[i]].
             if (pufferl.has_mask) {
