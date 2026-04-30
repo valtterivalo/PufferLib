@@ -183,6 +183,7 @@ static void test_solve_yields_reward_one(void) {
     env.actions = actions;
     env.rewards = rewards;
     env.terminals = terminals;
+    env.reward_win = 1.0f;
     env.rng = test_seed + 2;
 
     int episodes = 200;

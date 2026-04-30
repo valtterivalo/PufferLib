@@ -10,7 +10,11 @@
 
 void my_init(Env* env, Dict* kwargs) {
     env->num_agents = 1;
-    env->reward_candidate = (float)dict_get(kwargs, "reward_candidate")->value;
+    env->reward_step   = (float)dict_get(kwargs, "reward_step")->value;
+    env->reward_info   = (float)dict_get(kwargs, "reward_info")->value;
+    env->reward_win    = (float)dict_get(kwargs, "reward_win")->value;
+    env->reward_fail   = (float)dict_get(kwargs, "reward_fail")->value;
+    env->reward_repeat = (float)dict_get(kwargs, "reward_repeat")->value;
 }
 
 void my_log(Log* log, Dict* out) {
@@ -25,5 +29,4 @@ void my_log(Log* log, Dict* out) {
     dict_set(out, "final_log2_candidates", log->final_log2_candidates);
     dict_set(out, "mean_greens",           log->mean_greens);
     dict_set(out, "mean_yellows",          log->mean_yellows);
-    dict_set(out, "in_candidate_rate",     log->in_candidate_rate);
 }
