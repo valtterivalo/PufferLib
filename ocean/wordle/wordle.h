@@ -229,6 +229,11 @@ static inline int wordle_recount_candidates(Wordle* env) {
     return write;
 }
 
+static inline int wordle_remaining_bucket(int n) {
+    int bucket = (n <= 1) ? 0 : 31 - __builtin_clz((unsigned int)n);
+    return bucket >= WORDLE_BUCKETS ? WORDLE_BUCKETS - 1 : bucket;
+}
+
 void compute_observations(Wordle* env) {
     unsigned char* o = env->observations;
     memset(o, 0, WORDLE_OBS_SIZE);
@@ -275,10 +280,7 @@ void compute_observations(Wordle* env) {
     }
     off += WORDLE_OBS_MAX_COUNT;
 
-    int n = env->candidate_count;
-    int bucket = (n <= 1) ? 0 : 31 - __builtin_clz((unsigned int)n);
-    if (bucket >= WORDLE_BUCKETS) bucket = WORDLE_BUCKETS - 1;
-    o[off + bucket] = 1;
+    o[off + wordle_remaining_bucket(env->candidate_count)] = 1;
     off += WORDLE_OBS_REMAINING;
 
     assert(off == WORDLE_OBS_SIZE);
