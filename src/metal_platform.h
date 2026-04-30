@@ -155,15 +155,12 @@ inline int mtl_parse_int_config_value(const char *key, double value) {
   if (!std::isfinite(value)) {
     throw std::invalid_argument(std::string(key) + " must be a finite integer");
   }
-  if (std::trunc(value) != value) {
-    throw std::invalid_argument(std::string(key) + " must be an integer, got " +
-                                std::to_string(value));
-  }
-  if (value < (double)std::numeric_limits<int>::min() ||
-      value > (double)std::numeric_limits<int>::max()) {
+  double rounded = std::round(value);
+  if (rounded < (double)std::numeric_limits<int>::min() ||
+      rounded > (double)std::numeric_limits<int>::max()) {
     throw std::invalid_argument(std::string(key) + " is outside int range");
   }
-  return (int)value;
+  return (int)rounded;
 }
 
 inline int mtl_validate_nonzero_config_value(const char *key, int value) {

@@ -349,7 +349,7 @@ def _train(env_name, args, sweep_obj=None, result_queue=None, verbose=False):
     with _inferno_replay_env(args):
         try:
             pufferl = backend.create_pufferl(args)
-        except RuntimeError as e:
+        except (RuntimeError, ValueError) as e:
             print(f'WARNING: {e}, skipping')
             if result_queue is not None:
                 result_queue.put((args['gpu_id'], [], [], []))
