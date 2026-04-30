@@ -333,11 +333,13 @@ class Random:
             is_failure=is_failure,
         ))
 
+    def make_early_stopper(self):
+        return SweepEarlyStopper()
+
     def early_stop(self, logs, target_key):
-        if any("loss/" in k and np.isnan(v) for k, v in logs.items()):
-            logs['is_loss_nan'] = True
-            return True
-        return False
+        if not hasattr(self, '_early_stopper'):
+            self._early_stopper = self.make_early_stopper()
+        return self._early_stopper.early_stop(logs, target_key)
 
 
 class ParetoGenetic:
@@ -390,11 +392,13 @@ class ParetoGenetic:
             is_failure=is_failure,
         ))
 
+    def make_early_stopper(self):
+        return SweepEarlyStopper()
+
     def early_stop(self, logs, target_key):
-        if any("loss/" in k and np.isnan(v) for k, v in logs.items()):
-            logs['is_loss_nan'] = True
-            return True
-        return False
+        if not hasattr(self, '_early_stopper'):
+            self._early_stopper = self.make_early_stopper()
+        return self._early_stopper.early_stop(logs, target_key)
 
 
 class ExactGPModel(ExactGP):
@@ -517,6 +521,69 @@ class RobustLogCostModel:
             return 0.9 * self.max_score
 
         return self.A + self.B * np.log(cost)
+
+
+def _has_nan_loss(logs):
+    loss = logs.get('loss') if isinstance(logs, dict) else None
+    if isinstance(loss, dict):
+        return any(np.isnan(v) for v in loss.values())
+    return any("loss/" in k and np.isnan(v) for k, v in logs.items())
+
+
+def _get_log_metric(logs, key):
+    if key in logs:
+        return logs[key]
+
+    if '/' not in key:
+        return None
+
+    group, nested_key = key.split('/', 1)
+    group_logs = logs.get(group)
+    if isinstance(group_logs, dict):
+        return group_logs.get(nested_key)
+    return None
+
+
+class SweepEarlyStopper:
+    def __init__(self, metric_distribution='linear', stop_threshold_model=None):
+        self.metric_distribution = metric_distribution
+        self.stop_threshold_model = stop_threshold_model
+        self.running_target_buffer = deque(maxlen=30)
+
+    def logit_transform(self, value, epsilon=1e-9):
+        value = np.clip(value, epsilon, 1 - epsilon)
+        logit = math.log(value / (1 - value))
+        return np.clip(logit, -5, 100)
+
+    def get_early_stop_threshold(self, cost):
+        if self.stop_threshold_model is None:
+            return -np.inf
+        return self.stop_threshold_model.get_threshold(cost)
+
+    def should_stop(self, score, cost):
+        threshold = self.get_early_stop_threshold(cost)
+        if self.metric_distribution == 'percentile':
+            score = self.logit_transform(score)
+        return score < threshold
+
+    def early_stop(self, logs, target_key):
+        if _has_nan_loss(logs):
+            logs['is_loss_nan'] = True
+            return True
+
+        metric_val = _get_log_metric(logs, target_key)
+        cost = _get_log_metric(logs, 'uptime')
+        if metric_val is None or cost is None:
+            return False
+
+        self.running_target_buffer.append(metric_val)
+        target_running_mean = np.mean(self.running_target_buffer)
+        threshold = self.get_early_stop_threshold(cost)
+        logs['early_stop_threshold'] = max(threshold, -5)
+        if self.should_stop(max(target_running_mean, metric_val), cost):
+            logs['is_loss_nan'] = False
+            return True
+        return False
 
 
 # TODO: Eval defaults
@@ -737,6 +804,16 @@ class Protein:
         target_ratio = np.clip(self.target_cost_ratio.pop() + 0.1 * np.random.randn(), 0, 1)
         return (1 + expansion_rate) * target_ratio
 
+    def _suggest_random(self, fill, fixed_cost_norm):
+        zero_one = self.sobol.random(1)[0]
+        suggestion = 2*zero_one - 1
+        if fixed_cost_norm is not None:
+            suggestion[self.cost_param_idx] = fixed_cost_norm
+        elif self.cost_param_idx is not None:
+            cost_suggestion = self.cost_random_suggestion + 0.1 * np.random.randn()
+            suggestion[self.cost_param_idx] = np.clip(cost_suggestion, -1, 1)
+        return self.hyperparameters.to_dict(suggestion, fill)
+
     def suggest(self, fill, fixed_total_timesteps=None):
         info = {}
         self.suggestion_idx += 1
@@ -749,16 +826,8 @@ class Protein:
         #     suggestion = self.hyperparameters.search_centers
         #     return self.hyperparameters.to_dict(suggestion, fill), info
 
-        if self.suggestion_idx <= self.num_random_samples:
-            # Suggest the next point in the Sobol sequence
-            zero_one = self.sobol.random(1)[0]
-            suggestion = 2*zero_one - 1  # Scale from [0, 1) to [-1, 1)
-            if fixed_cost_norm is not None:
-                suggestion[self.cost_param_idx] = fixed_cost_norm
-            elif self.cost_param_idx is not None:
-                cost_suggestion = self.cost_random_suggestion + 0.1 * np.random.randn()
-                suggestion[self.cost_param_idx] = np.clip(cost_suggestion, -1, 1)  # limit the cost
-            return self.hyperparameters.to_dict(suggestion, fill), info
+        if self.suggestion_idx <= self.num_random_samples or not self.success_observations:
+            return self._suggest_random(fill, fixed_cost_norm), info
 
         elif self.resample_frequency and self.suggestion_idx % self.resample_frequency == 0:
             candidates, _ = pareto_points(self.success_observations)
@@ -894,6 +963,12 @@ class Protein:
         logit = math.log(value / (1 - value))
         return np.clip(logit, -5, 100)
 
+    def make_early_stopper(self):
+        return SweepEarlyStopper(
+            self.metric_distribution,
+            deepcopy(self.stop_threshold_model),
+        )
+
     def observe(self, hypers, score, cost, is_failure=False):
         params = self.hyperparameters.from_dict(hypers)
 
@@ -947,20 +1022,6 @@ class Protein:
         return score < threshold
 
     def early_stop(self, logs, target_key):
-        for k, v in logs['loss'].items():
-            if np.isnan(v):
-                logs['is_loss_nan'] = True
-                return True
-
-        if 'uptime' not in logs or target_key not in logs:
-            return False
-
-        metric_val, cost = logs['env'][target_key], logs['uptime']
-        self._running_target_buffer.append(metric_val)
-        target_running_mean = np.mean(self._running_target_buffer)
-        threshold = self.get_early_stop_threshold(cost)
-        logs['early_stop_threshold'] = max(threshold, -5)
-        if self.should_stop(max(target_running_mean, metric_val), cost):
-            logs['is_loss_nan'] = False
-            return True
-        return False
+        if not hasattr(self, '_early_stopper'):
+            self._early_stopper = self.make_early_stopper()
+        return self._early_stopper.early_stop(logs, target_key)

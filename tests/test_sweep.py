@@ -1,3 +1,4 @@
+import pickle
 import time
 import random
 
@@ -47,7 +48,82 @@ def synthetic_cutoff_task(args):
     score, cost = synthetic_basic_task(args)
     return score*min(2, np.log10(cost)), cost
 
-def test_sweep(args):
+
+def protein_test_args():
+    return {
+        'sweep': {
+            'method': 'Protein',
+            'metric': 'score',
+            'metric_distribution': 'linear',
+            'goal': 'maximize',
+            'downsample': 5,
+            'use_gpu': False,
+            'prune_pareto': True,
+            'early_stop_quantile': 0.3,
+            'max_suggestion_cost': 10,
+            'train': {
+                'total_timesteps': {
+                    'distribution': 'log_normal',
+                    'min': 100,
+                    'max': 1000,
+                    'scale': 'time',
+                },
+                'learning_rate': {
+                    'distribution': 'log_normal',
+                    'min': 0.0001,
+                    'max': 0.01,
+                    'scale': 0.5,
+                },
+            },
+        },
+        'train': {
+            'total_timesteps': 500,
+            'learning_rate': 0.001,
+        },
+    }
+
+
+def test_protein_suggest_continues_after_initial_failures():
+    args = protein_test_args()
+    sweep = pufferlib.sweep.Protein(args['sweep'], num_random_samples=1, use_gpu=False)
+
+    sweep.suggest(args)
+    sweep.observe(args, np.nan, 1.0, is_failure=True)
+    sweep.suggest(args)
+
+
+def test_protein_early_stopper_is_picklable():
+    args = protein_test_args()
+    sweep = pufferlib.sweep.Protein(args['sweep'], gp_training_iter=1, use_gpu=False)
+    for i in range(3):
+        args['train']['learning_rate'] = 0.0005 + i * 0.001
+        sweep.observe(args, float(i), float(i + 1))
+    sweep._train_gp_models()
+
+    pickle.loads(pickle.dumps(sweep.make_early_stopper()))
+
+
+def test_early_stopper_reads_nested_metric_logs():
+    model = pufferlib.sweep.RobustLogCostModel()
+    model.is_fitted = True
+    model.upper_cost_threshold = 1.0
+    model.max_score = 1.0
+    model.A = 0.5
+    model.B = 0.0
+    stopper = pufferlib.sweep.SweepEarlyStopper(
+        metric_distribution='linear',
+        stop_threshold_model=model,
+    )
+    logs = {
+        'loss': {'policy': 0.0},
+        'env': {'score': 0.1},
+        'uptime': 100.0,
+    }
+
+    assert stopper.early_stop(logs, 'env/score')
+
+
+def run_sweep(args):
     method = args['sweep']['method']
     if method == 'Random':
         sweep = pufferlib.sweep.Random(args['sweep'])
@@ -179,4 +255,4 @@ if __name__ == '__main__':
         visualize(args)
         exit(0)
 
-    test_sweep(args)
+    run_sweep(args)

@@ -561,8 +561,9 @@ def sweep(env_name, args=None, pareto=False):
         exp_args = deepcopy(args)
         active[gpu_id] = exp_args
         launched += 1
+        early_stopper = sweep_obj.make_early_stopper()
         train(env_name, exp_args, range(gpu_id, gpu_id + exp_gpus),
-            sweep_obj=sweep_obj, result_queue=result_queue)
+            sweep_obj=early_stopper, result_queue=result_queue)
 
 def eval(env_name, args=None, load_path=None):
     '''Evaluate a trained policy. Supports both native and --slowly torch backends.'''
