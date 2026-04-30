@@ -339,13 +339,17 @@ static int get_config_positive_int(py::dict& kwargs, const char* key) {
 
 static long get_config_positive_long(py::dict& kwargs, const char* key) {
     double value = get_config(kwargs, key);
-    if (!std::isfinite(value) || std::trunc(value) != value || value <= 0.0) {
+    if (!std::isfinite(value)) {
+        throw std::invalid_argument(std::string(key) + " must be a finite positive integer");
+    }
+    double rounded = std::round(value);
+    if (rounded <= 0.0) {
         throw std::invalid_argument(std::string(key) + " must be a positive integer");
     }
-    if (value > (double)std::numeric_limits<long>::max()) {
+    if (rounded > (double)std::numeric_limits<long>::max()) {
         throw std::invalid_argument(std::string(key) + " is outside long range");
     }
-    return (long)value;
+    return (long)rounded;
 }
 
 static uint64_t get_config_uint64(py::dict& kwargs, const char* key) {
