@@ -426,7 +426,7 @@ struct SampleParams {
 };
 
 inline float masked_logit(float l, float m) {
-    if (m < 0.5f) l = -INFINITY;
+    if (m < 0.5f) l = -1e9f;
     return l;
 }
 
