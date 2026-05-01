@@ -4527,6 +4527,97 @@ static void inf_step_human_commands(EncounterState* state, HumanInput* hi) {
 }
 
 
+/* archive cell key v0 for Go-Explore-style exploration. fixed 16-byte struct
+   that discretizes the env state. byte-equal keys = same cell. lossy on
+   continuous fields (player position quantized to 2-tile bins, HP/prayer to
+   10-unit bins, Zuk HP to 50-HP bins). full encounter would need a richer
+   key including pillar HP and per-NPC-type counts; this v0 targets Zuk-only. */
+
+typedef struct {
+    uint8_t wave;                       /* 0..68 */
+    uint8_t weapon_set;                 /* INF_GEAR_* enum */
+    uint8_t player_hp_bin;              /* current_hitpoints / 10 */
+    uint8_t player_prayer_bin;          /* current_prayer / 10 */
+    uint8_t brew_doses;                 /* exact dose count */
+    uint8_t restore_doses;              /* exact dose count */
+    uint8_t overhead_prayer;            /* PRAYER_PROTECT_* enum */
+    uint8_t offensive_prayer;           /* OFFENSIVE_PRAYER_* enum */
+    uint8_t player_x_quant;             /* (player.x - INF_ARENA_MIN_X) / 2 */
+    uint8_t player_y_quant;             /* (player.y - INF_ARENA_MIN_Y) / 2 */
+    uint8_t zuk_hp_bin;                 /* live Zuk HP / 50, 0 if no Zuk alive */
+    uint8_t zuk_phase_flags;            /* bit0=healer_spawned, 1=jad_spawned, 2=enraged, 3=timer_paused */
+    uint8_t active_jad_count;           /* live Jads */
+    uint8_t active_zuk_healer_count;    /* live Zuk healers */
+    uint8_t active_set_count;           /* live meleers + rangers (set members) */
+    uint8_t _pad;                       /* explicit padding so sizeof() == 16 and memcmp is well-defined */
+} InfCellKey;
+
+static size_t inf_cell_key_size(EncounterState* state) {
+    (void)state;
+    return sizeof(InfCellKey);
+}
+
+static void inf_write_cell_key(EncounterState* state, void* out) {
+    const InfernoState* s = (const InfernoState*)state;
+    InfCellKey* k = (InfCellKey*)out;
+    memset(k, 0, sizeof(InfCellKey));
+
+    k->wave = (uint8_t)(s->wave & 0xff);
+    k->weapon_set = (uint8_t)s->weapon_set;
+
+    k->player_hp_bin = (uint8_t)(s->player.current_hitpoints / 10);
+    k->player_prayer_bin = (uint8_t)(s->player.current_prayer / 10);
+    k->brew_doses = (uint8_t)s->player.brew_doses;
+    k->restore_doses = (uint8_t)s->player.restore_doses;
+    k->overhead_prayer = (uint8_t)s->player.prayer;
+    k->offensive_prayer = (uint8_t)s->player.offensive_prayer;
+
+    int dx = s->player.x - INF_ARENA_MIN_X;
+    int dy = s->player.y - INF_ARENA_MIN_Y;
+    if (dx < 0) dx = 0;
+    if (dy < 0) dy = 0;
+    k->player_x_quant = (uint8_t)((dx / 2) & 0xff);
+    k->player_y_quant = (uint8_t)((dy / 2) & 0xff);
+
+    int zuk_idx = inf_find_live_zuk_idx(s);
+    int zuk_hp = (zuk_idx >= 0) ? s->npcs[zuk_idx].hp : 0;
+    k->zuk_hp_bin = (uint8_t)((zuk_hp / 50) & 0xff);
+
+    k->zuk_phase_flags = (uint8_t)(
+        (s->zuk.healer_spawned ? 0x01u : 0u) |
+        (s->zuk.jad_spawned    ? 0x02u : 0u) |
+        (s->zuk.enraged        ? 0x04u : 0u) |
+        (s->zuk.timer_paused   ? 0x08u : 0u)
+    );
+
+    int n_jad = 0, n_healer = 0, n_set = 0;
+    for (int i = 0; i < INF_MAX_NPCS; i++) {
+        if (s->npcs[i].hp <= 0) continue;
+        switch (s->npcs[i].type) {
+            case INF_NPC_JAD:        n_jad++; break;
+            case INF_NPC_HEALER_ZUK: n_healer++; break;
+            case INF_NPC_MELEER:
+            case INF_NPC_RANGER:     n_set++; break;
+            default: break;
+        }
+    }
+    k->active_jad_count        = (uint8_t)(n_jad    > 255 ? 255 : n_jad);
+    k->active_zuk_healer_count = (uint8_t)(n_healer > 255 ? 255 : n_healer);
+    k->active_set_count        = (uint8_t)(n_set    > 255 ? 255 : n_set);
+}
+
+/* progress_score: scalar in roughly [0, 1] for Zuk-only. terminal-win = 1.0;
+   otherwise based on the lowest Zuk HP seen so far in the episode. min_zuk_hp_seen
+   is initialized lazily (memset-zero sentinel until first reward tick), so a
+   fresh reset returns 0 even though Zuk is full HP. */
+static float inf_progress_score(EncounterState* state) {
+    const InfernoState* s = (const InfernoState*)state;
+    if (s->episode_over && s->winner == 0) return 1.0f;
+    float min_zhp = (s->min_zuk_hp_seen > 0.0f) ? s->min_zuk_hp_seen : 1200.0f;
+    return (1200.0f - min_zhp) / 1200.0f;
+}
+
+
 /* snapshot/restore: archive-based exploration captures the full encounter state
    so we can branch from it later. process-local pointers (collision_map,
    human_commands) and the per-env episode Log accumulator are preserved across
@@ -4605,6 +4696,10 @@ static const EncounterDef ENCOUNTER_INFERNO = {
     .snapshot_size = inf_snapshot_size,
     .snapshot = inf_snapshot,
     .restore = inf_restore,
+
+    .cell_key_size = inf_cell_key_size,
+    .write_cell_key = inf_write_cell_key,
+    .progress_score = inf_progress_score,
 
     .write_obs = inf_write_obs,
     .write_mask = inf_write_mask,

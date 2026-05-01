@@ -2029,6 +2029,83 @@ static void test_inferno_snapshot_preserves_external_pointers(void) {
     inf_destroy(raw_b);
 }
 
+static void test_inferno_cell_key_is_deterministic_and_16_bytes(void) {
+    printf("--- inferno cell key is deterministic and 16 bytes ---\n");
+
+    EncounterState* raw = inf_create();
+    inf_reset(raw, 99u);
+
+    ASSERT_INT_EQ("sizeof(InfCellKey) == 16", (int)sizeof(InfCellKey), 16);
+    ASSERT_INT_EQ("inf_cell_key_size returns sizeof(InfCellKey)",
+        (int)inf_cell_key_size(raw), (int)sizeof(InfCellKey));
+
+    /* fresh reset: progress_score is exactly 0 (no Zuk damage yet) */
+    ASSERT_INT_EQ("progress_score == 0 at reset",
+        (int)(inf_progress_score(raw) * 1000.0f), 0);
+
+    int actions[INF_NUM_ACTION_HEADS] = {0};
+    actions[INF_HEAD_MOVE] = 3;
+    actions[INF_HEAD_TARGET] = 1;
+    actions[INF_HEAD_PRAYER] = 2;
+    actions[INF_HEAD_OFFENSIVE] = 1;
+
+    /* drive A: reset, step N actions, capture key K_A */
+    inf_reset(raw, 99u);
+    for (int i = 0; i < 20; i++) inf_step(raw, actions);
+    InfCellKey key_a;
+    inf_write_cell_key(raw, &key_a);
+
+    /* drive B: reset with same seed, step same actions, capture key K_B */
+    inf_reset(raw, 99u);
+    for (int i = 0; i < 20; i++) inf_step(raw, actions);
+    InfCellKey key_b;
+    inf_write_cell_key(raw, &key_b);
+
+    /* deterministic given (seed, actions): keys must be byte-identical */
+    int diff = memcmp(&key_a, &key_b, sizeof(InfCellKey));
+    ASSERT_INT_EQ("memcmp(key_a, key_b) == 0 for same seed+actions", diff, 0);
+
+    /* the key must reflect post-step state, not the reset state */
+    inf_reset(raw, 99u);
+    InfCellKey key_at_reset;
+    inf_write_cell_key(raw, &key_at_reset);
+    int diff_post = memcmp(&key_at_reset, &key_a, sizeof(InfCellKey));
+    ASSERT_INT_EQ("key at reset differs from key after stepping", (diff_post != 0) ? 1 : 0, 1);
+
+    inf_destroy(raw);
+}
+
+static void test_inferno_cell_key_quantization_groups_neighbors(void) {
+    printf("--- inferno cell key quantization groups neighbor states ---\n");
+
+    EncounterState* raw_a = inf_create();
+    EncounterState* raw_b = inf_create();
+    InfernoState* state_a = (InfernoState*)raw_a;
+    InfernoState* state_b = (InfernoState*)raw_b;
+
+    inf_reset(raw_a, 1u);
+    inf_reset(raw_b, 1u);
+
+    /* nudge state_b's player by 1 tile in x — within the 2-tile quantization
+       bin, so the key should still match state_a's key */
+    state_b->player.x = state_a->player.x + 1;
+
+    InfCellKey key_a, key_b;
+    inf_write_cell_key(raw_a, &key_a);
+    inf_write_cell_key(raw_b, &key_b);
+    int diff_within_bin = memcmp(&key_a, &key_b, sizeof(InfCellKey));
+    ASSERT_INT_EQ("1-tile player shift stays in same cell", diff_within_bin, 0);
+
+    /* shift by 2 tiles — crosses the bin boundary, key must differ */
+    state_b->player.x = state_a->player.x + 2;
+    inf_write_cell_key(raw_b, &key_b);
+    int diff_cross_bin = memcmp(&key_a, &key_b, sizeof(InfCellKey));
+    ASSERT_INT_EQ("2-tile player shift changes cell", (diff_cross_bin != 0) ? 1 : 0, 1);
+
+    inf_destroy(raw_a);
+    inf_destroy(raw_b);
+}
+
 static void test_inferno_human_equip_does_not_snap_loadout(void) {
     printf("--- inferno human equip does not snap full loadout ---\n");
 
@@ -2345,6 +2422,8 @@ int main(void) {
     test_human_target_and_potion_translation();
     test_inferno_snapshot_restore_round_trip();
     test_inferno_snapshot_preserves_external_pointers();
+    test_inferno_cell_key_is_deterministic_and_16_bytes();
+    test_inferno_cell_key_quantization_groups_neighbors();
     test_inferno_human_equip_does_not_snap_loadout();
     test_jad_render_uses_style_specific_attack_animation();
     test_jad_magic_render_emits_three_offset_projectiles();

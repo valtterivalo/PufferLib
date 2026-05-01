@@ -1608,6 +1608,16 @@ typedef struct {
     void (*snapshot)(EncounterState* state, void* out);
     void (*restore)(EncounterState* state, const void* data, size_t n);
 
+    /* Archive cell representation for Go-Explore-style exploration. NULL = not
+       supported. write_cell_key writes a fixed-size byte struct into `out` that
+       discretizes the state into a cell. Two states map to the same cell iff
+       their cell keys are byte-equal. progress_score returns a scalar in roughly
+       [0, 1.5] where higher = closer to solving the encounter; used to compare
+       elites within a cell and to weight cell selection. */
+    size_t (*cell_key_size)(EncounterState* state);
+    void (*write_cell_key)(EncounterState* state, void* out);
+    float (*progress_score)(EncounterState* state);
+
     /* RL interface */
     void (*write_obs)(EncounterState* state, float* obs_out);
     void (*write_mask)(EncounterState* state, float* mask_out);
