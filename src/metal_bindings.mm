@@ -555,6 +555,43 @@ PYBIND11_MODULE(_C, m) {
     m.def("close", &puf_close);
     m.def("save_weights", &save_weights);
     m.def("load_weights", &load_weights);
+
+    m.def("archive_explore", [](
+        py::object pufferl_obj,
+        int archive_capacity,
+        int num_iterations,
+        int action_chunk_pool_capacity_ints,
+        uint64_t archive_seed
+    ) -> py::dict {
+        PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
+        Archive* archive = nullptr;
+        ArchiveExploreStats stats;
+        {
+            py::gil_scoped_release no_gil;
+            stats = archive_explore_impl(
+                pufferl,
+                archive_capacity,
+                num_iterations,
+                action_chunk_pool_capacity_ints,
+                archive_seed,
+                &archive);
+        }
+        /* TODO(goexplore): save archive to disk before destroying. */
+        if (archive) archive_destroy(archive);
+
+        py::dict d;
+        d["iterations_run"] = stats.iterations_run;
+        d["total_new_cells"] = stats.total_new_cells;
+        d["archive_size"] = stats.archive_size;
+        d["total_dropped"] = stats.total_dropped;
+        d["wall_seconds"] = stats.wall_seconds;
+        return d;
+    },
+    py::arg("pufferl"),
+    py::arg("archive_capacity"),
+    py::arg("num_iterations"),
+    py::arg("action_chunk_pool_capacity_ints") = 10000000,
+    py::arg("archive_seed") = (uint64_t)42);
     m.def("uptime", [](py::object pufferl_obj) -> double {
         PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
         return wall_clock() - pufferl.start_time;

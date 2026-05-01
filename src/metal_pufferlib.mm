@@ -2,6 +2,7 @@
 #include "metal_kernels.mm"
 #include "cpu_inference.h"
 #include "vecenv.h"
+#include "archive.h"
 
 
 #include <cstring>
@@ -244,6 +245,17 @@ struct PuffeRL {
     FloatTensor train_logits;      // (total_agents, horizon, fused_cols)
     FloatTensor rollout_actions_f32; // (horizon, total_agents, num_atns)
     FloatTensor train_actions_f32;   // (total_agents, horizon, num_atns)
+
+    /* Archive-based exploration mode (Go-Explore Phase 1). When active,
+       net_callback captures the per-env recurrent hidden state at the end
+       of each forward pass into archive_hidden_state_history so the explorer
+       driver can attach it to discovered archive cells.
+       Layout: (horizon+1, total_agents, num_layers * hidden_size * dtype_size).
+       Slot [t+1] for env e holds the state AFTER nc(t) processed obs[t].
+       For a discovery at c_step(t), the matching hidden state is at slot t+1. */
+    bool archive_mode_active = false;
+    uint8_t* archive_hidden_state_history = nullptr;
+    size_t archive_per_env_hidden_bytes = 0;
 };
 
 // ============================================================================
@@ -444,6 +456,33 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
         env.actions.bytes + start * act_cols * sizeof(float),
         act_f32_buf.data,
         block_size * act_cols * sizeof(float));
+
+    /* Archive-mode hidden state capture. After the forward pass, state_puf
+       holds state[t+1] (the state we'd feed into nc(t+1)). Transpose-on-write
+       into the per-env contiguous layout so the flush function in the env
+       binding can do a direct lookup by (tick, env_idx) without a strided
+       gather. */
+    if (pufferl->archive_mode_active && pufferl->archive_hidden_state_history) {
+        int num_layers = (int)state_puf.shape[0];
+        int batch = (int)state_puf.shape[1];
+        int hsize = (int)state_puf.shape[2];
+        size_t element_size = (size_t)state_puf.dtype_size;
+        size_t per_env_bytes = pufferl->archive_per_env_hidden_bytes;
+        int total_agents = pufferl->vec->total_agents;
+        size_t row_size = (size_t)total_agents * per_env_bytes;
+        size_t tick_off = (size_t)(t + 1) * row_size;
+        for (int e = 0; e < block_size; e++) {
+            int env_global = start + e;
+            uint8_t* dst = pufferl->archive_hidden_state_history +
+                           tick_off + (size_t)env_global * per_env_bytes;
+            for (int l = 0; l < num_layers; l++) {
+                size_t src_off = ((size_t)l * batch + (size_t)e) * (size_t)hsize * element_size;
+                memcpy(dst + (size_t)l * (size_t)hsize * element_size,
+                       state_puf.bytes + src_off,
+                       (size_t)hsize * element_size);
+            }
+        }
+    }
 
     uint64_t tp3 = mach_absolute_time();
 
@@ -1211,6 +1250,181 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
 // ============================================================================
 // Cleanup
 // ============================================================================
+
+/* Archive-based exploration driver (Go-Explore Phase 1).
+
+   This is currently inferno-specific. The archive operations themselves are
+   generic, but the env-side hooks (inferno_env_*) are defined in
+   ocean/osrs_inferno/binding.c. Extending to other encounters means lifting
+   those hooks into a shared encounter-archive header. */
+
+extern "C" {
+    struct InfernoEnv;
+    struct InfernoEnv* inferno_env_at(void* envs_void, int idx);
+    void inferno_env_enable_archive_mode(struct InfernoEnv* env, Archive* archive, int action_history_cap);
+    void inferno_env_disable_archive_mode(struct InfernoEnv* env);
+    void inferno_env_begin_archive_iteration(struct InfernoEnv* env, int parent_idx);
+    int inferno_env_flush_scratch_to_archive(
+        struct InfernoEnv* env, const uint8_t* history,
+        int total_agents, int env_idx, size_t hidden_state_size);
+    int inferno_env_archive_scratch_count(const struct InfernoEnv* env);
+    int inferno_env_archive_scratch_dropped(const struct InfernoEnv* env);
+    size_t inferno_env_snapshot_bytes(void);
+    int inferno_env_register_root_cell(struct InfernoEnv* env, Archive* archive, const uint8_t* hidden_state);
+    void c_reset(struct InfernoEnv* env);
+}
+
+/* ArchiveExploreStats: surface-level counters returned to the caller for logging. */
+typedef struct {
+    int iterations_run;
+    int total_new_cells;       /* cells inserted with NEW result */
+    int archive_size;          /* archive->num_entries at end */
+    int total_dropped;         /* discoveries that hit the per-env scratch cap */
+    double wall_seconds;
+} ArchiveExploreStats;
+
+ArchiveExploreStats archive_explore_impl(
+    PuffeRL& pufferl,
+    int archive_capacity,
+    int num_iterations,
+    int action_chunk_pool_capacity_ints,
+    uint64_t archive_seed,
+    Archive** out_archive  /* on success the caller owns this and must call archive_destroy */
+) {
+    ArchiveExploreStats stats = {0};
+    auto t_start = std::chrono::high_resolution_clock::now();
+
+    /* This driver requires the inferno-specific env binding. A future-proof
+       version would route through an encounter vtable. */
+    int total_agents = pufferl.vec->total_agents;
+    int horizon = pufferl.hypers.horizon;
+    int num_atns = (int)puf_numel(pufferl.act_sizes_puf.shape);
+    int num_buffers = pufferl.hypers.num_buffers;
+    int block_size = total_agents / num_buffers;
+    (void)block_size;  /* used only in a future loop variant */
+
+    /* hidden state size per env, computed from one buffer_states entry. */
+    PufTensor& s0 = pufferl.buffer_states[0];
+    int num_layers = (int)s0.shape[0];
+    int hidden_size = (int)s0.shape[2];
+    pufferl.archive_per_env_hidden_bytes =
+        (size_t)num_layers * (size_t)hidden_size * (size_t)s0.dtype_size;
+
+    /* snapshot size pulled from the env binding via an extern shim so we
+       don't have to drag encounter headers into metal_pufferlib.mm. */
+    void* envs_void = pufferl.vec->envs;
+    size_t snapshot_bytes = inferno_env_snapshot_bytes();
+
+    /* Allocate archive */
+    Archive* archive = archive_create(
+        archive_capacity,
+        snapshot_bytes,
+        num_atns,
+        action_chunk_pool_capacity_ints,
+        pufferl.archive_per_env_hidden_bytes,
+        archive_seed);
+    if (!archive) {
+        std::fprintf(stderr, "archive_explore: failed to allocate archive\n");
+        std::abort();
+    }
+
+    /* Allocate per-tick hidden state history. Layout:
+       (horizon+1) * total_agents * per_env_hidden_bytes */
+    size_t row_size = (size_t)total_agents * pufferl.archive_per_env_hidden_bytes;
+    size_t hist_total = (size_t)(horizon + 1) * row_size;
+    pufferl.archive_hidden_state_history = (uint8_t*)std::malloc(hist_total);
+    if (!pufferl.archive_hidden_state_history) {
+        std::fprintf(stderr, "archive_explore: failed to allocate hidden state history (%zu bytes)\n",
+            hist_total);
+        archive_destroy(archive);
+        std::abort();
+    }
+    pufferl.archive_mode_active = true;
+
+    /* Reset all envs to a fresh start before the first iteration. The reset
+       state will be the starting cell for early iterations. */
+    for (int e = 0; e < total_agents; e++) {
+        struct InfernoEnv* env = inferno_env_at(envs_void, e);
+        c_reset(env);
+        inferno_env_enable_archive_mode(env, archive, horizon);
+    }
+
+    /* Register env 0's reset state as the archive root cell so archive_sample
+       has something to return on iteration 0. Hidden state is zero (no rollout
+       has run yet). */
+    {
+        std::vector<uint8_t> zero_hidden(pufferl.archive_per_env_hidden_bytes, 0);
+        inferno_env_register_root_cell(inferno_env_at(envs_void, 0),
+            archive, zero_hidden.data());
+    }
+
+    sync_pending_train(pufferl);
+
+    for (int iter = 0; iter < num_iterations; iter++) {
+        /* sample a cell for each env and restore */
+        for (int e = 0; e < total_agents; e++) {
+            int sampled = archive_sample(archive);
+            if (sampled == ARCHIVE_NULL_INDEX) sampled = ARCHIVE_ROOT_PARENT;
+            inferno_env_begin_archive_iteration(inferno_env_at(envs_void, e), sampled);
+        }
+
+        /* zero hidden state buffers — we just changed env state, recurrent
+           state from the last rollout corresponds to a different trajectory.
+           In a follow-up we can warm-load the hidden state from the sampled
+           archive cell instead. */
+        for (int b = 0; b < num_buffers; b++) {
+            std::memset(pufferl.buffer_states[b].bytes, 0,
+                pufferl.buffer_states[b].numel() * pufferl.buffer_states[b].dtype_size);
+        }
+
+        /* run the rollout (advances horizon ticks; net_callback captures
+           hidden state into history; c_step captures cells into per-env scratch) */
+        if (!pufferl.cpu_inference) puf_set_gpu_training(true);
+        static_vec_omp_step(pufferl.vec);
+        if (!pufferl.cpu_inference) puf_set_gpu_training(false);
+
+        /* flush each env's scratch into the shared archive */
+        int new_this_iter = 0;
+        int dropped_this_iter = 0;
+        for (int e = 0; e < total_agents; e++) {
+            struct InfernoEnv* env = inferno_env_at(envs_void, e);
+            new_this_iter += inferno_env_flush_scratch_to_archive(
+                env,
+                pufferl.archive_hidden_state_history,
+                total_agents, e,
+                pufferl.archive_per_env_hidden_bytes);
+            dropped_this_iter += inferno_env_archive_scratch_dropped(env);
+        }
+        stats.total_new_cells += new_this_iter;
+        stats.total_dropped += dropped_this_iter;
+        stats.iterations_run++;
+
+        /* periodic progress log */
+        if (iter < 4 || iter % 10 == 0 || iter == num_iterations - 1) {
+            std::fprintf(stderr,
+                "archive_explore iter %d: archive_size=%d, new_this_iter=%d, dropped=%d\n",
+                iter, archive->num_entries, new_this_iter, dropped_this_iter);
+        }
+    }
+
+    /* teardown */
+    for (int e = 0; e < total_agents; e++) {
+        inferno_env_disable_archive_mode(inferno_env_at(envs_void, e));
+    }
+    pufferl.archive_mode_active = false;
+    std::free(pufferl.archive_hidden_state_history);
+    pufferl.archive_hidden_state_history = nullptr;
+
+    auto t_end = std::chrono::high_resolution_clock::now();
+    stats.wall_seconds = std::chrono::duration<double>(t_end - t_start).count();
+    stats.archive_size = archive->num_entries;
+
+    if (out_archive) *out_archive = archive;
+    else archive_destroy(archive);
+
+    return stats;
+}
+
 
 void close_impl(PuffeRL& pufferl) {
     sync_pending_train(pufferl);

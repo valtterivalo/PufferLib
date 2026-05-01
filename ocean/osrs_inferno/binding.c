@@ -27,7 +27,10 @@
 
 #define INF_TOTAL_OBS (INF_NUM_OBS + INF_ACTION_MASK_SIZE)
 
-typedef struct {
+/* The struct tag is given explicitly so other translation units (like
+   src/metal_pufferlib.mm's archive driver) can forward-declare
+   `struct InfernoEnv;` and pass opaque pointers. */
+typedef struct InfernoEnv {
     void* observations;
     float* actions;
     float* rewards;
@@ -74,7 +77,7 @@ typedef struct {
     int archive_parent_idx;       /* archive entry restored at start of this iteration */
     uint32_t archive_parent_rng;  /* RNG state captured immediately after restore */
 
-#define INF_ARCHIVE_SCRATCH_CAP 16
+#define INF_ARCHIVE_SCRATCH_CAP 64
     InfSnapshot archive_scratch_snap[INF_ARCHIVE_SCRATCH_CAP];
     InfCellKey archive_scratch_key[INF_ARCHIVE_SCRATCH_CAP];
     int archive_scratch_tick[INF_ARCHIVE_SCRATCH_CAP];
@@ -915,4 +918,40 @@ int inferno_env_archive_scratch_count(const InfernoEnv* env) {
 
 int inferno_env_archive_scratch_dropped(const InfernoEnv* env) {
     return env->archive_scratch_dropped;
+}
+
+/* Encounter-side accessors so metal_pufferlib.mm (which doesn't include
+   encounter headers) can size the archive and bootstrap the root cell. */
+size_t inferno_env_snapshot_bytes(void) {
+    return sizeof(InfSnapshot);
+}
+
+/* Indexed access for callers that hold the env array as void* (pointer
+   arithmetic on an incomplete InfernoEnv would not compile). */
+struct InfernoEnv* inferno_env_at(void* envs_void, int idx) {
+    InfernoEnv* envs = (InfernoEnv*)envs_void;
+    return &envs[idx];
+}
+
+/* Register env's CURRENT state as a root cell in the given archive.
+   hidden_state may be NULL (zero-filled). Returns the entry index or
+   ARCHIVE_NULL_INDEX on full / collision-with-better. */
+int inferno_env_register_root_cell(
+    InfernoEnv* env,
+    Archive* archive,
+    const uint8_t* hidden_state
+) {
+    if (!archive) return ARCHIVE_NULL_INDEX;
+
+    InfCellKey key;
+    ENCOUNTER_INFERNO.write_cell_key(env->enc_state, &key);
+    InfSnapshot snap;
+    ENCOUNTER_INFERNO.snapshot(env->enc_state, &snap);
+    float quality = ENCOUNTER_INFERNO.progress_score(env->enc_state);
+
+    ArchiveInsertResult result;
+    return archive_insert(archive,
+        (const uint8_t*)&key, &snap, hidden_state,
+        ARCHIVE_ROOT_PARENT, NULL, 0, 0u,
+        quality, &result);
 }
