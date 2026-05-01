@@ -188,20 +188,19 @@ static inline int archive_lookup(const Archive* a, const uint8_t* key) {
 /* Result of archive_insert: how the request was resolved. */
 typedef enum {
     ARCHIVE_INSERT_NEW,         /* new cell created */
-    ARCHIVE_INSERT_REPLACED,    /* existing cell, quality strictly better, body replaced */
+    ARCHIVE_INSERT_REPLACED,    /* existing cell, quality stat improved (no structural rewire) */
     ARCHIVE_INSERT_KEPT,        /* existing cell, quality not better, only seen++ */
     ARCHIVE_INSERT_FULL         /* no room (entry capacity or action chunk pool exhausted) */
 } ArchiveInsertResult;
 
-/* Insert a cell. If the cell already exists and the new quality is strictly
-   higher, the snapshot/action_chunk/quality/parent/hidden_state fields are
-   replaced. The old action chunk is leaked into the pool (orphaned), which is
-   fine for short Go-Explore runs. hidden_state may be NULL even when the
-   archive has a hidden state pool; in that case zeros are written. Returns
-   the entry index (>= 0) on success, or ARCHIVE_NULL_INDEX on full. The
-   result enum tells the caller what happened so they can update outer state
-   (e.g. reset chosen_since_new on the parent when this cell was newly created
-   or improved). */
+/* Insert a cell. On re-discovery the structural fields (parent_idx,
+   action_chunk, snapshot, rng_seed, hidden_state) are NEVER rewritten,
+   because rewiring parent_idx would orphan or cycle every descendant of
+   `existing` whose action_chunk was authored against the old payload. The
+   only field updated on a higher-quality re-discovery is `quality` itself,
+   used by count_decay to weight sampling. `seen` is bumped on every
+   re-discovery. Returns the entry index (>= 0) on success, or
+   ARCHIVE_NULL_INDEX on full. */
 static inline int archive_insert(
     Archive* a,
     const uint8_t* key,
@@ -225,30 +224,6 @@ static inline int archive_insert(
         ArchiveEntry* e = &a->entries[existing];
         e->seen++;
         if (quality > e->quality) {
-            int needed = action_chunk_len * a->num_atns;
-            if (a->action_chunk_pool_used_ints + needed > a->action_chunk_pool_capacity_ints) {
-                if (out_result) *out_result = ARCHIVE_INSERT_FULL;
-                return ARCHIVE_NULL_INDEX;
-            }
-            memcpy(&a->snapshot_pool[(size_t)existing * a->snapshot_size],
-                   snapshot, a->snapshot_size);
-            if (a->hidden_state_size > 0) {
-                uint8_t* dst = &a->hidden_state_pool[(size_t)existing * a->hidden_state_size];
-                if (hidden_state) memcpy(dst, hidden_state, a->hidden_state_size);
-                else memset(dst, 0, a->hidden_state_size);
-            }
-            int offset = a->action_chunk_pool_used_ints;
-            if (action_chunk && needed > 0) {
-                memcpy(&a->action_chunk_pool[offset],
-                       action_chunk, (size_t)needed * sizeof(int));
-                a->action_chunk_pool_used_ints += needed;
-                e->action_chunk_offset = offset;
-            } else {
-                e->action_chunk_offset = -1;
-            }
-            e->action_chunk_len = action_chunk_len;
-            e->parent_idx = parent_idx;
-            e->rng_seed = rng_seed;
             e->quality = quality;
             e->chosen_since_new = 0;
             if (out_result) *out_result = ARCHIVE_INSERT_REPLACED;

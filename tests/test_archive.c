@@ -99,8 +99,8 @@ static void test_archive_insert_lookup_round_trip(void) {
     archive_destroy(a);
 }
 
-static void test_archive_duplicate_replaces_on_higher_quality(void) {
-    printf("--- archive duplicate replaces on strictly higher quality ---\n");
+static void test_archive_duplicate_keeps_first_write_structural_fields(void) {
+    printf("--- archive re-discovery preserves snapshot/parent/actions, only updates quality stat ---\n");
     Archive* a = archive_create(DUMMY_CAPACITY, DUMMY_SNAP_SIZE,
         DUMMY_NUM_ATNS, DUMMY_CHUNK_POOL_INTS, 0, 42u);
 
@@ -123,15 +123,16 @@ static void test_archive_duplicate_replaces_on_higher_quality(void) {
     const DummySnap* still_a = (const DummySnap*)archive_get_snapshot(a, idx_a);
     ASSERT_INT_EQ("snapshot still tag=1", still_a->tag, 1);
 
-    /* higher quality: replaces */
+    /* higher quality: structural fields stay frozen, only quality stat updates */
     DummySnap c_snap = { .tag = 3, .payload = 300 };
     int idx_c = archive_insert(a, key, &c_snap, NULL, ARCHIVE_ROOT_PARENT,
         NULL, 0, 0u, 0.7f, &r);
     ASSERT_INT_EQ("higher quality returns same idx", idx_c, idx_a);
     ASSERT_INT_EQ("higher quality result REPLACED", (int)r, (int)ARCHIVE_INSERT_REPLACED);
-    const DummySnap* now_c = (const DummySnap*)archive_get_snapshot(a, idx_a);
-    ASSERT_INT_EQ("snapshot replaced to tag=3", now_c->tag, 3);
-    ASSERT_INT_EQ("snapshot payload replaced", now_c->payload, 300);
+    const DummySnap* still_a_after_q_bump = (const DummySnap*)archive_get_snapshot(a, idx_a);
+    ASSERT_INT_EQ("snapshot NOT replaced (stays tag=1)", still_a_after_q_bump->tag, 1);
+    ASSERT_INT_EQ("snapshot payload NOT replaced", still_a_after_q_bump->payload, 100);
+    ASSERT_TRUE("quality stat updated to 0.7", a->entries[idx_a].quality > 0.69f);
 
     /* equal quality: kept (strict) */
     DummySnap d_snap = { .tag = 4, .payload = 400 };
@@ -139,8 +140,8 @@ static void test_archive_duplicate_replaces_on_higher_quality(void) {
         NULL, 0, 0u, 0.7f, &r);
     ASSERT_INT_EQ("equal quality returns same idx", idx_d, idx_a);
     ASSERT_INT_EQ("equal quality result KEPT", (int)r, (int)ARCHIVE_INSERT_KEPT);
-    const DummySnap* still_c = (const DummySnap*)archive_get_snapshot(a, idx_a);
-    ASSERT_INT_EQ("equal quality leaves tag=3", still_c->tag, 3);
+    const DummySnap* still_a_2 = (const DummySnap*)archive_get_snapshot(a, idx_a);
+    ASSERT_INT_EQ("equal quality leaves snapshot tag=1", still_a_2->tag, 1);
 
     archive_destroy(a);
 }
@@ -317,7 +318,9 @@ static void test_archive_hidden_state_round_trip(void) {
     }
     ASSERT_INT_EQ("NULL hidden state stored as zeros", all_zero, 1);
 
-    /* entry 1 quality replace: hidden state should be replaced too */
+    /* entry 1 quality bump: hidden state stays frozen (only quality stat updates).
+       Rewriting hidden state on re-discovery would let archive_explore warm-load
+       a hidden that doesn't pair with the entry's snapshot or chain actions. */
     float hs_a2[3 * 256];
     for (int i = 0; i < 3 * 256; i++) hs_a2[i] = (float)(i + 1000) * 0.002f;
     int idx_a2 = archive_insert(a, key_a, &snap, hs_a2, ARCHIVE_ROOT_PARENT,
@@ -325,8 +328,8 @@ static void test_archive_hidden_state_round_trip(void) {
     ASSERT_INT_EQ("replace returns same idx", idx_a2, idx_a);
     ASSERT_INT_EQ("replace result", (int)r, (int)ARCHIVE_INSERT_REPLACED);
     const float* hs_back2 = (const float*)archive_get_hidden_state(a, idx_a);
-    int diff2 = memcmp(hs_back2, hs_a2, hidden_state_size);
-    ASSERT_INT_EQ("hidden state replaced on quality upgrade", diff2, 0);
+    int diff2 = memcmp(hs_back2, hs_a, hidden_state_size);
+    ASSERT_INT_EQ("hidden state stays as first-write on quality bump", diff2, 0);
 
     archive_destroy(a);
 }
@@ -527,7 +530,7 @@ static void test_archive_export_top_k_demos(void) {
 int main(void) {
     test_archive_create_and_destroy();
     test_archive_insert_lookup_round_trip();
-    test_archive_duplicate_replaces_on_higher_quality();
+    test_archive_duplicate_keeps_first_write_structural_fields();
     test_archive_action_chunk_roundtrip_and_replay();
     test_archive_sample_weights_high_quality();
     test_archive_full_returns_null();
