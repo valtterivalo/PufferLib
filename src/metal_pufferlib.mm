@@ -1280,6 +1280,8 @@ typedef struct {
     int total_new_cells;       /* cells inserted with NEW result */
     int archive_size;          /* archive->num_entries at end */
     int total_dropped;         /* discoveries that hit the per-env scratch cap */
+    int demos_exported;
+    int save_ok;               /* 1 if archive saved, 0 if no path or failed */
     double wall_seconds;
 } ArchiveExploreStats;
 
@@ -1289,7 +1291,11 @@ ArchiveExploreStats archive_explore_impl(
     int num_iterations,
     int action_chunk_pool_capacity_ints,
     uint64_t archive_seed,
-    Archive** out_archive  /* on success the caller owns this and must call archive_destroy */
+    const char* archive_save_path,    /* NULL or "" = do not save */
+    const char* demo_export_dir,      /* NULL or "" = do not export demos */
+    int demo_max_count,
+    int demo_max_replay_ticks,
+    Archive** out_archive             /* if non-NULL, ownership transferred to caller */
 ) {
     ArchiveExploreStats stats = {0};
     auto t_start = std::chrono::high_resolution_clock::now();
@@ -1438,9 +1444,32 @@ ArchiveExploreStats archive_explore_impl(
     std::free(pufferl.archive_hidden_state_history);
     pufferl.archive_hidden_state_history = nullptr;
 
+    stats.archive_size = archive->num_entries;
+
+    /* save the archive to disk before exporting demos so a failed export
+       still leaves the canonical archive around. */
+    if (archive_save_path && archive_save_path[0]) {
+        int rc = archive_save(archive, archive_save_path);
+        stats.save_ok = (rc == 0) ? 1 : 0;
+        if (rc == 0) {
+            std::fprintf(stderr,
+                "archive_explore: archive saved to %s (%d cells)\n",
+                archive_save_path, archive->num_entries);
+        }
+    }
+
+    if (demo_export_dir && demo_export_dir[0]) {
+        stats.demos_exported = archive_export_top_k_demos(
+            archive, demo_export_dir,
+            demo_max_count > 0 ? demo_max_count : 100,
+            demo_max_replay_ticks > 0 ? demo_max_replay_ticks : 8192);
+        std::fprintf(stderr,
+            "archive_explore: %d demo files written under %s\n",
+            stats.demos_exported, demo_export_dir);
+    }
+
     auto t_end = std::chrono::high_resolution_clock::now();
     stats.wall_seconds = std::chrono::duration<double>(t_end - t_start).count();
-    stats.archive_size = archive->num_entries;
 
     if (out_archive) *out_archive = archive;
     else archive_destroy(archive);

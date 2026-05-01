@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #include "src/archive.h"
 
@@ -346,6 +347,183 @@ static void test_archive_no_hidden_state_returns_null(void) {
     archive_destroy(a);
 }
 
+static void test_archive_save_load_round_trip(void) {
+    printf("--- archive save / load preserves entries, pools, and lookup ---\n");
+
+    Archive* a = archive_create(DUMMY_CAPACITY, DUMMY_SNAP_SIZE,
+        DUMMY_NUM_ATNS, DUMMY_CHUNK_POOL_INTS, /*hidden_state_size=*/64, 12345u);
+
+    /* insert a small but representative set so we exercise every pool */
+    DummySnap snap = { .tag = 0xBE, .payload = 99 };
+    uint8_t hs[64];
+    for (int i = 0; i < 64; i++) hs[i] = (uint8_t)(i * 3 + 7);
+
+    int chunk[3 * DUMMY_NUM_ATNS] = { 11,12,13,14,  21,22,23,24,  31,32,33,34 };
+
+    ArchiveInsertResult r;
+    uint8_t k_root[ARCHIVE_KEY_SIZE], k_mid[ARCHIVE_KEY_SIZE], k_leaf[ARCHIVE_KEY_SIZE];
+    make_key(k_root, 400);
+    make_key(k_mid, 401);
+    make_key(k_leaf, 402);
+
+    int idx_root = archive_insert(a, k_root, &snap, hs, ARCHIVE_ROOT_PARENT,
+        NULL, 0, 0u, 0.1f, &r);
+    int idx_mid  = archive_insert(a, k_mid,  &snap, hs, idx_root,
+        chunk, 2, 7u, 0.4f, &r);
+    int idx_leaf = archive_insert(a, k_leaf, &snap, hs, idx_mid,
+        chunk + 2 * DUMMY_NUM_ATNS, 1, 99u, 0.9f, &r);
+
+    /* simulate some sample/observe traffic so chosen and seen != 0 */
+    a->entries[idx_root].chosen = 5;
+    a->entries[idx_root].seen = 9;
+    a->entries[idx_mid].chosen = 2;
+
+    const char* path = "/tmp/test_archive_round_trip.bin";
+    int save_rc = archive_save(a, path);
+    ASSERT_INT_EQ("save returns 0", save_rc, 0);
+
+    Archive* b = archive_load(path);
+    ASSERT_TRUE("load returns non-null", b != NULL);
+    ASSERT_INT_EQ("loaded num_entries matches", b->num_entries, a->num_entries);
+    ASSERT_INT_EQ("loaded snapshot_size matches",
+        (int)b->snapshot_size, (int)a->snapshot_size);
+    ASSERT_INT_EQ("loaded num_atns matches", b->num_atns, a->num_atns);
+    ASSERT_INT_EQ("loaded hidden_state_size matches",
+        (int)b->hidden_state_size, (int)a->hidden_state_size);
+    ASSERT_INT_EQ("loaded action_chunk_pool_used matches",
+        b->action_chunk_pool_used_ints, a->action_chunk_pool_used_ints);
+
+    /* lookup works on the loaded archive */
+    ASSERT_INT_EQ("loaded lookup finds root", archive_lookup(b, k_root), idx_root);
+    ASSERT_INT_EQ("loaded lookup finds mid", archive_lookup(b, k_mid), idx_mid);
+    ASSERT_INT_EQ("loaded lookup finds leaf", archive_lookup(b, k_leaf), idx_leaf);
+
+    /* entries equal */
+    int entries_eq = memcmp(a->entries, b->entries,
+        (size_t)a->num_entries * sizeof(ArchiveEntry)) == 0;
+    ASSERT_INT_EQ("entries memcmp == 0", entries_eq, 1);
+
+    /* snapshot pool equal */
+    int snap_eq = memcmp(a->snapshot_pool, b->snapshot_pool,
+        (size_t)a->num_entries * a->snapshot_size) == 0;
+    ASSERT_INT_EQ("snapshot pool memcmp == 0", snap_eq, 1);
+
+    /* action chunk pool equal */
+    int chunks_eq = memcmp(a->action_chunk_pool, b->action_chunk_pool,
+        (size_t)a->action_chunk_pool_used_ints * sizeof(int)) == 0;
+    ASSERT_INT_EQ("action chunk pool memcmp == 0", chunks_eq, 1);
+
+    /* hidden state pool equal */
+    int hs_eq = memcmp(a->hidden_state_pool, b->hidden_state_pool,
+        (size_t)a->num_entries * a->hidden_state_size) == 0;
+    ASSERT_INT_EQ("hidden state pool memcmp == 0", hs_eq, 1);
+
+    /* replay actions on the loaded archive matches the original */
+    int total_ticks = 2 + 1;
+    int* a_replay = (int*)malloc((size_t)total_ticks * DUMMY_NUM_ATNS * sizeof(int));
+    int* b_replay = (int*)malloc((size_t)total_ticks * DUMMY_NUM_ATNS * sizeof(int));
+    int aw = archive_replay_actions(a, idx_leaf, a_replay, 100);
+    int bw = archive_replay_actions(b, idx_leaf, b_replay, 100);
+    ASSERT_INT_EQ("replay length matches", bw, aw);
+    int replay_eq = memcmp(a_replay, b_replay,
+        (size_t)aw * DUMMY_NUM_ATNS * sizeof(int)) == 0;
+    ASSERT_INT_EQ("replay actions memcmp == 0", replay_eq, 1);
+    free(a_replay);
+    free(b_replay);
+
+    archive_destroy(a);
+    archive_destroy(b);
+    remove(path);
+}
+
+static void test_archive_load_rejects_bad_magic(void) {
+    printf("--- archive load rejects file with bad magic ---\n");
+    const char* path = "/tmp/test_archive_bad_magic.bin";
+    FILE* fp = fopen(path, "wb");
+    ASSERT_TRUE("scratch file opened", fp != NULL);
+    uint32_t bad_magic = 0xDEADBEEFu;
+    fwrite(&bad_magic, sizeof(bad_magic), 1, fp);
+    /* pad enough bytes that a header read doesn't get a short-read first */
+    char pad[sizeof(ArchiveFileHeader)];
+    fwrite(pad, sizeof(pad), 1, fp);
+    fclose(fp);
+
+    Archive* a = archive_load(path);
+    ASSERT_TRUE("load returns NULL on bad magic", a == NULL);
+    remove(path);
+}
+
+static void test_archive_export_top_k_demos(void) {
+    printf("--- archive export top-K demos in PLAY_REPLAY format ---\n");
+
+    Archive* a = archive_create(DUMMY_CAPACITY, DUMMY_SNAP_SIZE,
+        DUMMY_NUM_ATNS, DUMMY_CHUNK_POOL_INTS, 0, 999u);
+    DummySnap snap = { .tag = 1, .payload = 1 };
+
+    /* build three chains with different qualities so we can verify ordering */
+    uint8_t k[6][ARCHIVE_KEY_SIZE];
+    for (int i = 0; i < 6; i++) make_key(k[i], 500 + i);
+
+    int chunk_a[2 * DUMMY_NUM_ATNS] = { 1,1,1,1, 2,2,2,2 };
+    int chunk_b[3 * DUMMY_NUM_ATNS] = { 3,3,3,3, 4,4,4,4, 5,5,5,5 };
+
+    ArchiveInsertResult r;
+    /* chain 1: leaf has q=0.9 (best), 2 ticks long */
+    int c1_root = archive_insert(a, k[0], &snap, NULL, ARCHIVE_ROOT_PARENT, NULL, 0, 7u, 0.5f, &r);
+    int c1_leaf = archive_insert(a, k[1], &snap, NULL, c1_root, chunk_a, 2, 7u, 0.9f, &r);
+
+    /* chain 2: leaf has q=0.4 (mid), 5 ticks long */
+    int c2_root = archive_insert(a, k[2], &snap, NULL, ARCHIVE_ROOT_PARENT, NULL, 0, 11u, 0.2f, &r);
+    int c2_mid  = archive_insert(a, k[3], &snap, NULL, c2_root, chunk_a, 2, 11u, 0.3f, &r);
+    int c2_leaf = archive_insert(a, k[4], &snap, NULL, c2_mid,  chunk_b, 3, 11u, 0.4f, &r);
+
+    /* chain 3: a single root-only entry with q=0.1 (no chunk, will be skipped) */
+    int c3_root = archive_insert(a, k[5], &snap, NULL, ARCHIVE_ROOT_PARENT, NULL, 0, 0u, 0.1f, &r);
+    (void)c1_leaf; (void)c2_leaf; (void)c3_root;
+
+    const char* dir = "/tmp/test_archive_demos";
+    mkdir(dir, 0755);
+
+    int written = archive_export_top_k_demos(a, dir, 10, 100);
+    /* expected: 4 (c1_root has 0 chunks but quality > 0; chain_tick_count = 0
+       for c1_root since its action_chunk_len is 0 and parent is ROOT, so it
+       gets filtered. c1_leaf, c2_root (chunk=0 also filtered), c2_mid, c2_leaf,
+       c3_root (chunk=0 filtered). So 3 chains have chunks: c1_leaf (2 ticks),
+       c2_mid (2 ticks via chain), c2_leaf (5 ticks via chain). */
+    ASSERT_INT_EQ("3 demo files written (chains with at least 1 action)",
+        written, 3);
+
+    /* verify the highest-quality file exists and is parseable */
+    char top_path[1024];
+    snprintf(top_path, sizeof(top_path), "%s/demo_0000_q0.900_t2.bin", dir);
+    FILE* fp = fopen(top_path, "rb");
+    ASSERT_TRUE("top demo file opens", fp != NULL);
+    int n_ticks = 0;
+    uint32_t rng_seed = 0;
+    int read_ok = (fread(&n_ticks, sizeof(int), 1, fp) == 1) &&
+                  (fread(&rng_seed, sizeof(uint32_t), 1, fp) == 1);
+    ASSERT_INT_EQ("top demo header reads", read_ok ? 1 : 0, 1);
+    ASSERT_INT_EQ("top demo n_ticks == 2", n_ticks, 2);
+    ASSERT_INT_EQ("top demo rng_seed matches chain root", (int)rng_seed, 7);
+
+    int actions[2 * DUMMY_NUM_ATNS] = {0};
+    size_t got = fread(actions, sizeof(int),
+        (size_t)n_ticks * DUMMY_NUM_ATNS, fp);
+    ASSERT_INT_EQ("top demo action bytes match",
+        (int)got, n_ticks * DUMMY_NUM_ATNS);
+    int actions_eq = memcmp(actions, chunk_a,
+        sizeof(chunk_a)) == 0;
+    ASSERT_INT_EQ("top demo actions match chunk_a", actions_eq, 1);
+    fclose(fp);
+
+    /* cleanup */
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
+    system(cmd);
+
+    archive_destroy(a);
+}
+
 int main(void) {
     test_archive_create_and_destroy();
     test_archive_insert_lookup_round_trip();
@@ -355,6 +533,9 @@ int main(void) {
     test_archive_full_returns_null();
     test_archive_hidden_state_round_trip();
     test_archive_no_hidden_state_returns_null();
+    test_archive_save_load_round_trip();
+    test_archive_load_rejects_bad_magic();
+    test_archive_export_top_k_demos();
 
     printf("\n%d/%d tests passed\n", tests_passed, tests_run);
     return (tests_failed == 0) ? 0 : 1;

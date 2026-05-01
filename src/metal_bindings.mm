@@ -561,7 +561,11 @@ PYBIND11_MODULE(_C, m) {
         int archive_capacity,
         int num_iterations,
         int action_chunk_pool_capacity_ints,
-        uint64_t archive_seed
+        uint64_t archive_seed,
+        const std::string& archive_save_path,
+        const std::string& demo_export_dir,
+        int demo_max_count,
+        int demo_max_replay_ticks
     ) -> py::dict {
         PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
         Archive* archive = nullptr;
@@ -574,9 +578,12 @@ PYBIND11_MODULE(_C, m) {
                 num_iterations,
                 action_chunk_pool_capacity_ints,
                 archive_seed,
+                archive_save_path.empty() ? nullptr : archive_save_path.c_str(),
+                demo_export_dir.empty() ? nullptr : demo_export_dir.c_str(),
+                demo_max_count,
+                demo_max_replay_ticks,
                 &archive);
         }
-        /* TODO(goexplore): save archive to disk before destroying. */
         if (archive) archive_destroy(archive);
 
         py::dict d;
@@ -584,6 +591,8 @@ PYBIND11_MODULE(_C, m) {
         d["total_new_cells"] = stats.total_new_cells;
         d["archive_size"] = stats.archive_size;
         d["total_dropped"] = stats.total_dropped;
+        d["demos_exported"] = stats.demos_exported;
+        d["save_ok"] = stats.save_ok;
         d["wall_seconds"] = stats.wall_seconds;
         return d;
     },
@@ -591,7 +600,11 @@ PYBIND11_MODULE(_C, m) {
     py::arg("archive_capacity"),
     py::arg("num_iterations"),
     py::arg("action_chunk_pool_capacity_ints") = 10000000,
-    py::arg("archive_seed") = (uint64_t)42);
+    py::arg("archive_seed") = (uint64_t)42,
+    py::arg("archive_save_path") = std::string(""),
+    py::arg("demo_export_dir") = std::string(""),
+    py::arg("demo_max_count") = 100,
+    py::arg("demo_max_replay_ticks") = 8192);
     m.def("uptime", [](py::object pufferl_obj) -> double {
         PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
         return wall_clock() - pufferl.start_time;

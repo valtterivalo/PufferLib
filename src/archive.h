@@ -378,10 +378,13 @@ static inline int archive_replay_actions(
     int* out,
     int out_capacity_ticks
 ) {
-    /* walk parents to count total ticks first */
+    /* walk parents to count total ticks first. cap at num_entries hops to
+       defend against cycles introduced by quality-replace. */
     int total_ticks = 0;
     int idx = entry_idx;
+    int hops = 0;
     while (idx != ARCHIVE_ROOT_PARENT) {
+        if (hops++ > a->num_entries) return -1;
         const ArchiveEntry* e = archive_get(a, idx);
         if (!e) return -1;
         total_ticks += e->action_chunk_len;
@@ -393,7 +396,9 @@ static inline int archive_replay_actions(
     /* second pass: fill in reverse, then we have it forward by construction */
     int write_end = total_ticks;
     idx = entry_idx;
+    hops = 0;
     while (idx != ARCHIVE_ROOT_PARENT) {
+        if (hops++ > a->num_entries) return -1;
         const ArchiveEntry* e = archive_get(a, idx);
         const int* chunk = archive_get_action_chunk(a, idx);
         int chunk_ticks = e->action_chunk_len;
@@ -416,6 +421,293 @@ static inline void archive_note_discovery_from(Archive* a, int parent_idx) {
     if (parent_idx == ARCHIVE_ROOT_PARENT) return;
     if (parent_idx < 0 || parent_idx >= a->num_entries) return;
     a->entries[parent_idx].chosen_since_new = 0;
+}
+
+
+/* ============================================================================
+ * Demo export
+ * ==========================================================================*/
+
+typedef struct {
+    int leaf_idx;
+    float quality;
+    int chain_ticks;
+} ArchiveDemoCandidate;
+
+static int archive_demo_compare_desc(const void* x, const void* y) {
+    const ArchiveDemoCandidate* a = (const ArchiveDemoCandidate*)x;
+    const ArchiveDemoCandidate* b = (const ArchiveDemoCandidate*)y;
+    if (a->quality > b->quality) return -1;
+    if (a->quality < b->quality) return 1;
+    /* tie break: shorter trajectory wins (cleaner demo) */
+    if (a->chain_ticks < b->chain_ticks) return -1;
+    if (a->chain_ticks > b->chain_ticks) return 1;
+    return 0;
+}
+
+/* Walk parent chain from leaf to root, return the rng_seed of the entry
+   whose parent is ARCHIVE_ROOT_PARENT (the first entry of the chain).
+   Returns 0u if the chain cycles. */
+static inline uint32_t archive_chain_root_rng_seed(const Archive* a, int leaf_idx) {
+    int idx = leaf_idx;
+    int hops = 0;
+    while (idx >= 0) {
+        if (hops++ > a->num_entries) return 0u;
+        const ArchiveEntry* e = archive_get(a, idx);
+        if (!e) return 0u;
+        if (e->parent_idx == ARCHIVE_ROOT_PARENT) return e->rng_seed;
+        idx = e->parent_idx;
+    }
+    return 0u;
+}
+
+/* Total tick count to walk the chain root->leaf. Returns -1 if the chain has
+   a cycle (more hops than archive entries) — quality-replace can rewire a
+   cell's parent_idx and produce cycles in pathological cases. */
+static inline int archive_chain_tick_count(const Archive* a, int leaf_idx) {
+    int total = 0;
+    int idx = leaf_idx;
+    int hops = 0;
+    while (idx >= 0) {
+        if (hops++ > a->num_entries) return -1;  /* cycle */
+        const ArchiveEntry* e = archive_get(a, idx);
+        if (!e) return -1;
+        total += e->action_chunk_len;
+        if (e->parent_idx == ARCHIVE_ROOT_PARENT) break;
+        idx = e->parent_idx;
+    }
+    return total;
+}
+
+/* Export the top-K archive cells (by quality, ties broken by shorter chain)
+   as replay files in the format expected by the existing Inferno PLAY_REPLAY
+   reader: [int32 num_ticks][uint32 rng_seed][num_ticks * num_atns int32].
+   File names: <output_dir>/demo_<rank>_q<quality>_t<ticks>.bin
+
+   max_replay_ticks is a safety bound on chain length; chains longer than
+   this are skipped (printed to stderr). The output directory must already
+   exist. Returns the number of demo files actually written. */
+static inline int archive_export_top_k_demos(
+    const Archive* a,
+    const char* output_dir,
+    int max_demos,
+    int max_replay_ticks
+) {
+    if (a->num_entries == 0 || max_demos <= 0 || !output_dir) return 0;
+
+    ArchiveDemoCandidate* candidates = (ArchiveDemoCandidate*)malloc(
+        (size_t)a->num_entries * sizeof(ArchiveDemoCandidate));
+    if (!candidates) return 0;
+
+    int n_candidates = 0;
+    for (int i = 0; i < a->num_entries; i++) {
+        int chain = archive_chain_tick_count(a, i);
+        if (chain <= 0 || chain > max_replay_ticks) continue;
+        candidates[n_candidates].leaf_idx = i;
+        candidates[n_candidates].quality = a->entries[i].quality;
+        candidates[n_candidates].chain_ticks = chain;
+        n_candidates++;
+    }
+
+    qsort(candidates, n_candidates, sizeof(ArchiveDemoCandidate),
+        archive_demo_compare_desc);
+
+    int n_export = (max_demos < n_candidates) ? max_demos : n_candidates;
+    int* action_buf = (int*)malloc(
+        (size_t)max_replay_ticks * (size_t)a->num_atns * sizeof(int));
+    if (!action_buf) {
+        free(candidates);
+        return 0;
+    }
+
+    int written = 0;
+    for (int rank = 0; rank < n_export; rank++) {
+        int leaf = candidates[rank].leaf_idx;
+        int n_ticks = archive_replay_actions(a, leaf, action_buf, max_replay_ticks);
+        if (n_ticks <= 0) continue;
+        uint32_t rng_seed = archive_chain_root_rng_seed(a, leaf);
+
+        char path[1024];
+        snprintf(path, sizeof(path),
+            "%s/demo_%04d_q%.3f_t%d.bin",
+            output_dir, rank, candidates[rank].quality, n_ticks);
+
+        FILE* fp = fopen(path, "wb");
+        if (!fp) {
+            fprintf(stderr, "archive_export_top_k_demos: fopen %s failed\n", path);
+            continue;
+        }
+        size_t expected = (size_t)n_ticks * (size_t)a->num_atns;
+        int ok =
+            fwrite(&n_ticks, sizeof(int), 1, fp) == 1 &&
+            fwrite(&rng_seed, sizeof(uint32_t), 1, fp) == 1 &&
+            fwrite(action_buf, sizeof(int), expected, fp) == expected;
+        int close_ok = (fclose(fp) == 0);
+        if (ok && close_ok) {
+            written++;
+        } else {
+            fprintf(stderr, "archive_export_top_k_demos: short write %s\n", path);
+        }
+    }
+
+    free(candidates);
+    free(action_buf);
+    return written;
+}
+
+
+/* ============================================================================
+ * Save / load
+ * ==========================================================================*/
+
+#define ARCHIVE_FILE_MAGIC 0x41524356u  /* 'ARCV' little-endian */
+#define ARCHIVE_FILE_VERSION 1u
+
+typedef struct {
+    uint32_t magic;
+    uint32_t version;
+    uint64_t capacity;
+    uint64_t snapshot_size;
+    uint64_t num_atns;
+    uint64_t hidden_state_size;
+    uint64_t num_entries;
+    uint64_t action_chunk_pool_used_ints;
+    uint64_t rng_state;
+} ArchiveFileHeader;
+
+/* Serialize the archive to `path`. Format:
+     ArchiveFileHeader
+     entries[num_entries]                   (ArchiveEntry, packed)
+     snapshot_pool[num_entries]             (snapshot_size bytes each)
+     action_chunk_pool[action_chunk_pool_used_ints]  (int32 each)
+     hidden_state_pool[num_entries]         (hidden_state_size bytes each, omitted if zero)
+   Bucket table is rebuilt at load time from the entry keys. Returns 0 on
+   success, -1 on failure (also prints to stderr). */
+static inline int archive_save(const Archive* a, const char* path) {
+    FILE* fp = fopen(path, "wb");
+    if (!fp) {
+        fprintf(stderr, "archive_save: fopen %s failed\n", path);
+        return -1;
+    }
+
+    ArchiveFileHeader header = {
+        .magic = ARCHIVE_FILE_MAGIC,
+        .version = ARCHIVE_FILE_VERSION,
+        .capacity = (uint64_t)a->capacity,
+        .snapshot_size = (uint64_t)a->snapshot_size,
+        .num_atns = (uint64_t)a->num_atns,
+        .hidden_state_size = (uint64_t)a->hidden_state_size,
+        .num_entries = (uint64_t)a->num_entries,
+        .action_chunk_pool_used_ints = (uint64_t)a->action_chunk_pool_used_ints,
+        .rng_state = a->rng_state,
+    };
+
+    int ok = 1;
+    ok &= fwrite(&header, sizeof(header), 1, fp) == 1;
+    if (a->num_entries > 0) {
+        ok &= fwrite(a->entries, sizeof(ArchiveEntry),
+            (size_t)a->num_entries, fp) == (size_t)a->num_entries;
+        ok &= fwrite(a->snapshot_pool, a->snapshot_size,
+            (size_t)a->num_entries, fp) == (size_t)a->num_entries;
+    }
+    if (a->action_chunk_pool_used_ints > 0) {
+        ok &= fwrite(a->action_chunk_pool, sizeof(int),
+            (size_t)a->action_chunk_pool_used_ints, fp)
+            == (size_t)a->action_chunk_pool_used_ints;
+    }
+    if (a->hidden_state_size > 0 && a->num_entries > 0) {
+        ok &= fwrite(a->hidden_state_pool, a->hidden_state_size,
+            (size_t)a->num_entries, fp) == (size_t)a->num_entries;
+    }
+
+    int close_ok = (fclose(fp) == 0);
+    if (!ok || !close_ok) {
+        fprintf(stderr, "archive_save: short write or close error on %s\n", path);
+        return -1;
+    }
+    return 0;
+}
+
+/* Load an archive from disk. Returns NULL on failure. The returned archive's
+   action_chunk_pool_capacity is set equal to the loaded used count, so any
+   subsequent insert will report ARCHIVE_INSERT_FULL (loaded archives are
+   read-only by default). To extend, the caller can re-create with extra
+   capacity and re-insert entries. */
+static inline Archive* archive_load(const char* path) {
+    FILE* fp = fopen(path, "rb");
+    if (!fp) {
+        fprintf(stderr, "archive_load: fopen %s failed\n", path);
+        return NULL;
+    }
+
+    ArchiveFileHeader header;
+    if (fread(&header, sizeof(header), 1, fp) != 1) {
+        fprintf(stderr, "archive_load: short read on header\n");
+        fclose(fp);
+        return NULL;
+    }
+    if (header.magic != ARCHIVE_FILE_MAGIC) {
+        fprintf(stderr, "archive_load: bad magic 0x%08x in %s\n", header.magic, path);
+        fclose(fp);
+        return NULL;
+    }
+    if (header.version != ARCHIVE_FILE_VERSION) {
+        fprintf(stderr, "archive_load: version mismatch %u (want %u)\n",
+            header.version, ARCHIVE_FILE_VERSION);
+        fclose(fp);
+        return NULL;
+    }
+
+    Archive* a = archive_create(
+        (int)header.capacity,
+        (size_t)header.snapshot_size,
+        (int)header.num_atns,
+        (int)header.action_chunk_pool_used_ints,
+        (size_t)header.hidden_state_size,
+        header.rng_state);
+    if (!a) {
+        fclose(fp);
+        return NULL;
+    }
+
+    a->num_entries = (int)header.num_entries;
+    a->action_chunk_pool_used_ints = (int)header.action_chunk_pool_used_ints;
+
+    int ok = 1;
+    if (a->num_entries > 0) {
+        ok &= fread(a->entries, sizeof(ArchiveEntry),
+            (size_t)a->num_entries, fp) == (size_t)a->num_entries;
+        ok &= fread(a->snapshot_pool, a->snapshot_size,
+            (size_t)a->num_entries, fp) == (size_t)a->num_entries;
+    }
+    if (a->action_chunk_pool_used_ints > 0) {
+        ok &= fread(a->action_chunk_pool, sizeof(int),
+            (size_t)a->action_chunk_pool_used_ints, fp)
+            == (size_t)a->action_chunk_pool_used_ints;
+    }
+    if (a->hidden_state_size > 0 && a->num_entries > 0) {
+        ok &= fread(a->hidden_state_pool, a->hidden_state_size,
+            (size_t)a->num_entries, fp) == (size_t)a->num_entries;
+    }
+    fclose(fp);
+
+    if (!ok) {
+        fprintf(stderr, "archive_load: short read on body of %s\n", path);
+        archive_destroy(a);
+        return NULL;
+    }
+
+    /* rebuild bucket table from loaded entry keys */
+    for (int i = 0; i < a->num_entries; i++) {
+        int b = archive_find_bucket(a, a->entries[i].key);
+        if (b < 0) {
+            fprintf(stderr, "archive_load: hash table full while rebuilding from %s\n", path);
+            archive_destroy(a);
+            return NULL;
+        }
+        a->bucket_to_entry[b] = i;
+    }
+    return a;
 }
 
 #endif /* ARCHIVE_H */
