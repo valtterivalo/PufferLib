@@ -61,7 +61,7 @@ static void make_key(uint8_t* key, int seed) {
 static void test_archive_create_and_destroy(void) {
     printf("--- archive create and destroy ---\n");
     Archive* a = archive_create(DUMMY_CAPACITY, DUMMY_SNAP_SIZE,
-        DUMMY_NUM_ATNS, DUMMY_CHUNK_POOL_INTS, 42u);
+        DUMMY_NUM_ATNS, DUMMY_CHUNK_POOL_INTS, 0, 42u);
     ASSERT_TRUE("archive created", a != NULL);
     ASSERT_INT_EQ("capacity", a->capacity, DUMMY_CAPACITY);
     ASSERT_INT_EQ("num_entries starts at 0", a->num_entries, 0);
@@ -74,14 +74,14 @@ static void test_archive_create_and_destroy(void) {
 static void test_archive_insert_lookup_round_trip(void) {
     printf("--- archive insert / lookup round trip ---\n");
     Archive* a = archive_create(DUMMY_CAPACITY, DUMMY_SNAP_SIZE,
-        DUMMY_NUM_ATNS, DUMMY_CHUNK_POOL_INTS, 42u);
+        DUMMY_NUM_ATNS, DUMMY_CHUNK_POOL_INTS, 0, 42u);
 
     DummySnap snap = { .tag = 0xAA, .payload = 7 };
     uint8_t key[ARCHIVE_KEY_SIZE];
     make_key(key, 1);
 
     ArchiveInsertResult r = (ArchiveInsertResult)-1;
-    int idx = archive_insert(a, key, &snap, ARCHIVE_ROOT_PARENT,
+    int idx = archive_insert(a, key, &snap, NULL, ARCHIVE_ROOT_PARENT,
         NULL, 0, 0u, 0.5f, &r);
     ASSERT_TRUE("first insert returns valid index", idx >= 0);
     ASSERT_INT_EQ("first insert result is NEW", (int)r, (int)ARCHIVE_INSERT_NEW);
@@ -101,20 +101,20 @@ static void test_archive_insert_lookup_round_trip(void) {
 static void test_archive_duplicate_replaces_on_higher_quality(void) {
     printf("--- archive duplicate replaces on strictly higher quality ---\n");
     Archive* a = archive_create(DUMMY_CAPACITY, DUMMY_SNAP_SIZE,
-        DUMMY_NUM_ATNS, DUMMY_CHUNK_POOL_INTS, 42u);
+        DUMMY_NUM_ATNS, DUMMY_CHUNK_POOL_INTS, 0, 42u);
 
     uint8_t key[ARCHIVE_KEY_SIZE];
     make_key(key, 5);
 
     DummySnap a_snap = { .tag = 1, .payload = 100 };
     ArchiveInsertResult r = (ArchiveInsertResult)-1;
-    int idx_a = archive_insert(a, key, &a_snap, ARCHIVE_ROOT_PARENT,
+    int idx_a = archive_insert(a, key, &a_snap, NULL, ARCHIVE_ROOT_PARENT,
         NULL, 0, 0u, 0.3f, &r);
     ASSERT_INT_EQ("first insert NEW", (int)r, (int)ARCHIVE_INSERT_NEW);
 
     /* lower quality: kept, seen++ */
     DummySnap b_snap = { .tag = 2, .payload = 200 };
-    int idx_b = archive_insert(a, key, &b_snap, ARCHIVE_ROOT_PARENT,
+    int idx_b = archive_insert(a, key, &b_snap, NULL, ARCHIVE_ROOT_PARENT,
         NULL, 0, 0u, 0.2f, &r);
     ASSERT_INT_EQ("lower quality returns same idx", idx_b, idx_a);
     ASSERT_INT_EQ("lower quality result KEPT", (int)r, (int)ARCHIVE_INSERT_KEPT);
@@ -124,7 +124,7 @@ static void test_archive_duplicate_replaces_on_higher_quality(void) {
 
     /* higher quality: replaces */
     DummySnap c_snap = { .tag = 3, .payload = 300 };
-    int idx_c = archive_insert(a, key, &c_snap, ARCHIVE_ROOT_PARENT,
+    int idx_c = archive_insert(a, key, &c_snap, NULL, ARCHIVE_ROOT_PARENT,
         NULL, 0, 0u, 0.7f, &r);
     ASSERT_INT_EQ("higher quality returns same idx", idx_c, idx_a);
     ASSERT_INT_EQ("higher quality result REPLACED", (int)r, (int)ARCHIVE_INSERT_REPLACED);
@@ -134,7 +134,7 @@ static void test_archive_duplicate_replaces_on_higher_quality(void) {
 
     /* equal quality: kept (strict) */
     DummySnap d_snap = { .tag = 4, .payload = 400 };
-    int idx_d = archive_insert(a, key, &d_snap, ARCHIVE_ROOT_PARENT,
+    int idx_d = archive_insert(a, key, &d_snap, NULL, ARCHIVE_ROOT_PARENT,
         NULL, 0, 0u, 0.7f, &r);
     ASSERT_INT_EQ("equal quality returns same idx", idx_d, idx_a);
     ASSERT_INT_EQ("equal quality result KEPT", (int)r, (int)ARCHIVE_INSERT_KEPT);
@@ -147,7 +147,7 @@ static void test_archive_duplicate_replaces_on_higher_quality(void) {
 static void test_archive_action_chunk_roundtrip_and_replay(void) {
     printf("--- archive action chunk replay walks parent chain ---\n");
     Archive* a = archive_create(DUMMY_CAPACITY, DUMMY_SNAP_SIZE,
-        DUMMY_NUM_ATNS, DUMMY_CHUNK_POOL_INTS, 42u);
+        DUMMY_NUM_ATNS, DUMMY_CHUNK_POOL_INTS, 0, 42u);
 
     DummySnap snap = { .tag = 0, .payload = 0 };
 
@@ -177,11 +177,11 @@ static void test_archive_action_chunk_roundtrip_and_replay(void) {
     };
 
     ArchiveInsertResult r;
-    int idx_root = archive_insert(a, key_root, &snap, ARCHIVE_ROOT_PARENT,
+    int idx_root = archive_insert(a, key_root, &snap, NULL, ARCHIVE_ROOT_PARENT,
         chunk_root, 2, 0u, 0.1f, &r);
-    int idx_mid = archive_insert(a, key_mid, &snap, idx_root,
+    int idx_mid = archive_insert(a, key_mid, &snap, NULL, idx_root,
         chunk_mid, 3, 0u, 0.2f, &r);
-    int idx_tail = archive_insert(a, key_tail, &snap, idx_mid,
+    int idx_tail = archive_insert(a, key_tail, &snap, NULL, idx_mid,
         chunk_tail, 4, 0u, 0.3f, &r);
 
     ASSERT_TRUE("root inserted", idx_root >= 0);
@@ -212,7 +212,7 @@ static void test_archive_action_chunk_roundtrip_and_replay(void) {
 static void test_archive_sample_weights_high_quality(void) {
     printf("--- archive sample biases toward higher-quality entries ---\n");
     Archive* a = archive_create(DUMMY_CAPACITY, DUMMY_SNAP_SIZE,
-        DUMMY_NUM_ATNS, DUMMY_CHUNK_POOL_INTS, 0xC0FFEEu);
+        DUMMY_NUM_ATNS, DUMMY_CHUNK_POOL_INTS, 0, 0xC0FFEEu);
 
     DummySnap snap = { .tag = 0, .payload = 0 };
 
@@ -223,7 +223,7 @@ static void test_archive_sample_weights_high_quality(void) {
     for (int i = 0; i < 4; i++) {
         uint8_t key[ARCHIVE_KEY_SIZE];
         make_key(key, 200 + i);
-        idx[i] = archive_insert(a, key, &snap, ARCHIVE_ROOT_PARENT,
+        idx[i] = archive_insert(a, key, &snap, NULL, ARCHIVE_ROOT_PARENT,
             NULL, 0, 0u, qs[i], &r);
     }
 
@@ -256,22 +256,93 @@ static void test_archive_full_returns_null(void) {
     printf("--- archive full returns ARCHIVE_NULL_INDEX ---\n");
     int cap = 4;
     Archive* a = archive_create(cap, DUMMY_SNAP_SIZE,
-        DUMMY_NUM_ATNS, DUMMY_CHUNK_POOL_INTS, 7u);
+        DUMMY_NUM_ATNS, DUMMY_CHUNK_POOL_INTS, 0, 7u);
     DummySnap snap = { .tag = 0, .payload = 0 };
     ArchiveInsertResult r;
     for (int i = 0; i < cap; i++) {
         uint8_t key[ARCHIVE_KEY_SIZE];
         make_key(key, 300 + i);
-        int idx = archive_insert(a, key, &snap, ARCHIVE_ROOT_PARENT,
+        int idx = archive_insert(a, key, &snap, NULL, ARCHIVE_ROOT_PARENT,
             NULL, 0, 0u, 0.1f, &r);
         ASSERT_TRUE("fits while under capacity", idx >= 0);
     }
     uint8_t over_key[ARCHIVE_KEY_SIZE];
     make_key(over_key, 999);
-    int over = archive_insert(a, over_key, &snap, ARCHIVE_ROOT_PARENT,
+    int over = archive_insert(a, over_key, &snap, NULL, ARCHIVE_ROOT_PARENT,
         NULL, 0, 0u, 0.1f, &r);
     ASSERT_INT_EQ("over-capacity returns null index", over, ARCHIVE_NULL_INDEX);
     ASSERT_INT_EQ("over-capacity reports FULL", (int)r, (int)ARCHIVE_INSERT_FULL);
+    archive_destroy(a);
+}
+
+static void test_archive_hidden_state_round_trip(void) {
+    printf("--- archive hidden state round trips per entry ---\n");
+    /* simulate a recurrent policy with [num_layers, hidden_size] = [3, 256] floats */
+    const size_t hidden_state_size = 3 * 256 * sizeof(float);
+
+    Archive* a = archive_create(DUMMY_CAPACITY, DUMMY_SNAP_SIZE,
+        DUMMY_NUM_ATNS, DUMMY_CHUNK_POOL_INTS, hidden_state_size, 42u);
+    ASSERT_TRUE("archive with hidden state created", a != NULL);
+    ASSERT_INT_EQ("hidden_state_pool allocated",
+        (int)(a->hidden_state_pool != NULL ? 1 : 0), 1);
+
+    DummySnap snap = { .tag = 0, .payload = 0 };
+
+    /* entry 1: insert with a recognizable hidden state */
+    float hs_a[3 * 256];
+    for (int i = 0; i < 3 * 256; i++) hs_a[i] = (float)i * 0.001f;
+    uint8_t key_a[ARCHIVE_KEY_SIZE];
+    make_key(key_a, 50);
+    ArchiveInsertResult r;
+    int idx_a = archive_insert(a, key_a, &snap, hs_a, ARCHIVE_ROOT_PARENT,
+        NULL, 0, 0u, 0.5f, &r);
+    ASSERT_TRUE("insert with hidden state ok", idx_a >= 0);
+
+    const float* hs_back = (const float*)archive_get_hidden_state(a, idx_a);
+    ASSERT_TRUE("hidden state retrievable", hs_back != NULL);
+    int diff = memcmp(hs_back, hs_a, hidden_state_size);
+    ASSERT_INT_EQ("hidden state byte-identical to insert", diff, 0);
+
+    /* entry 2: insert with NULL hidden state (should be zero-filled) */
+    uint8_t key_b[ARCHIVE_KEY_SIZE];
+    make_key(key_b, 51);
+    int idx_b = archive_insert(a, key_b, &snap, NULL, ARCHIVE_ROOT_PARENT,
+        NULL, 0, 0u, 0.5f, &r);
+    ASSERT_TRUE("insert with NULL hidden state ok", idx_b >= 0);
+    const float* hs_b = (const float*)archive_get_hidden_state(a, idx_b);
+    int all_zero = 1;
+    for (int i = 0; i < 3 * 256; i++) {
+        if (hs_b[i] != 0.0f) { all_zero = 0; break; }
+    }
+    ASSERT_INT_EQ("NULL hidden state stored as zeros", all_zero, 1);
+
+    /* entry 1 quality replace: hidden state should be replaced too */
+    float hs_a2[3 * 256];
+    for (int i = 0; i < 3 * 256; i++) hs_a2[i] = (float)(i + 1000) * 0.002f;
+    int idx_a2 = archive_insert(a, key_a, &snap, hs_a2, ARCHIVE_ROOT_PARENT,
+        NULL, 0, 0u, 0.9f, &r);
+    ASSERT_INT_EQ("replace returns same idx", idx_a2, idx_a);
+    ASSERT_INT_EQ("replace result", (int)r, (int)ARCHIVE_INSERT_REPLACED);
+    const float* hs_back2 = (const float*)archive_get_hidden_state(a, idx_a);
+    int diff2 = memcmp(hs_back2, hs_a2, hidden_state_size);
+    ASSERT_INT_EQ("hidden state replaced on quality upgrade", diff2, 0);
+
+    archive_destroy(a);
+}
+
+static void test_archive_no_hidden_state_returns_null(void) {
+    printf("--- archive without hidden state pool returns NULL on get ---\n");
+    Archive* a = archive_create(DUMMY_CAPACITY, DUMMY_SNAP_SIZE,
+        DUMMY_NUM_ATNS, DUMMY_CHUNK_POOL_INTS, 0, 42u);
+    DummySnap snap = { 0 };
+    uint8_t key[ARCHIVE_KEY_SIZE];
+    make_key(key, 60);
+    ArchiveInsertResult r;
+    int idx = archive_insert(a, key, &snap, NULL, ARCHIVE_ROOT_PARENT,
+        NULL, 0, 0u, 0.5f, &r);
+    ASSERT_TRUE("insert ok", idx >= 0);
+    const void* hs = archive_get_hidden_state(a, idx);
+    ASSERT_TRUE("get_hidden_state returns NULL when pool absent", hs == NULL);
     archive_destroy(a);
 }
 
@@ -282,6 +353,8 @@ int main(void) {
     test_archive_action_chunk_roundtrip_and_replay();
     test_archive_sample_weights_high_quality();
     test_archive_full_returns_null();
+    test_archive_hidden_state_round_trip();
+    test_archive_no_hidden_state_returns_null();
 
     printf("\n%d/%d tests passed\n", tests_passed, tests_run);
     return (tests_failed == 0) ? 0 : 1;

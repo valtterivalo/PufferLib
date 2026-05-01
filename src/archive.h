@@ -57,6 +57,13 @@ typedef struct {
     int action_chunk_pool_used_ints;
     int num_atns;                /* ints per tick */
 
+    /* Optional per-entry hidden state pool for recurrent policies. When
+       hidden_state_size == 0 no pool is allocated and inserts ignore the
+       hidden state argument. When > 0 each entry has a fixed hidden_state_size
+       slot; inserting NULL writes zeros. */
+    uint8_t* hidden_state_pool;
+    size_t hidden_state_size;
+
     uint64_t rng_state;          /* xorshift state for sampling */
 } Archive;
 
@@ -97,6 +104,7 @@ static inline Archive* archive_create(
     size_t snapshot_size,
     int num_atns,
     int action_chunk_pool_capacity_ints,
+    size_t hidden_state_size,
     uint64_t seed
 ) {
     if (capacity <= 0 || snapshot_size == 0 || num_atns <= 0) return NULL;
@@ -108,6 +116,7 @@ static inline Archive* archive_create(
     a->snapshot_size = snapshot_size;
     a->num_atns = num_atns;
     a->action_chunk_pool_capacity_ints = action_chunk_pool_capacity_ints;
+    a->hidden_state_size = hidden_state_size;
     a->rng_state = seed ? seed : 0x12345678abcdef01ULL;
 
     /* hash table sized 2x capacity for low load factor, rounded up to pow2,
@@ -119,13 +128,18 @@ static inline Archive* archive_create(
     a->entries = (ArchiveEntry*)calloc((size_t)capacity, sizeof(ArchiveEntry));
     a->snapshot_pool = (uint8_t*)malloc((size_t)capacity * snapshot_size);
     a->action_chunk_pool = (int*)malloc((size_t)action_chunk_pool_capacity_ints * sizeof(int));
+    a->hidden_state_pool = (hidden_state_size > 0)
+        ? (uint8_t*)malloc((size_t)capacity * hidden_state_size)
+        : NULL;
 
     if (!a->bucket_to_entry || !a->entries ||
-        !a->snapshot_pool || !a->action_chunk_pool) {
+        !a->snapshot_pool || !a->action_chunk_pool ||
+        (hidden_state_size > 0 && !a->hidden_state_pool)) {
         free(a->bucket_to_entry);
         free(a->entries);
         free(a->snapshot_pool);
         free(a->action_chunk_pool);
+        free(a->hidden_state_pool);
         free(a);
         return NULL;
     }
@@ -142,6 +156,7 @@ static inline void archive_destroy(Archive* a) {
     free(a->entries);
     free(a->snapshot_pool);
     free(a->action_chunk_pool);
+    free(a->hidden_state_pool);
     free(a);
 }
 
@@ -179,16 +194,19 @@ typedef enum {
 } ArchiveInsertResult;
 
 /* Insert a cell. If the cell already exists and the new quality is strictly
-   higher, the snapshot/action_chunk/quality/parent fields are replaced. The
-   old action chunk is leaked into the pool (orphaned), which is fine for
-   short Go-Explore runs. Returns the entry index (>= 0) on success, or
-   ARCHIVE_NULL_INDEX on full. The result enum tells the caller what happened
-   so they can update outer state (e.g. reset chosen_since_new on the parent
-   when this cell was newly created or improved). */
+   higher, the snapshot/action_chunk/quality/parent/hidden_state fields are
+   replaced. The old action chunk is leaked into the pool (orphaned), which is
+   fine for short Go-Explore runs. hidden_state may be NULL even when the
+   archive has a hidden state pool; in that case zeros are written. Returns
+   the entry index (>= 0) on success, or ARCHIVE_NULL_INDEX on full. The
+   result enum tells the caller what happened so they can update outer state
+   (e.g. reset chosen_since_new on the parent when this cell was newly created
+   or improved). */
 static inline int archive_insert(
     Archive* a,
     const uint8_t* key,
     const void* snapshot,
+    const void* hidden_state,
     int parent_idx,
     const int* action_chunk,
     int action_chunk_len,
@@ -214,6 +232,11 @@ static inline int archive_insert(
             }
             memcpy(&a->snapshot_pool[(size_t)existing * a->snapshot_size],
                    snapshot, a->snapshot_size);
+            if (a->hidden_state_size > 0) {
+                uint8_t* dst = &a->hidden_state_pool[(size_t)existing * a->hidden_state_size];
+                if (hidden_state) memcpy(dst, hidden_state, a->hidden_state_size);
+                else memset(dst, 0, a->hidden_state_size);
+            }
             int offset = a->action_chunk_pool_used_ints;
             if (action_chunk && needed > 0) {
                 memcpy(&a->action_chunk_pool[offset],
@@ -260,6 +283,12 @@ static inline int archive_insert(
     memcpy(&a->snapshot_pool[(size_t)idx * a->snapshot_size],
            snapshot, a->snapshot_size);
 
+    if (a->hidden_state_size > 0) {
+        uint8_t* dst = &a->hidden_state_pool[(size_t)idx * a->hidden_state_size];
+        if (hidden_state) memcpy(dst, hidden_state, a->hidden_state_size);
+        else memset(dst, 0, a->hidden_state_size);
+    }
+
     if (action_chunk && needed > 0) {
         e->action_chunk_offset = a->action_chunk_pool_used_ints;
         e->action_chunk_len = action_chunk_len;
@@ -292,6 +321,12 @@ static inline const int* archive_get_action_chunk(const Archive* a, int entry_id
     const ArchiveEntry* e = &a->entries[entry_idx];
     if (e->action_chunk_offset < 0) return NULL;
     return &a->action_chunk_pool[e->action_chunk_offset];
+}
+
+static inline const void* archive_get_hidden_state(const Archive* a, int entry_idx) {
+    if (entry_idx < 0 || entry_idx >= a->num_entries) return NULL;
+    if (a->hidden_state_size == 0 || !a->hidden_state_pool) return NULL;
+    return &a->hidden_state_pool[(size_t)entry_idx * a->hidden_state_size];
 }
 
 
