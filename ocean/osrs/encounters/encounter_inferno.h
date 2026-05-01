@@ -4527,6 +4527,68 @@ static void inf_step_human_commands(EncounterState* state, HumanInput* hi) {
 }
 
 
+/* snapshot/restore: archive-based exploration captures the full encounter state
+   so we can branch from it later. process-local pointers (collision_map,
+   human_commands) and the per-env episode Log accumulator are preserved across
+   restore — they belong to the live env, not the recorded snapshot. */
+
+#define INF_SNAPSHOT_MAGIC 0x1FE00001u
+#define INF_SNAPSHOT_VERSION 1u
+
+typedef struct {
+    uint32_t magic;
+    uint32_t version;
+    InfernoState state;
+} InfSnapshot;
+
+static size_t inf_snapshot_size(EncounterState* state) {
+    (void)state;
+    return sizeof(InfSnapshot);
+}
+
+static void inf_snapshot(EncounterState* state, void* out) {
+    InfSnapshot* snap = (InfSnapshot*)out;
+    snap->magic = INF_SNAPSHOT_MAGIC;
+    snap->version = INF_SNAPSHOT_VERSION;
+    snap->state = *(InfernoState*)state;
+}
+
+static void inf_restore(EncounterState* state, const void* data, size_t n) {
+    if (n != sizeof(InfSnapshot)) {
+        fprintf(stderr,
+                "inf_restore: bad snapshot size %zu (expected %zu)\n",
+                n, sizeof(InfSnapshot));
+        abort();
+    }
+    const InfSnapshot* snap = (const InfSnapshot*)data;
+    if (snap->magic != INF_SNAPSHOT_MAGIC || snap->version != INF_SNAPSHOT_VERSION) {
+        fprintf(stderr,
+                "inf_restore: bad magic/version (got 0x%08x v%u, want 0x%08x v%u)\n",
+                snap->magic, snap->version,
+                INF_SNAPSHOT_MAGIC, INF_SNAPSHOT_VERSION);
+        abort();
+    }
+
+    InfernoState* dst = (InfernoState*)state;
+
+    const CollisionMap* collision_map = dst->collision_map;
+    int world_offset_x = dst->world_offset_x;
+    int world_offset_y = dst->world_offset_y;
+    Log saved_log = dst->log;
+    const HumanCommand* human_commands = dst->human_commands;
+    int human_command_count = dst->human_command_count;
+
+    *dst = snap->state;
+
+    dst->collision_map = collision_map;
+    dst->world_offset_x = world_offset_x;
+    dst->world_offset_y = world_offset_y;
+    dst->log = saved_log;
+    dst->human_commands = human_commands;
+    dst->human_command_count = human_command_count;
+}
+
+
 static const EncounterDef ENCOUNTER_INFERNO = {
     .name = "inferno",
     .obs_size = INF_NUM_OBS,
@@ -4539,6 +4601,10 @@ static const EncounterDef ENCOUNTER_INFERNO = {
     .reset = inf_reset,
     .step = inf_step,
     .step_human_commands = inf_step_human_commands,
+
+    .snapshot_size = inf_snapshot_size,
+    .snapshot = inf_snapshot,
+    .restore = inf_restore,
 
     .write_obs = inf_write_obs,
     .write_mask = inf_write_mask,

@@ -1598,6 +1598,16 @@ typedef struct {
     void (*step)(EncounterState* state, const int* actions);
     void (*step_human_commands)(EncounterState* state, struct HumanInput* hi);
 
+    /* state snapshot/restore for archive-based exploration. NULL = not supported.
+       snapshot_size returns the byte count the caller must allocate before calling
+       snapshot. snapshot writes the full encounter state to `out`. restore loads
+       it back. snapshot+restore must round-trip exactly: stepping from a restored
+       state with a fixed action sequence reproduces the same trajectory the
+       snapshot was taken from. */
+    size_t (*snapshot_size)(EncounterState* state);
+    void (*snapshot)(EncounterState* state, void* out);
+    void (*restore)(EncounterState* state, const void* data, size_t n);
+
     /* RL interface */
     void (*write_obs)(EncounterState* state, float* obs_out);
     void (*write_mask)(EncounterState* state, float* mask_out);

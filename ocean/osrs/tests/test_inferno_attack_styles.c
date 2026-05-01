@@ -1917,6 +1917,118 @@ static void test_human_target_and_potion_translation(void) {
     }
 }
 
+static void test_inferno_snapshot_restore_round_trip(void) {
+    printf("--- inferno snapshot/restore round trip ---\n");
+
+    EncounterState* raw = inf_create();
+    InfernoState* state = (InfernoState*)raw;
+    inf_reset(raw, 31415u);
+
+    int actions_a[INF_NUM_ACTION_HEADS] = {0};
+    actions_a[INF_HEAD_MOVE] = 1;
+    actions_a[INF_HEAD_TARGET] = 1;
+    actions_a[INF_HEAD_PRAYER] = 1;
+
+    int actions_b[INF_NUM_ACTION_HEADS] = {0};
+    actions_b[INF_HEAD_MOVE] = 5;
+    actions_b[INF_HEAD_TARGET] = 2;
+    actions_b[INF_HEAD_PRAYER] = 2;
+
+    /* advance the env into a non-trivial state */
+    const int N1 = 12;
+    for (int i = 0; i < N1; i++) inf_step(raw, actions_a);
+
+    /* checkpoint A: state at tick N1 */
+    size_t snap_size = inf_snapshot_size(raw);
+    ASSERT_INT_EQ("snapshot size matches sizeof(InfSnapshot)",
+        (int)snap_size, (int)sizeof(InfSnapshot));
+    InfSnapshot* snap_A = (InfSnapshot*)malloc(snap_size);
+    inf_snapshot(raw, snap_A);
+    ASSERT_INT_EQ("snapshot magic stamped",
+        (int)snap_A->magic, (int)INF_SNAPSHOT_MAGIC);
+    ASSERT_INT_EQ("snapshot version stamped",
+        (int)snap_A->version, (int)INF_SNAPSHOT_VERSION);
+
+    /* step further: this is the "future" trajectory we will reproduce */
+    const int N2 = 18;
+    for (int i = 0; i < N2; i++) inf_step(raw, actions_b);
+
+    /* checkpoint B: state at tick N1+N2 (without restore) */
+    InfSnapshot* snap_B = (InfSnapshot*)malloc(snap_size);
+    inf_snapshot(raw, snap_B);
+
+    /* now restore A and replay the same N2 actions */
+    inf_restore(raw, snap_A, snap_size);
+    ASSERT_INT_EQ("tick reset to N1 after restore", state->tick, N1);
+    for (int i = 0; i < N2; i++) inf_step(raw, actions_b);
+
+    /* checkpoint B': state at tick N1+N2 after restore-then-replay */
+    InfSnapshot* snap_B_prime = (InfSnapshot*)malloc(snap_size);
+    inf_snapshot(raw, snap_B_prime);
+
+    /* the two trajectories must match exactly: this is the core Go-Explore
+       property. compare the InfernoState struct in full via memcmp. */
+    int diff = memcmp(&snap_B->state, &snap_B_prime->state, sizeof(InfernoState));
+    ASSERT_INT_EQ("memcmp(state at N1+N2, state after restore+replay) == 0", diff, 0);
+
+    /* spot-check critical fields with friendly names so a regression points the
+       reader at the field that drifted */
+    InfernoState* a = &snap_B->state;
+    InfernoState* b = &snap_B_prime->state;
+    ASSERT_INT_EQ("tick", a->tick, b->tick);
+    ASSERT_INT_EQ("wave", a->wave, b->wave);
+    ASSERT_INT_EQ("episode_over", a->episode_over, b->episode_over);
+    ASSERT_INT_EQ("winner", a->winner, b->winner);
+    ASSERT_INT_EQ("rng_state", (int)a->rng_state, (int)b->rng_state);
+    ASSERT_INT_EQ("player x", a->player.x, b->player.x);
+    ASSERT_INT_EQ("player y", a->player.y, b->player.y);
+    ASSERT_INT_EQ("player hp", a->player.current_hitpoints, b->player.current_hitpoints);
+    ASSERT_INT_EQ("player prayer", a->player.current_prayer, b->player.current_prayer);
+
+    free(snap_A);
+    free(snap_B);
+    free(snap_B_prime);
+    inf_destroy(raw);
+}
+
+static void test_inferno_snapshot_preserves_external_pointers(void) {
+    printf("--- inferno snapshot preserves external pointers across restore ---\n");
+
+    EncounterState* raw_a = inf_create();
+    EncounterState* raw_b = inf_create();
+    InfernoState* state_a = (InfernoState*)raw_a;
+    InfernoState* state_b = (InfernoState*)raw_b;
+
+    /* simulate two envs each holding their own collision_map pointer (in the real
+       binding these point at a process-local cached collision grid; restore must
+       not clobber the live env's pointer with the snapshot's). */
+    int dummy_a = 1, dummy_b = 2;
+    state_a->collision_map = (const CollisionMap*)&dummy_a;
+    state_b->collision_map = (const CollisionMap*)&dummy_b;
+
+    inf_reset(raw_a, 7u);
+    /* re-set after reset zeroes the struct */
+    state_a->collision_map = (const CollisionMap*)&dummy_a;
+    inf_reset(raw_b, 7u);
+    state_b->collision_map = (const CollisionMap*)&dummy_b;
+
+    size_t snap_size = inf_snapshot_size(raw_a);
+    InfSnapshot* snap = (InfSnapshot*)malloc(snap_size);
+    inf_snapshot(raw_a, snap);
+
+    /* restore env A's snapshot into env B. env B's collision_map pointer must
+       survive — the snapshot's pointer would dangle in B's address context. */
+    inf_restore(raw_b, snap, snap_size);
+    ASSERT_INT_EQ("env B keeps its own collision_map after restore",
+        (int)(state_b->collision_map == (const CollisionMap*)&dummy_b), 1);
+    ASSERT_INT_EQ("env A snapshot did not leak its collision_map into B",
+        (int)(state_b->collision_map != (const CollisionMap*)&dummy_a), 1);
+
+    free(snap);
+    inf_destroy(raw_a);
+    inf_destroy(raw_b);
+}
+
 static void test_inferno_human_equip_does_not_snap_loadout(void) {
     printf("--- inferno human equip does not snap full loadout ---\n");
 
@@ -2231,6 +2343,8 @@ int main(void) {
     test_zuk_set_prayer_critical_ignores_shield_target();
     test_fail_fast_boundaries();
     test_human_target_and_potion_translation();
+    test_inferno_snapshot_restore_round_trip();
+    test_inferno_snapshot_preserves_external_pointers();
     test_inferno_human_equip_does_not_snap_loadout();
     test_jad_render_uses_style_specific_attack_animation();
     test_jad_magic_render_emits_three_offset_projectiles();
