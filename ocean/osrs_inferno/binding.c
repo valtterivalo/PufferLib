@@ -247,19 +247,6 @@ void c_step(Env* env) {
             ? 0.0f
             : (s->min_zuk_hp_seen > 0.0f ? s->min_zuk_hp_seen : 1200.0f);
 
-        /* action noop rates (per-episode ratios, averaged across episodes by aggregator) */
-        float at = (float)s->action_total_count;
-        if (at > 0.0f) {
-            env->log.noop_move   += (float)s->action_noop_count[0] / at;
-            env->log.noop_prayer += (float)s->action_noop_count[1] / at;
-            env->log.noop_target += (float)s->action_noop_count[2] / at;
-            env->log.noop_gear   += (float)s->action_noop_count[3] / at;
-            env->log.noop_eat    += (float)s->action_noop_count[4] / at;
-            env->log.noop_potion += (float)s->action_noop_count[5] / at;
-            env->log.noop_spell  += (float)s->action_noop_count[6] / at;
-            env->log.noop_spec   += (float)s->action_noop_count[7] / at;
-        }
-
         env->log.n += 1.0f;
     skip_log:;
     }

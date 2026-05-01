@@ -721,15 +721,6 @@ typedef struct {
     float min_zuk_hp_seen;     /* lowest Zuk HP reached during the episode */
     float hp_restored;         /* HP restored to enemies (healers + mager) this episode */
     float zuk_healer_damage;   /* total damage dealt to Zuk healers this episode */
-    /* Inferno action noop rates by named head. */
-    float noop_move;
-    float noop_prayer;
-    float noop_target;
-    float noop_gear;
-    float noop_eat;
-    float noop_potion;
-    float noop_spell;
-    float noop_spec;
     /* per-NPC-type stats (14 types each, for wandb only — not shown on dashboard) */
     float prayer_correct_by_type[14];
     float attacks_by_type[14];

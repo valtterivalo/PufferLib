@@ -1917,15 +1917,6 @@ static void test_human_target_and_potion_translation(void) {
     }
 }
 
-static void test_action_noop_count_matches_action_heads(void) {
-    printf("--- action noop count matches inferno action heads ---\n");
-
-    int noop_slots = (int)(
-        sizeof(((InfernoState*)0)->action_noop_count) /
-        sizeof(((InfernoState*)0)->action_noop_count[0]));
-    ASSERT_INT_EQ("noop counter slots", noop_slots, INF_NUM_ACTION_HEADS);
-}
-
 static void test_inferno_human_equip_does_not_snap_loadout(void) {
     printf("--- inferno human equip does not snap full loadout ---\n");
 
@@ -2240,7 +2231,6 @@ int main(void) {
     test_zuk_set_prayer_critical_ignores_shield_target();
     test_fail_fast_boundaries();
     test_human_target_and_potion_translation();
-    test_action_noop_count_matches_action_heads();
     test_inferno_human_equip_does_not_snap_loadout();
     test_jad_render_uses_style_specific_attack_animation();
     test_jad_magic_render_emits_three_offset_projectiles();

@@ -616,11 +616,6 @@ typedef struct {
     int behind_shield_this_tick;   /* 1 if behind shield this tick (for reward) */
     int total_zuk_ticks;           /* total ticks during Zuk wave (for behind_shield_pct) */
 
-    /* action distribution: count of action-0 (noop) per head.
-       high noop_rate = policy collapsed to doing nothing on that head. */
-    int action_noop_count[INF_NUM_ACTION_HEADS];
-    int action_total_count;    /* total ticks (denominator for noop rates) */
-
     /* per-tick reward event flags (cleared each tick) */
     int brewed_this_tick;      /* 1 if player drank a brew this tick */
     int blood_heal_this_tick;  /* HP healed from blood barrage this tick */
@@ -3426,12 +3421,6 @@ static void inf_step(EncounterState* state, const int* actions) {
                 s->behind_shield_this_tick = 1;
             }
         }
-    }
-
-    /* action noop tracking */
-    s->action_total_count++;
-    for (int h = 0; h < INF_NUM_ACTION_HEADS; h++) {
-        if (actions[h] == 0) s->action_noop_count[h]++;
     }
 
     /* bank the tick's irreversible HP progress before computing reward. all
