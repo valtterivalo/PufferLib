@@ -348,9 +348,11 @@ def _train(env_name, args, sweep_obj=None, result_queue=None, verbose=False):
 
     # Write config-only stub at trial start so hung/crashed trials leave a
     # post-mortem trace. Overwritten with full {config, metrics} at trial end.
+    # default=str handles bytes (nccl_id is b'' before being popped below) and
+    # any numpy scalars that protein may have leaked into args.
     log_path = os.path.join(log_dir, run_id + '.json')
     with open(log_path, 'w') as f:
-        json.dump({**args, 'metrics': {}, 'status': 'pending'}, f)
+        json.dump({**args, 'metrics': {}, 'status': 'pending'}, f, default=str)
 
     with _inferno_replay_env(args):
         try:
@@ -454,7 +456,7 @@ def _train(env_name, args, sweep_obj=None, result_queue=None, verbose=False):
 
     # Save own log: config + downsampled results (overwrites pending stub)
     with open(log_path, 'w') as f:
-        json.dump({**args, 'metrics': metrics, 'status': 'completed'}, f)
+        json.dump({**args, 'metrics': metrics, 'status': 'completed'}, f, default=str)
 
     if args['wandb']:
         if sweep_obj is None and model_path: # Don't spam uploads during sweeps
