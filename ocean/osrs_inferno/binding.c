@@ -14,6 +14,7 @@
 
 #include "osrs_env.h"  /* pulls in osrs_types, encounter, pvp stack */
 #include "replay_best.h"
+#include "src/archive.h"
 
 /* encounter headers + render.h have many static helpers only used by the
    standalone viewer (not c_render) — suppress unused-function noise. */
@@ -64,6 +65,33 @@ typedef struct {
     int pending_render_reset;
 
     OsrsEnv render_env; /* minimal env wrapper for pvp_render() */
+
+    /* archive-based exploration mode (Go-Explore Phase 1).
+       When archive != NULL, c_step suppresses auto-reset on terminal and
+       captures cell-change events into a per-env scratch buffer. The driver
+       loop flushes scratch into the shared archive between rollouts. */
+    Archive* archive;
+    int archive_parent_idx;       /* archive entry restored at start of this iteration */
+    uint32_t archive_parent_rng;  /* RNG state captured immediately after restore */
+
+#define INF_ARCHIVE_SCRATCH_CAP 16
+    InfSnapshot archive_scratch_snap[INF_ARCHIVE_SCRATCH_CAP];
+    InfCellKey archive_scratch_key[INF_ARCHIVE_SCRATCH_CAP];
+    int archive_scratch_tick[INF_ARCHIVE_SCRATCH_CAP];
+    float archive_scratch_quality[INF_ARCHIVE_SCRATCH_CAP];
+    int archive_scratch_count;
+    int archive_scratch_dropped;  /* count of cells we missed because scratch was full */
+
+    /* per-iteration action history. allocated once per env when archive_mode
+       is enabled, freed on close. */
+    int* archive_action_history;     /* INF_NUM_ACTION_HEADS * archive_action_history_cap ints */
+    int archive_action_history_cap;  /* maximum ticks per iteration */
+    int archive_action_history_len;  /* ticks captured so far this iteration */
+
+    /* cell-change detection: cell key at the previous tick (initial: zeroed).
+       set non-zero by inferno_env_begin_archive_iteration before the first tick. */
+    InfCellKey archive_prev_key;
+    int archive_prev_key_valid;
 } InfernoEnv;
 
 #define OBS_SIZE INF_TOTAL_OBS
@@ -173,6 +201,17 @@ void c_step(Env* env) {
         }
     }
 
+    /* archive-exploration action capture. mirrors the replay buffer above but
+       lives only as long as the current iteration; reset by
+       inferno_env_begin_archive_iteration. */
+    if (env->archive && env->archive_action_history &&
+        !used_human_commands &&
+        env->archive_action_history_len < env->archive_action_history_cap) {
+        memcpy(&env->archive_action_history[env->archive_action_history_len * NUM_ATNS],
+               env->acts_staging, NUM_ATNS * sizeof(int));
+        env->archive_action_history_len++;
+    }
+
     if (!used_human_commands)
         ENCOUNTER_INFERNO.step(env->enc_state, env->acts_staging);
 
@@ -185,6 +224,34 @@ void c_step(Env* env) {
     int is_term = ENCOUNTER_INFERNO.is_terminal(env->enc_state);
     env->term_staging = (unsigned char)is_term;
     env->terminals[0] = (float)is_term;
+
+    /* archive-exploration: if the post-step state lands in a different cell
+       than the previous tick's, capture (key, snapshot, quality) into the
+       per-env scratch buffer. flushed by inferno_env_flush_scratch_to_archive
+       after the rollout completes. */
+    if (env->archive) {
+        InfCellKey key;
+        ENCOUNTER_INFERNO.write_cell_key(env->enc_state, &key);
+
+        int key_changed = !env->archive_prev_key_valid ||
+            memcmp(&key, &env->archive_prev_key, sizeof(InfCellKey)) != 0;
+
+        if (key_changed) {
+            if (env->archive_scratch_count < INF_ARCHIVE_SCRATCH_CAP) {
+                int slot = env->archive_scratch_count++;
+                env->archive_scratch_key[slot] = key;
+                env->archive_scratch_tick[slot] = env->archive_action_history_len;
+                env->archive_scratch_quality[slot] =
+                    ENCOUNTER_INFERNO.progress_score(env->enc_state);
+                ENCOUNTER_INFERNO.snapshot(env->enc_state,
+                    &env->archive_scratch_snap[slot]);
+            } else {
+                env->archive_scratch_dropped++;
+            }
+            env->archive_prev_key = key;
+            env->archive_prev_key_valid = 1;
+        }
+    }
 
     /* terminal-only logging: accumulate completed episode stats into env->log.
        vecenv polls with static_vec_log() which sums across agents, divides by
@@ -295,13 +362,19 @@ void c_step(Env* env) {
         }
         env->episode_action_len = 0;
 
-        ENCOUNTER_INFERNO.reset(env->enc_state, 0);
-        ENCOUNTER_INFERNO.write_obs(env->enc_state, obs);
-        ENCOUNTER_INFERNO.write_mask(env->enc_state, obs + INF_NUM_OBS);
+        /* archive mode: do not auto-reset. the explorer driver re-restores from
+           a sampled cell at the start of the next iteration. inf_step is a
+           no-op while episode_over=1, so subsequent ticks of this rollout are
+           harmless (a wasted tail). */
+        if (env->archive == NULL) {
+            ENCOUNTER_INFERNO.reset(env->enc_state, 0);
+            ENCOUNTER_INFERNO.write_obs(env->enc_state, obs);
+            ENCOUNTER_INFERNO.write_mask(env->enc_state, obs + INF_NUM_OBS);
 
-        /* render-side cleanup needs the RenderClient which lives in c_render.
-           raise a flag so the next c_render call does the cleanup. */
-        env->pending_render_reset = 1;
+            /* render-side cleanup needs the RenderClient which lives in c_render.
+               raise a flag so the next c_render call does the cleanup. */
+            env->pending_render_reset = 1;
+        }
     }
 }
 
@@ -325,6 +398,9 @@ void c_close(Env* env) {
     env->episode_actions = NULL;
     free(env->replay_actions);
     env->replay_actions = NULL;
+    free(env->archive_action_history);
+    env->archive_action_history = NULL;
+    env->archive_action_history_cap = 0;
     if (env->enc_state) {
         ENCOUNTER_INFERNO.destroy(env->enc_state);
         env->enc_state = NULL;
@@ -685,4 +761,158 @@ void my_log(Log* log, Dict* out) {
             dict_set(out, kill_keys[t], log->killed_by_type[t]);
     }
     */
+}
+
+
+/* =====================================================================
+ * Archive-based exploration helpers (Go-Explore Phase 1).
+ *
+ * These are non-static so the Metal-side driver in metal_pufferlib.mm can
+ * call them via extern declarations. They are called once per env per
+ * iteration of the explorer loop:
+ *   - inferno_env_enable_archive_mode at setup
+ *   - inferno_env_begin_archive_iteration at the start of each iteration
+ *     (after sampling a cell from the archive)
+ *   - inferno_env_flush_scratch_to_archive at the end of each iteration
+ * ===================================================================== */
+
+void inferno_env_enable_archive_mode(
+    InfernoEnv* env,
+    Archive* archive,
+    int action_history_cap
+) {
+    env->archive = archive;
+    if (action_history_cap > env->archive_action_history_cap) {
+        free(env->archive_action_history);
+        env->archive_action_history = (int*)malloc(
+            (size_t)action_history_cap * NUM_ATNS * sizeof(int));
+        if (!env->archive_action_history) {
+            fprintf(stderr,
+                "inferno_env_enable_archive_mode: out of memory for action history\n");
+            abort();
+        }
+        env->archive_action_history_cap = action_history_cap;
+    }
+    env->archive_action_history_len = 0;
+    env->archive_scratch_count = 0;
+    env->archive_scratch_dropped = 0;
+    env->archive_prev_key_valid = 0;
+    env->archive_parent_idx = ARCHIVE_ROOT_PARENT;
+    env->archive_parent_rng = 0u;
+}
+
+void inferno_env_disable_archive_mode(InfernoEnv* env) {
+    env->archive = NULL;
+}
+
+/* restore env from an archive entry (or stay at current state if
+   archive_parent_idx == ARCHIVE_ROOT_PARENT) and reset per-iteration tracking.
+   the env->observations buffer is rewritten so the next net_callback reads
+   the post-restore obs. */
+void inferno_env_begin_archive_iteration(
+    InfernoEnv* env,
+    int archive_parent_idx
+) {
+    if (!env->archive) return;
+
+    if (archive_parent_idx >= 0) {
+        const void* snap = archive_get_snapshot(env->archive, archive_parent_idx);
+        if (snap) {
+            ENCOUNTER_INFERNO.restore(
+                env->enc_state, snap, ENCOUNTER_INFERNO.snapshot_size(env->enc_state));
+        }
+    }
+
+    env->archive_parent_idx = archive_parent_idx;
+    env->archive_parent_rng = ((InfernoState*)env->enc_state)->rng_state;
+    env->archive_action_history_len = 0;
+    env->archive_scratch_count = 0;
+    env->archive_scratch_dropped = 0;
+
+    /* seed prev_key with the post-restore cell so we only register changes */
+    ENCOUNTER_INFERNO.write_cell_key(env->enc_state, &env->archive_prev_key);
+    env->archive_prev_key_valid = 1;
+
+    /* re-write env_buf obs/mask to reflect post-restore state. rewards/terminals
+       cleared because the next rollout starts a fresh accumulation window. */
+    float* obs = (float*)env->observations;
+    ENCOUNTER_INFERNO.write_obs(env->enc_state, obs);
+    ENCOUNTER_INFERNO.write_mask(env->enc_state, obs + INF_NUM_OBS);
+    env->rewards[0] = 0.0f;
+    env->term_staging = 0;
+    env->terminals[0] = 0.0f;
+}
+
+/* flush all scratch entries into the shared archive, walking the parent chain
+   (each scratch entry's parent is the previous one in this iteration, or the
+   archive cell we restored from for the first scratch entry).
+
+   hidden_state_history is laid out as [horizon+1][total_agents][hidden_state_size].
+   For a discovery at scratch tick T, the hidden state to attach is at
+   history[T][env_idx]. Pass NULL to skip hidden state attachment.
+
+   Returns the number of NEW (not KEPT or REPLACED) cells inserted. */
+int inferno_env_flush_scratch_to_archive(
+    InfernoEnv* env,
+    const uint8_t* hidden_state_history,
+    int total_agents,
+    int env_idx,
+    size_t hidden_state_size
+) {
+    if (!env->archive || env->archive_scratch_count == 0) return 0;
+
+    int new_cells = 0;
+    int prev_archive_idx = env->archive_parent_idx;
+    int prev_action_tick = 0;
+
+    for (int i = 0; i < env->archive_scratch_count; i++) {
+        int tick_at_discovery = env->archive_scratch_tick[i];
+        if (tick_at_discovery <= prev_action_tick) continue;
+
+        const int* action_chunk =
+            &env->archive_action_history[prev_action_tick * NUM_ATNS];
+        int action_chunk_len = tick_at_discovery - prev_action_tick;
+
+        const uint8_t* hs = NULL;
+        if (hidden_state_history && hidden_state_size > 0) {
+            size_t row_size = (size_t)total_agents * hidden_state_size;
+            hs = hidden_state_history +
+                 (size_t)tick_at_discovery * row_size +
+                 (size_t)env_idx * hidden_state_size;
+        }
+
+        ArchiveInsertResult result;
+        int new_idx = archive_insert(
+            env->archive,
+            (const uint8_t*)&env->archive_scratch_key[i],
+            &env->archive_scratch_snap[i],
+            hs,
+            prev_archive_idx,
+            action_chunk,
+            action_chunk_len,
+            (i == 0) ? env->archive_parent_rng : 0u,
+            env->archive_scratch_quality[i],
+            &result);
+
+        if (new_idx >= 0) {
+            if (result == ARCHIVE_INSERT_NEW) {
+                new_cells++;
+                archive_note_discovery_from(env->archive, prev_archive_idx);
+            }
+            prev_archive_idx = new_idx;
+            prev_action_tick = tick_at_discovery;
+        }
+        /* on archive-full: stop. caller can size capacity up next time. */
+        if (new_idx < 0 && result == ARCHIVE_INSERT_FULL) break;
+    }
+
+    return new_cells;
+}
+
+int inferno_env_archive_scratch_count(const InfernoEnv* env) {
+    return env->archive_scratch_count;
+}
+
+int inferno_env_archive_scratch_dropped(const InfernoEnv* env) {
+    return env->archive_scratch_dropped;
 }
