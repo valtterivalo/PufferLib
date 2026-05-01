@@ -1360,21 +1360,44 @@ ArchiveExploreStats archive_explore_impl(
 
     sync_pending_train(pufferl);
 
+    /* per-env scratch to remember which archive cell each env restored from
+       this iteration so we can warm-load hidden state from the same cell. */
+    std::vector<int> per_env_sampled(total_agents);
+
     for (int iter = 0; iter < num_iterations; iter++) {
         /* sample a cell for each env and restore */
         for (int e = 0; e < total_agents; e++) {
             int sampled = archive_sample(archive);
             if (sampled == ARCHIVE_NULL_INDEX) sampled = ARCHIVE_ROOT_PARENT;
+            per_env_sampled[e] = sampled;
             inferno_env_begin_archive_iteration(inferno_env_at(envs_void, e), sampled);
         }
 
-        /* zero hidden state buffers — we just changed env state, recurrent
-           state from the last rollout corresponds to a different trajectory.
-           In a follow-up we can warm-load the hidden state from the sampled
-           archive cell instead. */
+        /* zero hidden state buffers, then warm-load each env's slot from the
+           archive cell we sampled. Envs that sampled cells without recorded
+           hidden state (e.g. the seed root) keep zero. */
         for (int b = 0; b < num_buffers; b++) {
             std::memset(pufferl.buffer_states[b].bytes, 0,
                 pufferl.buffer_states[b].numel() * pufferl.buffer_states[b].dtype_size);
+        }
+        for (int e = 0; e < total_agents; e++) {
+            int sampled = per_env_sampled[e];
+            if (sampled < 0) continue;
+            const uint8_t* cell_hidden = (const uint8_t*)archive_get_hidden_state(archive, sampled);
+            if (!cell_hidden) continue;
+            int buf = e / block_size;
+            int e_in_buffer = e - buf * block_size;
+            PufTensor& s = pufferl.buffer_states[buf];
+            int batch = (int)s.shape[1];
+            int hsize = (int)s.shape[2];
+            size_t element_size = (size_t)s.dtype_size;
+            for (int l = 0; l < num_layers; l++) {
+                size_t dst_off = ((size_t)l * batch + (size_t)e_in_buffer)
+                                 * (size_t)hsize * element_size;
+                size_t src_off = (size_t)l * (size_t)hsize * element_size;
+                std::memcpy(s.bytes + dst_off, cell_hidden + src_off,
+                    (size_t)hsize * element_size);
+            }
         }
 
         /* run the rollout (advances horizon ticks; net_callback captures
