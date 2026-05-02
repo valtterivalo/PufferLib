@@ -318,9 +318,6 @@ static void test_archive_hidden_state_round_trip(void) {
     }
     ASSERT_INT_EQ("NULL hidden state stored as zeros", all_zero, 1);
 
-    /* entry 1 quality bump: hidden state stays frozen (only quality stat updates).
-       Rewriting hidden state on re-discovery would let archive_explore warm-load
-       a hidden that doesn't pair with the entry's snapshot or chain actions. */
     float hs_a2[3 * 256];
     for (int i = 0; i < 3 * 256; i++) hs_a2[i] = (float)(i + 1000) * 0.002f;
     int idx_a2 = archive_insert(a, key_a, &snap, hs_a2, ARCHIVE_ROOT_PARENT,

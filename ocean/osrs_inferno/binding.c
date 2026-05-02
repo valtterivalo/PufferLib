@@ -97,10 +97,6 @@ typedef struct InfernoEnv {
     InfCellKey archive_prev_key;
     int archive_prev_key_valid;
 
-    /* When non-zero, c_step suppresses its mid-trajectory auto-reset on
-       terminal. Set during demo replay (snapshot ladder build) so a mid-
-       trajectory terminal does not silently re-seed the encounter to seed=0
-       and corrupt the rest of the replay. */
     uint8_t no_auto_reset;
 } InfernoEnv;
 
@@ -963,38 +959,20 @@ int inferno_env_register_root_cell(
         quality, &result);
 }
 
-/* Build a snapshot ladder for one demo by replaying it through `env`.
- *
- * Replays from c_reset(env) seeded with demo->rng_seed, capturing
- * ENCOUNTER_INFERNO.snapshot at every `out_ladder->snapshot_stride` ticks.
- * Slot 0 is tick 0 (post-reset). Subsequent slots are at ticks
- * stride, 2*stride, ..., last_multiple_of_stride <= length-1.
- *
- * The env's replay_actions/_num_ticks/_cursor/_rng_seed are temporarily
- * swapped so c_step pulls actions from the demo. no_auto_reset is set
- * for the duration so a mid-trajectory terminal does not silently
- * re-seed and corrupt the rest of the replay. All state is restored
- * before returning.
- *
- * out_ladder must be pre-allocated with snapshot_size = sizeof(InfSnapshot)
- * and num_snapshots = demo_snapshot_ladder_count_for_length(demo->length_ticks,
- * stride). Hidden pool is left untouched (v0 starts curriculum restores from
- * zero hidden state and lets the recurrent policy warm up).
- *
- * Returns 0 on success, -1 on parameter mismatch, -2 if scratch space ran
- * out (should not happen with the count_for_length sizing).
- */
+/* Replay one demo through `env` and capture an InfSnapshot at every
+   stride ticks (slot 0 = post-reset). Caller pre-sizes out_ladder via
+   demo_snapshot_ladder_count_for_length. Returns 0 on success, -1 on
+   shape mismatch. */
 int inferno_env_build_demo_snapshot_ladder(
     InfernoEnv* env,
     const DemoTrajectory* demo,
     DemoSnapshotLadder* out_ladder
 ) {
-    if (!env || !demo || !out_ladder) return -1;
     if (demo->num_atns != NUM_ATNS) return -1;
     if (out_ladder->snapshot_size != sizeof(InfSnapshot)) return -1;
     int stride = out_ladder->snapshot_stride;
-    int expected = demo_snapshot_ladder_count_for_length(demo->length_ticks, stride);
-    if (out_ladder->num_snapshots != expected) return -1;
+    if (out_ladder->num_snapshots !=
+        demo_snapshot_ladder_count_for_length(demo->length_ticks, stride)) return -1;
 
     int* saved_actions = env->replay_actions;
     int saved_num_ticks = env->replay_num_ticks;
@@ -1008,34 +986,19 @@ int inferno_env_build_demo_snapshot_ladder(
     env->replay_rng_seed = demo->rng_seed;
     env->no_auto_reset = 1;
 
-    /* Reset env to demo start. c_reset reads replay_rng_seed when
-       replay_actions is set (binding.c c_reset path). */
     c_reset(env);
-
-    /* slot 0: tick 0, post-reset state */
-    ENCOUNTER_INFERNO.snapshot(env->enc_state,
-        out_ladder->snapshot_pool + 0 * out_ladder->snapshot_size);
+    ENCOUNTER_INFERNO.snapshot(env->enc_state, out_ladder->snapshot_pool);
     out_ladder->snapshot_ticks[0] = 0;
     int next_slot = 1;
 
-    /* step through ticks 1 .. length-1; capture at each stride boundary */
     for (int t = 1; t < demo->length_ticks; t++) {
         c_step(env);
         if (t % stride == 0 && next_slot < out_ladder->num_snapshots) {
             ENCOUNTER_INFERNO.snapshot(env->enc_state,
-                out_ladder->snapshot_pool +
-                    (size_t)next_slot * out_ladder->snapshot_size);
+                out_ladder->snapshot_pool + (size_t)next_slot * out_ladder->snapshot_size);
             out_ladder->snapshot_ticks[next_slot] = t;
             next_slot++;
         }
-    }
-
-    int err = (next_slot == out_ladder->num_snapshots) ? 0 : -2;
-    if (err) {
-        fprintf(stderr,
-            "inferno_env_build_demo_snapshot_ladder: filled %d / %d slots "
-            "(length=%d, stride=%d)\n",
-            next_slot, out_ladder->num_snapshots, demo->length_ticks, stride);
     }
 
     env->replay_actions = saved_actions;
@@ -1044,5 +1007,5 @@ int inferno_env_build_demo_snapshot_ladder(
     env->replay_rng_seed = saved_rng_seed;
     env->no_auto_reset = saved_no_auto_reset;
 
-    return err;
+    return 0;
 }

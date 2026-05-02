@@ -1,19 +1,12 @@
-/* Combines multiple archives, dedupes cells by a configurable fingerprint
- * over the 16-byte cell key, sorts by quality, and exports the top-K as
- * PLAY_REPLAY demos to a single dir.
+/* Merge archives, dedupe cells by a fingerprint over the cell key, sort by
+ * quality, write top-K as PLAY_REPLAY demos.
  *
- * Two dedup modes:
- *   --mode full   = use the full 16-byte key as the fingerprint (default)
- *   --mode coarse = use only the inferno "macro state" bytes
- *                   (wave, weapon_set, brew/restore doses, zuk_hp_bin,
- *                    phase flags, jad/healer/set counts). Strips high-
- *                    frequency-changing bytes like player_x/y and prayer
- *                    flags so near-duplicate positions inside a single
- *                    chain don't all survive.
+ * usage: filter_demos [--mode full|coarse] <output_dir> <max_demos>
+ *                     <max_replay_ticks> <archive1> [archive2 ...]
  *
- * usage:
- *   filter_demos [--mode full|coarse] <output_dir> <max_demos> <max_replay_ticks> <archive1> [archive2 ...]
- */
+ * --mode coarse strips per-tick-noisy bytes (player_x/y, prayer flags, hp
+ * bin) from the dedup key so near-duplicate positions inside one chain
+ * don't all survive. */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -47,12 +40,8 @@ static uint64_t fnv1a64(const uint8_t* data, size_t n) {
     return h;
 }
 
-/* Inferno "macro state" byte indices in the 16-byte InfCellKey:
- *   0 wave, 1 weapon_set, 4 brew_doses, 5 restore_doses, 10 zuk_hp_bin,
- *   11 zuk_phase_flags, 12 active_jad_count, 13 active_zuk_healer_count,
- *   14 active_set_count.
- * Excluded (per-tick noise): 2 hp_bin, 3 prayer_bin, 6 overhead_prayer,
- *   7 offensive_prayer, 8 player_x_quant, 9 player_y_quant, 15 pad. */
+/* InfCellKey macro-state bytes: wave, weapon_set, brew/restore doses,
+   zuk_hp_bin, phase flags, jad/healer/set counts. */
 static const int COARSE_BYTES[] = {0, 1, 4, 5, 10, 11, 12, 13, 14};
 static const int COARSE_BYTE_COUNT = (int)(sizeof(COARSE_BYTES) / sizeof(COARSE_BYTES[0]));
 

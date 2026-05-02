@@ -1,19 +1,4 @@
-"""Multi-seed offline archive exploration for Go-Explore phase 2 pre-phase.
-
-Loads a trained checkpoint, runs `_C.archive_explore` once per seed, and dumps
-each seed's archive blob and PLAY_REPLAY demos under output_dir/seed_N/.
-
-Run from the inferno-sync repo root:
-
-    python scripts/run_archive_explore.py \
-        --checkpoint checkpoints/osrs_inferno/1777663368732/0000000012517376.bin \
-        --output-dir /tmp/inferno_phase2 \
-        --num-iterations 50 \
-        --archive-capacity 300000 \
-        --num-seeds 4 \
-        --start-seed 42 \
-        --demo-max-count 200
-"""
+"""Multi-seed offline archive exploration. Run from the inferno-sync repo root."""
 
 import argparse
 import os

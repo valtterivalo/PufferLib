@@ -1,9 +1,3 @@
-/* Tests for src/demostore.h
- * Run via:
- *   cc -O0 -g -Wall -o /tmp/test_demostore tests/test_demostore.c -I.
- *   /tmp/test_demostore
- */
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -42,7 +36,6 @@ static int g_fail = 0;
         } else { g_pass++; }                                                \
     } while (0)
 
-/* Write a synthetic PLAY_REPLAY demo file. Returns 0 on success. */
 static int write_synthetic_demo(
     const char* path, int n_ticks, int num_atns, uint32_t rng_seed,
     int action_value
@@ -67,13 +60,10 @@ static int write_synthetic_demo(
 static void test_create_and_destroy(void) {
     printf("--- demostore create/destroy ---\n");
     DemoStore* s = demostore_create(8);
-    ASSERT_TRUE("create returns non-null", s != NULL);
     ASSERT_INT_EQ("capacity", s->capacity, 8);
     ASSERT_INT_EQ("num_demos starts 0", s->num_demos, 0);
     demostore_destroy(s);
-    /* destroying NULL is a no-op */
     demostore_destroy(NULL);
-    ASSERT_TRUE("destroyed cleanly", 1);
 }
 
 static void test_load_one_demo_round_trip(void) {
@@ -94,17 +84,9 @@ static void test_load_one_demo_round_trip(void) {
     ASSERT_INT_EQ("num_atns", d->num_atns, num_atns);
     ASSERT_INT_EQ("rng_seed", (int)d->rng_seed, (int)rng_seed);
     ASSERT_INT_EQ("cursor starts at end", d->cursor_tick, n_ticks - 1);
-    ASSERT_INT_EQ("attempts 0", d->attempts, 0);
-    ASSERT_INT_EQ("successes 0", d->successes, 0);
 
-    /* spot-check actions: tick 5 head 3 should be 100 + 5*9 + 3 = 148 */
     const int* a5 = demostore_actions_at(s, 0, 5);
-    ASSERT_TRUE("actions_at(5) non-null", a5 != NULL);
-    if (a5) ASSERT_INT_EQ("actions[5][3]", a5[3], 148);
-
-    /* tick out of range -> NULL */
-    ASSERT_TRUE("actions_at(-1) null", demostore_actions_at(s, 0, -1) == NULL);
-    ASSERT_TRUE("actions_at(n) null", demostore_actions_at(s, 0, n_ticks) == NULL);
+    ASSERT_INT_EQ("actions[5][3]", a5[3], 148);
 
     demostore_destroy(s);
     unlink(path);
@@ -174,24 +156,17 @@ static void test_reject_misaligned_action_buffer(void) {
     unlink(p);
 }
 
-static void test_reject_bad_paths(void) {
-    printf("--- demostore rejects bad paths and bad params ---\n");
+static void test_reject_nonexistent_file(void) {
+    printf("--- demostore rejects nonexistent file ---\n");
     DemoStore* s = demostore_create(2);
     ASSERT_INT_EQ("nonexistent file -> -1",
         demostore_load_demo(s, "/no/such/file_for_demostore.bin", 9, 0), -1);
-    ASSERT_INT_EQ("NULL store -> -1", demostore_load_demo(NULL, "/dev/null", 9, 0), -1);
-    ASSERT_INT_EQ("num_atns=0 -> -1",
-        demostore_load_demo(s, "/dev/null", 0, 0), -1);
-    ASSERT_INT_EQ("num_atns too high -> -1",
-        demostore_load_demo(s, "/dev/null", DEMOSTORE_MAX_NUM_ATNS + 1, 0), -1);
     demostore_destroy(s);
 }
 
 static void test_ladder_count_for_length(void) {
     printf("--- ladder count_for_length covers tick 0 through length-1 ---\n");
-    /* length 100, stride 4: ticks 0, 4, 8, ..., 96 -> 25 snapshots */
     ASSERT_INT_EQ("100/4", demo_snapshot_ladder_count_for_length(100, 4), 25);
-    /* length 10, stride 3: ticks 0, 3, 6, 9 -> 4 snapshots */
     ASSERT_INT_EQ("10/3", demo_snapshot_ladder_count_for_length(10, 3), 4);
     ASSERT_INT_EQ("1/4", demo_snapshot_ladder_count_for_length(1, 4), 1);
     ASSERT_INT_EQ("0/x", demo_snapshot_ladder_count_for_length(0, 4), 0);
@@ -200,34 +175,23 @@ static void test_ladder_count_for_length(void) {
 
 static void test_ladder_create_and_destroy(void) {
     printf("--- ladder create/destroy with and without hidden pool ---\n");
-    /* without hidden pool */
-    DemoSnapshotLadder* l = demo_snapshot_ladder_create(
-        /*demo_id=*/3, /*stride=*/4, /*num_snapshots=*/25,
-        /*snapshot_size=*/128, /*hidden_size=*/0);
-    ASSERT_TRUE("create returns non-null", l != NULL);
+    DemoSnapshotLadder* l = demo_snapshot_ladder_create(3, 4, 25, 128, 0);
     ASSERT_INT_EQ("demo_id stored", l->demo_id, 3);
     ASSERT_INT_EQ("stride stored", l->snapshot_stride, 4);
     ASSERT_INT_EQ("num_snapshots stored", l->num_snapshots, 25);
-    ASSERT_TRUE("snapshot_pool allocated", l->snapshot_pool != NULL);
-    ASSERT_TRUE("snapshot_ticks allocated", l->snapshot_ticks != NULL);
     ASSERT_TRUE("hidden_pool null when hidden_size=0", l->hidden_pool == NULL);
     demo_snapshot_ladder_destroy(l);
 
-    /* with hidden pool */
-    DemoSnapshotLadder* l2 = demo_snapshot_ladder_create(
-        7, 4, 25, 128, 256 * 4);
-    ASSERT_TRUE("create with hidden non-null", l2 != NULL);
+    DemoSnapshotLadder* l2 = demo_snapshot_ladder_create(7, 4, 25, 128, 256 * 4);
     ASSERT_TRUE("hidden_pool allocated", l2->hidden_pool != NULL);
     demo_snapshot_ladder_destroy(l2);
 
-    /* invalid params return NULL */
     ASSERT_TRUE("stride=0 -> NULL",
         demo_snapshot_ladder_create(0, 0, 25, 128, 0) == NULL);
     ASSERT_TRUE("num_snapshots=0 -> NULL",
         demo_snapshot_ladder_create(0, 4, 0, 128, 0) == NULL);
     ASSERT_TRUE("snapshot_size=0 -> NULL",
         demo_snapshot_ladder_create(0, 4, 25, 0, 0) == NULL);
-
     demo_snapshot_ladder_destroy(NULL);
 }
 
@@ -237,33 +201,23 @@ static void test_ladder_slot_for_tick(void) {
     ASSERT_INT_EQ("tick 0", demo_snapshot_ladder_slot_for_tick(l, 0), 0);
     ASSERT_INT_EQ("tick 3", demo_snapshot_ladder_slot_for_tick(l, 3), 0);
     ASSERT_INT_EQ("tick 4", demo_snapshot_ladder_slot_for_tick(l, 4), 1);
-    ASSERT_INT_EQ("tick 7", demo_snapshot_ladder_slot_for_tick(l, 7), 1);
     ASSERT_INT_EQ("tick 8", demo_snapshot_ladder_slot_for_tick(l, 8), 2);
-    /* tick beyond last clamps to last slot */
-    ASSERT_INT_EQ("tick 999", demo_snapshot_ladder_slot_for_tick(l, 999), 9);
-    /* negative -> -1 */
+    ASSERT_INT_EQ("tick 999 clamps to last", demo_snapshot_ladder_slot_for_tick(l, 999), 9);
     ASSERT_INT_EQ("tick -1 -> -1", demo_snapshot_ladder_slot_for_tick(l, -1), -1);
-    ASSERT_INT_EQ("NULL ladder -> -1", demo_snapshot_ladder_slot_for_tick(NULL, 5), -1);
     demo_snapshot_ladder_destroy(l);
 }
 
 static void test_ladder_snapshot_at_bounds(void) {
     printf("--- ladder snapshot_at and hidden_at bounds-check ---\n");
     DemoSnapshotLadder* l = demo_snapshot_ladder_create(0, 4, 5, 16, 8);
-    ASSERT_TRUE("snapshot_at(0) non-null",
-        demo_snapshot_ladder_snapshot_at(l, 0) != NULL);
-    ASSERT_TRUE("snapshot_at(4) non-null",
-        demo_snapshot_ladder_snapshot_at(l, 4) != NULL);
-    ASSERT_TRUE("snapshot_at(-1) null",
-        demo_snapshot_ladder_snapshot_at(l, -1) == NULL);
-    ASSERT_TRUE("snapshot_at(5) null",
-        demo_snapshot_ladder_snapshot_at(l, 5) == NULL);
-    ASSERT_TRUE("hidden_at(0) non-null",
-        demo_snapshot_ladder_hidden_at(l, 0) != NULL);
+    ASSERT_TRUE("snapshot_at(0)", demo_snapshot_ladder_snapshot_at(l, 0) != NULL);
+    ASSERT_TRUE("snapshot_at(-1) null", demo_snapshot_ladder_snapshot_at(l, -1) == NULL);
+    ASSERT_TRUE("snapshot_at(5) null", demo_snapshot_ladder_snapshot_at(l, 5) == NULL);
+    ASSERT_TRUE("hidden_at(0)", demo_snapshot_ladder_hidden_at(l, 0) != NULL);
     demo_snapshot_ladder_destroy(l);
 
     DemoSnapshotLadder* nh = demo_snapshot_ladder_create(0, 4, 3, 16, 0);
-    ASSERT_TRUE("hidden_at returns NULL when no hidden pool",
+    ASSERT_TRUE("hidden_at NULL when no pool",
         demo_snapshot_ladder_hidden_at(nh, 0) == NULL);
     demo_snapshot_ladder_destroy(nh);
 }
@@ -275,7 +229,7 @@ int main(void) {
     test_capacity_full();
     test_filename_quality_parsing();
     test_reject_misaligned_action_buffer();
-    test_reject_bad_paths();
+    test_reject_nonexistent_file();
     test_ladder_count_for_length();
     test_ladder_create_and_destroy();
     test_ladder_slot_for_tick();

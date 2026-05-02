@@ -6,6 +6,10 @@
 #include <dirent.h>
 #include "../src/demostore.h"
 
+static int cmp_str(const void* a, const void* b) {
+    return strcmp(*(const char**)a, *(const char**)b);
+}
+
 int main(int argc, char** argv) {
     if (argc != 4) {
         fprintf(stderr, "usage: %s <dir> <max_demos> <num_atns>\n", argv[0]);
@@ -24,35 +28,24 @@ int main(int argc, char** argv) {
     char* names[1024];
     int n_names = 0;
     struct dirent* ent;
-    while ((ent = readdir(d)) != NULL) {
-        if (n_names >= 1024) break;
+    while ((ent = readdir(d)) != NULL && n_names < 1024) {
         const char* name = ent->d_name;
         size_t len = strlen(name);
         if (len < 4 || strcmp(name + len - 4, ".bin") != 0) continue;
         names[n_names++] = strdup(name);
     }
     closedir(d);
+    qsort(names, n_names, sizeof(char*), cmp_str);
 
-    /* Sort filenames so we get demo_0000_*.bin first. */
-    for (int i = 0; i < n_names; i++) {
-        for (int j = i + 1; j < n_names; j++) {
-            if (strcmp(names[i], names[j]) > 0) {
-                char* tmp = names[i]; names[i] = names[j]; names[j] = tmp;
-            }
-        }
-    }
-
-    int loaded = 0;
-    int min_ticks = 1 << 30;
-    int max_ticks = 0;
+    int loaded = 0, min_ticks = 1 << 30, max_ticks = 0;
     long total_ticks = 0;
     float min_q = 1e9f, max_q = -1e9f;
     for (int i = 0; i < n_names; i++) {
         snprintf(path, sizeof(path), "%s/%s", dir_path, names[i]);
-        int id = demostore_load_demo(s, path, num_atns, /*parse_filename_q=*/1);
+        int id = demostore_load_demo(s, path, num_atns, 1);
         if (id >= 0) {
-            loaded++;
             const DemoTrajectory* t = &s->demos[id];
+            loaded++;
             if (t->length_ticks < min_ticks) min_ticks = t->length_ticks;
             if (t->length_ticks > max_ticks) max_ticks = t->length_ticks;
             total_ticks += t->length_ticks;

@@ -193,14 +193,10 @@ typedef enum {
     ARCHIVE_INSERT_FULL         /* no room (entry capacity or action chunk pool exhausted) */
 } ArchiveInsertResult;
 
-/* Insert a cell. On re-discovery the structural fields (parent_idx,
-   action_chunk, snapshot, rng_seed, hidden_state) are NEVER rewritten,
-   because rewiring parent_idx would orphan or cycle every descendant of
-   `existing` whose action_chunk was authored against the old payload. The
-   only field updated on a higher-quality re-discovery is `quality` itself,
-   used by count_decay to weight sampling. `seen` is bumped on every
-   re-discovery. Returns the entry index (>= 0) on success, or
-   ARCHIVE_NULL_INDEX on full. */
+/* Insert or re-discover a cell. First-write wins for structural fields:
+   rewiring parent_idx on re-discovery would invalidate every descendant's
+   action_chunk and frequently produce parent-chain cycles. Re-discoveries
+   only bump `seen` and the `quality` stat used by count_decay sampling. */
 static inline int archive_insert(
     Archive* a,
     const uint8_t* key,
@@ -225,7 +221,6 @@ static inline int archive_insert(
         e->seen++;
         if (quality > e->quality) {
             e->quality = quality;
-            e->chosen_since_new = 0;
             if (out_result) *out_result = ARCHIVE_INSERT_REPLACED;
         } else if (out_result) {
             *out_result = ARCHIVE_INSERT_KEPT;
