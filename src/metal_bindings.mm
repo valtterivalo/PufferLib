@@ -122,6 +122,7 @@ static py::dict puf_log(py::object pufferl_obj) {
         loss_dict["old_kl"] = losses[LOSS_OLD_APPROX_KL] * inv_n;
         loss_dict["kl"] = losses[LOSS_APPROX_KL] * inv_n;
         loss_dict["clipfrac"] = losses[LOSS_CLIPFRAC] * inv_n;
+        loss_dict["bc"] = losses[LOSS_BC] * inv_n;
     }
     cudaStream_t loss_stream = pufferl.overlap_enabled
         ? (cudaStream_t)mtl_train_stream()

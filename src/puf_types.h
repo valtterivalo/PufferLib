@@ -115,8 +115,9 @@ enum LossIdx {
   LOSS_OLD_APPROX_KL = 4,
   LOSS_APPROX_KL = 5,
   LOSS_CLIPFRAC = 6,
-  LOSS_N = 7,
-  NUM_LOSSES = 8,
+  LOSS_BC = 7,
+  LOSS_N = 8,
+  NUM_LOSSES = 9,
 };
 
 struct PrefixScan {
@@ -301,6 +302,16 @@ struct TrainGraph {
   FloatTensor mb_returns;
   FloatTensor mb_ratio;
   FloatTensor mb_newvalue;
+  /* Phase 2C BC. mb_row_weights multiplies PPO/value/entropy contributions
+     per row (1.0 for online rows, 0.0 for demo BC rows). mb_bc_weights
+     scales the BC CE loss per row (0.0 for online, bc_coef for demo).
+     mb_bc_actions[S,H,num_atns] holds the BC target action per (row, tick,
+     head). When BC is inactive, mb_row_weights stays 1.0 and mb_bc_weights
+     stays 0.0 — the kernel reduces to the original PPO loss. */
+  FloatTensor mb_row_weights;
+  FloatTensor mb_bc_weights;
+  FloatTensor mb_bc_actions;
+  FloatTensor mb_head_weights;
 };
 
 inline void register_train_buffers(TrainGraph &bufs, Allocator &alloc, int S,
@@ -316,6 +327,10 @@ inline void register_train_buffers(TrainGraph &bufs, Allocator &alloc, int S,
   bufs.mb_returns = {.shape = {S, H}};
   bufs.mb_ratio = {.shape = {S, H}};
   bufs.mb_newvalue = {.shape = {S, H, 1}};
+  bufs.mb_row_weights = {.shape = {S, H}};
+  bufs.mb_bc_weights = {.shape = {S, H}};
+  bufs.mb_bc_actions = {.shape = {S, H, num_atns}};
+  bufs.mb_head_weights = {.shape = {num_atns}};
   alloc_register(&alloc, &bufs.mb_obs);
   alloc_register(&alloc, &bufs.mb_state);
   alloc_register(&alloc, &bufs.mb_actions);
@@ -326,6 +341,10 @@ inline void register_train_buffers(TrainGraph &bufs, Allocator &alloc, int S,
   alloc_register(&alloc, &bufs.mb_returns);
   alloc_register(&alloc, &bufs.mb_ratio);
   alloc_register(&alloc, &bufs.mb_newvalue);
+  alloc_register(&alloc, &bufs.mb_row_weights);
+  alloc_register(&alloc, &bufs.mb_bc_weights);
+  alloc_register(&alloc, &bufs.mb_bc_actions);
+  alloc_register(&alloc, &bufs.mb_head_weights);
 }
 
 typedef void (*init_weights_fn)(void *weights, uint64_t *seed,

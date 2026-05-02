@@ -1199,6 +1199,20 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
         for (int i = 0; i < act_n; i++) ones[i] = 1.0f;
     }
 
+    // BC defaults: row_weights=1 (PPO/value/entropy fully active), bc_weights=0
+    // (no BC contribution), head_weights=1 (uniform per-head). The phase 2C
+    // staging path overwrites these per-row when active.
+    {
+        float* rw = pufferl->train_buf.mb_row_weights.data;
+        for (size_t i = 0; i < puf_numel(pufferl->train_buf.mb_row_weights.shape); i++) rw[i] = 1.0f;
+        float* bw = pufferl->train_buf.mb_bc_weights.data;
+        for (size_t i = 0; i < puf_numel(pufferl->train_buf.mb_bc_weights.shape); i++) bw[i] = 0.0f;
+        float* ba = pufferl->train_buf.mb_bc_actions.data;
+        for (size_t i = 0; i < puf_numel(pufferl->train_buf.mb_bc_actions.shape); i++) ba[i] = 0.0f;
+        float* hw = pufferl->train_buf.mb_head_weights.data;
+        for (int h = 0; h < num_action_heads; h++) hw[h] = 1.0f;
+    }
+
 
     // muon_post_create: write lr and zero momentum (unified memory)
     pufferl->muon->lr_ptr = pufferl->muon->lr_puf.data;

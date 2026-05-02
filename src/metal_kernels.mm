@@ -775,6 +775,10 @@ void ppo_loss_fwd_bwd(PufTensor &dec_out, PufTensor &logstd, TrainGraph &graph,
     mtl_set_ptr(ms, (void *)mask_ptr, 17);
     mtl_set_ptr(ms, graph.mb_ratio.data, 18);
     mtl_set_ptr(ms, graph.mb_newvalue.data, 19);
+    mtl_set_ptr(ms, graph.mb_row_weights.data, 20);
+    mtl_set_ptr(ms, graph.mb_bc_weights.data, 21);
+    mtl_set_ptr(ms, graph.mb_bc_actions.data, 22);
+    mtl_set_ptr(ms, graph.mb_head_weights.data, 23);
     mtl_dispatch_groups(ms, pso, ppo_grid, ppo_threads);
   }
 
