@@ -1,10 +1,16 @@
 /* DemoStore: holds top-K archive demos for phase 2.
  *
- * File format (Phase2Demo, magic 'P2DM'):
- *   uint32 magic, uint32 version, int32 num_ticks, int32 num_atns,
- *   uint32 rng_seed, float quality, uint32 snapshot_size;
- *   uint8 root_snapshot[snapshot_size];
- *   int32 action[num_ticks * num_atns]. */
+ * File format v2 (magic 'P2DM' version 2):
+ *   Phase2DemoHeader header
+ *   uint8  snapshots[num_snapshots * snapshot_size]   (chain root -> leaf)
+ *   int32  snapshot_ticks[num_snapshots]              (cumulative ticks per slot)
+ *   int32  actions[num_ticks * num_atns]              (root-to-leaf action chain)
+ *
+ * The snapshot pool covers each archive cell along the demo's parent chain.
+ * Slot 0 is the chain root (low q, often c_reset state). Last slot is the
+ * leaf (high q). Ladder builders memcpy this directly; no replay needed.
+ * Action sequence is retained for diagnostic forward replay and per-slot BC
+ * supervision (the action at slot s is actions[snapshot_ticks[s]]). */
 
 #ifndef DEMOSTORE_H
 #define DEMOSTORE_H
@@ -21,7 +27,7 @@ extern "C" {
 
 #define DEMOSTORE_MAX_NUM_ATNS 16
 #define PHASE2_DEMO_MAGIC 0x4D443250u  /* 'P2DM' little-endian */
-#define PHASE2_DEMO_VERSION 1u
+#define PHASE2_DEMO_VERSION 2u
 
 typedef struct {
     uint32_t magic;
@@ -31,6 +37,7 @@ typedef struct {
     uint32_t rng_seed;
     float quality;
     uint32_t snapshot_size;
+    int32_t num_snapshots;
 } Phase2DemoHeader;
 
 typedef struct {
@@ -39,8 +46,10 @@ typedef struct {
     int num_atns;
     uint32_t rng_seed;
     float quality_at_root;
-    uint8_t* root_snapshot;
     uint32_t snapshot_size;
+    int num_snapshots;
+    uint8_t* snapshots;
+    int* snapshot_ticks;
     int* actions;
     int cursor_tick;
 } DemoTrajectory;
@@ -63,7 +72,8 @@ static inline void demostore_destroy(DemoStore* s) {
     if (!s) return;
     for (int i = 0; i < s->num_demos; i++) {
         free(s->demos[i].actions);
-        free(s->demos[i].root_snapshot);
+        free(s->demos[i].snapshots);
+        free(s->demos[i].snapshot_ticks);
     }
     free(s->demos);
     free(s);
@@ -110,18 +120,28 @@ static inline int demostore_load_demo(
         fclose(f); return -1;
     }
     if (h.num_ticks <= 0 || h.num_ticks > 1024 * 1024) { fclose(f); return -1; }
+    if (h.num_snapshots <= 0 || h.num_snapshots > h.num_ticks + 1) { fclose(f); return -1; }
 
-    /* allocate the runtime size and zero-pad the tail. older archives missed
-       trailing fields like the Log accumulator extension; those load as zero. */
-    uint8_t* root_snapshot = (uint8_t*)calloc(1, expected_snapshot_size);
-    if (fread(root_snapshot, 1, h.snapshot_size, f) != h.snapshot_size) {
-        free(root_snapshot); fclose(f); return -1;
+    /* allocate the runtime size per snapshot and zero-pad each tail. older
+       archives missed trailing fields like the Log accumulator extension. */
+    uint8_t* snapshots = (uint8_t*)calloc(
+        (size_t)h.num_snapshots, expected_snapshot_size);
+    for (int i = 0; i < h.num_snapshots; i++) {
+        uint8_t* slot = snapshots + (size_t)i * (size_t)expected_snapshot_size;
+        if (fread(slot, 1, h.snapshot_size, f) != h.snapshot_size) {
+            free(snapshots); fclose(f); return -1;
+        }
+    }
+
+    int* snapshot_ticks = (int*)malloc((size_t)h.num_snapshots * sizeof(int));
+    if (fread(snapshot_ticks, sizeof(int), h.num_snapshots, f) != (size_t)h.num_snapshots) {
+        free(snapshots); free(snapshot_ticks); fclose(f); return -1;
     }
 
     size_t expected = (size_t)h.num_ticks * (size_t)num_atns;
     int* actions = (int*)malloc(expected * sizeof(int));
     if (fread(actions, sizeof(int), expected, f) != expected) {
-        free(root_snapshot); free(actions); fclose(f); return -1;
+        free(snapshots); free(snapshot_ticks); free(actions); fclose(f); return -1;
     }
 
     long here = ftell(f);
@@ -131,7 +151,7 @@ static inline int demostore_load_demo(
     if (here != end) {
         fprintf(stderr,
             "demostore_load_demo: trailing bytes in %s\n", path);
-        free(root_snapshot); free(actions); return -1;
+        free(snapshots); free(snapshot_ticks); free(actions); return -1;
     }
 
     float q_root = h.quality;
@@ -148,10 +168,12 @@ static inline int demostore_load_demo(
     d->num_atns = num_atns;
     d->rng_seed = h.rng_seed;
     d->quality_at_root = q_root;
-    d->root_snapshot = root_snapshot;
     d->snapshot_size = expected_snapshot_size;
+    d->num_snapshots = h.num_snapshots;
+    d->snapshots = snapshots;
+    d->snapshot_ticks = snapshot_ticks;
     d->actions = actions;
-    d->cursor_tick = h.num_ticks - 1;
+    d->cursor_tick = snapshot_ticks[h.num_snapshots - 1];
     return demo_id;
 }
 
@@ -256,29 +278,39 @@ static inline const void* demo_snapshot_ladder_hidden_at(const DemoSnapshotLadde
     return l->hidden_pool + (size_t)i * l->hidden_size;
 }
 
+/* Locate the slot whose snapshot_tick is closest to (and not exceeding) tick.
+   Snapshot ticks are irregular (chain chunk lengths vary), so this is a
+   linear search. Returns the index of the largest slot s with
+   snapshot_ticks[s] <= tick, or 0 if tick is below the first slot. */
 static inline int demo_snapshot_ladder_slot_for_tick(const DemoSnapshotLadder* l, int tick) {
-    if (!l || tick < 0) return -1;
-    int slot = tick / l->snapshot_stride;
-    return slot >= l->num_snapshots ? l->num_snapshots - 1 : slot;
+    if (!l || tick < 0 || l->num_snapshots <= 0) return -1;
+    int slot = 0;
+    for (int s = 1; s < l->num_snapshots; s++) {
+        if (l->snapshot_ticks[s] <= tick) slot = s;
+        else break;
+    }
+    return slot;
 }
 
-/* env->observations captured at every demo tick; layout matches env-side
-   [obs, mask] split. */
+/* env->observations captured at every chain slot; one obs vector per slot,
+   not per tick (action replay does not reproduce the archive trajectory, so
+   ticks between slots have no recoverable state). For per-slot BC, action
+   at slot s is actions[snapshot_ticks[s]] from the demo's action chain. */
 typedef struct {
     int demo_id;
-    int length_ticks;
-    int obs_floats_per_tick;
+    int num_slots;
+    int obs_floats_per_slot;
     float* obs;
 } DemoObsCache;
 
 static inline DemoObsCache* demo_obs_cache_create(
-    int demo_id, int length_ticks, int obs_floats_per_tick
+    int demo_id, int num_slots, int obs_floats_per_slot
 ) {
     DemoObsCache* c = (DemoObsCache*)calloc(1, sizeof(*c));
     c->demo_id = demo_id;
-    c->length_ticks = length_ticks;
-    c->obs_floats_per_tick = obs_floats_per_tick;
-    c->obs = (float*)calloc((size_t)length_ticks * (size_t)obs_floats_per_tick, sizeof(float));
+    c->num_slots = num_slots;
+    c->obs_floats_per_slot = obs_floats_per_slot;
+    c->obs = (float*)calloc((size_t)num_slots * (size_t)obs_floats_per_slot, sizeof(float));
     return c;
 }
 

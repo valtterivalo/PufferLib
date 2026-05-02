@@ -1001,10 +1001,10 @@ int inferno_env_register_root_cell(
         quality, &result);
 }
 
-/* Restore the demo's archive root snapshot, then replay the recorded action
-   sequence and capture an InfSnapshot at slot 0 and every stride ticks. The
-   snapshot carries the RNG state, so the trajectory is deterministic. If
-   out_obs_cache is non-NULL, also captures env->observations at every tick.
+/* Copy the demo's chain snapshots directly into the ladder pool; per-slot
+   obs cache populated by restoring each snapshot in turn and writing obs.
+   No action replay: the archive trajectory is not deterministic from
+   snapshot+actions, but each snapshot stands alone as a faithful state.
    Returns 0 on success, -1 on shape mismatch. */
 int inferno_env_build_demo_snapshot_ladder(
     InfernoEnv* env,
@@ -1014,56 +1014,31 @@ int inferno_env_build_demo_snapshot_ladder(
 ) {
     if (demo->num_atns != NUM_ATNS) return -1;
     if (out_ladder->snapshot_size != sizeof(InfSnapshot)) return -1;
-    if (demo->snapshot_size != sizeof(InfSnapshot) || demo->root_snapshot == NULL) return -1;
-    int stride = out_ladder->snapshot_stride;
-    if (out_ladder->num_snapshots !=
-        demo_snapshot_ladder_count_for_length(demo->length_ticks, stride)) return -1;
+    if (demo->snapshot_size != sizeof(InfSnapshot) || demo->snapshots == NULL) return -1;
+    if (out_ladder->num_snapshots != demo->num_snapshots) return -1;
     if (out_obs_cache &&
-        (out_obs_cache->length_ticks != demo->length_ticks ||
-         out_obs_cache->obs_floats_per_tick != INF_TOTAL_OBS)) return -1;
+        (out_obs_cache->num_slots != demo->num_snapshots ||
+         out_obs_cache->obs_floats_per_slot != INF_TOTAL_OBS)) return -1;
 
-    int* saved_actions = env->replay_actions;
-    int saved_num_ticks = env->replay_num_ticks;
-    int saved_cursor = env->replay_cursor;
-    uint32_t saved_rng_seed = env->replay_rng_seed;
-    uint8_t saved_no_auto_reset = env->no_auto_reset;
+    InfSnapshot saved;
+    ENCOUNTER_INFERNO.snapshot(env->enc_state, &saved);
 
-    env->replay_actions = demo->actions;
-    env->replay_num_ticks = demo->length_ticks;
-    env->replay_cursor = 0;
-    env->replay_rng_seed = demo->rng_seed;
-    env->no_auto_reset = 1;
-
-    ENCOUNTER_INFERNO.restore(env->enc_state, demo->root_snapshot, demo->snapshot_size);
-    inferno_env_write_post_restore_state(env);
-    ENCOUNTER_INFERNO.snapshot(env->enc_state, out_ladder->snapshot_pool);
-    out_ladder->snapshot_ticks[0] = 0;
-    if (out_obs_cache) {
-        memcpy(out_obs_cache->obs, env->observations,
-            (size_t)INF_TOTAL_OBS * sizeof(float));
-    }
-    int next_slot = 1;
-
-    for (int t = 1; t < demo->length_ticks; t++) {
-        c_step(env);
+    for (int s = 0; s < demo->num_snapshots; s++) {
+        const uint8_t* src = demo->snapshots + (size_t)s * (size_t)demo->snapshot_size;
+        memcpy(out_ladder->snapshot_pool + (size_t)s * out_ladder->snapshot_size,
+               src, out_ladder->snapshot_size);
+        out_ladder->snapshot_ticks[s] = demo->snapshot_ticks[s];
         if (out_obs_cache) {
-            memcpy(out_obs_cache->obs + (size_t)t * (size_t)INF_TOTAL_OBS,
-                env->observations,
-                (size_t)INF_TOTAL_OBS * sizeof(float));
-        }
-        if (t % stride == 0 && next_slot < out_ladder->num_snapshots) {
-            ENCOUNTER_INFERNO.snapshot(env->enc_state,
-                out_ladder->snapshot_pool + (size_t)next_slot * out_ladder->snapshot_size);
-            out_ladder->snapshot_ticks[next_slot] = t;
-            next_slot++;
+            ENCOUNTER_INFERNO.restore(env->enc_state, src, demo->snapshot_size);
+            inferno_env_write_obs_mask(env);
+            memcpy(out_obs_cache->obs + (size_t)s * (size_t)INF_TOTAL_OBS,
+                   env->observations,
+                   (size_t)INF_TOTAL_OBS * sizeof(float));
         }
     }
 
-    env->replay_actions = saved_actions;
-    env->replay_num_ticks = saved_num_ticks;
-    env->replay_cursor = saved_cursor;
-    env->replay_rng_seed = saved_rng_seed;
-    env->no_auto_reset = saved_no_auto_reset;
+    ENCOUNTER_INFERNO.restore(env->enc_state, &saved, sizeof(saved));
+    inferno_env_write_post_restore_state(env);
 
     return 0;
 }

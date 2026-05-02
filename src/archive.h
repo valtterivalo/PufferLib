@@ -451,28 +451,58 @@ static inline int archive_chain_tick_count(const Archive* a, int leaf_idx) {
     return total;
 }
 
-/* Walk parent pointers from leaf back to the chain root and return that
-   root's archive index. Returns -1 if the chain has a cycle. */
-static inline int archive_chain_root_idx(const Archive* a, int leaf_idx) {
+/* Walk leaf -> root collecting cell indices and chunk lengths in reverse,
+   then store them in chain order (root first). Returns chain length in
+   cells, or -1 on cycle / corruption / overflow. snapshot_ticks_out[i] is
+   the cumulative tick at which chain_cells_out[i]'s snapshot was captured. */
+static inline int archive_collect_chain(
+    const Archive* a,
+    int leaf_idx,
+    int* chain_cells_out,
+    int* snapshot_ticks_out,
+    int max_cells
+) {
     int idx = leaf_idx;
-    int hops = 0;
-    while (idx >= 0) {
-        if (hops++ > a->num_entries) return -1;
+    int n = 0;
+    while (idx >= 0 && n < max_cells) {
         const ArchiveEntry* e = archive_get(a, idx);
         if (!e) return -1;
-        if (e->parent_idx == ARCHIVE_ROOT_PARENT) return idx;
+        chain_cells_out[n] = idx;
+        snapshot_ticks_out[n] = e->action_chunk_len;
+        n++;
+        if (e->parent_idx == ARCHIVE_ROOT_PARENT) break;
         idx = e->parent_idx;
+        if (n > a->num_entries) return -1;
     }
-    return -1;
+    if (n == 0) return -1;
+
+    /* reverse so order is root -> leaf */
+    for (int i = 0; i < n / 2; i++) {
+        int tmp_c = chain_cells_out[i];
+        int tmp_t = snapshot_ticks_out[i];
+        chain_cells_out[i] = chain_cells_out[n - 1 - i];
+        snapshot_ticks_out[i] = snapshot_ticks_out[n - 1 - i];
+        chain_cells_out[n - 1 - i] = tmp_c;
+        snapshot_ticks_out[n - 1 - i] = tmp_t;
+    }
+
+    /* chunk_len[0] is root's chunk (=0). cumulative tick of slot i is
+       sum of chunk_lens[0..i] but we want the tick AT which slot i's
+       snapshot was captured: 0 for root, root.chunk + child1.chunk for
+       child1, etc. so prefix-sum then shift. */
+    int cum = 0;
+    for (int i = 0; i < n; i++) {
+        int chunk = snapshot_ticks_out[i];
+        snapshot_ticks_out[i] = cum;
+        cum += chunk;
+    }
+    return n;
 }
 
-/* Export top-K archive cells as Phase2Demo files: header + root snapshot +
-   action chain from chain root to leaf. Replaying the action sequence on the
-   restored root reproduces the archive trajectory deterministically because
-   the RNG state is captured inside the snapshot.
-
-   File names: <output_dir>/demo_<rank>_q<quality>_t<ticks>.bin
-   Returns the number of demos actually written. */
+/* Export top-K archive cells as Phase2Demo v2 files: header + per-slot
+   snapshots along the chain (root -> leaf) + snapshot_ticks + action chain.
+   Skipping action replay at load time avoids the env non-determinism that
+   prevented v1 ladders from reproducing trajectories. */
 static inline int archive_export_top_k_demos(
     const Archive* a,
     const char* output_dir,
@@ -501,8 +531,10 @@ static inline int archive_export_top_k_demos(
     int n_export = (max_demos < n_candidates) ? max_demos : n_candidates;
     int* action_buf = (int*)malloc(
         (size_t)max_replay_ticks * (size_t)a->num_atns * sizeof(int));
-    if (!action_buf) {
-        free(candidates);
+    int* chain_cells = (int*)malloc((size_t)a->num_entries * sizeof(int));
+    int* chain_ticks = (int*)malloc((size_t)a->num_entries * sizeof(int));
+    if (!action_buf || !chain_cells || !chain_ticks) {
+        free(action_buf); free(chain_cells); free(chain_ticks); free(candidates);
         return 0;
     }
 
@@ -511,13 +543,17 @@ static inline int archive_export_top_k_demos(
         int leaf = candidates[rank].leaf_idx;
         int n_ticks = archive_replay_actions(a, leaf, action_buf, max_replay_ticks);
         if (n_ticks <= 0) continue;
-        /* embed the LEAF snapshot, not the chain root: action replay does
-           not reproduce the archive trajectory (some non-determinism is
-           outside InfernoState). The leaf snapshot lands the agent at
-           q=quality directly. cursor=0 -> leaf state. */
+        int n_cells = archive_collect_chain(a, leaf, chain_cells, chain_ticks, a->num_entries);
+        if (n_cells < 2) continue;
+        if (chain_ticks[n_cells - 1] + a->entries[leaf].action_chunk_len != n_ticks) {
+            fprintf(stderr,
+                "archive_export_top_k_demos: chain tick mismatch at leaf %d "
+                "(cum %d + leaf chunk %d != n_ticks %d)\n",
+                leaf, chain_ticks[n_cells - 1],
+                a->entries[leaf].action_chunk_len, n_ticks);
+            continue;
+        }
         uint32_t rng_seed = archive_chain_root_rng_seed(a, leaf);
-        const uint8_t* root_snapshot =
-            &a->snapshot_pool[(size_t)leaf * a->snapshot_size];
 
         char path[1024];
         snprintf(path, sizeof(path),
@@ -537,12 +573,16 @@ static inline int archive_export_top_k_demos(
             .rng_seed = rng_seed,
             .quality = candidates[rank].quality,
             .snapshot_size = (uint32_t)a->snapshot_size,
+            .num_snapshots = n_cells,
         };
+        int ok = fwrite(&h, sizeof(h), 1, fp) == 1;
+        for (int s = 0; s < n_cells && ok; s++) {
+            const uint8_t* snap = &a->snapshot_pool[(size_t)chain_cells[s] * a->snapshot_size];
+            ok = fwrite(snap, 1, a->snapshot_size, fp) == a->snapshot_size;
+        }
+        if (ok) ok = fwrite(chain_ticks, sizeof(int), n_cells, fp) == (size_t)n_cells;
         size_t expected = (size_t)n_ticks * (size_t)a->num_atns;
-        int ok =
-            fwrite(&h, sizeof(h), 1, fp) == 1 &&
-            fwrite(root_snapshot, 1, a->snapshot_size, fp) == a->snapshot_size &&
-            fwrite(action_buf, sizeof(int), expected, fp) == expected;
+        if (ok) ok = fwrite(action_buf, sizeof(int), expected, fp) == expected;
         int close_ok = (fclose(fp) == 0);
         if (ok && close_ok) {
             written++;
@@ -553,6 +593,8 @@ static inline int archive_export_top_k_demos(
 
     free(candidates);
     free(action_buf);
+    free(chain_cells);
+    free(chain_ticks);
     return written;
 }
 

@@ -37,6 +37,7 @@ static int g_fail = 0;
     } while (0)
 
 #define TEST_SNAPSHOT_SIZE 32
+#define TEST_NUM_SNAPSHOTS 4
 
 static int write_synthetic_demo(
     const char* path, int n_ticks, int num_atns, uint32_t rng_seed,
@@ -52,8 +53,13 @@ static int write_synthetic_demo(
         .rng_seed = rng_seed,
         .quality = 0.0f,
         .snapshot_size = TEST_SNAPSHOT_SIZE,
+        .num_snapshots = TEST_NUM_SNAPSHOTS,
     };
-    uint8_t snap[TEST_SNAPSHOT_SIZE] = {0};
+    uint8_t snap_pool[TEST_NUM_SNAPSHOTS * TEST_SNAPSHOT_SIZE] = {0};
+    int snap_ticks[TEST_NUM_SNAPSHOTS];
+    for (int i = 0; i < TEST_NUM_SNAPSHOTS; i++) {
+        snap_ticks[i] = (i * n_ticks) / TEST_NUM_SNAPSHOTS;
+    }
     int* actions = (int*)malloc((size_t)n_ticks * (size_t)num_atns * sizeof(int));
     for (int t = 0; t < n_ticks; t++) {
         for (int hh = 0; hh < num_atns; hh++) {
@@ -62,7 +68,8 @@ static int write_synthetic_demo(
     }
     size_t expected = (size_t)n_ticks * (size_t)num_atns;
     int ok = fwrite(&h, sizeof(h), 1, f) == 1 &&
-             fwrite(snap, 1, TEST_SNAPSHOT_SIZE, f) == TEST_SNAPSHOT_SIZE &&
+             fwrite(snap_pool, 1, sizeof(snap_pool), f) == sizeof(snap_pool) &&
+             fwrite(snap_ticks, sizeof(int), TEST_NUM_SNAPSHOTS, f) == TEST_NUM_SNAPSHOTS &&
              fwrite(actions, sizeof(int), expected, f) == expected;
     free(actions);
     fclose(f);
@@ -95,7 +102,8 @@ static void test_load_one_demo_round_trip(void) {
     ASSERT_INT_EQ("length_ticks", d->length_ticks, n_ticks);
     ASSERT_INT_EQ("num_atns", d->num_atns, num_atns);
     ASSERT_INT_EQ("rng_seed", (int)d->rng_seed, (int)rng_seed);
-    ASSERT_INT_EQ("cursor starts at end", d->cursor_tick, n_ticks - 1);
+    ASSERT_INT_EQ("cursor starts at last snapshot tick",
+        d->cursor_tick, ((TEST_NUM_SNAPSHOTS - 1) * n_ticks) / TEST_NUM_SNAPSHOTS);
 
     const int* a5 = demostore_actions_at(s, 0, 5);
     ASSERT_INT_EQ("actions[5][3]", a5[3], 148);
@@ -123,7 +131,8 @@ static void test_load_multiple_demos(void) {
     ASSERT_INT_EQ("b length", s->demos[1].length_ticks, 20);
     ASSERT_INT_EQ("c length", s->demos[2].length_ticks, 5);
 
-    ASSERT_INT_EQ("b cursor starts at length-1", s->demos[1].cursor_tick, 19);
+    ASSERT_INT_EQ("b cursor starts at last snapshot tick",
+        s->demos[1].cursor_tick, (3 * 20) / 4);
 
     demostore_destroy(s);
     unlink(p0); unlink(p1); unlink(p2);

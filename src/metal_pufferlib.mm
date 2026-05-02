@@ -1570,20 +1570,24 @@ int phase2_stage_demo_rows(PuffeRL& pufferl, RolloutBuf& rollouts) {
         int demo_id = ctx->active_pool[phase2_rand_int(ctx, ctx->active_pool_size)];
         DemoTrajectory* demo = &ctx->store->demos[demo_id];
         DemoObsCache* cache = pufferl.phase2_obs_caches[demo_id];
-        int max_start = demo->length_ticks - 1;
-        if (max_start < 0) max_start = 0;
-        int start_tick = phase2_rand_int(ctx, max_start + 1);
+        /* sample a slot in [0, num_snapshots-2]: each slot's BC label is the
+           first action of the chunk leading to slot+1, so the leaf (last slot)
+           has no valid label. action replay between slots is non-deterministic,
+           so we cannot synthesize a multi-tick recurrent BC window — only the
+           first tick of each row gets a real (obs, action) pair. */
+        int max_slot = demo->num_snapshots - 1;
+        if (max_slot < 1) continue;
+        int slot = phase2_rand_int(ctx, max_slot);
+        int demo_t = demo->snapshot_ticks[slot];
+        const float* slot_full =
+            cache->obs + (size_t)slot * cache->obs_floats_per_slot;
 
         for (int t = 0; t < H; t++) {
-            int demo_t = start_tick + t;
-            int valid = demo_t < demo->length_ticks;
             float* obs_dst = g.mb_obs.data + (size_t)(n * H + t) * input_size;
             float* act_dst = g.mb_actions.data + (size_t)(n * H + t) * num_atns;
             float* bc_act_dst = g.mb_bc_actions.data + (size_t)(n * H + t) * num_atns;
-            if (valid) {
-                const float* tick_full =
-                    cache->obs + (size_t)demo_t * cache->obs_floats_per_tick;
-                std::memcpy(obs_dst, tick_full, (size_t)input_size * sizeof(float));
+            if (t == 0) {
+                std::memcpy(obs_dst, slot_full, (size_t)input_size * sizeof(float));
                 for (int h = 0; h < num_atns; h++) {
                     int action = demo->actions[demo_t * num_atns + h];
                     act_dst[h] = (float)action;
@@ -1593,7 +1597,7 @@ int phase2_stage_demo_rows(PuffeRL& pufferl, RolloutBuf& rollouts) {
                 g.mb_bc_weights.data[n * H + t] = ctx->bc_coef;
                 if (pufferl.has_mask) {
                     std::memcpy(pufferl.mb_masks.data + ((size_t)n * H + t) * mask_w,
-                        tick_full + input_size, (size_t)mask_w * sizeof(float));
+                        slot_full + input_size, (size_t)mask_w * sizeof(float));
                 }
             } else {
                 std::memset(obs_dst, 0, (size_t)input_size * sizeof(float));
@@ -1671,9 +1675,9 @@ int phase2_init_impl(
     InfernoEnv* env0 = inferno_env_at(envs_void, 0);
     for (int i = 0; i < store->num_demos; i++) {
         DemoTrajectory* demo = &store->demos[i];
-        int n_snap = demo_snapshot_ladder_count_for_length(demo->length_ticks, snapshot_stride);
-        ladders[i] = demo_snapshot_ladder_create(i, snapshot_stride, n_snap, snapshot_size, 0);
-        obs_caches[i] = demo_obs_cache_create(i, demo->length_ticks, obs_floats);
+        ladders[i] = demo_snapshot_ladder_create(
+            i, snapshot_stride, demo->num_snapshots, snapshot_size, 0);
+        obs_caches[i] = demo_obs_cache_create(i, demo->num_snapshots, obs_floats);
         if (inferno_env_build_demo_snapshot_ladder(env0, demo, ladders[i], obs_caches[i]) != 0) {
             std::fprintf(stderr, "phase2_init: ladder build failed for demo %d\n", i);
             std::abort();
