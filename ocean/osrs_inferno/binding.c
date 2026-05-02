@@ -937,6 +937,10 @@ size_t inferno_env_snapshot_bytes(void) {
     return sizeof(InfSnapshot);
 }
 
+int inferno_env_obs_floats(void) {
+    return INF_TOTAL_OBS;
+}
+
 /* Indexed access for callers that hold the env array as void* (pointer
    arithmetic on an incomplete InfernoEnv would not compile). */
 struct InfernoEnv* inferno_env_at(void* envs_void, int idx) {
@@ -968,19 +972,23 @@ int inferno_env_register_root_cell(
 }
 
 /* Replay one demo through `env` and capture an InfSnapshot at every
-   stride ticks (slot 0 = post-reset). Caller pre-sizes out_ladder via
-   demo_snapshot_ladder_count_for_length. Returns 0 on success, -1 on
-   shape mismatch. */
+   stride ticks (slot 0 = post-reset). If out_obs_cache is non-NULL,
+   also captures env->observations at every tick. Returns 0 on success,
+   -1 on shape mismatch. */
 int inferno_env_build_demo_snapshot_ladder(
     InfernoEnv* env,
     const DemoTrajectory* demo,
-    DemoSnapshotLadder* out_ladder
+    DemoSnapshotLadder* out_ladder,
+    DemoObsCache* out_obs_cache
 ) {
     if (demo->num_atns != NUM_ATNS) return -1;
     if (out_ladder->snapshot_size != sizeof(InfSnapshot)) return -1;
     int stride = out_ladder->snapshot_stride;
     if (out_ladder->num_snapshots !=
         demo_snapshot_ladder_count_for_length(demo->length_ticks, stride)) return -1;
+    if (out_obs_cache &&
+        (out_obs_cache->length_ticks != demo->length_ticks ||
+         out_obs_cache->obs_floats_per_tick != INF_TOTAL_OBS)) return -1;
 
     int* saved_actions = env->replay_actions;
     int saved_num_ticks = env->replay_num_ticks;
@@ -997,10 +1005,19 @@ int inferno_env_build_demo_snapshot_ladder(
     c_reset(env);
     ENCOUNTER_INFERNO.snapshot(env->enc_state, out_ladder->snapshot_pool);
     out_ladder->snapshot_ticks[0] = 0;
+    if (out_obs_cache) {
+        memcpy(out_obs_cache->obs, env->observations,
+            (size_t)INF_TOTAL_OBS * sizeof(float));
+    }
     int next_slot = 1;
 
     for (int t = 1; t < demo->length_ticks; t++) {
         c_step(env);
+        if (out_obs_cache) {
+            memcpy(out_obs_cache->obs + (size_t)t * (size_t)INF_TOTAL_OBS,
+                env->observations,
+                (size_t)INF_TOTAL_OBS * sizeof(float));
+        }
         if (t % stride == 0 && next_slot < out_ladder->num_snapshots) {
             ENCOUNTER_INFERNO.snapshot(env->enc_state,
                 out_ladder->snapshot_pool + (size_t)next_slot * out_ladder->snapshot_size);

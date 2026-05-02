@@ -261,6 +261,7 @@ struct PuffeRL {
 
     DemoStore* phase2_store = nullptr;
     DemoSnapshotLadder** phase2_ladders = nullptr;
+    DemoObsCache** phase2_obs_caches = nullptr;
     Phase2Context* phase2_ctx = nullptr;
 };
 
@@ -1276,10 +1277,12 @@ extern "C" {
     int inferno_env_archive_scratch_count(const struct InfernoEnv* env);
     int inferno_env_archive_scratch_dropped(const struct InfernoEnv* env);
     size_t inferno_env_snapshot_bytes(void);
+    int inferno_env_obs_floats(void);
     int inferno_env_register_root_cell(struct InfernoEnv* env, Archive* archive, const uint8_t* hidden_state);
     void c_reset(struct InfernoEnv* env);
     int inferno_env_build_demo_snapshot_ladder(
-        struct InfernoEnv* env, const DemoTrajectory* demo, DemoSnapshotLadder* out_ladder);
+        struct InfernoEnv* env, const DemoTrajectory* demo,
+        DemoSnapshotLadder* out_ladder, DemoObsCache* out_obs_cache);
     void inferno_env_set_phase2_ctx(struct InfernoEnv* env, Phase2Context* ctx, int env_idx);
 }
 
@@ -1506,15 +1509,19 @@ int phase2_init_impl(
     }
 
     size_t snapshot_size = inferno_env_snapshot_bytes();
+    int obs_floats = inferno_env_obs_floats();
     DemoSnapshotLadder** ladders = (DemoSnapshotLadder**)std::calloc(
         (size_t)store->num_demos, sizeof(DemoSnapshotLadder*));
+    DemoObsCache** obs_caches = (DemoObsCache**)std::calloc(
+        (size_t)store->num_demos, sizeof(DemoObsCache*));
     void* envs_void = pufferl.vec->envs;
     InfernoEnv* env0 = inferno_env_at(envs_void, 0);
     for (int i = 0; i < store->num_demos; i++) {
         DemoTrajectory* demo = &store->demos[i];
         int n_snap = demo_snapshot_ladder_count_for_length(demo->length_ticks, snapshot_stride);
         ladders[i] = demo_snapshot_ladder_create(i, snapshot_stride, n_snap, snapshot_size, 0);
-        if (inferno_env_build_demo_snapshot_ladder(env0, demo, ladders[i]) != 0) {
+        obs_caches[i] = demo_obs_cache_create(i, demo->length_ticks, obs_floats);
+        if (inferno_env_build_demo_snapshot_ladder(env0, demo, ladders[i], obs_caches[i]) != 0) {
             std::fprintf(stderr, "phase2_init: ladder build failed for demo %d\n", i);
             std::abort();
         }
@@ -1530,6 +1537,7 @@ int phase2_init_impl(
 
     pufferl.phase2_store = store;
     pufferl.phase2_ladders = ladders;
+    pufferl.phase2_obs_caches = obs_caches;
     pufferl.phase2_ctx = ctx;
     std::fprintf(stderr,
         "phase2_init: %d demos, stride=%d, %d envs\n",
@@ -1546,11 +1554,14 @@ void phase2_close(PuffeRL& pufferl) {
     phase2_ctx_destroy(pufferl.phase2_ctx);
     for (int i = 0; i < pufferl.phase2_store->num_demos; i++) {
         demo_snapshot_ladder_destroy(pufferl.phase2_ladders[i]);
+        demo_obs_cache_destroy(pufferl.phase2_obs_caches[i]);
     }
     std::free(pufferl.phase2_ladders);
+    std::free(pufferl.phase2_obs_caches);
     demostore_destroy(pufferl.phase2_store);
     pufferl.phase2_ctx = nullptr;
     pufferl.phase2_ladders = nullptr;
+    pufferl.phase2_obs_caches = nullptr;
     pufferl.phase2_store = nullptr;
 }
 

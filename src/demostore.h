@@ -214,6 +214,41 @@ static inline int demo_snapshot_ladder_slot_for_tick(const DemoSnapshotLadder* l
     return slot >= l->num_snapshots ? l->num_snapshots - 1 : slot;
 }
 
+/* Per-demo obs+mask cache: env->observations captured at every tick of the
+   demo replay. BC training samples (obs[t..t+H-1], action[t..t+H-1]) windows
+   from this. Layout matches env->observations: obs_floats_per_tick floats
+   per tick, [obs INF_NUM_OBS, mask INF_ACTION_MASK_SIZE]. */
+
+typedef struct {
+    int demo_id;
+    int length_ticks;
+    int obs_floats_per_tick;
+    float* obs;
+} DemoObsCache;
+
+static inline DemoObsCache* demo_obs_cache_create(
+    int demo_id, int length_ticks, int obs_floats_per_tick
+) {
+    if (length_ticks <= 0 || obs_floats_per_tick <= 0) return NULL;
+    DemoObsCache* c = (DemoObsCache*)calloc(1, sizeof(*c));
+    c->demo_id = demo_id;
+    c->length_ticks = length_ticks;
+    c->obs_floats_per_tick = obs_floats_per_tick;
+    c->obs = (float*)calloc((size_t)length_ticks * (size_t)obs_floats_per_tick, sizeof(float));
+    return c;
+}
+
+static inline void demo_obs_cache_destroy(DemoObsCache* c) {
+    if (!c) return;
+    free(c->obs);
+    free(c);
+}
+
+static inline const float* demo_obs_cache_obs_at(const DemoObsCache* c, int tick) {
+    if (tick < 0 || tick >= c->length_ticks) return NULL;
+    return c->obs + (size_t)tick * (size_t)c->obs_floats_per_tick;
+}
+
 #ifdef __cplusplus
 }
 #endif
