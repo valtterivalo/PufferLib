@@ -618,13 +618,16 @@ PYBIND11_MODULE(_C, m) {
         int max_demos,
         uint64_t seed,
         float normal_start_frac,
-        float randomize_rng_frac
+        float randomize_rng_frac,
+        float bc_coef,
+        int bc_demos_per_minibatch
     ) -> int {
         PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
         py::gil_scoped_release no_gil;
         return phase2_init_impl(
             pufferl, demo_dir.c_str(), num_atns, snapshot_stride, max_demos,
-            seed, normal_start_frac, randomize_rng_frac);
+            seed, normal_start_frac, randomize_rng_frac,
+            bc_coef, bc_demos_per_minibatch);
     },
     py::arg("pufferl"),
     py::arg("demo_dir"),
@@ -633,7 +636,9 @@ PYBIND11_MODULE(_C, m) {
     py::arg("max_demos") = 64,
     py::arg("seed") = (uint64_t)42,
     py::arg("normal_start_frac") = 0.25f,
-    py::arg("randomize_rng_frac") = 0.25f);
+    py::arg("randomize_rng_frac") = 0.25f,
+    py::arg("bc_coef") = 0.0f,
+    py::arg("bc_demos_per_minibatch") = 0);
 
     m.def("uptime", [](py::object pufferl_obj) -> double {
         PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();

@@ -378,6 +378,8 @@ def _train(env_name, args, sweep_obj=None, result_queue=None, verbose=False):
                 seed=env_args.get('phase2_seed', 42),
                 normal_start_frac=env_args.get('phase2_normal_start_frac', 0.25),
                 randomize_rng_frac=env_args.get('phase2_randomize_rng_frac', 0.25),
+                bc_coef=env_args.get('phase2_bc_coef', 0.0),
+                bc_demos_per_minibatch=env_args.get('phase2_bc_demos_per_minibatch', 0),
             )
             print(f'phase2: loaded {n} demos from {phase2_dir}', flush=True)
 

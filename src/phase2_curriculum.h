@@ -39,6 +39,12 @@ typedef struct {
     float demote_rate;
     int backstep_ticks;
     float success_q_delta;
+
+    /* BC. When bc_coef > 0 and bc_demos_per_minibatch > 0, run_minibatch
+       overwrites the last bc_demos_per_minibatch rows of the minibatch
+       with demo windows and adds a head-weighted CE auxiliary loss. */
+    float bc_coef;
+    int bc_demos_per_minibatch;
 } Phase2Context;
 
 typedef struct {
@@ -89,6 +95,8 @@ static inline Phase2Context* phase2_ctx_create(
     ctx->demote_rate = 0.20f;
     ctx->backstep_ticks = 16;
     ctx->success_q_delta = 0.03f;
+    ctx->bc_coef = 0.0f;
+    ctx->bc_demos_per_minibatch = 0;
     return ctx;
 }
 

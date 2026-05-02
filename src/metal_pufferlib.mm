@@ -263,6 +263,18 @@ struct PuffeRL {
     DemoSnapshotLadder** phase2_ladders = nullptr;
     DemoObsCache** phase2_obs_caches = nullptr;
     Phase2Context* phase2_ctx = nullptr;
+
+    /* BC stash: rollout ratio/values at the prio-sampled indices that a BC
+       minibatch step overwrites with demo data. The kernel writes
+       mb_ratio/mb_newvalue for those rows, scatter writes them back to
+       rollouts; we restore from this stash so demo rows don't corrupt
+       importance weights / value estimates in subsequent minibatches. */
+    int phase2_bc_stash_count = 0;
+    int phase2_bc_stash_horizon = 0;
+    int* phase2_bc_stash_row = nullptr;
+    int64_t* phase2_bc_stash_roll_idx = nullptr;
+    float* phase2_bc_stash_ratio = nullptr;
+    float* phase2_bc_stash_values = nullptr;
 };
 
 // ============================================================================
@@ -520,6 +532,9 @@ static void sync_pending_train(PuffeRL& pufferl);
 // Training loop
 // ============================================================================
 
+int phase2_stage_demo_rows(PuffeRL& pufferl, RolloutBuf& rollouts);
+void phase2_unstage_demo_rows(PuffeRL& pufferl, RolloutBuf& rollouts);
+
 void train_impl(PuffeRL& pufferl) {
     HypersT& hypers = pufferl.hypers;
     uint64_t tp_preloop0 = mach_absolute_time();
@@ -659,6 +674,11 @@ void train_impl(PuffeRL& pufferl) {
         if (gpu_profile) mtl_ensure_stream_synced(s);
         uint64_t tp3 = mach_absolute_time();
 
+        if (pufferl.phase2_ctx) {
+            mtl_ensure_stream_synced(s);
+            phase2_stage_demo_rows(pufferl, rollouts);
+        }
+
         PolicyWeights& train_weights = pufferl.train_fp16 ? pufferl.weights_fp16 : pufferl.weights_fp32;
         PrecisionTensor obs_pt;
         PrecisionTensor state_pt;
@@ -776,6 +796,11 @@ void train_impl(PuffeRL& pufferl) {
         mtl_scatter_ppo_outputs(pufferl.train_buf, rollouts,
             (const int64_t*)pufferl.prio_bufs.idx.data, s);
         mtl_barrier((MetalStream*)s);
+
+        if (pufferl.phase2_bc_stash_count > 0) {
+            mtl_ensure_stream_synced(s);
+            phase2_unstage_demo_rows(pufferl, rollouts);
+        }
 
         if (gpu_profile) mtl_ensure_stream_synced(s);
         uint64_t tp9 = mach_absolute_time();
@@ -1504,6 +1529,127 @@ ArchiveExploreStats archive_explore_impl(
 }
 
 
+/* Overwrite the last K rows of train_buf with demo windows, where K is
+   pufferl.phase2_ctx->bc_demos_per_minibatch (clamped to N). Saves the
+   pre-stage rollout ratio/values at the picked prio indices so
+   phase2_unstage_demo_rows can restore them after scatter. Returns 0 if
+   BC is inactive (no staging done). */
+int phase2_stage_demo_rows(PuffeRL& pufferl, RolloutBuf& rollouts) {
+    Phase2Context* ctx = pufferl.phase2_ctx;
+    if (!ctx || ctx->bc_coef <= 0.0f || ctx->bc_demos_per_minibatch <= 0) {
+        pufferl.phase2_bc_stash_count = 0;
+        return 0;
+    }
+    if (pufferl.train_fp16) {
+        std::fprintf(stderr, "phase2_stage_demo_rows: BC + train_fp16 not supported\n");
+        std::abort();
+    }
+
+    TrainGraph& g = pufferl.train_buf;
+    int N = (int)g.mb_obs.shape[0];
+    int H = (int)g.mb_obs.shape[1];
+    int input_size = (int)g.mb_obs.shape[2];
+    int num_atns = (int)g.mb_actions.shape[2];
+    int num_layers = (int)g.mb_state.shape[0];
+    int hidden_size = (int)g.mb_state.shape[3];
+    int K = ctx->bc_demos_per_minibatch;
+    if (K > N) K = N;
+    int mask_w = pufferl.has_mask ? pufferl.mask_width : 0;
+    int obs_mask_offset = input_size - mask_w;
+
+    if (pufferl.phase2_bc_stash_row == nullptr) {
+        pufferl.phase2_bc_stash_row = (int*)std::calloc((size_t)N, sizeof(int));
+        pufferl.phase2_bc_stash_roll_idx = (int64_t*)std::calloc((size_t)N, sizeof(int64_t));
+        pufferl.phase2_bc_stash_ratio = (float*)std::calloc((size_t)N * (size_t)H, sizeof(float));
+        pufferl.phase2_bc_stash_values = (float*)std::calloc((size_t)N * (size_t)H, sizeof(float));
+    }
+    pufferl.phase2_bc_stash_horizon = H;
+    pufferl.phase2_bc_stash_count = K;
+
+    const int64_t* prio_idx = (const int64_t*)pufferl.prio_bufs.idx.data;
+    for (int k = 0; k < K; k++) {
+        int n = N - K + k;
+        int64_t roll_idx = prio_idx[n];
+        pufferl.phase2_bc_stash_row[k] = n;
+        pufferl.phase2_bc_stash_roll_idx[k] = roll_idx;
+        std::memcpy(pufferl.phase2_bc_stash_ratio + (size_t)k * H,
+            rollouts.ratio.data + (size_t)roll_idx * H, (size_t)H * sizeof(float));
+        std::memcpy(pufferl.phase2_bc_stash_values + (size_t)k * H,
+            rollouts.values.data + (size_t)roll_idx * H, (size_t)H * sizeof(float));
+
+        int demo_id = ctx->active_pool[phase2_rand_int(ctx, ctx->active_pool_size)];
+        DemoTrajectory* demo = &ctx->store->demos[demo_id];
+        DemoObsCache* cache = pufferl.phase2_obs_caches[demo_id];
+        int max_start = demo->length_ticks - 1;
+        if (max_start < 0) max_start = 0;
+        int start_tick = phase2_rand_int(ctx, max_start + 1);
+
+        for (int t = 0; t < H; t++) {
+            int demo_t = start_tick + t;
+            int valid = demo_t < demo->length_ticks;
+            float* obs_dst = g.mb_obs.data + (size_t)(n * H + t) * input_size;
+            float* act_dst = g.mb_actions.data + (size_t)(n * H + t) * num_atns;
+            float* bc_act_dst = g.mb_bc_actions.data + (size_t)(n * H + t) * num_atns;
+            if (valid) {
+                const float* tick_full =
+                    cache->obs + (size_t)demo_t * cache->obs_floats_per_tick;
+                std::memcpy(obs_dst, tick_full, (size_t)input_size * sizeof(float));
+                for (int h = 0; h < num_atns; h++) {
+                    int action = demo->actions[demo_t * num_atns + h];
+                    act_dst[h] = (float)action;
+                    bc_act_dst[h] = (float)action;
+                }
+                g.mb_row_weights.data[n * H + t] = 0.0f;
+                g.mb_bc_weights.data[n * H + t] = ctx->bc_coef;
+                if (pufferl.has_mask) {
+                    std::memcpy(pufferl.mb_masks.data + ((size_t)n * H + t) * mask_w,
+                        tick_full + input_size, (size_t)mask_w * sizeof(float));
+                }
+            } else {
+                std::memset(obs_dst, 0, (size_t)input_size * sizeof(float));
+                for (int h = 0; h < num_atns; h++) {
+                    act_dst[h] = 0.0f;
+                    bc_act_dst[h] = 0.0f;
+                }
+                g.mb_row_weights.data[n * H + t] = 0.0f;
+                g.mb_bc_weights.data[n * H + t] = 0.0f;
+                if (pufferl.has_mask) {
+                    float* mdst = pufferl.mb_masks.data + ((size_t)n * H + t) * mask_w;
+                    for (int m = 0; m < mask_w; m++) mdst[m] = 1.0f;
+                }
+            }
+            g.mb_advantages.data[n * H + t] = 0.0f;
+            g.mb_logprobs.data[n * H + t] = 0.0f;
+            g.mb_values.data[n * H + t] = 0.0f;
+            g.mb_returns.data[n * H + t] = 0.0f;
+        }
+        g.mb_prio.data[n] = 0.0f;
+
+        for (int l = 0; l < num_layers; l++) {
+            float* slot = g.mb_state.data +
+                ((size_t)l * (size_t)N + (size_t)n) * (size_t)hidden_size;
+            std::memset(slot, 0, (size_t)hidden_size * sizeof(float));
+        }
+    }
+    return K;
+}
+
+/* Restore rollout ratio/values at the indices we stashed in
+   phase2_stage_demo_rows. Run after mtl_scatter_ppo_outputs. */
+void phase2_unstage_demo_rows(PuffeRL& pufferl, RolloutBuf& rollouts) {
+    int K = pufferl.phase2_bc_stash_count;
+    if (K <= 0) return;
+    int H = pufferl.phase2_bc_stash_horizon;
+    for (int k = 0; k < K; k++) {
+        int64_t roll_idx = pufferl.phase2_bc_stash_roll_idx[k];
+        std::memcpy(rollouts.ratio.data + (size_t)roll_idx * H,
+            pufferl.phase2_bc_stash_ratio + (size_t)k * H, (size_t)H * sizeof(float));
+        std::memcpy(rollouts.values.data + (size_t)roll_idx * H,
+            pufferl.phase2_bc_stash_values + (size_t)k * H, (size_t)H * sizeof(float));
+    }
+    pufferl.phase2_bc_stash_count = 0;
+}
+
 int phase2_init_impl(
     PuffeRL& pufferl,
     const char* demo_dir,
@@ -1512,7 +1658,9 @@ int phase2_init_impl(
     int max_demos,
     uint64_t seed,
     float normal_start_frac,
-    float randomize_rng_frac
+    float randomize_rng_frac,
+    float bc_coef,
+    int bc_demos_per_minibatch
 ) {
     DemoStore* store = demostore_create(max_demos);
     int loaded = demostore_load_dir(store, demo_dir, num_atns, /*parse_q=*/1, max_demos);
@@ -1544,6 +1692,8 @@ int phase2_init_impl(
     Phase2Context* ctx = phase2_ctx_create(store, ladders, pufferl.vec->total_agents, seed);
     ctx->normal_start_frac = normal_start_frac;
     ctx->randomize_rng_frac = randomize_rng_frac;
+    ctx->bc_coef = bc_coef;
+    ctx->bc_demos_per_minibatch = bc_demos_per_minibatch;
 
     for (int e = 0; e < pufferl.vec->total_agents; e++) {
         inferno_env_set_phase2_ctx(inferno_env_at(envs_void, e), ctx, e);
@@ -1577,6 +1727,16 @@ void phase2_close(PuffeRL& pufferl) {
     pufferl.phase2_ladders = nullptr;
     pufferl.phase2_obs_caches = nullptr;
     pufferl.phase2_store = nullptr;
+
+    std::free(pufferl.phase2_bc_stash_row);
+    std::free(pufferl.phase2_bc_stash_roll_idx);
+    std::free(pufferl.phase2_bc_stash_ratio);
+    std::free(pufferl.phase2_bc_stash_values);
+    pufferl.phase2_bc_stash_row = nullptr;
+    pufferl.phase2_bc_stash_roll_idx = nullptr;
+    pufferl.phase2_bc_stash_ratio = nullptr;
+    pufferl.phase2_bc_stash_values = nullptr;
+    pufferl.phase2_bc_stash_count = 0;
 }
 
 void close_impl(PuffeRL& pufferl) {

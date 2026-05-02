@@ -784,8 +784,8 @@ kernel void ppo_loss_fwd_bwd_kernel(
         float adv_std = sqrt(adv_var[0]);
         float adv_normalized = (adv - adv_mean[0]) / (adv_std + 1e-8f);
 
-        // grad_loss is always 1.0. row_weight gates online-only PPO/value/entropy
-        // contributions: 1.0 for online rows, 0.0 for demo BC rows.
+        // row_weight gates online-only PPO/value/entropy contributions:
+        // 1.0 for online rows, 0.0 for demo BC rows.
         float dL = inv_NT;
         float rw = row_weights[nt];
         float d_pg_loss = dL * rw;
@@ -806,7 +806,7 @@ kernel void ppo_loss_fwd_bwd_kernel(
         } else {
             d_val_pred = val_pred - ret;
         }
-        grad_values_pred[nt] = dL * w * pp.vf_coef * d_val_pred * rw;
+        grad_values_pred[nt] = (rw > 0.0f) ? (dL * w * pp.vf_coef * d_val_pred) : 0.0f;
 
         // Policy loss + gradients. Both branches produce pg_loss, total_entropy,
         // logratio, ratio — the block-loss accumulation is shared after the if/else.
@@ -881,19 +881,26 @@ kernel void ppo_loss_fwd_bwd_kernel(
 
             float old_logp = old_logprobs[nt];
             logratio = total_log_prob - old_logp;
-            ratio = exp(logratio);
-            out_ratio[nt] = ratio;
+            ratio = (rw > 0.0f) ? exp(logratio) : 1.0f;
             float ratio_clipped = clamp(ratio, 1.0f - pp.clip_coef, 1.0f + pp.clip_coef);
             float wa = -w * adv_normalized;
             pg_loss = fmax(wa * ratio, wa * ratio_clipped);
 
-            // Backward: single joint d_new_logp shared across all heads
-            float d_ratio = wa * d_pg_loss;
-            if (wa * ratio_clipped > wa * ratio) {
-                if (ratio <= (1.0f - pp.clip_coef) || ratio >= (1.0f + pp.clip_coef))
-                    d_ratio = 0.0f;
+            // Backward: single joint d_new_logp shared across all heads.
+            // Gate by rw to keep NaN propagation contained when policy logits
+            // on demo obs go extreme.
+            float d_new_logp = 0.0f;
+            if (rw > 0.0f) {
+                float d_ratio = wa * d_pg_loss;
+                if (wa * ratio_clipped > wa * ratio) {
+                    if (ratio <= (1.0f - pp.clip_coef) || ratio >= (1.0f + pp.clip_coef))
+                        d_ratio = 0.0f;
+                }
+                d_new_logp = d_ratio * ratio;
+                out_ratio[nt] = ratio;
+            } else {
+                out_ratio[nt] = 1.0f;
             }
-            float d_new_logp = d_ratio * ratio;
 
             // Gradient pass over logits (reuses head_logsumexp, head_entropy)
             float bc_w = bc_weights[nt];
@@ -906,47 +913,58 @@ kernel void ppo_loss_fwd_bwd_kernel(
                 float head_w = head_weights[h];
                 float lse = head_logsumexp[h];
                 float ent = head_entropy[h];
+                bool head_finite = isfinite(lse) && isfinite(ent);
+                /* skip BC for this head when the demo's action is masked out
+                   in the current obs (state drift between recording and replay
+                   leaves invalid demo actions occasionally) */
+                bool bc_valid = bc_w > 0.0f && bc_act >= 0 && bc_act < A && head_finite &&
+                    action_mask[mask_base + logits_offset + bc_act] >= 0.5f;
 
                 for (int a = 0; a < A; a++) {
                     float raw_l = logits[logits_base + (logits_offset + a) * pp.logits_stride_a];
                     float m = action_mask[mask_base + logits_offset + a];
-                    if (m < 0.5f) {
+                    if (m < 0.5f || !head_finite) {
                         grad_logits[grad_logits_base + logits_offset + a] = 0.0f;
                         continue;
                     }
                     float l = masked_logit(raw_l, m);
                     float logp = l - lse;
                     float p = exp(logp);
-                    float d_logit = (a == act) ? d_new_logp : 0.0f;
-                    d_logit -= p * d_new_logp;
-                    d_logit += d_entropy_term * p * (-ent - logp);
-                    if (bc_w > 0.0f) {
+                    float d_logit = 0.0f;
+                    if (rw > 0.0f) {
+                        d_logit = (a == act) ? d_new_logp : 0.0f;
+                        d_logit -= p * d_new_logp;
+                        d_logit += d_entropy_term * p * (-ent - logp);
+                    }
+                    if (bc_valid) {
                         float bc_indicator = (a == bc_act) ? 1.0f : 0.0f;
                         d_logit += bc_w * head_w * (p - bc_indicator) * dL;
                     }
                     grad_logits[grad_logits_base + logits_offset + a] = d_logit;
                 }
-                if (bc_w > 0.0f && bc_act >= 0 && bc_act < A) {
+                if (bc_valid) {
                     float l = masked_logit(
                         logits[logits_base + (logits_offset + bc_act) * pp.logits_stride_a],
                         action_mask[mask_base + logits_offset + bc_act]);
-                    bc_loss_acc += head_w * (lse - l);
+                    if (isfinite(l)) bc_loss_acc += head_w * (lse - l);
                 }
                 logits_offset += A;
             }
             block_losses[LOSS_BC][tid] = bc_w * bc_loss_acc * inv_NT;
         }
 
-        // Shared loss accumulation. PPO-side stats are scaled by rw so demo
-        // rows (rw=0) don't pollute online stats; LOSS_BC is set above in
-        // the discrete branch (continuous BC not implemented yet).
-        block_losses[LOSS_PG][tid] = pg_loss * rw * inv_NT;
-        block_losses[LOSS_VF][tid] = v_loss * rw * inv_NT;
-        block_losses[LOSS_ENT][tid] = total_entropy * rw * inv_NT;
-        block_losses[LOSS_TOTAL][tid] = (pg_loss + pp.vf_coef * v_loss - pp.ent_coef * total_entropy) * rw * inv_NT;
-        block_losses[LOSS_OLD_APPROX_KL][tid] = (-logratio) * rw * inv_NT;
-        block_losses[LOSS_APPROX_KL][tid] = ((ratio - 1.0f) - logratio) * rw * inv_NT;
-        block_losses[LOSS_CLIPFRAC][tid] = (abs(ratio - 1.0f) > pp.clip_coef ? 1.0f : 0.0f) * rw * inv_NT;
+        // PPO loss reporting is gated by rw to keep NaN-on-demo-obs out of
+        // online stats (NaN * 0 = NaN in IEEE). LOSS_BC is set above in the
+        // discrete branch.
+        if (rw > 0.0f) {
+            block_losses[LOSS_PG][tid] = pg_loss * inv_NT;
+            block_losses[LOSS_VF][tid] = v_loss * inv_NT;
+            block_losses[LOSS_ENT][tid] = total_entropy * inv_NT;
+            block_losses[LOSS_TOTAL][tid] = (pg_loss + pp.vf_coef * v_loss - pp.ent_coef * total_entropy) * inv_NT;
+            block_losses[LOSS_OLD_APPROX_KL][tid] = (-logratio) * inv_NT;
+            block_losses[LOSS_APPROX_KL][tid] = ((ratio - 1.0f) - logratio) * inv_NT;
+            block_losses[LOSS_CLIPFRAC][tid] = (abs(ratio - 1.0f) > pp.clip_coef ? 1.0f : 0.0f) * inv_NT;
+        }
     } // end if (idx < total_elements)
 
     threadgroup_barrier(mem_flags::mem_threadgroup);
