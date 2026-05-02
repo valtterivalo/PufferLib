@@ -380,6 +380,10 @@ def _train(env_name, args, sweep_obj=None, result_queue=None, verbose=False):
                 randomize_rng_frac=env_args.get('phase2_randomize_rng_frac', 0.25),
                 bc_coef=env_args.get('phase2_bc_coef', 0.0),
                 bc_demos_per_minibatch=env_args.get('phase2_bc_demos_per_minibatch', 0),
+                promote_rate=env_args.get('phase2_promote_rate', 0.30),
+                demote_rate=env_args.get('phase2_demote_rate', 0.10),
+                backstep_ticks=env_args.get('phase2_backstep_ticks', 4),
+                success_q_delta=env_args.get('phase2_success_q_delta', 0.005),
             )
             print(f'phase2: loaded {n} demos from {phase2_dir}', flush=True)
 
@@ -657,10 +661,19 @@ def load_config(env_name):
     repo_dir = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
     puffer_config_dir = os.path.join(repo_dir, 'config/**/*.ini')
     puffer_default_config = os.path.join(repo_dir, 'config/default.ini')
+
+    config_file_override = os.environ.get('PUFFER_CONFIG_FILE', '').strip()
+
     #CC: Remove the default. Just raise an error on "puffer train" etc with no env (think we already do)
     if env_name == 'default':
         p = configparser.ConfigParser()
         p.read(puffer_default_config)
+    elif config_file_override:
+        p = configparser.ConfigParser()
+        p.read([puffer_default_config, config_file_override])
+        if env_name not in p.get('base', 'env_name', fallback='').split():
+            raise ValueError(
+                f'PUFFER_CONFIG_FILE={config_file_override} does not declare env_name={env_name}')
     else:
         for path in glob.glob(puffer_config_dir, recursive=True):
             p = configparser.ConfigParser()

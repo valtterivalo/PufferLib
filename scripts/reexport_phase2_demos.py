@@ -12,6 +12,8 @@ import os
 import shutil
 
 
+import sys
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--archive-glob',
@@ -26,6 +28,8 @@ def main():
     parser.add_argument('--clean', action='store_true', default=True,
         help='wipe output dirs before writing')
     args = parser.parse_args()
+
+    sys.argv = [sys.argv[0]]
 
     from pufferlib.pufferl import _resolve_backend, load_config
     backend_args = load_config('osrs_inferno')

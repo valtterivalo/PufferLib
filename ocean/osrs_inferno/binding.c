@@ -761,14 +761,18 @@ void my_log(Log* log, Dict* out) {
     dict_set(out, "zuk_healer_damage", log->zuk_healer_damage);
     dict_set(out, "deaths_to_jad", log->killed_by_type[INF_NPC_JAD] / log->n);
     if (log->n_normal > 0.0f) {
+        float min_zhp_n = log->min_zuk_hp_normal / log->n_normal;
         dict_set(out, "episode_return_normal", log->episode_return_normal / log->n_normal);
         dict_set(out, "wins_normal", log->wins_normal / log->n_normal);
-        dict_set(out, "min_zuk_hp_normal", log->min_zuk_hp_normal / log->n_normal);
+        dict_set(out, "min_zuk_hp_normal", min_zhp_n);
+        dict_set(out, "score_normal", (1200.0f - min_zhp_n) / 1200.0f);
     }
     if (log->n_snapshot > 0.0f) {
+        float min_zhp_s = log->min_zuk_hp_snapshot / log->n_snapshot;
         dict_set(out, "episode_return_snapshot", log->episode_return_snapshot / log->n_snapshot);
         dict_set(out, "wins_snapshot", log->wins_snapshot / log->n_snapshot);
-        dict_set(out, "min_zuk_hp_snapshot", log->min_zuk_hp_snapshot / log->n_snapshot);
+        dict_set(out, "min_zuk_hp_snapshot", min_zhp_s);
+        dict_set(out, "score_snapshot", (1200.0f - min_zhp_s) / 1200.0f);
     }
     dict_set(out, "snapshot_frac", log->n_snapshot);
     float gear_switch_rate = (log->episode_length > 0.0f)

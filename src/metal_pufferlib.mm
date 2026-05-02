@@ -1654,7 +1654,11 @@ int phase2_init_impl(
     float normal_start_frac,
     float randomize_rng_frac,
     float bc_coef,
-    int bc_demos_per_minibatch
+    int bc_demos_per_minibatch,
+    float promote_rate,
+    float demote_rate,
+    int backstep_ticks,
+    float success_q_delta
 ) {
     size_t snapshot_size = inferno_env_snapshot_bytes();
     int obs_floats = inferno_env_obs_floats();
@@ -1697,6 +1701,10 @@ int phase2_init_impl(
     ctx->randomize_rng_frac = randomize_rng_frac;
     ctx->bc_coef = bc_coef;
     ctx->bc_demos_per_minibatch = bc_demos_per_minibatch;
+    ctx->promote_rate = promote_rate;
+    ctx->demote_rate = demote_rate;
+    ctx->backstep_ticks = backstep_ticks;
+    ctx->success_q_delta = success_q_delta;
 
     for (int e = 0; e < pufferl.vec->total_agents; e++) {
         inferno_env_set_phase2_ctx(inferno_env_at(envs_void, e), ctx, e);
