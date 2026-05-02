@@ -86,11 +86,11 @@ static inline Phase2Context* phase2_ctx_create(
     ctx->demo_attempts = (int*)calloc((size_t)store->num_demos, sizeof(int));
     ctx->demo_successes = (int*)calloc((size_t)store->num_demos, sizeof(int));
     ctx->promote_attempts = 64;
-    ctx->promote_rate = 0.60f;
+    ctx->promote_rate = 0.30f;
     ctx->demote_attempts = 128;
-    ctx->demote_rate = 0.20f;
-    ctx->backstep_ticks = 16;
-    ctx->success_q_delta = 0.03f;
+    ctx->demote_rate = 0.10f;
+    ctx->backstep_ticks = 4;
+    ctx->success_q_delta = 0.005f;
     ctx->bc_coef = 0.0f;
     ctx->bc_demos_per_minibatch = 0;
     return ctx;
