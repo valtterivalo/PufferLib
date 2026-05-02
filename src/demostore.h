@@ -1,7 +1,10 @@
-/* DemoStore: holds top-K archive demos (PLAY_REPLAY format) for phase 2.
+/* DemoStore: holds top-K archive demos for phase 2.
  *
- * File format per demo: int32 num_ticks; uint32 rng_seed;
- *                       int32 action[num_ticks * num_atns]. */
+ * File format (Phase2Demo, magic 'P2DM'):
+ *   uint32 magic, uint32 version, int32 num_ticks, int32 num_atns,
+ *   uint32 rng_seed, float quality, uint32 snapshot_size;
+ *   uint8 root_snapshot[snapshot_size];
+ *   int32 action[num_ticks * num_atns]. */
 
 #ifndef DEMOSTORE_H
 #define DEMOSTORE_H
@@ -17,6 +20,18 @@ extern "C" {
 #endif
 
 #define DEMOSTORE_MAX_NUM_ATNS 16
+#define PHASE2_DEMO_MAGIC 0x4D443250u  /* 'P2DM' little-endian */
+#define PHASE2_DEMO_VERSION 1u
+
+typedef struct {
+    uint32_t magic;
+    uint32_t version;
+    int32_t num_ticks;
+    int32_t num_atns;
+    uint32_t rng_seed;
+    float quality;
+    uint32_t snapshot_size;
+} Phase2DemoHeader;
 
 typedef struct {
     int demo_id;
@@ -24,6 +39,8 @@ typedef struct {
     int num_atns;
     uint32_t rng_seed;
     float quality_at_root;
+    uint8_t* root_snapshot;
+    uint32_t snapshot_size;
     int* actions;
     int cursor_tick;
 } DemoTrajectory;
@@ -44,21 +61,25 @@ static inline DemoStore* demostore_create(int capacity) {
 
 static inline void demostore_destroy(DemoStore* s) {
     if (!s) return;
-    for (int i = 0; i < s->num_demos; i++) free(s->demos[i].actions);
+    for (int i = 0; i < s->num_demos; i++) {
+        free(s->demos[i].actions);
+        free(s->demos[i].root_snapshot);
+    }
     free(s->demos);
     free(s);
 }
 
-/* Load one PLAY_REPLAY demo from `path`. `num_atns` matches the encounter
-   (the file does not carry it). If `parse_filename_q` is non-zero, parses
-   quality from the filename convention "demo_*_q<f>_t<n>.bin". Returns the
-   new demo_id, or -1 on file read failure / capacity full / trailing bytes
-   (which usually means a num_atns mismatch). */
+/* Load one Phase2Demo file from `path`. `num_atns` and `expected_snapshot_size`
+   are validated against the header. If `parse_filename_q` is non-zero, parses
+   quality from the filename convention "demo_*_q<f>_t<n>.bin" and overrides the
+   header value (older filenames may be more reliable than re-export q). Returns
+   the new demo_id, or -1 on any mismatch / read failure / capacity full. */
 static inline int demostore_load_demo(
     DemoStore* s,
     const char* path,
     int num_atns,
-    int parse_filename_q
+    int parse_filename_q,
+    uint32_t expected_snapshot_size
 ) {
     if (s->num_demos >= s->capacity || num_atns <= 0 ||
         num_atns > DEMOSTORE_MAX_NUM_ATNS) return -1;
@@ -66,16 +87,41 @@ static inline int demostore_load_demo(
     FILE* f = fopen(path, "rb");
     if (!f) return -1;
 
-    int n_ticks = 0;
-    uint32_t rng_seed = 0;
-    if (fread(&n_ticks, sizeof(int), 1, f) != 1) { fclose(f); return -1; }
-    if (fread(&rng_seed, sizeof(uint32_t), 1, f) != 1) { fclose(f); return -1; }
-    if (n_ticks <= 0 || n_ticks > 1024 * 1024) { fclose(f); return -1; }
+    Phase2DemoHeader h;
+    if (fread(&h, sizeof(h), 1, f) != 1) { fclose(f); return -1; }
+    if (h.magic != PHASE2_DEMO_MAGIC || h.version != PHASE2_DEMO_VERSION) {
+        fprintf(stderr,
+            "demostore_load_demo: bad magic/version in %s "
+            "(got 0x%08x v%u, want 0x%08x v%u)\n",
+            path, h.magic, h.version, PHASE2_DEMO_MAGIC, PHASE2_DEMO_VERSION);
+        fclose(f); return -1;
+    }
+    if (h.num_atns != num_atns) {
+        fprintf(stderr,
+            "demostore_load_demo: %s num_atns=%d, expected %d\n",
+            path, h.num_atns, num_atns);
+        fclose(f); return -1;
+    }
+    if (h.snapshot_size > expected_snapshot_size) {
+        fprintf(stderr,
+            "demostore_load_demo: %s snapshot_size=%u > expected %u "
+            "(archive newer than runtime)\n",
+            path, h.snapshot_size, expected_snapshot_size);
+        fclose(f); return -1;
+    }
+    if (h.num_ticks <= 0 || h.num_ticks > 1024 * 1024) { fclose(f); return -1; }
 
-    size_t expected = (size_t)n_ticks * (size_t)num_atns;
+    /* allocate the runtime size and zero-pad the tail. older archives missed
+       trailing fields like the Log accumulator extension; those load as zero. */
+    uint8_t* root_snapshot = (uint8_t*)calloc(1, expected_snapshot_size);
+    if (fread(root_snapshot, 1, h.snapshot_size, f) != h.snapshot_size) {
+        free(root_snapshot); fclose(f); return -1;
+    }
+
+    size_t expected = (size_t)h.num_ticks * (size_t)num_atns;
     int* actions = (int*)malloc(expected * sizeof(int));
     if (fread(actions, sizeof(int), expected, f) != expected) {
-        free(actions); fclose(f); return -1;
+        free(root_snapshot); free(actions); fclose(f); return -1;
     }
 
     long here = ftell(f);
@@ -84,13 +130,11 @@ static inline int demostore_load_demo(
     fclose(f);
     if (here != end) {
         fprintf(stderr,
-            "demostore_load_demo: trailing bytes in %s (num_atns=%d?)\n",
-            path, num_atns);
-        free(actions);
-        return -1;
+            "demostore_load_demo: trailing bytes in %s\n", path);
+        free(root_snapshot); free(actions); return -1;
     }
 
-    float q_root = 0.0f;
+    float q_root = h.quality;
     if (parse_filename_q) {
         const char* slash = strrchr(path, '/');
         const char* q_marker = strstr(slash ? slash + 1 : path, "_q");
@@ -100,12 +144,14 @@ static inline int demostore_load_demo(
     int demo_id = s->num_demos++;
     DemoTrajectory* d = &s->demos[demo_id];
     d->demo_id = demo_id;
-    d->length_ticks = n_ticks;
+    d->length_ticks = h.num_ticks;
     d->num_atns = num_atns;
-    d->rng_seed = rng_seed;
+    d->rng_seed = h.rng_seed;
     d->quality_at_root = q_root;
+    d->root_snapshot = root_snapshot;
+    d->snapshot_size = expected_snapshot_size;
     d->actions = actions;
-    d->cursor_tick = n_ticks - 1;
+    d->cursor_tick = h.num_ticks - 1;
     return demo_id;
 }
 
@@ -122,7 +168,8 @@ static inline int qsort_strcmp_(const void* a, const void* b) {
     return strcmp(*(const char**)a, *(const char**)b);
 }
 static inline int demostore_load_dir(
-    DemoStore* s, const char* dir, int num_atns, int parse_q, int max_demos
+    DemoStore* s, const char* dir, int num_atns, int parse_q, int max_demos,
+    uint32_t expected_snapshot_size
 ) {
     DIR* d = opendir(dir);
     if (!d) return -1;
@@ -143,7 +190,8 @@ static inline int demostore_load_dir(
     int loaded = 0;
     for (int i = 0; i < n; i++) {
         snprintf(path, sizeof(path), "%s/%s", dir, names[i]);
-        if (demostore_load_demo(s, path, num_atns, parse_q) >= 0) loaded++;
+        if (demostore_load_demo(s, path, num_atns, parse_q,
+                                expected_snapshot_size) >= 0) loaded++;
     }
     for (int i = 0; i < n; i++) free(names[i]);
     free(names);

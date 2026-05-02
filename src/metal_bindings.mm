@@ -610,6 +610,24 @@ PYBIND11_MODULE(_C, m) {
     py::arg("demo_max_count") = 100,
     py::arg("demo_max_replay_ticks") = 8192);
 
+    m.def("reexport_demos_from_archive", [](
+        const std::string& archive_path,
+        const std::string& demo_export_dir,
+        int demo_max_count,
+        int demo_max_replay_ticks
+    ) -> int {
+        Archive* a = archive_load(archive_path.c_str());
+        if (!a) return -1;
+        int written = archive_export_top_k_demos(
+            a, demo_export_dir.c_str(), demo_max_count, demo_max_replay_ticks);
+        archive_destroy(a);
+        return written;
+    },
+    py::arg("archive_path"),
+    py::arg("demo_export_dir"),
+    py::arg("demo_max_count") = 100,
+    py::arg("demo_max_replay_ticks") = 8192);
+
     m.def("phase2_init", [](
         py::object pufferl_obj,
         const std::string& demo_dir,

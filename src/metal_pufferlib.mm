@@ -1652,16 +1652,17 @@ int phase2_init_impl(
     float bc_coef,
     int bc_demos_per_minibatch
 ) {
+    size_t snapshot_size = inferno_env_snapshot_bytes();
+    int obs_floats = inferno_env_obs_floats();
+
     DemoStore* store = demostore_create(max_demos);
-    int loaded = demostore_load_dir(store, demo_dir, num_atns, /*parse_q=*/1, max_demos);
+    int loaded = demostore_load_dir(store, demo_dir, num_atns, /*parse_q=*/1,
+                                    max_demos, (uint32_t)snapshot_size);
     if (loaded <= 0) {
         demostore_destroy(store);
         std::fprintf(stderr, "phase2_init: no demos loaded from %s\n", demo_dir);
         std::abort();
     }
-
-    size_t snapshot_size = inferno_env_snapshot_bytes();
-    int obs_floats = inferno_env_obs_floats();
     DemoSnapshotLadder** ladders = (DemoSnapshotLadder**)std::calloc(
         (size_t)store->num_demos, sizeof(DemoSnapshotLadder*));
     DemoObsCache** obs_caches = (DemoObsCache**)std::calloc(

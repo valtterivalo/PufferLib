@@ -5,15 +5,16 @@
 #include "../src/demostore.h"
 
 int main(int argc, char** argv) {
-    if (argc != 4) {
-        fprintf(stderr, "usage: %s <dir> <max_demos> <num_atns>\n", argv[0]);
+    if (argc != 5) {
+        fprintf(stderr, "usage: %s <dir> <max_demos> <num_atns> <snapshot_size>\n", argv[0]);
         return 1;
     }
     int max_demos = atoi(argv[2]);
     int num_atns = atoi(argv[3]);
+    uint32_t snap_size = (uint32_t)strtoul(argv[4], NULL, 10);
 
     DemoStore* s = demostore_create(max_demos);
-    int loaded = demostore_load_dir(s, argv[1], num_atns, 1, max_demos);
+    int loaded = demostore_load_dir(s, argv[1], num_atns, 1, max_demos, snap_size);
     if (loaded < 0) {
         fprintf(stderr, "demostore_load_dir(%s) failed\n", argv[1]);
         return 1;

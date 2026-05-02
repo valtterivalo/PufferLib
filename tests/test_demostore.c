@@ -36,22 +36,34 @@ static int g_fail = 0;
         } else { g_pass++; }                                                \
     } while (0)
 
+#define TEST_SNAPSHOT_SIZE 32
+
 static int write_synthetic_demo(
     const char* path, int n_ticks, int num_atns, uint32_t rng_seed,
     int action_value
 ) {
     FILE* f = fopen(path, "wb");
     if (!f) return -1;
-    if (fwrite(&n_ticks, sizeof(int), 1, f) != 1) { fclose(f); return -1; }
-    if (fwrite(&rng_seed, sizeof(uint32_t), 1, f) != 1) { fclose(f); return -1; }
+    Phase2DemoHeader h = {
+        .magic = PHASE2_DEMO_MAGIC,
+        .version = PHASE2_DEMO_VERSION,
+        .num_ticks = n_ticks,
+        .num_atns = num_atns,
+        .rng_seed = rng_seed,
+        .quality = 0.0f,
+        .snapshot_size = TEST_SNAPSHOT_SIZE,
+    };
+    uint8_t snap[TEST_SNAPSHOT_SIZE] = {0};
     int* actions = (int*)malloc((size_t)n_ticks * (size_t)num_atns * sizeof(int));
     for (int t = 0; t < n_ticks; t++) {
-        for (int h = 0; h < num_atns; h++) {
-            actions[t * num_atns + h] = action_value + t * num_atns + h;
+        for (int hh = 0; hh < num_atns; hh++) {
+            actions[t * num_atns + hh] = action_value + t * num_atns + hh;
         }
     }
     size_t expected = (size_t)n_ticks * (size_t)num_atns;
-    int ok = fwrite(actions, sizeof(int), expected, f) == expected;
+    int ok = fwrite(&h, sizeof(h), 1, f) == 1 &&
+             fwrite(snap, 1, TEST_SNAPSHOT_SIZE, f) == TEST_SNAPSHOT_SIZE &&
+             fwrite(actions, sizeof(int), expected, f) == expected;
     free(actions);
     fclose(f);
     return ok ? 0 : -1;
@@ -75,7 +87,7 @@ static void test_load_one_demo_round_trip(void) {
     ASSERT_INT_EQ("write synthetic", write_synthetic_demo(path, n_ticks, num_atns, rng_seed, 100), 0);
 
     DemoStore* s = demostore_create(4);
-    int demo_id = demostore_load_demo(s, path, num_atns, 0);
+    int demo_id = demostore_load_demo(s, path, num_atns, 0, TEST_SNAPSHOT_SIZE);
     ASSERT_INT_EQ("load returns demo_id 0", demo_id, 0);
     ASSERT_INT_EQ("num_demos == 1", s->num_demos, 1);
 
@@ -102,9 +114,9 @@ static void test_load_multiple_demos(void) {
     write_synthetic_demo(p2, 5, 9, 3u, 5000);
 
     DemoStore* s = demostore_create(4);
-    ASSERT_INT_EQ("load a", demostore_load_demo(s, p0, 9, 0), 0);
-    ASSERT_INT_EQ("load b", demostore_load_demo(s, p1, 9, 0), 1);
-    ASSERT_INT_EQ("load c", demostore_load_demo(s, p2, 9, 0), 2);
+    ASSERT_INT_EQ("load a", demostore_load_demo(s, p0, 9, 0, TEST_SNAPSHOT_SIZE), 0);
+    ASSERT_INT_EQ("load b", demostore_load_demo(s, p1, 9, 0, TEST_SNAPSHOT_SIZE), 1);
+    ASSERT_INT_EQ("load c", demostore_load_demo(s, p2, 9, 0, TEST_SNAPSHOT_SIZE), 2);
     ASSERT_INT_EQ("num_demos == 3", s->num_demos, 3);
 
     ASSERT_INT_EQ("a length", s->demos[0].length_ticks, 10);
@@ -122,9 +134,9 @@ static void test_capacity_full(void) {
     char p[] = "/tmp/test_demostore_cap.bin";
     write_synthetic_demo(p, 4, 2, 0u, 0);
     DemoStore* s = demostore_create(2);
-    ASSERT_INT_EQ("first load", demostore_load_demo(s, p, 2, 0), 0);
-    ASSERT_INT_EQ("second load", demostore_load_demo(s, p, 2, 0), 1);
-    ASSERT_INT_EQ("third load returns -1", demostore_load_demo(s, p, 2, 0), -1);
+    ASSERT_INT_EQ("first load", demostore_load_demo(s, p, 2, 0, TEST_SNAPSHOT_SIZE), 0);
+    ASSERT_INT_EQ("second load", demostore_load_demo(s, p, 2, 0, TEST_SNAPSHOT_SIZE), 1);
+    ASSERT_INT_EQ("third load returns -1", demostore_load_demo(s, p, 2, 0, TEST_SNAPSHOT_SIZE), -1);
     ASSERT_INT_EQ("num_demos still 2", s->num_demos, 2);
     demostore_destroy(s);
     unlink(p);
@@ -135,7 +147,7 @@ static void test_filename_quality_parsing(void) {
     char p[] = "/tmp/demo_0007_q0.716_t108.bin";
     write_synthetic_demo(p, 4, 2, 0u, 0);
     DemoStore* s = demostore_create(2);
-    int id = demostore_load_demo(s, p, 2, /*parse_filename_q=*/1);
+    int id = demostore_load_demo(s, p, 2, /*parse_filename_q=*/1, TEST_SNAPSHOT_SIZE);
     ASSERT_INT_EQ("loaded ok", id, 0);
     ASSERT_FLOAT_NEAR("quality parsed from filename", s->demos[0].quality_at_root, 0.716f, 0.001f);
     demostore_destroy(s);
@@ -148,8 +160,8 @@ static void test_reject_misaligned_action_buffer(void) {
     /* file written with num_atns=4 */
     write_synthetic_demo(p, 6, 4, 0u, 0);
     DemoStore* s = demostore_create(2);
-    /* try to load as num_atns=3: should reject */
-    int id = demostore_load_demo(s, p, 3, 0);
+    /* try to load as num_atns=3: should reject (header.num_atns mismatch) */
+    int id = demostore_load_demo(s, p, 3, 0, TEST_SNAPSHOT_SIZE);
     ASSERT_INT_EQ("misaligned load returns -1", id, -1);
     ASSERT_INT_EQ("num_demos still 0", s->num_demos, 0);
     demostore_destroy(s);
@@ -160,7 +172,7 @@ static void test_reject_nonexistent_file(void) {
     printf("--- demostore rejects nonexistent file ---\n");
     DemoStore* s = demostore_create(2);
     ASSERT_INT_EQ("nonexistent file -> -1",
-        demostore_load_demo(s, "/no/such/file_for_demostore.bin", 9, 0), -1);
+        demostore_load_demo(s, "/no/such/file_for_demostore.bin", 9, 0, TEST_SNAPSHOT_SIZE), -1);
     demostore_destroy(s);
 }
 

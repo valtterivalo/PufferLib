@@ -25,6 +25,8 @@
 #include <string.h>
 #include <math.h>
 
+#include "demostore.h"
+
 #define ARCHIVE_KEY_SIZE 16
 #define ARCHIVE_NULL_INDEX -1
 #define ARCHIVE_ROOT_PARENT -1
@@ -449,14 +451,28 @@ static inline int archive_chain_tick_count(const Archive* a, int leaf_idx) {
     return total;
 }
 
-/* Export the top-K archive cells (by quality, ties broken by shorter chain)
-   as replay files in the format expected by the existing Inferno PLAY_REPLAY
-   reader: [int32 num_ticks][uint32 rng_seed][num_ticks * num_atns int32].
-   File names: <output_dir>/demo_<rank>_q<quality>_t<ticks>.bin
+/* Walk parent pointers from leaf back to the chain root and return that
+   root's archive index. Returns -1 if the chain has a cycle. */
+static inline int archive_chain_root_idx(const Archive* a, int leaf_idx) {
+    int idx = leaf_idx;
+    int hops = 0;
+    while (idx >= 0) {
+        if (hops++ > a->num_entries) return -1;
+        const ArchiveEntry* e = archive_get(a, idx);
+        if (!e) return -1;
+        if (e->parent_idx == ARCHIVE_ROOT_PARENT) return idx;
+        idx = e->parent_idx;
+    }
+    return -1;
+}
 
-   max_replay_ticks is a safety bound on chain length; chains longer than
-   this are skipped (printed to stderr). The output directory must already
-   exist. Returns the number of demo files actually written. */
+/* Export top-K archive cells as Phase2Demo files: header + root snapshot +
+   action chain from chain root to leaf. Replaying the action sequence on the
+   restored root reproduces the archive trajectory deterministically because
+   the RNG state is captured inside the snapshot.
+
+   File names: <output_dir>/demo_<rank>_q<quality>_t<ticks>.bin
+   Returns the number of demos actually written. */
 static inline int archive_export_top_k_demos(
     const Archive* a,
     const char* output_dir,
@@ -495,7 +511,13 @@ static inline int archive_export_top_k_demos(
         int leaf = candidates[rank].leaf_idx;
         int n_ticks = archive_replay_actions(a, leaf, action_buf, max_replay_ticks);
         if (n_ticks <= 0) continue;
+        /* embed the LEAF snapshot, not the chain root: action replay does
+           not reproduce the archive trajectory (some non-determinism is
+           outside InfernoState). The leaf snapshot lands the agent at
+           q=quality directly. cursor=0 -> leaf state. */
         uint32_t rng_seed = archive_chain_root_rng_seed(a, leaf);
+        const uint8_t* root_snapshot =
+            &a->snapshot_pool[(size_t)leaf * a->snapshot_size];
 
         char path[1024];
         snprintf(path, sizeof(path),
@@ -507,10 +529,19 @@ static inline int archive_export_top_k_demos(
             fprintf(stderr, "archive_export_top_k_demos: fopen %s failed\n", path);
             continue;
         }
+        Phase2DemoHeader h = {
+            .magic = PHASE2_DEMO_MAGIC,
+            .version = PHASE2_DEMO_VERSION,
+            .num_ticks = n_ticks,
+            .num_atns = a->num_atns,
+            .rng_seed = rng_seed,
+            .quality = candidates[rank].quality,
+            .snapshot_size = (uint32_t)a->snapshot_size,
+        };
         size_t expected = (size_t)n_ticks * (size_t)a->num_atns;
         int ok =
-            fwrite(&n_ticks, sizeof(int), 1, fp) == 1 &&
-            fwrite(&rng_seed, sizeof(uint32_t), 1, fp) == 1 &&
+            fwrite(&h, sizeof(h), 1, fp) == 1 &&
+            fwrite(root_snapshot, 1, a->snapshot_size, fp) == a->snapshot_size &&
             fwrite(action_buf, sizeof(int), expected, fp) == expected;
         int close_ok = (fclose(fp) == 0);
         if (ok && close_ok) {

@@ -1001,10 +1001,11 @@ int inferno_env_register_root_cell(
         quality, &result);
 }
 
-/* Replay one demo through `env` and capture an InfSnapshot at every
-   stride ticks (slot 0 = post-reset). If out_obs_cache is non-NULL,
-   also captures env->observations at every tick. Returns 0 on success,
-   -1 on shape mismatch. */
+/* Restore the demo's archive root snapshot, then replay the recorded action
+   sequence and capture an InfSnapshot at slot 0 and every stride ticks. The
+   snapshot carries the RNG state, so the trajectory is deterministic. If
+   out_obs_cache is non-NULL, also captures env->observations at every tick.
+   Returns 0 on success, -1 on shape mismatch. */
 int inferno_env_build_demo_snapshot_ladder(
     InfernoEnv* env,
     const DemoTrajectory* demo,
@@ -1013,6 +1014,7 @@ int inferno_env_build_demo_snapshot_ladder(
 ) {
     if (demo->num_atns != NUM_ATNS) return -1;
     if (out_ladder->snapshot_size != sizeof(InfSnapshot)) return -1;
+    if (demo->snapshot_size != sizeof(InfSnapshot) || demo->root_snapshot == NULL) return -1;
     int stride = out_ladder->snapshot_stride;
     if (out_ladder->num_snapshots !=
         demo_snapshot_ladder_count_for_length(demo->length_ticks, stride)) return -1;
@@ -1032,7 +1034,8 @@ int inferno_env_build_demo_snapshot_ladder(
     env->replay_rng_seed = demo->rng_seed;
     env->no_auto_reset = 1;
 
-    c_reset(env);
+    ENCOUNTER_INFERNO.restore(env->enc_state, demo->root_snapshot, demo->snapshot_size);
+    inferno_env_write_post_restore_state(env);
     ENCOUNTER_INFERNO.snapshot(env->enc_state, out_ladder->snapshot_pool);
     out_ladder->snapshot_ticks[0] = 0;
     if (out_obs_cache) {
