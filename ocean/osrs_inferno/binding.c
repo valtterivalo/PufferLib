@@ -101,7 +101,6 @@ typedef struct InfernoEnv {
     uint8_t no_auto_reset;
     Phase2Context* phase2_ctx;
     int env_idx;
-    uint8_t last_start_was_snapshot;
 } InfernoEnv;
 
 #define OBS_SIZE INF_TOTAL_OBS
@@ -338,7 +337,9 @@ void c_step(Env* env) {
 
         env->log.n += 1.0f;
 
-        if (env->last_start_was_snapshot) {
+        int from_snapshot = env->phase2_ctx &&
+            env->phase2_ctx->env_states[env->env_idx].demo_id >= 0;
+        if (from_snapshot) {
             env->log.episode_return_snapshot += s->episode_return;
             env->log.wins_snapshot += (s->winner == 0) ? 1.0f : 0.0f;
             env->log.min_zuk_hp_snapshot += min_zuk_hp_term;
@@ -755,8 +756,6 @@ void my_log(Log* log, Dict* out) {
     dict_set(out, "hp_restored", log->hp_restored);
     dict_set(out, "zuk_healer_damage", log->zuk_healer_damage);
     dict_set(out, "deaths_to_jad", log->killed_by_type[INF_NPC_JAD] / log->n);
-    /* Phase 2 split. Aggregated log values are already normalized by total n
-       across envs; dividing by n_normal/n_snapshot recovers the per-group rate. */
     if (log->n_normal > 0.0f) {
         dict_set(out, "episode_return_normal", log->episode_return_normal / log->n_normal);
         dict_set(out, "wins_normal", log->wins_normal / log->n_normal);
@@ -1070,7 +1069,6 @@ void inferno_env_set_phase2_ctx(InfernoEnv* env, Phase2Context* ctx, int env_idx
 static void inferno_env_apply_phase2_reset(InfernoEnv* env) {
     Phase2Context* ctx = env->phase2_ctx;
     Phase2ResetDecision d = phase2_decide_reset(ctx);
-    env->last_start_was_snapshot = (d.demo_id >= 0);
 
     if (d.demo_id < 0) {
         ENCOUNTER_INFERNO.reset(env->enc_state, 0);

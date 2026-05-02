@@ -124,13 +124,13 @@ static inline Phase2CursorStats phase2_cursor_stats(Phase2Context* ctx) {
     int n = ctx->store->num_demos;
     for (int i = 0; i < n; i++) {
         DemoTrajectory* d = &ctx->store->demos[i];
-        float frac = d->length_ticks > 0 ? (float)d->cursor_tick / (float)d->length_ticks : 0.0f;
+        float frac = (float)d->cursor_tick / (float)d->length_ticks;
         s.mean_frac += frac;
         if (frac < s.min_frac) s.min_frac = frac;
         if (frac > s.max_frac) s.max_frac = frac;
         if (d->cursor_tick == 0) s.num_at_start++;
     }
-    if (n > 0) s.mean_frac /= (float)n;
+    s.mean_frac /= (float)n;
     return s;
 }
 
