@@ -3,11 +3,16 @@
 #include "cpu_inference.h"
 #include "vecenv.h"
 #include "archive.h"
+#include "demostore.h"
+#include "phase2_curriculum.h"
 
 
+#include <algorithm>
 #include <cstring>
+#include <dirent.h>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <sys/time.h>
 #include <vector>
 
@@ -256,6 +261,13 @@ struct PuffeRL {
     bool archive_mode_active = false;
     uint8_t* archive_hidden_state_history = nullptr;
     size_t archive_per_env_hidden_bytes = 0;
+
+    /* Phase 2 backward curriculum. Owns the demo store, ladders, and
+       per-env state. Attached to each InfernoEnv via
+       inferno_env_set_phase2_ctx so c_step's auto-reset path consults it. */
+    DemoStore* phase2_store = nullptr;
+    DemoSnapshotLadder** phase2_ladders = nullptr;
+    Phase2Context* phase2_ctx = nullptr;
 };
 
 // ============================================================================
@@ -1272,6 +1284,9 @@ extern "C" {
     size_t inferno_env_snapshot_bytes(void);
     int inferno_env_register_root_cell(struct InfernoEnv* env, Archive* archive, const uint8_t* hidden_state);
     void c_reset(struct InfernoEnv* env);
+    int inferno_env_build_demo_snapshot_ladder(
+        struct InfernoEnv* env, const DemoTrajectory* demo, DemoSnapshotLadder* out_ladder);
+    void inferno_env_set_phase2_ctx(struct InfernoEnv* env, Phase2Context* ctx, int env_idx);
 }
 
 /* ArchiveExploreStats: surface-level counters returned to the caller for logging. */
@@ -1478,7 +1493,109 @@ ArchiveExploreStats archive_explore_impl(
 }
 
 
+/* Load demos from `demo_dir` (.bin PLAY_REPLAY files), build a snapshot
+   ladder per demo by replaying through env 0, allocate Phase2Context, and
+   attach to all envs. Returns the number of demos loaded. */
+int phase2_init_impl(
+    PuffeRL& pufferl,
+    const char* demo_dir,
+    int num_atns,
+    int snapshot_stride,
+    int max_demos,
+    uint64_t seed,
+    float normal_start_frac,
+    float randomize_future_rng_frac
+) {
+    if (pufferl.phase2_ctx) {
+        std::fprintf(stderr, "phase2_init: already initialized\n");
+        return -1;
+    }
+
+    DIR* d = opendir(demo_dir);
+    if (!d) {
+        std::fprintf(stderr, "phase2_init: opendir %s failed\n", demo_dir);
+        return -1;
+    }
+
+    std::vector<std::string> demo_paths;
+    struct dirent* ent;
+    while ((ent = readdir(d)) != nullptr) {
+        const char* name = ent->d_name;
+        size_t len = std::strlen(name);
+        if (len < 4 || std::strcmp(name + len - 4, ".bin") != 0) continue;
+        demo_paths.emplace_back(std::string(demo_dir) + "/" + name);
+    }
+    closedir(d);
+    std::sort(demo_paths.begin(), demo_paths.end());
+    if ((int)demo_paths.size() > max_demos) demo_paths.resize(max_demos);
+
+    DemoStore* store = demostore_create((int)demo_paths.size());
+    for (const auto& p : demo_paths) {
+        if (demostore_load_demo(store, p.c_str(), num_atns, /*parse_q=*/1) < 0) {
+            std::fprintf(stderr, "phase2_init: failed to load %s\n", p.c_str());
+        }
+    }
+    if (store->num_demos == 0) {
+        demostore_destroy(store);
+        std::fprintf(stderr, "phase2_init: no demos loaded from %s\n", demo_dir);
+        return -1;
+    }
+
+    size_t snapshot_size = inferno_env_snapshot_bytes();
+    DemoSnapshotLadder** ladders = (DemoSnapshotLadder**)std::calloc(
+        (size_t)store->num_demos, sizeof(DemoSnapshotLadder*));
+    void* envs_void = pufferl.vec->envs;
+    InfernoEnv* env0 = inferno_env_at(envs_void, 0);
+    for (int i = 0; i < store->num_demos; i++) {
+        DemoTrajectory* demo = &store->demos[i];
+        int n_snap = demo_snapshot_ladder_count_for_length(demo->length_ticks, snapshot_stride);
+        ladders[i] = demo_snapshot_ladder_create(i, snapshot_stride, n_snap, snapshot_size, 0);
+        if (inferno_env_build_demo_snapshot_ladder(env0, demo, ladders[i]) != 0) {
+            std::fprintf(stderr, "phase2_init: ladder build failed for demo %d\n", i);
+        }
+    }
+
+    Phase2Context* ctx = phase2_ctx_create(store, ladders, pufferl.vec->total_agents, seed);
+    ctx->normal_start_frac = normal_start_frac;
+    ctx->randomize_future_rng_frac = randomize_future_rng_frac;
+
+    for (int e = 0; e < pufferl.vec->total_agents; e++) {
+        inferno_env_set_phase2_ctx(inferno_env_at(envs_void, e), ctx, e);
+    }
+
+    pufferl.phase2_store = store;
+    pufferl.phase2_ladders = ladders;
+    pufferl.phase2_ctx = ctx;
+    std::fprintf(stderr,
+        "phase2_init: %d demos loaded, ladders built (stride=%d), ctx attached to %d envs\n",
+        store->num_demos, snapshot_stride, pufferl.vec->total_agents);
+    return store->num_demos;
+}
+
+void phase2_apply_cursor_gate_impl(PuffeRL& pufferl) {
+    if (!pufferl.phase2_ctx) return;
+    phase2_apply_cursor_gate(pufferl.phase2_ctx);
+}
+
+void phase2_close(PuffeRL& pufferl) {
+    if (!pufferl.phase2_ctx) return;
+    void* envs_void = pufferl.vec->envs;
+    for (int e = 0; e < pufferl.vec->total_agents; e++) {
+        inferno_env_set_phase2_ctx(inferno_env_at(envs_void, e), nullptr, e);
+    }
+    phase2_ctx_destroy(pufferl.phase2_ctx);
+    for (int i = 0; i < pufferl.phase2_store->num_demos; i++) {
+        demo_snapshot_ladder_destroy(pufferl.phase2_ladders[i]);
+    }
+    std::free(pufferl.phase2_ladders);
+    demostore_destroy(pufferl.phase2_store);
+    pufferl.phase2_ctx = nullptr;
+    pufferl.phase2_ladders = nullptr;
+    pufferl.phase2_store = nullptr;
+}
+
 void close_impl(PuffeRL& pufferl) {
+    phase2_close(pufferl);
     sync_pending_train(pufferl);
     mtl_ensure_stream_synced((cudaStream_t)mtl_stream());
 

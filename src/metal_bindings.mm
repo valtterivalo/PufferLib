@@ -203,6 +203,8 @@ static void rollouts(py::object pufferl_obj) {
 
     mtl_sync_stats(&pufferl.rollout_sync_count, &pufferl.rollout_sync_ms);
     pufferl.global_step += pufferl.hypers.horizon * pufferl.hypers.total_agents;
+
+    phase2_apply_cursor_gate_impl(pufferl);
 }
 
 static py::dict train(py::object pufferl_obj) {
@@ -605,6 +607,32 @@ PYBIND11_MODULE(_C, m) {
     py::arg("demo_export_dir") = std::string(""),
     py::arg("demo_max_count") = 100,
     py::arg("demo_max_replay_ticks") = 8192);
+
+    m.def("phase2_init", [](
+        py::object pufferl_obj,
+        const std::string& demo_dir,
+        int num_atns,
+        int snapshot_stride,
+        int max_demos,
+        uint64_t seed,
+        float normal_start_frac,
+        float randomize_future_rng_frac
+    ) -> int {
+        PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
+        py::gil_scoped_release no_gil;
+        return phase2_init_impl(
+            pufferl, demo_dir.c_str(), num_atns, snapshot_stride, max_demos,
+            seed, normal_start_frac, randomize_future_rng_frac);
+    },
+    py::arg("pufferl"),
+    py::arg("demo_dir"),
+    py::arg("num_atns"),
+    py::arg("snapshot_stride") = 4,
+    py::arg("max_demos") = 64,
+    py::arg("seed") = (uint64_t)42,
+    py::arg("normal_start_frac") = 0.25f,
+    py::arg("randomize_future_rng_frac") = 0.25f);
+
     m.def("uptime", [](py::object pufferl_obj) -> double {
         PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
         return wall_clock() - pufferl.start_time;
