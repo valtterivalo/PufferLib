@@ -302,12 +302,6 @@ struct TrainGraph {
   FloatTensor mb_returns;
   FloatTensor mb_ratio;
   FloatTensor mb_newvalue;
-  /* Phase 2C BC. mb_row_weights multiplies PPO/value/entropy contributions
-     per row (1.0 for online rows, 0.0 for demo BC rows). mb_bc_weights
-     scales the BC CE loss per row (0.0 for online, bc_coef for demo).
-     mb_bc_actions[S,H,num_atns] holds the BC target action per (row, tick,
-     head). When BC is inactive, mb_row_weights stays 1.0 and mb_bc_weights
-     stays 0.0 — the kernel reduces to the original PPO loss. */
   FloatTensor mb_row_weights;
   FloatTensor mb_bc_weights;
   FloatTensor mb_bc_actions;

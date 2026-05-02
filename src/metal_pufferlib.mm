@@ -263,12 +263,6 @@ struct PuffeRL {
     DemoSnapshotLadder** phase2_ladders = nullptr;
     DemoObsCache** phase2_obs_caches = nullptr;
     Phase2Context* phase2_ctx = nullptr;
-
-    /* BC stash: rollout ratio/values at the prio-sampled indices that a BC
-       minibatch step overwrites with demo data. The kernel writes
-       mb_ratio/mb_newvalue for those rows, scatter writes them back to
-       rollouts; we restore from this stash so demo rows don't corrupt
-       importance weights / value estimates in subsequent minibatches. */
     int phase2_bc_stash_count = 0;
     int phase2_bc_stash_horizon = 0;
     int* phase2_bc_stash_row = nullptr;
@@ -1224,18 +1218,13 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
         for (int i = 0; i < act_n; i++) ones[i] = 1.0f;
     }
 
-    // BC defaults: row_weights=1 (PPO/value/entropy fully active), bc_weights=0
-    // (no BC contribution), head_weights=1 (uniform per-head). The phase 2C
-    // staging path overwrites these per-row when active.
     {
-        float* rw = pufferl->train_buf.mb_row_weights.data;
-        for (size_t i = 0; i < puf_numel(pufferl->train_buf.mb_row_weights.shape); i++) rw[i] = 1.0f;
-        float* bw = pufferl->train_buf.mb_bc_weights.data;
-        for (size_t i = 0; i < puf_numel(pufferl->train_buf.mb_bc_weights.shape); i++) bw[i] = 0.0f;
-        float* ba = pufferl->train_buf.mb_bc_actions.data;
-        for (size_t i = 0; i < puf_numel(pufferl->train_buf.mb_bc_actions.shape); i++) ba[i] = 0.0f;
-        float* hw = pufferl->train_buf.mb_head_weights.data;
-        for (int h = 0; h < num_action_heads; h++) hw[h] = 1.0f;
+        TrainGraph& tb = pufferl->train_buf;
+        size_t rw_n = puf_numel(tb.mb_row_weights.shape);
+        for (size_t i = 0; i < rw_n; i++) tb.mb_row_weights.data[i] = 1.0f;
+        for (size_t i = 0; i < puf_numel(tb.mb_bc_weights.shape); i++) tb.mb_bc_weights.data[i] = 0.0f;
+        for (size_t i = 0; i < puf_numel(tb.mb_bc_actions.shape); i++) tb.mb_bc_actions.data[i] = 0.0f;
+        for (int h = 0; h < num_action_heads; h++) tb.mb_head_weights.data[h] = 1.0f;
     }
 
 
@@ -1529,14 +1518,13 @@ ArchiveExploreStats archive_explore_impl(
 }
 
 
-/* Overwrite the last K rows of train_buf with demo windows, where K is
-   pufferl.phase2_ctx->bc_demos_per_minibatch (clamped to N). Saves the
-   pre-stage rollout ratio/values at the picked prio indices so
-   phase2_unstage_demo_rows can restore them after scatter. Returns 0 if
-   BC is inactive (no staging done). */
+/* Overwrite the last bc_demos_per_minibatch rows of train_buf with demo
+   windows; stash rollout ratio/values at those prio-sampled indices so
+   phase2_unstage_demo_rows can restore them after scatter. Caller must
+   ensure ctx is active and bc is enabled. */
 int phase2_stage_demo_rows(PuffeRL& pufferl, RolloutBuf& rollouts) {
     Phase2Context* ctx = pufferl.phase2_ctx;
-    if (!ctx || ctx->bc_coef <= 0.0f || ctx->bc_demos_per_minibatch <= 0) {
+    if (ctx->bc_coef <= 0.0f || ctx->bc_demos_per_minibatch <= 0) {
         pufferl.phase2_bc_stash_count = 0;
         return 0;
     }
@@ -1555,14 +1543,6 @@ int phase2_stage_demo_rows(PuffeRL& pufferl, RolloutBuf& rollouts) {
     int K = ctx->bc_demos_per_minibatch;
     if (K > N) K = N;
     int mask_w = pufferl.has_mask ? pufferl.mask_width : 0;
-    int obs_mask_offset = input_size - mask_w;
-
-    if (pufferl.phase2_bc_stash_row == nullptr) {
-        pufferl.phase2_bc_stash_row = (int*)std::calloc((size_t)N, sizeof(int));
-        pufferl.phase2_bc_stash_roll_idx = (int64_t*)std::calloc((size_t)N, sizeof(int64_t));
-        pufferl.phase2_bc_stash_ratio = (float*)std::calloc((size_t)N * (size_t)H, sizeof(float));
-        pufferl.phase2_bc_stash_values = (float*)std::calloc((size_t)N * (size_t)H, sizeof(float));
-    }
     pufferl.phase2_bc_stash_horizon = H;
     pufferl.phase2_bc_stash_count = K;
 
@@ -1703,6 +1683,16 @@ int phase2_init_impl(
     pufferl.phase2_ladders = ladders;
     pufferl.phase2_obs_caches = obs_caches;
     pufferl.phase2_ctx = ctx;
+
+    if (bc_demos_per_minibatch > 0) {
+        int N = (int)pufferl.train_buf.mb_obs.shape[0];
+        int H = (int)pufferl.train_buf.mb_obs.shape[1];
+        pufferl.phase2_bc_stash_row = (int*)std::calloc((size_t)N, sizeof(int));
+        pufferl.phase2_bc_stash_roll_idx = (int64_t*)std::calloc((size_t)N, sizeof(int64_t));
+        pufferl.phase2_bc_stash_ratio = (float*)std::calloc((size_t)N * (size_t)H, sizeof(float));
+        pufferl.phase2_bc_stash_values = (float*)std::calloc((size_t)N * (size_t)H, sizeof(float));
+    }
+
     std::fprintf(stderr,
         "phase2_init: %d demos, stride=%d, %d envs\n",
         store->num_demos, snapshot_stride, pufferl.vec->total_agents);

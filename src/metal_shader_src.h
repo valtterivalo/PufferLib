@@ -784,8 +784,6 @@ kernel void ppo_loss_fwd_bwd_kernel(
         float adv_std = sqrt(adv_var[0]);
         float adv_normalized = (adv - adv_mean[0]) / (adv_std + 1e-8f);
 
-        // row_weight gates online-only PPO/value/entropy contributions:
-        // 1.0 for online rows, 0.0 for demo BC rows.
         float dL = inv_NT;
         float rw = row_weights[nt];
         float d_pg_loss = dL * rw;
@@ -886,9 +884,9 @@ kernel void ppo_loss_fwd_bwd_kernel(
             float wa = -w * adv_normalized;
             pg_loss = fmax(wa * ratio, wa * ratio_clipped);
 
-            // Backward: single joint d_new_logp shared across all heads.
-            // Gate by rw to keep NaN propagation contained when policy logits
-            // on demo obs go extreme.
+            // gate d_new_logp computation by rw: ratio can be inf on demo
+            // rows (extreme logits on out-of-distribution demo obs), and
+            // 0 * inf = NaN propagates into grad_logits.
             float d_new_logp = 0.0f;
             if (rw > 0.0f) {
                 float d_ratio = wa * d_pg_loss;
@@ -902,7 +900,6 @@ kernel void ppo_loss_fwd_bwd_kernel(
                 out_ratio[nt] = 1.0f;
             }
 
-            // Gradient pass over logits (reuses head_logsumexp, head_entropy)
             float bc_w = bc_weights[nt];
             float bc_loss_acc = 0.0f;
             logits_offset = 0;
@@ -914,9 +911,9 @@ kernel void ppo_loss_fwd_bwd_kernel(
                 float lse = head_logsumexp[h];
                 float ent = head_entropy[h];
                 bool head_finite = isfinite(lse) && isfinite(ent);
-                /* skip BC for this head when the demo's action is masked out
-                   in the current obs (state drift between recording and replay
-                   leaves invalid demo actions occasionally) */
+                /* state drift between archive recording and replay sometimes
+                   leaves a demo action with mask=0 in the current obs; skip
+                   BC for that head rather than feeding a -1e9 logit into CE */
                 bool bc_valid = bc_w > 0.0f && bc_act >= 0 && bc_act < A && head_finite &&
                     action_mask[mask_base + logits_offset + bc_act] >= 0.5f;
 
@@ -939,23 +936,17 @@ kernel void ppo_loss_fwd_bwd_kernel(
                     if (bc_valid) {
                         float bc_indicator = (a == bc_act) ? 1.0f : 0.0f;
                         d_logit += bc_w * head_w * (p - bc_indicator) * dL;
+                        if (a == bc_act) bc_loss_acc += head_w * (lse - l);
                     }
                     grad_logits[grad_logits_base + logits_offset + a] = d_logit;
-                }
-                if (bc_valid) {
-                    float l = masked_logit(
-                        logits[logits_base + (logits_offset + bc_act) * pp.logits_stride_a],
-                        action_mask[mask_base + logits_offset + bc_act]);
-                    if (isfinite(l)) bc_loss_acc += head_w * (lse - l);
                 }
                 logits_offset += A;
             }
             block_losses[LOSS_BC][tid] = bc_w * bc_loss_acc * inv_NT;
         }
 
-        // PPO loss reporting is gated by rw to keep NaN-on-demo-obs out of
-        // online stats (NaN * 0 = NaN in IEEE). LOSS_BC is set above in the
-        // discrete branch.
+        // gate by rw because NaN * 0 = NaN in IEEE; demo rows with extreme
+        // policy outputs would otherwise poison online PPO stats.
         if (rw > 0.0f) {
             block_losses[LOSS_PG][tid] = pg_loss * inv_NT;
             block_losses[LOSS_VF][tid] = v_loss * inv_NT;
