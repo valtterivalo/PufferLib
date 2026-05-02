@@ -112,6 +112,28 @@ static inline void phase2_record_outcome(
     if (won || q_delta > ctx->success_q_delta) ctx->demo_successes[demo_id]++;
 }
 
+typedef struct {
+    float mean_frac;
+    float min_frac;
+    float max_frac;
+    int num_at_start;
+} Phase2CursorStats;
+
+static inline Phase2CursorStats phase2_cursor_stats(Phase2Context* ctx) {
+    Phase2CursorStats s = {.mean_frac = 0.0f, .min_frac = 1.0f, .max_frac = 0.0f, .num_at_start = 0};
+    int n = ctx->store->num_demos;
+    for (int i = 0; i < n; i++) {
+        DemoTrajectory* d = &ctx->store->demos[i];
+        float frac = d->length_ticks > 0 ? (float)d->cursor_tick / (float)d->length_ticks : 0.0f;
+        s.mean_frac += frac;
+        if (frac < s.min_frac) s.min_frac = frac;
+        if (frac > s.max_frac) s.max_frac = frac;
+        if (d->cursor_tick == 0) s.num_at_start++;
+    }
+    if (n > 0) s.mean_frac /= (float)n;
+    return s;
+}
+
 static inline void phase2_apply_cursor_gate(Phase2Context* ctx) {
     for (int i = 0; i < ctx->store->num_demos; i++) {
         int attempts = ctx->demo_attempts[i];

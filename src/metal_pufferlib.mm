@@ -278,6 +278,13 @@ struct PuffeRL {
 Dict* log_environments_impl(PuffeRL& pufferl) {
     Dict* out = create_dict(128);
     static_vec_log(pufferl.vec, out);
+    if (pufferl.phase2_ctx) {
+        Phase2CursorStats cs = phase2_cursor_stats(pufferl.phase2_ctx);
+        dict_set(out, "phase2_cursor_mean_frac", cs.mean_frac);
+        dict_set(out, "phase2_cursor_min_frac", cs.min_frac);
+        dict_set(out, "phase2_cursor_max_frac", cs.max_frac);
+        dict_set(out, "phase2_cursor_at_start", (float)cs.num_at_start);
+    }
     return out;
 }
 
