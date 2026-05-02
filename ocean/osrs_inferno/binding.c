@@ -16,6 +16,7 @@
 #include "replay_best.h"
 #include "src/archive.h"
 #include "src/demostore.h"
+#include "src/phase2_curriculum.h"
 
 /* encounter headers + render.h have many static helpers only used by the
    standalone viewer (not c_render) — suppress unused-function noise. */
@@ -98,6 +99,12 @@ typedef struct InfernoEnv {
     int archive_prev_key_valid;
 
     uint8_t no_auto_reset;
+
+    /* Phase 2 backward curriculum. When phase2_ctx != NULL, c_step's
+       auto-reset path consults the context to decide normal-vs-ladder reset
+       and to log the start state for cursor advancement. */
+    Phase2Context* phase2_ctx;
+    int env_idx;
 } InfernoEnv;
 
 #define OBS_SIZE INF_TOTAL_OBS
@@ -157,6 +164,8 @@ static void inferno_replay_write_or_abort(
         abort();
     }
 }
+
+static void inferno_env_apply_phase2_reset(Env* env);
 
 void c_step(Env* env) {
     int used_human_commands = 0;
@@ -373,10 +382,13 @@ void c_step(Env* env) {
            no-op while episode_over=1, so subsequent ticks of this rollout are
            harmless (a wasted tail). */
         if (env->archive == NULL && !env->no_auto_reset) {
-            ENCOUNTER_INFERNO.reset(env->enc_state, 0);
-            ENCOUNTER_INFERNO.write_obs(env->enc_state, obs);
-            ENCOUNTER_INFERNO.write_mask(env->enc_state, obs + INF_NUM_OBS);
-
+            if (env->phase2_ctx) {
+                inferno_env_apply_phase2_reset(env);
+            } else {
+                ENCOUNTER_INFERNO.reset(env->enc_state, 0);
+                ENCOUNTER_INFERNO.write_obs(env->enc_state, obs);
+                ENCOUNTER_INFERNO.write_mask(env->enc_state, obs + INF_NUM_OBS);
+            }
             /* render-side cleanup needs the RenderClient which lives in c_render.
                raise a flag so the next c_render call does the cleanup. */
             env->pending_render_reset = 1;
@@ -1008,4 +1020,43 @@ int inferno_env_build_demo_snapshot_ladder(
     env->no_auto_reset = saved_no_auto_reset;
 
     return 0;
+}
+
+void inferno_env_set_phase2_ctx(InfernoEnv* env, Phase2Context* ctx, int env_idx) {
+    env->phase2_ctx = ctx;
+    env->env_idx = env_idx;
+}
+
+static void inferno_env_apply_phase2_reset(InfernoEnv* env) {
+    Phase2Context* ctx = env->phase2_ctx;
+    Phase2ResetDecision d = phase2_decide_reset(ctx);
+
+    if (d.demo_id < 0) {
+        ENCOUNTER_INFERNO.reset(env->enc_state, 0);
+    } else {
+        DemoSnapshotLadder* ladder = ctx->ladders[d.demo_id];
+        const void* snap = demo_snapshot_ladder_snapshot_at(ladder, d.slot);
+        ENCOUNTER_INFERNO.restore(env->enc_state, snap, ladder->snapshot_size);
+        if (d.randomize_rng) {
+            ((InfernoState*)env->enc_state)->rng_state = d.fresh_rng_seed;
+        }
+    }
+
+    Phase2EnvState* es = &ctx->env_states[env->env_idx];
+    es->demo_id = d.demo_id;
+    es->slot = d.slot;
+    if (d.demo_id < 0) {
+        es->start_tick = 0;
+        es->start_q = 0.0f;
+    } else {
+        es->start_tick = ctx->ladders[d.demo_id]->snapshot_ticks[d.slot];
+        es->start_q = ENCOUNTER_INFERNO.progress_score(env->enc_state);
+    }
+
+    float* obs = (float*)env->observations;
+    ENCOUNTER_INFERNO.write_obs(env->enc_state, obs);
+    ENCOUNTER_INFERNO.write_mask(env->enc_state, obs + INF_NUM_OBS);
+    env->rewards[0] = 0.0f;
+    env->term_staging = 0;
+    env->terminals[0] = 0.0f;
 }
