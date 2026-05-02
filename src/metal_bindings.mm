@@ -367,7 +367,8 @@ static uint64_t get_config_uint64(py::dict& kwargs, const char* key) {
 
 static bool is_python_side_channel_env_key(const char* key) {
     return std::strcmp(key, "record_best_replay_path") == 0 ||
-           std::strcmp(key, "play_replay_path") == 0;
+           std::strcmp(key, "play_replay_path") == 0 ||
+           std::strcmp(key, "phase2_demo_dir") == 0;
 }
 
 static Dict* py_dict_to_c_dict(py::dict py_dict, bool is_env_dict) {

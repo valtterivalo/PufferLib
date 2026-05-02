@@ -365,6 +365,22 @@ def _train(env_name, args, sweep_obj=None, result_queue=None, verbose=False):
 
         args.pop('nccl_id', None)
         model_size = pufferl.num_params()
+
+        env_args = args.get('env', {})
+        phase2_dir = env_args.get('phase2_demo_dir', '')
+        if phase2_dir:
+            n = backend.phase2_init(
+                pufferl,
+                demo_dir=phase2_dir,
+                num_atns=env_args.get('phase2_num_atns', 9),
+                snapshot_stride=env_args.get('phase2_snapshot_stride', 4),
+                max_demos=env_args.get('phase2_max_demos', 64),
+                seed=env_args.get('phase2_seed', 42),
+                normal_start_frac=env_args.get('phase2_normal_start_frac', 0.25),
+                randomize_future_rng_frac=env_args.get('phase2_randomize_rng_frac', 0.25),
+            )
+            print(f'phase2: loaded {n} demos from {phase2_dir}', flush=True)
+
         if verbose:
             flat_logs = dict(unroll_nested_dict(backend.log(pufferl)))
             print_dashboard(args, model_size, flat_logs, clear=True)
