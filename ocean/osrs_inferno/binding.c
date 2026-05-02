@@ -163,10 +163,14 @@ static void inferno_replay_write_or_abort(
 
 static void inferno_env_apply_phase2_reset(Env* env);
 
-static inline void inferno_env_write_post_restore_state(Env* env) {
+static inline void inferno_env_write_obs_mask(Env* env) {
     float* obs = (float*)env->observations;
     ENCOUNTER_INFERNO.write_obs(env->enc_state, obs);
     ENCOUNTER_INFERNO.write_mask(env->enc_state, obs + INF_NUM_OBS);
+}
+
+static inline void inferno_env_write_post_restore_state(Env* env) {
+    inferno_env_write_obs_mask(env);
     env->rewards[0] = 0.0f;
     env->term_staging = 0;
     env->terminals[0] = 0.0f;
@@ -1091,5 +1095,5 @@ static void inferno_env_apply_phase2_reset(InfernoEnv* env) {
         es->start_tick = ctx->ladders[d.demo_id]->snapshot_ticks[d.slot];
         es->start_q = ENCOUNTER_INFERNO.progress_score(env->enc_state);
     }
-    inferno_env_write_post_restore_state(env);
+    inferno_env_write_obs_mask(env);
 }
