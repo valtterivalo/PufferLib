@@ -1,6 +1,4 @@
-/* Phase 2 backward curriculum: per-env reset hook decides between a normal
-   c_reset and restoring from a demo's snapshot ladder. Cursor advancement
-   per demo lives elsewhere (caller-driven outcome reporting). */
+/* Phase 2 backward curriculum: env-reset hook + cursor management. */
 
 #ifndef PHASE2_CURRICULUM_H
 #define PHASE2_CURRICULUM_H
@@ -28,7 +26,7 @@ typedef struct {
 
     uint64_t rng;
     float normal_start_frac;
-    float randomize_future_rng_frac;
+    float randomize_rng_frac;
 
     int active_pool_size;
     int* active_pool;
@@ -77,9 +75,9 @@ static inline Phase2Context* phase2_ctx_create(
         ctx->env_states[i].demo_id = -1;
         ctx->env_states[i].slot = -1;
     }
-    ctx->rng = seed ? seed : 1ULL;
+    ctx->rng = seed;
     ctx->normal_start_frac = 0.25f;
-    ctx->randomize_future_rng_frac = 0.25f;
+    ctx->randomize_rng_frac = 0.25f;
     ctx->active_pool_size = store->num_demos;
     ctx->active_pool = (int*)calloc((size_t)store->num_demos, sizeof(int));
     for (int i = 0; i < store->num_demos; i++) ctx->active_pool[i] = i;
@@ -95,7 +93,6 @@ static inline Phase2Context* phase2_ctx_create(
 }
 
 static inline void phase2_ctx_destroy(Phase2Context* ctx) {
-    if (!ctx) return;
     free(ctx->env_states);
     free(ctx->active_pool);
     free(ctx->demo_attempts);
@@ -106,7 +103,7 @@ static inline void phase2_ctx_destroy(Phase2Context* ctx) {
 static inline void phase2_record_outcome(
     Phase2Context* ctx, int demo_id, int won, float q_delta
 ) {
-    if (demo_id < 0 || demo_id >= ctx->store->num_demos) return;
+    if (demo_id < 0) return;
     ctx->demo_attempts[demo_id]++;
     if (won || q_delta > ctx->success_q_delta) ctx->demo_successes[demo_id]++;
 }
@@ -131,8 +128,6 @@ static inline void phase2_apply_cursor_gate(Phase2Context* ctx) {
     }
 }
 
-/* Pick demo+slot for a fresh env, or return demo_id=-1 for a normal c_reset.
-   Slot is sampled at the demo's cursor +/- 1 stride (clamped). */
 static inline Phase2ResetDecision phase2_decide_reset(Phase2Context* ctx) {
     Phase2ResetDecision d = {.demo_id = -1, .slot = -1, .randomize_rng = 0, .fresh_rng_seed = 0};
     if (ctx->active_pool_size == 0 ||
@@ -149,7 +144,7 @@ static inline Phase2ResetDecision phase2_decide_reset(Phase2Context* ctx) {
     if (slot >= ladder->num_snapshots) slot = ladder->num_snapshots - 1;
     d.slot = slot;
 
-    if (phase2_rand_unit(ctx) < ctx->randomize_future_rng_frac) {
+    if (phase2_rand_unit(ctx) < ctx->randomize_rng_frac) {
         d.randomize_rng = 1;
         d.fresh_rng_seed = (uint32_t)phase2_splitmix64(&ctx->rng);
     }

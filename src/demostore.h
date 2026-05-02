@@ -6,6 +6,7 @@
 #ifndef DEMOSTORE_H
 #define DEMOSTORE_H
 
+#include <dirent.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -113,6 +114,40 @@ static inline const int* demostore_actions_at(
 ) {
     const DemoTrajectory* d = &s->demos[demo_id];
     return &d->actions[(size_t)tick * (size_t)d->num_atns];
+}
+
+/* Sort + load all .bin files in `dir` (up to max_demos). Returns number
+   loaded, or -1 on opendir failure. Aborts on individual load failures. */
+static inline int qsort_strcmp_(const void* a, const void* b) {
+    return strcmp(*(const char**)a, *(const char**)b);
+}
+static inline int demostore_load_dir(
+    DemoStore* s, const char* dir, int num_atns, int parse_q, int max_demos
+) {
+    DIR* d = opendir(dir);
+    if (!d) return -1;
+    char** names = (char**)calloc(1024, sizeof(char*));
+    int n = 0;
+    struct dirent* ent;
+    while ((ent = readdir(d)) != NULL && n < 1024) {
+        const char* name = ent->d_name;
+        size_t len = strlen(name);
+        if (len < 4 || strcmp(name + len - 4, ".bin") != 0) continue;
+        names[n++] = strdup(name);
+    }
+    closedir(d);
+    qsort(names, (size_t)n, sizeof(char*), qsort_strcmp_);
+    if (max_demos > 0 && n > max_demos) n = max_demos;
+
+    char path[1024];
+    int loaded = 0;
+    for (int i = 0; i < n; i++) {
+        snprintf(path, sizeof(path), "%s/%s", dir, names[i]);
+        if (demostore_load_demo(s, path, num_atns, parse_q) >= 0) loaded++;
+    }
+    for (int i = 0; i < n; i++) free(names[i]);
+    free(names);
+    return loaded;
 }
 
 /* Per-demo snapshot ladder: env snapshots at ticks 0, stride, 2*stride, ...

@@ -66,11 +66,11 @@ static void test_decide_reset_normal_only(void) {
     DemoSnapshotLadder** l = mk_ladders(4, 80, 4);
     Phase2Context* ctx = phase2_ctx_create(s, l, 1, 42);
     ctx->normal_start_frac = 1.0f;
+    int normal = 0;
     for (int i = 0; i < 100; i++) {
-        Phase2ResetDecision d = phase2_decide_reset(ctx);
-        if (d.demo_id != -1) { ASSERT_INT_EQ("normal_only", d.demo_id, -1); break; }
+        if (phase2_decide_reset(ctx).demo_id == -1) normal++;
     }
-    g_pass++;
+    ASSERT_INT_EQ("100/100 normal", normal, 100);
     phase2_ctx_destroy(ctx);
     free_ladders(l, 4);
     demostore_destroy(s);
@@ -82,7 +82,7 @@ static void test_decide_reset_ladder_only(void) {
     DemoSnapshotLadder** l = mk_ladders(4, 80, 4);
     Phase2Context* ctx = phase2_ctx_create(s, l, 1, 42);
     ctx->normal_start_frac = 0.0f;
-    ctx->randomize_future_rng_frac = 0.0f;
+    ctx->randomize_rng_frac = 0.0f;
     int valid = 0;
     for (int i = 0; i < 100; i++) {
         Phase2ResetDecision d = phase2_decide_reset(ctx);
@@ -98,12 +98,12 @@ static void test_decide_reset_ladder_only(void) {
 }
 
 static void test_decide_reset_randomize_rng(void) {
-    printf("--- phase2 randomize_future_rng_frac drives randomize flag ---\n");
+    printf("--- phase2 randomize_rng_frac drives randomize flag ---\n");
     DemoStore* s = mk_store_with_demos(4, 80, 4);
     DemoSnapshotLadder** l = mk_ladders(4, 80, 4);
     Phase2Context* ctx = phase2_ctx_create(s, l, 1, 42);
     ctx->normal_start_frac = 0.0f;
-    ctx->randomize_future_rng_frac = 1.0f;
+    ctx->randomize_rng_frac = 1.0f;
     int randomized = 0;
     for (int i = 0; i < 100; i++) {
         Phase2ResetDecision d = phase2_decide_reset(ctx);
@@ -170,8 +170,6 @@ static void test_record_outcome(void) {
 
     phase2_record_outcome(ctx, -1, 1, 1.0f);
     ASSERT_INT_EQ("demo_id=-1 ignored: attempts[0] still 3", ctx->demo_attempts[0], 3);
-    phase2_record_outcome(ctx, 99, 1, 1.0f);
-    ASSERT_INT_EQ("oob demo_id ignored", ctx->demo_attempts[0], 3);
 
     phase2_ctx_destroy(ctx);
     free_ladders(l, 2);

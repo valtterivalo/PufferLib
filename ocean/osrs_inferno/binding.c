@@ -99,10 +99,6 @@ typedef struct InfernoEnv {
     int archive_prev_key_valid;
 
     uint8_t no_auto_reset;
-
-    /* Phase 2 backward curriculum. When phase2_ctx != NULL, c_step's
-       auto-reset path consults the context to decide normal-vs-ladder reset
-       and to log the start state for cursor advancement. */
     Phase2Context* phase2_ctx;
     int env_idx;
 } InfernoEnv;
@@ -166,6 +162,15 @@ static void inferno_replay_write_or_abort(
 }
 
 static void inferno_env_apply_phase2_reset(Env* env);
+
+static inline void inferno_env_write_post_restore_state(Env* env) {
+    float* obs = (float*)env->observations;
+    ENCOUNTER_INFERNO.write_obs(env->enc_state, obs);
+    ENCOUNTER_INFERNO.write_mask(env->enc_state, obs + INF_NUM_OBS);
+    env->rewards[0] = 0.0f;
+    env->term_staging = 0;
+    env->terminals[0] = 0.0f;
+}
 
 void c_step(Env* env) {
     int used_human_commands = 0;
@@ -403,18 +408,10 @@ void c_step(Env* env) {
 }
 
 void c_reset(Env* env) {
-    /* if replaying, seed the encounter RNG to match the recording */
     uint32_t seed = env->replay_actions ? env->replay_rng_seed : 0;
     ENCOUNTER_INFERNO.reset(env->enc_state, seed);
     env->replay_cursor = 0;
-
-    float* obs = (float*)env->observations;
-    ENCOUNTER_INFERNO.write_obs(env->enc_state, obs);
-    ENCOUNTER_INFERNO.write_mask(env->enc_state, obs + INF_NUM_OBS);
-
-    env->rewards[0] = 0.0f;
-    env->term_staging = 0;
-    env->terminals[0] = 0.0f;
+    inferno_env_write_post_restore_state(env);
 }
 
 void c_close(Env* env) {
@@ -857,14 +854,7 @@ void inferno_env_begin_archive_iteration(
     ENCOUNTER_INFERNO.write_cell_key(env->enc_state, &env->archive_prev_key);
     env->archive_prev_key_valid = 1;
 
-    /* re-write env_buf obs/mask to reflect post-restore state. rewards/terminals
-       cleared because the next rollout starts a fresh accumulation window. */
-    float* obs = (float*)env->observations;
-    ENCOUNTER_INFERNO.write_obs(env->enc_state, obs);
-    ENCOUNTER_INFERNO.write_mask(env->enc_state, obs + INF_NUM_OBS);
-    env->rewards[0] = 0.0f;
-    env->term_staging = 0;
-    env->terminals[0] = 0.0f;
+    inferno_env_write_post_restore_state(env);
 }
 
 /* flush all scratch entries into the shared archive, walking the parent chain
@@ -1058,11 +1048,5 @@ static void inferno_env_apply_phase2_reset(InfernoEnv* env) {
         es->start_tick = ctx->ladders[d.demo_id]->snapshot_ticks[d.slot];
         es->start_q = ENCOUNTER_INFERNO.progress_score(env->enc_state);
     }
-
-    float* obs = (float*)env->observations;
-    ENCOUNTER_INFERNO.write_obs(env->enc_state, obs);
-    ENCOUNTER_INFERNO.write_mask(env->enc_state, obs + INF_NUM_OBS);
-    env->rewards[0] = 0.0f;
-    env->term_staging = 0;
-    env->terminals[0] = 0.0f;
+    inferno_env_write_post_restore_state(env);
 }

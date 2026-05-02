@@ -38,7 +38,7 @@ def main():
             max_demos=own_args.max_demos,
             seed=42,
             normal_start_frac=own_args.normal_start_frac,
-            randomize_future_rng_frac=own_args.randomize_rng_frac,
+            randomize_rng_frac=own_args.randomize_rng_frac,
         )
         print(f'phase2_init: {n_demos} demos', flush=True)
 
