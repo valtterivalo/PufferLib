@@ -101,6 +101,7 @@ typedef struct InfernoEnv {
     uint8_t no_auto_reset;
     Phase2Context* phase2_ctx;
     int env_idx;
+    uint8_t last_start_was_snapshot;
 } InfernoEnv;
 
 #define OBS_SIZE INF_TOTAL_OBS
@@ -330,11 +331,24 @@ void c_step(Env* env) {
             if (s->winner == 0) zhp = 0.0f;
             env->log.zuk_hp_remaining += zhp;
         }
-        env->log.min_zuk_hp_seen += (s->winner == 0)
+        float min_zuk_hp_term = (s->winner == 0)
             ? 0.0f
             : (s->min_zuk_hp_seen > 0.0f ? s->min_zuk_hp_seen : 1200.0f);
+        env->log.min_zuk_hp_seen += min_zuk_hp_term;
 
         env->log.n += 1.0f;
+
+        if (env->last_start_was_snapshot) {
+            env->log.episode_return_snapshot += s->episode_return;
+            env->log.wins_snapshot += (s->winner == 0) ? 1.0f : 0.0f;
+            env->log.min_zuk_hp_snapshot += min_zuk_hp_term;
+            env->log.n_snapshot += 1.0f;
+        } else {
+            env->log.episode_return_normal += s->episode_return;
+            env->log.wins_normal += (s->winner == 0) ? 1.0f : 0.0f;
+            env->log.min_zuk_hp_normal += min_zuk_hp_term;
+            env->log.n_normal += 1.0f;
+        }
     skip_log:;
     }
 
@@ -741,6 +755,19 @@ void my_log(Log* log, Dict* out) {
     dict_set(out, "hp_restored", log->hp_restored);
     dict_set(out, "zuk_healer_damage", log->zuk_healer_damage);
     dict_set(out, "deaths_to_jad", log->killed_by_type[INF_NPC_JAD] / log->n);
+    /* Phase 2 split. Aggregated log values are already normalized by total n
+       across envs; dividing by n_normal/n_snapshot recovers the per-group rate. */
+    if (log->n_normal > 0.0f) {
+        dict_set(out, "episode_return_normal", log->episode_return_normal / log->n_normal);
+        dict_set(out, "wins_normal", log->wins_normal / log->n_normal);
+        dict_set(out, "min_zuk_hp_normal", log->min_zuk_hp_normal / log->n_normal);
+    }
+    if (log->n_snapshot > 0.0f) {
+        dict_set(out, "episode_return_snapshot", log->episode_return_snapshot / log->n_snapshot);
+        dict_set(out, "wins_snapshot", log->wins_snapshot / log->n_snapshot);
+        dict_set(out, "min_zuk_hp_snapshot", log->min_zuk_hp_snapshot / log->n_snapshot);
+    }
+    dict_set(out, "snapshot_frac", log->n_snapshot);
     float gear_switch_rate = (log->episode_length > 0.0f)
         ? log->gear_switches / log->episode_length : 0.0f;
     dict_set(out, "gear_switch_rate", gear_switch_rate);
@@ -1043,6 +1070,7 @@ void inferno_env_set_phase2_ctx(InfernoEnv* env, Phase2Context* ctx, int env_idx
 static void inferno_env_apply_phase2_reset(InfernoEnv* env) {
     Phase2Context* ctx = env->phase2_ctx;
     Phase2ResetDecision d = phase2_decide_reset(ctx);
+    env->last_start_was_snapshot = (d.demo_id >= 0);
 
     if (d.demo_id < 0) {
         ENCOUNTER_INFERNO.reset(env->enc_state, 0);

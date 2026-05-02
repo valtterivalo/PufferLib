@@ -721,6 +721,18 @@ typedef struct {
     float min_zuk_hp_seen;     /* lowest Zuk HP reached during the episode */
     float hp_restored;         /* HP restored to enemies (healers + mager) this episode */
     float zuk_healer_damage;   /* total damage dealt to Zuk healers this episode */
+    /* phase 2 snapshot-vs-normal eval split. Episodes that started from a
+       demo snapshot route to *_snapshot; episodes that started from a
+       normal c_reset route to *_normal. Outside phase 2 (no phase2_ctx),
+       all episodes route to *_normal. */
+    float episode_return_normal;
+    float episode_return_snapshot;
+    float wins_normal;
+    float wins_snapshot;
+    float min_zuk_hp_normal;
+    float min_zuk_hp_snapshot;
+    float n_normal;
+    float n_snapshot;
     /* per-NPC-type stats (14 types each, for wandb only — not shown on dashboard) */
     float prayer_correct_by_type[14];
     float attacks_by_type[14];
