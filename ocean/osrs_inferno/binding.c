@@ -383,6 +383,12 @@ void c_step(Env* env) {
            harmless (a wasted tail). */
         if (env->archive == NULL && !env->no_auto_reset) {
             if (env->phase2_ctx) {
+                Phase2EnvState* es = &env->phase2_ctx->env_states[env->env_idx];
+                if (es->demo_id >= 0) {
+                    float q_end = ENCOUNTER_INFERNO.progress_score(env->enc_state);
+                    int won = ((InfernoState*)env->enc_state)->winner == 0;
+                    phase2_record_outcome(env->phase2_ctx, es->demo_id, won, q_end - es->start_q);
+                }
                 inferno_env_apply_phase2_reset(env);
             } else {
                 ENCOUNTER_INFERNO.reset(env->enc_state, 0);

@@ -156,6 +156,114 @@ static void test_decide_reset_slot_jitter_bounds(void) {
     demostore_destroy(s);
 }
 
+static void test_record_outcome(void) {
+    printf("--- phase2 record_outcome bumps attempts and successes ---\n");
+    DemoStore* s = mk_store_with_demos(2, 80, 4);
+    DemoSnapshotLadder** l = mk_ladders(2, 80, 4);
+    Phase2Context* ctx = phase2_ctx_create(s, l, 1, 42);
+
+    phase2_record_outcome(ctx, 0, /*won=*/0, /*q_delta=*/0.01f);
+    phase2_record_outcome(ctx, 0, 0, 0.05f);
+    phase2_record_outcome(ctx, 0, 1, 0.0f);
+    ASSERT_INT_EQ("attempts[0]", ctx->demo_attempts[0], 3);
+    ASSERT_INT_EQ("successes[0] (q_delta=0.05 + won)", ctx->demo_successes[0], 2);
+
+    phase2_record_outcome(ctx, -1, 1, 1.0f);
+    ASSERT_INT_EQ("demo_id=-1 ignored: attempts[0] still 3", ctx->demo_attempts[0], 3);
+    phase2_record_outcome(ctx, 99, 1, 1.0f);
+    ASSERT_INT_EQ("oob demo_id ignored", ctx->demo_attempts[0], 3);
+
+    phase2_ctx_destroy(ctx);
+    free_ladders(l, 2);
+    demostore_destroy(s);
+}
+
+static void test_apply_cursor_gate_promote(void) {
+    printf("--- phase2 apply_cursor_gate steps cursor back on promote ---\n");
+    DemoStore* s = mk_store_with_demos(1, 80, 4);
+    DemoSnapshotLadder** l = mk_ladders(1, 80, 4);
+    Phase2Context* ctx = phase2_ctx_create(s, l, 1, 42);
+    ctx->promote_attempts = 10;
+    ctx->promote_rate = 0.6f;
+
+    int starting_cursor = s->demos[0].cursor_tick;
+    for (int i = 0; i < 10; i++) phase2_record_outcome(ctx, 0, 1, 0.0f);
+    phase2_apply_cursor_gate(ctx);
+    ASSERT_INT_EQ("cursor stepped back",
+        s->demos[0].cursor_tick, starting_cursor - ctx->backstep_ticks);
+    ASSERT_INT_EQ("attempts reset", ctx->demo_attempts[0], 0);
+    ASSERT_INT_EQ("successes reset", ctx->demo_successes[0], 0);
+
+    phase2_ctx_destroy(ctx);
+    free_ladders(l, 1);
+    demostore_destroy(s);
+}
+
+static void test_apply_cursor_gate_demote(void) {
+    printf("--- phase2 apply_cursor_gate steps cursor forward on demote ---\n");
+    DemoStore* s = mk_store_with_demos(1, 80, 4);
+    s->demos[0].cursor_tick = 30;
+    DemoSnapshotLadder** l = mk_ladders(1, 80, 4);
+    Phase2Context* ctx = phase2_ctx_create(s, l, 1, 42);
+    ctx->demote_attempts = 10;
+    ctx->demote_rate = 0.2f;
+
+    for (int i = 0; i < 10; i++) phase2_record_outcome(ctx, 0, 0, 0.0f);
+    phase2_apply_cursor_gate(ctx);
+    ASSERT_INT_EQ("cursor stepped forward",
+        s->demos[0].cursor_tick, 30 + ctx->backstep_ticks / 2);
+    ASSERT_INT_EQ("attempts reset", ctx->demo_attempts[0], 0);
+
+    phase2_ctx_destroy(ctx);
+    free_ladders(l, 1);
+    demostore_destroy(s);
+}
+
+static void test_apply_cursor_gate_no_action(void) {
+    printf("--- phase2 apply_cursor_gate does nothing below thresholds ---\n");
+    DemoStore* s = mk_store_with_demos(1, 80, 4);
+    int starting_cursor = s->demos[0].cursor_tick;
+    DemoSnapshotLadder** l = mk_ladders(1, 80, 4);
+    Phase2Context* ctx = phase2_ctx_create(s, l, 1, 42);
+    ctx->promote_attempts = 100;
+    ctx->demote_attempts = 100;
+
+    for (int i = 0; i < 5; i++) phase2_record_outcome(ctx, 0, 1, 0.0f);
+    phase2_apply_cursor_gate(ctx);
+    ASSERT_INT_EQ("cursor unchanged", s->demos[0].cursor_tick, starting_cursor);
+    ASSERT_INT_EQ("attempts not reset", ctx->demo_attempts[0], 5);
+
+    phase2_ctx_destroy(ctx);
+    free_ladders(l, 1);
+    demostore_destroy(s);
+}
+
+static void test_apply_cursor_gate_clamps_to_bounds(void) {
+    printf("--- phase2 apply_cursor_gate clamps cursor to [0, length-1] ---\n");
+    DemoStore* s = mk_store_with_demos(1, 20, 4);
+    s->demos[0].cursor_tick = 5;
+    DemoSnapshotLadder** l = mk_ladders(1, 20, 4);
+    Phase2Context* ctx = phase2_ctx_create(s, l, 1, 42);
+    ctx->promote_attempts = 1;
+    ctx->backstep_ticks = 16;
+
+    phase2_record_outcome(ctx, 0, 1, 0.0f);
+    phase2_apply_cursor_gate(ctx);
+    ASSERT_INT_EQ("cursor clamped to 0", s->demos[0].cursor_tick, 0);
+
+    s->demos[0].cursor_tick = 18;
+    ctx->promote_attempts = 100;
+    ctx->demote_attempts = 1;
+    ctx->demote_rate = 0.5f;
+    phase2_record_outcome(ctx, 0, 0, 0.0f);
+    phase2_apply_cursor_gate(ctx);
+    ASSERT_INT_EQ("cursor clamped to length-1", s->demos[0].cursor_tick, 19);
+
+    phase2_ctx_destroy(ctx);
+    free_ladders(l, 1);
+    demostore_destroy(s);
+}
+
 int main(void) {
     test_create_and_destroy();
     test_decide_reset_normal_only();
@@ -163,6 +271,11 @@ int main(void) {
     test_decide_reset_randomize_rng();
     test_decide_reset_mix_around_target();
     test_decide_reset_slot_jitter_bounds();
+    test_record_outcome();
+    test_apply_cursor_gate_promote();
+    test_apply_cursor_gate_demote();
+    test_apply_cursor_gate_no_action();
+    test_apply_cursor_gate_clamps_to_bounds();
     printf("\n%d/%d tests passed\n", g_pass, g_pass + g_fail);
     return g_fail == 0 ? 0 : 1;
 }

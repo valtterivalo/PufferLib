@@ -32,6 +32,15 @@ typedef struct {
 
     int active_pool_size;
     int* active_pool;
+
+    int* demo_attempts;
+    int* demo_successes;
+    int promote_attempts;
+    float promote_rate;
+    int demote_attempts;
+    float demote_rate;
+    int backstep_ticks;
+    float success_q_delta;
 } Phase2Context;
 
 typedef struct {
@@ -74,6 +83,14 @@ static inline Phase2Context* phase2_ctx_create(
     ctx->active_pool_size = store->num_demos;
     ctx->active_pool = (int*)calloc((size_t)store->num_demos, sizeof(int));
     for (int i = 0; i < store->num_demos; i++) ctx->active_pool[i] = i;
+    ctx->demo_attempts = (int*)calloc((size_t)store->num_demos, sizeof(int));
+    ctx->demo_successes = (int*)calloc((size_t)store->num_demos, sizeof(int));
+    ctx->promote_attempts = 64;
+    ctx->promote_rate = 0.60f;
+    ctx->demote_attempts = 128;
+    ctx->demote_rate = 0.20f;
+    ctx->backstep_ticks = 16;
+    ctx->success_q_delta = 0.03f;
     return ctx;
 }
 
@@ -81,7 +98,37 @@ static inline void phase2_ctx_destroy(Phase2Context* ctx) {
     if (!ctx) return;
     free(ctx->env_states);
     free(ctx->active_pool);
+    free(ctx->demo_attempts);
+    free(ctx->demo_successes);
     free(ctx);
+}
+
+static inline void phase2_record_outcome(
+    Phase2Context* ctx, int demo_id, int won, float q_delta
+) {
+    if (demo_id < 0 || demo_id >= ctx->store->num_demos) return;
+    ctx->demo_attempts[demo_id]++;
+    if (won || q_delta > ctx->success_q_delta) ctx->demo_successes[demo_id]++;
+}
+
+static inline void phase2_apply_cursor_gate(Phase2Context* ctx) {
+    for (int i = 0; i < ctx->store->num_demos; i++) {
+        int attempts = ctx->demo_attempts[i];
+        if (attempts < ctx->demote_attempts && attempts < ctx->promote_attempts) continue;
+        float rate = (float)ctx->demo_successes[i] / (float)attempts;
+        DemoTrajectory* d = &ctx->store->demos[i];
+        if (attempts >= ctx->promote_attempts && rate >= ctx->promote_rate) {
+            d->cursor_tick -= ctx->backstep_ticks;
+            if (d->cursor_tick < 0) d->cursor_tick = 0;
+            ctx->demo_attempts[i] = 0;
+            ctx->demo_successes[i] = 0;
+        } else if (attempts >= ctx->demote_attempts && rate < ctx->demote_rate) {
+            d->cursor_tick += ctx->backstep_ticks / 2;
+            if (d->cursor_tick >= d->length_ticks) d->cursor_tick = d->length_ticks - 1;
+            ctx->demo_attempts[i] = 0;
+            ctx->demo_successes[i] = 0;
+        }
+    }
 }
 
 /* Pick demo+slot for a fresh env, or return demo_id=-1 for a normal c_reset.
