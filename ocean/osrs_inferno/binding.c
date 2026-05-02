@@ -1070,6 +1070,70 @@ void inferno_env_set_phase2_ctx(InfernoEnv* env, Phase2Context* ctx, int env_idx
     env->env_idx = env_idx;
 }
 
+/* Walk each ladder slot, restore, compute progress and terminal flag, find
+   best nonterminal slot. Writes out_cursor_ticks[i] = tick of best slot per
+   demo. Prints per-demo diagnostic. Saves and restores env state across the
+   walk so the caller's env is not disturbed. Returns number of demos whose
+   ladder qmax fell more than 0.02 below the file_q (zero on healthy data). */
+int inferno_env_validate_ladders(
+    InfernoEnv* env,
+    const DemoStore* store,
+    DemoSnapshotLadder* const* ladders,
+    int* out_cursor_ticks
+) {
+    InfSnapshot saved;
+    ENCOUNTER_INFERNO.snapshot(env->enc_state, &saved);
+
+    int violations = 0;
+    for (int i = 0; i < store->num_demos; i++) {
+        const DemoTrajectory* d = &store->demos[i];
+        DemoSnapshotLadder* l = ladders[i];
+        float q0 = 0.0f, qmax = -1.0f, qlast = 0.0f;
+        int best_slot = -1;
+        int n_terminal_slots = 0;
+
+        for (int s = 0; s < l->num_snapshots; s++) {
+            const void* snap = demo_snapshot_ladder_snapshot_at(l, s);
+            ENCOUNTER_INFERNO.restore(env->enc_state, snap, l->snapshot_size);
+            float q = ENCOUNTER_INFERNO.progress_score(env->enc_state);
+            int eo = ((const InfernoState*)env->enc_state)->episode_over;
+            if (s == 0) q0 = q;
+            qlast = q;
+            if (eo) {
+                n_terminal_slots++;
+                continue;
+            }
+            if (q > qmax) {
+                qmax = q;
+                best_slot = s;
+            }
+        }
+
+        if (best_slot < 0) {
+            best_slot = 0;
+            qmax = q0;
+        }
+        out_cursor_ticks[i] = l->snapshot_ticks[best_slot];
+
+        int violated = (qmax + 0.02f < d->quality_at_root);
+        violations += violated;
+        fprintf(stderr,
+            "phase2 demo %3d: file_q=%.3f q0=%.3f qmax=%.3f qlast=%.3f "
+            "best_slot=%d/%d term=%d cursor=%d seed=%u len=%d%s\n",
+            i, d->quality_at_root, q0, qmax, qlast, best_slot, l->num_snapshots,
+            n_terminal_slots, out_cursor_ticks[i], d->rng_seed, d->length_ticks,
+            violated ? "  ** ladder qmax violates file_q" : "");
+    }
+
+    ENCOUNTER_INFERNO.restore(env->enc_state, &saved, sizeof(saved));
+    inferno_env_write_post_restore_state(env);
+
+    fprintf(stderr,
+        "phase2 ladder validation: %d demos, %d qmax violations\n",
+        store->num_demos, violations);
+    return violations;
+}
+
 static void inferno_env_apply_phase2_reset(InfernoEnv* env) {
     Phase2Context* ctx = env->phase2_ctx;
     Phase2ResetDecision d = phase2_decide_reset(ctx);

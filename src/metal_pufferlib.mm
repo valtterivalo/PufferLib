@@ -1319,6 +1319,9 @@ extern "C" {
         struct InfernoEnv* env, const DemoTrajectory* demo,
         DemoSnapshotLadder* out_ladder, DemoObsCache* out_obs_cache);
     void inferno_env_set_phase2_ctx(struct InfernoEnv* env, Phase2Context* ctx, int env_idx);
+    int inferno_env_validate_ladders(
+        struct InfernoEnv* env, const DemoStore* store,
+        DemoSnapshotLadder* const* ladders, int* out_cursor_ticks);
 }
 
 /* ArchiveExploreStats: surface-level counters returned to the caller for logging. */
@@ -1675,6 +1678,14 @@ int phase2_init_impl(
             std::abort();
         }
     }
+
+    int* cursor_ticks = (int*)std::calloc((size_t)store->num_demos, sizeof(int));
+    inferno_env_validate_ladders(env0, store, ladders, cursor_ticks);
+    for (int i = 0; i < store->num_demos; i++) {
+        store->demos[i].cursor_tick = cursor_ticks[i];
+    }
+    std::free(cursor_ticks);
+    c_reset(env0);
 
     Phase2Context* ctx = phase2_ctx_create(store, ladders, pufferl.vec->total_agents, seed);
     ctx->normal_start_frac = normal_start_frac;
