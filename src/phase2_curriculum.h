@@ -16,6 +16,7 @@ typedef struct {
     int slot;
     int start_tick;
     float start_q;
+    uint64_t rng_state;
 } Phase2EnvState;
 
 typedef struct {
@@ -57,12 +58,20 @@ static inline uint64_t phase2_splitmix64(uint64_t* s) {
     return z ^ (z >> 31);
 }
 
+static inline float phase2_rand_unit_state(uint64_t* state) {
+    return (phase2_splitmix64(state) >> 40) * (1.0f / (float)(1u << 24));
+}
+
+static inline int phase2_rand_int_state(uint64_t* state, int max_exclusive) {
+    return (int)(phase2_splitmix64(state) % (uint64_t)max_exclusive);
+}
+
 static inline float phase2_rand_unit(Phase2Context* ctx) {
-    return (phase2_splitmix64(&ctx->rng) >> 40) * (1.0f / (float)(1u << 24));
+    return phase2_rand_unit_state(&ctx->rng);
 }
 
 static inline int phase2_rand_int(Phase2Context* ctx, int max_exclusive) {
-    return (int)(phase2_splitmix64(&ctx->rng) % (uint64_t)max_exclusive);
+    return phase2_rand_int_state(&ctx->rng, max_exclusive);
 }
 
 static inline Phase2Context* phase2_ctx_create(
@@ -76,6 +85,8 @@ static inline Phase2Context* phase2_ctx_create(
     for (int i = 0; i < num_envs; i++) {
         ctx->env_states[i].demo_id = -1;
         ctx->env_states[i].slot = -1;
+        uint64_t s = seed ^ ((uint64_t)i * 0x9e3779b97f4a7c15ULL);
+        ctx->env_states[i].rng_state = phase2_splitmix64(&s);
     }
     ctx->rng = seed;
     ctx->normal_start_frac = 0.25f;
@@ -108,8 +119,10 @@ static inline void phase2_record_outcome(
     Phase2Context* ctx, int demo_id, int won, float q_delta
 ) {
     if (demo_id < 0) return;
-    ctx->demo_attempts[demo_id]++;
-    if (won || q_delta > ctx->success_q_delta) ctx->demo_successes[demo_id]++;
+    __atomic_fetch_add(&ctx->demo_attempts[demo_id], 1, __ATOMIC_RELAXED);
+    if (won || q_delta > ctx->success_q_delta) {
+        __atomic_fetch_add(&ctx->demo_successes[demo_id], 1, __ATOMIC_RELAXED);
+    }
 }
 
 typedef struct {
@@ -136,43 +149,44 @@ static inline Phase2CursorStats phase2_cursor_stats(Phase2Context* ctx) {
 
 static inline void phase2_apply_cursor_gate(Phase2Context* ctx) {
     for (int i = 0; i < ctx->store->num_demos; i++) {
-        int attempts = ctx->demo_attempts[i];
+        int attempts = __atomic_load_n(&ctx->demo_attempts[i], __ATOMIC_RELAXED);
         if (attempts < ctx->demote_attempts && attempts < ctx->promote_attempts) continue;
-        float rate = (float)ctx->demo_successes[i] / (float)attempts;
+        int successes = __atomic_load_n(&ctx->demo_successes[i], __ATOMIC_RELAXED);
+        float rate = (float)successes / (float)attempts;
         DemoTrajectory* d = &ctx->store->demos[i];
         if (attempts >= ctx->promote_attempts && rate >= ctx->promote_rate) {
             d->cursor_tick -= ctx->backstep_ticks;
             if (d->cursor_tick < 0) d->cursor_tick = 0;
-            ctx->demo_attempts[i] = 0;
-            ctx->demo_successes[i] = 0;
+            __atomic_store_n(&ctx->demo_attempts[i], 0, __ATOMIC_RELAXED);
+            __atomic_store_n(&ctx->demo_successes[i], 0, __ATOMIC_RELAXED);
         } else if (attempts >= ctx->demote_attempts && rate < ctx->demote_rate) {
             d->cursor_tick += ctx->backstep_ticks / 2;
             if (d->cursor_tick >= d->length_ticks) d->cursor_tick = d->length_ticks - 1;
-            ctx->demo_attempts[i] = 0;
-            ctx->demo_successes[i] = 0;
+            __atomic_store_n(&ctx->demo_attempts[i], 0, __ATOMIC_RELAXED);
+            __atomic_store_n(&ctx->demo_successes[i], 0, __ATOMIC_RELAXED);
         }
     }
 }
 
-static inline Phase2ResetDecision phase2_decide_reset(Phase2Context* ctx) {
+static inline Phase2ResetDecision phase2_decide_reset(Phase2Context* ctx, uint64_t* rng_state) {
     Phase2ResetDecision d = {.demo_id = -1, .slot = -1, .randomize_rng = 0, .fresh_rng_seed = 0};
     if (ctx->active_pool_size == 0 ||
-        phase2_rand_unit(ctx) < ctx->normal_start_frac) return d;
+        phase2_rand_unit_state(rng_state) < ctx->normal_start_frac) return d;
 
-    d.demo_id = ctx->active_pool[phase2_rand_int(ctx, ctx->active_pool_size)];
+    d.demo_id = ctx->active_pool[phase2_rand_int_state(rng_state, ctx->active_pool_size)];
     DemoSnapshotLadder* ladder = ctx->ladders[d.demo_id];
     DemoTrajectory* demo = &ctx->store->demos[d.demo_id];
 
     int cursor_slot = demo_snapshot_ladder_slot_for_tick(ladder, demo->cursor_tick);
-    int jitter = phase2_rand_int(ctx, 3) - 1;
+    int jitter = phase2_rand_int_state(rng_state, 3) - 1;
     int slot = cursor_slot + jitter;
     if (slot < 0) slot = 0;
     if (slot >= ladder->num_snapshots) slot = ladder->num_snapshots - 1;
     d.slot = slot;
 
-    if (phase2_rand_unit(ctx) < ctx->randomize_rng_frac) {
+    if (phase2_rand_unit_state(rng_state) < ctx->randomize_rng_frac) {
         d.randomize_rng = 1;
-        d.fresh_rng_seed = (uint32_t)phase2_splitmix64(&ctx->rng);
+        d.fresh_rng_seed = (uint32_t)phase2_splitmix64(rng_state);
     }
     return d;
 }

@@ -68,7 +68,7 @@ static void test_decide_reset_normal_only(void) {
     ctx->normal_start_frac = 1.0f;
     int normal = 0;
     for (int i = 0; i < 100; i++) {
-        if (phase2_decide_reset(ctx).demo_id == -1) normal++;
+        if (phase2_decide_reset(ctx, &ctx->env_states[0].rng_state).demo_id == -1) normal++;
     }
     ASSERT_INT_EQ("100/100 normal", normal, 100);
     phase2_ctx_destroy(ctx);
@@ -85,7 +85,7 @@ static void test_decide_reset_ladder_only(void) {
     ctx->randomize_rng_frac = 0.0f;
     int valid = 0;
     for (int i = 0; i < 100; i++) {
-        Phase2ResetDecision d = phase2_decide_reset(ctx);
+        Phase2ResetDecision d = phase2_decide_reset(ctx, &ctx->env_states[0].rng_state);
         if (d.demo_id < 0 || d.demo_id >= 4) break;
         if (d.slot < 0 || d.slot >= l[d.demo_id]->num_snapshots) break;
         if (d.randomize_rng != 0) break;
@@ -106,7 +106,7 @@ static void test_decide_reset_randomize_rng(void) {
     ctx->randomize_rng_frac = 1.0f;
     int randomized = 0;
     for (int i = 0; i < 100; i++) {
-        Phase2ResetDecision d = phase2_decide_reset(ctx);
+        Phase2ResetDecision d = phase2_decide_reset(ctx, &ctx->env_states[0].rng_state);
         if (d.randomize_rng) randomized++;
     }
     ASSERT_INT_EQ("100 random rng decisions", randomized, 100);
@@ -123,7 +123,7 @@ static void test_decide_reset_mix_around_target(void) {
     ctx->normal_start_frac = 0.5f;
     int normal = 0, ladder = 0;
     for (int i = 0; i < 1000; i++) {
-        Phase2ResetDecision d = phase2_decide_reset(ctx);
+        Phase2ResetDecision d = phase2_decide_reset(ctx, &ctx->env_states[0].rng_state);
         if (d.demo_id < 0) normal++;
         else ladder++;
     }
@@ -143,12 +143,12 @@ static void test_decide_reset_slot_jitter_bounds(void) {
     ctx->normal_start_frac = 0.0f;
     int n_snap = l[0]->num_snapshots;
     for (int i = 0; i < 200; i++) {
-        Phase2ResetDecision d = phase2_decide_reset(ctx);
+        Phase2ResetDecision d = phase2_decide_reset(ctx, &ctx->env_states[0].rng_state);
         ASSERT_TRUE("slot in bounds", d.slot >= 0 && d.slot < n_snap);
     }
     s->demos[0].cursor_tick = 79;
     for (int i = 0; i < 200; i++) {
-        Phase2ResetDecision d = phase2_decide_reset(ctx);
+        Phase2ResetDecision d = phase2_decide_reset(ctx, &ctx->env_states[0].rng_state);
         ASSERT_TRUE("slot in bounds at end", d.slot >= 0 && d.slot < n_snap);
     }
     phase2_ctx_destroy(ctx);

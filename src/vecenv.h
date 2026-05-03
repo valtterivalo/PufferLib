@@ -57,11 +57,15 @@ static inline DictItem* dict_get(Dict* dict, const char* key) {
 }
 
 static inline void dict_set(Dict* dict, const char* key, double value) {
-    assert(dict->size < dict->capacity);
     DictItem* item = dict_get_unsafe(dict, key);
     if (item != NULL) {
         item->value = value;
         return;
+    }
+    if (dict->size >= dict->capacity) {
+        fprintf(stderr, "dict_set: capacity %d exceeded inserting key '%s'\n",
+                dict->capacity, key);
+        abort();
     }
     dict->items[dict->size].key = key;
     dict->items[dict->size].value = value;

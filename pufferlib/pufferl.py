@@ -324,6 +324,19 @@ def _train_worker(args):
 
 def _train(env_name, args, sweep_obj=None, result_queue=None, verbose=False):
     '''Single-GPU training worker. Process target for both DDP ranks and sweep trials.'''
+    try:
+        _train_impl(env_name, args, sweep_obj=sweep_obj, result_queue=result_queue, verbose=verbose)
+    except BaseException:
+        if result_queue is not None:
+            try:
+                result_queue.put((args.get('gpu_id', 0), [], [], []))
+            except Exception:
+                pass
+        raise
+
+
+def _train_impl(env_name, args, sweep_obj=None, result_queue=None, verbose=False):
+    '''Worker body. Wrapped by _train so a crash always notifies the sweep main.'''
     backend = _resolve_backend(args)
     rank = args['rank']
     run_id = str(int(1000*time.time()))
@@ -548,6 +561,9 @@ def sweep(env_name, args=None, pareto=False):
     all_timesteps = np.geomspace(ts_config['min'], ts_config['max'], sweep_gpus)
     result_queue = mp.get_context('spawn').Queue()
 
+    import queue as _queue_mod
+    sweep_worker_timeout = float(os.environ.get('PUFFER_SWEEP_WORKER_TIMEOUT', '900'))
+
     active = {}
     completed = restored_runs
     launched = restored_runs
@@ -557,7 +573,16 @@ def sweep(env_name, args=None, pareto=False):
             or (has_run_cap and launched >= max_runs)
         )
         if should_collect:
-            gpu_id, scores, costs, timesteps = result_queue.get()
+            try:
+                gpu_id, scores, costs, timesteps = result_queue.get(timeout=sweep_worker_timeout)
+            except _queue_mod.Empty:
+                stuck = next(iter(active))
+                print(f'WARNING: sweep worker gpu_id={stuck} silent for >{sweep_worker_timeout:.0f}s, treating as failure')
+                done_args = active.pop(stuck)
+                sweep_obj.observe(done_args, 0, 0, is_failure=True)
+                continue
+            if gpu_id not in active:
+                continue
             done_args = active.pop(gpu_id)
 
             if not scores:

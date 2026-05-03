@@ -1118,7 +1118,7 @@ int inferno_env_validate_ladders(
 
 static void inferno_env_apply_phase2_reset(InfernoEnv* env) {
     Phase2Context* ctx = env->phase2_ctx;
-    Phase2ResetDecision d = phase2_decide_reset(ctx);
+    Phase2ResetDecision d = phase2_decide_reset(ctx, &ctx->env_states[env->env_idx].rng_state);
 
     if (d.demo_id < 0) {
         ENCOUNTER_INFERNO.reset(env->enc_state, 0);

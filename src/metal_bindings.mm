@@ -160,7 +160,7 @@ static py::dict puf_eval_log(py::object pufferl_obj) {
     pufferl.last_log_step = pufferl.global_step;
 
     py::dict env_dict;
-    Dict* env_out = create_dict(32);
+    Dict* env_out = create_dict(128);
     static_vec_eval_log(pufferl.vec, env_out);
     for (int i = 0; i < env_out->size; i++) {
         env_dict[env_out->items[i].key] = env_out->items[i].value;
