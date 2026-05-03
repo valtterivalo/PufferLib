@@ -729,6 +729,13 @@ typedef struct {
     float min_zuk_hp_snapshot;
     float n_normal;
     float n_snapshot;
+    /* normal-only diagnostic accumulators for reward-independent screening.
+       phase_reached_normal_sum: per-episode max phase bucket (0..4). Buckets
+       at min Zuk HP <= {900, 600, 300, 0=win} thresholds. The mean across
+       normal episodes is reported as phase_reached_normal in my_log. */
+    float episode_length_normal_died;
+    float n_normal_died;
+    float phase_reached_normal_sum;
     /* per-NPC-type stats (14 types each, for wandb only — not shown on dashboard) */
     float prayer_correct_by_type[14];
     float attacks_by_type[14];

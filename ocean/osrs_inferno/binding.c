@@ -353,6 +353,16 @@ void c_step(Env* env) {
             env->log.wins_normal += (s->winner == 0) ? 1.0f : 0.0f;
             env->log.min_zuk_hp_normal += min_zuk_hp_term;
             env->log.n_normal += 1.0f;
+            int won = (s->winner == 0);
+            int phase_bucket = won ? 4
+                : (min_zuk_hp_term <= 300.0f) ? 3
+                : (min_zuk_hp_term <= 600.0f) ? 2
+                : (min_zuk_hp_term <= 900.0f) ? 1 : 0;
+            env->log.phase_reached_normal_sum += (float)phase_bucket;
+            if (!won) {
+                env->log.episode_length_normal_died += (float)s->tick;
+                env->log.n_normal_died += 1.0f;
+            }
         }
     skip_log:;
     }
@@ -762,10 +772,17 @@ void my_log(Log* log, Dict* out) {
     dict_set(out, "deaths_to_jad", log->killed_by_type[INF_NPC_JAD] / log->n);
     if (log->n_normal > 0.0f) {
         float min_zhp_n = log->min_zuk_hp_normal / log->n_normal;
+        float score_n = (1200.0f - min_zhp_n) / 1200.0f;
+        float win_rate_n = log->wins_normal / log->n_normal;
         dict_set(out, "episode_return_normal", log->episode_return_normal / log->n_normal);
-        dict_set(out, "wins_normal", log->wins_normal / log->n_normal);
+        dict_set(out, "wins_normal", win_rate_n);
         dict_set(out, "min_zuk_hp_normal", min_zhp_n);
-        dict_set(out, "score_normal", (1200.0f - min_zhp_n) / 1200.0f);
+        dict_set(out, "score_normal", score_n);
+        dict_set(out, "zuk_objective_normal", score_n + 2.0f * win_rate_n);
+        dict_set(out, "phase_reached_normal", log->phase_reached_normal_sum / log->n_normal);
+        if (log->n_normal_died > 0.0f) {
+            dict_set(out, "death_tick_normal", log->episode_length_normal_died / log->n_normal_died);
+        }
     }
     if (log->n_snapshot > 0.0f) {
         float min_zhp_s = log->min_zuk_hp_snapshot / log->n_snapshot;
