@@ -571,6 +571,17 @@ void my_init(Env* env, Dict* kwargs) {
     ENCOUNTER_INFERNO.put_float(
         env->enc_state, "tag_reward_coeff",
         (float)dict_get_unsafe(kwargs, "tag_reward_coeff")->value);
+    static const char* const optional_float_keys[] = {
+        "win_bonus_coeff", "death_penalty_coeff",
+        "phase_900_bonus", "phase_600_bonus", "phase_300_bonus",
+        "shield_penalty_episode_cap",
+    };
+    for (size_t k = 0; k < sizeof(optional_float_keys)/sizeof(*optional_float_keys); k++) {
+        DictItem* item = dict_get_unsafe(kwargs, optional_float_keys[k]);
+        if (item) {
+            ENCOUNTER_INFERNO.put_float(env->enc_state, optional_float_keys[k], (float)item->value);
+        }
+    }
     DictItem* supply_profile_scale =
         dict_get_unsafe(kwargs, "late_start_supply_profile_scale");
     if (supply_profile_scale) {

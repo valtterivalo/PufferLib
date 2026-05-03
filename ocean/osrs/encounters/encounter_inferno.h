@@ -678,6 +678,20 @@ typedef struct {
     float shield_penalty_coeff;
     float tag_reward_coeff;
     float late_start_supply_profile_scale;
+    /* terminal + milestone reward shaping. all default 0 → preserves
+       existing behavior (win=+1.0 hard-coded, no death penalty, no
+       milestones). */
+    float win_bonus_coeff;
+    float death_penalty_coeff;
+    float phase_900_bonus;
+    float phase_600_bonus;
+    float phase_300_bonus;
+    float shield_penalty_episode_cap;
+    /* per-episode milestone-fired flags (cleared at reset) */
+    uint8_t phase_900_fired;
+    uint8_t phase_600_fired;
+    uint8_t phase_300_fired;
+    float shield_penalty_episode_total;
 
     Log log;
 } InfernoState;
@@ -1131,6 +1145,12 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
     float saved_shield_penalty_coeff = s->shield_penalty_coeff;
     float saved_tag_reward_coeff = s->tag_reward_coeff;
     float saved_late_start_supply_profile_scale = s->late_start_supply_profile_scale;
+    float saved_win_bonus_coeff = s->win_bonus_coeff;
+    float saved_death_penalty_coeff = s->death_penalty_coeff;
+    float saved_phase_900_bonus = s->phase_900_bonus;
+    float saved_phase_600_bonus = s->phase_600_bonus;
+    float saved_phase_300_bonus = s->phase_300_bonus;
+    float saved_shield_penalty_episode_cap = s->shield_penalty_episode_cap;
     memset(s, 0, sizeof(InfernoState));
     s->log = saved_log;
     s->start_wave = saved_start;
@@ -1142,6 +1162,12 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
     s->shield_penalty_coeff = saved_shield_penalty_coeff;
     s->tag_reward_coeff = saved_tag_reward_coeff;
     s->late_start_supply_profile_scale = saved_late_start_supply_profile_scale;
+    s->win_bonus_coeff = saved_win_bonus_coeff;
+    s->death_penalty_coeff = saved_death_penalty_coeff;
+    s->phase_900_bonus = saved_phase_900_bonus;
+    s->phase_600_bonus = saved_phase_600_bonus;
+    s->phase_300_bonus = saved_phase_300_bonus;
+    s->shield_penalty_episode_cap = saved_shield_penalty_episode_cap;
 
     /* human click-to-move: no destination after reset */
     s->player_dest_x = -1;
@@ -3261,8 +3287,10 @@ static float inf_compute_reward(InfernoState* s) {
     s->total_damage_received += s->damage_received_this_tick;
     s->total_hp_restored += s->hp_restored_this_tick;
 
-    if (s->episode_over)
-        return (s->winner == 0) ? 1.0f : 0.0f;
+    if (s->episode_over) {
+        float win_bonus = (s->win_bonus_coeff > 0.0f) ? s->win_bonus_coeff : 1.0f;
+        return (s->winner == 0) ? win_bonus : -s->death_penalty_coeff;
+    }
 
     int healer_is_actively_healing = 0;
     for (int i = 0; i < INF_MAX_NPCS; i++) {
@@ -3282,7 +3310,31 @@ static float inf_compute_reward(InfernoState* s) {
             fmaxf(0.0f, s->damage_dealt_this_tick - s->hp_restored_this_tick);
     }
     reward += s->tag_reward_coeff * (float)s->healer_tags_this_tick;
-    reward -= s->shield_penalty_coeff * s->shield_damage_this_tick;
+
+    float shield_penalty = s->shield_penalty_coeff * s->shield_damage_this_tick;
+    if (s->shield_penalty_episode_cap > 0.0f) {
+        float remaining = s->shield_penalty_episode_cap - s->shield_penalty_episode_total;
+        if (remaining < 0.0f) remaining = 0.0f;
+        if (shield_penalty > remaining) shield_penalty = remaining;
+    }
+    s->shield_penalty_episode_total += shield_penalty;
+    reward -= shield_penalty;
+
+    if (s->phase_900_bonus > 0.0f && !s->phase_900_fired
+            && s->min_zuk_hp_seen <= 900.0f && s->min_zuk_hp_seen > 0.0f) {
+        reward += s->phase_900_bonus;
+        s->phase_900_fired = 1;
+    }
+    if (s->phase_600_bonus > 0.0f && !s->phase_600_fired
+            && s->min_zuk_hp_seen <= 600.0f && s->min_zuk_hp_seen > 0.0f) {
+        reward += s->phase_600_bonus;
+        s->phase_600_fired = 1;
+    }
+    if (s->phase_300_bonus > 0.0f && !s->phase_300_fired
+            && s->min_zuk_hp_seen <= 300.0f && s->min_zuk_hp_seen > 0.0f) {
+        reward += s->phase_300_bonus;
+        s->phase_300_fired = 1;
+    }
     return reward;
 }
 
@@ -4165,6 +4217,12 @@ static void inf_put_float(EncounterState* state, const char* key, float value) {
     if (strcmp(key, "damage_reward_coeff") == 0) s->damage_reward_coeff = value;
     else if (strcmp(key, "shield_penalty_coeff") == 0) s->shield_penalty_coeff = value;
     else if (strcmp(key, "tag_reward_coeff") == 0) s->tag_reward_coeff = value;
+    else if (strcmp(key, "win_bonus_coeff") == 0) s->win_bonus_coeff = value;
+    else if (strcmp(key, "death_penalty_coeff") == 0) s->death_penalty_coeff = value;
+    else if (strcmp(key, "phase_900_bonus") == 0) s->phase_900_bonus = value;
+    else if (strcmp(key, "phase_600_bonus") == 0) s->phase_600_bonus = value;
+    else if (strcmp(key, "phase_300_bonus") == 0) s->phase_300_bonus = value;
+    else if (strcmp(key, "shield_penalty_episode_cap") == 0) s->shield_penalty_episode_cap = value;
     else if (strcmp(key, "late_start_supply_profile_scale") == 0) {
         inf_require_valid_supply_scale(value);
         s->late_start_supply_profile_scale = value;
