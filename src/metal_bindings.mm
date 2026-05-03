@@ -108,6 +108,7 @@ static py::dict puf_log(py::object pufferl_obj) {
     for (int i = 0; i < env_out->size; i++) {
         env_dict[env_out->items[i].key] = env_out->items[i].value;
     }
+    free_dict(env_out);
     result["env"] = env_dict;
 
     py::dict loss_dict;
@@ -165,6 +166,7 @@ static py::dict puf_eval_log(py::object pufferl_obj) {
     for (int i = 0; i < env_out->size; i++) {
         env_dict[env_out->items[i].key] = env_out->items[i].value;
     }
+    free_dict(env_out);
     result["env"] = env_dict;
     return result;
 }
@@ -453,8 +455,7 @@ static py::dict vec_log(VecEnv& ve) {
     for (int i = 0; i < out->size; i++) {
         result[out->items[i].key] = out->items[i].value;
     }
-    free(out->items);
-    free(out);
+    free_dict(out);
     return result;
 }
 

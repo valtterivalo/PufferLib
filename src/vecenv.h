@@ -41,6 +41,12 @@ static inline Dict* create_dict(int capacity) {
     return dict;
 }
 
+static inline void free_dict(Dict* dict) {
+    if (!dict) return;
+    free(dict->items);
+    free(dict);
+}
+
 static inline DictItem* dict_get_unsafe(Dict* dict, const char* key) {
     for (int i = 0; i < dict->size; i++) {
         if (strcmp(dict->items[i].key, key) == 0) {

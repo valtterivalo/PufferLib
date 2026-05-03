@@ -11,7 +11,10 @@
 extern "C" {
 #endif
 
-typedef struct {
+/* aligned to 32 bytes so adjacent env states don't share a cache line under
+   the OMP parallel-for in c_step — multiple worker threads write rng_state
+   concurrently. */
+typedef struct __attribute__((aligned(32))) {
     int demo_id;
     int slot;
     int start_tick;
@@ -85,7 +88,7 @@ static inline Phase2Context* phase2_ctx_create(
     for (int i = 0; i < num_envs; i++) {
         ctx->env_states[i].demo_id = -1;
         ctx->env_states[i].slot = -1;
-        uint64_t s = seed ^ ((uint64_t)i * 0x9e3779b97f4a7c15ULL);
+        uint64_t s = seed ^ (((uint64_t)i + 1) * 0x9e3779b97f4a7c15ULL);
         ctx->env_states[i].rng_state = phase2_splitmix64(&s);
     }
     ctx->rng = seed;
