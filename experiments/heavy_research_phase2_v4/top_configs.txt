@@ -1,0 +1,23 @@
+=== BASELINE TOP-5 ===
+  um0rbblw ret_n=7.308 lr=0.0050 ent=0.0030 gamma=0.99999 replay=0.718 h=128 mb=4096 gae=0.8350
+    p2: nsf=0.250 maxd=64 promo=0.300 demo=0.100 bks=4 succd=0.0050
+  t9gnkbd6 ret_n=7.265 lr=0.0050 ent=0.0099 gamma=0.99980 replay=0.750 h=128 mb=4096 gae=0.8481
+    p2: nsf=0.250 maxd=64 promo=0.300 demo=0.100 bks=4 succd=0.0050
+  ru8y5ve9 ret_n=7.258 lr=0.0050 ent=0.0133 gamma=0.99999 replay=0.750 h=128 mb=4096 gae=0.8268
+    p2: nsf=0.250 maxd=64 promo=0.300 demo=0.100 bks=4 succd=0.0050
+  kw508tny ret_n=7.133 lr=0.0050 ent=0.0170 gamma=0.99999 replay=0.750 h=128 mb=4096 gae=0.8618
+    p2: nsf=0.250 maxd=64 promo=0.300 demo=0.100 bks=4 succd=0.0050
+  nw575pq6 ret_n=7.069 lr=0.0050 ent=0.0030 gamma=0.99999 replay=0.750 h=128 mb=4096 gae=0.7500
+    p2: nsf=0.250 maxd=64 promo=0.300 demo=0.100 bks=4 succd=0.0050
+
+=== PHASE 2 TOP-5 ===
+  p1hl132v ret_n=6.150 lr=0.0050 ent=0.0317 gamma=0.99996 replay=0.500 h=128 mb=4096 gae=0.7976
+    p2: nsf=0.600 maxd=128 promo=0.150 demo=0.159 bks=8 succd=0.0300
+  uhl7m27a ret_n=4.150 lr=0.0050 ent=0.0035 gamma=0.99976 replay=0.750 h=128 mb=4096 gae=0.7500
+    p2: nsf=0.597 maxd=32 promo=0.226 demo=0.200 bks=16 succd=0.0238
+  v3dj6wq0 ret_n=4.148 lr=0.0050 ent=0.0224 gamma=0.99995 replay=0.750 h=128 mb=4096 gae=0.8677
+    p2: nsf=0.600 maxd=64 promo=0.152 demo=0.199 bks=16 succd=0.0300
+  aj44bhkq ret_n=4.096 lr=0.0050 ent=0.0030 gamma=0.99969 replay=0.750 h=128 mb=4096 gae=0.8207
+    p2: nsf=0.599 maxd=32 promo=0.150 demo=0.179 bks=16 succd=0.0267
+  kk38p605 ret_n=3.993 lr=0.0050 ent=0.0051 gamma=0.99973 replay=0.750 h=128 mb=4096 gae=0.7729
+    p2: nsf=0.600 maxd=32 promo=0.150 demo=0.174 bks=16 succd=0.0300

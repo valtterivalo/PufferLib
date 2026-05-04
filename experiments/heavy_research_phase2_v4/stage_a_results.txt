@@ -1,0 +1,57 @@
+wandb: Currently logged in as: valtterivalo (valtterivalo-clock-cloud) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+Fetching baseline sweep (phase2-v3-baseline-sweep) ...
+Fetching phase2 sweep (phase2-v3-phase2-sweep) ...
+
+run counts: baseline=80 ({'finished': 80}) skipped=0, phase2=89 ({'finished': 79, 'crashed': 10}) skipped=0
+
+All-trial summary stats:
+  baseline: n=80
+    mean   = 3.4572
+    median = 3.6076
+    iqm    = 3.5102
+    p90    = 4.5824
+    max    = 7.3082
+  phase2: n=89
+    mean   = 2.3749
+    median = 2.2667
+    iqm    = 2.3716
+    p90    = 3.7989
+    max    = 6.1497
+
+Top-10 by metric:
+  baseline top-10: n=10
+    mean   = 6.1148
+    median = 6.3404
+    iqm    = 6.3025
+    p90    = 7.2696
+    max    = 7.3082
+  phase2 top-10: n=10
+    mean   = 4.1852
+    median = 3.9878
+    iqm    = 3.9921
+    p90    = 4.3504
+    max    = 6.1497
+
+Bootstrap (n=all per arm, 10000 resamples):
+  delta_iqm        = -1.1386
+  delta_iqm 95% CI = [-1.4563, -0.7701]
+  delta_iqm 90% CI = [-1.4087, -0.8296]
+  PI(phase2>base)  = 0.276
+  PI 95% CI        = [0.201, 0.357]
+  PI 90% CI        = [0.212, 0.344]
+  rel iqm lift     = -32.4%
+
+Gate evaluation:
+  screening gate (delta_iqm>0, CI95 lower>0, PI>=0.70): False
+  small-n gate (PI>=0.70, CI90 lower>0.55, lift>=20%): False
+
+This is the screening result. Stage B locked re-eval (top-3 from each arm x 3-5 seeds at 200M) is the actual ship evidence.
+Top configs to forward to stage B:
+  baseline:
+    #1: 7.3082
+    #2: 7.2653
+    #3: 7.2577
+  phase2:
+    #1: 6.1497
+    #2: 4.1504
+    #3: 4.1478

@@ -1,0 +1,167 @@
+wandb: Currently logged in as: valtterivalo (valtterivalo-clock-cloud) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+Fetching control (stage-r1-current-widened) ...
+  control: {'finished': 78}  skipped=2
+
+Fetching v1 (stage-r1-v1-progress) ...
+  v1: {'finished': 37}  skipped=23
+Fetching v2 (stage-r1-v2-milestones) ...
+  v2: {'finished': 39}  skipped=21
+Fetching v3 (stage-r1-v3-rebalanced) ...
+  v3: {'finished': 58}  skipped=2
+
+================================================================================
+Per-arm summary stats:
+================================================================================
+  control (current_widened): n=78
+    zuk_objective_normal          mean=  0.279  median=  0.299  iqm=  0.270  p90=  0.443  max=  0.787
+    score_normal                  mean=  0.279  median=  0.299  iqm=  0.270  p90=  0.443  max=  0.787
+    wins_normal                   mean=  0.000  median=  0.000  iqm=  0.000  p90=  0.000  max=  0.000
+    min_zuk_hp_normal             mean=864.807  median=841.708  iqm=876.251  p90=1072.862  max=1130.603
+    episode_return_normal         mean=  3.118  median=  3.239  iqm=  2.986  p90=  5.176  max=  8.448
+    phase_reached_normal          mean=  0.666  median=  0.735  iqm=  0.604  p90=  1.256  max=  2.827
+    death_tick_normal             mean= 88.269  median= 90.170  iqm= 81.858  p90=149.365  max=321.471
+  v1 (stage-r1-v1-progress): n=37
+    zuk_objective_normal          mean=  0.369  median=  0.368  iqm=  0.386  p90=  0.556  max=  0.671
+    score_normal                  mean=  0.369  median=  0.368  iqm=  0.386  p90=  0.556  max=  0.671
+    wins_normal                   mean=  0.000  median=  0.000  iqm=  0.000  p90=  0.000  max=  0.000
+    min_zuk_hp_normal             mean=757.676  median=757.884  iqm=736.364  p90=1024.931  max=1200.000
+    episode_return_normal         mean=  3.678  median=  3.683  iqm=  3.861  p90=  5.532  max=  6.625
+    phase_reached_normal          mean=  1.024  median=  0.992  iqm=  1.054  p90=  1.725  max=  2.163
+    death_tick_normal             mean=115.906  median=125.684  iqm=123.220  p90=145.351  max=183.663
+  v2 (stage-r1-v2-milestones): n=39
+    zuk_objective_normal          mean=  0.473  median=  0.523  iqm=  0.517  p90=  0.563  max=  0.601
+    score_normal                  mean=  0.473  median=  0.523  iqm=  0.517  p90=  0.563  max=  0.601
+    wins_normal                   mean=  0.000  median=  0.000  iqm=  0.000  p90=  0.000  max=  0.000
+    min_zuk_hp_normal             mean=632.013  median=572.425  iqm=579.359  p90=779.239  max=1199.995
+    episode_return_normal         mean=  5.075  median=  5.614  iqm=  5.557  p90=  6.061  max=  6.354
+    phase_reached_normal          mean=  1.413  median=  1.603  iqm=  1.575  p90=  1.747  max=  1.892
+    death_tick_normal             mean=129.159  median=138.130  iqm=137.595  p90=145.972  max=148.676
+  v3 (stage-r1-v3-rebalanced): n=58
+    zuk_objective_normal          mean=  0.477  median=  0.536  iqm=  0.528  p90=  0.592  max=  0.709
+    score_normal                  mean=  0.477  median=  0.536  iqm=  0.528  p90=  0.592  max=  0.709
+    wins_normal                   mean=  0.000  median=  0.000  iqm=  0.000  p90=  0.000  max=  0.000
+    min_zuk_hp_normal             mean=627.648  median=556.910  iqm=566.017  p90=937.929  max=1200.000
+    episode_return_normal         mean=  5.288  median=  5.934  iqm=  5.839  p90=  6.586  max=  7.909
+    phase_reached_normal          mean=  1.429  median=  1.638  iqm=  1.613  p90=  1.875  max=  2.349
+    death_tick_normal             mean=129.982  median=142.446  iqm=141.976  p90=149.857  max=191.587
+
+================================================================================
+Top-10 per arm:
+================================================================================
+  control top-10 by zuk_objective_normal:
+    7os16e09  obj=0.787  score=0.787  win=0.000  zhp=256  ret=8.273  phase=2.83  death_t=292
+    nq35wm0g  obj=0.775  score=0.775  win=0.000  zhp=270  ret=8.448  phase=2.73  death_t=228
+    nif53rk1  obj=0.630  score=0.630  win=0.000  zhp=444  ret=6.437  phase=1.94  death_t=213
+    enzypyyf  obj=0.614  score=0.614  win=0.000  zhp=463  ret=6.643  phase=1.89  death_t=193
+    qit4l93d  obj=0.584  score=0.584  win=0.000  zhp=499  ret=6.549  phase=1.81  death_t=178
+    mu15xsbf  obj=0.566  score=0.566  win=0.000  zhp=521  ret=6.671  phase=1.77  death_t=167
+    278krwgu  obj=0.546  score=0.546  win=0.000  zhp=545  ret=6.321  phase=1.67  death_t=158
+    ocmgp4wa  obj=0.529  score=0.529  win=0.000  zhp=565  ret=6.200  phase=1.61  death_t=146
+    q2sds759  obj=0.406  score=0.406  win=0.000  zhp=713  ret=4.737  phase=1.10  death_t=111
+    59blgxwz  obj=0.395  score=0.395  win=0.000  zhp=726  ret=4.357  phase=1.10  death_t=108
+  v1 top-10 by zuk_objective_normal:
+    bz740fg2  obj=0.671  score=0.671  win=0.000  zhp=395  ret=6.625  phase=2.16  death_t=184
+    l2hsdja8  obj=0.576  score=0.576  win=0.000  zhp=509  ret=5.740  phase=1.77  death_t=149
+    zvqkt2tj  obj=0.569  score=0.569  win=0.000  zhp=517  ret=5.650  phase=1.80  death_t=145
+    wr0kpk4b  obj=0.557  score=0.557  win=0.000  zhp=532  ret=5.544  phase=1.73  death_t=145
+    dqf9iqlz  obj=0.556  score=0.556  win=0.000  zhp=533  ret=5.524  phase=1.72  death_t=140
+    nw7zlb2y  obj=0.534  score=0.534  win=0.000  zhp=559  ret=5.327  phase=1.62  death_t=139
+    unodoa7g  obj=0.530  score=0.530  win=0.000  zhp=564  ret=5.302  phase=1.61  death_t=146
+    mztuag8i  obj=0.509  score=0.509  win=0.000  zhp=589  ret=5.091  phase=1.53  death_t=136
+    dv0mrldp  obj=0.508  score=0.508  win=0.000  zhp=590  ret=5.080  phase=1.54  death_t=138
+    mt98i88g  obj=0.508  score=0.508  win=0.000  zhp=591  ret=5.065  phase=1.52  death_t=135
+  v2 top-10 by zuk_objective_normal:
+    j7xuaid2  obj=0.601  score=0.601  win=0.000  zhp=479  ret=6.354  phase=1.89  death_t=147
+    8hpun1n0  obj=0.573  score=0.573  win=0.000  zhp=512  ret=6.148  phase=1.77  death_t=142
+    g9j4uu33  obj=0.572  score=0.572  win=0.000  zhp=514  ret=6.162  phase=1.79  death_t=146
+    c37liwhi  obj=0.571  score=0.571  win=0.000  zhp=515  ret=6.137  phase=1.80  death_t=148
+    1kusfbv3  obj=0.561  score=0.561  win=0.000  zhp=527  ret=6.042  phase=1.74  death_t=145
+    wa3itd3k  obj=0.561  score=0.561  win=0.000  zhp=527  ret=6.017  phase=1.74  death_t=147
+    ayoi21e3  obj=0.557  score=0.557  win=0.000  zhp=532  ret=5.943  phase=1.73  death_t=142
+    nixi5dlm  obj=0.552  score=0.552  win=0.000  zhp=538  ret=5.940  phase=1.71  death_t=144
+    w9gormcs  obj=0.547  score=0.547  win=0.000  zhp=543  ret=5.897  phase=1.70  death_t=141
+    wmi7r0oc  obj=0.538  score=0.538  win=0.000  zhp=554  ret=5.778  phase=1.65  death_t=142
+  v3 top-10 by zuk_objective_normal:
+    kvuqyvh9  obj=0.709  score=0.709  win=0.000  zhp=349  ret=7.909  phase=2.35  death_t=192
+    fs4s6vst  obj=0.705  score=0.705  win=0.000  zhp=354  ret=7.833  phase=2.33  death_t=189
+    e3vyhuh9  obj=0.608  score=0.608  win=0.000  zhp=471  ret=6.791  phase=1.94  death_t=157
+    4c0z0c4n  obj=0.605  score=0.605  win=0.000  zhp=473  ret=6.717  phase=1.95  death_t=151
+    ju3se6a6  obj=0.598  score=0.598  win=0.000  zhp=482  ret=6.603  phase=1.90  death_t=147
+    t3damsfg  obj=0.595  score=0.595  win=0.000  zhp=486  ret=6.636  phase=1.92  death_t=150
+    zcsz52o1  obj=0.591  score=0.591  win=0.000  zhp=491  ret=6.560  phase=1.86  death_t=149
+    r1zk51zx  obj=0.591  score=0.591  win=0.000  zhp=491  ret=6.579  phase=1.86  death_t=147
+    m3udoan6  obj=0.587  score=0.587  win=0.000  zhp=495  ret=6.539  phase=1.86  death_t=152
+    x0ehwd7k  obj=0.585  score=0.585  win=0.000  zhp=498  ret=6.437  phase=1.82  death_t=138
+
+================================================================================
+Variant v1 vs control:
+================================================================================
+  v1 top-10 vs control top-10:
+    score_normal      median: 0.545 vs 0.575  delta=-0.031
+    phase_reached     median: 1.67 vs 1.79  delta=-0.12
+    death_tick_normal median: 143 vs 173  delta=-30
+    episode_return    median: 5.426 vs 6.493  (return is reward-coupled, not comparable across reward variants — diagnostic only)
+    flags: possible suicide perversity: dying earlier without progress; phase progression flat or worse than control
+
+  Bootstrap (n_treat=37, n_control=78, 10000 resamples):
+    iqm(control) = 0.2698
+    iqm(v1)     = 0.3864
+    delta_iqm    = +0.1166
+    95% CI       = [+0.0454, +0.1859]
+    PI(v1>ctrl) = 0.674  (95% CI [0.559, 0.782])
+    rel lift     = +43.2%
+
+  Gates:
+    screening (lift>=20% AND PI>=0.70 AND top10 score lift>=0.05): FAIL
+      top10 score_normal lift = -0.031
+    strong evidence: no
+    clean no-go: no
+
+================================================================================
+Variant v2 vs control:
+================================================================================
+  v2 top-10 vs control top-10:
+    score_normal      median: 0.561 vs 0.575  delta=-0.014
+    phase_reached     median: 1.74 vs 1.79  delta=-0.05
+    death_tick_normal median: 144 vs 173  delta=-28
+    episode_return    median: 6.029 vs 6.493  (return is reward-coupled, not comparable across reward variants — diagnostic only)
+    flags: possible suicide perversity: dying earlier without progress
+
+  Bootstrap (n_treat=39, n_control=78, 10000 resamples):
+    iqm(control) = 0.2698
+    iqm(v2)     = 0.5172
+    delta_iqm    = +0.2474
+    95% CI       = [+0.1972, +0.2910]
+    PI(v2>ctrl) = 0.839  (95% CI [0.746, 0.920])
+    rel lift     = +91.7%
+
+  Gates:
+    screening (lift>=20% AND PI>=0.70 AND top10 score lift>=0.05): FAIL
+      top10 score_normal lift = -0.014
+    strong evidence: no
+    clean no-go: no
+
+================================================================================
+Variant v3 vs control:
+================================================================================
+  v3 top-10 vs control top-10:
+    score_normal      median: 0.596 vs 0.575  delta=+0.021
+    phase_reached     median: 1.91 vs 1.79  delta=+0.12
+    death_tick_normal median: 150 vs 173  delta=-23
+    episode_return    median: 6.619 vs 6.493  (return is reward-coupled, not comparable across reward variants — diagnostic only)
+    flags: possible suicide perversity: dying earlier without progress
+
+  Bootstrap (n_treat=58, n_control=78, 10000 resamples):
+    iqm(control) = 0.2698
+    iqm(v3)     = 0.5283
+    delta_iqm    = +0.2585
+    95% CI       = [+0.2062, +0.3044]
+    PI(v3>ctrl) = 0.807  (95% CI [0.723, 0.886])
+    rel lift     = +95.8%
+
+  Gates:
+    screening (lift>=20% AND PI>=0.70 AND top10 score lift>=0.05): FAIL
+      top10 score_normal lift = +0.021
+    strong evidence: no
+    clean no-go: no
+
