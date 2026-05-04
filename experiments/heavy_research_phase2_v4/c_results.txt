@@ -1,0 +1,62 @@
+wandb: Currently logged in as: valtterivalo (valtterivalo-clock-cloud) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+Pulling C0 (ppo-control)...
+  4 finished
+Pulling C1 (phase2-no-bc)...
+  4 finished
+Pulling C2 (phase2-bc)...
+  4 finished
+
+==============================================================================
+C0: PPO continuation control (50M): n=4
+==============================================================================
+  scores: best=0.5882  top3_med=0.5854  top10_med=0.5781  p50=0.5781
+  wins:    runs_with_any_win=0  total_win_rate=0.0000
+  tails:   frac_<=300 median=0.072  <=240 median=0.016  <=150 median=0.0000  cells with any <=150: 0/4
+
+  per cell:
+    2o8ewlny   score=0.5882 win=0.000 min_hp= 494.1 phase=1.86 <=300=0.088 <=240=0.019 <=150=0.0000  tag=stage-r2-c-c0-ppo-control-s3
+    1wv5prug   score=0.5854 win=0.000 min_hp= 497.5 phase=1.83 <=300=0.056 <=240=0.012 <=150=0.0000  tag=stage-r2-c-c0-ppo-control-s1
+    yq6fb8tg   score=0.5709 win=0.000 min_hp= 515.0 phase=1.85 <=300=0.120 <=240=0.046 <=150=0.0000  tag=stage-r2-c-c0-ppo-control-s4
+    4wbdzimw   score=0.1317 win=0.000 min_hp=1041.9 phase=0.13 <=300=0.000 <=240=0.000 <=150=0.0000  tag=stage-r2-c-c0-ppo-control-s2
+
+==============================================================================
+C1: phase 2, no BC (50M): n=4
+==============================================================================
+  scores: best=0.7649  top3_med=0.7350  top10_med=0.6805  p50=0.6805
+  wins:    runs_with_any_win=0  total_win_rate=0.0000
+  tails:   frac_<=300 median=0.376  <=240 median=0.170  <=150 median=0.0000  cells with any <=150: 1/4
+
+  per cell:
+    ggzxso9c   score=0.7649 win=0.000 min_hp= 282.1 phase=2.65 <=300=0.662 <=240=0.493 <=150=0.0000  tag=stage-r2-c-c1-p2-nsf75-s1
+    dnh9k1vm   score=0.7350 win=0.000 min_hp= 318.0 phase=2.49 <=300=0.499 <=240=0.286 <=150=0.0035  tag=stage-r2-c-c1-p2-nsf85-s1
+    8z7elmbm   score=0.6261 win=0.000 min_hp= 448.7 phase=2.07 <=300=0.252 <=240=0.055 <=150=0.0000  tag=stage-r2-c-c1-p2-nsf75-s2
+    1obdzw4c   score=0.2496 win=0.000 min_hp= 900.5 phase=0.39 <=300=0.000 <=240=0.000 <=150=0.0000  tag=stage-r2-c-c1-p2-nsf85-s2
+
+==============================================================================
+C2: phase 2 + tiny BC (50M): n=4
+==============================================================================
+  scores: best=0.6239  top3_med=0.2496  top10_med=0.2305  p50=0.2305
+  wins:    runs_with_any_win=0  total_win_rate=0.0000
+  tails:   frac_<=300 median=0.000  <=240 median=0.000  <=150 median=0.0000  cells with any <=150: 0/4
+
+  per cell:
+    2w1gim15   score=0.6239 win=0.000 min_hp= 451.3 phase=1.90 <=300=0.053 <=240=0.024 <=150=0.0000  tag=stage-r2-c-c2-p2-bc005-s1
+    6b68dgup   score=0.2496 win=0.000 min_hp= 900.5 phase=0.43 <=300=0.000 <=240=0.000 <=150=0.0000  tag=stage-r2-c-c2-p2-bc005-s2
+    6sbkrid8   score=0.2114 win=0.000 min_hp= 946.4 phase=0.40 <=300=0.000 <=240=0.000 <=150=0.0000  tag=stage-r2-c-c2-p2-bc001-s1
+    44utea8h   score=0.2114 win=0.000 min_hp= 946.4 phase=0.40 <=300=0.000 <=240=0.000 <=150=0.0000  tag=stage-r2-c-c2-p2-bc001-s2
+
+==============================================================================
+Gates
+==============================================================================
+
+POSITIVE_C signals:
+  + C1 top-10 median 0.681 >= C0 + 0.04 (C0 top10_med 0.578)
+  + C1 median frac_<=300 0.376 >= 2x C0 (0.072)
+  + C1 1 cells reached <=150 HP
+  C2: no positive signals
+
+NO_GO signals (humans interpret):
+  - C2 top10 median 0.230 below C0 (0.578)
+
+  context: A' v3 200M best=0.738, top10_med=0.570
+           P0 D-audit had 9135/20k (45.7%) eps <=300
