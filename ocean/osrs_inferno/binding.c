@@ -363,6 +363,11 @@ void c_step(Env* env) {
                 env->log.episode_length_normal_died += (float)s->tick;
                 env->log.n_normal_died += 1.0f;
             }
+            if (min_zuk_hp_term <= 300.0f) env->log.count_min_hp_le_300_normal += 1.0f;
+            if (min_zuk_hp_term <= 240.0f) env->log.count_min_hp_le_240_normal += 1.0f;
+            if (min_zuk_hp_term <= 150.0f) env->log.count_min_hp_le_150_normal += 1.0f;
+            if (min_zuk_hp_term < env->log.best_min_zuk_hp_normal)
+                env->log.best_min_zuk_hp_normal = min_zuk_hp_term;
         }
     skip_log:;
     }
@@ -558,6 +563,7 @@ void my_init(Env* env, Dict* kwargs) {
     env->num_agents = 1;
     env->enc_state = ENCOUNTER_INFERNO.create();
     memset(&env->log, 0, sizeof(Log));
+    env->log.best_min_zuk_hp_normal = 1200.0f;
 
     DictItem* start_wave = dict_get_unsafe(kwargs, "start_wave");
     if (start_wave)
@@ -794,6 +800,15 @@ void my_log(Log* log, Dict* out) {
         if (log->n_normal_died > 0.0f) {
             dict_set(out, "death_tick_normal", log->episode_length_normal_died / log->n_normal_died);
         }
+        /* aggregator divides every Log field by n_total, so raw counts arrive
+           as count/n_total. Dividing by n_normal (also count/n_total) cancels
+           n_total and yields the true fraction-of-normal-episodes.
+           best_min_zuk_hp_normal is intentionally not surfaced: averaging mins
+           across envs is meaningless. Use the count grid instead. */
+        dict_set(out, "frac_min_hp_le_300_normal", log->count_min_hp_le_300_normal / log->n_normal);
+        dict_set(out, "frac_min_hp_le_240_normal", log->count_min_hp_le_240_normal / log->n_normal);
+        dict_set(out, "frac_min_hp_le_150_normal", log->count_min_hp_le_150_normal / log->n_normal);
+        dict_set(out, "frac_normal", log->n_normal);
     }
     if (log->n_snapshot > 0.0f) {
         float min_zhp_s = log->min_zuk_hp_snapshot / log->n_snapshot;

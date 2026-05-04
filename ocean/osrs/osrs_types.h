@@ -736,6 +736,14 @@ typedef struct {
     float episode_length_normal_died;
     float n_normal_died;
     float phase_reached_normal_sum;
+    /* D-audit tail counters: count of normal-start episodes that crossed
+       given Zuk HP thresholds, and the running minimum across all normal
+       episodes. mean min_zuk_hp_normal hides the distribution; these expose
+       the tail for demo selection / phase-2 readiness. */
+    float count_min_hp_le_300_normal;
+    float count_min_hp_le_240_normal;
+    float count_min_hp_le_150_normal;
+    float best_min_zuk_hp_normal;
     /* per-NPC-type stats (14 types each, for wandb only — not shown on dashboard) */
     float prayer_correct_by_type[14];
     float attacks_by_type[14];
