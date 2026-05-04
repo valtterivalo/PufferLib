@@ -1,0 +1,156 @@
+==============================================================================
+A1_v3  kvuqyvh9  (holographic-trooper-415)  state=finished
+==============================================================================
+Summary:
+  env/zuk_objective_normal            0.7091
+  env/score_normal                    0.7091
+  env/min_zuk_hp_normal               349.1355
+  env/wins_normal                     0
+  env/phase_reached_normal            2.3494
+  env/death_tick_normal               191.5874
+  env/episode_return_normal           7.9090
+Hparams (use these literally for A'):
+  train.learning_rate                 0.00654735
+  train.ent_coef                      0.00261701
+  train.gamma                         0.9995
+  train.gae_lambda                    0.948114
+  train.min_lr_ratio                  0.237302
+  train.clip_coef                     0.0997498
+  train.vf_coef                       0.0981473
+  train.vf_clip_coef                  0.1
+  train.max_grad_norm                 2.9499
+  train.replay_ratio                  0.946354
+  train.prio_alpha                    0.106414
+  train.vtrace_rho_clip               3.71578
+  train.vtrace_c_clip                 2.77775
+
+==============================================================================
+A1_v3  fs4s6vst  (elegant-transport-422)  state=finished
+==============================================================================
+Summary:
+  env/zuk_objective_normal            0.7053
+  env/score_normal                    0.7053
+  env/min_zuk_hp_normal               353.6832
+  env/wins_normal                     0
+  env/phase_reached_normal            2.3340
+  env/death_tick_normal               188.5038
+  env/episode_return_normal           7.8333
+Hparams (use these literally for A'):
+  train.learning_rate                 0.0148321
+  train.ent_coef                      0.0100298
+  train.gamma                         0.9995
+  train.gae_lambda                    0.850901
+  train.min_lr_ratio                  0.2
+  train.clip_coef                     0.149895
+  train.vf_coef                       0.5
+  train.vf_clip_coef                  0.1
+  train.max_grad_norm                 2.65452
+  train.replay_ratio                  0.616917
+  train.prio_alpha                    0.0223805
+  train.vtrace_rho_clip               4.84801
+  train.vtrace_c_clip                 1.80068
+
+==============================================================================
+A1_v3  e3vyhuh9  (rebel-republic-429)  state=finished
+==============================================================================
+Summary:
+  env/zuk_objective_normal            0.6077
+  env/score_normal                    0.6077
+  env/min_zuk_hp_normal               470.7904
+  env/wins_normal                     0
+  env/phase_reached_normal            1.9425
+  env/death_tick_normal               157.2455
+  env/episode_return_normal           6.7909
+Hparams (use these literally for A'):
+  train.learning_rate                 0.0091954
+  train.ent_coef                      0.00154412
+  train.gamma                         0.99974
+  train.gae_lambda                    0.89284
+  train.min_lr_ratio                  0.226254
+  train.clip_coef                     0.0659328
+  train.vf_coef                       0.5
+  train.vf_clip_coef                  0.1
+  train.max_grad_norm                 2.47366
+  train.replay_ratio                  0.893914
+  train.prio_alpha                    0.023369
+  train.vtrace_rho_clip               4.46444
+  train.vtrace_c_clip                 2.01167
+
+==============================================================================
+A1_v3  4c0z0c4n  (scruffy-looking-ewok-439)  state=finished
+==============================================================================
+Summary:
+  env/zuk_objective_normal            0.6054
+  env/score_normal                    0.6054
+  env/min_zuk_hp_normal               473.4657
+  env/wins_normal                     0
+  env/phase_reached_normal            1.9523
+  env/death_tick_normal               150.6333
+  env/episode_return_normal           6.7166
+Hparams (use these literally for A'):
+  train.learning_rate                 0.00777303
+  train.ent_coef                      0.00764294
+  train.gamma                         0.9995
+  train.gae_lambda                    0.874303
+  train.min_lr_ratio                  0.217866
+  train.clip_coef                     0.104352
+  train.vf_coef                       0.470602
+  train.vf_clip_coef                  0.146727
+  train.max_grad_norm                 2.62505
+  train.replay_ratio                  1.08591
+  train.prio_alpha                    0.0825057
+  train.vtrace_rho_clip               4.77159
+  train.vtrace_c_clip                 2.00895
+
+==============================================================================
+A2_ctrl  7os16e09  (peach-shape-241)  state=finished
+==============================================================================
+Summary:
+  env/zuk_objective_normal            0.7870
+  env/score_normal                    0.7870
+  env/min_zuk_hp_normal               255.6531
+  env/wins_normal                     0
+  env/phase_reached_normal            2.8265
+  env/death_tick_normal               291.5408
+  env/episode_return_normal           8.2726
+Hparams (use these literally for A'):
+  train.learning_rate                 0.00993096
+  train.ent_coef                      0.00305391
+  train.gamma                         0.9995
+  train.gae_lambda                    0.914683
+  train.min_lr_ratio                  0.864685
+  train.clip_coef                     0.0882743
+  train.vf_coef                       0.113187
+  train.vf_clip_coef                  0.491515
+  train.max_grad_norm                 2.62116
+  train.replay_ratio                  1.13936
+  train.prio_alpha                    0.185968
+  train.vtrace_rho_clip               3.61106
+  train.vtrace_c_clip                 1.39096
+
+==============================================================================
+A2_ctrl  nq35wm0g  (solar-dew-256)  state=finished
+==============================================================================
+Summary:
+  env/zuk_objective_normal            0.7751
+  env/score_normal                    0.7751
+  env/min_zuk_hp_normal               269.9161
+  env/wins_normal                     0
+  env/phase_reached_normal            2.7343
+  env/death_tick_normal               227.9965
+  env/episode_return_normal           8.4483
+Hparams (use these literally for A'):
+  train.learning_rate                 0.00636294
+  train.ent_coef                      0.00741119
+  train.gamma                         0.9995
+  train.gae_lambda                    0.888229
+  train.min_lr_ratio                  0.96171
+  train.clip_coef                     0.076379
+  train.vf_coef                       0.124912
+  train.vf_clip_coef                  0.154205
+  train.max_grad_norm                 2.59451
+  train.replay_ratio                  0.579744
+  train.prio_alpha                    0.180554
+  train.vtrace_rho_clip               3.37539
+  train.vtrace_c_clip                 1.26145
+

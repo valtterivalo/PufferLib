@@ -1,0 +1,200 @@
+[
+  {
+    "run_id": "kvuqyvh9",
+    "arm": "A1_v3",
+    "name": "holographic-trooper-415",
+    "tags": [
+      "stage-r1-v3-rebalanced"
+    ],
+    "state": "finished",
+    "hparams": {
+      "train.learning_rate": 0.006547348566644796,
+      "train.ent_coef": 0.002617007620428804,
+      "train.gamma": 0.9995,
+      "train.gae_lambda": 0.9481135119082286,
+      "train.min_lr_ratio": 0.2373021387577948,
+      "train.clip_coef": 0.09974981785734705,
+      "train.vf_coef": 0.09814731502801533,
+      "train.vf_clip_coef": 0.1,
+      "train.max_grad_norm": 2.949900183991357,
+      "train.replay_ratio": 0.9463540179422352,
+      "train.prio_alpha": 0.10641384219607952,
+      "train.vtrace_rho_clip": 3.715780800638065,
+      "train.vtrace_c_clip": 2.7777539073822792
+    },
+    "summary": {
+      "env/zuk_objective_normal": 0.7090537548065186,
+      "env/score_normal": 0.7090537548065186,
+      "env/min_zuk_hp_normal": 349.1355285644531,
+      "env/wins_normal": 0,
+      "env/phase_reached_normal": 2.349397659301758,
+      "env/death_tick_normal": 191.5873565673828,
+      "env/episode_return_normal": 7.909042835235596
+    }
+  },
+  {
+    "run_id": "fs4s6vst",
+    "arm": "A1_v3",
+    "name": "elegant-transport-422",
+    "tags": [
+      "stage-r1-v3-rebalanced"
+    ],
+    "state": "finished",
+    "hparams": {
+      "train.learning_rate": 0.01483207758095877,
+      "train.ent_coef": 0.01002982960828574,
+      "train.gamma": 0.9995,
+      "train.gae_lambda": 0.8509007421498984,
+      "train.min_lr_ratio": 0.2,
+      "train.clip_coef": 0.14989450546019484,
+      "train.vf_coef": 0.49999999999999994,
+      "train.vf_clip_coef": 0.1,
+      "train.max_grad_norm": 2.654520202679482,
+      "train.replay_ratio": 0.6169167033147319,
+      "train.prio_alpha": 0.022380481767449,
+      "train.vtrace_rho_clip": 4.848006101127459,
+      "train.vtrace_c_clip": 1.800675589308859
+    },
+    "summary": {
+      "env/zuk_objective_normal": 0.7052639722824097,
+      "env/score_normal": 0.7052639722824097,
+      "env/min_zuk_hp_normal": 353.6831970214844,
+      "env/wins_normal": 0,
+      "env/phase_reached_normal": 2.3339693546295166,
+      "env/death_tick_normal": 188.5038146972656,
+      "env/episode_return_normal": 7.833279132843018
+    }
+  },
+  {
+    "run_id": "e3vyhuh9",
+    "arm": "A1_v3",
+    "name": "rebel-republic-429",
+    "tags": [
+      "stage-r1-v3-rebalanced"
+    ],
+    "state": "finished",
+    "hparams": {
+      "train.learning_rate": 0.009195403858097974,
+      "train.ent_coef": 0.001544116026115421,
+      "train.gamma": 0.999739983246488,
+      "train.gae_lambda": 0.8928401233821004,
+      "train.min_lr_ratio": 0.2262544236142252,
+      "train.clip_coef": 0.06593283198643661,
+      "train.vf_coef": 0.49999999999999994,
+      "train.vf_clip_coef": 0.1,
+      "train.max_grad_norm": 2.4736634576512664,
+      "train.replay_ratio": 0.893913689038105,
+      "train.prio_alpha": 0.023368986439025963,
+      "train.vtrace_rho_clip": 4.464440732252642,
+      "train.vtrace_c_clip": 2.0116668393363417
+    },
+    "summary": {
+      "env/zuk_objective_normal": 0.6076746582984924,
+      "env/score_normal": 0.6076746582984924,
+      "env/min_zuk_hp_normal": 470.7904052734375,
+      "env/wins_normal": 0,
+      "env/phase_reached_normal": 1.942515015602112,
+      "env/death_tick_normal": 157.24551391601562,
+      "env/episode_return_normal": 6.7909345626831055
+    }
+  },
+  {
+    "run_id": "4c0z0c4n",
+    "arm": "A1_v3",
+    "name": "scruffy-looking-ewok-439",
+    "tags": [
+      "stage-r1-v3-rebalanced"
+    ],
+    "state": "finished",
+    "hparams": {
+      "train.learning_rate": 0.007773034605635744,
+      "train.ent_coef": 0.007642940415823469,
+      "train.gamma": 0.9995,
+      "train.gae_lambda": 0.8743027550749786,
+      "train.min_lr_ratio": 0.21786633445753695,
+      "train.clip_coef": 0.10435198418837284,
+      "train.vf_coef": 0.4706017805205218,
+      "train.vf_clip_coef": 0.14672661737619228,
+      "train.max_grad_norm": 2.625047249292215,
+      "train.replay_ratio": 1.0859075036447745,
+      "train.prio_alpha": 0.08250569688691411,
+      "train.vtrace_rho_clip": 4.771588743496611,
+      "train.vtrace_c_clip": 2.008953059678186
+    },
+    "summary": {
+      "env/zuk_objective_normal": 0.6054452657699585,
+      "env/score_normal": 0.6054452657699585,
+      "env/min_zuk_hp_normal": 473.4656677246094,
+      "env/wins_normal": 0,
+      "env/phase_reached_normal": 1.9522700309753416,
+      "env/death_tick_normal": 150.63330078125,
+      "env/episode_return_normal": 6.716617107391357
+    }
+  },
+  {
+    "run_id": "7os16e09",
+    "arm": "A2_ctrl",
+    "name": "peach-shape-241",
+    "tags": [
+      "stage-r1-current-widened"
+    ],
+    "state": "finished",
+    "hparams": {
+      "train.learning_rate": 0.009930962914206313,
+      "train.ent_coef": 0.0030539088828903612,
+      "train.gamma": 0.9995,
+      "train.gae_lambda": 0.9146827557999652,
+      "train.min_lr_ratio": 0.8646853870707847,
+      "train.clip_coef": 0.08827427034165314,
+      "train.vf_coef": 0.1131866955954459,
+      "train.vf_clip_coef": 0.49151500489511546,
+      "train.max_grad_norm": 2.6211624215137066,
+      "train.replay_ratio": 1.139356828848019,
+      "train.prio_alpha": 0.18596814126720285,
+      "train.vtrace_rho_clip": 3.611064834599955,
+      "train.vtrace_c_clip": 1.390964221776088
+    },
+    "summary": {
+      "env/zuk_objective_normal": 0.7869557738304138,
+      "env/score_normal": 0.7869557738304138,
+      "env/min_zuk_hp_normal": 255.6530609130859,
+      "env/wins_normal": 0,
+      "env/phase_reached_normal": 2.826530694961548,
+      "env/death_tick_normal": 291.5408020019531,
+      "env/episode_return_normal": 8.272550582885742
+    }
+  },
+  {
+    "run_id": "nq35wm0g",
+    "arm": "A2_ctrl",
+    "name": "solar-dew-256",
+    "tags": [
+      "stage-r1-current-widened"
+    ],
+    "state": "finished",
+    "hparams": {
+      "train.learning_rate": 0.006362941481309548,
+      "train.ent_coef": 0.007411194414434572,
+      "train.gamma": 0.9995,
+      "train.gae_lambda": 0.8882286342254024,
+      "train.min_lr_ratio": 0.961709954371178,
+      "train.clip_coef": 0.07637902335141177,
+      "train.vf_coef": 0.1249124578356959,
+      "train.vf_clip_coef": 0.15420493028773827,
+      "train.max_grad_norm": 2.5945053612871805,
+      "train.replay_ratio": 0.5797439202742894,
+      "train.prio_alpha": 0.1805535964471182,
+      "train.vtrace_rho_clip": 3.375388381526011,
+      "train.vtrace_c_clip": 1.2614500763553322
+    },
+    "summary": {
+      "env/zuk_objective_normal": 0.7750699520111084,
+      "env/score_normal": 0.7750699520111084,
+      "env/min_zuk_hp_normal": 269.91607666015625,
+      "env/wins_normal": 0,
+      "env/phase_reached_normal": 2.7342658042907715,
+      "env/death_tick_normal": 227.9965057373047,
+      "env/episode_return_normal": 8.44828987121582
+    }
+  }
+]
