@@ -59,13 +59,15 @@ def safe(summary, key):
 
 def fetch_arm(api, arm):
     """arm in {'a1-v3','a2-ctrl'}.  Returns list of finished runs with summary."""
-    runs = list(api.runs(PROJECT, filters={"tags": {"$regex": f"{TAG_PREFIX}-{arm}-"}}))
+    needle = f"{TAG_PREFIX}-{arm}-"
+    # wandb tag filters don't support $regex; pull broadly and filter client-side.
+    runs = list(api.runs(PROJECT, filters={"state": "finished"}))
     rows = []
     for r in runs:
-        if r.state != "finished":
-            continue
         tags = r.tags or []
-        cell_tag = next((t for t in tags if t.startswith(TAG_PREFIX)), None)
+        cell_tag = next((t for t in tags if t.startswith(needle)), None)
+        if cell_tag is None:
+            continue
         rows.append({
             "id": r.id,
             "tag": cell_tag,

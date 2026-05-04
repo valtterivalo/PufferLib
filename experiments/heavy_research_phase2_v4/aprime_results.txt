@@ -1,0 +1,55 @@
+wandb: Currently logged in as: valtterivalo (valtterivalo-clock-cloud) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+Pulling A1 (v3) ...
+  14 finished v3 runs
+Pulling A2 (ctrl) ...
+  6 finished ctrl runs
+
+==============================================================================
+A1: v3 reward (200M): n=14
+==============================================================================
+  scores: best=0.7375  top3_med=0.6284  top10_med=0.5701  p50=0.5570  worst=0.3223
+  wins:    total_normal_wins=0.000  runs_with_any_win=0
+  ceiling: cells with min_hp<=150: 0/14    <=300: 0/14
+  vs R1 baseline: p50 +0.034  top10_med -0.026  best +0.029
+
+  top 10 cells:
+    v3xzk1qs   score=0.7375 win=0.000 min_hp= 314.9 phase=2.51 death_t=187.0  tag=stage-r2-aprime-a1-v3-e3vyhuh9-s5
+    842dojh0   score=0.6284 win=0.000 min_hp= 445.9 phase=2.00 death_t=148.5  tag=stage-r2-aprime-a1-v3-e3vyhuh9-s1
+    t5k6svai   score=0.5914 win=0.000 min_hp= 490.3 phase=1.89 death_t=148.2  tag=stage-r2-aprime-a1-v3-kvuqyvh9-s4
+    fidtrqal   score=0.5815 win=0.000 min_hp= 502.2 phase=1.83 death_t=149.3  tag=stage-r2-aprime-a1-v3-fs4s6vst-s5
+    zpsbd3uq   score=0.5717 win=0.000 min_hp= 514.0 phase=1.86 death_t=148.1  tag=stage-r2-aprime-a1-v3-kvuqyvh9-s1
+    yfwbmszh   score=0.5685 win=0.000 min_hp= 517.8 phase=1.78 death_t=142.4  tag=stage-r2-aprime-a1-v3-fs4s6vst-s4
+    4wbhq9uy   score=0.5576 win=0.000 min_hp= 530.9 phase=1.70 death_t=138.9  tag=stage-r2-aprime-a1-v3-fs4s6vst-s1
+    b4u4fn73   score=0.5563 win=0.000 min_hp= 532.4 phase=1.75 death_t=148.8  tag=stage-r2-aprime-a1-v3-kvuqyvh9-s3
+    m8k9xxcz   score=0.5525 win=0.000 min_hp= 537.0 phase=1.72 death_t=146.7  tag=stage-r2-aprime-a1-v3-kvuqyvh9-s5
+    cxhfn9nn   score=0.5508 win=0.000 min_hp= 539.0 phase=1.71 death_t=142.7  tag=stage-r2-aprime-a1-v3-e3vyhuh9-s4
+
+==============================================================================
+A2: control reward (200M): n=6
+==============================================================================
+  scores: best=0.3358  top3_med=0.3302  top10_med=0.2085  p50=0.2085  worst=0.0000
+  wins:    total_normal_wins=0.000  runs_with_any_win=0
+  ceiling: cells with min_hp<=150: 0/6    <=300: 0/6
+  vs R1 baseline: p50 -0.091  top10_med -0.367  best -0.451
+
+  top 10 cells:
+    yoyxsq37   score=0.3358 win=0.000 min_hp= 797.0 phase=0.83 death_t= 92.4  tag=stage-r2-aprime-a2-ctrl-nq35wm0g-s3
+    8dzpqn3e   score=0.3302 win=0.000 min_hp= 803.7 phase=0.85 death_t= 92.3  tag=stage-r2-aprime-a2-ctrl-nq35wm0g-s1
+    abe6baml   score=0.3240 win=0.000 min_hp= 811.2 phase=0.82 death_t= 92.8  tag=stage-r2-aprime-a2-ctrl-nq35wm0g-s2
+    9h8lcm60   score=0.0929 win=0.000 min_hp=1088.5 phase=0.01 death_t= 36.5  tag=stage-r2-aprime-a2-ctrl-7os16e09-s2
+    l3mfw2qy   score=0.0833 win=0.000 min_hp=1100.0 phase=0.00 death_t= 33.4  tag=stage-r2-aprime-a2-ctrl-7os16e09-s3
+    paxhewzu   score=0.0000 win=0.000 min_hp=1200.0 phase=0.00 death_t= 50.2  tag=stage-r2-aprime-a2-ctrl-7os16e09-s1
+
+==============================================================================
+Gates
+==============================================================================
+
+STRONG_CONTINUE: no
+
+POSITIVE_UNDERTRAIN: no
+
+CONTROL_CEILING_WARN: no
+
+LONGER_PPO_NOGO: YES
+  All conditions hold:
+    0 wins, best=0.738<0.78, top10_med=0.570<=0.63
