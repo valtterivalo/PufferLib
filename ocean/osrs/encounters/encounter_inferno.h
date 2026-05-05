@@ -2689,14 +2689,161 @@ static void inf_apply_npc_death(InfernoState* s, int npc_idx) {
     }
 }
 
+typedef struct {
+    int target_slot;
+    int gear;
+    int overhead_style;
+    int offensive;
+} InfOraclePick;
+
+static int inf_oracle_trigger_active(const InfernoState* s, int mode) {
+    int zuk_idx = inf_find_live_zuk_idx(s);
+    if (zuk_idx < 0) return 0;
+    int zuk_hp = s->npcs[zuk_idx].hp;
+    if (mode == 1 || mode == 2 || mode == 8) return zuk_hp <= 300;
+    if (mode == 3) return zuk_hp <= 240;
+    if (mode >= 4 && mode <= 7) return s->zuk.jad_spawned || zuk_hp <= 600;
+    return 0;
+}
+
+static InfOraclePick inf_oracle_pick_full(const InfernoState* s, int mode) {
+    InfOraclePick pick = { -1, -1, ATTACK_STYLE_NONE, OFFENSIVE_PRAYER_NONE };
+    if (mode <= 0 || !inf_oracle_trigger_active(s, mode)) return pick;
+
+    for (int o = 22; o < 25; o++) {
+        int n = s->current_obs_slots[o];
+        if (n >= 0 && n < INF_MAX_NPCS &&
+            s->npcs[n].active && s->npcs[n].death_ticks == 0 &&
+            s->npcs[n].type == INF_NPC_JAD) {
+            pick.target_slot = o;
+            pick.gear = INF_GEAR_TBOW;
+            pick.offensive = OFFENSIVE_PRAYER_RIGOUR;
+            int jas = s->npcs[n].jad_attack_style;
+            if (jas == ATTACK_STYLE_RANGED) pick.overhead_style = ATTACK_STYLE_RANGED;
+            else if (jas == ATTACK_STYLE_MAGIC) pick.overhead_style = ATTACK_STYLE_MAGIC;
+            return pick;
+        }
+    }
+    if (mode == 1) return pick;
+
+    for (int o = 33; o < 37; o++) {
+        int n = s->current_obs_slots[o];
+        if (n >= 0 && n < INF_MAX_NPCS &&
+            s->npcs[n].active && s->npcs[n].death_ticks == 0 &&
+            s->npcs[n].type == INF_NPC_HEALER_ZUK) {
+            pick.target_slot = o;
+            pick.gear = INF_GEAR_BP;
+            pick.offensive = OFFENSIVE_PRAYER_RIGOUR;
+            pick.overhead_style = ATTACK_STYLE_MAGIC;
+            return pick;
+        }
+    }
+
+    for (int o = 0; o < 22; o++) {
+        int n = s->current_obs_slots[o];
+        if (n < 0 || n >= INF_MAX_NPCS) continue;
+        if (!s->npcs[n].active || s->npcs[n].death_ticks != 0) continue;
+        int t = s->npcs[n].type;
+        if (t == INF_NPC_ZUK || t == INF_NPC_ZUK_SHIELD ||
+            t == INF_NPC_JAD ||
+            t == INF_NPC_HEALER_ZUK || t == INF_NPC_HEALER_JAD)
+            continue;
+        pick.target_slot = o;
+        pick.offensive = OFFENSIVE_PRAYER_RIGOUR;
+        if (t == INF_NPC_MAGER) {
+            pick.gear = INF_GEAR_TBOW;
+            pick.overhead_style = ATTACK_STYLE_MAGIC;
+        } else if (t == INF_NPC_RANGER) {
+            pick.gear = INF_GEAR_TBOW;
+            pick.overhead_style = ATTACK_STYLE_RANGED;
+        } else if (t == INF_NPC_MELEER) {
+            pick.gear = INF_GEAR_BP;
+            pick.overhead_style = ATTACK_STYLE_MELEE;
+        } else {
+            pick.gear = INF_GEAR_BP;
+        }
+        return pick;
+    }
+
+    return pick;
+}
+
+static int inf_oracle_overrides_target(int mode) {
+    return mode >= 1 && mode <= 8;
+}
+
+static int inf_oracle_overrides_gear_offensive(int mode) {
+    return mode == 6 || mode == 7 || mode == 8;
+}
+
+static int inf_oracle_overrides_overhead(int mode) {
+    return mode == 5 || mode == 7 || mode == 8;
+}
+
+static int inf_oracle_overhead_action_for(const InfernoState* s, int wanted_style) {
+    OverheadPrayer want = PRAYER_NONE;
+    int toggle_action = ENCOUNTER_OVERHEAD_NO_CHANGE;
+    if (wanted_style == ATTACK_STYLE_RANGED) {
+        want = PRAYER_PROTECT_RANGED;
+        toggle_action = ENCOUNTER_OVERHEAD_TOGGLE_RANGED;
+    } else if (wanted_style == ATTACK_STYLE_MAGIC) {
+        want = PRAYER_PROTECT_MAGIC;
+        toggle_action = ENCOUNTER_OVERHEAD_TOGGLE_MAGIC;
+    } else if (wanted_style == ATTACK_STYLE_MELEE) {
+        want = PRAYER_PROTECT_MELEE;
+        toggle_action = ENCOUNTER_OVERHEAD_TOGGLE_MELEE;
+    } else {
+        return ENCOUNTER_OVERHEAD_NO_CHANGE;
+    }
+    if (s->player.prayer == want) return ENCOUNTER_OVERHEAD_NO_CHANGE;
+    return toggle_action;
+}
+
+static int inf_oracle_offensive_action_for(const InfernoState* s, int wanted_offensive) {
+    if (wanted_offensive == OFFENSIVE_PRAYER_RIGOUR) {
+        if (s->player.offensive_prayer == OFFENSIVE_PRAYER_RIGOUR) return ENCOUNTER_OFFENSIVE_NO_CHANGE;
+        return ENCOUNTER_OFFENSIVE_TOGGLE_RIGOUR;
+    }
+    if (wanted_offensive == OFFENSIVE_PRAYER_PIETY) {
+        if (s->player.offensive_prayer == OFFENSIVE_PRAYER_PIETY) return ENCOUNTER_OFFENSIVE_NO_CHANGE;
+        return ENCOUNTER_OFFENSIVE_TOGGLE_PIETY;
+    }
+    if (wanted_offensive == OFFENSIVE_PRAYER_AUGURY) {
+        if (s->player.offensive_prayer == OFFENSIVE_PRAYER_AUGURY) return ENCOUNTER_OFFENSIVE_NO_CHANGE;
+        return ENCOUNTER_OFFENSIVE_TOGGLE_AUGURY;
+    }
+    return ENCOUNTER_OFFENSIVE_NO_CHANGE;
+}
+
+static int inf_oracle_gear_action_for(const InfernoState* s, int wanted_gear) {
+    if (wanted_gear < 0) return 0;
+    if (s->weapon_set == wanted_gear) return 0;
+    return wanted_gear + 1;
+}
+
 static void inf_player_pretick(InfernoState* s, const int* actions) {
     /* apply prayer actions. each helper returns 1 on OFF→ON transition so we
        can skip that slot's drain this tick (wiki: no drain on activation tick). */
     OffensivePrayer prev_offensive = s->player.offensive_prayer;
-    if (encounter_apply_overhead_action(&s->player.prayer, actions[INF_HEAD_PRAYER])) {
+    int prayer_act = actions[INF_HEAD_PRAYER];
+    int offensive_act = actions[INF_HEAD_OFFENSIVE];
+    if (s->oracle_mode > 0) {
+        InfOraclePick pick = inf_oracle_pick_full(s, s->oracle_mode);
+        if (pick.target_slot >= 0) {
+            if (inf_oracle_overrides_overhead(s->oracle_mode) &&
+                pick.overhead_style != ATTACK_STYLE_NONE) {
+                prayer_act = inf_oracle_overhead_action_for(s, pick.overhead_style);
+            }
+            if (inf_oracle_overrides_gear_offensive(s->oracle_mode) &&
+                pick.offensive != OFFENSIVE_PRAYER_NONE) {
+                offensive_act = inf_oracle_offensive_action_for(s, pick.offensive);
+            }
+        }
+    }
+    if (encounter_apply_overhead_action(&s->player.prayer, prayer_act)) {
         s->player.prayer_just_activated = 1;
     }
-    if (encounter_apply_offensive_action(&s->player.offensive_prayer, actions[INF_HEAD_OFFENSIVE])) {
+    if (encounter_apply_offensive_action(&s->player.offensive_prayer, offensive_act)) {
         s->player.offensive_prayer_just_activated = 1;
     }
     /* inferno loadouts have ~0 prayer bonus (armadyl/ancestral/torva); pass 0.
@@ -2758,48 +2905,6 @@ static void inf_apply_human_player_commands(InfernoState* s) {
         inf_refresh_human_loadout_stats(s);
 }
 
-static int inf_oracle_pick_target_slot(const InfernoState* s, int mode) {
-    if (mode <= 0) return -1;
-    int zuk_idx = inf_find_live_zuk_idx(s);
-    if (zuk_idx < 0) return -1;
-    int zuk_hp = s->npcs[zuk_idx].hp;
-    int threshold = (mode == 3) ? 240 : 300;
-    if (zuk_hp > threshold) return -1;
-
-    for (int o = 22; o < 25; o++) {
-        int n = s->current_obs_slots[o];
-        if (n >= 0 && n < INF_MAX_NPCS &&
-            s->npcs[n].active && s->npcs[n].death_ticks == 0 &&
-            s->npcs[n].type == INF_NPC_JAD) {
-            return o;
-        }
-    }
-    if (mode == 1) return -1;
-
-    for (int o = 33; o < 37; o++) {
-        int n = s->current_obs_slots[o];
-        if (n >= 0 && n < INF_MAX_NPCS &&
-            s->npcs[n].active && s->npcs[n].death_ticks == 0 &&
-            s->npcs[n].type == INF_NPC_HEALER_ZUK) {
-            return o;
-        }
-    }
-
-    for (int o = 0; o < 22; o++) {
-        int n = s->current_obs_slots[o];
-        if (n < 0 || n >= INF_MAX_NPCS) continue;
-        if (!s->npcs[n].active || s->npcs[n].death_ticks != 0) continue;
-        int t = s->npcs[n].type;
-        if (t == INF_NPC_ZUK || t == INF_NPC_ZUK_SHIELD ||
-            t == INF_NPC_JAD ||
-            t == INF_NPC_HEALER_ZUK || t == INF_NPC_HEALER_JAD)
-            continue;
-        return o;
-    }
-
-    return -1;
-}
-
 static void inf_tick_player(InfernoState* s, const int* actions, int can_attack) {
     if (s->player_last_interaction_age == 0)
         s->player_last_interaction_age = 1;
@@ -2808,6 +2913,12 @@ static void inf_tick_player(InfernoState* s, const int* actions, int can_attack)
         inf_apply_human_player_commands(s);
     } else {
         int gear_act = actions[INF_HEAD_GEAR];
+        if (inf_oracle_overrides_gear_offensive(s->oracle_mode)) {
+            InfOraclePick pick = inf_oracle_pick_full(s, s->oracle_mode);
+            if (pick.target_slot >= 0 && pick.gear >= 0) {
+                gear_act = inf_oracle_gear_action_for(s, pick.gear);
+            }
+        }
         if (gear_act >= 1) s->total_gear_switches++;
         if (gear_act >= 1 && gear_act <= 3) {
             InfWeaponSet new_set = (InfWeaponSet)(gear_act - 1);
@@ -2919,9 +3030,9 @@ static void inf_tick_player(InfernoState* s, const int* actions, int can_attack)
     /* attack target selection: persistent until NPC dies or player clicks ground.
        target=0 means "no new target this tick" (preserves existing target). */
     int target = actions[INF_HEAD_TARGET];
-    if (s->oracle_mode > 0) {
-        int override_slot = inf_oracle_pick_target_slot(s, s->oracle_mode);
-        if (override_slot >= 0) target = override_slot + 1;
+    if (inf_oracle_overrides_target(s->oracle_mode)) {
+        InfOraclePick pick = inf_oracle_pick_full(s, s->oracle_mode);
+        if (pick.target_slot >= 0) target = pick.target_slot + 1;
     }
     int has_new_target = 0;
     if (target > 0 && target <= INF_OBS_NPCS) {
@@ -3339,6 +3450,14 @@ static int inf_healer_is_actively_healing(const InfernoState* s, const InfNPC* n
     return s->npcs[npc->aggro_target].active;
 }
 
+static inline float inf_dmg_below_threshold(float old_hp, float new_hp, float t) {
+    if (new_hp >= old_hp) return 0.0f;
+    float a = old_hp < t ? old_hp : t;
+    float b = new_hp < t ? new_hp : t;
+    float d = a - b;
+    return d > 0.0f ? d : 0.0f;
+}
+
 static float inf_zuk_low_watermark_reward(InfernoState* s) {
     int zuk_idx = inf_find_live_zuk_idx(s);
     if (zuk_idx < 0) return 0.0f;
@@ -3346,19 +3465,17 @@ static float inf_zuk_low_watermark_reward(InfernoState* s) {
     float zuk_hp = (float)s->npcs[zuk_idx].hp;
     if (zuk_hp >= s->min_zuk_hp_seen) return 0.0f;
 
-    float dmg = s->min_zuk_hp_seen - zuk_hp;
+    float old_min = s->min_zuk_hp_seen;
+    float dmg = old_min - zuk_hp;
     float reward = s->damage_reward_coeff * dmg;
     s->min_zuk_hp_seen = zuk_hp;
 
-    /* D-deep boundary tracking. Each threshold first-crossed gets a
-       tick stamp; damage_after_X accumulates fresh damage at any time
-       Zuk HP is below the boundary. */
     if (s->tick_at_le_300 < 0 && zuk_hp <= 300.0f) s->tick_at_le_300 = s->tick;
     if (s->tick_at_le_240 < 0 && zuk_hp <= 240.0f) s->tick_at_le_240 = s->tick;
     if (s->tick_at_le_150 < 0 && zuk_hp <= 150.0f) s->tick_at_le_150 = s->tick;
-    if (zuk_hp <= 300.0f) s->damage_after_300 += dmg;
-    if (zuk_hp <= 240.0f) s->damage_after_240 += dmg;
-    if (zuk_hp <= 150.0f) s->damage_after_150 += dmg;
+    s->damage_after_300 += inf_dmg_below_threshold(old_min, zuk_hp, 300.0f);
+    s->damage_after_240 += inf_dmg_below_threshold(old_min, zuk_hp, 240.0f);
+    s->damage_after_150 += inf_dmg_below_threshold(old_min, zuk_hp, 150.0f);
 
     return reward;
 }
@@ -4292,8 +4409,8 @@ static void inf_put_int(EncounterState* state, const char* key, int value) {
     else if (strcmp(key, "human_command_mode") == 0)
         s->human_command_mode = encounter_require_binary_config("inferno", key, value);
     else if (strcmp(key, "oracle_mode") == 0) {
-        if (value < 0 || value > 3) {
-            fprintf(stderr, "inferno: oracle_mode must be in [0,3], got %d\n", value);
+        if (value < 0 || value > 8) {
+            fprintf(stderr, "inferno: oracle_mode must be in [0,8], got %d\n", value);
             abort();
         }
         s->oracle_mode = value;

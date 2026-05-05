@@ -759,6 +759,8 @@ typedef struct {
     float count_died_with_jad_alive_normal;
     float count_died_with_set_alive_normal;
     float count_died_with_healer_alive_normal;
+    float count_died_with_zuk_healer_alive_normal;
+    float count_died_with_jad_healer_alive_normal;
     /* per-NPC-type stats (14 types each, for wandb only — not shown on dashboard) */
     float prayer_correct_by_type[14];
     float attacks_by_type[14];

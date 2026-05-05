@@ -1,0 +1,28 @@
+/Users/valtterivalo/.pyenv/versions/3.12.3/lib/python3.12/site-packages/torch/cuda/__init__.py:61: FutureWarning: The pynvml package is deprecated. Please install nvidia-ml-py instead. If you did not install pynvml directly, please report this to the maintainers of the package that installed pynvml for you.
+  import pynvml  # type: ignore[import]
+oracle_mode=4 target=20000 total_agents=256 horizon=128 ckpt=checkpoints/osrs_inferno/p2k4szzs/0000000049971200.bin
+  rollout=1 n_this=50 n_total=50 elapsed=0.1s rate=500.0/s
+  rollout=2 n_this=207 n_total=257 elapsed=0.1s rate=1957.4/s
+  rollout=3 n_this=255 n_total=512 elapsed=0.2s rate=2626.4/s
+  rollout=4 n_this=200 n_total=712 elapsed=0.3s rate=2751.6/s
+  rollout=5 n_this=135 n_total=847 elapsed=0.3s rate=2564.2/s
+  rollout=10 n_this=177 n_total=1941 elapsed=0.7s rate=2905.6/s
+  rollout=15 n_this=199 n_total=2942 elapsed=1.0s rate=2958.3/s
+  rollout=20 n_this=239 n_total=4033 elapsed=1.3s rate=3047.0/s
+  rollout=26 n_this=230 n_total=5231 elapsed=1.7s rate=3057.0/s
+  rollout=32 n_this=223 n_total=6434 elapsed=2.1s rate=3078.8/s
+  rollout=37 n_this=193 n_total=7456 elapsed=2.4s rate=3088.1/s
+  rollout=42 n_this=222 n_total=8587 elapsed=2.7s rate=3141.4/s
+  rollout=47 n_this=222 n_total=9636 elapsed=3.1s rate=3153.4/s
+  rollout=52 n_this=213 n_total=10699 elapsed=3.4s rate=3157.9/s
+  rollout=57 n_this=195 n_total=11702 elapsed=3.7s rate=3144.6/s
+  rollout=62 n_this=210 n_total=12747 elapsed=4.0s rate=3158.3/s
+  rollout=67 n_this=203 n_total=13808 elapsed=4.4s rate=3171.3/s
+  rollout=72 n_this=230 n_total=14819 elapsed=4.7s rate=3173.5/s
+  rollout=77 n_this=206 n_total=15844 elapsed=5.0s rate=3176.6/s
+  rollout=82 n_this=199 n_total=16918 elapsed=5.3s rate=3190.8/s
+  rollout=87 n_this=205 n_total=17942 elapsed=5.6s rate=3192.3/s
+  rollout=92 n_this=226 n_total=18978 elapsed=5.9s rate=3195.5/s
+  rollout=97 n_this=198 n_total=19996 elapsed=6.3s rate=3196.8/s
+done. elapsed=6s n_normal=0
+wrote experiments/heavy_research_phase2_v4/oracle_eval_v2/E4.json

@@ -384,19 +384,25 @@ void c_step(Env* env) {
                 env->log.ticks_after_150_normal_sum += (float)(s->tick - s->tick_at_le_150);
                 env->log.damage_after_150_normal_sum += s->damage_after_150;
             }
-            /* D-deep: count deaths with jad / healer / 'set' (any non-zuk
-               combat NPC, excluding shield and healers) alive at terminal. */
+            /* D-deep: count deaths with jad / zuk-healer / jad-healer / set
+               (any non-zuk combat NPC excluding shield and healers) alive at
+               terminal. zuk-healer and jad-healer split per heavy-agent r5 -
+               they reflect different fight phases and need separate counters. */
             if (!won) {
-                int jad_alive = 0, healer_alive = 0, set_alive = 0;
+                int jad_alive = 0, zuk_healer_alive = 0, jad_healer_alive = 0, set_alive = 0;
                 for (int n = 0; n < INF_MAX_NPCS; n++) {
                     if (s->npcs[n].hp <= 0) continue;
                     int t = s->npcs[n].type;
                     if (t == INF_NPC_JAD) jad_alive = 1;
-                    else if (t == INF_NPC_HEALER_ZUK || t == INF_NPC_HEALER_JAD) healer_alive = 1;
+                    else if (t == INF_NPC_HEALER_ZUK) zuk_healer_alive = 1;
+                    else if (t == INF_NPC_HEALER_JAD) jad_healer_alive = 1;
                     else if (t != INF_NPC_ZUK && t != INF_NPC_ZUK_SHIELD) set_alive = 1;
                 }
                 if (jad_alive) env->log.count_died_with_jad_alive_normal += 1.0f;
-                if (healer_alive) env->log.count_died_with_healer_alive_normal += 1.0f;
+                if (zuk_healer_alive || jad_healer_alive)
+                    env->log.count_died_with_healer_alive_normal += 1.0f;
+                if (zuk_healer_alive) env->log.count_died_with_zuk_healer_alive_normal += 1.0f;
+                if (jad_healer_alive) env->log.count_died_with_jad_healer_alive_normal += 1.0f;
                 if (set_alive) env->log.count_died_with_set_alive_normal += 1.0f;
             }
         }
@@ -873,6 +879,10 @@ void my_log(Log* log, Dict* out) {
             log->count_died_with_jad_alive_normal / log->n_normal);
         dict_set(out, "frac_died_with_healer_alive_normal",
             log->count_died_with_healer_alive_normal / log->n_normal);
+        dict_set(out, "frac_died_with_zuk_healer_alive_normal",
+            log->count_died_with_zuk_healer_alive_normal / log->n_normal);
+        dict_set(out, "frac_died_with_jad_healer_alive_normal",
+            log->count_died_with_jad_healer_alive_normal / log->n_normal);
         dict_set(out, "frac_died_with_set_alive_normal",
             log->count_died_with_set_alive_normal / log->n_normal);
     }

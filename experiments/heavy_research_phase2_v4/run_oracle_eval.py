@@ -30,7 +30,7 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--env", default="osrs_inferno")
     p.add_argument("--checkpoint", required=True)
-    p.add_argument("--oracle-mode", type=int, default=0, choices=[0, 1, 2, 3])
+    p.add_argument("--oracle-mode", type=int, default=0, choices=[0, 1, 2, 3, 4, 5, 6, 7, 8])
     p.add_argument("--target-episodes", type=int, default=20000)
     p.add_argument("--total-agents", type=int, default=256)
     p.add_argument("--num-buffers", type=int, default=2)

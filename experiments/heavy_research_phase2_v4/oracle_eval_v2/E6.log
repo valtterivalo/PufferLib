@@ -1,0 +1,27 @@
+/Users/valtterivalo/.pyenv/versions/3.12.3/lib/python3.12/site-packages/torch/cuda/__init__.py:61: FutureWarning: The pynvml package is deprecated. Please install nvidia-ml-py instead. If you did not install pynvml directly, please report this to the maintainers of the package that installed pynvml for you.
+  import pynvml  # type: ignore[import]
+oracle_mode=6 target=20000 total_agents=256 horizon=128 ckpt=checkpoints/osrs_inferno/p2k4szzs/0000000049971200.bin
+  rollout=1 n_this=50 n_total=50 elapsed=0.1s rate=500.0/s
+  rollout=2 n_this=207 n_total=257 elapsed=0.1s rate=1731.0/s
+  rollout=3 n_this=255 n_total=512 elapsed=0.2s rate=2405.4/s
+  rollout=4 n_this=162 n_total=674 elapsed=0.3s rate=2427.4/s
+  rollout=5 n_this=193 n_total=867 elapsed=0.3s rate=2556.5/s
+  rollout=10 n_this=201 n_total=2003 elapsed=0.7s rate=3035.1/s
+  rollout=16 n_this=212 n_total=3194 elapsed=1.1s rate=3029.2/s
+  rollout=21 n_this=195 n_total=4272 elapsed=1.4s rate=3102.0/s
+  rollout=27 n_this=216 n_total=5486 elapsed=1.8s rate=3127.1/s
+  rollout=33 n_this=187 n_total=6668 elapsed=2.1s rate=3119.6/s
+  rollout=38 n_this=194 n_total=7703 elapsed=2.5s rate=3140.5/s
+  rollout=43 n_this=193 n_total=8835 elapsed=2.8s rate=3182.0/s
+  rollout=48 n_this=217 n_total=9898 elapsed=3.1s rate=3205.7/s
+  rollout=53 n_this=214 n_total=10959 elapsed=3.4s rate=3216.8/s
+  rollout=58 n_this=208 n_total=11979 elapsed=3.7s rate=3211.3/s
+  rollout=63 n_this=223 n_total=13029 elapsed=4.0s rate=3220.6/s
+  rollout=68 n_this=185 n_total=14053 elapsed=4.4s rate=3227.8/s
+  rollout=73 n_this=229 n_total=15107 elapsed=4.7s rate=3234.5/s
+  rollout=78 n_this=207 n_total=16129 elapsed=5.0s rate=3234.2/s
+  rollout=83 n_this=212 n_total=17197 elapsed=5.3s rate=3237.9/s
+  rollout=88 n_this=202 n_total=18206 elapsed=5.6s rate=3233.9/s
+  rollout=93 n_this=205 n_total=19240 elapsed=5.9s rate=3234.9/s
+done. elapsed=6s n_normal=0
+wrote experiments/heavy_research_phase2_v4/oracle_eval_v2/E6.json
