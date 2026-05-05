@@ -626,6 +626,11 @@ void my_init(Env* env, Dict* kwargs) {
             env->enc_state, "late_start_supply_profile_scale",
             (float)supply_profile_scale->value);
     }
+    DictItem* oracle_mode = dict_get_unsafe(kwargs, "oracle_mode");
+    if (oracle_mode) {
+        ENCOUNTER_INFERNO.put_int(
+            env->enc_state, "oracle_mode", (int)oracle_mode->value);
+    }
     /* match the 1-indexed → 0-indexed conversion done by encounter's put_int */
     int sw = start_wave ? (int)start_wave->value : 0;
     env->config_start_wave = (sw > 0) ? sw - 1 : 0;

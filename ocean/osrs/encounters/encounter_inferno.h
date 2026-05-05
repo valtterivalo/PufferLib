@@ -704,6 +704,12 @@ typedef struct {
     uint8_t phase_300_fired;
     float shield_penalty_episode_total;
 
+    /* eval-time oracle target-priority wrapper. 0=off (default).
+       1=Jad-only override when zuk_hp <= 300.
+       2=full priority (Jad > zuk-healer > set) when zuk_hp <= 300.
+       3=full priority when zuk_hp <= 240. */
+    int oracle_mode;
+
     Log log;
 } InfernoState;
 
@@ -1162,6 +1168,7 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
     float saved_phase_600_bonus = s->phase_600_bonus;
     float saved_phase_300_bonus = s->phase_300_bonus;
     float saved_shield_penalty_episode_cap = s->shield_penalty_episode_cap;
+    int saved_oracle_mode = s->oracle_mode;
     memset(s, 0, sizeof(InfernoState));
     s->log = saved_log;
     s->start_wave = saved_start;
@@ -1179,6 +1186,7 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
     s->phase_600_bonus = saved_phase_600_bonus;
     s->phase_300_bonus = saved_phase_300_bonus;
     s->shield_penalty_episode_cap = saved_shield_penalty_episode_cap;
+    s->oracle_mode = saved_oracle_mode;
 
     /* human click-to-move: no destination after reset */
     s->player_dest_x = -1;
@@ -2750,6 +2758,48 @@ static void inf_apply_human_player_commands(InfernoState* s) {
         inf_refresh_human_loadout_stats(s);
 }
 
+static int inf_oracle_pick_target_slot(const InfernoState* s, int mode) {
+    if (mode <= 0) return -1;
+    int zuk_idx = inf_find_live_zuk_idx(s);
+    if (zuk_idx < 0) return -1;
+    int zuk_hp = s->npcs[zuk_idx].hp;
+    int threshold = (mode == 3) ? 240 : 300;
+    if (zuk_hp > threshold) return -1;
+
+    for (int o = 22; o < 25; o++) {
+        int n = s->current_obs_slots[o];
+        if (n >= 0 && n < INF_MAX_NPCS &&
+            s->npcs[n].active && s->npcs[n].death_ticks == 0 &&
+            s->npcs[n].type == INF_NPC_JAD) {
+            return o;
+        }
+    }
+    if (mode == 1) return -1;
+
+    for (int o = 33; o < 37; o++) {
+        int n = s->current_obs_slots[o];
+        if (n >= 0 && n < INF_MAX_NPCS &&
+            s->npcs[n].active && s->npcs[n].death_ticks == 0 &&
+            s->npcs[n].type == INF_NPC_HEALER_ZUK) {
+            return o;
+        }
+    }
+
+    for (int o = 0; o < 22; o++) {
+        int n = s->current_obs_slots[o];
+        if (n < 0 || n >= INF_MAX_NPCS) continue;
+        if (!s->npcs[n].active || s->npcs[n].death_ticks != 0) continue;
+        int t = s->npcs[n].type;
+        if (t == INF_NPC_ZUK || t == INF_NPC_ZUK_SHIELD ||
+            t == INF_NPC_JAD ||
+            t == INF_NPC_HEALER_ZUK || t == INF_NPC_HEALER_JAD)
+            continue;
+        return o;
+    }
+
+    return -1;
+}
+
 static void inf_tick_player(InfernoState* s, const int* actions, int can_attack) {
     if (s->player_last_interaction_age == 0)
         s->player_last_interaction_age = 1;
@@ -2869,6 +2919,10 @@ static void inf_tick_player(InfernoState* s, const int* actions, int can_attack)
     /* attack target selection: persistent until NPC dies or player clicks ground.
        target=0 means "no new target this tick" (preserves existing target). */
     int target = actions[INF_HEAD_TARGET];
+    if (s->oracle_mode > 0) {
+        int override_slot = inf_oracle_pick_target_slot(s, s->oracle_mode);
+        if (override_slot >= 0) target = override_slot + 1;
+    }
     int has_new_target = 0;
     if (target > 0 && target <= INF_OBS_NPCS) {
         int obs_idx = target - 1;
@@ -4237,6 +4291,13 @@ static void inf_put_int(EncounterState* state, const char* key, int value) {
     else if (strcmp(key, "player_dest_y") == 0) s->player_dest_y = value;
     else if (strcmp(key, "human_command_mode") == 0)
         s->human_command_mode = encounter_require_binary_config("inferno", key, value);
+    else if (strcmp(key, "oracle_mode") == 0) {
+        if (value < 0 || value > 3) {
+            fprintf(stderr, "inferno: oracle_mode must be in [0,3], got %d\n", value);
+            abort();
+        }
+        s->oracle_mode = value;
+    }
     else encounter_abort_unknown_config("inferno", "int", key);
 }
 
