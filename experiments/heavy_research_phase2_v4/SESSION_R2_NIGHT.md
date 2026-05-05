@@ -52,6 +52,11 @@ or D-deep (death-cause instrumentation).
      mean only 0.717
    - Doubling training time does NOT advance frontier
 
+7. **B0 horizon=256** — 3 seeds × 50M from p2k4szzs at horizon=256
+   - Best: jzz50pdq (s2) score 0.763 — also below round-2 frontier
+   - Doubling rollout horizon does NOT advance frontier
+   - Plateau is robust to knob changes (iter count, training time, horizon)
+
 ## Frontier history
 
 | Stage | Best policy | Score | min_hp | wins | Notes |
@@ -63,6 +68,7 @@ or D-deep (death-cause instrumentation).
 | **C round 2** | **p2k4szzs** | **0.779** | **265** | **0** | **50M phase 2, current best** |
 | C round 3 | qovt84tm | 0.769 | 277 | 0 | 50M phase 2 |
 | C long-train | kvv4q3e8 | 0.770 | 277 | 0 | 100M phase 2 |
+| B0 horizon=256 | jzz50pdq | 0.763 | 284 | 0 | 50M phase 2, horizon=256 |
 
 ## What's at the ceiling
 
