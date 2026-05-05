@@ -588,6 +588,11 @@ typedef struct {
     float damage_after_150;
     float damage_dealt_this_tick;
     float damage_zuk_healers_this_tick;
+    float damage_jad_this_tick;
+    float damage_set_this_tick;
+    int kill_jad_this_tick;
+    int kill_zuk_healer_this_tick;
+    int kill_set_this_tick;
     float shield_damage_this_tick;
     int healer_tags_this_tick;
     float damage_received_this_tick;
@@ -704,10 +709,36 @@ typedef struct {
     uint8_t phase_300_fired;
     float shield_penalty_episode_total;
 
+    /* v6-soft-E late-add reward shape (heavy agent r5).
+       Active only when jad_spawned || zuk_hp <= 600. Defaults are 0 = off. */
+    float jad_damage_reward_coeff;
+    float zuk_healer_damage_reward_coeff;
+    float set_damage_reward_coeff;
+    float jad_kill_bonus;
+    float zuk_healer_kill_bonus;
+    float set_kill_bonus;
+    /* Multiplies low-watermark Zuk reward once jad_killed_this_episode is set.
+       1.0 = unchanged (default). >1.0 incentivises returning to Zuk after Jad kill. */
+    float post_jad_zuk_multiplier;
+    /* Multiplies low-watermark Zuk reward while a Jad is currently alive.
+       1.0 = unchanged (default). <1.0 softly discourages tunneling Zuk while Jad up. */
+    float jad_alive_zuk_multiplier;
+
+    /* per-episode kill bonus accumulators - emitted gradually to avoid PPO
+       reward clamp [-1, 1] truncating large kill bonuses. */
+    float pending_jad_kill_bonus;
+    float pending_zuk_healer_kill_bonus;
+    float pending_set_kill_bonus;
+    /* set once any Jad transitions from alive to dead (or all jads dead after
+       jad_spawned). enables post_jad_zuk_multiplier. */
+    uint8_t jad_killed_this_episode;
+
     /* eval-time oracle target-priority wrapper. 0=off (default).
        1=Jad-only override when zuk_hp <= 300.
        2=full priority (Jad > zuk-healer > set) when zuk_hp <= 300.
-       3=full priority when zuk_hp <= 240. */
+       3=full priority when zuk_hp <= 240.
+       4-7=full priority overrides at jad_spawn (target/+overhead/+gear/+all).
+       8=full priority @300 (timing comparison). */
     int oracle_mode;
 
     Log log;
@@ -1169,6 +1200,14 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
     float saved_phase_300_bonus = s->phase_300_bonus;
     float saved_shield_penalty_episode_cap = s->shield_penalty_episode_cap;
     int saved_oracle_mode = s->oracle_mode;
+    float saved_jad_damage_reward_coeff = s->jad_damage_reward_coeff;
+    float saved_zuk_healer_damage_reward_coeff = s->zuk_healer_damage_reward_coeff;
+    float saved_set_damage_reward_coeff = s->set_damage_reward_coeff;
+    float saved_jad_kill_bonus = s->jad_kill_bonus;
+    float saved_zuk_healer_kill_bonus = s->zuk_healer_kill_bonus;
+    float saved_set_kill_bonus = s->set_kill_bonus;
+    float saved_post_jad_zuk_multiplier = s->post_jad_zuk_multiplier;
+    float saved_jad_alive_zuk_multiplier = s->jad_alive_zuk_multiplier;
     memset(s, 0, sizeof(InfernoState));
     s->log = saved_log;
     s->start_wave = saved_start;
@@ -1187,6 +1226,16 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
     s->phase_300_bonus = saved_phase_300_bonus;
     s->shield_penalty_episode_cap = saved_shield_penalty_episode_cap;
     s->oracle_mode = saved_oracle_mode;
+    s->jad_damage_reward_coeff = saved_jad_damage_reward_coeff;
+    s->zuk_healer_damage_reward_coeff = saved_zuk_healer_damage_reward_coeff;
+    s->set_damage_reward_coeff = saved_set_damage_reward_coeff;
+    s->jad_kill_bonus = saved_jad_kill_bonus;
+    s->zuk_healer_kill_bonus = saved_zuk_healer_kill_bonus;
+    s->set_kill_bonus = saved_set_kill_bonus;
+    s->post_jad_zuk_multiplier = saved_post_jad_zuk_multiplier;
+    s->jad_alive_zuk_multiplier = saved_jad_alive_zuk_multiplier;
+    if (s->post_jad_zuk_multiplier <= 0.0f) s->post_jad_zuk_multiplier = 1.0f;
+    if (s->jad_alive_zuk_multiplier <= 0.0f) s->jad_alive_zuk_multiplier = 1.0f;
 
     /* human click-to-move: no destination after reset */
     s->player_dest_x = -1;
@@ -3361,14 +3410,29 @@ static void inf_resolve_player_projectiles_on_npcs(InfernoState* s) {
         if (!s->npcs[i].active || s->npcs[i].death_ticks > 0) continue;
         int spell = s->npcs[i].pending_hit.spell_type;
         float dmg_before = s->damage_dealt_this_tick;
+        int hp_before = s->npcs[i].hp;
         int landed = encounter_resolve_npc_pending_hit(
             &s->npcs[i].pending_hit,
             &s->npcs[i].hp, &s->npcs[i].hit_landed_this_tick, &s->npcs[i].hit_damage,
             &s->npcs[i].frozen_ticks, &blood_heal_acc, &s->damage_dealt_this_tick);
         if (landed) {
             float landed_damage = s->damage_dealt_this_tick - dmg_before;
-            if (s->npcs[i].type == INF_NPC_HEALER_ZUK)
+            int t = s->npcs[i].type;
+            int hp_after = s->npcs[i].hp;
+            if (t == INF_NPC_HEALER_ZUK) {
                 s->damage_zuk_healers_this_tick += landed_damage;
+            } else if (t == INF_NPC_JAD) {
+                s->damage_jad_this_tick += landed_damage;
+            } else if (t != INF_NPC_ZUK && t != INF_NPC_ZUK_SHIELD &&
+                       t != INF_NPC_HEALER_JAD) {
+                s->damage_set_this_tick += landed_damage;
+            }
+            if (hp_before > 0 && hp_after <= 0) {
+                if (t == INF_NPC_JAD) s->kill_jad_this_tick++;
+                else if (t == INF_NPC_HEALER_ZUK) s->kill_zuk_healer_this_tick++;
+                else if (t != INF_NPC_ZUK && t != INF_NPC_ZUK_SHIELD &&
+                         t != INF_NPC_HEALER_JAD) s->kill_set_this_tick++;
+            }
             s->npcs[i].hit_spell_type = spell;
             if (s->npcs[i].aggro_target != -1) {
                 if (s->npcs[i].type == INF_NPC_HEALER_ZUK ||
@@ -3468,6 +3532,11 @@ static float inf_zuk_low_watermark_reward(InfernoState* s) {
     float old_min = s->min_zuk_hp_seen;
     float dmg = old_min - zuk_hp;
     float reward = s->damage_reward_coeff * dmg;
+    if (s->jad_killed_this_episode) {
+        reward *= s->post_jad_zuk_multiplier;
+    } else if (s->zuk.jad_spawned) {
+        reward *= s->jad_alive_zuk_multiplier;
+    }
     s->min_zuk_hp_seen = zuk_hp;
 
     if (s->tick_at_le_300 < 0 && zuk_hp <= 300.0f) s->tick_at_le_300 = s->tick;
@@ -3485,6 +3554,8 @@ static float inf_compute_reward(InfernoState* s) {
     s->total_zuk_healer_damage += s->damage_zuk_healers_this_tick;
     s->total_damage_received += s->damage_received_this_tick;
     s->total_hp_restored += s->hp_restored_this_tick;
+
+    if (s->kill_jad_this_tick > 0) s->jad_killed_this_episode = 1;
 
     if (s->episode_over) {
         float win_bonus = (s->win_bonus_coeff > 0.0f) ? s->win_bonus_coeff : 1.0f;
@@ -3509,6 +3580,40 @@ static float inf_compute_reward(InfernoState* s) {
             fmaxf(0.0f, s->damage_dealt_this_tick - s->hp_restored_this_tick);
     }
     reward += s->tag_reward_coeff * (float)s->healer_tags_this_tick;
+
+    /* v6-soft-E: late-add reward shape. Active iff Jad has appeared this
+       episode or Zuk is below 600 HP (proxy for late-game state). */
+    int zuk_idx = inf_find_live_zuk_idx(s);
+    int zuk_hp_now = (zuk_idx >= 0) ? s->npcs[zuk_idx].hp : 1200;
+    int late_add_reward_active = s->zuk.jad_spawned || zuk_hp_now <= 600;
+    if (late_add_reward_active) {
+        reward += s->jad_damage_reward_coeff * s->damage_jad_this_tick;
+        reward += s->zuk_healer_damage_reward_coeff * s->damage_zuk_healers_this_tick;
+        reward += s->set_damage_reward_coeff * s->damage_set_this_tick;
+        s->pending_jad_kill_bonus +=
+            (float)s->kill_jad_this_tick * s->jad_kill_bonus;
+        s->pending_zuk_healer_kill_bonus +=
+            (float)s->kill_zuk_healer_this_tick * s->zuk_healer_kill_bonus;
+        s->pending_set_kill_bonus +=
+            (float)s->kill_set_this_tick * s->set_kill_bonus;
+    }
+    /* emit pending kill bonuses gradually so a single-tick kill doesn't
+       saturate the [-1, 1] PPO reward clamp. */
+    if (s->pending_jad_kill_bonus > 0.0f) {
+        float emit = fminf(0.07f, s->pending_jad_kill_bonus);
+        reward += emit;
+        s->pending_jad_kill_bonus -= emit;
+    }
+    if (s->pending_zuk_healer_kill_bonus > 0.0f) {
+        float emit = fminf(0.05f, s->pending_zuk_healer_kill_bonus);
+        reward += emit;
+        s->pending_zuk_healer_kill_bonus -= emit;
+    }
+    if (s->pending_set_kill_bonus > 0.0f) {
+        float emit = fminf(0.03f, s->pending_set_kill_bonus);
+        reward += emit;
+        s->pending_set_kill_bonus -= emit;
+    }
 
     float shield_penalty = s->shield_penalty_coeff * s->shield_damage_this_tick;
     if (s->shield_penalty_episode_cap > 0.0f) {
@@ -3546,6 +3651,11 @@ static void inf_step(EncounterState* state, const int* actions) {
     s->reward = 0.0f;
     s->damage_dealt_this_tick = 0.0f;
     s->damage_zuk_healers_this_tick = 0.0f;
+    s->damage_jad_this_tick = 0.0f;
+    s->damage_set_this_tick = 0.0f;
+    s->kill_jad_this_tick = 0;
+    s->kill_zuk_healer_this_tick = 0;
+    s->kill_set_this_tick = 0;
     s->shield_damage_this_tick = 0.0f;
     s->healer_tags_this_tick = 0;
     s->damage_received_this_tick = 0.0f;
@@ -4433,6 +4543,14 @@ static void inf_put_float(EncounterState* state, const char* key, float value) {
         inf_require_valid_supply_scale(value);
         s->late_start_supply_profile_scale = value;
     }
+    else if (strcmp(key, "jad_damage_reward_coeff") == 0) s->jad_damage_reward_coeff = value;
+    else if (strcmp(key, "zuk_healer_damage_reward_coeff") == 0) s->zuk_healer_damage_reward_coeff = value;
+    else if (strcmp(key, "set_damage_reward_coeff") == 0) s->set_damage_reward_coeff = value;
+    else if (strcmp(key, "jad_kill_bonus") == 0) s->jad_kill_bonus = value;
+    else if (strcmp(key, "zuk_healer_kill_bonus") == 0) s->zuk_healer_kill_bonus = value;
+    else if (strcmp(key, "set_kill_bonus") == 0) s->set_kill_bonus = value;
+    else if (strcmp(key, "post_jad_zuk_multiplier") == 0) s->post_jad_zuk_multiplier = value;
+    else if (strcmp(key, "jad_alive_zuk_multiplier") == 0) s->jad_alive_zuk_multiplier = value;
     else encounter_abort_unknown_config("inferno", "float", key);
 }
 

@@ -618,6 +618,10 @@ void my_init(Env* env, Dict* kwargs) {
         "win_bonus_coeff", "death_penalty_coeff",
         "phase_900_bonus", "phase_600_bonus", "phase_300_bonus",
         "shield_penalty_episode_cap",
+        "jad_damage_reward_coeff", "zuk_healer_damage_reward_coeff",
+        "set_damage_reward_coeff",
+        "jad_kill_bonus", "zuk_healer_kill_bonus", "set_kill_bonus",
+        "post_jad_zuk_multiplier", "jad_alive_zuk_multiplier",
     };
     for (size_t k = 0; k < sizeof(optional_float_keys)/sizeof(*optional_float_keys); k++) {
         DictItem* item = dict_get_unsafe(kwargs, optional_float_keys[k]);
