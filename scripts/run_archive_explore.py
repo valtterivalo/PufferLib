@@ -18,6 +18,12 @@ def main():
     parser.add_argument('--demo-max-replay-ticks', type=int, default=8192)
     parser.add_argument('--action-chunk-pool-capacity-ints', type=int, default=20_000_000,
                         help='Pool size for action chunks. Bump if you hit drops.')
+    parser.add_argument('--frontier-mode', type=int, default=0,
+                        help='1 = bias archive sampling toward high-q cells')
+    parser.add_argument('--frontier-q-floor', type=float, default=0.80)
+    parser.add_argument('--frontier-q-power', type=float, default=4.0)
+    parser.add_argument('--frontier-eps', type=float, default=0.10,
+                        help='probability of falling back to standard count-decay sampling')
     own_args = parser.parse_args()
 
     sys.argv = [sys.argv[0]]
@@ -45,6 +51,8 @@ def main():
 
             print(f'\n--- seed {seed} (iter={own_args.num_iterations}, '
                   f'cap={own_args.archive_capacity}) ---', flush=True)
+            print(f'DEBUG backend={backend}, has archive_explore={hasattr(backend, "archive_explore")}',
+                  flush=True)
 
             stats = backend.archive_explore(
                 pufferl,
@@ -56,6 +64,10 @@ def main():
                 demo_export_dir=demo_dir,
                 demo_max_count=own_args.demo_max_count,
                 demo_max_replay_ticks=own_args.demo_max_replay_ticks,
+                frontier_mode=own_args.frontier_mode,
+                frontier_q_floor=own_args.frontier_q_floor,
+                frontier_q_power=own_args.frontier_q_power,
+                frontier_eps=own_args.frontier_eps,
             )
             print(f'seed={seed}: {dict(stats)}', flush=True)
             summaries.append((seed, dict(stats)))

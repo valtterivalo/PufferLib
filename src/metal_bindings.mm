@@ -570,9 +570,17 @@ PYBIND11_MODULE(_C, m) {
         const std::string& archive_save_path,
         const std::string& demo_export_dir,
         int demo_max_count,
-        int demo_max_replay_ticks
+        int demo_max_replay_ticks,
+        int frontier_mode,
+        float frontier_q_floor,
+        float frontier_q_power,
+        float frontier_eps
     ) -> py::dict {
         PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
+        pufferl.archive_frontier_mode = frontier_mode;
+        pufferl.archive_frontier_q_floor = frontier_q_floor;
+        pufferl.archive_frontier_q_power = frontier_q_power;
+        pufferl.archive_frontier_eps = frontier_eps;
         Archive* archive = nullptr;
         ArchiveExploreStats stats;
         {
@@ -609,7 +617,11 @@ PYBIND11_MODULE(_C, m) {
     py::arg("archive_save_path") = std::string(""),
     py::arg("demo_export_dir") = std::string(""),
     py::arg("demo_max_count") = 100,
-    py::arg("demo_max_replay_ticks") = 8192);
+    py::arg("demo_max_replay_ticks") = 8192,
+    py::arg("frontier_mode") = 0,
+    py::arg("frontier_q_floor") = 0.80f,
+    py::arg("frontier_q_power") = 4.0f,
+    py::arg("frontier_eps") = 0.10f);
 
     m.def("reexport_demos_from_archive", [](
         const std::string& archive_path,

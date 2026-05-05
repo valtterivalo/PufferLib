@@ -368,6 +368,37 @@ void c_step(Env* env) {
             if (min_zuk_hp_term <= 150.0f) env->log.count_min_hp_le_150_normal += 1.0f;
             if (min_zuk_hp_term < env->log.best_min_zuk_hp_normal)
                 env->log.best_min_zuk_hp_normal = min_zuk_hp_term;
+
+            /* D-deep: per-threshold ticks-survived-after and damage-after.
+               tick_at_le_X is -1 when the boundary was never crossed; only
+               accumulate when the episode actually crossed. */
+            if (s->tick_at_le_300 >= 0) {
+                env->log.ticks_after_300_normal_sum += (float)(s->tick - s->tick_at_le_300);
+                env->log.damage_after_300_normal_sum += s->damage_after_300;
+            }
+            if (s->tick_at_le_240 >= 0) {
+                env->log.ticks_after_240_normal_sum += (float)(s->tick - s->tick_at_le_240);
+                env->log.damage_after_240_normal_sum += s->damage_after_240;
+            }
+            if (s->tick_at_le_150 >= 0) {
+                env->log.ticks_after_150_normal_sum += (float)(s->tick - s->tick_at_le_150);
+                env->log.damage_after_150_normal_sum += s->damage_after_150;
+            }
+            /* D-deep: count deaths with jad / healer / 'set' (any non-zuk
+               combat NPC, excluding shield and healers) alive at terminal. */
+            if (!won) {
+                int jad_alive = 0, healer_alive = 0, set_alive = 0;
+                for (int n = 0; n < INF_MAX_NPCS; n++) {
+                    if (s->npcs[n].hp <= 0) continue;
+                    int t = s->npcs[n].type;
+                    if (t == INF_NPC_JAD) jad_alive = 1;
+                    else if (t == INF_NPC_HEALER_ZUK || t == INF_NPC_HEALER_JAD) healer_alive = 1;
+                    else if (t != INF_NPC_ZUK && t != INF_NPC_ZUK_SHIELD) set_alive = 1;
+                }
+                if (jad_alive) env->log.count_died_with_jad_alive_normal += 1.0f;
+                if (healer_alive) env->log.count_died_with_healer_alive_normal += 1.0f;
+                if (set_alive) env->log.count_died_with_set_alive_normal += 1.0f;
+            }
         }
     skip_log:;
     }
@@ -809,6 +840,36 @@ void my_log(Log* log, Dict* out) {
         dict_set(out, "frac_min_hp_le_240_normal", log->count_min_hp_le_240_normal / log->n_normal);
         dict_set(out, "frac_min_hp_le_150_normal", log->count_min_hp_le_150_normal / log->n_normal);
         dict_set(out, "frac_normal", log->n_normal);
+        /* D-deep means conditional on having crossed the boundary. The
+           aggregator divided everything by n_total, so dividing by
+           count_min_hp_le_X (also divided by n_total) cancels n_total and
+           gives the true conditional mean. Surface 0 when no eps crossed
+           so pufferl's first-log metric registration always has the keys. */
+        float t300 = log->count_min_hp_le_300_normal > 0.0f
+            ? log->ticks_after_300_normal_sum / log->count_min_hp_le_300_normal : 0.0f;
+        float t240 = log->count_min_hp_le_240_normal > 0.0f
+            ? log->ticks_after_240_normal_sum / log->count_min_hp_le_240_normal : 0.0f;
+        float t150 = log->count_min_hp_le_150_normal > 0.0f
+            ? log->ticks_after_150_normal_sum / log->count_min_hp_le_150_normal : 0.0f;
+        float d300 = log->count_min_hp_le_300_normal > 0.0f
+            ? log->damage_after_300_normal_sum / log->count_min_hp_le_300_normal : 0.0f;
+        float d240 = log->count_min_hp_le_240_normal > 0.0f
+            ? log->damage_after_240_normal_sum / log->count_min_hp_le_240_normal : 0.0f;
+        float d150 = log->count_min_hp_le_150_normal > 0.0f
+            ? log->damage_after_150_normal_sum / log->count_min_hp_le_150_normal : 0.0f;
+        dict_set(out, "ticks_after_300_normal", t300);
+        dict_set(out, "ticks_after_240_normal", t240);
+        dict_set(out, "ticks_after_150_normal", t150);
+        dict_set(out, "damage_after_300_normal", d300);
+        dict_set(out, "damage_after_240_normal", d240);
+        dict_set(out, "damage_after_150_normal", d150);
+        /* D-deep death-cause fractions: out of normal-start episodes. */
+        dict_set(out, "frac_died_with_jad_alive_normal",
+            log->count_died_with_jad_alive_normal / log->n_normal);
+        dict_set(out, "frac_died_with_healer_alive_normal",
+            log->count_died_with_healer_alive_normal / log->n_normal);
+        dict_set(out, "frac_died_with_set_alive_normal",
+            log->count_died_with_set_alive_normal / log->n_normal);
     }
     if (log->n_snapshot > 0.0f) {
         float min_zhp_s = log->min_zuk_hp_snapshot / log->n_snapshot;

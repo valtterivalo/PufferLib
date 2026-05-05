@@ -259,6 +259,11 @@ struct PuffeRL {
     uint8_t* archive_hidden_state_history = nullptr;
     size_t archive_per_env_hidden_bytes = 0;
 
+    int archive_frontier_mode = 0;
+    float archive_frontier_q_floor = 0.0f;
+    float archive_frontier_q_power = 1.0f;
+    float archive_frontier_eps = 0.0f;
+
     DemoStore* phase2_store = nullptr;
     DemoSnapshotLadder** phase2_ladders = nullptr;
     DemoObsCache** phase2_obs_caches = nullptr;
@@ -1396,6 +1401,16 @@ ArchiveExploreStats archive_explore_impl(
         std::abort();
     }
     pufferl.archive_mode_active = true;
+
+    /* Apply frontier-bias sampler config (no-op when frontier_mode=0). The
+       Archive struct is calloc'd so all fields default to 0, meaning the
+       standard count-decay sampler runs unless explicitly configured. */
+    archive_set_frontier_mode(
+        archive,
+        pufferl.archive_frontier_mode,
+        pufferl.archive_frontier_q_floor,
+        pufferl.archive_frontier_q_power,
+        pufferl.archive_frontier_eps);
 
     /* Reset all envs to a fresh start before the first iteration. The reset
        state will be the starting cell for early iterations. */

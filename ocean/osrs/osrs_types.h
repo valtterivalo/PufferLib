@@ -744,6 +744,21 @@ typedef struct {
     float count_min_hp_le_240_normal;
     float count_min_hp_le_150_normal;
     float best_min_zuk_hp_normal;
+    /* D-deep: per-threshold ticks-survived-after and damage-after sums.
+       Means computed in my_log as sum / count_min_hp_le_X to give average
+       behavior conditional on crossing the boundary. */
+    float ticks_after_300_normal_sum;
+    float ticks_after_240_normal_sum;
+    float ticks_after_150_normal_sum;
+    float damage_after_300_normal_sum;
+    float damage_after_240_normal_sum;
+    float damage_after_150_normal_sum;
+    /* D-deep: count of normal-start deaths with given mob alive at terminal.
+       Discriminates death cause (e.g. healer-active deaths suggest healer
+       priority issue, jad-active suggests poor add handling). */
+    float count_died_with_jad_alive_normal;
+    float count_died_with_set_alive_normal;
+    float count_died_with_healer_alive_normal;
     /* per-NPC-type stats (14 types each, for wandb only — not shown on dashboard) */
     float prayer_correct_by_type[14];
     float attacks_by_type[14];

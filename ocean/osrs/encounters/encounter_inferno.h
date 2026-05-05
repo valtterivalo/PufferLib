@@ -575,6 +575,17 @@ typedef struct {
     float reward;
     float episode_return;  /* accumulated reward over entire episode */
     float min_zuk_hp_seen; /* final-wave low watermark for irreversible Zuk progress */
+    /* D-deep: tick at which Zuk first crossed the named HP threshold this episode.
+       -1 = never crossed. Used by binding.c terminal block to compute ticks
+       survived after each milestone (proxy for "keep fighting after crossing"). */
+    int tick_at_le_300;
+    int tick_at_le_240;
+    int tick_at_le_150;
+    /* D-deep: damage to Zuk accumulated since first crossing each threshold.
+       Updated each tick when below the boundary. */
+    float damage_after_300;
+    float damage_after_240;
+    float damage_after_150;
     float damage_dealt_this_tick;
     float damage_zuk_healers_this_tick;
     float shield_damage_this_tick;
@@ -1174,6 +1185,11 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
     s->player_dest_y = -1;
     s->player_last_interaction_target_slot = -1;
     s->player_last_interaction_age = 1;
+
+    /* D-deep: -1 = boundary not yet crossed this episode */
+    s->tick_at_le_300 = -1;
+    s->tick_at_le_240 = -1;
+    s->tick_at_le_150 = -1;
 
     /* player */
     s->player.entity_type = ENTITY_PLAYER;
@@ -3276,8 +3292,20 @@ static float inf_zuk_low_watermark_reward(InfernoState* s) {
     float zuk_hp = (float)s->npcs[zuk_idx].hp;
     if (zuk_hp >= s->min_zuk_hp_seen) return 0.0f;
 
-    float reward = s->damage_reward_coeff * (s->min_zuk_hp_seen - zuk_hp);
+    float dmg = s->min_zuk_hp_seen - zuk_hp;
+    float reward = s->damage_reward_coeff * dmg;
     s->min_zuk_hp_seen = zuk_hp;
+
+    /* D-deep boundary tracking. Each threshold first-crossed gets a
+       tick stamp; damage_after_X accumulates fresh damage at any time
+       Zuk HP is below the boundary. */
+    if (s->tick_at_le_300 < 0 && zuk_hp <= 300.0f) s->tick_at_le_300 = s->tick;
+    if (s->tick_at_le_240 < 0 && zuk_hp <= 240.0f) s->tick_at_le_240 = s->tick;
+    if (s->tick_at_le_150 < 0 && zuk_hp <= 150.0f) s->tick_at_le_150 = s->tick;
+    if (zuk_hp <= 300.0f) s->damage_after_300 += dmg;
+    if (zuk_hp <= 240.0f) s->damage_after_240 += dmg;
+    if (zuk_hp <= 150.0f) s->damage_after_150 += dmg;
+
     return reward;
 }
 

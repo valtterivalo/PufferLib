@@ -67,6 +67,15 @@ typedef struct {
     size_t hidden_state_size;
 
     uint64_t rng_state;          /* xorshift state for sampling */
+
+    /* Frontier-biased sampler config. When frontier_mode != 0, archive_sample
+       picks high-quality cells with probability (1 - frontier_eps), falling
+       back to the standard count-decay sampler with probability frontier_eps.
+       Defaults set in archive_create_impl: frontier_mode=0 (= standard). */
+    int frontier_mode;
+    float frontier_q_floor;
+    float frontier_q_power;
+    float frontier_eps;
 } Archive;
 
 
@@ -150,6 +159,16 @@ static inline Archive* archive_create(
         a->bucket_to_entry[i] = ARCHIVE_NULL_INDEX;
     }
     return a;
+}
+
+/* Configure frontier-biased sampling. Pass on=0 to revert to standard. */
+static inline void archive_set_frontier_mode(
+    Archive* a, int on, float q_floor, float q_power, float eps
+) {
+    a->frontier_mode = on;
+    a->frontier_q_floor = q_floor;
+    a->frontier_q_power = q_power;
+    a->frontier_eps = eps;
 }
 
 static inline void archive_destroy(Archive* a) {
@@ -316,10 +335,49 @@ static inline double archive_entry_weight(const ArchiveEntry* e) {
     );
 }
 
+/* Frontier-biased weight: cells with q >= q_floor get weight q^power /
+   sqrt(chosen+1). Cells below the floor get 0. */
+static inline double archive_entry_weight_frontier(
+    const ArchiveEntry* e, float q_floor, float q_power
+) {
+    double q = (double)e->quality;
+    if (q < (double)q_floor) return 0.0;
+    double qp = pow(q, (double)q_power);
+    return qp / sqrt((double)e->chosen + 1.0);
+}
+
 /* Sample an entry weighted by archive_entry_weight. Increments chosen and
-   chosen_since_new on the picked entry. Returns ARCHIVE_NULL_INDEX if empty. */
+   chosen_since_new on the picked entry. Returns ARCHIVE_NULL_INDEX if empty.
+   When a->frontier_mode != 0, samples (1-eps) of the time from cells with
+   q >= q_floor weighted by q^power; eps of the time from the standard
+   count-decay sampler. Falls through to standard if no frontier cells exist. */
 static inline int archive_sample(Archive* a) {
     if (a->num_entries == 0) return ARCHIVE_NULL_INDEX;
+
+    int try_frontier = a->frontier_mode &&
+        ((double)archive_rand_float01(a) > (double)a->frontier_eps);
+
+    if (try_frontier) {
+        double total_f = 0.0;
+        for (int i = 0; i < a->num_entries; i++) {
+            total_f += archive_entry_weight_frontier(
+                &a->entries[i], a->frontier_q_floor, a->frontier_q_power);
+        }
+        if (total_f > 0.0) {
+            double r = (double)archive_rand_float01(a) * total_f;
+            double cum = 0.0;
+            int picked = a->num_entries - 1;
+            for (int i = 0; i < a->num_entries; i++) {
+                cum += archive_entry_weight_frontier(
+                    &a->entries[i], a->frontier_q_floor, a->frontier_q_power);
+                if (r <= cum) { picked = i; break; }
+            }
+            a->entries[picked].chosen++;
+            a->entries[picked].chosen_since_new++;
+            return picked;
+        }
+        /* fall through: no cells above floor yet */
+    }
 
     double total = 0.0;
     for (int i = 0; i < a->num_entries; i++) {
