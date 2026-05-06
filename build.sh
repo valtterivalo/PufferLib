@@ -321,6 +321,12 @@ else
 
     CUDA_HOME=${CUDA_HOME:-${CUDA_PATH:-/usr/local/cuda}}
     NVCC="$CUDA_HOME/bin/nvcc"
+    NVTX_LINK=()
+    if [ -f "$CUDA_HOME/lib64/libnvToolsExt.so" ] || \
+       [ -f "$CUDA_HOME/lib/libnvToolsExt.so" ] || \
+       ldconfig -p 2>/dev/null | grep -q 'libnvToolsExt\.so'; then
+        NVTX_LINK=(-lnvToolsExt)
+    fi
 
     # Detect OBS_TENSOR_T from the static object
     OBS_TENSOR_T=$(strings "$STATIC_OBJ" | grep 'Tensor$' | head -1)
@@ -341,7 +347,7 @@ else
             -Xcompiler=-fopenmp \
             tests/profile_kernels.cu ini.c \
             "$STATIC_LIB" "$RAYLIB_A" \
-            -lnccl -lnvidia-ml -lcublas -lcurand -lcudnn -lnvToolsExt \
+            -lnccl -lnvidia-ml -lcublas -lcurand -lcudnn "${NVTX_LINK[@]}" \
             -lGL -lm -lpthread -lomp5 \
             -o profile
         echo "=== Built: ./profile ==="
@@ -397,7 +403,7 @@ else
         src/bindings.o "$STATIC_LIB" "$RAYLIB_A"
         -L$CUDA_HOME/lib64
         -lcudart -lnccl -lnvidia-ml -lcublas -lcusolver -lcurand -lcudnn
-        -lnvToolsExt -lomp5
+        "${NVTX_LINK[@]}" -lomp5
         $LINK_OPT
     )
     LINK_CMD+=(-Bsymbolic-functions)

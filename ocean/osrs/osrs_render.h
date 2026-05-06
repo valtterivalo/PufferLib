@@ -776,6 +776,27 @@ static void context_menu_draw(RenderClient* rc) {
     }
 }
 
+static void render_draw_encounter_status_text(RenderClient* rc) {
+    EncounterOverlay* ov = &rc->encounter_overlay;
+    if (!ov->status_text_active || ov->status_text[0] == '\0') return;
+
+    int font_size = 22;
+    int text_w = MeasureText(ov->status_text, font_size);
+    int pad_x = 12;
+    int pad_y = 6;
+    int box_w = text_w + pad_x * 2;
+    int box_h = font_size + pad_y * 2;
+    int x = (RENDER_WINDOW_W - box_w) / 2;
+    int y = 42;
+
+    DrawRectangle(x, y, box_w, box_h, (Color){ 35, 15, 15, 220 });
+    DrawRectangleLines(x, y, box_w, box_h, (Color){ 190, 65, 45, 255 });
+    DrawText(ov->status_text, x + pad_x + 1, y + pad_y + 1,
+        font_size, (Color){ 0, 0, 0, 180 });
+    DrawText(ov->status_text, x + pad_x, y + pad_y,
+        font_size, (Color){ 255, 220, 190, 255 });
+}
+
 
 static RenderClient* render_make_client(void) {
     RenderClient* rc = (RenderClient*)calloc(1, sizeof(RenderClient));
@@ -4592,6 +4613,8 @@ void pvp_render(OsrsEnv* env) {
             }
         }
     }
+
+    render_draw_encounter_status_text(rc);
 
     /* right-click context menu: drawn last so it renders on top of everything */
     context_menu_draw(rc);

@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include "src/demostore.h"
 
@@ -185,6 +186,62 @@ static void test_reject_nonexistent_file(void) {
     demostore_destroy(s);
 }
 
+static void test_load_dir_limits_after_sorted_discovery(void) {
+    printf("--- demostore load_dir loads sorted prefix and frees all discovered names ---\n");
+
+    char dir_template[] = "/tmp/test_demostore_dir_XXXXXX";
+    char* dir = mkdtemp(dir_template);
+    ASSERT_TRUE("mkdtemp succeeds", dir != NULL);
+
+    char p0[256];
+    char p1[256];
+    snprintf(p0, sizeof(p0), "%s/demo_0000_q0.900_t4.bin", dir);
+    snprintf(p1, sizeof(p1), "%s/demo_0001_q0.800_t4.bin", dir);
+    ASSERT_INT_EQ("write demo 0", write_synthetic_demo(p0, 4, 2, 11u, 100), 0);
+    ASSERT_INT_EQ("write demo 1", write_synthetic_demo(p1, 4, 2, 22u, 200), 0);
+
+    DemoStore* s = demostore_create(2);
+    ASSERT_INT_EQ("load_dir max_demos=1", demostore_load_dir(
+        s, dir, 2, 1, 1, TEST_SNAPSHOT_SIZE), 1);
+    ASSERT_INT_EQ("only one demo loaded", s->num_demos, 1);
+    ASSERT_INT_EQ("sorted first rng loaded", (int)s->demos[0].rng_seed, 11);
+    ASSERT_FLOAT_NEAR("filename quality parsed", s->demos[0].quality_at_root,
+        0.900f, 0.001f);
+
+    demostore_destroy(s);
+    unlink(p0);
+    unlink(p1);
+    rmdir(dir);
+}
+
+static void test_load_dir_fails_on_bad_demo(void) {
+    printf("--- demostore load_dir fails loudly on bad demo file ---\n");
+
+    char dir_template[] = "/tmp/test_demostore_bad_dir_XXXXXX";
+    char* dir = mkdtemp(dir_template);
+    ASSERT_TRUE("mkdtemp succeeds", dir != NULL);
+
+    char p0[256];
+    char p1[256];
+    snprintf(p0, sizeof(p0), "%s/demo_0000_q0.900_t4.bin", dir);
+    snprintf(p1, sizeof(p1), "%s/demo_0001_q0.800_t4.bin", dir);
+    ASSERT_INT_EQ("write good demo", write_synthetic_demo(p0, 4, 2, 11u, 100), 0);
+    FILE* bad = fopen(p1, "wb");
+    ASSERT_TRUE("bad file opened", bad != NULL);
+    fputs("bad", bad);
+    fclose(bad);
+
+    DemoStore* s = demostore_create(2);
+    ASSERT_INT_EQ("load_dir rejects bad file", demostore_load_dir(
+        s, dir, 2, 1, 0, TEST_SNAPSHOT_SIZE), -1);
+    ASSERT_INT_EQ("failed load_dir leaves store unchanged", s->num_demos, 0);
+
+    demostore_destroy(s);
+    unlink(p0);
+    unlink(p1);
+    rmdir(dir);
+}
+
 static void test_ladder_count_for_length(void) {
     printf("--- ladder count_for_length covers tick 0 through length-1 ---\n");
     ASSERT_INT_EQ("100/4", demo_snapshot_ladder_count_for_length(100, 4), 25);
@@ -219,6 +276,7 @@ static void test_ladder_create_and_destroy(void) {
 static void test_ladder_slot_for_tick(void) {
     printf("--- ladder slot_for_tick maps to floor(tick/stride) ---\n");
     DemoSnapshotLadder* l = demo_snapshot_ladder_create(0, 4, 10, 16, 0);
+    for (int i = 0; i < 10; i++) l->snapshot_ticks[i] = i * 4;
     ASSERT_INT_EQ("tick 0", demo_snapshot_ladder_slot_for_tick(l, 0), 0);
     ASSERT_INT_EQ("tick 3", demo_snapshot_ladder_slot_for_tick(l, 3), 0);
     ASSERT_INT_EQ("tick 4", demo_snapshot_ladder_slot_for_tick(l, 4), 1);
@@ -251,6 +309,8 @@ int main(void) {
     test_filename_quality_parsing();
     test_reject_misaligned_action_buffer();
     test_reject_nonexistent_file();
+    test_load_dir_limits_after_sorted_discovery();
+    test_load_dir_fails_on_bad_demo();
     test_ladder_count_for_length();
     test_ladder_create_and_destroy();
     test_ladder_slot_for_tick();

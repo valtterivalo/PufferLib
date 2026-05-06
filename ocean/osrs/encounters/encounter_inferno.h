@@ -107,6 +107,26 @@ static const int INF_NPC_DEF_IDS[INF_NUM_NPC_TYPES] = {
     [INF_NPC_ZUK_SHIELD] = 7707,  /* Ancestral Glyph */
 };
 
+static const char* inf_npc_type_name(int type) {
+    switch (type) {
+        case INF_NPC_NIBBLER: return "Jal-Nib";
+        case INF_NPC_BAT: return "Jal-MejRah";
+        case INF_NPC_BLOB: return "Jal-Ak";
+        case INF_NPC_BLOB_MELEE: return "Jal-AkRek-Ket";
+        case INF_NPC_BLOB_RANGE: return "Jal-AkRek-Xil";
+        case INF_NPC_BLOB_MAGE: return "Jal-AkRek-Mej";
+        case INF_NPC_MELEER: return "Jal-ImKot";
+        case INF_NPC_RANGER: return "Jal-Xil";
+        case INF_NPC_MAGER: return "Jal-Zek";
+        case INF_NPC_JAD: return "JalTok-Jad";
+        case INF_NPC_ZUK: return "TzKal-Zuk";
+        case INF_NPC_HEALER_JAD: return "Yt-HurKot";
+        case INF_NPC_HEALER_ZUK: return "Jal-MejJak";
+        case INF_NPC_ZUK_SHIELD: return "Ancestral Glyph";
+        default: return "unknown";
+    }
+}
+
 typedef struct {
     int hp;
     int attack_speed;
@@ -3483,6 +3503,11 @@ static void inf_resolve_player_pending_hits(InfernoState* s) {
                 s->off_prayer_hits_this_tick++;
             }
 
+            if (dmg > 0 &&
+                hit->source_npc_type >= 0 &&
+                hit->source_npc_type < INF_NUM_NPC_TYPES) {
+                s->last_hit_by_type = hit->source_npc_type;
+            }
             encounter_damage_player(
                 &s->player, dmg, &s->damage_received_this_tick);
             s->player_pending_hits[i] =
@@ -4568,6 +4593,17 @@ static int inf_get_winner(EncounterState* state) {
     return ((InfernoState*)state)->winner;
 }
 
+static void inf_write_terminal_status_text(const InfernoState* s, char* out, size_t cap) {
+    if (cap == 0) return;
+    out[0] = '\0';
+    if (!s->episode_over) return;
+    if (s->winner == 0) {
+        snprintf(out, cap, "Inferno cleared");
+        return;
+    }
+    snprintf(out, cap, "Killed by %s", inf_npc_type_name(s->last_hit_by_type));
+}
+
 static void* inf_get_log(EncounterState* state) {
     InfernoState* s = (InfernoState*)state;
     if (s->episode_over) {
@@ -4600,6 +4636,8 @@ static void* inf_get_log(EncounterState* state) {
 static void inf_render_post_tick(EncounterState* state, EncounterOverlay* ov) {
     InfernoState* s = (InfernoState*)state;
     ov->projectile_count = 0;
+    inf_write_terminal_status_text(s, ov->status_text, sizeof(ov->status_text));
+    ov->status_text_active = ov->status_text[0] != '\0';
 
     /* NPC attack projectiles — per-NPC-type flight parameters */
     for (int i = 0; i < INF_MAX_NPCS; i++) {
@@ -4909,11 +4947,10 @@ static void inf_step_human_commands(EncounterState* state, HumanInput* hi) {
 }
 
 
-/* archive cell key v0 for Go-Explore-style exploration. fixed 16-byte struct
+/* archive cell key for Go-Explore-style exploration. fixed 16-byte struct
    that discretizes the env state. byte-equal keys = same cell. lossy on
    continuous fields (player position quantized to 2-tile bins, HP/prayer to
-   10-unit bins, Zuk HP to 50-HP bins). full encounter would need a richer
-   key including pillar HP and per-NPC-type counts; this v0 targets Zuk-only. */
+   10-unit bins, Zuk and Jad HP to 50-HP bins). */
 
 typedef struct {
     uint8_t wave;                       /* 0..68 */
@@ -4930,9 +4967,46 @@ typedef struct {
     uint8_t zuk_phase_flags;            /* bit0=healer_spawned, 1=jad_spawned, 2=enraged, 3=timer_paused */
     uint8_t active_jad_count;           /* live Jads */
     uint8_t active_zuk_healer_count;    /* live Zuk healers */
-    uint8_t active_set_count;           /* live meleers + rangers (set members) */
-    uint8_t _pad;                       /* explicit padding so sizeof() == 16 and memcmp is well-defined */
+    uint8_t active_set_count;           /* live magers + rangers + meleers */
+    uint8_t jad_hp_bin;                 /* total live Jad HP / 50 */
 } InfCellKey;
+
+typedef struct {
+    int live_jad_count;
+    int live_zuk_healer_count;
+    int live_set_count;
+    int live_jad_hp;
+    int live_jad_max_hp;
+} InfLateAddCounts;
+
+static InfLateAddCounts inf_late_add_counts(const InfernoState* s) {
+    InfLateAddCounts counts;
+    memset(&counts, 0, sizeof(counts));
+
+    for (int i = 0; i < INF_MAX_NPCS; i++) {
+        const InfNPC* npc = &s->npcs[i];
+        if (!npc->active || npc->hp <= 0) continue;
+        switch (npc->type) {
+            case INF_NPC_JAD:
+                counts.live_jad_count++;
+                counts.live_jad_hp += npc->hp;
+                counts.live_jad_max_hp += npc->max_hp > 0 ? npc->max_hp : npc->hp;
+                break;
+            case INF_NPC_HEALER_ZUK:
+                counts.live_zuk_healer_count++;
+                break;
+            case INF_NPC_MAGER:
+            case INF_NPC_MELEER:
+            case INF_NPC_RANGER:
+                counts.live_set_count++;
+                break;
+            default:
+                break;
+        }
+    }
+
+    return counts;
+}
 
 static size_t inf_cell_key_size(EncounterState* state) {
     (void)state;
@@ -4972,31 +5046,52 @@ static void inf_write_cell_key(EncounterState* state, void* out) {
         (s->zuk.timer_paused   ? 0x08u : 0u)
     );
 
-    int n_jad = 0, n_healer = 0, n_set = 0;
-    for (int i = 0; i < INF_MAX_NPCS; i++) {
-        if (s->npcs[i].hp <= 0) continue;
-        switch (s->npcs[i].type) {
-            case INF_NPC_JAD:        n_jad++; break;
-            case INF_NPC_HEALER_ZUK: n_healer++; break;
-            case INF_NPC_MELEER:
-            case INF_NPC_RANGER:     n_set++; break;
-            default: break;
-        }
-    }
-    k->active_jad_count        = (uint8_t)(n_jad    > 255 ? 255 : n_jad);
-    k->active_zuk_healer_count = (uint8_t)(n_healer > 255 ? 255 : n_healer);
-    k->active_set_count        = (uint8_t)(n_set    > 255 ? 255 : n_set);
+    InfLateAddCounts counts = inf_late_add_counts(s);
+    k->active_jad_count = (uint8_t)(
+        counts.live_jad_count > 255 ? 255 : counts.live_jad_count);
+    k->active_zuk_healer_count = (uint8_t)(
+        counts.live_zuk_healer_count > 255 ? 255 : counts.live_zuk_healer_count);
+    k->active_set_count = (uint8_t)(
+        counts.live_set_count > 255 ? 255 : counts.live_set_count);
+    int jad_hp_bin = counts.live_jad_hp / 50;
+    k->jad_hp_bin = (uint8_t)(jad_hp_bin > 255 ? 255 : jad_hp_bin);
 }
 
-/* progress_score: scalar in roughly [0, 1] for Zuk-only. terminal-win = 1.0;
-   otherwise based on the lowest Zuk HP seen so far in the episode. min_zuk_hp_seen
-   is initialized lazily (memset-zero sentinel until first reward tick), so a
-   fresh reset returns 0 even though Zuk is full HP. */
+/* progress_score: archive quality for Zuk transitions. */
 static float inf_progress_score(EncounterState* state) {
     const InfernoState* s = (const InfernoState*)state;
-    if (s->episode_over && s->winner == 0) return 1.0f;
+    if (s->episode_over && s->winner == 0) return 2.0f;
+
     float min_zhp = (s->min_zuk_hp_seen > 0.0f) ? s->min_zuk_hp_seen : 1200.0f;
-    return (1200.0f - min_zhp) / 1200.0f;
+    if (min_zhp < 0.0f) min_zhp = 0.0f;
+    if (min_zhp > 1200.0f) min_zhp = 1200.0f;
+
+    float q = (1200.0f - min_zhp) / 1200.0f;
+    InfLateAddCounts counts = inf_late_add_counts(s);
+
+    if (s->zuk.jad_spawned && counts.live_jad_count == 0) {
+        q += 0.10f;
+        if (min_zhp < 600.0f) {
+            q += 0.06f * ((600.0f - min_zhp) / 600.0f);
+        }
+    } else if (s->zuk.jad_spawned && counts.live_jad_max_hp > 0) {
+        float jad_damage_frac =
+            (float)(counts.live_jad_max_hp - counts.live_jad_hp) /
+            (float)counts.live_jad_max_hp;
+        if (jad_damage_frac < 0.0f) jad_damage_frac = 0.0f;
+        if (jad_damage_frac > 1.0f) jad_damage_frac = 1.0f;
+        q += 0.09f * jad_damage_frac;
+    }
+
+    if (s->zuk.healer_spawned && counts.live_zuk_healer_count == 0) {
+        q += 0.08f;
+    }
+
+    if (min_zhp <= 900.0f && counts.live_set_count == 0) {
+        q += 0.04f;
+    }
+
+    return q;
 }
 
 

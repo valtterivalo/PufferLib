@@ -1,13 +1,19 @@
-/* Quick archive inspector: peak quality, chain length distribution, cycle count. */
+/* Quick archive inspector: archive v2 quality and chain length distribution. */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include "../src/archive.h"
 
-typedef struct { float q; int idx; int chain; } Top;
+typedef struct {
+    float structural_q;
+    float sampling_q;
+    int idx;
+    int chain;
+} Top;
 
 static int cmp_top_desc(const void* a, const void* b) {
-    float qa = ((const Top*)a)->q, qb = ((const Top*)b)->q;
+    float qa = ((const Top*)a)->structural_q;
+    float qb = ((const Top*)b)->structural_q;
     return qa < qb ? 1 : qa > qb ? -1 : 0;
 }
 
@@ -21,22 +27,46 @@ int main(int argc, char** argv) {
         a->num_entries, a->snapshot_size, a->num_atns, a->hidden_state_size,
         a->action_chunk_pool_used_ints);
 
-    int qbins[11] = {0};
-    float max_q = -1.0f;
-    int max_q_idx = -1;
+    int structural_bins[11] = {0};
+    int sampling_bins[11] = {0};
+    float max_structural_q = -1.0f;
+    float max_sampling_q = -1.0f;
+    int max_structural_idx = -1;
+    int max_sampling_idx = -1;
     for (int i = 0; i < a->num_entries; i++) {
-        float q = a->entries[i].quality;
-        int b = (int)(q * 10.0f);
-        if (b < 0) b = 0;
-        if (b > 10) b = 10;
-        qbins[b]++;
-        if (q > max_q) { max_q = q; max_q_idx = i; }
+        float structural_q = a->entries[i].structural_quality;
+        float sampling_q = a->entries[i].sampling_quality;
+        int structural_bin = (int)(structural_q * 10.0f);
+        int sampling_bin = (int)(sampling_q * 10.0f);
+        if (structural_bin < 0) structural_bin = 0;
+        if (structural_bin > 10) structural_bin = 10;
+        if (sampling_bin < 0) sampling_bin = 0;
+        if (sampling_bin > 10) sampling_bin = 10;
+        structural_bins[structural_bin]++;
+        sampling_bins[sampling_bin]++;
+        if (structural_q > max_structural_q) {
+            max_structural_q = structural_q;
+            max_structural_idx = i;
+        }
+        if (sampling_q > max_sampling_q) {
+            max_sampling_q = sampling_q;
+            max_sampling_idx = i;
+        }
     }
-    fprintf(stderr, "\nquality histogram (10 bins):\n");
+    fprintf(stderr, "\nstructural quality histogram (10 bins):\n");
     for (int b = 0; b <= 10; b++) {
-        fprintf(stderr, "  [%.1f, %.1f): %d\n", b / 10.0f, (b + 1) / 10.0f, qbins[b]);
+        fprintf(stderr, "  [%.1f, %.1f): %d\n",
+            b / 10.0f, (b + 1) / 10.0f, structural_bins[b]);
     }
-    fprintf(stderr, "  peak quality: %.4f at entry %d\n", max_q, max_q_idx);
+    fprintf(stderr, "  peak structural quality: %.4f at entry %d\n",
+        max_structural_q, max_structural_idx);
+    fprintf(stderr, "\nsampling quality histogram (10 bins):\n");
+    for (int b = 0; b <= 10; b++) {
+        fprintf(stderr, "  [%.1f, %.1f): %d\n",
+            b / 10.0f, (b + 1) / 10.0f, sampling_bins[b]);
+    }
+    fprintf(stderr, "  peak sampling quality: %.4f at entry %d\n",
+        max_sampling_q, max_sampling_idx);
 
     int cycle_count = 0, valid_chains = 0, max_chain = 0;
     long total_ticks = 0;
@@ -63,16 +93,18 @@ int main(int argc, char** argv) {
 
     Top* sorted = (Top*)malloc(a->num_entries * sizeof(Top));
     for (int i = 0; i < a->num_entries; i++) {
-        sorted[i].q = a->entries[i].quality;
+        sorted[i].structural_q = a->entries[i].structural_quality;
+        sorted[i].sampling_q = a->entries[i].sampling_quality;
         sorted[i].idx = i;
         sorted[i].chain = archive_chain_tick_count(a, i);
     }
     qsort(sorted, a->num_entries, sizeof(Top), cmp_top_desc);
     int how_many = a->num_entries < 20 ? a->num_entries : 20;
-    fprintf(stderr, "\ntop %d by quality:\n", how_many);
+    fprintf(stderr, "\ntop %d by structural quality:\n", how_many);
     for (int k = 0; k < how_many; k++) {
-        fprintf(stderr, "  rank %2d: q=%.4f idx=%d chain=%d %s\n",
-            k, sorted[k].q, sorted[k].idx, sorted[k].chain,
+        fprintf(stderr, "  rank %2d: structural_q=%.4f sampling_q=%.4f idx=%d chain=%d %s\n",
+            k, sorted[k].structural_q, sorted[k].sampling_q,
+            sorted[k].idx, sorted[k].chain,
             sorted[k].chain < 0 ? "(CYCLE)" : sorted[k].chain == 0 ? "(EMPTY)" : "");
     }
     free(sorted);

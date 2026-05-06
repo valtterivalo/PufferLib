@@ -158,7 +158,20 @@ static inline int demostore_load_demo(
     if (parse_filename_q) {
         const char* slash = strrchr(path, '/');
         const char* q_marker = strstr(slash ? slash + 1 : path, "_q");
-        if (q_marker) q_root = (float)atof(q_marker + 2);
+        if (q_marker) {
+            char* q_end = NULL;
+            float parsed = strtof(q_marker + 2, &q_end);
+            if (q_end == q_marker + 2) {
+                fprintf(stderr,
+                    "demostore_load_demo: bad filename quality in %s\n",
+                    path);
+                free(snapshots);
+                free(snapshot_ticks);
+                free(actions);
+                return -1;
+            }
+            q_root = parsed;
+        }
     }
 
     int demo_id = s->num_demos++;
@@ -184,39 +197,87 @@ static inline const int* demostore_actions_at(
     return &d->actions[(size_t)tick * (size_t)d->num_atns];
 }
 
-/* Sort + load all .bin files in `dir` (up to max_demos). Returns number
-   loaded, or -1 on opendir failure. Aborts on individual load failures. */
+/* Sort + load .bin files in `dir`; max_demos limits the sorted load set.
+   Returns number loaded, or -1 on directory, allocation, schema, or read failure. */
 static inline int qsort_strcmp_(const void* a, const void* b) {
     return strcmp(*(const char**)a, *(const char**)b);
 }
+
+static inline void demostore_free_names(char** names, int n) {
+    for (int i = 0; i < n; i++) free(names[i]);
+    free(names);
+}
+
+static inline void demostore_truncate(DemoStore* s, int num_demos) {
+    for (int i = num_demos; i < s->num_demos; i++) {
+        free(s->demos[i].actions);
+        free(s->demos[i].snapshots);
+        free(s->demos[i].snapshot_ticks);
+        memset(&s->demos[i], 0, sizeof(DemoTrajectory));
+    }
+    s->num_demos = num_demos;
+}
+
 static inline int demostore_load_dir(
     DemoStore* s, const char* dir, int num_atns, int parse_q, int max_demos,
     uint32_t expected_snapshot_size
 ) {
     DIR* d = opendir(dir);
     if (!d) return -1;
-    char** names = (char**)calloc(1024, sizeof(char*));
+    int cap = 64;
     int n = 0;
+    char** names = (char**)calloc((size_t)cap, sizeof(char*));
+    if (!names) {
+        closedir(d);
+        return -1;
+    }
     struct dirent* ent;
-    while ((ent = readdir(d)) != NULL && n < 1024) {
+    while ((ent = readdir(d)) != NULL) {
         const char* name = ent->d_name;
         size_t len = strlen(name);
         if (len < 4 || strcmp(name + len - 4, ".bin") != 0) continue;
+        if (n == cap) {
+            int next_cap = cap * 2;
+            char** next = (char**)realloc(names, (size_t)next_cap * sizeof(char*));
+            if (!next) {
+                closedir(d);
+                demostore_free_names(names, n);
+                return -1;
+            }
+            names = next;
+            cap = next_cap;
+        }
         names[n++] = strdup(name);
+        if (!names[n - 1]) {
+            closedir(d);
+            demostore_free_names(names, n - 1);
+            return -1;
+        }
     }
     closedir(d);
     qsort(names, (size_t)n, sizeof(char*), qsort_strcmp_);
-    if (max_demos > 0 && n > max_demos) n = max_demos;
+
+    int load_count = n;
+    if (max_demos > 0 && load_count > max_demos) load_count = max_demos;
+    int start_count = s->num_demos;
+    if (s->num_demos + load_count > s->capacity) {
+        demostore_free_names(names, n);
+        return -1;
+    }
 
     char path[1024];
     int loaded = 0;
-    for (int i = 0; i < n; i++) {
+    for (int i = 0; i < load_count; i++) {
         snprintf(path, sizeof(path), "%s/%s", dir, names[i]);
         if (demostore_load_demo(s, path, num_atns, parse_q,
-                                expected_snapshot_size) >= 0) loaded++;
+                                expected_snapshot_size) < 0) {
+            demostore_truncate(s, start_count);
+            demostore_free_names(names, n);
+            return -1;
+        }
+        loaded++;
     }
-    for (int i = 0; i < n; i++) free(names[i]);
-    free(names);
+    demostore_free_names(names, n);
     return loaded;
 }
 

@@ -11,9 +11,8 @@
  * can be materialized by walking parents — used for demo export.
  *
  * Cell selection uses the count-decay heuristic from Ecoffet et al. 2021.
- * Quality is a scalar in roughly [0, 1.5] supplied by the encounter; higher
- * quality cells are preferred, but cells that have been chosen rarely (or
- * recently produced new discoveries) get a bonus to keep exploration spread.
+ * Sampling quality biases future exploration. Structural quality controls
+ * which snapshot and action chain the archive keeps for a cell.
  */
 
 #ifndef ARCHIVE_H
@@ -37,7 +36,8 @@ typedef struct {
     int action_chunk_offset;     /* offset into action_chunk_pool (in ints), -1 if root */
     int action_chunk_len;        /* number of ticks in the chunk */
     uint32_t rng_seed;           /* RNG state captured at the start of the chunk */
-    float quality;
+    float sampling_quality;
+    float structural_quality;
     uint32_t chosen;             /* times this cell was selected from the archive */
     uint32_t seen;               /* times we observed a state mapping to this cell */
     uint32_t chosen_since_new;   /* chosen count since this cell last produced a new/improved entry */
@@ -208,78 +208,51 @@ static inline int archive_lookup(const Archive* a, const uint8_t* key) {
 
 /* Result of archive_insert: how the request was resolved. */
 typedef enum {
-    ARCHIVE_INSERT_NEW,         /* new cell created */
-    ARCHIVE_INSERT_REPLACED,    /* existing cell, quality stat improved (no structural rewire) */
-    ARCHIVE_INSERT_KEPT,        /* existing cell, quality not better, only seen++ */
-    ARCHIVE_INSERT_FULL         /* no room (entry capacity or action chunk pool exhausted) */
+    ARCHIVE_INSERT_NEW,
+    ARCHIVE_INSERT_STRUCTURAL_REPLACED,
+    ARCHIVE_INSERT_SAMPLING_UPDATED,
+    ARCHIVE_INSERT_KEPT,
+    ARCHIVE_INSERT_FULL
 } ArchiveInsertResult;
 
-/* Insert or re-discover a cell. First-write wins for structural fields:
-   rewiring parent_idx on re-discovery would invalidate every descendant's
-   action_chunk and frequently produce parent-chain cycles. Re-discoveries
-   only bump `seen` and the `quality` stat used by count_decay sampling. */
-static inline int archive_insert(
-    Archive* a,
-    const uint8_t* key,
-    const void* snapshot,
-    const void* hidden_state,
-    int parent_idx,
+static inline int archive_action_chunk_needed_ints(const Archive* a, int action_chunk_len) {
+    if (action_chunk_len <= 0) return 0;
+    return action_chunk_len * a->num_atns;
+}
+
+static inline int archive_can_store_action_chunk(
+    const Archive* a,
     const int* action_chunk,
-    int action_chunk_len,
-    uint32_t rng_seed,
-    float quality,
-    ArchiveInsertResult* out_result
+    int action_chunk_len
 ) {
-    int b = archive_find_bucket(a, key);
-    if (b < 0) {
-        if (out_result) *out_result = ARCHIVE_INSERT_FULL;
-        return ARCHIVE_NULL_INDEX;
-    }
+    int needed = archive_action_chunk_needed_ints(a, action_chunk_len);
+    if (!action_chunk || needed <= 0) return 1;
+    return a->action_chunk_pool_used_ints + needed <= a->action_chunk_pool_capacity_ints;
+}
 
-    int existing = a->bucket_to_entry[b];
-    if (existing != ARCHIVE_NULL_INDEX) {
-        ArchiveEntry* e = &a->entries[existing];
-        e->seen++;
-        if (quality > e->quality) {
-            e->quality = quality;
-            if (out_result) *out_result = ARCHIVE_INSERT_REPLACED;
-        } else if (out_result) {
-            *out_result = ARCHIVE_INSERT_KEPT;
-        }
-        return existing;
-    }
-
-    if (a->num_entries >= a->capacity) {
-        if (out_result) *out_result = ARCHIVE_INSERT_FULL;
-        return ARCHIVE_NULL_INDEX;
-    }
-
-    int needed = action_chunk_len * a->num_atns;
-    if (action_chunk && needed > 0 &&
-        a->action_chunk_pool_used_ints + needed > a->action_chunk_pool_capacity_ints) {
-        if (out_result) *out_result = ARCHIVE_INSERT_FULL;
-        return ARCHIVE_NULL_INDEX;
-    }
-
-    int idx = a->num_entries++;
-    ArchiveEntry* e = &a->entries[idx];
-    memcpy(e->key, key, ARCHIVE_KEY_SIZE);
-    e->parent_idx = parent_idx;
-    e->rng_seed = rng_seed;
-    e->quality = quality;
-    e->chosen = 0;
-    e->seen = 1;
-    e->chosen_since_new = 0;
-
-    memcpy(&a->snapshot_pool[(size_t)idx * a->snapshot_size],
+static inline void archive_store_snapshot_hidden(
+    Archive* a,
+    int entry_idx,
+    const void* snapshot,
+    const void* hidden_state
+) {
+    memcpy(&a->snapshot_pool[(size_t)entry_idx * a->snapshot_size],
            snapshot, a->snapshot_size);
 
     if (a->hidden_state_size > 0) {
-        uint8_t* dst = &a->hidden_state_pool[(size_t)idx * a->hidden_state_size];
+        uint8_t* dst = &a->hidden_state_pool[(size_t)entry_idx * a->hidden_state_size];
         if (hidden_state) memcpy(dst, hidden_state, a->hidden_state_size);
         else memset(dst, 0, a->hidden_state_size);
     }
+}
 
+static inline void archive_store_action_chunk(
+    Archive* a,
+    ArchiveEntry* e,
+    const int* action_chunk,
+    int action_chunk_len
+) {
+    int needed = archive_action_chunk_needed_ints(a, action_chunk_len);
     if (action_chunk && needed > 0) {
         e->action_chunk_offset = a->action_chunk_pool_used_ints;
         e->action_chunk_len = action_chunk_len;
@@ -290,6 +263,121 @@ static inline int archive_insert(
         e->action_chunk_offset = -1;
         e->action_chunk_len = 0;
     }
+}
+
+static inline int archive_parent_chain_contains(
+    const Archive* a,
+    int parent_idx,
+    int needle_idx
+) {
+    int idx = parent_idx;
+    int hops = 0;
+    while (idx != ARCHIVE_ROOT_PARENT) {
+        if (idx < 0 || idx >= a->num_entries) return 1;
+        if (idx == needle_idx) return 1;
+        if (hops++ > a->num_entries) return 1;
+        idx = a->entries[idx].parent_idx;
+    }
+    return 0;
+}
+
+/* Insert or re-discover a cell. Better sampling quality only changes the
+   sampler statistic. Better structural quality replaces the remembered state,
+   hidden state, parent link, RNG seed, and action chunk for that cell. */
+static inline int archive_insert(
+    Archive* a,
+    const uint8_t* key,
+    const void* snapshot,
+    const void* hidden_state,
+    int parent_idx,
+    const int* action_chunk,
+    int action_chunk_len,
+    uint32_t rng_seed,
+    float sampling_quality,
+    float structural_quality,
+    ArchiveInsertResult* out_result
+) {
+    if (action_chunk_len < 0) {
+        if (out_result) *out_result = ARCHIVE_INSERT_FULL;
+        return ARCHIVE_NULL_INDEX;
+    }
+
+    int b = archive_find_bucket(a, key);
+    if (b < 0) {
+        if (out_result) *out_result = ARCHIVE_INSERT_FULL;
+        return ARCHIVE_NULL_INDEX;
+    }
+
+    int existing = a->bucket_to_entry[b];
+    if (existing != ARCHIVE_NULL_INDEX) {
+        ArchiveEntry* e = &a->entries[existing];
+        e->seen++;
+
+        int should_update_sampling = sampling_quality > e->sampling_quality;
+
+        if (structural_quality > e->structural_quality) {
+            if (archive_parent_chain_contains(a, parent_idx, existing)) {
+                if (should_update_sampling) e->sampling_quality = sampling_quality;
+                if (out_result) {
+                    *out_result = should_update_sampling
+                        ? ARCHIVE_INSERT_SAMPLING_UPDATED
+                        : ARCHIVE_INSERT_KEPT;
+                }
+                return existing;
+            }
+            if (!archive_can_store_action_chunk(a, action_chunk, action_chunk_len)) {
+                if (should_update_sampling) e->sampling_quality = sampling_quality;
+                if (out_result) {
+                    *out_result = should_update_sampling
+                        ? ARCHIVE_INSERT_SAMPLING_UPDATED
+                        : ARCHIVE_INSERT_KEPT;
+                }
+                return existing;
+            }
+
+            if (should_update_sampling) e->sampling_quality = sampling_quality;
+            e->parent_idx = parent_idx;
+            e->rng_seed = rng_seed;
+            e->structural_quality = structural_quality;
+            e->chosen_since_new = 0;
+            archive_store_snapshot_hidden(a, existing, snapshot, hidden_state);
+            archive_store_action_chunk(a, e, action_chunk, action_chunk_len);
+            if (out_result) *out_result = ARCHIVE_INSERT_STRUCTURAL_REPLACED;
+            return existing;
+        }
+
+        if (should_update_sampling) e->sampling_quality = sampling_quality;
+        if (out_result) {
+            *out_result = should_update_sampling
+                ? ARCHIVE_INSERT_SAMPLING_UPDATED
+                : ARCHIVE_INSERT_KEPT;
+        }
+        return existing;
+    }
+
+    if (a->num_entries >= a->capacity) {
+        if (out_result) *out_result = ARCHIVE_INSERT_FULL;
+        return ARCHIVE_NULL_INDEX;
+    }
+
+    if (!archive_can_store_action_chunk(a, action_chunk, action_chunk_len)) {
+        if (out_result) *out_result = ARCHIVE_INSERT_FULL;
+        return ARCHIVE_NULL_INDEX;
+    }
+
+    int idx = a->num_entries++;
+    ArchiveEntry* e = &a->entries[idx];
+    memcpy(e->key, key, ARCHIVE_KEY_SIZE);
+    e->parent_idx = parent_idx;
+    e->rng_seed = rng_seed;
+    e->sampling_quality = sampling_quality;
+    e->structural_quality = structural_quality;
+    e->chosen = 0;
+    e->seen = 1;
+    e->chosen_since_new = 0;
+
+    archive_store_snapshot_hidden(a, idx, snapshot, hidden_state);
+    archive_store_action_chunk(a, e, action_chunk, action_chunk_len);
 
     a->bucket_to_entry[b] = idx;
     if (out_result) *out_result = ARCHIVE_INSERT_NEW;
@@ -325,7 +413,7 @@ static inline const void* archive_get_hidden_state(const Archive* a, int entry_i
    bias up to 10x; the count-decay subscore biases toward cells visited or
    chosen rarely. */
 static inline double archive_entry_weight(const ArchiveEntry* e) {
-    double q = (double)e->quality;
+    double q = (double)e->sampling_quality;
     if (q < 0.0) q = 0.0;
     return (1.0 + 9.0 * q) * (
         0.6 / sqrt((double)e->chosen + 1.0) +
@@ -340,10 +428,38 @@ static inline double archive_entry_weight(const ArchiveEntry* e) {
 static inline double archive_entry_weight_frontier(
     const ArchiveEntry* e, float q_floor, float q_power
 ) {
-    double q = (double)e->quality;
+    double q = (double)e->sampling_quality;
     if (q < (double)q_floor) return 0.0;
     double qp = pow(q, (double)q_power);
     return qp / sqrt((double)e->chosen + 1.0);
+}
+
+static inline int archive_frontier_eligible_count(const Archive* a) {
+    if (!a->frontier_mode) return 0;
+    int count = 0;
+    for (int i = 0; i < a->num_entries; i++) {
+        if (a->entries[i].sampling_quality >= a->frontier_q_floor) count++;
+    }
+    return count;
+}
+
+static inline void archive_max_qualities(
+    const Archive* a,
+    float* sampling_quality_out,
+    float* structural_quality_out
+) {
+    float max_sampling = 0.0f;
+    float max_structural = 0.0f;
+    for (int i = 0; i < a->num_entries; i++) {
+        if (a->entries[i].sampling_quality > max_sampling) {
+            max_sampling = a->entries[i].sampling_quality;
+        }
+        if (a->entries[i].structural_quality > max_structural) {
+            max_structural = a->entries[i].structural_quality;
+        }
+    }
+    if (sampling_quality_out) *sampling_quality_out = max_sampling;
+    if (structural_quality_out) *structural_quality_out = max_structural;
 }
 
 /* Sample an entry weighted by archive_entry_weight. Increments chosen and
@@ -409,7 +525,7 @@ static inline int archive_replay_actions(
     int out_capacity_ticks
 ) {
     /* walk parents to count total ticks first. cap at num_entries hops to
-       defend against cycles introduced by quality-replace. */
+       defend against cycles introduced by structural replacement. */
     int total_ticks = 0;
     int idx = entry_idx;
     int hops = 0;
@@ -460,15 +576,15 @@ static inline void archive_note_discovery_from(Archive* a, int parent_idx) {
 
 typedef struct {
     int leaf_idx;
-    float quality;
+    float structural_quality;
     int chain_ticks;
 } ArchiveDemoCandidate;
 
 static int archive_demo_compare_desc(const void* x, const void* y) {
     const ArchiveDemoCandidate* a = (const ArchiveDemoCandidate*)x;
     const ArchiveDemoCandidate* b = (const ArchiveDemoCandidate*)y;
-    if (a->quality > b->quality) return -1;
-    if (a->quality < b->quality) return 1;
+    if (a->structural_quality > b->structural_quality) return -1;
+    if (a->structural_quality < b->structural_quality) return 1;
     /* tie break: shorter trajectory wins (cleaner demo) */
     if (a->chain_ticks < b->chain_ticks) return -1;
     if (a->chain_ticks > b->chain_ticks) return 1;
@@ -492,8 +608,7 @@ static inline uint32_t archive_chain_root_rng_seed(const Archive* a, int leaf_id
 }
 
 /* Total tick count to walk the chain root->leaf. Returns -1 if the chain has
-   a cycle (more hops than archive entries) — quality-replace can rewire a
-   cell's parent_idx and produce cycles in pathological cases. */
+   a cycle (more hops than archive entries). */
 static inline int archive_chain_tick_count(const Archive* a, int leaf_idx) {
     int total = 0;
     int idx = leaf_idx;
@@ -578,7 +693,7 @@ static inline int archive_export_top_k_demos(
         int chain = archive_chain_tick_count(a, i);
         if (chain <= 0 || chain > max_replay_ticks) continue;
         candidates[n_candidates].leaf_idx = i;
-        candidates[n_candidates].quality = a->entries[i].quality;
+        candidates[n_candidates].structural_quality = a->entries[i].structural_quality;
         candidates[n_candidates].chain_ticks = chain;
         n_candidates++;
     }
@@ -586,7 +701,6 @@ static inline int archive_export_top_k_demos(
     qsort(candidates, n_candidates, sizeof(ArchiveDemoCandidate),
         archive_demo_compare_desc);
 
-    int n_export = (max_demos < n_candidates) ? max_demos : n_candidates;
     int* action_buf = (int*)malloc(
         (size_t)max_replay_ticks * (size_t)a->num_atns * sizeof(int));
     int* chain_cells = (int*)malloc((size_t)a->num_entries * sizeof(int));
@@ -597,7 +711,7 @@ static inline int archive_export_top_k_demos(
     }
 
     int written = 0;
-    for (int rank = 0; rank < n_export; rank++) {
+    for (int rank = 0; rank < n_candidates && written < max_demos; rank++) {
         int leaf = candidates[rank].leaf_idx;
         int n_ticks = archive_replay_actions(a, leaf, action_buf, max_replay_ticks);
         if (n_ticks <= 0) continue;
@@ -616,7 +730,7 @@ static inline int archive_export_top_k_demos(
         char path[1024];
         snprintf(path, sizeof(path),
             "%s/demo_%04d_q%.3f_t%d.bin",
-            output_dir, rank, candidates[rank].quality, n_ticks);
+            output_dir, written, candidates[rank].structural_quality, n_ticks);
 
         FILE* fp = fopen(path, "wb");
         if (!fp) {
@@ -629,7 +743,7 @@ static inline int archive_export_top_k_demos(
             .num_ticks = n_ticks,
             .num_atns = a->num_atns,
             .rng_seed = rng_seed,
-            .quality = candidates[rank].quality,
+            .quality = candidates[rank].structural_quality,
             .snapshot_size = (uint32_t)a->snapshot_size,
             .num_snapshots = n_cells,
         };
@@ -662,7 +776,7 @@ static inline int archive_export_top_k_demos(
  * ==========================================================================*/
 
 #define ARCHIVE_FILE_MAGIC 0x41524356u  /* 'ARCV' little-endian */
-#define ARCHIVE_FILE_VERSION 1u
+#define ARCHIVE_FILE_VERSION 2u
 
 typedef struct {
     uint32_t magic;

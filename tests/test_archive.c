@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include "src/archive.h"
 
@@ -51,6 +52,22 @@ typedef struct {
 #define DUMMY_CAPACITY 64
 #define DUMMY_CHUNK_POOL_INTS 4096
 
+static int archive_insert_same_quality(
+    Archive* a,
+    const uint8_t* key,
+    const void* snapshot,
+    const void* hidden_state,
+    int parent_idx,
+    const int* action_chunk,
+    int action_chunk_len,
+    uint32_t rng_seed,
+    float quality,
+    ArchiveInsertResult* out_result
+) {
+    return archive_insert(a, key, snapshot, hidden_state, parent_idx,
+        action_chunk, action_chunk_len, rng_seed, quality, quality, out_result);
+}
+
 static void make_key(uint8_t* key, int seed) {
     /* deterministic but distinct keys per seed */
     memset(key, 0, ARCHIVE_KEY_SIZE);
@@ -82,7 +99,7 @@ static void test_archive_insert_lookup_round_trip(void) {
     make_key(key, 1);
 
     ArchiveInsertResult r = (ArchiveInsertResult)-1;
-    int idx = archive_insert(a, key, &snap, NULL, ARCHIVE_ROOT_PARENT,
+    int idx = archive_insert_same_quality(a, key, &snap, NULL, ARCHIVE_ROOT_PARENT,
         NULL, 0, 0u, 0.5f, &r);
     ASSERT_TRUE("first insert returns valid index", idx >= 0);
     ASSERT_INT_EQ("first insert result is NEW", (int)r, (int)ARCHIVE_INSERT_NEW);
@@ -99,49 +116,109 @@ static void test_archive_insert_lookup_round_trip(void) {
     archive_destroy(a);
 }
 
-static void test_archive_duplicate_keeps_first_write_structural_fields(void) {
-    printf("--- archive re-discovery preserves snapshot/parent/actions, only updates quality stat ---\n");
+static void test_archive_duplicate_updates_sampling_and_replaces_better_structure(void) {
+    printf("--- archive duplicate updates sampling and replaces better structure ---\n");
     Archive* a = archive_create(DUMMY_CAPACITY, DUMMY_SNAP_SIZE,
-        DUMMY_NUM_ATNS, DUMMY_CHUNK_POOL_INTS, 0, 42u);
+        DUMMY_NUM_ATNS, DUMMY_CHUNK_POOL_INTS, 64, 42u);
 
     uint8_t key[ARCHIVE_KEY_SIZE];
     make_key(key, 5);
 
     DummySnap a_snap = { .tag = 1, .payload = 100 };
+    uint8_t hs_a[64];
+    memset(hs_a, 11, sizeof(hs_a));
+    int chunk_a[2 * DUMMY_NUM_ATNS] = { 1,1,1,1, 2,2,2,2 };
     ArchiveInsertResult r = (ArchiveInsertResult)-1;
-    int idx_a = archive_insert(a, key, &a_snap, NULL, ARCHIVE_ROOT_PARENT,
-        NULL, 0, 0u, 0.3f, &r);
+    int idx_a = archive_insert(a, key, &a_snap, hs_a, ARCHIVE_ROOT_PARENT,
+        chunk_a, 2, 17u, 0.3f, 0.3f, &r);
     ASSERT_INT_EQ("first insert NEW", (int)r, (int)ARCHIVE_INSERT_NEW);
 
-    /* lower quality: kept, seen++ */
     DummySnap b_snap = { .tag = 2, .payload = 200 };
-    int idx_b = archive_insert(a, key, &b_snap, NULL, ARCHIVE_ROOT_PARENT,
-        NULL, 0, 0u, 0.2f, &r);
-    ASSERT_INT_EQ("lower quality returns same idx", idx_b, idx_a);
-    ASSERT_INT_EQ("lower quality result KEPT", (int)r, (int)ARCHIVE_INSERT_KEPT);
+    uint8_t hs_b[64];
+    memset(hs_b, 22, sizeof(hs_b));
+    int chunk_b[1 * DUMMY_NUM_ATNS] = { 3,3,3,3 };
+    int idx_b = archive_insert(a, key, &b_snap, hs_b, ARCHIVE_ROOT_PARENT,
+        chunk_b, 1, 23u, 0.8f, 0.2f, &r);
+    ASSERT_INT_EQ("sampling-only update returns same idx", idx_b, idx_a);
+    ASSERT_INT_EQ("sampling-only update result", (int)r,
+        (int)ARCHIVE_INSERT_SAMPLING_UPDATED);
     ASSERT_INT_EQ("seen incremented", (int)a->entries[idx_a].seen, 2);
     const DummySnap* still_a = (const DummySnap*)archive_get_snapshot(a, idx_a);
-    ASSERT_INT_EQ("snapshot still tag=1", still_a->tag, 1);
+    ASSERT_INT_EQ("sampling-only leaves snapshot tag=1", still_a->tag, 1);
+    ASSERT_INT_EQ("sampling quality updated to 0.8",
+        (int)(a->entries[idx_a].sampling_quality * 1000.0f), 800);
+    ASSERT_INT_EQ("structural quality remains 0.3",
+        (int)(a->entries[idx_a].structural_quality * 1000.0f), 300);
 
-    /* higher quality: structural fields stay frozen, only quality stat updates */
     DummySnap c_snap = { .tag = 3, .payload = 300 };
-    int idx_c = archive_insert(a, key, &c_snap, NULL, ARCHIVE_ROOT_PARENT,
-        NULL, 0, 0u, 0.7f, &r);
-    ASSERT_INT_EQ("higher quality returns same idx", idx_c, idx_a);
-    ASSERT_INT_EQ("higher quality result REPLACED", (int)r, (int)ARCHIVE_INSERT_REPLACED);
-    const DummySnap* still_a_after_q_bump = (const DummySnap*)archive_get_snapshot(a, idx_a);
-    ASSERT_INT_EQ("snapshot NOT replaced (stays tag=1)", still_a_after_q_bump->tag, 1);
-    ASSERT_INT_EQ("snapshot payload NOT replaced", still_a_after_q_bump->payload, 100);
-    ASSERT_TRUE("quality stat updated to 0.7", a->entries[idx_a].quality > 0.69f);
+    uint8_t hs_c[64];
+    memset(hs_c, 33, sizeof(hs_c));
+    int chunk_c[3 * DUMMY_NUM_ATNS] = {
+        4,4,4,4,
+        5,5,5,5,
+        6,6,6,6,
+    };
+    int idx_c = archive_insert(a, key, &c_snap, hs_c, ARCHIVE_ROOT_PARENT,
+        chunk_c, 3, 31u, 0.7f, 0.9f, &r);
+    ASSERT_INT_EQ("structural replacement returns same idx", idx_c, idx_a);
+    ASSERT_INT_EQ("structural replacement result", (int)r,
+        (int)ARCHIVE_INSERT_STRUCTURAL_REPLACED);
+    const DummySnap* replaced = (const DummySnap*)archive_get_snapshot(a, idx_a);
+    ASSERT_INT_EQ("snapshot replaced tag=3", replaced->tag, 3);
+    ASSERT_INT_EQ("snapshot replaced payload=300", replaced->payload, 300);
+    ASSERT_INT_EQ("sampling quality remains best 0.8",
+        (int)(a->entries[idx_a].sampling_quality * 1000.0f), 800);
+    ASSERT_INT_EQ("structural quality updated to 0.9",
+        (int)(a->entries[idx_a].structural_quality * 1000.0f), 900);
+    ASSERT_INT_EQ("rng seed replaced", (int)a->entries[idx_a].rng_seed, 31);
+    ASSERT_INT_EQ("action chunk len replaced", a->entries[idx_a].action_chunk_len, 3);
+    const int* chunk_back = archive_get_action_chunk(a, idx_a);
+    ASSERT_INT_EQ("replacement action chunk first value", chunk_back[0], 4);
+    const uint8_t* hs_back = (const uint8_t*)archive_get_hidden_state(a, idx_a);
+    ASSERT_INT_EQ("hidden state replaced", hs_back[0], 33);
 
-    /* equal quality: kept (strict) */
     DummySnap d_snap = { .tag = 4, .payload = 400 };
     int idx_d = archive_insert(a, key, &d_snap, NULL, ARCHIVE_ROOT_PARENT,
-        NULL, 0, 0u, 0.7f, &r);
-    ASSERT_INT_EQ("equal quality returns same idx", idx_d, idx_a);
+        NULL, 0, 0u, 0.7f, 0.9f, &r);
+    ASSERT_INT_EQ("equal structural quality returns same idx", idx_d, idx_a);
     ASSERT_INT_EQ("equal quality result KEPT", (int)r, (int)ARCHIVE_INSERT_KEPT);
-    const DummySnap* still_a_2 = (const DummySnap*)archive_get_snapshot(a, idx_a);
-    ASSERT_INT_EQ("equal quality leaves snapshot tag=1", still_a_2->tag, 1);
+    const DummySnap* still_c = (const DummySnap*)archive_get_snapshot(a, idx_a);
+    ASSERT_INT_EQ("equal structural quality leaves snapshot tag=3", still_c->tag, 3);
+
+    archive_destroy(a);
+}
+
+static void test_archive_duplicate_sampling_updates_when_structural_pool_is_full(void) {
+    printf("--- archive duplicate sampling updates when structural replacement has no chunk space ---\n");
+
+    Archive* a = archive_create(DUMMY_CAPACITY, DUMMY_SNAP_SIZE,
+        DUMMY_NUM_ATNS, DUMMY_NUM_ATNS, 0, 42u);
+
+    uint8_t key[ARCHIVE_KEY_SIZE];
+    make_key(key, 6);
+    DummySnap snap_a = { .tag = 1, .payload = 100 };
+    DummySnap snap_b = { .tag = 2, .payload = 200 };
+    int chunk_a[DUMMY_NUM_ATNS] = { 1,1,1,1 };
+    int chunk_b[2 * DUMMY_NUM_ATNS] = { 2,2,2,2, 3,3,3,3 };
+
+    ArchiveInsertResult r = (ArchiveInsertResult)-1;
+    int idx = archive_insert(a, key, &snap_a, NULL, ARCHIVE_ROOT_PARENT,
+        chunk_a, 1, 17u, 0.3f, 0.3f, &r);
+    ASSERT_INT_EQ("first insert NEW", (int)r, (int)ARCHIVE_INSERT_NEW);
+    ASSERT_TRUE("first insert returns valid index", idx >= 0);
+
+    int duplicate = archive_insert(a, key, &snap_b, NULL, ARCHIVE_ROOT_PARENT,
+        chunk_b, 2, 23u, 0.8f, 0.9f, &r);
+    ASSERT_INT_EQ("duplicate returns existing index", duplicate, idx);
+    ASSERT_INT_EQ("sampling update reported", (int)r,
+        (int)ARCHIVE_INSERT_SAMPLING_UPDATED);
+    ASSERT_INT_EQ("sampling quality updated despite full pool",
+        (int)(a->entries[idx].sampling_quality * 1000.0f), 800);
+    ASSERT_INT_EQ("structural quality unchanged",
+        (int)(a->entries[idx].structural_quality * 1000.0f), 300);
+    const DummySnap* still_a = (const DummySnap*)archive_get_snapshot(a, idx);
+    ASSERT_INT_EQ("snapshot unchanged", still_a->tag, 1);
+    ASSERT_INT_EQ("action chunk unchanged", a->entries[idx].action_chunk_len, 1);
 
     archive_destroy(a);
 }
@@ -179,11 +256,11 @@ static void test_archive_action_chunk_roundtrip_and_replay(void) {
     };
 
     ArchiveInsertResult r;
-    int idx_root = archive_insert(a, key_root, &snap, NULL, ARCHIVE_ROOT_PARENT,
+    int idx_root = archive_insert_same_quality(a, key_root, &snap, NULL, ARCHIVE_ROOT_PARENT,
         chunk_root, 2, 0u, 0.1f, &r);
-    int idx_mid = archive_insert(a, key_mid, &snap, NULL, idx_root,
+    int idx_mid = archive_insert_same_quality(a, key_mid, &snap, NULL, idx_root,
         chunk_mid, 3, 0u, 0.2f, &r);
-    int idx_tail = archive_insert(a, key_tail, &snap, NULL, idx_mid,
+    int idx_tail = archive_insert_same_quality(a, key_tail, &snap, NULL, idx_mid,
         chunk_tail, 4, 0u, 0.3f, &r);
 
     ASSERT_TRUE("root inserted", idx_root >= 0);
@@ -225,7 +302,7 @@ static void test_archive_sample_weights_high_quality(void) {
     for (int i = 0; i < 4; i++) {
         uint8_t key[ARCHIVE_KEY_SIZE];
         make_key(key, 200 + i);
-        idx[i] = archive_insert(a, key, &snap, NULL, ARCHIVE_ROOT_PARENT,
+        idx[i] = archive_insert_same_quality(a, key, &snap, NULL, ARCHIVE_ROOT_PARENT,
             NULL, 0, 0u, qs[i], &r);
     }
 
@@ -264,13 +341,13 @@ static void test_archive_full_returns_null(void) {
     for (int i = 0; i < cap; i++) {
         uint8_t key[ARCHIVE_KEY_SIZE];
         make_key(key, 300 + i);
-        int idx = archive_insert(a, key, &snap, NULL, ARCHIVE_ROOT_PARENT,
+        int idx = archive_insert_same_quality(a, key, &snap, NULL, ARCHIVE_ROOT_PARENT,
             NULL, 0, 0u, 0.1f, &r);
         ASSERT_TRUE("fits while under capacity", idx >= 0);
     }
     uint8_t over_key[ARCHIVE_KEY_SIZE];
     make_key(over_key, 999);
-    int over = archive_insert(a, over_key, &snap, NULL, ARCHIVE_ROOT_PARENT,
+    int over = archive_insert_same_quality(a, over_key, &snap, NULL, ARCHIVE_ROOT_PARENT,
         NULL, 0, 0u, 0.1f, &r);
     ASSERT_INT_EQ("over-capacity returns null index", over, ARCHIVE_NULL_INDEX);
     ASSERT_INT_EQ("over-capacity reports FULL", (int)r, (int)ARCHIVE_INSERT_FULL);
@@ -296,7 +373,7 @@ static void test_archive_hidden_state_round_trip(void) {
     uint8_t key_a[ARCHIVE_KEY_SIZE];
     make_key(key_a, 50);
     ArchiveInsertResult r;
-    int idx_a = archive_insert(a, key_a, &snap, hs_a, ARCHIVE_ROOT_PARENT,
+    int idx_a = archive_insert_same_quality(a, key_a, &snap, hs_a, ARCHIVE_ROOT_PARENT,
         NULL, 0, 0u, 0.5f, &r);
     ASSERT_TRUE("insert with hidden state ok", idx_a >= 0);
 
@@ -308,7 +385,7 @@ static void test_archive_hidden_state_round_trip(void) {
     /* entry 2: insert with NULL hidden state (should be zero-filled) */
     uint8_t key_b[ARCHIVE_KEY_SIZE];
     make_key(key_b, 51);
-    int idx_b = archive_insert(a, key_b, &snap, NULL, ARCHIVE_ROOT_PARENT,
+    int idx_b = archive_insert_same_quality(a, key_b, &snap, NULL, ARCHIVE_ROOT_PARENT,
         NULL, 0, 0u, 0.5f, &r);
     ASSERT_TRUE("insert with NULL hidden state ok", idx_b >= 0);
     const float* hs_b = (const float*)archive_get_hidden_state(a, idx_b);
@@ -320,13 +397,13 @@ static void test_archive_hidden_state_round_trip(void) {
 
     float hs_a2[3 * 256];
     for (int i = 0; i < 3 * 256; i++) hs_a2[i] = (float)(i + 1000) * 0.002f;
-    int idx_a2 = archive_insert(a, key_a, &snap, hs_a2, ARCHIVE_ROOT_PARENT,
+    int idx_a2 = archive_insert_same_quality(a, key_a, &snap, hs_a2, ARCHIVE_ROOT_PARENT,
         NULL, 0, 0u, 0.9f, &r);
     ASSERT_INT_EQ("replace returns same idx", idx_a2, idx_a);
-    ASSERT_INT_EQ("replace result", (int)r, (int)ARCHIVE_INSERT_REPLACED);
+    ASSERT_INT_EQ("replace result", (int)r, (int)ARCHIVE_INSERT_STRUCTURAL_REPLACED);
     const float* hs_back2 = (const float*)archive_get_hidden_state(a, idx_a);
-    int diff2 = memcmp(hs_back2, hs_a, hidden_state_size);
-    ASSERT_INT_EQ("hidden state stays as first-write on quality bump", diff2, 0);
+    int diff2 = memcmp(hs_back2, hs_a2, hidden_state_size);
+    ASSERT_INT_EQ("hidden state replaced on structural improvement", diff2, 0);
 
     archive_destroy(a);
 }
@@ -339,7 +416,7 @@ static void test_archive_no_hidden_state_returns_null(void) {
     uint8_t key[ARCHIVE_KEY_SIZE];
     make_key(key, 60);
     ArchiveInsertResult r;
-    int idx = archive_insert(a, key, &snap, NULL, ARCHIVE_ROOT_PARENT,
+    int idx = archive_insert_same_quality(a, key, &snap, NULL, ARCHIVE_ROOT_PARENT,
         NULL, 0, 0u, 0.5f, &r);
     ASSERT_TRUE("insert ok", idx >= 0);
     const void* hs = archive_get_hidden_state(a, idx);
@@ -366,11 +443,11 @@ static void test_archive_save_load_round_trip(void) {
     make_key(k_mid, 401);
     make_key(k_leaf, 402);
 
-    int idx_root = archive_insert(a, k_root, &snap, hs, ARCHIVE_ROOT_PARENT,
+    int idx_root = archive_insert_same_quality(a, k_root, &snap, hs, ARCHIVE_ROOT_PARENT,
         NULL, 0, 0u, 0.1f, &r);
-    int idx_mid  = archive_insert(a, k_mid,  &snap, hs, idx_root,
+    int idx_mid  = archive_insert_same_quality(a, k_mid,  &snap, hs, idx_root,
         chunk, 2, 7u, 0.4f, &r);
-    int idx_leaf = archive_insert(a, k_leaf, &snap, hs, idx_mid,
+    int idx_leaf = archive_insert_same_quality(a, k_leaf, &snap, hs, idx_mid,
         chunk + 2 * DUMMY_NUM_ATNS, 1, 99u, 0.9f, &r);
 
     /* simulate some sample/observe traffic so chosen and seen != 0 */
@@ -453,73 +530,104 @@ static void test_archive_load_rejects_bad_magic(void) {
     remove(path);
 }
 
+static void test_archive_load_rejects_v1_archives(void) {
+    printf("--- archive load rejects v1 archives ---\n");
+    const char* path = "/tmp/test_archive_v1.bin";
+    FILE* fp = fopen(path, "wb");
+    ASSERT_TRUE("scratch file opened", fp != NULL);
+
+    ArchiveFileHeader h = {
+        .magic = ARCHIVE_FILE_MAGIC,
+        .version = 1u,
+        .capacity = 4u,
+        .snapshot_size = DUMMY_SNAP_SIZE,
+        .num_atns = DUMMY_NUM_ATNS,
+        .hidden_state_size = 0u,
+        .num_entries = 0u,
+        .action_chunk_pool_used_ints = 0u,
+        .rng_state = 1u,
+    };
+    fwrite(&h, sizeof(h), 1, fp);
+    fclose(fp);
+
+    Archive* a = archive_load(path);
+    ASSERT_TRUE("load returns NULL on v1 archive", a == NULL);
+    remove(path);
+}
+
 static void test_archive_export_top_k_demos(void) {
-    printf("--- archive export top-K demos in PLAY_REPLAY format ---\n");
+    printf("--- archive export uses structural quality and replaced trajectory ---\n");
 
     Archive* a = archive_create(DUMMY_CAPACITY, DUMMY_SNAP_SIZE,
         DUMMY_NUM_ATNS, DUMMY_CHUNK_POOL_INTS, 0, 999u);
-    DummySnap snap = { .tag = 1, .payload = 1 };
 
-    /* build three chains with different qualities so we can verify ordering */
-    uint8_t k[6][ARCHIVE_KEY_SIZE];
-    for (int i = 0; i < 6; i++) make_key(k[i], 500 + i);
+    uint8_t k_root[ARCHIVE_KEY_SIZE];
+    uint8_t k_leaf[ARCHIVE_KEY_SIZE];
+    make_key(k_root, 500);
+    make_key(k_leaf, 501);
 
-    int chunk_a[2 * DUMMY_NUM_ATNS] = { 1,1,1,1, 2,2,2,2 };
-    int chunk_b[3 * DUMMY_NUM_ATNS] = { 3,3,3,3, 4,4,4,4, 5,5,5,5 };
+    DummySnap root_snap = { .tag = 10, .payload = 10 };
+    DummySnap old_leaf_snap = { .tag = 20, .payload = 20 };
+    DummySnap new_leaf_snap = { .tag = 30, .payload = 30 };
+
+    int old_chunk[2 * DUMMY_NUM_ATNS] = { 1,1,1,1, 2,2,2,2 };
+    int new_chunk[2 * DUMMY_NUM_ATNS] = { 8,8,8,8, 9,9,9,9 };
 
     ArchiveInsertResult r;
-    /* chain 1: leaf has q=0.9 (best), 2 ticks long */
-    int c1_root = archive_insert(a, k[0], &snap, NULL, ARCHIVE_ROOT_PARENT, NULL, 0, 7u, 0.5f, &r);
-    int c1_leaf = archive_insert(a, k[1], &snap, NULL, c1_root, chunk_a, 2, 7u, 0.9f, &r);
+    int root = archive_insert(a, k_root, &root_snap, NULL, ARCHIVE_ROOT_PARENT,
+        NULL, 0, 7u, 0.5f, 0.5f, &r);
+    ASSERT_TRUE("root inserted", root >= 0);
 
-    /* chain 2: leaf has q=0.4 (mid), 5 ticks long */
-    int c2_root = archive_insert(a, k[2], &snap, NULL, ARCHIVE_ROOT_PARENT, NULL, 0, 11u, 0.2f, &r);
-    int c2_mid  = archive_insert(a, k[3], &snap, NULL, c2_root, chunk_a, 2, 11u, 0.3f, &r);
-    int c2_leaf = archive_insert(a, k[4], &snap, NULL, c2_mid,  chunk_b, 3, 11u, 0.4f, &r);
+    int leaf = archive_insert(a, k_leaf, &old_leaf_snap, NULL, root,
+        old_chunk, 2, 17u, 0.9f, 0.4f, &r);
+    ASSERT_TRUE("old leaf inserted", leaf >= 0);
 
-    /* chain 3: a single root-only entry with q=0.1 (no chunk, will be skipped) */
-    int c3_root = archive_insert(a, k[5], &snap, NULL, ARCHIVE_ROOT_PARENT, NULL, 0, 0u, 0.1f, &r);
-    (void)c1_leaf; (void)c2_leaf; (void)c3_root;
+    int replaced_leaf = archive_insert(a, k_leaf, &new_leaf_snap, NULL, root,
+        new_chunk, 2, 23u, 0.1f, 1.2f, &r);
+    ASSERT_INT_EQ("leaf replaced in place", replaced_leaf, leaf);
+    ASSERT_INT_EQ("replacement result", (int)r,
+        (int)ARCHIVE_INSERT_STRUCTURAL_REPLACED);
 
     const char* dir = "/tmp/test_archive_demos";
     mkdir(dir, 0755);
 
     int written = archive_export_top_k_demos(a, dir, 10, 100);
-    /* expected: 4 (c1_root has 0 chunks but quality > 0; chain_tick_count = 0
-       for c1_root since its action_chunk_len is 0 and parent is ROOT, so it
-       gets filtered. c1_leaf, c2_root (chunk=0 also filtered), c2_mid, c2_leaf,
-       c3_root (chunk=0 filtered). So 3 chains have chunks: c1_leaf (2 ticks),
-       c2_mid (2 ticks via chain), c2_leaf (5 ticks via chain). */
-    ASSERT_INT_EQ("3 demo files written (chains with at least 1 action)",
-        written, 3);
+    ASSERT_INT_EQ("one demo file written", written, 1);
 
-    /* verify the highest-quality file exists and is parseable */
     char top_path[1024];
-    snprintf(top_path, sizeof(top_path), "%s/demo_0000_q0.900_t2.bin", dir);
+    snprintf(top_path, sizeof(top_path), "%s/demo_0000_q1.200_t2.bin", dir);
     FILE* fp = fopen(top_path, "rb");
     ASSERT_TRUE("top demo file opens", fp != NULL);
-    int n_ticks = 0;
-    uint32_t rng_seed = 0;
-    int read_ok = (fread(&n_ticks, sizeof(int), 1, fp) == 1) &&
-                  (fread(&rng_seed, sizeof(uint32_t), 1, fp) == 1);
+
+    Phase2DemoHeader h;
+    int read_ok = fread(&h, sizeof(h), 1, fp) == 1;
     ASSERT_INT_EQ("top demo header reads", read_ok ? 1 : 0, 1);
-    ASSERT_INT_EQ("top demo n_ticks == 2", n_ticks, 2);
-    ASSERT_INT_EQ("top demo rng_seed matches chain root", (int)rng_seed, 7);
+    ASSERT_INT_EQ("top demo n_ticks == 2", (int)h.num_ticks, 2);
+    ASSERT_INT_EQ("top demo rng_seed matches chain root", (int)h.rng_seed, 7);
+    ASSERT_INT_EQ("top demo quality uses structural quality",
+        (int)(h.quality * 1000.0f), 1200);
+    ASSERT_INT_EQ("top demo snapshot count", (int)h.num_snapshots, 2);
+
+    DummySnap snapshots[2];
+    size_t snaps_read = fread(snapshots, sizeof(DummySnap), 2, fp);
+    ASSERT_INT_EQ("snapshots read", (int)snaps_read, 2);
+    ASSERT_INT_EQ("leaf snapshot is replaced trajectory", snapshots[1].tag, 30);
+
+    int ticks[2] = {0};
+    size_t ticks_read = fread(ticks, sizeof(int), 2, fp);
+    ASSERT_INT_EQ("snapshot ticks read", (int)ticks_read, 2);
 
     int actions[2 * DUMMY_NUM_ATNS] = {0};
     size_t got = fread(actions, sizeof(int),
-        (size_t)n_ticks * DUMMY_NUM_ATNS, fp);
+        (size_t)h.num_ticks * DUMMY_NUM_ATNS, fp);
     ASSERT_INT_EQ("top demo action bytes match",
-        (int)got, n_ticks * DUMMY_NUM_ATNS);
-    int actions_eq = memcmp(actions, chunk_a,
-        sizeof(chunk_a)) == 0;
-    ASSERT_INT_EQ("top demo actions match chunk_a", actions_eq, 1);
+        (int)got, (int)h.num_ticks * DUMMY_NUM_ATNS);
+    int actions_eq = memcmp(actions, new_chunk, sizeof(new_chunk)) == 0;
+    ASSERT_INT_EQ("top demo actions match replacement chunk", actions_eq, 1);
     fclose(fp);
 
-    /* cleanup */
-    char cmd[1024];
-    snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
-    system(cmd);
+    remove(top_path);
+    rmdir(dir);
 
     archive_destroy(a);
 }
@@ -527,7 +635,8 @@ static void test_archive_export_top_k_demos(void) {
 int main(void) {
     test_archive_create_and_destroy();
     test_archive_insert_lookup_round_trip();
-    test_archive_duplicate_keeps_first_write_structural_fields();
+    test_archive_duplicate_updates_sampling_and_replaces_better_structure();
+    test_archive_duplicate_sampling_updates_when_structural_pool_is_full();
     test_archive_action_chunk_roundtrip_and_replay();
     test_archive_sample_weights_high_quality();
     test_archive_full_returns_null();
@@ -535,6 +644,7 @@ int main(void) {
     test_archive_no_hidden_state_returns_null();
     test_archive_save_load_round_trip();
     test_archive_load_rejects_bad_magic();
+    test_archive_load_rejects_v1_archives();
     test_archive_export_top_k_demos();
 
     printf("\n%d/%d tests passed\n", tests_passed, tests_run);

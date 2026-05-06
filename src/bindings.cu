@@ -163,6 +163,9 @@ void rollouts(pybind11::object pufferl_obj) {
     pufferl.profile.accum[PROF_EVAL_GPU] += eval_prof[EVAL_GPU];
     pufferl.profile.accum[PROF_EVAL_ENV] += eval_prof[EVAL_ENV_STEP];
     pufferl.global_step += pufferl.hypers.horizon * pufferl.hypers.total_agents;
+    if (pufferl.phase2_ctx) {
+        phase2_apply_cursor_gate(pufferl.phase2_ctx);
+    }
 }
 
 pybind11::dict train(pybind11::object pufferl_obj) {
@@ -390,6 +393,7 @@ std::unique_ptr<PuffeRL> create_pufferl(py::dict args) {
     hypers.prio_alpha = get_config(train_kwargs, "prio_alpha");
     hypers.prio_beta0 = get_config(train_kwargs, "prio_beta0");
     hypers.reset_state = get_config(args, "reset_state");
+    hypers.terminal_reset_state = get_config(train_kwargs, "terminal_reset_state");
     // Base-level config ([base] section becomes top-level in args)
     hypers.cudagraphs = get_config(args, "cudagraphs");
     hypers.profile = get_config(args, "profile");
@@ -399,7 +403,8 @@ std::unique_ptr<PuffeRL> create_pufferl(py::dict args) {
     hypers.gpu_id = get_config(args, "gpu_id");
     hypers.nccl_id = args["nccl_id"].cast<std::string>();
     // Seed
-    hypers.seed = get_config(args, "seed");
+    hypers.seed = args.contains("seed") ? get_config(args, "seed")
+        : train_kwargs.contains("seed") ? get_config(train_kwargs, "seed") : 42;
 
     int device_count = 0;
     cudaGetDeviceCount(&device_count);
@@ -481,6 +486,44 @@ PYBIND11_MODULE(_C, m) {
     m.def("close", &puf_close);
     m.def("save_weights", &save_weights);
     m.def("load_weights", &load_weights);
+    m.def("phase2_init", [](
+        py::object pufferl_obj,
+        const std::string& demo_dir,
+        int num_atns,
+        int snapshot_stride,
+        int max_demos,
+        uint64_t seed,
+        float normal_start_frac,
+        float randomize_rng_frac,
+        float bc_coef,
+        int bc_demos_per_minibatch,
+        float promote_rate,
+        float demote_rate,
+        int backstep_ticks,
+        float success_q_delta
+    ) -> int {
+        PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
+        py::gil_scoped_release no_gil;
+        return phase2_init_impl(
+            pufferl, demo_dir.c_str(), num_atns, snapshot_stride, max_demos,
+            seed, normal_start_frac, randomize_rng_frac,
+            bc_coef, bc_demos_per_minibatch,
+            promote_rate, demote_rate, backstep_ticks, success_q_delta);
+    },
+    py::arg("pufferl"),
+    py::arg("demo_dir"),
+    py::arg("num_atns"),
+    py::arg("snapshot_stride") = 4,
+    py::arg("max_demos") = 64,
+    py::arg("seed") = 42,
+    py::arg("normal_start_frac") = 0.25f,
+    py::arg("randomize_rng_frac") = 0.25f,
+    py::arg("bc_coef") = 0.0f,
+    py::arg("bc_demos_per_minibatch") = 0,
+    py::arg("promote_rate") = 0.30f,
+    py::arg("demote_rate") = 0.10f,
+    py::arg("backstep_ticks") = 4,
+    py::arg("success_q_delta") = 0.005f);
     m.def("python_vec_recv", &python_vec_recv);
     m.def("python_vec_send", &python_vec_send);
     py::class_<Policy>(m, "Policy");
@@ -515,6 +558,7 @@ PYBIND11_MODULE(_C, m) {
         .def_readwrite("vtrace_c_clip", &HypersT::vtrace_c_clip)
         .def_readwrite("prio_alpha", &HypersT::prio_alpha)
         .def_readwrite("prio_beta0", &HypersT::prio_beta0)
+        .def_readwrite("terminal_reset_state", &HypersT::terminal_reset_state)
         .def_readwrite("cudagraphs", &HypersT::cudagraphs)
         .def_readwrite("profile", &HypersT::profile)
         .def_readwrite("rank", &HypersT::rank)

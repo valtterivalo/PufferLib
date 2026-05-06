@@ -4,11 +4,30 @@
 #include <nvml.h>
 #include <nccl.h>
 
+#include <cstdio>
+#include <cstdlib>
 #include <time.h>
 #include "models.cu"
 #include "ocean.cu"
 #include "muon.cu"
 #include "vecenv.h"
+#include "demostore.h"
+#include "phase2_curriculum.h"
+
+extern "C" {
+    struct InfernoEnv;
+    size_t inferno_env_snapshot_bytes(void) __attribute__((weak));
+    int inferno_env_build_demo_snapshot_ladder(
+        struct InfernoEnv* env, const DemoTrajectory* demo,
+        DemoSnapshotLadder* out_ladder, DemoObsCache* out_obs_cache) __attribute__((weak));
+    void inferno_env_set_phase2_ctx(
+        struct InfernoEnv* env, Phase2Context* ctx, int env_idx) __attribute__((weak));
+    int inferno_env_validate_ladders(
+        struct InfernoEnv* env, const DemoStore* store,
+        DemoSnapshotLadder* const* ladders, int* out_cursor_ticks) __attribute__((weak));
+    struct InfernoEnv* inferno_env_at(void* envs_void, int idx) __attribute__((weak));
+    void c_reset(struct InfernoEnv* env);
+}
 
 static double wall_clock() {
     struct timespec ts;
@@ -91,6 +110,7 @@ struct TrainGraph {
     PrecisionTensor mb_logprobs;    // (B, T)
     PrecisionTensor mb_advantages;  // ...
     PrecisionTensor mb_values;
+    PrecisionTensor mb_terminals;
     PrecisionTensor mb_returns;
     PrecisionTensor mb_ratio;
     PrecisionTensor mb_newvalue;
@@ -106,6 +126,7 @@ void register_train_buffers(TrainGraph& bufs, Allocator* alloc, int B, int T, in
         .mb_logprobs =      {.shape = {B, T}},
         .mb_advantages =    {.shape = {B, T}},
         .mb_values =        {.shape = {B, T}},
+        .mb_terminals =     {.shape = {B, T}},
         .mb_returns =       {.shape = {B, T}},
         .mb_ratio =         {.shape = {B, T}},
         .mb_newvalue =      {.shape = {B, T}},
@@ -118,6 +139,7 @@ void register_train_buffers(TrainGraph& bufs, Allocator* alloc, int B, int T, in
     alloc_register(alloc, &bufs.mb_advantages);
     alloc_register(alloc, &bufs.mb_prio);
     alloc_register(alloc, &bufs.mb_values);
+    alloc_register(alloc, &bufs.mb_terminals);
     alloc_register(alloc, &bufs.mb_returns);
     alloc_register(alloc, &bufs.mb_ratio);
     alloc_register(alloc, &bufs.mb_newvalue);
@@ -143,6 +165,7 @@ struct PPOKernelArgs {
     const precision_t* logits;
     const precision_t* logstd; // Continuous only
     const precision_t* values_pred;
+    const float* masks;
     const float* adv_mean;
     const float* adv_var;
     const int* act_sizes;
@@ -151,6 +174,7 @@ struct PPOKernelArgs {
     int T_seq, A_total, N;
     int logits_stride_n, logits_stride_t, logits_stride_a;
     int values_stride_n, values_stride_t;
+    int mask_stride;
     bool is_continuous;
 };
 
@@ -205,6 +229,16 @@ void register_prio_buffers(PrioBuffers& bufs, Allocator* alloc, int B, int minib
 // Slice: select dim0 index t, then narrow dim0 from start for count.
 // 3D (T, B, F) -> (count, F); 2D (T, B) -> (count,)
 inline PrecisionTensor puf_slice(PrecisionTensor& p, int t, int start, int count) {
+    if (ndim(p.shape) == 3) {
+        long B = p.shape[1], F = p.shape[2];
+        return {.data = p.data + (t*B + start)*F, .shape = {count, F}};
+    } else {
+        long B = p.shape[1];
+        return {.data = p.data + (t*B + start), .shape = {count}};
+    }
+}
+
+inline FloatTensor puf_slice(FloatTensor& p, int t, int start, int count) {
     if (ndim(p.shape) == 3) {
         long B = p.shape[1], F = p.shape[2];
         return {.data = p.data + (t*B + start)*F, .shape = {count, F}};
@@ -272,6 +306,7 @@ typedef struct {
     float prio_beta0;
     // Flags
     bool reset_state;
+    bool terminal_reset_state;
     int cudagraphs;
     bool profile;
     // Multi-GPU
@@ -302,6 +337,16 @@ typedef struct {
     RolloutBuf train_rollouts;  // Pre-allocated transposed copy for train_impl
     EnvBuf env;
     TrainGraph train_buf;
+    bool has_mask;
+    int env_obs_width;
+    int mask_width;
+    FloatTensor ones_mask;
+    FloatTensor rollout_masks;
+    FloatTensor train_masks;
+    FloatTensor mb_masks;
+    DemoStore* phase2_store;
+    DemoSnapshotLadder** phase2_ladders;
+    Phase2Context* phase2_ctx;
     PrecisionTensor advantages_puf;  // Pre-allocated for train_impl (B, T)
     cudaGraphExec_t* fused_rollout_cudagraphs;  // [horizon][num_buffers]
     cudaGraphExec_t train_cudagraph;
@@ -330,8 +375,15 @@ typedef struct {
 } PuffeRL;
 
 Dict* log_environments_impl(PuffeRL& pufferl) {
-    Dict* out = create_dict(64);
+    Dict* out = create_dict(128);
     static_vec_log(pufferl.vec, out);
+    if (pufferl.phase2_ctx) {
+        Phase2CursorStats cs = phase2_cursor_stats(pufferl.phase2_ctx);
+        dict_set(out, "phase2_cursor_mean_frac", cs.mean_frac);
+        dict_set(out, "phase2_cursor_min_frac", cs.min_frac);
+        dict_set(out, "phase2_cursor_max_frac", cs.max_frac);
+        dict_set(out, "phase2_cursor_at_start", (float)cs.num_at_start);
+    }
     return out;
 }
 
@@ -359,6 +411,69 @@ __global__ void rng_init(curandStatePhilox4_32_10_t* states, uint64_t seed, int 
     }
 }
 
+__global__ void split_obs_mask_kernel(
+        precision_t* __restrict__ features,
+        float* __restrict__ masks,
+        const float* __restrict__ obs,
+        int rows, int env_obs_width, int input_size, int mask_width) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = rows * (input_size + mask_width);
+    if (idx >= total) {
+        return;
+    }
+
+    int row = idx / (input_size + mask_width);
+    int col = idx % (input_size + mask_width);
+    const float* src = obs + row * env_obs_width;
+    if (col < input_size) {
+        features[row * input_size + col] = from_float(src[col]);
+    } else {
+        int mask_col = col - input_size;
+        masks[row * mask_width + mask_col] = src[input_size + mask_col];
+    }
+}
+
+__global__ void zero_terminal_recurrent_state_kernel(
+        precision_t* __restrict__ state,
+        const float* __restrict__ terminals,
+        int layers, int batch, int hidden) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = layers * batch * hidden;
+    if (idx >= total) {
+        return;
+    }
+
+    int b = (idx / hidden) % batch;
+    if (terminals[b] > 0.5f) {
+        state[idx] = from_float(0.0f);
+    }
+}
+
+__global__ void transpose_102_f32(float* __restrict__ dst,
+        const float* __restrict__ src, int A, int B, int C) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = A * B * C;
+    if (idx >= total) {
+        return;
+    }
+    int a = idx / (B * C), rem = idx % (B * C), b = rem / C, c = rem % C;
+    dst[b * A * C + a * C + c] = src[idx];
+}
+
+__global__ void select_mask_copy(FloatTensor train_masks, FloatTensor mb_masks,
+        const int* __restrict__ idx) {
+    int mb = blockIdx.x;
+    int src_row = idx[mb];
+    int row_bytes = (numel(train_masks.shape) / train_masks.shape[0]) * sizeof(float);
+    copy_bytes((const char*)train_masks.data, (char*)mb_masks.data,
+        src_row, mb, row_bytes);
+}
+
+__device__ __forceinline__ float mask_value(
+        const float* __restrict__ masks, int row, int stride, int offset) {
+    return masks[(stride > 0 ? row * stride : 0) + offset];
+}
+
 __device__ __forceinline__ float safe_logit(const precision_t* logits,
         int logits_base, int logits_offset, int offset) {
     float l = to_float(logits[logits_base + logits_offset + offset]);
@@ -379,7 +494,9 @@ __global__ void sample_logits(
         precision_t* __restrict__ actions,    // (B, num_atns)
         precision_t* __restrict__ logprobs,   // (B,)
         precision_t* __restrict__ value_out,  // (B,)
-        curandStatePhilox4_32_10_t* __restrict__ rng_states) {
+        curandStatePhilox4_32_10_t* __restrict__ rng_states,
+        const float* __restrict__ masks,
+        int mask_stride) {
     int B = dec_out.shape[0];
     int fused_cols = dec_out.shape[1];
     int num_atns = numel(act_sizes_puf.shape);
@@ -435,6 +552,9 @@ __global__ void sample_logits(
             float max_val = -INFINITY;
             float sum_exp = 0.0f;
             for (int a = 0; a < A; ++a) {
+                if (mask_value(masks, idx, mask_stride, logits_offset + a) <= 0.0f) {
+                    continue;
+                }
                 float l = safe_logit(logits, logits_base, logits_offset, a);
                 if (l > max_val) {
                     sum_exp *= expf(max_val - l);
@@ -449,9 +569,13 @@ __global__ void sample_logits(
 
             // Step 4: Multinomial sampling using inverse CDF
             float cumsum = 0.0f;
-            int sampled_action = A - 1;  // default to last action
+            int sampled_action = A - 1;  // default to last valid action
 
             for (int a = 0; a < A; ++a) {
+                if (mask_value(masks, idx, mask_stride, logits_offset + a) <= 0.0f) {
+                    continue;
+                }
+                sampled_action = a;
                 float l = safe_logit(logits, logits_base, logits_offset, a);
                 float prob = expf(l - logsumexp);
                 cumsum += prob;
@@ -512,13 +636,22 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
 
     // Copy observations, rewards, terminals from GPU env buffers to rollout buffer
     OBS_TENSOR_T& obs_env = env.obs;
-    int n = block_size * obs_env.shape[1];
     PrecisionTensor obs_dst = puf_slice(rollouts.observations, t, start, block_size);
-    cast<<<grid_size(n), BLOCK_SIZE, 0, stream>>>(
-        obs_dst.data, obs_env.data + (long)start*obs_env.shape[1], n);
+    if (pufferl->has_mask) {
+        FloatTensor mask_dst = puf_slice(pufferl->rollout_masks, t, start, block_size);
+        int n = block_size * (obs_dst.shape[1] + pufferl->mask_width);
+        split_obs_mask_kernel<<<grid_size(n), BLOCK_SIZE, 0, stream>>>(
+            obs_dst.data, mask_dst.data,
+            (const float*)obs_env.data + (long)start * pufferl->env_obs_width,
+            block_size, pufferl->env_obs_width, obs_dst.shape[1], pufferl->mask_width);
+    } else {
+        int n = block_size * obs_env.shape[1];
+        cast<<<grid_size(n), BLOCK_SIZE, 0, stream>>>(
+            obs_dst.data, obs_env.data + (long)start*obs_env.shape[1], n);
+    }
 
     PrecisionTensor rew_dst = puf_slice(rollouts.rewards, t, start, block_size);
-    n = block_size;
+    int n = block_size;
     cast<<<grid_size(n), BLOCK_SIZE, 0, stream>>>(
         rew_dst.data, env.rewards.data + start, n);
 
@@ -528,6 +661,13 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
 
     // Policy forward pass for rollouts
     PrecisionTensor state_puf = pufferl->buffer_states[buf];
+    if (hypers.terminal_reset_state) {
+        int layers = state_puf.shape[0];
+        int batch = state_puf.shape[1];
+        int hidden = state_puf.shape[2];
+        zero_terminal_recurrent_state_kernel<<<grid_size(layers * batch * hidden), BLOCK_SIZE, 0, stream>>>(
+            state_puf.data, env.terminals.data + start, layers, batch, hidden);
+    }
     PrecisionTensor dec_puf = policy_forward(&pufferl->policy, pufferl->weights, pufferl->buffer_activations[buf], obs_dst, state_puf, stream);
 
     // Sample actions, logprobs, values into rollout buffer
@@ -539,11 +679,15 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
     if (dw->continuous) {
         p_logstd = dw->logstd;
     }
+    const float* mask_ptr = pufferl->has_mask
+        ? puf_slice(pufferl->rollout_masks, t, start, block_size).data
+        : pufferl->ones_mask.data;
+    int mask_stride = pufferl->has_mask ? pufferl->mask_width : 0;
 
     sample_logits<<<grid_size(block_size), BLOCK_SIZE, 0, stream>>>(
         dec_puf, p_logstd, pufferl->act_sizes_puf,
         act_slice.data, lp_slice.data, val_slice.data,
-        pufferl->rng_states[buf]);
+        pufferl->rng_states[buf], mask_ptr, mask_stride);
 
     // Copy actions to env
     long act_cols = env.actions.shape[1];
@@ -563,6 +707,7 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
 
 __device__ __forceinline__ void ppo_discrete_head(
         const precision_t* __restrict__ logits, int logits_base,
+        const float* __restrict__ masks, int mask_base,
         int logits_stride_a, int logits_offset, int A, int act,
         float* out_logsumexp, float* out_entropy, float* out_logp) {
     float max_logit = -INFINITY;
@@ -570,6 +715,9 @@ __device__ __forceinline__ void ppo_discrete_head(
     float act_logit = 0.0f;
 
     for (int a = 0; a < A; ++a) {
+        if (masks[mask_base + logits_offset + a] <= 0.0f) {
+            continue;
+        }
         float l = to_float(logits[logits_base + (logits_offset + a) * logits_stride_a]);
         if (a == act) {
             act_logit = l;
@@ -584,6 +732,9 @@ __device__ __forceinline__ void ppo_discrete_head(
 
     float ent = 0.0f;
     for (int a = 0; a < A; ++a) {
+        if (masks[mask_base + logits_offset + a] <= 0.0f) {
+            continue;
+        }
         float l = to_float(logits[logits_base + (logits_offset + a) * logits_stride_a]);
         float logp = l - logsumexp;
         float p = __expf(logp);
@@ -631,6 +782,7 @@ __global__ void ppo_loss_compute(
     int logits_base = n * a.logits_stride_n + t * a.logits_stride_t;
     int values_idx = n * a.values_stride_n + t * a.values_stride_t;
     int grad_logits_base = nt * a.A_total;
+    int mask_base = (a.mask_stride > 0) ? nt * a.mask_stride : 0;
 
     // Shared computation (used by both forward and backward)
 
@@ -688,7 +840,8 @@ __global__ void ppo_loss_compute(
             int act = static_cast<int>(g.actions[nt * a.num_atns + h]);
             head_act[h] = act;
             float lse, ent, lp;
-            ppo_discrete_head(a.logits, logits_base, a.logits_stride_a, logits_offset, A, act, &lse, &ent, &lp);
+            ppo_discrete_head(a.logits, logits_base, a.masks, mask_base,
+                a.logits_stride_a, logits_offset, A, act, &lse, &ent, &lp);
             head_logsumexp[h] = lse;
             head_entropy[h] = ent;
             total_log_prob += lp;
@@ -734,6 +887,10 @@ __global__ void ppo_loss_compute(
             float ent = head_entropy[h];
 
             for (int j = 0; j < A; ++j) {
+                if (a.masks[mask_base + logits_offset + j] <= 0.0f) {
+                    a.grad_logits[grad_logits_base + logits_offset + j] = 0.0f;
+                    continue;
+                }
                 float l = to_float(a.logits[logits_base + (logits_offset + j) * a.logits_stride_a]);
                 float logp = l - logsumexp;
                 float p = __expf(logp);
@@ -868,6 +1025,7 @@ void ppo_loss_fwd_bwd(
         IntTensor& act_sizes, FloatTensor& losses_acc,
         float clip_coef, float vf_clip_coef, float vf_coef, float ent_coef,
         PPOBuffersPuf& bufs, bool is_continuous,
+        const float* masks, int mask_stride,
         cudaStream_t stream) {
     int N = dec_out.shape[0], T = dec_out.shape[1], fused_cols = dec_out.shape[2];
     int A_total = fused_cols - 1;  // last column is value
@@ -912,6 +1070,7 @@ void ppo_loss_fwd_bwd(
         .logits = logits_ptr,
         .logstd = is_continuous ? logstd.data : nullptr,
         .values_pred = logits_ptr + A_total,
+        .masks = masks,
         .adv_mean = adv_mean_ptr,
         .adv_var = adv_var_ptr,
         .act_sizes = act_sizes.data,
@@ -921,6 +1080,7 @@ void ppo_loss_fwd_bwd(
         .T_seq = T, .A_total = A_total, .N = N,
         .logits_stride_n = T * fused_cols, .logits_stride_t = fused_cols, .logits_stride_a = 1,
         .values_stride_n = T * fused_cols, .values_stride_t = fused_cols,
+        .mask_stride = mask_stride,
         .is_continuous = is_continuous,
     };
 
@@ -1237,6 +1397,7 @@ __global__ void select_copy(RolloutBuf rollouts, TrainGraph graph,
     int obs_row_bytes = (numel(rollouts.observations.shape) / rollouts.observations.shape[0]) * sizeof(precision_t);
     int act_row_bytes = (numel(rollouts.actions.shape) / rollouts.actions.shape[0]) * sizeof(precision_t);
     int lp_row_bytes = (numel(rollouts.logprobs.shape) / rollouts.logprobs.shape[0]) * sizeof(precision_t);
+    int term_row_bytes = (numel(rollouts.terminals.shape) / rollouts.terminals.shape[0]) * sizeof(precision_t);
     int horizon = rollouts.values.shape[1];
 
     switch (ch) {
@@ -1257,8 +1418,11 @@ __global__ void select_copy(RolloutBuf rollouts, TrainGraph graph,
     case 4:
         if (threadIdx.x == 0) {
             graph.mb_prio.data[mb] = from_float(mb_prio[mb]);
-            break;
         }
+        break;
+    case 5:
+        copy_bytes((const char*)rollouts.terminals.data, (char*)graph.mb_terminals.data, src_row, mb, term_row_bytes);
+        break;
     }
 }
 
@@ -1299,6 +1463,10 @@ void train_impl(PuffeRL& pufferl) {
         rollouts.ratio.data, src.ratio.data, T, B, 1);
     transpose_102<<<grid_size(T*B), BLOCK_SIZE, 0, train_stream>>>(
         rollouts.values.data, src.values.data, T, B, 1);
+    if (pufferl.has_mask) {
+        transpose_102_f32<<<grid_size(T*B*pufferl.mask_width), BLOCK_SIZE, 0, train_stream>>>(
+            pufferl.train_masks.data, pufferl.rollout_masks.data, T, B, pufferl.mask_width);
+    }
 
     // We hard-clamp rewards to -1, 1. Our envs are mostly designed to respect this range
     clamp_precision_kernel<<<grid_size(numel(rollouts.rewards.shape)), BLOCK_SIZE, 0, train_stream>>>(
@@ -1355,9 +1523,13 @@ void train_impl(PuffeRL& pufferl) {
             RolloutBuf sel_src = rollouts;
             sel_src.values = rollouts.values;
             int mb_segs = pufferl.prio_bufs.idx.shape[0];
-            select_copy<<<dim3(mb_segs, 5), SELECT_COPY_THREADS, 0, train_stream>>>(
+            select_copy<<<dim3(mb_segs, 6), SELECT_COPY_THREADS, 0, train_stream>>>(
                 sel_src, graph, pufferl.prio_bufs.idx.data,
                 advantages_puf.data, pufferl.prio_bufs.mb_prio.data);
+            if (pufferl.has_mask) {
+                select_mask_copy<<<mb_segs, SELECT_COPY_THREADS, 0, train_stream>>>(
+                    pufferl.train_masks, pufferl.mb_masks, pufferl.prio_bufs.idx.data);
+            }
         }
         profile_end(hypers.profile);
 
@@ -1374,7 +1546,8 @@ void train_impl(PuffeRL& pufferl) {
             cudaStream_t stream = train_stream;
             PrecisionTensor obs_puf = graph.mb_obs;
             PrecisionTensor state_puf = graph.mb_state;
-            PrecisionTensor dec_puf = policy_forward_train(&pufferl.policy, pufferl.weights, pufferl.train_activations, obs_puf, state_puf, stream);
+            PrecisionTensor reset_puf = hypers.terminal_reset_state ? graph.mb_terminals : PrecisionTensor();
+            PrecisionTensor dec_puf = policy_forward_train(&pufferl.policy, pufferl.weights, pufferl.train_activations, obs_puf, state_puf, reset_puf, stream);
             DecoderWeights* dw_train = (DecoderWeights*)pufferl.weights.decoder;
             PrecisionTensor p_logstd;
             if (dw_train->continuous) {
@@ -1384,7 +1557,10 @@ void train_impl(PuffeRL& pufferl) {
             ppo_loss_fwd_bwd(dec_puf, p_logstd, graph,
                 pufferl.act_sizes_puf, pufferl.losses_puf,
                 hypers.clip_coef, hypers.vf_clip_coef, hypers.vf_coef, hypers.ent_coef,
-                pufferl.ppo_bufs_puf, pufferl.is_continuous, stream);
+                pufferl.ppo_bufs_puf, pufferl.is_continuous,
+                pufferl.has_mask ? pufferl.mb_masks.data : pufferl.ones_mask.data,
+                pufferl.has_mask ? pufferl.mask_width : 0,
+                stream);
 
             FloatTensor grad_logits_puf = pufferl.ppo_bufs_puf.grad_logits;
             FloatTensor grad_logstd_puf = pufferl.is_continuous ? pufferl.ppo_bufs_puf.grad_logstd : FloatTensor();
@@ -1507,8 +1683,17 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     nvmlInit();
     nvmlDeviceGetHandleByIndex(hypers.gpu_id, &pufferl->nvml_device);
 
-    // Create policy
-    int input_size = pufferl->env.obs.shape[1];
+    DictItem* mask_entry = dict_get_unsafe(env_kwargs, "mask_in_obs");
+    pufferl->has_mask = mask_entry && mask_entry->value > 0.0f;
+    pufferl->env_obs_width = pufferl->env.obs.shape[1];
+    pufferl->mask_width = act_n;
+
+    int input_size = pufferl->has_mask
+        ? pufferl->env_obs_width - pufferl->mask_width
+        : pufferl->env_obs_width;
+    if (input_size <= 0) {
+        throw std::runtime_error("mask_in_obs leaves no observation features");
+    }
     int hidden_size = hypers.hidden_size;
     int num_layers = hypers.num_layers;
     bool is_continuous = pufferl->is_continuous;
@@ -1595,6 +1780,17 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
         acts, minibatch_segments, hypers.horizon, decoder_output_size, is_continuous);
     register_prio_buffers(pufferl->prio_bufs,
         acts, hypers.total_agents, minibatch_segments);
+    if (pufferl->has_mask) {
+        pufferl->rollout_masks = {.shape = {horizon, total_agents, act_n}};
+        pufferl->train_masks = {.shape = {total_agents, horizon, act_n}};
+        pufferl->mb_masks = {.shape = {minibatch_segments, hypers.horizon, act_n}};
+        alloc_register(acts, &pufferl->rollout_masks);
+        alloc_register(acts, &pufferl->train_masks);
+        alloc_register(acts, &pufferl->mb_masks);
+    } else {
+        pufferl->ones_mask = {.shape = {act_n}};
+        alloc_register(acts, &pufferl->ones_mask);
+    }
 
     // Extra cuda buffers just reuse activ allocator
     pufferl->rng_offset_puf = {.shape = {num_buffers + 1}};
@@ -1649,6 +1845,10 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
 
     // Post-create initialization
     cudaMemcpy(pufferl->act_sizes_puf.data, raw_act_sizes, num_action_heads * sizeof(int), cudaMemcpyHostToDevice);
+    if (!pufferl->has_mask) {
+        std::vector<float> ones(act_n, 1.0f);
+        cudaMemcpy(pufferl->ones_mask.data, ones.data(), act_n * sizeof(float), cudaMemcpyHostToDevice);
+    }
     cudaMemset(pufferl->losses_puf.data, 0, NUM_LOSSES * sizeof(float));
     float one = 1.0f;
     cudaMemcpy(pufferl->ppo_bufs_puf.grad_loss.data, &one, sizeof(float), cudaMemcpyHostToDevice);
@@ -1751,8 +1951,111 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     return pufferl;
 }
 
+int phase2_init_impl(
+    PuffeRL& pufferl,
+    const char* demo_dir,
+    int num_atns,
+    int snapshot_stride,
+    int max_demos,
+    uint64_t seed,
+    float normal_start_frac,
+    float randomize_rng_frac,
+    float bc_coef,
+    int bc_demos_per_minibatch,
+    float promote_rate,
+    float demote_rate,
+    int backstep_ticks,
+    float success_q_delta
+) {
+    if (bc_coef > 0.0f || bc_demos_per_minibatch > 0) {
+        std::fprintf(stderr, "phase2_init: CUDA path supports curriculum resets only, not BC rows\n");
+        std::abort();
+    }
+    if (!inferno_env_snapshot_bytes || !inferno_env_build_demo_snapshot_ladder ||
+        !inferno_env_set_phase2_ctx || !inferno_env_validate_ladders ||
+        !inferno_env_at) {
+        std::fprintf(stderr, "phase2_init: inferno env hooks are unavailable\n");
+        std::abort();
+    }
+
+    size_t snapshot_size = inferno_env_snapshot_bytes();
+    DemoStore* store = demostore_create(max_demos);
+    int loaded = demostore_load_dir(store, demo_dir, num_atns, 1,
+        max_demos, (uint32_t)snapshot_size);
+    if (loaded <= 0) {
+        demostore_destroy(store);
+        std::fprintf(stderr, "phase2_init: no demos loaded from %s\n", demo_dir);
+        std::abort();
+    }
+
+    DemoSnapshotLadder** ladders = (DemoSnapshotLadder**)std::calloc(
+        (size_t)store->num_demos, sizeof(DemoSnapshotLadder*));
+    void* envs_void = pufferl.vec->envs;
+    InfernoEnv* env0 = inferno_env_at(envs_void, 0);
+    for (int i = 0; i < store->num_demos; i++) {
+        DemoTrajectory* demo = &store->demos[i];
+        ladders[i] = demo_snapshot_ladder_create(
+            i, snapshot_stride, demo->num_snapshots, snapshot_size, 0);
+        if (inferno_env_build_demo_snapshot_ladder(env0, demo, ladders[i], NULL) != 0) {
+            std::fprintf(stderr, "phase2_init: ladder build failed for demo %d\n", i);
+            std::abort();
+        }
+    }
+
+    int* cursor_ticks = (int*)std::calloc((size_t)store->num_demos, sizeof(int));
+    inferno_env_validate_ladders(env0, store, ladders, cursor_ticks);
+    for (int i = 0; i < store->num_demos; i++) {
+        store->demos[i].cursor_tick = cursor_ticks[i];
+    }
+    std::free(cursor_ticks);
+    c_reset(env0);
+
+    Phase2Context* ctx = phase2_ctx_create(store, ladders, pufferl.vec->total_agents, seed);
+    ctx->normal_start_frac = normal_start_frac;
+    ctx->randomize_rng_frac = randomize_rng_frac;
+    ctx->promote_rate = promote_rate;
+    ctx->demote_rate = demote_rate;
+    ctx->backstep_ticks = backstep_ticks;
+    ctx->success_q_delta = success_q_delta;
+
+    for (int e = 0; e < pufferl.vec->total_agents; e++) {
+        inferno_env_set_phase2_ctx(inferno_env_at(envs_void, e), ctx, e);
+    }
+
+    pufferl.phase2_store = store;
+    pufferl.phase2_ladders = ladders;
+    pufferl.phase2_ctx = ctx;
+
+    std::fprintf(stderr,
+        "phase2_init: %d demos, stride=%d, %d envs\n",
+        store->num_demos, snapshot_stride, pufferl.vec->total_agents);
+    return store->num_demos;
+}
+
+void phase2_close(PuffeRL& pufferl) {
+    if (!pufferl.phase2_ctx) {
+        return;
+    }
+
+    void* envs_void = pufferl.vec->envs;
+    for (int e = 0; e < pufferl.vec->total_agents; e++) {
+        inferno_env_set_phase2_ctx(inferno_env_at(envs_void, e), NULL, e);
+    }
+
+    phase2_ctx_destroy(pufferl.phase2_ctx);
+    for (int i = 0; i < pufferl.phase2_store->num_demos; i++) {
+        demo_snapshot_ladder_destroy(pufferl.phase2_ladders[i]);
+    }
+    std::free(pufferl.phase2_ladders);
+    demostore_destroy(pufferl.phase2_store);
+    pufferl.phase2_ctx = NULL;
+    pufferl.phase2_ladders = NULL;
+    pufferl.phase2_store = NULL;
+}
+
 void close_impl(PuffeRL& pufferl) {
     cudaDeviceSynchronize();
+    phase2_close(pufferl);
     if (pufferl.hypers.profile) {
         cudaProfilerStop();
     }

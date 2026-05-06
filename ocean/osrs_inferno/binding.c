@@ -68,6 +68,8 @@ typedef struct InfernoEnv {
     /* set by c_step on terminal-reset; consumed by c_render on its next call
        to mirror the standalone viewer's post-reset cleanup (osrs_visual.c:186). */
     int pending_render_reset;
+    int render_status_frames;
+    char render_status_text[ENCOUNTER_OVERLAY_STATUS_TEXT_LEN];
 
     OsrsEnv render_env; /* minimal env wrapper for pvp_render() */
 
@@ -108,6 +110,7 @@ typedef struct InfernoEnv {
 #define ACT_SIZES { ENCOUNTER_MOVE_ACTIONS, ENCOUNTER_OVERHEAD_DIM_PVE, INF_OBS_NPCS+1, 5, 2, 4, 3, 2, ENCOUNTER_OFFENSIVE_DIM }
 #define OBS_TENSOR_T FloatTensor
 #define Env InfernoEnv
+#define INF_RENDER_STATUS_FRAMES 180
 
 /* global best episode tracking */
 static pthread_mutex_t g_best_replay_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -283,6 +286,10 @@ void c_step(Env* env) {
        instead of noisy mid-episode snapshots. */
     if (is_term) {
         InfernoState* s = (InfernoState*)env->enc_state;
+        inf_write_terminal_status_text(s, env->render_status_text,
+            sizeof(env->render_status_text));
+        env->render_status_frames =
+            env->render_status_text[0] != '\0' ? INF_RENDER_STATUS_FRAMES : 0;
 
         /* only count episodes that match the configured start_wave.
            curriculum agents (overridden wave) are excluded from metrics. */
@@ -543,7 +550,15 @@ void c_render(Env* env) {
         }
         env->last_step_time = GetTime();
     }
+    if (env->render_status_frames > 0 && re->client) {
+        RenderClient* rc = (RenderClient*)re->client;
+        rc->encounter_overlay.status_text_active = 1;
+        snprintf(rc->encounter_overlay.status_text,
+            sizeof(rc->encounter_overlay.status_text),
+            "%s", env->render_status_text);
+    }
     pvp_render(re);
+    if (env->render_status_frames > 0) env->render_status_frames--;
 
     RenderClient* rc = (RenderClient*)re->client;
     if (!rc) return;
@@ -1022,7 +1037,7 @@ void inferno_env_begin_archive_iteration(
    For a discovery at scratch tick T, the hidden state to attach is at
    history[T][env_idx]. Pass NULL to skip hidden state attachment.
 
-   Returns the number of NEW (not KEPT or REPLACED) cells inserted. */
+   Returns the number of NEW cells inserted. */
 int inferno_env_flush_scratch_to_archive(
     InfernoEnv* env,
     const uint8_t* hidden_state_history,
@@ -1063,11 +1078,14 @@ int inferno_env_flush_scratch_to_archive(
             action_chunk_len,
             (i == 0) ? env->archive_parent_rng : 0u,
             env->archive_scratch_quality[i],
+            env->archive_scratch_quality[i],
             &result);
 
         if (new_idx >= 0) {
             if (result == ARCHIVE_INSERT_NEW) {
                 new_cells++;
+                archive_note_discovery_from(env->archive, prev_archive_idx);
+            } else if (result == ARCHIVE_INSERT_STRUCTURAL_REPLACED) {
                 archive_note_discovery_from(env->archive, prev_archive_idx);
             }
             prev_archive_idx = new_idx;
@@ -1125,6 +1143,7 @@ int inferno_env_register_root_cell(
     return archive_insert(archive,
         (const uint8_t*)&key, &snap, hidden_state,
         ARCHIVE_ROOT_PARENT, NULL, 0, 0u,
+        quality,
         quality, &result);
 }
 

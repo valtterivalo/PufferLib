@@ -162,7 +162,7 @@ static void test_record_outcome(void) {
     DemoSnapshotLadder** l = mk_ladders(2, 80, 4);
     Phase2Context* ctx = phase2_ctx_create(s, l, 1, 42);
 
-    phase2_record_outcome(ctx, 0, /*won=*/0, /*q_delta=*/0.01f);
+    phase2_record_outcome(ctx, 0, /*won=*/0, /*q_delta=*/0.001f);
     phase2_record_outcome(ctx, 0, 0, 0.05f);
     phase2_record_outcome(ctx, 0, 1, 0.0f);
     ASSERT_INT_EQ("attempts[0]", ctx->demo_attempts[0], 3);

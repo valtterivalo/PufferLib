@@ -63,6 +63,28 @@ static void assert_child_aborts(const char* label, void (*fn)(void)) {
     } \
 } while (0)
 
+#define ASSERT_FLOAT_GT(label, actual, threshold) do { \
+    tests_run++; \
+    if ((actual) > (threshold)) { \
+        tests_passed++; \
+    } else { \
+        tests_failed++; \
+        printf("  FAIL: %s — got %.6f, expected > %.6f\n", \
+            (label), (float)(actual), (float)(threshold)); \
+    } \
+} while (0)
+
+#define ASSERT_STR_EQ(label, actual, expected) do { \
+    tests_run++; \
+    if (strcmp((actual), (expected)) == 0) { \
+        tests_passed++; \
+    } else { \
+        tests_failed++; \
+        printf("  FAIL: %s - got \"%s\", expected \"%s\"\n", \
+            (label), (actual), (expected)); \
+    } \
+} while (0)
+
 static InfernoState make_test_state(int player_x, int player_y) {
     InfernoState state;
     memset(&state, 0, sizeof(state));
@@ -2106,6 +2128,116 @@ static void test_inferno_cell_key_quantization_groups_neighbors(void) {
     inf_destroy(raw_b);
 }
 
+static void test_inferno_cell_key_tracks_set_magers_and_jad_hp_bucket(void) {
+    printf("--- inferno cell key tracks set magers and jad hp bucket ---\n");
+
+    InfernoState state;
+    init_zuk_timing_state(&state);
+
+    state.npcs[2] = make_test_npc(
+        INF_NPC_MAGER, 20, 36, INF_NPC_STATS[INF_NPC_MAGER].size);
+    state.npcs[2].active = 1;
+    state.npcs[2].hp = state.npcs[2].max_hp = INF_NPC_STATS[INF_NPC_MAGER].hp;
+
+    state.npcs[3] = make_test_npc(
+        INF_NPC_RANGER, 26, 36, INF_NPC_STATS[INF_NPC_RANGER].size);
+    state.npcs[3].active = 1;
+    state.npcs[3].hp = state.npcs[3].max_hp = INF_NPC_STATS[INF_NPC_RANGER].hp;
+
+    state.npcs[4] = make_test_npc(
+        INF_NPC_MELEER, 24, 36, INF_NPC_STATS[INF_NPC_MELEER].size);
+    state.npcs[4].active = 1;
+    state.npcs[4].hp = state.npcs[4].max_hp = INF_NPC_STATS[INF_NPC_MELEER].hp;
+
+    state.npcs[5] = make_test_npc(
+        INF_NPC_JAD, 24, 32, INF_NPC_STATS[INF_NPC_JAD].size);
+    state.npcs[5].active = 1;
+    state.npcs[5].hp = 253;
+    state.npcs[5].max_hp = INF_NPC_STATS[INF_NPC_JAD].hp;
+
+    InfCellKey key;
+    inf_write_cell_key((EncounterState*)&state, &key);
+
+    ASSERT_INT_EQ("active_set_count includes mager ranger meleer",
+        key.active_set_count, 3);
+    ASSERT_INT_EQ("jad_hp_bin uses live Jad HP / 50",
+        key.jad_hp_bin, 5);
+}
+
+static void test_inferno_progress_score_rewards_late_add_transitions(void) {
+    printf("--- inferno progress score rewards late add transitions ---\n");
+
+    InfernoState jad_alive;
+    init_zuk_timing_state(&jad_alive);
+    jad_alive.zuk.jad_spawned = 1;
+    jad_alive.min_zuk_hp_seen = 300.0f;
+    jad_alive.npcs[0].hp = 300;
+    jad_alive.npcs[2] = make_test_npc(
+        INF_NPC_JAD, 24, 32, INF_NPC_STATS[INF_NPC_JAD].size);
+    jad_alive.npcs[2].active = 1;
+    jad_alive.npcs[2].hp = jad_alive.npcs[2].max_hp = INF_NPC_STATS[INF_NPC_JAD].hp;
+
+    InfernoState jad_dead = jad_alive;
+    jad_dead.npcs[2].active = 0;
+    jad_dead.npcs[2].hp = 0;
+
+    float q_jad_alive = inf_progress_score((EncounterState*)&jad_alive);
+    float q_jad_dead = inf_progress_score((EncounterState*)&jad_dead);
+    ASSERT_FLOAT_GT("same Zuk HP with Jad dead scores higher",
+        q_jad_dead, q_jad_alive);
+
+    InfernoState jad_damaged = jad_alive;
+    jad_damaged.npcs[2].hp = jad_damaged.npcs[2].max_hp / 2;
+    float q_jad_damaged = inf_progress_score((EncounterState*)&jad_damaged);
+    ASSERT_FLOAT_GT("same Zuk HP with Jad damaged scores higher",
+        q_jad_damaged, q_jad_alive);
+    ASSERT_FLOAT_GT("Jad dead scores above partial Jad damage",
+        q_jad_dead, q_jad_damaged);
+
+    InfernoState healer_alive = jad_dead;
+    healer_alive.zuk.healer_spawned = 1;
+    healer_alive.min_zuk_hp_seen = 180.0f;
+    healer_alive.npcs[0].hp = 180;
+    healer_alive.npcs[2] = make_test_npc(
+        INF_NPC_HEALER_ZUK, 20, 48, INF_NPC_STATS[INF_NPC_HEALER_ZUK].size);
+    healer_alive.npcs[2].active = 1;
+    healer_alive.npcs[2].hp = healer_alive.npcs[2].max_hp =
+        INF_NPC_STATS[INF_NPC_HEALER_ZUK].hp;
+
+    InfernoState healer_dead = healer_alive;
+    healer_dead.npcs[2].active = 0;
+    healer_dead.npcs[2].hp = 0;
+
+    float q_healer_alive = inf_progress_score((EncounterState*)&healer_alive);
+    float q_healer_dead = inf_progress_score((EncounterState*)&healer_dead);
+    ASSERT_FLOAT_GT("same Zuk HP with healers cleared scores higher",
+        q_healer_dead, q_healer_alive);
+
+    InfernoState set_alive;
+    init_zuk_timing_state(&set_alive);
+    set_alive.min_zuk_hp_seen = 850.0f;
+    set_alive.npcs[0].hp = 850;
+    set_alive.npcs[2] = make_test_npc(
+        INF_NPC_MAGER, 20, 36, INF_NPC_STATS[INF_NPC_MAGER].size);
+    set_alive.npcs[2].active = 1;
+    set_alive.npcs[2].hp = set_alive.npcs[2].max_hp = INF_NPC_STATS[INF_NPC_MAGER].hp;
+
+    InfernoState set_dead = set_alive;
+    set_dead.npcs[2].active = 0;
+    set_dead.npcs[2].hp = 0;
+
+    float q_set_alive = inf_progress_score((EncounterState*)&set_alive);
+    float q_set_dead = inf_progress_score((EncounterState*)&set_dead);
+    ASSERT_FLOAT_GT("same Zuk HP with set cleared scores higher",
+        q_set_dead, q_set_alive);
+
+    InfernoState win = healer_alive;
+    win.episode_over = 1;
+    win.winner = 0;
+    float q_win = inf_progress_score((EncounterState*)&win);
+    ASSERT_FLOAT_GT("win scores above partial state", q_win, q_healer_dead);
+}
+
 static void test_inferno_human_equip_does_not_snap_loadout(void) {
     printf("--- inferno human equip does not snap full loadout ---\n");
 
@@ -2368,6 +2500,46 @@ static void test_player_projectile_render_uses_stored_reference_timing(void) {
         tbow_state.player_attack_timing.visual_duration_ticks * 30);
 }
 
+static void test_delayed_player_hit_records_landing_source(void) {
+    printf("--- delayed player hit records landing source ---\n");
+
+    InfernoState state = make_test_state(10, 10);
+    state.player.base_hitpoints = 99;
+    state.player.current_hitpoints = 10;
+    state.last_hit_by_type = INF_NPC_MAGER;
+    state.player_pending_hit_count = 1;
+    state.player_pending_hits[0] = (EncounterPendingHit){
+        .active = 1,
+        .damage = 20,
+        .ticks_remaining = 1,
+        .attack_style = ATTACK_STYLE_NONE,
+        .check_prayer = 0,
+        .source_npc_type = INF_NPC_ZUK,
+    };
+
+    inf_resolve_player_pending_hits(&state);
+
+    ASSERT_INT_EQ("zuk hit killed player", state.player.current_hitpoints, 0);
+    ASSERT_INT_EQ("last hit source updated on landing",
+        state.last_hit_by_type, INF_NPC_ZUK);
+}
+
+static void test_inferno_render_overlay_reports_death_source(void) {
+    printf("--- inferno render overlay reports death source ---\n");
+
+    InfernoState state = make_test_state(10, 10);
+    state.episode_over = 1;
+    state.winner = 1;
+    state.last_hit_by_type = INF_NPC_ZUK;
+
+    EncounterOverlay ov;
+    memset(&ov, 0, sizeof(ov));
+    inf_render_post_tick((EncounterState*)&state, &ov);
+
+    ASSERT_INT_EQ("death banner active", ov.status_text_active, 1);
+    ASSERT_STR_EQ("death banner text", ov.status_text, "Killed by TzKal-Zuk");
+}
+
 int main(void) {
     inf_build_npc_stats();
 
@@ -2424,6 +2596,8 @@ int main(void) {
     test_inferno_snapshot_preserves_external_pointers();
     test_inferno_cell_key_is_deterministic_and_16_bytes();
     test_inferno_cell_key_quantization_groups_neighbors();
+    test_inferno_cell_key_tracks_set_magers_and_jad_hp_bucket();
+    test_inferno_progress_score_rewards_late_add_transitions();
     test_inferno_human_equip_does_not_snap_loadout();
     test_jad_render_uses_style_specific_attack_animation();
     test_jad_magic_render_emits_three_offset_projectiles();
@@ -2431,6 +2605,8 @@ int main(void) {
     test_jad_projectile_long_distance_visual_duration_uses_reference_formula();
     test_inferno_npc_projectile_render_uses_reference_visual_timing();
     test_player_projectile_render_uses_stored_reference_timing();
+    test_delayed_player_hit_records_landing_source();
+    test_inferno_render_overlay_reports_death_source();
 
     printf("\n%d/%d tests passed", tests_passed, tests_run);
     if (tests_failed > 0) {

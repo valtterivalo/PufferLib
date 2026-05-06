@@ -604,6 +604,9 @@ PYBIND11_MODULE(_C, m) {
         d["total_new_cells"] = stats.total_new_cells;
         d["archive_size"] = stats.archive_size;
         d["total_dropped"] = stats.total_dropped;
+        d["frontier_eligible_count"] = stats.frontier_eligible_count;
+        d["max_sampling_quality"] = stats.max_sampling_quality;
+        d["max_structural_quality"] = stats.max_structural_quality;
         d["demos_exported"] = stats.demos_exported;
         d["save_ok"] = stats.save_ok;
         d["wall_seconds"] = stats.wall_seconds;

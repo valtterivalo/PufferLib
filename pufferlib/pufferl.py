@@ -230,6 +230,33 @@ def _wandb_eval_payload(flat_logs, agent_steps):
             payload[f'eval/{key[4:]}'] = value
     return payload
 
+def _resolve_checkpoint_load_path(args, load_path=None, allow_auto_latest=False):
+    '''Resolve a checkpoint load request for train and eval entrypoints.'''
+    load_path = load_path or args.get('load_model_path')
+    checkpoint_dir = args['checkpoint_dir']
+    pattern = os.path.join(checkpoint_dir, args['env_name'], '**', '*.bin')
+
+    if load_path is None:
+        if not allow_auto_latest:
+            return None
+
+        candidates = glob.glob(pattern, recursive=True)
+        if candidates:
+            return max(candidates, key=os.path.getctime)
+
+        print(f'WARNING: no checkpoint found in {checkpoint_dir}/{args["env_name"]}/ '
+              f'- running with random weights. '
+              f'Train first with `puffer train {args["env_name"]}`.', flush=True)
+        return None
+
+    if load_path == 'latest':
+        candidates = glob.glob(pattern, recursive=True)
+        if not candidates:
+            raise FileNotFoundError(f'No .bin checkpoints found in {checkpoint_dir}/{args["env_name"]}/')
+        return max(candidates, key=os.path.getctime)
+
+    return load_path
+
 def _restore_exact_match_config(args, sweep_obj):
     flat_args = dict(unroll_nested_dict(args))
     swept_keys = set(sweep_obj.hyperparameters.flat_spaces)
@@ -316,6 +343,10 @@ def _train_worker(args):
     backend = _resolve_backend(args)
     with _inferno_replay_env(args):
         pufferl = backend.create_pufferl(args)
+        load_path = _resolve_checkpoint_load_path(args)
+        if load_path is not None:
+            backend.load_weights(pufferl, load_path)
+            print(f'Loaded weights from {load_path}', flush=True)
         args.pop('nccl_id', None)
         while pufferl.global_step < args['train']['total_timesteps']:
             backend.rollouts(pufferl)
@@ -380,6 +411,11 @@ def _train_body(env_name, args, sweep_obj=None, result_queue=None, verbose=False
 
         args.pop('nccl_id', None)
         model_size = pufferl.num_params()
+
+        load_path = _resolve_checkpoint_load_path(args)
+        if load_path is not None:
+            backend.load_weights(pufferl, load_path)
+            print(f'Loaded weights from {load_path}', flush=True)
 
         env_args = args.get('env', {})
         phase2_dir = env_args.get('phase2_demo_dir', '')
@@ -634,26 +670,8 @@ def eval(env_name, args=None, load_path=None):
     with _inferno_replay_env(args):
         pufferl = backend.create_pufferl(args)
 
-        # Resolve load path. If --load-model-path is omitted, auto-resolve the latest
-        # checkpoint for this env so `puffer eval <env>` "just works" after a training
-        # run. Pass --load-model-path latest explicitly if you want a hard error when
-        # no checkpoint exists. Explicit file paths are loaded as-is.
-        load_path = load_path or args.get('load_model_path')
-        checkpoint_dir = args['checkpoint_dir']
-        pattern = os.path.join(checkpoint_dir, args['env_name'], '**', '*.bin')
-        if load_path is None:
-            candidates = glob.glob(pattern, recursive=True)
-            if candidates:
-                load_path = max(candidates, key=os.path.getctime)
-            else:
-                print(f'WARNING: no checkpoint found in {checkpoint_dir}/{args["env_name"]}/ '
-                      f'— running with random weights. '
-                      f'Train first with `puffer train {args["env_name"]}`.', flush=True)
-        elif load_path == 'latest':
-            candidates = glob.glob(pattern, recursive=True)
-            if not candidates:
-                raise FileNotFoundError(f'No .bin checkpoints found in {checkpoint_dir}/{args["env_name"]}/')
-            load_path = max(candidates, key=os.path.getctime)
+        load_path = _resolve_checkpoint_load_path(
+            args, load_path=load_path, allow_auto_latest=True)
 
         if load_path is not None:
             backend.load_weights(pufferl, load_path)

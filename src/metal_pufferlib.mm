@@ -1335,6 +1335,9 @@ typedef struct {
     int total_new_cells;       /* cells inserted with NEW result */
     int archive_size;          /* archive->num_entries at end */
     int total_dropped;         /* discoveries that hit the per-env scratch cap */
+    int frontier_eligible_count;
+    float max_sampling_quality;
+    float max_structural_quality;
     int demos_exported;
     int save_ok;               /* 1 if archive saved, 0 if no path or failed */
     double wall_seconds;
@@ -1495,9 +1498,16 @@ ArchiveExploreStats archive_explore_impl(
 
         /* periodic progress log */
         if (iter < 4 || iter % 10 == 0 || iter == num_iterations - 1) {
+            int frontier_eligible = archive_frontier_eligible_count(archive);
+            float max_sampling_quality = 0.0f;
+            float max_structural_quality = 0.0f;
+            archive_max_qualities(
+                archive, &max_sampling_quality, &max_structural_quality);
             std::fprintf(stderr,
-                "archive_explore iter %d: archive_size=%d, new_this_iter=%d, dropped=%d\n",
-                iter, archive->num_entries, new_this_iter, dropped_this_iter);
+                "archive_explore iter %d: archive_size=%d, frontier_eligible=%d, max_sampling_q=%.3f, max_structural_q=%.3f, new_this_iter=%d, dropped=%d\n",
+                iter, archive->num_entries, frontier_eligible,
+                max_sampling_quality, max_structural_quality,
+                new_this_iter, dropped_this_iter);
         }
     }
 
@@ -1510,6 +1520,9 @@ ArchiveExploreStats archive_explore_impl(
     pufferl.archive_hidden_state_history = nullptr;
 
     stats.archive_size = archive->num_entries;
+    stats.frontier_eligible_count = archive_frontier_eligible_count(archive);
+    archive_max_qualities(
+        archive, &stats.max_sampling_quality, &stats.max_structural_quality);
 
     /* save the archive to disk before exporting demos so a failed export
        still leaves the canonical archive around. */

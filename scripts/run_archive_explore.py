@@ -24,6 +24,8 @@ def main():
     parser.add_argument('--frontier-q-power', type=float, default=4.0)
     parser.add_argument('--frontier-eps', type=float, default=0.10,
                         help='probability of falling back to standard count-decay sampling')
+    parser.add_argument('--oracle-mode', type=int, default=0,
+                        help='Inferno oracle_mode used only during archive exploration')
     own_args = parser.parse_args()
 
     sys.argv = [sys.argv[0]]
@@ -31,6 +33,8 @@ def main():
     from pufferlib.pufferl import load_config, _resolve_backend, _inferno_replay_env
 
     args = load_config(own_args.env)
+    if own_args.oracle_mode:
+        args['env']['oracle_mode'] = own_args.oracle_mode
     backend = _resolve_backend(args)
 
     os.makedirs(own_args.output_dir, exist_ok=True)

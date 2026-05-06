@@ -127,6 +127,7 @@ typedef struct {
    encounter's render_post_tick populates this, renderer reads it. */
 #define ENCOUNTER_MAX_OVERLAY_TILES 16
 #define ENCOUNTER_MAX_OVERLAY_ADDS 4
+#define ENCOUNTER_OVERLAY_STATUS_TEXT_LEN 64
 /* inferno can legitimately exceed single-digit projectile counts in one tick,
    especially during Zuk healer spark volleys. size this from real encounter
    volume so the renderer never silently drops visual events. */
@@ -181,6 +182,9 @@ typedef struct {
     /* melee targeting: shows which tile Zulrah is staring at */
     int melee_target_active;
     int melee_target_x, melee_target_y;
+
+    int status_text_active;
+    char status_text[ENCOUNTER_OVERLAY_STATUS_TEXT_LEN];
 } EncounterOverlay;
 
 /* map AttackStyle enum to overlay projectile style index.
