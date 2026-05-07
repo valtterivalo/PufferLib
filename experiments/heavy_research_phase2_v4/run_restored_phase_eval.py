@@ -61,6 +61,7 @@ def run_phase(args_cli: argparse.Namespace, name: str) -> dict[str, object]:
     args["env"]["phase2_randomize_rng_frac"] = args_cli.randomize_rng_frac
     args["env"]["phase2_diagnostic_phase"] = float(PHASES[name])
     args["env"]["phase2_diagnostic_tries"] = float(args_cli.diagnostic_tries)
+    args["env"]["phase2_max_player_attack_timer"] = float(args_cli.max_player_attack_timer)
     args["env"]["oracle_mode"] = float(args_cli.oracle_mode)
     args["reset_state"] = False
     if args["train"]["minibatch_size"] > args_cli.total_agents:
@@ -150,6 +151,7 @@ def main() -> int:
     parser.add_argument("--normal-start-frac", type=float, default=0.0)
     parser.add_argument("--randomize-rng-frac", type=float, default=0.0)
     parser.add_argument("--diagnostic-tries", type=int, default=256)
+    parser.add_argument("--max-player-attack-timer", type=int, default=-1)
     parser.add_argument("--oracle-mode", type=int, default=0)
     parser.add_argument("--config-file", default="")
     parser.add_argument("--output", required=True)

@@ -2375,6 +2375,13 @@ static void test_inferno_healer_diagnostic_phase_matches_snapshot_state(void) {
         inf_healer_diagnostic_phase_matches(&state, INF_HEALER_DIAG_PRE_HEALER), 1);
     ASSERT_INT_EQ("immediate healer phase rejects pre-spawn state",
         inf_healer_diagnostic_phase_matches(&state, INF_HEALER_DIAG_IMMEDIATE_HEALER), 0);
+    state.player.attack_timer = 3;
+    ASSERT_INT_EQ("attack timer filter accepts off value",
+        inf_healer_diagnostic_attack_timer_matches(&state, -1), 1);
+    ASSERT_INT_EQ("attack timer filter rejects high cooldown",
+        inf_healer_diagnostic_attack_timer_matches(&state, 2), 0);
+    ASSERT_INT_EQ("attack timer filter accepts ready cooldown",
+        inf_healer_diagnostic_attack_timer_matches(&state, 3), 1);
 
     state.zuk.healer_spawned = 1;
     state.npcs[0].hp = 239;

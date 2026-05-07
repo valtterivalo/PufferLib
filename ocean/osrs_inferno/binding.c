@@ -105,6 +105,7 @@ typedef struct InfernoEnv {
     int env_idx;
     int phase2_diagnostic_phase;
     int phase2_diagnostic_tries;
+    int phase2_max_player_attack_timer;
 } InfernoEnv;
 
 #define OBS_SIZE INF_TOTAL_OBS
@@ -840,6 +841,10 @@ void my_init(Env* env, Dict* kwargs) {
     env->phase2_diagnostic_tries = phase2_diagnostic_tries
         ? (int)phase2_diagnostic_tries->value : 64;
     if (env->phase2_diagnostic_tries < 1) env->phase2_diagnostic_tries = 1;
+    DictItem* phase2_max_player_attack_timer =
+        dict_get_unsafe(kwargs, "phase2_max_player_attack_timer");
+    env->phase2_max_player_attack_timer = phase2_max_player_attack_timer
+        ? (int)phase2_max_player_attack_timer->value : -1;
     /* match the 1-indexed → 0-indexed conversion done by encounter's put_int */
     int sw = start_wave ? (int)start_wave->value : 0;
     env->config_start_wave = (sw > 0) ? sw - 1 : 0;
@@ -1691,6 +1696,10 @@ static Phase2ResetDecision inferno_env_decide_phase2_reset(InfernoEnv* env) {
         if (!inf_healer_diagnostic_phase_matches(
                 (const InfernoState*)env->enc_state,
                 env->phase2_diagnostic_phase))
+            continue;
+        if (!inf_healer_diagnostic_attack_timer_matches(
+                (const InfernoState*)env->enc_state,
+                env->phase2_max_player_attack_timer))
             continue;
 
         d.demo_id = demo_id;

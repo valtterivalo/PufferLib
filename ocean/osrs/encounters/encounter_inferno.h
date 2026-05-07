@@ -975,6 +975,14 @@ static int inf_healer_diagnostic_phase_matches(
     return 0;
 }
 
+static int inf_healer_diagnostic_attack_timer_matches(
+    const InfernoState* s,
+    int max_player_attack_timer
+) {
+    return max_player_attack_timer < 0 ||
+        s->player.attack_timer <= max_player_attack_timer;
+}
+
 static void inf_reset_transition_diagnostics_for_restored_start(InfernoState* s) {
     int zuk_idx = inf_find_live_zuk_idx(s);
     int has_live_zuk = zuk_idx >= 0;
