@@ -9,7 +9,6 @@ from pathlib import Path
 
 
 REPO = Path(__file__).resolve().parents[2]
-DEFAULT_CFG = REPO / "experiments/heavy_research_phase2_v4/sweeps/inferno_c_base.ini"
 PHASES = {
     "pre_healer": 1,
     "immediate_healer": 2,
@@ -40,7 +39,10 @@ def weighted_env_metrics(log: dict[str, object], n_this: float) -> dict[str, flo
 
 def run_phase(args_cli: argparse.Namespace, name: str) -> dict[str, object]:
     sys.argv = [sys.argv[0]]
-    os.environ["PUFFER_CONFIG_FILE"] = args_cli.config_file
+    if args_cli.config_file:
+        os.environ["PUFFER_CONFIG_FILE"] = args_cli.config_file
+    else:
+        os.environ.pop("PUFFER_CONFIG_FILE", None)
 
     from pufferlib.pufferl import (
         _inferno_replay_env,
@@ -149,7 +151,7 @@ def main() -> int:
     parser.add_argument("--randomize-rng-frac", type=float, default=0.0)
     parser.add_argument("--diagnostic-tries", type=int, default=256)
     parser.add_argument("--oracle-mode", type=int, default=0)
-    parser.add_argument("--config-file", default=str(DEFAULT_CFG))
+    parser.add_argument("--config-file", default="")
     parser.add_argument("--output", required=True)
     args_cli = parser.parse_args()
 

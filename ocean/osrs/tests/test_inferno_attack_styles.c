@@ -2044,8 +2044,16 @@ static void test_inferno_snapshot_preserves_external_pointers(void) {
     inf_reset(raw_a, 7u);
     /* re-set after reset zeroes the struct */
     state_a->collision_map = (const CollisionMap*)&dummy_a;
+    state_a->oracle_mode = 0;
+    state_a->damage_reward_coeff = 0.123f;
+    state_a->start_wave = 12;
+    state_a->human_command_mode = 0;
     inf_reset(raw_b, 7u);
     state_b->collision_map = (const CollisionMap*)&dummy_b;
+    state_b->oracle_mode = 8;
+    state_b->damage_reward_coeff = 0.456f;
+    state_b->start_wave = INF_NUM_WAVES - 1;
+    state_b->human_command_mode = 1;
 
     size_t snap_size = inf_snapshot_size(raw_a);
     InfSnapshot* snap = (InfSnapshot*)malloc(snap_size);
@@ -2058,6 +2066,14 @@ static void test_inferno_snapshot_preserves_external_pointers(void) {
         (int)(state_b->collision_map == (const CollisionMap*)&dummy_b), 1);
     ASSERT_INT_EQ("env A snapshot did not leak its collision_map into B",
         (int)(state_b->collision_map != (const CollisionMap*)&dummy_a), 1);
+    ASSERT_INT_EQ("env B keeps live oracle_mode after restore",
+        state_b->oracle_mode, 8);
+    ASSERT_FLOAT_NEAR("env B keeps live damage coefficient after restore",
+        state_b->damage_reward_coeff, 0.456f, 1e-6f);
+    ASSERT_INT_EQ("env B keeps live start_wave after restore",
+        state_b->start_wave, INF_NUM_WAVES - 1);
+    ASSERT_INT_EQ("env B keeps live human command mode after restore",
+        state_b->human_command_mode, 1);
 
     free(snap);
     inf_destroy(raw_a);

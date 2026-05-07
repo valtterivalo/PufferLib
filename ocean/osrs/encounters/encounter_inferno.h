@@ -5276,6 +5276,101 @@ typedef struct {
     InfernoState state;
 } InfSnapshot;
 
+typedef struct {
+    const CollisionMap* collision_map;
+    int world_offset_x;
+    int world_offset_y;
+    Log log;
+    const HumanCommand* human_commands;
+    int human_command_count;
+    int human_command_mode;
+    int start_wave;
+    float damage_reward_coeff;
+    float shield_penalty_coeff;
+    float tag_reward_coeff;
+    float late_start_supply_profile_scale;
+    float win_bonus_coeff;
+    float death_penalty_coeff;
+    float phase_900_bonus;
+    float phase_600_bonus;
+    float phase_300_bonus;
+    float shield_penalty_episode_cap;
+    int oracle_mode;
+    float jad_damage_reward_coeff;
+    float zuk_healer_damage_reward_coeff;
+    float set_damage_reward_coeff;
+    float jad_kill_bonus;
+    float zuk_healer_kill_bonus;
+    float set_kill_bonus;
+    float post_jad_zuk_multiplier;
+    float jad_alive_zuk_multiplier;
+} InfLiveRestoreFields;
+
+static InfLiveRestoreFields inf_capture_live_restore_fields(const InfernoState* s) {
+    return (InfLiveRestoreFields){
+        .collision_map = s->collision_map,
+        .world_offset_x = s->world_offset_x,
+        .world_offset_y = s->world_offset_y,
+        .log = s->log,
+        .human_commands = s->human_commands,
+        .human_command_count = s->human_command_count,
+        .human_command_mode = s->human_command_mode,
+        .start_wave = s->start_wave,
+        .damage_reward_coeff = s->damage_reward_coeff,
+        .shield_penalty_coeff = s->shield_penalty_coeff,
+        .tag_reward_coeff = s->tag_reward_coeff,
+        .late_start_supply_profile_scale = s->late_start_supply_profile_scale,
+        .win_bonus_coeff = s->win_bonus_coeff,
+        .death_penalty_coeff = s->death_penalty_coeff,
+        .phase_900_bonus = s->phase_900_bonus,
+        .phase_600_bonus = s->phase_600_bonus,
+        .phase_300_bonus = s->phase_300_bonus,
+        .shield_penalty_episode_cap = s->shield_penalty_episode_cap,
+        .oracle_mode = s->oracle_mode,
+        .jad_damage_reward_coeff = s->jad_damage_reward_coeff,
+        .zuk_healer_damage_reward_coeff = s->zuk_healer_damage_reward_coeff,
+        .set_damage_reward_coeff = s->set_damage_reward_coeff,
+        .jad_kill_bonus = s->jad_kill_bonus,
+        .zuk_healer_kill_bonus = s->zuk_healer_kill_bonus,
+        .set_kill_bonus = s->set_kill_bonus,
+        .post_jad_zuk_multiplier = s->post_jad_zuk_multiplier,
+        .jad_alive_zuk_multiplier = s->jad_alive_zuk_multiplier,
+    };
+}
+
+static void inf_apply_live_restore_fields(
+    InfernoState* s,
+    InfLiveRestoreFields fields
+) {
+    s->collision_map = fields.collision_map;
+    s->world_offset_x = fields.world_offset_x;
+    s->world_offset_y = fields.world_offset_y;
+    s->log = fields.log;
+    s->human_commands = fields.human_commands;
+    s->human_command_count = fields.human_command_count;
+    s->human_command_mode = fields.human_command_mode;
+    s->start_wave = fields.start_wave;
+    s->damage_reward_coeff = fields.damage_reward_coeff;
+    s->shield_penalty_coeff = fields.shield_penalty_coeff;
+    s->tag_reward_coeff = fields.tag_reward_coeff;
+    s->late_start_supply_profile_scale = fields.late_start_supply_profile_scale;
+    s->win_bonus_coeff = fields.win_bonus_coeff;
+    s->death_penalty_coeff = fields.death_penalty_coeff;
+    s->phase_900_bonus = fields.phase_900_bonus;
+    s->phase_600_bonus = fields.phase_600_bonus;
+    s->phase_300_bonus = fields.phase_300_bonus;
+    s->shield_penalty_episode_cap = fields.shield_penalty_episode_cap;
+    s->oracle_mode = fields.oracle_mode;
+    s->jad_damage_reward_coeff = fields.jad_damage_reward_coeff;
+    s->zuk_healer_damage_reward_coeff = fields.zuk_healer_damage_reward_coeff;
+    s->set_damage_reward_coeff = fields.set_damage_reward_coeff;
+    s->jad_kill_bonus = fields.jad_kill_bonus;
+    s->zuk_healer_kill_bonus = fields.zuk_healer_kill_bonus;
+    s->set_kill_bonus = fields.set_kill_bonus;
+    s->post_jad_zuk_multiplier = fields.post_jad_zuk_multiplier;
+    s->jad_alive_zuk_multiplier = fields.jad_alive_zuk_multiplier;
+}
+
 static size_t inf_snapshot_size(EncounterState* state) {
     (void)state;
     return sizeof(InfSnapshot);
@@ -5306,21 +5401,11 @@ static void inf_restore(EncounterState* state, const void* data, size_t n) {
 
     InfernoState* dst = (InfernoState*)state;
 
-    const CollisionMap* collision_map = dst->collision_map;
-    int world_offset_x = dst->world_offset_x;
-    int world_offset_y = dst->world_offset_y;
-    Log saved_log = dst->log;
-    const HumanCommand* human_commands = dst->human_commands;
-    int human_command_count = dst->human_command_count;
+    InfLiveRestoreFields live_fields = inf_capture_live_restore_fields(dst);
 
     *dst = snap->state;
 
-    dst->collision_map = collision_map;
-    dst->world_offset_x = world_offset_x;
-    dst->world_offset_y = world_offset_y;
-    dst->log = saved_log;
-    dst->human_commands = human_commands;
-    dst->human_command_count = human_command_count;
+    inf_apply_live_restore_fields(dst, live_fields);
 }
 
 
