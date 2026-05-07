@@ -1832,12 +1832,25 @@ static void child_encounter_emit_projectile_overflow(void) {
         &ov, 0, 0, 1, 1, 0, 0, 30, 0, 0, 0, 0.0f, 0, 1, 1, 0, 0);
 }
 
+static void child_inf_restore_v1_snapshot(void) {
+    EncounterState* raw = inf_create();
+    inf_reset(raw, 123u);
+    size_t snap_size = inf_snapshot_size(raw);
+    InfSnapshot* snap = (InfSnapshot*)malloc(snap_size);
+    inf_snapshot(raw, snap);
+    snap->version = 1u;
+    inf_restore(raw, snap, snap_size);
+    free(snap);
+    inf_destroy(raw);
+}
+
 static void test_fail_fast_boundaries(void) {
     printf("--- fail fast boundaries ---\n");
 
     assert_child_aborts("invalid inferno start wave aborts", child_inf_put_bad_start_wave);
     assert_child_aborts("unknown inferno int config aborts", child_inf_put_unknown_int);
     assert_child_aborts("overlay projectile overflow aborts", child_encounter_emit_projectile_overflow);
+    assert_child_aborts("inferno v1 snapshot restore aborts", child_inf_restore_v1_snapshot);
 }
 
 static void test_human_target_and_potion_translation(void) {
@@ -2314,6 +2327,131 @@ static void test_inferno_healer_transition_stats_track_episode_progress(void) {
         state.total_zuk_healer_kills, 4);
 }
 
+static void test_inferno_healer_diagnostic_phase_matches_snapshot_state(void) {
+    printf("--- inferno healer diagnostic phase matches snapshot state ---\n");
+
+    InfernoState state = make_test_state(INF_ZUK_PLAYER_START_X, INF_ZUK_PLAYER_START_Y);
+    state.wave = INF_NUM_WAVES - 1;
+    state.min_zuk_hp_seen = 270.0f;
+    state.npcs[0] = make_test_npc(INF_NPC_ZUK, 20, 52, 5);
+    state.npcs[0].active = 1;
+    state.npcs[0].hp = 270;
+    state.npcs[0].max_hp = 1200;
+
+    ASSERT_INT_EQ("pre-healer phase matches 240-300 hp before spawn",
+        inf_healer_diagnostic_phase_matches(&state, INF_HEALER_DIAG_PRE_HEALER), 1);
+    ASSERT_INT_EQ("immediate healer phase rejects pre-spawn state",
+        inf_healer_diagnostic_phase_matches(&state, INF_HEALER_DIAG_IMMEDIATE_HEALER), 0);
+
+    state.zuk.healer_spawned = 1;
+    state.npcs[0].hp = 239;
+    state.min_zuk_hp_seen = 239.0f;
+    for (int i = 1; i <= 4; i++) {
+        state.npcs[i] = make_test_npc(INF_NPC_HEALER_ZUK, 15 + i, 48, 1);
+        state.npcs[i].active = 1;
+        state.npcs[i].hp = 100;
+        state.npcs[i].max_hp = 100;
+        state.npcs[i].aggro_target = 0;
+    }
+
+    ASSERT_INT_EQ("immediate healer phase matches four untagged healers",
+        inf_healer_diagnostic_phase_matches(&state, INF_HEALER_DIAG_IMMEDIATE_HEALER), 1);
+    ASSERT_INT_EQ("partial healer phase rejects all untagged healers",
+        inf_healer_diagnostic_phase_matches(&state, INF_HEALER_DIAG_PARTIAL_HEALER), 0);
+    state.episode_over = 1;
+    ASSERT_INT_EQ("diagnostic phases reject terminal snapshots",
+        inf_healer_diagnostic_phase_matches(&state, INF_HEALER_DIAG_IMMEDIATE_HEALER), 0);
+    state.episode_over = 0;
+    state.weapon_set = (InfWeaponSet)99;
+    ASSERT_INT_EQ("diagnostic phases reject invalid gear state",
+        inf_healer_diagnostic_phase_matches(&state, INF_HEALER_DIAG_IMMEDIATE_HEALER), 0);
+    state.weapon_set = INF_GEAR_MAGE;
+
+    state.npcs[1].aggro_target = -1;
+    state.npcs[2].active = 0;
+    ASSERT_INT_EQ("partial healer phase matches tagged or killed healers",
+        inf_healer_diagnostic_phase_matches(&state, INF_HEALER_DIAG_PARTIAL_HEALER), 1);
+
+    for (int i = 1; i <= 4; i++)
+        state.npcs[i].active = 0;
+    ASSERT_INT_EQ("post-healer phase matches no live Zuk healers after spawn",
+        inf_healer_diagnostic_phase_matches(&state, INF_HEALER_DIAG_POST_HEALER), 1);
+
+    state.min_zuk_hp_seen = 149.0f;
+    ASSERT_INT_EQ("post-150 phase matches low-watermark after healers",
+        inf_healer_diagnostic_phase_matches(&state, INF_HEALER_DIAG_POST_150), 1);
+}
+
+static void test_inferno_restored_start_resets_transition_diagnostics(void) {
+    printf("--- inferno restored start resets transition diagnostics ---\n");
+
+    InfernoState state = make_test_state(INF_ZUK_PLAYER_START_X, INF_ZUK_PLAYER_START_Y);
+    state.wave = INF_NUM_WAVES - 1;
+    state.tick = 500;
+    state.min_zuk_hp_seen = 180.0f;
+    state.zuk.healer_spawned = 1;
+    state.npcs[0] = make_test_npc(INF_NPC_ZUK, 20, 52, 5);
+    state.npcs[0].active = 1;
+    state.npcs[0].hp = 239;
+    state.npcs[0].max_hp = 1200;
+    for (int i = 1; i <= 4; i++) {
+        state.npcs[i] = make_test_npc(INF_NPC_HEALER_ZUK, 15 + i, 48, 1);
+        state.npcs[i].active = 1;
+        state.npcs[i].hp = 100;
+        state.npcs[i].max_hp = 100;
+        state.npcs[i].aggro_target = i <= 2 ? -1 : 0;
+    }
+
+    state.tick_at_le_300 = 10;
+    state.tick_at_le_240 = 20;
+    state.tick_at_le_150 = 30;
+    state.tick_at_zuk_healer_spawn = 40;
+    state.tick_at_first_zuk_healer_tag = 41;
+    state.tick_at_all_zuk_healers_tagged = 42;
+    state.tick_at_all_zuk_healers_dead = 43;
+    state.damage_after_300 = 11.0f;
+    state.damage_after_240 = 12.0f;
+    state.damage_after_150 = 13.0f;
+    state.hp_restored_after_240 = 14.0f;
+    state.spark_damage_after_240 = 15.0f;
+    state.zuk_hp_max_after_healer_spawn = 420.0f;
+    state.total_zuk_healer_tags = 4;
+    state.total_zuk_healer_kills = 3;
+
+    inf_reset_transition_diagnostics_for_restored_start(&state);
+
+    ASSERT_INT_EQ("restored start anchors le300 tick to current live hp",
+        state.tick_at_le_300, 500);
+    ASSERT_INT_EQ("restored start anchors le240 tick to current live hp",
+        state.tick_at_le_240, 500);
+    ASSERT_INT_EQ("restored start clears le150 until reached after restore",
+        state.tick_at_le_150, -1);
+    ASSERT_INT_EQ("restored start anchors healer spawn tick",
+        state.tick_at_zuk_healer_spawn, 500);
+    ASSERT_INT_EQ("restored start infers first live tag tick",
+        state.tick_at_first_zuk_healer_tag, 500);
+    ASSERT_INT_EQ("restored start clears all-tag tick for partial live tags",
+        state.tick_at_all_zuk_healers_tagged, -1);
+    ASSERT_INT_EQ("restored start clears all-dead tick while healers live",
+        state.tick_at_all_zuk_healers_dead, -1);
+    ASSERT_FLOAT_NEAR("restored start clears post300 damage",
+        state.damage_after_300, 0.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("restored start clears post240 damage",
+        state.damage_after_240, 0.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("restored start clears post150 damage",
+        state.damage_after_150, 0.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("restored start clears restored hp after 240",
+        state.hp_restored_after_240, 0.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("restored start clears spark damage after 240",
+        state.spark_damage_after_240, 0.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("restored start initializes post-spawn max hp",
+        state.zuk_hp_max_after_healer_spawn, 239.0f, 1e-6f);
+    ASSERT_INT_EQ("restored start infers current live tags only",
+        state.total_zuk_healer_tags, 2);
+    ASSERT_INT_EQ("restored start clears unobservable historical kills",
+        state.total_zuk_healer_kills, 0);
+}
+
 static void test_inferno_human_equip_does_not_snap_loadout(void) {
     printf("--- inferno human equip does not snap full loadout ---\n");
 
@@ -2675,6 +2813,8 @@ int main(void) {
     test_inferno_cell_key_tracks_set_magers_and_jad_hp_bucket();
     test_inferno_progress_score_rewards_late_add_transitions();
     test_inferno_healer_transition_stats_track_episode_progress();
+    test_inferno_healer_diagnostic_phase_matches_snapshot_state();
+    test_inferno_restored_start_resets_transition_diagnostics();
     test_inferno_human_equip_does_not_snap_loadout();
     test_jad_render_uses_style_specific_attack_animation();
     test_jad_magic_render_emits_three_offset_projectiles();

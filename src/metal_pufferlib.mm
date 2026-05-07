@@ -1324,6 +1324,7 @@ extern "C" {
         struct InfernoEnv* env, const DemoTrajectory* demo,
         DemoSnapshotLadder* out_ladder, DemoObsCache* out_obs_cache);
     void inferno_env_set_phase2_ctx(struct InfernoEnv* env, Phase2Context* ctx, int env_idx);
+    void inferno_env_force_phase2_reset(struct InfernoEnv* env);
     int inferno_env_validate_ladders(
         struct InfernoEnv* env, const DemoStore* store,
         DemoSnapshotLadder* const* ladders, int* out_cursor_ticks);
@@ -1756,6 +1757,18 @@ int phase2_init_impl(
         "phase2_init: %d demos, stride=%d, %d envs\n",
         store->num_demos, snapshot_stride, pufferl.vec->total_agents);
     return store->num_demos;
+}
+
+void phase2_reset_impl(PuffeRL& pufferl) {
+    if (!pufferl.phase2_ctx) {
+        std::fprintf(stderr, "phase2_reset: phase2 context is not initialized\n");
+        std::abort();
+    }
+
+    void* envs_void = pufferl.vec->envs;
+    for (int e = 0; e < pufferl.vec->total_agents; e++) {
+        inferno_env_force_phase2_reset(inferno_env_at(envs_void, e));
+    }
 }
 
 void phase2_close(PuffeRL& pufferl) {

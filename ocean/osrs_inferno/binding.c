@@ -103,6 +103,8 @@ typedef struct InfernoEnv {
     uint8_t no_auto_reset;
     Phase2Context* phase2_ctx;
     int env_idx;
+    int phase2_diagnostic_phase;
+    int phase2_diagnostic_tries;
 } InfernoEnv;
 
 #define OBS_SIZE INF_TOTAL_OBS
@@ -355,6 +357,84 @@ void c_step(Env* env) {
             env->log.wins_snapshot += (s->winner == 0) ? 1.0f : 0.0f;
             env->log.min_zuk_hp_snapshot += min_zuk_hp_term;
             env->log.n_snapshot += 1.0f;
+            int won = (s->winner == 0);
+            if (min_zuk_hp_term <= 300.0f) env->log.count_min_hp_le_300_snapshot += 1.0f;
+            if (min_zuk_hp_term <= 240.0f) env->log.count_min_hp_le_240_snapshot += 1.0f;
+            if (min_zuk_hp_term <= 150.0f) env->log.count_min_hp_le_150_snapshot += 1.0f;
+            if (s->tick_at_le_300 >= 0) {
+                env->log.ticks_after_300_snapshot_sum +=
+                    (float)(s->tick - s->tick_at_le_300);
+                env->log.damage_after_300_snapshot_sum += s->damage_after_300;
+            }
+            if (s->tick_at_le_240 >= 0) {
+                env->log.ticks_after_240_snapshot_sum +=
+                    (float)(s->tick - s->tick_at_le_240);
+                env->log.damage_after_240_snapshot_sum += s->damage_after_240;
+            }
+            if (s->tick_at_le_150 >= 0) {
+                env->log.ticks_after_150_snapshot_sum +=
+                    (float)(s->tick - s->tick_at_le_150);
+                env->log.damage_after_150_snapshot_sum += s->damage_after_150;
+            }
+            if (s->tick_at_zuk_healer_spawn >= 0 || s->zuk.healer_spawned) {
+                env->log.count_healer_spawned_snapshot += 1.0f;
+                env->log.zuk_hp_max_after_healer_spawn_snapshot_sum +=
+                    s->zuk_hp_max_after_healer_spawn;
+            }
+            if (s->total_zuk_healer_tags >= 1)
+                env->log.count_zuk_healers_tagged_ge_1_snapshot += 1.0f;
+            if (s->total_zuk_healer_tags >= 2)
+                env->log.count_zuk_healers_tagged_ge_2_snapshot += 1.0f;
+            if (s->total_zuk_healer_tags >= 4)
+                env->log.count_zuk_healers_tagged_ge_4_snapshot += 1.0f;
+            if (s->total_zuk_healer_kills >= 1)
+                env->log.count_zuk_healers_killed_ge_1_snapshot += 1.0f;
+            if (s->total_zuk_healer_kills >= 2)
+                env->log.count_zuk_healers_killed_ge_2_snapshot += 1.0f;
+            if (s->total_zuk_healer_kills >= 4)
+                env->log.count_zuk_healers_killed_ge_4_snapshot += 1.0f;
+            if (s->tick_at_all_zuk_healers_dead >= 0)
+                env->log.count_all_zuk_healers_dead_snapshot += 1.0f;
+            if (s->tick_at_le_240 >= 0) {
+                env->log.hp_restored_after_240_snapshot_sum +=
+                    s->hp_restored_after_240;
+                env->log.spark_damage_after_240_snapshot_sum +=
+                    s->spark_damage_after_240;
+                if (s->tick_at_first_zuk_healer_tag >= 0) {
+                    env->log.ticks_240_to_first_healer_tag_snapshot_sum +=
+                        (float)(s->tick_at_first_zuk_healer_tag - s->tick_at_le_240);
+                }
+                if (s->tick_at_all_zuk_healers_tagged >= 0) {
+                    env->log.ticks_240_to_all_healers_tagged_snapshot_sum +=
+                        (float)(s->tick_at_all_zuk_healers_tagged - s->tick_at_le_240);
+                }
+                if (s->tick_at_all_zuk_healers_dead >= 0) {
+                    env->log.ticks_240_to_all_healers_dead_snapshot_sum +=
+                        (float)(s->tick_at_all_zuk_healers_dead - s->tick_at_le_240);
+                }
+            }
+            if (!won) {
+                int zuk_healer_alive = 0;
+                for (int n = 0; n < INF_MAX_NPCS; n++) {
+                    if (s->npcs[n].hp <= 0) continue;
+                    if (s->npcs[n].type == INF_NPC_HEALER_ZUK)
+                        zuk_healer_alive = 1;
+                }
+                if (zuk_healer_alive)
+                    env->log.count_died_with_zuk_healer_alive_snapshot += 1.0f;
+                if (s->tick_at_le_240 >= 0) {
+                    if (s->tick_at_all_zuk_healers_dead >= 0 ||
+                            s->total_zuk_healer_kills >= 4) {
+                        env->log.count_died_after_240_all_healers_dead_snapshot += 1.0f;
+                    } else if (s->total_zuk_healer_kills > 0) {
+                        env->log.count_died_after_240_some_healers_killed_snapshot += 1.0f;
+                    } else if (s->total_zuk_healer_tags > 0) {
+                        env->log.count_died_after_240_some_healers_tagged_snapshot += 1.0f;
+                    } else {
+                        env->log.count_died_after_240_never_tagged_healer_snapshot += 1.0f;
+                    }
+                }
+            }
         } else {
             env->log.episode_return_normal += s->episode_return;
             env->log.wins_normal += (s->winner == 0) ? 1.0f : 0.0f;
@@ -703,6 +783,15 @@ void my_init(Env* env, Dict* kwargs) {
         ENCOUNTER_INFERNO.put_int(
             env->enc_state, "oracle_mode", (int)oracle_mode->value);
     }
+    DictItem* phase2_diagnostic_phase =
+        dict_get_unsafe(kwargs, "phase2_diagnostic_phase");
+    env->phase2_diagnostic_phase = phase2_diagnostic_phase
+        ? (int)phase2_diagnostic_phase->value : 0;
+    DictItem* phase2_diagnostic_tries =
+        dict_get_unsafe(kwargs, "phase2_diagnostic_tries");
+    env->phase2_diagnostic_tries = phase2_diagnostic_tries
+        ? (int)phase2_diagnostic_tries->value : 64;
+    if (env->phase2_diagnostic_tries < 1) env->phase2_diagnostic_tries = 1;
     /* match the 1-indexed → 0-indexed conversion done by encounter's put_int */
     int sw = start_wave ? (int)start_wave->value : 0;
     env->config_start_wave = (sw > 0) ? sw - 1 : 0;
@@ -1006,6 +1095,86 @@ void my_log(Log* log, Dict* out) {
         dict_set(out, "wins_snapshot", log->wins_snapshot / log->n_snapshot);
         dict_set(out, "min_zuk_hp_snapshot", min_zhp_s);
         dict_set(out, "score_snapshot", (1200.0f - min_zhp_s) / 1200.0f);
+        dict_set(out, "frac_min_hp_le_300_snapshot",
+            log->count_min_hp_le_300_snapshot / log->n_snapshot);
+        dict_set(out, "frac_min_hp_le_240_snapshot",
+            log->count_min_hp_le_240_snapshot / log->n_snapshot);
+        dict_set(out, "frac_min_hp_le_150_snapshot",
+            log->count_min_hp_le_150_snapshot / log->n_snapshot);
+        float t300_s = log->count_min_hp_le_300_snapshot > 0.0f
+            ? log->ticks_after_300_snapshot_sum /
+                log->count_min_hp_le_300_snapshot : 0.0f;
+        float t240_s = log->count_min_hp_le_240_snapshot > 0.0f
+            ? log->ticks_after_240_snapshot_sum /
+                log->count_min_hp_le_240_snapshot : 0.0f;
+        float t150_s = log->count_min_hp_le_150_snapshot > 0.0f
+            ? log->ticks_after_150_snapshot_sum /
+                log->count_min_hp_le_150_snapshot : 0.0f;
+        float d300_s = log->count_min_hp_le_300_snapshot > 0.0f
+            ? log->damage_after_300_snapshot_sum /
+                log->count_min_hp_le_300_snapshot : 0.0f;
+        float d240_s = log->count_min_hp_le_240_snapshot > 0.0f
+            ? log->damage_after_240_snapshot_sum /
+                log->count_min_hp_le_240_snapshot : 0.0f;
+        float d150_s = log->count_min_hp_le_150_snapshot > 0.0f
+            ? log->damage_after_150_snapshot_sum /
+                log->count_min_hp_le_150_snapshot : 0.0f;
+        dict_set(out, "ticks_after_300_snapshot", t300_s);
+        dict_set(out, "ticks_after_240_snapshot", t240_s);
+        dict_set(out, "ticks_after_150_snapshot", t150_s);
+        dict_set(out, "damage_after_300_snapshot", d300_s);
+        dict_set(out, "damage_after_240_snapshot", d240_s);
+        dict_set(out, "damage_after_150_snapshot", d150_s);
+        dict_set(out, "frac_healer_spawned_snapshot",
+            log->count_healer_spawned_snapshot / log->n_snapshot);
+        dict_set(out, "frac_zuk_healers_tagged_ge_1_snapshot",
+            log->count_zuk_healers_tagged_ge_1_snapshot / log->n_snapshot);
+        dict_set(out, "frac_zuk_healers_tagged_ge_2_snapshot",
+            log->count_zuk_healers_tagged_ge_2_snapshot / log->n_snapshot);
+        dict_set(out, "frac_zuk_healers_tagged_ge_4_snapshot",
+            log->count_zuk_healers_tagged_ge_4_snapshot / log->n_snapshot);
+        dict_set(out, "frac_zuk_healers_killed_ge_1_snapshot",
+            log->count_zuk_healers_killed_ge_1_snapshot / log->n_snapshot);
+        dict_set(out, "frac_zuk_healers_killed_ge_2_snapshot",
+            log->count_zuk_healers_killed_ge_2_snapshot / log->n_snapshot);
+        dict_set(out, "frac_zuk_healers_killed_ge_4_snapshot",
+            log->count_zuk_healers_killed_ge_4_snapshot / log->n_snapshot);
+        dict_set(out, "frac_all_zuk_healers_dead_snapshot",
+            log->count_all_zuk_healers_dead_snapshot / log->n_snapshot);
+        float first_tag_ticks_s = log->count_zuk_healers_tagged_ge_1_snapshot > 0.0f
+            ? log->ticks_240_to_first_healer_tag_snapshot_sum /
+                log->count_zuk_healers_tagged_ge_1_snapshot : 0.0f;
+        float all_tagged_ticks_s = log->count_zuk_healers_tagged_ge_4_snapshot > 0.0f
+            ? log->ticks_240_to_all_healers_tagged_snapshot_sum /
+                log->count_zuk_healers_tagged_ge_4_snapshot : 0.0f;
+        float all_dead_ticks_s = log->count_all_zuk_healers_dead_snapshot > 0.0f
+            ? log->ticks_240_to_all_healers_dead_snapshot_sum /
+                log->count_all_zuk_healers_dead_snapshot : 0.0f;
+        float hp_restored_after_240_s = log->count_min_hp_le_240_snapshot > 0.0f
+            ? log->hp_restored_after_240_snapshot_sum /
+                log->count_min_hp_le_240_snapshot : 0.0f;
+        float spark_damage_after_240_s = log->count_min_hp_le_240_snapshot > 0.0f
+            ? log->spark_damage_after_240_snapshot_sum /
+                log->count_min_hp_le_240_snapshot : 0.0f;
+        float max_hp_after_spawn_s = log->count_healer_spawned_snapshot > 0.0f
+            ? log->zuk_hp_max_after_healer_spawn_snapshot_sum /
+                log->count_healer_spawned_snapshot : 0.0f;
+        dict_set(out, "ticks_240_to_first_healer_tag_snapshot", first_tag_ticks_s);
+        dict_set(out, "ticks_240_to_all_healers_tagged_snapshot", all_tagged_ticks_s);
+        dict_set(out, "ticks_240_to_all_healers_dead_snapshot", all_dead_ticks_s);
+        dict_set(out, "hp_restored_after_240_snapshot", hp_restored_after_240_s);
+        dict_set(out, "zuk_hp_max_after_healer_spawn_snapshot", max_hp_after_spawn_s);
+        dict_set(out, "spark_damage_after_240_snapshot", spark_damage_after_240_s);
+        dict_set(out, "frac_died_with_zuk_healer_alive_snapshot",
+            log->count_died_with_zuk_healer_alive_snapshot / log->n_snapshot);
+        dict_set(out, "frac_died_after_240_never_tagged_healer_snapshot",
+            log->count_died_after_240_never_tagged_healer_snapshot / log->n_snapshot);
+        dict_set(out, "frac_died_after_240_some_healers_tagged_snapshot",
+            log->count_died_after_240_some_healers_tagged_snapshot / log->n_snapshot);
+        dict_set(out, "frac_died_after_240_some_healers_killed_snapshot",
+            log->count_died_after_240_some_healers_killed_snapshot / log->n_snapshot);
+        dict_set(out, "frac_died_after_240_all_healers_dead_snapshot",
+            log->count_died_after_240_all_healers_dead_snapshot / log->n_snapshot);
     }
     dict_set(out, "snapshot_frac", log->n_snapshot);
     float gear_switch_rate = (log->episode_length > 0.0f)
@@ -1289,6 +1458,14 @@ void inferno_env_set_phase2_ctx(InfernoEnv* env, Phase2Context* ctx, int env_idx
     env->env_idx = env_idx;
 }
 
+void inferno_env_force_phase2_reset(InfernoEnv* env) {
+    if (!env->phase2_ctx) {
+        fprintf(stderr, "inferno_env_force_phase2_reset: phase2 context is not set\n");
+        abort();
+    }
+    inferno_env_apply_phase2_reset(env);
+}
+
 /* Walk each ladder slot, restore, compute progress and terminal flag, find
    best nonterminal slot. Writes out_cursor_ticks[i] = tick of best slot per
    demo. Prints per-demo diagnostic. Saves and restores env state across the
@@ -1304,6 +1481,9 @@ int inferno_env_validate_ladders(
     ENCOUNTER_INFERNO.snapshot(env->enc_state, &saved);
 
     int violations = 0;
+    int phase_slot_counts[6] = {0};
+    int invalid_weapon_slots = 0;
+    int terminal_slots_total = 0;
     for (int i = 0; i < store->num_demos; i++) {
         const DemoTrajectory* d = &store->demos[i];
         DemoSnapshotLadder* l = ladders[i];
@@ -1314,12 +1494,19 @@ int inferno_env_validate_ladders(
         for (int s = 0; s < l->num_snapshots; s++) {
             const void* snap = demo_snapshot_ladder_snapshot_at(l, s);
             ENCOUNTER_INFERNO.restore(env->enc_state, snap, l->snapshot_size);
+            const InfernoState* is = (const InfernoState*)env->enc_state;
+            if (!inf_weapon_set_is_valid(is)) invalid_weapon_slots++;
+            for (int p = INF_HEALER_DIAG_PRE_HEALER; p <= INF_HEALER_DIAG_POST_150; p++) {
+                if (inf_healer_diagnostic_phase_matches(is, p))
+                    phase_slot_counts[p]++;
+            }
             float q = ENCOUNTER_INFERNO.progress_score(env->enc_state);
-            int eo = ((const InfernoState*)env->enc_state)->episode_over;
+            int eo = is->episode_over;
             if (s == 0) q0 = q;
             qlast = q;
             if (eo) {
                 n_terminal_slots++;
+                terminal_slots_total++;
                 continue;
             }
             if (q > qmax) {
@@ -1350,12 +1537,67 @@ int inferno_env_validate_ladders(
     fprintf(stderr,
         "phase2 ladder validation: %d demos, %d qmax violations\n",
         store->num_demos, violations);
+    fprintf(stderr,
+        "phase2 ladder phase slots: pre_healer=%d immediate_healer=%d "
+        "partial_healer=%d post_healer=%d post_150=%d "
+        "terminal=%d invalid_weapon=%d\n",
+        phase_slot_counts[INF_HEALER_DIAG_PRE_HEALER],
+        phase_slot_counts[INF_HEALER_DIAG_IMMEDIATE_HEALER],
+        phase_slot_counts[INF_HEALER_DIAG_PARTIAL_HEALER],
+        phase_slot_counts[INF_HEALER_DIAG_POST_HEALER],
+        phase_slot_counts[INF_HEALER_DIAG_POST_150],
+        terminal_slots_total,
+        invalid_weapon_slots);
     return violations;
+}
+
+static Phase2ResetDecision inferno_env_decide_phase2_reset(InfernoEnv* env) {
+    Phase2Context* ctx = env->phase2_ctx;
+    uint64_t* rng_state = &ctx->env_states[env->env_idx].rng_state;
+
+    if (env->phase2_diagnostic_phase == INF_HEALER_DIAG_OFF)
+        return phase2_decide_reset(ctx, rng_state);
+
+    Phase2ResetDecision d = {
+        .demo_id = -1,
+        .slot = -1,
+        .randomize_rng = 0,
+        .fresh_rng_seed = 0,
+    };
+    if (ctx->active_pool_size == 0 ||
+            phase2_rand_unit_state(rng_state) < ctx->normal_start_frac)
+        return d;
+
+    for (int i = 0; i < env->phase2_diagnostic_tries; i++) {
+        int demo_id = ctx->active_pool[
+            phase2_rand_int_state(rng_state, ctx->active_pool_size)];
+        DemoSnapshotLadder* ladder = ctx->ladders[demo_id];
+        if (!ladder || ladder->num_snapshots <= 0) continue;
+
+        int slot = phase2_rand_int_state(rng_state, ladder->num_snapshots);
+        const void* snap = demo_snapshot_ladder_snapshot_at(ladder, slot);
+        ENCOUNTER_INFERNO.restore(env->enc_state, snap, ladder->snapshot_size);
+
+        if (!inf_healer_diagnostic_phase_matches(
+                (const InfernoState*)env->enc_state,
+                env->phase2_diagnostic_phase))
+            continue;
+
+        d.demo_id = demo_id;
+        d.slot = slot;
+        if (phase2_rand_unit_state(rng_state) < ctx->randomize_rng_frac) {
+            d.randomize_rng = 1;
+            d.fresh_rng_seed = (uint32_t)phase2_splitmix64(rng_state);
+        }
+        return d;
+    }
+
+    return d;
 }
 
 static void inferno_env_apply_phase2_reset(InfernoEnv* env) {
     Phase2Context* ctx = env->phase2_ctx;
-    Phase2ResetDecision d = phase2_decide_reset(ctx, &ctx->env_states[env->env_idx].rng_state);
+    Phase2ResetDecision d = inferno_env_decide_phase2_reset(env);
 
     if (d.demo_id < 0) {
         ENCOUNTER_INFERNO.reset(env->enc_state, 0);
@@ -1366,6 +1608,8 @@ static void inferno_env_apply_phase2_reset(InfernoEnv* env) {
         if (d.randomize_rng) {
             ((InfernoState*)env->enc_state)->rng_state = d.fresh_rng_seed;
         }
+        inf_reset_transition_diagnostics_for_restored_start(
+            (InfernoState*)env->enc_state);
     }
 
     Phase2EnvState* es = &ctx->env_states[env->env_idx];

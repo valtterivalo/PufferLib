@@ -682,6 +682,11 @@ PYBIND11_MODULE(_C, m) {
     py::arg("demote_rate") = 0.10f,
     py::arg("backstep_ticks") = 4,
     py::arg("success_q_delta") = 0.005f);
+    m.def("phase2_reset", [](py::object pufferl_obj) {
+        PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
+        py::gil_scoped_release no_gil;
+        phase2_reset_impl(pufferl);
+    }, py::arg("pufferl"));
 
     m.def("uptime", [](py::object pufferl_obj) -> double {
         PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();

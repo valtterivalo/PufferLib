@@ -885,6 +885,112 @@ static int inf_find_live_zuk_idx(const InfernoState* s) {
     return -1;
 }
 
+static int inf_weapon_set_is_valid(const InfernoState* s) {
+    return s->weapon_set >= 0 && s->weapon_set < INF_NUM_WEAPON_SETS;
+}
+
+typedef enum {
+    INF_HEALER_DIAG_OFF = 0,
+    INF_HEALER_DIAG_PRE_HEALER = 1,
+    INF_HEALER_DIAG_IMMEDIATE_HEALER = 2,
+    INF_HEALER_DIAG_PARTIAL_HEALER = 3,
+    INF_HEALER_DIAG_POST_HEALER = 4,
+    INF_HEALER_DIAG_POST_150 = 5,
+} InfHealerDiagnosticPhase;
+
+typedef struct {
+    int live_count;
+    int tagged_count;
+    int healing_count;
+} InfZukHealerCounts;
+
+static InfZukHealerCounts inf_zuk_healer_counts(const InfernoState* s) {
+    InfZukHealerCounts counts;
+    memset(&counts, 0, sizeof(counts));
+
+    for (int i = 0; i < INF_MAX_NPCS; i++) {
+        const InfNPC* npc = &s->npcs[i];
+        if (!npc->active || npc->hp <= 0 || npc->type != INF_NPC_HEALER_ZUK)
+            continue;
+        counts.live_count++;
+        if (npc->aggro_target >= 0) counts.healing_count++;
+        else counts.tagged_count++;
+    }
+
+    return counts;
+}
+
+static int inf_healer_diagnostic_phase_matches(
+    const InfernoState* s,
+    int diagnostic_phase
+) {
+    if (diagnostic_phase == INF_HEALER_DIAG_OFF) return 1;
+    if (s->episode_over) return 0;
+    if (!inf_weapon_set_is_valid(s)) return 0;
+
+    int zuk_idx = inf_find_live_zuk_idx(s);
+    if (zuk_idx < 0 || !inf_is_final_wave(s)) return 0;
+
+    int zuk_hp = s->npcs[zuk_idx].hp;
+    InfZukHealerCounts healers = inf_zuk_healer_counts(s);
+
+    switch ((InfHealerDiagnosticPhase)diagnostic_phase) {
+        case INF_HEALER_DIAG_PRE_HEALER:
+            return !s->zuk.healer_spawned && zuk_hp > 240 && zuk_hp <= 300;
+        case INF_HEALER_DIAG_IMMEDIATE_HEALER:
+            return s->zuk.healer_spawned &&
+                healers.live_count == 4 &&
+                healers.healing_count == 4;
+        case INF_HEALER_DIAG_PARTIAL_HEALER:
+            return s->zuk.healer_spawned &&
+                healers.live_count > 0 &&
+                (healers.live_count < 4 || healers.tagged_count > 0);
+        case INF_HEALER_DIAG_POST_HEALER:
+            return s->zuk.healer_spawned && healers.live_count == 0;
+        case INF_HEALER_DIAG_POST_150:
+            return s->zuk.healer_spawned &&
+                (zuk_hp <= 150 ||
+                 (s->min_zuk_hp_seen > 0.0f && s->min_zuk_hp_seen <= 150.0f));
+        case INF_HEALER_DIAG_OFF:
+            return 1;
+    }
+
+    return 0;
+}
+
+static void inf_reset_transition_diagnostics_for_restored_start(InfernoState* s) {
+    int zuk_idx = inf_find_live_zuk_idx(s);
+    int has_live_zuk = zuk_idx >= 0;
+    float zuk_hp = has_live_zuk ? (float)s->npcs[zuk_idx].hp : 1200.0f;
+
+    s->tick_at_le_300 = has_live_zuk && zuk_hp <= 300.0f ? s->tick : -1;
+    s->tick_at_le_240 = has_live_zuk && zuk_hp <= 240.0f ? s->tick : -1;
+    s->tick_at_le_150 = has_live_zuk && zuk_hp <= 150.0f ? s->tick : -1;
+
+    s->damage_after_300 = 0.0f;
+    s->damage_after_240 = 0.0f;
+    s->damage_after_150 = 0.0f;
+    s->hp_restored_after_240 = 0.0f;
+    s->spark_damage_after_240 = 0.0f;
+    s->zuk_hp_max_after_healer_spawn =
+        s->zuk.healer_spawned && has_live_zuk ? zuk_hp : 0.0f;
+
+    InfZukHealerCounts healers = inf_zuk_healer_counts(s);
+    s->total_zuk_healer_tags = healers.tagged_count;
+    if (s->total_zuk_healer_tags > 4) s->total_zuk_healer_tags = 4;
+    s->total_zuk_healer_kills = 0;
+
+    s->tick_at_zuk_healer_spawn = s->zuk.healer_spawned ? s->tick : -1;
+    s->tick_at_first_zuk_healer_tag =
+        s->zuk.healer_spawned && healers.tagged_count > 0 ? s->tick : -1;
+    s->tick_at_all_zuk_healers_tagged =
+        s->zuk.healer_spawned &&
+        healers.live_count > 0 &&
+        healers.healing_count == 0 ? s->tick : -1;
+    s->tick_at_all_zuk_healers_dead =
+        s->zuk.healer_spawned && healers.live_count == 0 ? s->tick : -1;
+}
+
 enum {
     INF_STYLE_MASK_MELEE = 1 << 0,
     INF_STYLE_MASK_RANGED = 1 << 1,
@@ -5162,7 +5268,7 @@ static float inf_progress_score(EncounterState* state) {
    restore — they belong to the live env, not the recorded snapshot. */
 
 #define INF_SNAPSHOT_MAGIC 0x1FE00001u
-#define INF_SNAPSHOT_VERSION 1u
+#define INF_SNAPSHOT_VERSION 2u
 
 typedef struct {
     uint32_t magic;
