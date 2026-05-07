@@ -5203,7 +5203,7 @@ typedef struct {
     uint8_t brew_doses;                 /* exact dose count */
     uint8_t restore_doses;              /* exact dose count */
     uint8_t overhead_prayer;            /* PRAYER_PROTECT_* enum */
-    uint8_t offensive_prayer;           /* OFFENSIVE_PRAYER_* enum */
+    uint8_t offensive_prayer_attack_timer; /* low nibble offensive, high nibble player attack_timer */
     uint8_t player_x_quant;             /* (player.x - INF_ARENA_MIN_X) / 2 */
     uint8_t player_y_quant;             /* (player.y - INF_ARENA_MIN_Y) / 2 */
     uint8_t zuk_hp_bin;                 /* live Zuk HP / 50, 0 if no Zuk alive */
@@ -5256,6 +5256,13 @@ static size_t inf_cell_key_size(EncounterState* state) {
     return sizeof(InfCellKey);
 }
 
+static uint8_t inf_cell_attack_timer_bucket(const InfernoState* s) {
+    int timer = s->player.attack_timer;
+    if (timer < 0) timer = 0;
+    if (timer > 15) timer = 15;
+    return (uint8_t)timer;
+}
+
 static void inf_write_cell_key(EncounterState* state, void* out) {
     const InfernoState* s = (const InfernoState*)state;
     InfCellKey* k = (InfCellKey*)out;
@@ -5269,7 +5276,9 @@ static void inf_write_cell_key(EncounterState* state, void* out) {
     k->brew_doses = (uint8_t)s->player.brew_doses;
     k->restore_doses = (uint8_t)s->player.restore_doses;
     k->overhead_prayer = (uint8_t)s->player.prayer;
-    k->offensive_prayer = (uint8_t)s->player.offensive_prayer;
+    k->offensive_prayer_attack_timer = (uint8_t)(
+        ((uint8_t)s->player.offensive_prayer & 0x0fu) |
+        (inf_cell_attack_timer_bucket(s) << 4));
 
     int dx = s->player.x - INF_ARENA_MIN_X;
     int dy = s->player.y - INF_ARENA_MIN_Y;

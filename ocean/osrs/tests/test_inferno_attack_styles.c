@@ -2200,6 +2200,7 @@ static void test_inferno_cell_key_tracks_set_magers_and_jad_hp_bucket(void) {
     state.npcs[5].active = 1;
     state.npcs[5].hp = 253;
     state.npcs[5].max_hp = INF_NPC_STATS[INF_NPC_JAD].hp;
+    state.player.attack_timer = 6;
 
     InfCellKey key;
     inf_write_cell_key((EncounterState*)&state, &key);
@@ -2208,6 +2209,8 @@ static void test_inferno_cell_key_tracks_set_magers_and_jad_hp_bucket(void) {
         key.active_set_count, 3);
     ASSERT_INT_EQ("jad_hp_bin uses live Jad HP / 50",
         key.jad_hp_bin, 5);
+    ASSERT_INT_EQ("cell key stores player attack timer bucket",
+        key.offensive_prayer_attack_timer >> 4, 6);
 }
 
 static void test_inferno_progress_score_rewards_late_add_transitions(void) {

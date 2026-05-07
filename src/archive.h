@@ -776,7 +776,7 @@ static inline int archive_export_top_k_demos(
  * ==========================================================================*/
 
 #define ARCHIVE_FILE_MAGIC 0x41524356u  /* 'ARCV' little-endian */
-#define ARCHIVE_FILE_VERSION 2u
+#define ARCHIVE_FILE_VERSION 3u
 
 typedef struct {
     uint32_t magic;
