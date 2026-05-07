@@ -20,6 +20,7 @@ extern "C" {
 #define UNSIGNED_CHAR 3
 #define DOUBLE 4
 #define CHAR 5
+#define PUFFER_ENV_LOG_DICT_CAPACITY 256
 
 // Dict types
 typedef struct {

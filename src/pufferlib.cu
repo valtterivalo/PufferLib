@@ -376,7 +376,7 @@ typedef struct {
 } PuffeRL;
 
 Dict* log_environments_impl(PuffeRL& pufferl) {
-    Dict* out = create_dict(128);
+    Dict* out = create_dict(PUFFER_ENV_LOG_DICT_CAPACITY);
     static_vec_log(pufferl.vec, out);
     if (pufferl.phase2_ctx) {
         Phase2CursorStats cs = phase2_cursor_stats(pufferl.phase2_ctx);
