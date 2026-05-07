@@ -623,7 +623,6 @@ typedef struct {
     float shield_damage_this_tick;
     int healer_tags_this_tick;
     int zuk_healer_tags_this_tick;
-    int shield_tags_this_tick;
     float spark_damage_this_tick;
     float damage_received_this_tick;
     float hp_restored_this_tick;
@@ -637,7 +636,6 @@ typedef struct {
     float total_damage_received;
     float total_hp_restored;   /* cumulative HP restored to enemies this episode */
     int total_zuk_healer_tags;
-    int total_shield_tags;
     int total_zuk_healer_kills;
     int total_waves_cleared;
     int ticks_without_action;  /* consecutive ticks with no attack or movement */
@@ -726,7 +724,6 @@ typedef struct {
     float damage_reward_coeff;
     float shield_penalty_coeff;
     float tag_reward_coeff;
-    float shield_tag_reward_coeff;
     float late_start_supply_profile_scale;
     /* terminal + milestone reward shaping. all default 0 → preserves
        existing behavior (win=+1.0 hard-coded, no death penalty, no
@@ -785,6 +782,9 @@ typedef struct {
     int total_zuk_healer_out_of_range_ticks;
     int total_zuk_healer_attackable_ticks;
     float damage_jad_healers_this_tick;
+    int shield_tags_this_tick;
+    int total_shield_tags;
+    float shield_tag_reward_coeff;
 } InfernoState;
 
 /* prayer check and RNG: use shared encounter_prayer_correct_for_style(),
