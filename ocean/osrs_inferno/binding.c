@@ -124,30 +124,6 @@ static InfernoReplayBest g_best_replay = {
     .rng_seed = UINT32_MAX,
 };
 
-static float inferno_healer_transition_objective(
-    float score,
-    float win_rate,
-    float frac_min_hp_le_240,
-    float frac_min_hp_le_150,
-    float damage_after_150,
-    float frac_zuk_healers_tagged_ge_1,
-    float frac_zuk_healers_tagged_ge_4,
-    float frac_zuk_healers_killed_ge_1,
-    float frac_all_zuk_healers_dead,
-    float frac_died_with_zuk_healer_alive
-) {
-    return score +
-        2.0f * win_rate +
-        0.20f * frac_min_hp_le_240 +
-        0.80f * frac_min_hp_le_150 +
-        0.002f * damage_after_150 +
-        0.40f * frac_zuk_healers_tagged_ge_1 +
-        0.60f * frac_zuk_healers_tagged_ge_4 +
-        0.80f * frac_zuk_healers_killed_ge_1 +
-        1.20f * frac_all_zuk_healers_dead -
-        0.80f * frac_died_with_zuk_healer_alive;
-}
-
 static void inferno_replay_lock_best(void) {
     if (pthread_mutex_lock(&g_best_replay_mutex) != 0) {
         fprintf(stderr, "RECORD_REPLAY: cannot lock best replay state\n");
@@ -1118,11 +1094,6 @@ void my_log(Log* log, Dict* out) {
         dict_set(out, "damage_after_300_normal", d300);
         dict_set(out, "damage_after_240_normal", d240);
         dict_set(out, "damage_after_150_normal", d150);
-        dict_set(out, "healer_objective_normal",
-            inferno_healer_transition_objective(
-                score_n, win_rate_n, frac_le_240_n, frac_le_150_n, d150,
-                frac_tagged_ge_1_n, frac_tagged_ge_4_n, frac_killed_ge_1_n,
-                frac_all_healers_dead_n, frac_died_with_zuk_healer_n));
         dict_set(out, "frac_healer_spawned_normal",
             log->count_healer_spawned_normal / log->n_normal);
         dict_set(out, "frac_zuk_healers_tagged_ge_1_normal", frac_tagged_ge_1_n);
@@ -1258,11 +1229,6 @@ void my_log(Log* log, Dict* out) {
         dict_set(out, "damage_after_300_snapshot", d300_s);
         dict_set(out, "damage_after_240_snapshot", d240_s);
         dict_set(out, "damage_after_150_snapshot", d150_s);
-        dict_set(out, "healer_objective_snapshot",
-            inferno_healer_transition_objective(
-                score_s, win_rate_s, frac_le_240_s, frac_le_150_s, d150_s,
-                frac_tagged_ge_1_s, frac_tagged_ge_4_s, frac_killed_ge_1_s,
-                frac_all_healers_dead_s, frac_died_with_zuk_healer_s));
         dict_set(out, "frac_healer_spawned_snapshot",
             log->count_healer_spawned_snapshot / log->n_snapshot);
         dict_set(out, "frac_zuk_healers_tagged_ge_1_snapshot", frac_tagged_ge_1_s);
