@@ -777,6 +777,10 @@ typedef struct {
     int tick_at_first_zuk_healer_attack;
     int total_zuk_healer_target_ticks;
     int total_zuk_healer_attack_fires;
+    int total_zuk_healer_cannot_attack_ticks;
+    int total_zuk_healer_cooldown_ticks;
+    int total_zuk_healer_out_of_range_ticks;
+    int total_zuk_healer_attackable_ticks;
 } InfernoState;
 
 /* prayer check and RNG: use shared encounter_prayer_correct_for_style(),
@@ -994,6 +998,10 @@ static void inf_reset_transition_diagnostics_for_restored_start(InfernoState* s)
     s->total_zuk_healer_kills = 0;
     s->total_zuk_healer_target_ticks = 0;
     s->total_zuk_healer_attack_fires = 0;
+    s->total_zuk_healer_cannot_attack_ticks = 0;
+    s->total_zuk_healer_cooldown_ticks = 0;
+    s->total_zuk_healer_out_of_range_ticks = 0;
+    s->total_zuk_healer_attackable_ticks = 0;
 
     s->tick_at_zuk_healer_spawn = s->zuk.healer_spawned ? s->tick : -1;
     s->tick_at_first_zuk_healer_tag =
@@ -1409,6 +1417,10 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
     s->tick_at_first_zuk_healer_attack = -1;
     s->total_zuk_healer_target_ticks = 0;
     s->total_zuk_healer_attack_fires = 0;
+    s->total_zuk_healer_cannot_attack_ticks = 0;
+    s->total_zuk_healer_cooldown_ticks = 0;
+    s->total_zuk_healer_out_of_range_ticks = 0;
+    s->total_zuk_healer_attackable_ticks = 0;
 
     /* player */
     s->player.entity_type = ENTITY_PLAYER;
@@ -3313,6 +3325,29 @@ static void inf_tick_player(InfernoState* s, const int* actions, int can_attack)
 
     /* player attacks targeted NPC */
     if (can_attack && s->player.attack_timer > 0) s->player.attack_timer--;
+    int has_zuk_healer_target = osrs_interaction_active(&s->interaction) &&
+        inf_is_live_zuk_healer_slot(s, s->interaction.target_slot);
+    if (has_zuk_healer_target) {
+        if (!can_attack) {
+            s->total_zuk_healer_cannot_attack_ticks++;
+        } else if (s->player.attack_timer > 0) {
+            s->total_zuk_healer_cooldown_ticks++;
+        } else {
+            InfNPC* target_npc = &s->npcs[s->interaction.target_slot];
+            const EncounterLoadoutStats* ls = inf_current_loadout_stats(s);
+            int is_magic_attack = (ls->style == ATTACK_STYLE_MAGIC);
+            int mage_blocked = is_magic_attack &&
+                (s->player.current_magic < ((s->spell_choice == ENCOUNTER_SPELL_ICE)
+                    ? ICE_BARRAGE_LEVEL : BLOOD_BARRAGE_LEVEL));
+            if (!mage_blocked && encounter_player_can_attack(s->player.x, s->player.y,
+                    target_npc->x, target_npc->y, target_npc->size,
+                    ls->attack_range, s->los_blockers, s->los_blocker_count)) {
+                s->total_zuk_healer_attackable_ticks++;
+            } else {
+                s->total_zuk_healer_out_of_range_ticks++;
+            }
+        }
+    }
     if (can_attack && osrs_interaction_active(&s->interaction) && s->player.attack_timer == 0) {
         InfNPC* target_npc = &s->npcs[s->interaction.target_slot];
         if (target_npc->active) {

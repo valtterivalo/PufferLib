@@ -816,12 +816,22 @@ typedef struct {
     float n;
     float count_zuk_healers_targeted_ge_1_normal;
     float count_zuk_healers_attacked_ge_1_normal;
+    float count_zuk_healers_attackable_ge_1_normal;
     float ticks_240_to_first_healer_target_normal_sum;
     float ticks_240_to_first_healer_attack_normal_sum;
+    float zuk_healer_target_cannot_attack_ticks_normal_sum;
+    float zuk_healer_target_cooldown_ticks_normal_sum;
+    float zuk_healer_target_out_of_range_ticks_normal_sum;
+    float zuk_healer_target_attackable_ticks_normal_sum;
     float count_zuk_healers_targeted_ge_1_snapshot;
     float count_zuk_healers_attacked_ge_1_snapshot;
+    float count_zuk_healers_attackable_ge_1_snapshot;
     float ticks_240_to_first_healer_target_snapshot_sum;
     float ticks_240_to_first_healer_attack_snapshot_sum;
+    float zuk_healer_target_cannot_attack_ticks_snapshot_sum;
+    float zuk_healer_target_cooldown_ticks_snapshot_sum;
+    float zuk_healer_target_out_of_range_ticks_snapshot_sum;
+    float zuk_healer_target_attackable_ticks_snapshot_sum;
 } Log;
 
 typedef struct {

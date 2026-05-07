@@ -1469,6 +1469,12 @@ static void test_zuk_healer_target_action_tags_on_landed_hit(void) {
         state.tick_at_first_zuk_healer_attack, 321);
     ASSERT_INT_EQ("player attack records healer attack fire count",
         state.total_zuk_healer_attack_fires, 1);
+    ASSERT_INT_EQ("attackable healer target tick counted",
+        state.total_zuk_healer_attackable_ticks, 1);
+    ASSERT_INT_EQ("healer target was not blocked by cooldown",
+        state.total_zuk_healer_cooldown_ticks, 0);
+    ASSERT_INT_EQ("healer target was not blocked by range",
+        state.total_zuk_healer_out_of_range_ticks, 0);
 
     state.npcs[2].pending_hit.damage = 0;
     state.npcs[2].pending_hit.ticks_remaining = 1;
@@ -2448,6 +2454,10 @@ static void test_inferno_restored_start_resets_transition_diagnostics(void) {
     state.total_zuk_healer_kills = 3;
     state.total_zuk_healer_target_ticks = 7;
     state.total_zuk_healer_attack_fires = 8;
+    state.total_zuk_healer_cannot_attack_ticks = 9;
+    state.total_zuk_healer_cooldown_ticks = 10;
+    state.total_zuk_healer_out_of_range_ticks = 11;
+    state.total_zuk_healer_attackable_ticks = 12;
 
     inf_reset_transition_diagnostics_for_restored_start(&state);
 
@@ -2489,6 +2499,14 @@ static void test_inferno_restored_start_resets_transition_diagnostics(void) {
         state.total_zuk_healer_target_ticks, 0);
     ASSERT_INT_EQ("restored start clears healer attack fires",
         state.total_zuk_healer_attack_fires, 0);
+    ASSERT_INT_EQ("restored start clears healer cannot-attack ticks",
+        state.total_zuk_healer_cannot_attack_ticks, 0);
+    ASSERT_INT_EQ("restored start clears healer cooldown ticks",
+        state.total_zuk_healer_cooldown_ticks, 0);
+    ASSERT_INT_EQ("restored start clears healer range-blocked ticks",
+        state.total_zuk_healer_out_of_range_ticks, 0);
+    ASSERT_INT_EQ("restored start clears healer attackable ticks",
+        state.total_zuk_healer_attackable_ticks, 0);
 }
 
 static void test_inferno_human_equip_does_not_snap_loadout(void) {

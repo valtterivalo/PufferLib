@@ -399,6 +399,18 @@ void c_step(Env* env) {
                 env->log.count_zuk_healers_targeted_ge_1_snapshot += 1.0f;
             if (s->total_zuk_healer_attack_fires >= 1)
                 env->log.count_zuk_healers_attacked_ge_1_snapshot += 1.0f;
+            if (s->total_zuk_healer_attackable_ticks >= 1)
+                env->log.count_zuk_healers_attackable_ge_1_snapshot += 1.0f;
+            if (s->total_zuk_healer_target_ticks >= 1) {
+                env->log.zuk_healer_target_cannot_attack_ticks_snapshot_sum +=
+                    (float)s->total_zuk_healer_cannot_attack_ticks;
+                env->log.zuk_healer_target_cooldown_ticks_snapshot_sum +=
+                    (float)s->total_zuk_healer_cooldown_ticks;
+                env->log.zuk_healer_target_out_of_range_ticks_snapshot_sum +=
+                    (float)s->total_zuk_healer_out_of_range_ticks;
+                env->log.zuk_healer_target_attackable_ticks_snapshot_sum +=
+                    (float)s->total_zuk_healer_attackable_ticks;
+            }
             if (s->tick_at_le_240 >= 0) {
                 env->log.hp_restored_after_240_snapshot_sum +=
                     s->hp_restored_after_240;
@@ -506,6 +518,18 @@ void c_step(Env* env) {
                 env->log.count_zuk_healers_targeted_ge_1_normal += 1.0f;
             if (s->total_zuk_healer_attack_fires >= 1)
                 env->log.count_zuk_healers_attacked_ge_1_normal += 1.0f;
+            if (s->total_zuk_healer_attackable_ticks >= 1)
+                env->log.count_zuk_healers_attackable_ge_1_normal += 1.0f;
+            if (s->total_zuk_healer_target_ticks >= 1) {
+                env->log.zuk_healer_target_cannot_attack_ticks_normal_sum +=
+                    (float)s->total_zuk_healer_cannot_attack_ticks;
+                env->log.zuk_healer_target_cooldown_ticks_normal_sum +=
+                    (float)s->total_zuk_healer_cooldown_ticks;
+                env->log.zuk_healer_target_out_of_range_ticks_normal_sum +=
+                    (float)s->total_zuk_healer_out_of_range_ticks;
+                env->log.zuk_healer_target_attackable_ticks_normal_sum +=
+                    (float)s->total_zuk_healer_attackable_ticks;
+            }
             if (s->tick_at_le_240 >= 0) {
                 env->log.hp_restored_after_240_normal_sum += s->hp_restored_after_240;
                 env->log.spark_damage_after_240_normal_sum += s->spark_damage_after_240;
@@ -1073,6 +1097,25 @@ void my_log(Log* log, Dict* out) {
             log->count_zuk_healers_targeted_ge_1_normal / log->n_normal);
         dict_set(out, "frac_zuk_healers_attacked_ge_1_normal",
             log->count_zuk_healers_attacked_ge_1_normal / log->n_normal);
+        dict_set(out, "frac_zuk_healers_attackable_ge_1_normal",
+            log->count_zuk_healers_attackable_ge_1_normal / log->n_normal);
+        float target_den = log->count_zuk_healers_targeted_ge_1_normal;
+        dict_set(out, "zuk_healer_target_cannot_attack_ticks_normal",
+            target_den > 0.0f
+                ? log->zuk_healer_target_cannot_attack_ticks_normal_sum / target_den
+                : 0.0f);
+        dict_set(out, "zuk_healer_target_cooldown_ticks_normal",
+            target_den > 0.0f
+                ? log->zuk_healer_target_cooldown_ticks_normal_sum / target_den
+                : 0.0f);
+        dict_set(out, "zuk_healer_target_out_of_range_ticks_normal",
+            target_den > 0.0f
+                ? log->zuk_healer_target_out_of_range_ticks_normal_sum / target_den
+                : 0.0f);
+        dict_set(out, "zuk_healer_target_attackable_ticks_normal",
+            target_den > 0.0f
+                ? log->zuk_healer_target_attackable_ticks_normal_sum / target_den
+                : 0.0f);
         float first_target_ticks = log->count_zuk_healers_targeted_ge_1_normal > 0.0f
             ? log->ticks_240_to_first_healer_target_normal_sum /
                 log->count_zuk_healers_targeted_ge_1_normal : 0.0f;
@@ -1181,6 +1224,25 @@ void my_log(Log* log, Dict* out) {
             log->count_zuk_healers_targeted_ge_1_snapshot / log->n_snapshot);
         dict_set(out, "frac_zuk_healers_attacked_ge_1_snapshot",
             log->count_zuk_healers_attacked_ge_1_snapshot / log->n_snapshot);
+        dict_set(out, "frac_zuk_healers_attackable_ge_1_snapshot",
+            log->count_zuk_healers_attackable_ge_1_snapshot / log->n_snapshot);
+        float target_den_s = log->count_zuk_healers_targeted_ge_1_snapshot;
+        dict_set(out, "zuk_healer_target_cannot_attack_ticks_snapshot",
+            target_den_s > 0.0f
+                ? log->zuk_healer_target_cannot_attack_ticks_snapshot_sum / target_den_s
+                : 0.0f);
+        dict_set(out, "zuk_healer_target_cooldown_ticks_snapshot",
+            target_den_s > 0.0f
+                ? log->zuk_healer_target_cooldown_ticks_snapshot_sum / target_den_s
+                : 0.0f);
+        dict_set(out, "zuk_healer_target_out_of_range_ticks_snapshot",
+            target_den_s > 0.0f
+                ? log->zuk_healer_target_out_of_range_ticks_snapshot_sum / target_den_s
+                : 0.0f);
+        dict_set(out, "zuk_healer_target_attackable_ticks_snapshot",
+            target_den_s > 0.0f
+                ? log->zuk_healer_target_attackable_ticks_snapshot_sum / target_den_s
+                : 0.0f);
         float first_target_ticks_s = log->count_zuk_healers_targeted_ge_1_snapshot > 0.0f
             ? log->ticks_240_to_first_healer_target_snapshot_sum /
                 log->count_zuk_healers_targeted_ge_1_snapshot : 0.0f;
