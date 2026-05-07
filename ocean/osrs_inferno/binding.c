@@ -395,11 +395,23 @@ void c_step(Env* env) {
                 env->log.count_zuk_healers_killed_ge_4_snapshot += 1.0f;
             if (s->tick_at_all_zuk_healers_dead >= 0)
                 env->log.count_all_zuk_healers_dead_snapshot += 1.0f;
+            if (s->total_zuk_healer_target_ticks >= 1)
+                env->log.count_zuk_healers_targeted_ge_1_snapshot += 1.0f;
+            if (s->total_zuk_healer_attack_fires >= 1)
+                env->log.count_zuk_healers_attacked_ge_1_snapshot += 1.0f;
             if (s->tick_at_le_240 >= 0) {
                 env->log.hp_restored_after_240_snapshot_sum +=
                     s->hp_restored_after_240;
                 env->log.spark_damage_after_240_snapshot_sum +=
                     s->spark_damage_after_240;
+                if (s->tick_at_first_zuk_healer_target >= 0) {
+                    env->log.ticks_240_to_first_healer_target_snapshot_sum +=
+                        (float)(s->tick_at_first_zuk_healer_target - s->tick_at_le_240);
+                }
+                if (s->tick_at_first_zuk_healer_attack >= 0) {
+                    env->log.ticks_240_to_first_healer_attack_snapshot_sum +=
+                        (float)(s->tick_at_first_zuk_healer_attack - s->tick_at_le_240);
+                }
                 if (s->tick_at_first_zuk_healer_tag >= 0) {
                     env->log.ticks_240_to_first_healer_tag_snapshot_sum +=
                         (float)(s->tick_at_first_zuk_healer_tag - s->tick_at_le_240);
@@ -490,9 +502,21 @@ void c_step(Env* env) {
                 env->log.count_zuk_healers_killed_ge_4_normal += 1.0f;
             if (s->tick_at_all_zuk_healers_dead >= 0)
                 env->log.count_all_zuk_healers_dead_normal += 1.0f;
+            if (s->total_zuk_healer_target_ticks >= 1)
+                env->log.count_zuk_healers_targeted_ge_1_normal += 1.0f;
+            if (s->total_zuk_healer_attack_fires >= 1)
+                env->log.count_zuk_healers_attacked_ge_1_normal += 1.0f;
             if (s->tick_at_le_240 >= 0) {
                 env->log.hp_restored_after_240_normal_sum += s->hp_restored_after_240;
                 env->log.spark_damage_after_240_normal_sum += s->spark_damage_after_240;
+                if (s->tick_at_first_zuk_healer_target >= 0) {
+                    env->log.ticks_240_to_first_healer_target_normal_sum +=
+                        (float)(s->tick_at_first_zuk_healer_target - s->tick_at_le_240);
+                }
+                if (s->tick_at_first_zuk_healer_attack >= 0) {
+                    env->log.ticks_240_to_first_healer_attack_normal_sum +=
+                        (float)(s->tick_at_first_zuk_healer_attack - s->tick_at_le_240);
+                }
                 if (s->tick_at_first_zuk_healer_tag >= 0) {
                     env->log.ticks_240_to_first_healer_tag_normal_sum +=
                         (float)(s->tick_at_first_zuk_healer_tag - s->tick_at_le_240);
@@ -1045,6 +1069,16 @@ void my_log(Log* log, Dict* out) {
             log->count_zuk_healers_killed_ge_4_normal / log->n_normal);
         dict_set(out, "frac_all_zuk_healers_dead_normal",
             log->count_all_zuk_healers_dead_normal / log->n_normal);
+        dict_set(out, "frac_zuk_healers_targeted_ge_1_normal",
+            log->count_zuk_healers_targeted_ge_1_normal / log->n_normal);
+        dict_set(out, "frac_zuk_healers_attacked_ge_1_normal",
+            log->count_zuk_healers_attacked_ge_1_normal / log->n_normal);
+        float first_target_ticks = log->count_zuk_healers_targeted_ge_1_normal > 0.0f
+            ? log->ticks_240_to_first_healer_target_normal_sum /
+                log->count_zuk_healers_targeted_ge_1_normal : 0.0f;
+        float first_attack_ticks = log->count_zuk_healers_attacked_ge_1_normal > 0.0f
+            ? log->ticks_240_to_first_healer_attack_normal_sum /
+                log->count_zuk_healers_attacked_ge_1_normal : 0.0f;
         float first_tag_ticks = log->count_zuk_healers_tagged_ge_1_normal > 0.0f
             ? log->ticks_240_to_first_healer_tag_normal_sum /
                 log->count_zuk_healers_tagged_ge_1_normal : 0.0f;
@@ -1063,6 +1097,8 @@ void my_log(Log* log, Dict* out) {
         float max_hp_after_spawn = log->count_healer_spawned_normal > 0.0f
             ? log->zuk_hp_max_after_healer_spawn_normal_sum /
                 log->count_healer_spawned_normal : 0.0f;
+        dict_set(out, "ticks_240_to_first_healer_target_normal", first_target_ticks);
+        dict_set(out, "ticks_240_to_first_healer_attack_normal", first_attack_ticks);
         dict_set(out, "ticks_240_to_first_healer_tag_normal", first_tag_ticks);
         dict_set(out, "ticks_240_to_all_healers_tagged_normal", all_tagged_ticks);
         dict_set(out, "ticks_240_to_all_healers_dead_normal", all_dead_ticks);
@@ -1141,6 +1177,16 @@ void my_log(Log* log, Dict* out) {
             log->count_zuk_healers_killed_ge_4_snapshot / log->n_snapshot);
         dict_set(out, "frac_all_zuk_healers_dead_snapshot",
             log->count_all_zuk_healers_dead_snapshot / log->n_snapshot);
+        dict_set(out, "frac_zuk_healers_targeted_ge_1_snapshot",
+            log->count_zuk_healers_targeted_ge_1_snapshot / log->n_snapshot);
+        dict_set(out, "frac_zuk_healers_attacked_ge_1_snapshot",
+            log->count_zuk_healers_attacked_ge_1_snapshot / log->n_snapshot);
+        float first_target_ticks_s = log->count_zuk_healers_targeted_ge_1_snapshot > 0.0f
+            ? log->ticks_240_to_first_healer_target_snapshot_sum /
+                log->count_zuk_healers_targeted_ge_1_snapshot : 0.0f;
+        float first_attack_ticks_s = log->count_zuk_healers_attacked_ge_1_snapshot > 0.0f
+            ? log->ticks_240_to_first_healer_attack_snapshot_sum /
+                log->count_zuk_healers_attacked_ge_1_snapshot : 0.0f;
         float first_tag_ticks_s = log->count_zuk_healers_tagged_ge_1_snapshot > 0.0f
             ? log->ticks_240_to_first_healer_tag_snapshot_sum /
                 log->count_zuk_healers_tagged_ge_1_snapshot : 0.0f;
@@ -1159,6 +1205,8 @@ void my_log(Log* log, Dict* out) {
         float max_hp_after_spawn_s = log->count_healer_spawned_snapshot > 0.0f
             ? log->zuk_hp_max_after_healer_spawn_snapshot_sum /
                 log->count_healer_spawned_snapshot : 0.0f;
+        dict_set(out, "ticks_240_to_first_healer_target_snapshot", first_target_ticks_s);
+        dict_set(out, "ticks_240_to_first_healer_attack_snapshot", first_attack_ticks_s);
         dict_set(out, "ticks_240_to_first_healer_tag_snapshot", first_tag_ticks_s);
         dict_set(out, "ticks_240_to_all_healers_tagged_snapshot", all_tagged_ticks_s);
         dict_set(out, "ticks_240_to_all_healers_dead_snapshot", all_dead_ticks_s);

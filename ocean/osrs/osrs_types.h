@@ -814,6 +814,14 @@ typedef struct {
     float killed_by_type[14];
     float start_wave;   /* config start_wave (for score formula branching) */
     float n;
+    float count_zuk_healers_targeted_ge_1_normal;
+    float count_zuk_healers_attacked_ge_1_normal;
+    float ticks_240_to_first_healer_target_normal_sum;
+    float ticks_240_to_first_healer_attack_normal_sum;
+    float count_zuk_healers_targeted_ge_1_snapshot;
+    float count_zuk_healers_attacked_ge_1_snapshot;
+    float ticks_240_to_first_healer_target_snapshot_sum;
+    float ticks_240_to_first_healer_attack_snapshot_sum;
 } Log;
 
 typedef struct {

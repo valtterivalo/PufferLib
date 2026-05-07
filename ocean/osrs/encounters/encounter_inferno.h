@@ -773,6 +773,10 @@ typedef struct {
     int oracle_mode;
 
     Log log;
+    int tick_at_first_zuk_healer_target;
+    int tick_at_first_zuk_healer_attack;
+    int total_zuk_healer_target_ticks;
+    int total_zuk_healer_attack_fires;
 } InfernoState;
 
 /* prayer check and RNG: use shared encounter_prayer_correct_for_style(),
@@ -920,6 +924,15 @@ static InfZukHealerCounts inf_zuk_healer_counts(const InfernoState* s) {
     return counts;
 }
 
+static int inf_is_live_zuk_healer_slot(const InfernoState* s, int npc_slot) {
+    if (npc_slot < 0 || npc_slot >= INF_MAX_NPCS) return 0;
+    const InfNPC* npc = &s->npcs[npc_slot];
+    return npc->active &&
+        npc->hp > 0 &&
+        npc->death_ticks == 0 &&
+        npc->type == INF_NPC_HEALER_ZUK;
+}
+
 static int inf_healer_diagnostic_phase_matches(
     const InfernoState* s,
     int diagnostic_phase
@@ -979,6 +992,8 @@ static void inf_reset_transition_diagnostics_for_restored_start(InfernoState* s)
     s->total_zuk_healer_tags = healers.tagged_count;
     if (s->total_zuk_healer_tags > 4) s->total_zuk_healer_tags = 4;
     s->total_zuk_healer_kills = 0;
+    s->total_zuk_healer_target_ticks = 0;
+    s->total_zuk_healer_attack_fires = 0;
 
     s->tick_at_zuk_healer_spawn = s->zuk.healer_spawned ? s->tick : -1;
     s->tick_at_first_zuk_healer_tag =
@@ -989,6 +1004,8 @@ static void inf_reset_transition_diagnostics_for_restored_start(InfernoState* s)
         healers.healing_count == 0 ? s->tick : -1;
     s->tick_at_all_zuk_healers_dead =
         s->zuk.healer_spawned && healers.live_count == 0 ? s->tick : -1;
+    s->tick_at_first_zuk_healer_target = -1;
+    s->tick_at_first_zuk_healer_attack = -1;
 }
 
 enum {
@@ -1388,6 +1405,10 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
     s->tick_at_first_zuk_healer_tag = -1;
     s->tick_at_all_zuk_healers_tagged = -1;
     s->tick_at_all_zuk_healers_dead = -1;
+    s->tick_at_first_zuk_healer_target = -1;
+    s->tick_at_first_zuk_healer_attack = -1;
+    s->total_zuk_healer_target_ticks = 0;
+    s->total_zuk_healer_attack_fires = 0;
 
     /* player */
     s->player.entity_type = ENTITY_PLAYER;
@@ -3251,6 +3272,13 @@ static void inf_tick_player(InfernoState* s, const int* actions, int can_attack)
         osrs_interaction_clear(&s->interaction);
     }
 
+    if (osrs_interaction_active(&s->interaction) &&
+            inf_is_live_zuk_healer_slot(s, s->interaction.target_slot)) {
+        s->total_zuk_healer_target_ticks++;
+        if (s->tick_at_first_zuk_healer_target < 0)
+            s->tick_at_first_zuk_healer_target = s->tick;
+    }
+
     /* movement: explicit move, auto-chase toward target, or idle.
        OSRS order: target selection → movement → attack check. */
     if (has_explicit_move && !osrs_interaction_active(&s->interaction)) {
@@ -3477,6 +3505,11 @@ static void inf_tick_player(InfernoState* s, const int* actions, int can_attack)
                 }
 
                 s->player.attack_timer = ls->attack_speed;
+                if (target_npc->type == INF_NPC_HEALER_ZUK) {
+                    s->total_zuk_healer_attack_fires++;
+                    if (s->tick_at_first_zuk_healer_attack < 0)
+                        s->tick_at_first_zuk_healer_attack = s->tick;
+                }
 
                 /* player projectile event for renderer */
                 s->player_attacked_this_tick = 1;

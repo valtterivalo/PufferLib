@@ -1338,6 +1338,8 @@ static void init_zuk_timing_state(InfernoState* state) {
     state->player_dest_y = -1;
     state->player_last_interaction_target_slot = -1;
     state->player_last_interaction_age = 1;
+    state->tick_at_first_zuk_healer_target = -1;
+    state->tick_at_first_zuk_healer_attack = -1;
     state->weapon_set = INF_GEAR_TBOW;
     osrs_interaction_init(&state->interaction);
     encounter_compute_loadout_stats(INF_RANGE_TBOW_LOADOUT, ATTACK_STYLE_RANGED,
@@ -1428,6 +1430,7 @@ static void test_zuk_healer_target_action_tags_on_landed_hit(void) {
 
     InfernoState state;
     init_zuk_timing_state(&state);
+    state.tick = 321;
     state.player.x = 20;
     state.player.y = 46;
     encounter_apply_loadout(&state.player, INF_RANGE_TBOW_LOADOUT, GEAR_RANGED);
@@ -1456,8 +1459,16 @@ static void test_zuk_healer_target_action_tags_on_landed_hit(void) {
 
     ASSERT_INT_EQ("target action selects zuk healer",
         state.interaction.target_slot, 2);
+    ASSERT_INT_EQ("target action records first healer target tick",
+        state.tick_at_first_zuk_healer_target, 321);
+    ASSERT_INT_EQ("target action records healer target tick count",
+        state.total_zuk_healer_target_ticks, 1);
     ASSERT_INT_EQ("player attack queues healer hit",
         state.npcs[2].pending_hit.active, 1);
+    ASSERT_INT_EQ("player attack records first healer attack tick",
+        state.tick_at_first_zuk_healer_attack, 321);
+    ASSERT_INT_EQ("player attack records healer attack fire count",
+        state.total_zuk_healer_attack_fires, 1);
 
     state.npcs[2].pending_hit.damage = 0;
     state.npcs[2].pending_hit.ticks_remaining = 1;
@@ -2425,6 +2436,8 @@ static void test_inferno_restored_start_resets_transition_diagnostics(void) {
     state.tick_at_first_zuk_healer_tag = 41;
     state.tick_at_all_zuk_healers_tagged = 42;
     state.tick_at_all_zuk_healers_dead = 43;
+    state.tick_at_first_zuk_healer_target = 44;
+    state.tick_at_first_zuk_healer_attack = 45;
     state.damage_after_300 = 11.0f;
     state.damage_after_240 = 12.0f;
     state.damage_after_150 = 13.0f;
@@ -2433,6 +2446,8 @@ static void test_inferno_restored_start_resets_transition_diagnostics(void) {
     state.zuk_hp_max_after_healer_spawn = 420.0f;
     state.total_zuk_healer_tags = 4;
     state.total_zuk_healer_kills = 3;
+    state.total_zuk_healer_target_ticks = 7;
+    state.total_zuk_healer_attack_fires = 8;
 
     inf_reset_transition_diagnostics_for_restored_start(&state);
 
@@ -2450,6 +2465,10 @@ static void test_inferno_restored_start_resets_transition_diagnostics(void) {
         state.tick_at_all_zuk_healers_tagged, -1);
     ASSERT_INT_EQ("restored start clears all-dead tick while healers live",
         state.tick_at_all_zuk_healers_dead, -1);
+    ASSERT_INT_EQ("restored start clears first healer target tick",
+        state.tick_at_first_zuk_healer_target, -1);
+    ASSERT_INT_EQ("restored start clears first healer attack tick",
+        state.tick_at_first_zuk_healer_attack, -1);
     ASSERT_FLOAT_NEAR("restored start clears post300 damage",
         state.damage_after_300, 0.0f, 1e-6f);
     ASSERT_FLOAT_NEAR("restored start clears post240 damage",
@@ -2466,6 +2485,10 @@ static void test_inferno_restored_start_resets_transition_diagnostics(void) {
         state.total_zuk_healer_tags, 2);
     ASSERT_INT_EQ("restored start clears unobservable historical kills",
         state.total_zuk_healer_kills, 0);
+    ASSERT_INT_EQ("restored start clears healer target ticks",
+        state.total_zuk_healer_target_ticks, 0);
+    ASSERT_INT_EQ("restored start clears healer attack fires",
+        state.total_zuk_healer_attack_fires, 0);
 }
 
 static void test_inferno_human_equip_does_not_snap_loadout(void) {

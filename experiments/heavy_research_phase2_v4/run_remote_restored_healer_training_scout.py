@@ -28,6 +28,8 @@ METRIC_KEYS = [
     "env/wins_normal",
     "env/frac_min_hp_le_240_normal",
     "env/frac_min_hp_le_150_normal",
+    "env/frac_zuk_healers_targeted_ge_1_normal",
+    "env/frac_zuk_healers_attacked_ge_1_normal",
     "env/frac_zuk_healers_tagged_ge_1_normal",
     "env/frac_zuk_healers_killed_ge_1_normal",
     "env/frac_all_zuk_healers_dead_normal",
@@ -38,6 +40,10 @@ METRIC_KEYS = [
     "env/frac_min_hp_le_150_snapshot",
     "env/damage_after_240_snapshot",
     "env/frac_healer_spawned_snapshot",
+    "env/frac_zuk_healers_targeted_ge_1_snapshot",
+    "env/frac_zuk_healers_attacked_ge_1_snapshot",
+    "env/ticks_240_to_first_healer_target_snapshot",
+    "env/ticks_240_to_first_healer_attack_snapshot",
     "env/frac_zuk_healers_tagged_ge_1_snapshot",
     "env/frac_zuk_healers_tagged_ge_4_snapshot",
     "env/frac_zuk_healers_killed_ge_1_snapshot",
@@ -210,6 +216,8 @@ def summarize(rows: list[dict]) -> dict:
         arm_summary = {"n": len(arm_rows)}
         for key in [
             "score_snapshot",
+            "frac_zuk_healers_targeted_ge_1_snapshot",
+            "frac_zuk_healers_attacked_ge_1_snapshot",
             "frac_zuk_healers_tagged_ge_1_snapshot",
             "frac_zuk_healers_killed_ge_1_snapshot",
             "frac_all_zuk_healers_dead_snapshot",
