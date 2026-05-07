@@ -403,6 +403,9 @@ void c_step(Env* env) {
                 env->log.zuk_hp_max_after_healer_spawn_snapshot_sum +=
                     s->zuk_hp_max_after_healer_spawn;
             }
+            env->log.shield_tags_snapshot_sum += (float)s->total_shield_tags;
+            if (s->total_shield_tags >= 1)
+                env->log.count_shield_tags_ge_1_snapshot += 1.0f;
             if (s->total_zuk_healer_tags >= 1)
                 env->log.count_zuk_healers_tagged_ge_1_snapshot += 1.0f;
             if (s->total_zuk_healer_tags >= 2)
@@ -553,6 +556,9 @@ void c_step(Env* env) {
                 env->log.zuk_hp_max_after_healer_spawn_normal_sum +=
                     s->zuk_hp_max_after_healer_spawn;
             }
+            env->log.shield_tags_normal_sum += (float)s->total_shield_tags;
+            if (s->total_shield_tags >= 1)
+                env->log.count_shield_tags_ge_1_normal += 1.0f;
             if (s->total_zuk_healer_tags >= 1)
                 env->log.count_zuk_healers_tagged_ge_1_normal += 1.0f;
             if (s->total_zuk_healer_tags >= 2)
@@ -869,6 +875,7 @@ void my_init(Env* env, Dict* kwargs) {
         env->enc_state, "tag_reward_coeff",
         (float)dict_get_unsafe(kwargs, "tag_reward_coeff")->value);
     static const char* const optional_float_keys[] = {
+        "shield_tag_reward_coeff",
         "win_bonus_coeff", "death_penalty_coeff",
         "phase_900_bonus", "phase_600_bonus", "phase_300_bonus",
         "shield_penalty_episode_cap",
@@ -1217,6 +1224,10 @@ void my_log(Log* log, Dict* out) {
         dict_set(out, "damage_after_150_normal", d150);
         dict_set(out, "frac_healer_spawned_normal",
             log->count_healer_spawned_normal / log->n_normal);
+        dict_set(out, "shield_tags_normal",
+            log->shield_tags_normal_sum / log->n_normal);
+        dict_set(out, "frac_shield_tags_ge_1_normal",
+            log->count_shield_tags_ge_1_normal / log->n_normal);
         dict_set(out, "frac_zuk_healers_tagged_ge_1_normal", frac_tagged_ge_1_n);
         dict_set(out, "frac_zuk_healers_tagged_ge_2_normal",
             log->count_zuk_healers_tagged_ge_2_normal / log->n_normal);
@@ -1397,6 +1408,10 @@ void my_log(Log* log, Dict* out) {
         dict_set(out, "damage_after_150_snapshot", d150_s);
         dict_set(out, "frac_healer_spawned_snapshot",
             log->count_healer_spawned_snapshot / log->n_snapshot);
+        dict_set(out, "shield_tags_snapshot",
+            log->shield_tags_snapshot_sum / log->n_snapshot);
+        dict_set(out, "frac_shield_tags_ge_1_snapshot",
+            log->count_shield_tags_ge_1_snapshot / log->n_snapshot);
         dict_set(out, "frac_zuk_healers_tagged_ge_1_snapshot", frac_tagged_ge_1_s);
         dict_set(out, "frac_zuk_healers_tagged_ge_2_snapshot",
             log->count_zuk_healers_tagged_ge_2_snapshot / log->n_snapshot);

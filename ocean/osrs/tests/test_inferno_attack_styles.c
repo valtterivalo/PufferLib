@@ -454,6 +454,59 @@ static void test_jad_healer_damage_never_gets_damage_reward(void) {
         inf_compute_reward(&state), 0.0f, 0.0001f);
 }
 
+static void test_shield_tag_reward_excludes_zuk(void) {
+    printf("--- shield tag reward excludes zuk ---\n");
+
+    InfernoState state = make_test_state(24, 24);
+
+    inf_put_float((EncounterState*)&state, "shield_tag_reward_coeff", 0.20f);
+    state.npcs[0] = make_test_npc(INF_NPC_ZUK_SHIELD, 23, 44, 1);
+    state.npcs[0].active = 1;
+    state.npcs[0].hp = 100;
+
+    state.npcs[1] = make_test_npc(INF_NPC_MAGER, 20, 44, 1);
+    state.npcs[1].active = 1;
+    state.npcs[1].hp = 100;
+    state.npcs[1].aggro_target = 0;
+
+    state.npcs[2] = make_test_npc(INF_NPC_RANGER, 22, 44, 1);
+    state.npcs[2].active = 1;
+    state.npcs[2].hp = 100;
+    state.npcs[2].aggro_target = 0;
+
+    state.npcs[3] = make_test_npc(INF_NPC_JAD, 24, 44, 1);
+    state.npcs[3].active = 1;
+    state.npcs[3].hp = 100;
+    state.npcs[3].aggro_target = 0;
+
+    state.npcs[4] = make_test_npc(INF_NPC_ZUK, 26, 44, 5);
+    state.npcs[4].active = 1;
+    state.npcs[4].hp = 1000;
+    state.npcs[4].aggro_target = 0;
+
+    state.npcs[5] = make_test_npc(INF_NPC_HEALER_ZUK, 28, 44, 1);
+    state.npcs[5].active = 1;
+    state.npcs[5].hp = 100;
+    state.npcs[5].aggro_target = 0;
+
+    ASSERT_INT_EQ("mager can be tagged off shield",
+        inf_is_shield_taggable_slot(&state, 1), 1);
+    ASSERT_INT_EQ("ranger can be tagged off shield",
+        inf_is_shield_taggable_slot(&state, 2), 1);
+    ASSERT_INT_EQ("jad can be tagged off shield",
+        inf_is_shield_taggable_slot(&state, 3), 1);
+    ASSERT_INT_EQ("zuk cannot be tagged off shield",
+        inf_is_shield_taggable_slot(&state, 4), 0);
+    ASSERT_INT_EQ("zuk healer cannot be tagged off shield",
+        inf_is_shield_taggable_slot(&state, 5), 0);
+    ASSERT_INT_EQ("shield cannot be tagged off itself",
+        inf_is_shield_taggable_slot(&state, 0), 0);
+
+    state.shield_tags_this_tick = 3;
+    ASSERT_FLOAT_NEAR("shield tag reward pays per valid shield tag",
+        inf_compute_reward(&state), 0.60f, 0.0001f);
+}
+
 static void test_inferno_reset_supplies_match_current_inventory(void) {
     printf("--- inferno reset supplies match current inventory ---\n");
 
@@ -2573,6 +2626,7 @@ static void test_inferno_restored_start_resets_transition_diagnostics(void) {
     state.spark_damage_after_240 = 15.0f;
     state.zuk_hp_max_after_healer_spawn = 420.0f;
     state.total_zuk_healer_tags = 4;
+    state.total_shield_tags = 5;
     state.total_zuk_healer_kills = 3;
     state.total_zuk_healer_target_ticks = 7;
     state.total_zuk_healer_attack_fires = 8;
@@ -2615,6 +2669,8 @@ static void test_inferno_restored_start_resets_transition_diagnostics(void) {
         state.zuk_hp_max_after_healer_spawn, 239.0f, 1e-6f);
     ASSERT_INT_EQ("restored start infers current live tags only",
         state.total_zuk_healer_tags, 2);
+    ASSERT_INT_EQ("restored start clears prior shield tags",
+        state.total_shield_tags, 0);
     ASSERT_INT_EQ("restored start clears unobservable historical kills",
         state.total_zuk_healer_kills, 0);
     ASSERT_INT_EQ("restored start clears healer target ticks",
@@ -2954,6 +3010,7 @@ int main(void) {
     test_final_wave_reward_pays_zuk_healer_damage();
     test_jad_damage_reward_pauses_while_jad_healers_heal();
     test_jad_healer_damage_never_gets_damage_reward();
+    test_shield_tag_reward_excludes_zuk();
     test_inferno_reset_supplies_match_current_inventory();
     test_late_start_supply_profile_anchor_waves();
     test_late_start_supply_profile_interpolation_and_scale();

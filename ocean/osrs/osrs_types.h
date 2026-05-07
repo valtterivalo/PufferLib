@@ -761,6 +761,8 @@ typedef struct {
     float damage_after_240_normal_sum;
     float damage_after_150_normal_sum;
     float count_healer_spawned_normal;
+    float shield_tags_normal_sum;
+    float count_shield_tags_ge_1_normal;
     float count_zuk_healers_tagged_ge_1_normal;
     float count_zuk_healers_tagged_ge_2_normal;
     float count_zuk_healers_tagged_ge_4_normal;
@@ -804,6 +806,8 @@ typedef struct {
     float damage_after_240_snapshot_sum;
     float damage_after_150_snapshot_sum;
     float count_healer_spawned_snapshot;
+    float shield_tags_snapshot_sum;
+    float count_shield_tags_ge_1_snapshot;
     float count_zuk_healers_tagged_ge_1_snapshot;
     float count_zuk_healers_tagged_ge_2_snapshot;
     float count_zuk_healers_tagged_ge_4_snapshot;

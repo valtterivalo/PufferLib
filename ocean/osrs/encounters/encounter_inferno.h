@@ -623,6 +623,7 @@ typedef struct {
     float shield_damage_this_tick;
     int healer_tags_this_tick;
     int zuk_healer_tags_this_tick;
+    int shield_tags_this_tick;
     float spark_damage_this_tick;
     float damage_received_this_tick;
     float hp_restored_this_tick;
@@ -636,6 +637,7 @@ typedef struct {
     float total_damage_received;
     float total_hp_restored;   /* cumulative HP restored to enemies this episode */
     int total_zuk_healer_tags;
+    int total_shield_tags;
     int total_zuk_healer_kills;
     int total_waves_cleared;
     int ticks_without_action;  /* consecutive ticks with no attack or movement */
@@ -724,6 +726,7 @@ typedef struct {
     float damage_reward_coeff;
     float shield_penalty_coeff;
     float tag_reward_coeff;
+    float shield_tag_reward_coeff;
     float late_start_supply_profile_scale;
     /* terminal + milestone reward shaping. all default 0 → preserves
        existing behavior (win=+1.0 hard-coded, no death penalty, no
@@ -1004,6 +1007,7 @@ static void inf_reset_transition_diagnostics_for_restored_start(InfernoState* s)
     InfZukHealerCounts healers = inf_zuk_healer_counts(s);
     s->total_zuk_healer_tags = healers.tagged_count;
     if (s->total_zuk_healer_tags > 4) s->total_zuk_healer_tags = 4;
+    s->total_shield_tags = 0;
     s->total_zuk_healer_kills = 0;
     s->total_zuk_healer_target_ticks = 0;
     s->total_zuk_healer_attack_fires = 0;
@@ -1363,6 +1367,7 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
     float saved_damage_reward_coeff = s->damage_reward_coeff;
     float saved_shield_penalty_coeff = s->shield_penalty_coeff;
     float saved_tag_reward_coeff = s->tag_reward_coeff;
+    float saved_shield_tag_reward_coeff = s->shield_tag_reward_coeff;
     float saved_late_start_supply_profile_scale = s->late_start_supply_profile_scale;
     float saved_win_bonus_coeff = s->win_bonus_coeff;
     float saved_death_penalty_coeff = s->death_penalty_coeff;
@@ -1389,6 +1394,7 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
     s->damage_reward_coeff = saved_damage_reward_coeff;
     s->shield_penalty_coeff = saved_shield_penalty_coeff;
     s->tag_reward_coeff = saved_tag_reward_coeff;
+    s->shield_tag_reward_coeff = saved_shield_tag_reward_coeff;
     s->late_start_supply_profile_scale = saved_late_start_supply_profile_scale;
     s->win_bonus_coeff = saved_win_bonus_coeff;
     s->death_penalty_coeff = saved_death_penalty_coeff;
@@ -2047,6 +2053,31 @@ static const EncounterLoadoutStats* inf_current_loadout_stats(InfernoState* s) {
 
 static int inf_player_weapon_is(const InfernoState* s, uint8_t item) {
     return s->player.equipped[GEAR_SLOT_WEAPON] == item;
+}
+
+static int inf_npc_type_can_be_tagged_off_shield(int type) {
+    return type == INF_NPC_JAD ||
+        type == INF_NPC_RANGER ||
+        type == INF_NPC_MAGER;
+}
+
+static int inf_is_live_shield_slot(const InfernoState* s, int npc_idx) {
+    if (npc_idx < 0 || npc_idx >= INF_MAX_NPCS) return 0;
+    const InfNPC* npc = &s->npcs[npc_idx];
+    return npc->active &&
+        npc->death_ticks == 0 &&
+        npc->hp > 0 &&
+        npc->type == INF_NPC_ZUK_SHIELD;
+}
+
+static int inf_is_shield_taggable_slot(const InfernoState* s, int npc_idx) {
+    if (npc_idx < 0 || npc_idx >= INF_MAX_NPCS) return 0;
+    const InfNPC* npc = &s->npcs[npc_idx];
+    return npc->active &&
+        npc->death_ticks == 0 &&
+        npc->hp > 0 &&
+        inf_npc_type_can_be_tagged_off_shield(npc->type) &&
+        inf_is_live_shield_slot(s, npc->aggro_target);
 }
 
 static int inf_npc_target_hit_delay(
@@ -3655,6 +3686,7 @@ static void inf_resolve_player_projectiles_on_npcs(InfernoState* s) {
                          t != INF_NPC_HEALER_JAD) s->kill_set_this_tick++;
             }
             s->npcs[i].hit_spell_type = spell;
+            int shield_taggable = inf_is_shield_taggable_slot(s, i);
             if (s->npcs[i].aggro_target != -1) {
                 if (s->npcs[i].type == INF_NPC_HEALER_ZUK ||
                     s->npcs[i].type == INF_NPC_HEALER_JAD) {
@@ -3662,6 +3694,8 @@ static void inf_resolve_player_projectiles_on_npcs(InfernoState* s) {
                     if (s->npcs[i].type == INF_NPC_HEALER_ZUK)
                         s->zuk_healer_tags_this_tick++;
                 }
+                if (shield_taggable)
+                    s->shield_tags_this_tick++;
                 s->npcs[i].aggro_target = -1;
                 s->npcs[i].stun_timer = 2;
             }
@@ -3828,6 +3862,7 @@ static float inf_compute_reward(InfernoState* s) {
             fmaxf(0.0f, rewardable_damage - s->hp_restored_this_tick);
     }
     reward += s->tag_reward_coeff * (float)s->healer_tags_this_tick;
+    reward += s->shield_tag_reward_coeff * (float)s->shield_tags_this_tick;
 
     /* v6-soft-E: late-add reward shape. Active iff Jad has appeared this
        episode or Zuk is below 600 HP (proxy for late-game state). */
@@ -3893,6 +3928,8 @@ static float inf_compute_reward(InfernoState* s) {
 }
 
 static void inf_update_healer_transition_stats(InfernoState* s) {
+    s->total_shield_tags += s->shield_tags_this_tick;
+
     if (!s->zuk.healer_spawned) return;
 
     if (s->tick_at_zuk_healer_spawn < 0)
@@ -3950,6 +3987,7 @@ static void inf_step(EncounterState* state, const int* actions) {
     s->shield_damage_this_tick = 0.0f;
     s->healer_tags_this_tick = 0;
     s->zuk_healer_tags_this_tick = 0;
+    s->shield_tags_this_tick = 0;
     s->spark_damage_this_tick = 0.0f;
     s->damage_received_this_tick = 0.0f;
     s->hp_restored_this_tick = 0.0f;
@@ -4827,6 +4865,7 @@ static void inf_put_float(EncounterState* state, const char* key, float value) {
     if (strcmp(key, "damage_reward_coeff") == 0) s->damage_reward_coeff = value;
     else if (strcmp(key, "shield_penalty_coeff") == 0) s->shield_penalty_coeff = value;
     else if (strcmp(key, "tag_reward_coeff") == 0) s->tag_reward_coeff = value;
+    else if (strcmp(key, "shield_tag_reward_coeff") == 0) s->shield_tag_reward_coeff = value;
     else if (strcmp(key, "win_bonus_coeff") == 0) s->win_bonus_coeff = value;
     else if (strcmp(key, "death_penalty_coeff") == 0) s->death_penalty_coeff = value;
     else if (strcmp(key, "phase_900_bonus") == 0) s->phase_900_bonus = value;
@@ -5399,6 +5438,7 @@ typedef struct {
     float damage_reward_coeff;
     float shield_penalty_coeff;
     float tag_reward_coeff;
+    float shield_tag_reward_coeff;
     float late_start_supply_profile_scale;
     float win_bonus_coeff;
     float death_penalty_coeff;
@@ -5430,6 +5470,7 @@ static InfLiveRestoreFields inf_capture_live_restore_fields(const InfernoState* 
         .damage_reward_coeff = s->damage_reward_coeff,
         .shield_penalty_coeff = s->shield_penalty_coeff,
         .tag_reward_coeff = s->tag_reward_coeff,
+        .shield_tag_reward_coeff = s->shield_tag_reward_coeff,
         .late_start_supply_profile_scale = s->late_start_supply_profile_scale,
         .win_bonus_coeff = s->win_bonus_coeff,
         .death_penalty_coeff = s->death_penalty_coeff,
@@ -5464,6 +5505,7 @@ static void inf_apply_live_restore_fields(
     s->damage_reward_coeff = fields.damage_reward_coeff;
     s->shield_penalty_coeff = fields.shield_penalty_coeff;
     s->tag_reward_coeff = fields.tag_reward_coeff;
+    s->shield_tag_reward_coeff = fields.shield_tag_reward_coeff;
     s->late_start_supply_profile_scale = fields.late_start_supply_profile_scale;
     s->win_bonus_coeff = fields.win_bonus_coeff;
     s->death_penalty_coeff = fields.death_penalty_coeff;
