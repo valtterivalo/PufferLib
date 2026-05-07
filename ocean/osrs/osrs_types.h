@@ -715,6 +715,12 @@ typedef struct {
     float brews_remaining;         /* brew doses left at end of episode */
     float restores_remaining;      /* restore doses left at end of episode */
     float prayer_at_death;         /* prayer points at end of episode */
+    float brews_remaining_normal_died;
+    float restores_remaining_normal_died;
+    float prayer_at_death_normal_died;
+    float brews_remaining_snapshot_died;
+    float restores_remaining_snapshot_died;
+    float prayer_at_death_snapshot_died;
     /* Zuk diagnostics */
     float behind_shield_pct;   /* fraction of Zuk ticks behind shield */
     float zuk_hp_remaining;    /* Zuk HP at episode end (0 if killed) */
@@ -735,6 +741,7 @@ typedef struct {
        normal episodes is reported as phase_reached_normal in my_log. */
     float episode_length_normal_died;
     float n_normal_died;
+    float n_snapshot_died;
     float phase_reached_normal_sum;
     /* D-audit tail counters: count of normal-start episodes that crossed
        given Zuk HP thresholds, and the running minimum across all normal
@@ -779,6 +786,14 @@ typedef struct {
     float count_died_after_240_some_healers_tagged_normal;
     float count_died_after_240_some_healers_killed_normal;
     float count_died_after_240_all_healers_dead_normal;
+    float count_died_with_shield_active_normal;
+    float count_died_behind_shield_normal;
+    float count_died_after_240_normal;
+    float brews_remaining_after_240_death_normal_sum;
+    float restores_remaining_after_240_death_normal_sum;
+    float prayer_at_death_after_240_normal_sum;
+    float count_died_after_240_shield_active_normal;
+    float count_died_after_240_behind_shield_normal;
     float count_min_hp_le_300_snapshot;
     float count_min_hp_le_240_snapshot;
     float count_min_hp_le_150_snapshot;
@@ -807,11 +822,21 @@ typedef struct {
     float count_died_after_240_some_healers_tagged_snapshot;
     float count_died_after_240_some_healers_killed_snapshot;
     float count_died_after_240_all_healers_dead_snapshot;
+    float count_died_with_shield_active_snapshot;
+    float count_died_behind_shield_snapshot;
+    float count_died_after_240_snapshot;
+    float brews_remaining_after_240_death_snapshot_sum;
+    float restores_remaining_after_240_death_snapshot_sum;
+    float prayer_at_death_after_240_snapshot_sum;
+    float count_died_after_240_shield_active_snapshot;
+    float count_died_after_240_behind_shield_snapshot;
     /* per-NPC-type stats (14 types each, for wandb only — not shown on dashboard) */
     float prayer_correct_by_type[14];
     float attacks_by_type[14];
     float dmg_from_type[14];
     float killed_by_type[14];
+    float killed_by_type_normal[14];
+    float killed_by_type_snapshot[14];
     float start_wave;   /* config start_wave (for score formula branching) */
     float n;
     float count_zuk_healers_targeted_ge_1_normal;

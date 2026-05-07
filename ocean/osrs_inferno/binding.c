@@ -182,6 +182,25 @@ static inline void inferno_env_write_post_restore_state(Env* env) {
     env->terminals[0] = 0.0f;
 }
 
+static int inferno_terminal_shield_active(const InfernoState* s) {
+    int si = s->zuk.shield_idx;
+    return si >= 0 &&
+        s->npcs[si].active &&
+        s->npcs[si].death_ticks == 0 &&
+        s->npcs[si].hp > 0;
+}
+
+static int inferno_terminal_behind_shield(const InfernoState* s) {
+    if (!inferno_terminal_shield_active(s)) return 0;
+
+    int si = s->zuk.shield_idx;
+    int sx = s->npcs[si].x;
+    int sz = INF_NPC_STATS[INF_NPC_ZUK_SHIELD].size;
+    return s->player.x >= sx &&
+        s->player.x < sx + sz &&
+        s->player.y >= 41;
+}
+
 void c_step(Env* env) {
     int used_human_commands = 0;
     RenderClient* render_client = (RenderClient*)env->render_env.client;
@@ -351,6 +370,8 @@ void c_step(Env* env) {
 
         env->log.n += 1.0f;
 
+        int terminal_shield_active = inferno_terminal_shield_active(s);
+        int terminal_behind_shield = inferno_terminal_behind_shield(s);
         int from_snapshot = env->phase2_ctx &&
             env->phase2_ctx->env_states[env->env_idx].demo_id >= 0;
         if (from_snapshot) {
@@ -439,6 +460,17 @@ void c_step(Env* env) {
                 }
             }
             if (!won) {
+                env->log.n_snapshot_died += 1.0f;
+                env->log.brews_remaining_snapshot_died += (float)s->player.brew_doses;
+                env->log.restores_remaining_snapshot_died += (float)s->player.restore_doses;
+                env->log.prayer_at_death_snapshot_died += (float)s->player.current_prayer;
+                if (terminal_shield_active)
+                    env->log.count_died_with_shield_active_snapshot += 1.0f;
+                if (terminal_behind_shield)
+                    env->log.count_died_behind_shield_snapshot += 1.0f;
+                for (int t = 0; t < INF_NUM_NPC_TYPES; t++)
+                    env->log.killed_by_type_snapshot[t] += (float)s->killed_by_type[t];
+
                 int zuk_healer_alive = 0;
                 for (int n = 0; n < INF_MAX_NPCS; n++) {
                     if (s->npcs[n].hp <= 0) continue;
@@ -448,6 +480,17 @@ void c_step(Env* env) {
                 if (zuk_healer_alive)
                     env->log.count_died_with_zuk_healer_alive_snapshot += 1.0f;
                 if (s->tick_at_le_240 >= 0) {
+                    env->log.count_died_after_240_snapshot += 1.0f;
+                    env->log.brews_remaining_after_240_death_snapshot_sum +=
+                        (float)s->player.brew_doses;
+                    env->log.restores_remaining_after_240_death_snapshot_sum +=
+                        (float)s->player.restore_doses;
+                    env->log.prayer_at_death_after_240_snapshot_sum +=
+                        (float)s->player.current_prayer;
+                    if (terminal_shield_active)
+                        env->log.count_died_after_240_shield_active_snapshot += 1.0f;
+                    if (terminal_behind_shield)
+                        env->log.count_died_after_240_behind_shield_snapshot += 1.0f;
                     if (s->tick_at_all_zuk_healers_dead >= 0 ||
                             s->total_zuk_healer_kills >= 4) {
                         env->log.count_died_after_240_all_healers_dead_snapshot += 1.0f;
@@ -474,6 +517,15 @@ void c_step(Env* env) {
             if (!won) {
                 env->log.episode_length_normal_died += (float)s->tick;
                 env->log.n_normal_died += 1.0f;
+                env->log.brews_remaining_normal_died += (float)s->player.brew_doses;
+                env->log.restores_remaining_normal_died += (float)s->player.restore_doses;
+                env->log.prayer_at_death_normal_died += (float)s->player.current_prayer;
+                if (terminal_shield_active)
+                    env->log.count_died_with_shield_active_normal += 1.0f;
+                if (terminal_behind_shield)
+                    env->log.count_died_behind_shield_normal += 1.0f;
+                for (int t = 0; t < INF_NUM_NPC_TYPES; t++)
+                    env->log.killed_by_type_normal[t] += (float)s->killed_by_type[t];
             }
             if (min_zuk_hp_term <= 300.0f) env->log.count_min_hp_le_300_normal += 1.0f;
             if (min_zuk_hp_term <= 240.0f) env->log.count_min_hp_le_240_normal += 1.0f;
@@ -576,6 +628,17 @@ void c_step(Env* env) {
                 if (jad_healer_alive) env->log.count_died_with_jad_healer_alive_normal += 1.0f;
                 if (set_alive) env->log.count_died_with_set_alive_normal += 1.0f;
                 if (s->tick_at_le_240 >= 0) {
+                    env->log.count_died_after_240_normal += 1.0f;
+                    env->log.brews_remaining_after_240_death_normal_sum +=
+                        (float)s->player.brew_doses;
+                    env->log.restores_remaining_after_240_death_normal_sum +=
+                        (float)s->player.restore_doses;
+                    env->log.prayer_at_death_after_240_normal_sum +=
+                        (float)s->player.current_prayer;
+                    if (terminal_shield_active)
+                        env->log.count_died_after_240_shield_active_normal += 1.0f;
+                    if (terminal_behind_shield)
+                        env->log.count_died_after_240_behind_shield_normal += 1.0f;
                     if (s->tick_at_all_zuk_healers_dead >= 0 ||
                             s->total_zuk_healer_kills >= 4) {
                         env->log.count_died_after_240_all_healers_dead_normal += 1.0f;
@@ -1004,7 +1067,51 @@ Env* my_vec_init(int* num_envs_out, int* buffer_env_starts, int* buffer_env_coun
     return envs;
 }
 
+static void inferno_set_death_cause_metrics(
+    Dict* out,
+    const char* const* keys,
+    const float* counts,
+    float denom
+) {
+    for (int t = 0; t < INF_NUM_NPC_TYPES; t++) {
+        dict_set(out, keys[t], denom > 0.0f ? counts[t] / denom : 0.0f);
+    }
+}
+
 void my_log(Log* log, Dict* out) {
+    static const char* killed_by_normal_keys[] = {
+        "frac_deaths_killed_by_nibbler_normal",
+        "frac_deaths_killed_by_bat_normal",
+        "frac_deaths_killed_by_blob_normal",
+        "frac_deaths_killed_by_blob_mel_normal",
+        "frac_deaths_killed_by_blob_rng_normal",
+        "frac_deaths_killed_by_blob_mag_normal",
+        "frac_deaths_killed_by_meleer_normal",
+        "frac_deaths_killed_by_ranger_normal",
+        "frac_deaths_killed_by_mager_normal",
+        "frac_deaths_killed_by_jad_normal",
+        "frac_deaths_killed_by_zuk_normal",
+        "frac_deaths_killed_by_heal_jad_normal",
+        "frac_deaths_killed_by_heal_zuk_normal",
+        "frac_deaths_killed_by_shield_normal",
+    };
+    static const char* killed_by_snapshot_keys[] = {
+        "frac_deaths_killed_by_nibbler_snapshot",
+        "frac_deaths_killed_by_bat_snapshot",
+        "frac_deaths_killed_by_blob_snapshot",
+        "frac_deaths_killed_by_blob_mel_snapshot",
+        "frac_deaths_killed_by_blob_rng_snapshot",
+        "frac_deaths_killed_by_blob_mag_snapshot",
+        "frac_deaths_killed_by_meleer_snapshot",
+        "frac_deaths_killed_by_ranger_snapshot",
+        "frac_deaths_killed_by_mager_snapshot",
+        "frac_deaths_killed_by_jad_snapshot",
+        "frac_deaths_killed_by_zuk_snapshot",
+        "frac_deaths_killed_by_heal_jad_snapshot",
+        "frac_deaths_killed_by_heal_zuk_snapshot",
+        "frac_deaths_killed_by_shield_snapshot",
+    };
+
     dict_set(out, "episode_return", log->episode_return);
     dict_set(out, "damage_dealt", log->damage_dealt);
     dict_set(out, "damage_received", log->damage_received);
@@ -1061,6 +1168,20 @@ void my_log(Log* log, Dict* out) {
         dict_set(out, "phase_reached_normal", log->phase_reached_normal_sum / log->n_normal);
         if (log->n_normal_died > 0.0f) {
             dict_set(out, "death_tick_normal", log->episode_length_normal_died / log->n_normal_died);
+            dict_set(out, "brews_remaining_normal_died",
+                log->brews_remaining_normal_died / log->n_normal_died);
+            dict_set(out, "restores_remaining_normal_died",
+                log->restores_remaining_normal_died / log->n_normal_died);
+            dict_set(out, "prayer_at_death_normal_died",
+                log->prayer_at_death_normal_died / log->n_normal_died);
+            dict_set(out, "frac_deaths_with_shield_active_normal",
+                log->count_died_with_shield_active_normal / log->n_normal_died);
+            dict_set(out, "frac_deaths_behind_shield_normal",
+                log->count_died_behind_shield_normal / log->n_normal_died);
+            dict_set(out, "frac_deaths_after_240_normal",
+                log->count_died_after_240_normal / log->n_normal_died);
+            inferno_set_death_cause_metrics(out, killed_by_normal_keys,
+                log->killed_by_type_normal, log->n_normal_died);
         }
         /* aggregator divides every Log field by n_total, so raw counts arrive
            as count/n_total. Dividing by n_normal (also count/n_total) cancels
@@ -1180,6 +1301,35 @@ void my_log(Log* log, Dict* out) {
             log->count_died_after_240_some_healers_killed_normal / log->n_normal);
         dict_set(out, "frac_died_after_240_all_healers_dead_normal",
             log->count_died_after_240_all_healers_dead_normal / log->n_normal);
+        dict_set(out, "frac_died_with_shield_active_normal",
+            log->count_died_with_shield_active_normal / log->n_normal);
+        dict_set(out, "frac_died_behind_shield_normal",
+            log->count_died_behind_shield_normal / log->n_normal);
+        dict_set(out, "frac_died_after_240_normal",
+            log->count_died_after_240_normal / log->n_normal);
+        if (log->count_died_after_240_normal > 0.0f) {
+            dict_set(out, "brews_remaining_after_240_death_normal",
+                log->brews_remaining_after_240_death_normal_sum /
+                    log->count_died_after_240_normal);
+            dict_set(out, "restores_remaining_after_240_death_normal",
+                log->restores_remaining_after_240_death_normal_sum /
+                    log->count_died_after_240_normal);
+            dict_set(out, "prayer_at_death_after_240_normal",
+                log->prayer_at_death_after_240_normal_sum /
+                    log->count_died_after_240_normal);
+            dict_set(out, "frac_after_240_deaths_with_shield_active_normal",
+                log->count_died_after_240_shield_active_normal /
+                    log->count_died_after_240_normal);
+            dict_set(out, "frac_after_240_deaths_behind_shield_normal",
+                log->count_died_after_240_behind_shield_normal /
+                    log->count_died_after_240_normal);
+        } else {
+            dict_set(out, "brews_remaining_after_240_death_normal", 0.0f);
+            dict_set(out, "restores_remaining_after_240_death_normal", 0.0f);
+            dict_set(out, "prayer_at_death_after_240_normal", 0.0f);
+            dict_set(out, "frac_after_240_deaths_with_shield_active_normal", 0.0f);
+            dict_set(out, "frac_after_240_deaths_behind_shield_normal", 0.0f);
+        }
     }
     if (log->n_snapshot > 0.0f) {
         float min_zhp_s = log->min_zuk_hp_snapshot / log->n_snapshot;
@@ -1201,6 +1351,22 @@ void my_log(Log* log, Dict* out) {
         dict_set(out, "wins_snapshot", win_rate_s);
         dict_set(out, "min_zuk_hp_snapshot", min_zhp_s);
         dict_set(out, "score_snapshot", score_s);
+        if (log->n_snapshot_died > 0.0f) {
+            dict_set(out, "brews_remaining_snapshot_died",
+                log->brews_remaining_snapshot_died / log->n_snapshot_died);
+            dict_set(out, "restores_remaining_snapshot_died",
+                log->restores_remaining_snapshot_died / log->n_snapshot_died);
+            dict_set(out, "prayer_at_death_snapshot_died",
+                log->prayer_at_death_snapshot_died / log->n_snapshot_died);
+            dict_set(out, "frac_deaths_with_shield_active_snapshot",
+                log->count_died_with_shield_active_snapshot / log->n_snapshot_died);
+            dict_set(out, "frac_deaths_behind_shield_snapshot",
+                log->count_died_behind_shield_snapshot / log->n_snapshot_died);
+            dict_set(out, "frac_deaths_after_240_snapshot",
+                log->count_died_after_240_snapshot / log->n_snapshot_died);
+            inferno_set_death_cause_metrics(out, killed_by_snapshot_keys,
+                log->killed_by_type_snapshot, log->n_snapshot_died);
+        }
         dict_set(out, "frac_min_hp_le_300_snapshot",
             log->count_min_hp_le_300_snapshot / log->n_snapshot);
         dict_set(out, "frac_min_hp_le_240_snapshot", frac_le_240_s);
@@ -1306,6 +1472,35 @@ void my_log(Log* log, Dict* out) {
             log->count_died_after_240_some_healers_killed_snapshot / log->n_snapshot);
         dict_set(out, "frac_died_after_240_all_healers_dead_snapshot",
             log->count_died_after_240_all_healers_dead_snapshot / log->n_snapshot);
+        dict_set(out, "frac_died_with_shield_active_snapshot",
+            log->count_died_with_shield_active_snapshot / log->n_snapshot);
+        dict_set(out, "frac_died_behind_shield_snapshot",
+            log->count_died_behind_shield_snapshot / log->n_snapshot);
+        dict_set(out, "frac_died_after_240_snapshot",
+            log->count_died_after_240_snapshot / log->n_snapshot);
+        if (log->count_died_after_240_snapshot > 0.0f) {
+            dict_set(out, "brews_remaining_after_240_death_snapshot",
+                log->brews_remaining_after_240_death_snapshot_sum /
+                    log->count_died_after_240_snapshot);
+            dict_set(out, "restores_remaining_after_240_death_snapshot",
+                log->restores_remaining_after_240_death_snapshot_sum /
+                    log->count_died_after_240_snapshot);
+            dict_set(out, "prayer_at_death_after_240_snapshot",
+                log->prayer_at_death_after_240_snapshot_sum /
+                    log->count_died_after_240_snapshot);
+            dict_set(out, "frac_after_240_deaths_with_shield_active_snapshot",
+                log->count_died_after_240_shield_active_snapshot /
+                    log->count_died_after_240_snapshot);
+            dict_set(out, "frac_after_240_deaths_behind_shield_snapshot",
+                log->count_died_after_240_behind_shield_snapshot /
+                    log->count_died_after_240_snapshot);
+        } else {
+            dict_set(out, "brews_remaining_after_240_death_snapshot", 0.0f);
+            dict_set(out, "restores_remaining_after_240_death_snapshot", 0.0f);
+            dict_set(out, "prayer_at_death_after_240_snapshot", 0.0f);
+            dict_set(out, "frac_after_240_deaths_with_shield_active_snapshot", 0.0f);
+            dict_set(out, "frac_after_240_deaths_behind_shield_snapshot", 0.0f);
+        }
     }
     dict_set(out, "snapshot_frac", log->n_snapshot);
     float gear_switch_rate = (log->episode_length > 0.0f)
