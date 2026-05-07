@@ -1,5 +1,6 @@
 """Run a restored-start healer training scout on pufferbox4."""
 
+import argparse
 import glob
 import json
 import os
@@ -12,15 +13,12 @@ from statistics import mean, median
 
 SRC_REPO = Path("/puffertank/docker/goexplore_terminal_reset_test")
 MAIN_REPO = Path("/puffertank/docker/goexplore")
-CHECKPOINT = MAIN_REPO / "checkpoints/osrs_inferno/p2k4szzs/0000000049971200.bin"
-DEMOS = SRC_REPO / "experiments/heavy_research_phase2_v4/demos_quality_v2_snapshot_v2/seed_63/demos"
-OUT_DIR = MAIN_REPO / "experiments/heavy_research_phase2_v4/remote_restored_healer_training_scout"
-LOG_DIR = OUT_DIR / "logs"
-RESULTS_PATH = OUT_DIR / "results.jsonl"
-SUMMARY_PATH = OUT_DIR / "summary.json"
+DEFAULT_CHECKPOINT = MAIN_REPO / "checkpoints/osrs_inferno/p2k4szzs/0000000049971200.bin"
+DEFAULT_DEMOS = SRC_REPO / "experiments/heavy_research_phase2_v4/demos_quality_v2_snapshot_v2/seed_63/demos"
+DEFAULT_OUT_DIR = MAIN_REPO / "experiments/heavy_research_phase2_v4/remote_restored_healer_training_scout"
 
-TIMESTEPS = 50_000_000
-SEEDS = [901, 902]
+DEFAULT_TIMESTEPS = 50_000_000
+DEFAULT_SEEDS = "901,902"
 
 METRIC_KEYS = [
     "SPS",
@@ -92,6 +90,23 @@ ARMS = {
 }
 
 
+def parse_int_csv(raw: str) -> list[int]:
+    values = [item.strip() for item in raw.split(",") if item.strip()]
+    if not values:
+        raise ValueError("expected at least one integer")
+    return [int(item) for item in values]
+
+
+def parse_arm_csv(raw: str) -> list[str]:
+    names = [item.strip() for item in raw.split(",") if item.strip()]
+    if not names:
+        raise ValueError("expected at least one arm")
+    unknown = [name for name in names if name not in ARMS]
+    if unknown:
+        raise ValueError(f"unknown arms: {unknown}")
+    return names
+
+
 def last_metric(metrics: dict, key: str):
     value = metrics.get(key)
     if isinstance(value, list):
@@ -100,8 +115,8 @@ def last_metric(metrics: dict, key: str):
     return value if isinstance(value, (int, float)) else None
 
 
-def parse_json_metrics(arm: str, seed: int) -> dict:
-    pattern = str(OUT_DIR / "puffer_logs" / f"{arm}_s{seed}" / "osrs_inferno" / "*.json")
+def parse_json_metrics(out_dir: Path, arm: str, seed: int) -> dict:
+    pattern = str(out_dir / "puffer_logs" / f"{arm}_s{seed}" / "osrs_inferno" / "*.json")
     paths = sorted(glob.glob(pattern), key=lambda path: Path(path).stat().st_mtime)
     if not paths:
         return {}
@@ -110,27 +125,30 @@ def parse_json_metrics(arm: str, seed: int) -> dict:
     return {key.replace("env/", ""): last_metric(metrics, key) for key in METRIC_KEYS}
 
 
-def append_result(row: dict) -> None:
-    with RESULTS_PATH.open("a") as handle:
+def append_result(results_path: Path, row: dict) -> None:
+    with results_path.open("a") as handle:
         handle.write(json.dumps(row, sort_keys=True) + "\n")
 
 
-def read_results() -> list[dict]:
-    if not RESULTS_PATH.exists():
+def read_results(results_path: Path) -> list[dict]:
+    if not results_path.exists():
         return []
-    return [json.loads(line) for line in RESULTS_PATH.read_text().splitlines() if line.strip()]
+    return [json.loads(line) for line in results_path.read_text().splitlines() if line.strip()]
 
 
-def is_done(arm: str, seed: int) -> bool:
+def is_done(results_path: Path, arm: str, seed: int) -> bool:
     return any(
         row["arm"] == arm and row["seed"] == seed and row["returncode"] == 0
-        for row in read_results()
+        for row in read_results(results_path)
     )
 
 
-def run_cell(arm: str, seed: int, spec: dict) -> dict:
-    tag = f"remote-r18-restored-healer-{arm}-s{seed}"
-    log_path = LOG_DIR / f"{tag}.log"
+def run_cell(args_cli: argparse.Namespace, arm: str, seed: int, spec: dict) -> dict:
+    out_dir = Path(args_cli.out_dir)
+    log_dir = out_dir / "logs"
+    results_path = out_dir / "results.jsonl"
+    tag = f"{args_cli.tag_prefix}-{arm}-s{seed}"
+    log_path = log_dir / f"{tag}.log"
     phase2_seed = seed + spec["phase2_seed_offset"]
     cmd = [
         sys.executable,
@@ -143,13 +161,13 @@ def run_cell(arm: str, seed: int, spec: dict) -> dict:
         "--train.seed",
         str(seed),
         "--load-model-path",
-        str(CHECKPOINT),
+        str(args_cli.checkpoint),
         "--train.total-timesteps",
-        str(TIMESTEPS),
+        str(args_cli.timesteps),
         "--checkpoint-interval",
-        str(TIMESTEPS),
+        str(args_cli.timesteps),
         "--log-dir",
-        str(OUT_DIR / "puffer_logs" / f"{arm}_s{seed}"),
+        str(out_dir / "puffer_logs" / f"{arm}_s{seed}"),
         "--tag",
         tag,
         "--train.terminal-reset-state",
@@ -163,7 +181,7 @@ def run_cell(arm: str, seed: int, spec: dict) -> dict:
         "--policy.num-layers",
         "3",
         "--env.phase2-demo-dir",
-        str(DEMOS),
+        str(args_cli.demo_dir),
         "--env.phase2-seed",
         str(phase2_seed),
         "--env.phase2-normal-start-frac",
@@ -173,7 +191,9 @@ def run_cell(arm: str, seed: int, spec: dict) -> dict:
         "--env.phase2-diagnostic-phase",
         str(spec["phase"]),
         "--env.phase2-diagnostic-tries",
-        "512",
+        str(args_cli.diagnostic_tries),
+        "--env.phase2-max-player-attack-timer",
+        str(args_cli.max_player_attack_timer),
         "--env.phase2-bc-coef",
         "0.0",
         "--env.phase2-bc-demos-per-minibatch",
@@ -201,22 +221,24 @@ def run_cell(arm: str, seed: int, spec: dict) -> dict:
     row = {
         "arm": arm,
         "seed": seed,
-        "timesteps": TIMESTEPS,
+        "timesteps": args_cli.timesteps,
+        "demo_dir": str(args_cli.demo_dir),
+        "max_player_attack_timer": args_cli.max_player_attack_timer,
         "returncode": proc.returncode,
         "elapsed_sec": time.time() - start,
         "log_path": str(log_path),
-        "metrics": parse_json_metrics(arm, seed),
+        "metrics": parse_json_metrics(out_dir, arm, seed),
     }
-    append_result(row)
+    append_result(results_path, row)
     print(json.dumps(row, sort_keys=True), flush=True)
     if proc.returncode != 0:
         raise SystemExit(proc.returncode)
     return row
 
 
-def summarize(rows: list[dict]) -> dict:
+def summarize(arms: list[str], rows: list[dict]) -> dict:
     summary = {}
-    for arm in ARMS:
+    for arm in arms:
         arm_rows = [row for row in rows if row["arm"] == arm and row["returncode"] == 0]
         metrics = [row["metrics"] for row in arm_rows]
         arm_summary = {"n": len(arm_rows)}
@@ -242,23 +264,40 @@ def summarize(rows: list[dict]) -> dict:
 
 
 def main() -> int:
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
-    if not CHECKPOINT.exists():
-        raise SystemExit(f"missing checkpoint: {CHECKPOINT}")
-    if not DEMOS.exists():
-        raise SystemExit(f"missing demos: {DEMOS}")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--checkpoint", type=Path, default=DEFAULT_CHECKPOINT)
+    parser.add_argument("--demo-dir", type=Path, default=DEFAULT_DEMOS)
+    parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
+    parser.add_argument("--timesteps", type=int, default=DEFAULT_TIMESTEPS)
+    parser.add_argument("--seeds", default=DEFAULT_SEEDS)
+    parser.add_argument("--arms", default=",".join(ARMS))
+    parser.add_argument("--diagnostic-tries", type=int, default=512)
+    parser.add_argument("--max-player-attack-timer", type=int, default=-1)
+    parser.add_argument("--tag-prefix", default="remote-r18-restored-healer")
+    args_cli = parser.parse_args()
 
-    for arm, spec in ARMS.items():
-        for seed in SEEDS:
-            if is_done(arm, seed):
+    seeds = parse_int_csv(args_cli.seeds)
+    arms = parse_arm_csv(args_cli.arms)
+    args_cli.out_dir.mkdir(parents=True, exist_ok=True)
+    (args_cli.out_dir / "logs").mkdir(parents=True, exist_ok=True)
+    results_path = args_cli.out_dir / "results.jsonl"
+    summary_path = args_cli.out_dir / "summary.json"
+    if not args_cli.checkpoint.exists():
+        raise SystemExit(f"missing checkpoint: {args_cli.checkpoint}")
+    if not args_cli.demo_dir.exists():
+        raise SystemExit(f"missing demos: {args_cli.demo_dir}")
+
+    for arm in arms:
+        spec = ARMS[arm]
+        for seed in seeds:
+            if is_done(results_path, arm, seed):
                 print(f"skip completed arm={arm} seed={seed}", flush=True)
                 continue
-            run_cell(arm, seed, spec)
+            run_cell(args_cli, arm, seed, spec)
 
-    rows = read_results()
-    summary = summarize(rows)
-    SUMMARY_PATH.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
+    rows = read_results(results_path)
+    summary = summarize(arms, rows)
+    summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
     print(json.dumps(summary, indent=2, sort_keys=True), flush=True)
     return 0
 
