@@ -257,6 +257,32 @@ def _resolve_checkpoint_load_path(args, load_path=None, allow_auto_latest=False)
 
     return load_path
 
+def _phase2_init_if_configured(backend, pufferl, args):
+    '''Initialize Go-Explore restored-start curriculum when configured.'''
+    env_args = args.get('env', {})
+    phase2_dir = env_args.get('phase2_demo_dir', '')
+    if not phase2_dir:
+        return 0
+
+    n = backend.phase2_init(
+        pufferl,
+        demo_dir=phase2_dir,
+        num_atns=env_args.get('phase2_num_atns', 9),
+        snapshot_stride=env_args.get('phase2_snapshot_stride', 4),
+        max_demos=env_args.get('phase2_max_demos', 64),
+        seed=env_args.get('phase2_seed', 42),
+        normal_start_frac=env_args.get('phase2_normal_start_frac', 0.25),
+        randomize_rng_frac=env_args.get('phase2_randomize_rng_frac', 0.25),
+        bc_coef=env_args.get('phase2_bc_coef', 0.0),
+        bc_demos_per_minibatch=env_args.get('phase2_bc_demos_per_minibatch', 0),
+        promote_rate=env_args.get('phase2_promote_rate', 0.30),
+        demote_rate=env_args.get('phase2_demote_rate', 0.10),
+        backstep_ticks=env_args.get('phase2_backstep_ticks', 4),
+        success_q_delta=env_args.get('phase2_success_q_delta', 0.005),
+    )
+    print(f'phase2: loaded {n} demos from {phase2_dir}', flush=True)
+    return n
+
 def _restore_exact_match_config(args, sweep_obj):
     flat_args = dict(unroll_nested_dict(args))
     swept_keys = set(sweep_obj.hyperparameters.flat_spaces)
@@ -417,26 +443,7 @@ def _train_body(env_name, args, sweep_obj=None, result_queue=None, verbose=False
             backend.load_weights(pufferl, load_path)
             print(f'Loaded weights from {load_path}', flush=True)
 
-        env_args = args.get('env', {})
-        phase2_dir = env_args.get('phase2_demo_dir', '')
-        if phase2_dir:
-            n = backend.phase2_init(
-                pufferl,
-                demo_dir=phase2_dir,
-                num_atns=env_args.get('phase2_num_atns', 9),
-                snapshot_stride=env_args.get('phase2_snapshot_stride', 4),
-                max_demos=env_args.get('phase2_max_demos', 64),
-                seed=env_args.get('phase2_seed', 42),
-                normal_start_frac=env_args.get('phase2_normal_start_frac', 0.25),
-                randomize_rng_frac=env_args.get('phase2_randomize_rng_frac', 0.25),
-                bc_coef=env_args.get('phase2_bc_coef', 0.0),
-                bc_demos_per_minibatch=env_args.get('phase2_bc_demos_per_minibatch', 0),
-                promote_rate=env_args.get('phase2_promote_rate', 0.30),
-                demote_rate=env_args.get('phase2_demote_rate', 0.10),
-                backstep_ticks=env_args.get('phase2_backstep_ticks', 4),
-                success_q_delta=env_args.get('phase2_success_q_delta', 0.005),
-            )
-            print(f'phase2: loaded {n} demos from {phase2_dir}', flush=True)
+        _phase2_init_if_configured(backend, pufferl, args)
 
         if verbose:
             flat_logs = dict(unroll_nested_dict(backend.log(pufferl)))
@@ -676,6 +683,8 @@ def eval(env_name, args=None, load_path=None):
         if load_path is not None:
             backend.load_weights(pufferl, load_path)
             print(f'Loaded weights from {load_path}', flush=True)
+
+        _phase2_init_if_configured(backend, pufferl, args)
 
         while True:
             backend.render(pufferl, 0)

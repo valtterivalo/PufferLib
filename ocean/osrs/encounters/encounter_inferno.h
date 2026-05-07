@@ -781,6 +781,7 @@ typedef struct {
     int total_zuk_healer_cooldown_ticks;
     int total_zuk_healer_out_of_range_ticks;
     int total_zuk_healer_attackable_ticks;
+    float damage_jad_healers_this_tick;
 } InfernoState;
 
 /* prayer check and RNG: use shared encounter_prayer_correct_for_style(),
@@ -3639,6 +3640,8 @@ static void inf_resolve_player_projectiles_on_npcs(InfernoState* s) {
             int hp_after = s->npcs[i].hp;
             if (t == INF_NPC_HEALER_ZUK) {
                 s->damage_zuk_healers_this_tick += landed_damage;
+            } else if (t == INF_NPC_HEALER_JAD) {
+                s->damage_jad_healers_this_tick += landed_damage;
             } else if (t == INF_NPC_JAD) {
                 s->damage_jad_this_tick += landed_damage;
             } else if (t != INF_NPC_ZUK && t != INF_NPC_ZUK_SHIELD &&
@@ -3739,6 +3742,19 @@ static int inf_healer_is_actively_healing(const InfernoState* s, const InfNPC* n
     return s->npcs[npc->aggro_target].active;
 }
 
+static int inf_npc_type_is_actively_healed(
+    const InfernoState* s,
+    InfNPCType target_type
+) {
+    for (int i = 0; i < INF_MAX_NPCS; i++) {
+        const InfNPC* healer = &s->npcs[i];
+        if (!inf_healer_is_actively_healing(s, healer)) continue;
+        const InfNPC* target = &s->npcs[healer->aggro_target];
+        if (target->type == target_type) return 1;
+    }
+    return 0;
+}
+
 static inline float inf_dmg_below_threshold(float old_hp, float new_hp, float t) {
     if (new_hp >= old_hp) return 0.0f;
     float a = old_hp < t ? old_hp : t;
@@ -3747,7 +3763,10 @@ static inline float inf_dmg_below_threshold(float old_hp, float new_hp, float t)
     return d > 0.0f ? d : 0.0f;
 }
 
-static float inf_zuk_low_watermark_reward(InfernoState* s) {
+static float inf_zuk_low_watermark_reward(
+    InfernoState* s,
+    int should_reward_damage
+) {
     int zuk_idx = inf_find_live_zuk_idx(s);
     if (zuk_idx < 0) return 0.0f;
 
@@ -3756,7 +3775,7 @@ static float inf_zuk_low_watermark_reward(InfernoState* s) {
 
     float old_min = s->min_zuk_hp_seen;
     float dmg = old_min - zuk_hp;
-    float reward = s->damage_reward_coeff * dmg;
+    float reward = should_reward_damage ? s->damage_reward_coeff * dmg : 0.0f;
     if (s->jad_killed_this_episode) {
         reward *= s->post_jad_zuk_multiplier;
     } else if (s->zuk.jad_spawned) {
@@ -3787,22 +3806,26 @@ static float inf_compute_reward(InfernoState* s) {
         return (s->winner == 0) ? win_bonus : -s->death_penalty_coeff;
     }
 
-    int healer_is_actively_healing = 0;
-    for (int i = 0; i < INF_MAX_NPCS; i++) {
-        if (inf_healer_is_actively_healing(s, &s->npcs[i])) {
-            healer_is_actively_healing = 1;
-            break;
-        }
-    }
+    int jad_is_actively_healed =
+        inf_npc_type_is_actively_healed(s, INF_NPC_JAD);
+    int zuk_is_actively_healed =
+        inf_npc_type_is_actively_healed(s, INF_NPC_ZUK);
+    int healer_is_actively_healing =
+        jad_is_actively_healed || zuk_is_actively_healed;
 
     float reward = 0.0f;
     if (inf_is_final_wave(s)) {
-        reward = inf_zuk_low_watermark_reward(s);
+        reward = inf_zuk_low_watermark_reward(s, !zuk_is_actively_healed);
+        reward += s->damage_reward_coeff * s->damage_zuk_healers_this_tick;
         if (healer_is_actively_healing)
             reward -= s->damage_reward_coeff * s->hp_restored_this_tick;
     } else {
+        float rewardable_damage = s->damage_dealt_this_tick -
+            s->damage_jad_healers_this_tick;
+        if (jad_is_actively_healed)
+            rewardable_damage -= s->damage_jad_this_tick;
         reward = s->damage_reward_coeff *
-            fmaxf(0.0f, s->damage_dealt_this_tick - s->hp_restored_this_tick);
+            fmaxf(0.0f, rewardable_damage - s->hp_restored_this_tick);
     }
     reward += s->tag_reward_coeff * (float)s->healer_tags_this_tick;
 
@@ -3812,7 +3835,9 @@ static float inf_compute_reward(InfernoState* s) {
     int zuk_hp_now = (zuk_idx >= 0) ? s->npcs[zuk_idx].hp : 1200;
     int late_add_reward_active = s->zuk.jad_spawned || zuk_hp_now <= 600;
     if (late_add_reward_active) {
-        reward += s->jad_damage_reward_coeff * s->damage_jad_this_tick;
+        float rewardable_jad_damage =
+            jad_is_actively_healed ? 0.0f : s->damage_jad_this_tick;
+        reward += s->jad_damage_reward_coeff * rewardable_jad_damage;
         reward += s->zuk_healer_damage_reward_coeff * s->damage_zuk_healers_this_tick;
         reward += s->set_damage_reward_coeff * s->damage_set_this_tick;
         s->pending_jad_kill_bonus +=
@@ -3916,6 +3941,7 @@ static void inf_step(EncounterState* state, const int* actions) {
     s->reward = 0.0f;
     s->damage_dealt_this_tick = 0.0f;
     s->damage_zuk_healers_this_tick = 0.0f;
+    s->damage_jad_healers_this_tick = 0.0f;
     s->damage_jad_this_tick = 0.0f;
     s->damage_set_this_tick = 0.0f;
     s->kill_jad_this_tick = 0;

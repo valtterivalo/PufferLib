@@ -253,8 +253,8 @@ static void assert_supply_doses(const char* label,
     ASSERT_INT_EQ(buf, player->stamina_doses, expected.stamina_doses);
 }
 
-static void test_final_wave_reward_keeps_progress_during_active_healers(void) {
-    printf("--- final-wave reward keeps progress during active healers ---\n");
+static void test_final_wave_reward_applies_healer_tags_and_heal_cost(void) {
+    printf("--- final-wave reward applies healer tags and heal cost ---\n");
 
     InfernoState healing_state = make_test_state(24, 24);
     InfernoState damage_state = make_test_state(24, 24);
@@ -280,8 +280,8 @@ static void test_final_wave_reward_keeps_progress_during_active_healers(void) {
     damage_state.npcs[0].aggro_target = -1;
     damage_state.healer_tags_this_tick = 0;
 
-    ASSERT_FLOAT_NEAR("active healer reward includes progress, tags, heal cost, and shield penalty",
-        inf_compute_reward(&healing_state), 0.83f, 0.0001f);
+    ASSERT_FLOAT_NEAR("active healer reward includes tags, heal cost, and shield penalty",
+        inf_compute_reward(&healing_state), 0.33f, 0.0001f);
     ASSERT_FLOAT_NEAR("active healer reward updates zuk low watermark",
         healing_state.min_zuk_hp_seen, 1150.0f, 0.0001f);
     ASSERT_FLOAT_NEAR("non-final-wave reward still uses damage path",
@@ -340,6 +340,118 @@ static void test_final_wave_reward_uses_zuk_low_watermark_progress(void) {
         inf_compute_reward(&state), 0.10f, 0.0001f);
     ASSERT_FLOAT_NEAR("new lower zuk hp refreshes low watermark",
         state.min_zuk_hp_seen, 1140.0f, 0.0001f);
+}
+
+static void test_final_wave_reward_blocks_zuk_damage_while_healers_heal(void) {
+    printf("--- final-wave reward blocks zuk damage while healers heal ---\n");
+
+    InfernoState state = make_test_state(24, 24);
+
+    inf_put_float((EncounterState*)&state, "damage_reward_coeff", 0.01f);
+    inf_put_float((EncounterState*)&state, "shield_penalty_coeff", 0.01f);
+    inf_put_float((EncounterState*)&state, "tag_reward_coeff", 0.25f);
+    state.wave = INF_NUM_WAVES - 1;
+    state.min_zuk_hp_seen = 240.0f;
+    state.zuk.healer_spawned = 1;
+    state.npcs[0] = make_test_npc(INF_NPC_ZUK, 22, 50, 5);
+    state.npcs[0].active = 1;
+    state.npcs[0].hp = 220;
+    state.npcs[0].max_hp = 1200;
+    state.npcs[1] = make_test_npc(INF_NPC_HEALER_ZUK, 20, 34, 1);
+    state.npcs[1].active = 1;
+    state.npcs[1].hp = state.npcs[1].max_hp =
+        INF_NPC_STATS[INF_NPC_HEALER_ZUK].hp;
+    state.npcs[1].aggro_target = 0;
+
+    ASSERT_FLOAT_NEAR("zuk progress pays nothing while a healer heals zuk",
+        inf_compute_reward(&state), 0.0f, 0.0001f);
+    ASSERT_FLOAT_NEAR("low watermark still tracks observed zuk hp",
+        state.min_zuk_hp_seen, 220.0f, 0.0001f);
+
+    state.min_zuk_hp_seen = 240.0f;
+    state.npcs[1].aggro_target = -1;
+
+    ASSERT_FLOAT_NEAR("zuk progress resumes after healers are tagged",
+        inf_compute_reward(&state), 0.20f, 0.0001f);
+}
+
+static void test_final_wave_reward_pays_zuk_healer_damage(void) {
+    printf("--- final-wave reward pays zuk healer damage ---\n");
+
+    InfernoState state = make_test_state(24, 24);
+
+    inf_put_float((EncounterState*)&state, "damage_reward_coeff", 0.01f);
+    inf_put_float((EncounterState*)&state, "shield_penalty_coeff", 0.01f);
+    inf_put_float((EncounterState*)&state, "tag_reward_coeff", 0.25f);
+    state.wave = INF_NUM_WAVES - 1;
+    state.min_zuk_hp_seen = 240.0f;
+    state.zuk.healer_spawned = 1;
+    state.damage_dealt_this_tick = 31.0f;
+    state.damage_zuk_healers_this_tick = 31.0f;
+    state.npcs[0] = make_test_npc(INF_NPC_ZUK, 22, 50, 5);
+    state.npcs[0].active = 1;
+    state.npcs[0].hp = 240;
+    state.npcs[0].max_hp = 1200;
+    state.npcs[1] = make_test_npc(INF_NPC_HEALER_ZUK, 20, 34, 1);
+    state.npcs[1].active = 1;
+    state.npcs[1].hp = state.npcs[1].max_hp =
+        INF_NPC_STATS[INF_NPC_HEALER_ZUK].hp;
+    state.npcs[1].aggro_target = -1;
+
+    ASSERT_FLOAT_NEAR("zuk healer damage uses base damage reward",
+        inf_compute_reward(&state), 0.31f, 0.0001f);
+}
+
+static void test_jad_damage_reward_pauses_while_jad_healers_heal(void) {
+    printf("--- jad damage reward pauses while jad healers heal ---\n");
+
+    InfernoState state = make_test_state(24, 24);
+
+    inf_put_float((EncounterState*)&state, "damage_reward_coeff", 0.01f);
+    inf_put_float((EncounterState*)&state, "shield_penalty_coeff", 0.01f);
+    inf_put_float((EncounterState*)&state, "tag_reward_coeff", 0.25f);
+    state.wave = 66;
+    state.damage_dealt_this_tick = 40.0f;
+    state.damage_jad_this_tick = 40.0f;
+    state.npcs[0] = make_test_npc(INF_NPC_JAD, 24, 32, 5);
+    state.npcs[0].active = 1;
+    state.npcs[0].hp = 200;
+    state.npcs[0].max_hp = INF_NPC_STATS[INF_NPC_JAD].hp;
+    state.npcs[1] = make_test_npc(INF_NPC_HEALER_JAD, 20, 34, 1);
+    state.npcs[1].active = 1;
+    state.npcs[1].hp = state.npcs[1].max_hp =
+        INF_NPC_STATS[INF_NPC_HEALER_JAD].hp;
+    state.npcs[1].jad_owner_idx = 0;
+    state.npcs[1].aggro_target = 0;
+
+    ASSERT_FLOAT_NEAR("jad damage pays nothing while a healer heals jad",
+        inf_compute_reward(&state), 0.0f, 0.0001f);
+
+    state.npcs[1].aggro_target = -1;
+
+    ASSERT_FLOAT_NEAR("jad damage resumes after the healer is tagged",
+        inf_compute_reward(&state), 0.40f, 0.0001f);
+}
+
+static void test_jad_healer_damage_never_gets_damage_reward(void) {
+    printf("--- jad healer damage never gets damage reward ---\n");
+
+    InfernoState state = make_test_state(24, 24);
+
+    inf_put_float((EncounterState*)&state, "damage_reward_coeff", 0.01f);
+    inf_put_float((EncounterState*)&state, "shield_penalty_coeff", 0.01f);
+    inf_put_float((EncounterState*)&state, "tag_reward_coeff", 0.25f);
+    state.wave = 66;
+    state.damage_dealt_this_tick = 40.0f;
+    state.damage_jad_healers_this_tick = 40.0f;
+    state.npcs[0] = make_test_npc(INF_NPC_HEALER_JAD, 20, 34, 1);
+    state.npcs[0].active = 1;
+    state.npcs[0].hp = state.npcs[0].max_hp =
+        INF_NPC_STATS[INF_NPC_HEALER_JAD].hp;
+    state.npcs[0].aggro_target = -1;
+
+    ASSERT_FLOAT_NEAR("jad healer damage is not rewarded",
+        inf_compute_reward(&state), 0.0f, 0.0001f);
 }
 
 static void test_inferno_reset_supplies_match_current_inventory(void) {
@@ -2836,8 +2948,12 @@ int main(void) {
     test_jad_healer_spawn_offsets_match_wave_67_reference();
     test_jad_healer_spawn_offsets_match_zuk_reference();
     test_meleer_dig_landing_order();
-    test_final_wave_reward_keeps_progress_during_active_healers();
+    test_final_wave_reward_applies_healer_tags_and_heal_cost();
     test_final_wave_reward_uses_zuk_low_watermark_progress();
+    test_final_wave_reward_blocks_zuk_damage_while_healers_heal();
+    test_final_wave_reward_pays_zuk_healer_damage();
+    test_jad_damage_reward_pauses_while_jad_healers_heal();
+    test_jad_healer_damage_never_gets_damage_reward();
     test_inferno_reset_supplies_match_current_inventory();
     test_late_start_supply_profile_anchor_waves();
     test_late_start_supply_profile_interpolation_and_scale();
