@@ -124,6 +124,30 @@ static InfernoReplayBest g_best_replay = {
     .rng_seed = UINT32_MAX,
 };
 
+static float inferno_healer_transition_objective(
+    float score,
+    float win_rate,
+    float frac_min_hp_le_240,
+    float frac_min_hp_le_150,
+    float damage_after_150,
+    float frac_zuk_healers_tagged_ge_1,
+    float frac_zuk_healers_tagged_ge_4,
+    float frac_zuk_healers_killed_ge_1,
+    float frac_all_zuk_healers_dead,
+    float frac_died_with_zuk_healer_alive
+) {
+    return score +
+        2.0f * win_rate +
+        0.20f * frac_min_hp_le_240 +
+        0.80f * frac_min_hp_le_150 +
+        0.002f * damage_after_150 +
+        0.40f * frac_zuk_healers_tagged_ge_1 +
+        0.60f * frac_zuk_healers_tagged_ge_4 +
+        0.80f * frac_zuk_healers_killed_ge_1 +
+        1.20f * frac_all_zuk_healers_dead -
+        0.80f * frac_died_with_zuk_healer_alive;
+}
+
 static void inferno_replay_lock_best(void) {
     if (pthread_mutex_lock(&g_best_replay_mutex) != 0) {
         fprintf(stderr, "RECORD_REPLAY: cannot lock best replay state\n");
@@ -1041,6 +1065,18 @@ void my_log(Log* log, Dict* out) {
         float min_zhp_n = log->min_zuk_hp_normal / log->n_normal;
         float score_n = (1200.0f - min_zhp_n) / 1200.0f;
         float win_rate_n = log->wins_normal / log->n_normal;
+        float frac_le_240_n = log->count_min_hp_le_240_normal / log->n_normal;
+        float frac_le_150_n = log->count_min_hp_le_150_normal / log->n_normal;
+        float frac_tagged_ge_1_n =
+            log->count_zuk_healers_tagged_ge_1_normal / log->n_normal;
+        float frac_tagged_ge_4_n =
+            log->count_zuk_healers_tagged_ge_4_normal / log->n_normal;
+        float frac_killed_ge_1_n =
+            log->count_zuk_healers_killed_ge_1_normal / log->n_normal;
+        float frac_all_healers_dead_n =
+            log->count_all_zuk_healers_dead_normal / log->n_normal;
+        float frac_died_with_zuk_healer_n =
+            log->count_died_with_zuk_healer_alive_normal / log->n_normal;
         dict_set(out, "episode_return_normal", log->episode_return_normal / log->n_normal);
         dict_set(out, "wins_normal", win_rate_n);
         dict_set(out, "min_zuk_hp_normal", min_zhp_n);
@@ -1056,8 +1092,8 @@ void my_log(Log* log, Dict* out) {
            best_min_zuk_hp_normal is intentionally not surfaced: averaging mins
            across envs is meaningless. Use the count grid instead. */
         dict_set(out, "frac_min_hp_le_300_normal", log->count_min_hp_le_300_normal / log->n_normal);
-        dict_set(out, "frac_min_hp_le_240_normal", log->count_min_hp_le_240_normal / log->n_normal);
-        dict_set(out, "frac_min_hp_le_150_normal", log->count_min_hp_le_150_normal / log->n_normal);
+        dict_set(out, "frac_min_hp_le_240_normal", frac_le_240_n);
+        dict_set(out, "frac_min_hp_le_150_normal", frac_le_150_n);
         dict_set(out, "frac_normal", log->n_normal);
         /* D-deep means conditional on having crossed the boundary. The
            aggregator divided everything by n_total, so dividing by
@@ -1082,22 +1118,23 @@ void my_log(Log* log, Dict* out) {
         dict_set(out, "damage_after_300_normal", d300);
         dict_set(out, "damage_after_240_normal", d240);
         dict_set(out, "damage_after_150_normal", d150);
+        dict_set(out, "healer_objective_normal",
+            inferno_healer_transition_objective(
+                score_n, win_rate_n, frac_le_240_n, frac_le_150_n, d150,
+                frac_tagged_ge_1_n, frac_tagged_ge_4_n, frac_killed_ge_1_n,
+                frac_all_healers_dead_n, frac_died_with_zuk_healer_n));
         dict_set(out, "frac_healer_spawned_normal",
             log->count_healer_spawned_normal / log->n_normal);
-        dict_set(out, "frac_zuk_healers_tagged_ge_1_normal",
-            log->count_zuk_healers_tagged_ge_1_normal / log->n_normal);
+        dict_set(out, "frac_zuk_healers_tagged_ge_1_normal", frac_tagged_ge_1_n);
         dict_set(out, "frac_zuk_healers_tagged_ge_2_normal",
             log->count_zuk_healers_tagged_ge_2_normal / log->n_normal);
-        dict_set(out, "frac_zuk_healers_tagged_ge_4_normal",
-            log->count_zuk_healers_tagged_ge_4_normal / log->n_normal);
-        dict_set(out, "frac_zuk_healers_killed_ge_1_normal",
-            log->count_zuk_healers_killed_ge_1_normal / log->n_normal);
+        dict_set(out, "frac_zuk_healers_tagged_ge_4_normal", frac_tagged_ge_4_n);
+        dict_set(out, "frac_zuk_healers_killed_ge_1_normal", frac_killed_ge_1_n);
         dict_set(out, "frac_zuk_healers_killed_ge_2_normal",
             log->count_zuk_healers_killed_ge_2_normal / log->n_normal);
         dict_set(out, "frac_zuk_healers_killed_ge_4_normal",
             log->count_zuk_healers_killed_ge_4_normal / log->n_normal);
-        dict_set(out, "frac_all_zuk_healers_dead_normal",
-            log->count_all_zuk_healers_dead_normal / log->n_normal);
+        dict_set(out, "frac_all_zuk_healers_dead_normal", frac_all_healers_dead_n);
         dict_set(out, "frac_zuk_healers_targeted_ge_1_normal",
             log->count_zuk_healers_targeted_ge_1_normal / log->n_normal);
         dict_set(out, "frac_zuk_healers_attacked_ge_1_normal",
@@ -1159,7 +1196,7 @@ void my_log(Log* log, Dict* out) {
         dict_set(out, "frac_died_with_healer_alive_normal",
             log->count_died_with_healer_alive_normal / log->n_normal);
         dict_set(out, "frac_died_with_zuk_healer_alive_normal",
-            log->count_died_with_zuk_healer_alive_normal / log->n_normal);
+            frac_died_with_zuk_healer_n);
         dict_set(out, "frac_died_with_jad_healer_alive_normal",
             log->count_died_with_jad_healer_alive_normal / log->n_normal);
         dict_set(out, "frac_died_with_set_alive_normal",
@@ -1175,16 +1212,28 @@ void my_log(Log* log, Dict* out) {
     }
     if (log->n_snapshot > 0.0f) {
         float min_zhp_s = log->min_zuk_hp_snapshot / log->n_snapshot;
+        float win_rate_s = log->wins_snapshot / log->n_snapshot;
+        float score_s = (1200.0f - min_zhp_s) / 1200.0f;
+        float frac_le_240_s = log->count_min_hp_le_240_snapshot / log->n_snapshot;
+        float frac_le_150_s = log->count_min_hp_le_150_snapshot / log->n_snapshot;
+        float frac_tagged_ge_1_s =
+            log->count_zuk_healers_tagged_ge_1_snapshot / log->n_snapshot;
+        float frac_tagged_ge_4_s =
+            log->count_zuk_healers_tagged_ge_4_snapshot / log->n_snapshot;
+        float frac_killed_ge_1_s =
+            log->count_zuk_healers_killed_ge_1_snapshot / log->n_snapshot;
+        float frac_all_healers_dead_s =
+            log->count_all_zuk_healers_dead_snapshot / log->n_snapshot;
+        float frac_died_with_zuk_healer_s =
+            log->count_died_with_zuk_healer_alive_snapshot / log->n_snapshot;
         dict_set(out, "episode_return_snapshot", log->episode_return_snapshot / log->n_snapshot);
-        dict_set(out, "wins_snapshot", log->wins_snapshot / log->n_snapshot);
+        dict_set(out, "wins_snapshot", win_rate_s);
         dict_set(out, "min_zuk_hp_snapshot", min_zhp_s);
-        dict_set(out, "score_snapshot", (1200.0f - min_zhp_s) / 1200.0f);
+        dict_set(out, "score_snapshot", score_s);
         dict_set(out, "frac_min_hp_le_300_snapshot",
             log->count_min_hp_le_300_snapshot / log->n_snapshot);
-        dict_set(out, "frac_min_hp_le_240_snapshot",
-            log->count_min_hp_le_240_snapshot / log->n_snapshot);
-        dict_set(out, "frac_min_hp_le_150_snapshot",
-            log->count_min_hp_le_150_snapshot / log->n_snapshot);
+        dict_set(out, "frac_min_hp_le_240_snapshot", frac_le_240_s);
+        dict_set(out, "frac_min_hp_le_150_snapshot", frac_le_150_s);
         float t300_s = log->count_min_hp_le_300_snapshot > 0.0f
             ? log->ticks_after_300_snapshot_sum /
                 log->count_min_hp_le_300_snapshot : 0.0f;
@@ -1209,22 +1258,23 @@ void my_log(Log* log, Dict* out) {
         dict_set(out, "damage_after_300_snapshot", d300_s);
         dict_set(out, "damage_after_240_snapshot", d240_s);
         dict_set(out, "damage_after_150_snapshot", d150_s);
+        dict_set(out, "healer_objective_snapshot",
+            inferno_healer_transition_objective(
+                score_s, win_rate_s, frac_le_240_s, frac_le_150_s, d150_s,
+                frac_tagged_ge_1_s, frac_tagged_ge_4_s, frac_killed_ge_1_s,
+                frac_all_healers_dead_s, frac_died_with_zuk_healer_s));
         dict_set(out, "frac_healer_spawned_snapshot",
             log->count_healer_spawned_snapshot / log->n_snapshot);
-        dict_set(out, "frac_zuk_healers_tagged_ge_1_snapshot",
-            log->count_zuk_healers_tagged_ge_1_snapshot / log->n_snapshot);
+        dict_set(out, "frac_zuk_healers_tagged_ge_1_snapshot", frac_tagged_ge_1_s);
         dict_set(out, "frac_zuk_healers_tagged_ge_2_snapshot",
             log->count_zuk_healers_tagged_ge_2_snapshot / log->n_snapshot);
-        dict_set(out, "frac_zuk_healers_tagged_ge_4_snapshot",
-            log->count_zuk_healers_tagged_ge_4_snapshot / log->n_snapshot);
-        dict_set(out, "frac_zuk_healers_killed_ge_1_snapshot",
-            log->count_zuk_healers_killed_ge_1_snapshot / log->n_snapshot);
+        dict_set(out, "frac_zuk_healers_tagged_ge_4_snapshot", frac_tagged_ge_4_s);
+        dict_set(out, "frac_zuk_healers_killed_ge_1_snapshot", frac_killed_ge_1_s);
         dict_set(out, "frac_zuk_healers_killed_ge_2_snapshot",
             log->count_zuk_healers_killed_ge_2_snapshot / log->n_snapshot);
         dict_set(out, "frac_zuk_healers_killed_ge_4_snapshot",
             log->count_zuk_healers_killed_ge_4_snapshot / log->n_snapshot);
-        dict_set(out, "frac_all_zuk_healers_dead_snapshot",
-            log->count_all_zuk_healers_dead_snapshot / log->n_snapshot);
+        dict_set(out, "frac_all_zuk_healers_dead_snapshot", frac_all_healers_dead_s);
         dict_set(out, "frac_zuk_healers_targeted_ge_1_snapshot",
             log->count_zuk_healers_targeted_ge_1_snapshot / log->n_snapshot);
         dict_set(out, "frac_zuk_healers_attacked_ge_1_snapshot",
@@ -1281,7 +1331,7 @@ void my_log(Log* log, Dict* out) {
         dict_set(out, "zuk_hp_max_after_healer_spawn_snapshot", max_hp_after_spawn_s);
         dict_set(out, "spark_damage_after_240_snapshot", spark_damage_after_240_s);
         dict_set(out, "frac_died_with_zuk_healer_alive_snapshot",
-            log->count_died_with_zuk_healer_alive_snapshot / log->n_snapshot);
+            frac_died_with_zuk_healer_s);
         dict_set(out, "frac_died_after_240_never_tagged_healer_snapshot",
             log->count_died_after_240_never_tagged_healer_snapshot / log->n_snapshot);
         dict_set(out, "frac_died_after_240_some_healers_tagged_snapshot",
