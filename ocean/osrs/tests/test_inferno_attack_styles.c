@@ -2238,6 +2238,82 @@ static void test_inferno_progress_score_rewards_late_add_transitions(void) {
     ASSERT_FLOAT_GT("win scores above partial state", q_win, q_healer_dead);
 }
 
+static void test_inferno_healer_transition_stats_track_episode_progress(void) {
+    printf("--- inferno healer transition stats track episode progress ---\n");
+
+    InfernoState state = make_test_state(INF_ZUK_PLAYER_START_X, INF_ZUK_PLAYER_START_Y);
+    state.tick = 120;
+    state.tick_at_le_240 = -1;
+    state.tick_at_zuk_healer_spawn = -1;
+    state.tick_at_first_zuk_healer_tag = -1;
+    state.tick_at_all_zuk_healers_tagged = -1;
+    state.tick_at_all_zuk_healers_dead = -1;
+    state.zuk.healer_spawned = 1;
+
+    state.npcs[0] = make_test_npc(INF_NPC_ZUK, 20, 52, 5);
+    state.npcs[0].active = 1;
+    state.npcs[0].hp = 239;
+    state.npcs[0].max_hp = 1200;
+
+    for (int i = 1; i <= 4; i++) {
+        state.npcs[i] = make_test_npc(INF_NPC_HEALER_ZUK, 15 + i, 48, 1);
+        state.npcs[i].active = 1;
+        state.npcs[i].hp = 100;
+        state.npcs[i].max_hp = 100;
+    }
+
+    state.zuk_healer_tags_this_tick = 1;
+    state.hp_restored_this_tick = 21.0f;
+    state.spark_damage_this_tick = 7.0f;
+    inf_update_healer_transition_stats(&state);
+
+    ASSERT_INT_EQ("healer spawn tick recorded",
+        state.tick_at_zuk_healer_spawn, 120);
+    ASSERT_INT_EQ("healer stats infer 240 threshold tick",
+        state.tick_at_le_240, 120);
+    ASSERT_INT_EQ("first healer tag tick recorded",
+        state.tick_at_first_zuk_healer_tag, 120);
+    ASSERT_INT_EQ("one healer tag accumulated",
+        state.total_zuk_healer_tags, 1);
+    ASSERT_FLOAT_NEAR("post-240 restored hp accumulated",
+        state.hp_restored_after_240, 21.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("post-240 spark damage accumulated",
+        state.spark_damage_after_240, 7.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("post-spawn max Zuk HP initialized",
+        state.zuk_hp_max_after_healer_spawn, 239.0f, 1e-6f);
+
+    state.tick = 121;
+    state.npcs[0].hp = 420;
+    state.zuk_healer_tags_this_tick = 3;
+    state.kill_zuk_healer_this_tick = 2;
+    state.hp_restored_this_tick = 13.0f;
+    state.spark_damage_this_tick = 5.0f;
+    inf_update_healer_transition_stats(&state);
+
+    ASSERT_INT_EQ("all healer tag tick recorded",
+        state.tick_at_all_zuk_healers_tagged, 121);
+    ASSERT_INT_EQ("four healer tags accumulated",
+        state.total_zuk_healer_tags, 4);
+    ASSERT_INT_EQ("two healer kills accumulated",
+        state.total_zuk_healer_kills, 2);
+    ASSERT_FLOAT_NEAR("post-spawn max Zuk HP tracks healer restore",
+        state.zuk_hp_max_after_healer_spawn, 420.0f, 1e-6f);
+
+    state.tick = 122;
+    state.zuk_healer_tags_this_tick = 0;
+    state.kill_zuk_healer_this_tick = 2;
+    state.hp_restored_this_tick = 0.0f;
+    state.spark_damage_this_tick = 0.0f;
+    for (int i = 1; i <= 4; i++)
+        state.npcs[i].active = 0;
+    inf_update_healer_transition_stats(&state);
+
+    ASSERT_INT_EQ("all healer dead tick recorded",
+        state.tick_at_all_zuk_healers_dead, 122);
+    ASSERT_INT_EQ("four healer kills accumulated",
+        state.total_zuk_healer_kills, 4);
+}
+
 static void test_inferno_human_equip_does_not_snap_loadout(void) {
     printf("--- inferno human equip does not snap full loadout ---\n");
 
@@ -2598,6 +2674,7 @@ int main(void) {
     test_inferno_cell_key_quantization_groups_neighbors();
     test_inferno_cell_key_tracks_set_magers_and_jad_hp_bucket();
     test_inferno_progress_score_rewards_late_add_transitions();
+    test_inferno_healer_transition_stats_track_episode_progress();
     test_inferno_human_equip_does_not_snap_loadout();
     test_jad_render_uses_style_specific_attack_animation();
     test_jad_magic_render_emits_three_offset_projectiles();

@@ -753,6 +753,20 @@ typedef struct {
     float damage_after_300_normal_sum;
     float damage_after_240_normal_sum;
     float damage_after_150_normal_sum;
+    float count_healer_spawned_normal;
+    float count_zuk_healers_tagged_ge_1_normal;
+    float count_zuk_healers_tagged_ge_2_normal;
+    float count_zuk_healers_tagged_ge_4_normal;
+    float count_zuk_healers_killed_ge_1_normal;
+    float count_zuk_healers_killed_ge_2_normal;
+    float count_zuk_healers_killed_ge_4_normal;
+    float count_all_zuk_healers_dead_normal;
+    float ticks_240_to_first_healer_tag_normal_sum;
+    float ticks_240_to_all_healers_tagged_normal_sum;
+    float ticks_240_to_all_healers_dead_normal_sum;
+    float hp_restored_after_240_normal_sum;
+    float zuk_hp_max_after_healer_spawn_normal_sum;
+    float spark_damage_after_240_normal_sum;
     /* D-deep: count of normal-start deaths with given mob alive at terminal.
        Discriminates death cause (e.g. healer-active deaths suggest healer
        priority issue, jad-active suggests poor add handling). */
@@ -761,6 +775,10 @@ typedef struct {
     float count_died_with_healer_alive_normal;
     float count_died_with_zuk_healer_alive_normal;
     float count_died_with_jad_healer_alive_normal;
+    float count_died_after_240_never_tagged_healer_normal;
+    float count_died_after_240_some_healers_tagged_normal;
+    float count_died_after_240_some_healers_killed_normal;
+    float count_died_after_240_all_healers_dead_normal;
     /* per-NPC-type stats (14 types each, for wandb only — not shown on dashboard) */
     float prayer_correct_by_type[14];
     float attacks_by_type[14];

@@ -601,11 +601,18 @@ typedef struct {
     int tick_at_le_300;
     int tick_at_le_240;
     int tick_at_le_150;
+    int tick_at_zuk_healer_spawn;
+    int tick_at_first_zuk_healer_tag;
+    int tick_at_all_zuk_healers_tagged;
+    int tick_at_all_zuk_healers_dead;
     /* D-deep: damage to Zuk accumulated since first crossing each threshold.
        Updated each tick when below the boundary. */
     float damage_after_300;
     float damage_after_240;
     float damage_after_150;
+    float hp_restored_after_240;
+    float spark_damage_after_240;
+    float zuk_hp_max_after_healer_spawn;
     float damage_dealt_this_tick;
     float damage_zuk_healers_this_tick;
     float damage_jad_this_tick;
@@ -615,6 +622,8 @@ typedef struct {
     int kill_set_this_tick;
     float shield_damage_this_tick;
     int healer_tags_this_tick;
+    int zuk_healer_tags_this_tick;
+    float spark_damage_this_tick;
     float damage_received_this_tick;
     float hp_restored_this_tick;
     int prayer_correct_this_tick;  /* count of NPC attacks blocked by prayer this tick */
@@ -626,6 +635,8 @@ typedef struct {
     float total_zuk_healer_damage;
     float total_damage_received;
     float total_hp_restored;   /* cumulative HP restored to enemies this episode */
+    int total_zuk_healer_tags;
+    int total_zuk_healer_kills;
     int total_waves_cleared;
     int ticks_without_action;  /* consecutive ticks with no attack or movement */
     int total_prayer_correct;  /* times prayer blocked an NPC attack */
@@ -1267,6 +1278,10 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
     s->tick_at_le_300 = -1;
     s->tick_at_le_240 = -1;
     s->tick_at_le_150 = -1;
+    s->tick_at_zuk_healer_spawn = -1;
+    s->tick_at_first_zuk_healer_tag = -1;
+    s->tick_at_all_zuk_healers_tagged = -1;
+    s->tick_at_all_zuk_healers_dead = -1;
 
     /* player */
     s->player.entity_type = ENTITY_PLAYER;
@@ -2640,6 +2655,7 @@ static void inf_resolve_pending_sparks(InfernoState* s) {
                 s->player.x, s->player.y, 1)) {
             encounter_damage_player(&s->player, s->pending_sparks[i].damage,
                                     &s->damage_received_this_tick);
+            s->spark_damage_this_tick += (float)s->pending_sparks[i].damage;
             s->last_hit_by_type = INF_NPC_HEALER_ZUK;
         }
         s->pending_sparks[i].active = 0;
@@ -3458,6 +3474,8 @@ static void inf_resolve_player_projectiles_on_npcs(InfernoState* s) {
                 if (s->npcs[i].type == INF_NPC_HEALER_ZUK ||
                     s->npcs[i].type == INF_NPC_HEALER_JAD) {
                     s->healer_tags_this_tick++;
+                    if (s->npcs[i].type == INF_NPC_HEALER_ZUK)
+                        s->zuk_healer_tags_this_tick++;
                 }
                 s->npcs[i].aggro_target = -1;
                 s->npcs[i].stun_timer = 2;
@@ -3667,6 +3685,46 @@ static float inf_compute_reward(InfernoState* s) {
     return reward;
 }
 
+static void inf_update_healer_transition_stats(InfernoState* s) {
+    if (!s->zuk.healer_spawned) return;
+
+    if (s->tick_at_zuk_healer_spawn < 0)
+        s->tick_at_zuk_healer_spawn = s->tick;
+
+    int zuk_idx = inf_find_live_zuk_idx(s);
+    if (zuk_idx >= 0) {
+        float hp = (float)s->npcs[zuk_idx].hp;
+        if (s->tick_at_le_240 < 0 && hp <= 240.0f)
+            s->tick_at_le_240 = s->tick;
+        if (hp > s->zuk_hp_max_after_healer_spawn)
+            s->zuk_hp_max_after_healer_spawn = hp;
+    }
+
+    s->total_zuk_healer_tags += s->zuk_healer_tags_this_tick;
+    if (s->total_zuk_healer_tags > 4) s->total_zuk_healer_tags = 4;
+    s->total_zuk_healer_kills += s->kill_zuk_healer_this_tick;
+    if (s->total_zuk_healer_kills > 4) s->total_zuk_healer_kills = 4;
+
+    if (s->total_zuk_healer_tags > 0 && s->tick_at_first_zuk_healer_tag < 0)
+        s->tick_at_first_zuk_healer_tag = s->tick;
+    if (s->total_zuk_healer_tags >= 4 && s->tick_at_all_zuk_healers_tagged < 0)
+        s->tick_at_all_zuk_healers_tagged = s->tick;
+
+    int live_zuk_healers = 0;
+    for (int i = 0; i < INF_MAX_NPCS; i++) {
+        if (!s->npcs[i].active || s->npcs[i].hp <= 0) continue;
+        if (s->npcs[i].type == INF_NPC_HEALER_ZUK)
+            live_zuk_healers++;
+    }
+    if (live_zuk_healers == 0 && s->tick_at_all_zuk_healers_dead < 0)
+        s->tick_at_all_zuk_healers_dead = s->tick;
+
+    if (s->tick_at_le_240 >= 0) {
+        s->hp_restored_after_240 += s->hp_restored_this_tick;
+        s->spark_damage_after_240 += s->spark_damage_this_tick;
+    }
+}
+
 
 static void inf_step(EncounterState* state, const int* actions) {
     InfernoState* s = (InfernoState*)state;
@@ -3683,6 +3741,8 @@ static void inf_step(EncounterState* state, const int* actions) {
     s->kill_set_this_tick = 0;
     s->shield_damage_this_tick = 0.0f;
     s->healer_tags_this_tick = 0;
+    s->zuk_healer_tags_this_tick = 0;
+    s->spark_damage_this_tick = 0.0f;
     s->damage_received_this_tick = 0.0f;
     s->hp_restored_this_tick = 0.0f;
     s->prayer_correct_this_tick = 0;
@@ -3731,6 +3791,7 @@ static void inf_step(EncounterState* state, const int* actions) {
         inf_invalidate_los_cache(s);
         inf_tick_npcs(s);
     }
+    inf_update_healer_transition_stats(s);
 
     /* if npc damage killed the player, stop the tick here — a corpse can't
        eat, attack, or move. without this check the hp-clamp-at-0 in
