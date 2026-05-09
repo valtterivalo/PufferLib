@@ -491,6 +491,10 @@ static std::unique_ptr<PuffeRL> create_pufferl(py::dict args) {
     hypers.vf_clip_coef = get_config(train_kwargs, "vf_clip_coef");
     hypers.vf_coef = get_config(train_kwargs, "vf_coef");
     hypers.ent_coef = get_config(train_kwargs, "ent_coef");
+    bool aurora = get_config(train_kwargs, "aurora") > 0;
+    if (aurora) {
+        throw std::runtime_error("Aurora is implemented only in CUDA");
+    }
     hypers.gamma = get_config(train_kwargs, "gamma");
     hypers.gae_lambda = get_config(train_kwargs, "gae_lambda");
     hypers.vtrace_rho_clip = get_config(train_kwargs, "vtrace_rho_clip");
