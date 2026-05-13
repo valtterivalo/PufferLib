@@ -55,6 +55,7 @@ __global__ void muon_nesterov(float* __restrict__ mb, precision_t* __restrict__ 
     }
 }
 
+// Aurora Nesterov: paper's lerp form -- mb = lerp(g, mb, mu); update = lerp(g, mb, mu)
 __global__ void aurora_nesterov(float* __restrict__ mb, precision_t* __restrict__ gc,
         float mu, int n) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -86,6 +87,10 @@ __global__ void muon_clip_norm(precision_t* __restrict__ dst,
     }
 }
 
+// Aurora row-norm scaling kernels. `transposed=true` means storage is column-major view
+// (we use it for the wide path so the "rows" we iterate over are actually columns of the
+// stored matrix). `wide=true` means the parameter is (R,C) with R<C; the scale vector then
+// indexes columns of the stored matrix.
 __global__ void aurora_init_row_scales(float* __restrict__ row_scale,
         const precision_t* __restrict__ src, int rows, int cols,
         bool transposed, float eps) {
@@ -155,9 +160,6 @@ static constexpr double ns_coeffs[5][3] = {
     {2.8366, -3.0525, 1.2012},
 };
 
-static constexpr int aurora_polar_iters = 12;
-static constexpr double aurora_simple_quintic[3] = {2.0, -1.5, 0.5};
-
 struct Muon {
     double momentum, weight_decay, eps;
     bool aurora;
@@ -208,8 +210,12 @@ void muon_init(Muon* m, Allocator* param_alloc, double lr_val,
         AllocEntry& e = param_alloc->regs[_i];
         if (ndim(e.shape) >= 2) {
             long R = e.shape[0], C = numel(e.shape) / R;
-            max_M = max(max_M, min(R, C));
-            max_N = max(max_N, max(R, C));
+            // Per-block shape: the optimizer iterates split_count sub-blocks of
+            // (R/split_count, C), so size scratch buffers for the largest block.
+            int sc = (e.split_count > 0) ? e.split_count : 1;
+            long block_R = R / sc;
+            max_M = max(max_M, min(block_R, C));
+            max_N = max(max_N, max(block_R, C));
         }
     }
     if (max_M > 0) {
@@ -217,14 +223,14 @@ void muon_init(Muon* m, Allocator* param_alloc, double lr_val,
         m->gram =        {.shape = {max_M, max_M}};
         m->gram_buf =    {.shape = {max_M, max_M}};
         m->x_buf =       {.shape = {max_M, max_N}};
-        m->orig_buf =    {.shape = {max_M, max_N}};
         m->ns_norm_puf = {.shape = {1}};
         alloc_register(alloc, &m->gram);
         alloc_register(alloc, &m->gram_buf);
         alloc_register(alloc, &m->x_buf);
-        alloc_register(alloc, &m->orig_buf);
         if (aurora) {
-            m->aurora_row_scale = {.shape = {max_N}};
+            m->orig_buf =          {.shape = {max_M, max_N}};
+            m->aurora_row_scale =  {.shape = {max_N}};
+            alloc_register(alloc, &m->orig_buf);
             alloc_register(alloc, &m->aurora_row_scale);
         }
         alloc_register(alloc, &m->ns_norm_puf);
@@ -241,7 +247,11 @@ void muon_post_create(Muon* m) {
     cudaMemset(m->mb_puf.data, 0, numel(m->mb_puf.shape) * sizeof(float));
 }
 
-void muon_polar_project(Muon* m, PrecisionTensor x, PrecisionTensor x_buf,
+// Muon polar: 5 iters of Quintic-5 NS with per-iter coefficients tuned to maximize
+// convergence (max |1 - p(s)| ~ 0.031 for s in [0, 1.5]). Returns the buffer holding
+// the result. For 5 iters (odd) the final dst is x_buf; the helper is written so that
+// odd K returns x_buf and even K would return x.
+static PrecisionTensor muon_polar_project(Muon* m, PrecisionTensor x, PrecisionTensor x_buf,
         PrecisionTensor gram, PrecisionTensor gram_buf, bool tall,
         long R, long C, long M, long N, cudaStream_t stream) {
     int nblk = min((int)grid_size(numel(x.shape)), 256);
@@ -265,11 +275,28 @@ void muon_polar_project(Muon* m, PrecisionTensor x, PrecisionTensor x_buf,
             tall ? src.data : gram_buf.data, tall ? gram_buf.data : src.data, dst.data,
             stream, 1.0f, ns_coeffs[i][0]);
     }
+    // 5 iters (odd): final dst is x_buf at i=4.
+    return x_buf;
 }
 
-PrecisionTensor aurora_polar_project(Muon* m, PrecisionTensor x, PrecisionTensor x_buf,
+// Aurora paper-faithful polar: 12 iterations of simple-quintic Newton-Schulz with
+// fixed coefficients (a, b, c) = (2.0, -1.5, 0.5). This is byte-for-byte the polar
+// function shipped in the Aurora reference release (aurora-release/src/polar.py),
+// which matches the modded-nanoGPT track-3 "not optimizing for wallclock" baseline.
+// Each iteration cubically halves remaining singular-value error around 1, so 12
+// iters drive all non-zero singular values to ~bf16 machine precision.
+//
+// Cost: 36 matmul-equivalents/polar (vs Muon's 15). K=2 outer Aurora => ~72/tall-weight.
+// Returns the tensor holding the result. For K=12 (even) the final dst is `x`; for
+// odd K it would be `x_buf`. Callers should use the returned tensor.
+static PrecisionTensor aurora_polar_project(Muon* m, PrecisionTensor x, PrecisionTensor x_buf,
         PrecisionTensor gram, PrecisionTensor gram_buf, bool tall,
         long R, long C, long M, long N, cudaStream_t stream) {
+    constexpr int K = 12;
+    constexpr float A_COEF = 2.0f;
+    constexpr float B_COEF = -1.5f;
+    constexpr float C_COEF = 0.5f;
+
     int nblk = min((int)grid_size(numel(x.shape)), 256);
     muon_norm_partials<<<nblk, 256, 0, stream>>>(
         m->norm_partials.data, x.data, numel(x.shape));
@@ -279,21 +306,19 @@ PrecisionTensor aurora_polar_project(Muon* m, PrecisionTensor x, PrecisionTensor
 
     cublasOperation_t gram_op_a = tall ? CUBLAS_OP_T : CUBLAS_OP_N;
     cublasOperation_t gram_op_b = tall ? CUBLAS_OP_N : CUBLAS_OP_T;
-    for (int i = 0; i < aurora_polar_iters; ++i) {
+    for (int i = 0; i < K; ++i) {
         PrecisionTensor& src = (i % 2 == 0) ? x : x_buf;
         PrecisionTensor& dst = (i % 2 == 0) ? x_buf : x;
         cublasGemmExDense(gram_op_a, gram_op_b, (int)M, (int)M, (int)N,
             src.data, src.data, gram.data, stream);
         puf_copy(&gram_buf, &gram, stream);
-        puf_addmm_nn(&gram, &gram, &gram_buf, aurora_simple_quintic[2],
-            aurora_simple_quintic[1], stream);
+        puf_addmm_nn(&gram, &gram, &gram_buf, C_COEF, B_COEF, stream);
         puf_copy(&dst, &src, stream);
         cublasGemmExDense(CUBLAS_OP_N, CUBLAS_OP_N, (int)R, (int)C, (int)M,
             tall ? src.data : gram_buf.data, tall ? gram_buf.data : src.data, dst.data,
-            stream, 1.0f, aurora_simple_quintic[0]);
+            stream, 1.0f, A_COEF);
     }
-
-    return (aurora_polar_iters % 2 == 0) ? x : x_buf;
+    return (K % 2 == 1) ? x_buf : x;
 }
 
 void muon_step(Muon* m, FloatTensor weights, PrecisionTensor grads, float max_grad_norm, cudaStream_t stream = 0) {
@@ -311,6 +336,7 @@ void muon_step(Muon* m, FloatTensor weights, PrecisionTensor grads, float max_gr
     muon_clip_norm<<<grid_size(numel(grads.shape)), BLOCK_SIZE, 0, stream>>>(
         grads.data, m->grad_norm_ptr, max_grad_norm, 1e-6f, numel(grads.shape));
 
+    // Nesterov momentum (Aurora uses the paper's lerp form to match its update semantics)
     if (m->aurora) {
         aurora_nesterov<<<grid_size(numel(m->mb_puf.shape)), BLOCK_SIZE, 0, stream>>>(
             m->mb_puf.data, grads.data, (float)m->momentum, numel(m->mb_puf.shape));
@@ -325,51 +351,76 @@ void muon_step(Muon* m, FloatTensor weights, PrecisionTensor grads, float max_gr
         precision_t* gc_ptr = grads.data + offset;
         float* wb_ptr = weights.data + offset;
         long ne = numel(e.shape);
-        const precision_t* update_ptr = gc_ptr;
-        float scale = 1.0f;
 
-        // Orthogonalize the update
-        if (ndim(e.shape) >= 2) {
-            long R = e.shape[0], C = ne / R;
-            long M = min(R, C), N = max(R, C);
-            bool tall = R > C;
-            PrecisionTensor x = {.data = gc_ptr, .shape = {R, C}};
-            PrecisionTensor x_buf = {.data = m->x_buf.data, .shape = {R, C}};
-            PrecisionTensor orig_buf = {.data = m->orig_buf.data, .shape = {R, C}};
+        if (ndim(e.shape) < 2) {
+            // 1-D params (biases, scalars): no orthogonalization, just decay+SGD.
+            muon_weight_update<<<grid_size(ne), BLOCK_SIZE, 0, stream>>>(
+                wb_ptr, gc_ptr, m->lr_ptr, (float)m->weight_decay, 1.0f, (int)ne);
+            offset += ne;
+            continue;
+        }
+
+        long R_full = e.shape[0], C = ne / R_full;
+        // Split a packed parameter along the leading row dim into `split_count` sub-
+        // blocks for orthogonalization. Each block hits the polar path as its own
+        // logical parameter. split_count == 1 reproduces the original behavior. Storage
+        // is row-major and the row dim is leading, so each block's slice is contiguous.
+        int sc = (e.split_count > 0) ? e.split_count : 1;
+        long block_R = (R_full % sc == 0) ? (R_full / sc) : R_full;
+        if (block_R == R_full) sc = 1;
+        long block_ne = block_R * C;
+        long M = min(block_R, C), N = max(block_R, C);
+        bool tall = block_R > C;
+        float scale = sqrtf(fmaxf(1.0f, (float)block_R / (float)C));
+
+        for (int s = 0; s < sc; s++) {
+            precision_t* gc_ptr_s = gc_ptr + s * block_ne;
+            float* wb_ptr_s = wb_ptr + s * block_ne;
+            PrecisionTensor x = {.data = gc_ptr_s, .shape = {block_R, C}};
+            PrecisionTensor x_buf = {.data = m->x_buf.data, .shape = {block_R, C}};
             PrecisionTensor gram = {.data = m->gram.data, .shape = {M, M}};
             PrecisionTensor gram_buf = {.data = m->gram_buf.data, .shape = {M, M}};
+            const precision_t* update_ptr = gc_ptr_s;
 
-            if (m->aurora && R != C) {
+            if (m->aurora && block_R != C) {
+                // K=2 outer: init D from raw row norms, polar, update D, re-apply onto
+                // the saved original, polar again. Each polar is paper-faithful
+                // simple-quintic-12 (36 matmuls), so total Aurora cost ~72 matmuls/
+                // tall-weight vs Muon's 15 (~4.8x). Matches the Aurora release.
+                PrecisionTensor orig_buf = {.data = m->orig_buf.data, .shape = {block_R, C}};
+                bool wide = block_R < C;
+                // wide=true uses the cols of the stored matrix as the "rows" axis (the
+                // n-axis in paper notation). Today no PufferLib network registers a wide
+                // non-square weight, so this branch is untested in practice; keep it
+                // for symmetry but treat as best-effort.
+
                 puf_copy(&orig_buf, &x, stream);
-                bool wide = R < C;
                 aurora_init_row_scales<<<(int)N, 256, 0, stream>>>(
                     m->aurora_row_scale.data, orig_buf.data, (int)N, (int)M, wide, 1e-7f);
-                aurora_apply_row_scales<<<grid_size(ne), BLOCK_SIZE, 0, stream>>>(
-                    x.data, orig_buf.data, m->aurora_row_scale.data, (int)R, (int)C, wide);
-                PrecisionTensor aurora_update = aurora_polar_project(
-                    m, x, x_buf, gram, gram_buf, tall, R, C, M, N, stream);
+                aurora_apply_row_scales<<<grid_size(numel(x.shape)), BLOCK_SIZE, 0, stream>>>(
+                    x.data, orig_buf.data, m->aurora_row_scale.data, (int)block_R, (int)C, wide);
+                PrecisionTensor polar1 = aurora_polar_project(
+                    m, x, x_buf, gram, gram_buf, tall, block_R, C, M, N, stream);
 
                 float target_row_sq = (float)M / (float)N;
                 aurora_update_row_scales<<<(int)N, 256, 0, stream>>>(
-                    m->aurora_row_scale.data, aurora_update.data, (int)N, (int)M, wide,
+                    m->aurora_row_scale.data, polar1.data, (int)N, (int)M, wide,
                     target_row_sq, 0.5f, 1e-14f);
-                aurora_apply_row_scales<<<grid_size(ne), BLOCK_SIZE, 0, stream>>>(
-                    x.data, orig_buf.data, m->aurora_row_scale.data, (int)R, (int)C, wide);
-            }
-            if (m->aurora) {
-                PrecisionTensor aurora_update = aurora_polar_project(
-                    m, x, x_buf, gram, gram_buf, tall, R, C, M, N, stream);
-                update_ptr = aurora_update.data;
+                aurora_apply_row_scales<<<grid_size(numel(x.shape)), BLOCK_SIZE, 0, stream>>>(
+                    x.data, orig_buf.data, m->aurora_row_scale.data, (int)block_R, (int)C, wide);
+                PrecisionTensor polar2 = aurora_polar_project(
+                    m, x, x_buf, gram, gram_buf, tall, block_R, C, M, N, stream);
+                update_ptr = polar2.data;
             } else {
-                muon_polar_project(m, x, x_buf, gram, gram_buf, tall, R, C, M, N, stream);
-                update_ptr = x_buf.data;
+                // Plain Muon polar (also the path for square / wide / aurora-off).
+                PrecisionTensor polar_out = muon_polar_project(
+                    m, x, x_buf, gram, gram_buf, tall, block_R, C, M, N, stream);
+                update_ptr = polar_out.data;
             }
 
-            scale = sqrtf(fmaxf(1.0f, (float)R / (float)C));
+            muon_weight_update<<<grid_size(block_ne), BLOCK_SIZE, 0, stream>>>(
+                wb_ptr_s, update_ptr, m->lr_ptr, (float)m->weight_decay, scale, (int)block_ne);
         }
-
-        muon_weight_update<<<grid_size(ne), BLOCK_SIZE, 0, stream>>>(
-            wb_ptr, update_ptr, m->lr_ptr, (float)m->weight_decay, scale, (int)ne);
         offset += ne;
     }
 }

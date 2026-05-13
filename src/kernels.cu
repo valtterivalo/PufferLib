@@ -387,6 +387,11 @@ struct AllocEntry {
     void** data_ptr;    // address of the tensor's data field
     int64_t* shape;     // pointer to the tensor's shape array
     int elem_size;      // sizeof element type
+    // For 2-D params that pack k logically-independent projections along the leading
+    // (row) dim. Optimizer code can iterate sub-blocks of shape (shape[0]/split_count,
+    // shape[1]) for orthogonalization, so each block is treated as its own parameter.
+    // 1 = no split (default).
+    int split_count;
 };
 
 struct Allocator {
@@ -397,16 +402,17 @@ struct Allocator {
     long total_bytes = 0;
 };
 
-static void alloc_register_impl(Allocator* alloc, void** data_ptr, int64_t* shape, int elem_size) {
+static void alloc_register_impl(Allocator* alloc, void** data_ptr, int64_t* shape,
+        int elem_size, int split_count = 1) {
     alloc->regs = (AllocEntry*)realloc(alloc->regs, (alloc->num_regs + 1) * sizeof(AllocEntry));
-    alloc->regs[alloc->num_regs++] = {data_ptr, shape, elem_size};
+    alloc->regs[alloc->num_regs++] = {data_ptr, shape, elem_size, split_count};
     int64_t n = numel(shape);
     alloc->total_elems += n;
     alloc->total_bytes = (alloc->total_bytes + 15) & ~15;
     alloc->total_bytes += n * elem_size;
 }
-void alloc_register(Allocator* a, PrecisionTensor* t) {
-    alloc_register_impl(a, (void**)&t->data, t->shape, sizeof(precision_t));
+void alloc_register(Allocator* a, PrecisionTensor* t, int split_count = 1) {
+    alloc_register_impl(a, (void**)&t->data, t->shape, sizeof(precision_t), split_count);
 }
 void alloc_register(Allocator* a, FloatTensor* t) {
     alloc_register_impl(a, (void**)&t->data, t->shape, sizeof(float));

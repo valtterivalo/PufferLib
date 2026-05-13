@@ -748,7 +748,7 @@ static void mingru_reg_params(void* w, Allocator* alloc) {
     MinGRUWeights* m = (MinGRUWeights*)w;
     for (int i = 0; i < m->num_layers; i++) {
         m->weights[i] = {.shape = {3 * m->hidden, m->hidden}};
-        alloc_register(alloc,&m->weights[i]);
+        alloc_register(alloc, &m->weights[i], /*split_count=*/3);
     }
 }
 
