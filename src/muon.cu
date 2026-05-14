@@ -147,6 +147,56 @@ __global__ void aurora_update_row_scales(float* __restrict__ row_scale,
     }
 }
 
+enum MuonStatIdx {
+    MUON_STAT_MATRIX_COUNT = 0,
+    MUON_STAT_ROW_COUNT,
+    MUON_STAT_PRE_ROW_SQ_SUM,
+    MUON_STAT_PRE_ROW_SQ_SUM_SQ,
+    MUON_STAT_POST_ROW_SQ_SUM,
+    MUON_STAT_POST_ROW_SQ_SUM_SQ,
+    MUON_STAT_COUNT,
+};
+
+enum MuonRowStatPhase {
+    MUON_ROW_STAT_PRE = 0,
+    MUON_ROW_STAT_POST,
+};
+
+__global__ void muon_row_sq_stats(float* __restrict__ stats,
+        const precision_t* __restrict__ src, int rows, int cols,
+        bool transposed, MuonRowStatPhase phase) {
+    int row = blockIdx.x;
+    if (row >= rows) return;
+    float sum = 0.0f;
+    for (int col = threadIdx.x; col < cols; col += blockDim.x) {
+        int idx = transposed ? col * rows + row : row * cols + col;
+        float v = to_float(src[idx]);
+        sum += v * v;
+    }
+    __shared__ float sdata[256];
+    int tid = threadIdx.x;
+    sdata[tid] = sum;
+    __syncthreads();
+    for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+        if (tid < s) sdata[tid] += sdata[tid + s];
+        __syncthreads();
+    }
+    if (tid == 0) {
+        float row_sq = sdata[0];
+        if (phase == MUON_ROW_STAT_POST) {
+            atomicAdd(&stats[MUON_STAT_POST_ROW_SQ_SUM], row_sq);
+            atomicAdd(&stats[MUON_STAT_POST_ROW_SQ_SUM_SQ], row_sq * row_sq);
+        } else {
+            atomicAdd(&stats[MUON_STAT_PRE_ROW_SQ_SUM], row_sq);
+            atomicAdd(&stats[MUON_STAT_PRE_ROW_SQ_SUM_SQ], row_sq * row_sq);
+            atomicAdd(&stats[MUON_STAT_ROW_COUNT], 1.0f);
+            if (row == 0) {
+                atomicAdd(&stats[MUON_STAT_MATRIX_COUNT], 1.0f);
+            }
+        }
+    }
+}
+
 static constexpr double ns_coeffs[5][3] = {
     {4.0848, -6.8946, 2.9270},
     {3.9505, -6.3029, 2.6377},
@@ -155,6 +205,7 @@ static constexpr double ns_coeffs[5][3] = {
     {2.8366, -3.0525, 1.2012},
 };
 
+static constexpr int muon_polar_iters = 5;
 static constexpr int aurora_polar_iters = 12;
 static constexpr double aurora_simple_quintic[3] = {2.0, -1.5, 0.5};
 
@@ -166,8 +217,9 @@ struct Muon {
     float* lr_derived_ptr;
     float* norm_ptr;
     float* grad_norm_ptr;
+    float* row_stats_ptr;
     FloatTensor lr_puf, lr_derived_puf, ns_norm_puf, grad_norm_puf;
-    FloatTensor mb_puf;
+    FloatTensor mb_puf, row_stats_puf;
     PrecisionTensor gram, gram_buf, x_buf, orig_buf;
     FloatTensor aurora_row_scale;
     FloatTensor norm_partials;
@@ -179,7 +231,7 @@ struct Muon {
 
 void muon_init(Muon* m, Allocator* param_alloc, double lr_val,
         double momentum, double eps, double weight_decay,
-        Allocator* alloc, bool aurora = false) {
+        Allocator* alloc, bool aurora = false, bool aurora_row_stats = false) {
     m->momentum = momentum;
     m->weight_decay = weight_decay;
     m->eps = eps;
@@ -187,11 +239,13 @@ void muon_init(Muon* m, Allocator* param_alloc, double lr_val,
     m->lr_val_init = (float)lr_val;
     m->lr_ptr = nullptr;
     m->lr_derived_ptr = nullptr;
+    m->row_stats_ptr = nullptr;
     m->param_alloc = param_alloc;
     m->nccl_comm = nullptr;
     m->world_size = 1;
     m->max_M = 0; m->max_N = 0;
     m->aurora_row_scale = {};
+    m->row_stats_puf = {};
     long n = param_alloc->total_elems;
     m->lr_puf =         {.shape = {1}};
     m->lr_derived_puf = {.shape = {2}};
@@ -203,6 +257,10 @@ void muon_init(Muon* m, Allocator* param_alloc, double lr_val,
     alloc_register(alloc, &m->mb_puf);
     alloc_register(alloc, &m->norm_partials);
     alloc_register(alloc, &m->grad_norm_puf);
+    if (aurora_row_stats) {
+        m->row_stats_puf = {.shape = {MUON_STAT_COUNT}};
+        alloc_register(alloc, &m->row_stats_puf);
+    }
     long max_M = 0, max_N = 0;
     for (int _i = 0; _i < param_alloc->num_regs; _i++) {
         AllocEntry& e = param_alloc->regs[_i];
@@ -236,12 +294,16 @@ void muon_post_create(Muon* m) {
     m->lr_derived_ptr = m->lr_derived_puf.data;
     m->grad_norm_ptr = m->grad_norm_puf.data;
     if (m->ns_norm_puf.data) m->norm_ptr = m->ns_norm_puf.data;
+    if (m->row_stats_puf.data) m->row_stats_ptr = m->row_stats_puf.data;
     cudaMemcpy(m->lr_ptr, &m->lr_val_init, sizeof(float), cudaMemcpyHostToDevice);
     cudaMemset(m->lr_derived_ptr, 0, 2 * sizeof(float));
     cudaMemset(m->mb_puf.data, 0, numel(m->mb_puf.shape) * sizeof(float));
+    if (m->row_stats_ptr) {
+        cudaMemset(m->row_stats_ptr, 0, MUON_STAT_COUNT * sizeof(float));
+    }
 }
 
-void muon_polar_project(Muon* m, PrecisionTensor x, PrecisionTensor x_buf,
+PrecisionTensor muon_polar_project(Muon* m, PrecisionTensor x, PrecisionTensor x_buf,
         PrecisionTensor gram, PrecisionTensor gram_buf, bool tall,
         long R, long C, long M, long N, cudaStream_t stream) {
     int nblk = min((int)grid_size(numel(x.shape)), 256);
@@ -253,7 +315,7 @@ void muon_polar_project(Muon* m, PrecisionTensor x, PrecisionTensor x_buf,
 
     cublasOperation_t gram_op_a = tall ? CUBLAS_OP_T : CUBLAS_OP_N;
     cublasOperation_t gram_op_b = tall ? CUBLAS_OP_N : CUBLAS_OP_T;
-    for (int i = 0; i < 5; ++i) {
+    for (int i = 0; i < muon_polar_iters; ++i) {
         PrecisionTensor& src = (i % 2 == 0) ? x : x_buf;
         PrecisionTensor& dst = (i % 2 == 0) ? x_buf : x;
         cublasGemmExDense(gram_op_a, gram_op_b, (int)M, (int)M, (int)N,
@@ -265,6 +327,8 @@ void muon_polar_project(Muon* m, PrecisionTensor x, PrecisionTensor x_buf,
             tall ? src.data : gram_buf.data, tall ? gram_buf.data : src.data, dst.data,
             stream, 1.0f, ns_coeffs[i][0]);
     }
+
+    return (muon_polar_iters % 2 == 0) ? x : x_buf;
 }
 
 PrecisionTensor aurora_polar_project(Muon* m, PrecisionTensor x, PrecisionTensor x_buf,
@@ -333,15 +397,20 @@ void muon_step(Muon* m, FloatTensor weights, PrecisionTensor grads, float max_gr
             long R = e.shape[0], C = ne / R;
             long M = min(R, C), N = max(R, C);
             bool tall = R > C;
+            bool wide = R < C;
             PrecisionTensor x = {.data = gc_ptr, .shape = {R, C}};
             PrecisionTensor x_buf = {.data = m->x_buf.data, .shape = {R, C}};
             PrecisionTensor orig_buf = {.data = m->orig_buf.data, .shape = {R, C}};
             PrecisionTensor gram = {.data = m->gram.data, .shape = {M, M}};
             PrecisionTensor gram_buf = {.data = m->gram_buf.data, .shape = {M, M}};
 
+            if (m->row_stats_ptr) {
+                muon_row_sq_stats<<<(int)N, 256, 0, stream>>>(
+                    m->row_stats_ptr, x.data, (int)N, (int)M, wide, MUON_ROW_STAT_PRE);
+            }
+
             if (m->aurora && R != C) {
                 puf_copy(&orig_buf, &x, stream);
-                bool wide = R < C;
                 aurora_init_row_scales<<<(int)N, 256, 0, stream>>>(
                     m->aurora_row_scale.data, orig_buf.data, (int)N, (int)M, wide, 1e-7f);
                 aurora_apply_row_scales<<<grid_size(ne), BLOCK_SIZE, 0, stream>>>(
@@ -361,8 +430,14 @@ void muon_step(Muon* m, FloatTensor weights, PrecisionTensor grads, float max_gr
                     m, x, x_buf, gram, gram_buf, tall, R, C, M, N, stream);
                 update_ptr = aurora_update.data;
             } else {
-                muon_polar_project(m, x, x_buf, gram, gram_buf, tall, R, C, M, N, stream);
-                update_ptr = x_buf.data;
+                PrecisionTensor muon_update = muon_polar_project(
+                    m, x, x_buf, gram, gram_buf, tall, R, C, M, N, stream);
+                update_ptr = muon_update.data;
+            }
+
+            if (m->row_stats_ptr) {
+                muon_row_sq_stats<<<(int)N, 256, 0, stream>>>(
+                    m->row_stats_ptr, update_ptr, (int)N, (int)M, wide, MUON_ROW_STAT_POST);
             }
 
             scale = sqrtf(fmaxf(1.0f, (float)R / (float)C));

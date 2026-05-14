@@ -22,6 +22,19 @@ static void assert_static_env_name_matches(void) {
     }
 }
 
+struct RowSqMoments {
+    float mean;
+    float cv;
+};
+
+static RowSqMoments row_sq_moments(float sum, float sum_sq, float count) {
+    if (count <= 0.0f) return RowSqMoments{0.0f, 0.0f};
+    float mean = sum / count;
+    if (mean <= 0.0f) return RowSqMoments{mean, 0.0f};
+    float var = fmaxf(0.0f, sum_sq / count - mean * mean);
+    return RowSqMoments{mean, sqrtf(var) / mean};
+}
+
 // Wrapper functions for Python bindings
 pybind11::dict puf_log(pybind11::object pufferl_obj) {
     auto& pufferl = pufferl_obj.cast<PuffeRL&>();
@@ -79,6 +92,30 @@ pybind11::dict puf_log(pybind11::object pufferl_obj) {
     perf_dict["train"] = train_total;
     memset(pufferl.profile.accum, 0, sizeof(pufferl.profile.accum));
     result["perf"] = perf_dict;
+
+    if (pufferl.hypers.aurora_row_stats && pufferl.muon.row_stats_ptr) {
+        pybind11::dict optimizer_dict;
+        float stats_host[MUON_STAT_COUNT];
+        cudaMemcpy(stats_host, pufferl.muon.row_stats_ptr,
+            sizeof(stats_host), cudaMemcpyDeviceToHost);
+        float row_count = stats_host[MUON_STAT_ROW_COUNT];
+        optimizer_dict["matrix_count"] = stats_host[MUON_STAT_MATRIX_COUNT];
+        optimizer_dict["row_count"] = row_count;
+        RowSqMoments pre = row_sq_moments(
+            stats_host[MUON_STAT_PRE_ROW_SQ_SUM],
+            stats_host[MUON_STAT_PRE_ROW_SQ_SUM_SQ],
+            row_count);
+        RowSqMoments post = row_sq_moments(
+            stats_host[MUON_STAT_POST_ROW_SQ_SUM],
+            stats_host[MUON_STAT_POST_ROW_SQ_SUM_SQ],
+            row_count);
+        optimizer_dict["pre_row_sq_mean"] = pre.mean;
+        optimizer_dict["pre_row_sq_cv"] = pre.cv;
+        optimizer_dict["post_row_sq_mean"] = post.mean;
+        optimizer_dict["post_row_sq_cv"] = post.cv;
+        cudaMemset(pufferl.muon.row_stats_ptr, 0, MUON_STAT_COUNT * sizeof(float));
+        result["optimizer"] = optimizer_dict;
+    }
 
     // Utilization
     pybind11::dict util_dict;
@@ -373,7 +410,10 @@ std::unique_ptr<PuffeRL> create_pufferl(py::dict args) {
     hypers.beta1 = get_config(train_kwargs, "beta1");
     hypers.beta2 = get_config(train_kwargs, "beta2");
     hypers.eps = get_config(train_kwargs, "eps");
+    hypers.weight_decay = get_config(train_kwargs, "weight_decay");
+    hypers.aurora_weight_decay = get_config(train_kwargs, "aurora_weight_decay");
     hypers.aurora = get_config(train_kwargs, "aurora");
+    hypers.aurora_row_stats = get_config(train_kwargs, "aurora_row_stats") > 0;
     // Training
     hypers.minibatch_size = get_config(train_kwargs, "minibatch_size");
     hypers.replay_ratio = get_config(train_kwargs, "replay_ratio");
@@ -552,7 +592,10 @@ PYBIND11_MODULE(_C, m) {
         .def_readwrite("beta1", &HypersT::beta1)
         .def_readwrite("beta2", &HypersT::beta2)
         .def_readwrite("eps", &HypersT::eps)
+        .def_readwrite("weight_decay", &HypersT::weight_decay)
+        .def_readwrite("aurora_weight_decay", &HypersT::aurora_weight_decay)
         .def_readwrite("aurora", &HypersT::aurora)
+        .def_readwrite("aurora_row_stats", &HypersT::aurora_row_stats)
         .def_readwrite("total_timesteps", &HypersT::total_timesteps)
         .def_readwrite("max_grad_norm", &HypersT::max_grad_norm)
         .def_readwrite("clip_coef", &HypersT::clip_coef)

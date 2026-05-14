@@ -88,6 +88,9 @@ typedef struct {
     bool anneal_lr;
     // Optimizer (Muon only — Adam removed)
     float beta1;
+    float weight_decay;
+    float aurora_weight_decay;
+    bool aurora_row_stats;
     // Training
     int minibatch_size;
     float replay_ratio;
@@ -1307,27 +1310,30 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
 
 extern "C" {
     struct InfernoEnv;
-    struct InfernoEnv* inferno_env_at(void* envs_void, int idx);
-    void inferno_env_enable_archive_mode(struct InfernoEnv* env, Archive* archive, int action_history_cap);
-    void inferno_env_disable_archive_mode(struct InfernoEnv* env);
-    void inferno_env_begin_archive_iteration(struct InfernoEnv* env, int parent_idx);
+    struct InfernoEnv* inferno_env_at(void* envs_void, int idx) __attribute__((weak));
+    void inferno_env_enable_archive_mode(
+        struct InfernoEnv* env, Archive* archive, int action_history_cap) __attribute__((weak));
+    void inferno_env_disable_archive_mode(struct InfernoEnv* env) __attribute__((weak));
+    void inferno_env_begin_archive_iteration(struct InfernoEnv* env, int parent_idx) __attribute__((weak));
     int inferno_env_flush_scratch_to_archive(
         struct InfernoEnv* env, const uint8_t* history,
-        int total_agents, int env_idx, size_t hidden_state_size);
-    int inferno_env_archive_scratch_count(const struct InfernoEnv* env);
-    int inferno_env_archive_scratch_dropped(const struct InfernoEnv* env);
-    size_t inferno_env_snapshot_bytes(void);
-    int inferno_env_obs_floats(void);
-    int inferno_env_register_root_cell(struct InfernoEnv* env, Archive* archive, const uint8_t* hidden_state);
-    void c_reset(struct InfernoEnv* env);
+        int total_agents, int env_idx, size_t hidden_state_size) __attribute__((weak));
+    int inferno_env_archive_scratch_count(const struct InfernoEnv* env) __attribute__((weak));
+    int inferno_env_archive_scratch_dropped(const struct InfernoEnv* env) __attribute__((weak));
+    size_t inferno_env_snapshot_bytes(void) __attribute__((weak));
+    int inferno_env_obs_floats(void) __attribute__((weak));
+    int inferno_env_register_root_cell(
+        struct InfernoEnv* env, Archive* archive, const uint8_t* hidden_state) __attribute__((weak));
+    void c_reset(struct InfernoEnv* env) __attribute__((weak));
     int inferno_env_build_demo_snapshot_ladder(
         struct InfernoEnv* env, const DemoTrajectory* demo,
-        DemoSnapshotLadder* out_ladder, DemoObsCache* out_obs_cache);
-    void inferno_env_set_phase2_ctx(struct InfernoEnv* env, Phase2Context* ctx, int env_idx);
-    void inferno_env_force_phase2_reset(struct InfernoEnv* env);
+        DemoSnapshotLadder* out_ladder, DemoObsCache* out_obs_cache) __attribute__((weak));
+    void inferno_env_set_phase2_ctx(
+        struct InfernoEnv* env, Phase2Context* ctx, int env_idx) __attribute__((weak));
+    void inferno_env_force_phase2_reset(struct InfernoEnv* env) __attribute__((weak));
     int inferno_env_validate_ladders(
         struct InfernoEnv* env, const DemoStore* store,
-        DemoSnapshotLadder* const* ladders, int* out_cursor_ticks);
+        DemoSnapshotLadder* const* ladders, int* out_cursor_ticks) __attribute__((weak));
 }
 
 /* ArchiveExploreStats: surface-level counters returned to the caller for logging. */

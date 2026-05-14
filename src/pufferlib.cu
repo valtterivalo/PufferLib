@@ -47,7 +47,8 @@ enum ProfileIdx {
     PROF_EVAL_GPU,
     PROF_EVAL_ENV,
     PROF_TRAIN_MISC,
-    PROF_TRAIN_FORWARD,
+    PROF_TRAIN_MODEL,
+    PROF_TRAIN_MUON,
     NUM_PROF,
 };
 
@@ -56,10 +57,11 @@ static const char* PROF_NAMES[NUM_PROF] = {
     "eval_gpu",
     "eval_env",
     "train_misc",
-    "train_forward",
+    "train_model",
+    "train_muon",
 };
 
-#define NUM_TRAIN_EVENTS 5
+#define NUM_TRAIN_EVENTS 6
 typedef struct {
     cudaEvent_t events[NUM_TRAIN_EVENTS];
     float accum[NUM_PROF];
@@ -286,7 +288,10 @@ typedef struct {
     float beta1;
     float beta2;
     float eps;
+    float weight_decay;
+    float aurora_weight_decay;
     bool aurora;
+    bool aurora_row_stats;
     // Training
     int minibatch_size;
     float replay_ratio;
@@ -1535,7 +1540,7 @@ void train_impl(PuffeRL& pufferl) {
         }
         profile_end(hypers.profile);
 
-        cudaEventRecord(pufferl.profile.events[3]);  // end misc / start forward
+        cudaEventRecord(pufferl.profile.events[3]);
         profile_begin("train_forward_backward", hypers.profile);
         if (pufferl.train_captured) {
             cudaGraphLaunch(pufferl.train_cudagraph, train_stream);
@@ -1570,6 +1575,7 @@ void train_impl(PuffeRL& pufferl) {
             policy_backward(&pufferl.policy, pufferl.weights, pufferl.train_activations,
                 grad_logits_puf, grad_logstd_puf, grad_values_puf, stream);
 
+            cudaEventRecord(pufferl.profile.events[4], stream);
             muon_step(&pufferl.muon, pufferl.master_weights, pufferl.grad_puf, hypers.max_grad_norm, stream);
             if (USE_BF16) {
                 int n = numel(pufferl.param_puf.shape);
@@ -1604,7 +1610,7 @@ void train_impl(PuffeRL& pufferl) {
                 (char*)rollouts.values.data, pufferl.prio_bufs.idx.data,
                 (const char*)graph.mb_newvalue.data, num_idx, row_bytes);
         }
-        cudaEventRecord(pufferl.profile.events[4]);  // end forward
+        cudaEventRecord(pufferl.profile.events[5]);
     }
     pufferl.epoch += 1;
 
@@ -1618,9 +1624,10 @@ void train_impl(PuffeRL& pufferl) {
         // In-loop misc (last iteration, representative) scaled by count
         cudaEventElapsedTime(&ms, pufferl.profile.events[2], pufferl.profile.events[3]);
         pufferl.profile.accum[PROF_TRAIN_MISC] += ms * total_minibatches;
-        // In-loop forward (last iteration, representative) scaled by count
         cudaEventElapsedTime(&ms, pufferl.profile.events[3], pufferl.profile.events[4]);
-        pufferl.profile.accum[PROF_TRAIN_FORWARD] += ms * total_minibatches;
+        pufferl.profile.accum[PROF_TRAIN_MODEL] += ms * total_minibatches;
+        cudaEventElapsedTime(&ms, pufferl.profile.events[4], pufferl.profile.events[5]);
+        pufferl.profile.accum[PROF_TRAIN_MUON] += ms * total_minibatches;
     }
 
 }
@@ -1807,8 +1814,9 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     pufferl->advantages_puf = {.shape = {total_agents, horizon}};
     alloc_register(acts, &pufferl->advantages_puf);
 
+    float effective_weight_decay = hypers.aurora ? hypers.aurora_weight_decay : hypers.weight_decay;
     muon_init(&pufferl->muon, params, hypers.lr, hypers.beta1, hypers.eps,
-        0.0, acts, hypers.aurora);
+        effective_weight_decay, acts, hypers.aurora, hypers.aurora_row_stats);
     pufferl->muon.nccl_comm = pufferl->nccl_comm;
     pufferl->muon.world_size = hypers.world_size;
 
@@ -1911,6 +1919,9 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
         cudaFree(saved_weights);
         cudaMemcpy(pufferl->muon.mb_puf.data, saved_momentum, wb_bytes, cudaMemcpyDeviceToDevice);
         cudaFree(saved_momentum);
+        if (pufferl->muon.row_stats_ptr) {
+            cudaMemset(pufferl->muon.row_stats_ptr, 0, MUON_STAT_COUNT * sizeof(float));
+        }
         if (USE_BF16) {
             int n = numel(pufferl->param_puf.shape);
             cast<<<grid_size(n), BLOCK_SIZE, 0, pufferl->default_stream>>>(

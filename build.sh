@@ -36,6 +36,10 @@ CLANG_WARN="\
     -Wno-error=array-parameter"
 
 PLATFORM="$(uname -s)"
+PYTHON_BIN="${PYTHON:-python}"
+if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
+    PYTHON_BIN=python3
+fi
 
 if [ -n "$DEBUG" ] || [ "$MODE" = "local" ]; then
     CLANG_OPT="-g -O0 $CLANG_WARN"
@@ -206,10 +210,10 @@ fi
 # Default: build _C.so with env statically linked
 # ============================================================================
 
-PYTHON_INCLUDE=$(python -c "import sysconfig; print(sysconfig.get_path('include'))")
-PYBIND_INCLUDE=$(python -c "import pybind11; print(pybind11.get_include())")
-NUMPY_INCLUDE=$(python -c "import numpy; print(numpy.get_include())")
-EXT_SUFFIX=$(python -c "import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX'))")
+PYTHON_INCLUDE=$("$PYTHON_BIN" -c "import sysconfig; print(sysconfig.get_path('include'))")
+PYBIND_INCLUDE=$("$PYTHON_BIN" -c "import pybind11; print(pybind11.get_include())")
+NUMPY_INCLUDE=$("$PYTHON_BIN" -c "import numpy; print(numpy.get_include())")
+EXT_SUFFIX=$("$PYTHON_BIN" -c "import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX'))")
 OUTPUT="pufferlib/_C${EXT_SUFFIX}"
 
 # Step 1: Static env library

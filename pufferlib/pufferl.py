@@ -119,7 +119,11 @@ def print_dashboard(args, model_size, flat_logs, clear=False, idx=[0],
     p.add_row(*fmt_perf('  Env', b2, delta, g('perf/eval_env'), b2, c2))
     p.add_row(*fmt_perf('Train', b1, delta, train, b2, c2))
     p.add_row(*fmt_perf('  Misc', b2, delta, g('perf/train_misc'), b2, c2))
-    p.add_row(*fmt_perf('  Forward', b2, delta, g('perf/train_forward'), b2, c2))
+    if 'perf/train_model' in flat_logs or 'perf/train_muon' in flat_logs:
+        p.add_row(*fmt_perf('  Model', b2, delta, g('perf/train_model'), b2, c2))
+        p.add_row(*fmt_perf('  Muon', b2, delta, g('perf/train_muon'), b2, c2))
+    elif 'perf/train_forward' in flat_logs:
+        p.add_row(*fmt_perf('  Forward', b2, delta, g('perf/train_forward'), b2, c2))
 
     l = Table(box=None, expand=True)
     l.add_column(f'{c1}Losses', justify="left", width=16)

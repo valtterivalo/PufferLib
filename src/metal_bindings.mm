@@ -483,6 +483,9 @@ static std::unique_ptr<PuffeRL> create_pufferl(py::dict args) {
     hypers.min_lr_ratio = get_config(train_kwargs, "min_lr_ratio");
     hypers.anneal_lr = get_config(train_kwargs, "anneal_lr");
     hypers.beta1 = get_config(train_kwargs, "beta1");
+    hypers.weight_decay = get_config(train_kwargs, "weight_decay");
+    hypers.aurora_weight_decay = get_config(train_kwargs, "aurora_weight_decay");
+    hypers.aurora_row_stats = get_config(train_kwargs, "aurora_row_stats") > 0;
     hypers.minibatch_size = get_config_positive_int(train_kwargs, "minibatch_size");
     hypers.replay_ratio = get_config(train_kwargs, "replay_ratio");
     hypers.total_timesteps = get_config_positive_long(train_kwargs, "total_timesteps");
@@ -717,6 +720,9 @@ PYBIND11_MODULE(_C, m) {
         .def_readwrite("min_lr_ratio", &HypersT::min_lr_ratio)
         .def_readwrite("anneal_lr", &HypersT::anneal_lr)
         .def_readwrite("beta1", &HypersT::beta1)
+        .def_readwrite("weight_decay", &HypersT::weight_decay)
+        .def_readwrite("aurora_weight_decay", &HypersT::aurora_weight_decay)
+        .def_readwrite("aurora_row_stats", &HypersT::aurora_row_stats)
         .def_readwrite("total_timesteps", &HypersT::total_timesteps)
         .def_readwrite("max_grad_norm", &HypersT::max_grad_norm)
         .def_readwrite("clip_coef", &HypersT::clip_coef)
