@@ -12,6 +12,13 @@
 
 namespace py = pybind11;
 
+static void cuda_check(cudaError_t err, const char* op) {
+    if (err != cudaSuccess) {
+        throw std::runtime_error(
+            std::string(op) + ": " + cudaGetErrorString(err));
+    }
+}
+
 static void assert_static_env_name_matches(void) {
     const char* binding_env_name = PUFFER_STRINGIFY(ENV_NAME);
     const char* static_env_name = get_static_env_name();
@@ -189,7 +196,10 @@ void save_weights(pybind11::object pufferl_obj, const std::string& path) {
     PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
     int64_t nbytes = numel(pufferl.master_weights.shape) * sizeof(float);
     std::vector<char> buf(nbytes);
-    cudaMemcpy(buf.data(), pufferl.master_weights.data, nbytes, cudaMemcpyDeviceToHost);
+    cuda_check(
+        cudaMemcpy(buf.data(), pufferl.master_weights.data, nbytes,
+            cudaMemcpyDeviceToHost),
+        "save_weights device-to-host copy");
     FILE* f = fopen(path.c_str(), "wb");
     if (!f) throw std::runtime_error("Failed to open " + path + " for writing");
     fwrite(buf.data(), 1, nbytes, f);
@@ -217,11 +227,18 @@ void load_weights(pybind11::object pufferl_obj, const std::string& path) {
         throw std::runtime_error("Failed to read weight file");
     }
     fclose(f);
-    cudaMemcpy(pufferl.master_weights.data, buf.data(), nbytes, cudaMemcpyHostToDevice);
+    cuda_check(
+        cudaMemcpy(pufferl.master_weights.data, buf.data(), nbytes,
+            cudaMemcpyHostToDevice),
+        "load_weights host-to-device copy");
     if (USE_BF16) {
         int n = numel(pufferl.param_puf.shape);
         cast<<<grid_size(n), BLOCK_SIZE, 0, pufferl.default_stream>>>(
             pufferl.param_puf.data, pufferl.master_weights.data, n);
+        cuda_check(cudaGetLastError(), "load_weights fp32-to-bf16 launch");
+        cuda_check(
+            cudaStreamSynchronize(pufferl.default_stream),
+            "load_weights fp32-to-bf16 sync");
     }
 }
 
@@ -249,8 +266,14 @@ void save_training_state(pybind11::object pufferl_obj, const std::string& path) 
     };
     std::vector<char> weights(nbytes);
     std::vector<char> momentum(nbytes);
-    cudaMemcpy(weights.data(), pufferl.master_weights.data, nbytes, cudaMemcpyDeviceToHost);
-    cudaMemcpy(momentum.data(), pufferl.muon.mb_puf.data, nbytes, cudaMemcpyDeviceToHost);
+    cuda_check(
+        cudaMemcpy(weights.data(), pufferl.master_weights.data, nbytes,
+            cudaMemcpyDeviceToHost),
+        "save_training_state weights device-to-host copy");
+    cuda_check(
+        cudaMemcpy(momentum.data(), pufferl.muon.mb_puf.data, nbytes,
+            cudaMemcpyDeviceToHost),
+        "save_training_state momentum device-to-host copy");
 
     FILE* f = fopen(path.c_str(), "wb");
     if (!f) throw std::runtime_error("Failed to open " + path + " for writing");
@@ -291,12 +314,22 @@ void load_training_state(pybind11::object pufferl_obj, const std::string& path) 
         throw std::runtime_error("Failed to read training state " + path);
     }
 
-    cudaMemcpy(pufferl.master_weights.data, weights.data(), nbytes, cudaMemcpyHostToDevice);
-    cudaMemcpy(pufferl.muon.mb_puf.data, momentum.data(), nbytes, cudaMemcpyHostToDevice);
+    cuda_check(
+        cudaMemcpy(pufferl.master_weights.data, weights.data(), nbytes,
+            cudaMemcpyHostToDevice),
+        "load_training_state weights host-to-device copy");
+    cuda_check(
+        cudaMemcpy(pufferl.muon.mb_puf.data, momentum.data(), nbytes,
+            cudaMemcpyHostToDevice),
+        "load_training_state momentum host-to-device copy");
     if (USE_BF16) {
         int n = numel(pufferl.param_puf.shape);
         cast<<<grid_size(n), BLOCK_SIZE, 0, pufferl.default_stream>>>(
             pufferl.param_puf.data, pufferl.master_weights.data, n);
+        cuda_check(cudaGetLastError(), "load_training_state fp32-to-bf16 launch");
+        cuda_check(
+            cudaStreamSynchronize(pufferl.default_stream),
+            "load_training_state fp32-to-bf16 sync");
     }
     pufferl.global_step = header.global_step;
     pufferl.epoch = header.epoch;
@@ -330,9 +363,14 @@ void load_anchor_weights(
     if (anchor_coef > 0.0) {
         if (!pufferl.anchor_weights.data) {
             pufferl.anchor_weights = {.shape = {num_weights}};
-            cudaMalloc(&pufferl.anchor_weights.data, nbytes);
+            cuda_check(
+                cudaMalloc(&pufferl.anchor_weights.data, nbytes),
+                "load_anchor_weights allocation");
         }
-        cudaMemcpy(pufferl.anchor_weights.data, buf.data(), nbytes, cudaMemcpyHostToDevice);
+        cuda_check(
+            cudaMemcpy(pufferl.anchor_weights.data, buf.data(), nbytes,
+                cudaMemcpyHostToDevice),
+            "load_anchor_weights host-to-device copy");
     }
     if (pufferl.hypers.parent_kl_coef > 0.0f || pufferl.hypers.parent_kl_log) {
         load_parent_policy_weights(pufferl, buf);
@@ -515,6 +553,8 @@ std::unique_ptr<PuffeRL> create_pufferl(py::dict args) {
     hypers.terminal_reset_state = get_config(train_kwargs, "terminal_reset_state");
     // Base-level config ([base] section becomes top-level in args)
     hypers.cudagraphs = get_config(args, "cudagraphs");
+    hypers.capture_train_graph = !args.contains("capture_train_graph") ||
+        args["capture_train_graph"].cast<bool>();
     hypers.profile = get_config(args, "profile");
     // Multi-GPU / device selection
     hypers.rank = get_config(args, "rank");
@@ -690,6 +730,7 @@ PYBIND11_MODULE(_C, m) {
         .def_readwrite("prio_beta0", &HypersT::prio_beta0)
         .def_readwrite("terminal_reset_state", &HypersT::terminal_reset_state)
         .def_readwrite("cudagraphs", &HypersT::cudagraphs)
+        .def_readwrite("capture_train_graph", &HypersT::capture_train_graph)
         .def_readwrite("profile", &HypersT::profile)
         .def_readwrite("rank", &HypersT::rank)
         .def_readwrite("world_size", &HypersT::world_size)

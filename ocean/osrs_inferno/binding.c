@@ -2574,6 +2574,12 @@ void my_log(Log* log, Dict* out) {
     dict_set(out, "damage_dealt", log->damage_dealt);
     dict_set(out, "damage_received", log->damage_received);
     dict_set(out, "episode_length", log->episode_length);
+    float damage_per_tick = log->episode_length > 0.0f
+        ? log->damage_dealt / log->episode_length : 0.0f;
+    dict_set(out, "damage_per_tick", damage_per_tick);
+    dict_set(out, "damage_per_100_ticks", damage_per_tick * 100.0f);
+    dict_set(out, "ticks_per_100_damage", log->damage_dealt > 0.0f
+        ? 100.0f * log->episode_length / log->damage_dealt : 0.0f);
     dict_set(out, "wins", log->wins);
     dict_set(out, "wave", log->wave);
     dict_set(out, "idle_ticks", log->idle_ticks);

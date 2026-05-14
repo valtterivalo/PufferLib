@@ -256,6 +256,8 @@ OSRS_INFERNO_WANDB_ENV_KEYS = frozenset({
     'env/damage_after_240_normal',
     'env/damage_after_300_normal',
     'env/damage_dealt',
+    'env/damage_per_100_ticks',
+    'env/damage_per_tick',
     'env/damage_received',
     'env/death_tick_normal',
     'env/deaths_to_jad',
@@ -315,6 +317,7 @@ OSRS_INFERNO_WANDB_ENV_KEYS = frozenset({
     'env/spark_damage_after_240_normal',
     'env/ticks_240_to_all_healers_dead_normal',
     'env/ticks_240_to_all_healers_tagged_normal',
+    'env/ticks_per_100_damage',
     'env/ticks_240_to_first_healer_attack_normal',
     'env/ticks_240_to_first_healer_tag_normal',
     'env/ticks_240_to_first_healer_target_normal',
@@ -862,6 +865,7 @@ def eval(env_name, args=None, load_path=None):
     '''Evaluate a trained policy. Supports both native and --slowly torch backends.'''
     args = args or load_config(env_name)
     args['reset_state'] = False
+    args['capture_train_graph'] = False
     args['train']['horizon'] = 1
     # Eval batches are total_agents*1, so cap minibatch to that to satisfy
     # the divisibility check. Training-time minibatch may be larger.
