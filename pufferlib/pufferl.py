@@ -865,7 +865,6 @@ def eval(env_name, args=None, load_path=None):
     '''Evaluate a trained policy. Supports both native and --slowly torch backends.'''
     args = args or load_config(env_name)
     args['reset_state'] = False
-    args['capture_train_graph'] = False
     args['train']['horizon'] = 1
     # Eval batches are total_agents*1, so cap minibatch to that to satisfy
     # the divisibility check. Training-time minibatch may be larger.

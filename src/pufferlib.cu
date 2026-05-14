@@ -328,7 +328,6 @@ typedef struct {
     bool reset_state;
     bool terminal_reset_state;
     int cudagraphs;
-    bool capture_train_graph;
     bool profile;
     // Multi-GPU
     int rank;
@@ -2498,7 +2497,7 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
         pufferl->rollout_captured = true;
 
         bool needs_parent_policy = hypers.parent_kl_coef > 0.0f || hypers.parent_kl_log;
-        if (hypers.capture_train_graph && !needs_parent_policy) {
+        if (!needs_parent_policy) {
             tl_stream = warmup_stream;
             for (int i = 0; i <= hypers.cudagraphs; i++) {
                 train_impl(*pufferl);

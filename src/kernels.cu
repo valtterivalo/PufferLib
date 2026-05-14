@@ -155,9 +155,18 @@ __device__ __forceinline__ float logaddexp(float a, float b) {
 
 __device__ __forceinline__ void copy_bytes(const char* __restrict__ src,
         char* __restrict__ dst, int src_row, int dst_row, int row_bytes) {
-    const int* soffset = (const int*)(src + (int64_t)src_row * row_bytes);
-    int* doffset = (int*)(dst + (int64_t)dst_row * row_bytes);
-    for (int i = threadIdx.x; i < row_bytes / 4; i += blockDim.x) {
+    const char* soffset = src + (int64_t)src_row * row_bytes;
+    char* doffset = dst + (int64_t)dst_row * row_bytes;
+    uintptr_t alignment = (uintptr_t)soffset | (uintptr_t)doffset | (uintptr_t)row_bytes;
+    if ((alignment & 3u) == 0) {
+        const int* src_i32 = (const int*)soffset;
+        int* dst_i32 = (int*)doffset;
+        for (int i = threadIdx.x; i < row_bytes / 4; i += blockDim.x) {
+            dst_i32[i] = src_i32[i];
+        }
+        return;
+    }
+    for (int i = threadIdx.x; i < row_bytes; i += blockDim.x) {
         doffset[i] = soffset[i];
     }
 }

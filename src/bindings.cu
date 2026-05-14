@@ -553,8 +553,6 @@ std::unique_ptr<PuffeRL> create_pufferl(py::dict args) {
     hypers.terminal_reset_state = get_config(train_kwargs, "terminal_reset_state");
     // Base-level config ([base] section becomes top-level in args)
     hypers.cudagraphs = get_config(args, "cudagraphs");
-    hypers.capture_train_graph = !args.contains("capture_train_graph") ||
-        args["capture_train_graph"].cast<bool>();
     hypers.profile = get_config(args, "profile");
     // Multi-GPU / device selection
     hypers.rank = get_config(args, "rank");
@@ -730,7 +728,6 @@ PYBIND11_MODULE(_C, m) {
         .def_readwrite("prio_beta0", &HypersT::prio_beta0)
         .def_readwrite("terminal_reset_state", &HypersT::terminal_reset_state)
         .def_readwrite("cudagraphs", &HypersT::cudagraphs)
-        .def_readwrite("capture_train_graph", &HypersT::capture_train_graph)
         .def_readwrite("profile", &HypersT::profile)
         .def_readwrite("rank", &HypersT::rank)
         .def_readwrite("world_size", &HypersT::world_size)
