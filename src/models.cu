@@ -28,7 +28,7 @@ typedef PrecisionTensor (*decoder_backward_fn)(void* weights, void* activations,
 typedef PrecisionTensor (*network_forward_fn)(void* weights, PrecisionTensor x,
     PrecisionTensor state, void* activations, cudaStream_t stream);
 typedef PrecisionTensor (*network_forward_train_fn)(void* weights, PrecisionTensor x,
-    PrecisionTensor state, void* activations, cudaStream_t stream);
+    PrecisionTensor state, PrecisionTensor reset, void* activations, cudaStream_t stream);
 typedef PrecisionTensor (*network_backward_fn)(void* weights,
     PrecisionTensor grad, void* activations, cudaStream_t stream);
 
@@ -141,6 +141,7 @@ struct PrefixScan {
     precision_t* combined_ptr = nullptr;
     precision_t* state_ptr = nullptr;
     precision_t* input_ptr = nullptr;  // (B, T, H) original input before projection (for highway gate)
+    precision_t* reset_ptr = nullptr;
     int B = 0, T = 0, H = 0;
     FloatTensor a_star, s_vals, log_values_buf;
     PrecisionTensor out, next_state;
@@ -233,6 +234,66 @@ __global__ void mingru_scan_forward(PrefixScan scan) {
 
     // Write timestep T to next_state (raw scan_result, no proj, for recurrence)
     next_state[bH + h] = from_float(scan_result);
+}
+
+__global__ void mingru_scan_forward_reset(PrefixScan scan) {
+    int T_seq = scan.T, H = scan.H, B = scan.B;
+    precision_t* __restrict__ out = scan.out.data;
+    precision_t* __restrict__ next_state = scan.next_state.data;
+    float* __restrict__ curr_buf = scan.a_star.data;
+    float* __restrict__ prev_buf = scan.s_vals.data;
+    const precision_t* __restrict__ combined = scan.combined_ptr;
+    const precision_t* __restrict__ state = scan.state_ptr;
+    const precision_t* __restrict__ input = scan.input_ptr;
+    const precision_t* __restrict__ reset = scan.reset_ptr;
+
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= B * H) {
+        return;
+    }
+
+    int b = idx / H;
+    int h = idx % H;
+    int bH = b * H;
+    int H3 = 3 * H;
+    int H2 = 2 * H;
+    int bHT = bH * T_seq;
+    int out_base = bHT + h;
+    int cbase = 3 * bHT;
+    int T_out = T_seq + 1;
+    int buf_base = b * T_out * H + h;
+
+    curr_buf[buf_base] = to_float(state[bH + h]);
+    prev_buf[buf_base] = to_float(state[bH + h]);
+
+    const precision_t* combined_h_base = &combined[cbase + h];
+    const precision_t* combined_g_base = &combined[cbase + H + h];
+    const precision_t* combined_p_base = &combined[cbase + H2 + h];
+
+    float prev = to_float(state[bH + h]);
+    for (int t = 0; t < T_seq; t++) {
+        if (to_float(reset[b * T_seq + t]) > 0.5f) {
+            prev = 0.0f;
+        }
+
+        int t_offset = t * H3;
+        int input_idx = out_base + t * H;
+        float hidden_val = to_float(combined_h_base[t_offset]);
+        float gate_val = to_float(combined_g_base[t_offset]);
+        float proj_val = to_float(combined_p_base[t_offset]);
+        float x_val = to_float(input[input_idx]);
+        float gate_sigmoid = sigmoid(gate_val);
+        float hidden_tilde = (hidden_val >= 0.0f) ? hidden_val + 0.5f : fast_sigmoid(hidden_val);
+        float curr = lerp(prev, hidden_tilde, gate_sigmoid);
+        float proj_sigmoid = sigmoid(proj_val);
+
+        out[input_idx] = from_float(proj_sigmoid * curr + (1.0f - proj_sigmoid) * x_val);
+        curr_buf[buf_base + (t + 1) * H] = curr;
+        prev_buf[buf_base + (t + 1) * H] = prev;
+        prev = curr;
+    }
+
+    next_state[bH + h] = from_float(prev);
 }
 
 // Reads sparse checkpoints from forward pass, recomputes intermediate values in chunks
@@ -383,6 +444,75 @@ __global__ void mingru_scan_backward(PrefixScan scan,
     float grad_z_0 = acc * __expf(z_0 - s_0);
 
     grad_state[state_idx] = from_float(grad_z_0 / to_float(state[state_idx]));
+}
+
+__global__ void mingru_scan_backward_reset(PrefixScan scan,
+        const precision_t* __restrict__ grad_out,
+        const precision_t* __restrict__ grad_next_state) {
+    int T_seq = scan.T, H = scan.H, B = scan.B;
+    precision_t* __restrict__ grad_combined = scan.grad_combined.data;
+    precision_t* __restrict__ grad_state = scan.grad_state.data;
+    precision_t* __restrict__ grad_input = scan.grad_input.data;
+    const precision_t* __restrict__ combined = scan.combined_ptr;
+    const precision_t* __restrict__ input = scan.input_ptr;
+    const precision_t* __restrict__ reset = scan.reset_ptr;
+    const float* __restrict__ curr_buf = scan.a_star.data;
+    const float* __restrict__ prev_buf = scan.s_vals.data;
+
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= B * H) {
+        return;
+    }
+
+    int b = idx / H;
+    int h = idx % H;
+    int bHT = b * H * T_seq;
+    int cbase = 3 * bHT;
+    int H3 = 3 * H;
+    int H2 = 2 * H;
+    int state_idx = b * H + h;
+    int out_base = bHT + h;
+    int T_out = T_seq + 1;
+    int buf_base = b * T_out * H + h;
+
+    const precision_t* combined_h_base = &combined[cbase + h];
+    const precision_t* combined_g_base = &combined[cbase + H + h];
+    const precision_t* combined_p_base = &combined[cbase + H2 + h];
+    precision_t* grad_combined_h_base = &grad_combined[cbase + h];
+    precision_t* grad_combined_g_base = &grad_combined[cbase + H + h];
+    precision_t* grad_combined_p_base = &grad_combined[cbase + H2 + h];
+
+    float grad_next = to_float(grad_next_state[state_idx]);
+    for (int t = T_seq - 1; t >= 0; t--) {
+        int t_offset = t * H3;
+        int input_idx = out_base + t * H;
+        float curr = curr_buf[buf_base + (t + 1) * H];
+        float prev = prev_buf[buf_base + (t + 1) * H];
+        float hidden_val = to_float(combined_h_base[t_offset]);
+        float gate_val = to_float(combined_g_base[t_offset]);
+        float proj_val = to_float(combined_p_base[t_offset]);
+        float x_val = to_float(input[input_idx]);
+        float gate_sigmoid = sigmoid(gate_val);
+        float hidden_tilde = (hidden_val >= 0.0f) ? hidden_val + 0.5f : fast_sigmoid(hidden_val);
+        float hidden_grad = (hidden_val >= 0.0f)
+            ? 1.0f
+            : hidden_tilde * (1.0f - hidden_tilde);
+        float proj_sigmoid = sigmoid(proj_val);
+        float grad_out_val = to_float(grad_out[input_idx]);
+        float grad_curr = grad_next + grad_out_val * proj_sigmoid;
+        float grad_proj = grad_out_val * (curr - x_val) * proj_sigmoid * (1.0f - proj_sigmoid);
+        float grad_gate = grad_curr * (hidden_tilde - prev) * gate_sigmoid * (1.0f - gate_sigmoid);
+        float grad_hidden = grad_curr * gate_sigmoid * hidden_grad;
+        float grad_prev = grad_curr * (1.0f - gate_sigmoid);
+
+        grad_input[input_idx] = from_float(grad_out_val * (1.0f - proj_sigmoid));
+        grad_combined_h_base[t_offset] = from_float(grad_hidden);
+        grad_combined_g_base[t_offset] = from_float(grad_gate);
+        grad_combined_p_base[t_offset] = from_float(grad_proj);
+        grad_next = (to_float(reset[b * T_seq + t]) > 0.5f) ? 0.0f : grad_prev;
+    }
+
+    grad_state[state_idx] = from_float(grad_next);
 }
 
 __global__ void sum_rows_to_precision_kernel(precision_t* __restrict__ dst,
@@ -719,7 +849,7 @@ static PrecisionTensor mingru_forward(void* w, PrecisionTensor x, PrecisionTenso
 }
 
 static PrecisionTensor mingru_forward_train(void* w, PrecisionTensor x, PrecisionTensor state,
-        void* activations, cudaStream_t stream) {
+        PrecisionTensor reset, void* activations, cudaStream_t stream) {
     MinGRUWeights* m = (MinGRUWeights*)w;
     MinGRUActivations* a = (MinGRUActivations*)activations;
     int B = x.shape[0];
@@ -730,7 +860,12 @@ static PrecisionTensor mingru_forward_train(void* w, PrecisionTensor x, Precisio
         a->scan_bufs[i].combined_ptr = a->combined_bufs[i].data;
         a->scan_bufs[i].state_ptr = state_i.data;
         a->scan_bufs[i].input_ptr = a->saved_inputs[i].data;
-        mingru_scan_forward<<<grid_size(B*m->hidden), BLOCK_SIZE, 0, stream>>>(a->scan_bufs[i]);
+        a->scan_bufs[i].reset_ptr = reset.data;
+        if (reset.data) {
+            mingru_scan_forward_reset<<<grid_size(B*m->hidden), BLOCK_SIZE, 0, stream>>>(a->scan_bufs[i]);
+        } else {
+            mingru_scan_forward<<<grid_size(B*m->hidden), BLOCK_SIZE, 0, stream>>>(a->scan_bufs[i]);
+        }
         x = a->scan_bufs[i].out;
     }
     return x;
@@ -739,10 +874,16 @@ static PrecisionTensor mingru_forward_train(void* w, PrecisionTensor x, Precisio
 static PrecisionTensor mingru_backward(void* w, PrecisionTensor grad, void* activations, cudaStream_t stream) {
     MinGRUWeights* m = (MinGRUWeights*)w;
     MinGRUActivations* a = (MinGRUActivations*)activations;
+    puf_zero(&a->grad_next_state, stream);
     for (int i = m->num_layers - 1; i >= 0; i--) {
         PrefixScan& scan = a->scan_bufs[i];
-        mingru_scan_backward<<<grid_size(scan.B*scan.H), BLOCK_SIZE, 0, stream>>>(
-            scan, grad.data, a->grad_next_state.data);
+        if (scan.reset_ptr) {
+            mingru_scan_backward_reset<<<grid_size(scan.B*scan.H), BLOCK_SIZE, 0, stream>>>(
+                scan, grad.data, a->grad_next_state.data);
+        } else {
+            mingru_scan_backward<<<grid_size(scan.B*scan.H), BLOCK_SIZE, 0, stream>>>(
+                scan, grad.data, a->grad_next_state.data);
+        }
         puf_mm_tn(&scan.grad_combined, &a->saved_inputs[i], &a->wgrad_scratch[i], stream);
         puf_mm_nn(&scan.grad_combined, &m->weights[i], &a->grad_input_buf, stream);
         int n = numel(scan.grad_input.shape);
@@ -787,10 +928,10 @@ PrecisionTensor policy_forward(Policy* p, PolicyWeights& w, PolicyActivations& a
 }
 
 PrecisionTensor policy_forward_train(Policy* p, PolicyWeights& w, PolicyActivations& activations,
-        PrecisionTensor x, PrecisionTensor state, cudaStream_t stream) {
+        PrecisionTensor x, PrecisionTensor state, PrecisionTensor reset, cudaStream_t stream) {
     int B = x.shape[0], TT = x.shape[1];
     PrecisionTensor h = p->encoder.forward(w.encoder, activations.encoder, *puf_squeeze(&x, 0), stream);
-    h = p->network.forward_train(w.network, *puf_unsqueeze(&h, 0, B, TT), state, activations.network, stream);
+    h = p->network.forward_train(w.network, *puf_unsqueeze(&h, 0, B, TT), state, reset, activations.network, stream);
     PrecisionTensor dec_out = p->decoder.forward(w.decoder, activations.decoder, *puf_squeeze(&h, 0), stream);
     return *puf_unsqueeze(&dec_out, 0, B, TT);
 }

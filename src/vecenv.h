@@ -1,19 +1,26 @@
-// vecenv.h - Static env binding: types + implementation
-// Types/declarations always available (for pufferlib.cu).
-// Implementations compiled only when OBS_SIZE is defined (by binding.c).
-
 #pragma once
 
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 #include <assert.h>
+#ifdef __APPLE__
+#include <dispatch/dispatch.h>
+#include <pthread/qos.h>
+#endif
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 #include "tensor.h"
+
+#define FLOAT 1
+#define INT 2
+#define UNSIGNED_CHAR 3
+#define DOUBLE 4
+#define CHAR 5
+#define PUFFER_ENV_LOG_DICT_CAPACITY 384
 
 // Dict types
 typedef struct {
@@ -35,6 +42,12 @@ static inline Dict* create_dict(int capacity) {
     return dict;
 }
 
+static inline void free_dict(Dict* dict) {
+    if (!dict) return;
+    free(dict->items);
+    free(dict);
+}
+
 static inline DictItem* dict_get_unsafe(Dict* dict, const char* key) {
     for (int i = 0; i < dict->size; i++) {
         if (strcmp(dict->items[i].key, key) == 0) {
@@ -46,25 +59,29 @@ static inline DictItem* dict_get_unsafe(Dict* dict, const char* key) {
 
 static inline DictItem* dict_get(Dict* dict, const char* key) {
     DictItem* item = dict_get_unsafe(dict, key);
-    if (item == NULL) printf("dict_get failed to find key: %s\n", key);
     assert(item != NULL);
     return item;
 }
 
 static inline void dict_set(Dict* dict, const char* key, double value) {
-    assert(dict->size < dict->capacity);
     DictItem* item = dict_get_unsafe(dict, key);
     if (item != NULL) {
         item->value = value;
         return;
+    }
+    if (dict->size >= dict->capacity) {
+        fprintf(stderr, "dict_set: capacity %d exceeded inserting key '%s'\n",
+                dict->capacity, key);
+        abort();
     }
     dict->items[dict->size].key = key;
     dict->items[dict->size].value = value;
     dict->size++;
 }
 
-// Forward declare CUDA stream type
+#ifndef CUDA_STREAM_T_DEFINED
 typedef struct CUstream_st* cudaStream_t;
+#endif
 
 // Threading state
 typedef struct StaticThreading StaticThreading;
@@ -116,9 +133,11 @@ void static_vec_omp_step(StaticVec* vec);
 void static_vec_seq_step(StaticVec* vec);
 void static_vec_render(StaticVec* vec, int env_id);
 void static_vec_read_profile(StaticVec* vec, float out[NUM_EVAL_PROF]);
+const char* get_static_env_name(void);
 
 // Env info
 int get_obs_size(void);
+int get_obs_type(void);  // legacy compat (Metal path)
 int get_num_atns(void);
 int* get_act_sizes(void);
 int get_num_act_sizes(void);
@@ -146,15 +165,33 @@ int my_put(void* env, Dict* kwargs);
 
 #ifdef OBS_SIZE
 
+#ifndef OBS_TENSOR_T
+  #if OBS_TYPE == FLOAT
+    #define OBS_TENSOR_T FloatTensor
+  #elif OBS_TYPE == UNSIGNED_CHAR
+    #define OBS_TENSOR_T ByteTensor
+  #elif OBS_TYPE == INT
+    #define OBS_TENSOR_T IntTensor
+  #else
+    #define OBS_TENSOR_T FloatTensor
+  #endif
+#endif
+
 static inline size_t obs_element_size(void) {
     OBS_TENSOR_T t;
     return sizeof(*t.data);
 }
 
-// Usually near the top, after any #includes
 #define _STRINGIFY(x)   #x
 #define  STRINGIFY(x)  _STRINGIFY(x)
+#ifndef ENV_NAME
+#define ENV_NAME unknown
+#endif
 const char dtype_symbol[] = STRINGIFY(OBS_TENSOR_T);
+
+const char* get_static_env_name(void) {
+    return STRINGIFY(ENV_NAME);
+}
 
 #include <omp.h>
 #include <stdatomic.h>
@@ -192,30 +229,29 @@ extern const char* cudaGetErrorString(cudaError_t);
 void my_init(Env* env, Dict* kwargs);
 void my_log(Log* log, Dict* out);
 
-#ifdef MY_VEC_STEP_RANGE
-void MY_VEC_STEP_RANGE(StaticVec* vec, int env_start, int env_count, int num_workers);
-#endif
-
-typedef struct StaticOMPArg StaticOMPArg;
 
 struct StaticThreading {
-    atomic_int* buffer_states;
     atomic_int shutdown;
     int num_threads;
     int num_buffers;
     pthread_t* threads;
     float* accum;  // [num_buffers * NUM_EVAL_PROF] per-buffer timing in ms
-    StaticOMPArg* thread_args;
+#ifdef __APPLE__
+    dispatch_semaphore_t* buf_ready;  // main signals -> worker wakes
+    dispatch_semaphore_t* buf_done;   // worker signals -> main wakes
+#else
+    atomic_int* buffer_states;  // spin-wait fallback for Linux/CUDA
+#endif
 };
 
-struct StaticOMPArg {
+typedef struct StaticOMPArg {
     StaticVec* vec;
     int buf;
     int horizon;
     void* ctx;
     net_callback_fn net_callback;
     thread_init_fn thread_init;
-};
+} StaticOMPArg;
 
 // OMP thread manager
 static void* static_omp_threadmanager(void* arg) {
@@ -232,21 +268,32 @@ static void* static_omp_threadmanager(void* arg) {
         thread_init(ctx, buf);
     }
 
+#ifdef __APPLE__
+    // pin rollout threads to P-cores for deterministic scheduling
+    pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+#endif
+
     int agents_per_buffer = vec->agents_per_buffer;
     int agent_start = buf * agents_per_buffer;
     int env_start = vec->buffer_env_starts[buf];
     int env_count = vec->buffer_env_counts[buf];
-    atomic_int* buffer_states = threading->buffer_states;
     int num_workers = threading->num_threads / vec->buffers;
     if (num_workers < 1) num_workers = 1;
 
-    printf("Num workers: %d\n", num_workers);
+    Env* envs = (Env*)vec->envs;
+
     while (true) {
+#ifdef __APPLE__
+        dispatch_semaphore_wait(threading->buf_ready[buf], DISPATCH_TIME_FOREVER);
+        if (atomic_load(&threading->shutdown)) return NULL;
+#else
+        atomic_int* buffer_states = threading->buffer_states;
         while (atomic_load(&buffer_states[buf]) != OMP_RUNNING) {
             if (atomic_load(&threading->shutdown)) {
                 return NULL;
             }
         }
+#endif
         cudaStream_t stream = vec->streams[buf];
 
         float* my_accum = &threading->accum[buf * NUM_EVAL_PROF];
@@ -268,15 +315,10 @@ static void* static_omp_threadmanager(void* arg) {
             memset(&vec->rewards[agent_start], 0, agents_per_buffer * sizeof(float));
             memset(&vec->terminals[agent_start], 0, agents_per_buffer * sizeof(float));
             clock_gettime(CLOCK_MONOTONIC, &t0);
-            #ifdef MY_VEC_STEP_RANGE
-            MY_VEC_STEP_RANGE(vec, env_start, env_count, num_workers);
-            #else
-            Env* envs = (Env*)vec->envs;
             #pragma omp parallel for schedule(static) num_threads(num_workers)
             for (int i = env_start; i < env_start + env_count; i++) {
                 c_step(&envs[i]);
             }
-            #endif
             clock_gettime(CLOCK_MONOTONIC, &t1);
             my_accum[EVAL_ENV_STEP] += (t1.tv_sec - t0.tv_sec) * 1000.0f + (t1.tv_nsec - t0.tv_nsec) / 1e6f;
 
@@ -297,26 +339,42 @@ static void* static_omp_threadmanager(void* arg) {
                 cudaMemcpyHostToDevice, stream);
         }
         cudaStreamSynchronize(stream);
+#ifdef __APPLE__
+        dispatch_semaphore_signal(threading->buf_done[buf]);
+#else
         atomic_store(&buffer_states[buf], OMP_WAITING);
+#endif
     }
 }
 
 void static_vec_omp_step(StaticVec* vec) {
     StaticThreading* threading = vec->threading;
-    for (int buf = 0; buf < vec->buffers; buf++) {
+#ifdef __APPLE__
+    for (int buf = 0; buf < vec->buffers; buf++)
+        dispatch_semaphore_signal(threading->buf_ready[buf]);
+    for (int buf = 0; buf < vec->buffers; buf++)
+        dispatch_semaphore_wait(threading->buf_done[buf], DISPATCH_TIME_FOREVER);
+#else
+    for (int buf = 0; buf < vec->buffers; buf++)
         atomic_store(&threading->buffer_states[buf], OMP_RUNNING);
-    }
-    for (int buf = 0; buf < vec->buffers; buf++) {
+    for (int buf = 0; buf < vec->buffers; buf++)
         while (atomic_load(&threading->buffer_states[buf]) != OMP_WAITING) {}
-    }
+#endif
 }
 
 void static_vec_seq_step(StaticVec* vec) {
     StaticThreading* threading = vec->threading;
+#ifdef __APPLE__
+    for (int buf = 0; buf < vec->buffers; buf++) {
+        dispatch_semaphore_signal(threading->buf_ready[buf]);
+        dispatch_semaphore_wait(threading->buf_done[buf], DISPATCH_TIME_FOREVER);
+    }
+#else
     for (int buf = 0; buf < vec->buffers; buf++) {
         atomic_store(&threading->buffer_states[buf], OMP_RUNNING);
         while (atomic_load(&threading->buffer_states[buf]) != OMP_WAITING) {}
     }
+#endif
 }
 
 // Optional: Initialize all envs at once (for shared state, variable agents per env, etc.)
@@ -443,7 +501,6 @@ StaticVec* create_static_vec(int total_agents, int num_buffers, int gpu, Dict* v
             env->terminals = vec->terminals + slot;
             buf_agent += env->num_agents;
         }
-        assert(buf_agent == vec->agents_per_buffer && "buffer agents don't match total agents");
     }
 
     return vec;
@@ -471,15 +528,23 @@ void create_static_threads(StaticVec* vec, int num_threads, int horizon,
     vec->threading = (StaticThreading*)calloc(1, sizeof(StaticThreading));
     vec->threading->num_threads = num_threads;
     vec->threading->num_buffers = vec->buffers;
-    vec->threading->buffer_states = (atomic_int*)calloc(vec->buffers, sizeof(atomic_int));
     vec->threading->threads = (pthread_t*)calloc(vec->buffers, sizeof(pthread_t));
     vec->threading->accum = (float*)calloc(vec->buffers * NUM_EVAL_PROF, sizeof(float));
+#ifdef __APPLE__
+    vec->threading->buf_ready = (dispatch_semaphore_t*)calloc(vec->buffers, sizeof(dispatch_semaphore_t));
+    vec->threading->buf_done = (dispatch_semaphore_t*)calloc(vec->buffers, sizeof(dispatch_semaphore_t));
+    for (int i = 0; i < vec->buffers; i++) {
+        vec->threading->buf_ready[i] = dispatch_semaphore_create(0);
+        vec->threading->buf_done[i] = dispatch_semaphore_create(0);
+    }
+#else
+    vec->threading->buffer_states = (atomic_int*)calloc(vec->buffers, sizeof(atomic_int));
+#endif
 
     // Streams are now created by pufferlib.cu (PyTorch-managed streams)
     // Do NOT create streams here - they've already been set up
 
-    vec->threading->thread_args = (StaticOMPArg*)calloc(vec->buffers, sizeof(StaticOMPArg));
-    StaticOMPArg* args = vec->threading->thread_args;
+    StaticOMPArg* args = (StaticOMPArg*)calloc(vec->buffers, sizeof(StaticOMPArg));
     for (int i = 0; i < vec->buffers; i++) {
         args[i].vec = vec;
         args[i].buf = i;
@@ -496,6 +561,11 @@ void static_vec_close(StaticVec* vec) {
 
     if (vec->threading != NULL) {
         atomic_store(&vec->threading->shutdown, 1);
+#ifdef __APPLE__
+        // Wake all waiting workers so they can check shutdown flag and exit.
+        for (int i = 0; i < vec->buffers; i++)
+            dispatch_semaphore_signal(vec->threading->buf_ready[i]);
+#endif
         for (int i = 0; i < vec->buffers; i++) {
             pthread_join(vec->threading->threads[i], NULL);
         }
@@ -509,10 +579,18 @@ void static_vec_close(StaticVec* vec) {
     my_vec_close(envs);
     free(vec->envs);
     if (vec->threading != NULL) {
+#ifdef __APPLE__
+        for (int i = 0; i < vec->buffers; i++) {
+            dispatch_release(vec->threading->buf_ready[i]);
+            dispatch_release(vec->threading->buf_done[i]);
+        }
+        free(vec->threading->buf_ready);
+        free(vec->threading->buf_done);
+#else
         free(vec->threading->buffer_states);
+#endif
         free(vec->threading->threads);
         free(vec->threading->accum);
-        free(vec->threading->thread_args);
         free(vec->threading);
     }
     free(vec->buffer_env_starts);
@@ -608,6 +686,18 @@ void static_vec_render(StaticVec* vec, int env_id) {
 }
 
 int get_obs_size(void) { return OBS_SIZE; }
+#ifdef OBS_TYPE
+int get_obs_type(void) { return OBS_TYPE; }
+#else
+int get_obs_type(void) {
+    if (strcmp(dtype_symbol, "FloatTensor") == 0) return FLOAT;
+    if (strcmp(dtype_symbol, "ByteTensor") == 0) return UNSIGNED_CHAR;
+    if (strcmp(dtype_symbol, "IntTensor") == 0) return INT;
+    if (strcmp(dtype_symbol, "LongTensor") == 0) return INT;
+    assert(false && "Unsupported observation tensor type");
+    return FLOAT;
+}
+#endif
 int get_num_atns(void) { return NUM_ATNS; }
 static int _act_sizes[] = ACT_SIZES;
 int* get_act_sizes(void) { return _act_sizes; }
@@ -615,12 +705,6 @@ int get_num_act_sizes(void) { return (int)(sizeof(_act_sizes) / sizeof(_act_size
 const char* get_obs_dtype(void) { return dtype_symbol; }
 size_t get_obs_elem_size(void) { return obs_element_size(); }
 
-#ifdef MY_VEC_STEP
-void MY_VEC_STEP(StaticVec* vec);
-static inline void _static_vec_env_step(StaticVec* vec) {
-    MY_VEC_STEP(vec);
-}
-#else
 static inline void _static_vec_env_step(StaticVec* vec) {
     memset(vec->rewards, 0, vec->total_agents * sizeof(float));
     memset(vec->terminals, 0, vec->total_agents * sizeof(float));
@@ -630,7 +714,6 @@ static inline void _static_vec_env_step(StaticVec* vec) {
         c_step(&envs[i]);
     }
 }
-#endif
 
 void gpu_vec_step(StaticVec* vec) {
     assert(vec->buffers == 1);

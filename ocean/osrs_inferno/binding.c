@@ -1,0 +1,3706 @@
+/**
+ * @file binding.c
+ * @brief Static-native binding for OSRS Inferno encounter.
+ *
+ * Bridges vecenv.h's contract (float actions, float terminals) with the
+ * Inferno encounter's vtable interface.
+ */
+
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
+#include <pthread.h>
+#include <stdint.h>
+#include <errno.h>
+#include <limits.h>
+#include <sys/stat.h>
+
+#include "osrs_env.h"  /* pulls in osrs_types, encounter, pvp stack */
+#include "replay_best.h"
+#include "src/archive.h"
+#include "src/demostore.h"
+#include "src/phase2_curriculum.h"
+
+/* encounter headers + render.h have many static helpers only used by the
+   standalone viewer (not c_render) — suppress unused-function noise. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
+#include "encounters/encounter_inferno.h"
+#include "encounters/encounter_zulrah.h"  /* render.h references ZulrahState */
+#include "osrs_render.h"
+#pragma GCC diagnostic pop
+
+#define INF_TOTAL_OBS (INF_NUM_OBS + INF_ACTION_MASK_SIZE)
+
+/* The struct tag is given explicitly so other translation units (like
+   src/metal_pufferlib.mm's archive driver) can forward-declare
+   `struct InfernoEnv;` and pass opaque pointers. */
+typedef struct InfernoEnv {
+    void* observations;
+    float* actions;
+    float* rewards;
+    float* terminals;
+    int num_agents;
+    int rng;
+    Log log;
+
+    EncounterState* enc_state;
+    int config_start_wave;  /* the start_wave from config (not curriculum override) */
+
+    int acts_staging[INF_NUM_ACTION_HEADS];
+    unsigned char term_staging;
+
+    /* best-episode replay recording: all envs buffer their current episode's actions.
+       on terminal, if the episode reached a new global best wave, flush to disk.
+       binary format: [int32 num_ticks] [uint32 rng_state] [num_heads int32 per tick] */
+    int* episode_actions;    /* buffer: episode_len * NUM_ATNS ints */
+    int episode_action_cap;  /* max ticks we can buffer */
+    int episode_action_len;  /* ticks buffered so far this episode */
+    uint32_t episode_rng_start; /* RNG state at start of current episode */
+    InfSnapshot episode_initial_snapshot;
+    int episode_initial_snapshot_valid;
+
+    /* replay playback: when PLAY_REPLAY=path is set, override the policy's
+       actions with the recorded ones. first env only (env 0). */
+    int* replay_actions;     /* full action buffer: num_ticks * NUM_ATNS */
+    int replay_num_ticks;
+    int replay_cursor;       /* ticks consumed so far */
+    uint32_t replay_rng_seed;
+    InfSnapshot replay_initial_snapshot;
+    int replay_has_initial_snapshot;
+    char replay_phase2_demo_path[1024];
+    uint8_t* replay_phase2_demo_snapshots;
+    int* replay_phase2_demo_snapshot_ticks;
+    int replay_phase2_demo_snapshot_cap;
+    int replay_phase2_demo_snapshot_count;
+    int replay_phase2_demo_written;
+    char live_phase2_demo_dir[1024];
+    int* live_phase2_demo_actions;
+    int live_phase2_demo_action_cap;
+    int live_phase2_demo_action_len;
+    uint8_t* live_phase2_demo_snapshots;
+    int* live_phase2_demo_snapshot_ticks;
+    uint8_t* live_phase2_demo_hidden_states;
+    uint8_t* live_phase2_demo_current_hidden;
+    uint32_t live_phase2_demo_hidden_state_size;
+    int live_phase2_demo_current_hidden_valid;
+    uint8_t* live_phase2_demo_first_forward_valid;
+    uint8_t* live_phase2_demo_first_forward_values;
+    uint8_t* live_phase2_demo_first_forward_obs_values;
+    uint32_t live_phase2_demo_first_forward_size;
+    uint32_t live_phase2_demo_first_forward_obs_size;
+    int live_phase2_demo_pending_forward_slot;
+    int live_phase2_demo_snapshot_cap;
+    int live_phase2_demo_snapshot_count;
+    int live_phase2_demo_last_capture_tick;
+
+    float ticks_per_second;
+    double last_step_time;
+
+    /* set by c_step on terminal-reset; consumed by c_render on its next call
+       to mirror the standalone viewer's post-reset cleanup (osrs_visual.c:186). */
+    int pending_render_reset;
+    int render_status_frames;
+    char render_status_text[ENCOUNTER_OVERLAY_STATUS_TEXT_LEN];
+
+    OsrsEnv render_env; /* minimal env wrapper for pvp_render() */
+
+    /* archive-based exploration mode (Go-Explore Phase 1).
+       When archive != NULL, c_step suppresses auto-reset on terminal and
+       captures cell-change events into a per-env scratch buffer. The driver
+       loop flushes scratch into the shared archive between rollouts. */
+    Archive* archive;
+    int archive_parent_idx;       /* archive entry restored at start of this iteration */
+    uint32_t archive_parent_rng;  /* RNG state captured immediately after restore */
+
+#define INF_ARCHIVE_SCRATCH_CAP 64
+    InfSnapshot archive_scratch_snap[INF_ARCHIVE_SCRATCH_CAP];
+    InfCellKey archive_scratch_key[INF_ARCHIVE_SCRATCH_CAP];
+    int archive_scratch_tick[INF_ARCHIVE_SCRATCH_CAP];
+    float archive_scratch_quality[INF_ARCHIVE_SCRATCH_CAP];
+    int archive_scratch_count;
+    int archive_scratch_dropped;  /* count of cells we missed because scratch was full */
+
+    /* per-iteration action history. allocated once per env when archive_mode
+       is enabled, freed on close. */
+    int* archive_action_history;     /* INF_NUM_ACTION_HEADS * archive_action_history_cap ints */
+    int archive_action_history_cap;  /* maximum ticks per iteration */
+    int archive_action_history_len;  /* ticks captured so far this iteration */
+
+    /* cell-change detection: cell key at the previous tick (initial: zeroed).
+       set non-zero by inferno_env_begin_archive_iteration before the first tick. */
+    InfCellKey archive_prev_key;
+    int archive_prev_key_valid;
+
+    uint8_t no_auto_reset;
+    Phase2Context* phase2_ctx;
+    int env_idx;
+    int phase2_diagnostic_phase;
+    int phase2_diagnostic_tries;
+    int phase2_max_player_attack_timer;
+    int phase2_diagnostic_burnin_slots;
+    FILE* post_240_trace_file;
+    int post_240_trace_id;
+    int post_240_trace_active;
+    int post_240_trace_rows;
+    int post_240_trace_truncated;
+} InfernoEnv;
+
+#define OBS_SIZE INF_TOTAL_OBS
+#define NUM_ATNS INF_NUM_ACTION_HEADS
+#define ACT_SIZES { ENCOUNTER_MOVE_ACTIONS, ENCOUNTER_OVERHEAD_DIM_PVE, INF_OBS_NPCS+1, 5, 2, 4, 3, 2, ENCOUNTER_OFFENSIVE_DIM }
+#define OBS_TENSOR_T FloatTensor
+#define Env InfernoEnv
+#define INF_RENDER_STATUS_FRAMES 180
+
+/* global best episode tracking */
+static pthread_mutex_t g_best_replay_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t g_live_phase2_demo_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t g_post_240_trace_mutex = PTHREAD_MUTEX_INITIALIZER;
+static InfernoReplayBest g_best_replay = {
+    .wave = 0,
+    .ticks = 999999,
+    .min_zuk_hp = 999999,
+    .rng_seed = UINT32_MAX,
+};
+static int g_live_phase2_demo_env_count = 0;
+static int g_live_phase2_demo_file_count = 0;
+static int g_post_240_trace_initialized = 0;
+static int g_post_240_trace_next_id = 0;
+static int g_post_240_trace_max = 0;
+static int g_post_240_trace_tick_cap = 512;
+static char g_post_240_trace_dir[1024] = "";
+
+static void inferno_replay_lock_best(void) {
+    if (pthread_mutex_lock(&g_best_replay_mutex) != 0) {
+        fprintf(stderr, "RECORD_REPLAY: cannot lock best replay state\n");
+        abort();
+    }
+}
+
+static void inferno_replay_unlock_best(void) {
+    if (pthread_mutex_unlock(&g_best_replay_mutex) != 0) {
+        fprintf(stderr, "RECORD_REPLAY: cannot unlock best replay state\n");
+        abort();
+    }
+}
+
+static void inferno_replay_write_or_abort(
+    const char* rpath,
+    int episode_action_len,
+    uint32_t episode_rng_start,
+    const int* episode_actions,
+    const InfSnapshot* initial_snapshot
+) {
+    FILE* fp = fopen(rpath, "wb");
+    if (!fp) {
+        fprintf(stderr, "record_best_replay_path: cannot open %s\n", rpath);
+        abort();
+    }
+
+    size_t expected_actions = (size_t)episode_action_len * NUM_ATNS;
+    int has_written_replay =
+        fwrite(&episode_action_len, sizeof(int), 1, fp) == 1 &&
+        fwrite(&episode_rng_start, sizeof(uint32_t), 1, fp) == 1 &&
+        fwrite(episode_actions, sizeof(int), expected_actions, fp) == expected_actions;
+    if (has_written_replay && initial_snapshot) {
+        has_written_replay =
+            fwrite(initial_snapshot, sizeof(*initial_snapshot), 1, fp) == 1;
+    }
+    if (!has_written_replay) {
+        fprintf(stderr, "RECORD_REPLAY: short write to %s\n", rpath);
+        fclose(fp);
+        abort();
+    }
+
+    if (fclose(fp) != 0) {
+        fprintf(stderr, "RECORD_REPLAY: cannot close %s\n", rpath);
+        abort();
+    }
+}
+
+static int inferno_read_int_env(const char* name, int default_value) {
+    const char* raw = getenv(name);
+    if (!raw || !raw[0]) return default_value;
+
+    char* end = NULL;
+    errno = 0;
+    long value = strtol(raw, &end, 10);
+    if (errno != 0 || end == raw || *end != '\0' || value < INT_MIN || value > INT_MAX) {
+        fprintf(stderr, "%s must be an integer, got %s\n", name, raw);
+        abort();
+    }
+    return (int)value;
+}
+
+static void inferno_post_240_trace_lock(void) {
+    if (pthread_mutex_lock(&g_post_240_trace_mutex) != 0) {
+        fprintf(stderr, "POST240_TRACE: cannot lock trace state\n");
+        abort();
+    }
+}
+
+static void inferno_post_240_trace_unlock(void) {
+    if (pthread_mutex_unlock(&g_post_240_trace_mutex) != 0) {
+        fprintf(stderr, "POST240_TRACE: cannot unlock trace state\n");
+        abort();
+    }
+}
+
+static void inferno_post_240_trace_init_once(void) {
+    inferno_post_240_trace_lock();
+    if (!g_post_240_trace_initialized) {
+        const char* dir = getenv("POST240_TRACE_DIR");
+        if (dir && dir[0]) {
+            int n = snprintf(g_post_240_trace_dir, sizeof(g_post_240_trace_dir), "%s", dir);
+            if (n < 0 || (size_t)n >= sizeof(g_post_240_trace_dir)) {
+                fprintf(stderr, "POST240_TRACE_DIR too long\n");
+                abort();
+            }
+            g_post_240_trace_max =
+                inferno_read_int_env("POST240_TRACE_MAX_EPISODES", 40);
+            g_post_240_trace_tick_cap =
+                inferno_read_int_env("POST240_TRACE_TICK_CAP", 512);
+            if (g_post_240_trace_max < 0) {
+                fprintf(stderr, "POST240_TRACE_MAX_EPISODES must be >= 0\n");
+                abort();
+            }
+            if (g_post_240_trace_tick_cap <= 0) {
+                fprintf(stderr, "POST240_TRACE_TICK_CAP must be > 0\n");
+                abort();
+            }
+            if (mkdir(g_post_240_trace_dir, 0775) != 0 && errno != EEXIST) {
+                fprintf(stderr, "POST240_TRACE: cannot create %s\n", g_post_240_trace_dir);
+                abort();
+            }
+        }
+        g_post_240_trace_initialized = 1;
+    }
+    inferno_post_240_trace_unlock();
+}
+
+static int inferno_post_240_trace_reserve_id(void) {
+    int id = -1;
+    inferno_post_240_trace_lock();
+    if (g_post_240_trace_dir[0] && g_post_240_trace_next_id < g_post_240_trace_max) {
+        id = g_post_240_trace_next_id++;
+    }
+    inferno_post_240_trace_unlock();
+    return id;
+}
+
+static int inferno_trace_find_zuk_hp(const InfernoState* s) {
+    int zuk_idx = inf_find_live_zuk_idx(s);
+    return zuk_idx >= 0 ? s->npcs[zuk_idx].hp : 0;
+}
+
+static void inferno_trace_pending_sparks(
+    const InfernoState* s,
+    int* count,
+    int* min_ticks
+) {
+    *count = 0;
+    *min_ticks = -1;
+    for (int i = 0; i < INF_MAX_PENDING_SPARKS; i++) {
+        if (!s->pending_sparks[i].active) continue;
+        (*count)++;
+        if (*min_ticks < 0 || s->pending_sparks[i].ticks_remaining < *min_ticks)
+            *min_ticks = s->pending_sparks[i].ticks_remaining;
+    }
+}
+
+static void inferno_trace_set_state(
+    const InfernoState* s,
+    int* active_count,
+    int* ranger_alive,
+    int* mager_alive,
+    int* meleer_alive,
+    int* ranger_hp,
+    int* mager_hp,
+    int* set_targeting_player,
+    int* set_targeting_shield,
+    int* min_attack_timer
+) {
+    *active_count = 0;
+    *ranger_alive = 0;
+    *mager_alive = 0;
+    *meleer_alive = 0;
+    *ranger_hp = 0;
+    *mager_hp = 0;
+    *set_targeting_player = 0;
+    *set_targeting_shield = 0;
+    *min_attack_timer = -1;
+    for (int i = 0; i < INF_MAX_NPCS; i++) {
+        const InfNPC* npc = &s->npcs[i];
+        if (!npc->active || npc->death_ticks != 0 || npc->hp <= 0)
+            continue;
+        if (!inf_npc_type_is_set_pressure(npc->type))
+            continue;
+        (*active_count)++;
+        if (*min_attack_timer < 0 || npc->attack_timer < *min_attack_timer)
+            *min_attack_timer = npc->attack_timer;
+        if (npc->type == INF_NPC_RANGER) {
+            *ranger_alive = 1;
+            *ranger_hp += npc->hp;
+        } else if (npc->type == INF_NPC_MAGER) {
+            *mager_alive = 1;
+            *mager_hp += npc->hp;
+        } else if (npc->type == INF_NPC_MELEER) {
+            *meleer_alive = 1;
+        }
+        if (npc->aggro_target < 0)
+            (*set_targeting_player)++;
+        else if (npc->aggro_target == s->zuk.shield_idx)
+            (*set_targeting_shield)++;
+    }
+}
+
+static void inferno_trace_jad_state(
+    const InfernoState* s,
+    int* alive,
+    int* next_style
+) {
+    *alive = 0;
+    *next_style = ATTACK_STYLE_NONE;
+    for (int i = 0; i < INF_MAX_NPCS; i++) {
+        const InfNPC* npc = &s->npcs[i];
+        if (!npc->active || npc->death_ticks != 0 || npc->hp <= 0)
+            continue;
+        if (npc->type != INF_NPC_JAD)
+            continue;
+        *alive = 1;
+        *next_style = npc->jad_attack_style;
+        return;
+    }
+}
+
+static void inferno_post_240_trace_close(Env* env, const char* reason) {
+    if (!env->post_240_trace_file)
+        return;
+
+    InfernoState* s = (InfernoState*)env->enc_state;
+    fprintf(env->post_240_trace_file,
+        "{\"kind\":\"end\",\"reason\":\"%s\",\"trace_id\":%d,"
+        "\"tick\":%d,\"winner\":%d,\"last_hit_by_type\":%d,"
+        "\"killed_by_zuk\":%d,\"killed_by_ranger\":%d,"
+        "\"killed_by_mager\":%d,\"killed_by_healer_zuk\":%d,"
+        "\"all_healers_dead_tick\":%d,\"rows\":%d,\"truncated\":%d}\n",
+        reason,
+        env->post_240_trace_id,
+        s->tick,
+        s->winner,
+        s->last_hit_by_type,
+        s->killed_by_type[INF_NPC_ZUK],
+        s->killed_by_type[INF_NPC_RANGER],
+        s->killed_by_type[INF_NPC_MAGER],
+        s->killed_by_type[INF_NPC_HEALER_ZUK],
+        s->tick_at_all_zuk_healers_dead,
+        env->post_240_trace_rows,
+        env->post_240_trace_truncated);
+    if (fclose(env->post_240_trace_file) != 0) {
+        fprintf(stderr, "POST240_TRACE: cannot close trace file\n");
+        abort();
+    }
+    env->post_240_trace_file = NULL;
+    env->post_240_trace_active = 0;
+}
+
+static void inferno_post_240_trace_open(Env* env, const InfernoState* s) {
+    if (env->post_240_trace_file)
+        return;
+    if (s->tick_at_le_240 < 0)
+        return;
+    if (s->start_wave != env->config_start_wave)
+        return;
+
+    int id = inferno_post_240_trace_reserve_id();
+    if (id < 0)
+        return;
+
+    char path[1400];
+    int n = snprintf(path, sizeof(path),
+        "%s/trace_%06d_env%04d_seed%u_oracle%d.jsonl",
+        g_post_240_trace_dir,
+        id,
+        env->env_idx,
+        env->episode_rng_start,
+        s->oracle_mode);
+    if (n < 0 || (size_t)n >= sizeof(path)) {
+        fprintf(stderr, "POST240_TRACE path too long\n");
+        abort();
+    }
+
+    env->post_240_trace_file = fopen(path, "w");
+    if (!env->post_240_trace_file) {
+        fprintf(stderr, "POST240_TRACE: cannot open %s\n", path);
+        abort();
+    }
+    env->post_240_trace_id = id;
+    env->post_240_trace_active = 1;
+    env->post_240_trace_rows = 0;
+    env->post_240_trace_truncated = 0;
+    fprintf(env->post_240_trace_file,
+        "{\"kind\":\"meta\",\"trace_id\":%d,\"env_idx\":%d,"
+        "\"rng_start\":%u,\"oracle_mode\":%d,\"start_wave\":%d,"
+        "\"tick_at_le_240\":%d,\"tick_at_zuk_healer_spawn\":%d}\n",
+        id,
+        env->env_idx,
+        env->episode_rng_start,
+        s->oracle_mode,
+        s->start_wave + 1,
+        s->tick_at_le_240,
+        s->tick_at_zuk_healer_spawn);
+}
+
+static void inferno_post_240_trace_write_healers(FILE* fp, const InfernoState* s) {
+    for (int h = 0; h < 4; h++) {
+        int obs_slot = 33 + h;
+        int npc_idx = s->current_obs_slots[obs_slot];
+        int alive = 0;
+        int hp = 0;
+        int tagged = 0;
+        int attackable = 0;
+        int in_range = 0;
+        int targeted = 0;
+        int hit_this_tick = 0;
+        int healing_zuk = 0;
+        int attack_timer = -1;
+        if (npc_idx >= 0 && npc_idx < INF_MAX_NPCS) {
+            const InfNPC* npc = &s->npcs[npc_idx];
+            alive = npc->active && npc->death_ticks == 0 && npc->hp > 0 &&
+                npc->type == INF_NPC_HEALER_ZUK;
+            if (alive) {
+                hp = npc->hp;
+                tagged = !inf_is_untagged_live_zuk_healer_slot(s, npc_idx);
+                attackable = inf_obs_slot_is_targetable(s, obs_slot);
+                in_range = inf_player_can_attack_npc_from_current_tile(s, npc_idx);
+                targeted = osrs_interaction_active(&s->interaction) &&
+                    s->interaction.target_slot == npc_idx;
+                hit_this_tick = s->player_attacked_this_tick &&
+                    s->player_attack_npc_idx == npc_idx;
+                healing_zuk = inf_is_untagged_live_zuk_healer_slot(s, npc_idx);
+                attack_timer = npc->attack_timer;
+            }
+        }
+        fprintf(fp,
+            ",\"h%d_alive\":%d,\"h%d_hp\":%d,\"h%d_tagged\":%d,"
+            "\"h%d_attackable\":%d,\"h%d_in_range\":%d,"
+            "\"h%d_targeted\":%d,\"h%d_hit\":%d,"
+            "\"h%d_healing_zuk\":%d,\"h%d_attack_timer\":%d",
+            h, alive,
+            h, hp,
+            h, tagged,
+            h, attackable,
+            h, in_range,
+            h, targeted,
+            h, hit_this_tick,
+            h, healing_zuk,
+            h, attack_timer);
+    }
+}
+
+static void inferno_post_240_trace_capture(Env* env, int is_term) {
+    InfernoState* s = (InfernoState*)env->enc_state;
+    if (!g_post_240_trace_initialized)
+        inferno_post_240_trace_init_once();
+    if (!g_post_240_trace_dir[0] || g_post_240_trace_max <= 0)
+        return;
+
+    inferno_post_240_trace_open(env, s);
+    if (!env->post_240_trace_file)
+        return;
+
+    if (env->post_240_trace_rows < g_post_240_trace_tick_cap) {
+        int spark_count = 0;
+        int spark_min_ticks = -1;
+        int set_count = 0;
+        int ranger_alive = 0;
+        int mager_alive = 0;
+        int meleer_alive = 0;
+        int ranger_hp = 0;
+        int mager_hp = 0;
+        int set_targeting_player = 0;
+        int set_targeting_shield = 0;
+        int set_attack_timer_min = -1;
+        int jad_alive = 0;
+        int jad_next_style = ATTACK_STYLE_NONE;
+        int shield_x = -1;
+        int shield_y = -1;
+        int shield_active = 0;
+        int target_slot = osrs_interaction_active(&s->interaction)
+            ? s->interaction.target_slot : -1;
+        int target_type = -1;
+        int target_attackable = 0;
+        int target_in_range = 0;
+        int target_is_healer = 0;
+        int target_is_set = 0;
+        int target_is_zuk = 0;
+        if (s->zuk.shield_idx >= 0 && s->zuk.shield_idx < INF_MAX_NPCS) {
+            const InfNPC* shield = &s->npcs[s->zuk.shield_idx];
+            shield_active = shield->active && shield->death_ticks == 0 && shield->hp > 0;
+            if (shield_active) {
+                shield_x = shield->x;
+                shield_y = shield->y;
+            }
+        }
+        if (target_slot >= 0 && target_slot < INF_MAX_NPCS) {
+            const InfNPC* target = &s->npcs[target_slot];
+            target_type = target->type;
+            target_attackable =
+                inf_obs_slot_is_targetable(s, inf_find_target_obs_slot(s, target_slot));
+            target_in_range = inf_player_can_attack_npc_from_current_tile(s, target_slot);
+            target_is_healer = target_type == INF_NPC_HEALER_ZUK;
+            target_is_set = inf_npc_type_is_set_pressure(target_type);
+            target_is_zuk = target_type == INF_NPC_ZUK;
+        }
+
+        inferno_trace_pending_sparks(s, &spark_count, &spark_min_ticks);
+        inferno_trace_set_state(s, &set_count, &ranger_alive, &mager_alive,
+            &meleer_alive, &ranger_hp, &mager_hp, &set_targeting_player,
+            &set_targeting_shield, &set_attack_timer_min);
+        inferno_trace_jad_state(s, &jad_alive, &jad_next_style);
+
+        fprintf(env->post_240_trace_file,
+            "{\"kind\":\"tick\",\"trace_id\":%d,\"tick\":%d,"
+            "\"tick_since_240\":%d,\"terminal\":%d,\"winner\":%d,"
+            "\"zuk_hp\":%d,\"zuk_hp_max_after_healer_spawn\":%.3f,"
+            "\"player_x\":%d,\"player_y\":%d,\"player_hp\":%d,"
+            "\"player_prayer\":%d,\"player_attack_timer\":%d,"
+            "\"active_overhead\":%d,\"offensive_prayer\":%d,"
+            "\"current_weapon\":%d,\"brews\":%d,\"restores\":%d,"
+            "\"shield_x\":%d,\"shield_y\":%d,\"shield_dir\":%d,"
+            "\"shield_freeze\":%d,\"shield_active\":%d,"
+            "\"behind_shield\":%d,\"offshield_after_240\":%d,"
+            "\"pending_spark_count\":%d,\"pending_spark_min_ticks\":%d,"
+            "\"spark_damage_this_tick\":%.3f,"
+            "\"set_alive_count\":%d,\"set_ranger_alive\":%d,"
+            "\"set_mager_alive\":%d,\"set_meleer_alive\":%d,"
+            "\"set_ranger_hp\":%d,\"set_mager_hp\":%d,"
+            "\"set_targeting_player\":%d,\"set_targeting_shield\":%d,"
+            "\"set_attack_timer_min\":%d,"
+            "\"jad_alive\":%d,\"jad_attack_style_next\":%d,"
+            "\"policy_move\":%d,\"policy_prayer\":%d,\"policy_target\":%d,"
+            "\"policy_gear\":%d,\"policy_eat\":%d,\"policy_potion\":%d,"
+            "\"policy_spell\":%d,\"policy_spec\":%d,\"policy_offensive\":%d,"
+            "\"current_target_slot\":%d,\"current_target_type\":%d,"
+            "\"target_is_healer\":%d,\"target_is_set\":%d,\"target_is_zuk\":%d,"
+            "\"target_attackable\":%d,\"target_in_range\":%d,"
+            "\"actual_attack_fired\":%d,\"actual_attack_target\":%d,"
+            "\"hit_landed\":%d,\"hit_damage\":%d,"
+            "\"damage_zuk_this_tick\":%.3f,\"damage_set_this_tick\":%.3f,"
+            "\"damage_zuk_healers_this_tick\":%.3f,"
+            "\"total_zuk_healer_tags\":%d,\"total_zuk_healer_kills\":%d,"
+            "\"tick_at_first_zuk_healer_target\":%d,"
+            "\"tick_at_first_zuk_healer_attack\":%d,"
+            "\"tick_at_first_zuk_healer_tag\":%d,"
+            "\"tick_at_all_zuk_healers_tagged\":%d,"
+            "\"tick_at_all_zuk_healers_dead\":%d,"
+            "\"tick_at_first_zuk_hit_after_all_healers_dead\":%d",
+            env->post_240_trace_id,
+            s->tick,
+            s->tick_at_le_240 >= 0 ? s->tick - s->tick_at_le_240 : -1,
+            is_term,
+            s->winner,
+            inferno_trace_find_zuk_hp(s),
+            s->zuk_hp_max_after_healer_spawn,
+            s->player.x,
+            s->player.y,
+            s->player.current_hitpoints,
+            s->player.current_prayer,
+            s->player.attack_timer,
+            s->player.prayer,
+            s->player.offensive_prayer,
+            s->weapon_set,
+            s->player.brew_doses,
+            s->player.restore_doses,
+            shield_x,
+            shield_y,
+            s->zuk.shield_dir,
+            s->zuk.shield_freeze,
+            shield_active,
+            inf_player_behind_zuk_shield_now(s),
+            s->offshield_ticks_after_240,
+            spark_count,
+            spark_min_ticks,
+            s->spark_damage_this_tick,
+            set_count,
+            ranger_alive,
+            mager_alive,
+            meleer_alive,
+            ranger_hp,
+            mager_hp,
+            set_targeting_player,
+            set_targeting_shield,
+            set_attack_timer_min,
+            jad_alive,
+            jad_next_style,
+            env->acts_staging[INF_HEAD_MOVE],
+            env->acts_staging[INF_HEAD_PRAYER],
+            env->acts_staging[INF_HEAD_TARGET],
+            env->acts_staging[INF_HEAD_GEAR],
+            env->acts_staging[INF_HEAD_EAT],
+            env->acts_staging[INF_HEAD_POTION],
+            env->acts_staging[INF_HEAD_SPELL],
+            env->acts_staging[INF_HEAD_SPEC],
+            env->acts_staging[INF_HEAD_OFFENSIVE],
+            target_slot,
+            target_type,
+            target_is_healer,
+            target_is_set,
+            target_is_zuk,
+            target_attackable,
+            target_in_range,
+            s->player_attacked_this_tick,
+            s->player_attack_npc_idx,
+            s->player_attacked_this_tick && s->player_attack_dmg > 0,
+            s->player_attack_dmg,
+            s->damage_zuk_this_tick,
+            s->damage_set_this_tick,
+            s->damage_zuk_healers_this_tick,
+            s->total_zuk_healer_tags,
+            s->total_zuk_healer_kills,
+            s->tick_at_first_zuk_healer_target,
+            s->tick_at_first_zuk_healer_attack,
+            s->tick_at_first_zuk_healer_tag,
+            s->tick_at_all_zuk_healers_tagged,
+            s->tick_at_all_zuk_healers_dead,
+            s->tick_at_first_zuk_hit_after_all_healers_dead);
+        inferno_post_240_trace_write_healers(env->post_240_trace_file, s);
+        fprintf(env->post_240_trace_file, "}\n");
+        env->post_240_trace_rows++;
+    } else {
+        env->post_240_trace_truncated = 1;
+    }
+
+    if (is_term)
+        inferno_post_240_trace_close(env, "terminal");
+}
+
+static void inferno_phase2_demo_write_or_abort(
+    const char* path,
+    int num_ticks,
+    int num_snapshots,
+    uint32_t rng_seed,
+    float quality,
+    const uint8_t* snapshots,
+    const int* snapshot_ticks,
+    const int* actions,
+    const uint8_t* hidden_states,
+    uint32_t hidden_state_size
+) {
+    FILE* fp = fopen(path, "wb");
+    if (!fp) {
+        fprintf(stderr, "RECORD_PHASE2_DEMO: cannot open %s\n", path);
+        abort();
+    }
+
+    Phase2DemoHeader header = {
+        .magic = PHASE2_DEMO_MAGIC,
+        .version = PHASE2_DEMO_VERSION,
+        .num_ticks = num_ticks,
+        .num_atns = NUM_ATNS,
+        .rng_seed = rng_seed,
+        .quality = quality,
+        .snapshot_size = (uint32_t)sizeof(InfSnapshot),
+        .num_snapshots = num_snapshots,
+        .hidden_state_size = hidden_state_size,
+        .reserved = 0,
+    };
+
+    size_t snapshot_bytes = (size_t)num_snapshots * sizeof(InfSnapshot);
+    size_t action_count = (size_t)num_ticks * NUM_ATNS;
+    size_t hidden_bytes = (size_t)num_snapshots * (size_t)hidden_state_size;
+    int ok =
+        fwrite(&header, sizeof(header), 1, fp) == 1 &&
+        fwrite(snapshots, 1, snapshot_bytes, fp) == snapshot_bytes &&
+        fwrite(snapshot_ticks, sizeof(int), (size_t)num_snapshots, fp) ==
+            (size_t)num_snapshots &&
+        fwrite(actions, sizeof(int), action_count, fp) == action_count;
+    if (ok && hidden_state_size > 0) {
+        ok = hidden_states &&
+            fwrite(hidden_states, 1, hidden_bytes, fp) == hidden_bytes;
+    }
+    if (!ok) {
+        fprintf(stderr, "RECORD_PHASE2_DEMO: short write to %s\n", path);
+        fclose(fp);
+        abort();
+    }
+
+    if (fclose(fp) != 0) {
+        fprintf(stderr, "RECORD_PHASE2_DEMO: cannot close %s\n", path);
+        abort();
+    }
+}
+
+static int inferno_live_phase2_demo_reserve_env(int max_envs) {
+    if (pthread_mutex_lock(&g_live_phase2_demo_mutex) != 0) {
+        fprintf(stderr, "RECORD_LIVE_PHASE2_DEMO: cannot lock state\n");
+        abort();
+    }
+    int env_id = g_live_phase2_demo_env_count++;
+    if (pthread_mutex_unlock(&g_live_phase2_demo_mutex) != 0) {
+        fprintf(stderr, "RECORD_LIVE_PHASE2_DEMO: cannot unlock state\n");
+        abort();
+    }
+    return env_id < max_envs;
+}
+
+static int inferno_live_phase2_demo_reserve_file(int max_files) {
+    if (pthread_mutex_lock(&g_live_phase2_demo_mutex) != 0) {
+        fprintf(stderr, "RECORD_LIVE_PHASE2_DEMO: cannot lock state\n");
+        abort();
+    }
+    int file_id = -1;
+    if (g_live_phase2_demo_file_count < max_files)
+        file_id = g_live_phase2_demo_file_count++;
+    if (pthread_mutex_unlock(&g_live_phase2_demo_mutex) != 0) {
+        fprintf(stderr, "RECORD_LIVE_PHASE2_DEMO: cannot unlock state\n");
+        abort();
+    }
+    return file_id;
+}
+
+static int inferno_env_live_phase2_demo_matches(const InfernoState* s) {
+    for (int phase = INF_HEALER_DIAG_PRE_HEALER;
+            phase < INF_HEALER_DIAG_COUNT; phase++) {
+        if (inf_healer_diagnostic_phase_matches(s, phase))
+            return 1;
+    }
+    return 0;
+}
+
+static int inferno_live_phase2_demo_wants_hidden(void) {
+    const char* text = getenv("RECORD_LIVE_PHASE2_DEMO_HIDDEN");
+    return text && text[0] && atoi(text) != 0;
+}
+
+static int inferno_live_phase2_demo_wants_first_forward(void) {
+    const char* text = getenv("RECORD_LIVE_PHASE2_DEMO_EQUIV");
+    return text && text[0] && atoi(text) != 0;
+}
+
+static void inferno_first_forward_write_or_abort(
+    const char* demo_path,
+    int num_snapshots,
+    const uint8_t* valid,
+    const uint8_t* values,
+    uint32_t value_size,
+    const uint8_t* obs_values,
+    uint32_t obs_size
+) {
+    char path[1200];
+    int n = snprintf(path, sizeof(path), "%s.ffwd", demo_path);
+    if (n < 0 || (size_t)n >= sizeof(path)) {
+        fprintf(stderr, "RECORD_LIVE_PHASE2_DEMO_EQUIV: sidecar path too long\n");
+        abort();
+    }
+
+    FILE* fp = fopen(path, "wb");
+    if (!fp) {
+        fprintf(stderr, "RECORD_LIVE_PHASE2_DEMO_EQUIV: cannot open %s\n", path);
+        abort();
+    }
+
+    Phase2FirstForwardHeader header = {
+        .magic = PHASE2_FIRST_FORWARD_MAGIC,
+        .version = PHASE2_FIRST_FORWARD_VERSION,
+        .num_snapshots = num_snapshots,
+        .logits_value_size = value_size,
+        .obs_size = obs_size,
+        .reserved = {0, 0, 0},
+    };
+    size_t valid_bytes = (size_t)num_snapshots;
+    size_t value_bytes = (size_t)num_snapshots * (size_t)value_size;
+    size_t obs_bytes = (size_t)num_snapshots * (size_t)obs_size;
+    int ok =
+        fwrite(&header, sizeof(header), 1, fp) == 1 &&
+        fwrite(valid, 1, valid_bytes, fp) == valid_bytes &&
+        fwrite(values, 1, value_bytes, fp) == value_bytes &&
+        (obs_size == 0 || fwrite(obs_values, 1, obs_bytes, fp) == obs_bytes);
+    if (!ok) {
+        fprintf(stderr, "RECORD_LIVE_PHASE2_DEMO_EQUIV: short write to %s\n", path);
+        fclose(fp);
+        abort();
+    }
+    if (fclose(fp) != 0) {
+        fprintf(stderr, "RECORD_LIVE_PHASE2_DEMO_EQUIV: cannot close %s\n", path);
+        abort();
+    }
+}
+
+void inferno_env_store_live_recurrent_state(
+    Env* env,
+    const uint8_t* hidden_layer_major,
+    int num_layers,
+    size_t layer_stride_bytes,
+    size_t row_bytes,
+    int is_valid_for_next_forward
+) {
+    if (!env->live_phase2_demo_snapshots) return;
+    if (!hidden_layer_major || num_layers <= 0 || row_bytes == 0) {
+        fprintf(stderr, "RECORD_LIVE_PHASE2_DEMO_HIDDEN: bad hidden state input\n");
+        abort();
+    }
+    env->live_phase2_demo_current_hidden_valid = 0;
+    if (!is_valid_for_next_forward) return;
+
+    size_t hidden_state_size = (size_t)num_layers * row_bytes;
+    if (hidden_state_size > UINT32_MAX) {
+        fprintf(stderr, "RECORD_LIVE_PHASE2_DEMO_HIDDEN: hidden state too large\n");
+        abort();
+    }
+    if (env->live_phase2_demo_hidden_state_size != 0 &&
+            env->live_phase2_demo_hidden_state_size != hidden_state_size) {
+        fprintf(stderr,
+            "RECORD_LIVE_PHASE2_DEMO_HIDDEN: hidden size changed from %u to %zu\n",
+            env->live_phase2_demo_hidden_state_size, hidden_state_size);
+        abort();
+    }
+    if (env->live_phase2_demo_hidden_state_size == 0) {
+        env->live_phase2_demo_hidden_state_size = (uint32_t)hidden_state_size;
+        env->live_phase2_demo_current_hidden = (uint8_t*)calloc(1, hidden_state_size);
+        env->live_phase2_demo_hidden_states = (uint8_t*)calloc(
+            (size_t)env->live_phase2_demo_snapshot_cap, hidden_state_size);
+        if (!env->live_phase2_demo_current_hidden ||
+                !env->live_phase2_demo_hidden_states) {
+            fprintf(stderr, "RECORD_LIVE_PHASE2_DEMO_HIDDEN: out of memory\n");
+            abort();
+        }
+    }
+
+    for (int layer = 0; layer < num_layers; layer++) {
+        memcpy(
+            env->live_phase2_demo_current_hidden + (size_t)layer * row_bytes,
+            hidden_layer_major + (size_t)layer * layer_stride_bytes,
+            row_bytes);
+    }
+    env->live_phase2_demo_current_hidden_valid = 1;
+}
+
+void inferno_env_store_live_first_forward(
+    Env* env,
+    const uint8_t* obs,
+    size_t obs_size,
+    const uint8_t* logits_value,
+    size_t logits_value_size
+) {
+    if (!env->live_phase2_demo_snapshots ||
+            !inferno_live_phase2_demo_wants_first_forward())
+        return;
+    if (env->live_phase2_demo_pending_forward_slot < 0)
+        return;
+    if (!logits_value || logits_value_size == 0 || logits_value_size > UINT32_MAX ||
+            !obs || obs_size == 0 || obs_size > UINT32_MAX) {
+        fprintf(stderr, "RECORD_LIVE_PHASE2_DEMO_EQUIV: bad first-forward payload\n");
+        abort();
+    }
+    if (env->live_phase2_demo_first_forward_size != 0 &&
+            env->live_phase2_demo_first_forward_size != logits_value_size) {
+        fprintf(stderr,
+            "RECORD_LIVE_PHASE2_DEMO_EQUIV: first-forward size changed from %u to %zu\n",
+            env->live_phase2_demo_first_forward_size, logits_value_size);
+        abort();
+    }
+    if (env->live_phase2_demo_first_forward_obs_size != 0 &&
+            env->live_phase2_demo_first_forward_obs_size != obs_size) {
+        fprintf(stderr,
+            "RECORD_LIVE_PHASE2_DEMO_EQUIV: first-forward obs size changed from %u to %zu\n",
+            env->live_phase2_demo_first_forward_obs_size, obs_size);
+        abort();
+    }
+    if (env->live_phase2_demo_first_forward_size == 0) {
+        env->live_phase2_demo_first_forward_size = (uint32_t)logits_value_size;
+        env->live_phase2_demo_first_forward_obs_size = (uint32_t)obs_size;
+        env->live_phase2_demo_first_forward_valid = (uint8_t*)calloc(
+            (size_t)env->live_phase2_demo_snapshot_cap, 1);
+        env->live_phase2_demo_first_forward_values = (uint8_t*)calloc(
+            (size_t)env->live_phase2_demo_snapshot_cap, logits_value_size);
+        env->live_phase2_demo_first_forward_obs_values = (uint8_t*)calloc(
+            (size_t)env->live_phase2_demo_snapshot_cap, obs_size);
+        if (!env->live_phase2_demo_first_forward_valid ||
+                !env->live_phase2_demo_first_forward_values ||
+                !env->live_phase2_demo_first_forward_obs_values) {
+            fprintf(stderr, "RECORD_LIVE_PHASE2_DEMO_EQUIV: out of memory\n");
+            abort();
+        }
+    }
+
+    int slot = env->live_phase2_demo_pending_forward_slot;
+    if (slot < 0 || slot >= env->live_phase2_demo_snapshot_count ||
+            slot >= env->live_phase2_demo_snapshot_cap) {
+        fprintf(stderr, "RECORD_LIVE_PHASE2_DEMO_EQUIV: invalid pending slot %d\n", slot);
+        abort();
+    }
+    memcpy(
+        env->live_phase2_demo_first_forward_values +
+            (size_t)slot * (size_t)env->live_phase2_demo_first_forward_size,
+        logits_value,
+        logits_value_size);
+    memcpy(
+        env->live_phase2_demo_first_forward_obs_values +
+            (size_t)slot * (size_t)env->live_phase2_demo_first_forward_obs_size,
+        obs,
+        obs_size);
+    env->live_phase2_demo_first_forward_valid[slot] = 1;
+    env->live_phase2_demo_pending_forward_slot = -1;
+}
+
+void inferno_env_record_phase2_first_forward_compare(
+    Env* env,
+    float logit_l2,
+    float logit_max_abs,
+    float value_abs,
+    float obs_l2,
+    float obs_max_abs,
+    int allclose,
+    int obs_allclose
+) {
+    env->log.phase2_first_forward_checks_snapshot += 1.0f;
+    env->log.phase2_first_forward_logit_l2_snapshot_sum += logit_l2;
+    env->log.phase2_first_forward_logit_max_abs_snapshot_sum += logit_max_abs;
+    env->log.phase2_first_forward_value_abs_snapshot_sum += value_abs;
+    env->log.phase2_first_forward_obs_l2_snapshot_sum += obs_l2;
+    env->log.phase2_first_forward_obs_max_abs_snapshot_sum += obs_max_abs;
+    if (allclose)
+        env->log.phase2_first_forward_allclose_snapshot += 1.0f;
+    if (obs_allclose)
+        env->log.phase2_first_forward_obs_allclose_snapshot += 1.0f;
+}
+
+void inferno_env_record_phase2_hidden_restore_compare(
+    Env* env,
+    float l2,
+    float max_abs,
+    int allclose
+) {
+    env->log.phase2_hidden_restore_checks_snapshot += 1.0f;
+    env->log.phase2_hidden_restore_l2_snapshot_sum += l2;
+    env->log.phase2_hidden_restore_max_abs_snapshot_sum += max_abs;
+    if (allclose)
+        env->log.phase2_hidden_restore_allclose_snapshot += 1.0f;
+}
+
+static void inferno_env_live_phase2_demo_capture(Env* env) {
+    if (!env->live_phase2_demo_snapshots) return;
+    if (inferno_live_phase2_demo_wants_hidden() &&
+            !env->live_phase2_demo_current_hidden_valid)
+        return;
+    InfernoState* s = (InfernoState*)env->enc_state;
+    if (!inferno_env_live_phase2_demo_matches(s)) return;
+    if (s->tick == env->live_phase2_demo_last_capture_tick) return;
+    if (env->live_phase2_demo_snapshot_count >=
+            env->live_phase2_demo_snapshot_cap) return;
+    if (inferno_live_phase2_demo_wants_first_forward() &&
+            env->live_phase2_demo_pending_forward_slot >= 0) {
+        fprintf(stderr,
+            "RECORD_LIVE_PHASE2_DEMO_EQUIV: previous first-forward payload missing\n");
+        abort();
+    }
+
+    int slot = env->live_phase2_demo_snapshot_count++;
+    ENCOUNTER_INFERNO.snapshot(env->enc_state,
+        env->live_phase2_demo_snapshots +
+            (size_t)slot * sizeof(InfSnapshot));
+    env->live_phase2_demo_snapshot_ticks[slot] = s->tick;
+    if (env->live_phase2_demo_hidden_state_size > 0) {
+        memcpy(
+            env->live_phase2_demo_hidden_states +
+                (size_t)slot * (size_t)env->live_phase2_demo_hidden_state_size,
+            env->live_phase2_demo_current_hidden,
+            (size_t)env->live_phase2_demo_hidden_state_size);
+    } else if (inferno_live_phase2_demo_wants_hidden()) {
+        fprintf(stderr,
+            "RECORD_LIVE_PHASE2_DEMO_HIDDEN: snapshot captured before hidden state\n");
+        abort();
+    }
+    env->live_phase2_demo_last_capture_tick = s->tick;
+    if (inferno_live_phase2_demo_wants_first_forward())
+        env->live_phase2_demo_pending_forward_slot = slot;
+}
+
+static void inferno_env_live_phase2_demo_flush(Env* env) {
+    if (!env->live_phase2_demo_snapshots) return;
+    if (env->live_phase2_demo_snapshot_count <= 0) return;
+    if (!env->live_phase2_demo_actions || env->live_phase2_demo_action_len <= 0) {
+        fprintf(stderr, "RECORD_LIVE_PHASE2_DEMO: missing action history\n");
+        abort();
+    }
+
+    const char* max_files_text = getenv("RECORD_LIVE_PHASE2_DEMO_MAX_FILES");
+    int max_files = max_files_text && max_files_text[0] ? atoi(max_files_text) : 64;
+    if (max_files <= 0) max_files = 64;
+    int file_id = inferno_live_phase2_demo_reserve_file(max_files);
+    if (file_id < 0) return;
+
+    InfernoState* s = (InfernoState*)env->enc_state;
+    int num_ticks = env->live_phase2_demo_action_len;
+    int max_snapshot_tick = 0;
+    for (int i = 0; i < env->live_phase2_demo_snapshot_count; i++) {
+        if (env->live_phase2_demo_snapshot_ticks[i] > max_snapshot_tick)
+            max_snapshot_tick = env->live_phase2_demo_snapshot_ticks[i];
+    }
+    if (max_snapshot_tick >= num_ticks) {
+        fprintf(stderr,
+            "RECORD_LIVE_PHASE2_DEMO: snapshot tick %d lacks next action in %d ticks\n",
+            max_snapshot_tick, num_ticks);
+        abort();
+    }
+    if (inferno_live_phase2_demo_wants_first_forward()) {
+        if (env->live_phase2_demo_first_forward_size == 0 ||
+                !env->live_phase2_demo_first_forward_valid ||
+                !env->live_phase2_demo_first_forward_values ||
+                !env->live_phase2_demo_first_forward_obs_values) {
+            fprintf(stderr,
+                "RECORD_LIVE_PHASE2_DEMO_EQUIV: no first-forward payloads recorded\n");
+            abort();
+        }
+        for (int i = 0; i < env->live_phase2_demo_snapshot_count; i++) {
+            if (!env->live_phase2_demo_first_forward_valid[i]) {
+                fprintf(stderr,
+                    "RECORD_LIVE_PHASE2_DEMO_EQUIV: missing first-forward slot %d\n", i);
+                abort();
+            }
+        }
+    }
+
+    char path[1200];
+    float quality = ENCOUNTER_INFERNO.progress_score(env->enc_state);
+    int n = snprintf(path, sizeof(path), "%s/live_demo_%06d_q%.3f_t%d.bin",
+        env->live_phase2_demo_dir, file_id, quality, num_ticks);
+    if (n < 0 || (size_t)n >= sizeof(path)) {
+        fprintf(stderr, "RECORD_LIVE_PHASE2_DEMO: path too long\n");
+        abort();
+    }
+
+    inferno_phase2_demo_write_or_abort(
+        path,
+        num_ticks,
+        env->live_phase2_demo_snapshot_count,
+        s->rng_state,
+        quality,
+        env->live_phase2_demo_snapshots,
+        env->live_phase2_demo_snapshot_ticks,
+        env->live_phase2_demo_actions,
+        env->live_phase2_demo_hidden_states,
+        env->live_phase2_demo_hidden_state_size);
+    if (inferno_live_phase2_demo_wants_first_forward()) {
+        inferno_first_forward_write_or_abort(
+            path,
+            env->live_phase2_demo_snapshot_count,
+            env->live_phase2_demo_first_forward_valid,
+            env->live_phase2_demo_first_forward_values,
+            env->live_phase2_demo_first_forward_size,
+            env->live_phase2_demo_first_forward_obs_values,
+            env->live_phase2_demo_first_forward_obs_size);
+    }
+    fprintf(stderr, "RECORD_LIVE_PHASE2_DEMO: wrote %d snapshots to %s\n",
+        env->live_phase2_demo_snapshot_count, path);
+}
+
+static void inferno_env_live_phase2_demo_reset(Env* env) {
+    env->live_phase2_demo_action_len = 0;
+    env->live_phase2_demo_snapshot_count = 0;
+    env->live_phase2_demo_last_capture_tick = -1;
+    env->live_phase2_demo_current_hidden_valid = 0;
+    env->live_phase2_demo_pending_forward_slot = -1;
+    if (env->live_phase2_demo_first_forward_valid &&
+            env->live_phase2_demo_snapshot_cap > 0) {
+        memset(env->live_phase2_demo_first_forward_valid, 0,
+            (size_t)env->live_phase2_demo_snapshot_cap);
+    }
+}
+
+static void inferno_env_apply_phase2_reset(Env* env);
+
+static inline void inferno_env_write_obs_mask(Env* env) {
+    float* obs = (float*)env->observations;
+    ENCOUNTER_INFERNO.write_obs(env->enc_state, obs);
+    ENCOUNTER_INFERNO.write_mask(env->enc_state, obs + INF_NUM_OBS);
+}
+
+static inline void inferno_env_write_post_restore_state(Env* env) {
+    inferno_env_write_obs_mask(env);
+    env->rewards[0] = 0.0f;
+    env->term_staging = 0;
+    env->terminals[0] = 0.0f;
+}
+
+static inline void inferno_env_mark_episode_start(Env* env) {
+    env->episode_rng_start = ((InfernoState*)env->enc_state)->rng_state;
+}
+
+static int inferno_zuk_healers_resolved_20(const InfernoState* s) {
+    return s->tick_at_all_zuk_healers_dead >= 0 &&
+        s->tick - s->tick_at_all_zuk_healers_dead >= 20;
+}
+
+static int inferno_active_set_pressure_count(const InfernoState* s) {
+    int count = 0;
+    for (int i = 0; i < INF_MAX_NPCS; i++) {
+        const InfNPC* npc = &s->npcs[i];
+        if (!npc->active || npc->death_ticks != 0 || npc->hp <= 0)
+            continue;
+        if (inf_npc_type_is_set_pressure(npc->type))
+            count++;
+    }
+    return count;
+}
+
+static int inferno_env_phase2_success(
+    const Env* env,
+    const InfernoState* s,
+    int won,
+    float q_delta
+) {
+    if (won) return 1;
+    if (env->phase2_diagnostic_phase == INF_HEALER_DIAG_OFF)
+        return q_delta > env->phase2_ctx->success_q_delta;
+
+    const Phase2EnvState* es = &env->phase2_ctx->env_states[env->env_idx];
+    int ticks_after_healer_clear = s->tick_at_all_zuk_healers_dead >= 0
+        ? s->tick - s->tick_at_all_zuk_healers_dead : -1;
+    int active_set_count = inferno_active_set_pressure_count(s);
+    int set_pressure_decreased =
+        es->start_active_set_count > 0 &&
+        active_set_count < es->start_active_set_count;
+
+    switch ((InfHealerDiagnosticPhase)env->phase2_diagnostic_phase) {
+        case INF_HEALER_DIAG_H0_PRE_HEALER_TIGHT:
+        case INF_HEALER_DIAG_PRE_HEALER:
+        case INF_HEALER_DIAG_IMMEDIATE_HEALER:
+        case INF_HEALER_DIAG_PARTIAL_HEALER:
+            return inferno_zuk_healers_resolved_20(s);
+        case INF_HEALER_DIAG_H4_HEALER_OVERLAP:
+            return ticks_after_healer_clear >= 60 &&
+                (set_pressure_decreased ||
+                    s->damage_after_all_zuk_healers_dead >= 150.0f);
+        case INF_HEALER_DIAG_POST_HEALER_SET_ALIVE:
+        case INF_HEALER_DIAG_POST_HEALER:
+        case INF_HEALER_DIAG_POST_150:
+            return ticks_after_healer_clear >= 100 &&
+                (active_set_count == 0 ||
+                    s->damage_after_all_zuk_healers_dead >= 300.0f);
+        case INF_HEALER_DIAG_OFF:
+            return q_delta > env->phase2_ctx->success_q_delta;
+        case INF_HEALER_DIAG_COUNT:
+            return 0;
+    }
+
+    return 0;
+}
+
+static int inferno_terminal_shield_active(const InfernoState* s) {
+    int si = s->zuk.shield_idx;
+    return si >= 0 &&
+        s->npcs[si].active &&
+        s->npcs[si].death_ticks == 0 &&
+        s->npcs[si].hp > 0;
+}
+
+static int inferno_terminal_behind_shield(const InfernoState* s) {
+    if (!inferno_terminal_shield_active(s)) return 0;
+
+    int si = s->zuk.shield_idx;
+    int sx = s->npcs[si].x;
+    int sz = INF_NPC_STATS[INF_NPC_ZUK_SHIELD].size;
+    return s->player.x >= sx &&
+        s->player.x < sx + sz &&
+        s->player.y >= 41;
+}
+
+static void inferno_env_record_phase2_first_action_match(Env* env) {
+    if (!env->phase2_ctx) return;
+
+    Phase2EnvState* es = &env->phase2_ctx->env_states[env->env_idx];
+    if (!es->first_action_pending) return;
+    es->first_action_pending = 0;
+
+    if (es->demo_id < 0) return;
+    DemoTrajectory* demo = &env->phase2_ctx->store->demos[es->demo_id];
+    if (es->start_tick < 0 || es->start_tick >= demo->length_ticks) return;
+
+    const int* expected = demostore_actions_at(
+        env->phase2_ctx->store, es->demo_id, es->start_tick);
+    int head_matches = 0;
+    for (int h = 0; h < NUM_ATNS; h++) {
+        if (env->acts_staging[h] == expected[h])
+            head_matches++;
+    }
+
+    env->log.phase2_first_action_checks_snapshot += 1.0f;
+    env->log.phase2_first_action_head_matches_snapshot += (float)head_matches;
+    if (head_matches == NUM_ATNS)
+        env->log.phase2_first_action_exact_matches_snapshot += 1.0f;
+}
+
+void c_step(Env* env) {
+    int used_human_commands = 0;
+    RenderClient* render_client = (RenderClient*)env->render_env.client;
+
+    /* replay playback: if this env has a loaded replay, override policy actions */
+    if (env->replay_actions && env->replay_cursor < env->replay_num_ticks) {
+        int off = env->replay_cursor * NUM_ATNS;
+        for (int i = 0; i < NUM_ATNS; i++)
+            env->acts_staging[i] = env->replay_actions[off + i];
+        env->replay_cursor++;
+        if (render_client) {
+            human_input_clear_pending(&render_client->human_input);
+            human_input_clear_move(&render_client->human_input);
+            ENCOUNTER_INFERNO.put_int(env->enc_state, "player_dest_x", -1);
+            ENCOUNTER_INFERNO.put_int(env->enc_state, "player_dest_y", -1);
+            ENCOUNTER_INFERNO.put_int(env->enc_state, "human_command_mode", 0);
+        }
+    } else if (render_client && render_client->human_input.enabled &&
+               ENCOUNTER_INFERNO.step_human_commands) {
+        if (env->episode_actions && render_client->human_input.commands.count > 0) {
+            fprintf(stderr, "RECORD_REPLAY cannot record human command mode\n");
+            abort();
+        }
+        ENCOUNTER_INFERNO.step_human_commands(env->enc_state, &render_client->human_input);
+        used_human_commands = 1;
+    } else {
+        if (render_client) {
+            human_input_clear_pending(&render_client->human_input);
+            human_input_clear_move(&render_client->human_input);
+            ENCOUNTER_INFERNO.put_int(env->enc_state, "player_dest_x", -1);
+            ENCOUNTER_INFERNO.put_int(env->enc_state, "player_dest_y", -1);
+            ENCOUNTER_INFERNO.put_int(env->enc_state, "human_command_mode", 0);
+        }
+        for (int i = 0; i < NUM_ATNS; i++)
+            env->acts_staging[i] = (int)env->actions[i];
+    }
+
+    if (!used_human_commands)
+        inferno_env_record_phase2_first_action_match(env);
+
+    /* buffer actions for best-episode recording */
+    if (env->episode_actions && !used_human_commands) {
+        if (env->episode_action_len == 0) {
+            env->episode_rng_start = ((InfernoState*)env->enc_state)->rng_state;
+            ENCOUNTER_INFERNO.snapshot(
+                env->enc_state,
+                &env->episode_initial_snapshot);
+            env->episode_initial_snapshot_valid = 1;
+        }
+        if (env->episode_action_len < env->episode_action_cap) {
+            memcpy(&env->episode_actions[env->episode_action_len * NUM_ATNS],
+                   env->acts_staging, NUM_ATNS * sizeof(int));
+            env->episode_action_len++;
+        }
+    }
+
+    /* archive-exploration action capture. mirrors the replay buffer above but
+       lives only as long as the current iteration; reset by
+       inferno_env_begin_archive_iteration. */
+    if (env->archive && env->archive_action_history &&
+        !used_human_commands &&
+        env->archive_action_history_len < env->archive_action_history_cap) {
+        memcpy(&env->archive_action_history[env->archive_action_history_len * NUM_ATNS],
+               env->acts_staging, NUM_ATNS * sizeof(int));
+        env->archive_action_history_len++;
+    }
+    if (env->live_phase2_demo_actions && !used_human_commands &&
+            env->live_phase2_demo_action_len < env->live_phase2_demo_action_cap) {
+        memcpy(&env->live_phase2_demo_actions[
+                   env->live_phase2_demo_action_len * NUM_ATNS],
+               env->acts_staging, NUM_ATNS * sizeof(int));
+        env->live_phase2_demo_action_len++;
+    }
+
+    if (!used_human_commands)
+        ENCOUNTER_INFERNO.step(env->enc_state, env->acts_staging);
+
+    float* obs = (float*)env->observations;
+    ENCOUNTER_INFERNO.write_obs(env->enc_state, obs);
+    ENCOUNTER_INFERNO.write_mask(env->enc_state, obs + INF_NUM_OBS);
+
+    env->rewards[0] = ENCOUNTER_INFERNO.get_reward(env->enc_state);
+
+    int is_term = ENCOUNTER_INFERNO.is_terminal(env->enc_state);
+    env->term_staging = (unsigned char)is_term;
+    env->terminals[0] = (float)is_term;
+
+    inferno_post_240_trace_capture(env, is_term);
+
+    if (!is_term)
+        inferno_env_live_phase2_demo_capture(env);
+
+    if (env->replay_phase2_demo_snapshots && !env->replay_phase2_demo_written) {
+        if (env->replay_phase2_demo_snapshot_count >=
+                env->replay_phase2_demo_snapshot_cap) {
+            fprintf(stderr, "RECORD_PHASE2_DEMO: snapshot buffer exhausted\n");
+            abort();
+        }
+
+        int slot = env->replay_phase2_demo_snapshot_count++;
+        ENCOUNTER_INFERNO.snapshot(env->enc_state,
+            env->replay_phase2_demo_snapshots +
+                (size_t)slot * sizeof(InfSnapshot));
+        env->replay_phase2_demo_snapshot_ticks[slot] = env->replay_cursor;
+
+        if (is_term || env->replay_cursor >= env->replay_num_ticks) {
+            float quality = ENCOUNTER_INFERNO.progress_score(env->enc_state);
+            inferno_phase2_demo_write_or_abort(
+                env->replay_phase2_demo_path,
+                env->replay_num_ticks,
+                env->replay_phase2_demo_snapshot_count,
+                env->replay_rng_seed,
+                quality,
+                env->replay_phase2_demo_snapshots,
+                env->replay_phase2_demo_snapshot_ticks,
+                env->replay_actions,
+                NULL,
+                0);
+            env->replay_phase2_demo_written = 1;
+            fprintf(stderr, "RECORD_PHASE2_DEMO: wrote %d snapshots to %s\n",
+                env->replay_phase2_demo_snapshot_count,
+                env->replay_phase2_demo_path);
+        }
+    }
+
+    /* archive-exploration: if the post-step state lands in a different cell
+       than the previous tick's, capture (key, snapshot, quality) into the
+       per-env scratch buffer. flushed by inferno_env_flush_scratch_to_archive
+       after the rollout completes. */
+    if (env->archive) {
+        InfCellKey key;
+        ENCOUNTER_INFERNO.write_cell_key(env->enc_state, &key);
+
+        int key_changed = !env->archive_prev_key_valid ||
+            memcmp(&key, &env->archive_prev_key, sizeof(InfCellKey)) != 0;
+
+        if (key_changed) {
+            if (env->archive_scratch_count < INF_ARCHIVE_SCRATCH_CAP) {
+                int slot = env->archive_scratch_count++;
+                env->archive_scratch_key[slot] = key;
+                env->archive_scratch_tick[slot] = env->archive_action_history_len;
+                env->archive_scratch_quality[slot] =
+                    ENCOUNTER_INFERNO.progress_score(env->enc_state);
+                ENCOUNTER_INFERNO.snapshot(env->enc_state,
+                    &env->archive_scratch_snap[slot]);
+            } else {
+                env->archive_scratch_dropped++;
+            }
+            env->archive_prev_key = key;
+            env->archive_prev_key_valid = 1;
+        }
+    }
+
+    /* terminal-only logging: accumulate completed episode stats into env->log.
+       vecenv polls with static_vec_log() which sums across agents, divides by
+       total n, then clears. this gives proper per-completed-episode averages
+       instead of noisy mid-episode snapshots. */
+    if (is_term) {
+        InfernoState* s = (InfernoState*)env->enc_state;
+        inf_write_terminal_status_text(s, env->render_status_text,
+            sizeof(env->render_status_text));
+        env->render_status_frames =
+            env->render_status_text[0] != '\0' ? INF_RENDER_STATUS_FRAMES : 0;
+
+        /* only count episodes that match the configured start_wave.
+           curriculum agents (overridden wave) are excluded from metrics. */
+        if (s->start_wave != env->config_start_wave) goto skip_log;
+
+        env->log.episode_return += s->episode_return;
+        env->log.episode_length += (float)s->tick;
+        env->log.damage_dealt += s->total_damage_dealt;
+        env->log.zuk_healer_damage += s->total_zuk_healer_damage;
+        env->log.damage_received += s->total_damage_received;
+        env->log.hp_restored += s->total_hp_restored;
+        env->log.wins += (s->winner == 0) ? 1.0f : 0.0f;
+        env->log.wave += (float)s->wave;
+        env->log.prayer_correct += (float)s->total_prayer_correct;
+        env->log.prayer_total += (float)s->total_npc_attacks;
+        env->log.idle_ticks += (float)s->total_idle_ticks;
+        env->log.brews_used += (float)s->total_brews_used;
+        env->log.blood_healed += (float)s->total_blood_healed;
+        env->log.unavoidable_off_prayer += (float)s->total_unavoidable_off;
+        env->log.brews_remaining += (float)s->player.brew_doses;
+        env->log.restores_remaining += (float)s->player.restore_doses;
+        env->log.prayer_at_death += (float)s->player.current_prayer;
+        env->log.npc_kills += (float)s->total_npc_kills;
+        env->log.gear_switches += (float)s->total_gear_switches;
+        env->log.current_ranged += (float)s->player.current_ranged;
+        env->log.current_magic += (float)s->player.current_magic;
+        env->log.start_wave += (float)env->config_start_wave;
+
+        for (int t = 0; t < INF_NUM_NPC_TYPES; t++) {
+            env->log.prayer_correct_by_type[t] += (float)s->prayer_correct_by_type[t];
+            env->log.attacks_by_type[t] += (float)s->attacks_by_type[t];
+            env->log.dmg_from_type[t] += s->dmg_from_type[t];
+            env->log.killed_by_type[t] += (float)s->killed_by_type[t];
+        }
+
+        /* Zuk shield tracking */
+        env->log.behind_shield_pct += (s->total_zuk_ticks > 0)
+            ? (float)s->behind_shield_ticks / (float)s->total_zuk_ticks : 0.0f;
+
+        /* Zuk HP remaining at episode end */
+        {
+            float zhp = 1200.0f;
+            for (int n = 0; n < INF_MAX_NPCS; n++) {
+                if (s->npcs[n].type == INF_NPC_ZUK) {
+                    zhp = (float)s->npcs[n].hp;
+                    break;
+                }
+            }
+            if (s->winner == 0) zhp = 0.0f;
+            env->log.zuk_hp_remaining += zhp;
+        }
+        float min_zuk_hp_term = (s->winner == 0)
+            ? 0.0f
+            : (s->min_zuk_hp_seen > 0.0f ? s->min_zuk_hp_seen : 1200.0f);
+        env->log.min_zuk_hp_seen += min_zuk_hp_term;
+
+        env->log.n += 1.0f;
+
+        int terminal_shield_active = inferno_terminal_shield_active(s);
+        int terminal_behind_shield = inferno_terminal_behind_shield(s);
+        int from_snapshot = env->phase2_ctx &&
+            env->phase2_ctx->env_states[env->env_idx].demo_id >= 0;
+        if (from_snapshot) {
+            env->log.episode_return_snapshot += s->episode_return;
+            env->log.wins_snapshot += (s->winner == 0) ? 1.0f : 0.0f;
+            env->log.min_zuk_hp_snapshot += min_zuk_hp_term;
+            env->log.n_snapshot += 1.0f;
+            int won = (s->winner == 0);
+            if (min_zuk_hp_term <= 300.0f) env->log.count_min_hp_le_300_snapshot += 1.0f;
+            if (min_zuk_hp_term <= 240.0f) env->log.count_min_hp_le_240_snapshot += 1.0f;
+            if (min_zuk_hp_term <= 150.0f) env->log.count_min_hp_le_150_snapshot += 1.0f;
+            if (s->tick_at_le_300 >= 0) {
+                env->log.ticks_after_300_snapshot_sum +=
+                    (float)(s->tick - s->tick_at_le_300);
+                env->log.damage_after_300_snapshot_sum += s->damage_after_300;
+            }
+            if (s->tick_at_le_240 >= 0) {
+                env->log.ticks_after_240_snapshot_sum +=
+                    (float)(s->tick - s->tick_at_le_240);
+                env->log.damage_after_240_snapshot_sum += s->damage_after_240;
+            }
+            if (s->tick_at_le_150 >= 0) {
+                env->log.ticks_after_150_snapshot_sum +=
+                    (float)(s->tick - s->tick_at_le_150);
+                env->log.damage_after_150_snapshot_sum += s->damage_after_150;
+            }
+            if (s->tick_at_zuk_healer_spawn >= 0 || s->zuk.healer_spawned) {
+                env->log.count_healer_spawned_snapshot += 1.0f;
+                env->log.zuk_hp_max_after_healer_spawn_snapshot_sum +=
+                    s->zuk_hp_max_after_healer_spawn;
+            }
+            env->log.shield_tags_snapshot_sum += (float)s->total_shield_tags;
+            if (s->total_shield_tags >= 1)
+                env->log.count_shield_tags_ge_1_snapshot += 1.0f;
+            if (s->total_zuk_healer_tags >= 1)
+                env->log.count_zuk_healers_tagged_ge_1_snapshot += 1.0f;
+            if (s->total_zuk_healer_tags >= 2)
+                env->log.count_zuk_healers_tagged_ge_2_snapshot += 1.0f;
+            if (s->total_zuk_healer_tags >= 4)
+                env->log.count_zuk_healers_tagged_ge_4_snapshot += 1.0f;
+            if (s->total_zuk_healer_kills >= 1)
+                env->log.count_zuk_healers_killed_ge_1_snapshot += 1.0f;
+            if (s->total_zuk_healer_kills >= 2)
+                env->log.count_zuk_healers_killed_ge_2_snapshot += 1.0f;
+            if (s->total_zuk_healer_kills >= 4)
+                env->log.count_zuk_healers_killed_ge_4_snapshot += 1.0f;
+            if (s->tick_at_all_zuk_healers_dead >= 0) {
+                env->log.count_all_zuk_healers_dead_snapshot += 1.0f;
+                float post_healer_survival =
+                    (float)(s->tick - s->tick_at_all_zuk_healers_dead);
+                env->log.post_healer_survival_ticks_snapshot_sum +=
+                    post_healer_survival;
+                env->log.damage_after_all_zuk_healers_dead_snapshot_sum +=
+                    s->damage_after_all_zuk_healers_dead;
+                env->log.zuk_hp_at_all_zuk_healers_dead_snapshot_sum +=
+                    s->zuk_hp_at_all_zuk_healers_dead;
+                env->log.offshield_ticks_after_all_zuk_healers_dead_snapshot_sum +=
+                    (float)s->offshield_ticks_after_all_zuk_healers_dead;
+                if (post_healer_survival >= 20.0f || won)
+                    env->log.count_healer_resolved_20_snapshot += 1.0f;
+                if (s->damage_after_all_zuk_healers_dead > 0.0f)
+                    env->log.count_reengaged_zuk_after_healers_snapshot += 1.0f;
+                if (s->tick_at_first_zuk_hit_after_all_healers_dead >= 0) {
+                    env->log.ticks_all_healers_dead_to_first_zuk_hit_snapshot_sum +=
+                        (float)(s->tick_at_first_zuk_hit_after_all_healers_dead -
+                            s->tick_at_all_zuk_healers_dead);
+                }
+            }
+            if (s->total_zuk_healer_target_ticks >= 1)
+                env->log.count_zuk_healers_targeted_ge_1_snapshot += 1.0f;
+            if (s->total_zuk_healer_attack_fires >= 1)
+                env->log.count_zuk_healers_attacked_ge_1_snapshot += 1.0f;
+            if (s->total_zuk_healer_attackable_ticks >= 1)
+                env->log.count_zuk_healers_attackable_ge_1_snapshot += 1.0f;
+            if (s->total_zuk_healer_target_ticks >= 1) {
+                env->log.zuk_healer_target_cannot_attack_ticks_snapshot_sum +=
+                    (float)s->total_zuk_healer_cannot_attack_ticks;
+                env->log.zuk_healer_target_cooldown_ticks_snapshot_sum +=
+                    (float)s->total_zuk_healer_cooldown_ticks;
+                env->log.zuk_healer_target_out_of_range_ticks_snapshot_sum +=
+                    (float)s->total_zuk_healer_out_of_range_ticks;
+                env->log.zuk_healer_target_attackable_ticks_snapshot_sum +=
+                    (float)s->total_zuk_healer_attackable_ticks;
+            }
+            if (s->tick_at_le_240 >= 0) {
+                env->log.hp_restored_after_240_snapshot_sum +=
+                    s->hp_restored_after_240;
+                env->log.spark_damage_after_240_snapshot_sum +=
+                    s->spark_damage_after_240;
+                env->log.offshield_ticks_after_240_snapshot_sum +=
+                    (float)s->offshield_ticks_after_240;
+                if (s->tick_at_first_zuk_healer_target >= 0) {
+                    env->log.ticks_240_to_first_healer_target_snapshot_sum +=
+                        (float)(s->tick_at_first_zuk_healer_target - s->tick_at_le_240);
+                }
+                if (s->tick_at_first_zuk_healer_attack >= 0) {
+                    env->log.ticks_240_to_first_healer_attack_snapshot_sum +=
+                        (float)(s->tick_at_first_zuk_healer_attack - s->tick_at_le_240);
+                }
+                if (s->tick_at_first_zuk_healer_tag >= 0) {
+                    env->log.ticks_240_to_first_healer_tag_snapshot_sum +=
+                        (float)(s->tick_at_first_zuk_healer_tag - s->tick_at_le_240);
+                }
+                if (s->tick_at_all_zuk_healers_tagged >= 0) {
+                    env->log.ticks_240_to_all_healers_tagged_snapshot_sum +=
+                        (float)(s->tick_at_all_zuk_healers_tagged - s->tick_at_le_240);
+                }
+                if (s->tick_at_all_zuk_healers_dead >= 0) {
+                    env->log.ticks_240_to_all_healers_dead_snapshot_sum +=
+                        (float)(s->tick_at_all_zuk_healers_dead - s->tick_at_le_240);
+                }
+            }
+            if (!won) {
+                env->log.n_snapshot_died += 1.0f;
+                env->log.brews_remaining_snapshot_died += (float)s->player.brew_doses;
+                env->log.restores_remaining_snapshot_died += (float)s->player.restore_doses;
+                env->log.prayer_at_death_snapshot_died += (float)s->player.current_prayer;
+                if (terminal_shield_active)
+                    env->log.count_died_with_shield_active_snapshot += 1.0f;
+                if (terminal_behind_shield)
+                    env->log.count_died_behind_shield_snapshot += 1.0f;
+                for (int t = 0; t < INF_NUM_NPC_TYPES; t++)
+                    env->log.killed_by_type_snapshot[t] += (float)s->killed_by_type[t];
+
+                int zuk_healer_alive = 0;
+                for (int n = 0; n < INF_MAX_NPCS; n++) {
+                    if (s->npcs[n].hp <= 0) continue;
+                    if (s->npcs[n].type == INF_NPC_HEALER_ZUK)
+                        zuk_healer_alive = 1;
+                }
+                if (zuk_healer_alive)
+                    env->log.count_died_with_zuk_healer_alive_snapshot += 1.0f;
+                if (s->tick_at_le_240 >= 0) {
+                    env->log.count_died_after_240_snapshot += 1.0f;
+                    env->log.brews_remaining_after_240_death_snapshot_sum +=
+                        (float)s->player.brew_doses;
+                    env->log.restores_remaining_after_240_death_snapshot_sum +=
+                        (float)s->player.restore_doses;
+                    env->log.prayer_at_death_after_240_snapshot_sum +=
+                        (float)s->player.current_prayer;
+                    if (terminal_shield_active)
+                        env->log.count_died_after_240_shield_active_snapshot += 1.0f;
+                    if (terminal_behind_shield)
+                        env->log.count_died_after_240_behind_shield_snapshot += 1.0f;
+                    if (s->tick_at_all_zuk_healers_dead >= 0 ||
+                            s->total_zuk_healer_kills >= 4) {
+                        env->log.count_died_after_240_all_healers_dead_snapshot += 1.0f;
+                    } else if (s->total_zuk_healer_kills > 0) {
+                        env->log.count_died_after_240_some_healers_killed_snapshot += 1.0f;
+                    } else if (s->total_zuk_healer_tags > 0) {
+                        env->log.count_died_after_240_some_healers_tagged_snapshot += 1.0f;
+                    } else {
+                        env->log.count_died_after_240_never_tagged_healer_snapshot += 1.0f;
+                    }
+                }
+            }
+        } else {
+            env->log.episode_return_normal += s->episode_return;
+            env->log.wins_normal += (s->winner == 0) ? 1.0f : 0.0f;
+            env->log.min_zuk_hp_normal += min_zuk_hp_term;
+            env->log.n_normal += 1.0f;
+            int won = (s->winner == 0);
+            int phase_bucket = won ? 4
+                : (min_zuk_hp_term <= 300.0f) ? 3
+                : (min_zuk_hp_term <= 600.0f) ? 2
+                : (min_zuk_hp_term <= 900.0f) ? 1 : 0;
+            env->log.phase_reached_normal_sum += (float)phase_bucket;
+            if (!won) {
+                env->log.episode_length_normal_died += (float)s->tick;
+                env->log.n_normal_died += 1.0f;
+                env->log.brews_remaining_normal_died += (float)s->player.brew_doses;
+                env->log.restores_remaining_normal_died += (float)s->player.restore_doses;
+                env->log.prayer_at_death_normal_died += (float)s->player.current_prayer;
+                if (terminal_shield_active)
+                    env->log.count_died_with_shield_active_normal += 1.0f;
+                if (terminal_behind_shield)
+                    env->log.count_died_behind_shield_normal += 1.0f;
+                for (int t = 0; t < INF_NUM_NPC_TYPES; t++)
+                    env->log.killed_by_type_normal[t] += (float)s->killed_by_type[t];
+            }
+            if (min_zuk_hp_term <= 300.0f) env->log.count_min_hp_le_300_normal += 1.0f;
+            if (min_zuk_hp_term <= 240.0f) env->log.count_min_hp_le_240_normal += 1.0f;
+            if (min_zuk_hp_term <= 150.0f) env->log.count_min_hp_le_150_normal += 1.0f;
+            if (min_zuk_hp_term < env->log.best_min_zuk_hp_normal)
+                env->log.best_min_zuk_hp_normal = min_zuk_hp_term;
+
+            /* Per-threshold survival and damage, accumulated only after crossing. */
+            if (s->tick_at_le_300 >= 0) {
+                env->log.ticks_after_300_normal_sum += (float)(s->tick - s->tick_at_le_300);
+                env->log.damage_after_300_normal_sum += s->damage_after_300;
+            }
+            if (s->tick_at_le_240 >= 0) {
+                env->log.ticks_after_240_normal_sum += (float)(s->tick - s->tick_at_le_240);
+                env->log.damage_after_240_normal_sum += s->damage_after_240;
+            }
+            if (s->tick_at_le_150 >= 0) {
+                env->log.ticks_after_150_normal_sum += (float)(s->tick - s->tick_at_le_150);
+                env->log.damage_after_150_normal_sum += s->damage_after_150;
+            }
+            if (s->tick_at_zuk_healer_spawn >= 0 || s->zuk.healer_spawned) {
+                env->log.count_healer_spawned_normal += 1.0f;
+                env->log.zuk_hp_max_after_healer_spawn_normal_sum +=
+                    s->zuk_hp_max_after_healer_spawn;
+            }
+            env->log.shield_tags_normal_sum += (float)s->total_shield_tags;
+            if (s->total_shield_tags >= 1)
+                env->log.count_shield_tags_ge_1_normal += 1.0f;
+            if (s->total_zuk_healer_tags >= 1)
+                env->log.count_zuk_healers_tagged_ge_1_normal += 1.0f;
+            if (s->total_zuk_healer_tags >= 2)
+                env->log.count_zuk_healers_tagged_ge_2_normal += 1.0f;
+            if (s->total_zuk_healer_tags >= 4)
+                env->log.count_zuk_healers_tagged_ge_4_normal += 1.0f;
+            if (s->total_zuk_healer_kills >= 1)
+                env->log.count_zuk_healers_killed_ge_1_normal += 1.0f;
+            if (s->total_zuk_healer_kills >= 2)
+                env->log.count_zuk_healers_killed_ge_2_normal += 1.0f;
+            if (s->total_zuk_healer_kills >= 4)
+                env->log.count_zuk_healers_killed_ge_4_normal += 1.0f;
+            if (s->tick_at_all_zuk_healers_dead >= 0) {
+                env->log.count_all_zuk_healers_dead_normal += 1.0f;
+                float post_healer_survival =
+                    (float)(s->tick - s->tick_at_all_zuk_healers_dead);
+                env->log.post_healer_survival_ticks_normal_sum +=
+                    post_healer_survival;
+                env->log.damage_after_all_zuk_healers_dead_normal_sum +=
+                    s->damage_after_all_zuk_healers_dead;
+                env->log.zuk_hp_at_all_zuk_healers_dead_normal_sum +=
+                    s->zuk_hp_at_all_zuk_healers_dead;
+                env->log.offshield_ticks_after_all_zuk_healers_dead_normal_sum +=
+                    (float)s->offshield_ticks_after_all_zuk_healers_dead;
+                if (post_healer_survival >= 20.0f || won)
+                    env->log.count_healer_resolved_20_normal += 1.0f;
+                if (s->damage_after_all_zuk_healers_dead > 0.0f)
+                    env->log.count_reengaged_zuk_after_healers_normal += 1.0f;
+                if (s->tick_at_first_zuk_hit_after_all_healers_dead >= 0) {
+                    env->log.ticks_all_healers_dead_to_first_zuk_hit_normal_sum +=
+                        (float)(s->tick_at_first_zuk_hit_after_all_healers_dead -
+                            s->tick_at_all_zuk_healers_dead);
+                }
+            }
+            if (s->total_zuk_healer_target_ticks >= 1)
+                env->log.count_zuk_healers_targeted_ge_1_normal += 1.0f;
+            if (s->total_zuk_healer_attack_fires >= 1)
+                env->log.count_zuk_healers_attacked_ge_1_normal += 1.0f;
+            if (s->total_zuk_healer_attackable_ticks >= 1)
+                env->log.count_zuk_healers_attackable_ge_1_normal += 1.0f;
+            env->log.zuk_untagged_healer_target_bonus_coeff_normal_sum +=
+                s->zuk_untagged_healer_target_bonus_coeff;
+            env->log.zuk_safe_untagged_healer_target_bonus_coeff_normal_sum +=
+                s->zuk_safe_untagged_healer_target_bonus_coeff;
+            env->log.zuk_healer_reward_mode_normal_sum +=
+                (float)s->zuk_healer_reward_mode;
+            env->log.zuk_untagged_healer_targets_normal_sum +=
+                (float)s->total_zuk_untagged_healer_targets;
+            env->log.zuk_safe_untagged_healer_targets_normal_sum +=
+                (float)s->total_zuk_safe_untagged_healer_targets;
+            env->log.zuk_unsafe_untagged_healer_targets_normal_sum +=
+                (float)s->total_zuk_unsafe_untagged_healer_targets;
+            env->log.zuk_untagged_healer_target_reward_count_normal_sum +=
+                (float)s->total_zuk_untagged_healer_target_rewards;
+            env->log.zuk_safe_untagged_healer_target_reward_count_normal_sum +=
+                (float)s->total_zuk_safe_untagged_healer_target_rewards;
+            env->log.post_healer_set_damage_reward_coeff_normal_sum +=
+                s->post_healer_set_damage_reward_coeff;
+            env->log.post_healer_set_kill_bonus_coeff_normal_sum +=
+                s->post_healer_set_kill_bonus;
+            env->log.post_healer_set_alive_penalty_coeff_normal_sum +=
+                s->post_healer_set_alive_tick_penalty_coeff;
+            env->log.post_healer_set_alive_penalty_cap_normal_sum +=
+                s->post_healer_set_alive_penalty_cap;
+            env->log.post_healer_set_damage_reward_normal_sum +=
+                s->post_healer_set_damage_reward_total;
+            env->log.post_healer_set_kill_bonus_reward_normal_sum +=
+                s->post_healer_set_kill_bonus_total;
+            env->log.post_healer_set_alive_penalty_normal_sum +=
+                s->post_healer_set_alive_penalty_total;
+            env->log.post_healer_set_pressure_normal_sum +=
+                s->post_healer_set_pressure_total;
+            env->log.action_mask_checks_normal_sum +=
+                (float)s->total_action_mask_checks;
+            env->log.target_head_valid_healer_count_normal_sum +=
+                (float)s->target_head_valid_healer_count;
+            env->log.target_head_valid_zuk_count_normal_sum +=
+                (float)s->target_head_valid_zuk_count;
+            env->log.target_head_valid_set_count_normal_sum +=
+                (float)s->target_head_valid_set_count;
+            if (s->total_action_mask_checks > 0) {
+                for (int h = 0; h < 9; h++) {
+                    env->log.zero_valid_action_head_count_normal_sum[h] +=
+                        (float)s->zero_valid_action_head_count[h];
+                    env->log.valid_action_count_min_by_head_normal_sum[h] +=
+                        (float)s->min_valid_action_count_by_head[h];
+                }
+            }
+            if (s->total_zuk_healer_target_ticks >= 1) {
+                env->log.zuk_healer_target_cannot_attack_ticks_normal_sum +=
+                    (float)s->total_zuk_healer_cannot_attack_ticks;
+                env->log.zuk_healer_target_cooldown_ticks_normal_sum +=
+                    (float)s->total_zuk_healer_cooldown_ticks;
+                env->log.zuk_healer_target_out_of_range_ticks_normal_sum +=
+                    (float)s->total_zuk_healer_out_of_range_ticks;
+                env->log.zuk_healer_target_attackable_ticks_normal_sum +=
+                    (float)s->total_zuk_healer_attackable_ticks;
+            }
+            if (s->tick_at_le_240 >= 0) {
+                env->log.hp_restored_after_240_normal_sum += s->hp_restored_after_240;
+                env->log.spark_damage_after_240_normal_sum += s->spark_damage_after_240;
+                env->log.offshield_ticks_after_240_normal_sum +=
+                    (float)s->offshield_ticks_after_240;
+                if (s->tick_at_first_zuk_healer_target >= 0) {
+                    env->log.ticks_240_to_first_healer_target_normal_sum +=
+                        (float)(s->tick_at_first_zuk_healer_target - s->tick_at_le_240);
+                }
+                if (s->tick_at_first_zuk_healer_attack >= 0) {
+                    env->log.ticks_240_to_first_healer_attack_normal_sum +=
+                        (float)(s->tick_at_first_zuk_healer_attack - s->tick_at_le_240);
+                }
+                if (s->tick_at_first_zuk_healer_tag >= 0) {
+                    env->log.ticks_240_to_first_healer_tag_normal_sum +=
+                        (float)(s->tick_at_first_zuk_healer_tag - s->tick_at_le_240);
+                }
+                if (s->tick_at_all_zuk_healers_tagged >= 0) {
+                    env->log.ticks_240_to_all_healers_tagged_normal_sum +=
+                        (float)(s->tick_at_all_zuk_healers_tagged - s->tick_at_le_240);
+                }
+                if (s->tick_at_all_zuk_healers_dead >= 0) {
+                    env->log.ticks_240_to_all_healers_dead_normal_sum +=
+                        (float)(s->tick_at_all_zuk_healers_dead - s->tick_at_le_240);
+                }
+            }
+            /* Terminal death pressure by phase. */
+            if (!won) {
+                int jad_alive = 0, zuk_healer_alive = 0, jad_healer_alive = 0, set_alive = 0;
+                for (int n = 0; n < INF_MAX_NPCS; n++) {
+                    if (s->npcs[n].hp <= 0) continue;
+                    int t = s->npcs[n].type;
+                    if (t == INF_NPC_JAD) jad_alive = 1;
+                    else if (t == INF_NPC_HEALER_ZUK) zuk_healer_alive = 1;
+                    else if (t == INF_NPC_HEALER_JAD) jad_healer_alive = 1;
+                    else if (inf_npc_type_is_set_pressure(t)) set_alive = 1;
+                }
+                if (jad_alive) env->log.count_died_with_jad_alive_normal += 1.0f;
+                if (zuk_healer_alive || jad_healer_alive)
+                    env->log.count_died_with_healer_alive_normal += 1.0f;
+                if (zuk_healer_alive) env->log.count_died_with_zuk_healer_alive_normal += 1.0f;
+                if (jad_healer_alive) env->log.count_died_with_jad_healer_alive_normal += 1.0f;
+                if (set_alive) env->log.count_died_with_set_alive_normal += 1.0f;
+                if (s->tick_at_le_240 >= 0) {
+                    env->log.count_died_after_240_normal += 1.0f;
+                    env->log.brews_remaining_after_240_death_normal_sum +=
+                        (float)s->player.brew_doses;
+                    env->log.restores_remaining_after_240_death_normal_sum +=
+                        (float)s->player.restore_doses;
+                    env->log.prayer_at_death_after_240_normal_sum +=
+                        (float)s->player.current_prayer;
+                    if (terminal_shield_active)
+                        env->log.count_died_after_240_shield_active_normal += 1.0f;
+                    if (terminal_behind_shield)
+                        env->log.count_died_after_240_behind_shield_normal += 1.0f;
+                    if (s->tick_at_all_zuk_healers_dead >= 0 ||
+                            s->total_zuk_healer_kills >= 4) {
+                        env->log.count_died_after_240_all_healers_dead_normal += 1.0f;
+                        if (set_alive)
+                            env->log.count_died_after_all_healers_dead_with_set_alive_normal += 1.0f;
+                        if (s->killed_by_type[INF_NPC_ZUK] > 0)
+                            env->log.count_died_after_all_healers_dead_killed_by_zuk_normal += 1.0f;
+                        if (s->killed_by_type[INF_NPC_RANGER] > 0)
+                            env->log.count_died_after_all_healers_dead_killed_by_ranger_normal += 1.0f;
+                        if (s->killed_by_type[INF_NPC_MAGER] > 0)
+                            env->log.count_died_after_all_healers_dead_killed_by_mager_normal += 1.0f;
+                        if (terminal_shield_active)
+                            env->log.count_died_after_all_healers_dead_with_shield_active_normal += 1.0f;
+                        if (terminal_behind_shield)
+                            env->log.count_died_after_all_healers_dead_behind_shield_normal += 1.0f;
+                        env->log.brews_remaining_after_all_healers_dead_death_normal_sum +=
+                            (float)s->player.brew_doses;
+                        env->log.restores_remaining_after_all_healers_dead_death_normal_sum +=
+                            (float)s->player.restore_doses;
+                    } else if (s->total_zuk_healer_kills > 0) {
+                        env->log.count_died_after_240_some_healers_killed_normal += 1.0f;
+                    } else if (s->total_zuk_healer_tags > 0) {
+                        env->log.count_died_after_240_some_healers_tagged_normal += 1.0f;
+                    } else {
+                        env->log.count_died_after_240_never_tagged_healer_normal += 1.0f;
+                    }
+                }
+            }
+        }
+    skip_log:;
+    }
+
+    if (is_term) {
+        /* check if this episode is a new global best — if so, flush replay to disk.
+           for full runs (start_wave 0): best = highest wave reached, then fewest ticks.
+           for zuk-only (start_wave 68+): best = most damage to zuk (lowest zuk HP), then fewest ticks.
+           curriculum starts from mid-waves also record. */
+        if (env->episode_actions && env->episode_action_len > 0) {
+            InfernoState* st = (InfernoState*)env->enc_state;
+            int wave = st->wave;
+            int ticks = env->episode_action_len;
+            int min_zuk_hp = (st->winner == 0)
+                ? 0
+                : (st->min_zuk_hp_seen > 0.0f ? (int)st->min_zuk_hp_seen : 1200);
+
+            inferno_replay_lock_best();
+            int is_new_best = inferno_replay_is_better(
+                &g_best_replay,
+                st->start_wave,
+                wave,
+                ticks,
+                min_zuk_hp,
+                env->episode_rng_start);
+            if (is_new_best) {
+                inferno_replay_best_apply(
+                    &g_best_replay, wave, ticks, min_zuk_hp, env->episode_rng_start);
+                const char* rpath = getenv("RECORD_REPLAY");
+                if (rpath && rpath[0]) {
+                    inferno_replay_write_or_abort(
+                        rpath,
+                        env->episode_action_len,
+                        env->episode_rng_start,
+                        env->episode_actions,
+                        env->episode_initial_snapshot_valid ?
+                            &env->episode_initial_snapshot : NULL);
+                    if (st->start_wave >= 68) {
+                        fprintf(stderr, "replay: new best min zuk hp=%d (%d ticks, rng=%u) saved to %s\n",
+                                g_best_replay.min_zuk_hp, env->episode_action_len, env->episode_rng_start, rpath);
+                    } else {
+                        fprintf(stderr, "replay: new best wave %d (%d ticks, rng=%u) saved to %s\n",
+                                wave, env->episode_action_len, env->episode_rng_start, rpath);
+                    }
+                }
+            }
+            inferno_replay_unlock_best();
+        }
+        inferno_env_live_phase2_demo_flush(env);
+        inferno_env_live_phase2_demo_reset(env);
+        env->episode_action_len = 0;
+        env->episode_initial_snapshot_valid = 0;
+
+        /* archive mode: do not auto-reset. the explorer driver re-restores from
+           a sampled cell at the start of the next iteration. inf_step is a
+           no-op while episode_over=1, so subsequent ticks of this rollout are
+           harmless (a wasted tail). */
+        if (env->archive == NULL && !env->no_auto_reset) {
+            if (env->phase2_ctx) {
+                Phase2EnvState* es = &env->phase2_ctx->env_states[env->env_idx];
+                if (es->demo_id >= 0) {
+                    float q_end = ENCOUNTER_INFERNO.progress_score(env->enc_state);
+                    const InfernoState* st = (const InfernoState*)env->enc_state;
+                    float q_delta = q_end - es->start_q;
+                    int success = inferno_env_phase2_success(
+                        env, st, st->winner == 0, q_delta);
+                    phase2_record_success(env->phase2_ctx, es->demo_id, success);
+                }
+                inferno_env_apply_phase2_reset(env);
+            } else {
+                ENCOUNTER_INFERNO.reset(env->enc_state, 0);
+                ENCOUNTER_INFERNO.write_obs(env->enc_state, obs);
+                ENCOUNTER_INFERNO.write_mask(env->enc_state, obs + INF_NUM_OBS);
+            }
+            inferno_env_mark_episode_start(env);
+            /* render-side cleanup needs the RenderClient which lives in c_render.
+               raise a flag so the next c_render call does the cleanup. */
+            env->pending_render_reset = 1;
+        }
+    }
+}
+
+void c_reset(Env* env) {
+    inferno_post_240_trace_close(env, "reset");
+    uint32_t seed = env->replay_actions ? env->replay_rng_seed : 0;
+    if (env->replay_actions && env->replay_has_initial_snapshot) {
+        ENCOUNTER_INFERNO.restore(
+            env->enc_state,
+            &env->replay_initial_snapshot,
+            sizeof(env->replay_initial_snapshot));
+    } else {
+        ENCOUNTER_INFERNO.reset(env->enc_state, seed);
+    }
+    env->replay_cursor = 0;
+    inferno_env_mark_episode_start(env);
+    inferno_env_live_phase2_demo_reset(env);
+    inferno_env_write_post_restore_state(env);
+}
+
+void c_close(Env* env) {
+    inferno_post_240_trace_close(env, "close");
+    free(env->episode_actions);
+    env->episode_actions = NULL;
+    free(env->replay_actions);
+    env->replay_actions = NULL;
+    free(env->replay_phase2_demo_snapshots);
+    env->replay_phase2_demo_snapshots = NULL;
+    free(env->replay_phase2_demo_snapshot_ticks);
+    env->replay_phase2_demo_snapshot_ticks = NULL;
+    free(env->live_phase2_demo_snapshots);
+    env->live_phase2_demo_snapshots = NULL;
+    free(env->live_phase2_demo_snapshot_ticks);
+    env->live_phase2_demo_snapshot_ticks = NULL;
+    free(env->live_phase2_demo_actions);
+    env->live_phase2_demo_actions = NULL;
+    free(env->live_phase2_demo_hidden_states);
+    env->live_phase2_demo_hidden_states = NULL;
+    free(env->live_phase2_demo_current_hidden);
+    env->live_phase2_demo_current_hidden = NULL;
+    free(env->live_phase2_demo_first_forward_valid);
+    env->live_phase2_demo_first_forward_valid = NULL;
+    free(env->live_phase2_demo_first_forward_values);
+    env->live_phase2_demo_first_forward_values = NULL;
+    free(env->live_phase2_demo_first_forward_obs_values);
+    env->live_phase2_demo_first_forward_obs_values = NULL;
+    free(env->archive_action_history);
+    env->archive_action_history = NULL;
+    env->archive_action_history_cap = 0;
+    if (env->enc_state) {
+        ENCOUNTER_INFERNO.destroy(env->enc_state);
+        env->enc_state = NULL;
+    }
+    if (env->render_env.client) {
+        render_destroy_client((RenderClient*)env->render_env.client);
+        env->render_env.client = NULL;
+    }
+}
+
+static void inferno_env_apply_render_status_overlay(Env* env, RenderClient* rc) {
+    if (env->render_status_frames <= 0 || env->render_status_text[0] == '\0')
+        return;
+    rc->encounter_overlay.status_text_active = 1;
+    snprintf(rc->encounter_overlay.status_text,
+        sizeof(rc->encounter_overlay.status_text),
+        "%s", env->render_status_text);
+}
+
+void c_render(Env* env) {
+    OsrsEnv* re = &env->render_env;
+    re->encounter_def = (void*)&ENCOUNTER_INFERNO;
+    re->encounter_state = env->enc_state;
+
+    int first_call = (re->client == NULL);
+    if (first_call) {
+        re->client = render_make_client();
+        RenderClient* rc = (RenderClient*)re->client;
+        rc->ticks_per_second = env->ticks_per_second;
+        rc->model_cache = model_cache_load("data/equipment.models");
+        if (rc->model_cache) rc->show_models = 1;
+        rc->anim_cache = anim_cache_load("data/equipment.anims");
+        render_init_overlay_models(rc);
+        rc->terrain = terrain_load("data/inferno.terrain");
+        rc->objects = objects_load("data/inferno.objects");
+        rc->objects_zuk = objects_load("data/inferno_zuk.objects");
+        /* inferno region (35,83) starts at world (2246, 5315) */
+        if (rc->terrain) terrain_offset(rc->terrain, 2246, 5315);
+        if (rc->objects) objects_offset(rc->objects, 2246, 5315);
+        if (rc->objects_zuk) objects_offset(rc->objects_zuk, 2246, 5315);
+        rc->npc_model_cache = model_cache_load("data/inferno.models");
+        rc->npc_anim_cache = anim_cache_load("data/inferno.anims");
+
+        /* inferno renders in encounter-local tiles, but render_make_client()
+           initializes the camera to wilderness PvP world coords. mirror the
+           standalone viewer's post-load bootstrap so the first live frame uses
+           inferno arena bounds and entity positions. */
+        render_populate_entities(rc, re);
+        rc->cam_target_x = (float)rc->arena_base_x + (float)rc->arena_width / 2.0f;
+        rc->cam_target_z = -((float)rc->arena_base_y + (float)rc->arena_height / 2.0f);
+        for (int i = 0; i < rc->entity_count; i++) {
+            int size = rc->entities[i].npc_size > 1 ? rc->entities[i].npc_size : 1;
+            rc->sub_x[i] = rc->entities[i].x * 128 + size * 64;
+            rc->sub_y[i] = rc->entities[i].y * 128 + size * 64;
+            rc->dest_x[i] = rc->sub_x[i];
+            rc->dest_y[i] = rc->sub_y[i];
+        }
+        env->last_step_time = GetTime();
+    }
+    if (env->render_status_frames > 0 && re->client)
+        inferno_env_apply_render_status_overlay(env, (RenderClient*)re->client);
+    pvp_render(re);
+    if (env->render_status_frames > 0) env->render_status_frames--;
+
+    RenderClient* rc = (RenderClient*)re->client;
+    if (!rc) return;
+
+    /* post-reset cleanup: c_step raised the flag after resetting the encounter.
+       mirror osrs_visual.c:186-201 so damage splats, in-flight effects, stale
+       inventory state, and last-frame sub-tile coordinates (from dead-player
+       body) don't leak into the next episode. */
+    if (env->pending_render_reset) {
+        render_reset_episode_visual_state(rc, re);
+        env->pending_render_reset = 0;
+    }
+
+    /* update NPC visual positions once per tick (not per frame).
+       render_post_tick snaps sub_x/sub_y/dest_x/dest_y for spawned/moved NPCs
+       and resets composite state on npc_slot changes. */
+    render_populate_entities(rc, re);
+    render_post_tick(rc, re);
+    inferno_env_apply_render_status_overlay(env, rc);
+
+    /* match the standalone viewer's visual_frame pattern: spin pvp_render at
+       ~60fps until the next sim tick is due. pvp_render uses GetFrameTime()
+       to accumulate client_tick_accumulator and steps render_client_tick every
+       20ms, which is what animates sub_x/sub_y interpolation smoothly between
+       sim ticks. calling pvp_render only once per 600ms collapses all 30
+       client-ticks into a single frame → entities snap instantly, no motion.
+       so: keep rendering until the tick deadline, then return. c_step's sim
+       step follows immediately and the loop repeats. */
+    float tps = rc->ticks_per_second > 0.0f ? rc->ticks_per_second : 1.667f;
+    double interval = 1.0 / (double)tps;
+    double deadline = env->last_step_time + interval;
+    while (GetTime() < deadline) {
+        pvp_render(re);
+    }
+    env->last_step_time = GetTime();
+}
+
+#define MY_VEC_INIT
+#include "vecenv.h"
+
+/* max episode length for action buffer (INF_MAX_TICKS from encounter) */
+#define REPLAY_MAX_TICKS INF_MAX_TICKS
+
+void my_init(Env* env, Dict* kwargs) {
+    env->num_agents = 1;
+    env->enc_state = ENCOUNTER_INFERNO.create();
+    memset(&env->log, 0, sizeof(Log));
+    env->log.best_min_zuk_hp_normal = 1200.0f;
+
+    DictItem* start_wave = dict_get_unsafe(kwargs, "start_wave");
+    if (start_wave)
+        ENCOUNTER_INFERNO.put_int(env->enc_state, "start_wave", (int)start_wave->value);
+    ENCOUNTER_INFERNO.put_float(
+        env->enc_state, "damage_reward_coeff",
+        (float)dict_get_unsafe(kwargs, "damage_reward_coeff")->value);
+    ENCOUNTER_INFERNO.put_float(
+        env->enc_state, "shield_penalty_coeff",
+        (float)dict_get_unsafe(kwargs, "shield_penalty_coeff")->value);
+    ENCOUNTER_INFERNO.put_float(
+        env->enc_state, "tag_reward_coeff",
+        (float)dict_get_unsafe(kwargs, "tag_reward_coeff")->value);
+    static const char* const optional_float_keys[] = {
+        "shield_tag_reward_coeff",
+        "win_bonus_coeff", "death_penalty_coeff",
+        "phase_900_bonus", "phase_600_bonus", "phase_300_bonus",
+        "shield_penalty_episode_cap",
+        "supply_milestone_brew_reward_coeff",
+        "supply_milestone_restore_reward_coeff",
+        "jad_damage_reward_coeff", "zuk_healer_damage_reward_coeff",
+        "set_damage_reward_coeff",
+        "jad_kill_bonus", "zuk_healer_kill_bonus", "set_kill_bonus",
+        "post_healer_zuk_damage_coeff", "zuk_healer_phase_hp_delta_coeff",
+        "post_healer_set_damage_reward_coeff", "post_healer_set_kill_bonus",
+        "post_healer_set_alive_tick_penalty_coeff",
+        "post_healer_set_alive_penalty_cap",
+        "zuk_untagged_healer_tick_penalty_coeff",
+        "zuk_untagged_healer_target_bonus_coeff",
+        "zuk_safe_untagged_healer_target_bonus_coeff",
+        "zuk_untagged_healer_nonmagic_attack_bonus_coeff",
+        "zuk_healer_mage_attack_penalty_coeff",
+        "post_jad_zuk_multiplier", "jad_alive_zuk_multiplier",
+    };
+    for (size_t k = 0; k < sizeof(optional_float_keys)/sizeof(*optional_float_keys); k++) {
+        DictItem* item = dict_get_unsafe(kwargs, optional_float_keys[k]);
+        if (item) {
+            ENCOUNTER_INFERNO.put_float(env->enc_state, optional_float_keys[k], (float)item->value);
+        }
+    }
+    DictItem* supply_profile_scale =
+        dict_get_unsafe(kwargs, "late_start_supply_profile_scale");
+    if (supply_profile_scale) {
+        ENCOUNTER_INFERNO.put_float(
+            env->enc_state, "late_start_supply_profile_scale",
+            (float)supply_profile_scale->value);
+    }
+    DictItem* oracle_mode = dict_get_unsafe(kwargs, "oracle_mode");
+    if (oracle_mode) {
+        ENCOUNTER_INFERNO.put_int(
+            env->enc_state, "oracle_mode", (int)oracle_mode->value);
+    }
+    DictItem* zuk_healer_reward_mode =
+        dict_get_unsafe(kwargs, "zuk_healer_reward_mode");
+    if (zuk_healer_reward_mode) {
+        ENCOUNTER_INFERNO.put_int(
+            env->enc_state, "zuk_healer_reward_mode",
+            (int)zuk_healer_reward_mode->value);
+    }
+    DictItem* joseph_reward_mode =
+        dict_get_unsafe(kwargs, "joseph_reward_mode");
+    if (joseph_reward_mode) {
+        ENCOUNTER_INFERNO.put_int(
+            env->enc_state, "joseph_reward_mode",
+            (int)joseph_reward_mode->value);
+    }
+    DictItem* safe_healer_target_mask =
+        dict_get_unsafe(kwargs, "zuk_safe_untagged_healer_target_mask");
+    if (safe_healer_target_mask) {
+        ENCOUNTER_INFERNO.put_int(
+            env->enc_state, "zuk_safe_untagged_healer_target_mask",
+            (int)safe_healer_target_mask->value);
+    }
+    DictItem* force_safe_healer_target_mask =
+        dict_get_unsafe(kwargs, "zuk_force_safe_untagged_healer_target_mask");
+    if (force_safe_healer_target_mask) {
+        ENCOUNTER_INFERNO.put_int(
+            env->enc_state, "zuk_force_safe_untagged_healer_target_mask",
+            (int)force_safe_healer_target_mask->value);
+    }
+    DictItem* phase2_diagnostic_phase =
+        dict_get_unsafe(kwargs, "phase2_diagnostic_phase");
+    env->phase2_diagnostic_phase = phase2_diagnostic_phase
+        ? (int)phase2_diagnostic_phase->value : 0;
+    if (env->phase2_diagnostic_phase < INF_HEALER_DIAG_OFF ||
+            env->phase2_diagnostic_phase >= INF_HEALER_DIAG_COUNT) {
+        fprintf(stderr, "phase2_diagnostic_phase must be in [0,%d), got %d\n",
+            INF_HEALER_DIAG_COUNT, env->phase2_diagnostic_phase);
+        abort();
+    }
+    DictItem* phase2_diagnostic_tries =
+        dict_get_unsafe(kwargs, "phase2_diagnostic_tries");
+    env->phase2_diagnostic_tries = phase2_diagnostic_tries
+        ? (int)phase2_diagnostic_tries->value : 64;
+    if (env->phase2_diagnostic_tries < 1) {
+        fprintf(stderr, "phase2_diagnostic_tries must be >= 1, got %d\n",
+            env->phase2_diagnostic_tries);
+        abort();
+    }
+    DictItem* phase2_max_player_attack_timer =
+        dict_get_unsafe(kwargs, "phase2_max_player_attack_timer");
+    env->phase2_max_player_attack_timer = phase2_max_player_attack_timer
+        ? (int)phase2_max_player_attack_timer->value : -1;
+    DictItem* phase2_diagnostic_burnin_slots =
+        dict_get_unsafe(kwargs, "phase2_diagnostic_burnin_slots");
+    env->phase2_diagnostic_burnin_slots = phase2_diagnostic_burnin_slots
+        ? (int)phase2_diagnostic_burnin_slots->value : 0;
+    if (env->phase2_diagnostic_burnin_slots < 0) {
+        fprintf(stderr, "phase2_diagnostic_burnin_slots must be >= 0, got %d\n",
+            env->phase2_diagnostic_burnin_slots);
+        abort();
+    }
+    /* match the 1-indexed → 0-indexed conversion done by encounter's put_int */
+    int sw = start_wave ? (int)start_wave->value : 0;
+    env->config_start_wave = (sw > 0) ? sw - 1 : 0;
+
+    const char* record_path = getenv("RECORD_REPLAY");
+    const char* play_path = getenv("PLAY_REPLAY");
+    if (record_path && record_path[0] && play_path && play_path[0]) {
+        fprintf(stderr, "RECORD_REPLAY and PLAY_REPLAY cannot both be set\n");
+        abort();
+    }
+
+    if (record_path && record_path[0]) {
+        env->episode_actions = (int*)malloc(REPLAY_MAX_TICKS * NUM_ATNS * sizeof(int));
+        if (!env->episode_actions) {
+            fprintf(stderr, "RECORD_REPLAY: out of memory\n");
+            abort();
+        }
+        env->episode_action_cap = REPLAY_MAX_TICKS;
+    } else {
+        env->episode_actions = NULL;
+        env->episode_action_cap = 0;
+    }
+    env->episode_action_len = 0;
+    env->episode_initial_snapshot_valid = 0;
+
+    /* playback: first env (env 0) loads the replay if PLAY_REPLAY is set.
+       we use g_play_replay_loaded to ensure only one env loads it. */
+    env->replay_actions = NULL;
+    env->replay_num_ticks = 0;
+    env->replay_cursor = 0;
+    env->replay_rng_seed = 0;
+    env->replay_has_initial_snapshot = 0;
+    env->replay_phase2_demo_path[0] = '\0';
+    env->replay_phase2_demo_snapshots = NULL;
+    env->replay_phase2_demo_snapshot_ticks = NULL;
+    env->replay_phase2_demo_snapshot_cap = 0;
+    env->replay_phase2_demo_snapshot_count = 0;
+    env->replay_phase2_demo_written = 0;
+    env->live_phase2_demo_dir[0] = '\0';
+    env->live_phase2_demo_actions = NULL;
+    env->live_phase2_demo_action_cap = 0;
+    env->live_phase2_demo_action_len = 0;
+    env->live_phase2_demo_snapshots = NULL;
+    env->live_phase2_demo_snapshot_ticks = NULL;
+    env->live_phase2_demo_hidden_states = NULL;
+    env->live_phase2_demo_current_hidden = NULL;
+    env->live_phase2_demo_hidden_state_size = 0;
+    env->live_phase2_demo_current_hidden_valid = 0;
+    env->live_phase2_demo_first_forward_valid = NULL;
+    env->live_phase2_demo_first_forward_values = NULL;
+    env->live_phase2_demo_first_forward_obs_values = NULL;
+    env->live_phase2_demo_first_forward_size = 0;
+    env->live_phase2_demo_first_forward_obs_size = 0;
+    env->live_phase2_demo_pending_forward_slot = -1;
+    env->live_phase2_demo_snapshot_cap = 0;
+    env->live_phase2_demo_snapshot_count = 0;
+    env->live_phase2_demo_last_capture_tick = -1;
+    env->post_240_trace_file = NULL;
+    env->post_240_trace_id = -1;
+    env->post_240_trace_active = 0;
+    env->post_240_trace_rows = 0;
+    env->post_240_trace_truncated = 0;
+    env->env_idx = env->rng;
+    env->ticks_per_second = 1.667f;
+    env->last_step_time = 0.0;
+    static int g_play_replay_loaded = 0;
+    if (play_path && play_path[0] && !g_play_replay_loaded) {
+        FILE* fp = fopen(play_path, "rb");
+        if (!fp) {
+            fprintf(stderr, "PLAY_REPLAY: cannot open %s\n", play_path);
+            abort();
+        }
+        int num_ticks = 0;
+        uint32_t rng_seed = 0;
+        if (fread(&num_ticks, sizeof(int), 1, fp) != 1 ||
+            fread(&rng_seed, sizeof(uint32_t), 1, fp) != 1 ||
+            num_ticks <= 0 || num_ticks > REPLAY_MAX_TICKS) {
+            fprintf(stderr, "PLAY_REPLAY: invalid replay header in %s\n", play_path);
+            fclose(fp);
+            abort();
+        }
+        int* buf = (int*)malloc(num_ticks * NUM_ATNS * sizeof(int));
+        if (!buf) {
+            fprintf(stderr, "PLAY_REPLAY: out of memory\n");
+            fclose(fp);
+            abort();
+        }
+        if (fread(buf, sizeof(int), num_ticks * NUM_ATNS, fp) != (size_t)(num_ticks * NUM_ATNS)) {
+            fprintf(stderr, "PLAY_REPLAY: short read from %s\n", play_path);
+            free(buf);
+            fclose(fp);
+            abort();
+        }
+        long payload_end = ftell(fp);
+        if (payload_end < 0) {
+            fprintf(stderr, "PLAY_REPLAY: ftell failed for %s\n", play_path);
+            free(buf);
+            fclose(fp);
+            abort();
+        }
+        if (fseek(fp, 0, SEEK_END) != 0) {
+            fprintf(stderr, "PLAY_REPLAY: seek failed for %s\n", play_path);
+            free(buf);
+            fclose(fp);
+            abort();
+        }
+        long file_end = ftell(fp);
+        if (file_end < 0 || fseek(fp, payload_end, SEEK_SET) != 0) {
+            fprintf(stderr, "PLAY_REPLAY: seek failed for %s\n", play_path);
+            free(buf);
+            fclose(fp);
+            abort();
+        }
+        InfSnapshot initial_snapshot;
+        int has_initial_snapshot = 0;
+        long remaining = file_end - payload_end;
+        if (remaining == (long)sizeof(InfSnapshot)) {
+            if (fread(&initial_snapshot, sizeof(initial_snapshot), 1, fp) != 1) {
+                fprintf(stderr, "PLAY_REPLAY: short snapshot read from %s\n", play_path);
+                free(buf);
+                fclose(fp);
+                abort();
+            }
+            has_initial_snapshot = 1;
+        } else if (remaining != 0) {
+            fprintf(stderr, "PLAY_REPLAY: unexpected trailing bytes in %s\n", play_path);
+            free(buf);
+            fclose(fp);
+            abort();
+        }
+        fclose(fp);
+        env->replay_actions = buf;
+        env->replay_num_ticks = num_ticks;
+        env->replay_rng_seed = rng_seed;
+        env->replay_has_initial_snapshot = has_initial_snapshot;
+        if (has_initial_snapshot) env->replay_initial_snapshot = initial_snapshot;
+        g_play_replay_loaded = 1;
+        fprintf(stderr, "PLAY_REPLAY: loaded %d ticks, rng=%u from %s\n",
+                num_ticks, rng_seed, play_path);
+        if (has_initial_snapshot) {
+            ENCOUNTER_INFERNO.restore(
+                env->enc_state,
+                &env->replay_initial_snapshot,
+                sizeof(env->replay_initial_snapshot));
+        } else {
+            ENCOUNTER_INFERNO.reset(env->enc_state, rng_seed);
+        }
+
+        const char* phase2_demo_path = getenv("RECORD_PHASE2_DEMO");
+        if (phase2_demo_path && phase2_demo_path[0]) {
+            int n = snprintf(env->replay_phase2_demo_path,
+                sizeof(env->replay_phase2_demo_path), "%s", phase2_demo_path);
+            if (n < 0 || (size_t)n >= sizeof(env->replay_phase2_demo_path)) {
+                fprintf(stderr, "RECORD_PHASE2_DEMO: path too long\n");
+                abort();
+            }
+
+            env->replay_phase2_demo_snapshot_cap = num_ticks + 1;
+            env->replay_phase2_demo_snapshots = (uint8_t*)calloc(
+                (size_t)env->replay_phase2_demo_snapshot_cap,
+                sizeof(InfSnapshot));
+            env->replay_phase2_demo_snapshot_ticks = (int*)calloc(
+                (size_t)env->replay_phase2_demo_snapshot_cap,
+                sizeof(int));
+            if (!env->replay_phase2_demo_snapshots ||
+                    !env->replay_phase2_demo_snapshot_ticks) {
+                fprintf(stderr, "RECORD_PHASE2_DEMO: out of memory\n");
+                abort();
+            }
+
+            ENCOUNTER_INFERNO.snapshot(env->enc_state,
+                env->replay_phase2_demo_snapshots);
+            env->replay_phase2_demo_snapshot_ticks[0] = 0;
+            env->replay_phase2_demo_snapshot_count = 1;
+        }
+    }
+
+    const char* phase2_demo_path = getenv("RECORD_PHASE2_DEMO");
+    if (phase2_demo_path && phase2_demo_path[0] && (!play_path || !play_path[0])) {
+        fprintf(stderr, "RECORD_PHASE2_DEMO requires PLAY_REPLAY\n");
+        abort();
+    }
+
+    const char* live_demo_dir = getenv("RECORD_LIVE_PHASE2_DEMO_DIR");
+    if (live_demo_dir && live_demo_dir[0]) {
+        const char* max_envs_text = getenv("RECORD_LIVE_PHASE2_DEMO_MAX_ENVS");
+        int max_envs = max_envs_text && max_envs_text[0] ? atoi(max_envs_text) : 64;
+        if (max_envs <= 0) max_envs = 64;
+        if (inferno_live_phase2_demo_reserve_env(max_envs)) {
+            int n = snprintf(env->live_phase2_demo_dir,
+                sizeof(env->live_phase2_demo_dir), "%s", live_demo_dir);
+            if (n < 0 || (size_t)n >= sizeof(env->live_phase2_demo_dir)) {
+                fprintf(stderr, "RECORD_LIVE_PHASE2_DEMO: dir path too long\n");
+                abort();
+            }
+            const char* cap_text = getenv("RECORD_LIVE_PHASE2_DEMO_SNAPSHOT_CAP");
+            int cap = cap_text && cap_text[0] ? atoi(cap_text) : 512;
+            if (cap <= 0) cap = 512;
+            env->live_phase2_demo_snapshot_cap = cap;
+            env->live_phase2_demo_action_cap = REPLAY_MAX_TICKS;
+            env->live_phase2_demo_actions = (int*)calloc(
+                (size_t)env->live_phase2_demo_action_cap * NUM_ATNS,
+                sizeof(int));
+            env->live_phase2_demo_snapshots = (uint8_t*)calloc(
+                (size_t)cap, sizeof(InfSnapshot));
+            env->live_phase2_demo_snapshot_ticks = (int*)calloc(
+                (size_t)cap, sizeof(int));
+            if (!env->live_phase2_demo_actions ||
+                    !env->live_phase2_demo_snapshots ||
+                    !env->live_phase2_demo_snapshot_ticks) {
+                fprintf(stderr, "RECORD_LIVE_PHASE2_DEMO: out of memory\n");
+                abort();
+            }
+        }
+    }
+}
+
+/* curriculum wave mixing: start some agents at later waves for late-game gradient signal.
+   base-start agents are scored normally; curriculum agents train but don't affect sweep metric. */
+#define MAX_CURRICULUM_TIERS 8
+
+Env* my_vec_init(int* num_envs_out, int* buffer_env_starts, int* buffer_env_counts,
+                 Dict* vec_kwargs, Dict* env_kwargs) {
+    int total_agents = (int)dict_get(vec_kwargs, "total_agents")->value;
+    int num_buffers = (int)dict_get(vec_kwargs, "num_buffers")->value;
+    int agents_per_buffer = total_agents / num_buffers;
+    DictItem* base_start_wave_item = dict_get_unsafe(env_kwargs, "start_wave");
+    int base_start_wave = base_start_wave_item ? (int)base_start_wave_item->value : 0;
+
+    /* parse curriculum tiers from env config */
+    static const char* wave_keys[] = {
+        "curriculum_wave_1","curriculum_wave_2","curriculum_wave_3","curriculum_wave_4",
+        "curriculum_wave_5","curriculum_wave_6","curriculum_wave_7","curriculum_wave_8",
+    };
+    static const char* frac_keys[] = {
+        "curriculum_frac_1","curriculum_frac_2","curriculum_frac_3","curriculum_frac_4",
+        "curriculum_frac_5","curriculum_frac_6","curriculum_frac_7","curriculum_frac_8",
+    };
+    int curriculum_waves[MAX_CURRICULUM_TIERS];
+    float curriculum_fracs[MAX_CURRICULUM_TIERS];
+    int num_tiers = 0;
+    for (int i = 0; i < MAX_CURRICULUM_TIERS; i++) {
+        DictItem* w = dict_get_unsafe(env_kwargs, wave_keys[i]);
+        DictItem* f = dict_get_unsafe(env_kwargs, frac_keys[i]);
+        if (w && f && f->value > 0.0) {
+            curriculum_waves[num_tiers] = (int)w->value;
+            curriculum_fracs[num_tiers] = (float)f->value;
+            num_tiers++;
+        }
+    }
+
+    /* allocate and init all envs (same as default my_vec_init) */
+    Env* envs = (Env*)calloc(total_agents, sizeof(Env));
+    int num_envs = 0;
+    int agents_created = 0;
+    while (agents_created < total_agents) {
+        srand(num_envs);
+        envs[num_envs].rng = num_envs;
+        my_init(&envs[num_envs], env_kwargs);
+        envs[num_envs].env_idx = num_envs;
+        agents_created += envs[num_envs].num_agents;
+        num_envs++;
+    }
+    envs = (Env*)realloc(envs, num_envs * sizeof(Env));
+
+    /* assign curriculum start_waves to agents at the end of the array */
+    if (num_tiers > 0) {
+        int tier_counts[MAX_CURRICULUM_TIERS];
+        int curriculum_total = 0;
+        for (int t = 0; t < num_tiers; t++) {
+            tier_counts[t] = (int)(curriculum_fracs[t] * num_envs);
+            if (tier_counts[t] < 1) tier_counts[t] = 1;
+            curriculum_total += tier_counts[t];
+        }
+        int base_count = num_envs - curriculum_total;
+        int cursor = base_count;
+        for (int t = 0; t < num_tiers; t++) {
+            for (int i = 0; i < tier_counts[t] && cursor < num_envs; i++, cursor++) {
+                ENCOUNTER_INFERNO.put_int(envs[cursor].enc_state,
+                    "start_wave", curriculum_waves[t]);
+            }
+        }
+        fprintf(stderr, "curriculum: %d wave-%d", base_count, base_start_wave);
+        for (int t = 0; t < num_tiers; t++)
+            fprintf(stderr, ", %d wave-%d", tier_counts[t], curriculum_waves[t]);
+        fprintf(stderr, " (%d total)\n", num_envs);
+    }
+
+    /* fill buffer info (same as default) */
+    int buf = 0;
+    int buf_agents = 0;
+    buffer_env_starts[0] = 0;
+    buffer_env_counts[0] = 0;
+    for (int i = 0; i < num_envs; i++) {
+        buf_agents += envs[i].num_agents;
+        buffer_env_counts[buf]++;
+        if (buf_agents >= agents_per_buffer && buf < num_buffers - 1) {
+            buf++;
+            buffer_env_starts[buf] = i + 1;
+            buffer_env_counts[buf] = 0;
+            buf_agents = 0;
+        }
+    }
+
+    *num_envs_out = num_envs;
+    return envs;
+}
+
+static void inferno_set_death_cause_metrics(
+    Dict* out,
+    const char* const* keys,
+    const float* counts,
+    float denom
+) {
+    for (int t = 0; t < INF_NUM_NPC_TYPES; t++) {
+        dict_set(out, keys[t], denom > 0.0f ? counts[t] / denom : 0.0f);
+    }
+}
+
+void my_log(Log* log, Dict* out) {
+    static const char* killed_by_normal_keys[] = {
+        "frac_deaths_killed_by_nibbler_normal",
+        "frac_deaths_killed_by_bat_normal",
+        "frac_deaths_killed_by_blob_normal",
+        "frac_deaths_killed_by_blob_mel_normal",
+        "frac_deaths_killed_by_blob_rng_normal",
+        "frac_deaths_killed_by_blob_mag_normal",
+        "frac_deaths_killed_by_meleer_normal",
+        "frac_deaths_killed_by_ranger_normal",
+        "frac_deaths_killed_by_mager_normal",
+        "frac_deaths_killed_by_jad_normal",
+        "frac_deaths_killed_by_zuk_normal",
+        "frac_deaths_killed_by_heal_jad_normal",
+        "frac_deaths_killed_by_heal_zuk_normal",
+        "frac_deaths_killed_by_shield_normal",
+    };
+    static const char* killed_by_snapshot_keys[] = {
+        "frac_deaths_killed_by_nibbler_snapshot",
+        "frac_deaths_killed_by_bat_snapshot",
+        "frac_deaths_killed_by_blob_snapshot",
+        "frac_deaths_killed_by_blob_mel_snapshot",
+        "frac_deaths_killed_by_blob_rng_snapshot",
+        "frac_deaths_killed_by_blob_mag_snapshot",
+        "frac_deaths_killed_by_meleer_snapshot",
+        "frac_deaths_killed_by_ranger_snapshot",
+        "frac_deaths_killed_by_mager_snapshot",
+        "frac_deaths_killed_by_jad_snapshot",
+        "frac_deaths_killed_by_zuk_snapshot",
+        "frac_deaths_killed_by_heal_jad_snapshot",
+        "frac_deaths_killed_by_heal_zuk_snapshot",
+        "frac_deaths_killed_by_shield_snapshot",
+    };
+    static const char* zero_valid_head_normal_keys[] = {
+        "zero_valid_action_head_move_normal",
+        "zero_valid_action_head_prayer_normal",
+        "zero_valid_action_head_target_normal",
+        "zero_valid_action_head_gear_normal",
+        "zero_valid_action_head_eat_normal",
+        "zero_valid_action_head_potion_normal",
+        "zero_valid_action_head_spell_normal",
+        "zero_valid_action_head_spec_normal",
+        "zero_valid_action_head_offensive_normal",
+    };
+    static const char* min_valid_head_normal_keys[] = {
+        "valid_action_count_min_move_normal",
+        "valid_action_count_min_prayer_normal",
+        "valid_action_count_min_target_normal",
+        "valid_action_count_min_gear_normal",
+        "valid_action_count_min_eat_normal",
+        "valid_action_count_min_potion_normal",
+        "valid_action_count_min_spell_normal",
+        "valid_action_count_min_spec_normal",
+        "valid_action_count_min_offensive_normal",
+    };
+
+    dict_set(out, "episode_return", log->episode_return);
+    dict_set(out, "damage_dealt", log->damage_dealt);
+    dict_set(out, "damage_received", log->damage_received);
+    dict_set(out, "episode_length", log->episode_length);
+    dict_set(out, "wins", log->wins);
+    dict_set(out, "wave", log->wave);
+    dict_set(out, "idle_ticks", log->idle_ticks);
+    dict_set(out, "brews_used", log->brews_used);
+    dict_set(out, "blood_healed", log->blood_healed);
+
+    /* prayer analysis: correct rate + unavoidable breakdown */
+    float prayer_rate = (log->prayer_total > 0.0f)
+        ? log->prayer_correct / log->prayer_total : 0.0f;
+    dict_set(out, "prayer_correct_rate", prayer_rate);
+    /* what fraction of off-prayer hits were unavoidable (multi-style same tick) */
+    float off_prayer = log->prayer_total - log->prayer_correct;
+    float unavoidable_rate = (off_prayer > 0.0f)
+        ? log->unavoidable_off_prayer / off_prayer : 0.0f;
+    dict_set(out, "unavoidable_off_prayer_rate", unavoidable_rate);
+
+    dict_set(out, "brews_remaining", log->brews_remaining);
+    dict_set(out, "restores_remaining", log->restores_remaining);
+    dict_set(out, "prayer_at_death", log->prayer_at_death);
+
+    dict_set(out, "current_ranged", log->current_ranged);
+    dict_set(out, "current_magic", log->current_magic);
+    dict_set(out, "behind_shield_pct", log->behind_shield_pct);
+    dict_set(out, "zuk_hp_remaining", log->zuk_hp_remaining);
+    dict_set(out, "min_zuk_hp_seen", log->min_zuk_hp_seen);
+    dict_set(out, "hp_restored", log->hp_restored);
+    dict_set(out, "zuk_healer_damage", log->zuk_healer_damage);
+    dict_set(out, "deaths_to_jad", log->killed_by_type[INF_NPC_JAD] / log->n);
+    if (log->n_normal > 0.0f) {
+        float min_zhp_n = log->min_zuk_hp_normal / log->n_normal;
+        float score_n = (1200.0f - min_zhp_n) / 1200.0f;
+        float win_rate_n = log->wins_normal / log->n_normal;
+        float frac_le_240_n = log->count_min_hp_le_240_normal / log->n_normal;
+        float frac_le_150_n = log->count_min_hp_le_150_normal / log->n_normal;
+        float frac_tagged_ge_1_n =
+            log->count_zuk_healers_tagged_ge_1_normal / log->n_normal;
+        float frac_tagged_ge_4_n =
+            log->count_zuk_healers_tagged_ge_4_normal / log->n_normal;
+        float frac_killed_ge_1_n =
+            log->count_zuk_healers_killed_ge_1_normal / log->n_normal;
+        float frac_all_healers_dead_n =
+            log->count_all_zuk_healers_dead_normal / log->n_normal;
+        float frac_died_with_zuk_healer_n =
+            log->count_died_with_zuk_healer_alive_normal / log->n_normal;
+        dict_set(out, "episode_return_normal", log->episode_return_normal / log->n_normal);
+        dict_set(out, "wins_normal", win_rate_n);
+        dict_set(out, "min_zuk_hp_normal", min_zhp_n);
+        dict_set(out, "score_normal", score_n);
+        dict_set(out, "zuk_objective_normal", score_n + 2.0f * win_rate_n);
+        dict_set(out, "phase_reached_normal", log->phase_reached_normal_sum / log->n_normal);
+        if (log->n_normal_died > 0.0f) {
+            dict_set(out, "death_tick_normal", log->episode_length_normal_died / log->n_normal_died);
+            dict_set(out, "brews_remaining_normal_died",
+                log->brews_remaining_normal_died / log->n_normal_died);
+            dict_set(out, "restores_remaining_normal_died",
+                log->restores_remaining_normal_died / log->n_normal_died);
+            dict_set(out, "prayer_at_death_normal_died",
+                log->prayer_at_death_normal_died / log->n_normal_died);
+            dict_set(out, "frac_deaths_with_shield_active_normal",
+                log->count_died_with_shield_active_normal / log->n_normal_died);
+            dict_set(out, "frac_deaths_behind_shield_normal",
+                log->count_died_behind_shield_normal / log->n_normal_died);
+            dict_set(out, "frac_deaths_after_240_normal",
+                log->count_died_after_240_normal / log->n_normal_died);
+            inferno_set_death_cause_metrics(out, killed_by_normal_keys,
+                log->killed_by_type_normal, log->n_normal_died);
+        }
+        /* aggregator divides every Log field by n_total, so raw counts arrive
+           as count/n_total. Dividing by n_normal (also count/n_total) cancels
+           n_total and yields the true fraction-of-normal-episodes.
+           best_min_zuk_hp_normal is intentionally not surfaced: averaging mins
+           across envs is meaningless. Use the count grid instead. */
+        dict_set(out, "frac_min_hp_le_300_normal", log->count_min_hp_le_300_normal / log->n_normal);
+        dict_set(out, "frac_min_hp_le_240_normal", frac_le_240_n);
+        dict_set(out, "frac_min_hp_le_150_normal", frac_le_150_n);
+        dict_set(out, "frac_normal", log->n_normal);
+        /* Conditional on having crossed the boundary. The
+           aggregator divided everything by n_total, so dividing by
+           count_min_hp_le_X (also divided by n_total) cancels n_total and
+           gives the true conditional mean. Surface 0 when no eps crossed
+           so pufferl's first-log metric registration always has the keys. */
+        float t300 = log->count_min_hp_le_300_normal > 0.0f
+            ? log->ticks_after_300_normal_sum / log->count_min_hp_le_300_normal : 0.0f;
+        float t240 = log->count_min_hp_le_240_normal > 0.0f
+            ? log->ticks_after_240_normal_sum / log->count_min_hp_le_240_normal : 0.0f;
+        float t150 = log->count_min_hp_le_150_normal > 0.0f
+            ? log->ticks_after_150_normal_sum / log->count_min_hp_le_150_normal : 0.0f;
+        float d300 = log->count_min_hp_le_300_normal > 0.0f
+            ? log->damage_after_300_normal_sum / log->count_min_hp_le_300_normal : 0.0f;
+        float d240 = log->count_min_hp_le_240_normal > 0.0f
+            ? log->damage_after_240_normal_sum / log->count_min_hp_le_240_normal : 0.0f;
+        float d150 = log->count_min_hp_le_150_normal > 0.0f
+            ? log->damage_after_150_normal_sum / log->count_min_hp_le_150_normal : 0.0f;
+        dict_set(out, "ticks_after_300_normal", t300);
+        dict_set(out, "ticks_after_240_normal", t240);
+        dict_set(out, "ticks_after_150_normal", t150);
+        dict_set(out, "damage_after_300_normal", d300);
+        dict_set(out, "damage_after_240_normal", d240);
+        dict_set(out, "damage_after_150_normal", d150);
+        dict_set(out, "frac_healer_spawned_normal",
+            log->count_healer_spawned_normal / log->n_normal);
+        dict_set(out, "shield_tags_normal",
+            log->shield_tags_normal_sum / log->n_normal);
+        dict_set(out, "frac_shield_tags_ge_1_normal",
+            log->count_shield_tags_ge_1_normal / log->n_normal);
+        dict_set(out, "frac_zuk_healers_tagged_ge_1_normal", frac_tagged_ge_1_n);
+        dict_set(out, "frac_zuk_healers_tagged_ge_2_normal",
+            log->count_zuk_healers_tagged_ge_2_normal / log->n_normal);
+        dict_set(out, "frac_zuk_healers_tagged_ge_4_normal", frac_tagged_ge_4_n);
+        dict_set(out, "frac_zuk_healers_killed_ge_1_normal", frac_killed_ge_1_n);
+        dict_set(out, "frac_zuk_healers_killed_ge_2_normal",
+            log->count_zuk_healers_killed_ge_2_normal / log->n_normal);
+        dict_set(out, "frac_zuk_healers_killed_ge_4_normal",
+            log->count_zuk_healers_killed_ge_4_normal / log->n_normal);
+        dict_set(out, "frac_all_zuk_healers_dead_normal", frac_all_healers_dead_n);
+        dict_set(out, "frac_zuk_healers_targeted_ge_1_normal",
+            log->count_zuk_healers_targeted_ge_1_normal / log->n_normal);
+        dict_set(out, "frac_zuk_healers_attacked_ge_1_normal",
+            log->count_zuk_healers_attacked_ge_1_normal / log->n_normal);
+        dict_set(out, "frac_zuk_healers_attackable_ge_1_normal",
+            log->count_zuk_healers_attackable_ge_1_normal / log->n_normal);
+        float target_den = log->count_zuk_healers_targeted_ge_1_normal;
+        dict_set(out, "zuk_healer_target_cannot_attack_ticks_normal",
+            target_den > 0.0f
+                ? log->zuk_healer_target_cannot_attack_ticks_normal_sum / target_den
+                : 0.0f);
+        dict_set(out, "zuk_healer_target_cooldown_ticks_normal",
+            target_den > 0.0f
+                ? log->zuk_healer_target_cooldown_ticks_normal_sum / target_den
+                : 0.0f);
+        dict_set(out, "zuk_healer_target_out_of_range_ticks_normal",
+            target_den > 0.0f
+                ? log->zuk_healer_target_out_of_range_ticks_normal_sum / target_den
+                : 0.0f);
+        dict_set(out, "zuk_healer_target_attackable_ticks_normal",
+            target_den > 0.0f
+                ? log->zuk_healer_target_attackable_ticks_normal_sum / target_den
+                : 0.0f);
+        float untagged_target_coeff =
+            log->zuk_untagged_healer_target_bonus_coeff_normal_sum /
+                log->n_normal;
+        float safe_target_coeff =
+            log->zuk_safe_untagged_healer_target_bonus_coeff_normal_sum /
+                log->n_normal;
+        dict_set(out, "zuk_untagged_healer_target_bonus_coeff_normal",
+            untagged_target_coeff);
+        dict_set(out, "zuk_safe_untagged_healer_target_bonus_coeff_normal",
+            safe_target_coeff);
+        dict_set(out, "zuk_healer_reward_mode_normal",
+            log->zuk_healer_reward_mode_normal_sum / log->n_normal);
+        dict_set(out, "zuk_untagged_healer_targets_normal",
+            log->zuk_untagged_healer_targets_normal_sum / log->n_normal);
+        dict_set(out, "zuk_safe_untagged_healer_targets_normal",
+            log->zuk_safe_untagged_healer_targets_normal_sum / log->n_normal);
+        dict_set(out, "zuk_unsafe_untagged_healer_targets_normal",
+            log->zuk_unsafe_untagged_healer_targets_normal_sum / log->n_normal);
+        dict_set(out, "zuk_untagged_healer_target_reward_count_normal",
+            log->zuk_untagged_healer_target_reward_count_normal_sum /
+                log->n_normal);
+        dict_set(out, "zuk_safe_untagged_healer_target_reward_count_normal",
+            log->zuk_safe_untagged_healer_target_reward_count_normal_sum /
+                log->n_normal);
+        dict_set(out, "zuk_untagged_healer_target_reward_normal",
+            log->zuk_untagged_healer_target_reward_count_normal_sum *
+                untagged_target_coeff / log->n_normal);
+        dict_set(out, "zuk_safe_untagged_healer_target_reward_normal",
+            log->zuk_safe_untagged_healer_target_reward_count_normal_sum *
+                safe_target_coeff / log->n_normal);
+        dict_set(out, "post_healer_set_damage_reward_coeff_normal",
+            log->post_healer_set_damage_reward_coeff_normal_sum / log->n_normal);
+        dict_set(out, "post_healer_set_kill_bonus_coeff_normal",
+            log->post_healer_set_kill_bonus_coeff_normal_sum / log->n_normal);
+        dict_set(out, "post_healer_set_alive_penalty_coeff_normal",
+            log->post_healer_set_alive_penalty_coeff_normal_sum / log->n_normal);
+        dict_set(out, "post_healer_set_alive_penalty_cap_normal",
+            log->post_healer_set_alive_penalty_cap_normal_sum / log->n_normal);
+        dict_set(out, "post_healer_set_damage_reward_normal",
+            log->post_healer_set_damage_reward_normal_sum / log->n_normal);
+        dict_set(out, "post_healer_set_kill_bonus_reward_normal",
+            log->post_healer_set_kill_bonus_reward_normal_sum / log->n_normal);
+        dict_set(out, "post_healer_set_alive_penalty_normal",
+            log->post_healer_set_alive_penalty_normal_sum / log->n_normal);
+        dict_set(out, "post_healer_set_pressure_normal",
+            log->post_healer_set_pressure_normal_sum / log->n_normal);
+        dict_set(out, "action_mask_checks_normal",
+            log->action_mask_checks_normal_sum / log->n_normal);
+        dict_set(out, "target_head_valid_healer_count_normal",
+            log->target_head_valid_healer_count_normal_sum / log->n_normal);
+        dict_set(out, "target_head_valid_zuk_count_normal",
+            log->target_head_valid_zuk_count_normal_sum / log->n_normal);
+        dict_set(out, "target_head_valid_set_count_normal",
+            log->target_head_valid_set_count_normal_sum / log->n_normal);
+        for (int h = 0; h < 9; h++) {
+            dict_set(out, zero_valid_head_normal_keys[h],
+                log->zero_valid_action_head_count_normal_sum[h] / log->n_normal);
+            dict_set(out, min_valid_head_normal_keys[h],
+                log->valid_action_count_min_by_head_normal_sum[h] /
+                    log->n_normal);
+        }
+        float first_target_ticks = log->count_zuk_healers_targeted_ge_1_normal > 0.0f
+            ? log->ticks_240_to_first_healer_target_normal_sum /
+                log->count_zuk_healers_targeted_ge_1_normal : 0.0f;
+        float first_attack_ticks = log->count_zuk_healers_attacked_ge_1_normal > 0.0f
+            ? log->ticks_240_to_first_healer_attack_normal_sum /
+                log->count_zuk_healers_attacked_ge_1_normal : 0.0f;
+        float first_tag_ticks = log->count_zuk_healers_tagged_ge_1_normal > 0.0f
+            ? log->ticks_240_to_first_healer_tag_normal_sum /
+                log->count_zuk_healers_tagged_ge_1_normal : 0.0f;
+        float all_tagged_ticks = log->count_zuk_healers_tagged_ge_4_normal > 0.0f
+            ? log->ticks_240_to_all_healers_tagged_normal_sum /
+                log->count_zuk_healers_tagged_ge_4_normal : 0.0f;
+        float all_dead_ticks = log->count_all_zuk_healers_dead_normal > 0.0f
+            ? log->ticks_240_to_all_healers_dead_normal_sum /
+                log->count_all_zuk_healers_dead_normal : 0.0f;
+        float healer_resolve_n =
+            log->count_healer_resolved_20_normal / log->n_normal;
+        float post_healer_survival_n =
+            log->count_all_zuk_healers_dead_normal > 0.0f
+                ? log->post_healer_survival_ticks_normal_sum /
+                    log->count_all_zuk_healers_dead_normal : 0.0f;
+        float post_healer_zuk_damage_n =
+            log->count_all_zuk_healers_dead_normal > 0.0f
+                ? log->damage_after_all_zuk_healers_dead_normal_sum /
+                    log->count_all_zuk_healers_dead_normal : 0.0f;
+        float reengaged_zuk_after_healers_n =
+            log->count_reengaged_zuk_after_healers_normal / log->n_normal;
+        float first_zuk_hit_after_all_dead_n =
+            log->count_reengaged_zuk_after_healers_normal > 0.0f
+                ? log->ticks_all_healers_dead_to_first_zuk_hit_normal_sum /
+                    log->count_reengaged_zuk_after_healers_normal : 0.0f;
+        float zuk_hp_when_all_dead_n =
+            log->count_all_zuk_healers_dead_normal > 0.0f
+                ? log->zuk_hp_at_all_zuk_healers_dead_normal_sum /
+                    log->count_all_zuk_healers_dead_normal : 0.0f;
+        float hp_restored_after_240 = log->count_min_hp_le_240_normal > 0.0f
+            ? log->hp_restored_after_240_normal_sum /
+                log->count_min_hp_le_240_normal : 0.0f;
+        float spark_damage_after_240 = log->count_min_hp_le_240_normal > 0.0f
+            ? log->spark_damage_after_240_normal_sum /
+                log->count_min_hp_le_240_normal : 0.0f;
+        float max_hp_after_spawn = log->count_healer_spawned_normal > 0.0f
+            ? log->zuk_hp_max_after_healer_spawn_normal_sum /
+                log->count_healer_spawned_normal : 0.0f;
+        float offshield_after_240_n = log->count_min_hp_le_240_normal > 0.0f
+            ? log->offshield_ticks_after_240_normal_sum /
+                log->count_min_hp_le_240_normal : 0.0f;
+        float offshield_after_all_dead_n = log->count_all_zuk_healers_dead_normal > 0.0f
+            ? log->offshield_ticks_after_all_zuk_healers_dead_normal_sum /
+                log->count_all_zuk_healers_dead_normal : 0.0f;
+        dict_set(out, "ticks_240_to_first_healer_target_normal", first_target_ticks);
+        dict_set(out, "ticks_240_to_first_healer_attack_normal", first_attack_ticks);
+        dict_set(out, "ticks_240_to_first_healer_tag_normal", first_tag_ticks);
+        dict_set(out, "ticks_240_to_all_healers_tagged_normal", all_tagged_ticks);
+        dict_set(out, "ticks_240_to_all_healers_dead_normal", all_dead_ticks);
+        dict_set(out, "healer_resolve_normal", healer_resolve_n);
+        dict_set(out, "post_healer_objective_normal",
+            healer_resolve_n + 0.001f * post_healer_zuk_damage_n -
+                0.1f * frac_died_with_zuk_healer_n);
+        dict_set(out, "post_healer_survival_ticks_normal", post_healer_survival_n);
+        dict_set(out, "post_healer_zuk_damage_normal", post_healer_zuk_damage_n);
+        dict_set(out, "frac_reengaged_zuk_after_healers_normal",
+            reengaged_zuk_after_healers_n);
+        dict_set(out, "ticks_all_healers_dead_to_first_zuk_hit_normal",
+            first_zuk_hit_after_all_dead_n);
+        dict_set(out, "zuk_hp_when_all_healers_dead_normal", zuk_hp_when_all_dead_n);
+        dict_set(out, "offshield_ticks_after_240_normal", offshield_after_240_n);
+        dict_set(out, "offshield_ticks_after_all_healers_dead_normal",
+            offshield_after_all_dead_n);
+        dict_set(out, "hp_restored_after_240_normal", hp_restored_after_240);
+        dict_set(out, "zuk_hp_max_after_healer_spawn_normal", max_hp_after_spawn);
+        dict_set(out, "spark_damage_after_240_normal", spark_damage_after_240);
+        /* Death-cause fractions, out of normal-start episodes. */
+        dict_set(out, "frac_died_with_jad_alive_normal",
+            log->count_died_with_jad_alive_normal / log->n_normal);
+        dict_set(out, "frac_died_with_healer_alive_normal",
+            log->count_died_with_healer_alive_normal / log->n_normal);
+        dict_set(out, "frac_died_with_zuk_healer_alive_normal",
+            frac_died_with_zuk_healer_n);
+        dict_set(out, "frac_died_with_jad_healer_alive_normal",
+            log->count_died_with_jad_healer_alive_normal / log->n_normal);
+        dict_set(out, "frac_died_with_set_alive_normal",
+            log->count_died_with_set_alive_normal / log->n_normal);
+        dict_set(out, "frac_died_after_240_never_tagged_healer_normal",
+            log->count_died_after_240_never_tagged_healer_normal / log->n_normal);
+        dict_set(out, "frac_died_after_240_some_healers_tagged_normal",
+            log->count_died_after_240_some_healers_tagged_normal / log->n_normal);
+        dict_set(out, "frac_died_after_240_some_healers_killed_normal",
+            log->count_died_after_240_some_healers_killed_normal / log->n_normal);
+        dict_set(out, "frac_died_after_240_all_healers_dead_normal",
+            log->count_died_after_240_all_healers_dead_normal / log->n_normal);
+        float all_healers_dead_death_den =
+            log->count_died_after_240_all_healers_dead_normal;
+        dict_set(out, "frac_died_after_all_healers_dead_with_set_alive_normal",
+            log->count_died_after_all_healers_dead_with_set_alive_normal /
+                log->n_normal);
+        dict_set(out, "frac_died_after_all_healers_dead_killed_by_zuk_normal",
+            log->count_died_after_all_healers_dead_killed_by_zuk_normal /
+                log->n_normal);
+        dict_set(out, "frac_died_after_all_healers_dead_killed_by_ranger_normal",
+            log->count_died_after_all_healers_dead_killed_by_ranger_normal /
+                log->n_normal);
+        dict_set(out, "frac_died_after_all_healers_dead_killed_by_mager_normal",
+            log->count_died_after_all_healers_dead_killed_by_mager_normal /
+                log->n_normal);
+        dict_set(out, "frac_died_after_all_healers_dead_with_shield_active_normal",
+            log->count_died_after_all_healers_dead_with_shield_active_normal /
+                log->n_normal);
+        dict_set(out, "frac_died_after_all_healers_dead_behind_shield_normal",
+            log->count_died_after_all_healers_dead_behind_shield_normal /
+                log->n_normal);
+        if (all_healers_dead_death_den > 0.0f) {
+            dict_set(out, "frac_after_all_healers_dead_deaths_with_set_alive_normal",
+                log->count_died_after_all_healers_dead_with_set_alive_normal /
+                    all_healers_dead_death_den);
+            dict_set(out, "frac_after_all_healers_dead_deaths_killed_by_zuk_normal",
+                log->count_died_after_all_healers_dead_killed_by_zuk_normal /
+                    all_healers_dead_death_den);
+            dict_set(out, "frac_after_all_healers_dead_deaths_killed_by_ranger_normal",
+                log->count_died_after_all_healers_dead_killed_by_ranger_normal /
+                    all_healers_dead_death_den);
+            dict_set(out, "frac_after_all_healers_dead_deaths_killed_by_mager_normal",
+                log->count_died_after_all_healers_dead_killed_by_mager_normal /
+                    all_healers_dead_death_den);
+            dict_set(out, "frac_after_all_healers_dead_deaths_with_shield_active_normal",
+                log->count_died_after_all_healers_dead_with_shield_active_normal /
+                    all_healers_dead_death_den);
+            dict_set(out, "frac_after_all_healers_dead_deaths_behind_shield_normal",
+                log->count_died_after_all_healers_dead_behind_shield_normal /
+                    all_healers_dead_death_den);
+            dict_set(out, "brews_remaining_after_all_healers_dead_death_normal",
+                log->brews_remaining_after_all_healers_dead_death_normal_sum /
+                    all_healers_dead_death_den);
+            dict_set(out, "restores_remaining_after_all_healers_dead_death_normal",
+                log->restores_remaining_after_all_healers_dead_death_normal_sum /
+                    all_healers_dead_death_den);
+        } else {
+            dict_set(out, "frac_after_all_healers_dead_deaths_with_set_alive_normal", 0.0f);
+            dict_set(out, "frac_after_all_healers_dead_deaths_killed_by_zuk_normal", 0.0f);
+            dict_set(out, "frac_after_all_healers_dead_deaths_killed_by_ranger_normal", 0.0f);
+            dict_set(out, "frac_after_all_healers_dead_deaths_killed_by_mager_normal", 0.0f);
+            dict_set(out, "frac_after_all_healers_dead_deaths_with_shield_active_normal", 0.0f);
+            dict_set(out, "frac_after_all_healers_dead_deaths_behind_shield_normal", 0.0f);
+            dict_set(out, "brews_remaining_after_all_healers_dead_death_normal", 0.0f);
+            dict_set(out, "restores_remaining_after_all_healers_dead_death_normal", 0.0f);
+        }
+        dict_set(out, "frac_died_with_shield_active_normal",
+            log->count_died_with_shield_active_normal / log->n_normal);
+        dict_set(out, "frac_died_behind_shield_normal",
+            log->count_died_behind_shield_normal / log->n_normal);
+        dict_set(out, "frac_died_after_240_normal",
+            log->count_died_after_240_normal / log->n_normal);
+        if (log->count_died_after_240_normal > 0.0f) {
+            dict_set(out, "brews_remaining_after_240_death_normal",
+                log->brews_remaining_after_240_death_normal_sum /
+                    log->count_died_after_240_normal);
+            dict_set(out, "restores_remaining_after_240_death_normal",
+                log->restores_remaining_after_240_death_normal_sum /
+                    log->count_died_after_240_normal);
+            dict_set(out, "prayer_at_death_after_240_normal",
+                log->prayer_at_death_after_240_normal_sum /
+                    log->count_died_after_240_normal);
+            dict_set(out, "frac_after_240_deaths_with_shield_active_normal",
+                log->count_died_after_240_shield_active_normal /
+                    log->count_died_after_240_normal);
+            dict_set(out, "frac_after_240_deaths_behind_shield_normal",
+                log->count_died_after_240_behind_shield_normal /
+                    log->count_died_after_240_normal);
+        } else {
+            dict_set(out, "brews_remaining_after_240_death_normal", 0.0f);
+            dict_set(out, "restores_remaining_after_240_death_normal", 0.0f);
+            dict_set(out, "prayer_at_death_after_240_normal", 0.0f);
+            dict_set(out, "frac_after_240_deaths_with_shield_active_normal", 0.0f);
+            dict_set(out, "frac_after_240_deaths_behind_shield_normal", 0.0f);
+        }
+    }
+    if (log->n_snapshot > 0.0f) {
+        float min_zhp_s = log->min_zuk_hp_snapshot / log->n_snapshot;
+        float win_rate_s = log->wins_snapshot / log->n_snapshot;
+        float score_s = (1200.0f - min_zhp_s) / 1200.0f;
+        float frac_le_240_s = log->count_min_hp_le_240_snapshot / log->n_snapshot;
+        float frac_le_150_s = log->count_min_hp_le_150_snapshot / log->n_snapshot;
+        float frac_tagged_ge_1_s =
+            log->count_zuk_healers_tagged_ge_1_snapshot / log->n_snapshot;
+        float frac_tagged_ge_4_s =
+            log->count_zuk_healers_tagged_ge_4_snapshot / log->n_snapshot;
+        float frac_killed_ge_1_s =
+            log->count_zuk_healers_killed_ge_1_snapshot / log->n_snapshot;
+        float frac_all_healers_dead_s =
+            log->count_all_zuk_healers_dead_snapshot / log->n_snapshot;
+        float frac_died_with_zuk_healer_s =
+            log->count_died_with_zuk_healer_alive_snapshot / log->n_snapshot;
+        dict_set(out, "episode_return_snapshot", log->episode_return_snapshot / log->n_snapshot);
+        dict_set(out, "wins_snapshot", win_rate_s);
+        dict_set(out, "min_zuk_hp_snapshot", min_zhp_s);
+        dict_set(out, "score_snapshot", score_s);
+        if (log->n_snapshot_died > 0.0f) {
+            dict_set(out, "brews_remaining_snapshot_died",
+                log->brews_remaining_snapshot_died / log->n_snapshot_died);
+            dict_set(out, "restores_remaining_snapshot_died",
+                log->restores_remaining_snapshot_died / log->n_snapshot_died);
+            dict_set(out, "prayer_at_death_snapshot_died",
+                log->prayer_at_death_snapshot_died / log->n_snapshot_died);
+            dict_set(out, "frac_deaths_with_shield_active_snapshot",
+                log->count_died_with_shield_active_snapshot / log->n_snapshot_died);
+            dict_set(out, "frac_deaths_behind_shield_snapshot",
+                log->count_died_behind_shield_snapshot / log->n_snapshot_died);
+            dict_set(out, "frac_deaths_after_240_snapshot",
+                log->count_died_after_240_snapshot / log->n_snapshot_died);
+            inferno_set_death_cause_metrics(out, killed_by_snapshot_keys,
+                log->killed_by_type_snapshot, log->n_snapshot_died);
+        }
+        dict_set(out, "frac_min_hp_le_300_snapshot",
+            log->count_min_hp_le_300_snapshot / log->n_snapshot);
+        dict_set(out, "frac_min_hp_le_240_snapshot", frac_le_240_s);
+        dict_set(out, "frac_min_hp_le_150_snapshot", frac_le_150_s);
+        float t300_s = log->count_min_hp_le_300_snapshot > 0.0f
+            ? log->ticks_after_300_snapshot_sum /
+                log->count_min_hp_le_300_snapshot : 0.0f;
+        float t240_s = log->count_min_hp_le_240_snapshot > 0.0f
+            ? log->ticks_after_240_snapshot_sum /
+                log->count_min_hp_le_240_snapshot : 0.0f;
+        float t150_s = log->count_min_hp_le_150_snapshot > 0.0f
+            ? log->ticks_after_150_snapshot_sum /
+                log->count_min_hp_le_150_snapshot : 0.0f;
+        float d300_s = log->count_min_hp_le_300_snapshot > 0.0f
+            ? log->damage_after_300_snapshot_sum /
+                log->count_min_hp_le_300_snapshot : 0.0f;
+        float d240_s = log->count_min_hp_le_240_snapshot > 0.0f
+            ? log->damage_after_240_snapshot_sum /
+                log->count_min_hp_le_240_snapshot : 0.0f;
+        float d150_s = log->count_min_hp_le_150_snapshot > 0.0f
+            ? log->damage_after_150_snapshot_sum /
+                log->count_min_hp_le_150_snapshot : 0.0f;
+        dict_set(out, "ticks_after_300_snapshot", t300_s);
+        dict_set(out, "ticks_after_240_snapshot", t240_s);
+        dict_set(out, "ticks_after_150_snapshot", t150_s);
+        dict_set(out, "damage_after_300_snapshot", d300_s);
+        dict_set(out, "damage_after_240_snapshot", d240_s);
+        dict_set(out, "damage_after_150_snapshot", d150_s);
+        dict_set(out, "frac_healer_spawned_snapshot",
+            log->count_healer_spawned_snapshot / log->n_snapshot);
+        dict_set(out, "shield_tags_snapshot",
+            log->shield_tags_snapshot_sum / log->n_snapshot);
+        dict_set(out, "frac_shield_tags_ge_1_snapshot",
+            log->count_shield_tags_ge_1_snapshot / log->n_snapshot);
+        dict_set(out, "frac_zuk_healers_tagged_ge_1_snapshot", frac_tagged_ge_1_s);
+        dict_set(out, "frac_zuk_healers_tagged_ge_2_snapshot",
+            log->count_zuk_healers_tagged_ge_2_snapshot / log->n_snapshot);
+        dict_set(out, "frac_zuk_healers_tagged_ge_4_snapshot", frac_tagged_ge_4_s);
+        dict_set(out, "frac_zuk_healers_killed_ge_1_snapshot", frac_killed_ge_1_s);
+        dict_set(out, "frac_zuk_healers_killed_ge_2_snapshot",
+            log->count_zuk_healers_killed_ge_2_snapshot / log->n_snapshot);
+        dict_set(out, "frac_zuk_healers_killed_ge_4_snapshot",
+            log->count_zuk_healers_killed_ge_4_snapshot / log->n_snapshot);
+        dict_set(out, "frac_all_zuk_healers_dead_snapshot", frac_all_healers_dead_s);
+        dict_set(out, "frac_zuk_healers_targeted_ge_1_snapshot",
+            log->count_zuk_healers_targeted_ge_1_snapshot / log->n_snapshot);
+        dict_set(out, "frac_zuk_healers_attacked_ge_1_snapshot",
+            log->count_zuk_healers_attacked_ge_1_snapshot / log->n_snapshot);
+        dict_set(out, "frac_zuk_healers_attackable_ge_1_snapshot",
+            log->count_zuk_healers_attackable_ge_1_snapshot / log->n_snapshot);
+        float target_den_s = log->count_zuk_healers_targeted_ge_1_snapshot;
+        dict_set(out, "zuk_healer_target_cannot_attack_ticks_snapshot",
+            target_den_s > 0.0f
+                ? log->zuk_healer_target_cannot_attack_ticks_snapshot_sum / target_den_s
+                : 0.0f);
+        dict_set(out, "zuk_healer_target_cooldown_ticks_snapshot",
+            target_den_s > 0.0f
+                ? log->zuk_healer_target_cooldown_ticks_snapshot_sum / target_den_s
+                : 0.0f);
+        dict_set(out, "zuk_healer_target_out_of_range_ticks_snapshot",
+            target_den_s > 0.0f
+                ? log->zuk_healer_target_out_of_range_ticks_snapshot_sum / target_den_s
+                : 0.0f);
+        dict_set(out, "zuk_healer_target_attackable_ticks_snapshot",
+            target_den_s > 0.0f
+                ? log->zuk_healer_target_attackable_ticks_snapshot_sum / target_den_s
+                : 0.0f);
+        float first_target_ticks_s = log->count_zuk_healers_targeted_ge_1_snapshot > 0.0f
+            ? log->ticks_240_to_first_healer_target_snapshot_sum /
+                log->count_zuk_healers_targeted_ge_1_snapshot : 0.0f;
+        float first_attack_ticks_s = log->count_zuk_healers_attacked_ge_1_snapshot > 0.0f
+            ? log->ticks_240_to_first_healer_attack_snapshot_sum /
+                log->count_zuk_healers_attacked_ge_1_snapshot : 0.0f;
+        float first_tag_ticks_s = log->count_zuk_healers_tagged_ge_1_snapshot > 0.0f
+            ? log->ticks_240_to_first_healer_tag_snapshot_sum /
+                log->count_zuk_healers_tagged_ge_1_snapshot : 0.0f;
+        float all_tagged_ticks_s = log->count_zuk_healers_tagged_ge_4_snapshot > 0.0f
+            ? log->ticks_240_to_all_healers_tagged_snapshot_sum /
+                log->count_zuk_healers_tagged_ge_4_snapshot : 0.0f;
+        float all_dead_ticks_s = log->count_all_zuk_healers_dead_snapshot > 0.0f
+            ? log->ticks_240_to_all_healers_dead_snapshot_sum /
+                log->count_all_zuk_healers_dead_snapshot : 0.0f;
+        float healer_resolve_s =
+            log->count_healer_resolved_20_snapshot / log->n_snapshot;
+        float post_healer_survival_s =
+            log->count_all_zuk_healers_dead_snapshot > 0.0f
+                ? log->post_healer_survival_ticks_snapshot_sum /
+                    log->count_all_zuk_healers_dead_snapshot : 0.0f;
+        float post_healer_zuk_damage_s =
+            log->count_all_zuk_healers_dead_snapshot > 0.0f
+                ? log->damage_after_all_zuk_healers_dead_snapshot_sum /
+                    log->count_all_zuk_healers_dead_snapshot : 0.0f;
+        float reengaged_zuk_after_healers_s =
+            log->count_reengaged_zuk_after_healers_snapshot / log->n_snapshot;
+        float first_zuk_hit_after_all_dead_s =
+            log->count_reengaged_zuk_after_healers_snapshot > 0.0f
+                ? log->ticks_all_healers_dead_to_first_zuk_hit_snapshot_sum /
+                    log->count_reengaged_zuk_after_healers_snapshot : 0.0f;
+        float zuk_hp_when_all_dead_s =
+            log->count_all_zuk_healers_dead_snapshot > 0.0f
+                ? log->zuk_hp_at_all_zuk_healers_dead_snapshot_sum /
+                    log->count_all_zuk_healers_dead_snapshot : 0.0f;
+        float hp_restored_after_240_s = log->count_min_hp_le_240_snapshot > 0.0f
+            ? log->hp_restored_after_240_snapshot_sum /
+                log->count_min_hp_le_240_snapshot : 0.0f;
+        float spark_damage_after_240_s = log->count_min_hp_le_240_snapshot > 0.0f
+            ? log->spark_damage_after_240_snapshot_sum /
+                log->count_min_hp_le_240_snapshot : 0.0f;
+        float max_hp_after_spawn_s = log->count_healer_spawned_snapshot > 0.0f
+            ? log->zuk_hp_max_after_healer_spawn_snapshot_sum /
+                log->count_healer_spawned_snapshot : 0.0f;
+        float offshield_after_240_s = log->count_min_hp_le_240_snapshot > 0.0f
+            ? log->offshield_ticks_after_240_snapshot_sum /
+                log->count_min_hp_le_240_snapshot : 0.0f;
+        float offshield_after_all_dead_s = log->count_all_zuk_healers_dead_snapshot > 0.0f
+            ? log->offshield_ticks_after_all_zuk_healers_dead_snapshot_sum /
+                log->count_all_zuk_healers_dead_snapshot : 0.0f;
+        dict_set(out, "ticks_240_to_first_healer_target_snapshot", first_target_ticks_s);
+        dict_set(out, "ticks_240_to_first_healer_attack_snapshot", first_attack_ticks_s);
+        dict_set(out, "ticks_240_to_first_healer_tag_snapshot", first_tag_ticks_s);
+        dict_set(out, "ticks_240_to_all_healers_tagged_snapshot", all_tagged_ticks_s);
+        dict_set(out, "ticks_240_to_all_healers_dead_snapshot", all_dead_ticks_s);
+        dict_set(out, "healer_resolve_snapshot", healer_resolve_s);
+        dict_set(out, "post_healer_objective_snapshot",
+            healer_resolve_s + 0.001f * post_healer_zuk_damage_s -
+                0.1f * frac_died_with_zuk_healer_s);
+        dict_set(out, "post_healer_survival_ticks_snapshot", post_healer_survival_s);
+        dict_set(out, "post_healer_zuk_damage_snapshot", post_healer_zuk_damage_s);
+        dict_set(out, "frac_reengaged_zuk_after_healers_snapshot",
+            reengaged_zuk_after_healers_s);
+        dict_set(out, "ticks_all_healers_dead_to_first_zuk_hit_snapshot",
+            first_zuk_hit_after_all_dead_s);
+        dict_set(out, "zuk_hp_when_all_healers_dead_snapshot", zuk_hp_when_all_dead_s);
+        dict_set(out, "offshield_ticks_after_240_snapshot", offshield_after_240_s);
+        dict_set(out, "offshield_ticks_after_all_healers_dead_snapshot",
+            offshield_after_all_dead_s);
+        dict_set(out, "hp_restored_after_240_snapshot", hp_restored_after_240_s);
+        dict_set(out, "zuk_hp_max_after_healer_spawn_snapshot", max_hp_after_spawn_s);
+        dict_set(out, "spark_damage_after_240_snapshot", spark_damage_after_240_s);
+        dict_set(out, "frac_died_with_zuk_healer_alive_snapshot",
+            frac_died_with_zuk_healer_s);
+        dict_set(out, "frac_died_after_240_never_tagged_healer_snapshot",
+            log->count_died_after_240_never_tagged_healer_snapshot / log->n_snapshot);
+        dict_set(out, "frac_died_after_240_some_healers_tagged_snapshot",
+            log->count_died_after_240_some_healers_tagged_snapshot / log->n_snapshot);
+        dict_set(out, "frac_died_after_240_some_healers_killed_snapshot",
+            log->count_died_after_240_some_healers_killed_snapshot / log->n_snapshot);
+        dict_set(out, "frac_died_after_240_all_healers_dead_snapshot",
+            log->count_died_after_240_all_healers_dead_snapshot / log->n_snapshot);
+        dict_set(out, "frac_died_with_shield_active_snapshot",
+            log->count_died_with_shield_active_snapshot / log->n_snapshot);
+        dict_set(out, "frac_died_behind_shield_snapshot",
+            log->count_died_behind_shield_snapshot / log->n_snapshot);
+        dict_set(out, "frac_died_after_240_snapshot",
+            log->count_died_after_240_snapshot / log->n_snapshot);
+        if (log->count_died_after_240_snapshot > 0.0f) {
+            dict_set(out, "brews_remaining_after_240_death_snapshot",
+                log->brews_remaining_after_240_death_snapshot_sum /
+                    log->count_died_after_240_snapshot);
+            dict_set(out, "restores_remaining_after_240_death_snapshot",
+                log->restores_remaining_after_240_death_snapshot_sum /
+                    log->count_died_after_240_snapshot);
+            dict_set(out, "prayer_at_death_after_240_snapshot",
+                log->prayer_at_death_after_240_snapshot_sum /
+                    log->count_died_after_240_snapshot);
+            dict_set(out, "frac_after_240_deaths_with_shield_active_snapshot",
+                log->count_died_after_240_shield_active_snapshot /
+                    log->count_died_after_240_snapshot);
+            dict_set(out, "frac_after_240_deaths_behind_shield_snapshot",
+                log->count_died_after_240_behind_shield_snapshot /
+                    log->count_died_after_240_snapshot);
+        } else {
+            dict_set(out, "brews_remaining_after_240_death_snapshot", 0.0f);
+            dict_set(out, "restores_remaining_after_240_death_snapshot", 0.0f);
+            dict_set(out, "prayer_at_death_after_240_snapshot", 0.0f);
+            dict_set(out, "frac_after_240_deaths_with_shield_active_snapshot", 0.0f);
+            dict_set(out, "frac_after_240_deaths_behind_shield_snapshot", 0.0f);
+        }
+    }
+    if (log->phase2_first_action_checks_snapshot > 0.0f) {
+        dict_set(out, "phase2_first_action_exact_match_snapshot",
+            log->phase2_first_action_exact_matches_snapshot /
+                log->phase2_first_action_checks_snapshot);
+        dict_set(out, "phase2_first_action_head_match_snapshot",
+            log->phase2_first_action_head_matches_snapshot /
+                (log->phase2_first_action_checks_snapshot * (float)NUM_ATNS));
+        dict_set(out, "phase2_first_action_checks_snapshot",
+            log->phase2_first_action_checks_snapshot);
+    } else {
+        dict_set(out, "phase2_first_action_exact_match_snapshot", 0.0f);
+        dict_set(out, "phase2_first_action_head_match_snapshot", 0.0f);
+        dict_set(out, "phase2_first_action_checks_snapshot", 0.0f);
+    }
+    if (log->phase2_first_forward_checks_snapshot > 0.0f) {
+        dict_set(out, "phase2_first_forward_logit_l2_snapshot",
+            log->phase2_first_forward_logit_l2_snapshot_sum /
+                log->phase2_first_forward_checks_snapshot);
+        dict_set(out, "phase2_first_forward_logit_max_abs_snapshot",
+            log->phase2_first_forward_logit_max_abs_snapshot_sum /
+                log->phase2_first_forward_checks_snapshot);
+        dict_set(out, "phase2_first_forward_value_abs_snapshot",
+            log->phase2_first_forward_value_abs_snapshot_sum /
+                log->phase2_first_forward_checks_snapshot);
+        dict_set(out, "phase2_first_forward_obs_l2_snapshot",
+            log->phase2_first_forward_obs_l2_snapshot_sum /
+                log->phase2_first_forward_checks_snapshot);
+        dict_set(out, "phase2_first_forward_obs_max_abs_snapshot",
+            log->phase2_first_forward_obs_max_abs_snapshot_sum /
+                log->phase2_first_forward_checks_snapshot);
+        dict_set(out, "phase2_first_forward_allclose_snapshot",
+            log->phase2_first_forward_allclose_snapshot /
+                log->phase2_first_forward_checks_snapshot);
+        dict_set(out, "phase2_first_forward_obs_allclose_snapshot",
+            log->phase2_first_forward_obs_allclose_snapshot /
+                log->phase2_first_forward_checks_snapshot);
+        dict_set(out, "phase2_first_forward_checks_snapshot",
+            log->phase2_first_forward_checks_snapshot);
+    } else {
+        dict_set(out, "phase2_first_forward_logit_l2_snapshot", 0.0f);
+        dict_set(out, "phase2_first_forward_logit_max_abs_snapshot", 0.0f);
+        dict_set(out, "phase2_first_forward_value_abs_snapshot", 0.0f);
+        dict_set(out, "phase2_first_forward_obs_l2_snapshot", 0.0f);
+        dict_set(out, "phase2_first_forward_obs_max_abs_snapshot", 0.0f);
+        dict_set(out, "phase2_first_forward_allclose_snapshot", 0.0f);
+        dict_set(out, "phase2_first_forward_obs_allclose_snapshot", 0.0f);
+        dict_set(out, "phase2_first_forward_checks_snapshot", 0.0f);
+    }
+    if (log->phase2_hidden_restore_checks_snapshot > 0.0f) {
+        dict_set(out, "phase2_hidden_restore_l2_snapshot",
+            log->phase2_hidden_restore_l2_snapshot_sum /
+                log->phase2_hidden_restore_checks_snapshot);
+        dict_set(out, "phase2_hidden_restore_max_abs_snapshot",
+            log->phase2_hidden_restore_max_abs_snapshot_sum /
+                log->phase2_hidden_restore_checks_snapshot);
+        dict_set(out, "phase2_hidden_restore_allclose_snapshot",
+            log->phase2_hidden_restore_allclose_snapshot /
+                log->phase2_hidden_restore_checks_snapshot);
+        dict_set(out, "phase2_hidden_restore_checks_snapshot",
+            log->phase2_hidden_restore_checks_snapshot);
+    } else {
+        dict_set(out, "phase2_hidden_restore_l2_snapshot", 0.0f);
+        dict_set(out, "phase2_hidden_restore_max_abs_snapshot", 0.0f);
+        dict_set(out, "phase2_hidden_restore_allclose_snapshot", 0.0f);
+        dict_set(out, "phase2_hidden_restore_checks_snapshot", 0.0f);
+    }
+    dict_set(out, "snapshot_frac", log->n_snapshot);
+    float gear_switch_rate = (log->episode_length > 0.0f)
+        ? log->gear_switches / log->episode_length : 0.0f;
+    dict_set(out, "gear_switch_rate", gear_switch_rate);
+
+    float wr = log->wins;
+    float score;
+    int start_wave = (int)(log->start_wave + 0.5f);
+    if (start_wave >= 68) {
+        /* Zuk-only: score = fraction of lowest Zuk HP reached (0..1), wins = 1.0 */
+        score = (1200.0f - log->min_zuk_hp_seen) / 1200.0f;
+    } else {
+        /* full runs: wave progress (0..0.5) + win bonus (0..1) */
+        float wave_frac = log->wave / (float)INF_NUM_WAVES;
+        score = wr + (1.0f - wr) * wave_frac * 0.5f;
+    }
+    dict_set(out, "score", score);
+
+    /* per-NPC-type prayer rates and damage (wandb only).
+       keys must be string literals — dict_set stores the pointer, not a copy. */
+    /*
+    static const char* pray_keys[] = {
+        "pray_nibbler","pray_bat","pray_blob","pray_blob_mel","pray_blob_rng","pray_blob_mag",
+        "pray_meleer","pray_ranger","pray_mager","pray_jad","pray_zuk","pray_heal_jad","pray_heal_zuk","pray_shield"
+    };
+    static const char* dmg_keys[] = {
+        "dmg_from_nibbler","dmg_from_bat","dmg_from_blob","dmg_from_blob_mel","dmg_from_blob_rng","dmg_from_blob_mag",
+        "dmg_from_meleer","dmg_from_ranger","dmg_from_mager","dmg_from_jad","dmg_from_zuk","dmg_from_heal_jad","dmg_from_heal_zuk","dmg_from_shield"
+    };
+    static const char* kill_keys[] = {
+        "killed_by_nibbler","killed_by_bat","killed_by_blob","killed_by_blob_mel","killed_by_blob_rng","killed_by_blob_mag",
+        "killed_by_meleer","killed_by_ranger","killed_by_mager","killed_by_jad","killed_by_zuk","killed_by_heal_jad","killed_by_heal_zuk","killed_by_shield"
+    };
+    for (int t = 0; t < INF_NUM_NPC_TYPES; t++) {
+        if (log->attacks_by_type[t] > 0.0f) {
+            dict_set(out, pray_keys[t], log->prayer_correct_by_type[t] / log->attacks_by_type[t]);
+            dict_set(out, dmg_keys[t], log->dmg_from_type[t]);
+        }
+        if (log->killed_by_type[t] > 0.0f)
+            dict_set(out, kill_keys[t], log->killed_by_type[t]);
+    }
+    */
+}
+
+
+/* =====================================================================
+ * Archive-based exploration helpers (Go-Explore Phase 1).
+ *
+ * These are non-static so the Metal-side driver in metal_pufferlib.mm can
+ * call them via extern declarations. They are called once per env per
+ * iteration of the explorer loop:
+ *   - inferno_env_enable_archive_mode at setup
+ *   - inferno_env_begin_archive_iteration at the start of each iteration
+ *     (after sampling a cell from the archive)
+ *   - inferno_env_flush_scratch_to_archive at the end of each iteration
+ * ===================================================================== */
+
+void inferno_env_enable_archive_mode(
+    InfernoEnv* env,
+    Archive* archive,
+    int action_history_cap
+) {
+    env->archive = archive;
+    if (action_history_cap > env->archive_action_history_cap) {
+        free(env->archive_action_history);
+        env->archive_action_history = (int*)malloc(
+            (size_t)action_history_cap * NUM_ATNS * sizeof(int));
+        if (!env->archive_action_history) {
+            fprintf(stderr,
+                "inferno_env_enable_archive_mode: out of memory for action history\n");
+            abort();
+        }
+        env->archive_action_history_cap = action_history_cap;
+    }
+    env->archive_action_history_len = 0;
+    env->archive_scratch_count = 0;
+    env->archive_scratch_dropped = 0;
+    env->archive_prev_key_valid = 0;
+    env->archive_parent_idx = ARCHIVE_ROOT_PARENT;
+    env->archive_parent_rng = 0u;
+}
+
+void inferno_env_disable_archive_mode(InfernoEnv* env) {
+    env->archive = NULL;
+}
+
+/* restore env from an archive entry (or stay at current state if
+   archive_parent_idx == ARCHIVE_ROOT_PARENT) and reset per-iteration tracking.
+   the env->observations buffer is rewritten so the next net_callback reads
+   the post-restore obs. */
+void inferno_env_begin_archive_iteration(
+    InfernoEnv* env,
+    int archive_parent_idx
+) {
+    if (!env->archive) return;
+
+    if (archive_parent_idx >= 0) {
+        const void* snap = archive_get_snapshot(env->archive, archive_parent_idx);
+        if (snap) {
+            ENCOUNTER_INFERNO.restore(
+                env->enc_state, snap, ENCOUNTER_INFERNO.snapshot_size(env->enc_state));
+        }
+    }
+
+    env->archive_parent_idx = archive_parent_idx;
+    env->archive_parent_rng = ((InfernoState*)env->enc_state)->rng_state;
+    env->archive_action_history_len = 0;
+    env->archive_scratch_count = 0;
+    env->archive_scratch_dropped = 0;
+
+    /* seed prev_key with the post-restore cell so we only register changes */
+    ENCOUNTER_INFERNO.write_cell_key(env->enc_state, &env->archive_prev_key);
+    env->archive_prev_key_valid = 1;
+
+    inferno_env_write_post_restore_state(env);
+}
+
+/* flush all scratch entries into the shared archive, walking the parent chain
+   (each scratch entry's parent is the previous one in this iteration, or the
+   archive cell we restored from for the first scratch entry).
+
+   hidden_state_history is laid out as [horizon+1][total_agents][hidden_state_size].
+   For a discovery at scratch tick T, the hidden state to attach is at
+   history[T][env_idx]. Pass NULL to skip hidden state attachment.
+
+   Returns the number of NEW cells inserted. */
+int inferno_env_flush_scratch_to_archive(
+    InfernoEnv* env,
+    const uint8_t* hidden_state_history,
+    int total_agents,
+    int env_idx,
+    size_t hidden_state_size
+) {
+    if (!env->archive || env->archive_scratch_count == 0) return 0;
+
+    int new_cells = 0;
+    int prev_archive_idx = env->archive_parent_idx;
+    int prev_action_tick = 0;
+
+    for (int i = 0; i < env->archive_scratch_count; i++) {
+        int tick_at_discovery = env->archive_scratch_tick[i];
+        if (tick_at_discovery <= prev_action_tick) continue;
+
+        const int* action_chunk =
+            &env->archive_action_history[prev_action_tick * NUM_ATNS];
+        int action_chunk_len = tick_at_discovery - prev_action_tick;
+
+        const uint8_t* hs = NULL;
+        if (hidden_state_history && hidden_state_size > 0) {
+            size_t row_size = (size_t)total_agents * hidden_state_size;
+            hs = hidden_state_history +
+                 (size_t)tick_at_discovery * row_size +
+                 (size_t)env_idx * hidden_state_size;
+        }
+
+        ArchiveInsertResult result;
+        int new_idx = archive_insert(
+            env->archive,
+            (const uint8_t*)&env->archive_scratch_key[i],
+            &env->archive_scratch_snap[i],
+            hs,
+            prev_archive_idx,
+            action_chunk,
+            action_chunk_len,
+            (i == 0) ? env->archive_parent_rng : 0u,
+            env->archive_scratch_quality[i],
+            env->archive_scratch_quality[i],
+            &result);
+
+        if (new_idx >= 0) {
+            if (result == ARCHIVE_INSERT_NEW) {
+                new_cells++;
+                archive_note_discovery_from(env->archive, prev_archive_idx);
+            } else if (result == ARCHIVE_INSERT_STRUCTURAL_REPLACED) {
+                archive_note_discovery_from(env->archive, prev_archive_idx);
+            }
+            prev_archive_idx = new_idx;
+            prev_action_tick = tick_at_discovery;
+        }
+        /* on archive-full: stop. caller can size capacity up next time. */
+        if (new_idx < 0 && result == ARCHIVE_INSERT_FULL) break;
+    }
+
+    return new_cells;
+}
+
+int inferno_env_archive_scratch_count(const InfernoEnv* env) {
+    return env->archive_scratch_count;
+}
+
+int inferno_env_archive_scratch_dropped(const InfernoEnv* env) {
+    return env->archive_scratch_dropped;
+}
+
+/* Encounter-side accessors so metal_pufferlib.mm (which doesn't include
+   encounter headers) can size the archive and bootstrap the root cell. */
+size_t inferno_env_snapshot_bytes(void) {
+    return sizeof(InfSnapshot);
+}
+
+int inferno_env_obs_floats(void) {
+    return INF_TOTAL_OBS;
+}
+
+/* Indexed access for callers that hold the env array as void* (pointer
+   arithmetic on an incomplete InfernoEnv would not compile). */
+struct InfernoEnv* inferno_env_at(void* envs_void, int idx) {
+    InfernoEnv* envs = (InfernoEnv*)envs_void;
+    return &envs[idx];
+}
+
+/* Register env's CURRENT state as a root cell in the given archive.
+   hidden_state may be NULL (zero-filled). Returns the entry index or
+   ARCHIVE_NULL_INDEX on full / collision-with-better. */
+int inferno_env_register_root_cell(
+    InfernoEnv* env,
+    Archive* archive,
+    const uint8_t* hidden_state
+) {
+    if (!archive) return ARCHIVE_NULL_INDEX;
+
+    InfCellKey key;
+    ENCOUNTER_INFERNO.write_cell_key(env->enc_state, &key);
+    InfSnapshot snap;
+    ENCOUNTER_INFERNO.snapshot(env->enc_state, &snap);
+    float quality = ENCOUNTER_INFERNO.progress_score(env->enc_state);
+
+    ArchiveInsertResult result;
+    return archive_insert(archive,
+        (const uint8_t*)&key, &snap, hidden_state,
+        ARCHIVE_ROOT_PARENT, NULL, 0, 0u,
+        quality,
+        quality, &result);
+}
+
+/* Copy the demo's chain snapshots directly into the ladder pool; per-slot
+   obs cache populated by restoring each snapshot in turn and writing obs.
+   No action replay: the archive trajectory is not deterministic from
+   snapshot+actions, but each snapshot stands alone as a faithful state.
+   Returns 0 on success, -1 on shape mismatch. */
+int inferno_env_build_demo_snapshot_ladder(
+    InfernoEnv* env,
+    const DemoTrajectory* demo,
+    DemoSnapshotLadder* out_ladder,
+    DemoObsCache* out_obs_cache
+) {
+    if (demo->num_atns != NUM_ATNS) return -1;
+    if (out_ladder->snapshot_size != sizeof(InfSnapshot)) return -1;
+    if (demo->snapshot_size < 2 * sizeof(uint32_t) ||
+        demo->snapshot_size > sizeof(InfSnapshot) ||
+        demo->snapshots == NULL) return -1;
+    if (out_ladder->num_snapshots != demo->num_snapshots) return -1;
+    if (out_ladder->hidden_size != demo->hidden_state_size) return -1;
+    if (out_obs_cache &&
+        (out_obs_cache->num_slots != demo->num_snapshots ||
+         out_obs_cache->obs_floats_per_slot != INF_TOTAL_OBS)) return -1;
+
+    InfSnapshot saved;
+    ENCOUNTER_INFERNO.snapshot(env->enc_state, &saved);
+
+    for (int s = 0; s < demo->num_snapshots; s++) {
+        const uint8_t* src = demo->snapshots + (size_t)s * (size_t)demo->snapshot_size;
+        ENCOUNTER_INFERNO.restore(env->enc_state, src, demo->snapshot_size);
+        ENCOUNTER_INFERNO.snapshot(env->enc_state,
+            out_ladder->snapshot_pool + (size_t)s * out_ladder->snapshot_size);
+        out_ladder->snapshot_ticks[s] = demo->snapshot_ticks[s];
+        if (out_obs_cache) {
+            inferno_env_write_obs_mask(env);
+            memcpy(out_obs_cache->obs + (size_t)s * (size_t)INF_TOTAL_OBS,
+                   env->observations,
+                   (size_t)INF_TOTAL_OBS * sizeof(float));
+        }
+        if (out_ladder->hidden_pool && demo->hidden_states) {
+            memcpy(out_ladder->hidden_pool + (size_t)s * out_ladder->hidden_size,
+                   demo->hidden_states + (size_t)s * (size_t)demo->hidden_state_size,
+                   (size_t)demo->hidden_state_size);
+        }
+    }
+
+    ENCOUNTER_INFERNO.restore(env->enc_state, &saved, sizeof(saved));
+    inferno_env_write_post_restore_state(env);
+
+    return 0;
+}
+
+void inferno_env_set_phase2_ctx(InfernoEnv* env, Phase2Context* ctx, int env_idx) {
+    env->phase2_ctx = ctx;
+    env->env_idx = env_idx;
+}
+
+void inferno_env_force_phase2_reset(InfernoEnv* env) {
+    if (!env->phase2_ctx) {
+        fprintf(stderr, "inferno_env_force_phase2_reset: phase2 context is not set\n");
+        abort();
+    }
+    inferno_env_apply_phase2_reset(env);
+}
+
+/* Walk each ladder slot, restore, compute progress and terminal flag, find
+   best nonterminal slot. Writes out_cursor_ticks[i] = tick of best slot per
+   demo. Prints per-demo diagnostic. Saves and restores env state across the
+   walk so the caller's env is not disturbed. Returns number of demos whose
+   ladder qmax fell more than 0.02 below the file_q (zero on healthy data). */
+int inferno_env_validate_ladders(
+    InfernoEnv* env,
+    const DemoStore* store,
+    DemoSnapshotLadder* const* ladders,
+    int* out_cursor_ticks
+) {
+    InfSnapshot saved;
+    ENCOUNTER_INFERNO.snapshot(env->enc_state, &saved);
+
+    int violations = 0;
+    int phase_slot_counts[INF_HEALER_DIAG_COUNT] = {0};
+    int invalid_weapon_slots = 0;
+    int terminal_slots_total = 0;
+    for (int i = 0; i < store->num_demos; i++) {
+        const DemoTrajectory* d = &store->demos[i];
+        DemoSnapshotLadder* l = ladders[i];
+        float q0 = 0.0f, qmax = -1.0f, qlast = 0.0f;
+        int best_slot = -1;
+        int n_terminal_slots = 0;
+
+        for (int s = 0; s < l->num_snapshots; s++) {
+            const void* snap = demo_snapshot_ladder_snapshot_at(l, s);
+            ENCOUNTER_INFERNO.restore(env->enc_state, snap, l->snapshot_size);
+            const InfernoState* is = (const InfernoState*)env->enc_state;
+            if (!inf_weapon_set_is_valid(is)) invalid_weapon_slots++;
+            for (int p = INF_HEALER_DIAG_PRE_HEALER; p < INF_HEALER_DIAG_COUNT; p++) {
+                if (inf_healer_diagnostic_phase_matches(is, p))
+                    phase_slot_counts[p]++;
+            }
+            float q = ENCOUNTER_INFERNO.progress_score(env->enc_state);
+            int eo = is->episode_over;
+            if (s == 0) q0 = q;
+            qlast = q;
+            if (eo) {
+                n_terminal_slots++;
+                terminal_slots_total++;
+                continue;
+            }
+            if (q > qmax) {
+                qmax = q;
+                best_slot = s;
+            }
+        }
+
+        if (best_slot < 0) {
+            best_slot = 0;
+            qmax = q0;
+        }
+        out_cursor_ticks[i] = l->snapshot_ticks[best_slot];
+
+        int violated = (qmax + 0.02f < d->quality_at_root);
+        violations += violated;
+        fprintf(stderr,
+            "phase2 demo %3d: file_q=%.3f q0=%.3f qmax=%.3f qlast=%.3f "
+            "best_slot=%d/%d term=%d cursor=%d seed=%u len=%d%s\n",
+            i, d->quality_at_root, q0, qmax, qlast, best_slot, l->num_snapshots,
+            n_terminal_slots, out_cursor_ticks[i], d->rng_seed, d->length_ticks,
+            violated ? "  ** ladder qmax violates file_q" : "");
+    }
+
+    ENCOUNTER_INFERNO.restore(env->enc_state, &saved, sizeof(saved));
+    inferno_env_write_post_restore_state(env);
+
+    fprintf(stderr,
+        "phase2 ladder validation: %d demos, %d qmax violations\n",
+        store->num_demos, violations);
+    fprintf(stderr,
+        "phase2 ladder phase slots: pre_healer=%d immediate_healer=%d "
+        "partial_healer=%d post_healer=%d post_150=%d "
+        "h0_pre_healer=%d h4_overlap=%d post_healer_set_alive=%d "
+        "terminal=%d invalid_weapon=%d\n",
+        phase_slot_counts[INF_HEALER_DIAG_PRE_HEALER],
+        phase_slot_counts[INF_HEALER_DIAG_IMMEDIATE_HEALER],
+        phase_slot_counts[INF_HEALER_DIAG_PARTIAL_HEALER],
+        phase_slot_counts[INF_HEALER_DIAG_POST_HEALER],
+        phase_slot_counts[INF_HEALER_DIAG_POST_150],
+        phase_slot_counts[INF_HEALER_DIAG_H0_PRE_HEALER_TIGHT],
+        phase_slot_counts[INF_HEALER_DIAG_H4_HEALER_OVERLAP],
+        phase_slot_counts[INF_HEALER_DIAG_POST_HEALER_SET_ALIVE],
+        terminal_slots_total,
+        invalid_weapon_slots);
+    return violations;
+}
+
+static Phase2ResetDecision inferno_env_decide_phase2_reset(InfernoEnv* env) {
+    Phase2Context* ctx = env->phase2_ctx;
+    uint64_t* rng_state = &ctx->env_states[env->env_idx].rng_state;
+
+    if (env->phase2_diagnostic_phase == INF_HEALER_DIAG_OFF)
+        return phase2_decide_reset(ctx, rng_state);
+
+    Phase2ResetDecision d = {
+        .demo_id = -1,
+        .slot = -1,
+        .randomize_rng = 0,
+        .fresh_rng_seed = 0,
+    };
+    if (ctx->active_pool_size == 0 ||
+            phase2_rand_unit_state(rng_state) < ctx->normal_start_frac)
+        return d;
+
+    for (int i = 0; i < env->phase2_diagnostic_tries; i++) {
+        int demo_id = ctx->active_pool[
+            phase2_rand_int_state(rng_state, ctx->active_pool_size)];
+        DemoSnapshotLadder* ladder = ctx->ladders[demo_id];
+        if (!ladder || ladder->num_snapshots <= 0) continue;
+
+        int slot = phase2_rand_int_state(rng_state, ladder->num_snapshots);
+        const void* snap = demo_snapshot_ladder_snapshot_at(ladder, slot);
+        ENCOUNTER_INFERNO.restore(env->enc_state, snap, ladder->snapshot_size);
+
+        if (!inf_healer_diagnostic_phase_matches(
+                (const InfernoState*)env->enc_state,
+                env->phase2_diagnostic_phase))
+            continue;
+        if (!inf_healer_diagnostic_attack_timer_matches(
+                (const InfernoState*)env->enc_state,
+                env->phase2_max_player_attack_timer))
+            continue;
+
+        d.demo_id = demo_id;
+        d.slot = slot - env->phase2_diagnostic_burnin_slots;
+        if (d.slot < 0) d.slot = 0;
+        if (phase2_rand_unit_state(rng_state) < ctx->randomize_rng_frac) {
+            d.randomize_rng = 1;
+            d.fresh_rng_seed = (uint32_t)phase2_splitmix64(rng_state);
+        }
+        return d;
+    }
+
+    return d;
+}
+
+static void inferno_env_apply_phase2_reset(InfernoEnv* env) {
+    Phase2Context* ctx = env->phase2_ctx;
+    Phase2ResetDecision d = inferno_env_decide_phase2_reset(env);
+
+    if (d.demo_id < 0) {
+        ENCOUNTER_INFERNO.reset(env->enc_state, 0);
+    } else {
+        DemoSnapshotLadder* ladder = ctx->ladders[d.demo_id];
+        const void* snap = demo_snapshot_ladder_snapshot_at(ladder, d.slot);
+        ENCOUNTER_INFERNO.restore(env->enc_state, snap, ladder->snapshot_size);
+        if (d.randomize_rng) {
+            ((InfernoState*)env->enc_state)->rng_state = d.fresh_rng_seed;
+        }
+        inf_reset_transition_diagnostics_for_restored_start(
+            (InfernoState*)env->enc_state);
+    }
+
+    Phase2EnvState* es = &ctx->env_states[env->env_idx];
+    es->demo_id = d.demo_id;
+    es->slot = d.slot;
+    if (d.demo_id < 0) {
+        es->start_tick = 0;
+        es->start_q = 0.0f;
+        es->start_active_set_count = 0;
+        es->needs_hidden_restore = 0;
+        es->first_action_pending = 0;
+    } else {
+        es->start_tick = ctx->ladders[d.demo_id]->snapshot_ticks[d.slot];
+        es->start_q = ENCOUNTER_INFERNO.progress_score(env->enc_state);
+        es->start_active_set_count =
+            inferno_active_set_pressure_count((const InfernoState*)env->enc_state);
+        es->needs_hidden_restore =
+            ctx->ladders[d.demo_id]->hidden_size > 0 ? 1 : 0;
+        es->first_action_pending = 1;
+    }
+    inferno_env_mark_episode_start(env);
+    inferno_env_write_obs_mask(env);
+}

@@ -1,0 +1,107 @@
+# Disabled Zuk-only SOTA config.
+# Rename this file to osrs_inferno.ini to make it the active Inferno config.
+
+[base]
+env_name = osrs_inferno
+policy_name = MinGRU
+rnn_name = Recurrent
+score_metric = zuk_objective_normal
+
+[env]
+start_wave = 69
+damage_reward_coeff = 0.0011475594126221567
+shield_penalty_coeff = 0.0
+tag_reward_coeff = 0.3843499586596577
+shield_tag_reward_coeff = 0.011599760870927182
+late_start_supply_profile_scale = 1.0
+mask_in_obs = 1.0
+win_bonus_coeff = 0.0
+death_penalty_coeff = 0.0
+phase_900_bonus = 0.0
+phase_600_bonus = 0.0
+phase_300_bonus = 0.0
+shield_penalty_episode_cap = 0.0
+record_best_replay_path = ""
+play_replay_path = ""
+post_240_trace_dir = ""
+post_240_trace_max_episodes = 40
+post_240_trace_tick_cap = 512
+curriculum_wave_1 = 20.0
+curriculum_frac_1 = 0.0
+curriculum_wave_2 = 40.0
+curriculum_frac_2 = 0.0
+curriculum_wave_3 = 60.0
+curriculum_frac_3 = 0.0
+phase2_demo_dir = ""
+phase2_num_atns = 9
+phase2_snapshot_stride = 4
+phase2_max_demos = 64
+phase2_seed = 42
+phase2_normal_start_frac = 0.25
+phase2_randomize_rng_frac = 0.25
+phase2_diagnostic_phase = 0
+phase2_diagnostic_tries = 64
+phase2_max_player_attack_timer = -1
+phase2_diagnostic_burnin_slots = 0
+phase2_bc_coef = 0.0
+phase2_bc_demos_per_minibatch = 0
+phase2_promote_rate = 0.30
+phase2_demote_rate = 0.10
+phase2_backstep_ticks = 4
+phase2_success_q_delta = 0.005
+jad_damage_reward_coeff = 0.004234442246405153
+zuk_healer_damage_reward_coeff = 0.0023748639311440972
+set_damage_reward_coeff = 0.00263289953427484
+jad_kill_bonus = 0.3547626816239702
+zuk_healer_kill_bonus = 0.48620143451525816
+set_kill_bonus = 0.3
+post_healer_zuk_damage_coeff = 0.0
+post_healer_set_damage_reward_coeff = 0.0
+post_healer_set_kill_bonus = 0.0
+post_healer_set_alive_tick_penalty_coeff = 0.0
+post_healer_set_alive_penalty_cap = 0.0
+zuk_healer_phase_hp_delta_coeff = 0.0
+zuk_untagged_healer_tick_penalty_coeff = 0.0
+zuk_untagged_healer_target_bonus_coeff = 0.0
+zuk_safe_untagged_healer_target_bonus_coeff = 0.0
+zuk_untagged_healer_nonmagic_attack_bonus_coeff = 0.0
+zuk_healer_mage_attack_penalty_coeff = 0.0
+zuk_safe_untagged_healer_target_mask = 0
+zuk_force_safe_untagged_healer_target_mask = 0
+zuk_healer_reward_mode = 0
+joseph_reward_mode = 0
+oracle_mode = 0
+post_jad_zuk_multiplier = 0.9506515045066175
+jad_alive_zuk_multiplier = 0.2468685129760289
+
+[vec]
+total_agents = 4096
+num_buffers = 2
+num_threads = 16
+
+[policy]
+hidden_size = 512
+num_layers = 2
+expansion_factor = 1
+
+[train]
+total_timesteps = 74626336
+horizon = 64
+min_lr_ratio = 0.10770254478735564
+learning_rate = 0.012010653141777173
+beta1 = 0.9641862728826048
+beta2 = 0.9998701883037843
+eps = 0.000004655041309600953
+ent_coef = 0.000049786529654755765
+gamma = 0.9999931627415247
+gae_lambda = 0.9
+vtrace_rho_clip = 1.0
+vtrace_c_clip = 1.159507819770901
+prio_alpha = 0.2543608578483453
+prio_beta0 = 0.6156827710404575
+clip_coef = 0.27915900773721647
+vf_coef = 0.06873306012622059
+vf_clip_coef = 1.0074546111086815
+max_grad_norm = 6.277216665439213
+replay_ratio = 1.6996592700975346
+minibatch_size = 4096

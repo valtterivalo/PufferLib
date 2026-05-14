@@ -2,16 +2,15 @@
 c_*.c
 pufferlib/extensions.c
 pufferlib/puffernet.c
-logs/
-
-# Build dir
-build/
 
 # hipified cuda extensions dir [HIP/ROCM]
 pufferlib/extensions/hip/
 
 # Raylib
 raylib_wasm/
+
+# Reference repos and caches (large, not tracked)
+.refs/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -20,8 +19,9 @@ __pycache__/
 *.npy
 cy_*.c
 
-# C extensions
+# C extensions and build artifacts
 *.so
+*.a
 *.o
 
 # Distribution / packaging
@@ -162,13 +162,26 @@ raylib*/
 box2d*/
 
 # Temp Impulse Wars files
-pufferlib/ocean/impulse_wars/*-debug/
-pufferlib/ocean/impulse_wars/*-release/
-pufferlib/ocean/impulse_wars/debug-*/
-pufferlib/ocean/impulse_wars/release-*/
-pufferlib/ocean/impulse_wars/benchmark/
+ocean/impulse_wars/*-debug/
+ocean/impulse_wars/*-release/
+ocean/impulse_wars/debug-*/
+ocean/impulse_wars/release-*/
+ocean/impulse_wars/benchmark/
 
-# Data
-resources/drive/data/*
-resources/drive/binaries/*
+# Local OSRS viewer binaries
+/osrs_inferno
+/osrs_inferno.exe
+/osrs_inferno.dSYM/
+/osrs_pvp
+/osrs_pvp.exe
+/osrs_pvp.dSYM/
+/osrs_zulrah
+/osrs_zulrah.exe
+/osrs_zulrah.dSYM/
 
+# Local experiment artifacts
+/.claude/worktrees/
+/logs/
+/runs/
+/*.bin
+data/
