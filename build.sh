@@ -36,8 +36,13 @@ CLANG_WARN="\
     -Wno-error=array-parameter"
 
 PLATFORM="$(uname -s)"
-PYTHON_BIN="${PYTHON:-python}"
-if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
+if [ -n "${PYTHON:-}" ]; then
+    PYTHON_BIN="$PYTHON"
+elif command -v python >/dev/null 2>&1; then
+    PYTHON_BIN=python
+elif [ -x ".venv/bin/python" ]; then
+    PYTHON_BIN=".venv/bin/python"
+else
     PYTHON_BIN=python3
 fi
 
