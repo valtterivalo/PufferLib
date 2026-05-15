@@ -119,6 +119,19 @@ static int source_block_contains(
     } \
 } while (0)
 
+#define ASSERT_SOURCE_NOT_CONTAINS(label, path, needle) do { \
+    char* source = read_source_file((path)); \
+    tests_run++; \
+    if (source && strstr(source, (needle)) == NULL) { \
+        tests_passed++; \
+    } else { \
+        tests_failed++; \
+        printf("  FAIL: %s - unexpected \"%s\" in %s\n", \
+            (label), (needle), (path)); \
+    } \
+    free(source); \
+} while (0)
+
 #define ASSERT_FLOAT_NEAR(label, actual, expected, tol) do { \
     tests_run++; \
     float diff = (float)((actual) - (expected)); \
@@ -203,7 +216,24 @@ static HumanInput make_human_input(void) {
 
 static int inferno_pending_hit_obs_start(void);
 static int inferno_spark_obs_start(void);
+static int inferno_obs_slot_dig_index(int slot_idx);
+static int inferno_obs_slot_phantom_index(int slot_idx);
+static int inferno_obs_slot_target_category_start(int slot_idx);
 static void init_zuk_timing_state(InfernoState* state);
+
+enum {
+    INF_OBS_WAVE_NORM = 14,
+    INF_OBS_WAVE_PHASE_START = 15,
+    INF_OBS_ZUK_ATTACK_TIMER = 21,
+    INF_OBS_PRAYER_TIMER = 42,
+    INF_OBS_PRAYER_MELEE = 43,
+    INF_OBS_PRAYER_RANGED = 44,
+    INF_OBS_PRAYER_MAGIC = 45,
+    INF_OBS_PRAYER_CONFLICT = 46,
+    INF_OBS_ZUK_PHASE_START = 47,
+    INF_OBS_ZUK_SHIELD_DIR = 48,
+    INF_OBS_ZUK_SHIELD_FREEZE = 49,
+};
 
 static void init_jad_timing_test_state(InfernoState* state, int player_x, int player_y, int jad_x, int jad_y) {
     memset(state, 0, sizeof(*state));
@@ -1417,8 +1447,8 @@ static void test_late_start_supply_observations(void) {
     enum {
         INF_OBS_BREW_DOSES = 11,
         INF_OBS_RESTORE_DOSES = 12,
-        INF_OBS_BASTION_DOSES = 20,
-        INF_OBS_STAMINA_DOSES = 21,
+        INF_OBS_BASTION_DOSES = 25,
+        INF_OBS_STAMINA_DOSES = 26,
     };
     ASSERT_FLOAT_NEAR("brew obs uses full-kit denominator",
         obs[INF_OBS_BREW_DOSES],
@@ -1482,6 +1512,7 @@ static void test_overlap_shuffle_hold_after_recent_target_click(void) {
         INF_NPC_RANGER, 20, 20, INF_NPC_STATS[INF_NPC_RANGER].size);
     state.npcs[0].active = 1;
 
+    inf_rebuild_entity_collision_flags(&state);
     inf_npc_move(&state, 0);
 
     ASSERT_INT_EQ("held overlap keeps x", state.npcs[0].x, 20);
@@ -1509,6 +1540,24 @@ static void test_overlap_shuffle_respects_npc_collision_flags(void) {
 
     ASSERT_INT_EQ("overlap shuffle picks the only free tile x", state.npcs[0].x, 20);
     ASSERT_INT_EQ("overlap shuffle picks the only free tile y", state.npcs[0].y, 19);
+}
+
+static void test_large_npc_overlap_shuffle_can_partially_unclip(void) {
+    printf("--- large npc overlap shuffle can partially unclip ---\n");
+
+    InfernoState state = make_test_state(21, 21);
+    state.rng_state = 12345;
+    state.npcs[0] = make_test_npc(
+        INF_NPC_MAGER, 20, 20, INF_NPC_STATS[INF_NPC_MAGER].size);
+    state.npcs[0].active = 1;
+
+    inf_rebuild_entity_collision_flags(&state);
+    inf_npc_move(&state, 0);
+
+    int dx = abs(state.npcs[0].x - 20);
+    int dy = abs(state.npcs[0].y - 20);
+    ASSERT_INT_EQ("large npc takes one shuffle step", dx + dy, 1);
+    ASSERT_INT_EQ("large npc marks moved", state.npcs[0].moved_this_tick, 1);
 }
 
 static void test_player_movement_ignores_npc_collision_flags(void) {
@@ -1599,8 +1648,8 @@ static void test_tagged_jad_healers_queue_behind_front_healer(void) {
     ASSERT_INT_EQ("second healer remains blocked behind front", state.npcs[1].x, 18);
 }
 
-static void test_stacked_npc_unclipping_clears_flag_when_one_leaves(void) {
-    printf("--- stacked npc unclipping clears flag when one leaves ---\n");
+static void test_stacked_npc_unclipping_preserves_flag_when_one_leaves(void) {
+    printf("--- stacked npc unclipping preserves flag when one leaves ---\n");
 
     InfernoState state = make_test_state(25, 25);
     state.npcs[0] = make_test_npc(INF_NPC_HEALER_JAD, 20, 20, 1);
@@ -1610,14 +1659,43 @@ static void test_stacked_npc_unclipping_clears_flag_when_one_leaves(void) {
 
     inf_rebuild_entity_collision_flags(&state);
     ASSERT_INT_EQ("stacked tile initially flagged",
-                  state.npc_collision_flags[20 - INF_ARENA_MIN_X][20 - INF_ARENA_MIN_Y], 1);
+                  state.npc_collision_flags[20 - INF_ARENA_MIN_X][20 - INF_ARENA_MIN_Y], 2);
 
     inf_update_npc_collision_flags(&state, 0, 20, 20, 21, 20, 1);
 
-    ASSERT_INT_EQ("old stacked tile unclipped",
-                  state.npc_collision_flags[20 - INF_ARENA_MIN_X][20 - INF_ARENA_MIN_Y], 0);
+    ASSERT_INT_EQ("old stacked tile remains occupied",
+                  state.npc_collision_flags[20 - INF_ARENA_MIN_X][20 - INF_ARENA_MIN_Y], 1);
     ASSERT_INT_EQ("new tile flagged",
                   state.npc_collision_flags[21 - INF_ARENA_MIN_X][20 - INF_ARENA_MIN_Y], 1);
+}
+
+static void test_meleer_dig_can_stack_without_losing_collision_flag(void) {
+    printf("--- meleer dig can stack without losing collision flag ---\n");
+
+    InfernoState state = make_test_state(20, 20);
+    state.npcs[0] = make_test_npc(
+        INF_NPC_MELEER, 5, 5, INF_NPC_STATS[INF_NPC_MELEER].size);
+    state.npcs[0].active = 1;
+    state.npcs[0].dig_freeze_timer = 1;
+    int dig_x = state.player.x - state.npcs[0].size + 1;
+    int dig_y = state.player.y - state.npcs[0].size + 1;
+    state.npcs[1] = make_test_npc(
+        INF_NPC_RANGER, dig_x, dig_y, INF_NPC_STATS[INF_NPC_RANGER].size);
+    state.npcs[1].active = 1;
+
+    inf_rebuild_entity_collision_flags(&state);
+    inf_meleer_dig_check(&state, 0);
+
+    ASSERT_INT_EQ("dig lands on first candidate x", state.npcs[0].x, dig_x);
+    ASSERT_INT_EQ("dig lands on first candidate y", state.npcs[0].y, dig_y);
+    ASSERT_INT_EQ("stacked landing tile has both NPCs",
+                  state.npc_collision_flags[dig_x - INF_ARENA_MIN_X][dig_y - INF_ARENA_MIN_Y], 2);
+
+    inf_update_npc_collision_flags(
+        &state, 0, dig_x, dig_y, 25, 25, INF_NPC_STATS[INF_NPC_MELEER].size);
+
+    ASSERT_INT_EQ("other NPC still blocks old landing tile",
+                  state.npc_collision_flags[dig_x - INF_ARENA_MIN_X][dig_y - INF_ARENA_MIN_Y], 1);
 }
 
 static void test_jad_healer_spawn_offsets_match_wave_67_reference(void) {
@@ -2230,8 +2308,9 @@ static void test_jad_has_no_pre_fire_style_preview(void) {
 
     float obs[INF_NUM_OBS];
     inf_write_obs((EncounterState*)&state, obs);
-    ASSERT_FLOAT_NEAR("prayer-critical timer ignores hidden jad style", obs[37], 1.0f, 1e-6f);
-    ASSERT_INT_EQ("prayer-critical style stays zero before fire", (int)(obs[38] + obs[39] + obs[40]), 0);
+    ASSERT_FLOAT_NEAR("prayer-critical timer ignores hidden jad style", obs[INF_OBS_PRAYER_TIMER], 1.0f, 1e-6f);
+    ASSERT_INT_EQ("prayer-critical style stays zero before fire",
+        (int)(obs[INF_OBS_PRAYER_MELEE] + obs[INF_OBS_PRAYER_RANGED] + obs[INF_OBS_PRAYER_MAGIC]), 0);
 }
 
 static void test_jad_fire_tick_exposes_three_tick_prayer_deadline(void) {
@@ -2250,8 +2329,8 @@ static void test_jad_fire_tick_exposes_three_tick_prayer_deadline(void) {
     float obs[INF_NUM_OBS];
     memset(obs, 0, sizeof(obs));
     inf_write_obs((EncounterState*)&state, obs);
-    ASSERT_FLOAT_NEAR("prayer-critical timer exposes jad fire deadline", obs[37], 0.3f, 1e-6f);
-    ASSERT_FLOAT_NEAR("prayer-critical magic style exposed after fire", obs[40], 1.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("prayer-critical timer exposes jad fire deadline", obs[INF_OBS_PRAYER_TIMER], 0.3f, 1e-6f);
+    ASSERT_FLOAT_NEAR("prayer-critical magic style exposed after fire", obs[INF_OBS_PRAYER_MAGIC], 1.0f, 1e-6f);
     int pending_start = inferno_pending_hit_obs_start();
     ASSERT_FLOAT_NEAR("pending hit obs timer uses prayer window", obs[pending_start + 3], 0.3f, 1e-6f);
     ASSERT_FLOAT_NEAR("pending hit pre-check damage exposes max threat", obs[pending_start + 4], 113.0f / 150.0f, 1e-6f);
@@ -2356,18 +2435,94 @@ static void test_triple_jad_pending_threats_fit_obs_layout(void) {
 
     float obs[INF_NUM_OBS];
     inf_write_obs((EncounterState*)&state, obs);
-    ASSERT_INT_EQ("inferno obs shape includes spark slots", INF_NUM_OBS, 746);
+    ASSERT_INT_EQ("inferno obs shape includes compact spark slots", INF_NUM_OBS, 744);
 }
 
 static void test_inferno_obs_shape_includes_step_out_forecast_features(void) {
     printf("--- inferno obs shape includes step-out forecast features ---\n");
 
-    ASSERT_INT_EQ("npc obs keeps base slot shape",
-        INF_TOTAL_NPC_OBS_SIZE, 282);
+    ASSERT_INT_EQ("gear action head removed tank slot",
+        INF_ACTION_DIMS[INF_HEAD_GEAR], 4);
+    ASSERT_INT_EQ("action mask removed tank slot",
+        INF_ACTION_MASK_SIZE, 86);
+    ASSERT_INT_EQ("npc obs includes compact target and dig signals",
+        INF_TOTAL_NPC_OBS_SIZE, 415);
     ASSERT_INT_EQ("step-out forecast covers every movement action",
         INF_STEP_OUT_FORECAST_OBS_SIZE, 200);
-    ASSERT_INT_EQ("inferno obs shape includes step-out forecast",
-        INF_NUM_OBS, 746);
+    ASSERT_INT_EQ("inferno obs shape includes compact spark summary",
+        INF_PENDING_SPARK_OBS_SIZE, 20);
+    ASSERT_INT_EQ("inferno obs shape includes cleanup pass",
+        INF_NUM_OBS, 744);
+    ASSERT_SOURCE_NOT_CONTAINS("armor_tank state is removed",
+        "ocean/osrs/encounters/encounter_inferno.h", "armor_tank");
+    ASSERT_SOURCE_NOT_CONTAINS("extra npc obs scaffold is removed",
+        "ocean/osrs/encounters/encounter_inferno.h", "INF_EXTRA_NPC_OBS_FEATURES");
+}
+
+static void test_inferno_obs_wave_phase_one_hot(void) {
+    printf("--- inferno obs wave phase one hot ---\n");
+
+    int waves[6] = {1, 18, 35, 50, 67, 69};
+    for (int phase = 0; phase < 6; phase++) {
+        InfernoState state = make_test_state(20, 20);
+        state.wave = waves[phase] - 1;
+        state.player.current_hitpoints = 99;
+        state.player.base_hitpoints = 99;
+        state.player.base_prayer = 99;
+        state.player.current_prayer = 99;
+
+        float obs[INF_NUM_OBS];
+        inf_write_obs((EncounterState*)&state, obs);
+
+        for (int i = 0; i < 6; i++) {
+            float expected = (i == phase) ? 1.0f : 0.0f;
+            ASSERT_FLOAT_NEAR("wave phase one hot", obs[INF_OBS_WAVE_PHASE_START + i],
+                expected, 1e-6f);
+        }
+    }
+
+    InfernoState triple_jad = make_test_state(20, 20);
+    triple_jad.wave = 67;
+    triple_jad.player.current_hitpoints = 99;
+    triple_jad.player.base_hitpoints = 99;
+    triple_jad.player.base_prayer = 99;
+    triple_jad.player.current_prayer = 99;
+    float obs[INF_NUM_OBS];
+    inf_write_obs((EncounterState*)&triple_jad, obs);
+    ASSERT_FLOAT_NEAR("wave 68 stays in Jad phase",
+        obs[INF_OBS_WAVE_PHASE_START + 4], 1.0f, 1e-6f);
+}
+
+static void test_inferno_obs_exposes_meleer_dig_state(void) {
+    printf("--- inferno obs exposes meleer dig state ---\n");
+
+    InfernoState state = make_test_state(20, 20);
+    state.player.current_hitpoints = 99;
+    state.player.base_hitpoints = 99;
+    state.player.base_prayer = 99;
+    state.player.current_prayer = 99;
+    state.npcs[0] = make_test_npc(
+        INF_NPC_MELEER, 24, 20, INF_NPC_STATS[INF_NPC_MELEER].size);
+    state.npcs[0].active = 1;
+    state.npcs[0].hp = state.npcs[0].max_hp = INF_NPC_STATS[INF_NPC_MELEER].hp;
+    state.npcs[0].no_los_ticks = 25;
+    state.npcs[0].dig_freeze_timer = 3;
+    state.npcs[0].dig_attack_delay = 6;
+
+    float obs[INF_NUM_OBS];
+    inf_write_obs((EncounterState*)&state, obs);
+
+    int meleer_slot = 4;
+    int dig_start = inferno_obs_slot_dig_index(meleer_slot);
+    ASSERT_INT_EQ("meleer occupies first meleer slot",
+        state.current_obs_slots[meleer_slot], 0);
+    ASSERT_FLOAT_NEAR("meleer no-los dig progress",
+        obs[dig_start], 0.5f, 1e-6f);
+    ASSERT_FLOAT_NEAR("meleer emerge timer",
+        obs[dig_start + 1], 0.5f, 1e-6f);
+    ASSERT_FLOAT_NEAR("meleer post-dig attack delay",
+        obs[dig_start + 2], 1.0f, 1e-6f);
+
 }
 
 static void test_jad_special_wave_spawn_cadence_matches_reference(void) {
@@ -2479,14 +2634,14 @@ static void test_jad_melee_stays_instant_and_untelegraphed(void) {
 
     ASSERT_FLOAT_NEAR(
         "jad prayer-critical preview does not advertise melee fallback",
-        obs[41], 1.0f / 3.0f, 1e-6f);
+        obs[INF_OBS_PRAYER_CONFLICT], 1.0f / 3.0f, 1e-6f);
     ASSERT_INT_EQ(
         "jad prayer-critical preview keeps ranged one-hot",
-        (int)(obs[38] + obs[39] + obs[40]),
+        (int)(obs[INF_OBS_PRAYER_MELEE] + obs[INF_OBS_PRAYER_RANGED] + obs[INF_OBS_PRAYER_MAGIC]),
         1);
     ASSERT_FLOAT_NEAR(
         "jad preview keeps ranged as the visible style",
-        obs[39], 1.0f, 1e-6f);
+        obs[INF_OBS_PRAYER_RANGED], 1.0f, 1e-6f);
 
     int saw_melee = 0;
     for (uint32_t seed = 0; seed < 256; seed++) {
@@ -2542,13 +2697,15 @@ static int inferno_obs_slot_feature_count(int slot_idx) {
     int has_scan = (type == INF_NPC_BLOB);
     int has_los = (type != INF_NPC_NIBBLER && type != INF_NPC_MELEER &&
         type != INF_NPC_HEALER_JAD && type != INF_NPC_ZUK_SHIELD);
-    int has_aggro = (type != INF_NPC_NIBBLER && type != INF_NPC_ZUK_SHIELD);
+    int has_target_category = (type != INF_NPC_NIBBLER &&
+        type != INF_NPC_ZUK_SHIELD);
     int has_timer = (type != INF_NPC_NIBBLER && type != INF_NPC_HEALER_JAD &&
         type != INF_NPC_ZUK_SHIELD);
     int has_targeted = 1;
+    int has_meleer_dig = (type == INF_NPC_MELEER);
 
     return 4 + has_timer + 3 * has_style + has_los + 3 * has_scan +
-        has_aggro + has_targeted + INF_EXTRA_NPC_OBS_FEATURES;
+        4 * has_target_category + has_targeted + 1 + 3 * has_meleer_dig;
 }
 
 static int inferno_obs_slot_start(int slot_idx) {
@@ -2578,6 +2735,36 @@ static int inferno_pending_hit_obs_start(void) {
 static int inferno_spark_obs_start(void) {
     return inferno_pending_hit_obs_start() +
         INF_FEATURES_PER_HIT * ENCOUNTER_MAX_PENDING_HITS;
+}
+
+static int inferno_obs_slot_target_category_start(int slot_idx) {
+    int type = inferno_obs_slot_type(slot_idx);
+    int has_style = (type == INF_NPC_BLOB || type == INF_NPC_JAD);
+    int has_scan = (type == INF_NPC_BLOB);
+    int has_los = (type != INF_NPC_NIBBLER && type != INF_NPC_MELEER &&
+        type != INF_NPC_HEALER_JAD && type != INF_NPC_ZUK_SHIELD);
+    int has_timer = (type != INF_NPC_NIBBLER && type != INF_NPC_HEALER_JAD &&
+        type != INF_NPC_ZUK_SHIELD);
+
+    return inferno_obs_slot_start(slot_idx) + 4 + has_timer +
+        3 * has_style + has_los + 3 * has_scan;
+}
+
+static int inferno_obs_slot_targeted_index(int slot_idx) {
+    int type = inferno_obs_slot_type(slot_idx);
+    int has_target_category = (type != INF_NPC_NIBBLER &&
+        type != INF_NPC_ZUK_SHIELD);
+
+    return inferno_obs_slot_target_category_start(slot_idx) +
+        4 * has_target_category;
+}
+
+static int inferno_obs_slot_phantom_index(int slot_idx) {
+    return inferno_obs_slot_targeted_index(slot_idx) + 1;
+}
+
+static int inferno_obs_slot_dig_index(int slot_idx) {
+    return inferno_obs_slot_phantom_index(slot_idx) + 1;
 }
 
 static void init_step_out_forecast_stack_state(InfernoState* state, int player_x, int player_y) {
@@ -3027,27 +3214,49 @@ static void test_zuk_obs_exposes_attack_timer_summary(void) {
     inf_write_obs((EncounterState*)&state, obs);
 
     ASSERT_FLOAT_NEAR("zuk attack timer uses existing player placeholder",
-        obs[15], 0.3f, 1e-6f);
+        obs[INF_OBS_ZUK_ATTACK_TIMER], 0.3f, 1e-6f);
 }
 
 static void test_zuk_obs_exposes_pending_sparks(void) {
-    printf("--- zuk obs exposes pending sparks ---\n");
+    printf("--- zuk obs exposes compressed pending spark summaries ---\n");
 
     InfernoState state;
     init_zuk_timing_state(&state);
     state.pending_sparks[0] = (InfPendingSpark){
-        .active = 1, .x = state.player.x + 4, .y = state.player.y,
-        .damage = 8, .ticks_remaining = 4,
+        .active = 1, .src_x = state.player.x + 5, .src_y = state.player.y,
+        .x = state.player.x + 4, .y = state.player.y,
+        .damage = 3, .ticks_remaining = 4,
     };
     state.pending_sparks[1] = (InfPendingSpark){
-        .active = 1, .x = state.player.x - 1, .y = state.player.y + 2,
-        .damage = 10, .ticks_remaining = 2,
+        .active = 1, .src_x = state.player.x + 5, .src_y = state.player.y,
+        .x = state.player.x - 1, .y = state.player.y + 2,
+        .damage = 7, .ticks_remaining = 2,
+    };
+    state.pending_sparks[2] = (InfPendingSpark){
+        .active = 1, .src_x = state.player.x - 3, .src_y = state.player.y + 1,
+        .x = state.player.x - 2, .y = state.player.y + 1,
+        .damage = 5, .ticks_remaining = 3,
+    };
+    state.pending_sparks[3] = (InfPendingSpark){
+        .active = 1, .src_x = state.player.x + 1, .src_y = state.player.y + 1,
+        .x = state.player.x + 1, .y = state.player.y + 1,
+        .damage = 6, .ticks_remaining = 4,
+    };
+    state.pending_sparks[4] = (InfPendingSpark){
+        .active = 1, .src_x = state.player.x + 2, .src_y = state.player.y + 2,
+        .x = state.player.x + 2, .y = state.player.y + 2,
+        .damage = 8, .ticks_remaining = 5,
+    };
+    state.pending_sparks[5] = (InfPendingSpark){
+        .active = 1, .src_x = state.player.x + 3, .src_y = state.player.y + 3,
+        .x = state.player.x + 3, .y = state.player.y + 3,
+        .damage = 9, .ticks_remaining = 6,
     };
 
     int spark_start = inferno_spark_obs_start();
     int spark_features = 5;
-    int spark_slots = INF_MAX_PENDING_SPARKS;
-    ASSERT_INT_EQ("inferno obs has pending spark section",
+    int spark_slots = 4;
+    ASSERT_INT_EQ("inferno obs has compressed spark section",
         INF_NUM_OBS >= spark_start + spark_features * spark_slots, 1);
     if (INF_NUM_OBS < spark_start + spark_features * spark_slots)
         return;
@@ -3055,19 +3264,19 @@ static void test_zuk_obs_exposes_pending_sparks(void) {
     float obs[INF_NUM_OBS];
     inf_write_obs((EncounterState*)&state, obs);
 
-    ASSERT_FLOAT_NEAR("first spark active", obs[spark_start], 1.0f, 1e-6f);
-    ASSERT_FLOAT_NEAR("first spark rel x sorted by earliest landing",
-        obs[spark_start + 1], -1.0f / (float)INF_ARENA_WIDTH, 1e-6f);
-    ASSERT_FLOAT_NEAR("first spark rel y",
-        obs[spark_start + 2], 2.0f / (float)INF_ARENA_HEIGHT, 1e-6f);
-    ASSERT_FLOAT_NEAR("first spark timer",
+    ASSERT_FLOAT_NEAR("first spark group active", obs[spark_start], 1.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("first spark group uses source x",
+        obs[spark_start + 1], 5.0f / (float)INF_ARENA_WIDTH, 1e-6f);
+    ASSERT_FLOAT_NEAR("first spark group uses source y",
+        obs[spark_start + 2], 0.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("first spark group earliest timer",
         obs[spark_start + 3], 0.2f, 1e-6f);
-    ASSERT_FLOAT_NEAR("first spark damage",
+    ASSERT_FLOAT_NEAR("first spark group total damage",
         obs[spark_start + 4], 1.0f, 1e-6f);
-    ASSERT_FLOAT_NEAR("second spark active",
+    ASSERT_FLOAT_NEAR("second spark group active",
         obs[spark_start + 5], 1.0f, 1e-6f);
-    ASSERT_FLOAT_NEAR("second spark timer",
-        obs[spark_start + 8], 0.4f, 1e-6f);
+    ASSERT_FLOAT_NEAR("fourth spark group active",
+        obs[spark_start + 15], 1.0f, 1e-6f);
 }
 
 static void assert_human_blowpipe_zuk_chase_endpoint(
@@ -3861,6 +4070,32 @@ static void test_phantom_barrage_does_not_displace_live_obs_slots(void) {
         inf_find_target_obs_slot(&state, 0), -1);
 }
 
+static void test_phantom_barrage_targetability_obs_requires_ready_attack(void) {
+    printf("--- phantom barrage targetability obs requires ready attack ---\n");
+
+    InfernoState state;
+    init_phantom_barrage_test_state(&state, 1, 1);
+    float obs[INF_NUM_OBS];
+    inf_write_obs((EncounterState*)&state, obs);
+    int target_slot = inf_find_target_obs_slot(&state, 0);
+    ASSERT_INT_EQ("dying target appears in obs slots", target_slot >= 0, 1);
+    if (target_slot < 0) return;
+
+    int phantom_idx = inferno_obs_slot_phantom_index(target_slot);
+    ASSERT_FLOAT_NEAR("cooldown target is not phantom targetable now",
+        obs[phantom_idx], 0.0f, 1e-6f);
+
+    init_phantom_barrage_test_state(&state, 1, 0);
+    memset(obs, 0, sizeof(obs));
+    inf_write_obs((EncounterState*)&state, obs);
+    target_slot = inf_find_target_obs_slot(&state, 0);
+    ASSERT_INT_EQ("ready dying target appears in obs slots", target_slot >= 0, 1);
+    if (target_slot < 0) return;
+    phantom_idx = inferno_obs_slot_phantom_index(target_slot);
+    ASSERT_FLOAT_NEAR("ready barrage target is phantom targetable now",
+        obs[phantom_idx], 1.0f, 1e-6f);
+}
+
 static void init_confliction_barrage_test_state(
     InfernoState* state,
     InfNPCType target_type
@@ -4019,15 +4254,18 @@ static void test_zuk_obs_tracks_shield_and_mager_aggro(void) {
 
     int mager_slot = 0;
     int shield_slot = 26;
-    int mager_start = inferno_obs_slot_start(mager_slot);
     int shield_start = inferno_obs_slot_start(shield_slot);
+    int mager_target_category = inferno_obs_slot_target_category_start(mager_slot);
 
     ASSERT_INT_EQ("first mager occupies mager slot 0", state.current_obs_slots[mager_slot], 0);
     ASSERT_INT_EQ("shield occupies dedicated shield slot", state.current_obs_slots[shield_slot], 2);
     ASSERT_FLOAT_NEAR("shield hp ratio visible in shield slot", obs[shield_start], 0.5f, 1e-6f);
-    ASSERT_FLOAT_NEAR("mager aggro bit is 0 while on shield", obs[mager_start + 6], 0.0f, 1e-6f);
-    ASSERT_FLOAT_NEAR("shield direction visible while alive", obs[43], 0.0f, 1e-6f);
-    ASSERT_FLOAT_NEAR("shield freeze visible while alive", obs[44], 0.6f, 1e-6f);
+    ASSERT_FLOAT_NEAR("mager target_player off while on shield",
+        obs[mager_target_category], 0.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("mager target_shield on while on shield",
+        obs[mager_target_category + 2], 1.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("shield direction visible while alive", obs[INF_OBS_ZUK_SHIELD_DIR], 0.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("shield freeze visible while alive", obs[INF_OBS_ZUK_SHIELD_FREEZE], 0.6f, 1e-6f);
     ASSERT_FLOAT_NEAR("mager target mask is valid", mask[inferno_target_mask_slot_offset(mager_slot)], 1.0f, 1e-6f);
     ASSERT_FLOAT_NEAR("shield target mask stays invalid", mask[inferno_target_mask_slot_offset(shield_slot)], 0.0f, 1e-6f);
 
@@ -4042,9 +4280,10 @@ static void test_zuk_obs_tracks_shield_and_mager_aggro(void) {
 
     ASSERT_INT_EQ("dead shield drops out of shield slot", state.current_obs_slots[shield_slot], -1);
     ASSERT_FLOAT_NEAR("dead shield slot hp zeros out", obs[shield_start], 0.0f, 1e-6f);
-    ASSERT_FLOAT_NEAR("dead shield zeroes stale direction", obs[43], 0.0f, 1e-6f);
-    ASSERT_FLOAT_NEAR("dead shield zeroes stale freeze", obs[44], 0.0f, 1e-6f);
-    ASSERT_FLOAT_NEAR("mager aggro bit flips to player", obs[mager_start + 6], 1.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("dead shield zeroes stale direction", obs[INF_OBS_ZUK_SHIELD_DIR], 0.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("dead shield zeroes stale freeze", obs[INF_OBS_ZUK_SHIELD_FREEZE], 0.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("mager target_player flips on",
+        obs[mager_target_category], 1.0f, 1e-6f);
 }
 
 static void test_zuk_healer_obs_marks_untagged_healer_pressure(void) {
@@ -4078,18 +4317,60 @@ static void test_zuk_healer_obs_marks_untagged_healer_pressure(void) {
     inf_write_obs((EncounterState*)&state, obs);
 
     int healer_slot = 33;
-    int healer_start = inferno_obs_slot_start(healer_slot);
+    int healer_target_category = inferno_obs_slot_target_category_start(healer_slot);
     ASSERT_INT_EQ("Zuk healer occupies first Zuk healer obs slot",
         state.current_obs_slots[healer_slot], 1);
-    ASSERT_FLOAT_NEAR("untagged Zuk healer pressure bit is visible",
-        obs[healer_start + 6], 1.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("untagged Zuk healer target_zuk is visible",
+        obs[healer_target_category + 1], 1.0f, 1e-6f);
 
     state.npcs[1].aggro_target = -1;
     memset(obs, 0, sizeof(obs));
     inf_write_obs((EncounterState*)&state, obs);
 
-    ASSERT_FLOAT_NEAR("tagged Zuk healer clears pressure bit",
-        obs[healer_start + 6], 0.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("tagged Zuk healer target_player is visible",
+        obs[healer_target_category], 1.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("tagged Zuk healer clears target_zuk",
+        obs[healer_target_category + 1], 0.0f, 1e-6f);
+}
+
+static void test_inferno_obs_target_categories_cover_boss_helpers(void) {
+    printf("--- inferno obs target categories cover boss helpers ---\n");
+
+    InfernoState state = make_test_state(20, 20);
+    state.player.current_hitpoints = 99;
+    state.player.base_hitpoints = 99;
+    state.player.base_prayer = 99;
+    state.player.current_prayer = 99;
+    state.player.current_defence = 99;
+    state.player.current_magic = 99;
+    state.player.current_ranged = 99;
+
+    state.npcs[0] = make_test_npc(
+        INF_NPC_JAD, 24, 20, INF_NPC_STATS[INF_NPC_JAD].size);
+    state.npcs[0].active = 1;
+    state.npcs[0].hp = state.npcs[0].max_hp = INF_NPC_STATS[INF_NPC_JAD].hp;
+
+    state.npcs[1] = make_test_npc(
+        INF_NPC_HEALER_JAD, 25, 20, INF_NPC_STATS[INF_NPC_HEALER_JAD].size);
+    state.npcs[1].active = 1;
+    state.npcs[1].hp = state.npcs[1].max_hp = INF_NPC_STATS[INF_NPC_HEALER_JAD].hp;
+    state.npcs[1].aggro_target = 0;
+
+    float obs[INF_NUM_OBS];
+    inf_write_obs((EncounterState*)&state, obs);
+
+    int healer_slot = 27;
+    int target_category = inferno_obs_slot_target_category_start(healer_slot);
+    ASSERT_INT_EQ("Jad healer occupies helper slot",
+        state.current_obs_slots[healer_slot], 1);
+    ASSERT_FLOAT_NEAR("Jad healer targeting Jad maps to other NPC",
+        obs[target_category + 3], 1.0f, 1e-6f);
+
+    state.npcs[1].aggro_target = -1;
+    memset(obs, 0, sizeof(obs));
+    inf_write_obs((EncounterState*)&state, obs);
+    ASSERT_FLOAT_NEAR("tagged Jad healer maps to player",
+        obs[target_category], 1.0f, 1e-6f);
 }
 
 static void test_zuk_set_obs_los_uses_current_target(void) {
@@ -4123,9 +4404,10 @@ static void test_zuk_set_obs_los_uses_current_target(void) {
     inf_write_obs((EncounterState*)&state, obs);
 
     int mager_start = inferno_obs_slot_start(0);
+    int mager_target_category = inferno_obs_slot_target_category_start(0);
     ASSERT_INT_EQ("mager occupies first obs slot", state.current_obs_slots[0], 0);
     ASSERT_FLOAT_NEAR("mager los follows shield target", obs[mager_start + 4], 1.0f, 1e-6f);
-    ASSERT_FLOAT_NEAR("mager aggro bit stays off for shield target", obs[mager_start + 6], 0.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("mager target_shield stays on", obs[mager_target_category + 2], 1.0f, 1e-6f);
 }
 
 static void test_zuk_set_prayer_critical_ignores_shield_target(void) {
@@ -4159,8 +4441,10 @@ static void test_zuk_set_prayer_critical_ignores_shield_target(void) {
     float obs[INF_NUM_OBS];
     inf_write_obs((EncounterState*)&state, obs);
 
-    ASSERT_FLOAT_NEAR("shield-targeted mager does not create prayer deadline", obs[37], 1.0f, 1e-6f);
-    ASSERT_FLOAT_NEAR("shield-targeted mager has no prayer style", obs[38] + obs[39] + obs[40], 0.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("shield-targeted mager does not create prayer deadline", obs[INF_OBS_PRAYER_TIMER], 1.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("shield-targeted mager has no prayer style",
+        obs[INF_OBS_PRAYER_MELEE] + obs[INF_OBS_PRAYER_RANGED] + obs[INF_OBS_PRAYER_MAGIC],
+        0.0f, 1e-6f);
 }
 
 static void child_inf_put_bad_start_wave(void) {
@@ -5698,10 +5982,12 @@ int main(void) {
     test_tagged_jad_healer_melee_geometry();
     test_overlap_shuffle_hold_after_recent_target_click();
     test_overlap_shuffle_respects_npc_collision_flags();
+    test_large_npc_overlap_shuffle_can_partially_unclip();
     test_player_movement_ignores_npc_collision_flags();
     test_tagged_jad_healer_stops_at_melee_contact();
     test_tagged_jad_healers_queue_behind_front_healer();
-    test_stacked_npc_unclipping_clears_flag_when_one_leaves();
+    test_stacked_npc_unclipping_preserves_flag_when_one_leaves();
+    test_meleer_dig_can_stack_without_losing_collision_flag();
     test_jad_healer_spawn_offsets_match_wave_67_reference();
     test_jad_healer_spawn_offsets_match_zuk_reference();
     test_meleer_dig_landing_order();
@@ -5755,6 +6041,8 @@ int main(void) {
     test_jad_long_distance_damage_uses_delayed_projectile_landing();
     test_triple_jad_pending_threats_fit_obs_layout();
     test_inferno_obs_shape_includes_step_out_forecast_features();
+    test_inferno_obs_wave_phase_one_hot();
+    test_inferno_obs_exposes_meleer_dig_state();
     test_jad_special_wave_spawn_cadence_matches_reference();
     test_triple_jad_first_attacks_are_staggered();
     test_jad_melee_stays_instant_and_untelegraphed();
@@ -5782,6 +6070,7 @@ int main(void) {
     test_phantom_barrage_hits_aoe_on_first_cast_window();
     test_phantom_barrage_close_barrage_timing_cannot_recast();
     test_phantom_barrage_does_not_displace_live_obs_slots();
+    test_phantom_barrage_targetability_obs_requires_ready_attack();
     test_inferno_barrage_primes_confliction_and_reuses_double_accuracy();
     test_barrage_accuracy_regression_against_ranger_and_mager();
     test_zuk_obs_exposes_attack_timer_summary();
@@ -5798,6 +6087,7 @@ int main(void) {
     test_zuk_spark_render_matches_pending_spark_state();
     test_zuk_obs_tracks_shield_and_mager_aggro();
     test_zuk_healer_obs_marks_untagged_healer_pressure();
+    test_inferno_obs_target_categories_cover_boss_helpers();
     test_zuk_set_obs_los_uses_current_target();
     test_zuk_set_prayer_critical_ignores_shield_target();
     test_fail_fast_boundaries();

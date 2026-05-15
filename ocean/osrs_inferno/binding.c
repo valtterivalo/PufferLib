@@ -144,11 +144,16 @@ typedef struct InfernoEnv {
     int post_240_trace_active;
     int post_240_trace_rows;
     int post_240_trace_truncated;
+    FILE* stall_trace_file;
+    int stall_trace_id;
+    int stall_trace_rows;
+    int stall_trace_truncated;
+    int stall_trace_ticks;
 } InfernoEnv;
 
 #define OBS_SIZE INF_TOTAL_OBS
 #define NUM_ATNS INF_NUM_ACTION_HEADS
-#define ACT_SIZES { ENCOUNTER_MOVE_ACTIONS, ENCOUNTER_OVERHEAD_DIM_PVE, INF_OBS_NPCS+1, 5, 2, 4, 3, 2, ENCOUNTER_OFFENSIVE_DIM }
+#define ACT_SIZES { ENCOUNTER_MOVE_ACTIONS, ENCOUNTER_OVERHEAD_DIM_PVE, INF_OBS_NPCS+1, 4, 2, 4, 3, 2, ENCOUNTER_OFFENSIVE_DIM }
 #define OBS_TENSOR_T FloatTensor
 #define Env InfernoEnv
 #define INF_RENDER_STATUS_FRAMES 180
@@ -157,6 +162,7 @@ typedef struct InfernoEnv {
 static pthread_mutex_t g_best_replay_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t g_live_phase2_demo_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t g_post_240_trace_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t g_stall_trace_mutex = PTHREAD_MUTEX_INITIALIZER;
 static InfernoReplayBest g_best_replay = {
     .wave = 0,
     .ticks = 999999,
@@ -170,6 +176,12 @@ static int g_post_240_trace_next_id = 0;
 static int g_post_240_trace_max = 0;
 static int g_post_240_trace_tick_cap = 512;
 static char g_post_240_trace_dir[1024] = "";
+static int g_stall_trace_initialized = 0;
+static int g_stall_trace_next_id = 0;
+static int g_stall_trace_max = 0;
+static int g_stall_trace_tick_cap = 512;
+static int g_stall_trace_min_ticks = 64;
+static char g_stall_trace_dir[1024] = "";
 
 static void inferno_replay_lock_best(void) {
     if (pthread_mutex_lock(&g_best_replay_mutex) != 0) {
@@ -287,6 +299,348 @@ static int inferno_post_240_trace_reserve_id(void) {
     }
     inferno_post_240_trace_unlock();
     return id;
+}
+
+typedef struct {
+    int selected_target_action;
+    int selected_target_npc;
+    int selected_target_type;
+    int valid_target_actions;
+    int selected_action_valid[INF_NUM_ACTION_HEADS];
+    int selected_action_value[INF_NUM_ACTION_HEADS];
+} InfernoStallTraceDecision;
+
+static int inferno_action_mask_offset(int head) {
+    if (head < 0 || head >= INF_NUM_ACTION_HEADS) {
+        fprintf(stderr, "bad action head %d\n", head);
+        abort();
+    }
+    int offset = 0;
+    for (int h = 0; h < head; h++)
+        offset += INF_ACTION_DIMS[h];
+    return offset;
+}
+
+static void inferno_stall_trace_lock(void) {
+    if (pthread_mutex_lock(&g_stall_trace_mutex) != 0) {
+        fprintf(stderr, "STALL_TRACE: cannot lock trace state\n");
+        abort();
+    }
+}
+
+static void inferno_stall_trace_unlock(void) {
+    if (pthread_mutex_unlock(&g_stall_trace_mutex) != 0) {
+        fprintf(stderr, "STALL_TRACE: cannot unlock trace state\n");
+        abort();
+    }
+}
+
+static void inferno_stall_trace_init_once(void) {
+    inferno_stall_trace_lock();
+    if (!g_stall_trace_initialized) {
+        const char* dir = getenv("STALL_TRACE_DIR");
+        if (dir && dir[0]) {
+            int n = snprintf(g_stall_trace_dir, sizeof(g_stall_trace_dir), "%s", dir);
+            if (n < 0 || (size_t)n >= sizeof(g_stall_trace_dir)) {
+                fprintf(stderr, "STALL_TRACE_DIR too long\n");
+                abort();
+            }
+            g_stall_trace_max =
+                inferno_read_int_env("STALL_TRACE_MAX_EPISODES", 16);
+            g_stall_trace_tick_cap =
+                inferno_read_int_env("STALL_TRACE_TICK_CAP", 512);
+            g_stall_trace_min_ticks =
+                inferno_read_int_env("STALL_TRACE_MIN_TICKS", 64);
+            if (g_stall_trace_max < 0) {
+                fprintf(stderr, "STALL_TRACE_MAX_EPISODES must be >= 0\n");
+                abort();
+            }
+            if (g_stall_trace_tick_cap <= 0) {
+                fprintf(stderr, "STALL_TRACE_TICK_CAP must be > 0\n");
+                abort();
+            }
+            if (g_stall_trace_min_ticks <= 0) {
+                fprintf(stderr, "STALL_TRACE_MIN_TICKS must be > 0\n");
+                abort();
+            }
+            if (mkdir(g_stall_trace_dir, 0775) != 0 && errno != EEXIST) {
+                fprintf(stderr, "STALL_TRACE: cannot create %s\n", g_stall_trace_dir);
+                abort();
+            }
+        }
+        g_stall_trace_initialized = 1;
+    }
+    inferno_stall_trace_unlock();
+}
+
+static int inferno_stall_trace_reserve_id(void) {
+    int id = -1;
+    inferno_stall_trace_lock();
+    if (g_stall_trace_dir[0] && g_stall_trace_next_id < g_stall_trace_max)
+        id = g_stall_trace_next_id++;
+    inferno_stall_trace_unlock();
+    return id;
+}
+
+static void inferno_stall_trace_capture_decision(
+    Env* env,
+    const float* action_mask,
+    InfernoStallTraceDecision* out
+) {
+    InfernoState* s = (InfernoState*)env->enc_state;
+    inf_refresh_current_obs_slots(s);
+    memset(out, 0, sizeof(*out));
+    out->selected_target_action = env->acts_staging[INF_HEAD_TARGET];
+    out->selected_target_npc = -1;
+    out->selected_target_type = -1;
+
+    for (int h = 0; h < INF_NUM_ACTION_HEADS; h++) {
+        int action = env->acts_staging[h];
+        int offset = inferno_action_mask_offset(h);
+        out->selected_action_value[h] = action;
+        out->selected_action_valid[h] =
+            action >= 0 && action < INF_ACTION_DIMS[h] &&
+            action_mask[offset + action] > 0.5f;
+    }
+
+    int target_offset = inferno_action_mask_offset(INF_HEAD_TARGET);
+    for (int a = 1; a <= INF_OBS_NPCS; a++) {
+        if (action_mask[target_offset + a] > 0.5f)
+            out->valid_target_actions++;
+    }
+    if (out->selected_target_action > 0 &&
+            out->selected_target_action <= INF_OBS_NPCS) {
+        int obs_slot = out->selected_target_action - 1;
+        int npc_idx = s->current_obs_slots[obs_slot];
+        out->selected_target_npc = npc_idx;
+        if (npc_idx >= 0 && npc_idx < INF_MAX_NPCS)
+            out->selected_target_type = s->npcs[npc_idx].type;
+    }
+}
+
+static int inferno_stall_trace_has_alive_target(const InfernoState* s) {
+    for (int i = 0; i < INF_MAX_NPCS; i++) {
+        const InfNPC* npc = &s->npcs[i];
+        if (!npc->active || npc->death_ticks > 0 || npc->hp <= 0)
+            continue;
+        if (npc->type == INF_NPC_ZUK_SHIELD)
+            continue;
+        return 1;
+    }
+    return 0;
+}
+
+static int inferno_stall_trace_tick_matches(const InfernoState* s) {
+    if (s->episode_over) return 0;
+    if (s->wave_spawn_delay > 0 || s->wave_ready_delay > 0) return 0;
+    if (!inferno_stall_trace_has_alive_target(s)) return 0;
+    if (s->player.attack_timer != 0) return 0;
+    if (s->player_attacked_this_tick) return 0;
+    if (s->damage_dealt_this_tick > 0.0f) return 0;
+    return 1;
+}
+
+static void inferno_stall_trace_write_npcs(FILE* fp, InfernoState* s) {
+    fprintf(fp, "\"npcs\":[");
+    int first = 1;
+    for (int i = 0; i < INF_MAX_NPCS; i++) {
+        InfNPC* npc = &s->npcs[i];
+        if (!npc->active || npc->death_ticks > 0 || npc->hp <= 0)
+            continue;
+        if (npc->type == INF_NPC_ZUK_SHIELD)
+            continue;
+        int obs_slot = inf_find_target_obs_slot(s, i);
+        int player_can_attack =
+            inf_player_can_attack_npc_from_current_tile(s, i);
+        int npc_has_los = inf_npc_has_los_direct(s, i);
+        if (!first) fprintf(fp, ",");
+        first = 0;
+        fprintf(fp,
+            "{\"slot\":%d,\"type\":%d,\"hp\":%d,\"x\":%d,\"y\":%d,"
+            "\"size\":%d,\"attack_timer\":%d,\"obs_slot\":%d,"
+            "\"player_can_attack\":%d,\"npc_has_los\":%d}",
+            i, npc->type, npc->hp, npc->x, npc->y, npc->size,
+            npc->attack_timer, obs_slot, player_can_attack, npc_has_los);
+    }
+    fprintf(fp, "]");
+}
+
+static void inferno_stall_trace_close(Env* env, const char* reason) {
+    if (!env->stall_trace_file)
+        return;
+
+    InfernoState* s = (InfernoState*)env->enc_state;
+    fprintf(env->stall_trace_file,
+        "{\"kind\":\"end\",\"reason\":\"%s\",\"trace_id\":%d,"
+        "\"tick\":%d,\"winner\":%d,\"rows\":%d,\"truncated\":%d}\n",
+        reason,
+        env->stall_trace_id,
+        s->tick,
+        s->winner,
+        env->stall_trace_rows,
+        env->stall_trace_truncated);
+    if (fclose(env->stall_trace_file) != 0) {
+        fprintf(stderr, "STALL_TRACE: cannot close trace file\n");
+        abort();
+    }
+    env->stall_trace_file = NULL;
+}
+
+static void inferno_stall_trace_open(Env* env, const InfernoState* s) {
+    if (env->stall_trace_file)
+        return;
+
+    int id = inferno_stall_trace_reserve_id();
+    if (id < 0)
+        return;
+
+    char path[1400];
+    int n = snprintf(path, sizeof(path),
+        "%s/stall_%06d_env%04d_seed%u.jsonl",
+        g_stall_trace_dir,
+        id,
+        env->env_idx,
+        env->episode_rng_start);
+    if (n < 0 || (size_t)n >= sizeof(path)) {
+        fprintf(stderr, "STALL_TRACE path too long\n");
+        abort();
+    }
+
+    env->stall_trace_file = fopen(path, "w");
+    if (!env->stall_trace_file) {
+        fprintf(stderr, "STALL_TRACE: cannot open %s\n", path);
+        abort();
+    }
+    env->stall_trace_id = id;
+    env->stall_trace_rows = 0;
+    env->stall_trace_truncated = 0;
+    fprintf(env->stall_trace_file,
+        "{\"kind\":\"meta\",\"trace_id\":%d,\"env_idx\":%d,"
+        "\"rng_start\":%u,\"start_wave\":%d,\"min_ticks\":%d,"
+        "\"tick_cap\":%d}\n",
+        id,
+        env->env_idx,
+        env->episode_rng_start,
+        s->start_wave + 1,
+        g_stall_trace_min_ticks,
+        g_stall_trace_tick_cap);
+}
+
+static void inferno_stall_trace_capture(
+    Env* env,
+    const InfernoStallTraceDecision* decision,
+    int is_term
+) {
+    if (!g_stall_trace_initialized)
+        inferno_stall_trace_init_once();
+    if (!g_stall_trace_dir[0] || g_stall_trace_max <= 0)
+        return;
+
+    InfernoState* s = (InfernoState*)env->enc_state;
+    if (inferno_stall_trace_tick_matches(s)) {
+        env->stall_trace_ticks++;
+    } else {
+        env->stall_trace_ticks = 0;
+        if (is_term)
+            inferno_stall_trace_close(env, "terminal");
+        return;
+    }
+
+    if (env->stall_trace_ticks < g_stall_trace_min_ticks)
+        return;
+
+    inferno_stall_trace_open(env, s);
+    if (!env->stall_trace_file)
+        return;
+
+    if (env->stall_trace_rows >= g_stall_trace_tick_cap) {
+        env->stall_trace_truncated = 1;
+        return;
+    }
+
+    int current_target_slot = osrs_interaction_active(&s->interaction)
+        ? s->interaction.target_slot : -1;
+    int current_target_type = -1;
+    int current_target_attackable = 0;
+    int current_target_in_range = 0;
+    int current_target_los = 0;
+    if (current_target_slot >= 0 && current_target_slot < INF_MAX_NPCS) {
+        current_target_type = s->npcs[current_target_slot].type;
+        current_target_attackable = inf_obs_slot_is_targetable(
+            s, inf_find_target_obs_slot(s, current_target_slot));
+        current_target_in_range =
+            inf_player_can_attack_npc_from_current_tile(s, current_target_slot);
+        current_target_los = inf_npc_has_los_direct(s, current_target_slot);
+    }
+
+    fprintf(env->stall_trace_file,
+        "{\"kind\":\"stall_tick\",\"trace_id\":%d,\"tick\":%d,"
+        "\"stall_ticks\":%d,\"wave\":%d,\"reward\":%.6f,"
+        "\"episode_return\":%.6f,\"player_x\":%d,\"player_y\":%d,"
+        "\"player_hp\":%d,\"player_prayer\":%d,"
+        "\"player_attack_timer\":%d,\"player_dest_x\":%d,"
+        "\"player_dest_y\":%d,\"player_moved\":%d,"
+        "\"active_overhead\":%d,"
+        "\"offensive_prayer\":%d,\"weapon\":%d,\"ranged\":%d,"
+        "\"magic\":%d,\"brews\":%d,\"restores\":%d,\"bastions\":%d,"
+        "\"policy_move\":%d,\"policy_prayer\":%d,"
+        "\"policy_target\":%d,\"policy_gear\":%d,"
+        "\"policy_eat\":%d,\"policy_potion\":%d,"
+        "\"policy_spell\":%d,\"policy_spec\":%d,"
+        "\"policy_offensive\":%d,\"valid_target_actions\":%d,"
+        "\"selected_target_npc\":%d,\"selected_target_type\":%d,"
+        "\"selected_action_valid\":[",
+        env->stall_trace_id,
+        s->tick,
+        env->stall_trace_ticks,
+        s->wave + 1,
+        s->reward,
+        s->episode_return,
+        s->player.x,
+        s->player.y,
+        s->player.current_hitpoints,
+        s->player.current_prayer,
+        s->player.attack_timer,
+        s->player_dest_x,
+        s->player_dest_y,
+        s->player_moved_this_tick,
+        s->player.prayer,
+        s->player.offensive_prayer,
+        s->weapon_set,
+        s->player.current_ranged,
+        s->player.current_magic,
+        s->player.brew_doses,
+        s->player.restore_doses,
+        s->player.bastion_doses,
+        decision->selected_action_value[INF_HEAD_MOVE],
+        decision->selected_action_value[INF_HEAD_PRAYER],
+        decision->selected_action_value[INF_HEAD_TARGET],
+        decision->selected_action_value[INF_HEAD_GEAR],
+        decision->selected_action_value[INF_HEAD_EAT],
+        decision->selected_action_value[INF_HEAD_POTION],
+        decision->selected_action_value[INF_HEAD_SPELL],
+        decision->selected_action_value[INF_HEAD_SPEC],
+        decision->selected_action_value[INF_HEAD_OFFENSIVE],
+        decision->valid_target_actions,
+        decision->selected_target_npc,
+        decision->selected_target_type);
+
+    for (int h = 0; h < INF_NUM_ACTION_HEADS; h++) {
+        if (h > 0) fprintf(env->stall_trace_file, ",");
+        fprintf(env->stall_trace_file, "%d", decision->selected_action_valid[h]);
+    }
+    fprintf(env->stall_trace_file,
+        "],\"current_target_slot\":%d,\"current_target_type\":%d,"
+        "\"current_target_attackable\":%d,\"current_target_in_range\":%d,"
+        "\"current_target_los\":%d,",
+        current_target_slot,
+        current_target_type,
+        current_target_attackable,
+        current_target_in_range,
+        current_target_los);
+    inferno_stall_trace_write_npcs(env->stall_trace_file, s);
+    fprintf(env->stall_trace_file, "}\n");
+    env->stall_trace_rows++;
 }
 
 static int inferno_trace_find_zuk_hp(const InfernoState* s) {
@@ -1273,6 +1627,14 @@ void c_step(Env* env) {
     if (!used_human_commands)
         inferno_env_record_phase2_first_action_match(env);
 
+    float action_mask_before[INF_ACTION_MASK_SIZE];
+    memcpy(action_mask_before,
+        (float*)env->observations + INF_NUM_OBS,
+        sizeof(action_mask_before));
+    InfernoStallTraceDecision stall_decision;
+    inferno_stall_trace_capture_decision(
+        env, action_mask_before, &stall_decision);
+
     /* buffer actions for best-episode recording */
     if (env->episode_actions && !used_human_commands) {
         if (env->episode_action_len == 0) {
@@ -1320,6 +1682,8 @@ void c_step(Env* env) {
     env->term_staging = (unsigned char)is_term;
     env->terminals[0] = (float)is_term;
 
+    if (!used_human_commands)
+        inferno_stall_trace_capture(env, &stall_decision, is_term);
     inferno_post_240_trace_capture(env, is_term);
 
     if (!is_term)
@@ -1932,6 +2296,8 @@ void c_step(Env* env) {
 
 void c_reset(Env* env) {
     inferno_post_240_trace_close(env, "reset");
+    inferno_stall_trace_close(env, "reset");
+    env->stall_trace_ticks = 0;
     uint32_t seed = env->replay_actions ? env->replay_rng_seed : 0;
     if (env->replay_actions && env->replay_has_initial_snapshot) {
         ENCOUNTER_INFERNO.restore(
@@ -1949,6 +2315,7 @@ void c_reset(Env* env) {
 
 void c_close(Env* env) {
     inferno_post_240_trace_close(env, "close");
+    inferno_stall_trace_close(env, "close");
     free(env->episode_actions);
     env->episode_actions = NULL;
     free(env->replay_actions);
@@ -2261,6 +2628,11 @@ void my_init(Env* env, Dict* kwargs) {
     env->post_240_trace_active = 0;
     env->post_240_trace_rows = 0;
     env->post_240_trace_truncated = 0;
+    env->stall_trace_file = NULL;
+    env->stall_trace_id = -1;
+    env->stall_trace_rows = 0;
+    env->stall_trace_truncated = 0;
+    env->stall_trace_ticks = 0;
     env->env_idx = env->rng;
     env->ticks_per_second = 1.667f;
     env->last_step_time = 0.0;
@@ -2472,6 +2844,14 @@ Env* my_vec_init(int* num_envs_out, int* buffer_env_starts, int* buffer_env_coun
             tier_counts[t] = (int)(curriculum_fracs[t] * num_envs);
             if (tier_counts[t] < 1) tier_counts[t] = 1;
             curriculum_total += tier_counts[t];
+        }
+        while (curriculum_total > num_envs) {
+            for (int t = num_tiers - 1; t >= 0 && curriculum_total > num_envs; t--) {
+                if (tier_counts[t] > 0) {
+                    tier_counts[t]--;
+                    curriculum_total--;
+                }
+            }
         }
         int base_count = num_envs - curriculum_total;
         int cursor = base_count;

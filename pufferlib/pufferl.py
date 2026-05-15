@@ -193,6 +193,10 @@ def _inferno_replay_env(args):
     post_240_trace_dir = env_args.get('post_240_trace_dir', '')
     post_240_trace_max_episodes = env_args.get('post_240_trace_max_episodes', 40)
     post_240_trace_tick_cap = env_args.get('post_240_trace_tick_cap', 512)
+    stall_trace_dir = env_args.get('stall_trace_dir', '')
+    stall_trace_max_episodes = env_args.get('stall_trace_max_episodes', 16)
+    stall_trace_tick_cap = env_args.get('stall_trace_tick_cap', 512)
+    stall_trace_min_ticks = env_args.get('stall_trace_min_ticks', 64)
     if record_path and play_path:
         raise ValueError('record_best_replay_path and play_replay_path cannot both be set')
 
@@ -201,6 +205,10 @@ def _inferno_replay_env(args):
     old_post_240_trace_dir = os.environ.get('POST240_TRACE_DIR')
     old_post_240_trace_max_episodes = os.environ.get('POST240_TRACE_MAX_EPISODES')
     old_post_240_trace_tick_cap = os.environ.get('POST240_TRACE_TICK_CAP')
+    old_stall_trace_dir = os.environ.get('STALL_TRACE_DIR')
+    old_stall_trace_max_episodes = os.environ.get('STALL_TRACE_MAX_EPISODES')
+    old_stall_trace_tick_cap = os.environ.get('STALL_TRACE_TICK_CAP')
+    old_stall_trace_min_ticks = os.environ.get('STALL_TRACE_MIN_TICKS')
     try:
         if record_path:
             os.environ['RECORD_REPLAY'] = record_path
@@ -218,6 +226,16 @@ def _inferno_replay_env(args):
             os.environ.pop('POST240_TRACE_DIR', None)
             os.environ.pop('POST240_TRACE_MAX_EPISODES', None)
             os.environ.pop('POST240_TRACE_TICK_CAP', None)
+        if stall_trace_dir:
+            os.environ['STALL_TRACE_DIR'] = stall_trace_dir
+            os.environ['STALL_TRACE_MAX_EPISODES'] = str(int(stall_trace_max_episodes))
+            os.environ['STALL_TRACE_TICK_CAP'] = str(int(stall_trace_tick_cap))
+            os.environ['STALL_TRACE_MIN_TICKS'] = str(int(stall_trace_min_ticks))
+        else:
+            os.environ.pop('STALL_TRACE_DIR', None)
+            os.environ.pop('STALL_TRACE_MAX_EPISODES', None)
+            os.environ.pop('STALL_TRACE_TICK_CAP', None)
+            os.environ.pop('STALL_TRACE_MIN_TICKS', None)
         yield
     finally:
         if old_record is None:
@@ -240,6 +258,22 @@ def _inferno_replay_env(args):
             os.environ.pop('POST240_TRACE_TICK_CAP', None)
         else:
             os.environ['POST240_TRACE_TICK_CAP'] = old_post_240_trace_tick_cap
+        if old_stall_trace_dir is None:
+            os.environ.pop('STALL_TRACE_DIR', None)
+        else:
+            os.environ['STALL_TRACE_DIR'] = old_stall_trace_dir
+        if old_stall_trace_max_episodes is None:
+            os.environ.pop('STALL_TRACE_MAX_EPISODES', None)
+        else:
+            os.environ['STALL_TRACE_MAX_EPISODES'] = old_stall_trace_max_episodes
+        if old_stall_trace_tick_cap is None:
+            os.environ.pop('STALL_TRACE_TICK_CAP', None)
+        else:
+            os.environ['STALL_TRACE_TICK_CAP'] = old_stall_trace_tick_cap
+        if old_stall_trace_min_ticks is None:
+            os.environ.pop('STALL_TRACE_MIN_TICKS', None)
+        else:
+            os.environ['STALL_TRACE_MIN_TICKS'] = old_stall_trace_min_ticks
 
 def _sweep_metric_key(args):
     return f'env/{args["sweep"]["metric"]}'

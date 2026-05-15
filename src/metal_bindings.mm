@@ -503,6 +503,7 @@ static bool is_python_side_channel_env_key(const char* key) {
     return std::strcmp(key, "record_best_replay_path") == 0 ||
            std::strcmp(key, "play_replay_path") == 0 ||
            std::strcmp(key, "post_240_trace_dir") == 0 ||
+           std::strcmp(key, "stall_trace_dir") == 0 ||
            std::strcmp(key, "phase2_demo_dir") == 0;
 }
 
