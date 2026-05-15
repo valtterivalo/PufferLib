@@ -130,10 +130,22 @@ struct PrefixScan {
   PrecisionTensor grad_combined, grad_state, grad_input;
 };
 
+enum OptimizerParamRole {
+  OPT_PARAM_UNTAGGED = 0,
+  OPT_PARAM_ENCODER,
+  OPT_PARAM_DECODER,
+  OPT_PARAM_LOGSTD,
+  OPT_PARAM_MINGRU,
+  OPT_PARAM_CONV,
+  OPT_PARAM_EMBEDDING,
+  OPT_PARAM_ROLE_COUNT,
+};
+
 struct AllocEntry {
   void **data_ptr;
   int64_t *shape;
   int elem_size;
+  OptimizerParamRole role;
 };
 
 struct Allocator {
@@ -187,21 +199,32 @@ struct Allocator {
 };
 
 inline void alloc_register(Allocator *a, FloatTensor *t) {
-  a->regs.push_back({(void **)&t->data, t->shape, (int)sizeof(float)});
+  a->regs.push_back({(void **)&t->data, t->shape, (int)sizeof(float),
+                     OPT_PARAM_UNTAGGED});
 }
 inline void alloc_register(Allocator *a, PrecisionTensor *t) {
   assert((t->dtype_size == 2 || t->dtype_size == 4) &&
          "alloc_register: unsupported precision tensor dtype");
-  a->regs.push_back({(void **)&t->data, t->shape, t->dtype_size});
+  a->regs.push_back({(void **)&t->data, t->shape, t->dtype_size,
+                     OPT_PARAM_UNTAGGED});
+}
+inline void alloc_register(Allocator *a, PrecisionTensor *t,
+                           OptimizerParamRole role) {
+  assert((t->dtype_size == 2 || t->dtype_size == 4) &&
+         "alloc_register: unsupported precision tensor dtype");
+  a->regs.push_back({(void **)&t->data, t->shape, t->dtype_size, role});
 }
 inline void alloc_register(Allocator *a, IntTensor *t) {
-  a->regs.push_back({(void **)&t->data, t->shape, (int)sizeof(int)});
+  a->regs.push_back({(void **)&t->data, t->shape, (int)sizeof(int),
+                     OPT_PARAM_UNTAGGED});
 }
 inline void alloc_register(Allocator *a, LongTensor *t) {
-  a->regs.push_back({(void **)&t->data, t->shape, (int)sizeof(long)});
+  a->regs.push_back({(void **)&t->data, t->shape, (int)sizeof(long),
+                     OPT_PARAM_UNTAGGED});
 }
 inline void alloc_register(Allocator *a, PufTensor *t) {
-  a->regs.push_back({(void **)&t->bytes, t->shape, t->dtype_size});
+  a->regs.push_back({(void **)&t->bytes, t->shape, t->dtype_size,
+                     OPT_PARAM_UNTAGGED});
 }
 
 struct AllocSet {

@@ -35,6 +35,27 @@ static RowSqMoments row_sq_moments(float sum, float sum_sq, float count) {
     return RowSqMoments{mean, sqrtf(var) / mean};
 }
 
+static void add_row_stats(pybind11::dict& dst, const float* stats_host, int group) {
+    const float* stats = stats_host + group * MUON_STAT_COUNT;
+    float row_count = stats[MUON_STAT_ROW_COUNT];
+    dst["matrix_count"] = stats[MUON_STAT_MATRIX_COUNT];
+    dst["aurora_matrix_count"] = stats[MUON_STAT_AURORA_MATRIX_COUNT];
+    dst["plain_matrix_count"] = stats[MUON_STAT_PLAIN_MATRIX_COUNT];
+    dst["row_count"] = row_count;
+    RowSqMoments pre = row_sq_moments(
+        stats[MUON_STAT_PRE_ROW_SQ_SUM],
+        stats[MUON_STAT_PRE_ROW_SQ_SUM_SQ],
+        row_count);
+    RowSqMoments post = row_sq_moments(
+        stats[MUON_STAT_POST_ROW_SQ_SUM],
+        stats[MUON_STAT_POST_ROW_SQ_SUM_SQ],
+        row_count);
+    dst["pre_row_sq_mean"] = pre.mean;
+    dst["pre_row_sq_cv"] = pre.cv;
+    dst["post_row_sq_mean"] = post.mean;
+    dst["post_row_sq_cv"] = post.cv;
+}
+
 // Wrapper functions for Python bindings
 pybind11::dict puf_log(pybind11::object pufferl_obj) {
     auto& pufferl = pufferl_obj.cast<PuffeRL&>();
@@ -95,25 +116,22 @@ pybind11::dict puf_log(pybind11::object pufferl_obj) {
 
     if (pufferl.hypers.aurora_row_stats && pufferl.muon.row_stats_ptr) {
         pybind11::dict optimizer_dict;
-        float stats_host[MUON_STAT_COUNT];
+        float stats_host[MUON_ROW_STAT_TOTAL];
         cudaMemcpy(stats_host, pufferl.muon.row_stats_ptr,
             sizeof(stats_host), cudaMemcpyDeviceToHost);
-        float row_count = stats_host[MUON_STAT_ROW_COUNT];
-        optimizer_dict["matrix_count"] = stats_host[MUON_STAT_MATRIX_COUNT];
-        optimizer_dict["row_count"] = row_count;
-        RowSqMoments pre = row_sq_moments(
-            stats_host[MUON_STAT_PRE_ROW_SQ_SUM],
-            stats_host[MUON_STAT_PRE_ROW_SQ_SUM_SQ],
-            row_count);
-        RowSqMoments post = row_sq_moments(
-            stats_host[MUON_STAT_POST_ROW_SQ_SUM],
-            stats_host[MUON_STAT_POST_ROW_SQ_SUM_SQ],
-            row_count);
-        optimizer_dict["pre_row_sq_mean"] = pre.mean;
-        optimizer_dict["pre_row_sq_cv"] = pre.cv;
-        optimizer_dict["post_row_sq_mean"] = post.mean;
-        optimizer_dict["post_row_sq_cv"] = post.cv;
-        cudaMemset(pufferl.muon.row_stats_ptr, 0, MUON_STAT_COUNT * sizeof(float));
+        add_row_stats(optimizer_dict, stats_host, MUON_ROW_STAT_ALL_GROUP);
+        pybind11::dict roles_dict;
+        for (int role = 0; role < OPT_PARAM_ROLE_COUNT; role++) {
+            pybind11::dict role_dict;
+            int group = MUON_ROW_STAT_ROLE_OFFSET + role;
+            add_row_stats(role_dict, stats_host, group);
+            const float* stats = stats_host + group * MUON_STAT_COUNT;
+            if (stats[MUON_STAT_MATRIX_COUNT] > 0.0f) {
+                roles_dict[optimizer_param_role_name(role)] = role_dict;
+            }
+        }
+        optimizer_dict["roles"] = roles_dict;
+        cudaMemset(pufferl.muon.row_stats_ptr, 0, MUON_ROW_STAT_TOTAL * sizeof(float));
         result["optimizer"] = optimizer_dict;
     }
 

@@ -61,7 +61,7 @@ static const char* PROF_NAMES[NUM_PROF] = {
     "train_muon",
 };
 
-#define NUM_TRAIN_EVENTS 6
+#define NUM_TRAIN_EVENTS 7
 typedef struct {
     cudaEvent_t events[NUM_TRAIN_EVENTS];
     float accum[NUM_PROF];
@@ -1577,6 +1577,7 @@ void train_impl(PuffeRL& pufferl) {
 
             cudaEventRecord(pufferl.profile.events[4], stream);
             muon_step(&pufferl.muon, pufferl.master_weights, pufferl.grad_puf, hypers.max_grad_norm, stream);
+            cudaEventRecord(pufferl.profile.events[5], stream);
             if (USE_BF16) {
                 int n = numel(pufferl.param_puf.shape);
                 cast<<<grid_size(n), BLOCK_SIZE, 0, stream>>>(
@@ -1610,7 +1611,7 @@ void train_impl(PuffeRL& pufferl) {
                 (char*)rollouts.values.data, pufferl.prio_bufs.idx.data,
                 (const char*)graph.mb_newvalue.data, num_idx, row_bytes);
         }
-        cudaEventRecord(pufferl.profile.events[5]);
+        cudaEventRecord(pufferl.profile.events[6]);
     }
     pufferl.epoch += 1;
 
@@ -1628,6 +1629,8 @@ void train_impl(PuffeRL& pufferl) {
         pufferl.profile.accum[PROF_TRAIN_MODEL] += ms * total_minibatches;
         cudaEventElapsedTime(&ms, pufferl.profile.events[4], pufferl.profile.events[5]);
         pufferl.profile.accum[PROF_TRAIN_MUON] += ms * total_minibatches;
+        cudaEventElapsedTime(&ms, pufferl.profile.events[5], pufferl.profile.events[6]);
+        pufferl.profile.accum[PROF_TRAIN_MISC] += ms * total_minibatches;
     }
 
 }
@@ -1814,9 +1817,9 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     pufferl->advantages_puf = {.shape = {total_agents, horizon}};
     alloc_register(acts, &pufferl->advantages_puf);
 
-    float effective_weight_decay = hypers.aurora ? hypers.aurora_weight_decay : hypers.weight_decay;
     muon_init(&pufferl->muon, params, hypers.lr, hypers.beta1, hypers.eps,
-        effective_weight_decay, acts, hypers.aurora, hypers.aurora_row_stats);
+        hypers.weight_decay, hypers.aurora_weight_decay, acts,
+        hypers.aurora, hypers.aurora_row_stats);
     pufferl->muon.nccl_comm = pufferl->nccl_comm;
     pufferl->muon.world_size = hypers.world_size;
 
@@ -1920,7 +1923,7 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
         cudaMemcpy(pufferl->muon.mb_puf.data, saved_momentum, wb_bytes, cudaMemcpyDeviceToDevice);
         cudaFree(saved_momentum);
         if (pufferl->muon.row_stats_ptr) {
-            cudaMemset(pufferl->muon.row_stats_ptr, 0, MUON_STAT_COUNT * sizeof(float));
+            cudaMemset(pufferl->muon.row_stats_ptr, 0, MUON_ROW_STAT_TOTAL * sizeof(float));
         }
         if (USE_BF16) {
             int n = numel(pufferl->param_puf.shape);

@@ -495,8 +495,8 @@ static void nmmo3_encoder_reg_params(void* w, Allocator* alloc) {
     ew->embed_w = {.shape = {N3_EMBED_VOCAB, N3_EMBED_DIM}};
     ew->proj_w  = {.shape = {ew->hidden, N3_CONCAT}};
     ew->proj_b  = {.shape = {ew->hidden}};
-    alloc_register(alloc,&ew->embed_w);
-    alloc_register(alloc,&ew->proj_w);  alloc_register(alloc,&ew->proj_b);
+    alloc_register(alloc,&ew->embed_w, OPT_PARAM_EMBEDDING);
+    alloc_register(alloc,&ew->proj_w, OPT_PARAM_ENCODER);  alloc_register(alloc,&ew->proj_b);
 }
 
 static void nmmo3_encoder_reg_train(void* w, void* activations, Allocator* acts, Allocator* grads, int B_TT) {

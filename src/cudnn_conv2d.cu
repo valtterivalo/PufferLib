@@ -118,7 +118,7 @@ static void conv_setup(ConvWeights* cw, int B, cudnnDataType_t dt) {
 static void conv_reg_params(ConvWeights* cw, Allocator* alloc) {
     cw->w = {.shape = {cw->OC, cw->IC * cw->K * cw->K}};
     cw->b = {.shape = {cw->OC}};
-    alloc_register(alloc,&cw->w); alloc_register(alloc,&cw->b);
+    alloc_register(alloc,&cw->w, OPT_PARAM_CONV); alloc_register(alloc,&cw->b);
 }
 
 static void conv_reg_train(ConvWeights* cw, ConvActivations* ca, Allocator* acts, Allocator* grads, int B, cudnnDataType_t dt) {
