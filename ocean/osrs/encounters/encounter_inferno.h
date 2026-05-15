@@ -6303,6 +6303,23 @@ static char* inf_lab_alloc_json(InfernoState* s) {
     return out.data;
 }
 
+static char* inf_lab_next_token(char** cursor) {
+    if (!cursor || !*cursor) inf_lab_abort("null token cursor");
+    char* start = *cursor + strspn(*cursor, " \t\r\n");
+    if (*start == '\0') {
+        *cursor = start;
+        return NULL;
+    }
+    char* end = start + strcspn(start, " \t\r\n");
+    if (*end != '\0') {
+        *end = '\0';
+        *cursor = end + 1;
+    } else {
+        *cursor = end;
+    }
+    return start;
+}
+
 static InfLabLineResult inf_lab_apply_script_line_impl(
     InfernoState* s, const char* line, char** out_json
 ) {
@@ -6318,8 +6335,8 @@ static InfLabLineResult inf_lab_apply_script_line_impl(
         return INF_LAB_LINE_NONE;
     }
 
-    char* save = NULL;
-    char* command = strtok_r(text, " \t\r\n", &save);
+    char* cursor = text;
+    char* command = inf_lab_next_token(&cursor);
     if (!command) {
         free(copy);
         return INF_LAB_LINE_NONE;
@@ -6374,9 +6391,9 @@ static InfLabLineResult inf_lab_apply_script_line_impl(
         inf_lab_abort("unknown script command %s", command);
     }
 
-    for (char* token = strtok_r(NULL, " \t\r\n", &save);
+    for (char* token = inf_lab_next_token(&cursor);
             token != NULL;
-            token = strtok_r(NULL, " \t\r\n", &save)) {
+            token = inf_lab_next_token(&cursor)) {
         const char* key = NULL;
         const char* value = NULL;
         inf_lab_parse_key_value(token, &key, &value);
