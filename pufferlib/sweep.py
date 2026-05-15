@@ -2,7 +2,7 @@ import random
 import math
 import warnings
 from collections import deque
-from copy import deepcopy
+from copy import copy, deepcopy
 from contextlib import contextmanager
 
 import numpy as np
@@ -332,6 +332,9 @@ class Random:
             is_failure=is_failure,
         ))
 
+    def make_early_stopper(self):
+        return self
+
     def early_stop(self, logs, target_key):
         if any("loss/" in k and np.isnan(v) for k, v in logs.items()):
             logs['is_loss_nan'] = True
@@ -388,6 +391,9 @@ class ParetoGenetic:
             cost=cost,
             is_failure=is_failure,
         ))
+
+    def make_early_stopper(self):
+        return self
 
     def early_stop(self, logs, target_key):
         if any("loss/" in k and np.isnan(v) for k, v in logs.items()):
@@ -617,6 +623,11 @@ class Protein:
             self.gp_score_buffer = torch.empty(self.gp_max_obs, device=self.device)
             self.gp_cost_buffer = torch.empty(self.gp_max_obs, device=self.device)
             self.infer_batch_buffer = torch.empty(self.infer_batch_size, self.hyperparameters.num, device=self.device)
+
+    def make_early_stopper(self):
+        early_stopper = copy(self)
+        early_stopper._running_target_buffer = deque(maxlen=self._running_target_buffer.maxlen)
+        return early_stopper
 
     def _filter_near_duplicates(self, inputs, duplicate_threshold=EPSILON):
         if len(inputs) < 2:
