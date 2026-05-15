@@ -527,6 +527,8 @@ std::unique_ptr<PuffeRL> create_pufferl(py::dict args) {
     hypers.beta1 = get_config(train_kwargs, "beta1");
     hypers.beta2 = get_config(train_kwargs, "beta2");
     hypers.eps = get_config(train_kwargs, "eps");
+    hypers.weight_decay = get_config(train_kwargs, "weight_decay");
+    hypers.aurora_weight_decay = get_config(train_kwargs, "aurora_weight_decay");
     hypers.aurora = get_config(train_kwargs, "aurora");
     // Training
     hypers.minibatch_size = get_config(train_kwargs, "minibatch_size");
@@ -711,6 +713,8 @@ PYBIND11_MODULE(_C, m) {
         .def_readwrite("beta1", &HypersT::beta1)
         .def_readwrite("beta2", &HypersT::beta2)
         .def_readwrite("eps", &HypersT::eps)
+        .def_readwrite("weight_decay", &HypersT::weight_decay)
+        .def_readwrite("aurora_weight_decay", &HypersT::aurora_weight_decay)
         .def_readwrite("aurora", &HypersT::aurora)
         .def_readwrite("total_timesteps", &HypersT::total_timesteps)
         .def_readwrite("max_grad_norm", &HypersT::max_grad_norm)

@@ -392,10 +392,22 @@ void puf_normal_init(PrecisionTensor* dst, float std, ulong seed, cudaStream_t s
     cudaFree(buf);
 }
 
+enum OptimizerParamRole {
+    OPT_PARAM_UNTAGGED = 0,
+    OPT_PARAM_ENCODER,
+    OPT_PARAM_DECODER,
+    OPT_PARAM_LOGSTD,
+    OPT_PARAM_MINGRU,
+    OPT_PARAM_CONV,
+    OPT_PARAM_EMBEDDING,
+    OPT_PARAM_ROLE_COUNT,
+};
+
 struct AllocEntry {
     void** data_ptr;    // address of the tensor's data field
     int64_t* shape;     // pointer to the tensor's shape array
     int elem_size;      // sizeof element type
+    OptimizerParamRole role;
 };
 
 struct Allocator {
@@ -406,25 +418,29 @@ struct Allocator {
     long total_bytes = 0;
 };
 
-static void alloc_register_impl(Allocator* alloc, void** data_ptr, int64_t* shape, int elem_size) {
+static void alloc_register_impl(Allocator* alloc, void** data_ptr, int64_t* shape,
+        int elem_size, OptimizerParamRole role) {
     alloc->regs = (AllocEntry*)realloc(alloc->regs, (alloc->num_regs + 1) * sizeof(AllocEntry));
-    alloc->regs[alloc->num_regs++] = {data_ptr, shape, elem_size};
+    alloc->regs[alloc->num_regs++] = {data_ptr, shape, elem_size, role};
     int64_t n = numel(shape);
     alloc->total_elems += n;
     alloc->total_bytes = (alloc->total_bytes + 15) & ~15;
     alloc->total_bytes += n * elem_size;
 }
 void alloc_register(Allocator* a, PrecisionTensor* t) {
-    alloc_register_impl(a, (void**)&t->data, t->shape, sizeof(precision_t));
+    alloc_register_impl(a, (void**)&t->data, t->shape, sizeof(precision_t), OPT_PARAM_UNTAGGED);
+}
+void alloc_register(Allocator* a, PrecisionTensor* t, OptimizerParamRole role) {
+    alloc_register_impl(a, (void**)&t->data, t->shape, sizeof(precision_t), role);
 }
 void alloc_register(Allocator* a, FloatTensor* t) {
-    alloc_register_impl(a, (void**)&t->data, t->shape, sizeof(float));
+    alloc_register_impl(a, (void**)&t->data, t->shape, sizeof(float), OPT_PARAM_UNTAGGED);
 }
 void alloc_register(Allocator* a, LongTensor* t) {
-    alloc_register_impl(a, (void**)&t->data, t->shape, sizeof(long));
+    alloc_register_impl(a, (void**)&t->data, t->shape, sizeof(long), OPT_PARAM_UNTAGGED);
 }
 void alloc_register(Allocator* a, IntTensor* t) {
-    alloc_register_impl(a, (void**)&t->data, t->shape, sizeof(int));
+    alloc_register_impl(a, (void**)&t->data, t->shape, sizeof(int), OPT_PARAM_UNTAGGED);
 }
 
 cudaError_t alloc_create(Allocator* alloc) {

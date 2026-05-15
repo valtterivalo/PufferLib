@@ -111,7 +111,7 @@ def print_dashboard(args, model_size, flat_logs, clear=False, idx=[0],
     train = g('perf/train')
     delta = rollout + train
     p = Table(box=None, expand=True, show_header=False)
-    p.add_column(f"{c1}Performance", justify="left", width=10)
+    p.add_column(f"{c1}Performance", justify="left", width=13)
     p.add_column(f"{c1}Time", justify="right", width=8)
     p.add_column(f"{c1}%", justify="right", width=4)
     p.add_row(*fmt_perf('Evaluate', b1, delta, rollout, b2, c2))
@@ -119,7 +119,11 @@ def print_dashboard(args, model_size, flat_logs, clear=False, idx=[0],
     p.add_row(*fmt_perf('  Env', b2, delta, g('perf/eval_env'), b2, c2))
     p.add_row(*fmt_perf('Train', b1, delta, train, b2, c2))
     p.add_row(*fmt_perf('  Misc', b2, delta, g('perf/train_misc'), b2, c2))
-    p.add_row(*fmt_perf('  Forward', b2, delta, g('perf/train_forward'), b2, c2))
+    if 'perf/train_model' in flat_logs:
+        p.add_row(*fmt_perf('  Train Model', b2, delta, g('perf/train_model'), b2, c2))
+        p.add_row(*fmt_perf('  Train Muon', b2, delta, g('perf/train_muon'), b2, c2))
+    else:
+        p.add_row(*fmt_perf('  Forward', b2, delta, g('perf/train_forward'), b2, c2))
 
     l = Table(box=None, expand=True)
     l.add_column(f'{c1}Losses', justify="left", width=16)
@@ -600,6 +604,8 @@ def _train_body(env_name, args, sweep_obj=None, result_queue=None, verbose=False
         try:
             pufferl = backend.create_pufferl(args)
         except (RuntimeError, ValueError) as e:
+            if sweep_obj is None and result_queue is None:
+                raise
             print(f'WARNING: {e}, skipping')
             if result_queue is not None:
                 result_queue.put((args['gpu_id'], [], [], []))

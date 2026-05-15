@@ -564,7 +564,7 @@ static void encoder_init_weights(void* w, ulong* seed, cudaStream_t stream) {
 static void encoder_reg_params(void* w, Allocator* alloc) {
     EncoderWeights* ew = (EncoderWeights*)w;
     ew->weight = {.shape = {ew->out_dim, ew->in_dim}};
-    alloc_register(alloc,&ew->weight);
+    alloc_register(alloc,&ew->weight, OPT_PARAM_ENCODER);
 }
 
 static void encoder_reg_train(void* w, void* activations, Allocator* acts, Allocator* grads, int B_TT) {
@@ -634,10 +634,10 @@ static void decoder_init_weights(void* w, ulong* seed, cudaStream_t stream) {
 static void decoder_reg_params(void* w, Allocator* alloc) {
     DecoderWeights* dw = (DecoderWeights*)w;
     dw->weight = {.shape = {dw->output_dim + 1, dw->hidden_dim}};
-    alloc_register(alloc,&dw->weight);
+    alloc_register(alloc,&dw->weight, OPT_PARAM_DECODER);
     if (dw->continuous) {
         dw->logstd = {.shape = {1, dw->output_dim}};
-        alloc_register(alloc,&dw->logstd);
+        alloc_register(alloc,&dw->logstd, OPT_PARAM_LOGSTD);
     }
 }
 
@@ -748,7 +748,7 @@ static void mingru_reg_params(void* w, Allocator* alloc) {
     MinGRUWeights* m = (MinGRUWeights*)w;
     for (int i = 0; i < m->num_layers; i++) {
         m->weights[i] = {.shape = {3 * m->hidden, m->hidden}};
-        alloc_register(alloc,&m->weights[i]);
+        alloc_register(alloc,&m->weights[i], OPT_PARAM_MINGRU);
     }
 }
 

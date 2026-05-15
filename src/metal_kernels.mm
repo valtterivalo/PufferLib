@@ -1067,8 +1067,10 @@ void muon_init(Muon *m, Allocator *param_alloc, FloatTensor weight_buffer,
     int nd = puf_ndim(e.shape);
     if (nd >= 2) {
       int64_t R = e.shape[0], C = puf_numel(e.shape) / R;
-      max_M = std::max(max_M, std::min(R, C));
-      max_N = std::max(max_N, std::max(R, C));
+      if (std::min(R, C) >= 2) {
+        max_M = std::max(max_M, std::min(R, C));
+        max_N = std::max(max_N, std::max(R, C));
+      }
     }
   }
   if (max_M > 0) {
@@ -1247,7 +1249,7 @@ static void encoder_init_weights(void *w, uint64_t *seed,
 static void encoder_reg_params(void *w, Allocator *alloc, int esz) {
   EncoderWeights *ew = (EncoderWeights *)w;
   ew->weight = {.shape = {ew->out_dim, ew->in_dim}, .dtype_size = esz};
-  alloc_register(alloc, &ew->weight);
+  alloc_register(alloc, &ew->weight, OPT_PARAM_ENCODER);
 }
 
 static void encoder_reg_train(void *w, void *activations,
@@ -1346,10 +1348,10 @@ static void decoder_reg_params(void *w, Allocator *alloc, int esz) {
   int od = dw->output_dim;
   int H = dw->hidden_dim;
   dw->weight = {.shape = {od + 1, H}, .dtype_size = esz};
-  alloc_register(alloc, &dw->weight);
+  alloc_register(alloc, &dw->weight, OPT_PARAM_DECODER);
   if (dw->continuous) {
     dw->logstd = {.shape = {1, od}, .dtype_size = esz};
-    alloc_register(alloc, &dw->logstd);
+    alloc_register(alloc, &dw->logstd, OPT_PARAM_LOGSTD);
   }
 }
 
@@ -1403,7 +1405,7 @@ static void mingru_reg_params(void *w, Allocator *alloc, int esz) {
     m->weights[i] = {
         .shape = {3 * m->hidden, m->hidden},
         .dtype_size = esz};
-    alloc_register(alloc, &m->weights[i]);
+    alloc_register(alloc, &m->weights[i], OPT_PARAM_MINGRU);
   }
 }
 

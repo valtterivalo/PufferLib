@@ -88,6 +88,8 @@ typedef struct {
     bool anneal_lr;
     // Optimizer (Muon only — Adam removed)
     float beta1;
+    float weight_decay;
+    float aurora_weight_decay;
     // Training
     int minibatch_size;
     float replay_ratio;
