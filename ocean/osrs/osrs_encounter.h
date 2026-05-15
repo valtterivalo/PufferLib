@@ -121,6 +121,8 @@ typedef struct {
                               ref: InfernoTrainer JalTokJad.ts:49-57. */
     int spell_type;        /* ENCOUNTER_SPELL_* for freeze/heal effects */
     int source_npc_type;   /* encounter-local NPC type for custom delayed rolls */
+    int hit_success;       /* accuracy result; 0 can still be a visible splash */
+    int elysian_reduced;   /* shield proc already applied before queuing */
 } EncounterPendingHit;
 
 /* visual overlay data: shared between encounter and renderer.
@@ -302,6 +304,7 @@ typedef struct {
     int hit_damage;
     int hit_was_successful;
     int hit_spell_type;  /* ENCOUNTER_SPELL_* for barrage impact effects on NPCs */
+    int elysian_proc_this_tick;
     int cast_veng_this_tick;
     int ate_food_this_tick;
     int ate_karambwan_this_tick;
@@ -353,6 +356,7 @@ static inline void render_entity_from_player(const Player* p, RenderEntity* out)
     out->hit_landed_this_tick = p->hit_landed_this_tick;
     out->hit_damage = p->hit_damage;
     out->hit_was_successful = p->hit_was_successful;
+    out->elysian_proc_this_tick = p->elysian_proc_this_tick;
     out->cast_veng_this_tick = p->cast_veng_this_tick;
     out->ate_food_this_tick = p->ate_food_this_tick;
     out->ate_karambwan_this_tick = p->ate_karambwan_this_tick;
@@ -1186,7 +1190,8 @@ static inline int encounter_npc_try_step(
     for size>1 NPCs, validates movement by checking EDGE TILES the NPC sweeps
     through, not just the destination footprint. for diagonal moves, both the
     x-edge and y-edge must be clear (each extended by 1 tile for the corner).
-    ref: InfernoTrainer Mob.ts:160-270 movementStep + getX/YMovementTiles.
+    ref: RuneLite WorldArea.calculateNextTravellingPoint and osrs-sdk
+    Mob.ts:160-270 movementStep + getX/YMovementTiles.
 
     stop_at_melee_distance matches RuneLite WorldArea.calculateNextTravellingPoint:
     overlap returns no normal step, cardinal melee contact returns no step,
@@ -1201,10 +1206,12 @@ static inline int encounter_npc_step_toward(
     int size = npc_size;
     int x_gap = encounter_npc_axis_gap(*x, size, tx, target_size);
     int y_gap = encounter_npc_axis_gap(*y, size, ty, target_size);
-    int dx = encounter_npc_axis_dir(*x, size, tx, target_size);
-    int dy = encounter_npc_axis_dir(*y, size, ty, target_size);
+    int raw_dx = tx - *x;
+    int raw_dy = ty - *y;
+    int dx = (raw_dx > 0) - (raw_dx < 0);
+    int dy = (raw_dy > 0) - (raw_dy < 0);
 
-    if (stop_at_melee_distance && x_gap == 0 && y_gap == 0) return 0;
+    if (x_gap == 0 && y_gap == 0) return 0;
     if (stop_at_melee_distance && x_gap + y_gap == 1) return 0;
     if (dx == 0 && dy == 0) return 0;
 
@@ -1217,8 +1224,8 @@ static inline int encounter_npc_step_toward(
         return 1;
     if (dx != 0 && encounter_npc_try_step(x, y, size, dx, 0, is_blocked, ctx))
         return 1;
-    int max_gap = x_gap > y_gap ? x_gap : y_gap;
-    if (dy != 0 && max_gap > 1 &&
+    int max_abs_delta = abs(raw_dx) > abs(raw_dy) ? abs(raw_dx) : abs(raw_dy);
+    if (dy != 0 && max_abs_delta > 1 &&
         encounter_npc_try_step(x, y, size, 0, dy, is_blocked, ctx))
         return 1;
     return 0;
@@ -1347,6 +1354,7 @@ static inline void encounter_clear_tick_flags(Player* p) {
     p->hit_landed_this_tick = 0;
     p->hit_damage = 0;
     p->hit_was_successful = 0;
+    p->elysian_proc_this_tick = 0;
     p->cast_veng_this_tick = 0;
     p->ate_food_this_tick = 0;
     p->ate_karambwan_this_tick = 0;

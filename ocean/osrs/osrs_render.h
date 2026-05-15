@@ -274,13 +274,14 @@ static void hull_append_projected_world_point(
 typedef struct {
     int active;
     int damage;
+    int type;
     double hitmark_move;   /* OSRS hitmarkMove: starts +5, decrements to -5 */
     int hitmark_trans;     /* OSRS hitmarkTrans: opacity 0-230, starts 230 */
     int ticks_remaining;   /* counts down from 70 client ticks */
 } HitSplat;
 
 
-#define CONTEXT_MENU_MAX_ITEMS 8
+#define CONTEXT_MENU_MAX_ITEMS 64
 #define CONTEXT_MENU_ROW_H     15
 #define CONTEXT_MENU_PADDING    4
 #define CONTEXT_MENU_MIN_W    150
@@ -289,12 +290,21 @@ typedef enum {
     CMENU_ACTION_NONE = 0,
     CMENU_ACTION_WALK_HERE,
     CMENU_ACTION_ATTACK,
+    CMENU_ACTION_LAB_SELECT_NPC,
+    CMENU_ACTION_LAB_MOVE_SELECTED_NPC,
+    CMENU_ACTION_LAB_PLACE_PLAYER,
+    CMENU_ACTION_LAB_SPAWN_NPC,
+    CMENU_ACTION_LAB_KILL_NPC,
+    CMENU_ACTION_LAB_DELETE_NPC,
+    CMENU_ACTION_LAB_TOGGLE_PILLAR,
     CMENU_ACTION_CANCEL,
 } ContextMenuAction;
 
 typedef struct {
     ContextMenuAction action;
     int entity_idx;         /* render entity index for ATTACK, -1 for walk/cancel */
+    int npc_type;
+    int pillar_idx;
     char label[64];         /* display text, e.g. "Attack Jal-Zek" */
 } ContextMenuItem;
 
@@ -321,6 +331,11 @@ typedef struct {
     int show_models;
     int show_safe_spots;
     int show_debug;       /* toggle raycast debug, hulls, hitboxes, projectile trails */
+    int inferno_lab_enabled;
+    int inferno_lab_show_forecast;
+    int inferno_lab_selected_npc_slot;
+    int inferno_lab_prev_paused;
+    int inferno_lab_prev_human_enabled;
 
     /* UI layout mode: 0 = fixed (1182/1183 chrome), 1 = resizable (1177/1178).
        L key toggles. mirrors OSRS client display modes. */
@@ -382,6 +397,8 @@ typedef struct {
         int secondary_frame_idx;
         int secondary_ticks;
     } anim[MAX_RENDER_ENTITIES];
+    int primary_event_tick[MAX_RENDER_ENTITIES];
+    int last_primary_event_tick[MAX_RENDER_ENTITIES];
 
     /* entity identity tracking — detect slot compaction shifts to reset stale anim/composite */
     int prev_npc_slot[MAX_RENDER_ENTITIES];
@@ -492,6 +509,10 @@ typedef struct {
 
 /* forward declarations */
 static Camera3D render_build_3d_camera(RenderClient* rc);
+static void render_populate_entities(RenderClient* rc, OsrsEnv* env);
+static void render_seed_entity_visual_slot(RenderClient* rc, int i);
+static inline int render_world_to_screen_x_rc(RenderClient* rc, int world_x);
+static inline int render_world_to_screen_y_rc(RenderClient* rc, int world_y);
 
 /** Get the raw Player* for a given entity index (for GUI functions that need full Player state).
     Returns the Player* from get_entity for encounters that use Player structs (PvP, Zulrah).
@@ -520,6 +541,115 @@ static AnimFrameBase* render_get_framebase(RenderClient* rc, uint16_t base_id) {
     if (rc->anim_cache) fb = anim_get_framebase(rc->anim_cache, base_id);
     if (!fb && rc->npc_anim_cache) fb = anim_get_framebase(rc->npc_anim_cache, base_id);
     return fb;
+}
+
+static InfernoState* render_inferno_state_from_env(OsrsEnv* env) {
+    if (!env || !env->encounter_def || !env->encounter_state) return NULL;
+    const EncounterDef* def = (const EncounterDef*)env->encounter_def;
+    if (strcmp(def->name, "inferno") != 0) return NULL;
+    return (InfernoState*)env->encounter_state;
+}
+
+static InfernoState* render_inferno_state_from_client(RenderClient* rc) {
+    if (!rc || !rc->gui.encounter_def || !rc->gui.encounter_state) return NULL;
+    const EncounterDef* def = (const EncounterDef*)rc->gui.encounter_def;
+    if (strcmp(def->name, "inferno") != 0) return NULL;
+    return (InfernoState*)rc->gui.encounter_state;
+}
+
+static Color render_inferno_lab_forecast_color(
+    const InfStepOutForecastAction* action
+) {
+    if (!action->valid) return (Color){ 120, 120, 120, 120 };
+    if (action->melee_fallback_exposure) return (Color){ 190, 80, 255, 190 };
+    if (action->same_tick_mixed_style_conflict) return (Color){ 255, 60, 60, 190 };
+    if (action->ranger_mager_offtick_opportunity) return (Color){ 70, 220, 255, 190 };
+    for (int t = 0; t < INF_STEP_OUT_FORECAST_HORIZON; t++) {
+        if (inf_step_out_forecast_tick_has_event(&action->ticks[t]))
+            return (Color){ 255, 170, 40, 180 };
+    }
+    return (Color){ 60, 220, 80, 170 };
+}
+
+static void render_inferno_lab_draw_forecast_2d(RenderClient* rc) {
+    InfernoState* s = render_inferno_state_from_client(rc);
+    if (!s || !rc->inferno_lab_enabled || !rc->inferno_lab_show_forecast) return;
+
+    InfStepOutForecast forecast;
+    inf_build_step_out_forecast(s, &forecast);
+    int ts = RENDER_TILE_SIZE;
+    for (int action_idx = 0; action_idx < ENCOUNTER_MOVE_ACTIONS; action_idx++) {
+        const InfStepOutForecastAction* action = &forecast.actions[action_idx];
+        int sx = render_world_to_screen_x_rc(rc, action->land_x);
+        int sy = render_world_to_screen_y_rc(rc, action->land_y);
+        Color color = render_inferno_lab_forecast_color(action);
+        DrawRectangle(sx + 2, sy + 2, ts - 4, ts - 4, color);
+        DrawRectangleLines(sx + 2, sy + 2, ts - 4, ts - 4,
+            CLITERAL(Color){ 255, 255, 255, 150 });
+        DrawText(TextFormat("%d", action_idx), sx + 4, sy + 4, 8, WHITE);
+    }
+}
+
+static void render_inferno_lab_draw_forecast_3d(RenderClient* rc) {
+    InfernoState* s = render_inferno_state_from_client(rc);
+    if (!s || !rc->inferno_lab_enabled || !rc->inferno_lab_show_forecast) return;
+
+    InfStepOutForecast forecast;
+    inf_build_step_out_forecast(s, &forecast);
+    int has_terrain = rc->terrain && rc->terrain->loaded;
+    for (int action_idx = 0; action_idx < ENCOUNTER_MOVE_ACTIONS; action_idx++) {
+        const InfStepOutForecastAction* action = &forecast.actions[action_idx];
+        float ground = has_terrain
+            ? terrain_height_avg(rc->terrain, action->land_x, action->land_y)
+            : 2.0f;
+        float fx = (float)action->land_x + 0.5f;
+        float fz = -(float)(action->land_y + 1) + 0.5f;
+        Color color = render_inferno_lab_forecast_color(action);
+        DrawCube((Vector3){ fx, ground + 0.06f, fz },
+            0.92f, 0.04f, 0.92f, color);
+        Color wire = color;
+        wire.a = 255;
+        DrawCubeWires((Vector3){ fx, ground + 0.09f, fz },
+            0.94f, 0.04f, 0.94f, wire);
+    }
+}
+
+static void render_inferno_lab_dump_json(InfernoState* s) {
+    char* json = inf_lab_alloc_json(s);
+    printf("%s\n", json);
+    fflush(stdout);
+    free(json);
+}
+
+static void render_inferno_lab_snap_entity_visual(RenderClient* rc, int entity_idx) {
+    if (entity_idx < 0 || entity_idx >= rc->entity_count) return;
+    render_seed_entity_visual_slot(rc, entity_idx);
+    rc->visual_moving[entity_idx] = 0;
+    rc->step_tracker[entity_idx] = 0;
+}
+
+static void render_inferno_lab_snap_all_visuals(RenderClient* rc) {
+    for (int i = 0; i < rc->entity_count; i++)
+        render_inferno_lab_snap_entity_visual(rc, i);
+    rc->prev_entity_count = rc->entity_count;
+}
+
+static void render_inferno_lab_apply_command(
+    RenderClient* rc, OsrsEnv* env, InfernoLabCommand cmd
+) {
+    InfernoState* s = render_inferno_state_from_env(env);
+    if (!s) return;
+    inf_lab_apply_command(s, &cmd);
+    if ((cmd.kind == INF_LAB_COMMAND_DELETE_NPC ||
+            cmd.kind == INF_LAB_COMMAND_KILL_NPC ||
+            cmd.kind == INF_LAB_COMMAND_CLEAR_NPCS) &&
+            rc->inferno_lab_selected_npc_slot >= 0) {
+        int slot = rc->inferno_lab_selected_npc_slot;
+        if (slot >= INF_MAX_NPCS || !s->npcs[slot].active)
+            rc->inferno_lab_selected_npc_slot = -1;
+    }
+    render_populate_entities(rc, env);
+    render_inferno_lab_snap_all_visuals(rc);
 }
 
 
@@ -605,14 +735,26 @@ static void context_menu_dismiss(ContextMenu* cm) {
     cm->hover_idx = -1;
 }
 
-/** Add an item to the context menu. */
-static void context_menu_add(ContextMenu* cm, ContextMenuAction action,
-                              int entity_idx, const char* label) {
-    if (cm->item_count >= CONTEXT_MENU_MAX_ITEMS) return;
+static ContextMenuItem* context_menu_add(
+    ContextMenu* cm, ContextMenuAction action, int entity_idx, const char* label
+) {
+    if (cm->item_count >= CONTEXT_MENU_MAX_ITEMS) return NULL;
     ContextMenuItem* item = &cm->items[cm->item_count++];
     item->action = action;
     item->entity_idx = entity_idx;
+    item->npc_type = -1;
+    item->pillar_idx = -1;
     snprintf(item->label, sizeof(item->label), "%s", label);
+    return item;
+}
+
+static void context_menu_add_lab_npc(
+    ContextMenu* cm, int npc_type, const char* label
+) {
+    ContextMenuItem* item = context_menu_add(
+        cm, CMENU_ACTION_LAB_SPAWN_NPC, -1, label);
+    if (!item) return;
+    item->npc_type = npc_type;
 }
 
 /** Build context menu from a right-click at screen position (mx, my).
@@ -621,6 +763,8 @@ static void context_menu_add(ContextMenu* cm, ContextMenuAction action,
 static void context_menu_build(RenderClient* rc, OsrsEnv* env, int mx, int my) {
     ContextMenu* cm = &rc->context_menu;
     RenderHumanAttackCtx attack_ctx = { .rc = rc, .env = env };
+    InfernoState* lab_state = rc->inferno_lab_enabled
+        ? render_inferno_state_from_env(env) : NULL;
     cm->item_count = 0;
     cm->hover_idx = -1;
     cm->walk_tile_x = -1;
@@ -634,8 +778,11 @@ static void context_menu_build(RenderClient* rc, OsrsEnv* env, int mx, int my) {
         /* 3D: test against convex hulls */
         for (int ei = 0; ei < rc->entity_count; ei++) {
             RenderEntity* ent = &rc->entities[ei];
-            if (!render_can_human_attack_entity(
-                    &attack_ctx, ent, ei, rc->gui.gui_entity_idx)) {
+            int usable_entity = lab_state
+                ? (ent->entity_type == ENTITY_NPC && ent->npc_slot >= 0)
+                : render_can_human_attack_entity(
+                    &attack_ctx, ent, ei, rc->gui.gui_entity_idx);
+            if (!usable_entity) {
                 continue;
             }
             if (hull_contains(&rc->entity_hulls[ei], mx, my)) {
@@ -683,8 +830,11 @@ static void context_menu_build(RenderClient* rc, OsrsEnv* env, int mx, int my) {
 
                 for (int ei = 0; ei < rc->entity_count; ei++) {
                     RenderEntity* ent = &rc->entities[ei];
-                    if (!render_can_human_attack_entity(
-                            &attack_ctx, ent, ei, rc->gui.gui_entity_idx)) {
+                    int usable_entity = lab_state
+                        ? (ent->entity_type == ENTITY_NPC && ent->npc_slot >= 0)
+                        : render_can_human_attack_entity(
+                            &attack_ctx, ent, ei, rc->gui.gui_entity_idx);
+                    if (!usable_entity) {
                         continue;
                     }
                     if (human_tile_hits_entity(ent, wx, wy)) {
@@ -702,8 +852,44 @@ static void context_menu_build(RenderClient* rc, OsrsEnv* env, int mx, int my) {
         RenderEntity* ent = &rc->entities[ei];
         const char* name = render_entity_display_name(ent);
         char label[64];
-        snprintf(label, sizeof(label), "Attack %s", name);
-        context_menu_add(cm, CMENU_ACTION_ATTACK, ei, label);
+        if (lab_state) {
+            snprintf(label, sizeof(label), "Lab select %s", name);
+            context_menu_add(cm, CMENU_ACTION_LAB_SELECT_NPC, ei, label);
+            snprintf(label, sizeof(label), "Lab kill %s", name);
+            context_menu_add(cm, CMENU_ACTION_LAB_KILL_NPC, ei, label);
+            snprintf(label, sizeof(label), "Lab delete %s", name);
+            context_menu_add(cm, CMENU_ACTION_LAB_DELETE_NPC, ei, label);
+        }
+        if (!lab_state || render_can_human_attack_entity(
+                &attack_ctx, ent, ei, rc->gui.gui_entity_idx)) {
+            snprintf(label, sizeof(label), "Attack %s", name);
+            context_menu_add(cm, CMENU_ACTION_ATTACK, ei, label);
+        }
+    }
+
+    if (lab_state && cm->walk_tile_x >= 0) {
+        context_menu_add(cm, CMENU_ACTION_LAB_PLACE_PLAYER, -1, "Lab place player");
+        if (rc->inferno_lab_selected_npc_slot >= 0 &&
+                rc->inferno_lab_selected_npc_slot < INF_MAX_NPCS &&
+                lab_state->npcs[rc->inferno_lab_selected_npc_slot].active) {
+            context_menu_add(cm, CMENU_ACTION_LAB_MOVE_SELECTED_NPC, -1,
+                "Lab move selected NPC");
+        }
+        context_menu_add_lab_npc(cm, INF_NPC_RANGER, "Lab spawn ranger");
+        context_menu_add_lab_npc(cm, INF_NPC_MAGER, "Lab spawn mager");
+        context_menu_add_lab_npc(cm, INF_NPC_JAD, "Lab spawn jad");
+        context_menu_add_lab_npc(cm, INF_NPC_BLOB, "Lab spawn blob");
+        context_menu_add_lab_npc(cm, INF_NPC_MELEER, "Lab spawn meleer");
+        context_menu_add_lab_npc(cm, INF_NPC_BAT, "Lab spawn bat");
+        context_menu_add_lab_npc(cm, INF_NPC_NIBBLER, "Lab spawn nibbler");
+        int pillar_idx = inf_lab_nearest_pillar_idx(
+            lab_state, cm->walk_tile_x, cm->walk_tile_y);
+        if (pillar_idx >= 0) {
+            ContextMenuItem* item = context_menu_add(
+                cm, CMENU_ACTION_LAB_TOGGLE_PILLAR, -1,
+                TextFormat("Lab toggle pillar %d", pillar_idx));
+            if (item) item->pillar_idx = pillar_idx;
+        }
     }
 
     if (cm->walk_tile_x >= 0)
@@ -734,10 +920,11 @@ static void context_menu_build(RenderClient* rc, OsrsEnv* env, int mx, int my) {
 }
 
 /** Execute a context menu item action on the HumanInput staging buffer. */
-static void context_menu_execute(RenderClient* rc, int item_idx) {
+static void context_menu_execute(RenderClient* rc, OsrsEnv* env, int item_idx) {
     ContextMenu* cm = &rc->context_menu;
     if (item_idx < 0 || item_idx >= cm->item_count) return;
     ContextMenuItem* item = &cm->items[item_idx];
+    InfernoState* lab_state = render_inferno_state_from_env(env);
 
     switch (item->action) {
         case CMENU_ACTION_WALK_HERE:
@@ -771,6 +958,98 @@ static void context_menu_execute(RenderClient* rc, int item_idx) {
             }
             break;
         }
+
+        case CMENU_ACTION_LAB_SELECT_NPC: {
+            int ei = item->entity_idx;
+            if (ei >= 0 && ei < rc->entity_count)
+                rc->inferno_lab_selected_npc_slot = rc->entities[ei].npc_slot;
+            break;
+        }
+
+        case CMENU_ACTION_LAB_MOVE_SELECTED_NPC:
+            if (lab_state && rc->inferno_lab_selected_npc_slot >= 0) {
+                render_inferno_lab_apply_command(rc, env, (InfernoLabCommand){
+                    .kind = INF_LAB_COMMAND_MOVE_NPC,
+                    .as.move_npc = {
+                        .slot = rc->inferno_lab_selected_npc_slot,
+                        .x = cm->walk_tile_x,
+                        .y = cm->walk_tile_y,
+                    },
+                });
+            }
+            break;
+
+        case CMENU_ACTION_LAB_PLACE_PLAYER:
+            render_inferno_lab_apply_command(rc, env, (InfernoLabCommand){
+                .kind = INF_LAB_COMMAND_SET_PLAYER,
+                .as.tile = {
+                    .x = cm->walk_tile_x,
+                    .y = cm->walk_tile_y,
+                },
+            });
+            break;
+
+        case CMENU_ACTION_LAB_SPAWN_NPC:
+            if (lab_state) {
+                int slot = inf_find_free_npc(lab_state);
+                if (slot >= 0) {
+                    render_inferno_lab_apply_command(rc, env, (InfernoLabCommand){
+                        .kind = INF_LAB_COMMAND_SPAWN_NPC,
+                        .as.spawn_npc = {
+                            .slot = slot,
+                            .type = (InfNPCType)item->npc_type,
+                            .x = cm->walk_tile_x,
+                            .y = cm->walk_tile_y,
+                            .hp = { .kind = INF_LAB_OPTIONAL_INT_UNSET },
+                            .timer = { .kind = INF_LAB_OPTIONAL_INT_UNSET },
+                        },
+                    });
+                    rc->inferno_lab_selected_npc_slot = slot;
+                }
+            }
+            break;
+
+        case CMENU_ACTION_LAB_KILL_NPC: {
+            int ei = item->entity_idx;
+            if (ei >= 0 && ei < rc->entity_count) {
+                int slot = rc->entities[ei].npc_slot;
+                render_inferno_lab_apply_command(rc, env, (InfernoLabCommand){
+                    .kind = INF_LAB_COMMAND_KILL_NPC,
+                    .as.npc_slot = { .slot = slot },
+                });
+            }
+            break;
+        }
+
+        case CMENU_ACTION_LAB_DELETE_NPC: {
+            int ei = item->entity_idx;
+            if (ei >= 0 && ei < rc->entity_count) {
+                int slot = rc->entities[ei].npc_slot;
+                render_inferno_lab_apply_command(rc, env, (InfernoLabCommand){
+                    .kind = INF_LAB_COMMAND_DELETE_NPC,
+                    .as.npc_slot = { .slot = slot },
+                });
+            }
+            break;
+        }
+
+        case CMENU_ACTION_LAB_TOGGLE_PILLAR:
+            if (lab_state && item->pillar_idx >= 0) {
+                int idx = item->pillar_idx;
+                render_inferno_lab_apply_command(rc, env, (InfernoLabCommand){
+                    .kind = INF_LAB_COMMAND_SET_PILLAR,
+                    .as.pillar = {
+                        .pillar_idx = idx,
+                        .state = lab_state->pillars[idx].active
+                            ? INF_LAB_PILLAR_REMOVED
+                            : INF_LAB_PILLAR_ACTIVE,
+                        .hp = lab_state->pillars[idx].active
+                            ? inf_lab_optional_int_set(0)
+                            : inf_lab_optional_int_unset(),
+                    },
+                });
+            }
+            break;
 
         case CMENU_ACTION_CANCEL:
         case CMENU_ACTION_NONE:
@@ -826,6 +1105,24 @@ static void context_menu_draw(RenderClient* rc) {
     }
 }
 
+static void render_inferno_lab_draw_hud(RenderClient* rc) {
+    InfernoState* s = render_inferno_state_from_client(rc);
+    if (!s || !rc->inferno_lab_enabled) return;
+
+    int selected = rc->inferno_lab_selected_npc_slot;
+    char selected_text[64] = "none";
+    if (selected >= 0 && selected < INF_MAX_NPCS && s->npcs[selected].active) {
+        snprintf(selected_text, sizeof(selected_text), "%d %s", selected,
+            inf_lab_npc_type_name(s->npcs[selected].type));
+    }
+    DrawRectangle(8, 8, 455, 58, CLITERAL(Color){ 15, 10, 18, 220 });
+    DrawRectangleLines(8, 8, 455, 58, CLITERAL(Color){ 190, 80, 255, 255 });
+    DrawText("INFERNO LAB", 16, 14, 16, CLITERAL(Color){ 230, 210, 255, 255 });
+    DrawText(TextFormat("F8 off  F7 forecast %s  F9 dump  selected: %s",
+        rc->inferno_lab_show_forecast ? "on" : "off", selected_text),
+        16, 38, 12, CLITERAL(Color){ 230, 230, 230, 255 });
+}
+
 static void render_draw_encounter_status_text(RenderClient* rc) {
     EncounterOverlay* ov = &rc->encounter_overlay;
     if (!ov->status_text_active || ov->status_text[0] == '\0') return;
@@ -861,6 +1158,11 @@ static RenderClient* render_make_client(void) {
     rc->mode_3d = 1;
     rc->show_safe_spots = 0;
     rc->show_debug = 0;
+    rc->inferno_lab_enabled = 0;
+    rc->inferno_lab_show_forecast = 0;
+    rc->inferno_lab_selected_npc_slot = -1;
+    rc->inferno_lab_prev_paused = 0;
+    rc->inferno_lab_prev_human_enabled = 0;
     rc->layout_mode = 1;  /* default to resizable mode (modern OSRS layout) */
     rc->cam_yaw = 0.0f;
     rc->cam_pitch = 0.6f;    /* ~34 degrees, similar to OSRS default */
@@ -883,6 +1185,8 @@ static RenderClient* render_make_client(void) {
     for (int i = 0; i < MAX_RENDER_ENTITIES; i++) {
         rc->anim[i].primary_seq_id = -1;
         rc->anim[i].secondary_seq_id = ANIM_SEQ_IDLE;
+        rc->primary_event_tick[i] = -1;
+        rc->last_primary_event_tick[i] = -2;
         rc->prev_npc_slot[i] = -1;
     }
 
@@ -1478,6 +1782,44 @@ static void render_handle_input(RenderClient* rc, OsrsEnv* env) {
     if (IsKeyPressed(KEY_D))      rc->show_debug = !rc->show_debug;
     if (IsKeyPressed(KEY_T))      rc->mode_3d = !rc->mode_3d;
     if (IsKeyPressed(KEY_L))      rc->layout_mode = !rc->layout_mode;
+    if (IsKeyPressed(KEY_F8)) {
+        InfernoState* s = render_inferno_state_from_env(env);
+        if (s) {
+            int enable_lab = !rc->inferno_lab_enabled;
+            if (enable_lab) {
+                rc->inferno_lab_prev_paused = rc->is_paused;
+                rc->inferno_lab_prev_human_enabled = rc->human_input.enabled;
+            }
+            rc->inferno_lab_enabled = enable_lab;
+            rc->inferno_lab_show_forecast = rc->inferno_lab_enabled;
+            rc->inferno_lab_selected_npc_slot = -1;
+            context_menu_dismiss(&rc->context_menu);
+            if (rc->inferno_lab_enabled) {
+                rc->is_paused = 1;
+                rc->human_input.enabled = 1;
+                human_input_clear_pending(&rc->human_input);
+                human_input_clear_move(&rc->human_input);
+                inf_lab_refresh_geometry(s);
+                render_populate_entities(rc, env);
+                render_inferno_lab_snap_all_visuals(rc);
+            } else {
+                rc->is_paused = rc->inferno_lab_prev_paused;
+                rc->human_input.enabled = rc->inferno_lab_prev_human_enabled;
+                human_input_clear_pending(&rc->human_input);
+                human_input_clear_move(&rc->human_input);
+                rc->human_input.cursor_mode = CURSOR_NORMAL;
+            }
+            fprintf(stderr, "inferno lab: %s\n",
+                rc->inferno_lab_enabled ? "ON" : "OFF");
+        }
+    }
+    if (IsKeyPressed(KEY_F7) && rc->inferno_lab_enabled) {
+        rc->inferno_lab_show_forecast = !rc->inferno_lab_show_forecast;
+    }
+    if (IsKeyPressed(KEY_F9) && rc->inferno_lab_enabled) {
+        InfernoState* s = render_inferno_state_from_env(env);
+        if (s) render_inferno_lab_dump_json(s);
+    }
 
     float wheel = GetMouseWheelMove();
 
@@ -1597,7 +1939,7 @@ static void render_handle_input(RenderClient* rc, OsrsEnv* env) {
                 my >= cm->screen_y && my < cm->screen_y + menu_h) {
                 int row = (my - cm->screen_y - CONTEXT_MENU_PADDING) / CONTEXT_MENU_ROW_H;
                 if (row >= 0 && row < cm->item_count)
-                    context_menu_execute(rc, row);
+                    context_menu_execute(rc, env, row);
                 else
                     context_menu_dismiss(cm);
             } else {
@@ -1847,6 +2189,7 @@ static void render_clear_history(RenderClient* rc) {
 
 /* forward declaration: render_push_splat used by render_post_tick, defined later */
 static void render_push_splat(RenderClient* rc, int damage, int pidx);
+static void render_push_splat_type(RenderClient* rc, int damage, int pidx, int type);
 
 
 /* populate rc->entities from env->players or encounter vtable.
@@ -1905,6 +2248,8 @@ static void render_reset_entity_visual_slot(RenderClient* rc, int i) {
     rc->anim[i].secondary_seq_id = -1;
     rc->anim[i].secondary_frame_idx = 0;
     rc->anim[i].secondary_ticks = 0;
+    rc->primary_event_tick[i] = -1;
+    rc->last_primary_event_tick[i] = -2;
     rc->composites[i].needs_rebuild = 1;
     rc->prev_npc_slot[i] = -1;
     rc->sub_x[i] = 0;
@@ -1986,6 +2331,8 @@ static void render_post_tick(RenderClient* rc, OsrsEnv* env) {
             rc->anim[i].secondary_seq_id = -1;
             rc->anim[i].secondary_frame_idx = 0;
             rc->anim[i].secondary_ticks = 0;
+            rc->primary_event_tick[i] = -1;
+            rc->last_primary_event_tick[i] = -2;
             rc->composites[i].needs_rebuild = 1;
             /* flush hitsplat state so dying NPC's splats don't transfer
                to the NPC that shifts into this slot after death compaction */
@@ -2081,7 +2428,19 @@ static void render_post_tick(RenderClient* rc, OsrsEnv* env) {
            hitsplat: one splat per hit, fills the next available slot (0-3). */
         if (p->hit_landed_this_tick) {
             rc->hp_bar_visible_until[i] = env->tick + 10;
-            render_push_splat(rc, p->hit_damage, i);
+            if (p->elysian_proc_this_tick)
+                render_push_splat_type(rc, p->hit_damage, i, 4);
+            else
+                render_push_splat(rc, p->hit_damage, i);
+        }
+        if (p->npc_anim_id >= 0 ||
+            p->attack_style_this_tick != ATTACK_STYLE_NONE ||
+            p->cast_veng_this_tick ||
+            p->ate_food_this_tick ||
+            p->ate_karambwan_this_tick ||
+            p->used_special_this_tick ||
+            p->hit_landed_this_tick) {
+            rc->primary_event_tick[i] = env->tick;
         }
     }
 
@@ -2510,12 +2869,13 @@ static void render_update_splats_client_tick(RenderClient* rc) {
 }
 
 /* OSRS Entity.damage(): find first expired slot, init with standard values */
-static void render_push_splat(RenderClient* rc, int damage, int pidx) {
+static void render_push_splat_type(RenderClient* rc, int damage, int pidx, int type) {
     for (int i = 0; i < RENDER_SPLATS_PER_PLAYER; i++) {
         if (!rc->splats[pidx][i].active) {
             rc->splats[pidx][i] = (HitSplat){
                 .active = 1,
                 .damage = damage,
+                .type = type,
                 .hitmark_move = 5.0,
                 .hitmark_trans = 230,
                 .ticks_remaining = 70,
@@ -2532,10 +2892,15 @@ static void render_push_splat(RenderClient* rc, int damage, int pidx) {
     rc->splats[pidx][oldest] = (HitSplat){
         .active = 1,
         .damage = damage,
+        .type = type,
         .hitmark_move = 5.0,
         .hitmark_trans = 230,
         .ticks_remaining = 70,
     };
+}
+
+static void render_push_splat(RenderClient* rc, int damage, int pidx) {
+    render_push_splat_type(rc, damage, pidx, damage > 0 ? 1 : 0);
 }
 
 
@@ -2687,6 +3052,7 @@ static void render_draw_grid(RenderClient* rc, OsrsEnv* env) {
             DrawCircle(pcx, pcy, 4.0f, pc);
         }
     }
+    render_inferno_lab_draw_forecast_2d(rc);
 }
 
 
@@ -2782,6 +3148,20 @@ static void render_draw_players(RenderClient* rc) {
             if (!p->npc_visible) continue;
         }
 
+        if (rc->show_debug && p->entity_type == ENTITY_NPC) {
+            int sz = p->npc_size > 1 ? p->npc_size : 1;
+            for (int dx = 0; dx < sz; dx++) {
+                for (int dy = 0; dy < sz; dy++) {
+                    int hsx = render_world_to_screen_x_rc(rc, p->x + dx);
+                    int hsy = render_world_to_screen_y_rc(rc, p->y + dy);
+                    Color hitbox_col = (dx == 0 && dy == 0)
+                        ? CLITERAL(Color){ 255, 230, 40, 150 }
+                        : CLITERAL(Color){ 0, 200, 255, 70 };
+                    DrawRectangle(hsx + 1, hsy + 1, ts - 2, ts - 2, hitbox_col);
+                }
+            }
+        }
+
         /* player/entity body */
         DrawRectangle(sx + inset, sy + inset, ts - inset * 2, ts - inset * 2, color);
 
@@ -2844,9 +3224,9 @@ static void render_draw_dest_markers(RenderClient* rc) {
    Client.java:6052-6073: hitMarks[type].drawSprite(spriteDrawX - 12, spriteDrawY - 12)
    then smallFont.drawText centered on the sprite.
    sprite index: 0=blue(miss), 1=red(regular hit). sprites are 24x23px. */
-static void render_draw_hitmark(RenderClient* rc, int cx, int cy, int damage, int opacity) {
+static void render_draw_hitmark(RenderClient* rc, int cx, int cy, int damage, int opacity, int type) {
     unsigned char a = (unsigned char)(opacity > 255 ? 255 : (opacity < 0 ? 0 : opacity));
-    int sprite_idx = (damage > 0) ? 1 : 0;  /* red for hits, blue for misses */
+    int sprite_idx = (type >= 0 && type < 5) ? type : ((damage > 0) ? 1 : 0);
 
     if (rc->hitmark_sprites_loaded) {
         /* draw the actual cache sprite, centered at (cx, cy).
@@ -2857,7 +3237,8 @@ static void render_draw_hitmark(RenderClient* rc, int cx, int cy, int damage, in
         DrawTexture(tex, (int)draw_x, (int)draw_y, (Color){ 255, 255, 255, a });
     } else {
         /* fallback: colored circle if sprites missing */
-        Color bg = (damage > 0) ? (Color){ 175, 25, 25, a } : (Color){ 65, 105, 225, a };
+        Color bg = (sprite_idx == 4) ? (Color){ 220, 185, 45, a } :
+            ((damage > 0) ? (Color){ 175, 25, 25, a } : (Color){ 65, 105, 225, a });
         DrawCircle(cx, cy, 12.0f, bg);
     }
 
@@ -2898,7 +3279,7 @@ static void render_draw_splats_2d(RenderClient* rc) {
             render_splat_slot_offset(i, &slot_dx, &slot_dy);
             int sx = base_x + slot_dx;
             int sy = base_y + slot_dy + (int)s->hitmark_move;
-            render_draw_hitmark(rc, sx, sy, s->damage, s->hitmark_trans);
+            render_draw_hitmark(rc, sx, sy, s->damage, s->hitmark_trans, s->type);
         }
     }
 }
@@ -3545,13 +3926,19 @@ static void render_player_composite(
         new_primary = render_select_primary(p);
     }
     if (new_primary >= 0) {
+        int event_changed =
+            rc->primary_event_tick[player_idx] !=
+            rc->last_primary_event_tick[player_idx];
         int need_restart = (rc->anim[player_idx].primary_seq_id != new_primary) ||
-                           (rc->anim[player_idx].primary_loops > 0);
+                           (rc->anim[player_idx].primary_loops > 0) ||
+                           (event_changed && new_primary != ANIM_SEQ_DEATH);
         if (need_restart) {
             rc->anim[player_idx].primary_seq_id = new_primary;
             rc->anim[player_idx].primary_frame_idx = 0;
             rc->anim[player_idx].primary_ticks = 0;
             rc->anim[player_idx].primary_loops = 0;
+            rc->last_primary_event_tick[player_idx] =
+                rc->primary_event_tick[player_idx];
         }
     }
 
@@ -3799,8 +4186,11 @@ static void render_draw_3d_world(RenderClient* rc) {
                 for (int dy = 0; dy < sz; dy++) {
                     float mx = tx + (float)dx;
                     float mz = tz - (float)dy;
+                    Color tile_col = col;
+                    if (ep->entity_type == ENTITY_NPC && dx == 0 && dy == 0)
+                        tile_col = CLITERAL(Color){ 255, 230, 40, 150 };
                     DrawCube((Vector3){ mx + 0.5f, ground + 0.08f, mz + 0.5f },
-                             0.9f, 0.04f, 0.9f, col);
+                             0.9f, 0.04f, 0.9f, tile_col);
                 }
             }
         }
@@ -4021,6 +4411,7 @@ static void render_draw_3d_world(RenderClient* rc) {
                 }
             }
         }
+        render_inferno_lab_draw_forecast_3d(rc);
 
         #undef OV_GROUND
     }
@@ -4389,7 +4780,7 @@ static void render_draw_overhead_status(RenderClient* rc, OsrsEnv* env) {
             render_splat_slot_offset(si, &slot_dx, &slot_dy);
             int sx = (int)screen_abdomen.x + slot_dx;
             int sy = (int)screen_abdomen.y + slot_dy;
-            render_draw_hitmark(rc, sx, sy, s->damage, s->hitmark_trans);
+            render_draw_hitmark(rc, sx, sy, s->damage, s->hitmark_trans, s->type);
         }
 
         /* track vertical offset for stacking elements above the player.
@@ -5041,6 +5432,7 @@ void pvp_render(OsrsEnv* env) {
     }
 
     render_draw_encounter_status_text(rc);
+    render_inferno_lab_draw_hud(rc);
 
     /* right-click context menu: drawn last so it renders on top of everything */
     context_menu_draw(rc);

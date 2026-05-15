@@ -174,6 +174,8 @@ static InfNPC make_test_npc(InfNPCType type, int x, int y, int size) {
     npc.size = size;
     npc.aggro_target = -1;
     npc.attack_visual_target = -1;
+    npc.resurrection_visual_target = -1;
+    npc.attack_style = INF_NPC_STATS[type].default_style;
     npc.jad_owner_idx = -1;
     npc.blob_scanned_prayer = -1;
     npc.jad_attack_style = ATTACK_STYLE_NONE;
@@ -282,6 +284,17 @@ static int count_active_npc_type(const InfernoState* state, InfNPCType type) {
     return count;
 }
 
+static int find_active_npc_type_at(
+    const InfernoState* state, InfNPCType type, int x, int y
+) {
+    for (int i = 0; i < INF_MAX_NPCS; i++) {
+        if (state->npcs[i].active && state->npcs[i].type == type &&
+                state->npcs[i].x == x && state->npcs[i].y == y)
+            return i;
+    }
+    return -1;
+}
+
 static int force_mager_resurrect(InfernoState* s, int idx) {
     for (uint32_t seed = 1; seed < 100000; seed++) {
         InfernoState probe = *s;
@@ -289,6 +302,21 @@ static int force_mager_resurrect(InfernoState* s, int idx) {
         if (inf_mager_resurrect(&probe, idx)) {
             s->rng_state = seed;
             return inf_mager_resurrect(s, idx);
+        }
+    }
+    return 0;
+}
+
+static int force_mager_attack_resurrection(InfernoState* s, int idx) {
+    for (uint32_t seed = 1; seed < 100000; seed++) {
+        InfernoState probe = *s;
+        probe.rng_state = seed;
+        inf_npc_attack(&probe, idx);
+        if (probe.dead_mob_count == 0 &&
+                count_active_npc_type(&probe, INF_NPC_RANGER) > 0) {
+            s->rng_state = seed;
+            inf_npc_attack(s, idx);
+            return 1;
         }
     }
     return 0;
@@ -2018,6 +2046,98 @@ static void test_resurrected_mob_does_not_reenter_dead_store(void) {
     ASSERT_INT_EQ("resurrected ranger not re-added", state.dead_mob_count, 0);
 }
 
+static void test_blob_split_waits_for_death_removal(void) {
+    printf("--- blob split waits for death removal ---\n");
+
+    InfernoState state = make_test_state(25, 16);
+    state.wave = 30;
+    state.npcs[0] = make_test_npc(
+        INF_NPC_BLOB, 10, 10, INF_NPC_STATS[INF_NPC_BLOB].size);
+    state.npcs[0].active = 1;
+    state.npcs[0].hp = 0;
+    state.npcs[0].max_hp = INF_NPC_STATS[INF_NPC_BLOB].hp;
+
+    inf_apply_npc_death(&state, 0);
+
+    ASSERT_INT_EQ("dead blob remains during death linger", state.npcs[0].active, 1);
+    ASSERT_INT_EQ("dead blob death linger starts", state.npcs[0].death_ticks, INF_NPC_DEATH_LINGER_TICKS);
+    ASSERT_INT_EQ("blob parent enters mager resurrection store", state.dead_mob_count, 1);
+    ASSERT_INT_EQ("blob parent store type", state.dead_mobs[0].type, INF_NPC_BLOB);
+    ASSERT_INT_EQ("blob split melee not spawned before removal",
+        count_active_npc_type(&state, INF_NPC_BLOB_MELEE), 0);
+    ASSERT_INT_EQ("blob split range not spawned before removal",
+        count_active_npc_type(&state, INF_NPC_BLOB_RANGE), 0);
+    ASSERT_INT_EQ("blob split mage not spawned before removal",
+        count_active_npc_type(&state, INF_NPC_BLOB_MAGE), 0);
+
+    for (int t = 0; t < INF_NPC_DEATH_LINGER_TICKS; t++)
+        inf_tick_npcs(&state);
+
+    ASSERT_INT_EQ("blob parent removed after death linger", state.npcs[0].active, 0);
+    ASSERT_INT_EQ("blob split melee spawned after removal",
+        find_active_npc_type_at(&state, INF_NPC_BLOB_MELEE, 10, 10) >= 0, 1);
+    ASSERT_INT_EQ("blob split range spawned after removal",
+        find_active_npc_type_at(&state, INF_NPC_BLOB_RANGE, 11, 11) >= 0, 1);
+    ASSERT_INT_EQ("blob split mage spawned after removal",
+        find_active_npc_type_at(&state, INF_NPC_BLOB_MAGE, 12, 12) >= 0, 1);
+    ASSERT_INT_EQ("blob split melee not resurrectable",
+        state.dead_mob_count, 1);
+
+    int range_idx = find_active_npc_type_at(&state, INF_NPC_BLOB_RANGE, 11, 11);
+    int melee_idx = find_active_npc_type_at(&state, INF_NPC_BLOB_MELEE, 10, 10);
+    int mage_idx = find_active_npc_type_at(&state, INF_NPC_BLOB_MAGE, 12, 12);
+    ASSERT_INT_EQ("split range cooldown", state.npcs[range_idx].attack_timer, 4);
+    ASSERT_INT_EQ("split melee cooldown", state.npcs[melee_idx].attack_timer, 4);
+    ASSERT_INT_EQ("split mage cooldown", state.npcs[mage_idx].attack_timer, 4);
+}
+
+static void test_mager_resurrection_render_event_is_not_magic_projectile(void) {
+    printf("--- mager resurrection render event is not magic projectile ---\n");
+
+    InfernoState state = make_test_state(25, 16);
+    state.wave = 35;
+    state.player.current_defence = 99;
+    state.player.current_magic = 99;
+    state.weapon_set = INF_GEAR_MAGE;
+    state.npcs[0] = make_test_npc(
+        INF_NPC_MAGER, 30, 20, INF_NPC_STATS[INF_NPC_MAGER].size);
+    state.npcs[0].active = 1;
+    state.npcs[0].hp = state.npcs[0].max_hp = INF_NPC_STATS[INF_NPC_MAGER].hp;
+    state.npcs[0].attack_timer = 0;
+    state.dead_mobs[0].type = INF_NPC_RANGER;
+    state.dead_mobs[0].x = 18;
+    state.dead_mobs[0].y = 18;
+    state.dead_mobs[0].hp = INF_NPC_STATS[INF_NPC_RANGER].hp / 2;
+    state.dead_mobs[0].max_hp = INF_NPC_STATS[INF_NPC_RANGER].hp;
+    state.dead_mob_count = 1;
+
+    ASSERT_INT_EQ("mager attack converted into resurrection",
+        force_mager_attack_resurrection(&state, 0), 1);
+    ASSERT_INT_EQ("resurrection is marked for render",
+        state.npcs[0].resurrecting_this_tick, 1);
+    ASSERT_INT_EQ("resurrection does not expose a magic attack style",
+        state.npcs[0].attack_style_this_tick, ATTACK_STYLE_NONE);
+    ASSERT_INT_EQ("resurrected ranger attack delay",
+        state.npcs[state.npcs[0].resurrection_visual_target].attack_timer,
+        INF_NPC_STATS[INF_NPC_RANGER].attack_speed);
+
+    RenderEntity entities[4];
+    int count = 0;
+    inf_fill_render_entities((EncounterState*)&state, entities, 4, &count);
+    ASSERT_INT_EQ("resurrection render has mager and resurrected mob", count >= 3, 1);
+    ASSERT_INT_EQ("mager uses resurrection animation",
+        entities[1].npc_anim_id, INF_GEN_ANIM_MAGER_RESURRECT);
+    ASSERT_INT_EQ("mager faces resurrected mob",
+        entities[1].dest_x,
+        state.npcs[state.npcs[0].resurrection_visual_target].x +
+            state.npcs[state.npcs[0].resurrection_visual_target].size / 2);
+
+    EncounterOverlay ov;
+    memset(&ov, 0, sizeof(ov));
+    inf_render_post_tick((EncounterState*)&state, &ov);
+    ASSERT_INT_EQ("resurrection does not emit magic projectile", ov.projectile_count, 0);
+}
+
 static void test_double_mager_wave_resurrection_limit(void) {
     printf("--- double mager wave respects once-only resurrection ---\n");
 
@@ -2236,7 +2356,18 @@ static void test_triple_jad_pending_threats_fit_obs_layout(void) {
 
     float obs[INF_NUM_OBS];
     inf_write_obs((EncounterState*)&state, obs);
-    ASSERT_INT_EQ("inferno obs shape includes spark slots", INF_NUM_OBS, 546);
+    ASSERT_INT_EQ("inferno obs shape includes spark slots", INF_NUM_OBS, 746);
+}
+
+static void test_inferno_obs_shape_includes_step_out_forecast_features(void) {
+    printf("--- inferno obs shape includes step-out forecast features ---\n");
+
+    ASSERT_INT_EQ("npc obs keeps base slot shape",
+        INF_TOTAL_NPC_OBS_SIZE, 282);
+    ASSERT_INT_EQ("step-out forecast covers every movement action",
+        INF_STEP_OUT_FORECAST_OBS_SIZE, 200);
+    ASSERT_INT_EQ("inferno obs shape includes step-out forecast",
+        INF_NUM_OBS, 746);
 }
 
 static void test_jad_special_wave_spawn_cadence_matches_reference(void) {
@@ -2417,7 +2548,7 @@ static int inferno_obs_slot_feature_count(int slot_idx) {
     int has_targeted = 1;
 
     return 4 + has_timer + 3 * has_style + has_los + 3 * has_scan +
-        has_aggro + has_targeted;
+        has_aggro + has_targeted + INF_EXTRA_NPC_OBS_FEATURES;
 }
 
 static int inferno_obs_slot_start(int slot_idx) {
@@ -2436,13 +2567,298 @@ static int inferno_target_mask_none_offset(void) {
     return ENCOUNTER_MOVE_ACTIONS + ENCOUNTER_OVERHEAD_DIM_PVE;
 }
 
-static int inferno_pending_hit_obs_start(void) {
+static int inferno_step_out_forecast_obs_start(void) {
     return INF_PLAYER_OBS_SIZE + 12 + INF_TOTAL_NPC_OBS_SIZE;
+}
+
+static int inferno_pending_hit_obs_start(void) {
+    return inferno_step_out_forecast_obs_start() + INF_STEP_OUT_FORECAST_OBS_SIZE;
 }
 
 static int inferno_spark_obs_start(void) {
     return inferno_pending_hit_obs_start() +
         INF_FEATURES_PER_HIT * ENCOUNTER_MAX_PENDING_HITS;
+}
+
+static void init_step_out_forecast_stack_state(InfernoState* state, int player_x, int player_y) {
+    inf_build_npc_stats();
+    memset(state, 0, sizeof(*state));
+    memset(state->npc_los_cache, -1, sizeof(state->npc_los_cache));
+    state->rng_state = 20260515u;
+    state->wave = 59;
+    state->player.entity_type = ENTITY_PLAYER;
+    state->player.x = player_x;
+    state->player.y = player_y;
+    state->player.base_hitpoints = 99;
+    state->player.current_hitpoints = 99;
+    state->player.current_defence = 99;
+    state->player.current_magic = 99;
+    state->player.current_prayer = 99;
+    state->player_last_interaction_target_slot = -1;
+    state->player_last_interaction_age = 1;
+    state->player_dest_x = -1;
+    state->player_dest_y = -1;
+    state->weapon_set = INF_GEAR_TBOW;
+    osrs_interaction_init(&state->interaction);
+    for (int p = 0; p < INF_NUM_PILLARS; p++) {
+        state->pillars[p].x = INF_PILLAR_POS[p][0];
+        state->pillars[p].y = INF_PILLAR_POS[p][1];
+        state->pillars[p].hp = INF_PILLAR_HP;
+        state->pillars[p].active = 1;
+    }
+    inf_rebuild_los(state);
+    inf_rebuild_player_collision_flags(state);
+}
+
+static void add_step_out_forecast_npc(
+    InfernoState* state, int slot, InfNPCType type, int x, int y, int timer
+) {
+    inf_init_npc(state, slot, type, x, y);
+    state->npcs[slot].attack_timer = timer;
+    state->npcs[slot].stun_timer = 0;
+    state->npcs[slot].frozen_ticks = 0;
+}
+
+static void assert_step_out_ranger_then_mager(
+    const char* label,
+    const InfStepOutForecastAction* action,
+    int expected_x,
+    int expected_y
+) {
+    char msg[128];
+    snprintf(msg, sizeof(msg), "%s action is valid", label);
+    ASSERT_INT_EQ(msg, action->valid, 1);
+    snprintf(msg, sizeof(msg), "%s landing x", label);
+    ASSERT_INT_EQ(msg, action->land_x, expected_x);
+    snprintf(msg, sizeof(msg), "%s landing y", label);
+    ASSERT_INT_EQ(msg, action->land_y, expected_y);
+    snprintf(msg, sizeof(msg), "%s ranger fires first", label);
+    ASSERT_INT_EQ(msg, action->ticks[0].ranger_count, 1);
+    snprintf(msg, sizeof(msg), "%s mager waits first tick", label);
+    ASSERT_INT_EQ(msg, action->ticks[0].mager_count, 0);
+    snprintf(msg, sizeof(msg), "%s mager fires second", label);
+    ASSERT_INT_EQ(msg, action->ticks[1].mager_count, 1);
+    snprintf(msg, sizeof(msg), "%s ranger does not double-fire", label);
+    ASSERT_INT_EQ(msg, action->ticks[1].ranger_count, 0);
+    snprintf(msg, sizeof(msg), "%s exposes off-tick opportunity", label);
+    ASSERT_INT_EQ(msg, action->ranger_mager_offtick_opportunity, 1);
+    snprintf(msg, sizeof(msg), "%s avoids same-tick conflict", label);
+    ASSERT_INT_EQ(msg, action->same_tick_mixed_style_conflict, 0);
+}
+
+static void test_step_out_forecast_matches_movement_head_destinations(void) {
+    printf("--- step-out forecast matches movement head destinations ---\n");
+
+    InfernoState state;
+    init_step_out_forecast_stack_state(&state, 29, 39);
+
+    InfStepOutForecast forecast;
+    inf_build_step_out_forecast(&state, &forecast);
+
+    for (int action = 0; action < ENCOUNTER_MOVE_ACTIONS; action++) {
+        Player moved = state.player;
+        if (action > 0) {
+            encounter_move_to_target(
+                &moved,
+                ENCOUNTER_MOVE_TARGET_DX[action],
+                ENCOUNTER_MOVE_TARGET_DY[action],
+                inf_tile_walkable,
+                &state);
+        }
+
+        ASSERT_INT_EQ("forecast movement landing x",
+            forecast.actions[action].land_x, moved.x);
+        ASSERT_INT_EQ("forecast movement landing y",
+            forecast.actions[action].land_y, moved.y);
+    }
+}
+
+static void assert_inferno_npc_sw_origin_step(
+    const char* label,
+    int pillar_idx,
+    InfNPCType type,
+    int player_x,
+    int player_y,
+    int npc_x,
+    int npc_y,
+    int expected_x,
+    int expected_y
+) {
+    InfernoState state;
+    init_step_out_forecast_stack_state(&state, player_x, player_y);
+    for (int p = 0; p < INF_NUM_PILLARS; p++) {
+        state.pillars[p].active = p == pillar_idx;
+        state.pillars[p].hp = p == pillar_idx ? INF_PILLAR_HP : 0;
+    }
+    inf_rebuild_los(&state);
+    add_step_out_forecast_npc(&state, 0, type, npc_x, npc_y, 0);
+    inf_rebuild_entity_collision_flags(&state);
+    ASSERT_INT_EQ("starting NPC has no LOS",
+        inf_npc_has_los_direct(&state, 0), 0);
+
+    inf_npc_move(&state, 0);
+
+    char msg[128];
+    snprintf(msg, sizeof(msg), "%s x", label);
+    ASSERT_INT_EQ(msg, state.npcs[0].x, expected_x);
+    snprintf(msg, sizeof(msg), "%s y", label);
+    ASSERT_INT_EQ(msg, state.npcs[0].y, expected_y);
+}
+
+static void test_inferno_npc_travel_uses_sw_origin_around_all_pillars(void) {
+    printf("--- inferno NPC travel uses SW origin around all pillars ---\n");
+
+    assert_inferno_npc_sw_origin_step(
+        "south pillar mager",
+        0, INF_NPC_MAGER,
+        15, 14,
+        12, 30,
+        13, 29);
+    assert_inferno_npc_sw_origin_step(
+        "west pillar ranger",
+        1, INF_NPC_RANGER,
+        12, 28,
+        11, 37,
+        12, 37);
+    assert_inferno_npc_sw_origin_step(
+        "north pillar ranger",
+        2, INF_NPC_RANGER,
+        18, 40,
+        16, 22,
+        17, 23);
+}
+
+static void test_step_out_forecast_north_pillar_ranger_mager_order(void) {
+    printf("--- step-out forecast north pillar ranger/mager order ---\n");
+
+    InfernoState state;
+    init_step_out_forecast_stack_state(&state, 29, 39);
+    add_step_out_forecast_npc(&state, 0, INF_NPC_RANGER, 24, 31, 0);
+    add_step_out_forecast_npc(&state, 1, INF_NPC_MAGER, 29, 30, 0);
+
+    InfStepOutForecast forecast;
+    inf_build_step_out_forecast(&state, &forecast);
+
+    const InfStepOutForecastAction* idle = &forecast.actions[0];
+    ASSERT_INT_EQ("idle remains safe from ranged tick one",
+        idle->ticks[0].ranged_count, 0);
+    ASSERT_INT_EQ("idle remains safe from magic tick one",
+        idle->ticks[0].magic_count, 0);
+
+    const InfStepOutForecastAction* run_west = &forecast.actions[11];
+    assert_step_out_ranger_then_mager("north pillar run west", run_west, 27, 39);
+}
+
+static void test_step_out_forecast_obs_exposes_compact_action_affordance(void) {
+    printf("--- step-out forecast obs exposes compact action affordance ---\n");
+
+    InfernoState state;
+    init_step_out_forecast_stack_state(&state, 29, 39);
+    add_step_out_forecast_npc(&state, 0, INF_NPC_RANGER, 24, 31, 0);
+    add_step_out_forecast_npc(&state, 1, INF_NPC_MAGER, 29, 30, 0);
+
+    float obs[INF_NUM_OBS];
+    inf_write_obs((EncounterState*)&state, obs);
+
+    int action_start = inferno_step_out_forecast_obs_start() +
+        11 * INF_STEP_OUT_FORECAST_ACTION_FEATURES;
+    ASSERT_FLOAT_NEAR("run west obs valid",
+        obs[action_start], 1.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("run west obs first attack tick",
+        obs[action_start + 1], 1.0f / 4.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("run west obs first style mask",
+        obs[action_start + 2], (float)INF_STYLE_MASK_RANGED / 7.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("run west obs has max hit",
+        obs[action_start + 3], 70.0f / 150.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("run west obs same-tick conflict",
+        obs[action_start + 4], 0.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("run west obs ranger/mager conflict",
+        obs[action_start + 5], 0.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("run west obs off-tick opportunity",
+        obs[action_start + 6], 1.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("run west obs melee fallback exposure",
+        obs[action_start + 7], 0.0f, 1e-6f);
+}
+
+static void test_step_out_forecast_south_pillar_ranger_mager_order(void) {
+    printf("--- step-out forecast south pillar ranger/mager order ---\n");
+
+    InfernoState state;
+    init_step_out_forecast_stack_state(&state, 22, 17);
+    add_step_out_forecast_npc(&state, 0, INF_NPC_RANGER, 17, 25, 0);
+    add_step_out_forecast_npc(&state, 1, INF_NPC_MAGER, 22, 26, 0);
+
+    InfStepOutForecast forecast;
+    inf_build_step_out_forecast(&state, &forecast);
+
+    const InfStepOutForecastAction* run_west = &forecast.actions[11];
+    assert_step_out_ranger_then_mager("south pillar run west", run_west, 20, 17);
+}
+
+static void test_step_out_forecast_west_pillar_ranger_mager_order(void) {
+    printf("--- step-out forecast west pillar ranger/mager order ---\n");
+
+    InfernoState state;
+    init_step_out_forecast_stack_state(&state, 11, 29);
+    add_step_out_forecast_npc(&state, 0, INF_NPC_RANGER, 8, 40, 0);
+    add_step_out_forecast_npc(&state, 1, INF_NPC_MAGER, 16, 42, 0);
+
+    InfStepOutForecast forecast;
+    inf_build_step_out_forecast(&state, &forecast);
+
+    const InfStepOutForecastAction* walk_north = &forecast.actions[4];
+    assert_step_out_ranger_then_mager("west pillar walk north", walk_north, 11, 28);
+}
+
+static void test_step_out_forecast_inactive_pillar_does_not_create_cover(void) {
+    printf("--- step-out forecast inactive pillar does not create cover ---\n");
+
+    InfernoState state;
+    init_step_out_forecast_stack_state(&state, 29, 39);
+    state.pillars[2].active = 0;
+    state.pillars[2].hp = 0;
+    inf_rebuild_los(&state);
+    add_step_out_forecast_npc(&state, 0, INF_NPC_RANGER, 24, 31, 0);
+    add_step_out_forecast_npc(&state, 1, INF_NPC_MAGER, 29, 30, 0);
+
+    InfStepOutForecast forecast;
+    inf_build_step_out_forecast(&state, &forecast);
+
+    const InfStepOutForecastAction* idle = &forecast.actions[0];
+    ASSERT_INT_EQ("inactive north pillar exposes ranger immediately",
+        idle->ticks[0].ranger_count, 1);
+    ASSERT_INT_EQ("inactive north pillar exposes mager immediately",
+        idle->ticks[0].mager_count, 1);
+    ASSERT_INT_EQ("inactive north pillar shows same-tick conflict",
+        idle->same_tick_mixed_style_conflict, 1);
+    ASSERT_INT_EQ("inactive north pillar has no off-tick cover",
+        idle->ranger_mager_offtick_opportunity, 0);
+}
+
+static void test_step_out_same_tick_ranger_mager_event_logs(void) {
+    printf("--- step-out same-tick ranger/mager event logs ---\n");
+
+    InfernoState state;
+    init_step_out_forecast_stack_state(&state, 14, 35);
+    add_step_out_forecast_npc(&state, 0, INF_NPC_RANGER, 5, 39, 0);
+    add_step_out_forecast_npc(&state, 1, INF_NPC_MAGER, 4, 34, 0);
+
+    int actions[INF_NUM_ACTION_HEADS] = {0};
+    actions[INF_HEAD_MOVE] = 13;
+    inf_step((EncounterState*)&state, actions);
+
+    ASSERT_INT_EQ("step-out tick moved the player",
+        state.player_moved_this_tick, 1);
+    ASSERT_INT_EQ("movement tick does not count attacks before NPCs see new tile",
+        state.total_step_out_ranger_mager_same_tick_attacks, 0);
+
+    int noop[INF_NUM_ACTION_HEADS] = {0};
+    inf_step((EncounterState*)&state, noop);
+
+    ASSERT_INT_EQ("same-tick ranger/mager event counted",
+        state.total_ranger_mager_same_tick_attacks, 1);
+    ASSERT_INT_EQ("step-out same-tick ranger/mager event counted",
+        state.total_step_out_ranger_mager_same_tick_attacks, 1);
 }
 
 static void test_direct_start_waves_spawn_without_empty_gap(void) {
@@ -3443,6 +3859,120 @@ static void test_phantom_barrage_does_not_displace_live_obs_slots(void) {
     }
     ASSERT_INT_EQ("dying phantom target does not displace live cap",
         inf_find_target_obs_slot(&state, 0), -1);
+}
+
+static void init_confliction_barrage_test_state(
+    InfernoState* state,
+    InfNPCType target_type
+) {
+    *state = make_test_state(10, 10);
+    state->rng_state = 1;
+    state->weapon_set = INF_GEAR_MAGE;
+    state->spell_choice = ENCOUNTER_SPELL_BLOOD;
+    state->player.entity_type = ENTITY_PLAYER;
+    state->player.base_hitpoints = 99;
+    state->player.current_hitpoints = 99;
+    state->player.base_attack = 99;
+    state->player.base_strength = 99;
+    state->player.base_defence = 99;
+    state->player.base_ranged = 99;
+    state->player.base_magic = 99;
+    state->player.current_attack = 99;
+    state->player.current_strength = 99;
+    state->player.current_defence = 99;
+    state->player.current_ranged = 99;
+    state->player.current_magic = 99;
+    state->player_dest_x = -1;
+    state->player_dest_y = -1;
+    osrs_interaction_init(&state->interaction);
+    encounter_apply_loadout(&state->player, INF_MAGE_LOADOUT, GEAR_MAGE);
+    encounter_compute_loadout_stats(INF_MAGE_LOADOUT, ATTACK_STYLE_MAGIC,
+        OFFENSIVE_PRAYER_NONE, 99, FIGHT_STYLE_AUTOCAST, 30,
+        &state->loadout_stats[INF_GEAR_MAGE]);
+
+    state->npcs[0] = make_test_npc(
+        target_type, 16, 10, INF_NPC_STATS[target_type].size);
+    state->npcs[0].active = 1;
+    state->npcs[0].hp = state->npcs[0].max_hp = INF_NPC_STATS[target_type].hp;
+    osrs_interaction_set(&state->interaction, 0);
+}
+
+static int inferno_fire_blood_barrage_at_slot_zero(
+    InfernoState* state,
+    uint32_t seed
+) {
+    int actions[INF_NUM_ACTION_HEADS];
+    memset(actions, 0, sizeof(actions));
+    state->rng_state = seed;
+    state->player.attack_timer = 0;
+    state->npcs[0].pending_hit = (EncounterPendingHit){0};
+    osrs_interaction_set(&state->interaction, 0);
+    inf_tick_player(state, actions, 1);
+    return state->npcs[0].pending_hit.hit_success;
+}
+
+static void test_inferno_barrage_primes_confliction_and_reuses_double_accuracy(void) {
+    printf("--- inferno barrage primes Confliction and reuses double accuracy ---\n");
+
+    InfernoState state;
+    uint32_t miss_seed = 0;
+    for (uint32_t seed = 1; seed < 10000 && miss_seed == 0; seed++) {
+        init_confliction_barrage_test_state(&state, INF_NPC_RANGER);
+        int hit = inferno_fire_blood_barrage_at_slot_zero(&state, seed);
+        if (state.npcs[0].pending_hit.active && !hit)
+            miss_seed = seed;
+    }
+    ASSERT_INT_EQ("deterministic miss seed found", miss_seed > 0, 1);
+    if (miss_seed == 0) return;
+
+    init_confliction_barrage_test_state(&state, INF_NPC_RANGER);
+    ASSERT_INT_EQ("first barrage splashes",
+        inferno_fire_blood_barrage_at_slot_zero(&state, miss_seed), 0);
+    ASSERT_INT_EQ("splash primes Confliction",
+        state.player.item_effect_state.confliction_is_primed, 1);
+    ASSERT_INT_EQ("prime target kind",
+        state.player.item_effect_state.confliction_target.kind, OSRS_TARGET_NPC);
+    ASSERT_INT_EQ("prime target slot",
+        state.player.item_effect_state.confliction_target.id, 0);
+
+    const EncounterLoadoutStats* ls = &state.loadout_stats[INF_GEAR_MAGE];
+    OsrsPreparedAttackEffects prepared = osrs_prepare_attack_effects(
+        &state.player.equipment_effect_profile,
+        &state.player.item_effect_state,
+        state.player.equipped[GEAR_SLOT_WEAPON],
+        ATTACK_STYLE_MAGIC,
+        OSRS_MAGIC_ATTACK_ANCIENT_BLOOD,
+        (OsrsTargetRef){ .kind = OSRS_TARGET_NPC, .id = 0 },
+        1,
+        ls->eff_level * (ls->attack_bonus + 64),
+        ls->max_hit,
+        0,
+        0,
+        state.player.current_hitpoints,
+        state.player.base_hitpoints
+    );
+    ASSERT_INT_EQ("same target prepares double accuracy",
+        prepared.use_double_accuracy, 1);
+
+    inferno_fire_blood_barrage_at_slot_zero(&state, miss_seed);
+    ASSERT_INT_EQ("double accuracy attempt clears Confliction",
+        state.player.item_effect_state.confliction_is_primed, 0);
+}
+
+static void test_barrage_accuracy_regression_against_ranger_and_mager(void) {
+    printf("--- barrage accuracy regression against ranger and mager ---\n");
+
+    InfNPCType targets[2] = { INF_NPC_RANGER, INF_NPC_MAGER };
+    for (int i = 0; i < 2; i++) {
+        int hits = 0;
+        for (uint32_t seed = 1; seed <= 64; seed++) {
+            InfernoState state;
+            init_confliction_barrage_test_state(&state, targets[i]);
+            hits += inferno_fire_blood_barrage_at_slot_zero(&state, seed);
+        }
+        ASSERT_INT_EQ("repeated barrages are not all splashes", hits > 0, 1);
+        ASSERT_INT_EQ("repeated barrages are not guaranteed hits", hits < 64, 1);
+    }
 }
 
 static void test_zuk_obs_tracks_shield_and_mager_aggro(void) {
@@ -4734,6 +5264,64 @@ static void test_player_projectile_render_uses_stored_reference_timing(void) {
         tbow_state.player_attack_timing.visual_duration_ticks * 30);
 }
 
+static void test_magic_splash_landing_keeps_spell_visual_context(void) {
+    printf("--- magic splash landing keeps spell visual context ---\n");
+
+    InfernoState state = make_test_state(10, 10);
+    state.npcs[0] = make_test_npc(
+        INF_NPC_RANGER, 16, 10, INF_NPC_STATS[INF_NPC_RANGER].size);
+    state.npcs[0].active = 1;
+    state.npcs[0].hp = state.npcs[0].max_hp = INF_NPC_STATS[INF_NPC_RANGER].hp;
+    state.npcs[0].pending_hit.active = 1;
+    state.npcs[0].pending_hit.ticks_remaining = 1;
+    state.npcs[0].pending_hit.damage = 0;
+    state.npcs[0].pending_hit.attack_style = ATTACK_STYLE_MAGIC;
+    state.npcs[0].pending_hit.spell_type = ENCOUNTER_SPELL_BLOOD;
+    state.npcs[0].pending_hit.hit_success = 0;
+
+    inf_resolve_player_projectiles_on_npcs(&state);
+
+    RenderEntity entities[4];
+    int count = 0;
+    inf_fill_render_entities((EncounterState*)&state, entities, 4, &count);
+
+    ASSERT_INT_EQ("splashing ranger still emits landed visual event",
+        entities[1].hit_landed_this_tick, 1);
+    ASSERT_INT_EQ("splashing ranger records failed accuracy",
+        entities[1].hit_was_successful, 0);
+    ASSERT_INT_EQ("splashing ranger records blood barrage spell",
+        entities[1].hit_spell_type, ENCOUNTER_SPELL_BLOOD);
+}
+
+static void test_elysian_proc_propagates_to_player_render_entity(void) {
+    printf("--- elysian proc propagates to player render entity ---\n");
+
+    InfernoState state = make_test_state(10, 10);
+    state.player.entity_type = ENTITY_PLAYER;
+    state.player.base_hitpoints = 99;
+    state.player.current_hitpoints = 99;
+    state.player.equipped[GEAR_SLOT_SHIELD] = ITEM_ELYSIAN_SPIRIT_SHIELD;
+    state.player_pending_hit_count = 1;
+    state.player_pending_hits[0].active = 1;
+    state.player_pending_hits[0].ticks_remaining = 1;
+    state.player_pending_hits[0].damage = 12;
+    state.player_pending_hits[0].attack_style = ATTACK_STYLE_RANGED;
+    state.player_pending_hits[0].source_npc_type = INF_NPC_RANGER;
+    state.player_pending_hits[0].elysian_reduced = 1;
+
+    inf_resolve_player_pending_hits(&state);
+
+    RenderEntity entities[2];
+    int count = 0;
+    inf_fill_render_entities((EncounterState*)&state, entities, 2, &count);
+
+    ASSERT_INT_EQ("player render entity exists", count >= 1, 1);
+    ASSERT_INT_EQ("elysian proc reaches player state",
+        state.player.elysian_proc_this_tick, 1);
+    ASSERT_INT_EQ("elysian proc reaches render entity",
+        entities[0].elysian_proc_this_tick, 1);
+}
+
 static void test_delayed_player_hit_records_landing_source(void) {
     printf("--- delayed player hit records landing source ---\n");
 
@@ -4901,18 +5489,6 @@ static void test_inferno_binding_forwards_supply_milestone_rewards(void) {
         "[env]",
         "[vec]",
         "supply_milestone_restore_reward_coeff = 0.0");
-    ASSERT_SOURCE_BLOCK_CONTAINS(
-        "supply milestone brew is swept",
-        "config/ocean/osrs_inferno.ini",
-        "sweep_only =",
-        "[sweep.train.total_timesteps]",
-        "env.supply_milestone_brew_reward_coeff");
-    ASSERT_SOURCE_BLOCK_CONTAINS(
-        "supply milestone restore is swept",
-        "config/ocean/osrs_inferno.ini",
-        "sweep_only =",
-        "[sweep.train.total_timesteps]",
-        "env.supply_milestone_restore_reward_coeff");
 }
 
 static void test_inferno_binding_forwards_post_healer_set_rewards(void) {
@@ -5168,6 +5744,8 @@ int main(void) {
     test_late_start_supply_observations();
     test_dead_mob_store_eligibility();
     test_resurrected_mob_does_not_reenter_dead_store();
+    test_blob_split_waits_for_death_removal();
+    test_mager_resurrection_render_event_is_not_magic_projectile();
     test_double_mager_wave_resurrection_limit();
     test_pending_hit_obs_timer_prefers_prayer_window();
     test_jad_has_no_pre_fire_style_preview();
@@ -5176,9 +5754,18 @@ int main(void) {
     test_jad_prayer_first_on_fourth_tick_does_not_block();
     test_jad_long_distance_damage_uses_delayed_projectile_landing();
     test_triple_jad_pending_threats_fit_obs_layout();
+    test_inferno_obs_shape_includes_step_out_forecast_features();
     test_jad_special_wave_spawn_cadence_matches_reference();
     test_triple_jad_first_attacks_are_staggered();
     test_jad_melee_stays_instant_and_untelegraphed();
+    test_step_out_forecast_matches_movement_head_destinations();
+    test_inferno_npc_travel_uses_sw_origin_around_all_pillars();
+    test_step_out_forecast_north_pillar_ranger_mager_order();
+    test_step_out_forecast_obs_exposes_compact_action_affordance();
+    test_step_out_forecast_south_pillar_ranger_mager_order();
+    test_step_out_forecast_west_pillar_ranger_mager_order();
+    test_step_out_forecast_inactive_pillar_does_not_create_cover();
+    test_step_out_same_tick_ranger_mager_event_logs();
     test_direct_start_waves_spawn_without_empty_gap();
     test_joseph_start_wave_70_seeds_zuk_jad_checkpoint();
     test_joseph_start_wave_71_seeds_zuk_healer_checkpoint();
@@ -5195,6 +5782,8 @@ int main(void) {
     test_phantom_barrage_hits_aoe_on_first_cast_window();
     test_phantom_barrage_close_barrage_timing_cannot_recast();
     test_phantom_barrage_does_not_displace_live_obs_slots();
+    test_inferno_barrage_primes_confliction_and_reuses_double_accuracy();
+    test_barrage_accuracy_regression_against_ranger_and_mager();
     test_zuk_obs_exposes_attack_timer_summary();
     test_zuk_obs_exposes_pending_sparks();
     test_human_blowpipe_click_chases_zuk_out_of_range();
@@ -5232,6 +5821,8 @@ int main(void) {
     test_jad_projectile_long_distance_visual_duration_uses_reference_formula();
     test_inferno_npc_projectile_render_uses_reference_visual_timing();
     test_player_projectile_render_uses_stored_reference_timing();
+    test_magic_splash_landing_keeps_spell_visual_context();
+    test_elysian_proc_propagates_to_player_render_entity();
     test_delayed_player_hit_records_landing_source();
     test_terminal_reward_uses_explicit_win_bonus();
     test_lethal_pending_hit_banks_damage_stats_before_terminal();

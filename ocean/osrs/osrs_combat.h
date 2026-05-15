@@ -124,6 +124,7 @@ typedef struct {
     int magic_def_bonus; /* in: NPC magic defence bonus */
     int npc_idx;         /* in: index into caller's NPC array (for callbacks) */
     int* frozen_ticks;   /* in: pointer to NPC's frozen_ticks (NULL = no freeze tracking) */
+    int rolled;          /* out: 1 if this target had an accuracy roll */
     int hit;             /* out: 1 = accuracy passed, 0 = splashed */
     int damage;          /* out: damage rolled (0 if splashed) */
 } BarrageTarget;
@@ -167,6 +168,7 @@ static inline BarrageResult osrs_barrage_resolve(
         float chance = primary_use_double_accuracy
             ? osrs_hit_chance_double(att_roll, def_roll)
             : osrs_hit_chance(att_roll, def_roll);
+        targets[0].rolled = 1;
         targets[0].hit = encounter_rand_float(rng_state) < chance;
         targets[0].damage = targets[0].hit ? encounter_rand_int(rng_state, max_hit + 1) : 0;
         result.total_damage += targets[0].damage;
@@ -188,6 +190,7 @@ static inline BarrageResult osrs_barrage_resolve(
 
         int def_roll = (targets[i].def_level + 8) * (targets[i].magic_def_bonus + 64);
         float chance = osrs_hit_chance(att_roll, def_roll);
+        targets[i].rolled = 1;
         targets[i].hit = encounter_rand_float(rng_state) < chance;
         targets[i].damage = targets[i].hit ? encounter_rand_int(rng_state, max_hit + 1) : 0;
         result.total_damage += targets[i].damage;

@@ -45,6 +45,13 @@ static int blocked_rect(void* ctx, int x, int y, int size) {
             y >= r->by && y < r->by + r->bsize);
 }
 
+typedef struct { int x, y; } BlockPoint;
+static int blocked_point(void* ctx, int x, int y, int size) {
+    BlockPoint* p = (BlockPoint*)ctx;
+    (void)size;
+    return x == p->x && y == p->y;
+}
+
 /* --- regression: in-range NPC still moves (no range-stop in helper) --- */
 static void test_in_range_still_steps(void) {
     printf("--- in-range NPC still steps (no helper-level range stop) ---\n");
@@ -84,6 +91,56 @@ static void test_pillar_diagonal_path(void) {
     ASSERT_EQ("moved=1 (took diagonal)", moved, 1);
     ASSERT_EQ("x=1", x, 1);
     ASSERT_EQ("y=1", y, 1);
+}
+
+static void test_origin_delta_moves_npcs_inside_footprint_axis(void) {
+    printf("--- origin delta moves NPCs inside footprint axis ---\n");
+    for (int size = 1; size <= 5; size++) {
+        int x = 10, y = 10;
+        int tx = 10 + size - 1;
+        int moved = encounter_npc_step_toward(
+            &x, &y, tx, 20, size, 1, 0, blocked_never, NULL);
+        char label[64];
+        snprintf(label, sizeof(label), "size %d moved", size);
+        ASSERT_EQ(label, moved, 1);
+        snprintf(label, sizeof(label), "size %d x follows SW-origin delta", size);
+        ASSERT_EQ(label, x, size == 1 ? 10 : 11);
+        snprintf(label, sizeof(label), "size %d y follows SW-origin delta", size);
+        ASSERT_EQ(label, y, 11);
+    }
+}
+
+static void test_origin_delta_diagonal_blocked_uses_x_fallback(void) {
+    printf("--- origin delta diagonal blocked uses x fallback ---\n");
+    BlockPoint blocked_y_edge = { 10, 12 };
+    int x = 10, y = 10;
+    int moved = encounter_npc_step_toward(
+        &x, &y, 11, 20, 2, 1, 0, blocked_point, &blocked_y_edge);
+    ASSERT_EQ("moved via x fallback", moved, 1);
+    ASSERT_EQ("x advanced", x, 11);
+    ASSERT_EQ("y unchanged", y, 10);
+}
+
+static void test_origin_delta_x_blocked_uses_y_fallback_when_far(void) {
+    printf("--- origin delta x blocked uses y fallback when far ---\n");
+    BlockPoint blocked_x_edge = { 12, 10 };
+    int x = 10, y = 10;
+    int moved = encounter_npc_step_toward(
+        &x, &y, 11, 20, 2, 1, 0, blocked_point, &blocked_x_edge);
+    ASSERT_EQ("moved via y fallback", moved, 1);
+    ASSERT_EQ("x unchanged", x, 10);
+    ASSERT_EQ("y advanced", y, 11);
+}
+
+static void test_origin_delta_x_blocked_does_not_use_y_fallback_when_close(void) {
+    printf("--- origin delta x blocked does not use y fallback when close ---\n");
+    BlockPoint blocked_x_edge = { 12, 10 };
+    int x = 10, y = 10;
+    int moved = encounter_npc_step_toward(
+        &x, &y, 11, 11, 2, 1, 0, blocked_point, &blocked_x_edge);
+    ASSERT_EQ("no y fallback at one-tile anchor distance", moved, 0);
+    ASSERT_EQ("x unchanged", x, 10);
+    ASSERT_EQ("y unchanged", y, 10);
 }
 
 /* --- melee adjacent: step helper tries, fails naturally (player tile blocked) --- */
@@ -158,6 +215,10 @@ int main(void) {
     test_in_range_still_steps();
     test_pillar_stuck();
     test_pillar_diagonal_path();
+    test_origin_delta_moves_npcs_inside_footprint_axis();
+    test_origin_delta_diagonal_blocked_uses_x_fallback();
+    test_origin_delta_x_blocked_uses_y_fallback_when_far();
+    test_origin_delta_x_blocked_does_not_use_y_fallback_when_close();
     test_melee_cardinal_contact_stops_without_target_tile_block();
     test_melee_diagonal_contact_tries_x_only();
     test_melee_diagonal_contact_does_not_fall_back_to_y();

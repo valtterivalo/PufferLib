@@ -31,6 +31,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <stdarg.h>
+#include <ctype.h>
+#include <errno.h>
 
 
 #define INF_ARENA_MIN_X    11
@@ -439,6 +442,8 @@ typedef struct {
     /* mager resurrection state */
     int resurrect_cooldown; /* mager: ticks until next resurrection attempt */
     int resurrection_count; /* number of times this original mob has been resurrected */
+    int resurrecting_this_tick;
+    int resurrection_visual_target;
 
     /* freeze state (ice barrage) */
     int frozen_ticks;       /* ticks remaining in ice barrage freeze */
@@ -465,7 +470,9 @@ typedef struct {
     int moved_this_tick;        /* 1 when NPC moves this tick */
     int hit_landed_this_tick; /* 1 when this NPC was hit by player */
     int hit_damage;          /* damage dealt to this NPC this tick */
+    int hit_was_successful_this_tick;
     int hit_spell_type;      /* ENCOUNTER_SPELL_* from the pending hit that just landed */
+    int spawn_blob_splits_on_removal;
 } InfNPC;
 
 
@@ -657,6 +664,8 @@ typedef struct {
     int prayer_correct_this_tick;  /* count of NPC attacks blocked by prayer this tick */
     int wave_completed_this_tick;
     int pillar_lost_this_tick;     /* -1 = none, 0-2 = which pillar was destroyed */
+    int player_moved_this_tick;
+    int player_moved_last_tick;
 
     /* cumulative stats for diagnostics */
     float total_damage_dealt;
@@ -679,6 +688,8 @@ typedef struct {
     /* per-tick tracking for multi-style analysis */
     int tick_styles_fired;     /* bitmask of styles that fired this tick (bit0=mel,1=rng,2=mag) */
     int tick_attacks_fired;    /* count of NPC attacks that fired this tick */
+    int total_ranger_mager_same_tick_attacks;
+    int total_step_out_ranger_mager_same_tick_attacks;
     /* per-NPC-type prayer and damage tracking (for wandb, not dashboard) */
     int prayer_correct_by_type[INF_NUM_NPC_TYPES];
     int attacks_by_type[INF_NUM_NPC_TYPES];
@@ -1303,6 +1314,15 @@ static inline int inf_jad_roll_primary_style(uint32_t* rng_state) {
 }
 
 static inline int inf_npc_attack_anim_id(const InfNPC* npc, const NpcModelMapping* nm) {
+    if (npc->resurrecting_this_tick)
+        return INF_GEN_ANIM_MAGER_RESURRECT;
+    if (npc->type == INF_NPC_RANGER &&
+        npc->attack_style_this_tick == ATTACK_STYLE_MELEE)
+        return INF_GEN_ANIM_RANGER_ATTACK_MELEE;
+    if (npc->type == INF_NPC_MAGER &&
+        npc->attack_style_this_tick == ATTACK_STYLE_MELEE)
+        return INF_GEN_ANIM_MAGER_ATTACK_MELEE;
+
     if (npc->type == INF_NPC_JAD) {
         switch (npc->attack_style_this_tick) {
             case ATTACK_STYLE_MAGIC:
@@ -1915,6 +1935,7 @@ static void inf_init_npc(InfernoState* s, int idx, InfNPCType type, int x, int y
     npc->target_x = x;
     npc->target_y = y;
     npc->attack_visual_target = -1;
+    npc->resurrection_visual_target = -1;
     npc->heal_target = -1;
     npc->jad_owner_idx = -1;
     npc->aggro_target = -1;
@@ -2628,6 +2649,19 @@ static void inf_resolve_npc_target_hits(InfernoState* s) {
     }
 }
 
+static int inf_apply_elysian_to_player_hit(InfernoState* s, int damage, int* reduced) {
+    *reduced = 0;
+    if (damage <= 0) return damage;
+    osrs_ensure_player_equipment(&s->player);
+    if (!osrs_effect_profile_has(
+            &s->player.equipment_effect_profile, OSRS_ITEM_EFFECT_ELYSIAN))
+        return damage;
+    if (encounter_rand_int(&s->rng_state, 10) >= 7)
+        return damage;
+    *reduced = 1;
+    return damage * 75 / 100;
+}
+
 
 static void inf_npc_attack(InfernoState* s, int idx) {
     InfNPC* npc = &s->npcs[idx];
@@ -2884,7 +2918,10 @@ static void inf_npc_attack(InfernoState* s, int idx) {
                 ph->attack_style = ATTACK_STYLE_NONE;  /* typeless — not blockable */
                 ph->check_prayer = 0;
                 ph->prayer_check_delay = 0;
+                ph->spell_type = 0;
                 ph->source_npc_type = npc->type;
+                ph->hit_success = 1;
+                ph->elysian_reduced = 0;
             }
             s->last_hit_by_type = INF_NPC_ZUK;
             npc->attacked_this_tick = 1;
@@ -2906,7 +2943,7 @@ static void inf_npc_attack(InfernoState* s, int idx) {
         actual_style == ATTACK_STYLE_MAGIC &&
         inf_mager_resurrect(s, idx)) {
         npc->attacked_this_tick = 1;
-        npc->attack_style_this_tick = ATTACK_STYLE_MAGIC;
+        npc->attack_style_this_tick = ATTACK_STYLE_NONE;
         npc->attack_timer = stats->attack_speed;
         return;
     }
@@ -2921,6 +2958,7 @@ static void inf_npc_attack(InfernoState* s, int idx) {
     int is_delayed_jad = (npc->type == INF_NPC_JAD &&
                           actual_style != ATTACK_STYLE_MELEE);
     int dmg = is_delayed_jad ? max_hit : encounter_rand_int(&s->rng_state, max_hit + 1);
+    int accuracy_hit = 1;
 
     /* accuracy roll: NPC attack roll vs player defence roll */
     if (!is_delayed_jad) {
@@ -2938,8 +2976,10 @@ static void inf_npc_attack(InfernoState* s, int idx) {
             ls->def_stab, ls->def_slash, ls->def_crush, ls->def_magic, ls->def_ranged,
             actual_style, stats->melee_style);
         int def_roll = osrs_player_def_roll_vs_npc(s->player.current_defence, s->player.current_magic, def_bonus, actual_style);
-        if (encounter_rand_float(&s->rng_state) >= osrs_hit_chance(att_roll, def_roll))
+        if (encounter_rand_float(&s->rng_state) >= osrs_hit_chance(att_roll, def_roll)) {
             dmg = 0;  /* missed */
+            accuracy_hit = 0;
+        }
     }
 
     EncounterProjectileTiming hit_timing =
@@ -2967,6 +3007,9 @@ static void inf_npc_attack(InfernoState* s, int idx) {
         int prayer_matches = encounter_prayer_correct_for_style(s->player.prayer, actual_style);
           if (prayer_matches) { dmg = 0; s->prayer_correct_this_tick++; s->prayer_correct_by_type[npc->type]++; }
           else if (dmg > 0) { s->off_prayer_hits_this_tick++; }
+        int elysian_reduced = 0;
+        dmg = inf_apply_elysian_to_player_hit(s, dmg, &elysian_reduced);
+        if (elysian_reduced) s->player.elysian_proc_this_tick = 1;
         s->dmg_from_type[npc->type] += (float)dmg;
         if (dmg > 0) s->last_hit_by_type = npc->type;
         encounter_damage_player(&s->player, dmg, &s->damage_received_this_tick);
@@ -3000,7 +3043,10 @@ static void inf_npc_attack(InfernoState* s, int idx) {
             ph->attack_style = actual_style;
             ph->check_prayer = is_jad ? 1 : 0;
             ph->prayer_check_delay = is_jad ? INF_JAD_PROJECTILE_DELAY + 1 : 0;
+            ph->spell_type = 0;
             ph->source_npc_type = npc->type;
+            ph->hit_success = accuracy_hit;
+            ph->elysian_reduced = 0;
         }
     }
 
@@ -3068,6 +3114,7 @@ static int inf_mager_resurrect(InfernoState* s, int idx) {
     s->npcs[slot].hp = dm->hp;      /* 50% of max HP */
     s->npcs[slot].max_hp = dm->max_hp;
     s->npcs[slot].resurrection_count = 1;
+    s->npcs[slot].attack_timer = INF_NPC_STATS[dm->type].attack_speed;
 
     /* remove from dead store (swap with last) */
     s->dead_mobs[di] = s->dead_mobs[s->dead_mob_count - 1];
@@ -3075,6 +3122,9 @@ static int inf_mager_resurrect(InfernoState* s, int idx) {
 
     /* 8-tick cooldown */
     npc->resurrect_cooldown = 8;
+    npc->resurrecting_this_tick = 1;
+    npc->resurrection_visual_target = slot;
+    npc->attack_visual_target = slot;
     return 1;
 }
 
@@ -3339,6 +3389,11 @@ static void inf_tick_npcs(InfernoState* s) {
     inf_resolve_npc_target_hits(s);
     inf_zuk_tick(s);
 
+    int blob_split_x[INF_MAX_NPCS];
+    int blob_split_y[INF_MAX_NPCS];
+    int blob_split_parent[INF_MAX_NPCS];
+    int blob_split_count = 0;
+
     for (int i = 0; i < INF_MAX_NPCS; i++) {
         if (!s->npcs[i].active) continue;
 
@@ -3352,7 +3407,16 @@ static void inf_tick_npcs(InfernoState* s) {
         /* death linger: decrement and deactivate when done */
         if (s->npcs[i].death_ticks > 0) {
             s->npcs[i].death_ticks--;
-            if (s->npcs[i].death_ticks == 0) inf_deactivate_npc(s, i);
+            if (s->npcs[i].death_ticks == 0) {
+                if (s->npcs[i].spawn_blob_splits_on_removal &&
+                    blob_split_count < INF_MAX_NPCS) {
+                    blob_split_x[blob_split_count] = s->npcs[i].x;
+                    blob_split_y[blob_split_count] = s->npcs[i].y;
+                    blob_split_parent[blob_split_count] = i;
+                    blob_split_count++;
+                }
+                inf_deactivate_npc(s, i);
+            }
             continue;  /* dying NPCs don't move or attack */
         }
 
@@ -3372,6 +3436,29 @@ static void inf_tick_npcs(InfernoState* s) {
         /* jad healer spawning */
         if (s->npcs[i].type == INF_NPC_JAD)
             inf_jad_check_healers(s, i);
+    }
+
+    for (int i = 0; i < blob_split_count; i++) {
+        InfNPCType split_types[3] = {
+            INF_NPC_BLOB_RANGE, INF_NPC_BLOB_MELEE, INF_NPC_BLOB_MAGE
+        };
+        int split_offsets[3][2] = {
+            {1, 1}, {0, 0}, {2, 2}
+        };
+        for (int sp = 0; sp < 3; sp++) {
+            int slot = -1;
+            for (int n = 0; n < INF_MAX_NPCS; n++) {
+                if (n == blob_split_parent[i] || s->npcs[n].active) continue;
+                slot = n;
+                break;
+            }
+            if (slot < 0) break;
+            inf_init_npc(
+                s, slot, split_types[sp],
+                blob_split_x[i] + split_offsets[sp][0],
+                blob_split_y[i] + split_offsets[sp][1]);
+            s->npcs[slot].attack_timer = 4;
+        }
     }
 }
 
@@ -3420,18 +3507,9 @@ static void inf_apply_npc_death(InfernoState* s, int npc_idx) {
     npc->death_ticks = INF_NPC_DEATH_LINGER_TICKS;
     s->total_npc_kills++;
 
-    if (npc->type == INF_NPC_BLOB) {
-        InfNPCType split_types[3] = {
-            INF_NPC_BLOB_MELEE, INF_NPC_BLOB_RANGE, INF_NPC_BLOB_MAGE
-        };
-        for (int sp = 0; sp < 3; sp++) {
-            int slot = inf_find_free_npc(s);
-            if (slot < 0) break;
-            inf_init_npc(s, slot, split_types[sp], npc->x + (sp - 1), npc->y);
-        }
-    } else {
-        inf_store_dead_mob(s, npc);
-    }
+    if (npc->type == INF_NPC_BLOB)
+        npc->spawn_blob_splits_on_removal = 1;
+    inf_store_dead_mob(s, npc);
 
     if (npc->type == INF_NPC_JAD) {
         for (int j = 0; j < INF_MAX_NPCS; j++) {
@@ -4090,7 +4168,7 @@ static void inf_tick_player(InfernoState* s, const int* actions, int can_attack)
 
                     /* queue pending hits for delayed damage */
                     for (int i = 0; i < bt_count; i++) {
-                        if (!btargets[i].active || !btargets[i].hit) continue;
+                        if (!btargets[i].active || !btargets[i].rolled) continue;
                         int nidx = btargets[i].npc_idx;
                         if (s->npcs[nidx].death_ticks > 0) continue;
                         EncounterPendingHit* ph = &s->npcs[nidx].pending_hit;
@@ -4100,6 +4178,8 @@ static void inf_tick_player(InfernoState* s, const int* actions, int can_attack)
                         ph->attack_style = ATTACK_STYLE_MAGIC;
                         ph->check_prayer = 0;
                         ph->spell_type = s->spell_choice;
+                        ph->hit_success = btargets[i].hit;
+                        ph->elysian_reduced = 0;
                     }
 
                 } else if (weapon_is_tbow) {
@@ -4120,7 +4200,9 @@ static void inf_tick_player(InfernoState* s, const int* actions, int can_attack)
                         s->player.base_hitpoints
                     );
                     int def_roll = (ns->def_level + 8) * (ns->ranged_def_bonus + 64);
-                    if (encounter_rand_float(&s->rng_state) < osrs_hit_chance(attack_effects.attack_roll, def_roll)) {
+                    int hit_success = encounter_rand_float(&s->rng_state) <
+                        osrs_hit_chance(attack_effects.attack_roll, def_roll);
+                    if (hit_success) {
                         total_dmg = encounter_rand_int(&s->rng_state, attack_effects.max_hit + 1);
                     }
                     EncounterPendingHit* ph = &target_npc->pending_hit;
@@ -4130,6 +4212,8 @@ static void inf_tick_player(InfernoState* s, const int* actions, int can_attack)
                     ph->attack_style = ATTACK_STYLE_RANGED;
                     ph->check_prayer = 0;
                     ph->spell_type = 0;
+                    ph->hit_success = hit_success;
+                    ph->elysian_reduced = 0;
 
                 } else if (is_blowpipe_spec_attack) {
                     /* blowpipe spec: 2x accuracy, 1.5x max hit, heal 50% of damage */
@@ -4151,13 +4235,17 @@ static void inf_tick_player(InfernoState* s, const int* actions, int can_attack)
                     ph->attack_style = ATTACK_STYLE_RANGED;
                     ph->check_prayer = 0;
                     ph->spell_type = 0;
+                    ph->hit_success = total_dmg > 0;
+                    ph->elysian_reduced = 0;
 
                 } else {
                     /* blowpipe: single target, normal attack */
                     const InfNPCStats* ns = &INF_NPC_STATS[target_npc->type];
                     int att_roll = ls->eff_level * (ls->attack_bonus + 64);
                     int def_roll = (ns->def_level + 8) * (ns->ranged_def_bonus + 64);
-                    if (encounter_rand_float(&s->rng_state) < osrs_hit_chance(att_roll, def_roll)) {
+                    int hit_success = encounter_rand_float(&s->rng_state) <
+                        osrs_hit_chance(att_roll, def_roll);
+                    if (hit_success) {
                         total_dmg = encounter_rand_int(&s->rng_state, ls->max_hit + 1);
                     }
                     EncounterPendingHit* ph = &target_npc->pending_hit;
@@ -4167,6 +4255,8 @@ static void inf_tick_player(InfernoState* s, const int* actions, int can_attack)
                     ph->attack_style = ATTACK_STYLE_RANGED;
                     ph->check_prayer = 0;
                     ph->spell_type = 0;
+                    ph->hit_success = hit_success;
+                    ph->elysian_reduced = 0;
                 }
 
                 s->player.attack_timer = ls->attack_speed;
@@ -4256,6 +4346,7 @@ static void inf_resolve_player_projectiles_on_npcs(InfernoState* s) {
     for (int i = 0; i < INF_MAX_NPCS; i++) {
         if (!s->npcs[i].active || s->npcs[i].death_ticks > 0) continue;
         int spell = s->npcs[i].pending_hit.spell_type;
+        int hit_success = s->npcs[i].pending_hit.hit_success;
         float dmg_before = s->damage_dealt_this_tick;
         int hp_before = s->npcs[i].hp;
         int landed = encounter_resolve_npc_pending_hit(
@@ -4290,6 +4381,7 @@ static void inf_resolve_player_projectiles_on_npcs(InfernoState* s) {
                 }
             }
             s->npcs[i].hit_spell_type = spell;
+            s->npcs[i].hit_was_successful_this_tick = hit_success;
             int shield_taggable = inf_is_shield_taggable_slot(s, i);
             if (s->npcs[i].aggro_target != -1) {
                 if (s->npcs[i].type == INF_NPC_HEALER_ZUK ||
@@ -4348,6 +4440,13 @@ static void inf_resolve_player_pending_hits(InfernoState* s) {
                 hit->source_npc_type >= 0 &&
                 hit->source_npc_type < INF_NUM_NPC_TYPES) {
                 s->last_hit_by_type = hit->source_npc_type;
+            }
+            if (hit->elysian_reduced) {
+                s->player.elysian_proc_this_tick = 1;
+            } else {
+                int elysian_reduced = 0;
+                dmg = inf_apply_elysian_to_player_hit(s, dmg, &elysian_reduced);
+                if (elysian_reduced) s->player.elysian_proc_this_tick = 1;
             }
             encounter_damage_player(
                 &s->player, dmg, &s->damage_received_this_tick);
@@ -4768,6 +4867,8 @@ static void inf_step(EncounterState* state, const int* actions) {
     s->tick_attacks_fired = 0;
     s->wave_completed_this_tick = 0;
     s->pillar_lost_this_tick = -1;
+    s->player_moved_last_tick = s->player_moved_this_tick;
+    s->player_moved_this_tick = 0;
     s->player_attacked_this_tick = 0;
     s->player_attack_timing = (EncounterProjectileTiming){0};
     s->brewed_this_tick = 0;
@@ -4780,9 +4881,12 @@ static void inf_step(EncounterState* state, const int* actions) {
         s->npcs[i].attacked_this_tick = 0;
         s->npcs[i].attack_style_this_tick = ATTACK_STYLE_NONE;
         s->npcs[i].attack_visual_target = -1;
+        s->npcs[i].resurrecting_this_tick = 0;
+        s->npcs[i].resurrection_visual_target = -1;
         s->npcs[i].moved_this_tick = 0;
         s->npcs[i].hit_landed_this_tick = 0;
         s->npcs[i].hit_damage = 0;
+        s->npcs[i].hit_was_successful_this_tick = 0;
         s->npcs[i].hit_spell_type = 0;
     }
     s->tick++;
@@ -4824,7 +4928,12 @@ static void inf_step(EncounterState* state, const int* actions) {
 
     /* player actions */
     int can_player_attack = !in_wave_gap && !in_ready_gap;
+    int player_x_before_tick_player = s->player.x;
+    int player_y_before_tick_player = s->player.y;
     inf_tick_player(s, actions, can_player_attack);
+    s->player_moved_this_tick =
+        (s->player.x != player_x_before_tick_player ||
+         s->player.y != player_y_before_tick_player) ? 1 : 0;
     inf_resolve_jad_prayer_checks_after_player(s);
 
     /* idle penalty counter: consecutive ticks where player could attack but didn't */
@@ -4847,9 +4956,25 @@ static void inf_step(EncounterState* state, const int* actions) {
        prayer_correct_this_tick is a count (multiple NPCs can attack same tick).
        total_npc_attacks counts attacks directed at the player (not nibbler→pillar). */
     s->total_prayer_correct += s->prayer_correct_this_tick;
+    int ranger_attacked_this_tick = 0;
+    int mager_attacked_this_tick = 0;
     for (int i = 0; i < INF_MAX_NPCS; i++) {
-        if (s->npcs[i].attacked_this_tick && s->npcs[i].aggro_target < 0 && s->npcs[i].type != INF_NPC_NIBBLER && !(s->npcs[i].type == INF_NPC_BLOB && s->npcs[i].blob_scanned_prayer >= 0))
+        if (s->npcs[i].attacked_this_tick &&
+                s->npcs[i].aggro_target < 0 &&
+                s->npcs[i].type != INF_NPC_NIBBLER &&
+                !(s->npcs[i].type == INF_NPC_BLOB &&
+                    s->npcs[i].blob_scanned_prayer >= 0)) {
             s->total_npc_attacks++;
+            if (s->npcs[i].type == INF_NPC_RANGER)
+                ranger_attacked_this_tick = 1;
+            if (s->npcs[i].type == INF_NPC_MAGER)
+                mager_attacked_this_tick = 1;
+        }
+    }
+    if (ranger_attacked_this_tick && mager_attacked_this_tick) {
+        s->total_ranger_mager_same_tick_attacks++;
+        if (s->player_moved_last_tick)
+            s->total_step_out_ranger_mager_same_tick_attacks++;
     }
     /* multi-style analysis: count off-prayer hits that were unavoidable because
        a different style was correctly prayed on the same tick. popcount of
@@ -4937,15 +5062,45 @@ finish_step:
 }
 
 
-/* obs layout: player + Zuk phase + pillars + NPC slots + pending hits + pending Zuk healer sparks */
+/* obs layout: player + Zuk phase + pillars + NPC slots + step-out forecast + pending hits + pending Zuk healer sparks */
 #define INF_PLAYER_OBS_SIZE 52   /* +3 for offensive prayer one-hot (piety/rigour/augury) */
-#define INF_TOTAL_NPC_OBS_SIZE 282
+#define INF_BASE_NPC_OBS_SIZE 282
+#define INF_EXTRA_NPC_OBS_FEATURES 0
+#define INF_TOTAL_NPC_OBS_SIZE (INF_BASE_NPC_OBS_SIZE + INF_OBS_NPCS * INF_EXTRA_NPC_OBS_FEATURES)
+#define INF_STEP_OUT_FORECAST_HORIZON 4
+#define INF_STEP_OUT_FORECAST_TICK_FEATURES 7
+#define INF_STEP_OUT_FORECAST_ACTION_FEATURES 8
+#define INF_STEP_OUT_FORECAST_OBS_SIZE (ENCOUNTER_MOVE_ACTIONS * INF_STEP_OUT_FORECAST_ACTION_FEATURES)
 #define INF_FEATURES_PER_HIT 5
 #define INF_SPARK_OBS_SLOTS INF_MAX_PENDING_SPARKS
 #define INF_FEATURES_PER_SPARK 5
 #define INF_PENDING_HIT_OBS_SIZE (INF_FEATURES_PER_HIT * ENCOUNTER_MAX_PENDING_HITS)
 #define INF_PENDING_SPARK_OBS_SIZE (INF_FEATURES_PER_SPARK * INF_SPARK_OBS_SLOTS)
-#define INF_NUM_OBS (INF_PLAYER_OBS_SIZE + 12 + INF_TOTAL_NPC_OBS_SIZE + INF_PENDING_HIT_OBS_SIZE + INF_PENDING_SPARK_OBS_SIZE)
+#define INF_NUM_OBS (INF_PLAYER_OBS_SIZE + 12 + INF_TOTAL_NPC_OBS_SIZE + INF_STEP_OUT_FORECAST_OBS_SIZE + INF_PENDING_HIT_OBS_SIZE + INF_PENDING_SPARK_OBS_SIZE)
+
+typedef struct {
+    int melee_count;
+    int ranged_count;
+    int magic_count;
+    int blob_scan_count;
+    int ranger_count;
+    int mager_count;
+    int max_hit;
+} InfStepOutForecastTick;
+
+typedef struct {
+    int valid;
+    int land_x;
+    int land_y;
+    InfStepOutForecastTick ticks[INF_STEP_OUT_FORECAST_HORIZON];
+    int same_tick_mixed_style_conflict;
+    int ranger_mager_offtick_opportunity;
+    int melee_fallback_exposure;
+} InfStepOutForecastAction;
+
+typedef struct {
+    InfStepOutForecastAction actions[ENCOUNTER_MOVE_ACTIONS];
+} InfStepOutForecast;
 
 /* max hit per NPC type, normalized by mager max (70). for prayer priority obs. */
 static const float INF_NPC_MAX_HIT_NORM[INF_NUM_NPC_TYPES] = {
@@ -4984,6 +5139,1268 @@ static float inf_zuk_attack_timer_obs(const InfernoState* s) {
     }
 
     return (min_timer < 999) ? (float)min_timer / 10.0f : 0.0f;
+}
+
+static int inf_npc_targets_player_for_obs(const InfernoState* s, const InfNPC* npc) {
+    InfTargetArea target = inf_npc_current_target_area(s, npc);
+    return target.is_player;
+}
+
+static int inf_npc_planned_style_for_obs(const InfNPC* npc) {
+    if (npc->type == INF_NPC_BLOB && npc->blob_scanned_prayer >= 0) {
+        OverheadPrayer scanned = (OverheadPrayer)npc->blob_scanned_prayer;
+        if (scanned == PRAYER_PROTECT_MAGIC) return ATTACK_STYLE_RANGED;
+        if (scanned == PRAYER_PROTECT_RANGED) return ATTACK_STYLE_MAGIC;
+    }
+    if (npc->type == INF_NPC_JAD)
+        return npc->jad_attack_style;
+    return npc->attack_style;
+}
+
+static int inf_step_out_forecast_action_valid(InfernoState* s, int action) {
+    if (action == 0) return 1;
+    int nx = s->player.x + ENCOUNTER_MOVE_TARGET_DX[action];
+    int ny = s->player.y + ENCOUNTER_MOVE_TARGET_DY[action];
+    return inf_in_arena(nx, ny) && !inf_blocked_by_pillar(s, nx, ny, 1);
+}
+
+static int inf_forecast_style_max_hit(
+    const InfNPCStats* stats, int style
+) {
+    if (style == ATTACK_STYLE_NONE) return 0;
+    int max_hit = osrs_npc_max_hit(style,
+        stats->str_level, stats->range_level,
+        stats->melee_str_bonus, stats->ranged_str_bonus,
+        stats->magic_base_dmg, stats->magic_dmg_pct);
+    if (stats->max_hit_cap > 0 && max_hit > stats->max_hit_cap)
+        max_hit = stats->max_hit_cap;
+    return max_hit;
+}
+
+static void inf_step_out_forecast_record_style_mask(
+    InfStepOutForecastAction* action,
+    int tick_idx,
+    InfNPCType type,
+    const InfNPCStats* stats,
+    int style_mask
+) {
+    if (tick_idx < 0 || tick_idx >= INF_STEP_OUT_FORECAST_HORIZON) return;
+    InfStepOutForecastTick* tick = &action->ticks[tick_idx];
+    int styles = 0;
+    if (style_mask & INF_STYLE_MASK_MELEE) {
+        tick->melee_count++;
+        int max_hit = inf_forecast_style_max_hit(stats, ATTACK_STYLE_MELEE);
+        if (max_hit > tick->max_hit) tick->max_hit = max_hit;
+        styles++;
+    }
+    if (style_mask & INF_STYLE_MASK_RANGED) {
+        tick->ranged_count++;
+        int max_hit = inf_forecast_style_max_hit(stats, ATTACK_STYLE_RANGED);
+        if (max_hit > tick->max_hit) tick->max_hit = max_hit;
+        styles++;
+    }
+    if (style_mask & INF_STYLE_MASK_MAGIC) {
+        tick->magic_count++;
+        int max_hit = inf_forecast_style_max_hit(stats, ATTACK_STYLE_MAGIC);
+        if (max_hit > tick->max_hit) tick->max_hit = max_hit;
+        styles++;
+    }
+    if (type == INF_NPC_RANGER) tick->ranger_count++;
+    if (type == INF_NPC_MAGER) tick->mager_count++;
+    if (styles >= 2 || ((tick->melee_count > 0) +
+            (tick->ranged_count > 0) + (tick->magic_count > 0)) >= 2) {
+        action->same_tick_mixed_style_conflict = 1;
+    }
+    if ((style_mask & INF_STYLE_MASK_MELEE) &&
+            (type == INF_NPC_RANGER || type == INF_NPC_MAGER)) {
+        action->melee_fallback_exposure = 1;
+    }
+}
+
+static void inf_step_out_forecast_record_blob_scan(
+    InfStepOutForecastAction* action, int tick_idx
+) {
+    if (tick_idx < 0 || tick_idx >= INF_STEP_OUT_FORECAST_HORIZON) return;
+    action->ticks[tick_idx].blob_scan_count++;
+}
+
+static int inf_forecast_jad_unknown_style_mask(const InfNPC* npc) {
+    if (npc->type != INF_NPC_JAD) return 0;
+    if (npc->jad_attack_style != ATTACK_STYLE_NONE) return 0;
+    return INF_STYLE_MASK_RANGED | INF_STYLE_MASK_MAGIC;
+}
+
+static void inf_step_out_forecast_npc_attack(
+    InfernoState* s,
+    int idx,
+    InfStepOutForecastAction* action,
+    int tick_idx
+) {
+    InfNPC* npc = &s->npcs[idx];
+    if (!npc->active || npc->death_ticks > 0 || npc->hp <= 0) return;
+    const InfNPCStats* stats = &INF_NPC_STATS[npc->type];
+    if (npc->attack_timer > 0) npc->attack_timer--;
+    if (npc->stun_timer > 0) { npc->stun_timer--; return; }
+    if (npc->dig_freeze_timer > 0 || npc->dig_attack_delay > 0) return;
+    if (npc->type == INF_NPC_ZUK_SHIELD || npc->type == INF_NPC_NIBBLER)
+        return;
+    if (npc->aggro_target >= 0) return;
+    if (!inf_npc_targets_player_for_obs(s, npc)) return;
+
+    int has_los_now = 0;
+    if (stats->attack_range > 1)
+        has_los_now = inf_npc_has_los(s, idx);
+
+    if (npc->type == INF_NPC_BLOB &&
+        npc->blob_scanned_prayer < 0 &&
+        has_los_now &&
+        !npc->had_los_last_tick) {
+        npc->blob_scanned_prayer = (int)s->player.prayer;
+        if (s->player.prayer == PRAYER_PROTECT_MAGIC) npc->attack_style = ATTACK_STYLE_RANGED;
+        else if (s->player.prayer == PRAYER_PROTECT_RANGED) npc->attack_style = ATTACK_STYLE_MAGIC;
+        else npc->attack_style = ATTACK_STYLE_RANGED;
+        npc->had_los_last_tick = has_los_now;
+        npc->attack_timer = stats->attack_speed;
+        inf_step_out_forecast_record_blob_scan(action, tick_idx);
+        return;
+    }
+
+    npc->had_los_last_tick = has_los_now;
+    if (npc->attack_timer > 0) return;
+
+    if (stats->attack_range > 1 &&
+        !(npc->type == INF_NPC_BLOB && npc->blob_scanned_prayer >= 0) &&
+        !has_los_now) return;
+
+    int dist = encounter_dist_to_npc(
+        s->player.x, s->player.y, npc->x, npc->y, npc->size);
+    if (dist == 0 || dist > stats->attack_range) return;
+
+    if (npc->type == INF_NPC_BLOB && npc->blob_scanned_prayer < 0) {
+        npc->blob_scanned_prayer = (int)s->player.prayer;
+        if (s->player.prayer == PRAYER_PROTECT_MAGIC) npc->attack_style = ATTACK_STYLE_RANGED;
+        else if (s->player.prayer == PRAYER_PROTECT_RANGED) npc->attack_style = ATTACK_STYLE_MAGIC;
+        else npc->attack_style = ATTACK_STYLE_RANGED;
+        npc->attack_timer = stats->attack_speed;
+        inf_step_out_forecast_record_blob_scan(action, tick_idx);
+        return;
+    }
+
+    int style_mask = inf_forecast_jad_unknown_style_mask(npc);
+    if (style_mask == 0) {
+        int planned_style = inf_npc_planned_style_for_obs(npc);
+        if (planned_style == ATTACK_STYLE_NONE) return;
+        style_mask = inf_attack_style_options_mask(
+            s, npc, stats, planned_style, dist);
+    }
+    if (style_mask == 0) return;
+
+    inf_step_out_forecast_record_style_mask(
+        action, tick_idx, npc->type, stats, style_mask);
+
+    if (npc->type == INF_NPC_BLOB)
+        npc->blob_scanned_prayer = -1;
+    if (npc->type == INF_NPC_JAD)
+        npc->jad_attack_style = ATTACK_STYLE_NONE;
+    npc->attack_timer = stats->attack_speed;
+    if (npc->type == INF_NPC_JAD) {
+        if (s->wave == 66)      npc->attack_timer = 8;
+        else if (s->wave == 67) npc->attack_timer = 9;
+        else                    npc->attack_timer = 8;
+    }
+}
+
+static void inf_step_out_forecast_tick(
+    InfernoState* sim,
+    InfStepOutForecastAction* action,
+    int tick_idx
+) {
+    for (int i = 0; i < INF_MAX_NPCS; i++) {
+        InfNPC* npc = &sim->npcs[i];
+        if (!npc->active || npc->death_ticks > 0) continue;
+        if (npc->frozen_ticks > 0) npc->frozen_ticks--;
+        if (npc->type == INF_NPC_MAGER && npc->resurrect_cooldown > 0)
+            npc->resurrect_cooldown--;
+        inf_invalidate_los_cache(sim);
+        inf_npc_move(sim, i);
+        inf_invalidate_los_cache(sim);
+        inf_step_out_forecast_npc_attack(sim, i, action, tick_idx);
+    }
+}
+
+static void inf_step_out_forecast_finalize_action(
+    InfStepOutForecastAction* action
+) {
+    for (int t = 0; t < INF_STEP_OUT_FORECAST_HORIZON - 1; t++) {
+        int ranger_then_mager = action->ticks[t].ranger_count > 0 &&
+            action->ticks[t + 1].mager_count > 0;
+        int mager_then_ranger = action->ticks[t].mager_count > 0 &&
+            action->ticks[t + 1].ranger_count > 0;
+        if (ranger_then_mager || mager_then_ranger)
+            action->ranger_mager_offtick_opportunity = 1;
+    }
+}
+
+static int inf_step_out_forecast_tick_style_mask(
+    const InfStepOutForecastTick* tick
+) {
+    int mask = 0;
+    if (tick->melee_count > 0) mask |= INF_STYLE_MASK_MELEE;
+    if (tick->ranged_count > 0) mask |= INF_STYLE_MASK_RANGED;
+    if (tick->magic_count > 0) mask |= INF_STYLE_MASK_MAGIC;
+    return mask;
+}
+
+static int inf_step_out_forecast_tick_has_event(
+    const InfStepOutForecastTick* tick
+) {
+    return tick->melee_count > 0 ||
+        tick->ranged_count > 0 ||
+        tick->magic_count > 0 ||
+        tick->blob_scan_count > 0;
+}
+
+static void inf_build_step_out_forecast(
+    const InfernoState* s,
+    InfStepOutForecast* out
+) {
+    memset(out, 0, sizeof(*out));
+    for (int action_idx = 0; action_idx < ENCOUNTER_MOVE_ACTIONS; action_idx++) {
+        InfStepOutForecastAction* action = &out->actions[action_idx];
+        Player moved = s->player;
+        action->valid = inf_step_out_forecast_action_valid(
+            (InfernoState*)s, action_idx);
+        if (action_idx > 0) {
+            encounter_move_to_target(
+                &moved,
+                ENCOUNTER_MOVE_TARGET_DX[action_idx],
+                ENCOUNTER_MOVE_TARGET_DY[action_idx],
+                inf_tile_walkable,
+                (void*)s);
+        }
+        action->land_x = moved.x;
+        action->land_y = moved.y;
+        if (!action->valid) continue;
+
+        InfernoState sim = *s;
+        sim.player.x = moved.x;
+        sim.player.y = moved.y;
+        sim.player.is_running = moved.is_running;
+        inf_invalidate_los_cache(&sim);
+        inf_rebuild_entity_collision_flags(&sim);
+
+        for (int tick_idx = 0; tick_idx < INF_STEP_OUT_FORECAST_HORIZON; tick_idx++) {
+            inf_step_out_forecast_tick(&sim, action, tick_idx);
+        }
+        inf_step_out_forecast_finalize_action(action);
+    }
+}
+
+#define INF_LAB_PILLAR_CONTEXT_RADIUS (INF_PILLAR_SIZE + 2)
+
+typedef enum {
+    INF_LAB_COMMAND_NONE = 0,
+    INF_LAB_COMMAND_RESET,
+    INF_LAB_COMMAND_SET_PLAYER,
+    INF_LAB_COMMAND_SPAWN_NPC,
+    INF_LAB_COMMAND_MOVE_NPC,
+    INF_LAB_COMMAND_DELETE_NPC,
+    INF_LAB_COMMAND_KILL_NPC,
+    INF_LAB_COMMAND_SET_NPC_HP,
+    INF_LAB_COMMAND_SET_NPC_TIMER,
+    INF_LAB_COMMAND_SET_PILLAR,
+    INF_LAB_COMMAND_SPAWN_WAVE,
+    INF_LAB_COMMAND_CLEAR_NPCS,
+    INF_LAB_COMMAND_STEP_TICKS,
+} InfLabCommandKind;
+
+typedef enum {
+    INF_LAB_LINE_NONE = 0,
+    INF_LAB_LINE_FORECAST,
+    INF_LAB_LINE_DUMP,
+} InfLabLineResult;
+
+typedef enum {
+    INF_LAB_PILLAR_REMOVED = 0,
+    INF_LAB_PILLAR_ACTIVE,
+} InfLabPillarState;
+
+typedef enum {
+    INF_LAB_OPTIONAL_INT_UNSET = 0,
+    INF_LAB_OPTIONAL_INT_SET,
+} InfLabOptionalIntKind;
+
+typedef struct {
+    InfLabOptionalIntKind kind;
+    int value;
+} InfLabOptionalInt;
+
+static inline InfLabOptionalInt inf_lab_optional_int_unset(void) {
+    return (InfLabOptionalInt){ .kind = INF_LAB_OPTIONAL_INT_UNSET };
+}
+
+static inline InfLabOptionalInt inf_lab_optional_int_set(int value) {
+    return (InfLabOptionalInt){
+        .kind = INF_LAB_OPTIONAL_INT_SET,
+        .value = value,
+    };
+}
+
+typedef struct {
+    int x;
+    int y;
+} InfLabTileCommand;
+
+typedef struct {
+    int slot;
+    InfNPCType type;
+    int x;
+    int y;
+    InfLabOptionalInt hp;
+    InfLabOptionalInt timer;
+} InfLabSpawnNpcCommand;
+
+typedef struct {
+    int slot;
+    int x;
+    int y;
+} InfLabMoveNpcCommand;
+
+typedef struct {
+    int slot;
+} InfLabNpcSlotCommand;
+
+typedef struct {
+    int slot;
+    int hp;
+} InfLabNpcHpCommand;
+
+typedef struct {
+    int slot;
+    int timer;
+} InfLabNpcTimerCommand;
+
+typedef struct {
+    int pillar_idx;
+    InfLabPillarState state;
+    InfLabOptionalInt hp;
+} InfLabPillarCommand;
+
+typedef struct {
+    int wave;
+} InfLabWaveCommand;
+
+typedef struct {
+    int ticks;
+} InfLabStepTicksCommand;
+
+typedef struct {
+    uint32_t seed;
+} InfLabResetCommand;
+
+typedef struct {
+    InfLabCommandKind kind;
+    union {
+        InfLabResetCommand reset;
+        InfLabTileCommand tile;
+        InfLabSpawnNpcCommand spawn_npc;
+        InfLabMoveNpcCommand move_npc;
+        InfLabNpcSlotCommand npc_slot;
+        InfLabNpcHpCommand npc_hp;
+        InfLabNpcTimerCommand npc_timer;
+        InfLabPillarCommand pillar;
+        InfLabWaveCommand wave;
+        InfLabStepTicksCommand step_ticks;
+    } as;
+} InfernoLabCommand;
+
+typedef struct {
+    char* data;
+    size_t len;
+    size_t cap;
+} InfLabString;
+
+static void inf_lab_abort(const char* fmt, ...) {
+    va_list args;
+    fprintf(stderr, "inferno lab: ");
+    va_start(args, fmt);
+    vfprintf(stderr, fmt, args);
+    va_end(args);
+    fprintf(stderr, "\n");
+    abort();
+}
+
+static void inf_lab_require_slot(int slot) {
+    if (slot < 0 || slot >= INF_MAX_NPCS)
+        inf_lab_abort("npc slot must be in [0,%d], got %d", INF_MAX_NPCS - 1, slot);
+}
+
+static void inf_lab_require_type(int type) {
+    if (type < 0 || type >= INF_NUM_NPC_TYPES)
+        inf_lab_abort("npc type must be in [0,%d], got %d", INF_NUM_NPC_TYPES - 1, type);
+}
+
+static void inf_lab_require_player_tile(InfernoState* s, int x, int y) {
+    if (!inf_in_arena(x, y))
+        inf_lab_abort("player tile out of arena: (%d,%d)", x, y);
+    if (inf_blocked_by_pillar(s, x, y, 1))
+        inf_lab_abort("player tile is blocked by a pillar: (%d,%d)", x, y);
+}
+
+static void inf_lab_clear_transient(InfernoState* s) {
+    osrs_interaction_init(&s->interaction);
+    s->player_last_interaction_target_slot = -1;
+    s->player_last_interaction_age = 1;
+    s->player_dest_x = -1;
+    s->player_dest_y = -1;
+    s->player_pending_hit_count = 0;
+    memset(s->pending_sparks, 0, sizeof(s->pending_sparks));
+    memset(s->npc_target_hits, 0, sizeof(s->npc_target_hits));
+    s->player_attacked_this_tick = 0;
+    s->player_attack_npc_idx = -1;
+    s->player_attack_dmg = 0;
+    s->player_attack_style_id = ATTACK_STYLE_NONE;
+    for (int i = 0; i < INF_MAX_NPCS; i++) {
+        InfNPC* npc = &s->npcs[i];
+        npc->attacked_this_tick = 0;
+        npc->attack_style_this_tick = ATTACK_STYLE_NONE;
+        npc->attack_visual_target = -1;
+        npc->moved_this_tick = 0;
+        npc->hit_landed_this_tick = 0;
+        npc->hit_damage = 0;
+        npc->hit_was_successful_this_tick = 0;
+        npc->hit_spell_type = ENCOUNTER_SPELL_NONE;
+        memset(&npc->pending_hit, 0, sizeof(npc->pending_hit));
+    }
+}
+
+static void inf_lab_refresh_geometry(InfernoState* s) {
+    inf_rebuild_los(s);
+    inf_invalidate_los_cache(s);
+    inf_rebuild_entity_collision_flags(s);
+    inf_refresh_current_obs_slots(s);
+}
+
+static void inf_lab_remove_all_npcs(InfernoState* s) {
+    memset(s->npcs, 0, sizeof(s->npcs));
+    s->dead_mob_count = 0;
+}
+
+static void inf_lab_clear_npcs(InfernoState* s) {
+    inf_lab_remove_all_npcs(s);
+    inf_lab_clear_transient(s);
+    inf_lab_refresh_geometry(s);
+}
+
+static void inf_lab_apply_command(InfernoState* s, const InfernoLabCommand* cmd) {
+    if (!s || !cmd) inf_lab_abort("null command");
+
+    switch (cmd->kind) {
+        case INF_LAB_COMMAND_NONE:
+            return;
+
+        case INF_LAB_COMMAND_RESET:
+            inf_reset((EncounterState*)s, cmd->as.reset.seed);
+            return;
+
+        case INF_LAB_COMMAND_SET_PLAYER:
+            inf_lab_require_player_tile(s, cmd->as.tile.x, cmd->as.tile.y);
+            s->player.x = cmd->as.tile.x;
+            s->player.y = cmd->as.tile.y;
+            inf_lab_clear_transient(s);
+            inf_lab_refresh_geometry(s);
+            return;
+
+        case INF_LAB_COMMAND_SPAWN_NPC: {
+            const InfLabSpawnNpcCommand* spawn = &cmd->as.spawn_npc;
+            inf_lab_require_slot(spawn->slot);
+            inf_lab_require_type(spawn->type);
+            if (s->npcs[spawn->slot].active)
+                inf_deactivate_npc(s, spawn->slot);
+            inf_init_npc(s, spawn->slot, spawn->type, spawn->x, spawn->y);
+            if (spawn->hp.kind == INF_LAB_OPTIONAL_INT_SET) {
+                int hp = spawn->hp.value;
+                if (hp < 0) inf_lab_abort("npc hp must be nonnegative");
+                if (hp > s->npcs[spawn->slot].max_hp)
+                    inf_lab_abort("npc hp %d exceeds max hp %d",
+                        hp, s->npcs[spawn->slot].max_hp);
+                s->npcs[spawn->slot].hp = hp;
+            }
+            if (spawn->timer.kind == INF_LAB_OPTIONAL_INT_SET) {
+                if (spawn->timer.value < 0)
+                    inf_lab_abort("npc timer must be nonnegative");
+                s->npcs[spawn->slot].attack_timer = spawn->timer.value;
+            }
+            inf_lab_clear_transient(s);
+            inf_lab_refresh_geometry(s);
+            return;
+        }
+
+        case INF_LAB_COMMAND_MOVE_NPC: {
+            const InfLabMoveNpcCommand* move = &cmd->as.move_npc;
+            inf_lab_require_slot(move->slot);
+            if (!s->npcs[move->slot].active)
+                inf_lab_abort("cannot move inactive npc slot %d", move->slot);
+            s->npcs[move->slot].x = move->x;
+            s->npcs[move->slot].y = move->y;
+            s->npcs[move->slot].target_x = move->x;
+            s->npcs[move->slot].target_y = move->y;
+            inf_lab_clear_transient(s);
+            inf_lab_refresh_geometry(s);
+            return;
+        }
+
+        case INF_LAB_COMMAND_DELETE_NPC: {
+            int slot = cmd->as.npc_slot.slot;
+            inf_lab_require_slot(slot);
+            inf_deactivate_npc(s, slot);
+            inf_lab_clear_transient(s);
+            inf_lab_refresh_geometry(s);
+            return;
+        }
+
+        case INF_LAB_COMMAND_KILL_NPC: {
+            int slot = cmd->as.npc_slot.slot;
+            inf_lab_require_slot(slot);
+            if (!s->npcs[slot].active)
+                inf_lab_abort("cannot kill inactive npc slot %d", slot);
+            s->npcs[slot].hp = 0;
+            inf_apply_npc_death(s, slot);
+            inf_lab_refresh_geometry(s);
+            return;
+        }
+
+        case INF_LAB_COMMAND_SET_NPC_HP: {
+            int slot = cmd->as.npc_hp.slot;
+            int hp = cmd->as.npc_hp.hp;
+            inf_lab_require_slot(slot);
+            if (!s->npcs[slot].active)
+                inf_lab_abort("cannot set hp for inactive npc slot %d", slot);
+            if (hp < 0) inf_lab_abort("npc hp must be nonnegative");
+            if (hp > s->npcs[slot].max_hp)
+                inf_lab_abort("npc hp %d exceeds max hp %d",
+                    hp, s->npcs[slot].max_hp);
+            s->npcs[slot].hp = hp;
+            inf_lab_refresh_geometry(s);
+            return;
+        }
+
+        case INF_LAB_COMMAND_SET_NPC_TIMER: {
+            int slot = cmd->as.npc_timer.slot;
+            int timer = cmd->as.npc_timer.timer;
+            inf_lab_require_slot(slot);
+            if (!s->npcs[slot].active)
+                inf_lab_abort("cannot set timer for inactive npc slot %d", slot);
+            if (timer < 0) inf_lab_abort("npc timer must be nonnegative");
+            s->npcs[slot].attack_timer = timer;
+            inf_lab_refresh_geometry(s);
+            return;
+        }
+
+        case INF_LAB_COMMAND_SET_PILLAR: {
+            const InfLabPillarCommand* pillar = &cmd->as.pillar;
+            if (pillar->pillar_idx < 0 || pillar->pillar_idx >= INF_NUM_PILLARS)
+                inf_lab_abort("pillar idx must be in [0,%d], got %d",
+                    INF_NUM_PILLARS - 1, pillar->pillar_idx);
+            s->pillars[pillar->pillar_idx].active =
+                pillar->state == INF_LAB_PILLAR_ACTIVE;
+            if (pillar->state == INF_LAB_PILLAR_ACTIVE) {
+                if (pillar->hp.kind == INF_LAB_OPTIONAL_INT_UNSET) {
+                    s->pillars[pillar->pillar_idx].hp = INF_PILLAR_HP;
+                } else if (pillar->hp.value <= 0 ||
+                        pillar->hp.value > INF_PILLAR_HP) {
+                    inf_lab_abort("pillar hp must be in [1,%d], got %d",
+                        INF_PILLAR_HP, pillar->hp.value);
+                } else {
+                    s->pillars[pillar->pillar_idx].hp = pillar->hp.value;
+                }
+            } else {
+                s->pillars[pillar->pillar_idx].hp = 0;
+            }
+            inf_lab_clear_transient(s);
+            inf_lab_refresh_geometry(s);
+            return;
+        }
+
+        case INF_LAB_COMMAND_SPAWN_WAVE:
+            inf_require_valid_public_wave(cmd->as.wave.wave);
+            inf_lab_remove_all_npcs(s);
+            s->wave = cmd->as.wave.wave - 1;
+            s->wave_spawn_target = s->wave;
+            s->wave_spawn_delay = 0;
+            s->wave_ready_delay = INF_START_READY_TICKS;
+            inf_spawn_wave(s);
+            inf_lab_clear_transient(s);
+            inf_lab_refresh_geometry(s);
+            return;
+
+        case INF_LAB_COMMAND_CLEAR_NPCS:
+            inf_lab_clear_npcs(s);
+            return;
+
+        case INF_LAB_COMMAND_STEP_TICKS: {
+            int ticks = cmd->as.step_ticks.ticks;
+            if (ticks < 0) inf_lab_abort("step_ticks must be nonnegative");
+            int actions[INF_NUM_ACTION_HEADS] = {0};
+            for (int t = 0; t < ticks; t++)
+                inf_step((EncounterState*)s, actions);
+            inf_lab_refresh_geometry(s);
+            return;
+        }
+    }
+
+    inf_lab_abort("unknown command kind %d", cmd->kind);
+}
+
+static int inf_lab_nearest_pillar_idx(const InfernoState* s, int x, int y) {
+    int best_idx = -1;
+    int best_dist = INT32_MAX;
+    for (int p = 0; p < INF_NUM_PILLARS; p++) {
+        int cx = s->pillars[p].x + INF_PILLAR_SIZE / 2;
+        int cy = s->pillars[p].y + INF_PILLAR_SIZE / 2;
+        int dist = abs(cx - x) + abs(cy - y);
+        if (dist < best_dist) {
+            best_dist = dist;
+            best_idx = p;
+        }
+    }
+    return best_dist <= INF_LAB_PILLAR_CONTEXT_RADIUS ? best_idx : -1;
+}
+
+static const char* inf_lab_npc_type_name(int type) {
+    switch (type) {
+        case INF_NPC_NIBBLER: return "nibbler";
+        case INF_NPC_BAT: return "bat";
+        case INF_NPC_BLOB: return "blob";
+        case INF_NPC_BLOB_MELEE: return "blob_melee";
+        case INF_NPC_BLOB_RANGE: return "blob_range";
+        case INF_NPC_BLOB_MAGE: return "blob_mage";
+        case INF_NPC_MELEER: return "meleer";
+        case INF_NPC_RANGER: return "ranger";
+        case INF_NPC_MAGER: return "mager";
+        case INF_NPC_JAD: return "jad";
+        case INF_NPC_ZUK: return "zuk";
+        case INF_NPC_HEALER_JAD: return "healer_jad";
+        case INF_NPC_HEALER_ZUK: return "healer_zuk";
+        case INF_NPC_ZUK_SHIELD: return "zuk_shield";
+        default: return "unknown";
+    }
+}
+
+static int inf_lab_parse_npc_type(const char* value) {
+    if (strcmp(value, "nibbler") == 0) return INF_NPC_NIBBLER;
+    if (strcmp(value, "bat") == 0) return INF_NPC_BAT;
+    if (strcmp(value, "blob") == 0) return INF_NPC_BLOB;
+    if (strcmp(value, "blob_melee") == 0) return INF_NPC_BLOB_MELEE;
+    if (strcmp(value, "blob_range") == 0) return INF_NPC_BLOB_RANGE;
+    if (strcmp(value, "blob_mage") == 0) return INF_NPC_BLOB_MAGE;
+    if (strcmp(value, "meleer") == 0 || strcmp(value, "melee") == 0)
+        return INF_NPC_MELEER;
+    if (strcmp(value, "ranger") == 0 || strcmp(value, "range") == 0)
+        return INF_NPC_RANGER;
+    if (strcmp(value, "mager") == 0 || strcmp(value, "mage") == 0)
+        return INF_NPC_MAGER;
+    if (strcmp(value, "jad") == 0) return INF_NPC_JAD;
+    if (strcmp(value, "zuk") == 0) return INF_NPC_ZUK;
+    if (strcmp(value, "healer_jad") == 0 || strcmp(value, "jad_healer") == 0)
+        return INF_NPC_HEALER_JAD;
+    if (strcmp(value, "healer_zuk") == 0 || strcmp(value, "zuk_healer") == 0)
+        return INF_NPC_HEALER_ZUK;
+    if (strcmp(value, "zuk_shield") == 0 || strcmp(value, "shield") == 0)
+        return INF_NPC_ZUK_SHIELD;
+
+    char* end = NULL;
+    errno = 0;
+    long parsed = strtol(value, &end, 10);
+    if (errno == 0 && end && *end == '\0') {
+        inf_lab_require_type((int)parsed);
+        return (int)parsed;
+    }
+    inf_lab_abort("unknown npc type %s", value);
+    return 0;
+}
+
+static int inf_lab_parse_int_value(const char* value) {
+    char* end = NULL;
+    errno = 0;
+    long parsed = strtol(value, &end, 10);
+    if (errno != 0 || !end || *end != '\0' ||
+            parsed < INT32_MIN || parsed > INT32_MAX) {
+        inf_lab_abort("invalid integer %s", value);
+    }
+    return (int)parsed;
+}
+
+static uint32_t inf_lab_parse_seed_value(const char* value) {
+    char* end = NULL;
+    errno = 0;
+    unsigned long parsed = strtoul(value, &end, 10);
+    if (errno != 0 || !end || *end != '\0' || parsed > UINT32_MAX)
+        inf_lab_abort("invalid seed %s", value);
+    return (uint32_t)parsed;
+}
+
+static InfLabOptionalInt inf_lab_parse_optional_hp_value(const char* value) {
+    if (strcmp(value, "full") == 0) return inf_lab_optional_int_unset();
+    return inf_lab_optional_int_set(inf_lab_parse_int_value(value));
+}
+
+static char* inf_lab_trim(char* s) {
+    while (*s && isspace((unsigned char)*s)) s++;
+    char* end = s + strlen(s);
+    while (end > s && isspace((unsigned char)end[-1])) end--;
+    *end = '\0';
+    return s;
+}
+
+static void inf_lab_parse_key_value(
+    char* token, const char** key, const char** value
+) {
+    char* eq = strchr(token, '=');
+    if (!eq || eq == token || eq[1] == '\0')
+        inf_lab_abort("expected key=value token, got %s", token);
+    *eq = '\0';
+    *key = token;
+    *value = eq + 1;
+}
+
+typedef struct {
+    int slot;
+    int type;
+    int x;
+    int y;
+    InfLabOptionalInt hp;
+    InfLabOptionalInt timer;
+    int pillar_idx;
+    InfLabPillarState pillar_state;
+    int wave;
+    int ticks;
+    uint32_t seed;
+} InfLabParsedArgs;
+
+static InfLabParsedArgs inf_lab_parsed_args_default(void) {
+    return (InfLabParsedArgs){
+        .slot = -1,
+        .type = -1,
+        .x = INT32_MIN,
+        .y = INT32_MIN,
+        .hp = { .kind = INF_LAB_OPTIONAL_INT_UNSET },
+        .timer = { .kind = INF_LAB_OPTIONAL_INT_UNSET },
+        .pillar_idx = -1,
+        .pillar_state = INF_LAB_PILLAR_ACTIVE,
+        .wave = -1,
+        .ticks = 0,
+        .seed = 0,
+    };
+}
+
+static void inf_lab_apply_script_arg(
+    InfLabParsedArgs* args,
+    InfLabCommandKind kind,
+    const char* command,
+    const char* key,
+    const char* value
+) {
+    switch (kind) {
+        case INF_LAB_COMMAND_RESET:
+            if (strcmp(key, "seed") == 0) {
+                args->seed = inf_lab_parse_seed_value(value);
+                return;
+            }
+            break;
+
+        case INF_LAB_COMMAND_SET_PLAYER:
+            if (strcmp(key, "x") == 0) {
+                args->x = inf_lab_parse_int_value(value);
+                return;
+            }
+            if (strcmp(key, "y") == 0) {
+                args->y = inf_lab_parse_int_value(value);
+                return;
+            }
+            break;
+
+        case INF_LAB_COMMAND_SPAWN_NPC:
+            if (strcmp(key, "slot") == 0) {
+                args->slot = inf_lab_parse_int_value(value);
+                return;
+            }
+            if (strcmp(key, "type") == 0) {
+                args->type = inf_lab_parse_npc_type(value);
+                return;
+            }
+            if (strcmp(key, "x") == 0) {
+                args->x = inf_lab_parse_int_value(value);
+                return;
+            }
+            if (strcmp(key, "y") == 0) {
+                args->y = inf_lab_parse_int_value(value);
+                return;
+            }
+            if (strcmp(key, "hp") == 0) {
+                args->hp = inf_lab_parse_optional_hp_value(value);
+                return;
+            }
+            if (strcmp(key, "timer") == 0) {
+                args->timer = inf_lab_optional_int_set(
+                    inf_lab_parse_int_value(value));
+                return;
+            }
+            break;
+
+        case INF_LAB_COMMAND_MOVE_NPC:
+            if (strcmp(key, "slot") == 0) {
+                args->slot = inf_lab_parse_int_value(value);
+                return;
+            }
+            if (strcmp(key, "x") == 0) {
+                args->x = inf_lab_parse_int_value(value);
+                return;
+            }
+            if (strcmp(key, "y") == 0) {
+                args->y = inf_lab_parse_int_value(value);
+                return;
+            }
+            break;
+
+        case INF_LAB_COMMAND_DELETE_NPC:
+        case INF_LAB_COMMAND_KILL_NPC:
+            if (strcmp(key, "slot") == 0) {
+                args->slot = inf_lab_parse_int_value(value);
+                return;
+            }
+            break;
+
+        case INF_LAB_COMMAND_SET_NPC_HP:
+            if (strcmp(key, "slot") == 0) {
+                args->slot = inf_lab_parse_int_value(value);
+                return;
+            }
+            if (strcmp(key, "hp") == 0) {
+                args->hp = inf_lab_optional_int_set(
+                    inf_lab_parse_int_value(value));
+                return;
+            }
+            break;
+
+        case INF_LAB_COMMAND_SET_NPC_TIMER:
+            if (strcmp(key, "slot") == 0) {
+                args->slot = inf_lab_parse_int_value(value);
+                return;
+            }
+            if (strcmp(key, "timer") == 0) {
+                args->timer = inf_lab_optional_int_set(
+                    inf_lab_parse_int_value(value));
+                return;
+            }
+            break;
+
+        case INF_LAB_COMMAND_SET_PILLAR:
+            if (strcmp(key, "idx") == 0 || strcmp(key, "pillar_idx") == 0) {
+                args->pillar_idx = inf_lab_parse_int_value(value);
+                return;
+            }
+            if (strcmp(key, "active") == 0) {
+                int active = inf_lab_parse_int_value(value);
+                if (active != 0 && active != 1)
+                    inf_lab_abort("pillar active must be 0 or 1, got %d", active);
+                args->pillar_state = active
+                    ? INF_LAB_PILLAR_ACTIVE
+                    : INF_LAB_PILLAR_REMOVED;
+                return;
+            }
+            if (strcmp(key, "hp") == 0) {
+                args->hp = inf_lab_parse_optional_hp_value(value);
+                return;
+            }
+            break;
+
+        case INF_LAB_COMMAND_SPAWN_WAVE:
+            if (strcmp(key, "wave") == 0 || strcmp(key, "public") == 0) {
+                args->wave = inf_lab_parse_int_value(value);
+                return;
+            }
+            break;
+
+        case INF_LAB_COMMAND_STEP_TICKS:
+            if (strcmp(key, "ticks") == 0) {
+                args->ticks = inf_lab_parse_int_value(value);
+                return;
+            }
+            break;
+
+        case INF_LAB_COMMAND_NONE:
+        case INF_LAB_COMMAND_CLEAR_NPCS:
+            break;
+    }
+
+    inf_lab_abort("unknown key %s for command %s", key, command);
+}
+
+static InfernoLabCommand inf_lab_build_script_command(
+    InfLabCommandKind kind, const InfLabParsedArgs* args, const char* command
+) {
+    switch (kind) {
+        case INF_LAB_COMMAND_NONE:
+            return (InfernoLabCommand){ .kind = INF_LAB_COMMAND_NONE };
+
+        case INF_LAB_COMMAND_RESET:
+            return (InfernoLabCommand){
+                .kind = INF_LAB_COMMAND_RESET,
+                .as.reset = { .seed = args->seed },
+            };
+
+        case INF_LAB_COMMAND_SET_PLAYER:
+            if (args->x == INT32_MIN || args->y == INT32_MIN)
+                inf_lab_abort("command %s requires x and y", command);
+            return (InfernoLabCommand){
+                .kind = INF_LAB_COMMAND_SET_PLAYER,
+                .as.tile = { .x = args->x, .y = args->y },
+            };
+
+        case INF_LAB_COMMAND_SPAWN_NPC:
+            if (args->x == INT32_MIN || args->y == INT32_MIN)
+                inf_lab_abort("command %s requires x and y", command);
+            if (args->slot < 0 || args->type < 0)
+                inf_lab_abort("npc command requires slot and type");
+            return (InfernoLabCommand){
+                .kind = INF_LAB_COMMAND_SPAWN_NPC,
+                .as.spawn_npc = {
+                    .slot = args->slot,
+                    .type = (InfNPCType)args->type,
+                    .x = args->x,
+                    .y = args->y,
+                    .hp = args->hp,
+                    .timer = args->timer,
+                },
+            };
+
+        case INF_LAB_COMMAND_MOVE_NPC:
+            if (args->x == INT32_MIN || args->y == INT32_MIN)
+                inf_lab_abort("command %s requires x and y", command);
+            if (args->slot < 0)
+                inf_lab_abort("command %s requires slot", command);
+            return (InfernoLabCommand){
+                .kind = INF_LAB_COMMAND_MOVE_NPC,
+                .as.move_npc = {
+                    .slot = args->slot,
+                    .x = args->x,
+                    .y = args->y,
+                },
+            };
+
+        case INF_LAB_COMMAND_DELETE_NPC:
+        case INF_LAB_COMMAND_KILL_NPC:
+            if (args->slot < 0)
+                inf_lab_abort("command %s requires slot", command);
+            return (InfernoLabCommand){
+                .kind = kind,
+                .as.npc_slot = { .slot = args->slot },
+            };
+
+        case INF_LAB_COMMAND_SET_NPC_HP:
+            if (args->slot < 0)
+                inf_lab_abort("command %s requires slot", command);
+            if (args->hp.kind != INF_LAB_OPTIONAL_INT_SET)
+                inf_lab_abort("set_npc_hp requires hp");
+            return (InfernoLabCommand){
+                .kind = INF_LAB_COMMAND_SET_NPC_HP,
+                .as.npc_hp = {
+                    .slot = args->slot,
+                    .hp = args->hp.value,
+                },
+            };
+
+        case INF_LAB_COMMAND_SET_NPC_TIMER:
+            if (args->slot < 0)
+                inf_lab_abort("command %s requires slot", command);
+            if (args->timer.kind != INF_LAB_OPTIONAL_INT_SET)
+                inf_lab_abort("set_npc_timer requires timer");
+            return (InfernoLabCommand){
+                .kind = INF_LAB_COMMAND_SET_NPC_TIMER,
+                .as.npc_timer = {
+                    .slot = args->slot,
+                    .timer = args->timer.value,
+                },
+            };
+
+        case INF_LAB_COMMAND_SET_PILLAR:
+            if (args->pillar_idx < 0)
+                inf_lab_abort("set_pillar requires idx");
+            return (InfernoLabCommand){
+                .kind = INF_LAB_COMMAND_SET_PILLAR,
+                .as.pillar = {
+                    .pillar_idx = args->pillar_idx,
+                    .state = args->pillar_state,
+                    .hp = args->hp,
+                },
+            };
+
+        case INF_LAB_COMMAND_SPAWN_WAVE:
+            if (args->wave < 0)
+                inf_lab_abort("spawn_wave requires wave");
+            return (InfernoLabCommand){
+                .kind = INF_LAB_COMMAND_SPAWN_WAVE,
+                .as.wave = { .wave = args->wave },
+            };
+
+        case INF_LAB_COMMAND_CLEAR_NPCS:
+            return (InfernoLabCommand){ .kind = INF_LAB_COMMAND_CLEAR_NPCS };
+
+        case INF_LAB_COMMAND_STEP_TICKS:
+            return (InfernoLabCommand){
+                .kind = INF_LAB_COMMAND_STEP_TICKS,
+                .as.step_ticks = { .ticks = args->ticks },
+            };
+    }
+
+    inf_lab_abort("unknown command kind %d", kind);
+}
+
+static void inf_lab_string_init(InfLabString* out) {
+    out->len = 0;
+    out->cap = 4096;
+    out->data = (char*)malloc(out->cap);
+    if (!out->data) inf_lab_abort("out of memory");
+    out->data[0] = '\0';
+}
+
+static void inf_lab_string_reserve(InfLabString* out, size_t need) {
+    if (need <= out->cap) return;
+    size_t next = out->cap;
+    while (next < need) {
+        if (next > SIZE_MAX / 2) inf_lab_abort("json output too large");
+        next *= 2;
+    }
+    char* data = (char*)realloc(out->data, next);
+    if (!data) inf_lab_abort("out of memory");
+    out->data = data;
+    out->cap = next;
+}
+
+static void inf_lab_string_append(InfLabString* out, const char* fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    va_list copy;
+    va_copy(copy, args);
+    int needed = vsnprintf(NULL, 0, fmt, copy);
+    va_end(copy);
+    if (needed < 0) inf_lab_abort("json formatting failed");
+    inf_lab_string_reserve(out, out->len + (size_t)needed + 1);
+    int written = vsnprintf(out->data + out->len, out->cap - out->len, fmt, args);
+    va_end(args);
+    if (written != needed) inf_lab_abort("json formatting length mismatch");
+    out->len += (size_t)written;
+}
+
+static void inf_lab_append_forecast_tick_json(
+    InfLabString* out, const InfStepOutForecastTick* tick, int tick_idx
+) {
+    int style_mask = inf_step_out_forecast_tick_style_mask(tick);
+    inf_lab_string_append(out,
+        "{\"t\":%d,\"style_mask\":%d,\"melee\":%d,\"ranged\":%d,"
+        "\"magic\":%d,\"blob_scan\":%d,\"ranger\":%d,\"mager\":%d,"
+        "\"max_hit\":%d}",
+        tick_idx + 1, style_mask, tick->melee_count, tick->ranged_count,
+        tick->magic_count, tick->blob_scan_count, tick->ranger_count,
+        tick->mager_count, tick->max_hit);
+}
+
+static int inf_lab_forecast_action_has_ranger_mager_same_tick(
+    const InfStepOutForecastAction* action
+) {
+    for (int tick_idx = 0; tick_idx < INF_STEP_OUT_FORECAST_HORIZON; tick_idx++) {
+        if (action->ticks[tick_idx].ranger_count > 0 &&
+                action->ticks[tick_idx].mager_count > 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void inf_lab_append_forecast_json(InfernoState* s, InfLabString* out) {
+    InfStepOutForecast forecast;
+    inf_build_step_out_forecast(s, &forecast);
+    inf_lab_string_append(out, "\"forecast\":{\"horizon\":%d,\"actions\":[",
+        INF_STEP_OUT_FORECAST_HORIZON);
+    for (int action_idx = 0; action_idx < ENCOUNTER_MOVE_ACTIONS; action_idx++) {
+        const InfStepOutForecastAction* action = &forecast.actions[action_idx];
+        if (action_idx > 0) inf_lab_string_append(out, ",");
+        inf_lab_string_append(out,
+            "{\"action\":%d,\"dx\":%d,\"dy\":%d,\"valid\":%d,"
+            "\"land_x\":%d,\"land_y\":%d,\"same_tick_mixed\":%d,"
+            "\"ranger_mager_same_tick\":%d,\"ranger_mager_offtick\":%d,"
+            "\"melee_fallback\":%d,\"ticks\":[",
+            action_idx,
+            ENCOUNTER_MOVE_TARGET_DX[action_idx],
+            ENCOUNTER_MOVE_TARGET_DY[action_idx],
+            action->valid, action->land_x, action->land_y,
+            action->same_tick_mixed_style_conflict,
+            inf_lab_forecast_action_has_ranger_mager_same_tick(action),
+            action->ranger_mager_offtick_opportunity,
+            action->melee_fallback_exposure);
+        for (int tick_idx = 0; tick_idx < INF_STEP_OUT_FORECAST_HORIZON; tick_idx++) {
+            if (tick_idx > 0) inf_lab_string_append(out, ",");
+            inf_lab_append_forecast_tick_json(out, &action->ticks[tick_idx], tick_idx);
+        }
+        inf_lab_string_append(out, "]}");
+    }
+    inf_lab_string_append(out, "]}");
+}
+
+static void inf_lab_append_npcs_json(InfernoState* s, InfLabString* out) {
+    inf_lab_string_append(out, "\"npcs\":[");
+    int emitted = 0;
+    for (int i = 0; i < INF_MAX_NPCS; i++) {
+        InfNPC* npc = &s->npcs[i];
+        if (!npc->active) continue;
+        if (emitted > 0) inf_lab_string_append(out, ",");
+        int los = npc->death_ticks > 0 ? 0 : inf_npc_has_los(s, i);
+        inf_lab_string_append(out,
+            "{\"slot\":%d,\"type\":\"%s\",\"type_id\":%d,\"def_id\":%d,"
+            "\"x\":%d,\"y\":%d,\"size\":%d,\"hp\":%d,\"max_hp\":%d,"
+            "\"timer\":%d,\"stun\":%d,\"frozen\":%d,\"death_ticks\":%d,"
+            "\"los_to_player\":%d}",
+            i, inf_lab_npc_type_name(npc->type), npc->type,
+            INF_NPC_DEF_IDS[npc->type], npc->x, npc->y,
+            inf_npc_effective_size(npc), npc->hp, npc->max_hp,
+            npc->attack_timer, npc->stun_timer, npc->frozen_ticks,
+            npc->death_ticks, los);
+        emitted++;
+    }
+    inf_lab_string_append(out, "]");
+}
+
+static void inf_lab_append_pillars_json(const InfernoState* s, InfLabString* out) {
+    inf_lab_string_append(out, "\"pillars\":[");
+    for (int p = 0; p < INF_NUM_PILLARS; p++) {
+        if (p > 0) inf_lab_string_append(out, ",");
+        inf_lab_string_append(out,
+            "{\"idx\":%d,\"x\":%d,\"y\":%d,\"size\":%d,"
+            "\"active\":%d,\"hp\":%d}",
+            p, s->pillars[p].x, s->pillars[p].y, INF_PILLAR_SIZE,
+            s->pillars[p].active, s->pillars[p].hp);
+    }
+    inf_lab_string_append(out, "]");
+}
+
+static char* inf_lab_alloc_json(InfernoState* s) {
+    InfLabString out;
+    inf_lab_string_init(&out);
+    inf_invalidate_los_cache(s);
+    inf_lab_string_append(&out,
+        "{\"tick\":%d,\"wave\":%d,"
+        "\"player\":{\"x\":%d,\"y\":%d,\"hp\":%d,\"prayer\":%d},",
+        s->tick, s->wave + 1,
+        s->player.x, s->player.y,
+        s->player.current_hitpoints, s->player.current_prayer);
+    inf_lab_append_pillars_json(s, &out);
+    inf_lab_string_append(&out, ",");
+    inf_lab_append_npcs_json(s, &out);
+    inf_lab_string_append(&out, ",");
+    inf_lab_append_forecast_json(s, &out);
+    inf_lab_string_append(&out, "}");
+    return out.data;
+}
+
+static InfLabLineResult inf_lab_apply_script_line_impl(
+    InfernoState* s, const char* line, char** out_json
+) {
+    if (!line) inf_lab_abort("null script line");
+    size_t len = strlen(line);
+    char* copy = (char*)malloc(len + 1);
+    if (!copy) inf_lab_abort("out of memory");
+    memcpy(copy, line, len + 1);
+
+    char* text = inf_lab_trim(copy);
+    if (*text == '\0' || *text == '#') {
+        free(copy);
+        return INF_LAB_LINE_NONE;
+    }
+
+    char* save = NULL;
+    char* command = strtok_r(text, " \t\r\n", &save);
+    if (!command) {
+        free(copy);
+        return INF_LAB_LINE_NONE;
+    }
+
+    if (strcmp(command, "forecast") == 0) {
+        InfStepOutForecast forecast;
+        inf_build_step_out_forecast(s, &forecast);
+        (void)forecast;
+        free(copy);
+        return INF_LAB_LINE_FORECAST;
+    }
+    if (strcmp(command, "dump") == 0 || strcmp(command, "dump_json") == 0) {
+        if (out_json) *out_json = inf_lab_alloc_json(s);
+        free(copy);
+        return INF_LAB_LINE_DUMP;
+    }
+
+    InfLabCommandKind kind = INF_LAB_COMMAND_NONE;
+    InfLabParsedArgs args = inf_lab_parsed_args_default();
+
+    if (strcmp(command, "reset") == 0) {
+        kind = INF_LAB_COMMAND_RESET;
+    } else if (strcmp(command, "player") == 0 ||
+            strcmp(command, "set_player") == 0) {
+        kind = INF_LAB_COMMAND_SET_PLAYER;
+    } else if (strcmp(command, "npc") == 0 ||
+            strcmp(command, "spawn_npc") == 0) {
+        kind = INF_LAB_COMMAND_SPAWN_NPC;
+    } else if (strcmp(command, "move_npc") == 0) {
+        kind = INF_LAB_COMMAND_MOVE_NPC;
+    } else if (strcmp(command, "delete_npc") == 0) {
+        kind = INF_LAB_COMMAND_DELETE_NPC;
+    } else if (strcmp(command, "kill_npc") == 0) {
+        kind = INF_LAB_COMMAND_KILL_NPC;
+    } else if (strcmp(command, "set_npc_hp") == 0) {
+        kind = INF_LAB_COMMAND_SET_NPC_HP;
+    } else if (strcmp(command, "set_npc_timer") == 0) {
+        kind = INF_LAB_COMMAND_SET_NPC_TIMER;
+    } else if (strcmp(command, "pillar") == 0 ||
+            strcmp(command, "set_pillar") == 0) {
+        kind = INF_LAB_COMMAND_SET_PILLAR;
+    } else if (strcmp(command, "wave") == 0 ||
+            strcmp(command, "spawn_wave") == 0) {
+        kind = INF_LAB_COMMAND_SPAWN_WAVE;
+    } else if (strcmp(command, "clear_npcs") == 0) {
+        kind = INF_LAB_COMMAND_CLEAR_NPCS;
+    } else if (strcmp(command, "step") == 0 ||
+            strcmp(command, "step_ticks") == 0) {
+        kind = INF_LAB_COMMAND_STEP_TICKS;
+    } else {
+        inf_lab_abort("unknown script command %s", command);
+    }
+
+    for (char* token = strtok_r(NULL, " \t\r\n", &save);
+            token != NULL;
+            token = strtok_r(NULL, " \t\r\n", &save)) {
+        const char* key = NULL;
+        const char* value = NULL;
+        inf_lab_parse_key_value(token, &key, &value);
+        inf_lab_apply_script_arg(&args, kind, command, key, value);
+    }
+
+    InfernoLabCommand cmd = inf_lab_build_script_command(kind, &args, command);
+    inf_lab_apply_command(s, &cmd);
+    free(copy);
+    return INF_LAB_LINE_NONE;
+}
+
+static InfLabLineResult inf_lab_apply_script_line(
+    InfernoState* s, const char* line
+) {
+    return inf_lab_apply_script_line_impl(s, line, NULL);
+}
+
+static InfLabLineResult inf_lab_apply_script_line_alloc_json(
+    InfernoState* s, const char* line, char** out_json
+) {
+    if (!out_json) inf_lab_abort("json output pointer is required");
+    *out_json = NULL;
+    return inf_lab_apply_script_line_impl(s, line, out_json);
 }
 
 static int inf_spark_obs_less(
@@ -5269,6 +6686,7 @@ static void inf_write_obs(EncounterState* state, float* obs) {
         if (has_scan) num_features += 3;
         if (has_aggro) num_features += 1;
         if (has_targeted) num_features += 1;
+        num_features += INF_EXTRA_NPC_OBS_FEATURES;
 
         if (n >= 0) {
             InfNPC* npc = &s->npcs[n];
@@ -5333,6 +6751,48 @@ static void inf_write_obs(EncounterState* state, float* obs) {
         if (i != expected_npc_end) {
             fprintf(stderr, "FATAL: obs misaligned after NPC section: i=%d expected=%d\n",
                     i, expected_npc_end);
+            abort();
+        }
+    }
+
+    {
+        InfStepOutForecast forecast;
+        inf_build_step_out_forecast(s, &forecast);
+        for (int action_idx = 0; action_idx < ENCOUNTER_MOVE_ACTIONS; action_idx++) {
+            const InfStepOutForecastAction* action = &forecast.actions[action_idx];
+            int first_attack_tick = 0;
+            int first_style_mask = 0;
+            int max_hit = 0;
+            int ranger_mager_same_tick = 0;
+            for (int tick_idx = 0; tick_idx < INF_STEP_OUT_FORECAST_HORIZON; tick_idx++) {
+                const InfStepOutForecastTick* tick = &action->ticks[tick_idx];
+                int style_mask = inf_step_out_forecast_tick_style_mask(tick);
+                if (first_attack_tick == 0 &&
+                        inf_step_out_forecast_tick_has_event(tick)) {
+                    first_attack_tick = tick_idx + 1;
+                    first_style_mask = style_mask;
+                }
+                if (tick->max_hit > max_hit) max_hit = tick->max_hit;
+                if (tick->ranger_count > 0 && tick->mager_count > 0)
+                    ranger_mager_same_tick = 1;
+            }
+            obs[i++] = action->valid ? 1.0f : 0.0f;
+            obs[i++] = (float)first_attack_tick / (float)INF_STEP_OUT_FORECAST_HORIZON;
+            obs[i++] = (float)first_style_mask / 7.0f;
+            obs[i++] = (float)max_hit / 150.0f;
+            obs[i++] = action->same_tick_mixed_style_conflict ? 1.0f : 0.0f;
+            obs[i++] = ranger_mager_same_tick ? 1.0f : 0.0f;
+            obs[i++] = action->ranger_mager_offtick_opportunity ? 1.0f : 0.0f;
+            obs[i++] = action->melee_fallback_exposure ? 1.0f : 0.0f;
+        }
+    }
+
+    {
+        int expected_forecast_end = INF_PLAYER_OBS_SIZE + 12 +
+            INF_TOTAL_NPC_OBS_SIZE + INF_STEP_OUT_FORECAST_OBS_SIZE;
+        if (i != expected_forecast_end) {
+            fprintf(stderr, "FATAL: obs misaligned after step-out forecast: i=%d expected=%d\n",
+                    i, expected_forecast_end);
             abort();
         }
     }
@@ -5612,7 +7072,7 @@ static void inf_fill_render_entities(EncounterState* state, RenderEntity* out, i
         re->npc_slot = i;
         /* facing: nibblers → pillar (dest-based), NPCs attacking shield → shield
            (dest-based), all others → player (entity 0). */
-        if (npc->type == INF_NPC_NIBBLER) {
+        if (npc->type == INF_NPC_NIBBLER || npc->resurrecting_this_tick) {
             re->attack_target_entity_idx = -1;
         } else if (npc->aggro_target >= 0 && npc->aggro_target < INF_MAX_NPCS &&
                    s->npcs[npc->aggro_target].active) {
@@ -5655,6 +7115,12 @@ static void inf_fill_render_entities(EncounterState* state, RenderEntity* out, i
                 re->dest_x = npc->x;
                 re->dest_y = npc->y;
             }
+        } else if (npc->resurrection_visual_target >= 0 &&
+                   npc->resurrection_visual_target < INF_MAX_NPCS &&
+                   s->npcs[npc->resurrection_visual_target].active) {
+            InfNPC* at = &s->npcs[npc->resurrection_visual_target];
+            re->dest_x = at->x + at->size / 2;
+            re->dest_y = at->y + at->size / 2;
         } else if (npc->aggro_target >= 0 && npc->aggro_target < INF_MAX_NPCS &&
                    s->npcs[npc->aggro_target].active) {
             /* attacking shield/other NPC — face toward target NPC center */
@@ -5671,9 +7137,7 @@ static void inf_fill_render_entities(EncounterState* state, RenderEntity* out, i
             ? (AttackStyle)npc->attack_style_this_tick : ATTACK_STYLE_NONE;
         re->hit_landed_this_tick = npc->hit_landed_this_tick;
         re->hit_damage = npc->hit_damage;
-        /* barrage hits that pass accuracy are queued; splashes never enter the queue.
-           so any NPC with hit_landed_this_tick from a pending hit was a successful hit. */
-        re->hit_was_successful = npc->hit_landed_this_tick;
+        re->hit_was_successful = npc->hit_was_successful_this_tick;
         re->hit_spell_type = npc->hit_spell_type;
     }
 
@@ -5843,6 +7307,10 @@ static void* inf_get_log(EncounterState* state) {
         s->log.idle_ticks += (float)s->total_idle_ticks;
         s->log.brews_used += (float)s->total_brews_used;
         s->log.blood_healed += (float)s->total_blood_healed;
+        s->log.ranger_mager_same_tick_attacks +=
+            (float)s->total_ranger_mager_same_tick_attacks;
+        s->log.step_out_ranger_mager_same_tick_attacks +=
+            (float)s->total_step_out_ranger_mager_same_tick_attacks;
         s->log.n += 1.0f;
         s->log.npc_kills += (float)s->total_npc_kills;
         s->log.gear_switches += (float)s->total_gear_switches;
@@ -5870,6 +7338,7 @@ static void inf_render_post_tick(EncounterState* state, EncounterOverlay* ov) {
 
         /* nibblers attack pillars, not worth showing as projectile */
         if (npc->type == INF_NPC_NIBBLER) continue;
+        if (npc->resurrecting_this_tick) continue;
 
         /* blob scan animation (no projectile) — only emit on the actual fire tick.
            blob_scanned_prayer >= 0 means scan just happened, -1 means fire. */
@@ -6336,7 +7805,7 @@ static float inf_progress_score(EncounterState* state) {
    restore — they belong to the live env, not the recorded snapshot. */
 
 #define INF_SNAPSHOT_MAGIC 0x1FE00001u
-#define INF_SNAPSHOT_VERSION 12u
+#define INF_SNAPSHOT_VERSION 13u
 
 typedef struct {
     uint32_t magic;

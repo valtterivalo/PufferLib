@@ -1415,6 +1415,10 @@ void c_step(Env* env) {
         env->log.brews_used += (float)s->total_brews_used;
         env->log.blood_healed += (float)s->total_blood_healed;
         env->log.unavoidable_off_prayer += (float)s->total_unavoidable_off;
+        env->log.ranger_mager_same_tick_attacks +=
+            (float)s->total_ranger_mager_same_tick_attacks;
+        env->log.step_out_ranger_mager_same_tick_attacks +=
+            (float)s->total_step_out_ranger_mager_same_tick_attacks;
         env->log.brews_remaining += (float)s->player.brew_doses;
         env->log.restores_remaining += (float)s->player.restore_doses;
         env->log.prayer_at_death += (float)s->player.current_prayer;
@@ -2595,10 +2599,13 @@ void my_log(Log* log, Dict* out) {
     float unavoidable_rate = (off_prayer > 0.0f)
         ? log->unavoidable_off_prayer / off_prayer : 0.0f;
     dict_set(out, "unavoidable_off_prayer_rate", unavoidable_rate);
-
     dict_set(out, "brews_remaining", log->brews_remaining);
     dict_set(out, "restores_remaining", log->restores_remaining);
     dict_set(out, "prayer_at_death", log->prayer_at_death);
+    dict_set(out, "ranger_mager_same_tick_attacks",
+        log->ranger_mager_same_tick_attacks);
+    dict_set(out, "step_out_ranger_mager_same_tick_attacks",
+        log->step_out_ranger_mager_same_tick_attacks);
 
     dict_set(out, "current_ranged", log->current_ranged);
     dict_set(out, "current_magic", log->current_magic);

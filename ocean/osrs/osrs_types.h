@@ -571,6 +571,7 @@ typedef struct {
     int hit_was_on_prayer;
     int hit_attacker_idx;
     int freeze_applied_this_tick;
+    int elysian_proc_this_tick;
 
     // Morrigan's javelin DoT (Phantom Strike): 5 HP every 3 ticks from calc tick
     int morr_dot_remaining;      // remaining bleed damage to deliver
@@ -712,6 +713,8 @@ typedef struct {
     float current_ranged;
     float current_magic;
     float unavoidable_off_prayer;  /* off-prayer hits where correct prayer was on a different style */
+    float ranger_mager_same_tick_attacks;
+    float step_out_ranger_mager_same_tick_attacks;
     float brews_remaining;         /* brew doses left at end of episode */
     float restores_remaining;      /* restore doses left at end of episode */
     float prayer_at_death;         /* prayer points at end of episode */
