@@ -138,23 +138,26 @@ class Logit(Space):
         log_spaced = zero_one*(math.log(1-self.max, self.base) - math.log(1-self.min, self.base)) + math.log(1-self.min, self.base)
         return 1 - self.base**log_spaced
 
-def _params_from_puffer_sweep(sweep_config, only_include=None):
+def _params_from_puffer_sweep(sweep_config, only_include=None, prefix=''):
     param_spaces = {}
 
     if 'sweep_only' in sweep_config:
         only_include = [p.strip() for p in sweep_config['sweep_only'].split(',')]
 
     for name, param in sweep_config.items():
+        full_name = f'{prefix}.{name}' if prefix else name
         if name in ('method', 'metric', 'metric_distribution', 'goal', 'downsample', 'use_gpu', 'prune_pareto',
                     'sweep_only', 'max_suggestion_cost', 'early_stop_quantile', 'gpus', 'max_runs', 'min_sps'):
             continue
 
         assert isinstance(param, dict), f'Param {name} is not a dict'
         if any(isinstance(param[k], dict) for k in param):
-            param_spaces[name] = _params_from_puffer_sweep(param, only_include)
+            child_spaces = _params_from_puffer_sweep(param, only_include, full_name)
+            if child_spaces:
+                param_spaces[name] = child_spaces
             continue
  
-        if only_include and not any(k in name for k in only_include):
+        if only_include and name not in only_include and full_name not in only_include:
             continue
 
         assert 'distribution' in param
