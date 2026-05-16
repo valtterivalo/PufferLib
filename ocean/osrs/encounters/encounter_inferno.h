@@ -5321,14 +5321,29 @@ static void inf_step_out_forecast_npc_attack(
     }
 }
 
+static int inf_collect_step_out_forecast_slots(
+    const InfernoState* s,
+    int slots[INF_MAX_NPCS]
+) {
+    int count = 0;
+    for (int i = 0; i < INF_MAX_NPCS; i++) {
+        const InfNPC* npc = &s->npcs[i];
+        if (!npc->active || npc->death_ticks > 0) continue;
+        slots[count++] = i;
+    }
+    return count;
+}
+
 static void inf_step_out_forecast_tick(
     InfernoState* sim,
     InfStepOutForecastAction* action,
-    int tick_idx
+    int tick_idx,
+    const int slots[INF_MAX_NPCS],
+    int slot_count
 ) {
-    for (int i = 0; i < INF_MAX_NPCS; i++) {
+    for (int slot_idx = 0; slot_idx < slot_count; slot_idx++) {
+        int i = slots[slot_idx];
         InfNPC* npc = &sim->npcs[i];
-        if (!npc->active || npc->death_ticks > 0) continue;
         if (npc->frozen_ticks > 0) npc->frozen_ticks--;
         if (npc->type == INF_NPC_MAGER && npc->resurrect_cooldown > 0)
             npc->resurrect_cooldown--;
@@ -5376,6 +5391,9 @@ static void inf_build_step_out_forecast(
     InfStepOutForecast* out
 ) {
     memset(out, 0, sizeof(*out));
+    int forecast_slots[INF_MAX_NPCS];
+    int forecast_slot_count = inf_collect_step_out_forecast_slots(
+        s, forecast_slots);
     for (int action_idx = 0; action_idx < ENCOUNTER_MOVE_ACTIONS; action_idx++) {
         InfStepOutForecastAction* action = &out->actions[action_idx];
         Player moved = s->player;
@@ -5391,17 +5409,18 @@ static void inf_build_step_out_forecast(
         }
         action->land_x = moved.x;
         action->land_y = moved.y;
-        if (!action->valid) continue;
+        if (!action->valid || forecast_slot_count == 0) continue;
 
         InfernoState sim = *s;
         sim.player.x = moved.x;
         sim.player.y = moved.y;
         sim.player.is_running = moved.is_running;
         inf_invalidate_los_cache(&sim);
-        inf_rebuild_entity_collision_flags(&sim);
+        inf_rebuild_player_collision_flags(&sim);
 
         for (int tick_idx = 0; tick_idx < INF_STEP_OUT_FORECAST_HORIZON; tick_idx++) {
-            inf_step_out_forecast_tick(&sim, action, tick_idx);
+            inf_step_out_forecast_tick(
+                &sim, action, tick_idx, forecast_slots, forecast_slot_count);
         }
         inf_step_out_forecast_finalize_action(action);
     }

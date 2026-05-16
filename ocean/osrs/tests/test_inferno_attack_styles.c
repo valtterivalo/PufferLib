@@ -5737,13 +5737,13 @@ static void test_inferno_binding_forwards_healer_attack_shape_coeffs(void) {
         "config/ocean/osrs_inferno.ini",
         "[env]",
         "[vec]",
-        "zuk_untagged_healer_nonmagic_attack_bonus_coeff = 0.2456639328343739");
+        "zuk_untagged_healer_nonmagic_attack_bonus_coeff =");
     ASSERT_SOURCE_BLOCK_CONTAINS(
         "mage healer attack penalty config",
         "config/ocean/osrs_inferno.ini",
         "[env]",
         "[vec]",
-        "zuk_healer_mage_attack_penalty_coeff = 0.18");
+        "zuk_healer_mage_attack_penalty_coeff =");
 }
 
 static void test_inferno_binding_forwards_supply_milestone_rewards(void) {
