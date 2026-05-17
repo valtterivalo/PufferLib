@@ -1347,6 +1347,7 @@ static void test_inferno_reset_preserves_reward_config(void) {
     inf_put_int(raw_state, "zuk_force_safe_untagged_healer_target_mask", 1);
     inf_put_int(raw_state, "zuk_healer_reward_mode", 1);
     inf_put_int(raw_state, "joseph_reward_mode", 1);
+    inf_put_int(raw_state, "terminal_penalty_enabled", 1);
     inf_reset(raw_state, 123u);
 
     ASSERT_FLOAT_NEAR("supply milestone brew reward coefficient",
@@ -1371,6 +1372,7 @@ static void test_inferno_reset_preserves_reward_config(void) {
         state->zuk_force_safe_untagged_healer_target_mask, 1);
     ASSERT_INT_EQ("Zuk healer reward mode", state->zuk_healer_reward_mode, 1);
     ASSERT_INT_EQ("Joseph reward mode", state->joseph_reward_mode, 1);
+    ASSERT_INT_EQ("terminal penalty enabled", state->terminal_penalty_enabled, 1);
 
     inf_destroy(raw_state);
 }
@@ -6097,6 +6099,33 @@ static void test_lethal_pending_hit_banks_damage_stats_before_terminal(void) {
         state.episode_return, 0.0f, 1e-6f);
 }
 
+static void test_terminal_penalty_applies_to_death_when_enabled(void) {
+    printf("--- terminal penalty applies to death when enabled ---\n");
+
+    InfernoState state = make_test_state(10, 10);
+    state.terminal_penalty_enabled = 1;
+    state.player.base_hitpoints = 99;
+    state.player.current_hitpoints = 10;
+    state.player_pending_hit_count = 1;
+    state.player_pending_hits[0] = (EncounterPendingHit){
+        .active = 1,
+        .damage = 20,
+        .ticks_remaining = 1,
+        .attack_style = ATTACK_STYLE_MAGIC,
+        .check_prayer = 0,
+        .source_npc_type = INF_NPC_ZUK,
+    };
+
+    step_inferno_noop(&state);
+
+    ASSERT_INT_EQ("lethal hit ends episode", state.episode_over, 1);
+    ASSERT_INT_EQ("lethal hit marks loss", state.winner, 1);
+    ASSERT_FLOAT_NEAR("lethal tick emits terminal penalty",
+        state.reward, -1.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("episode return includes terminal penalty",
+        state.episode_return, -1.0f, 1e-6f);
+}
+
 static void test_timeout_reward_matches_episode_return(void) {
     printf("--- timeout reward matches episode return ---\n");
 
@@ -6112,6 +6141,24 @@ static void test_timeout_reward_matches_episode_return(void) {
     ASSERT_FLOAT_NEAR("timeout emits zero reward", state.reward, 0.0f, 1e-6f);
     ASSERT_FLOAT_NEAR("episode return matches timeout reward",
         state.episode_return, 0.0f, 1e-6f);
+}
+
+static void test_terminal_penalty_applies_to_timeout_when_enabled(void) {
+    printf("--- terminal penalty applies to timeout when enabled ---\n");
+
+    InfernoState state = make_test_state(10, 10);
+    state.terminal_penalty_enabled = 1;
+    state.player.base_hitpoints = 99;
+    state.player.current_hitpoints = 99;
+    state.tick = INF_MAX_TICKS - 1;
+
+    step_inferno_noop(&state);
+
+    ASSERT_INT_EQ("timeout ends episode", state.episode_over, 1);
+    ASSERT_INT_EQ("timeout marks loss", state.winner, 1);
+    ASSERT_FLOAT_NEAR("timeout emits terminal penalty", state.reward, -1.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("episode return includes terminal penalty",
+        state.episode_return, -1.0f, 1e-6f);
 }
 
 static void test_inferno_render_overlay_reports_death_source(void) {
@@ -6260,6 +6307,29 @@ static void test_inferno_binding_forwards_safe_healer_target_mask(void) {
         "[env]",
         "[vec]",
         "zuk_force_safe_untagged_healer_target_mask = 0");
+}
+
+static void test_inferno_binding_forwards_terminal_penalty_toggle(void) {
+    printf("--- inferno binding forwards terminal penalty toggle ---\n");
+
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "terminal penalty int config",
+        "ocean/osrs_inferno/binding.c",
+        "DictItem* terminal_penalty_enabled",
+        "DictItem* zuk_healer_reward_mode",
+        "\"terminal_penalty_enabled\"");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "terminal penalty default config",
+        "config/ocean/osrs_inferno.ini",
+        "[env]",
+        "[vec]",
+        "terminal_penalty_enabled = 0");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "terminal penalty sweep axis",
+        "config/ocean/osrs_inferno.ini",
+        "[sweep.env.terminal_penalty_enabled]",
+        "scale = auto",
+        "distribution = int_uniform");
 }
 
 static void test_inferno_binding_logs_post_healer_set_reward_components(void) {
@@ -6555,7 +6625,9 @@ int main(void) {
     test_terminal_reward_uses_fixed_win_reward();
     test_final_wave_completion_emits_terminal_reward();
     test_lethal_pending_hit_banks_damage_stats_before_terminal();
+    test_terminal_penalty_applies_to_death_when_enabled();
     test_timeout_reward_matches_episode_return();
+    test_terminal_penalty_applies_to_timeout_when_enabled();
     test_inferno_render_overlay_reports_death_source();
     test_inferno_binding_forwards_safe_target_reward_coeff();
     test_inferno_binding_forwards_healer_attack_shape_coeffs();
@@ -6563,6 +6635,7 @@ int main(void) {
     test_inferno_binding_forwards_post_healer_set_rewards();
     test_inferno_binding_forwards_joseph_reward_mode();
     test_inferno_binding_forwards_safe_healer_target_mask();
+    test_inferno_binding_forwards_terminal_penalty_toggle();
     test_inferno_binding_logs_post_healer_set_reward_components();
     test_inferno_binding_emits_post_240_traces();
     test_inferno_render_status_survives_overlay_refresh();

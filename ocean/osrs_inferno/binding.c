@@ -2614,6 +2614,13 @@ void my_init(Env* env, Dict* kwargs) {
         ENCOUNTER_INFERNO.put_int(
             env->enc_state, "oracle_mode", (int)oracle_mode->value);
     }
+    DictItem* terminal_penalty_enabled =
+        dict_get_unsafe(kwargs, "terminal_penalty_enabled");
+    if (terminal_penalty_enabled) {
+        ENCOUNTER_INFERNO.put_int(
+            env->enc_state, "terminal_penalty_enabled",
+            (int)terminal_penalty_enabled->value);
+    }
     DictItem* zuk_healer_reward_mode =
         dict_get_unsafe(kwargs, "zuk_healer_reward_mode");
     if (zuk_healer_reward_mode) {

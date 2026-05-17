@@ -771,6 +771,7 @@ typedef struct {
     float supply_milestone_restore_reward_coeff;
     uint32_t supply_milestone_rewarded_mask;
     float death_penalty_coeff;
+    int terminal_penalty_enabled;
     float phase_900_bonus;
     float phase_600_bonus;
     float phase_300_bonus;
@@ -1603,6 +1604,7 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
     float saved_supply_milestone_restore_reward_coeff =
         s->supply_milestone_restore_reward_coeff;
     float saved_death_penalty_coeff = s->death_penalty_coeff;
+    int saved_terminal_penalty_enabled = s->terminal_penalty_enabled;
     float saved_phase_900_bonus = s->phase_900_bonus;
     float saved_phase_600_bonus = s->phase_600_bonus;
     float saved_phase_300_bonus = s->phase_300_bonus;
@@ -1658,6 +1660,7 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
     s->supply_milestone_restore_reward_coeff =
         saved_supply_milestone_restore_reward_coeff;
     s->death_penalty_coeff = saved_death_penalty_coeff;
+    s->terminal_penalty_enabled = saved_terminal_penalty_enabled;
     s->phase_900_bonus = saved_phase_900_bonus;
     s->phase_600_bonus = saved_phase_600_bonus;
     s->phase_300_bonus = saved_phase_300_bonus;
@@ -4742,7 +4745,9 @@ static float inf_compute_reward(InfernoState* s) {
     if (s->kill_jad_this_tick > 0) s->jad_killed_this_episode = 1;
 
     if (s->episode_over) {
-        return (s->winner == 0) ? 1.0f : -s->death_penalty_coeff;
+        if (s->winner == 0) return 1.0f;
+        if (s->terminal_penalty_enabled) return -1.0f;
+        return -s->death_penalty_coeff;
     }
 
     int jad_is_actively_healed =
@@ -4900,6 +4905,10 @@ static float inf_compute_reward(InfernoState* s) {
     return reward;
 }
 
+static float inf_terminal_loss_reward(const InfernoState* s) {
+    return s->terminal_penalty_enabled ? -1.0f : 0.0f;
+}
+
 static void inf_update_healer_transition_stats(InfernoState* s) {
     s->total_shield_tags += s->shield_tags_this_tick;
 
@@ -5041,7 +5050,7 @@ static void inf_step(EncounterState* state, const int* actions) {
             s->killed_by_type[s->last_hit_by_type]++;
         s->episode_over = 1;
         s->winner = 1;
-        s->reward = 0.0f;
+        s->reward = inf_terminal_loss_reward(s);
         s->episode_return += s->reward;
         return;
     }
@@ -5139,7 +5148,7 @@ static void inf_step(EncounterState* state, const int* actions) {
             s->killed_by_type[s->last_hit_by_type]++;
         s->episode_over = 1;
         s->winner = 1;
-        s->reward = 0.0f;  /* player died. Do not negative reward to avoid stalling.*/
+        s->reward = inf_terminal_loss_reward(s);
         goto finish_step;
     }
 
@@ -5172,11 +5181,10 @@ static void inf_step(EncounterState* state, const int* actions) {
         }
     }
 
-    /* timeout — zero reward so agent isn't rewarded/penalized for running out of time */
     if (s->tick >= INF_MAX_TICKS) {
         s->episode_over = 1;
         s->winner = 1;
-        s->reward = 0.0f;
+        s->reward = inf_terminal_loss_reward(s);
     }
 
 finish_step:
@@ -7438,6 +7446,9 @@ static void inf_put_int(EncounterState* state, const char* key, int value) {
     else if (strcmp(key, "player_dest_y") == 0) s->player_dest_y = value;
     else if (strcmp(key, "human_command_mode") == 0)
         s->human_command_mode = encounter_require_binary_config("inferno", key, value);
+    else if (strcmp(key, "terminal_penalty_enabled") == 0)
+        s->terminal_penalty_enabled =
+            encounter_require_binary_config("inferno", key, value);
     else if (strcmp(key, "oracle_mode") == 0) {
         if (value < 0 || value > 11) {
             fprintf(stderr, "inferno: oracle_mode must be in [0,11], got %d\n", value);
@@ -8106,6 +8117,7 @@ typedef struct {
     float supply_milestone_brew_reward_coeff;
     float supply_milestone_restore_reward_coeff;
     float death_penalty_coeff;
+    int terminal_penalty_enabled;
     float phase_900_bonus;
     float phase_600_bonus;
     float phase_300_bonus;
@@ -8156,6 +8168,7 @@ static InfLiveRestoreFields inf_capture_live_restore_fields(const InfernoState* 
         .supply_milestone_restore_reward_coeff =
             s->supply_milestone_restore_reward_coeff,
         .death_penalty_coeff = s->death_penalty_coeff,
+        .terminal_penalty_enabled = s->terminal_penalty_enabled,
         .phase_900_bonus = s->phase_900_bonus,
         .phase_600_bonus = s->phase_600_bonus,
         .phase_300_bonus = s->phase_300_bonus,
@@ -8219,6 +8232,7 @@ static void inf_apply_live_restore_fields(
     s->supply_milestone_restore_reward_coeff =
         fields.supply_milestone_restore_reward_coeff;
     s->death_penalty_coeff = fields.death_penalty_coeff;
+    s->terminal_penalty_enabled = fields.terminal_penalty_enabled;
     s->phase_900_bonus = fields.phase_900_bonus;
     s->phase_600_bonus = fields.phase_600_bonus;
     s->phase_300_bonus = fields.phase_300_bonus;
