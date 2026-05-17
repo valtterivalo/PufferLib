@@ -724,7 +724,6 @@ typedef struct {
     const HumanCommand* human_commands;
     int human_command_count;
     int stamina_active_ticks;  /* countdown for stamina effect */
-    int spell_choice;          /* 0 = blood barrage, 1 = ice barrage */
 
     /* per-tick player attack event for renderer projectiles */
     int player_attacked_this_tick;  /* 1 if player fired an attack this tick */
@@ -957,6 +956,10 @@ static int inf_npc_has_los(InfernoState* s, int i) {
 /* invalidate entire LOS cache (call at start of tick and on pillar collapse) */
 static inline void inf_invalidate_los_cache(InfernoState* s) {
     memset(s->npc_los_cache, -1, sizeof(s->npc_los_cache));
+}
+
+static inline void inf_invalidate_npc_los_cache(InfernoState* s, int i) {
+    s->npc_los_cache[i] = -1;
 }
 
 static inline int inf_is_final_wave(const InfernoState* s) {
@@ -1773,6 +1776,9 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
     s->player.stamina_doses = start_supplies.stamina_doses;
     s->stamina_active_ticks = 0;
     s->player.prayer = PRAYER_NONE;
+    s->player.autocast_enabled = 1;
+    s->player.autocast_defensive = 0;
+    s->player.autocast_spell = ENCOUNTER_SPELL_BLOOD;
     osrs_interaction_init(&s->interaction);
     s->player.spec_armed = 0;
     s->player.special_energy = 100;
@@ -2290,6 +2296,7 @@ static void inf_npc_move(InfernoState* s, int idx) {
             inf_npc_blocked_ignore_player, &mc, inf_npc_overlap_hold, &s->rng_state);
         if (stepped == ENCOUNTER_NPC_UNDER_PLAYER_MOVED) {
             npc->moved_this_tick = 1;
+            inf_invalidate_npc_los_cache(s, idx);
             if (uses_collision_flag)
                 inf_stamp_npc_collision_footprint(s, npc->x, npc->y, npc->size);
             return;
@@ -2313,11 +2320,9 @@ static void inf_npc_move(InfernoState* s, int idx) {
        reference: InfernoTrainer Unit.ts:383 canMove = !hasLOS (where
        hasLOS is relative to the NPC's current aggro target). */
     if (npc->type != INF_NPC_NIBBLER) {
-        if (entity_has_line_of_sight(
-                s->los_blockers, s->los_blocker_count,
-                npc->x, npc->y, npc->size,
-                tx, ty, target_size,
-                stats->attack_range)) {
+        int has_los = inf_npc_has_los_direct(s, idx);
+        s->npc_los_cache[idx] = (int8_t)has_los;
+        if (has_los) {
             if (uses_collision_flag)
                 inf_stamp_npc_collision_footprint(s, npc->x, npc->y, npc->size);
             return;
@@ -2331,6 +2336,7 @@ static void inf_npc_move(InfernoState* s, int idx) {
                               inf_npc_blocked, &mc);
     if (npc->x != ox || npc->y != oy) {
         npc->moved_this_tick = 1;
+        inf_invalidate_npc_los_cache(s, idx);
     }
     if (uses_collision_flag)
         inf_stamp_npc_collision_footprint(s, npc->x, npc->y, npc->size);
@@ -2432,6 +2438,116 @@ static int inf_player_weapon_is(const InfernoState* s, uint8_t item) {
     return s->player.equipped[GEAR_SLOT_WEAPON] == item;
 }
 
+typedef struct {
+    EncounterLoadoutStats stats;
+    int spell;
+    int is_barrage;
+    uint8_t weapon;
+} InfPlayerAttack;
+
+static int inf_is_barrage_spell(int spell) {
+    return spell == ENCOUNTER_SPELL_BLOOD || spell == ENCOUNTER_SPELL_ICE;
+}
+
+static int inf_spell_magic_level_requirement(int spell) {
+    if (spell == ENCOUNTER_SPELL_ICE) return ICE_BARRAGE_LEVEL;
+    if (spell == ENCOUNTER_SPELL_BLOOD) return BLOOD_BARRAGE_LEVEL;
+    fprintf(stderr, "BUG: invalid Inferno spell %d\n", spell);
+    abort();
+}
+
+static int inf_spell_action_to_spell(int action_spell) {
+    if (action_spell == 1) return ENCOUNTER_SPELL_BLOOD;
+    if (action_spell == 2) return ENCOUNTER_SPELL_ICE;
+    return ENCOUNTER_SPELL_NONE;
+}
+
+static int inf_spell_base_damage(int spell) {
+    if (!inf_is_barrage_spell(spell)) {
+        fprintf(stderr, "BUG: invalid Inferno spell %d\n", spell);
+        abort();
+    }
+    return 30;
+}
+
+static int inf_item_supports_autocast(uint8_t item) {
+    return item == ITEM_KODAI_WAND;
+}
+
+static int inf_player_autocast_spell(const Player* p) {
+    return p->autocast_spell == ENCOUNTER_SPELL_ICE
+        ? ENCOUNTER_SPELL_ICE
+        : ENCOUNTER_SPELL_BLOOD;
+}
+
+static FightStyle inf_player_spell_fight_style(const Player* p) {
+    return (p->autocast_defensive || p->fight_style == FIGHT_STYLE_DEFENSIVE_AUTOCAST)
+        ? FIGHT_STYLE_DEFENSIVE_AUTOCAST
+        : FIGHT_STYLE_AUTOCAST;
+}
+
+static int inf_autocast_is_active(const InfernoState* s) {
+    return s->player.autocast_enabled &&
+        inf_item_supports_autocast(s->player.equipped[GEAR_SLOT_WEAPON]);
+}
+
+static void inf_compute_manual_spell_stats(
+    InfernoState* s,
+    int spell,
+    EncounterLoadoutStats* out
+) {
+    encounter_compute_player_equipped_stats(
+        &s->player,
+        ATTACK_STYLE_MAGIC,
+        inf_player_spell_fight_style(&s->player),
+        inf_spell_base_damage(spell),
+        out);
+    out->attack_speed = 5;
+    out->attack_range = 10;
+}
+
+static int inf_resolve_player_attack(
+    InfernoState* s,
+    int manual_spell,
+    InfPlayerAttack* out
+) {
+    memset(out, 0, sizeof(*out));
+    out->spell = ENCOUNTER_SPELL_NONE;
+    out->weapon = s->player.equipped[GEAR_SLOT_WEAPON];
+
+    if (inf_is_barrage_spell(manual_spell)) {
+        if (s->player.current_magic < inf_spell_magic_level_requirement(manual_spell))
+            return 0;
+        inf_compute_manual_spell_stats(s, manual_spell, &out->stats);
+        out->spell = manual_spell;
+        out->is_barrage = 1;
+        return 1;
+    }
+
+    const EncounterLoadoutStats* ls = inf_current_loadout_stats(s);
+    out->stats = *ls;
+
+    if (ls->style != ATTACK_STYLE_MAGIC)
+        return 1;
+
+    if (!inf_autocast_is_active(s))
+        return 0;
+
+    int autocast_spell = inf_player_autocast_spell(&s->player);
+    if (s->player.current_magic < inf_spell_magic_level_requirement(autocast_spell))
+        return 0;
+
+    out->spell = autocast_spell;
+    out->is_barrage = 1;
+    out->stats.attack_speed = 5;
+    out->stats.attack_range = 10;
+    return 1;
+}
+
+static int inf_player_has_any_barrage_spell_available(const InfernoState* s) {
+    return s->player.current_magic >= BLOOD_BARRAGE_LEVEL;
+}
+
 static int inf_npc_type_can_be_tagged_off_shield(int type) {
     return type == INF_NPC_JAD ||
         type == INF_NPC_RANGER ||
@@ -2510,22 +2626,7 @@ static int inf_player_can_attack_npc_from_current_tile(
         s->los_blocker_count);
 }
 
-static int inf_spell_choice_magic_level_requirement(const InfernoState* s) {
-    return (s->spell_choice == ENCOUNTER_SPELL_ICE)
-        ? ICE_BARRAGE_LEVEL
-        : BLOOD_BARRAGE_LEVEL;
-}
-
-static int inf_current_attack_is_barrage(InfernoState* s) {
-    const EncounterLoadoutStats* ls = inf_current_loadout_stats(s);
-    return ls->style == ATTACK_STYLE_MAGIC &&
-        s->player.current_magic >= inf_spell_choice_magic_level_requirement(s);
-}
-
-static int inf_player_can_phantom_barrage_npc(
-    InfernoState* s,
-    int npc_idx
-) {
+static int inf_player_can_phantom_barrage_npc(InfernoState* s, int npc_idx) {
     if (npc_idx < 0 || npc_idx >= INF_MAX_NPCS) return 0;
 
     const InfNPC* npc = &s->npcs[npc_idx];
@@ -2533,16 +2634,20 @@ static int inf_player_can_phantom_barrage_npc(
             npc->type == INF_NPC_ZUK_SHIELD)
         return 0;
 
-    if (!inf_current_attack_is_barrage(s)) return 0;
+    InfPlayerAttack attack;
+    int has_barrage = inf_resolve_player_attack(s, ENCOUNTER_SPELL_NONE, &attack) &&
+        attack.is_barrage;
+    if (!has_barrage)
+        has_barrage = inf_player_has_any_barrage_spell_available(s);
+    if (!has_barrage) return 0;
 
-    const EncounterLoadoutStats* ls = inf_current_loadout_stats(s);
     return encounter_player_can_attack(
         s->player.x,
         s->player.y,
         npc->x,
         npc->y,
         npc->size,
-        ls->attack_range,
+        10,
         s->los_blockers,
         s->los_blocker_count);
 }
@@ -3479,14 +3584,14 @@ static void inf_tick_npcs(InfernoState* s) {
 
 
 #define INF_HEAD_MOVE      0   /* 25: idle + 8 walk + 16 run */
-#define INF_HEAD_PRAYER    1   /* 4: no_change, toggle_melee, toggle_ranged, toggle_magic (ENCOUNTER_OVERHEAD_DIM_PVE) */
+#define INF_HEAD_PRAYER    1   /* no_change, off, set_refresh_melee/ranged/magic */
 #define INF_HEAD_TARGET    2   /* INF_OBS_NPCS+1: none or observation slot */
 #define INF_HEAD_GEAR      3   /* 4: no_switch, mage, tbow, bp */
 #define INF_HEAD_EAT       4   /* 2: none, brew */
 #define INF_HEAD_POTION    5   /* 4: none, restore, bastion, stamina */
 #define INF_HEAD_SPELL     6   /* 3: no_change, blood_barrage, ice_barrage */
 #define INF_HEAD_SPEC      7   /* 2: no_change, toggle (arm/disarm blowpipe spec) */
-#define INF_HEAD_OFFENSIVE 8   /* 4: no_change, toggle_piety, toggle_rigour, toggle_augury (ENCOUNTER_OFFENSIVE_DIM) */
+#define INF_HEAD_OFFENSIVE 8   /* no_change, off, set_refresh_piety/rigour/augury */
 static const int INF_ACTION_DIMS[INF_NUM_ACTION_HEADS] = {
     ENCOUNTER_MOVE_ACTIONS, ENCOUNTER_OVERHEAD_DIM_PVE, INF_OBS_NPCS+1, 4, 2, 4, 3, 2, ENCOUNTER_OFFENSIVE_DIM
 };
@@ -3665,36 +3770,30 @@ static int inf_oracle_overrides_overhead(int mode) {
 }
 
 static int inf_oracle_overhead_action_for(const InfernoState* s, int wanted_style) {
-    OverheadPrayer want = PRAYER_NONE;
-    int toggle_action = ENCOUNTER_OVERHEAD_NO_CHANGE;
+    (void)s;
+    int action = ENCOUNTER_OVERHEAD_NO_CHANGE;
     if (wanted_style == ATTACK_STYLE_RANGED) {
-        want = PRAYER_PROTECT_RANGED;
-        toggle_action = ENCOUNTER_OVERHEAD_TOGGLE_RANGED;
+        action = ENCOUNTER_OVERHEAD_SET_REFRESH_RANGED;
     } else if (wanted_style == ATTACK_STYLE_MAGIC) {
-        want = PRAYER_PROTECT_MAGIC;
-        toggle_action = ENCOUNTER_OVERHEAD_TOGGLE_MAGIC;
+        action = ENCOUNTER_OVERHEAD_SET_REFRESH_MAGIC;
     } else if (wanted_style == ATTACK_STYLE_MELEE) {
-        want = PRAYER_PROTECT_MELEE;
-        toggle_action = ENCOUNTER_OVERHEAD_TOGGLE_MELEE;
+        action = ENCOUNTER_OVERHEAD_SET_REFRESH_MELEE;
     } else {
         return ENCOUNTER_OVERHEAD_NO_CHANGE;
     }
-    if (s->player.prayer == want) return ENCOUNTER_OVERHEAD_NO_CHANGE;
-    return toggle_action;
+    return action;
 }
 
 static int inf_oracle_offensive_action_for(const InfernoState* s, int wanted_offensive) {
+    (void)s;
     if (wanted_offensive == OFFENSIVE_PRAYER_RIGOUR) {
-        if (s->player.offensive_prayer == OFFENSIVE_PRAYER_RIGOUR) return ENCOUNTER_OFFENSIVE_NO_CHANGE;
-        return ENCOUNTER_OFFENSIVE_TOGGLE_RIGOUR;
+        return ENCOUNTER_OFFENSIVE_SET_REFRESH_RIGOUR;
     }
     if (wanted_offensive == OFFENSIVE_PRAYER_PIETY) {
-        if (s->player.offensive_prayer == OFFENSIVE_PRAYER_PIETY) return ENCOUNTER_OFFENSIVE_NO_CHANGE;
-        return ENCOUNTER_OFFENSIVE_TOGGLE_PIETY;
+        return ENCOUNTER_OFFENSIVE_SET_REFRESH_PIETY;
     }
     if (wanted_offensive == OFFENSIVE_PRAYER_AUGURY) {
-        if (s->player.offensive_prayer == OFFENSIVE_PRAYER_AUGURY) return ENCOUNTER_OFFENSIVE_NO_CHANGE;
-        return ENCOUNTER_OFFENSIVE_TOGGLE_AUGURY;
+        return ENCOUNTER_OFFENSIVE_SET_REFRESH_AUGURY;
     }
     return ENCOUNTER_OFFENSIVE_NO_CHANGE;
 }
@@ -3706,8 +3805,8 @@ static int inf_oracle_gear_action_for(const InfernoState* s, int wanted_gear) {
 }
 
 static void inf_player_pretick(InfernoState* s, const int* actions) {
-    /* apply prayer actions. each helper returns 1 on OFF→ON transition so we
-       can skip that slot's drain this tick (wiki: no drain on activation tick). */
+    /* apply prayer actions. each helper returns 1 when the final active prayer
+       was activated this tick, so that slot skips drain. */
     OffensivePrayer prev_offensive = s->player.offensive_prayer;
     int prayer_act = actions[INF_HEAD_PRAYER];
     int offensive_act = actions[INF_HEAD_OFFENSIVE];
@@ -3730,10 +3829,10 @@ static void inf_player_pretick(InfernoState* s, const int* actions) {
     if (encounter_apply_offensive_action(&s->player.offensive_prayer, offensive_act)) {
         s->player.offensive_prayer_just_activated = 1;
     }
-    /* inferno loadouts have ~0 prayer bonus (armadyl/ancestral/torva); pass 0.
-       drain can also clear offensive_prayer (pp<=0 auto-clear), so recompute
+    /* drain can also clear offensive_prayer (pp<=0 auto-clear), so recompute
        AFTER drain to catch both the apply-side change and the drain-side clear. */
-    encounter_drain_all_prayers(&s->player, 0);
+    encounter_drain_all_prayers(
+        &s->player, encounter_player_prayer_bonus(&s->player));
     /* offensive prayer is baked into eff_level/max_hit via the loadout cache.
        recompute all loadouts on any change so combat math reflects current state. */
     if (s->player.offensive_prayer != prev_offensive) {
@@ -3772,7 +3871,13 @@ static void inf_apply_human_player_commands(InfernoState* s) {
                     did_change_equipment = 1;
                     if (cmd->gear_slot == GEAR_SLOT_WEAPON) {
                         AttackStyle style = inf_player_equipped_attack_style(s);
-                        s->player.fight_style = inf_default_fight_style_for_style(style);
+                        if (inf_item_supports_autocast(s->player.equipped[GEAR_SLOT_WEAPON])) {
+                            s->player.fight_style = s->player.autocast_defensive
+                                ? FIGHT_STYLE_DEFENSIVE_AUTOCAST
+                                : FIGHT_STYLE_AUTOCAST;
+                        } else {
+                            s->player.fight_style = inf_default_fight_style_for_style(style);
+                        }
                         inf_note_human_weapon_set(s);
                     }
                 }
@@ -3781,6 +3886,24 @@ static void inf_apply_human_player_commands(InfernoState* s) {
             if (cmd->fight_style >= FIGHT_STYLE_ACCURATE &&
                 cmd->fight_style <= FIGHT_STYLE_DEFENSIVE_AUTOCAST) {
                 s->player.fight_style = (FightStyle)cmd->fight_style;
+                if (cmd->fight_style == FIGHT_STYLE_AUTOCAST ||
+                        cmd->fight_style == FIGHT_STYLE_DEFENSIVE_AUTOCAST) {
+                    s->player.autocast_enabled = 1;
+                    s->player.autocast_defensive =
+                        cmd->fight_style == FIGHT_STYLE_DEFENSIVE_AUTOCAST;
+                }
+                did_change_equipment = 1;
+            }
+        } else if (cmd->kind == HUMAN_COMMAND_SET_AUTOCAST) {
+            if (inf_is_barrage_spell(cmd->autocast_spell)) {
+                s->player.autocast_enabled = 1;
+                s->player.autocast_defensive = cmd->autocast_defensive != 0;
+                s->player.autocast_spell = cmd->autocast_spell;
+                if (inf_item_supports_autocast(s->player.equipped[GEAR_SLOT_WEAPON])) {
+                    s->player.fight_style = s->player.autocast_defensive
+                        ? FIGHT_STYLE_DEFENSIVE_AUTOCAST
+                        : FIGHT_STYLE_AUTOCAST;
+                }
                 did_change_equipment = 1;
             }
         }
@@ -3825,14 +3948,7 @@ static void inf_tick_player(InfernoState* s, const int* actions, int can_attack)
         }
     }
 
-    /* spell choice for mage attacks — normalize to ENCOUNTER_SPELL_*.
-       human sends ATTACK_ICE=2 / ATTACK_BLOOD=3, RL sends 0=blood / 1=ice. */
-    /* spell: 0=no change, 1=blood barrage, 2=ice barrage */
-    int spell_act = actions[INF_HEAD_SPELL];
-    if (spell_act == 2)
-        s->spell_choice = ENCOUNTER_SPELL_ICE;
-    else if (spell_act == 1)
-        s->spell_choice = ENCOUNTER_SPELL_BLOOD;
+    int manual_spell = inf_spell_action_to_spell(actions[INF_HEAD_SPELL]);
 
     /* special energy regen: 10 energy every 50 ticks (30 seconds) */
     encounter_tick_spec_regen(&s->player);
@@ -4026,7 +4142,11 @@ static void inf_tick_player(InfernoState* s, const int* actions, int can_attack)
     } else if (osrs_interaction_active(&s->interaction)) {
         /* auto-chase: pathfind toward attack target when out of range */
         InfNPC* chase_npc = &s->npcs[s->interaction.target_slot];
-        const EncounterLoadoutStats* ls = inf_current_loadout_stats(s);
+        InfPlayerAttack chase_attack;
+        int has_chase_attack = inf_resolve_player_attack(s, manual_spell, &chase_attack);
+        const EncounterLoadoutStats* ls = has_chase_attack
+            ? &chase_attack.stats
+            : inf_current_loadout_stats(s);
         encounter_chase_attack_target(&s->player,
             chase_npc->x, chase_npc->y, INF_NPC_STATS[chase_npc->type].size,
             ls->attack_range,
@@ -4048,14 +4168,11 @@ static void inf_tick_player(InfernoState* s, const int* actions, int can_attack)
             s->total_zuk_healer_cooldown_ticks++;
         } else {
             InfNPC* target_npc = &s->npcs[s->interaction.target_slot];
-            const EncounterLoadoutStats* ls = inf_current_loadout_stats(s);
-            int is_magic_attack = (ls->style == ATTACK_STYLE_MAGIC);
-            int mage_blocked = is_magic_attack &&
-                (s->player.current_magic < ((s->spell_choice == ENCOUNTER_SPELL_ICE)
-                    ? ICE_BARRAGE_LEVEL : BLOOD_BARRAGE_LEVEL));
-            if (!mage_blocked && encounter_player_can_attack(s->player.x, s->player.y,
+            InfPlayerAttack healer_attack;
+            int has_healer_attack = inf_resolve_player_attack(s, manual_spell, &healer_attack);
+            if (has_healer_attack && encounter_player_can_attack(s->player.x, s->player.y,
                     target_npc->x, target_npc->y, target_npc->size,
-                    ls->attack_range, s->los_blockers, s->los_blocker_count)) {
+                    healer_attack.stats.attack_range, s->los_blockers, s->los_blocker_count)) {
                 s->total_zuk_healer_attackable_ticks++;
             } else {
                 s->total_zuk_healer_out_of_range_ticks++;
@@ -4065,21 +4182,16 @@ static void inf_tick_player(InfernoState* s, const int* actions, int can_attack)
     if (can_attack && osrs_interaction_active(&s->interaction) && s->player.attack_timer == 0) {
         InfNPC* target_npc = &s->npcs[s->interaction.target_slot];
         if (target_npc->active) {
-            const EncounterLoadoutStats* ls = inf_current_loadout_stats(s);
-
-            /* magic level gate: can't cast a barrage below its required level.
-               real OSRS greys out the spell button; here we skip the entire attack
-               so no damage lands, attack_timer does not reset, and the agent retries
-               next tick (or picks a different spell). */
-            int is_magic_attack = (ls->style == ATTACK_STYLE_MAGIC);
+            InfPlayerAttack attack;
+            int has_attack = inf_resolve_player_attack(s, manual_spell, &attack);
+            const EncounterLoadoutStats* ls = &attack.stats;
+            int is_magic_attack = attack.is_barrage;
             int weapon_is_blowpipe = inf_player_weapon_is(s, ITEM_TOXIC_BLOWPIPE);
             int weapon_is_tbow = inf_player_weapon_is(s, ITEM_TWISTED_BOW);
-            uint8_t player_weapon = s->player.equipped[GEAR_SLOT_WEAPON];
-            int mage_blocked = is_magic_attack &&
-                (s->player.current_magic < ((s->spell_choice == ENCOUNTER_SPELL_ICE)
-                    ? ICE_BARRAGE_LEVEL : BLOOD_BARRAGE_LEVEL));
+            uint8_t player_weapon = attack.weapon;
+            int active_spell = attack.spell;
 
-            if (!mage_blocked && encounter_player_can_attack(s->player.x, s->player.y,
+            if (has_attack && encounter_player_can_attack(s->player.x, s->player.y,
                     target_npc->x, target_npc->y, target_npc->size,
                     ls->attack_range, s->los_blockers, s->los_blocker_count)) {
                 int is_blowpipe_spec_attack = weapon_is_blowpipe &&
@@ -4105,7 +4217,7 @@ static void inf_tick_player(InfernoState* s, const int* actions, int can_attack)
                         .kind = OSRS_TARGET_NPC,
                         .id = s->interaction.target_slot,
                     };
-                    OsrsMagicAttackKind magic_kind = (s->spell_choice == ENCOUNTER_SPELL_ICE)
+                    OsrsMagicAttackKind magic_kind = (active_spell == ENCOUNTER_SPELL_ICE)
                         ? OSRS_MAGIC_ATTACK_ANCIENT_ICE
                         : OSRS_MAGIC_ATTACK_ANCIENT_BLOOD;
                     OsrsPreparedAttackEffects attack_effects = osrs_prepare_attack_effects(
@@ -4157,7 +4269,7 @@ static void inf_tick_player(InfernoState* s, const int* actions, int can_attack)
                        freeze is applied by the shared function at cast time. */
                     BarrageResult br = osrs_barrage_resolve(
                         btargets, bt_count, attack_effects.attack_roll, attack_effects.max_hit,
-                        &s->rng_state, s->spell_choice, attack_effects.use_double_accuracy);
+                        &s->rng_state, active_spell, attack_effects.use_double_accuracy);
                     total_dmg = br.total_damage;
                     if (target_npc->death_ticks > 0) {
                         total_dmg -= btargets[0].damage;
@@ -4189,7 +4301,7 @@ static void inf_tick_player(InfernoState* s, const int* actions, int can_attack)
                         ph->ticks_remaining = hit_delay;
                         ph->attack_style = ATTACK_STYLE_MAGIC;
                         ph->check_prayer = 0;
-                        ph->spell_type = s->spell_choice;
+                        ph->spell_type = active_spell;
                         ph->hit_success = btargets[i].hit;
                         ph->elysian_reduced = 0;
                     }
@@ -4294,7 +4406,7 @@ static void inf_tick_player(InfernoState* s, const int* actions, int can_attack)
                 s->player.attack_style_this_tick = ls->style;
                 if (ls->style == ATTACK_STYLE_MAGIC) {
                     /* 0=none, 1=ice, 2=blood */
-                    s->player.magic_type_this_tick = (s->spell_choice == ENCOUNTER_SPELL_ICE) ? 1 : 2;
+                    s->player.magic_type_this_tick = (active_spell == ENCOUNTER_SPELL_ICE) ? 1 : 2;
                 }
                 if (target_npc->death_ticks > 0)
                     osrs_interaction_clear(&s->interaction);
@@ -4412,10 +4524,11 @@ static void inf_resolve_player_projectiles_on_npcs(InfernoState* s) {
     }
     if (blood_heal_acc > 0) {
         int healed = blood_heal_acc / 4;
+        int hp_before = s->player.current_hitpoints;
         s->player.current_hitpoints += healed;
         if (s->player.current_hitpoints > s->player.base_hitpoints)
             s->player.current_hitpoints = s->player.base_hitpoints;
-        s->blood_heal_this_tick = healed;
+        s->blood_heal_this_tick = s->player.current_hitpoints - hp_before;
     }
 }
 
@@ -4946,6 +5059,8 @@ static void inf_step(EncounterState* state, const int* actions) {
     s->player_moved_this_tick =
         (s->player.x != player_x_before_tick_player ||
          s->player.y != player_y_before_tick_player) ? 1 : 0;
+    if (s->player_moved_this_tick)
+        inf_invalidate_los_cache(s);
     inf_resolve_jad_prayer_checks_after_player(s);
 
     /* idle penalty counter: consecutive ticks where player could attack but didn't */
@@ -5259,25 +5374,26 @@ static void inf_step_out_forecast_npc_attack(
     if (!inf_npc_targets_player_for_obs(s, npc)) return;
 
     int has_los_now = 0;
-    if (stats->attack_range > 1)
+    if (npc->type == INF_NPC_BLOB && stats->attack_range > 1) {
         has_los_now = inf_npc_has_los(s, idx);
-
-    if (npc->type == INF_NPC_BLOB &&
-        npc->blob_scanned_prayer < 0 &&
-        has_los_now &&
-        !npc->had_los_last_tick) {
-        npc->blob_scanned_prayer = (int)s->player.prayer;
-        if (s->player.prayer == PRAYER_PROTECT_MAGIC) npc->attack_style = ATTACK_STYLE_RANGED;
-        else if (s->player.prayer == PRAYER_PROTECT_RANGED) npc->attack_style = ATTACK_STYLE_MAGIC;
-        else npc->attack_style = ATTACK_STYLE_RANGED;
+        if (npc->blob_scanned_prayer < 0 &&
+            has_los_now &&
+            !npc->had_los_last_tick) {
+            npc->blob_scanned_prayer = (int)s->player.prayer;
+            if (s->player.prayer == PRAYER_PROTECT_MAGIC) npc->attack_style = ATTACK_STYLE_RANGED;
+            else if (s->player.prayer == PRAYER_PROTECT_RANGED) npc->attack_style = ATTACK_STYLE_MAGIC;
+            else npc->attack_style = ATTACK_STYLE_RANGED;
+            npc->had_los_last_tick = has_los_now;
+            npc->attack_timer = stats->attack_speed;
+            inf_step_out_forecast_record_blob_scan(action, tick_idx);
+            return;
+        }
         npc->had_los_last_tick = has_los_now;
-        npc->attack_timer = stats->attack_speed;
-        inf_step_out_forecast_record_blob_scan(action, tick_idx);
-        return;
     }
-
-    npc->had_los_last_tick = has_los_now;
     if (npc->attack_timer > 0) return;
+
+    if (npc->type != INF_NPC_BLOB && stats->attack_range > 1)
+        has_los_now = inf_npc_has_los(s, idx);
 
     if (stats->attack_range > 1 &&
         !(npc->type == INF_NPC_BLOB && npc->blob_scanned_prayer >= 0) &&
@@ -5347,9 +5463,7 @@ static void inf_step_out_forecast_tick(
         if (npc->frozen_ticks > 0) npc->frozen_ticks--;
         if (npc->type == INF_NPC_MAGER && npc->resurrect_cooldown > 0)
             npc->resurrect_cooldown--;
-        inf_invalidate_los_cache(sim);
         inf_npc_move(sim, i);
-        inf_invalidate_los_cache(sim);
         inf_step_out_forecast_npc_attack(sim, i, action, tick_idx);
     }
 }
@@ -6624,6 +6738,10 @@ static void inf_refresh_current_obs_slots(InfernoState* s) {
 
 static void inf_write_obs(EncounterState* state, float* obs) {
     InfernoState* s = (InfernoState*)state;
+#ifdef INF_PROFILE_ENABLED
+    int inf_prof_enabled = INF_PROFILE_ENABLED();
+    double inf_prof_t0 = inf_prof_enabled ? INF_PROFILE_NOW_MS() : 0.0;
+#endif
     memset(obs, 0, INF_NUM_OBS * sizeof(float));
     int i = 0;
     int px = s->player.x, py = s->player.y;
@@ -6804,7 +6922,13 @@ static void inf_write_obs(EncounterState* state, float* obs) {
         obs[i++] = (float)(s->pillars[p].y - py) / (float)INF_ARENA_HEIGHT;
     }
 
+#ifdef INF_PROFILE_ENABLED
+    INF_PROFILE_MARK(INF_PROF_OBS_PREFIX);
+#endif
     inf_refresh_current_obs_slots(s);
+#ifdef INF_PROFILE_ENABLED
+    INF_PROFILE_MARK(INF_PROF_OBS_REFRESH_SLOTS);
+#endif
 
     /* NPCs: variable features per slot, fixed order */
     int slot_types[INF_OBS_NPCS];
@@ -6910,6 +7034,9 @@ static void inf_write_obs(EncounterState* state, float* obs) {
             for (int j = 0; j < num_features; j++) obs[i++] = 0.0f;
         }
     }
+#ifdef INF_PROFILE_ENABLED
+    INF_PROFILE_MARK(INF_PROF_OBS_NPC_SLOTS);
+#endif
 
     /* assert NPC section wrote exactly the right number of features.
        if this fires, INF_FEATURES_PER_NPC doesn't match the actual feature count. */
@@ -6953,6 +7080,9 @@ static void inf_write_obs(EncounterState* state, float* obs) {
             obs[i++] = action->melee_fallback_exposure ? 1.0f : 0.0f;
         }
     }
+#ifdef INF_PROFILE_ENABLED
+    INF_PROFILE_MARK(INF_PROF_OBS_FORECAST);
+#endif
 
     {
         int expected_forecast_end = INF_PLAYER_OBS_SIZE + 12 +
@@ -6977,6 +7107,9 @@ static void inf_write_obs(EncounterState* state, float* obs) {
             for (int j = 0; j < INF_FEATURES_PER_HIT; j++) obs[i++] = 0.0f;
         }
     }
+#ifdef INF_PROFILE_ENABLED
+    INF_PROFILE_MARK(INF_PROF_OBS_PENDING_HITS);
+#endif
 
     {
         InfSparkObsBucket buckets[INF_MAX_PENDING_SPARKS];
@@ -6995,6 +7128,9 @@ static void inf_write_obs(EncounterState* state, float* obs) {
             }
         }
     }
+#ifdef INF_PROFILE_ENABLED
+    INF_PROFILE_MARK(INF_PROF_OBS_SPARKS);
+#endif
 
     if (i != INF_NUM_OBS) {
         fprintf(stderr, "BUG: inf_write_obs wrote %d features, expected %d\n", i, INF_NUM_OBS);
@@ -7048,16 +7184,12 @@ static void inf_write_mask(EncounterState* state, float* mask) {
                          ? 1.0f : 0.0f;
     }
 
-    /* HEAD_PRAYER (4): 0=no_change always valid, 1-3=toggle_melee/ranged/magic.
-       toggles are always valid (the env decides on/off based on current state)
-       but require pp > 0 to activate; mask activation paths when pp=0.
-       since the agent can't know if the toggle will activate vs deactivate without
-       additional state, we keep toggles available when pp>0 and when the matching
-       prayer is already active (toggle-off is free). */
+    /* HEAD_PRAYER: no_change, off, set_refresh_melee/ranged/magic. */
     mask[offset++] = 1.0f;  /* no_change always valid */
-    mask[offset++] = (s->player.current_prayer > 0 || s->player.prayer == PRAYER_PROTECT_MELEE) ? 1.0f : 0.0f;
-    mask[offset++] = (s->player.current_prayer > 0 || s->player.prayer == PRAYER_PROTECT_RANGED) ? 1.0f : 0.0f;
-    mask[offset++] = (s->player.current_prayer > 0 || s->player.prayer == PRAYER_PROTECT_MAGIC) ? 1.0f : 0.0f;
+    mask[offset++] = s->player.prayer != PRAYER_NONE ? 1.0f : 0.0f;
+    mask[offset++] = s->player.current_prayer > 0 ? 1.0f : 0.0f;
+    mask[offset++] = s->player.current_prayer > 0 ? 1.0f : 0.0f;
+    mask[offset++] = s->player.current_prayer > 0 ? 1.0f : 0.0f;
 
     int has_forced_safe_healer_target =
         s->zuk_force_safe_untagged_healer_target_mask &&
@@ -7119,16 +7251,9 @@ static void inf_write_mask(EncounterState* state, float* mask) {
                       s->stamina_active_ticks == 0)
                      ? 1.0f : 0.0f;
 
-    /* HEAD_SPELL (3): no_change, blood_barrage, ice_barrage.
-       noop always valid. blood masked at full HP or if magic level is too low
-       to cast blood barrage (req 92). ice masked if magic level too low (req 94).
-       both spells masked when not in mage gear. */
-    mask[offset++] = 1.0f;  /* no_change always valid */
-    mask[offset++] = (s->weapon_set == INF_GEAR_MAGE &&
-                      s->player.current_magic >= BLOOD_BARRAGE_LEVEL &&
-                      s->player.current_hitpoints < s->player.base_hitpoints) ? 1.0f : 0.0f;
-    mask[offset++] = (s->weapon_set == INF_GEAR_MAGE &&
-                      s->player.current_magic >= ICE_BARRAGE_LEVEL) ? 1.0f : 0.0f;
+    mask[offset++] = 1.0f;
+    mask[offset++] = s->player.current_magic >= BLOOD_BARRAGE_LEVEL ? 1.0f : 0.0f;
+    mask[offset++] = s->player.current_magic >= ICE_BARRAGE_LEVEL ? 1.0f : 0.0f;
 
     /* HEAD_SPEC (2): no_change, toggle. allow when blowpipe equipped + enough energy. */
     mask[offset++] = 1.0f;  /* no_change always valid */
@@ -7136,12 +7261,12 @@ static void inf_write_mask(EncounterState* state, float* mask) {
                       s->player.special_energy >= BLOWPIPE_SPEC_COST)
                      ? 1.0f : 0.0f;
 
-    /* HEAD_OFFENSIVE (4): 0=no_change always valid, 1-3=toggle_piety/rigour/augury.
-       same rule as overhead — toggles need pp>0 to activate, free to deactivate. */
+    /* HEAD_OFFENSIVE: no_change, off, set_refresh_piety/rigour/augury. */
     mask[offset++] = 1.0f;  /* no_change always valid */
-    mask[offset++] = (s->player.current_prayer > 0 || s->player.offensive_prayer == OFFENSIVE_PRAYER_PIETY)  ? 1.0f : 0.0f;
-    mask[offset++] = (s->player.current_prayer > 0 || s->player.offensive_prayer == OFFENSIVE_PRAYER_RIGOUR) ? 1.0f : 0.0f;
-    mask[offset++] = (s->player.current_prayer > 0 || s->player.offensive_prayer == OFFENSIVE_PRAYER_AUGURY) ? 1.0f : 0.0f;
+    mask[offset++] = s->player.offensive_prayer != OFFENSIVE_PRAYER_NONE ? 1.0f : 0.0f;
+    mask[offset++] = s->player.current_prayer > 0 ? 1.0f : 0.0f;
+    mask[offset++] = s->player.current_prayer > 0 ? 1.0f : 0.0f;
+    mask[offset++] = s->player.current_prayer > 0 ? 1.0f : 0.0f;
 
     int mask_offset = 0;
     for (int h = 0; h < INF_NUM_ACTION_HEADS; h++) {
@@ -7780,6 +7905,7 @@ static void inf_translate_human_commands(HumanInput* hi, int* actions, InfernoSt
                 break;
             case HUMAN_COMMAND_EQUIP_INVENTORY_ITEM:
             case HUMAN_COMMAND_FIGHT_STYLE:
+            case HUMAN_COMMAND_SET_AUTOCAST:
             case HUMAN_COMMAND_NONE:
                 break;
         }

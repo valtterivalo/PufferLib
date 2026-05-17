@@ -6,6 +6,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <string>
 #include <vector>
 #include <time.h>
 #include "models.cu"
@@ -27,6 +28,9 @@ extern "C" {
     int inferno_env_validate_ladders(
         struct InfernoEnv* env, const DemoStore* store,
         DemoSnapshotLadder* const* ladders, int* out_cursor_ticks) __attribute__((weak));
+    int inferno_env_profile_count(void) __attribute__((weak));
+    const char* inferno_env_profile_name(int slot) __attribute__((weak));
+    double inferno_env_profile_read_reset_ms(int slot) __attribute__((weak));
     struct InfernoEnv* inferno_env_at(void* envs_void, int idx) __attribute__((weak));
     void inferno_env_store_live_recurrent_state(
         struct InfernoEnv* env, const uint8_t* hidden_layer_major,

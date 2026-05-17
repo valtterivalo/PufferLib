@@ -346,6 +346,7 @@ typedef struct {
     /* spell targeting: GuiSpellIdx of the spell awaiting an enemy click, or
        -1 when not targeting. render code sets this before calling gui_draw. */
     int pending_spell_highlight;
+    int autocast_selector_open;
 } GuiState;
 
 
@@ -1651,11 +1652,14 @@ static void gui_draw_equipment(GuiState* gs, Player* p) {
     gui_text_shadow("Worn Equipment", gs->panel_x + 8, oy, 12, GUI_TEXT_ORANGE);
     oy += 22;
 
-    /* OSRS paperdoll: 5 rows, 3-column layout centered in panel.
-       slot sizes scaled to fill panel width (320px - 16px padding = 304px). */
-    int gap = 6;
-    int sw = (gs->panel_w - 16 - gap * 2) / 3;  /* ~97px per slot */
-    int sh = (int)(sw * 0.75f);                    /* maintain ~4:3 aspect ratio (~73px) */
+    int gap = 5;
+    int sw = 42;
+    int sh = 36;
+    int max_sw = (gs->panel_w - 16 - gap * 2) / 3;
+    if (sw > max_sw) {
+        sw = max_sw;
+        sh = (int)(sw * 0.85f);
+    }
     int cx = gs->panel_x + gs->panel_w / 2;
     int r3_w = sw * 3 + gap * 2;
     int r3_x = cx - r3_w / 2;
@@ -1691,6 +1695,104 @@ static void gui_draw_equipment(GuiState* gs, Player* p) {
    grid is just the identity: position i maps to enum value i. */
 #define GUI_PRAYER_GRID_COUNT GUI_NUM_PRAYERS
 
+#define GUI_PRAYER_GRID_COLS 5
+#define GUI_PRAYER_CELL_PX 37
+#define GUI_SPELL_GRID_COLS 4
+#define GUI_SPELL_CELL_PX 36
+
+static int gui_fit_cell_size(int panel_w, int cols, int gap, int native_px) {
+    int fitted = (panel_w - 16 - gap * (cols - 1)) / cols;
+    return fitted < native_px ? fitted : native_px;
+}
+
+static void gui_prayer_grid_metrics(GuiState* gs, int* gx, int* gy, int* cell, int* gap) {
+    *gap = 2;
+    *cell = gui_fit_cell_size(gs->panel_w, GUI_PRAYER_GRID_COLS, *gap, GUI_PRAYER_CELL_PX);
+    int grid_w = GUI_PRAYER_GRID_COLS * *cell + (GUI_PRAYER_GRID_COLS - 1) * *gap;
+    *gx = gs->panel_x + (gs->panel_w - grid_w) / 2;
+    *gy = gui_content_y(gs) + 4 + 18 + 6;
+}
+
+static void gui_spell_grid_metrics(GuiState* gs, int* gx, int* gy, int* cell, int* gap) {
+    *gap = 6;
+    *cell = gui_fit_cell_size(gs->panel_w, GUI_SPELL_GRID_COLS, *gap, GUI_SPELL_CELL_PX);
+    int grid_w = GUI_SPELL_GRID_COLS * *cell + (GUI_SPELL_GRID_COLS - 1) * *gap;
+    *gx = gs->panel_x + (gs->panel_w - grid_w) / 2;
+    *gy = gui_content_y(gs) + 8;
+}
+
+typedef struct {
+    const char* names[4];
+    FightStyle values[4];
+    int count;
+} GuiCombatStyleOptions;
+
+static GuiCombatStyleOptions gui_combat_style_options(uint8_t weapon) {
+    GuiCombatStyleOptions out = {
+        .names = { "Accurate", "Aggressive", "Controlled", "Defensive" },
+        .values = {
+            FIGHT_STYLE_ACCURATE,
+            FIGHT_STYLE_AGGRESSIVE,
+            FIGHT_STYLE_CONTROLLED,
+            FIGHT_STYLE_DEFENSIVE,
+        },
+        .count = 4,
+    };
+
+    switch (weapon) {
+        case ITEM_TOXIC_BLOWPIPE:
+        case ITEM_ZARYTE_CROSSBOW:
+        case ITEM_TWISTED_BOW:
+            out.names[0] = "Accurate";
+            out.names[1] = "Rapid";
+            out.names[2] = "Longrange";
+            out.values[0] = FIGHT_STYLE_ACCURATE;
+            out.values[1] = FIGHT_STYLE_RAPID;
+            out.values[2] = FIGHT_STYLE_LONGRANGE;
+            out.count = 3;
+            break;
+        case ITEM_SCYTHE_OF_VITUR:
+            out.names[0] = "Chop";
+            out.names[1] = "Jab";
+            out.names[2] = "Block";
+            out.count = 3;
+            break;
+        case ITEM_SGS:
+            out.names[0] = "Chop";
+            out.names[1] = "Slash";
+            out.names[2] = "Smash";
+            out.names[3] = "Block";
+            break;
+        case ITEM_DRAGON_CLAWS:
+            out.names[0] = "Chop";
+            out.names[1] = "Slash";
+            out.names[2] = "Lunge";
+            out.names[3] = "Block";
+            break;
+        case ITEM_KODAI_WAND:
+            out.names[0] = "Autocast";
+            out.names[1] = "Defensive";
+            out.values[0] = FIGHT_STYLE_AUTOCAST;
+            out.values[1] = FIGHT_STYLE_DEFENSIVE_AUTOCAST;
+            out.count = 2;
+            break;
+        default:
+            break;
+    }
+
+    return out;
+}
+
+static int gui_autocast_spell(const Player* p) {
+    return p->autocast_spell == ENCOUNTER_SPELL_ICE
+        ? ENCOUNTER_SPELL_ICE
+        : ENCOUNTER_SPELL_BLOOD;
+}
+
+static const char* gui_autocast_spell_name(int spell) {
+    return spell == ENCOUNTER_SPELL_ICE ? "Ice Barrage" : "Blood Barrage";
+}
+
 /** Check if a prayer grid slot is currently active based on player state. */
 static int gui_prayer_is_active(GuiPrayerIdx pidx, Player* p) {
     switch (pidx) {
@@ -1722,13 +1824,10 @@ static void gui_draw_prayer(GuiState* gs, Player* p) {
                     bar_x + bar_w / 2 - 20, oy + 3, 10, GUI_TEXT_WHITE);
     oy += bar_h + 6;
 
-    /* 5-column grid of all 25 prayers.
-       OSRS native: 37x37 pitch, scaled to fill 320px panel (~60px cells). */
-    int cols = 5;
-    int gap = 2;
-    int icon_sz = (gs->panel_w - 16 - gap * (cols - 1)) / cols;  /* ~60px */
-    int grid_w = cols * icon_sz + (cols - 1) * gap;
-    int gx = gs->panel_x + (gs->panel_w - grid_w) / 2;
+    int cols = GUI_PRAYER_GRID_COLS;
+    int gap, icon_sz, gx, gy;
+    gui_prayer_grid_metrics(gs, &gx, &gy, &icon_sz, &gap);
+    oy = gy;
 
     for (int i = 0; i < GUI_PRAYER_GRID_COUNT; i++) {
         int col = i % cols;
@@ -1787,42 +1886,18 @@ static void gui_draw_combat(GuiState* gs, Player* p) {
         oy += 22;
     }
 
-    /* 4 attack style buttons (2x2 grid) scaled to fill panel width.
-       style names are weapon-specific in real OSRS (bow=Accurate/Rapid/Longrange,
-       scythe=Chop/Jab/Block, godsword=Chop/Slash/Smash/Block, etc.). */
-    const char* style_names[4] = { "Accurate", "Aggressive", "Controlled", "Defensive" };
-    int num_styles = 4;
-    switch (p->equipped[GEAR_SLOT_WEAPON]) {
-        case ITEM_TOXIC_BLOWPIPE:
-        case ITEM_ZARYTE_CROSSBOW:
-        case ITEM_TWISTED_BOW:
-            style_names[0] = "Accurate"; style_names[1] = "Rapid";
-            style_names[2] = "Longrange"; num_styles = 3; break;
-        case ITEM_SCYTHE_OF_VITUR:
-            style_names[0] = "Chop"; style_names[1] = "Jab";
-            style_names[2] = "Block"; num_styles = 3; break;
-        case ITEM_SGS:
-            style_names[0] = "Chop"; style_names[1] = "Slash";
-            style_names[2] = "Smash"; style_names[3] = "Block"; break;
-        case ITEM_DRAGON_CLAWS:
-            style_names[0] = "Chop"; style_names[1] = "Slash";
-            style_names[2] = "Lunge"; style_names[3] = "Block"; break;
-        case ITEM_KODAI_WAND:
-            style_names[0] = "Bash"; style_names[1] = "Pound";
-            style_names[2] = "Focus"; style_names[3] = "Block"; break;
-        default: break;
-    }
+    GuiCombatStyleOptions styles = gui_combat_style_options(p->equipped[GEAR_SLOT_WEAPON]);
     int btn_gap = 6;
     int btn_w = (gs->panel_w - 16 - btn_gap) / 2;
     int btn_h = 60;
 
-    for (int i = 0; i < num_styles; i++) {
+    for (int i = 0; i < styles.count; i++) {
         int col = i % 2;
         int row = i / 2;
         int bx = ox + col * (btn_w + btn_gap);
         int by = oy + row * (btn_h + btn_gap);
 
-        int active = ((int)p->fight_style == i);
+        int active = p->fight_style == styles.values[i];
 
         if (gs->slot_tile.id != 0) {
             Rectangle src = { 0, 0, (float)gs->slot_tile.width, (float)gs->slot_tile.height };
@@ -1835,10 +1910,46 @@ static void gui_draw_combat(GuiState* gs, Player* p) {
         DrawRectangleLines(bx, by, btn_w, btn_h, GUI_BORDER);
 
         Color txt_c = active ? GUI_TEXT_YELLOW : GUI_TEXT_WHITE;
-        int txt_w = MeasureText(style_names[i], 11);
-        gui_text_shadow(style_names[i], bx + btn_w / 2 - txt_w / 2, by + btn_h / 2 - 5, 11, txt_c);
+        int txt_w = MeasureText(styles.names[i], 11);
+        gui_text_shadow(styles.names[i], bx + btn_w / 2 - txt_w / 2, by + btn_h / 2 - 5, 11, txt_c);
     }
     oy += 2 * (btn_h + btn_gap) + 10;
+
+    if (p->equipped[GEAR_SLOT_WEAPON] == ITEM_KODAI_WAND) {
+        int ac_w = gs->panel_w - 16;
+        int ac_h = 26;
+        int spell = gui_autocast_spell(p);
+        const char* spell_name = gui_autocast_spell_name(spell);
+        if (gs->slot_tile.id != 0) {
+            Rectangle src = { 0, 0, (float)gs->slot_tile.width, (float)gs->slot_tile.height };
+            Rectangle dst = { (float)ox, (float)oy, (float)ac_w, (float)ac_h };
+            DrawTexturePro(gs->slot_tile, src, dst, (Vector2){0,0}, 0.0f, WHITE);
+        } else {
+            DrawRectangle(ox, oy, ac_w, ac_h, GUI_SPEC_DARK);
+        }
+        DrawRectangleLines(ox, oy, ac_w, ac_h,
+            p->autocast_enabled ? GUI_TEXT_YELLOW : GUI_BORDER);
+        gui_text_shadow(TextFormat("Autocast: %s", spell_name),
+            ox + 8, oy + 7, 10, p->autocast_enabled ? GUI_TEXT_YELLOW : GUI_TEXT_WHITE);
+        oy += ac_h + 6;
+
+        if (gs->autocast_selector_open) {
+            int sel_gap = 6;
+            int sel_w = (gs->panel_w - 16 - sel_gap) / 2;
+            const char* names[2] = { "Blood", "Ice" };
+            int spells[2] = { ENCOUNTER_SPELL_BLOOD, ENCOUNTER_SPELL_ICE };
+            for (int i = 0; i < 2; i++) {
+                int bx = ox + i * (sel_w + sel_gap);
+                Color c = spells[i] == spell ? GUI_TEXT_YELLOW : GUI_TEXT_WHITE;
+                DrawRectangle(bx, oy, sel_w, ac_h, GUI_SPEC_DARK);
+                DrawRectangleLines(bx, oy, sel_w, ac_h,
+                    spells[i] == spell ? GUI_TEXT_YELLOW : GUI_BORDER);
+                int tw = MeasureText(names[i], 10);
+                gui_text_shadow(names[i], bx + sel_w / 2 - tw / 2, oy + 7, 10, c);
+            }
+            oy += ac_h + 6;
+        }
+    }
 
     /* special attack bar — clickable. yellow border when spec is queued (OSRS-style). */
     Color spec_label_color = p->spec_armed ? GUI_TEXT_YELLOW : GUI_TEXT_WHITE;
@@ -1917,14 +2028,10 @@ static inline int gui_spell_castable(GuiSpellIdx s) {
 static void gui_draw_spellbook(GuiState* gs, Player* p) {
     int oy = gui_content_y(gs) + 8;
 
-    /* 4-column grid of all spells, scaled to fill panel width.
-       OSRS ancient spellbook native is ~26x26 icons. we scale up to match
-       the inventory cell size for visual consistency. */
-    int cols = 4;
-    int gap = 2;
-    int icon_sz = (gs->panel_w - 16 - gap * (cols - 1)) / cols;  /* ~76px */
-    int grid_w = cols * icon_sz + (cols - 1) * gap;
-    int gx = gs->panel_x + (gs->panel_w - grid_w) / 2;
+    int cols = GUI_SPELL_GRID_COLS;
+    int gap, icon_sz, gx, gy;
+    gui_spell_grid_metrics(gs, &gx, &gy, &icon_sz, &gap);
+    oy = gy;
 
     for (int i = 0; i < GUI_SPELL_GRID_COUNT; i++) {
         int col = i % cols;

@@ -318,46 +318,32 @@ static void execute_switches(OsrsEnv* env, int agent_idx, int* actions) {
     int overhead_action = actions[HEAD_OVERHEAD];
     int offensive_action = actions[HEAD_OFFENSIVE];
 
-    /* LMS restricts smite/redemption — clear those toggle actions before apply. */
+    /* LMS restricts smite/redemption. */
     if (env->is_lms &&
-        (overhead_action == ENCOUNTER_OVERHEAD_TOGGLE_SMITE ||
-         overhead_action == ENCOUNTER_OVERHEAD_TOGGLE_REDEMPTION)) {
+        (overhead_action == ENCOUNTER_OVERHEAD_SET_REFRESH_SMITE ||
+         overhead_action == ENCOUNTER_OVERHEAD_SET_REFRESH_REDEMPTION)) {
         overhead_action = ENCOUNTER_OVERHEAD_NO_CHANGE;
     }
-    /* agent cannot activate a prayer with 0 pp. toggle-off (when target already on)
-       is always allowed — but drain will clear it anyway. here we just block pure
-       activations. this is intentionally conservative: if current prayer matches target,
-       the toggle turns it off (allowed); otherwise we check pp. */
     if (p->current_prayer <= 0) {
-        /* disallow overhead activation when OOC */
-        if (overhead_action > 0) {
-            /* if toggle matches current (would deactivate) still allow */
-            int would_deactivate =
-                (overhead_action == ENCOUNTER_OVERHEAD_TOGGLE_MELEE     && p->prayer == PRAYER_PROTECT_MELEE)  ||
-                (overhead_action == ENCOUNTER_OVERHEAD_TOGGLE_RANGED    && p->prayer == PRAYER_PROTECT_RANGED) ||
-                (overhead_action == ENCOUNTER_OVERHEAD_TOGGLE_MAGIC     && p->prayer == PRAYER_PROTECT_MAGIC)  ||
-                (overhead_action == ENCOUNTER_OVERHEAD_TOGGLE_SMITE     && p->prayer == PRAYER_SMITE)          ||
-                (overhead_action == ENCOUNTER_OVERHEAD_TOGGLE_REDEMPTION && p->prayer == PRAYER_REDEMPTION);
-            if (!would_deactivate) overhead_action = ENCOUNTER_OVERHEAD_NO_CHANGE;
-        }
-        if (offensive_action > 0) {
-            int would_deactivate =
-                (offensive_action == ENCOUNTER_OFFENSIVE_TOGGLE_PIETY  && p->offensive_prayer == OFFENSIVE_PRAYER_PIETY)  ||
-                (offensive_action == ENCOUNTER_OFFENSIVE_TOGGLE_RIGOUR && p->offensive_prayer == OFFENSIVE_PRAYER_RIGOUR) ||
-                (offensive_action == ENCOUNTER_OFFENSIVE_TOGGLE_AUGURY && p->offensive_prayer == OFFENSIVE_PRAYER_AUGURY);
-            if (!would_deactivate) offensive_action = ENCOUNTER_OFFENSIVE_NO_CHANGE;
-        }
+        if (overhead_action >= ENCOUNTER_OVERHEAD_SET_REFRESH_MELEE)
+            overhead_action = ENCOUNTER_OVERHEAD_NO_CHANGE;
+        if (offensive_action >= ENCOUNTER_OFFENSIVE_SET_REFRESH_PIETY)
+            offensive_action = ENCOUNTER_OFFENSIVE_NO_CHANGE;
     }
 
     OverheadPrayer prev_prayer = p->prayer;
     OffensivePrayer prev_offensive = p->offensive_prayer;
+    int prayer_commanded =
+        overhead_action != ENCOUNTER_OVERHEAD_NO_CHANGE ||
+        offensive_action != ENCOUNTER_OFFENSIVE_NO_CHANGE;
     if (encounter_apply_overhead_action(&p->prayer, overhead_action)) {
         p->prayer_just_activated = 1;
     }
     if (encounter_apply_offensive_action(&p->offensive_prayer, offensive_action)) {
         p->offensive_prayer_just_activated = 1;
     }
-    if (p->prayer != prev_prayer || p->offensive_prayer != prev_offensive) p->clicks_this_tick++;
+    if (prayer_commanded || p->prayer != prev_prayer || p->offensive_prayer != prev_offensive)
+        p->clicks_this_tick++;
     int loadout_action = actions[HEAD_LOADOUT];
     int loadout_switches = apply_loadout(p, loadout_action);
     p->clicks_this_tick += loadout_switches;

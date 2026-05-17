@@ -399,6 +399,7 @@ def _wandb_eval_payload(flat_logs, agent_steps, env_name=None):
     for key, value in flat_logs.items():
         if key.startswith('env/'):
             payload[f'eval/{key[4:]}'] = value
+            payload[key] = value
     return _filter_wandb_payload(payload, env_name)
 
 def _resolve_checkpoint_load_path(args, load_path=None, allow_auto_latest=False,
@@ -670,6 +671,8 @@ def _train_body(env_name, args, sweep_obj=None, result_queue=None, verbose=False
 
         model_path = ''
         flat_logs = {}
+        last_log_was_eval = False
+        logged_eval_to_wandb = False
         train_epochs = int(total_timesteps // (args['vec']['total_agents'] * args['train']['horizon']))
         eval_epochs = train_epochs // 2
         for epoch in range(train_epochs + eval_epochs):
@@ -693,7 +696,9 @@ def _train_body(env_name, args, sweep_obj=None, result_queue=None, verbose=False
             if time.time() < pufferl.last_log_time + 0.6 and epoch < train_epochs - 1:
                 continue
 
-            logs = backend.eval_log(pufferl) if epoch >= train_epochs else backend.log(pufferl)
+            is_eval_epoch = epoch >= train_epochs
+            logs = backend.eval_log(pufferl) if is_eval_epoch else backend.log(pufferl)
+            last_log_was_eval = is_eval_epoch
             fresh_logs = dict(unroll_nested_dict(logs))
             flat_logs = {**flat_logs, **fresh_logs}
 
@@ -725,8 +730,16 @@ def _train_body(env_name, args, sweep_obj=None, result_queue=None, verbose=False
                             flat_logs, pufferl.global_step, args['env_name']),
                         step=pufferl.global_step,
                     )
+                    logged_eval_to_wandb = True
                 break
 
+
+        if args['wandb'] and last_log_was_eval and not logged_eval_to_wandb:
+            wandb.log(
+                _wandb_eval_payload(
+                    flat_logs, pufferl.global_step, args['env_name']),
+                step=pufferl.global_step,
+            )
 
         print_dashboard(args, model_size, flat_logs)
         backend.close(pufferl)

@@ -86,6 +86,17 @@ pybind11::dict puf_log(pybind11::object pufferl_obj) {
         if (i >= PROF_TRAIN_MISC) train_total += sec;
     }
     perf_dict["train"] = train_total;
+    if (inferno_env_profile_count &&
+            inferno_env_profile_name &&
+            inferno_env_profile_read_reset_ms) {
+        int profile_count = inferno_env_profile_count();
+        for (int i = 0; i < profile_count; i++) {
+            const char* name = inferno_env_profile_name(i);
+            double ms = inferno_env_profile_read_reset_ms(i);
+            std::string key = std::string("inferno_") + name;
+            perf_dict[pybind11::str(key)] = ms / 1000.0;
+        }
+    }
     memset(pufferl.profile.accum, 0, sizeof(pufferl.profile.accum));
     result["perf"] = perf_dict;
 

@@ -155,8 +155,8 @@ static const int ZUL_POSITIONS[ZUL_NUM_POSITIONS][2] = {
 
 #define ZUL_MOVE_DIM      ENCOUNTER_MOVE_ACTIONS
 #define ZUL_ATTACK_DIM    3
-#define ZUL_PRAYER_DIM    ENCOUNTER_OVERHEAD_DIM_PVE   /* 4: no_change, toggle_melee/ranged/magic */
-#define ZUL_OFFENSIVE_DIM ENCOUNTER_OFFENSIVE_DIM      /* 4: no_change, toggle_piety/rigour/augury */
+#define ZUL_PRAYER_DIM    ENCOUNTER_OVERHEAD_DIM_PVE   /* no_change, off, set_refresh_melee/ranged/magic */
+#define ZUL_OFFENSIVE_DIM ENCOUNTER_OFFENSIVE_DIM      /* no_change, off, set_refresh_piety/rigour/augury */
 #define ZUL_FOOD_DIM      3   /* none, shark, karambwan */
 #define ZUL_POTION_DIM    3   /* none, restore, antivenom */
 #define ZUL_SPEC_DIM      2
@@ -1740,11 +1740,11 @@ static void zul_write_mask(EncounterState* state, float* mask) {
             mask[off] = 0.0f;
         off++;
     }
-    /* overhead prayer: 0=no_change always valid, 1-3=toggle_melee/ranged/magic
-       require prayer points (deactivation also needs pp>0 because activations
-       are what cost — if pp=0 all prayers auto-clear anyway). */
+    /* overhead prayer: no_change, off, set_refresh_melee/ranged/magic. */
     for (int p = 0; p < ZUL_PRAYER_DIM; p++) {
-        if (p >= ENCOUNTER_OVERHEAD_TOGGLE_MELEE && s->player.current_prayer <= 0)
+        if (p == ENCOUNTER_OVERHEAD_OFF && s->player.prayer == PRAYER_NONE)
+            mask[off] = 0.0f;
+        if (p >= ENCOUNTER_OVERHEAD_SET_REFRESH_MELEE && s->player.current_prayer <= 0)
             mask[off] = 0.0f;
         off++;
     }
@@ -1781,10 +1781,12 @@ static void zul_write_mask(EncounterState* state, float* mask) {
             mask[off] = 0.0f;  /* weapon has no spec */
     }
     off++;
-    /* offensive prayer: 0=no_change always valid, 1-3=toggle_piety/rigour/augury
-       require prayer points. */
+    /* offensive prayer: no_change, off, set_refresh_piety/rigour/augury. */
     for (int o = 0; o < ZUL_OFFENSIVE_DIM; o++) {
-        if (o >= ENCOUNTER_OFFENSIVE_TOGGLE_PIETY && s->player.current_prayer <= 0)
+        if (o == ENCOUNTER_OFFENSIVE_OFF &&
+                s->player.offensive_prayer == OFFENSIVE_PRAYER_NONE)
+            mask[off] = 0.0f;
+        if (o >= ENCOUNTER_OFFENSIVE_SET_REFRESH_PIETY && s->player.current_prayer <= 0)
             mask[off] = 0.0f;
         off++;
     }
@@ -2029,7 +2031,8 @@ static void zul_step(EncounterState* state, const int* actions) {
        drain can clear offensive_prayer at pp<=0; refresh mage/range caches
        afterwards so subsequent attacks don't use stale prayer-boosted stats. */
     OffensivePrayer prev_off_drain = s->player.offensive_prayer;
-    encounter_drain_all_prayers(&s->player, 0);
+    encounter_drain_all_prayers(
+        &s->player, encounter_player_prayer_bonus(&s->player));
     if (s->player.offensive_prayer != prev_off_drain) {
         if (s->mage_stats.style == ATTACK_STYLE_MAGIC) {
             encounter_update_loadout_level(&s->mage_stats, s->player.offensive_prayer,
@@ -2063,22 +2066,20 @@ static void zul_heuristic_actions(ZulrahState* s, int* actions) {
     int hp = s->player.current_hitpoints;
 
     /* prayer: match form. GREEN=ranged, BLUE=magic, RED=melee.
-       heuristic picks target-prayer; toggle semantic means if target is already
-       on this call is a no-op (since actual state == target), and if wrong one
-       was on it replaces. only emit if player isn't already on target. */
+       heuristic picks target-prayer and only emits when the slot must change. */
     if (s->zulrah_visible && !s->is_diving) {
         switch (s->current_form) {
             case ZUL_FORM_GREEN:
                 if (s->player.prayer != PRAYER_PROTECT_RANGED)
-                    actions[ZUL_HEAD_PRAYER] = ENCOUNTER_OVERHEAD_TOGGLE_RANGED;
+                    actions[ZUL_HEAD_PRAYER] = ENCOUNTER_OVERHEAD_SET_REFRESH_RANGED;
                 break;
             case ZUL_FORM_BLUE:
                 if (s->player.prayer != PRAYER_PROTECT_MAGIC)
-                    actions[ZUL_HEAD_PRAYER] = ENCOUNTER_OVERHEAD_TOGGLE_MAGIC;
+                    actions[ZUL_HEAD_PRAYER] = ENCOUNTER_OVERHEAD_SET_REFRESH_MAGIC;
                 break;
             case ZUL_FORM_RED:
                 if (s->player.prayer != PRAYER_PROTECT_MELEE)
-                    actions[ZUL_HEAD_PRAYER] = ENCOUNTER_OVERHEAD_TOGGLE_MELEE;
+                    actions[ZUL_HEAD_PRAYER] = ENCOUNTER_OVERHEAD_SET_REFRESH_MELEE;
                 break;
         }
         /* offensive prayer: match attack style. green/blue use mage/ranged → piety is wrong.
@@ -2089,11 +2090,11 @@ static void zul_heuristic_actions(ZulrahState* s, int* actions) {
         else if (s->current_form == ZUL_FORM_RED) target_off = OFFENSIVE_PRAYER_PIETY;
         if (target_off != OFFENSIVE_PRAYER_NONE && s->player.offensive_prayer != target_off) {
             if (target_off == OFFENSIVE_PRAYER_AUGURY)
-                actions[ZUL_HEAD_OFFENSIVE] = ENCOUNTER_OFFENSIVE_TOGGLE_AUGURY;
+                actions[ZUL_HEAD_OFFENSIVE] = ENCOUNTER_OFFENSIVE_SET_REFRESH_AUGURY;
             else if (target_off == OFFENSIVE_PRAYER_RIGOUR)
-                actions[ZUL_HEAD_OFFENSIVE] = ENCOUNTER_OFFENSIVE_TOGGLE_RIGOUR;
+                actions[ZUL_HEAD_OFFENSIVE] = ENCOUNTER_OFFENSIVE_SET_REFRESH_RIGOUR;
             else if (target_off == OFFENSIVE_PRAYER_PIETY)
-                actions[ZUL_HEAD_OFFENSIVE] = ENCOUNTER_OFFENSIVE_TOGGLE_PIETY;
+                actions[ZUL_HEAD_OFFENSIVE] = ENCOUNTER_OFFENSIVE_SET_REFRESH_PIETY;
         }
     }
 
@@ -2417,6 +2418,7 @@ static void zul_translate_human_commands(HumanInput* hi, int* actions, ZulrahSta
                 break;
             case HUMAN_COMMAND_EQUIP_INVENTORY_ITEM:
             case HUMAN_COMMAND_FIGHT_STYLE:
+            case HUMAN_COMMAND_SET_AUTOCAST:
             case HUMAN_COMMAND_NONE:
                 break;
         }

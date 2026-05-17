@@ -5,7 +5,13 @@
 #ifndef OSRS_RENDER_CLICK_HULL_H
 #define OSRS_RENDER_CLICK_HULL_H
 
+#if __has_include("raylib.h")
 #include "raylib.h"
+#elif __has_include("raylib-5.5_macos/include/raylib.h")
+#include "raylib-5.5_macos/include/raylib.h"
+#else
+#error "raylib.h not found"
+#endif
 #include "osrs_encounter.h"
 
 #define RENDER_CLICKBOX_PRISM_SIDE_COUNT 6

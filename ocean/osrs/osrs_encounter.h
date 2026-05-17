@@ -13,9 +13,9 @@
  *     encounter_resolve_attack_target() match npc_slot to render entity index
  *     EncounterOverlay                 visual overlay (hazards, projectiles, boss)
  *
- *   prayer (toggle-semantic, matches real OSRS click behavior):
- *     ENCOUNTER_OVERHEAD_*                canonical overhead action encoding (4/6 dim)
- *     ENCOUNTER_OFFENSIVE_*               canonical offensive action encoding (4 dim)
+ *   prayer (set/refresh semantic for RL tick commands):
+ *     ENCOUNTER_OVERHEAD_*                canonical overhead action encoding (5/7 dim)
+ *     ENCOUNTER_OFFENSIVE_*               canonical offensive action encoding (5 dim)
  *     encounter_apply_overhead_action()   apply overhead action, returns 1 on activation
  *     encounter_apply_offensive_action()  apply offensive action, returns 1 on activation
  *     encounter_drain_all_prayers()       drain both slots per tick (activation-tick skip)
@@ -320,6 +320,34 @@ typedef enum {
     RENDER_ENTITY_FACE_DEST_TILE = 2,
 } RenderEntityFacingMode;
 
+static inline int render_entity_find_previous_identity_index(
+    const RenderEntity* previous,
+    int previous_count,
+    const int* previous_used,
+    const RenderEntity* entity
+) {
+    if (entity->entity_type == ENTITY_PLAYER) {
+        if (previous_count > 0 && previous[0].entity_type == ENTITY_PLAYER &&
+                !previous_used[0]) {
+            return 0;
+        }
+        return -1;
+    }
+
+    if (entity->entity_type != ENTITY_NPC || entity->npc_slot < 0)
+        return -1;
+
+    for (int i = 0; i < previous_count; i++) {
+        if (previous_used[i]) continue;
+        if (previous[i].entity_type == ENTITY_NPC &&
+                previous[i].npc_slot == entity->npc_slot &&
+                previous[i].npc_def_id == entity->npc_def_id) {
+            return i;
+        }
+    }
+    return -1;
+}
+
 static inline RenderEntityFacingMode render_entity_select_facing_mode(
     const RenderEntity* entity, int moved
 ) {
@@ -381,15 +409,13 @@ static inline void encounter_resolve_attack_target(
         }
     }
 }
-/* canonical prayer action encoding (toggle semantics, matches OSRS)         */
+/* canonical prayer action encoding for simulator tick commands              */
 /*                                                                           */
-/* real OSRS has no "turn off" button — clicking an active prayer icon       */
-/* toggles it off. clicking a different prayer in the same slot replaces it. */
-/* our encoding mirrors that exactly: agent action either no-ops or targets  */
-/* a specific prayer; target-already-active → off, otherwise activate.       */
+/* the RL action space uses explicit no_change, off, and set_refresh actions.*/
+/* human UI clicks translate OSRS click-toggle behavior into those commands. */
 /*                                                                           */
 /* each encounter chooses its action-head dim based on which prayers it      */
-/* exposes — PvE uses 4 (no smite/redemption), PvP uses 6. new encounters    */
+/* exposes — PvE uses 5 (no smite/redemption), PvP uses 7. new encounters    */
 /* wire up by:                                                               */
 /*   1. declaring two action heads with encounter_overhead_dim /             */
 /*      ENCOUNTER_OFFENSIVE_DIM                                              */
@@ -398,62 +424,64 @@ static inline void encounter_resolve_attack_target(
 /*   4. calling encounter_drain_all_prayers() on pretick (handles both slots */
 /*      + activation-tick skip + pp=0 auto-clear)                            */
 /* overhead action encoding. dim depends on encounter:
-   - PvE (inferno/zulrah): 4 dim, actions 0-3 only
-   - PvP: 6 dim, full range */
-#define ENCOUNTER_OVERHEAD_NO_CHANGE          0
-#define ENCOUNTER_OVERHEAD_TOGGLE_MELEE       1
-#define ENCOUNTER_OVERHEAD_TOGGLE_RANGED      2
-#define ENCOUNTER_OVERHEAD_TOGGLE_MAGIC       3
-#define ENCOUNTER_OVERHEAD_TOGGLE_SMITE       4
-#define ENCOUNTER_OVERHEAD_TOGGLE_REDEMPTION  5
-#define ENCOUNTER_OVERHEAD_DIM_PVE            4
-#define ENCOUNTER_OVERHEAD_DIM_PVP            6
+   - PvE (inferno/zulrah): 5 dim, actions 0-4 only
+   - PvP: 7 dim, full range */
+#define ENCOUNTER_OVERHEAD_NO_CHANGE                    0
+#define ENCOUNTER_OVERHEAD_OFF                          1
+#define ENCOUNTER_OVERHEAD_SET_REFRESH_MELEE            2
+#define ENCOUNTER_OVERHEAD_SET_REFRESH_RANGED           3
+#define ENCOUNTER_OVERHEAD_SET_REFRESH_MAGIC            4
+#define ENCOUNTER_OVERHEAD_SET_REFRESH_SMITE            5
+#define ENCOUNTER_OVERHEAD_SET_REFRESH_REDEMPTION       6
+#define ENCOUNTER_OVERHEAD_DIM_PVE                      5
+#define ENCOUNTER_OVERHEAD_DIM_PVP                      7
 
-/* offensive action encoding — 4 dim, shared by all encounters. */
-#define ENCOUNTER_OFFENSIVE_NO_CHANGE         0
-#define ENCOUNTER_OFFENSIVE_TOGGLE_PIETY      1
-#define ENCOUNTER_OFFENSIVE_TOGGLE_RIGOUR     2
-#define ENCOUNTER_OFFENSIVE_TOGGLE_AUGURY     3
-#define ENCOUNTER_OFFENSIVE_DIM               4
+/* offensive action encoding — 5 dim, shared by all encounters. */
+#define ENCOUNTER_OFFENSIVE_NO_CHANGE                   0
+#define ENCOUNTER_OFFENSIVE_OFF                         1
+#define ENCOUNTER_OFFENSIVE_SET_REFRESH_PIETY           2
+#define ENCOUNTER_OFFENSIVE_SET_REFRESH_RIGOUR          3
+#define ENCOUNTER_OFFENSIVE_SET_REFRESH_AUGURY          4
+#define ENCOUNTER_OFFENSIVE_DIM                         5
 
-/** apply an overhead prayer action with toggle semantics.
-    target-already-active → set to PRAYER_NONE (toggle off).
-    target-not-active → activate target (replacing whatever was in the slot).
-    returns 1 on OFF→ON transition (caller should set prayer_just_activated),
-    0 on no-op, toggle-off, or replace. */
+/** apply an overhead prayer action with set/refresh semantics.
+    set/refresh leaves target active and marks the slot newly activated.
+    off clears the slot. no_change preserves state and drains normally. */
 static inline int encounter_apply_overhead_action(OverheadPrayer* overhead, int action) {
     OverheadPrayer target;
     switch (action) {
-        case ENCOUNTER_OVERHEAD_NO_CHANGE:          return 0;
-        case ENCOUNTER_OVERHEAD_TOGGLE_MELEE:       target = PRAYER_PROTECT_MELEE;  break;
-        case ENCOUNTER_OVERHEAD_TOGGLE_RANGED:      target = PRAYER_PROTECT_RANGED; break;
-        case ENCOUNTER_OVERHEAD_TOGGLE_MAGIC:       target = PRAYER_PROTECT_MAGIC;  break;
-        case ENCOUNTER_OVERHEAD_TOGGLE_SMITE:       target = PRAYER_SMITE;          break;
-        case ENCOUNTER_OVERHEAD_TOGGLE_REDEMPTION:  target = PRAYER_REDEMPTION;     break;
+        case ENCOUNTER_OVERHEAD_NO_CHANGE:
+            return 0;
+        case ENCOUNTER_OVERHEAD_OFF:
+            *overhead = PRAYER_NONE;
+            return 0;
+        case ENCOUNTER_OVERHEAD_SET_REFRESH_MELEE:       target = PRAYER_PROTECT_MELEE;  break;
+        case ENCOUNTER_OVERHEAD_SET_REFRESH_RANGED:      target = PRAYER_PROTECT_RANGED; break;
+        case ENCOUNTER_OVERHEAD_SET_REFRESH_MAGIC:       target = PRAYER_PROTECT_MAGIC;  break;
+        case ENCOUNTER_OVERHEAD_SET_REFRESH_SMITE:       target = PRAYER_SMITE;          break;
+        case ENCOUNTER_OVERHEAD_SET_REFRESH_REDEMPTION:  target = PRAYER_REDEMPTION;     break;
         default: return 0;
     }
-    if (*overhead == target) { *overhead = PRAYER_NONE; return 0; }
-    int activating = (*overhead == PRAYER_NONE) ? 1 : 0;
     *overhead = target;
-    return activating;
+    return 1;
 }
 
-/** apply an offensive prayer action with toggle semantics.
-    same rules as overhead: target-active → off, target-inactive → activate.
-    returns 1 on OFF→ON transition, 0 otherwise. */
+/** apply an offensive prayer action with set/refresh semantics. */
 static inline int encounter_apply_offensive_action(OffensivePrayer* offensive, int action) {
     OffensivePrayer target;
     switch (action) {
-        case ENCOUNTER_OFFENSIVE_NO_CHANGE:       return 0;
-        case ENCOUNTER_OFFENSIVE_TOGGLE_PIETY:    target = OFFENSIVE_PRAYER_PIETY;  break;
-        case ENCOUNTER_OFFENSIVE_TOGGLE_RIGOUR:   target = OFFENSIVE_PRAYER_RIGOUR; break;
-        case ENCOUNTER_OFFENSIVE_TOGGLE_AUGURY:   target = OFFENSIVE_PRAYER_AUGURY; break;
+        case ENCOUNTER_OFFENSIVE_NO_CHANGE:
+            return 0;
+        case ENCOUNTER_OFFENSIVE_OFF:
+            *offensive = OFFENSIVE_PRAYER_NONE;
+            return 0;
+        case ENCOUNTER_OFFENSIVE_SET_REFRESH_PIETY:    target = OFFENSIVE_PRAYER_PIETY;  break;
+        case ENCOUNTER_OFFENSIVE_SET_REFRESH_RIGOUR:   target = OFFENSIVE_PRAYER_RIGOUR; break;
+        case ENCOUNTER_OFFENSIVE_SET_REFRESH_AUGURY:   target = OFFENSIVE_PRAYER_AUGURY; break;
         default: return 0;
     }
-    if (*offensive == target) { *offensive = OFFENSIVE_PRAYER_NONE; return 0; }
-    int activating = (*offensive == OFFENSIVE_PRAYER_NONE) ? 1 : 0;
     *offensive = target;
-    return activating;
+    return 1;
 }
 
 
@@ -1408,6 +1436,12 @@ static inline int encounter_offensive_drain_effect(OffensivePrayer prayer) {
         case OFFENSIVE_PRAYER_MAGIC_LOW:   return 6;
         default: return 0;
     }
+}
+
+static inline int encounter_player_prayer_bonus(const Player* p) {
+    EquipmentBonuses bonuses;
+    osrs_sum_equipment_bonuses(p->equipped, &bonuses);
+    return bonuses.prayer;
 }
 
 /** drain both overhead and offensive prayer for one tick.

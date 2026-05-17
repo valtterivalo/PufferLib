@@ -29,6 +29,7 @@ typedef enum {
     HUMAN_COMMAND_SPEC_TOGGLE,
     HUMAN_COMMAND_EQUIP_INVENTORY_ITEM,
     HUMAN_COMMAND_FIGHT_STYLE,
+    HUMAN_COMMAND_SET_AUTOCAST,
 } HumanCommandKind;
 
 typedef struct {
@@ -44,6 +45,8 @@ typedef struct {
     int item_db_idx;
     int gear_slot;
     int fight_style;
+    int autocast_spell;
+    int autocast_defensive;
 } HumanCommand;
 
 typedef struct {
@@ -60,8 +63,8 @@ typedef struct HumanInput {
     /* semantic action staging (set by clicks, consumed at tick boundary) */
     int pending_move_x, pending_move_y;   /* world tile coords, -1 = none */
     int pending_attack;                    /* 1 = attack target entity */
-    int pending_prayer;                    /* OverheadAction value, -1 = no change */
-    int pending_offensive_prayer;          /* 0=none, 1=piety, 2=rigour, 3=augury, -1=no change */
+    int pending_prayer;                    /* ENCOUNTER_OVERHEAD_* value, -1 = no change */
+    int pending_offensive_prayer;          /* ENCOUNTER_OFFENSIVE_* value, -1 = no change */
     int pending_food;                      /* 1 = eat food */
     int pending_karambwan;                 /* 1 = eat karambwan */
     int pending_potion;                    /* PotionAction-style intent, 0 = none */
@@ -216,6 +219,18 @@ static inline void human_input_queue_fight_style(HumanInput* hi, int fight_style
     human_input_queue_command(hi, (HumanCommand){
         .kind = HUMAN_COMMAND_FIGHT_STYLE,
         .fight_style = fight_style,
+    });
+}
+
+static inline void human_input_queue_set_autocast(
+    HumanInput* hi,
+    int autocast_spell,
+    int autocast_defensive
+) {
+    human_input_queue_command(hi, (HumanCommand){
+        .kind = HUMAN_COMMAND_SET_AUTOCAST,
+        .autocast_spell = autocast_spell,
+        .autocast_defensive = autocast_defensive,
     });
 }
 

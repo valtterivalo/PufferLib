@@ -132,6 +132,14 @@ static void human_handle_ground_click(HumanInput* hi,
                               can_attack_entity, can_attack_ctx);
 }
 
+static int human_overhead_click_action(const Player* p, OverheadPrayer target, int set_refresh_action) {
+    return p->prayer == target ? ENCOUNTER_OVERHEAD_OFF : set_refresh_action;
+}
+
+static int human_offensive_click_action(const Player* p, OffensivePrayer target, int set_refresh_action) {
+    return p->offensive_prayer == target ? ENCOUNTER_OFFENSIVE_OFF : set_refresh_action;
+}
+
 /** Handle prayer icon click. Hit-tests the 5-col prayer grid.
     Reuses the same layout math as gui_draw_prayer(). */
 static void human_handle_prayer_click(HumanInput* hi, GuiState* gs, Player* p,
@@ -141,11 +149,10 @@ static void human_handle_prayer_click(HumanInput* hi, GuiState* gs, Player* p,
     int bar_h = 18;
     oy += bar_h + 6;
 
-    int cols = 5;
-    int gap = 2;
-    int icon_sz = (gs->panel_w - 16 - gap * (cols - 1)) / cols;
-    int grid_w = cols * icon_sz + (cols - 1) * gap;
-    int gx = gs->panel_x + (gs->panel_w - grid_w) / 2;
+    int cols = GUI_PRAYER_GRID_COLS;
+    int gap, icon_sz, gx, gy;
+    gui_prayer_grid_metrics(gs, &gx, &gy, &icon_sz, &gap);
+    oy = gy;
 
     /* hit-test: which cell was clicked? */
     if (mouse_x < gx || mouse_y < oy) return;
@@ -162,41 +169,47 @@ static void human_handle_prayer_click(HumanInput* hi, GuiState* gs, Player* p,
     if (mouse_x > cell_x + icon_sz || mouse_y > cell_y + icon_sz) return;
 
     GuiPrayerIdx pidx = (GuiPrayerIdx)idx;
-    (void)p;  /* current-state check no longer needed — toggle is handled by env */
 
-    /* emit toggle actions directly (new ENCOUNTER_OVERHEAD_* / ENCOUNTER_OFFENSIVE_* encoding).
-       the env handles the target-already-active → off transition. */
+    /* UI clicks preserve OSRS toggle behavior, while the sim receives explicit set/off commands. */
     switch (pidx) {
         case GUI_PRAY_PROTECT_MAGIC:
-            hi->pending_prayer = ENCOUNTER_OVERHEAD_TOGGLE_MAGIC;
+            hi->pending_prayer = human_overhead_click_action(
+                p, PRAYER_PROTECT_MAGIC, ENCOUNTER_OVERHEAD_SET_REFRESH_MAGIC);
             human_input_queue_overhead_prayer(hi, hi->pending_prayer);
             break;
         case GUI_PRAY_PROTECT_MISSILES:
-            hi->pending_prayer = ENCOUNTER_OVERHEAD_TOGGLE_RANGED;
+            hi->pending_prayer = human_overhead_click_action(
+                p, PRAYER_PROTECT_RANGED, ENCOUNTER_OVERHEAD_SET_REFRESH_RANGED);
             human_input_queue_overhead_prayer(hi, hi->pending_prayer);
             break;
         case GUI_PRAY_PROTECT_MELEE:
-            hi->pending_prayer = ENCOUNTER_OVERHEAD_TOGGLE_MELEE;
+            hi->pending_prayer = human_overhead_click_action(
+                p, PRAYER_PROTECT_MELEE, ENCOUNTER_OVERHEAD_SET_REFRESH_MELEE);
             human_input_queue_overhead_prayer(hi, hi->pending_prayer);
             break;
         case GUI_PRAY_SMITE:
-            hi->pending_prayer = ENCOUNTER_OVERHEAD_TOGGLE_SMITE;
+            hi->pending_prayer = human_overhead_click_action(
+                p, PRAYER_SMITE, ENCOUNTER_OVERHEAD_SET_REFRESH_SMITE);
             human_input_queue_overhead_prayer(hi, hi->pending_prayer);
             break;
         case GUI_PRAY_REDEMPTION:
-            hi->pending_prayer = ENCOUNTER_OVERHEAD_TOGGLE_REDEMPTION;
+            hi->pending_prayer = human_overhead_click_action(
+                p, PRAYER_REDEMPTION, ENCOUNTER_OVERHEAD_SET_REFRESH_REDEMPTION);
             human_input_queue_overhead_prayer(hi, hi->pending_prayer);
             break;
         case GUI_PRAY_PIETY:
-            hi->pending_offensive_prayer = ENCOUNTER_OFFENSIVE_TOGGLE_PIETY;
+            hi->pending_offensive_prayer = human_offensive_click_action(
+                p, OFFENSIVE_PRAYER_PIETY, ENCOUNTER_OFFENSIVE_SET_REFRESH_PIETY);
             human_input_queue_offensive_prayer(hi, hi->pending_offensive_prayer);
             break;
         case GUI_PRAY_RIGOUR:
-            hi->pending_offensive_prayer = ENCOUNTER_OFFENSIVE_TOGGLE_RIGOUR;
+            hi->pending_offensive_prayer = human_offensive_click_action(
+                p, OFFENSIVE_PRAYER_RIGOUR, ENCOUNTER_OFFENSIVE_SET_REFRESH_RIGOUR);
             human_input_queue_offensive_prayer(hi, hi->pending_offensive_prayer);
             break;
         case GUI_PRAY_AUGURY:
-            hi->pending_offensive_prayer = ENCOUNTER_OFFENSIVE_TOGGLE_AUGURY;
+            hi->pending_offensive_prayer = human_offensive_click_action(
+                p, OFFENSIVE_PRAYER_AUGURY, ENCOUNTER_OFFENSIVE_SET_REFRESH_AUGURY);
             human_input_queue_offensive_prayer(hi, hi->pending_offensive_prayer);
             break;
         default:
@@ -209,11 +222,10 @@ static void human_handle_prayer_click(HumanInput* hi, GuiState* gs, Player* p,
 static void human_handle_spell_click(HumanInput* hi, GuiState* gs,
                                       int mouse_x, int mouse_y) {
     int oy = gui_content_y(gs) + 8;
-    int cols = 4;
-    int gap = 2;
-    int icon_sz = (gs->panel_w - 16 - gap * (cols - 1)) / cols;
-    int grid_w = cols * icon_sz + (cols - 1) * gap;
-    int gx = gs->panel_x + (gs->panel_w - grid_w) / 2;
+    int cols = GUI_SPELL_GRID_COLS;
+    int gap, icon_sz, gx, gy;
+    gui_spell_grid_metrics(gs, &gx, &gy, &icon_sz, &gap);
+    oy = gy;
 
     if (mouse_x < gx || mouse_y < oy) return;
     int col = (mouse_x - gx) / (icon_sz + gap);
@@ -260,12 +272,12 @@ static void human_handle_combat_click(HumanInput* hi, GuiState* gs, Player* p,
     Texture2D wpn_tex = gui_get_item_sprite(gs, p->equipped[GEAR_SLOT_WEAPON]);
     oy += (wpn_tex.id != 0) ? 60 : 22;
 
-    /* 2x2 fight style buttons */
+    GuiCombatStyleOptions styles = gui_combat_style_options(p->equipped[GEAR_SLOT_WEAPON]);
     int btn_gap = 6;
     int btn_w = (gs->panel_w - 16 - btn_gap) / 2;
     int btn_h = 60;
 
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < styles.count; i++) {
         int col = i % 2;
         int row = i / 2;
         int bx = ox + col * (btn_w + btn_gap);
@@ -273,13 +285,61 @@ static void human_handle_combat_click(HumanInput* hi, GuiState* gs, Player* p,
         if (mouse_x >= bx && mouse_x < bx + btn_w &&
             mouse_y >= by && mouse_y < by + btn_h) {
             if (hi->enabled)
-                human_input_queue_fight_style(hi, i);
+                human_input_queue_fight_style(hi, styles.values[i]);
             else
-                p->fight_style = (FightStyle)i;
+                p->fight_style = styles.values[i];
+            if (styles.values[i] == FIGHT_STYLE_AUTOCAST ||
+                    styles.values[i] == FIGHT_STYLE_DEFENSIVE_AUTOCAST) {
+                int defensive = styles.values[i] == FIGHT_STYLE_DEFENSIVE_AUTOCAST;
+                if (hi->enabled)
+                    human_input_queue_set_autocast(
+                        hi,
+                        gui_autocast_spell(p),
+                        defensive);
+                else {
+                    p->autocast_enabled = 1;
+                    p->autocast_defensive = defensive;
+                }
+            }
             return;
         }
     }
     oy += 2 * (btn_h + btn_gap) + 10;
+
+    if (p->equipped[GEAR_SLOT_WEAPON] == ITEM_KODAI_WAND) {
+        int ac_w = gs->panel_w - 16;
+        int ac_h = 26;
+        if (mouse_x >= ox && mouse_x < ox + ac_w &&
+                mouse_y >= oy && mouse_y < oy + ac_h) {
+            gs->autocast_selector_open = !gs->autocast_selector_open;
+            return;
+        }
+        oy += ac_h + 6;
+
+        if (gs->autocast_selector_open) {
+            int sel_gap = 6;
+            int sel_w = (gs->panel_w - 16 - sel_gap) / 2;
+            int spells[2] = { ENCOUNTER_SPELL_BLOOD, ENCOUNTER_SPELL_ICE };
+            for (int i = 0; i < 2; i++) {
+                int bx = ox + i * (sel_w + sel_gap);
+                if (mouse_x >= bx && mouse_x < bx + sel_w &&
+                        mouse_y >= oy && mouse_y < oy + ac_h) {
+                    int defensive = p->fight_style == FIGHT_STYLE_DEFENSIVE_AUTOCAST ||
+                        p->autocast_defensive;
+                    if (hi->enabled) {
+                        human_input_queue_set_autocast(hi, spells[i], defensive);
+                    } else {
+                        p->autocast_enabled = 1;
+                        p->autocast_defensive = defensive;
+                        p->autocast_spell = spells[i];
+                    }
+                    gs->autocast_selector_open = 0;
+                    return;
+                }
+            }
+            oy += ac_h + 6;
+        }
+    }
 
     /* skip "Special Attack" label */
     oy += 16;

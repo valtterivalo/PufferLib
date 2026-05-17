@@ -14,12 +14,106 @@
 #include <errno.h>
 #include <limits.h>
 #include <sys/stat.h>
+#include <time.h>
 
 #include "osrs_env.h"  /* pulls in osrs_types, encounter, pvp stack */
 #include "replay_best.h"
 #include "src/archive.h"
 #include "src/demostore.h"
 #include "src/phase2_curriculum.h"
+
+typedef enum {
+    INF_PROF_C_STEP_TOTAL = 0,
+    INF_PROF_C_ACTIONS,
+    INF_PROF_C_PRE_STEP_TRACES,
+    INF_PROF_C_ENCOUNTER_STEP,
+    INF_PROF_C_WRITE_OBS,
+    INF_PROF_C_WRITE_MASK,
+    INF_PROF_C_REWARD_TERMINAL,
+    INF_PROF_C_POST_STEP_TRACES,
+    INF_PROF_C_TERMINAL_LOG,
+    INF_PROF_C_RESET,
+    INF_PROF_OBS_PREFIX,
+    INF_PROF_OBS_REFRESH_SLOTS,
+    INF_PROF_OBS_NPC_SLOTS,
+    INF_PROF_OBS_FORECAST,
+    INF_PROF_OBS_PENDING_HITS,
+    INF_PROF_OBS_SPARKS,
+    INF_PROF_COUNT,
+} InfernoProfileSlot;
+
+static int g_inferno_profile_enabled = -1;
+static double g_inferno_profile_ms[INF_PROF_COUNT];
+
+static const char* g_inferno_profile_names[INF_PROF_COUNT] = {
+    "c_step_total",
+    "c_actions",
+    "c_pre_step_traces",
+    "c_encounter_step",
+    "c_write_obs",
+    "c_write_mask",
+    "c_reward_terminal",
+    "c_post_step_traces",
+    "c_terminal_log",
+    "c_reset",
+    "obs_prefix",
+    "obs_refresh_slots",
+    "obs_npc_slots",
+    "obs_forecast",
+    "obs_pending_hits",
+    "obs_sparks",
+};
+
+static int inferno_profile_enabled(void) {
+    if (g_inferno_profile_enabled < 0) {
+        const char* text = getenv("PUFFER_INFERNO_PROFILE");
+        g_inferno_profile_enabled = (text && text[0] && text[0] != '0') ? 1 : 0;
+    }
+    return g_inferno_profile_enabled;
+}
+
+static double inferno_profile_now_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1000000.0;
+}
+
+static void inferno_profile_add(int slot, double ms) {
+    if (slot < 0 || slot >= INF_PROF_COUNT) abort();
+    #pragma omp atomic update
+    g_inferno_profile_ms[slot] += ms;
+}
+
+static void inferno_profile_mark(int enabled, double* last_ms, int slot) {
+    if (!enabled) return;
+    double now = inferno_profile_now_ms();
+    inferno_profile_add(slot, now - *last_ms);
+    *last_ms = now;
+}
+
+int inferno_env_profile_count(void) {
+    return inferno_profile_enabled() ? INF_PROF_COUNT : 0;
+}
+
+const char* inferno_env_profile_name(int slot) {
+    if (slot < 0 || slot >= INF_PROF_COUNT) abort();
+    return g_inferno_profile_names[slot];
+}
+
+double inferno_env_profile_read_reset_ms(int slot) {
+    if (slot < 0 || slot >= INF_PROF_COUNT) abort();
+    double value;
+    #pragma omp atomic read
+    value = g_inferno_profile_ms[slot];
+    #pragma omp atomic write
+    g_inferno_profile_ms[slot] = 0.0;
+    return value;
+}
+
+#define INF_PROFILE_ENABLED() inferno_profile_enabled()
+#define INF_PROFILE_NOW_MS() inferno_profile_now_ms()
+#define INF_PROFILE_ADD(slot, ms) inferno_profile_add((slot), (ms))
+#define INF_PROFILE_MARK(slot) inferno_profile_mark(inf_prof_enabled, &inf_prof_t0, (slot))
 
 /* encounter headers + render.h have many static helpers only used by the
    standalone viewer (not c_render) — suppress unused-function noise. */
@@ -1588,6 +1682,9 @@ static void inferno_env_record_phase2_first_action_match(Env* env) {
 }
 
 void c_step(Env* env) {
+    int inf_prof_enabled = INF_PROFILE_ENABLED();
+    double inf_prof_total_t0 = inf_prof_enabled ? INF_PROFILE_NOW_MS() : 0.0;
+    double inf_prof_t0 = inf_prof_total_t0;
     int used_human_commands = 0;
     RenderClient* render_client = (RenderClient*)env->render_env.client;
 
@@ -1627,6 +1724,7 @@ void c_step(Env* env) {
     if (!used_human_commands)
         inferno_env_record_phase2_first_action_match(env);
 
+    INF_PROFILE_MARK(INF_PROF_C_ACTIONS);
     float action_mask_before[INF_ACTION_MASK_SIZE];
     memcpy(action_mask_before,
         (float*)env->observations + INF_NUM_OBS,
@@ -1669,18 +1767,23 @@ void c_step(Env* env) {
         env->live_phase2_demo_action_len++;
     }
 
+    INF_PROFILE_MARK(INF_PROF_C_PRE_STEP_TRACES);
     if (!used_human_commands)
         ENCOUNTER_INFERNO.step(env->enc_state, env->acts_staging);
+    INF_PROFILE_MARK(INF_PROF_C_ENCOUNTER_STEP);
 
     float* obs = (float*)env->observations;
     ENCOUNTER_INFERNO.write_obs(env->enc_state, obs);
+    INF_PROFILE_MARK(INF_PROF_C_WRITE_OBS);
     ENCOUNTER_INFERNO.write_mask(env->enc_state, obs + INF_NUM_OBS);
+    INF_PROFILE_MARK(INF_PROF_C_WRITE_MASK);
 
     env->rewards[0] = ENCOUNTER_INFERNO.get_reward(env->enc_state);
 
     int is_term = ENCOUNTER_INFERNO.is_terminal(env->enc_state);
     env->term_staging = (unsigned char)is_term;
     env->terminals[0] = (float)is_term;
+    INF_PROFILE_MARK(INF_PROF_C_REWARD_TERMINAL);
 
     if (!used_human_commands)
         inferno_stall_trace_capture(env, &stall_decision, is_term);
@@ -1749,6 +1852,7 @@ void c_step(Env* env) {
             env->archive_prev_key_valid = 1;
         }
     }
+    INF_PROFILE_MARK(INF_PROF_C_POST_STEP_TRACES);
 
     /* terminal-only logging: accumulate completed episode stats into env->log.
        vecenv polls with static_vec_log() which sums across agents, divides by
@@ -2264,6 +2368,7 @@ void c_step(Env* env) {
         inferno_env_live_phase2_demo_reset(env);
         env->episode_action_len = 0;
         env->episode_initial_snapshot_valid = 0;
+        INF_PROFILE_MARK(INF_PROF_C_TERMINAL_LOG);
 
         /* archive mode: do not auto-reset. the explorer driver re-restores from
            a sampled cell at the start of the next iteration. inf_step is a
@@ -2291,7 +2396,10 @@ void c_step(Env* env) {
                raise a flag so the next c_render call does the cleanup. */
             env->pending_render_reset = 1;
         }
+        INF_PROFILE_MARK(INF_PROF_C_RESET);
     }
+    if (inf_prof_enabled)
+        INF_PROFILE_ADD(INF_PROF_C_STEP_TOTAL, INF_PROFILE_NOW_MS() - inf_prof_total_t0);
 }
 
 void c_reset(Env* env) {

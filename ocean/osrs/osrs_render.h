@@ -280,6 +280,34 @@ typedef struct {
     int ticks_remaining;   /* counts down from 70 client ticks */
 } HitSplat;
 
+typedef struct {
+    int primary_seq_id;
+    int primary_frame_idx;
+    int primary_ticks;
+    int primary_loops;
+    int secondary_seq_id;
+    int secondary_frame_idx;
+    int secondary_ticks;
+} RenderAnimationState;
+
+typedef struct {
+    RenderAnimationState anim;
+    int primary_event_tick;
+    int last_primary_event_tick;
+    int sub_x;
+    int sub_y;
+    int dest_x;
+    int dest_y;
+    int visual_moving;
+    int visual_running;
+    int step_tracker;
+    float yaw;
+    float target_yaw;
+    int facing_opponent;
+    int hp_bar_visible_until;
+    HitSplat splats[RENDER_SPLATS_PER_PLAYER];
+} RenderVisualSlotSnapshot;
+
 
 #define CONTEXT_MENU_MAX_ITEMS 64
 #define CONTEXT_MENU_ROW_H     15
@@ -385,18 +413,7 @@ typedef struct {
     float entity_visual_mid_y[MAX_RENDER_ENTITIES];  /* world-space middle of animated mesh */
 
     /* per-entity two-track animation (matches OSRS primary + secondary system) */
-    struct {
-        /* primary track: action animation (attack, cast, eat, block, death) */
-        int primary_seq_id;       /* -1 = inactive */
-        int primary_frame_idx;
-        int primary_ticks;
-        int primary_loops;        /* how many times the anim has looped */
-
-        /* secondary track: pose animation (idle, walk, run — always active) */
-        int secondary_seq_id;
-        int secondary_frame_idx;
-        int secondary_ticks;
-    } anim[MAX_RENDER_ENTITIES];
+    RenderAnimationState anim[MAX_RENDER_ENTITIES];
     int primary_event_tick[MAX_RENDER_ENTITIES];
     int last_primary_event_tick[MAX_RENDER_ENTITIES];
 
@@ -495,6 +512,9 @@ typedef struct {
 
     /* OSRS GUI panel system (inventory, equipment, prayer, combat, spellbook) */
     GuiState gui;
+    RenderTexture2D minimap_surface;
+    int minimap_surface_w;
+    int minimap_surface_h;
 
     /* interactive human control (H key toggle) */
     HumanInput human_input;
@@ -1676,6 +1696,9 @@ static Vector3 flight_get_position(const FlightProjectile* fp, float src_ground,
 
 static void render_destroy_client(RenderClient* rc) {
     flight_clear_all(rc);
+    if (rc->minimap_surface.id != 0) {
+        UnloadRenderTexture(rc->minimap_surface);
+    }
     /* free GUI panel sprites */
     gui_unload_sprites(&rc->gui);
     /* free prayer icon textures */
@@ -2270,6 +2293,49 @@ static void render_reset_entity_visual_slot(RenderClient* rc, int i) {
         rc->splats[i][s].active = 0;
 }
 
+static RenderVisualSlotSnapshot render_snapshot_entity_visual_slot(
+    const RenderClient* rc, int i
+) {
+    RenderVisualSlotSnapshot out;
+    memset(&out, 0, sizeof(out));
+    out.anim = rc->anim[i];
+    out.primary_event_tick = rc->primary_event_tick[i];
+    out.last_primary_event_tick = rc->last_primary_event_tick[i];
+    out.sub_x = rc->sub_x[i];
+    out.sub_y = rc->sub_y[i];
+    out.dest_x = rc->dest_x[i];
+    out.dest_y = rc->dest_y[i];
+    out.visual_moving = rc->visual_moving[i];
+    out.visual_running = rc->visual_running[i];
+    out.step_tracker = rc->step_tracker[i];
+    out.yaw = rc->yaw[i];
+    out.target_yaw = rc->target_yaw[i];
+    out.facing_opponent = rc->facing_opponent[i];
+    out.hp_bar_visible_until = rc->hp_bar_visible_until[i];
+    memcpy(out.splats, rc->splats[i], sizeof(out.splats));
+    return out;
+}
+
+static void render_restore_entity_visual_slot(
+    RenderClient* rc, int i, const RenderVisualSlotSnapshot* snapshot
+) {
+    rc->anim[i] = snapshot->anim;
+    rc->primary_event_tick[i] = snapshot->primary_event_tick;
+    rc->last_primary_event_tick[i] = snapshot->last_primary_event_tick;
+    rc->sub_x[i] = snapshot->sub_x;
+    rc->sub_y[i] = snapshot->sub_y;
+    rc->dest_x[i] = snapshot->dest_x;
+    rc->dest_y[i] = snapshot->dest_y;
+    rc->visual_moving[i] = snapshot->visual_moving;
+    rc->visual_running[i] = snapshot->visual_running;
+    rc->step_tracker[i] = snapshot->step_tracker;
+    rc->yaw[i] = snapshot->yaw;
+    rc->target_yaw[i] = snapshot->target_yaw;
+    rc->facing_opponent[i] = snapshot->facing_opponent;
+    rc->hp_bar_visible_until[i] = snapshot->hp_bar_visible_until;
+    memcpy(rc->splats[i], snapshot->splats, sizeof(snapshot->splats));
+}
+
 static void render_seed_entity_visual_slot(RenderClient* rc, int i) {
     int size = rc->entities[i].npc_size > 1 ? rc->entities[i].npc_size : 1;
     rc->sub_x[i] = rc->entities[i].x * 128 + size * 64;
@@ -2317,35 +2383,28 @@ static void render_pre_tick(RenderClient* rc, OsrsEnv* env) {
  * - animation stalls (walkFlag=0) pause movement, then catch up at double speed
  */
 static void render_post_tick(RenderClient* rc, OsrsEnv* env) {
+    RenderEntity previous_entities[MAX_RENDER_ENTITIES];
+    RenderVisualSlotSnapshot previous_visuals[MAX_RENDER_ENTITIES];
+    int previous_used[MAX_RENDER_ENTITIES] = {0};
+    int previous_count = rc->entity_count;
+    memcpy(previous_entities, rc->entities,
+        (size_t)previous_count * sizeof(previous_entities[0]));
+    for (int i = 0; i < previous_count; i++)
+        previous_visuals[i] = render_snapshot_entity_visual_slot(rc, i);
+
     render_populate_entities(rc, env);
 
-    /* detect entity identity changes from slot compaction (NPC deaths cause
-       remaining NPCs to shift to lower indices). reset stale animation and
-       composite state when a slot's NPC identity changes. */
     for (int i = 0; i < rc->entity_count; i++) {
-        if (rc->entities[i].npc_slot != rc->prev_npc_slot[i]) {
-            rc->anim[i].primary_seq_id = -1;
-            rc->anim[i].primary_frame_idx = 0;
-            rc->anim[i].primary_ticks = 0;
-            rc->anim[i].primary_loops = 0;
-            rc->anim[i].secondary_seq_id = -1;
-            rc->anim[i].secondary_frame_idx = 0;
-            rc->anim[i].secondary_ticks = 0;
-            rc->primary_event_tick[i] = -1;
-            rc->last_primary_event_tick[i] = -2;
-            rc->composites[i].needs_rebuild = 1;
-            /* flush hitsplat state so dying NPC's splats don't transfer
-               to the NPC that shifts into this slot after death compaction */
-            for (int s = 0; s < RENDER_SPLATS_PER_PLAYER; s++)
-                rc->splats[i][s].active = 0;
-            rc->hp_bar_visible_until[i] = 0;
-            /* reset interpolation state — zeroed sub triggers the teleport-snap
-               guard below, which cleanly snaps to the new entity's actual tile */
-            rc->sub_x[i] = 0;
-            rc->sub_y[i] = 0;
-            rc->dest_x[i] = 0;
-            rc->dest_y[i] = 0;
-            rc->step_tracker[i] = 0;
+        int previous_idx = render_entity_find_previous_identity_index(
+            previous_entities, previous_count, previous_used, &rc->entities[i]);
+        if (previous_idx >= 0) {
+            previous_used[previous_idx] = 1;
+            if (previous_idx != i) {
+                render_restore_entity_visual_slot(rc, i, &previous_visuals[previous_idx]);
+                rc->composites[i].needs_rebuild = 1;
+            }
+        } else {
+            render_reset_entity_visual_slot(rc, i);
         }
         rc->prev_npc_slot[i] = rc->entities[i].npc_slot;
     }
@@ -4982,6 +5041,27 @@ static void render_draw_minimap_entity_dot(
     (void)gs;
 }
 
+static void render_ensure_minimap_surface(RenderClient* rc, int w, int h) {
+    if (rc->minimap_surface.id != 0 &&
+        rc->minimap_surface_w == w &&
+        rc->minimap_surface_h == h) {
+        return;
+    }
+
+    if (rc->minimap_surface.id != 0) {
+        UnloadRenderTexture(rc->minimap_surface);
+    }
+
+    rc->minimap_surface = LoadRenderTexture(w, h);
+    if (rc->minimap_surface.id == 0 || rc->minimap_surface.texture.id == 0) {
+        fprintf(stderr, "minimap render texture allocation failed\n");
+        abort();
+    }
+    SetTextureFilter(rc->minimap_surface.texture, TEXTURE_FILTER_POINT);
+    rc->minimap_surface_w = w;
+    rc->minimap_surface_h = h;
+}
+
 /* Draw the minimap area at the top of the right-hand panel: dark backdrop, the
    circular minimap with arena tiles (terrain base color + walls + entity dots),
    the rotating compass at top-left, and four stat orbs (HP, prayer, run, spec).
@@ -5022,31 +5102,34 @@ static void render_draw_minimap_area(RenderClient* rc, OsrsEnv* env, Player* p) 
     int mask_y = cy - mask_h / 2;
     int r = (mask_w < mask_h ? mask_w : mask_h) / 2 - 2;
 
-    /* orbs cluster around the chrome at fixed offsets (resizable mode). compass
-       sits inside the chrome's top-left compass slot. */
-    int compass_cx = chrome_x + (is_resizable ? 32 : 32);
-    int compass_cy_pos = chrome_y + (is_resizable ? 32 : 32);
-    int orb_hp_cx     = chrome_x - 6;
-    int orb_hp_cy     = chrome_y + 22;
-    int orb_pray_cx   = chrome_x - 6;
-    int orb_pray_cy   = chrome_y + 64;
-    int orb_run_cx    = chrome_x - 6;
-    int orb_run_cy    = chrome_y + 106;
-    int orb_spec_cx   = chrome_x - 6;
-    int orb_spec_cy   = chrome_y + 148;
+    int layout_x = chrome_x - 28;
+    int layout_y = chrome_y - 4;
+    int compass_x = chrome_x + 25;
+    int compass_y = chrome_y - 2;
+    int orb_hp_cx     = layout_x + 42;
+    int orb_hp_cy     = layout_y + 47 + 17;
+    int orb_pray_cx   = layout_x + 42;
+    int orb_pray_cy   = layout_y + 81 + 17;
+    int orb_run_cx    = layout_x + 10 + 42;
+    int orb_run_cy    = layout_y + 114 + 17;
+    int orb_spec_cx   = layout_x + 32 + 42;
+    int orb_spec_cy   = layout_y + 140 + 17;
 
-    /* circular dark backing for the minimap interior — only fills inside the
-       circle, so corners (outside) stay transparent and the game world shows
-       through. */
-    DrawCircle(cx, cy, r, (Color){10, 8, 6, 255});
+    render_ensure_minimap_surface(rc, mask_w, mask_h);
+    BeginTextureMode(rc->minimap_surface);
+    ClearBackground(BLANK);
+    int map_cx = mask_w / 2;
+    int map_cy = mask_h / 2;
+
+    DrawCircle(map_cx, map_cy, r, (Color){10, 8, 6, 255});
 
     if (rc->arena_width > 0 && rc->arena_height > 0) {
         int max_dim = rc->arena_width > rc->arena_height ? rc->arena_width : rc->arena_height;
         float scale = (float)(2 * r - 4) / (float)max_dim;
         float arena_px_w = rc->arena_width * scale;
         float arena_px_h = rc->arena_height * scale;
-        float ax0 = (float)cx - arena_px_w * 0.5f;
-        float ay0 = (float)cy - arena_px_h * 0.5f;
+        float ax0 = (float)map_cx - arena_px_w * 0.5f;
+        float ay0 = (float)map_cy - arena_px_h * 0.5f;
         int r_sq = r * r;
 
         /* per-encounter base tile color. inferno: dark volcanic. */
@@ -5064,8 +5147,8 @@ static void render_draw_minimap_area(RenderClient* rc, OsrsEnv* env, Player* p) 
                    a rectangular backdrop. */
                 int tile_cx = sx + sw / 2;
                 int tile_cy = sy + sw / 2;
-                int dxc = tile_cx - cx;
-                int dyc = tile_cy - cy;
+                int dxc = tile_cx - map_cx;
+                int dyc = tile_cy - map_cy;
                 if (dxc * dxc + dyc * dyc > r_sq) continue;
 
                 Color c = tile_color;
@@ -5101,8 +5184,8 @@ static void render_draw_minimap_area(RenderClient* rc, OsrsEnv* env, Player* p) 
             /* skip dots outside the circle — entity center test against radius */
             int dot_cx = dx + dw / 2;
             int dot_cy = dy + dw / 2;
-            int ddx = dot_cx - cx;
-            int ddy = dot_cy - cy;
+            int ddx = dot_cx - map_cx;
+            int ddy = dot_cy - map_cy;
             if (ddx * ddx + ddy * ddy > r_sq) continue;
 
             Texture2D dot_sprite;
@@ -5123,7 +5206,12 @@ static void render_draw_minimap_area(RenderClient* rc, OsrsEnv* env, Player* p) 
             }
         }
     }
-    (void)mask_sprite; (void)mask_x; (void)mask_y; (void)mask_w; (void)mask_h;
+    EndTextureMode();
+    Rectangle surface_src = { 0, 0, (float)mask_w, -(float)mask_h };
+    Rectangle surface_dst = { (float)mask_x, (float)mask_y,
+                              (float)mask_w, (float)mask_h };
+    DrawTexturePro(rc->minimap_surface.texture, surface_src, surface_dst,
+                   (Vector2){0, 0}, 0.0f, WHITE);
 
     /* metallic chrome bezel on top of the masked minimap, scaled to chrome_scale
        and positioned so its inner circle aligns with the mask center. */
@@ -5140,13 +5228,11 @@ static void render_draw_minimap_area(RenderClient* rc, OsrsEnv* env, Player* p) 
         Texture2D comp = gs->minimap_compass;
         float dst_size = 32.0f;  /* native 32x32 — no scaling in resizable mode */
         Rectangle src = { 0, 0, (float)comp.width, (float)comp.height };
-        Rectangle dst = { (float)compass_cx, (float)compass_cy_pos,
+        Rectangle dst = { (float)compass_x, (float)compass_y,
                           dst_size, dst_size };
         Vector2 origin = { dst_size * 0.5f, dst_size * 0.5f };
         float angle_deg = -rc->cam_yaw * (180.0f / 3.14159265f);
         DrawTexturePro(comp, src, dst, origin, angle_deg, WHITE);
-    } else {
-        DrawText("N", compass_cx - 4, compass_cy_pos - 6, 12, (Color){220, 60, 60, 255});
     }
 
     /* orbs: clustered along the chrome's left edge (HP, prayer, run, spec)
@@ -5270,8 +5356,11 @@ void pvp_render(OsrsEnv* env) {
             /* weapon + attack timer */
             const char* gear = is->weapon_set == INF_GEAR_MAGE ? "mage" :
                                is->weapon_set == INF_GEAR_TBOW ? "tbow" : "bp";
-            const char* spell = is->spell_choice == ENCOUNTER_SPELL_ICE ? "ice" :
-                                is->spell_choice == ENCOUNTER_SPELL_BLOOD ? "blood" : "none";
+            const char* spell = "none";
+            if (inf_autocast_is_active(is))
+                spell = inf_player_autocast_spell(&is->player) == ENCOUNTER_SPELL_ICE
+                    ? "ice"
+                    : "blood";
             DrawText(TextFormat("GEAR: %s  ATK: %d/%d  SPELL: %s", gear,
                 is->player.attack_timer, is->loadout_stats[is->weapon_set].attack_speed, spell),
                 dx, dy, fs, dc);

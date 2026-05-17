@@ -76,17 +76,17 @@
 #define HEAD_POTION     4
 #define HEAD_KARAMBWAN  5
 #define HEAD_VENG       6
-#define HEAD_OFFENSIVE  7   // toggle piety/rigour/augury — agent-controlled, no longer auto-assigned
+#define HEAD_OFFENSIVE  7   // set or refresh piety/rigour/augury
 
 // Per-head action dimensions
 #define LOADOUT_DIM     9   // KEEP, MELEE, RANGE, MAGE, TANK, SPEC_MELEE, SPEC_RANGE, SPEC_MAGIC, GMAUL
 #define COMBAT_DIM     13   // NONE, ATK, ICE, BLOOD, ADJACENT, UNDER, DIAGONAL, FARCAST_2..7
-#define OVERHEAD_DIM    6   // ENCOUNTER_OVERHEAD_DIM_PVP: no_change, toggle_{melee,ranged,magic,smite,redemption}
+#define OVERHEAD_DIM    7   // no_change, off, set_refresh_{melee,ranged,magic,smite,redemption}
 #define FOOD_DIM        2   // NONE, EAT
 #define POTION_DIM      5   // PvP head only: NONE, BREW, RESTORE, COMBAT, RANGED
 #define KARAMBWAN_DIM   2   // NONE, EAT
 #define VENG_DIM        2   // NONE, CAST
-#define OFFENSIVE_DIM   4   // ENCOUNTER_OFFENSIVE_DIM: no_change, toggle_{piety,rigour,augury}
+#define OFFENSIVE_DIM   5   // no_change, off, set_refresh_{piety,rigour,augury}
 
 // Total action mask size: sum of all head dims
 #define ACTION_MASK_SIZE (LOADOUT_DIM + COMBAT_DIM + OVERHEAD_DIM + \
@@ -526,6 +526,9 @@ typedef struct {
     OverheadPrayer prayer;
     OffensivePrayer offensive_prayer;
     FightStyle fight_style;
+    int autocast_enabled;
+    int autocast_defensive;
+    int autocast_spell;
     int prayer_drain_counter;  // Accumulates drain, triggers at drain_resistance
     /* activation-tick bookkeeping: OSRS does not drain a prayer on the tick it
        was activated (wiki: "the game does not drain prayer for prayers on the

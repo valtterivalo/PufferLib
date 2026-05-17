@@ -214,6 +214,75 @@ static HumanInput make_human_input(void) {
     return input;
 }
 
+static void init_spell_cast_test_state(InfernoState* state, InfNPCType target_type) {
+    *state = make_test_state(10, 10);
+    state->rng_state = 1;
+    state->weapon_set = INF_GEAR_MAGE;
+    state->player.entity_type = ENTITY_PLAYER;
+    state->player.base_hitpoints = 99;
+    state->player.current_hitpoints = 99;
+    state->player.base_attack = 99;
+    state->player.base_strength = 99;
+    state->player.base_defence = 99;
+    state->player.base_ranged = 99;
+    state->player.base_magic = 99;
+    state->player.current_attack = 99;
+    state->player.current_strength = 99;
+    state->player.current_defence = 99;
+    state->player.current_ranged = 99;
+    state->player.current_magic = 99;
+    state->player.autocast_enabled = 1;
+    state->player.autocast_defensive = 0;
+    state->player.autocast_spell = ENCOUNTER_SPELL_BLOOD;
+    state->player_dest_x = -1;
+    state->player_dest_y = -1;
+    osrs_interaction_init(&state->interaction);
+    encounter_apply_loadout(&state->player, INF_MAGE_LOADOUT, GEAR_MAGE);
+    encounter_compute_loadout_stats(INF_MAGE_LOADOUT, ATTACK_STYLE_MAGIC,
+        OFFENSIVE_PRAYER_NONE, 99, FIGHT_STYLE_AUTOCAST, 30,
+        &state->loadout_stats[INF_GEAR_MAGE]);
+    encounter_compute_loadout_stats(INF_RANGE_TBOW_LOADOUT, ATTACK_STYLE_RANGED,
+        OFFENSIVE_PRAYER_NONE, 99, FIGHT_STYLE_RAPID, 0,
+        &state->loadout_stats[INF_GEAR_TBOW]);
+    encounter_compute_loadout_stats(INF_RANGE_BP_LOADOUT, ATTACK_STYLE_RANGED,
+        OFFENSIVE_PRAYER_NONE, 99, FIGHT_STYLE_RAPID, 0,
+        &state->loadout_stats[INF_GEAR_BP]);
+
+    state->npcs[0] = make_test_npc(
+        target_type, 16, 10, INF_NPC_STATS[target_type].size);
+    state->npcs[0].active = 1;
+    state->npcs[0].hp = state->npcs[0].max_hp = INF_NPC_STATS[target_type].hp;
+    inf_refresh_current_obs_slots(state);
+}
+
+static int inf_action_target_for_npc(InfernoState* state, int npc_slot) {
+    inf_refresh_current_obs_slots(state);
+    int target_slot = inf_find_target_obs_slot(state, npc_slot);
+    ASSERT_INT_EQ("target NPC has observation slot", target_slot >= 0, 1);
+    if (target_slot < 0) return 0;
+    return target_slot + 1;
+}
+
+static int inferno_action_head_mask_offset(int head) {
+    int offset = 0;
+    for (int h = 0; h < head; h++)
+        offset += INF_ACTION_DIMS[h];
+    return offset;
+}
+
+static void fire_player_action_at_slot_zero(
+    InfernoState* state,
+    int spell_action
+) {
+    int actions[INF_NUM_ACTION_HEADS];
+    memset(actions, 0, sizeof(actions));
+    actions[INF_HEAD_TARGET] = inf_action_target_for_npc(state, 0);
+    actions[INF_HEAD_SPELL] = spell_action;
+    state->player.attack_timer = 0;
+    state->npcs[0].pending_hit = (EncounterPendingHit){0};
+    inf_tick_player(state, actions, 1);
+}
+
 static int inferno_pending_hit_obs_start(void);
 static int inferno_spark_obs_start(void);
 static int inferno_obs_slot_dig_index(int slot_idx);
@@ -2345,7 +2414,7 @@ static void test_jad_prayer_on_third_tick_blocks(void) {
     step_inferno_with_prayer(&state, 0);
     step_inferno_with_prayer(&state, 0);
     step_inferno_with_prayer(&state, 0);
-    step_inferno_with_prayer(&state, ENCOUNTER_OVERHEAD_TOGGLE_MAGIC);
+    step_inferno_with_prayer(&state, ENCOUNTER_OVERHEAD_SET_REFRESH_MAGIC);
 
     ASSERT_INT_EQ("jad prayer check consumed pending protection", state.player_pending_hits[0].check_prayer, 0);
     ASSERT_INT_EQ("jad protected damage is frozen at zero", state.player_pending_hits[0].damage, 0);
@@ -2371,7 +2440,7 @@ static void test_jad_prayer_first_on_fourth_tick_does_not_block(void) {
         step_inferno_with_prayer(&state, 0);
         ASSERT_INT_EQ("late-prayer test reaches checked pending hit", state.player_pending_hits[0].check_prayer, 0);
 
-        step_inferno_with_prayer(&state, ENCOUNTER_OVERHEAD_TOGGLE_MAGIC);
+        step_inferno_with_prayer(&state, ENCOUNTER_OVERHEAD_SET_REFRESH_MAGIC);
         if (state.damage_received_this_tick > 0.0f) {
             saw_late_damage = 1;
             ASSERT_INT_EQ("late prayer did not block queued jad damage", state.player.current_hitpoints < 99, 1);
@@ -2444,7 +2513,7 @@ static void test_inferno_obs_shape_includes_step_out_forecast_features(void) {
     ASSERT_INT_EQ("gear action head removed tank slot",
         INF_ACTION_DIMS[INF_HEAD_GEAR], 4);
     ASSERT_INT_EQ("action mask removed tank slot",
-        INF_ACTION_MASK_SIZE, 86);
+        INF_ACTION_MASK_SIZE, 88);
     ASSERT_INT_EQ("npc obs includes compact target and dig signals",
         INF_TOTAL_NPC_OBS_SIZE, 415);
     ASSERT_INT_EQ("step-out forecast covers every movement action",
@@ -3480,6 +3549,43 @@ static void test_render_facing_prefers_attack_target_while_chasing(void) {
         RENDER_ENTITY_FACE_MOVEMENT);
 }
 
+static void test_render_identity_survives_npc_death_compaction(void) {
+    printf("--- render identity survives NPC death compaction ---\n");
+
+    RenderEntity previous[4];
+    memset(previous, 0, sizeof(previous));
+    previous[0].entity_type = ENTITY_PLAYER;
+    previous[1].entity_type = ENTITY_NPC;
+    previous[1].npc_slot = 0;
+    previous[1].npc_def_id = INF_NPC_DEF_IDS[INF_NPC_MAGER];
+    previous[2].entity_type = ENTITY_NPC;
+    previous[2].npc_slot = 1;
+    previous[2].npc_def_id = INF_NPC_DEF_IDS[INF_NPC_RANGER];
+    previous[3].entity_type = ENTITY_NPC;
+    previous[3].npc_slot = 2;
+    previous[3].npc_def_id = INF_NPC_DEF_IDS[INF_NPC_MELEER];
+
+    int used[4] = {0};
+    RenderEntity current = previous[2];
+    int previous_idx = render_entity_find_previous_identity_index(
+        previous, 4, used, &current);
+
+    ASSERT_INT_EQ("ranger keeps old visual slot after earlier NPC dies",
+        previous_idx, 2);
+    used[previous_idx] = 1;
+    current = previous[3];
+    previous_idx = render_entity_find_previous_identity_index(
+        previous, 4, used, &current);
+    ASSERT_INT_EQ("meleer keeps old visual slot after earlier NPC dies",
+        previous_idx, 3);
+
+    current.npc_def_id = INF_NPC_DEF_IDS[INF_NPC_RANGER];
+    previous_idx = render_entity_find_previous_identity_index(
+        previous, 4, used, &current);
+    ASSERT_INT_EQ("same slot with different NPC type is not the same identity",
+        previous_idx, -1);
+}
+
 static void test_zuk_healer_target_action_tags_on_landed_hit(void) {
     printf("--- zuk healer target action tags on landed hit ---\n");
 
@@ -3554,7 +3660,8 @@ static void test_zuk_healer_mage_attack_counts_penalty_event(void) {
     state.player.x = 20;
     state.player.y = 46;
     state.weapon_set = INF_GEAR_MAGE;
-    state.spell_choice = ENCOUNTER_SPELL_ICE;
+    state.player.autocast_enabled = 1;
+    state.player.autocast_spell = ENCOUNTER_SPELL_ICE;
     encounter_apply_loadout(&state.player, INF_MAGE_LOADOUT, GEAR_MAGE);
     encounter_compute_loadout_stats(INF_MAGE_LOADOUT, ATTACK_STYLE_MAGIC,
         OFFENSIVE_PRAYER_NONE, 99, FIGHT_STYLE_AUTOCAST, 30,
@@ -3954,7 +4061,8 @@ static void init_phantom_barrage_test_state(
     state->player.y = 40;
     state->player.attack_timer = player_attack_timer;
     state->weapon_set = INF_GEAR_MAGE;
-    state->spell_choice = ENCOUNTER_SPELL_ICE;
+    state->player.autocast_enabled = 1;
+    state->player.autocast_spell = ENCOUNTER_SPELL_ICE;
     encounter_apply_loadout(&state->player, INF_MAGE_LOADOUT, GEAR_MAGE);
     encounter_compute_loadout_stats(INF_MAGE_LOADOUT, ATTACK_STYLE_MAGIC,
         OFFENSIVE_PRAYER_NONE, 99, FIGHT_STYLE_AUTOCAST, 30,
@@ -4103,7 +4211,6 @@ static void init_confliction_barrage_test_state(
     *state = make_test_state(10, 10);
     state->rng_state = 1;
     state->weapon_set = INF_GEAR_MAGE;
-    state->spell_choice = ENCOUNTER_SPELL_BLOOD;
     state->player.entity_type = ENTITY_PLAYER;
     state->player.base_hitpoints = 99;
     state->player.current_hitpoints = 99;
@@ -4117,6 +4224,8 @@ static void init_confliction_barrage_test_state(
     state->player.current_defence = 99;
     state->player.current_ranged = 99;
     state->player.current_magic = 99;
+    state->player.autocast_enabled = 1;
+    state->player.autocast_spell = ENCOUNTER_SPELL_BLOOD;
     state->player_dest_x = -1;
     state->player_dest_y = -1;
     osrs_interaction_init(&state->interaction);
@@ -4144,6 +4253,52 @@ static int inferno_fire_blood_barrage_at_slot_zero(
     osrs_interaction_set(&state->interaction, 0);
     inf_tick_player(state, actions, 1);
     return state->npcs[0].pending_hit.hit_success;
+}
+
+static void test_default_autocast_casts_blood_barrage(void) {
+    printf("--- default autocast casts blood barrage ---\n");
+
+    InfernoState state;
+    init_confliction_barrage_test_state(&state, INF_NPC_RANGER);
+
+    int actions[INF_NUM_ACTION_HEADS];
+    memset(actions, 0, sizeof(actions));
+    state.rng_state = 1;
+    state.player.attack_timer = 0;
+    inf_tick_player(&state, actions, 1);
+
+    ASSERT_INT_EQ("pending hit records blood barrage",
+        state.npcs[0].pending_hit.spell_type, ENCOUNTER_SPELL_BLOOD);
+    ASSERT_INT_EQ("player render spell records blood barrage",
+        state.player.magic_type_this_tick, ENCOUNTER_SPELL_BLOOD);
+}
+
+static void test_ice_barrage_success_freezes_target_and_records_spell(void) {
+    printf("--- ice barrage success freezes target and records spell ---\n");
+
+    int found = 0;
+    for (uint32_t seed = 1; seed < 256 && !found; seed++) {
+        InfernoState state;
+        init_confliction_barrage_test_state(&state, INF_NPC_RANGER);
+        state.player.autocast_spell = ENCOUNTER_SPELL_ICE;
+
+        int actions[INF_NUM_ACTION_HEADS];
+        memset(actions, 0, sizeof(actions));
+        state.rng_state = seed;
+        state.player.attack_timer = 0;
+        inf_tick_player(&state, actions, 1);
+
+        if (state.npcs[0].pending_hit.hit_success) {
+            found = 1;
+            ASSERT_INT_EQ("ice pending hit records ice barrage",
+                state.npcs[0].pending_hit.spell_type, ENCOUNTER_SPELL_ICE);
+            ASSERT_INT_EQ("ice barrage freezes on successful accuracy",
+                state.npcs[0].frozen_ticks, BARRAGE_FREEZE_TICKS);
+            ASSERT_INT_EQ("player render spell records ice barrage",
+                state.player.magic_type_this_tick, ENCOUNTER_SPELL_ICE);
+        }
+    }
+    ASSERT_INT_EQ("found deterministic successful ice barrage seed", found, 1);
 }
 
 static void test_inferno_barrage_primes_confliction_and_reuses_double_accuracy(void) {
@@ -4208,6 +4363,156 @@ static void test_barrage_accuracy_regression_against_ranger_and_mager(void) {
         ASSERT_INT_EQ("repeated barrages are not all splashes", hits > 0, 1);
         ASSERT_INT_EQ("repeated barrages are not guaranteed hits", hits < 64, 1);
     }
+}
+
+static void test_explicit_spell_cast_does_not_persist(void) {
+    printf("--- explicit spell cast does not persist ---\n");
+
+    InfernoState state;
+    init_spell_cast_test_state(&state, INF_NPC_RANGER);
+    state.player.autocast_spell = ENCOUNTER_SPELL_BLOOD;
+
+    fire_player_action_at_slot_zero(&state, 2);
+    ASSERT_INT_EQ("manual ice cast records ice pending hit",
+        state.npcs[0].pending_hit.spell_type, ENCOUNTER_SPELL_ICE);
+    ASSERT_INT_EQ("manual ice render records ice",
+        state.player.magic_type_this_tick, ENCOUNTER_SPELL_ICE);
+
+    state.player.attack_timer = 0;
+    state.npcs[0].pending_hit = (EncounterPendingHit){0};
+    fire_player_action_at_slot_zero(&state, 0);
+    ASSERT_INT_EQ("later normal attack falls back to blood autocast",
+        state.npcs[0].pending_hit.spell_type, ENCOUNTER_SPELL_BLOOD);
+}
+
+static void test_spell_without_target_does_not_affect_later_attack(void) {
+    printf("--- spell without target does not affect later attack ---\n");
+
+    InfernoState state;
+    init_spell_cast_test_state(&state, INF_NPC_RANGER);
+    state.player.autocast_spell = ENCOUNTER_SPELL_BLOOD;
+
+    int actions[INF_NUM_ACTION_HEADS];
+    memset(actions, 0, sizeof(actions));
+    actions[INF_HEAD_SPELL] = 2;
+    inf_tick_player(&state, actions, 1);
+    ASSERT_INT_EQ("spell without target does not fire",
+        state.player_attacked_this_tick, 0);
+
+    fire_player_action_at_slot_zero(&state, 0);
+    ASSERT_INT_EQ("next normal attack uses autocast blood",
+        state.npcs[0].pending_hit.spell_type, ENCOUNTER_SPELL_BLOOD);
+}
+
+static void test_target_without_spell_uses_autocast(void) {
+    printf("--- target without spell uses autocast ---\n");
+
+    InfernoState state;
+    init_spell_cast_test_state(&state, INF_NPC_RANGER);
+    state.player.autocast_spell = ENCOUNTER_SPELL_ICE;
+
+    fire_player_action_at_slot_zero(&state, 0);
+    ASSERT_INT_EQ("no-spell target attack uses ice autocast",
+        state.npcs[0].pending_hit.spell_type, ENCOUNTER_SPELL_ICE);
+}
+
+static void test_manual_spell_overrides_autocast(void) {
+    printf("--- manual spell overrides autocast ---\n");
+
+    InfernoState state;
+    init_spell_cast_test_state(&state, INF_NPC_RANGER);
+    state.player.autocast_spell = ENCOUNTER_SPELL_BLOOD;
+
+    fire_player_action_at_slot_zero(&state, 2);
+    ASSERT_INT_EQ("manual ice overrides blood autocast",
+        state.npcs[0].pending_hit.spell_type, ENCOUNTER_SPELL_ICE);
+
+    init_spell_cast_test_state(&state, INF_NPC_RANGER);
+    state.player.autocast_spell = ENCOUNTER_SPELL_ICE;
+    fire_player_action_at_slot_zero(&state, 1);
+    ASSERT_INT_EQ("manual blood overrides ice autocast",
+        state.npcs[0].pending_hit.spell_type, ENCOUNTER_SPELL_BLOOD);
+}
+
+static void test_blood_barrage_at_full_hp_is_valid_and_heals_zero(void) {
+    printf("--- blood barrage at full HP is valid and heals zero ---\n");
+
+    InfernoState state;
+    init_spell_cast_test_state(&state, INF_NPC_NIBBLER);
+    float mask[INF_ACTION_MASK_SIZE];
+    inf_write_mask((EncounterState*)&state, mask);
+    ASSERT_FLOAT_NEAR("blood barrage action valid at full HP",
+        mask[inferno_action_head_mask_offset(INF_HEAD_SPELL) + 1], 1.0f, 1e-6f);
+
+    fire_player_action_at_slot_zero(&state, 1);
+    state.npcs[0].pending_hit.damage = 12;
+    state.npcs[0].pending_hit.ticks_remaining = 1;
+    state.player.current_hitpoints = state.player.base_hitpoints;
+    inf_resolve_player_projectiles_on_npcs(&state);
+
+    ASSERT_INT_EQ("full HP blood barrage heals zero",
+        state.blood_heal_this_tick, 0);
+    ASSERT_INT_EQ("HP stays capped",
+        state.player.current_hitpoints, state.player.base_hitpoints);
+}
+
+static void test_manual_spell_in_range_gear_uses_range_gear_magic_stats(void) {
+    printf("--- manual spell in range gear uses range gear magic stats ---\n");
+
+    InfernoState state;
+    init_spell_cast_test_state(&state, INF_NPC_RANGER);
+    state.weapon_set = INF_GEAR_BP;
+    encounter_apply_loadout(&state.player, INF_RANGE_BP_LOADOUT, GEAR_RANGED);
+    state.player.autocast_spell = ENCOUNTER_SPELL_BLOOD;
+
+    InfPlayerAttack attack;
+    int resolved = inf_resolve_player_attack(&state, ENCOUNTER_SPELL_ICE, &attack);
+    EncounterLoadoutStats expected;
+    encounter_compute_player_equipped_stats(
+        &state.player, ATTACK_STYLE_MAGIC, FIGHT_STYLE_AUTOCAST, 30, &expected);
+
+    ASSERT_INT_EQ("manual spell resolves as attack",
+        resolved, 1);
+    ASSERT_INT_EQ("manual spell is magic",
+        attack.stats.style, ATTACK_STYLE_MAGIC);
+    ASSERT_INT_EQ("manual spell uses current gear magic attack bonus",
+        attack.stats.attack_bonus, expected.attack_bonus);
+    ASSERT_INT_EQ("manual spell uses barrage speed",
+        attack.stats.attack_speed, 5);
+    ASSERT_INT_EQ("manual spell uses barrage range",
+        attack.stats.attack_range, 10);
+}
+
+static void test_phantom_barrage_allows_explicit_spell_from_range_gear(void) {
+    printf("--- phantom barrage allows explicit spell from range gear ---\n");
+
+    InfernoState state;
+    init_phantom_barrage_test_state(&state, 1, 1);
+    state.weapon_set = INF_GEAR_BP;
+    encounter_apply_loadout(&state.player, INF_RANGE_BP_LOADOUT, GEAR_RANGED);
+    state.player.autocast_enabled = 1;
+    state.player.autocast_spell = ENCOUNTER_SPELL_BLOOD;
+    inf_refresh_current_obs_slots(&state);
+
+    int target_slot = inf_find_target_obs_slot(&state, 0);
+    ASSERT_INT_EQ("dying target appears in obs slots", target_slot >= 0, 1);
+    if (target_slot < 0) return;
+
+    float mask[INF_ACTION_MASK_SIZE];
+    inf_write_mask((EncounterState*)&state, mask);
+    ASSERT_FLOAT_NEAR("explicit spell can target phantom from range gear",
+        mask[inferno_target_mask_slot_offset(target_slot)], 1.0f, 1e-6f);
+
+    int actions[INF_NUM_ACTION_HEADS];
+    memset(actions, 0, sizeof(actions));
+    actions[INF_HEAD_TARGET] = target_slot + 1;
+    actions[INF_HEAD_SPELL] = 2;
+    inf_tick_player(&state, actions, 1);
+
+    ASSERT_INT_EQ("explicit phantom barrage fires from range gear",
+        state.player_attacked_this_tick, 1);
+    ASSERT_INT_EQ("explicit phantom barrage uses magic style",
+        state.player_attack_style_id, ATTACK_STYLE_MAGIC);
 }
 
 static void test_zuk_obs_tracks_shield_and_mager_aggro(void) {
@@ -4638,6 +4943,105 @@ static void test_human_targeting_refreshes_stale_obs_slots(void) {
     }
 }
 
+static void test_human_spell_selection_is_client_local_until_target_click(void) {
+    printf("--- human spell selection is client local until target click ---\n");
+
+    InfernoState state;
+    init_spell_cast_test_state(&state, INF_NPC_RANGER);
+    HumanInput hi;
+    human_input_init(&hi);
+    hi.cursor_mode = CURSOR_SPELL_TARGET;
+    hi.selected_spell = ATTACK_BLOOD;
+
+    int actions[INF_NUM_ACTION_HEADS];
+    inf_translate_human_commands(&hi, actions, &state);
+    ASSERT_INT_EQ("client-only selection queues no command",
+        hi.commands.count, 0);
+    ASSERT_INT_EQ("client-only selection sends no spell action",
+        actions[INF_HEAD_SPELL], 0);
+
+    human_input_queue_spell_target(&hi, ATTACK_BLOOD, 0);
+    inf_translate_human_commands(&hi, actions, &state);
+    ASSERT_INT_EQ("spell target command kind",
+        hi.commands.items[0].kind, HUMAN_COMMAND_SPELL_TARGET);
+    ASSERT_INT_EQ("spell target command carries blood",
+        hi.commands.items[0].spell, ATTACK_BLOOD);
+    ASSERT_INT_EQ("spell target command maps spell action",
+        actions[INF_HEAD_SPELL], 1);
+
+    human_input_destroy(&hi);
+}
+
+static void test_human_walk_command_sends_no_selected_spell_cast(void) {
+    printf("--- human walk command sends no selected spell cast ---\n");
+
+    InfernoState state;
+    init_spell_cast_test_state(&state, INF_NPC_RANGER);
+    HumanInput hi;
+    human_input_init(&hi);
+    hi.cursor_mode = CURSOR_SPELL_TARGET;
+    hi.selected_spell = ATTACK_ICE;
+    human_input_queue_walk(&hi, 20, 20);
+
+    int actions[INF_NUM_ACTION_HEADS];
+    inf_translate_human_commands(&hi, actions, &state);
+    ASSERT_INT_EQ("walk command sends no spell action",
+        actions[INF_HEAD_SPELL], 0);
+    ASSERT_INT_EQ("walk command sends no target action",
+        actions[INF_HEAD_TARGET], 0);
+
+    human_input_destroy(&hi);
+}
+
+static void test_human_autocast_selection_persists_across_weapon_switches(void) {
+    printf("--- human autocast selection persists across weapon switches ---\n");
+
+    InfernoState state;
+    init_spell_cast_test_state(&state, INF_NPC_RANGER);
+    state.human_command_mode = 1;
+    state.player.autocast_spell = ENCOUNTER_SPELL_BLOOD;
+
+    HumanInput hi;
+    human_input_init(&hi);
+    human_input_queue_set_autocast(&hi, ENCOUNTER_SPELL_ICE, 1);
+    human_input_queue_equip_inventory_item(&hi, 0, ITEM_TWISTED_BOW, GEAR_SLOT_WEAPON);
+    human_input_queue_equip_inventory_item(&hi, 0, ITEM_KODAI_WAND, GEAR_SLOT_WEAPON);
+    state.human_commands = hi.commands.items;
+    state.human_command_count = hi.commands.count;
+    inf_apply_human_player_commands(&state);
+
+    ASSERT_INT_EQ("autocast spell persists after weapon switches",
+        state.player.autocast_spell, ENCOUNTER_SPELL_ICE);
+    ASSERT_INT_EQ("autocast stays enabled",
+        state.player.autocast_enabled, 1);
+    ASSERT_INT_EQ("defensive autocast persists",
+        state.player.autocast_defensive, 1);
+    ASSERT_INT_EQ("kodai returns to defensive autocast stance",
+        state.player.fight_style, FIGHT_STYLE_DEFENSIVE_AUTOCAST);
+
+    human_input_destroy(&hi);
+}
+
+static void test_autocast_is_inactive_with_non_autocast_weapon(void) {
+    printf("--- autocast is inactive with non-autocast weapon ---\n");
+
+    InfernoState state;
+    init_spell_cast_test_state(&state, INF_NPC_RANGER);
+    state.weapon_set = INF_GEAR_BP;
+    encounter_apply_loadout(&state.player, INF_RANGE_BP_LOADOUT, GEAR_RANGED);
+    state.player.autocast_enabled = 1;
+    state.player.autocast_spell = ENCOUNTER_SPELL_ICE;
+
+    InfPlayerAttack attack;
+    int resolved = inf_resolve_player_attack(&state, ENCOUNTER_SPELL_NONE, &attack);
+    ASSERT_INT_EQ("normal attack still resolves",
+        resolved, 1);
+    ASSERT_INT_EQ("non-autocast weapon ignores remembered autocast",
+        attack.stats.style, ATTACK_STYLE_RANGED);
+    ASSERT_INT_EQ("remembered autocast spell remains stored",
+        state.player.autocast_spell, ENCOUNTER_SPELL_ICE);
+}
+
 static void test_inferno_snapshot_restore_round_trip(void) {
     printf("--- inferno snapshot/restore round trip ---\n");
 
@@ -4648,12 +5052,12 @@ static void test_inferno_snapshot_restore_round_trip(void) {
     int actions_a[INF_NUM_ACTION_HEADS] = {0};
     actions_a[INF_HEAD_MOVE] = 1;
     actions_a[INF_HEAD_TARGET] = 1;
-    actions_a[INF_HEAD_PRAYER] = 1;
+    actions_a[INF_HEAD_PRAYER] = ENCOUNTER_OVERHEAD_SET_REFRESH_MELEE;
 
     int actions_b[INF_NUM_ACTION_HEADS] = {0};
     actions_b[INF_HEAD_MOVE] = 5;
     actions_b[INF_HEAD_TARGET] = 2;
-    actions_b[INF_HEAD_PRAYER] = 2;
+    actions_b[INF_HEAD_PRAYER] = ENCOUNTER_OVERHEAD_SET_REFRESH_RANGED;
 
     /* advance the env into a non-trivial state */
     const int N1 = 12;
@@ -4852,8 +5256,8 @@ static void test_inferno_cell_key_is_deterministic_and_16_bytes(void) {
     int actions[INF_NUM_ACTION_HEADS] = {0};
     actions[INF_HEAD_MOVE] = 3;
     actions[INF_HEAD_TARGET] = 1;
-    actions[INF_HEAD_PRAYER] = 2;
-    actions[INF_HEAD_OFFENSIVE] = 1;
+    actions[INF_HEAD_PRAYER] = ENCOUNTER_OVERHEAD_SET_REFRESH_RANGED;
+    actions[INF_HEAD_OFFENSIVE] = ENCOUNTER_OFFENSIVE_SET_REFRESH_PIETY;
 
     /* drive A: reset, step N actions, capture key K_A */
     inf_reset(raw, 99u);
@@ -6071,13 +6475,23 @@ int main(void) {
     test_phantom_barrage_close_barrage_timing_cannot_recast();
     test_phantom_barrage_does_not_displace_live_obs_slots();
     test_phantom_barrage_targetability_obs_requires_ready_attack();
+    test_default_autocast_casts_blood_barrage();
+    test_ice_barrage_success_freezes_target_and_records_spell();
     test_inferno_barrage_primes_confliction_and_reuses_double_accuracy();
     test_barrage_accuracy_regression_against_ranger_and_mager();
+    test_explicit_spell_cast_does_not_persist();
+    test_spell_without_target_does_not_affect_later_attack();
+    test_target_without_spell_uses_autocast();
+    test_manual_spell_overrides_autocast();
+    test_blood_barrage_at_full_hp_is_valid_and_heals_zero();
+    test_manual_spell_in_range_gear_uses_range_gear_magic_stats();
+    test_phantom_barrage_allows_explicit_spell_from_range_gear();
     test_zuk_obs_exposes_attack_timer_summary();
     test_zuk_obs_exposes_pending_sparks();
     test_human_blowpipe_click_chases_zuk_out_of_range();
     test_zuk_healer_blowpipe_target_chases_out_of_range();
     test_render_facing_prefers_attack_target_while_chasing();
+    test_render_identity_survives_npc_death_compaction();
     test_zuk_healer_target_action_tags_on_landed_hit();
     test_zuk_healer_mage_attack_counts_penalty_event();
     test_zuk_safe_healer_target_mask_requires_fire_window();
@@ -6093,6 +6507,10 @@ int main(void) {
     test_fail_fast_boundaries();
     test_human_target_and_potion_translation();
     test_human_targeting_refreshes_stale_obs_slots();
+    test_human_spell_selection_is_client_local_until_target_click();
+    test_human_walk_command_sends_no_selected_spell_cast();
+    test_human_autocast_selection_persists_across_weapon_switches();
+    test_autocast_is_inactive_with_non_autocast_weapon();
     test_inferno_snapshot_restore_round_trip();
     test_inferno_restore_builds_npc_stats_before_late_spawn();
     test_inferno_snapshot_preserves_external_pointers();
