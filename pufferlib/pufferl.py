@@ -15,7 +15,6 @@ import configparser
 from contextlib import contextmanager
 from collections import defaultdict
 import multiprocessing as mp
-import queue
 from copy import deepcopy
 
 import numpy as np
@@ -809,6 +808,7 @@ def train(env_name, args=None, gpus=None, **kwargs):
         gpus = gpus[-1:] + gpus[:-1]  # Main process gets rank 0
 
     ctx = mp.get_context('spawn')
+    processes = []
     for rank, gpu_id in reversed(list(enumerate(gpus))):
         worker_args = deepcopy(args)
         worker_args['rank'] = rank
@@ -816,8 +816,12 @@ def train(env_name, args=None, gpus=None, **kwargs):
         if rank == 0 and not subprocess:
             _train(env_name, worker_args, verbose=True)
         else:
-            ctx.Process(target=_train, args=(env_name, worker_args),
-                kwargs=kwargs).start()
+            process = ctx.Process(target=_train, args=(env_name, worker_args),
+                kwargs=kwargs)
+            process.start()
+            processes.append(process)
+
+    return processes
 
 def sweep(env_name, args=None, pareto=False):
     '''Train entry point. Handles single-GPU, multi-GPU DDP, and sweeps.'''
@@ -852,8 +856,6 @@ def sweep(env_name, args=None, pareto=False):
     all_timesteps = np.geomspace(ts_config['min'], ts_config['max'], sweep_gpus)
     result_queue = mp.get_context('spawn').Queue()
 
-    sweep_worker_timeout = float(os.environ.get('PUFFER_SWEEP_WORKER_TIMEOUT', '300'))
-
     active = {}
     completed = restored_runs
     launched = restored_runs
@@ -863,17 +865,12 @@ def sweep(env_name, args=None, pareto=False):
             or (has_run_cap and launched >= max_runs)
         )
         if should_collect:
-            try:
-                gpu_id, scores, costs, timesteps = result_queue.get(timeout=sweep_worker_timeout)
-            except queue.Empty:
-                stuck = next(iter(active))
-                print(f'WARNING: sweep worker gpu_id={stuck} silent for >{sweep_worker_timeout:.0f}s, treating as failure')
-                done_args = active.pop(stuck)
-                sweep_obj.observe(done_args, 0, 0, is_failure=True)
-                continue
+            gpu_id, scores, costs, timesteps = result_queue.get()
             if gpu_id not in active:
                 continue
-            done_args = active.pop(gpu_id)
+            done_args, processes = active.pop(gpu_id)
+            for process in processes:
+                process.join()
 
             if not scores:
                 sweep_obj.observe(done_args, 0, 0, is_failure=True)
@@ -902,11 +899,11 @@ def sweep(env_name, args=None, pareto=False):
             continue
 
         exp_args = deepcopy(args)
-        active[gpu_id] = exp_args
         launched += 1
         early_stopper = sweep_obj.make_early_stopper()
-        train(env_name, exp_args, range(gpu_id, gpu_id + exp_gpus),
+        processes = train(env_name, exp_args, range(gpu_id, gpu_id + exp_gpus),
             sweep_obj=early_stopper, result_queue=result_queue)
+        active[gpu_id] = (exp_args, processes)
 
 def eval(env_name, args=None, load_path=None):
     '''Evaluate a trained policy. Supports both native and --slowly torch backends.'''

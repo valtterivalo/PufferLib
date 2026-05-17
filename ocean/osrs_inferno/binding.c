@@ -2577,7 +2577,7 @@ void my_init(Env* env, Dict* kwargs) {
         (float)dict_get_unsafe(kwargs, "tag_reward_coeff")->value);
     static const char* const optional_float_keys[] = {
         "shield_tag_reward_coeff",
-        "win_bonus_coeff", "death_penalty_coeff",
+        "death_penalty_coeff",
         "phase_900_bonus", "phase_600_bonus", "phase_300_bonus",
         "shield_penalty_episode_cap",
         "supply_milestone_brew_reward_coeff",

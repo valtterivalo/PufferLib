@@ -4762,9 +4762,9 @@ static void child_inf_put_unknown_int(void) {
     inf_put_int((EncounterState*)&state, "bogus_key", 1);
 }
 
-static void child_inf_put_negative_win_bonus(void) {
+static void child_inf_put_removed_win_bonus(void) {
     InfernoState state = make_test_state(0, 0);
-    inf_put_float((EncounterState*)&state, "win_bonus_coeff", -1.0f);
+    inf_put_float((EncounterState*)&state, "win_bonus_coeff", 1.0f);
 }
 
 static void child_encounter_emit_projectile_overflow(void) {
@@ -4799,7 +4799,7 @@ static void test_fail_fast_boundaries(void) {
 
     assert_child_aborts("invalid inferno start wave aborts", child_inf_put_bad_start_wave);
     assert_child_aborts("unknown inferno int config aborts", child_inf_put_unknown_int);
-    assert_child_aborts("negative win bonus aborts", child_inf_put_negative_win_bonus);
+    assert_child_aborts("removed win bonus config aborts", child_inf_put_removed_win_bonus);
     assert_child_aborts("overlay projectile overflow aborts", child_encounter_emit_projectile_overflow);
     assert_child_aborts("inferno pending spark overflow aborts", child_inf_pending_spark_overflow);
     assert_child_aborts("inferno v1 snapshot restore aborts", child_inf_restore_v1_snapshot);
@@ -6034,19 +6034,39 @@ static void test_delayed_player_hit_records_landing_source(void) {
         state.last_hit_by_type, INF_NPC_ZUK);
 }
 
-static void test_terminal_reward_uses_explicit_win_bonus(void) {
-    printf("--- terminal reward uses explicit win bonus ---\n");
+static void test_terminal_reward_uses_fixed_win_reward(void) {
+    printf("--- terminal reward uses fixed win reward ---\n");
 
     InfernoState state = make_test_state(10, 10);
     state.episode_over = 1;
     state.winner = 0;
-    state.win_bonus_coeff = 0.0f;
-    ASSERT_FLOAT_NEAR("zero win bonus stays zero",
-        inf_compute_reward(&state), 0.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("terminal win reward is fixed",
+        inf_compute_reward(&state), 1.0f, 1e-6f);
 
-    state.win_bonus_coeff = 2.0f;
-    ASSERT_FLOAT_NEAR("custom win bonus is used",
-        inf_compute_reward(&state), 2.0f, 1e-6f);
+    state.winner = 1;
+    state.death_penalty_coeff = 0.25f;
+    ASSERT_FLOAT_NEAR("terminal loss uses configured death penalty",
+        inf_compute_reward(&state), -0.25f, 1e-6f);
+}
+
+static void test_final_wave_completion_emits_terminal_reward(void) {
+    printf("--- final wave completion emits terminal reward ---\n");
+
+    InfernoState state = make_test_state(10, 10);
+    state.player.base_hitpoints = 99;
+    state.player.current_hitpoints = 99;
+    state.wave = INF_NUM_WAVES - 1;
+
+    step_inferno_noop(&state);
+
+    ASSERT_INT_EQ("final wave completion ends episode", state.episode_over, 1);
+    ASSERT_INT_EQ("final wave completion marks win", state.winner, 0);
+    ASSERT_INT_EQ("final wave completion marks wave clear",
+        state.wave_completed_this_tick, 1);
+    ASSERT_FLOAT_NEAR("final wave completion emits clipped terminal reward",
+        state.reward, 1.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("episode return includes terminal reward",
+        state.episode_return, 1.0f, 1e-6f);
 }
 
 static void test_lethal_pending_hit_banks_damage_stats_before_terminal(void) {
@@ -6532,7 +6552,8 @@ int main(void) {
     test_magic_splash_landing_keeps_spell_visual_context();
     test_elysian_proc_propagates_to_player_render_entity();
     test_delayed_player_hit_records_landing_source();
-    test_terminal_reward_uses_explicit_win_bonus();
+    test_terminal_reward_uses_fixed_win_reward();
+    test_final_wave_completion_emits_terminal_reward();
     test_lethal_pending_hit_banks_damage_stats_before_terminal();
     test_timeout_reward_matches_episode_return();
     test_inferno_render_overlay_reports_death_source();

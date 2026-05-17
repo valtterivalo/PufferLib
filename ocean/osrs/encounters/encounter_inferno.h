@@ -770,8 +770,6 @@ typedef struct {
     float supply_milestone_brew_reward_coeff;
     float supply_milestone_restore_reward_coeff;
     uint32_t supply_milestone_rewarded_mask;
-    /* terminal + milestone reward shaping. */
-    float win_bonus_coeff;
     float death_penalty_coeff;
     float phase_900_bonus;
     float phase_600_bonus;
@@ -1425,7 +1423,6 @@ static EncounterState* inf_create(void) {
     InfernoState* s = (InfernoState*)calloc(1, sizeof(InfernoState));
     s->rng_state = 12345;
     s->late_start_supply_profile_scale = 1.0f;
-    s->win_bonus_coeff = 1.0f;
     return (EncounterState*)s;
 }
 
@@ -1605,7 +1602,6 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
         s->supply_milestone_brew_reward_coeff;
     float saved_supply_milestone_restore_reward_coeff =
         s->supply_milestone_restore_reward_coeff;
-    float saved_win_bonus_coeff = s->win_bonus_coeff;
     float saved_death_penalty_coeff = s->death_penalty_coeff;
     float saved_phase_900_bonus = s->phase_900_bonus;
     float saved_phase_600_bonus = s->phase_600_bonus;
@@ -1661,7 +1657,6 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
         saved_supply_milestone_brew_reward_coeff;
     s->supply_milestone_restore_reward_coeff =
         saved_supply_milestone_restore_reward_coeff;
-    s->win_bonus_coeff = saved_win_bonus_coeff;
     s->death_penalty_coeff = saved_death_penalty_coeff;
     s->phase_900_bonus = saved_phase_900_bonus;
     s->phase_600_bonus = saved_phase_600_bonus;
@@ -4747,7 +4742,7 @@ static float inf_compute_reward(InfernoState* s) {
     if (s->kill_jad_this_tick > 0) s->jad_killed_this_episode = 1;
 
     if (s->episode_over) {
-        return (s->winner == 0) ? s->win_bonus_coeff : -s->death_penalty_coeff;
+        return (s->winner == 0) ? 1.0f : -s->death_penalty_coeff;
     }
 
     int jad_is_actively_healed =
@@ -7487,10 +7482,6 @@ static void inf_put_float(EncounterState* state, const char* key, float value) {
     else if (strcmp(key, "shield_penalty_coeff") == 0) s->shield_penalty_coeff = value;
     else if (strcmp(key, "tag_reward_coeff") == 0) s->tag_reward_coeff = value;
     else if (strcmp(key, "shield_tag_reward_coeff") == 0) s->shield_tag_reward_coeff = value;
-    else if (strcmp(key, "win_bonus_coeff") == 0) {
-        inf_require_nonnegative_float_config(key, value);
-        s->win_bonus_coeff = value;
-    }
     else if (strcmp(key, "death_penalty_coeff") == 0) {
         inf_require_nonnegative_float_config(key, value);
         s->death_penalty_coeff = value;
@@ -8114,7 +8105,6 @@ typedef struct {
     float late_start_supply_profile_scale;
     float supply_milestone_brew_reward_coeff;
     float supply_milestone_restore_reward_coeff;
-    float win_bonus_coeff;
     float death_penalty_coeff;
     float phase_900_bonus;
     float phase_600_bonus;
@@ -8165,7 +8155,6 @@ static InfLiveRestoreFields inf_capture_live_restore_fields(const InfernoState* 
             s->supply_milestone_brew_reward_coeff,
         .supply_milestone_restore_reward_coeff =
             s->supply_milestone_restore_reward_coeff,
-        .win_bonus_coeff = s->win_bonus_coeff,
         .death_penalty_coeff = s->death_penalty_coeff,
         .phase_900_bonus = s->phase_900_bonus,
         .phase_600_bonus = s->phase_600_bonus,
@@ -8229,7 +8218,6 @@ static void inf_apply_live_restore_fields(
         fields.supply_milestone_brew_reward_coeff;
     s->supply_milestone_restore_reward_coeff =
         fields.supply_milestone_restore_reward_coeff;
-    s->win_bonus_coeff = fields.win_bonus_coeff;
     s->death_penalty_coeff = fields.death_penalty_coeff;
     s->phase_900_bonus = fields.phase_900_bonus;
     s->phase_600_bonus = fields.phase_600_bonus;
