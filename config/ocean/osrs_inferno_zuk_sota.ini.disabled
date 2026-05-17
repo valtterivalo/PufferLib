@@ -17,6 +17,7 @@ late_start_supply_profile_scale = 1.0
 mask_in_obs = 1.0
 death_penalty_coeff = 0.0
 terminal_penalty_enabled = 0
+step_out_forecast_obs_enabled = 1
 phase_900_bonus = 0.0
 phase_600_bonus = 0.0
 phase_300_bonus = 0.0

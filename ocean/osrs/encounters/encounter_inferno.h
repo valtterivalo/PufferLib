@@ -772,6 +772,7 @@ typedef struct {
     uint32_t supply_milestone_rewarded_mask;
     float death_penalty_coeff;
     int terminal_penalty_enabled;
+    int step_out_forecast_obs_enabled;
     float phase_900_bonus;
     float phase_600_bonus;
     float phase_300_bonus;
@@ -1424,6 +1425,7 @@ static EncounterState* inf_create(void) {
     InfernoState* s = (InfernoState*)calloc(1, sizeof(InfernoState));
     s->rng_state = 12345;
     s->late_start_supply_profile_scale = 1.0f;
+    s->step_out_forecast_obs_enabled = 1;
     return (EncounterState*)s;
 }
 
@@ -1605,6 +1607,7 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
         s->supply_milestone_restore_reward_coeff;
     float saved_death_penalty_coeff = s->death_penalty_coeff;
     int saved_terminal_penalty_enabled = s->terminal_penalty_enabled;
+    int saved_step_out_forecast_obs_enabled = s->step_out_forecast_obs_enabled;
     float saved_phase_900_bonus = s->phase_900_bonus;
     float saved_phase_600_bonus = s->phase_600_bonus;
     float saved_phase_300_bonus = s->phase_300_bonus;
@@ -1661,6 +1664,7 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
         saved_supply_milestone_restore_reward_coeff;
     s->death_penalty_coeff = saved_death_penalty_coeff;
     s->terminal_penalty_enabled = saved_terminal_penalty_enabled;
+    s->step_out_forecast_obs_enabled = saved_step_out_forecast_obs_enabled;
     s->phase_900_bonus = saved_phase_900_bonus;
     s->phase_600_bonus = saved_phase_600_bonus;
     s->phase_300_bonus = saved_phase_300_bonus;
@@ -7053,34 +7057,38 @@ static void inf_write_obs(EncounterState* state, float* obs) {
     }
 
     {
-        InfStepOutForecast forecast;
-        inf_build_step_out_forecast(s, &forecast);
-        for (int action_idx = 0; action_idx < ENCOUNTER_MOVE_ACTIONS; action_idx++) {
-            const InfStepOutForecastAction* action = &forecast.actions[action_idx];
-            int first_attack_tick = 0;
-            int first_style_mask = 0;
-            int max_hit = 0;
-            int ranger_mager_same_tick = 0;
-            for (int tick_idx = 0; tick_idx < INF_STEP_OUT_FORECAST_HORIZON; tick_idx++) {
-                const InfStepOutForecastTick* tick = &action->ticks[tick_idx];
-                int style_mask = inf_step_out_forecast_tick_style_mask(tick);
-                if (first_attack_tick == 0 &&
-                        inf_step_out_forecast_tick_has_event(tick)) {
-                    first_attack_tick = tick_idx + 1;
-                    first_style_mask = style_mask;
+        if (s->step_out_forecast_obs_enabled) {
+            InfStepOutForecast forecast;
+            inf_build_step_out_forecast(s, &forecast);
+            for (int action_idx = 0; action_idx < ENCOUNTER_MOVE_ACTIONS; action_idx++) {
+                const InfStepOutForecastAction* action = &forecast.actions[action_idx];
+                int first_attack_tick = 0;
+                int first_style_mask = 0;
+                int max_hit = 0;
+                int ranger_mager_same_tick = 0;
+                for (int tick_idx = 0; tick_idx < INF_STEP_OUT_FORECAST_HORIZON; tick_idx++) {
+                    const InfStepOutForecastTick* tick = &action->ticks[tick_idx];
+                    int style_mask = inf_step_out_forecast_tick_style_mask(tick);
+                    if (first_attack_tick == 0 &&
+                            inf_step_out_forecast_tick_has_event(tick)) {
+                        first_attack_tick = tick_idx + 1;
+                        first_style_mask = style_mask;
+                    }
+                    if (tick->max_hit > max_hit) max_hit = tick->max_hit;
+                    if (tick->ranger_count > 0 && tick->mager_count > 0)
+                        ranger_mager_same_tick = 1;
                 }
-                if (tick->max_hit > max_hit) max_hit = tick->max_hit;
-                if (tick->ranger_count > 0 && tick->mager_count > 0)
-                    ranger_mager_same_tick = 1;
+                obs[i++] = action->valid ? 1.0f : 0.0f;
+                obs[i++] = (float)first_attack_tick / (float)INF_STEP_OUT_FORECAST_HORIZON;
+                obs[i++] = (float)first_style_mask / 7.0f;
+                obs[i++] = (float)max_hit / 150.0f;
+                obs[i++] = action->same_tick_mixed_style_conflict ? 1.0f : 0.0f;
+                obs[i++] = ranger_mager_same_tick ? 1.0f : 0.0f;
+                obs[i++] = action->ranger_mager_offtick_opportunity ? 1.0f : 0.0f;
+                obs[i++] = action->melee_fallback_exposure ? 1.0f : 0.0f;
             }
-            obs[i++] = action->valid ? 1.0f : 0.0f;
-            obs[i++] = (float)first_attack_tick / (float)INF_STEP_OUT_FORECAST_HORIZON;
-            obs[i++] = (float)first_style_mask / 7.0f;
-            obs[i++] = (float)max_hit / 150.0f;
-            obs[i++] = action->same_tick_mixed_style_conflict ? 1.0f : 0.0f;
-            obs[i++] = ranger_mager_same_tick ? 1.0f : 0.0f;
-            obs[i++] = action->ranger_mager_offtick_opportunity ? 1.0f : 0.0f;
-            obs[i++] = action->melee_fallback_exposure ? 1.0f : 0.0f;
+        } else {
+            i += INF_STEP_OUT_FORECAST_OBS_SIZE;
         }
     }
 #ifdef INF_PROFILE_ENABLED
@@ -7448,6 +7456,9 @@ static void inf_put_int(EncounterState* state, const char* key, int value) {
         s->human_command_mode = encounter_require_binary_config("inferno", key, value);
     else if (strcmp(key, "terminal_penalty_enabled") == 0)
         s->terminal_penalty_enabled =
+            encounter_require_binary_config("inferno", key, value);
+    else if (strcmp(key, "step_out_forecast_obs_enabled") == 0)
+        s->step_out_forecast_obs_enabled =
             encounter_require_binary_config("inferno", key, value);
     else if (strcmp(key, "oracle_mode") == 0) {
         if (value < 0 || value > 11) {
@@ -8118,6 +8129,7 @@ typedef struct {
     float supply_milestone_restore_reward_coeff;
     float death_penalty_coeff;
     int terminal_penalty_enabled;
+    int step_out_forecast_obs_enabled;
     float phase_900_bonus;
     float phase_600_bonus;
     float phase_300_bonus;
@@ -8169,6 +8181,7 @@ static InfLiveRestoreFields inf_capture_live_restore_fields(const InfernoState* 
             s->supply_milestone_restore_reward_coeff,
         .death_penalty_coeff = s->death_penalty_coeff,
         .terminal_penalty_enabled = s->terminal_penalty_enabled,
+        .step_out_forecast_obs_enabled = s->step_out_forecast_obs_enabled,
         .phase_900_bonus = s->phase_900_bonus,
         .phase_600_bonus = s->phase_600_bonus,
         .phase_300_bonus = s->phase_300_bonus,
@@ -8233,6 +8246,7 @@ static void inf_apply_live_restore_fields(
         fields.supply_milestone_restore_reward_coeff;
     s->death_penalty_coeff = fields.death_penalty_coeff;
     s->terminal_penalty_enabled = fields.terminal_penalty_enabled;
+    s->step_out_forecast_obs_enabled = fields.step_out_forecast_obs_enabled;
     s->phase_900_bonus = fields.phase_900_bonus;
     s->phase_600_bonus = fields.phase_600_bonus;
     s->phase_300_bonus = fields.phase_300_bonus;

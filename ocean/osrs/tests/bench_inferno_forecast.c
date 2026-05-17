@@ -42,6 +42,7 @@ static void init_bench_state(InfernoState* state, int player_x, int player_y) {
     state->player_last_interaction_age = 1;
     state->player_dest_x = -1;
     state->player_dest_y = -1;
+    state->step_out_forecast_obs_enabled = 1;
     state->weapon_set = INF_GEAR_TBOW;
     osrs_interaction_init(&state->interaction);
     for (int p = 0; p < INF_NUM_PILLARS; p++) {
@@ -89,8 +90,19 @@ static void init_dense_wave_state(InfernoState* state) {
     inf_rebuild_entity_collision_flags(state);
 }
 
+static void init_pillar_stack_no_forecast_state(InfernoState* state) {
+    init_pillar_stack_state(state);
+    state->step_out_forecast_obs_enabled = 0;
+}
+
+static void init_dense_wave_no_forecast_state(InfernoState* state) {
+    init_dense_wave_state(state);
+    state->step_out_forecast_obs_enabled = 0;
+}
+
 typedef void (*BenchInit)(InfernoState*);
 typedef void (*BenchFn)(InfernoState*, float*);
+typedef void (*FixedBenchFn)(const InfernoState*, float*);
 
 static void bench_forecast(InfernoState* state, float* obs) {
     (void)obs;
@@ -106,14 +118,61 @@ static void bench_obs(InfernoState* state, float* obs) {
     bench_sink += obs[INF_NUM_OBS - 1];
 }
 
+static void bench_mask(InfernoState* state, float* obs) {
+    inf_write_mask((EncounterState*)state, obs);
+    bench_sink += obs[0];
+    bench_sink += obs[INF_ACTION_MASK_SIZE - 1];
+}
+
+static void bench_copy_fixed(const InfernoState* template, float* obs) {
+    (void)obs;
+    InfernoState state;
+    memcpy(&state, template, sizeof(state));
+    bench_sink += state.player.x;
+}
+
+static void bench_step_fixed(const InfernoState* template, float* obs) {
+    (void)obs;
+    InfernoState state;
+    memcpy(&state, template, sizeof(state));
+    int actions[INF_NUM_ACTION_HEADS] = {0};
+    inf_step((EncounterState*)&state, actions);
+    bench_sink += state.player.current_hitpoints;
+}
+
+static void bench_step_obs_mask_fixed(const InfernoState* template, float* obs) {
+    InfernoState state;
+    memcpy(&state, template, sizeof(state));
+    int actions[INF_NUM_ACTION_HEADS] = {0};
+    inf_step((EncounterState*)&state, actions);
+    inf_write_obs((EncounterState*)&state, obs);
+    inf_write_mask((EncounterState*)&state, obs + INF_NUM_OBS);
+    bench_sink += state.player.current_hitpoints;
+    bench_sink += obs[0];
+}
+
 static void run_bench(const char* label, BenchInit init, BenchFn fn, int iters) {
     InfernoState state;
-    float obs[INF_NUM_OBS];
+    float obs[INF_NUM_OBS + INF_ACTION_MASK_SIZE];
     init(&state);
     fn(&state, obs);
     double start = now_seconds();
     for (int i = 0; i < iters; i++) {
         fn(&state, obs);
+    }
+    double elapsed = now_seconds() - start;
+    printf("%-24s %9d calls  %9.3f ms  %9.3f us/call\n",
+        label, iters, elapsed * 1000.0, elapsed * 1000000.0 / (double)iters);
+}
+
+static void run_fixed_bench(const char* label, BenchInit init, FixedBenchFn fn, int iters) {
+    InfernoState template;
+    float obs[INF_NUM_OBS + INF_ACTION_MASK_SIZE];
+    init(&template);
+    fn(&template, obs);
+    double start = now_seconds();
+    for (int i = 0; i < iters; i++) {
+        fn(&template, obs);
     }
     double elapsed = now_seconds() - start;
     printf("%-24s %9d calls  %9.3f ms  %9.3f us/call\n",
@@ -126,10 +185,19 @@ int main(void) {
     printf("INF_STEP_OUT_FORECAST_OBS_SIZE = %d\n", INF_STEP_OUT_FORECAST_OBS_SIZE);
     run_bench("empty forecast", init_empty_state, bench_forecast, 200000);
     run_bench("empty obs", init_empty_state, bench_obs, 200000);
+    run_bench("empty mask", init_empty_state, bench_mask, 200000);
     run_bench("stack forecast", init_pillar_stack_state, bench_forecast, 100000);
     run_bench("stack obs", init_pillar_stack_state, bench_obs, 100000);
+    run_bench("stack obs no forecast", init_pillar_stack_no_forecast_state, bench_obs, 100000);
+    run_bench("stack mask", init_pillar_stack_state, bench_mask, 100000);
     run_bench("dense forecast", init_dense_wave_state, bench_forecast, 50000);
     run_bench("dense obs", init_dense_wave_state, bench_obs, 50000);
+    run_bench("dense obs no forecast", init_dense_wave_no_forecast_state, bench_obs, 50000);
+    run_bench("dense mask", init_dense_wave_state, bench_mask, 50000);
+    run_fixed_bench("dense copy fixed", init_dense_wave_state, bench_copy_fixed, 50000);
+    run_fixed_bench("dense step fixed", init_dense_wave_state, bench_step_fixed, 50000);
+    run_fixed_bench("dense step+obs+mask", init_dense_wave_state, bench_step_obs_mask_fixed, 50000);
+    run_fixed_bench("step+obs+mask no fc", init_dense_wave_no_forecast_state, bench_step_obs_mask_fixed, 50000);
     printf("bench_sink = %.3f\n", bench_sink);
     return 0;
 }

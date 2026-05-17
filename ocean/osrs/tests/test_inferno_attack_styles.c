@@ -175,6 +175,7 @@ static InfernoState make_test_state(int player_x, int player_y) {
     state.player.y = player_y;
     state.player_last_interaction_target_slot = -1;
     state.player_last_interaction_age = 1;
+    state.step_out_forecast_obs_enabled = 1;
     return state;
 }
 
@@ -1348,6 +1349,7 @@ static void test_inferno_reset_preserves_reward_config(void) {
     inf_put_int(raw_state, "zuk_healer_reward_mode", 1);
     inf_put_int(raw_state, "joseph_reward_mode", 1);
     inf_put_int(raw_state, "terminal_penalty_enabled", 1);
+    inf_put_int(raw_state, "step_out_forecast_obs_enabled", 0);
     inf_reset(raw_state, 123u);
 
     ASSERT_FLOAT_NEAR("supply milestone brew reward coefficient",
@@ -1373,6 +1375,8 @@ static void test_inferno_reset_preserves_reward_config(void) {
     ASSERT_INT_EQ("Zuk healer reward mode", state->zuk_healer_reward_mode, 1);
     ASSERT_INT_EQ("Joseph reward mode", state->joseph_reward_mode, 1);
     ASSERT_INT_EQ("terminal penalty enabled", state->terminal_penalty_enabled, 1);
+    ASSERT_INT_EQ("step-out forecast obs disabled",
+        state->step_out_forecast_obs_enabled, 0);
 
     inf_destroy(raw_state);
 }
@@ -2856,6 +2860,7 @@ static void init_step_out_forecast_stack_state(InfernoState* state, int player_x
     state->player_last_interaction_age = 1;
     state->player_dest_x = -1;
     state->player_dest_y = -1;
+    state->step_out_forecast_obs_enabled = 1;
     state->weapon_set = INF_GEAR_TBOW;
     osrs_interaction_init(&state->interaction);
     for (int p = 0; p < INF_NUM_PILLARS; p++) {
@@ -3036,6 +3041,25 @@ static void test_step_out_forecast_obs_exposes_compact_action_affordance(void) {
         obs[action_start + 6], 1.0f, 1e-6f);
     ASSERT_FLOAT_NEAR("run west obs melee fallback exposure",
         obs[action_start + 7], 0.0f, 1e-6f);
+}
+
+static void test_step_out_forecast_obs_can_be_disabled(void) {
+    printf("--- step-out forecast obs can be disabled ---\n");
+
+    InfernoState state;
+    init_step_out_forecast_stack_state(&state, 29, 39);
+    add_step_out_forecast_npc(&state, 0, INF_NPC_RANGER, 24, 31, 0);
+    add_step_out_forecast_npc(&state, 1, INF_NPC_MAGER, 29, 30, 0);
+    state.step_out_forecast_obs_enabled = 0;
+
+    float obs[INF_NUM_OBS];
+    inf_write_obs((EncounterState*)&state, obs);
+
+    int forecast_start = inferno_step_out_forecast_obs_start();
+    for (int j = 0; j < INF_STEP_OUT_FORECAST_OBS_SIZE; j++) {
+        ASSERT_FLOAT_NEAR("disabled forecast obs stays zero",
+            obs[forecast_start + j], 0.0f, 1e-6f);
+    }
 }
 
 static void test_step_out_forecast_south_pillar_ranger_mager_order(void) {
@@ -6332,6 +6356,35 @@ static void test_inferno_binding_forwards_terminal_penalty_toggle(void) {
         "distribution = int_uniform");
 }
 
+static void test_inferno_binding_forwards_step_out_forecast_obs_toggle(void) {
+    printf("--- inferno binding forwards step-out forecast obs toggle ---\n");
+
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "step-out forecast obs int config",
+        "ocean/osrs_inferno/binding.c",
+        "DictItem* step_out_forecast_obs_enabled",
+        "DictItem* zuk_healer_reward_mode",
+        "\"step_out_forecast_obs_enabled\"");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "step-out forecast obs default config",
+        "config/ocean/osrs_inferno.ini",
+        "[env]",
+        "[vec]",
+        "step_out_forecast_obs_enabled = 1");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "step-out forecast obs sweep axis",
+        "config/ocean/osrs_inferno.ini",
+        "[sweep.env.step_out_forecast_obs_enabled]",
+        "scale = auto",
+        "distribution = int_uniform");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "step-out forecast obs sweep-only entry",
+        "config/ocean/osrs_inferno.ini",
+        "[sweep]",
+        "[sweep.train.total_timesteps]",
+        "env.step_out_forecast_obs_enabled");
+}
+
 static void test_inferno_binding_logs_post_healer_set_reward_components(void) {
     printf("--- inferno binding logs post-healer set reward components ---\n");
 
@@ -6544,6 +6597,7 @@ int main(void) {
     test_inferno_npc_travel_uses_sw_origin_around_all_pillars();
     test_step_out_forecast_north_pillar_ranger_mager_order();
     test_step_out_forecast_obs_exposes_compact_action_affordance();
+    test_step_out_forecast_obs_can_be_disabled();
     test_step_out_forecast_south_pillar_ranger_mager_order();
     test_step_out_forecast_west_pillar_ranger_mager_order();
     test_step_out_forecast_inactive_pillar_does_not_create_cover();
@@ -6636,6 +6690,7 @@ int main(void) {
     test_inferno_binding_forwards_joseph_reward_mode();
     test_inferno_binding_forwards_safe_healer_target_mask();
     test_inferno_binding_forwards_terminal_penalty_toggle();
+    test_inferno_binding_forwards_step_out_forecast_obs_toggle();
     test_inferno_binding_logs_post_healer_set_reward_components();
     test_inferno_binding_emits_post_240_traces();
     test_inferno_render_status_survives_overlay_refresh();

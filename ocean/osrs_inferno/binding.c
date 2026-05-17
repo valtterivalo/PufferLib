@@ -2621,6 +2621,13 @@ void my_init(Env* env, Dict* kwargs) {
             env->enc_state, "terminal_penalty_enabled",
             (int)terminal_penalty_enabled->value);
     }
+    DictItem* step_out_forecast_obs_enabled =
+        dict_get_unsafe(kwargs, "step_out_forecast_obs_enabled");
+    if (step_out_forecast_obs_enabled) {
+        ENCOUNTER_INFERNO.put_int(
+            env->enc_state, "step_out_forecast_obs_enabled",
+            (int)step_out_forecast_obs_enabled->value);
+    }
     DictItem* zuk_healer_reward_mode =
         dict_get_unsafe(kwargs, "zuk_healer_reward_mode");
     if (zuk_healer_reward_mode) {
