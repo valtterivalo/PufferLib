@@ -4540,7 +4540,7 @@ static void test_phantom_barrage_target_is_masked_until_cast_window(void) {
 }
 
 static void test_phantom_barrage_hits_aoe_on_first_cast_window(void) {
-    printf("--- phantom barrage hits AoE on first cast window ---\n");
+    printf("--- manual phantom barrage hits AoE on first cast window ---\n");
 
     int found_aoe_hit = 0;
     for (uint32_t seed = 1; seed < 200 && !found_aoe_hit; seed++) {
@@ -4555,6 +4555,7 @@ static void test_phantom_barrage_hits_aoe_on_first_cast_window(void) {
         int actions[INF_NUM_ACTION_HEADS];
         memset(actions, 0, sizeof(actions));
         actions[INF_HEAD_TARGET] = target_slot + 1;
+        actions[INF_HEAD_SPELL] = 2;
         inf_tick_player(&state, actions, 1);
 
         ASSERT_INT_EQ("phantom primary does not receive stale pending hit",
@@ -4567,6 +4568,86 @@ static void test_phantom_barrage_hits_aoe_on_first_cast_window(void) {
     }
 
     ASSERT_INT_EQ("phantom barrage can queue adjacent AoE hit", found_aoe_hit, 1);
+}
+
+static void test_ranged_attack_cannot_fire_on_dying_target(void) {
+    printf("--- ranged attack cannot fire on dying target ---\n");
+
+    InfernoState state;
+    init_spell_cast_test_state(&state, INF_NPC_NIBBLER);
+    state.weapon_set = INF_GEAR_LONG_RANGE;
+    encounter_apply_loadout(&state.player, INF_MAX_RANGE_LONG_LOADOUT, GEAR_RANGED);
+    state.player.autocast_enabled = 0;
+    state.player.attack_timer = 0;
+    state.npcs[0].hp = 0;
+    state.npcs[0].death_ticks = 1;
+    osrs_interaction_set(&state.interaction, 0);
+
+    int actions[INF_NUM_ACTION_HEADS];
+    memset(actions, 0, sizeof(actions));
+    inf_tick_player(&state, actions, 1);
+
+    ASSERT_INT_EQ("ranged attack does not fire on dying target",
+        state.player_attacked_this_tick, 0);
+    ASSERT_INT_EQ("ranged attack does not queue dying target pending hit",
+        state.npcs[0].pending_hit.active, 0);
+    ASSERT_INT_EQ("ranged attack does not start cooldown",
+        state.player.attack_timer, 0);
+}
+
+static void test_autocast_barrage_cannot_fire_on_dying_target(void) {
+    printf("--- autocast barrage cannot fire on dying target ---\n");
+
+    InfernoState state;
+    init_spell_cast_test_state(&state, INF_NPC_NIBBLER);
+    state.player.attack_timer = 0;
+    state.npcs[0].hp = 0;
+    state.npcs[0].death_ticks = 1;
+    osrs_interaction_set(&state.interaction, 0);
+
+    int actions[INF_NUM_ACTION_HEADS];
+    memset(actions, 0, sizeof(actions));
+    inf_tick_player(&state, actions, 1);
+
+    ASSERT_INT_EQ("autocast does not fire on dying target",
+        state.player_attacked_this_tick, 0);
+    ASSERT_INT_EQ("autocast does not queue dying target pending hit",
+        state.npcs[0].pending_hit.active, 0);
+    ASSERT_INT_EQ("autocast does not start cooldown",
+        state.player.attack_timer, 0);
+}
+
+static void test_manual_blood_barrage_can_heal_from_dying_primary(void) {
+    printf("--- manual blood barrage can heal from dying primary ---\n");
+
+    int found_heal = 0;
+    for (uint32_t seed = 1; seed < 400 && !found_heal; seed++) {
+        InfernoState state;
+        init_spell_cast_test_state(&state, INF_NPC_NIBBLER);
+        state.rng_state = seed;
+        state.player.current_hitpoints = 80;
+        state.player.attack_timer = 0;
+        state.npcs[0].hp = 0;
+        state.npcs[0].death_ticks = 1;
+        osrs_interaction_set(&state.interaction, 0);
+
+        int actions[INF_NUM_ACTION_HEADS];
+        memset(actions, 0, sizeof(actions));
+        actions[INF_HEAD_SPELL] = 1;
+        inf_tick_player(&state, actions, 1);
+
+        ASSERT_INT_EQ("manual blood barrage fires on dying target",
+            state.player_attacked_this_tick, 1);
+        ASSERT_INT_EQ("manual blood barrage does not queue dying target pending hit",
+            state.npcs[0].pending_hit.active, 0);
+        if (state.blood_heal_this_tick > 0 &&
+                state.player.current_hitpoints > 80) {
+            found_heal = 1;
+        }
+    }
+
+    ASSERT_INT_EQ("manual blood barrage can heal from dying primary",
+        found_heal, 1);
 }
 
 static void test_phantom_barrage_close_barrage_timing_cannot_recast(void) {
@@ -7381,6 +7462,9 @@ int main(void) {
     test_player_projectile_timing_uses_reference_options();
     test_phantom_barrage_target_is_masked_until_cast_window();
     test_phantom_barrage_hits_aoe_on_first_cast_window();
+    test_ranged_attack_cannot_fire_on_dying_target();
+    test_autocast_barrage_cannot_fire_on_dying_target();
+    test_manual_blood_barrage_can_heal_from_dying_primary();
     test_phantom_barrage_close_barrage_timing_cannot_recast();
     test_phantom_barrage_does_not_displace_live_obs_slots();
     test_phantom_barrage_targetability_obs_requires_ready_attack();

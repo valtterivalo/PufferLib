@@ -60,6 +60,15 @@ static void inf_apply_npc_death(InfernoState* s, int npc_idx) {
     }
 }
 
+static void inf_apply_blood_barrage_heal_damage(InfernoState* s, int damage) {
+    if (damage <= 0) return;
+    int hp_before = s->player.current_hitpoints;
+    s->player.current_hitpoints += damage / 4;
+    if (s->player.current_hitpoints > s->player.base_hitpoints)
+        s->player.current_hitpoints = s->player.base_hitpoints;
+    s->blood_heal_this_tick += s->player.current_hitpoints - hp_before;
+}
+
 typedef struct {
     int target_slot;
     int gear;
@@ -477,6 +486,7 @@ static void inf_tick_player_ctx(
             s->npcs[npc_idx].type != INF_NPC_ZUK_SHIELD;
         int is_phantom_target =
             npc_idx >= 0 && npc_idx < INF_MAX_NPCS &&
+            inf_is_barrage_spell(manual_spell) &&
             inf_npc_is_phantom_barrage_obs_candidate(s, ctx, npc_idx);
         if (is_live_target || is_phantom_target) {
             if (npc_idx < 32 && inf_is_untagged_live_zuk_healer_slot(s, npc_idx)) {
@@ -539,13 +549,16 @@ static void inf_tick_player_ctx(
     int has_explicit_move = (actions[INF_HEAD_MOVE] > 0 || s->player_dest_x >= 0);
     if (!has_new_target && has_explicit_move)
         osrs_interaction_check_interrupt(&s->interaction, OSRS_IACT_MOVE);
-    /* clear target if NPC died unless the current tick can still phantom barrage it. */
-    if (osrs_interaction_active(&s->interaction) &&
-        (!s->npcs[s->interaction.target_slot].active ||
-         (s->npcs[s->interaction.target_slot].death_ticks > 0 &&
-             !inf_npc_is_phantom_barrage_cast_window(
-                 s, ctx, s->interaction.target_slot)))) {
-        osrs_interaction_clear(&s->interaction);
+    if (osrs_interaction_active(&s->interaction)) {
+        int target_slot = s->interaction.target_slot;
+        int target_can_manual_phantom =
+            inf_is_barrage_spell(manual_spell) &&
+            inf_npc_is_phantom_barrage_cast_window(s, ctx, target_slot);
+        if (!s->npcs[target_slot].active ||
+                (s->npcs[target_slot].death_ticks > 0 &&
+                 !target_can_manual_phantom)) {
+            osrs_interaction_clear(&s->interaction);
+        }
     }
 
     if (osrs_interaction_active(&s->interaction) &&
@@ -626,8 +639,12 @@ static void inf_tick_player_ctx(
             int weapon_is_blowpipe = inf_player_weapon_is(s, ITEM_TOXIC_BLOWPIPE);
             uint8_t player_weapon = attack.weapon;
             int active_spell = attack.spell;
+            int is_manual_dying_barrage =
+                target_npc->death_ticks > 0 && inf_is_barrage_spell(manual_spell);
 
-            if (has_attack && encounter_player_can_attack(s->player.x, s->player.y,
+            if (target_npc->death_ticks > 0 && !is_manual_dying_barrage) {
+                osrs_interaction_clear(&s->interaction);
+            } else if (has_attack && encounter_player_can_attack(s->player.x, s->player.y,
                     target_npc->x, target_npc->y, target_npc->size,
                     ls->attack_range, s->los_blockers, s->los_blocker_count)) {
                 int is_blowpipe_spec_attack = weapon_is_blowpipe &&
@@ -706,11 +723,16 @@ static void inf_tick_player_ctx(
                         btargets, bt_count, attack_effects.attack_roll, attack_effects.max_hit,
                         &s->rng_state, active_spell, attack_effects.use_double_accuracy);
                     total_dmg = br.total_damage;
+                    int phantom_primary_blood_damage = 0;
                     if (target_npc->death_ticks > 0) {
+                        if (active_spell == ENCOUNTER_SPELL_BLOOD && btargets[0].hit)
+                            phantom_primary_blood_damage = btargets[0].damage;
                         total_dmg -= btargets[0].damage;
                         btargets[0].hit = 0;
                         btargets[0].damage = 0;
                     }
+                    inf_apply_blood_barrage_heal_damage(
+                        s, phantom_primary_blood_damage);
                     osrs_finalize_attack_effects(
                         &s->player.equipment_effect_profile,
                         &s->player.item_effect_state,
@@ -950,14 +972,7 @@ static void inf_resolve_player_projectiles_on_npcs(InfernoState* s) {
             inf_apply_npc_death(s, i);
         }
     }
-    if (blood_heal_acc > 0) {
-        int healed = blood_heal_acc / 4;
-        int hp_before = s->player.current_hitpoints;
-        s->player.current_hitpoints += healed;
-        if (s->player.current_hitpoints > s->player.base_hitpoints)
-            s->player.current_hitpoints = s->player.base_hitpoints;
-        s->blood_heal_this_tick = s->player.current_hitpoints - hp_before;
-    }
+    inf_apply_blood_barrage_heal_damage(s, blood_heal_acc);
 }
 
 static void inf_resolve_player_pending_hits_ctx(InfernoState* s, const InfernoContext* ctx) {

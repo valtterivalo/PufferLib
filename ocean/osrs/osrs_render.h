@@ -2361,9 +2361,11 @@ static void render_clear_history(RenderClient* rc) {
     rc->history_cursor = -1;
 }
 
-/* forward declaration: render_push_splat used by render_post_tick, defined later */
-static void render_push_splat(RenderClient* rc, int damage, int pidx);
 static void render_push_splat_type(RenderClient* rc, int damage, int pidx, int type);
+
+static int render_entity_hit_splat_type(const RenderEntity* entity) {
+    return entity->hit_damage > 0 ? 1 : 0;
+}
 
 
 /* populate rc->entities from env->players or encounter vtable.
@@ -2645,10 +2647,8 @@ static void render_post_tick(RenderClient* rc, OsrsEnv* env) {
            hitsplat: one splat per hit, fills the next available slot (0-3). */
         if (p->hit_landed_this_tick) {
             rc->hp_bar_visible_until[i] = env->tick + 10;
-            if (p->elysian_proc_this_tick)
-                render_push_splat_type(rc, p->hit_damage, i, 4);
-            else
-                render_push_splat(rc, p->hit_damage, i);
+            render_push_splat_type(rc, p->hit_damage, i,
+                render_entity_hit_splat_type(p));
         }
         if (p->npc_anim_id >= 0 ||
             p->attack_style_this_tick != ATTACK_STYLE_NONE ||
@@ -3111,12 +3111,6 @@ static void render_push_splat_type(RenderClient* rc, int damage, int pidx, int t
         .ticks_remaining = 70,
     };
 }
-
-static void render_push_splat(RenderClient* rc, int damage, int pidx) {
-    render_push_splat_type(rc, damage, pidx, damage > 0 ? 1 : 0);
-}
-
-
 
 static void render_draw_grid(RenderClient* rc, OsrsEnv* env) {
     const CollisionMap* cmap = rc->collision_map;

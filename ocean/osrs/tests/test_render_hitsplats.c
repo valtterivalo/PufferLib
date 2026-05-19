@@ -61,6 +61,18 @@ int main(void) {
     assert(rc.splats[0][0].ticks_remaining == 69);
     assert(rc.splats[0][0].hitmark_move == 4.75);
 
+    RenderEntity elysian_hit = {
+        .hit_damage = 12,
+        .elysian_proc_this_tick = 1,
+    };
+    assert(render_entity_hit_splat_type(&elysian_hit) == 1);
+
+    RenderEntity elysian_zero = {
+        .hit_damage = 0,
+        .elysian_proc_this_tick = 1,
+    };
+    assert(render_entity_hit_splat_type(&elysian_zero) == 0);
+
     for (int i = 0; i < 40; i++) {
         render_update_splats_client_tick(&rc);
     }

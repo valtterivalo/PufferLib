@@ -239,12 +239,7 @@ static int inf_player_can_phantom_barrage_npc(
             npc->type == INF_NPC_ZUK_SHIELD)
         return 0;
 
-    InfPlayerAttack attack;
-    int has_barrage = inf_resolve_player_attack_ctx(s, ctx, ENCOUNTER_SPELL_NONE, &attack) &&
-        attack.is_barrage;
-    if (!has_barrage)
-        has_barrage = inf_player_has_any_barrage_spell_available(s);
-    if (!has_barrage) return 0;
+    if (!inf_player_has_any_barrage_spell_available(s)) return 0;
 
     return encounter_player_can_attack(
         s->player.x,
