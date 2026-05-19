@@ -85,6 +85,18 @@ static void test_alpha_transform_updates_face_alphas_and_mesh_colors(void) {
 }
 
 static void test_projectile_profiles_match_runec_visual_rows(void) {
+    assert(OSRS_COMBAT_VISUAL_ROW_COUNT > 1000);
+
+    const OsrsCombatVisualRow* tbow_row =
+        osrs_combat_visual_find_item_id(OSRS_ITEM_ID_TWISTED_BOW, ATTACK_STYLE_RANGED);
+    assert(tbow_row);
+    assert(tbow_row->attack_anim_id == 426);
+
+    const OsrsCombatVisualRow* bowfa_row =
+        osrs_combat_visual_find_item_id(OSRS_ITEM_ID_BOW_OF_FAERDHINEN, ATTACK_STYLE_RANGED);
+    assert(bowfa_row);
+    assert(bowfa_row->attack_anim_id == 426);
+
     const OsrsCombatProjectileProfile* tbow =
         osrs_combat_visual_ranged_projectile_profile(
             ITEM_TWISTED_BOW, OSRS_COMBAT_PROJECTILE_NONE);
@@ -114,6 +126,17 @@ static void test_projectile_profiles_match_runec_visual_rows(void) {
     assert(trident->launch_spotanim_id == GFX_TRIDENT_CAST);
     assert(trident->travel_spotanim_id == GFX_TRIDENT_PROJ);
     assert(trident->impact_spotanim_id == GFX_TRIDENT_IMPACT);
+
+    const OsrsCombatVisualRow* jad_magic =
+        osrs_combat_visual_find_npc_id(3127, ATTACK_STYLE_MAGIC);
+    assert(jad_magic);
+    assert(jad_magic->attack_anim_id == 2656);
+    assert(jad_magic->projectile.travel_spotanim_id == 445);
+    assert(jad_magic->projectile.impact_spotanim_id == 446);
+
+    assert(osrs_combat_visual_find_npc_id(7706, ATTACK_STYLE_MAGIC) == NULL);
+    assert(osrs_combat_visual_find_npc_id(7698, ATTACK_STYLE_RANGED) == NULL);
+    assert(osrs_combat_visual_find_npc_id(7699, ATTACK_STYLE_MAGIC) == NULL);
 }
 
 static void test_spell_profiles_match_runec_visual_rows(void) {
@@ -149,11 +172,11 @@ int main(void) {
     assert(osrs_combat_visual_weapon_attack_anim(
         ITEM_WHIP, ATTACK_STYLE_MELEE, 0, OSRS_PLAYER_UNARMED_ATTACK_ANIM) == 1658);
     assert(osrs_combat_visual_weapon_attack_anim(
-        ITEM_INQUISITORS_MACE, ATTACK_STYLE_MELEE, 0, OSRS_PLAYER_UNARMED_ATTACK_ANIM) == 400);
+        ITEM_INQUISITORS_MACE, ATTACK_STYLE_MELEE, 0, OSRS_PLAYER_UNARMED_ATTACK_ANIM) == 4503);
     assert(osrs_combat_visual_weapon_attack_anim(
         ITEM_INQUISITORS_MACE, ATTACK_STYLE_MELEE, 1, OSRS_PLAYER_UNARMED_ATTACK_ANIM) == 1060);
     assert(osrs_combat_visual_weapon_attack_anim(
-        ITEM_RUNE_CROSSBOW, ATTACK_STYLE_RANGED, 0, OSRS_PLAYER_UNARMED_ATTACK_ANIM) == 4230);
+        ITEM_RUNE_CROSSBOW, ATTACK_STYLE_RANGED, 0, OSRS_PLAYER_UNARMED_ATTACK_ANIM) == 7552);
     assert(osrs_combat_visual_ranged_projectile(
         ITEM_RUNE_CROSSBOW, OSRS_COMBAT_PROJECTILE_NONE) == OSRS_COMBAT_PROJECTILE_BOLT);
     assert(osrs_combat_visual_ranged_projectile(
@@ -181,7 +204,7 @@ int main(void) {
         NUM_ITEMS, ATTACK_STYLE_MELEE, 0, OSRS_PLAYER_UNARMED_ATTACK_ANIM)
         == OSRS_PLAYER_UNARMED_ATTACK_ANIM);
 
-    const OsrsItemCombatVisual* visual =
+    const OsrsCombatVisualRow* visual =
         osrs_combat_visual_find_item_id(OSRS_ITEM_ID_TWISTED_BOW, ATTACK_STYLE_RANGED);
     assert(visual);
     assert(visual->attack_anim_id == 426);
