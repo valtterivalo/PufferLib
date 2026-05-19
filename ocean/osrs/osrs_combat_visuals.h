@@ -17,6 +17,7 @@
 
 enum {
     OSRS_COMBAT_VISUAL_STYLE_ANY = -1,
+    OSRS_COMBAT_VISUAL_STANCE_ANY = -1,
     OSRS_COMBAT_VISUAL_NO_ANIMATION = -1,
     OSRS_PLAYER_UNARMED_ATTACK_ANIM = 422,
     OSRS_PLAYER_POWERED_STAFF_ATTACK_ANIM = 1167,
@@ -211,6 +212,34 @@ static inline int osrs_combat_visual_style_matches(
     return row->style == OSRS_COMBAT_VISUAL_STYLE_ANY || row->style == (int8_t)style;
 }
 
+static inline int osrs_combat_visual_stance_matches(
+    const OsrsCombatVisualRow* row, int stance_idx
+) {
+    return row->stance_idx < 0 || row->stance_idx == stance_idx;
+}
+
+static inline int osrs_combat_visual_fight_style_stance_idx(
+    FightStyle fight_style
+) {
+    switch (fight_style) {
+        case FIGHT_STYLE_ACCURATE:
+        case FIGHT_STYLE_AUTOCAST:
+            return 0;
+        case FIGHT_STYLE_AGGRESSIVE:
+        case FIGHT_STYLE_RAPID:
+            return 1;
+        case FIGHT_STYLE_CONTROLLED:
+            return 2;
+        case FIGHT_STYLE_DEFENSIVE:
+        case FIGHT_STYLE_LONGRANGE:
+        case FIGHT_STYLE_DEFENSIVE_AUTOCAST:
+            return 3;
+        default:
+            fprintf(stderr, "unknown fight style: %d\n", fight_style);
+            abort();
+    }
+}
+
 static inline int osrs_combat_visual_key_matches(
     const OsrsCombatVisualRow* row,
     int kind,
@@ -228,14 +257,18 @@ static inline const OsrsCombatVisualRow* osrs_combat_visual_find_row(
     int32_t key_id,
     const char* key_name,
     AttackStyle style,
+    int stance_idx,
     int require_attack_anim,
     int require_projectile
 ) {
     const OsrsCombatVisualRow* fallback = NULL;
+    const OsrsCombatVisualRow* style_fallback = NULL;
+    const OsrsCombatVisualRow* stance_fallback = NULL;
     for (size_t i = 0; i < OSRS_COMBAT_VISUAL_ROW_COUNT; i++) {
         const OsrsCombatVisualRow* row = &OSRS_COMBAT_VISUAL_ROWS[i];
         if (!osrs_combat_visual_key_matches(row, kind, key_id, key_name)) continue;
         if (!osrs_combat_visual_style_matches(row, style)) continue;
+        if (!osrs_combat_visual_stance_matches(row, stance_idx)) continue;
         if (require_attack_anim &&
                 row->attack_anim_id == OSRS_COMBAT_VISUAL_NO_ANIMATION) {
             continue;
@@ -243,38 +276,59 @@ static inline const OsrsCombatVisualRow* osrs_combat_visual_find_row(
         if (require_projectile && !osrs_combat_visual_row_has_projectile(row)) {
             continue;
         }
-        if (row->style == (int8_t)style) return row;
-        if (!fallback) fallback = row;
+        int exact_style = row->style == (int8_t)style;
+        int any_style = row->style == OSRS_COMBAT_VISUAL_STYLE_ANY;
+        int exact_stance = stance_idx >= 0 && row->stance_idx == stance_idx;
+        int any_stance = row->stance_idx < 0;
+        if (exact_style && exact_stance) return row;
+        if (!style_fallback && exact_style && any_stance)
+            style_fallback = row;
+        if (!stance_fallback && any_style && exact_stance)
+            stance_fallback = row;
+        if (!fallback && any_stance)
+            fallback = row;
     }
-    return fallback;
+    return style_fallback ? style_fallback
+        : (stance_fallback ? stance_fallback : fallback);
 }
 
 static inline const OsrsCombatVisualRow* osrs_combat_visual_find_item_id(
     uint16_t item_id, AttackStyle style
 ) {
     return osrs_combat_visual_find_row(
-        OSRS_COMBAT_VISUAL_KIND_ITEM, item_id, NULL, style, 1, 0);
+        OSRS_COMBAT_VISUAL_KIND_ITEM, item_id, NULL, style,
+        OSRS_COMBAT_VISUAL_STANCE_ANY, 1, 0);
+}
+
+static inline const OsrsCombatVisualRow* osrs_combat_visual_find_item_id_stance(
+    uint16_t item_id, AttackStyle style, int stance_idx
+) {
+    return osrs_combat_visual_find_row(
+        OSRS_COMBAT_VISUAL_KIND_ITEM, item_id, NULL, style, stance_idx, 1, 0);
 }
 
 static inline const OsrsCombatVisualRow* osrs_combat_visual_find_item_projectile_id(
     uint16_t item_id, AttackStyle style
 ) {
     return osrs_combat_visual_find_row(
-        OSRS_COMBAT_VISUAL_KIND_ITEM, item_id, NULL, style, 0, 1);
+        OSRS_COMBAT_VISUAL_KIND_ITEM, item_id, NULL, style,
+        OSRS_COMBAT_VISUAL_STANCE_ANY, 0, 1);
 }
 
 static inline const OsrsCombatVisualRow* osrs_combat_visual_find_special_item_id(
     uint16_t item_id, AttackStyle style
 ) {
     return osrs_combat_visual_find_row(
-        OSRS_COMBAT_VISUAL_KIND_SPECIAL, item_id, NULL, style, 1, 0);
+        OSRS_COMBAT_VISUAL_KIND_SPECIAL, item_id, NULL, style,
+        OSRS_COMBAT_VISUAL_STANCE_ANY, 1, 0);
 }
 
 static inline const OsrsCombatVisualRow* osrs_combat_visual_find_npc_id(
     uint16_t npc_id, AttackStyle style
 ) {
     return osrs_combat_visual_find_row(
-        OSRS_COMBAT_VISUAL_KIND_NPC, npc_id, NULL, style, 0, 0);
+        OSRS_COMBAT_VISUAL_KIND_NPC, npc_id, NULL, style,
+        OSRS_COMBAT_VISUAL_STANCE_ANY, 0, 0);
 }
 
 static inline const char* osrs_combat_visual_spell_name(int spell_type) {
@@ -293,6 +347,7 @@ static inline const OsrsCombatVisualRow* osrs_combat_visual_find_spell(
         spell_type,
         osrs_combat_visual_spell_name(spell_type),
         ATTACK_STYLE_MAGIC,
+        OSRS_COMBAT_VISUAL_STANCE_ANY,
         0,
         1);
 }
@@ -323,8 +378,12 @@ static inline int osrs_combat_visual_special_fallback_anim(uint16_t item_id) {
     return OSRS_COMBAT_VISUAL_NO_ANIMATION;
 }
 
-static inline int osrs_combat_visual_weapon_attack_anim(
-    uint8_t item_db_idx, AttackStyle style, int is_special, int fallback_anim_id
+static inline int osrs_combat_visual_weapon_attack_anim_for_stance(
+    uint8_t item_db_idx,
+    AttackStyle style,
+    int stance_idx,
+    int is_special,
+    int fallback_anim_id
 ) {
     if (item_db_idx >= NUM_ITEMS) return fallback_anim_id;
     uint16_t item_id = ITEM_DATABASE[item_db_idx].item_id;
@@ -336,9 +395,30 @@ static inline int osrs_combat_visual_weapon_attack_anim(
         if (fallback_special != OSRS_COMBAT_VISUAL_NO_ANIMATION)
             return fallback_special;
     }
-    const OsrsCombatVisualRow* row = osrs_combat_visual_find_item_id(item_id, style);
+    const OsrsCombatVisualRow* row =
+        osrs_combat_visual_find_item_id_stance(item_id, style, stance_idx);
     if (!row) return fallback_anim_id;
     return row->attack_anim_id;
+}
+
+static inline int osrs_combat_visual_weapon_attack_anim_for_fight_style(
+    uint8_t item_db_idx,
+    AttackStyle style,
+    FightStyle fight_style,
+    int is_special,
+    int fallback_anim_id
+) {
+    return osrs_combat_visual_weapon_attack_anim_for_stance(
+        item_db_idx, style, osrs_combat_visual_fight_style_stance_idx(fight_style),
+        is_special, fallback_anim_id);
+}
+
+static inline int osrs_combat_visual_weapon_attack_anim(
+    uint8_t item_db_idx, AttackStyle style, int is_special, int fallback_anim_id
+) {
+    return osrs_combat_visual_weapon_attack_anim_for_stance(
+        item_db_idx, style, OSRS_COMBAT_VISUAL_STANCE_ANY,
+        is_special, fallback_anim_id);
 }
 
 static inline const OsrsCombatWeaponProjectileDefault*
@@ -444,16 +524,23 @@ static inline const OsrsCombatProjectileProfile* osrs_combat_visual_magic_projec
         osrs_combat_visual_magic_projectile(item_db_idx));
 }
 
-static inline int osrs_combat_visual_magic_attack_anim(
-    uint8_t item_db_idx, int is_special, int fallback_anim_id
+static inline int osrs_combat_visual_magic_attack_anim_for_fight_style(
+    uint8_t item_db_idx, FightStyle fight_style, int is_special, int fallback_anim_id
 ) {
     if (item_db_idx >= NUM_ITEMS) return fallback_anim_id;
     if (!osrs_combat_visual_item_is_powered_staff(
             ITEM_DATABASE[item_db_idx].item_id)) {
         return fallback_anim_id;
     }
-    return osrs_combat_visual_weapon_attack_anim(
-        item_db_idx, ATTACK_STYLE_MAGIC, is_special, fallback_anim_id);
+    return osrs_combat_visual_weapon_attack_anim_for_fight_style(
+        item_db_idx, ATTACK_STYLE_MAGIC, fight_style, is_special, fallback_anim_id);
+}
+
+static inline int osrs_combat_visual_magic_attack_anim(
+    uint8_t item_db_idx, int is_special, int fallback_anim_id
+) {
+    return osrs_combat_visual_magic_attack_anim_for_fight_style(
+        item_db_idx, FIGHT_STYLE_AUTOCAST, is_special, fallback_anim_id);
 }
 
 #endif

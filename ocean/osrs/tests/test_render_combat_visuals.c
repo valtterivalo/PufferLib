@@ -233,6 +233,17 @@ int main(void) {
         == OSRS_COMBAT_PROJECTILE_RUNE_ARROW);
     assert(osrs_combat_visual_weapon_attack_anim(
         ITEM_TOXIC_BLOWPIPE, ATTACK_STYLE_RANGED, 1, OSRS_PLAYER_UNARMED_ATTACK_ANIM) == 5061);
+    assert(osrs_combat_visual_weapon_attack_anim(
+        ITEM_BGS, ATTACK_STYLE_MELEE, 0, OSRS_PLAYER_UNARMED_ATTACK_ANIM) == 7045);
+    assert(osrs_combat_visual_weapon_attack_anim_for_fight_style(
+        ITEM_BGS, ATTACK_STYLE_MELEE, FIGHT_STYLE_ACCURATE, 0,
+        OSRS_PLAYER_UNARMED_ATTACK_ANIM) == 7045);
+    assert(osrs_combat_visual_weapon_attack_anim_for_fight_style(
+        ITEM_BGS, ATTACK_STYLE_MELEE, FIGHT_STYLE_CONTROLLED, 0,
+        OSRS_PLAYER_UNARMED_ATTACK_ANIM) == 7054);
+    assert(osrs_combat_visual_weapon_attack_anim_for_fight_style(
+        ITEM_BGS, ATTACK_STYLE_MELEE, FIGHT_STYLE_DEFENSIVE, 0,
+        OSRS_PLAYER_UNARMED_ATTACK_ANIM) == 7055);
     assert(osrs_combat_visual_ranged_projectile(
         ITEM_TOXIC_BLOWPIPE, OSRS_COMBAT_PROJECTILE_NONE)
         == OSRS_COMBAT_PROJECTILE_DRAGON_DART);

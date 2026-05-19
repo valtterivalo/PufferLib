@@ -3717,12 +3717,13 @@ static int render_select_primary(RenderEntity* p) {
     if (p->attack_style_this_tick != ATTACK_STYLE_NONE) {
         if (p->attack_style_this_tick == ATTACK_STYLE_MAGIC) {
             uint8_t wpn = p->equipped[GEAR_SLOT_WEAPON];
-            return osrs_combat_visual_magic_attack_anim(
-                wpn, p->used_special_this_tick, ANIM_SEQ_CAST_BARRAGE);
+            return osrs_combat_visual_magic_attack_anim_for_fight_style(
+                wpn, p->fight_style, p->used_special_this_tick, ANIM_SEQ_CAST_BARRAGE);
         }
-        return osrs_combat_visual_weapon_attack_anim(
+        return osrs_combat_visual_weapon_attack_anim_for_fight_style(
             p->equipped[GEAR_SLOT_WEAPON],
             (AttackStyle)p->attack_style_this_tick,
+            p->fight_style,
             p->used_special_this_tick,
             OSRS_PLAYER_UNARMED_ATTACK_ANIM);
     }

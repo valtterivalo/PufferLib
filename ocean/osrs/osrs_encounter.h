@@ -338,6 +338,7 @@ typedef struct {
     int frozen_ticks;
     int veng_active;
     int is_running;
+    FightStyle fight_style;
     AttackStyle attack_style_this_tick;
     int magic_type_this_tick;
     int hit_landed_this_tick;
@@ -424,6 +425,7 @@ static inline void render_entity_from_player(const Player* p, RenderEntity* out)
     out->frozen_ticks = p->frozen_ticks;
     out->veng_active = p->veng_active;
     out->is_running = p->is_running;
+    out->fight_style = p->fight_style;
     out->attack_style_this_tick = p->attack_style_this_tick;
     out->magic_type_this_tick = p->magic_type_this_tick;
     out->hit_landed_this_tick = p->hit_landed_this_tick;

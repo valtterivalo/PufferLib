@@ -1,7 +1,10 @@
-kind|key|style|attack_anim|launch_spotanim|travel_spotanim|impact_spotanim|projectile_model|projectile_anim|hit_delay|client_delay|proj_start_height|proj_end_height|proj_delay|proj_angle|proj_length_adjustment|proj_progress|proj_step_multiplier|note
+kind|key|style|attack_anim|launch_spotanim|travel_spotanim|impact_spotanim|projectile_model|projectile_anim|hit_delay|client_delay|proj_start_height|proj_end_height|proj_delay|proj_angle|proj_length_adjustment|proj_progress|proj_step_multiplier|note|projectile_count|alt_proj_start_height|alt_proj_end_height|alt_proj_delay|alt_proj_angle|alt_proj_length_adjustment|alt_proj_progress|alt_proj_step_multiplier|aux_travel_spotanim|aux_impact_spotanim|aux_projectile_model|aux_projectile_anim|impact_on_last_only|double_launch_spotanim|stance_idx
 npc|7698|ranged|7605|-|1377|1378|33013|-|-|-|-|-|-|-|-|-|-|inferno:jal_xil_ranged
 npc|7699|magic|7610|-|1379|1380|33016|7614|-|-|-|-|-|-|-|-|-|inferno:jal_zek_magic
 npc|7700|magic|7592|-|448|-|9337|2659|-|-|-|-|-|-|-|-|-|inferno:jaltok_jad_magic
 npc|7700|ranged|7593|-|451|-|9342|2660|-|-|-|-|-|-|-|-|-|inferno:jaltok_jad_ranged
 npc|7706|magic|7566|-|1375|-|33006|7571|-|-|-|-|-|-|-|-|-|inferno:tzkal_zuk_magic
 npc|7708|magic|-|-|660|659|14759|3942|-|-|-|-|-|-|-|-|-|inferno:jal_mejjak_magic
+item|11804|slash|7045|-|-|-|-|-|-|-|-|-|-|-|-|-|-|runec:bgs:attack:stance1|-|-|-|-|-|-|-|-|-|-|-|-|-|-|0
+item|11804|crush|7054|-|-|-|-|-|-|-|-|-|-|-|-|-|-|runec:bgs:attack:stance3|-|-|-|-|-|-|-|-|-|-|-|-|-|-|2
+item|11804|slash|7055|-|-|-|-|-|-|-|-|-|-|-|-|-|-|runec:bgs:attack:stance4|-|-|-|-|-|-|-|-|-|-|-|-|-|-|3
