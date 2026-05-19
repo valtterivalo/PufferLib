@@ -15,7 +15,7 @@
 #include "rlgl.h"
 #include "raymath.h"
 #include "osrs_models.h"
-#include "osrs_assets.h"
+#include "osrs_asset_raylib.h"
 #include "osrs_anim.h"
 #include "osrs_combat_visuals.h"
 #include "osrs_combat.h"
@@ -1315,7 +1315,7 @@ static RenderClient* render_make_client(void) {
         rc->prayer_icons_loaded = 1;
         for (int i = 0; i < 6; i++) {
             if (osrs_asset_exists(paths[i])) {
-                rc->prayer_icons[i] = LoadTexture(paths[i]);
+                rc->prayer_icons[i] = osrs_asset_load_texture(paths[i]);
             } else {
                 rc->prayer_icons_loaded = 0;
             }
@@ -1328,7 +1328,7 @@ static RenderClient* render_make_client(void) {
         for (int i = 0; i < 5; i++) {
             const char* path = TextFormat(OSRS_ASSET("sprites/gui/hitmarks_%d.png"), i);
             if (osrs_asset_exists(path)) {
-                rc->hitmark_sprites[i] = LoadTexture(path);
+                rc->hitmark_sprites[i] = osrs_asset_load_texture(path);
             } else {
                 rc->hitmark_sprites_loaded = 0;
             }
@@ -1345,7 +1345,7 @@ static RenderClient* render_make_client(void) {
         for (int i = 0; i < 8; i++) {
             const char* path = TextFormat(OSRS_ASSET("sprites/gui/%s.png"), cross_names[i]);
             if (osrs_asset_exists(path)) {
-                rc->click_cross_sprites[i] = LoadTexture(path);
+                rc->click_cross_sprites[i] = osrs_asset_load_texture(path);
             } else {
                 rc->click_cross_loaded = 0;
             }

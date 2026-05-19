@@ -24,12 +24,11 @@
 #define OSRS_GUI_H
 
 #include <assert.h>
-#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "osrs_assets.h"
+#include "osrs_asset_raylib.h"
 #include "osrs_human_input_types.h"
 
 #if __has_include("raylib.h")
@@ -486,7 +485,7 @@ typedef struct {
 /** Try loading a texture, returns 1 on success. */
 static int gui_try_load(Texture2D* tex, const char* path) {
     if (osrs_asset_exists(path)) {
-        *tex = LoadTexture(path);
+        *tex = osrs_asset_load_texture(path);
         return 1;
     }
     return 0;
@@ -538,29 +537,6 @@ static void gui_pop_clip(GuiUiClipState* clip, Rectangle prev, int prev_active) 
     if (clip->active) gui_apply_scissor(clip->current);
 }
 
-static const char* gui_asset_ext(const char* path, const char* fallback) {
-    const char* dot = path ? strrchr(path, '.') : NULL;
-    return dot && dot[0] ? dot : fallback;
-}
-
-static Font gui_load_font_asset(const char* path, int font_size) {
-    Font empty = {0};
-    OsrsAssetBytes bytes = osrs_asset_read_all(path);
-    if (!bytes.data || bytes.size == 0) {
-        osrs_asset_bytes_free(&bytes);
-        return empty;
-    }
-    if (bytes.size > (size_t)INT_MAX) {
-        fprintf(stderr, "GUI font asset too large: %s (%zu bytes)\n", path, bytes.size);
-        abort();
-    }
-    Font font = LoadFontFromMemory(gui_asset_ext(path, ".ttf"), bytes.data,
-        (int)bytes.size, font_size, NULL, 95);
-    osrs_asset_bytes_free(&bytes);
-    if (font.texture.id != 0) SetTextureFilter(font.texture, TEXTURE_FILTER_POINT);
-    return font.texture.id != 0 ? font : empty;
-}
-
 static Font gui_font_for_size(const GuiState* gs, int size) {
     if (gs && size <= 12 && gs->small_font_loaded) return gs->small_font;
     if (gs && gs->font_loaded) return gs->font;
@@ -576,10 +552,12 @@ static int gui_measure_text(const GuiState* gs, const char* text, int size) {
 }
 
 static void gui_load_fonts(GuiState* gs) {
-    gs->font = gui_load_font_asset("fonts/runescape.ttf", 14);
+    gs->font = osrs_asset_load_font("fonts/runescape.ttf", 14);
     gs->font_loaded = gs->font.texture.id != 0;
-    gs->small_font = gui_load_font_asset("fonts/runescape_small.ttf", 12);
+    if (gs->font_loaded) SetTextureFilter(gs->font.texture, TEXTURE_FILTER_POINT);
+    gs->small_font = osrs_asset_load_font("fonts/runescape_small.ttf", 12);
     gs->small_font_loaded = gs->small_font.texture.id != 0;
+    if (gs->small_font_loaded) SetTextureFilter(gs->small_font.texture, TEXTURE_FILTER_POINT);
 }
 
 static void gui_load_item_stack_variants(GuiState* gs) {
@@ -959,7 +937,7 @@ static void gui_load_sprites(GuiState* gs) {
         if (osrs_asset_exists(path)) {
             int idx = gs->item_sprite_count;
             gs->item_sprite_ids[idx] = item_id;
-            gs->item_sprite_tex[idx] = LoadTexture(path);
+            gs->item_sprite_tex[idx] = osrs_asset_load_texture(path);
             gs->item_sprite_count++;
         }
     }
@@ -983,7 +961,7 @@ static void gui_load_sprites(GuiState* gs) {
         if (osrs_asset_exists(path)) {
             int idx = gs->item_sprite_count;
             gs->item_sprite_ids[idx] = cid;
-            gs->item_sprite_tex[idx] = LoadTexture(path);
+            gs->item_sprite_tex[idx] = osrs_asset_load_texture(path);
             gs->item_sprite_count++;
         }
     }
@@ -1012,7 +990,7 @@ static Texture2D gui_get_sprite_by_osrs_id(GuiState* gs, int osrs_id) {
     if (!osrs_asset_exists(path)) return empty;
     int idx = gs->item_sprite_count++;
     gs->item_sprite_ids[idx] = osrs_id;
-    gs->item_sprite_tex[idx] = LoadTexture(path);
+    gs->item_sprite_tex[idx] = osrs_asset_load_texture(path);
     if (gs->item_sprite_tex[idx].id == 0) {
         gs->item_sprite_count--;
         gs->item_sprite_ids[idx] = 0;
