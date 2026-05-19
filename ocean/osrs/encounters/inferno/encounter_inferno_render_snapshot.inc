@@ -420,6 +420,8 @@ static void inf_render_post_tick_ctx(
 
             uint32_t player_proj_model = 0;
             int player_proj_anim = -1;
+            int player_launch_gfx = 0;
+            int player_impact_gfx = 0;
             if (s->player_attack_style_id == ATTACK_STYLE_MAGIC) {
                 p_arc = 0.0f;
                 /* barrage: no projectile model (effect system handles it) */
@@ -430,6 +432,10 @@ static void inf_render_post_tick_ctx(
                 if (profile && profile->projectile_model_id > 0) {
                     player_proj_model = (uint32_t)profile->projectile_model_id;
                     player_proj_anim = profile->projectile_anim_id;
+                    player_launch_gfx = osrs_combat_projectile_value_or(
+                        profile->launch_spotanim_id, 0);
+                    player_impact_gfx = osrs_combat_projectile_value_or(
+                        profile->impact_spotanim_id, 0);
                     p_start_h = osrs_combat_projectile_value_or(
                         profile->projectile_start_height, p_start_h);
                     p_end_h = osrs_combat_projectile_value_or(
@@ -444,9 +450,10 @@ static void inf_render_post_tick_ctx(
                     s->player.x, s->player.y, target->x, target->y,
                     p_style, s->player_attack_dmg,
                     p_duration, p_start_h, p_end_h, 16, p_arc, p_tracks,
-                    1, target_size, player_proj_model, 0);
+                    1, target_size, player_proj_model, player_impact_gfx);
                 ov->projectiles[pi].start_delay = p_start_delay;
                 encounter_set_projectile_animation(ov, pi, player_proj_anim);
+                encounter_set_projectile_launch_gfx(ov, pi, player_launch_gfx);
                 encounter_set_projectile_target_npc_slot(ov, pi, target_idx);
             }
         }

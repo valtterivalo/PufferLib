@@ -7,6 +7,7 @@
 #define OSRS_GFX_IDS_H
 
 #define GFX_RUNE_ARROW      15
+#define GFX_RUNE_ARROW_LAUNCH 24
 #define GFX_BOLT            27
 #define GFX_SPLASH          85
 #define GFX_ICE_BARRAGE_PROJ 368
@@ -18,8 +19,10 @@
 #define GFX_TRIDENT_PROJ    1040
 #define GFX_TRIDENT_IMPACT  1042
 #define GFX_BLOWPIPE_SPEC   1043
+#define GFX_DRAGON_ARROW_LAUNCH 1116
 #define GFX_DRAGON_ARROW    1120
 #define GFX_DRAGON_DART     1122
+#define GFX_DRAGON_DART_LAUNCH 1123
 #define GFX_RUNE_DART       231
 #define GFX_DRAGON_BOLT     1468
 

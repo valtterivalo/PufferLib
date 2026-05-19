@@ -145,6 +145,7 @@ typedef struct {
     int anim_frame;
     int anim_tick_counter;
     AnimModelState* anim_state;
+    int launch_gfx_id;
     int impact_gfx_id;          /* landing spotanim to spawn on arrival */
 } FlightProjectile;
 
@@ -582,6 +583,14 @@ static int render_spawn_profile_projectile(
     int fallback_slope
 ) {
     if (!profile || profile->travel_spotanim_id < 0) return -1;
+    if (profile->launch_spotanim_id > 0) {
+        effect_spawn_spotanim_subtile(
+            rc->effects, profile->launch_spotanim_id,
+            src_x * 128.0f + 64.0f, src_y * 128.0f + 64.0f,
+            rc->effect_client_tick_counter + delay_client_ticks,
+            rc->spotanims, rc->anim_cache, rc->model_cache,
+            rc->npc_model_cache, rc->projectile_model_cache);
+    }
     return effect_spawn_projectile(
         rc->effects, profile->travel_spotanim_id,
         src_x, src_y, dst_x, dst_y,
@@ -1595,7 +1604,7 @@ static void flight_spawn(RenderClient* rc,
                          int style, int damage,
                          int duration_ticks, int start_h, int end_h, int curve,
                          float arc_height, int tracks_target, uint32_t model_id,
-                         int anim_id, int impact_gfx_id,
+                         int anim_id, int launch_gfx_id, int impact_gfx_id,
                          int start_delay, int motion_mode,
                          float offset_x, float offset_y, float offset_z,
                          int target_kind, int target_npc_slot) {
@@ -1634,6 +1643,7 @@ static void flight_spawn(RenderClient* rc,
     fp->anim_frame = 0;
     fp->anim_tick_counter = 0;
     fp->anim_state = render_create_projectile_anim_state(rc, model_id, anim_id);
+    fp->launch_gfx_id = launch_gfx_id;
     fp->impact_gfx_id = impact_gfx_id;
     fp->start_delay = start_delay;
     fp->motion_mode = motion_mode;
@@ -1641,6 +1651,14 @@ static void flight_spawn(RenderClient* rc,
     fp->offset_y = offset_y;
     fp->offset_z = offset_z;
     flight_update_live_destination(rc, fp);
+    if (fp->launch_gfx_id > 0) {
+        effect_spawn_spotanim_subtile(
+            rc->effects, fp->launch_gfx_id,
+            fp->src_x * 128.0f, fp->src_y * 128.0f,
+            rc->effect_client_tick_counter + fp->start_delay,
+            rc->spotanims, rc->anim_cache, rc->model_cache,
+            rc->npc_model_cache, rc->projectile_model_cache);
+    }
 
     /* height arc: OSRS SceneProjectile.calculateIncrements
        skip quadratic computation when using sinusoidal arc */
@@ -2837,6 +2855,7 @@ static void render_post_tick(RenderClient* rc, OsrsEnv* env) {
                     dur, sh, eh, cv, arc, trk,
                     ov->projectiles[i].model_id,
                     ov->projectiles[i].anim_id,
+                    ov->projectiles[i].launch_gfx_id,
                     ov->projectiles[i].impact_gfx_id,
                     ov->projectiles[i].start_delay,
                     ov->projectiles[i].motion_mode,

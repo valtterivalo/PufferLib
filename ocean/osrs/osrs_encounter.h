@@ -191,6 +191,7 @@ typedef struct {
         int dst_size;        /* target entity size for center offset (1 = player) */
         uint32_t model_id;   /* GFX model from cache (0 = style-based fallback) */
         int anim_id;         /* spotanim animation sequence (-1 = static model) */
+        int launch_gfx_id;
         int impact_gfx_id;   /* optional landing spotanim to spawn on arrival */
     } projectiles[ENCOUNTER_MAX_OVERLAY_PROJECTILES];
     int projectile_count;
@@ -256,6 +257,7 @@ static inline int encounter_emit_projectile(
     ov->projectiles[i].dst_size = dst_size;
     ov->projectiles[i].model_id = model_id;
     ov->projectiles[i].anim_id = -1;
+    ov->projectiles[i].launch_gfx_id = 0;
     ov->projectiles[i].impact_gfx_id = impact_gfx_id;
     return i;
 }
@@ -301,6 +303,13 @@ static inline void encounter_set_projectile_animation(
 ) {
     encounter_require_projectile_index(ov, projectile_idx);
     ov->projectiles[projectile_idx].anim_id = anim_id;
+}
+
+static inline void encounter_set_projectile_launch_gfx(
+    EncounterOverlay* ov, int projectile_idx, int launch_gfx_id
+) {
+    encounter_require_projectile_index(ov, projectile_idx);
+    ov->projectiles[projectile_idx].launch_gfx_id = launch_gfx_id;
 }
 
 static inline void encounter_set_projectile_offset(

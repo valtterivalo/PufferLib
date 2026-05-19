@@ -6639,6 +6639,10 @@ static void test_player_projectile_render_uses_stored_reference_timing(void) {
         blowpipe_ov.projectiles[0].model_id, OSRS_PROJECTILE_MODEL_DRAGON_DART);
     ASSERT_INT_EQ("blowpipe projectile animation",
         blowpipe_ov.projectiles[0].anim_id, OSRS_PROJECTILE_ANIM_DRAGON_DART);
+    ASSERT_INT_EQ("blowpipe launch spotanim",
+        blowpipe_ov.projectiles[0].launch_gfx_id, GFX_DRAGON_DART_LAUNCH);
+    ASSERT_INT_EQ("blowpipe impact spotanim",
+        blowpipe_ov.projectiles[0].impact_gfx_id, 0);
     ASSERT_INT_EQ("blowpipe projectile start height",
         blowpipe_ov.projectiles[0].start_h, 163);
     ASSERT_INT_EQ("blowpipe projectile end height",
@@ -6680,6 +6684,10 @@ static void test_player_projectile_render_uses_stored_reference_timing(void) {
         tbow_ov.projectiles[0].model_id, OSRS_PROJECTILE_MODEL_DRAGON_ARROW);
     ASSERT_INT_EQ("tbow projectile animation",
         tbow_ov.projectiles[0].anim_id, OSRS_PROJECTILE_ANIM_DRAGON_ARROW);
+    ASSERT_INT_EQ("tbow launch spotanim",
+        tbow_ov.projectiles[0].launch_gfx_id, GFX_DRAGON_ARROW_LAUNCH);
+    ASSERT_INT_EQ("tbow impact spotanim",
+        tbow_ov.projectiles[0].impact_gfx_id, 0);
     ASSERT_INT_EQ("tbow visual start delay",
         tbow_ov.projectiles[0].start_delay,
         tbow_state.player_attack_timing.visual_start_delay_ticks * 30);
@@ -6711,6 +6719,10 @@ static void test_player_projectile_render_uses_stored_reference_timing(void) {
     ASSERT_INT_EQ("bowfa projectile count", bowfa_ov.projectile_count, 1);
     ASSERT_INT_EQ("bowfa projectile model",
         bowfa_ov.projectiles[0].model_id, OSRS_PROJECTILE_MODEL_ARROW);
+    ASSERT_INT_EQ("bowfa launch spotanim",
+        bowfa_ov.projectiles[0].launch_gfx_id, GFX_RUNE_ARROW_LAUNCH);
+    ASSERT_INT_EQ("bowfa impact spotanim",
+        bowfa_ov.projectiles[0].impact_gfx_id, 0);
 }
 
 static void test_magic_splash_landing_keeps_spell_visual_context(void) {

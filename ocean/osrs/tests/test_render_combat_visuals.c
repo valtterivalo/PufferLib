@@ -89,7 +89,7 @@ static void test_projectile_profiles_match_runec_visual_rows(void) {
         osrs_combat_visual_ranged_projectile_profile(
             ITEM_TWISTED_BOW, OSRS_COMBAT_PROJECTILE_NONE);
     assert(tbow);
-    assert(tbow->launch_spotanim_id == 1116);
+    assert(tbow->launch_spotanim_id == GFX_DRAGON_ARROW_LAUNCH);
     assert(tbow->travel_spotanim_id == GFX_DRAGON_ARROW);
     assert(tbow->projectile_model_id == OSRS_PROJECTILE_MODEL_DRAGON_ARROW);
     assert(tbow->projectile_anim_id == OSRS_PROJECTILE_ANIM_DRAGON_ARROW);
@@ -98,7 +98,7 @@ static void test_projectile_profiles_match_runec_visual_rows(void) {
         osrs_combat_visual_ranged_projectile_profile(
             ITEM_TOXIC_BLOWPIPE, OSRS_COMBAT_PROJECTILE_NONE);
     assert(blowpipe);
-    assert(blowpipe->launch_spotanim_id == 1123);
+    assert(blowpipe->launch_spotanim_id == GFX_DRAGON_DART_LAUNCH);
     assert(blowpipe->travel_spotanim_id == GFX_DRAGON_DART);
     assert(blowpipe->projectile_model_id == OSRS_PROJECTILE_MODEL_DRAGON_DART);
     assert(blowpipe->projectile_anim_id == OSRS_PROJECTILE_ANIM_DRAGON_DART);
