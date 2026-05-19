@@ -35,8 +35,6 @@
 #include "raylib.h"
 #elif __has_include("raylib-5.5_macos/include/raylib.h")
 #include "raylib-5.5_macos/include/raylib.h"
-#elif __has_include("refs/RuneC/lib/raylib/include/raylib.h")
-#include "refs/RuneC/lib/raylib/include/raylib.h"
 #else
 #error "raylib.h not found"
 #endif
@@ -468,7 +466,7 @@ typedef struct {
 
 /** Try loading a texture, returns 1 on success. */
 static int gui_try_load(Texture2D* tex, const char* path) {
-    if (FileExists(path)) {
+    if (osrs_asset_exists(path)) {
         *tex = LoadTexture(path);
         return 1;
     }
@@ -598,7 +596,7 @@ static void gui_load_sprites(GuiState* gs) {
     /* equipment slot backgrounds: sprite IDs mapped to GEAR_SLOT_* order.
        GEAR_SLOT: HEAD=0, CAPE=1, NECK=2, AMMO=3, WEAPON=4, SHIELD=5,
                   BODY=6, LEGS=7, HANDS=8, FEET=9, RING=10 */
-    static const char* slot_files[] = {
+    const char* slot_files[] = {
         OSRS_ASSET("sprites/gui/slot_head.png"),    /* GEAR_SLOT_HEAD */
         OSRS_ASSET("sprites/gui/slot_cape.png"),    /* GEAR_SLOT_CAPE */
         OSRS_ASSET("sprites/gui/slot_neck.png"),    /* GEAR_SLOT_NECK */
@@ -618,7 +616,7 @@ static void gui_load_sprites(GuiState* gs) {
     gui_try_load(&gs->slot_tile_bg, OSRS_ASSET("sprites/gui/slot_tile.png"));
 
     /* tab icons: mapped to GuiTab enum order (7 tabs) */
-    static const char* tab_files[] = {
+    const char* tab_files[] = {
         OSRS_ASSET("sprites/gui/tab_combat.png"),    /* GUI_TAB_COMBAT */
         OSRS_ASSET("sprites/gui/tab_stats.png"),     /* GUI_TAB_STATS */
         OSRS_ASSET("sprites/gui/tab_quests.png"),    /* GUI_TAB_QUESTS */
@@ -632,7 +630,7 @@ static void gui_load_sprites(GuiState* gs) {
     }
 
     /* skill icons for stats tab (OSRS skill_icons from RuneLite resources) */
-    static const char* skill_icon_files[] = {
+    const char* skill_icon_files[] = {
         OSRS_ASSET("sprites/gui/skill_attack.png"),
         OSRS_ASSET("sprites/gui/skill_strength.png"),
         OSRS_ASSET("sprites/gui/skill_defence.png"),
@@ -734,7 +732,7 @@ static void gui_load_sprites(GuiState* gs) {
     gs->minimap_chrome_loaded &= gui_try_load(&gs->minimap_dot_item,
         OSRS_ASSET("sprites/gui/minimap_dot_item.png"));
 
-    static const char* tab_sel_files[] = {
+    const char* tab_sel_files[] = {
         OSRS_ASSET("sprites/gui/tab_stone_tl_sel.png"),
         OSRS_ASSET("sprites/gui/tab_stone_tr_sel.png"),
         OSRS_ASSET("sprites/gui/tab_stone_bl_sel.png"),
@@ -824,7 +822,7 @@ static void gui_load_sprites(GuiState* gs) {
         int item_id = ITEM_DATABASE[i].item_id;
         if (item_id <= 0) continue;
         const char* path = TextFormat(OSRS_ASSET("sprites/items/%d.png"), item_id);
-        if (FileExists(path)) {
+        if (osrs_asset_exists(path)) {
             int idx = gs->item_sprite_count;
             gs->item_sprite_ids[idx] = item_id;
             gs->item_sprite_tex[idx] = LoadTexture(path);
@@ -848,7 +846,7 @@ static void gui_load_sprites(GuiState* gs) {
         if (gs->item_sprite_count >= GUI_MAX_ITEM_SPRITES) break;
         int cid = consumable_ids[i];
         const char* path = TextFormat(OSRS_ASSET("sprites/items/%d.png"), cid);
-        if (FileExists(path)) {
+        if (osrs_asset_exists(path)) {
             int idx = gs->item_sprite_count;
             gs->item_sprite_ids[idx] = cid;
             gs->item_sprite_tex[idx] = LoadTexture(path);

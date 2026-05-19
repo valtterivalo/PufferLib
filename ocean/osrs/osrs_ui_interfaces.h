@@ -5,8 +5,6 @@
 #include "raylib.h"
 #elif __has_include("raylib-5.5_macos/include/raylib.h")
 #include "raylib-5.5_macos/include/raylib.h"
-#elif __has_include("refs/RuneC/lib/raylib/include/raylib.h")
-#include "refs/RuneC/lib/raylib/include/raylib.h"
 #else
 #error "raylib.h not found"
 #endif

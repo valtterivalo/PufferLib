@@ -1312,7 +1312,7 @@ static RenderClient* render_make_client(void) {
         };
         rc->prayer_icons_loaded = 1;
         for (int i = 0; i < 6; i++) {
-            if (FileExists(paths[i])) {
+            if (osrs_asset_exists(paths[i])) {
                 rc->prayer_icons[i] = LoadTexture(paths[i]);
             } else {
                 rc->prayer_icons_loaded = 0;
@@ -1325,7 +1325,7 @@ static RenderClient* render_make_client(void) {
         rc->hitmark_sprites_loaded = 1;
         for (int i = 0; i < 5; i++) {
             const char* path = TextFormat(OSRS_ASSET("sprites/gui/hitmarks_%d.png"), i);
-            if (FileExists(path)) {
+            if (osrs_asset_exists(path)) {
                 rc->hitmark_sprites[i] = LoadTexture(path);
             } else {
                 rc->hitmark_sprites_loaded = 0;
@@ -1342,7 +1342,7 @@ static RenderClient* render_make_client(void) {
         rc->click_cross_loaded = 1;
         for (int i = 0; i < 8; i++) {
             const char* path = TextFormat(OSRS_ASSET("sprites/gui/%s.png"), cross_names[i]);
-            if (FileExists(path)) {
+            if (osrs_asset_exists(path)) {
                 rc->click_cross_sprites[i] = LoadTexture(path);
             } else {
                 rc->click_cross_loaded = 0;
