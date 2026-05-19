@@ -6635,6 +6635,14 @@ static void test_player_projectile_render_uses_stored_reference_timing(void) {
     ASSERT_INT_EQ("blowpipe projectile target kind",
         blowpipe_ov.projectiles[0].target_kind, ENCOUNTER_PROJECTILE_TARGET_NPC_SLOT);
     ASSERT_INT_EQ("blowpipe projectile target slot", blowpipe_ov.projectiles[0].target_npc_slot, 0);
+    ASSERT_INT_EQ("blowpipe projectile model",
+        blowpipe_ov.projectiles[0].model_id, OSRS_PROJECTILE_MODEL_DRAGON_DART);
+    ASSERT_INT_EQ("blowpipe projectile animation",
+        blowpipe_ov.projectiles[0].anim_id, OSRS_PROJECTILE_ANIM_DRAGON_DART);
+    ASSERT_INT_EQ("blowpipe projectile start height",
+        blowpipe_ov.projectiles[0].start_h, 163);
+    ASSERT_INT_EQ("blowpipe projectile end height",
+        blowpipe_ov.projectiles[0].end_h, 146);
     ASSERT_INT_EQ("blowpipe spec visual start delay",
         blowpipe_ov.projectiles[0].start_delay,
         blowpipe_state.player_attack_timing.visual_start_delay_ticks * 30);
@@ -6668,16 +6676,50 @@ static void test_player_projectile_render_uses_stored_reference_timing(void) {
     ASSERT_INT_EQ("tbow projectile target kind",
         tbow_ov.projectiles[0].target_kind, ENCOUNTER_PROJECTILE_TARGET_NPC_SLOT);
     ASSERT_INT_EQ("tbow projectile target slot", tbow_ov.projectiles[0].target_npc_slot, 0);
+    ASSERT_INT_EQ("tbow projectile model",
+        tbow_ov.projectiles[0].model_id, OSRS_PROJECTILE_MODEL_DRAGON_ARROW);
+    ASSERT_INT_EQ("tbow projectile animation",
+        tbow_ov.projectiles[0].anim_id, OSRS_PROJECTILE_ANIM_DRAGON_ARROW);
     ASSERT_INT_EQ("tbow visual start delay",
         tbow_ov.projectiles[0].start_delay,
         tbow_state.player_attack_timing.visual_start_delay_ticks * 30);
     ASSERT_INT_EQ("tbow visual duration",
         tbow_ov.projectiles[0].duration_ticks,
         tbow_state.player_attack_timing.visual_duration_ticks * 30);
+
+    InfernoState bowfa_state = make_test_state(10, 10);
+    bowfa_state.player.equipped[GEAR_SLOT_WEAPON] = ITEM_BOW_OF_FAERDHINEN;
+    bowfa_state.npcs[0] = make_test_npc(
+        INF_NPC_JAD, 18, 10, INF_NPC_STATS[INF_NPC_JAD].size);
+    bowfa_state.npcs[0].active = 1;
+    bowfa_state.player_attacked_this_tick = 1;
+    bowfa_state.player_attack_npc_idx = 0;
+    bowfa_state.player_attack_style_id = ATTACK_STYLE_RANGED;
+    bowfa_state.player_attack_dmg = 7;
+
+    int bowfa_dist = encounter_projectile_distance(
+        bowfa_state.player.x, bowfa_state.player.y, 1,
+        bowfa_state.npcs[0].x, bowfa_state.npcs[0].y, bowfa_state.npcs[0].size,
+        ENCOUNTER_PROJECTILE_DISTANCE_CLOSEST_TILE);
+    bowfa_state.player_attack_timing = inf_player_projectile_timing(
+        ATTACK_STYLE_RANGED, ITEM_BOW_OF_FAERDHINEN, 0, bowfa_dist);
+
+    EncounterOverlay bowfa_ov;
+    memset(&bowfa_ov, 0, sizeof(bowfa_ov));
+    inf_render_post_tick((EncounterState*)&bowfa_state, &bowfa_ov);
+
+    ASSERT_INT_EQ("bowfa projectile count", bowfa_ov.projectile_count, 1);
+    ASSERT_INT_EQ("bowfa projectile model",
+        bowfa_ov.projectiles[0].model_id, OSRS_PROJECTILE_MODEL_ARROW);
 }
 
 static void test_magic_splash_landing_keeps_spell_visual_context(void) {
     printf("--- magic splash landing keeps spell visual context ---\n");
+
+    ASSERT_INT_EQ("ice barrage visual id matches encounter spell id",
+        OSRS_COMBAT_VISUAL_SPELL_ICE_BARRAGE, ENCOUNTER_SPELL_ICE);
+    ASSERT_INT_EQ("blood barrage visual id matches encounter spell id",
+        OSRS_COMBAT_VISUAL_SPELL_BLOOD_BARRAGE, ENCOUNTER_SPELL_BLOOD);
 
     InfernoState state = make_test_state(10, 10);
     state.npcs[0] = make_test_npc(

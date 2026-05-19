@@ -11,6 +11,7 @@
 
 #include "osrs_items.h"
 #include "osrs_types.h"
+#include "osrs_gfx_ids.h"
 #include <stdint.h>
 #include <stddef.h>
 
@@ -19,6 +20,7 @@ enum {
     OSRS_COMBAT_VISUAL_NO_ANIMATION = -1,
     OSRS_PLAYER_UNARMED_ATTACK_ANIM = 422,
     OSRS_PLAYER_POWERED_STAFF_ATTACK_ANIM = 1167,
+    OSRS_COMBAT_PROJECTILE_MISSING = -1,
 };
 
 typedef enum {
@@ -72,6 +74,126 @@ typedef enum {
     OSRS_COMBAT_PROJECTILE_DRAGON_DART,
     OSRS_COMBAT_PROJECTILE_TRIDENT,
 } OsrsCombatProjectileVisual;
+
+typedef enum {
+    OSRS_COMBAT_VISUAL_SPELL_NONE = 0,
+    OSRS_COMBAT_VISUAL_SPELL_ICE_BARRAGE = 1,
+    OSRS_COMBAT_VISUAL_SPELL_BLOOD_BARRAGE = 2,
+} OsrsCombatVisualSpell;
+
+typedef struct {
+    int32_t launch_spotanim_id;
+    int32_t travel_spotanim_id;
+    int32_t impact_spotanim_id;
+    int32_t projectile_model_id;
+    int32_t projectile_anim_id;
+    int16_t hit_delay;
+    int16_t client_delay;
+    int16_t projectile_start_height;
+    int16_t projectile_end_height;
+    int16_t projectile_delay;
+    int16_t projectile_angle;
+    int16_t projectile_length_adjustment;
+    int16_t projectile_progress;
+    int16_t projectile_step_multiplier;
+    int16_t projectile_count;
+} OsrsCombatProjectileProfile;
+
+typedef struct {
+    int spell_type;
+    const char* spell_name;
+    OsrsCombatProjectileProfile projectile;
+} OsrsSpellCombatVisual;
+
+enum {
+    OSRS_PROJECTILE_MODEL_BOLT = 3135,
+    OSRS_PROJECTILE_MODEL_ARROW = 3136,
+    OSRS_PROJECTILE_MODEL_ICE_BARRAGE = 14215,
+    OSRS_PROJECTILE_MODEL_DRAGON_ARROW = 26377,
+    OSRS_PROJECTILE_MODEL_DRAGON_DART = 26379,
+    OSRS_PROJECTILE_ANIM_BARRAGE = 1964,
+    OSRS_PROJECTILE_ANIM_DRAGON_ARROW = 6622,
+    OSRS_PROJECTILE_ANIM_DRAGON_DART = 6622,
+};
+
+#define OSRS_COMBAT_PROJECTILE_PROFILE_NONE \
+    {OSRS_COMBAT_PROJECTILE_MISSING, OSRS_COMBAT_PROJECTILE_MISSING, \
+     OSRS_COMBAT_PROJECTILE_MISSING, OSRS_COMBAT_PROJECTILE_MISSING, \
+     OSRS_COMBAT_PROJECTILE_MISSING, OSRS_COMBAT_PROJECTILE_MISSING, \
+     OSRS_COMBAT_PROJECTILE_MISSING, OSRS_COMBAT_PROJECTILE_MISSING, \
+     OSRS_COMBAT_PROJECTILE_MISSING, OSRS_COMBAT_PROJECTILE_MISSING, \
+     OSRS_COMBAT_PROJECTILE_MISSING, OSRS_COMBAT_PROJECTILE_MISSING, \
+     OSRS_COMBAT_PROJECTILE_MISSING, OSRS_COMBAT_PROJECTILE_MISSING, 1}
+
+#define OSRS_COMBAT_PROJECTILE_PROFILE( \
+    launch, travel, impact, model, anim, hit, client, start_h, end_h, delay, \
+    angle, length, progress, step, count) \
+    {launch, travel, impact, model, anim, hit, client, start_h, end_h, delay, \
+     angle, length, progress, step, count}
+
+static const OsrsCombatProjectileProfile OSRS_COMBAT_PROJECTILE_PROFILES[] = {
+    [OSRS_COMBAT_PROJECTILE_NONE] = OSRS_COMBAT_PROJECTILE_PROFILE_NONE,
+    [OSRS_COMBAT_PROJECTILE_BOLT] = OSRS_COMBAT_PROJECTILE_PROFILE(
+        OSRS_COMBAT_PROJECTILE_MISSING, GFX_BOLT, OSRS_COMBAT_PROJECTILE_MISSING,
+        OSRS_PROJECTILE_MODEL_BOLT, OSRS_COMBAT_PROJECTILE_MISSING,
+        2, 2, OSRS_COMBAT_PROJECTILE_MISSING, OSRS_COMBAT_PROJECTILE_MISSING,
+        OSRS_COMBAT_PROJECTILE_MISSING, OSRS_COMBAT_PROJECTILE_MISSING,
+        OSRS_COMBAT_PROJECTILE_MISSING, OSRS_COMBAT_PROJECTILE_MISSING,
+        OSRS_COMBAT_PROJECTILE_MISSING, 1),
+    [OSRS_COMBAT_PROJECTILE_RUNE_ARROW] = OSRS_COMBAT_PROJECTILE_PROFILE(
+        24, GFX_RUNE_ARROW, OSRS_COMBAT_PROJECTILE_MISSING,
+        OSRS_PROJECTILE_MODEL_ARROW, OSRS_COMBAT_PROJECTILE_MISSING,
+        2, 2, OSRS_COMBAT_PROJECTILE_MISSING, OSRS_COMBAT_PROJECTILE_MISSING,
+        OSRS_COMBAT_PROJECTILE_MISSING, OSRS_COMBAT_PROJECTILE_MISSING,
+        OSRS_COMBAT_PROJECTILE_MISSING, OSRS_COMBAT_PROJECTILE_MISSING,
+        OSRS_COMBAT_PROJECTILE_MISSING, 1),
+    [OSRS_COMBAT_PROJECTILE_DRAGON_ARROW] = OSRS_COMBAT_PROJECTILE_PROFILE(
+        1116, GFX_DRAGON_ARROW, OSRS_COMBAT_PROJECTILE_MISSING,
+        OSRS_PROJECTILE_MODEL_DRAGON_ARROW, OSRS_PROJECTILE_ANIM_DRAGON_ARROW,
+        2, 2, OSRS_COMBAT_PROJECTILE_MISSING, OSRS_COMBAT_PROJECTILE_MISSING,
+        OSRS_COMBAT_PROJECTILE_MISSING, OSRS_COMBAT_PROJECTILE_MISSING,
+        OSRS_COMBAT_PROJECTILE_MISSING, OSRS_COMBAT_PROJECTILE_MISSING,
+        OSRS_COMBAT_PROJECTILE_MISSING, 1),
+    [OSRS_COMBAT_PROJECTILE_DRAGON_DART] = OSRS_COMBAT_PROJECTILE_PROFILE(
+        1123, GFX_DRAGON_DART, OSRS_COMBAT_PROJECTILE_MISSING,
+        OSRS_PROJECTILE_MODEL_DRAGON_DART, OSRS_PROJECTILE_ANIM_DRAGON_DART,
+        2, 2, 163, 146, 32, 15, 0, 11, 5, 1),
+    [OSRS_COMBAT_PROJECTILE_TRIDENT] = OSRS_COMBAT_PROJECTILE_PROFILE(
+        GFX_TRIDENT_CAST, GFX_TRIDENT_PROJ, GFX_TRIDENT_IMPACT,
+        OSRS_COMBAT_PROJECTILE_MISSING, OSRS_COMBAT_PROJECTILE_MISSING,
+        3, 3, 160, 120, OSRS_COMBAT_PROJECTILE_MISSING, 16,
+        OSRS_COMBAT_PROJECTILE_MISSING, OSRS_COMBAT_PROJECTILE_MISSING,
+        OSRS_COMBAT_PROJECTILE_MISSING, 1),
+};
+
+static const size_t OSRS_COMBAT_PROJECTILE_PROFILE_COUNT =
+    sizeof(OSRS_COMBAT_PROJECTILE_PROFILES) /
+    sizeof(OSRS_COMBAT_PROJECTILE_PROFILES[0]);
+
+static const OsrsSpellCombatVisual OSRS_SPELL_COMBAT_VISUALS[] = {
+    {
+        OSRS_COMBAT_VISUAL_SPELL_ICE_BARRAGE,
+        "Ice Barrage",
+        OSRS_COMBAT_PROJECTILE_PROFILE(
+            OSRS_COMBAT_PROJECTILE_MISSING, GFX_ICE_BARRAGE_PROJ,
+            GFX_ICE_BARRAGE_HIT, OSRS_PROJECTILE_MODEL_ICE_BARRAGE,
+            OSRS_PROJECTILE_ANIM_BARRAGE, 3, 3, 172, 0, 51, 16, -5, 64, 10, 1),
+    },
+    {
+        OSRS_COMBAT_VISUAL_SPELL_BLOOD_BARRAGE,
+        "Blood Barrage",
+        OSRS_COMBAT_PROJECTILE_PROFILE(
+            OSRS_COMBAT_PROJECTILE_MISSING, OSRS_COMBAT_PROJECTILE_MISSING,
+            GFX_BLOOD_BARRAGE_HIT, OSRS_COMBAT_PROJECTILE_MISSING,
+            OSRS_COMBAT_PROJECTILE_MISSING, 3, 3, 172, 124, 51, 16, -5, 64, 10, 1),
+    },
+};
+
+#undef OSRS_COMBAT_PROJECTILE_PROFILE
+#undef OSRS_COMBAT_PROJECTILE_PROFILE_NONE
+
+static const size_t OSRS_SPELL_COMBAT_VISUAL_COUNT =
+    sizeof(OSRS_SPELL_COMBAT_VISUALS) / sizeof(OSRS_SPELL_COMBAT_VISUALS[0]);
 
 #define OSRS_COMBAT_VISUAL_ITEM(item_id, attack_anim, special_anim) \
     {item_id, OSRS_COMBAT_VISUAL_STYLE_ANY, attack_anim, special_anim, \
@@ -145,6 +267,42 @@ static const OsrsItemCombatVisual OSRS_ITEM_COMBAT_VISUALS[] = {
 static const size_t OSRS_ITEM_COMBAT_VISUAL_COUNT =
     sizeof(OSRS_ITEM_COMBAT_VISUALS) / sizeof(OSRS_ITEM_COMBAT_VISUALS[0]);
 
+static inline const OsrsCombatProjectileProfile* osrs_combat_projectile_profile(
+    OsrsCombatProjectileVisual visual
+) {
+    if (visual < 0 || (size_t)visual >= OSRS_COMBAT_PROJECTILE_PROFILE_COUNT) {
+        return NULL;
+    }
+    const OsrsCombatProjectileProfile* profile = &OSRS_COMBAT_PROJECTILE_PROFILES[visual];
+    if (profile->travel_spotanim_id == OSRS_COMBAT_PROJECTILE_MISSING &&
+            profile->impact_spotanim_id == OSRS_COMBAT_PROJECTILE_MISSING &&
+            profile->projectile_model_id == OSRS_COMBAT_PROJECTILE_MISSING) {
+        return NULL;
+    }
+    return profile;
+}
+
+static inline int osrs_combat_projectile_value_or(int value, int fallback) {
+    return value == OSRS_COMBAT_PROJECTILE_MISSING ? fallback : value;
+}
+
+static inline const OsrsSpellCombatVisual* osrs_combat_visual_find_spell(
+    int spell_type
+) {
+    for (size_t i = 0; i < OSRS_SPELL_COMBAT_VISUAL_COUNT; i++) {
+        const OsrsSpellCombatVisual* visual = &OSRS_SPELL_COMBAT_VISUALS[i];
+        if (visual->spell_type == spell_type) return visual;
+    }
+    return NULL;
+}
+
+static inline const OsrsCombatProjectileProfile* osrs_combat_visual_spell_projectile(
+    int spell_type
+) {
+    const OsrsSpellCombatVisual* visual = osrs_combat_visual_find_spell(spell_type);
+    return visual ? &visual->projectile : NULL;
+}
+
 /**
  * Return the combat visual row for an OSRS item id and style.
  */
@@ -202,6 +360,13 @@ static inline OsrsCombatProjectileVisual osrs_combat_visual_ranged_projectile(
     return (OsrsCombatProjectileVisual)visual->ranged_projectile_visual;
 }
 
+static inline const OsrsCombatProjectileProfile* osrs_combat_visual_ranged_projectile_profile(
+    uint8_t item_db_idx, OsrsCombatProjectileVisual fallback
+) {
+    return osrs_combat_projectile_profile(
+        osrs_combat_visual_ranged_projectile(item_db_idx, fallback));
+}
+
 /**
  * Return the magic projectile category for an item database index.
  */
@@ -212,6 +377,13 @@ static inline OsrsCombatProjectileVisual osrs_combat_visual_magic_projectile(
         osrs_combat_visual_find_item_db(item_db_idx, ATTACK_STYLE_MAGIC);
     if (!visual) return OSRS_COMBAT_PROJECTILE_NONE;
     return (OsrsCombatProjectileVisual)visual->magic_projectile_visual;
+}
+
+static inline const OsrsCombatProjectileProfile* osrs_combat_visual_magic_projectile_profile(
+    uint8_t item_db_idx
+) {
+    return osrs_combat_projectile_profile(
+        osrs_combat_visual_magic_projectile(item_db_idx));
 }
 
 /**

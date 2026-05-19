@@ -569,24 +569,32 @@ static void render_seed_entity_visual_slot(RenderClient* rc, int i);
 static inline int render_world_to_screen_x_rc(RenderClient* rc, int world_x);
 static inline int render_world_to_screen_y_rc(RenderClient* rc, int world_y);
 
-static int render_projectile_gfx_for_visual(OsrsCombatProjectileVisual visual) {
-    switch (visual) {
-    case OSRS_COMBAT_PROJECTILE_BOLT:
-        return GFX_BOLT;
-    case OSRS_COMBAT_PROJECTILE_RUNE_ARROW:
-        return GFX_RUNE_ARROW;
-    case OSRS_COMBAT_PROJECTILE_DRAGON_ARROW:
-        return GFX_DRAGON_ARROW;
-    case OSRS_COMBAT_PROJECTILE_DRAGON_DART:
-        return GFX_DRAGON_DART;
-    case OSRS_COMBAT_PROJECTILE_TRIDENT:
-        return GFX_TRIDENT_PROJ;
-    case OSRS_COMBAT_PROJECTILE_NONE:
-        return 0;
-    default:
-        fprintf(stderr, "render: unknown projectile visual %d\n", visual);
-        abort();
-    }
+static int render_projectile_profile_value_or(int value, int fallback) {
+    return osrs_combat_projectile_value_or(value, fallback);
+}
+
+static int render_spawn_profile_projectile(
+    RenderClient* rc,
+    const OsrsCombatProjectileProfile* profile,
+    int src_x, int src_y, int dst_x, int dst_y,
+    int delay_client_ticks, int duration_client_ticks,
+    int fallback_start_height, int fallback_end_height,
+    int fallback_slope
+) {
+    if (!profile || profile->travel_spotanim_id < 0) return -1;
+    return effect_spawn_projectile(
+        rc->effects, profile->travel_spotanim_id,
+        src_x, src_y, dst_x, dst_y,
+        delay_client_ticks, duration_client_ticks,
+        render_projectile_profile_value_or(
+            profile->projectile_start_height, fallback_start_height),
+        render_projectile_profile_value_or(
+            profile->projectile_end_height, fallback_end_height),
+        render_projectile_profile_value_or(
+            profile->projectile_angle, fallback_slope),
+        rc->effect_client_tick_counter,
+        rc->spotanims, rc->model_cache, rc->npc_model_cache,
+        rc->projectile_model_cache);
 }
 
 /** Get the raw Player* for a given entity index (for GUI functions that need full Player state).
@@ -2690,44 +2698,36 @@ static void render_post_tick(RenderClient* rc, OsrsEnv* env) {
                 uint8_t wpn = p->equipped[GEAR_SLOT_WEAPON];
                 int dist = render_pvp_distance_to_target(p, t);
                 int duration_ticks = pvp_magic_hit_delay(dist) * 30;
-                OsrsCombatProjectileVisual visual =
-                    osrs_combat_visual_magic_projectile(wpn);
-                int gfx = render_projectile_gfx_for_visual(visual);
-                if (gfx > 0) {
-                    effect_spawn_projectile(rc->effects, gfx,
+                const OsrsCombatProjectileProfile* profile =
+                    osrs_combat_visual_magic_projectile_profile(wpn);
+                if (profile) {
+                    render_spawn_profile_projectile(rc, profile,
                         p->x, p->y, t->x, t->y,
-                        0, duration_ticks, 40 * 4, 30 * 4, 16, ct,
-                        rc->spotanims, rc->model_cache, rc->npc_model_cache,
-                        rc->projectile_model_cache);
-                } else if (p->magic_type_this_tick == 1) {
-                    /* ice barrage: projectile orb rises from target tile
-                       heights *4 per reference (stream.readUnsignedByte() * 4) */
-                    effect_spawn_projectile(rc->effects, GFX_ICE_BARRAGE_PROJ,
-                        t->x, t->y, t->x, t->y,  /* src=dst (rises in place) */
-                        0, 56, 43 * 4, 0, 16, ct,
-                        rc->spotanims, rc->model_cache, rc->npc_model_cache,
-                        rc->projectile_model_cache);
+                        0, duration_ticks, 40 * 4, 30 * 4, 16);
+                } else {
+                    profile = osrs_combat_visual_spell_projectile(p->magic_type_this_tick);
+                    if (profile && profile->travel_spotanim_id >= 0) {
+                        render_spawn_profile_projectile(rc, profile,
+                            t->x, t->y, t->x, t->y,
+                            0, 56, 43 * 4, 0, 16);
+                    }
                 }
-                /* blood barrage: no projectile, impact spawns on hit */
             }
 
             /* attacker fired a ranged attack this tick */
             if (p->attack_style_this_tick == ATTACK_STYLE_RANGED) {
                 uint8_t wpn = p->equipped[GEAR_SLOT_WEAPON];
                 int dist = render_pvp_distance_to_target(p, t);
-                OsrsCombatProjectileVisual visual =
-                    osrs_combat_visual_ranged_projectile(wpn, OSRS_COMBAT_PROJECTILE_BOLT);
-                int gfx = render_projectile_gfx_for_visual(visual);
+                const OsrsCombatProjectileProfile* profile =
+                    osrs_combat_visual_ranged_projectile_profile(
+                        wpn, OSRS_COMBAT_PROJECTILE_BOLT);
                 int duration_ticks = p->used_special_this_tick
                     ? pvp_ranged_hit_delay_for_weapon(
                         dist, 1, render_pvp_ranged_spec_weapon_for_item(wpn)) * 30
                     : pvp_ranged_hit_delay(dist) * 30;
-                /* heights *4 per reference: 43*4=172 start, 31*4=124 end */
-                effect_spawn_projectile(rc->effects, gfx,
+                render_spawn_profile_projectile(rc, profile,
                     p->x, p->y, t->x, t->y,
-                    0, duration_ticks, 43 * 4, 31 * 4, 16, ct,
-                    rc->spotanims, rc->model_cache, rc->npc_model_cache,
-                    rc->projectile_model_cache);
+                    0, duration_ticks, 43 * 4, 31 * 4, 16);
             }
         }
 
@@ -2744,13 +2744,15 @@ static void render_post_tick(RenderClient* rc, OsrsEnv* env) {
 
             /* check if attacker used a powered staff (trident/sang/ayak) */
             uint8_t att_wpn = att->equipped[GEAR_SLOT_WEAPON];
-            int att_is_powered_staff =
-                osrs_combat_visual_magic_projectile(att_wpn) == OSRS_COMBAT_PROJECTILE_TRIDENT;
+            const OsrsCombatProjectileProfile* att_magic_profile =
+                osrs_combat_visual_magic_projectile_profile(att_wpn);
+            int att_is_powered_staff = att_magic_profile &&
+                att_magic_profile->impact_spotanim_id >= 0;
 
             if (att_is_powered_staff && att->attack_style_this_tick == ATTACK_STYLE_MAGIC) {
                 /* powered staff hit: trident impact splash */
                 if (p->hit_was_successful) {
-                    effect_spawn_spotanim(rc->effects, GFX_TRIDENT_IMPACT,
+                    effect_spawn_spotanim(rc->effects, att_magic_profile->impact_spotanim_id,
                         p->x, p->y, ct, rc->spotanims, rc->anim_cache,
                         rc->model_cache, rc->npc_model_cache,
                         rc->projectile_model_cache);
@@ -2768,15 +2770,19 @@ static void render_post_tick(RenderClient* rc, OsrsEnv* env) {
                    fallback caused blood/ice effects on tbow hits when barrage fired same tick. */
                 int spell = p->hit_spell_type;
                 if (spell > 0) {
+                    const OsrsCombatProjectileProfile* profile =
+                        osrs_combat_visual_spell_projectile(spell);
+                    if (!profile || profile->impact_spotanim_id < 0) {
+                        fprintf(stderr, "render: missing spell impact visual %d\n", spell);
+                        abort();
+                    }
                     /* center effect on NPC footprint center using sub-tile precision.
                        for size 2: center at (x*128 + 128, y*128 + 128) = between 4 tiles.
                        for size 3: center at (x*128 + 192, y*128 + 192) = middle tile center. */
                     float fx = (float)p->x * 128.0f + (float)p->npc_size * 64.0f;
                     float fy = (float)p->y * 128.0f + (float)p->npc_size * 64.0f;
                     if (p->hit_was_successful) {
-                        int gfx = (spell == 1)  /* ENCOUNTER_SPELL_ICE */
-                            ? GFX_ICE_BARRAGE_HIT : GFX_BLOOD_BARRAGE_HIT;
-                        effect_spawn_spotanim_subtile(rc->effects, gfx,
+                        effect_spawn_spotanim_subtile(rc->effects, profile->impact_spotanim_id,
                             fx, fy, ct, rc->spotanims, rc->anim_cache,
                             rc->model_cache,
                             rc->npc_model_cache, rc->projectile_model_cache);

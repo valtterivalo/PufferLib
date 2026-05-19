@@ -1,0 +1,26 @@
+/**
+ * @file osrs_gfx_ids.h
+ * @brief Shared spotanim ids used by combat render paths.
+ */
+
+#ifndef OSRS_GFX_IDS_H
+#define OSRS_GFX_IDS_H
+
+#define GFX_RUNE_ARROW      15
+#define GFX_BOLT            27
+#define GFX_SPLASH          85
+#define GFX_ICE_BARRAGE_PROJ 368
+#define GFX_ICE_BARRAGE_HIT 369
+#define GFX_BLOOD_BARRAGE_HIT 377
+#define GFX_TEKTON_METEOR_SPLAT 659
+#define GFX_TEKTON_METEOR_PROJ  660
+#define GFX_TRIDENT_CAST    665
+#define GFX_TRIDENT_PROJ    1040
+#define GFX_TRIDENT_IMPACT  1042
+#define GFX_BLOWPIPE_SPEC   1043
+#define GFX_DRAGON_ARROW    1120
+#define GFX_DRAGON_DART     1122
+#define GFX_RUNE_DART       231
+#define GFX_DRAGON_BOLT     1468
+
+#endif

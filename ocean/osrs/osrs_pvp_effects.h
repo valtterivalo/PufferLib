@@ -16,30 +16,10 @@
 #include "osrs_models.h"
 #include "osrs_anim.h"
 #include "osrs_spotanims.h"
+#include "osrs_gfx_ids.h"
 #include <math.h>
 
 #define MAX_ACTIVE_EFFECTS 16
-
-
-/* GFX IDs from spotanim.dat */
-#define GFX_BOLT            27
-#define GFX_SPLASH          85     /* blue splash on spell miss */
-#define GFX_ICE_BARRAGE_PROJ 368
-#define GFX_ICE_BARRAGE_HIT 369
-#define GFX_BLOOD_BARRAGE_HIT 377
-#define GFX_TEKTON_METEOR_SPLAT 659
-#define GFX_TEKTON_METEOR_PROJ  660
-#define GFX_DRAGON_BOLT     1468
-
-/* player weapon projectiles (zulrah encounter) */
-#define GFX_TRIDENT_CAST    665    /* casting effect on player */
-#define GFX_TRIDENT_PROJ    1040   /* trident projectile in flight */
-#define GFX_TRIDENT_IMPACT  1042   /* trident hit splash on target */
-#define GFX_DRAGON_ARROW    1120   /* dragon arrow projectile (tbow) */
-#define GFX_RUNE_ARROW      15     /* rune arrow projectile (MSB) */
-#define GFX_DRAGON_DART     1122   /* dragon dart projectile (blowpipe) */
-#define GFX_RUNE_DART       231    /* rune dart projectile */
-#define GFX_BLOWPIPE_SPEC   1043   /* blowpipe special attack effect */
 
 static const OsrsSpotAnimDef* spotanim_lookup(
     const OsrsSpotAnimSet* spotanims,

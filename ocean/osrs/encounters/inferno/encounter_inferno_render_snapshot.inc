@@ -419,16 +419,23 @@ static void inf_render_post_tick_ctx(
             uint8_t weapon = s->player.equipped[GEAR_SLOT_WEAPON];
 
             uint32_t player_proj_model = 0;
+            int player_proj_anim = -1;
             if (s->player_attack_style_id == ATTACK_STYLE_MAGIC) {
                 p_arc = 0.0f;
                 /* barrage: no projectile model (effect system handles it) */
-            } else if (weapon == ITEM_TWISTED_BOW) {
-                p_arc = 1.0f;
-                player_proj_model = INF_GFX_1120_MODEL;
             } else {
-                /* blowpipe */
-                p_arc = 0.5f;
-                player_proj_model = 26379;  /* dragon dart */
+                const OsrsCombatProjectileProfile* profile =
+                    osrs_combat_visual_ranged_projectile_profile(
+                        weapon, OSRS_COMBAT_PROJECTILE_NONE);
+                if (profile && profile->projectile_model_id > 0) {
+                    player_proj_model = (uint32_t)profile->projectile_model_id;
+                    player_proj_anim = profile->projectile_anim_id;
+                    p_start_h = osrs_combat_projectile_value_or(
+                        profile->projectile_start_height, p_start_h);
+                    p_end_h = osrs_combat_projectile_value_or(
+                        profile->projectile_end_height, p_end_h);
+                    p_arc = profile->travel_spotanim_id == GFX_DRAGON_DART ? 0.5f : 1.0f;
+                }
             }
 
             /* barrage has no in-flight projectile in OSRS (only hit splash) */
@@ -439,6 +446,7 @@ static void inf_render_post_tick_ctx(
                     p_duration, p_start_h, p_end_h, 16, p_arc, p_tracks,
                     1, target_size, player_proj_model, 0);
                 ov->projectiles[pi].start_delay = p_start_delay;
+                encounter_set_projectile_animation(ov, pi, player_proj_anim);
                 encounter_set_projectile_target_npc_slot(ov, pi, target_idx);
             }
         }

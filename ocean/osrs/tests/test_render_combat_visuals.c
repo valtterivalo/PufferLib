@@ -84,9 +84,67 @@ static void test_alpha_transform_updates_face_alphas_and_mesh_colors(void) {
     anim_model_state_free(state);
 }
 
+static void test_projectile_profiles_match_runec_visual_rows(void) {
+    const OsrsCombatProjectileProfile* tbow =
+        osrs_combat_visual_ranged_projectile_profile(
+            ITEM_TWISTED_BOW, OSRS_COMBAT_PROJECTILE_NONE);
+    assert(tbow);
+    assert(tbow->launch_spotanim_id == 1116);
+    assert(tbow->travel_spotanim_id == GFX_DRAGON_ARROW);
+    assert(tbow->projectile_model_id == OSRS_PROJECTILE_MODEL_DRAGON_ARROW);
+    assert(tbow->projectile_anim_id == OSRS_PROJECTILE_ANIM_DRAGON_ARROW);
+
+    const OsrsCombatProjectileProfile* blowpipe =
+        osrs_combat_visual_ranged_projectile_profile(
+            ITEM_TOXIC_BLOWPIPE, OSRS_COMBAT_PROJECTILE_NONE);
+    assert(blowpipe);
+    assert(blowpipe->launch_spotanim_id == 1123);
+    assert(blowpipe->travel_spotanim_id == GFX_DRAGON_DART);
+    assert(blowpipe->projectile_model_id == OSRS_PROJECTILE_MODEL_DRAGON_DART);
+    assert(blowpipe->projectile_anim_id == OSRS_PROJECTILE_ANIM_DRAGON_DART);
+    assert(blowpipe->projectile_start_height == 163);
+    assert(blowpipe->projectile_end_height == 146);
+    assert(blowpipe->projectile_delay == 32);
+    assert(blowpipe->projectile_angle == 15);
+    assert(blowpipe->projectile_progress == 11);
+
+    const OsrsCombatProjectileProfile* trident =
+        osrs_combat_visual_magic_projectile_profile(ITEM_TRIDENT_OF_SWAMP);
+    assert(trident);
+    assert(trident->launch_spotanim_id == GFX_TRIDENT_CAST);
+    assert(trident->travel_spotanim_id == GFX_TRIDENT_PROJ);
+    assert(trident->impact_spotanim_id == GFX_TRIDENT_IMPACT);
+}
+
+static void test_spell_profiles_match_runec_visual_rows(void) {
+    const OsrsCombatProjectileProfile* ice =
+        osrs_combat_visual_spell_projectile(OSRS_COMBAT_VISUAL_SPELL_ICE_BARRAGE);
+    assert(ice);
+    assert(ice->travel_spotanim_id == GFX_ICE_BARRAGE_PROJ);
+    assert(ice->impact_spotanim_id == GFX_ICE_BARRAGE_HIT);
+    assert(ice->projectile_model_id == OSRS_PROJECTILE_MODEL_ICE_BARRAGE);
+    assert(ice->projectile_anim_id == OSRS_PROJECTILE_ANIM_BARRAGE);
+    assert(ice->projectile_start_height == 172);
+    assert(ice->projectile_end_height == 0);
+    assert(ice->projectile_delay == 51);
+    assert(ice->projectile_angle == 16);
+    assert(ice->projectile_length_adjustment == -5);
+    assert(ice->projectile_progress == 64);
+    assert(ice->projectile_step_multiplier == 10);
+
+    const OsrsCombatProjectileProfile* blood =
+        osrs_combat_visual_spell_projectile(OSRS_COMBAT_VISUAL_SPELL_BLOOD_BARRAGE);
+    assert(blood);
+    assert(blood->travel_spotanim_id == OSRS_COMBAT_PROJECTILE_MISSING);
+    assert(blood->impact_spotanim_id == GFX_BLOOD_BARRAGE_HIT);
+    assert(blood->projectile_delay == 51);
+}
+
 int main(void) {
     test_empty_origin_transform_sets_fallback_pivot();
     test_alpha_transform_updates_face_alphas_and_mesh_colors();
+    test_projectile_profiles_match_runec_visual_rows();
+    test_spell_profiles_match_runec_visual_rows();
 
     assert(osrs_combat_visual_weapon_attack_anim(
         ITEM_WHIP, ATTACK_STYLE_MELEE, 0, OSRS_PLAYER_UNARMED_ATTACK_ANIM) == 1658);
