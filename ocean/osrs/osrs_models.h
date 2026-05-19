@@ -300,6 +300,12 @@ static uint32_t item_hide_body_mask(uint16_t item_id) {
     return mapping->hide_body_mask;
 }
 
+static inline uint32_t item_render_equip_slot(uint16_t item_id) {
+    const ItemModelMapping* mapping = item_model_mapping_for_item(item_id);
+    if (!mapping) return ITEM_RENDER_MODEL_MISSING;
+    return mapping->equip_slot;
+}
+
 static uint32_t item_render_flags(uint16_t item_id) {
     const ItemModelMapping* mapping = item_model_mapping_for_item(item_id);
     if (!mapping) return 0;

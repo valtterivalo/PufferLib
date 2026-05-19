@@ -9,6 +9,10 @@ static uint32_t hide_mask_for_item(int item_index) {
     return item_hide_body_mask(ITEM_DATABASE[item_index].item_id);
 }
 
+static uint32_t equip_slot_for_item(int item_index) {
+    return item_render_equip_slot(ITEM_DATABASE[item_index].item_id);
+}
+
 static uint32_t render_flags_for_item(int item_index) {
     return item_render_flags(ITEM_DATABASE[item_index].item_id);
 }
@@ -65,11 +69,133 @@ static void assert_runtime_model_present(int item_index) {
     assert(model_file_contains_model(OSRS_ASSET("equipment.models"), model_id));
 }
 
+static void assert_render_slot_matches_db(int item_index) {
+    assert(equip_slot_for_item(item_index) == ITEM_DATABASE[item_index].slot);
+}
+
 static void clear_equipment(uint8_t equipped[NUM_GEAR_SLOTS]) {
     for (int i = 0; i < NUM_GEAR_SLOTS; i++) {
         equipped[i] = ITEM_NONE;
     }
 }
+
+static void assert_body_models_present(const OsrsPlayerAppearance* appearance) {
+    for (int bp = 0; bp < BODY_PART_COUNT; bp++) {
+        if (!appearance->body_visible[bp]) continue;
+        assert(appearance->body_model_ids[bp] != ITEM_RENDER_MODEL_MISSING);
+        assert(model_file_contains_model(
+            OSRS_ASSET("equipment.models"), appearance->body_model_ids[bp]));
+    }
+}
+
+static void assert_item_models_present(const OsrsPlayerAppearance* appearance) {
+    for (int i = 0; i < OSRS_VISIBLE_EQUIP_SLOT_COUNT; i++) {
+        int slot = OSRS_VISIBLE_EQUIP_SLOTS[i];
+        if (!appearance->item_visible[slot]) continue;
+        assert(appearance->item_model_ids[slot] != ITEM_RENDER_MODEL_MISSING);
+        assert(model_file_contains_model(
+            OSRS_ASSET("equipment.models"), appearance->item_model_ids[slot]));
+    }
+}
+
+static void assert_resolved_models_present(const uint8_t equipped[NUM_GEAR_SLOTS]) {
+    OsrsPlayerAppearance appearance = osrs_resolve_player_appearance(equipped);
+    assert_body_models_present(&appearance);
+    assert_item_models_present(&appearance);
+}
+
+static void set_equipment(
+    uint8_t equipped[NUM_GEAR_SLOTS],
+    const uint8_t loadout[NUM_GEAR_SLOTS]
+) {
+    for (int i = 0; i < NUM_GEAR_SLOTS; i++) {
+        equipped[i] = loadout[i];
+    }
+}
+
+static const uint8_t MAX_MAGE_LOADOUT[NUM_GEAR_SLOTS] = {
+    [GEAR_SLOT_HEAD] = ITEM_MASORI_MASK_F,
+    [GEAR_SLOT_CAPE] = ITEM_DIZANAS_QUIVER,
+    [GEAR_SLOT_NECK] = ITEM_OCCULT_NECKLACE,
+    [GEAR_SLOT_AMMO] = ITEM_DRAGON_ARROWS,
+    [GEAR_SLOT_WEAPON] = ITEM_KODAI_WAND,
+    [GEAR_SLOT_SHIELD] = ITEM_ELYSIAN_SPIRIT_SHIELD,
+    [GEAR_SLOT_BODY] = ITEM_VIRTUS_ROBE_TOP,
+    [GEAR_SLOT_LEGS] = ITEM_VIRTUS_ROBE_BOTTOM,
+    [GEAR_SLOT_HANDS] = ITEM_CONFLICTION_GAUNTLETS,
+    [GEAR_SLOT_FEET] = ITEM_AVERNIC_TREADS,
+    [GEAR_SLOT_RING] = ITEM_VENATOR_RING,
+};
+
+static const uint8_t MAX_RANGE_LONG_LOADOUT[NUM_GEAR_SLOTS] = {
+    [GEAR_SLOT_HEAD] = ITEM_MASORI_MASK_F,
+    [GEAR_SLOT_CAPE] = ITEM_DIZANAS_QUIVER,
+    [GEAR_SLOT_NECK] = ITEM_NECKLACE_OF_ANGUISH,
+    [GEAR_SLOT_AMMO] = ITEM_DRAGON_ARROWS,
+    [GEAR_SLOT_WEAPON] = ITEM_TWISTED_BOW,
+    [GEAR_SLOT_SHIELD] = ITEM_NONE,
+    [GEAR_SLOT_BODY] = ITEM_MASORI_BODY_F,
+    [GEAR_SLOT_LEGS] = ITEM_MASORI_CHAPS_F,
+    [GEAR_SLOT_HANDS] = ITEM_ZARYTE_VAMBRACES,
+    [GEAR_SLOT_FEET] = ITEM_AVERNIC_TREADS,
+    [GEAR_SLOT_RING] = ITEM_VENATOR_RING,
+};
+
+static const uint8_t MAX_RANGE_FAST_LOADOUT[NUM_GEAR_SLOTS] = {
+    [GEAR_SLOT_HEAD] = ITEM_MASORI_MASK_F,
+    [GEAR_SLOT_CAPE] = ITEM_DIZANAS_QUIVER,
+    [GEAR_SLOT_NECK] = ITEM_NECKLACE_OF_ANGUISH,
+    [GEAR_SLOT_AMMO] = ITEM_DRAGON_DART,
+    [GEAR_SLOT_WEAPON] = ITEM_TOXIC_BLOWPIPE,
+    [GEAR_SLOT_SHIELD] = ITEM_NONE,
+    [GEAR_SLOT_BODY] = ITEM_MASORI_BODY_F,
+    [GEAR_SLOT_LEGS] = ITEM_MASORI_CHAPS_F,
+    [GEAR_SLOT_HANDS] = ITEM_ZARYTE_VAMBRACES,
+    [GEAR_SLOT_FEET] = ITEM_AVERNIC_TREADS,
+    [GEAR_SLOT_RING] = ITEM_VENATOR_RING,
+};
+
+static const uint8_t BUDGET_MAGE_LOADOUT[NUM_GEAR_SLOTS] = {
+    [GEAR_SLOT_HEAD] = ITEM_CRYSTAL_HELM,
+    [GEAR_SLOT_CAPE] = ITEM_DIZANAS_QUIVER,
+    [GEAR_SLOT_NECK] = ITEM_OCCULT_NECKLACE,
+    [GEAR_SLOT_AMMO] = ITEM_GOD_BLESSING,
+    [GEAR_SLOT_WEAPON] = ITEM_DRAGON_HUNTER_WAND,
+    [GEAR_SLOT_SHIELD] = ITEM_CRYSTAL_SHIELD,
+    [GEAR_SLOT_BODY] = ITEM_AHRIMS_ROBETOP,
+    [GEAR_SLOT_LEGS] = ITEM_AHRIMS_ROBESKIRT,
+    [GEAR_SLOT_HANDS] = ITEM_CONFLICTION_GAUNTLETS,
+    [GEAR_SLOT_FEET] = ITEM_ECHO_BOOTS,
+    [GEAR_SLOT_RING] = ITEM_VENATOR_RING,
+};
+
+static const uint8_t BUDGET_RANGE_LONG_LOADOUT[NUM_GEAR_SLOTS] = {
+    [GEAR_SLOT_HEAD] = ITEM_CRYSTAL_HELM,
+    [GEAR_SLOT_CAPE] = ITEM_DIZANAS_QUIVER,
+    [GEAR_SLOT_NECK] = ITEM_NECKLACE_OF_ANGUISH,
+    [GEAR_SLOT_AMMO] = ITEM_GOD_BLESSING,
+    [GEAR_SLOT_WEAPON] = ITEM_BOW_OF_FAERDHINEN,
+    [GEAR_SLOT_SHIELD] = ITEM_NONE,
+    [GEAR_SLOT_BODY] = ITEM_CRYSTAL_BODY,
+    [GEAR_SLOT_LEGS] = ITEM_CRYSTAL_LEGS,
+    [GEAR_SLOT_HANDS] = ITEM_BARROWS_GLOVES,
+    [GEAR_SLOT_FEET] = ITEM_ECHO_BOOTS,
+    [GEAR_SLOT_RING] = ITEM_VENATOR_RING,
+};
+
+static const uint8_t BUDGET_RANGE_FAST_LOADOUT[NUM_GEAR_SLOTS] = {
+    [GEAR_SLOT_HEAD] = ITEM_CRYSTAL_HELM,
+    [GEAR_SLOT_CAPE] = ITEM_DIZANAS_QUIVER,
+    [GEAR_SLOT_NECK] = ITEM_NECKLACE_OF_ANGUISH,
+    [GEAR_SLOT_AMMO] = ITEM_DRAGON_DART,
+    [GEAR_SLOT_WEAPON] = ITEM_TOXIC_BLOWPIPE,
+    [GEAR_SLOT_SHIELD] = ITEM_NONE,
+    [GEAR_SLOT_BODY] = ITEM_CRYSTAL_BODY,
+    [GEAR_SLOT_LEGS] = ITEM_CRYSTAL_LEGS,
+    [GEAR_SLOT_HANDS] = ITEM_BARROWS_GLOVES,
+    [GEAR_SLOT_FEET] = ITEM_ECHO_BOOTS,
+    [GEAR_SLOT_RING] = ITEM_VENATOR_RING,
+};
 
 int main(void) {
     assert(hide_mask_for_item(ITEM_TWISTED_BOW) == 0);
@@ -93,6 +219,21 @@ int main(void) {
     assert_runtime_model_present(ITEM_ELYSIAN_SPIRIT_SHIELD);
     assert_runtime_model_present(ITEM_VIRTUS_ROBE_TOP);
     assert_runtime_model_present(ITEM_VIRTUS_ROBE_BOTTOM);
+
+    assert_render_slot_matches_db(ITEM_MASORI_MASK_F);
+    assert_render_slot_matches_db(ITEM_DIZANAS_QUIVER);
+    assert_render_slot_matches_db(ITEM_OCCULT_NECKLACE);
+    assert_render_slot_matches_db(ITEM_DRAGON_ARROWS);
+    assert_render_slot_matches_db(ITEM_KODAI_WAND);
+    assert_render_slot_matches_db(ITEM_ELYSIAN_SPIRIT_SHIELD);
+    assert_render_slot_matches_db(ITEM_VIRTUS_ROBE_TOP);
+    assert_render_slot_matches_db(ITEM_VIRTUS_ROBE_BOTTOM);
+    assert_render_slot_matches_db(ITEM_CONFLICTION_GAUNTLETS);
+    assert_render_slot_matches_db(ITEM_AVERNIC_TREADS);
+    assert_render_slot_matches_db(ITEM_VENATOR_RING);
+    assert_render_slot_matches_db(ITEM_BOW_OF_FAERDHINEN);
+    assert_render_slot_matches_db(ITEM_DRAGON_HUNTER_WAND);
+    assert_render_slot_matches_db(ITEM_ECHO_BOOTS);
 
     assert((render_flags_for_item(ITEM_TWISTED_BOW) & ITEM_RENDER_FLAG_TWO_HANDED) != 0);
     assert((render_flags_for_item(ITEM_BOW_OF_FAERDHINEN) & ITEM_RENDER_FLAG_TWO_HANDED) != 0);
@@ -147,6 +288,19 @@ int main(void) {
     assert(!budget_body.body_visible[BODY_PART_ARMS]);
     assert(!budget_body.body_visible[BODY_PART_FEET]);
     assert(budget_body.body_visible[BODY_PART_LEGS]);
+
+    set_equipment(equipped, MAX_MAGE_LOADOUT);
+    assert_resolved_models_present(equipped);
+    set_equipment(equipped, MAX_RANGE_LONG_LOADOUT);
+    assert_resolved_models_present(equipped);
+    set_equipment(equipped, MAX_RANGE_FAST_LOADOUT);
+    assert_resolved_models_present(equipped);
+    set_equipment(equipped, BUDGET_MAGE_LOADOUT);
+    assert_resolved_models_present(equipped);
+    set_equipment(equipped, BUDGET_RANGE_LONG_LOADOUT);
+    assert_resolved_models_present(equipped);
+    set_equipment(equipped, BUDGET_RANGE_FAST_LOADOUT);
+    assert_resolved_models_present(equipped);
 
     return 0;
 }

@@ -93,6 +93,9 @@ DEFAULT_MALE_KITS = {
 # body part name labels for C header
 BODY_PART_NAMES = ["HEAD", "JAW", "TORSO", "ARMS", "HANDS", "LEGS", "FEET"]
 
+WEARPOS_HAT = 0
+WEARPOS_BACK = 1
+WEARPOS_FRONT = 2
 WEARPOS_RIGHT_HAND = 3
 WEARPOS_TORSO = 4
 WEARPOS_LEFT_HAND = 5
@@ -102,12 +105,26 @@ WEARPOS_HEAD = 8
 WEARPOS_HANDS = 9
 WEARPOS_FEET = 10
 WEARPOS_JAW = 11
+WEARPOS_RING = 12
+WEARPOS_QUIVER = 13
 
 ITEM_RENDER_MODEL_MISSING = 0xFFFFFFFF
 ITEM_RENDER_FLAG_TWO_HANDED = 1 << 0
 ITEM_RENDER_FLAG_WEARPOS_AUTHORITY = 1 << 1
 RUNEC_ITEM_RENDER_MAGIC = 0x4D455249
 RUNEC_ITEM_RENDER_VERSION = 2
+
+EQUIP_SLOT_HEAD = 0
+EQUIP_SLOT_CAPE = 1
+EQUIP_SLOT_NECK = 2
+EQUIP_SLOT_WEAPON = 3
+EQUIP_SLOT_BODY = 4
+EQUIP_SLOT_SHIELD = 5
+EQUIP_SLOT_LEGS = 6
+EQUIP_SLOT_HANDS = 7
+EQUIP_SLOT_FEET = 8
+EQUIP_SLOT_RING = 9
+EQUIP_SLOT_AMMO = 10
 
 KNOWN_PLAYER_BAS: dict[int, tuple[int, int, int]] = {
     11802: (7053, 7052, 7043),
@@ -138,6 +155,31 @@ def item_wearpos_values(item: ItemDef) -> tuple[int, int, int]:
         item_wearpos_value(item.wearpos2),
         item_wearpos_value(item.wearpos3),
     )
+
+
+def item_equip_slot_value(item: ItemDef) -> int:
+    """Infer the C equipment slot from cache wear position metadata."""
+
+    wearpos_to_slot = {
+        WEARPOS_HAT: EQUIP_SLOT_HEAD,
+        WEARPOS_BACK: EQUIP_SLOT_CAPE,
+        WEARPOS_FRONT: EQUIP_SLOT_NECK,
+        WEARPOS_RIGHT_HAND: EQUIP_SLOT_WEAPON,
+        WEARPOS_TORSO: EQUIP_SLOT_BODY,
+        WEARPOS_LEFT_HAND: EQUIP_SLOT_SHIELD,
+        WEARPOS_ARMS: EQUIP_SLOT_BODY,
+        WEARPOS_LEGS: EQUIP_SLOT_LEGS,
+        WEARPOS_HEAD: EQUIP_SLOT_HEAD,
+        WEARPOS_HANDS: EQUIP_SLOT_HANDS,
+        WEARPOS_FEET: EQUIP_SLOT_FEET,
+        WEARPOS_JAW: EQUIP_SLOT_HEAD,
+        WEARPOS_RING: EQUIP_SLOT_RING,
+        WEARPOS_QUIVER: EQUIP_SLOT_AMMO,
+    }
+    for wearpos in (item.wearpos1, item.wearpos2, item.wearpos3):
+        if wearpos in wearpos_to_slot:
+            return wearpos_to_slot[wearpos]
+    return ITEM_RENDER_MODEL_MISSING
 
 
 def item_render_anim_value(anim_id: int) -> int:
@@ -2029,7 +2071,7 @@ def write_models_binary(
 
 def write_item_model_header(
     output_path: Path,
-    mappings: list[tuple[int, int, int, int, int, int, int, int]],
+    mappings: list[tuple[int, int, int, int, int, int, int, int, int, int, int, int]],
 ) -> None:
     """Write C header with item → model ID mapping.
 
@@ -2050,6 +2092,7 @@ def write_item_model_header(
         f.write("    uint32_t inv_model;\n")
         f.write("    uint32_t wield_model;\n")
         f.write("    uint32_t hide_body_mask;\n")
+        f.write("    uint32_t equip_slot;\n")
         f.write("    uint32_t wearpos1;\n")
         f.write("    uint32_t wearpos2;\n")
         f.write("    uint32_t wearpos3;\n")
@@ -2065,12 +2108,12 @@ def write_item_model_header(
             "static const ItemModelMapping ITEM_MODEL_MAP[] = {\n"
         )
         for (
-            item_id, inv, wield, hide_mask, wearpos1, wearpos2, wearpos3, flags,
-            ready_anim, walk_anim, run_anim
+            item_id, inv, wield, hide_mask, equip_slot, wearpos1, wearpos2,
+            wearpos3, flags, ready_anim, walk_anim, run_anim
         ) in mappings:
             f.write(
                 f"    {{ {item_id}, {inv}, {wield}, {hide_mask}, "
-                f"{wearpos1}, {wearpos2}, {wearpos3}, {flags}, "
+                f"{equip_slot}, {wearpos1}, {wearpos2}, {wearpos3}, {flags}, "
                 f"{ready_anim}, {walk_anim}, {run_anim} }},\n"
             )
         f.write("};\n\n")
@@ -2336,6 +2379,7 @@ def main() -> None:
             inv,
             wield_synth,
             item_hide_body_mask(item),
+            item_equip_slot_value(item),
             wearpos1,
             wearpos2,
             wearpos3,
