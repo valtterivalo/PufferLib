@@ -333,6 +333,11 @@ typedef struct {
 } GuiUiOverrides;
 
 typedef struct {
+    Rectangle current;
+    int active;
+} GuiUiClipState;
+
+typedef struct {
     GuiTab active_tab;
     int panel_x, panel_y;
     int panel_w, panel_h;
@@ -485,6 +490,52 @@ static int gui_try_load(Texture2D* tex, const char* path) {
         return 1;
     }
     return 0;
+}
+
+static int gui_rect_has_area(Rectangle rect) {
+    return rect.width > 0.0f && rect.height > 0.0f;
+}
+
+static Rectangle gui_rect_intersect(Rectangle a, Rectangle b) {
+    float x1 = a.x > b.x ? a.x : b.x;
+    float y1 = a.y > b.y ? a.y : b.y;
+    float x2 = a.x + a.width < b.x + b.width ? a.x + a.width : b.x + b.width;
+    float y2 = a.y + a.height < b.y + b.height ? a.y + a.height : b.y + b.height;
+    if (x2 <= x1 || y2 <= y1) return (Rectangle){0};
+    return (Rectangle){x1, y1, x2 - x1, y2 - y1};
+}
+
+static void gui_apply_scissor(Rectangle rect) {
+    int x = (int)(rect.x + 0.5f);
+    int y = (int)(rect.y + 0.5f);
+    int w = (int)(rect.width + 0.5f);
+    int h = (int)(rect.height + 0.5f);
+    if (w < 0) w = 0;
+    if (h < 0) h = 0;
+    BeginScissorMode(x, y, w, h);
+}
+
+static void gui_push_clip(
+    GuiUiClipState* clip,
+    Rectangle next,
+    Rectangle* prev,
+    int* prev_active
+) {
+    *prev = clip->current;
+    *prev_active = clip->active;
+    if (clip->active) next = gui_rect_intersect(next, clip->current);
+    if (!gui_rect_has_area(next)) next = (Rectangle){0};
+    if (clip->active) EndScissorMode();
+    gui_apply_scissor(next);
+    clip->current = next;
+    clip->active = 1;
+}
+
+static void gui_pop_clip(GuiUiClipState* clip, Rectangle prev, int prev_active) {
+    if (clip->active) EndScissorMode();
+    clip->current = prev;
+    clip->active = prev_active;
+    if (clip->active) gui_apply_scissor(clip->current);
 }
 
 static const char* gui_asset_ext(const char* path, const char* fallback) {
@@ -1565,6 +1616,33 @@ static void gui_draw_ui_sprite_component(
         component->flipped_vertically ? -(float)tex.height : (float)tex.height,
     };
 
+    if (component->shadow_color != 0) {
+        Color shadow = gui_ui_color_from_rgb(component->shadow_color, component->opacity);
+        DrawTexturePro(tex, src,
+            (Rectangle){rect.x + 1.0f, rect.y + 1.0f, rect.width, rect.height},
+            (Vector2){0, 0}, 0.0f, shadow);
+    }
+    if (component->border_type > 0) {
+        Color border = BLACK;
+        border.a = tint.a;
+        int layers = component->border_type < 3 ? component->border_type : 3;
+        for (int layer = 0; layer < layers; layer++) {
+            float offset = (float)(layer + 1);
+            DrawTexturePro(tex, src,
+                (Rectangle){rect.x - offset, rect.y, rect.width, rect.height},
+                (Vector2){0, 0}, 0.0f, border);
+            DrawTexturePro(tex, src,
+                (Rectangle){rect.x + offset, rect.y, rect.width, rect.height},
+                (Vector2){0, 0}, 0.0f, border);
+            DrawTexturePro(tex, src,
+                (Rectangle){rect.x, rect.y - offset, rect.width, rect.height},
+                (Vector2){0, 0}, 0.0f, border);
+            DrawTexturePro(tex, src,
+                (Rectangle){rect.x, rect.y + offset, rect.width, rect.height},
+                (Vector2){0, 0}, 0.0f, border);
+        }
+    }
+
     if (component->sprite_tiling) {
         for (float y = rect.y; y < rect.y + rect.height; y += (float)tex.height) {
             for (float x = rect.x; x < rect.x + rect.width; x += (float)tex.width) {
@@ -1623,11 +1701,15 @@ static void gui_draw_ui_component(
     const OsrsUiInterfaceGroup* group,
     const OsrsUiComponent* component,
     Rectangle rect,
+    GuiUiClipState* clip,
     const GuiUiOverrides* overrides
 ) {
     const GuiUiComponentOverride* override = gui_ui_component_override(overrides, component->id);
     if ((component->hidden && !(override && override->force_visible))
         || (override && override->hidden)) {
+        return;
+    }
+    if (clip && clip->active && !gui_rect_has_area(gui_rect_intersect(rect, clip->current))) {
         return;
     }
 
@@ -1669,7 +1751,15 @@ static void gui_draw_ui_component(
         const OsrsUiComponent* child = &group->components[i];
         if (child->parent_id != (int32_t)component->id) continue;
         Rectangle child_rect = osrs_ui_layout_component(child, child_parent, 0);
-        gui_draw_ui_component(gs, group, child, child_rect, overrides);
+        if (component->type == 0 && gui_rect_has_area(rect)) {
+            Rectangle prev = {0};
+            int prev_active = 0;
+            gui_push_clip(clip, rect, &prev, &prev_active);
+            gui_draw_ui_component(gs, group, child, child_rect, clip, overrides);
+            gui_pop_clip(clip, prev, prev_active);
+        } else {
+            gui_draw_ui_component(gs, group, child, child_rect, clip, overrides);
+        }
     }
 
     const GuiUiItemContainerOverride* container =
@@ -1688,13 +1778,18 @@ static int gui_draw_ui_group(
 ) {
     const OsrsUiInterfaceGroup* group = osrs_ui_interface_group(&gs->ui_interfaces, group_name);
     if (!group) return 0;
+    GuiUiClipState clip = {0};
+    Rectangle prev = {0};
+    int prev_active = 0;
+    gui_push_clip(&clip, mount, &prev, &prev_active);
     for (int i = 0; i < group->component_count; i++) {
         const OsrsUiComponent* component = &group->components[i];
         if (component->parent_id != -1) continue;
         Rectangle rect = osrs_ui_layout_component(
             component, mount, osrs_ui_component_uses_mount_rect(component));
-        gui_draw_ui_component(gs, group, component, rect, overrides);
+        gui_draw_ui_component(gs, group, component, rect, &clip, overrides);
     }
+    gui_pop_clip(&clip, prev, prev_active);
     return 1;
 }
 

@@ -683,6 +683,21 @@ static void test_runec_stack_variants_file_loads(void) {
         gui_item_display_id_for_quantity(&gs, 882, 5), 897);
 }
 
+static void test_decoded_ui_clip_rect_math(void) {
+    printf("--- decoded ui clip rect math ---\n");
+
+    Rectangle a = {10, 20, 80, 40};
+    Rectangle b = {30, 10, 25, 25};
+    Rectangle hit = gui_rect_intersect(a, b);
+    assert_rect_eq("clip intersection", hit, (Rectangle){30, 20, 25, 15});
+    ASSERT_INT_EQ("clip intersection has area", gui_rect_has_area(hit), 1);
+
+    Rectangle miss = gui_rect_intersect(
+        (Rectangle){0, 0, 10, 10},
+        (Rectangle){10, 10, 10, 10});
+    ASSERT_INT_EQ("touching edges have no area", gui_rect_has_area(miss), 0);
+}
+
 static void test_decoded_runec_ui_interfaces_resolve(void) {
     printf("--- decoded runec ui interfaces resolve ---\n");
 
@@ -796,6 +811,7 @@ int main(void) {
     test_runec_stack_quantity_formatting();
     test_runec_stack_variant_selection();
     test_runec_stack_variants_file_loads();
+    test_decoded_ui_clip_rect_math();
     test_decoded_runec_ui_interfaces_resolve();
     test_gui_uses_decoded_runec_panel_rects();
 
