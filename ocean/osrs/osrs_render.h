@@ -383,14 +383,14 @@ static int context_menu_row_at(const ContextMenu* cm, int mx, int my) {
 }
 
 static void context_menu_draw_text_shadow(
+    const GuiState* gs,
     const char* text,
     int x,
     int y,
     int size,
     Color color
 ) {
-    DrawText(text, x + 1, y + 1, size, (Color){0, 0, 0, color.a});
-    DrawText(text, x, y, size, color);
+    gui_text_shadow(gs, text, x, y, size, color);
 }
 
 typedef struct {
@@ -1019,10 +1019,14 @@ static void context_menu_build(RenderClient* rc, OsrsEnv* env, int mx, int my) {
         context_menu_add_lab_npc(cm, INF_NPC_RANGER, "Lab spawn ranger");
         context_menu_add_lab_npc(cm, INF_NPC_MAGER, "Lab spawn mager");
         context_menu_add_lab_npc(cm, INF_NPC_JAD, "Lab spawn jad");
+        context_menu_add_lab_npc(cm, INF_NPC_ZUK, "Lab spawn Zuk");
         context_menu_add_lab_npc(cm, INF_NPC_BLOB, "Lab spawn blob");
         context_menu_add_lab_npc(cm, INF_NPC_MELEER, "Lab spawn meleer");
         context_menu_add_lab_npc(cm, INF_NPC_BAT, "Lab spawn bat");
         context_menu_add_lab_npc(cm, INF_NPC_NIBBLER, "Lab spawn nibbler");
+        context_menu_add_lab_npc(cm, INF_NPC_HEALER_JAD, "Lab spawn Jad healer");
+        context_menu_add_lab_npc(cm, INF_NPC_HEALER_ZUK, "Lab spawn Zuk healer");
+        context_menu_add_lab_npc(cm, INF_NPC_ZUK_SHIELD, "Lab spawn Zuk shield");
         int pillar_idx = inf_lab_nearest_pillar_idx(
             lab_state, cm->walk_tile_x, cm->walk_tile_y);
         if (pillar_idx >= 0) {
@@ -1396,6 +1400,7 @@ static void context_menu_draw(RenderClient* rc) {
         border
     );
     context_menu_draw_text_shadow(
+        &rc->gui,
         "Choose Option", cm->screen_x + 5, cm->screen_y + 4, 11, title_color);
 
     for (int i = 0; i < cm->item_count; i++) {
@@ -1410,6 +1415,7 @@ static void context_menu_draw(RenderClient* rc) {
         );
         Color tc = (i == cm->hover_idx) ? text_hover : text_normal;
         context_menu_draw_text_shadow(
+            &rc->gui,
             cm->items[i].label,
             cm->screen_x + CONTEXT_MENU_PADDING + 4,
             iy + 3,

@@ -74,8 +74,7 @@ static Texture2D objects_load_atlas(const char* atlas_path) {
         .format = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8,
     };
     tex = LoadTextureFromImage(img);
-    /* set texture filtering for better quality at angles */
-    SetTextureFilter(tex, TEXTURE_FILTER_BILINEAR);
+    SetTextureFilter(tex, TEXTURE_FILTER_POINT);
     free(pixels);
 
     fprintf(stderr, "objects_load_atlas: loaded %ux%u atlas texture\n", width, height);
