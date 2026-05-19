@@ -190,6 +190,57 @@ static void test_projectile_profiles_match_runec_visual_rows(void) {
     assert(inferno_zuk_healer->projectile.impact_spotanim_id == 659);
     assert(inferno_zuk_healer->projectile.projectile_model_id == INF_GFX_660_MODEL);
     assert(inferno_zuk_healer->projectile.projectile_anim_id == INF_GFX_660_ANIM);
+
+    const OsrsCombatVisualRow* graardor =
+        osrs_combat_visual_find_npc_id(2215, ATTACK_STYLE_RANGED);
+    assert(graardor);
+    assert(graardor->attack_anim_id == 7021);
+    assert(graardor->projectile.launch_spotanim_id == 1203);
+    assert(graardor->projectile.travel_spotanim_id == 1202);
+    assert(graardor->projectile.impact_spotanim_id == 1203);
+    assert(graardor->projectile.projectile_model_id == 28083);
+
+    const OsrsCombatVisualRow* steelwill =
+        osrs_combat_visual_find_npc_id(2217, ATTACK_STYLE_MAGIC);
+    assert(steelwill);
+    assert(steelwill->attack_anim_id == 7071);
+    assert(steelwill->projectile.launch_spotanim_id == 1216);
+    assert(steelwill->projectile.travel_spotanim_id == 1217);
+    assert(steelwill->projectile.impact_spotanim_id == 1218);
+    assert(steelwill->projectile.projectile_model_id == 28104);
+
+    const OsrsCombatVisualRow* grimspike =
+        osrs_combat_visual_find_npc_id(2218, ATTACK_STYLE_RANGED);
+    assert(grimspike);
+    assert(grimspike->attack_anim_id == 7073);
+    assert(grimspike->projectile.launch_spotanim_id == 1219);
+    assert(grimspike->projectile.travel_spotanim_id == 1220);
+    assert(grimspike->projectile.projectile_model_id == 28099);
+
+    const OsrsCombatVisualRow* kbd =
+        osrs_combat_visual_find_npc_id(239, ATTACK_STYLE_MAGIC);
+    assert(kbd);
+    assert(kbd->attack_anim_id == 86);
+    assert(kbd->projectile.launch_spotanim_id == 1);
+    assert(kbd->projectile.travel_spotanim_id == 54);
+    assert(kbd->projectile.projectile_model_id == 3154);
+    assert(kbd->style == OSRS_COMBAT_VISUAL_STYLE_ANY);
+
+    const OsrsCombatVisualRow* vorkath_magic =
+        osrs_combat_visual_find_npc_id(8061, ATTACK_STYLE_MAGIC);
+    assert(vorkath_magic);
+    assert(vorkath_magic->attack_anim_id == 7952);
+    assert(vorkath_magic->projectile.travel_spotanim_id == 1479);
+    assert(vorkath_magic->projectile.impact_spotanim_id == 1480);
+    assert(vorkath_magic->projectile.projectile_model_id == 35033);
+
+    const OsrsCombatVisualRow* vorkath_ranged =
+        osrs_combat_visual_find_npc_id(8061, ATTACK_STYLE_RANGED);
+    assert(vorkath_ranged);
+    assert(vorkath_ranged->attack_anim_id == 7952);
+    assert(vorkath_ranged->projectile.travel_spotanim_id == 1477);
+    assert(vorkath_ranged->projectile.impact_spotanim_id == 1478);
+    assert(vorkath_ranged->projectile.projectile_model_id == 34658);
 }
 
 static void test_spell_profiles_match_runec_visual_rows(void) {

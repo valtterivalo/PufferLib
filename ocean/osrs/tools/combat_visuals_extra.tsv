@@ -5,6 +5,7 @@ npc|7700|magic|7592|-|448|-|9337|2659|-|-|-|-|-|-|-|-|-|inferno:jaltok_jad_magic
 npc|7700|ranged|7593|-|451|-|9342|2660|-|-|-|-|-|-|-|-|-|inferno:jaltok_jad_ranged
 npc|7706|magic|7566|-|1375|-|33006|7571|-|-|-|-|-|-|-|-|-|inferno:tzkal_zuk_magic
 npc|7708|magic|-|-|660|659|14759|3942|-|-|-|-|-|-|-|-|-|inferno:jal_mejjak_magic
+npc|239|any|86|1|54|-|3154|373|3|3|172|124|41|16|0|64|5|runec:king_black_dragon_dragonfire
 item|11804|slash|7045|-|-|-|-|-|-|-|-|-|-|-|-|-|-|runec:bgs:attack:stance1|-|-|-|-|-|-|-|-|-|-|-|-|-|-|0
 item|11804|crush|7054|-|-|-|-|-|-|-|-|-|-|-|-|-|-|runec:bgs:attack:stance3|-|-|-|-|-|-|-|-|-|-|-|-|-|-|2
 item|11804|slash|7055|-|-|-|-|-|-|-|-|-|-|-|-|-|-|runec:bgs:attack:stance4|-|-|-|-|-|-|-|-|-|-|-|-|-|-|3
