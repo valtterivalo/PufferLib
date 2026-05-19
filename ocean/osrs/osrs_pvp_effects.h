@@ -158,8 +158,9 @@ static void effect_init_anim_state(
         e->meta, model_cache, secondary_model_cache, projectile_model_cache);
     if (!om || !om->vertex_skins || om->base_vert_count == 0) return;
 
-    e->anim_state = anim_model_state_create(
-        om->vertex_skins, om->base_vert_count);
+    e->anim_state = anim_model_state_create_with_face_alpha(
+        om->vertex_skins, om->base_vert_count,
+        om->face_alpha_labels, om->base_face_alphas, om->mesh.triangleCount);
 }
 
 

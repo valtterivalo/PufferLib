@@ -1,7 +1,7 @@
 /**
  * @fileoverview Loads OSRS 3D models from .models v2 binary and converts to raylib meshes.
  *
- * Binary format produced by scripts/export_models.py (MDL2):
+ * Binary format produced by scripts/export_models.py (MDL2/MDL3/MDL4):
  *   header: uint32 magic ("MDL2"), uint32 count, uint32 offsets[count]
  *   per model:
  *     uint32 model_id
@@ -13,6 +13,9 @@
  *     int16  base_verts[base_vert_count * 3]   (original OSRS coords, y NOT negated)
  *     uint8  vertex_skins[base_vert_count]     (label group per vertex for animation)
  *     uint16 face_indices[face_count * 3]      (a,b,c per face into base verts)
+ *     uint8  face_priorities[face_count]
+ *     uint8  face_alphas[face_count]           (MDL4 only, OSRS alpha)
+ *     uint8  face_alpha_labels[face_count]     (MDL4 only, 255 = none)
  *
  * Expanded vertices + colors are used directly by raylib Mesh for rendering.
  * Base vertices, skins, and face indices are used by the animation system to
@@ -34,6 +37,7 @@
 
 #define MDL2_MAGIC 0x4D444C32  /* "MDL2" */
 #define MDL3_MAGIC 0x4D444C33  /* "MDL3" */
+#define MDL4_MAGIC 0x4D444C34  /* "MDL4" */
 #define ATLS_MAGIC 0x41544C53  /* "ATLS" */
 
 typedef struct {
@@ -46,6 +50,8 @@ typedef struct {
     uint8_t*  vertex_skins;     /* [base_vert_count] label group per vertex */
     uint16_t* face_indices;     /* [face_count * 3] triangle index buffer */
     uint8_t*  face_priorities;  /* [face_count] render priority per face (0-11) */
+    uint8_t*  base_face_alphas; /* [face_count] OSRS alpha: 0 opaque, 255 transparent */
+    uint8_t*  face_alpha_labels;/* [face_count] label group per face for type-5 anims */
     uint16_t  base_vert_count;
     uint8_t   min_priority;     /* minimum face priority in this model */
 
@@ -115,12 +121,13 @@ static ModelCache* model_cache_load(const char* path) {
     osrs_read_exact(f, &magic, 4, 1, path, "magic");
     osrs_read_exact(f, &count, 4, 1, path, "model count");
 
-    if (magic != MDL2_MAGIC && magic != MDL3_MAGIC) {
-        fprintf(stderr, "model_cache_load: bad magic 0x%08X (expected MDL2/MDL3)\n",
+    if (magic != MDL2_MAGIC && magic != MDL3_MAGIC && magic != MDL4_MAGIC) {
+        fprintf(stderr, "model_cache_load: bad magic 0x%08X (expected MDL2/MDL3/MDL4)\n",
                 magic);
         abort();
     }
-    int has_texcoords = (magic == MDL3_MAGIC);
+    int has_texcoords = (magic == MDL3_MAGIC || magic == MDL4_MAGIC);
+    int has_face_alpha_labels = (magic == MDL4_MAGIC);
 
     /* read offset table */
     uint32_t* offsets = (uint32_t*)osrs_malloc_or_abort(
@@ -196,6 +203,17 @@ static ModelCache* model_cache_load(const char* path) {
             face_count, "model face priorities");
         osrs_read_exact(f, cache->models[i].face_priorities, 1,
             face_count, path, "face priorities");
+
+        if (has_face_alpha_labels) {
+            cache->models[i].base_face_alphas = (uint8_t*)osrs_malloc_or_abort(
+                face_count, "model base face alphas");
+            osrs_read_exact(f, cache->models[i].base_face_alphas, 1,
+                face_count, path, "base face alphas");
+            cache->models[i].face_alpha_labels = (uint8_t*)osrs_malloc_or_abort(
+                face_count, "model face alpha labels");
+            osrs_read_exact(f, cache->models[i].face_alpha_labels, 1,
+                face_count, path, "face alpha labels");
+        }
 
         /* compute min priority for this model */
         uint8_t min_pri = 255;
@@ -368,6 +386,8 @@ static void model_cache_free(ModelCache* cache) {
         free(cache->models[i].vertex_skins);
         free(cache->models[i].face_indices);
         free(cache->models[i].face_priorities);
+        free(cache->models[i].base_face_alphas);
+        free(cache->models[i].face_alpha_labels);
     }
     if (cache->atlas_texture.id > 0) UnloadTexture(cache->atlas_texture);
     free(cache->models);

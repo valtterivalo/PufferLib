@@ -12,10 +12,15 @@
 #include "ocean/osrs/encounters/encounter_inferno.h"
 #include "ocean/osrs/osrs_assets.h"
 #include "ocean/osrs/osrs_anim.h"
+#include "ocean/osrs/osrs_binary_io.h"
 #include "ocean/osrs/osrs_spotanims.h"
 
 static int tests_run = 0;
 static int tests_failed = 0;
+
+#define TEST_MDL2_MAGIC 0x4D444C32u
+#define TEST_MDL3_MAGIC 0x4D444C33u
+#define TEST_MDL4_MAGIC 0x4D444C34u
 
 static int has_anim(AnimCache* first, AnimCache* second, int seq_id) {
     return anim_get_sequence(first, (uint16_t)seq_id) ||
@@ -38,6 +43,85 @@ static int has_anim(AnimCache* first, AnimCache* second, int seq_id) {
         printf("  FAIL: %s missing gfx %d\n", (label), (gfx_id)); \
     } \
 } while (0)
+
+static int sequence_has_transform_type(
+    AnimCache* first,
+    AnimCache* second,
+    int seq_id,
+    int type
+) {
+    AnimCache* caches[] = { first, second };
+    for (int ci = 0; ci < 2; ci++) {
+        AnimCache* cache = caches[ci];
+        AnimSequence* seq = anim_get_sequence(cache, (uint16_t)seq_id);
+        if (!cache || !seq) continue;
+        for (int fi = 0; fi < seq->frame_count; fi++) {
+            AnimSequenceFrame* frame = &seq->frames[fi];
+            AnimFrameBase* fb = anim_get_framebase(cache, frame->frame.framebase_id);
+            if (!fb) continue;
+            for (int ti = 0; ti < frame->frame.transform_count; ti++) {
+                uint8_t slot = frame->frame.transforms[ti].slot_index;
+                if (slot < fb->slot_count && fb->types[slot] == type) return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+static int model_file_has_face_alpha_labels(const char* path, uint32_t model_id) {
+    FILE* f = fopen(path, "rb");
+    if (!f) return 0;
+
+    uint32_t magic = 0;
+    uint32_t count = 0;
+    osrs_read_exact(f, &magic, 4, 1, path, "model magic");
+    osrs_read_exact(f, &count, 4, 1, path, "model count");
+    if (magic != TEST_MDL2_MAGIC && magic != TEST_MDL3_MAGIC && magic != TEST_MDL4_MAGIC) {
+        fclose(f);
+        return 0;
+    }
+
+    uint32_t* offsets = osrs_malloc_or_abort(count * sizeof(uint32_t), "test model offsets");
+    osrs_read_exact(f, offsets, 4, count, path, "model offsets");
+    int has_texcoords = magic == TEST_MDL3_MAGIC || magic == TEST_MDL4_MAGIC;
+    int has_alpha_labels = magic == TEST_MDL4_MAGIC;
+    int found = 0;
+    for (uint32_t i = 0; i < count; i++) {
+        osrs_seek_or_abort(f, (long)offsets[i], path);
+        uint32_t row_model_id = 0;
+        uint16_t vert_count = 0;
+        uint16_t face_count = 0;
+        uint16_t base_vert_count = 0;
+        osrs_read_exact(f, &row_model_id, 4, 1, path, "model id");
+        osrs_read_exact(f, &vert_count, 2, 1, path, "expanded vertex count");
+        osrs_read_exact(f, &face_count, 2, 1, path, "face count");
+        osrs_read_exact(f, &base_vert_count, 2, 1, path, "base vertex count");
+        if (row_model_id != model_id) continue;
+
+        long skip = (long)vert_count * 3L * (long)sizeof(float)
+            + (long)vert_count * 4L
+            + (has_texcoords ? (long)vert_count * 2L * (long)sizeof(float) : 0L)
+            + (long)base_vert_count * 3L * (long)sizeof(int16_t)
+            + (long)base_vert_count
+            + (long)face_count * 3L * (long)sizeof(uint16_t)
+            + (long)face_count;
+        fseek(f, skip, SEEK_CUR);
+
+        if (!has_alpha_labels) break;
+        fseek(f, face_count, SEEK_CUR);
+        for (uint16_t face = 0; face < face_count; face++) {
+            int label = fgetc(f);
+            if (label >= 0 && label != 255) {
+                found = 1;
+                break;
+            }
+        }
+        break;
+    }
+    free(offsets);
+    fclose(f);
+    return found;
+}
 
 int main(void) {
     AnimCache* equipment = anim_cache_load(OSRS_ASSET("equipment.anims"));
@@ -88,6 +172,21 @@ int main(void) {
     ASSERT_SPOTANIM_PRESENT("blood barrage impact", spotanims, 377);
     ASSERT_SPOTANIM_PRESENT("trident projectile", spotanims, 1040);
     ASSERT_SPOTANIM_PRESENT("dragon dart projectile", spotanims, 1122);
+    tests_run++;
+    const OsrsSpotAnimDef* ice_barrage = osrs_spotanim_find(spotanims, 369);
+    if (!ice_barrage || !sequence_has_transform_type(
+            equipment, inferno, ice_barrage->animation_id, 5)) {
+        tests_failed++;
+        printf("  FAIL: ice barrage impact sequence lacks alpha transforms\n");
+    }
+
+    printf("--- projectile model export coverage ---\n");
+    tests_run++;
+    if (!model_file_has_face_alpha_labels(
+            OSRS_ASSET("projectiles.models"), OSRS_SPOTANIM_MODEL_BASE + 369u)) {
+        tests_failed++;
+        printf("  FAIL: ice barrage impact model lacks face alpha labels\n");
+    }
 
     osrs_spotanims_free(spotanims);
 

@@ -9,7 +9,7 @@
  *   1 = translate (add dx/dy/dz to all vertices in referenced groups)
  *   2 = rotate (euler Z-X-Y around pivot, raw*8 → 2048-entry sine table)
  *   3 = scale (relative to pivot, 128 = 1.0x identity)
- *   5 = alpha (face transparency, not used in our viewer)
+ *   5 = alpha (face transparency)
  *
  * Binary format (.anims) produced by scripts/export_animations.py:
  *   header: uint32 magic ("ANIM"), uint16 framebase_count, uint16 sequence_count
@@ -98,6 +98,12 @@ typedef struct {
     /* vertex group lookup: groups[label] = { vertex indices } */
     int**    groups;            /* [ANIM_MAX_LABELS] arrays of vertex indices */
     int*     group_counts;      /* [ANIM_MAX_LABELS] count per group */
+
+    uint8_t* base_face_alphas;  /* [face_count], OSRS alpha: 0 opaque, 255 transparent */
+    uint8_t* face_alphas;       /* [face_count] mutable working copy */
+    int      face_count;
+    int**    face_alpha_groups; /* [ANIM_MAX_LABELS] arrays of face indices */
+    int*     face_alpha_group_counts;
 } AnimModelState;
 
 
@@ -261,9 +267,12 @@ static AnimFrameBase* anim_get_framebase(AnimCache* cache, uint16_t base_id) {
 }
 
 
-static AnimModelState* anim_model_state_create(
+static AnimModelState* anim_model_state_create_with_face_alpha(
     const uint8_t* vertex_skins,
-    int base_vert_count
+    int base_vert_count,
+    const uint8_t* face_alpha_labels,
+    const uint8_t* base_face_alphas,
+    int face_count
 ) {
     AnimModelState* state = (AnimModelState*)osrs_calloc_or_abort(
         1, sizeof(AnimModelState), "animation model state");
@@ -299,7 +308,51 @@ static AnimModelState* anim_model_state_create(
         state->groups[label][state->group_counts[label]++] = v;
     }
 
+    if (face_count > 0 && face_alpha_labels && base_face_alphas) {
+        state->face_count = face_count;
+        state->base_face_alphas = (uint8_t*)osrs_malloc_or_abort(
+            face_count, "animation model base face alphas");
+        state->face_alphas = (uint8_t*)osrs_malloc_or_abort(
+            face_count, "animation model face alphas");
+        memcpy(state->base_face_alphas, base_face_alphas, face_count);
+        memcpy(state->face_alphas, base_face_alphas, face_count);
+
+        state->face_alpha_groups = (int**)osrs_calloc_or_abort(
+            ANIM_MAX_LABELS, sizeof(int*), "animation face alpha groups");
+        state->face_alpha_group_counts = (int*)osrs_calloc_or_abort(
+            ANIM_MAX_LABELS, sizeof(int), "animation face alpha group counts");
+
+        int face_label_counts[ANIM_MAX_LABELS] = {0};
+        for (int face = 0; face < face_count; face++) {
+            uint8_t label = face_alpha_labels[face];
+            if (label == 255) continue;
+            face_label_counts[label]++;
+        }
+        for (int label = 0; label < ANIM_MAX_LABELS; label++) {
+            if (face_label_counts[label] > 0) {
+                state->face_alpha_groups[label] = (int*)osrs_malloc_or_abort(
+                    face_label_counts[label] * sizeof(int),
+                    "animation face alpha group faces");
+                state->face_alpha_group_counts[label] = 0;
+            }
+        }
+        for (int face = 0; face < face_count; face++) {
+            uint8_t label = face_alpha_labels[face];
+            if (label == 255) continue;
+            state->face_alpha_groups[label][
+                state->face_alpha_group_counts[label]++] = face;
+        }
+    }
+
     return state;
+}
+
+static AnimModelState* anim_model_state_create(
+    const uint8_t* vertex_skins,
+    int base_vert_count
+) {
+    return anim_model_state_create_with_face_alpha(
+        vertex_skins, base_vert_count, NULL, NULL, 0);
 }
 
 static void anim_model_state_free(AnimModelState* state) {
@@ -310,6 +363,15 @@ static void anim_model_state_free(AnimModelState* state) {
     }
     free(state->groups);
     free(state->group_counts);
+    if (state->face_alpha_groups) {
+        for (int l = 0; l < ANIM_MAX_LABELS; l++) {
+            free(state->face_alpha_groups[l]);
+        }
+    }
+    free(state->face_alpha_groups);
+    free(state->face_alpha_group_counts);
+    free(state->base_face_alphas);
+    free(state->face_alphas);
     free(state);
 }
 
@@ -319,6 +381,37 @@ static void anim_apply_rest_pose(
     const int16_t* base_verts_src
 ) {
     memcpy(state->verts, base_verts_src, state->vert_count * 3 * sizeof(int16_t));
+    if (state->face_alphas && state->base_face_alphas) {
+        memcpy(state->face_alphas, state->base_face_alphas, state->face_count);
+    }
+}
+
+static int anim_clamp_alpha(int alpha) {
+    if (alpha < 0) return 0;
+    if (alpha > 255) return 255;
+    return alpha;
+}
+
+static void anim_apply_alpha_transform(
+    AnimModelState* state,
+    const uint8_t* labels,
+    uint8_t map_len,
+    int dx
+) {
+    if (!state->face_alphas || !state->face_alpha_groups ||
+        !state->face_alpha_group_counts) {
+        return;
+    }
+
+    int delta = dx * 8;
+    for (int m = 0; m < map_len; m++) {
+        uint8_t label = labels[m];
+        for (int fi = 0; fi < state->face_alpha_group_counts[label]; fi++) {
+            int face = state->face_alpha_groups[label][fi];
+            state->face_alphas[face] = (uint8_t)anim_clamp_alpha(
+                (int)state->face_alphas[face] + delta);
+        }
+    }
 }
 
 
@@ -365,6 +458,10 @@ static void anim_apply_frame(
                 pivot_x = sum_x / count + dx;
                 pivot_y = sum_y / count + dy;
                 pivot_z = sum_z / count + dz;
+            } else {
+                pivot_x = dx;
+                pivot_y = dy;
+                pivot_z = dz;
             }
         } else if (type == 1) {
             /* translate: add dx/dy/dz to all vertices in referenced groups */
@@ -443,8 +540,9 @@ static void anim_apply_frame(
                     state->verts[v * 3 + 2] = (int16_t)(vz + pivot_z);
                 }
             }
+        } else if (type == 5) {
+            anim_apply_alpha_transform(state, labels, map_len, dx);
         }
-        /* type 5 (alpha) skipped — we don't use face transparency in the viewer */
     }
 }
 
@@ -479,6 +577,10 @@ static void anim_apply_single_transform(
             *pivot_x = sx / count + dx;
             *pivot_y = sy / count + dy;
             *pivot_z = sz / count + dz;
+        } else {
+            *pivot_x = dx;
+            *pivot_y = dy;
+            *pivot_z = dz;
         }
     } else if (type == 1) {
         for (int m = 0; m < map_len; m++) {
@@ -528,6 +630,8 @@ static void anim_apply_single_transform(
                 state->verts[v * 3 + 2] = (int16_t)((vz * dz) / 128 + *pivot_z);
             }
         }
+    } else if (type == 5) {
+        anim_apply_alpha_transform(state, labels, map_len, dx);
     }
 }
 
@@ -647,6 +751,21 @@ static void anim_update_mesh(
         mesh_vertices[vi + 6] = (float)state->verts[c * 3];
         mesh_vertices[vi + 7] = (float)(-state->verts[c * 3 + 1]);
         mesh_vertices[vi + 8] = (float)state->verts[c * 3 + 2];
+    }
+}
+
+static void anim_update_mesh_alpha(
+    unsigned char* mesh_colors,
+    const AnimModelState* state,
+    int face_count
+) {
+    if (!mesh_colors || !state || !state->face_alphas) return;
+    int count = face_count < state->face_count ? face_count : state->face_count;
+    for (int fi = 0; fi < count; fi++) {
+        unsigned char alpha = (unsigned char)(255 - state->face_alphas[fi]);
+        for (int corner = 0; corner < 3; corner++) {
+            mesh_colors[(fi * 3 + corner) * 4 + 3] = alpha;
+        }
     }
 }
 

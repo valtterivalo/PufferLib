@@ -1457,7 +1457,9 @@ static AnimModelState* render_create_projectile_anim_state(
                 model_id, anim_id);
         abort();
     }
-    return anim_model_state_create(om->vertex_skins, om->base_vert_count);
+    return anim_model_state_create_with_face_alpha(
+        om->vertex_skins, om->base_vert_count,
+        om->face_alpha_labels, om->base_face_alphas, om->mesh.triangleCount);
 }
 
 /**
@@ -4502,6 +4504,12 @@ static void render_draw_3d_world(RenderClient* rc) {
                     om->face_indices, om->mesh.triangleCount);
                 UpdateMeshBuffer(om->mesh, 0, om->mesh.vertices,
                     om->mesh.triangleCount * 9 * sizeof(float), 0);
+                anim_update_mesh_alpha(om->mesh.colors, fp->anim_state,
+                    om->mesh.triangleCount);
+                if (fp->anim_state->face_alphas) {
+                    UpdateMeshBuffer(om->mesh, 3, om->mesh.colors,
+                        om->mesh.vertexCount * 4, 0);
+                }
                 proj_model = &om->model;
             } else if (fp->model_id > 0) {
                 proj_model = render_get_proj_model(rc, fp->model_id);
@@ -4700,8 +4708,8 @@ static void render_draw_3d_world(RenderClient* rc) {
             float ey = ground + (float)(e->height / 128.0);
 
             /* apply scale from spotanim def */
-            float sx = eff_scale * (float)e->meta->resize_xy / 128.0f;
-            float sz = eff_scale * (float)e->meta->resize_z / 128.0f;
+            float scale_xy = eff_scale * (float)e->meta->resize_xy / 128.0f;
+            float scale_y = eff_scale * (float)e->meta->resize_z / 128.0f;
 
             /* animate: apply current frame to per-effect anim state,
                then write transformed vertices into the shared mesh.
@@ -4721,6 +4729,12 @@ static void render_draw_3d_world(RenderClient* rc) {
                             om->face_indices, om->mesh.triangleCount);
                         UpdateMeshBuffer(om->mesh, 0, om->mesh.vertices,
                             om->mesh.triangleCount * 9 * sizeof(float), 0);
+                        anim_update_mesh_alpha(om->mesh.colors, e->anim_state,
+                            om->mesh.triangleCount);
+                        if (e->anim_state->face_alphas) {
+                            UpdateMeshBuffer(om->mesh, 3, om->mesh.colors,
+                                om->mesh.vertexCount * 4, 0);
+                        }
                     }
                 }
             }
@@ -4737,11 +4751,13 @@ static void render_draw_3d_world(RenderClient* rc) {
                         (float)e->x_increment,
                         (float)e->y_increment,
                         (float)e->height_increment);
-                t = render_projectile_transform(sx, sx, sz,
+                t = render_projectile_transform(scale_xy, scale_y, scale_xy,
                     orientation.yaw, orientation.pitch,
                     (Vector3){ ex, ey, ez });
             } else {
-                t = MatrixMultiply(MatrixScale(-sx, sx, sz), MatrixTranslate(ex, ey, ez));
+                t = MatrixMultiply(
+                    MatrixScale(-scale_xy, scale_y, scale_xy),
+                    MatrixTranslate(ex, ey, ez));
             }
             om->model.transform = t;
 
