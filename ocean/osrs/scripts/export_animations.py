@@ -12,7 +12,10 @@ Modern cache sources:
 Usage:
     uv run python scripts/export_animations.py \
         --modern-cache ../reference/osrs-cache-modern \
-        --output data/equipment.anims
+        --output ../data/equipment.anims \
+        --include-spotanim-sequences \
+        --item-render-map ../../refs/RuneC/data/models/item_render.map \
+        --combat-visuals ../../refs/RuneC/data/defs/combat_visuals.tsv
 """
 
 import argparse
@@ -31,6 +34,10 @@ from modern_cache_reader import (
 MODERN_FRAME_INDEX = 0  # modern cache: frame archives
 MODERN_FRAMEBASE_INDEX = 1  # modern cache: frame bases
 MODERN_SEQ_CONFIG_GROUP = 12  # modern cache: config index 2, group 12
+MODERN_SPOTANIM_CONFIG_GROUP = 13  # modern cache: config index 2, group 13
+ITEM_RENDER_MAGIC = 0x4D455249
+ITEM_RENDER_V2 = 2
+MISSING_U32 = 0xFFFFFFFF
 
 
 # --- binary reading helpers ---
@@ -362,6 +369,13 @@ ANIM_MAUL_SPEC = 1667
 ANIM_CLAWS_SLASH = 393
 ANIM_CLAWS_SPEC = 7514
 ANIM_GODSWORD_SLASH = 7045
+ANIM_GODSWORD_READY = 7053
+ANIM_GODSWORD_WALK = 7052
+ANIM_GODSWORD_RUN = 7043
+ANIM_GODSWORD_TURN = 7044
+ANIM_GODSWORD_WALK_LEFT = 7048
+ANIM_GODSWORD_WALK_RIGHT = 7047
+ANIM_GODSWORD_BLOCK = 7056
 ANIM_GODSWORD_SPEC_AGS = 7644
 ANIM_BALLISTA_SHOOT = 7218
 ANIM_DARK_BOW_SHOOT = 426
@@ -405,7 +419,10 @@ NEEDED_ANIMATIONS = {
     ANIM_CROSSBOW_SHOOT, ANIM_SCIMITAR_SLASH,
     ANIM_2H_SLASH, ANIM_MAUL_CRUSH, ANIM_MAUL_SPEC,
     ANIM_CLAWS_SLASH, ANIM_CLAWS_SPEC,
-    ANIM_GODSWORD_SLASH, ANIM_GODSWORD_SPEC_AGS,
+    ANIM_GODSWORD_SLASH, ANIM_GODSWORD_READY, ANIM_GODSWORD_WALK,
+    ANIM_GODSWORD_RUN, ANIM_GODSWORD_TURN, ANIM_GODSWORD_WALK_LEFT,
+    ANIM_GODSWORD_WALK_RIGHT, ANIM_GODSWORD_BLOCK,
+    ANIM_GODSWORD_SPEC_AGS,
     ANIM_BALLISTA_SHOOT, ANIM_DARK_BOW_SHOOT,
     ANIM_JAVELIN_THROW,
     ANIM_WARHAMMER_CRUSH, ANIM_WARHAMMER_SPEC,
@@ -447,6 +464,137 @@ NEEDED_ANIMATIONS = {
     6622,  # GFX 1122 dragon dart projectile
     876,   # GFX 1043 blowpipe special attack
 }
+
+
+def _skip_bytes(buf: io.BytesIO, count: int, context: str) -> None:
+    skipped = buf.read(count)
+    if len(skipped) != count:
+        sys.exit(f"truncated {context}")
+
+
+def _skip_cstring(buf: io.BytesIO, context: str) -> None:
+    while True:
+        b = buf.read(1)
+        if not b:
+            sys.exit(f"truncated {context}")
+        if b[0] == 0:
+            return
+
+
+def parse_spotanim_sequence_ids(reader: ModernCacheReader) -> set[int]:
+    """Return every animation sequence referenced by spotanim definitions."""
+
+    files = reader.read_group(2, MODERN_SPOTANIM_CONFIG_GROUP)
+    out: set[int] = set()
+
+    for gfx_id, data in files.items():
+        buf = io.BytesIO(data)
+        while True:
+            opcode_raw = buf.read(1)
+            if not opcode_raw:
+                break
+            opcode = opcode_raw[0]
+
+            if opcode == 0:
+                break
+            if opcode == 1:
+                _skip_bytes(buf, 2, f"spotanim {gfx_id} model id")
+            elif opcode == 2:
+                anim_id = read_ushort(buf)
+                if anim_id != 0xFFFF:
+                    out.add(anim_id)
+            elif opcode == 3:
+                _skip_bytes(buf, 4, f"spotanim {gfx_id} model id")
+            elif opcode in (4, 5, 6):
+                _skip_bytes(buf, 2, f"spotanim {gfx_id} u16 opcode {opcode}")
+            elif opcode in (7, 8):
+                _skip_bytes(buf, 1, f"spotanim {gfx_id} u8 opcode {opcode}")
+            elif opcode == 9:
+                _skip_cstring(buf, f"spotanim {gfx_id} string opcode")
+            elif opcode in (40, 41):
+                count = read_ubyte(buf)
+                _skip_bytes(buf, count * 4, f"spotanim {gfx_id} pairs opcode {opcode}")
+            else:
+                sys.exit(f"unknown spotanim opcode {opcode} for gfx {gfx_id}")
+
+    return out
+
+
+def read_item_render_sequence_ids(path: Path) -> set[int]:
+    """Return ready, walk, and run sequence ids from a RuneC item render map."""
+
+    if not path.is_file():
+        return set()
+
+    data = path.read_bytes()
+    if len(data) < 16:
+        sys.exit(f"item render map too small: {path}")
+
+    magic, version, count, body_count = struct.unpack_from("<IIII", data, 0)
+    if magic != ITEM_RENDER_MAGIC:
+        sys.exit(f"bad item render map magic in {path}: 0x{magic:08x}")
+    if version < ITEM_RENDER_V2:
+        return set()
+
+    pos = 16 + body_count * 4
+    row_size = struct.calcsize("<IIIIIIIIIIIII")
+    out: set[int] = set()
+
+    for _ in range(count):
+        if pos + row_size > len(data):
+            sys.exit(f"truncated item render row in {path}")
+        fields = struct.unpack_from("<IIIIIIIIIIIII", data, pos)
+        pos += row_size
+        for anim_id in fields[10:13]:
+            if anim_id != MISSING_U32 and 0 < anim_id <= 0xFFFF:
+                out.add(int(anim_id))
+
+    return out
+
+
+def read_combat_visual_sequence_ids(path: Path) -> set[int]:
+    """Return attack and projectile sequence ids from RuneC combat visuals."""
+
+    if not path.is_file():
+        return set()
+
+    out: set[int] = set()
+    for raw in path.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or line.startswith("kind|"):
+            continue
+        parts = line.split("|")
+        for idx in (3, 8, 30):
+            if idx >= len(parts):
+                continue
+            value = parts[idx].strip()
+            if not value or value == "-":
+                continue
+            try:
+                anim_id = int(value)
+            except ValueError:
+                sys.exit(f"bad combat visual sequence id {value!r} in {path}")
+            if 0 < anim_id <= 0xFFFF:
+                out.add(anim_id)
+
+    return out
+
+
+def parse_extra_sequence_ids(raw: str) -> set[int]:
+    """Parse comma-separated extra sequence ids."""
+
+    if not raw:
+        return set()
+    out: set[int] = set()
+    for piece in raw.split(","):
+        value = piece.strip()
+        if not value:
+            continue
+        seq_id = int(value, 0)
+        if seq_id <= 0 or seq_id > 0xFFFF:
+            sys.exit(f"extra sequence id out of range: {seq_id}")
+        out.add(seq_id)
+    return out
 
 
 def parse_modern_framebase(base_id: int, data: bytes) -> FrameBaseDef:
@@ -524,6 +672,26 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="export OSRS animations from cache")
     parser.add_argument("--modern-cache", type=Path, required=True, help="path to modern OpenRS2 cache directory")
     parser.add_argument("--output", required=True, help="output .anims file path")
+    parser.add_argument(
+        "--include-spotanim-sequences",
+        action="store_true",
+        help="include every animation sequence referenced by spotanim definitions",
+    )
+    parser.add_argument(
+        "--item-render-map",
+        type=Path,
+        help="include ready, walk, and run BAS sequences from a RuneC item_render.map",
+    )
+    parser.add_argument(
+        "--combat-visuals",
+        type=Path,
+        help="include attack and projectile sequences from RuneC combat_visuals.tsv",
+    )
+    parser.add_argument(
+        "--extra-sequences",
+        default="",
+        help="comma-separated extra animation sequence ids",
+    )
     args = parser.parse_args()
 
     output_path = Path(args.output)
@@ -531,6 +699,27 @@ def main() -> None:
 
     print(f"reading modern cache from {cache_path}")
     reader = ModernCacheReader(cache_path)
+    needed = set(NEEDED_ANIMATIONS)
+
+    if args.include_spotanim_sequences:
+        spotanim_ids = parse_spotanim_sequence_ids(reader)
+        needed |= spotanim_ids
+        print(f"including {len(spotanim_ids)} spotanim sequence IDs")
+
+    if args.item_render_map:
+        item_render_ids = read_item_render_sequence_ids(args.item_render_map)
+        needed |= item_render_ids
+        print(f"including {len(item_render_ids)} item render BAS sequence IDs")
+
+    if args.combat_visuals:
+        combat_visual_ids = read_combat_visual_sequence_ids(args.combat_visuals)
+        needed |= combat_visual_ids
+        print(f"including {len(combat_visual_ids)} combat visual sequence IDs")
+
+    extra_ids = parse_extra_sequence_ids(args.extra_sequences)
+    if extra_ids:
+        needed |= extra_ids
+        print(f"including {len(extra_ids)} explicit extra sequence IDs")
 
     # 1. load sequences
     print("loading sequences...")
@@ -555,8 +744,8 @@ def main() -> None:
     print(f"  loaded {len(sequences)} sequences")
 
     # filter to needed animations
-    available = NEEDED_ANIMATIONS & set(sequences.keys())
-    missing = NEEDED_ANIMATIONS - set(sequences.keys())
+    available = needed & set(sequences.keys())
+    missing = needed - set(sequences.keys())
     if missing:
         print(f"  warning: {len(missing)} animations not found in cache: {sorted(missing)}")
     print(f"  {len(available)} needed animations available")

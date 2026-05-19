@@ -12,7 +12,7 @@
 #   ./scripts/export_items.sh ~/osrs-cache 11230,22461,22464,22467,22470
 #
 # Dependencies are auto-fetched from Maven Central on first run. Requires
-# Java 11+ and curl. Output goes to repo-root data/sprites/items/<item_id>.png.
+# Java 11+ and curl. Output goes to ocean/osrs/data/sprites/items/<item_id>.png.
 
 set -eo pipefail
 
@@ -32,10 +32,9 @@ ITEM_IDS="$2"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 OSRS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-REPO_ROOT="$(cd "$OSRS_DIR/../.." && pwd)"
 BUILD_DIR="$OSRS_DIR/build/item_exporter"
 DEPS_DIR="$BUILD_DIR/deps"
-OUTPUT_DIR="$REPO_ROOT/data/sprites/items"
+OUTPUT_DIR="$OSRS_DIR/data/sprites/items"
 
 mkdir -p "$BUILD_DIR" "$DEPS_DIR" "$OUTPUT_DIR"
 

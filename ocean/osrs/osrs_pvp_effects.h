@@ -15,6 +15,7 @@
 
 #include "osrs_models.h"
 #include "osrs_anim.h"
+#include "osrs_spotanims.h"
 #include <math.h>
 
 #define MAX_ACTIVE_EFFECTS 16
@@ -40,39 +41,39 @@
 #define GFX_RUNE_DART       231    /* rune dart projectile */
 #define GFX_BLOWPIPE_SPEC   1043   /* blowpipe special attack effect */
 
-typedef struct {
-    int gfx_id;
-    uint32_t model_id;
-    int anim_seq_id;      /* -1 = no animation (static model) */
-    int resize_xy;        /* 128 = 1.0x */
-    int resize_z;
-} SpotAnimMeta;
+static const OsrsSpotAnimDef* spotanim_lookup(
+    const OsrsSpotAnimSet* spotanims,
+    int gfx_id
+) {
+    return osrs_spotanim_find(spotanims, gfx_id);
+}
 
-/* parsed from spotanim.dat via export_spotanims.py */
-static const SpotAnimMeta SPOTANIM_TABLE[] = {
-    { GFX_BOLT,              3135,  -1,   128, 128 },
-    { GFX_SPLASH,            3080,  653,  128, 128 },
-    { GFX_ICE_BARRAGE_PROJ,  14215, 1964, 128, 128 },
-    { GFX_ICE_BARRAGE_HIT,   6381,  1965, 128, 128 },
-    { GFX_BLOOD_BARRAGE_HIT, 6375,  1967, 128, 128 },
-    { GFX_TEKTON_METEOR_SPLAT, 14760, 3941, 128, 128 },
-    { GFX_TEKTON_METEOR_PROJ,  14759, 3942, 128, 128 },
-    { GFX_DRAGON_BOLT,       0xD0001, -1, 128, 128 }, /* synthetic recolored model */
-    /* player weapon projectiles (zulrah encounter) */
-    { GFX_TRIDENT_CAST,      20823,  5460, 128, 128 },
-    { GFX_TRIDENT_PROJ,      20825,  5462, 128, 128 },
-    { GFX_TRIDENT_IMPACT,    20824,  5461, 128, 128 },
-    { GFX_DRAGON_ARROW,      26377,  6622, 128, 128 },
-    { GFX_RUNE_ARROW,        3136,   -1,   128, 128 },
-    { GFX_DRAGON_DART,       26379,  6622, 128, 128 },
-    { GFX_RUNE_DART,         3131,   -1,   128, 128 },
-    { GFX_BLOWPIPE_SPEC,     29421,  876,  128, 128 },
-};
-#define SPOTANIM_TABLE_SIZE (sizeof(SPOTANIM_TABLE) / sizeof(SPOTANIM_TABLE[0]))
+static OsrsModel* effect_find_model_in_cache(ModelCache* cache, uint32_t model_id) {
+    if (!cache) return NULL;
+    return model_cache_get(cache, model_id);
+}
 
-static const SpotAnimMeta* spotanim_lookup(int gfx_id) {
-    for (int i = 0; i < (int)SPOTANIM_TABLE_SIZE; i++) {
-        if (SPOTANIM_TABLE[i].gfx_id == gfx_id) return &SPOTANIM_TABLE[i];
+static OsrsModel* effect_find_model(
+    const OsrsSpotAnimDef* meta,
+    ModelCache* model_cache,
+    ModelCache* secondary_model_cache,
+    ModelCache* projectile_model_cache
+) {
+    if (!meta || meta->model_id < 0) return NULL;
+    uint32_t model_ids[2] = {
+        OSRS_SPOTANIM_MODEL_BASE + meta->id,
+        (uint32_t)meta->model_id,
+    };
+    ModelCache* caches[3] = {
+        projectile_model_cache,
+        model_cache,
+        secondary_model_cache,
+    };
+    for (int m = 0; m < 2; m++) {
+        for (int c = 0; c < 3; c++) {
+            OsrsModel* om = effect_find_model_in_cache(caches[c], model_ids[m]);
+            if (om) return om;
+        }
     }
     return NULL;
 }
@@ -87,7 +88,7 @@ typedef enum {
 typedef struct {
     EffectType type;
     int gfx_id;
-    const SpotAnimMeta* meta;
+    const OsrsSpotAnimDef* meta;
 
     /* world position in sub-tile coords (128 units per tile) */
     double src_x, src_y;      /* start (projectiles) */
@@ -148,13 +149,13 @@ static int effect_find_slot(ActiveEffect effects[MAX_ACTIVE_EFFECTS]) {
 static void effect_init_anim_state(
     ActiveEffect* e,
     ModelCache* model_cache,
-    ModelCache* secondary_model_cache
+    ModelCache* secondary_model_cache,
+    ModelCache* projectile_model_cache
 ) {
-    if (!e->meta || e->meta->anim_seq_id < 0) return;
+    if (!e->meta || e->meta->animation_id < 0) return;
 
-    OsrsModel* om = model_cache_get(model_cache, e->meta->model_id);
-    if (!om && secondary_model_cache)
-        om = model_cache_get(secondary_model_cache, e->meta->model_id);
+    OsrsModel* om = effect_find_model(
+        e->meta, model_cache, secondary_model_cache, projectile_model_cache);
     if (!om || !om->vertex_skins || om->base_vert_count == 0) return;
 
     e->anim_state = anim_model_state_create(
@@ -172,11 +173,13 @@ static int effect_spawn_spotanim_subtile(
     int gfx_id,
     float subtile_x, float subtile_y,
     int current_client_tick,
+    const OsrsSpotAnimSet* spotanims,
     AnimCache* anim_cache,
     ModelCache* model_cache,
-    ModelCache* secondary_model_cache
+    ModelCache* secondary_model_cache,
+    ModelCache* projectile_model_cache
 ) {
-    const SpotAnimMeta* meta = spotanim_lookup(gfx_id);
+    const OsrsSpotAnimDef* meta = spotanim_lookup(spotanims, gfx_id);
     if (!meta) return -1;
 
     int slot = effect_find_slot(effects);
@@ -194,8 +197,8 @@ static int effect_spawn_spotanim_subtile(
 
     /* duration from animation, or 30 client ticks default */
     int duration = 30;
-    if (meta->anim_seq_id >= 0 && anim_cache) {
-        AnimSequence* seq = anim_get_sequence(anim_cache, meta->anim_seq_id);
+    if (meta->animation_id >= 0 && anim_cache) {
+        AnimSequence* seq = anim_get_sequence(anim_cache, meta->animation_id);
         if (seq) {
             duration = 0;
             for (int f = 0; f < seq->frame_count; f++) {
@@ -205,7 +208,7 @@ static int effect_spawn_spotanim_subtile(
     }
     e->stop_tick = current_client_tick + duration;
 
-    effect_init_anim_state(e, model_cache, secondary_model_cache);
+    effect_init_anim_state(e, model_cache, secondary_model_cache, projectile_model_cache);
     return slot;
 }
 
@@ -213,12 +216,14 @@ static int effect_spawn_spotanim_subtile(
 static int effect_spawn_spotanim(
     ActiveEffect effects[MAX_ACTIVE_EFFECTS],
     int gfx_id, int world_x, int world_y,
-    int current_client_tick, AnimCache* anim_cache,
-    ModelCache* model_cache, ModelCache* secondary_model_cache
+    int current_client_tick, const OsrsSpotAnimSet* spotanims,
+    AnimCache* anim_cache, ModelCache* model_cache,
+    ModelCache* secondary_model_cache, ModelCache* projectile_model_cache
 ) {
     return effect_spawn_spotanim_subtile(effects, gfx_id,
         world_x * 128.0f + 64.0f, world_y * 128.0f + 64.0f,
-        current_client_tick, anim_cache, model_cache, secondary_model_cache);
+        current_client_tick, spotanims, anim_cache, model_cache,
+        secondary_model_cache, projectile_model_cache);
 }
 
 /**
@@ -240,10 +245,12 @@ static int effect_spawn_projectile(
     int end_height_subtile,
     int slope,
     int current_client_tick,
+    const OsrsSpotAnimSet* spotanims,
     ModelCache* model_cache,
-    ModelCache* secondary_model_cache
+    ModelCache* secondary_model_cache,
+    ModelCache* projectile_model_cache
 ) {
-    const SpotAnimMeta* meta = spotanim_lookup(gfx_id);
+    const OsrsSpotAnimDef* meta = spotanim_lookup(spotanims, gfx_id);
     if (!meta) return -1;
 
     int slot = effect_find_slot(effects);
@@ -268,7 +275,7 @@ static int effect_spawn_projectile(
     e->start_tick = current_client_tick + delay_client_ticks;
     e->stop_tick = current_client_tick + delay_client_ticks + duration_client_ticks;
 
-    effect_init_anim_state(e, model_cache, secondary_model_cache);
+    effect_init_anim_state(e, model_cache, secondary_model_cache, projectile_model_cache);
     return slot;
 }
 
@@ -335,8 +342,8 @@ static void effect_client_tick(
         }
 
         /* advance animation */
-        if (e->meta && e->meta->anim_seq_id >= 0 && anim_cache) {
-            AnimSequence* seq = anim_get_sequence(anim_cache, e->meta->anim_seq_id);
+        if (e->meta && e->meta->animation_id >= 0 && anim_cache) {
+            AnimSequence* seq = anim_get_sequence(anim_cache, e->meta->animation_id);
             if (seq && seq->frame_count > 0) {
                 e->anim_tick_counter++;
                 while (e->anim_tick_counter >= seq->frames[e->anim_frame].delay) {

@@ -144,7 +144,9 @@ typedef enum {
     ITEM_SPECTRAL_SPIRIT_SHIELD = 131,  /* Spectral spirit shield */
     ITEM_ELYSIAN_SPIRIT_SHIELD = 132,  /* Elysian spirit shield */
     ITEM_DRAGONFIRE_SHIELD = 133,  /* Dragonfire shield */
-    NUM_ITEMS = 134,
+    ITEM_DRAGON_HUNTER_WAND = 134,  /* Dragon hunter wand */
+    ITEM_ECHO_BOOTS = 135,  /* Echo boots */
+    NUM_ITEMS = 136,
     ITEM_NONE = 255
 } ItemIndex;
 
@@ -876,7 +878,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = -10, .attack_ranged = 9,
         .defence_stab = 12, .defence_slash = 8, .defence_crush = 14,
         .defence_magic = 10, .defence_ranged = 18,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 2, .effect_mask = OSRS_ITEM_EFFECT_NONE
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 2, .effect_mask = OSRS_ITEM_EFFECT_CRYSTAL_ARMOUR
     },
     [ITEM_AVAS_ASSEMBLER] = { /* Ava's assembler */
         .item_id = 22109, .name = "Ava's assembler", .slot = SLOT_CAPE,
@@ -894,7 +896,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = -18, .attack_ranged = 31,
         .defence_stab = 46, .defence_slash = 38, .defence_crush = 48,
         .defence_magic = 44, .defence_ranged = 68,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 3, .effect_mask = OSRS_ITEM_EFFECT_NONE
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 3, .effect_mask = OSRS_ITEM_EFFECT_CRYSTAL_ARMOUR
     },
     [ITEM_CRYSTAL_LEGS] = { /* Crystal legs */
         .item_id = 23979, .name = "Crystal legs", .slot = SLOT_LEGS,
@@ -903,7 +905,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = -12, .attack_ranged = 18,
         .defence_stab = 26, .defence_slash = 21, .defence_crush = 30,
         .defence_magic = 34, .defence_ranged = 38,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 2, .effect_mask = OSRS_ITEM_EFFECT_NONE
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 2, .effect_mask = OSRS_ITEM_EFFECT_CRYSTAL_ARMOUR
     },
     [ITEM_BOW_OF_FAERDHINEN] = { /* Bow of faerdhinen (c) */
         .item_id = 25865, .name = "Bow of faerdhinen", .slot = SLOT_WEAPON,
@@ -1354,6 +1356,24 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .defence_stab = 70, .defence_slash = 75, .defence_crush = 72,
         .defence_magic = 10, .defence_ranged = 72,
         .melee_strength = 7, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
+    },
+    [ITEM_DRAGON_HUNTER_WAND] = { /* Dragon hunter wand */
+        .item_id = 30070, .name = "Dragon hunter wand", .slot = SLOT_WEAPON,
+        .attack_speed = 5, .attack_range = 10,
+        .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
+        .attack_magic = 16, .attack_ranged = 0,
+        .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
+        .defence_magic = 16, .defence_ranged = 0,
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 10, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_DRAGON_HUNTER_WAND
+    },
+    [ITEM_ECHO_BOOTS] = { /* Echo boots */
+        .item_id = 28945, .name = "Echo boots", .slot = SLOT_FEET,
+        .attack_speed = 0, .attack_range = 0,
+        .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
+        .attack_magic = -3, .attack_ranged = -1,
+        .defence_stab = 32, .defence_slash = 32, .defence_crush = 32,
+        .defence_magic = -3, .defence_ranged = 24,
+        .melee_strength = 3, .ranged_strength = 0, .magic_damage = 0, .prayer = 4, .effect_mask = OSRS_ITEM_EFFECT_ECHO_BOOTS
     },
 };
 

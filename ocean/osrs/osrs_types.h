@@ -138,6 +138,8 @@ static const int ACTION_HEAD_DIMS[NUM_ACTION_HEADS] = {
 #define MAXED_MELEE_ATTACK_SPEED_OBS 4
 #define MAXED_RANGED_ATTACK_SPEED_OBS 5
 #define RUN_ENERGY_RECOVER_TICKS 3
+#define OSRS_RUN_ENERGY_UNITS_PER_PERCENT 100
+#define OSRS_RUN_ENERGY_FULL 10000
 
 typedef enum {
     ATTACK_STYLE_NONE = 0,
@@ -413,6 +415,17 @@ typedef struct {
 } OsrsTargetRef;
 
 typedef enum {
+    OSRS_TARGET_CLASS_STANDARD = 0,
+    OSRS_TARGET_CLASS_DRAGON,
+} OsrsTargetClass;
+
+typedef struct {
+    int magic_level;
+    int magic_attack_bonus;
+    OsrsTargetClass target_class;
+} OsrsTargetEffectContext;
+
+typedef enum {
     OSRS_RECOIL_SOURCE_NONE = 0,
     OSRS_RECOIL_SOURCE_RING_OF_RECOIL,
     OSRS_RECOIL_SOURCE_RING_OF_SUFFERING_RI,
@@ -430,6 +443,7 @@ typedef struct {
     uint8_t shield_item;
     uint8_t virtus_piece_count;
     uint8_t dharok_piece_count;
+    uint8_t crystal_armour_points;
     OsrsRecoilSource recoil_source;
     OsrsSpecRegenMode spec_regen_mode;
 } OsrsEquipmentEffectProfile;
@@ -437,6 +451,7 @@ typedef struct {
 typedef struct {
     int special_regen_ticks;
     int recoil_charges;
+    int echo_boot_charges;
     uint8_t confliction_is_primed;
     uint8_t confliction_weapon_item;
     OsrsMagicAttackKind confliction_magic_kind;
@@ -1123,6 +1138,7 @@ typedef struct {
     // Encounter dispatch. NULL uses the default PvP step/reset path.
     const void* encounter_def;     /* EncounterDef* — void* to avoid include dependency */
     void* encounter_state;          /* EncounterState* — owned by this env */
+    void* encounter_context;        /* EncounterContext* — owned by this env */
 
     // Collision map (shared across envs, read-only after init). NULL = flat arena.
     void* collision_map;  /* CollisionMap* — void* to avoid forward-decl dependency */
@@ -1159,6 +1175,10 @@ static inline int clamp(int val, int min, int max) {
     if (val < min) return min;
     if (val > max) return max;
     return val;
+}
+
+static inline int osrs_run_energy_percent(int run_energy) {
+    return clamp(run_energy / OSRS_RUN_ENERGY_UNITS_PER_PERCENT, 0, 100);
 }
 
 static inline float clampf(float val, float min, float max) {

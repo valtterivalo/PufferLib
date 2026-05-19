@@ -234,6 +234,21 @@ struct PrioBuffers {
     IntTensor idx;
 };
 
+struct StateBuffer {
+    void* states;
+    int state_size;
+    int capacity;
+    int size;
+    int write_pos;
+    int num_cl_envs;
+    int num_fresh_envs;
+    int* state_inds_host;
+    PrecisionTensor advantages;
+    PrecisionTensor importance;
+    IntTensor state_inds;
+    PrioBuffers prio_bufs;
+};
+
 void register_prio_buffers(PrioBuffers& bufs, Allocator* alloc, int B, int minibatch_segments) {
     bufs = (PrioBuffers){
         .prio_probs = {.shape = {B}},
@@ -245,6 +260,22 @@ void register_prio_buffers(PrioBuffers& bufs, Allocator* alloc, int B, int minib
     alloc_register(alloc, &bufs.cdf);
     alloc_register(alloc, &bufs.idx);
     alloc_register(alloc, &bufs.mb_prio);
+}
+
+void register_state_buffer(StateBuffer* buf, Allocator* alloc,
+        int capacity, int total_agents, int num_cl_envs) {
+    buf->capacity = capacity;
+    buf->num_cl_envs = num_cl_envs;
+    buf->num_fresh_envs = total_agents - num_cl_envs;
+    buf->advantages = {.shape = {capacity}};
+    buf->importance = {.shape = {total_agents}};
+    buf->state_inds = {.shape = {total_agents}};
+    alloc_register(alloc, &buf->advantages);
+    alloc_register(alloc, &buf->importance);
+    alloc_register(alloc, &buf->state_inds);
+    if (num_cl_envs > 0) {
+        register_prio_buffers(buf->prio_bufs, alloc, capacity, num_cl_envs);
+    }
 }
 
 // Slice: select dim0 index t, then narrow dim0 from start for count.
@@ -328,6 +359,12 @@ typedef struct {
     // Priority
     float prio_alpha;
     float prio_beta0;
+    // Curriculum state buffer
+    int state_buffer_size;
+    float cl_frac;
+    int warmup_states;
+    float explore_alpha;
+    float explore_beta;
     // Flags
     bool reset_state;
     bool terminal_reset_state;
@@ -398,6 +435,8 @@ typedef struct {
     FloatTensor losses_puf;     // (NUM_LOSSES,) f32 accumulator
     PPOBuffersPuf ppo_bufs_puf; // Pre-allocated buffers for ppo_loss_fwd_bwd
     PrioBuffers prio_bufs;      // Pre-allocated buffers for prio_replay
+    StateBuffer state_buf;
+    int curriculum_enabled;
     FloatTensor master_weights;  // fp32 master weights (flat); same buffer as param_puf in fp32 mode
     FloatTensor anchor_weights;
     float anchor_coef;
@@ -1561,6 +1600,47 @@ __global__ void compute_prio_normalize(float* prio_weights, int length) {
     }
 }
 
+__global__ void compute_state_prio_normalize(float* prio_weights, int length) {
+    __shared__ float shmem[PRIO_NUM_WARPS];
+    __shared__ float block_sum;
+    __shared__ int use_uniform;
+
+    if (length <= 0) return;
+
+    int tx = threadIdx.x;
+    int lane = tx % PRIO_WARP_SIZE;
+    int warp_id = tx / PRIO_WARP_SIZE;
+
+    float local_sum = 0.0f;
+    for (int t = tx; t < length; t += blockDim.x) {
+        local_sum += prio_weights[t];
+    }
+    for (int s = PRIO_WARP_SIZE / 2; s >= 1; s /= 2) {
+        local_sum += __shfl_down_sync(PRIO_FULL_MASK, local_sum, s);
+    }
+    if (lane == 0) {
+        shmem[warp_id] = local_sum;
+    }
+    __syncthreads();
+
+    if (warp_id == 0) {
+        float val = (lane < PRIO_NUM_WARPS) ? shmem[lane] : 0.0f;
+        for (int s = PRIO_NUM_WARPS / 2; s >= 1; s /= 2) {
+            val += __shfl_down_sync(PRIO_FULL_MASK, val, s);
+        }
+        if (tx == 0) {
+            block_sum = val;
+            use_uniform = (val <= 0.0f || isnan(val) || isinf(val));
+        }
+    }
+    __syncthreads();
+
+    float inv_sum = use_uniform ? (1.0f / (float)length) : (1.0f / block_sum);
+    for (int t = tx; t < length; t += blockDim.x) {
+        prio_weights[t] = use_uniform ? inv_sum : prio_weights[t] * inv_sum;
+    }
+}
+
 // mb_prio[i] = pow(total_agents * prio_probs[idx[i]], -anneal_beta)
 __global__ void compute_prio_imp_weights(
         const int* __restrict__ indices,
@@ -1574,39 +1654,40 @@ __global__ void compute_prio_imp_weights(
     }
 }
 
-// Multinomial with replacement (uses cuRAND)
-__global__ void multinomial_sample(
-        int* __restrict__ out_idx, const float* __restrict__ probs,
-        float* __restrict__ cdf, int B, int num_samples,
-        uint64_t seed, int64_t* __restrict__ offset_ptr) {
-    int tid = threadIdx.x;
-    if (tid == 0) {
+__global__ void build_cdf(
+        float* __restrict__ cdf, const float* __restrict__ probs, int B) {
+    if (blockIdx.x == 0 && threadIdx.x == 0) {
         float cum = 0.0f;
         for (int i = 0; i < B; i++) {
             cum += probs[i];
             cdf[i] = cum;
         }
     }
-    __syncthreads();
-    if (tid < num_samples) {
-        uint64_t base_off = *offset_ptr;
-        curandStatePhilox4_32_10_t rng_state;
-        curand_init(seed, base_off + tid, 0, &rng_state);
-        float u = curand_uniform(&rng_state);
-        int lo = 0, hi = B - 1;
-        while (lo < hi) {
-            int mid = (lo + hi) / 2;
-            if (cdf[mid] < u) {
-                lo = mid + 1;
-            } else {
-                hi = mid;
-            }
-        }
-        out_idx[tid] = lo;
+}
+
+__global__ void advance_rng_offset(long* __restrict__ offset_ptr, long delta) {
+    if (blockIdx.x == 0 && threadIdx.x == 0) {
+        *offset_ptr += delta;
     }
-    if (tid == 0) {
-        atomicAdd((unsigned long long*)offset_ptr, (unsigned long long)num_samples);
+}
+
+__global__ void multinomial_sample(int* __restrict__ out_idx, const float* __restrict__ cdf,
+        int B, int num_samples, uint64_t seed, const long* __restrict__ offset_ptr) {
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (tid >= num_samples) return;
+
+    uint64_t base_off = (uint64_t)(*offset_ptr);
+    curandStatePhilox4_32_10_t rng_state;
+    curand_init(seed, base_off + tid, 0, &rng_state);
+    float u = curand_uniform(&rng_state);
+
+    int lo = 0, hi = B - 1;
+    while (lo < hi) {
+        int mid = (lo + hi) / 2;
+        if (cdf[mid] < u) lo = mid + 1;
+        else hi = mid;
     }
+    out_idx[tid] = lo;
 }
 
 // Prioritize high absolute advantage trajectories
@@ -1622,14 +1703,186 @@ void prio_replay_cuda(PrecisionTensor& advantages, float prio_alpha,
         advantages.data, bufs.prio_probs.data, prio_alpha, T);
     compute_prio_normalize<<<1, PRIO_BLOCK_SIZE, 0, stream>>>(
         bufs.prio_probs.data, B);
-    int block = fmaxf(((minibatch_segments + 31) / 32) * 32, 32);
-    multinomial_sample<<<1, block, 0, stream>>>(
-        bufs.idx.data, bufs.prio_probs.data,
-        bufs.cdf.data, B, minibatch_segments, seed, offset_ptr);
+    build_cdf<<<1, 1, 0, stream>>>(bufs.cdf.data, bufs.prio_probs.data, B);
+    int threads = 256;
+    int blocks = (minibatch_segments + threads - 1) / threads;
+    multinomial_sample<<<blocks, threads, 0, stream>>>(
+        bufs.idx.data, bufs.cdf.data, B, minibatch_segments, seed, offset_ptr);
+    advance_rng_offset<<<1, 1, 0, stream>>>(offset_ptr, (long)minibatch_segments);
     int p3_blocks = (minibatch_segments + PRIO_BLOCK_SIZE - 1) / PRIO_BLOCK_SIZE;
     compute_prio_imp_weights<<<p3_blocks, PRIO_BLOCK_SIZE, 0, stream>>>(
         bufs.idx.data, bufs.prio_probs.data,
         bufs.mb_prio.data, total_agents, anneal_beta, minibatch_segments);
+}
+
+__global__ void scatter_state_advantages(
+        precision_t* __restrict__ dst,
+        const int* __restrict__ state_inds,
+        const precision_t* __restrict__ advantages_bt,
+        int count, int horizon) {
+    if (blockIdx.x != 0 || threadIdx.x != 0) return;
+    for (int i = 0; i < count; i++) {
+        dst[state_inds[i]] = advantages_bt[(long)i * horizon];
+    }
+}
+
+__global__ void compute_state_prio_abs(
+        const precision_t* __restrict__ advantages,
+        float* __restrict__ prio_weights,
+        float prio_alpha, int length) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= length) return;
+
+    float adv = fabsf(to_float(advantages[idx]));
+    float pw;
+    if (prio_alpha == 0.0f) {
+        pw = 1.0f;
+    } else if (adv == 0.0f) {
+        pw = 0.0f;
+    } else {
+        pw = __powf(adv, prio_alpha);
+    }
+    if (isnan(pw) || isinf(pw)) pw = 0.0f;
+    prio_weights[idx] = pw;
+}
+
+__global__ void build_state_importance(
+        precision_t* __restrict__ out,
+        const int* __restrict__ state_inds,
+        const float* __restrict__ prio_probs,
+        int num_fresh, int num_cl, int buffer_size, float beta) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = num_fresh + num_cl;
+    if (idx >= total) return;
+
+    float weight = 1.0f;
+    if (idx >= num_fresh) {
+        int state_idx = state_inds[idx];
+        float value = prio_probs[state_idx] * (float)buffer_size;
+        weight = __powf(value, -beta);
+        if (isnan(weight) || isinf(weight)) weight = 1.0f;
+    }
+    out[idx] = from_float(weight);
+}
+
+static inline int clamp_int(int v, int lo, int hi) {
+    return v < lo ? lo : (v > hi ? hi : v);
+}
+
+int init_state_buffer(PuffeRL* pufferl) {
+    StateBuffer* buf = &pufferl->state_buf;
+    buf->state_size = get_state_size();
+    size_t capacity = (size_t)buf->capacity;
+    size_t state_size = (size_t)buf->state_size;
+    if (state_size == 0 || capacity > ((size_t)-1) / state_size) {
+        fprintf(stderr, "Failed to allocate curriculum state buffer: invalid size\n");
+        return 0;
+    }
+
+    size_t state_bytes = capacity * state_size;
+    buf->states = malloc(state_bytes);
+    buf->state_inds_host = (int*)malloc((size_t)pufferl->hypers.total_agents * sizeof(int));
+    if (buf->states == NULL || buf->state_inds_host == NULL) {
+        fprintf(stderr,
+            "Failed to allocate curriculum state buffer: capacity=%d state_size=%d bytes=%zu\n",
+            buf->capacity, buf->state_size, state_bytes);
+        free(buf->states);
+        free(buf->state_inds_host);
+        buf->states = NULL;
+        buf->state_inds_host = NULL;
+        return 0;
+    }
+    return 1;
+}
+
+void close_state_buffer(PuffeRL* pufferl) {
+    StateBuffer* buf = &pufferl->state_buf;
+    free(buf->states);
+    free(buf->state_inds_host);
+    buf->states = NULL;
+    buf->state_inds_host = NULL;
+}
+
+void curriculum_rollout_begin(PuffeRL* pufferl) {
+    HypersT* h = &pufferl->hypers;
+    StateBuffer* buf = &pufferl->state_buf;
+    StaticVec* vec = pufferl->vec;
+    cudaStream_t stream = pufferl->default_stream;
+    int total_agents = h->total_agents;
+    int configured_cl = clamp_int((int)(h->cl_frac * (float)total_agents), 0, total_agents);
+    int do_warmup = (buf->size == 0 || buf->size < h->warmup_states);
+    int num_cl = do_warmup ? 0 : configured_cl;
+    int num_fresh = total_agents - num_cl;
+    int total_epochs = h->total_timesteps / (h->total_agents * h->horizon);
+    float beta_progress = total_epochs > 0 ? (float)pufferl->epoch / (float)total_epochs : 1.0f;
+    beta_progress = fminf(1.0f, fmaxf(0.0f, beta_progress));
+    float beta = h->explore_beta + (1.0f - h->explore_beta) * beta_progress;
+
+    buf->num_cl_envs = num_cl;
+    buf->num_fresh_envs = num_fresh;
+    vec->log_env_limit = (num_cl > 0) ? num_fresh : 0;
+
+    if (num_cl > 0) {
+        compute_state_prio_abs<<<grid_size(buf->size), BLOCK_SIZE, 0, stream>>>(
+            buf->advantages.data, buf->prio_bufs.prio_probs.data,
+            h->explore_alpha, buf->size);
+        compute_state_prio_normalize<<<1, PRIO_BLOCK_SIZE, 0, stream>>>(
+            buf->prio_bufs.prio_probs.data, buf->size);
+        build_cdf<<<1, 1, 0, stream>>>(
+            buf->prio_bufs.cdf.data, buf->prio_bufs.prio_probs.data, buf->size);
+        int threads = 256;
+        int blocks = (num_cl + threads - 1) / threads;
+        long* rng_offset = pufferl->rng_offset_puf.data + h->num_buffers + 1;
+        multinomial_sample<<<blocks, threads, 0, stream>>>(
+            buf->prio_bufs.idx.data, buf->prio_bufs.cdf.data,
+            buf->size, num_cl, pufferl->seed, rng_offset);
+        advance_rng_offset<<<1, 1, 0, stream>>>(rng_offset, (long)num_cl);
+        cudaMemcpyAsync(buf->state_inds_host + num_fresh, buf->prio_bufs.idx.data,
+            num_cl * sizeof(int), cudaMemcpyDeviceToHost, stream);
+        cudaStreamSynchronize(stream);
+
+        static_vec_load_states(vec, buf->states, buf->state_inds_host + num_fresh,
+            num_fresh, num_cl);
+        if (vec->gpu) {
+            cudaMemcpy(vec->gpu_observations, vec->observations,
+                (size_t)vec->total_agents * get_obs_size() * get_obs_elem_size(),
+                cudaMemcpyHostToDevice);
+        }
+    }
+
+    for (int i = 0; i < num_fresh; i++) {
+        buf->state_inds_host[i] = (buf->write_pos + i) % buf->capacity;
+    }
+    if (num_fresh > 0) {
+        static_vec_store_states(vec, buf->states, buf->state_inds_host, 0, num_fresh);
+        buf->write_pos = (buf->write_pos + num_fresh) % buf->capacity;
+        buf->size = clamp_int(buf->size + num_fresh, 0, buf->capacity);
+    }
+
+    cudaMemcpyAsync(buf->state_inds.data, buf->state_inds_host,
+        total_agents * sizeof(int), cudaMemcpyHostToDevice, stream);
+    build_state_importance<<<grid_size(total_agents), BLOCK_SIZE, 0, stream>>>(
+        buf->importance.data, buf->state_inds.data, buf->prio_bufs.prio_probs.data,
+        num_fresh, num_cl, buf->size, beta);
+}
+
+void curriculum_update_advantages(PuffeRL* pufferl, PrecisionTensor* advantages,
+        cudaStream_t stream) {
+    StateBuffer* buf = &pufferl->state_buf;
+    int horizon = advantages->shape[1];
+    int num_fresh = buf->num_fresh_envs;
+    int num_cl = buf->num_cl_envs;
+
+    if (num_cl > 0) {
+        scatter_state_advantages<<<1, 1, 0, stream>>>(
+            buf->advantages.data, buf->state_inds.data + num_fresh,
+            advantages->data + (long)num_fresh * horizon, num_cl, horizon);
+    }
+    if (num_fresh > 0) {
+        scatter_state_advantages<<<1, 1, 0, stream>>>(
+            buf->advantages.data, buf->state_inds.data,
+            advantages->data, num_fresh, horizon);
+    }
 }
 
 // Experience the puffer advantage! Generalized advantage estimation + V-Trace
@@ -1794,7 +2047,8 @@ __device__ __forceinline__ void copy_values_adv_returns(
 
 __global__ void select_copy(RolloutBuf rollouts, TrainGraph graph,
         const int* __restrict__ idx, const precision_t* __restrict__ advantages,
-        const float* __restrict__ mb_prio) {
+        const float* __restrict__ mb_prio,
+        const precision_t* __restrict__ row_importance) {
     int mb = blockIdx.x;
     int ch = blockIdx.y;
     int src_row = idx[mb];
@@ -1823,7 +2077,11 @@ __global__ void select_copy(RolloutBuf rollouts, TrainGraph graph,
         break;
     case 4:
         if (threadIdx.x == 0) {
-            graph.mb_prio.data[mb] = from_float(mb_prio[mb]);
+            float prio = mb_prio[mb];
+            if (row_importance != nullptr) {
+                prio *= to_float(row_importance[src_row]);
+            }
+            graph.mb_prio.data[mb] = from_float(prio);
         }
         break;
     case 5:
@@ -1969,6 +2227,9 @@ void train_impl(PuffeRL& pufferl) {
         puff_advantage_cuda(rollouts.values, rollouts.rewards, rollouts.terminals,
             rollouts.ratio, advantages_puf, hypers.gamma, hypers.gae_lambda,
             hypers.vtrace_rho_clip, hypers.vtrace_c_clip, train_stream);
+        if (mb == 0 && pufferl.curriculum_enabled && pufferl.state_buf.size > 0) {
+            curriculum_update_advantages(&pufferl, &advantages_puf, train_stream);
+        }
         profile_end(hypers.profile);
 
         profile_begin("compute_prio", hypers.profile);
@@ -1985,9 +2246,12 @@ void train_impl(PuffeRL& pufferl) {
             RolloutBuf sel_src = rollouts;
             sel_src.values = rollouts.values;
             int mb_segs = pufferl.prio_bufs.idx.shape[0];
+            const precision_t* row_importance = pufferl.curriculum_enabled
+                ? pufferl.state_buf.importance.data : nullptr;
             select_copy<<<dim3(mb_segs, 6), SELECT_COPY_THREADS, 0, train_stream>>>(
                 sel_src, graph, pufferl.prio_bufs.idx.data,
-                advantages_puf.data, pufferl.prio_bufs.mb_prio.data);
+                advantages_puf.data, pufferl.prio_bufs.mb_prio.data,
+                row_importance);
             if (pufferl.has_mask) {
                 select_mask_copy<<<mb_segs, SELECT_COPY_THREADS, 0, train_stream>>>(
                     pufferl.train_masks, pufferl.mb_masks, pufferl.prio_bufs.idx.data);
@@ -2130,6 +2394,20 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     StaticVec* vec = create_environments(hypers.num_buffers, hypers.total_agents,
         env_name, vec_kwargs, env_kwargs, pufferl->env);
     pufferl->vec = vec;
+    assert(hypers.cl_frac >= 0.0f && "cl_frac must be nonnegative");
+    assert(hypers.cl_frac <= 0.9f && "cl_frac must be <= 0.9");
+    int initial_num_cl_envs = clamp_int(
+        (int)(hypers.cl_frac * (float)hypers.total_agents), 0, hypers.total_agents);
+    pufferl->curriculum_enabled = hypers.state_buffer_size > 0 && initial_num_cl_envs > 0;
+    if (pufferl->curriculum_enabled) {
+        assert(static_vec_has_state(vec) &&
+            "state_buffer_size > 0 requires PUFFER_STATE_T env support");
+        assert(get_state_size() > 0 &&
+            "state_buffer_size > 0 requires nonzero env state size");
+        assert(hypers.warmup_states >= 0 && "warmup_states must be nonnegative");
+        assert(hypers.warmup_states <= hypers.state_buffer_size &&
+            "warmup_states must be <= state_buffer_size");
+    }
 
     // Sanity check action space
     int num_action_heads = pufferl->env.actions.shape[1];
@@ -2185,6 +2463,7 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     int total_agents = vec->total_agents;
     int batch = total_agents / hypers.num_buffers;
     int num_buffers = hypers.num_buffers;
+    int num_cl_envs = clamp_int((int)(hypers.cl_frac * (float)total_agents), 0, total_agents);
 
     Encoder encoder = {
         .forward = encoder_forward,
@@ -2260,6 +2539,10 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
         acts, minibatch_segments, hypers.horizon, decoder_output_size, is_continuous);
     register_prio_buffers(pufferl->prio_bufs,
         acts, hypers.total_agents, minibatch_segments);
+    if (pufferl->curriculum_enabled) {
+        register_state_buffer(&pufferl->state_buf,
+            acts, hypers.state_buffer_size, total_agents, num_cl_envs);
+    }
     if (pufferl->has_mask) {
         pufferl->rollout_masks = {.shape = {horizon, total_agents, act_n}};
         pufferl->train_masks = {.shape = {total_agents, horizon, act_n}};
@@ -2273,7 +2556,7 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     }
 
     // Extra cuda buffers just reuse activ allocator
-    pufferl->rng_offset_puf = {.shape = {num_buffers + 1}};
+    pufferl->rng_offset_puf = {.shape = {num_buffers + 1 + (int)pufferl->curriculum_enabled}};
     alloc_register(acts, &pufferl->rng_offset_puf);
 
     pufferl->act_sizes_puf  = {.shape = {num_action_heads}};
@@ -2302,6 +2585,14 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
 
     pufferl->grad_puf = {.data = (precision_t*)grads->mem, .shape = {grads->total_elems}};
     pufferl->param_puf = {.data = (precision_t*)params->mem, .shape = {params->total_elems}};
+    if (pufferl->curriculum_enabled) {
+        if (!init_state_buffer(pufferl.get())) {
+            alloc_free(params);
+            alloc_free(grads);
+            alloc_free(acts);
+            return nullptr;
+        }
+    }
 
     ulong init_seed = hypers.seed;
     policy_init_weights(&pufferl->policy, pufferl->weights, &init_seed, pufferl->default_stream);
@@ -2787,6 +3078,9 @@ void close_impl(PuffeRL& pufferl) {
     if (pufferl.anchor_weights.data) {
         cudaFree(pufferl.anchor_weights.data);
         pufferl.anchor_weights.data = NULL;
+    }
+    if (pufferl.curriculum_enabled) {
+        close_state_buffer(&pufferl);
     }
 
     alloc_free(&pufferl.params_alloc);

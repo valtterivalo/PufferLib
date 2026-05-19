@@ -8,7 +8,7 @@ Exports specific sprite IDs needed for the debug viewer GUI:
   - equipment slot backgrounds (156-165, 170)
   - prayer icons enabled/disabled (115-154, 502-509, 945-951, 1420-1427)
   - tab icons (168, 776, 779, 780, 900, 901)
-  - spell icons (325-336, 375-386, 557, 561, 564, 607, 611, 614)
+  - spell icons (325-348, 375-398, 557, 561, 564, 607, 611, 614)
   - combat interface sprites (657)
 
 Usage:
@@ -18,7 +18,6 @@ Usage:
 """
 
 import argparse
-import io
 import struct
 import sys
 from dataclasses import dataclass, field
@@ -27,6 +26,7 @@ from pathlib import Path
 # add parent for modern_cache_reader import
 sys.path.insert(0, str(Path(__file__).parent))
 from modern_cache_reader import ModernCacheReader
+from rc_cache import decode_sprite_group
 
 DEFAULT_MODERN_CACHE = Path(__file__).resolve().parents[3] / ".refs" / "osrs-cache-modern"
 
@@ -47,115 +47,28 @@ class SpriteFrame:
 
 
 def decode_sprites(group_id: int, data: bytes) -> list[SpriteFrame]:
-    """Decode sprite archive using SpriteLoader format from deob client.
-
-    Ported from SpriteLoader.java (runelite-cache). Format is trailer-based:
-      [pixel data for all frames]
-      [palette: (palette_len - 1) x 3 bytes RGB]
-      [per-frame: offset_x, offset_y, width, height as u16 arrays] x frame_count
-      [max_width u16, max_height u16, palette_len_minus1 u8]  (5 bytes)
-      [frame_count u16]  (last 2 bytes)
-    """
-    if len(data) < 2:
-        return []
-
-    buf = io.BytesIO(data)
-
-    # trailer: frame_count at very end (SpriteLoader.java line 41)
-    buf.seek(len(data) - 2)
-    frame_count = struct.unpack(">H", buf.read(2))[0]
-    if frame_count == 0:
-        return []
-
-    # header block: 5 bytes before per-frame data before frame_count
-    # (SpriteLoader.java line 48)
-    header_start = len(data) - 7 - frame_count * 8
-    buf.seek(header_start)
-
-    max_width = struct.unpack(">H", buf.read(2))[0]
-    max_height = struct.unpack(">H", buf.read(2))[0]
-    # SpriteLoader.java line 53: paletteLength = readUnsignedByte() + 1
-    palette_len = buf.read(1)[0] + 1
-
-    # per-frame dimensions: 4 arrays of frame_count u16 values
-    # (SpriteLoader.java lines 64-82)
-    offsets_x = [struct.unpack(">H", buf.read(2))[0] for _ in range(frame_count)]
-    offsets_y = [struct.unpack(">H", buf.read(2))[0] for _ in range(frame_count)]
-    widths = [struct.unpack(">H", buf.read(2))[0] for _ in range(frame_count)]
-    heights = [struct.unpack(">H", buf.read(2))[0] for _ in range(frame_count)]
-
-    # palette: (palette_len - 1) RGB entries before the header block
-    # (SpriteLoader.java line 85)
-    palette_start = header_start - (palette_len - 1) * 3
-    buf.seek(palette_start)
-    palette = [0] * palette_len  # index 0 = transparent
-    for i in range(1, palette_len):
-        r = buf.read(1)[0]
-        g = buf.read(1)[0]
-        b = buf.read(1)[0]
-        rgb = (r << 16) | (g << 8) | b
-        palette[i] = rgb if rgb != 0 else 1
-
-    # pixel data from start of file (SpriteLoader.java line 98)
-    buf.seek(0)
+    """Decode a sprite group through the shared RuneC cache pipeline."""
     frames = []
-    for fi in range(frame_count):
-        w = widths[fi]
-        h = heights[fi]
-        dimension = w * h
-
-        # per-frame arrays matching Java's byte[] layout
-        indices = [0] * dimension
-        alphas = [0] * dimension
-
-        flags = buf.read(1)[0]
-
-        # read palette indices (SpriteLoader.java lines 113-131)
-        if not (flags & 0x01):
-            # horizontal
-            for j in range(dimension):
-                indices[j] = buf.read(1)[0]
-        else:
-            # vertical: iterate columns then rows
-            for j in range(w):
-                for k in range(h):
-                    indices[w * k + j] = buf.read(1)[0]
-
-        # read alpha channel if FLAG_ALPHA (SpriteLoader.java lines 134-155)
-        if flags & 0x02:
-            if not (flags & 0x01):
-                for j in range(dimension):
-                    alphas[j] = buf.read(1)[0]
-            else:
-                for j in range(w):
-                    for k in range(h):
-                        alphas[w * k + j] = buf.read(1)[0]
-
-        # force opaque for all non-zero palette indices
-        # (SpriteLoader.java lines 157-166 — runs AFTER alpha read)
-        for j in range(dimension):
-            if indices[j] != 0:
-                alphas[j] = 0xFF
-
-        # build ARGB pixels (SpriteLoader.java lines 168-176)
-        pixels = [0] * dimension
-        for j in range(dimension):
-            idx = indices[j] & 0xFF
-            pixels[j] = palette[idx] | (alphas[j] << 24)
-
-        frame = SpriteFrame(
-            group_id=group_id,
-            frame=fi,
-            offset_x=offsets_x[fi],
-            offset_y=offsets_y[fi],
-            width=w,
-            height=h,
-            max_width=max_width,
-            max_height=max_height,
-            pixels=pixels,
+    for frame_idx, sprite in enumerate(decode_sprite_group(data)):
+        pixels = []
+        raw = sprite.pixels
+        for offset in range(0, len(raw), 4):
+            r = raw[offset]
+            g = raw[offset + 1]
+            b = raw[offset + 2]
+            a = raw[offset + 3]
+            pixels.append((a << 24) | (r << 16) | (g << 8) | b)
+        frames.append(
+            SpriteFrame(
+                group_id=group_id,
+                frame=frame_idx,
+                width=sprite.width,
+                height=sprite.height,
+                max_width=sprite.width,
+                max_height=sprite.height,
+                pixels=pixels,
+            )
         )
-        frames.append(frame)
-
     return frames
 
 
@@ -186,7 +99,14 @@ def save_sprite_png(sprite: SpriteFrame, path: Path, sprite_id: int = -1) -> Non
         return
 
     normalize_rgb = sprite_id in ALPHA_MASK_NORMALIZE_IDS
-    img = Image.new("RGBA", (sprite.width, sprite.height))
+    canvas_w = sprite.max_width if sprite.max_width > 0 else sprite.width
+    canvas_h = sprite.max_height if sprite.max_height > 0 else sprite.height
+    if sprite.offset_x < 0 or sprite.offset_y < 0:
+        raise ValueError(f"{path.name}: negative sprite offset")
+    if sprite.offset_x + sprite.width > canvas_w or sprite.offset_y + sprite.height > canvas_h:
+        raise ValueError(f"{path.name}: sprite frame exceeds max canvas")
+
+    frame_img = Image.new("RGBA", (sprite.width, sprite.height))
     rgba_data = []
     for argb in sprite.pixels:
         a = (argb >> 24) & 0xFF
@@ -197,7 +117,10 @@ def save_sprite_png(sprite: SpriteFrame, path: Path, sprite_id: int = -1) -> Non
             g = (argb >> 8) & 0xFF
             b = argb & 0xFF
         rgba_data.append((r, g, b, a))
-    img.putdata(rgba_data)
+    frame_img.putdata(rgba_data)
+
+    img = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
+    img.alpha_composite(frame_img, (sprite.offset_x, sprite.offset_y))
     img.save(str(path))
 
 
@@ -222,17 +145,21 @@ SPRITE_IDS: dict[str, list[int]] = {
         1424, 1425,  # rigour/augury disabled
     ],
     # tab icons (combat, stats, quests, inventory, equipment, prayer, magic)
-    "tab": [168, 776, 779, 780, 898, 899, 900, 901],
-    # ancient spell icons (enabled + disabled) — full book (smoke/shadow/blood/ice)
+    "tab": [168, 776, 779, 780, 898, 899, 900, 901, 1583],
+    # ancient spell icons (enabled + disabled)
     "spell_ancient": [
         325, 326, 327, 328,  # ice rush/burst/blitz/barrage
         329, 330, 331, 332,  # smoke rush/burst/blitz/barrage
         333, 334, 335, 336,  # blood rush/burst/blitz/barrage
         337, 338, 339, 340,  # shadow rush/burst/blitz/barrage
+        341, 342, 343, 344,  # Paddewwa/Senntisten/Kharyrll/Lassar
+        345, 346, 347, 348,  # Dareeyak/Carrallanger/Annakarl/Ghorrock
         375, 376, 377, 378,  # ice disabled
         379, 380, 381, 382,  # smoke disabled
         383, 384, 385, 386,  # blood disabled
         387, 388, 389, 390,  # shadow disabled
+        391, 392, 393, 394,  # ancient teleports disabled
+        395, 396, 397, 398,  # ancient teleports disabled
     ],
     # lunar spell icons
     "spell_lunar": [557, 561, 564, 607, 611, 614],
@@ -378,6 +305,139 @@ SPRITE_NAMES: dict[int, str] = {
     1360: "hitmarks_2", 1361: "hitmarks_3", 1362: "hitmarks_4",
 }
 
+RUNEC_UI_ALIASES: dict[int, list[str]] = {
+    897: ["tradebacking_dark"],
+    1026: ["side_stone_highlights_0"],
+    1027: ["side_stone_highlights_1"],
+    1028: ["side_stone_highlights_2"],
+    1029: ["side_stone_highlights_3"],
+    1030: ["side_stone_highlights_4"],
+    1173: ["osrs_stretch_side_topbottom_0"],
+    1174: ["osrs_stretch_side_topbottom_1"],
+    1175: ["osrs_stretch_side_columns_0"],
+    1176: ["osrs_stretch_side_columns_1"],
+    1177: ["osrs_stretch_mapsurround"],
+    1178: ["resize_map_mask"],
+    1179: ["resize_compass_mask"],
+    168: ["side_icons_0", "side_icon_combat"],
+    898: ["side_icons_1", "side_icon_stats"],
+    899: ["side_icons_2", "side_icon_quests"],
+    900: ["side_icons_3", "side_icon_inventory"],
+    901: ["side_icons_4", "side_icon_equipment"],
+    902: ["side_icons_5", "side_icon_prayer"],
+    903: ["side_icons_6", "side_icon_magic"],
+    1583: ["side_icon_magic_ancient"],
+    904: ["side_icons_7", "side_icon_clan"],
+    905: ["side_icons_8", "side_icon_friends"],
+    907: ["side_icons_10", "side_icon_logout"],
+    908: ["side_icons_11", "side_icon_options"],
+    909: ["side_icons_12", "side_icon_emotes"],
+    910: ["side_icons_13", "side_icon_music"],
+    1709: ["side_icons_22", "side_icon_grouping"],
+    3560: ["side_icons_39", "side_icon_logout_modern"],
+    293: ["combatboxes_0"],
+    294: ["combatboxes_1"],
+    295: ["combatboxes_2"],
+    296: ["combatboxes_3"],
+    653: ["combatboxes_large_0"],
+    654: ["combatboxes_large_1"],
+    655: ["combatboxes_very_large_0"],
+    656: ["combatboxes_very_large_1"],
+    657: ["combatboxes_special_attack"],
+    760: ["combat_shield"],
+    675: ["options_icons_16"],
+    912: ["options_icons_18"],
+    1090: ["options_icons_28"],
+    1343: ["whistle"],
+    1052: ["sideicons_interface_14"],
+    1053: ["sideicons_interface_15"],
+    1299: ["sideicons_interface_16"],
+    1071: ["orb_frame_0"],
+    1072: ["orb_frame_1"],
+    2140: ["orb_frame_2"],
+    1059: ["orb_filler_0"],
+    1060: ["orb_filler_1"],
+    1061: ["orb_filler_2"],
+    1062: ["orb_filler_3"],
+    1063: ["orb_filler_4"],
+    1064: ["orb_filler_5"],
+    1065: ["orb_filler_6"],
+    1066: ["orb_filler_7"],
+    1102: ["orb_filler_8"],
+    1607: ["orb_filler_9"],
+    1608: ["orb_filler_10"],
+    1609: ["orb_filler_11"],
+    1636: ["orb_filler_12"],
+    1637: ["orb_filler_13"],
+    2208: ["orb_filler_14"],
+    1067: ["orb_icon_0"],
+    1068: ["orb_icon_1"],
+    1069: ["orb_icon_2"],
+    1070: ["orb_icon_3"],
+    1058: ["orb_icon_4"],
+    1092: ["orb_icon_5"],
+    1610: ["orb_icon_6"],
+    1668: ["orb_icon_7"],
+    3015: ["orb_icon_8"],
+    3016: ["orb_icon_9"],
+    3017: ["orb_icon_10"],
+    3018: ["orb_icon_11"],
+    3019: ["orb_icon_12"],
+    3020: ["orb_icon_13"],
+    3021: ["orb_icon_14"],
+    3022: ["orb_icon_15"],
+    2138: ["ring_34_0"],
+    5794: ["tli_button01_orb01_34x34_0"],
+    1196: ["orb_xp_0"],
+    1438: ["ring_30"],
+    1439: ["worldmap_icon_0"],
+    2420: ["wiki_icon_0"],
+    189: ["stats_total_left"],
+    190: ["stats_total_right"],
+    191: ["stats_total_middle"],
+    215: ["staticons2_0", "skill_icon_18"],
+    216: ["staticons2_1", "skill_icon_19"],
+    217: ["staticons2_2", "skill_icon_20"],
+    220: ["staticons2_5", "skill_icon_21"],
+    221: ["staticons2_6", "skill_icon_22"],
+    222: ["staticons2_7", "skill_icon_23"],
+    944: ["prayeron_24"],
+    948: ["prayeroff_24"],
+}
+
+for frame, sprite_id in enumerate(range(233, 253)):
+    RUNEC_UI_ALIASES.setdefault(sprite_id, []).append(f"combaticons_{frame}")
+for frame, sprite_id in enumerate(range(253, 273)):
+    RUNEC_UI_ALIASES.setdefault(sprite_id, []).append(f"combaticons2_{frame}")
+for frame, sprite_id in enumerate(range(273, 293)):
+    RUNEC_UI_ALIASES.setdefault(sprite_id, []).append(f"combaticons3_{frame}")
+for frame, sprite_id in enumerate(range(774, 788)):
+    RUNEC_UI_ALIASES.setdefault(sprite_id, []).append(f"sideicons_interface_{frame}")
+for frame, sprite_id in enumerate(range(197, 215)):
+    RUNEC_UI_ALIASES.setdefault(sprite_id, []).extend([f"staticons_{frame}", f"skill_icon_{frame}"])
+for frame, sprite_id in enumerate(range(3051, 3057)):
+    RUNEC_UI_ALIASES.setdefault(sprite_id, []).append(f"chat_tab_button_{frame}")
+for frame, sprite_id in enumerate(range(156, 168)):
+    RUNEC_UI_ALIASES.setdefault(sprite_id, []).append(f"wornicons_{frame}")
+for frame, sprite_id in enumerate(range(170, 185)):
+    RUNEC_UI_ALIASES.setdefault(sprite_id, []).append(f"miscgraphics_{frame}")
+for frame in range(20):
+    RUNEC_UI_ALIASES.setdefault(115 + frame, []).append(f"prayeron_{frame}")
+    RUNEC_UI_ALIASES.setdefault(135 + frame, []).append(f"prayeroff_{frame}")
+for frame, sprite_id in enumerate(range(502, 506), start=20):
+    RUNEC_UI_ALIASES.setdefault(sprite_id, []).append(f"prayeron_{frame}")
+for frame, sprite_id in enumerate(range(506, 510), start=20):
+    RUNEC_UI_ALIASES.setdefault(sprite_id, []).append(f"prayeroff_{frame}")
+
+
+def sprite_output_names(sprite_id: int) -> list[str]:
+    """Return every filename stem that should be emitted for a sprite group."""
+    names = [SPRITE_NAMES.get(sprite_id, str(sprite_id))]
+    for alias in RUNEC_UI_ALIASES.get(sprite_id, []):
+        if alias not in names:
+            names.append(alias)
+    return names
+
 
 def main() -> None:
     """Export GUI sprites from modern OSRS cache."""
@@ -387,7 +447,7 @@ def main() -> None:
         help="Path to modern cache directory",
     )
     parser.add_argument(
-        "--output", default="data/sprites/gui",
+        "--output", default=str(Path(__file__).resolve().parents[1] / "data/sprites/gui"),
         help="Output directory for PNGs",
     )
     parser.add_argument(
@@ -411,6 +471,7 @@ def main() -> None:
     all_ids: set[int] = set()
     for ids in SPRITE_IDS.values():
         all_ids.update(ids)
+    all_ids.update(RUNEC_UI_ALIASES.keys())
 
     # check which IDs exist in the cache
     manifest = reader.read_index_manifest(8)
@@ -444,14 +505,14 @@ def main() -> None:
             continue
 
         for frame in frames:
-            name = SPRITE_NAMES.get(sprite_id, str(sprite_id))
-            if len(frames) > 1:
-                filename = f"{name}_{frame.frame}.png"
-            else:
-                filename = f"{name}.png"
-            path = out_dir / filename
-            save_sprite_png(frame, path, sprite_id)
-            exported += 1
+            for name in sprite_output_names(sprite_id):
+                if len(frames) > 1:
+                    filename = f"{name}_{frame.frame}.png"
+                else:
+                    filename = f"{name}.png"
+                path = out_dir / filename
+                save_sprite_png(frame, path, sprite_id)
+                exported += 1
 
         if len(frames) == 1:
             f = frames[0]

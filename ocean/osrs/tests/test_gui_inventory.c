@@ -51,6 +51,29 @@ static int expected_vial_count(int doses) {
     return (doses + 3) / 4;
 }
 
+static int file_exists(const char* path) {
+    FILE* file = fopen(path, "rb");
+    if (!file) return 0;
+    fclose(file);
+    return 1;
+}
+
+static int load_test_ui_interfaces(OsrsUiInterfaceStore* store) {
+    return osrs_ui_interfaces_load(store, OSRS_ASSET("ui/interfaces.bin"));
+}
+
+static void assert_rect_eq(const char* label, Rectangle actual, Rectangle expected) {
+    char part[128];
+    snprintf(part, sizeof(part), "%s x", label);
+    ASSERT_INT_EQ(part, (int)actual.x, (int)expected.x);
+    snprintf(part, sizeof(part), "%s y", label);
+    ASSERT_INT_EQ(part, (int)actual.y, (int)expected.y);
+    snprintf(part, sizeof(part), "%s width", label);
+    ASSERT_INT_EQ(part, (int)actual.width, (int)expected.width);
+    snprintf(part, sizeof(part), "%s height", label);
+    ASSERT_INT_EQ(part, (int)actual.height, (int)expected.height);
+}
+
 static void test_gui_populate_tracks_bastion_and_stamina(void) {
     printf("--- gui populate tracks inferno potion snapshots ---\n");
 
@@ -68,6 +91,327 @@ static void test_gui_populate_tracks_bastion_and_stamina(void) {
     ASSERT_INT_EQ("snapshot keeps stamina doses", gs.inv_prev_stamina_doses, 4);
     ASSERT_INT_EQ("bastion vials present", count_slots_of_type(&gs, INV_SLOT_BASTION_POT), 2);
     ASSERT_INT_EQ("stamina vial present", find_slot_of_type(&gs, INV_SLOT_STAMINA_POT) >= 0, 1);
+}
+
+static void test_inventory_slot_geometry_matches_osrs_reference(void) {
+    printf("--- inventory slot geometry matches osrs reference ---\n");
+
+    GuiState gs;
+    memset(&gs, 0, sizeof(gs));
+
+    gs.panel_x = 100;
+    gs.panel_y = 200;
+    gs.panel_w = 241;
+    gs.tab_h = 37;
+
+    int x = 0;
+    int y = 0;
+    gui_inv_slot_pos(&gs, 0, &x, &y);
+    ASSERT_INT_EQ("slot 0 x", x, 139);
+    ASSERT_INT_EQ("slot 0 y", y, 245);
+
+    gui_inv_slot_pos(&gs, 27, &x, &y);
+    ASSERT_INT_EQ("slot 27 x", x, 265);
+    ASSERT_INT_EQ("slot 27 y", y, 461);
+
+    ASSERT_INT_EQ("inventory sprite width", INV_SPRITE_W, 32);
+    ASSERT_INT_EQ("inventory sprite height", INV_SPRITE_H, 32);
+}
+
+static void test_side_panel_geometry_matches_runec_reference(void) {
+    printf("--- side panel geometry matches runec reference ---\n");
+
+    GuiState gs;
+    memset(&gs, 0, sizeof(gs));
+    gs.panel_x = 100;
+    gs.panel_y = 200;
+    gs.panel_w = 241;
+    gs.tab_h = 37;
+    gs.active_tab = GUI_TAB_COMBAT;
+
+    ASSERT_INT_EQ("inventory tab hit",
+        gui_handle_tab_click(&gs, 100 + 104 + 16, 200 + 18), 1);
+    ASSERT_INT_EQ("inventory tab selected", gs.active_tab, GUI_TAB_INVENTORY);
+    ASSERT_INT_EQ("inventory tab press starts",
+        gs.tab_press_timer[GUI_TAB_INVENTORY], GUI_TAB_PRESS_TICKS);
+    gui_tick(&gs);
+    ASSERT_INT_EQ("inventory tab press ticks",
+        gs.tab_press_timer[GUI_TAB_INVENTORY], GUI_TAB_PRESS_TICKS - 1);
+    for (int i = 0; i < GUI_TAB_PRESS_TICKS; i++) {
+        gui_tick(&gs);
+    }
+    ASSERT_INT_EQ("inventory tab press clears",
+        gs.tab_press_timer[GUI_TAB_INVENTORY], 0);
+    ASSERT_INT_EQ("spellbook tab hit",
+        gui_handle_tab_click(&gs, 100 + 203 + 16, 200 + 18), 1);
+    ASSERT_INT_EQ("spellbook tab selected", gs.active_tab, GUI_TAB_SPELLBOOK);
+    ASSERT_INT_EQ("bottom options tab is presentation only",
+        gui_handle_tab_click(&gs, 100 + 137 + 1, 200 + 298 + 1), 0);
+
+    int gx = 0;
+    int gy = 0;
+    int cell = 0;
+    int gap = 0;
+    gui_prayer_grid_metrics(&gs, &gx, &gy, &cell, &gap);
+    ASSERT_INT_EQ("prayer grid x", gx, 133);
+    ASSERT_INT_EQ("prayer grid y", gy, 245);
+    ASSERT_INT_EQ("prayer cell size", cell, 34);
+    ASSERT_INT_EQ("prayer gap", gap, 2);
+}
+
+static void test_spellbook_icon_fit_preserves_projectile_aspect(void) {
+    printf("--- spellbook icon fit preserves projectile aspect ---\n");
+
+    GuiState gs;
+    memset(&gs, 0, sizeof(gs));
+    gs.panel_x = 100;
+    gs.panel_y = 200;
+    gs.panel_w = 241;
+    gs.tab_h = 37;
+
+    int gx = 0;
+    int gy = 0;
+    int cell = 0;
+    int gap = 0;
+    gui_spell_grid_metrics(&gs, &gx, &gy, &cell, &gap);
+    ASSERT_INT_EQ("spell grid x", gx, 144);
+    ASSERT_INT_EQ("spell grid y", gy, 245);
+    ASSERT_INT_EQ("spell cell size", cell, 34);
+    ASSERT_INT_EQ("spell gap", gap, 5);
+
+    Rectangle fit = gui_texture_fit_rect(24, 24, (Rectangle){0, 0, 30, 30}, 24, 24);
+    assert_rect_eq("ancient spell fit", fit, (Rectangle){3, 3, 24, 24});
+
+    fit = gui_texture_fit_rect(40, 40, (Rectangle){0, 0, 30, 30}, 22, 22);
+    assert_rect_eq("standard spell fit", fit, (Rectangle){4, 4, 22, 22});
+
+    ASSERT_INT_EQ("ancient spellbook grid count", GUI_SPELL_GRID_COUNT, 24);
+    for (int i = 0; i < GUI_SPELL_GRID_COUNT; i++) {
+        ASSERT_INT_EQ("ancient grid excludes vengeance",
+            GUI_SPELL_GRID[i].idx != GUI_SPELL_VENGEANCE, 1);
+    }
+    ASSERT_INT_EQ("first teleport slot", GUI_SPELL_GRID[16].idx, GUI_SPELL_PADDEWWA_TELEPORT);
+    ASSERT_INT_EQ("last teleport slot", GUI_SPELL_GRID[23].idx, GUI_SPELL_GHORROCK_TELEPORT);
+    ASSERT_INT_EQ("paddewwa on sprite", gui_spell_on_sprite_id(GUI_SPELL_PADDEWWA_TELEPORT), 341);
+    ASSERT_INT_EQ("ghorrock off sprite", gui_spell_off_sprite_id(GUI_SPELL_GHORROCK_TELEPORT), 398);
+    ASSERT_INT_EQ("smoke burst is inert", gui_spell_castable(GUI_SPELL_SMOKE_BURST), 0);
+    ASSERT_INT_EQ("shadow burst is inert", gui_spell_castable(GUI_SPELL_SHADOW_BURST), 0);
+    ASSERT_INT_EQ("blood burst is castable", gui_spell_castable(GUI_SPELL_BLOOD_BURST), 1);
+    ASSERT_INT_EQ("ice burst is castable", gui_spell_castable(GUI_SPELL_ICE_BURST), 1);
+    ASSERT_INT_EQ("ancient teleport is inert", gui_spell_castable(GUI_SPELL_PADDEWWA_TELEPORT), 0);
+    ASSERT_INT_EQ("vengeance is not ancient castable", gui_spell_castable(GUI_SPELL_VENGEANCE), 0);
+}
+
+static void test_prayer_sprite_mapping_matches_player_state(void) {
+    printf("--- prayer sprite mapping matches player state ---\n");
+
+    Player p;
+    memset(&p, 0, sizeof(p));
+
+    p.prayer = PRAYER_PROTECT_MAGIC;
+    ASSERT_INT_EQ("protect magic active",
+        gui_prayer_is_active(GUI_PRAY_PROTECT_MAGIC, &p), 1);
+    ASSERT_INT_EQ("protect ranged inactive",
+        gui_prayer_is_active(GUI_PRAY_PROTECT_MISSILES, &p), 0);
+    ASSERT_INT_EQ("protect melee inactive",
+        gui_prayer_is_active(GUI_PRAY_PROTECT_MELEE, &p), 0);
+    ASSERT_INT_EQ("retribution inactive",
+        gui_prayer_is_active(GUI_PRAY_RETRIBUTION, &p), 0);
+    ASSERT_INT_EQ("redemption inactive",
+        gui_prayer_is_active(GUI_PRAY_REDEMPTION, &p), 0);
+    ASSERT_INT_EQ("smite inactive",
+        gui_prayer_is_active(GUI_PRAY_SMITE, &p), 0);
+    ASSERT_INT_EQ("protect magic on sprite",
+        gui_prayer_on_sprite_id(GUI_PRAY_PROTECT_MAGIC), 127);
+    ASSERT_INT_EQ("protect magic off sprite",
+        gui_prayer_off_sprite_id(GUI_PRAY_PROTECT_MAGIC), 147);
+    ASSERT_INT_EQ("protect ranged on sprite",
+        gui_prayer_on_sprite_id(GUI_PRAY_PROTECT_MISSILES), 128);
+    ASSERT_INT_EQ("protect melee on sprite",
+        gui_prayer_on_sprite_id(GUI_PRAY_PROTECT_MELEE), 129);
+    ASSERT_INT_EQ("smite on sprite",
+        gui_prayer_on_sprite_id(GUI_PRAY_SMITE), 132);
+    ASSERT_INT_EQ("redemption on sprite",
+        gui_prayer_on_sprite_id(GUI_PRAY_REDEMPTION), 130);
+
+    p.prayer = PRAYER_NONE;
+    p.offensive_prayer = OFFENSIVE_PRAYER_RIGOUR;
+    ASSERT_INT_EQ("rigour active", gui_prayer_is_active(GUI_PRAY_RIGOUR, &p), 1);
+    ASSERT_INT_EQ("augury inactive", gui_prayer_is_active(GUI_PRAY_AUGURY, &p), 0);
+    ASSERT_INT_EQ("rigour on sprite", gui_prayer_on_sprite_id(GUI_PRAY_RIGOUR), 1420);
+    ASSERT_INT_EQ("augury on sprite", gui_prayer_on_sprite_id(GUI_PRAY_AUGURY), 1421);
+}
+
+static void test_minimap_geometry_matches_runec_reference(void) {
+    printf("--- minimap geometry matches runec reference ---\n");
+
+    ASSERT_INT_EQ("map container width", GUI_MAP_CONTAINER_W, 211);
+    ASSERT_INT_EQ("map container height", GUI_MAP_CONTAINER_H, 207);
+    ASSERT_INT_EQ("minimap x", GUI_MINIMAP_X, 53);
+    ASSERT_INT_EQ("minimap y", GUI_MINIMAP_Y, 8);
+    ASSERT_INT_EQ("minimap width", GUI_MINIMAP_W, 152);
+    ASSERT_INT_EQ("minimap height", GUI_MINIMAP_H, 152);
+    ASSERT_INT_EQ("minimap mask center x2", (int)(GUI_MINIMAP_MASK_CENTER * 2.0f), 151);
+    ASSERT_INT_EQ("minimap mask radius", (int)GUI_MINIMAP_MASK_RADIUS, 76);
+    ASSERT_INT_EQ("compass x", GUI_COMPASS_X, 34);
+    ASSERT_INT_EQ("compass y", GUI_COMPASS_Y, 5);
+    ASSERT_INT_EQ("xp orb x", GUI_ORBS_X + GUI_XP_X, 0);
+    ASSERT_INT_EQ("xp orb y", GUI_ORBS_Y + GUI_XP_Y, 27);
+    ASSERT_INT_EQ("hp orb x", GUI_ORBS_X + GUI_HP_X, 0);
+    ASSERT_INT_EQ("hp orb y", GUI_ORBS_Y + GUI_HP_Y, 47);
+    ASSERT_INT_EQ("prayer orb x", GUI_ORBS_X + GUI_PRAYER_X, 0);
+    ASSERT_INT_EQ("prayer orb y", GUI_ORBS_Y + GUI_PRAYER_Y, 81);
+    ASSERT_INT_EQ("run orb x", GUI_ORBS_X + GUI_RUN_X, 10);
+    ASSERT_INT_EQ("run orb y", GUI_ORBS_Y + GUI_RUN_Y, 113);
+    ASSERT_INT_EQ("spec orb x", GUI_ORBS_X + GUI_SPEC_X, 32);
+    ASSERT_INT_EQ("spec orb y", GUI_ORBS_Y + GUI_SPEC_Y, 138);
+    ASSERT_INT_EQ("worldmap x", GUI_ORBS_X + GUI_WORLDMAP_X, 177);
+    ASSERT_INT_EQ("worldmap y", GUI_ORBS_Y + GUI_WORLDMAP_Y, 147);
+}
+
+static void test_spellbook_tab_uses_ancient_icon(void) {
+    printf("--- spellbook tab uses ancient icon ---\n");
+
+    int count = (int)(sizeof(GUI_SIDE_STONES) / sizeof(GUI_SIDE_STONES[0]));
+    const GuiSideStoneRef* spellbook = NULL;
+    for (int i = 0; i < count; i++) {
+        if (GUI_SIDE_STONES[i].logical_tab == GUI_TAB_SPELLBOOK) {
+            spellbook = &GUI_SIDE_STONES[i];
+            break;
+        }
+    }
+
+    ASSERT_INT_EQ("spellbook tab ref exists", spellbook != NULL, 1);
+    ASSERT_INT_EQ("spellbook tab ancient icon",
+        strcmp(spellbook->icon_asset, "side_icon_magic_ancient"), 0);
+    ASSERT_INT_EQ("standard spellbook icon remains available",
+        file_exists("ocean/osrs/data/sprites/gui/side_icon_magic.png"), 1);
+    ASSERT_INT_EQ("ancient spellbook icon exists",
+        file_exists("ocean/osrs/data/sprites/gui/side_icon_magic_ancient.png"), 1);
+}
+
+static void test_human_combat_clicks_use_runec_geometry(void) {
+    printf("--- human combat clicks use runec geometry ---\n");
+
+    GuiState gs;
+    Player p;
+    HumanInput hi;
+    memset(&gs, 0, sizeof(gs));
+    memset(&p, 0, sizeof(p));
+    human_input_init(&hi);
+
+    gs.panel_x = 100;
+    gs.panel_y = 200;
+    gs.panel_w = 241;
+    gs.tab_h = 37;
+    p.equipped[GEAR_SLOT_WEAPON] = ITEM_TWISTED_BOW;
+
+    human_handle_combat_click(&hi, &gs, &p, 100 + 25 + 102 + 1, 200 + 37 + 46 + 1);
+    ASSERT_INT_EQ("ranged rapid style selected", p.fight_style, FIGHT_STYLE_RAPID);
+
+    human_handle_combat_click(&hi, &gs, &p, 100 + 25 + 20 + 1, 200 + 37 + 200 + 1);
+    ASSERT_INT_EQ("spec click queued", hi.pending_spec, 1);
+
+    p.equipped[GEAR_SLOT_WEAPON] = ITEM_KODAI_WAND;
+    human_handle_combat_click(&hi, &gs, &p, 100 + 25 + 20 + 1, 200 + 37 + 153 + 1);
+    ASSERT_INT_EQ("autocast selector opens", gs.autocast_selector_open, 1);
+    human_handle_combat_click(&hi, &gs, &p, 100 + 25 + 100 + 1, 200 + 37 + 182 + 1);
+    ASSERT_INT_EQ("ice autocast selected", p.autocast_spell, ENCOUNTER_SPELL_ICE);
+    ASSERT_INT_EQ("autocast selector closes", gs.autocast_selector_open, 0);
+
+    human_input_destroy(&hi);
+}
+
+static void test_human_prayer_clicks_match_prayer_grid(void) {
+    printf("--- human prayer clicks match prayer grid ---\n");
+
+    GuiState gs;
+    Player p;
+    HumanInput hi;
+    memset(&gs, 0, sizeof(gs));
+    memset(&p, 0, sizeof(p));
+    human_input_init(&hi);
+
+    gs.panel_x = 100;
+    gs.panel_y = 200;
+    gs.panel_w = 241;
+    gs.tab_h = 37;
+
+    int gx = 0;
+    int gy = 0;
+    int cell = 0;
+    int gap = 0;
+    gui_prayer_grid_metrics(&gs, &gx, &gy, &cell, &gap);
+
+    int idx = GUI_PRAY_PROTECT_MAGIC;
+    int col = idx % GUI_PRAYER_GRID_COLS;
+    int row = idx / GUI_PRAYER_GRID_COLS;
+    int x = gx + col * (cell + gap) + 1;
+    int y = gy + row * (cell + gap) + 1;
+
+    human_handle_prayer_click(&hi, &gs, &p, x, y);
+    ASSERT_INT_EQ("protect magic click queues set",
+        hi.pending_prayer, ENCOUNTER_OVERHEAD_SET_REFRESH_MAGIC);
+    ASSERT_INT_EQ("protect magic command kind",
+        hi.commands.items[0].kind, HUMAN_COMMAND_OVERHEAD_PRAYER);
+    ASSERT_INT_EQ("protect magic command queued",
+        hi.commands.items[0].overhead_prayer, ENCOUNTER_OVERHEAD_SET_REFRESH_MAGIC);
+
+    p.prayer = PRAYER_PROTECT_MAGIC;
+    human_handle_prayer_click(&hi, &gs, &p, x, y);
+    ASSERT_INT_EQ("protect magic active click queues off",
+        hi.pending_prayer, ENCOUNTER_OVERHEAD_OFF);
+    ASSERT_INT_EQ("second prayer command queued", hi.commands.count, 2);
+    ASSERT_INT_EQ("second command is off",
+        hi.commands.items[1].overhead_prayer, ENCOUNTER_OVERHEAD_OFF);
+
+    human_input_destroy(&hi);
+}
+
+static void test_human_spell_clicks_match_ancient_grid(void) {
+    printf("--- human spell clicks match ancient grid ---\n");
+
+    GuiState gs;
+    HumanInput hi;
+    memset(&gs, 0, sizeof(gs));
+    human_input_init(&hi);
+
+    gs.panel_x = 100;
+    gs.panel_y = 200;
+    gs.panel_w = 241;
+    gs.tab_h = 37;
+
+    int gx = 0;
+    int gy = 0;
+    int cell = 0;
+    int gap = 0;
+    gui_spell_grid_metrics(&gs, &gx, &gy, &cell, &gap);
+
+    int blood_burst = 6;
+    int blood_x = gx + (blood_burst % GUI_SPELL_GRID_COLS) * (cell + gap) + 1;
+    int blood_y = gy + (blood_burst / GUI_SPELL_GRID_COLS) * (cell + gap) + 1;
+    human_handle_spell_click(&hi, &gs, blood_x, blood_y);
+    ASSERT_INT_EQ("blood spell selects target cursor", hi.cursor_mode, CURSOR_SPELL_TARGET);
+    ASSERT_INT_EQ("blood spell selects blood attack", hi.selected_spell, ATTACK_BLOOD);
+    ASSERT_INT_EQ("blood spell highlight records exact cell",
+        hi.selected_spell_gui_idx, GUI_SPELL_BLOOD_BURST);
+
+    hi.cursor_mode = CURSOR_NORMAL;
+    hi.selected_spell = 0;
+    hi.selected_spell_gui_idx = -1;
+    int smoke_burst = 4;
+    int smoke_x = gx + (smoke_burst % GUI_SPELL_GRID_COLS) * (cell + gap) + 1;
+    int smoke_y = gy + (smoke_burst / GUI_SPELL_GRID_COLS) * (cell + gap) + 1;
+    human_handle_spell_click(&hi, &gs, smoke_x, smoke_y);
+    ASSERT_INT_EQ("smoke spell stays inert", hi.cursor_mode, CURSOR_NORMAL);
+
+    int paddewwa = 16;
+    int paddewwa_x = gx + (paddewwa % GUI_SPELL_GRID_COLS) * (cell + gap) + 1;
+    int paddewwa_y = gy + (paddewwa / GUI_SPELL_GRID_COLS) * (cell + gap) + 1;
+    human_handle_spell_click(&hi, &gs, paddewwa_x, paddewwa_y);
+    ASSERT_INT_EQ("ancient teleport stays inert", hi.cursor_mode, CURSOR_NORMAL);
+
+    human_input_destroy(&hi);
 }
 
 static void test_gui_update_tracks_bastion_and_stamina(void) {
@@ -220,13 +564,166 @@ static void test_human_equipment_click_queues_without_mutating_player(void) {
     human_input_destroy(&hi);
 }
 
+static void test_budget_item_labels_and_sprites_resolve(void) {
+    printf("--- budget item labels and sprites resolve ---\n");
+
+    ASSERT_INT_EQ("dragon hunter wand label",
+        strcmp(gui_item_short_name(ITEM_DRAGON_HUNTER_WAND), "DH wand"), 0);
+    ASSERT_INT_EQ("echo boots label",
+        strcmp(gui_item_short_name(ITEM_ECHO_BOOTS), "Echo boots"), 0);
+    ASSERT_INT_EQ("dragon hunter wand sprite exists",
+        file_exists(OSRS_ASSET("sprites/items/30070.png")), 1);
+    ASSERT_INT_EQ("echo boots sprite exists",
+        file_exists(OSRS_ASSET("sprites/items/28945.png")), 1);
+}
+
+static void test_runec_ui_asset_aliases_exist(void) {
+    printf("--- runec ui asset aliases exist ---\n");
+
+    ASSERT_INT_EQ("side background alias exists",
+        file_exists(OSRS_ASSET("sprites/gui/tradebacking_dark.png")), 1);
+    ASSERT_INT_EQ("top tab strip alias exists",
+        file_exists(OSRS_ASSET("sprites/gui/osrs_stretch_side_topbottom_0.png")), 1);
+    ASSERT_INT_EQ("inventory tab icon alias exists",
+        file_exists(OSRS_ASSET("sprites/gui/side_icon_inventory.png")), 1);
+    ASSERT_INT_EQ("ancient magic tab icon alias exists",
+        file_exists(OSRS_ASSET("sprites/gui/side_icon_magic_ancient.png")), 1);
+    ASSERT_INT_EQ("combat button alias exists",
+        file_exists(OSRS_ASSET("sprites/gui/combatboxes_0.png")), 1);
+    ASSERT_INT_EQ("worn equipment icon alias exists",
+        file_exists(OSRS_ASSET("sprites/gui/wornicons_11.png")), 1);
+    ASSERT_INT_EQ("skill icon alias exists",
+        file_exists(OSRS_ASSET("sprites/gui/skill_icon_23.png")), 1);
+    ASSERT_INT_EQ("prayer icon alias exists",
+        file_exists(OSRS_ASSET("sprites/gui/prayeron_24.png")), 1);
+    ASSERT_INT_EQ("magic icon alias exists",
+        file_exists(OSRS_ASSET("sprites/gui/magicon_47.png")), 1);
+    ASSERT_INT_EQ("standard spell icon alias exists",
+        file_exists(OSRS_ASSET("sprites/gui/standard_spell_on_79.png")), 1);
+    ASSERT_INT_EQ("ancient ice barrage icon exists",
+        file_exists(OSRS_ASSET("sprites/gui/328.png")), 1);
+    ASSERT_INT_EQ("ancient ghorrock teleport icon exists",
+        file_exists(OSRS_ASSET("sprites/gui/348.png")), 1);
+    ASSERT_INT_EQ("ancient ghorrock teleport disabled icon exists",
+        file_exists(OSRS_ASSET("sprites/gui/398.png")), 1);
+    ASSERT_INT_EQ("minimap surround alias exists",
+        file_exists(OSRS_ASSET("sprites/gui/osrs_stretch_mapsurround.png")), 1);
+    ASSERT_INT_EQ("compass alias exists",
+        file_exists(OSRS_ASSET("sprites/gui/compass.png")), 1);
+}
+
+static void test_decoded_runec_ui_interfaces_resolve(void) {
+    printf("--- decoded runec ui interfaces resolve ---\n");
+
+    OsrsUiInterfaceStore store;
+    memset(&store, 0, sizeof(store));
+
+    ASSERT_INT_EQ("ui interface binary exists", file_exists(OSRS_ASSET("ui/interfaces.bin")), 1);
+    ASSERT_INT_EQ("ui interface binary loads", load_test_ui_interfaces(&store), 1);
+    ASSERT_INT_EQ("wornitems group exists",
+        osrs_ui_interface_group(&store, "wornitems") != NULL, 1);
+    ASSERT_INT_EQ("combat interface group exists",
+        osrs_ui_interface_group(&store, "combat_interface") != NULL, 1);
+    ASSERT_INT_EQ("stats group exists",
+        osrs_ui_interface_group(&store, "stats") != NULL, 1);
+
+    Rectangle mount = {125, 237, 190, 261};
+    Rectangle rect = {0};
+    ASSERT_INT_EQ("worn slot0 rect resolves",
+        osrs_ui_interfaces_component_rect(&store, "wornitems", "slot0", mount, &rect), 1);
+    assert_rect_eq("worn slot0 rect", rect, (Rectangle){202, 241, 36, 36});
+
+    ASSERT_INT_EQ("worn ammo rect resolves",
+        osrs_ui_interfaces_component_rect(&store, "wornitems", "slot13", mount, &rect), 1);
+    assert_rect_eq("worn ammo rect", rect, (Rectangle){243, 280, 36, 36});
+
+    ASSERT_INT_EQ("combat rapid rect resolves",
+        osrs_ui_interfaces_component_rect(&store, "combat_interface", "1", mount, &rect), 1);
+    assert_rect_eq("combat rapid rect", rect, (Rectangle){227, 283, 68, 47});
+
+    ASSERT_INT_EQ("stats attack rect resolves",
+        osrs_ui_interfaces_component_rect(&store, "stats", "attack", mount, &rect), 1);
+    assert_rect_eq("stats attack rect", rect, (Rectangle){126, 238, 62, 30});
+
+    ASSERT_INT_EQ("stats total rect resolves",
+        osrs_ui_interfaces_component_rect(&store, "stats", "total", mount, &rect), 1);
+    assert_rect_eq("stats total rect", rect, (Rectangle){125, 478, 190, 19});
+
+    OsrsUiHitResult hit;
+    memset(&hit, 0, sizeof(hit));
+    ASSERT_INT_EQ("worn slot0 hit resolves",
+        osrs_ui_interfaces_hit_test(
+            &store,
+            "wornitems",
+            mount,
+            (Vector2){203, 242},
+            &hit),
+        1);
+    ASSERT_INT_EQ("worn slot0 hit component", strcmp(hit.name, "slot0"), 0);
+    ASSERT_INT_EQ("worn slot0 hit file id", hit.file_id, 15);
+
+    osrs_ui_interfaces_unload(&store);
+}
+
+static void test_gui_uses_decoded_runec_panel_rects(void) {
+    printf("--- gui uses decoded runec panel rects ---\n");
+
+    GuiState gs;
+    memset(&gs, 0, sizeof(gs));
+    gs.panel_x = 100;
+    gs.panel_y = 200;
+    gs.panel_w = 241;
+    gs.tab_h = 37;
+
+    ASSERT_INT_EQ("ui interface binary loads on gui state", load_test_ui_interfaces(&gs.ui_interfaces), 1);
+
+    Rectangle ammo = gui_side_component_rect(
+        &gs,
+        "wornitems",
+        "slot13",
+        (Rectangle){133, 43, 36, 36});
+    assert_rect_eq("decoded ammo rect", ammo, (Rectangle){243, 280, 36, 36});
+
+    Rectangle rapid = gui_combat_style_rect(&gs, 1);
+    assert_rect_eq("decoded combat rapid rect", rapid, (Rectangle){227, 283, 68, 47});
+
+    Rectangle attack = gui_side_component_rect(
+        &gs,
+        "stats",
+        "attack",
+        (Rectangle){1, 1, 62, 30});
+    assert_rect_eq("decoded stats attack rect", attack, (Rectangle){126, 238, 62, 30});
+
+    Rectangle sailing = gui_side_component_rect(
+        &gs,
+        "stats",
+        "sailing",
+        (Rectangle){127, 211, 62, 32});
+    assert_rect_eq("decoded stats sailing rect", sailing, (Rectangle){252, 448, 62, 32});
+
+    osrs_ui_interfaces_unload(&gs.ui_interfaces);
+}
+
 int main(void) {
     test_gui_populate_tracks_bastion_and_stamina();
+    test_inventory_slot_geometry_matches_osrs_reference();
+    test_side_panel_geometry_matches_runec_reference();
+    test_spellbook_icon_fit_preserves_projectile_aspect();
+    test_prayer_sprite_mapping_matches_player_state();
+    test_minimap_geometry_matches_runec_reference();
+    test_spellbook_tab_uses_ancient_icon();
+    test_human_combat_clicks_use_runec_geometry();
+    test_human_prayer_clicks_match_prayer_grid();
+    test_human_spell_clicks_match_ancient_grid();
     test_gui_update_tracks_bastion_and_stamina();
     test_gui_reset_helper_clears_inventory_interaction_state();
     test_gui_reset_rebuild_restores_potions();
     test_gui_populate_late_start_inferno_supplies();
     test_human_equipment_click_queues_without_mutating_player();
+    test_budget_item_labels_and_sprites_resolve();
+    test_runec_ui_asset_aliases_exist();
+    test_decoded_runec_ui_interfaces_resolve();
+    test_gui_uses_decoded_runec_panel_rects();
 
     printf("\n%d/%d tests passed", tests_passed, tests_run);
     if (tests_failed > 0) {

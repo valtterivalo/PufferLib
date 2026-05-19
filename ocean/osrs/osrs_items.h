@@ -40,6 +40,9 @@ typedef enum {
     OSRS_ITEM_EFFECT_LIGHTBEARER = 1u << 5,
     OSRS_ITEM_EFFECT_DHAROK_PIECE = 1u << 6,
     OSRS_ITEM_EFFECT_ELYSIAN = 1u << 7,
+    OSRS_ITEM_EFFECT_CRYSTAL_ARMOUR = 1u << 8,
+    OSRS_ITEM_EFFECT_DRAGON_HUNTER_WAND = 1u << 9,
+    OSRS_ITEM_EFFECT_ECHO_BOOTS = 1u << 10,
 } OsrsItemEffectMask;
 
 typedef struct {
@@ -126,6 +129,10 @@ static inline const Item* get_item(uint8_t item_index) {
     return &ITEM_DATABASE[item_index];
 }
 
+static inline int item_supports_ancient_autocast(uint8_t item_index) {
+    return item_index == ITEM_KODAI_WAND || item_index == ITEM_DRAGON_HUNTER_WAND;
+}
+
 /** Check if item is a weapon. */
 static inline int item_is_weapon(uint8_t item_index) {
     if (item_index >= NUM_ITEMS) return 0;
@@ -171,6 +178,7 @@ static inline int get_item_attack_style(uint8_t item_index) {
         case ITEM_AHRIM_STAFF:
         case ITEM_STAFF_OF_DEAD:
         case ITEM_KODAI_WAND:
+        case ITEM_DRAGON_HUNTER_WAND:
         case ITEM_VOLATILE_STAFF:
         case ITEM_ZURIELS_STAFF:
         case ITEM_TRIDENT_OF_SWAMP:

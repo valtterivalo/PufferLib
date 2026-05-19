@@ -25,6 +25,8 @@ static double now_seconds(void) {
 }
 
 static void init_bench_state(InfernoState* state, int player_x, int player_y) {
+    inf_legacy_context()->config = inf_default_config();
+    inf_legacy_context()->config.step_out_forecast_obs_enabled = 1;
     inf_build_npc_stats();
     memset(state, 0, sizeof(*state));
     memset(state->npc_los_cache, -1, sizeof(state->npc_los_cache));
@@ -42,8 +44,7 @@ static void init_bench_state(InfernoState* state, int player_x, int player_y) {
     state->player_last_interaction_age = 1;
     state->player_dest_x = -1;
     state->player_dest_y = -1;
-    state->step_out_forecast_obs_enabled = 1;
-    state->weapon_set = INF_GEAR_TBOW;
+    state->weapon_set = INF_GEAR_LONG_RANGE;
     osrs_interaction_init(&state->interaction);
     for (int p = 0; p < INF_NUM_PILLARS; p++) {
         state->pillars[p].x = INF_PILLAR_POS[p][0];
@@ -92,12 +93,12 @@ static void init_dense_wave_state(InfernoState* state) {
 
 static void init_pillar_stack_no_forecast_state(InfernoState* state) {
     init_pillar_stack_state(state);
-    state->step_out_forecast_obs_enabled = 0;
+    inf_legacy_context()->config.step_out_forecast_obs_enabled = 0;
 }
 
 static void init_dense_wave_no_forecast_state(InfernoState* state) {
     init_dense_wave_state(state);
-    state->step_out_forecast_obs_enabled = 0;
+    inf_legacy_context()->config.step_out_forecast_obs_enabled = 0;
 }
 
 typedef void (*BenchInit)(InfernoState*);

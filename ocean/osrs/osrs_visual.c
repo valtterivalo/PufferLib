@@ -11,6 +11,7 @@
 #include <string.h>
 #include <time.h>
 #include "osrs_env.h"
+#include "osrs_assets.h"
 #include "osrs_encounter.h"
 #include "osrs_binary_io.h"
 #include "encounters/encounter_nh_pvp.h"
@@ -107,6 +108,28 @@ static void benchmark(OsrsEnv* env, int num_steps) {
     printf("  Avg episode length: %.1f ticks\n", (float)total_steps / episodes);
 }
 
+static EncounterContext* visual_create_encounter_context(const EncounterDef* edef) {
+    if (!edef || edef->context_size == 0)
+        return NULL;
+    EncounterContext* context = (EncounterContext*)calloc(1, edef->context_size);
+    if (!context) abort();
+    if (edef->init_context)
+        edef->init_context(context);
+    return context;
+}
+
+static void visual_destroy_encounter_context(
+    const EncounterDef* edef,
+    EncounterContext** context
+) {
+    if (!context || !*context)
+        return;
+    if (edef && edef->destroy_context)
+        edef->destroy_context(*context);
+    free(*context);
+    *context = NULL;
+}
+
 static void run_profile(OsrsEnv* env, const char* encounter_name) {
     printf("Profiling %s for 10 seconds...\n", encounter_name ? encounter_name : "pvp");
 
@@ -118,25 +141,32 @@ static void run_profile(OsrsEnv* env, const char* encounter_name) {
         }
         env->encounter_def = (void*)edef;
         env->encounter_state = edef->create();
+        env->encounter_context = visual_create_encounter_context(edef);
 
         if (strcmp(encounter_name, "zulrah") == 0) {
-            CollisionMap* cmap = collision_map_load("data/zulrah.cmap");
+            CollisionMap* cmap = collision_map_load(OSRS_ASSET("zulrah.cmap"));
             if (cmap) {
-                edef->put_ptr(env->encounter_state, "collision_map", cmap);
-                edef->put_int(env->encounter_state, "world_offset_x", 2256);
-                edef->put_int(env->encounter_state, "world_offset_y", 3061);
+                edef->put_ptr(
+                    env->encounter_state, env->encounter_context, "collision_map", cmap);
+                edef->put_int(
+                    env->encounter_state, env->encounter_context, "world_offset_x", 2256);
+                edef->put_int(
+                    env->encounter_state, env->encounter_context, "world_offset_y", 3061);
                 env->collision_map = cmap;
             }
         } else if (strcmp(encounter_name, "inferno") == 0) {
-            CollisionMap* cmap = collision_map_load("data/inferno.cmap");
+            CollisionMap* cmap = collision_map_load(OSRS_ASSET("inferno.cmap"));
             if (cmap) {
-                edef->put_ptr(env->encounter_state, "collision_map", cmap);
-                edef->put_int(env->encounter_state, "world_offset_x", 2246);
-                edef->put_int(env->encounter_state, "world_offset_y", 5315);
+                edef->put_ptr(
+                    env->encounter_state, env->encounter_context, "collision_map", cmap);
+                edef->put_int(
+                    env->encounter_state, env->encounter_context, "world_offset_x", 2246);
+                edef->put_int(
+                    env->encounter_state, env->encounter_context, "world_offset_y", 5315);
                 env->collision_map = cmap;
             }
         }
-        edef->reset(env->encounter_state, 0);
+        edef->reset(env->encounter_state, env->encounter_context, 0);
     } else {
         env->pvp_runtime.use_c_opponent = 1;
         env->pvp_runtime.opponent.type = OPP_IMPROVED;
@@ -155,9 +185,10 @@ static void run_profile(OsrsEnv* env, const char* encounter_name) {
             for (int h = 0; h < edef->num_action_heads; h++) {
                 enc_actions[h] = rand() % edef->action_head_dims[h];
             }
-            edef->step(env->encounter_state, enc_actions);
-            if (edef->is_terminal(env->encounter_state)) {
-                edef->reset(env->encounter_state, (uint32_t)rand());
+            edef->step(env->encounter_state, env->encounter_context, enc_actions);
+            if (edef->is_terminal(env->encounter_state, env->encounter_context)) {
+                edef->reset(
+                    env->encounter_state, env->encounter_context, (uint32_t)rand());
             }
         } else {
             for (int agent = 0; agent < NUM_AGENTS; agent++) {
@@ -187,6 +218,9 @@ static void run_profile(OsrsEnv* env, const char* encounter_name) {
     if (env->encounter_def && env->encounter_state) {
         ((const EncounterDef*)env->encounter_def)->destroy(env->encounter_state);
         env->encounter_state = NULL;
+        visual_destroy_encounter_context(
+            (const EncounterDef*)env->encounter_def,
+            (EncounterContext**)&env->encounter_context);
     }
 }
 
@@ -288,7 +322,9 @@ static void visual_frame(void* arg) {
             vs->episode_ended = 0;
             if (env->encounter_def) {
                 ((const EncounterDef*)env->encounter_def)->reset(
-                    env->encounter_state, (uint32_t)rand());
+                    env->encounter_state,
+                    (EncounterContext*)env->encounter_context,
+                    (uint32_t)rand());
             } else {
                 pvp_reset(env);
             }
@@ -325,24 +361,40 @@ static void visual_frame(void* arg) {
         int used_human_step = 0;
 
         if (rc->human_input.enabled && edef->step_human_commands) {
-            edef->step_human_commands(env->encounter_state, &rc->human_input);
+            edef->step_human_commands(
+                env->encounter_state,
+                (EncounterContext*)env->encounter_context,
+                &rc->human_input);
             used_human_step = 1;
         } else if (rc->human_input.enabled) {
             /* human control: per-encounter translator */
             if (edef->translate_human_input)
                 edef->translate_human_input(&rc->human_input, enc_actions,
-                                            env->encounter_state);
+                                            env->encounter_state,
+                                            (EncounterContext*)env->encounter_context);
             /* set encounter destination from human click for proper pathfinding.
                attacking an NPC cancels movement (OSRS: server stops walking
                to old dest and auto-walks toward target instead). */
             if (rc->human_input.pending_move_x >= 0 && edef->put_int) {
-                edef->put_int(env->encounter_state, "player_dest_x",
+                edef->put_int(env->encounter_state,
+                              (EncounterContext*)env->encounter_context,
+                              "player_dest_x",
                               rc->human_input.pending_move_x);
-                edef->put_int(env->encounter_state, "player_dest_y",
+                edef->put_int(env->encounter_state,
+                              (EncounterContext*)env->encounter_context,
+                              "player_dest_y",
                               rc->human_input.pending_move_y);
             } else if (rc->human_input.pending_attack && edef->put_int) {
-                edef->put_int(env->encounter_state, "player_dest_x", -1);
-                edef->put_int(env->encounter_state, "player_dest_y", -1);
+                edef->put_int(
+                    env->encounter_state,
+                    (EncounterContext*)env->encounter_context,
+                    "player_dest_x",
+                    -1);
+                edef->put_int(
+                    env->encounter_state,
+                    (EncounterContext*)env->encounter_context,
+                    "player_dest_y",
+                    -1);
             }
             human_input_clear_pending(&rc->human_input);
         } else if (vs->replay && replay_get_actions(vs->replay, enc_actions)) {
@@ -355,13 +407,18 @@ static void visual_frame(void* arg) {
             }
         }
         if (!used_human_step)
-            edef->step(env->encounter_state, enc_actions);
+            edef->step(
+                env->encounter_state,
+                (EncounterContext*)env->encounter_context,
+                enc_actions);
         /* sync env->tick so renderer HP bars/splats use correct tick */
-        env->tick = edef->get_tick(env->encounter_state);
+        env->tick = edef->get_tick(
+            env->encounter_state, (EncounterContext*)env->encounter_context);
 
         /* clear human move when player arrived at clicked destination */
         if (rc->human_input.enabled && rc->human_input.pending_move_x >= 0) {
-            Player* ply = edef->get_entity(env->encounter_state, 0);
+            Player* ply = edef->get_entity(
+                env->encounter_state, (EncounterContext*)env->encounter_context, 0);
             if (ply && ply->x == rc->human_input.pending_move_x &&
                 ply->y == rc->human_input.pending_move_y) {
                 human_input_clear_move(&rc->human_input);
@@ -406,7 +463,8 @@ static void visual_frame(void* arg) {
 
     /* auto-reset on episode end */
     int is_over = env->encounter_def
-        ? ((const EncounterDef*)env->encounter_def)->is_terminal(env->encounter_state)
+        ? ((const EncounterDef*)env->encounter_def)->is_terminal(
+            env->encounter_state, (EncounterContext*)env->encounter_context)
         : env->episode_over;
     if (is_over) {
         vs->episode_ended = 1;
@@ -426,6 +484,7 @@ static void run_visual(OsrsEnv* env, const char* encounter_name, const char* rep
         }
         env->encounter_def = (void*)edef;
         env->encounter_state = edef->create();
+        env->encounter_context = visual_create_encounter_context(edef);
         /* seed=0 matches training binding (uses default RNG, not explicit seed) */
 
         /* load encounter-specific collision map.
@@ -433,30 +492,41 @@ static void run_visual(OsrsEnv* env, const char* encounter_name, const char* rep
            the Zulrah island collision data has ~69 walkable tiles forming the
            irregular island shape (narrow south, wide north, pillar alcoves). */
         if (strcmp(encounter_name, "zulrah") == 0) {
-            CollisionMap* cmap = collision_map_load("data/zulrah.cmap");
+            CollisionMap* cmap = collision_map_load(OSRS_ASSET("zulrah.cmap"));
             if (cmap) {
-                edef->put_ptr(env->encounter_state, "collision_map", cmap);
-                edef->put_int(env->encounter_state, "world_offset_x", 2256);
-                edef->put_int(env->encounter_state, "world_offset_y", 3061);
+                edef->put_ptr(
+                    env->encounter_state, env->encounter_context, "collision_map", cmap);
+                edef->put_int(
+                    env->encounter_state, env->encounter_context, "world_offset_x", 2256);
+                edef->put_int(
+                    env->encounter_state, env->encounter_context, "world_offset_y", 3061);
                 env->collision_map = cmap;
                 fprintf(stderr, "zulrah collision map: %d regions, offset (2256, 3061)\n",
                         cmap->count);
             }
         } else if (strcmp(encounter_name, "inferno") == 0) {
-            CollisionMap* cmap = collision_map_load("data/inferno.cmap");
+            CollisionMap* cmap = collision_map_load(OSRS_ASSET("inferno.cmap"));
             if (cmap) {
-                edef->put_ptr(env->encounter_state, "collision_map", cmap);
-                edef->put_int(env->encounter_state, "world_offset_x", 2246);
-                edef->put_int(env->encounter_state, "world_offset_y", 5315);
+                edef->put_ptr(
+                    env->encounter_state, env->encounter_context, "collision_map", cmap);
+                edef->put_int(
+                    env->encounter_state, env->encounter_context, "world_offset_x", 2246);
+                edef->put_int(
+                    env->encounter_state, env->encounter_context, "world_offset_y", 5315);
                 env->collision_map = cmap;
                 fprintf(stderr, "inferno collision map: %d regions, offset (2246, 5315)\n",
                         cmap->count);
             }
         }
 
-        if (start_wave >= 0 && edef->put_int)
-            edef->put_int(env->encounter_state, "start_wave", start_wave);
-        edef->reset(env->encounter_state, 0);
+        if (start_wave >= 0 && edef->put_int) {
+            edef->put_int(
+                env->encounter_state,
+                env->encounter_context,
+                "start_wave",
+                start_wave);
+        }
+        edef->reset(env->encounter_state, env->encounter_context, 0);
         fprintf(stderr, "encounter: %s (obs=%d, heads=%d)%s\n",
                 edef->name, edef->obs_size, edef->num_action_heads,
                 start_wave >= 0 ? "" : "");
@@ -489,20 +559,21 @@ static void run_visual(OsrsEnv* env, const char* encounter_name, const char* rep
     }
 
     /* load 3D assets if available */
-    rc->model_cache = model_cache_load("data/equipment.models");
+    rc->model_cache = model_cache_load(OSRS_ASSET("equipment.models"));
     if (rc->model_cache) {
         rc->show_models = 1;
     }
-    rc->anim_cache = anim_cache_load("data/equipment.anims");
+    rc->anim_cache = anim_cache_load(OSRS_ASSET("equipment.anims"));
+    render_load_projectile_assets(rc);
     render_init_overlay_models(rc);
     /* load terrain/objects per encounter */
     if (!encounter_name) {
-        rc->terrain = terrain_load("data/wilderness.terrain");
-        rc->objects = objects_load("data/wilderness.objects");
-        rc->npcs = objects_load("data/wilderness.npcs");
+        rc->terrain = terrain_load(OSRS_ASSET("wilderness.terrain"));
+        rc->objects = objects_load(OSRS_ASSET("wilderness.objects"));
+        rc->npcs = objects_load(OSRS_ASSET("wilderness.npcs"));
     } else if (strcmp(encounter_name, "zulrah") == 0) {
-        rc->terrain = terrain_load("data/zulrah.terrain");
-        rc->objects = objects_load("data/zulrah.objects");
+        rc->terrain = terrain_load(OSRS_ASSET("zulrah.terrain"));
+        rc->objects = objects_load(OSRS_ASSET("zulrah.objects"));
 
         /* Zulrah coordinate alignment: three coordinate spaces are in play:
 
@@ -535,15 +606,15 @@ static void run_visual(OsrsEnv* env, const char* encounter_name, const char* rep
         rc->collision_world_offset_x = 2256;
         rc->collision_world_offset_y = 3061;
 
-        rc->npc_model_cache = model_cache_load("data/zulrah.models");
-        rc->npc_anim_cache = anim_cache_load("data/zulrah.anims");
+        rc->npc_model_cache = model_cache_load(OSRS_ASSET("zulrah.models"));
+        rc->npc_anim_cache = anim_cache_load(OSRS_ASSET("zulrah.anims"));
         fprintf(stderr, "zulrah: npc_models=%d, npc_anims=%d seqs\n",
                 rc->npc_model_cache ? rc->npc_model_cache->count : 0,
                 rc->npc_anim_cache ? rc->npc_anim_cache->seq_count : 0);
     } else if (encounter_name && strcmp(encounter_name, "inferno") == 0) {
-        rc->terrain = terrain_load("data/inferno.terrain");
-        rc->objects = objects_load("data/inferno.objects");
-        rc->objects_zuk = objects_load("data/inferno_zuk.objects");
+        rc->terrain = terrain_load(OSRS_ASSET("inferno.terrain"));
+        rc->objects = objects_load(OSRS_ASSET("inferno.objects"));
+        rc->objects_zuk = objects_load(OSRS_ASSET("inferno_zuk.objects"));
         /* inferno region (35,83) starts at world (2240, 5312).
            encounter uses region-local coords (10-40, 13-44).
            offset terrain/objects so local coord 0 maps to world 2240. */
@@ -554,8 +625,8 @@ static void run_visual(OsrsEnv* env, const char* encounter_name, const char* rep
         if (rc->objects_zuk)
             objects_offset(rc->objects_zuk, 2246, 5315);
 
-        rc->npc_model_cache = model_cache_load("data/inferno.models");
-        rc->npc_anim_cache = anim_cache_load("data/inferno.anims");
+        rc->npc_model_cache = model_cache_load(OSRS_ASSET("inferno.models"));
+        rc->npc_anim_cache = anim_cache_load(OSRS_ASSET("inferno.anims"));
 
         /* collision map for debug overlay (C key) */
         if (env->collision_map) {
@@ -593,8 +664,12 @@ static void run_visual(OsrsEnv* env, const char* encounter_name, const char* rep
         replay = replay_load(replay_path, edef->num_action_heads);
         /* restore RNG state from replay so sim matches training exactly */
         if (replay && edef->put_int) {
-            edef->reset(env->encounter_state, 0);
-            edef->put_int(env->encounter_state, "seed", (int)replay->rng_seed);
+            edef->reset(env->encounter_state, env->encounter_context, 0);
+            edef->put_int(
+                env->encounter_state,
+                env->encounter_context,
+                "seed",
+                (int)replay->rng_seed);
             render_populate_entities(rc, env);
             for (int i = 0; i < rc->entity_count; i++) {
                 int size = rc->entities[i].npc_size > 1 ? rc->entities[i].npc_size : 1;
@@ -635,6 +710,9 @@ static void run_visual(OsrsEnv* env, const char* encounter_name, const char* rep
     if (env->encounter_def && env->encounter_state) {
         ((const EncounterDef*)env->encounter_def)->destroy(env->encounter_state);
         env->encounter_state = NULL;
+        visual_destroy_encounter_context(
+            (const EncounterDef*)env->encounter_def,
+            (EncounterContext**)&env->encounter_context);
     }
 }
 #endif

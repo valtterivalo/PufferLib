@@ -377,10 +377,10 @@ def split_group(data: bytes, file_ids: list[int]) -> dict[int, bytes]:
 
 
 class ModernCacheReader:
-    """Read OSRS cache in OpenRS2 flat file format.
+    """Read OSRS cache data from OpenRS2 flat files or Jagex dat2/idx stores.
 
-    Expects a directory with numbered subdirectories (0/, 1/, 2/, ..., 255/)
-    each containing .dat files named by group ID.
+    OpenRS2 flat caches use numbered subdirectories like 0/, 1/, 2/, and 255/.
+    Jagex disk stores use main_file_cache.dat2 plus main_file_cache.idx* files.
     """
 
     def __init__(self, cache_dir: str | Path) -> None:
@@ -389,14 +389,98 @@ class ModernCacheReader:
         if not self.cache_dir.is_dir():
             msg = f"cache directory not found: {self.cache_dir}"
             raise FileNotFoundError(msg)
+        self._jagex_dat2 = self.cache_dir / "main_file_cache.dat2"
+        self._openrs2_layout = (self.cache_dir / "255").is_dir()
+        self._jagex_layout = self._jagex_dat2.exists() and not self._openrs2_layout
         self._manifest_cache: dict[int, IndexManifest] = {}
 
     def _read_raw(self, index_id: int, group_id: int) -> bytes | None:
         """Read raw container bytes from disk."""
-        path = self.cache_dir / str(index_id) / f"{group_id}.dat"
-        if not path.exists():
+        if self._jagex_layout:
+            return self._read_jagex_raw(index_id, group_id)
+
+        index_dir = self.cache_dir / str(index_id)
+        for path in (index_dir / f"{group_id}.dat", index_dir / str(group_id)):
+            if path.exists():
+                return path.read_bytes()
+        return None
+
+    def _read_jagex_raw(self, index_id: int, group_id: int) -> bytes | None:
+        """Read a raw cache container from a Jagex dat2/idx disk store."""
+        idx_path = self.cache_dir / f"main_file_cache.idx{index_id}"
+        if not idx_path.exists():
             return None
-        return path.read_bytes()
+
+        entry_offset = group_id * 6
+        with idx_path.open("rb") as idx:
+            idx.seek(0, 2)
+            if idx.tell() < entry_offset + 6:
+                return None
+            idx.seek(entry_offset)
+            entry = idx.read(6)
+
+        if len(entry) != 6:
+            return None
+        size = (entry[0] << 16) | (entry[1] << 8) | entry[2]
+        sector = (entry[3] << 16) | (entry[4] << 8) | entry[5]
+        if size <= 0 or sector <= 0:
+            return None
+
+        header_len = 10 if group_id > 0xFFFF else 8
+        payload_len = 520 - header_len
+        data = bytearray()
+        chunk = 0
+
+        with self._jagex_dat2.open("rb") as dat:
+            dat.seek(0, 2)
+            dat_size = dat.tell()
+            while len(data) < size:
+                sector_offset = sector * 520
+                if sector_offset + header_len > dat_size:
+                    raise ValueError(
+                        f"invalid dat2 sector {sector} for index={index_id} group={group_id}"
+                    )
+
+                dat.seek(sector_offset)
+                header = dat.read(header_len)
+                if len(header) != header_len:
+                    raise ValueError(
+                        f"short dat2 sector header for index={index_id} group={group_id}"
+                    )
+
+                if header_len == 10:
+                    archive_id = (
+                        (header[0] << 24)
+                        | (header[1] << 16)
+                        | (header[2] << 8)
+                        | header[3]
+                    )
+                    chunk_id = (header[4] << 8) | header[5]
+                    next_sector = (header[6] << 16) | (header[7] << 8) | header[8]
+                    sector_index = header[9]
+                else:
+                    archive_id = (header[0] << 8) | header[1]
+                    chunk_id = (header[2] << 8) | header[3]
+                    next_sector = (header[4] << 16) | (header[5] << 8) | header[6]
+                    sector_index = header[7]
+
+                if archive_id != group_id or chunk_id != chunk or sector_index != index_id:
+                    raise ValueError(
+                        "corrupt dat2 sector chain "
+                        f"index={index_id} group={group_id} sector={sector}"
+                    )
+
+                remaining = size - len(data)
+                data.extend(dat.read(min(payload_len, remaining)))
+                sector = next_sector
+                chunk += 1
+
+                if sector == 0 and len(data) < size:
+                    raise ValueError(
+                        f"truncated dat2 archive index={index_id} group={group_id}"
+                    )
+
+        return bytes(data)
 
     def read_container(self, index_id: int, group_id: int) -> bytes | None:
         """Read and decompress a container from the cache."""

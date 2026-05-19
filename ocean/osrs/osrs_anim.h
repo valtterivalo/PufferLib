@@ -314,6 +314,14 @@ static void anim_model_state_free(AnimModelState* state) {
 }
 
 
+static void anim_apply_rest_pose(
+    AnimModelState* state,
+    const int16_t* base_verts_src
+) {
+    memcpy(state->verts, base_verts_src, state->vert_count * 3 * sizeof(int16_t));
+}
+
+
 static void anim_apply_frame(
     AnimModelState* state,
     const int16_t* base_verts_src,
@@ -321,7 +329,7 @@ static void anim_apply_frame(
     const AnimFrameBase* fb
 ) {
     /* reset to base pose */
-    memcpy(state->verts, base_verts_src, state->vert_count * 3 * sizeof(int16_t));
+    anim_apply_rest_pose(state, base_verts_src);
 
     /* pivot point for rotate/scale */
     int pivot_x = 0, pivot_y = 0, pivot_z = 0;
@@ -547,7 +555,7 @@ static void anim_apply_frame_interleaved(
     const uint8_t* interleave_order, int interleave_count
 ) {
     /* reset to base pose */
-    memcpy(state->verts, base_verts_src, state->vert_count * 3 * sizeof(int16_t));
+    anim_apply_rest_pose(state, base_verts_src);
 
     /* build boolean mask: interleave_order lists SLOT INDICES the SECONDARY owns.
        index by slot index (0-244 for our 245-slot framebase), NOT vertex labels. */

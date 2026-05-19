@@ -101,7 +101,7 @@ static void init_player(Player* p) {
     p->dest_y = 0;
     p->is_moving = 0;
     p->is_running = 0;
-    p->run_energy = 100;
+    p->run_energy = OSRS_RUN_ENERGY_FULL;
     p->run_recovery_ticks = 0;
     p->last_obs_target_x = 0;
     p->last_obs_target_y = 0;

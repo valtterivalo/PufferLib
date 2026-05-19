@@ -1,0 +1,1033 @@
+#line 3605 "encounter_inferno.h"
+#define INF_HEAD_MOVE      0   /* 25: idle + 8 walk + 16 run */
+#define INF_HEAD_PRAYER    1   /* no_change, off, set_refresh_melee/ranged/magic */
+#define INF_HEAD_TARGET    2   /* INF_OBS_NPCS+1: none or observation slot */
+#define INF_HEAD_GEAR      3   /* 4: no_switch, mage, long_range, bp */
+#define INF_HEAD_EAT       4   /* 2: none, brew */
+#define INF_HEAD_POTION    5   /* 4: none, restore, bastion, stamina */
+#define INF_HEAD_SPELL     6   /* 3: no_change, blood_barrage, ice_barrage */
+#define INF_HEAD_SPEC      7   /* 2: no_change, toggle (arm/disarm blowpipe spec) */
+#define INF_HEAD_OFFENSIVE 8   /* no_change, off, set_refresh_piety/rigour/augury */
+static const int INF_ACTION_DIMS[INF_NUM_ACTION_HEADS] = {
+    ENCOUNTER_MOVE_ACTIONS, ENCOUNTER_OVERHEAD_DIM_PVE, INF_OBS_NPCS+1, 4, 2, 4, 3, 2, ENCOUNTER_OFFENSIVE_DIM
+};
+#define INF_ACTION_MASK_SIZE (ENCOUNTER_MOVE_ACTIONS + ENCOUNTER_OVERHEAD_DIM_PVE + INF_OBS_NPCS+1 + 4 + 2 + 4 + 3 + 2 + ENCOUNTER_OFFENSIVE_DIM)
+
+/* movement uses shared encounter_move_to_target from osrs_encounter.h */
+
+/* walkability callback for encounter_move_to_target */
+static int inf_tile_walkable(void* data, int x, int y) {
+    InfWalkCtx* wc = (InfWalkCtx*)data;
+    InfernoState* s = wc->s;
+    const InfernoContext* ctx = wc->ctx;
+    if (!inf_in_arena(x, y)) return 0;
+    if (inf_blocked_by_pillar(s, x, y, 1)) return 0;
+    if (ctx->collision_map)
+        if (!collision_tile_walkable(ctx->collision_map, 0,
+                x + ctx->world_offset_x, y + ctx->world_offset_y))
+            return 0;
+    return 1;
+}
+
+/* sara brew heal at base HP 99: floor(99*0.15)+2 = 16. ref: osrs_consumables.h osrs_brew_effect */
+#define INF_BREW_HEAL       (99 * 15 / 100 + 2)
+/* super restore at base prayer 99: 8 + floor(99/4) = 32. ref: osrs_consumables.h osrs_drink_potion */
+#define INF_RESTORE_AMOUNT  (8 + 99 / 4)
+#define INF_NPC_DEATH_LINGER_TICKS 3
+
+/* apply NPC death: blob split, mager resurrection store, jad healer cleanup.
+   call after reducing npc->hp. checks if hp <= 0 and handles death effects. */
+static void inf_apply_npc_death(InfernoState* s, int npc_idx) {
+    InfNPC* npc = &s->npcs[npc_idx];
+    if (npc->hp > 0 || !npc->active || npc->death_ticks > 0) return;
+    /* keep active=1 for death_ticks so renderer shows final hitsplat + death anim.
+       inf_tick_npcs decrements death_ticks and sets active=0 when it reaches 0. */
+    npc->death_ticks = INF_NPC_DEATH_LINGER_TICKS;
+    s->total_npc_kills++;
+
+    if (npc->type == INF_NPC_BLOB)
+        npc->spawn_blob_splits_on_removal = 1;
+    inf_store_dead_mob(s, npc);
+
+    if (npc->type == INF_NPC_JAD) {
+        for (int j = 0; j < INF_MAX_NPCS; j++) {
+            if (s->npcs[j].active &&
+                s->npcs[j].type == INF_NPC_HEALER_JAD &&
+                s->npcs[j].jad_owner_idx == npc_idx) {
+                inf_deactivate_npc(s, j);
+            }
+        }
+    }
+}
+
+typedef struct {
+    int target_slot;
+    int gear;
+    int overhead_style;
+    int offensive;
+} InfOraclePick;
+
+static int inf_oracle_trigger_active(const InfernoState* s, int mode) {
+    int zuk_idx = inf_find_live_zuk_idx(s);
+    if (zuk_idx < 0) return 0;
+    int zuk_hp = s->npcs[zuk_idx].hp;
+    if (mode == 1 || mode == 2 || mode == 8) return zuk_hp <= 300;
+    if (mode == 3) return zuk_hp <= 240;
+    if (mode >= 4 && mode <= 7) return s->zuk.jad_spawned || zuk_hp <= 600;
+    if (mode == 9 || mode == 10 || mode == 11)
+        return s->zuk.healer_spawned && s->total_zuk_healer_tags < 4;
+    return 0;
+}
+
+static InfOraclePick inf_oracle_pick_full(const InfernoState* s, int mode) {
+    InfOraclePick pick = { -1, -1, ATTACK_STYLE_NONE, OFFENSIVE_PRAYER_NONE };
+    if (mode <= 0 || !inf_oracle_trigger_active(s, mode)) return pick;
+
+    if (mode == 9) {
+        for (int o = 33; o < 37; o++) {
+            int n = s->current_obs_slots[o];
+            if (n < 0 || n >= INF_MAX_NPCS) continue;
+            const InfNPC* npc = &s->npcs[n];
+            if (!npc->active || npc->death_ticks != 0 ||
+                    npc->type != INF_NPC_HEALER_ZUK)
+                continue;
+            if (npc->aggro_target >= 0 && npc->aggro_target < INF_MAX_NPCS &&
+                    s->npcs[npc->aggro_target].active &&
+                    s->npcs[npc->aggro_target].type == INF_NPC_ZUK) {
+                pick.target_slot = o;
+                return pick;
+            }
+        }
+        return pick;
+    }
+
+    if (mode == 10 || mode == 11) {
+        if (!inf_player_behind_zuk_shield_now(s)) return pick;
+        if (mode == 11 && s->player.attack_timer != 0) return pick;
+
+        for (int o = 33; o < 37; o++) {
+            int n = s->current_obs_slots[o];
+            if (!inf_is_untagged_live_zuk_healer_slot(s, n))
+                continue;
+            if (inf_player_can_attack_npc_from_current_tile(s, n)) {
+                pick.target_slot = o;
+                return pick;
+            }
+        }
+        return pick;
+    }
+
+    for (int o = 22; o < 25; o++) {
+        int n = s->current_obs_slots[o];
+        if (n >= 0 && n < INF_MAX_NPCS &&
+            s->npcs[n].active && s->npcs[n].death_ticks == 0 &&
+            s->npcs[n].type == INF_NPC_JAD) {
+            pick.target_slot = o;
+            pick.gear = INF_GEAR_LONG_RANGE;
+            pick.offensive = OFFENSIVE_PRAYER_RIGOUR;
+            int jas = s->npcs[n].jad_attack_style;
+            if (jas == ATTACK_STYLE_RANGED) pick.overhead_style = ATTACK_STYLE_RANGED;
+            else if (jas == ATTACK_STYLE_MAGIC) pick.overhead_style = ATTACK_STYLE_MAGIC;
+            return pick;
+        }
+    }
+    if (mode == 1) return pick;
+
+    for (int o = 33; o < 37; o++) {
+        int n = s->current_obs_slots[o];
+        if (n >= 0 && n < INF_MAX_NPCS &&
+            s->npcs[n].active && s->npcs[n].death_ticks == 0 &&
+            s->npcs[n].type == INF_NPC_HEALER_ZUK) {
+            pick.target_slot = o;
+            pick.gear = INF_GEAR_BP;
+            pick.offensive = OFFENSIVE_PRAYER_RIGOUR;
+            pick.overhead_style = ATTACK_STYLE_MAGIC;
+            return pick;
+        }
+    }
+
+    for (int o = 0; o < 22; o++) {
+        int n = s->current_obs_slots[o];
+        if (n < 0 || n >= INF_MAX_NPCS) continue;
+        if (!s->npcs[n].active || s->npcs[n].death_ticks != 0) continue;
+        int t = s->npcs[n].type;
+        if (t == INF_NPC_ZUK || t == INF_NPC_ZUK_SHIELD ||
+            t == INF_NPC_JAD ||
+            t == INF_NPC_HEALER_ZUK || t == INF_NPC_HEALER_JAD)
+            continue;
+        pick.target_slot = o;
+        pick.offensive = OFFENSIVE_PRAYER_RIGOUR;
+        if (t == INF_NPC_MAGER) {
+            pick.gear = INF_GEAR_LONG_RANGE;
+            pick.overhead_style = ATTACK_STYLE_MAGIC;
+        } else if (t == INF_NPC_RANGER) {
+            pick.gear = INF_GEAR_LONG_RANGE;
+            pick.overhead_style = ATTACK_STYLE_RANGED;
+        } else if (t == INF_NPC_MELEER) {
+            pick.gear = INF_GEAR_BP;
+            pick.overhead_style = ATTACK_STYLE_MELEE;
+        } else {
+            pick.gear = INF_GEAR_BP;
+        }
+        return pick;
+    }
+
+    return pick;
+}
+
+static int inf_oracle_overrides_target(int mode) {
+    return mode >= 1 && mode <= 11;
+}
+
+static int inf_oracle_overrides_gear_offensive(int mode) {
+    return mode == 6 || mode == 7 || mode == 8;
+}
+
+static int inf_oracle_overrides_overhead(int mode) {
+    return mode == 5 || mode == 7 || mode == 8;
+}
+
+static int inf_oracle_overhead_action_for(const InfernoState* s, int wanted_style) {
+    (void)s;
+    int action = ENCOUNTER_OVERHEAD_NO_CHANGE;
+    if (wanted_style == ATTACK_STYLE_RANGED) {
+        action = ENCOUNTER_OVERHEAD_SET_REFRESH_RANGED;
+    } else if (wanted_style == ATTACK_STYLE_MAGIC) {
+        action = ENCOUNTER_OVERHEAD_SET_REFRESH_MAGIC;
+    } else if (wanted_style == ATTACK_STYLE_MELEE) {
+        action = ENCOUNTER_OVERHEAD_SET_REFRESH_MELEE;
+    } else {
+        return ENCOUNTER_OVERHEAD_NO_CHANGE;
+    }
+    return action;
+}
+
+static int inf_oracle_offensive_action_for(const InfernoState* s, int wanted_offensive) {
+    (void)s;
+    if (wanted_offensive == OFFENSIVE_PRAYER_RIGOUR) {
+        return ENCOUNTER_OFFENSIVE_SET_REFRESH_RIGOUR;
+    }
+    if (wanted_offensive == OFFENSIVE_PRAYER_PIETY) {
+        return ENCOUNTER_OFFENSIVE_SET_REFRESH_PIETY;
+    }
+    if (wanted_offensive == OFFENSIVE_PRAYER_AUGURY) {
+        return ENCOUNTER_OFFENSIVE_SET_REFRESH_AUGURY;
+    }
+    return ENCOUNTER_OFFENSIVE_NO_CHANGE;
+}
+
+static int inf_oracle_gear_action_for(const InfernoState* s, int wanted_gear) {
+    if (wanted_gear < 0) return 0;
+    if ((int)s->weapon_set == wanted_gear) return 0;
+    return wanted_gear + 1;
+}
+
+static void inf_player_pretick(InfernoState* s, InfernoContext* ctx, const int* actions) {
+    /* apply prayer actions. each helper returns 1 when the final active prayer
+       was activated this tick, so that slot skips drain. */
+    OffensivePrayer prev_offensive = s->player.offensive_prayer;
+    int prayer_act = actions[INF_HEAD_PRAYER];
+    int offensive_act = actions[INF_HEAD_OFFENSIVE];
+    if (ctx->config.oracle_mode > 0) {
+        InfOraclePick pick = inf_oracle_pick_full(s, ctx->config.oracle_mode);
+        if (pick.target_slot >= 0) {
+            if (inf_oracle_overrides_overhead(ctx->config.oracle_mode) &&
+                pick.overhead_style != ATTACK_STYLE_NONE) {
+                prayer_act = inf_oracle_overhead_action_for(s, pick.overhead_style);
+            }
+            if (inf_oracle_overrides_gear_offensive(ctx->config.oracle_mode) &&
+                pick.offensive != OFFENSIVE_PRAYER_NONE) {
+                offensive_act = inf_oracle_offensive_action_for(s, pick.offensive);
+            }
+        }
+    }
+    if (encounter_apply_overhead_action(&s->player.prayer, prayer_act)) {
+        s->player.prayer_just_activated = 1;
+    }
+    if (encounter_apply_offensive_action(&s->player.offensive_prayer, offensive_act)) {
+        s->player.offensive_prayer_just_activated = 1;
+    }
+    /* drain can also clear offensive_prayer (pp<=0 auto-clear), so recompute
+       AFTER drain to catch both the apply-side change and the drain-side clear. */
+    encounter_drain_all_prayers(
+        &s->player, encounter_player_prayer_bonus(&s->player));
+    /* offensive prayer is baked into eff_level/max_hit via the loadout cache.
+       recompute all loadouts on any change so combat math reflects current state. */
+    if (s->player.offensive_prayer != prev_offensive) {
+        encounter_recompute_loadout_max_hits(s->loadout_stats, INF_NUM_WEAPON_SETS, &s->player);
+        if (ctx->human_command_mode)
+            inf_refresh_human_loadout_stats(s);
+    }
+}
+
+static FightStyle inf_default_fight_style_for_style(AttackStyle style) {
+    if (style == ATTACK_STYLE_MAGIC) return FIGHT_STYLE_AUTOCAST;
+    if (style == ATTACK_STYLE_RANGED) return FIGHT_STYLE_RAPID;
+    return FIGHT_STYLE_ACCURATE;
+}
+
+static void inf_note_human_weapon_set(InfernoState* s) {
+    uint8_t weapon = s->player.equipped[GEAR_SLOT_WEAPON];
+    const uint8_t* const* loadouts =
+        inf_loadouts_for_profile(s->active_loadout_profile);
+    for (int g = 0; g < INF_NUM_WEAPON_SETS; g++) {
+        if (loadouts[g][GEAR_SLOT_WEAPON] == weapon) {
+            s->weapon_set = (InfWeaponSet)g;
+            return;
+        }
+    }
+}
+
+static void inf_apply_human_player_commands_ctx(InfernoState* s, InfernoContext* ctx) {
+    int did_change_equipment = 0;
+    for (int i = 0; i < ctx->human_command_count; i++) {
+        const HumanCommand* cmd = &ctx->human_commands[i];
+        if (cmd->kind == HUMAN_COMMAND_EQUIP_INVENTORY_ITEM) {
+            if (cmd->gear_slot >= 0 && cmd->gear_slot < NUM_GEAR_SLOTS &&
+                cmd->item_db_idx >= 0 && cmd->item_db_idx < NUM_ITEMS) {
+                int changed = slot_equip_item(&s->player, cmd->gear_slot, (uint8_t)cmd->item_db_idx);
+                if (changed) {
+                    s->total_gear_switches++;
+                    did_change_equipment = 1;
+                    if (cmd->gear_slot == GEAR_SLOT_WEAPON) {
+                        AttackStyle style = inf_player_equipped_attack_style(s);
+                        if (item_supports_ancient_autocast(s->player.equipped[GEAR_SLOT_WEAPON])) {
+                            s->player.fight_style = s->player.autocast_defensive
+                                ? FIGHT_STYLE_DEFENSIVE_AUTOCAST
+                                : FIGHT_STYLE_AUTOCAST;
+                        } else {
+                            s->player.fight_style = inf_default_fight_style_for_style(style);
+                        }
+                        inf_note_human_weapon_set(s);
+                    }
+                }
+            }
+        } else if (cmd->kind == HUMAN_COMMAND_FIGHT_STYLE) {
+            if (cmd->fight_style >= FIGHT_STYLE_ACCURATE &&
+                cmd->fight_style <= FIGHT_STYLE_DEFENSIVE_AUTOCAST) {
+                s->player.fight_style = (FightStyle)cmd->fight_style;
+                if (cmd->fight_style == FIGHT_STYLE_AUTOCAST ||
+                        cmd->fight_style == FIGHT_STYLE_DEFENSIVE_AUTOCAST) {
+                    s->player.autocast_enabled = 1;
+                    s->player.autocast_defensive =
+                        cmd->fight_style == FIGHT_STYLE_DEFENSIVE_AUTOCAST;
+                }
+                did_change_equipment = 1;
+            }
+        } else if (cmd->kind == HUMAN_COMMAND_SET_AUTOCAST) {
+            if (inf_is_barrage_spell(cmd->autocast_spell)) {
+                s->player.autocast_enabled = 1;
+                s->player.autocast_defensive = cmd->autocast_defensive != 0;
+                s->player.autocast_spell = cmd->autocast_spell;
+                if (item_supports_ancient_autocast(s->player.equipped[GEAR_SLOT_WEAPON])) {
+                    s->player.fight_style = s->player.autocast_defensive
+                        ? FIGHT_STYLE_DEFENSIVE_AUTOCAST
+                        : FIGHT_STYLE_AUTOCAST;
+                }
+                did_change_equipment = 1;
+            }
+        }
+    }
+    if (did_change_equipment)
+        inf_refresh_human_loadout_stats(s);
+}
+
+static void inf_apply_human_player_commands(InfernoState* s) {
+    inf_apply_human_player_commands_ctx(s, inf_legacy_context());
+}
+
+static void inf_tick_player_ctx(
+    InfernoState* s,
+    InfernoContext* ctx,
+    const int* actions,
+    int can_attack
+) {
+    if (s->player_last_interaction_age == 0)
+        s->player_last_interaction_age = 1;
+
+    if (ctx->human_command_mode) {
+        inf_apply_human_player_commands_ctx(s, ctx);
+    } else {
+        int gear_act = actions[INF_HEAD_GEAR];
+        if (inf_oracle_overrides_gear_offensive(ctx->config.oracle_mode)) {
+            InfOraclePick pick = inf_oracle_pick_full(s, ctx->config.oracle_mode);
+            if (pick.target_slot >= 0 && pick.gear >= 0) {
+                gear_act = inf_oracle_gear_action_for(s, pick.gear);
+            }
+        }
+        if (gear_act >= 1) s->total_gear_switches++;
+        if (gear_act >= 1 && gear_act <= 3) {
+            InfWeaponSet new_set = (InfWeaponSet)(gear_act - 1);
+            s->weapon_set = new_set;
+            GearSet gs = (new_set == INF_GEAR_MAGE) ? GEAR_MAGE : GEAR_RANGED;
+            const uint8_t* const* loadouts =
+                inf_loadouts_for_profile(s->active_loadout_profile);
+            encounter_apply_loadout(&s->player, loadouts[new_set], gs);
+        }
+        {
+            const uint8_t* const* loadouts =
+                inf_loadouts_for_profile(s->active_loadout_profile);
+            uint8_t current_weapon = s->player.equipped[GEAR_SLOT_WEAPON];
+            if (current_weapon != loadouts[s->weapon_set][GEAR_SLOT_WEAPON]) {
+                for (int g = 0; g < INF_NUM_WEAPON_SETS; g++) {
+                    if (loadouts[g][GEAR_SLOT_WEAPON] == current_weapon) {
+                        s->weapon_set = (InfWeaponSet)g;
+                        GearSet gs = (g == INF_GEAR_MAGE) ? GEAR_MAGE : GEAR_RANGED;
+                        encounter_apply_loadout(&s->player, loadouts[g], gs);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    int manual_spell = inf_spell_action_to_spell(actions[INF_HEAD_SPELL]);
+
+    /* special energy regen: 10 energy every 50 ticks (30 seconds) */
+    encounter_tick_spec_regen(&s->player);
+
+    /* spec toggle: arm/disarm (does NOT interrupt interaction) */
+    if (actions[INF_HEAD_SPEC] == 1)
+        osrs_spec_toggle(&s->player.spec_armed);
+
+    /* stat decay: every 60 ticks, boosted/drained stats move 1 toward base */
+    if (s->tick > 0 && s->tick % 60 == 0) {
+        int* stats[] = { &s->player.current_ranged, &s->player.current_magic,
+                         &s->player.current_attack, &s->player.current_strength,
+                         &s->player.current_defence };
+        for (int si = 0; si < 5; si++) {
+            if (*stats[si] > 99) (*stats[si])--;
+            else if (*stats[si] < 99) (*stats[si])++;
+        }
+        encounter_recompute_loadout_max_hits(s->loadout_stats, INF_NUM_WEAPON_SETS, &s->player);
+        if (ctx->human_command_mode)
+            inf_refresh_human_loadout_stats(s);
+    }
+
+    /* consumables — shared 3-tick potion timer */
+    if (s->player.potion_timer > 0) s->player.potion_timer--;
+    if (s->stamina_active_ticks > 0) s->stamina_active_ticks--;
+
+    /* brew (INF_HEAD_EAT): heals 16 HP, can overcap to base+16 */
+    int eat_act = actions[INF_HEAD_EAT];
+    if (eat_act == 1 && s->player.brew_doses > 0 && s->player.potion_timer == 0
+        && s->player.current_hitpoints < s->player.base_hitpoints) {
+        s->player.current_hitpoints += INF_BREW_HEAL;
+        if (s->player.current_hitpoints > s->player.base_hitpoints + INF_BREW_HEAL)
+            s->player.current_hitpoints = s->player.base_hitpoints + INF_BREW_HEAL;
+        s->player.brew_doses--;
+        s->player.potion_timer = 3;
+        s->player.ate_food_this_tick = 1;
+        s->brewed_this_tick = 1;
+        encounter_brew_drain_stats(&s->player);
+        encounter_recompute_loadout_max_hits(s->loadout_stats, INF_NUM_WEAPON_SETS, &s->player);
+        if (ctx->human_command_mode)
+            inf_refresh_human_loadout_stats(s);
+    }
+
+    /* potions (INF_HEAD_POTION): 1=restore, 2=bastion, 3=stamina */
+    int pot_act = actions[INF_HEAD_POTION];
+    if (pot_act == 1 && s->player.restore_doses > 0 && s->player.potion_timer == 0) {
+        /* super restore: restores prayer + all combat stats */
+        s->player.current_prayer += INF_RESTORE_AMOUNT;
+        if (s->player.current_prayer > s->player.base_prayer)
+            s->player.current_prayer = s->player.base_prayer;
+        encounter_restore_stats(&s->player);
+        s->player.restore_doses--;
+        s->player.potion_timer = 3;
+        encounter_recompute_loadout_max_hits(s->loadout_stats, INF_NUM_WEAPON_SETS, &s->player);
+        if (ctx->human_command_mode)
+            inf_refresh_human_loadout_stats(s);
+    } else if (pot_act == 2 && s->player.bastion_doses > 0 && s->player.potion_timer == 0) {
+        encounter_bastion_boost(&s->player);
+        s->player.bastion_doses--;
+        s->player.potion_timer = 3;
+        encounter_recompute_loadout_max_hits(s->loadout_stats, INF_NUM_WEAPON_SETS, &s->player);
+        if (ctx->human_command_mode)
+            inf_refresh_human_loadout_stats(s);
+    } else if (pot_act == 3 && s->player.stamina_doses > 0 && s->player.potion_timer == 0) {
+        s->stamina_active_ticks = 200;
+        s->player.stamina_doses--;
+        s->player.potion_timer = 3;
+    }
+
+    /* inventory actions interrupt interaction (per OSRS entity interaction rules) */
+    if (eat_act > 0)
+        osrs_interaction_check_interrupt(&s->interaction, OSRS_IACT_EAT);
+    if (pot_act > 0)
+        osrs_interaction_check_interrupt(&s->interaction, OSRS_IACT_DRINK);
+
+    inf_refresh_current_obs_slots_ctx(s, ctx);
+
+    /* attack target selection: persistent until NPC dies or player clicks ground.
+       target=0 means "no new target this tick" (preserves existing target). */
+    int target = actions[INF_HEAD_TARGET];
+    if (inf_oracle_overrides_target(ctx->config.oracle_mode)) {
+        InfOraclePick pick = inf_oracle_pick_full(s, ctx->config.oracle_mode);
+        if (pick.target_slot >= 0) target = pick.target_slot + 1;
+    }
+    int has_new_target = 0;
+    if (target > 0 && target <= INF_OBS_NPCS) {
+        int obs_idx = target - 1;
+        int npc_idx = s->current_obs_slots[obs_idx];
+        int is_live_target =
+            npc_idx >= 0 && npc_idx < INF_MAX_NPCS &&
+            s->npcs[npc_idx].active &&
+            s->npcs[npc_idx].death_ticks == 0 &&
+            s->npcs[npc_idx].type != INF_NPC_ZUK_SHIELD;
+        int is_phantom_target =
+            npc_idx >= 0 && npc_idx < INF_MAX_NPCS &&
+            inf_npc_is_phantom_barrage_obs_candidate(s, ctx, npc_idx);
+        if (is_live_target || is_phantom_target) {
+            if (npc_idx < 32 && inf_is_untagged_live_zuk_healer_slot(s, npc_idx)) {
+                int is_safe_target =
+                    inf_player_behind_zuk_shield_now(s) &&
+                    s->player.attack_timer == 0 &&
+                    inf_player_can_attack_npc_from_current_tile(s, npc_idx);
+                s->total_zuk_untagged_healer_targets++;
+                if (is_safe_target)
+                    s->total_zuk_safe_untagged_healer_targets++;
+                else
+                    s->total_zuk_unsafe_untagged_healer_targets++;
+                if ((s->rewarded_zuk_healer_target_mask & (1u << npc_idx)) == 0) {
+                    if (ctx->config.zuk_untagged_healer_target_bonus_coeff > 0.0f) {
+                        s->zuk_untagged_healer_targets_this_tick++;
+                        s->total_zuk_untagged_healer_target_rewards++;
+                        s->rewarded_zuk_healer_target_mask |= 1u << npc_idx;
+                    } else if (
+                            ctx->config.zuk_safe_untagged_healer_target_bonus_coeff > 0.0f &&
+                            is_safe_target) {
+                        s->zuk_safe_untagged_healer_targets_this_tick++;
+                        s->total_zuk_safe_untagged_healer_target_rewards++;
+                        s->rewarded_zuk_healer_target_mask |= 1u << npc_idx;
+                    }
+                }
+            }
+            osrs_interaction_set(&s->interaction, npc_idx);
+            s->player_last_interaction_target_slot = npc_idx;
+            s->player_last_interaction_age = 0;
+            has_new_target = 1;
+        }
+    }
+    if ((ctx->config.oracle_mode == 10 || ctx->config.oracle_mode == 11) &&
+            osrs_interaction_active(&s->interaction) &&
+            inf_is_untagged_live_zuk_healer_slot(s, s->interaction.target_slot) &&
+            (!inf_player_behind_zuk_shield_now(s) ||
+                !inf_player_can_attack_npc_from_current_tile(
+                    s, s->interaction.target_slot) ||
+                (ctx->config.oracle_mode == 11 && s->player.attack_timer != 0))) {
+        osrs_interaction_clear(&s->interaction);
+    }
+    if (ctx->config.zuk_safe_untagged_healer_target_mask &&
+            osrs_interaction_active(&s->interaction) &&
+            !inf_untagged_zuk_healer_target_is_safe_now(
+                s, ctx,
+                s->interaction.target_slot)) {
+        osrs_interaction_clear(&s->interaction);
+    }
+    if (ctx->config.zuk_force_safe_untagged_healer_target_mask &&
+            osrs_interaction_active(&s->interaction) &&
+            inf_has_safe_untagged_zuk_healer_target_now(s, ctx) &&
+            !inf_is_safe_untagged_zuk_healer_target_now(
+                s, ctx,
+                s->interaction.target_slot)) {
+        osrs_interaction_clear(&s->interaction);
+    }
+    /* explicit movement (ground click or RL move) cancels attack target,
+       but only if no new target was set this tick. auto-chase movement
+       does NOT cancel — only explicit user actions do. */
+    int has_explicit_move = (actions[INF_HEAD_MOVE] > 0 || s->player_dest_x >= 0);
+    if (!has_new_target && has_explicit_move)
+        osrs_interaction_check_interrupt(&s->interaction, OSRS_IACT_MOVE);
+    /* clear target if NPC died unless the current tick can still phantom barrage it. */
+    if (osrs_interaction_active(&s->interaction) &&
+        (!s->npcs[s->interaction.target_slot].active ||
+         (s->npcs[s->interaction.target_slot].death_ticks > 0 &&
+             !inf_npc_is_phantom_barrage_cast_window(
+                 s, ctx, s->interaction.target_slot)))) {
+        osrs_interaction_clear(&s->interaction);
+    }
+
+    if (osrs_interaction_active(&s->interaction) &&
+            inf_is_live_zuk_healer_slot(s, s->interaction.target_slot)) {
+        s->total_zuk_healer_target_ticks++;
+        if (s->tick_at_first_zuk_healer_target < 0)
+            s->tick_at_first_zuk_healer_target = s->tick;
+    }
+
+    /* movement: explicit move, auto-chase toward target, or idle.
+       OSRS order: target selection → movement → attack check. */
+    if (has_explicit_move && !osrs_interaction_active(&s->interaction)) {
+        /* explicit movement (ground click or RL agent) — no attack target */
+        if (s->player_dest_x >= 0) {
+            InfWalkCtx wc = { s, ctx };
+            encounter_move_toward_dest(&s->player, &s->player_dest_x, &s->player_dest_y,
+                ctx->collision_map, ctx->world_offset_x, ctx->world_offset_y,
+                inf_tile_walkable, &wc, inf_pathfind_blocked, &wc,
+                INF_ARENA_MIN_X, INF_ARENA_MIN_Y, INF_ARENA_WIDTH, INF_ARENA_HEIGHT);
+        } else {
+            int move_act = actions[INF_HEAD_MOVE];
+            s->player.is_running = 0;
+            if (move_act > 0 && move_act < ENCOUNTER_MOVE_ACTIONS) {
+                InfWalkCtx wc = { s, ctx };
+                encounter_move_to_target(&s->player,
+                    ENCOUNTER_MOVE_TARGET_DX[move_act], ENCOUNTER_MOVE_TARGET_DY[move_act],
+                    inf_tile_walkable, &wc);
+            }
+        }
+    } else if (osrs_interaction_active(&s->interaction)) {
+        /* auto-chase: pathfind toward attack target when out of range */
+        InfNPC* chase_npc = &s->npcs[s->interaction.target_slot];
+        InfWalkCtx wc = { s, ctx };
+        InfPlayerAttack chase_attack;
+        int has_chase_attack = inf_resolve_player_attack_ctx(s, ctx, manual_spell, &chase_attack);
+        const EncounterLoadoutStats* ls = has_chase_attack
+            ? &chase_attack.stats
+            : inf_current_loadout_stats(s, ctx);
+        encounter_chase_attack_target(&s->player,
+            chase_npc->x, chase_npc->y, INF_NPC_STATS[chase_npc->type].size,
+            ls->attack_range,
+            ctx->collision_map, ctx->world_offset_x, ctx->world_offset_y,
+            inf_tile_walkable, &wc, inf_pathfind_blocked, &wc,
+            s->los_blockers, s->los_blocker_count,
+            INF_ARENA_MIN_X, INF_ARENA_MIN_Y, INF_ARENA_WIDTH, INF_ARENA_HEIGHT);
+    }
+    inf_rebuild_player_collision_flags(s);
+
+    /* player attacks targeted NPC */
+    if (can_attack && s->player.attack_timer > 0) s->player.attack_timer--;
+    int has_zuk_healer_target = osrs_interaction_active(&s->interaction) &&
+        inf_is_live_zuk_healer_slot(s, s->interaction.target_slot);
+    if (has_zuk_healer_target) {
+        if (!can_attack) {
+            s->total_zuk_healer_cannot_attack_ticks++;
+        } else if (s->player.attack_timer > 0) {
+            s->total_zuk_healer_cooldown_ticks++;
+        } else {
+            InfNPC* target_npc = &s->npcs[s->interaction.target_slot];
+            InfPlayerAttack healer_attack;
+            int has_healer_attack = inf_resolve_player_attack_ctx(s, ctx, manual_spell, &healer_attack);
+            if (has_healer_attack && encounter_player_can_attack(s->player.x, s->player.y,
+                    target_npc->x, target_npc->y, target_npc->size,
+                    healer_attack.stats.attack_range, s->los_blockers, s->los_blocker_count)) {
+                s->total_zuk_healer_attackable_ticks++;
+            } else {
+                s->total_zuk_healer_out_of_range_ticks++;
+            }
+        }
+    }
+    if (can_attack && osrs_interaction_active(&s->interaction) && s->player.attack_timer == 0) {
+        InfNPC* target_npc = &s->npcs[s->interaction.target_slot];
+        if (target_npc->active) {
+            InfPlayerAttack attack;
+            int has_attack = inf_resolve_player_attack_ctx(s, ctx, manual_spell, &attack);
+            const EncounterLoadoutStats* ls = &attack.stats;
+            int is_magic_attack = attack.is_barrage;
+            int weapon_is_blowpipe = inf_player_weapon_is(s, ITEM_TOXIC_BLOWPIPE);
+            uint8_t player_weapon = attack.weapon;
+            int active_spell = attack.spell;
+
+            if (has_attack && encounter_player_can_attack(s->player.x, s->player.y,
+                    target_npc->x, target_npc->y, target_npc->size,
+                    ls->attack_range, s->los_blockers, s->los_blocker_count)) {
+                int is_blowpipe_spec_attack = weapon_is_blowpipe &&
+                    s->player.spec_armed && s->player.special_energy >= BLOWPIPE_SPEC_COST;
+                EncounterProjectileDistanceMode distance_mode = is_magic_attack
+                    ? ENCOUNTER_PROJECTILE_DISTANCE_TARGET_SW_TILE
+                    : ENCOUNTER_PROJECTILE_DISTANCE_CLOSEST_TILE;
+                int projectile_dist = encounter_projectile_distance(
+                    s->player.x, s->player.y, 1,
+                    target_npc->x, target_npc->y, target_npc->size,
+                    distance_mode);
+                EncounterProjectileTiming hit_timing = inf_player_projectile_timing(
+                    ls->style, player_weapon, is_blowpipe_spec_attack, projectile_dist);
+                int hit_delay = hit_timing.damage_delay_ticks;
+
+                int total_dmg = 0;
+
+                if (is_magic_attack) {
+                    /* barrage spells: 3x3 AoE via shared osrs_barrage_resolve.
+                       ice barrage: freeze on hit (including 0 dmg), not on splash.
+                       blood barrage: heal 25% of total AoE damage (applied when hits land). */
+                    OsrsTargetRef target_ref = {
+                        .kind = OSRS_TARGET_NPC,
+                        .id = s->interaction.target_slot,
+                    };
+                    OsrsMagicAttackKind magic_kind = (active_spell == ENCOUNTER_SPELL_ICE)
+                        ? OSRS_MAGIC_ATTACK_ANCIENT_ICE
+                        : OSRS_MAGIC_ATTACK_ANCIENT_BLOOD;
+                    OsrsPreparedAttackEffects attack_effects = osrs_prepare_attack_effects(
+                        &s->player.equipment_effect_profile,
+                        &s->player.item_effect_state,
+                        s->player.equipped[GEAR_SLOT_WEAPON],
+                        ATTACK_STYLE_MAGIC,
+                        magic_kind,
+                        target_ref,
+                        1,
+                        ls->eff_level * (ls->attack_bonus + 64),
+                        ls->max_hit,
+                        osrs_target_effect_context_none(),
+                        s->player.current_hitpoints,
+                        s->player.base_hitpoints
+                    );
+
+                    /* build target array: primary target first, then all other active NPCs */
+                    BarrageTarget btargets[INF_MAX_NPCS + 1];
+                    int bt_count = 0;
+                    {
+                        const InfNPCStats* ns = &INF_NPC_STATS[target_npc->type];
+                        btargets[bt_count++] = (BarrageTarget){
+                            .active = 1, .x = target_npc->x, .y = target_npc->y,
+                            .def_level = ns->def_level, .magic_def_bonus = ns->magic_def_bonus,
+                            .npc_idx = s->interaction.target_slot,
+                            .frozen_ticks = &s->npcs[s->interaction.target_slot].frozen_ticks,
+                            .hit = 0, .damage = 0
+                        };
+                    }
+                    for (int i = 0; i < INF_MAX_NPCS; i++) {
+                        if (i == s->interaction.target_slot || !s->npcs[i].active) continue;
+                        /* shield is invulnerable — no damage, no freeze from AoE */
+                        if (s->npcs[i].type == INF_NPC_ZUK_SHIELD) continue;
+                        /* skip dying NPCs — already logged as killed */
+                        if (s->npcs[i].death_ticks > 0) continue;
+                        const InfNPCStats* ns2 = &INF_NPC_STATS[s->npcs[i].type];
+                        btargets[bt_count++] = (BarrageTarget){
+                            .active = 1, .x = s->npcs[i].x, .y = s->npcs[i].y,
+                            .def_level = ns2->def_level, .magic_def_bonus = ns2->magic_def_bonus,
+                            .npc_idx = i,
+                            .frozen_ticks = &s->npcs[i].frozen_ticks,
+                            .hit = 0, .damage = 0
+                        };
+                    }
+
+                    /* resolve barrage: accuracy/damage rolls + instant freeze for ice.
+                       freeze is applied by the shared function at cast time. */
+                    BarrageResult br = osrs_barrage_resolve(
+                        btargets, bt_count, attack_effects.attack_roll, attack_effects.max_hit,
+                        &s->rng_state, active_spell, attack_effects.use_double_accuracy);
+                    total_dmg = br.total_damage;
+                    if (target_npc->death_ticks > 0) {
+                        total_dmg -= btargets[0].damage;
+                        btargets[0].hit = 0;
+                        btargets[0].damage = 0;
+                    }
+                    osrs_finalize_attack_effects(
+                        &s->player.equipment_effect_profile,
+                        &s->player.item_effect_state,
+                        s->player.equipped[GEAR_SLOT_WEAPON],
+                        ATTACK_STYLE_MAGIC,
+                        magic_kind,
+                        target_ref,
+                        1,
+                        attack_effects.use_double_accuracy,
+                        btargets[0].hit,
+                        btargets[0].damage,
+                        &s->rng_state
+                    );
+
+                    /* queue pending hits for delayed damage */
+                    for (int i = 0; i < bt_count; i++) {
+                        if (!btargets[i].active || !btargets[i].rolled) continue;
+                        int nidx = btargets[i].npc_idx;
+                        if (s->npcs[nidx].death_ticks > 0) continue;
+                        EncounterPendingHit* ph = &s->npcs[nidx].pending_hit;
+                        ph->active = 1;
+                        ph->damage = btargets[i].damage;
+                        ph->ticks_remaining = hit_delay;
+                        ph->attack_style = ATTACK_STYLE_MAGIC;
+                        ph->check_prayer = 0;
+                        ph->spell_type = active_spell;
+                        ph->hit_success = btargets[i].hit;
+                        ph->elysian_reduced = 0;
+                    }
+
+                } else if (is_blowpipe_spec_attack) {
+                    /* blowpipe spec: 2x accuracy, 1.5x max hit, heal 50% of damage */
+                    if (!encounter_use_spec(&s->player, BLOWPIPE_SPEC_COST)) abort();
+                    osrs_spec_disarm(&s->player.spec_armed);
+                    const InfNPCStats* ns = &INF_NPC_STATS[target_npc->type];
+                    int base_att_roll = ls->eff_level * (ls->attack_bonus + 64);
+                    total_dmg = osrs_blowpipe_spec_resolve(
+                        base_att_roll, ls->max_hit,
+                        ns->def_level, ns->ranged_def_bonus, &s->rng_state);
+                    int heal = total_dmg * BLOWPIPE_SPEC_HEAL_PCT / 100;
+                    s->player.current_hitpoints += heal;
+                    if (s->player.current_hitpoints > s->player.base_hitpoints)
+                        s->player.current_hitpoints = s->player.base_hitpoints;
+                    EncounterPendingHit* ph = &target_npc->pending_hit;
+                    ph->active = 1;
+                    ph->damage = total_dmg;
+                    ph->ticks_remaining = hit_delay;
+                    ph->attack_style = ATTACK_STYLE_RANGED;
+                    ph->check_prayer = 0;
+                    ph->spell_type = 0;
+                    ph->hit_success = total_dmg > 0;
+                    ph->elysian_reduced = 0;
+
+                } else if (ls->style == ATTACK_STYLE_RANGED) {
+                    const InfNPCStats* ns = &INF_NPC_STATS[target_npc->type];
+                    OsrsPreparedAttackEffects attack_effects = osrs_prepare_attack_effects(
+                        &s->player.equipment_effect_profile,
+                        &s->player.item_effect_state,
+                        s->player.equipped[GEAR_SLOT_WEAPON],
+                        ATTACK_STYLE_RANGED,
+                        OSRS_MAGIC_ATTACK_NONE,
+                        (OsrsTargetRef){ .kind = OSRS_TARGET_NPC, .id = s->interaction.target_slot },
+                        1,
+                        ls->eff_level * (ls->attack_bonus + 64),
+                        ls->max_hit,
+                        osrs_target_effect_context_magic(
+                            ns->magic_level,
+                            ns->magic_att_bonus),
+                        s->player.current_hitpoints,
+                        s->player.base_hitpoints
+                    );
+                    int def_roll = (ns->def_level + 8) * (ns->ranged_def_bonus + 64);
+                    int hit_success = encounter_rand_float(&s->rng_state) <
+                        osrs_hit_chance(attack_effects.attack_roll, def_roll);
+                    if (hit_success) {
+                        total_dmg = encounter_rand_int(&s->rng_state, attack_effects.max_hit + 1);
+                    }
+                    EncounterPendingHit* ph = &target_npc->pending_hit;
+                    ph->active = 1;
+                    ph->damage = total_dmg;
+                    ph->ticks_remaining = hit_delay;
+                    ph->attack_style = ATTACK_STYLE_RANGED;
+                    ph->check_prayer = 0;
+                    ph->spell_type = 0;
+                    ph->hit_success = hit_success;
+                    ph->elysian_reduced = 0;
+                }
+
+                s->player.attack_timer = ls->attack_speed;
+                if (target_npc->type == INF_NPC_HEALER_ZUK) {
+                    int target_was_untagged = target_npc->aggro_target >= 0;
+                    s->total_zuk_healer_attack_fires++;
+                    if (target_was_untagged && !is_magic_attack)
+                        s->zuk_untagged_healer_nonmagic_attacks_this_tick++;
+                    if (is_magic_attack)
+                        s->zuk_healer_mage_attack_fires_this_tick++;
+                    if (s->tick_at_first_zuk_healer_attack < 0)
+                        s->tick_at_first_zuk_healer_attack = s->tick;
+                }
+
+                /* player projectile event for renderer */
+                s->player_attacked_this_tick = 1;
+                s->player_attack_npc_idx = s->interaction.target_slot;
+                s->player_attack_dmg = total_dmg;
+                s->player_attack_style_id = ls->style;
+                s->player_attack_timing = hit_timing;
+
+                /* player attack animation + spell type for renderer effect system */
+                s->player.attack_style_this_tick = ls->style;
+                if (ls->style == ATTACK_STYLE_MAGIC) {
+                    /* 0=none, 1=ice, 2=blood */
+                    s->player.magic_type_this_tick = (active_spell == ENCOUNTER_SPELL_ICE) ? 1 : 2;
+                }
+                if (target_npc->death_ticks > 0)
+                    osrs_interaction_clear(&s->interaction);
+            }
+        }
+    }
+}
+
+static void inf_tick_player(InfernoState* s, const int* actions, int can_attack) {
+    inf_tick_player_ctx(s, inf_legacy_context(), actions, can_attack);
+}
+
+static int inf_roll_delayed_jad_damage(
+    InfernoState* s,
+    const InfernoContext* ctx,
+    int attack_style
+) {
+    const InfNPCStats* stats = &INF_NPC_STATS[INF_NPC_JAD];
+    int max_hit = osrs_npc_max_hit(attack_style,
+        stats->str_level, stats->range_level,
+        stats->melee_str_bonus, stats->ranged_str_bonus,
+        stats->magic_base_dmg, stats->magic_dmg_pct);
+    if (stats->max_hit_cap > 0 && max_hit > stats->max_hit_cap)
+        max_hit = stats->max_hit_cap;
+
+    int dmg = encounter_rand_int(&s->rng_state, max_hit + 1);
+    int att_lvl, att_bonus;
+    if (attack_style == ATTACK_STYLE_RANGED) {
+        att_lvl = stats->range_level;
+        att_bonus = stats->range_att_bonus;
+    } else {
+        att_lvl = stats->magic_level;
+        att_bonus = stats->magic_att_bonus;
+    }
+
+    int att_roll = osrs_npc_attack_roll(att_lvl, att_bonus);
+    const EncounterLoadoutStats* ls = inf_current_loadout_stats(s, ctx);
+    int def_bonus = encounter_player_def_bonus(
+        ls->def_stab, ls->def_slash, ls->def_crush, ls->def_magic, ls->def_ranged,
+        attack_style, stats->melee_style);
+    int def_roll = osrs_player_def_roll_vs_npc(
+        s->player.current_defence, s->player.current_magic, def_bonus, attack_style);
+    if (encounter_rand_float(&s->rng_state) >= osrs_hit_chance(att_roll, def_roll))
+        dmg = 0;
+    return dmg;
+}
+
+static void inf_apply_delayed_prayer_check(
+    InfernoState* s,
+    const InfernoContext* ctx,
+    EncounterPendingHit* hit
+) {
+    if (encounter_prayer_correct_for_style(s->player.prayer, hit->attack_style)) {
+        hit->damage = 0;
+        s->prayer_correct_this_tick++;
+        if (hit->source_npc_type >= 0 && hit->source_npc_type < INF_NUM_NPC_TYPES)
+            s->prayer_correct_by_type[hit->source_npc_type]++;
+    } else if (hit->source_npc_type == INF_NPC_JAD) {
+        hit->damage = inf_roll_delayed_jad_damage(s, ctx, hit->attack_style);
+        s->dmg_from_type[INF_NPC_JAD] += (float)hit->damage;
+        if (hit->damage > 0) {
+            s->last_hit_by_type = INF_NPC_JAD;
+            s->off_prayer_hits_this_tick++;
+        }
+    } else if (hit->damage > 0 && hit->attack_style != ATTACK_STYLE_NONE) {
+        s->off_prayer_hits_this_tick++;
+    }
+    hit->check_prayer = 0;
+}
+
+static void inf_resolve_player_projectiles_on_npcs(InfernoState* s) {
+    int blood_heal_acc = 0;
+    for (int i = 0; i < INF_MAX_NPCS; i++) {
+        if (!s->npcs[i].active || s->npcs[i].death_ticks > 0) continue;
+        int spell = s->npcs[i].pending_hit.spell_type;
+        int hit_success = s->npcs[i].pending_hit.hit_success;
+        float dmg_before = s->damage_dealt_this_tick;
+        int hp_before = s->npcs[i].hp;
+        int landed = encounter_resolve_npc_pending_hit(
+            &s->npcs[i].pending_hit,
+            &s->npcs[i].hp, &s->npcs[i].hit_landed_this_tick, &s->npcs[i].hit_damage,
+            &s->npcs[i].frozen_ticks, &blood_heal_acc, &s->damage_dealt_this_tick);
+        if (landed) {
+            float landed_damage = s->damage_dealt_this_tick - dmg_before;
+            int t = s->npcs[i].type;
+            int hp_after = s->npcs[i].hp;
+            int is_resurrected = s->npcs[i].resurrection_count != 0;
+            if (is_resurrected) {
+                s->damage_resurrected_this_tick += landed_damage;
+            } else {
+                if (t == INF_NPC_ZUK) {
+                    s->damage_zuk_this_tick += landed_damage;
+                } else if (t == INF_NPC_HEALER_ZUK) {
+                    s->damage_zuk_healers_this_tick += landed_damage;
+                } else if (t == INF_NPC_HEALER_JAD) {
+                    s->damage_jad_healers_this_tick += landed_damage;
+                } else if (t == INF_NPC_JAD) {
+                    s->damage_jad_this_tick += landed_damage;
+                } else if (t != INF_NPC_ZUK && t != INF_NPC_ZUK_SHIELD &&
+                           t != INF_NPC_HEALER_JAD) {
+                    s->damage_set_this_tick += landed_damage;
+                }
+                if (hp_before > 0 && hp_after <= 0) {
+                    if (t == INF_NPC_JAD) s->kill_jad_this_tick++;
+                    else if (t == INF_NPC_HEALER_ZUK) s->kill_zuk_healer_this_tick++;
+                    else if (t != INF_NPC_ZUK && t != INF_NPC_ZUK_SHIELD &&
+                             t != INF_NPC_HEALER_JAD) s->kill_set_this_tick++;
+                }
+            }
+            s->npcs[i].hit_spell_type = spell;
+            s->npcs[i].hit_was_successful_this_tick = hit_success;
+            int shield_taggable = inf_is_shield_taggable_slot(s, i);
+            if (s->npcs[i].aggro_target != -1) {
+                if (s->npcs[i].type == INF_NPC_HEALER_ZUK ||
+                    s->npcs[i].type == INF_NPC_HEALER_JAD) {
+                    s->healer_tags_this_tick++;
+                    if (s->npcs[i].type == INF_NPC_HEALER_ZUK)
+                        s->zuk_healer_tags_this_tick++;
+                }
+                if (shield_taggable)
+                    s->shield_tags_this_tick++;
+                s->npcs[i].aggro_target = -1;
+                s->npcs[i].stun_timer = 2;
+            }
+            inf_apply_npc_death(s, i);
+        }
+    }
+    if (blood_heal_acc > 0) {
+        int healed = blood_heal_acc / 4;
+        int hp_before = s->player.current_hitpoints;
+        s->player.current_hitpoints += healed;
+        if (s->player.current_hitpoints > s->player.base_hitpoints)
+            s->player.current_hitpoints = s->player.base_hitpoints;
+        s->blood_heal_this_tick = s->player.current_hitpoints - hp_before;
+    }
+}
+
+static void inf_resolve_player_pending_hits_ctx(InfernoState* s, const InfernoContext* ctx) {
+    for (int i = 0; i < s->player_pending_hit_count; i++) {
+        EncounterPendingHit* hit = &s->player_pending_hits[i];
+
+        if (hit->check_prayer && hit->prayer_check_delay > 0 &&
+            hit->source_npc_type != INF_NPC_JAD) {
+            hit->prayer_check_delay--;
+            if (hit->prayer_check_delay == 0) {
+                inf_apply_delayed_prayer_check(s, ctx, hit);
+            }
+        }
+
+        hit->ticks_remaining--;
+        if (hit->ticks_remaining <= 0) {
+            int dmg = hit->damage;
+            if (hit->check_prayer) {
+                if (encounter_prayer_correct_for_style(s->player.prayer, hit->attack_style)) {
+                    dmg = 0;
+                    s->prayer_correct_this_tick++;
+                    if (hit->source_npc_type >= 0 && hit->source_npc_type < INF_NUM_NPC_TYPES)
+                        s->prayer_correct_by_type[hit->source_npc_type]++;
+                } else if (dmg > 0 && hit->attack_style != ATTACK_STYLE_NONE) {
+                    s->off_prayer_hits_this_tick++;
+                }
+            } else if (dmg > 0 && hit->attack_style != ATTACK_STYLE_NONE &&
+                       hit->source_npc_type != INF_NPC_JAD) {
+                s->off_prayer_hits_this_tick++;
+            }
+
+            if (dmg > 0 &&
+                hit->source_npc_type >= 0 &&
+                hit->source_npc_type < INF_NUM_NPC_TYPES) {
+                s->last_hit_by_type = hit->source_npc_type;
+            }
+            if (hit->elysian_reduced) {
+                s->player.elysian_proc_this_tick = 1;
+            } else {
+                int elysian_reduced = 0;
+                dmg = inf_apply_elysian_to_player_hit(s, dmg, &elysian_reduced);
+                if (elysian_reduced) s->player.elysian_proc_this_tick = 1;
+            }
+            inf_apply_echo_boots_recoil(s, dmg);
+            encounter_damage_player(
+                &s->player, dmg, &s->damage_received_this_tick);
+            s->player_pending_hits[i] =
+                s->player_pending_hits[--s->player_pending_hit_count];
+            i--;
+        }
+    }
+}
+
+static void inf_resolve_player_pending_hits(InfernoState* s) {
+    inf_resolve_player_pending_hits_ctx(s, inf_legacy_context());
+}
+
+static void inf_resolve_jad_prayer_checks_after_player(
+    InfernoState* s,
+    const InfernoContext* ctx
+) {
+    for (int i = 0; i < s->player_pending_hit_count; i++) {
+        EncounterPendingHit* hit = &s->player_pending_hits[i];
+        if (!hit->check_prayer ||
+            hit->source_npc_type != INF_NPC_JAD ||
+            hit->prayer_check_delay <= 0) {
+            continue;
+        }
+        hit->prayer_check_delay--;
+        if (hit->prayer_check_delay == 0)
+            inf_apply_delayed_prayer_check(s, ctx, hit);
+    }
+}

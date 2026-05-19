@@ -27,6 +27,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from modern_cache_reader import ModernCacheReader
+from export_collision_map_modern import read_map_group_payload
 
 # --- OSRS noise functions (from MapRegion.java) ---
 
@@ -300,6 +301,18 @@ def find_map_groups(
     m{rx}_{ry} (terrain) patterns.
     """
     manifest = reader.read_index_manifest(5)
+
+    if not manifest.has_names:
+        result: dict[int, tuple[int | None, int | None]] = {}
+        for group_id in manifest.group_ids:
+            if not (0 <= group_id <= 0xFFFF):
+                continue
+            file_ids = manifest.group_file_ids.get(group_id, [])
+            terrain_gid = group_id if 0 in file_ids else None
+            obj_gid = group_id if 1 in file_ids else None
+            if terrain_gid is not None or obj_gid is not None:
+                result[group_id] = (terrain_gid, obj_gid)
+        return result
 
     hash_to_gid: dict[int, int] = {}
     for gid in manifest.group_ids:
@@ -795,7 +808,7 @@ def write_terrain_binary(
 
 
 def _main_modern(args: argparse.Namespace) -> None:
-    """Export terrain from modern OpenRS2 cache."""
+    """Export terrain from a modern OSRS cache."""
     if not args.modern_cache.exists():
         sys.exit(f"modern cache directory not found: {args.modern_cache}")
 
@@ -814,14 +827,24 @@ def _main_modern(args: argparse.Namespace) -> None:
     map_groups = find_map_groups(reader)
     print(f"  {len(map_groups)} regions found in index 5")
 
-    # determine target regions
     target_coords: set[tuple[int, int]] = set()
     if args.regions:
         for coord in args.regions.split():
             parts = coord.split(",")
             target_coords.add((int(parts[0]), int(parts[1])))
+    elif args.wilderness:
+        for rx in range(44, 57):
+            for ry in range(48, 63):
+                ms = (rx << 8) | ry
+                if ms in map_groups:
+                    target_coords.add((rx, ry))
+    elif args.all_regions:
+        for ms in map_groups:
+            rx = (ms >> 8) & 0xFF
+            ry = ms & 0xFF
+            target_coords.add((rx, ry))
     else:
-        sys.exit("--regions is required when using --modern-cache")
+        sys.exit("--regions, --wilderness, or --all-regions is required when using --modern-cache")
 
     print(f"  exporting {len(target_coords)} specified regions")
 
@@ -841,7 +864,7 @@ def _main_modern(args: argparse.Namespace) -> None:
             errors += 1
             continue
 
-        terrain_data = reader.read_container(5, terrain_gid)
+        terrain_data = read_map_group_payload(reader, terrain_gid, 0)
         if terrain_data is None:
             print(f"  region ({rx},{ry}): failed to read terrain")
             errors += 1
@@ -896,13 +919,13 @@ def main() -> None:
         "--modern-cache",
         type=Path,
         required=True,
-        help="path to modern OpenRS2 cache directory",
+        help="path to modern OSRS cache directory",
     )
     parser.add_argument(
         "--keys",
         type=Path,
         default=None,
-        help="path to XTEA keys JSON (for modern cache object data)",
+        help="optional legacy XTEA keys JSON",
     )
     parser.add_argument(
         "--regions",
@@ -913,8 +936,18 @@ def main() -> None:
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("data/wilderness.terrain"),
+        default=Path(__file__).resolve().parents[1] / "data/wilderness.terrain",
         help="output .terrain binary file",
+    )
+    parser.add_argument(
+        "--wilderness",
+        action="store_true",
+        help="export wilderness regions (rx=44-56, ry=48-62)",
+    )
+    parser.add_argument(
+        "--all-regions",
+        action="store_true",
+        help="export all available regions",
     )
     parser.add_argument(
         "--brightness",

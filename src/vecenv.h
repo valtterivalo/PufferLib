@@ -107,6 +107,7 @@ typedef struct StaticVec {
     StaticThreading* threading;
     int obs_size;
     int num_atns;
+    int log_env_limit;
     int gpu;
 } StaticVec;
 
@@ -134,6 +135,14 @@ void static_vec_seq_step(StaticVec* vec);
 void static_vec_render(StaticVec* vec, int env_id);
 void static_vec_read_profile(StaticVec* vec, float out[NUM_EVAL_PROF]);
 const char* get_static_env_name(void);
+int get_state_size(void);
+int static_vec_has_state(StaticVec* vec);
+void static_vec_store_states(StaticVec* vec, void* states, const int* state_inds,
+    int env_start, int env_count);
+void static_vec_load_states(StaticVec* vec, const void* states, const int* state_inds,
+    int env_start, int env_count);
+void static_vec_store_state(StaticVec* vec, int env_id, void* out);
+void static_vec_load_state(StaticVec* vec, int env_id, const void* data);
 
 // Env info
 int get_obs_size(void);
@@ -621,7 +630,10 @@ static inline float static_vec_aggregate_logs(StaticVec* vec, Log* out) {
     Env* envs = (Env*)vec->envs;
     memset(out, 0, sizeof(Log));
     int num_keys = sizeof(Log) / sizeof(float);
-    for (int i = 0; i < vec->size; i++) {
+    int limit = vec->size;
+    if (vec->log_env_limit > 0 && vec->log_env_limit < limit)
+        limit = vec->log_env_limit;
+    for (int i = 0; i < limit; i++) {
         Env* env = &envs[i];
         if (env->log.n == 0) {
             continue;
@@ -683,6 +695,106 @@ void static_vec_read_profile(StaticVec* vec, float out[NUM_EVAL_PROF]) {
 void static_vec_render(StaticVec* vec, int env_id) {
     Env* envs = (Env*)vec->envs;
     c_render(&envs[env_id]);
+}
+
+#ifdef PUFFER_STATE_T
+#ifndef PUFFER_STATE_SIZE
+#define PUFFER_STATE_SIZE ((int)sizeof(PUFFER_STATE_T))
+#endif
+#endif
+
+int get_state_size(void) {
+#ifdef PUFFER_STATE_T
+    return PUFFER_STATE_SIZE;
+#else
+    return 0;
+#endif
+}
+
+int static_vec_has_state(StaticVec* vec) {
+    (void)vec;
+#ifdef PUFFER_STATE_T
+    return 1;
+#else
+    return 0;
+#endif
+}
+
+void static_vec_store_states(StaticVec* vec, void* states, const int* state_inds,
+        int env_start, int env_count) {
+#ifdef PUFFER_STATE_T
+    if (!vec || !states || !state_inds || env_start < 0 ||
+            env_count < 0 || env_start + env_count > vec->size) {
+        abort();
+    }
+    Env* envs = (Env*)vec->envs;
+    PUFFER_STATE_T* state_buf = (PUFFER_STATE_T*)states;
+    for (int i = 0; i < env_count; i++) {
+        state_buf[state_inds[i]] = envs[env_start + i].state;
+    }
+#else
+    (void)vec;
+    (void)states;
+    (void)state_inds;
+    (void)env_start;
+    (void)env_count;
+    abort();
+#endif
+}
+
+void static_vec_load_states(StaticVec* vec, const void* states, const int* state_inds,
+        int env_start, int env_count) {
+#ifdef PUFFER_STATE_T
+    if (!vec || !states || !state_inds || env_start < 0 ||
+            env_count < 0 || env_start + env_count > vec->size) {
+        abort();
+    }
+    Env* envs = (Env*)vec->envs;
+    const PUFFER_STATE_T* state_buf = (const PUFFER_STATE_T*)states;
+    for (int i = 0; i < env_count; i++) {
+        Env* env = &envs[env_start + i];
+        env->state = state_buf[state_inds[i]];
+#ifdef PUFFER_STATE_REFRESH
+        PUFFER_STATE_REFRESH(env);
+#endif
+    }
+#else
+    (void)vec;
+    (void)states;
+    (void)state_inds;
+    (void)env_start;
+    (void)env_count;
+    abort();
+#endif
+}
+
+void static_vec_store_state(StaticVec* vec, int env_id, void* out) {
+#ifdef PUFFER_STATE_T
+    if (!vec || !out || env_id < 0 || env_id >= vec->size) abort();
+    Env* envs = (Env*)vec->envs;
+    memcpy(out, &envs[env_id].state, PUFFER_STATE_SIZE);
+#else
+    (void)vec;
+    (void)env_id;
+    (void)out;
+    abort();
+#endif
+}
+
+void static_vec_load_state(StaticVec* vec, int env_id, const void* data) {
+#ifdef PUFFER_STATE_T
+    if (!vec || !data || env_id < 0 || env_id >= vec->size) abort();
+    Env* envs = (Env*)vec->envs;
+    memcpy(&envs[env_id].state, data, PUFFER_STATE_SIZE);
+#ifdef PUFFER_STATE_REFRESH
+    PUFFER_STATE_REFRESH(&envs[env_id]);
+#endif
+#else
+    (void)vec;
+    (void)env_id;
+    (void)data;
+    abort();
+#endif
 }
 
 int get_obs_size(void) { return OBS_SIZE; }

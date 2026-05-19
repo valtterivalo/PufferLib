@@ -1,4 +1,4 @@
-"""Export placed map objects (walls, props, trees) from modern OpenRS2 OSRS cache.
+"""Export placed map objects from a modern OSRS cache.
 
 Reads object placements from each region's object file, resolves their 3D models
 from object definitions, decodes model geometry, applies rotation and
@@ -14,7 +14,6 @@ Object types exported:
 Usage:
     uv run python scripts/export_objects.py \
         --modern-cache ../reference/osrs-cache-modern \
-        --keys ../reference/osrs-cache-modern/keys.json \
         --regions "35,47 35,48" \
         --output data/zulrah.objects
 """
@@ -42,9 +41,11 @@ from export_collision_map_modern import (
     _read_extended_smart,
     find_map_groups,
     load_xtea_keys,
+    read_map_group_payload,
+    xtea_decrypt,
 )
 from export_terrain import stitch_region_edges
-from modern_cache_reader import ModernCacheReader, read_smart
+from modern_cache_reader import ModernCacheReader, read_smart, read_u8, read_u16, read_u32
 
 # --- object definition with model IDs ---
 
@@ -136,6 +137,21 @@ def decode_loc_definitions_modern(reader: ModernCacheReader) -> dict[int, LocDef
                 d.has_typed_models = False
                 for _ in range(count):
                     mid = struct.unpack(">H", buf.read(2))[0]
+                    d.model_ids.append(mid)
+                    d.model_types.append(10)
+            elif opcode == 6:
+                count = read_u8(buf)
+                d.has_typed_models = True
+                for _ in range(count):
+                    mid = read_u32(buf)
+                    mtype = read_u8(buf)
+                    d.model_ids.append(mid)
+                    d.model_types.append(mtype)
+            elif opcode == 7:
+                count = read_u8(buf)
+                d.has_typed_models = False
+                for _ in range(count):
+                    mid = read_u32(buf)
                     d.model_ids.append(mid)
                     d.model_types.append(10)
             elif opcode == 14:
@@ -252,6 +268,19 @@ def decode_loc_definitions_modern(reader: ModernCacheReader) -> dict[int, LocDef
                 buf.read(1)  # crossWorldSound
             elif opcode == 96:
                 buf.read(1)  # thickness/raise
+            elif opcode == 100:
+                read_u8(buf)
+                read_u8(buf)
+                _read_modern_obj_string(buf)
+            elif opcode in (101, 102):
+                read_u8(buf)
+                if opcode == 102:
+                    read_u16(buf)
+                read_u16(buf)
+                read_u16(buf)
+                read_u32(buf)
+                read_u32(buf)
+                _read_modern_obj_string(buf)
             elif opcode == 249:
                 count = buf.read(1)[0]
                 for _ in range(count):
@@ -816,7 +845,7 @@ def _build_and_write(
 
 
 def _main_modern(args: argparse.Namespace) -> None:
-    """Export objects from modern OpenRS2 cache."""
+    """Export objects from a modern OSRS cache."""
     if not args.modern_cache.exists():
         sys.exit(f"modern cache directory not found: {args.modern_cache}")
 
@@ -836,15 +865,26 @@ def _main_modern(args: argparse.Namespace) -> None:
     map_groups = find_map_groups(reader)
     print(f"  {len(map_groups)} regions found in index 5")
 
-    # determine target regions
-    if not args.regions:
-        sys.exit("--regions is required when using --modern-cache")
-
     target_coords: set[tuple[int, int]] = set()
-    for coord in args.regions.split():
-        parts = coord.split(",")
-        target_coords.add((int(parts[0]), int(parts[1])))
-    print(f"  exporting {len(target_coords)} specified regions")
+    if args.regions:
+        for coord in args.regions.split():
+            parts = coord.split(",")
+            target_coords.add((int(parts[0]), int(parts[1])))
+    elif args.wilderness:
+        for rx in range(44, 57):
+            for ry in range(48, 63):
+                ms = (rx << 8) | ry
+                if ms in map_groups:
+                    target_coords.add((rx, ry))
+    elif args.all_regions:
+        for ms in map_groups:
+            rx = (ms >> 8) & 0xFF
+            ry = ms & 0xFF
+            target_coords.add((rx, ry))
+    else:
+        sys.exit("--regions, --wilderness, or --all-regions is required when using --modern-cache")
+
+    print(f"  exporting {len(target_coords)} regions")
 
     # parse object placements and terrain
     all_placements: list[PlacedObject] = []
@@ -862,27 +902,28 @@ def _main_modern(args: argparse.Namespace) -> None:
 
         # parse terrain
         if terrain_gid is not None:
-            terrain_data = reader.read_container(5, terrain_gid)
+            terrain_data = read_map_group_payload(reader, terrain_gid, 0)
             if terrain_data:
                 rt = parse_terrain_full(terrain_data, rx * 64, ry * 64)
                 rt.region_x = rx
                 rt.region_y = ry
                 terrain_parsed[(rx, ry)] = rt
 
-        # parse object placements (XTEA encrypted in modern cache)
+        # parse object placements
         if loc_gid is not None:
             import bz2
             import zlib
 
-            from export_collision_map_modern import xtea_decrypt
-
             ms = (rx << 8) | ry
-            key = xtea_keys.get(ms)
-            if key is None:
-                print(f"  region ({rx},{ry}): no XTEA key, skipping objects")
-            else:
-                raw_obj = reader._read_raw(5, loc_gid)
+            loc_data = None
+            try:
+                loc_data = read_map_group_payload(reader, loc_gid, 1)
+            except Exception:
                 loc_data = None
+
+            key = xtea_keys.get(ms)
+            if loc_data is None and key is not None:
+                raw_obj = reader._read_raw(5, loc_gid)
                 if raw_obj is not None and len(raw_obj) >= 5:
                     # container: compression(1) + compressed_len(4) + encrypted payload
                     compression = raw_obj[0]
@@ -899,15 +940,15 @@ def _main_modern(args: argparse.Namespace) -> None:
                         elif compression == 1:
                             loc_data = bz2.decompress(b"BZh1" + gzip_data)
 
-                if loc_data:
-                    placements = parse_object_placements_modern(
-                        loc_data, rx * 64, ry * 64,
-                    )
-                    all_placements.extend(placements)
-                    print(f"  region ({rx},{ry}): {len(placements)} placements")
-                else:
-                    print(f"  region ({rx},{ry}): could not read/decrypt loc data")
-                    errors += 1
+            if loc_data:
+                placements = parse_object_placements_modern(
+                    loc_data, rx * 64, ry * 64,
+                )
+                all_placements.extend(placements)
+                print(f"  region ({rx},{ry}): {len(placements)} placements")
+            else:
+                print(f"  region ({rx},{ry}): could not read loc data")
+                errors += 1
 
     print(f"  {len(all_placements)} placements parsed, {errors} region errors")
 
@@ -931,7 +972,7 @@ def main() -> None:
         "--keys",
         type=Path,
         default=None,
-        help="path to XTEA keys JSON (for modern cache object data decryption)",
+        help="optional legacy XTEA keys JSON",
     )
     parser.add_argument(
         "--regions",
@@ -942,8 +983,18 @@ def main() -> None:
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("data/wilderness.objects"),
+        default=Path(__file__).resolve().parents[1] / "data/wilderness.objects",
         help="output .objects binary file",
+    )
+    parser.add_argument(
+        "--wilderness",
+        action="store_true",
+        help="export wilderness regions (rx=44-56, ry=48-62)",
+    )
+    parser.add_argument(
+        "--all-regions",
+        action="store_true",
+        help="export all available regions",
     )
     parser.add_argument(
         "--exclude-ids",

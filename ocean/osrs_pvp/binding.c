@@ -84,7 +84,16 @@ void c_reset(Env* env) {
 
 void c_close(Env* env) { pvp_close(&env->pvp); }
 void c_render(Env* env) {
+    int first_call = env->pvp.client == NULL;
     pvp_render(&env->pvp);
+    if (first_call) {
+        RenderClient* rc = (RenderClient*)env->pvp.client;
+        rc->model_cache = model_cache_load(OSRS_ASSET("equipment.models"));
+        if (rc->model_cache) rc->show_models = 1;
+        rc->anim_cache = anim_cache_load(OSRS_ASSET("equipment.anims"));
+        render_load_projectile_assets(rc);
+        render_init_overlay_models(rc);
+    }
 }
 
 #include "vecenv.h"

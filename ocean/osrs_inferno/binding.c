@@ -17,10 +17,13 @@
 #include <time.h>
 
 #include "osrs_env.h"  /* pulls in osrs_types, encounter, pvp stack */
+#include "osrs_assets.h"
 #include "replay_best.h"
 #include "src/archive.h"
 #include "src/demostore.h"
 #include "src/phase2_curriculum.h"
+
+#define INFERNO_ENV_EXPORT __attribute__((visibility("default")))
 
 typedef enum {
     INF_PROF_C_STEP_TOTAL = 0,
@@ -91,16 +94,16 @@ static void inferno_profile_mark(int enabled, double* last_ms, int slot) {
     *last_ms = now;
 }
 
-int inferno_env_profile_count(void) {
+INFERNO_ENV_EXPORT int inferno_env_profile_count(void) {
     return inferno_profile_enabled() ? INF_PROF_COUNT : 0;
 }
 
-const char* inferno_env_profile_name(int slot) {
+INFERNO_ENV_EXPORT const char* inferno_env_profile_name(int slot) {
     if (slot < 0 || slot >= INF_PROF_COUNT) abort();
     return g_inferno_profile_names[slot];
 }
 
-double inferno_env_profile_read_reset_ms(int slot) {
+INFERNO_ENV_EXPORT double inferno_env_profile_read_reset_ms(int slot) {
     if (slot < 0 || slot >= INF_PROF_COUNT) abort();
     double value;
     #pragma omp atomic read
@@ -138,7 +141,8 @@ typedef struct InfernoEnv {
     int rng;
     Log log;
 
-    EncounterState* enc_state;
+    InfernoState state;
+    InfernoContext context;
     int config_start_wave;  /* the start_wave from config (not curriculum override) */
 
     int acts_staging[INF_NUM_ACTION_HEADS];
@@ -244,6 +248,11 @@ typedef struct InfernoEnv {
     int stall_trace_truncated;
     int stall_trace_ticks;
 } InfernoEnv;
+
+#define INF_ENV_STATE(env) ((EncounterState*)&((env)->state))
+#define INF_ENV_CONTEXT(env) ((EncounterContext*)&((env)->context))
+#define INF_ENV_INFERNO(env) (&((env)->state))
+#define INF_ENV_INFERNO_CONTEXT(env) (&((env)->context))
 
 #define OBS_SIZE INF_TOTAL_OBS
 #define NUM_ATNS INF_NUM_ACTION_HEADS
@@ -481,7 +490,7 @@ static void inferno_stall_trace_capture_decision(
     const float* action_mask,
     InfernoStallTraceDecision* out
 ) {
-    InfernoState* s = (InfernoState*)env->enc_state;
+    InfernoState* s = INF_ENV_INFERNO(env);
     inf_refresh_current_obs_slots(s);
     memset(out, 0, sizeof(*out));
     out->selected_target_action = env->acts_staging[INF_HEAD_TARGET];
@@ -563,7 +572,7 @@ static void inferno_stall_trace_close(Env* env, const char* reason) {
     if (!env->stall_trace_file)
         return;
 
-    InfernoState* s = (InfernoState*)env->enc_state;
+    InfernoState* s = INF_ENV_INFERNO(env);
     fprintf(env->stall_trace_file,
         "{\"kind\":\"end\",\"reason\":\"%s\",\"trace_id\":%d,"
         "\"tick\":%d,\"winner\":%d,\"rows\":%d,\"truncated\":%d}\n",
@@ -630,7 +639,7 @@ static void inferno_stall_trace_capture(
     if (!g_stall_trace_dir[0] || g_stall_trace_max <= 0)
         return;
 
-    InfernoState* s = (InfernoState*)env->enc_state;
+    InfernoState* s = INF_ENV_INFERNO(env);
     if (inferno_stall_trace_tick_matches(s)) {
         env->stall_trace_ticks++;
     } else {
@@ -661,7 +670,9 @@ static void inferno_stall_trace_capture(
     if (current_target_slot >= 0 && current_target_slot < INF_MAX_NPCS) {
         current_target_type = s->npcs[current_target_slot].type;
         current_target_attackable = inf_obs_slot_is_targetable(
-            s, inf_find_target_obs_slot(s, current_target_slot));
+            s,
+            INF_ENV_INFERNO_CONTEXT(env),
+            inf_find_target_obs_slot(s, current_target_slot));
         current_target_in_range =
             inf_player_can_attack_npc_from_current_tile(s, current_target_slot);
         current_target_los = inf_npc_has_los_direct(s, current_target_slot);
@@ -826,7 +837,7 @@ static void inferno_post_240_trace_close(Env* env, const char* reason) {
     if (!env->post_240_trace_file)
         return;
 
-    InfernoState* s = (InfernoState*)env->enc_state;
+    InfernoState* s = INF_ENV_INFERNO(env);
     fprintf(env->post_240_trace_file,
         "{\"kind\":\"end\",\"reason\":\"%s\",\"trace_id\":%d,"
         "\"tick\":%d,\"winner\":%d,\"last_hit_by_type\":%d,"
@@ -872,7 +883,7 @@ static void inferno_post_240_trace_open(Env* env, const InfernoState* s) {
         id,
         env->env_idx,
         env->episode_rng_start,
-        s->oracle_mode);
+        INF_ENV_INFERNO_CONTEXT(env)->config.oracle_mode);
     if (n < 0 || (size_t)n >= sizeof(path)) {
         fprintf(stderr, "POST240_TRACE path too long\n");
         abort();
@@ -894,13 +905,17 @@ static void inferno_post_240_trace_open(Env* env, const InfernoState* s) {
         id,
         env->env_idx,
         env->episode_rng_start,
-        s->oracle_mode,
+        INF_ENV_INFERNO_CONTEXT(env)->config.oracle_mode,
         s->start_wave + 1,
         s->tick_at_le_240,
         s->tick_at_zuk_healer_spawn);
 }
 
-static void inferno_post_240_trace_write_healers(FILE* fp, const InfernoState* s) {
+static void inferno_post_240_trace_write_healers(
+    FILE* fp,
+    const InfernoState* s,
+    const InfernoContext* ctx
+) {
     for (int h = 0; h < 4; h++) {
         int obs_slot = 33 + h;
         int npc_idx = s->current_obs_slots[obs_slot];
@@ -920,7 +935,7 @@ static void inferno_post_240_trace_write_healers(FILE* fp, const InfernoState* s
             if (alive) {
                 hp = npc->hp;
                 tagged = !inf_is_untagged_live_zuk_healer_slot(s, npc_idx);
-                attackable = inf_obs_slot_is_targetable(s, obs_slot);
+                attackable = inf_obs_slot_is_targetable(s, ctx, obs_slot);
                 in_range = inf_player_can_attack_npc_from_current_tile(s, npc_idx);
                 targeted = osrs_interaction_active(&s->interaction) &&
                     s->interaction.target_slot == npc_idx;
@@ -948,7 +963,7 @@ static void inferno_post_240_trace_write_healers(FILE* fp, const InfernoState* s
 }
 
 static void inferno_post_240_trace_capture(Env* env, int is_term) {
-    InfernoState* s = (InfernoState*)env->enc_state;
+    InfernoState* s = INF_ENV_INFERNO(env);
     if (!g_post_240_trace_initialized)
         inferno_post_240_trace_init_once();
     if (!g_post_240_trace_dir[0] || g_post_240_trace_max <= 0)
@@ -995,7 +1010,10 @@ static void inferno_post_240_trace_capture(Env* env, int is_term) {
             const InfNPC* target = &s->npcs[target_slot];
             target_type = target->type;
             target_attackable =
-                inf_obs_slot_is_targetable(s, inf_find_target_obs_slot(s, target_slot));
+                inf_obs_slot_is_targetable(
+                    s,
+                    INF_ENV_INFERNO_CONTEXT(env),
+                    inf_find_target_obs_slot(s, target_slot));
             target_in_range = inf_player_can_attack_npc_from_current_tile(s, target_slot);
             target_is_healer = target_type == INF_NPC_HEALER_ZUK;
             target_is_set = inf_npc_type_is_set_pressure(target_type);
@@ -1113,7 +1131,8 @@ static void inferno_post_240_trace_capture(Env* env, int is_term) {
             s->tick_at_all_zuk_healers_tagged,
             s->tick_at_all_zuk_healers_dead,
             s->tick_at_first_zuk_hit_after_all_healers_dead);
-        inferno_post_240_trace_write_healers(env->post_240_trace_file, s);
+        inferno_post_240_trace_write_healers(
+            env->post_240_trace_file, s, INF_ENV_INFERNO_CONTEXT(env));
         fprintf(env->post_240_trace_file, "}\n");
         env->post_240_trace_rows++;
     } else {
@@ -1276,7 +1295,7 @@ static void inferno_first_forward_write_or_abort(
     }
 }
 
-void inferno_env_store_live_recurrent_state(
+INFERNO_ENV_EXPORT void inferno_env_store_live_recurrent_state(
     Env* env,
     const uint8_t* hidden_layer_major,
     int num_layers,
@@ -1325,7 +1344,7 @@ void inferno_env_store_live_recurrent_state(
     env->live_phase2_demo_current_hidden_valid = 1;
 }
 
-void inferno_env_store_live_first_forward(
+INFERNO_ENV_EXPORT void inferno_env_store_live_first_forward(
     Env* env,
     const uint8_t* obs,
     size_t obs_size,
@@ -1393,7 +1412,7 @@ void inferno_env_store_live_first_forward(
     env->live_phase2_demo_pending_forward_slot = -1;
 }
 
-void inferno_env_record_phase2_first_forward_compare(
+INFERNO_ENV_EXPORT void inferno_env_record_phase2_first_forward_compare(
     Env* env,
     float logit_l2,
     float logit_max_abs,
@@ -1415,7 +1434,7 @@ void inferno_env_record_phase2_first_forward_compare(
         env->log.phase2_first_forward_obs_allclose_snapshot += 1.0f;
 }
 
-void inferno_env_record_phase2_hidden_restore_compare(
+INFERNO_ENV_EXPORT void inferno_env_record_phase2_hidden_restore_compare(
     Env* env,
     float l2,
     float max_abs,
@@ -1433,7 +1452,7 @@ static void inferno_env_live_phase2_demo_capture(Env* env) {
     if (inferno_live_phase2_demo_wants_hidden() &&
             !env->live_phase2_demo_current_hidden_valid)
         return;
-    InfernoState* s = (InfernoState*)env->enc_state;
+    InfernoState* s = INF_ENV_INFERNO(env);
     if (!inferno_env_live_phase2_demo_matches(s)) return;
     if (s->tick == env->live_phase2_demo_last_capture_tick) return;
     if (env->live_phase2_demo_snapshot_count >=
@@ -1446,7 +1465,7 @@ static void inferno_env_live_phase2_demo_capture(Env* env) {
     }
 
     int slot = env->live_phase2_demo_snapshot_count++;
-    ENCOUNTER_INFERNO.snapshot(env->enc_state,
+    ENCOUNTER_INFERNO.snapshot(INF_ENV_STATE(env), INF_ENV_CONTEXT(env),
         env->live_phase2_demo_snapshots +
             (size_t)slot * sizeof(InfSnapshot));
     env->live_phase2_demo_snapshot_ticks[slot] = s->tick;
@@ -1480,7 +1499,7 @@ static void inferno_env_live_phase2_demo_flush(Env* env) {
     int file_id = inferno_live_phase2_demo_reserve_file(max_files);
     if (file_id < 0) return;
 
-    InfernoState* s = (InfernoState*)env->enc_state;
+    InfernoState* s = INF_ENV_INFERNO(env);
     int num_ticks = env->live_phase2_demo_action_len;
     int max_snapshot_tick = 0;
     for (int i = 0; i < env->live_phase2_demo_snapshot_count; i++) {
@@ -1512,7 +1531,7 @@ static void inferno_env_live_phase2_demo_flush(Env* env) {
     }
 
     char path[1200];
-    float quality = ENCOUNTER_INFERNO.progress_score(env->enc_state);
+    float quality = ENCOUNTER_INFERNO.progress_score(INF_ENV_STATE(env), INF_ENV_CONTEXT(env));
     int n = snprintf(path, sizeof(path), "%s/live_demo_%06d_q%.3f_t%d.bin",
         env->live_phase2_demo_dir, file_id, quality, num_ticks);
     if (n < 0 || (size_t)n >= sizeof(path)) {
@@ -1562,8 +1581,8 @@ static void inferno_env_apply_phase2_reset(Env* env);
 
 static inline void inferno_env_write_obs_mask(Env* env) {
     float* obs = (float*)env->observations;
-    ENCOUNTER_INFERNO.write_obs(env->enc_state, obs);
-    ENCOUNTER_INFERNO.write_mask(env->enc_state, obs + INF_NUM_OBS);
+    ENCOUNTER_INFERNO.write_obs(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), obs);
+    ENCOUNTER_INFERNO.write_mask(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), obs + INF_NUM_OBS);
 }
 
 static inline void inferno_env_write_post_restore_state(Env* env) {
@@ -1573,8 +1592,13 @@ static inline void inferno_env_write_post_restore_state(Env* env) {
     env->terminals[0] = 0.0f;
 }
 
+static inline void inferno_env_refresh_after_state_load(Env* env) {
+    inf_refresh_after_state_load(INF_ENV_INFERNO(env), INF_ENV_INFERNO_CONTEXT(env));
+    inferno_env_write_post_restore_state(env);
+}
+
 static inline void inferno_env_mark_episode_start(Env* env) {
-    env->episode_rng_start = ((InfernoState*)env->enc_state)->rng_state;
+    env->episode_rng_start = INF_ENV_INFERNO(env)->rng_state;
 }
 
 static int inferno_zuk_healers_resolved_20(const InfernoState* s) {
@@ -1697,9 +1721,9 @@ void c_step(Env* env) {
         if (render_client) {
             human_input_clear_pending(&render_client->human_input);
             human_input_clear_move(&render_client->human_input);
-            ENCOUNTER_INFERNO.put_int(env->enc_state, "player_dest_x", -1);
-            ENCOUNTER_INFERNO.put_int(env->enc_state, "player_dest_y", -1);
-            ENCOUNTER_INFERNO.put_int(env->enc_state, "human_command_mode", 0);
+            ENCOUNTER_INFERNO.put_int(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), "player_dest_x", -1);
+            ENCOUNTER_INFERNO.put_int(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), "player_dest_y", -1);
+            ENCOUNTER_INFERNO.put_int(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), "human_command_mode", 0);
         }
     } else if (render_client && render_client->human_input.enabled &&
                ENCOUNTER_INFERNO.step_human_commands) {
@@ -1707,15 +1731,15 @@ void c_step(Env* env) {
             fprintf(stderr, "RECORD_REPLAY cannot record human command mode\n");
             abort();
         }
-        ENCOUNTER_INFERNO.step_human_commands(env->enc_state, &render_client->human_input);
+        ENCOUNTER_INFERNO.step_human_commands(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), &render_client->human_input);
         used_human_commands = 1;
     } else {
         if (render_client) {
             human_input_clear_pending(&render_client->human_input);
             human_input_clear_move(&render_client->human_input);
-            ENCOUNTER_INFERNO.put_int(env->enc_state, "player_dest_x", -1);
-            ENCOUNTER_INFERNO.put_int(env->enc_state, "player_dest_y", -1);
-            ENCOUNTER_INFERNO.put_int(env->enc_state, "human_command_mode", 0);
+            ENCOUNTER_INFERNO.put_int(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), "player_dest_x", -1);
+            ENCOUNTER_INFERNO.put_int(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), "player_dest_y", -1);
+            ENCOUNTER_INFERNO.put_int(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), "human_command_mode", 0);
         }
         for (int i = 0; i < NUM_ATNS; i++)
             env->acts_staging[i] = (int)env->actions[i];
@@ -1736,9 +1760,10 @@ void c_step(Env* env) {
     /* buffer actions for best-episode recording */
     if (env->episode_actions && !used_human_commands) {
         if (env->episode_action_len == 0) {
-            env->episode_rng_start = ((InfernoState*)env->enc_state)->rng_state;
+            env->episode_rng_start = INF_ENV_INFERNO(env)->rng_state;
             ENCOUNTER_INFERNO.snapshot(
-                env->enc_state,
+                INF_ENV_STATE(env),
+                INF_ENV_CONTEXT(env),
                 &env->episode_initial_snapshot);
             env->episode_initial_snapshot_valid = 1;
         }
@@ -1769,18 +1794,18 @@ void c_step(Env* env) {
 
     INF_PROFILE_MARK(INF_PROF_C_PRE_STEP_TRACES);
     if (!used_human_commands)
-        ENCOUNTER_INFERNO.step(env->enc_state, env->acts_staging);
+        ENCOUNTER_INFERNO.step(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), env->acts_staging);
     INF_PROFILE_MARK(INF_PROF_C_ENCOUNTER_STEP);
 
     float* obs = (float*)env->observations;
-    ENCOUNTER_INFERNO.write_obs(env->enc_state, obs);
+    ENCOUNTER_INFERNO.write_obs(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), obs);
     INF_PROFILE_MARK(INF_PROF_C_WRITE_OBS);
-    ENCOUNTER_INFERNO.write_mask(env->enc_state, obs + INF_NUM_OBS);
+    ENCOUNTER_INFERNO.write_mask(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), obs + INF_NUM_OBS);
     INF_PROFILE_MARK(INF_PROF_C_WRITE_MASK);
 
-    env->rewards[0] = ENCOUNTER_INFERNO.get_reward(env->enc_state);
+    env->rewards[0] = ENCOUNTER_INFERNO.get_reward(INF_ENV_STATE(env), INF_ENV_CONTEXT(env));
 
-    int is_term = ENCOUNTER_INFERNO.is_terminal(env->enc_state);
+    int is_term = ENCOUNTER_INFERNO.is_terminal(INF_ENV_STATE(env), INF_ENV_CONTEXT(env));
     env->term_staging = (unsigned char)is_term;
     env->terminals[0] = (float)is_term;
     INF_PROFILE_MARK(INF_PROF_C_REWARD_TERMINAL);
@@ -1800,13 +1825,13 @@ void c_step(Env* env) {
         }
 
         int slot = env->replay_phase2_demo_snapshot_count++;
-        ENCOUNTER_INFERNO.snapshot(env->enc_state,
+        ENCOUNTER_INFERNO.snapshot(INF_ENV_STATE(env), INF_ENV_CONTEXT(env),
             env->replay_phase2_demo_snapshots +
                 (size_t)slot * sizeof(InfSnapshot));
         env->replay_phase2_demo_snapshot_ticks[slot] = env->replay_cursor;
 
         if (is_term || env->replay_cursor >= env->replay_num_ticks) {
-            float quality = ENCOUNTER_INFERNO.progress_score(env->enc_state);
+            float quality = ENCOUNTER_INFERNO.progress_score(INF_ENV_STATE(env), INF_ENV_CONTEXT(env));
             inferno_phase2_demo_write_or_abort(
                 env->replay_phase2_demo_path,
                 env->replay_num_ticks,
@@ -1831,7 +1856,7 @@ void c_step(Env* env) {
        after the rollout completes. */
     if (env->archive) {
         InfCellKey key;
-        ENCOUNTER_INFERNO.write_cell_key(env->enc_state, &key);
+        ENCOUNTER_INFERNO.write_cell_key(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), &key);
 
         int key_changed = !env->archive_prev_key_valid ||
             memcmp(&key, &env->archive_prev_key, sizeof(InfCellKey)) != 0;
@@ -1842,8 +1867,8 @@ void c_step(Env* env) {
                 env->archive_scratch_key[slot] = key;
                 env->archive_scratch_tick[slot] = env->archive_action_history_len;
                 env->archive_scratch_quality[slot] =
-                    ENCOUNTER_INFERNO.progress_score(env->enc_state);
-                ENCOUNTER_INFERNO.snapshot(env->enc_state,
+                    ENCOUNTER_INFERNO.progress_score(INF_ENV_STATE(env), INF_ENV_CONTEXT(env));
+                ENCOUNTER_INFERNO.snapshot(INF_ENV_STATE(env), INF_ENV_CONTEXT(env),
                     &env->archive_scratch_snap[slot]);
             } else {
                 env->archive_scratch_dropped++;
@@ -1859,7 +1884,7 @@ void c_step(Env* env) {
        total n, then clears. this gives proper per-completed-episode averages
        instead of noisy mid-episode snapshots. */
     if (is_term) {
-        InfernoState* s = (InfernoState*)env->enc_state;
+        InfernoState* s = INF_ENV_INFERNO(env);
         inf_write_terminal_status_text(s, env->render_status_text,
             sizeof(env->render_status_text));
         env->render_status_frames =
@@ -2176,11 +2201,11 @@ void c_step(Env* env) {
             if (s->total_zuk_healer_attackable_ticks >= 1)
                 env->log.count_zuk_healers_attackable_ge_1_normal += 1.0f;
             env->log.zuk_untagged_healer_target_bonus_coeff_normal_sum +=
-                s->zuk_untagged_healer_target_bonus_coeff;
+                INF_ENV_INFERNO_CONTEXT(env)->config.zuk_untagged_healer_target_bonus_coeff;
             env->log.zuk_safe_untagged_healer_target_bonus_coeff_normal_sum +=
-                s->zuk_safe_untagged_healer_target_bonus_coeff;
+                INF_ENV_INFERNO_CONTEXT(env)->config.zuk_safe_untagged_healer_target_bonus_coeff;
             env->log.zuk_healer_reward_mode_normal_sum +=
-                (float)s->zuk_healer_reward_mode;
+                (float)INF_ENV_INFERNO_CONTEXT(env)->config.zuk_healer_reward_mode;
             env->log.zuk_untagged_healer_targets_normal_sum +=
                 (float)s->total_zuk_untagged_healer_targets;
             env->log.zuk_safe_untagged_healer_targets_normal_sum +=
@@ -2192,13 +2217,13 @@ void c_step(Env* env) {
             env->log.zuk_safe_untagged_healer_target_reward_count_normal_sum +=
                 (float)s->total_zuk_safe_untagged_healer_target_rewards;
             env->log.post_healer_set_damage_reward_coeff_normal_sum +=
-                s->post_healer_set_damage_reward_coeff;
+                INF_ENV_INFERNO_CONTEXT(env)->config.post_healer_set_damage_reward_coeff;
             env->log.post_healer_set_kill_bonus_coeff_normal_sum +=
-                s->post_healer_set_kill_bonus;
+                INF_ENV_INFERNO_CONTEXT(env)->config.post_healer_set_kill_bonus;
             env->log.post_healer_set_alive_penalty_coeff_normal_sum +=
-                s->post_healer_set_alive_tick_penalty_coeff;
+                INF_ENV_INFERNO_CONTEXT(env)->config.post_healer_set_alive_tick_penalty_coeff;
             env->log.post_healer_set_alive_penalty_cap_normal_sum +=
-                s->post_healer_set_alive_penalty_cap;
+                INF_ENV_INFERNO_CONTEXT(env)->config.post_healer_set_alive_penalty_cap;
             env->log.post_healer_set_damage_reward_normal_sum +=
                 s->post_healer_set_damage_reward_total;
             env->log.post_healer_set_kill_bonus_reward_normal_sum +=
@@ -2326,7 +2351,7 @@ void c_step(Env* env) {
            for zuk-only (start_wave 68+): best = most damage to zuk (lowest zuk HP), then fewest ticks.
            curriculum starts from mid-waves also record. */
         if (env->episode_actions && env->episode_action_len > 0) {
-            InfernoState* st = (InfernoState*)env->enc_state;
+            InfernoState* st = INF_ENV_INFERNO(env);
             int wave = st->wave;
             int ticks = env->episode_action_len;
             int min_zuk_hp = (st->winner == 0)
@@ -2378,8 +2403,8 @@ void c_step(Env* env) {
             if (env->phase2_ctx) {
                 Phase2EnvState* es = &env->phase2_ctx->env_states[env->env_idx];
                 if (es->demo_id >= 0) {
-                    float q_end = ENCOUNTER_INFERNO.progress_score(env->enc_state);
-                    const InfernoState* st = (const InfernoState*)env->enc_state;
+                    float q_end = ENCOUNTER_INFERNO.progress_score(INF_ENV_STATE(env), INF_ENV_CONTEXT(env));
+                    const InfernoState* st = INF_ENV_INFERNO(env);
                     float q_delta = q_end - es->start_q;
                     int success = inferno_env_phase2_success(
                         env, st, st->winner == 0, q_delta);
@@ -2387,9 +2412,9 @@ void c_step(Env* env) {
                 }
                 inferno_env_apply_phase2_reset(env);
             } else {
-                ENCOUNTER_INFERNO.reset(env->enc_state, 0);
-                ENCOUNTER_INFERNO.write_obs(env->enc_state, obs);
-                ENCOUNTER_INFERNO.write_mask(env->enc_state, obs + INF_NUM_OBS);
+                ENCOUNTER_INFERNO.reset(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), 0);
+                ENCOUNTER_INFERNO.write_obs(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), obs);
+                ENCOUNTER_INFERNO.write_mask(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), obs + INF_NUM_OBS);
             }
             inferno_env_mark_episode_start(env);
             /* render-side cleanup needs the RenderClient which lives in c_render.
@@ -2409,11 +2434,12 @@ void c_reset(Env* env) {
     uint32_t seed = env->replay_actions ? env->replay_rng_seed : 0;
     if (env->replay_actions && env->replay_has_initial_snapshot) {
         ENCOUNTER_INFERNO.restore(
-            env->enc_state,
+            INF_ENV_STATE(env),
+            INF_ENV_CONTEXT(env),
             &env->replay_initial_snapshot,
             sizeof(env->replay_initial_snapshot));
     } else {
-        ENCOUNTER_INFERNO.reset(env->enc_state, seed);
+        ENCOUNTER_INFERNO.reset(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), seed);
     }
     env->replay_cursor = 0;
     inferno_env_mark_episode_start(env);
@@ -2451,10 +2477,7 @@ void c_close(Env* env) {
     free(env->archive_action_history);
     env->archive_action_history = NULL;
     env->archive_action_history_cap = 0;
-    if (env->enc_state) {
-        ENCOUNTER_INFERNO.destroy(env->enc_state);
-        env->enc_state = NULL;
-    }
+    ENCOUNTER_INFERNO.destroy_context(INF_ENV_CONTEXT(env));
     if (env->render_env.client) {
         render_destroy_client((RenderClient*)env->render_env.client);
         env->render_env.client = NULL;
@@ -2473,26 +2496,30 @@ static void inferno_env_apply_render_status_overlay(Env* env, RenderClient* rc) 
 void c_render(Env* env) {
     OsrsEnv* re = &env->render_env;
     re->encounter_def = (void*)&ENCOUNTER_INFERNO;
-    re->encounter_state = env->enc_state;
+    re->encounter_state = INF_ENV_STATE(env);
+    re->encounter_context = INF_ENV_CONTEXT(env);
+    re->tick = ENCOUNTER_INFERNO.get_tick(
+        INF_ENV_STATE(env), INF_ENV_CONTEXT(env));
 
     int first_call = (re->client == NULL);
     if (first_call) {
         re->client = render_make_client();
         RenderClient* rc = (RenderClient*)re->client;
         rc->ticks_per_second = env->ticks_per_second;
-        rc->model_cache = model_cache_load("data/equipment.models");
+        rc->model_cache = model_cache_load(OSRS_ASSET("equipment.models"));
         if (rc->model_cache) rc->show_models = 1;
-        rc->anim_cache = anim_cache_load("data/equipment.anims");
+        rc->anim_cache = anim_cache_load(OSRS_ASSET("equipment.anims"));
+        render_load_projectile_assets(rc);
         render_init_overlay_models(rc);
-        rc->terrain = terrain_load("data/inferno.terrain");
-        rc->objects = objects_load("data/inferno.objects");
-        rc->objects_zuk = objects_load("data/inferno_zuk.objects");
+        rc->terrain = terrain_load(OSRS_ASSET("inferno.terrain"));
+        rc->objects = objects_load(OSRS_ASSET("inferno.objects"));
+        rc->objects_zuk = objects_load(OSRS_ASSET("inferno_zuk.objects"));
         /* inferno region (35,83) starts at world (2246, 5315) */
         if (rc->terrain) terrain_offset(rc->terrain, 2246, 5315);
         if (rc->objects) objects_offset(rc->objects, 2246, 5315);
         if (rc->objects_zuk) objects_offset(rc->objects_zuk, 2246, 5315);
-        rc->npc_model_cache = model_cache_load("data/inferno.models");
-        rc->npc_anim_cache = anim_cache_load("data/inferno.anims");
+        rc->npc_model_cache = model_cache_load(OSRS_ASSET("inferno.models"));
+        rc->npc_anim_cache = anim_cache_load(OSRS_ASSET("inferno.anims"));
 
         /* inferno renders in encounter-local tiles, but render_make_client()
            initializes the camera to wilderness PvP world coords. mirror the
@@ -2510,11 +2537,6 @@ void c_render(Env* env) {
         }
         env->last_step_time = GetTime();
     }
-    if (env->render_status_frames > 0 && re->client)
-        inferno_env_apply_render_status_overlay(env, (RenderClient*)re->client);
-    pvp_render(re);
-    if (env->render_status_frames > 0) env->render_status_frames--;
-
     RenderClient* rc = (RenderClient*)re->client;
     if (!rc) return;
 
@@ -2528,11 +2550,11 @@ void c_render(Env* env) {
     }
 
     /* update NPC visual positions once per tick (not per frame).
-       render_post_tick snaps sub_x/sub_y/dest_x/dest_y for spawned/moved NPCs
-       and resets composite state on npc_slot changes. */
-    render_populate_entities(rc, re);
+       render_post_tick snapshots the existing rc->entities before repopulating
+       so it can detect new NPC identities and clear stale splats/HP bars. */
     render_post_tick(rc, re);
     inferno_env_apply_render_status_overlay(env, rc);
+    if (env->render_status_frames > 0) env->render_status_frames--;
 
     /* match the standalone viewer's visual_frame pattern: spin pvp_render at
        ~60fps until the next sim tick is due. pvp_render uses GetFrameTime()
@@ -2551,32 +2573,120 @@ void c_render(Env* env) {
     env->last_step_time = GetTime();
 }
 
-#define MY_VEC_INIT
-#include "vecenv.h"
+	#define MY_VEC_INIT
+	#define PUFFER_STATE_T InfernoState
+	#define PUFFER_STATE_SIZE ((int)sizeof(InfernoState))
+	#define PUFFER_STATE_REFRESH(env) inferno_env_refresh_after_state_load(env)
+	#include "vecenv.h"
 
 /* max episode length for action buffer (INF_MAX_TICKS from encounter) */
 #define REPLAY_MAX_TICKS INF_MAX_TICKS
 
+static void inferno_env_put_float(Env* env, const char* key, float value) {
+    ENCOUNTER_INFERNO.put_float(
+        INF_ENV_STATE(env),
+        INF_ENV_CONTEXT(env),
+        key,
+        value);
+}
+
+static void inferno_env_put_int(Env* env, const char* key, int value) {
+    ENCOUNTER_INFERNO.put_int(
+        INF_ENV_STATE(env),
+        INF_ENV_CONTEXT(env),
+        key,
+        value);
+}
+
+static void inferno_apply_obs_profile(Env* env, int obs_profile) {
+    switch (obs_profile) {
+        case 0:
+            inferno_env_put_int(env, "step_out_forecast_obs_enabled", 0);
+            break;
+        case 1:
+            inferno_env_put_int(env, "step_out_forecast_obs_enabled", 1);
+            break;
+        default:
+            fprintf(stderr, "obs_profile must be 0 or 1, got %d\n", obs_profile);
+            abort();
+    }
+}
+
+static void inferno_zero_phase_reward_coeffs(Env* env) {
+    static const char* const keys[] = {
+        "jad_damage_reward_coeff",
+        "zuk_healer_damage_reward_coeff",
+        "set_damage_reward_coeff",
+        "jad_kill_bonus",
+        "zuk_healer_kill_bonus",
+        "set_kill_bonus",
+        "post_healer_zuk_damage_coeff",
+        "zuk_healer_phase_hp_delta_coeff",
+        "post_healer_set_damage_reward_coeff",
+        "post_healer_set_kill_bonus",
+        "post_healer_set_alive_tick_penalty_coeff",
+        "post_healer_set_alive_penalty_cap",
+        "zuk_untagged_healer_tick_penalty_coeff",
+        "zuk_untagged_healer_target_bonus_coeff",
+        "zuk_safe_untagged_healer_target_bonus_coeff",
+    };
+    for (size_t i = 0; i < sizeof(keys) / sizeof(*keys); i++)
+        inferno_env_put_float(env, keys[i], 0.0f);
+    inferno_env_put_float(env, "post_jad_zuk_multiplier", 1.0f);
+    inferno_env_put_float(env, "jad_alive_zuk_multiplier", 1.0f);
+}
+
+static void inferno_apply_reward_profile(Env* env, int reward_profile) {
+    switch (reward_profile) {
+        case 0:
+            inferno_env_put_int(env, "joseph_reward_mode", 0);
+            inferno_env_put_float(env, "damage_reward_coeff", 0.0f);
+            inferno_env_put_float(env, "shield_penalty_coeff", 0.0f);
+            inferno_env_put_float(env, "tag_reward_coeff", 0.0f);
+            inferno_env_put_float(env, "shield_tag_reward_coeff", 0.0f);
+            inferno_env_put_float(
+                env,
+                "zuk_untagged_healer_nonmagic_attack_bonus_coeff",
+                0.0f);
+            inferno_env_put_float(env, "zuk_healer_mage_attack_penalty_coeff", 0.0f);
+            inferno_zero_phase_reward_coeffs(env);
+            break;
+        case 1:
+            inferno_env_put_int(env, "joseph_reward_mode", 0);
+            break;
+        case 2:
+            inferno_env_put_int(env, "joseph_reward_mode", 1);
+            inferno_env_put_float(env, "shield_tag_reward_coeff", 0.0f);
+            inferno_zero_phase_reward_coeffs(env);
+            break;
+        default:
+            fprintf(stderr, "reward_profile must be in [0,2], got %d\n", reward_profile);
+            abort();
+    }
+}
+
 void my_init(Env* env, Dict* kwargs) {
     env->num_agents = 1;
-    env->enc_state = ENCOUNTER_INFERNO.create();
+    ENCOUNTER_INFERNO.init_context(INF_ENV_CONTEXT(env));
+    ENCOUNTER_INFERNO.init_state(INF_ENV_STATE(env), INF_ENV_CONTEXT(env));
     memset(&env->log, 0, sizeof(Log));
     env->log.best_min_zuk_hp_normal = 1200.0f;
 
     DictItem* start_wave = dict_get_unsafe(kwargs, "start_wave");
     if (start_wave)
-        ENCOUNTER_INFERNO.put_int(env->enc_state, "start_wave", (int)start_wave->value);
+        ENCOUNTER_INFERNO.put_int(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), "start_wave", (int)start_wave->value);
     ENCOUNTER_INFERNO.put_float(
-        env->enc_state, "damage_reward_coeff",
+        INF_ENV_STATE(env), INF_ENV_CONTEXT(env), "damage_reward_coeff",
         (float)dict_get_unsafe(kwargs, "damage_reward_coeff")->value);
     ENCOUNTER_INFERNO.put_float(
-        env->enc_state, "shield_penalty_coeff",
+        INF_ENV_STATE(env), INF_ENV_CONTEXT(env), "shield_penalty_coeff",
         (float)dict_get_unsafe(kwargs, "shield_penalty_coeff")->value);
     ENCOUNTER_INFERNO.put_float(
-        env->enc_state, "tag_reward_coeff",
+        INF_ENV_STATE(env), INF_ENV_CONTEXT(env), "tag_reward_coeff",
         (float)dict_get_unsafe(kwargs, "tag_reward_coeff")->value);
     static const char* const optional_float_keys[] = {
         "shield_tag_reward_coeff",
+        "budget_loadout_fraction",
         "death_penalty_coeff",
         "phase_900_bonus", "phase_600_bonus", "phase_300_bonus",
         "shield_penalty_episode_cap",
@@ -2599,61 +2709,78 @@ void my_init(Env* env, Dict* kwargs) {
     for (size_t k = 0; k < sizeof(optional_float_keys)/sizeof(*optional_float_keys); k++) {
         DictItem* item = dict_get_unsafe(kwargs, optional_float_keys[k]);
         if (item) {
-            ENCOUNTER_INFERNO.put_float(env->enc_state, optional_float_keys[k], (float)item->value);
+            ENCOUNTER_INFERNO.put_float(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), optional_float_keys[k], (float)item->value);
         }
     }
     DictItem* supply_profile_scale =
         dict_get_unsafe(kwargs, "late_start_supply_profile_scale");
     if (supply_profile_scale) {
         ENCOUNTER_INFERNO.put_float(
-            env->enc_state, "late_start_supply_profile_scale",
+            INF_ENV_STATE(env), INF_ENV_CONTEXT(env), "late_start_supply_profile_scale",
             (float)supply_profile_scale->value);
     }
     DictItem* oracle_mode = dict_get_unsafe(kwargs, "oracle_mode");
     if (oracle_mode) {
         ENCOUNTER_INFERNO.put_int(
-            env->enc_state, "oracle_mode", (int)oracle_mode->value);
+            INF_ENV_STATE(env), INF_ENV_CONTEXT(env), "oracle_mode",
+            (int)oracle_mode->value);
     }
     DictItem* terminal_penalty_enabled =
         dict_get_unsafe(kwargs, "terminal_penalty_enabled");
     if (terminal_penalty_enabled) {
         ENCOUNTER_INFERNO.put_int(
-            env->enc_state, "terminal_penalty_enabled",
+            INF_ENV_STATE(env), INF_ENV_CONTEXT(env), "terminal_penalty_enabled",
             (int)terminal_penalty_enabled->value);
     }
     DictItem* step_out_forecast_obs_enabled =
         dict_get_unsafe(kwargs, "step_out_forecast_obs_enabled");
     if (step_out_forecast_obs_enabled) {
         ENCOUNTER_INFERNO.put_int(
-            env->enc_state, "step_out_forecast_obs_enabled",
+            INF_ENV_STATE(env), INF_ENV_CONTEXT(env), "step_out_forecast_obs_enabled",
             (int)step_out_forecast_obs_enabled->value);
+    }
+    DictItem* obs_profile = dict_get_unsafe(kwargs, "obs_profile");
+    if (obs_profile) {
+        inferno_apply_obs_profile(env, (int)obs_profile->value);
+    }
+    DictItem* loadout_profile_mode =
+        dict_get_unsafe(kwargs, "loadout_profile_mode");
+    if (loadout_profile_mode) {
+        ENCOUNTER_INFERNO.put_int(
+            INF_ENV_STATE(env), INF_ENV_CONTEXT(env), "loadout_profile_mode",
+            (int)loadout_profile_mode->value);
     }
     DictItem* zuk_healer_reward_mode =
         dict_get_unsafe(kwargs, "zuk_healer_reward_mode");
     if (zuk_healer_reward_mode) {
         ENCOUNTER_INFERNO.put_int(
-            env->enc_state, "zuk_healer_reward_mode",
+            INF_ENV_STATE(env), INF_ENV_CONTEXT(env), "zuk_healer_reward_mode",
             (int)zuk_healer_reward_mode->value);
     }
     DictItem* joseph_reward_mode =
         dict_get_unsafe(kwargs, "joseph_reward_mode");
     if (joseph_reward_mode) {
         ENCOUNTER_INFERNO.put_int(
-            env->enc_state, "joseph_reward_mode",
+            INF_ENV_STATE(env), INF_ENV_CONTEXT(env), "joseph_reward_mode",
             (int)joseph_reward_mode->value);
+    }
+    DictItem* reward_profile = dict_get_unsafe(kwargs, "reward_profile");
+    if (reward_profile) {
+        inferno_apply_reward_profile(env, (int)reward_profile->value);
     }
     DictItem* safe_healer_target_mask =
         dict_get_unsafe(kwargs, "zuk_safe_untagged_healer_target_mask");
     if (safe_healer_target_mask) {
         ENCOUNTER_INFERNO.put_int(
-            env->enc_state, "zuk_safe_untagged_healer_target_mask",
+            INF_ENV_STATE(env), INF_ENV_CONTEXT(env), "zuk_safe_untagged_healer_target_mask",
             (int)safe_healer_target_mask->value);
     }
     DictItem* force_safe_healer_target_mask =
         dict_get_unsafe(kwargs, "zuk_force_safe_untagged_healer_target_mask");
     if (force_safe_healer_target_mask) {
         ENCOUNTER_INFERNO.put_int(
-            env->enc_state, "zuk_force_safe_untagged_healer_target_mask",
+            INF_ENV_STATE(env), INF_ENV_CONTEXT(env),
+            "zuk_force_safe_untagged_healer_target_mask",
             (int)force_safe_healer_target_mask->value);
     }
     DictItem* phase2_diagnostic_phase =
@@ -2834,11 +2961,12 @@ void my_init(Env* env, Dict* kwargs) {
                 num_ticks, rng_seed, play_path);
         if (has_initial_snapshot) {
             ENCOUNTER_INFERNO.restore(
-                env->enc_state,
+                INF_ENV_STATE(env),
+                INF_ENV_CONTEXT(env),
                 &env->replay_initial_snapshot,
                 sizeof(env->replay_initial_snapshot));
         } else {
-            ENCOUNTER_INFERNO.reset(env->enc_state, rng_seed);
+            ENCOUNTER_INFERNO.reset(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), rng_seed);
         }
 
         const char* phase2_demo_path = getenv("RECORD_PHASE2_DEMO");
@@ -2863,7 +2991,7 @@ void my_init(Env* env, Dict* kwargs) {
                 abort();
             }
 
-            ENCOUNTER_INFERNO.snapshot(env->enc_state,
+            ENCOUNTER_INFERNO.snapshot(INF_ENV_STATE(env), INF_ENV_CONTEXT(env),
                 env->replay_phase2_demo_snapshots);
             env->replay_phase2_demo_snapshot_ticks[0] = 0;
             env->replay_phase2_demo_snapshot_count = 1;
@@ -2921,6 +3049,15 @@ Env* my_vec_init(int* num_envs_out, int* buffer_env_starts, int* buffer_env_coun
     int agents_per_buffer = total_agents / num_buffers;
     DictItem* base_start_wave_item = dict_get_unsafe(env_kwargs, "start_wave");
     int base_start_wave = base_start_wave_item ? (int)base_start_wave_item->value : 0;
+    DictItem* classic_curriculum_mode_item =
+        dict_get_unsafe(env_kwargs, "classic_curriculum_mode");
+    int classic_curriculum_mode = classic_curriculum_mode_item
+        ? (int)classic_curriculum_mode_item->value : 1;
+    if (classic_curriculum_mode < 0 || classic_curriculum_mode > 1) {
+        fprintf(stderr, "classic_curriculum_mode must be 0 or 1, got %d\n",
+            classic_curriculum_mode);
+        abort();
+    }
 
     /* parse curriculum tiers from env config */
     static const char* wave_keys[] = {
@@ -2934,13 +3071,15 @@ Env* my_vec_init(int* num_envs_out, int* buffer_env_starts, int* buffer_env_coun
     int curriculum_waves[MAX_CURRICULUM_TIERS];
     float curriculum_fracs[MAX_CURRICULUM_TIERS];
     int num_tiers = 0;
-    for (int i = 0; i < MAX_CURRICULUM_TIERS; i++) {
-        DictItem* w = dict_get_unsafe(env_kwargs, wave_keys[i]);
-        DictItem* f = dict_get_unsafe(env_kwargs, frac_keys[i]);
-        if (w && f && f->value > 0.0) {
-            curriculum_waves[num_tiers] = (int)w->value;
-            curriculum_fracs[num_tiers] = (float)f->value;
-            num_tiers++;
+    if (classic_curriculum_mode == 1) {
+        for (int i = 0; i < MAX_CURRICULUM_TIERS; i++) {
+            DictItem* w = dict_get_unsafe(env_kwargs, wave_keys[i]);
+            DictItem* f = dict_get_unsafe(env_kwargs, frac_keys[i]);
+            if (w && f && f->value > 0.0) {
+                curriculum_waves[num_tiers] = (int)w->value;
+                curriculum_fracs[num_tiers] = (float)f->value;
+                num_tiers++;
+            }
         }
     }
 
@@ -2979,8 +3118,11 @@ Env* my_vec_init(int* num_envs_out, int* buffer_env_starts, int* buffer_env_coun
         int cursor = base_count;
         for (int t = 0; t < num_tiers; t++) {
             for (int i = 0; i < tier_counts[t] && cursor < num_envs; i++, cursor++) {
-                ENCOUNTER_INFERNO.put_int(envs[cursor].enc_state,
-                    "start_wave", curriculum_waves[t]);
+                ENCOUNTER_INFERNO.put_int(
+                    INF_ENV_STATE(&envs[cursor]),
+                    INF_ENV_CONTEXT(&envs[cursor]),
+                    "start_wave",
+                    curriculum_waves[t]);
             }
         }
         fprintf(stderr, "curriculum: %d wave-%d", base_count, base_start_wave);
@@ -3802,7 +3944,7 @@ void my_log(Log* log, Dict* out) {
  *   - inferno_env_flush_scratch_to_archive at the end of each iteration
  * ===================================================================== */
 
-void inferno_env_enable_archive_mode(
+INFERNO_ENV_EXPORT void inferno_env_enable_archive_mode(
     InfernoEnv* env,
     Archive* archive,
     int action_history_cap
@@ -3827,7 +3969,7 @@ void inferno_env_enable_archive_mode(
     env->archive_parent_rng = 0u;
 }
 
-void inferno_env_disable_archive_mode(InfernoEnv* env) {
+INFERNO_ENV_EXPORT void inferno_env_disable_archive_mode(InfernoEnv* env) {
     env->archive = NULL;
 }
 
@@ -3835,7 +3977,7 @@ void inferno_env_disable_archive_mode(InfernoEnv* env) {
    archive_parent_idx == ARCHIVE_ROOT_PARENT) and reset per-iteration tracking.
    the env->observations buffer is rewritten so the next net_callback reads
    the post-restore obs. */
-void inferno_env_begin_archive_iteration(
+INFERNO_ENV_EXPORT void inferno_env_begin_archive_iteration(
     InfernoEnv* env,
     int archive_parent_idx
 ) {
@@ -3845,18 +3987,21 @@ void inferno_env_begin_archive_iteration(
         const void* snap = archive_get_snapshot(env->archive, archive_parent_idx);
         if (snap) {
             ENCOUNTER_INFERNO.restore(
-                env->enc_state, snap, ENCOUNTER_INFERNO.snapshot_size(env->enc_state));
+                INF_ENV_STATE(env),
+                INF_ENV_CONTEXT(env),
+                snap,
+                ENCOUNTER_INFERNO.snapshot_size(INF_ENV_STATE(env), INF_ENV_CONTEXT(env)));
         }
     }
 
     env->archive_parent_idx = archive_parent_idx;
-    env->archive_parent_rng = ((InfernoState*)env->enc_state)->rng_state;
+    env->archive_parent_rng = INF_ENV_INFERNO(env)->rng_state;
     env->archive_action_history_len = 0;
     env->archive_scratch_count = 0;
     env->archive_scratch_dropped = 0;
 
     /* seed prev_key with the post-restore cell so we only register changes */
-    ENCOUNTER_INFERNO.write_cell_key(env->enc_state, &env->archive_prev_key);
+    ENCOUNTER_INFERNO.write_cell_key(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), &env->archive_prev_key);
     env->archive_prev_key_valid = 1;
 
     inferno_env_write_post_restore_state(env);
@@ -3871,7 +4016,7 @@ void inferno_env_begin_archive_iteration(
    history[T][env_idx]. Pass NULL to skip hidden state attachment.
 
    Returns the number of NEW cells inserted. */
-int inferno_env_flush_scratch_to_archive(
+INFERNO_ENV_EXPORT int inferno_env_flush_scratch_to_archive(
     InfernoEnv* env,
     const uint8_t* hidden_state_history,
     int total_agents,
@@ -3931,27 +4076,27 @@ int inferno_env_flush_scratch_to_archive(
     return new_cells;
 }
 
-int inferno_env_archive_scratch_count(const InfernoEnv* env) {
+INFERNO_ENV_EXPORT int inferno_env_archive_scratch_count(const InfernoEnv* env) {
     return env->archive_scratch_count;
 }
 
-int inferno_env_archive_scratch_dropped(const InfernoEnv* env) {
+INFERNO_ENV_EXPORT int inferno_env_archive_scratch_dropped(const InfernoEnv* env) {
     return env->archive_scratch_dropped;
 }
 
 /* Encounter-side accessors so metal_pufferlib.mm (which doesn't include
    encounter headers) can size the archive and bootstrap the root cell. */
-size_t inferno_env_snapshot_bytes(void) {
+INFERNO_ENV_EXPORT size_t inferno_env_snapshot_bytes(void) {
     return sizeof(InfSnapshot);
 }
 
-int inferno_env_obs_floats(void) {
+INFERNO_ENV_EXPORT int inferno_env_obs_floats(void) {
     return INF_TOTAL_OBS;
 }
 
 /* Indexed access for callers that hold the env array as void* (pointer
    arithmetic on an incomplete InfernoEnv would not compile). */
-struct InfernoEnv* inferno_env_at(void* envs_void, int idx) {
+INFERNO_ENV_EXPORT struct InfernoEnv* inferno_env_at(void* envs_void, int idx) {
     InfernoEnv* envs = (InfernoEnv*)envs_void;
     return &envs[idx];
 }
@@ -3959,7 +4104,7 @@ struct InfernoEnv* inferno_env_at(void* envs_void, int idx) {
 /* Register env's CURRENT state as a root cell in the given archive.
    hidden_state may be NULL (zero-filled). Returns the entry index or
    ARCHIVE_NULL_INDEX on full / collision-with-better. */
-int inferno_env_register_root_cell(
+INFERNO_ENV_EXPORT int inferno_env_register_root_cell(
     InfernoEnv* env,
     Archive* archive,
     const uint8_t* hidden_state
@@ -3967,10 +4112,10 @@ int inferno_env_register_root_cell(
     if (!archive) return ARCHIVE_NULL_INDEX;
 
     InfCellKey key;
-    ENCOUNTER_INFERNO.write_cell_key(env->enc_state, &key);
+    ENCOUNTER_INFERNO.write_cell_key(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), &key);
     InfSnapshot snap;
-    ENCOUNTER_INFERNO.snapshot(env->enc_state, &snap);
-    float quality = ENCOUNTER_INFERNO.progress_score(env->enc_state);
+    ENCOUNTER_INFERNO.snapshot(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), &snap);
+    float quality = ENCOUNTER_INFERNO.progress_score(INF_ENV_STATE(env), INF_ENV_CONTEXT(env));
 
     ArchiveInsertResult result;
     return archive_insert(archive,
@@ -3985,7 +4130,7 @@ int inferno_env_register_root_cell(
    No action replay: the archive trajectory is not deterministic from
    snapshot+actions, but each snapshot stands alone as a faithful state.
    Returns 0 on success, -1 on shape mismatch. */
-int inferno_env_build_demo_snapshot_ladder(
+INFERNO_ENV_EXPORT int inferno_env_build_demo_snapshot_ladder(
     InfernoEnv* env,
     const DemoTrajectory* demo,
     DemoSnapshotLadder* out_ladder,
@@ -4003,12 +4148,12 @@ int inferno_env_build_demo_snapshot_ladder(
          out_obs_cache->obs_floats_per_slot != INF_TOTAL_OBS)) return -1;
 
     InfSnapshot saved;
-    ENCOUNTER_INFERNO.snapshot(env->enc_state, &saved);
+    ENCOUNTER_INFERNO.snapshot(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), &saved);
 
     for (int s = 0; s < demo->num_snapshots; s++) {
         const uint8_t* src = demo->snapshots + (size_t)s * (size_t)demo->snapshot_size;
-        ENCOUNTER_INFERNO.restore(env->enc_state, src, demo->snapshot_size);
-        ENCOUNTER_INFERNO.snapshot(env->enc_state,
+        ENCOUNTER_INFERNO.restore(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), src, demo->snapshot_size);
+        ENCOUNTER_INFERNO.snapshot(INF_ENV_STATE(env), INF_ENV_CONTEXT(env),
             out_ladder->snapshot_pool + (size_t)s * out_ladder->snapshot_size);
         out_ladder->snapshot_ticks[s] = demo->snapshot_ticks[s];
         if (out_obs_cache) {
@@ -4024,18 +4169,18 @@ int inferno_env_build_demo_snapshot_ladder(
         }
     }
 
-    ENCOUNTER_INFERNO.restore(env->enc_state, &saved, sizeof(saved));
+    ENCOUNTER_INFERNO.restore(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), &saved, sizeof(saved));
     inferno_env_write_post_restore_state(env);
 
     return 0;
 }
 
-void inferno_env_set_phase2_ctx(InfernoEnv* env, Phase2Context* ctx, int env_idx) {
+INFERNO_ENV_EXPORT void inferno_env_set_phase2_ctx(InfernoEnv* env, Phase2Context* ctx, int env_idx) {
     env->phase2_ctx = ctx;
     env->env_idx = env_idx;
 }
 
-void inferno_env_force_phase2_reset(InfernoEnv* env) {
+INFERNO_ENV_EXPORT void inferno_env_force_phase2_reset(InfernoEnv* env) {
     if (!env->phase2_ctx) {
         fprintf(stderr, "inferno_env_force_phase2_reset: phase2 context is not set\n");
         abort();
@@ -4048,14 +4193,14 @@ void inferno_env_force_phase2_reset(InfernoEnv* env) {
    demo. Prints per-demo diagnostic. Saves and restores env state across the
    walk so the caller's env is not disturbed. Returns number of demos whose
    ladder qmax fell more than 0.02 below the file_q (zero on healthy data). */
-int inferno_env_validate_ladders(
+INFERNO_ENV_EXPORT int inferno_env_validate_ladders(
     InfernoEnv* env,
     const DemoStore* store,
     DemoSnapshotLadder* const* ladders,
     int* out_cursor_ticks
 ) {
     InfSnapshot saved;
-    ENCOUNTER_INFERNO.snapshot(env->enc_state, &saved);
+    ENCOUNTER_INFERNO.snapshot(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), &saved);
 
     int violations = 0;
     int phase_slot_counts[INF_HEALER_DIAG_COUNT] = {0};
@@ -4070,14 +4215,14 @@ int inferno_env_validate_ladders(
 
         for (int s = 0; s < l->num_snapshots; s++) {
             const void* snap = demo_snapshot_ladder_snapshot_at(l, s);
-            ENCOUNTER_INFERNO.restore(env->enc_state, snap, l->snapshot_size);
-            const InfernoState* is = (const InfernoState*)env->enc_state;
+            ENCOUNTER_INFERNO.restore(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), snap, l->snapshot_size);
+            const InfernoState* is = INF_ENV_INFERNO(env);
             if (!inf_weapon_set_is_valid(is)) invalid_weapon_slots++;
             for (int p = INF_HEALER_DIAG_PRE_HEALER; p < INF_HEALER_DIAG_COUNT; p++) {
                 if (inf_healer_diagnostic_phase_matches(is, p))
                     phase_slot_counts[p]++;
             }
-            float q = ENCOUNTER_INFERNO.progress_score(env->enc_state);
+            float q = ENCOUNTER_INFERNO.progress_score(INF_ENV_STATE(env), INF_ENV_CONTEXT(env));
             int eo = is->episode_over;
             if (s == 0) q0 = q;
             qlast = q;
@@ -4108,7 +4253,7 @@ int inferno_env_validate_ladders(
             violated ? "  ** ladder qmax violates file_q" : "");
     }
 
-    ENCOUNTER_INFERNO.restore(env->enc_state, &saved, sizeof(saved));
+    ENCOUNTER_INFERNO.restore(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), &saved, sizeof(saved));
     inferno_env_write_post_restore_state(env);
 
     fprintf(stderr,
@@ -4157,14 +4302,14 @@ static Phase2ResetDecision inferno_env_decide_phase2_reset(InfernoEnv* env) {
 
         int slot = phase2_rand_int_state(rng_state, ladder->num_snapshots);
         const void* snap = demo_snapshot_ladder_snapshot_at(ladder, slot);
-        ENCOUNTER_INFERNO.restore(env->enc_state, snap, ladder->snapshot_size);
+        ENCOUNTER_INFERNO.restore(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), snap, ladder->snapshot_size);
 
         if (!inf_healer_diagnostic_phase_matches(
-                (const InfernoState*)env->enc_state,
+                INF_ENV_INFERNO(env),
                 env->phase2_diagnostic_phase))
             continue;
         if (!inf_healer_diagnostic_attack_timer_matches(
-                (const InfernoState*)env->enc_state,
+                INF_ENV_INFERNO(env),
                 env->phase2_max_player_attack_timer))
             continue;
 
@@ -4186,16 +4331,16 @@ static void inferno_env_apply_phase2_reset(InfernoEnv* env) {
     Phase2ResetDecision d = inferno_env_decide_phase2_reset(env);
 
     if (d.demo_id < 0) {
-        ENCOUNTER_INFERNO.reset(env->enc_state, 0);
+        ENCOUNTER_INFERNO.reset(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), 0);
     } else {
         DemoSnapshotLadder* ladder = ctx->ladders[d.demo_id];
         const void* snap = demo_snapshot_ladder_snapshot_at(ladder, d.slot);
-        ENCOUNTER_INFERNO.restore(env->enc_state, snap, ladder->snapshot_size);
+        ENCOUNTER_INFERNO.restore(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), snap, ladder->snapshot_size);
         if (d.randomize_rng) {
-            ((InfernoState*)env->enc_state)->rng_state = d.fresh_rng_seed;
+            INF_ENV_INFERNO(env)->rng_state = d.fresh_rng_seed;
         }
         inf_reset_transition_diagnostics_for_restored_start(
-            (InfernoState*)env->enc_state);
+            INF_ENV_INFERNO(env));
     }
 
     Phase2EnvState* es = &ctx->env_states[env->env_idx];
@@ -4209,9 +4354,9 @@ static void inferno_env_apply_phase2_reset(InfernoEnv* env) {
         es->first_action_pending = 0;
     } else {
         es->start_tick = ctx->ladders[d.demo_id]->snapshot_ticks[d.slot];
-        es->start_q = ENCOUNTER_INFERNO.progress_score(env->enc_state);
+        es->start_q = ENCOUNTER_INFERNO.progress_score(INF_ENV_STATE(env), INF_ENV_CONTEXT(env));
         es->start_active_set_count =
-            inferno_active_set_pressure_count((const InfernoState*)env->enc_state);
+            inferno_active_set_pressure_count(INF_ENV_INFERNO(env));
         es->needs_hidden_restore =
             ctx->ladders[d.demo_id]->hidden_size > 0 ? 1 : 0;
         es->first_action_pending = 1;

@@ -73,17 +73,18 @@ OSRS_INCLUDE=""
 if [[ "$SRC_DIR" == *osrs* ]]; then
     OSRS_INCLUDE="-Iocean/osrs"
     OSRS_ASSET_VERSION="osrs-assets-v9"
-    OSRS_ASSET_MARKER="data/.${OSRS_ASSET_VERSION}"
-    if [ ! -f "$OSRS_ASSET_MARKER" ]; then
+    OSRS_DATA_DIR="ocean/osrs/data"
+    if [ ! -f "$OSRS_DATA_DIR/equipment.models" ] || \
+       [ ! -f "$OSRS_DATA_DIR/equipment.anims" ] || \
+       [ ! -f "$OSRS_DATA_DIR/inferno.models" ]; then
         echo "Downloading OSRS visual assets..."
-        mkdir -p data
+        mkdir -p "$OSRS_DATA_DIR"
         OSRS_ASSET_TAR_ARGS=(xz --exclude='._*' --exclude='*/._*')
         [ "$PLATFORM" = "Linux" ] && OSRS_ASSET_TAR_ARGS+=(--warning=no-unknown-keyword)
-        OSRS_ASSET_TAR_ARGS+=(--strip-components=1 -C data)
+        OSRS_ASSET_TAR_ARGS+=(--strip-components=1 -C "$OSRS_DATA_DIR")
         curl -sL "https://github.com/valtterivalo/PufferLib/releases/download/${OSRS_ASSET_VERSION}/${OSRS_ASSET_VERSION}.tar.gz" \
             | tar "${OSRS_ASSET_TAR_ARGS[@]}"
-        find data -name '._*' -delete
-        touch "$OSRS_ASSET_MARKER"
+        find "$OSRS_DATA_DIR" -name '._*' -delete
     fi
 fi
 
@@ -167,7 +168,7 @@ if [ "$MODE" = "web" ]; then
     if [[ "$SRC_DIR" == *osrs* ]]; then
         WEB_SRC="ocean/osrs/osrs_visual.c"
         WEB_EXTRA="-Iocean/osrs"
-        PRELOAD="--preload-file ocean/osrs/data@data"
+        PRELOAD="--preload-file ocean/osrs/data@ocean/osrs/data"
         WEB_DEFINES="$WEB_DEFINES -DOSRS_VISUAL"
     fi
 
@@ -314,7 +315,7 @@ if [ "$PLATFORM" = "Darwin" ]; then
 
     clang++ -shared -fPIC -undefined dynamic_lookup \
         src/metal_bindings.o src/metal_platform.o \
-        "$STATIC_LIB" \
+        -Wl,-force_load,"$STATIC_LIB" \
         "$RAYLIB_A" \
         -framework Metal -framework Accelerate -framework Foundation \
         -framework Cocoa -framework OpenGL -framework IOKit \

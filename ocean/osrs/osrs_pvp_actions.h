@@ -233,10 +233,14 @@ static void update_timers(Player* p) {
         p->offensive_prayer_just_activated = 0;
     }
 
-    if (p->run_energy < 100 && (!p->is_moving || !p->is_running)) {
+    if (p->run_energy < OSRS_RUN_ENERGY_FULL && (!p->is_moving || !p->is_running)) {
         p->run_recovery_ticks += 1;
         if (p->run_recovery_ticks >= RUN_ENERGY_RECOVER_TICKS) {
-            p->run_energy = clamp(p->run_energy + 1, 0, 100);
+            p->run_energy = clamp(
+                p->run_energy + OSRS_RUN_ENERGY_UNITS_PER_PERCENT,
+                0,
+                OSRS_RUN_ENERGY_FULL
+            );
             p->run_recovery_ticks = 0;
         }
     } else {

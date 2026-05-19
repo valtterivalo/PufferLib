@@ -9,7 +9,7 @@
  *   - equipment slot backgrounds: sprite IDs 156-165, 170
  *   - prayer icons (enabled/disabled): sprite IDs 115-154, 502-509, 945-951, 1420-1425
  *   - tab icons: sprite IDs 168, 898, 899, 900, 901, 779, 780
- *   - spell icons: sprite IDs 325-336, 375-386, 557, 561, 564, 607, 611, 614
+ *   - spell icons: sprite IDs 325-348, 375-398, 557, 561, 564, 607, 611, 614
  *   - special attack bar: sprite ID 657
  *
  * Layout constants derived from OSRS client widget definitions:
@@ -23,12 +23,27 @@
 #ifndef OSRS_GUI_H
 #define OSRS_GUI_H
 
+#include <assert.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "osrs_assets.h"
 #include "osrs_human_input_types.h"
 
+#if __has_include("raylib.h")
 #include "raylib.h"
+#elif __has_include("raylib-5.5_macos/include/raylib.h")
+#include "raylib-5.5_macos/include/raylib.h"
+#elif __has_include("refs/RuneC/lib/raylib/include/raylib.h")
+#include "refs/RuneC/lib/raylib/include/raylib.h"
+#else
+#error "raylib.h not found"
+#endif
 #include "osrs_types.h"
 #include "osrs_items.h"
 #include "osrs_pvp_gear.h"
+#include "osrs_ui_interfaces.h"
 
 
 #define GUI_BG_DARK     CLITERAL(Color){ 62, 53, 41, 255 }
@@ -53,6 +68,51 @@
 
 /* OSRS text shadow: draw black at (+1,+1) then color on top */
 #define GUI_TEXT_SHADOW CLITERAL(Color){ 0, 0, 0, 255 }
+
+#define GUI_MAP_CONTAINER_W 211
+#define GUI_MAP_CONTAINER_H 207
+#define GUI_MINIMAP_X 53
+#define GUI_MINIMAP_Y 8
+#define GUI_MINIMAP_W 152
+#define GUI_MINIMAP_H 152
+#define GUI_MINIMAP_MASK_CENTER 75.5f
+#define GUI_MINIMAP_MASK_RADIUS 76.0f
+#define GUI_MAP_SURROUND_X 29
+#define GUI_MAP_SURROUND_Y 0
+#define GUI_MAP_SURROUND_W 182
+#define GUI_MAP_SURROUND_H 166
+#define GUI_COMPASS_X 34
+#define GUI_COMPASS_Y 5
+#define GUI_COMPASS_W 35
+#define GUI_COMPASS_H 35
+
+#define GUI_ORBS_X 0
+#define GUI_ORBS_Y 10
+#define GUI_ORBS_W 207
+#define GUI_ORBS_H 197
+#define GUI_XP_X 0
+#define GUI_XP_Y 17
+#define GUI_HP_X 0
+#define GUI_HP_Y 37
+#define GUI_PRAYER_X 0
+#define GUI_PRAYER_Y 71
+#define GUI_RUN_X 10
+#define GUI_RUN_Y 103
+#define GUI_SPEC_X 32
+#define GUI_SPEC_Y 128
+#define GUI_WORLDMAP_X 177
+#define GUI_WORLDMAP_Y 137
+
+#define GUI_SIDE_MENU_W 241
+#define GUI_SIDE_MENU_H 335
+#define GUI_SIDE_CONTENT_X 25
+#define GUI_SIDE_CONTENT_Y 37
+#define GUI_SIDE_CONTENT_W 190
+#define GUI_SIDE_CONTENT_H 261
+#define GUI_SIDE_TOP_Y 0
+#define GUI_SIDE_BOTTOM_Y 298
+
+#define GUI_TAB_PRESS_TICKS 6
 
 
 typedef enum {
@@ -110,31 +170,32 @@ typedef enum {
 } GuiPrayerIdx;
 
 
-/* Ancient spellbook sorted by level (Smoke→Shadow→Blood→Ice per row,
-   Rush→Burst→Blitz→Barrage per family). Only Ice/Blood/Vengeance are
-   castable in this env; Smoke/Shadow render greyed-out for authenticity. */
+/* Ancient spellbook sorted by level: combat spells followed by teleports. */
 typedef enum {
-    /* row 0: Rush spells (level 50/52/56/58) */
     GUI_SPELL_SMOKE_RUSH = 0,     /* sprite 329 / 379 */
     GUI_SPELL_SHADOW_RUSH,        /* sprite 337 / 387 */
     GUI_SPELL_BLOOD_RUSH,         /* sprite 333 / 383 */
     GUI_SPELL_ICE_RUSH,           /* sprite 325 / 375 */
-    /* row 1: Burst spells (62/64/68/70) */
     GUI_SPELL_SMOKE_BURST,        /* sprite 330 / 380 */
     GUI_SPELL_SHADOW_BURST,       /* sprite 338 / 388 */
     GUI_SPELL_BLOOD_BURST,        /* sprite 334 / 384 */
     GUI_SPELL_ICE_BURST,          /* sprite 326 / 376 */
-    /* row 2: Blitz spells (74/76/80/82) */
     GUI_SPELL_SMOKE_BLITZ,        /* sprite 331 / 381 */
     GUI_SPELL_SHADOW_BLITZ,       /* sprite 339 / 389 */
     GUI_SPELL_BLOOD_BLITZ,        /* sprite 335 / 385 */
     GUI_SPELL_ICE_BLITZ,          /* sprite 327 / 377 */
-    /* row 3: Barrage spells (86/88/92/94) */
     GUI_SPELL_SMOKE_BARRAGE,      /* sprite 332 / 382 */
     GUI_SPELL_SHADOW_BARRAGE,     /* sprite 340 / 390 */
     GUI_SPELL_BLOOD_BARRAGE,      /* sprite 336 / 386 */
     GUI_SPELL_ICE_BARRAGE,        /* sprite 328 / 378 */
-    /* lunar spell(s) we use */
+    GUI_SPELL_PADDEWWA_TELEPORT,   /* sprite 341 / 391 */
+    GUI_SPELL_SENNTISTEN_TELEPORT, /* sprite 342 / 392 */
+    GUI_SPELL_KHARYRLL_TELEPORT,   /* sprite 343 / 393 */
+    GUI_SPELL_LASSAR_TELEPORT,     /* sprite 344 / 394 */
+    GUI_SPELL_DAREEYAK_TELEPORT,   /* sprite 345 / 395 */
+    GUI_SPELL_CARRALLANGER_TELEPORT, /* sprite 346 / 396 */
+    GUI_SPELL_ANNAKARL_TELEPORT,   /* sprite 347 / 397 */
+    GUI_SPELL_GHORROCK_TELEPORT,   /* sprite 348 / 398 */
     GUI_SPELL_VENGEANCE,          /* sprite 564 */
     GUI_NUM_SPELLS
 } GuiSpellIdx;
@@ -213,6 +274,57 @@ typedef enum {
     INV_ACTION_DRINK,
 } InvAction;
 
+#define GUI_MAX_NAMED_ASSETS 768
+#define GUI_UI_ITEM_CONTAINER_MAX_SLOTS 64
+#define GUI_UI_MAX_COMPONENT_OVERRIDES 64
+
+typedef struct {
+    char name[64];
+    Texture2D tex;
+} GuiNamedAsset;
+
+typedef struct {
+    int present;
+    int enabled;
+    uint8_t item_db_idx;
+    int osrs_id;
+    int quantity;
+    int selected;
+    unsigned char alpha;
+    int gear_slot;
+    const char* empty_asset;
+} GuiUiItemSlot;
+
+typedef struct {
+    uint32_t component_id;
+    int hidden;
+    int force_visible;
+    const char* text;
+    const char* sprite_asset;
+    int sprite_present;
+    int sprite_id;
+    GuiUiItemSlot item;
+} GuiUiComponentOverride;
+
+typedef struct {
+    uint32_t component_id;
+    int slot_count;
+    int columns;
+    float x0;
+    float y0;
+    float step_x;
+    float step_y;
+    float slot_w;
+    float slot_h;
+    GuiUiItemSlot slots[GUI_UI_ITEM_CONTAINER_MAX_SLOTS];
+} GuiUiItemContainerOverride;
+
+typedef struct {
+    const GuiUiComponentOverride* components;
+    int component_count;
+    const GuiUiItemContainerOverride* item_containers;
+    int item_container_count;
+} GuiUiOverrides;
 
 typedef struct {
     GuiTab active_tab;
@@ -231,6 +343,9 @@ typedef struct {
 
     /* textures loaded from exported cache sprites */
     int sprites_loaded;
+    GuiNamedAsset named_assets[GUI_MAX_NAMED_ASSETS];
+    int named_asset_count;
+    OsrsUiInterfaceStore ui_interfaces;
 
     /* equipment slot background sprites (indexed by GEAR_SLOT_*) */
     Texture2D slot_sprites[GUI_NUM_SLOT_SPRITES];
@@ -238,6 +353,7 @@ typedef struct {
 
     /* tab icons: 7 tabs (combat, stats, quests, inventory, equipment, prayer, spellbook) */
     Texture2D tab_icons[GUI_TAB_COUNT];
+    int tab_press_timer[GUI_TAB_COUNT];
 
     /* prayer icons: enabled and disabled variants */
     Texture2D prayer_on[GUI_NUM_PRAYERS];
@@ -359,42 +475,157 @@ static int gui_try_load(Texture2D* tex, const char* path) {
     return 0;
 }
 
+static Texture2D gui_asset(const GuiState* gs, const char* name) {
+    for (int i = 0; i < gs->named_asset_count; i++) {
+        if (strcmp(gs->named_assets[i].name, name) == 0) {
+            return gs->named_assets[i].tex;
+        }
+    }
+    return (Texture2D){0};
+}
+
+static Texture2D gui_load_named_asset_path(GuiState* gs, const char* name, const char* path) {
+    if (gs->named_asset_count >= GUI_MAX_NAMED_ASSETS) {
+        fprintf(stderr, "GUI named asset capacity exceeded\n");
+        abort();
+    }
+
+    Texture2D tex = {0};
+    if (!gui_try_load(&tex, path)) return tex;
+
+    GuiNamedAsset* asset = &gs->named_assets[gs->named_asset_count++];
+    snprintf(asset->name, sizeof(asset->name), "%s", name);
+    asset->tex = tex;
+    return tex;
+}
+
+static void gui_load_named_asset(GuiState* gs, const char* name) {
+    char path[160];
+    snprintf(path, sizeof(path), OSRS_ASSET("sprites/gui/%s.png"), name);
+    gui_load_named_asset_path(gs, name, path);
+}
+
+static Texture2D gui_sprite_asset(GuiState* gs, int sprite_id) {
+    if (sprite_id < 0) return (Texture2D){0};
+
+    char name[32];
+    snprintf(name, sizeof(name), "#%d", sprite_id);
+    Texture2D tex = gui_asset(gs, name);
+    if (tex.id != 0) return tex;
+
+    char path[160];
+    snprintf(path, sizeof(path), OSRS_ASSET("sprites/gui/%d.png"), sprite_id);
+    return gui_load_named_asset_path(gs, name, path);
+}
+
+static void gui_load_named_asset_range(GuiState* gs, const char* prefix, int first, int last) {
+    char name[64];
+    for (int i = first; i <= last; i++) {
+        snprintf(name, sizeof(name), "%s_%d", prefix, i);
+        gui_load_named_asset(gs, name);
+    }
+}
+
+static int gui_load_ui_interfaces(GuiState* gs) {
+    return osrs_ui_interfaces_load(&gs->ui_interfaces, OSRS_ASSET("ui/interfaces.bin"));
+}
+
+static const int GUI_PRAYER_ON_SPRITE_IDS[GUI_NUM_PRAYERS] = {
+    115, 116, 117, 133, 134,
+    118, 119, 120, 121, 122,
+    123, 502, 503, 124, 125,
+    126, 127, 128, 129, 504,
+    505, 131, 130, 132, 947,
+    945, 946, 1420, 1421,
+};
+
+static const int GUI_PRAYER_OFF_SPRITE_IDS[GUI_NUM_PRAYERS] = {
+    135, 136, 137, 153, 154,
+    138, 139, 140, 141, 142,
+    143, 506, 507, 144, 145,
+    146, 147, 148, 149, 508,
+    509, 151, 150, 152, 951,
+    949, 950, 1424, 1425,
+};
+
+static const int GUI_SPELL_ON_SPRITE_IDS[GUI_NUM_SPELLS] = {
+    329, 337, 333, 325,
+    330, 338, 334, 326,
+    331, 339, 335, 327,
+    332, 340, 336, 328,
+    341, 342, 343, 344,
+    345, 346, 347, 348,
+    564,
+};
+
+static const int GUI_SPELL_OFF_SPRITE_IDS[GUI_NUM_SPELLS] = {
+    379, 387, 383, 375,
+    380, 388, 384, 376,
+    381, 389, 385, 377,
+    382, 390, 386, 378,
+    391, 392, 393, 394,
+    395, 396, 397, 398,
+    614,
+};
+
+static int gui_prayer_on_sprite_id(GuiPrayerIdx idx) {
+    assert(idx >= 0 && idx < GUI_NUM_PRAYERS);
+    return GUI_PRAYER_ON_SPRITE_IDS[idx];
+}
+
+static int gui_prayer_off_sprite_id(GuiPrayerIdx idx) {
+    assert(idx >= 0 && idx < GUI_NUM_PRAYERS);
+    return GUI_PRAYER_OFF_SPRITE_IDS[idx];
+}
+
+static int gui_spell_on_sprite_id(GuiSpellIdx idx) {
+    assert(idx >= 0 && idx < GUI_NUM_SPELLS);
+    return GUI_SPELL_ON_SPRITE_IDS[idx];
+}
+
+static int gui_spell_off_sprite_id(GuiSpellIdx idx) {
+    assert(idx >= 0 && idx < GUI_NUM_SPELLS);
+    return GUI_SPELL_OFF_SPRITE_IDS[idx];
+}
+
 /** Load all GUI sprites from data/sprites/gui/. */
 static void gui_load_sprites(GuiState* gs) {
     gs->sprites_loaded = 1;
     int ok = 1;
+    gs->named_asset_count = 0;
+    gui_load_ui_interfaces(gs);
 
     /* equipment slot backgrounds: sprite IDs mapped to GEAR_SLOT_* order.
        GEAR_SLOT: HEAD=0, CAPE=1, NECK=2, AMMO=3, WEAPON=4, SHIELD=5,
                   BODY=6, LEGS=7, HANDS=8, FEET=9, RING=10 */
     static const char* slot_files[] = {
-        "data/sprites/gui/slot_head.png",    /* GEAR_SLOT_HEAD */
-        "data/sprites/gui/slot_cape.png",    /* GEAR_SLOT_CAPE */
-        "data/sprites/gui/slot_neck.png",    /* GEAR_SLOT_NECK */
-        "data/sprites/gui/slot_tile.png",    /* GEAR_SLOT_AMMO (use tile bg) */
-        "data/sprites/gui/slot_weapon.png",  /* GEAR_SLOT_WEAPON */
-        "data/sprites/gui/slot_shield.png",  /* GEAR_SLOT_SHIELD */
-        "data/sprites/gui/slot_body.png",    /* GEAR_SLOT_BODY */
-        "data/sprites/gui/slot_legs.png",    /* GEAR_SLOT_LEGS */
-        "data/sprites/gui/slot_hands.png",   /* GEAR_SLOT_HANDS */
-        "data/sprites/gui/slot_feet.png",    /* GEAR_SLOT_FEET */
-        "data/sprites/gui/slot_ring.png",    /* GEAR_SLOT_RING */
-        "data/sprites/gui/slot_tile.png",    /* spare tile bg */
+        OSRS_ASSET("sprites/gui/slot_head.png"),    /* GEAR_SLOT_HEAD */
+        OSRS_ASSET("sprites/gui/slot_cape.png"),    /* GEAR_SLOT_CAPE */
+        OSRS_ASSET("sprites/gui/slot_neck.png"),    /* GEAR_SLOT_NECK */
+        OSRS_ASSET("sprites/gui/slot_tile.png"),    /* GEAR_SLOT_AMMO (use tile bg) */
+        OSRS_ASSET("sprites/gui/slot_weapon.png"),  /* GEAR_SLOT_WEAPON */
+        OSRS_ASSET("sprites/gui/slot_shield.png"),  /* GEAR_SLOT_SHIELD */
+        OSRS_ASSET("sprites/gui/slot_body.png"),    /* GEAR_SLOT_BODY */
+        OSRS_ASSET("sprites/gui/slot_legs.png"),    /* GEAR_SLOT_LEGS */
+        OSRS_ASSET("sprites/gui/slot_hands.png"),   /* GEAR_SLOT_HANDS */
+        OSRS_ASSET("sprites/gui/slot_feet.png"),    /* GEAR_SLOT_FEET */
+        OSRS_ASSET("sprites/gui/slot_ring.png"),    /* GEAR_SLOT_RING */
+        OSRS_ASSET("sprites/gui/slot_tile.png"),    /* spare tile bg */
     };
     for (int i = 0; i < GUI_NUM_SLOT_SPRITES; i++) {
         ok &= gui_try_load(&gs->slot_sprites[i], slot_files[i]);
     }
-    gui_try_load(&gs->slot_tile_bg, "data/sprites/gui/slot_tile.png");
+    gui_try_load(&gs->slot_tile_bg, OSRS_ASSET("sprites/gui/slot_tile.png"));
 
     /* tab icons: mapped to GuiTab enum order (7 tabs) */
     static const char* tab_files[] = {
-        "data/sprites/gui/tab_combat.png",    /* GUI_TAB_COMBAT */
-        "data/sprites/gui/tab_stats.png",     /* GUI_TAB_STATS */
-        "data/sprites/gui/tab_quests.png",    /* GUI_TAB_QUESTS */
-        "data/sprites/gui/tab_inventory.png", /* GUI_TAB_INVENTORY */
-        "data/sprites/gui/tab_equipment.png", /* GUI_TAB_EQUIPMENT */
-        "data/sprites/gui/tab_prayer.png",    /* GUI_TAB_PRAYER */
-        "data/sprites/gui/tab_magic.png",     /* GUI_TAB_SPELLBOOK */
+        OSRS_ASSET("sprites/gui/tab_combat.png"),    /* GUI_TAB_COMBAT */
+        OSRS_ASSET("sprites/gui/tab_stats.png"),     /* GUI_TAB_STATS */
+        OSRS_ASSET("sprites/gui/tab_quests.png"),    /* GUI_TAB_QUESTS */
+        OSRS_ASSET("sprites/gui/tab_inventory.png"), /* GUI_TAB_INVENTORY */
+        OSRS_ASSET("sprites/gui/tab_equipment.png"), /* GUI_TAB_EQUIPMENT */
+        OSRS_ASSET("sprites/gui/tab_prayer.png"),    /* GUI_TAB_PRAYER */
+        OSRS_ASSET("sprites/gui/tab_magic.png"),     /* GUI_TAB_SPELLBOOK */
     };
     for (int i = 0; i < GUI_TAB_COUNT; i++) {
         ok &= gui_try_load(&gs->tab_icons[i], tab_files[i]);
@@ -402,143 +633,186 @@ static void gui_load_sprites(GuiState* gs) {
 
     /* skill icons for stats tab (OSRS skill_icons from RuneLite resources) */
     static const char* skill_icon_files[] = {
-        "data/sprites/gui/skill_attack.png",
-        "data/sprites/gui/skill_strength.png",
-        "data/sprites/gui/skill_defence.png",
-        "data/sprites/gui/skill_ranged.png",
-        "data/sprites/gui/skill_prayer.png",
-        "data/sprites/gui/skill_magic.png",
-        "data/sprites/gui/skill_hitpoints.png",
+        OSRS_ASSET("sprites/gui/skill_attack.png"),
+        OSRS_ASSET("sprites/gui/skill_strength.png"),
+        OSRS_ASSET("sprites/gui/skill_defence.png"),
+        OSRS_ASSET("sprites/gui/skill_ranged.png"),
+        OSRS_ASSET("sprites/gui/skill_prayer.png"),
+        OSRS_ASSET("sprites/gui/skill_magic.png"),
+        OSRS_ASSET("sprites/gui/skill_hitpoints.png"),
     };
     gs->skill_icons_loaded = 1;
     for (int i = 0; i < 7; i++) {
         gs->skill_icons_loaded &= gui_try_load(&gs->skill_icons[i], skill_icon_files[i]);
     }
 
-    /* prayer icons: indexed by GuiPrayerIdx, sprite IDs match real OSRS. */
-    static const int pray_on_ids[GUI_NUM_PRAYERS] = {
-        115, 116, 117, 133, 134,   /* row 0: ThickSkin, Burst, Clarity, SharpEye, MysticWill */
-        118, 119, 120, 121, 122,   /* row 1: RockSkin, Superhuman, ImprovedReflex, RapidRestore, RapidHeal */
-        123, 502, 503, 124, 125,   /* row 2: ProtectItem, HawkEye, MysticLore, SteelSkin, UltimateStr */
-        126, 127, 128, 129, 504,   /* row 3: IncredibleReflex, ProtMagic, ProtMissiles, ProtMelee, EagleEye */
-        505, 131, 130, 132, 947,   /* row 4: MysticMight, Retribution, Redemption, Smite, Preserve */
-        945, 946, 1420, 1421,      /* row 5: Chivalry, Piety, Rigour, Augury (1 empty cell) */
-    };
-    static const int pray_off_ids[GUI_NUM_PRAYERS] = {
-        135, 136, 137, 153, 154,
-        138, 139, 140, 141, 142,
-        143, 506, 507, 144, 145,
-        146, 147, 148, 149, 508,
-        509, 151, 150, 152, 951,
-        949, 950, 1424, 1425,
-    };
     for (int i = 0; i < GUI_NUM_PRAYERS; i++) {
-        const char* on_path = TextFormat("data/sprites/gui/%d.png", pray_on_ids[i]);
-        const char* off_path = TextFormat("data/sprites/gui/%d.png", pray_off_ids[i]);
+        const char* on_path = TextFormat(OSRS_ASSET("sprites/gui/%d.png"),
+            gui_prayer_on_sprite_id((GuiPrayerIdx)i));
+        const char* off_path = TextFormat(OSRS_ASSET("sprites/gui/%d.png"),
+            gui_prayer_off_sprite_id((GuiPrayerIdx)i));
         gui_try_load(&gs->prayer_on[i], on_path);
         gui_try_load(&gs->prayer_off[i], off_path);
     }
 
-    /* spell icons — indexed by GuiSpellIdx. full ancient book + vengeance. */
-    static const int spell_on_ids[GUI_NUM_SPELLS] = {
-        329, 337, 333, 325,   /* Rush:    Smoke, Shadow, Blood, Ice */
-        330, 338, 334, 326,   /* Burst:   Smoke, Shadow, Blood, Ice */
-        331, 339, 335, 327,   /* Blitz:   Smoke, Shadow, Blood, Ice */
-        332, 340, 336, 328,   /* Barrage: Smoke, Shadow, Blood, Ice */
-        564,                  /* Vengeance */
-    };
-    static const int spell_off_ids[GUI_NUM_SPELLS] = {
-        379, 387, 383, 375,
-        380, 388, 384, 376,
-        381, 389, 385, 377,
-        382, 390, 386, 378,
-        614,
-    };
     for (int i = 0; i < GUI_NUM_SPELLS; i++) {
-        const char* on_path = TextFormat("data/sprites/gui/%d.png", spell_on_ids[i]);
-        const char* off_path = TextFormat("data/sprites/gui/%d.png", spell_off_ids[i]);
+        const char* on_path = TextFormat(OSRS_ASSET("sprites/gui/%d.png"),
+            gui_spell_on_sprite_id((GuiSpellIdx)i));
+        const char* off_path = TextFormat(OSRS_ASSET("sprites/gui/%d.png"),
+            gui_spell_off_sprite_id((GuiSpellIdx)i));
         gui_try_load(&gs->spell_on[i], on_path);
         gui_try_load(&gs->spell_off[i], off_path);
     }
 
     /* special attack bar */
-    gs->spec_bar_loaded = gui_try_load(&gs->spec_bar, "data/sprites/gui/special_attack.png");
+    gs->spec_bar_loaded = gui_try_load(&gs->spec_bar, OSRS_ASSET("sprites/gui/special_attack.png"));
 
     /* interface chrome */
     gs->chrome_loaded = 1;
-    gs->chrome_loaded &= gui_try_load(&gs->side_panel_bg, "data/sprites/gui/side_panel_bg.png");
-    gs->chrome_loaded &= gui_try_load(&gs->tabs_row_bottom, "data/sprites/gui/tabs_row_bottom.png");
-    gs->chrome_loaded &= gui_try_load(&gs->tabs_row_top, "data/sprites/gui/tabs_row_top.png");
-    gui_try_load(&gs->slanted_tab, "data/sprites/gui/slanted_tab.png");
-    gui_try_load(&gs->slanted_tab_hover, "data/sprites/gui/slanted_tab_hover.png");
-    gui_try_load(&gs->slot_tile, "data/sprites/gui/slot_tile.png");
-    gui_try_load(&gs->slot_selected, "data/sprites/gui/slot_selected.png");
-    gui_try_load(&gs->orb_frame, "data/sprites/gui/orb_frame.png");
+    gs->chrome_loaded &= gui_try_load(&gs->side_panel_bg, OSRS_ASSET("sprites/gui/side_panel_bg.png"));
+    gs->chrome_loaded &= gui_try_load(&gs->tabs_row_bottom, OSRS_ASSET("sprites/gui/tabs_row_bottom.png"));
+    gs->chrome_loaded &= gui_try_load(&gs->tabs_row_top, OSRS_ASSET("sprites/gui/tabs_row_top.png"));
+    gui_try_load(&gs->slanted_tab, OSRS_ASSET("sprites/gui/slanted_tab.png"));
+    gui_try_load(&gs->slanted_tab_hover, OSRS_ASSET("sprites/gui/slanted_tab_hover.png"));
+    gui_try_load(&gs->slot_tile, OSRS_ASSET("sprites/gui/slot_tile.png"));
+    gui_try_load(&gs->slot_selected, OSRS_ASSET("sprites/gui/slot_selected.png"));
+    gui_try_load(&gs->orb_frame, OSRS_ASSET("sprites/gui/orb_frame.png"));
 
     /* canonical OSRS minimap chrome (loaded best-effort; gracefully omitted if
        the asset bundle predates the export pipeline update). */
     gs->minimap_chrome_loaded = 1;
     gs->minimap_chrome_loaded &= gui_try_load(&gs->minimap_compass,
-        "data/sprites/gui/compass.png");
+        OSRS_ASSET("sprites/gui/compass.png"));
     gs->minimap_chrome_loaded &= gui_try_load(&gs->minimap_alpha_mask,
-        "data/sprites/gui/minimap_alpha_mask.png");
+        OSRS_ASSET("sprites/gui/minimap_alpha_mask.png"));
     gs->minimap_chrome_loaded &= gui_try_load(&gs->minimap_frame,
-        "data/sprites/gui/minimap_and_compass_frame.png");
+        OSRS_ASSET("sprites/gui/minimap_and_compass_frame.png"));
     gui_try_load(&gs->rm_minimap_alpha_mask,
-        "data/sprites/gui/rm_minimap_alpha_mask.png");
+        OSRS_ASSET("sprites/gui/rm_minimap_alpha_mask.png"));
     gui_try_load(&gs->rm_minimap_frame,
-        "data/sprites/gui/rm_minimap_and_compass_frame.png");
+        OSRS_ASSET("sprites/gui/rm_minimap_and_compass_frame.png"));
     gui_try_load(&gs->rm_compass_alpha_mask,
-        "data/sprites/gui/rm_compass_alpha_mask.png");
+        OSRS_ASSET("sprites/gui/rm_compass_alpha_mask.png"));
     gui_try_load(&gs->rm_side_panel_bg,
-        "data/sprites/gui/rm_side_panel_bg.png");
+        OSRS_ASSET("sprites/gui/rm_side_panel_bg.png"));
     gui_try_load(&gs->rm_side_panel_edge_left,
-        "data/sprites/gui/rm_side_panel_edge_left.png");
+        OSRS_ASSET("sprites/gui/rm_side_panel_edge_left.png"));
     gui_try_load(&gs->rm_side_panel_edge_right,
-        "data/sprites/gui/rm_side_panel_edge_right.png");
+        OSRS_ASSET("sprites/gui/rm_side_panel_edge_right.png"));
     gui_try_load(&gs->rm_tabs_top_row,
-        "data/sprites/gui/rm_tabs_top_row.png");
+        OSRS_ASSET("sprites/gui/rm_tabs_top_row.png"));
     gui_try_load(&gs->rm_tabs_bottom_row,
-        "data/sprites/gui/rm_tabs_bottom_row.png");
+        OSRS_ASSET("sprites/gui/rm_tabs_bottom_row.png"));
     gui_try_load(&gs->rm_tab_stone,
-        "data/sprites/gui/rm_tab_stone_middle.png");
+        OSRS_ASSET("sprites/gui/rm_tab_stone_middle.png"));
     gui_try_load(&gs->rm_tab_stone_selected,
-        "data/sprites/gui/rm_tab_stone_middle_selected.png");
+        OSRS_ASSET("sprites/gui/rm_tab_stone_middle_selected.png"));
     gs->minimap_chrome_loaded &= gui_try_load(&gs->orb_empty,
-        "data/sprites/gui/orb_empty.png");
+        OSRS_ASSET("sprites/gui/orb_empty.png"));
     gs->minimap_chrome_loaded &= gui_try_load(&gs->orb_hp,
-        "data/sprites/gui/orb_hp.png");
+        OSRS_ASSET("sprites/gui/orb_hp.png"));
     gs->minimap_chrome_loaded &= gui_try_load(&gs->orb_prayer,
-        "data/sprites/gui/orb_prayer.png");
+        OSRS_ASSET("sprites/gui/orb_prayer.png"));
     gs->minimap_chrome_loaded &= gui_try_load(&gs->orb_run,
-        "data/sprites/gui/orb_run.png");
+        OSRS_ASSET("sprites/gui/orb_run.png"));
     gs->minimap_chrome_loaded &= gui_try_load(&gs->orb_run_active,
-        "data/sprites/gui/orb_run_active.png");
+        OSRS_ASSET("sprites/gui/orb_run_active.png"));
     gs->minimap_chrome_loaded &= gui_try_load(&gs->orb_icon_hp,
-        "data/sprites/gui/orb_icon_hp.png");
+        OSRS_ASSET("sprites/gui/orb_icon_hp.png"));
     gs->minimap_chrome_loaded &= gui_try_load(&gs->orb_icon_prayer,
-        "data/sprites/gui/orb_icon_prayer.png");
+        OSRS_ASSET("sprites/gui/orb_icon_prayer.png"));
     gs->minimap_chrome_loaded &= gui_try_load(&gs->orb_icon_walk,
-        "data/sprites/gui/orb_icon_walk.png");
+        OSRS_ASSET("sprites/gui/orb_icon_walk.png"));
     gs->minimap_chrome_loaded &= gui_try_load(&gs->orb_icon_run,
-        "data/sprites/gui/orb_icon_run.png");
+        OSRS_ASSET("sprites/gui/orb_icon_run.png"));
     gs->minimap_chrome_loaded &= gui_try_load(&gs->minimap_dot_player,
-        "data/sprites/gui/minimap_dot_player.png");
+        OSRS_ASSET("sprites/gui/minimap_dot_player.png"));
     gs->minimap_chrome_loaded &= gui_try_load(&gs->minimap_dot_npc,
-        "data/sprites/gui/minimap_dot_npc.png");
+        OSRS_ASSET("sprites/gui/minimap_dot_npc.png"));
     gs->minimap_chrome_loaded &= gui_try_load(&gs->minimap_dot_friend,
-        "data/sprites/gui/minimap_dot_friend.png");
+        OSRS_ASSET("sprites/gui/minimap_dot_friend.png"));
     gs->minimap_chrome_loaded &= gui_try_load(&gs->minimap_dot_item,
-        "data/sprites/gui/minimap_dot_item.png");
+        OSRS_ASSET("sprites/gui/minimap_dot_item.png"));
 
     static const char* tab_sel_files[] = {
-        "data/sprites/gui/tab_stone_tl_sel.png",
-        "data/sprites/gui/tab_stone_tr_sel.png",
-        "data/sprites/gui/tab_stone_bl_sel.png",
-        "data/sprites/gui/tab_stone_br_sel.png",
-        "data/sprites/gui/tab_stone_mid_sel.png",
+        OSRS_ASSET("sprites/gui/tab_stone_tl_sel.png"),
+        OSRS_ASSET("sprites/gui/tab_stone_tr_sel.png"),
+        OSRS_ASSET("sprites/gui/tab_stone_bl_sel.png"),
+        OSRS_ASSET("sprites/gui/tab_stone_br_sel.png"),
+        OSRS_ASSET("sprites/gui/tab_stone_mid_sel.png"),
     };
     for (int i = 0; i < 5; i++) gui_try_load(&gs->tab_stone_sel[i], tab_sel_files[i]);
+
+    static const char* ui_asset_names[] = {
+        "tradebacking_dark",
+        "osrs_stretch_side_topbottom_0",
+        "osrs_stretch_side_topbottom_1",
+        "osrs_stretch_side_columns_0",
+        "osrs_stretch_side_columns_1",
+        "osrs_stretch_mapsurround",
+        "compass",
+        "compass_outline",
+        "resize_map_mask",
+        "resize_compass_mask",
+        "tli_button01_orb01_34x34_0",
+        "ring_34_0",
+        "orb_xp_0",
+        "ring_30",
+        "worldmap_icon_0",
+        "wiki_icon_0",
+        "combatboxes_0",
+        "combatboxes_1",
+        "combatboxes_special_attack",
+        "combat_shield",
+        "miscgraphics_2",
+        "miscgraphics_3",
+        "options_icons_16",
+        "options_icons_18",
+        "options_icons_28",
+        "whistle",
+    };
+    int ui_asset_count = (int)(sizeof(ui_asset_names) / sizeof(ui_asset_names[0]));
+    for (int i = 0; i < ui_asset_count; i++) {
+        gui_load_named_asset(gs, ui_asset_names[i]);
+    }
+    gui_load_named_asset_range(gs, "side_stone_highlights", 0, 4);
+    gui_load_named_asset_range(gs, "sideicons_interface", 0, 16);
+    gui_load_named_asset_range(gs, "combatboxes", 0, 3);
+    gui_load_named_asset_range(gs, "combaticons", 0, 19);
+    gui_load_named_asset_range(gs, "combaticons2", 0, 19);
+    gui_load_named_asset_range(gs, "combaticons3", 0, 19);
+    gui_load_named_asset_range(gs, "orb_frame", 0, 2);
+    gui_load_named_asset_range(gs, "orb_filler", 0, 14);
+    gui_load_named_asset_range(gs, "orb_icon", 0, 15);
+    gui_load_named_asset_range(gs, "wornicons", 0, 11);
+    gui_load_named_asset_range(gs, "skill_icon", 0, 23);
+    gui_load_named_asset_range(gs, "prayeron", 0, 28);
+    gui_load_named_asset_range(gs, "prayeroff", 0, 28);
+    gui_load_named_asset_range(gs, "magicon", 0, 47);
+    gui_load_named_asset_range(gs, "magicoff", 0, 47);
+    gui_load_named_asset_range(gs, "standard_spell_on", 0, 79);
+
+    static const char* side_icon_names[] = {
+        "side_icon_combat",
+        "side_icon_stats",
+        "side_icon_quests",
+        "side_icon_inventory",
+        "side_icon_equipment",
+        "side_icon_prayer",
+        "side_icon_magic",
+        "side_icon_magic_ancient",
+        "side_icon_clan",
+        "side_icon_friends",
+        "side_icon_grouping",
+        "side_icon_logout",
+        "side_icon_options",
+        "side_icon_emotes",
+        "side_icon_music",
+    };
+    int side_icon_count = (int)(sizeof(side_icon_names) / sizeof(side_icon_names[0]));
+    for (int i = 0; i < side_icon_count; i++) {
+        gui_load_named_asset(gs, side_icon_names[i]);
+    }
 
     if (!ok) {
         TraceLog(LOG_WARNING, "GUI: some sprites missing from data/sprites/gui/");
@@ -549,7 +823,7 @@ static void gui_load_sprites(GuiState* gs) {
     for (int i = 0; i < NUM_ITEMS && gs->item_sprite_count < GUI_MAX_ITEM_SPRITES; i++) {
         int item_id = ITEM_DATABASE[i].item_id;
         if (item_id <= 0) continue;
-        const char* path = TextFormat("data/sprites/items/%d.png", item_id);
+        const char* path = TextFormat(OSRS_ASSET("sprites/items/%d.png"), item_id);
         if (FileExists(path)) {
             int idx = gs->item_sprite_count;
             gs->item_sprite_ids[idx] = item_id;
@@ -573,7 +847,7 @@ static void gui_load_sprites(GuiState* gs) {
     for (int i = 0; i < (int)(sizeof(consumable_ids)/sizeof(consumable_ids[0])); i++) {
         if (gs->item_sprite_count >= GUI_MAX_ITEM_SPRITES) break;
         int cid = consumable_ids[i];
-        const char* path = TextFormat("data/sprites/items/%d.png", cid);
+        const char* path = TextFormat(OSRS_ASSET("sprites/items/%d.png"), cid);
         if (FileExists(path)) {
             int idx = gs->item_sprite_count;
             gs->item_sprite_ids[idx] = cid;
@@ -607,7 +881,12 @@ static Texture2D gui_get_sprite_by_osrs_id(GuiState* gs, int osrs_id) {
 
 /** Unload all GUI textures. */
 static void gui_unload_sprites(GuiState* gs) {
+    osrs_ui_interfaces_unload(&gs->ui_interfaces);
     if (!gs->sprites_loaded) return;
+    for (int i = 0; i < gs->named_asset_count; i++) {
+        if (gs->named_assets[i].tex.id) UnloadTexture(gs->named_assets[i].tex);
+    }
+    gs->named_asset_count = 0;
     for (int i = 0; i < GUI_NUM_SLOT_SPRITES; i++) UnloadTexture(gs->slot_sprites[i]);
     UnloadTexture(gs->slot_tile_bg);
     for (int i = 0; i < GUI_TAB_COUNT; i++) UnloadTexture(gs->tab_icons[i]);
@@ -688,6 +967,7 @@ static const char* gui_item_short_name(uint8_t item_idx) {
         case ITEM_INQUISITORS_MACE:  return "Inq mace";
         case ITEM_STAFF_OF_DEAD:     return "SOTD";
         case ITEM_KODAI_WAND:        return "Kodai";
+        case ITEM_DRAGON_HUNTER_WAND: return "DH wand";
         case ITEM_VOLATILE_STAFF:    return "Volatile";
         case ITEM_ZURIELS_STAFF:     return "Zuriel stf";
         case ITEM_ARMADYL_CROSSBOW:  return "ACB";
@@ -757,6 +1037,8 @@ static const char* gui_item_short_name(uint8_t item_idx) {
         case ITEM_CRYSTAL_BODY:      return "Crystal bd";
         case ITEM_CRYSTAL_LEGS:      return "Crystal lg";
         case ITEM_BOW_OF_FAERDHINEN: return "Fbow";
+        case ITEM_CRYSTAL_SHIELD:    return "Crystal sh";
+        case ITEM_ECHO_BOOTS:        return "Echo boots";
         case ITEM_BLESSED_DHIDE_BOOTS: return "Bless boot";
         case ITEM_MYSTIC_HAT:        return "Mystic hat";
         case ITEM_TRIDENT_OF_SWAMP:  return "Trident";
@@ -830,75 +1112,465 @@ static void gui_draw_equip_slot(GuiState* gs, int x, int y, int w, int h,
 }
 
 
-/* Canonical OSRS resizable-mode tab x-offsets within the 241px tab row.
-   from runelite WidgetOffset.java RESIZABLE_2010_*_HIGHLIGHT, normalized so
-   the leftmost tab starts at x=4 and tabs are 34px apart. */
-static const int GUI_TAB_X_OFFSETS[GUI_TAB_COUNT] = {
-    4,   /* combat   (STONE0) */
-    38,  /* stats    (STONE1) */
-    72,  /* quests   (STONE2) */
-    106, /* inventory(STONE3) */
-    140, /* equipment(STONE4) */
-    174, /* prayer   (STONE5) */
-    208, /* magic    (STONE6) */
+typedef struct {
+    int logical_tab;
+    const char* stone_asset;
+    const char* icon_asset;
+    Rectangle rect;
+    Rectangle icon_rect;
+} GuiSideStoneRef;
+
+static const GuiSideStoneRef GUI_SIDE_STONES[] = {
+    {GUI_TAB_COMBAT,    "side_stone_highlights_0", "side_icon_combat",    {0,   0, 38, 36}, {4,   0, 33, 36}},
+    {GUI_TAB_STATS,     "side_stone_highlights_4", "side_icon_stats",     {38,  0, 33, 36}, {38,  0, 33, 36}},
+    {GUI_TAB_QUESTS,    "side_stone_highlights_4", "side_icon_quests",    {71,  0, 38, 36}, {71,  0, 33, 36}},
+    {GUI_TAB_INVENTORY, "side_stone_highlights_4", "side_icon_inventory", {104, 0, 33, 36}, {104, 0, 33, 36}},
+    {GUI_TAB_EQUIPMENT, "side_stone_highlights_4", "side_icon_equipment", {137, 0, 33, 36}, {137, 0, 33, 36}},
+    {GUI_TAB_PRAYER,    "side_stone_highlights_4", "side_icon_prayer",    {170, 0, 33, 36}, {170, 0, 33, 36}},
+    {GUI_TAB_SPELLBOOK, "side_stone_highlights_1", "side_icon_magic_ancient", {203, 0, 38, 36}, {204, 0, 33, 36}},
+    {-1, "side_stone_highlights_2", "side_icon_clan",     {0,   0, 38, 36}, {4,   0, 33, 36}},
+    {-1, "side_stone_highlights_4", "side_icon_friends",  {38,  0, 33, 36}, {38,  0, 33, 36}},
+    {-1, "side_stone_highlights_4", "side_icon_grouping", {71,  0, 33, 36}, {71,  0, 33, 36}},
+    {-1, "side_stone_highlights_4", "side_icon_logout",   {104, 0, 33, 36}, {104, 0, 33, 36}},
+    {-1, "side_stone_highlights_4", "side_icon_options",  {137, 0, 33, 36}, {137, 0, 33, 36}},
+    {-1, "side_stone_highlights_4", "side_icon_emotes",   {170, 0, 33, 36}, {170, 0, 33, 36}},
+    {-1, "side_stone_highlights_3", "side_icon_music",    {203, 0, 38, 36}, {204, 0, 33, 36}},
 };
-#define GUI_TAB_STONE_W 33
-#define GUI_TAB_STONE_H 36
 
-static void gui_draw_tab_bar(GuiState* gs) {
-    /* tab row: 241x37 strip at the top of the side panel content area, right
-       after the minimap. */
-    int ty = gs->panel_y + gs->status_bar_h;
+static Rectangle gui_side_content_rect(GuiState* gs) {
+    return (Rectangle){
+        (float)(gs->panel_x + GUI_SIDE_CONTENT_X),
+        (float)(gs->panel_y + GUI_SIDE_CONTENT_Y),
+        (float)GUI_SIDE_CONTENT_W,
+        (float)GUI_SIDE_CONTENT_H,
+    };
+}
 
-    if (gs->rm_tabs_top_row.id != 0) {
-        Rectangle src = { 0, 0, (float)gs->rm_tabs_top_row.width,
-                                (float)gs->rm_tabs_top_row.height };
-        Rectangle dst = { (float)gs->panel_x, (float)ty,
-                          (float)gs->panel_w, (float)gs->tab_h };
-        DrawTexturePro(gs->rm_tabs_top_row, src, dst, (Vector2){0,0}, 0.0f, WHITE);
-    } else {
-        DrawRectangle(gs->panel_x, ty, gs->panel_w, gs->tab_h, GUI_TAB_INACTIVE);
+static Rectangle gui_side_ref_rect(GuiState* gs, Rectangle ref) {
+    Rectangle content = gui_side_content_rect(gs);
+    return (Rectangle){content.x + ref.x, content.y + ref.y, ref.width, ref.height};
+}
+
+static Rectangle gui_side_component_rect(
+    GuiState* gs,
+    const char* group_name,
+    const char* component_name,
+    Rectangle fallback
+) {
+    Rectangle out = {0};
+    if (osrs_ui_interfaces_component_rect(
+            &gs->ui_interfaces,
+            group_name,
+            component_name,
+            gui_side_content_rect(gs),
+            &out)) {
+        return out;
     }
+    return gui_side_ref_rect(gs, fallback);
+}
 
-    int stone_y = ty + (gs->tab_h - GUI_TAB_STONE_H) / 2;
+static void gui_draw_texture(Texture2D tex, Rectangle dst, Color tint) {
+    if (tex.id == 0) return;
+    Rectangle src = {0, 0, (float)tex.width, (float)tex.height};
+    DrawTexturePro(tex, src, dst, (Vector2){0, 0}, 0.0f, tint);
+}
 
-    for (int i = 0; i < GUI_TAB_COUNT; i++) {
-        int tx = gs->panel_x + GUI_TAB_X_OFFSETS[i];
-        int is_active = (i == (int)gs->active_tab);
+static Rectangle gui_texture_fit_rect(
+    int texture_w,
+    int texture_h,
+    Rectangle rect,
+    float max_w,
+    float max_h
+) {
+    assert(texture_w > 0);
+    assert(texture_h > 0);
+    float scale_x = max_w / (float)texture_w;
+    float scale_y = max_h / (float)texture_h;
+    float scale = scale_x < scale_y ? scale_x : scale_y;
+    if (scale > 1.0f) scale = 1.0f;
+    float width = (float)texture_w * scale;
+    float height = (float)texture_h * scale;
+    return (Rectangle){
+        rect.x + (rect.width - width) * 0.5f,
+        rect.y + (rect.height - height) * 0.5f,
+        width,
+        height,
+    };
+}
 
-        Texture2D stone = is_active ? gs->rm_tab_stone_selected : gs->rm_tab_stone;
-        if (stone.id != 0) {
-            Rectangle src = { 0, 0, (float)stone.width, (float)stone.height };
-            Rectangle dst = { (float)tx, (float)stone_y,
-                              (float)GUI_TAB_STONE_W, (float)GUI_TAB_STONE_H };
-            DrawTexturePro(stone, src, dst, (Vector2){0,0}, 0.0f, WHITE);
-        }
+static void gui_draw_texture_centered(
+    Texture2D tex,
+    Rectangle rect,
+    float max_w,
+    float max_h,
+    Color tint
+) {
+    if (tex.id == 0) return;
+    gui_draw_texture(tex, gui_texture_fit_rect(tex.width, tex.height, rect, max_w, max_h), tint);
+}
 
-        /* tab icon centered on the stone */
-        if (gs->sprites_loaded && gs->tab_icons[i].id != 0) {
-            Color tint = is_active ? WHITE : CLITERAL(Color){ 200, 200, 200, 255 };
-            Texture2D tex = gs->tab_icons[i];
-            float ssx = (float)(GUI_TAB_STONE_W - 6) / (float)tex.width;
-            float ssy = (float)(GUI_TAB_STONE_H - 6) / (float)tex.height;
-            float s = (ssx < ssy) ? ssx : ssy;
-            int dw = (int)(tex.width * s);
-            int dh = (int)(tex.height * s);
-            int dx = tx + (GUI_TAB_STONE_W - dw) / 2;
-            int dy = stone_y + (GUI_TAB_STONE_H - dh) / 2;
-            DrawTextureEx(tex, (Vector2){ (float)dx, (float)dy }, 0.0f, s, tint);
+static void gui_draw_named_asset(GuiState* gs, const char* name, Rectangle dst, Color tint) {
+    gui_draw_texture(gui_asset(gs, name), dst, tint);
+}
+
+static int gui_draw_named_asset_centered(
+    GuiState* gs,
+    const char* name,
+    Rectangle rect,
+    float max_w,
+    float max_h,
+    Color tint
+) {
+    Texture2D tex = gui_asset(gs, name);
+    if (tex.id == 0) return 0;
+    gui_draw_texture_centered(tex, rect, max_w, max_h, tint);
+    return 1;
+}
+
+static void gui_draw_named_asset_tiled(GuiState* gs, const char* name, Rectangle dst, Color tint) {
+    Texture2D tex = gui_asset(gs, name);
+    if (tex.id == 0) {
+        DrawRectangleRec(dst, GUI_BG_DARK);
+        return;
+    }
+    for (float y = dst.y; y < dst.y + dst.height; y += (float)tex.height) {
+        for (float x = dst.x; x < dst.x + dst.width; x += (float)tex.width) {
+            float w = (x + tex.width > dst.x + dst.width) ? dst.x + dst.width - x : (float)tex.width;
+            float h = (y + tex.height > dst.y + dst.height) ? dst.y + dst.height - y : (float)tex.height;
+            Rectangle src = {0, 0, w, h};
+            Rectangle part = {x, y, w, h};
+            DrawTexturePro(tex, src, part, (Vector2){0, 0}, 0.0f, tint);
         }
     }
 }
 
-static int gui_handle_tab_click(GuiState* gs, int mouse_x, int mouse_y) {
-    int ty = gs->panel_y + gs->status_bar_h;
-    int stone_y = ty + (gs->tab_h - GUI_TAB_STONE_H) / 2;
-    if (mouse_y < stone_y || mouse_y >= stone_y + GUI_TAB_STONE_H) return 0;
+static Color gui_ui_color_from_rgb(int rgb, unsigned char opacity) {
+    return (Color){
+        (unsigned char)((rgb >> 16) & 0xff),
+        (unsigned char)((rgb >> 8) & 0xff),
+        (unsigned char)(rgb & 0xff),
+        (unsigned char)(255 - opacity),
+    };
+}
 
-    for (int i = 0; i < GUI_TAB_COUNT; i++) {
-        int tx = gs->panel_x + GUI_TAB_X_OFFSETS[i];
-        if (mouse_x >= tx && mouse_x < tx + GUI_TAB_STONE_W) {
-            gs->active_tab = (GuiTab)i;
+static const GuiUiComponentOverride* gui_ui_component_override(
+    const GuiUiOverrides* overrides,
+    uint32_t component_id
+) {
+    if (!overrides) return NULL;
+    for (int i = 0; i < overrides->component_count; i++) {
+        if (overrides->components[i].component_id == component_id) {
+            return &overrides->components[i];
+        }
+    }
+    return NULL;
+}
+
+static GuiUiComponentOverride* gui_ui_push_component_override(
+    GuiUiComponentOverride* overrides,
+    int* count,
+    uint32_t component_id
+) {
+    assert(*count < GUI_UI_MAX_COMPONENT_OVERRIDES);
+    GuiUiComponentOverride* override = &overrides[(*count)++];
+    memset(override, 0, sizeof(*override));
+    override->component_id = component_id;
+    return override;
+}
+
+static const GuiUiItemContainerOverride* gui_ui_item_container_override(
+    const GuiUiOverrides* overrides,
+    uint32_t component_id
+) {
+    if (!overrides) return NULL;
+    for (int i = 0; i < overrides->item_container_count; i++) {
+        if (overrides->item_containers[i].component_id == component_id) {
+            return &overrides->item_containers[i];
+        }
+    }
+    return NULL;
+}
+
+static void gui_draw_ui_item_slot(GuiState* gs, const GuiUiItemSlot* slot, Rectangle rect) {
+    if (slot->gear_slot >= 0) {
+        uint8_t item_idx = slot->enabled ? slot->item_db_idx : ITEM_NONE;
+        gui_draw_equip_slot(
+            gs,
+            (int)rect.x,
+            (int)rect.y,
+            (int)rect.width,
+            (int)rect.height,
+            slot->gear_slot,
+            item_idx);
+        if (!slot->enabled && slot->empty_asset) {
+            gui_draw_named_asset_centered(gs, slot->empty_asset, rect, rect.width, rect.height, WHITE);
+        }
+    } else {
+        DrawRectangleRec(rect, (Color){0, 0, 0, 30});
+        if (!slot->enabled) return;
+
+        Texture2D tex = {0};
+        if (slot->item_db_idx != ITEM_NONE) {
+            tex = gui_get_item_sprite(gs, slot->item_db_idx);
+        } else if (slot->osrs_id > 0) {
+            tex = gui_get_sprite_by_osrs_id(gs, slot->osrs_id);
+        }
+
+        Color tint = WHITE;
+        tint.a = slot->alpha == 0 ? 255 : slot->alpha;
+        if (tex.id != 0) {
+            Rectangle src = {0, 0, (float)tex.width, (float)tex.height};
+            DrawTexturePro(tex, src, rect, (Vector2){0, 0}, 0.0f, tint);
+        }
+
+        if (slot->quantity > 1) {
+            const char* text = TextFormat("%d", slot->quantity);
+            gui_text_shadow(text, (int)rect.x + 1, (int)rect.y - 1, 10, GUI_TEXT_YELLOW);
+        }
+    }
+
+    if (slot->selected) {
+        DrawRectangleLinesEx((Rectangle){rect.x - 1, rect.y - 1, rect.width + 2, rect.height + 2},
+            2.0f, GUI_TEXT_YELLOW);
+    }
+}
+
+static void gui_draw_ui_item_container(
+    GuiState* gs,
+    const GuiUiItemContainerOverride* container,
+    Rectangle rect
+) {
+    if (!container || container->columns <= 0) return;
+    int count = container->slot_count;
+    if (count > GUI_UI_ITEM_CONTAINER_MAX_SLOTS) count = GUI_UI_ITEM_CONTAINER_MAX_SLOTS;
+    for (int i = 0; i < count; i++) {
+        int col = i % container->columns;
+        int row = i / container->columns;
+        Rectangle slot = {
+            rect.x + container->x0 + (float)col * container->step_x,
+            rect.y + container->y0 + (float)row * container->step_y,
+            container->slot_w,
+            container->slot_h,
+        };
+        gui_draw_ui_item_slot(gs, &container->slots[i], slot);
+    }
+}
+
+static void gui_draw_ui_sprite_component(
+    GuiState* gs,
+    const OsrsUiComponent* component,
+    const GuiUiComponentOverride* override,
+    Rectangle rect
+) {
+    Texture2D tex = {0};
+    if (override && override->sprite_asset) {
+        tex = gui_asset(gs, override->sprite_asset);
+    } else {
+        int sprite_id = override && override->sprite_present ? override->sprite_id : component->sprite_id;
+        tex = gui_sprite_asset(gs, sprite_id);
+    }
+    if (tex.id == 0) return;
+
+    if (rect.width <= 0) rect.width = (float)tex.width;
+    if (rect.height <= 0) rect.height = (float)tex.height;
+    Color tint = WHITE;
+    tint.a = (unsigned char)(255 - component->opacity);
+    Rectangle src = {
+        component->flipped_horizontally ? (float)tex.width : 0.0f,
+        component->flipped_vertically ? (float)tex.height : 0.0f,
+        component->flipped_horizontally ? -(float)tex.width : (float)tex.width,
+        component->flipped_vertically ? -(float)tex.height : (float)tex.height,
+    };
+
+    if (component->sprite_tiling) {
+        for (float y = rect.y; y < rect.y + rect.height; y += (float)tex.height) {
+            for (float x = rect.x; x < rect.x + rect.width; x += (float)tex.width) {
+                float w = x + tex.width > rect.x + rect.width
+                    ? rect.x + rect.width - x
+                    : (float)tex.width;
+                float h = y + tex.height > rect.y + rect.height
+                    ? rect.y + rect.height - y
+                    : (float)tex.height;
+                Rectangle part_src = src;
+                part_src.width = component->flipped_horizontally ? -w : w;
+                part_src.height = component->flipped_vertically ? -h : h;
+                DrawTexturePro(tex, part_src, (Rectangle){x, y, w, h},
+                    (Vector2){0, 0}, 0.0f, tint);
+            }
+        }
+    } else {
+        DrawTexturePro(tex, src, rect, (Vector2){0, 0}, 0.0f, tint);
+    }
+}
+
+static void gui_draw_ui_text_component(
+    const OsrsUiComponent* component,
+    const GuiUiComponentOverride* override,
+    Rectangle rect
+) {
+    const char* text = override && override->text ? override->text : component->text;
+    if (!text || !text[0]) return;
+    int size = component->line_height > 0 ? component->line_height + 9 : 12;
+    if (size < 10) size = 10;
+    Color color = gui_ui_color_from_rgb(component->text_color, component->opacity);
+    int width = MeasureText(text, size);
+    int x = (int)rect.x;
+    int y = (int)rect.y;
+    if (component->x_text_alignment == 1) {
+        x = (int)(rect.x + (rect.width - width) * 0.5f);
+    } else if (component->x_text_alignment == 2) {
+        x = (int)(rect.x + rect.width - width);
+    }
+    if (component->y_text_alignment == 1) {
+        y = (int)(rect.y + (rect.height - size) * 0.5f);
+    } else if (component->y_text_alignment == 2) {
+        y = (int)(rect.y + rect.height - size);
+    }
+    if (component->text_shadowed) DrawText(text, x + 1, y + 1, size, BLACK);
+    DrawText(text, x, y, size, color);
+}
+
+static void gui_draw_ui_component(
+    GuiState* gs,
+    const OsrsUiInterfaceGroup* group,
+    const OsrsUiComponent* component,
+    Rectangle rect,
+    const GuiUiOverrides* overrides
+) {
+    const GuiUiComponentOverride* override = gui_ui_component_override(overrides, component->id);
+    if ((component->hidden && !(override && override->force_visible))
+        || (override && override->hidden)) {
+        return;
+    }
+
+    if (override && (override->sprite_asset || override->sprite_present) && component->type != 5) {
+        gui_draw_ui_sprite_component(gs, component, override, rect);
+    }
+
+    if (component->type == 3) {
+        Color color = gui_ui_color_from_rgb(component->text_color, component->opacity);
+        if (component->filled) {
+            DrawRectangleRec(rect, color);
+        } else {
+            DrawRectangleLinesEx(rect, 1, color);
+        }
+    } else if (component->type == 4) {
+        gui_draw_ui_text_component(component, override, rect);
+    } else if (component->type == 5) {
+        gui_draw_ui_sprite_component(gs, component, override, rect);
+    } else if (component->type == 6 && component->model_type == 4 && component->model_id > 0) {
+        GuiUiItemSlot slot = {
+            .enabled = 1,
+            .osrs_id = component->model_id,
+            .quantity = 1,
+            .alpha = 255,
+            .gear_slot = -1,
+        };
+        gui_draw_ui_item_slot(gs, &slot, rect);
+    } else if (component->type == 9) {
+        Color color = gui_ui_color_from_rgb(component->text_color, component->opacity);
+        Vector2 a = {rect.x, component->line_direction ? rect.y + rect.height : rect.y};
+        Vector2 b = {rect.x + rect.width, component->line_direction ? rect.y : rect.y + rect.height};
+        DrawLineEx(a, b, component->line_width > 0 ? (float)component->line_width : 1.0f, color);
+    }
+
+    Rectangle child_parent = component->type == 0
+        ? osrs_ui_rect_expand_to_scroll(rect, component)
+        : rect;
+    for (int i = 0; i < group->component_count; i++) {
+        const OsrsUiComponent* child = &group->components[i];
+        if (child->parent_id != (int32_t)component->id) continue;
+        Rectangle child_rect = osrs_ui_layout_component(child, child_parent, 0);
+        gui_draw_ui_component(gs, group, child, child_rect, overrides);
+    }
+
+    const GuiUiItemContainerOverride* container =
+        gui_ui_item_container_override(overrides, component->id);
+    if (container) gui_draw_ui_item_container(gs, container, rect);
+    if (override && override->item.present) {
+        gui_draw_ui_item_slot(gs, &override->item, rect);
+    }
+}
+
+static int gui_draw_ui_group(
+    GuiState* gs,
+    const char* group_name,
+    Rectangle mount,
+    const GuiUiOverrides* overrides
+) {
+    const OsrsUiInterfaceGroup* group = osrs_ui_interface_group(&gs->ui_interfaces, group_name);
+    if (!group) return 0;
+    for (int i = 0; i < group->component_count; i++) {
+        const OsrsUiComponent* component = &group->components[i];
+        if (component->parent_id != -1) continue;
+        Rectangle rect = osrs_ui_layout_component(
+            component, mount, osrs_ui_component_uses_mount_rect(component));
+        gui_draw_ui_component(gs, group, component, rect, overrides);
+    }
+    return 1;
+}
+
+static void gui_draw_side_chrome(GuiState* gs) {
+    Rectangle backing = {(float)(gs->panel_x + 20), (float)(gs->panel_y + 27), 200.0f, 281.0f};
+    gui_draw_named_asset_tiled(gs, "tradebacking_dark", backing, WHITE);
+
+    gui_draw_named_asset(gs, "osrs_stretch_side_topbottom_0",
+        (Rectangle){(float)gs->panel_x, (float)(gs->panel_y + GUI_SIDE_TOP_Y), GUI_SIDE_MENU_W, 37}, WHITE);
+    gui_draw_named_asset(gs, "osrs_stretch_side_topbottom_1",
+        (Rectangle){(float)gs->panel_x, (float)(gs->panel_y + GUI_SIDE_BOTTOM_Y), GUI_SIDE_MENU_W, 37}, WHITE);
+    gui_draw_named_asset(gs, "osrs_stretch_side_columns_0",
+        (Rectangle){(float)(gs->panel_x + 2), (float)(gs->panel_y + 37), 26, 261}, WHITE);
+    gui_draw_named_asset(gs, "osrs_stretch_side_columns_1",
+        (Rectangle){(float)(gs->panel_x + 212), (float)(gs->panel_y + 37), 26, 261}, WHITE);
+
+    int count = (int)(sizeof(GUI_SIDE_STONES) / sizeof(GUI_SIDE_STONES[0]));
+    for (int i = 0; i < count; i++) {
+        const GuiSideStoneRef* ref = &GUI_SIDE_STONES[i];
+        if (ref->logical_tab != (int)gs->active_tab) continue;
+        int row_y = gs->panel_y + (i < 7 ? GUI_SIDE_TOP_Y : GUI_SIDE_BOTTOM_Y);
+        int pressed = gs->tab_press_timer[gs->active_tab] > 0 ? 1 : 0;
+        Rectangle stone = {
+            (float)(gs->panel_x + (int)ref->rect.x),
+            (float)(row_y + (int)ref->rect.y + pressed),
+            ref->rect.width,
+            ref->rect.height,
+        };
+        gui_draw_named_asset_tiled(gs, ref->stone_asset, stone, WHITE);
+        DrawRectangleRec(stone, (Color){145, 22, 18, (unsigned char)(pressed ? 72 : 44)});
+        break;
+    }
+
+    for (int i = 0; i < count; i++) {
+        const GuiSideStoneRef* ref = &GUI_SIDE_STONES[i];
+        int row_y = gs->panel_y + (i < 7 ? GUI_SIDE_TOP_Y : GUI_SIDE_BOTTOM_Y);
+        int pressed = ref->logical_tab == (int)gs->active_tab &&
+            gs->tab_press_timer[gs->active_tab] > 0 ? 1 : 0;
+        Rectangle icon = {
+            (float)(gs->panel_x + (int)ref->icon_rect.x),
+            (float)(row_y + (int)ref->icon_rect.y + pressed),
+            ref->icon_rect.width,
+            ref->icon_rect.height,
+        };
+        gui_draw_named_asset(gs, ref->icon_asset, icon, WHITE);
+    }
+}
+
+static void gui_draw_tab_bar(GuiState* gs) {
+    gui_draw_side_chrome(gs);
+}
+
+static int gui_handle_tab_click(GuiState* gs, int mouse_x, int mouse_y) {
+    int count = (int)(sizeof(GUI_SIDE_STONES) / sizeof(GUI_SIDE_STONES[0]));
+    for (int i = 0; i < count; i++) {
+        const GuiSideStoneRef* ref = &GUI_SIDE_STONES[i];
+        if (ref->logical_tab < 0) continue;
+        int row_y = gs->panel_y + (i < 7 ? GUI_SIDE_TOP_Y : GUI_SIDE_BOTTOM_Y);
+        int x = gs->panel_x + (int)ref->rect.x;
+        int y = row_y + (int)ref->rect.y;
+        if (mouse_x >= x && mouse_x < x + (int)ref->rect.width &&
+            mouse_y >= y && mouse_y < y + (int)ref->rect.height) {
+            gs->active_tab = (GuiTab)ref->logical_tab;
+            gs->tab_press_timer[ref->logical_tab] = GUI_TAB_PRESS_TICKS;
             return 1;
         }
     }
@@ -911,13 +1583,15 @@ static int gui_content_y(GuiState* gs) {
 }
 
 
-/* inventory grid — OSRS native sizes (resizable mode is static-pixel, no scaling).
-   4-column x 7-row grid, 42x36 cell pitch, 36x32 item sprites. */
+/* inventory grid: OSRS native static-pixel layout */
 #define INV_COLS 4
 #define INV_ROWS 7
+#define INV_PANEL_CONTENT_X GUI_SIDE_CONTENT_X
+#define INV_SLOT_X 14
+#define INV_SLOT_Y 8
 #define INV_CELL_W 42
 #define INV_CELL_H 36
-#define INV_SPRITE_W 36
+#define INV_SPRITE_W 32
 #define INV_SPRITE_H 32
 
 /** Get the OSRS item ID for a consumable based on remaining doses/count. */
@@ -1056,6 +1730,9 @@ static void gui_reset_inventory_ui_state(GuiState* gs) {
     gs->inv_drag_start_y = 0;
     gs->inv_drag_mouse_x = 0;
     gs->inv_drag_mouse_y = 0;
+    for (int i = 0; i < GUI_TAB_COUNT; i++) {
+        gs->tab_press_timer[i] = 0;
+    }
 }
 
 /** Full inventory grid build from player state. Called once at reset.
@@ -1350,9 +2027,8 @@ static void gui_update_inventory(GuiState* gs, Player* p) {
 
 /** Get the inventory grid screen position for a slot index. */
 static void gui_inv_slot_pos(GuiState* gs, int slot, int* out_x, int* out_y) {
-    int grid_w = INV_COLS * INV_CELL_W;
-    int grid_x = gs->panel_x + (gs->panel_w - grid_w) / 2;
-    int grid_y = gui_content_y(gs) + 4;
+    int grid_x = gs->panel_x + INV_PANEL_CONTENT_X + INV_SLOT_X;
+    int grid_y = gui_content_y(gs) + INV_SLOT_Y;
     int col = slot % INV_COLS;
     int row = slot / INV_COLS;
     *out_x = grid_x + col * INV_CELL_W;
@@ -1540,8 +2216,12 @@ static void gui_inv_handle_mouse(GuiState* gs, Player* p, HumanInput* hi) {
     }
 }
 
-/** Tick the inventory dim timer (call at 50 Hz). */
-static void gui_inv_tick(GuiState* gs) {
+static void gui_tick(GuiState* gs) {
+    for (int i = 0; i < GUI_TAB_COUNT; i++) {
+        if (gs->tab_press_timer[i] > 0) {
+            gs->tab_press_timer[i]--;
+        }
+    }
     if (gs->inv_dim_timer > 0 && !gs->inv_drag_active) {
         gs->inv_dim_timer--;
         if (gs->inv_dim_timer <= 0) {
@@ -1550,28 +2230,86 @@ static void gui_inv_tick(GuiState* gs) {
     }
 }
 
-static void gui_draw_inventory(GuiState* gs, Player* p) {
-    /* full rebuild on first frame or reset, incremental updates after */
-    if (gs->inv_grid_dirty) {
-        gui_populate_inventory(gs, p);
-        gs->inv_grid_dirty = 0;
+static GuiUiItemSlot gui_ui_slot_from_inv_slot(const GuiState* gs, const InvSlot* inv, int slot) {
+    GuiUiItemSlot out = {
+        .present = 1,
+        .enabled = inv->type != INV_SLOT_EMPTY,
+        .item_db_idx = ITEM_NONE,
+        .osrs_id = inv->osrs_id,
+        .quantity = 1,
+        .selected = 0,
+        .alpha = 255,
+        .gear_slot = -1,
+    };
+    if (inv->type == INV_SLOT_EQUIPMENT) {
+        out.item_db_idx = inv->item_db_idx;
+    }
+    if (gs->inv_dim_slot == slot && gs->inv_dim_timer > 0) {
+        out.alpha = 128;
+    }
+    if (gs->inv_drag_active && slot == gs->inv_drag_src_slot) {
+        out.alpha = 80;
+    }
+    return out;
+}
+
+static void gui_draw_inventory_drag(GuiState* gs) {
+    if (!(gs->inv_drag_active && gs->inv_drag_src_slot >= 0)) return;
+    InvSlot* drag = &gs->inv_grid[gs->inv_drag_src_slot];
+    Texture2D tex = {0};
+    if (drag->type == INV_SLOT_EQUIPMENT) {
+        tex = gui_get_item_sprite(gs, drag->item_db_idx);
     } else {
-        gui_update_inventory(gs, p);
+        tex = gui_get_sprite_by_osrs_id(gs, drag->osrs_id);
+    }
+    if (tex.id != 0) {
+        int dx = gs->inv_drag_mouse_x - INV_SPRITE_W / 2;
+        int dy = gs->inv_drag_mouse_y - INV_SPRITE_H / 2;
+        Rectangle src = {0, 0, (float)tex.width, (float)tex.height};
+        Rectangle dst = {(float)dx, (float)dy, (float)INV_SPRITE_W, (float)INV_SPRITE_H};
+        DrawTexturePro(tex, src, dst, (Vector2){0, 0}, 0.0f,
+            CLITERAL(Color){255, 255, 255, 200});
     }
 
-    /* draw 4x7 slot backgrounds (subtle dark rectangles matching OSRS inventory) */
+    int target = gui_inv_slot_at(gs, gs->inv_drag_mouse_x, gs->inv_drag_mouse_y);
+    if (target >= 0 && target != gs->inv_drag_src_slot) {
+        int tx, ty;
+        gui_inv_slot_pos(gs, target, &tx, &ty);
+        DrawRectangle(tx, ty, INV_CELL_W, INV_CELL_H, CLITERAL(Color){255, 255, 255, 40});
+    }
+}
+
+static int gui_draw_inventory_decoded(GuiState* gs) {
+    GuiUiItemContainerOverride container = {
+        .component_id = OSRS_UI_COMPONENT_ID(OSRS_UI_GROUP_INVENTORY, 0),
+        .slot_count = INV_GRID_SLOTS,
+        .columns = 4,
+        .x0 = 14,
+        .y0 = 8,
+        .step_x = 42,
+        .step_y = 36,
+        .slot_w = INV_SPRITE_W,
+        .slot_h = INV_SPRITE_H,
+    };
+    for (int slot = 0; slot < INV_GRID_SLOTS; slot++) {
+        container.slots[slot] = gui_ui_slot_from_inv_slot(gs, &gs->inv_grid[slot], slot);
+    }
+    GuiUiOverrides overrides = {
+        .item_containers = &container,
+        .item_container_count = 1,
+    };
+    return gui_draw_ui_group(gs, "inventory", gui_side_content_rect(gs), &overrides);
+}
+
+static void gui_draw_inventory_manual(GuiState* gs) {
     for (int slot = 0; slot < INV_GRID_SLOTS; slot++) {
         int cx, cy;
         gui_inv_slot_pos(gs, slot, &cx, &cy);
-        /* OSRS inventory slots have a very subtle dark border/tint.
-           draw a 36x32 centered slot background to delineate cells. */
         int sx = cx + (INV_CELL_W - INV_SPRITE_W) / 2;
         int sy = cy + (INV_CELL_H - INV_SPRITE_H) / 2;
-        DrawRectangle(sx, sy, INV_SPRITE_W, INV_SPRITE_H,
-                      CLITERAL(Color){ 0, 0, 0, 30 });
+        DrawRectangle(sx, sy, INV_SPRITE_W, INV_SPRITE_H, CLITERAL(Color){0, 0, 0, 30});
     }
 
-    /* draw items (sprites are 36x32 native, scaled to INV_SPRITE_W x INV_SPRITE_H) */
     for (int slot = 0; slot < INV_GRID_SLOTS; slot++) {
         int cx, cy;
         gui_inv_slot_pos(gs, slot, &cx, &cy);
@@ -1616,89 +2354,158 @@ static void gui_draw_inventory(GuiState* gs, Player* p) {
         }
     }
 
-    /* draw dragged item at cursor position */
-    if (gs->inv_drag_active && gs->inv_drag_src_slot >= 0) {
-        InvSlot* drag = &gs->inv_grid[gs->inv_drag_src_slot];
-        Texture2D tex = { 0 };
-        if (drag->type == INV_SLOT_EQUIPMENT) {
-            tex = gui_get_item_sprite(gs, drag->item_db_idx);
-        } else {
-            tex = gui_get_sprite_by_osrs_id(gs, drag->osrs_id);
-        }
-        if (tex.id != 0) {
-            int dx = gs->inv_drag_mouse_x - INV_SPRITE_W / 2;
-            int dy = gs->inv_drag_mouse_y - INV_SPRITE_H / 2;
-            Rectangle src = { 0, 0, (float)tex.width, (float)tex.height };
-            Rectangle dst = { (float)dx, (float)dy, (float)INV_SPRITE_W, (float)INV_SPRITE_H };
-            DrawTexturePro(tex, src, dst, (Vector2){0,0}, 0.0f,
-                           CLITERAL(Color){ 255, 255, 255, 200 });
-        }
-
-        /* highlight target slot under cursor */
-        int target = gui_inv_slot_at(gs, gs->inv_drag_mouse_x, gs->inv_drag_mouse_y);
-        if (target >= 0 && target != gs->inv_drag_src_slot) {
-            int tx, ty;
-            gui_inv_slot_pos(gs, target, &tx, &ty);
-            DrawRectangle(tx, ty, INV_CELL_W, INV_CELL_H,
-                          CLITERAL(Color){ 255, 255, 255, 40 });
-        }
-    }
+    gui_draw_inventory_drag(gs);
 }
 
+static void gui_draw_inventory(GuiState* gs, Player* p) {
+    if (gs->inv_grid_dirty) {
+        gui_populate_inventory(gs, p);
+        gs->inv_grid_dirty = 0;
+    } else {
+        gui_update_inventory(gs, p);
+    }
+
+    if (gui_draw_inventory_decoded(gs)) {
+        gui_draw_inventory_drag(gs);
+        return;
+    }
+
+    gui_draw_inventory_manual(gs);
+}
+
+
+typedef struct {
+    int gear_slot;
+    const char* worn_asset;
+    const char* component_name;
+    uint32_t component_file_id;
+    Rectangle rect;
+} GuiWornSlotRef;
+
+static const GuiWornSlotRef GUI_WORN_SLOT_REFS[] = {
+    {GEAR_SLOT_HEAD,   "wornicons_0",  "slot0",  15, {77,  4,   36, 36}},
+    {GEAR_SLOT_CAPE,   "wornicons_1",  "slot1",  16, {36,  43,  36, 36}},
+    {GEAR_SLOT_NECK,   "wornicons_2",  "slot2",  17, {77,  43,  36, 36}},
+    {GEAR_SLOT_AMMO,   "wornicons_6",  "slot13", 25, {133, 43,  36, 36}},
+    {GEAR_SLOT_WEAPON, "wornicons_3",  "slot3",  18, {21,  82,  36, 36}},
+    {GEAR_SLOT_BODY,   "wornicons_4",  "slot4",  19, {77,  82,  36, 36}},
+    {GEAR_SLOT_SHIELD, "wornicons_5",  "slot5",  20, {133, 82,  36, 36}},
+    {GEAR_SLOT_LEGS,   "wornicons_7",  "slot7",  21, {77,  122, 36, 36}},
+    {GEAR_SLOT_HANDS,  "wornicons_9",  "slot9",  22, {21,  162, 36, 36}},
+    {GEAR_SLOT_FEET,   "wornicons_10", "slot10", 23, {77,  162, 36, 36}},
+    {GEAR_SLOT_RING,   "wornicons_11", "slot12", 24, {133, 162, 36, 36}},
+};
+
+typedef struct {
+    const char* component_name;
+    const char* icon_component_name;
+    const char* asset;
+    Rectangle rect;
+    Rectangle icon_rect;
+} GuiWornButtonRef;
+
+static const GuiWornButtonRef GUI_WORN_BUTTON_REFS[] = {
+    {"equipment",     "equipment_icon", "options_icons_16", {7,   208, 40, 40}, {10,  210, 32, 32}},
+    {"pricechecker",  "com_4",          "options_icons_28", {52,  208, 40, 40}, {56,  212, 32, 32}},
+    {"deathkeep",     "com_6",          "options_icons_18", {97,  208, 40, 40}, {99,  211, 34, 34}},
+    {"call_follower", "com_8",          "whistle",          {142, 208, 40, 40}, {145, 211, 32, 32}},
+};
+
+static int gui_draw_equipment_decoded(GuiState* gs, Player* p) {
+    GuiUiComponentOverride overrides[GUI_UI_MAX_COMPONENT_OVERRIDES];
+    memset(overrides, 0, sizeof(overrides));
+    int override_count = 0;
+
+    int slot_count = (int)(sizeof(GUI_WORN_SLOT_REFS) / sizeof(GUI_WORN_SLOT_REFS[0]));
+    for (int i = 0; i < slot_count; i++) {
+        const GuiWornSlotRef* ref = &GUI_WORN_SLOT_REFS[i];
+        int item_idx = p->equipped[ref->gear_slot];
+        GuiUiComponentOverride* override = gui_ui_push_component_override(
+            overrides,
+            &override_count,
+            OSRS_UI_COMPONENT_ID(OSRS_UI_GROUP_WORNITEMS, ref->component_file_id));
+        override->item = (GuiUiItemSlot){
+            .present = 1,
+            .enabled = item_idx != ITEM_NONE,
+            .item_db_idx = item_idx,
+            .quantity = 1,
+            .alpha = 255,
+            .gear_slot = ref->gear_slot,
+            .empty_asset = ref->worn_asset,
+        };
+    }
+
+    GuiUiOverrides ui_overrides = {
+        .components = overrides,
+        .component_count = override_count,
+    };
+
+    int button_count = (int)(sizeof(GUI_WORN_BUTTON_REFS) / sizeof(GUI_WORN_BUTTON_REFS[0]));
+    for (int i = 0; i < button_count; i++) {
+        const GuiWornButtonRef* ref = &GUI_WORN_BUTTON_REFS[i];
+        Rectangle rect = gui_side_component_rect(gs, "wornitems", ref->component_name, ref->rect);
+        gui_draw_named_asset(gs, "combatboxes_0", rect, WHITE);
+        if (gui_asset(gs, "combatboxes_0").id == 0) {
+            gui_draw_slot((int)rect.x, (int)rect.y, (int)rect.width, (int)rect.height, GUI_BG_SLOT);
+        }
+    }
+
+    return gui_draw_ui_group(gs, "wornitems", gui_side_content_rect(gs), &ui_overrides);
+}
 
 static void gui_draw_equipment(GuiState* gs, Player* p) {
-    int oy = gui_content_y(gs) + 8;
+    if (gui_draw_equipment_decoded(gs, p)) return;
 
-    gui_text_shadow("Worn Equipment", gs->panel_x + 8, oy, 12, GUI_TEXT_ORANGE);
-    oy += 22;
+    gui_draw_named_asset_tiled(gs, "miscgraphics_2",
+        gui_side_ref_rect(gs, (Rectangle){77, 39, 36, 124}), WHITE);
+    gui_draw_named_asset_tiled(gs, "miscgraphics_2",
+        gui_side_ref_rect(gs, (Rectangle){21, 118, 36, 45}), WHITE);
+    gui_draw_named_asset_tiled(gs, "miscgraphics_2",
+        gui_side_ref_rect(gs, (Rectangle){133, 118, 36, 45}), WHITE);
+    gui_draw_named_asset_tiled(gs, "miscgraphics_3",
+        gui_side_ref_rect(gs, (Rectangle){56, 81, 78, 36}), WHITE);
+    gui_draw_named_asset_tiled(gs, "miscgraphics_3",
+        gui_side_ref_rect(gs, (Rectangle){71, 42, 48, 36}), WHITE);
 
-    int gap = 5;
-    int sw = 42;
-    int sh = 36;
-    int max_sw = (gs->panel_w - 16 - gap * 2) / 3;
-    if (sw > max_sw) {
-        sw = max_sw;
-        sh = (int)(sw * 0.85f);
+    int slot_count = (int)(sizeof(GUI_WORN_SLOT_REFS) / sizeof(GUI_WORN_SLOT_REFS[0]));
+    for (int i = 0; i < slot_count; i++) {
+        const GuiWornSlotRef* ref = &GUI_WORN_SLOT_REFS[i];
+        Rectangle dst = gui_side_component_rect(gs, "wornitems", ref->component_name, ref->rect);
+        int item_idx = p->equipped[ref->gear_slot];
+        gui_draw_equip_slot(
+            gs,
+            (int)dst.x,
+            (int)dst.y,
+            (int)dst.width,
+            (int)dst.height,
+            ref->gear_slot,
+            item_idx);
+        if (item_idx == ITEM_NONE) {
+            gui_draw_named_asset_centered(gs, ref->worn_asset, dst, dst.width, dst.height, WHITE);
+        }
     }
-    int cx = gs->panel_x + gs->panel_w / 2;
-    int r3_w = sw * 3 + gap * 2;
-    int r3_x = cx - r3_w / 2;
 
-    /* row 0: head (centered) */
-    gui_draw_equip_slot(gs, cx - sw / 2, oy, sw, sh, GEAR_SLOT_HEAD, p->equipped[GEAR_SLOT_HEAD]);
-    oy += sh + gap;
-
-    /* row 1: cape, neck, ammo */
-    gui_draw_equip_slot(gs, r3_x, oy, sw, sh, GEAR_SLOT_CAPE, p->equipped[GEAR_SLOT_CAPE]);
-    gui_draw_equip_slot(gs, r3_x + sw + gap, oy, sw, sh, GEAR_SLOT_NECK, p->equipped[GEAR_SLOT_NECK]);
-    gui_draw_equip_slot(gs, r3_x + 2 * (sw + gap), oy, sw, sh, GEAR_SLOT_AMMO, p->equipped[GEAR_SLOT_AMMO]);
-    oy += sh + gap;
-
-    /* row 2: weapon, body, shield */
-    gui_draw_equip_slot(gs, r3_x, oy, sw, sh, GEAR_SLOT_WEAPON, p->equipped[GEAR_SLOT_WEAPON]);
-    gui_draw_equip_slot(gs, r3_x + sw + gap, oy, sw, sh, GEAR_SLOT_BODY, p->equipped[GEAR_SLOT_BODY]);
-    gui_draw_equip_slot(gs, r3_x + 2 * (sw + gap), oy, sw, sh, GEAR_SLOT_SHIELD, p->equipped[GEAR_SLOT_SHIELD]);
-    oy += sh + gap;
-
-    /* row 3: legs (centered) */
-    gui_draw_equip_slot(gs, cx - sw / 2, oy, sw, sh, GEAR_SLOT_LEGS, p->equipped[GEAR_SLOT_LEGS]);
-    oy += sh + gap;
-
-    /* row 4: hands, feet, ring */
-    gui_draw_equip_slot(gs, r3_x, oy, sw, sh, GEAR_SLOT_HANDS, p->equipped[GEAR_SLOT_HANDS]);
-    gui_draw_equip_slot(gs, r3_x + sw + gap, oy, sw, sh, GEAR_SLOT_FEET, p->equipped[GEAR_SLOT_FEET]);
-    gui_draw_equip_slot(gs, r3_x + 2 * (sw + gap), oy, sw, sh, GEAR_SLOT_RING, p->equipped[GEAR_SLOT_RING]);
+    int button_count = (int)(sizeof(GUI_WORN_BUTTON_REFS) / sizeof(GUI_WORN_BUTTON_REFS[0]));
+    for (int i = 0; i < button_count; i++) {
+        const GuiWornButtonRef* ref = &GUI_WORN_BUTTON_REFS[i];
+        Rectangle rect = gui_side_component_rect(gs, "wornitems", ref->component_name, ref->rect);
+        Rectangle icon = gui_side_component_rect(
+            gs, "wornitems", ref->icon_component_name, ref->icon_rect);
+        gui_draw_named_asset(gs, "combatboxes_0", rect, WHITE);
+        if (gui_asset(gs, "combatboxes_0").id == 0) {
+            gui_draw_slot((int)rect.x, (int)rect.y, (int)rect.width, (int)rect.height, GUI_BG_SLOT);
+        }
+        gui_draw_named_asset_centered(gs, ref->asset, icon, icon.width, icon.height, WHITE);
+    }
 }
 
 
-/* enum order is already display order — 5 cols × 6 rows, 29 prayers + 1 empty.
-   grid is just the identity: position i maps to enum value i. */
 #define GUI_PRAYER_GRID_COUNT GUI_NUM_PRAYERS
 
 #define GUI_PRAYER_GRID_COLS 5
-#define GUI_PRAYER_CELL_PX 37
+#define GUI_PRAYER_CELL_PX 34
 #define GUI_SPELL_GRID_COLS 4
-#define GUI_SPELL_CELL_PX 36
+#define GUI_SPELL_CELL_PX 34
 
 static int gui_fit_cell_size(int panel_w, int cols, int gap, int native_px) {
     int fitted = (panel_w - 16 - gap * (cols - 1)) / cols;
@@ -1707,17 +2514,17 @@ static int gui_fit_cell_size(int panel_w, int cols, int gap, int native_px) {
 
 static void gui_prayer_grid_metrics(GuiState* gs, int* gx, int* gy, int* cell, int* gap) {
     *gap = 2;
-    *cell = gui_fit_cell_size(gs->panel_w, GUI_PRAYER_GRID_COLS, *gap, GUI_PRAYER_CELL_PX);
-    int grid_w = GUI_PRAYER_GRID_COLS * *cell + (GUI_PRAYER_GRID_COLS - 1) * *gap;
-    *gx = gs->panel_x + (gs->panel_w - grid_w) / 2;
-    *gy = gui_content_y(gs) + 4 + 18 + 6;
+    *cell = GUI_PRAYER_CELL_PX;
+    *gx = gs->panel_x + GUI_SIDE_CONTENT_X + 8;
+    *gy = gui_content_y(gs) + 8;
 }
 
 static void gui_spell_grid_metrics(GuiState* gs, int* gx, int* gy, int* cell, int* gap) {
-    *gap = 6;
+    *gap = 5;
     *cell = gui_fit_cell_size(gs->panel_w, GUI_SPELL_GRID_COLS, *gap, GUI_SPELL_CELL_PX);
     int grid_w = GUI_SPELL_GRID_COLS * *cell + (GUI_SPELL_GRID_COLS - 1) * *gap;
-    *gx = gs->panel_x + (gs->panel_w - grid_w) / 2;
+    Rectangle content = gui_side_content_rect(gs);
+    *gx = (int)(content.x + (content.width - grid_w) / 2);
     *gy = gui_content_y(gs) + 8;
 }
 
@@ -1742,6 +2549,7 @@ static GuiCombatStyleOptions gui_combat_style_options(uint8_t weapon) {
     switch (weapon) {
         case ITEM_TOXIC_BLOWPIPE:
         case ITEM_ZARYTE_CROSSBOW:
+        case ITEM_BOW_OF_FAERDHINEN:
         case ITEM_TWISTED_BOW:
             out.names[0] = "Accurate";
             out.names[1] = "Rapid";
@@ -1770,6 +2578,7 @@ static GuiCombatStyleOptions gui_combat_style_options(uint8_t weapon) {
             out.names[3] = "Block";
             break;
         case ITEM_KODAI_WAND:
+        case ITEM_DRAGON_HUNTER_WAND:
             out.names[0] = "Autocast";
             out.names[1] = "Defensive";
             out.values[0] = FIGHT_STYLE_AUTOCAST;
@@ -1783,6 +2592,110 @@ static GuiCombatStyleOptions gui_combat_style_options(uint8_t weapon) {
     return out;
 }
 
+static Rectangle gui_combat_style_fallback_rect(int index) {
+    static const Rectangle rects[4] = {
+        {20,  46, 68, 47},
+        {102, 46, 68, 47},
+        {20,  99, 68, 47},
+        {102, 99, 68, 47},
+    };
+    assert(index >= 0 && index < 4);
+    return rects[index];
+}
+
+static Rectangle gui_combat_style_rect(GuiState* gs, int index) {
+    assert(index >= 0 && index < 4);
+    char component_name[2] = {(char)('0' + index), '\0'};
+    return gui_side_component_rect(
+        gs,
+        "combat_interface",
+        component_name,
+        gui_combat_style_fallback_rect(index));
+}
+
+static Rectangle gui_combat_style_icon_rect(int index) {
+    static const Rectangle rects[4] = {
+        {37,  51, 34, 24},
+        {119, 51, 34, 24},
+        {37, 104, 34, 24},
+        {119,104, 34, 24},
+    };
+    assert(index >= 0 && index < 4);
+    return rects[index];
+}
+
+static Rectangle gui_combat_style_text_rect(int index) {
+    static const Rectangle rects[4] = {
+        {20,  67, 68, 13},
+        {102, 76, 68, 13},
+        {20, 129, 68, 13},
+        {102,129, 68, 13},
+    };
+    assert(index >= 0 && index < 4);
+    return rects[index];
+}
+
+static Rectangle gui_combat_autocast_rect(void) {
+    return (Rectangle){20, 153, 150, 26};
+}
+
+static Rectangle gui_combat_autocast_spell_rect(int index) {
+    static const Rectangle rects[2] = {
+        {20, 182, 70, 26},
+        {100, 182, 70, 26},
+    };
+    assert(index >= 0 && index < 2);
+    return rects[index];
+}
+
+static Rectangle gui_combat_special_rect(void) {
+    return (Rectangle){20, 200, 150, 26};
+}
+
+static Rectangle gui_combat_category_rect(void) {
+    return (Rectangle){0, 233, 190, 28};
+}
+
+static void gui_draw_combat_box(GuiState* gs, Rectangle rect, int selected) {
+    gui_draw_named_asset(gs, selected ? "combatboxes_1" : "combatboxes_0", rect, WHITE);
+    if (gui_asset(gs, selected ? "combatboxes_1" : "combatboxes_0").id == 0) {
+        DrawRectangleRec(rect, selected ? (Color){83, 61, 43, 245} : (Color){45, 39, 31, 235});
+        DrawRectangleLinesEx(rect, 1, selected ? GUI_TEXT_YELLOW : (Color){103, 89, 63, 255});
+    }
+    if (selected) {
+        DrawRectangleRec(rect, (Color){120, 27, 20, 54});
+    }
+}
+
+static const char* gui_combat_icon_asset(uint8_t weapon, FightStyle style, int index) {
+    switch (weapon) {
+        case ITEM_TOXIC_BLOWPIPE:
+        case ITEM_ZARYTE_CROSSBOW:
+        case ITEM_BOW_OF_FAERDHINEN:
+        case ITEM_TWISTED_BOW:
+            switch (style) {
+                case FIGHT_STYLE_ACCURATE:  return "combaticons2_15";
+                case FIGHT_STYLE_RAPID:     return "combaticons2_16";
+                case FIGHT_STYLE_LONGRANGE: return "combaticons2_17";
+                default: break;
+            }
+            break;
+        case ITEM_KODAI_WAND:
+        case ITEM_DRAGON_HUNTER_WAND:
+            return index == 0 ? "sideicons_interface_14" : "sideicons_interface_15";
+        default:
+            break;
+    }
+
+    switch (style) {
+        case FIGHT_STYLE_ACCURATE:   return "combaticons_6";
+        case FIGHT_STYLE_AGGRESSIVE: return "combaticons_5";
+        case FIGHT_STYLE_CONTROLLED: return "combaticons_7";
+        case FIGHT_STYLE_DEFENSIVE:  return "combaticons_4";
+        default: return "sideicons_interface_0";
+    }
+}
+
 static int gui_autocast_spell(const Player* p) {
     return p->autocast_spell == ENCOUNTER_SPELL_ICE
         ? ENCOUNTER_SPELL_ICE
@@ -1791,6 +2704,85 @@ static int gui_autocast_spell(const Player* p) {
 
 static const char* gui_autocast_spell_name(int spell) {
     return spell == ENCOUNTER_SPELL_ICE ? "Ice Barrage" : "Blood Barrage";
+}
+
+static uint32_t gui_combat_component_id(uint32_t file_id) {
+    return OSRS_UI_COMPONENT_ID(OSRS_UI_GROUP_COMBAT_INTERFACE, file_id);
+}
+
+static const char* gui_combat_selected_style_name(
+    const GuiCombatStyleOptions* styles,
+    FightStyle fight_style
+) {
+    for (int i = 0; i < styles->count; i++) {
+        if (fight_style == styles->values[i]) return styles->names[i];
+    }
+    return "Accurate";
+}
+
+static int gui_draw_combat_decoded(
+    GuiState* gs,
+    Player* p,
+    const char* wpn_name,
+    const GuiCombatStyleOptions* styles
+) {
+    GuiUiComponentOverride overrides[GUI_UI_MAX_COMPONENT_OVERRIDES];
+    int override_count = 0;
+
+    char combat_level[32];
+    snprintf(combat_level, sizeof(combat_level), "Combat Lvl: %d",
+        p->base_attack + p->base_strength + p->base_defence);
+
+    char category_text[64];
+    snprintf(category_text, sizeof(category_text), "Attack style: %s",
+        gui_combat_selected_style_name(styles, p->fight_style));
+
+    GuiUiComponentOverride* title = gui_ui_push_component_override(
+        overrides, &override_count, gui_combat_component_id(3));
+    title->text = wpn_name;
+
+    GuiUiComponentOverride* level = gui_ui_push_component_override(
+        overrides, &override_count, gui_combat_component_id(4));
+    level->text = combat_level;
+
+    GuiUiComponentOverride* category = gui_ui_push_component_override(
+        overrides, &override_count, gui_combat_component_id(5));
+    category->text = category_text;
+
+    static const uint32_t hidden_file_ids[] = {22, 32, 37, 38, 45, 46, 47, 48, 49};
+    int hidden_count = (int)(sizeof(hidden_file_ids) / sizeof(hidden_file_ids[0]));
+    for (int i = 0; i < hidden_count; i++) {
+        GuiUiComponentOverride* hidden = gui_ui_push_component_override(
+            overrides, &override_count, gui_combat_component_id(hidden_file_ids[i]));
+        hidden->hidden = 1;
+    }
+
+    static const uint32_t root_file_ids[4] = {6, 10, 14, 18};
+    static const uint32_t icon_file_ids[4] = {8, 12, 16, 20};
+    static const uint32_t text_file_ids[4] = {9, 13, 17, 21};
+    for (int i = 0; i < styles->count; i++) {
+        int active = p->fight_style == styles->values[i];
+
+        GuiUiComponentOverride* root = gui_ui_push_component_override(
+            overrides, &override_count, gui_combat_component_id(root_file_ids[i]));
+        root->force_visible = 1;
+        root->sprite_asset = active ? "combatboxes_1" : "combatboxes_0";
+
+        GuiUiComponentOverride* icon = gui_ui_push_component_override(
+            overrides, &override_count, gui_combat_component_id(icon_file_ids[i]));
+        icon->sprite_asset = gui_combat_icon_asset(p->equipped[GEAR_SLOT_WEAPON],
+            styles->values[i], i);
+
+        GuiUiComponentOverride* text = gui_ui_push_component_override(
+            overrides, &override_count, gui_combat_component_id(text_file_ids[i]));
+        text->text = styles->names[i];
+    }
+
+    GuiUiOverrides ui_overrides = {
+        .components = overrides,
+        .component_count = override_count,
+    };
+    return gui_draw_ui_group(gs, "combat_interface", gui_side_content_rect(gs), &ui_overrides);
 }
 
 /** Check if a prayer grid slot is currently active based on player state. */
@@ -1809,179 +2801,142 @@ static int gui_prayer_is_active(GuiPrayerIdx pidx, Player* p) {
 }
 
 static void gui_draw_prayer(GuiState* gs, Player* p) {
-    int oy = gui_content_y(gs) + 4;
-
-    /* prayer points bar at top */
-    int bar_x = gs->panel_x + 8;
-    int bar_w = gs->panel_w - 16;
-    int bar_h = 18;
-    float pray_pct = (p->base_prayer > 0) ?
-        (float)p->current_prayer / (float)p->base_prayer : 0.0f;
-    DrawRectangle(bar_x, oy, bar_w, bar_h, GUI_SPEC_DARK);
-    DrawRectangle(bar_x, oy, (int)(bar_w * pray_pct), bar_h, GUI_TEXT_CYAN);
-    DrawRectangleLines(bar_x, oy, bar_w, bar_h, GUI_BORDER);
-    gui_text_shadow(TextFormat("%d / %d", p->current_prayer, p->base_prayer),
-                    bar_x + bar_w / 2 - 20, oy + 3, 10, GUI_TEXT_WHITE);
-    oy += bar_h + 6;
-
     int cols = GUI_PRAYER_GRID_COLS;
     int gap, icon_sz, gx, gy;
     gui_prayer_grid_metrics(gs, &gx, &gy, &icon_sz, &gap);
-    oy = gy;
 
     for (int i = 0; i < GUI_PRAYER_GRID_COUNT; i++) {
         int col = i % cols;
         int row = i / cols;
         int ix = gx + col * (icon_sz + gap);
-        int iy = oy + row * (icon_sz + gap);
+        int iy = gy + row * (icon_sz + gap);
 
         GuiPrayerIdx pidx = (GuiPrayerIdx)i;
         int active = gui_prayer_is_active(pidx, p);
+        Rectangle cell_rect = {(float)ix, (float)iy, (float)icon_sz, (float)icon_sz};
 
-        /* draw slot_tile background */
-        if (gs->slot_tile.id != 0) {
-            Rectangle src = { 0, 0, (float)gs->slot_tile.width, (float)gs->slot_tile.height };
-            Rectangle dst = { (float)ix, (float)iy, (float)icon_sz, (float)icon_sz };
-            DrawTexturePro(gs->slot_tile, src, dst, (Vector2){0,0}, 0.0f, WHITE);
-        }
-
-        /* active prayer: yellow highlight overlay */
+        DrawRectangleRec(cell_rect, (Color){16, 13, 10, 95});
         if (active) {
-            DrawRectangle(ix, iy, icon_sz, icon_sz, GUI_PRAYER_ON);
+            DrawRectangleRec(cell_rect, (Color){255, 224, 64, 34});
         }
 
-        /* draw prayer sprite (scaled to cell) */
         if (gs->sprites_loaded) {
             Texture2D tex = active ? gs->prayer_on[pidx] : gs->prayer_off[pidx];
-            if (tex.id != 0) {
-                Rectangle src = { 0, 0, (float)tex.width, (float)tex.height };
-                Rectangle dst = { (float)ix, (float)iy, (float)icon_sz, (float)icon_sz };
-                DrawTexturePro(tex, src, dst, (Vector2){0,0}, 0.0f, WHITE);
-            }
+            gui_draw_texture_centered(tex, cell_rect, 30, 30, WHITE);
         }
     }
 }
 
 
 static void gui_draw_combat(GuiState* gs, Player* p) {
-    int ox = gs->panel_x + 8;
-    int oy = gui_content_y(gs) + 8;
-
-    /* weapon name + sprite (scaled to match panel) */
     const char* wpn_name = "Unarmed";
     if (p->equipped[GEAR_SLOT_WEAPON] != ITEM_NONE &&
         p->equipped[GEAR_SLOT_WEAPON] < NUM_ITEMS) {
         wpn_name = gui_item_short_name(p->equipped[GEAR_SLOT_WEAPON]);
     }
 
-    Texture2D wpn_tex = gui_get_item_sprite(gs, p->equipped[GEAR_SLOT_WEAPON]);
-    if (wpn_tex.id != 0) {
-        Rectangle src = { 0, 0, (float)wpn_tex.width, (float)wpn_tex.height };
-        Rectangle dst = { (float)ox, (float)oy, 60.0f, 54.0f };
-        DrawTexturePro(wpn_tex, src, dst, (Vector2){0,0}, 0.0f, WHITE);
-        gui_text_shadow(wpn_name, ox + 66, oy + 16, 14, GUI_TEXT_ORANGE);
-        oy += 60;
-    } else {
-        gui_text_shadow(wpn_name, ox, oy, 14, GUI_TEXT_ORANGE);
-        oy += 22;
-    }
-
     GuiCombatStyleOptions styles = gui_combat_style_options(p->equipped[GEAR_SLOT_WEAPON]);
-    int btn_gap = 6;
-    int btn_w = (gs->panel_w - 16 - btn_gap) / 2;
-    int btn_h = 60;
+    int decoded = gui_draw_combat_decoded(gs, p, wpn_name, &styles);
 
-    for (int i = 0; i < styles.count; i++) {
-        int col = i % 2;
-        int row = i / 2;
-        int bx = ox + col * (btn_w + btn_gap);
-        int by = oy + row * (btn_h + btn_gap);
+    if (!decoded) {
+        Rectangle title = gui_side_ref_rect(gs, (Rectangle){10, 6, 170, 14});
+        Rectangle level = gui_side_ref_rect(gs, (Rectangle){10, 26, 170, 12});
+        int tw = MeasureText(wpn_name, 11);
+        gui_text_shadow(wpn_name, (int)(title.x + title.width / 2 - tw / 2),
+            (int)title.y, 11, GUI_TEXT_ORANGE);
+        const char* combat_level = TextFormat("Combat Lvl: %d",
+            p->base_attack + p->base_strength + p->base_defence);
+        int cw = MeasureText(combat_level, 10);
+        gui_text_shadow(combat_level, (int)(level.x + level.width / 2 - cw / 2),
+            (int)level.y, 10, GUI_TEXT_YELLOW);
 
-        int active = p->fight_style == styles.values[i];
-
-        if (gs->slot_tile.id != 0) {
-            Rectangle src = { 0, 0, (float)gs->slot_tile.width, (float)gs->slot_tile.height };
-            Rectangle dst = { (float)bx, (float)by, (float)btn_w, (float)btn_h };
-            DrawTexturePro(gs->slot_tile, src, dst, (Vector2){0,0}, 0.0f, WHITE);
+        for (int i = 0; i < styles.count; i++) {
+            Rectangle rect = gui_combat_style_rect(gs, i);
+            Rectangle icon = gui_side_ref_rect(gs, gui_combat_style_icon_rect(i));
+            Rectangle text = gui_side_ref_rect(gs, gui_combat_style_text_rect(i));
+            int active = p->fight_style == styles.values[i];
+            gui_draw_combat_box(gs, rect, active);
+            gui_draw_named_asset_centered(
+                gs,
+                gui_combat_icon_asset(p->equipped[GEAR_SLOT_WEAPON], styles.values[i], i),
+                icon,
+                icon.width,
+                icon.height,
+                WHITE);
+            Color txt_c = active ? GUI_TEXT_YELLOW : GUI_TEXT_WHITE;
+            int txt_w = MeasureText(styles.names[i], 10);
+            gui_text_shadow(
+                styles.names[i],
+                (int)(text.x + text.width / 2 - txt_w / 2),
+                (int)(text.y + 1),
+                10,
+                txt_c);
         }
-        if (active) {
-            DrawRectangle(bx, by, btn_w, btn_h, GUI_PRAYER_ON);
-        }
-        DrawRectangleLines(bx, by, btn_w, btn_h, GUI_BORDER);
-
-        Color txt_c = active ? GUI_TEXT_YELLOW : GUI_TEXT_WHITE;
-        int txt_w = MeasureText(styles.names[i], 11);
-        gui_text_shadow(styles.names[i], bx + btn_w / 2 - txt_w / 2, by + btn_h / 2 - 5, 11, txt_c);
     }
-    oy += 2 * (btn_h + btn_gap) + 10;
 
-    if (p->equipped[GEAR_SLOT_WEAPON] == ITEM_KODAI_WAND) {
-        int ac_w = gs->panel_w - 16;
-        int ac_h = 26;
+    if (item_supports_ancient_autocast(p->equipped[GEAR_SLOT_WEAPON])) {
+        Rectangle ac = gui_side_ref_rect(gs, gui_combat_autocast_rect());
         int spell = gui_autocast_spell(p);
         const char* spell_name = gui_autocast_spell_name(spell);
-        if (gs->slot_tile.id != 0) {
-            Rectangle src = { 0, 0, (float)gs->slot_tile.width, (float)gs->slot_tile.height };
-            Rectangle dst = { (float)ox, (float)oy, (float)ac_w, (float)ac_h };
-            DrawTexturePro(gs->slot_tile, src, dst, (Vector2){0,0}, 0.0f, WHITE);
-        } else {
-            DrawRectangle(ox, oy, ac_w, ac_h, GUI_SPEC_DARK);
-        }
-        DrawRectangleLines(ox, oy, ac_w, ac_h,
+        gui_draw_named_asset(gs, "combatboxes_1", ac, WHITE);
+        DrawRectangleLines((int)ac.x, (int)ac.y, (int)ac.width, (int)ac.height,
             p->autocast_enabled ? GUI_TEXT_YELLOW : GUI_BORDER);
-        gui_text_shadow(TextFormat("Autocast: %s", spell_name),
-            ox + 8, oy + 7, 10, p->autocast_enabled ? GUI_TEXT_YELLOW : GUI_TEXT_WHITE);
-        oy += ac_h + 6;
+        gui_text_shadow(
+            TextFormat("Autocast: %s", spell_name),
+            (int)ac.x + 8,
+            (int)ac.y + 7,
+            10,
+            p->autocast_enabled ? GUI_TEXT_YELLOW : GUI_TEXT_WHITE);
 
         if (gs->autocast_selector_open) {
-            int sel_gap = 6;
-            int sel_w = (gs->panel_w - 16 - sel_gap) / 2;
             const char* names[2] = { "Blood", "Ice" };
             int spells[2] = { ENCOUNTER_SPELL_BLOOD, ENCOUNTER_SPELL_ICE };
             for (int i = 0; i < 2; i++) {
-                int bx = ox + i * (sel_w + sel_gap);
+                Rectangle rect = gui_side_ref_rect(gs, gui_combat_autocast_spell_rect(i));
                 Color c = spells[i] == spell ? GUI_TEXT_YELLOW : GUI_TEXT_WHITE;
-                DrawRectangle(bx, oy, sel_w, ac_h, GUI_SPEC_DARK);
-                DrawRectangleLines(bx, oy, sel_w, ac_h,
+                gui_draw_named_asset(gs, "combatboxes_1", rect, WHITE);
+                DrawRectangleLines((int)rect.x, (int)rect.y, (int)rect.width, (int)rect.height,
                     spells[i] == spell ? GUI_TEXT_YELLOW : GUI_BORDER);
                 int tw = MeasureText(names[i], 10);
-                gui_text_shadow(names[i], bx + sel_w / 2 - tw / 2, oy + 7, 10, c);
+                gui_text_shadow(
+                    names[i],
+                    (int)(rect.x + rect.width / 2 - tw / 2),
+                    (int)rect.y + 7,
+                    10,
+                    c);
             }
-            oy += ac_h + 6;
         }
     }
 
-    /* special attack bar — clickable. yellow border when spec is queued (OSRS-style). */
-    Color spec_label_color = p->spec_armed ? GUI_TEXT_YELLOW : GUI_TEXT_WHITE;
-    gui_text_shadow("Special Attack", ox, oy, 11, spec_label_color);
-    oy += 16;
-
-    int spec_w = gs->panel_w - 16;
-    int spec_h = 26;
+    Rectangle spec = gui_side_ref_rect(gs, gui_combat_special_rect());
     float spec_pct = (float)p->special_energy / 100.0f;
-
-    /* background: draw spec bar sprite if available, else dark rect */
-    if (gs->spec_bar_loaded && gs->spec_bar.id != 0) {
-        /* stretch spec bar sprite to fill */
-        Rectangle src = { 0, 0, (float)gs->spec_bar.width, (float)gs->spec_bar.height };
-        Rectangle dst = { (float)ox, (float)oy, (float)spec_w, (float)spec_h };
-        DrawTexturePro(gs->spec_bar, src, dst, (Vector2){0, 0}, 0.0f, CLITERAL(Color){80, 80, 80, 255});
-        /* green fill overlay */
-        DrawRectangle(ox, oy, (int)(spec_w * spec_pct), spec_h,
-                      CLITERAL(Color){ 0, 180, 0, 160 });
-    } else {
-        DrawRectangle(ox, oy, spec_w, spec_h, GUI_SPEC_DARK);
-        DrawRectangle(ox, oy, (int)(spec_w * spec_pct), spec_h, GUI_SPEC_GREEN);
+    gui_draw_named_asset(gs, "combatboxes_special_attack", spec, WHITE);
+    if (gui_asset(gs, "combatboxes_special_attack").id == 0) {
+        DrawRectangleRec(spec, (Color){32, 28, 22, 235});
     }
-    /* active highlight: bright yellow-green border when spec is queued */
+    Rectangle empty = {spec.x + 2, spec.y + 7, spec.width - 4, 12};
+    DrawRectangleRec(empty, (Color){115, 6, 6, 255});
+    Rectangle fill = empty;
+    fill.width *= spec_pct;
+    DrawRectangleRec(fill, p->spec_armed ? GUI_SPEC_GREEN : (Color){57, 125, 59, 255});
     if (p->spec_armed) {
-        DrawRectangle(ox, oy, spec_w, spec_h, CLITERAL(Color){ 200, 200, 50, 60 });
-        DrawRectangleLines(ox, oy, spec_w, spec_h, GUI_TEXT_YELLOW);
-    } else {
-        DrawRectangleLines(ox, oy, spec_w, spec_h, GUI_BORDER);
+        DrawRectangleRec(spec, CLITERAL(Color){ 200, 200, 50, 60 });
     }
-    gui_text_shadow(TextFormat("%d%%", p->special_energy),
-                    ox + spec_w / 2 - 10, oy + 4, 10, GUI_TEXT_WHITE);
+    DrawRectangleLinesEx((Rectangle){spec.x + 2, spec.y + 6, spec.width - 4, 14}, 1,
+        (Color){44, 42, 35, 255});
+    const char* spec_text = TextFormat("Special Attack: %d%%", p->special_energy);
+    int spec_w = MeasureText(spec_text, 10);
+    gui_text_shadow(spec_text, (int)(spec.x + spec.width / 2 - spec_w / 2),
+        (int)(spec.y + 8), 10, GUI_TEXT_YELLOW);
+
+    if (!decoded) {
+        Rectangle category = gui_side_ref_rect(gs, gui_combat_category_rect());
+        const char* category_text = TextFormat("Attack style: %s",
+            gui_combat_selected_style_name(&styles, p->fight_style));
+        int category_w = MeasureText(category_text, 12);
+        gui_text_shadow(category_text, (int)(category.x + category.width / 2 - category_w / 2),
+            (int)(category.y + 7), 12, GUI_TEXT_ORANGE);
+    }
 }
 
 
@@ -1990,11 +2945,6 @@ typedef struct {
     GuiSpellIdx idx;
 } GuiSpellEntry;
 
-/* Ancient spellbook grid (4 cols × 4 rows = 16 combat spells, + vengeance).
-   sort is by level: rows go Rush/Burst/Blitz/Barrage top-to-bottom, and
-   within each row the order is Smoke / Shadow / Blood / Ice (ascending level).
-   only Ice/Blood/Vengeance are castable in this env — Smoke/Shadow render
-   greyed out with the "off" sprite and don't respond to clicks. */
 static const GuiSpellEntry GUI_SPELL_GRID[] = {
     { "Smoke Rush",    GUI_SPELL_SMOKE_RUSH },
     { "Shadow Rush",   GUI_SPELL_SHADOW_RUSH },
@@ -2012,247 +2962,215 @@ static const GuiSpellEntry GUI_SPELL_GRID[] = {
     { "Shadow Barrage",GUI_SPELL_SHADOW_BARRAGE },
     { "Blood Barrage", GUI_SPELL_BLOOD_BARRAGE },
     { "Ice Barrage",   GUI_SPELL_ICE_BARRAGE },
-    { "Vengeance",     GUI_SPELL_VENGEANCE },
+    { "Paddewwa Teleport",     GUI_SPELL_PADDEWWA_TELEPORT },
+    { "Senntisten Teleport",   GUI_SPELL_SENNTISTEN_TELEPORT },
+    { "Kharyrll Teleport",     GUI_SPELL_KHARYRLL_TELEPORT },
+    { "Lassar Teleport",       GUI_SPELL_LASSAR_TELEPORT },
+    { "Dareeyak Teleport",     GUI_SPELL_DAREEYAK_TELEPORT },
+    { "Carrallanger Teleport", GUI_SPELL_CARRALLANGER_TELEPORT },
+    { "Annakarl Teleport",     GUI_SPELL_ANNAKARL_TELEPORT },
+    { "Ghorrock Teleport",     GUI_SPELL_GHORROCK_TELEPORT },
 };
-#define GUI_SPELL_GRID_COUNT 17
+#define GUI_SPELL_GRID_COUNT ((int)(sizeof(GUI_SPELL_GRID) / sizeof(GUI_SPELL_GRID[0])))
 
-/* which spells are castable in this env (others render greyed out). */
+static inline int gui_spell_is_ice(GuiSpellIdx s) {
+    return s == GUI_SPELL_ICE_RUSH
+        || s == GUI_SPELL_ICE_BURST
+        || s == GUI_SPELL_ICE_BLITZ
+        || s == GUI_SPELL_ICE_BARRAGE;
+}
+
+static inline int gui_spell_is_blood(GuiSpellIdx s) {
+    return s == GUI_SPELL_BLOOD_RUSH
+        || s == GUI_SPELL_BLOOD_BURST
+        || s == GUI_SPELL_BLOOD_BLITZ
+        || s == GUI_SPELL_BLOOD_BARRAGE;
+}
+
 static inline int gui_spell_castable(GuiSpellIdx s) {
-    return (s == GUI_SPELL_VENGEANCE)
-        || (s >= GUI_SPELL_ICE_RUSH && s <= GUI_SPELL_ICE_BURST)     /* ice */
-        || (s >= GUI_SPELL_BLOOD_RUSH && s <= GUI_SPELL_BLOOD_BURST) /* blood */
-        || (s == GUI_SPELL_ICE_BLITZ || s == GUI_SPELL_ICE_BARRAGE)
-        || (s == GUI_SPELL_BLOOD_BLITZ || s == GUI_SPELL_BLOOD_BARRAGE);
+    return gui_spell_is_ice(s) || gui_spell_is_blood(s);
 }
 
 static void gui_draw_spellbook(GuiState* gs, Player* p) {
-    int oy = gui_content_y(gs) + 8;
-
+    (void)p;
     int cols = GUI_SPELL_GRID_COLS;
     int gap, icon_sz, gx, gy;
     gui_spell_grid_metrics(gs, &gx, &gy, &icon_sz, &gap);
-    oy = gy;
 
     for (int i = 0; i < GUI_SPELL_GRID_COUNT; i++) {
         int col = i % cols;
         int row = i / cols;
         int ix = gx + col * (icon_sz + gap);
-        int iy = oy + row * (icon_sz + gap);
+        int iy = gy + row * (icon_sz + gap);
 
         GuiSpellIdx sidx_here = GUI_SPELL_GRID[i].idx;
-        /* active highlight for vengeance */
-        int active = (sidx_here == GUI_SPELL_VENGEANCE && p->veng_active);
-        /* spell-targeting mode: highlight the pending spell cell */
         int targeting = (gs->pending_spell_highlight >= 0 &&
                          (int)sidx_here == gs->pending_spell_highlight);
+        Rectangle cell_rect = {(float)ix, (float)iy, (float)icon_sz, (float)icon_sz};
 
-        /* slot_tile background */
-        if (gs->slot_tile.id != 0) {
-            Rectangle src = { 0, 0, (float)gs->slot_tile.width, (float)gs->slot_tile.height };
-            Rectangle dst = { (float)ix, (float)iy, (float)icon_sz, (float)icon_sz };
-            DrawTexturePro(gs->slot_tile, src, dst, (Vector2){0,0}, 0.0f, WHITE);
-        }
+        DrawRectangleRec(cell_rect, (Color){12, 12, 28, 105});
 
-        if (active) {
-            DrawRectangle(ix, iy, icon_sz, icon_sz, GUI_PRAYER_ON);
-        }
-        if (targeting) {
-            /* yellow 2px border around the targeted spell */
-            DrawRectangleLinesEx((Rectangle){(float)ix, (float)iy, (float)icon_sz, (float)icon_sz}, 2.0f, YELLOW);
-        }
-
-        /* draw spell sprite. non-castable spells (smoke/shadow in this env)
-           use the greyed "off" sprite so the panel looks authentic. */
         GuiSpellIdx sidx = GUI_SPELL_GRID[i].idx;
         if (gs->sprites_loaded) {
             int castable = gui_spell_castable(sidx);
             Texture2D tex = castable ? gs->spell_on[sidx] : gs->spell_off[sidx];
             if (tex.id != 0) {
-                Rectangle src = { 0, 0, (float)tex.width, (float)tex.height };
-                Rectangle dst = { (float)ix, (float)iy, (float)icon_sz, (float)icon_sz };
-                DrawTexturePro(tex, src, dst, (Vector2){0,0}, 0.0f, WHITE);
+                gui_draw_texture_centered(
+                    tex,
+                    cell_rect,
+                    24,
+                    24,
+                    castable ? WHITE : (Color){170, 170, 170, 220});
             }
         }
-    }
-    oy += ((GUI_SPELL_GRID_COUNT + cols - 1) / cols) * (icon_sz + gap) + 12;
-
-    /* veng cooldown below the grid */
-    int ox = gs->panel_x + 8;
-    gui_text_shadow(TextFormat("Veng cooldown: %d", p->veng_cooldown),
-                    ox, oy, 10, p->veng_cooldown > 0 ? GUI_TEXT_RED : GUI_TEXT_GREEN);
-    (void)p;
-}
-/* stats panel — OSRS-authentic skills tab layout                            */
-/*                                                                           */
-/* matches the real OSRS fixed-mode skills interface: 3-column grid,         */
-/* skill icon on left, current level center, base level right.               */
-/* only combat skills are shown; non-combat rows are empty.                  */
-/* below the skill grid: combat info (max hit, gear, prayer, consumables).   */
-/*                                                                           */
-/* OSRS skill grid order (3 columns, 8 rows):                                */
-/*   col 0: Attack, Strength, Defence, Ranged, Prayer, Magic, RC, Constr    */
-/*   col 1: Hitpoints, Agility, Herblore, Thieving, Crafting, Fletch, ...   */
-/*   col 2: Mining, Smithing, Fishing, Cooking, Firemaking, WC, ...          */
-/* we show rows 0-5 (the 7 combat skills) and leave col 2 empty.            */
-/* skill icon indices (matches skill_icon_files load order) */
-#define SKILL_ICON_ATTACK    0
-#define SKILL_ICON_STRENGTH  1
-#define SKILL_ICON_DEFENCE   2
-#define SKILL_ICON_RANGED    3
-#define SKILL_ICON_PRAYER    4
-#define SKILL_ICON_MAGIC     5
-#define SKILL_ICON_HITPOINTS 6
-
-/* draw one skill cell: icon + current level (left) + base level (right).
-   OSRS style: yellow if current == base, green if boosted, red if drained.
-   cell dimensions match the real client scaled to our panel width. */
-static void gui_draw_skill_cell(GuiState* gs, int cx, int cy, int cw, int ch,
-                                 int icon_idx, int current, int base) {
-    /* dark cell background with border (matches OSRS skill cell) */
-    DrawRectangle(cx, cy, cw, ch, (Color){30, 27, 20, 255});
-    DrawRectangleLines(cx, cy, cw, ch, (Color){60, 54, 42, 255});
-
-    /* skill icon (scaled to fit cell height with padding) */
-    int icon_sz = ch - 6;
-    int icon_x = cx + 3;
-    int icon_y = cy + 3;
-    if (gs->skill_icons_loaded && icon_idx >= 0 && icon_idx < 7 &&
-        gs->skill_icons[icon_idx].id != 0) {
-        Texture2D tex = gs->skill_icons[icon_idx];
-        Rectangle src = { 0, 0, (float)tex.width, (float)tex.height };
-        Rectangle dst = { (float)icon_x, (float)icon_y, (float)icon_sz, (float)icon_sz };
-        DrawTexturePro(tex, src, dst, (Vector2){0,0}, 0.0f, WHITE);
-    }
-
-    /* level color: yellow=normal, green=boosted, red=drained */
-    Color lvl_color = GUI_TEXT_YELLOW;
-    if (current > base) lvl_color = GUI_TEXT_GREEN;
-    else if (current < base) lvl_color = (Color){255, 60, 60, 255};
-
-    /* current level (left side, after icon) */
-    int text_y = cy + ch / 2 - 5;
-    gui_text_shadow(TextFormat("%d", current), icon_x + icon_sz + 4, text_y, 10, lvl_color);
-
-    /* base level (right-aligned) */
-    const char* base_str = TextFormat("%d", base);
-    int bw = MeasureText(base_str, 10);
-    gui_text_shadow(base_str, cx + cw - bw - 4, text_y, 10, lvl_color);
-}
-
-static const char* gui_gear_name(GearSet g) {
-    switch (g) {
-        case GEAR_MAGE:   return "Mage";
-        case GEAR_RANGED: return "Ranged";
-        case GEAR_MELEE:  return "Melee";
-        case GEAR_SPEC:   return "Spec";
-        case GEAR_TANK:   return "Tank";
-        default:          return "???";
+        if (targeting) {
+            DrawRectangleLinesEx(cell_rect, 2.0f, YELLOW);
+        }
     }
 }
+typedef enum {
+    GUI_SKILL_PLAYER_ATTACK = 0,
+    GUI_SKILL_PLAYER_STRENGTH,
+    GUI_SKILL_PLAYER_DEFENCE,
+    GUI_SKILL_PLAYER_RANGED,
+    GUI_SKILL_PLAYER_PRAYER,
+    GUI_SKILL_PLAYER_MAGIC,
+    GUI_SKILL_PLAYER_HITPOINTS,
+    GUI_SKILL_PLAYER_OTHER,
+} GuiSkillValueKind;
 
-static const char* gui_prayer_name(OverheadPrayer pr) {
-    switch (pr) {
-        case PRAYER_PROTECT_MAGIC:  return "Protect Magic";
-        case PRAYER_PROTECT_RANGED: return "Protect Ranged";
-        case PRAYER_PROTECT_MELEE:  return "Protect Melee";
-        case PRAYER_SMITE:          return "Smite";
-        case PRAYER_REDEMPTION:     return "Redemption";
-        default:                    return "None";
+typedef struct {
+    const char* component_name;
+    const char* icon_asset;
+    GuiSkillValueKind value_kind;
+    Rectangle fallback;
+} GuiSkillPanelSlot;
+
+static const GuiSkillPanelSlot GUI_SKILL_PANEL_SLOTS[] = {
+    {"attack",       "skill_icon_0",  GUI_SKILL_PLAYER_ATTACK,    {1,   1,   62, 30}},
+    {"strength",     "skill_icon_1",  GUI_SKILL_PLAYER_STRENGTH,  {1,   31,  62, 30}},
+    {"defence",      "skill_icon_2",  GUI_SKILL_PLAYER_DEFENCE,   {1,   61,  62, 30}},
+    {"ranged",       "skill_icon_3",  GUI_SKILL_PLAYER_RANGED,    {1,   91,  62, 30}},
+    {"prayer",       "skill_icon_4",  GUI_SKILL_PLAYER_PRAYER,    {1,   121, 62, 30}},
+    {"magic",        "skill_icon_5",  GUI_SKILL_PLAYER_MAGIC,     {1,   151, 62, 30}},
+    {"runecraft",    "skill_icon_18", GUI_SKILL_PLAYER_OTHER,     {1,   181, 62, 30}},
+    {"construction", "skill_icon_22", GUI_SKILL_PLAYER_OTHER,     {1,   211, 62, 32}},
+    {"hitpoints",    "skill_icon_6",  GUI_SKILL_PLAYER_HITPOINTS, {64,  1,   62, 30}},
+    {"agility",      "skill_icon_7",  GUI_SKILL_PLAYER_OTHER,     {64,  31,  62, 30}},
+    {"herblore",     "skill_icon_8",  GUI_SKILL_PLAYER_OTHER,     {64,  61,  62, 30}},
+    {"thieving",     "skill_icon_9",  GUI_SKILL_PLAYER_OTHER,     {64,  91,  62, 30}},
+    {"crafting",     "skill_icon_10", GUI_SKILL_PLAYER_OTHER,     {64,  121, 62, 30}},
+    {"fletching",    "skill_icon_11", GUI_SKILL_PLAYER_OTHER,     {64,  151, 62, 30}},
+    {"slayer",       "skill_icon_19", GUI_SKILL_PLAYER_OTHER,     {64,  181, 62, 30}},
+    {"hunter",       "skill_icon_21", GUI_SKILL_PLAYER_OTHER,     {64,  211, 62, 32}},
+    {"mining",       "skill_icon_12", GUI_SKILL_PLAYER_OTHER,     {127, 1,   62, 30}},
+    {"smithing",     "skill_icon_13", GUI_SKILL_PLAYER_OTHER,     {127, 31,  62, 30}},
+    {"fishing",      "skill_icon_14", GUI_SKILL_PLAYER_OTHER,     {127, 61,  62, 30}},
+    {"cooking",      "skill_icon_15", GUI_SKILL_PLAYER_OTHER,     {127, 91,  62, 30}},
+    {"firemaking",   "skill_icon_16", GUI_SKILL_PLAYER_OTHER,     {127, 121, 62, 30}},
+    {"woodcutting",  "skill_icon_17", GUI_SKILL_PLAYER_OTHER,     {127, 151, 62, 30}},
+    {"farming",      "skill_icon_20", GUI_SKILL_PLAYER_OTHER,     {127, 181, 62, 30}},
+    {"sailing",      "skill_icon_23", GUI_SKILL_PLAYER_OTHER,     {127, 211, 62, 32}},
+};
+
+static void gui_skill_values(const Player* p, GuiSkillValueKind kind, int* current, int* base) {
+    switch (kind) {
+        case GUI_SKILL_PLAYER_ATTACK:
+            *current = p->current_attack;
+            *base = p->base_attack;
+            break;
+        case GUI_SKILL_PLAYER_STRENGTH:
+            *current = p->current_strength;
+            *base = p->base_strength;
+            break;
+        case GUI_SKILL_PLAYER_DEFENCE:
+            *current = p->current_defence;
+            *base = p->base_defence;
+            break;
+        case GUI_SKILL_PLAYER_RANGED:
+            *current = p->current_ranged;
+            *base = p->base_ranged;
+            break;
+        case GUI_SKILL_PLAYER_PRAYER:
+            *current = p->current_prayer;
+            *base = p->base_prayer;
+            break;
+        case GUI_SKILL_PLAYER_MAGIC:
+            *current = p->current_magic;
+            *base = p->base_magic;
+            break;
+        case GUI_SKILL_PLAYER_HITPOINTS:
+            *current = p->current_hitpoints;
+            *base = p->base_hitpoints;
+            break;
+        case GUI_SKILL_PLAYER_OTHER:
+            *current = 99;
+            *base = 99;
+            break;
     }
+    if (*base <= 0) *base = 1;
+    if (*current <= 0) *current = *base;
+}
+
+static Color gui_skill_current_color(int current, int base) {
+    if (current < base) return (Color){220, 45, 31, 255};
+    if (current > base) return GUI_TEXT_GREEN;
+    return GUI_TEXT_YELLOW;
+}
+
+static void gui_draw_skill_panel_slot(
+    GuiState* gs,
+    const GuiSkillPanelSlot* slot,
+    Rectangle rect,
+    int current,
+    int base
+) {
+    DrawRectangleRec(rect, (Color){72, 70, 60, 232});
+    DrawLineEx((Vector2){rect.x, rect.y}, (Vector2){rect.x + rect.width - 1, rect.y},
+        1, (Color){139, 130, 104, 255});
+    DrawLineEx((Vector2){rect.x, rect.y}, (Vector2){rect.x, rect.y + rect.height - 1},
+        1, (Color){139, 130, 104, 255});
+    DrawLineEx((Vector2){rect.x, rect.y + rect.height - 1},
+        (Vector2){rect.x + rect.width - 1, rect.y + rect.height - 1},
+        1, (Color){28, 25, 21, 255});
+    DrawLineEx((Vector2){rect.x + rect.width - 1, rect.y},
+        (Vector2){rect.x + rect.width - 1, rect.y + rect.height - 1},
+        1, (Color){28, 25, 21, 255});
+
+    Rectangle icon_rect = {rect.x + 3, rect.y + 3, 24, 24};
+    gui_draw_named_asset_centered(gs, slot->icon_asset, icon_rect, 24, 24, WHITE);
+
+    char current_text[8];
+    char base_text[8];
+    snprintf(current_text, sizeof(current_text), "%d", current);
+    snprintf(base_text, sizeof(base_text), "%d", base);
+    gui_text_shadow(current_text, (int)rect.x + 39, (int)rect.y + 2, 10,
+        gui_skill_current_color(current, base));
+    gui_text_shadow(base_text, (int)rect.x + 39, (int)rect.y + 17, 9, GUI_TEXT_GREEN);
 }
 
 static void gui_draw_stats(GuiState* gs, Player* p) {
-    int ox = gs->panel_x + 4;
-    int oy = gui_content_y(gs) + 4;
+    int total_level = 0;
+    int count = (int)(sizeof(GUI_SKILL_PANEL_SLOTS) / sizeof(GUI_SKILL_PANEL_SLOTS[0]));
 
-    /* OSRS skill grid: 3 columns, 6 visible rows for combat skills.
-       cell dimensions scale to panel width. OSRS original: 62x32 in 190px panel. */
-    int gap = 2;
-    int cols = 3;
-    int cw = (gs->panel_w - 8 - gap * (cols - 1)) / cols;
-    int ch = 32;
+    for (int i = 0; i < count; i++) {
+        const GuiSkillPanelSlot* slot = &GUI_SKILL_PANEL_SLOTS[i];
+        int current = 0;
+        int base = 0;
+        gui_skill_values(p, slot->value_kind, &current, &base);
+        total_level += base;
 
-    /* OSRS grid: row x col → (icon_idx, current, base) or -1 for empty.
-       col 0: attack, strength, defence, ranged, prayer, magic
-       col 1: hitpoints, then empty
-       col 2: empty (non-combat) */
-    int grid_icon[6][3];
-    int grid_cur[6][3];
-    int grid_base[6][3];
-    memset(grid_icon, -1, sizeof(grid_icon));
-    memset(grid_cur, 0, sizeof(grid_cur));
-    memset(grid_base, 0, sizeof(grid_base));
-
-    /* col 0: combat stats in OSRS order */
-    grid_icon[0][0] = SKILL_ICON_ATTACK;    grid_cur[0][0] = p->current_attack;    grid_base[0][0] = p->base_attack;
-    grid_icon[1][0] = SKILL_ICON_STRENGTH;  grid_cur[1][0] = p->current_strength;  grid_base[1][0] = p->base_strength;
-    grid_icon[2][0] = SKILL_ICON_DEFENCE;   grid_cur[2][0] = p->current_defence;   grid_base[2][0] = p->base_defence;
-    grid_icon[3][0] = SKILL_ICON_RANGED;    grid_cur[3][0] = p->current_ranged;    grid_base[3][0] = p->base_ranged;
-    grid_icon[4][0] = SKILL_ICON_PRAYER;    grid_cur[4][0] = p->current_prayer;    grid_base[4][0] = p->base_prayer;
-    grid_icon[5][0] = SKILL_ICON_MAGIC;     grid_cur[5][0] = p->current_magic;     grid_base[5][0] = p->base_magic;
-
-    /* col 1: hitpoints at row 0, rest stays -1 (empty) */
-    grid_icon[0][1] = SKILL_ICON_HITPOINTS; grid_cur[0][1] = p->current_hitpoints; grid_base[0][1] = p->base_hitpoints;
-
-    /* draw the grid */
-    for (int r = 0; r < 6; r++) {
-        for (int c = 0; c < cols; c++) {
-            int cx = ox + c * (cw + gap);
-            int cy = oy + r * (ch + gap);
-            if (grid_icon[r][c] >= 0) {
-                gui_draw_skill_cell(gs, cx, cy, cw, ch,
-                    grid_icon[r][c], grid_cur[r][c], grid_base[r][c]);
-            } else {
-                /* empty cell: just dark bg */
-                DrawRectangle(cx, cy, cw, ch, (Color){20, 18, 14, 255});
-                DrawRectangleLines(cx, cy, cw, ch, (Color){40, 36, 28, 255});
-            }
-        }
+        Rectangle rect = gui_side_component_rect(gs, "stats", slot->component_name, slot->fallback);
+        gui_draw_skill_panel_slot(gs, slot, rect, current, base);
     }
-    oy += 6 * (ch + gap) + 6;
 
-    /* separator */
-    int bar_w = gs->panel_w - 8;
-    DrawLine(ox, oy, ox + bar_w, oy, GUI_BORDER);
-    oy += 6;
-
-    /* combat info below the skill grid */
-    int lh = 17;
-    gui_text_shadow(TextFormat("Gear: %s", gui_gear_name(p->current_gear)),
-                    ox + 2, oy, 10, GUI_TEXT_ORANGE);
-    oy += lh;
-    gui_text_shadow(TextFormat("Max Hit: %d   Str Bonus: %d", p->gui_max_hit, p->gui_strength_bonus),
-                    ox + 2, oy, 10, GUI_TEXT_YELLOW);
-    oy += lh;
-    gui_text_shadow(TextFormat("Speed: %d   Range: %d", p->gui_attack_speed, p->gui_attack_range),
-                    ox + 2, oy, 10, GUI_TEXT_WHITE);
-    oy += lh;
-    gui_text_shadow(TextFormat("Prayer: %s", gui_prayer_name(p->prayer)),
-                    ox + 2, oy, 10, GUI_TEXT_CYAN);
-    oy += lh + 4;
-
-    /* separator */
-    DrawLine(ox, oy, ox + bar_w, oy, GUI_BORDER);
-    oy += 6;
-
-    /* consumables */
-    gui_text_shadow(TextFormat("Brews: %d  Restores: %d", p->brew_doses, p->restore_doses),
-                    ox + 2, oy, 10, GUI_TEXT_WHITE);
-    oy += lh;
-    gui_text_shadow(TextFormat("Bastion: %d  Stamina: %d",
-                    p->combat_potion_doses, p->ranged_potion_doses),
-                    ox + 2, oy, 10, GUI_TEXT_WHITE);
-    oy += lh;
-
-    /* special attack energy bar */
-    int spec_bar_w = bar_w;
-    int spec_bar_h = 14;
-    float spec_pct = (float)p->special_energy / 100.0f;
-    DrawRectangle(ox, oy, spec_bar_w, spec_bar_h, GUI_SPEC_DARK);
-    DrawRectangle(ox, oy, (int)(spec_bar_w * spec_pct), spec_bar_h, GUI_SPEC_GREEN);
-    DrawRectangleLines(ox, oy, spec_bar_w, spec_bar_h, GUI_BORDER);
-    gui_text_shadow(TextFormat("Spec: %d%%", p->special_energy),
-                    ox + 4, oy + 1, 10, GUI_TEXT_WHITE);
+    Rectangle total = gui_side_component_rect(gs, "stats", "total", (Rectangle){0, 241, 190, 19});
+    DrawRectangleRec(total, (Color){7, 7, 7, 238});
+    DrawRectangleLinesEx(total, 1, (Color){99, 91, 68, 255});
+    const char* total_text = TextFormat("Total level: %d", total_level);
+    int width = MeasureText(total_text, 10);
+    gui_text_shadow(total_text, (int)(total.x + (total.width - width) * 0.5f),
+        (int)(total.y + 5), 10, GUI_TEXT_YELLOW);
 }
 
 
@@ -2264,68 +3182,18 @@ static void gui_cycle_entity(GuiState* gs) {
 /* Draw the resizable-mode side panel: minimap area at top (handled outside),
    then top tab row, content area, and bottom tab row at the very bottom. */
 static void gui_draw(GuiState* gs, Player* p) {
-    int px = gs->panel_x;
-    int pw = gs->panel_w;
-    int bottom_tab_h = gs->tab_h;
-
-    /* content area: between top tab row and bottom tab row. */
     int content_y = gs->panel_y + gs->status_bar_h + gs->tab_h;
-    int content_h = gs->panel_h - gs->status_bar_h - gs->tab_h - bottom_tab_h;
-
-    /* tile resizable side panel background across the content area. native
-       sprite is 88x60; we wallpaper it. fallback to fixed-mode bg or a flat
-       dark rect if the resizable asset isn't available. */
-    Texture2D bg = gs->rm_side_panel_bg.id != 0 ? gs->rm_side_panel_bg
-                : (gs->chrome_loaded ? gs->side_panel_bg : (Texture2D){0});
-    if (bg.id != 0) {
-        for (int yy = 0; yy < content_h; yy += bg.height) {
-            for (int xx = 0; xx < pw; xx += bg.width) {
-                int draw_w = (xx + bg.width  > pw)        ? (pw - xx)        : bg.width;
-                int draw_h = (yy + bg.height > content_h) ? (content_h - yy) : bg.height;
-                Rectangle src = { 0, 0, (float)draw_w, (float)draw_h };
-                Rectangle dst = { (float)(px + xx), (float)(content_y + yy),
-                                  (float)draw_w, (float)draw_h };
-                DrawTexturePro(bg, src, dst, (Vector2){0,0}, 0.0f, WHITE);
-            }
-        }
-    } else {
-        DrawRectangle(px, content_y, pw, content_h, GUI_BG_DARK);
-    }
-
-    /* side panel left + right vertical edges (decorative metallic strips) */
-    if (gs->rm_side_panel_edge_left.id != 0) {
-        Texture2D el = gs->rm_side_panel_edge_left;
-        for (int yy = 0; yy < content_h; yy += el.height) {
-            int draw_h = (yy + el.height > content_h) ? (content_h - yy) : el.height;
-            Rectangle src = { 0, 0, (float)el.width, (float)draw_h };
-            Rectangle dst = { (float)px, (float)(content_y + yy),
-                              (float)el.width, (float)draw_h };
-            DrawTexturePro(el, src, dst, (Vector2){0,0}, 0.0f, WHITE);
-        }
-    }
-    if (gs->rm_side_panel_edge_right.id != 0) {
-        Texture2D er = gs->rm_side_panel_edge_right;
-        for (int yy = 0; yy < content_h; yy += er.height) {
-            int draw_h = (yy + er.height > content_h) ? (content_h - yy) : er.height;
-            Rectangle src = { 0, 0, (float)er.width, (float)draw_h };
-            Rectangle dst = { (float)(px + pw - er.width), (float)(content_y + yy),
-                              (float)er.width, (float)draw_h };
-            DrawTexturePro(er, src, dst, (Vector2){0,0}, 0.0f, WHITE);
-        }
-    }
+    gui_draw_tab_bar(gs);
 
     /* entity selector header */
     if (gs->gui_entity_count > 1) {
-        int hx = px + 4;
+        int hx = gs->panel_x + GUI_SIDE_CONTENT_X + 4;
         int hy = content_y + 2;
         const char* etype = (p->entity_type == ENTITY_NPC) ? "NPC" : "Player";
         gui_text_shadow(TextFormat("[G] %s %d/%d", etype,
                         gs->gui_entity_idx + 1, gs->gui_entity_count),
                         hx, hy, 8, GUI_TEXT_ORANGE);
     }
-
-    /* top tab row above content */
-    gui_draw_tab_bar(gs);
 
     /* active tab content */
     switch (gs->active_tab) {
@@ -2337,19 +3205,6 @@ static void gui_draw(GuiState* gs, Player* p) {
         case GUI_TAB_STATS:     gui_draw_stats(gs, p);     break;
         case GUI_TAB_QUESTS:    /* empty tab */ break;
         default: break;
-    }
-
-    /* bottom tab row: decorative chrome (real OSRS has friends/options/etc here
-       but our viewer doesn't expose those). draws over any tab content that
-       overflows the content area. */
-    int btr_y = gs->panel_y + gs->panel_h - bottom_tab_h;
-    if (gs->rm_tabs_bottom_row.id != 0) {
-        Texture2D btr = gs->rm_tabs_bottom_row;
-        Rectangle src = { 0, 0, (float)btr.width, (float)btr.height };
-        Rectangle dst = { (float)px, (float)btr_y, (float)pw, (float)bottom_tab_h };
-        DrawTexturePro(btr, src, dst, (Vector2){0,0}, 0.0f, WHITE);
-    } else {
-        DrawRectangle(px, btr_y, pw, bottom_tab_h, GUI_TAB_INACTIVE);
     }
 }
 

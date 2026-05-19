@@ -1,4 +1,4 @@
-"""Export collision data from modern OpenRS2 OSRS cache to .cmap binary format.
+"""Export collision data from a modern OSRS cache to .cmap binary format.
 
 Reads modern cache (flat file format from OpenRS2), parses terrain and object
 data for specified regions, and outputs collision flags compatible with
@@ -7,21 +7,18 @@ osrs_collision.h's collision_map_load().
 Usage:
     uv run python scripts/export_collision_map_modern.py \
         --cache ../../../.refs/osrs-cache-modern \
-        --keys ../../../.refs/osrs-cache-modern/keys.json \
         --output data/zulrah.cmap \
         --regions 35,48
 
     # export multiple regions
     uv run python scripts/export_collision_map_modern.py \
         --cache ../../../.refs/osrs-cache-modern \
-        --keys ../../../.refs/osrs-cache-modern/keys.json \
         --output data/world.cmap \
         --regions 35,48 34,48 36,48
 
     # export wilderness regions
     uv run python scripts/export_collision_map_modern.py \
         --cache ../../../.refs/osrs-cache-modern \
-        --keys ../../../.refs/osrs-cache-modern/keys.json \
         --output data/wilderness.cmap \
         --wilderness
 """
@@ -43,6 +40,7 @@ from modern_cache_reader import (
     read_smart,
     read_string,
     read_u16,
+    read_u32,
     read_u8,
 )
 
@@ -435,6 +433,15 @@ def decode_modern_obj_def(obj_id: int, data: bytes) -> ModernObjDef:
             count = read_u8(buf)
             for _ in range(count):
                 read_u16(buf)
+        elif opcode == 6:
+            count = read_u8(buf)
+            for _ in range(count):
+                read_u32(buf)
+                read_u8(buf)
+        elif opcode == 7:
+            count = read_u8(buf)
+            for _ in range(count):
+                read_u32(buf)
         elif opcode == 14:
             d.width = read_u8(buf)
         elif opcode == 15:
@@ -561,6 +568,25 @@ def decode_modern_obj_def(obj_id: int, data: bytes) -> ModernObjDef:
             read_u8(buf)  # crossWorldSound
         elif opcode == 96:
             read_u8(buf)  # thickness/raise
+        elif opcode == 100:
+            idx = read_u8(buf)
+            read_u8(buf)
+            action = _read_modern_obj_string(buf)
+            if 0 <= idx < len(d.actions) and action and action != "hidden":
+                d.actions[idx] = action
+                d.has_actions = True
+        elif opcode in (101, 102):
+            idx = read_u8(buf)
+            if opcode == 102:
+                read_u16(buf)
+            read_u16(buf)
+            read_u16(buf)
+            read_u32(buf)
+            read_u32(buf)
+            action = _read_modern_obj_string(buf)
+            if 0 <= idx < len(d.actions) and action and action != "hidden":
+                d.actions[idx] = action
+                d.has_actions = True
         elif opcode == 249:
             # params map: u8 count, then (u8 is_string, u24 key, string|i32 value)
             count = read_u8(buf)
@@ -719,6 +745,18 @@ def find_map_groups(
     """
     manifest = reader.read_index_manifest(5)
 
+    if not manifest.has_names:
+        result: dict[int, tuple[int | None, int | None]] = {}
+        for group_id in manifest.group_ids:
+            if not (0 <= group_id <= 0xFFFF):
+                continue
+            file_ids = manifest.group_file_ids.get(group_id, [])
+            terrain_gid = group_id if 0 in file_ids else None
+            obj_gid = group_id if 1 in file_ids else None
+            if terrain_gid is not None or obj_gid is not None:
+                result[group_id] = (terrain_gid, obj_gid)
+        return result
+
     # build reverse lookup: name_hash -> group_id
     hash_to_gid: dict[int, int] = {}
     for gid in manifest.group_ids:
@@ -741,6 +779,20 @@ def find_map_groups(
                 result[mapsquare] = (terrain_gid, obj_gid)
 
     return result
+
+
+def read_map_group_payload(
+    reader: ModernCacheReader,
+    group_id: int,
+    preferred_file_id: int,
+) -> bytes | None:
+    manifest = reader.read_index_manifest(5)
+    file_ids = manifest.group_file_ids.get(group_id, [])
+    if preferred_file_id in file_ids:
+        return reader.read_group(5, group_id)[preferred_file_id]
+    if len(file_ids) == 1:
+        return reader.read_group(5, group_id)[file_ids[0]]
+    return reader.read_container(5, group_id)
 
 
 def load_xtea_keys(keys_path: Path) -> dict[int, list[int]]:
@@ -782,7 +834,7 @@ def main() -> None:
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("data/zulrah.cmap"),
+        default=Path(__file__).resolve().parents[1] / "data/zulrah.cmap",
         help="output .cmap binary file",
     )
     parser.add_argument(
@@ -810,17 +862,18 @@ def main() -> None:
 
     if not args.cache.exists():
         sys.exit(f"cache directory not found: {args.cache}")
-    if not args.keys.exists():
-        sys.exit(f"XTEA keys file not found: {args.keys}")
-
     args.output.parent.mkdir(parents=True, exist_ok=True)
 
     print(f"reading modern cache from {args.cache}")
     reader = ModernCacheReader(args.cache)
 
-    print("loading XTEA keys...")
-    xtea_keys = load_xtea_keys(args.keys)
-    print(f"  {len(xtea_keys)} region keys loaded")
+    xtea_keys: dict[int, list[int]] = {}
+    if args.keys and args.keys.exists():
+        print("loading XTEA keys...")
+        xtea_keys = load_xtea_keys(args.keys)
+        print(f"  {len(xtea_keys)} region keys loaded")
+    else:
+        print("no XTEA keys file; reading keyless map groups directly")
 
     print("loading modern object definitions...")
     obj_defs = decode_modern_obj_defs(reader)
@@ -875,7 +928,7 @@ def main() -> None:
             errors += 1
             continue
 
-        terrain_data = reader.read_container(5, terrain_gid)
+        terrain_data = read_map_group_payload(reader, terrain_gid, 0)
         if terrain_data is None:
             print(f"  region ({rx},{ry}): failed to read terrain")
             errors += 1
@@ -883,13 +936,17 @@ def main() -> None:
 
         flags, down_heights = parse_terrain(terrain_data)
 
-        # parse objects (XTEA encrypted)
+        # parse objects
         obj_marked = 0
         if obj_gid is not None:
+            obj_data = None
+            try:
+                obj_data = read_map_group_payload(reader, obj_gid, 1)
+            except Exception:
+                obj_data = None
+
             key = xtea_keys.get(ms)
-            if key is None:
-                print(f"  region ({rx},{ry}): no XTEA key, skipping objects")
-            else:
+            if obj_data is None and key is not None:
                 raw_obj = reader._read_raw(5, obj_gid)
                 if raw_obj is not None and len(raw_obj) >= 5:
                     # container: compression(1) + compressed_len(4) + encrypted_payload
@@ -910,10 +967,13 @@ def main() -> None:
                             # bzip2 — strip 'BZ' header
                             obj_data = bz2.decompress(b"BZh1" + gzip_data)
 
-                    obj_marked = parse_objects_modern(
-                        obj_data, flags, down_heights, obj_defs
-                    )
-                    total_obj_marked += obj_marked
+            if obj_data is not None:
+                obj_marked = parse_objects_modern(
+                    obj_data, flags, down_heights, obj_defs
+                )
+                total_obj_marked += obj_marked
+            else:
+                print(f"  region ({rx},{ry}): no readable object data")
 
         output_regions[ms] = flags
         decoded += 1

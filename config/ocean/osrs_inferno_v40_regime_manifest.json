@@ -1,0 +1,114 @@
+{
+  "name": "osrs_inferno_v40_regime",
+  "created_for": "explicit attribution sweep over curriculum, observations, rewards, loadouts, and state-buffer curriculum",
+  "config": "config/ocean/osrs_inferno_v40_regime.ini",
+  "wandb_group": "full-inferno-v40-regime",
+  "remote_path": "/puffertank/docker/goexplore_regime_v40_20260519",
+  "modes": {
+    "train.state_curriculum_mode": {
+      "values": {
+        "0": "off",
+        "1": "advantage_buffer"
+      },
+      "default": 1,
+      "off_value": 0,
+      "continuous_params": [
+        "train.state_buffer_size",
+        "train.cl_frac",
+        "train.explore_alpha",
+        "train.explore_beta"
+      ],
+      "hypothesis": "Tests whether Puffer 5 style state replay improves learnability or robustness beyond classic wave starts.",
+      "cost_impact": "May increase restore traffic and change terminal reset distribution."
+    },
+    "env.classic_curriculum_mode": {
+      "values": {
+        "0": "off",
+        "1": "fixed_late_waves"
+      },
+      "default": 1,
+      "off_value": 0,
+      "continuous_params": [
+        "env.curriculum_frac_1",
+        "env.curriculum_frac_2",
+        "env.curriculum_frac_3",
+        "env.curriculum_frac_4",
+        "env.curriculum_wave_5",
+        "env.curriculum_frac_5"
+      ],
+      "hypothesis": "Tests whether hard-coded late-wave starts still help once state replay can sample learned frontier states.",
+      "cost_impact": "Mostly score distribution, not raw SPS."
+    },
+    "env.obs_profile": {
+      "values": {
+        "0": "lean_no_forecast",
+        "1": "full_forecast"
+      },
+      "default": 1,
+      "off_value": 0,
+      "continuous_params": [],
+      "hypothesis": "Tests whether step-out forecast observations pay for their bandwidth and model burden.",
+      "cost_impact": "Forecast off should improve environment throughput and reduce input compute."
+    },
+    "env.reward_profile": {
+      "values": {
+        "0": "sparse",
+        "1": "legacy_shaped",
+        "2": "joseph_shaped"
+      },
+      "default": 2,
+      "off_value": 0,
+      "continuous_params": [
+        "env.damage_reward_coeff",
+        "env.shield_penalty_coeff",
+        "env.tag_reward_coeff",
+        "env.shield_tag_reward_coeff",
+        "env.jad_damage_reward_coeff",
+        "env.zuk_healer_damage_reward_coeff",
+        "env.set_damage_reward_coeff",
+        "env.jad_kill_bonus",
+        "env.zuk_healer_kill_bonus",
+        "env.set_kill_bonus",
+        "env.zuk_untagged_healer_nonmagic_attack_bonus_coeff",
+        "env.zuk_healer_mage_attack_penalty_coeff",
+        "env.post_healer_set_alive_tick_penalty_coeff",
+        "env.post_healer_set_alive_penalty_cap",
+        "env.post_jad_zuk_multiplier",
+        "env.jad_alive_zuk_multiplier"
+      ],
+      "hypothesis": "Separates terminal-only learning, pre-state-buffer shaping, and the current Joseph Zuk-aware shaping.",
+      "cost_impact": "No meaningful SPS impact, but strong behavioral impact."
+    },
+    "env.loadout_profile_mode": {
+      "values": {
+        "0": "max_only",
+        "1": "budget_only",
+        "2": "mixed_budget"
+      },
+      "default": 2,
+      "off_value": 0,
+      "continuous_params": [
+        "env.budget_loadout_fraction"
+      ],
+      "hypothesis": "Tests whether budget gear variation improves robustness without drowning the max-gear solve signal.",
+      "cost_impact": "Budget gear changes episode length and may reduce SPS through longer fights."
+    },
+    "env.terminal_penalty_enabled": {
+      "values": {
+        "0": "off",
+        "1": "death_or_timeout_penalty"
+      },
+      "default": 0,
+      "off_value": 0,
+      "continuous_params": [],
+      "hypothesis": "Tests whether terminal pressure fixes stalling without perverse over-punishment.",
+      "cost_impact": "No meaningful SPS impact."
+    }
+  },
+  "analysis_rules": [
+    "Compare only completed candidates for score claims.",
+    "Report Pareto frontier with wall-clock cost, SPS, score, win rate, wave, and min Zuk HP together.",
+    "When a mode is off, treat its subordinate continuous parameters as inactive.",
+    "Do not promote a default from one lucky seed without a controlled repro."
+  ]
+}

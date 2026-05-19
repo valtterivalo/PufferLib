@@ -118,7 +118,7 @@ class OpenRS2Storage implements Storage {
 public class ExportItemSprites {
     public static void main(String[] args) throws Exception {
         String cachePath = ".refs/osrs-cache-modern";
-        String outputPath = "data/sprites/items";
+        String outputPath = "ocean/osrs/data/sprites/items";
         String idsArg = null;
 
         for (int i = 0; i < args.length; i++) {

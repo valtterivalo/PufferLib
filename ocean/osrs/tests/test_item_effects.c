@@ -820,13 +820,13 @@ static void test_shared_prepare_attack_virtus_ancient_bonus(void) {
         &profile, &state, ITEM_KODAI_WAND, ATTACK_STYLE_MAGIC,
         OSRS_MAGIC_ATTACK_ANCIENT_ICE, osrs_target_ref_none(), 1,
         stats.eff_level * (stats.attack_bonus + 64), stats.max_hit,
-        0, 0, 99, 99
+        osrs_target_effect_context_none(), 99, 99
     );
     OsrsPreparedAttackEffects non_ancient = osrs_prepare_attack_effects(
         &profile, &state, ITEM_KODAI_WAND, ATTACK_STYLE_MAGIC,
         OSRS_MAGIC_ATTACK_STANDARD_SPELL, osrs_target_ref_none(), 1,
         stats.eff_level * (stats.attack_bonus + 64), stats.max_hit,
-        0, 0, 99, 99
+        osrs_target_effect_context_none(), 99, 99
     );
 
     ASSERT_INT_EQ("virtus ancient adds 6%", ancient.max_hit, stats.max_hit * 106 / 100);
@@ -857,7 +857,7 @@ static void test_shared_prepare_attack_tbow_scaling(void) {
         &profile, &state, ITEM_TWISTED_BOW, ATTACK_STYLE_RANGED,
         OSRS_MAGIC_ATTACK_NONE, osrs_target_ref_none(), 1,
         base_attack_roll, stats.max_hit,
-        150, 550, 99, 99
+        osrs_target_effect_context_magic(150, 550), 99, 99
     );
 
     int target_magic = max_int(150, 550);

@@ -849,9 +849,6 @@ static int zul_player_attack_hits(
     ZulrahState* s, int is_mage, const OsrsPreparedAttackEffects* attack_effects
 ) {
     int att_roll = attack_effects->attack_roll;
-    /* crystal armor set bonus: +30% ranged accuracy with bowfa (tier 1 only) */
-    if (!is_mage && s->gear_tier == 1)
-        att_roll = att_roll * 130 / 100;
 
     int def_magic = 0, def_ranged = 0;
     zul_form_def_bonuses(s->current_form, &def_magic, &def_ranged);
@@ -894,8 +891,9 @@ static void zul_player_attack(ZulrahState* s, int is_mage) {
         1,
         osrs_player_att_roll(ls->eff_level, ls->attack_bonus),
         ls->max_hit,
-        monster->magic_level,
-        monster->magic_att_bonus,
+        osrs_target_effect_context_magic(
+            monster->magic_level,
+            monster->magic_att_bonus),
         s->player.current_hitpoints,
         s->player.base_hitpoints
     );
@@ -2440,6 +2438,147 @@ static void zul_step_human_commands(EncounterState* state, HumanInput* hi) {
     human_input_clear_pending(hi);
 }
 
+typedef struct {
+    int unused;
+} ZulrahContext;
+
+static void zul_init_context(EncounterContext* context) {
+    (void)context;
+}
+
+static void zul_destroy_context(EncounterContext* context) {
+    (void)context;
+}
+
+static void zul_init_state_ctx(EncounterState* state, EncounterContext* context) {
+    (void)context;
+    memset(state, 0, sizeof(ZulrahState));
+}
+
+static void zul_reset_ctx(EncounterState* state, EncounterContext* context, uint32_t seed) {
+    (void)context;
+    zul_reset(state, seed);
+}
+
+static void zul_step_ctx(EncounterState* state, EncounterContext* context, const int* actions) {
+    (void)context;
+    zul_step(state, actions);
+}
+
+static void zul_step_human_commands_ctx(
+    EncounterState* state,
+    EncounterContext* context,
+    HumanInput* hi
+) {
+    (void)context;
+    zul_step_human_commands(state, hi);
+}
+
+static void zul_write_obs_ctx(EncounterState* state, EncounterContext* context, float* obs) {
+    (void)context;
+    zul_write_obs(state, obs);
+}
+
+static void zul_write_mask_ctx(EncounterState* state, EncounterContext* context, float* mask) {
+    (void)context;
+    zul_write_mask(state, mask);
+}
+
+static float zul_get_reward_ctx(EncounterState* state, EncounterContext* context) {
+    (void)context;
+    return zul_get_reward(state);
+}
+
+static int zul_is_terminal_ctx(EncounterState* state, EncounterContext* context) {
+    (void)context;
+    return zul_is_terminal(state);
+}
+
+static int zul_get_entity_count_ctx(EncounterState* state, EncounterContext* context) {
+    (void)context;
+    return zul_get_entity_count(state);
+}
+
+static void* zul_get_entity_ctx(EncounterState* state, EncounterContext* context, int index) {
+    (void)context;
+    return zul_get_entity(state, index);
+}
+
+static void zul_fill_render_entities_ctx(
+    EncounterState* state,
+    EncounterContext* context,
+    RenderEntity* out,
+    int max_entities,
+    int* count
+) {
+    (void)context;
+    zul_fill_render_entities(state, out, max_entities, count);
+}
+
+static void zul_put_int_ctx(
+    EncounterState* state,
+    EncounterContext* context,
+    const char* key,
+    int value
+) {
+    (void)context;
+    zul_put_int(state, key, value);
+}
+
+static void zul_put_float_ctx(
+    EncounterState* state,
+    EncounterContext* context,
+    const char* key,
+    float value
+) {
+    (void)context;
+    zul_put_float(state, key, value);
+}
+
+static void zul_put_ptr_ctx(
+    EncounterState* state,
+    EncounterContext* context,
+    const char* key,
+    void* value
+) {
+    (void)context;
+    zul_put_ptr(state, key, value);
+}
+
+static void zul_render_post_tick_ctx(
+    EncounterState* state,
+    EncounterContext* context,
+    EncounterOverlay* overlay
+) {
+    (void)context;
+    zul_render_post_tick(state, overlay);
+}
+
+static void* zul_get_log_ctx(EncounterState* state, EncounterContext* context) {
+    (void)context;
+    return zul_get_log(state);
+}
+
+static int zul_get_tick_ctx(EncounterState* state, EncounterContext* context) {
+    (void)context;
+    return zul_get_tick(state);
+}
+
+static int zul_get_winner_ctx(EncounterState* state, EncounterContext* context) {
+    (void)context;
+    return zul_get_winner(state);
+}
+
+static void zul_translate_human_input_ctx(
+    HumanInput* hi,
+    int* actions,
+    EncounterState* state,
+    EncounterContext* context
+) {
+    (void)context;
+    zul_translate_human_input(hi, actions, state);
+}
+
 
 static const EncounterDef ENCOUNTER_ZULRAH = {
     .name = "zulrah",
@@ -2447,31 +2586,36 @@ static const EncounterDef ENCOUNTER_ZULRAH = {
     .num_action_heads = ZUL_NUM_ACTION_HEADS,
     .action_head_dims = ZUL_ACTION_HEAD_DIMS,
     .mask_size = ZUL_ACTION_MASK_SIZE,
+    .state_size = sizeof(ZulrahState),
+    .context_size = sizeof(ZulrahContext),
+    .init_context = zul_init_context,
+    .destroy_context = zul_destroy_context,
+    .init_state = zul_init_state_ctx,
     .create = zul_create,
     .destroy = zul_destroy,
-    .reset = zul_reset,
-    .step = zul_step,
-    .step_human_commands = zul_step_human_commands,
-    .write_obs = zul_write_obs,
-    .write_mask = zul_write_mask,
-    .get_reward = zul_get_reward,
-    .is_terminal = zul_is_terminal,
-    .get_entity_count = zul_get_entity_count,
-    .get_entity = zul_get_entity,
-    .fill_render_entities = zul_fill_render_entities,
-    .put_int = zul_put_int,
-    .put_float = zul_put_float,
-    .put_ptr = zul_put_ptr,
+    .reset = zul_reset_ctx,
+    .step = zul_step_ctx,
+    .step_human_commands = zul_step_human_commands_ctx,
+    .write_obs = zul_write_obs_ctx,
+    .write_mask = zul_write_mask_ctx,
+    .get_reward = zul_get_reward_ctx,
+    .is_terminal = zul_is_terminal_ctx,
+    .get_entity_count = zul_get_entity_count_ctx,
+    .get_entity = zul_get_entity_ctx,
+    .fill_render_entities = zul_fill_render_entities_ctx,
+    .put_int = zul_put_int_ctx,
+    .put_float = zul_put_float_ctx,
+    .put_ptr = zul_put_ptr_ctx,
     .arena_base_x = 0,
     .arena_base_y = 0,
     .arena_width = ZUL_ARENA_SIZE,
     .arena_height = ZUL_ARENA_SIZE,
-    .render_post_tick = zul_render_post_tick,
-    .get_log = zul_get_log,
-    .get_tick = zul_get_tick,
-    .get_winner = zul_get_winner,
+    .render_post_tick = zul_render_post_tick_ctx,
+    .get_log = zul_get_log_ctx,
+    .get_tick = zul_get_tick_ctx,
+    .get_winner = zul_get_winner_ctx,
 
-    .translate_human_input = zul_translate_human_input,
+    .translate_human_input = zul_translate_human_input_ctx,
     .head_move = ZUL_HEAD_MOVE,
     .head_prayer = ZUL_HEAD_PRAYER,
     .head_target = -1,

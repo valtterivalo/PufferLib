@@ -68,8 +68,14 @@
 #include "osrs_item_effects.h"
 #include "osrs_human_input_types.h"
 
-/* opaque encounter state — each encounter defines its own struct */
+/* opaque encounter runtime pieces — each encounter defines its own structs */
 typedef struct EncounterState EncounterState;
+typedef struct EncounterContext EncounterContext;
+
+typedef struct {
+    EncounterState* state;
+    EncounterContext* context;
+} EncounterRuntime;
 
 static inline void encounter_abort_unknown_config(
     const char* encounter_name, const char* config_type, const char* key
@@ -140,6 +146,12 @@ typedef enum {
     ENCOUNTER_PROJECTILE_MOTION_TARGET_ANCHORED = 1,
 } EncounterProjectileMotionMode;
 
+typedef enum {
+    ENCOUNTER_PROJECTILE_TARGET_FIXED = 0,
+    ENCOUNTER_PROJECTILE_TARGET_PLAYER = 1,
+    ENCOUNTER_PROJECTILE_TARGET_NPC_SLOT = 2,
+} EncounterProjectileTargetKind;
+
 typedef struct {
     /* encounter-defined area hazards. current users write 3x3 poison clouds. */
     struct { int x, y, active; } hazards[ENCOUNTER_MAX_OVERLAY_TILES];
@@ -170,6 +182,8 @@ typedef struct {
         int curve;           /* OSRS slope param (0 = use default 16) */
         float arc_height;    /* sinusoidal arc peak in tiles (0 = quadratic/straight) */
         int tracks_target;   /* 1 = re-aim toward target each tick */
+        int target_kind;
+        int target_npc_slot;
         int start_delay;     /* ticks before projectile becomes visible (0 = immediate) */
         int motion_mode;     /* EncounterProjectileMotionMode */
         float offset_x, offset_y, offset_z; /* local multi-model offset */
@@ -234,6 +248,10 @@ static inline int encounter_emit_projectile(
     ov->projectiles[i].offset_y = 0.0f;
     ov->projectiles[i].offset_z = 0.0f;
     ov->projectiles[i].tracks_target = tracks_target;
+    ov->projectiles[i].target_kind = tracks_target
+        ? ENCOUNTER_PROJECTILE_TARGET_PLAYER
+        : ENCOUNTER_PROJECTILE_TARGET_FIXED;
+    ov->projectiles[i].target_npc_slot = -1;
     ov->projectiles[i].src_size = src_size;
     ov->projectiles[i].dst_size = dst_size;
     ov->projectiles[i].model_id = model_id;
@@ -256,6 +274,19 @@ static inline void encounter_require_projectile_index(const EncounterOverlay* ov
             projectile_idx, ov->projectile_count);
         abort();
     }
+}
+
+static inline void encounter_set_projectile_target_npc_slot(
+    EncounterOverlay* ov, int projectile_idx, int npc_slot
+) {
+    encounter_require_projectile_index(ov, projectile_idx);
+    if (npc_slot < 0) {
+        fprintf(stderr, "encounter projectile target npc slot is invalid: %d\n", npc_slot);
+        abort();
+    }
+    ov->projectiles[projectile_idx].tracks_target = 1;
+    ov->projectiles[projectile_idx].target_kind = ENCOUNTER_PROJECTILE_TARGET_NPC_SLOT;
+    ov->projectiles[projectile_idx].target_npc_slot = npc_slot;
 }
 
 static inline void encounter_set_projectile_motion_mode(
@@ -311,6 +342,7 @@ typedef struct {
     int used_special_this_tick;
     uint8_t equipped[NUM_GEAR_SLOTS];
     int npc_slot;  /* source slot index in encounter's NPC array; -1 for player */
+    uint32_t npc_instance_id;  /* stable for one NPC lifetime; 0 means slot+def only */
     int attack_target_entity_idx;  /* render entity index of attack target, -1 = none */
 } RenderEntity;
 
@@ -342,6 +374,10 @@ static inline int render_entity_find_previous_identity_index(
         if (previous[i].entity_type == ENTITY_NPC &&
                 previous[i].npc_slot == entity->npc_slot &&
                 previous[i].npc_def_id == entity->npc_def_id) {
+            if ((previous[i].npc_instance_id || entity->npc_instance_id) &&
+                    previous[i].npc_instance_id != entity->npc_instance_id) {
+                continue;
+            }
             return i;
         }
     }
@@ -391,6 +427,7 @@ static inline void render_entity_from_player(const Player* p, RenderEntity* out)
     out->used_special_this_tick = p->used_special_this_tick;
     memcpy(out->equipped, p->equipped, NUM_GEAR_SLOTS);
     out->npc_slot = -1;  /* player, not an NPC */
+    out->npc_instance_id = 0;
     out->attack_target_entity_idx = -1;
 }
 
@@ -1281,16 +1318,22 @@ static inline void encounter_damage_player(
 
 /** apply damage to an NPC-like entity via raw field pointers.
     works with any struct that has hp/hit_landed/hit_damage int fields.
+    returns the damage applied after capping to current HP.
     always sets hit_landed so the renderer shows a splat —
     0 damage produces a blue "miss" splat (standard OSRS behavior). */
-static inline void encounter_damage_npc(
+static inline int encounter_damage_npc(
     int* hp, int* hit_landed, int* hit_damage, int damage
 ) {
+    int applied = 0;
     if (damage > 0) {
-        *hp -= damage;
+        applied = damage > *hp ? *hp : damage;
+        if (applied < 0) applied = 0;
+        *hp -= applied;
+        if (*hp < 0) *hp = 0;
     }
     *hit_landed = 1;
-    *hit_damage = damage > 0 ? damage : 0;
+    *hit_damage = applied;
+    return applied;
 }
 
 
@@ -1309,8 +1352,7 @@ static inline int encounter_resolve_npc_pending_hit(
     if (ph->ticks_remaining > 0) return 0;
 
     /* hit landed */
-    int dmg = ph->damage;
-    encounter_damage_npc(npc_hp, hit_landed, hit_damage, dmg);
+    int dmg = encounter_damage_npc(npc_hp, hit_landed, hit_damage, ph->damage);
     if (damage_dealt_acc) *damage_dealt_acc += dmg;
 
     /* blood barrage: accumulate damage for 25% heal (at land time — heal depends on damage) */
@@ -1918,14 +1960,22 @@ typedef struct {
     const int* action_head_dims; /* array of per-head dimensions */
     int mask_size;              /* sum of action_head_dims */
 
-    /* lifecycle: create/destroy encounter state */
+    /* lifecycle: allocate typed encounter runtime state and context */
+    size_t state_size;
+    size_t context_size;
+    void (*init_context)(EncounterContext* context);
+    void (*destroy_context)(EncounterContext* context);
+    void (*init_state)(EncounterState* state, EncounterContext* context);
+
+    /* legacy lifecycle for callers that still need a one-pointer runtime */
     EncounterState* (*create)(void);
     void (*destroy)(EncounterState* state);
 
     /* episode lifecycle */
-    void (*reset)(EncounterState* state, uint32_t seed);
-    void (*step)(EncounterState* state, const int* actions);
-    void (*step_human_commands)(EncounterState* state, struct HumanInput* hi);
+    void (*reset)(EncounterState* state, EncounterContext* context, uint32_t seed);
+    void (*step)(EncounterState* state, EncounterContext* context, const int* actions);
+    void (*step_human_commands)(
+        EncounterState* state, EncounterContext* context, struct HumanInput* hi);
 
     /* state snapshot/restore for archive-based exploration. NULL = not supported.
        snapshot_size returns the byte count the caller must allocate before calling
@@ -1933,9 +1983,10 @@ typedef struct {
        it back. snapshot+restore must round-trip exactly: stepping from a restored
        state with a fixed action sequence reproduces the same trajectory the
        snapshot was taken from. */
-    size_t (*snapshot_size)(EncounterState* state);
-    void (*snapshot)(EncounterState* state, void* out);
-    void (*restore)(EncounterState* state, const void* data, size_t n);
+    size_t (*snapshot_size)(EncounterState* state, EncounterContext* context);
+    void (*snapshot)(EncounterState* state, EncounterContext* context, void* out);
+    void (*restore)(
+        EncounterState* state, EncounterContext* context, const void* data, size_t n);
 
     /* Archive cell representation for Go-Explore-style exploration. NULL = not
        supported. write_cell_key writes a fixed-size byte struct into `out` that
@@ -1943,29 +1994,37 @@ typedef struct {
        their cell keys are byte-equal. progress_score returns a scalar in roughly
        [0, 1.5] where higher = closer to solving the encounter; used to compare
        elites within a cell and to weight cell selection. */
-    size_t (*cell_key_size)(EncounterState* state);
-    void (*write_cell_key)(EncounterState* state, void* out);
-    float (*progress_score)(EncounterState* state);
+    size_t (*cell_key_size)(EncounterState* state, EncounterContext* context);
+    void (*write_cell_key)(EncounterState* state, EncounterContext* context, void* out);
+    float (*progress_score)(EncounterState* state, EncounterContext* context);
 
     /* RL interface */
-    void (*write_obs)(EncounterState* state, float* obs_out);
-    void (*write_mask)(EncounterState* state, float* mask_out);
-    float (*get_reward)(EncounterState* state);
-    int (*is_terminal)(EncounterState* state);
+    void (*write_obs)(EncounterState* state, EncounterContext* context, float* obs_out);
+    void (*write_mask)(EncounterState* state, EncounterContext* context, float* mask_out);
+    float (*get_reward)(EncounterState* state, EncounterContext* context);
+    int (*is_terminal)(EncounterState* state, EncounterContext* context);
 
     /* entity access for renderer (returns entity count, writes entity pointers).
        renderer uses this to draw all entities generically. */
-    int (*get_entity_count)(EncounterState* state);
-    void* (*get_entity)(EncounterState* state, int index);  /* returns Player* */
+    int (*get_entity_count)(EncounterState* state, EncounterContext* context);
+    void* (*get_entity)(
+        EncounterState* state, EncounterContext* context, int index);  /* returns Player* */
 
     /* render entity population: fills array of RenderEntity structs for the renderer.
        replaces get_entity casting for rendering. NULL = renderer falls back to get_entity. */
-    void (*fill_render_entities)(EncounterState* state, RenderEntity* out, int max_entities, int* count);
+    void (*fill_render_entities)(
+        EncounterState* state,
+        EncounterContext* context,
+        RenderEntity* out,
+        int max_entities,
+        int* count);
 
     /* encounter-specific config (key-value put/get for binding kwargs) */
-    void (*put_int)(EncounterState* state, const char* key, int value);
-    void (*put_float)(EncounterState* state, const char* key, float value);
-    void (*put_ptr)(EncounterState* state, const char* key, void* value);
+    void (*put_int)(EncounterState* state, EncounterContext* context, const char* key, int value);
+    void (*put_float)(
+        EncounterState* state, EncounterContext* context, const char* key, float value);
+    void (*put_ptr)(
+        EncounterState* state, EncounterContext* context, const char* key, void* value);
 
     /* arena bounds for renderer (0 = use FIGHT_AREA_* defaults) */
     int arena_base_x, arena_base_y;
@@ -1974,8 +2033,10 @@ typedef struct {
     /* human mode input translation (per-encounter, NULL = no human mode).
        translates semantic HumanInput intents to encounter-specific action arrays.
        each encounter owns its own mapping since action head layouts differ. */
-    void (*translate_human_input)(struct HumanInput* hi, int* actions, EncounterState* state);
-    int (*is_human_targetable_npc_slot)(EncounterState* state, int npc_slot);
+    void (*translate_human_input)(
+        struct HumanInput* hi, int* actions, EncounterState* state, EncounterContext* context);
+    int (*is_human_targetable_npc_slot)(
+        EncounterState* state, EncounterContext* context, int npc_slot);
 
     /* action head indices used by shared translate helpers and renderer.
        set to -1 if the encounter doesn't have that action head. */
@@ -1985,15 +2046,45 @@ typedef struct {
 
     /* render hooks (optional — NULL if not implemented).
        populates visual overlay data for the renderer. */
-    void (*render_post_tick)(EncounterState* state, EncounterOverlay* overlay);
+    void (*render_post_tick)(
+        EncounterState* state, EncounterContext* context, EncounterOverlay* overlay);
 
     /* logging (returns pointer to encounter's Log struct, or NULL) */
-    void* (*get_log)(EncounterState* state);
+    void* (*get_log)(EncounterState* state, EncounterContext* context);
 
     /* tick access */
-    int (*get_tick)(EncounterState* state);
-    int (*get_winner)(EncounterState* state);
+    int (*get_tick)(EncounterState* state, EncounterContext* context);
+    int (*get_winner)(EncounterState* state, EncounterContext* context);
 } EncounterDef;
+
+static inline EncounterRuntime encounter_runtime_create(const EncounterDef* def) {
+    EncounterRuntime runtime = {0};
+    if (!def || def->state_size == 0 || def->context_size == 0) {
+        fprintf(stderr, "encounter_runtime_create: %s has no typed runtime\n",
+            def ? def->name : "(null)");
+        abort();
+    }
+    runtime.state = (EncounterState*)calloc(1, def->state_size);
+    runtime.context = (EncounterContext*)calloc(1, def->context_size);
+    if (!runtime.state || !runtime.context) {
+        fprintf(stderr, "encounter_runtime_create: out of memory for %s\n", def->name);
+        abort();
+    }
+    if (def->init_context) def->init_context(runtime.context);
+    if (def->init_state) def->init_state(runtime.state, runtime.context);
+    return runtime;
+}
+
+static inline void encounter_runtime_destroy(const EncounterDef* def, EncounterRuntime* runtime) {
+    if (!runtime) return;
+    if (def && def->destroy_context && runtime->context) {
+        def->destroy_context(runtime->context);
+    }
+    free(runtime->state);
+    free(runtime->context);
+    runtime->state = NULL;
+    runtime->context = NULL;
+}
 
 
 #define MAX_ENCOUNTERS 32

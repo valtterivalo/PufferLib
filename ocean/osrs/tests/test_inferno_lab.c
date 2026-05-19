@@ -41,8 +41,7 @@ static int tests_failed = 0;
 
 static InfernoState* make_lab_state(void) {
     InfernoState* state = (InfernoState*)inf_create();
-    state->start_wave = 0;
-    state->late_start_supply_profile_scale = 1.0f;
+    inf_put_float((EncounterState*)state, "late_start_supply_profile_scale", 1.0f);
     inf_reset((EncounterState*)state, 20260515u);
     inf_lab_apply_command(state, &(InfernoLabCommand){
         .kind = INF_LAB_COMMAND_CLEAR_NPCS,

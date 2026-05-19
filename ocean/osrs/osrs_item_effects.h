@@ -16,6 +16,7 @@
 #define OSRS_SPEC_REGEN_INTERVAL 50
 #define OSRS_SPEC_REGEN_LIGHTBEARER 25
 #define OSRS_SPEC_REGEN_AMOUNT 10
+#define OSRS_ECHO_BOOTS_MAX_CHARGES 60000
 
 typedef struct {
     int attack_roll;
@@ -34,6 +35,38 @@ static inline OsrsTargetRef osrs_target_ref_none(void) {
 
 static inline int osrs_target_ref_equal(OsrsTargetRef lhs, OsrsTargetRef rhs) {
     return lhs.kind == rhs.kind && lhs.id == rhs.id;
+}
+
+static inline OsrsTargetEffectContext osrs_target_effect_context_none(void) {
+    return (OsrsTargetEffectContext){0};
+}
+
+static inline OsrsTargetEffectContext osrs_target_effect_context_magic(
+    int magic_level,
+    int magic_attack_bonus
+) {
+    return (OsrsTargetEffectContext){
+        .magic_level = magic_level,
+        .magic_attack_bonus = magic_attack_bonus,
+        .target_class = OSRS_TARGET_CLASS_STANDARD,
+    };
+}
+
+static inline OsrsTargetEffectContext osrs_target_effect_context_dragon(
+    int magic_level,
+    int magic_attack_bonus
+) {
+    return (OsrsTargetEffectContext){
+        .magic_level = magic_level,
+        .magic_attack_bonus = magic_attack_bonus,
+        .target_class = OSRS_TARGET_CLASS_DRAGON,
+    };
+}
+
+static inline int osrs_target_effect_context_is_dragon(
+    OsrsTargetEffectContext target_context
+) {
+    return target_context.target_class == OSRS_TARGET_CLASS_DRAGON;
 }
 
 static inline int osrs_magic_attack_is_ancient(OsrsMagicAttackKind kind) {
@@ -62,6 +95,15 @@ static inline OsrsSpecRegenMode osrs_spec_regen_mode_from_ring(uint8_t ring_item
         return OSRS_SPEC_REGEN_MODE_LIGHTBEARER;
     }
     return OSRS_SPEC_REGEN_MODE_NORMAL;
+}
+
+static inline uint8_t osrs_crystal_armour_points(uint8_t item_index) {
+    switch (item_index) {
+        case ITEM_CRYSTAL_HELM: return 1;
+        case ITEM_CRYSTAL_LEGS: return 2;
+        case ITEM_CRYSTAL_BODY: return 3;
+        default: return 0;
+    }
 }
 
 static inline void osrs_item_effect_state_init(OsrsItemEffectState* state) {
@@ -125,6 +167,9 @@ static inline void osrs_derive_equipment_effect_profile(
         if (effect_mask & OSRS_ITEM_EFFECT_DHAROK_PIECE) {
             out->dharok_piece_count += 1;
         }
+        if (effect_mask & OSRS_ITEM_EFFECT_CRYSTAL_ARMOUR) {
+            out->crystal_armour_points += osrs_crystal_armour_points(item_index);
+        }
     }
 }
 
@@ -155,6 +200,14 @@ static inline void osrs_sync_item_effect_state(
 
     if (!osrs_effect_profile_has(current_profile, OSRS_ITEM_EFFECT_CONFLICTION)) {
         osrs_clear_confliction_state(&player->item_effect_state);
+    }
+
+    int had_echo = osrs_effect_profile_has(previous_profile, OSRS_ITEM_EFFECT_ECHO_BOOTS);
+    int has_echo = osrs_effect_profile_has(current_profile, OSRS_ITEM_EFFECT_ECHO_BOOTS);
+    if (has_echo && !had_echo) {
+        player->item_effect_state.echo_boot_charges = OSRS_ECHO_BOOTS_MAX_CHARGES;
+    } else if (!has_echo) {
+        player->item_effect_state.echo_boot_charges = 0;
     }
 }
 
@@ -208,8 +261,7 @@ static inline OsrsPreparedAttackEffects osrs_prepare_attack_effects(
     int is_primary_target,
     int base_attack_roll,
     int base_max_hit,
-    int target_magic_level,
-    int target_magic_attack_bonus,
+    OsrsTargetEffectContext target_context,
     int attacker_current_hitpoints,
     int attacker_base_hitpoints
 ) {
@@ -222,9 +274,28 @@ static inline OsrsPreparedAttackEffects osrs_prepare_attack_effects(
     if (style == ATTACK_STYLE_RANGED &&
         weapon_item == ITEM_TWISTED_BOW &&
         osrs_effect_profile_has(profile, OSRS_ITEM_EFFECT_TWISTED_BOW)) {
-        int target_magic = max_int(target_magic_level, target_magic_attack_bonus);
+        int target_magic = max_int(
+            target_context.magic_level,
+            target_context.magic_attack_bonus);
         result.attack_roll = (int)(result.attack_roll * osrs_tbow_acc_mult(target_magic));
         result.max_hit = (int)(result.max_hit * osrs_tbow_dmg_mult(target_magic));
+    }
+
+    if (style == ATTACK_STYLE_RANGED &&
+        weapon_item == ITEM_BOW_OF_FAERDHINEN &&
+        profile->crystal_armour_points > 0) {
+        result.attack_roll =
+            result.attack_roll * (20 + profile->crystal_armour_points) / 20;
+        result.max_hit =
+            result.max_hit * (40 + profile->crystal_armour_points) / 40;
+    }
+
+    if (osrs_target_effect_context_is_dragon(target_context) &&
+        weapon_item == ITEM_DRAGON_HUNTER_WAND &&
+        osrs_effect_profile_has(profile, OSRS_ITEM_EFFECT_DRAGON_HUNTER_WAND) &&
+        (style == ATTACK_STYLE_MAGIC || style == ATTACK_STYLE_MELEE)) {
+        result.attack_roll = result.attack_roll * 7 / 4;
+        result.max_hit = result.max_hit * 7 / 5;
     }
 
     if (style == ATTACK_STYLE_MAGIC && osrs_magic_attack_is_ancient(magic_kind) &&
@@ -297,6 +368,24 @@ static inline int osrs_has_recoil_available(
     return 0;
 }
 
+static inline int osrs_has_echo_boots_recoil_available(
+    const OsrsEquipmentEffectProfile* profile,
+    const OsrsItemEffectState* state
+) {
+    return osrs_effect_profile_has(profile, OSRS_ITEM_EFFECT_ECHO_BOOTS) &&
+        state->echo_boot_charges > 0;
+}
+
+static inline int osrs_echo_boots_recoil_damage(
+    const OsrsEquipmentEffectProfile* profile,
+    const OsrsItemEffectState* state,
+    int final_damage
+) {
+    if (final_damage <= 0) return 0;
+    if (!osrs_has_echo_boots_recoil_available(profile, state)) return 0;
+    return 1;
+}
+
 static inline DamageResult osrs_apply_passive_damage_pipeline(
     int raw_damage,
     int attack_style,
@@ -328,6 +417,17 @@ static inline DamageResult osrs_apply_passive_damage_pipeline(
     );
     result.elysian_reduced = elysian_reduced;
     return result;
+}
+
+static inline void osrs_consume_echo_boots_charge(Player* defender) {
+    osrs_ensure_player_equipment(defender);
+    if (!osrs_effect_profile_has(
+            &defender->equipment_effect_profile, OSRS_ITEM_EFFECT_ECHO_BOOTS)) {
+        return;
+    }
+    if (defender->item_effect_state.echo_boot_charges <= 0)
+        return;
+    defender->item_effect_state.echo_boot_charges--;
 }
 
 static inline void osrs_consume_recoil_charges(Player* defender, int recoil_damage) {

@@ -27,6 +27,10 @@ typedef struct {
     OsrsEnv env;
 } NhPvpState;
 
+typedef struct {
+    int unused;
+} NhPvpContext;
+
 
 static EncounterState* nh_pvp_create(void) {
     NhPvpState* s = (NhPvpState*)calloc(1, sizeof(NhPvpState));
@@ -47,7 +51,16 @@ static void nh_pvp_destroy(EncounterState* state) {
     free(s);
 }
 
-static void nh_pvp_reset(EncounterState* state, uint32_t seed) {
+static void nh_pvp_init_context(EncounterContext* context) {
+    (void)context;
+}
+
+static void nh_pvp_destroy_context(EncounterContext* context) {
+    (void)context;
+}
+
+static void nh_pvp_reset(EncounterState* state, EncounterContext* context, uint32_t seed) {
+    (void)context;
     NhPvpState* s = (NhPvpState*)state;
     if (seed != 0) {
         s->env.has_rng_seed = 1;
@@ -56,7 +69,8 @@ static void nh_pvp_reset(EncounterState* state, uint32_t seed) {
     pvp_reset(&s->env);
 }
 
-static void nh_pvp_step(EncounterState* state, const int* actions) {
+static void nh_pvp_step(EncounterState* state, EncounterContext* context, const int* actions) {
+    (void)context;
     NhPvpState* s = (NhPvpState*)state;
     /* pvp_step reads agent 0 actions from ocean_io.agent_actions. */
     memcpy(s->env.ocean_io.agent_actions, actions, NUM_ACTION_HEADS * sizeof(int));
@@ -64,14 +78,20 @@ static void nh_pvp_step(EncounterState* state, const int* actions) {
 }
 
 
-static void nh_pvp_write_obs(EncounterState* state, float* obs_out) {
+static void nh_pvp_write_obs(EncounterState* state, EncounterContext* context, float* obs_out) {
+    (void)context;
     NhPvpState* s = (NhPvpState*)state;
     /* observations are already computed by pvp_step into _obs_buf.
        copy agent 0's observations (SLOT_NUM_OBSERVATIONS floats). */
     memcpy(obs_out, s->env._obs_buf, SLOT_NUM_OBSERVATIONS * sizeof(float));
 }
 
-static void nh_pvp_write_mask(EncounterState* state, float* mask_out) {
+static void nh_pvp_write_mask(
+    EncounterState* state,
+    EncounterContext* context,
+    float* mask_out
+) {
+    (void)context;
     NhPvpState* s = (NhPvpState*)state;
     /* masks are in _masks_buf, ACTION_MASK_SIZE bytes for agent 0.
        convert to float for the encounter interface. */
@@ -80,29 +100,40 @@ static void nh_pvp_write_mask(EncounterState* state, float* mask_out) {
     }
 }
 
-static float nh_pvp_get_reward(EncounterState* state) {
+static float nh_pvp_get_reward(EncounterState* state, EncounterContext* context) {
+    (void)context;
     NhPvpState* s = (NhPvpState*)state;
     return s->env._rews_buf[0];
 }
 
-static int nh_pvp_is_terminal(EncounterState* state) {
+static int nh_pvp_is_terminal(EncounterState* state, EncounterContext* context) {
+    (void)context;
     NhPvpState* s = (NhPvpState*)state;
     return s->env.episode_over;
 }
 
 
-static int nh_pvp_get_entity_count(EncounterState* state) {
+static int nh_pvp_get_entity_count(EncounterState* state, EncounterContext* context) {
     (void)state;
+    (void)context;
     return NUM_AGENTS;  /* always 2 for NH PvP */
 }
 
-static void* nh_pvp_get_entity(EncounterState* state, int index) {
+static void* nh_pvp_get_entity(EncounterState* state, EncounterContext* context, int index) {
+    (void)context;
     NhPvpState* s = (NhPvpState*)state;
     return &s->env.players[index];
 }
 
 
-static void nh_pvp_fill_render_entities(EncounterState* state, RenderEntity* out, int max_entities, int* count) {
+static void nh_pvp_fill_render_entities(
+    EncounterState* state,
+    EncounterContext* context,
+    RenderEntity* out,
+    int max_entities,
+    int* count
+) {
+    (void)context;
     NhPvpState* s = (NhPvpState*)state;
     int n = NUM_AGENTS < max_entities ? NUM_AGENTS : max_entities;
     for (int i = 0; i < n; i++) {
@@ -112,7 +143,13 @@ static void nh_pvp_fill_render_entities(EncounterState* state, RenderEntity* out
 }
 
 
-static void nh_pvp_put_int(EncounterState* state, const char* key, int value) {
+static void nh_pvp_put_int(
+    EncounterState* state,
+    EncounterContext* context,
+    const char* key,
+    int value
+) {
+    (void)context;
     NhPvpState* s = (NhPvpState*)state;
     if (strcmp(key, "opponent_type") == 0) {
         s->env.pvp_runtime.opponent.type = (OpponentType)value;
@@ -128,14 +165,26 @@ static void nh_pvp_put_int(EncounterState* state, const char* key, int value) {
     }
 }
 
-static void nh_pvp_put_float(EncounterState* state, const char* key, float value) {
+static void nh_pvp_put_float(
+    EncounterState* state,
+    EncounterContext* context,
+    const char* key,
+    float value
+) {
+    (void)context;
     NhPvpState* s = (NhPvpState*)state;
     if (strcmp(key, "shaping_scale") == 0) {
         s->env.shaping.shaping_scale = value;
     }
 }
 
-static void nh_pvp_put_ptr(EncounterState* state, const char* key, void* value) {
+static void nh_pvp_put_ptr(
+    EncounterState* state,
+    EncounterContext* context,
+    const char* key,
+    void* value
+) {
+    (void)context;
     NhPvpState* s = (NhPvpState*)state;
     if (strcmp(key, "collision_map") == 0) {
         s->env.collision_map = value;
@@ -143,17 +192,20 @@ static void nh_pvp_put_ptr(EncounterState* state, const char* key, void* value) 
 }
 
 
-static void* nh_pvp_get_log(EncounterState* state) {
+static void* nh_pvp_get_log(EncounterState* state, EncounterContext* context) {
+    (void)context;
     NhPvpState* s = (NhPvpState*)state;
     return &s->env.log;
 }
 
-static int nh_pvp_get_tick(EncounterState* state) {
+static int nh_pvp_get_tick(EncounterState* state, EncounterContext* context) {
+    (void)context;
     NhPvpState* s = (NhPvpState*)state;
     return s->env.tick;
 }
 
-static int nh_pvp_get_winner(EncounterState* state) {
+static int nh_pvp_get_winner(EncounterState* state, EncounterContext* context) {
+    (void)context;
     NhPvpState* s = (NhPvpState*)state;
     return s->env.winner;
 }
@@ -165,6 +217,10 @@ static const EncounterDef ENCOUNTER_NH_PVP = {
     .num_action_heads = NUM_ACTION_HEADS,
     .action_head_dims = NH_PVP_ACTION_DIMS,
     .mask_size = ACTION_MASK_SIZE,
+    .state_size = sizeof(NhPvpState),
+    .context_size = sizeof(NhPvpContext),
+    .init_context = nh_pvp_init_context,
+    .destroy_context = nh_pvp_destroy_context,
 
     .create = nh_pvp_create,
     .destroy = nh_pvp_destroy,

@@ -14,6 +14,7 @@
 #define OSRS_HUMAN_INPUT_H
 
 #include "osrs_types.h"
+#include "osrs_items.h"
 #include "osrs_human_input_types.h"
 #include "osrs_encounter.h"
 
@@ -144,20 +145,14 @@ static int human_offensive_click_action(const Player* p, OffensivePrayer target,
     Reuses the same layout math as gui_draw_prayer(). */
 static void human_handle_prayer_click(HumanInput* hi, GuiState* gs, Player* p,
                                        int mouse_x, int mouse_y) {
-    int oy = gui_content_y(gs) + 4;
-    /* skip prayer points bar */
-    int bar_h = 18;
-    oy += bar_h + 6;
-
     int cols = GUI_PRAYER_GRID_COLS;
     int gap, icon_sz, gx, gy;
     gui_prayer_grid_metrics(gs, &gx, &gy, &icon_sz, &gap);
-    oy = gy;
 
     /* hit-test: which cell was clicked? */
-    if (mouse_x < gx || mouse_y < oy) return;
+    if (mouse_x < gx || mouse_y < gy) return;
     int col = (mouse_x - gx) / (icon_sz + gap);
-    int row = (mouse_y - oy) / (icon_sz + gap);
+    int row = (mouse_y - gy) / (icon_sz + gap);
     if (col < 0 || col >= cols) return;
 
     int idx = row * cols + col;
@@ -165,7 +160,7 @@ static void human_handle_prayer_click(HumanInput* hi, GuiState* gs, Player* p,
 
     /* check click is within the cell bounds (not in the gap) */
     int cell_x = gx + col * (icon_sz + gap);
-    int cell_y = oy + row * (icon_sz + gap);
+    int cell_y = gy + row * (icon_sz + gap);
     if (mouse_x > cell_x + icon_sz || mouse_y > cell_y + icon_sz) return;
 
     GuiPrayerIdx pidx = (GuiPrayerIdx)idx;
@@ -217,8 +212,7 @@ static void human_handle_prayer_click(HumanInput* hi, GuiState* gs, Player* p,
     }
 }
 
-/** Handle spell icon click. Hit-tests the 4-col spell grid.
-    Ice/blood spells enter CURSOR_SPELL_TARGET mode; vengeance is instant. */
+/** Handle spell icon click. Hit-tests the 4-col Ancient spell grid. */
 static void human_handle_spell_click(HumanInput* hi, GuiState* gs,
                                       int mouse_x, int mouse_y) {
     int oy = gui_content_y(gs) + 8;
@@ -241,19 +235,13 @@ static void human_handle_spell_click(HumanInput* hi, GuiState* gs,
 
     GuiSpellIdx sidx = GUI_SPELL_GRID[idx].idx;
 
-    /* only castable spells respond to clicks (Smoke/Shadow are greyed out) */
     if (!gui_spell_castable(sidx)) return;
 
-    if (sidx == GUI_SPELL_VENGEANCE) {
-        /* vengeance is instant — no targeting needed */
-        hi->pending_veng = 1;
-    } else if (sidx == GUI_SPELL_ICE_RUSH || sidx == GUI_SPELL_ICE_BURST ||
-               sidx == GUI_SPELL_ICE_BLITZ || sidx == GUI_SPELL_ICE_BARRAGE) {
+    if (gui_spell_is_ice(sidx)) {
         hi->cursor_mode = CURSOR_SPELL_TARGET;
         hi->selected_spell = ATTACK_ICE;
         hi->selected_spell_gui_idx = (int)sidx;
-    } else if (sidx == GUI_SPELL_BLOOD_RUSH || sidx == GUI_SPELL_BLOOD_BURST ||
-               sidx == GUI_SPELL_BLOOD_BLITZ || sidx == GUI_SPELL_BLOOD_BARRAGE) {
+    } else if (gui_spell_is_blood(sidx)) {
         hi->cursor_mode = CURSOR_SPELL_TARGET;
         hi->selected_spell = ATTACK_BLOOD;
         hi->selected_spell_gui_idx = (int)sidx;
@@ -265,25 +253,12 @@ static void human_handle_spell_click(HumanInput* hi, GuiState* gs,
     Spec bar click sets pending_spec. */
 static void human_handle_combat_click(HumanInput* hi, GuiState* gs, Player* p,
                                        int mouse_x, int mouse_y) {
-    int ox = gs->panel_x + 8;
-    int oy = gui_content_y(gs) + 8;
-
-    /* skip weapon name/sprite area */
-    Texture2D wpn_tex = gui_get_item_sprite(gs, p->equipped[GEAR_SLOT_WEAPON]);
-    oy += (wpn_tex.id != 0) ? 60 : 22;
-
     GuiCombatStyleOptions styles = gui_combat_style_options(p->equipped[GEAR_SLOT_WEAPON]);
-    int btn_gap = 6;
-    int btn_w = (gs->panel_w - 16 - btn_gap) / 2;
-    int btn_h = 60;
 
     for (int i = 0; i < styles.count; i++) {
-        int col = i % 2;
-        int row = i / 2;
-        int bx = ox + col * (btn_w + btn_gap);
-        int by = oy + row * (btn_h + btn_gap);
-        if (mouse_x >= bx && mouse_x < bx + btn_w &&
-            mouse_y >= by && mouse_y < by + btn_h) {
+        Rectangle rect = gui_combat_style_rect(gs, i);
+        if (mouse_x >= rect.x && mouse_x < rect.x + rect.width &&
+            mouse_y >= rect.y && mouse_y < rect.y + rect.height) {
             if (hi->enabled)
                 human_input_queue_fight_style(hi, styles.values[i]);
             else
@@ -304,26 +279,21 @@ static void human_handle_combat_click(HumanInput* hi, GuiState* gs, Player* p,
             return;
         }
     }
-    oy += 2 * (btn_h + btn_gap) + 10;
 
-    if (p->equipped[GEAR_SLOT_WEAPON] == ITEM_KODAI_WAND) {
-        int ac_w = gs->panel_w - 16;
-        int ac_h = 26;
-        if (mouse_x >= ox && mouse_x < ox + ac_w &&
-                mouse_y >= oy && mouse_y < oy + ac_h) {
+    if (item_supports_ancient_autocast(p->equipped[GEAR_SLOT_WEAPON])) {
+        Rectangle ac = gui_side_ref_rect(gs, gui_combat_autocast_rect());
+        if (mouse_x >= ac.x && mouse_x < ac.x + ac.width &&
+                mouse_y >= ac.y && mouse_y < ac.y + ac.height) {
             gs->autocast_selector_open = !gs->autocast_selector_open;
             return;
         }
-        oy += ac_h + 6;
 
         if (gs->autocast_selector_open) {
-            int sel_gap = 6;
-            int sel_w = (gs->panel_w - 16 - sel_gap) / 2;
             int spells[2] = { ENCOUNTER_SPELL_BLOOD, ENCOUNTER_SPELL_ICE };
             for (int i = 0; i < 2; i++) {
-                int bx = ox + i * (sel_w + sel_gap);
-                if (mouse_x >= bx && mouse_x < bx + sel_w &&
-                        mouse_y >= oy && mouse_y < oy + ac_h) {
+                Rectangle rect = gui_side_ref_rect(gs, gui_combat_autocast_spell_rect(i));
+                if (mouse_x >= rect.x && mouse_x < rect.x + rect.width &&
+                        mouse_y >= rect.y && mouse_y < rect.y + rect.height) {
                     int defensive = p->fight_style == FIGHT_STYLE_DEFENSIVE_AUTOCAST ||
                         p->autocast_defensive;
                     if (hi->enabled) {
@@ -337,18 +307,13 @@ static void human_handle_combat_click(HumanInput* hi, GuiState* gs, Player* p,
                     return;
                 }
             }
-            oy += ac_h + 6;
         }
     }
 
-    /* skip "Special Attack" label */
-    oy += 16;
-
     /* spec bar */
-    int spec_w = gs->panel_w - 16;
-    int spec_h = 26;
-    if (mouse_x >= ox && mouse_x < ox + spec_w &&
-        mouse_y >= oy && mouse_y < oy + spec_h) {
+    Rectangle spec = gui_side_ref_rect(gs, gui_combat_special_rect());
+    if (mouse_x >= spec.x && mouse_x < spec.x + spec.width &&
+        mouse_y >= spec.y && mouse_y < spec.y + spec.height) {
         hi->pending_spec = 1;
         human_input_queue_spec_toggle(hi);
     }

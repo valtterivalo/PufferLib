@@ -25,6 +25,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 from modern_cache_reader import ModernCacheReader
 
 MODERN_SPOTANIM_CONFIG_GROUP = 13
+SPOTANIM_BIN_MAGIC = 0x544F5053
+SPOTANIM_BIN_VERSION = 1
 
 
 @dataclass
@@ -61,6 +63,8 @@ def _parse_modern_spotanim_entry(gfx_id: int, data: bytes) -> SpotAnimDef:
         elif opcode == 2:
             anim_id = struct.unpack(">H", entry_buf.read(2))[0]
             sa.animation_id = anim_id if anim_id != 65535 else -1
+        elif opcode == 3:
+            sa.model_id = struct.unpack(">i", entry_buf.read(4))[0]
         elif opcode == 4:
             sa.resize_xy = struct.unpack(">H", entry_buf.read(2))[0]
         elif opcode == 5:
@@ -71,6 +75,11 @@ def _parse_modern_spotanim_entry(gfx_id: int, data: bytes) -> SpotAnimDef:
             sa.brightness = entry_buf.read(1)[0]
         elif opcode == 8:
             sa.shadow = entry_buf.read(1)[0]
+        elif opcode == 9:
+            while True:
+                b = entry_buf.read(1)
+                if not b or b == b"\0":
+                    break
         elif opcode == 40:
             length = entry_buf.read(1)[0]
             for _ in range(length):
@@ -99,6 +108,24 @@ def decode_spotanims_modern(reader: ModernCacheReader) -> dict[int, SpotAnimDef]
         spotanims[gfx_id] = sa
 
     return spotanims
+
+
+def write_spotanims_binary(path: Path, spotanims: dict[int, SpotAnimDef]) -> None:
+    """Write RuneC-compatible SPOT binary metadata."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("wb") as f:
+        f.write(struct.pack("<III",
+            SPOTANIM_BIN_MAGIC, SPOTANIM_BIN_VERSION, len(spotanims)))
+        for gfx_id, sa in sorted(spotanims.items()):
+            f.write(struct.pack("<IiiIIIii",
+                gfx_id,
+                sa.model_id,
+                sa.animation_id,
+                sa.resize_xy,
+                sa.resize_z,
+                sa.rotation,
+                sa.brightness,
+                sa.shadow))
 
 
 # GFX IDs we need for the PvP viewer
@@ -131,6 +158,11 @@ def main() -> None:
         action="store_true",
         help="print all spotanims (not just targets)",
     )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        help="write RuneC-compatible spotanims.bin metadata",
+    )
     args = parser.parse_args()
 
     cache_path = args.modern_cache
@@ -139,6 +171,10 @@ def main() -> None:
     modern_reader = ModernCacheReader(cache_path)
     spotanims = decode_spotanims_modern(modern_reader)
     print(f"parsed {len(spotanims)} spotanims total\n")
+
+    if args.output:
+        write_spotanims_binary(args.output, spotanims)
+        print(f"wrote {len(spotanims)} spotanims to {args.output}\n")
 
     if args.ids:
         target_ids = {int(x) for x in args.ids.split(",")}

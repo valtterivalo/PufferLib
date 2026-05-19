@@ -68,8 +68,7 @@ static void run_script(FILE* file, InfernoState* state) {
 
 int main(int argc, char** argv) {
     InfernoState* state = (InfernoState*)inf_create();
-    state->start_wave = 0;
-    state->late_start_supply_profile_scale = 1.0f;
+    inf_put_float((EncounterState*)state, "late_start_supply_profile_scale", 1.0f);
     inf_reset((EncounterState*)state, 20260515u);
     inf_lab_apply_command(state, &(InfernoLabCommand){
         .kind = INF_LAB_COMMAND_CLEAR_NPCS,

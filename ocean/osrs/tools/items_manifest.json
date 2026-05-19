@@ -501,7 +501,8 @@
     "index": "ITEM_CRYSTAL_HELM",
     "item_id": 23971,
     "attack_range": 0,
-    "comment": "Crystal helm"
+    "comment": "Crystal helm",
+    "effect_tags": ["CRYSTAL_ARMOUR"]
   },
   {
     "index": "ITEM_AVAS_ASSEMBLER",
@@ -513,13 +514,15 @@
     "index": "ITEM_CRYSTAL_BODY",
     "item_id": 23975,
     "attack_range": 0,
-    "comment": "Crystal body"
+    "comment": "Crystal body",
+    "effect_tags": ["CRYSTAL_ARMOUR"]
   },
   {
     "index": "ITEM_CRYSTAL_LEGS",
     "item_id": 23979,
     "attack_range": 0,
-    "comment": "Crystal legs"
+    "comment": "Crystal legs",
+    "effect_tags": ["CRYSTAL_ARMOUR"]
   },
   {
     "index": "ITEM_BOW_OF_FAERDHINEN",
@@ -834,5 +837,19 @@
     "version": "Charged",
     "attack_range": 0,
     "comment": "Dragonfire shield"
+  },
+  {
+    "index": "ITEM_DRAGON_HUNTER_WAND",
+    "item_id": 30070,
+    "attack_range": 10,
+    "comment": "Dragon hunter wand",
+    "effect_tags": ["DRAGON_HUNTER_WAND"]
+  },
+  {
+    "index": "ITEM_ECHO_BOOTS",
+    "item_id": 28945,
+    "attack_range": 0,
+    "comment": "Echo boots",
+    "effect_tags": ["ECHO_BOOTS"]
   }
 ]

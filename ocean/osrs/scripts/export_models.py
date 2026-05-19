@@ -1,4 +1,4 @@
-"""Export OSRS 3D models from modern OpenRS2 flat file cache to a binary .models file.
+"""Export OSRS 3D models from a modern OSRS cache to a binary .models file.
 
 Reads item definitions to find model IDs (inventory + male wield), then
 decodes model geometry. Outputs a binary file consumable by osrs_pvp_models.h
@@ -24,8 +24,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from modern_cache_reader import ModernCacheReader, decompress_container, read_string
-from export_textures import TextureAtlas
+from modern_cache_reader import ModernCacheReader, decompress_container, read_string, read_u32
+from export_textures import (
+    TextureAtlas,
+    build_atlas,
+    load_texture_average_colors,
+    load_texture_definitions,
+    load_texture_sprites,
+    write_texture_anim_binary,
+)
 
 _read_string = read_string
 
@@ -45,7 +52,11 @@ class ItemDef:
     inv_model: int = -1
     male_wield: int = -1
     male_wield2: int = -1
+    male_wield3: int = -1
     male_offset: int = 0
+    wearpos1: int = -1
+    wearpos2: int = -1
+    wearpos3: int = -1
     recolor_src: list[int] = field(default_factory=list)
     recolor_dst: list[int] = field(default_factory=list)
 
@@ -79,6 +90,133 @@ DEFAULT_MALE_KITS = {
 
 # body part name labels for C header
 BODY_PART_NAMES = ["HEAD", "JAW", "TORSO", "ARMS", "HANDS", "LEGS", "FEET"]
+
+WEARPOS_RIGHT_HAND = 3
+WEARPOS_TORSO = 4
+WEARPOS_LEFT_HAND = 5
+WEARPOS_ARMS = 6
+WEARPOS_LEGS = 7
+WEARPOS_HEAD = 8
+WEARPOS_HANDS = 9
+WEARPOS_FEET = 10
+WEARPOS_JAW = 11
+
+ITEM_RENDER_MODEL_MISSING = 0xFFFFFFFF
+ITEM_RENDER_FLAG_TWO_HANDED = 1 << 0
+ITEM_RENDER_FLAG_WEARPOS_AUTHORITY = 1 << 1
+RUNEC_ITEM_RENDER_MAGIC = 0x4D455249
+RUNEC_ITEM_RENDER_VERSION = 2
+
+KNOWN_PLAYER_BAS: dict[int, tuple[int, int, int]] = {
+    11802: (7053, 7052, 7043),
+}
+
+BODY_MASK_HEAD = 1 << BODY_PART_NAMES.index("HEAD")
+BODY_MASK_JAW = 1 << BODY_PART_NAMES.index("JAW")
+BODY_MASK_TORSO = 1 << BODY_PART_NAMES.index("TORSO")
+BODY_MASK_ARMS = 1 << BODY_PART_NAMES.index("ARMS")
+BODY_MASK_HANDS = 1 << BODY_PART_NAMES.index("HANDS")
+BODY_MASK_LEGS = 1 << BODY_PART_NAMES.index("LEGS")
+BODY_MASK_FEET = 1 << BODY_PART_NAMES.index("FEET")
+
+
+def item_wearpos_value(wearpos: int) -> int:
+    """Return a C-friendly wear position value."""
+
+    if wearpos >= 0:
+        return wearpos
+    return ITEM_RENDER_MODEL_MISSING
+
+
+def item_wearpos_values(item: ItemDef) -> tuple[int, int, int]:
+    """Return all three C-friendly equipped wear position values."""
+
+    return (
+        item_wearpos_value(item.wearpos1),
+        item_wearpos_value(item.wearpos2),
+        item_wearpos_value(item.wearpos3),
+    )
+
+
+def item_render_anim_value(anim_id: int) -> int:
+    """Return a C-friendly animation id value."""
+
+    if anim_id >= 0:
+        return anim_id
+    return ITEM_RENDER_MODEL_MISSING
+
+
+def load_runec_item_render_anims(path: Path) -> dict[int, tuple[int, int, int]]:
+    """Load RuneC item ready, walk, and run animation metadata."""
+
+    out = dict(KNOWN_PLAYER_BAS)
+    if not path.is_file():
+        return out
+
+    blob = path.read_bytes()
+    if len(blob) < 16:
+        sys.exit(f"truncated RuneC item render map: {path}")
+
+    magic, version, record_count, body_count = struct.unpack_from("<IIII", blob, 0)
+    if magic != RUNEC_ITEM_RENDER_MAGIC:
+        sys.exit(f"bad RuneC item render map magic in {path}: 0x{magic:08x}")
+    if version < RUNEC_ITEM_RENDER_VERSION:
+        return out
+
+    offset = 16 + body_count * 4
+    record_size = 13 * 4
+    expected_size = offset + record_count * record_size
+    if len(blob) < expected_size:
+        sys.exit(f"truncated RuneC item render records: {path}")
+
+    missing = ITEM_RENDER_MODEL_MISSING
+    for i in range(record_count):
+        fields = struct.unpack_from("<" + "I" * 13, blob, offset + i * record_size)
+        item_id = fields[0]
+        ready, walk, run = fields[10], fields[11], fields[12]
+        if ready == missing and walk == missing and run == missing:
+            continue
+        out[item_id] = (
+            -1 if ready == missing else int(ready),
+            -1 if walk == missing else int(walk),
+            -1 if run == missing else int(run),
+        )
+
+    return out
+
+
+def item_render_flags(item: ItemDef) -> int:
+    """Return viewer render flags derived from cache wear position data."""
+
+    flags = 0
+    wearposes = (item.wearpos1, item.wearpos2, item.wearpos3)
+    if any(wearpos >= 0 for wearpos in wearposes):
+        flags |= ITEM_RENDER_FLAG_WEARPOS_AUTHORITY
+    if item.wearpos2 == WEARPOS_LEFT_HAND or item.wearpos3 == WEARPOS_LEFT_HAND:
+        flags |= ITEM_RENDER_FLAG_TWO_HANDED
+    return flags
+
+
+def item_hide_body_mask(item: ItemDef) -> int:
+    """Return default player body parts hidden by an equipped item."""
+
+    mask = 0
+    for wearpos in (item.wearpos1, item.wearpos2, item.wearpos3):
+        if wearpos == WEARPOS_TORSO:
+            mask |= BODY_MASK_TORSO
+        elif wearpos == WEARPOS_ARMS:
+            mask |= BODY_MASK_ARMS
+        elif wearpos == WEARPOS_LEGS:
+            mask |= BODY_MASK_LEGS
+        elif wearpos == WEARPOS_HEAD:
+            mask |= BODY_MASK_HEAD
+        elif wearpos == WEARPOS_HANDS:
+            mask |= BODY_MASK_HANDS
+        elif wearpos == WEARPOS_FEET:
+            mask |= BODY_MASK_FEET
+        elif wearpos == WEARPOS_JAW:
+            mask |= BODY_MASK_JAW
+    return mask
 
 
 def decode_identity_kits_modern(reader: ModernCacheReader) -> dict[int, IdentityKitDef]:
@@ -120,12 +258,28 @@ def decode_identity_kits_modern(reader: ModernCacheReader) -> dict[int, Identity
                 ]
             elif op == 3:
                 kit.valid_style = True
-            elif 40 <= op < 50:
+            elif op == 5:
+                n = buf.read(1)[0]
+                kit.body_models = [read_u32(buf) for _ in range(n)]
+            elif op == 40:
+                n = buf.read(1)[0]
+                for i in range(n):
+                    src = struct.unpack(">H", buf.read(2))[0]
+                    dst = struct.unpack(">H", buf.read(2))[0]
+                    if i < len(kit.original_colors):
+                        kit.original_colors[i] = src
+                        kit.replacement_colors[i] = dst
+            elif op == 41:
+                n = buf.read(1)[0]
+                buf.read(n * 4)
+            elif 42 <= op < 50:
                 kit.original_colors[op - 40] = struct.unpack(">H", buf.read(2))[0]
             elif 50 <= op < 60:
                 kit.replacement_colors[op - 50] = struct.unpack(">H", buf.read(2))[0]
             elif 60 <= op < 70:
                 buf.read(2)  # head model (not needed for body rendering)
+            elif 70 <= op < 80:
+                buf.read(4)
 
         kits[kit_id] = kit
 
@@ -239,9 +393,9 @@ def _parse_modern_item_entry(item_id: int, data: bytes) -> ItemDef:
         elif opcode == 12:
             buf.read(4)  # value
         elif opcode == 13:
-            buf.read(1)  # wearPos1
+            d.wearpos1 = buf.read(1)[0]
         elif opcode == 14:
-            buf.read(1)  # wearPos2
+            d.wearpos2 = buf.read(1)[0]
         elif opcode == 15:
             pass  # isTradeable (modern flag, 0 bytes)
         elif opcode == 16:
@@ -269,7 +423,7 @@ def _parse_modern_item_entry(item_id: int, data: bytes) -> ItemDef:
         elif opcode == 26:
             buf.read(2)  # femaleWield2
         elif opcode == 27:
-            buf.read(1)  # wearPos3
+            d.wearpos3 = buf.read(1)[0]
         elif opcode == 28:
             buf.read(1)  # unknown u8
         elif opcode == 29:
@@ -292,9 +446,30 @@ def _parse_modern_item_entry(item_id: int, data: bytes) -> ItemDef:
         elif opcode == 42:
             buf.read(1)  # shiftClickDropIndex
         elif opcode == 43:
-            count = buf.read(1)[0]
-            for _ in range(count):
-                buf.read(4)  # sub-operation pairs (u16+u16)
+            buf.read(1)
+            while True:
+                subop = buf.read(1)
+                if not subop or subop[0] == 0:
+                    break
+                _read_string(buf)
+        elif opcode == 44:
+            d.inv_model = read_u32(buf)
+        elif opcode == 45:
+            d.male_wield = read_u32(buf)
+            d.male_offset = struct.unpack(">b", buf.read(1))[0]
+        elif opcode == 46:
+            d.male_wield2 = read_u32(buf)
+        elif opcode == 47:
+            d.male_wield3 = read_u32(buf)
+        elif opcode == 48:
+            read_u32(buf)
+            buf.read(1)
+        elif opcode == 49:
+            read_u32(buf)
+        elif opcode == 50:
+            read_u32(buf)
+        elif opcode in (51, 52, 53, 54):
+            read_u32(buf)
         elif opcode == 62:
             buf.read(1)  # unknown u8
         elif opcode == 64:
@@ -322,7 +497,7 @@ def _parse_modern_item_entry(item_id: int, data: bytes) -> ItemDef:
         elif opcode == 77:
             buf.read(2)  # unknown u16 (modern)
         elif opcode == 78:
-            buf.read(2)  # maleModel2
+            d.male_wield3 = struct.unpack(">H", buf.read(2))[0]
         elif opcode == 79:
             buf.read(2)  # femaleModel2
         elif opcode == 80:
@@ -510,6 +685,7 @@ class ModelData:
     vertex_skins: list[int] = field(default_factory=list)  # label group per vertex (for animation)
     face_priorities: list[int] = field(default_factory=list)  # per-face render priority (0-11)
     face_alphas: list[int] = field(default_factory=list)  # per-face alpha (0=opaque)
+    face_render_types: list[int] = field(default_factory=list)
     face_tex_coords: list[int] = field(default_factory=list)
     tex_u: list[int] = field(default_factory=list)
     tex_v: list[int] = field(default_factory=list)
@@ -652,6 +828,20 @@ def _decode_face_priorities(
     return [model_priority] * count
 
 
+def _decode_face_alphas(data: bytes, offset: int, count: int, has_alphas: int) -> list[int]:
+    """Read per-face transparency bytes."""
+    if has_alphas == 1:
+        return [_read_ubyte(data, offset + i) for i in range(count)]
+    return [0] * count
+
+
+def _decode_face_render_types(data: bytes, offset: int, count: int, has_types: bool) -> list[int]:
+    """Read per-face render types."""
+    if has_types:
+        return [_read_ubyte(data, offset + i) for i in range(count)]
+    return [0] * count
+
+
 def _decode_face_colors(data: bytes, offset: int, count: int) -> list[int]:
     """Read face colors as unsigned shorts."""
     colors = []
@@ -676,99 +866,199 @@ def _decode_face_textures_from_stream(
     return textures
 
 
+def _decode_texture_render_types(data: bytes, count: int) -> list[int]:
+    """Read model texture render types as signed Java bytes."""
+    types: list[int] = []
+    for i in range(count):
+        value = data[i]
+        if value >= 128:
+            value -= 256
+        types.append(value)
+    return types
+
+
+def _decode_texture_triangle_indices(
+    data: bytes,
+    offset: int,
+    texture_count: int,
+    texture_render_types: list[int] | None = None,
+) -> tuple[list[int], list[int], list[int]]:
+    """Read type-0 texture coordinate triangles."""
+    tex_u = [0] * texture_count
+    tex_v = [0] * texture_count
+    tex_w = [0] * texture_count
+    pos = offset
+    for i in range(texture_count):
+        render_type = (
+            texture_render_types[i] & 0xFF
+            if texture_render_types is not None and i < len(texture_render_types)
+            else 0
+        )
+        if render_type == 0:
+            tex_u[i] = _read_ushort(data, pos)
+            tex_v[i] = _read_ushort(data, pos + 2)
+            tex_w[i] = _read_ushort(data, pos + 4)
+            pos += 6
+    return tex_u, tex_v, tex_w
+
+
+def _decode_face_texture_coords_from_stream(
+    data: bytes,
+    offset: int,
+    face_textures: list[int],
+    texture_count: int,
+) -> list[int]:
+    """Read per-face texture-coordinate triangle indexes."""
+    coords = [-1] * len(face_textures)
+    pos = offset
+    for i, texture_id in enumerate(face_textures):
+        if texture_id < 0:
+            continue
+        if pos >= len(data):
+            break
+        coord = data[pos] - 1
+        pos += 1
+        if 0 <= coord < texture_count:
+            coords[i] = coord
+    return coords
+
+
+def _apply_render_type_textures_and_coords(
+    data: bytes,
+    render_type_offset: int,
+    face_colors: list[int],
+    face_count: int,
+) -> tuple[list[int], list[int], list[int]]:
+    """Handle faceRenderType texture flags."""
+    face_textures = [-1] * face_count
+    face_tex_coords = [-1] * face_count
+    face_render_types = [0] * face_count
+    for i in range(face_count):
+        render_type = _read_ubyte(data, render_type_offset + i)
+        if render_type & 1:
+            face_render_types[i] = 1
+        if render_type & 2:
+            face_textures[i] = face_colors[i]
+            face_colors[i] = 127
+            face_tex_coords[i] = render_type >> 2
+    return face_textures, face_tex_coords, face_render_types
+
+
 def _apply_render_type_textures(
     data: bytes,
     render_type_offset: int,
     face_colors: list[int],
     face_count: int,
 ) -> list[int]:
-    """Handle faceRenderType & 2 texture assignment (type2/oldFormat path).
-
-    Mirrors Java: when renderType & 2, faceTextures[i] = faceColors[i],
-    faceColors[i] = 127. Returns the face_textures array.
-    """
-    face_textures = [-1] * face_count
-    for i in range(face_count):
-        render_type = _read_ubyte(data, render_type_offset + i)
-        if render_type & 2:
-            face_textures[i] = face_colors[i]
-            face_colors[i] = 127
+    """Compatibility wrapper for older callers."""
+    face_textures, _, _ = _apply_render_type_textures_and_coords(
+        data, render_type_offset, face_colors, face_count,
+    )
     return face_textures
 
 
-def _decode_type2(model_id: int, data: bytes) -> ModelData | None:
-    """23-byte footer without textureRenderTypes (type2, magic 0xFF 0xFE).
+def _drop_redundant_texture_coords(
+    face_a: list[int],
+    face_b: list[int],
+    face_c: list[int],
+    tex_u: list[int],
+    tex_v: list[int],
+    tex_w: list[int],
+    face_tex_coords: list[int],
+) -> list[int]:
+    """Drop explicit texture coords matching the face triangle."""
+    out = list(face_tex_coords)
+    for i, coord in enumerate(out):
+        if coord < 0 or coord >= len(tex_u):
+            continue
+        if (
+            i < len(face_a)
+            and face_a[i] == tex_u[coord]
+            and face_b[i] == tex_v[coord]
+            and face_c[i] == tex_w[coord]
+        ):
+            out[i] = -1
+    return out
 
-    Mirrors Java decodeType2. Vertex flags start at offset 0 (no tex render types).
-    """
+
+def _decode_type2(model_id: int, data: bytes) -> ModelData | None:
+    """Decode type2 model data."""
     n = len(data)
     if n < 23:
         return None
 
     off = n - 23
-    var9 = _read_ushort(data, off)       # verticesCount
-    var10 = _read_ushort(data, off + 2)  # triangleFaceCount
-    var11 = _read_ubyte(data, off + 4)   # texturesCount
-    var12 = _read_ubyte(data, off + 5)   # has faceRenderType
-    var13 = _read_ubyte(data, off + 6)   # face priority
-    var14 = _read_ubyte(data, off + 7)   # has transparency
-    var15 = _read_ubyte(data, off + 8)   # has face skins
-    var16 = _read_ubyte(data, off + 9)   # has vertex skins
-    _ = _read_ubyte(data, off + 10)  # has animaya
-    var18 = _read_ushort(data, off + 11)  # vertex X len
-    var19 = _read_ushort(data, off + 13)  # vertex Y len
-    _ = _read_ushort(data, off + 15)  # vertex Z len
-    var21 = _read_ushort(data, off + 17)  # face index len
-    var22 = _read_ushort(data, off + 19)  # tex len (= face_tex_len not used by us, but 0xFF-2)
+    var9 = _read_ushort(data, off)
+    var10 = _read_ushort(data, off + 2)
+    var11 = _read_ubyte(data, off + 4)
+    var12 = _read_ubyte(data, off + 5)
+    var13 = _read_ubyte(data, off + 6)
+    var14 = _read_ubyte(data, off + 7)
+    var15 = _read_ubyte(data, off + 8)
+    var16 = _read_ubyte(data, off + 9)
+    _ = _read_ubyte(data, off + 10)
+    var18 = _read_ushort(data, off + 11)
+    var19 = _read_ushort(data, off + 13)
+    _ = _read_ushort(data, off + 15)
+    var21 = _read_ushort(data, off + 17)
+    var22 = _read_ushort(data, off + 19)
 
-    # section offsets (mirrors Java decodeType2)
-    # type2: vertex flags start at offset 0 (var23=0 in Java)
     var23 = 0
-    var24 = var23 + var9     # end of vertex flags
-    var25 = var24            # face strip type offset
+    var24 = var23 + var9
+    var25 = var24
     var24 += var10
 
-    var26 = var24            # face priority offset
+    var26 = var24
     if var13 == 255:
         var24 += var10
 
+    var27 = var24
     if var15 == 1:
         var24 += var10
 
-    var28 = var24            # face render type offset
+    var28 = var24
     if var12 == 1:
         var24 += var10
 
-    var29 = var24            # vertex skin offset
-    var24 += var22           # tex len
+    var29 = var24
+    var24 += var22
 
+    var30 = var24
     if var14 == 1:
         var24 += var10
 
-    var31 = var24            # face index data offset
+    var31 = var24
     var24 += var21
 
-    var32 = var24            # face color offset
+    var32 = var24
     var24 += var10 * 2
 
+    var33 = var24
     var24 += var11 * 6
 
-    var34 = var24            # vertex X offset
+    var34 = var24
     var24 += var18
-    var35 = var24            # vertex Y offset
+    var35 = var24
     var24 += var19
-    # vertex Z starts at var24
 
     vx, vy, vz = _decode_vertices(data, var23, var34, var35, var24, var9)
     fa, fb, fc = _decode_faces(data, var31, var25, var10)
     colors = _decode_face_colors(data, var32, var10)
+    tex_u, tex_v, tex_w = _decode_texture_triangle_indices(data, var33, var11, None)
 
-    # handle faceRenderType & 2 → face is textured (type2/oldFormat path)
     face_textures: list[int] = []
+    face_tex_coords: list[int] = []
+    face_render_types = [0] * var10
     if var12 == 1:
-        face_textures = _apply_render_type_textures(data, var28, colors, var10)
+        face_textures, face_tex_coords, face_render_types = (
+            _apply_render_type_textures_and_coords(data, var28, colors, var10)
+        )
+        face_tex_coords = _drop_redundant_texture_coords(
+            fa, fb, fc, tex_u, tex_v, tex_w, face_tex_coords,
+        )
 
     priorities = _decode_face_priorities(data, var26, var10, var13)
+    alphas = _decode_face_alphas(data, var30, var10, var14)
     skins = _decode_vertex_skins(data, var29, var9, var16)
 
     return ModelData(
@@ -780,78 +1070,94 @@ def _decode_type2(model_id: int, data: bytes) -> ModelData | None:
         face_colors=colors,
         face_textures=face_textures,
         face_priorities=priorities,
+        face_alphas=alphas,
+        face_render_types=face_render_types,
         vertex_skins=skins,
+        face_tex_coords=face_tex_coords,
+        tex_u=tex_u,
+        tex_v=tex_v,
+        tex_w=tex_w,
+        tex_face_count=var11,
     )
 
 
 def _decode_old_format(model_id: int, data: bytes) -> ModelData | None:
-    """18-byte footer format (original 317). Mirrors Java decodeOldFormat exactly."""
+    """Decode old-format model data."""
     n = len(data)
     if n < 18:
         return None
 
     off = n - 18
-    var9 = _read_ushort(data, off)       # verticesCount
-    var10 = _read_ushort(data, off + 2)  # triangleFaceCount
-    var11 = _read_ubyte(data, off + 4)   # texturesCount
-    var12 = _read_ubyte(data, off + 5)   # has faceRenderType
-    var13 = _read_ubyte(data, off + 6)   # face priority
-    var14 = _read_ubyte(data, off + 7)   # has transparency
-    var15 = _read_ubyte(data, off + 8)   # has face skins
-    var16 = _read_ubyte(data, off + 9)   # has vertex skins
-    var17 = _read_ushort(data, off + 10)  # vertex X len
-    var18 = _read_ushort(data, off + 12)  # vertex Y len
-    _ = _read_ushort(data, off + 14)  # vertex Z len
-    var20 = _read_ushort(data, off + 16)  # face index len
+    var9 = _read_ushort(data, off)
+    var10 = _read_ushort(data, off + 2)
+    var11 = _read_ubyte(data, off + 4)
+    var12 = _read_ubyte(data, off + 5)
+    var13 = _read_ubyte(data, off + 6)
+    var14 = _read_ubyte(data, off + 7)
+    var15 = _read_ubyte(data, off + 8)
+    var16 = _read_ubyte(data, off + 9)
+    var17 = _read_ushort(data, off + 10)
+    var18 = _read_ushort(data, off + 12)
+    _ = _read_ushort(data, off + 14)
+    var20 = _read_ushort(data, off + 16)
 
-    # section offset calculation (exact mirror of Java)
     var21 = 0
-    var22 = var21 + var9      # vertex flags end
-    var23 = var22             # face type offset
-    var22 += var10            # face types
+    var22 = var21 + var9
+    var23 = var22
+    var22 += var10
 
-    var24 = var22             # face priority offset
+    var24 = var22
     if var13 == 255:
         var22 += var10
 
+    var25 = var22
     if var15 == 1:
         var22 += var10
 
-    var26 = var22             # face render type offset
+    var26 = var22
     if var12 == 1:
         var22 += var10
 
-    var27 = var22             # vertex skin offset
+    var27 = var22
     if var16 == 1:
         var22 += var9
 
+    var28 = var22
     if var14 == 1:
         var22 += var10
 
-    var29 = var22             # face index offset
+    var29 = var22
     var22 += var20
 
-    var30 = var22             # face color offset
+    var30 = var22
     var22 += var10 * 2
 
+    var31 = var22
     var22 += var11 * 6
 
-    var32 = var22             # vertex X offset
+    var32 = var22
     var22 += var17
-    var33 = var22             # vertex Y offset
+    var33 = var22
     var22 += var18
-    # vertex Z starts here
 
     vx, vy, vz = _decode_vertices(data, var21, var32, var33, var22, var9)
     fa, fb, fc = _decode_faces(data, var29, var23, var10)
     colors = _decode_face_colors(data, var30, var10)
+    tex_u, tex_v, tex_w = _decode_texture_triangle_indices(data, var31, var11, None)
 
-    # handle faceRenderType & 2 → face is textured (type2/oldFormat path)
     face_textures: list[int] = []
+    face_tex_coords: list[int] = []
+    face_render_types = [0] * var10
     if var12 == 1:
-        face_textures = _apply_render_type_textures(data, var26, colors, var10)
+        face_textures, face_tex_coords, face_render_types = (
+            _apply_render_type_textures_and_coords(data, var26, colors, var10)
+        )
+        face_tex_coords = _drop_redundant_texture_coords(
+            fa, fb, fc, tex_u, tex_v, tex_w, face_tex_coords,
+        )
 
     priorities = _decode_face_priorities(data, var24, var10, var13)
+    alphas = _decode_face_alphas(data, var28, var10, var14)
     skins = _decode_vertex_skins(data, var27, var9, var16)
 
     return ModelData(
@@ -863,104 +1169,112 @@ def _decode_old_format(model_id: int, data: bytes) -> ModelData | None:
         face_colors=colors,
         face_textures=face_textures,
         face_priorities=priorities,
+        face_alphas=alphas,
+        face_render_types=face_render_types,
         vertex_skins=skins,
+        face_tex_coords=face_tex_coords,
+        tex_u=tex_u,
+        tex_v=tex_v,
+        tex_w=tex_w,
+        tex_face_count=var11,
     )
 
 
 def _decode_type1(model_id: int, data: bytes) -> ModelData | None:
-    """23-byte footer with textureRenderTypes (type1). Mirrors Java decodeType1."""
+    """Decode type1 model data."""
     n = len(data)
     if n < 23:
         return None
 
     off = n - 23
-    var9 = _read_ushort(data, off)       # verticesCount
-    var10 = _read_ushort(data, off + 2)  # triangleFaceCount
-    var11 = _read_ubyte(data, off + 4)   # texturesCount
-    var12 = _read_ubyte(data, off + 5)   # has faceRenderType
-    var13 = _read_ubyte(data, off + 6)   # face priority
-    var14 = _read_ubyte(data, off + 7)   # has transparency
-    var15 = _read_ubyte(data, off + 8)   # has face skins
-    var16 = _read_ubyte(data, off + 9)   # has face textures
-    var17 = _read_ubyte(data, off + 10)  # has vertex skins
-    # note: no animaya byte in type1 footer (that's in type3)
-    var18 = _read_ushort(data, off + 11)  # vertex X len
-    var19 = _read_ushort(data, off + 13)  # vertex Y len
-    var20 = _read_ushort(data, off + 15)  # vertex Z len
-    var21 = _read_ushort(data, off + 17)  # face index len
-    var22 = _read_ushort(data, off + 19)  # tex index len
+    var9 = _read_ushort(data, off)
+    var10 = _read_ushort(data, off + 2)
+    var11 = _read_ubyte(data, off + 4)
+    var12 = _read_ubyte(data, off + 5)
+    var13 = _read_ubyte(data, off + 6)
+    var14 = _read_ubyte(data, off + 7)
+    var15 = _read_ubyte(data, off + 8)
+    var16 = _read_ubyte(data, off + 9)
+    var17 = _read_ubyte(data, off + 10)
+    var18 = _read_ushort(data, off + 11)
+    var19 = _read_ushort(data, off + 13)
+    var20 = _read_ushort(data, off + 15)
+    var21 = _read_ushort(data, off + 17)
+    var22 = _read_ushort(data, off + 19)
 
-    # count texture render types
-    tex_type0 = 0
-    tex_type13 = 0
-    tex_type2 = 0
-    if var11 > 0:
-        for i in range(var11):
-            t = data[i]
-            if t == 0:
-                tex_type0 += 1
-            if 1 <= t <= 3:
-                tex_type13 += 1
-            if t == 2:
-                tex_type2 += 1
+    texture_render_types = _decode_texture_render_types(data, var11)
+    tex_type0 = sum(1 for t in texture_render_types if t == 0)
+    tex_type13 = sum(1 for t in texture_render_types if 1 <= t <= 3)
 
-    # section offsets (exact mirror of Java decodeType1)
     var26 = var11 + var9
+    var56 = var26
     if var12 == 1:
         var26 += var10
 
-    var28 = var26             # face strip type offset
+    var28 = var26
     var26 += var10
 
-    var29 = var26             # face priority offset
+    var29 = var26
     if var13 == 255:
         var26 += var10
 
+    var30 = var26
     if var15 == 1:
         var26 += var10
 
-    var31 = var26             # vertex skin offset
+    var31 = var26
     if var17 == 1:
         var26 += var9
 
+    var32 = var26
     if var14 == 1:
         var26 += var10
 
-    var33 = var26             # face index data offset
+    var33 = var26
     var26 += var21
 
-    var34 = var26             # face texture offset
+    var34 = var26
     if var16 == 1:
         var26 += var10 * 2
 
+    var35 = var26
     var26 += var22
 
-    var36 = var26             # face color offset
+    var36 = var26
     var26 += var10 * 2
 
-    var37 = var26             # vertex X offset
+    var37 = var26
     var26 += var18
-    var38 = var26             # vertex Y offset
+    var38 = var26
     var26 += var19
-    var39 = var26             # vertex Z offset
+    var39 = var26
     var26 += var20
 
-    # texture coordinates
+    var40 = var26
     var26 += tex_type0 * 6
+    var41 = var26
     var26 += tex_type13 * 6
-    # ... (more tex data, but we don't need it)
 
-    # vertex flags start at offset var11 (after textureRenderTypes)
     vx, vy, vz = _decode_vertices(data, var11, var37, var38, var39, var9)
     fa, fb, fc = _decode_faces(data, var33, var28, var10)
     colors = _decode_face_colors(data, var36, var10)
+    face_render_types = _decode_face_render_types(data, var56, var10, var12 == 1)
 
-    # type1: faceTextures read from dedicated stream (readUShort() - 1)
     face_textures: list[int] = []
+    face_tex_coords: list[int] = []
     if var16 == 1:
         face_textures = _decode_face_textures_from_stream(data, var34, var10)
+        if var11 > 0:
+            face_tex_coords = _decode_face_texture_coords_from_stream(
+                data, var35, face_textures, var11,
+            )
+
+    tex_u, tex_v, tex_w = _decode_texture_triangle_indices(
+        data, var40, var11, texture_render_types,
+    )
 
     priorities = _decode_face_priorities(data, var29, var10, var13)
+    alphas = _decode_face_alphas(data, var32, var10, var14)
     skins = _decode_vertex_skins(data, var31, var9, var17)
 
     return ModelData(
@@ -972,105 +1286,113 @@ def _decode_type1(model_id: int, data: bytes) -> ModelData | None:
         face_colors=colors,
         face_textures=face_textures,
         face_priorities=priorities,
+        face_alphas=alphas,
+        face_render_types=face_render_types,
         vertex_skins=skins,
+        face_tex_coords=face_tex_coords,
+        tex_u=tex_u,
+        tex_v=tex_v,
+        tex_w=tex_w,
+        tex_face_count=var11,
     )
 
 
 def _decode_type3(model_id: int, data: bytes) -> ModelData | None:
-    """26-byte footer (type3, magic 0xFF 0xFD). Mirrors Java decodeType3."""
+    """Decode type3 model data."""
     n = len(data)
     if n < 26:
         return None
 
     off = n - 26
-    var9 = _read_ushort(data, off)       # verticesCount
-    var10 = _read_ushort(data, off + 2)  # triangleFaceCount
-    var11 = _read_ubyte(data, off + 4)   # texturesCount
-    var12 = _read_ubyte(data, off + 5)   # has faceRenderType
-    var13 = _read_ubyte(data, off + 6)   # face priority
-    var14 = _read_ubyte(data, off + 7)   # has transparency
-    var15 = _read_ubyte(data, off + 8)   # has face skins
-    var16 = _read_ubyte(data, off + 9)   # has face textures
-    var17 = _read_ubyte(data, off + 10)  # has vertex skins
-    _ = _read_ubyte(data, off + 11)  # has animaya
-    var19 = _read_ushort(data, off + 12)  # vertex X len
-    var20 = _read_ushort(data, off + 14)  # vertex Y len
-    var21 = _read_ushort(data, off + 16)  # vertex Z len
-    var22 = _read_ushort(data, off + 18)  # face index len
-    var23 = _read_ushort(data, off + 20)  # tex map len
-    var24 = _read_ushort(data, off + 22)  # tex index len
-    # off+24..25 = magic (0xFF, 0xFD)
+    var9 = _read_ushort(data, off)
+    var10 = _read_ushort(data, off + 2)
+    var11 = _read_ubyte(data, off + 4)
+    var12 = _read_ubyte(data, off + 5)
+    var13 = _read_ubyte(data, off + 6)
+    var14 = _read_ubyte(data, off + 7)
+    var15 = _read_ubyte(data, off + 8)
+    var16 = _read_ubyte(data, off + 9)
+    var17 = _read_ubyte(data, off + 10)
+    _ = _read_ubyte(data, off + 11)
+    var19 = _read_ushort(data, off + 12)
+    var20 = _read_ushort(data, off + 14)
+    var21 = _read_ushort(data, off + 16)
+    var22 = _read_ushort(data, off + 18)
+    var23 = _read_ushort(data, off + 20)
+    var24 = _read_ushort(data, off + 22)
 
-    # count texture render types
-    tex_type0 = 0
-    tex_type13 = 0
-    tex_type2 = 0
-    if var11 > 0:
-        for i in range(var11):
-            t = data[i]
-            if t == 0:
-                tex_type0 += 1
-            if 1 <= t <= 3:
-                tex_type13 += 1
-            if t == 2:
-                tex_type2 += 1
+    texture_render_types = _decode_texture_render_types(data, var11)
+    tex_type0 = sum(1 for t in texture_render_types if t == 0)
+    tex_type13 = sum(1 for t in texture_render_types if 1 <= t <= 3)
 
-    # section offsets (exact mirror of Java decodeType3)
     var28 = var11 + var9
+    var58 = var28
     if var12 == 1:
         var28 += var10
 
-    var30 = var28             # face strip type offset
+    var30 = var28
     var28 += var10
 
-    var31 = var28             # face priority offset
+    var31 = var28
     if var13 == 255:
         var28 += var10
 
+    var32 = var28
     if var15 == 1:
         var28 += var10
 
-    var33 = var28             # tex index / vertex skin region
-    var28 += var24            # tex_index_len
+    var33 = var28
+    var28 += var24
 
+    var34 = var28
     if var14 == 1:
         var28 += var10
 
-    var35 = var28             # face index data offset
-    var28 += var22            # face_index_len
+    var35 = var28
+    var28 += var22
 
-    var36 = var28             # face texture offset
+    var36 = var28
     if var16 == 1:
         var28 += var10 * 2
 
-    var28 += var23            # tex_map_len
+    var37 = var28
+    var28 += var23
 
-    var38 = var28             # FACE COLOR offset
+    var38 = var28
     var28 += var10 * 2
 
-    var39 = var28             # vertex X offset
+    var39 = var28
     var28 += var19
-    var40 = var28             # vertex Y offset
+    var40 = var28
     var28 += var20
-    var41 = var28             # vertex Z offset
+    var41 = var28
     var28 += var21
 
-    # texture coordinates section (we skip but need for total size check)
+    var42 = var28
     var28 += tex_type0 * 6
+    var43 = var28
     var28 += tex_type13 * 6
-    # ... (more tex data for type 1-3 and type 2)
 
-    # vertex flags start at offset var11 (after textureRenderTypes)
     vx, vy, vz = _decode_vertices(data, var11, var39, var40, var41, var9)
     fa, fb, fc = _decode_faces(data, var35, var30, var10)
     colors = _decode_face_colors(data, var38, var10)
+    face_render_types = _decode_face_render_types(data, var58, var10, var12 == 1)
 
-    # type3: faceTextures read from dedicated stream (readUShort() - 1)
     face_textures: list[int] = []
+    face_tex_coords: list[int] = []
     if var16 == 1:
         face_textures = _decode_face_textures_from_stream(data, var36, var10)
+        if var11 > 0:
+            face_tex_coords = _decode_face_texture_coords_from_stream(
+                data, var37, face_textures, var11,
+            )
+
+    tex_u, tex_v, tex_w = _decode_texture_triangle_indices(
+        data, var42, var11, texture_render_types,
+    )
 
     priorities = _decode_face_priorities(data, var31, var10, var13)
+    alphas = _decode_face_alphas(data, var34, var10, var14)
     skins = _decode_vertex_skins(data, var33, var9, var17)
 
     return ModelData(
@@ -1082,7 +1404,14 @@ def _decode_type3(model_id: int, data: bytes) -> ModelData | None:
         face_colors=colors,
         face_textures=face_textures,
         face_priorities=priorities,
+        face_alphas=alphas,
+        face_render_types=face_render_types,
         vertex_skins=skins,
+        face_tex_coords=face_tex_coords,
+        tex_u=tex_u,
+        tex_v=tex_v,
+        tex_w=tex_w,
+        tex_face_count=var11,
     )
 
 
@@ -1149,6 +1478,8 @@ def _hue_to_channel(p: float, q: float, t: float) -> float:
 
 MDLS_MAGIC = 0x4D444C53  # "MDLS" (v1)
 MDL2_MAGIC = 0x4D444C32  # "MDL2" (v2, adds animation data)
+MDL3_MAGIC = 0x4D444C33  # "MDL3" (v3, adds expanded texcoords)
+MUV1_MAGIC = 0x3156554D  # "MUV1" optional dynamic texture projection block
 
 
 def _merge_models(models: list[ModelData]) -> ModelData:
@@ -1160,6 +1491,7 @@ def _merge_models(models: list[ModelData]) -> ModelData:
     merged = ModelData(model_id=models[0].model_id)
 
     vert_offset = 0
+    tex_offset = 0
     for md in models:
         merged.vertices_x.extend(md.vertices_x)
         merged.vertices_y.extend(md.vertices_y)
@@ -1169,16 +1501,35 @@ def _merge_models(models: list[ModelData]) -> ModelData:
         merged.face_b.extend(b + vert_offset for b in md.face_b)
         merged.face_c.extend(c + vert_offset for c in md.face_c)
         merged.face_colors.extend(md.face_colors)
-        merged.face_priorities.extend(md.face_priorities)
-        merged.face_alphas.extend(md.face_alphas)
-        merged.face_textures.extend(md.face_textures)
-        merged.face_tex_coords.extend(md.face_tex_coords)
-        merged.tex_u.extend(md.tex_u)
-        merged.tex_v.extend(md.tex_v)
-        merged.tex_w.extend(md.tex_w)
+        for face_idx in range(md.face_count):
+            merged.face_priorities.append(
+                md.face_priorities[face_idx]
+                if face_idx < len(md.face_priorities) else 0
+            )
+            merged.face_alphas.append(
+                md.face_alphas[face_idx]
+                if face_idx < len(md.face_alphas) else 0
+            )
+            merged.face_render_types.append(
+                md.face_render_types[face_idx]
+                if face_idx < len(md.face_render_types) else 0
+            )
+            merged.face_textures.append(
+                md.face_textures[face_idx]
+                if face_idx < len(md.face_textures) else -1
+            )
+            coord = (
+                md.face_tex_coords[face_idx]
+                if face_idx < len(md.face_tex_coords) else -1
+            )
+            merged.face_tex_coords.append(coord + tex_offset if coord >= 0 else -1)
+        merged.tex_u.extend(u + vert_offset for u in md.tex_u)
+        merged.tex_v.extend(v + vert_offset for v in md.tex_v)
+        merged.tex_w.extend(w + vert_offset for w in md.tex_w)
         merged.vertex_skins.extend(md.vertex_skins)
 
         vert_offset += md.vertex_count
+        tex_offset += md.tex_face_count
         merged.vertex_count += md.vertex_count
         merged.face_count += md.face_count
         merged.tex_face_count += md.tex_face_count
@@ -1186,10 +1537,146 @@ def _merge_models(models: list[ModelData]) -> ModelData:
     return merged
 
 
+def _default_face_uvs() -> tuple[tuple[float, float, float], tuple[float, float, float]]:
+    return (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)
+
+
+def _projected_face_uvs(
+    model: ModelData,
+    face_idx: int,
+) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
+    """Compute RuneLite-style texture UVs for one face."""
+    if face_idx >= len(model.face_tex_coords):
+        return _default_face_uvs()
+    tex_coord = model.face_tex_coords[face_idx]
+    if tex_coord < 0 or tex_coord >= len(model.tex_u):
+        return _default_face_uvs()
+    if face_idx >= len(model.face_a):
+        return _default_face_uvs()
+
+    tri_a = model.face_a[face_idx]
+    tri_b = model.face_b[face_idx]
+    tri_c = model.face_c[face_idx]
+    tex_a = model.tex_u[tex_coord]
+    tex_b = model.tex_v[tex_coord]
+    tex_c = model.tex_w[tex_coord]
+    max_vertex = model.vertex_count
+    if (
+        tri_a < 0 or tri_a >= max_vertex
+        or tri_b < 0 or tri_b >= max_vertex
+        or tri_c < 0 or tri_c >= max_vertex
+        or tex_a < 0 or tex_a >= max_vertex
+        or tex_b < 0 or tex_b >= max_vertex
+        or tex_c < 0 or tex_c >= max_vertex
+    ):
+        return _default_face_uvs()
+
+    v1x = float(model.vertices_x[tex_a])
+    v1y = float(model.vertices_y[tex_a])
+    v1z = float(model.vertices_z[tex_a])
+    v2x = float(model.vertices_x[tex_b]) - v1x
+    v2y = float(model.vertices_y[tex_b]) - v1y
+    v2z = float(model.vertices_z[tex_b]) - v1z
+    v3x = float(model.vertices_x[tex_c]) - v1x
+    v3y = float(model.vertices_y[tex_c]) - v1y
+    v3z = float(model.vertices_z[tex_c]) - v1z
+    v4x = float(model.vertices_x[tri_a]) - v1x
+    v4y = float(model.vertices_y[tri_a]) - v1y
+    v4z = float(model.vertices_z[tri_a]) - v1z
+    v5x = float(model.vertices_x[tri_b]) - v1x
+    v5y = float(model.vertices_y[tri_b]) - v1y
+    v5z = float(model.vertices_z[tri_b]) - v1z
+    v6x = float(model.vertices_x[tri_c]) - v1x
+    v6y = float(model.vertices_y[tri_c]) - v1y
+    v6z = float(model.vertices_z[tri_c]) - v1z
+
+    v7x = v2y * v3z - v2z * v3y
+    v7y = v2z * v3x - v2x * v3z
+    v7z = v2x * v3y - v2y * v3x
+
+    v8x = v3y * v7z - v3z * v7y
+    v8y = v3z * v7x - v3x * v7z
+    v8z = v3x * v7y - v3y * v7x
+    denom_u = v8x * v2x + v8y * v2y + v8z * v2z
+    if abs(denom_u) < 1.0e-6:
+        return _default_face_uvs()
+    inv_u = 1.0 / denom_u
+    u0 = (v8x * v4x + v8y * v4y + v8z * v4z) * inv_u
+    u1 = (v8x * v5x + v8y * v5y + v8z * v5z) * inv_u
+    u2 = (v8x * v6x + v8y * v6y + v8z * v6z) * inv_u
+
+    v8x = v2y * v7z - v2z * v7y
+    v8y = v2z * v7x - v2x * v7z
+    v8z = v2x * v7y - v2y * v7x
+    denom_v = v8x * v3x + v8y * v3y + v8z * v3z
+    if abs(denom_v) < 1.0e-6:
+        return _default_face_uvs()
+    inv_v = 1.0 / denom_v
+    v0 = (v8x * v4x + v8y * v4y + v8z * v4z) * inv_v
+    v1 = (v8x * v5x + v8y * v5y + v8z * v5z) * inv_v
+    v2 = (v8x * v6x + v8y * v6y + v8z * v6z) * inv_v
+
+    if not all(math.isfinite(value) for value in (u0, u1, u2, v0, v1, v2)):
+        return _default_face_uvs()
+    return (u0, u1, u2), (v0, v1, v2)
+
+
+def _clamp_uv_component(value: float) -> float:
+    if value < 0.0:
+        return 0.0
+    if value > 1.0:
+        return 1.0
+    return value
+
+
+def _repeat_uv_component_with_margin(value: float, margin: float) -> float:
+    if margin <= 0.0:
+        return _clamp_uv_component(value)
+    while value < -margin:
+        value += 1.0
+    while value > 1.0 + margin:
+        value -= 1.0
+    if value < -margin:
+        return -margin
+    if value > 1.0 + margin:
+        return 1.0 + margin
+    return value
+
+
+def _atlas_face_uv(atlas: TextureAtlas, tex_id: int, u: float, v: float) -> tuple[float, float]:
+    u_off, v_off, u_size, v_size = atlas.uv_map[tex_id]
+    eps_u = 0.5 / max(1, atlas.width)
+    eps_v = 0.5 / max(1, atlas.height)
+    usable_u = max(0.0, u_size - eps_u * 2.0)
+    usable_v = max(0.0, v_size - eps_v * 2.0)
+    u = _clamp_uv_component(u)
+    v = _repeat_uv_component_with_margin(v, float(getattr(atlas, "repeat_v_margin", 0.0)))
+    return (
+        u_off + eps_u + u * usable_u,
+        v_off + eps_v + v * usable_v,
+    )
+
+
+def _atlas_face_uv_params(atlas: TextureAtlas, tex_id: int) -> tuple[float, float, float, float, float]:
+    u_off, v_off, u_size, v_size = atlas.uv_map[tex_id]
+    eps_u = 0.5 / max(1, atlas.width)
+    eps_v = 0.5 / max(1, atlas.height)
+    usable_u = max(0.0, u_size - eps_u * 2.0)
+    usable_v = max(0.0, v_size - eps_v * 2.0)
+    return (
+        u_off + eps_u,
+        v_off + eps_v,
+        usable_u,
+        usable_v,
+        float(getattr(atlas, "repeat_v_margin", 0.0)),
+    )
+
+
 def expand_model(
     model: ModelData,
     tex_colors: dict[int, int] | None = None,
     atlas: TextureAtlas | None = None,
+    bake_priority_offsets: bool = False,
 ) -> tuple[list[float], list[tuple[int, int, int, int]], list[float]]:
     """Expand indexed model to per-vertex (3 verts per face, no index buffer).
 
@@ -1215,6 +1702,11 @@ def expand_model(
         a = model.face_a[fi]
         b = model.face_b[fi]
         c = model.face_c[fi]
+        alpha = (
+            max(0, min(255, 255 - model.face_alphas[fi]))
+            if fi < len(model.face_alphas)
+            else 255
+        )
 
         # bounds check
         if (
@@ -1236,14 +1728,9 @@ def expand_model(
         bx, by, bz = float(model.vertices_x[b]), float(-model.vertices_y[b]), float(model.vertices_z[b])
         cx, cy, cz = float(model.vertices_x[c]), float(-model.vertices_y[c]), float(model.vertices_z[c])
 
-        # priority-based normal offset to prevent z-fighting on coplanar faces.
-        # OSRS uses a painter's algorithm with per-face priorities (0-9 drawn in
-        # strict ascending order). we only offset faces above the model's minimum
-        # priority — if all faces share the same priority, no offset is needed.
         pri = model.face_priorities[fi] if fi < len(model.face_priorities) else 0
         pri_delta = pri - min_pri
-        if pri_delta > 0:
-            # face normal via cross product of edges
+        if bake_priority_offsets and pri_delta > 0:
             e1x, e1y, e1z = bx - ax, by - ay, bz - az
             e2x, e2y, e2z = cx - ax, cy - ay, cz - az
             nx = e1y * e2z - e1z * e2y
@@ -1251,8 +1738,6 @@ def expand_model(
             nz = e1x * e2y - e1y * e2x
             length = math.sqrt(nx * nx + ny * ny + nz * nz)
             if length > 0.001:
-                # 0.15 OSRS units per priority level — small enough to be invisible,
-                # large enough to resolve depth buffer ambiguity at 1/128 scale
                 bias = pri_delta * 0.15 / length
                 nx *= bias
                 ny *= bias
@@ -1276,41 +1761,53 @@ def expand_model(
         )
 
         if atlas and tex_id >= 0 and tex_id in atlas.uv_map:
-            # textured face: compute UV in atlas space
-            u_off, v_off, u_size, v_size = atlas.uv_map[tex_id]
-
-            # face vertices ARE the UV basis (textureCoords = -1 case):
-            # vertex A → (0,0), B → (1,0), C → (0,1) in texture space
-            # mapped to atlas: offset + fraction * size
-            uv_a = (u_off + 0.0 * u_size, v_off + 0.0 * v_size)
-            uv_b = (u_off + 1.0 * u_size, v_off + 0.0 * v_size)
-            uv_c = (u_off + 0.0 * u_size, v_off + 1.0 * v_size)
+            u_face, v_face = _projected_face_uvs(model, fi)
+            uv_a = _atlas_face_uv(atlas, tex_id, u_face[0], v_face[0])
+            uv_b = _atlas_face_uv(atlas, tex_id, u_face[1], v_face[1])
+            uv_c = _atlas_face_uv(atlas, tex_id, u_face[2], v_face[2])
             uvs.extend([uv_a[0], uv_a[1], uv_b[0], uv_b[1], uv_c[0], uv_c[1]])
 
-            # vertex color = white (texture provides color)
-            colors.extend([(255, 255, 255, 255)] * 3)
+            colors.extend([(255, 255, 255, alpha)] * 3)
         else:
-            # non-textured face: UV points to white pixel, vertex color = HSL
             if atlas:
                 uvs.extend([atlas.white_u, atlas.white_v] * 3)
             else:
                 uvs.extend([0.0] * 6)
+
+            if atlas and tex_id >= 0:
+                colors.extend([(255, 0, 255, alpha)] * 3)
+                continue
 
             if tex_id >= 0 and tex_colors and tex_id in tex_colors:
                 hsl = tex_colors[tex_id]
             else:
                 hsl = model.face_colors[fi] if fi < len(model.face_colors) else 0
             r, g, b_col = hsl15_to_rgb(hsl)
-            color = (r, g, b_col, 255)
+            color = (r, g, b_col, alpha)
             colors.extend([color, color, color])
 
     return verts, colors, uvs
 
 
+def _write_atlas_binary(path: Path, atlas: TextureAtlas) -> None:
+    """Write an ATLS atlas companion for textured MDL3 model sets."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("wb") as f:
+        f.write(struct.pack("<I", 0x41544C53))
+        f.write(struct.pack("<I", atlas.width))
+        f.write(struct.pack("<I", atlas.height))
+        f.write(atlas.pixels)
+
+
 def write_models_binary(
-    output_path: Path, models: list[ModelData],
+    output_path: Path,
+    models: list[ModelData],
+    tex_colors: dict[int, int] | None = None,
+    atlas: TextureAtlas | None = None,
+    atlas_path: Path | None = None,
+    bake_priority_offsets: bool = False,
 ) -> None:
-    """Write models to .models v2 binary format (MDL2).
+    """Write models to .models binary format.
 
     V2 format adds animation data per model:
       - base vertex positions (indexed, pre-animation reference pose)
@@ -1324,15 +1821,21 @@ def write_models_binary(
       uint16 base_vert_count        (original indexed vertex count)
       float  expanded_verts[expanded_vert_count * 3]   (x,y,z)
       uint8  colors[expanded_vert_count * 4]            (r,g,b,a)
+      float  texcoords[expanded_vert_count * 2]         (MDL3 only)
       int16  base_verts[base_vert_count * 3]            (x,y,z — original OSRS coords, y NOT negated)
       uint8  vertex_skins[base_vert_count]              (label group per vertex)
       uint16 face_indices[face_count * 3]               (a,b,c per face)
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    has_textures = atlas is not None
+    magic = MDL3_MAGIC if has_textures else MDL2_MAGIC
+
+    if atlas is not None:
+        _write_atlas_binary(atlas_path or output_path.with_suffix(".atlas"), atlas)
 
     with open(output_path, "wb") as f:
         # header
-        f.write(struct.pack("<I", MDL2_MAGIC))
+        f.write(struct.pack("<I", magic))
         f.write(struct.pack("<I", len(models)))
 
         # placeholder for offsets table
@@ -1343,7 +1846,12 @@ def write_models_binary(
         for model in models:
             offsets.append(f.tell())
 
-            verts, colors, _uvs = expand_model(model)
+            verts, colors, uvs = expand_model(
+                model,
+                tex_colors=tex_colors,
+                atlas=atlas,
+                bake_priority_offsets=bake_priority_offsets,
+            )
             expanded_vert_count = model.face_count * 3
 
             # per-model header
@@ -1359,6 +1867,10 @@ def write_models_binary(
             # colors (uint8 x4 per expanded vertex)
             for r, g, b, a in colors:
                 f.write(struct.pack("BBBB", r, g, b, a))
+
+            if has_textures:
+                for uv in uvs:
+                    f.write(struct.pack("<f", uv))
 
             # base vertex positions (int16 x3, original OSRS coords)
             for i in range(model.vertex_count):
@@ -1385,6 +1897,76 @@ def write_models_binary(
                 pri = priorities[i] if i < len(priorities) else 0
                 f.write(struct.pack("B", pri))
 
+            if has_textures and atlas is not None:
+                f.write(struct.pack("<II", MUV1_MAGIC, model.face_count))
+                for i in range(model.face_count):
+                    tex_id = (
+                        model.face_textures[i]
+                        if i < len(model.face_textures) else -1
+                    )
+                    if tex_id < 0 or tex_id not in atlas.uv_map:
+                        f.write(struct.pack(
+                            "<BxxxHHHfffff",
+                            0,
+                            0,
+                            0,
+                            0,
+                            0.0,
+                            0.0,
+                            0.0,
+                            0.0,
+                            0.0,
+                        ))
+                        continue
+
+                    coord = (
+                        model.face_tex_coords[i]
+                        if i < len(model.face_tex_coords) else -1
+                    )
+                    if 0 <= coord < len(model.tex_u):
+                        tex_a = model.tex_u[coord]
+                        tex_b = model.tex_v[coord]
+                        tex_c = model.tex_w[coord]
+                    else:
+                        tex_a = model.face_a[i]
+                        tex_b = model.face_b[i]
+                        tex_c = model.face_c[i]
+
+                    if (
+                        tex_a < 0 or tex_a > 0xFFFF
+                        or tex_b < 0 or tex_b > 0xFFFF
+                        or tex_c < 0 or tex_c > 0xFFFF
+                    ):
+                        f.write(struct.pack(
+                            "<BxxxHHHfffff",
+                            0,
+                            0,
+                            0,
+                            0,
+                            0.0,
+                            0.0,
+                            0.0,
+                            0.0,
+                            0.0,
+                        ))
+                        continue
+
+                    u_base, v_base, u_scale, v_scale, repeat_v_margin = (
+                        _atlas_face_uv_params(atlas, tex_id)
+                    )
+                    f.write(struct.pack(
+                        "<BxxxHHHfffff",
+                        1,
+                        tex_a,
+                        tex_b,
+                        tex_c,
+                        u_base,
+                        v_base,
+                        u_scale,
+                        v_scale,
+                        repeat_v_margin,
+                    ))
+
         # go back and write offsets
         f.seek(offsets_pos)
         for off in offsets:
@@ -1393,13 +1975,11 @@ def write_models_binary(
 
 def write_item_model_header(
     output_path: Path,
-    mappings: list[tuple[int, int, int, int]],
+    mappings: list[tuple[int, int, int, int, int, int, int, int]],
 ) -> None:
     """Write C header with item → model ID mapping.
 
-    Each entry: (item_id, inv_model_id, wield_model_id, has_sleeves).
-    has_sleeves indicates whether the body item provides its own arm model
-    (male_wield2), meaning default arm body parts should be hidden.
+    Each entry carries cache wear positions, render flags, and hide masks.
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -1408,11 +1988,21 @@ def write_item_model_header(
         f.write("#ifndef ITEM_MODELS_H\n")
         f.write("#define ITEM_MODELS_H\n\n")
         f.write("#include <stdint.h>\n\n")
+        f.write("#define ITEM_RENDER_MODEL_MISSING 0xFFFFFFFFu\n")
+        f.write("#define ITEM_RENDER_FLAG_TWO_HANDED 1u\n")
+        f.write("#define ITEM_RENDER_FLAG_WEARPOS_AUTHORITY 2u\n\n")
         f.write("typedef struct {\n")
         f.write("    uint16_t item_id;\n")
         f.write("    uint32_t inv_model;\n")
         f.write("    uint32_t wield_model;\n")
-        f.write("    uint8_t  has_sleeves;\n")
+        f.write("    uint32_t hide_body_mask;\n")
+        f.write("    uint32_t wearpos1;\n")
+        f.write("    uint32_t wearpos2;\n")
+        f.write("    uint32_t wearpos3;\n")
+        f.write("    uint32_t render_flags;\n")
+        f.write("    uint32_t ready_anim_id;\n")
+        f.write("    uint32_t walk_anim_id;\n")
+        f.write("    uint32_t run_anim_id;\n")
         f.write("} ItemModelMapping;\n\n")
         f.write(
             f"#define ITEM_MODEL_COUNT {len(mappings)}\n\n"
@@ -1420,8 +2010,15 @@ def write_item_model_header(
         f.write(
             "static const ItemModelMapping ITEM_MODEL_MAP[] = {\n"
         )
-        for item_id, inv, wield, sleeves in mappings:
-            f.write(f"    {{ {item_id}, {inv}, {wield}, {sleeves} }},\n")
+        for (
+            item_id, inv, wield, hide_mask, wearpos1, wearpos2, wearpos3, flags,
+            ready_anim, walk_anim, run_anim
+        ) in mappings:
+            f.write(
+                f"    {{ {item_id}, {inv}, {wield}, {hide_mask}, "
+                f"{wearpos1}, {wearpos2}, {wearpos3}, {flags}, "
+                f"{ready_anim}, {walk_anim}, {run_anim} }},\n"
+            )
         f.write("};\n\n")
         f.write("#endif /* ITEM_MODELS_H */\n")
 
@@ -1429,7 +2026,7 @@ def write_item_model_header(
 def write_player_model_header(
     output_path: Path,
     body_part_model_ids: dict[int, int],
-    item_mappings: list[tuple[int, int, int, int]],
+    item_mappings: list[tuple[int, int, int, int, int, int, int, int]],
     item_defs: dict[int, ItemDef],
 ) -> None:
     """Write C header for player model rendering.
@@ -1553,6 +2150,8 @@ SIM_ITEM_IDS = [
     23975,  # Crystal body
     23979,  # Crystal legs
     25865,  # Bow of faerdhinen (c)
+    30070,  # Dragon hunter wand
+    28945,  # Echo boots
     19921,  # Blessed d'hide boots
     # tier 0 (budget)
     4089,   # Mystic hat
@@ -1578,6 +2177,7 @@ SIM_ITEM_IDS = [
 
 
 def main() -> None:
+    default_data_dir = Path(__file__).resolve().parents[1] / "data"
     parser = argparse.ArgumentParser(
         description="export OSRS 3D models from modern OpenRS2 cache"
     )
@@ -1590,14 +2190,20 @@ def main() -> None:
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("data/equipment.models"),
+        default=default_data_dir / "equipment.models",
         help="output .models binary file",
     )
     parser.add_argument(
         "--header",
         type=Path,
-        default=Path("data/item_models.h"),
+        default=default_data_dir / "item_models.h",
         help="output C header with item→model mapping",
+    )
+    parser.add_argument(
+        "--runec-item-render-map",
+        type=Path,
+        default=Path("refs/RuneC/data/models/item_render.map"),
+        help="optional RuneC item render map for ready, walk, and run anim metadata",
     )
     parser.add_argument(
         "--extra-models",
@@ -1617,11 +2223,12 @@ def main() -> None:
     print("loading item definitions...")
     item_defs = decode_item_definitions_modern(modern_reader)
     print(f"  loaded {len(item_defs)} item definitions")
+    item_render_anims = load_runec_item_render_anims(args.runec_item_render_map)
 
     # build per-item wield models with recolors + maleWield2 merged
     print("building wield models...")
     needed_models: set[int] = set()  # raw inv models (no recolor needed for inventory icons)
-    mappings: list[tuple[int, int, int]] = []  # (item_id, inv_model, wield_synth_id)
+    mappings: list[tuple[int, int, int, int, int, int, int, int, int, int, int]] = []
     wield_models: list[ModelData] = []  # recolored + merged wield models
 
     def _load_model(mid: int) -> ModelData | None:
@@ -1651,6 +2258,10 @@ def main() -> None:
             md2 = _load_model(item.male_wield2)
             if md2:
                 wield_parts.append(md2)
+        if item.male_wield3 >= 0:
+            md3 = _load_model(item.male_wield3)
+            if md3:
+                wield_parts.append(md3)
 
         if wield_parts:
             if len(wield_parts) == 1:
@@ -1668,13 +2279,27 @@ def main() -> None:
             merged.model_id = wield_synth
             wield_models.append(merged)
 
-        has_sleeves = 1 if item.male_wield2 >= 0 else 0
-        mappings.append((item_id, inv, wield_synth, has_sleeves))
+        wearpos1, wearpos2, wearpos3 = item_wearpos_values(item)
+        ready_anim, walk_anim, run_anim = item_render_anims.get(item_id, (-1, -1, -1))
+        mappings.append((
+            item_id,
+            inv,
+            wield_synth,
+            item_hide_body_mask(item),
+            wearpos1,
+            wearpos2,
+            wearpos3,
+            item_render_flags(item),
+            item_render_anim_value(ready_anim),
+            item_render_anim_value(walk_anim),
+            item_render_anim_value(run_anim),
+        ))
         rc_info = f", {len(item.recolor_src)} recolors" if item.recolor_src else ""
         w2_info = f" + wield2={item.male_wield2}" if item.male_wield2 >= 0 else ""
+        w3_info = f" + wield3={item.male_wield3}" if item.male_wield3 >= 0 else ""
         print(
             f"  {item.name} (id={item_id}): inv={inv}, "
-            f"wield={item.male_wield}{w2_info}{rc_info}"
+            f"wield={item.male_wield}{w2_info}{w3_info}{rc_info}"
         )
 
     # decode identity kits for player body parts
@@ -1815,7 +2440,12 @@ def main() -> None:
     print(f"total: {total_verts} vertices, {total_faces} faces")
 
     # write binary output (body + equipment models)
-    write_models_binary(args.output, all_models)
+    print("loading texture atlas...")
+    tex_colors = load_texture_average_colors(modern_reader)
+    texture_defs = load_texture_definitions(modern_reader)
+    atlas = build_atlas(load_texture_sprites(modern_reader), repeat_v_padding=128)
+    write_models_binary(args.output, all_models, tex_colors=tex_colors, atlas=atlas)
+    write_texture_anim_binary(args.output.with_suffix(".tanim"), atlas, texture_defs)
     file_size = args.output.stat().st_size
     print(f"\nwrote {file_size:,} bytes to {args.output}")
 
