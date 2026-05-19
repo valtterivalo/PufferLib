@@ -37,7 +37,7 @@ static int model_file_contains_model(const char* path, uint32_t model_id) {
     uint32_t count = 0;
     assert(fread(&magic, sizeof(magic), 1, f) == 1);
     assert(fread(&count, sizeof(count), 1, f) == 1);
-    assert(magic == MDL2_MAGIC || magic == MDL3_MAGIC);
+    assert(magic == MDL2_MAGIC || magic == MDL3_MAGIC || magic == MDL4_MAGIC);
 
     uint32_t* offsets = malloc((size_t)count * sizeof(uint32_t));
     assert(offsets);

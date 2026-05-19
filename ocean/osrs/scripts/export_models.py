@@ -59,6 +59,8 @@ class ItemDef:
     wearpos3: int = -1
     recolor_src: list[int] = field(default_factory=list)
     recolor_dst: list[int] = field(default_factory=list)
+    retexture_src: list[int] = field(default_factory=list)
+    retexture_dst: list[int] = field(default_factory=list)
 
 
 @dataclass
@@ -217,6 +219,21 @@ def item_hide_body_mask(item: ItemDef) -> int:
         elif wearpos == WEARPOS_JAW:
             mask |= BODY_MASK_JAW
     return mask
+
+
+def apply_item_render_overrides(model: "ModelData", item: ItemDef) -> None:
+    """Apply cache item recolor and retexture pairs to a render model."""
+
+    for src, dst in zip(item.recolor_src, item.recolor_dst):
+        for fi in range(model.face_count):
+            if model.face_colors[fi] == src:
+                model.face_colors[fi] = dst
+
+    if model.face_textures:
+        for src, dst in zip(item.retexture_src, item.retexture_dst):
+            for fi in range(min(model.face_count, len(model.face_textures))):
+                if model.face_textures[fi] == src:
+                    model.face_textures[fi] = dst
 
 
 def decode_identity_kits_modern(reader: ModernCacheReader) -> dict[int, IdentityKitDef]:
@@ -442,7 +459,10 @@ def _parse_modern_item_entry(item_id: int, data: bytes) -> ItemDef:
         elif opcode == 41:
             count = buf.read(1)[0]
             for _ in range(count):
-                buf.read(4)  # retextureFrom + retextureTo
+                src = struct.unpack(">H", buf.read(2))[0]
+                dst = struct.unpack(">H", buf.read(2))[0]
+                d.retexture_src.append(src)
+                d.retexture_dst.append(dst)
         elif opcode == 42:
             buf.read(1)  # shiftClickDropIndex
         elif opcode == 43:
@@ -2303,11 +2323,7 @@ def main() -> None:
             else:
                 merged = _merge_models(wield_parts)
 
-            # apply item recolors
-            for src, dst in zip(item.recolor_src, item.recolor_dst):
-                for fi in range(merged.face_count):
-                    if merged.face_colors[fi] == src:
-                        merged.face_colors[fi] = dst
+            apply_item_render_overrides(merged, item)
 
             wield_synth = 0xE0000 + idx
             merged.model_id = wield_synth
@@ -2329,11 +2345,12 @@ def main() -> None:
             item_render_anim_value(run_anim),
         ))
         rc_info = f", {len(item.recolor_src)} recolors" if item.recolor_src else ""
+        rt_info = f", {len(item.retexture_src)} retextures" if item.retexture_src else ""
         w2_info = f" + wield2={item.male_wield2}" if item.male_wield2 >= 0 else ""
         w3_info = f" + wield3={item.male_wield3}" if item.male_wield3 >= 0 else ""
         print(
             f"  {item.name} (id={item_id}): inv={inv}, "
-            f"wield={item.male_wield}{w2_info}{w3_info}{rc_info}"
+            f"wield={item.male_wield}{w2_info}{w3_info}{rc_info}{rt_info}"
         )
 
     # decode identity kits for player body parts
