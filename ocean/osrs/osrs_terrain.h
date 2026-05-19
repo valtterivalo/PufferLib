@@ -15,6 +15,7 @@
 #define OSRS_TERRAIN_H
 
 #include "raylib.h"
+#include "osrs_assets.h"
 #include "osrs_binary_io.h"
 #include <math.h>
 #include <stdio.h>
@@ -39,7 +40,7 @@ typedef struct {
 } TerrainMesh;
 
 static TerrainMesh* terrain_load(const char* path) {
-    FILE* f = fopen(path, "rb");
+    FILE* f = osrs_asset_fopen(path, "rb");
     if (!f) {
         fprintf(stderr, "terrain_load: could not open %s\n", path);
         return NULL;

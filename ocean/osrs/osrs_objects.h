@@ -16,6 +16,7 @@
 
 #include "raylib.h"
 #include "rlgl.h"
+#include "osrs_assets.h"
 #include "osrs_binary_io.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -43,7 +44,7 @@ typedef struct {
  */
 static Texture2D objects_load_atlas(const char* atlas_path) {
     Texture2D tex = { 0 };
-    FILE* f = fopen(atlas_path, "rb");
+    FILE* f = osrs_asset_fopen(atlas_path, "rb");
     if (!f) {
         fprintf(stderr, "objects_load_atlas: could not open %s\n", atlas_path);
         abort();
@@ -82,7 +83,7 @@ static Texture2D objects_load_atlas(const char* atlas_path) {
 }
 
 static ObjectMesh* objects_load(const char* path) {
-    FILE* f = fopen(path, "rb");
+    FILE* f = osrs_asset_fopen(path, "rb");
     if (!f) {
         fprintf(stderr, "objects_load: could not open %s\n", path);
         return NULL;

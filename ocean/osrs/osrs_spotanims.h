@@ -5,6 +5,7 @@
 #ifndef OSRS_SPOTANIMS_H
 #define OSRS_SPOTANIMS_H
 
+#include "osrs_assets.h"
 #include "osrs_binary_io.h"
 #include <stdint.h>
 #include <limits.h>
@@ -33,7 +34,7 @@ typedef struct {
 static void osrs_spotanims_free(OsrsSpotAnimSet* set);
 
 static OsrsSpotAnimSet* osrs_spotanims_load(const char* path) {
-    FILE* f = fopen(path, "rb");
+    FILE* f = osrs_asset_fopen(path, "rb");
     if (!f) {
         fprintf(stderr, "osrs_spotanims_load: cannot open %s\n", path);
         return NULL;

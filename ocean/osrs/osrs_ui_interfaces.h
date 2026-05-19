@@ -14,6 +14,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "osrs_assets.h"
+
 #define OSRS_UI_BIN_MAGIC "RCUIBIN2"
 #define OSRS_UI_BIN_VERSION_MIN 1u
 #define OSRS_UI_BIN_VERSION_MAX 2u
@@ -237,7 +239,7 @@ static char* osrs_ui_read_string(OsrsUiReader* r) {
 }
 
 static unsigned char* osrs_ui_read_file_bytes(const char* path, size_t* out_size) {
-    FILE* file = fopen(path, "rb");
+    FILE* file = osrs_asset_fopen(path, "rb");
     if (!file) return NULL;
     fseek(file, 0, SEEK_END);
     long size = ftell(file);

@@ -26,6 +26,7 @@
 #define OSRS_MODELS_H
 
 #include "raylib.h"
+#include "osrs_assets.h"
 #include "osrs_binary_io.h"
 #include "osrs_types.h"
 #include "osrs_items.h"
@@ -76,7 +77,7 @@ static Texture2D model_cache_load_atlas(const char* model_path) {
         strncat(atlas_path, ".atlas", sizeof(atlas_path) - strlen(atlas_path) - 1);
     }
 
-    FILE* f = fopen(atlas_path, "rb");
+    FILE* f = osrs_asset_fopen(atlas_path, "rb");
     if (!f) return (Texture2D){0};
 
     uint32_t magic, width, height;
@@ -110,7 +111,7 @@ static Texture2D model_cache_load_atlas(const char* model_path) {
 
 
 static ModelCache* model_cache_load(const char* path) {
-    FILE* f = fopen(path, "rb");
+    FILE* f = osrs_asset_fopen(path, "rb");
     if (!f) {
         fprintf(stderr, "model_cache_load: cannot open %s\n", path);
         return NULL;

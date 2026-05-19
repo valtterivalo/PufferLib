@@ -19,6 +19,7 @@
 #ifndef OSRS_ANIM_H
 #define OSRS_ANIM_H
 
+#include "osrs_assets.h"
 #include "osrs_binary_io.h"
 #include <math.h>
 #include <stdint.h>
@@ -134,7 +135,7 @@ static uint32_t anim_read_u32(const uint8_t** p) {
 }
 
 static AnimCache* anim_cache_load(const char* path) {
-    FILE* f = fopen(path, "rb");
+    FILE* f = osrs_asset_fopen(path, "rb");
     if (!f) {
         fprintf(stderr, "anim_cache_load: cannot open %s\n", path);
         return NULL;

@@ -88,7 +88,7 @@ static inline int osrs_asset_exists(const char* path) {
 static inline OsrsAssetBytes osrs_asset_read_all(const char* path) {
     OsrsAssetBytes out = {0};
     const char* full_path = osrs_asset_path(path);
-    FILE* f = fopen(full_path, "rb");
+    FILE* f = osrs_asset_fopen(path, "rb");
     if (!f) return out;
     if (fseek(f, 0, SEEK_END) != 0) {
         fprintf(stderr, "%s: fseek end failed\n", full_path);

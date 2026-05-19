@@ -20,6 +20,8 @@
 #include <string.h>
 #include <stdio.h>
 
+#include "osrs_assets.h"
+
 #define COLLISION_NONE                   0x000000
 #define COLLISION_WALL_NORTH_WEST        0x000001
 #define COLLISION_WALL_NORTH             0x000002
@@ -304,7 +306,7 @@ static inline int collision_traversable_step(const CollisionMap* map, int height
 
 /** Load collision map from a binary file. Returns NULL on failure. */
 static inline CollisionMap* collision_map_load(const char* path) {
-    FILE* f = fopen(path, "rb");
+    FILE* f = osrs_asset_fopen(path, "rb");
     if (f == NULL) {
         fprintf(stderr, "collision_map_load: cannot open %s\n", path);
         return NULL;

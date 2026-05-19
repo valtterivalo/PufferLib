@@ -26,6 +26,14 @@ int main(void) {
 
     unsetenv("OSRS_ASSET_ROOT");
     assert(osrs_asset_exists("sprites/gui/compass.png"));
+    FILE* asset = osrs_asset_fopen("sprites/gui/compass.png", "rb");
+    assert(asset);
+    fclose(asset);
+
+    FILE* rooted_asset = osrs_asset_fopen("ocean/osrs/data/sprites/gui/compass.png", "rb");
+    assert(rooted_asset);
+    fclose(rooted_asset);
+
     OsrsAssetBytes bytes = osrs_asset_read_all("sprites/gui/compass.png");
     assert(bytes.data);
     assert(bytes.size > 0);
