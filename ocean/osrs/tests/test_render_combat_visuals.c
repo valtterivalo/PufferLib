@@ -1,5 +1,6 @@
 #include "../osrs_combat_visuals.h"
 #include "../osrs_anim.h"
+#include "../data/npc_models.h"
 #include <assert.h>
 #include <stdint.h>
 
@@ -134,9 +135,54 @@ static void test_projectile_profiles_match_runec_visual_rows(void) {
     assert(jad_magic->projectile.travel_spotanim_id == 445);
     assert(jad_magic->projectile.impact_spotanim_id == 446);
 
-    assert(osrs_combat_visual_find_npc_id(7706, ATTACK_STYLE_MAGIC) == NULL);
-    assert(osrs_combat_visual_find_npc_id(7698, ATTACK_STYLE_RANGED) == NULL);
-    assert(osrs_combat_visual_find_npc_id(7699, ATTACK_STYLE_MAGIC) == NULL);
+    const OsrsCombatVisualRow* inferno_ranger =
+        osrs_combat_visual_find_npc_id(7698, ATTACK_STYLE_RANGED);
+    assert(inferno_ranger);
+    assert(inferno_ranger->attack_anim_id == INF_GEN_ANIM_RANGER_ATTACK);
+    assert(inferno_ranger->projectile.travel_spotanim_id == 1377);
+    assert(inferno_ranger->projectile.impact_spotanim_id == 1378);
+    assert(inferno_ranger->projectile.projectile_model_id == INF_GFX_1377_MODEL);
+
+    const OsrsCombatVisualRow* inferno_mager =
+        osrs_combat_visual_find_npc_id(7699, ATTACK_STYLE_MAGIC);
+    assert(inferno_mager);
+    assert(inferno_mager->attack_anim_id == INF_GEN_ANIM_MAGER_ATTACK);
+    assert(inferno_mager->projectile.travel_spotanim_id == 1379);
+    assert(inferno_mager->projectile.impact_spotanim_id == 1380);
+    assert(inferno_mager->projectile.projectile_model_id == INF_GFX_1379_MODEL);
+    assert(inferno_mager->projectile.projectile_anim_id == INF_GFX_1379_ANIM);
+
+    const OsrsCombatVisualRow* inferno_jad_magic =
+        osrs_combat_visual_find_npc_id(7700, ATTACK_STYLE_MAGIC);
+    assert(inferno_jad_magic);
+    assert(inferno_jad_magic->attack_anim_id == INF_GEN_ANIM_JALTOK_JAD_ATTACK_MAGIC);
+    assert(inferno_jad_magic->projectile.travel_spotanim_id == 448);
+    assert(inferno_jad_magic->projectile.projectile_model_id == INF_GFX_448_MODEL);
+
+    const OsrsCombatVisualRow* inferno_jad_ranged =
+        osrs_combat_visual_find_npc_id(7700, ATTACK_STYLE_RANGED);
+    assert(inferno_jad_ranged);
+    assert(inferno_jad_ranged->attack_anim_id == INF_GEN_ANIM_JALTOK_JAD_ATTACK_RANGED);
+    assert(inferno_jad_ranged->projectile.travel_spotanim_id == 451);
+    assert(inferno_jad_ranged->projectile.projectile_model_id == INF_GFX_451_MODEL);
+    assert(inferno_jad_ranged->projectile.projectile_anim_id == INF_GFX_451_ANIM);
+
+    const OsrsCombatVisualRow* inferno_zuk =
+        osrs_combat_visual_find_npc_id(7706, ATTACK_STYLE_MAGIC);
+    assert(inferno_zuk);
+    assert(inferno_zuk->attack_anim_id == INF_GEN_ANIM_TZKAL_ZUK_ATTACK);
+    assert(inferno_zuk->projectile.travel_spotanim_id == 1375);
+    assert(inferno_zuk->projectile.projectile_model_id == INF_GFX_1375_MODEL);
+    assert(inferno_zuk->projectile.projectile_anim_id == INF_GFX_1375_ANIM);
+
+    const OsrsCombatVisualRow* inferno_zuk_healer =
+        osrs_combat_visual_find_npc_id(7708, ATTACK_STYLE_MAGIC);
+    assert(inferno_zuk_healer);
+    assert(inferno_zuk_healer->attack_anim_id == OSRS_COMBAT_VISUAL_NO_ANIMATION);
+    assert(inferno_zuk_healer->projectile.travel_spotanim_id == 660);
+    assert(inferno_zuk_healer->projectile.impact_spotanim_id == 659);
+    assert(inferno_zuk_healer->projectile.projectile_model_id == INF_GFX_660_MODEL);
+    assert(inferno_zuk_healer->projectile.projectile_anim_id == INF_GFX_660_ANIM);
 }
 
 static void test_spell_profiles_match_runec_visual_rows(void) {

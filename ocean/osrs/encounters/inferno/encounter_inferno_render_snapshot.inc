@@ -233,6 +233,14 @@ static void* inf_get_log(EncounterState* state) {
     return inf_get_log_ctx(state, (EncounterContext*)inf_legacy_context());
 }
 
+static const OsrsCombatVisualRow* inf_npc_combat_visual_row(
+    InfNPCType type, int style
+) {
+    assert(type >= 0 && type < INF_NUM_NPC_TYPES);
+    return osrs_combat_visual_find_npc_id(
+        (uint16_t)INF_NPC_DEF_IDS[type], (AttackStyle)style);
+}
+
 
 
 static void inf_render_post_tick_ctx(
@@ -306,24 +314,29 @@ static void inf_render_post_tick_ctx(
         int duration = timing.visual_duration_ticks * 30;
         int start_delay = timing.visual_start_delay_ticks * 30;
 
-        /* per-NPC-type projectile GFX model ID */
+        const OsrsCombatVisualRow* npc_visual =
+            inf_npc_combat_visual_row(npc->type, actual_style);
         uint32_t proj_model_id = 0;
-        switch (npc->type) {
-            case INF_NPC_BAT:        proj_model_id = INF_GFX_1374_MODEL; break;
-            case INF_NPC_BLOB:       proj_model_id = (actual_style == ATTACK_STYLE_RANGED) ? INF_GFX_1378_MODEL : INF_GFX_1380_MODEL; break;
-            case INF_NPC_BLOB_RANGE: proj_model_id = INF_GFX_1379_MODEL; break;
-            case INF_NPC_BLOB_MAGE:  proj_model_id = INF_GFX_1381_MODEL; break;
-            case INF_NPC_BLOB_MELEE: proj_model_id = INF_GFX_1382_MODEL; break;
-            case INF_NPC_RANGER:     proj_model_id = INF_GFX_1377_MODEL; break;
-            case INF_NPC_MAGER:      proj_model_id = INF_GFX_1376_MODEL; break;
-            case INF_NPC_JAD:
-                proj_model_id = (actual_style == ATTACK_STYLE_MAGIC)
-                    ? INF_GFX_448_MODEL
-                    : INF_GFX_451_MODEL;
-                break;
-            case INF_NPC_ZUK:        proj_model_id = INF_GFX_1375_MODEL; break;
-            case INF_NPC_HEALER_ZUK: proj_model_id = INF_GFX_660_MODEL; break;
-            default: break;
+        int proj_anim_id = OSRS_COMBAT_PROJECTILE_MISSING;
+        int impact_gfx_id = 0;
+        if (npc_visual) {
+            if (npc_visual->projectile.projectile_model_id > 0)
+                proj_model_id = (uint32_t)npc_visual->projectile.projectile_model_id;
+            if (npc_visual->projectile.projectile_anim_id > 0)
+                proj_anim_id = npc_visual->projectile.projectile_anim_id;
+            if (npc_visual->projectile.impact_spotanim_id > 0)
+                impact_gfx_id = npc_visual->projectile.impact_spotanim_id;
+        }
+
+        if (proj_model_id == 0) {
+            switch (npc->type) {
+                case INF_NPC_BAT:        proj_model_id = INF_GFX_1374_MODEL; break;
+                case INF_NPC_BLOB:       proj_model_id = (actual_style == ATTACK_STYLE_RANGED) ? INF_GFX_1378_MODEL : INF_GFX_1380_MODEL; break;
+                case INF_NPC_BLOB_RANGE: proj_model_id = INF_GFX_1379_MODEL; break;
+                case INF_NPC_BLOB_MAGE:  proj_model_id = INF_GFX_1381_MODEL; break;
+                case INF_NPC_BLOB_MELEE: proj_model_id = INF_GFX_1382_MODEL; break;
+                default: break;
+            }
         }
 
         /* NPC-specific flight overrides */
@@ -368,7 +381,8 @@ static void inf_render_post_tick_ctx(
             continue;
         }
 
-        int impact_gfx_id = (npc->type == INF_NPC_HEALER_ZUK) ? INF_GFX_659_ID : 0;
+        if (npc->type == INF_NPC_HEALER_ZUK && impact_gfx_id <= 0)
+            impact_gfx_id = INF_GFX_659_ID;
         int pi = encounter_emit_projectile(ov,
             npc->x, npc->y, target_x, target_y,
             proj_style, (int)s->damage_received_this_tick,
@@ -383,8 +397,8 @@ static void inf_render_post_tick_ctx(
             encounter_set_projectile_motion_mode(
                 ov, pi, ENCOUNTER_PROJECTILE_MOTION_TARGET_ANCHORED);
 
-        if (npc->type == INF_NPC_JAD && actual_style == ATTACK_STYLE_RANGED)
-            encounter_set_projectile_animation(ov, pi, INF_GFX_451_ANIM);
+        if (proj_anim_id > 0)
+            encounter_set_projectile_animation(ov, pi, proj_anim_id);
 
     }
 
@@ -392,13 +406,29 @@ static void inf_render_post_tick_ctx(
         InfPendingSpark* spark = &s->pending_sparks[i];
         if (!spark->active || spark->visual_emitted) continue;
 
-        encounter_emit_projectile(
+        const OsrsCombatVisualRow* spark_visual =
+            inf_npc_combat_visual_row(INF_NPC_HEALER_ZUK, ATTACK_STYLE_MAGIC);
+        uint32_t spark_model_id = INF_GFX_660_MODEL;
+        int spark_anim_id = OSRS_COMBAT_PROJECTILE_MISSING;
+        int spark_impact_gfx_id = INF_GFX_659_ID;
+        if (spark_visual) {
+            if (spark_visual->projectile.projectile_model_id > 0)
+                spark_model_id = (uint32_t)spark_visual->projectile.projectile_model_id;
+            if (spark_visual->projectile.projectile_anim_id > 0)
+                spark_anim_id = spark_visual->projectile.projectile_anim_id;
+            if (spark_visual->projectile.impact_spotanim_id > 0)
+                spark_impact_gfx_id = spark_visual->projectile.impact_spotanim_id;
+        }
+
+        int pi = encounter_emit_projectile(
             ov,
             spark->src_x, spark->src_y, spark->x, spark->y,
             encounter_attack_style_to_proj_style(ATTACK_STYLE_MAGIC),
             spark->damage,
             4 * 30, 96, 64, 16, 3.0f, 0, 1, 1,
-            INF_GFX_660_MODEL, INF_GFX_659_ID);
+            spark_model_id, spark_impact_gfx_id);
+        if (spark_anim_id > 0)
+            encounter_set_projectile_animation(ov, pi, spark_anim_id);
         spark->visual_emitted = 1;
     }
 

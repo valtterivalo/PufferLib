@@ -1,0 +1,7 @@
+kind|key|style|attack_anim|launch_spotanim|travel_spotanim|impact_spotanim|projectile_model|projectile_anim|hit_delay|client_delay|proj_start_height|proj_end_height|proj_delay|proj_angle|proj_length_adjustment|proj_progress|proj_step_multiplier|note
+npc|7698|ranged|7605|-|1377|1378|33013|-|-|-|-|-|-|-|-|-|-|inferno:jal_xil_ranged
+npc|7699|magic|7610|-|1379|1380|33016|7614|-|-|-|-|-|-|-|-|-|inferno:jal_zek_magic
+npc|7700|magic|7592|-|448|-|9337|2659|-|-|-|-|-|-|-|-|-|inferno:jaltok_jad_magic
+npc|7700|ranged|7593|-|451|-|9342|2660|-|-|-|-|-|-|-|-|-|inferno:jaltok_jad_ranged
+npc|7706|magic|7566|-|1375|-|33006|7571|-|-|-|-|-|-|-|-|-|inferno:tzkal_zuk_magic
+npc|7708|magic|-|-|660|659|14759|3942|-|-|-|-|-|-|-|-|-|inferno:jal_mejjak_magic

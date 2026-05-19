@@ -98,12 +98,14 @@ ANIMATION_ARGS=(
 )
 RUNEC_ITEM_RENDER_MAP="$PROJECT_ROOT/refs/RuneC/data/models/item_render.map"
 RUNEC_COMBAT_VISUALS="$PROJECT_ROOT/refs/RuneC/data/defs/combat_visuals.tsv"
+LOCAL_COMBAT_VISUALS="$PROJECT_ROOT/ocean/osrs/tools/combat_visuals_extra.tsv"
 if [ -f "$RUNEC_ITEM_RENDER_MAP" ]; then
     ANIMATION_ARGS+=(--item-render-map "$RUNEC_ITEM_RENDER_MAP")
 fi
 if [ -f "$RUNEC_COMBAT_VISUALS" ]; then
     ANIMATION_ARGS+=(--combat-visuals "$RUNEC_COMBAT_VISUALS")
 fi
+ANIMATION_ARGS+=(--combat-visuals "$LOCAL_COMBAT_VISUALS")
 python export_animations.py \
     "${ANIMATION_ARGS[@]}"
 

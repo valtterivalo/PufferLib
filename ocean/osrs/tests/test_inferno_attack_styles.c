@@ -4302,6 +4302,9 @@ static void test_zuk_spark_render_matches_pending_spark_state(void) {
     ASSERT_INT_EQ("spark target x", ov.projectiles[0].dst_x, state.player.x);
     ASSERT_INT_EQ("spark target y", ov.projectiles[0].dst_y, state.player.y);
     ASSERT_INT_EQ("spark visual duration", ov.projectiles[0].duration_ticks, 4 * 30);
+    ASSERT_INT_EQ("spark projectile model", ov.projectiles[0].model_id, INF_GFX_660_MODEL);
+    ASSERT_INT_EQ("spark projectile animation", ov.projectiles[0].anim_id, INF_GFX_660_ANIM);
+    ASSERT_INT_EQ("spark impact spotanim", ov.projectiles[0].impact_gfx_id, 659);
     ASSERT_INT_EQ("spark render marks visual emitted",
         state.pending_sparks[0].visual_emitted, 1);
 }
@@ -6547,6 +6550,12 @@ static void test_inferno_npc_projectile_render_uses_reference_visual_timing(void
         inf_npc_projectile_timing(INF_NPC_MAGER, ATTACK_STYLE_MAGIC, mager_dist);
 
     ASSERT_INT_EQ("mager projectile count", mager_ov.projectile_count, 1);
+    ASSERT_INT_EQ("mager projectile model",
+        mager_ov.projectiles[0].model_id, INF_GFX_1379_MODEL);
+    ASSERT_INT_EQ("mager projectile animation",
+        mager_ov.projectiles[0].anim_id, INF_GFX_1379_ANIM);
+    ASSERT_INT_EQ("mager impact spotanim",
+        mager_ov.projectiles[0].impact_gfx_id, 1380);
     ASSERT_INT_EQ("mager projectile tracks player", mager_ov.projectiles[0].tracks_target, 1);
     ASSERT_INT_EQ("mager projectile target kind",
         mager_ov.projectiles[0].target_kind, ENCOUNTER_PROJECTILE_TARGET_PLAYER);
@@ -6574,6 +6583,10 @@ static void test_inferno_npc_projectile_render_uses_reference_visual_timing(void
         inf_npc_projectile_timing(INF_NPC_RANGER, ATTACK_STYLE_RANGED, ranger_dist);
 
     ASSERT_INT_EQ("ranger projectile count", ranger_ov.projectile_count, 1);
+    ASSERT_INT_EQ("ranger projectile model",
+        ranger_ov.projectiles[0].model_id, INF_GFX_1377_MODEL);
+    ASSERT_INT_EQ("ranger impact spotanim",
+        ranger_ov.projectiles[0].impact_gfx_id, 1378);
     ASSERT_INT_EQ("ranger projectile tracks player", ranger_ov.projectiles[0].tracks_target, 1);
     ASSERT_INT_EQ("ranger projectile target kind",
         ranger_ov.projectiles[0].target_kind, ENCOUNTER_PROJECTILE_TARGET_PLAYER);
@@ -6604,6 +6617,43 @@ static void test_inferno_npc_projectile_render_tracks_target_npc_slot(void) {
     ASSERT_INT_EQ("shield-target projectile target kind",
         ov.projectiles[0].target_kind, ENCOUNTER_PROJECTILE_TARGET_NPC_SLOT);
     ASSERT_INT_EQ("shield-target projectile target slot", ov.projectiles[0].target_npc_slot, 1);
+}
+
+static void test_inferno_zuk_projectile_render_uses_combat_visual_rows(void) {
+    printf("--- inferno zuk projectile render uses combat visual rows ---\n");
+
+    InfernoState state;
+    init_zuk_timing_state(&state);
+    state.npcs[0].attacked_this_tick = 1;
+    state.npcs[0].attack_style_this_tick = ATTACK_STYLE_NONE;
+
+    EncounterOverlay ov;
+    memset(&ov, 0, sizeof(ov));
+    inf_render_post_tick((EncounterState*)&state, &ov);
+
+    ASSERT_INT_EQ("zuk projectile count", ov.projectile_count, 1);
+    ASSERT_INT_EQ("zuk projectile model", ov.projectiles[0].model_id, INF_GFX_1375_MODEL);
+    ASSERT_INT_EQ("zuk projectile animation", ov.projectiles[0].anim_id, INF_GFX_1375_ANIM);
+
+    InfernoState healer_state;
+    init_zuk_timing_state(&healer_state);
+    healer_state.npcs[2] = make_test_npc(
+        INF_NPC_HEALER_ZUK, 28, 49, INF_NPC_STATS[INF_NPC_HEALER_ZUK].size);
+    healer_state.npcs[2].active = 1;
+    healer_state.npcs[2].attacked_this_tick = 1;
+    healer_state.npcs[2].attack_style_this_tick = ATTACK_STYLE_MAGIC;
+    healer_state.npcs[2].attack_visual_target = 0;
+
+    EncounterOverlay healer_ov;
+    memset(&healer_ov, 0, sizeof(healer_ov));
+    inf_render_post_tick((EncounterState*)&healer_state, &healer_ov);
+
+    ASSERT_INT_EQ("healer projectile count", healer_ov.projectile_count, 1);
+    ASSERT_INT_EQ("healer projectile model",
+        healer_ov.projectiles[0].model_id, INF_GFX_660_MODEL);
+    ASSERT_INT_EQ("healer projectile animation",
+        healer_ov.projectiles[0].anim_id, INF_GFX_660_ANIM);
+    ASSERT_INT_EQ("healer impact spotanim", healer_ov.projectiles[0].impact_gfx_id, 659);
 }
 
 static void test_player_projectile_render_uses_stored_reference_timing(void) {
@@ -7583,6 +7633,7 @@ int main(void) {
     test_jad_projectile_long_distance_visual_duration_uses_reference_formula();
     test_inferno_npc_projectile_render_uses_reference_visual_timing();
     test_inferno_npc_projectile_render_tracks_target_npc_slot();
+    test_inferno_zuk_projectile_render_uses_combat_visual_rows();
     test_player_projectile_render_uses_stored_reference_timing();
     test_magic_splash_landing_keeps_spell_visual_context();
     test_npc_overkill_hit_caps_splat_hp_and_damage_stats();

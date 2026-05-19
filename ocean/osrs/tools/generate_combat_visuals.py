@@ -1,4 +1,4 @@
-"""Generate osrs_combat_visuals_generated.h from RuneC combat visuals."""
+"""Generate osrs_combat_visuals_generated.h from combat visual TSVs."""
 
 import argparse
 import csv
@@ -118,7 +118,7 @@ def write_header(rows: list[dict[str, str]], output: Path) -> None:
         "\n".join([
             "/**",
             " * @file osrs_combat_visuals_generated.h",
-            " * @brief AUTO-GENERATED combat visuals from RuneC combat_visuals.tsv",
+            " * @brief AUTO-GENERATED combat visuals from RuneC plus local overlays",
             " *",
             " * DO NOT EDIT. Regenerate with:",
             " *   python3 ocean/osrs/tools/generate_combat_visuals.py",
@@ -148,12 +148,22 @@ def main() -> None:
         type=Path,
     )
     parser.add_argument(
+        "--extra-tsv",
+        action="append",
+        default=[Path("ocean/osrs/tools/combat_visuals_extra.tsv")],
+        type=Path,
+    )
+    parser.add_argument(
         "--output",
         default="ocean/osrs/osrs_combat_visuals_generated.h",
         type=Path,
     )
     args = parser.parse_args()
-    write_header(read_rows(args.tsv), args.output)
+    rows = read_rows(args.tsv)
+    for path in args.extra_tsv:
+        if path.is_file():
+            rows.extend(read_rows(path))
+    write_header(rows, args.output)
 
 
 if __name__ == "__main__":

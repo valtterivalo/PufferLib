@@ -684,8 +684,10 @@ def main() -> None:
     )
     parser.add_argument(
         "--combat-visuals",
+        action="append",
+        default=[],
         type=Path,
-        help="include attack and projectile sequences from RuneC combat_visuals.tsv",
+        help="include attack and projectile sequences from combat_visuals.tsv",
     )
     parser.add_argument(
         "--extra-sequences",
@@ -711,10 +713,13 @@ def main() -> None:
         needed |= item_render_ids
         print(f"including {len(item_render_ids)} item render BAS sequence IDs")
 
-    if args.combat_visuals:
-        combat_visual_ids = read_combat_visual_sequence_ids(args.combat_visuals)
+    for combat_visuals in args.combat_visuals:
+        combat_visual_ids = read_combat_visual_sequence_ids(combat_visuals)
         needed |= combat_visual_ids
-        print(f"including {len(combat_visual_ids)} combat visual sequence IDs")
+        print(
+            f"including {len(combat_visual_ids)} combat visual sequence IDs "
+            f"from {combat_visuals}"
+        )
 
     extra_ids = parse_extra_sequence_ids(args.extra_sequences)
     if extra_ids:
