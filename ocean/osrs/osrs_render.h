@@ -5660,6 +5660,10 @@ void pvp_render(OsrsEnv* env) {
     render_populate_entities(rc, env);
 
     render_handle_input(rc, env);
+    float frame_dt = GetFrameTime();
+    model_cache_update_texture_anims(rc->model_cache, frame_dt);
+    model_cache_update_texture_anims(rc->npc_model_cache, frame_dt);
+    model_cache_update_texture_anims(rc->projectile_model_cache, frame_dt);
 
     /* inventory mouse interaction (clicks, drags) — runs every frame.
        gui functions need the full Player* (inventory, stats, etc.) */

@@ -63,6 +63,24 @@ static int model_file_contains_model(const char* path, uint32_t model_id) {
     return found;
 }
 
+static void test_equipment_texture_animation_rows_load(void) {
+    ModelCache cache = {0};
+    model_cache_load_texture_anims(&cache, OSRS_ASSET("equipment.models"));
+
+    assert(cache.texture_anim_count == 22);
+    assert(cache.texture_anims);
+    assert(cache.texture_anims[0].texture_id == 17);
+    assert(cache.texture_anims[0].x == 256);
+    assert(cache.texture_anims[0].y == 384);
+    assert(cache.texture_anims[0].w == 128);
+    assert(cache.texture_anims[0].h == 384);
+    assert(cache.texture_anims[0].direction == 1);
+    assert(cache.texture_anims[0].speed == 2);
+    assert(cache.texture_anims[0].pad == 128);
+
+    free(cache.texture_anims);
+}
+
 static void assert_runtime_model_present(int item_index) {
     uint32_t model_id = wield_model_for_item(item_index);
     assert(model_id != ITEM_RENDER_MODEL_MISSING);
@@ -198,6 +216,8 @@ static const uint8_t BUDGET_RANGE_FAST_LOADOUT[NUM_GEAR_SLOTS] = {
 };
 
 int main(void) {
+    test_equipment_texture_animation_rows_load();
+
     assert(hide_mask_for_item(ITEM_TWISTED_BOW) == 0);
     assert(hide_mask_for_item(ITEM_KODAI_WAND) == 0);
     assert(hide_mask_for_item(ITEM_CRYSTAL_HELM) ==

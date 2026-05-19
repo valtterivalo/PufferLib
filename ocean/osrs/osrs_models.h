@@ -40,6 +40,16 @@
 #define MDL3_MAGIC 0x4D444C33  /* "MDL3" */
 #define MDL4_MAGIC 0x4D444C34  /* "MDL4" */
 #define ATLS_MAGIC 0x41544C53  /* "ATLS" */
+#define TANM_MAGIC 0x4D4E4154  /* "TANM" */
+#define TANM_VERSION 1
+
+typedef struct {
+    uint32_t texture_id;
+    uint16_t x, y, w, h;
+    uint8_t direction;
+    uint8_t speed;
+    uint16_t pad;
+} ModelTextureAnimRow;
 
 typedef struct {
     uint32_t model_id;
@@ -62,19 +72,135 @@ typedef struct {
     OsrsModel* models;
     int count;
     Texture2D atlas_texture;
+    unsigned char* atlas_base_pixels;
+    unsigned char* atlas_pixels;
+    ModelTextureAnimRow* texture_anims;
+    int atlas_width;
+    int atlas_height;
+    int texture_anim_count;
+    float texture_anim_ticks;
     int has_atlas;
 } ModelCache;
 
+static int model_cache_companion_path(
+    char* out,
+    size_t cap,
+    const char* path,
+    const char* suffix
+) {
+    if (!out || cap == 0 || !path || !suffix) return 0;
+    const char* dot = strrchr(path, '.');
+    size_t stem_len = dot ? (size_t)(dot - path) : strlen(path);
+    int n = snprintf(out, cap, "%.*s%s", (int)stem_len, path, suffix);
+    return n > 0 && (size_t)n < cap;
+}
 
-static Texture2D model_cache_load_atlas(const char* model_path) {
+static void model_cache_load_texture_anims(ModelCache* cache, const char* model_path) {
+    if (!cache || !model_path) return;
+
+    char tanm_path[1024];
+    if (!model_cache_companion_path(tanm_path, sizeof(tanm_path), model_path, ".tanim"))
+        return;
+
+    FILE* f = osrs_asset_fopen(tanm_path, "rb");
+    if (!f) return;
+
+    uint32_t magic = 0;
+    uint32_t version = 0;
+    uint32_t count = 0;
+    osrs_read_exact(f, &magic, sizeof(magic), 1, tanm_path, "tanim magic");
+    osrs_read_exact(f, &version, sizeof(version), 1, tanm_path, "tanim version");
+    osrs_read_exact(f, &count, sizeof(count), 1, tanm_path, "tanim count");
+    if (magic != TANM_MAGIC || version != TANM_VERSION) {
+        fprintf(stderr, "model_cache_load: bad texture anim file %s\n", tanm_path);
+        abort();
+    }
+
+    cache->texture_anims = (ModelTextureAnimRow*)osrs_calloc_or_abort(
+        count, sizeof(ModelTextureAnimRow), "model texture animation rows");
+    cache->texture_anim_count = (int)count;
+
+    for (uint32_t i = 0; i < count; i++) {
+        ModelTextureAnimRow* row = &cache->texture_anims[i];
+        osrs_read_exact(f, &row->texture_id, sizeof(row->texture_id), 1,
+            tanm_path, "tanim texture id");
+        osrs_read_exact(f, &row->x, sizeof(row->x), 1, tanm_path, "tanim x");
+        osrs_read_exact(f, &row->y, sizeof(row->y), 1, tanm_path, "tanim y");
+        osrs_read_exact(f, &row->w, sizeof(row->w), 1, tanm_path, "tanim width");
+        osrs_read_exact(f, &row->h, sizeof(row->h), 1, tanm_path, "tanim height");
+        osrs_read_exact(f, &row->direction, sizeof(row->direction), 1,
+            tanm_path, "tanim direction");
+        osrs_read_exact(f, &row->speed, sizeof(row->speed), 1, tanm_path, "tanim speed");
+        osrs_read_exact(f, &row->pad, sizeof(row->pad), 1, tanm_path, "tanim pad");
+    }
+    fclose(f);
+
+    fprintf(stderr, "model_cache_load: loaded %d texture anim rows from %s\n",
+        cache->texture_anim_count, tanm_path);
+}
+
+static void model_cache_update_texture_anims(ModelCache* cache, float dt) {
+    if (!cache || !cache->atlas_pixels || !cache->atlas_base_pixels ||
+            cache->atlas_texture.id <= 0 || cache->texture_anim_count <= 0) {
+        return;
+    }
+
+    cache->texture_anim_ticks += dt * 50.0f;
+    size_t total = (size_t)cache->atlas_width * (size_t)cache->atlas_height * 4;
+    memcpy(cache->atlas_pixels, cache->atlas_base_pixels, total);
+
+    for (int r = 0; r < cache->texture_anim_count; r++) {
+        ModelTextureAnimRow* row = &cache->texture_anims[r];
+        if (row->w == 0 || row->h == 0 || row->speed == 0) continue;
+        if ((int)row->x + (int)row->w > cache->atlas_width ||
+                (int)row->y + (int)row->h > cache->atlas_height) {
+            continue;
+        }
+
+        int shift = (int)(cache->texture_anim_ticks * (float)row->speed);
+        if (row->direction == 1 || row->direction == 3) {
+            int pad = row->pad;
+            if (pad * 2 >= row->h) pad = 0;
+            int center_h = row->h - pad * 2;
+            if (center_h <= 0) center_h = row->h;
+            shift %= center_h;
+            if (row->direction == 1) shift = -shift;
+            for (int y = 0; y < row->h; y++) {
+                int sy = (y - pad + shift) % center_h;
+                if (sy < 0) sy += center_h;
+                sy += pad;
+                for (int x = 0; x < row->w; x++) {
+                    size_t dst = ((size_t)(row->y + y) * (size_t)cache->atlas_width +
+                        (size_t)(row->x + x)) * 4;
+                    size_t src = ((size_t)(row->y + sy) * (size_t)cache->atlas_width +
+                        (size_t)(row->x + x)) * 4;
+                    memcpy(&cache->atlas_pixels[dst], &cache->atlas_base_pixels[src], 4);
+                }
+            }
+        } else if (row->direction == 2 || row->direction == 4) {
+            shift %= row->w;
+            if (row->direction == 2) shift = -shift;
+            for (int y = 0; y < row->h; y++) {
+                for (int x = 0; x < row->w; x++) {
+                    int sx = (x + shift) % row->w;
+                    if (sx < 0) sx += row->w;
+                    size_t dst = ((size_t)(row->y + y) * (size_t)cache->atlas_width +
+                        (size_t)(row->x + x)) * 4;
+                    size_t src = ((size_t)(row->y + y) * (size_t)cache->atlas_width +
+                        (size_t)(row->x + sx)) * 4;
+                    memcpy(&cache->atlas_pixels[dst], &cache->atlas_base_pixels[src], 4);
+                }
+            }
+        }
+    }
+
+    UpdateTexture(cache->atlas_texture, cache->atlas_pixels);
+}
+
+static Texture2D model_cache_load_atlas(ModelCache* cache, const char* model_path) {
     char atlas_path[1024];
-    strncpy(atlas_path, model_path, sizeof(atlas_path) - 1);
-    atlas_path[sizeof(atlas_path) - 1] = '\0';
-    char* dot = strrchr(atlas_path, '.');
-    if (dot) {
-        strcpy(dot, ".atlas");
-    } else {
-        strncat(atlas_path, ".atlas", sizeof(atlas_path) - strlen(atlas_path) - 1);
+    if (!model_cache_companion_path(atlas_path, sizeof(atlas_path), model_path, ".atlas")) {
+        return (Texture2D){0};
     }
 
     FILE* f = osrs_asset_fopen(atlas_path, "rb");
@@ -103,8 +229,19 @@ static Texture2D model_cache_load_atlas(const char* model_path) {
         .format = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8,
     };
     Texture2D texture = LoadTextureFromImage(image);
-    free(pixels);
     if (texture.id > 0) SetTextureFilter(texture, TEXTURE_FILTER_POINT);
+    if (texture.id > 0 && cache) {
+        cache->atlas_width = (int)width;
+        cache->atlas_height = (int)height;
+        cache->atlas_base_pixels = (unsigned char*)osrs_malloc_or_abort(
+            pixel_count, "model atlas base pixels");
+        cache->atlas_pixels = (unsigned char*)osrs_malloc_or_abort(
+            pixel_count, "model atlas working pixels");
+        memcpy(cache->atlas_base_pixels, pixels, pixel_count);
+        memcpy(cache->atlas_pixels, pixels, pixel_count);
+        model_cache_load_texture_anims(cache, model_path);
+    }
+    free(pixels);
     fprintf(stderr, "model_cache_load: loaded atlas %ux%u from %s\n", width, height, atlas_path);
     return texture;
 }
@@ -141,7 +278,7 @@ static ModelCache* model_cache_load(const char* path) {
         count, sizeof(OsrsModel), "model entries");
     cache->count = (int)count;
     if (has_texcoords) {
-        cache->atlas_texture = model_cache_load_atlas(path);
+        cache->atlas_texture = model_cache_load_atlas(cache, path);
         cache->has_atlas = cache->atlas_texture.id > 0;
         if (!cache->has_atlas) {
             fprintf(stderr, "model_cache_load: MDL3 model set requires a sibling .atlas file: %s\n", path);
@@ -397,6 +534,9 @@ static void model_cache_free(ModelCache* cache) {
         free(cache->models[i].face_alpha_labels);
     }
     if (cache->atlas_texture.id > 0) UnloadTexture(cache->atlas_texture);
+    free(cache->atlas_base_pixels);
+    free(cache->atlas_pixels);
+    free(cache->texture_anims);
     free(cache->models);
     free(cache);
 }
