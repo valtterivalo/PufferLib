@@ -767,6 +767,7 @@ static void inf_tick_player_ctx(
                     /* blowpipe spec: 2x accuracy, 1.5x max hit, heal 50% of damage */
                     if (!encounter_use_spec(&s->player, BLOWPIPE_SPEC_COST)) abort();
                     osrs_spec_disarm(&s->player.spec_armed);
+                    s->player.used_special_this_tick = 1;
                     const InfNPCStats* ns = &INF_NPC_STATS[target_npc->type];
                     int base_att_roll = ls->eff_level * (ls->attack_bonus + 64);
                     total_dmg = osrs_blowpipe_spec_resolve(

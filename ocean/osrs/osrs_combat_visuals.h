@@ -138,6 +138,7 @@ enum {
     OSRS_PROJECTILE_ANIM_BARRAGE = 1964,
     OSRS_PROJECTILE_ANIM_DRAGON_ARROW = 6622,
     OSRS_PROJECTILE_ANIM_DRAGON_DART = 6622,
+    OSRS_COMBAT_PROJECTILE_SEQUENCE_MAX = 8,
 };
 
 #include "osrs_combat_visuals_generated.h"
@@ -152,6 +153,12 @@ typedef struct {
     uint16_t projectile_item_id;
     OsrsCombatProjectileVisual visual;
 } OsrsCombatWeaponProjectileDefault;
+
+typedef struct {
+    OsrsCombatProjectileProfile projectile;
+    int16_t sequence_index;
+    int16_t sequence_count;
+} OsrsCombatProjectileSequencePart;
 
 static const OsrsCombatProjectileProfile OSRS_POWERED_STAFF_PROJECTILE_PROFILE = {
     GFX_TRIDENT_CAST, GFX_TRIDENT_PROJ, GFX_TRIDENT_IMPACT,
@@ -203,7 +210,168 @@ static inline int osrs_combat_visual_row_has_projectile(
         (row->projectile.launch_spotanim_id != OSRS_COMBAT_PROJECTILE_MISSING ||
          row->projectile.travel_spotanim_id != OSRS_COMBAT_PROJECTILE_MISSING ||
          row->projectile.impact_spotanim_id != OSRS_COMBAT_PROJECTILE_MISSING ||
-         row->projectile.projectile_model_id != OSRS_COMBAT_PROJECTILE_MISSING);
+         row->projectile.projectile_model_id != OSRS_COMBAT_PROJECTILE_MISSING ||
+         row->aux_travel_spotanim_id != OSRS_COMBAT_PROJECTILE_MISSING ||
+         row->aux_projectile_model_id != OSRS_COMBAT_PROJECTILE_MISSING);
+}
+
+static inline int osrs_combat_visual_projectile_count(
+    const OsrsCombatVisualRow* row
+) {
+    if (!row || row->projectile.projectile_count < 1) return 1;
+    if (row->projectile.projectile_count > 4) return 4;
+    return row->projectile.projectile_count;
+}
+
+static inline int osrs_combat_visual_show_impact_for_projectile(
+    const OsrsCombatVisualRow* effect,
+    int sequence_index,
+    int sequence_count
+) {
+    if (!effect || !effect->impact_on_last_only) return 1;
+    return sequence_index == sequence_count - 1;
+}
+
+static inline int osrs_combat_projectile_profile_has_timing(
+    const OsrsCombatProjectileProfile* profile
+) {
+    return profile &&
+        profile->projectile_start_height != OSRS_COMBAT_PROJECTILE_MISSING &&
+        profile->projectile_end_height != OSRS_COMBAT_PROJECTILE_MISSING &&
+        profile->projectile_delay != OSRS_COMBAT_PROJECTILE_MISSING &&
+        profile->projectile_angle != OSRS_COMBAT_PROJECTILE_MISSING &&
+        profile->projectile_progress != OSRS_COMBAT_PROJECTILE_MISSING &&
+        profile->projectile_step_multiplier != OSRS_COMBAT_PROJECTILE_MISSING;
+}
+
+static inline int osrs_combat_alt_projectile_profile_has_timing(
+    const OsrsCombatAltProjectileProfile* profile
+) {
+    return profile &&
+        profile->projectile_start_height != OSRS_COMBAT_PROJECTILE_MISSING &&
+        profile->projectile_end_height != OSRS_COMBAT_PROJECTILE_MISSING &&
+        profile->projectile_delay != OSRS_COMBAT_PROJECTILE_MISSING &&
+        profile->projectile_angle != OSRS_COMBAT_PROJECTILE_MISSING &&
+        profile->projectile_progress != OSRS_COMBAT_PROJECTILE_MISSING &&
+        profile->projectile_step_multiplier != OSRS_COMBAT_PROJECTILE_MISSING;
+}
+
+static inline void osrs_combat_projectile_apply_timing(
+    OsrsCombatProjectileProfile* out,
+    const OsrsCombatProjectileProfile* timing
+) {
+    if (!out || !timing) return;
+    out->hit_delay = timing->hit_delay;
+    out->client_delay = timing->client_delay;
+    out->projectile_start_height = timing->projectile_start_height;
+    out->projectile_end_height = timing->projectile_end_height;
+    out->projectile_delay = timing->projectile_delay;
+    out->projectile_angle = timing->projectile_angle;
+    out->projectile_length_adjustment = timing->projectile_length_adjustment;
+    out->projectile_progress = timing->projectile_progress;
+    out->projectile_step_multiplier = timing->projectile_step_multiplier;
+}
+
+static inline void osrs_combat_projectile_apply_alt_timing(
+    OsrsCombatProjectileProfile* out,
+    const OsrsCombatAltProjectileProfile* timing
+) {
+    if (!out || !timing) return;
+    out->projectile_start_height = timing->projectile_start_height;
+    out->projectile_end_height = timing->projectile_end_height;
+    out->projectile_delay = timing->projectile_delay;
+    out->projectile_angle = timing->projectile_angle;
+    out->projectile_length_adjustment = timing->projectile_length_adjustment;
+    out->projectile_progress = timing->projectile_progress;
+    out->projectile_step_multiplier = timing->projectile_step_multiplier;
+}
+
+static inline int osrs_combat_visual_build_projectile_sequence(
+    const OsrsCombatProjectileProfile* base,
+    const OsrsCombatVisualRow* effect,
+    OsrsCombatProjectileSequencePart* out,
+    int capacity
+) {
+    if (!out || capacity < 0) abort();
+    if (!base && !effect) return 0;
+
+    int sequence_count = osrs_combat_visual_projectile_count(effect);
+    int out_count = 0;
+    const OsrsCombatProjectileProfile* timing =
+        effect && osrs_combat_projectile_profile_has_timing(&effect->projectile)
+            ? &effect->projectile
+            : base;
+
+    for (int i = 0; i < sequence_count; i++) {
+        int show_impact =
+            osrs_combat_visual_show_impact_for_projectile(effect, i, sequence_count);
+        int use_alt = i > 0 && effect &&
+            osrs_combat_alt_projectile_profile_has_timing(&effect->alt_projectile);
+
+        if (effect && (
+                effect->aux_travel_spotanim_id != OSRS_COMBAT_PROJECTILE_MISSING ||
+                effect->aux_projectile_model_id != OSRS_COMBAT_PROJECTILE_MISSING)) {
+            if (out_count >= capacity) return -1;
+            OsrsCombatProjectileProfile aux = {
+                .launch_spotanim_id = i == 0
+                    ? effect->projectile.launch_spotanim_id
+                    : OSRS_COMBAT_PROJECTILE_MISSING,
+                .travel_spotanim_id = effect->aux_travel_spotanim_id,
+                .impact_spotanim_id = show_impact
+                    ? effect->aux_impact_spotanim_id
+                    : OSRS_COMBAT_PROJECTILE_MISSING,
+                .projectile_model_id = effect->aux_projectile_model_id,
+                .projectile_anim_id = effect->aux_projectile_anim_id,
+                .hit_delay = OSRS_COMBAT_PROJECTILE_MISSING,
+                .client_delay = OSRS_COMBAT_PROJECTILE_MISSING,
+                .projectile_start_height = OSRS_COMBAT_PROJECTILE_MISSING,
+                .projectile_end_height = OSRS_COMBAT_PROJECTILE_MISSING,
+                .projectile_delay = OSRS_COMBAT_PROJECTILE_MISSING,
+                .projectile_angle = OSRS_COMBAT_PROJECTILE_MISSING,
+                .projectile_length_adjustment = OSRS_COMBAT_PROJECTILE_MISSING,
+                .projectile_progress = OSRS_COMBAT_PROJECTILE_MISSING,
+                .projectile_step_multiplier = OSRS_COMBAT_PROJECTILE_MISSING,
+                .projectile_count = sequence_count,
+            };
+            osrs_combat_projectile_apply_timing(&aux, timing);
+            if (use_alt)
+                osrs_combat_projectile_apply_alt_timing(&aux, &effect->alt_projectile);
+            out[out_count++] = (OsrsCombatProjectileSequencePart){
+                .projectile = aux,
+                .sequence_index = (int16_t)i,
+                .sequence_count = (int16_t)sequence_count,
+            };
+        }
+
+        if (!base) continue;
+        OsrsCombatProjectileProfile primary = *base;
+        if (timing)
+            osrs_combat_projectile_apply_timing(&primary, timing);
+        if (use_alt)
+            osrs_combat_projectile_apply_alt_timing(&primary, &effect->alt_projectile);
+
+        if (effect && i == 0 &&
+                effect->projectile.launch_spotanim_id != OSRS_COMBAT_PROJECTILE_MISSING &&
+                effect->aux_travel_spotanim_id == OSRS_COMBAT_PROJECTILE_MISSING) {
+            primary.launch_spotanim_id = effect->projectile.launch_spotanim_id;
+        } else if (effect && i == 0 &&
+                effect->double_launch_spotanim_id != OSRS_COMBAT_PROJECTILE_MISSING) {
+            primary.launch_spotanim_id = effect->double_launch_spotanim_id;
+        } else if (i > 0) {
+            primary.launch_spotanim_id = OSRS_COMBAT_PROJECTILE_MISSING;
+        }
+        if (!show_impact)
+            primary.impact_spotanim_id = OSRS_COMBAT_PROJECTILE_MISSING;
+        primary.projectile_count = sequence_count;
+
+        if (out_count >= capacity) return -1;
+        out[out_count++] = (OsrsCombatProjectileSequencePart){
+            .projectile = primary,
+            .sequence_index = (int16_t)i,
+            .sequence_count = (int16_t)sequence_count,
+        };
+    }
+    return out_count;
 }
 
 static inline int osrs_combat_visual_style_matches(

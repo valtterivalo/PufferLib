@@ -128,6 +128,21 @@ static void test_projectile_profiles_match_runec_visual_rows(void) {
     assert(blowpipe_special->travel_spotanim_id == OSRS_COMBAT_PROJECTILE_MISSING);
     assert(osrs_combat_visual_ranged_special_projectile_profile(ITEM_TWISTED_BOW) == NULL);
 
+    const OsrsCombatVisualRow* darkbow_special =
+        osrs_combat_visual_find_special_projectile_item_id(
+            OSRS_ITEM_ID_DARK_BOW, ATTACK_STYLE_RANGED);
+    assert(darkbow_special);
+    assert(darkbow_special->attack_anim_id == 426);
+    assert(darkbow_special->projectile.projectile_count == 2);
+    assert(darkbow_special->projectile.projectile_angle == 5);
+    assert(darkbow_special->alt_projectile.projectile_angle == 25);
+    assert(darkbow_special->aux_travel_spotanim_id == 1101);
+    assert(darkbow_special->aux_impact_spotanim_id == 1103);
+    assert(darkbow_special->aux_projectile_model_id == 26393);
+    assert(darkbow_special->aux_projectile_anim_id == 6590);
+    assert(darkbow_special->impact_on_last_only == 1);
+    assert(darkbow_special->double_launch_spotanim_id == 1109);
+
     const OsrsCombatProjectileProfile* trident =
         osrs_combat_visual_magic_projectile_profile(ITEM_TRIDENT_OF_SWAMP);
     assert(trident);
@@ -243,6 +258,55 @@ static void test_projectile_profiles_match_runec_visual_rows(void) {
     assert(vorkath_ranged->projectile.projectile_model_id == 34658);
 }
 
+static void test_projectile_sequence_builder_matches_runec_specials(void) {
+    const OsrsCombatVisualRow* rune_arrow =
+        osrs_combat_visual_find_item_projectile_id(
+            OSRS_ITEM_ID_RUNE_ARROW, ATTACK_STYLE_RANGED);
+    assert(rune_arrow);
+    const OsrsCombatVisualRow* darkbow =
+        osrs_combat_visual_find_special_projectile_item_id(
+            OSRS_ITEM_ID_DARK_BOW, ATTACK_STYLE_RANGED);
+    assert(darkbow);
+
+    OsrsCombatProjectileSequencePart parts[OSRS_COMBAT_PROJECTILE_SEQUENCE_MAX];
+    int count = osrs_combat_visual_build_projectile_sequence(
+        &rune_arrow->projectile, darkbow, parts, OSRS_COMBAT_PROJECTILE_SEQUENCE_MAX);
+    assert(count == 4);
+
+    assert(parts[0].sequence_index == 0);
+    assert(parts[0].sequence_count == 2);
+    assert(parts[0].projectile.travel_spotanim_id == 1101);
+    assert(parts[0].projectile.impact_spotanim_id == OSRS_COMBAT_PROJECTILE_MISSING);
+    assert(parts[0].projectile.projectile_model_id == 26393);
+    assert(parts[0].projectile.projectile_anim_id == 6590);
+    assert(parts[0].projectile.projectile_angle == 5);
+
+    assert(parts[1].sequence_index == 0);
+    assert(parts[1].sequence_count == 2);
+    assert(parts[1].projectile.launch_spotanim_id == 1109);
+    assert(parts[1].projectile.travel_spotanim_id == GFX_RUNE_ARROW);
+    assert(parts[1].projectile.projectile_model_id == OSRS_PROJECTILE_MODEL_ARROW);
+    assert(parts[1].projectile.projectile_angle == 5);
+
+    assert(parts[2].sequence_index == 1);
+    assert(parts[2].sequence_count == 2);
+    assert(parts[2].projectile.travel_spotanim_id == 1101);
+    assert(parts[2].projectile.impact_spotanim_id == 1103);
+    assert(parts[2].projectile.projectile_angle == 25);
+    assert(parts[2].projectile.projectile_length_adjustment == 14);
+    assert(parts[2].projectile.projectile_step_multiplier == 10);
+
+    assert(parts[3].sequence_index == 1);
+    assert(parts[3].sequence_count == 2);
+    assert(parts[3].projectile.launch_spotanim_id == OSRS_COMBAT_PROJECTILE_MISSING);
+    assert(parts[3].projectile.travel_spotanim_id == GFX_RUNE_ARROW);
+    assert(parts[3].projectile.projectile_model_id == OSRS_PROJECTILE_MODEL_ARROW);
+    assert(parts[3].projectile.projectile_angle == 25);
+
+    assert(osrs_combat_visual_build_projectile_sequence(
+        &rune_arrow->projectile, darkbow, parts, 3) == -1);
+}
+
 static void test_spell_profiles_match_runec_visual_rows(void) {
     const OsrsCombatProjectileProfile* ice =
         osrs_combat_visual_spell_projectile(OSRS_COMBAT_VISUAL_SPELL_ICE_BARRAGE);
@@ -271,6 +335,7 @@ int main(void) {
     test_empty_origin_transform_sets_fallback_pivot();
     test_alpha_transform_updates_face_alphas_and_mesh_colors();
     test_projectile_profiles_match_runec_visual_rows();
+    test_projectile_sequence_builder_matches_runec_specials();
     test_spell_profiles_match_runec_visual_rows();
 
     assert(osrs_combat_visual_weapon_attack_anim(

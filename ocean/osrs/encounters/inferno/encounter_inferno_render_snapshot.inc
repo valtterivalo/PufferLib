@@ -448,43 +448,49 @@ static void inf_render_post_tick_ctx(
             int p_start_delay = s->player_attack_timing.visual_start_delay_ticks * 30;
             uint8_t weapon = s->player.equipped[GEAR_SLOT_WEAPON];
 
-            uint32_t player_proj_model = 0;
-            int player_proj_anim = -1;
-            int player_launch_gfx = 0;
-            int player_impact_gfx = 0;
             if (s->player_attack_style_id == ATTACK_STYLE_MAGIC) {
                 p_arc = 0.0f;
                 /* barrage: no projectile model (effect system handles it) */
             } else {
-                const OsrsCombatProjectileProfile* profile =
+                const OsrsCombatProjectileProfile* base_profile =
                     osrs_combat_visual_ranged_projectile_profile(
                         weapon, OSRS_COMBAT_PROJECTILE_NONE);
-                if (profile && profile->projectile_model_id > 0) {
-                    player_proj_model = (uint32_t)profile->projectile_model_id;
-                    player_proj_anim = profile->projectile_anim_id;
-                    player_launch_gfx = osrs_combat_projectile_value_or(
+                const OsrsCombatVisualRow* effect = NULL;
+                if (s->player.used_special_this_tick && weapon < NUM_ITEMS) {
+                    effect = osrs_combat_visual_find_special_projectile_item_id(
+                        ITEM_DATABASE[weapon].item_id, ATTACK_STYLE_RANGED);
+                }
+                OsrsCombatProjectileSequencePart parts[OSRS_COMBAT_PROJECTILE_SEQUENCE_MAX];
+                int part_count = osrs_combat_visual_build_projectile_sequence(
+                    base_profile, effect, parts, OSRS_COMBAT_PROJECTILE_SEQUENCE_MAX);
+                if (part_count < 0) abort();
+                for (int part_i = 0; part_i < part_count; part_i++) {
+                    const OsrsCombatProjectileProfile* profile = &parts[part_i].projectile;
+                    if (profile->projectile_model_id <= 0) continue;
+                    uint32_t player_proj_model = (uint32_t)profile->projectile_model_id;
+                    int player_proj_anim = profile->projectile_anim_id;
+                    int player_launch_gfx = osrs_combat_projectile_value_or(
                         profile->launch_spotanim_id, 0);
-                    player_impact_gfx = osrs_combat_projectile_value_or(
+                    int player_impact_gfx = osrs_combat_projectile_value_or(
                         profile->impact_spotanim_id, 0);
-                    p_start_h = osrs_combat_projectile_value_or(
+                    int part_start_h = osrs_combat_projectile_value_or(
                         profile->projectile_start_height, p_start_h);
-                    p_end_h = osrs_combat_projectile_value_or(
+                    int part_end_h = osrs_combat_projectile_value_or(
                         profile->projectile_end_height, p_end_h);
                     p_arc = profile->travel_spotanim_id == GFX_DRAGON_DART ? 0.5f : 1.0f;
+                    int visual_damage = part_i == part_count - 1
+                        ? s->player_attack_dmg
+                        : 0;
+                    int pi = encounter_emit_projectile(ov,
+                        s->player.x, s->player.y, target->x, target->y,
+                        p_style, visual_damage,
+                        p_duration, part_start_h, part_end_h, 16, p_arc, p_tracks,
+                        1, target_size, player_proj_model, player_impact_gfx);
+                    ov->projectiles[pi].start_delay = p_start_delay;
+                    encounter_set_projectile_animation(ov, pi, player_proj_anim);
+                    encounter_set_projectile_launch_gfx(ov, pi, player_launch_gfx);
+                    encounter_set_projectile_target_npc_slot(ov, pi, target_idx);
                 }
-            }
-
-            /* barrage has no in-flight projectile in OSRS (only hit splash) */
-            if (player_proj_model > 0) {
-                int pi = encounter_emit_projectile(ov,
-                    s->player.x, s->player.y, target->x, target->y,
-                    p_style, s->player_attack_dmg,
-                    p_duration, p_start_h, p_end_h, 16, p_arc, p_tracks,
-                    1, target_size, player_proj_model, player_impact_gfx);
-                ov->projectiles[pi].start_delay = p_start_delay;
-                encounter_set_projectile_animation(ov, pi, player_proj_anim);
-                encounter_set_projectile_launch_gfx(ov, pi, player_launch_gfx);
-                encounter_set_projectile_target_npc_slot(ov, pi, target_idx);
             }
         }
     }

@@ -6668,6 +6668,7 @@ static void test_player_projectile_render_uses_stored_reference_timing(void) {
     blowpipe_state.player_attack_npc_idx = 0;
     blowpipe_state.player_attack_style_id = ATTACK_STYLE_RANGED;
     blowpipe_state.player_attack_dmg = 7;
+    blowpipe_state.player.used_special_this_tick = 1;
 
     int blowpipe_dist = encounter_projectile_distance(
         blowpipe_state.player.x, blowpipe_state.player.y, 1,
@@ -6690,7 +6691,7 @@ static void test_player_projectile_render_uses_stored_reference_timing(void) {
     ASSERT_INT_EQ("blowpipe projectile animation",
         blowpipe_ov.projectiles[0].anim_id, OSRS_PROJECTILE_ANIM_DRAGON_DART);
     ASSERT_INT_EQ("blowpipe launch spotanim",
-        blowpipe_ov.projectiles[0].launch_gfx_id, GFX_DRAGON_DART_LAUNCH);
+        blowpipe_ov.projectiles[0].launch_gfx_id, GFX_BLOWPIPE_SPEC);
     ASSERT_INT_EQ("blowpipe impact spotanim",
         blowpipe_ov.projectiles[0].impact_gfx_id, 0);
     ASSERT_INT_EQ("blowpipe projectile start height",
