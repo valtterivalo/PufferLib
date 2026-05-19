@@ -5389,7 +5389,7 @@ static void render_draw_minimap_area(RenderClient* rc, OsrsEnv* env, Player* p) 
         DrawTexturePro(comp, src, dst, origin, angle_deg, WHITE);
     } else {
         gui_draw_named_asset(gs, "resize_compass_mask", compass, WHITE);
-        gui_text_shadow("N", (int)compass.x + 16, (int)compass.y + 12, 14, GUI_TEXT_ORANGE);
+        gui_text_shadow(gs, "N", (int)compass.x + 16, (int)compass.y + 12, 14, GUI_TEXT_ORANGE);
     }
 
     int orbs_x = map_x + GUI_ORBS_X;

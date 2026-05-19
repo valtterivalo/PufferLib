@@ -24,6 +24,7 @@
 #define OSRS_GUI_H
 
 #include <assert.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -275,11 +276,18 @@ typedef enum {
 #define GUI_MAX_NAMED_ASSETS 768
 #define GUI_UI_ITEM_CONTAINER_MAX_SLOTS 64
 #define GUI_UI_MAX_COMPONENT_OVERRIDES 64
+#define GUI_ITEM_STACK_VARIANT_MAX 2048
 
 typedef struct {
     char name[64];
     Texture2D tex;
 } GuiNamedAsset;
+
+typedef struct {
+    int base_item_id;
+    int threshold;
+    int display_item_id;
+} GuiItemStackVariant;
 
 typedef struct {
     int present;
@@ -344,6 +352,12 @@ typedef struct {
     GuiNamedAsset named_assets[GUI_MAX_NAMED_ASSETS];
     int named_asset_count;
     OsrsUiInterfaceStore ui_interfaces;
+    Font font;
+    Font small_font;
+    int font_loaded;
+    int small_font_loaded;
+    GuiItemStackVariant item_stack_variants[GUI_ITEM_STACK_VARIANT_MAX];
+    int item_stack_variant_count;
 
     /* equipment slot background sprites (indexed by GEAR_SLOT_*) */
     Texture2D slot_sprites[GUI_NUM_SLOT_SPRITES];
@@ -473,6 +487,73 @@ static int gui_try_load(Texture2D* tex, const char* path) {
     return 0;
 }
 
+static const char* gui_asset_ext(const char* path, const char* fallback) {
+    const char* dot = path ? strrchr(path, '.') : NULL;
+    return dot && dot[0] ? dot : fallback;
+}
+
+static Font gui_load_font_asset(const char* path, int font_size) {
+    Font empty = {0};
+    OsrsAssetBytes bytes = osrs_asset_read_all(path);
+    if (!bytes.data || bytes.size == 0) {
+        osrs_asset_bytes_free(&bytes);
+        return empty;
+    }
+    if (bytes.size > (size_t)INT_MAX) {
+        fprintf(stderr, "GUI font asset too large: %s (%zu bytes)\n", path, bytes.size);
+        abort();
+    }
+    Font font = LoadFontFromMemory(gui_asset_ext(path, ".ttf"), bytes.data,
+        (int)bytes.size, font_size, NULL, 95);
+    osrs_asset_bytes_free(&bytes);
+    if (font.texture.id != 0) SetTextureFilter(font.texture, TEXTURE_FILTER_POINT);
+    return font.texture.id != 0 ? font : empty;
+}
+
+static Font gui_font_for_size(const GuiState* gs, int size) {
+    if (gs && size <= 12 && gs->small_font_loaded) return gs->small_font;
+    if (gs && gs->font_loaded) return gs->font;
+    return GetFontDefault();
+}
+
+static int gui_measure_text(const GuiState* gs, const char* text, int size) {
+    if (!text || !text[0]) return 0;
+    Font font = gui_font_for_size(gs, size);
+    if (font.texture.id == 0) return MeasureText(text, size);
+    Vector2 measured = MeasureTextEx(font, text, (float)size, 0.0f);
+    return (int)(measured.x + 0.5f);
+}
+
+static void gui_load_fonts(GuiState* gs) {
+    gs->font = gui_load_font_asset("fonts/runescape.ttf", 14);
+    gs->font_loaded = gs->font.texture.id != 0;
+    gs->small_font = gui_load_font_asset("fonts/runescape_small.ttf", 12);
+    gs->small_font_loaded = gs->small_font.texture.id != 0;
+}
+
+static void gui_load_item_stack_variants(GuiState* gs) {
+    gs->item_stack_variant_count = 0;
+    FILE* f = osrs_asset_fopen("sprites/items/item_stack_variants.tsv", "rb");
+    if (!f) return;
+    char line[128];
+    while (fgets(line, sizeof(line), f)) {
+        if (line[0] == '#' || line[0] == '\n' || line[0] == '\0') continue;
+        GuiItemStackVariant variant = {0};
+        if (sscanf(line, "%d\t%d\t%d",
+                &variant.base_item_id,
+                &variant.threshold,
+                &variant.display_item_id) != 3) {
+            continue;
+        }
+        if (gs->item_stack_variant_count >= GUI_ITEM_STACK_VARIANT_MAX) {
+            fprintf(stderr, "too many item stack variants\n");
+            abort();
+        }
+        gs->item_stack_variants[gs->item_stack_variant_count++] = variant;
+    }
+    fclose(f);
+}
+
 static Texture2D gui_asset(const GuiState* gs, const char* name) {
     for (int i = 0; i < gs->named_asset_count; i++) {
         if (strcmp(gs->named_assets[i].name, name) == 0) {
@@ -592,6 +673,8 @@ static void gui_load_sprites(GuiState* gs) {
     int ok = 1;
     gs->named_asset_count = 0;
     gui_load_ui_interfaces(gs);
+    gui_load_fonts(gs);
+    gui_load_item_stack_variants(gs);
 
     /* equipment slot backgrounds: sprite IDs mapped to GEAR_SLOT_* order.
        GEAR_SLOT: HEAD=0, CAPE=1, NECK=2, AMMO=3, WEAPON=4, SHIELD=5,
@@ -857,14 +940,13 @@ static void gui_load_sprites(GuiState* gs) {
 }
 
 /** Look up item sprite texture by item database index. Returns NULL texture (id=0) if not found. */
+static Texture2D gui_get_sprite_by_osrs_id(GuiState* gs, int osrs_id);
+
 static Texture2D gui_get_item_sprite(GuiState* gs, uint8_t item_idx) {
     Texture2D empty = { 0 };
     if (item_idx == ITEM_NONE || item_idx >= NUM_ITEMS) return empty;
     int item_id = ITEM_DATABASE[item_idx].item_id;
-    for (int i = 0; i < gs->item_sprite_count; i++) {
-        if (gs->item_sprite_ids[i] == item_id) return gs->item_sprite_tex[i];
-    }
-    return empty;
+    return gui_get_sprite_by_osrs_id(gs, item_id);
 }
 
 /** Look up item sprite texture by OSRS item ID directly (for consumables). */
@@ -874,7 +956,92 @@ static Texture2D gui_get_sprite_by_osrs_id(GuiState* gs, int osrs_id) {
     for (int i = 0; i < gs->item_sprite_count; i++) {
         if (gs->item_sprite_ids[i] == osrs_id) return gs->item_sprite_tex[i];
     }
-    return empty;
+    if (gs->item_sprite_count >= GUI_MAX_ITEM_SPRITES) return empty;
+    const char* path = TextFormat(OSRS_ASSET("sprites/items/%d.png"), osrs_id);
+    if (!osrs_asset_exists(path)) return empty;
+    int idx = gs->item_sprite_count++;
+    gs->item_sprite_ids[idx] = osrs_id;
+    gs->item_sprite_tex[idx] = LoadTexture(path);
+    if (gs->item_sprite_tex[idx].id == 0) {
+        gs->item_sprite_count--;
+        gs->item_sprite_ids[idx] = 0;
+        return empty;
+    }
+    return gs->item_sprite_tex[idx];
+}
+
+static int gui_coin_stack_display_id(int quantity) {
+    if (quantity <= 1) return 995;
+    if (quantity == 2) return 996;
+    if (quantity == 3) return 997;
+    if (quantity == 4) return 998;
+    if (quantity < 25) return 999;
+    if (quantity < 100) return 1000;
+    if (quantity < 250) return 1001;
+    if (quantity < 1000) return 1002;
+    return 1003;
+}
+
+static int gui_item_display_id_for_quantity(const GuiState* gs, int item_id, int quantity) {
+    if (item_id <= 0 || quantity <= 1) return item_id;
+    if (item_id == 995) return gui_coin_stack_display_id(quantity);
+    int best_threshold = 0;
+    int best_display_id = item_id;
+    for (int i = 0; gs && i < gs->item_stack_variant_count; i++) {
+        const GuiItemStackVariant* variant = &gs->item_stack_variants[i];
+        if (variant->base_item_id != item_id) continue;
+        if (quantity < variant->threshold) continue;
+        if (variant->threshold < best_threshold) continue;
+        best_threshold = variant->threshold;
+        best_display_id = variant->display_item_id;
+    }
+    return best_display_id;
+}
+
+static Texture2D gui_get_item_sprite_for_quantity(
+    GuiState* gs,
+    uint8_t item_idx,
+    int quantity
+) {
+    Texture2D empty = {0};
+    if (item_idx == ITEM_NONE || item_idx >= NUM_ITEMS) return empty;
+    int item_id = ITEM_DATABASE[item_idx].item_id;
+    int display_id = gui_item_display_id_for_quantity(gs, item_id, quantity);
+    Texture2D tex = gui_get_sprite_by_osrs_id(gs, display_id);
+    if (tex.id == 0 && display_id != item_id) {
+        tex = gui_get_sprite_by_osrs_id(gs, item_id);
+    }
+    return tex;
+}
+
+static Texture2D gui_get_sprite_by_osrs_id_for_quantity(
+    GuiState* gs,
+    int osrs_id,
+    int quantity
+) {
+    int display_id = gui_item_display_id_for_quantity(gs, osrs_id, quantity);
+    Texture2D tex = gui_get_sprite_by_osrs_id(gs, display_id);
+    if (tex.id == 0 && display_id != osrs_id) {
+        tex = gui_get_sprite_by_osrs_id(gs, osrs_id);
+    }
+    return tex;
+}
+
+static Color gui_stack_text_color(int quantity) {
+    if (quantity >= 10000000) return GUI_TEXT_GREEN;
+    if (quantity >= 100000) return GUI_TEXT_WHITE;
+    return GUI_TEXT_YELLOW;
+}
+
+static void gui_format_stack_quantity(int quantity, char* dst, size_t cap) {
+    if (!dst || cap == 0) return;
+    if (quantity >= 10000000) {
+        snprintf(dst, cap, "%dM", quantity / 1000000);
+    } else if (quantity >= 100000) {
+        snprintf(dst, cap, "%dK", quantity / 1000);
+    } else {
+        snprintf(dst, cap, "%d", quantity);
+    }
 }
 
 /** Unload all GUI textures. */
@@ -935,7 +1102,12 @@ static void gui_unload_sprites(GuiState* gs) {
     if (gs->minimap_dot_friend.id) UnloadTexture(gs->minimap_dot_friend);
     if (gs->minimap_dot_item.id) UnloadTexture(gs->minimap_dot_item);
     for (int i = 0; i < gs->item_sprite_count; i++) UnloadTexture(gs->item_sprite_tex[i]);
+    if (gs->font_loaded) UnloadFont(gs->font);
+    if (gs->small_font_loaded) UnloadFont(gs->small_font);
     gs->item_sprite_count = 0;
+    gs->font_loaded = 0;
+    gs->small_font_loaded = 0;
+    gs->item_stack_variant_count = 0;
     gs->sprites_loaded = 0;
 }
 
@@ -1053,9 +1225,20 @@ static const char* gui_item_short_name(uint8_t item_idx) {
 
 
 /** Draw text with OSRS-style shadow (black at +1,+1, then color). */
-static void gui_text_shadow(const char* text, int x, int y, int size, Color color) {
-    DrawText(text, x + 1, y + 1, size, GUI_TEXT_SHADOW);
-    DrawText(text, x, y, size, color);
+static void gui_text_shadow(
+    const GuiState* gs,
+    const char* text,
+    int x,
+    int y,
+    int size,
+    Color color
+) {
+    if (!text || !text[0]) return;
+    Font font = gui_font_for_size(gs, size);
+    Vector2 shadow = {(float)x + 1.0f, (float)y + 1.0f};
+    Vector2 pos = {(float)x, (float)y};
+    DrawTextEx(font, text, shadow, (float)size, 0.0f, GUI_TEXT_SHADOW);
+    DrawTextEx(font, text, pos, (float)size, 0.0f, color);
 }
 
 /** Draw an OSRS-style beveled slot rectangle. */
@@ -1099,7 +1282,7 @@ static void gui_draw_equip_slot(GuiState* gs, int x, int y, int w, int h,
             gui_draw_tex_centered(item_tex, x, y, w, h);
         } else {
             const char* name = gui_item_short_name(item_idx);
-            gui_text_shadow(name, x + 2, y + h / 2 - 4, 7, GUI_TEXT_YELLOW);
+            gui_text_shadow(gs, name, x + 2, y + h / 2 - 4, 7, GUI_TEXT_YELLOW);
         }
     } else if (gs->sprites_loaded && gear_slot >= 0 && gear_slot < GUI_NUM_SLOT_SPRITES) {
         Texture2D bg = gs->slot_sprites[gear_slot];
@@ -1309,9 +1492,9 @@ static void gui_draw_ui_item_slot(GuiState* gs, const GuiUiItemSlot* slot, Recta
 
         Texture2D tex = {0};
         if (slot->item_db_idx != ITEM_NONE) {
-            tex = gui_get_item_sprite(gs, slot->item_db_idx);
+            tex = gui_get_item_sprite_for_quantity(gs, slot->item_db_idx, slot->quantity);
         } else if (slot->osrs_id > 0) {
-            tex = gui_get_sprite_by_osrs_id(gs, slot->osrs_id);
+            tex = gui_get_sprite_by_osrs_id_for_quantity(gs, slot->osrs_id, slot->quantity);
         }
 
         Color tint = WHITE;
@@ -1322,8 +1505,10 @@ static void gui_draw_ui_item_slot(GuiState* gs, const GuiUiItemSlot* slot, Recta
         }
 
         if (slot->quantity > 1) {
-            const char* text = TextFormat("%d", slot->quantity);
-            gui_text_shadow(text, (int)rect.x + 1, (int)rect.y - 1, 10, GUI_TEXT_YELLOW);
+            char text[16];
+            gui_format_stack_quantity(slot->quantity, text, sizeof(text));
+            gui_text_shadow(gs, text, (int)rect.x + 1, (int)rect.y - 1, 10,
+                gui_stack_text_color(slot->quantity));
         }
     }
 
@@ -1402,6 +1587,7 @@ static void gui_draw_ui_sprite_component(
 }
 
 static void gui_draw_ui_text_component(
+    const GuiState* gs,
     const OsrsUiComponent* component,
     const GuiUiComponentOverride* override,
     Rectangle rect
@@ -1411,7 +1597,7 @@ static void gui_draw_ui_text_component(
     int size = component->line_height > 0 ? component->line_height + 9 : 12;
     if (size < 10) size = 10;
     Color color = gui_ui_color_from_rgb(component->text_color, component->opacity);
-    int width = MeasureText(text, size);
+    int width = gui_measure_text(gs, text, size);
     int x = (int)rect.x;
     int y = (int)rect.y;
     if (component->x_text_alignment == 1) {
@@ -1424,8 +1610,12 @@ static void gui_draw_ui_text_component(
     } else if (component->y_text_alignment == 2) {
         y = (int)(rect.y + rect.height - size);
     }
-    if (component->text_shadowed) DrawText(text, x + 1, y + 1, size, BLACK);
-    DrawText(text, x, y, size, color);
+    Font font = gui_font_for_size(gs, size);
+    if (component->text_shadowed) {
+        DrawTextEx(font, text, (Vector2){(float)x + 1.0f, (float)y + 1.0f},
+            (float)size, 0.0f, BLACK);
+    }
+    DrawTextEx(font, text, (Vector2){(float)x, (float)y}, (float)size, 0.0f, color);
 }
 
 static void gui_draw_ui_component(
@@ -1453,7 +1643,7 @@ static void gui_draw_ui_component(
             DrawRectangleLinesEx(rect, 1, color);
         }
     } else if (component->type == 4) {
-        gui_draw_ui_text_component(component, override, rect);
+        gui_draw_ui_text_component(gs, component, override, rect);
     } else if (component->type == 5) {
         gui_draw_ui_sprite_component(gs, component, override, rect);
     } else if (component->type == 6 && component->model_type == 4 && component->model_id > 0) {
@@ -2348,7 +2538,7 @@ static void gui_draw_inventory_manual(GuiState* gs) {
         } else {
             const char* name = (inv->type == INV_SLOT_EQUIPMENT)
                 ? gui_item_short_name(inv->item_db_idx) : "???";
-            gui_text_shadow(name, cx + 2, cy + 12, 7, GUI_TEXT_YELLOW);
+            gui_text_shadow(gs, name, cx + 2, cy + 12, 7, GUI_TEXT_YELLOW);
         }
     }
 
@@ -2839,13 +3029,13 @@ static void gui_draw_combat(GuiState* gs, Player* p) {
     if (!decoded) {
         Rectangle title = gui_side_ref_rect(gs, (Rectangle){10, 6, 170, 14});
         Rectangle level = gui_side_ref_rect(gs, (Rectangle){10, 26, 170, 12});
-        int tw = MeasureText(wpn_name, 11);
-        gui_text_shadow(wpn_name, (int)(title.x + title.width / 2 - tw / 2),
+        int tw = gui_measure_text(gs, wpn_name, 11);
+        gui_text_shadow(gs, wpn_name, (int)(title.x + title.width / 2 - tw / 2),
             (int)title.y, 11, GUI_TEXT_ORANGE);
         const char* combat_level = TextFormat("Combat Lvl: %d",
             p->base_attack + p->base_strength + p->base_defence);
-        int cw = MeasureText(combat_level, 10);
-        gui_text_shadow(combat_level, (int)(level.x + level.width / 2 - cw / 2),
+        int cw = gui_measure_text(gs, combat_level, 10);
+        gui_text_shadow(gs, combat_level, (int)(level.x + level.width / 2 - cw / 2),
             (int)level.y, 10, GUI_TEXT_YELLOW);
 
         for (int i = 0; i < styles.count; i++) {
@@ -2862,8 +3052,9 @@ static void gui_draw_combat(GuiState* gs, Player* p) {
                 icon.height,
                 WHITE);
             Color txt_c = active ? GUI_TEXT_YELLOW : GUI_TEXT_WHITE;
-            int txt_w = MeasureText(styles.names[i], 10);
+            int txt_w = gui_measure_text(gs, styles.names[i], 10);
             gui_text_shadow(
+                gs,
                 styles.names[i],
                 (int)(text.x + text.width / 2 - txt_w / 2),
                 (int)(text.y + 1),
@@ -2880,6 +3071,7 @@ static void gui_draw_combat(GuiState* gs, Player* p) {
         DrawRectangleLines((int)ac.x, (int)ac.y, (int)ac.width, (int)ac.height,
             p->autocast_enabled ? GUI_TEXT_YELLOW : GUI_BORDER);
         gui_text_shadow(
+            gs,
             TextFormat("Autocast: %s", spell_name),
             (int)ac.x + 8,
             (int)ac.y + 7,
@@ -2895,8 +3087,9 @@ static void gui_draw_combat(GuiState* gs, Player* p) {
                 gui_draw_named_asset(gs, "combatboxes_1", rect, WHITE);
                 DrawRectangleLines((int)rect.x, (int)rect.y, (int)rect.width, (int)rect.height,
                     spells[i] == spell ? GUI_TEXT_YELLOW : GUI_BORDER);
-                int tw = MeasureText(names[i], 10);
+                int tw = gui_measure_text(gs, names[i], 10);
                 gui_text_shadow(
+                    gs,
                     names[i],
                     (int)(rect.x + rect.width / 2 - tw / 2),
                     (int)rect.y + 7,
@@ -2923,16 +3116,16 @@ static void gui_draw_combat(GuiState* gs, Player* p) {
     DrawRectangleLinesEx((Rectangle){spec.x + 2, spec.y + 6, spec.width - 4, 14}, 1,
         (Color){44, 42, 35, 255});
     const char* spec_text = TextFormat("Special Attack: %d%%", p->special_energy);
-    int spec_w = MeasureText(spec_text, 10);
-    gui_text_shadow(spec_text, (int)(spec.x + spec.width / 2 - spec_w / 2),
+    int spec_w = gui_measure_text(gs, spec_text, 10);
+    gui_text_shadow(gs, spec_text, (int)(spec.x + spec.width / 2 - spec_w / 2),
         (int)(spec.y + 8), 10, GUI_TEXT_YELLOW);
 
     if (!decoded) {
         Rectangle category = gui_side_ref_rect(gs, gui_combat_category_rect());
         const char* category_text = TextFormat("Attack style: %s",
             gui_combat_selected_style_name(&styles, p->fight_style));
-        int category_w = MeasureText(category_text, 12);
-        gui_text_shadow(category_text, (int)(category.x + category.width / 2 - category_w / 2),
+        int category_w = gui_measure_text(gs, category_text, 12);
+        gui_text_shadow(gs, category_text, (int)(category.x + category.width / 2 - category_w / 2),
             (int)(category.y + 7), 12, GUI_TEXT_ORANGE);
     }
 }
@@ -3142,9 +3335,9 @@ static void gui_draw_skill_panel_slot(
     char base_text[8];
     snprintf(current_text, sizeof(current_text), "%d", current);
     snprintf(base_text, sizeof(base_text), "%d", base);
-    gui_text_shadow(current_text, (int)rect.x + 39, (int)rect.y + 2, 10,
+    gui_text_shadow(gs, current_text, (int)rect.x + 39, (int)rect.y + 2, 10,
         gui_skill_current_color(current, base));
-    gui_text_shadow(base_text, (int)rect.x + 39, (int)rect.y + 17, 9, GUI_TEXT_GREEN);
+    gui_text_shadow(gs, base_text, (int)rect.x + 39, (int)rect.y + 17, 9, GUI_TEXT_GREEN);
 }
 
 static void gui_draw_stats(GuiState* gs, Player* p) {
@@ -3166,8 +3359,8 @@ static void gui_draw_stats(GuiState* gs, Player* p) {
     DrawRectangleRec(total, (Color){7, 7, 7, 238});
     DrawRectangleLinesEx(total, 1, (Color){99, 91, 68, 255});
     const char* total_text = TextFormat("Total level: %d", total_level);
-    int width = MeasureText(total_text, 10);
-    gui_text_shadow(total_text, (int)(total.x + (total.width - width) * 0.5f),
+    int width = gui_measure_text(gs, total_text, 10);
+    gui_text_shadow(gs, total_text, (int)(total.x + (total.width - width) * 0.5f),
         (int)(total.y + 5), 10, GUI_TEXT_YELLOW);
 }
 
@@ -3188,7 +3381,7 @@ static void gui_draw(GuiState* gs, Player* p) {
         int hx = gs->panel_x + GUI_SIDE_CONTENT_X + 4;
         int hy = content_y + 2;
         const char* etype = (p->entity_type == ENTITY_NPC) ? "NPC" : "Player";
-        gui_text_shadow(TextFormat("[G] %s %d/%d", etype,
+        gui_text_shadow(gs, TextFormat("[G] %s %d/%d", etype,
                         gs->gui_entity_idx + 1, gs->gui_entity_count),
                         hx, hy, 8, GUI_TEXT_ORANGE);
     }

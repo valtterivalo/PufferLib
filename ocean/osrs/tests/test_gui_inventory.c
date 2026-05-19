@@ -610,6 +610,77 @@ static void test_runec_ui_asset_aliases_exist(void) {
         file_exists(OSRS_ASSET("sprites/gui/osrs_stretch_mapsurround.png")), 1);
     ASSERT_INT_EQ("compass alias exists",
         file_exists(OSRS_ASSET("sprites/gui/compass.png")), 1);
+    ASSERT_INT_EQ("runescape font exists",
+        file_exists(OSRS_ASSET("fonts/runescape.ttf")), 1);
+    ASSERT_INT_EQ("runescape small font exists",
+        file_exists(OSRS_ASSET("fonts/runescape_small.ttf")), 1);
+    ASSERT_INT_EQ("item stack variants exist",
+        file_exists(OSRS_ASSET("sprites/items/item_stack_variants.tsv")), 1);
+}
+
+static void test_runec_stack_quantity_formatting(void) {
+    printf("--- runec stack quantity formatting ---\n");
+
+    char text[16];
+    gui_format_stack_quantity(99999, text, sizeof(text));
+    ASSERT_INT_EQ("low stack text", strcmp(text, "99999"), 0);
+    Color color = gui_stack_text_color(99999);
+    ASSERT_INT_EQ("low stack is yellow r", color.r, GUI_TEXT_YELLOW.r);
+    ASSERT_INT_EQ("low stack is yellow g", color.g, GUI_TEXT_YELLOW.g);
+
+    gui_format_stack_quantity(100000, text, sizeof(text));
+    ASSERT_INT_EQ("mid stack text", strcmp(text, "100K"), 0);
+    color = gui_stack_text_color(100000);
+    ASSERT_INT_EQ("mid stack is white r", color.r, GUI_TEXT_WHITE.r);
+    ASSERT_INT_EQ("mid stack is white g", color.g, GUI_TEXT_WHITE.g);
+
+    gui_format_stack_quantity(10000000, text, sizeof(text));
+    ASSERT_INT_EQ("large stack text", strcmp(text, "10M"), 0);
+    color = gui_stack_text_color(10000000);
+    ASSERT_INT_EQ("large stack is green r", color.r, GUI_TEXT_GREEN.r);
+    ASSERT_INT_EQ("large stack is green g", color.g, GUI_TEXT_GREEN.g);
+}
+
+static void test_runec_stack_variant_selection(void) {
+    printf("--- runec stack variant selection ---\n");
+
+    GuiState gs;
+    memset(&gs, 0, sizeof(gs));
+    gs.item_stack_variants[0] = (GuiItemStackVariant){
+        .base_item_id = 45,
+        .threshold = 2,
+        .display_item_id = 9199,
+    };
+    gs.item_stack_variants[1] = (GuiItemStackVariant){
+        .base_item_id = 45,
+        .threshold = 5,
+        .display_item_id = 9202,
+    };
+    gs.item_stack_variant_count = 2;
+
+    ASSERT_INT_EQ("single stack keeps base",
+        gui_item_display_id_for_quantity(&gs, 45, 1), 45);
+    ASSERT_INT_EQ("threshold stack uses first variant",
+        gui_item_display_id_for_quantity(&gs, 45, 2), 9199);
+    ASSERT_INT_EQ("between thresholds keeps best variant",
+        gui_item_display_id_for_quantity(&gs, 45, 4), 9199);
+    ASSERT_INT_EQ("higher threshold uses later variant",
+        gui_item_display_id_for_quantity(&gs, 45, 5), 9202);
+    ASSERT_INT_EQ("coins use coin display ids",
+        gui_item_display_id_for_quantity(&gs, 995, 1000), 1003);
+}
+
+static void test_runec_stack_variants_file_loads(void) {
+    printf("--- runec stack variants file loads ---\n");
+
+    GuiState gs;
+    memset(&gs, 0, sizeof(gs));
+    gui_load_item_stack_variants(&gs);
+
+    ASSERT_INT_EQ("stack variant file has rows",
+        gs.item_stack_variant_count > 100, 1);
+    ASSERT_INT_EQ("arrow stack variant from file",
+        gui_item_display_id_for_quantity(&gs, 882, 5), 897);
 }
 
 static void test_decoded_runec_ui_interfaces_resolve(void) {
@@ -722,6 +793,9 @@ int main(void) {
     test_human_equipment_click_queues_without_mutating_player();
     test_budget_item_labels_and_sprites_resolve();
     test_runec_ui_asset_aliases_exist();
+    test_runec_stack_quantity_formatting();
+    test_runec_stack_variant_selection();
+    test_runec_stack_variants_file_loads();
     test_decoded_runec_ui_interfaces_resolve();
     test_gui_uses_decoded_runec_panel_rects();
 
