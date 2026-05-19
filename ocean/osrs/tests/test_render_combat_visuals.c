@@ -121,6 +121,13 @@ static void test_projectile_profiles_match_runec_visual_rows(void) {
     assert(blowpipe->projectile_angle == 15);
     assert(blowpipe->projectile_progress == 11);
 
+    const OsrsCombatProjectileProfile* blowpipe_special =
+        osrs_combat_visual_ranged_special_projectile_profile(ITEM_TOXIC_BLOWPIPE);
+    assert(blowpipe_special);
+    assert(blowpipe_special->launch_spotanim_id == GFX_BLOWPIPE_SPEC);
+    assert(blowpipe_special->travel_spotanim_id == OSRS_COMBAT_PROJECTILE_MISSING);
+    assert(osrs_combat_visual_ranged_special_projectile_profile(ITEM_TWISTED_BOW) == NULL);
+
     const OsrsCombatProjectileProfile* trident =
         osrs_combat_visual_magic_projectile_profile(ITEM_TRIDENT_OF_SWAMP);
     assert(trident);

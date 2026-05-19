@@ -323,6 +323,14 @@ static inline const OsrsCombatVisualRow* osrs_combat_visual_find_special_item_id
         OSRS_COMBAT_VISUAL_STANCE_ANY, 1, 0);
 }
 
+static inline const OsrsCombatVisualRow* osrs_combat_visual_find_special_projectile_item_id(
+    uint16_t item_id, AttackStyle style
+) {
+    return osrs_combat_visual_find_row(
+        OSRS_COMBAT_VISUAL_KIND_SPECIAL, item_id, NULL, style,
+        OSRS_COMBAT_VISUAL_STANCE_ANY, 0, 1);
+}
+
 static inline const OsrsCombatVisualRow* osrs_combat_visual_find_npc_id(
     uint16_t npc_id, AttackStyle style
 ) {
@@ -496,6 +504,16 @@ static inline const OsrsCombatProjectileProfile* osrs_combat_visual_ranged_proje
         if (projectile) return &projectile->projectile;
     }
     return osrs_combat_projectile_profile(fallback);
+}
+
+static inline const OsrsCombatProjectileProfile* osrs_combat_visual_ranged_special_projectile_profile(
+    uint8_t item_db_idx
+) {
+    if (item_db_idx >= NUM_ITEMS) return NULL;
+    const OsrsCombatVisualRow* special =
+        osrs_combat_visual_find_special_projectile_item_id(
+            ITEM_DATABASE[item_db_idx].item_id, ATTACK_STYLE_RANGED);
+    return special ? &special->projectile : NULL;
 }
 
 static inline int osrs_combat_visual_item_is_powered_staff(uint16_t item_id) {

@@ -582,15 +582,17 @@ static int render_spawn_profile_projectile(
     int fallback_start_height, int fallback_end_height,
     int fallback_slope
 ) {
-    if (!profile || profile->travel_spotanim_id < 0) return -1;
+    if (!profile) return -1;
+    int launch_slot = -1;
     if (profile->launch_spotanim_id > 0) {
-        effect_spawn_spotanim_subtile(
+        launch_slot = effect_spawn_spotanim_subtile(
             rc->effects, profile->launch_spotanim_id,
             src_x * 128.0f + 64.0f, src_y * 128.0f + 64.0f,
             rc->effect_client_tick_counter + delay_client_ticks,
             rc->spotanims, rc->anim_cache, rc->model_cache,
             rc->npc_model_cache, rc->projectile_model_cache);
     }
+    if (profile->travel_spotanim_id < 0) return launch_slot;
     return effect_spawn_projectile(
         rc->effects, profile->travel_spotanim_id,
         src_x, src_y, dst_x, dst_y,
@@ -2736,16 +2738,27 @@ static void render_post_tick(RenderClient* rc, OsrsEnv* env) {
             if (p->attack_style_this_tick == ATTACK_STYLE_RANGED) {
                 uint8_t wpn = p->equipped[GEAR_SLOT_WEAPON];
                 int dist = render_pvp_distance_to_target(p, t);
-                const OsrsCombatProjectileProfile* profile =
+                const OsrsCombatProjectileProfile* special_profile =
+                    p->used_special_this_tick
+                        ? osrs_combat_visual_ranged_special_projectile_profile(wpn)
+                        : NULL;
+                const OsrsCombatProjectileProfile* base_profile =
                     osrs_combat_visual_ranged_projectile_profile(
                         wpn, OSRS_COMBAT_PROJECTILE_BOLT);
                 int duration_ticks = p->used_special_this_tick
                     ? pvp_ranged_hit_delay_for_weapon(
                         dist, 1, render_pvp_ranged_spec_weapon_for_item(wpn)) * 30
                     : pvp_ranged_hit_delay(dist) * 30;
-                render_spawn_profile_projectile(rc, profile,
-                    p->x, p->y, t->x, t->y,
-                    0, duration_ticks, 43 * 4, 31 * 4, 16);
+                if (special_profile) {
+                    render_spawn_profile_projectile(rc, special_profile,
+                        p->x, p->y, t->x, t->y,
+                        0, duration_ticks, 43 * 4, 31 * 4, 16);
+                }
+                if (!special_profile || special_profile->travel_spotanim_id < 0) {
+                    render_spawn_profile_projectile(rc, base_profile,
+                        p->x, p->y, t->x, t->y,
+                        0, duration_ticks, 43 * 4, 31 * 4, 16);
+                }
             }
         }
 
