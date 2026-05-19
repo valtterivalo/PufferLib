@@ -322,6 +322,97 @@ static void test_human_combat_clicks_use_runec_geometry(void) {
     human_input_destroy(&hi);
 }
 
+static void test_human_gui_context_action_helpers(void) {
+    printf("--- human gui context action helpers ---\n");
+
+    GuiState gs;
+    Player p;
+    HumanInput hi;
+    memset(&gs, 0, sizeof(gs));
+    memset(&p, 0, sizeof(p));
+    human_input_init(&hi);
+
+    hi.enabled = 1;
+    gs.panel_x = 100;
+    gs.panel_y = 200;
+    gs.panel_w = 241;
+    gs.tab_h = 37;
+
+    gs.inv_grid[0].type = INV_SLOT_EQUIPMENT;
+    gs.inv_grid[0].item_db_idx = ITEM_TWISTED_BOW;
+    ASSERT_INT_EQ("weapon context action label",
+        strcmp(gui_inv_primary_action_label(&gs.inv_grid[0]), "Wield"), 0);
+    ASSERT_INT_EQ("equipment context display name",
+        strcmp(gui_inv_slot_display_name(&gs.inv_grid[0]), "T bow"), 0);
+    gs.inv_grid[1].type = INV_SLOT_BASTION_POT;
+    ASSERT_INT_EQ("potion context action label",
+        strcmp(gui_inv_primary_action_label(&gs.inv_grid[1]), "Drink"), 0);
+    ASSERT_INT_EQ("potion context display name",
+        strcmp(gui_inv_slot_display_name(&gs.inv_grid[1]), "Bastion potion"), 0);
+
+    int gx = 0;
+    int gy = 0;
+    int cell = 0;
+    int gap = 0;
+    gui_prayer_grid_metrics(&gs, &gx, &gy, &cell, &gap);
+    int idx = GUI_PRAY_PROTECT_MISSILES;
+    int pray_x = gx + (idx % GUI_PRAYER_GRID_COLS) * (cell + gap) + 1;
+    int pray_y = gy + (idx / GUI_PRAYER_GRID_COLS) * (cell + gap) + 1;
+    ASSERT_INT_EQ("context prayer hit test",
+        human_gui_prayer_idx_at(&gs, pray_x, pray_y), GUI_PRAY_PROTECT_MISSILES);
+    ASSERT_INT_EQ("context prayer name",
+        strcmp(human_gui_prayer_name(GUI_PRAY_PROTECT_MISSILES), "Protect from Missiles"), 0);
+    ASSERT_INT_EQ("context prayer apply returns handled",
+        human_apply_prayer_idx(&hi, &p, GUI_PRAY_PROTECT_MISSILES), 1);
+    ASSERT_INT_EQ("context prayer command queued",
+        hi.commands.items[0].overhead_prayer, ENCOUNTER_OVERHEAD_SET_REFRESH_RANGED);
+
+    gui_spell_grid_metrics(&gs, &gx, &gy, &cell, &gap);
+    int spell_grid_slot = 15;
+    int spell_x = gx + (spell_grid_slot % GUI_SPELL_GRID_COLS) * (cell + gap) + 1;
+    int spell_y = gy + (spell_grid_slot / GUI_SPELL_GRID_COLS) * (cell + gap) + 1;
+    ASSERT_INT_EQ("context spell hit test",
+        human_gui_spell_idx_at(&gs, spell_x, spell_y), GUI_SPELL_ICE_BARRAGE);
+    ASSERT_INT_EQ("context spell name",
+        strcmp(human_gui_spell_name(GUI_SPELL_ICE_BARRAGE), "Ice Barrage"), 0);
+    ASSERT_INT_EQ("context spell apply returns handled",
+        human_select_spell_idx(&hi, GUI_SPELL_ICE_BARRAGE), 1);
+    ASSERT_INT_EQ("context spell cursor selected", hi.cursor_mode, CURSOR_SPELL_TARGET);
+    ASSERT_INT_EQ("context spell attack selected", hi.selected_spell, ATTACK_ICE);
+
+    p.equipped[GEAR_SLOT_WEAPON] = ITEM_KODAI_WAND;
+    int style_x = 100 + 25 + 20 + 1;
+    int style_y = 200 + 37 + 46 + 1;
+    ASSERT_INT_EQ("context combat style hit test",
+        human_gui_combat_style_index_at(&gs, &p, style_x, style_y), 0);
+    human_apply_combat_style(&hi, &gs, &p, FIGHT_STYLE_DEFENSIVE_AUTOCAST);
+    ASSERT_INT_EQ("context combat style command",
+        hi.commands.items[1].kind, HUMAN_COMMAND_FIGHT_STYLE);
+    ASSERT_INT_EQ("context autocast command from defensive style",
+        hi.commands.items[2].kind, HUMAN_COMMAND_SET_AUTOCAST);
+    ASSERT_INT_EQ("context autocast defensive",
+        hi.commands.items[2].autocast_defensive, 1);
+
+    int ac_x = 100 + 25 + 20 + 1;
+    int ac_y = 200 + 37 + 153 + 1;
+    ASSERT_INT_EQ("context autocast button hit",
+        human_gui_autocast_button_hit(&gs, &p, ac_x, ac_y), 1);
+    human_apply_autocast_spell(&hi, &gs, &p, ENCOUNTER_SPELL_ICE, 1);
+    ASSERT_INT_EQ("context explicit autocast command",
+        hi.commands.items[3].kind, HUMAN_COMMAND_SET_AUTOCAST);
+    ASSERT_INT_EQ("context explicit autocast spell",
+        hi.commands.items[3].autocast_spell, ENCOUNTER_SPELL_ICE);
+
+    int spec_x = 100 + 25 + 20 + 1;
+    int spec_y = 200 + 37 + 200 + 1;
+    ASSERT_INT_EQ("context spec hit", human_gui_spec_hit(&gs, spec_x, spec_y), 1);
+    human_apply_spec_toggle(&hi);
+    ASSERT_INT_EQ("context spec command",
+        hi.commands.items[4].kind, HUMAN_COMMAND_SPEC_TOGGLE);
+
+    human_input_destroy(&hi);
+}
+
 static void test_human_prayer_clicks_match_prayer_grid(void) {
     printf("--- human prayer clicks match prayer grid ---\n");
 
@@ -799,6 +890,7 @@ int main(void) {
     test_minimap_geometry_matches_runec_reference();
     test_spellbook_tab_uses_ancient_icon();
     test_human_combat_clicks_use_runec_geometry();
+    test_human_gui_context_action_helpers();
     test_human_prayer_clicks_match_prayer_grid();
     test_human_spell_clicks_match_ancient_grid();
     test_gui_update_tracks_bastion_and_stamina();

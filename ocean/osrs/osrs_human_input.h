@@ -141,111 +141,236 @@ static int human_offensive_click_action(const Player* p, OffensivePrayer target,
     return p->offensive_prayer == target ? ENCOUNTER_OFFENSIVE_OFF : set_refresh_action;
 }
 
-/** Handle prayer icon click. Hit-tests the 5-col prayer grid.
-    Reuses the same layout math as gui_draw_prayer(). */
-static void human_handle_prayer_click(HumanInput* hi, GuiState* gs, Player* p,
-                                       int mouse_x, int mouse_y) {
+static int human_gui_rect_contains(Rectangle rect, int mouse_x, int mouse_y) {
+    return mouse_x >= rect.x && mouse_x < rect.x + rect.width &&
+           mouse_y >= rect.y && mouse_y < rect.y + rect.height;
+}
+
+static int human_gui_prayer_idx_at(GuiState* gs, int mouse_x, int mouse_y) {
     int cols = GUI_PRAYER_GRID_COLS;
     int gap, icon_sz, gx, gy;
     gui_prayer_grid_metrics(gs, &gx, &gy, &icon_sz, &gap);
 
-    /* hit-test: which cell was clicked? */
-    if (mouse_x < gx || mouse_y < gy) return;
+    if (mouse_x < gx || mouse_y < gy) return -1;
     int col = (mouse_x - gx) / (icon_sz + gap);
     int row = (mouse_y - gy) / (icon_sz + gap);
-    if (col < 0 || col >= cols) return;
+    if (col < 0 || col >= cols) return -1;
 
     int idx = row * cols + col;
-    if (idx < 0 || idx >= GUI_PRAYER_GRID_COUNT) return;
+    if (idx < 0 || idx >= GUI_PRAYER_GRID_COUNT) return -1;
 
-    /* check click is within the cell bounds (not in the gap) */
     int cell_x = gx + col * (icon_sz + gap);
     int cell_y = gy + row * (icon_sz + gap);
-    if (mouse_x > cell_x + icon_sz || mouse_y > cell_y + icon_sz) return;
+    if (mouse_x >= cell_x + icon_sz || mouse_y >= cell_y + icon_sz) return -1;
 
-    GuiPrayerIdx pidx = (GuiPrayerIdx)idx;
+    return idx;
+}
 
-    /* UI clicks preserve OSRS toggle behavior, while the sim receives explicit set/off commands. */
+static const char* human_gui_prayer_name(GuiPrayerIdx pidx) {
+    switch (pidx) {
+        case GUI_PRAY_PROTECT_MAGIC:    return "Protect from Magic";
+        case GUI_PRAY_PROTECT_MISSILES: return "Protect from Missiles";
+        case GUI_PRAY_PROTECT_MELEE:    return "Protect from Melee";
+        case GUI_PRAY_SMITE:            return "Smite";
+        case GUI_PRAY_REDEMPTION:       return "Redemption";
+        case GUI_PRAY_PIETY:            return "Piety";
+        case GUI_PRAY_RIGOUR:           return "Rigour";
+        case GUI_PRAY_AUGURY:           return "Augury";
+        default: return NULL;
+    }
+}
+
+static int human_apply_prayer_idx(HumanInput* hi, Player* p, GuiPrayerIdx pidx) {
     switch (pidx) {
         case GUI_PRAY_PROTECT_MAGIC:
             hi->pending_prayer = human_overhead_click_action(
                 p, PRAYER_PROTECT_MAGIC, ENCOUNTER_OVERHEAD_SET_REFRESH_MAGIC);
             human_input_queue_overhead_prayer(hi, hi->pending_prayer);
-            break;
+            return 1;
         case GUI_PRAY_PROTECT_MISSILES:
             hi->pending_prayer = human_overhead_click_action(
                 p, PRAYER_PROTECT_RANGED, ENCOUNTER_OVERHEAD_SET_REFRESH_RANGED);
             human_input_queue_overhead_prayer(hi, hi->pending_prayer);
-            break;
+            return 1;
         case GUI_PRAY_PROTECT_MELEE:
             hi->pending_prayer = human_overhead_click_action(
                 p, PRAYER_PROTECT_MELEE, ENCOUNTER_OVERHEAD_SET_REFRESH_MELEE);
             human_input_queue_overhead_prayer(hi, hi->pending_prayer);
-            break;
+            return 1;
         case GUI_PRAY_SMITE:
             hi->pending_prayer = human_overhead_click_action(
                 p, PRAYER_SMITE, ENCOUNTER_OVERHEAD_SET_REFRESH_SMITE);
             human_input_queue_overhead_prayer(hi, hi->pending_prayer);
-            break;
+            return 1;
         case GUI_PRAY_REDEMPTION:
             hi->pending_prayer = human_overhead_click_action(
                 p, PRAYER_REDEMPTION, ENCOUNTER_OVERHEAD_SET_REFRESH_REDEMPTION);
             human_input_queue_overhead_prayer(hi, hi->pending_prayer);
-            break;
+            return 1;
         case GUI_PRAY_PIETY:
             hi->pending_offensive_prayer = human_offensive_click_action(
                 p, OFFENSIVE_PRAYER_PIETY, ENCOUNTER_OFFENSIVE_SET_REFRESH_PIETY);
             human_input_queue_offensive_prayer(hi, hi->pending_offensive_prayer);
-            break;
+            return 1;
         case GUI_PRAY_RIGOUR:
             hi->pending_offensive_prayer = human_offensive_click_action(
                 p, OFFENSIVE_PRAYER_RIGOUR, ENCOUNTER_OFFENSIVE_SET_REFRESH_RIGOUR);
             human_input_queue_offensive_prayer(hi, hi->pending_offensive_prayer);
-            break;
+            return 1;
         case GUI_PRAY_AUGURY:
             hi->pending_offensive_prayer = human_offensive_click_action(
                 p, OFFENSIVE_PRAYER_AUGURY, ENCOUNTER_OFFENSIVE_SET_REFRESH_AUGURY);
             human_input_queue_offensive_prayer(hi, hi->pending_offensive_prayer);
-            break;
+            return 1;
         default:
-            break;  /* non-actionable prayer */
+            return 0;
     }
 }
 
-/** Handle spell icon click. Hit-tests the 4-col Ancient spell grid. */
-static void human_handle_spell_click(HumanInput* hi, GuiState* gs,
-                                      int mouse_x, int mouse_y) {
-    int oy = gui_content_y(gs) + 8;
+static int human_gui_spell_idx_at(GuiState* gs, int mouse_x, int mouse_y) {
     int cols = GUI_SPELL_GRID_COLS;
     int gap, icon_sz, gx, gy;
     gui_spell_grid_metrics(gs, &gx, &gy, &icon_sz, &gap);
-    oy = gy;
 
-    if (mouse_x < gx || mouse_y < oy) return;
+    if (mouse_x < gx || mouse_y < gy) return -1;
     int col = (mouse_x - gx) / (icon_sz + gap);
-    int row = (mouse_y - oy) / (icon_sz + gap);
-    if (col < 0 || col >= cols) return;
+    int row = (mouse_y - gy) / (icon_sz + gap);
+    if (col < 0 || col >= cols) return -1;
 
     int idx = row * cols + col;
-    if (idx < 0 || idx >= GUI_SPELL_GRID_COUNT) return;
+    if (idx < 0 || idx >= GUI_SPELL_GRID_COUNT) return -1;
 
     int cell_x = gx + col * (icon_sz + gap);
-    int cell_y = oy + row * (icon_sz + gap);
-    if (mouse_x > cell_x + icon_sz || mouse_y > cell_y + icon_sz) return;
+    int cell_y = gy + row * (icon_sz + gap);
+    if (mouse_x >= cell_x + icon_sz || mouse_y >= cell_y + icon_sz) return -1;
 
-    GuiSpellIdx sidx = GUI_SPELL_GRID[idx].idx;
+    return GUI_SPELL_GRID[idx].idx;
+}
 
-    if (!gui_spell_castable(sidx)) return;
+static const char* human_gui_spell_name(GuiSpellIdx sidx) {
+    for (int i = 0; i < GUI_SPELL_GRID_COUNT; i++) {
+        if (GUI_SPELL_GRID[i].idx == sidx) return GUI_SPELL_GRID[i].name;
+    }
+    return NULL;
+}
+
+static int human_select_spell_idx(HumanInput* hi, GuiSpellIdx sidx) {
+    if (!gui_spell_castable(sidx)) return 0;
 
     if (gui_spell_is_ice(sidx)) {
         hi->cursor_mode = CURSOR_SPELL_TARGET;
         hi->selected_spell = ATTACK_ICE;
         hi->selected_spell_gui_idx = (int)sidx;
-    } else if (gui_spell_is_blood(sidx)) {
+        return 1;
+    }
+
+    if (gui_spell_is_blood(sidx)) {
         hi->cursor_mode = CURSOR_SPELL_TARGET;
         hi->selected_spell = ATTACK_BLOOD;
         hi->selected_spell_gui_idx = (int)sidx;
+        return 1;
     }
+
+    return 0;
+}
+
+static int human_gui_combat_style_index_at(GuiState* gs, Player* p, int mouse_x, int mouse_y) {
+    GuiCombatStyleOptions styles = gui_combat_style_options(p->equipped[GEAR_SLOT_WEAPON]);
+    for (int i = 0; i < styles.count; i++) {
+        if (human_gui_rect_contains(gui_combat_style_rect(gs, i), mouse_x, mouse_y)) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static int human_apply_combat_style(
+    HumanInput* hi,
+    GuiState* gs,
+    Player* p,
+    FightStyle fight_style
+) {
+    if (hi->enabled)
+        human_input_queue_fight_style(hi, fight_style);
+    else
+        p->fight_style = fight_style;
+
+    if (fight_style == FIGHT_STYLE_AUTOCAST ||
+            fight_style == FIGHT_STYLE_DEFENSIVE_AUTOCAST) {
+        int defensive = fight_style == FIGHT_STYLE_DEFENSIVE_AUTOCAST;
+        if (hi->enabled) {
+            human_input_queue_set_autocast(hi, gui_autocast_spell(p), defensive);
+        } else {
+            p->autocast_enabled = 1;
+            p->autocast_defensive = defensive;
+        }
+    }
+
+    (void)gs;
+    return 1;
+}
+
+static int human_gui_autocast_button_hit(GuiState* gs, Player* p, int mouse_x, int mouse_y) {
+    if (!item_supports_ancient_autocast(p->equipped[GEAR_SLOT_WEAPON])) return 0;
+    return human_gui_rect_contains(gui_side_ref_rect(gs, gui_combat_autocast_rect()),
+        mouse_x, mouse_y);
+}
+
+static int human_gui_autocast_spell_at(GuiState* gs, Player* p, int mouse_x, int mouse_y) {
+    if (!item_supports_ancient_autocast(p->equipped[GEAR_SLOT_WEAPON])) return -1;
+    int spells[2] = { ENCOUNTER_SPELL_BLOOD, ENCOUNTER_SPELL_ICE };
+    for (int i = 0; i < 2; i++) {
+        if (human_gui_rect_contains(gui_side_ref_rect(gs, gui_combat_autocast_spell_rect(i)),
+                mouse_x, mouse_y)) {
+            return spells[i];
+        }
+    }
+    return -1;
+}
+
+static int human_apply_autocast_spell(
+    HumanInput* hi,
+    GuiState* gs,
+    Player* p,
+    int spell,
+    int defensive
+) {
+    if (hi->enabled) {
+        human_input_queue_set_autocast(hi, spell, defensive);
+    } else {
+        p->autocast_enabled = 1;
+        p->autocast_defensive = defensive;
+        p->autocast_spell = spell;
+    }
+    gs->autocast_selector_open = 0;
+    return 1;
+}
+
+static int human_gui_spec_hit(GuiState* gs, int mouse_x, int mouse_y) {
+    return human_gui_rect_contains(gui_side_ref_rect(gs, gui_combat_special_rect()),
+        mouse_x, mouse_y);
+}
+
+static void human_apply_spec_toggle(HumanInput* hi) {
+    hi->pending_spec = 1;
+    human_input_queue_spec_toggle(hi);
+}
+
+/** Handle prayer icon click. Hit-tests the 5-col prayer grid.
+    Reuses the same layout math as gui_draw_prayer(). */
+static void human_handle_prayer_click(HumanInput* hi, GuiState* gs, Player* p,
+                                       int mouse_x, int mouse_y) {
+    int idx = human_gui_prayer_idx_at(gs, mouse_x, mouse_y);
+    if (idx >= 0)
+        human_apply_prayer_idx(hi, p, (GuiPrayerIdx)idx);
+}
+
+/** Handle spell icon click. Hit-tests the 4-col Ancient spell grid. */
+static void human_handle_spell_click(HumanInput* hi, GuiState* gs,
+                                      int mouse_x, int mouse_y) {
+    int idx = human_gui_spell_idx_at(gs, mouse_x, mouse_y);
+    if (idx >= 0)
+        human_select_spell_idx(hi, (GuiSpellIdx)idx);
 }
 
 /** Handle combat panel click (fight style buttons + spec bar).
@@ -255,67 +380,31 @@ static void human_handle_combat_click(HumanInput* hi, GuiState* gs, Player* p,
                                        int mouse_x, int mouse_y) {
     GuiCombatStyleOptions styles = gui_combat_style_options(p->equipped[GEAR_SLOT_WEAPON]);
 
-    for (int i = 0; i < styles.count; i++) {
-        Rectangle rect = gui_combat_style_rect(gs, i);
-        if (mouse_x >= rect.x && mouse_x < rect.x + rect.width &&
-            mouse_y >= rect.y && mouse_y < rect.y + rect.height) {
-            if (hi->enabled)
-                human_input_queue_fight_style(hi, styles.values[i]);
-            else
-                p->fight_style = styles.values[i];
-            if (styles.values[i] == FIGHT_STYLE_AUTOCAST ||
-                    styles.values[i] == FIGHT_STYLE_DEFENSIVE_AUTOCAST) {
-                int defensive = styles.values[i] == FIGHT_STYLE_DEFENSIVE_AUTOCAST;
-                if (hi->enabled)
-                    human_input_queue_set_autocast(
-                        hi,
-                        gui_autocast_spell(p),
-                        defensive);
-                else {
-                    p->autocast_enabled = 1;
-                    p->autocast_defensive = defensive;
-                }
-            }
-            return;
-        }
+    int style_idx = human_gui_combat_style_index_at(gs, p, mouse_x, mouse_y);
+    if (style_idx >= 0) {
+        human_apply_combat_style(hi, gs, p, styles.values[style_idx]);
+        return;
     }
 
     if (item_supports_ancient_autocast(p->equipped[GEAR_SLOT_WEAPON])) {
-        Rectangle ac = gui_side_ref_rect(gs, gui_combat_autocast_rect());
-        if (mouse_x >= ac.x && mouse_x < ac.x + ac.width &&
-                mouse_y >= ac.y && mouse_y < ac.y + ac.height) {
+        if (human_gui_autocast_button_hit(gs, p, mouse_x, mouse_y)) {
             gs->autocast_selector_open = !gs->autocast_selector_open;
             return;
         }
 
         if (gs->autocast_selector_open) {
-            int spells[2] = { ENCOUNTER_SPELL_BLOOD, ENCOUNTER_SPELL_ICE };
-            for (int i = 0; i < 2; i++) {
-                Rectangle rect = gui_side_ref_rect(gs, gui_combat_autocast_spell_rect(i));
-                if (mouse_x >= rect.x && mouse_x < rect.x + rect.width &&
-                        mouse_y >= rect.y && mouse_y < rect.y + rect.height) {
-                    int defensive = p->fight_style == FIGHT_STYLE_DEFENSIVE_AUTOCAST ||
-                        p->autocast_defensive;
-                    if (hi->enabled) {
-                        human_input_queue_set_autocast(hi, spells[i], defensive);
-                    } else {
-                        p->autocast_enabled = 1;
-                        p->autocast_defensive = defensive;
-                        p->autocast_spell = spells[i];
-                    }
-                    gs->autocast_selector_open = 0;
-                    return;
-                }
+            int spell = human_gui_autocast_spell_at(gs, p, mouse_x, mouse_y);
+            if (spell >= 0) {
+                int defensive = p->fight_style == FIGHT_STYLE_DEFENSIVE_AUTOCAST ||
+                    p->autocast_defensive;
+                human_apply_autocast_spell(hi, gs, p, spell, defensive);
+                return;
             }
         }
     }
 
-    /* spec bar */
-    Rectangle spec = gui_side_ref_rect(gs, gui_combat_special_rect());
-    if (mouse_x >= spec.x && mouse_x < spec.x + spec.width &&
-        mouse_y >= spec.y && mouse_y < spec.y + spec.height) {
-        hi->pending_spec = 1;
-        human_input_queue_spec_toggle(hi);
+    if (human_gui_spec_hit(gs, mouse_x, mouse_y)) {
+        human_apply_spec_toggle(hi);
     }
 }
 

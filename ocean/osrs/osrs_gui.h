@@ -2308,6 +2308,62 @@ static int gui_inv_slot_at(GuiState* gs, int mx, int my) {
     return -1;
 }
 
+static const char* gui_inv_primary_action_label(const InvSlot* inv) {
+    switch (inv->type) {
+        case INV_SLOT_EQUIPMENT: {
+            int gear_slot = item_to_gear_slot(inv->item_db_idx);
+            return gear_slot == GEAR_SLOT_WEAPON || gear_slot == GEAR_SLOT_AMMO
+                ? "Wield"
+                : "Wear";
+        }
+        case INV_SLOT_FOOD:
+        case INV_SLOT_KARAMBWAN:
+            return "Eat";
+        case INV_SLOT_BREW:
+        case INV_SLOT_RESTORE:
+        case INV_SLOT_COMBAT_POT:
+        case INV_SLOT_RANGED_POT:
+        case INV_SLOT_ANTIVENOM:
+        case INV_SLOT_PRAYER_POT:
+        case INV_SLOT_BASTION_POT:
+        case INV_SLOT_STAMINA_POT:
+            return "Drink";
+        case INV_SLOT_EMPTY:
+        default:
+            return NULL;
+    }
+}
+
+static const char* gui_inv_slot_display_name(const InvSlot* inv) {
+    switch (inv->type) {
+        case INV_SLOT_EQUIPMENT:
+            return gui_item_short_name(inv->item_db_idx);
+        case INV_SLOT_FOOD:
+            return "Shark";
+        case INV_SLOT_KARAMBWAN:
+            return "Karambwan";
+        case INV_SLOT_BREW:
+            return "Saradomin brew";
+        case INV_SLOT_RESTORE:
+            return "Super restore";
+        case INV_SLOT_COMBAT_POT:
+            return "Super combat";
+        case INV_SLOT_RANGED_POT:
+            return "Ranging potion";
+        case INV_SLOT_ANTIVENOM:
+            return "Anti-venom+";
+        case INV_SLOT_PRAYER_POT:
+            return "Prayer potion";
+        case INV_SLOT_BASTION_POT:
+            return "Bastion potion";
+        case INV_SLOT_STAMINA_POT:
+            return "Stamina potion";
+        case INV_SLOT_EMPTY:
+        default:
+            return "";
+    }
+}
+
 /** Handle inventory click: equip gear items, eat/drink consumables.
     hi is a HumanInput* (from osrs_pvp_human_input_types.h, included above).
     When non-NULL and enabled, food/potion clicks set pending_* fields instead of

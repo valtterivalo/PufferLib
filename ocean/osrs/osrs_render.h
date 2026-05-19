@@ -332,6 +332,12 @@ typedef enum {
     CMENU_ACTION_LAB_KILL_NPC,
     CMENU_ACTION_LAB_DELETE_NPC,
     CMENU_ACTION_LAB_TOGGLE_PILLAR,
+    CMENU_ACTION_GUI_INVENTORY_PRIMARY,
+    CMENU_ACTION_GUI_PRAYER,
+    CMENU_ACTION_GUI_SPELL,
+    CMENU_ACTION_GUI_COMBAT_STYLE,
+    CMENU_ACTION_GUI_AUTOCAST,
+    CMENU_ACTION_GUI_SPEC_TOGGLE,
     CMENU_ACTION_CANCEL,
 } ContextMenuAction;
 
@@ -340,6 +346,12 @@ typedef struct {
     int entity_idx;         /* render entity index for ATTACK, -1 for walk/cancel */
     int npc_type;
     int pillar_idx;
+    int inventory_slot;
+    int prayer_idx;
+    int spell_idx;
+    int fight_style;
+    int autocast_spell;
+    int autocast_defensive;
     char label[64];         /* display text, e.g. "Attack Jal-Zek" */
 } ContextMenuItem;
 
@@ -350,6 +362,7 @@ typedef struct {
     int item_count;
     ContextMenuItem items[CONTEXT_MENU_MAX_ITEMS];
     int walk_tile_x, walk_tile_y;  /* world tile for "Walk here" */
+    int click_screen_x, click_screen_y;
     int hover_idx;           /* item currently hovered, -1 = none */
 } ContextMenu;
 
@@ -841,6 +854,12 @@ static ContextMenuItem* context_menu_add(
     item->entity_idx = entity_idx;
     item->npc_type = -1;
     item->pillar_idx = -1;
+    item->inventory_slot = -1;
+    item->prayer_idx = -1;
+    item->spell_idx = -1;
+    item->fight_style = -1;
+    item->autocast_spell = -1;
+    item->autocast_defensive = 0;
     snprintf(item->label, sizeof(item->label), "%s", label);
     return item;
 }
@@ -852,6 +871,31 @@ static void context_menu_add_lab_npc(
         cm, CMENU_ACTION_LAB_SPAWN_NPC, -1, label);
     if (!item) return;
     item->npc_type = npc_type;
+}
+
+static void context_menu_finish_layout(ContextMenu* cm, int mx, int my) {
+    int max_w = CONTEXT_MENU_MIN_W;
+    int title_w = MeasureText("Choose Option", 11) + CONTEXT_MENU_PADDING * 2 + 10;
+    if (title_w > max_w) max_w = title_w;
+    for (int i = 0; i < cm->item_count; i++) {
+        int w = MeasureText(cm->items[i].label, 11) + CONTEXT_MENU_PADDING * 2 + 12;
+        if (w > max_w) max_w = w;
+    }
+    cm->width = max_w;
+    cm->click_screen_x = mx;
+    cm->click_screen_y = my;
+
+    int menu_h = context_menu_height(cm);
+    cm->screen_x = mx;
+    cm->screen_y = my;
+    if (cm->screen_x + cm->width > RENDER_WINDOW_W)
+        cm->screen_x = RENDER_WINDOW_W - cm->width;
+    if (cm->screen_y + menu_h > RENDER_WINDOW_H)
+        cm->screen_y = RENDER_WINDOW_H - menu_h;
+    if (cm->screen_x < 0) cm->screen_x = 0;
+    if (cm->screen_y < 0) cm->screen_y = 0;
+
+    cm->visible = (cm->item_count > 0);
 }
 
 /** Build context menu from a right-click at screen position (mx, my).
@@ -994,28 +1038,131 @@ static void context_menu_build(RenderClient* rc, OsrsEnv* env, int mx, int my) {
 
     context_menu_add(cm, CMENU_ACTION_CANCEL, -1, "Cancel");
 
-    /* compute menu width from widest label */
-    int max_w = CONTEXT_MENU_MIN_W;
-    int title_w = MeasureText("Choose Option", 11) + CONTEXT_MENU_PADDING * 2 + 10;
-    if (title_w > max_w) max_w = title_w;
-    for (int i = 0; i < cm->item_count; i++) {
-        int w = MeasureText(cm->items[i].label, 11) + CONTEXT_MENU_PADDING * 2 + 12;
-        if (w > max_w) max_w = w;
+    context_menu_finish_layout(cm, mx, my);
+}
+
+static void context_menu_build_gui(RenderClient* rc, Player* p, int mx, int my) {
+    ContextMenu* cm = &rc->context_menu;
+    cm->item_count = 0;
+    cm->hover_idx = -1;
+    cm->walk_tile_x = -1;
+    cm->walk_tile_y = -1;
+
+    switch (rc->gui.active_tab) {
+        case GUI_TAB_INVENTORY: {
+            int slot = gui_inv_slot_at(&rc->gui, mx, my);
+            if (slot >= 0) {
+                InvSlot* inv = &rc->gui.inv_grid[slot];
+                const char* action = gui_inv_primary_action_label(inv);
+                const char* name = gui_inv_slot_display_name(inv);
+                if (action && name[0]) {
+                    ContextMenuItem* item = context_menu_add(
+                        cm,
+                        CMENU_ACTION_GUI_INVENTORY_PRIMARY,
+                        -1,
+                        TextFormat("%s %s", action, name));
+                    if (item) item->inventory_slot = slot;
+                }
+            }
+            break;
+        }
+
+        case GUI_TAB_PRAYER: {
+            int idx = human_gui_prayer_idx_at(&rc->gui, mx, my);
+            if (idx >= 0) {
+                const char* name = human_gui_prayer_name((GuiPrayerIdx)idx);
+                if (name) {
+                    int active = gui_prayer_is_active((GuiPrayerIdx)idx, p);
+                    ContextMenuItem* item = context_menu_add(
+                        cm,
+                        CMENU_ACTION_GUI_PRAYER,
+                        -1,
+                        TextFormat("%s %s", active ? "Deactivate" : "Activate", name));
+                    if (item) item->prayer_idx = idx;
+                }
+            }
+            break;
+        }
+
+        case GUI_TAB_SPELLBOOK: {
+            int idx = human_gui_spell_idx_at(&rc->gui, mx, my);
+            if (idx >= 0 && gui_spell_castable((GuiSpellIdx)idx)) {
+                const char* name = human_gui_spell_name((GuiSpellIdx)idx);
+                if (name) {
+                    ContextMenuItem* item = context_menu_add(
+                        cm,
+                        CMENU_ACTION_GUI_SPELL,
+                        -1,
+                        TextFormat("Cast %s", name));
+                    if (item) item->spell_idx = idx;
+                }
+            }
+            break;
+        }
+
+        case GUI_TAB_COMBAT: {
+            GuiCombatStyleOptions styles = gui_combat_style_options(
+                p->equipped[GEAR_SLOT_WEAPON]);
+            int style_idx = human_gui_combat_style_index_at(&rc->gui, p, mx, my);
+            if (style_idx >= 0 && style_idx < styles.count) {
+                ContextMenuItem* item = context_menu_add(
+                    cm,
+                    CMENU_ACTION_GUI_COMBAT_STYLE,
+                    -1,
+                    TextFormat("Select %s", styles.names[style_idx]));
+                if (item) item->fight_style = styles.values[style_idx];
+            }
+
+            if (human_gui_autocast_button_hit(&rc->gui, p, mx, my)) {
+                int defensive = p->fight_style == FIGHT_STYLE_DEFENSIVE_AUTOCAST ||
+                    p->autocast_defensive;
+                ContextMenuItem* blood = context_menu_add(
+                    cm, CMENU_ACTION_GUI_AUTOCAST, -1, "Autocast Blood Barrage");
+                if (blood) {
+                    blood->autocast_spell = ENCOUNTER_SPELL_BLOOD;
+                    blood->autocast_defensive = defensive;
+                }
+                ContextMenuItem* ice = context_menu_add(
+                    cm, CMENU_ACTION_GUI_AUTOCAST, -1, "Autocast Ice Barrage");
+                if (ice) {
+                    ice->autocast_spell = ENCOUNTER_SPELL_ICE;
+                    ice->autocast_defensive = defensive;
+                }
+            } else if (rc->gui.autocast_selector_open) {
+                int spell = human_gui_autocast_spell_at(&rc->gui, p, mx, my);
+                if (spell >= 0) {
+                    int defensive = p->fight_style == FIGHT_STYLE_DEFENSIVE_AUTOCAST ||
+                        p->autocast_defensive;
+                    ContextMenuItem* item = context_menu_add(
+                        cm,
+                        CMENU_ACTION_GUI_AUTOCAST,
+                        -1,
+                        TextFormat("Autocast %s", gui_autocast_spell_name(spell)));
+                    if (item) {
+                        item->autocast_spell = spell;
+                        item->autocast_defensive = defensive;
+                    }
+                }
+            }
+
+            if (human_gui_spec_hit(&rc->gui, mx, my)) {
+                context_menu_add(cm, CMENU_ACTION_GUI_SPEC_TOGGLE, -1,
+                    "Use Special Attack");
+            }
+            break;
+        }
+
+        default:
+            break;
     }
-    cm->width = max_w;
 
-    /* position: at cursor, clamped to screen bounds */
-    int menu_h = context_menu_height(cm);
-    cm->screen_x = mx;
-    cm->screen_y = my;
-    if (cm->screen_x + cm->width > RENDER_WINDOW_W)
-        cm->screen_x = RENDER_WINDOW_W - cm->width;
-    if (cm->screen_y + menu_h > RENDER_WINDOW_H)
-        cm->screen_y = RENDER_WINDOW_H - menu_h;
-    if (cm->screen_x < 0) cm->screen_x = 0;
-    if (cm->screen_y < 0) cm->screen_y = 0;
+    if (cm->item_count == 0) {
+        context_menu_dismiss(cm);
+        return;
+    }
 
-    cm->visible = (cm->item_count > 0);
+    context_menu_add(cm, CMENU_ACTION_CANCEL, -1, "Cancel");
+    context_menu_finish_layout(cm, mx, my);
 }
 
 /** Execute a context menu item action on the HumanInput staging buffer. */
@@ -1031,7 +1178,7 @@ static void context_menu_execute(RenderClient* rc, OsrsEnv* env, int item_idx) {
             rc->human_input.pending_move_y = cm->walk_tile_y;
             rc->human_input.pending_attack = 0;
             human_input_queue_walk(&rc->human_input, cm->walk_tile_x, cm->walk_tile_y);
-            human_set_click_cross(&rc->human_input, cm->screen_x, cm->screen_y, 0);
+            human_set_click_cross(&rc->human_input, cm->click_screen_x, cm->click_screen_y, 0);
             break;
 
         case CMENU_ACTION_ATTACK: {
@@ -1053,10 +1200,69 @@ static void context_menu_execute(RenderClient* rc, OsrsEnv* env, int item_idx) {
                         &rc->human_input,
                         rc->human_input.pending_target_idx);
                 }
-                human_set_click_cross(&rc->human_input, cm->screen_x, cm->screen_y, 1);
+                human_set_click_cross(&rc->human_input, cm->click_screen_x, cm->click_screen_y, 1);
             }
             break;
         }
+
+        case CMENU_ACTION_GUI_INVENTORY_PRIMARY: {
+            Player* p = rc->entity_count > 0 && rc->gui.gui_entity_idx < rc->entity_count
+                ? render_get_player_ptr(env, rc->gui.gui_entity_idx)
+                : NULL;
+            if (p) {
+                gui_inv_click(&rc->gui, p, item->inventory_slot, &rc->human_input);
+            }
+            break;
+        }
+
+        case CMENU_ACTION_GUI_PRAYER: {
+            Player* p = rc->entity_count > 0 && rc->gui.gui_entity_idx < rc->entity_count
+                ? render_get_player_ptr(env, rc->gui.gui_entity_idx)
+                : NULL;
+            if (p && item->prayer_idx >= 0) {
+                human_apply_prayer_idx(&rc->human_input, p, (GuiPrayerIdx)item->prayer_idx);
+            }
+            break;
+        }
+
+        case CMENU_ACTION_GUI_SPELL:
+            if (item->spell_idx >= 0) {
+                human_select_spell_idx(&rc->human_input, (GuiSpellIdx)item->spell_idx);
+            }
+            break;
+
+        case CMENU_ACTION_GUI_COMBAT_STYLE: {
+            Player* p = rc->entity_count > 0 && rc->gui.gui_entity_idx < rc->entity_count
+                ? render_get_player_ptr(env, rc->gui.gui_entity_idx)
+                : NULL;
+            if (p && item->fight_style >= 0) {
+                human_apply_combat_style(
+                    &rc->human_input,
+                    &rc->gui,
+                    p,
+                    (FightStyle)item->fight_style);
+            }
+            break;
+        }
+
+        case CMENU_ACTION_GUI_AUTOCAST: {
+            Player* p = rc->entity_count > 0 && rc->gui.gui_entity_idx < rc->entity_count
+                ? render_get_player_ptr(env, rc->gui.gui_entity_idx)
+                : NULL;
+            if (p && item->autocast_spell >= 0) {
+                human_apply_autocast_spell(
+                    &rc->human_input,
+                    &rc->gui,
+                    p,
+                    item->autocast_spell,
+                    item->autocast_defensive);
+            }
+            break;
+        }
+
+        case CMENU_ACTION_GUI_SPEC_TOGGLE:
+            human_apply_spec_toggle(&rc->human_input);
+            break;
 
         case CMENU_ACTION_LAB_SELECT_NPC: {
             int ei = item->entity_idx;
@@ -2290,12 +2496,21 @@ static void render_handle_input(RenderClient* rc, OsrsEnv* env) {
         if (rc->human_input.enabled) {
             int rmx = GetMouseX();
             int rmy = GetMouseY();
-            /* only open menu in game area (left of GUI panel) */
             if (rmx < rc->gui.panel_x) {
                 /* cancel spell targeting on right-click (OSRS behavior) */
                 if (rc->human_input.cursor_mode == CURSOR_SPELL_TARGET)
                     rc->human_input.cursor_mode = CURSOR_NORMAL;
                 context_menu_build(rc, env, rmx, rmy);
+            } else if (rmx < rc->gui.panel_x + rc->gui.panel_w &&
+                    rmy >= rc->gui.panel_y &&
+                    rmy < rc->gui.panel_y + rc->gui.panel_h) {
+                Player* gui_p = rc->entity_count > 0 && rc->gui.gui_entity_idx < rc->entity_count
+                    ? render_get_player_ptr(env, rc->gui.gui_entity_idx)
+                    : NULL;
+                if (gui_p)
+                    context_menu_build_gui(rc, gui_p, rmx, rmy);
+                else
+                    context_menu_dismiss(&rc->context_menu);
             } else {
                 context_menu_dismiss(&rc->context_menu);
             }
