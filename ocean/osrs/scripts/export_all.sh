@@ -86,7 +86,7 @@ python export_spotanims.py \
 python export_projectile_models.py \
     --cache "$CACHE" \
     --spotanims "$DATA_DIR/spotanims.bin" \
-    --spotanim-ids 15,27,85,231,368,369,377,659,660,665,1040,1042,1043,1120,1122,1468 \
+    --spotanim-ids 15,24,27,85,231,368,369,377,659,660,665,1040,1042,1043,1116,1120,1122,1123,1374,1383,1468 \
     --output "$DATA_DIR/projectiles.models"
 
 echo ""
