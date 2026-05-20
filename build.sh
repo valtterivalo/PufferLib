@@ -72,7 +72,7 @@ fi
 OSRS_INCLUDE=""
 if [[ "$SRC_DIR" == *osrs* ]]; then
     OSRS_INCLUDE="-Iocean/osrs"
-    OSRS_ASSET_VERSION="osrs-assets-v9"
+    OSRS_ASSET_VERSION="osrs-assets-v10"
     OSRS_DATA_DIR="ocean/osrs/data"
     if [ ! -f "$OSRS_DATA_DIR/equipment.models" ] || \
        [ ! -f "$OSRS_DATA_DIR/equipment.anims" ] || \
