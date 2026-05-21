@@ -11,6 +11,10 @@ raylib_wasm/
 
 # Reference repos and caches (large, not tracked)
 .refs/
+refs/
+
+# Generated web artifacts
+build_web/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
