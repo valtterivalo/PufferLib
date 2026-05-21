@@ -182,6 +182,8 @@ typedef struct {
         int curve;           /* OSRS slope param (0 = use default 16) */
         float arc_height;    /* sinusoidal arc peak in tiles (0 = quadratic/straight) */
         int tracks_target;   /* 1 = re-aim toward target each tick */
+        int source_kind;
+        int source_npc_slot;
         int target_kind;
         int target_npc_slot;
         int start_delay;     /* ticks before projectile becomes visible (0 = immediate) */
@@ -249,6 +251,8 @@ static inline int encounter_emit_projectile(
     ov->projectiles[i].offset_y = 0.0f;
     ov->projectiles[i].offset_z = 0.0f;
     ov->projectiles[i].tracks_target = tracks_target;
+    ov->projectiles[i].source_kind = ENCOUNTER_PROJECTILE_TARGET_FIXED;
+    ov->projectiles[i].source_npc_slot = -1;
     ov->projectiles[i].target_kind = tracks_target
         ? ENCOUNTER_PROJECTILE_TARGET_PLAYER
         : ENCOUNTER_PROJECTILE_TARGET_FIXED;
@@ -276,6 +280,26 @@ static inline void encounter_require_projectile_index(const EncounterOverlay* ov
             projectile_idx, ov->projectile_count);
         abort();
     }
+}
+
+static inline void encounter_set_projectile_source_player(
+    EncounterOverlay* ov, int projectile_idx
+) {
+    encounter_require_projectile_index(ov, projectile_idx);
+    ov->projectiles[projectile_idx].source_kind = ENCOUNTER_PROJECTILE_TARGET_PLAYER;
+    ov->projectiles[projectile_idx].source_npc_slot = -1;
+}
+
+static inline void encounter_set_projectile_source_npc_slot(
+    EncounterOverlay* ov, int projectile_idx, int npc_slot
+) {
+    encounter_require_projectile_index(ov, projectile_idx);
+    if (npc_slot < 0) {
+        fprintf(stderr, "encounter projectile source npc slot is invalid: %d\n", npc_slot);
+        abort();
+    }
+    ov->projectiles[projectile_idx].source_kind = ENCOUNTER_PROJECTILE_TARGET_NPC_SLOT;
+    ov->projectiles[projectile_idx].source_npc_slot = npc_slot;
 }
 
 static inline void encounter_set_projectile_target_npc_slot(
@@ -472,7 +496,8 @@ static inline void encounter_resolve_attack_target(
 /*   4. calling encounter_drain_all_prayers() on pretick (handles both slots */
 /*      + activation-tick skip + pp=0 auto-clear)                            */
 /* overhead action encoding. dim depends on encounter:
-   - PvE (inferno/zulrah): 5 dim, actions 0-4 only
+   - PvE: 5 dim, actions 0-4 only
+   - PvE with Redemption: 6 dim, action 5 maps to Redemption locally
    - PvP: 7 dim, full range */
 #define ENCOUNTER_OVERHEAD_NO_CHANGE                    0
 #define ENCOUNTER_OVERHEAD_OFF                          1
@@ -482,6 +507,7 @@ static inline void encounter_resolve_attack_target(
 #define ENCOUNTER_OVERHEAD_SET_REFRESH_SMITE            5
 #define ENCOUNTER_OVERHEAD_SET_REFRESH_REDEMPTION       6
 #define ENCOUNTER_OVERHEAD_DIM_PVE                      5
+#define ENCOUNTER_OVERHEAD_DIM_PVE_REDEMPTION           6
 #define ENCOUNTER_OVERHEAD_DIM_PVP                      7
 
 /* offensive action encoding — 5 dim, shared by all encounters. */

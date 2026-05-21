@@ -22,35 +22,6 @@
 struct RenderClient;
 
 
-/** Convert screen X to world tile X (inverse of render_world_to_screen_x_rc).
-    tile_size = RENDER_TILE_SIZE (passed to avoid header ordering issues). */
-static inline int human_screen_to_world_x(int screen_x, int arena_base_x,
-                                           int tile_size) {
-    return screen_x / tile_size + arena_base_x;
-}
-
-/** Convert screen Y to world tile Y (inverse of render_world_to_screen_y_rc).
-    OSRS Y increases north, screen Y increases down. */
-static inline int human_screen_to_world_y(int screen_y, int arena_base_y,
-                                           int arena_height, int header_h,
-                                           int tile_size) {
-    int flipped = (screen_y - header_h) / tile_size;
-    return arena_base_y + (arena_height - 1) - flipped;
-}
-
-
-/** Check if world tile (wx,wy) is within an NPC's bounding box.
-    OSRS NPCs occupy npc_size x npc_size tiles anchored at (x,y) as southwest corner.
-    Players have npc_size 0 or 1, occupying just their tile. */
-static int human_tile_hits_entity(RenderEntity* ent, int wx, int wy) {
-    int size = ent->npc_size > 1 ? ent->npc_size : 1;
-    return wx >= ent->x && wx < ent->x + size &&
-           wy >= ent->y && wy < ent->y + size;
-}
-
-typedef int (*human_can_attack_entity_fn)(
-    void* ctx, const RenderEntity* entity, int entity_idx, int gui_entity_idx);
-
 /** Set click cross at screen position (2D overlay, like real OSRS client). */
 static void human_set_click_cross(HumanInput* hi, int screen_x, int screen_y, int is_attack) {
     hi->click_screen_x = screen_x;
@@ -58,79 +29,6 @@ static void human_set_click_cross(HumanInput* hi, int screen_x, int screen_y, in
     hi->click_cross_timer = 0;
     hi->click_cross_active = 1;
     hi->click_is_attack = is_attack;
-}
-
-/** Process a world-tile click: attack entity if hit, otherwise move.
-    screen_x/y is the raw mouse position for the click cross overlay. */
-static void human_process_tile_click(HumanInput* hi,
-                                      int wx, int wy,
-                                      int screen_x, int screen_y,
-                                      RenderEntity* entities, int entity_count,
-                                      int gui_entity_idx,
-                                      human_can_attack_entity_fn can_attack_entity,
-                                      void* can_attack_ctx) {
-    /* check if an attackable entity occupies this tile (bounding box) */
-    for (int i = 0; i < entity_count; i++) {
-        if (i == gui_entity_idx && entities[i].entity_type == ENTITY_PLAYER) continue;
-        if (!entities[i].npc_visible && entities[i].entity_type == ENTITY_NPC) continue;
-        if (human_tile_hits_entity(&entities[i], wx, wy)) {
-            if (can_attack_entity &&
-                !can_attack_entity(can_attack_ctx, &entities[i], i, gui_entity_idx)) {
-                continue;
-            }
-            hi->pending_attack = 1;
-            hi->pending_target_idx = entities[i].npc_slot;
-            /* attack cancels movement — server stops walking to old dest
-               and auto-walks toward target instead (OSRS server behavior) */
-            hi->pending_move_x = -1;
-            hi->pending_move_y = -1;
-            if (hi->cursor_mode == CURSOR_SPELL_TARGET) {
-                hi->pending_spell = hi->selected_spell;
-                human_input_queue_spell_target(hi, hi->selected_spell, hi->pending_target_idx);
-                hi->cursor_mode = CURSOR_NORMAL;
-            } else {
-                human_input_queue_attack_npc(hi, hi->pending_target_idx);
-            }
-            human_set_click_cross(hi, screen_x, screen_y, 1);
-            return;
-        }
-    }
-
-    /* no entity — movement click */
-    if (hi->cursor_mode == CURSOR_SPELL_TARGET) {
-        hi->cursor_mode = CURSOR_NORMAL;
-        return;
-    }
-
-    hi->pending_move_x = wx;
-    hi->pending_move_y = wy;
-    human_input_queue_walk(hi, wx, wy);
-    human_set_click_cross(hi, screen_x, screen_y, 0);
-}
-
-/** Handle ground/entity click in 2D grid mode.
-    tile_size and header_h are RENDER_TILE_SIZE/RENDER_HEADER_HEIGHT. */
-static void human_handle_ground_click(HumanInput* hi,
-                                       int mouse_x, int mouse_y,
-                                       int arena_base_x, int arena_base_y,
-                                       int arena_width, int arena_height,
-                                       RenderEntity* entities, int entity_count,
-                                       int gui_entity_idx,
-                                       human_can_attack_entity_fn can_attack_entity,
-                                       void* can_attack_ctx,
-                                       int tile_size, int header_h) {
-    if (mouse_y < header_h) return;
-    int grid_pixel_w = arena_width * tile_size;
-    int grid_pixel_h = arena_height * tile_size;
-    if (mouse_x < 0 || mouse_x >= grid_pixel_w) return;
-    if (mouse_y >= header_h + grid_pixel_h) return;
-
-    int wx = human_screen_to_world_x(mouse_x, arena_base_x, tile_size);
-    int wy = human_screen_to_world_y(mouse_y, arena_base_y, arena_height,
-                                      header_h, tile_size);
-    human_process_tile_click(hi, wx, wy, mouse_x, mouse_y,
-                              entities, entity_count, gui_entity_idx,
-                              can_attack_entity, can_attack_ctx);
 }
 
 static int human_overhead_click_action(const Player* p, OverheadPrayer target, int set_refresh_action) {
@@ -258,16 +156,36 @@ static int human_select_spell_idx(HumanInput* hi, GuiSpellIdx sidx) {
     if (!gui_spell_castable(sidx)) return 0;
 
     if (gui_spell_is_ice(sidx)) {
-        hi->cursor_mode = CURSOR_SPELL_TARGET;
-        hi->selected_spell = ATTACK_ICE;
-        hi->selected_spell_gui_idx = (int)sidx;
+        human_input_apply_ui_intent(
+            hi, osrs_ui_intent_select_spell(ATTACK_ICE, (int)sidx));
         return 1;
     }
 
     if (gui_spell_is_blood(sidx)) {
-        hi->cursor_mode = CURSOR_SPELL_TARGET;
-        hi->selected_spell = ATTACK_BLOOD;
-        hi->selected_spell_gui_idx = (int)sidx;
+        human_input_apply_ui_intent(
+            hi, osrs_ui_intent_select_spell(ATTACK_BLOOD, (int)sidx));
+        return 1;
+    }
+
+    return 0;
+}
+
+static int human_apply_selected_target_to_widget(HumanInput* hi, uint32_t widget_component_id) {
+    if (hi->cursor_mode == CURSOR_ITEM_TARGET) {
+        OsrsUiIntent intent = osrs_ui_intent_item_on_widget(
+            hi->selected_item_inventory_slot,
+            hi->selected_item_db_idx,
+            hi->selected_item_osrs_id,
+            widget_component_id);
+        human_input_apply_ui_intent(hi, intent);
+        return 1;
+    }
+
+    if (hi->cursor_mode == CURSOR_SPELL_TARGET) {
+        human_input_apply_ui_intent(hi, osrs_ui_intent_spell_on_widget(
+            hi->selected_spell,
+            hi->selected_spell_gui_idx,
+            widget_component_id));
         return 1;
     }
 
@@ -361,16 +279,28 @@ static void human_apply_spec_toggle(HumanInput* hi) {
 static void human_handle_prayer_click(HumanInput* hi, GuiState* gs, Player* p,
                                        int mouse_x, int mouse_y) {
     int idx = human_gui_prayer_idx_at(gs, mouse_x, mouse_y);
-    if (idx >= 0)
+    if (idx >= 0) {
+        if (hi->cursor_mode != CURSOR_NORMAL) {
+            human_apply_selected_target_to_widget(hi,
+                osrs_ui_intent_widget_component_id(OSRS_UI_GROUP_PRAYERBOOK, idx));
+            return;
+        }
         human_apply_prayer_idx(hi, p, (GuiPrayerIdx)idx);
+    }
 }
 
 /** Handle spell icon click. Hit-tests the 4-col Ancient spell grid. */
 static void human_handle_spell_click(HumanInput* hi, GuiState* gs,
                                       int mouse_x, int mouse_y) {
     int idx = human_gui_spell_idx_at(gs, mouse_x, mouse_y);
-    if (idx >= 0)
+    if (idx >= 0) {
+        if (hi->cursor_mode != CURSOR_NORMAL) {
+            human_apply_selected_target_to_widget(hi,
+                osrs_ui_intent_widget_component_id(OSRS_UI_GROUP_MAGIC_SPELLBOOK, idx));
+            return;
+        }
         human_select_spell_idx(hi, (GuiSpellIdx)idx);
+    }
 }
 
 /** Handle combat panel click (fight style buttons + spec bar).
@@ -382,12 +312,22 @@ static void human_handle_combat_click(HumanInput* hi, GuiState* gs, Player* p,
 
     int style_idx = human_gui_combat_style_index_at(gs, p, mouse_x, mouse_y);
     if (style_idx >= 0) {
+        if (hi->cursor_mode != CURSOR_NORMAL) {
+            human_apply_selected_target_to_widget(hi,
+                osrs_ui_intent_widget_component_id(OSRS_UI_GROUP_COMBAT_INTERFACE, style_idx));
+            return;
+        }
         human_apply_combat_style(hi, gs, p, styles.values[style_idx]);
         return;
     }
 
     if (item_supports_ancient_autocast(p->equipped[GEAR_SLOT_WEAPON])) {
         if (human_gui_autocast_button_hit(gs, p, mouse_x, mouse_y)) {
+            if (hi->cursor_mode != CURSOR_NORMAL) {
+                human_apply_selected_target_to_widget(hi,
+                    osrs_ui_intent_widget_component_id(OSRS_UI_GROUP_COMBAT_INTERFACE, 100));
+                return;
+            }
             gs->autocast_selector_open = !gs->autocast_selector_open;
             return;
         }
@@ -395,6 +335,12 @@ static void human_handle_combat_click(HumanInput* hi, GuiState* gs, Player* p,
         if (gs->autocast_selector_open) {
             int spell = human_gui_autocast_spell_at(gs, p, mouse_x, mouse_y);
             if (spell >= 0) {
+                if (hi->cursor_mode != CURSOR_NORMAL) {
+                    human_apply_selected_target_to_widget(hi,
+                        osrs_ui_intent_widget_component_id(
+                            OSRS_UI_GROUP_COMBAT_INTERFACE, 110 + spell));
+                    return;
+                }
                 int defensive = p->fight_style == FIGHT_STYLE_DEFENSIVE_AUTOCAST ||
                     p->autocast_defensive;
                 human_apply_autocast_spell(hi, gs, p, spell, defensive);
@@ -404,6 +350,11 @@ static void human_handle_combat_click(HumanInput* hi, GuiState* gs, Player* p,
     }
 
     if (human_gui_spec_hit(gs, mouse_x, mouse_y)) {
+        if (hi->cursor_mode != CURSOR_NORMAL) {
+            human_apply_selected_target_to_widget(hi,
+                osrs_ui_intent_widget_component_id(OSRS_UI_GROUP_COMBAT_INTERFACE, 120));
+            return;
+        }
         human_apply_spec_toggle(hi);
     }
 }
@@ -529,22 +480,6 @@ static void human_draw_click_cross(HumanInput* hi, Texture2D* cross_sprites, int
             : CLITERAL(Color){ 255, 255, 0, (unsigned char)alpha };
         DrawLine(cx - 6, cy - 6, cx + 6, cy + 6, c);
         DrawLine(cx + 6, cy - 6, cx - 6, cy + 6, c);
-    }
-}
-
-/** Draw HUD indicators for human control mode.
-    Call from the header rendering section. */
-static void human_draw_hud(HumanInput* hi) {
-    if (!hi->enabled) return;
-
-    /* "HUMAN" indicator in header */
-    DrawText("HUMAN", 8, 8, 16, YELLOW);
-
-    /* spell targeting mode indicator */
-    if (hi->cursor_mode == CURSOR_SPELL_TARGET) {
-        const char* spell = (hi->selected_spell == ATTACK_ICE) ? "[ICE]" :
-                            (hi->selected_spell == ATTACK_BLOOD) ? "[BLOOD]" : "[SPELL]";
-        DrawText(spell, 80, 8, 14, CLITERAL(Color){100, 200, 255, 255});
     }
 }
 

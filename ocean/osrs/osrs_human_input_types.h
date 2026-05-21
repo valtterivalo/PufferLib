@@ -12,8 +12,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "osrs_ui_intent.h"
+
 typedef enum {
     CURSOR_NORMAL = 0,
+    CURSOR_ITEM_TARGET,
     CURSOR_SPELL_TARGET,   /* clicked a combat spell, waiting for target click */
 } CursorMode;
 
@@ -30,6 +33,9 @@ typedef enum {
     HUMAN_COMMAND_EQUIP_INVENTORY_ITEM,
     HUMAN_COMMAND_FIGHT_STYLE,
     HUMAN_COMMAND_SET_AUTOCAST,
+    HUMAN_COMMAND_ITEM_ON_ITEM,
+    HUMAN_COMMAND_ITEM_ON_WIDGET,
+    HUMAN_COMMAND_SPELL_ON_WIDGET,
 } HumanCommandKind;
 
 typedef struct {
@@ -41,12 +47,16 @@ typedef struct {
     int food;
     int potion;
     int spell;
+    int spell_gui_idx;
     int inventory_slot;
+    int target_inventory_slot;
     int item_db_idx;
+    int item_osrs_id;
     int gear_slot;
     int fight_style;
     int autocast_spell;
     int autocast_defensive;
+    uint32_t widget_component_id;
 } HumanCommand;
 
 typedef struct {
@@ -75,6 +85,9 @@ typedef struct HumanInput {
     int pending_gear;                      /* gear switch action value, 0 = none */
 
     CursorMode cursor_mode;
+    int selected_item_inventory_slot;       /* inventory slot selected with Use. -1 = none */
+    int selected_item_db_idx;               /* ITEM_DATABASE index for selected item */
+    int selected_item_osrs_id;              /* OSRS item id for selected item source */
     int selected_spell;                    /* ATTACK_ICE or ATTACK_BLOOD for targeting */
     int selected_spell_gui_idx;            /* GuiSpellIdx of the exact spell cell clicked, for UI highlight. -1 = none */
 
@@ -122,6 +135,9 @@ static inline void human_input_init(HumanInput* hi) {
     hi->pending_prayer = -1;
     hi->pending_offensive_prayer = -1;
     hi->pending_target_idx = -1;
+    hi->selected_item_inventory_slot = -1;
+    hi->selected_item_db_idx = -1;
+    hi->selected_spell_gui_idx = -1;
     hi->click_cross_active = 0;
     human_command_queue_reserve(&hi->commands, 8);
 }
@@ -144,6 +160,15 @@ static inline void human_input_clear_pending(HumanInput* hi) {
 static inline void human_input_clear_move(HumanInput* hi) {
     hi->pending_move_x = -1;
     hi->pending_move_y = -1;
+}
+
+static inline void human_input_clear_selected_ui_target(HumanInput* hi) {
+    hi->cursor_mode = CURSOR_NORMAL;
+    hi->selected_item_inventory_slot = -1;
+    hi->selected_item_db_idx = -1;
+    hi->selected_item_osrs_id = 0;
+    hi->selected_spell = 0;
+    hi->selected_spell_gui_idx = -1;
 }
 
 static inline void human_input_queue_walk(HumanInput* hi, int world_x, int world_y) {
@@ -198,6 +223,52 @@ static inline void human_input_queue_spell_target(HumanInput* hi, int spell, int
     });
 }
 
+static inline void human_input_queue_item_on_item(
+    HumanInput* hi,
+    int source_inventory_slot,
+    int target_inventory_slot,
+    int item_db_idx,
+    int item_osrs_id
+) {
+    human_input_queue_command(hi, (HumanCommand){
+        .kind = HUMAN_COMMAND_ITEM_ON_ITEM,
+        .inventory_slot = source_inventory_slot,
+        .target_inventory_slot = target_inventory_slot,
+        .item_db_idx = item_db_idx,
+        .item_osrs_id = item_osrs_id,
+    });
+}
+
+static inline void human_input_queue_item_on_widget(
+    HumanInput* hi,
+    int source_inventory_slot,
+    int item_db_idx,
+    int item_osrs_id,
+    uint32_t widget_component_id
+) {
+    human_input_queue_command(hi, (HumanCommand){
+        .kind = HUMAN_COMMAND_ITEM_ON_WIDGET,
+        .inventory_slot = source_inventory_slot,
+        .item_db_idx = item_db_idx,
+        .item_osrs_id = item_osrs_id,
+        .widget_component_id = widget_component_id,
+    });
+}
+
+static inline void human_input_queue_spell_on_widget(
+    HumanInput* hi,
+    int spell,
+    int spell_gui_idx,
+    uint32_t widget_component_id
+) {
+    human_input_queue_command(hi, (HumanCommand){
+        .kind = HUMAN_COMMAND_SPELL_ON_WIDGET,
+        .spell = spell,
+        .spell_gui_idx = spell_gui_idx,
+        .widget_component_id = widget_component_id,
+    });
+}
+
 static inline void human_input_queue_spec_toggle(HumanInput* hi) {
     human_input_queue_command(hi, (HumanCommand){
         .kind = HUMAN_COMMAND_SPEC_TOGGLE,
@@ -232,6 +303,70 @@ static inline void human_input_queue_set_autocast(
         .autocast_spell = autocast_spell,
         .autocast_defensive = autocast_defensive,
     });
+}
+
+static inline void human_input_apply_ui_intent(HumanInput* hi, OsrsUiIntent intent) {
+    switch (intent.kind) {
+        case OSRS_UI_INTENT_SELECT_ITEM:
+            human_input_clear_selected_ui_target(hi);
+            hi->cursor_mode = CURSOR_ITEM_TARGET;
+            hi->selected_item_inventory_slot = intent.source_inventory_slot;
+            hi->selected_item_db_idx = intent.item_db_idx;
+            hi->selected_item_osrs_id = intent.item_osrs_id;
+            break;
+        case OSRS_UI_INTENT_SELECT_SPELL:
+            human_input_clear_selected_ui_target(hi);
+            hi->cursor_mode = CURSOR_SPELL_TARGET;
+            hi->selected_spell = intent.spell;
+            hi->selected_spell_gui_idx = intent.spell_gui_idx;
+            break;
+        case OSRS_UI_INTENT_ITEM_ON_ITEM:
+            human_input_queue_item_on_item(
+                hi,
+                intent.source_inventory_slot,
+                intent.target_inventory_slot,
+                intent.item_db_idx,
+                intent.item_osrs_id);
+            human_input_clear_selected_ui_target(hi);
+            break;
+        case OSRS_UI_INTENT_ITEM_ON_WIDGET:
+            human_input_queue_item_on_widget(
+                hi,
+                intent.source_inventory_slot,
+                intent.item_db_idx,
+                intent.item_osrs_id,
+                intent.widget_component_id);
+            human_input_clear_selected_ui_target(hi);
+            break;
+        case OSRS_UI_INTENT_SPELL_ON_TARGET:
+            hi->pending_attack = 1;
+            hi->pending_target_idx = intent.npc_slot;
+            hi->pending_spell = intent.spell;
+            hi->pending_move_x = -1;
+            hi->pending_move_y = -1;
+            human_input_queue_command(hi, (HumanCommand){
+                .kind = HUMAN_COMMAND_SPELL_TARGET,
+                .spell = intent.spell,
+                .spell_gui_idx = intent.spell_gui_idx,
+                .npc_slot = intent.npc_slot,
+            });
+            human_input_clear_selected_ui_target(hi);
+            break;
+        case OSRS_UI_INTENT_SPELL_ON_WIDGET:
+            human_input_queue_spell_on_widget(
+                hi,
+                intent.spell,
+                intent.spell_gui_idx,
+                intent.widget_component_id);
+            human_input_clear_selected_ui_target(hi);
+            break;
+        case OSRS_UI_INTENT_NONE:
+            break;
+        default:
+            fprintf(stderr, "human_input_apply_ui_intent: bad intent kind: %d\n",
+                (int)intent.kind);
+            abort();
+    }
 }
 
 #endif /* OSRS_HUMAN_INPUT_TYPES_H */

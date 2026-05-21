@@ -33,6 +33,26 @@ static uint32_t wield_model_for_item(int item_index) {
     return item_to_wield_model(ITEM_DATABASE[item_index].item_id);
 }
 
+typedef struct {
+    int slot;
+    uint32_t model_id;
+} ExpectedSlotModel;
+
+typedef struct {
+    int body_part;
+    uint32_t model_id;
+} ExpectedBodyModel;
+
+static const ExpectedBodyModel DEFAULT_VISIBLE_BODY_MODELS[] = {
+    { BODY_PART_HEAD, 0xF0000u },
+    { BODY_PART_JAW, 0xF0001u },
+    { BODY_PART_TORSO, 0xF0002u },
+    { BODY_PART_ARMS, 0xF0003u },
+    { BODY_PART_HANDS, 0xF0004u },
+    { BODY_PART_LEGS, 0xF0005u },
+    { BODY_PART_FEET, 0xF0006u },
+};
+
 static int model_file_contains_model(const char* path, uint32_t model_id) {
     FILE* f = fopen(path, "rb");
     assert(f);
@@ -81,6 +101,46 @@ static void test_equipment_texture_animation_rows_load(void) {
     free(cache.texture_anims);
 }
 
+static void test_model_cache_get_uses_index_with_safe_fallback(void) {
+    OsrsModel models[2] = {0};
+    models[0].model_id = 7;
+    models[1].model_id = 300;
+
+    int index_by_id[16];
+    for (int i = 0; i < 16; i++) {
+        index_by_id[i] = -1;
+    }
+    index_by_id[7] = 1;
+
+    ModelCache cache = {
+        .models = models,
+        .index_by_id = index_by_id,
+        .count = 2,
+        .index_limit = 16,
+    };
+
+    assert(model_cache_get(&cache, 7) == &models[0]);
+    assert(model_cache_get(&cache, 300) == &models[1]);
+    assert(model_cache_get(&cache, 404) == NULL);
+}
+
+static void test_model_append_overflow_status_is_explicit(void) {
+    int16_t base_vertices[6] = {0};
+    OsrsModel model = {
+        .model_id = 4242,
+        .base_vertices = base_vertices,
+        .base_vert_count = 2,
+    };
+    model.mesh.triangleCount = 2;
+
+    assert(osrs_model_append_check(3, 8, &model, 5, 10) == OSRS_MODEL_APPEND_OK);
+    assert(osrs_model_append_check(4, 8, &model, 5, 10) ==
+        OSRS_MODEL_APPEND_BASE_VERTEX_OVERFLOW);
+    assert(osrs_model_append_check(3, 9, &model, 5, 10) ==
+        OSRS_MODEL_APPEND_FACE_OVERFLOW);
+    assert(osrs_model_append_check(0, 0, NULL, 5, 10) == OSRS_MODEL_APPEND_EMPTY);
+}
+
 static void assert_runtime_model_present(int item_index) {
     uint32_t model_id = wield_model_for_item(item_index);
     assert(model_id != ITEM_RENDER_MODEL_MISSING);
@@ -120,6 +180,61 @@ static void assert_resolved_models_present(const uint8_t equipped[NUM_GEAR_SLOTS
     OsrsPlayerAppearance appearance = osrs_resolve_player_appearance(equipped);
     assert_body_models_present(&appearance);
     assert_item_models_present(&appearance);
+}
+
+static uint32_t expected_slot_model_or_missing(
+    const ExpectedSlotModel* expected,
+    int expected_count,
+    int slot
+) {
+    for (int i = 0; i < expected_count; i++) {
+        if (expected[i].slot == slot) return expected[i].model_id;
+    }
+    return ITEM_RENDER_MODEL_MISSING;
+}
+
+static uint32_t expected_body_model_or_missing(
+    const ExpectedBodyModel* expected,
+    int expected_count,
+    int body_part
+) {
+    for (int i = 0; i < expected_count; i++) {
+        if (expected[i].body_part == body_part) return expected[i].model_id;
+    }
+    return ITEM_RENDER_MODEL_MISSING;
+}
+
+static void assert_expected_player_model_ids(
+    const uint8_t equipped[NUM_GEAR_SLOTS],
+    const ExpectedBodyModel* expected_body_models,
+    int expected_body_model_count,
+    const ExpectedSlotModel* expected_slot_models,
+    int expected_slot_model_count
+) {
+    OsrsPlayerAppearance appearance = osrs_resolve_player_appearance(equipped);
+
+    for (int bp = 0; bp < BODY_PART_COUNT; bp++) {
+        uint32_t expected = expected_body_model_or_missing(
+            expected_body_models, expected_body_model_count, bp);
+        if (expected == ITEM_RENDER_MODEL_MISSING) {
+            assert(!appearance.body_visible[bp]);
+        } else {
+            assert(appearance.body_visible[bp]);
+            assert(appearance.body_model_ids[bp] == expected);
+        }
+    }
+
+    for (int i = 0; i < OSRS_VISIBLE_EQUIP_SLOT_COUNT; i++) {
+        int slot = OSRS_VISIBLE_EQUIP_SLOTS[i];
+        uint32_t expected = expected_slot_model_or_missing(
+            expected_slot_models, expected_slot_model_count, slot);
+        if (expected == ITEM_RENDER_MODEL_MISSING) {
+            assert(!appearance.item_visible[slot]);
+        } else {
+            assert(appearance.item_visible[slot]);
+            assert(appearance.item_model_ids[slot] == expected);
+        }
+    }
 }
 
 static void set_equipment(
@@ -215,8 +330,140 @@ static const uint8_t BUDGET_RANGE_FAST_LOADOUT[NUM_GEAR_SLOTS] = {
     [GEAR_SLOT_RING] = ITEM_VENATOR_RING,
 };
 
+static const ExpectedSlotModel MAX_MAGE_MODELS[] = {
+    { GEAR_SLOT_HEAD, 917571 },
+    { GEAR_SLOT_CAPE, 917575 },
+    { GEAR_SLOT_NECK, 917549 },
+    { GEAR_SLOT_WEAPON, 917524 },
+    { GEAR_SLOT_SHIELD, 917606 },
+    { GEAR_SLOT_BODY, 917607 },
+    { GEAR_SLOT_LEGS, 917608 },
+    { GEAR_SLOT_HANDS, 917567 },
+    { GEAR_SLOT_FEET, 917568 },
+};
+
+static const ExpectedSlotModel MAX_RANGE_LONG_MODELS[] = {
+    { GEAR_SLOT_HEAD, 917571 },
+    { GEAR_SLOT_CAPE, 917575 },
+    { GEAR_SLOT_NECK, 917574 },
+    { GEAR_SLOT_WEAPON, 917570 },
+    { GEAR_SLOT_BODY, 917572 },
+    { GEAR_SLOT_LEGS, 917573 },
+    { GEAR_SLOT_HANDS, 917576 },
+    { GEAR_SLOT_FEET, 917568 },
+};
+
+static const ExpectedSlotModel MAX_RANGE_FAST_MODELS[] = {
+    { GEAR_SLOT_HEAD, 917571 },
+    { GEAR_SLOT_CAPE, 917575 },
+    { GEAR_SLOT_NECK, 917574 },
+    { GEAR_SLOT_WEAPON, 917577 },
+    { GEAR_SLOT_BODY, 917572 },
+    { GEAR_SLOT_LEGS, 917573 },
+    { GEAR_SLOT_HANDS, 917576 },
+    { GEAR_SLOT_FEET, 917568 },
+};
+
+static const ExpectedSlotModel BUDGET_MAGE_MODELS[] = {
+    { GEAR_SLOT_HEAD, 917584 },
+    { GEAR_SLOT_CAPE, 917575 },
+    { GEAR_SLOT_NECK, 917549 },
+    { GEAR_SLOT_WEAPON, 917589 },
+    { GEAR_SLOT_SHIELD, 917604 },
+    { GEAR_SLOT_BODY, 917543 },
+    { GEAR_SLOT_LEGS, 917544 },
+    { GEAR_SLOT_HANDS, 917567 },
+    { GEAR_SLOT_FEET, 917590 },
+};
+
+static const ExpectedSlotModel BUDGET_RANGE_LONG_MODELS[] = {
+    { GEAR_SLOT_HEAD, 917584 },
+    { GEAR_SLOT_CAPE, 917575 },
+    { GEAR_SLOT_NECK, 917574 },
+    { GEAR_SLOT_WEAPON, 917588 },
+    { GEAR_SLOT_BODY, 917586 },
+    { GEAR_SLOT_LEGS, 917587 },
+    { GEAR_SLOT_HANDS, 917517 },
+    { GEAR_SLOT_FEET, 917590 },
+};
+
+static const ExpectedSlotModel BUDGET_RANGE_FAST_MODELS[] = {
+    { GEAR_SLOT_HEAD, 917584 },
+    { GEAR_SLOT_CAPE, 917575 },
+    { GEAR_SLOT_NECK, 917574 },
+    { GEAR_SLOT_WEAPON, 917577 },
+    { GEAR_SLOT_BODY, 917586 },
+    { GEAR_SLOT_LEGS, 917587 },
+    { GEAR_SLOT_HANDS, 917517 },
+    { GEAR_SLOT_FEET, 917590 },
+};
+
+static const ExpectedSlotModel MIXED_WAND_SHIELD_MODELS[] = {
+    { GEAR_SLOT_WEAPON, 917589 },
+    { GEAR_SLOT_SHIELD, 917604 },
+};
+
+static const ExpectedSlotModel MIXED_BOWFA_SHIELD_MODELS[] = {
+    { GEAR_SLOT_WEAPON, 917588 },
+};
+
+static void test_expected_player_model_ids(void) {
+    uint8_t equipped[NUM_GEAR_SLOTS];
+
+    set_equipment(equipped, MAX_MAGE_LOADOUT);
+    assert_expected_player_model_ids(equipped, NULL, 0,
+        MAX_MAGE_MODELS, (int)(sizeof(MAX_MAGE_MODELS) / sizeof(MAX_MAGE_MODELS[0])));
+
+    set_equipment(equipped, MAX_RANGE_LONG_LOADOUT);
+    assert_expected_player_model_ids(equipped, NULL, 0,
+        MAX_RANGE_LONG_MODELS,
+        (int)(sizeof(MAX_RANGE_LONG_MODELS) / sizeof(MAX_RANGE_LONG_MODELS[0])));
+
+    set_equipment(equipped, MAX_RANGE_FAST_LOADOUT);
+    assert_expected_player_model_ids(equipped, NULL, 0,
+        MAX_RANGE_FAST_MODELS,
+        (int)(sizeof(MAX_RANGE_FAST_MODELS) / sizeof(MAX_RANGE_FAST_MODELS[0])));
+
+    set_equipment(equipped, BUDGET_MAGE_LOADOUT);
+    assert_expected_player_model_ids(equipped, NULL, 0,
+        BUDGET_MAGE_MODELS,
+        (int)(sizeof(BUDGET_MAGE_MODELS) / sizeof(BUDGET_MAGE_MODELS[0])));
+
+    set_equipment(equipped, BUDGET_RANGE_LONG_LOADOUT);
+    assert_expected_player_model_ids(equipped, NULL, 0,
+        BUDGET_RANGE_LONG_MODELS,
+        (int)(sizeof(BUDGET_RANGE_LONG_MODELS) / sizeof(BUDGET_RANGE_LONG_MODELS[0])));
+
+    set_equipment(equipped, BUDGET_RANGE_FAST_LOADOUT);
+    assert_expected_player_model_ids(equipped, NULL, 0,
+        BUDGET_RANGE_FAST_MODELS,
+        (int)(sizeof(BUDGET_RANGE_FAST_MODELS) / sizeof(BUDGET_RANGE_FAST_MODELS[0])));
+
+    clear_equipment(equipped);
+    equipped[GEAR_SLOT_WEAPON] = ITEM_DRAGON_HUNTER_WAND;
+    equipped[GEAR_SLOT_SHIELD] = ITEM_CRYSTAL_SHIELD;
+    assert_expected_player_model_ids(
+        equipped,
+        DEFAULT_VISIBLE_BODY_MODELS,
+        (int)(sizeof(DEFAULT_VISIBLE_BODY_MODELS) / sizeof(DEFAULT_VISIBLE_BODY_MODELS[0])),
+        MIXED_WAND_SHIELD_MODELS,
+        (int)(sizeof(MIXED_WAND_SHIELD_MODELS) / sizeof(MIXED_WAND_SHIELD_MODELS[0])));
+
+    clear_equipment(equipped);
+    equipped[GEAR_SLOT_WEAPON] = ITEM_BOW_OF_FAERDHINEN;
+    equipped[GEAR_SLOT_SHIELD] = ITEM_CRYSTAL_SHIELD;
+    assert_expected_player_model_ids(
+        equipped,
+        DEFAULT_VISIBLE_BODY_MODELS,
+        (int)(sizeof(DEFAULT_VISIBLE_BODY_MODELS) / sizeof(DEFAULT_VISIBLE_BODY_MODELS[0])),
+        MIXED_BOWFA_SHIELD_MODELS,
+        (int)(sizeof(MIXED_BOWFA_SHIELD_MODELS) / sizeof(MIXED_BOWFA_SHIELD_MODELS[0])));
+}
+
 int main(void) {
     test_equipment_texture_animation_rows_load();
+    test_model_cache_get_uses_index_with_safe_fallback();
+    test_model_append_overflow_status_is_explicit();
 
     assert(hide_mask_for_item(ITEM_TWISTED_BOW) == 0);
     assert(hide_mask_for_item(ITEM_KODAI_WAND) == 0);
@@ -321,6 +568,7 @@ int main(void) {
     assert_resolved_models_present(equipped);
     set_equipment(equipped, BUDGET_RANGE_FAST_LOADOUT);
     assert_resolved_models_present(equipped);
+    test_expected_player_model_ids();
 
     return 0;
 }

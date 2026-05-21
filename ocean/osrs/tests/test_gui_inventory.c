@@ -655,6 +655,95 @@ static void test_human_equipment_click_queues_without_mutating_player(void) {
     human_input_destroy(&hi);
 }
 
+static void test_gui_selected_item_click_queues_item_on_item(void) {
+    printf("--- gui selected item click queues item on item ---\n");
+
+    GuiState gs;
+    Player p;
+    HumanInput hi;
+    memset(&gs, 0, sizeof(gs));
+    memset(&p, 0, sizeof(p));
+    human_input_init(&hi);
+
+    hi.enabled = 1;
+    gs.inv_grid[0].type = INV_SLOT_EQUIPMENT;
+    gs.inv_grid[0].item_db_idx = ITEM_TOXIC_BLOWPIPE;
+    gs.inv_grid[0].osrs_id = ITEM_DATABASE[ITEM_TOXIC_BLOWPIPE].item_id;
+    gs.inv_grid[1].type = INV_SLOT_EQUIPMENT;
+    gs.inv_grid[1].item_db_idx = ITEM_KODAI_WAND;
+    gs.inv_grid[1].osrs_id = ITEM_DATABASE[ITEM_KODAI_WAND].item_id;
+
+    ASSERT_INT_EQ("item source selected",
+        gui_inv_select_item(&gs, &hi, 0), 1);
+    ASSERT_INT_EQ("item target cursor", hi.cursor_mode, CURSOR_ITEM_TARGET);
+    ASSERT_INT_EQ("selected source slot", hi.selected_item_inventory_slot, 0);
+    ASSERT_INT_EQ("selected source item id",
+        hi.selected_item_osrs_id, ITEM_DATABASE[ITEM_TOXIC_BLOWPIPE].item_id);
+
+    InvAction action = gui_inv_click(&gs, &p, 1, &hi);
+    ASSERT_INT_EQ("selected item click returns item-on-item",
+        action, INV_ACTION_ITEM_ON_ITEM);
+    ASSERT_INT_EQ("item-on-item command count", hi.commands.count, 1);
+    ASSERT_INT_EQ("item-on-item command kind",
+        hi.commands.items[0].kind, HUMAN_COMMAND_ITEM_ON_ITEM);
+    ASSERT_INT_EQ("item-on-item source slot", hi.commands.items[0].inventory_slot, 0);
+    ASSERT_INT_EQ("item-on-item target slot", hi.commands.items[0].target_inventory_slot, 1);
+    ASSERT_INT_EQ("item-on-item source item id",
+        hi.commands.items[0].item_osrs_id, ITEM_DATABASE[ITEM_TOXIC_BLOWPIPE].item_id);
+    ASSERT_INT_EQ("item target cursor clears", hi.cursor_mode, CURSOR_NORMAL);
+
+    human_input_destroy(&hi);
+}
+
+static void test_human_selected_target_widget_helpers_queue_commands(void) {
+    printf("--- human selected target widget helpers queue commands ---\n");
+
+    GuiState gs;
+    HumanInput hi;
+    memset(&gs, 0, sizeof(gs));
+    human_input_init(&hi);
+    hi.enabled = 1;
+
+    human_select_spell_idx(&hi, GUI_SPELL_ICE_BARRAGE);
+    ASSERT_INT_EQ("spell target selected before widget",
+        hi.cursor_mode, CURSOR_SPELL_TARGET);
+    ASSERT_INT_EQ("spell-on-widget handled",
+        human_apply_selected_target_to_widget(&hi,
+            osrs_ui_intent_widget_component_id(OSRS_UI_GROUP_MAGIC_SPELLBOOK, 47)), 1);
+    ASSERT_INT_EQ("spell-on-widget command count", hi.commands.count, 1);
+    ASSERT_INT_EQ("spell-on-widget command kind",
+        hi.commands.items[0].kind, HUMAN_COMMAND_SPELL_ON_WIDGET);
+    ASSERT_INT_EQ("spell-on-widget spell", hi.commands.items[0].spell, ATTACK_ICE);
+    ASSERT_INT_EQ("spell-on-widget gui idx",
+        hi.commands.items[0].spell_gui_idx, GUI_SPELL_ICE_BARRAGE);
+    ASSERT_INT_EQ("spell-on-widget group",
+        osrs_ui_intent_widget_group_id(hi.commands.items[0].widget_component_id),
+        OSRS_UI_GROUP_MAGIC_SPELLBOOK);
+    ASSERT_INT_EQ("spell target cursor clears", hi.cursor_mode, CURSOR_NORMAL);
+
+    gs.inv_grid[3].type = INV_SLOT_EQUIPMENT;
+    gs.inv_grid[3].item_db_idx = ITEM_KODAI_WAND;
+    gs.inv_grid[3].osrs_id = ITEM_DATABASE[ITEM_KODAI_WAND].item_id;
+    ASSERT_INT_EQ("item source selected before widget",
+        gui_inv_select_item(&gs, &hi, 3), 1);
+    ASSERT_INT_EQ("item-on-widget handled",
+        human_apply_selected_target_to_widget(&hi,
+            osrs_ui_intent_widget_component_id(OSRS_UI_GROUP_WORNITEMS, 15)), 1);
+    ASSERT_INT_EQ("item-on-widget command count", hi.commands.count, 2);
+    ASSERT_INT_EQ("item-on-widget command kind",
+        hi.commands.items[1].kind, HUMAN_COMMAND_ITEM_ON_WIDGET);
+    ASSERT_INT_EQ("item-on-widget source slot", hi.commands.items[1].inventory_slot, 3);
+    ASSERT_INT_EQ("item-on-widget source item id",
+        hi.commands.items[1].item_osrs_id, ITEM_DATABASE[ITEM_KODAI_WAND].item_id);
+    ASSERT_INT_EQ("item-on-widget group",
+        osrs_ui_intent_widget_group_id(hi.commands.items[1].widget_component_id),
+        OSRS_UI_GROUP_WORNITEMS);
+    ASSERT_INT_EQ("item-on-widget child",
+        osrs_ui_intent_widget_child_id(hi.commands.items[1].widget_component_id), 15);
+
+    human_input_destroy(&hi);
+}
+
 static void test_budget_item_labels_and_sprites_resolve(void) {
     printf("--- budget item labels and sprites resolve ---\n");
 
@@ -898,6 +987,8 @@ int main(void) {
     test_gui_reset_rebuild_restores_potions();
     test_gui_populate_late_start_inferno_supplies();
     test_human_equipment_click_queues_without_mutating_player();
+    test_gui_selected_item_click_queues_item_on_item();
+    test_human_selected_target_widget_helpers_queue_commands();
     test_budget_item_labels_and_sprites_resolve();
     test_runec_ui_asset_aliases_exist();
     test_runec_stack_quantity_formatting();

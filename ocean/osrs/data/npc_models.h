@@ -18,11 +18,13 @@ typedef struct {
     uint32_t walk_anim;    /* walk cycle animation; 65535 = use idle_anim */
 } NpcModelMapping;
 
+#include "npc_models_zulrah.h"
+
 /* zulrah forms + snakeling */
 static const NpcModelMapping NPC_MODEL_MAP_ZULRAH[] = {
-    {2042, 14408, 5069, 5068, 65535},  /* green zulrah (ranged) */
-    {2043, 14409, 5069, 5068, 65535},  /* red zulrah (melee) */
-    {2044, 14407, 5069, 5068, 65535},  /* blue zulrah (magic) */
+    {2042, 14408, 5070, 5068, 65535},  /* green zulrah (ranged) */
+    {2043, 14409, 5070, 5806, 65535},  /* red zulrah (melee) */
+    {2044, 14407, 5070, 5069, 65535},  /* blue zulrah (magic) */
     {2045, 10415, 1721, 140, 2405},    /* snakeling melee */
     {2046, 10415, 1721, 185, 2405},    /* snakeling magic */
 };
@@ -43,14 +45,16 @@ static const NpcModelMapping NPC_MODEL_MAP_ZULRAH[] = {
 #define GFX_SNAKELING_SPAWN_MODEL 20390  /* GFX 1047 spawn orb */
 
 /* zulrah animation sequence IDs */
-#define ZULRAH_ANIM_ATTACK   5068
-#define ZULRAH_ANIM_IDLE     5069
-#define ZULRAH_ANIM_DIVE     5072
-#define ZULRAH_ANIM_SURFACE  5071
-#define ZULRAH_ANIM_RISE     5073
-#define ZULRAH_ANIM_5070     5070
-#define ZULRAH_ANIM_5806     5806
-#define ZULRAH_ANIM_5807     5807
+#define ZULRAH_ANIM_ATTACK        ZUL_GEN_ANIM_SNAKEBOSS_ATTACK_ACIDX3
+#define ZULRAH_ANIM_ATTACK_MAGIC  ZUL_GEN_ANIM_SNAKEBOSS_ATTACK_ACIDX1
+#define ZULRAH_ANIM_IDLE          5070
+#define ZULRAH_ANIM_DIVE          ZUL_GEN_ANIM_SNAKEBOSS_SINKFAST
+#define ZULRAH_ANIM_SURFACE       ZUL_GEN_ANIM_SNAKEBOSS_SPAWN
+#define ZULRAH_ANIM_RISE          ZUL_GEN_ANIM_SNAKEBOSS_EMERGEFAST
+#define ZULRAH_ANIM_TAIL_LEFT     ZUL_GEN_ANIM_SNAKEBOSS_ATTACK_TAIL_LEFT
+#define ZULRAH_ANIM_TAIL_RIGHT    ZUL_GEN_ANIM_SNAKEBOSS_ATTACK_TAIL_RIGHT
+#define ZULRAH_ANIM_DEATH         ZUL_GEN_ANIM_SNAKEBOSS_DEATH
+#define ZULRAH_ANIM_DEFEND        ZUL_GEN_ANIM_SNAKEBOSS_DEFEND
 #define GFX_SNAKELING_SPAWN_ANIM 5358
 
 /* ================================================================ */
@@ -112,6 +116,9 @@ static const NpcModelMapping NPC_MODEL_MAP_ZULRAH[] = {
 #define INF_PILLAR_MODEL_25   33045  /* object 30287 — 25% HP */
 
 static const NpcModelMapping* npc_model_lookup(uint16_t npc_id) {
+    for (int i = 0; i < (int)(sizeof(NPC_MODEL_MAP_ZULRAH_GEN) / sizeof(NPC_MODEL_MAP_ZULRAH_GEN[0])); i++) {
+        if (NPC_MODEL_MAP_ZULRAH_GEN[i].npc_id == npc_id) return &NPC_MODEL_MAP_ZULRAH_GEN[i];
+    }
     for (int i = 0; i < (int)(sizeof(NPC_MODEL_MAP_ZULRAH) / sizeof(NPC_MODEL_MAP_ZULRAH[0])); i++) {
         if (NPC_MODEL_MAP_ZULRAH[i].npc_id == npc_id) return &NPC_MODEL_MAP_ZULRAH[i];
     }

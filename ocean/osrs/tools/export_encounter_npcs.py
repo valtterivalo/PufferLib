@@ -154,6 +154,9 @@ def parse_modern_npc_def(npc_id: int, data: bytes) -> NpcDef:
         elif opcode == 60:
             count = read_u8(buf)
             d.chathead_model_ids = [read_u16(buf) for _ in range(count)]
+        elif opcode == 61:
+            count = read_u8(buf)
+            d.model_ids = [read_u32(buf) for _ in range(count)]
         elif 74 <= opcode <= 79:
             read_u16(buf)
         elif opcode == 93:
@@ -284,6 +287,8 @@ def parse_modern_spotanim(spotanim_id: int, data: bytes) -> SpotAnimDef:
             break
         elif opcode == 1:
             d.model_id = read_u16(buf)
+        elif opcode == 3:
+            d.model_id = read_i32(buf)
         elif opcode == 2:
             d.seq_id = read_u16(buf)
         elif opcode == 4:

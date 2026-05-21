@@ -656,9 +656,9 @@ static void inf_write_mask_ctx(
                          ? 1.0f : 0.0f;
     }
 
-    /* HEAD_PRAYER: no_change, off, set_refresh_melee/ranged/magic. */
+    /* HEAD_PRAYER: no_change, off, set_refresh_melee/ranged/magic/redemption. */
     mask[offset++] = 1.0f;  /* no_change always valid */
-    mask[offset++] = s->player.prayer != PRAYER_NONE ? 1.0f : 0.0f;
+    mask[offset++] = s->player.current_prayer > 0 ? 1.0f : 0.0f;
     mask[offset++] = s->player.current_prayer > 0 ? 1.0f : 0.0f;
     mask[offset++] = s->player.current_prayer > 0 ? 1.0f : 0.0f;
     mask[offset++] = s->player.current_prayer > 0 ? 1.0f : 0.0f;

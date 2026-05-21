@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>OSRS lab</title>
+        <style>
+            :root {
+                color-scheme: dark;
+                --bg: #080807;
+                --panel: #11100d;
+                --ink: #ebe5dc;
+                --muted: #9a9185;
+                --line: rgba(235, 229, 220, 0.18);
+                --gold: #d4a843;
+                --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+                --sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+            }
+
+            * {
+                box-sizing: border-box;
+            }
+
+            html,
+            body {
+                width: 100%;
+                height: 100%;
+                margin: 0;
+                overflow: hidden;
+                background: var(--bg);
+                color: var(--ink);
+                font-family: var(--sans);
+            }
+
+            body {
+                display: grid;
+                grid-template-rows: auto minmax(0, 1fr);
+            }
+
+            .toolbar {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 1rem;
+                min-height: 2.6rem;
+                padding: 0.55rem 0.75rem;
+                border-bottom: 1px solid var(--line);
+                background: rgba(17, 16, 13, 0.96);
+                font-family: var(--mono);
+                font-size: 0.72rem;
+                line-height: 1.4;
+                text-transform: lowercase;
+            }
+
+            .toolbar strong {
+                color: var(--gold);
+                font-weight: 400;
+            }
+
+            .actions {
+                display: flex;
+                gap: 0.5rem;
+            }
+
+            button {
+                border: 1px solid var(--line);
+                background: rgba(235, 229, 220, 0.05);
+                color: var(--ink);
+                font: inherit;
+                padding: 0.35rem 0.55rem;
+                cursor: pointer;
+            }
+
+            button:hover {
+                border-color: rgba(212, 168, 67, 0.5);
+                color: var(--gold);
+            }
+
+            .stage {
+                position: relative;
+                min-width: 0;
+                min-height: 0;
+                background: #000;
+            }
+
+            canvas.emscripten {
+                display: block;
+                width: 100vw;
+                height: calc(100vh - 2.6rem);
+                border: 0;
+                outline: none;
+                background: #000;
+            }
+
+            .status {
+                position: absolute;
+                left: 0.75rem;
+                bottom: 0.75rem;
+                max-width: min(34rem, calc(100% - 1.5rem));
+                border: 1px solid var(--line);
+                background: rgba(8, 8, 7, 0.82);
+                color: var(--muted);
+                padding: 0.5rem 0.65rem;
+                font-family: var(--mono);
+                font-size: 0.7rem;
+                line-height: 1.5;
+                white-space: pre-wrap;
+            }
+
+            .status[hidden] {
+                display: none;
+            }
+
+            @media (max-width: 720px) {
+                .toolbar {
+                    align-items: flex-start;
+                    flex-direction: column;
+                }
+
+                canvas.emscripten {
+                    height: calc(100vh - 5rem);
+                }
+            }
+        </style>
+    </head>
+    <body>
+        <div class="toolbar">
+            <div>
+                <strong id="preset-label">osrs lab</strong>
+                <span id="preset-detail">loading</span>
+            </div>
+            <div class="actions">
+                <button id="focus-button" type="button">focus</button>
+                <button id="restart-button" type="button">reset</button>
+            </div>
+        </div>
+        <div class="stage">
+            <canvas
+                class="emscripten"
+                id="canvas"
+                oncontextmenu="event.preventDefault()"
+                tabindex="0"
+            ></canvas>
+            <pre class="status" id="status">loading wasm</pre>
+        </div>
+        <script>
+            const params = new URLSearchParams(window.location.search);
+            const validEncounters = new Set(["pvp", "zulrah", "inferno"]);
+            const encounter = validEncounters.has(params.get("encounter"))
+                ? params.get("encounter")
+                : "inferno";
+            const wave = params.get("wave") || (encounter === "inferno" ? "69" : "");
+            const tier = params.get("tier") || "";
+            const replay = params.get("replay") || "";
+            const model = params.get("model") || "";
+            const policyMode = params.get("policyMode") || "";
+            const policySeed = params.get("policySeed") || "";
+            const label = document.getElementById("preset-label");
+            const detail = document.getElementById("preset-detail");
+            const status = document.getElementById("status");
+            const canvas = document.getElementById("canvas");
+            const args = ["--visual", "--encounter", encounter];
+            const assetVersion = "__OSRS_LAB_ASSET_VERSION__";
+
+            if (wave) args.push("--wave", wave);
+            if (tier) args.push("--tier", tier);
+            if (replay) args.push("--replay", replay);
+            if (model) args.push("--model", model);
+            if (policyMode) args.push("--policy-mode", policyMode);
+            if (policySeed) args.push("--policy-seed", policySeed);
+
+            label.textContent = encounter;
+            detail.textContent = model
+                ? `${wave ? `wave ${wave}, ` : ""}${policyMode || "sample"} policy`
+                : (wave ? `wave ${wave}` : "live visual runner");
+
+            document.getElementById("focus-button").addEventListener("click", () => {
+                canvas.focus();
+            });
+            document.getElementById("restart-button").addEventListener("click", () => {
+                window.location.reload();
+            });
+            canvas.addEventListener("click", () => {
+                canvas.focus();
+            });
+
+            function versionedAssetUrl(path) {
+                const separator = path.includes("?") ? "&" : "?";
+                return `${path}${separator}v=${encodeURIComponent(assetVersion)}`;
+            }
+
+            function loadTextSync(path, allowMissing) {
+                const request = new XMLHttpRequest();
+                request.open("GET", versionedAssetUrl(path), false);
+                request.overrideMimeType("text/plain; charset=x-user-defined");
+                request.send(null);
+                if (request.status === 404 && allowMissing) return null;
+                if (request.status !== 0 && (request.status < 200 || request.status >= 300)) {
+                    throw new Error(`failed to load ${path}: ${request.status}`);
+                }
+                return request.responseText;
+            }
+
+            var Module = {
+                arguments: args,
+                canvas,
+                locateFile(path, prefix) {
+                    if (path === "game.wasm" || path === "game.data") {
+                        return versionedAssetUrl(`${prefix || ""}${path}`);
+                    }
+                    return `${prefix || ""}${path}`;
+                },
+                getPreloadedPackage(packageName, packageSize) {
+                    const packagePath = packageName.split("?")[0];
+                    const manifestText = loadTextSync(`${packagePath}.chunks.json`, true);
+                    if (!manifestText) return null;
+                    const manifest = JSON.parse(manifestText);
+                    if (manifest.size !== packageSize) {
+                        throw new Error(
+                            `data manifest size ${manifest.size} did not match ${packageSize}`,
+                        );
+                    }
+                    const data = new Uint8Array(manifest.size);
+                    let offset = 0;
+                    for (const chunk of manifest.chunks) {
+                        Module.setStatus(`loading ${chunk}`);
+                        const chunkText = loadTextSync(chunk, false);
+                        for (let i = 0; i < chunkText.length; i++) {
+                            data[offset + i] = chunkText.charCodeAt(i) & 255;
+                        }
+                        offset += chunkText.length;
+                    }
+                    if (offset !== manifest.size) {
+                        throw new Error(`loaded ${offset} bytes, expected ${manifest.size}`);
+                    }
+                    return data.buffer;
+                },
+                print(text) {
+                    console.log(text);
+                },
+                printErr(text) {
+                    console.error(text);
+                    status.hidden = false;
+                    status.textContent = text;
+                },
+                setStatus(text) {
+                    status.hidden = !text;
+                    status.textContent = text;
+                },
+                onRuntimeInitialized() {
+                    status.hidden = true;
+                    canvas.focus();
+                },
+                monitorRunDependencies(left) {
+                    if (left > 0) {
+                        Module.setStatus(`preparing ${left}`);
+                    }
+                },
+            };
+        </script>
+        {{{ SCRIPT }}}
+    </body>
+</html>

@@ -1,0 +1,123 @@
+{
+  "format": "puffer-osrs-asset-manifest-v1",
+  "asset_version": "osrs-assets-v10",
+  "archive": {
+    "name": "osrs-assets-v10.tar.gz",
+    "url": "https://github.com/valtterivalo/PufferLib/releases/download/osrs-assets-v10/osrs-assets-v10.tar.gz",
+    "sha256": "731209700cfa0cf4aad9ed4763fa430f62cfd55b0109c07aa9cf56c9c5bfcf42",
+    "strip_components": 1
+  },
+  "required_groups": [
+    {
+      "name": "core",
+      "files": [
+        "equipment.models",
+        "equipment.anims",
+        "equipment.atlas",
+        "equipment.tanim",
+        "projectiles.models",
+        "projectiles.atlas",
+        "spotanims.bin",
+        "fonts/runescape.ttf",
+        "fonts/runescape_small.ttf",
+        "ui/interfaces.bin",
+        "ui/interface_manifest.json"
+      ]
+    },
+    {
+      "name": "inferno",
+      "files": [
+        "inferno.models",
+        "inferno.anims",
+        "inferno.terrain",
+        "inferno.objects",
+        "inferno_zuk.objects",
+        "inferno.cmap",
+        "inferno_npcs.models",
+        "inferno_npcs.anims"
+      ]
+    },
+    {
+      "name": "zulrah",
+      "files": [
+        "zulrah.models",
+        "zulrah.anims",
+        "zulrah.terrain",
+        "zulrah.objects",
+        "zulrah.cmap"
+      ]
+    },
+    {
+      "name": "gui",
+      "files": [
+        "sprites/gui/compass.png",
+        "sprites/gui/side_panel_bg.png",
+        "sprites/gui/orb_frame.png",
+        "sprites/gui/headicons_prayer_0.png",
+        "sprites/gui/hitmarks_0.png",
+        "sprites/gui/cross_yellow_1.png",
+        "sprites/gui/side_icon_inventory.png",
+        "sprites/gui/tradebacking_dark.png",
+        "sprites/gui/osrs_stretch_side_topbottom_0.png",
+        "sprites/gui/wornicons_11.png",
+        "sprites/gui/skill_icon_23.png",
+        "sprites/gui/prayeron_24.png",
+        "sprites/gui/magicon_47.png",
+        "sprites/gui/standard_spell_on_79.png",
+        "sprites/gui/minimap_alpha_mask.png"
+      ]
+    },
+    {
+      "name": "items",
+      "files": [
+        "sprites/items/30070.png",
+        "sprites/items/28945.png",
+        "sprites/items/item_stack_variants.tsv"
+      ]
+    },
+    {
+      "name": "headers",
+      "files": [
+        "item_models.h",
+        "player_models.h",
+        "npc_models.h",
+        "npc_models_inferno.h",
+        "npc_models_zulrah.h"
+      ]
+    },
+    {
+      "name": "combat_visuals",
+      "files": [
+        "projectiles.models",
+        "projectiles.atlas",
+        "spotanims.bin",
+        "equipment.anims",
+        "inferno.anims",
+        "zulrah.anims"
+      ]
+    },
+    {
+      "name": "wilderness",
+      "files": [
+        "wilderness.cmap",
+        "wilderness.terrain"
+      ]
+    },
+    {
+      "name": "pvp",
+      "files": [
+        "equipment.models",
+        "equipment.anims",
+        "equipment.atlas",
+        "equipment.tanim",
+        "projectiles.models",
+        "projectiles.atlas",
+        "spotanims.bin",
+        "ui/interfaces.bin",
+        "ui/interface_manifest.json",
+        "wilderness.cmap",
+        "wilderness.terrain"
+      ]
+    }
+  ]
+}

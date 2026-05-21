@@ -17,19 +17,18 @@ _CONST_PATTERN = re.compile(
     r"public\s+static\s+final\s+int\s+(\w+)\s*=\s*(\d+)\s*;"
 )
 
-DEFAULT_GAMEVAL_DIR = (
-    Path(__file__).resolve().parents[3]
-    / ".refs"
-    / "osrs-client-deob"
-    / "runelite-api"
-    / "src"
-    / "main"
-    / "java"
-    / "net"
-    / "runelite"
-    / "api"
-    / "gameval"
-)
+def _default_gameval_dir() -> Path:
+    root = Path(__file__).resolve().parents[3]
+    suffix = Path(
+        "osrs-client-deob/runelite-api/src/main/java/net/runelite/api/gameval",
+    )
+    refs_path = root / "refs" / suffix
+    if refs_path.exists():
+        return refs_path
+    return root / ".refs" / suffix
+
+
+DEFAULT_GAMEVAL_DIR = _default_gameval_dir()
 
 
 def parse_gameval_file(path: Path) -> dict[str, int]:

@@ -2865,8 +2865,8 @@ static void test_inferno_obs_shape_includes_step_out_forecast_features(void) {
 
     ASSERT_INT_EQ("gear action head removed tank slot",
         INF_ACTION_DIMS[INF_HEAD_GEAR], 4);
-    ASSERT_INT_EQ("action mask removed tank slot",
-        INF_ACTION_MASK_SIZE, 88);
+    ASSERT_INT_EQ("action mask includes redemption",
+        INF_ACTION_MASK_SIZE, 89);
     ASSERT_INT_EQ("npc obs includes compact target and dig signals",
         INF_TOTAL_NPC_OBS_SIZE, 415);
     ASSERT_INT_EQ("step-out forecast covers every movement action",
@@ -3139,11 +3139,11 @@ static int inferno_obs_slot_start(int slot_idx) {
 }
 
 static int inferno_target_mask_slot_offset(int slot_idx) {
-    return ENCOUNTER_MOVE_ACTIONS + ENCOUNTER_OVERHEAD_DIM_PVE + 1 + slot_idx;
+    return ENCOUNTER_MOVE_ACTIONS + ENCOUNTER_OVERHEAD_DIM_PVE_REDEMPTION + 1 + slot_idx;
 }
 
 static int inferno_target_mask_none_offset(void) {
-    return ENCOUNTER_MOVE_ACTIONS + ENCOUNTER_OVERHEAD_DIM_PVE;
+    return ENCOUNTER_MOVE_ACTIONS + ENCOUNTER_OVERHEAD_DIM_PVE_REDEMPTION;
 }
 
 static int inferno_step_out_forecast_obs_start(void) {
@@ -5627,6 +5627,186 @@ static void test_echo_boots_recoil_hits_nearby_npcs_once(void) {
         state.damage_dealt_this_tick, 1.0f, 1e-6f);
 }
 
+static void test_redemption_pressure_counts_zero_hit_low_hp_landing(void) {
+    printf("--- redemption pressure counts zero-hit low-HP landing ---\n");
+
+    InfernoState state = make_test_state(20, 20);
+    state.player.base_hitpoints = 99;
+    state.player.current_hitpoints = 7;
+    state.player.base_prayer = 99;
+    state.player.current_prayer = 12;
+    state.tick_at_le_240 = 10;
+
+    inf_damage_player_from_type(&state, INF_NPC_HEALER_ZUK, 0);
+
+    ASSERT_INT_EQ("zero hit preserves HP",
+        state.player.current_hitpoints, 7);
+    ASSERT_INT_EQ("zero hit at low HP counts proc opportunity",
+        state.redemption_proc_opportunities, 1);
+    ASSERT_INT_EQ("zero hit opportunity is classified",
+        state.redemption_zero_hit_proc_opportunities, 1);
+    ASSERT_INT_EQ("zero hit after 240 is classified",
+        state.redemption_proc_opportunities_after_240, 1);
+    ASSERT_INT_EQ("healer-Zuk source gets opportunity",
+        state.redemption_proc_opportunities_by_type[INF_NPC_HEALER_ZUK], 1);
+    ASSERT_INT_EQ("healer-Zuk source gets zero-hit opportunity",
+        state.redemption_zero_hit_proc_opportunities_by_type[INF_NPC_HEALER_ZUK], 1);
+    ASSERT_FLOAT_NEAR("heal potential is capped at prayer heal",
+        state.redemption_heal_potential, 24.0f, 1e-6f);
+}
+
+static void test_redemption_pressure_splits_lethal_band_deaths(void) {
+    printf("--- redemption pressure splits lethal band deaths ---\n");
+
+    InfernoState band = make_test_state(20, 20);
+    band.player.base_hitpoints = 99;
+    band.player.current_hitpoints = 7;
+    band.player.base_prayer = 99;
+    band.player.current_prayer = 12;
+    band.tick_at_le_240 = 10;
+
+    inf_damage_player_from_type(&band, INF_NPC_HEALER_ZUK, 8);
+
+    ASSERT_INT_EQ("band lethal hit kills player",
+        band.player.current_hitpoints, 0);
+    ASSERT_INT_EQ("band lethal hit counts death from band",
+        band.redemption_deaths_from_band, 1);
+    ASSERT_INT_EQ("band lethal hit counts after 240",
+        band.redemption_deaths_from_band_after_240, 1);
+    ASSERT_INT_EQ("band lethal hit counts source",
+        band.redemption_deaths_from_band_by_type[INF_NPC_HEALER_ZUK], 1);
+
+    InfernoState above = make_test_state(20, 20);
+    above.player.base_hitpoints = 99;
+    above.player.current_hitpoints = 20;
+    above.player.base_prayer = 99;
+    above.player.current_prayer = 12;
+
+    inf_damage_player_from_type(&above, INF_NPC_ZUK, 25);
+
+    ASSERT_INT_EQ("above-band lethal hit is not redemption-saveable",
+        above.redemption_deaths_from_band, 0);
+    ASSERT_INT_EQ("above-band lethal hit is classified separately",
+        above.redemption_deaths_from_above_band, 1);
+}
+
+static void test_redemption_action_maps_without_smite(void) {
+    printf("--- redemption action maps without smite ---\n");
+
+    InfernoState state = make_test_state(20, 20);
+    InfernoContext* ctx = inf_legacy_context();
+    state.player.base_prayer = 99;
+    state.player.current_prayer = 99;
+
+    int actions[INF_NUM_ACTION_HEADS] = {0};
+    actions[INF_HEAD_PRAYER] = INF_OVERHEAD_SET_REFRESH_REDEMPTION;
+    inf_player_pretick(&state, ctx, actions);
+
+    ASSERT_INT_EQ("inferno exposes six overhead actions",
+        INF_ACTION_DIMS[INF_HEAD_PRAYER], ENCOUNTER_OVERHEAD_DIM_PVE_REDEMPTION);
+    ASSERT_INT_EQ("local action five is redemption",
+        state.player.prayer, PRAYER_REDEMPTION);
+    ASSERT_INT_EQ("inferno action five is not smite",
+        state.player.prayer == PRAYER_SMITE, 0);
+    ASSERT_INT_EQ("redemption action is counted",
+        state.redemption_action_count, 1);
+    ASSERT_INT_EQ("active redemption tick is counted",
+        state.redemption_active_ticks, 1);
+}
+
+static void test_redemption_zero_hit_landing_heals_and_drains(void) {
+    printf("--- redemption zero-hit landing heals and drains ---\n");
+
+    InfernoState state = make_test_state(20, 20);
+    state.player.base_hitpoints = 99;
+    state.player.current_hitpoints = 7;
+    state.player.base_prayer = 99;
+    state.player.current_prayer = 12;
+    state.player.prayer = PRAYER_REDEMPTION;
+    state.player.offensive_prayer = OFFENSIVE_PRAYER_RIGOUR;
+
+    inf_damage_player_from_type(&state, INF_NPC_HEALER_ZUK, 0);
+
+    ASSERT_INT_EQ("zero hit procs redemption at low HP",
+        state.player.current_hitpoints, 31);
+    ASSERT_INT_EQ("redemption drains prayer points",
+        state.player.current_prayer, 0);
+    ASSERT_INT_EQ("redemption clears overhead",
+        state.player.prayer, PRAYER_NONE);
+    ASSERT_INT_EQ("redemption clears offensive prayer",
+        state.player.offensive_prayer, OFFENSIVE_PRAYER_NONE);
+    ASSERT_INT_EQ("zero hit still shows a hitsplat",
+        state.player.hit_landed_this_tick, 1);
+    ASSERT_INT_EQ("zero hit remains zero damage",
+        state.player.hit_damage, 0);
+    ASSERT_INT_EQ("redemption proc is counted",
+        state.redemption_proc_count, 1);
+    ASSERT_INT_EQ("zero-hit redemption proc is counted",
+        state.redemption_zero_hit_proc_count, 1);
+    ASSERT_FLOAT_NEAR("redemption heal amount is counted",
+        state.redemption_heal_done, 24.0f, 1e-6f);
+}
+
+static void test_redemption_does_not_prevent_lethal_damage(void) {
+    printf("--- redemption does not prevent lethal damage ---\n");
+
+    InfernoState state = make_test_state(20, 20);
+    state.player.base_hitpoints = 99;
+    state.player.current_hitpoints = 7;
+    state.player.base_prayer = 99;
+    state.player.current_prayer = 12;
+    state.player.prayer = PRAYER_REDEMPTION;
+
+    inf_damage_player_from_type(&state, INF_NPC_HEALER_ZUK, 8);
+
+    ASSERT_INT_EQ("lethal damage still kills through redemption",
+        state.player.current_hitpoints, 0);
+    ASSERT_INT_EQ("lethal damage does not drain redemption",
+        state.player.current_prayer, 12);
+    ASSERT_INT_EQ("lethal damage does not count a redemption proc",
+        state.redemption_proc_count, 0);
+    ASSERT_FLOAT_NEAR("lethal damage does not count redemption healing",
+        state.redemption_heal_done, 0.0f, 1e-6f);
+}
+
+static void test_redemption_procs_on_locked_zero_projectile_landing(void) {
+    printf("--- redemption procs on locked zero projectile landing ---\n");
+
+    InfernoState state = make_test_state(20, 20);
+    InfernoContext* ctx = inf_legacy_context();
+    state.player.base_hitpoints = 99;
+    state.player.current_hitpoints = 7;
+    state.player.base_prayer = 99;
+    state.player.current_prayer = 12;
+    state.player.prayer = PRAYER_REDEMPTION;
+    state.player_pending_hit_count = 1;
+    state.player_pending_hits[0] = (EncounterPendingHit){
+        .active = 1,
+        .damage = 0,
+        .ticks_remaining = 1,
+        .attack_style = ATTACK_STYLE_MAGIC,
+        .check_prayer = 0,
+        .prayer_check_delay = 0,
+        .source_npc_type = INF_NPC_HEALER_ZUK,
+        .hit_success = 1,
+    };
+
+    inf_resolve_player_pending_hits_ctx(&state, ctx);
+
+    ASSERT_INT_EQ("locked zero projectile lands",
+        state.player_pending_hit_count, 0);
+    ASSERT_INT_EQ("redemption heals on landing after protection was locked",
+        state.player.current_hitpoints, 31);
+    ASSERT_INT_EQ("redemption drains prayer on landing",
+        state.player.current_prayer, 0);
+    ASSERT_INT_EQ("zero-hit opportunity source is still logged",
+        state.redemption_zero_hit_proc_opportunities_by_type[INF_NPC_HEALER_ZUK], 1);
+    ASSERT_INT_EQ("locked zero projectile counts a real proc",
+        state.redemption_proc_count, 1);
+    ASSERT_INT_EQ("locked zero projectile counts a zero-hit proc",
+        state.redemption_zero_hit_proc_count, 1);
+}
+
 static void test_human_autocast_works_with_dragon_hunter_wand(void) {
     printf("--- human autocast works with dragon hunter wand ---\n");
 
@@ -6551,14 +6731,18 @@ static void test_inferno_npc_projectile_render_uses_reference_visual_timing(void
 
     ASSERT_INT_EQ("mager projectile count", mager_ov.projectile_count, 1);
     ASSERT_INT_EQ("mager projectile model",
-        mager_ov.projectiles[0].model_id, INF_GFX_1379_MODEL);
+        mager_ov.projectiles[0].model_id, INF_GFX_1376_MODEL);
     ASSERT_INT_EQ("mager projectile animation",
-        mager_ov.projectiles[0].anim_id, INF_GFX_1379_ANIM);
+        mager_ov.projectiles[0].anim_id, INF_GFX_1376_ANIM);
     ASSERT_INT_EQ("mager impact spotanim",
-        mager_ov.projectiles[0].impact_gfx_id, 1380);
+        mager_ov.projectiles[0].impact_gfx_id, 0);
     ASSERT_INT_EQ("mager projectile tracks player", mager_ov.projectiles[0].tracks_target, 1);
     ASSERT_INT_EQ("mager projectile target kind",
         mager_ov.projectiles[0].target_kind, ENCOUNTER_PROJECTILE_TARGET_PLAYER);
+    ASSERT_INT_EQ("mager projectile source kind",
+        mager_ov.projectiles[0].source_kind, ENCOUNTER_PROJECTILE_TARGET_NPC_SLOT);
+    ASSERT_INT_EQ("mager projectile source slot",
+        mager_ov.projectiles[0].source_npc_slot, 0);
     ASSERT_INT_EQ("mager visual start delay",
         mager_ov.projectiles[0].start_delay, mager_timing.visual_start_delay_ticks * 30);
     ASSERT_INT_EQ("mager visual duration",
@@ -6590,10 +6774,32 @@ static void test_inferno_npc_projectile_render_uses_reference_visual_timing(void
     ASSERT_INT_EQ("ranger projectile tracks player", ranger_ov.projectiles[0].tracks_target, 1);
     ASSERT_INT_EQ("ranger projectile target kind",
         ranger_ov.projectiles[0].target_kind, ENCOUNTER_PROJECTILE_TARGET_PLAYER);
+    ASSERT_INT_EQ("ranger projectile source kind",
+        ranger_ov.projectiles[0].source_kind, ENCOUNTER_PROJECTILE_TARGET_NPC_SLOT);
+    ASSERT_INT_EQ("ranger projectile source slot",
+        ranger_ov.projectiles[0].source_npc_slot, 0);
     ASSERT_INT_EQ("ranger visual start delay",
         ranger_ov.projectiles[0].start_delay, ranger_timing.visual_start_delay_ticks * 30);
     ASSERT_INT_EQ("ranger visual duration",
         ranger_ov.projectiles[0].duration_ticks, ranger_timing.visual_duration_ticks * 30);
+
+    InfernoState blob_state = make_test_state(10, 10);
+    blob_state.npcs[3] = make_test_npc(
+        INF_NPC_BLOB, 16, 10, INF_NPC_STATS[INF_NPC_BLOB].size);
+    blob_state.npcs[3].active = 1;
+    blob_state.npcs[3].attacked_this_tick = 1;
+    blob_state.npcs[3].attack_style_this_tick = ATTACK_STYLE_RANGED;
+
+    EncounterOverlay blob_ov;
+    memset(&blob_ov, 0, sizeof(blob_ov));
+    inf_render_post_tick((EncounterState*)&blob_state, &blob_ov);
+
+    ASSERT_INT_EQ("blob projectile count", blob_ov.projectile_count, 1);
+    ASSERT_INT_EQ("blob projectile source kind",
+        blob_ov.projectiles[0].source_kind, ENCOUNTER_PROJECTILE_TARGET_NPC_SLOT);
+    ASSERT_INT_EQ("blob projectile source slot", blob_ov.projectiles[0].source_npc_slot, 3);
+    ASSERT_INT_EQ("blob projectile target kind",
+        blob_ov.projectiles[0].target_kind, ENCOUNTER_PROJECTILE_TARGET_PLAYER);
 }
 
 static void test_inferno_npc_projectile_render_tracks_target_npc_slot(void) {
@@ -6617,6 +6823,9 @@ static void test_inferno_npc_projectile_render_tracks_target_npc_slot(void) {
     ASSERT_INT_EQ("shield-target projectile target kind",
         ov.projectiles[0].target_kind, ENCOUNTER_PROJECTILE_TARGET_NPC_SLOT);
     ASSERT_INT_EQ("shield-target projectile target slot", ov.projectiles[0].target_npc_slot, 1);
+    ASSERT_INT_EQ("shield-target projectile source kind",
+        ov.projectiles[0].source_kind, ENCOUNTER_PROJECTILE_TARGET_NPC_SLOT);
+    ASSERT_INT_EQ("shield-target projectile source slot", ov.projectiles[0].source_npc_slot, 2);
 }
 
 static void test_inferno_zuk_projectile_render_uses_combat_visual_rows(void) {
@@ -6634,6 +6843,9 @@ static void test_inferno_zuk_projectile_render_uses_combat_visual_rows(void) {
     ASSERT_INT_EQ("zuk projectile count", ov.projectile_count, 1);
     ASSERT_INT_EQ("zuk projectile model", ov.projectiles[0].model_id, INF_GFX_1375_MODEL);
     ASSERT_INT_EQ("zuk projectile animation", ov.projectiles[0].anim_id, INF_GFX_1375_ANIM);
+    ASSERT_INT_EQ("zuk projectile source kind",
+        ov.projectiles[0].source_kind, ENCOUNTER_PROJECTILE_TARGET_NPC_SLOT);
+    ASSERT_INT_EQ("zuk projectile source slot", ov.projectiles[0].source_npc_slot, 0);
 
     InfernoState healer_state;
     init_zuk_timing_state(&healer_state);
@@ -6654,6 +6866,9 @@ static void test_inferno_zuk_projectile_render_uses_combat_visual_rows(void) {
     ASSERT_INT_EQ("healer projectile animation",
         healer_ov.projectiles[0].anim_id, INF_GFX_660_ANIM);
     ASSERT_INT_EQ("healer impact spotanim", healer_ov.projectiles[0].impact_gfx_id, 659);
+    ASSERT_INT_EQ("healer projectile source kind",
+        healer_ov.projectiles[0].source_kind, ENCOUNTER_PROJECTILE_TARGET_NPC_SLOT);
+    ASSERT_INT_EQ("healer projectile source slot", healer_ov.projectiles[0].source_npc_slot, 2);
 }
 
 static void test_player_projectile_render_uses_stored_reference_timing(void) {
@@ -7612,6 +7827,12 @@ int main(void) {
     test_human_autocast_selection_persists_across_weapon_switches();
     test_autocast_is_inactive_with_non_autocast_weapon();
     test_echo_boots_recoil_hits_nearby_npcs_once();
+    test_redemption_pressure_counts_zero_hit_low_hp_landing();
+    test_redemption_pressure_splits_lethal_band_deaths();
+    test_redemption_action_maps_without_smite();
+    test_redemption_zero_hit_landing_heals_and_drains();
+    test_redemption_does_not_prevent_lethal_damage();
+    test_redemption_procs_on_locked_zero_projectile_landing();
     test_human_autocast_works_with_dragon_hunter_wand();
     test_inferno_snapshot_restore_round_trip();
     test_inferno_snapshot_preserves_loadout_profile();

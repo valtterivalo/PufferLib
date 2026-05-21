@@ -1,6 +1,6 @@
 #line 3605 "encounter_inferno.h"
 #define INF_HEAD_MOVE      0   /* 25: idle + 8 walk + 16 run */
-#define INF_HEAD_PRAYER    1   /* no_change, off, set_refresh_melee/ranged/magic */
+#define INF_HEAD_PRAYER    1   /* no_change, redemption, set_refresh_melee/ranged/magic */
 #define INF_HEAD_TARGET    2   /* INF_OBS_NPCS+1: none or observation slot */
 #define INF_HEAD_GEAR      3   /* 4: no_switch, mage, long_range, bp */
 #define INF_HEAD_EAT       4   /* 2: none, brew */
@@ -12,6 +12,21 @@ static const int INF_ACTION_DIMS[INF_NUM_ACTION_HEADS] = {
     ENCOUNTER_MOVE_ACTIONS, ENCOUNTER_OVERHEAD_DIM_PVE, INF_OBS_NPCS+1, 4, 2, 4, 3, 2, ENCOUNTER_OFFENSIVE_DIM
 };
 #define INF_ACTION_MASK_SIZE (ENCOUNTER_MOVE_ACTIONS + ENCOUNTER_OVERHEAD_DIM_PVE + INF_OBS_NPCS+1 + 4 + 2 + 4 + 3 + 2 + ENCOUNTER_OFFENSIVE_DIM)
+#define INF_OVERHEAD_SET_REFRESH_REDEMPTION ENCOUNTER_OVERHEAD_OFF
+
+static int inf_canonical_overhead_action(int action) {
+    return action == INF_OVERHEAD_SET_REFRESH_REDEMPTION
+        ? ENCOUNTER_OVERHEAD_SET_REFRESH_REDEMPTION
+        : action;
+}
+
+static int inf_local_overhead_action(int action) {
+    if (action == ENCOUNTER_OVERHEAD_SET_REFRESH_REDEMPTION)
+        return INF_OVERHEAD_SET_REFRESH_REDEMPTION;
+    if (action == ENCOUNTER_OVERHEAD_SET_REFRESH_SMITE)
+        return ENCOUNTER_OVERHEAD_NO_CHANGE;
+    return action;
+}
 
 /* movement uses shared encounter_move_to_target from osrs_encounter.h */
 
@@ -235,7 +250,7 @@ static void inf_player_pretick(InfernoState* s, InfernoContext* ctx, const int* 
     /* apply prayer actions. each helper returns 1 when the final active prayer
        was activated this tick, so that slot skips drain. */
     OffensivePrayer prev_offensive = s->player.offensive_prayer;
-    int prayer_act = actions[INF_HEAD_PRAYER];
+    int prayer_act = inf_canonical_overhead_action(actions[INF_HEAD_PRAYER]);
     int offensive_act = actions[INF_HEAD_OFFENSIVE];
     if (ctx->config.oracle_mode > 0) {
         InfOraclePick pick = inf_oracle_pick_full(s, ctx->config.oracle_mode);
@@ -253,6 +268,8 @@ static void inf_player_pretick(InfernoState* s, InfernoContext* ctx, const int* 
     if (encounter_apply_overhead_action(&s->player.prayer, prayer_act)) {
         s->player.prayer_just_activated = 1;
     }
+    if (prayer_act == ENCOUNTER_OVERHEAD_SET_REFRESH_REDEMPTION)
+        s->redemption_action_count++;
     if (encounter_apply_offensive_action(&s->player.offensive_prayer, offensive_act)) {
         s->player.offensive_prayer_just_activated = 1;
     }
@@ -260,6 +277,8 @@ static void inf_player_pretick(InfernoState* s, InfernoContext* ctx, const int* 
        AFTER drain to catch both the apply-side change and the drain-side clear. */
     encounter_drain_all_prayers(
         &s->player, encounter_player_prayer_bonus(&s->player));
+    if (s->player.prayer == PRAYER_REDEMPTION)
+        s->redemption_active_ticks++;
     /* offensive prayer is baked into eff_level/max_hit via the loadout cache.
        recompute all loadouts on any change so combat math reflects current state. */
     if (s->player.offensive_prayer != prev_offensive) {
@@ -1018,8 +1037,7 @@ static void inf_resolve_player_pending_hits_ctx(InfernoState* s, const InfernoCo
                 if (elysian_reduced) s->player.elysian_proc_this_tick = 1;
             }
             inf_apply_echo_boots_recoil(s, dmg);
-            encounter_damage_player(
-                &s->player, dmg, &s->damage_received_this_tick);
+            inf_damage_player_from_type(s, hit->source_npc_type, dmg);
             s->player_pending_hits[i] =
                 s->player_pending_hits[--s->player_pending_hit_count];
             i--;

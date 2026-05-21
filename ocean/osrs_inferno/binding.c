@@ -2284,6 +2284,42 @@ void c_step(Env* env) {
                         (float)(s->tick_at_all_zuk_healers_dead - s->tick_at_le_240);
                 }
             }
+            env->log.redemption_proc_opportunities_normal_sum +=
+                (float)s->redemption_proc_opportunities;
+            env->log.redemption_zero_hit_proc_opportunities_normal_sum +=
+                (float)s->redemption_zero_hit_proc_opportunities;
+            env->log.redemption_proc_opportunities_after_240_normal_sum +=
+                (float)s->redemption_proc_opportunities_after_240;
+            env->log.redemption_heal_potential_normal_sum +=
+                s->redemption_heal_potential;
+            env->log.redemption_heal_potential_after_240_normal_sum +=
+                s->redemption_heal_potential_after_240;
+            env->log.redemption_deaths_from_band_normal +=
+                (float)s->redemption_deaths_from_band;
+            env->log.redemption_deaths_from_band_after_240_normal +=
+                (float)s->redemption_deaths_from_band_after_240;
+            env->log.redemption_deaths_from_above_band_normal +=
+                (float)s->redemption_deaths_from_above_band;
+            env->log.redemption_action_count_normal_sum +=
+                (float)s->redemption_action_count;
+            env->log.redemption_active_ticks_normal_sum +=
+                (float)s->redemption_active_ticks;
+            env->log.redemption_proc_count_normal_sum +=
+                (float)s->redemption_proc_count;
+            env->log.redemption_zero_hit_proc_count_normal_sum +=
+                (float)s->redemption_zero_hit_proc_count;
+            env->log.redemption_heal_done_normal_sum +=
+                s->redemption_heal_done;
+            for (int t = 0; t < INF_NUM_NPC_TYPES; t++) {
+                env->log.redemption_proc_opportunities_by_type_normal[t] +=
+                    (float)s->redemption_proc_opportunities_by_type[t];
+                env->log.redemption_zero_hit_proc_opportunities_by_type_normal[t] +=
+                    (float)s->redemption_zero_hit_proc_opportunities_by_type[t];
+                env->log.redemption_heal_potential_by_type_normal[t] +=
+                    s->redemption_heal_potential_by_type[t];
+                env->log.redemption_deaths_from_band_by_type_normal[t] +=
+                    (float)s->redemption_deaths_from_band_by_type[t];
+            }
             /* Terminal death pressure by phase. */
             if (!won) {
                 int jad_alive = 0, zuk_healer_alive = 0, jad_healer_alive = 0, set_alive = 0;
@@ -2503,6 +2539,9 @@ void c_render(Env* env) {
 
     int first_call = (re->client == NULL);
     if (first_call) {
+        osrs_asset_require_group(OSRS_ASSET_GROUP_INFERNO);
+        osrs_asset_require_group(OSRS_ASSET_GROUP_COMBAT_VISUALS);
+
         re->client = render_make_client();
         RenderClient* rc = (RenderClient*)re->client;
         rc->ticks_per_second = env->ticks_per_second;
@@ -2556,18 +2595,23 @@ void c_render(Env* env) {
     inferno_env_apply_render_status_overlay(env, rc);
     if (env->render_status_frames > 0) env->render_status_frames--;
 
-    /* match the standalone viewer's visual_frame pattern: spin pvp_render at
-       ~60fps until the next sim tick is due. pvp_render uses GetFrameTime()
-       to accumulate client_tick_accumulator and steps render_client_tick every
-       20ms, which is what animates sub_x/sub_y interpolation smoothly between
-       sim ticks. calling pvp_render only once per 600ms collapses all 30
-       client-ticks into a single frame → entities snap instantly, no motion.
-       so: keep rendering until the tick deadline, then return. c_step's sim
-       step follows immediately and the loop repeats. */
-    float tps = rc->ticks_per_second > 0.0f ? rc->ticks_per_second : 1.667f;
+    /* Match the standalone viewer's visual_frame pattern: render until the
+       next sim tick is due. pvp_render scales the client-tick clock by replay
+       speed, so high-speed evals still drain projectile flights and effects. */
+    if (rc->ticks_per_second <= 0.0f) {
+        pvp_render(re);
+        env->last_step_time = GetTime();
+        return;
+    }
+    float tps = render_effective_ticks_per_second(rc);
     double interval = 1.0 / (double)tps;
     double deadline = env->last_step_time + interval;
+    int rendered = 0;
     while (GetTime() < deadline) {
+        pvp_render(re);
+        rendered = 1;
+    }
+    if (!rendered) {
         pvp_render(re);
     }
     env->last_step_time = GetTime();
@@ -3502,6 +3546,78 @@ void my_log(Log* log, Dict* out) {
         dict_set(out, "hp_restored_after_240_normal", hp_restored_after_240);
         dict_set(out, "zuk_hp_max_after_healer_spawn_normal", max_hp_after_spawn);
         dict_set(out, "spark_damage_after_240_normal", spark_damage_after_240);
+        dict_set(out, "redemption_proc_opportunities_normal",
+            log->redemption_proc_opportunities_normal_sum / log->n_normal);
+        dict_set(out, "redemption_zero_hit_proc_opportunities_normal",
+            log->redemption_zero_hit_proc_opportunities_normal_sum / log->n_normal);
+        dict_set(out, "redemption_proc_opportunities_after_240_normal",
+            log->redemption_proc_opportunities_after_240_normal_sum / log->n_normal);
+        dict_set(out, "redemption_heal_potential_normal",
+            log->redemption_heal_potential_normal_sum / log->n_normal);
+        dict_set(out, "redemption_heal_potential_after_240_normal",
+            log->redemption_heal_potential_after_240_normal_sum / log->n_normal);
+        dict_set(out, "frac_redemption_deaths_from_band_normal",
+            log->redemption_deaths_from_band_normal / log->n_normal);
+        dict_set(out, "frac_redemption_deaths_from_band_after_240_normal",
+            log->redemption_deaths_from_band_after_240_normal / log->n_normal);
+        dict_set(out, "frac_redemption_deaths_from_above_band_normal",
+            log->redemption_deaths_from_above_band_normal / log->n_normal);
+        dict_set(out, "redemption_action_count_normal",
+            log->redemption_action_count_normal_sum / log->n_normal);
+        dict_set(out, "redemption_active_ticks_normal",
+            log->redemption_active_ticks_normal_sum / log->n_normal);
+        dict_set(out, "redemption_proc_count_normal",
+            log->redemption_proc_count_normal_sum / log->n_normal);
+        dict_set(out, "redemption_zero_hit_proc_count_normal",
+            log->redemption_zero_hit_proc_count_normal_sum / log->n_normal);
+        dict_set(out, "redemption_heal_done_normal",
+            log->redemption_heal_done_normal_sum / log->n_normal);
+        dict_set(out, "redemption_proc_opportunities_heal_zuk_normal",
+            log->redemption_proc_opportunities_by_type_normal[INF_NPC_HEALER_ZUK] /
+                log->n_normal);
+        dict_set(out, "redemption_zero_hit_proc_opportunities_heal_zuk_normal",
+            log->redemption_zero_hit_proc_opportunities_by_type_normal[INF_NPC_HEALER_ZUK] /
+                log->n_normal);
+        dict_set(out, "redemption_heal_potential_heal_zuk_normal",
+            log->redemption_heal_potential_by_type_normal[INF_NPC_HEALER_ZUK] /
+                log->n_normal);
+        dict_set(out, "frac_redemption_deaths_from_band_heal_zuk_normal",
+            log->redemption_deaths_from_band_by_type_normal[INF_NPC_HEALER_ZUK] /
+                log->n_normal);
+        dict_set(out, "redemption_proc_opportunities_ranger_normal",
+            log->redemption_proc_opportunities_by_type_normal[INF_NPC_RANGER] /
+                log->n_normal);
+        dict_set(out, "redemption_zero_hit_proc_opportunities_ranger_normal",
+            log->redemption_zero_hit_proc_opportunities_by_type_normal[INF_NPC_RANGER] /
+                log->n_normal);
+        dict_set(out, "redemption_proc_opportunities_mager_normal",
+            log->redemption_proc_opportunities_by_type_normal[INF_NPC_MAGER] /
+                log->n_normal);
+        dict_set(out, "redemption_zero_hit_proc_opportunities_mager_normal",
+            log->redemption_zero_hit_proc_opportunities_by_type_normal[INF_NPC_MAGER] /
+                log->n_normal);
+        dict_set(out, "redemption_proc_opportunities_zuk_normal",
+            log->redemption_proc_opportunities_by_type_normal[INF_NPC_ZUK] /
+                log->n_normal);
+        dict_set(out, "redemption_zero_hit_proc_opportunities_zuk_normal",
+            log->redemption_zero_hit_proc_opportunities_by_type_normal[INF_NPC_ZUK] /
+                log->n_normal);
+        dict_set(out, "redemption_proc_opportunities_jad_normal",
+            log->redemption_proc_opportunities_by_type_normal[INF_NPC_JAD] /
+                log->n_normal);
+        dict_set(out, "redemption_zero_hit_proc_opportunities_jad_normal",
+            log->redemption_zero_hit_proc_opportunities_by_type_normal[INF_NPC_JAD] /
+                log->n_normal);
+        if (log->n_normal_died > 0.0f) {
+            dict_set(out, "frac_deaths_redemption_from_band_normal",
+                log->redemption_deaths_from_band_normal / log->n_normal_died);
+            dict_set(out, "frac_deaths_redemption_from_band_after_240_normal",
+                log->redemption_deaths_from_band_after_240_normal /
+                    log->n_normal_died);
+        } else {
+            dict_set(out, "frac_deaths_redemption_from_band_normal", 0.0f);
+            dict_set(out, "frac_deaths_redemption_from_band_after_240_normal", 0.0f);
+        }
         /* Death-cause fractions, out of normal-start episodes. */
         dict_set(out, "frac_died_with_jad_alive_normal",
             log->count_died_with_jad_alive_normal / log->n_normal);

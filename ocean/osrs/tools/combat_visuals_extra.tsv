@@ -4,12 +4,14 @@ npc|7693|melee|7582|-|1382|-|33017|7614|-|-|-|-|-|-|-|-|-|inferno:jal_ak_melee
 npc|7693|ranged|7583|-|1383|-|853351|366|-|-|-|-|-|-|-|-|-|inferno:jal_ak_ranged
 npc|7693|magic|7581|-|1384|-|853352|-|-|-|-|-|-|-|-|-|-|inferno:jal_ak_magic
 npc|7698|ranged|7605|-|1377|1378|33013|-|-|-|-|-|-|-|-|-|-|inferno:jal_xil_ranged
-npc|7699|magic|7610|-|1379|1380|33016|7614|-|-|-|-|-|-|-|-|-|inferno:jal_zek_magic
+npc|7699|magic|7610|-|1376|-|33007|7571|-|-|-|-|-|-|-|-|-|inferno:jal_zek_magic
 npc|7700|magic|7592|-|448|-|9337|2659|-|-|-|-|-|-|-|-|-|inferno:jaltok_jad_magic
 npc|7700|ranged|7593|-|451|-|9342|2660|-|-|-|-|-|-|-|-|-|inferno:jaltok_jad_ranged
 npc|7706|magic|7566|-|1375|-|33006|7571|-|-|-|-|-|-|-|-|-|inferno:tzkal_zuk_magic
 npc|7708|magic|-|-|660|659|14759|3942|-|-|-|-|-|-|-|-|-|inferno:jal_mejjak_magic
 npc|239|any|86|1|54|-|3154|373|3|3|172|124|41|16|0|64|5|runec:king_black_dragon_dragonfire
+item|31113|magic|12397|3366|3367|3368|28450|12398|3|3|160|120|-|16|-|-|-|gameval:eye_of_ayak_normal
+special|31113|magic|12394|3364|3367|3365|28450|12398|3|3|160|120|-|16|-|-|-|gameval:eye_of_ayak_soul_rend
 special|11235|ranged|426|-|-|-|-|-|3|3|163|146|41|5|5|11|5|runec:darkbow_special|2|163|146|41|25|14|11|10|1101|1103|26393|6590|1|1109|-
 item|11804|slash|7045|-|-|-|-|-|-|-|-|-|-|-|-|-|-|runec:bgs:attack:stance1|-|-|-|-|-|-|-|-|-|-|-|-|-|-|0
 item|11804|crush|7054|-|-|-|-|-|-|-|-|-|-|-|-|-|-|runec:bgs:attack:stance3|-|-|-|-|-|-|-|-|-|-|-|-|-|-|2

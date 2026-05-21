@@ -149,6 +149,32 @@ static void test_projectile_profiles_match_runec_visual_rows(void) {
     assert(trident->launch_spotanim_id == GFX_TRIDENT_CAST);
     assert(trident->travel_spotanim_id == GFX_TRIDENT_PROJ);
     assert(trident->impact_spotanim_id == GFX_TRIDENT_IMPACT);
+    assert(trident->projectile_model_id == OSRS_PROJECTILE_MODEL_TRIDENT);
+    assert(trident->projectile_anim_id == OSRS_PROJECTILE_ANIM_TRIDENT);
+
+    const OsrsCombatVisualRow* eye =
+        osrs_combat_visual_find_item_id(OSRS_ITEM_ID_EYE_OF_AYAK, ATTACK_STYLE_MAGIC);
+    assert(eye);
+    assert(eye->attack_anim_id == 12397);
+    const OsrsCombatProjectileProfile* eye_projectile =
+        osrs_combat_visual_magic_projectile_profile(ITEM_EYE_OF_AYAK);
+    assert(eye_projectile);
+    assert(eye_projectile->launch_spotanim_id == GFX_EYE_OF_AYAK_CAST);
+    assert(eye_projectile->travel_spotanim_id == GFX_EYE_OF_AYAK_PROJ);
+    assert(eye_projectile->impact_spotanim_id == GFX_EYE_OF_AYAK_IMPACT);
+    assert(eye_projectile->projectile_model_id == 28450);
+    assert(eye_projectile->projectile_anim_id == 12398);
+
+    const OsrsCombatVisualRow* eye_special =
+        osrs_combat_visual_find_special_projectile_item_id(
+            OSRS_ITEM_ID_EYE_OF_AYAK, ATTACK_STYLE_MAGIC);
+    assert(eye_special);
+    assert(eye_special->attack_anim_id == 12394);
+    assert(eye_special->projectile.launch_spotanim_id == GFX_EYE_OF_AYAK_SPECIAL_CAST);
+    assert(eye_special->projectile.travel_spotanim_id == GFX_EYE_OF_AYAK_PROJ);
+    assert(eye_special->projectile.impact_spotanim_id == GFX_EYE_OF_AYAK_SPECIAL_IMPACT);
+    assert(eye_special->projectile.projectile_model_id == 28450);
+    assert(eye_special->projectile.projectile_anim_id == 12398);
 
     const OsrsCombatVisualRow* jad_magic =
         osrs_combat_visual_find_npc_id(3127, ATTACK_STYLE_MAGIC);
@@ -169,10 +195,10 @@ static void test_projectile_profiles_match_runec_visual_rows(void) {
         osrs_combat_visual_find_npc_id(7699, ATTACK_STYLE_MAGIC);
     assert(inferno_mager);
     assert(inferno_mager->attack_anim_id == INF_GEN_ANIM_MAGER_ATTACK);
-    assert(inferno_mager->projectile.travel_spotanim_id == 1379);
-    assert(inferno_mager->projectile.impact_spotanim_id == 1380);
-    assert(inferno_mager->projectile.projectile_model_id == INF_GFX_1379_MODEL);
-    assert(inferno_mager->projectile.projectile_anim_id == INF_GFX_1379_ANIM);
+    assert(inferno_mager->projectile.travel_spotanim_id == 1376);
+    assert(inferno_mager->projectile.impact_spotanim_id == OSRS_COMBAT_PROJECTILE_MISSING);
+    assert(inferno_mager->projectile.projectile_model_id == INF_GFX_1376_MODEL);
+    assert(inferno_mager->projectile.projectile_anim_id == INF_GFX_1376_ANIM);
 
     const OsrsCombatVisualRow* inferno_jad_magic =
         osrs_combat_visual_find_npc_id(7700, ATTACK_STYLE_MAGIC);
@@ -331,12 +357,84 @@ static void test_spell_profiles_match_runec_visual_rows(void) {
     assert(blood->projectile_delay == 51);
 }
 
+static void test_barrage_spell_rows_cover_runec_contract(void) {
+    const OsrsCombatVisualRow* ice = osrs_combat_visual_find_row(
+        OSRS_COMBAT_VISUAL_KIND_SPELL, OSRS_COMBAT_PROJECTILE_MISSING,
+        "Ice Barrage", ATTACK_STYLE_MAGIC, OSRS_COMBAT_VISUAL_STANCE_ANY, 0, 1);
+    assert(ice);
+    assert(ice->attack_anim_id == 811);
+    assert(ice->projectile.travel_spotanim_id == GFX_ICE_BARRAGE_PROJ);
+    assert(ice->projectile.impact_spotanim_id == GFX_ICE_BARRAGE_HIT);
+    assert(ice->projectile.projectile_model_id == OSRS_PROJECTILE_MODEL_ICE_BARRAGE);
+    assert(ice->projectile.projectile_anim_id == OSRS_PROJECTILE_ANIM_BARRAGE);
+
+    const OsrsCombatVisualRow* blood = osrs_combat_visual_find_row(
+        OSRS_COMBAT_VISUAL_KIND_SPELL, OSRS_COMBAT_PROJECTILE_MISSING,
+        "Blood Barrage", ATTACK_STYLE_MAGIC, OSRS_COMBAT_VISUAL_STANCE_ANY, 0, 1);
+    assert(blood);
+    assert(blood->attack_anim_id == 811);
+    assert(blood->projectile.impact_spotanim_id == GFX_BLOOD_BARRAGE_HIT);
+    assert(blood->projectile.projectile_delay == 51);
+
+    const OsrsCombatVisualRow* shadow = osrs_combat_visual_find_row(
+        OSRS_COMBAT_VISUAL_KIND_SPELL, OSRS_COMBAT_PROJECTILE_MISSING,
+        "Shadow Barrage", ATTACK_STYLE_MAGIC, OSRS_COMBAT_VISUAL_STANCE_ANY, 0, 1);
+    assert(shadow);
+    assert(shadow->attack_anim_id == 811);
+    assert(shadow->projectile.impact_spotanim_id == 383);
+    assert(shadow->projectile.projectile_delay == 51);
+
+    const OsrsCombatVisualRow* smoke = osrs_combat_visual_find_row(
+        OSRS_COMBAT_VISUAL_KIND_SPELL, OSRS_COMBAT_PROJECTILE_MISSING,
+        "Smoke Barrage", ATTACK_STYLE_MAGIC, OSRS_COMBAT_VISUAL_STANCE_ANY, 0, 1);
+    assert(smoke);
+    assert(smoke->attack_anim_id == 811);
+    assert(smoke->projectile.travel_spotanim_id == 390);
+    assert(smoke->projectile.impact_spotanim_id == 391);
+    assert(smoke->projectile.projectile_model_id == 6398);
+    assert(smoke->projectile.projectile_anim_id == 1986);
+}
+
+static void test_budget_gear_visual_rows_match_runec(void) {
+    const OsrsCombatVisualRow* rune_crossbow =
+        osrs_combat_visual_find_item_id(OSRS_ITEM_ID_RUNE_CROSSBOW, ATTACK_STYLE_RANGED);
+    assert(rune_crossbow);
+    assert(rune_crossbow->attack_anim_id == 7552);
+    assert(rune_crossbow->projectile.projectile_start_height == 155);
+    assert(rune_crossbow->projectile.projectile_angle == 5);
+
+    const OsrsCombatVisualRow* magic_shortbow_i =
+        osrs_combat_visual_find_item_id(OSRS_ITEM_ID_MAGIC_SHORTBOW_I, ATTACK_STYLE_RANGED);
+    assert(magic_shortbow_i);
+    assert(magic_shortbow_i->attack_anim_id == 426);
+    assert(magic_shortbow_i->projectile.projectile_start_height == 163);
+    assert(magic_shortbow_i->projectile.projectile_angle == 15);
+
+    const OsrsCombatVisualRow* kodai =
+        osrs_combat_visual_find_item_id(OSRS_ITEM_ID_KODAI_WAND, ATTACK_STYLE_MAGIC);
+    assert(kodai);
+    assert(kodai->attack_anim_id == 414);
+
+    const OsrsCombatVisualRow* ahrims =
+        osrs_combat_visual_find_item_id(OSRS_ITEM_ID_AHRIMS_STAFF, ATTACK_STYLE_MAGIC);
+    assert(ahrims);
+    assert(ahrims->attack_anim_id == 2078);
+
+    const OsrsCombatVisualRow* dragon_hunter_wand =
+        osrs_combat_visual_find_item_id(OSRS_ITEM_ID_DRAGON_HUNTER_WAND, ATTACK_STYLE_MAGIC);
+    if (dragon_hunter_wand) {
+        assert(dragon_hunter_wand->attack_anim_id != OSRS_COMBAT_VISUAL_NO_ANIMATION);
+    }
+}
+
 int main(void) {
     test_empty_origin_transform_sets_fallback_pivot();
     test_alpha_transform_updates_face_alphas_and_mesh_colors();
     test_projectile_profiles_match_runec_visual_rows();
     test_projectile_sequence_builder_matches_runec_specials();
     test_spell_profiles_match_runec_visual_rows();
+    test_barrage_spell_rows_cover_runec_contract();
+    test_budget_gear_visual_rows_match_runec();
 
     assert(osrs_combat_visual_weapon_attack_anim(
         ITEM_WHIP, ATTACK_STYLE_MELEE, 0, OSRS_PLAYER_UNARMED_ATTACK_ANIM) == 1658);

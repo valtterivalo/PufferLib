@@ -25,13 +25,20 @@
 #ifndef OSRS_MODELS_H
 #define OSRS_MODELS_H
 
+#if __has_include("raylib.h")
 #include "raylib.h"
+#elif __has_include("raylib-5.5_macos/include/raylib.h")
+#include "raylib-5.5_macos/include/raylib.h"
+#else
+#error "raylib.h not found"
+#endif
 #include "osrs_assets.h"
 #include "osrs_binary_io.h"
 #include "osrs_types.h"
 #include "osrs_items.h"
 #include "data/item_models.h"
 #include "data/player_models.h"
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -42,6 +49,7 @@
 #define ATLS_MAGIC 0x41544C53  /* "ATLS" */
 #define TANM_MAGIC 0x4D4E4154  /* "TANM" */
 #define TANM_VERSION 1
+#define MODEL_CACHE_DENSE_INDEX_LIMIT 0x100000u
 
 typedef struct {
     uint32_t texture_id;
@@ -70,7 +78,9 @@ typedef struct {
 
 typedef struct {
     OsrsModel* models;
+    int* index_by_id;
     int count;
+    size_t index_limit;
     Texture2D atlas_texture;
     unsigned char* atlas_base_pixels;
     unsigned char* atlas_pixels;
@@ -81,6 +91,57 @@ typedef struct {
     float texture_anim_ticks;
     int has_atlas;
 } ModelCache;
+
+typedef enum {
+    OSRS_MODEL_APPEND_OK,
+    OSRS_MODEL_APPEND_EMPTY,
+    OSRS_MODEL_APPEND_BASE_VERTEX_OVERFLOW,
+    OSRS_MODEL_APPEND_FACE_OVERFLOW,
+} OsrsModelAppendResult;
+
+static const char* osrs_model_append_result_name(OsrsModelAppendResult result) {
+    switch (result) {
+        case OSRS_MODEL_APPEND_OK:
+            return "ok";
+        case OSRS_MODEL_APPEND_EMPTY:
+            return "empty model";
+        case OSRS_MODEL_APPEND_BASE_VERTEX_OVERFLOW:
+            return "base vertex overflow";
+        case OSRS_MODEL_APPEND_FACE_OVERFLOW:
+            return "face overflow";
+    }
+    return "unknown append result";
+}
+
+static OsrsModelAppendResult osrs_model_append_check(
+    int current_base_vert_count,
+    int current_face_count,
+    const OsrsModel* model,
+    int base_vert_capacity,
+    int face_capacity
+) {
+    if (!model || !model->base_vertices || model->base_vert_count == 0) {
+        return OSRS_MODEL_APPEND_EMPTY;
+    }
+    if (current_base_vert_count < 0 || current_face_count < 0 ||
+            base_vert_capacity < 0 || face_capacity < 0 ||
+            model->mesh.triangleCount < 0) {
+        fprintf(stderr, "osrs_model_append_check: invalid composite geometry counts\n");
+        abort();
+    }
+
+    int model_base_vert_count = (int)model->base_vert_count;
+    int model_face_count = model->mesh.triangleCount;
+    if (model_base_vert_count > base_vert_capacity ||
+            current_base_vert_count > base_vert_capacity - model_base_vert_count) {
+        return OSRS_MODEL_APPEND_BASE_VERTEX_OVERFLOW;
+    }
+    if (model_face_count > face_capacity ||
+            current_face_count > face_capacity - model_face_count) {
+        return OSRS_MODEL_APPEND_FACE_OVERFLOW;
+    }
+    return OSRS_MODEL_APPEND_OK;
+}
 
 static int model_cache_companion_path(
     char* out,
@@ -246,6 +307,44 @@ static Texture2D model_cache_load_atlas(ModelCache* cache, const char* model_pat
     return texture;
 }
 
+static size_t model_cache_index_limit_or_abort(
+    FILE* f,
+    const uint32_t* offsets,
+    uint32_t count,
+    const char* path
+) {
+    size_t index_limit = 0;
+    for (uint32_t i = 0; i < count; i++) {
+        osrs_seek_or_abort(f, (long)offsets[i], path);
+        uint32_t model_id = 0;
+        osrs_read_exact(f, &model_id, sizeof(model_id), 1, path, "model id");
+        if (model_id < MODEL_CACHE_DENSE_INDEX_LIMIT) {
+            size_t candidate = (size_t)model_id + 1;
+            if (candidate > index_limit) index_limit = candidate;
+        }
+    }
+    return index_limit;
+}
+
+static void model_cache_init_index(ModelCache* cache, size_t limit) {
+    if (limit == 0) return;
+    if (limit > SIZE_MAX / sizeof(int)) {
+        fprintf(stderr, "model_cache_load: model id index too large for %zu slots\n", limit);
+        abort();
+    }
+
+    cache->index_by_id = (int*)osrs_malloc_or_abort(
+        limit * sizeof(int), "model id index");
+    cache->index_limit = limit;
+    for (size_t i = 0; i < limit; i++) {
+        cache->index_by_id[i] = -1;
+    }
+}
+
+static void model_cache_set_index(ModelCache* cache, uint32_t model_id, int index) {
+    if (!cache->index_by_id || (size_t)model_id >= cache->index_limit) return;
+    cache->index_by_id[model_id] = index;
+}
 
 static ModelCache* model_cache_load(const char* path) {
     FILE* f = osrs_asset_fopen(path, "rb");
@@ -272,11 +371,20 @@ static ModelCache* model_cache_load(const char* path) {
         count * sizeof(uint32_t), "model offsets");
     osrs_read_exact(f, offsets, 4, count, path, "model offsets");
 
+    if (count > (uint32_t)INT_MAX) {
+        fprintf(stderr, "model_cache_load: too many models: %u\n", count);
+        abort();
+    }
+
     ModelCache* cache = (ModelCache*)osrs_calloc_or_abort(
         1, sizeof(ModelCache), "model cache");
     cache->models = (OsrsModel*)osrs_calloc_or_abort(
         count, sizeof(OsrsModel), "model entries");
     cache->count = (int)count;
+    if (count > 0) {
+        size_t index_limit = model_cache_index_limit_or_abort(f, offsets, count, path);
+        model_cache_init_index(cache, index_limit);
+    }
     if (has_texcoords) {
         cache->atlas_texture = model_cache_load_atlas(cache, path);
         cache->has_atlas = cache->atlas_texture.id > 0;
@@ -298,6 +406,7 @@ static ModelCache* model_cache_load(const char* path) {
 
         cache->models[i].model_id = model_id;
         cache->models[i].base_vert_count = base_vert_count;
+        model_cache_set_index(cache, model_id, (int)i);
 
         /* allocate raylib mesh for expanded rendering geometry */
         Mesh mesh = { 0 };
@@ -381,6 +490,12 @@ static ModelCache* model_cache_load(const char* path) {
 
 static OsrsModel* model_cache_get(ModelCache* cache, uint32_t model_id) {
     if (!cache) return NULL;
+    if (cache->index_by_id && (size_t)model_id < cache->index_limit) {
+        int idx = cache->index_by_id[model_id];
+        if (idx >= 0 && idx < cache->count && cache->models[idx].model_id == model_id) {
+            return &cache->models[idx];
+        }
+    }
     for (int i = 0; i < cache->count; i++) {
         if (cache->models[i].model_id == model_id) {
             return &cache->models[i];
@@ -418,12 +533,6 @@ static const ItemModelMapping* item_model_mapping_for_item(uint16_t item_id) {
         }
     }
     return NULL;
-}
-
-static uint32_t item_to_inv_model(uint16_t item_id) {
-    const ItemModelMapping* mapping = item_model_mapping_for_item(item_id);
-    if (!mapping) return ITEM_RENDER_MODEL_MISSING;
-    return mapping->inv_model;
 }
 
 static uint32_t item_to_wield_model(uint16_t item_id) {
@@ -537,6 +646,7 @@ static void model_cache_free(ModelCache* cache) {
     free(cache->atlas_base_pixels);
     free(cache->atlas_pixels);
     free(cache->texture_anims);
+    free(cache->index_by_id);
     free(cache->models);
     free(cache);
 }

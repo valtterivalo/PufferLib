@@ -372,6 +372,7 @@ static void inf_render_post_tick_ctx(
                     proj_style, (int)s->damage_received_this_tick,
                     duration, start_h, end_h, curve, arc, tracks, npc_size, 1,
                     model_ids[j], 0);
+                encounter_set_projectile_source_npc_slot(ov, pi, i);
                 ov->projectiles[pi].start_delay = start_delay;
                 if (target_npc_slot >= 0)
                     encounter_set_projectile_target_npc_slot(ov, pi, target_npc_slot);
@@ -389,6 +390,7 @@ static void inf_render_post_tick_ctx(
             duration, start_h, end_h, curve, arc, tracks, npc_size, 1,
             proj_model_id, impact_gfx_id);
 
+        encounter_set_projectile_source_npc_slot(ov, pi, i);
         ov->projectiles[pi].start_delay = start_delay;
         if (target_npc_slot >= 0)
             encounter_set_projectile_target_npc_slot(ov, pi, target_npc_slot);
@@ -486,6 +488,7 @@ static void inf_render_post_tick_ctx(
                         p_style, visual_damage,
                         p_duration, part_start_h, part_end_h, 16, p_arc, p_tracks,
                         1, target_size, player_proj_model, player_impact_gfx);
+                    encounter_set_projectile_source_player(ov, pi);
                     ov->projectiles[pi].start_delay = p_start_delay;
                     encounter_set_projectile_animation(ov, pi, player_proj_anim);
                     encounter_set_projectile_launch_gfx(ov, pi, player_launch_gfx);
@@ -516,6 +519,7 @@ static void inf_translate_human_input_ctx(
 
     encounter_translate_movement(hi, actions, INF_HEAD_MOVE, inf_get_player_for_input, state);
     encounter_translate_prayer(hi, actions, INF_HEAD_PRAYER);
+    actions[INF_HEAD_PRAYER] = inf_local_overhead_action(actions[INF_HEAD_PRAYER]);
     encounter_translate_offensive_prayer(hi, actions, INF_HEAD_OFFENSIVE);
     InfernoState* s = (InfernoState*)state;
     InfernoContext* ctx = context ? (InfernoContext*)context : inf_legacy_context();
@@ -594,7 +598,7 @@ static void inf_translate_human_commands_ctx(
                 break;
             }
             case HUMAN_COMMAND_OVERHEAD_PRAYER:
-                actions[INF_HEAD_PRAYER] = cmd->overhead_prayer;
+                actions[INF_HEAD_PRAYER] = inf_local_overhead_action(cmd->overhead_prayer);
                 break;
             case HUMAN_COMMAND_OFFENSIVE_PRAYER:
                 actions[INF_HEAD_OFFENSIVE] = cmd->offensive_prayer;
@@ -614,6 +618,9 @@ static void inf_translate_human_commands_ctx(
             case HUMAN_COMMAND_EQUIP_INVENTORY_ITEM:
             case HUMAN_COMMAND_FIGHT_STYLE:
             case HUMAN_COMMAND_SET_AUTOCAST:
+            case HUMAN_COMMAND_ITEM_ON_ITEM:
+            case HUMAN_COMMAND_ITEM_ON_WIDGET:
+            case HUMAN_COMMAND_SPELL_ON_WIDGET:
             case HUMAN_COMMAND_NONE:
                 break;
         }
@@ -828,7 +835,7 @@ static float inf_progress_score(EncounterState* state) {
 /* snapshot/restore stores only gameplay state. live process data stays in context. */
 
 #define INF_SNAPSHOT_MAGIC 0x1FE00001u
-#define INF_SNAPSHOT_VERSION 16u
+#define INF_SNAPSHOT_VERSION 17u
 
 typedef struct {
     uint32_t magic;

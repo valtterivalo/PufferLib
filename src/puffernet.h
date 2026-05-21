@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <string.h>
+#include <stdlib.h>
 #include <math.h>
 #include <assert.h>
 
@@ -32,6 +33,7 @@ void* alloc(Arena* allocator, size_t size) {
 typedef struct Weights Weights;
 struct Weights {
     float* data;
+    int raw_size;
     int size;
     int idx;
 };
@@ -57,6 +59,7 @@ Weights* load_weights(const char* filename) {
     if (read_size != num_weights) {
         perror("Error reading file");
     }
+    weights->raw_size = num_weights;
     weights->size = num_weights + 7;
     weights->idx = 0;
     return weights;
@@ -459,7 +462,7 @@ Linear* make_linear(Weights* weights, int batch_size, int input_dim, int output_
     Linear* layer = (Linear*)calloc(1, sizeof(Linear) + buffer_size);
     *layer = (Linear){
         .output = (float*)(layer + 1),
-        .weights = get_weights_aligned(weights, output_dim*input_dim),
+        .weights = get_weights(weights, output_dim*input_dim),
         .batch_size = batch_size,
         .input_dim = input_dim,
         .output_dim = output_dim,
@@ -1048,7 +1051,7 @@ PufferNet* make_puffernet(Weights* weights, int num_agents, int input_dim,
     net->encoder = make_linear(weights, num_agents, input_dim, hidden_dim);
     net->decoder = make_linear(weights, num_agents, hidden_dim, atn_sum + 1);
     if (net->is_continuous) {
-        net->log_std = get_weights_aligned(weights, num_actions);
+        net->log_std = get_weights(weights, num_actions);
     }
     net->mingru  = make_mingru(weights, num_agents, hidden_dim, num_layers);
     if (!net->is_continuous) {

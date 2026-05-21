@@ -72,6 +72,14 @@ else
 fi
 
 echo ""
+echo "=== exporting zulrah NPC models and animations ==="
+python ../tools/export_encounter_npcs.py \
+    --group zulrah \
+    --modern-cache "$CACHE" \
+    --manifest "$PROJECT_ROOT/ocean/osrs/tools/monsters_manifest.json" \
+    --output-dir "$DATA_DIR"
+
+echo ""
 echo "=== exporting equipment models ==="
 python export_models.py \
     --modern-cache "$CACHE" \
@@ -85,8 +93,9 @@ python export_spotanims.py \
     --output "$DATA_DIR/spotanims.bin"
 python export_projectile_models.py \
     --cache "$CACHE" \
+    --models 26393,35982 \
     --spotanims "$DATA_DIR/spotanims.bin" \
-    --spotanim-ids 15,24,27,85,231,368,369,377,659,660,665,1040,1042,1043,1116,1120,1122,1123,1374,1383,1468 \
+    --spotanim-ids 15,24,27,85,231,368,369,377,659,660,665,1040,1042,1043,1101,1103,1116,1120,1122,1123,1374,1383,1468,1619,1620,3364,3365,3366,3367,3368 \
     --output "$DATA_DIR/projectiles.models"
 
 echo ""

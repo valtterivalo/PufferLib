@@ -730,6 +730,11 @@ typedef struct {
     float gear_switches;
     float current_ranged;
     float current_magic;
+    float zulrah_tier_n[3];
+    float zulrah_tier_wins[3];
+    float zulrah_tier_score_sum[3];
+    float zulrah_tier_damage_received[3];
+    float zulrah_tier_episode_length[3];
     float unavoidable_off_prayer;  /* off-prayer hits where correct prayer was on a different style */
     float ranger_mager_same_tick_attacks;
     float step_out_ranger_mager_same_tick_attacks;
@@ -883,6 +888,23 @@ typedef struct {
     float prayer_correct_by_type[14];
     float attacks_by_type[14];
     float dmg_from_type[14];
+    float redemption_proc_opportunities_normal_sum;
+    float redemption_zero_hit_proc_opportunities_normal_sum;
+    float redemption_proc_opportunities_after_240_normal_sum;
+    float redemption_heal_potential_normal_sum;
+    float redemption_heal_potential_after_240_normal_sum;
+    float redemption_deaths_from_band_normal;
+    float redemption_deaths_from_band_after_240_normal;
+    float redemption_deaths_from_above_band_normal;
+    float redemption_proc_opportunities_by_type_normal[14];
+    float redemption_zero_hit_proc_opportunities_by_type_normal[14];
+    float redemption_heal_potential_by_type_normal[14];
+    float redemption_deaths_from_band_by_type_normal[14];
+    float redemption_action_count_normal_sum;
+    float redemption_active_ticks_normal_sum;
+    float redemption_proc_count_normal_sum;
+    float redemption_zero_hit_proc_count_normal_sum;
+    float redemption_heal_done_normal_sum;
     float killed_by_type[14];
     float killed_by_type_normal[14];
     float killed_by_type_snapshot[14];

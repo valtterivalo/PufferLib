@@ -680,6 +680,11 @@ def _parse_modern_item_entry(item_id: int, data: bytes) -> ItemDef:
     return d
 
 
+SIM_ITEM_VISUAL_SOURCE_IDS = {
+    13867: 22647,
+}
+
+
 def decode_item_definitions_modern(reader: ModernCacheReader) -> dict[int, ItemDef]:
     """Decode item definitions from modern cache (config index 2, group 6).
 
@@ -689,9 +694,13 @@ def decode_item_definitions_modern(reader: ModernCacheReader) -> dict[int, ItemD
     files = reader.read_group(2, MODERN_CONFIG_OBJ_GROUP)
     defs: dict[int, ItemDef] = {}
 
-    for item_id in SIM_ITEM_IDS:
+    item_ids = sorted(set(SIM_ITEM_IDS) | set(SIM_ITEM_VISUAL_SOURCE_IDS.values()))
+    for item_id in item_ids:
         if item_id not in files:
-            print(f"  warning: item {item_id} not in modern cache config group {MODERN_CONFIG_OBJ_GROUP}")
+            print(
+                f"  warning: item {item_id} not in modern cache config group "
+                f"{MODERN_CONFIG_OBJ_GROUP}"
+            )
             continue
         d = _parse_modern_item_entry(item_id, files[item_id])
         if d.inv_model >= 0 or d.name:
@@ -2335,9 +2344,10 @@ def main() -> None:
         return decode_model(mid, raw_m)
 
     for idx, item_id in enumerate(SIM_ITEM_IDS):
-        item = item_defs.get(item_id)
+        visual_item_id = SIM_ITEM_VISUAL_SOURCE_IDS.get(item_id, item_id)
+        item = item_defs.get(visual_item_id)
         if item is None:
-            print(f"  warning: item {item_id} not found in cache")
+            print(f"  warning: item {visual_item_id} not found in cache")
             continue
 
         inv = item.inv_model if item.inv_model >= 0 else 0xFFFFFFFF
@@ -2393,7 +2403,7 @@ def main() -> None:
         w2_info = f" + wield2={item.male_wield2}" if item.male_wield2 >= 0 else ""
         w3_info = f" + wield3={item.male_wield3}" if item.male_wield3 >= 0 else ""
         print(
-            f"  {item.name} (id={item_id}): inv={inv}, "
+            f"  {item.name} (id={item_id}, visual={visual_item_id}): inv={inv}, "
             f"wield={item.male_wield}{w2_info}{w3_info}{rc_info}{rt_info}"
         )
 

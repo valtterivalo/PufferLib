@@ -73,6 +73,14 @@ int main(void) {
     };
     assert(render_entity_hit_splat_type(&elysian_zero) == 0);
 
+    assert(render_offhand_uses_shield_block_anim(ITEM_MAGES_BOOK) == 0);
+    assert(render_offhand_uses_shield_block_anim(ITEM_BOOK_OF_DARKNESS) == 0);
+    assert(render_offhand_uses_shield_block_anim(ITEM_ELIDINIS_WARD_F) == 0);
+    assert(render_offhand_uses_shield_block_anim(ITEM_DRAGON_DEFENDER) == 0);
+    assert(render_offhand_uses_shield_block_anim(ITEM_AVERNIC_DEFENDER) == 0);
+    assert(render_offhand_uses_shield_block_anim(ITEM_SPIRIT_SHIELD) == 1);
+    assert(render_offhand_uses_shield_block_anim(ITEM_DRAGONFIRE_SHIELD) == 1);
+
     for (int i = 0; i < 40; i++) {
         render_update_splats_client_tick(&rc);
     }

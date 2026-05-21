@@ -40,6 +40,8 @@ typedef struct {
     unsigned char term_staging;
 
     OsrsEnv render_env;
+    int pending_render_reset;
+    double last_step_time;
 } ZulrahEnv;
 
 #define OBS_SIZE ZUL_TOTAL_OBS
@@ -48,6 +50,14 @@ typedef struct {
 #define OBS_TENSOR_T FloatTensor
 #define Env ZulrahEnv
 #define ZUL_ENV_CONTEXT(env) ((EncounterContext*)((env)->enc_context))
+
+static void zulrah_env_put_int(Env* env, const char* key, int value) {
+    ENCOUNTER_ZULRAH.put_int(env->enc_state, ZUL_ENV_CONTEXT(env), key, value);
+}
+
+static void zulrah_env_put_float(Env* env, const char* key, float value) {
+    ENCOUNTER_ZULRAH.put_float(env->enc_state, ZUL_ENV_CONTEXT(env), key, value);
+}
 
 void c_step(Env* env) {
     int used_human_commands = 0;
@@ -106,8 +116,26 @@ void c_step(Env* env) {
         env->log.idle_ticks += (float)zs->total_potions_used;
         env->log.brews_used += (float)zs->total_venom_ticks;
         env->log.wave += (float)zs->total_phases_completed;
+        int tier = zs->gear_tier;
+        if (tier < 0 || tier >= ZUL_NUM_GEAR_TIERS) {
+            fprintf(stderr, "zulrah invalid sampled gear tier %d\n", tier);
+            abort();
+        }
+        float win = (zs->winner == 0) ? 1.0f : 0.0f;
+        float speed_bonus = win > 0.0f
+            ? (1.0f - (float)zs->tick / (float)ZUL_MAX_TICKS) * 0.3f
+            : 0.0f;
+        float dmg_penalty = win > 0.0f
+            ? (zs->total_damage_received / (float)ZUL_BASE_HP) * 0.2f
+            : 0.0f;
+        env->log.zulrah_tier_n[tier] += 1.0f;
+        env->log.zulrah_tier_wins[tier] += win;
+        env->log.zulrah_tier_score_sum[tier] += win + speed_bonus - dmg_penalty;
+        env->log.zulrah_tier_damage_received[tier] += zs->total_damage_received;
+        env->log.zulrah_tier_episode_length[tier] += (float)zs->tick;
         env->log.n += 1.0f;
 
+        env->pending_render_reset = 1;
         ENCOUNTER_ZULRAH.reset(env->enc_state, ZUL_ENV_CONTEXT(env), 0);
         ENCOUNTER_ZULRAH.write_obs(env->enc_state, ZUL_ENV_CONTEXT(env), obs);
         ENCOUNTER_ZULRAH.write_mask(env->enc_state, ZUL_ENV_CONTEXT(env), obs + ZUL_NUM_OBS);
@@ -141,6 +169,10 @@ void c_close(Env* env) {
         render_destroy_client((RenderClient*)env->render_env.client);
         env->render_env.client = NULL;
     }
+    if (env->render_env.collision_map) {
+        collision_map_free((CollisionMap*)env->render_env.collision_map);
+        env->render_env.collision_map = NULL;
+    }
 }
 
 void c_render(Env* env) {
@@ -148,11 +180,24 @@ void c_render(Env* env) {
     re->encounter_def = (void*)&ENCOUNTER_ZULRAH;
     re->encounter_state = env->enc_state;
     re->encounter_context = env->enc_context;
+    re->tick = ENCOUNTER_ZULRAH.get_tick(env->enc_state, ZUL_ENV_CONTEXT(env));
 
     int first_call = (re->client == NULL);
-    pvp_render(re);
-
     if (first_call) {
+        osrs_asset_require_group(OSRS_ASSET_GROUP_ZULRAH);
+        osrs_asset_require_group(OSRS_ASSET_GROUP_COMBAT_VISUALS);
+
+        CollisionMap* cmap = collision_map_load(OSRS_ASSET("zulrah.cmap"));
+        if (!cmap) {
+            fprintf(stderr, "zulrah eval render failed to load collision map\n");
+            abort();
+        }
+        ENCOUNTER_ZULRAH.put_ptr(env->enc_state, ZUL_ENV_CONTEXT(env), "collision_map", cmap);
+        ENCOUNTER_ZULRAH.put_int(env->enc_state, ZUL_ENV_CONTEXT(env), "world_offset_x", 2256);
+        ENCOUNTER_ZULRAH.put_int(env->enc_state, ZUL_ENV_CONTEXT(env), "world_offset_y", 3061);
+        re->collision_map = cmap;
+
+        re->client = render_make_client();
         RenderClient* rc = (RenderClient*)re->client;
         rc->model_cache = model_cache_load(OSRS_ASSET("equipment.models"));
         if (rc->model_cache) rc->show_models = 1;
@@ -167,15 +212,45 @@ void c_render(Env* env) {
         if (rc->objects) objects_offset(rc->objects, 2256, 3061);
         rc->npc_model_cache = model_cache_load(OSRS_ASSET("zulrah.models"));
         rc->npc_anim_cache = anim_cache_load(OSRS_ASSET("zulrah.anims"));
+        rc->collision_map = cmap;
+        rc->collision_world_offset_x = 2256;
+        rc->collision_world_offset_y = 3061;
+
+        render_populate_entities(rc, re);
+        rc->cam_target_x = (float)rc->arena_base_x + (float)rc->arena_width / 2.0f;
+        rc->cam_target_z = -((float)rc->arena_base_y + (float)rc->arena_height / 2.0f);
+        for (int i = 0; i < rc->entity_count; i++)
+            render_seed_entity_visual_slot(rc, i);
+        env->last_step_time = GetTime();
     }
 
     RenderClient* rc = (RenderClient*)re->client;
-    if (rc && rc->ticks_per_second > 0.0f) {
-        double interval = 1.0 / rc->ticks_per_second;
-        double elapsed = GetTime() - rc->last_tick_time;
-        if (elapsed < interval) WaitTime(interval - elapsed);
-        rc->last_tick_time = GetTime();
+    if (!rc) return;
+    if (env->pending_render_reset) {
+        render_reset_episode_visual_state(rc, re);
+        env->pending_render_reset = 0;
     }
+    render_post_tick(rc, re);
+
+    if (rc->ticks_per_second <= 0.0f) {
+        pvp_render(re);
+        rc->last_tick_time = GetTime();
+        env->last_step_time = rc->last_tick_time;
+        return;
+    }
+
+    float tps = render_effective_ticks_per_second(rc);
+    double interval = 1.0 / (double)tps;
+    double deadline = env->last_step_time + interval;
+    int rendered = 0;
+    while (GetTime() < deadline) {
+        pvp_render(re);
+        rendered = 1;
+    }
+    if (!rendered) pvp_render(re);
+
+    rc->last_tick_time = GetTime();
+    env->last_step_time = rc->last_tick_time;
 }
 
 #include "vecenv.h"
@@ -190,9 +265,19 @@ void my_init(Env* env, Dict* kwargs) {
     memset(&env->log, 0, sizeof(Log));
 
     DictItem* gear = dict_get_unsafe(kwargs, "gear_tier");
-    if (gear) {
-        ENCOUNTER_ZULRAH.put_int(
-            env->enc_state, ZUL_ENV_CONTEXT(env), "gear_tier", (int)gear->value);
+    if (gear) zulrah_env_put_int(env, "gear_tier", (int)gear->value);
+
+    DictItem* gear_mode = dict_get_unsafe(kwargs, "gear_tier_mode");
+    if (gear_mode) zulrah_env_put_int(env, "gear_tier_mode", (int)gear_mode->value);
+
+    const char* weight_keys[ZUL_NUM_GEAR_TIERS] = {
+        "gear_tier_weight_0",
+        "gear_tier_weight_1",
+        "gear_tier_weight_2",
+    };
+    for (int i = 0; i < ZUL_NUM_GEAR_TIERS; i++) {
+        DictItem* item = dict_get_unsafe(kwargs, weight_keys[i]);
+        if (item) zulrah_env_put_float(env, weight_keys[i], (float)item->value);
     }
 }
 
@@ -221,4 +306,54 @@ void my_log(Log* log, Dict* out) {
         ? (log->damage_received / (float)ZUL_BASE_HP) * 0.2f : 0.0f;
     float score = wr + speed_bonus - dmg_penalty;
     dict_set(out, "score", score);
+
+    const char* tier_frac_keys[ZUL_NUM_GEAR_TIERS] = {
+        "gear_tier_0_frac",
+        "gear_tier_1_frac",
+        "gear_tier_2_frac",
+    };
+    const char* tier_win_keys[ZUL_NUM_GEAR_TIERS] = {
+        "wins_tier_0",
+        "wins_tier_1",
+        "wins_tier_2",
+    };
+    const char* tier_score_keys[ZUL_NUM_GEAR_TIERS] = {
+        "score_tier_0",
+        "score_tier_1",
+        "score_tier_2",
+    };
+    const char* tier_damage_keys[ZUL_NUM_GEAR_TIERS] = {
+        "damage_received_tier_0",
+        "damage_received_tier_1",
+        "damage_received_tier_2",
+    };
+    const char* tier_length_keys[ZUL_NUM_GEAR_TIERS] = {
+        "episode_length_tier_0",
+        "episode_length_tier_1",
+        "episode_length_tier_2",
+    };
+
+    float tier_scores[ZUL_NUM_GEAR_TIERS];
+    for (int i = 0; i < ZUL_NUM_GEAR_TIERS; i++) {
+        float n = log->zulrah_tier_n[i];
+        float tier_frac = (log->n > 0.0f) ? n / log->n : 0.0f;
+        float tier_wins = n > 0.0f ? log->zulrah_tier_wins[i] / n : 0.0f;
+        float tier_score = n > 0.0f ? log->zulrah_tier_score_sum[i] / n : 0.0f;
+        float tier_damage = n > 0.0f ? log->zulrah_tier_damage_received[i] / n : 0.0f;
+        float tier_length = n > 0.0f ? log->zulrah_tier_episode_length[i] / n : 0.0f;
+        tier_scores[i] = tier_score;
+        dict_set(out, tier_frac_keys[i], tier_frac);
+        dict_set(out, tier_win_keys[i], tier_wins);
+        dict_set(out, tier_score_keys[i], tier_score);
+        dict_set(out, tier_damage_keys[i], tier_damage);
+        dict_set(out, tier_length_keys[i], tier_length);
+    }
+
+    float score_general = tier_scores[0];
+    if (tier_scores[1] < score_general) score_general = tier_scores[1];
+    if (tier_scores[2] < score_general) score_general = tier_scores[2];
+    float score_low_budget_weighted =
+        0.50f * tier_scores[0] + 0.30f * tier_scores[1] + 0.20f * tier_scores[2];
+    dict_set(out, "score_general", score_general);
+    dict_set(out, "score_low_budget_weighted", score_low_budget_weighted);
 }

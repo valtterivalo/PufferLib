@@ -10,6 +10,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <errno.h>
+#include <math.h>
+#include <stdint.h>
 #include "osrs_env.h"
 #include "osrs_assets.h"
 #include "osrs_encounter.h"
@@ -27,11 +30,18 @@
 
 #ifdef OSRS_VISUAL
 #include "osrs_render.h"
+#include "puffernet.h"
 #endif
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
 #endif
+
+static int encounter_name_is_pvp(const char* encounter_name) {
+    return encounter_name &&
+        (strcmp(encounter_name, "pvp") == 0 ||
+         strcmp(encounter_name, "nh_pvp") == 0);
+}
 
 static void print_player_state(Player* p, int idx) {
     printf("Player %d: HP=%d/%d Prayer=%d Gear=%d Pos=(%d,%d) Frozen=%d\n",
@@ -233,9 +243,11 @@ typedef struct {
     int  num_heads;
     int  current_tick;
     uint32_t rng_seed; /* RNG state at episode start — needed for deterministic replay */
+    void* initial_snapshot;
+    size_t initial_snapshot_size;
 } ReplayFile;
 
-static ReplayFile* replay_load(const char* path, int num_heads) {
+static ReplayFile* replay_load(const char* path, int num_heads, size_t snapshot_size) {
     FILE* f = fopen(path, "rb");
     if (!f) {
         fprintf(stderr, "replay: can't open %s\n", path);
@@ -265,6 +277,32 @@ static ReplayFile* replay_load(const char* path, int num_heads) {
     rf->actions = (int*)osrs_malloc_or_abort(
         action_count * sizeof(int), "replay actions");
     osrs_read_exact(f, rf->actions, sizeof(int), action_count, path, "replay actions");
+    long payload_end = ftell(f);
+    if (payload_end < 0) {
+        fprintf(stderr, "replay: ftell failed for %s\n", path);
+        abort();
+    }
+    if (fseek(f, 0, SEEK_END) != 0) {
+        fprintf(stderr, "replay: seek failed for %s\n", path);
+        abort();
+    }
+    long file_end = ftell(f);
+    if (file_end < 0 || fseek(f, payload_end, SEEK_SET) != 0) {
+        fprintf(stderr, "replay: seek failed for %s\n", path);
+        abort();
+    }
+    long remaining = file_end - payload_end;
+    if (remaining > 0) {
+        if (snapshot_size == 0 || remaining != (long)snapshot_size) {
+            fprintf(stderr,
+                "replay: unexpected trailing bytes in %s: got %ld, expected %zu\n",
+                path, remaining, snapshot_size);
+            abort();
+        }
+        rf->initial_snapshot = osrs_malloc_or_abort(snapshot_size, "replay snapshot");
+        rf->initial_snapshot_size = snapshot_size;
+        osrs_read_exact(f, rf->initial_snapshot, 1, snapshot_size, path, "replay snapshot");
+    }
     fclose(f);
     fprintf(stderr, "replay loaded: %d ticks, rng=%u from %s\n", num_ticks, rng_seed, path);
     return rf;
@@ -278,14 +316,199 @@ static int replay_get_actions(ReplayFile* rf, int* out) {
     return 1;
 }
 
-static void replay_free(ReplayFile* rf) {
-    if (rf) { free(rf->actions); free(rf); }
+static void __attribute__((unused)) replay_free(ReplayFile* rf) {
+    if (rf) { free(rf->actions); free(rf->initial_snapshot); free(rf); }
+}
+
+#define VISUAL_POLICY_MAX_ACTION_HEADS 16
+
+typedef enum {
+    VISUAL_POLICY_NONE = 0,
+    VISUAL_POLICY_SAMPLE = 1,
+    VISUAL_POLICY_ARGMAX = 2,
+} VisualPolicyMode;
+
+typedef struct {
+    int enabled;
+    VisualPolicyMode mode;
+    uint32_t rng_state;
+    Weights* weights;
+    PufferNet* net;
+    float* obs;
+    int obs_size;
+    int mask_size;
+    int action_dims[VISUAL_POLICY_MAX_ACTION_HEADS];
+    int num_action_heads;
+} VisualPolicy;
+
+static uint32_t visual_policy_parse_seed(const char* value) {
+    errno = 0;
+    char* end = NULL;
+    unsigned long parsed = strtoul(value, &end, 10);
+    if (errno || !end || *end != '\0' || parsed > UINT32_MAX) {
+        fprintf(stderr, "policy: invalid policy seed: %s\n", value);
+        abort();
+    }
+    return (uint32_t)parsed;
+}
+
+static VisualPolicyMode visual_policy_parse_mode(const char* value) {
+    if (!value || strcmp(value, "sample") == 0) return VISUAL_POLICY_SAMPLE;
+    if (strcmp(value, "argmax") == 0) return VISUAL_POLICY_ARGMAX;
+    fprintf(stderr, "policy: invalid policy mode: %s\n", value);
+    abort();
+}
+
+static uint32_t visual_policy_next_u32(VisualPolicy* policy) {
+    policy->rng_state = policy->rng_state * 1664525u + 1013904223u;
+    return policy->rng_state;
+}
+
+static float visual_policy_next_uniform(VisualPolicy* policy) {
+    return (float)((visual_policy_next_u32(policy) >> 8) * (1.0 / 16777216.0));
+}
+
+static void visual_policy_init(
+    VisualPolicy* policy,
+    const EncounterDef* edef,
+    const char* model_path,
+    VisualPolicyMode mode,
+    uint32_t seed
+) {
+    memset(policy, 0, sizeof(*policy));
+    if (!model_path || !model_path[0]) return;
+    if (!edef || strcmp(edef->name, "inferno") != 0) {
+        fprintf(stderr, "policy: model loading is currently wired for inferno only\n");
+        abort();
+    }
+    if (edef->num_action_heads > VISUAL_POLICY_MAX_ACTION_HEADS) {
+        fprintf(stderr, "policy: too many action heads: %d\n", edef->num_action_heads);
+        abort();
+    }
+    if (edef->obs_size != INF_NUM_OBS || edef->mask_size != INF_ACTION_MASK_SIZE) {
+        fprintf(stderr, "policy: inferno shape mismatch obs=%d mask=%d expected=%d/%d\n",
+            edef->obs_size, edef->mask_size, INF_NUM_OBS, INF_ACTION_MASK_SIZE);
+        abort();
+    }
+    policy->obs_size = edef->obs_size;
+    policy->mask_size = edef->mask_size;
+    policy->num_action_heads = edef->num_action_heads;
+    for (int h = 0; h < edef->num_action_heads; h++) {
+        policy->action_dims[h] = edef->action_head_dims[h];
+    }
+    policy->weights = load_weights(model_path);
+    if (!policy->weights) {
+        fprintf(stderr, "policy: failed to load model: %s\n", model_path);
+        abort();
+    }
+    policy->net = make_puffernet(
+        policy->weights, 1, INF_NUM_OBS,
+        512, 2, policy->action_dims, policy->num_action_heads);
+    if (policy->weights->idx != policy->weights->raw_size) {
+        fprintf(stderr,
+            "policy: model shape mismatch consumed=%d floats file=%d floats\n",
+            policy->weights->idx, policy->weights->raw_size);
+        abort();
+    }
+    policy->obs = (float*)osrs_calloc_or_abort(
+        (size_t)(INF_NUM_OBS + INF_ACTION_MASK_SIZE),
+        sizeof(float),
+        "visual policy obs");
+    policy->mode = mode;
+    policy->rng_state = seed;
+    policy->enabled = 1;
+    fprintf(stderr, "policy: loaded %s mode=%s seed=%u\n",
+        model_path, mode == VISUAL_POLICY_ARGMAX ? "argmax" : "sample", seed);
+}
+
+static void __attribute__((unused)) visual_policy_destroy(VisualPolicy* policy) {
+    if (!policy) return;
+    if (policy->net) free_puffernet(policy->net);
+    free(policy->weights);
+    free(policy->obs);
+    memset(policy, 0, sizeof(*policy));
+}
+
+static int visual_policy_argmax_masked(const float* logits, const float* mask, int dim) {
+    int best_action = -1;
+    float best_logit = -INFINITY;
+    for (int a = 0; a < dim; a++) {
+        if (mask[a] <= 0.5f) continue;
+        if (best_action < 0 || logits[a] > best_logit) {
+            best_action = a;
+            best_logit = logits[a];
+        }
+    }
+    return best_action;
+}
+
+static int visual_policy_sample_masked(
+    VisualPolicy* policy,
+    const float* logits,
+    const float* mask,
+    int dim
+) {
+    int best_action = visual_policy_argmax_masked(logits, mask, dim);
+    if (best_action < 0) return -1;
+    float max_logit = logits[best_action];
+    float sum = 0.0f;
+    for (int a = 0; a < dim; a++) {
+        if (mask[a] <= 0.5f) continue;
+        sum += expf(logits[a] - max_logit);
+    }
+    if (!(sum > 0.0f) || !isfinite(sum)) {
+        fprintf(stderr, "policy: invalid masked softmax sum %f\n", sum);
+        abort();
+    }
+    float threshold = visual_policy_next_uniform(policy) * sum;
+    float acc = 0.0f;
+    for (int a = 0; a < dim; a++) {
+        if (mask[a] <= 0.5f) continue;
+        acc += expf(logits[a] - max_logit);
+        if (threshold <= acc) return a;
+    }
+    return best_action;
+}
+
+static void visual_policy_actions(
+    VisualPolicy* policy,
+    const EncounterDef* edef,
+    EncounterState* state,
+    EncounterContext* context,
+    int* actions
+) {
+    if (!policy || !policy->enabled) return;
+    edef->write_obs(state, context, policy->obs);
+    edef->write_mask(state, context, policy->obs + policy->obs_size);
+    linear(policy->net->encoder, policy->obs);
+    mingru(policy->net->mingru, policy->net->encoder->output);
+    linear(policy->net->decoder, policy->net->mingru->output);
+
+    const float* logits = policy->net->decoder->output;
+    const float* mask = policy->obs + policy->obs_size;
+    int logit_offset = 0;
+    int mask_offset = 0;
+    for (int h = 0; h < policy->num_action_heads; h++) {
+        int dim = policy->action_dims[h];
+        int action = policy->mode == VISUAL_POLICY_ARGMAX
+            ? visual_policy_argmax_masked(logits + logit_offset, mask + mask_offset, dim)
+            : visual_policy_sample_masked(
+                policy, logits + logit_offset, mask + mask_offset, dim);
+        if (action < 0) {
+            fprintf(stderr, "policy: action head %d has no valid mask entry\n", h);
+            abort();
+        }
+        actions[h] = action;
+        logit_offset += dim;
+        mask_offset += dim;
+    }
 }
 
 typedef struct {
     OsrsEnv* env;
     const char* encounter_name;
     ReplayFile* replay;
+    VisualPolicy policy;
     int start_wave;
     /* per-frame state */
     double episode_end_time;  /* >0 when holding final frame */
@@ -329,6 +552,12 @@ static void visual_frame(void* arg) {
                 pvp_reset(env);
             }
             render_reset_episode_visual_state(rc, env);
+            if (vs->policy.net && vs->policy.net->mingru)
+                memset(vs->policy.net->mingru->state, 0,
+                    (size_t)vs->policy.net->mingru->num_layers *
+                    (size_t)vs->policy.net->mingru->batch_size *
+                    (size_t)vs->policy.net->mingru->hidden_size *
+                    sizeof(float));
             render_save_snapshot(rc, env);
         }
         return;
@@ -399,6 +628,13 @@ static void visual_frame(void* arg) {
             human_input_clear_pending(&rc->human_input);
         } else if (vs->replay && replay_get_actions(vs->replay, enc_actions)) {
             /* replay mode: actions come from pre-recorded file */
+        } else if (vs->policy.enabled) {
+            visual_policy_actions(
+                &vs->policy,
+                edef,
+                env->encounter_state,
+                (EncounterContext*)env->encounter_context,
+                enc_actions);
         } else if (strcmp(edef->name, "zulrah") == 0) {
             zul_heuristic_actions((ZulrahState*)env->encounter_state, enc_actions);
         } else {
@@ -406,11 +642,12 @@ static void visual_frame(void* arg) {
                 enc_actions[h] = rand() % edef->action_head_dims[h];
             }
         }
-        if (!used_human_step)
+        if (!used_human_step) {
             edef->step(
                 env->encounter_state,
                 (EncounterContext*)env->encounter_context,
                 enc_actions);
+        }
         /* sync env->tick so renderer HP bars/splats use correct tick */
         env->tick = edef->get_tick(
             env->encounter_state, (EncounterContext*)env->encounter_context);
@@ -472,7 +709,16 @@ static void visual_frame(void* arg) {
     }
 }
 
-static void run_visual(OsrsEnv* env, const char* encounter_name, const char* replay_path, int start_wave) {
+static void run_visual(
+    OsrsEnv* env,
+    const char* encounter_name,
+    const char* replay_path,
+    int start_wave,
+    int gear_tier,
+    const char* model_path,
+    VisualPolicyMode policy_mode,
+    uint32_t policy_seed
+) {
     env->client = NULL;
 
     /* set up encounter if specified, otherwise default to PvP */
@@ -485,6 +731,18 @@ static void run_visual(OsrsEnv* env, const char* encounter_name, const char* rep
         env->encounter_def = (void*)edef;
         env->encounter_state = edef->create();
         env->encounter_context = visual_create_encounter_context(edef);
+        if (encounter_name_is_pvp(encounter_name) && edef->put_int) {
+            edef->put_int(env->encounter_state, env->encounter_context, "use_c_opponent", 1);
+            edef->put_int(env->encounter_state, env->encounter_context, "opponent_type", OPP_IMPROVED);
+#ifdef __EMSCRIPTEN__
+            edef->put_int(env->encounter_state, env->encounter_context, "use_c_opponent_p0", 0);
+#else
+            edef->put_int(env->encounter_state, env->encounter_context, "use_c_opponent_p0", 1);
+            edef->put_int(env->encounter_state, env->encounter_context, "opponent_p0_type", OPP_IMPROVED);
+#endif
+            edef->put_int(env->encounter_state, env->encounter_context, "is_lms", 1);
+            edef->put_int(env->encounter_state, env->encounter_context, "gear_tier", gear_tier);
+        }
         /* seed=0 matches training binding (uses default RNG, not explicit seed) */
 
         /* load encounter-specific collision map.
@@ -552,6 +810,21 @@ static void run_visual(OsrsEnv* env, const char* encounter_name, const char* rep
     /* init window before main loop (WindowShouldClose needs a window) */
     pvp_render(env);
     RenderClient* rc = (RenderClient*)env->client;
+#ifdef __EMSCRIPTEN__
+    if (!encounter_name || encounter_name_is_pvp(encounter_name)) {
+        rc->ticks_per_second = 15.0f;
+    }
+#endif
+
+    if (!encounter_name || encounter_name_is_pvp(encounter_name)) {
+        osrs_asset_require_group(OSRS_ASSET_GROUP_PVP);
+    } else if (strcmp(encounter_name, "zulrah") == 0) {
+        osrs_asset_require_group(OSRS_ASSET_GROUP_ZULRAH);
+        osrs_asset_require_group(OSRS_ASSET_GROUP_COMBAT_VISUALS);
+    } else if (strcmp(encounter_name, "inferno") == 0) {
+        osrs_asset_require_group(OSRS_ASSET_GROUP_INFERNO);
+        osrs_asset_require_group(OSRS_ASSET_GROUP_COMBAT_VISUALS);
+    }
 
     /* share collision map pointer with renderer for overlays */
     if (env->collision_map) {
@@ -567,7 +840,7 @@ static void run_visual(OsrsEnv* env, const char* encounter_name, const char* rep
     render_load_projectile_assets(rc);
     render_init_overlay_models(rc);
     /* load terrain/objects per encounter */
-    if (!encounter_name) {
+    if (!encounter_name || encounter_name_is_pvp(encounter_name)) {
         rc->terrain = terrain_load(OSRS_ASSET("wilderness.terrain"));
         rc->objects = objects_load(OSRS_ASSET("wilderness.objects"));
         rc->npcs = objects_load(OSRS_ASSET("wilderness.npcs"));
@@ -661,15 +934,31 @@ static void run_visual(OsrsEnv* env, const char* encounter_name, const char* rep
     ReplayFile* replay = NULL;
     if (replay_path && env->encounter_def) {
         const EncounterDef* edef = (const EncounterDef*)env->encounter_def;
-        replay = replay_load(replay_path, edef->num_action_heads);
-        /* restore RNG state from replay so sim matches training exactly */
-        if (replay && edef->put_int) {
+        size_t snapshot_size = 0;
+        if (edef->snapshot_size)
+            snapshot_size = edef->snapshot_size(
+                env->encounter_state,
+                env->encounter_context);
+        replay = replay_load(replay_path, edef->num_action_heads, snapshot_size);
+        if (replay && replay->initial_snapshot) {
+            if (!edef->restore) {
+                fprintf(stderr, "replay: encounter has snapshot data but no restore hook\n");
+                abort();
+            }
+            edef->restore(
+                env->encounter_state,
+                env->encounter_context,
+                replay->initial_snapshot,
+                replay->initial_snapshot_size);
+        } else if (replay && edef->put_int) {
             edef->reset(env->encounter_state, env->encounter_context, 0);
             edef->put_int(
                 env->encounter_state,
                 env->encounter_context,
                 "seed",
                 (int)replay->rng_seed);
+        }
+        if (replay) {
             render_populate_entities(rc, env);
             for (int i = 0; i < rc->entity_count; i++) {
                 int size = rc->entities[i].npc_size > 1 ? rc->entities[i].npc_size : 1;
@@ -681,27 +970,46 @@ static void run_visual(OsrsEnv* env, const char* encounter_name, const char* rep
         }
     }
 
+    VisualPolicy policy;
+    visual_policy_init(
+        &policy,
+        (const EncounterDef*)env->encounter_def,
+        model_path,
+        policy_mode,
+        policy_seed);
+
     /* save initial state as first snapshot */
     render_save_snapshot(rc, env);
 
+#ifdef __EMSCRIPTEN__
+    static VisualState web_visual_state;
+    web_visual_state = (VisualState){
+        .env = env,
+        .encounter_name = encounter_name,
+        .replay = replay,
+        .policy = policy,
+        .start_wave = start_wave,
+        .episode_end_time = 0,
+        .episode_ended = 0,
+    };
+    emscripten_set_main_loop_arg(visual_frame, &web_visual_state, 0, 1);
+#else
     VisualState vs = {
         .env = env,
         .encounter_name = encounter_name,
         .replay = replay,
+        .policy = policy,
         .start_wave = start_wave,
         .episode_end_time = 0,
         .episode_ended = 0,
     };
 
-#ifdef __EMSCRIPTEN__
-    emscripten_set_main_loop_arg(visual_frame, &vs, 0, 1);
-#else
     while (!WindowShouldClose()) {
         visual_frame(&vs);
     }
-#endif
 
     replay_free(replay);
+    visual_policy_destroy(&vs.policy);
 
     if (env->client) {
         render_destroy_client((RenderClient*)env->client);
@@ -714,6 +1022,7 @@ static void run_visual(OsrsEnv* env, const char* encounter_name, const char* rep
             (const EncounterDef*)env->encounter_def,
             (EncounterContext**)&env->encounter_context);
     }
+#endif
 }
 #endif
 
@@ -724,6 +1033,9 @@ int main(int argc, char** argv) {
     int start_wave = -1; /* -1 = default (wave 0) */
     const char* encounter_name __attribute__((unused)) = NULL;
     const char* replay_path __attribute__((unused)) = NULL;
+    const char* model_path __attribute__((unused)) = NULL;
+    const char* policy_mode_name __attribute__((unused)) = "sample";
+    uint32_t policy_seed __attribute__((unused)) = 1;
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--visual") == 0) use_visual = 1;
         else if (strcmp(argv[i], "--profile") == 0) { use_profile = 1; use_visual = 0; }
@@ -731,6 +1043,12 @@ int main(int argc, char** argv) {
             encounter_name = argv[++i];
         else if (strcmp(argv[i], "--replay") == 0 && i + 1 < argc)
             replay_path = argv[++i];
+        else if (strcmp(argv[i], "--model") == 0 && i + 1 < argc)
+            model_path = argv[++i];
+        else if (strcmp(argv[i], "--policy-mode") == 0 && i + 1 < argc)
+            policy_mode_name = argv[++i];
+        else if (strcmp(argv[i], "--policy-seed") == 0 && i + 1 < argc)
+            policy_seed = visual_policy_parse_seed(argv[++i]);
         else if (strcmp(argv[i], "--tier") == 0 && i + 1 < argc)
             gear_tier = atoi(argv[++i]);
         else if (strcmp(argv[i], "--wave") == 0 && i + 1 < argc)
@@ -739,11 +1057,20 @@ int main(int argc, char** argv) {
 
 #ifdef __EMSCRIPTEN__
     if (!encounter_name) encounter_name = "inferno";
+    if (encounter_name && strcmp(encounter_name, "pvp") == 0) encounter_name = NULL;
+#else
+    if (encounter_name && strcmp(encounter_name, "pvp") == 0) encounter_name = "nh_pvp";
 #endif
+    VisualPolicyMode policy_mode __attribute__((unused)) =
+        visual_policy_parse_mode(policy_mode_name);
 
     srand((unsigned int)time(NULL));
 
+#ifdef __EMSCRIPTEN__
+    static OsrsEnv env;
+#else
     OsrsEnv env;
+#endif
     memset(&env, 0, sizeof(OsrsEnv));
 
     if (use_profile) {
@@ -790,7 +1117,15 @@ int main(int argc, char** argv) {
         env.ocean_io.agent_obs = env._obs_buf;
         env.ocean_io.agent_rewards = env.rewards;
         env.ocean_io.agent_terminals = env.terminals;
-        run_visual(&env, encounter_name, replay_path, start_wave);
+        run_visual(
+            &env,
+            encounter_name,
+            replay_path,
+            start_wave,
+            gear_tier,
+            model_path,
+            policy_mode,
+            policy_seed);
         pvp_close(&env);
 #else
         fprintf(stderr, "not compiled with visual support (use: make visual)\n");

@@ -13,6 +13,10 @@
 #include <sys/time.h>
 #include <vector>
 
+#ifndef PUFFER_ENV_OSRS_INFERNO
+#define PUFFER_ENV_OSRS_INFERNO 0
+#endif
+
 static thread_local cudaStream_t tl_rollout_stream = 0;
 static std::mutex g_rollout_profile_mutex;
 
@@ -1340,6 +1344,7 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
    those hooks into a shared encounter-archive header. */
 
 extern "C" {
+#if PUFFER_ENV_OSRS_INFERNO
     struct InfernoEnv;
     struct InfernoEnv* inferno_env_at(void* envs_void, int idx);
     void inferno_env_enable_archive_mode(struct InfernoEnv* env, Archive* archive, int action_history_cap);
@@ -1362,6 +1367,7 @@ extern "C" {
     int inferno_env_validate_ladders(
         struct InfernoEnv* env, const DemoStore* store,
         DemoSnapshotLadder* const* ladders, int* out_cursor_ticks);
+#endif
 }
 
 /* ArchiveExploreStats: surface-level counters returned to the caller for logging. */
@@ -1378,6 +1384,7 @@ typedef struct {
     double wall_seconds;
 } ArchiveExploreStats;
 
+#if PUFFER_ENV_OSRS_INFERNO
 ArchiveExploreStats archive_explore_impl(
     PuffeRL& pufferl,
     int archive_capacity,
@@ -1589,6 +1596,34 @@ ArchiveExploreStats archive_explore_impl(
 
     return stats;
 }
+#else
+ArchiveExploreStats archive_explore_impl(
+    PuffeRL& pufferl,
+    int archive_capacity,
+    int num_iterations,
+    int action_chunk_pool_capacity_ints,
+    uint64_t archive_seed,
+    const char* archive_save_path,
+    const char* demo_export_dir,
+    int demo_max_count,
+    int demo_max_replay_ticks,
+    Archive** out_archive
+) {
+    (void)pufferl;
+    (void)archive_capacity;
+    (void)num_iterations;
+    (void)action_chunk_pool_capacity_ints;
+    (void)archive_seed;
+    (void)archive_save_path;
+    (void)demo_export_dir;
+    (void)demo_max_count;
+    (void)demo_max_replay_ticks;
+    (void)out_archive;
+    std::fprintf(stderr,
+        "archive_explore: only osrs_inferno implements archive exploration hooks\n");
+    std::abort();
+}
+#endif
 
 
 /* Overwrite the last bc_demos_per_minibatch rows of train_buf with demo
@@ -1707,6 +1742,7 @@ void phase2_unstage_demo_rows(PuffeRL& pufferl, RolloutBuf& rollouts) {
     pufferl.phase2_bc_stash_count = 0;
 }
 
+#if PUFFER_ENV_OSRS_INFERNO
 int phase2_init_impl(
     PuffeRL& pufferl,
     const char* demo_dir,
@@ -1834,6 +1870,51 @@ void phase2_close(PuffeRL& pufferl) {
     pufferl.phase2_bc_stash_values = nullptr;
     pufferl.phase2_bc_stash_count = 0;
 }
+#else
+int phase2_init_impl(
+    PuffeRL& pufferl,
+    const char* demo_dir,
+    int num_atns,
+    int snapshot_stride,
+    int max_demos,
+    uint64_t seed,
+    float normal_start_frac,
+    float randomize_rng_frac,
+    float bc_coef,
+    int bc_demos_per_minibatch,
+    float promote_rate,
+    float demote_rate,
+    int backstep_ticks,
+    float success_q_delta
+) {
+    (void)pufferl;
+    (void)demo_dir;
+    (void)num_atns;
+    (void)snapshot_stride;
+    (void)max_demos;
+    (void)seed;
+    (void)normal_start_frac;
+    (void)randomize_rng_frac;
+    (void)bc_coef;
+    (void)bc_demos_per_minibatch;
+    (void)promote_rate;
+    (void)demote_rate;
+    (void)backstep_ticks;
+    (void)success_q_delta;
+    std::fprintf(stderr, "phase2_init: only osrs_inferno implements phase2 env hooks\n");
+    std::abort();
+}
+
+void phase2_reset_impl(PuffeRL& pufferl) {
+    (void)pufferl;
+    std::fprintf(stderr, "phase2_reset: only osrs_inferno implements phase2 env hooks\n");
+    std::abort();
+}
+
+void phase2_close(PuffeRL& pufferl) {
+    (void)pufferl;
+}
+#endif
 
 void close_impl(PuffeRL& pufferl) {
     phase2_close(pufferl);

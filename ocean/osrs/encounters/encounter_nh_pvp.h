@@ -31,6 +31,47 @@ typedef struct {
     int unused;
 } NhPvpContext;
 
+static void nh_pvp_translate_human_input(HumanInput* hi, int* actions, Player* agent, Player* target) {
+    for (int h = 0; h < NUM_ACTION_HEADS; h++) actions[h] = 0;
+    actions[HEAD_LOADOUT] = LOADOUT_KEEP;
+
+    if (hi->pending_attack) {
+        if (hi->pending_spell == ATTACK_ICE) {
+            actions[HEAD_COMBAT] = ATTACK_ICE;
+        } else if (hi->pending_spell == ATTACK_BLOOD) {
+            actions[HEAD_COMBAT] = ATTACK_BLOOD;
+        } else {
+            actions[HEAD_COMBAT] = ATTACK_ATK;
+        }
+    } else if (hi->pending_move_x >= 0 && hi->pending_move_y >= 0) {
+        int dx = hi->pending_move_x - target->x;
+        int dy = hi->pending_move_y - target->y;
+        int dist = abs(dx) > abs(dy) ? abs(dx) : abs(dy);
+        if (dist == 0) {
+            actions[HEAD_COMBAT] = MOVE_UNDER;
+        } else if (dist == 1) {
+            actions[HEAD_COMBAT] = (dx == 0 || dy == 0) ? MOVE_ADJACENT : MOVE_DIAGONAL;
+        } else {
+            int fc = dist;
+            if (fc < 2) fc = 2;
+            if (fc > 7) fc = 7;
+            actions[HEAD_COMBAT] = MOVE_FARCAST_2 + (fc - 2);
+        }
+    }
+
+    if (hi->pending_prayer >= 0) actions[HEAD_OVERHEAD] = hi->pending_prayer;
+    if (hi->pending_food) actions[HEAD_FOOD] = FOOD_EAT;
+    if (hi->pending_potion > 0) actions[HEAD_POTION] = hi->pending_potion;
+    if (hi->pending_karambwan) actions[HEAD_KARAMBWAN] = KARAM_EAT;
+    if (hi->pending_veng) actions[HEAD_VENG] = VENG_CAST;
+    if (hi->pending_spec) {
+        AttackStyle style = get_item_attack_style(agent->equipped[GEAR_SLOT_WEAPON]);
+        if (style == ATTACK_STYLE_MELEE) actions[HEAD_LOADOUT] = LOADOUT_SPEC_MELEE;
+        else if (style == ATTACK_STYLE_RANGED) actions[HEAD_LOADOUT] = LOADOUT_SPEC_RANGE;
+        else if (style == ATTACK_STYLE_MAGIC) actions[HEAD_LOADOUT] = LOADOUT_SPEC_MAGIC;
+    }
+}
+
 
 static EncounterState* nh_pvp_create(void) {
     NhPvpState* s = (NhPvpState*)calloc(1, sizeof(NhPvpState));
@@ -75,6 +116,25 @@ static void nh_pvp_step(EncounterState* state, EncounterContext* context, const 
     /* pvp_step reads agent 0 actions from ocean_io.agent_actions. */
     memcpy(s->env.ocean_io.agent_actions, actions, NUM_ACTION_HEADS * sizeof(int));
     pvp_step(&s->env);
+}
+
+static void nh_pvp_step_human_commands(
+    EncounterState* state,
+    EncounterContext* context,
+    HumanInput* hi
+) {
+    (void)context;
+    NhPvpState* s = (NhPvpState*)state;
+    int saved_use_c_opponent_p0 = s->env.pvp_runtime.use_c_opponent_p0;
+    s->env.pvp_runtime.use_c_opponent_p0 = 0;
+    nh_pvp_translate_human_input(
+        hi,
+        s->env.ocean_io.agent_actions,
+        &s->env.players[0],
+        &s->env.players[1]);
+    pvp_step(&s->env);
+    s->env.pvp_runtime.use_c_opponent_p0 = saved_use_c_opponent_p0;
+    human_input_clear_pending(hi);
 }
 
 
@@ -139,6 +199,10 @@ static void nh_pvp_fill_render_entities(
     for (int i = 0; i < n; i++) {
         render_entity_from_player(&s->env.players[i], &out[i]);
     }
+    if (n >= 2) {
+        out[0].attack_target_entity_idx = 1;
+        out[1].attack_target_entity_idx = 0;
+    }
     *count = n;
 }
 
@@ -153,12 +217,31 @@ static void nh_pvp_put_int(
     NhPvpState* s = (NhPvpState*)state;
     if (strcmp(key, "opponent_type") == 0) {
         s->env.pvp_runtime.opponent.type = (OpponentType)value;
+    } else if (strcmp(key, "opponent_p0_type") == 0) {
+        s->env.pvp_runtime.opponent_p0.type = (OpponentType)value;
     } else if (strcmp(key, "is_lms") == 0) {
         s->env.is_lms = value;
     } else if (strcmp(key, "use_c_opponent") == 0) {
         s->env.pvp_runtime.use_c_opponent = value;
+    } else if (strcmp(key, "use_c_opponent_p0") == 0) {
+        s->env.pvp_runtime.use_c_opponent_p0 = value;
     } else if (strcmp(key, "auto_reset") == 0) {
         s->env.auto_reset = value;
+    } else if (strcmp(key, "gear_tier") == 0) {
+        if (value < 0) {
+            s->env.pvp_runtime.gear_tier_weights[0] = 0.60f;
+            s->env.pvp_runtime.gear_tier_weights[1] = 0.25f;
+            s->env.pvp_runtime.gear_tier_weights[2] = 0.10f;
+            s->env.pvp_runtime.gear_tier_weights[3] = 0.05f;
+        } else {
+            if (value > 3) {
+                fprintf(stderr, "nh_pvp: invalid gear_tier %d\n", value);
+                abort();
+            }
+            for (int t = 0; t < 4; t++)
+                s->env.pvp_runtime.gear_tier_weights[t] = 0.0f;
+            s->env.pvp_runtime.gear_tier_weights[value] = 1.0f;
+        }
     } else if (strcmp(key, "seed") == 0) {
         s->env.has_rng_seed = 1;
         s->env.rng_seed = (uint32_t)value;
@@ -226,6 +309,7 @@ static const EncounterDef ENCOUNTER_NH_PVP = {
     .destroy = nh_pvp_destroy,
     .reset = nh_pvp_reset,
     .step = nh_pvp_step,
+    .step_human_commands = nh_pvp_step_human_commands,
 
     .write_obs = nh_pvp_write_obs,
     .write_mask = nh_pvp_write_mask,

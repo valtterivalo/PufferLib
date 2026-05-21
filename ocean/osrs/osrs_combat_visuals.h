@@ -133,9 +133,11 @@ enum {
     OSRS_PROJECTILE_MODEL_BOLT = 3135,
     OSRS_PROJECTILE_MODEL_ARROW = 3136,
     OSRS_PROJECTILE_MODEL_ICE_BARRAGE = 14215,
+    OSRS_PROJECTILE_MODEL_TRIDENT = 20825,
     OSRS_PROJECTILE_MODEL_DRAGON_ARROW = 26377,
     OSRS_PROJECTILE_MODEL_DRAGON_DART = 26379,
     OSRS_PROJECTILE_ANIM_BARRAGE = 1964,
+    OSRS_PROJECTILE_ANIM_TRIDENT = 5462,
     OSRS_PROJECTILE_ANIM_DRAGON_ARROW = 6622,
     OSRS_PROJECTILE_ANIM_DRAGON_DART = 6622,
     OSRS_COMBAT_PROJECTILE_SEQUENCE_MAX = 8,
@@ -162,7 +164,7 @@ typedef struct {
 
 static const OsrsCombatProjectileProfile OSRS_POWERED_STAFF_PROJECTILE_PROFILE = {
     GFX_TRIDENT_CAST, GFX_TRIDENT_PROJ, GFX_TRIDENT_IMPACT,
-    OSRS_COMBAT_PROJECTILE_MISSING, OSRS_COMBAT_PROJECTILE_MISSING,
+    OSRS_PROJECTILE_MODEL_TRIDENT, OSRS_PROJECTILE_ANIM_TRIDENT,
     3, 3, 160, 120, OSRS_COMBAT_PROJECTILE_MISSING, 16,
     OSRS_COMBAT_PROJECTILE_MISSING, OSRS_COMBAT_PROJECTILE_MISSING,
     OSRS_COMBAT_PROJECTILE_MISSING, 1
@@ -706,6 +708,13 @@ static inline OsrsCombatProjectileVisual osrs_combat_visual_magic_projectile(
 static inline const OsrsCombatProjectileProfile* osrs_combat_visual_magic_projectile_profile(
     uint8_t item_db_idx
 ) {
+    if (item_db_idx >= NUM_ITEMS) {
+        return osrs_combat_projectile_profile(OSRS_COMBAT_PROJECTILE_NONE);
+    }
+    uint16_t item_id = ITEM_DATABASE[item_db_idx].item_id;
+    const OsrsCombatVisualRow* item_projectile =
+        osrs_combat_visual_find_item_projectile_id(item_id, ATTACK_STYLE_MAGIC);
+    if (item_projectile) return &item_projectile->projectile;
     return osrs_combat_projectile_profile(
         osrs_combat_visual_magic_projectile(item_db_idx));
 }
@@ -718,8 +727,17 @@ static inline int osrs_combat_visual_magic_attack_anim_for_fight_style(
             ITEM_DATABASE[item_db_idx].item_id)) {
         return fallback_anim_id;
     }
-    return osrs_combat_visual_weapon_attack_anim_for_fight_style(
-        item_db_idx, ATTACK_STYLE_MAGIC, fight_style, is_special, fallback_anim_id);
+    int anim = osrs_combat_visual_weapon_attack_anim_for_fight_style(
+        item_db_idx, ATTACK_STYLE_MAGIC, fight_style, is_special,
+        OSRS_COMBAT_VISUAL_NO_ANIMATION);
+    if (anim != OSRS_COMBAT_VISUAL_NO_ANIMATION) return anim;
+    if (fight_style != FIGHT_STYLE_AUTOCAST) {
+        anim = osrs_combat_visual_weapon_attack_anim_for_fight_style(
+            item_db_idx, ATTACK_STYLE_MAGIC, FIGHT_STYLE_AUTOCAST, is_special,
+            OSRS_COMBAT_VISUAL_NO_ANIMATION);
+        if (anim != OSRS_COMBAT_VISUAL_NO_ANIMATION) return anim;
+    }
+    return OSRS_PLAYER_POWERED_STAFF_ATTACK_ANIM;
 }
 
 static inline int osrs_combat_visual_magic_attack_anim(

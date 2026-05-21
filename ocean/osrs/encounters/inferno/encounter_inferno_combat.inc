@@ -33,6 +33,12 @@ static int inf_player_weapon_is(const InfernoState* s, uint8_t item) {
     return s->player.equipped[GEAR_SLOT_WEAPON] == item;
 }
 
+static void inf_damage_player_from_type(
+    InfernoState* s,
+    int source_type,
+    int damage
+);
+
 typedef struct {
     EncounterLoadoutStats stats;
     int spell;
@@ -512,7 +518,7 @@ static void inf_npc_attack_ctx(InfernoState* s, InfernoContext* ctx, int idx) {
                         int pdy = s->player.y - s->pillars[p].y;
                         if (pdx >= -1 && pdx <= INF_PILLAR_SIZE && pdy >= -1 && pdy <= INF_PILLAR_SIZE) {
                             /* pillar collapse: 49 damage (observed in-game, server-side formula unknown) */
-                            encounter_damage_player(&s->player, 49, &s->damage_received_this_tick);
+                            inf_damage_player_from_type(s, -1, 49);
                         }
                     }
                 }
@@ -583,7 +589,7 @@ static void inf_npc_attack_ctx(InfernoState* s, InfernoContext* ctx, int idx) {
               if (prayer_matches) { dmg = 0; s->prayer_correct_this_tick = 1; }
               else if (dmg > 0) { s->off_prayer_hits_this_tick++; }
             inf_apply_echo_boots_recoil(s, dmg);
-            encounter_damage_player(&s->player, dmg, &s->damage_received_this_tick);
+            inf_damage_player_from_type(s, npc->type, dmg);
             npc->attack_style_this_tick = ATTACK_STYLE_MELEE;
             npc->attacked_this_tick = 1;
             npc->attack_visual_target = -1;
@@ -795,7 +801,7 @@ static void inf_npc_attack_ctx(InfernoState* s, InfernoContext* ctx, int idx) {
         inf_apply_echo_boots_recoil(s, dmg);
         s->dmg_from_type[npc->type] += (float)dmg;
         if (dmg > 0) s->last_hit_by_type = npc->type;
-        encounter_damage_player(&s->player, dmg, &s->damage_received_this_tick);
+        inf_damage_player_from_type(s, npc->type, dmg);
     } else {
             /* ranged/magic: queue pending hit on player */
         if (s->player_pending_hit_count < ENCOUNTER_MAX_PENDING_HITS) {
@@ -1129,6 +1135,105 @@ static void inf_healer_apply_landed_heal(InfernoState* s, int idx) {
         s->hp_restored_zuk_this_tick += effective_heal;
 }
 
+static void inf_record_redemption_pressure(
+    InfernoState* s,
+    int source_type,
+    int damage
+) {
+    if (s->player.current_prayer <= 0) return;
+
+    int before_hp = s->player.current_hitpoints;
+    int after_hp = before_hp - (damage > 0 ? damage : 0);
+    if (after_hp < 0) after_hp = 0;
+
+    int before_band = before_hp > 0 && before_hp <= 9;
+    int after_band = after_hp > 0 && after_hp <= 9;
+    int source_valid = source_type >= 0 && source_type < INF_NUM_NPC_TYPES;
+    int after_240 = s->tick_at_le_240 >= 0;
+
+    if (before_band || after_band) {
+        int heal = s->player.base_prayer / 4;
+        int missing = s->player.base_hitpoints - after_hp;
+        float heal_potential = (float)(missing > heal ? heal : missing);
+        if (heal_potential < 0.0f) heal_potential = 0.0f;
+
+        s->redemption_proc_opportunities++;
+        s->redemption_heal_potential += heal_potential;
+        if (damage <= 0)
+            s->redemption_zero_hit_proc_opportunities++;
+        if (after_240) {
+            s->redemption_proc_opportunities_after_240++;
+            s->redemption_heal_potential_after_240 += heal_potential;
+        }
+        if (source_valid) {
+            s->redemption_proc_opportunities_by_type[source_type]++;
+            s->redemption_heal_potential_by_type[source_type] += heal_potential;
+            if (damage <= 0)
+                s->redemption_zero_hit_proc_opportunities_by_type[source_type]++;
+        }
+    }
+
+    if (damage > 0 && before_hp > 0 && after_hp <= 0) {
+        if (before_band) {
+            s->redemption_deaths_from_band++;
+            if (after_240)
+                s->redemption_deaths_from_band_after_240++;
+            if (source_valid)
+                s->redemption_deaths_from_band_by_type[source_type]++;
+        } else {
+            s->redemption_deaths_from_above_band++;
+        }
+    }
+}
+
+static int inf_redemption_threshold(const InfernoState* s) {
+    return (s->player.base_hitpoints - 1) / 10;
+}
+
+static void inf_apply_redemption_if_due(InfernoState* s, int before_hp, int damage) {
+    Player* p = &s->player;
+    if (p->prayer != PRAYER_REDEMPTION || p->current_prayer <= 0)
+        return;
+    if (p->current_hitpoints <= 0)
+        return;
+
+    int threshold = inf_redemption_threshold(s);
+    int before_band = before_hp > 0 && before_hp <= threshold;
+    int after_band = p->current_hitpoints > 0 && p->current_hitpoints <= threshold;
+    if (!before_band && !after_band)
+        return;
+
+    int old_offensive = p->offensive_prayer;
+    int hp_before_heal = p->current_hitpoints;
+    int heal = p->base_prayer / 4;
+    p->current_hitpoints += heal;
+    if (p->current_hitpoints > p->base_hitpoints)
+        p->current_hitpoints = p->base_hitpoints;
+    s->redemption_proc_count++;
+    if (damage <= 0)
+        s->redemption_zero_hit_proc_count++;
+    s->redemption_heal_done += (float)(p->current_hitpoints - hp_before_heal);
+    p->current_prayer = 0;
+    p->prayer = PRAYER_NONE;
+    p->offensive_prayer = OFFENSIVE_PRAYER_NONE;
+    p->prayer_drain_counter = 0;
+    p->prayer_just_activated = 0;
+    p->offensive_prayer_just_activated = 0;
+    if (old_offensive != OFFENSIVE_PRAYER_NONE)
+        encounter_recompute_loadout_max_hits(s->loadout_stats, INF_NUM_WEAPON_SETS, p);
+}
+
+static void inf_damage_player_from_type(
+    InfernoState* s,
+    int source_type,
+    int damage
+) {
+    int before_hp = s->player.current_hitpoints;
+    inf_record_redemption_pressure(s, source_type, damage);
+    encounter_damage_player(&s->player, damage, &s->damage_received_this_tick);
+    inf_apply_redemption_if_due(s, before_hp, damage);
+}
+
 static void inf_queue_pending_spark(
     InfernoState* s, int src_x, int src_y, int x, int y, int damage, int ticks_remaining
 ) {
@@ -1180,8 +1285,8 @@ static void inf_resolve_pending_sparks(InfernoState* s) {
         if (encounter_entity_footprints_overlap(
                 s->pending_sparks[i].x - 1, s->pending_sparks[i].y - 1, 3,
                 s->player.x, s->player.y, 1)) {
-            encounter_damage_player(&s->player, s->pending_sparks[i].damage,
-                                    &s->damage_received_this_tick);
+            inf_damage_player_from_type(
+                s, INF_NPC_HEALER_ZUK, s->pending_sparks[i].damage);
             s->spark_damage_this_tick += (float)s->pending_sparks[i].damage;
             s->last_hit_by_type = INF_NPC_HEALER_ZUK;
         }

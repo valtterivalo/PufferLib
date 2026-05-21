@@ -270,6 +270,7 @@ typedef enum {
     INV_ACTION_EQUIP,
     INV_ACTION_EAT,
     INV_ACTION_DRINK,
+    INV_ACTION_ITEM_ON_ITEM,
 } InvAction;
 
 #define GUI_MAX_NAMED_ASSETS 768
@@ -2364,6 +2365,26 @@ static const char* gui_inv_slot_display_name(const InvSlot* inv) {
     }
 }
 
+/** Select an inventory item as the source for the next item target click. */
+static int gui_inv_select_item(GuiState* gs, HumanInput* hi, int slot) {
+    if (!hi || !hi->enabled) return 0;
+    if (slot < 0 || slot >= INV_GRID_SLOTS) return 0;
+    InvSlot* inv = &gs->inv_grid[slot];
+    if (inv->type == INV_SLOT_EMPTY) return 0;
+
+    int item_db_idx = inv->type == INV_SLOT_EQUIPMENT ? inv->item_db_idx : -1;
+    int osrs_id = inv->osrs_id;
+    if (osrs_id == 0 && inv->type == INV_SLOT_EQUIPMENT) {
+        osrs_id = ITEM_DATABASE[inv->item_db_idx].item_id;
+    }
+
+    gs->inv_dim_slot = slot;
+    gs->inv_dim_timer = INV_DIM_TICKS;
+    human_input_apply_ui_intent(hi,
+        osrs_ui_intent_select_item(slot, item_db_idx, osrs_id));
+    return 1;
+}
+
 /** Handle inventory click: equip gear items, eat/drink consumables.
     hi is a HumanInput* (from osrs_pvp_human_input_types.h, included above).
     When non-NULL and enabled, food/potion clicks set pending_* fields instead of
@@ -2382,6 +2403,15 @@ static InvAction gui_inv_click(GuiState* gs, Player* p, int slot,
     /* when human control is active, route food/potion through action system
        instead of directly mutating player state (respects timers) */
     int human_active = (hi && hi->enabled);
+    if (human_active && hi->cursor_mode == CURSOR_ITEM_TARGET) {
+        OsrsUiIntent intent = osrs_ui_intent_item_on_item(
+            hi->selected_item_inventory_slot,
+            slot,
+            hi->selected_item_db_idx,
+            hi->selected_item_osrs_id);
+        human_input_apply_ui_intent(hi, intent);
+        return INV_ACTION_ITEM_ON_ITEM;
+    }
 
     switch (inv->type) {
         case INV_SLOT_EQUIPMENT: {

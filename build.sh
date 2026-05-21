@@ -72,20 +72,12 @@ fi
 OSRS_INCLUDE=""
 if [[ "$SRC_DIR" == *osrs* ]]; then
     OSRS_INCLUDE="-Iocean/osrs"
-    OSRS_ASSET_VERSION="osrs-assets-v10"
-    OSRS_DATA_DIR="ocean/osrs/data"
-    if [ ! -f "$OSRS_DATA_DIR/equipment.models" ] || \
-       [ ! -f "$OSRS_DATA_DIR/equipment.anims" ] || \
-       [ ! -f "$OSRS_DATA_DIR/inferno.models" ]; then
-        echo "Downloading OSRS visual assets..."
-        mkdir -p "$OSRS_DATA_DIR"
-        OSRS_ASSET_TAR_ARGS=(xz --exclude='._*' --exclude='*/._*')
-        [ "$PLATFORM" = "Linux" ] && OSRS_ASSET_TAR_ARGS+=(--warning=no-unknown-keyword)
-        OSRS_ASSET_TAR_ARGS+=(--strip-components=1 -C "$OSRS_DATA_DIR")
-        curl -sL "https://github.com/valtterivalo/PufferLib/releases/download/${OSRS_ASSET_VERSION}/${OSRS_ASSET_VERSION}.tar.gz" \
-            | tar "${OSRS_ASSET_TAR_ARGS[@]}"
-        find "$OSRS_DATA_DIR" -name '._*' -delete
-    fi
+    bash ocean/osrs/scripts/setup-data.sh
+fi
+
+ENV_DEFINES=()
+if [ "$ENV" = "osrs_inferno" ]; then
+    ENV_DEFINES+=(-DPUFFER_ENV_OSRS_INFERNO=1)
 fi
 
 if [ "$PLATFORM" = "Linux" ]; then
@@ -107,16 +99,18 @@ download() {
     fi
 }
 
-# Raylib: use bundled copy for OSRS envs, otherwise download
-if [[ "$SRC_DIR" == *osrs* ]] && [ -d "ocean/osrs/$RAYLIB_NAME" ]; then
+# Raylib: web builds always need the wasm archive
+if [ "$MODE" = "web" ]; then
+    RAYLIB_NAME='raylib-5.5_webassembly'
+    if [[ "$SRC_DIR" == *osrs* ]] && [ -d "ocean/osrs/$RAYLIB_NAME" ]; then
+        RAYLIB_NAME="ocean/osrs/$RAYLIB_NAME"
+    else
+        download "$RAYLIB_NAME" "$RAYLIB_URL/$RAYLIB_NAME.zip"
+    fi
+elif [[ "$SRC_DIR" == *osrs* ]] && [ -d "ocean/osrs/$RAYLIB_NAME" ]; then
     RAYLIB_NAME="ocean/osrs/$RAYLIB_NAME"
 else
-    if [ "$MODE" = "web" ]; then
-        RAYLIB_NAME='raylib-5.5_webassembly'
-        download "$RAYLIB_NAME" "$RAYLIB_URL/$RAYLIB_NAME.zip"
-    else
-        download "$RAYLIB_NAME" "$RAYLIB_URL/$RAYLIB_NAME.tar.gz"
-    fi
+    download "$RAYLIB_NAME" "$RAYLIB_URL/$RAYLIB_NAME.tar.gz"
 fi
 [ ! -f "$RAYLIB_NAME/include/rlights.h" ] && \
     curl -sL "https://raw.githubusercontent.com/raysan5/raylib/master/examples/shaders/rlights.h" \
@@ -157,19 +151,33 @@ find_omp_include() {
 # ============================================================================
 
 if [ "$MODE" = "web" ]; then
-    [ ! -f "minshell.html" ] && \
-        curl -sL "https://raw.githubusercontent.com/raysan5/raylib/master/src/minshell.html" -o minshell.html
-
-    # OSRS envs use ocean/osrs/osrs_visual.c as the web entry point
+    SHELL_FILE="./minshell.html"
     WEB_SRC="$SRC_DIR/$ENV.c"
     WEB_EXTRA=""
     PRELOAD="--preload-file resources/$ENV@resources/$ENV --preload-file resources/shared@resources/shared"
     WEB_DEFINES="-DNDEBUG -DPLATFORM_WEB -DGRAPHICS_API_OPENGL_ES3"
     if [[ "$SRC_DIR" == *osrs* ]]; then
+        SHELL_FILE="ocean/osrs/web/osrs_shell.html"
         WEB_SRC="ocean/osrs/osrs_visual.c"
         WEB_EXTRA="-Iocean/osrs"
         PRELOAD="--preload-file ocean/osrs/data@ocean/osrs/data"
         WEB_DEFINES="$WEB_DEFINES -DOSRS_VISUAL"
+        if [ "$ENV" = "osrs_inferno" ]; then
+            INFERNO_WEB_POLICY="checkpoints/osrs_inferno/redemption_j6bgoiu4_compact/latest_eval_0000000255655936.bin"
+            if [ ! -f "$INFERNO_WEB_POLICY" ]; then
+                echo "Error: missing Inferno web policy: $INFERNO_WEB_POLICY"
+                exit 1
+            fi
+            PRELOAD="$PRELOAD --preload-file $INFERNO_WEB_POLICY@resources/osrs_inferno/osrs_inferno_redemption_j6bgoiu4_compact.bin"
+        fi
+    fi
+    if [ ! -f "$SHELL_FILE" ]; then
+        if [ "$SHELL_FILE" = "./minshell.html" ]; then
+            curl -sL "https://raw.githubusercontent.com/raysan5/raylib/master/src/minshell.html" -o minshell.html
+        else
+            echo "Error: web shell missing: $SHELL_FILE"
+            exit 1
+        fi
     fi
 
     mkdir -p "build_web/$ENV"
@@ -180,13 +188,49 @@ if [ "$MODE" = "web" ]; then
         -O3 -Wall \
         $LINK_ARCHIVES \
         "${INCLUDES[@]}" $WEB_EXTRA \
+        "${ENV_DEFINES[@]}" \
         -L. -L./$RAYLIB_NAME/lib \
         -sASSERTIONS=2 -gsource-map \
         -sUSE_GLFW=3 -sUSE_WEBGL2=1 -sASYNCIFY -sFILESYSTEM -sFORCE_FILESYSTEM=1 \
-        --shell-file ./minshell.html \
+        -sINCOMING_MODULE_JS_API=arguments,canvas,locateFile,print,printErr,onRuntimeInitialized,setStatus,monitorRunDependencies \
+        --shell-file "$SHELL_FILE" \
         -sINITIAL_MEMORY=512MB -sALLOW_MEMORY_GROWTH -sSTACK_SIZE=512KB \
         $WEB_DEFINES \
         $PRELOAD
+    if [[ "$SRC_DIR" == *osrs* ]]; then
+        python3 ocean/osrs/scripts/chunk_web_data.py "build_web/$ENV/game.data" --remove-source
+        WEB_ASSET_VERSION=$(python3 - "build_web/$ENV" <<'PY'
+from hashlib import sha256
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+hasher = sha256()
+for path in [
+    root / "game.js",
+    root / "game.wasm",
+    root / "game.data.chunks.json",
+    *sorted(root.glob("game.data.part*")),
+]:
+    hasher.update(path.name.encode())
+    hasher.update(b"\0")
+    hasher.update(path.read_bytes())
+print(hasher.hexdigest()[:16])
+PY
+)
+        python3 - "$WEB_ASSET_VERSION" "build_web/$ENV/game.html" <<'PY'
+from pathlib import Path
+import sys
+
+version = sys.argv[1]
+path = Path(sys.argv[2])
+html = path.read_text()
+html = html.replace("__OSRS_LAB_ASSET_VERSION__", version)
+html = html.replace("src=game.js", f"src=game.js?v={version}")
+html = html.replace('src="game.js"', f'src="game.js?v={version}"')
+path.write_text(html)
+PY
+    fi
     echo "Built: build_web/$ENV/game.html"
     exit 0
 fi
@@ -201,6 +245,7 @@ if [ "$MODE" = "local" ] || [ "$MODE" = "fast" ]; then
     FLAGS=(
         "${INCLUDES[@]}"
         -I. -I$SRC_DIR $OSRS_INCLUDE
+        "${ENV_DEFINES[@]}"
         "$LOCAL_SRC" $EXTRA_SRC -o "${OUTPUT_NAME:-$ENV}"
         $LINK_ARCHIVES
         -DPLATFORM_DESKTOP -DOSRS_VISUAL
@@ -254,6 +299,7 @@ fi
 
 clang -c $CLANG_OPT \
     -I. -Isrc -I$SRC_DIR $OSRS_INCLUDE \
+    "${ENV_DEFINES[@]}" \
     -I./$RAYLIB_NAME/include \
     -DENV_NAME=$ENV \
     -DPLATFORM_DESKTOP \
@@ -279,6 +325,7 @@ if [ "$PLATFORM" = "Darwin" ]; then
             $PRECISION \
             -DWITH_METAL \
             -DENV_NAME=$ENV \
+            "${ENV_DEFINES[@]}" \
             -DNPY_NO_DEPRECATED_API=NPY_1_7_API_VERSION \
             -DPLATFORM_DESKTOP \
             -I. -Isrc \

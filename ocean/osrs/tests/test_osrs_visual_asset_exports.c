@@ -15,6 +15,7 @@
 #include "ocean/osrs/osrs_binary_io.h"
 #include "ocean/osrs/osrs_spotanims.h"
 #include "ocean/osrs/data/item_models.h"
+#include "ocean/osrs/data/npc_models_zulrah.h"
 #include "ocean/osrs/data/player_models.h"
 
 static int tests_run = 0;
@@ -118,6 +119,62 @@ static const uint8_t TEST_BUDGET_RANGE_FAST_LOADOUT[NUM_GEAR_SLOTS] = {
     [GEAR_SLOT_HANDS] = ITEM_BARROWS_GLOVES,
     [GEAR_SLOT_FEET] = ITEM_ECHO_BOOTS,
     [GEAR_SLOT_RING] = ITEM_VENATOR_RING,
+};
+
+static const uint8_t TEST_PVP_BASIC_LOADOUT[NUM_GEAR_SLOTS] = {
+    [GEAR_SLOT_HEAD] = ITEM_HELM_NEITIZNOT,
+    [GEAR_SLOT_CAPE] = ITEM_GOD_CAPE,
+    [GEAR_SLOT_NECK] = ITEM_GLORY,
+    [GEAR_SLOT_AMMO] = ITEM_DIAMOND_BOLTS_E,
+    [GEAR_SLOT_WEAPON] = ITEM_WHIP,
+    [GEAR_SLOT_SHIELD] = ITEM_DRAGON_DEFENDER,
+    [GEAR_SLOT_BODY] = ITEM_BLACK_DHIDE_BODY,
+    [GEAR_SLOT_LEGS] = ITEM_RUNE_PLATELEGS,
+    [GEAR_SLOT_HANDS] = ITEM_BARROWS_GLOVES,
+    [GEAR_SLOT_FEET] = ITEM_CLIMBING_BOOTS,
+    [GEAR_SLOT_RING] = ITEM_BERSERKER_RING,
+};
+
+static const uint8_t TEST_PVP_MAGE_LOADOUT[NUM_GEAR_SLOTS] = {
+    [GEAR_SLOT_HEAD] = ITEM_ANCESTRAL_HAT,
+    [GEAR_SLOT_CAPE] = ITEM_GOD_CAPE,
+    [GEAR_SLOT_NECK] = ITEM_OCCULT_NECKLACE,
+    [GEAR_SLOT_AMMO] = ITEM_DIAMOND_BOLTS_E,
+    [GEAR_SLOT_WEAPON] = ITEM_ZURIELS_STAFF,
+    [GEAR_SLOT_SHIELD] = ITEM_MAGES_BOOK,
+    [GEAR_SLOT_BODY] = ITEM_ANCESTRAL_TOP,
+    [GEAR_SLOT_LEGS] = ITEM_ANCESTRAL_BOTTOM,
+    [GEAR_SLOT_HANDS] = ITEM_BARROWS_GLOVES,
+    [GEAR_SLOT_FEET] = ITEM_ETERNAL_BOOTS,
+    [GEAR_SLOT_RING] = ITEM_LIGHTBEARER,
+};
+
+static const uint8_t TEST_PVP_RANGE_LOADOUT[NUM_GEAR_SLOTS] = {
+    [GEAR_SLOT_HEAD] = ITEM_TORAGS_HELM,
+    [GEAR_SLOT_CAPE] = ITEM_INFERNAL_CAPE,
+    [GEAR_SLOT_NECK] = ITEM_FURY,
+    [GEAR_SLOT_AMMO] = ITEM_OPAL_DRAGON_BOLTS,
+    [GEAR_SLOT_WEAPON] = ITEM_ZARYTE_CROSSBOW,
+    [GEAR_SLOT_SHIELD] = ITEM_BLESSED_SPIRIT_SHIELD,
+    [GEAR_SLOT_BODY] = ITEM_KARILS_TOP,
+    [GEAR_SLOT_LEGS] = ITEM_BANDOS_TASSETS,
+    [GEAR_SLOT_HANDS] = ITEM_BARROWS_GLOVES,
+    [GEAR_SLOT_FEET] = ITEM_CLIMBING_BOOTS,
+    [GEAR_SLOT_RING] = ITEM_LIGHTBEARER,
+};
+
+static const uint8_t TEST_PVP_MELEE_LOADOUT[NUM_GEAR_SLOTS] = {
+    [GEAR_SLOT_HEAD] = ITEM_GUTHANS_HELM,
+    [GEAR_SLOT_CAPE] = ITEM_INFERNAL_CAPE,
+    [GEAR_SLOT_NECK] = ITEM_FURY,
+    [GEAR_SLOT_AMMO] = ITEM_DIAMOND_BOLTS_E,
+    [GEAR_SLOT_WEAPON] = ITEM_VESTAS,
+    [GEAR_SLOT_SHIELD] = ITEM_DRAGON_DEFENDER,
+    [GEAR_SLOT_BODY] = ITEM_KARILS_TOP,
+    [GEAR_SLOT_LEGS] = ITEM_VERACS_PLATESKIRT,
+    [GEAR_SLOT_HANDS] = ITEM_BARROWS_GLOVES,
+    [GEAR_SLOT_FEET] = ITEM_CLIMBING_BOOTS,
+    [GEAR_SLOT_RING] = ITEM_BERSERKER_RING,
 };
 
 typedef struct {
@@ -413,6 +470,61 @@ static void assert_projectile_profile_assets(
     }
 }
 
+static void assert_combat_visual_row_assets(
+    const char* label,
+    const OsrsCombatVisualRow* row,
+    const OsrsSpotAnimSet* spotanims,
+    AnimCache* equipment,
+    AnimCache* inferno
+) {
+    tests_run++;
+    if (!row) {
+        tests_failed++;
+        printf("  FAIL: %s missing combat visual row\n", label);
+        return;
+    }
+
+    assert_projectile_profile_assets(label, &row->projectile, spotanims, equipment, inferno);
+    assert_spotanim_render_asset(label, spotanims, equipment, inferno,
+        row->aux_travel_spotanim_id);
+    assert_spotanim_render_asset(label, spotanims, equipment, inferno,
+        row->aux_impact_spotanim_id);
+    assert_spotanim_render_asset(label, spotanims, equipment, inferno,
+        row->double_launch_spotanim_id);
+
+    if (row->aux_projectile_model_id != OSRS_COMBAT_PROJECTILE_MISSING) {
+        tests_run++;
+        if (!visual_model_exists_in_render_caches((uint32_t)row->aux_projectile_model_id)) {
+            tests_failed++;
+            printf("  FAIL: %s missing aux projectile model %d\n",
+                label, row->aux_projectile_model_id);
+        }
+    }
+    if (row->aux_projectile_anim_id != OSRS_COMBAT_PROJECTILE_MISSING) {
+        ASSERT_ANIM_PRESENT(label, equipment, inferno, row->aux_projectile_anim_id);
+    }
+}
+
+static void assert_visible_item_render_asset(uint8_t item_idx) {
+    if (item_idx >= NUM_ITEMS) return;
+    int slot = ITEM_DATABASE[item_idx].slot;
+    if (slot == GEAR_SLOT_AMMO || slot == GEAR_SLOT_RING || slot < 0) return;
+
+    const ItemModelMapping* mapping = item_mapping_for_db_index(item_idx);
+    tests_run++;
+    if (!mapping || mapping->wield_model == ITEM_RENDER_MODEL_MISSING) {
+        tests_failed++;
+        printf("  FAIL: pvp item %s has no visible wield model\n",
+            ITEM_DATABASE[item_idx].name);
+        return;
+    }
+    if (!model_file_contains_model(OSRS_ASSET("equipment.models"), mapping->wield_model)) {
+        tests_failed++;
+        printf("  FAIL: pvp item %s missing wield model %u\n",
+            ITEM_DATABASE[item_idx].name, (unsigned)mapping->wield_model);
+    }
+}
+
 static const OsrsCombatProjectileProfile* test_npc_projectile_profile(
     uint16_t npc_id,
     AttackStyle style
@@ -435,6 +547,10 @@ static void test_inferno_render_asset_contract(
         {"budget mage", TEST_BUDGET_MAGE_LOADOUT},
         {"budget long range", TEST_BUDGET_RANGE_LONG_LOADOUT},
         {"budget fast range", TEST_BUDGET_RANGE_FAST_LOADOUT},
+        {"pvp basic", TEST_PVP_BASIC_LOADOUT},
+        {"pvp mage", TEST_PVP_MAGE_LOADOUT},
+        {"pvp range", TEST_PVP_RANGE_LOADOUT},
+        {"pvp melee", TEST_PVP_MELEE_LOADOUT},
     };
     for (size_t i = 0; i < sizeof(loadouts) / sizeof(loadouts[0]); i++) {
         assert_loadout_models_present(loadouts[i].name, loadouts[i].equipped);
@@ -456,6 +572,15 @@ static void test_inferno_render_asset_contract(
             ASSERT_ANIM_PRESENT("inferno npc walk", equipment, inferno,
                 (int)npc->walk_anim);
         }
+    }
+
+    printf("--- zulrah render asset contract ---\n");
+    for (size_t i = 0;
+            i < sizeof(NPC_MODEL_MAP_ZULRAH_GEN) / sizeof(NPC_MODEL_MAP_ZULRAH_GEN[0]);
+            i++) {
+        const NpcModelMapping* npc = &NPC_MODEL_MAP_ZULRAH_GEN[i];
+        ASSERT_MODEL_PRESENT("zulrah npc", OSRS_ASSET("zulrah.models"),
+            npc->model_id);
     }
 
     const RequiredAnim extra_anims[] = {
@@ -510,6 +635,24 @@ static void test_inferno_render_asset_contract(
         {"blowpipe",
             osrs_combat_visual_ranged_projectile_profile(
                 ITEM_TOXIC_BLOWPIPE, OSRS_COMBAT_PROJECTILE_NONE)},
+        {"pvp rune crossbow",
+            osrs_combat_visual_ranged_projectile_profile(
+                ITEM_RUNE_CROSSBOW, OSRS_COMBAT_PROJECTILE_NONE)},
+        {"pvp armadyl crossbow",
+            osrs_combat_visual_ranged_projectile_profile(
+                ITEM_ARMADYL_CROSSBOW, OSRS_COMBAT_PROJECTILE_NONE)},
+        {"pvp zaryte crossbow",
+            osrs_combat_visual_ranged_projectile_profile(
+                ITEM_ZARYTE_CROSSBOW, OSRS_COMBAT_PROJECTILE_NONE)},
+        {"pvp dark bow",
+            osrs_combat_visual_ranged_projectile_profile(
+                ITEM_DARK_BOW, OSRS_COMBAT_PROJECTILE_NONE)},
+        {"pvp heavy ballista",
+            osrs_combat_visual_ranged_projectile_profile(
+                ITEM_HEAVY_BALLISTA, OSRS_COMBAT_PROJECTILE_NONE)},
+        {"pvp morrigans javelin",
+            osrs_combat_visual_ranged_projectile_profile(
+                ITEM_MORRIGANS_JAVELIN, OSRS_COMBAT_PROJECTILE_NONE)},
         {"ice barrage",
             osrs_combat_visual_spell_projectile(
                 OSRS_COMBAT_VISUAL_SPELL_ICE_BARRAGE)},
@@ -541,6 +684,72 @@ static void test_inferno_render_asset_contract(
         assert_projectile_profile_assets(
             profiles[i].name, profiles[i].profile, spotanims, equipment, inferno);
     }
+
+    const uint8_t pvp_items[] = {
+        ITEM_HELM_NEITIZNOT,
+        ITEM_GOD_CAPE,
+        ITEM_GLORY,
+        ITEM_BLACK_DHIDE_BODY,
+        ITEM_MYSTIC_TOP,
+        ITEM_RUNE_PLATELEGS,
+        ITEM_MYSTIC_BOTTOM,
+        ITEM_WHIP,
+        ITEM_RUNE_CROSSBOW,
+        ITEM_AHRIM_STAFF,
+        ITEM_DRAGON_DAGGER,
+        ITEM_DRAGON_DEFENDER,
+        ITEM_SPIRIT_SHIELD,
+        ITEM_BARROWS_GLOVES,
+        ITEM_CLIMBING_BOOTS,
+        ITEM_GHRAZI_RAPIER,
+        ITEM_INQUISITORS_MACE,
+        ITEM_STAFF_OF_DEAD,
+        ITEM_KODAI_WAND,
+        ITEM_VOLATILE_STAFF,
+        ITEM_ZURIELS_STAFF,
+        ITEM_ARMADYL_CROSSBOW,
+        ITEM_ZARYTE_CROSSBOW,
+        ITEM_DRAGON_CLAWS,
+        ITEM_AGS,
+        ITEM_ANCIENT_GS,
+        ITEM_GRANITE_MAUL,
+        ITEM_ELDER_MAUL,
+        ITEM_DARK_BOW,
+        ITEM_HEAVY_BALLISTA,
+        ITEM_VESTAS,
+        ITEM_VOIDWAKER,
+        ITEM_STATIUS_WARHAMMER,
+        ITEM_MORRIGANS_JAVELIN,
+        ITEM_ANCESTRAL_HAT,
+        ITEM_ANCESTRAL_TOP,
+        ITEM_ANCESTRAL_BOTTOM,
+        ITEM_AHRIMS_ROBETOP,
+        ITEM_AHRIMS_ROBESKIRT,
+        ITEM_KARILS_TOP,
+        ITEM_BANDOS_TASSETS,
+        ITEM_BLESSED_SPIRIT_SHIELD,
+        ITEM_FURY,
+        ITEM_OCCULT_NECKLACE,
+        ITEM_INFERNAL_CAPE,
+        ITEM_ETERNAL_BOOTS,
+        ITEM_MAGES_BOOK,
+        ITEM_TORAGS_PLATELEGS,
+        ITEM_DHAROKS_PLATELEGS,
+        ITEM_VERACS_PLATESKIRT,
+        ITEM_TORAGS_HELM,
+        ITEM_DHAROKS_HELM,
+        ITEM_VERACS_HELM,
+        ITEM_GUTHANS_HELM,
+    };
+    for (size_t i = 0; i < sizeof(pvp_items) / sizeof(pvp_items[0]); i++) {
+        assert_visible_item_render_asset(pvp_items[i]);
+    }
+
+    assert_combat_visual_row_assets(
+        "pvp dark bow special",
+        osrs_combat_visual_find_special_projectile_item_id(
+            OSRS_ITEM_ID_DARK_BOW, ATTACK_STYLE_RANGED),
+        spotanims, equipment, inferno);
 }
 
 int main(void) {
@@ -590,7 +799,9 @@ int main(void) {
     ASSERT_SPOTANIM_PRESENT("ice barrage projectile", spotanims, 368);
     ASSERT_SPOTANIM_PRESENT("ice barrage impact", spotanims, 369);
     ASSERT_SPOTANIM_PRESENT("blood barrage impact", spotanims, 377);
+    ASSERT_SPOTANIM_PRESENT("trident cast", spotanims, 665);
     ASSERT_SPOTANIM_PRESENT("trident projectile", spotanims, 1040);
+    ASSERT_SPOTANIM_PRESENT("trident impact", spotanims, 1042);
     ASSERT_SPOTANIM_PRESENT("dragon dart projectile", spotanims, 1122);
     tests_run++;
     const OsrsSpotAnimDef* ice_barrage = osrs_spotanim_find(spotanims, 369);
