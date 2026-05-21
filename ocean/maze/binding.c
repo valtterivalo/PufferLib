@@ -3,6 +3,10 @@
 #define NUM_ATNS 1
 #define ACT_SIZES {5}
 #define OBS_TENSOR_T ByteTensor
+#define PUFFER_STATE_T MazePufferState
+#define PUFFER_STATE_STORE(env, out) maze_state_snapshot_store(env, out)
+#define PUFFER_STATE_LOAD(env, state) maze_state_snapshot_load(env, state)
+#define PUFFER_STATE_REFRESH(env) compute_observations(env)
 
 #define MY_VEC_INIT
 #define MY_VEC_CLOSE

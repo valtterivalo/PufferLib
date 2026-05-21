@@ -137,6 +137,7 @@ void static_vec_read_profile(StaticVec* vec, float out[NUM_EVAL_PROF]);
 const char* get_static_env_name(void);
 int get_state_size(void);
 int static_vec_has_state(StaticVec* vec);
+int static_vec_fixed_agents_per_env(StaticVec* vec);
 void static_vec_store_states(StaticVec* vec, void* states, const int* state_inds,
     int env_start, int env_count);
 void static_vec_load_states(StaticVec* vec, const void* states, const int* state_inds,
@@ -720,6 +721,26 @@ int static_vec_has_state(StaticVec* vec) {
 #endif
 }
 
+int static_vec_fixed_agents_per_env(StaticVec* vec) {
+    if (!vec || vec->size <= 0) {
+        return 0;
+    }
+    Env* envs = (Env*)vec->envs;
+    int agents_per_env = envs[0].num_agents;
+    if (agents_per_env <= 0) {
+        return 0;
+    }
+    for (int i = 0; i < vec->size; i++) {
+        if (envs[i].num_agents != agents_per_env) {
+            return 0;
+        }
+    }
+    if (vec->size * agents_per_env != vec->total_agents) {
+        return 0;
+    }
+    return agents_per_env;
+}
+
 void static_vec_store_states(StaticVec* vec, void* states, const int* state_inds,
         int env_start, int env_count) {
 #ifdef PUFFER_STATE_T
@@ -730,7 +751,11 @@ void static_vec_store_states(StaticVec* vec, void* states, const int* state_inds
     Env* envs = (Env*)vec->envs;
     PUFFER_STATE_T* state_buf = (PUFFER_STATE_T*)states;
     for (int i = 0; i < env_count; i++) {
+#ifdef PUFFER_STATE_STORE
+        PUFFER_STATE_STORE(&envs[env_start + i], &state_buf[state_inds[i]]);
+#else
         state_buf[state_inds[i]] = envs[env_start + i].state;
+#endif
     }
 #else
     (void)vec;
@@ -753,7 +778,11 @@ void static_vec_load_states(StaticVec* vec, const void* states, const int* state
     const PUFFER_STATE_T* state_buf = (const PUFFER_STATE_T*)states;
     for (int i = 0; i < env_count; i++) {
         Env* env = &envs[env_start + i];
+#ifdef PUFFER_STATE_LOAD
+        PUFFER_STATE_LOAD(env, &state_buf[state_inds[i]]);
+#else
         env->state = state_buf[state_inds[i]];
+#endif
 #ifdef PUFFER_STATE_REFRESH
         PUFFER_STATE_REFRESH(env);
 #endif
@@ -772,7 +801,11 @@ void static_vec_store_state(StaticVec* vec, int env_id, void* out) {
 #ifdef PUFFER_STATE_T
     if (!vec || !out || env_id < 0 || env_id >= vec->size) abort();
     Env* envs = (Env*)vec->envs;
+#ifdef PUFFER_STATE_STORE
+    PUFFER_STATE_STORE(&envs[env_id], (PUFFER_STATE_T*)out);
+#else
     memcpy(out, &envs[env_id].state, PUFFER_STATE_SIZE);
+#endif
 #else
     (void)vec;
     (void)env_id;
@@ -785,7 +818,11 @@ void static_vec_load_state(StaticVec* vec, int env_id, const void* data) {
 #ifdef PUFFER_STATE_T
     if (!vec || !data || env_id < 0 || env_id >= vec->size) abort();
     Env* envs = (Env*)vec->envs;
+#ifdef PUFFER_STATE_LOAD
+    PUFFER_STATE_LOAD(&envs[env_id], (const PUFFER_STATE_T*)data);
+#else
     memcpy(&envs[env_id].state, data, PUFFER_STATE_SIZE);
+#endif
 #ifdef PUFFER_STATE_REFRESH
     PUFFER_STATE_REFRESH(&envs[env_id]);
 #endif

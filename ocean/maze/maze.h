@@ -8,6 +8,8 @@
 
 #define TWO_PI 2.0*PI
 #define MAX_SIZE 40
+#define MAZE_STATE_MAX_SIZE 64
+#define MAZE_STATE_MAX_AGENTS 1
 
 #define ATN_PASS 0
 #define ATN_FORWARD 1
@@ -258,6 +260,17 @@ struct State {
     unsigned char* maze;
 };
 
+typedef struct MazePufferState MazePufferState;
+struct MazePufferState {
+    int width;
+    int height;
+    int horizon;
+    int tick;
+    int num_agents;
+    Agent agents[MAZE_STATE_MAX_AGENTS];
+    unsigned char maze[MAZE_STATE_MAX_SIZE * MAZE_STATE_MAX_SIZE];
+};
+
 void init_state(State* state, int max_size, int num_agents) {
     state->agents = calloc(num_agents, sizeof(Agent));
     state->maze = calloc(max_size*max_size, sizeof(unsigned char));
@@ -284,6 +297,30 @@ void set_state(Grid* env, State* state) {
     env->num_agents = state->num_agents;
     memcpy(env->agents, state->agents, env->num_agents*sizeof(Agent));
     memcpy(env->maze, state->maze, env->max_size*env->max_size);
+}
+
+void maze_state_snapshot_store(Grid* env, MazePufferState* out) {
+    assert(env->max_size <= MAZE_STATE_MAX_SIZE);
+    assert(env->num_agents <= MAZE_STATE_MAX_AGENTS);
+    out->width = env->width;
+    out->height = env->height;
+    out->horizon = env->horizon;
+    out->tick = env->tick;
+    out->num_agents = env->num_agents;
+    memcpy(out->agents, env->agents, env->num_agents * sizeof(Agent));
+    memcpy(out->maze, env->maze, env->max_size * env->max_size);
+}
+
+void maze_state_snapshot_load(Grid* env, const MazePufferState* in) {
+    assert(env->max_size <= MAZE_STATE_MAX_SIZE);
+    assert(in->num_agents <= MAZE_STATE_MAX_AGENTS);
+    env->width = in->width;
+    env->height = in->height;
+    env->horizon = in->horizon;
+    env->tick = in->tick;
+    env->num_agents = in->num_agents;
+    memcpy(env->agents, in->agents, env->num_agents * sizeof(Agent));
+    memcpy(env->maze, in->maze, env->max_size * env->max_size);
 }
 
 void c_reset(Grid* env) {

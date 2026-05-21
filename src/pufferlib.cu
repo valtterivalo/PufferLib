@@ -234,21 +234,6 @@ struct PrioBuffers {
     IntTensor idx;
 };
 
-struct StateBuffer {
-    void* states;
-    int state_size;
-    int capacity;
-    int size;
-    int write_pos;
-    int num_cl_envs;
-    int num_fresh_envs;
-    int* state_inds_host;
-    PrecisionTensor advantages;
-    PrecisionTensor importance;
-    IntTensor state_inds;
-    PrioBuffers prio_bufs;
-};
-
 void register_prio_buffers(PrioBuffers& bufs, Allocator* alloc, int B, int minibatch_segments) {
     bufs = (PrioBuffers){
         .prio_probs = {.shape = {B}},
@@ -262,21 +247,9 @@ void register_prio_buffers(PrioBuffers& bufs, Allocator* alloc, int B, int minib
     alloc_register(alloc, &bufs.mb_prio);
 }
 
-void register_state_buffer(StateBuffer* buf, Allocator* alloc,
-        int capacity, int total_agents, int num_cl_envs) {
-    buf->capacity = capacity;
-    buf->num_cl_envs = num_cl_envs;
-    buf->num_fresh_envs = total_agents - num_cl_envs;
-    buf->advantages = {.shape = {capacity}};
-    buf->importance = {.shape = {total_agents}};
-    buf->state_inds = {.shape = {total_agents}};
-    alloc_register(alloc, &buf->advantages);
-    alloc_register(alloc, &buf->importance);
-    alloc_register(alloc, &buf->state_inds);
-    if (num_cl_envs > 0) {
-        register_prio_buffers(buf->prio_bufs, alloc, capacity, num_cl_envs);
-    }
-}
+#define PUFFER_CURRICULUM_TYPES
+#include "curriculum.cu"
+#undef PUFFER_CURRICULUM_TYPES
 
 // Slice: select dim0 index t, then narrow dim0 from start for count.
 // 3D (T, B, F) -> (count, F); 2D (T, B) -> (count,)
@@ -359,12 +332,16 @@ typedef struct {
     // Priority
     float prio_alpha;
     float prio_beta0;
+    bool anneal_prio_beta;
     // Curriculum state buffer
     int state_buffer_size;
     float cl_frac;
+    bool anneal_cl;
     int warmup_states;
+    int state_checkpoint_interval;
     float explore_alpha;
     float explore_beta;
+    float explore_decay;
     // Flags
     bool reset_state;
     bool terminal_reset_state;
@@ -458,6 +435,8 @@ typedef struct {
     ulong seed;
     curandStatePhilox4_32_10_t** rng_states;  // per-buffer persistent RNG states [num_buffers]
 } PuffeRL;
+
+static inline void capture_curriculum_checkpoint(PuffeRL* pufferl, int buffer_idx, int t);
 
 Dict* log_environments_impl(PuffeRL& pufferl) {
     Dict* out = create_dict(PUFFER_ENV_LOG_DICT_CAPACITY);
@@ -998,6 +977,9 @@ void capture_or_compare_phase2_first_forward_for_buffer(
 extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
     PuffeRL* pufferl = (PuffeRL*)ctx;
     HypersT& hypers = pufferl->hypers;
+    if (pufferl->curriculum_enabled) {
+        capture_curriculum_checkpoint(pufferl, buf, t);
+    }
     int graph = t * hypers.num_buffers + buf;
     profile_begin("fused_rollout", hypers.profile);
 
@@ -1715,175 +1697,9 @@ void prio_replay_cuda(PrecisionTensor& advantages, float prio_alpha,
         bufs.mb_prio.data, total_agents, anneal_beta, minibatch_segments);
 }
 
-__global__ void scatter_state_advantages(
-        precision_t* __restrict__ dst,
-        const int* __restrict__ state_inds,
-        const precision_t* __restrict__ advantages_bt,
-        int count, int horizon) {
-    if (blockIdx.x != 0 || threadIdx.x != 0) return;
-    for (int i = 0; i < count; i++) {
-        dst[state_inds[i]] = advantages_bt[(long)i * horizon];
-    }
-}
-
-__global__ void compute_state_prio_abs(
-        const precision_t* __restrict__ advantages,
-        float* __restrict__ prio_weights,
-        float prio_alpha, int length) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= length) return;
-
-    float adv = fabsf(to_float(advantages[idx]));
-    float pw;
-    if (prio_alpha == 0.0f) {
-        pw = 1.0f;
-    } else if (adv == 0.0f) {
-        pw = 0.0f;
-    } else {
-        pw = __powf(adv, prio_alpha);
-    }
-    if (isnan(pw) || isinf(pw)) pw = 0.0f;
-    prio_weights[idx] = pw;
-}
-
-__global__ void build_state_importance(
-        precision_t* __restrict__ out,
-        const int* __restrict__ state_inds,
-        const float* __restrict__ prio_probs,
-        int num_fresh, int num_cl, int buffer_size, float beta) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int total = num_fresh + num_cl;
-    if (idx >= total) return;
-
-    float weight = 1.0f;
-    if (idx >= num_fresh) {
-        int state_idx = state_inds[idx];
-        float value = prio_probs[state_idx] * (float)buffer_size;
-        weight = __powf(value, -beta);
-        if (isnan(weight) || isinf(weight)) weight = 1.0f;
-    }
-    out[idx] = from_float(weight);
-}
-
-static inline int clamp_int(int v, int lo, int hi) {
-    return v < lo ? lo : (v > hi ? hi : v);
-}
-
-int init_state_buffer(PuffeRL* pufferl) {
-    StateBuffer* buf = &pufferl->state_buf;
-    buf->state_size = get_state_size();
-    size_t capacity = (size_t)buf->capacity;
-    size_t state_size = (size_t)buf->state_size;
-    if (state_size == 0 || capacity > ((size_t)-1) / state_size) {
-        fprintf(stderr, "Failed to allocate curriculum state buffer: invalid size\n");
-        return 0;
-    }
-
-    size_t state_bytes = capacity * state_size;
-    buf->states = malloc(state_bytes);
-    buf->state_inds_host = (int*)malloc((size_t)pufferl->hypers.total_agents * sizeof(int));
-    if (buf->states == NULL || buf->state_inds_host == NULL) {
-        fprintf(stderr,
-            "Failed to allocate curriculum state buffer: capacity=%d state_size=%d bytes=%zu\n",
-            buf->capacity, buf->state_size, state_bytes);
-        free(buf->states);
-        free(buf->state_inds_host);
-        buf->states = NULL;
-        buf->state_inds_host = NULL;
-        return 0;
-    }
-    return 1;
-}
-
-void close_state_buffer(PuffeRL* pufferl) {
-    StateBuffer* buf = &pufferl->state_buf;
-    free(buf->states);
-    free(buf->state_inds_host);
-    buf->states = NULL;
-    buf->state_inds_host = NULL;
-}
-
-void curriculum_rollout_begin(PuffeRL* pufferl) {
-    HypersT* h = &pufferl->hypers;
-    StateBuffer* buf = &pufferl->state_buf;
-    StaticVec* vec = pufferl->vec;
-    cudaStream_t stream = pufferl->default_stream;
-    int total_agents = h->total_agents;
-    int configured_cl = clamp_int((int)(h->cl_frac * (float)total_agents), 0, total_agents);
-    int do_warmup = (buf->size == 0 || buf->size < h->warmup_states);
-    int num_cl = do_warmup ? 0 : configured_cl;
-    int num_fresh = total_agents - num_cl;
-    int total_epochs = h->total_timesteps / (h->total_agents * h->horizon);
-    float beta_progress = total_epochs > 0 ? (float)pufferl->epoch / (float)total_epochs : 1.0f;
-    beta_progress = fminf(1.0f, fmaxf(0.0f, beta_progress));
-    float beta = h->explore_beta + (1.0f - h->explore_beta) * beta_progress;
-
-    buf->num_cl_envs = num_cl;
-    buf->num_fresh_envs = num_fresh;
-    vec->log_env_limit = (num_cl > 0) ? num_fresh : 0;
-
-    if (num_cl > 0) {
-        compute_state_prio_abs<<<grid_size(buf->size), BLOCK_SIZE, 0, stream>>>(
-            buf->advantages.data, buf->prio_bufs.prio_probs.data,
-            h->explore_alpha, buf->size);
-        compute_state_prio_normalize<<<1, PRIO_BLOCK_SIZE, 0, stream>>>(
-            buf->prio_bufs.prio_probs.data, buf->size);
-        build_cdf<<<1, 1, 0, stream>>>(
-            buf->prio_bufs.cdf.data, buf->prio_bufs.prio_probs.data, buf->size);
-        int threads = 256;
-        int blocks = (num_cl + threads - 1) / threads;
-        long* rng_offset = pufferl->rng_offset_puf.data + h->num_buffers + 1;
-        multinomial_sample<<<blocks, threads, 0, stream>>>(
-            buf->prio_bufs.idx.data, buf->prio_bufs.cdf.data,
-            buf->size, num_cl, pufferl->seed, rng_offset);
-        advance_rng_offset<<<1, 1, 0, stream>>>(rng_offset, (long)num_cl);
-        cudaMemcpyAsync(buf->state_inds_host + num_fresh, buf->prio_bufs.idx.data,
-            num_cl * sizeof(int), cudaMemcpyDeviceToHost, stream);
-        cudaStreamSynchronize(stream);
-
-        static_vec_load_states(vec, buf->states, buf->state_inds_host + num_fresh,
-            num_fresh, num_cl);
-        if (vec->gpu) {
-            cudaMemcpy(vec->gpu_observations, vec->observations,
-                (size_t)vec->total_agents * get_obs_size() * get_obs_elem_size(),
-                cudaMemcpyHostToDevice);
-        }
-    }
-
-    for (int i = 0; i < num_fresh; i++) {
-        buf->state_inds_host[i] = (buf->write_pos + i) % buf->capacity;
-    }
-    if (num_fresh > 0) {
-        static_vec_store_states(vec, buf->states, buf->state_inds_host, 0, num_fresh);
-        buf->write_pos = (buf->write_pos + num_fresh) % buf->capacity;
-        buf->size = clamp_int(buf->size + num_fresh, 0, buf->capacity);
-    }
-
-    cudaMemcpyAsync(buf->state_inds.data, buf->state_inds_host,
-        total_agents * sizeof(int), cudaMemcpyHostToDevice, stream);
-    build_state_importance<<<grid_size(total_agents), BLOCK_SIZE, 0, stream>>>(
-        buf->importance.data, buf->state_inds.data, buf->prio_bufs.prio_probs.data,
-        num_fresh, num_cl, buf->size, beta);
-}
-
-void curriculum_update_advantages(PuffeRL* pufferl, PrecisionTensor* advantages,
-        cudaStream_t stream) {
-    StateBuffer* buf = &pufferl->state_buf;
-    int horizon = advantages->shape[1];
-    int num_fresh = buf->num_fresh_envs;
-    int num_cl = buf->num_cl_envs;
-
-    if (num_cl > 0) {
-        scatter_state_advantages<<<1, 1, 0, stream>>>(
-            buf->advantages.data, buf->state_inds.data + num_fresh,
-            advantages->data + (long)num_fresh * horizon, num_cl, horizon);
-    }
-    if (num_fresh > 0) {
-        scatter_state_advantages<<<1, 1, 0, stream>>>(
-            buf->advantages.data, buf->state_inds.data,
-            advantages->data, num_fresh, horizon);
-    }
-}
+#define PUFFER_CURRICULUM_IMPL
+#include "curriculum.cu"
+#undef PUFFER_CURRICULUM_IMPL
 
 // Experience the puffer advantage! Generalized advantage estimation + V-Trace
 // importance sampling correction in a single streamlined operation
@@ -2213,8 +2029,11 @@ void train_impl(PuffeRL& pufferl) {
         cudaMemcpy(muon->lr_ptr, &lr, sizeof(float), cudaMemcpyHostToDevice);
     }
 
-    // Annealed priority exponent
-    float anneal_beta = prio_beta0 + (1.0f - prio_beta0) * prio_alpha * (float)current_epoch/(float)total_epochs;
+    float anneal_beta = prio_beta0;
+    if (hypers.anneal_prio_beta && total_epochs > 0) {
+        anneal_beta += (1.0f - prio_beta0) * prio_alpha *
+            (float)current_epoch / (float)total_epochs;
+    }
     TrainGraph& graph = pufferl.train_buf;
     cudaEventRecord(pufferl.profile.events[1]);  // pre-loop end
 
@@ -2227,7 +2046,7 @@ void train_impl(PuffeRL& pufferl) {
         puff_advantage_cuda(rollouts.values, rollouts.rewards, rollouts.terminals,
             rollouts.ratio, advantages_puf, hypers.gamma, hypers.gae_lambda,
             hypers.vtrace_rho_clip, hypers.vtrace_c_clip, train_stream);
-        if (mb == 0 && pufferl.curriculum_enabled && pufferl.state_buf.size > 0) {
+        if (mb == 0 && pufferl.curriculum_enabled) {
             curriculum_update_advantages(&pufferl, &advantages_puf, train_stream);
         }
         profile_end(hypers.profile);
@@ -2397,16 +2216,18 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     assert(hypers.cl_frac >= 0.0f && "cl_frac must be nonnegative");
     assert(hypers.cl_frac <= 0.9f && "cl_frac must be <= 0.9");
     int initial_num_cl_envs = clamp_int(
-        (int)(hypers.cl_frac * (float)hypers.total_agents), 0, hypers.total_agents);
+        (int)(hypers.cl_frac * (float)vec->size), 0, vec->size);
     pufferl->curriculum_enabled = hypers.state_buffer_size > 0 && initial_num_cl_envs > 0;
+    int agents_per_env = 0;
     if (pufferl->curriculum_enabled) {
-        assert(static_vec_has_state(vec) &&
-            "state_buffer_size > 0 requires PUFFER_STATE_T env support");
-        assert(get_state_size() > 0 &&
-            "state_buffer_size > 0 requires nonzero env state size");
+        agents_per_env = fixed_agents_per_env(vec);
         assert(hypers.warmup_states >= 0 && "warmup_states must be nonnegative");
         assert(hypers.warmup_states <= hypers.state_buffer_size &&
             "warmup_states must be <= state_buffer_size");
+        assert(hypers.state_checkpoint_interval > 0 &&
+            "state_checkpoint_interval must be positive");
+        assert(hypers.explore_decay >= 0.0f && hypers.explore_decay <= 1.0f &&
+            "explore_decay must be in [0, 1]");
     }
 
     // Sanity check action space
@@ -2463,7 +2284,8 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     int total_agents = vec->total_agents;
     int batch = total_agents / hypers.num_buffers;
     int num_buffers = hypers.num_buffers;
-    int num_cl_envs = clamp_int((int)(hypers.cl_frac * (float)total_agents), 0, total_agents);
+    int num_cl_envs = pufferl->curriculum_enabled ?
+        clamp_int((int)(hypers.cl_frac * (float)vec->size), 0, vec->size) : 0;
 
     Encoder encoder = {
         .forward = encoder_forward,
@@ -2541,7 +2363,8 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
         acts, hypers.total_agents, minibatch_segments);
     if (pufferl->curriculum_enabled) {
         register_state_buffer(&pufferl->state_buf,
-            acts, hypers.state_buffer_size, total_agents, num_cl_envs);
+            acts, hypers.state_buffer_size, total_agents, vec->size, agents_per_env,
+            num_cl_envs, horizon, hypers.state_checkpoint_interval);
     }
     if (pufferl->has_mask) {
         pufferl->rollout_masks = {.shape = {horizon, total_agents, act_n}};
@@ -2586,7 +2409,7 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     pufferl->grad_puf = {.data = (precision_t*)grads->mem, .shape = {grads->total_elems}};
     pufferl->param_puf = {.data = (precision_t*)params->mem, .shape = {params->total_elems}};
     if (pufferl->curriculum_enabled) {
-        if (!init_state_buffer(pufferl.get())) {
+        if (!init_state_buffer(&pufferl->state_buf, hypers.total_agents)) {
             alloc_free(params);
             alloc_free(grads);
             alloc_free(acts);
@@ -2780,6 +2603,8 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
         cudaStream_t warmup_stream;
         cudaStreamCreate(&warmup_stream);
         pufferl->default_stream = warmup_stream;
+        int saved_curriculum_enabled = pufferl->curriculum_enabled;
+        pufferl->curriculum_enabled = 0;
 
         for (pufferl->epoch = 0; pufferl->epoch <= hypers.cudagraphs; pufferl->epoch++) {
             for (int i = 0; i < num_buffers * horizon; ++i) {
@@ -2803,6 +2628,7 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
         cudaDeviceSynchronize();
         pufferl->default_stream = saved_default;
         tl_stream = saved_tl;
+        pufferl->curriculum_enabled = saved_curriculum_enabled;
         cudaStreamDestroy(warmup_stream);
 
         // Restore weights + optimizer state corrupted by warmup/capture
@@ -2821,6 +2647,8 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
             rng_init<<<grid_size(agents_per_buf), BLOCK_SIZE>>>(
                 pufferl->rng_states[i], pufferl->seed + i, agents_per_buf);
         }
+        cudaMemset(pufferl->rng_offset_puf.data, 0,
+            numel(pufferl->rng_offset_puf.shape) * sizeof(long));
         cudaDeviceSynchronize();
 
         pufferl->epoch = 0;
@@ -3080,7 +2908,7 @@ void close_impl(PuffeRL& pufferl) {
         pufferl.anchor_weights.data = NULL;
     }
     if (pufferl.curriculum_enabled) {
-        close_state_buffer(&pufferl);
+        close_state_buffer(&pufferl.state_buf);
     }
 
     alloc_free(&pufferl.params_alloc);
