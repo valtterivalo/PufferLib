@@ -25,6 +25,8 @@
 #include "../osrs_special_attacks.h"
 #include "../osrs_pvp_gear.h"
 #include "../osrs_encounter.h"
+#include "../osrs_encounter_player.h"
+#include "../osrs_encounter_visual_events.h"
 #include "../osrs_interaction.h"
 #include "../data/npc_models.h"
 #include <assert.h>

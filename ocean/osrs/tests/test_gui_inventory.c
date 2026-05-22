@@ -757,6 +757,22 @@ static void test_budget_item_labels_and_sprites_resolve(void) {
         file_exists(OSRS_ASSET("sprites/items/28945.png")), 1);
 }
 
+static void test_saturated_heart_inventory_slot_resolves(void) {
+    printf("--- saturated heart inventory slot resolves ---\n");
+
+    GuiState gs = {0};
+    Player player = {0};
+    player.saturated_heart_count = 1;
+    gui_populate_inventory(&gs, &player);
+
+    int slot = find_slot_of_type(&gs, INV_SLOT_SATURATED_HEART);
+    ASSERT_INT_EQ("saturated heart slot exists", slot >= 0, 1);
+    ASSERT_INT_EQ("saturated heart item id",
+        gs.inv_grid[slot].osrs_id, OSRS_ID_SATURATED_HEART);
+    ASSERT_INT_EQ("saturated heart sprite exists",
+        file_exists(OSRS_ASSET("sprites/items/27641.png")), 1);
+}
+
 static void test_runec_ui_asset_aliases_exist(void) {
     printf("--- runec ui asset aliases exist ---\n");
 
@@ -990,6 +1006,7 @@ int main(void) {
     test_gui_selected_item_click_queues_item_on_item();
     test_human_selected_target_widget_helpers_queue_commands();
     test_budget_item_labels_and_sprites_resolve();
+    test_saturated_heart_inventory_slot_resolves();
     test_runec_ui_asset_aliases_exist();
     test_runec_stack_quantity_formatting();
     test_runec_stack_variant_selection();

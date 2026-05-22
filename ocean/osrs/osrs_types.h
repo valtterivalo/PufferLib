@@ -508,6 +508,8 @@ typedef struct {
     int bastion_doses;
     int stamina_doses;
     int antivenom_doses;
+    int saturated_heart_count;
+    int saturated_heart_active_ticks;
 
     // Timers
     int attack_timer;
@@ -735,6 +737,14 @@ typedef struct {
     float zulrah_tier_score_sum[3];
     float zulrah_tier_damage_received[3];
     float zulrah_tier_episode_length[3];
+    float zulrah_tier_cloud_occupancy_ticks[3];
+    float zulrah_tier_cloud_damage_received[3];
+    float cloud_occupancy_ticks;
+    float cloud_occupancy_frac;
+    float cloud_damage_received;
+    float active_cloud_count_ticks;
+    float pending_cloud_count_ticks;
+    float zulrah_kills;
     float unavoidable_off_prayer;  /* off-prayer hits where correct prayer was on a different style */
     float ranger_mager_same_tick_attacks;
     float step_out_ranger_mager_same_tick_attacks;

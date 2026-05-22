@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "ocean/osrs/osrs_consumables.h"
+#include "ocean/osrs/osrs_player_consumables.h"
 
 static int total_tests = 0;
 static int passed_tests = 0;
@@ -112,12 +113,46 @@ static void test_combo_timing(void) {
     ASSERT_EQ(osrs_can_drink(2), 0, "can't drink when timer=2");
 }
 
+static void test_player_food_transition_allows_shark_karambwan_combo(void) {
+    printf("--- player food transition ---\n");
+
+    Player p = {0};
+    p.base_hitpoints = 99;
+    p.current_hitpoints = 40;
+    p.food_count = 1;
+    p.karambwan_count = 1;
+
+    ASSERT_EQ(osrs_player_can_eat_food_type(&p, FOOD_SHARK), 1, "player can eat shark");
+    OsrsPlayerEatResult r = osrs_player_eat_food_type(&p, FOOD_SHARK);
+    ASSERT_EQ(r.consumed, 1, "player shark consumed");
+    ASSERT_EQ(r.hp_healed, 20, "player shark heals 20");
+    ASSERT_EQ(p.current_hitpoints, 60, "player shark hp");
+    ASSERT_EQ(p.food_count, 0, "player shark decrements food");
+    ASSERT_EQ(p.food_timer, 3, "player shark sets food timer");
+    ASSERT_EQ(p.attack_timer, 3, "player shark delays attack");
+    ASSERT_EQ(p.ate_food_this_tick, 1, "player shark event set");
+
+    ASSERT_EQ(osrs_player_can_eat_food_type(&p, FOOD_SHARK), 0, "player food timer blocks shark");
+    ASSERT_EQ(osrs_player_can_eat_food_type(&p, FOOD_KARAMBWAN), 1, "player food timer does not block karambwan");
+
+    r = osrs_player_eat_food_type(&p, FOOD_KARAMBWAN);
+    ASSERT_EQ(r.consumed, 1, "player karambwan consumed");
+    ASSERT_EQ(r.hp_healed, 18, "player karambwan heals 18");
+    ASSERT_EQ(p.current_hitpoints, 78, "player karambwan hp");
+    ASSERT_EQ(p.karambwan_count, 0, "player karambwan decrements count");
+    ASSERT_EQ(p.karambwan_timer, 2, "player karambwan sets timer");
+    ASSERT_EQ(p.potion_timer, 3, "player karambwan sets potion timer");
+    ASSERT_EQ(p.attack_timer, 5, "player karambwan stacks attack delay");
+    ASSERT_EQ(p.ate_karambwan_this_tick, 1, "player karambwan event set");
+}
+
 int main(void) {
     test_food_heal_amount();
     test_eat_food();
     test_drink_potion();
     test_brew();
     test_combo_timing();
+    test_player_food_transition_allows_shark_karambwan_combo();
 
     printf("\n=== results: %d/%d passed ===\n", passed_tests, total_tests);
     return (passed_tests == total_tests) ? 0 : 1;

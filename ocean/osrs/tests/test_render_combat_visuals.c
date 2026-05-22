@@ -152,6 +152,19 @@ static void test_projectile_profiles_match_runec_visual_rows(void) {
     assert(trident->projectile_model_id == OSRS_PROJECTILE_MODEL_TRIDENT);
     assert(trident->projectile_anim_id == OSRS_PROJECTILE_ANIM_TRIDENT);
 
+    const OsrsCombatVisualRow* sang_row =
+        osrs_combat_visual_find_item_id(22481, ATTACK_STYLE_MAGIC);
+    assert(sang_row);
+    assert(sang_row->attack_anim_id == OSRS_PLAYER_POWERED_STAFF_ATTACK_ANIM);
+    const OsrsCombatProjectileProfile* sang =
+        osrs_combat_visual_magic_projectile_profile(ITEM_SANGUINESTI_STAFF);
+    assert(sang);
+    assert(sang->launch_spotanim_id == GFX_TRIDENT_CAST);
+    assert(sang->travel_spotanim_id == GFX_TRIDENT_PROJ);
+    assert(sang->impact_spotanim_id == GFX_TRIDENT_IMPACT);
+    assert(sang->projectile_model_id == OSRS_PROJECTILE_MODEL_TRIDENT);
+    assert(sang->projectile_anim_id == OSRS_PROJECTILE_ANIM_TRIDENT);
+
     const OsrsCombatVisualRow* eye =
         osrs_combat_visual_find_item_id(OSRS_ITEM_ID_EYE_OF_AYAK, ATTACK_STYLE_MAGIC);
     assert(eye);

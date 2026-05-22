@@ -38,6 +38,24 @@ typedef struct {
 #define OBS_TENSOR_T FloatTensor
 #define Env PvpEnv
 
+static void pvp_env_set_gear_tier(Env* env, int tier) {
+    if (tier == -1) {
+        env->pvp.pvp_runtime.gear_tier_weights[0] = 0.60f;
+        env->pvp.pvp_runtime.gear_tier_weights[1] = 0.25f;
+        env->pvp.pvp_runtime.gear_tier_weights[2] = 0.10f;
+        env->pvp.pvp_runtime.gear_tier_weights[3] = 0.05f;
+        return;
+    }
+
+    if (tier < 0 || tier > 3) {
+        fprintf(stderr, "osrs_pvp invalid gear_tier %d\n", tier);
+        abort();
+    }
+
+    for (int i = 0; i < 4; i++) env->pvp.pvp_runtime.gear_tier_weights[i] = 0.0f;
+    env->pvp.pvp_runtime.gear_tier_weights[tier] = 1.0f;
+}
+
 void c_step(Env* env) {
     for (int i = 0; i < NUM_ATNS; i++) {
         env->ocean_acts_staging[i] = (int)env->actions[i];
@@ -149,10 +167,8 @@ void my_init(Env* env, Dict* kwargs) {
     env->pvp.shaping.click_penalty_threshold = 5;
     env->pvp.shaping.click_penalty_coef = -0.003f;
 
-    env->pvp.pvp_runtime.gear_tier_weights[0] = 1.0f;
-    env->pvp.pvp_runtime.gear_tier_weights[1] = 0.0f;
-    env->pvp.pvp_runtime.gear_tier_weights[2] = 0.0f;
-    env->pvp.pvp_runtime.gear_tier_weights[3] = 0.0f;
+    DictItem* gear_tier = dict_get_unsafe(kwargs, "gear_tier");
+    pvp_env_set_gear_tier(env, gear_tier ? (int)gear_tier->value : 3);
 
     pvp_reset(&env->pvp);
 }

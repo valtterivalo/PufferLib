@@ -72,6 +72,7 @@
       "files": [
         "sprites/items/30070.png",
         "sprites/items/28945.png",
+        "sprites/items/27641.png",
         "sprites/items/item_stack_variants.tsv"
       ]
     },

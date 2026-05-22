@@ -170,6 +170,14 @@ if [ "$MODE" = "web" ]; then
             fi
             PRELOAD="$PRELOAD --preload-file $INFERNO_WEB_POLICY@resources/osrs_inferno/osrs_inferno_redemption_j6bgoiu4_compact.bin"
         fi
+        ZULRAH_WEB_POLICY="checkpoints/osrs_zulrah/website/osrs_zulrah_generalized_52m.bin"
+        if [ -f "$ZULRAH_WEB_POLICY" ]; then
+            PRELOAD="$PRELOAD --preload-file $ZULRAH_WEB_POLICY@resources/osrs_zulrah/osrs_zulrah_generalized_52m.bin"
+        fi
+        PVP_WEB_POLICY="checkpoints/osrs_pvp/website/osrs_pvp_website.bin"
+        if [ -f "$PVP_WEB_POLICY" ]; then
+            PRELOAD="$PRELOAD --preload-file $PVP_WEB_POLICY@resources/osrs_pvp/osrs_pvp_website.bin"
+        fi
     fi
     if [ ! -f "$SHELL_FILE" ]; then
         if [ "$SHELL_FILE" = "./minshell.html" ]; then

@@ -9,3 +9,6 @@
 *.cmap
 *.bin
 sprites/
+!sprites/
+!sprites/items/
+!sprites/items/27641.png

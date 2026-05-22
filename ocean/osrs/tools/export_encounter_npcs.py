@@ -401,27 +401,26 @@ def main() -> None:
         npc_defs[npc_id] = npc
         npc_comments[npc_id] = comment
 
-        # resolve attack anim names -> IDs
         attack_names = vis.get("attack_anims", [])
         if attack_names:
             attack_ids = resolve_names(attack_names, anim_ids, context=f"NPC {npc_id} attack_anims")
         else:
             attack_ids = []
+        attack_ids += vis.get("attack_anim_ids", [])
         npc_attack_anims[npc_id] = attack_ids
         for name, aid in zip(attack_names, attack_ids):
             anim_name_to_id[name] = aid
 
-        # resolve extra anim names -> IDs
         extra_names = vis.get("extra_anims", [])
         if extra_names:
             extra_ids = resolve_names(extra_names, anim_ids, context=f"NPC {npc_id} extra_anims")
         else:
             extra_ids = []
+        extra_ids += vis.get("extra_anim_ids", [])
         npc_extra_anims[npc_id] = extra_ids
         for name, eid in zip(extra_names, extra_ids):
             anim_name_to_id[name] = eid
 
-        # collect all anim IDs: idle + walk from cache, attack + extra from gameval
         for anim_id in [npc.idle_anim, npc.walk_anim]:
             if anim_id >= 0:
                 all_anim_ids.add(anim_id)

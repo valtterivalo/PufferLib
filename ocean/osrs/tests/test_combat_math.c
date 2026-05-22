@@ -321,6 +321,11 @@ static void test_hit_delays(void) {
     ASSERT_INT_EQ("bp d=6 npc",  encounter_blowpipe_hit_delay(6, 0), 2); /* 1+1=2 */
     ASSERT_INT_EQ("bp d=6 plr",  encounter_blowpipe_hit_delay(6, 1), 3);
     ASSERT_INT_EQ("bp d=12 npc", encounter_blowpipe_hit_delay(12, 0), 3); /* 2+1=3 */
+
+    ASSERT_INT_EQ("eye of ayak d=1", encounter_eye_of_ayak_hit_delay(1), 1);
+    ASSERT_INT_EQ("eye of ayak d=2", encounter_eye_of_ayak_hit_delay(2), 1);
+    ASSERT_INT_EQ("eye of ayak d=3", encounter_eye_of_ayak_hit_delay(3), 2);
+    ASSERT_INT_EQ("eye of ayak d=8", encounter_eye_of_ayak_hit_delay(8), 2);
 }
 
 static void test_projectile_delay_options(void) {
@@ -362,6 +367,10 @@ static void test_projectile_delay_options(void) {
         encounter_projectile_hit_delay(11, 0, ENCOUNTER_PROJECTILE_DELAY_DARK_BOW_SECOND,
             (EncounterProjectileDelayOptions){0}),
         encounter_dark_bow_second_hit_delay(11, 0));
+    ASSERT_INT_EQ("eye of ayak projectile delay",
+        encounter_projectile_hit_delay(6, 1, ENCOUNTER_PROJECTILE_DELAY_EYE_OF_AYAK,
+            (EncounterProjectileDelayOptions){0}),
+        2);
 }
 
 static void test_projectile_distance_modes(void) {

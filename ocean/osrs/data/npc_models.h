@@ -38,11 +38,15 @@ static const NpcModelMapping NPC_MODEL_MAP_ZULRAH[] = {
 #define SNAKELING_ANIM_WALK    2405  /* walk cycle */
 
 /* zulrah spotanim (projectile/cloud) model IDs */
-#define GFX_RANGED_PROJ_MODEL  20390  /* GFX 1044 ranged projectile */
-#define GFX_CLOUD_PROJ_MODEL   11221  /* GFX 1045 cloud projectile */
-#define GFX_MAGIC_PROJ_MODEL   26593  /* GFX 1046 magic projectile */
+#define GFX_RANGED_PROJ_MODEL  ZUL_GEN_GFX_1044_MODEL
+#define GFX_RANGED_PROJ_ANIM   ZUL_GEN_GFX_1044_ANIM
+#define GFX_CLOUD_PROJ_MODEL   ZUL_GEN_GFX_1045_MODEL
+#define GFX_CLOUD_PROJ_ANIM    ZUL_GEN_GFX_1045_ANIM
+#define GFX_MAGIC_PROJ_MODEL   ZUL_GEN_GFX_1046_MODEL
+#define GFX_MAGIC_PROJ_ANIM    ZUL_GEN_GFX_1046_ANIM
 #define GFX_TOXIC_CLOUD_MODEL   4086  /* object 11700 */
-#define GFX_SNAKELING_SPAWN_MODEL 20390  /* GFX 1047 spawn orb */
+#define GFX_SNAKELING_SPAWN_MODEL ZUL_GEN_GFX_1047_MODEL
+#define GFX_SNAKELING_SPAWN_ANIM  ZUL_GEN_GFX_1047_ANIM
 
 /* zulrah animation sequence IDs */
 #define ZULRAH_ANIM_ATTACK        ZUL_GEN_ANIM_SNAKEBOSS_ATTACK_ACIDX3
@@ -55,7 +59,6 @@ static const NpcModelMapping NPC_MODEL_MAP_ZULRAH[] = {
 #define ZULRAH_ANIM_TAIL_RIGHT    ZUL_GEN_ANIM_SNAKEBOSS_ATTACK_TAIL_RIGHT
 #define ZULRAH_ANIM_DEATH         ZUL_GEN_ANIM_SNAKEBOSS_DEATH
 #define ZULRAH_ANIM_DEFEND        ZUL_GEN_ANIM_SNAKEBOSS_DEFEND
-#define GFX_SNAKELING_SPAWN_ANIM 5358
 
 /* ================================================================ */
 /* inferno NPC model/animation mappings (generated) */

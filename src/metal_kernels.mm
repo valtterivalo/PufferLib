@@ -556,12 +556,63 @@ static void dispatch_scan_backward(const char *kernel_name, PrefixScan &scan,
   mtl_dispatch_1d(ms, pso, scan.B * scan.H);
 }
 
+static void dispatch_scan_forward_reset(const char *kernel_name, PrefixScan &scan,
+                                         cudaStream_t stream) {
+  MetalStream *ms = mtl_resolve_stream(stream);
+  ms->compute_encoder();
+  auto pso = mtl_pipeline(kernel_name);
+  mtl_set_pso(ms, pso);
+  mtl_set_ptr(ms, scan.out.data, 0);
+  mtl_set_ptr(ms, scan.next_state.data, 1);
+  mtl_set_ptr(ms, scan.a_star.data, 2);
+  mtl_set_ptr(ms, scan.s_vals.data, 3);
+  mtl_set_ptr(ms, scan.log_values_buf.data, 4);
+  mtl_set_ptr(ms, scan.combined_ptr, 5);
+  mtl_set_ptr(ms, scan.state_ptr, 6);
+  mtl_set_ptr(ms, scan.input_ptr, 7);
+  mtl_set_ptr(ms, scan.reset_ptr, 8);
+  struct { int T_seq, H, B; } params = {scan.T, scan.H, scan.B};
+  mtl_set_params(ms, params, 9);
+  mtl_dispatch_1d(ms, pso, scan.B * scan.H);
+}
+
+static void dispatch_scan_backward_reset(const char *kernel_name, PrefixScan &scan,
+                                          const void *grad, const void *grad_next_state,
+                                          cudaStream_t stream) {
+  MetalStream *ms = mtl_resolve_stream(stream);
+  ms->compute_encoder();
+  auto pso = mtl_pipeline(kernel_name);
+  mtl_set_pso(ms, pso);
+  mtl_set_ptr(ms, scan.grad_combined.data, 0);
+  mtl_set_ptr(ms, scan.grad_state.data, 1);
+  mtl_set_ptr(ms, scan.grad_input.data, 2);
+  mtl_set_ptr(ms, grad, 3);
+  mtl_set_ptr(ms, grad_next_state, 4);
+  mtl_set_ptr(ms, scan.combined_ptr, 5);
+  mtl_set_ptr(ms, scan.state_ptr, 6);
+  mtl_set_ptr(ms, scan.input_ptr, 7);
+  mtl_set_ptr(ms, scan.a_star.data, 8);
+  mtl_set_ptr(ms, scan.s_vals.data, 9);
+  mtl_set_ptr(ms, scan.log_values_buf.data, 10);
+  mtl_set_ptr(ms, scan.reset_ptr, 11);
+  struct { int T_seq, H, B; } params = {scan.T, scan.H, scan.B};
+  mtl_set_params(ms, params, 12);
+  mtl_dispatch_1d(ms, pso, scan.B * scan.H);
+}
+
 void mtl_mingru_scan_forward(PrefixScan &scan, cudaStream_t stream) {
   dispatch_scan_forward("mingru_scan_forward_checkpointed", scan, stream);
 }
 void mtl_mingru_scan_backward(PrefixScan &scan, const float *grad,
                                const float *grad_next_state, cudaStream_t stream) {
   dispatch_scan_backward("mingru_scan_backward_checkpointed", scan, grad, grad_next_state, stream);
+}
+void mtl_mingru_scan_forward_reset(PrefixScan &scan, cudaStream_t stream) {
+  dispatch_scan_forward_reset("mingru_scan_forward_reset", scan, stream);
+}
+void mtl_mingru_scan_backward_reset(PrefixScan &scan, const float *grad,
+                                     const float *grad_next_state, cudaStream_t stream) {
+  dispatch_scan_backward_reset("mingru_scan_backward_reset", scan, grad, grad_next_state, stream);
 }
 void mtl_mingru_scan_forward_fp16(PrefixScan &scan, cudaStream_t stream) {
   dispatch_scan_forward("mingru_scan_forward_checkpointed_fp16", scan, stream);
@@ -570,12 +621,20 @@ void mtl_mingru_scan_backward_fp16(PrefixScan &scan, const void *grad,
                                     const void *grad_next_state, cudaStream_t stream) {
   dispatch_scan_backward("mingru_scan_backward_checkpointed_fp16", scan, grad, grad_next_state, stream);
 }
+void mtl_mingru_scan_forward_reset_fp16(PrefixScan &scan, cudaStream_t stream) {
+  dispatch_scan_forward_reset("mingru_scan_forward_reset_fp16", scan, stream);
+}
+void mtl_mingru_scan_backward_reset_fp16(PrefixScan &scan, const void *grad,
+                                          const void *grad_next_state, cudaStream_t stream) {
+  dispatch_scan_backward_reset("mingru_scan_backward_reset_fp16", scan, grad, grad_next_state, stream);
+}
 
 // Dispatch GPU sampling kernel on the current command buffer (no sync).
 // Call BEFORE ensure_gpu_synced so sampling runs in the same command buffer
 // as the forward pass.
 void mtl_sample_logits_dispatch_to(
     PrecisionTensor &dec_out, IntTensor &act_sizes_puf,
+    PufTensor &logstd, bool is_continuous,
     float *action_out_f32, float *logprobs, float *value_out,
     const float *action_mask, int mask_stride,
     uint64_t seed, uint32_t *offset_ptr, cudaStream_t stream) {
@@ -596,7 +655,7 @@ void mtl_sample_logits_dispatch_to(
   mtl_set_ptr(ms, logprobs, 1);
   mtl_set_ptr(ms, value_out, 2);
   mtl_set_ptr(ms, dec_out.data, 3);
-  mtl_set_ptr(ms, dec_out.data, 4);  // dummy logstd (discrete only)
+  mtl_set_ptr(ms, is_continuous ? logstd.bytes : (void*)dec_out.data, 4);
   // value column is the last fused decoder column.
   mtl_set_ptr(ms, dec_out.data + (fused_cols - 1), 5);
   mtl_set_ptr(ms, act_sizes_puf.data, 6);
@@ -615,7 +674,7 @@ void mtl_sample_logits_dispatch_to(
     int is_continuous;
     int mask_stride;
   } params = {seed, offset_snapshot, num_atns, A_total, B,
-              fused_cols, 0, fused_cols, 0, mask_stride};
+              fused_cols, 0, fused_cols, is_continuous ? 1 : 0, mask_stride};
   mtl_set_params(ms, params, 7);
 
   mtl_set_ptr(ms, (void *)action_mask, 8);
@@ -663,7 +722,6 @@ void ppo_loss_fwd_bwd(PufTensor &dec_out, PufTensor &logstd, TrainGraph &graph,
                        float clip_coef, float vf_clip_coef, float vf_coef,
                        float ent_coef, PPOBuffersPuf &bufs, bool is_continuous,
                        const float *ext_mask_ptr, int ext_mask_stride,
-                       const FloatTensor *full_batch_adv,
                        cudaStream_t stream) {
   int N = (int)dec_out.shape[0], T = (int)dec_out.shape[1];
   int fused_cols = (int)dec_out.shape[2];
@@ -680,15 +738,13 @@ void ppo_loss_fwd_bwd(PufTensor &dec_out, PufTensor &logstd, TrainGraph &graph,
   MetalStream *ms = mtl_resolve_stream(stream);
 
   {
-    const float *adv_data = full_batch_adv ? full_batch_adv->data : graph.mb_advantages.data;
-    int64_t adv_count = full_batch_adv ? puf_numel(full_batch_adv->shape) : puf_numel(graph.mb_advantages.shape);
     ms->compute_encoder();
     auto pso = mtl_pipeline("var_mean_kernel");
     mtl_set_pso(ms, pso);
-    mtl_set_ptr(ms, adv_data, 0);
+    mtl_set_ptr(ms, graph.mb_advantages.data, 0);
     mtl_set_ptr(ms, bufs.adv_scratch.data, 1);
     mtl_set_ptr(ms, bufs.adv_scratch.data + 1, 2);
-    struct { int count; } params = {(int)adv_count};
+    struct { int count; } params = {(int)puf_numel(graph.mb_advantages.shape)};
     mtl_set_params(ms, params, 3);
     mtl_dispatch_groups(ms, pso, 1, 256);
   }
@@ -945,6 +1001,9 @@ void mtl_select_copy(RolloutBuf &rollouts, TrainGraph &graph,
   int lp_row_bytes = (int)(puf_numel(rollouts.logprobs.shape) /
                            rollouts.logprobs.shape[0]) *
                      (int)sizeof(float);
+  int term_row_bytes = (int)(puf_numel(rollouts.terminals.shape) /
+                             rollouts.terminals.shape[0]) *
+                       (int)sizeof(float);
   int horizon = (int)rollouts.values.shape[1];
 
   MetalStream *ms = mtl_resolve_stream(stream);
@@ -959,23 +1018,25 @@ void mtl_select_copy(RolloutBuf &rollouts, TrainGraph &graph,
   mtl_set_ptr(ms, graph.mb_advantages.data, 4);
   mtl_set_ptr(ms, graph.mb_returns.data, 5);
   mtl_set_ptr(ms, graph.mb_prio.data, 6);
-  mtl_set_ptr(ms, rollouts.observations.data, 7);
-  mtl_set_ptr(ms, rollouts.actions.data, 8);
-  mtl_set_ptr(ms, rollouts.logprobs.data, 9);
-  mtl_set_ptr(ms, rollouts.values.data, 10);
-  mtl_set_ptr(ms, advantages, 11);
-  mtl_set_ptr(ms, idx, 12);
-  mtl_set_ptr(ms, mb_prio, 13);
+  mtl_set_ptr(ms, graph.mb_terminals.data, 7);
+  mtl_set_ptr(ms, rollouts.observations.data, 8);
+  mtl_set_ptr(ms, rollouts.actions.data, 9);
+  mtl_set_ptr(ms, rollouts.logprobs.data, 10);
+  mtl_set_ptr(ms, rollouts.values.data, 11);
+  mtl_set_ptr(ms, advantages, 12);
+  mtl_set_ptr(ms, idx, 13);
+  mtl_set_ptr(ms, mb_prio, 14);
+  mtl_set_ptr(ms, rollouts.terminals.data, 15);
 
   struct {
-    int obs_row_bytes, act_row_bytes, lp_row_bytes, horizon, train_fp16;
-  } params = {obs_row_bytes, act_row_bytes, lp_row_bytes, horizon, train_fp16 ? 1 : 0};
-  mtl_set_params(ms, params, 14);
+    int obs_row_bytes, act_row_bytes, lp_row_bytes, term_row_bytes, horizon, train_fp16;
+  } params = {obs_row_bytes, act_row_bytes, lp_row_bytes, term_row_bytes, horizon, train_fp16 ? 1 : 0};
+  mtl_set_params(ms, params, 16);
 
-  mtl_set_ptr(ms, fp16_obs_out, 15);
+  mtl_set_ptr(ms, fp16_obs_out, 17);
 
-  // 2D dispatch: (mb_segs, 5) threadgroups, 256 threads each
-  [ms->enc dispatchThreadgroups:MTLSizeMake(mb_segs, 5, 1)
+  // 2D dispatch: (mb_segs, 6) threadgroups, 256 threads each
+  [ms->enc dispatchThreadgroups:MTLSizeMake(mb_segs, 6, 1)
       threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
 }
 
@@ -1014,6 +1075,10 @@ void mtl_anchor_blend_weights(float *weights, const float *anchor,
 }
 
 static constexpr int kMuonNsIters = 5;
+
+static void muon_addmm_dependency_boundary(cudaStream_t stream) {
+  mtl_ensure_stream_synced(stream);
+}
 
 // ============================================================================
 // Kaiming uniform init (CPU-side, matches CUDA puf_kaiming_init)
@@ -1111,9 +1176,9 @@ void muon_step(Muon *m, cudaStream_t stream) {
     float *up_ptr = m->up_puf.data + offset;
     int64_t R = e.shape[0];
     int64_t C = puf_numel(e.shape) / std::max<int64_t>(1, R);
-    // NS orthogonalization for 2D+ params with M >= 2.
-    // 1-row tensors (e.g. value weight) use direct gradient update.
-    if (puf_ndim(e.shape) >= 2 && std::min(R, C) >= 2) {
+    // Match CUDA Muon: every 2D parameter goes through polar projection,
+    // including 1-row and 1-column output matrices.
+    if (puf_ndim(e.shape) >= 2) {
       bool transposed_flag = R > C;
       int64_t M = transposed_flag ? C : R;
       int64_t N = transposed_flag ? R : C;
@@ -1161,11 +1226,11 @@ void muon_step(Muon *m, cudaStream_t stream) {
         puf_copy(gram, A, stream);
         mtl_barrier(ms);
         puf_addmm_nn(A, A, gram, c, b, stream);
-        mtl_barrier(ms);
+        muon_addmm_dependency_boundary(stream);
         puf_copy(dst, src, stream);
         mtl_barrier(ms);
         puf_addmm_nn(gram, src, dst, 1.0f, a, stream);
-        mtl_barrier(ms);
+        muon_addmm_dependency_boundary(stream);
       }
 
       PufTensor &result_precision = (kMuonNsIters % 2 == 0) ? x : tmp;
@@ -1498,6 +1563,7 @@ static PrecisionTensor mingru_forward(void *w, PrecisionTensor x,
 
 static PrecisionTensor mingru_forward_train(void *w, PrecisionTensor x,
                                             PrecisionTensor state,
+                                            PrecisionTensor reset,
                                             void *activations,
                                             cudaStream_t stream) {
   MinGRUWeights *m = (MinGRUWeights *)w;
@@ -1514,8 +1580,13 @@ static PrecisionTensor mingru_forward_train(void *w, PrecisionTensor x,
     a->scan_bufs[i].combined_ptr = a->combined_bufs[i].data;
     a->scan_bufs[i].state_ptr = state_i.data;
     a->scan_bufs[i].input_ptr = a->saved_inputs[i].data;
-    if (x.dtype_size == 2) {
+    a->scan_bufs[i].reset_ptr = reset.data;
+    if (x.dtype_size == 2 && reset.data) {
+      mtl_mingru_scan_forward_reset_fp16(a->scan_bufs[i], stream);
+    } else if (x.dtype_size == 2) {
       mtl_mingru_scan_forward_fp16(a->scan_bufs[i], stream);
+    } else if (reset.data) {
+      mtl_mingru_scan_forward_reset(a->scan_bufs[i], stream);
     } else {
       mtl_mingru_scan_forward(a->scan_bufs[i], stream);
     }
@@ -1538,9 +1609,15 @@ static PrecisionTensor mingru_backward(void *w, PrecisionTensor grad,
 
   for (int i = m->num_layers - 1; i >= 0; i--) {
     PrefixScan &scan = a->scan_bufs[i];
-    if (grad.dtype_size == 2) {
+    if (grad.dtype_size == 2 && scan.reset_ptr) {
+      mtl_mingru_scan_backward_reset_fp16(scan, grad.data,
+                                          a->grad_next_state.data, stream);
+    } else if (grad.dtype_size == 2) {
       mtl_mingru_scan_backward_fp16(scan, grad.data,
                                     a->grad_next_state.data, stream);
+    } else if (scan.reset_ptr) {
+      mtl_mingru_scan_backward_reset(scan, grad.data,
+                                     a->grad_next_state.data, stream);
     } else {
       mtl_mingru_scan_backward(scan, grad.data,
                                a->grad_next_state.data, stream);

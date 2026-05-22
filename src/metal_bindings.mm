@@ -194,6 +194,12 @@ static void rollouts(py::object pufferl_obj) {
 
     auto t0 = std::chrono::high_resolution_clock::now();
     if (!pufferl.cpu_inference) puf_set_gpu_training(true);
+    if (pufferl.hypers.reset_state) {
+        for (size_t i = 0; i < pufferl.buffer_states.size(); i++) {
+            cudaStream_t stream = i < pufferl.rollout_streams.size() ? pufferl.rollout_streams[i] : 0;
+            puf_zero(&pufferl.buffer_states[i], stream);
+        }
+    }
     static_vec_omp_step(pufferl.vec);
     if (!pufferl.cpu_inference) puf_set_gpu_training(false);
     float sec = std::chrono::duration<float>(
@@ -445,9 +451,10 @@ static void py_puff_advantage_cpu(
             float imp = importance[offset + t];
             float rho_t = imp < rho_clip ? imp : rho_clip;
             float c_t = imp < c_clip ? imp : c_clip;
-            float delta = rho_t * rewards[offset + next_t]
-                + gamma * values[offset + next_t] * next_nonterminal
-                - values[offset + t];
+            bool vector_mode = (horizon % 4) == 0;
+            float delta = vector_mode
+                ? rho_t * (rewards[offset + next_t] + gamma * values[offset + next_t] * next_nonterminal - values[offset + t])
+                : rho_t * rewards[offset + next_t] + gamma * values[offset + next_t] * next_nonterminal - values[offset + t];
             last = delta + gamma * lambda * c_t * last * next_nonterminal;
             advantages[offset + t] = last;
         }
@@ -463,6 +470,11 @@ static double get_config(py::dict& kwargs, const char* key) {
     } catch (const py::cast_error&) {
         throw std::invalid_argument(std::string(key) + " must be numeric");
     }
+}
+
+static double get_optional_config(py::dict& kwargs, const char* key, double default_value) {
+    if (!kwargs.contains(key)) return default_value;
+    return get_config(kwargs, key);
 }
 
 static int get_config_int(py::dict& kwargs, const char* key) {
@@ -639,12 +651,25 @@ static std::unique_ptr<PuffeRL> create_pufferl(py::dict args) {
     hypers.vtrace_c_clip = get_config(train_kwargs, "vtrace_c_clip");
     hypers.prio_alpha = get_config(train_kwargs, "prio_alpha");
     hypers.prio_beta0 = get_config(train_kwargs, "prio_beta0");
-    hypers.reset_state =
-        (args.contains("reset_state") && get_config(args, "reset_state") > 0) ||
-        (train_kwargs.contains("reset_state") && get_config(train_kwargs, "reset_state") > 0);
+    hypers.anneal_prio_beta = get_config(train_kwargs, "anneal_prio_beta") > 0;
+    int state_curriculum_mode =
+        (int)get_optional_config(train_kwargs, "state_curriculum_mode", 1.0);
+    if (state_curriculum_mode < 0 || state_curriculum_mode > 1) {
+        throw std::runtime_error("state_curriculum_mode must be 0 or 1");
+    }
+    if (state_curriculum_mode != 0 ||
+            get_config(train_kwargs, "state_buffer_size") > 0.0 ||
+            get_config(train_kwargs, "cl_frac") > 0.0 ||
+            get_config(train_kwargs, "warmup_states") > 0.0) {
+        throw std::runtime_error("state-buffer curriculum is implemented only in CUDA");
+    }
+    if ((train_kwargs.contains("gpus") && get_config(train_kwargs, "gpus") > 1.0) ||
+            (args.contains("world_size") && get_config(args, "world_size") > 1.0)) {
+        throw std::runtime_error("Metal backend does not support multi-GPU");
+    }
+    hypers.reset_state = args.contains("reset_state") && get_config(args, "reset_state") > 0;
     hypers.terminal_reset_state =
-        (args.contains("terminal_reset_state") && get_config(args, "terminal_reset_state") > 0) ||
-        (train_kwargs.contains("terminal_reset_state") && get_config(train_kwargs, "terminal_reset_state") > 0);
+        train_kwargs.contains("terminal_reset_state") && get_config(train_kwargs, "terminal_reset_state") > 0;
     hypers.profile = train_kwargs.contains("profile") ? get_config(train_kwargs, "profile")
         : args.contains("profile") ? get_config(args, "profile") : 0;
     hypers.overlap =
@@ -873,6 +898,7 @@ PYBIND11_MODULE(_C, m) {
         .def_readwrite("vtrace_c_clip", &HypersT::vtrace_c_clip)
         .def_readwrite("prio_alpha", &HypersT::prio_alpha)
         .def_readwrite("prio_beta0", &HypersT::prio_beta0)
+        .def_readwrite("anneal_prio_beta", &HypersT::anneal_prio_beta)
         .def_readwrite("reset_state", &HypersT::reset_state)
         .def_readwrite("terminal_reset_state", &HypersT::terminal_reset_state)
         .def_readwrite("profile", &HypersT::profile)
@@ -914,6 +940,14 @@ PYBIND11_MODULE(_C, m) {
         .def("log", &vec_log)
         .def("close", &vec_close);
 
+    m.def("env_obs_size", []() -> int { return get_obs_size(); });
+    m.def("env_num_action_heads", []() -> int { return get_num_atns(); });
+    m.def("env_action_dims", []() {
+        py::list dims;
+        int* sizes = get_act_sizes();
+        for (int i = 0; i < get_num_act_sizes(); i++) dims.append(sizes[i]);
+        return dims;
+    });
     m.def("create_pufferl", &create_pufferl);
     py::class_<PuffeRL, std::unique_ptr<PuffeRL>>(m, "PuffeRL")
         .def_readwrite("policy", &PuffeRL::policy)

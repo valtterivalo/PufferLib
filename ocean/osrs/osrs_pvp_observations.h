@@ -11,6 +11,7 @@
 
 #include <string.h>
 #include "osrs_types.h"
+#include "osrs_player_consumables.h"
 #include "osrs_pvp_gear.h"
 #include "osrs_pvp_combat.h"
 #include "osrs_encounter.h"  // for ENCOUNTER_OVERHEAD_* / ENCOUNTER_OFFENSIVE_* encoding
@@ -97,24 +98,12 @@ static inline int can_use_potion(Player* p, int potion_type) {
 
 /** Check if food is available and player not at full HP. */
 static inline int can_eat_food(Player* p) {
-    if (remaining_ticks(p->food_timer) > 0) {
-        return 0;
-    }
-    if (p->food_count <= 0) {
-        return 0;
-    }
-    return p->current_hitpoints < p->base_hitpoints;
+    return osrs_player_can_eat_food_type(p, FOOD_SHARK);
 }
 
 /** Check if karambwan is available and player not at full HP. */
 static inline int can_eat_karambwan(Player* p) {
-    if (remaining_ticks(p->karambwan_timer) > 0) {
-        return 0;
-    }
-    if (p->karambwan_count <= 0) {
-        return 0;
-    }
-    return p->current_hitpoints < p->base_hitpoints;
+    return osrs_player_can_eat_food_type(p, FOOD_KARAMBWAN);
 }
 
 /** Check if target is about to attack (tank gear useful). */

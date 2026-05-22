@@ -14,7 +14,7 @@
  *     EncounterOverlay                 visual overlay (hazards, projectiles, boss)
  *
  *   prayer (set/refresh semantic for RL tick commands):
- *     ENCOUNTER_OVERHEAD_*                canonical overhead action encoding (5/7 dim)
+ *     ENCOUNTER_OVERHEAD_*                canonical overhead action encoding (5/6/7 dim)
  *     ENCOUNTER_OFFENSIVE_*               canonical offensive action encoding (5 dim)
  *     encounter_apply_overhead_action()   apply overhead action, returns 1 on activation
  *     encounter_apply_offensive_action()  apply offensive action, returns 1 on activation
@@ -65,6 +65,7 @@
 #include "osrs_items.h"
 #include "osrs_pathfinding.h"
 #include "osrs_combat.h"
+#include "osrs_consumables.h"
 #include "osrs_item_effects.h"
 #include "osrs_human_input_types.h"
 
@@ -432,6 +433,7 @@ static inline RenderEntityFacingMode render_entity_select_facing_mode(
 
 /** Fill a RenderEntity from a Player struct. */
 static inline void render_entity_from_player(const Player* p, RenderEntity* out) {
+    memset(out, 0, sizeof(RenderEntity));
     out->entity_type = p->entity_type;
     out->npc_def_id = p->npc_def_id;
     out->npc_visible = p->npc_visible;
@@ -455,6 +457,7 @@ static inline void render_entity_from_player(const Player* p, RenderEntity* out)
     out->hit_landed_this_tick = p->hit_landed_this_tick;
     out->hit_damage = p->hit_damage;
     out->hit_was_successful = p->hit_was_successful;
+    out->hit_spell_type = 0;
     out->elysian_proc_this_tick = p->elysian_proc_this_tick;
     out->cast_veng_this_tick = p->cast_veng_this_tick;
     out->ate_food_this_tick = p->ate_food_this_tick;
@@ -487,7 +490,8 @@ static inline void encounter_resolve_attack_target(
 /* human UI clicks translate OSRS click-toggle behavior into those commands. */
 /*                                                                           */
 /* each encounter chooses its action-head dim based on which prayers it      */
-/* exposes — PvE uses 5 (no smite/redemption), PvP uses 7. new encounters    */
+/* exposes. PvE uses 5, PvE with Redemption uses 6, PvP uses 7. new          */
+/* encounters                                                               */
 /* wire up by:                                                               */
 /*   1. declaring two action heads with encounter_overhead_dim /             */
 /*      ENCOUNTER_OFFENSIVE_DIM                                              */
@@ -799,10 +803,6 @@ static inline PathResult encounter_pathfind_arena_attack_approach(
     const LOSBlocker* los_blockers, int los_blocker_count,
     int arena_base_x, int arena_base_y, int arena_w, int arena_h
 ) {
-    (void)attack_range;
-    (void)los_blockers;
-    (void)los_blocker_count;
-
     PathResult result = {0, 0, 0, src_x, src_y};
 
     if (arena_w <= 0 || arena_w > PATHFIND_ARENA_MAX ||
@@ -839,8 +839,6 @@ static inline PathResult encounter_pathfind_arena_attack_approach(
             seek_tiles, &seek_count, target_x + target_size, y,
             world_offset_x, world_offset_y, extra_blocked, blocked_ctx);
     }
-    if (seek_count == 0) return result;
-
     static _Thread_local uint16_t approach_gen[PATHFIND_ARENA_MAX][PATHFIND_ARENA_MAX];
     static _Thread_local int8_t approach_via[PATHFIND_ARENA_MAX][PATHFIND_ARENA_MAX];
     static _Thread_local int16_t approach_cost[PATHFIND_ARENA_MAX][PATHFIND_ARENA_MAX];
@@ -894,8 +892,13 @@ static inline PathResult encounter_pathfind_arena_attack_approach(
         int tile_x = arena_base_x + cur_x;
         int tile_y = arena_base_y + cur_y;
         if (is_walkable(ctx, tile_x, tile_y) &&
-                encounter_attack_seek_has_exact_tile(
-                    tile_x, tile_y, seek_tiles, seek_count)) {
+                !APPROACH_EB(tile_x, tile_y) &&
+                (seek_count > 0
+                    ? encounter_attack_seek_has_exact_tile(
+                        tile_x, tile_y, seek_tiles, seek_count)
+                    : encounter_player_can_attack(
+                        tile_x, tile_y, target_x, target_y, target_size,
+                        attack_range, los_blockers, los_blocker_count))) {
             selected_x = cur_x;
             selected_y = cur_y;
             break;
@@ -939,7 +942,7 @@ static inline PathResult encounter_pathfind_arena_attack_approach(
         }
     }
 
-    if (selected_x < 0) {
+    if (selected_x < 0 && seek_count > 0) {
         int first_local_x = seek_tiles[0].x - arena_base_x;
         int first_local_y = seek_tiles[0].y - arena_base_y;
         int scan_min_x = min_explored_x > first_local_x - PATHFIND_MAX_FALLBACK_RADIUS
@@ -1797,6 +1800,73 @@ static inline void encounter_compute_player_equipped_stats(
 /* sara brew:     heals HP, boosts def, drains att/str/ranged/magic          */
 /* super restore: restores all drained stats toward base (caps at base)      */
 /* bastion:       boosts ranged above base, boosts def                       */
+static inline void encounter_init_maxed_player_combat_stats(
+    Player* p,
+    int prayer_level
+) {
+    p->base_attack = MAXED_BASE_ATTACK;
+    p->base_strength = MAXED_BASE_STRENGTH;
+    p->base_defence = MAXED_BASE_DEFENCE;
+    p->base_ranged = MAXED_BASE_RANGED;
+    p->base_magic = MAXED_BASE_MAGIC;
+    p->base_prayer = prayer_level;
+    p->base_hitpoints = MAXED_BASE_HITPOINTS;
+
+    p->current_attack = p->base_attack;
+    p->current_strength = p->base_strength;
+    p->current_defence = p->base_defence;
+    p->current_ranged = p->base_ranged;
+    p->current_magic = p->base_magic;
+    p->current_prayer = p->base_prayer;
+    p->current_hitpoints = p->base_hitpoints;
+}
+
+static inline void encounter_apply_saturated_heart_boost(Player* p) {
+    int boost = osrs_saturated_heart_magic_boost(p->base_magic);
+    int cap = p->base_magic + boost;
+    p->current_magic += boost;
+    if (p->current_magic > cap) p->current_magic = cap;
+    p->saturated_heart_active_ticks = 500;
+}
+
+static inline int encounter_tick_saturated_heart(Player* p) {
+    if (p->saturated_heart_active_ticks <= 0) return 0;
+    p->saturated_heart_active_ticks -= 1;
+    if (p->saturated_heart_active_ticks > 0) return 0;
+    if (p->current_magic <= p->base_magic) return 0;
+    p->current_magic = p->base_magic;
+    return 1;
+}
+
+static inline int encounter_saturated_heart_protects_magic(const Player* p) {
+    if (p->saturated_heart_active_ticks <= 0) return 0;
+    int cap = p->base_magic + osrs_saturated_heart_magic_boost(p->base_magic);
+    return p->current_magic <= cap && p->current_magic > p->base_magic;
+}
+
+static inline int encounter_decay_stat_toward_base(int* current, int base) {
+    if (*current > base) {
+        *current -= 1;
+        return 1;
+    }
+    if (*current < base) {
+        *current += 1;
+        return 1;
+    }
+    return 0;
+}
+
+static inline int encounter_decay_player_combat_stats_toward_base(Player* p) {
+    int changed = 0;
+    changed |= encounter_decay_stat_toward_base(&p->current_attack, p->base_attack);
+    changed |= encounter_decay_stat_toward_base(&p->current_strength, p->base_strength);
+    changed |= encounter_decay_stat_toward_base(&p->current_defence, p->base_defence);
+    changed |= encounter_decay_stat_toward_base(&p->current_ranged, p->base_ranged);
+    if (!encounter_saturated_heart_protects_magic(p))
+        changed |= encounter_decay_stat_toward_base(&p->current_magic, p->base_magic);
+    return changed;
+}
+
 /** sara brew stat drain. call AFTER healing HP (which is encounter-specific).
     drains att/str/ranged/magic by floor(current/10)+2 each (uses CURRENT level).
     boosts defence by floor(current_def/5)+2, capped at base + max boost from base.

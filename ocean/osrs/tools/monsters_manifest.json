@@ -205,7 +205,9 @@
     "visual": {
       "group": "zulrah",
       "attack_anims": [],
+      "attack_anim_ids": [140],
       "extra_anims": [],
+      "extra_anim_ids": [138],
       "spotanims": []
     }
   },
@@ -217,7 +219,9 @@
     "visual": {
       "group": "zulrah",
       "attack_anims": [],
+      "attack_anim_ids": [185],
       "extra_anims": [],
+      "extra_anim_ids": [138],
       "spotanims": ["SNAKEBOSS_MINION_SPELL"]
     }
   }

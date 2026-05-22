@@ -281,6 +281,60 @@ kernel void mingru_scan_forward_checkpointed(
     next_state[bH + h] = max(fast::exp(a_star + s), 1e-30f);
 }
 
+kernel void mingru_scan_forward_reset(
+    device float* out               [[buffer(0)]],
+    device float* next_state        [[buffer(1)]],
+    device float* curr_buf          [[buffer(2)]],
+    device float* prev_buf          [[buffer(3)]],
+    device float* unused_buf        [[buffer(4)]],
+    const device float* combined    [[buffer(5)]],
+    const device float* state       [[buffer(6)]],
+    const device float* input       [[buffer(7)]],
+    const device float* reset       [[buffer(8)]],
+    constant ScanParams& p          [[buffer(9)]],
+    uint idx [[thread_position_in_grid]]
+) {
+    (void)unused_buf;
+    if ((int)idx >= p.B * p.H) return;
+
+    int b = (int)idx / p.H;
+    int h = (int)idx % p.H;
+    int bH = b * p.H;
+    int H3 = 3 * p.H;
+    int H2 = 2 * p.H;
+    int bHT = bH * p.T_seq;
+    int out_base = bHT + h;
+    int cbase = 3 * bHT;
+    int T_out = p.T_seq + 1;
+    int buf_base = b * T_out * p.H + h;
+
+    float prev = state[bH + h];
+    curr_buf[buf_base] = prev;
+    prev_buf[buf_base] = prev;
+
+    for (int t = 0; t < p.T_seq; t++) {
+        if (reset[b * p.T_seq + t] > 0.5f) prev = 0.0f;
+
+        int t_offset = t * H3;
+        int input_idx = out_base + t * p.H;
+        float hidden_val = combined[cbase + h + t_offset];
+        float gate_val = combined[cbase + p.H + h + t_offset];
+        float proj_val = combined[cbase + H2 + h + t_offset];
+        float x_val = input[input_idx];
+        float gate_sigmoid = sigmoid_f(gate_val);
+        float hidden_tilde = tilde_relu_fwd(hidden_val);
+        float curr = lerp_f(prev, hidden_tilde, gate_sigmoid);
+        float proj_sigmoid = sigmoid_f(proj_val);
+
+        out[input_idx] = proj_sigmoid * curr + (1.0f - proj_sigmoid) * x_val;
+        curr_buf[buf_base + (t + 1) * p.H] = curr;
+        prev_buf[buf_base + (t + 1) * p.H] = prev;
+        prev = curr;
+    }
+
+    next_state[bH + h] = prev;
+}
+
 kernel void mingru_scan_backward_checkpointed(
     device float* grad_combined          [[buffer(0)]],
     device float* grad_state             [[buffer(1)]],
@@ -412,6 +466,70 @@ kernel void mingru_scan_backward_checkpointed(
     grad_state[state_idx] = (state[state_idx] > 0.0f) ? (grad_z_0 / state[state_idx]) : 0.0f;
 }
 
+kernel void mingru_scan_backward_reset(
+    device float* grad_combined          [[buffer(0)]],
+    device float* grad_state             [[buffer(1)]],
+    device float* grad_input             [[buffer(2)]],
+    const device float* grad_out         [[buffer(3)]],
+    const device float* grad_next_state  [[buffer(4)]],
+    const device float* combined         [[buffer(5)]],
+    const device float* state            [[buffer(6)]],
+    const device float* input            [[buffer(7)]],
+    const device float* curr_buf         [[buffer(8)]],
+    const device float* prev_buf         [[buffer(9)]],
+    const device float* unused_buf       [[buffer(10)]],
+    const device float* reset            [[buffer(11)]],
+    constant ScanParams& p               [[buffer(12)]],
+    uint idx [[thread_position_in_grid]]
+) {
+    (void)state;
+    (void)unused_buf;
+    if ((int)idx >= p.B * p.H) return;
+
+    int b = (int)idx / p.H;
+    int h = (int)idx % p.H;
+    int bHT = b * p.H * p.T_seq;
+    int cbase = 3 * bHT;
+    int H3 = 3 * p.H;
+    int H2 = 2 * p.H;
+    int state_idx = b * p.H + h;
+    int out_base = bHT + h;
+    int T_out = p.T_seq + 1;
+    int buf_base = b * T_out * p.H + h;
+
+    float grad_next = grad_next_state[state_idx];
+    for (int t = p.T_seq - 1; t >= 0; t--) {
+        int t_offset = t * H3;
+        int input_idx = out_base + t * p.H;
+        float curr = curr_buf[buf_base + (t + 1) * p.H];
+        float prev = prev_buf[buf_base + (t + 1) * p.H];
+        float hidden_val = combined[cbase + h + t_offset];
+        float gate_val = combined[cbase + p.H + h + t_offset];
+        float proj_val = combined[cbase + H2 + h + t_offset];
+        float x_val = input[input_idx];
+        float gate_sigmoid = sigmoid_f(gate_val);
+        float hidden_tilde = tilde_relu_fwd(hidden_val);
+        float hidden_grad = hidden_val >= 0.0f
+            ? 1.0f
+            : hidden_tilde * (1.0f - hidden_tilde);
+        float proj_sigmoid = sigmoid_f(proj_val);
+        float grad_out_val = grad_out[input_idx];
+        float grad_curr = grad_next + grad_out_val * proj_sigmoid;
+        float grad_proj = grad_out_val * (curr - x_val) * proj_sigmoid * (1.0f - proj_sigmoid);
+        float grad_gate = grad_curr * (hidden_tilde - prev) * gate_sigmoid * (1.0f - gate_sigmoid);
+        float grad_hidden = grad_curr * gate_sigmoid * hidden_grad;
+        float grad_prev = grad_curr * (1.0f - gate_sigmoid);
+
+        grad_input[input_idx] = grad_out_val * (1.0f - proj_sigmoid);
+        grad_combined[cbase + h + t_offset] = grad_hidden;
+        grad_combined[cbase + p.H + h + t_offset] = grad_gate;
+        grad_combined[cbase + H2 + h + t_offset] = grad_proj;
+        grad_next = reset[b * p.T_seq + t] > 0.5f ? 0.0f : grad_prev;
+    }
+
+    grad_state[state_idx] = grad_next;
+}
+
 struct SampleParams {
     uint64_t seed;
     uint offset;
@@ -457,11 +575,10 @@ kernel void sample_logits_kernel(
 
     if (sp.is_continuous) {
         constexpr float LOG_2PI = 1.8378770664093453f;
-        int logstd_base = (int)idx * sp.logstd_stride;
 
         for (int h = 0; h < sp.num_atns; h++) {
             float mean = logits[logits_base + h];
-            float log_std = logstd[logstd_base + h];
+            float log_std = logstd[h];
             float std = exp(log_std);
 
             // Need 2 uniforms for Box-Muller
@@ -804,7 +921,7 @@ kernel void ppo_loss_fwd_bwd_kernel(
         } else {
             d_val_pred = val_pred - ret;
         }
-        grad_values_pred[nt] = (rw > 0.0f) ? (dL * w * pp.vf_coef * d_val_pred) : 0.0f;
+        grad_values_pred[nt] = (rw > 0.0f) ? (dL * pp.vf_coef * d_val_pred) : 0.0f;
 
         // Policy loss + gradients. Both branches produce pg_loss, total_entropy,
         // logratio, ratio — the block-loss accumulation is shared after the if/else.
@@ -817,7 +934,7 @@ kernel void ppo_loss_fwd_bwd_kernel(
             total_entropy = 0.0f;
             for (int h = 0; h < pp.num_atns; h++) {
                 float mean = logits[logits_base + h * pp.logits_stride_a];
-                float log_std = logstd[logits_base + h * pp.logits_stride_a];
+                float log_std = logstd[h];
                 float action = actions[nt * pp.num_atns + h];
                 float lp, ent;
                 ppo_continuous_head(mean, log_std, action, lp, ent);
@@ -842,7 +959,7 @@ kernel void ppo_loss_fwd_bwd_kernel(
 
             for (int h = 0; h < pp.num_atns; h++) {
                 float mean = logits[logits_base + h * pp.logits_stride_a];
-                float log_std = logstd[logits_base + h * pp.logits_stride_a];
+                float log_std = logstd[h];
                 float std = exp(log_std);
                 float var = std * std;
                 float action = actions[nt * pp.num_atns + h];
@@ -1043,7 +1160,10 @@ kernel void puff_advantage_kernel(
         float nextnonterminal = 1.0f - d[t_next];
         float rho_t = min(imp[t], p.rho_clip);
         float c_t = min(imp[t], p.c_clip);
-        float delta = rho_t * (r[t_next] + p.gamma * v[t_next] * nextnonterminal - v[t]);
+        bool vector_mode = (p.horizon % 4) == 0;
+        float delta = vector_mode
+            ? rho_t * (r[t_next] + p.gamma * v[t_next] * nextnonterminal - v[t])
+            : rho_t * r[t_next] + p.gamma * v[t_next] * nextnonterminal - v[t];
         lastpufferlam = delta + p.gamma * p.lambda * c_t * lastpufferlam * nextnonterminal;
         adv[t] = lastpufferlam;
     }
@@ -1073,10 +1193,8 @@ kernel void prio_adv_reduction_kernel(
     local_sum = simd_sum(local_sum);
 
     if (simd_lane == 0 && tx < 32) {
-        // epsilon floor prevents pow(0, alpha>0) = 0 which would permanently
-        // exclude zero-advantage segments from sampling in sparse-reward envs
-        float pw = pow(local_sum + 1e-6f, pp.prio_alpha);
-        if (isnan(pw) || isinf(pw)) pw = 1e-6f;
+        float pw = pow(local_sum, pp.prio_alpha);
+        if (isnan(pw) || isinf(pw)) pw = 0.0f;
         prio_weights[row] = pw;
     }
 }
@@ -1112,9 +1230,7 @@ kernel void prio_normalize_kernel(
     if (simd_id == 0) {
         float val = (simd_lane < NUM_WARPS) ? shmem[simd_lane] : 0.0f;
         val = simd_sum(val);
-        // add eps * length so numerator and denominator are consistent:
-        // sum((w_i + eps)) = sum(w_i) + eps*length
-        if (tx == 0) block_sum = val + eps * float(pp.length);
+        if (tx == 0) block_sum = val + eps;
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
@@ -1172,31 +1288,9 @@ kernel void prio_imp_weights_kernel(
     uint simd_lane [[thread_index_in_simdgroup]],
     uint simd_id [[simdgroup_index_in_threadgroup]]
 ) {
-    // Compute raw importance weights
-    float w = 1.0f;
     if ((int)tx < pp.minibatch_segments) {
         float value = prio_probs[indices[tx]] * float(pp.total_agents);
-        w = pow(value, -pp.anneal_beta);
-    }
-
-    // Max-normalize: w_i /= max(w_j) so all weights are in [0, 1].
-    // Prevents gradient amplification from undersampled segments.
-    constexpr int NUM_WARPS = 8;
-    threadgroup float shmem[NUM_WARPS];
-    float local_max = ((int)tx < pp.minibatch_segments) ? w : 0.0f;
-    local_max = simd_max(local_max);
-    if (simd_lane == 0) shmem[simd_id] = local_max;
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    if (simd_id == 0) {
-        float val = (simd_lane < NUM_WARPS) ? shmem[simd_lane] : 0.0f;
-        val = simd_max(val);
-        if (simd_lane == 0) shmem[0] = val;
-    }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    float w_max = max(shmem[0], 1e-8f);
-
-    if ((int)tx < pp.minibatch_segments) {
-        mb_prio[tx] = w / w_max;
+        mb_prio[tx] = pow(value, -pp.anneal_beta);
     }
 }
 
@@ -1648,6 +1742,7 @@ struct SelectCopyParams {
     int obs_row_bytes;
     int act_row_bytes;
     int lp_row_bytes;
+    int term_row_bytes;
     int horizon;
     int train_fp16;  // 1: encoder reads fp16_obs_out (skip mb_obs f32 write); 0: encoder reads mb_obs (skip f16 write)
 };
@@ -1663,15 +1758,17 @@ kernel void select_copy_kernel(
     device float* mb_advantages         [[buffer(4)]],
     device float* mb_returns            [[buffer(5)]],
     device float* mb_prio_out           [[buffer(6)]],
-    const device char* src_obs          [[buffer(7)]],
-    const device char* src_actions      [[buffer(8)]],
-    const device char* src_logprobs     [[buffer(9)]],
-    const device float* src_values      [[buffer(10)]],
-    const device float* advantages      [[buffer(11)]],
-    const device int64_t* idx           [[buffer(12)]],
-    const device float* mb_prio_in      [[buffer(13)]],
-    constant SelectCopyParams& p        [[buffer(14)]],
-    device half* fp16_obs_out           [[buffer(15)]],
+    device char* mb_terminals           [[buffer(7)]],
+    const device char* src_obs          [[buffer(8)]],
+    const device char* src_actions      [[buffer(9)]],
+    const device char* src_logprobs     [[buffer(10)]],
+    const device float* src_values      [[buffer(11)]],
+    const device float* advantages      [[buffer(12)]],
+    const device int64_t* idx           [[buffer(13)]],
+    const device float* mb_prio_in      [[buffer(14)]],
+    const device char* src_terminals    [[buffer(15)]],
+    constant SelectCopyParams& p        [[buffer(16)]],
+    device half* fp16_obs_out           [[buffer(17)]],
     uint2 group_id [[threadgroup_position_in_grid]],
     uint tid [[thread_index_in_threadgroup]]
 ) {
@@ -1721,6 +1818,10 @@ kernel void select_copy_kernel(
         if (tid == 0) {
             mb_prio_out[mb] = mb_prio_in[mb];
         }
+    } else if (ch == 5) {
+        const device int* sptr = (const device int*)(src_terminals + (int64_t)src_row * p.term_row_bytes);
+        device int* dptr = (device int*)(mb_terminals + (int64_t)mb * p.term_row_bytes);
+        for (int i = (int)tid; i < p.term_row_bytes / 4; i += 256) dptr[i] = sptr[i];
     }
 }
 
@@ -2053,6 +2154,61 @@ kernel void mingru_scan_forward_checkpointed_fp16(
     next_state[bH + h] = half(min(next_state_val, 65000.0f));
 }
 
+kernel void mingru_scan_forward_reset_fp16(
+    device half* out                [[buffer(0)]],
+    device half* next_state         [[buffer(1)]],
+    device float* curr_buf          [[buffer(2)]],
+    device float* prev_buf          [[buffer(3)]],
+    device float* unused_buf        [[buffer(4)]],
+    const device half* combined     [[buffer(5)]],
+    const device half* state        [[buffer(6)]],
+    const device half* input        [[buffer(7)]],
+    const device float* reset       [[buffer(8)]],
+    constant ScanParams& p          [[buffer(9)]],
+    uint idx [[thread_position_in_grid]]
+) {
+    (void)unused_buf;
+    if ((int)idx >= p.B * p.H) return;
+
+    int b = (int)idx / p.H;
+    int h = (int)idx % p.H;
+    int bH = b * p.H;
+    int H3 = 3 * p.H;
+    int H2 = 2 * p.H;
+    int bHT = bH * p.T_seq;
+    int out_base = bHT + h;
+    int cbase = 3 * bHT;
+    int T_out = p.T_seq + 1;
+    int buf_base = b * T_out * p.H + h;
+
+    float prev = float(state[bH + h]);
+    curr_buf[buf_base] = prev;
+    prev_buf[buf_base] = prev;
+
+    for (int t = 0; t < p.T_seq; t++) {
+        if (reset[b * p.T_seq + t] > 0.5f) prev = 0.0f;
+
+        int t_offset = t * H3;
+        int input_idx = out_base + t * p.H;
+        float hidden_val = float(combined[cbase + h + t_offset]);
+        float gate_val = float(combined[cbase + p.H + h + t_offset]);
+        float proj_val = float(combined[cbase + H2 + h + t_offset]);
+        float x_val = float(input[input_idx]);
+        float gate_sigmoid = sigmoid_f(gate_val);
+        float hidden_tilde = tilde_relu_fwd(hidden_val);
+        float curr = lerp_f(prev, hidden_tilde, gate_sigmoid);
+        float proj_sigmoid = sigmoid_f(proj_val);
+        float out_val = proj_sigmoid * curr + (1.0f - proj_sigmoid) * x_val;
+
+        out[input_idx] = half(clamp(out_val, -65000.0f, 65000.0f));
+        curr_buf[buf_base + (t + 1) * p.H] = curr;
+        prev_buf[buf_base + (t + 1) * p.H] = prev;
+        prev = curr;
+    }
+
+    next_state[bH + h] = half(clamp(prev, -65000.0f, 65000.0f));
+}
+
 kernel void mingru_scan_backward_checkpointed_fp16(
     device half* grad_combined            [[buffer(0)]],
     device half* grad_state               [[buffer(1)]],
@@ -2181,6 +2337,70 @@ kernel void mingru_scan_backward_checkpointed_fp16(
     float state_val = float(state[state_idx]);
     float grad_state_val = (state_val > 0.0f) ? (grad_z_0 / state_val) : 0.0f;
     grad_state[state_idx] = half(clamp(grad_state_val, -65000.0f, 65000.0f));
+}
+
+kernel void mingru_scan_backward_reset_fp16(
+    device half* grad_combined            [[buffer(0)]],
+    device half* grad_state               [[buffer(1)]],
+    device half* grad_input               [[buffer(2)]],
+    const device half* grad_out           [[buffer(3)]],
+    const device half* grad_next_state    [[buffer(4)]],
+    const device half* combined           [[buffer(5)]],
+    const device half* state              [[buffer(6)]],
+    const device half* input              [[buffer(7)]],
+    const device float* curr_buf          [[buffer(8)]],
+    const device float* prev_buf          [[buffer(9)]],
+    const device float* unused_buf        [[buffer(10)]],
+    const device float* reset             [[buffer(11)]],
+    constant ScanParams& p                [[buffer(12)]],
+    uint idx [[thread_position_in_grid]]
+) {
+    (void)state;
+    (void)unused_buf;
+    if ((int)idx >= p.B * p.H) return;
+
+    int b = (int)idx / p.H;
+    int h = (int)idx % p.H;
+    int bHT = b * p.H * p.T_seq;
+    int cbase = 3 * bHT;
+    int H3 = 3 * p.H;
+    int H2 = 2 * p.H;
+    int state_idx = b * p.H + h;
+    int out_base = bHT + h;
+    int T_out = p.T_seq + 1;
+    int buf_base = b * T_out * p.H + h;
+
+    float grad_next = float(grad_next_state[state_idx]);
+    for (int t = p.T_seq - 1; t >= 0; t--) {
+        int t_offset = t * H3;
+        int input_idx = out_base + t * p.H;
+        float curr = curr_buf[buf_base + (t + 1) * p.H];
+        float prev = prev_buf[buf_base + (t + 1) * p.H];
+        float hidden_val = float(combined[cbase + h + t_offset]);
+        float gate_val = float(combined[cbase + p.H + h + t_offset]);
+        float proj_val = float(combined[cbase + H2 + h + t_offset]);
+        float x_val = float(input[input_idx]);
+        float gate_sigmoid = sigmoid_f(gate_val);
+        float hidden_tilde = tilde_relu_fwd(hidden_val);
+        float hidden_grad = hidden_val >= 0.0f
+            ? 1.0f
+            : hidden_tilde * (1.0f - hidden_tilde);
+        float proj_sigmoid = sigmoid_f(proj_val);
+        float grad_out_val = float(grad_out[input_idx]);
+        float grad_curr = grad_next + grad_out_val * proj_sigmoid;
+        float grad_proj = grad_out_val * (curr - x_val) * proj_sigmoid * (1.0f - proj_sigmoid);
+        float grad_gate = grad_curr * (hidden_tilde - prev) * gate_sigmoid * (1.0f - gate_sigmoid);
+        float grad_hidden = grad_curr * gate_sigmoid * hidden_grad;
+        float grad_prev = grad_curr * (1.0f - gate_sigmoid);
+
+        grad_input[input_idx] = half(clamp(grad_out_val * (1.0f - proj_sigmoid), -65000.0f, 65000.0f));
+        grad_combined[cbase + h + t_offset] = half(clamp(grad_hidden, -65000.0f, 65000.0f));
+        grad_combined[cbase + p.H + h + t_offset] = half(clamp(grad_gate, -65000.0f, 65000.0f));
+        grad_combined[cbase + H2 + h + t_offset] = half(clamp(grad_proj, -65000.0f, 65000.0f));
+        grad_next = reset[b * p.T_seq + t] > 0.5f ? 0.0f : grad_prev;
+    }
+
+    grad_state[state_idx] = half(clamp(grad_next, -65000.0f, 65000.0f));
 }
 
 // ============================================================================

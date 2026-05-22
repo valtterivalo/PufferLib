@@ -202,9 +202,21 @@ static int has_anim(AnimCache* first, AnimCache* second, int seq_id) {
         anim_get_sequence(second, (uint16_t)seq_id);
 }
 
+static int has_anim_only(AnimCache* cache, int seq_id) {
+    return anim_get_sequence(cache, (uint16_t)seq_id) != NULL;
+}
+
 #define ASSERT_ANIM_PRESENT(label, first, second, seq_id) do { \
     tests_run++; \
     if (!has_anim((first), (second), (seq_id))) { \
+        tests_failed++; \
+        printf("  FAIL: %s missing seq %d\n", (label), (seq_id)); \
+    } \
+} while (0)
+
+#define ASSERT_ANIM_PRESENT_ONLY(label, cache, seq_id) do { \
+    tests_run++; \
+    if (!has_anim_only((cache), (seq_id))) { \
         tests_failed++; \
         printf("  FAIL: %s missing seq %d\n", (label), (seq_id)); \
     } \
@@ -783,11 +795,18 @@ int main(void) {
     ASSERT_ANIM_PRESENT("zulrah idle", equipment, zulrah, ZULRAH_ANIM_IDLE);
     ASSERT_ANIM_PRESENT("zulrah dive", equipment, zulrah, ZULRAH_ANIM_DIVE);
     ASSERT_ANIM_PRESENT("zulrah rise", equipment, zulrah, ZULRAH_ANIM_RISE);
+    ASSERT_ANIM_PRESENT("zulrah death", equipment, zulrah, ZULRAH_ANIM_DEATH);
+    ASSERT_ANIM_PRESENT_ONLY("zulrah-cache death", zulrah, ZULRAH_ANIM_DEATH);
     ASSERT_ANIM_PRESENT("snakeling idle", equipment, zulrah, SNAKELING_ANIM_IDLE);
     ASSERT_ANIM_PRESENT("snakeling melee attack", equipment, zulrah, SNAKELING_ANIM_MELEE);
     ASSERT_ANIM_PRESENT("snakeling magic attack", equipment, zulrah, SNAKELING_ANIM_MAGIC);
     ASSERT_ANIM_PRESENT("snakeling death", equipment, zulrah, SNAKELING_ANIM_DEATH);
     ASSERT_ANIM_PRESENT("snakeling walk", equipment, zulrah, SNAKELING_ANIM_WALK);
+    ASSERT_ANIM_PRESENT_ONLY("zulrah-cache snakeling idle", zulrah, SNAKELING_ANIM_IDLE);
+    ASSERT_ANIM_PRESENT_ONLY("zulrah-cache snakeling melee attack", zulrah, SNAKELING_ANIM_MELEE);
+    ASSERT_ANIM_PRESENT_ONLY("zulrah-cache snakeling magic attack", zulrah, SNAKELING_ANIM_MAGIC);
+    ASSERT_ANIM_PRESENT_ONLY("zulrah-cache snakeling death", zulrah, SNAKELING_ANIM_DEATH);
+    ASSERT_ANIM_PRESENT_ONLY("zulrah-cache snakeling walk", zulrah, SNAKELING_ANIM_WALK);
 
     printf("--- spotanim export coverage ---\n");
     tests_run++;

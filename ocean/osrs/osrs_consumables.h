@@ -2,9 +2,7 @@
  * @fileoverview osrs_consumables.h — shared food, potion, and brew consumption.
  *
  * pure functions that compute the effect of consuming food/potions/brews.
- * encounters call these instead of inlining eat/drink logic per encounter.
- * functions do NOT mutate state — they return result structs that the caller
- * applies. this keeps them testable and encounter-agnostic.
+ * encounters call these instead of inlining eat/drink calculations.
  *
  * SHARED FUNCTIONS:
  *   osrs_food_heal_amount(type)       heal amount for a food type
@@ -40,6 +38,7 @@ typedef enum {
     POTION_RANGING,
     POTION_SUPER_COMBAT,
     POTION_IMBUED_HEART,
+    POTION_SATURATED_HEART,
     NUM_POTION_TYPES
 } PotionType;
 
@@ -82,6 +81,14 @@ static inline int osrs_food_heal_amount(FoodType type) {
 /* timer checks */
 static inline int osrs_can_eat(int food_timer) { return food_timer <= 0; }
 static inline int osrs_can_drink(int potion_timer) { return potion_timer <= 0; }
+
+static inline int osrs_imbued_heart_magic_boost(int base_magic) {
+    return 1 + base_magic / 10;
+}
+
+static inline int osrs_saturated_heart_magic_boost(int base_magic) {
+    return 4 + base_magic / 10;
+}
 
 /* eat food: compute result. caller applies hp change and timer.
    anglerfish can overheal (eat at full HP). all others require HP < max.
@@ -146,7 +153,11 @@ static inline DrinkResult osrs_drink_potion(PotionType type, int current_prayer,
             break;
         case POTION_IMBUED_HEART:
             r.consumed = 1;
-            r.level_boost = 1 + prayer_level / 10;  /* +1 + 10% of level */
+            r.level_boost = osrs_imbued_heart_magic_boost(prayer_level);
+            break;
+        case POTION_SATURATED_HEART:
+            r.consumed = 1;
+            r.level_boost = osrs_saturated_heart_magic_boost(prayer_level);
             break;
         default:
             break;

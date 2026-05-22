@@ -1,6 +1,6 @@
 #line 3605 "encounter_inferno.h"
 #define INF_HEAD_MOVE      0   /* 25: idle + 8 walk + 16 run */
-#define INF_HEAD_PRAYER    1   /* no_change, redemption, set_refresh_melee/ranged/magic */
+#define INF_HEAD_PRAYER    1   /* no_change, off, set_refresh_melee/ranged/magic/redemption */
 #define INF_HEAD_TARGET    2   /* INF_OBS_NPCS+1: none or observation slot */
 #define INF_HEAD_GEAR      3   /* 4: no_switch, mage, long_range, bp */
 #define INF_HEAD_EAT       4   /* 2: none, brew */
@@ -9,10 +9,17 @@
 #define INF_HEAD_SPEC      7   /* 2: no_change, toggle (arm/disarm blowpipe spec) */
 #define INF_HEAD_OFFENSIVE 8   /* no_change, off, set_refresh_piety/rigour/augury */
 static const int INF_ACTION_DIMS[INF_NUM_ACTION_HEADS] = {
-    ENCOUNTER_MOVE_ACTIONS, ENCOUNTER_OVERHEAD_DIM_PVE, INF_OBS_NPCS+1, 4, 2, 4, 3, 2, ENCOUNTER_OFFENSIVE_DIM
+    ENCOUNTER_MOVE_ACTIONS, ENCOUNTER_OVERHEAD_DIM_PVE_REDEMPTION, INF_OBS_NPCS+1, 4, 2, 4, 3, 2, ENCOUNTER_OFFENSIVE_DIM
 };
-#define INF_ACTION_MASK_SIZE (ENCOUNTER_MOVE_ACTIONS + ENCOUNTER_OVERHEAD_DIM_PVE + INF_OBS_NPCS+1 + 4 + 2 + 4 + 3 + 2 + ENCOUNTER_OFFENSIVE_DIM)
-#define INF_OVERHEAD_SET_REFRESH_REDEMPTION ENCOUNTER_OVERHEAD_OFF
+#define INF_ACTION_MASK_SIZE (ENCOUNTER_MOVE_ACTIONS + ENCOUNTER_OVERHEAD_DIM_PVE_REDEMPTION + INF_OBS_NPCS+1 + 4 + 2 + 4 + 3 + 2 + ENCOUNTER_OFFENSIVE_DIM)
+#define INF_OVERHEAD_SET_REFRESH_REDEMPTION ENCOUNTER_OVERHEAD_SET_REFRESH_SMITE
+
+static int inf_action_head_mask_offset(int head) {
+    int offset = 0;
+    for (int h = 0; h < head; h++)
+        offset += INF_ACTION_DIMS[h];
+    return offset;
+}
 
 static int inf_canonical_overhead_action(int action) {
     return action == INF_OVERHEAD_SET_REFRESH_REDEMPTION
@@ -44,6 +51,47 @@ static int inf_tile_walkable(void* data, int x, int y) {
     return 1;
 }
 
+typedef struct {
+    InfernoState* s;
+    InfernoContext* ctx;
+    int manual_spell;
+} InfPlayerStepTargetCtx;
+
+static int inf_lookup_player_attack_target(
+    void* data,
+    int target_slot,
+    OsrsAttackTarget* out
+) {
+    InfPlayerStepTargetCtx* tc = (InfPlayerStepTargetCtx*)data;
+    InfernoState* s = tc->s;
+    InfernoContext* ctx = tc->ctx;
+    if (target_slot < 0 || target_slot >= INF_MAX_NPCS)
+        return 0;
+
+    InfNPC* npc = &s->npcs[target_slot];
+    int target_can_manual_phantom =
+        inf_is_barrage_spell(tc->manual_spell) &&
+        inf_npc_is_phantom_barrage_cast_window(s, ctx, target_slot);
+    if (!npc->active ||
+            (npc->death_ticks > 0 && !target_can_manual_phantom))
+        return 0;
+
+    InfPlayerAttack attack;
+    int has_attack = inf_resolve_player_attack_ctx(
+        s, ctx, tc->manual_spell, &attack);
+    const EncounterLoadoutStats* ls = has_attack
+        ? &attack.stats
+        : inf_current_loadout_stats(s, ctx);
+    *out = (OsrsAttackTarget){
+        .slot = target_slot,
+        .x = npc->x,
+        .y = npc->y,
+        .size = npc->size,
+        .attack_range = ls->attack_range,
+    };
+    return 1;
+}
+
 /* sara brew heal at base HP 99: floor(99*0.15)+2 = 16. ref: osrs_consumables.h osrs_brew_effect */
 #define INF_BREW_HEAL       (99 * 15 / 100 + 2)
 /* super restore at base prayer 99: 8 + floor(99/4) = 32. ref: osrs_consumables.h osrs_drink_potion */
@@ -54,10 +102,9 @@ static int inf_tile_walkable(void* data, int x, int y) {
    call after reducing npc->hp. checks if hp <= 0 and handles death effects. */
 static void inf_apply_npc_death(InfernoState* s, int npc_idx) {
     InfNPC* npc = &s->npcs[npc_idx];
-    if (npc->hp > 0 || !npc->active || npc->death_ticks > 0) return;
-    /* keep active=1 for death_ticks so renderer shows final hitsplat + death anim.
-       inf_tick_npcs decrements death_ticks and sets active=0 when it reaches 0. */
-    npc->death_ticks = INF_NPC_DEATH_LINGER_TICKS;
+    if (!osrs_npc_death_linger_start(
+            npc->hp, npc->active, &npc->death_ticks, INF_NPC_DEATH_LINGER_TICKS))
+        return;
     s->total_npc_kills++;
 
     if (npc->type == INF_NPC_BLOB)
@@ -588,42 +635,46 @@ static void inf_tick_player_ctx(
     }
 
     /* movement: explicit move, auto-chase toward target, or idle.
-       OSRS order: target selection → movement → attack check. */
+       OSRS order: target selection, movement, attack check. */
+    OsrsPlayerMoveKind move_kind = OSRS_PLAYER_MOVE_NONE;
+    int move_act = actions[INF_HEAD_MOVE];
     if (has_explicit_move && !osrs_interaction_active(&s->interaction)) {
-        /* explicit movement (ground click or RL agent) — no attack target */
-        if (s->player_dest_x >= 0) {
-            InfWalkCtx wc = { s, ctx };
-            encounter_move_toward_dest(&s->player, &s->player_dest_x, &s->player_dest_y,
-                ctx->collision_map, ctx->world_offset_x, ctx->world_offset_y,
-                inf_tile_walkable, &wc, inf_pathfind_blocked, &wc,
-                INF_ARENA_MIN_X, INF_ARENA_MIN_Y, INF_ARENA_WIDTH, INF_ARENA_HEIGHT);
-        } else {
-            int move_act = actions[INF_HEAD_MOVE];
-            s->player.is_running = 0;
-            if (move_act > 0 && move_act < ENCOUNTER_MOVE_ACTIONS) {
-                InfWalkCtx wc = { s, ctx };
-                encounter_move_to_target(&s->player,
-                    ENCOUNTER_MOVE_TARGET_DX[move_act], ENCOUNTER_MOVE_TARGET_DY[move_act],
-                    inf_tile_walkable, &wc);
-            }
-        }
-    } else if (osrs_interaction_active(&s->interaction)) {
-        /* auto-chase: pathfind toward attack target when out of range */
-        InfNPC* chase_npc = &s->npcs[s->interaction.target_slot];
-        InfWalkCtx wc = { s, ctx };
-        InfPlayerAttack chase_attack;
-        int has_chase_attack = inf_resolve_player_attack_ctx(s, ctx, manual_spell, &chase_attack);
-        const EncounterLoadoutStats* ls = has_chase_attack
-            ? &chase_attack.stats
-            : inf_current_loadout_stats(s, ctx);
-        encounter_chase_attack_target(&s->player,
-            chase_npc->x, chase_npc->y, INF_NPC_STATS[chase_npc->type].size,
-            ls->attack_range,
-            ctx->collision_map, ctx->world_offset_x, ctx->world_offset_y,
-            inf_tile_walkable, &wc, inf_pathfind_blocked, &wc,
-            s->los_blockers, s->los_blocker_count,
-            INF_ARENA_MIN_X, INF_ARENA_MIN_Y, INF_ARENA_WIDTH, INF_ARENA_HEIGHT);
+        if (s->player_dest_x >= 0)
+            move_kind = OSRS_PLAYER_MOVE_DESTINATION;
+        else if (move_act > 0 && move_act < ENCOUNTER_MOVE_ACTIONS)
+            move_kind = OSRS_PLAYER_MOVE_ACTION;
     }
+    InfWalkCtx wc = { s, ctx };
+    InfPlayerStepTargetCtx target_ctx = {
+        .s = s,
+        .ctx = ctx,
+        .manual_spell = manual_spell,
+    };
+    (void)osrs_encounter_player_step(&(OsrsPlayerStepInput){
+        .player = &s->player,
+        .interaction = &s->interaction,
+        .target_lookup = inf_lookup_player_attack_target,
+        .target_ctx = &target_ctx,
+        .move_kind = move_kind,
+        .move_action = move_act,
+        .dest_x = &s->player_dest_x,
+        .dest_y = &s->player_dest_y,
+        .arena = {
+            .collision_map = ctx->collision_map,
+            .world_offset_x = ctx->world_offset_x,
+            .world_offset_y = ctx->world_offset_y,
+            .is_walkable = inf_tile_walkable,
+            .walkable_ctx = &wc,
+            .extra_blocked = inf_pathfind_blocked,
+            .blocked_ctx = &wc,
+            .los_blockers = s->los_blockers,
+            .los_blocker_count = s->los_blocker_count,
+            .arena_base_x = INF_ARENA_MIN_X,
+            .arena_base_y = INF_ARENA_MIN_Y,
+            .arena_w = INF_ARENA_WIDTH,
+            .arena_h = INF_ARENA_HEIGHT,
+        },
+    });
     inf_rebuild_player_collision_flags(s);
 
     /* player attacks targeted NPC */

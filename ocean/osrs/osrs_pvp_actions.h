@@ -15,6 +15,7 @@
 #include "osrs_types.h"
 #include "osrs_items.h"
 #include "osrs_consumables.h"
+#include "osrs_player_consumables.h"
 #include "osrs_pvp_gear.h"
 #include "osrs_pvp_combat.h"
 #include "osrs_pvp_movement.h"
@@ -28,54 +29,11 @@
 #define PRAYER_BONUS 6
 
 /**
- * Eat food (regular or karambwan).
- *
- * Food: heals based on HP level (capped at 22), no overheal.
- * Karambwan: heals 18, shares timer with food.
- *
  * @param p            Player eating
  * @param is_karambwan 1 for karambwan, 0 for regular food
  */
 static void eat_food(Player* p, int is_karambwan) {
-    if (is_karambwan) {
-        if (p->karambwan_count <= 0 || p->karambwan_timer > 0) return;
-        p->karambwan_count--;
-        int hp_before = p->current_hitpoints;
-        int heal_amount = osrs_food_heal_amount(FOOD_KARAMBWAN);
-        int max_hp = p->base_hitpoints;
-        int actual_heal = max_int(0, min_int(heal_amount, max_hp - hp_before));
-        int waste = heal_amount - actual_heal;
-        p->current_hitpoints = clamp(hp_before + heal_amount, 0, max_hp);
-        p->last_karambwan_heal = actual_heal;
-        p->last_karambwan_waste = waste;
-        p->karambwan_timer = 2;  // 2-tick self-cooldown: karam, 1, Ready
-        p->food_timer = 3;      // 3-tick cross-lockout on food
-        p->potion_timer = 3;    // 3-tick cross-lockout on potions
-        p->ate_karambwan_this_tick = 1;  // Track for reward shaping
-        // Eating always delays attack timer (clamp to 0 so idle-negative timer doesn't skip delay)
-        int combat_ticks = p->has_attack_timer ? max_int(p->attack_timer_uncapped, 0) : 0;
-        p->attack_timer = combat_ticks + 2;
-        p->attack_timer_uncapped = combat_ticks + 2;
-        p->has_attack_timer = 1;
-    } else {
-        if (p->food_count <= 0 || p->food_timer > 0) return;
-        p->food_count--;
-        int heal_amount = osrs_food_heal_amount(FOOD_SHARK);
-        int hp_before = p->current_hitpoints;
-        int max_hp = p->base_hitpoints;
-        int actual_heal = min_int(heal_amount, max_hp - hp_before);
-        int waste = heal_amount - actual_heal;
-        p->current_hitpoints = hp_before + actual_heal;
-        p->last_food_heal = actual_heal;
-        p->last_food_waste = waste;
-        p->food_timer = 3;
-        p->ate_food_this_tick = 1;  // Track for reward shaping
-        // Eating always delays attack timer (clamp to 0 so idle-negative timer doesn't skip delay)
-        int combat_ticks = p->has_attack_timer ? max_int(p->attack_timer_uncapped, 0) : 0;
-        p->attack_timer = combat_ticks + 3;
-        p->attack_timer_uncapped = combat_ticks + 3;
-        p->has_attack_timer = 1;
-    }
+    osrs_player_eat_food_type(p, is_karambwan ? FOOD_KARAMBWAN : FOOD_SHARK);
 }
 
 /**
@@ -667,17 +625,20 @@ static void execute_attack_combat(OsrsEnv* env, int agent_idx, int* actions) {
     /* auto-walk to target if attack/interaction active but out of range */
     if (has_attack && move_action == MOVE_NONE && can_move(p) && !p->did_attack_auto_move) {
         int in_range = 0;
+        int auto_walk_range = 1;
         switch (attack_style) {
             case ATTACK_STYLE_MELEE:
                 in_range = is_in_melee_range(p, t);
                 break;
             case ATTACK_STYLE_RANGED: {
                 int range = get_attack_range(p, ATTACK_STYLE_RANGED);
+                auto_walk_range = range;
                 in_range = (dist <= range);
                 break;
             }
             case ATTACK_STYLE_MAGIC: {
                 int range = get_attack_range(p, ATTACK_STYLE_MAGIC);
+                auto_walk_range = range;
                 in_range = (dist <= range);
                 break;
             }
@@ -686,7 +647,14 @@ static void execute_attack_combat(OsrsEnv* env, int agent_idx, int* actions) {
                 break;
         }
         if (!in_range) {
-            move_toward_target(p, t, cmap);
+            if (attack_style == ATTACK_STYLE_MELEE) {
+                int adj_x, adj_y;
+                if (select_closest_adjacent_tile(p, t->x, t->y, &adj_x, &adj_y, cmap)) {
+                    set_destination(p, adj_x, adj_y, cmap);
+                }
+            } else {
+                move_toward_target(p, t, auto_walk_range, cmap);
+            }
         }
     }
 }

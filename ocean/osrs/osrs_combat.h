@@ -330,6 +330,10 @@ static inline int encounter_dark_bow_second_hit_delay(int distance, int is_playe
     return 1 + (2 + distance) / 3 + (is_player ? 1 : 0);
 }
 
+static inline int encounter_eye_of_ayak_hit_delay(int distance) {
+    return distance <= 2 ? 1 : 2;
+}
+
 typedef enum {
     ENCOUNTER_PROJECTILE_DISTANCE_CLOSEST_TILE,
     ENCOUNTER_PROJECTILE_DISTANCE_TARGET_SW_TILE,
@@ -342,6 +346,7 @@ typedef enum {
     ENCOUNTER_PROJECTILE_DELAY_THROWN,
     ENCOUNTER_PROJECTILE_DELAY_BALLISTA,
     ENCOUNTER_PROJECTILE_DELAY_DARK_BOW_SECOND,
+    ENCOUNTER_PROJECTILE_DELAY_EYE_OF_AYAK,
 } EncounterProjectileDelayKind;
 
 typedef struct {
@@ -410,6 +415,8 @@ static inline int encounter_projectile_base_hit_delay(
             return encounter_ballista_hit_delay(distance, is_player);
         case ENCOUNTER_PROJECTILE_DELAY_DARK_BOW_SECOND:
             return encounter_dark_bow_second_hit_delay(distance, is_player);
+        case ENCOUNTER_PROJECTILE_DELAY_EYE_OF_AYAK:
+            return encounter_eye_of_ayak_hit_delay(distance);
     }
     abort();
 }

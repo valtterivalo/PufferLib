@@ -21,6 +21,7 @@
 
 #include "osrs_types.h"
 #include "osrs_collision.h"
+#include "osrs_encounter.h"
 
 // is_in_wilderness and tile_hash are defined in osrs_types.h
 
@@ -294,6 +295,11 @@ static void set_destination(Player* p, int dest_x, int dest_y, const CollisionMa
     p->is_moving = (p->x != dest_x || p->y != dest_y) ? 1 : 0;
 }
 
+static int pvp_tile_walkable(void* ctx, int x, int y) {
+    const CollisionMap* cmap = (const CollisionMap*)ctx;
+    return is_in_wilderness(x, y) && collision_tile_walkable(cmap, 0, x, y);
+}
+
 /**
  * Process movement action for a player.
  *
@@ -371,11 +377,35 @@ static void process_movement(Player* p, Player* target, int movement_action, int
  * @param p      Player to move
  * @param target Target to chase
  */
-static void move_toward_target(Player* p, Player* target, const CollisionMap* cmap) {
+static void move_toward_target(
+    Player* p,
+    Player* target,
+    int attack_range,
+    const CollisionMap* cmap
+) {
     if (p->frozen_ticks > 0) {
         return;
     }
-    set_destination(p, target->x, target->y, cmap);
+    int moved = encounter_chase_attack_target(
+        p,
+        target->x,
+        target->y,
+        1,
+        attack_range,
+        cmap,
+        0,
+        0,
+        pvp_tile_walkable,
+        (void*)cmap,
+        NULL,
+        NULL,
+        NULL,
+        0,
+        0,
+        0,
+        0,
+        0);
+    p->is_moving = moved;
 }
 
 /**

@@ -9,8 +9,8 @@ static const NpcModelMapping NPC_MODEL_MAP_ZULRAH_GEN[] = {
     {2042, 0xC07FA, 5070, 5068, 5070},  /* Zulrah green/ranged form */
     {2043, 0xC07FB, 5070, 5806, 5070},  /* Zulrah red/melee form */
     {2044, 0xC07FC, 5070, 5068, 5070},  /* Zulrah blue/magic form */
-    {2045, 0xC07FD, 1721, 65535, 2405},  /* Snakeling melee variant */
-    {2046, 0xC07FE, 1721, 65535, 2405},  /* Snakeling magic variant */
+    {2045, 0xC07FD, 1721, 140, 2405},  /* Snakeling melee variant */
+    {2046, 0xC07FE, 1721, 185, 2405},  /* Snakeling magic variant */
 };
 
 /* zulrah animation IDs */

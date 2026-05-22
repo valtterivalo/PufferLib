@@ -51,6 +51,13 @@ typedef struct {
 #define Env ZulrahEnv
 #define ZUL_ENV_CONTEXT(env) ((EncounterContext*)((env)->enc_context))
 
+static uint32_t zulrah_env_next_seed(Env* env) {
+    uint32_t next = (uint32_t)env->rng + 0x9e3779b9u;
+    if (next == 0) next = 1;
+    env->rng = (int)next;
+    return next;
+}
+
 static void zulrah_env_put_int(Env* env, const char* key, int value) {
     ENCOUNTER_ZULRAH.put_int(env->enc_state, ZUL_ENV_CONTEXT(env), key, value);
 }
@@ -106,7 +113,21 @@ void c_step(Env* env) {
         ZulrahState* zs = (ZulrahState*)env->enc_state;
         env->log.episode_return += zs->episode_return;
         env->log.episode_length += (float)zs->tick;
-        env->log.wins += (zs->winner == 0) ? 1.0f : 0.0f;
+        float kills = (float)zs->kills_this_episode;
+        float win = (zs->episode_mode == ZUL_EPISODE_TRIP)
+            ? kills
+            : ((zs->winner == 0) ? 1.0f : 0.0f);
+        float partial = (zs->episode_mode == ZUL_EPISODE_TRIP)
+            ? zul_current_kill_progress(zs)
+            : 0.0f;
+        float speed_bonus = (zs->episode_mode == ZUL_EPISODE_TRIP)
+            ? zs->score_speed_bonus_sum
+            : (win > 0.0f
+                ? (1.0f - (float)zs->tick / (float)ZUL_MAX_TICKS) *
+                    ZUL_SCORE_SPEED_BONUS_DEFAULT
+                : 0.0f);
+        env->log.wins += win;
+        env->log.zulrah_kills += kills;
         env->log.damage_dealt += zs->total_damage_dealt;
         env->log.damage_received += zs->total_damage_received;
         env->log.prayer_correct += (float)zs->total_prayer_correct;
@@ -116,34 +137,40 @@ void c_step(Env* env) {
         env->log.idle_ticks += (float)zs->total_potions_used;
         env->log.brews_used += (float)zs->total_venom_ticks;
         env->log.wave += (float)zs->total_phases_completed;
+        env->log.cloud_occupancy_ticks += (float)zs->total_cloud_occupancy_ticks;
+        env->log.cloud_occupancy_frac += zs->tick > 0
+            ? (float)zs->total_cloud_occupancy_ticks / (float)zs->tick
+            : 0.0f;
+        env->log.cloud_damage_received += zs->total_cloud_damage_received;
+        env->log.active_cloud_count_ticks += (float)zs->total_active_cloud_ticks;
+        env->log.pending_cloud_count_ticks += (float)zs->total_pending_cloud_ticks;
         int tier = zs->gear_tier;
         if (tier < 0 || tier >= ZUL_NUM_GEAR_TIERS) {
             fprintf(stderr, "zulrah invalid sampled gear tier %d\n", tier);
             abort();
         }
-        float win = (zs->winner == 0) ? 1.0f : 0.0f;
-        float speed_bonus = win > 0.0f
-            ? (1.0f - (float)zs->tick / (float)ZUL_MAX_TICKS) * 0.3f
-            : 0.0f;
-        float dmg_penalty = win > 0.0f
-            ? (zs->total_damage_received / (float)ZUL_BASE_HP) * 0.2f
-            : 0.0f;
         env->log.zulrah_tier_n[tier] += 1.0f;
         env->log.zulrah_tier_wins[tier] += win;
-        env->log.zulrah_tier_score_sum[tier] += win + speed_bonus - dmg_penalty;
+        env->log.zulrah_tier_score_sum[tier] += win + partial + speed_bonus;
         env->log.zulrah_tier_damage_received[tier] += zs->total_damage_received;
         env->log.zulrah_tier_episode_length[tier] += (float)zs->tick;
+        env->log.zulrah_tier_cloud_occupancy_ticks[tier] +=
+            (float)zs->total_cloud_occupancy_ticks;
+        env->log.zulrah_tier_cloud_damage_received[tier] +=
+            zs->total_cloud_damage_received;
         env->log.n += 1.0f;
 
         env->pending_render_reset = 1;
-        ENCOUNTER_ZULRAH.reset(env->enc_state, ZUL_ENV_CONTEXT(env), 0);
+        ENCOUNTER_ZULRAH.reset(
+            env->enc_state, ZUL_ENV_CONTEXT(env), zulrah_env_next_seed(env));
         ENCOUNTER_ZULRAH.write_obs(env->enc_state, ZUL_ENV_CONTEXT(env), obs);
         ENCOUNTER_ZULRAH.write_mask(env->enc_state, ZUL_ENV_CONTEXT(env), obs + ZUL_NUM_OBS);
     }
 }
 
 void c_reset(Env* env) {
-    ENCOUNTER_ZULRAH.reset(env->enc_state, ZUL_ENV_CONTEXT(env), 0);
+    ENCOUNTER_ZULRAH.reset(
+        env->enc_state, ZUL_ENV_CONTEXT(env), zulrah_env_next_seed(env));
 
     float* obs = (float*)env->observations;
     ENCOUNTER_ZULRAH.write_obs(env->enc_state, ZUL_ENV_CONTEXT(env), obs);
@@ -270,6 +297,9 @@ void my_init(Env* env, Dict* kwargs) {
     DictItem* gear_mode = dict_get_unsafe(kwargs, "gear_tier_mode");
     if (gear_mode) zulrah_env_put_int(env, "gear_tier_mode", (int)gear_mode->value);
 
+    DictItem* episode_mode = dict_get_unsafe(kwargs, "episode_mode");
+    if (episode_mode) zulrah_env_put_int(env, "episode_mode", (int)episode_mode->value);
+
     const char* weight_keys[ZUL_NUM_GEAR_TIERS] = {
         "gear_tier_weight_0",
         "gear_tier_weight_1",
@@ -278,6 +308,19 @@ void my_init(Env* env, Dict* kwargs) {
     for (int i = 0; i < ZUL_NUM_GEAR_TIERS; i++) {
         DictItem* item = dict_get_unsafe(kwargs, weight_keys[i]);
         if (item) zulrah_env_put_float(env, weight_keys[i], (float)item->value);
+    }
+
+    const char* reward_keys[] = {
+        "reward_win",
+        "reward_loss_penalty",
+        "reward_damage_dealt",
+        "reward_correct_style",
+        "reward_damage_received_penalty",
+        "reward_cloud_occupancy_penalty",
+    };
+    for (int i = 0; i < (int)(sizeof(reward_keys) / sizeof(reward_keys[0])); i++) {
+        DictItem* item = dict_get_unsafe(kwargs, reward_keys[i]);
+        if (item) zulrah_env_put_float(env, reward_keys[i], (float)item->value);
     }
 }
 
@@ -298,13 +341,19 @@ void my_log(Log* log, Dict* out) {
     dict_set(out, "potions_used", log->idle_ticks);    /* reused field */
     dict_set(out, "venom_ticks", log->brews_used);     /* reused field */
     dict_set(out, "phases_completed", log->wave);      /* reused field */
+    dict_set(out, "cloud_occupancy_ticks", log->cloud_occupancy_ticks);
+    dict_set(out, "cloud_occupancy_frac", log->cloud_occupancy_frac);
+    dict_set(out, "cloud_damage_received", log->cloud_damage_received);
+    dict_set(out, "active_cloud_count_ticks", log->active_cloud_count_ticks);
+    dict_set(out, "pending_cloud_count_ticks", log->pending_cloud_count_ticks);
+    dict_set(out, "kills", log->zulrah_kills);
 
     float wr = log->wins;
     float speed_bonus = (wr > 0.1f)
-        ? (1.0f - log->episode_length / (float)ZUL_MAX_TICKS) * 0.3f : 0.0f;
-    float dmg_penalty = (wr > 0.1f)
-        ? (log->damage_received / (float)ZUL_BASE_HP) * 0.2f : 0.0f;
-    float score = wr + speed_bonus - dmg_penalty;
+        ? (1.0f - log->episode_length / (float)ZUL_MAX_TICKS) *
+            ZUL_SCORE_SPEED_BONUS_DEFAULT
+        : 0.0f;
+    float score = wr + speed_bonus;
     dict_set(out, "score", score);
 
     const char* tier_frac_keys[ZUL_NUM_GEAR_TIERS] = {
@@ -332,6 +381,16 @@ void my_log(Log* log, Dict* out) {
         "episode_length_tier_1",
         "episode_length_tier_2",
     };
+    const char* tier_cloud_keys[ZUL_NUM_GEAR_TIERS] = {
+        "cloud_occupancy_ticks_tier_0",
+        "cloud_occupancy_ticks_tier_1",
+        "cloud_occupancy_ticks_tier_2",
+    };
+    const char* tier_cloud_damage_keys[ZUL_NUM_GEAR_TIERS] = {
+        "cloud_damage_received_tier_0",
+        "cloud_damage_received_tier_1",
+        "cloud_damage_received_tier_2",
+    };
 
     float tier_scores[ZUL_NUM_GEAR_TIERS];
     for (int i = 0; i < ZUL_NUM_GEAR_TIERS; i++) {
@@ -341,12 +400,18 @@ void my_log(Log* log, Dict* out) {
         float tier_score = n > 0.0f ? log->zulrah_tier_score_sum[i] / n : 0.0f;
         float tier_damage = n > 0.0f ? log->zulrah_tier_damage_received[i] / n : 0.0f;
         float tier_length = n > 0.0f ? log->zulrah_tier_episode_length[i] / n : 0.0f;
+        float tier_cloud = n > 0.0f
+            ? log->zulrah_tier_cloud_occupancy_ticks[i] / n : 0.0f;
+        float tier_cloud_damage = n > 0.0f
+            ? log->zulrah_tier_cloud_damage_received[i] / n : 0.0f;
         tier_scores[i] = tier_score;
         dict_set(out, tier_frac_keys[i], tier_frac);
         dict_set(out, tier_win_keys[i], tier_wins);
         dict_set(out, tier_score_keys[i], tier_score);
         dict_set(out, tier_damage_keys[i], tier_damage);
         dict_set(out, tier_length_keys[i], tier_length);
+        dict_set(out, tier_cloud_keys[i], tier_cloud);
+        dict_set(out, tier_cloud_damage_keys[i], tier_cloud_damage);
     }
 
     float score_general = tier_scores[0];

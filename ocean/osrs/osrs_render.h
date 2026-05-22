@@ -2767,6 +2767,14 @@ static void render_seed_entity_visual_slot(RenderClient* rc, int i) {
     rc->prev_npc_slot[i] = rc->entities[i].npc_slot;
 }
 
+static void render_ensure_entity_visual_slots(RenderClient* rc) {
+    for (int i = 0; i < rc->entity_count; i++) {
+        if (rc->sub_x[i] == 0 && rc->sub_y[i] == 0) {
+            render_seed_entity_visual_slot(rc, i);
+        }
+    }
+}
+
 static void render_reset_episode_visual_state(RenderClient* rc, OsrsEnv* env) {
     render_clear_history(rc);
     effect_clear_all(rc->effects);
@@ -3347,6 +3355,19 @@ static void render_get_visual_pos(
 
     *out_x = tile_x;
     *out_z = -tile_y;
+    if (rc->entity_count == 2 &&
+        rc->entities[0].entity_type == ENTITY_PLAYER &&
+        rc->entities[1].entity_type == ENTITY_PLAYER &&
+        player_idx >= 0 && player_idx < 2) {
+        int other_idx = 1 - player_idx;
+        float other_x = (float)rc->sub_x[other_idx] / 128.0f;
+        float other_y = (float)rc->sub_y[other_idx] / 128.0f;
+        if (fabsf(tile_x - other_x) < 0.35f && fabsf(tile_y - other_y) < 0.35f) {
+            float sign = player_idx == 0 ? -1.0f : 1.0f;
+            *out_x += sign * 0.18f;
+            *out_z += sign * 0.10f;
+        }
+    }
 
     if (rc->terrain) {
         *out_ground = terrain_height_avg(rc->terrain,
@@ -4241,8 +4262,9 @@ static void render_draw_3d_world(RenderClient* rc) {
 
     /* inferno pillars: "Rocky support" objects with 4 HP-level models.
        dynamically spawned (not in static objects file). */
-    if (rc->npc_model_cache && rc->gui.encounter_state) {
-        InfernoState* is = (InfernoState*)rc->gui.encounter_state;
+    InfernoState* pillar_state = render_inferno_state_from_client(rc);
+    if (rc->npc_model_cache && pillar_state) {
+        InfernoState* is = pillar_state;
         float plat_y = 2.0f;
         float ms = 1.0f / 128.0f;
         for (int p = 0; p < INF_NUM_PILLARS; p++) {
@@ -4297,15 +4319,6 @@ static void render_draw_3d_world(RenderClient* rc) {
         DrawSphere((Vector3){ rc->debug_ray_hit_x, rc->debug_ray_hit_y, rc->debug_ray_hit_z },
                    0.1f, RED);
     }
-    /* draw ray as line from origin forward */
-    if (rc->show_debug && rc->debug_hit_wx >= 0) {
-        Vector3 a = rc->debug_ray_origin;
-        Vector3 b = { a.x + rc->debug_ray_dir.x * 50.0f,
-                      a.y + rc->debug_ray_dir.y * 50.0f,
-                      a.z + rc->debug_ray_dir.z * 50.0f };
-        DrawLine3D(a, b, YELLOW);
-    }
-
     /* debug: draw game-logic tile positions for all entities.
        green = player, cyan = NPCs. shows where the game thinks entities are
        vs where the 3D model renders (which uses sub_x/sub_y interpolation). */
@@ -4774,28 +4787,66 @@ static void render_draw_3d_world(RenderClient* rc) {
     /* click cross is now drawn as 2D overlay in pvp_render, not in 3D world */
 
     /* debug: player→NPC LOS lines (green=can attack, red=blocked/out of range) */
-    if (rc->show_debug && rc->gui.encounter_state) {
-        InfernoState* is = (InfernoState*)rc->gui.encounter_state;
-        float plat_y = 2.0f;
-        float ph = plat_y + 1.0f;  /* player line height */
-        float player_wx = (float)is->player.x + 0.5f;
-        float player_wz = -(float)is->player.y - 0.5f;
-        const EncounterLoadoutStats* ls = &is->loadout_stats[is->weapon_set];
-        for (int ni = 0; ni < INF_MAX_NPCS; ni++) {
-            InfNPC* npc = &is->npcs[ni];
-            if (!npc->active || npc->death_ticks > 0) continue;
-            float half = (float)(npc->size - 1) / 2.0f;
-            float npc_wx = (float)npc->x + half + 0.5f;
-            float npc_wz = -(float)npc->y - half - 0.5f;
-            int can_atk = encounter_player_can_attack(
-                is->player.x, is->player.y,
-                npc->x, npc->y, npc->size,
-                ls->attack_range, is->los_blockers, is->los_blocker_count);
-            Color lc = can_atk ? GREEN : RED;
-            DrawLine3D(
-                (Vector3){ player_wx, ph, player_wz },
-                (Vector3){ npc_wx, ph, npc_wz },
-                lc);
+    InfernoState* debug_inferno_state = render_inferno_state_from_client(rc);
+    if (rc->show_debug && rc->entity_count > 0) {
+        int player_idx = rc->gui.gui_entity_idx;
+        if (player_idx < 0 || player_idx >= rc->entity_count ||
+                rc->entities[player_idx].entity_type != ENTITY_PLAYER) {
+            player_idx = -1;
+            for (int i = 0; i < rc->entity_count; i++) {
+                if (rc->entities[i].entity_type == ENTITY_PLAYER) {
+                    player_idx = i;
+                    break;
+                }
+            }
+        }
+
+        if (player_idx >= 0) {
+            RenderEntity* player = &rc->entities[player_idx];
+            float player_x, player_z, player_ground;
+            render_get_visual_pos(rc, player_idx, &player_x, &player_z, &player_ground);
+            float player_y = rc->entity_visual_mid_y[player_idx] > player_ground
+                ? rc->entity_visual_mid_y[player_idx]
+                : player_ground + 1.0f;
+
+            for (int i = 0; i < rc->entity_count; i++) {
+                if (i == player_idx) continue;
+                RenderEntity* target = &rc->entities[i];
+                if (target->entity_type == ENTITY_NPC && !target->npc_visible) continue;
+
+                int is_target = target->entity_type == ENTITY_NPC ||
+                    player->attack_target_entity_idx == i;
+                if (!is_target) continue;
+
+                Color lc = GREEN;
+                if (debug_inferno_state && target->entity_type == ENTITY_NPC) {
+                    int slot = target->npc_slot;
+                    if (slot < 0 || slot >= INF_MAX_NPCS) continue;
+                    InfNPC* npc = &debug_inferno_state->npcs[slot];
+                    if (!npc->active || npc->death_ticks > 0) continue;
+                    const EncounterLoadoutStats* ls =
+                        &debug_inferno_state->loadout_stats[debug_inferno_state->weapon_set];
+                    int can_atk = encounter_player_can_attack(
+                        debug_inferno_state->player.x,
+                        debug_inferno_state->player.y,
+                        npc->x, npc->y, npc->size,
+                        ls->attack_range,
+                        debug_inferno_state->los_blockers,
+                        debug_inferno_state->los_blocker_count);
+                    lc = can_atk ? GREEN : RED;
+                }
+
+                float target_x, target_z, target_ground;
+                render_get_visual_pos(rc, i, &target_x, &target_z, &target_ground);
+                float target_y = rc->entity_visual_mid_y[i] > target_ground
+                    ? rc->entity_visual_mid_y[i]
+                    : target_ground + 1.0f;
+                float line_y = player_y < target_y ? player_y : target_y;
+                DrawLine3D(
+                    (Vector3){ player_x, line_y, player_z },
+                    (Vector3){ target_x, line_y, target_z },
+                    lc);
+            }
         }
     }
 
@@ -4831,6 +4882,7 @@ static void render_draw_3d_world(RenderClient* rc) {
  */
 static void render_draw_overhead_status(RenderClient* rc, OsrsEnv* env) {
     Camera3D cam = render_build_3d_camera(rc);
+    InfernoState* debug_state = render_inferno_state_from_client(rc);
 
     /* map our OverheadPrayer enum → OSRS headIcon sprite index */
     static const int prayer_to_headicon[] = {
@@ -4923,8 +4975,8 @@ static void render_draw_overhead_status(RenderClient* rc, OsrsEnv* env) {
         }
 
         /* debug: per-NPC combat state below the entity (only for NPCs) */
-        if (rc->show_debug && p->entity_type == ENTITY_NPC && rc->gui.encounter_state) {
-            InfernoState* is = (InfernoState*)rc->gui.encounter_state;
+        if (rc->show_debug && p->entity_type == ENTITY_NPC && debug_state) {
+            InfernoState* is = debug_state;
             int slot = p->npc_slot;
             if (slot >= 0 && slot < INF_MAX_NPCS && is->npcs[slot].active) {
                 InfNPC* npc = &is->npcs[slot];
@@ -5338,6 +5390,30 @@ static void render_draw_target_label(RenderClient* rc) {
     DrawText(label, x, 12, 16, COLOR_TEXT);
 }
 
+static int render_scene_is_pvp(OsrsEnv* env) {
+    if (!env->encounter_def) return 1;
+    const EncounterDef* def = (const EncounterDef*)env->encounter_def;
+    return strcmp(def->name, "nh_pvp") == 0 || strcmp(def->name, "pvp") == 0;
+}
+
+static void render_follow_pvp_fighter_midpoint(RenderClient* rc, OsrsEnv* env, double frame_dt) {
+    if (!render_scene_is_pvp(env) || rc->human_input.enabled || rc->entity_count < 2)
+        return;
+
+    float x0 = (float)rc->sub_x[0] / 128.0f;
+    float y0 = (float)rc->sub_y[0] / 128.0f;
+    float x1 = (float)rc->sub_x[1] / 128.0f;
+    float y1 = (float)rc->sub_y[1] / 128.0f;
+    float target_x = (x0 + x1) * 0.5f;
+    float target_z = -((y0 + y1) * 0.5f);
+    float lerp = 1.0f - powf(0.70f, (float)frame_dt * 60.0f);
+
+    rc->cam_target_x += (target_x - rc->cam_target_x) * lerp;
+    rc->cam_target_z += (target_z - rc->cam_target_z) * lerp;
+    rc->cam_dist += (72.0f - rc->cam_dist) * lerp;
+    rc->cam_pitch += (1.52f - rc->cam_pitch) * lerp;
+}
+
 
 void pvp_render(OsrsEnv* env) {
     RenderClient* rc = (RenderClient*)env->client;
@@ -5349,10 +5425,12 @@ void pvp_render(OsrsEnv* env) {
     /* ensure entity pointers are current (may be called without render_post_tick
        during pause, rewind, or initial frame) */
     render_populate_entities(rc, env);
+    render_ensure_entity_visual_slots(rc);
 
     render_handle_input(rc, env);
     double frame_dt = GetFrameTime();
     double visual_dt = render_scaled_frame_dt(rc, frame_dt);
+    render_follow_pvp_fighter_midpoint(rc, env, frame_dt);
     model_cache_update_texture_anims(rc->model_cache, (float)visual_dt);
     model_cache_update_texture_anims(rc->npc_model_cache, (float)visual_dt);
     model_cache_update_texture_anims(rc->projectile_model_cache, (float)visual_dt);

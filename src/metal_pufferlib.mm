@@ -111,6 +111,7 @@ typedef struct {
     // Priority
     float prio_alpha;
     float prio_beta0;
+    bool anneal_prio_beta;
     // Flags
     bool reset_state;
     bool terminal_reset_state;
@@ -207,7 +208,6 @@ struct PuffeRL {
     RolloutBuf train_rollouts;
     EnvBuf env;
     TrainGraph train_buf;
-    FloatTensor old_values_puf;
     FloatTensor advantages_puf;
     IntTensor act_sizes_puf;
     FloatTensor losses_puf;
@@ -477,9 +477,13 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
         PrecisionTensor mingru_input = p->encoder.forward(infer_weights.encoder, acts.encoder, obs_pt, stream);
         PrecisionTensor h = p->network.forward(infer_weights.network, mingru_input, state_pt, acts.network, stream);
         PrecisionTensor dec_pt = p->decoder.forward(infer_weights.decoder, acts.decoder, h, stream);
+        PufTensor rollout_logstd = {};
+        if (pufferl->is_continuous) {
+            rollout_logstd = to_puf(((DecoderWeights*)infer_weights.decoder)->logstd);
+        }
 
         mtl_sample_logits_dispatch_to(
-            dec_pt, pufferl->act_sizes_puf,
+            dec_pt, pufferl->act_sizes_puf, rollout_logstd, pufferl->is_continuous,
             act_f32_buf.data, lp_slice.data, val_slice.data,
             mask_ptr, mask_stride,
             buf_rng_seed, buf_rng_offset, stream);
@@ -633,8 +637,6 @@ void train_impl(PuffeRL& pufferl) {
     mtl_fill_f32(rollouts.ratio.data, 1.0f,
                  (int)puf_numel(rollouts.ratio.shape), train_stream);
 
-    // old_values = values.clone()
-    puf_copy(pufferl.old_values_puf, rollouts.values, train_stream);
     // Metal 4 visibility boundary before minibatch loop consumes transposed rollouts.
     mtl_barrier((MetalStream*)train_stream);
 
@@ -652,8 +654,11 @@ void train_impl(PuffeRL& pufferl) {
         *lr_ptr = lr;
     }
 
-    float anneal_beta = hypers.prio_beta0 + (1.0f - hypers.prio_beta0)
-        * prio_alpha * (float)current_epoch / (float)total_epochs;
+    float anneal_beta = hypers.prio_beta0;
+    if (hypers.anneal_prio_beta && total_epochs > 0) {
+        anneal_beta += (1.0f - hypers.prio_beta0) * prio_alpha
+            * (float)current_epoch / (float)total_epochs;
+    }
 
     uint64_t tp_preloop1 = mach_absolute_time();
     pufferl.profile.accum[PROF_TRAIN_PRELOOP] += prof_ms(tp_preloop0, tp_preloop1);
@@ -679,7 +684,7 @@ void train_impl(PuffeRL& pufferl) {
         if (hypers.reset_state) puf_zero(&pufferl.train_buf.mb_state, s);
         {
             RolloutBuf sel_src = rollouts;
-            sel_src.values = pufferl.old_values_puf;
+            sel_src.values = rollouts.values;
             mtl_select_copy(sel_src, pufferl.train_buf,
                 (const int64_t*)pufferl.prio_bufs.idx.data,
                 pufferl.advantages_puf.data,
@@ -735,8 +740,14 @@ void train_impl(PuffeRL& pufferl) {
         }
         if (pufferl.train_fp16 && hypers.reset_state) puf_zero(&pufferl.fp16_state_buf, s);
 
+        PrecisionTensor reset_pt = {};
+        if (hypers.terminal_reset_state) {
+            FloatTensor &mt = pufferl.train_buf.mb_terminals;
+            reset_pt = {.data = mt.data, .shape = {mt.shape[0], mt.shape[1]}, .dtype_size = (int)sizeof(float)};
+        }
+
         PrecisionTensor dec_pt = policy_forward_train(pufferl.policy, train_weights,
-            pufferl.train_activations, obs_pt, state_pt, s);
+            pufferl.train_activations, obs_pt, state_pt, reset_pt, s);
 
         if (gpu_profile) mtl_ensure_stream_synced(s);
         uint64_t tp4 = mach_absolute_time();
@@ -765,14 +776,12 @@ void train_impl(PuffeRL& pufferl) {
                 ppo_mask_ptr = pufferl.ones_mask.data;
                 ppo_mask_stride = 0;
             }
-            // When PER is active, pass full-batch advantages for unbiased var/mean.
-            const FloatTensor *full_adv = (prio_alpha > 0.0f) ? &pufferl.advantages_puf : nullptr;
             PufTensor logstd_puf = to_puf(p_logstd);
             ppo_loss_fwd_bwd(dec_puf, logstd_puf, pufferl.train_buf,
                 pufferl.act_sizes_puf, pufferl.losses_puf,
                 hypers.clip_coef, hypers.vf_clip_coef, hypers.vf_coef, hypers.ent_coef,
                 pufferl.ppo_bufs_puf, pufferl.is_continuous,
-                ppo_mask_ptr, ppo_mask_stride, full_adv, s);
+                ppo_mask_ptr, ppo_mask_stride, s);
         }
         mtl_barrier((MetalStream*)s);
 
@@ -1210,9 +1219,7 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     register_rollout_buffers(pufferl->train_rollouts, alloc, total_agents, horizon, input_size, num_action_heads);
 
     // Pre-allocated train temporaries
-    pufferl->old_values_puf = {.shape = {total_agents, horizon}};
     pufferl->advantages_puf = {.shape = {total_agents, horizon}};
-    alloc_register(&alloc, &pufferl->old_values_puf);
     alloc_register(&alloc, &pufferl->advantages_puf);
 
     // PPO loss buffers

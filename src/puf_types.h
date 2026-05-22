@@ -124,6 +124,7 @@ struct PrefixScan {
   void *combined_ptr = nullptr;
   void *state_ptr = nullptr;
   void *input_ptr = nullptr;
+  void *reset_ptr = nullptr;
   int B = 0, T = 0, H = 0;
   FloatTensor a_star, s_vals, log_values_buf;
   PrecisionTensor out, next_state;
@@ -299,6 +300,7 @@ struct TrainGraph {
   FloatTensor mb_advantages;
   FloatTensor mb_prio;
   FloatTensor mb_values;
+  FloatTensor mb_terminals;
   FloatTensor mb_returns;
   FloatTensor mb_ratio;
   FloatTensor mb_newvalue;
@@ -318,6 +320,7 @@ inline void register_train_buffers(TrainGraph &bufs, Allocator &alloc, int S,
   bufs.mb_advantages = {.shape = {S, H}};
   bufs.mb_prio = {.shape = {S, 1}};
   bufs.mb_values = {.shape = {S, H}};
+  bufs.mb_terminals = {.shape = {S, H}};
   bufs.mb_returns = {.shape = {S, H}};
   bufs.mb_ratio = {.shape = {S, H}};
   bufs.mb_newvalue = {.shape = {S, H, 1}};
@@ -332,6 +335,7 @@ inline void register_train_buffers(TrainGraph &bufs, Allocator &alloc, int S,
   alloc_register(&alloc, &bufs.mb_advantages);
   alloc_register(&alloc, &bufs.mb_prio);
   alloc_register(&alloc, &bufs.mb_values);
+  alloc_register(&alloc, &bufs.mb_terminals);
   alloc_register(&alloc, &bufs.mb_returns);
   alloc_register(&alloc, &bufs.mb_ratio);
   alloc_register(&alloc, &bufs.mb_newvalue);
@@ -362,6 +366,7 @@ typedef PrecisionTensor (*network_forward_fn)(void *weights, PrecisionTensor x,
                                               cudaStream_t stream);
 typedef PrecisionTensor (*network_forward_train_fn)(void *weights, PrecisionTensor x,
                                                     PrecisionTensor state,
+                                                    PrecisionTensor reset,
                                                     void *activations,
                                                     cudaStream_t stream);
 typedef PrecisionTensor (*network_backward_fn)(void *weights, PrecisionTensor grad,
@@ -498,11 +503,12 @@ inline PrecisionTensor policy_forward_train(Policy *p, PolicyWeights &w,
                                             PolicyActivations &activations,
                                             PrecisionTensor x,
                                             PrecisionTensor state,
+                                            PrecisionTensor reset,
                                             cudaStream_t stream) {
   int B = x.shape[0], TT = x.shape[1];
   PrecisionTensor h =
       p->encoder.forward(w.encoder, activations.encoder, *puf_squeeze(&x, 0), stream);
-  h = p->network.forward_train(w.network, *puf_unsqueeze(&h, 0, B, TT), state,
+  h = p->network.forward_train(w.network, *puf_unsqueeze(&h, 0, B, TT), state, reset,
                                activations.network, stream);
   PrecisionTensor dec_out =
       p->decoder.forward(w.decoder, activations.decoder, *puf_squeeze(&h, 0), stream);

@@ -215,6 +215,7 @@ typedef enum {
     INV_SLOT_PRAYER_POT,    /* prayer potion (OSRS IDs 2434/139/141/143 for 4/3/2/1 dose) */
     INV_SLOT_BASTION_POT,   /* bastion potion (OSRS IDs 22461/22464/22467/22470) */
     INV_SLOT_STAMINA_POT,   /* stamina potion (OSRS IDs 12625/12627/12629/12631) */
+    INV_SLOT_SATURATED_HEART, /* saturated heart (OSRS ID 27641) */
 } InvSlotType;
 
 /* OSRS item IDs for consumable sprites (4-dose shown by default) */
@@ -252,6 +253,7 @@ typedef enum {
 #define OSRS_ID_STAMINA_3     12627
 #define OSRS_ID_STAMINA_2     12629
 #define OSRS_ID_STAMINA_1     12631
+#define OSRS_ID_SATURATED_HEART 27641
 
 #define INV_GRID_SLOTS 28  /* 4 columns x 7 rows */
 
@@ -458,6 +460,7 @@ typedef struct {
     int inv_prev_bastion_doses;
     int inv_prev_stamina_doses;
     int inv_prev_antivenom_doses;
+    int inv_prev_saturated_heart_count;
 
     /* human-clicked inventory slot: when a human clicks a consumable, this records
        the exact slot so gui_update_inventory removes from that slot instead of the
@@ -954,6 +957,7 @@ static void gui_load_sprites(GuiState* gs) {
         OSRS_ID_PRAYER_POT_4, OSRS_ID_PRAYER_POT_3, OSRS_ID_PRAYER_POT_2, OSRS_ID_PRAYER_POT_1,
         OSRS_ID_BASTION_4, OSRS_ID_BASTION_3, OSRS_ID_BASTION_2, OSRS_ID_BASTION_1,
         OSRS_ID_STAMINA_4, OSRS_ID_STAMINA_3, OSRS_ID_STAMINA_2, OSRS_ID_STAMINA_1,
+        OSRS_ID_SATURATED_HEART,
     };
     for (int i = 0; i < (int)(sizeof(consumable_ids)/sizeof(consumable_ids[0])); i++) {
         if (gs->item_sprite_count >= GUI_MAX_ITEM_SPRITES) break;
@@ -1901,6 +1905,8 @@ static int gui_consumable_osrs_id(InvSlotType type, int doses) {
             if (doses == 3) return OSRS_ID_STAMINA_3;
             if (doses == 2) return OSRS_ID_STAMINA_2;
             return OSRS_ID_STAMINA_1;
+        case INV_SLOT_SATURATED_HEART:
+            return OSRS_ID_SATURATED_HEART;
         default: return 0;
     }
 }
@@ -1964,6 +1970,7 @@ static void gui_snapshot_inventory_state(GuiState* gs, const Player* p) {
     gs->inv_prev_bastion_doses = p->bastion_doses;
     gs->inv_prev_stamina_doses = p->stamina_doses;
     gs->inv_prev_antivenom_doses = p->antivenom_doses;
+    gs->inv_prev_saturated_heart_count = p->saturated_heart_count;
 }
 
 /** Return 1 when any inventory-tracked consumable count changed. */
@@ -1977,7 +1984,8 @@ static int gui_inventory_consumables_changed(const GuiState* gs, const Player* p
         || p->ranged_potion_doses != gs->inv_prev_ranged_doses
         || p->bastion_doses != gs->inv_prev_bastion_doses
         || p->stamina_doses != gs->inv_prev_stamina_doses
-        || p->antivenom_doses != gs->inv_prev_antivenom_doses;
+        || p->antivenom_doses != gs->inv_prev_antivenom_doses
+        || p->saturated_heart_count != gs->inv_prev_saturated_heart_count;
 }
 
 /** Clear inventory-only GUI state that must not leak across resets. */
@@ -2066,6 +2074,12 @@ static void gui_populate_inventory(GuiState* gs, Player* p) {
     ADD_POTION_VIALS(p->antivenom_doses, INV_SLOT_ANTIVENOM);
     ADD_POTION_VIALS(p->prayer_pot_doses, INV_SLOT_PRAYER_POT);
     #undef ADD_POTION_VIALS
+
+    for (int i = 0; i < p->saturated_heart_count && n < INV_GRID_SLOTS; i++) {
+        gs->inv_grid[n].type = INV_SLOT_SATURATED_HEART;
+        gs->inv_grid[n].osrs_id = OSRS_ID_SATURATED_HEART;
+        n++;
+    }
 
     /* snapshot player state for incremental change detection */
     gui_snapshot_inventory_state(gs, p);
@@ -2276,6 +2290,15 @@ static void gui_update_inventory(GuiState* gs, Player* p) {
     if (p->prayer_pot_doses != gs->inv_prev_prayer_pot_doses) {
         gui_inv_update_potion_doses(gs, INV_SLOT_PRAYER_POT, p->prayer_pot_doses);
     }
+    int heart_diff = gs->inv_prev_saturated_heart_count - p->saturated_heart_count;
+    for (int i = 0; i < heart_diff; i++)
+        gui_inv_remove_last_consumable(gs, INV_SLOT_SATURATED_HEART);
+    for (int i = 0; i < -heart_diff; i++) {
+        int slot = gui_inv_first_empty(gs);
+        if (slot < 0) break;
+        gs->inv_grid[slot].type = INV_SLOT_SATURATED_HEART;
+        gs->inv_grid[slot].osrs_id = OSRS_ID_SATURATED_HEART;
+    }
 
     /* only clear human click when a consumable was actually used this frame.
        if no diff happened yet, keep it for the next tick when the sim processes the action. */
@@ -2329,6 +2352,8 @@ static const char* gui_inv_primary_action_label(const InvSlot* inv) {
         case INV_SLOT_BASTION_POT:
         case INV_SLOT_STAMINA_POT:
             return "Drink";
+        case INV_SLOT_SATURATED_HEART:
+            return NULL;
         case INV_SLOT_EMPTY:
         default:
             return NULL;
@@ -2359,6 +2384,8 @@ static const char* gui_inv_slot_display_name(const InvSlot* inv) {
             return "Bastion potion";
         case INV_SLOT_STAMINA_POT:
             return "Stamina potion";
+        case INV_SLOT_SATURATED_HEART:
+            return "Saturated heart";
         case INV_SLOT_EMPTY:
         default:
             return "";

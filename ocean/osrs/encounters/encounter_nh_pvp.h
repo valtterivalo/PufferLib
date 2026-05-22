@@ -7,19 +7,21 @@
  * the reference for how to add new encounters.
  *
  * Entity layout: 2 players (agent + opponent).
- * Obs: 334 features. Actions: 7 heads [9,13,6,2,5,2,2]. Mask: 39.
+ * Obs: SLOT_NUM_OBSERVATIONS features. Actions: NUM_ACTION_HEADS heads.
+ * Mask: ACTION_MASK_SIZE logits.
  */
 
 #ifndef ENCOUNTER_NH_PVP_H
 #define ENCOUNTER_NH_PVP_H
 
 #include "../osrs_encounter.h"
+#include "../osrs_encounter_visual_events.h"
 #include "../osrs_env.h"
 
 /* obs/action dimensions from osrs_types.h */
 static const int NH_PVP_ACTION_DIMS[] = {
     LOADOUT_DIM, COMBAT_DIM, OVERHEAD_DIM,
-    FOOD_DIM, POTION_DIM, KARAMBWAN_DIM, VENG_DIM
+    FOOD_DIM, POTION_DIM, KARAMBWAN_DIM, VENG_DIM, OFFENSIVE_DIM
 };
 
 
@@ -197,7 +199,7 @@ static void nh_pvp_fill_render_entities(
     NhPvpState* s = (NhPvpState*)state;
     int n = NUM_AGENTS < max_entities ? NUM_AGENTS : max_entities;
     for (int i = 0; i < n; i++) {
-        render_entity_from_player(&s->env.players[i], &out[i]);
+        osrs_render_entity_from_player_entity(&s->env.players[i], &out[i]);
     }
     if (n >= 2) {
         out[0].attack_target_entity_idx = 1;

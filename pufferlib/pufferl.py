@@ -10,8 +10,10 @@ import glob
 import json
 import ast
 import time
+import hashlib
 import argparse
 import configparser
+import subprocess as subprocess_lib
 from contextlib import contextmanager
 from collections import defaultdict
 import multiprocessing as mp
@@ -435,6 +437,163 @@ def _resolve_checkpoint_load_path(args, load_path=None, allow_auto_latest=False,
 
     return load_path
 
+def _checkpoint_sidecar_path(path):
+    return path + '.json'
+
+def _checkpoint_sha256(path):
+    h = hashlib.sha256()
+    with open(path, 'rb') as f:
+        while True:
+            chunk = f.read(1024 * 1024)
+            if not chunk:
+                break
+            h.update(chunk)
+    return h.hexdigest()
+
+def _json_ready(value):
+    if isinstance(value, dict):
+        return {str(k): _json_ready(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_ready(v) for v in value]
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
+
+def _repo_commit():
+    repo_dir = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+    return subprocess_lib.check_output(
+        ['git', 'rev-parse', 'HEAD'], cwd=repo_dir, text=True).strip()
+
+def _native_env_contract():
+    contract = {}
+    if hasattr(_C, 'env_obs_size'):
+        contract['obs_size'] = int(_C.env_obs_size())
+    if hasattr(_C, 'env_num_action_heads'):
+        contract['num_action_heads'] = int(_C.env_num_action_heads())
+    if hasattr(_C, 'env_action_dims'):
+        contract['action_dims'] = [int(v) for v in _C.env_action_dims()]
+    return contract
+
+def _zulrah_gear_config(args):
+    if args['env_name'] != 'osrs_zulrah':
+        return None
+    env_args = args.get('env', {})
+    return {
+        'gear_tier': env_args.get('gear_tier'),
+        'gear_tier_mode': env_args.get('gear_tier_mode'),
+        'episode_mode': env_args.get('episode_mode'),
+        'gear_tier_weight_0': env_args.get('gear_tier_weight_0'),
+        'gear_tier_weight_1': env_args.get('gear_tier_weight_1'),
+        'gear_tier_weight_2': env_args.get('gear_tier_weight_2'),
+    }
+
+def _zulrah_reward_config(args):
+    if args['env_name'] != 'osrs_zulrah':
+        return None
+    env_args = args.get('env', {})
+    return {
+        'reward_win': env_args.get('reward_win'),
+        'reward_loss_penalty': env_args.get('reward_loss_penalty'),
+        'reward_damage_dealt': env_args.get('reward_damage_dealt'),
+        'reward_correct_style': env_args.get('reward_correct_style'),
+        'reward_damage_received_penalty': env_args.get('reward_damage_received_penalty'),
+        'reward_cloud_occupancy_penalty': env_args.get('reward_cloud_occupancy_penalty'),
+    }
+
+def _checkpoint_file_info(path):
+    digest = _checkpoint_sha256(path)
+    return {
+        'path': path,
+        'size_bytes': os.path.getsize(path),
+        'sha256': digest,
+        'sha256_prefix': digest[:16],
+    }
+
+def _checkpoint_metadata(args, pufferl, path):
+    info = _checkpoint_file_info(path)
+    return _json_ready({
+        'metadata_version': 1,
+        'checkpoint': info,
+        'env_name': args['env_name'],
+        'num_params': int(pufferl.num_params()),
+        'score_metric': args.get('score_metric'),
+        'policy': args.get('policy', {}),
+        'env_contract': _native_env_contract(),
+        'zulrah_gear_config': _zulrah_gear_config(args),
+        'zulrah_reward_config': _zulrah_reward_config(args),
+        'git_commit': _repo_commit(),
+    })
+
+def _write_checkpoint_metadata(args, pufferl, path):
+    sidecar = _checkpoint_sidecar_path(path)
+    with open(sidecar, 'w') as f:
+        json.dump(_checkpoint_metadata(args, pufferl, path), f,
+            indent=2, sort_keys=True)
+
+def _validate_checkpoint_metadata(args, pufferl, path):
+    sidecar = _checkpoint_sidecar_path(path)
+    if not os.path.exists(sidecar):
+        return None
+    with open(sidecar) as f:
+        metadata = json.load(f)
+    expected = _checkpoint_metadata(args, pufferl, path)
+    fields = [
+        'env_name',
+        'num_params',
+        'score_metric',
+        'policy',
+        'env_contract',
+        'zulrah_gear_config',
+        'zulrah_reward_config',
+    ]
+    mismatches = [
+        key for key in fields
+        if metadata.get(key) != expected.get(key)
+    ]
+    if metadata.get('checkpoint', {}).get('sha256') != expected['checkpoint']['sha256']:
+        mismatches.append('checkpoint.sha256')
+    if mismatches:
+        raise ValueError(
+            f'Checkpoint metadata mismatch for {path}: {", ".join(mismatches)}')
+    return metadata
+
+def _print_resolved_checkpoint(path, pufferl=None):
+    info = _checkpoint_file_info(path)
+    params = '' if pufferl is None else f' params={int(pufferl.num_params())}'
+    print(
+        f'Resolved checkpoint: path={info["path"]} '
+        f'sha256={info["sha256_prefix"]} size={info["size_bytes"]}{params}',
+        flush=True)
+    return info
+
+def _no_render_eval_summary(args, pufferl, checkpoint_info, flat_logs):
+    env_args = args.get('env', {})
+    return _json_ready({
+        'checkpoint': checkpoint_info,
+        'model': {
+            'num_params': int(pufferl.num_params()),
+        },
+        'env': args['env_name'],
+        'policy': args.get('policy', {}),
+        'score_metric': args.get('score_metric'),
+        'zulrah_reward_config': _zulrah_reward_config(args),
+        'episode_mode': env_args.get('episode_mode'),
+        'gear_tier_mode': env_args.get('gear_tier_mode'),
+        'tier_weights': [
+            env_args.get('gear_tier_weight_0'),
+            env_args.get('gear_tier_weight_1'),
+            env_args.get('gear_tier_weight_2'),
+        ],
+        'sampled_tier_fractions': {
+            'tier_0': flat_logs.get('env/gear_tier_0_frac'),
+            'tier_1': flat_logs.get('env/gear_tier_1_frac'),
+            'tier_2': flat_logs.get('env/gear_tier_2_frac'),
+        },
+        'metrics': flat_logs,
+    })
+
 def _phase2_init_if_configured(backend, pufferl, args):
     '''Initialize Go-Explore restored-start curriculum when configured.'''
     env_args = args.get('env', {})
@@ -566,6 +725,7 @@ def _train_worker(args):
             backend.load_training_state(pufferl, load_state_path)
             print(f'Loaded training state from {load_state_path}', flush=True)
         elif load_path is not None:
+            _validate_checkpoint_metadata(args, pufferl, load_path)
             backend.load_weights(pufferl, load_path)
             print(f'Loaded weights from {load_path}', flush=True)
         anchor_path = args.get('anchor_model_path')
@@ -686,6 +846,7 @@ def _train_body(env_name, args, sweep_obj=None, result_queue=None, verbose=False
             if should_save and sweep_obj is None:
                 model_path = os.path.join(checkpoint_dir, f'{pufferl.global_step:016d}.bin')
                 backend.save_weights(pufferl, model_path)
+                _write_checkpoint_metadata(args, pufferl, model_path)
                 if args['save_training_state']:
                     state_path = os.path.join(checkpoint_dir,
                         f'{pufferl.global_step:016d}.state')
@@ -700,6 +861,21 @@ def _train_body(env_name, args, sweep_obj=None, result_queue=None, verbose=False
             last_log_was_eval = is_eval_epoch
             fresh_logs = dict(unroll_nested_dict(logs))
             flat_logs = {**flat_logs, **fresh_logs}
+            nan_loss_keys = [
+                k for k, v in fresh_logs.items()
+                if k.startswith('loss/')
+                and isinstance(v, (float, np.floating))
+                and np.isnan(v)
+            ]
+            if nan_loss_keys:
+                if model_path and os.path.exists(model_path):
+                    os.remove(model_path)
+                    sidecar = _checkpoint_sidecar_path(model_path)
+                    if os.path.exists(sidecar):
+                        os.remove(sidecar)
+                backend.close(pufferl)
+                raise FloatingPointError(
+                    f'NaN loss in {env_name}: {", ".join(nan_loss_keys)}')
 
             if verbose:
                 print_dashboard(args, model_size, flat_logs)
@@ -925,10 +1101,26 @@ def eval(env_name, args=None, load_path=None):
             require_checkpoint=True)
 
         if load_path is not None:
+            checkpoint_info = _print_resolved_checkpoint(load_path, pufferl)
+            _validate_checkpoint_metadata(args, pufferl, load_path)
             backend.load_weights(pufferl, load_path)
             print(f'Loaded weights from {load_path}', flush=True)
+        else:
+            checkpoint_info = None
 
         _phase2_init_if_configured(backend, pufferl, args)
+
+        if args['render_mode'] == 'None':
+            flat_logs = {}
+            while flat_logs.get('env/n', 0) < args['eval_episodes']:
+                backend.rollouts(pufferl)
+                logs = backend.eval_log(pufferl)
+                flat_logs = dict(unroll_nested_dict(logs))
+            print(json.dumps(
+                _no_render_eval_summary(args, pufferl, checkpoint_info, flat_logs),
+                indent=2, sort_keys=True))
+            backend.close(pufferl)
+            return
 
         while True:
             backend.render(pufferl, 0)
@@ -980,12 +1172,22 @@ def load_config(env_name):
             raise ValueError(
                 f'PUFFER_CONFIG_FILE={config_file_override} does not declare env_name={env_name}')
     else:
-        for path in glob.glob(puffer_config_dir, recursive=True):
-            p = configparser.ConfigParser()
-            p.read([puffer_default_config, path])
-            if env_name in p['base']['env_name'].split(): break
-        else:
+        matches = []
+        for path in sorted(glob.glob(puffer_config_dir, recursive=True)):
+            candidate = configparser.ConfigParser()
+            candidate.read([puffer_default_config, path])
+            if env_name in candidate['base']['env_name'].split():
+                matches.append((path, candidate))
+
+        if not matches:
             raise ValueError('No config for env_name {}'.format(env_name))
+
+        exact_config_name = f'{env_name}.ini'
+        exact_matches = [
+            (path, candidate) for path, candidate in matches
+            if os.path.basename(path) == exact_config_name
+        ]
+        _, p = (exact_matches or matches)[0]
 
     for section in p.sections():
         for key in p[section]:

@@ -658,6 +658,7 @@ static void inf_write_mask_ctx(
 
     /* HEAD_PRAYER: no_change, off, set_refresh_melee/ranged/magic/redemption. */
     mask[offset++] = 1.0f;  /* no_change always valid */
+    mask[offset++] = s->player.prayer != PRAYER_NONE ? 1.0f : 0.0f;
     mask[offset++] = s->player.current_prayer > 0 ? 1.0f : 0.0f;
     mask[offset++] = s->player.current_prayer > 0 ? 1.0f : 0.0f;
     mask[offset++] = s->player.current_prayer > 0 ? 1.0f : 0.0f;
@@ -753,7 +754,7 @@ static void inf_write_mask_ctx(
             s->min_valid_action_count_by_head[h] = valid;
         mask_offset += INF_ACTION_DIMS[h];
     }
-    int target_offset = ENCOUNTER_MOVE_ACTIONS + ENCOUNTER_OVERHEAD_DIM_PVE + 1;
+    int target_offset = inf_action_head_mask_offset(INF_HEAD_TARGET) + 1;
     for (int n = 0; n < INF_OBS_NPCS; n++) {
         if (mask[target_offset + n] <= 0.0f)
             continue;
@@ -843,90 +844,82 @@ static void inf_fill_render_entities_ctx(
 
     /* index 0: the player */
     if (n < max_entities) {
-        render_entity_from_player(&s->player, &out[n++]);
+        osrs_render_entity_from_player_entity(&s->player, &out[n++]);
     }
 
-    /* active NPCs: manually fill since InfNPC is not a Player */
     for (int i = 0; i < INF_MAX_NPCS && n < max_entities; i++) {
         InfNPC* npc = &s->npcs[i];
         if (!npc->active) continue;
 
-        RenderEntity* re = &out[n++];
-        memset(re, 0, sizeof(RenderEntity));
-        memset(re->equipped, ITEM_NONE, NUM_GEAR_SLOTS);
-        re->entity_type = ENTITY_NPC;
-        re->npc_def_id = INF_NPC_DEF_IDS[npc->type];
-        re->npc_slot = i;
-        re->npc_instance_id = npc->render_id;
-        /* facing: nibblers → pillar (dest-based), NPCs attacking shield → shield
-           (dest-based), all others → player (entity 0). */
+        int attack_target_entity_idx = 0;
         if (npc->type == INF_NPC_NIBBLER || npc->resurrecting_this_tick) {
-            re->attack_target_entity_idx = -1;
+            attack_target_entity_idx = -1;
         } else if (npc->aggro_target >= 0 && npc->aggro_target < INF_MAX_NPCS &&
                    s->npcs[npc->aggro_target].active) {
-            /* attacking another NPC (e.g. shield) — use dest-based facing */
-            re->attack_target_entity_idx = -1;
-        } else {
-            re->attack_target_entity_idx = 0;  /* player */
+            attack_target_entity_idx = -1;
         }
-        re->npc_visible = npc->active;
-        re->npc_size = npc->size;
-        {
-            const NpcModelMapping* nm = npc_model_lookup(INF_NPC_DEF_IDS[npc->type]);
-            if (npc->death_ticks > 0) {
-                re->npc_anim_id = inf_npc_death_anim_id(npc, nm);
-            } else if (npc->type == INF_NPC_MELEER &&
-                       npc->dig_freeze_timer == 6) {
-                re->npc_anim_id = INF_GEN_ANIM_MELEER_DIG_DOWN;
-            } else if (npc->type == INF_NPC_MELEER &&
-                       npc->dig_attack_delay == 6) {
-                re->npc_anim_id = INF_GEN_ANIM_MELEER_DIG_UP;
-            } else if (npc->attacked_this_tick) {
-                re->npc_anim_id = inf_npc_attack_anim_id(npc, nm);
-            } else {
-                /* walk/idle handled by secondary track in render_client_tick.
-                   setting walk as primary causes stall (interleave_count==0)
-                   which freezes movement and creates tile-to-tile teleporting. */
-                re->npc_anim_id = -1;
-            }
+
+        int npc_anim_id = -1;
+        const NpcModelMapping* nm = npc_model_lookup(INF_NPC_DEF_IDS[npc->type]);
+        if (npc->death_ticks > 0) {
+            npc_anim_id = inf_npc_death_anim_id(npc, nm);
+        } else if (npc->type == INF_NPC_MELEER &&
+                   npc->dig_freeze_timer == 6) {
+            npc_anim_id = INF_GEN_ANIM_MELEER_DIG_DOWN;
+        } else if (npc->type == INF_NPC_MELEER &&
+                   npc->dig_attack_delay == 6) {
+            npc_anim_id = INF_GEN_ANIM_MELEER_DIG_UP;
+        } else if (npc->attacked_this_tick) {
+            npc_anim_id = inf_npc_attack_anim_id(npc, nm);
         }
-        re->x = npc->x;
-        re->y = npc->y;
-        /* nibblers: set dest to pillar center so renderer faces them toward
-           the pillar instead of the player when idle/attacking */
+
+        int dest_x = npc->target_x;
+        int dest_y = npc->target_y;
         if (npc->type == INF_NPC_NIBBLER) {
             int tp = s->nibbler_target_pillar;
             if (tp >= 0 && tp < INF_NUM_PILLARS && s->pillars[tp].active) {
-                re->dest_x = s->pillars[tp].x + INF_PILLAR_SIZE / 2;
-                re->dest_y = s->pillars[tp].y + INF_PILLAR_SIZE / 2;
+                dest_x = s->pillars[tp].x + INF_PILLAR_SIZE / 2;
+                dest_y = s->pillars[tp].y + INF_PILLAR_SIZE / 2;
             } else {
-                re->dest_x = npc->x;
-                re->dest_y = npc->y;
+                dest_x = npc->x;
+                dest_y = npc->y;
             }
         } else if (npc->resurrection_visual_target >= 0 &&
                    npc->resurrection_visual_target < INF_MAX_NPCS &&
                    s->npcs[npc->resurrection_visual_target].active) {
             InfNPC* at = &s->npcs[npc->resurrection_visual_target];
-            re->dest_x = at->x + at->size / 2;
-            re->dest_y = at->y + at->size / 2;
+            dest_x = at->x + at->size / 2;
+            dest_y = at->y + at->size / 2;
         } else if (npc->aggro_target >= 0 && npc->aggro_target < INF_MAX_NPCS &&
                    s->npcs[npc->aggro_target].active) {
-            /* attacking shield/other NPC — face toward target NPC center */
             InfNPC* at = &s->npcs[npc->aggro_target];
-            re->dest_x = at->x + at->size / 2;
-            re->dest_y = at->y + at->size / 2;
-        } else {
-            re->dest_x = npc->target_x;
-            re->dest_y = npc->target_y;
+            dest_x = at->x + at->size / 2;
+            dest_y = at->y + at->size / 2;
         }
-        re->current_hitpoints = npc->hp;
-        re->base_hitpoints = npc->max_hp;
-        re->attack_style_this_tick = npc->attacked_this_tick
-            ? (AttackStyle)npc->attack_style_this_tick : ATTACK_STYLE_NONE;
-        re->hit_landed_this_tick = npc->hit_landed_this_tick;
-        re->hit_damage = npc->hit_damage;
-        re->hit_was_successful = npc->hit_was_successful_this_tick;
-        re->hit_spell_type = npc->hit_spell_type;
+
+        RenderEntity* re = &out[n++];
+        osrs_render_entity_from_npc_spec(&(OsrsNpcRenderEntitySpec){
+            .npc_def_id = INF_NPC_DEF_IDS[npc->type],
+            .npc_slot = i,
+            .npc_instance_id = npc->render_id,
+            .npc_visible = npc->active,
+            .npc_size = npc->size,
+            .npc_anim_id = npc_anim_id,
+            .x = npc->x,
+            .y = npc->y,
+            .dest_x = dest_x,
+            .dest_y = dest_y,
+            .current_hitpoints = npc->hp,
+            .base_hitpoints = npc->max_hp,
+            .attack_style_this_tick = npc->attacked_this_tick
+                ? (AttackStyle)npc->attack_style_this_tick
+                : ATTACK_STYLE_NONE,
+            .hit_landed_this_tick = npc->hit_landed_this_tick,
+            .hit_damage = npc->hit_damage,
+            .hit_was_successful = npc->hit_was_successful_this_tick,
+            .hit_spell_type = npc->hit_spell_type,
+            .attack_target_entity_idx = attack_target_entity_idx,
+        }, re);
     }
 
     encounter_resolve_attack_target(out, n, s->interaction.target_slot);

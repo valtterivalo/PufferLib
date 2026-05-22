@@ -1317,10 +1317,8 @@ static void inf_tick_npcs_ctx(InfernoState* s, InfernoContext* ctx) {
                 inf_healer_apply_landed_heal(s, i);
         }
 
-        /* death linger: decrement and deactivate when done */
         if (s->npcs[i].death_ticks > 0) {
-            s->npcs[i].death_ticks--;
-            if (s->npcs[i].death_ticks == 0) {
+            if (osrs_npc_death_linger_tick(&s->npcs[i].death_ticks)) {
                 if (s->npcs[i].spawn_blob_splits_on_removal &&
                     blob_split_count < INF_MAX_NPCS) {
                     blob_split_x[blob_split_count] = s->npcs[i].x;
@@ -1330,10 +1328,9 @@ static void inf_tick_npcs_ctx(InfernoState* s, InfernoContext* ctx) {
                 }
                 inf_deactivate_npc(s, i);
             }
-            continue;  /* dying NPCs don't move or attack */
+            continue;
         }
 
-        /* decrement ice barrage freeze timer */
         if (s->npcs[i].frozen_ticks > 0) s->npcs[i].frozen_ticks--;
 
         if (s->npcs[i].type == INF_NPC_MAGER && s->npcs[i].resurrect_cooldown > 0)

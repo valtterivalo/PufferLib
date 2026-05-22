@@ -329,6 +329,11 @@ typedef enum {
 } VisualPolicyMode;
 
 typedef struct {
+    int input_size;
+    int decoder_value_heads;
+} VisualPolicyModelShape;
+
+typedef struct {
     int enabled;
     VisualPolicyMode mode;
     uint32_t rng_state;
@@ -359,6 +364,139 @@ static VisualPolicyMode visual_policy_parse_mode(const char* value) {
     abort();
 }
 
+static int visual_policy_is_continuous(
+    const int* action_dims,
+    int num_action_heads
+) {
+    for (int h = 0; h < num_action_heads; h++) {
+        if (action_dims[h] != 1) return 0;
+    }
+    return 1;
+}
+
+static int64_t visual_policy_expected_weight_count(
+    int input_size,
+    int hidden_size,
+    int num_layers,
+    const int* action_dims,
+    int num_action_heads,
+    int decoder_value_heads
+) {
+    int action_sum = 0;
+    for (int h = 0; h < num_action_heads; h++) {
+        action_sum += action_dims[h];
+    }
+
+    int64_t total = 0;
+    total += (int64_t)hidden_size * input_size;
+    total += (int64_t)(action_sum + decoder_value_heads) * hidden_size;
+    if (visual_policy_is_continuous(action_dims, num_action_heads)) {
+        total += num_action_heads;
+    }
+    total += (int64_t)num_layers * 3 * hidden_size * hidden_size;
+    return total;
+}
+
+static VisualPolicyModelShape visual_policy_select_model_shape(
+    const VisualPolicy* policy,
+    const EncounterDef* edef,
+    int hidden_size,
+    int num_layers
+) {
+    int obs_input_size = policy->obs_size;
+    int full_input_size = policy->obs_size + policy->mask_size;
+    int64_t obs_value_expected = visual_policy_expected_weight_count(
+        obs_input_size, hidden_size, num_layers, policy->action_dims,
+        policy->num_action_heads, 1);
+    int64_t full_value_expected = visual_policy_expected_weight_count(
+        full_input_size, hidden_size, num_layers, policy->action_dims,
+        policy->num_action_heads, 1);
+    int64_t obs_policy_expected = visual_policy_expected_weight_count(
+        obs_input_size, hidden_size, num_layers, policy->action_dims,
+        policy->num_action_heads, 0);
+    int64_t full_policy_expected = visual_policy_expected_weight_count(
+        full_input_size, hidden_size, num_layers, policy->action_dims,
+        policy->num_action_heads, 0);
+    int64_t file_weights = policy->weights->raw_size;
+
+    VisualPolicyModelShape match = {0};
+    int matches = 0;
+    if (obs_value_expected == file_weights) {
+        match = (VisualPolicyModelShape){obs_input_size, 1};
+        matches++;
+    }
+    if (full_value_expected == file_weights) {
+        match = (VisualPolicyModelShape){full_input_size, 1};
+        matches++;
+    }
+    if (obs_policy_expected == file_weights) {
+        match = (VisualPolicyModelShape){obs_input_size, 0};
+        matches++;
+    }
+    if (full_policy_expected == file_weights) {
+        match = (VisualPolicyModelShape){full_input_size, 0};
+        matches++;
+    }
+
+    if (matches != 1) {
+        fprintf(stderr,
+            "policy: %s model shape mismatch file=%lld floats obs_value=%lld full_value=%lld obs_policy=%lld full_policy=%lld\n",
+            edef->name,
+            (long long)file_weights,
+            (long long)obs_value_expected,
+            (long long)full_value_expected,
+            (long long)obs_policy_expected,
+            (long long)full_policy_expected);
+        abort();
+    }
+    return match;
+}
+
+static PufferNet* visual_policy_make_puffernet(
+    Weights* weights,
+    int input_dim,
+    int hidden_dim,
+    int num_layers,
+    int action_dims[],
+    int num_action_heads,
+    int decoder_value_heads
+) {
+    PufferNet* net = (PufferNet*)calloc(1, sizeof(PufferNet));
+    if (!net) {
+        fprintf(stderr, "policy: failed to allocate puffer net\n");
+        abort();
+    }
+    net->num_agents = 1;
+    net->obs = (float*)calloc((size_t)input_dim, sizeof(float));
+    if (!net->obs) {
+        fprintf(stderr, "policy: failed to allocate puffer net obs\n");
+        abort();
+    }
+
+    int action_sum = 0;
+    int is_continuous = visual_policy_is_continuous(action_dims, num_action_heads);
+    for (int h = 0; h < num_action_heads; h++) {
+        action_sum += action_dims[h];
+    }
+    if (is_continuous && decoder_value_heads == 0) {
+        fprintf(stderr, "policy: continuous policy-only decoder is unsupported\n");
+        abort();
+    }
+
+    net->is_continuous = is_continuous;
+    net->num_actions = num_action_heads;
+    net->encoder = make_linear(weights, 1, input_dim, hidden_dim);
+    net->decoder = make_linear(weights, 1, hidden_dim, action_sum + decoder_value_heads);
+    if (net->is_continuous) {
+        net->log_std = get_weights(weights, num_action_heads);
+    }
+    net->mingru = make_mingru(weights, 1, hidden_dim, num_layers);
+    if (!net->is_continuous) {
+        net->multidiscrete = make_multidiscrete(1, action_dims, num_action_heads);
+    }
+    return net;
+}
+
 static uint32_t visual_policy_next_u32(VisualPolicy* policy) {
     policy->rng_state = policy->rng_state * 1664525u + 1013904223u;
     return policy->rng_state;
@@ -377,17 +515,21 @@ static void visual_policy_init(
 ) {
     memset(policy, 0, sizeof(*policy));
     if (!model_path || !model_path[0]) return;
-    if (!edef || strcmp(edef->name, "inferno") != 0) {
-        fprintf(stderr, "policy: model loading is currently wired for inferno only\n");
+    if (!edef) {
+        fprintf(stderr, "policy: missing encounter definition\n");
         abort();
     }
     if (edef->num_action_heads > VISUAL_POLICY_MAX_ACTION_HEADS) {
         fprintf(stderr, "policy: too many action heads: %d\n", edef->num_action_heads);
         abort();
     }
-    if (edef->obs_size != INF_NUM_OBS || edef->mask_size != INF_ACTION_MASK_SIZE) {
-        fprintf(stderr, "policy: inferno shape mismatch obs=%d mask=%d expected=%d/%d\n",
-            edef->obs_size, edef->mask_size, INF_NUM_OBS, INF_ACTION_MASK_SIZE);
+    int action_mask_size = 0;
+    for (int h = 0; h < edef->num_action_heads; h++) {
+        action_mask_size += edef->action_head_dims[h];
+    }
+    if (action_mask_size != edef->mask_size) {
+        fprintf(stderr, "policy: %s mask mismatch heads=%d mask=%d\n",
+            edef->name, action_mask_size, edef->mask_size);
         abort();
     }
     policy->obs_size = edef->obs_size;
@@ -401,9 +543,18 @@ static void visual_policy_init(
         fprintf(stderr, "policy: failed to load model: %s\n", model_path);
         abort();
     }
-    policy->net = make_puffernet(
-        policy->weights, 1, INF_NUM_OBS,
-        512, 2, policy->action_dims, policy->num_action_heads);
+    int hidden_size = strcmp(edef->name, "inferno") == 0 ? 512 : 128;
+    int num_layers = 2;
+    VisualPolicyModelShape model_shape = visual_policy_select_model_shape(
+        policy, edef, hidden_size, num_layers);
+    policy->net = visual_policy_make_puffernet(
+        policy->weights,
+        model_shape.input_size,
+        hidden_size,
+        num_layers,
+        policy->action_dims,
+        policy->num_action_heads,
+        model_shape.decoder_value_heads);
     if (policy->weights->idx != policy->weights->raw_size) {
         fprintf(stderr,
             "policy: model shape mismatch consumed=%d floats file=%d floats\n",
@@ -411,7 +562,7 @@ static void visual_policy_init(
         abort();
     }
     policy->obs = (float*)osrs_calloc_or_abort(
-        (size_t)(INF_NUM_OBS + INF_ACTION_MASK_SIZE),
+        (size_t)(policy->obs_size + policy->mask_size),
         sizeof(float),
         "visual policy obs");
     policy->mode = mode;
@@ -842,8 +993,8 @@ static void run_visual(
     /* load terrain/objects per encounter */
     if (!encounter_name || encounter_name_is_pvp(encounter_name)) {
         rc->terrain = terrain_load(OSRS_ASSET("wilderness.terrain"));
-        rc->objects = objects_load(OSRS_ASSET("wilderness.objects"));
-        rc->npcs = objects_load(OSRS_ASSET("wilderness.npcs"));
+        rc->objects = NULL;
+        rc->npcs = NULL;
     } else if (strcmp(encounter_name, "zulrah") == 0) {
         rc->terrain = terrain_load(OSRS_ASSET("zulrah.terrain"));
         rc->objects = objects_load(OSRS_ASSET("zulrah.objects"));
@@ -1057,7 +1208,7 @@ int main(int argc, char** argv) {
 
 #ifdef __EMSCRIPTEN__
     if (!encounter_name) encounter_name = "inferno";
-    if (encounter_name && strcmp(encounter_name, "pvp") == 0) encounter_name = NULL;
+    if (encounter_name && strcmp(encounter_name, "pvp") == 0) encounter_name = "nh_pvp";
 #else
     if (encounter_name && strcmp(encounter_name, "pvp") == 0) encounter_name = "nh_pvp";
 #endif

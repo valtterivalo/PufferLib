@@ -172,6 +172,10 @@ static inline void human_input_clear_selected_ui_target(HumanInput* hi) {
 }
 
 static inline void human_input_queue_walk(HumanInput* hi, int world_x, int world_y) {
+    hi->pending_move_x = world_x;
+    hi->pending_move_y = world_y;
+    hi->pending_attack = 0;
+    hi->pending_target_idx = -1;
     human_input_queue_command(hi, (HumanCommand){
         .kind = HUMAN_COMMAND_WALK,
         .world_x = world_x,
@@ -180,6 +184,9 @@ static inline void human_input_queue_walk(HumanInput* hi, int world_x, int world
 }
 
 static inline void human_input_queue_attack_npc(HumanInput* hi, int npc_slot) {
+    human_input_clear_move(hi);
+    hi->pending_attack = 1;
+    hi->pending_target_idx = npc_slot;
     human_input_queue_command(hi, (HumanCommand){
         .kind = HUMAN_COMMAND_ATTACK_NPC,
         .npc_slot = npc_slot,
@@ -216,6 +223,10 @@ static inline void human_input_queue_drink(HumanInput* hi, int potion, int inven
 }
 
 static inline void human_input_queue_spell_target(HumanInput* hi, int spell, int npc_slot) {
+    human_input_clear_move(hi);
+    hi->pending_attack = 1;
+    hi->pending_spell = spell;
+    hi->pending_target_idx = npc_slot;
     human_input_queue_command(hi, (HumanCommand){
         .kind = HUMAN_COMMAND_SPELL_TARGET,
         .spell = spell,

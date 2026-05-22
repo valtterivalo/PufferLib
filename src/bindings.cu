@@ -812,6 +812,14 @@ PYBIND11_MODULE(_C, m) {
         return now - pufferl.start_time;
     });
     m.def("puff_advantage", &py_puff_advantage);
+    m.def("env_obs_size", []() -> int { return get_obs_size(); });
+    m.def("env_num_action_heads", []() -> int { return get_num_atns(); });
+    m.def("env_action_dims", []() {
+        py::list dims;
+        int* sizes = get_act_sizes();
+        for (int i = 0; i < get_num_act_sizes(); i++) dims.append(sizes[i]);
+        return dims;
+    });
     m.def("create_vec", &create_vec, py::arg("args"), py::arg("gpu") = 1);
     py::class_<VecEnv, std::unique_ptr<VecEnv>>(m, "VecEnv")
         .def_readonly("total_agents",  &VecEnv::total_agents)

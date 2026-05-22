@@ -159,7 +159,9 @@ dmypy.json
 *.gb
 
 checkpoints/
+checkpoints_*/
 experiments/
+logs_*/
 wandb/
 .neptune/
 raylib*/
@@ -189,3 +191,7 @@ ocean/impulse_wars/benchmark/
 /runs/
 /*.bin
 data/
+!ocean/osrs/data/
+!ocean/osrs/data/sprites/
+!ocean/osrs/data/sprites/items/
+!ocean/osrs/data/sprites/items/27641.png
