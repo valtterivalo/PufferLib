@@ -27,6 +27,7 @@ try:
     from pufferlib import _C
 except ImportError:
     raise ImportError('Failed to import PufferLib C++ backend. If you have non-default PyTorch, try installing with --no-build-isolation')
+from pufferlib import selfplay
 
 import rich
 import rich.traceback
@@ -828,6 +829,15 @@ def _train_body(env_name, args, sweep_obj=None, result_queue=None, verbose=False
             flat_logs = dict(unroll_nested_dict(backend.log(pufferl)))
             print_dashboard(args, model_size, flat_logs, clear=True)
 
+        """Multi-bank PFSP self-play curriculum (no-op when selfplay.enabled=0).
+        Ported from cheng_fork/selfplay; works on either backend (CUDA on box,
+        Metal locally) via the _C symbols added in src/metal_bindings.mm."""
+        pool_state = None
+        try:
+            pool_state = selfplay.setup(pufferl, backend, args, run_id)
+        except RuntimeError as e:
+            print(f'WARNING: {e}, skipping selfplay setup')
+
         model_path = ''
         flat_logs = {}
         last_log_was_eval = False
@@ -876,6 +886,11 @@ def _train_body(env_name, args, sweep_obj=None, result_queue=None, verbose=False
                 backend.close(pufferl)
                 raise FloatingPointError(
                     f'NaN loss in {env_name}: {", ".join(nan_loss_keys)}')
+
+            """Self-play pool maintenance: opponent Elo update, snapshot, swap.
+            No-op when pool_state is None (selfplay disabled)."""
+            if epoch < train_epochs:
+                selfplay.step(pufferl, backend, pool_state, flat_logs, epoch)
 
             if verbose:
                 print_dashboard(args, model_size, flat_logs)
