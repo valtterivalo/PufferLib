@@ -36,7 +36,13 @@ from export_models import (
     hsl15_to_rgb,
     load_model_modern,
 )
-from export_textures import TextureAtlas
+from export_textures import (
+    TextureAtlas,
+    build_atlas,
+    load_texture_average_colors,
+    load_texture_sprites,
+    write_atlas_binary,
+)
 from export_collision_map_modern import (
     _read_extended_smart,
     find_map_groups,
@@ -85,6 +91,9 @@ class LocDef:
     # color remapping
     recolor_from: list[int] = field(default_factory=list)
     recolor_to: list[int] = field(default_factory=list)
+    # texture remapping
+    retexture_from: list[int] = field(default_factory=list)
+    retexture_to: list[int] = field(default_factory=list)
 
 
 def _read_modern_obj_string(buf: io.BytesIO) -> str:
@@ -190,8 +199,8 @@ def decode_loc_definitions_modern(reader: ModernCacheReader) -> dict[int, LocDef
             elif opcode == 41:
                 count = buf.read(1)[0]
                 for _ in range(count):
-                    buf.read(2)  # texture from
-                    buf.read(2)  # texture to
+                    d.retexture_from.append(struct.unpack(">H", buf.read(2))[0])
+                    d.retexture_to.append(struct.unpack(">H", buf.read(2))[0])
             elif opcode == 60:
                 buf.read(2)  # mapAreaId
             elif opcode == 61:
@@ -402,6 +411,21 @@ def apply_recolors(model: ModelData, loc: LocDef) -> None:
     for i in range(model.face_count):
         if i < len(model.face_colors) and model.face_colors[i] in remap:
             model.face_colors[i] = remap[model.face_colors[i]]
+
+
+def apply_retextures(model: ModelData, loc: LocDef) -> None:
+    """Apply texture remapping from object definition to textured faces.
+
+    Each placement can override the default model textures via the loc def's
+    retexture table (opcode 41). Without this, e.g. trees fall back to the
+    generic leaf texture instead of the species-specific one.
+    """
+    if not loc.retexture_from:
+        return
+    remap = dict(zip(loc.retexture_from, loc.retexture_to))
+    for i in range(len(model.face_textures)):
+        if model.face_textures[i] in remap:
+            model.face_textures[i] = remap[model.face_textures[i]]
 
 
 def scale_model(model: ModelData, size_x: int, size_h: int, size_y: int) -> None:
@@ -641,6 +665,7 @@ def process_placements(
 
         # apply color remapping
         apply_recolors(md, loc)
+        apply_retextures(md, loc)
 
         # apply scale
         scale_model(md, loc.model_size_x, loc.model_size_h, loc.model_size_y)
@@ -843,6 +868,12 @@ def _build_and_write(
     file_size = args.output.stat().st_size
     print(f"\nwrote {file_size:,} bytes to {args.output}")
 
+    if atlas is not None:
+        atlas_path = args.output.with_suffix(".atlas")
+        write_atlas_binary(atlas_path, atlas)
+        atlas_size = atlas_path.stat().st_size
+        print(f"wrote {atlas_size:,} bytes to {atlas_path}")
+
 
 def _main_modern(args: argparse.Namespace) -> None:
     """Export objects from a modern OSRS cache."""
@@ -952,12 +983,13 @@ def _main_modern(args: argparse.Namespace) -> None:
 
     print(f"  {len(all_placements)} placements parsed, {errors} region errors")
 
-    # no texture atlas for modern cache (textures not yet supported)
-    tex_colors: dict[int, int] = {}
+    print("loading texture atlas...")
+    tex_colors = load_texture_average_colors(reader)
+    atlas = build_atlas(load_texture_sprites(reader), repeat_v_padding=128)
 
     loader_modern = lambda mid: load_model_modern(reader, mid)
     _build_and_write(args, all_placements, loc_defs, loader_modern, terrain_parsed,
-                     tex_colors)
+                     tex_colors, atlas=atlas)
 
 
 def main() -> None:

@@ -51,6 +51,7 @@ static const char* const OSRS_ASSET_INFERNO_PATHS[] = {
     "inferno.anims",
     "inferno.terrain",
     "inferno.objects",
+    "inferno.atlas",
     "inferno_zuk.objects",
     "inferno.cmap",
     "inferno_npcs.models",
@@ -62,6 +63,7 @@ static const char* const OSRS_ASSET_ZULRAH_PATHS[] = {
     "zulrah.anims",
     "zulrah.terrain",
     "zulrah.objects",
+    "zulrah.atlas",
     "zulrah.cmap",
 };
 
@@ -111,6 +113,7 @@ static const char* const OSRS_ASSET_WILDERNESS_PATHS[] = {
     "wilderness.cmap",
     "wilderness.terrain",
     "wilderness.objects",
+    "wilderness.atlas",
 };
 
 static const char* const OSRS_ASSET_PVP_PATHS[] = {
@@ -126,6 +129,7 @@ static const char* const OSRS_ASSET_PVP_PATHS[] = {
     "wilderness.cmap",
     "wilderness.terrain",
     "wilderness.objects",
+    "wilderness.atlas",
 };
 
 static const OsrsAssetGroup OSRS_ASSET_GROUPS[OSRS_ASSET_GROUP_COUNT] = {

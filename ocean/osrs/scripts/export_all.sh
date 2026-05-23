@@ -37,6 +37,41 @@ CACHE="$(cd "$CACHE_INPUT" && pwd)"
 KEYS="$CACHE/keys.json"
 cd "$SCRIPT_DIR"
 
+echo "=== exporting inferno collision map ==="
+if [ -f "$KEYS" ]; then
+    python export_collision_map_modern.py \
+        --cache "$CACHE" --keys "$KEYS" \
+        --output "$DATA_DIR/inferno.cmap" \
+        --regions 35,83
+else
+    python export_collision_map_modern.py \
+        --cache "$CACHE" \
+        --output "$DATA_DIR/inferno.cmap" \
+        --regions 35,83
+fi
+
+echo ""
+echo "=== exporting inferno terrain ==="
+python export_terrain.py \
+    --modern-cache "$CACHE" \
+    --output "$DATA_DIR/inferno.terrain" \
+    --regions "35,83"
+
+echo ""
+echo "=== exporting inferno objects ==="
+if [ -f "$KEYS" ]; then
+    python export_objects.py \
+        --modern-cache "$CACHE" --keys "$KEYS" \
+        --output "$DATA_DIR/inferno.objects" \
+        --regions "35,83"
+else
+    python export_objects.py \
+        --modern-cache "$CACHE" \
+        --output "$DATA_DIR/inferno.objects" \
+        --regions "35,83"
+fi
+
+echo ""
 echo "=== exporting zulrah collision map ==="
 if [ -f "$KEYS" ]; then
     python export_collision_map_modern.py \

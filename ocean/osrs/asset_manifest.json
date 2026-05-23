@@ -31,6 +31,7 @@
         "inferno.anims",
         "inferno.terrain",
         "inferno.objects",
+        "inferno.atlas",
         "inferno_zuk.objects",
         "inferno.cmap",
         "inferno_npcs.models",
@@ -44,6 +45,7 @@
         "zulrah.anims",
         "zulrah.terrain",
         "zulrah.objects",
+        "zulrah.atlas",
         "zulrah.cmap"
       ]
     },
@@ -102,7 +104,8 @@
       "files": [
         "wilderness.cmap",
         "wilderness.terrain",
-        "wilderness.objects"
+        "wilderness.objects",
+        "wilderness.atlas"
       ]
     },
     {
@@ -119,7 +122,8 @@
         "ui/interface_manifest.json",
         "wilderness.cmap",
         "wilderness.terrain",
-        "wilderness.objects"
+        "wilderness.objects",
+        "wilderness.atlas"
       ]
     }
   ]

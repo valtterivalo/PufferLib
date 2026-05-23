@@ -54,6 +54,7 @@ static void test_asset_groups(void) {
     assert(inferno);
     assert(osrs_asset_group_contains(inferno, "inferno.models"));
     assert(osrs_asset_group_contains(inferno, "inferno_zuk.objects"));
+    assert(osrs_asset_group_contains(inferno, "inferno.atlas"));
 
     const OsrsAssetGroup* pvp = osrs_asset_group_by_name("pvp");
     assert(pvp);
@@ -62,6 +63,7 @@ static void test_asset_groups(void) {
     assert(osrs_asset_group_contains(pvp, "wilderness.cmap"));
     assert(osrs_asset_group_contains(pvp, "wilderness.terrain"));
     assert(osrs_asset_group_contains(pvp, "wilderness.objects"));
+    assert(osrs_asset_group_contains(pvp, "wilderness.atlas"));
 
     for (size_t group_idx = 0; group_idx < osrs_asset_group_count(); group_idx++) {
         const OsrsAssetGroup* group = osrs_asset_group_at(group_idx);
