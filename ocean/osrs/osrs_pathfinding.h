@@ -263,26 +263,26 @@ static inline PathResult pathfind_step(const CollisionMap* map, int height,
         #undef EB
     }
 
-    /* fallback: if no exact path, find closest reachable tile near dest */
+    /* fallback: if no exact path, find the BFS-reached tile with minimum Manhattan
+       distance to the requested dest. matches RuneC rc_find_path; the prior
+       radius-bounded scan silently failed when the nearest approach was farther
+       than 10 tiles. */
     if (!found_path) {
-        int best_dist_sq = PATHFIND_MAX_FALLBACK_RADIUS * PATHFIND_MAX_FALLBACK_RADIUS + 1;
+        int best_manhattan = PATHFIND_GRID_SIZE * 2;
         int best_cost = 999999;
         int best_x = -1, best_y = -1;
-        int r = PATHFIND_MAX_FALLBACK_RADIUS;
 
-        for (int fx = local_dest_x - r; fx <= local_dest_x + r; fx++) {
-            for (int fy = local_dest_y - r; fy <= local_dest_y + r; fy++) {
-                if (fx < 0 || fx >= PATHFIND_GRID_SIZE || fy < 0 || fy >= PATHFIND_GRID_SIZE)
-                    continue;
-                if (cost[fx][fy] == 0) continue;  /* not reached by BFS */
+        for (int fx = 0; fx < PATHFIND_GRID_SIZE; fx++) {
+            for (int fy = 0; fy < PATHFIND_GRID_SIZE; fy++) {
+                if (cost[fx][fy] == 0) continue;
 
                 int ddx = fx - local_dest_x;
                 int ddy = fy - local_dest_y;
-                int dist_sq = ddx * ddx + ddy * ddy;
+                int manhattan = (ddx < 0 ? -ddx : ddx) + (ddy < 0 ? -ddy : ddy);
 
-                if (dist_sq < best_dist_sq ||
-                    (dist_sq == best_dist_sq && cost[fx][fy] < best_cost)) {
-                    best_dist_sq = dist_sq;
+                if (manhattan < best_manhattan ||
+                    (manhattan == best_manhattan && cost[fx][fy] < best_cost)) {
+                    best_manhattan = manhattan;
                     best_cost = cost[fx][fy];
                     best_x = fx;
                     best_y = fy;
@@ -291,7 +291,7 @@ static inline PathResult pathfind_step(const CollisionMap* map, int height,
         }
 
         if (best_x == -1) {
-            return result;  /* completely unreachable */
+            return result;
         }
 
         cur_x = best_x;
@@ -501,22 +501,21 @@ static inline PathResult pathfind_step_arena(
         #undef EB
     }
 
-    /* fallback: closest reachable tile near dest */
+    /* fallback: BFS-reached tile with minimum Manhattan distance to dest.
+       see pathfind_step for rationale. */
     if (!found_path) {
-        int best_dist_sq = PATHFIND_MAX_FALLBACK_RADIUS * PATHFIND_MAX_FALLBACK_RADIUS + 1;
+        int best_manhattan = arena_w + arena_h;
         int best_cost = 999999;
         int best_x = -1, best_y = -1;
-        int r = PATHFIND_MAX_FALLBACK_RADIUS;
 
-        for (int fx = local_dest_x - r; fx <= local_dest_x + r; fx++) {
-            for (int fy = local_dest_y - r; fy <= local_dest_y + r; fy++) {
-                if (fx < 0 || fx >= arena_w || fy < 0 || fy >= arena_h) continue;
+        for (int fx = 0; fx < arena_w; fx++) {
+            for (int fy = 0; fy < arena_h; fy++) {
                 if (!BFS_VISITED(fx, fy) || BFS_COST(fx, fy) == 0) continue;
                 int ddx = fx - local_dest_x, ddy = fy - local_dest_y;
-                int dist_sq = ddx * ddx + ddy * ddy;
-                if (dist_sq < best_dist_sq ||
-                    (dist_sq == best_dist_sq && BFS_COST(fx, fy) < best_cost)) {
-                    best_dist_sq = dist_sq;
+                int manhattan = (ddx < 0 ? -ddx : ddx) + (ddy < 0 ? -ddy : ddy);
+                if (manhattan < best_manhattan ||
+                    (manhattan == best_manhattan && BFS_COST(fx, fy) < best_cost)) {
+                    best_manhattan = manhattan;
                     best_cost = BFS_COST(fx, fy);
                     best_x = fx; best_y = fy;
                 }
