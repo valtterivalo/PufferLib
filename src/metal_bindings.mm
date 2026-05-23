@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstring>
 #include <mach/mach.h>
+#include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <stdexcept>
@@ -733,6 +734,46 @@ PYBIND11_MODULE(_C, m) {
     m.def("save_training_state", &save_training_state);
     m.def("load_training_state", &load_training_state);
     m.def("load_anchor_weights", &load_anchor_weights);
+
+    /* Self-play multi-bank PFSP entry points. Matches the CUDA backend API so
+       pufferlib/selfplay.py works against either backend. */
+    m.def("add_frozen_bank", [](py::object pufferl_obj, int slice_size) -> int {
+        PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
+        return pufferl_add_frozen_bank(&pufferl, slice_size);
+    }, py::arg("pufferl"), py::arg("slice_size"));
+
+    m.def("load_frozen_bank", [](py::object pufferl_obj, int bank_idx, const std::string& path) {
+        PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
+        pufferl_load_frozen_bank(&pufferl, bank_idx, path.c_str());
+    }, py::arg("pufferl"), py::arg("bank_idx"), py::arg("path"));
+
+    m.def("set_agent_perm", [](py::object pufferl_obj, py::array_t<int> perm) {
+        PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
+        auto buf = perm.request();
+        if (buf.size != pufferl.vec->total_agents) {
+            throw std::runtime_error("set_agent_perm: perm length must equal total_agents");
+        }
+        pufferl_set_agent_perm(&pufferl, (const int*)buf.ptr);
+    }, py::arg("pufferl"), py::arg("perm"));
+
+    m.def("set_env_tags", [](py::object pufferl_obj, py::array_t<int> tags) {
+        PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
+        auto buf = tags.request();
+        if (buf.size != pufferl.vec->size) {
+            throw std::runtime_error("set_env_tags: tags length must equal num_envs");
+        }
+        pufferl_set_env_tags(&pufferl, (const int*)buf.ptr);
+    }, py::arg("pufferl"), py::arg("tags"));
+
+    m.def("count_aligned", [](py::object pufferl_obj, int tag_value, int reset_flags) -> int {
+        PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
+        return pufferl_count_aligned(&pufferl, tag_value, reset_flags);
+    }, py::arg("pufferl"), py::arg("tag_value"), py::arg("reset_flags"));
+
+    m.def("num_envs", [](py::object pufferl_obj) -> int {
+        PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
+        return pufferl_num_envs(&pufferl);
+    }, py::arg("pufferl"));
 
     m.def("archive_explore", [](
         py::object pufferl_obj,

@@ -177,6 +177,29 @@ typedef struct {
 } ProfileT;
 
 // ============================================================================
+// Frozen weight banks — self-play multi-bank PFSP. Each bank holds an entire
+// frozen historical opponent: its own fp32 weights, per-buffer activations,
+// and per-buffer recurrent states sized for the bank's slice of each buffer.
+// Banks share the primary's Policy struct (same architecture by construction
+// in our use — all banks come from snapshots of the same primary).
+// ============================================================================
+
+struct MetalWeightBank {
+    PolicyWeights weights;            // structured fp32 view
+    Allocator params_alloc;           // owns the fp32 params buffer
+    FloatTensor master_weights;       // flat view of params_alloc.mem
+    std::vector<PolicyActivations> buffer_activations;
+    std::vector<Allocator> buffer_allocs;
+    std::vector<PufTensor> buffer_states;
+    Allocator state_alloc;            // owns the per-buffer state tensors
+    std::vector<FloatTensor> sample_act_f32_buffers;
+    Allocator sample_alloc;           // owns sample_act_f32 scratch
+    int slice_size;                   // # agents per buffer this bank serves
+    int hidden_size;
+    int num_layers;
+};
+
+// ============================================================================
 // PuffeRL state — Metal version (no CUDA graphs, NCCL, nvml, multi-stream)
 // ============================================================================
 
@@ -270,6 +293,25 @@ struct PuffeRL {
     float archive_frontier_q_floor = 0.0f;
     float archive_frontier_q_power = 1.0f;
     float archive_frontier_eps = 0.0f;
+
+    /* Self-play frozen banks: each bank has its own fp32 weights + per-buffer
+       activations/states sized for the bank's slice. Multi-bank dispatch in
+       net_callback_wrapper iterates over banks and runs each on its
+       [bank_layout[b], bank_layout[b+1]) slice of every buffer. */
+    std::vector<MetalWeightBank> frozen_banks;
+    int num_frozen_banks = 0;
+    /* Per-buffer-relative bank layout: bank_layout[b] = first agent slot owned
+       by bank b within each buffer chunk. Length num_banks+1; the last entry
+       equals agents_per_buffer. Bank 0 = primary (learner). Empty (size 0) =
+       no layout set, primary owns the full chunk. */
+    std::vector<int> bank_layout;
+    /* Construction inputs: cached so we can build new banks with the right
+       activation sizes after init. */
+    int policy_hidden_size = 0;
+    int policy_num_layers = 0;
+    int policy_input_size = 0;
+    int policy_decoder_output_size = 0;
+    int policy_num_atns = 0;
 
     DemoStore* phase2_store = nullptr;
     DemoSnapshotLadder** phase2_ladders = nullptr;
@@ -514,6 +556,89 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
         act_f32_buf.data,
         block_size * act_cols * sizeof(float));
 
+    /* Frozen-bank passes. Each bank reruns forward+sample on its slice with
+       its own weights/activations/state, then overwrites the rollouts.actions
+       and env.actions rows for those slots. Primary already ran on the whole
+       block above; the frozen-bank slots get re-stamped here. Advantages on
+       these rows get zeroed at training time (see zero_frozen_advantages). */
+    if (pufferl->num_frozen_banks > 0 && !pufferl->bank_layout.empty()) {
+        for (int b = 1; b <= pufferl->num_frozen_banks; b++) {
+            int bank_off = pufferl->bank_layout[b];
+            int bank_end = pufferl->bank_layout[b + 1];
+            int bank_size = bank_end - bank_off;
+            if (bank_size <= 0) continue;
+            int sub_start = start + bank_off;
+
+            MetalWeightBank& fb = pufferl->frozen_banks[b - 1];
+            PufTensor fb_state = fb.buffer_states[buf];
+            PolicyActivations& fb_acts = fb.buffer_activations[buf];
+            FloatTensor& fb_act_buf = fb.sample_act_f32_buffers[buf];
+
+            /* Terminal-reset on this bank's slice. Frozen state is local to the
+               bank; resetting it on episode boundaries matches primary semantics. */
+            if (hypers.terminal_reset_state) {
+                zero_terminal_recurrent_state(fb_state, env.terminals.data + sub_start);
+            }
+
+            FloatTensor fb_obs   = puf_slice(rollouts.observations, t, sub_start, bank_size);
+            FloatTensor fb_act   = puf_slice(rollouts.actions,      t, sub_start, bank_size);
+            FloatTensor fb_lp    = puf_slice(rollouts.logprobs,     t, sub_start, bank_size);
+            FloatTensor fb_val   = puf_slice(rollouts.values,       t, sub_start, bank_size);
+            const float* fb_mask_ptr;
+            int fb_mask_stride;
+            if (pufferl->has_mask) {
+                FloatTensor m = puf_slice(pufferl->rollout_masks, t, sub_start, bank_size);
+                fb_mask_ptr = m.data;
+                fb_mask_stride = pufferl->mask_width;
+            } else {
+                fb_mask_ptr = pufferl->ones_mask.data;
+                fb_mask_stride = 0;
+            }
+
+            if (pufferl->cpu_inference) {
+                PufTensor fb_obs_puf = {.bytes = (char*)fb_obs.data,
+                                        .shape = {fb_obs.shape[0], fb_obs.shape[1]},
+                                        .dtype_size = (int)sizeof(float)};
+                cpu_forward_and_sample(
+                    fb_obs_puf, fb_state, fb.weights, hypers.hidden_size, fb_acts,
+                    pufferl->act_sizes_puf, fb_act_buf,
+                    fb_lp.data, fb_val.data,
+                    fb_mask_ptr, fb_mask_stride,
+                    /* RNG offset by bank_off so banks don't collide */
+                    buf_rng_seed, buf_rng_offset);
+                memcpy(fb_act.data, fb_act_buf.data, bank_size * num_atns * sizeof(float));
+            } else {
+                PrecisionTensor fb_obs_pt = {
+                    .data = fb_obs.data,
+                    .shape = {fb_obs.shape[0], fb_obs.shape[1]},
+                    .dtype_size = (int)sizeof(float),
+                };
+                PrecisionTensor fb_state_pt = {
+                    .data = (float*)fb_state.bytes,
+                    .shape = {fb_state.shape[0], fb_state.shape[1], fb_state.shape[2]},
+                    .dtype_size = fb_state.dtype_size,
+                };
+                PrecisionTensor fb_enc = p->encoder.forward(fb.weights.encoder, fb_acts.encoder, fb_obs_pt, stream);
+                PrecisionTensor fb_h   = p->network.forward(fb.weights.network, fb_enc, fb_state_pt, fb_acts.network, stream);
+                PrecisionTensor fb_dec = p->decoder.forward(fb.weights.decoder, fb_acts.decoder, fb_h, stream);
+                PufTensor fb_logstd = {};
+                if (pufferl->is_continuous)
+                    fb_logstd = to_puf(((DecoderWeights*)fb.weights.decoder)->logstd);
+                mtl_sample_logits_dispatch_to(
+                    fb_dec, pufferl->act_sizes_puf, fb_logstd, pufferl->is_continuous,
+                    fb_act_buf.data, fb_lp.data, fb_val.data,
+                    fb_mask_ptr, fb_mask_stride,
+                    buf_rng_seed, buf_rng_offset, stream);
+                mtl_ensure_stream_synced(stream);
+                memcpy(fb_act.data, fb_act_buf.data, bank_size * num_atns * sizeof(float));
+            }
+            /* Overwrite env.actions rows for this slice (primary already wrote
+               them based on its own forward; the frozen bank's choices win). */
+            memcpy(env.actions.bytes + (int64_t)sub_start * act_cols * sizeof(float),
+                   fb_act_buf.data, bank_size * act_cols * sizeof(float));
+        }
+    }
+
     /* Archive-mode hidden state capture. After the forward pass, state_puf
        holds state[t+1] (the state we'd feed into nc(t+1)). Transpose-on-write
        into the per-env contiguous layout so the flush function in the env
@@ -560,6 +685,184 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
 static void copy_weights_to_infer(PuffeRL& pufferl) {
     int64_t nbytes = pufferl.alloc_fp32.params.total_elems * sizeof(float);
     memcpy(pufferl.infer_params_alloc.mem, pufferl.alloc_fp32.params.mem, nbytes);
+}
+
+// ============================================================================
+// Frozen weight bank lifecycle — create, load, destroy.
+//
+// A bank holds its own fp32 params + per-buffer activations and recurrent
+// states, all sized for `slice_size` agents per buffer (vs. the primary
+// which sizes per the full agents_per_buffer). Activations and states are
+// allocated lazily once `slice_size` is known. Layout is sequential after
+// the primary in `bank_layout`.
+// ============================================================================
+
+static void metal_weight_bank_create(MetalWeightBank* bank, PuffeRL* pufferl, int slice_size) {
+    int input_size = pufferl->policy_input_size;
+    int hidden_size = pufferl->policy_hidden_size;
+    int decoder_output_size = pufferl->policy_decoder_output_size;
+    int num_layers = pufferl->policy_num_layers;
+    int horizon = pufferl->hypers.horizon;
+    bool is_continuous = pufferl->is_continuous;
+    int num_buffers = (int)pufferl->buffer_activations.size();
+    int esz_fp32 = (int)sizeof(float);
+
+    bank->slice_size = slice_size;
+    bank->hidden_size = hidden_size;
+    bank->num_layers = num_layers;
+
+    /* fp32 params (matches primary layout — same Policy struct). */
+    bank->weights.encoder = new EncoderWeights{.in_dim = input_size, .out_dim = hidden_size};
+    bank->weights.decoder = new DecoderWeights{.hidden_dim = hidden_size, .output_dim = decoder_output_size, .continuous = is_continuous};
+    bank->weights.network = new MinGRUWeights{.hidden = hidden_size, .num_layers = num_layers, .horizon = horizon};
+    ((MinGRUWeights*)bank->weights.network)->weights.resize(num_layers);
+    pufferl->policy->encoder.reg_params(bank->weights.encoder, &bank->params_alloc, esz_fp32);
+    pufferl->policy->decoder.reg_params(bank->weights.decoder, &bank->params_alloc, esz_fp32);
+    pufferl->policy->network.reg_params(bank->weights.network, &bank->params_alloc, esz_fp32);
+    bank->params_alloc.create();
+    mtl_wrap_allocator(&bank->params_alloc);
+    bank->master_weights = {.data = (float*)bank->params_alloc.mem, .shape = {bank->params_alloc.total_elems}};
+
+    /* Per-buffer inference activations sized for slice_size. */
+    bank->buffer_activations.resize(num_buffers);
+    bank->buffer_allocs.resize(num_buffers);
+    for (int i = 0; i < num_buffers; i++) {
+        PolicyActivations& rbuf = bank->buffer_activations[i];
+        Allocator& ralloc = bank->buffer_allocs[i];
+        rbuf.encoder = new EncoderActivations{};
+        rbuf.decoder = new DecoderActivations{};
+        rbuf.network = new MinGRUActivations{};
+        pufferl->policy->encoder.reg_rollout(bank->weights.encoder, rbuf.encoder, &ralloc, slice_size);
+        pufferl->policy->decoder.reg_rollout(bank->weights.decoder, rbuf.decoder, &ralloc, slice_size);
+        pufferl->policy->network.reg_rollout(bank->weights.network, rbuf.network, &ralloc, slice_size);
+        ralloc.create();
+        mtl_wrap_allocator(&ralloc);
+    }
+
+    /* Per-buffer recurrent states: (num_layers, slice_size, hidden_size). */
+    bank->buffer_states.resize(num_buffers);
+    for (int i = 0; i < num_buffers; i++) {
+        PufTensor& st = bank->buffer_states[i];
+        st.shape[0] = num_layers;
+        st.shape[1] = slice_size;
+        st.shape[2] = hidden_size;
+        st.dtype_size = esz_fp32;
+        alloc_register(&bank->state_alloc, &st);
+    }
+    bank->state_alloc.create();
+    mtl_wrap_allocator(&bank->state_alloc);
+    /* Zero recurrent states (banks start with fresh state). */
+    memset(bank->state_alloc.mem, 0, bank->state_alloc.total_elems * esz_fp32);
+
+    /* Per-buffer sampled-action scratch: (slice_size, num_atns). */
+    bank->sample_act_f32_buffers.resize(num_buffers);
+    int num_atns = pufferl->policy_num_atns;
+    for (int i = 0; i < num_buffers; i++) {
+        FloatTensor& s = bank->sample_act_f32_buffers[i];
+        s.shape[0] = slice_size;
+        s.shape[1] = num_atns;
+        alloc_register(&bank->sample_alloc, &s);
+    }
+    bank->sample_alloc.create();
+    mtl_wrap_allocator(&bank->sample_alloc);
+}
+
+static void metal_weight_bank_load(MetalWeightBank* bank, const char* path) {
+    FILE* f = fopen(path, "rb");
+    if (!f) {
+        fprintf(stderr, "metal_weight_bank_load: cannot open %s\n", path);
+        return;
+    }
+    fseek(f, 0, SEEK_END);
+    long fbytes = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    int64_t expected = bank->params_alloc.total_elems * (int64_t)sizeof(float);
+    if (fbytes != expected) {
+        fprintf(stderr, "metal_weight_bank_load: size mismatch in %s (got %ld, expected %lld)\n",
+                path, fbytes, (long long)expected);
+        fclose(f);
+        return;
+    }
+    size_t got = fread(bank->params_alloc.mem, 1, fbytes, f);
+    fclose(f);
+    if ((long)got != fbytes) {
+        fprintf(stderr, "metal_weight_bank_load: short read on %s (got %zu of %ld)\n", path, got, fbytes);
+    }
+}
+
+static void metal_weight_bank_destroy(MetalWeightBank* bank) {
+    bank->params_alloc.destroy();
+    bank->state_alloc.destroy();
+    bank->sample_alloc.destroy();
+    for (auto& a : bank->buffer_allocs) a.destroy();
+    bank->buffer_allocs.clear();
+    bank->buffer_activations.clear();
+    bank->buffer_states.clear();
+    bank->sample_act_f32_buffers.clear();
+    delete (EncoderWeights*)bank->weights.encoder; bank->weights.encoder = nullptr;
+    delete (DecoderWeights*)bank->weights.decoder; bank->weights.decoder = nullptr;
+    delete (MinGRUWeights*)bank->weights.network;  bank->weights.network  = nullptr;
+}
+
+/* Rebuild bank_layout after a frozen bank is added or removed. Primary owns
+   the head segment [0, primary_size); each frozen bank b owns the slice
+   [bank_layout[b+1], bank_layout[b+2]). */
+static void metal_recompute_bank_layout(PuffeRL* pufferl) {
+    int agents_per_buffer = pufferl->vec->total_agents / pufferl->hypers.num_buffers;
+    int total_frozen = 0;
+    for (auto& b : pufferl->frozen_banks) total_frozen += b.slice_size;
+    if (total_frozen >= agents_per_buffer) {
+        fprintf(stderr, "metal: total frozen slice (%d) >= agents_per_buffer (%d); refusing\n",
+                total_frozen, agents_per_buffer);
+        return;
+    }
+    int num_banks = 1 + pufferl->num_frozen_banks;
+    pufferl->bank_layout.resize(num_banks + 1);
+    pufferl->bank_layout[0] = 0;
+    pufferl->bank_layout[1] = agents_per_buffer - total_frozen;
+    int cumul = pufferl->bank_layout[1];
+    for (int b = 0; b < pufferl->num_frozen_banks; b++) {
+        cumul += pufferl->frozen_banks[b].slice_size;
+        pufferl->bank_layout[2 + b] = cumul;
+    }
+}
+
+// ============================================================================
+// Self-play C entry points — selfplay.py talks to these via the _C module.
+// ============================================================================
+
+extern "C" int pufferl_add_frozen_bank(PuffeRL* pufferl, int slice_size) {
+    int idx = pufferl->num_frozen_banks;
+    pufferl->frozen_banks.emplace_back();
+    metal_weight_bank_create(&pufferl->frozen_banks[idx], pufferl, slice_size);
+    pufferl->num_frozen_banks++;
+    metal_recompute_bank_layout(pufferl);
+    return idx;
+}
+
+extern "C" void pufferl_load_frozen_bank(PuffeRL* pufferl, int bank_idx, const char* path) {
+    if (bank_idx < 0 || bank_idx >= pufferl->num_frozen_banks) {
+        fprintf(stderr, "pufferl_load_frozen_bank: invalid bank_idx %d (have %d)\n",
+                bank_idx, pufferl->num_frozen_banks);
+        return;
+    }
+    metal_weight_bank_load(&pufferl->frozen_banks[bank_idx], path);
+}
+
+extern "C" void pufferl_set_agent_perm(PuffeRL* pufferl, const int* perm) {
+    static_vec_set_perm(pufferl->vec, perm);
+}
+
+extern "C" void pufferl_set_env_tags(PuffeRL* pufferl, const int* tags) {
+    static_vec_set_env_tags(pufferl->vec, tags);
+}
+
+extern "C" int pufferl_count_aligned(PuffeRL* pufferl, int tag_value, int reset_flags) {
+    return static_vec_count_aligned(pufferl->vec, tag_value, reset_flags);
+}
+
+extern "C" int pufferl_num_envs(PuffeRL* pufferl) {
+    return pufferl->vec->size;
 }
 
 // ============================================================================
@@ -672,6 +975,24 @@ void train_impl(PuffeRL& pufferl) {
         puff_advantage(rollouts.values, rollouts.rewards, rollouts.terminals,
             rollouts.ratio, pufferl.advantages_puf, hypers.gamma, hypers.gae_lambda,
             hypers.vtrace_rho_clip, hypers.vtrace_c_clip, s);
+
+        /* Zero advantages on frozen-bank rows. Those rollouts came from a stale
+           historical policy; including them in PPO would corrupt the gradient
+           (stale importance ratio = garbage). Same purpose as CUDA's
+           zero_frozen_advantages_kernel. Rows: per buffer, slots
+           [bank_layout[1], agents_per_buffer) within the buffer chunk. */
+        if (pufferl.num_frozen_banks > 0 && !pufferl.bank_layout.empty()) {
+            int apb = hypers.total_agents / hypers.num_buffers;
+            int H = (int)pufferl.advantages_puf.shape[1];
+            int primary_end = pufferl.bank_layout[1];
+            for (int buf_i = 0; buf_i < hypers.num_buffers; buf_i++) {
+                int row0 = buf_i * apb + primary_end;
+                int row1 = buf_i * apb + apb;
+                size_t bytes = (size_t)(row1 - row0) * (size_t)H * sizeof(float);
+                if (bytes > 0)
+                    memset(pufferl.advantages_puf.data + (size_t)row0 * H, 0, bytes);
+            }
+        }
 
         prio_precompute(pufferl.advantages_puf, prio_alpha, pufferl.prio_bufs, s);
         prio_sample(minibatch_segments, hypers.total_agents, anneal_beta,
@@ -1044,6 +1365,13 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
         .num_atns = act_n,
     };
     pufferl->policy = policy;
+    /* Cache construction params so frozen banks (added post-init) can replicate
+       the same architecture. All banks in a session share the primary's arch. */
+    pufferl->policy_hidden_size = hidden_size;
+    pufferl->policy_num_layers = num_layers;
+    pufferl->policy_input_size = input_size;
+    pufferl->policy_decoder_output_size = decoder_output_size;
+    pufferl->policy_num_atns = act_n;
 
     // fp32 master weights
     auto new_weights = [&]() -> PolicyWeights {
