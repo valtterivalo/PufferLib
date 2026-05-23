@@ -992,6 +992,14 @@ typedef struct {
     float phase2_hidden_restore_l2_snapshot_sum;
     float phase2_hidden_restore_max_abs_snapshot_sum;
     float phase2_hidden_restore_allclose_snapshot;
+    /* Multi-bank PFSP self-play accumulators. When env->tag > 0, the env is
+       playing against frozen bank (tag - 1); on episode terminal we increment
+       hist_n_bank[tag-1] by 1 and hist_score_bank[tag-1] by 1.0 (win) or 0.0
+       (loss) from the learner's (slot 0) perspective. selfplay.py reads these
+       via my_log -> dict_set("hist_score_bank_<b>", ...) keys to drive Elo
+       update + opponent swap logic. Up to 8 banks (matches chess + CHESS_MAX_BANKS). */
+    float hist_score_bank[8];
+    float hist_n_bank[8];
 } Log;
 
 typedef struct {

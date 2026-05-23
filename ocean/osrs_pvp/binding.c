@@ -31,10 +31,34 @@ typedef struct {
     OsrsEnv pvp;
 
     int ocean_acts_staging[NUM_ACTION_HEADS];
+    int ocean_acts_staging_p1[NUM_ACTION_HEADS];  /* slot 1's int actions, fed to external_opponent_actions */
     unsigned char ocean_term_staging;
 
     float ticks_per_second;
     double last_step_time;
+
+    /* Self-play env-side opt-in (see vecenv.h MY_USES_TAGS / MY_USES_PERM).
+       tag: 0 = primary selfplay, >=1 = playing frozen bank (tag-1). Used to
+       attribute episode outcomes to the correct bank's hist_score_bank entry.
+       boundary_reached: set on episode terminal so selfplay.step() knows
+       this env finished its current matchup and can be counted into the swap
+       decision via count_aligned. */
+    int tag;
+    int boundary_reached;
+
+    /* Per-slot pointer arrays for num_agents=2 self-play opt-in (MY_USES_PERM).
+       Routed by my_setup_perm using vec->agent_perm. Slot 0 = learner, slot 1
+       = opponent (driven by primary policy in pure-selfplay envs, by frozen
+       bank in historical envs). */
+    void* obs_ptr[2];
+    float* action_ptr[2];
+    float* reward_ptr[2];
+    float* terminal_ptr[2];
+
+    /* When 1, p1 actions come from the rollout (action_ptr[1]); when 0, the
+       legacy C-heuristic opponent path is used (use_c_opponent driven).
+       selfplay setups should flip this on via env kwargs. */
+    int use_rollout_opponent;
 } PvpEnv;
 
 #define OBS_SIZE OCEAN_OBS_SIZE
@@ -42,6 +66,10 @@ typedef struct {
 #define ACT_SIZES {LOADOUT_DIM, COMBAT_DIM, OVERHEAD_DIM, FOOD_DIM, POTION_DIM, KARAMBWAN_DIM, VENG_DIM, OFFENSIVE_DIM, MOVE_DIM}
 #define OBS_TENSOR_T FloatTensor
 #define Env PvpEnv
+#define MY_USES_TAGS
+#define MY_USES_PERM
+/* PvP uses obs-embedded action mask (rollout splitter handles via has_mask),
+   not the separate MY_ACTION_MASK buffer path. */
 
 static void pvp_env_set_gear_tier(Env* env, int tier) {
     if (tier == -1) {
@@ -72,15 +100,47 @@ void c_step(Env* env) {
     }
 
     if (!used_human_commands) {
+        /* slot 0 actions: float → int into ocean_acts_staging.
+           Read from action_ptr[0] which my_setup_perm wired to the perm-routed
+           rollout row (identity perm = the env's natural slot 0). */
+        float* p0_acts = env->action_ptr[0] ? env->action_ptr[0] : env->actions;
         for (int i = 0; i < NUM_ATNS; i++) {
-            env->ocean_acts_staging[i] = (int)env->actions[i];
+            env->ocean_acts_staging[i] = (int)p0_acts[i];
+        }
+        /* slot 1 actions: copy into external_opponent_actions when use_rollout_opponent.
+           Otherwise the C-heuristic path inside pvp_step generates p1 actions itself. */
+        if (env->use_rollout_opponent && env->action_ptr[1]) {
+            for (int i = 0; i < NUM_ATNS; i++) {
+                env->ocean_acts_staging_p1[i] = (int)env->action_ptr[1][i];
+                env->pvp.pvp_runtime.external_opponent_actions[i] = env->ocean_acts_staging_p1[i];
+            }
         }
         pvp_step(&env->pvp);
     }
 
+    /* Terminals: mirror to both slots. pvp_step writes the shared episode_over
+       to env->pvp.terminals[0..1]; copy each cell into its rollout slot. */
     env->terminals[0] = (float)env->ocean_term_staging;
+    if (env->terminal_ptr[1]) {
+        *env->terminal_ptr[1] = (float)env->ocean_term_staging;
+    }
+    /* Rewards: p0 from pvp internal _rews_buf[0], p1 from _rews_buf[1]. */
+    if (env->reward_ptr[0]) *env->reward_ptr[0] = env->pvp._rews_buf[0];
+    if (env->reward_ptr[1]) *env->reward_ptr[1] = env->pvp._rews_buf[1];
 
     if (env->ocean_term_staging) {
+        /* Self-play per-bank attribution. When env->tag > 0, this env is the
+           learner playing against frozen bank (tag - 1). Accumulate the win
+           (1.0) or loss (0.0) and game count so selfplay.step() sees this
+           bank's winrate via my_log -> hist_score_bank_<tag-1>. Also set
+           boundary_reached for static_vec_count_aligned. */
+        if (env->tag > 0 && env->tag <= 8) {
+            int b = env->tag - 1;
+            float win = env->pvp.log.wins;  /* 1.0 if learner won, 0.0 otherwise */
+            env->log.hist_score_bank[b] += win;
+            env->log.hist_n_bank[b] += 1.0f;
+        }
+        env->boundary_reached = 1;
         env->log.episode_return += env->pvp.log.episode_return;
         env->log.episode_length += env->pvp.log.episode_length;
         env->log.wins += env->pvp.log.wins;
@@ -104,16 +164,24 @@ void c_step(Env* env) {
 }
 
 void c_reset(Env* env) {
-    env->pvp.ocean_io.agent_obs = (float*)env->observations;
+    /* Wire pvp's obs writes to the per-slot rollout buffers. obs_ptr[] is set
+       by my_setup_perm (called from create_static_vec or static_vec_set_perm). */
+    env->pvp.ocean_io.agent_obs = env->obs_ptr[0]
+        ? (float*)env->obs_ptr[0] : (float*)env->observations;
+    env->pvp.ocean_io.agent_obs_p1 = env->obs_ptr[1] ? (float*)env->obs_ptr[1] : NULL;
     env->pvp.ocean_io.agent_rewards = env->rewards;
     env->pvp.ocean_io.agent_terminals = &env->ocean_term_staging;
     env->pvp.ocean_io.agent_actions = env->ocean_acts_staging;
 
     pvp_reset(&env->pvp);
     ocean_write_obs(&env->pvp);
+    if (env->pvp.ocean_io.agent_obs_p1) ocean_write_obs_p1(&env->pvp);
     env->pvp.ocean_io.agent_rewards[0] = 0.0f;
     env->pvp.ocean_io.agent_terminals[0] = 0;
     env->terminals[0] = 0.0f;
+    if (env->terminal_ptr[1]) *env->terminal_ptr[1] = 0.0f;
+    if (env->reward_ptr[1]) *env->reward_ptr[1] = 0.0f;
+    env->boundary_reached = 0;
 }
 
 void c_close(Env* env) { pvp_close(&env->pvp); }
@@ -169,10 +237,48 @@ void c_render(Env* env) {
 
 #include "vecenv.h"
 
+/* Self-play opt-in: route both rollout slots' obs/action/reward/terminal
+   pointers through vec->agent_perm (identity when NULL). vecenv calls this
+   from create_static_vec (init) and from static_vec_set_perm (when selfplay
+   reroutes envs to frozen-bank slots). Both ocean_io.agent_obs and
+   agent_obs_p1 also get rewired so pvp_step's ocean_write_obs / _p1 land in
+   the rollout buffer rather than internal scratch. */
+void my_setup_perm(StaticVec* vec, Env* env, int slot_base) {
+    int n = env->num_agents;
+    if (n > 2) n = 2;
+    size_t obs_elem = obs_element_size();
+    for (int s = 0; s < n; s++) {
+        int phys = vec->agent_perm ? vec->agent_perm[slot_base + s] : (slot_base + s);
+        env->obs_ptr[s]      = (char*)vec->observations + (size_t)phys * OBS_SIZE * obs_elem;
+        env->action_ptr[s]   = vec->actions   + (size_t)phys * NUM_ATNS;
+        env->reward_ptr[s]   = vec->rewards   + phys;
+        env->terminal_ptr[s] = vec->terminals + phys;
+    }
+    /* Keep header fields pointing at slot 0 so vecenv reset/log scanning still
+       finds the expected per-env reward/terminal cell. */
+    env->observations = env->obs_ptr[0];
+    env->actions      = env->action_ptr[0];
+    env->rewards      = env->reward_ptr[0];
+    env->terminals    = env->terminal_ptr[0];
+    /* Wire pvp_step's observation writes to land in the rollout buffer. */
+    env->pvp.ocean_io.agent_obs    = (float*)env->obs_ptr[0];
+    if (n >= 2) {
+        env->pvp.ocean_io.agent_obs_p1 = (float*)env->obs_ptr[1];
+    }
+}
+
 void my_init(Env* env, Dict* kwargs) {
-    env->num_agents = 1;
+    /* num_agents is determined at init by the use_rollout_opponent kwarg.
+       When 1, both players are rollout-driven (self-play). When 0 (default),
+       only slot 0 is exposed and the C-heuristic opponent drives slot 1
+       internally, preserving OPP_IMPROVED backward compat. */
+    DictItem* use_roll_opp_kw = dict_get_unsafe(kwargs, "use_rollout_opponent");
+    int rollout_opponent = use_roll_opp_kw ? (int)use_roll_opp_kw->value : 0;
+    env->num_agents = rollout_opponent ? 2 : 1;
     env->ticks_per_second = 1.667f;
     env->last_step_time = 0.0;
+    env->tag = 0;
+    env->boundary_reached = 0;
 
     pvp_init(&env->pvp);
 
@@ -189,6 +295,15 @@ void my_init(Env* env, Dict* kwargs) {
 
     DictItem* opp = dict_get_unsafe(kwargs, "opponent_type");
     env->pvp.pvp_runtime.opponent.type = opp ? (OpponentType)(int)opp->value : OPP_IMPROVED;
+
+    /* use_rollout_opponent was read above to decide num_agents. Mirror it
+       into pvp_runtime so pvp_step reads p1 actions from
+       external_opponent_actions (filled in c_step from action_ptr[1]). */
+    env->use_rollout_opponent = rollout_opponent;
+    env->pvp.pvp_runtime.use_external_opponent_actions = rollout_opponent;
+    if (rollout_opponent) {
+        env->pvp.pvp_runtime.use_c_opponent = 0;
+    }
 
     DictItem* shaping_scale = dict_get_unsafe(kwargs, "shaping_scale");
     env->pvp.shaping.shaping_scale = shaping_scale ? (float)shaping_scale->value : 0.0f;
@@ -245,6 +360,26 @@ void my_log(Log* log, Dict* out) {
     dict_set(out, "spec_remaining", log->spec_energy_remaining);
     dict_set(out, "attacks_landed", log->attacks_landed);
     dict_set(out, "off_prayer_hits", log->off_prayer_hits);
+
+    /* Per-bank PFSP stats. Keys MUST be literal strings — dict_set stores the
+       key pointer, so a stack-formatted "hist_score_bank_%d" would alias to
+       the same address across all iterations. selfplay.step() reads these. */
+    dict_set(out, "hist_score_bank_0", log->hist_score_bank[0]);
+    dict_set(out, "hist_score_bank_1", log->hist_score_bank[1]);
+    dict_set(out, "hist_score_bank_2", log->hist_score_bank[2]);
+    dict_set(out, "hist_score_bank_3", log->hist_score_bank[3]);
+    dict_set(out, "hist_score_bank_4", log->hist_score_bank[4]);
+    dict_set(out, "hist_score_bank_5", log->hist_score_bank[5]);
+    dict_set(out, "hist_score_bank_6", log->hist_score_bank[6]);
+    dict_set(out, "hist_score_bank_7", log->hist_score_bank[7]);
+    dict_set(out, "hist_n_bank_0", log->hist_n_bank[0]);
+    dict_set(out, "hist_n_bank_1", log->hist_n_bank[1]);
+    dict_set(out, "hist_n_bank_2", log->hist_n_bank[2]);
+    dict_set(out, "hist_n_bank_3", log->hist_n_bank[3]);
+    dict_set(out, "hist_n_bank_4", log->hist_n_bank[4]);
+    dict_set(out, "hist_n_bank_5", log->hist_n_bank[5]);
+    dict_set(out, "hist_n_bank_6", log->hist_n_bank[6]);
+    dict_set(out, "hist_n_bank_7", log->hist_n_bank[7]);
 
     float dph = (log->attacks_landed > 0.0f)
         ? log->damage_dealt / log->attacks_landed : 0.0f;

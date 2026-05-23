@@ -99,16 +99,26 @@ typedef struct StaticVec {
     float* actions;
     float* rewards;
     float* terminals;
+    unsigned char* action_mask;       // NULL unless env defines MY_ACTION_MASK
     void* gpu_observations;
     float* gpu_actions;
     float* gpu_rewards;
     float* gpu_terminals;
+    unsigned char* gpu_action_mask;   // NULL unless env defines MY_ACTION_MASK
     cudaStream_t* streams;
     StaticThreading* threading;
     int obs_size;
     int num_atns;
+    int action_mask_size;             // 0 unless env defines MY_ACTION_MASK
     int log_env_limit;
     int gpu;
+    /* Optional permutation. agent_perm[slot] = physical agent index in the
+       global obs/action/reward/terminal buffers. NULL = identity. Only valid
+       when env defines MY_USES_PERM. Set via static_vec_set_perm; consumed
+       inside the env-provided my_setup_perm callback to re-route per-slot
+       pointer arrays without copying data. Used by selfplay to dispatch
+       different policy weights to different env slots. */
+    int* agent_perm;
 } StaticVec;
 
 // Callback types
@@ -158,6 +168,21 @@ size_t get_obs_elem_size(void);
 void static_vec_step(StaticVec* vec);
 void gpu_vec_step(StaticVec* vec);
 void cpu_vec_step(StaticVec* vec);
+
+/* Optional permutation. Sets agent_perm and re-populates per-slot env pointers
+   via my_setup_perm. Only defined when env opted in via MY_USES_PERM; otherwise
+   logs to stderr and leaves the perm unset. */
+void static_vec_set_perm(StaticVec* vec, const int* perm);
+
+/* Optional per-env tagging + boundary tracking for selfplay-pool curricula.
+   Env must opt in via MY_USES_TAGS and provide `int tag` and
+   `int boundary_reached` fields on its Env struct. set_env_tags assigns
+   tag values (0 = primary selfplay, 1..N = playing frozen bank N-1) and
+   clears boundary_reached. count_aligned returns the count of envs whose
+   tag matches `tag_value` and have boundary_reached set; if reset_flags is
+   non-zero, clears boundary_reached on matching envs only. */
+void static_vec_set_env_tags(StaticVec* vec, const int* tags);
+int static_vec_count_aligned(StaticVec* vec, int tag_value, int reset_flags);
 
 // Optional shared state functions
 void* my_shared(void* env, Dict* kwargs);
@@ -238,6 +263,13 @@ extern const char* cudaGetErrorString(cudaError_t);
 // Forward declare env-provided functions (defined in binding.c after this include)
 void my_init(Env* env, Dict* kwargs);
 void my_log(Log* log, Dict* out);
+
+#ifdef MY_USES_PERM
+/* Env-provided: populate per-slot pointer arrays on env, given the global slot
+   base for slot 0. Reads vec->agent_perm (NULL = identity) to compute physical
+   indices into vec global buffers. */
+void my_setup_perm(StaticVec* vec, Env* env, int slot_base);
+#endif
 
 
 struct StaticThreading {
@@ -347,6 +379,13 @@ static void* static_omp_threadmanager(void* arg) {
                 &vec->terminals[agent_start],
                 agents_per_buffer * sizeof(float),
                 cudaMemcpyHostToDevice, stream);
+#ifdef MY_ACTION_MASK
+            cudaMemcpyAsync(
+                vec->gpu_action_mask + agent_start * MY_ACTION_MASK,
+                vec->action_mask     + agent_start * MY_ACTION_MASK,
+                agents_per_buffer * MY_ACTION_MASK * sizeof(unsigned char),
+                cudaMemcpyHostToDevice, stream);
+#endif
         }
         cudaStreamSynchronize(stream);
 #ifdef __APPLE__
@@ -491,6 +530,21 @@ StaticVec* create_static_vec(int total_agents, int num_buffers, int gpu, Dict* v
         vec->gpu_terminals = vec->terminals;
     }
 
+#ifdef MY_ACTION_MASK
+    vec->action_mask_size = MY_ACTION_MASK;
+    size_t mask_bytes = (size_t)total_agents * MY_ACTION_MASK * sizeof(unsigned char);
+    if (gpu) {
+        cudaHostAlloc((void**)&vec->action_mask, mask_bytes, cudaHostAllocPortable);
+        cudaMalloc((void**)&vec->gpu_action_mask, mask_bytes);
+        cudaMemset(vec->gpu_action_mask, 0, mask_bytes);
+    } else {
+        vec->action_mask = (unsigned char*)calloc(total_agents * MY_ACTION_MASK, sizeof(unsigned char));
+        vec->gpu_action_mask = vec->action_mask;  /* unified memory on Apple */
+    }
+#endif
+    /* No #else: action_mask/gpu_action_mask/action_mask_size are zero-initialized
+       by the calloc(1, sizeof(StaticVec)) at function entry. */
+
     // Streams allocated here, created in create_static_threads
     vec->streams = (cudaStream_t*)calloc(num_buffers, sizeof(cudaStream_t));
 
@@ -509,6 +563,15 @@ StaticVec* create_static_vec(int total_agents, int num_buffers, int gpu, Dict* v
             env->actions = vec->actions + slot * NUM_ATNS;
             env->rewards = vec->rewards + slot;
             env->terminals = vec->terminals + slot;
+#ifdef MY_ACTION_MASK
+            env->action_mask = vec->action_mask + slot * MY_ACTION_MASK;
+#endif
+#ifdef MY_USES_PERM
+            /* agent_perm is NULL at init (identity), so slots map to the same
+               base+stride layout as the lines above. Env can refresh its own
+               per-slot pointer arrays from the perm in this call. */
+            my_setup_perm(vec, env, slot);
+#endif
             buf_agent += env->num_agents;
         }
     }
@@ -526,10 +589,16 @@ void static_vec_reset(StaticVec* vec) {
             vec->total_agents * OBS_SIZE * obs_element_size(), cudaMemcpyHostToDevice);
         cudaMemset(vec->gpu_rewards,   0, vec->total_agents * sizeof(float));
         cudaMemset(vec->gpu_terminals, 0, vec->total_agents * sizeof(float));
+#ifdef MY_ACTION_MASK
+        cudaMemcpy(vec->gpu_action_mask, vec->action_mask,
+            (size_t)vec->total_agents * MY_ACTION_MASK * sizeof(unsigned char),
+            cudaMemcpyHostToDevice);
+#endif
         cudaDeviceSynchronize();
     } else {
         memset(vec->rewards, 0, vec->total_agents * sizeof(float));
         memset(vec->terminals, 0, vec->total_agents * sizeof(float));
+        /* unified memory: gpu_action_mask aliases action_mask, no copy needed */
     }
 }
 
@@ -616,14 +685,22 @@ void static_vec_close(StaticVec* vec) {
         cudaFreeHost(vec->actions);
         cudaFreeHost(vec->rewards);
         cudaFreeHost(vec->terminals);
+#ifdef MY_ACTION_MASK
+        cudaFree(vec->gpu_action_mask);
+        cudaFreeHost(vec->action_mask);
+#endif
     } else {
         free(vec->observations);
         free(vec->actions);
         free(vec->rewards);
         free(vec->terminals);
+#ifdef MY_ACTION_MASK
+        free(vec->action_mask);
+#endif
     }
 
     free(vec->streams);
+    if (vec->agent_perm != NULL) free(vec->agent_perm);
     free(vec);
 }
 
@@ -697,6 +774,80 @@ void static_vec_render(StaticVec* vec, int env_id) {
     Env* envs = (Env*)vec->envs;
     c_render(&envs[env_id]);
 }
+
+/* ---------------------------------------------------------------------------
+ * Self-play infrastructure: optional permutation + env tagging + boundary
+ * tracking. All behavior-neutral when the env doesn't opt in via the
+ * MY_USES_PERM / MY_USES_TAGS macros.
+ * ------------------------------------------------------------------------- */
+
+void static_vec_set_perm(StaticVec* vec, const int* perm) {
+#ifndef MY_USES_PERM
+    (void)vec; (void)perm;
+    fprintf(stderr, "static_vec_set_perm: env did not opt in via MY_USES_PERM; ignoring.\n");
+    return;
+#else
+    int N = vec->total_agents;
+    if (vec->agent_perm == NULL) {
+        vec->agent_perm = (int*)malloc(N * sizeof(int));
+    }
+    memcpy(vec->agent_perm, perm, N * sizeof(int));
+
+    Env* envs = (Env*)vec->envs;
+    for (int buf = 0; buf < vec->buffers; buf++) {
+        int buf_start = buf * vec->agents_per_buffer;
+        int buf_agent = 0;
+        int env_start = vec->buffer_env_starts[buf];
+        int env_count = vec->buffer_env_counts[buf];
+        for (int e = 0; e < env_count; e++) {
+            Env* env = &envs[env_start + e];
+            my_setup_perm(vec, env, buf_start + buf_agent);
+            buf_agent += env->num_agents;
+        }
+    }
+#endif
+}
+
+#ifdef MY_USES_TAGS
+void static_vec_set_env_tags(StaticVec* vec, const int* tags) {
+    Env* envs = (Env*)vec->envs;
+    for (int i = 0; i < vec->size; i++) {
+        envs[i].tag = tags[i];
+        envs[i].boundary_reached = 0;
+    }
+}
+
+int static_vec_count_aligned(StaticVec* vec, int tag_value, int reset_flags) {
+    Env* envs = (Env*)vec->envs;
+    int count = 0;
+    for (int i = 0; i < vec->size; i++) {
+        if (envs[i].tag == tag_value && envs[i].boundary_reached) {
+            count++;
+        }
+    }
+    /* Only reset matching-tag envs. Multi-bank: each bank's swap finalizes by
+       calling count_aligned(tag=bank+1, reset=1); we must not touch
+       boundary_reached on envs playing other banks or their alignment data
+       would be lost. */
+    if (reset_flags) {
+        for (int i = 0; i < vec->size; i++) {
+            if (envs[i].tag == tag_value) {
+                envs[i].boundary_reached = 0;
+            }
+        }
+    }
+    return count;
+}
+#else
+void static_vec_set_env_tags(StaticVec* vec, const int* tags) {
+    (void)vec; (void)tags;
+    fprintf(stderr, "static_vec_set_env_tags: env did not opt in via MY_USES_TAGS; ignoring.\n");
+}
+int static_vec_count_aligned(StaticVec* vec, int tag_value, int reset_flags) {
+    (void)vec; (void)tag_value; (void)reset_flags;
+    return 0;
+}
+#endif
 
 #ifdef PUFFER_STATE_T
 #ifndef PUFFER_STATE_SIZE
