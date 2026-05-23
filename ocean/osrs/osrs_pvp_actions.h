@@ -681,23 +681,6 @@ static void execute_actions(OsrsEnv* env, int agent_idx, int* actions) {
     execute_attacks(env, agent_idx, actions);
 }
 
-/**
- * Calculate reward for an agent.
- *
- * Sparse terminal signal:
- * - +1.0 for win
- * - -0.5 for loss
- * - 0 for ongoing ticks
- *
- * When shaping is enabled, adds per-tick reward shaping (scaled by shaping_scale):
- * - Damage dealt/received
- * - Defensive prayer correctness
- * - Off-prayer hits
- * - Eating penalties (premature, wasted)
- * - Spec timing bonuses
- * - Bad behavior penalties (melee frozen, magic no staff)
- * - Terminal shaping (KO bonus, wasted resources penalty)
- */
 static float calculate_reward(OsrsEnv* env, int agent_idx) {
     float reward = 0.0f;
     Player* p = &env->players[agent_idx];

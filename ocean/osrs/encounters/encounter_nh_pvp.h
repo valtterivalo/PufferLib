@@ -37,37 +37,16 @@ static void nh_pvp_translate_human_input(HumanInput* hi, int* actions, Player* a
     for (int h = 0; h < NUM_ACTION_HEADS; h++) actions[h] = 0;
     actions[HEAD_LOADOUT] = LOADOUT_KEEP;
 
-    if (hi->pending_attack) {
-        if (hi->pending_spell == ATTACK_ICE) {
-            actions[HEAD_COMBAT] = ATTACK_ICE;
-        } else if (hi->pending_spell == ATTACK_BLOOD) {
-            actions[HEAD_COMBAT] = ATTACK_BLOOD;
-        } else {
-            actions[HEAD_COMBAT] = ATTACK_ATK;
-        }
-    } else if (hi->pending_move_x >= 0 && hi->pending_move_y >= 0) {
-        int dx = hi->pending_move_x - target->x;
-        int dy = hi->pending_move_y - target->y;
-        int dist = abs(dx) > abs(dy) ? abs(dx) : abs(dy);
-        if (dist == 0) {
-            actions[HEAD_COMBAT] = MOVE_UNDER;
-        } else if (dist == 1) {
-            actions[HEAD_COMBAT] = (dx == 0 || dy == 0) ? MOVE_ADJACENT : MOVE_DIAGONAL;
-        } else {
-            int fc = dist;
-            if (fc < 2) fc = 2;
-            if (fc > 7) fc = 7;
-            actions[HEAD_COMBAT] = MOVE_FARCAST_2 + (fc - 2);
-        }
-    }
+    encounter_translate_attack_or_move(hi, actions, HEAD_COMBAT, target);
+    encounter_translate_prayer(hi, actions, HEAD_OVERHEAD);
+    encounter_translate_offensive_prayer(hi, actions, HEAD_OFFENSIVE);
 
-    if (hi->pending_prayer >= 0) actions[HEAD_OVERHEAD] = hi->pending_prayer;
     if (hi->pending_food) actions[HEAD_FOOD] = FOOD_EAT;
     if (hi->pending_potion > 0) actions[HEAD_POTION] = hi->pending_potion;
     if (hi->pending_karambwan) actions[HEAD_KARAMBWAN] = KARAM_EAT;
     if (hi->pending_veng) actions[HEAD_VENG] = VENG_CAST;
     if (hi->pending_spec) {
-        AttackStyle style = get_item_attack_style(agent->equipped[GEAR_SLOT_WEAPON]);
+        AttackStyle style = (AttackStyle)get_item_attack_style(agent->equipped[GEAR_SLOT_WEAPON]);
         if (style == ATTACK_STYLE_MELEE) actions[HEAD_LOADOUT] = LOADOUT_SPEC_MELEE;
         else if (style == ATTACK_STYLE_RANGED) actions[HEAD_LOADOUT] = LOADOUT_SPEC_RANGE;
         else if (style == ATTACK_STYLE_MAGIC) actions[HEAD_LOADOUT] = LOADOUT_SPEC_MAGIC;
@@ -200,10 +179,7 @@ static void nh_pvp_fill_render_entities(
     int n = NUM_AGENTS < max_entities ? NUM_AGENTS : max_entities;
     for (int i = 0; i < n; i++) {
         osrs_render_entity_from_player_entity(&s->env.players[i], &out[i]);
-    }
-    if (n >= 2) {
-        out[0].attack_target_entity_idx = 1;
-        out[1].attack_target_entity_idx = 0;
+        out[i].attack_target_entity_idx = (n >= 2) ? (1 - i) : -1;
     }
     *count = n;
 }

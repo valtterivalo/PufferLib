@@ -5406,12 +5406,10 @@ static void render_follow_pvp_fighter_midpoint(RenderClient* rc, OsrsEnv* env, d
     float y1 = (float)rc->sub_y[1] / 128.0f;
     float target_x = (x0 + x1) * 0.5f;
     float target_z = -((y0 + y1) * 0.5f);
-    float lerp = 1.0f - powf(0.70f, (float)frame_dt * 60.0f);
+    float lerp = 1.0f - powf(0.85f, (float)frame_dt * 60.0f);
 
     rc->cam_target_x += (target_x - rc->cam_target_x) * lerp;
     rc->cam_target_z += (target_z - rc->cam_target_z) * lerp;
-    rc->cam_dist += (72.0f - rc->cam_dist) * lerp;
-    rc->cam_pitch += (1.52f - rc->cam_pitch) * lerp;
 }
 
 

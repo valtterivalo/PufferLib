@@ -2057,6 +2057,43 @@ static inline void encounter_translate_target(HumanInput* hi, int* actions, int 
     actions[head_target] = hi->pending_target_idx + 1;
 }
 
+/** translate human attack-or-move click for encounters with a merged combat head
+    (ATTACK_*, MOVE_UNDER/ADJACENT/DIAGONAL, MOVE_FARCAST_2..7).
+    pending_attack takes precedence; otherwise the move click is resolved against
+    the target's tile to pick UNDER/ADJACENT/DIAGONAL or a farcast at the
+    chebyshev distance, clamped to [2, 7]. */
+static inline void encounter_translate_attack_or_move(
+    HumanInput* hi,
+    int* actions,
+    int head_combat,
+    const Player* target
+) {
+    if (head_combat < 0 || !target) return;
+
+    if (hi->pending_attack) {
+        if (hi->pending_spell == ATTACK_ICE) actions[head_combat] = ATTACK_ICE;
+        else if (hi->pending_spell == ATTACK_BLOOD) actions[head_combat] = ATTACK_BLOOD;
+        else actions[head_combat] = ATTACK_ATK;
+        return;
+    }
+
+    if (hi->pending_move_x < 0 || hi->pending_move_y < 0) return;
+
+    int dx = hi->pending_move_x - target->x;
+    int dy = hi->pending_move_y - target->y;
+    int adx = dx < 0 ? -dx : dx;
+    int ady = dy < 0 ? -dy : dy;
+    int dist = adx > ady ? adx : ady;
+    if (dist == 0) {
+        actions[head_combat] = MOVE_UNDER;
+    } else if (dist == 1) {
+        actions[head_combat] = (dx == 0 || dy == 0) ? MOVE_ADJACENT : MOVE_DIAGONAL;
+    } else {
+        int fc = dist < 2 ? 2 : (dist > 7 ? 7 : dist);
+        actions[head_combat] = MOVE_FARCAST_2 + (fc - 2);
+    }
+}
+
 
 typedef struct {
     const char* name;           /* "nh_pvp", "cerberus", "jad", etc. */

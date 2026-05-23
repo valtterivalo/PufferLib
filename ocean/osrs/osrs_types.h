@@ -751,6 +751,12 @@ typedef struct {
     float brews_remaining;         /* brew doses left at end of episode */
     float restores_remaining;      /* restore doses left at end of episode */
     float prayer_at_death;         /* prayer points at end of episode */
+    /* PvP-specific end-of-episode counters */
+    float food_remaining;
+    float karambwan_remaining;
+    float spec_energy_remaining;
+    float attacks_landed;
+    float off_prayer_hits;
     float brews_remaining_normal_died;
     float restores_remaining_normal_died;
     float prayer_at_death_normal_died;

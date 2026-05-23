@@ -129,39 +129,51 @@ python validate_gui_assets.py \
     --full-ancient-spellbook \
     --require-transparent
 
+# PvP LMS arena lives in regions (47, 55) and (48, 55), covering world tiles
+# (3008, 3520) to (3135, 3583). Fight area is (3041, 3530) + 61x28, so two
+# regions give comfortable margin around the arena. wilderness.* files below
+# are scoped to that slice — small enough to commit-and-ship like inferno/zulrah.
+PVP_REGIONS="47,55 48,55"
+
 echo ""
-echo "=== exporting wilderness collision map ==="
+echo "=== exporting wilderness (LMS arena) collision map ==="
 if [ -f "$KEYS" ]; then
     python export_collision_map_modern.py \
         --cache "$CACHE" --keys "$KEYS" \
         --output "$DATA_DIR/wilderness.cmap" \
-        --wilderness
+        --regions $PVP_REGIONS
 else
     python export_collision_map_modern.py \
         --cache "$CACHE" \
         --output "$DATA_DIR/wilderness.cmap" \
-        --wilderness
+        --regions $PVP_REGIONS
 fi
 
 echo ""
-echo "=== exporting wilderness terrain ==="
+echo "=== exporting wilderness (LMS arena) terrain ==="
 python export_terrain.py \
     --modern-cache "$CACHE" \
     --output "$DATA_DIR/wilderness.terrain" \
-    --wilderness
+    --regions "$PVP_REGIONS"
+
+echo ""
+echo "=== exporting wilderness (LMS arena) objects ==="
+if [ -f "$KEYS" ]; then
+    python export_objects.py \
+        --modern-cache "$CACHE" --keys "$KEYS" \
+        --output "$DATA_DIR/wilderness.objects" \
+        --regions "$PVP_REGIONS"
+else
+    python export_objects.py \
+        --modern-cache "$CACHE" \
+        --output "$DATA_DIR/wilderness.objects" \
+        --regions "$PVP_REGIONS"
+fi
 
 echo ""
 echo "done. all assets exported to $DATA_DIR/"
 echo ""
 echo "notes:"
-echo "  - wilderness.objects (685MB+) is not exported by default."
-echo "    run manually if needed:"
-if [ -f "$KEYS" ]; then
-    echo "    python scripts/export_objects.py --modern-cache $CACHE --keys $KEYS --output data/wilderness.objects --wilderness"
-else
-    echo "    python scripts/export_objects.py --modern-cache $CACHE --output data/wilderness.objects --wilderness"
-fi
-echo ""
 echo "  - item sprites (inventory icons) require the Java exporter:"
 echo "    javac -cp <runelite-cache-jar> scripts/ExportItemSprites.java"
 echo "    java -cp .:scripts:<runelite-cache-jar> ExportItemSprites <cache_dir> ocean/osrs/data/sprites/items/"

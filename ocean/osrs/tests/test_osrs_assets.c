@@ -61,6 +61,7 @@ static void test_asset_groups(void) {
     assert(osrs_asset_group_contains(pvp, "projectiles.models"));
     assert(osrs_asset_group_contains(pvp, "wilderness.cmap"));
     assert(osrs_asset_group_contains(pvp, "wilderness.terrain"));
+    assert(osrs_asset_group_contains(pvp, "wilderness.objects"));
 
     for (size_t group_idx = 0; group_idx < osrs_asset_group_count(); group_idx++) {
         const OsrsAssetGroup* group = osrs_asset_group_at(group_idx);

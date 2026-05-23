@@ -110,6 +110,7 @@ static const char* const OSRS_ASSET_COMBAT_VISUALS_PATHS[] = {
 static const char* const OSRS_ASSET_WILDERNESS_PATHS[] = {
     "wilderness.cmap",
     "wilderness.terrain",
+    "wilderness.objects",
 };
 
 static const char* const OSRS_ASSET_PVP_PATHS[] = {
@@ -124,6 +125,7 @@ static const char* const OSRS_ASSET_PVP_PATHS[] = {
     "ui/interface_manifest.json",
     "wilderness.cmap",
     "wilderness.terrain",
+    "wilderness.objects",
 };
 
 static const OsrsAssetGroup OSRS_ASSET_GROUPS[OSRS_ASSET_GROUP_COUNT] = {

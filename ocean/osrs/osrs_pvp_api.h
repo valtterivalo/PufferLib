@@ -662,7 +662,6 @@ void pvp_step(OsrsEnv* env) {
             }
         }
 
-        // Write final episode stats to log
         Player* p0 = &env->players[0];
         env->log.episode_return = env->_episode_return;
         env->log.episode_length = (float)env->tick;
@@ -672,11 +671,12 @@ void pvp_step(OsrsEnv* env) {
         env->log.prayer_correct = (float)p0->target_pray_correct_count;
         env->log.prayer_total = (float)(p0->target_pray_melee_count +
             p0->target_pray_ranged_count + p0->target_pray_magic_count);
-        env->log.idle_ticks = (float)(p0->food_count + p0->karambwan_count); /* food remaining */
-        env->log.brews_used = (float)p0->brew_doses;    /* brews remaining */
-        env->log.wave = (float)p0->special_energy;      /* spec energy remaining */
-        env->log.npc_kills = (float)p0->total_target_hit_count;     /* attacks landed */
-        env->log.blood_healed = (float)p0->target_hit_off_prayer_count; /* off-prayer hits */
+        env->log.food_remaining = (float)p0->food_count;
+        env->log.karambwan_remaining = (float)p0->karambwan_count;
+        env->log.brews_remaining = (float)p0->brew_doses;
+        env->log.spec_energy_remaining = (float)p0->special_energy;
+        env->log.attacks_landed = (float)p0->total_target_hit_count;
+        env->log.off_prayer_hits = (float)p0->target_hit_off_prayer_count;
         env->log.n = 1.0f;
 
         // Auto-reset for next episode

@@ -30,6 +30,9 @@ typedef struct {
 
     int ocean_acts_staging[NUM_ACTION_HEADS];
     unsigned char ocean_term_staging;
+
+    float ticks_per_second;
+    double last_step_time;
 } PvpEnv;
 
 #define OBS_SIZE OCEAN_OBS_SIZE
@@ -73,11 +76,12 @@ void c_step(Env* env) {
         env->log.damage_received += env->pvp.log.damage_received;
         env->log.prayer_correct += env->pvp.log.prayer_correct;
         env->log.prayer_total += env->pvp.log.prayer_total;
-        env->log.idle_ticks += env->pvp.log.idle_ticks;
-        env->log.brews_used += env->pvp.log.brews_used;
-        env->log.wave += env->pvp.log.wave;
-        env->log.npc_kills += env->pvp.log.npc_kills;
-        env->log.blood_healed += env->pvp.log.blood_healed;
+        env->log.food_remaining += env->pvp.log.food_remaining;
+        env->log.karambwan_remaining += env->pvp.log.karambwan_remaining;
+        env->log.brews_remaining += env->pvp.log.brews_remaining;
+        env->log.spec_energy_remaining += env->pvp.log.spec_energy_remaining;
+        env->log.attacks_landed += env->pvp.log.attacks_landed;
+        env->log.off_prayer_hits += env->pvp.log.off_prayer_hits;
         env->log.n += env->pvp.log.n;
         memset(&env->pvp.log, 0, sizeof(env->pvp.log));
     }
@@ -101,23 +105,63 @@ void c_reset(Env* env) {
 }
 
 void c_close(Env* env) { pvp_close(&env->pvp); }
+
 void c_render(Env* env) {
     int first_call = env->pvp.client == NULL;
-    pvp_render(&env->pvp);
     if (first_call) {
+        osrs_asset_require_group(OSRS_ASSET_GROUP_PVP);
+        osrs_asset_require_group(OSRS_ASSET_GROUP_COMBAT_VISUALS);
+
+        env->pvp.client = render_make_client();
         RenderClient* rc = (RenderClient*)env->pvp.client;
+        rc->ticks_per_second = env->ticks_per_second;
         rc->model_cache = model_cache_load(OSRS_ASSET("equipment.models"));
         if (rc->model_cache) rc->show_models = 1;
         rc->anim_cache = anim_cache_load(OSRS_ASSET("equipment.anims"));
         render_load_projectile_assets(rc);
         render_init_overlay_models(rc);
+        rc->terrain = terrain_load(OSRS_ASSET("wilderness.terrain"));
+        rc->objects = objects_load(OSRS_ASSET("wilderness.objects"));
+        CollisionMap* cmap = collision_map_load(OSRS_ASSET("wilderness.cmap"));
+        if (cmap) {
+            env->pvp.collision_map = cmap;
+            rc->collision_map = cmap;
+        }
+        env->last_step_time = GetTime();
     }
+
+    RenderClient* rc = (RenderClient*)env->pvp.client;
+    if (!rc) return;
+
+    render_post_tick(rc, &env->pvp);
+
+    if (rc->ticks_per_second <= 0.0f) {
+        pvp_render(&env->pvp);
+        rc->last_tick_time = GetTime();
+        env->last_step_time = rc->last_tick_time;
+        return;
+    }
+
+    float tps = render_effective_ticks_per_second(rc);
+    double interval = 1.0 / (double)tps;
+    double deadline = env->last_step_time + interval;
+    int rendered = 0;
+    while (GetTime() < deadline) {
+        pvp_render(&env->pvp);
+        rendered = 1;
+    }
+    if (!rendered) pvp_render(&env->pvp);
+
+    rc->last_tick_time = GetTime();
+    env->last_step_time = rc->last_tick_time;
 }
 
 #include "vecenv.h"
 
 void my_init(Env* env, Dict* kwargs) {
     env->num_agents = 1;
+    env->ticks_per_second = 1.667f;
+    env->last_step_time = 0.0;
 
     pvp_init(&env->pvp);
 
@@ -180,26 +224,23 @@ void my_log(Log* log, Dict* out) {
     dict_set(out, "damage_dealt", log->damage_dealt);
     dict_set(out, "damage_received", log->damage_received);
 
-    /* prayer correctness rate */
     float prayer_rate = (log->prayer_total > 0.0f)
         ? log->prayer_correct / log->prayer_total : 0.0f;
     dict_set(out, "prayer_correct_rate", prayer_rate);
 
-    /* combat stats (stored in reused Log fields) */
-    dict_set(out, "food_remaining", log->idle_ticks);
-    dict_set(out, "brews_remaining", log->brews_used);
-    dict_set(out, "spec_remaining", log->wave);
-    dict_set(out, "attacks_landed", log->npc_kills);
-    dict_set(out, "off_prayer_hits", log->blood_healed);
+    dict_set(out, "food_remaining", log->food_remaining);
+    dict_set(out, "karambwan_remaining", log->karambwan_remaining);
+    dict_set(out, "brews_remaining", log->brews_remaining);
+    dict_set(out, "spec_remaining", log->spec_energy_remaining);
+    dict_set(out, "attacks_landed", log->attacks_landed);
+    dict_set(out, "off_prayer_hits", log->off_prayer_hits);
 
-    /* damage per hit */
-    float dph = (log->npc_kills > 0.0f)
-        ? log->damage_dealt / log->npc_kills : 0.0f;
+    float dph = (log->attacks_landed > 0.0f)
+        ? log->damage_dealt / log->attacks_landed : 0.0f;
     dict_set(out, "damage_per_hit", dph);
 
-    /* composite score: winrate + damage fraction */
     float wr = log->wins;
-    float dmg_frac = log->damage_dealt / 99.0f;  /* normalized to max HP */
+    float dmg_frac = log->damage_dealt / 99.0f;
     float score = wr + (1.0f - wr) * dmg_frac * 0.5f;
     dict_set(out, "score", score);
 }

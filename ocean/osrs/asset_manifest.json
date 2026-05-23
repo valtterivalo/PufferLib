@@ -101,7 +101,8 @@
       "name": "wilderness",
       "files": [
         "wilderness.cmap",
-        "wilderness.terrain"
+        "wilderness.terrain",
+        "wilderness.objects"
       ]
     },
     {
@@ -117,7 +118,8 @@
         "ui/interfaces.bin",
         "ui/interface_manifest.json",
         "wilderness.cmap",
-        "wilderness.terrain"
+        "wilderness.terrain",
+        "wilderness.objects"
       ]
     }
   ]
