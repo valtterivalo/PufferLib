@@ -2,32 +2,13 @@
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
-#include <cstring>
-#include <stdexcept>
-#include <string>
+#include <pybind11/numpy.h>
 #include "pufferlib.cu"
 
 #define _PUFFER_STRINGIFY(x) #x
 #define PUFFER_STRINGIFY(x) _PUFFER_STRINGIFY(x)
 
 namespace py = pybind11;
-
-static void cuda_check(cudaError_t err, const char* op) {
-    if (err != cudaSuccess) {
-        throw std::runtime_error(
-            std::string(op) + ": " + cudaGetErrorString(err));
-    }
-}
-
-static void assert_static_env_name_matches(void) {
-    const char* binding_env_name = PUFFER_STRINGIFY(ENV_NAME);
-    const char* static_env_name = get_static_env_name();
-    if (strcmp(binding_env_name, static_env_name) != 0) {
-        throw std::runtime_error(
-            std::string("compiled _C env mismatch: binding env_name=") +
-            binding_env_name + ", static_env_name=" + static_env_name);
-    }
-}
 
 // Wrapper functions for Python bindings
 pybind11::dict puf_log(pybind11::object pufferl_obj) {
@@ -71,8 +52,6 @@ pybind11::dict puf_log(pybind11::object pufferl_obj) {
         losses_dict["old_kl"] = losses_host[LOSS_OLD_APPROX_KL] * inv_n;
         losses_dict["kl"] = losses_host[LOSS_APPROX_KL] * inv_n;
         losses_dict["clipfrac"] = losses_host[LOSS_CLIPFRAC] * inv_n;
-        losses_dict["parent_kl"] = losses_host[LOSS_PARENT_KL] * inv_n;
-        losses_dict["parent_logit_delta"] = losses_host[LOSS_PARENT_LOGIT_DELTA] * inv_n;
     }
     cudaMemset(pufferl.losses_puf.data, 0, numel(pufferl.losses_puf.shape) * sizeof(float));
     result["loss"] = losses_dict;
@@ -86,17 +65,6 @@ pybind11::dict puf_log(pybind11::object pufferl_obj) {
         if (i >= PROF_TRAIN_MISC) train_total += sec;
     }
     perf_dict["train"] = train_total;
-    if (inferno_env_profile_count &&
-            inferno_env_profile_name &&
-            inferno_env_profile_read_reset_ms) {
-        int profile_count = inferno_env_profile_count();
-        for (int i = 0; i < profile_count; i++) {
-            const char* name = inferno_env_profile_name(i);
-            double ms = inferno_env_profile_read_reset_ms(i);
-            std::string key = std::string("inferno_") + name;
-            perf_dict[pybind11::str(key)] = ms / 1000.0;
-        }
-    }
     memset(pufferl.profile.accum, 0, sizeof(pufferl.profile.accum));
     result["perf"] = perf_dict;
 
@@ -139,7 +107,9 @@ pybind11::dict puf_eval_log(pybind11::object pufferl_obj) {
     pufferl.last_log_step = pufferl.global_step;
  
     pybind11::dict env_dict;
-    Dict* env_out = create_dict(PUFFER_ENV_LOG_DICT_CAPACITY);
+    // Capacity 64 to fit chess's per-bank hist_score_bank/hist_n_bank entries
+    // (16 keys across 8 banks) on top of base env-log fields.
+    Dict* env_out = create_dict(64);
     static_vec_eval_log(pufferl.vec, env_out);
     for (int i = 0; i < env_out->size; i++) {
         env_dict[env_out->items[i].key] = env_out->items[i].value;
@@ -167,17 +137,18 @@ void rollouts(pybind11::object pufferl_obj) {
     pybind11::gil_scoped_release no_gil;
     double t0 = wall_clock();
 
-    // Zero state buffers
+    // Zero state buffers (primary + every frozen bank, so all banks see fresh
+    // state symmetrically — otherwise frozen banks accumulate indefinitely while
+    // primary resets, giving primary an unfair in-distribution advantage).
     if (pufferl.hypers.reset_state) {
         for (int i = 0; i < pufferl.hypers.num_buffers; i++) {
             puf_zero(&pufferl.buffer_states[i], pufferl.default_stream);
         }
-    }
-
-    if (pufferl.curriculum_enabled) {
-        curriculum_rollout_begin(&pufferl);
-    } else {
-        pufferl.vec->log_env_limit = 0;
+        for (int b = 0; b < pufferl.num_frozen_banks; b++) {
+            for (int i = 0; i < pufferl.hypers.num_buffers; i++) {
+                puf_zero(&pufferl.frozen_banks[b].buffer_states[i], pufferl.default_stream);
+            }
+        }
     }
 
     static_vec_omp_step(pufferl.vec);
@@ -189,9 +160,6 @@ void rollouts(pybind11::object pufferl_obj) {
     pufferl.profile.accum[PROF_EVAL_GPU] += eval_prof[EVAL_GPU];
     pufferl.profile.accum[PROF_EVAL_ENV] += eval_prof[EVAL_ENV_STEP];
     pufferl.global_step += pufferl.hypers.horizon * pufferl.hypers.total_agents;
-    if (pufferl.phase2_ctx) {
-        phase2_apply_cursor_gate(pufferl.phase2_ctx);
-    }
 }
 
 pybind11::dict train(pybind11::object pufferl_obj) {
@@ -213,10 +181,7 @@ void save_weights(pybind11::object pufferl_obj, const std::string& path) {
     PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
     int64_t nbytes = numel(pufferl.master_weights.shape) * sizeof(float);
     std::vector<char> buf(nbytes);
-    cuda_check(
-        cudaMemcpy(buf.data(), pufferl.master_weights.data, nbytes,
-            cudaMemcpyDeviceToHost),
-        "save_weights device-to-host copy");
+    cudaMemcpy(buf.data(), pufferl.master_weights.data, nbytes, cudaMemcpyDeviceToHost);
     FILE* f = fopen(path.c_str(), "wb");
     if (!f) throw std::runtime_error("Failed to open " + path + " for writing");
     fwrite(buf.data(), 1, nbytes, f);
@@ -244,156 +209,56 @@ void load_weights(pybind11::object pufferl_obj, const std::string& path) {
         throw std::runtime_error("Failed to read weight file");
     }
     fclose(f);
-    cuda_check(
-        cudaMemcpy(pufferl.master_weights.data, buf.data(), nbytes,
-            cudaMemcpyHostToDevice),
-        "load_weights host-to-device copy");
+    cudaMemcpy(pufferl.master_weights.data, buf.data(), nbytes, cudaMemcpyHostToDevice);
     if (USE_BF16) {
         int n = numel(pufferl.param_puf.shape);
         cast<<<grid_size(n), BLOCK_SIZE, 0, pufferl.default_stream>>>(
             pufferl.param_puf.data, pufferl.master_weights.data, n);
-        cuda_check(cudaGetLastError(), "load_weights fp32-to-bf16 launch");
-        cuda_check(
-            cudaStreamSynchronize(pufferl.default_stream),
-            "load_weights fp32-to-bf16 sync");
     }
 }
 
-struct TrainingStateHeader {
-    uint32_t magic;
-    uint32_t version;
-    int64_t num_weights;
-    int64_t global_step;
-    int64_t epoch;
-};
-
-static constexpr uint32_t TRAINING_STATE_MAGIC = 0x54534650u;
-static constexpr uint32_t TRAINING_STATE_VERSION = 1u;
-
-void save_training_state(pybind11::object pufferl_obj, const std::string& path) {
+int py_add_frozen_bank(py::object pufferl_obj, int slice_size,
+                       int hidden_size, int num_layers) {
     PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
-    int64_t num_weights = numel(pufferl.master_weights.shape);
-    int64_t nbytes = num_weights * sizeof(float);
-    TrainingStateHeader header = {
-        .magic = TRAINING_STATE_MAGIC,
-        .version = TRAINING_STATE_VERSION,
-        .num_weights = num_weights,
-        .global_step = pufferl.global_step,
-        .epoch = pufferl.epoch,
-    };
-    std::vector<char> weights(nbytes);
-    std::vector<char> momentum(nbytes);
-    cuda_check(
-        cudaMemcpy(weights.data(), pufferl.master_weights.data, nbytes,
-            cudaMemcpyDeviceToHost),
-        "save_training_state weights device-to-host copy");
-    cuda_check(
-        cudaMemcpy(momentum.data(), pufferl.muon.mb_puf.data, nbytes,
-            cudaMemcpyDeviceToHost),
-        "save_training_state momentum device-to-host copy");
-
-    FILE* f = fopen(path.c_str(), "wb");
-    if (!f) throw std::runtime_error("Failed to open " + path + " for writing");
-    bool ok =
-        fwrite(&header, sizeof(header), 1, f) == 1 &&
-        fwrite(weights.data(), 1, nbytes, f) == (size_t)nbytes &&
-        fwrite(momentum.data(), 1, nbytes, f) == (size_t)nbytes;
-    if (fclose(f) != 0 || !ok) {
-        throw std::runtime_error("Failed to write training state " + path);
-    }
+    return pufferl_add_frozen_bank(&pufferl, slice_size, hidden_size, num_layers);
 }
 
-void load_training_state(pybind11::object pufferl_obj, const std::string& path) {
+void py_load_frozen_bank(py::object pufferl_obj, int bank_idx, const std::string& path) {
     PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
-    int64_t num_weights = numel(pufferl.master_weights.shape);
-    int64_t nbytes = num_weights * sizeof(float);
-    FILE* f = fopen(path.c_str(), "rb");
-    if (!f) throw std::runtime_error("Failed to open " + path + " for reading");
-
-    TrainingStateHeader header;
-    if (fread(&header, sizeof(header), 1, f) != 1) {
-        fclose(f);
-        throw std::runtime_error("Failed to read training state header " + path);
-    }
-    if (header.magic != TRAINING_STATE_MAGIC ||
-            header.version != TRAINING_STATE_VERSION ||
-            header.num_weights != num_weights) {
-        fclose(f);
-        throw std::runtime_error("Training state header mismatch in " + path);
-    }
-
-    std::vector<char> weights(nbytes);
-    std::vector<char> momentum(nbytes);
-    bool ok =
-        fread(weights.data(), 1, nbytes, f) == (size_t)nbytes &&
-        fread(momentum.data(), 1, nbytes, f) == (size_t)nbytes;
-    if (fclose(f) != 0 || !ok) {
-        throw std::runtime_error("Failed to read training state " + path);
-    }
-
-    cuda_check(
-        cudaMemcpy(pufferl.master_weights.data, weights.data(), nbytes,
-            cudaMemcpyHostToDevice),
-        "load_training_state weights host-to-device copy");
-    cuda_check(
-        cudaMemcpy(pufferl.muon.mb_puf.data, momentum.data(), nbytes,
-            cudaMemcpyHostToDevice),
-        "load_training_state momentum host-to-device copy");
-    if (USE_BF16) {
-        int n = numel(pufferl.param_puf.shape);
-        cast<<<grid_size(n), BLOCK_SIZE, 0, pufferl.default_stream>>>(
-            pufferl.param_puf.data, pufferl.master_weights.data, n);
-        cuda_check(cudaGetLastError(), "load_training_state fp32-to-bf16 launch");
-        cuda_check(
-            cudaStreamSynchronize(pufferl.default_stream),
-            "load_training_state fp32-to-bf16 sync");
-    }
-    pufferl.global_step = header.global_step;
-    pufferl.epoch = header.epoch;
-    pufferl.last_log_step = pufferl.global_step;
+    pufferl_load_frozen_bank(&pufferl, bank_idx, path.c_str());
 }
 
-void load_anchor_weights(
-    pybind11::object pufferl_obj,
-    const std::string& path,
-    double anchor_coef
-) {
+void py_set_agent_perm(py::object pufferl_obj, py::array_t<int> perm) {
     PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
-    int64_t nbytes = numel(pufferl.master_weights.shape) * sizeof(float);
-    FILE* f = fopen(path.c_str(), "rb");
-    if (!f) throw std::runtime_error("Failed to open " + path + " for reading");
-    fseek(f, 0, SEEK_END);
-    long file_size = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    if (file_size != nbytes) {
-        fclose(f);
-        throw std::runtime_error("Anchor weight file size mismatch: expected " +
-            std::to_string(nbytes) + " bytes, got " + std::to_string(file_size));
+    auto buf = perm.request();
+    if (buf.ndim != 1) throw std::runtime_error("agent_perm must be 1-D");
+    if ((int)buf.shape[0] != pufferl.vec->total_agents) {
+        throw std::runtime_error("agent_perm length must equal total_agents");
     }
-
-    int64_t num_weights = numel(pufferl.master_weights.shape);
-    std::vector<float> buf(num_weights);
-    size_t nread = fread(buf.data(), 1, nbytes, f);
-    if (fclose(f) != 0 || (int64_t)nread != nbytes) {
-        throw std::runtime_error("Failed to read anchor weights " + path);
-    }
-    if (anchor_coef > 0.0) {
-        if (!pufferl.anchor_weights.data) {
-            pufferl.anchor_weights = {.shape = {num_weights}};
-            cuda_check(
-                cudaMalloc(&pufferl.anchor_weights.data, nbytes),
-                "load_anchor_weights allocation");
-        }
-        cuda_check(
-            cudaMemcpy(pufferl.anchor_weights.data, buf.data(), nbytes,
-                cudaMemcpyHostToDevice),
-            "load_anchor_weights host-to-device copy");
-    }
-    if (pufferl.hypers.parent_kl_coef > 0.0f || pufferl.hypers.parent_kl_log) {
-        load_parent_policy_weights(pufferl, buf);
-    }
-    pufferl.anchor_coef = (float)anchor_coef;
+    pufferl_set_agent_perm(&pufferl, (const int*)buf.ptr);
 }
+
+void py_set_env_tags(py::object pufferl_obj, py::array_t<int> tags) {
+    PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
+    auto buf = tags.request();
+    if (buf.ndim != 1) throw std::runtime_error("env_tags must be 1-D");
+    int num_envs = pufferl_num_envs(&pufferl);
+    if ((int)buf.shape[0] != num_envs) {
+        throw std::runtime_error("env_tags length must equal num_envs");
+    }
+    pufferl_set_env_tags(&pufferl, (const int*)buf.ptr);
+}
+
+int py_count_aligned(py::object pufferl_obj, int tag_value, int reset_flags) {
+    PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
+    return pufferl_count_aligned(&pufferl, tag_value, reset_flags);
+}
+
+int py_num_envs(py::object pufferl_obj) {
+    PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
+    return pufferl_num_envs(&pufferl);
+}
+
 void py_puff_advantage(
         long long values_ptr, long long rewards_ptr,
         long long dones_ptr,  long long importance_ptr,
@@ -421,13 +286,6 @@ double get_config(py::dict& kwargs, const char* key) {
     }
 }
 
-double get_optional_config(py::dict& kwargs, const char* key, double default_value) {
-    if (!kwargs.contains(key)) {
-        return default_value;
-    }
-    return get_config(kwargs, key);
-}
-
 Dict* py_dict_to_c_dict(py::dict py_dict) {
     Dict* c_dict = create_dict(py_dict.size());
     for (auto item : py_dict) {
@@ -442,7 +300,7 @@ Dict* py_dict_to_c_dict(py::dict py_dict) {
 }
 
 // ============================================================================
-// Python-facing VecEnv wrapper.
+// Python-facing VecEnv: wraps StaticVec for use from python_pufferl.py.
 // After vec_step(), GPU buffers are current — Python wraps them zero-copy
 // with torch.from_blob(ptr, shape, dtype, device='cuda').
 // ============================================================================
@@ -512,7 +370,7 @@ void cpu_vec_step_py(VecEnv& ve, long long actions_ptr) {
 }
 
 py::dict vec_log(VecEnv& ve) {
-    Dict* out = create_dict(PUFFER_ENV_LOG_DICT_CAPACITY);
+    Dict* out = create_dict(32);
     static_vec_log(ve.vec, out);
     py::dict result;
     for (int i = 0; i < out->size; i++) {
@@ -551,7 +409,6 @@ std::unique_ptr<PuffeRL> create_pufferl(py::dict args) {
     hypers.beta1 = get_config(train_kwargs, "beta1");
     hypers.beta2 = get_config(train_kwargs, "beta2");
     hypers.eps = get_config(train_kwargs, "eps");
-    hypers.aurora = get_config(train_kwargs, "aurora");
     // Training
     hypers.minibatch_size = get_config(train_kwargs, "minibatch_size");
     hypers.replay_ratio = get_config(train_kwargs, "replay_ratio");
@@ -562,8 +419,8 @@ std::unique_ptr<PuffeRL> create_pufferl(py::dict args) {
     hypers.vf_clip_coef = get_config(train_kwargs, "vf_clip_coef");
     hypers.vf_coef = get_config(train_kwargs, "vf_coef");
     hypers.ent_coef = get_config(train_kwargs, "ent_coef");
-    hypers.parent_kl_coef = get_config(train_kwargs, "parent_kl_coef");
-    hypers.parent_kl_log = get_config(train_kwargs, "parent_kl_log");
+    hypers.min_ent_coef_ratio = get_config(train_kwargs, "min_ent_coef_ratio");
+    hypers.anneal_ent_coef = get_config(train_kwargs, "anneal_ent_coef");
     // GAE
     hypers.gamma = get_config(train_kwargs, "gamma");
     hypers.gae_lambda = get_config(train_kwargs, "gae_lambda");
@@ -573,28 +430,7 @@ std::unique_ptr<PuffeRL> create_pufferl(py::dict args) {
     // Priority
     hypers.prio_alpha = get_config(train_kwargs, "prio_alpha");
     hypers.prio_beta0 = get_config(train_kwargs, "prio_beta0");
-    hypers.anneal_prio_beta = get_config(train_kwargs, "anneal_prio_beta");
-    // Curriculum state buffer
-    int state_curriculum_mode =
-        (int)get_optional_config(train_kwargs, "state_curriculum_mode", 1.0);
-    if (state_curriculum_mode < 0 || state_curriculum_mode > 1) {
-        throw std::runtime_error("state_curriculum_mode must be 0 or 1");
-    }
-    hypers.state_buffer_size = get_config(train_kwargs, "state_buffer_size");
-    hypers.cl_frac = get_config(train_kwargs, "cl_frac");
-    hypers.anneal_cl = get_config(train_kwargs, "anneal_cl");
-    hypers.warmup_states = get_config(train_kwargs, "warmup_states");
-    hypers.state_checkpoint_interval = get_config(train_kwargs, "state_checkpoint_interval");
-    if (state_curriculum_mode == 0) {
-        hypers.state_buffer_size = 0;
-        hypers.cl_frac = 0.0f;
-        hypers.warmup_states = 0;
-    }
-    hypers.explore_alpha = get_config(train_kwargs, "explore_alpha");
-    hypers.explore_beta = get_config(train_kwargs, "explore_beta");
-    hypers.explore_decay = get_config(train_kwargs, "explore_decay");
     hypers.reset_state = get_config(args, "reset_state");
-    hypers.terminal_reset_state = get_config(train_kwargs, "terminal_reset_state");
     // Base-level config ([base] section becomes top-level in args)
     hypers.cudagraphs = get_config(args, "cudagraphs");
     hypers.profile = get_config(args, "profile");
@@ -604,8 +440,7 @@ std::unique_ptr<PuffeRL> create_pufferl(py::dict args) {
     hypers.gpu_id = get_config(args, "gpu_id");
     hypers.nccl_id = args["nccl_id"].cast<std::string>();
     // Seed
-    hypers.seed = args.contains("seed") ? get_config(args, "seed")
-        : train_kwargs.contains("seed") ? get_config(train_kwargs, "seed") : 42;
+    hypers.seed = get_config(args, "seed");
 
     int device_count = 0;
     cudaGetDeviceCount(&device_count);
@@ -629,8 +464,6 @@ std::unique_ptr<PuffeRL> create_pufferl(py::dict args) {
 }
 
 PYBIND11_MODULE(_C, m) {
-    assert_static_env_name_matches();
-
     // Multi-GPU: generate NCCL unique ID (call on rank 0, pass bytes to all ranks)
     m.def("get_nccl_id", []() {
         ncclUniqueId id;
@@ -675,7 +508,6 @@ PYBIND11_MODULE(_C, m) {
 
     m.attr("precision_bytes") = (int)sizeof(precision_t);
     m.attr("env_name") = PUFFER_STRINGIFY(ENV_NAME);
-    m.attr("static_env_name") = get_static_env_name();
     m.attr("gpu") = 1;
 
     // Core functions
@@ -687,52 +519,12 @@ PYBIND11_MODULE(_C, m) {
     m.def("close", &puf_close);
     m.def("save_weights", &save_weights);
     m.def("load_weights", &load_weights);
-    m.def("save_training_state", &save_training_state);
-    m.def("load_training_state", &load_training_state);
-    m.def("load_anchor_weights", &load_anchor_weights);
-    m.def("phase2_init", [](
-        py::object pufferl_obj,
-        const std::string& demo_dir,
-        int num_atns,
-        int snapshot_stride,
-        int max_demos,
-        uint64_t seed,
-        float normal_start_frac,
-        float randomize_rng_frac,
-        float bc_coef,
-        int bc_demos_per_minibatch,
-        float promote_rate,
-        float demote_rate,
-        int backstep_ticks,
-        float success_q_delta
-    ) -> int {
-        PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
-        py::gil_scoped_release no_gil;
-        return phase2_init_impl(
-            pufferl, demo_dir.c_str(), num_atns, snapshot_stride, max_demos,
-            seed, normal_start_frac, randomize_rng_frac,
-            bc_coef, bc_demos_per_minibatch,
-            promote_rate, demote_rate, backstep_ticks, success_q_delta);
-    },
-    py::arg("pufferl"),
-    py::arg("demo_dir"),
-    py::arg("num_atns"),
-    py::arg("snapshot_stride") = 4,
-    py::arg("max_demos") = 64,
-    py::arg("seed") = 42,
-    py::arg("normal_start_frac") = 0.25f,
-    py::arg("randomize_rng_frac") = 0.25f,
-    py::arg("bc_coef") = 0.0f,
-    py::arg("bc_demos_per_minibatch") = 0,
-    py::arg("promote_rate") = 0.30f,
-    py::arg("demote_rate") = 0.10f,
-    py::arg("backstep_ticks") = 4,
-    py::arg("success_q_delta") = 0.005f);
-    m.def("phase2_reset", [](py::object pufferl_obj) {
-        PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
-        py::gil_scoped_release no_gil;
-        phase2_reset_impl(pufferl);
-    }, py::arg("pufferl"));
+    m.def("add_frozen_bank", &py_add_frozen_bank);
+    m.def("load_frozen_bank", &py_load_frozen_bank);
+    m.def("set_agent_perm", &py_set_agent_perm);
+    m.def("set_env_tags", &py_set_env_tags);
+    m.def("count_aligned", &py_count_aligned);
+    m.def("num_envs", &py_num_envs);
     m.def("python_vec_recv", &python_vec_recv);
     m.def("python_vec_send", &python_vec_send);
     py::class_<Policy>(m, "Policy");
@@ -755,31 +547,20 @@ PYBIND11_MODULE(_C, m) {
         .def_readwrite("beta1", &HypersT::beta1)
         .def_readwrite("beta2", &HypersT::beta2)
         .def_readwrite("eps", &HypersT::eps)
-        .def_readwrite("aurora", &HypersT::aurora)
         .def_readwrite("total_timesteps", &HypersT::total_timesteps)
         .def_readwrite("max_grad_norm", &HypersT::max_grad_norm)
         .def_readwrite("clip_coef", &HypersT::clip_coef)
         .def_readwrite("vf_clip_coef", &HypersT::vf_clip_coef)
         .def_readwrite("vf_coef", &HypersT::vf_coef)
         .def_readwrite("ent_coef", &HypersT::ent_coef)
-        .def_readwrite("parent_kl_coef", &HypersT::parent_kl_coef)
-        .def_readwrite("parent_kl_log", &HypersT::parent_kl_log)
+        .def_readwrite("min_ent_coef_ratio", &HypersT::min_ent_coef_ratio)
+        .def_readwrite("anneal_ent_coef", &HypersT::anneal_ent_coef)
         .def_readwrite("gamma", &HypersT::gamma)
         .def_readwrite("gae_lambda", &HypersT::gae_lambda)
         .def_readwrite("vtrace_rho_clip", &HypersT::vtrace_rho_clip)
         .def_readwrite("vtrace_c_clip", &HypersT::vtrace_c_clip)
         .def_readwrite("prio_alpha", &HypersT::prio_alpha)
         .def_readwrite("prio_beta0", &HypersT::prio_beta0)
-        .def_readwrite("anneal_prio_beta", &HypersT::anneal_prio_beta)
-        .def_readwrite("state_buffer_size", &HypersT::state_buffer_size)
-        .def_readwrite("cl_frac", &HypersT::cl_frac)
-        .def_readwrite("anneal_cl", &HypersT::anneal_cl)
-        .def_readwrite("warmup_states", &HypersT::warmup_states)
-        .def_readwrite("state_checkpoint_interval", &HypersT::state_checkpoint_interval)
-        .def_readwrite("explore_alpha", &HypersT::explore_alpha)
-        .def_readwrite("explore_beta", &HypersT::explore_beta)
-        .def_readwrite("explore_decay", &HypersT::explore_decay)
-        .def_readwrite("terminal_reset_state", &HypersT::terminal_reset_state)
         .def_readwrite("cudagraphs", &HypersT::cudagraphs)
         .def_readwrite("profile", &HypersT::profile)
         .def_readwrite("rank", &HypersT::rank)
@@ -812,14 +593,6 @@ PYBIND11_MODULE(_C, m) {
         return now - pufferl.start_time;
     });
     m.def("puff_advantage", &py_puff_advantage);
-    m.def("env_obs_size", []() -> int { return get_obs_size(); });
-    m.def("env_num_action_heads", []() -> int { return get_num_atns(); });
-    m.def("env_action_dims", []() {
-        py::list dims;
-        int* sizes = get_act_sizes();
-        for (int i = 0; i < get_num_act_sizes(); i++) dims.append(sizes[i]);
-        return dims;
-    });
     m.def("create_vec", &create_vec, py::arg("args"), py::arg("gpu") = 1);
     py::class_<VecEnv, std::unique_ptr<VecEnv>>(m, "VecEnv")
         .def_readonly("total_agents",  &VecEnv::total_agents)
