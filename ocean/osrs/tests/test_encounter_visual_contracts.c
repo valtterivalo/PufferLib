@@ -128,6 +128,93 @@ static void test_nh_pvp_respects_visual_tier_override(void) {
     nh_pvp_destroy((EncounterState*)state);
 }
 
+static void test_nh_pvp_head_move_drives_walk_dest(void) {
+    /* HEAD_MOVE = 5 (one tile NW per ENCOUNTER_MOVE_TARGET_DX/DY) writes a
+       walk_dest one tile NW of the player, and pvp_step actually moves them
+       there via osrs_encounter_player_step. */
+    NhPvpState* state = (NhPvpState*)nh_pvp_create();
+    NhPvpContext context;
+    memset(&context, 0, sizeof(context));
+    nh_pvp_put_int((EncounterState*)state, (EncounterContext*)&context, "use_c_opponent", 1);
+    nh_pvp_put_int((EncounterState*)state, (EncounterContext*)&context, "opponent_type", OPP_NONE);
+    nh_pvp_put_int((EncounterState*)state, (EncounterContext*)&context, "is_lms", 1);
+    nh_pvp_reset((EncounterState*)state, (EncounterContext*)&context, 123);
+
+    int start_x = state->env.players[0].x;
+    int start_y = state->env.players[0].y;
+    int expected_x = start_x + ENCOUNTER_MOVE_TARGET_DX[5];
+    int expected_y = start_y + ENCOUNTER_MOVE_TARGET_DY[5];
+
+    int actions[NUM_ACTION_HEADS] = {0};
+    actions[HEAD_MOVE] = 5;
+    nh_pvp_step((EncounterState*)state, (EncounterContext*)&context, actions);
+
+    assert(state->env.players[0].x == expected_x);
+    assert(state->env.players[0].y == expected_y);
+
+    nh_pvp_destroy((EncounterState*)state);
+}
+
+static void test_nh_pvp_walk_dest_persists_until_arrival(void) {
+    /* Set walk_dest far enough that the player can't arrive in one tick.
+       Confirm walk_dest is still set after one step and that an idle action
+       on the next tick continues the BFS toward the destination. */
+    NhPvpState* state = (NhPvpState*)nh_pvp_create();
+    NhPvpContext context;
+    memset(&context, 0, sizeof(context));
+    nh_pvp_put_int((EncounterState*)state, (EncounterContext*)&context, "use_c_opponent", 1);
+    nh_pvp_put_int((EncounterState*)state, (EncounterContext*)&context, "opponent_type", OPP_NONE);
+    nh_pvp_put_int((EncounterState*)state, (EncounterContext*)&context, "is_lms", 1);
+    nh_pvp_reset((EncounterState*)state, (EncounterContext*)&context, 123);
+
+    /* manually set walk_dest 10 tiles east of player 0. shared SDK steps up
+       to 2 tiles per tick toward it; far enough to require multiple ticks. */
+    Player* p0 = &state->env.players[0];
+    int target_x = p0->x + 10;
+    int target_y = p0->y;
+    state->env.pvp_runtime.walk_dest_x[0] = target_x;
+    state->env.pvp_runtime.walk_dest_y[0] = target_y;
+
+    int idle[NUM_ACTION_HEADS] = {0};
+    int start_x = p0->x;
+    nh_pvp_step((EncounterState*)state, (EncounterContext*)&context, idle);
+    int after_first_step_x = state->env.players[0].x;
+    assert(after_first_step_x > start_x);                                       /* moved east */
+    assert(after_first_step_x < target_x);                                      /* not yet arrived */
+    assert(state->env.pvp_runtime.walk_dest_x[0] == target_x);                   /* dest unchanged */
+
+    /* tick 2 (idle) continues BFS walk via persistent walk_dest. */
+    nh_pvp_step((EncounterState*)state, (EncounterContext*)&context, idle);
+    int after_second_step_x = state->env.players[0].x;
+    assert(after_second_step_x > after_first_step_x);                            /* moved again */
+    assert(state->env.pvp_runtime.walk_dest_x[0] == target_x);
+
+    nh_pvp_destroy((EncounterState*)state);
+}
+
+static void test_nh_pvp_head_move_mask_blocks_unwalkable_idle(void) {
+    /* HEAD_MOVE = 0 is always valid (idle). other actions are masked by
+       wilderness bounds + collision. confirm idle is set in the mask buffer. */
+    NhPvpState* state = (NhPvpState*)nh_pvp_create();
+    NhPvpContext context;
+    memset(&context, 0, sizeof(context));
+    nh_pvp_put_int((EncounterState*)state, (EncounterContext*)&context, "use_c_opponent", 1);
+    nh_pvp_put_int((EncounterState*)state, (EncounterContext*)&context, "opponent_type", OPP_NONE);
+    nh_pvp_put_int((EncounterState*)state, (EncounterContext*)&context, "is_lms", 1);
+    nh_pvp_reset((EncounterState*)state, (EncounterContext*)&context, 123);
+    compute_action_masks(&state->env, 0);
+
+    int head_move_offset = LOADOUT_DIM + COMBAT_DIM + OVERHEAD_DIM
+        + FOOD_DIM + POTION_DIM + KARAMBWAN_DIM + VENG_DIM + OFFENSIVE_DIM;
+    unsigned char* mask = state->env.action_masks;
+    assert(mask[head_move_offset + 0] == 1);  /* idle always valid */
+    /* total mask size accounts for the 25-action move head */
+    /* compute_action_masks writes ACTION_MASK_SIZE bytes per agent */
+    assert(ACTION_MASK_SIZE == head_move_offset + MOVE_DIM);
+
+    nh_pvp_destroy((EncounterState*)state);
+}
+
 static void test_zulrah_uses_generated_cache_mapping(void) {
     const NpcModelMapping* green = npc_model_lookup(2042);
     const NpcModelMapping* red = npc_model_lookup(2043);
@@ -1278,6 +1365,9 @@ int main(void) {
     test_nh_pvp_exposes_two_visible_fighters();
     test_nh_pvp_scripted_demo_ticks_both_sides();
     test_nh_pvp_respects_visual_tier_override();
+    test_nh_pvp_head_move_drives_walk_dest();
+    test_nh_pvp_walk_dest_persists_until_arrival();
+    test_nh_pvp_head_move_mask_blocks_unwalkable_idle();
     test_zulrah_uses_generated_cache_mapping();
     test_zulrah_animation_events_have_lifetimes();
     test_zulrah_primary_animations_are_single_tick_render_events();

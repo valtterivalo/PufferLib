@@ -301,6 +301,10 @@ void pvp_init(OsrsEnv* env) {
     memset(&env->pvp_runtime.opponent_p0, 0, sizeof(env->pvp_runtime.opponent_p0));
     memset(&env->pvp_runtime.pfsp, 0, sizeof(env->pvp_runtime.pfsp));
     memset(env->pvp_runtime.gear_tier_weights, 0, sizeof(env->pvp_runtime.gear_tier_weights));
+    for (int i = 0; i < NUM_AGENTS; i++) {
+        env->pvp_runtime.walk_dest_x[i] = -1;
+        env->pvp_runtime.walk_dest_y[i] = -1;
+    }
     memset(&env->shaping, 0, sizeof(env->shaping));
     memset(&env->log, 0, sizeof(env->log));
 }
@@ -362,6 +366,10 @@ void pvp_reset(OsrsEnv* env) {
     env->pid_shuffle_countdown = 100 + rand_int(env, 51); // 100-150 ticks
 
     env->pvp_runtime.is_pvp_arena = 0;
+    for (int i = 0; i < NUM_AGENTS; i++) {
+        env->pvp_runtime.walk_dest_x[i] = -1;
+        env->pvp_runtime.walk_dest_y[i] = -1;
+    }
 
     env->_episode_return = 0.0f;
 
@@ -547,6 +555,13 @@ void pvp_step(OsrsEnv* env) {
         if (pi->potion_timer > 0) pi->potion_timer--;
         if (pi->karambwan_timer > 0) pi->karambwan_timer--;
     }
+
+    /* canonical movement via the shared encounter SDK. only fires when
+       walk_dest is set (HEAD_MOVE > 0, legacy HEAD_COMBAT MOVE_*, or a
+       persistent human click). attack-driven auto-chase still flows through
+       execute_attack_movement below until that path is migrated. */
+    pvp_step_player_movement(env, first);
+    pvp_step_player_movement(env, second);
 
     if (env->players[0].x == env->players[1].x &&
         env->players[0].y == env->players[1].y) {

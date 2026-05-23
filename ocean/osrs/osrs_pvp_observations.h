@@ -631,6 +631,35 @@ static void generate_slot_observations(OsrsEnv* env, int agent_idx) {
     obs[187] = (current_weapon_style == ATTACK_STYLE_RANGED) ? 1.0f : 0.0f;
     obs[188] = (current_weapon_style == ATTACK_STYLE_MELEE) ? 1.0f : 0.0f;
     obs[189] = p->ate_brew_this_tick ? 1.0f : 0.0f;
+
+    /* spatial obs added 2026-05 alongside HEAD_MOVE migration. Suarez-aligned:
+       egocentric (relative to player), normalized to [0,1] or [-1,1].
+       agent sees its own wilderness location and the opponent's relative
+       direction — enough to reason about positioning and pathing. */
+    float wild_w = (float)(WILD_MAX_X - WILD_MIN_X);
+    float wild_h = (float)(WILD_MAX_Y - WILD_MIN_Y);
+    obs[190] = (float)(p->x - WILD_MIN_X) / wild_w;       /* dist from west wall */
+    obs[191] = (float)(WILD_MAX_X - p->x) / wild_w;       /* dist from east wall */
+    obs[192] = (float)(p->y - WILD_MIN_Y) / wild_h;       /* dist from south wall */
+    obs[193] = (float)(WILD_MAX_Y - p->y) / wild_h;       /* dist from north wall */
+    /* opponent egocentric. clamp to [-1, 1] via a region-half scale. */
+    float scale = (wild_w > wild_h ? wild_h : wild_w) * 0.5f;
+    if (scale < 1.0f) scale = 1.0f;
+    obs[194] = clampf((float)(t->x - p->x) / scale, -1.0f, 1.0f);
+    obs[195] = clampf((float)(t->y - p->y) / scale, -1.0f, 1.0f);
+    /* per-HEAD_MOVE walkability (25 floats). matches the mask but exposed to
+       the value head so the policy can reason about its movement options
+       even before the mask gates them out. */
+    const CollisionMap* cmap_obs = (const CollisionMap*)env->collision_map;
+    for (int m = 0; m < MOVE_DIM; m++) {
+        if (m == 0) {
+            obs[196 + m] = 1.0f;
+            continue;
+        }
+        int nx = p->x + ENCOUNTER_MOVE_TARGET_DX[m];
+        int ny = p->y + ENCOUNTER_MOVE_TARGET_DY[m];
+        obs[196 + m] = pvp_tile_walkable((void*)cmap_obs, nx, ny) ? 1.0f : 0.0f;
+    }
 }
 
 /**
@@ -755,6 +784,22 @@ static void compute_action_masks(OsrsEnv* env, int agent_idx) {
     mask[offset + ENCOUNTER_OFFENSIVE_SET_REFRESH_RIGOUR] = has_prayer;
     mask[offset + ENCOUNTER_OFFENSIVE_SET_REFRESH_AUGURY] = has_prayer;
     offset += OFFENSIVE_DIM;
+
+    /* MOVE head: 25-action delta grid (idle + 8 walk + 16 run). idle (action 0)
+       is always valid. each non-idle action is valid iff its target tile is in
+       wilderness bounds and walkable, AND the player is not frozen. */
+    mask[offset + 0] = 1;  /* idle */
+    int can_move_for_move_head = can_move(p);
+    for (int m = 1; m < MOVE_DIM; m++) {
+        if (!can_move_for_move_head) {
+            mask[offset + m] = 0;
+            continue;
+        }
+        int nx = p->x + ENCOUNTER_MOVE_TARGET_DX[m];
+        int ny = p->y + ENCOUNTER_MOVE_TARGET_DY[m];
+        mask[offset + m] = pvp_tile_walkable((void*)cmap, nx, ny) ? 1 : 0;
+    }
+    offset += MOVE_DIM;
 }
 
 #endif // OSRS_PVP_OBSERVATIONS_H

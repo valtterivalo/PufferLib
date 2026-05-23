@@ -22,6 +22,8 @@
 #include "osrs_types.h"
 #include "osrs_collision.h"
 #include "osrs_encounter.h"
+#include "osrs_encounter_player.h"
+#include "osrs_pvp_gear.h"
 
 // is_in_wilderness and tile_hash are defined in osrs_types.h
 
@@ -300,74 +302,11 @@ static int pvp_tile_walkable(void* ctx, int x, int y) {
     return is_in_wilderness(x, y) && collision_tile_walkable(cmap, 0, x, y);
 }
 
-/**
- * Process movement action for a player.
- *
- * Movement is blocked when frozen. Otherwise:
- *   0 = maintain current movement state
- *   1 = move to adjacent tile
- *   2 = move to target's tile
- *   3 = farcast (move to distance)
- *   4 = move to diagonal tile
- *
- * @param p               Player processing movement
- * @param target          Target player (for position reference)
- * @param movement_action Action index (0-4)
- * @param farcast_distance Distance for farcast action
- */
-static void process_movement(Player* p, Player* target, int movement_action, int farcast_distance, const CollisionMap* cmap) {
-    if (p->frozen_ticks > 0) {
-        p->is_moving = 0;
-        return;
-    }
-
-    int moved_before = p->is_moving;
-    p->is_moving = 0;
-
-    (void)target;
-    int target_x = p->last_obs_target_x;
-    int target_y = p->last_obs_target_y;
-
-    switch (movement_action) {
-        case 0:
-            p->is_moving = moved_before ? 1 : 0;
-            break;
-        case 1: {
-            int dest_x = 0;
-            int dest_y = 0;
-            if (select_closest_adjacent_tile(p, target_x, target_y, &dest_x, &dest_y, cmap)) {
-                set_destination(p, dest_x, dest_y, cmap);
-            } else {
-                set_destination(p, p->x, p->y, cmap);
-            }
-            break;
-        }
-        case 2:
-            set_destination(p, target_x, target_y, cmap);
-            break;
-        case 3: {
-            int dest_x = 0;
-            int dest_y = 0;
-            int target_dist = farcast_distance;
-            if (select_farcast_tile(p, target_x, target_y, target_dist, &dest_x, &dest_y, cmap)) {
-                set_destination(p, dest_x, dest_y, cmap);
-            } else {
-                set_destination(p, p->x, p->y, cmap);
-            }
-            break;
-        }
-        case 4: {
-            int dest_x = 0;
-            int dest_y = 0;
-            if (select_closest_diagonal_tile(p, target_x, target_y, &dest_x, &dest_y, cmap)) {
-                set_destination(p, dest_x, dest_y, cmap);
-            } else {
-                set_destination(p, p->x, p->y, cmap);
-            }
-            break;
-        }
-    }
-}
+/* process_movement: deleted. movement now flows through walk_dest +
+   osrs_encounter_player_step (see pvp_step_player_movement above). the
+   five legacy modes (adjacent / under / diagonal / farcast / none) are
+   translated to walk_dest tiles in execute_switches, keeping the same
+   semantics while using the shared SDK's BFS pathfinder. */
 
 /**
  * Simple chase movement - move toward target's position.
@@ -499,6 +438,123 @@ static void resolve_same_tile(Player* mover, Player* blocker, const CollisionMap
             return;
         }
     }
+}
+
+/* ---------------------------------------------------------------------------
+ * Shared encounter SDK glue: lookup callback, arena builder, and the per-tick
+ * player step that routes PvP movement through osrs_encounter_player_step.
+ *
+ * This is the canonical click-anywhere path: HEAD_MOVE picks a 25-action
+ * delta target (or a far human-clicked tile sits in walk_dest_x/y), the BFS
+ * pathfinder walks one or two steps per tick toward that target, and the
+ * shared SDK handles auto-chase when an attack interaction is active.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Lookup callback for osrs_encounter_player_step.
+ *
+ * Resolves the opposing-player slot index to its tile, footprint, and weapon
+ * attack range. Both PvP players are 1x1 footprints. Attack range comes from
+ * the equipped weapon via get_attack_range — melee returns 1, ranged/magic
+ * return weapon-specific values, and the rare halberd case bumps to 2.
+ *
+ * @param ctx          OsrsEnv* — passes opponent players directly.
+ * @param target_slot  0 or 1 (the opposing player index).
+ * @param out          Populated on success.
+ * @return 1 if target found, 0 if slot invalid.
+ */
+static int pvp_lookup_attack_target(void* ctx, int target_slot, OsrsAttackTarget* out) {
+    if (target_slot < 0 || target_slot >= NUM_AGENTS) return 0;
+    OsrsEnv* env = (OsrsEnv*)ctx;
+    Player* target = &env->players[target_slot];
+    Player* self = &env->players[1 - target_slot];
+    AttackStyle style = get_slot_weapon_attack_style(self);
+    int range;
+    if (style == ATTACK_STYLE_MELEE || style == ATTACK_STYLE_NONE) {
+        range = 1;
+    } else {
+        range = get_attack_range(self, style);
+    }
+    out->slot = target_slot;
+    out->x = target->x;
+    out->y = target->y;
+    out->size = 1;
+    out->attack_range = range;
+    return 1;
+}
+
+/**
+ * Build the standard PvP arena descriptor. Wilderness collision via
+ * pvp_tile_walkable, full BFS (arena_w = 0) since the wilderness exceeds
+ * the 48-tile arena cap.
+ */
+static inline OsrsEncounterArena pvp_build_arena(OsrsEnv* env) {
+    OsrsEncounterArena arena;
+    arena.collision_map = (const CollisionMap*)env->collision_map;
+    arena.world_offset_x = 0;
+    arena.world_offset_y = 0;
+    arena.is_walkable = pvp_tile_walkable;
+    arena.walkable_ctx = (void*)arena.collision_map;
+    arena.extra_blocked = NULL;
+    arena.blocked_ctx = NULL;
+    arena.los_blockers = NULL;
+    arena.los_blocker_count = 0;
+    arena.arena_base_x = 0;
+    arena.arena_base_y = 0;
+    arena.arena_w = 0;
+    arena.arena_h = 0;
+    return arena;
+}
+
+/**
+ * Apply one tick of player movement via the shared encounter SDK.
+ *
+ * Reads walk_dest_x/y from the PvP runtime; if -1 the player is idle and
+ * the SDK may still auto-chase an active attack interaction (chase ranges
+ * to the lookup target). EXPLICIT_FIRST policy means an in-progress walk
+ * always wins over a chase. Returns the SDK result for the caller to log.
+ */
+static inline OsrsPlayerStepResult pvp_step_player_movement(OsrsEnv* env, int agent_idx) {
+    OsrsPlayerStepResult result = {.target_slot = -1};
+    int* dest_x = &env->pvp_runtime.walk_dest_x[agent_idx];
+    int* dest_y = &env->pvp_runtime.walk_dest_y[agent_idx];
+
+    /* skip when no explicit walk destination — execute_attack_movement still
+       handles attack-driven auto-chase via the legacy chase code path. */
+    if (*dest_x < 0 || *dest_y < 0) return result;
+
+    Player* p = &env->players[agent_idx];
+    OsrsEncounterArena arena = pvp_build_arena(env);
+    OsrsPlayerStepInput input = {
+        .player = p,
+        .interaction = &p->interaction,
+        .target_lookup = pvp_lookup_attack_target,
+        .target_ctx = env,
+        .has_new_target = 0,
+        .new_target_slot = -1,
+        .move_kind = OSRS_PLAYER_MOVE_DESTINATION,
+        .target_move_policy = OSRS_PLAYER_TARGET_MOVE_EXPLICIT_FIRST,
+        .move_action = 0,
+        .dest_x = dest_x,
+        .dest_y = dest_y,
+        .blocked_ticks = p->frozen_ticks,
+        .arena = arena,
+    };
+    result = osrs_encounter_player_step(&input);
+    p->is_moving = (*dest_x >= 0) ? 1 : 0;
+    return result;
+}
+
+/**
+ * Convert a HEAD_MOVE action index (1..MOVE_DIM-1) into a wilderness-walkable
+ * destination tile and store it in walk_dest. Action 0 (idle) clears walk_dest
+ * unless the existing walk_dest is still valid (multi-tick BFS in flight).
+ */
+static inline void pvp_set_walk_dest_from_head_move(OsrsEnv* env, int agent_idx, int move_action) {
+    Player* p = &env->players[agent_idx];
+    if (move_action <= 0 || move_action >= MOVE_DIM) return;
+    env->pvp_runtime.walk_dest_x[agent_idx] = p->x + ENCOUNTER_MOVE_TARGET_DX[move_action];
+    env->pvp_runtime.walk_dest_y[agent_idx] = p->y + ENCOUNTER_MOVE_TARGET_DY[move_action];
 }
 
 /**

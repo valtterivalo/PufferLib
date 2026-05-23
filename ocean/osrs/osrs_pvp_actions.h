@@ -272,7 +272,6 @@ static inline AttackStyle resolve_attack_style_for_action(Player* p, int attack_
  */
 static void execute_switches(OsrsEnv* env, int agent_idx, int* actions) {
     Player* p = &env->players[agent_idx];
-    Player* t = &env->players[1 - agent_idx];
     const CollisionMap* cmap = (const CollisionMap*)env->collision_map;
 
     p->consumable_used_this_tick = 0;
@@ -371,42 +370,68 @@ static void execute_switches(OsrsEnv* env, int agent_idx, int* actions) {
         osrs_interaction_check_interrupt(&p->interaction, OSRS_IACT_EAT);
     }
     int combat_action = actions[HEAD_COMBAT];
+    int head_move = actions[HEAD_MOVE];
     int is_spec_loadout = (loadout_action == LOADOUT_SPEC_MELEE ||
                            loadout_action == LOADOUT_SPEC_RANGE ||
                            loadout_action == LOADOUT_SPEC_MAGIC ||
                            loadout_action == LOADOUT_GMAUL);
-    int move_action = (!is_spec_loadout && is_move_action(combat_action))
-                      ? combat_action : MOVE_NONE;
 
-    int farcast_dist = 0;
-    switch (move_action) {
-        case MOVE_ADJACENT:
-            process_movement(p, t, 1, 0, cmap);
-            p->clicks_this_tick++;
-            break;
-        case MOVE_UNDER:
-            process_movement(p, t, 2, 0, cmap);
-            p->clicks_this_tick++;
-            break;
-        case MOVE_DIAGONAL:
-            process_movement(p, t, 4, 0, cmap);
-            p->clicks_this_tick++;
-            break;
-        case MOVE_FARCAST_2:
-        case MOVE_FARCAST_3:
-        case MOVE_FARCAST_4:
-        case MOVE_FARCAST_5:
-        case MOVE_FARCAST_6:
-        case MOVE_FARCAST_7:
-            farcast_dist = move_action - MOVE_FARCAST_2 + 2;
-            process_movement(p, t, 3, farcast_dist, cmap);
-            p->clicks_this_tick++;
-            break;
-        default:
-            break;
+    /* set walk_dest from this tick's movement command. canonical click-anywhere
+       path: HEAD_MOVE is a 25-action delta grid (idle + 8 walk + 16 run).
+       legacy HEAD_COMBAT MOVE_* still works for unmigrated opponents — values
+       there resolve through select_*_tile helpers into the same walk_dest.
+       actual stepping happens later in pvp_step via pvp_step_player_movement. */
+    int command_issued = 0;
+    if (!is_spec_loadout && head_move > 0 && head_move < MOVE_DIM) {
+        pvp_set_walk_dest_from_head_move(env, agent_idx, head_move);
+        command_issued = 1;
+    } else if (!is_spec_loadout && is_move_action(combat_action)) {
+        int tx = p->last_obs_target_x;
+        int ty = p->last_obs_target_y;
+        int dest_x = -1, dest_y = -1;
+        switch (combat_action) {
+            case MOVE_ADJACENT:
+                if (!select_closest_adjacent_tile(p, tx, ty, &dest_x, &dest_y, cmap)) {
+                    dest_x = -1; dest_y = -1;
+                }
+                break;
+            case MOVE_UNDER:
+                if (is_in_wilderness(tx, ty) && collision_tile_walkable(cmap, 0, tx, ty)) {
+                    dest_x = tx; dest_y = ty;
+                }
+                break;
+            case MOVE_DIAGONAL:
+                if (!select_closest_diagonal_tile(p, tx, ty, &dest_x, &dest_y, cmap)) {
+                    dest_x = -1; dest_y = -1;
+                }
+                break;
+            case MOVE_FARCAST_2:
+            case MOVE_FARCAST_3:
+            case MOVE_FARCAST_4:
+            case MOVE_FARCAST_5:
+            case MOVE_FARCAST_6:
+            case MOVE_FARCAST_7: {
+                int fd = combat_action - MOVE_FARCAST_2 + 2;
+                if (!select_farcast_tile(p, tx, ty, fd, &dest_x, &dest_y, cmap)) {
+                    dest_x = -1; dest_y = -1;
+                }
+                break;
+            }
+            default:
+                break;
+        }
+        env->pvp_runtime.walk_dest_x[agent_idx] = dest_x;
+        env->pvp_runtime.walk_dest_y[agent_idx] = dest_y;
+        command_issued = (dest_x >= 0);
     }
-    if (move_action != MOVE_NONE)
+    /* no else: when no movement command is issued this tick, walk_dest
+       persists from a prior tick. matches OSRS click semantics — a click
+       walks the player until arrival or a new command overrides it. the
+       shared SDK clears walk_dest = -1 when the player arrives. */
+    if (command_issued) {
+        p->clicks_this_tick++;
         osrs_interaction_check_interrupt(&p->interaction, OSRS_IACT_MOVE);
+    }
     int veng_action = actions[HEAD_VENG];
     if (veng_action == VENG_CAST && p->is_lunar_spellbook &&
         !p->veng_active && remaining_ticks(p->veng_cooldown) == 0 &&
@@ -438,6 +463,11 @@ static void execute_attack_movement(OsrsEnv* env, int agent_idx, int* actions) {
     int combat_action = actions[HEAD_COMBAT];
     int attack_action = is_attack_action(combat_action) ? combat_action : ATTACK_NONE;
     int move_action = is_move_action(combat_action) ? combat_action : MOVE_NONE;
+    /* explicit walk via HEAD_MOVE or persistent walk_dest takes precedence over
+       attack-driven auto-chase. matches OSRS: a tile click cancels attack auto-
+       walk for this tick. */
+    int explicit_move_in_progress = (actions[HEAD_MOVE] > 0 && actions[HEAD_MOVE] < MOVE_DIM)
+        || env->pvp_runtime.walk_dest_x[agent_idx] >= 0;
 
     /* GMAUL is instant: forces attack (spec armed by execute_switches) */
     int is_gmaul = (loadout_action == LOADOUT_GMAUL);
@@ -490,8 +520,10 @@ static void execute_attack_movement(OsrsEnv* env, int agent_idx, int* actions) {
 
     p->did_attack_auto_move = 0;
 
-    /* auto-move into melee range if melee attack/interaction active */
-    if (has_attack && move_action == MOVE_NONE && can_move(p)) {
+    /* auto-move into melee range when player has an active attack but no
+       explicit walk this tick. explicit_move_in_progress (HEAD_MOVE or
+       persistent walk_dest) suppresses auto-walk per OSRS click semantics. */
+    if (has_attack && move_action == MOVE_NONE && !explicit_move_in_progress && can_move(p)) {
         if (attack_style == ATTACK_STYLE_MELEE && !is_in_melee_range(p, t)) {
             int adj_x, adj_y;
             if (select_closest_adjacent_tile(p, t->x, t->y, &adj_x, &adj_y, cmap)) {
@@ -522,6 +554,8 @@ static void execute_attack_combat(OsrsEnv* env, int agent_idx, int* actions) {
     int combat_action = actions[HEAD_COMBAT];
     int attack_action = is_attack_action(combat_action) ? combat_action : ATTACK_NONE;
     int move_action = is_move_action(combat_action) ? combat_action : MOVE_NONE;
+    int explicit_move_in_progress = (actions[HEAD_MOVE] > 0 && actions[HEAD_MOVE] < MOVE_DIM)
+        || env->pvp_runtime.walk_dest_x[agent_idx] >= 0;
 
     /* GMAUL is instant: forces attack (spec armed by execute_switches) */
     int is_gmaul = (loadout_action == LOADOUT_GMAUL);
@@ -622,8 +656,10 @@ static void execute_attack_combat(OsrsEnv* env, int agent_idx, int* actions) {
             break;
     }
 
-    /* auto-walk to target if attack/interaction active but out of range */
-    if (has_attack && move_action == MOVE_NONE && can_move(p) && !p->did_attack_auto_move) {
+    /* auto-walk to target if attack/interaction active but out of range.
+       suppressed when policy issued an explicit move this tick. */
+    if (has_attack && move_action == MOVE_NONE && !explicit_move_in_progress
+            && can_move(p) && !p->did_attack_auto_move) {
         int in_range = 0;
         int auto_walk_range = 1;
         switch (attack_style) {

@@ -18,10 +18,10 @@
 #include "../osrs_encounter_visual_events.h"
 #include "../osrs_env.h"
 
-/* obs/action dimensions from osrs_types.h */
+/* obs/action dimensions from osrs_types.h. order must match HEAD_* indices. */
 static const int NH_PVP_ACTION_DIMS[] = {
     LOADOUT_DIM, COMBAT_DIM, OVERHEAD_DIM,
-    FOOD_DIM, POTION_DIM, KARAMBWAN_DIM, VENG_DIM, OFFENSIVE_DIM
+    FOOD_DIM, POTION_DIM, KARAMBWAN_DIM, VENG_DIM, OFFENSIVE_DIM, MOVE_DIM
 };
 
 
@@ -37,7 +37,15 @@ static void nh_pvp_translate_human_input(HumanInput* hi, int* actions, Player* a
     for (int h = 0; h < NUM_ACTION_HEADS; h++) actions[h] = 0;
     actions[HEAD_LOADOUT] = LOADOUT_KEEP;
 
-    encounter_translate_attack_or_move(hi, actions, HEAD_COMBAT, target);
+    /* HEAD_COMBAT only carries attack intent now; movement flows via walk_dest
+       in nh_pvp_step_human_commands. encounter_translate_attack_or_move would
+       still emit MOVE_* values if the click is not on the opponent, so we
+       only consult it for attacks. */
+    if (hi->pending_attack) {
+        if (hi->pending_spell == ATTACK_ICE) actions[HEAD_COMBAT] = ATTACK_ICE;
+        else if (hi->pending_spell == ATTACK_BLOOD) actions[HEAD_COMBAT] = ATTACK_BLOOD;
+        else actions[HEAD_COMBAT] = ATTACK_ATK;
+    }
     encounter_translate_prayer(hi, actions, HEAD_OVERHEAD);
     encounter_translate_offensive_prayer(hi, actions, HEAD_OFFENSIVE);
 
@@ -51,6 +59,7 @@ static void nh_pvp_translate_human_input(HumanInput* hi, int* actions, Player* a
         else if (style == ATTACK_STYLE_RANGED) actions[HEAD_LOADOUT] = LOADOUT_SPEC_RANGE;
         else if (style == ATTACK_STYLE_MAGIC) actions[HEAD_LOADOUT] = LOADOUT_SPEC_MAGIC;
     }
+    (void)target;
 }
 
 
@@ -108,6 +117,13 @@ static void nh_pvp_step_human_commands(
     NhPvpState* s = (NhPvpState*)state;
     int saved_use_c_opponent_p0 = s->env.pvp_runtime.use_c_opponent_p0;
     s->env.pvp_runtime.use_c_opponent_p0 = 0;
+    /* click-anywhere: write raw click coords to agent 0's walk_dest before the
+       step. BFS pathfinder walks toward it across as many ticks as needed and
+       clears it on arrival. attack click still flows through HEAD_COMBAT. */
+    if (hi->pending_move_x >= 0 && hi->pending_move_y >= 0) {
+        s->env.pvp_runtime.walk_dest_x[0] = hi->pending_move_x;
+        s->env.pvp_runtime.walk_dest_y[0] = hi->pending_move_y;
+    }
     nh_pvp_translate_human_input(
         hi,
         s->env.ocean_io.agent_actions,
@@ -115,7 +131,20 @@ static void nh_pvp_step_human_commands(
         &s->env.players[1]);
     pvp_step(&s->env);
     s->env.pvp_runtime.use_c_opponent_p0 = saved_use_c_opponent_p0;
-    human_input_clear_pending(hi);
+    /* only clear non-move pending fields; pending_move stays until the player
+       arrives at the clicked tile so subsequent ticks keep extending walk_dest. */
+    if (s->env.pvp_runtime.walk_dest_x[0] < 0 || s->env.pvp_runtime.walk_dest_y[0] < 0) {
+        human_input_clear_move(hi);
+    }
+    hi->pending_attack = 0;
+    hi->pending_spell = 0;
+    hi->pending_prayer = 0;
+    hi->pending_offensive_prayer = 0;
+    hi->pending_food = 0;
+    hi->pending_potion = 0;
+    hi->pending_karambwan = 0;
+    hi->pending_veng = 0;
+    hi->pending_spec = 0;
 }
 
 
