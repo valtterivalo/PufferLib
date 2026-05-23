@@ -126,9 +126,65 @@ EQUIP_SLOT_FEET = 8
 EQUIP_SLOT_RING = 9
 EQUIP_SLOT_AMMO = 10
 
+RSMOD_OBJ_ENRICHER = Path(__file__).resolve().parents[3] / "refs" / "rsmod-data" / "obj-enricher.toml"
+
+RSMOD_OBJ_NAMES: dict[int, str] = {
+    4151:  "abyssal_whip",
+    4153:  "granite_maul",
+    11791: "sotd",
+    12926: "toxic_blowpipe_loaded",
+    19481: "heavy_ballista",
+    21003: "elder_maul",
+    21006: "kodai_wand",
+    22324: "ghrazi_rapier",
+    22613: "vestas_longsword",
+    24424: "nightmare_staff_volatile",
+    25730: "ancient_godsword",
+    26374: "zaryte_xbow",
+}
+
 KNOWN_PLAYER_BAS: dict[int, tuple[int, int, int]] = {
     11802: (7053, 7052, 7043),
 }
+
+
+def load_rsmod_bas(toml_path: Path, name_to_id: dict[int, str]) -> dict[int, tuple[int, int, int]]:
+    """Read RSMod's obj-enricher.toml and return BAS triplets for the items we care about.
+
+    The toml contains `[[config]]` blocks keyed by obj name (e.g. `granite_maul`).
+    Each block may set `ready_anim`, `walk_anim`, `run_anim` plus combat/sound
+    overrides we ignore. Items with no toml override fall back to KNOWN_PLAYER_BAS
+    or unarmed defaults at render time.
+    """
+
+    if not toml_path.is_file():
+        return {}
+
+    import re
+
+    text = toml_path.read_text()
+    configs = re.split(r"\[\[config\]\]", text)
+    obj_to_anims: dict[str, tuple[int, int, int]] = {}
+    for cfg in configs:
+        obj_match = re.search(r"^obj\s*=\s*'([^']+)'", cfg, re.MULTILINE)
+        if not obj_match:
+            continue
+        ready = re.search(r"^ready_anim\s*=\s*(\d+)", cfg, re.MULTILINE)
+        walk = re.search(r"^walk_anim\s*=\s*(\d+)", cfg, re.MULTILINE)
+        run = re.search(r"^run_anim\s*=\s*(\d+)", cfg, re.MULTILINE)
+        if not (ready or walk or run):
+            continue
+        obj_to_anims[obj_match.group(1)] = (
+            int(ready.group(1)) if ready else -1,
+            int(walk.group(1)) if walk else -1,
+            int(run.group(1)) if run else -1,
+        )
+
+    out: dict[int, tuple[int, int, int]] = {}
+    for item_id, obj_name in name_to_id.items():
+        if obj_name in obj_to_anims:
+            out[item_id] = obj_to_anims[obj_name]
+    return out
 
 BODY_MASK_HEAD = 1 << BODY_PART_NAMES.index("HEAD")
 BODY_MASK_JAW = 1 << BODY_PART_NAMES.index("JAW")
@@ -191,9 +247,17 @@ def item_render_anim_value(anim_id: int) -> int:
 
 
 def load_runec_item_render_anims(path: Path) -> dict[int, tuple[int, int, int]]:
-    """Load RuneC item ready, walk, and run animation metadata."""
+    """Load player BAS (ready, walk, run) anim IDs for wielded items.
 
-    out = dict(KNOWN_PLAYER_BAS)
+    Sources in priority order: RSMod's obj-enricher.toml (refs/rsmod-data/),
+    KNOWN_PLAYER_BAS fallback for items not in the toml, and the RuneC
+    item_render.map binary if present.
+    """
+
+    out: dict[int, tuple[int, int, int]] = {}
+    out.update(load_rsmod_bas(RSMOD_OBJ_ENRICHER, RSMOD_OBJ_NAMES))
+    for item_id, anims in KNOWN_PLAYER_BAS.items():
+        out.setdefault(item_id, anims)
     if not path.is_file():
         return out
 

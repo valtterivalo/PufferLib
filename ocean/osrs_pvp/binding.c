@@ -13,6 +13,7 @@
 #pragma GCC diagnostic ignored "-Wunused-function"
 #include "encounters/encounter_inferno.h"  /* render.h references InfernoState */
 #include "encounters/encounter_zulrah.h"   /* render.h references ZulrahState */
+#include "encounters/encounter_nh_pvp.h"
 #include "osrs_render.h"
 #include "osrs_scene_assets.h"
 #pragma GCC diagnostic pop
@@ -38,7 +39,7 @@ typedef struct {
 
 #define OBS_SIZE OCEAN_OBS_SIZE
 #define NUM_ATNS NUM_ACTION_HEADS
-#define ACT_SIZES {LOADOUT_DIM, COMBAT_DIM, OVERHEAD_DIM, FOOD_DIM, POTION_DIM, KARAMBWAN_DIM, VENG_DIM, OFFENSIVE_DIM}
+#define ACT_SIZES {LOADOUT_DIM, COMBAT_DIM, OVERHEAD_DIM, FOOD_DIM, POTION_DIM, KARAMBWAN_DIM, VENG_DIM, OFFENSIVE_DIM, MOVE_DIM}
 #define OBS_TENSOR_T FloatTensor
 #define Env PvpEnv
 
@@ -61,11 +62,21 @@ static void pvp_env_set_gear_tier(Env* env, int tier) {
 }
 
 void c_step(Env* env) {
-    for (int i = 0; i < NUM_ATNS; i++) {
-        env->ocean_acts_staging[i] = (int)env->actions[i];
+    RenderClient* rc = (RenderClient*)env->pvp.client;
+    int used_human_commands = 0;
+
+    if (rc && rc->human_input.enabled && ENCOUNTER_NH_PVP.step_human_commands) {
+        ENCOUNTER_NH_PVP.step_human_commands(
+            (EncounterState*)&env->pvp, NULL, &rc->human_input);
+        used_human_commands = 1;
     }
 
-    pvp_step(&env->pvp);
+    if (!used_human_commands) {
+        for (int i = 0; i < NUM_ATNS; i++) {
+            env->ocean_acts_staging[i] = (int)env->actions[i];
+        }
+        pvp_step(&env->pvp);
+    }
 
     env->terminals[0] = (float)env->ocean_term_staging;
 
@@ -108,6 +119,10 @@ void c_reset(Env* env) {
 void c_close(Env* env) { pvp_close(&env->pvp); }
 
 void c_render(Env* env) {
+    env->pvp.encounter_def = (const void*)&ENCOUNTER_NH_PVP;
+    env->pvp.encounter_state = (void*)&env->pvp;
+    env->pvp.encounter_context = NULL;
+
     int first_call = env->pvp.client == NULL;
     if (first_call) {
         env->pvp.client = render_make_client();

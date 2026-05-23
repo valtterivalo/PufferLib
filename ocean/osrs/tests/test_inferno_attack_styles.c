@@ -17,6 +17,8 @@
 
 #include "ocean/osrs/encounters/encounter_inferno.h"
 #include "ocean/osrs/osrs_anim.h"
+#include "ocean/osrs/osrs_render_motion.h"
+#include <math.h>
 
 static int tests_run = 0;
 static int tests_passed = 0;
@@ -3980,6 +3982,91 @@ static void test_render_identity_survives_npc_death_compaction(void) {
         previous_idx, 1);
 }
 
+static void test_render_identity_matches_two_players_across_tick(void) {
+    printf("--- render identity matches two players across tick ---\n");
+
+    RenderEntity previous[2];
+    memset(previous, 0, sizeof(previous));
+    previous[0].entity_type = ENTITY_PLAYER;
+    previous[1].entity_type = ENTITY_PLAYER;
+
+    int used[2] = {0, 0};
+    RenderEntity current = previous[0];
+    int idx0 = render_entity_find_previous_identity_index(previous, 2, used, &current);
+    ASSERT_INT_EQ("first PvP player matches previous[0]", idx0, 0);
+
+    used[idx0] = 1;
+    current = previous[1];
+    int idx1 = render_entity_find_previous_identity_index(previous, 2, used, &current);
+    ASSERT_INT_EQ("second PvP player matches previous[1]", idx1, 1);
+}
+
+static void test_render_identity_two_players_claim_unique_slots(void) {
+    printf("--- render identity two players claim unique slots ---\n");
+
+    RenderEntity previous[2];
+    memset(previous, 0, sizeof(previous));
+    previous[0].entity_type = ENTITY_PLAYER;
+    previous[1].entity_type = ENTITY_PLAYER;
+
+    int used[2] = {0, 0};
+    RenderEntity current;
+    memset(&current, 0, sizeof(current));
+    current.entity_type = ENTITY_PLAYER;
+
+    int idx0 = render_entity_find_previous_identity_index(previous, 2, used, &current);
+    if (idx0 >= 0) used[idx0] = 1;
+    int idx1 = render_entity_find_previous_identity_index(previous, 2, used, &current);
+
+    ASSERT_INT_EQ("first player gets a previous slot", (idx0 >= 0), 1);
+    ASSERT_INT_EQ("second player gets a previous slot", (idx1 >= 0), 1);
+    ASSERT_INT_EQ("two concurrent players claim distinct previous slots",
+        (idx0 != idx1), 1);
+}
+
+static void test_render_identity_single_player_unchanged(void) {
+    printf("--- render identity single player unchanged ---\n");
+
+    RenderEntity previous[1];
+    memset(previous, 0, sizeof(previous));
+    previous[0].entity_type = ENTITY_PLAYER;
+
+    int used[1] = {0};
+    RenderEntity current = previous[0];
+    int idx = render_entity_find_previous_identity_index(previous, 1, used, &current);
+    ASSERT_INT_EQ("single-player encounter still matches previous[0]", idx, 0);
+}
+
+static void test_sub_x_walk_arrives_at_dest_in_one_game_tick(void) {
+    printf("--- sub_x walk arrives at dest in one game tick ---\n");
+
+    float sub = 0.0f;
+    float dest = OSRS_RENDER_SUB_UNITS_PER_TILE;
+    int ticks = (int)OSRS_RENDER_CLIENT_TICKS_PER_GAME_TICK;
+    int step_tracker = 0;
+    for (int t = 0; t < ticks; t++) {
+        sub = osrs_render_advance_axis_one_client_tick(sub, dest, 0, &step_tracker);
+    }
+    int reached = (fabsf(sub - dest) < 0.5f) ? 1 : 0;
+    ASSERT_INT_EQ("walking entity reaches its destination tile within one game tick",
+        reached, 1);
+}
+
+static void test_sub_x_run_arrives_at_two_tiles_in_one_game_tick(void) {
+    printf("--- sub_x run arrives at two-tile dest in one game tick ---\n");
+
+    float sub = 0.0f;
+    float dest = 2.0f * OSRS_RENDER_SUB_UNITS_PER_TILE;
+    int ticks = (int)OSRS_RENDER_CLIENT_TICKS_PER_GAME_TICK;
+    int step_tracker = 0;
+    for (int t = 0; t < ticks; t++) {
+        sub = osrs_render_advance_axis_one_client_tick(sub, dest, 1, &step_tracker);
+    }
+    int reached = (fabsf(sub - dest) < 0.5f) ? 1 : 0;
+    ASSERT_INT_EQ("running entity reaches its two-tile destination within one game tick",
+        reached, 1);
+}
+
 static void test_inferno_npc_spawn_id_changes_on_slot_reuse(void) {
     printf("--- inferno npc spawn id changes on slot reuse ---\n");
 
@@ -7805,6 +7892,11 @@ int main(void) {
     test_zuk_healer_blowpipe_target_chases_out_of_range();
     test_render_facing_prefers_attack_target_while_chasing();
     test_render_identity_survives_npc_death_compaction();
+    test_render_identity_matches_two_players_across_tick();
+    test_render_identity_two_players_claim_unique_slots();
+    test_render_identity_single_player_unchanged();
+    test_sub_x_walk_arrives_at_dest_in_one_game_tick();
+    test_sub_x_run_arrives_at_two_tiles_in_one_game_tick();
     test_inferno_npc_spawn_id_changes_on_slot_reuse();
     test_anim_rest_pose_resets_working_vertices();
     test_zuk_healer_target_action_tags_on_landed_hit();

@@ -22,6 +22,7 @@
 #include "osrs_pvp_combat.h"
 #include "osrs_pvp_effects.h"
 #include "osrs_projectile_orientation.h"
+#include "osrs_render_motion.h"
 #include "osrs_render_click_hull.h"
 #include "data/player_models.h"
 #include "data/npc_models.h"
@@ -304,10 +305,10 @@ typedef struct {
     RenderAnimationState anim;
     int primary_event_tick;
     int last_primary_event_tick;
-    int sub_x;
-    int sub_y;
-    int dest_x;
-    int dest_y;
+    float sub_x;
+    float sub_y;
+    float dest_x;
+    float dest_y;
     int visual_moving;
     int visual_running;
     int step_tracker;
@@ -501,8 +502,8 @@ typedef struct {
     HitSplat splats[MAX_RENDER_ENTITIES][RENDER_SPLATS_PER_PLAYER];
 
     /* per-entity sub-tile position and facing (OSRS: 128 units per tile) */
-    int sub_x[MAX_RENDER_ENTITIES], sub_y[MAX_RENDER_ENTITIES];
-    int dest_x[MAX_RENDER_ENTITIES], dest_y[MAX_RENDER_ENTITIES];
+    float sub_x[MAX_RENDER_ENTITIES], sub_y[MAX_RENDER_ENTITIES];
+    float dest_x[MAX_RENDER_ENTITIES], dest_y[MAX_RENDER_ENTITIES];
     int visual_moving[MAX_RENDER_ENTITIES];
     int visual_running[MAX_RENDER_ENTITIES];
     int step_tracker[MAX_RENDER_ENTITIES];
@@ -2860,9 +2861,9 @@ static void render_post_tick(RenderClient* rc, OsrsEnv* env) {
         if (p->entity_type == ENTITY_NPC && p->npc_visible) {
             /* distance to destination in tiles — uses dest center, not SW anchor,
                so large NPCs (size 5 shield) don't false-trigger the snap. */
-            int tile_dx = abs(rc->sub_x[i] - new_dest_x) / 128;
-            int tile_dy = abs(rc->sub_y[i] - new_dest_y) / 128;
-            if (tile_dx > 2 || tile_dy > 2 || (rc->sub_x[i] == 0 && rc->sub_y[i] == 0)) {
+            float tile_dx = fabsf(rc->sub_x[i] - new_dest_x) / 128.0f;
+            float tile_dy = fabsf(rc->sub_y[i] - new_dest_y) / 128.0f;
+            if (tile_dx > 2.0f || tile_dy > 2.0f || (rc->sub_x[i] == 0.0f && rc->sub_y[i] == 0.0f)) {
                 rc->sub_x[i] = new_dest_x;
                 rc->sub_y[i] = new_dest_y;
                 rc->dest_x[i] = new_dest_x;
@@ -3170,21 +3171,17 @@ static void render_client_tick(RenderClient* rc, int player_idx) {
        when a non-melee animation is playing (walkFlag==0), sub-tile
        movement stalls. stepTracker accumulates stalled frames, then
        drives 2x catch-up speed once the animation ends. */
-    int dx = rc->dest_x[player_idx] - rc->sub_x[player_idx];
-    int dy = rc->dest_y[player_idx] - rc->sub_y[player_idx];
+    float dx = rc->dest_x[player_idx] - rc->sub_x[player_idx];
+    float dy = rc->dest_y[player_idx] - rc->sub_y[player_idx];
 
-    if (dx == 0 && dy == 0) {
-        /* not moving */
+    if (dx == 0.0f && dy == 0.0f) {
         rc->visual_moving[player_idx] = 0;
         rc->step_tracker[player_idx] = 0;
     } else {
-        /* check movement stall: animations without interleave_order (cast,
-           ranged, death) stall sub-tile movement. animations WITH interleave
-           (melee, eat, block) allow walking — the interleave blends upper body
-           attack with lower body walk. matches the real client behavior where
-           the stall correlates with having no interleave_order.
-           the 317 cache doesn't set walkFlag=0 for these, but modern OSRS
-           clearly stalls movement during cast/ranged (confirmed from footage). */
+        /* animations without interleave_order (cast, ranged, death) stall
+           sub-tile movement. animations WITH interleave (melee, eat, block)
+           allow walking — the interleave blends upper body attack with lower
+           body walk. matches the real client. */
         int stall = 0;
         if (rc->anim[player_idx].primary_seq_id >= 0 &&
             rc->anim[player_idx].primary_loops == 0 && rc->anim_cache) {
@@ -3201,35 +3198,19 @@ static void render_client_tick(RenderClient* rc, int player_idx) {
         } else {
             rc->visual_moving[player_idx] = 1;
 
-            /* pvp_render scales client tick time with replay speed, so movement
-               stays in OSRS client-tick units here. floor(128/30)=4 means a
-               walking entity is still moving between game ticks instead of
-               snapping early to tile center. */
-            int base_walk = 128 / (int)RENDER_CLIENT_TICKS_PER_GAME_TICK;
-            if (base_walk < 1) base_walk = 1;
-            int speed = rc->visual_running[player_idx] ? base_walk * 2 : base_walk;
-
-            /* catch-up: double speed while step_tracker > 0 (one stalled
-               frame recovered per catch-up frame). */
-            if (rc->step_tracker[player_idx] > 0) {
-                speed *= 2;
-                rc->step_tracker[player_idx]--;
-            }
-
-            if (dx > 0) rc->sub_x[player_idx] += (dx > speed) ? speed : dx;
-            else if (dx < 0) rc->sub_x[player_idx] += (dx < -speed) ? -speed : dx;
-
-            if (dy > 0) rc->sub_y[player_idx] += (dy > speed) ? speed : dy;
-            else if (dy < 0) rc->sub_y[player_idx] += (dy < -speed) ? -speed : dy;
+            float speed = osrs_render_walk_speed_one_client_tick(
+                rc->visual_running[player_idx], &rc->step_tracker[player_idx]);
+            rc->sub_x[player_idx] = osrs_render_advance_axis_toward(
+                rc->sub_x[player_idx], rc->dest_x[player_idx], speed);
+            rc->sub_y[player_idx] = osrs_render_advance_axis_toward(
+                rc->sub_y[player_idx], rc->dest_y[player_idx], speed);
 
             /* when walking (not facing opponent), update target_yaw to movement
                direction each client tick, matching nextStep's turnDirection
                assignment from step delta. */
             if (!rc->facing_opponent[player_idx] && rc->entities[player_idx].npc_def_id != 7707) {
-                float fdx = (float)dx;
-                float fdy = (float)dy;
-                if (fdx != 0.0f || fdy != 0.0f) {
-                    rc->target_yaw[player_idx] = atan2f(-fdx, fdy);
+                if (dx != 0.0f || dy != 0.0f) {
+                    rc->target_yaw[player_idx] = atan2f(-dx, dy);
                 }
             }
         }
@@ -3355,19 +3336,6 @@ static void render_get_visual_pos(
 
     *out_x = tile_x;
     *out_z = -tile_y;
-    if (rc->entity_count == 2 &&
-        rc->entities[0].entity_type == ENTITY_PLAYER &&
-        rc->entities[1].entity_type == ENTITY_PLAYER &&
-        player_idx >= 0 && player_idx < 2) {
-        int other_idx = 1 - player_idx;
-        float other_x = (float)rc->sub_x[other_idx] / 128.0f;
-        float other_y = (float)rc->sub_y[other_idx] / 128.0f;
-        if (fabsf(tile_x - other_x) < 0.35f && fabsf(tile_y - other_y) < 0.35f) {
-            float sign = player_idx == 0 ? -1.0f : 1.0f;
-            *out_x += sign * 0.18f;
-            *out_z += sign * 0.10f;
-        }
-    }
 
     if (rc->terrain) {
         *out_ground = terrain_height_avg(rc->terrain,
@@ -4605,6 +4573,17 @@ static void render_draw_3d_world(RenderClient* rc) {
 
             /* skip invisible NPCs (diving, dead, etc.) */
             if (ep->entity_type == ENTITY_NPC && !ep->npc_visible) continue;
+
+            /* hide opponent player when stacked on the camera-followed tile
+               (real OSRS draws only the local player when stacked) */
+            if (ep->entity_type == ENTITY_PLAYER && i != rc->gui.gui_entity_idx) {
+                int fi = rc->gui.gui_entity_idx;
+                if (fi >= 0 && fi < rc->entity_count &&
+                        ep->x == rc->entities[fi].x &&
+                        ep->y == rc->entities[fi].y) {
+                    continue;
+                }
+            }
 
             float px, pz, ground;
             render_get_visual_pos(rc, i, &px, &pz, &ground);

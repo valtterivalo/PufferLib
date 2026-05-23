@@ -394,9 +394,10 @@ static inline int render_entity_find_previous_identity_index(
     const RenderEntity* entity
 ) {
     if (entity->entity_type == ENTITY_PLAYER) {
-        if (previous_count > 0 && previous[0].entity_type == ENTITY_PLAYER &&
-                !previous_used[0]) {
-            return 0;
+        for (int j = 0; j < previous_count; j++) {
+            if (!previous_used[j] && previous[j].entity_type == ENTITY_PLAYER) {
+                return j;
+            }
         }
         return -1;
     }
