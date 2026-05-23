@@ -26,10 +26,12 @@ static char* read_text_file(const char* path) {
 
 static void test_zulrah_eval_binding_bootstraps_3d_scene(void) {
     char* source = read_text_file("ocean/osrs_zulrah/binding.c");
-    assert(strstr(source, "osrs_asset_require_group(OSRS_ASSET_GROUP_ZULRAH);"));
-    assert(strstr(source, "osrs_asset_require_group(OSRS_ASSET_GROUP_COMBAT_VISUALS);"));
-    assert(strstr(source, "collision_map_load(OSRS_ASSET(\"zulrah.cmap\"))"));
-    assert(strstr(source, "rc->collision_map = cmap;"));
+    assert(strstr(source, "encounter_load_scene_assets(rc, &scene)"));
+    assert(strstr(source, "OSRS_ASSET_GROUP_ZULRAH"));
+    assert(strstr(source, "OSRS_ASSET_GROUP_COMBAT_VISUALS"));
+    assert(strstr(source, "\"zulrah.cmap\""));
+    assert(strstr(source, "\"zulrah.terrain\""));
+    assert(strstr(source, "\"zulrah.objects\""));
     assert(strstr(source, "render_populate_entities(rc, re);"));
     assert(strstr(source, "rc->cam_target_x = (float)rc->arena_base_x"));
     assert(strstr(source, "render_seed_entity_visual_slot(rc, i);"));

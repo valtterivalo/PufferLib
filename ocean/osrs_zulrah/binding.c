@@ -19,6 +19,7 @@
 #include "encounters/encounter_zulrah.h"
 #include "encounters/encounter_inferno.h"  /* render.h references InfernoState */
 #include "osrs_render.h"
+#include "osrs_scene_assets.h"
 #pragma GCC diagnostic pop
 
 #define ZUL_TOTAL_OBS (ZUL_NUM_OBS + ZUL_ACTION_MASK_SIZE)
@@ -211,10 +212,23 @@ void c_render(Env* env) {
 
     int first_call = (re->client == NULL);
     if (first_call) {
-        osrs_asset_require_group(OSRS_ASSET_GROUP_ZULRAH);
-        osrs_asset_require_group(OSRS_ASSET_GROUP_COMBAT_VISUALS);
-
-        CollisionMap* cmap = collision_map_load(OSRS_ASSET("zulrah.cmap"));
+        re->client = render_make_client();
+        RenderClient* rc = (RenderClient*)re->client;
+        EncounterSceneConfig scene = {
+            .required_groups = {
+                OSRS_ASSET_GROUP_ZULRAH, OSRS_ASSET_GROUP_COMBAT_VISUALS, -1, -1,
+            },
+            .terrain_path = OSRS_ASSET("zulrah.terrain"),
+            .objects_path = OSRS_ASSET("zulrah.objects"),
+            .cmap_path = OSRS_ASSET("zulrah.cmap"),
+            .npc_models_path = OSRS_ASSET("zulrah.models"),
+            .npc_anims_path = OSRS_ASSET("zulrah.anims"),
+            /* zulrah regions (35,47)+(35,48) start at world (2240, 3008);
+               island platform at world ~(2256, 3061). */
+            .world_origin_x = 2256,
+            .world_origin_y = 3061,
+        };
+        CollisionMap* cmap = encounter_load_scene_assets(rc, &scene);
         if (!cmap) {
             fprintf(stderr, "zulrah eval render failed to load collision map\n");
             abort();
@@ -223,25 +237,6 @@ void c_render(Env* env) {
         ENCOUNTER_ZULRAH.put_int(env->enc_state, ZUL_ENV_CONTEXT(env), "world_offset_x", 2256);
         ENCOUNTER_ZULRAH.put_int(env->enc_state, ZUL_ENV_CONTEXT(env), "world_offset_y", 3061);
         re->collision_map = cmap;
-
-        re->client = render_make_client();
-        RenderClient* rc = (RenderClient*)re->client;
-        rc->model_cache = model_cache_load(OSRS_ASSET("equipment.models"));
-        if (rc->model_cache) rc->show_models = 1;
-        rc->anim_cache = anim_cache_load(OSRS_ASSET("equipment.anims"));
-        render_load_projectile_assets(rc);
-        render_init_overlay_models(rc);
-        rc->terrain = terrain_load(OSRS_ASSET("zulrah.terrain"));
-        rc->objects = objects_load(OSRS_ASSET("zulrah.objects"));
-        /* zulrah regions (35,47)+(35,48) start at world (2240, 3008);
-           island platform at world ~(2256, 3061) → offset by (2256, 3061). */
-        if (rc->terrain) terrain_offset(rc->terrain, 2256, 3061);
-        if (rc->objects) objects_offset(rc->objects, 2256, 3061);
-        rc->npc_model_cache = model_cache_load(OSRS_ASSET("zulrah.models"));
-        rc->npc_anim_cache = anim_cache_load(OSRS_ASSET("zulrah.anims"));
-        rc->collision_map = cmap;
-        rc->collision_world_offset_x = 2256;
-        rc->collision_world_offset_y = 3061;
 
         render_populate_entities(rc, re);
         rc->cam_target_x = (float)rc->arena_base_x + (float)rc->arena_width / 2.0f;

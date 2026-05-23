@@ -125,6 +125,7 @@ INFERNO_ENV_EXPORT double inferno_env_profile_read_reset_ms(int slot) {
 #include "encounters/encounter_inferno.h"
 #include "encounters/encounter_zulrah.h"  /* render.h references ZulrahState */
 #include "osrs_render.h"
+#include "osrs_scene_assets.h"
 #pragma GCC diagnostic pop
 
 #define INF_TOTAL_OBS (INF_NUM_OBS + INF_ACTION_MASK_SIZE)
@@ -2539,26 +2540,23 @@ void c_render(Env* env) {
 
     int first_call = (re->client == NULL);
     if (first_call) {
-        osrs_asset_require_group(OSRS_ASSET_GROUP_INFERNO);
-        osrs_asset_require_group(OSRS_ASSET_GROUP_COMBAT_VISUALS);
-
         re->client = render_make_client();
         RenderClient* rc = (RenderClient*)re->client;
         rc->ticks_per_second = env->ticks_per_second;
-        rc->model_cache = model_cache_load(OSRS_ASSET("equipment.models"));
-        if (rc->model_cache) rc->show_models = 1;
-        rc->anim_cache = anim_cache_load(OSRS_ASSET("equipment.anims"));
-        render_load_projectile_assets(rc);
-        render_init_overlay_models(rc);
-        rc->terrain = terrain_load(OSRS_ASSET("inferno.terrain"));
-        rc->objects = objects_load(OSRS_ASSET("inferno.objects"));
-        rc->objects_zuk = objects_load(OSRS_ASSET("inferno_zuk.objects"));
-        /* inferno region (35,83) starts at world (2246, 5315) */
-        if (rc->terrain) terrain_offset(rc->terrain, 2246, 5315);
-        if (rc->objects) objects_offset(rc->objects, 2246, 5315);
-        if (rc->objects_zuk) objects_offset(rc->objects_zuk, 2246, 5315);
-        rc->npc_model_cache = model_cache_load(OSRS_ASSET("inferno.models"));
-        rc->npc_anim_cache = anim_cache_load(OSRS_ASSET("inferno.anims"));
+        EncounterSceneConfig scene = {
+            .required_groups = {
+                OSRS_ASSET_GROUP_INFERNO, OSRS_ASSET_GROUP_COMBAT_VISUALS, -1, -1,
+            },
+            .terrain_path = OSRS_ASSET("inferno.terrain"),
+            .objects_path = OSRS_ASSET("inferno.objects"),
+            .objects_secondary_path = OSRS_ASSET("inferno_zuk.objects"),
+            .npc_models_path = OSRS_ASSET("inferno.models"),
+            .npc_anims_path = OSRS_ASSET("inferno.anims"),
+            /* inferno region (35,83) starts at world (2246, 5315). */
+            .world_origin_x = 2246,
+            .world_origin_y = 5315,
+        };
+        encounter_load_scene_assets(rc, &scene);
 
         /* inferno renders in encounter-local tiles, but render_make_client()
            initializes the camera to wilderness PvP world coords. mirror the

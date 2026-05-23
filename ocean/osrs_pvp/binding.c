@@ -14,6 +14,7 @@
 #include "encounters/encounter_inferno.h"  /* render.h references InfernoState */
 #include "encounters/encounter_zulrah.h"   /* render.h references ZulrahState */
 #include "osrs_render.h"
+#include "osrs_scene_assets.h"
 #pragma GCC diagnostic pop
 
 /* vecenv-compatible header fields must stay first. */
@@ -109,24 +110,19 @@ void c_close(Env* env) { pvp_close(&env->pvp); }
 void c_render(Env* env) {
     int first_call = env->pvp.client == NULL;
     if (first_call) {
-        osrs_asset_require_group(OSRS_ASSET_GROUP_PVP);
-        osrs_asset_require_group(OSRS_ASSET_GROUP_COMBAT_VISUALS);
-
         env->pvp.client = render_make_client();
         RenderClient* rc = (RenderClient*)env->pvp.client;
         rc->ticks_per_second = env->ticks_per_second;
-        rc->model_cache = model_cache_load(OSRS_ASSET("equipment.models"));
-        if (rc->model_cache) rc->show_models = 1;
-        rc->anim_cache = anim_cache_load(OSRS_ASSET("equipment.anims"));
-        render_load_projectile_assets(rc);
-        render_init_overlay_models(rc);
-        rc->terrain = terrain_load(OSRS_ASSET("wilderness.terrain"));
-        rc->objects = objects_load(OSRS_ASSET("wilderness.objects"));
-        CollisionMap* cmap = collision_map_load(OSRS_ASSET("wilderness.cmap"));
-        if (cmap) {
-            env->pvp.collision_map = cmap;
-            rc->collision_map = cmap;
-        }
+        EncounterSceneConfig scene = {
+            .required_groups = {
+                OSRS_ASSET_GROUP_PVP, OSRS_ASSET_GROUP_COMBAT_VISUALS, -1, -1,
+            },
+            .terrain_path = OSRS_ASSET("wilderness.terrain"),
+            .objects_path = OSRS_ASSET("wilderness.objects"),
+            .cmap_path = OSRS_ASSET("wilderness.cmap"),
+        };
+        CollisionMap* cmap = encounter_load_scene_assets(rc, &scene);
+        if (cmap) env->pvp.collision_map = cmap;
         env->last_step_time = GetTime();
     }
 
