@@ -22,7 +22,7 @@ We argue that modern game RL benchmarks benefit from three properties: fast trai
 The contribution is a benchmark design pattern: player-readable state, structured actions, strict masks, replayable failures, behavior-level logs, and high-throughput recurrent training. The environment exposes 744 symbolic observation features, 9 action heads, and 89 mask logits. PufferLib 4 supplies the training substrate through native CUDA kernels, static buffers, CUDA graphs, PufferNet recurrent policies, current-epoch priority replay, and Protein sweeps. A compact recurrent checkpoint trained for 171.7M environment steps reached 0.49 logged development win rate and 0.736 internal progress score in the stored run summary. We present this result as evidence that the benchmark trains through full clears while still surfacing meaningful late-fight failures, not as a solved benchmark.
 \end{abstract}
 
-\section{Introduction And Contribution}
+\section{Introduction and Contribution}
 
 The Old School RuneScape Inferno is a solo player-versus-monster challenge released in 2017. The player must survive 69 waves and defeat TzKal-Zuk to earn the infernal cape. The OSRS Wiki describes the activity as a no-restock encounter with three pillars that block projectiles during the waves and a mandatory shield mechanic in the final fight \cite{osrs-inferno}. This makes the Inferno useful for game RL because many failures are player-readable. If the agent dies to a Jal-Zek, it may have missed a magic prayer. If a pillar falls, it likely ignored nibblers. If Zuk shield health drops, it failed movement, target priority, or healer timing.
 
@@ -69,7 +69,7 @@ Reward and score are separate. Reward can be shaped, swept, and replaced. Score 
 \node[box, draw=teal!65!black, minimum height=1.45cm] (sim) at (0,0) {OSRS Inferno Sim\\{\small waves, pillars, Zuk shield}\\{\small one step = one tick}};
 \node[box, draw=purple!70!black] (obs) at (4.2,1.45) {Observation\\{\small 744 player-readable features}};
 \node[box, draw=orange!80!black] (act) at (4.2,0) {Action Interface\\{\small 9 heads, 89 mask logits}};
-\node[box, draw=teal!80!black] (log) at (4.2,-1.45) {Replay And Logs\\{\small win, wave, prayer, healers, Zuk HP}};
+\node[box, draw=teal!80!black] (log) at (4.2,-1.45) {Replay and Logs\\{\small win, wave, prayer, healers, Zuk HP}};
 \node[box, draw=red!70!black, minimum height=1.45cm] (train) at (8.3,1.1) {PufferLib 4\\{\small PufferNet, MinGRU, CUDA}\\{\small Protein sweeps}};
 \node[box, draw=blue!70!black, minimum height=1.25cm] (watch) at (8.3,-1.35) {Human Inspection\\{\small watched mistakes stay legible}};
 \draw[arrow] (sim) -- (obs);
@@ -85,7 +85,7 @@ Reward and score are separate. Reward can be shaped, swept, and replaced. Score 
 \label{fig:contract}
 \end{figure}
 
-\section{Training And Iteration Loop}
+\section{Training and Iteration Loop}
 
 PufferLib 4 matters here because the bottleneck is the full edit-train-watch loop. The public Puffer docs describe a native backend with CUDA C kernels, static memory, CUDA graphs, async environment workers, fused operations, action masks, PufferNet policies, and Protein sweeps \cite{puffer-docs}. Joseph Suarez's Puffer 4 engineering notes frame the same systems problem: small-model RL can spend too much time in framework overhead unless memory layout, kernel launch overhead, and fused computation are designed together \cite{puffer4-systems}.
 
@@ -145,7 +145,7 @@ This distinction is central to the benchmark. In an inspectable game task, succe
 
 A stricter public benchmark release should do more than run more episodes. It should freeze the observation and action schema, pin the checkpoint metadata, run normal-start no-render evaluation with an explicit episode count, replay sampled wins and losses, and report behavioral counters alongside score. A policy should be judged on full clears, late-phase progress, and whether watched failures remain explainable from logged state.
 
-\section{Lessons And Limitations}
+\section{Lessons and Limitations}
 
 First, game benchmarks need a player-facing contract. If policy behavior looks wrong in replay, the logs and simulator should explain why. This is not a cosmetic requirement. In the Inferno, rendering and replay caught bugs that scalar training curves would have hidden.
 
