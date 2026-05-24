@@ -4,6 +4,7 @@ import pytest
 
 from pufferlib import selfplay
 from pufferlib.pufferl import (
+    _filter_sweep_observation_series,
     _fixed_eval_args,
     _pvp_score_from_means,
     _weighted_mean,
@@ -113,6 +114,18 @@ def test_fixed_eval_args_construct_valid_native_backend_config(monkeypatch):
     assert eval_args['selfplay']['enabled'] == 0
     assert eval_args['env']['opponent_type'] == 8
     assert eval_args['env']['seed'] == 12345
+
+
+def test_sweep_observation_filter_skips_empty_fixed_eval_bins():
+    scores, costs, timesteps = _filter_sweep_observation_series(
+        [[], [], 0.42],
+        [1.0, 2.0, 3.0],
+        [100.0, 200.0, 300.0],
+    )
+
+    assert scores == [0.42]
+    assert costs == [3.0]
+    assert timesteps == [300.0]
 
 
 def test_osrs_pvp_v2_sweep_scripted_pool_config_survives_literal_eval(monkeypatch):

@@ -420,6 +420,30 @@ def _weighted_mean(values, weights):
         raise ValueError(f'weights must be finite nonnegative values: {weights!r}')
     return float(np.dot(values, weights / weights.sum()))
 
+def _finite_scalar_or_none(value):
+    if value is None:
+        return None
+    arr = np.asarray(value)
+    if arr.shape != ():
+        return None
+    scalar = float(arr)
+    if not np.isfinite(scalar):
+        return None
+    return scalar
+
+def _filter_sweep_observation_series(scores, costs, timesteps):
+    out_scores, out_costs, out_timesteps = [], [], []
+    for score, cost, timestep in zip(scores, costs, timesteps):
+        score_scalar = _finite_scalar_or_none(score)
+        cost_scalar = _finite_scalar_or_none(cost)
+        timestep_scalar = _finite_scalar_or_none(timestep)
+        if score_scalar is None or cost_scalar is None or timestep_scalar is None:
+            continue
+        out_scores.append(score_scalar)
+        out_costs.append(cost_scalar)
+        out_timesteps.append(timestep_scalar)
+    return out_scores, out_costs, out_timesteps
+
 def _config_sequence(section, key, cast):
     return selfplay.parse_config_sequence(section.get(key, ''), cast, key)
 
@@ -1157,7 +1181,8 @@ def _train_body(env_name, args, sweep_obj=None, result_queue=None, verbose=False
         wandb.run.finish()
 
     if result_queue is not None:
-        result_queue.put((args['gpu_id'], metrics[target_key], metrics['uptime'], metrics['agent_steps']))
+        result_queue.put((args['gpu_id'], *_filter_sweep_observation_series(
+            metrics[target_key], metrics['uptime'], metrics['agent_steps'])))
 
 def train(env_name, args=None, gpus=None, **kwargs):
     args = args or load_config(env_name)
