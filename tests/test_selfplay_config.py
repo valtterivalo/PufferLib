@@ -100,6 +100,7 @@ def test_fixed_eval_args_construct_valid_native_backend_config(monkeypatch):
     monkeypatch.setattr(sys, 'argv', ['pytest'])
     monkeypatch.setenv('PUFFER_CONFIG_FILE', 'config/ocean/osrs_pvp_v2_sweep.ini')
     args = load_config('osrs_pvp')
+    args.pop('nccl_id', None)
 
     eval_args = _fixed_eval_args(args, opponent=8, seed=12345)
 
@@ -108,6 +109,7 @@ def test_fixed_eval_args_construct_valid_native_backend_config(monkeypatch):
         eval_args['train']['horizon'] * eval_args['vec']['total_agents'])
     assert eval_args['train']['minibatch_size'] == eval_args['train']['total_timesteps']
     assert eval_args['train']['cpu_inference'] == 1
+    assert eval_args['nccl_id'] == b''
     assert eval_args['selfplay']['enabled'] == 0
     assert eval_args['env']['opponent_type'] == 8
     assert eval_args['env']['seed'] == 12345

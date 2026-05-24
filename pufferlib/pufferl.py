@@ -431,6 +431,7 @@ def _fixed_eval_args(args, opponent, seed):
     eval_args['wandb'] = False
     eval_args['checkpoint_interval'] = 0
     eval_args['reset_state'] = True
+    eval_args.setdefault('nccl_id', b'')
     eval_args.setdefault('selfplay', {})['enabled'] = 0
     cfg = eval_args.get('fixed_eval', {})
 
