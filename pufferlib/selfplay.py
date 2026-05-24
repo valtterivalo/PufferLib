@@ -83,6 +83,31 @@ def evict(pool, max_size):
     return pool[:half:2] + pool[half:]
 
 
+def parse_config_sequence(value, cast, field_name):
+    '''Parse comma text or literal config sequences into typed values.'''
+    if value is None:
+        return []
+
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return []
+        raw_values = [part.strip() for part in text.split(',') if part.strip()]
+    elif isinstance(value, np.ndarray):
+        raw_values = value.tolist()
+    elif isinstance(value, (list, tuple)):
+        raw_values = list(value)
+    else:
+        raw_values = [value]
+
+    try:
+        return [cast(raw) for raw in raw_values]
+    except (TypeError, ValueError) as err:
+        raise RuntimeError(
+            f'selfplay.{field_name} not parseable as {cast.__name__} list: {value!r}'
+        ) from err
+
+
 def build_perm_tags(num_buffers, agents_per_buffer, agents_per_env, frozen_sizes, num_envs):
     '''Build env-slot -> rollout-row routing and per-env bank tag.
 
@@ -242,24 +267,18 @@ def setup(pufferl, backend, args, run_id):
     #   selfplay.scripted_opp_weights   "1.0,1.0,1.0,1.0,1.0"  (sampling weights)
     #   selfplay.scripted_env_pct       0.20  (fraction of selfplay envs to
     #                                          devote to scripted-opp matchups)
-    pool_str = str(sp.get('scripted_opp_pool', '')).strip()
-    scripted_opps_list = []
-    if pool_str:
-        try:
-            scripted_opps_list = [int(x) for x in pool_str.split(',') if x.strip()]
-        except ValueError:
-            raise RuntimeError(f'selfplay.scripted_opp_pool not parseable as ints: {pool_str!r}')
+    scripted_opps_list = parse_config_sequence(
+        sp.get('scripted_opp_pool', ''), int, 'scripted_opp_pool')
 
-    weights_str = str(sp.get('scripted_opp_weights', '')).strip()
-    if weights_str and scripted_opps_list:
-        try:
-            weights_list = [float(x) for x in weights_str.split(',') if x.strip()]
-        except ValueError:
-            raise RuntimeError(f'selfplay.scripted_opp_weights not parseable as floats: {weights_str!r}')
+    weights_list = parse_config_sequence(
+        sp.get('scripted_opp_weights', ''), float, 'scripted_opp_weights')
+    if weights_list:
         if len(weights_list) != len(scripted_opps_list):
             raise RuntimeError('selfplay.scripted_opp_weights length must match scripted_opp_pool')
     else:
         weights_list = [1.0] * len(scripted_opps_list)
+    if weights_list and not scripted_opps_list:
+        raise RuntimeError('selfplay.scripted_opp_weights requires scripted_opp_pool')
 
     scripted_env_pct = float(sp.get('scripted_env_pct', 0.0))
     selfplay_envs_total = sum(
@@ -417,6 +436,8 @@ def step(pufferl, backend, pool_state, flat_logs, epoch):
     flat_logs['pool/size']     = len(pool_state['pool'])
     flat_logs['env/elo']       = pool_state['primary_elo']
     flat_logs['pool/num_banks'] = num_banks
+    flat_logs['pool/scripted_envs'] = int(np.count_nonzero(pool_state['scripted_envs'] >= 0))
+    flat_logs['pool/scripted_opp_types'] = len(pool_state['scripted_opps_list'])
     total_score = 0.0
     total_n     = 0.0
     for b in range(num_banks):

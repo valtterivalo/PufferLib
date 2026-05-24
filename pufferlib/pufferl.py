@@ -832,11 +832,7 @@ def _train_body(env_name, args, sweep_obj=None, result_queue=None, verbose=False
         """Multi-bank PFSP self-play curriculum (no-op when selfplay.enabled=0).
         Ported from cheng_fork/selfplay; works on either backend (CUDA on box,
         Metal locally) via the _C symbols added in src/metal_bindings.mm."""
-        pool_state = None
-        try:
-            pool_state = selfplay.setup(pufferl, backend, args, run_id)
-        except RuntimeError as e:
-            print(f'WARNING: {e}, skipping selfplay setup')
+        pool_state = selfplay.setup(pufferl, backend, args, run_id)
 
         model_path = ''
         flat_logs = {}
