@@ -184,6 +184,13 @@ void static_vec_set_perm(StaticVec* vec, const int* perm);
 void static_vec_set_env_tags(StaticVec* vec, const int* tags);
 int static_vec_count_aligned(StaticVec* vec, int tag_value, int reset_flags);
 
+/* Optional: per-env scripted opponent override for envs that opt in via
+   MY_USES_SCRIPTED_OPPS and provide an `int scripted_opp_type` field. -1
+   means no override; >= 0 routes the env's secondary slot to the named
+   scripted policy (env-specific semantics — for osrs_pvp this is the
+   OpponentType enum, c_step then routes p1 to that C-heuristic). */
+void static_vec_set_env_scripted_opps(StaticVec* vec, const int* scripted_opps);
+
 // Optional shared state functions
 void* my_shared(void* env, Dict* kwargs);
 void my_shared_close(void* env);
@@ -846,6 +853,20 @@ void static_vec_set_env_tags(StaticVec* vec, const int* tags) {
 int static_vec_count_aligned(StaticVec* vec, int tag_value, int reset_flags) {
     (void)vec; (void)tag_value; (void)reset_flags;
     return 0;
+}
+#endif
+
+#ifdef MY_USES_SCRIPTED_OPPS
+void static_vec_set_env_scripted_opps(StaticVec* vec, const int* scripted_opps) {
+    Env* envs = (Env*)vec->envs;
+    for (int i = 0; i < vec->size; i++) {
+        envs[i].scripted_opp_type = scripted_opps[i];
+    }
+}
+#else
+void static_vec_set_env_scripted_opps(StaticVec* vec, const int* scripted_opps) {
+    (void)vec; (void)scripted_opps;
+    fprintf(stderr, "static_vec_set_env_scripted_opps: env did not opt in via MY_USES_SCRIPTED_OPPS; ignoring.\n");
 }
 #endif
 

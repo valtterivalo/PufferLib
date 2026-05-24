@@ -49,7 +49,7 @@ typedef struct {
     /* Per-slot pointer arrays for num_agents=2 self-play opt-in (MY_USES_PERM).
        Routed by my_setup_perm using vec->agent_perm. Slot 0 = learner, slot 1
        = opponent (driven by primary policy in pure-selfplay envs, by frozen
-       bank in historical envs). */
+       bank in historical envs, by C-heuristic in scripted-opp envs). */
     void* obs_ptr[2];
     float* action_ptr[2];
     float* reward_ptr[2];
@@ -59,6 +59,13 @@ typedef struct {
        legacy C-heuristic opponent path is used (use_c_opponent driven).
        selfplay setups should flip this on via env kwargs. */
     int use_rollout_opponent;
+
+    /* Per-env scripted opponent override. >= 0 = OpponentType to use for slot
+       1 (C-heuristic). -1 = use whatever the global mode dictates (rollout if
+       use_rollout_opponent else default opponent_type). Set by selfplay.setup
+       via pufferl_set_env_scripted_opps to distribute envs across pure
+       self-play (-1), frozen-bank (-1), and scripted-opp (>= 0) curricula. */
+    int scripted_opp_type;
 } PvpEnv;
 
 #define OBS_SIZE OCEAN_OBS_SIZE
@@ -68,6 +75,7 @@ typedef struct {
 #define Env PvpEnv
 #define MY_USES_TAGS
 #define MY_USES_PERM
+#define MY_USES_SCRIPTED_OPPS
 /* PvP uses obs-embedded action mask (rollout splitter handles via has_mask),
    not the separate MY_ACTION_MASK buffer path. */
 
@@ -107,15 +115,31 @@ void c_step(Env* env) {
         for (int i = 0; i < NUM_ATNS; i++) {
             env->ocean_acts_staging[i] = (int)p0_acts[i];
         }
-        /* slot 1 actions: copy into external_opponent_actions when use_rollout_opponent.
-           Otherwise the C-heuristic path inside pvp_step generates p1 actions itself. */
-        if (env->use_rollout_opponent && env->action_ptr[1]) {
+        /* Slot 1 routing — three modes:
+             scripted_opp_type >= 0 → C-heuristic of that specific type drives p1
+             use_rollout_opponent && action_ptr[1] → rollout drives p1 (pure selfplay)
+             else → legacy default opponent_type C-heuristic */
+        if (env->scripted_opp_type >= 0) {
+            env->pvp.pvp_runtime.opponent.type = (OpponentType)env->scripted_opp_type;
+            env->pvp.pvp_runtime.use_external_opponent_actions = 0;
+            env->pvp.pvp_runtime.use_c_opponent = 1;
+        } else if (env->use_rollout_opponent && env->action_ptr[1]) {
+            env->pvp.pvp_runtime.use_external_opponent_actions = 1;
+            env->pvp.pvp_runtime.use_c_opponent = 0;
             for (int i = 0; i < NUM_ATNS; i++) {
                 env->ocean_acts_staging_p1[i] = (int)env->action_ptr[1][i];
                 env->pvp.pvp_runtime.external_opponent_actions[i] = env->ocean_acts_staging_p1[i];
             }
         }
         pvp_step(&env->pvp);
+
+        /* For scripted-opp envs, slot 1's reward reflects what the C-heuristic
+           did, not what the policy's slot 1 logits chose. Zero it to suppress
+           that noisy training signal — the policy only trains on slot 0
+           (learner) in scripted-opp envs. */
+        if (env->scripted_opp_type >= 0) {
+            env->pvp._rews_buf[1] = 0.0f;
+        }
     }
 
     /* Terminals: mirror to both slots. pvp_step writes the shared episode_over
@@ -305,6 +329,10 @@ void my_init(Env* env, Dict* kwargs) {
         env->pvp.pvp_runtime.use_c_opponent = 0;
     }
 
+    /* Scripted opponent override starts unset. selfplay.setup can set this
+       per-env via pufferl_set_env_scripted_opps after vec creation. */
+    env->scripted_opp_type = -1;
+
     DictItem* shaping_scale = dict_get_unsafe(kwargs, "shaping_scale");
     env->pvp.shaping.shaping_scale = shaping_scale ? (float)shaping_scale->value : 0.0f;
 
@@ -332,6 +360,11 @@ void my_init(Env* env, Dict* kwargs) {
     env->pvp.shaping.premature_eat_threshold = 0.7071f;
     env->pvp.shaping.ko_bonus = 0.15f;
     env->pvp.shaping.wasted_resources_penalty = -0.07f;
+    /* ko_supplies_bonus_coef: proportional bonus when KO'ing with opponent
+       supplies remaining. Sweep over [0, ~0.5] to find if fast-KO incentive
+       helps. Defaults to 0 so existing OPP_IMPROVED training is unchanged. */
+    DictItem* ko_sup = dict_get_unsafe(kwargs, "ko_supplies_bonus_coef");
+    env->pvp.shaping.ko_supplies_bonus_coef = ko_sup ? (float)ko_sup->value : 0.0f;
     env->pvp.shaping.prayer_penalty_enabled = 1;
     env->pvp.shaping.click_penalty_enabled = 0;
     env->pvp.shaping.click_penalty_threshold = 5;
@@ -385,10 +418,29 @@ void my_log(Log* log, Dict* out) {
         ? log->damage_dealt / log->attacks_landed : 0.0f;
     dict_set(out, "damage_per_hit", dph);
 
+    /* Score (fixed across all sweep trials — this is the Protein yardstick).
+       Two components:
+         - wins (0/1): the static "you KO'd them" signal, the only thing that
+           truly matters in OSRS PvP.
+         - damage_differential: dealt - received, normalized by 2 * base_hp
+           (so range [-1, +1]) then shifted to [0, 1]. Captures "how decisively
+           did you outpace them in the damage race" as a tiebreaker.
+
+       Reward shaping (separate from score, swept per trial) controls the
+       training-time incentives. Score stays fixed so Protein has a stable
+       metric. */
     float wr = log->wins;
-    float dmg_frac = log->damage_dealt / 99.0f;
-    float score = wr + (1.0f - wr) * dmg_frac * 0.5f;
+    float dmg_dealt_norm = log->damage_dealt / 99.0f;
+    float dmg_recv_norm  = log->damage_received / 99.0f;
+    float dmg_diff = dmg_dealt_norm - dmg_recv_norm;
+    /* Map [-2, +2] linearly to [0, 1] (saturates beyond ±base_hp on each side). */
+    float dmg_diff_score = 0.5f + 0.25f * dmg_diff;
+    if (dmg_diff_score < 0.0f) dmg_diff_score = 0.0f;
+    if (dmg_diff_score > 1.0f) dmg_diff_score = 1.0f;
+
+    float score = 0.7f * wr + 0.3f * dmg_diff_score;
     dict_set(out, "score", score);
+    dict_set(out, "dmg_diff_score", dmg_diff_score);
 }
 
 void binding_set_pfsp_weights(StaticVec* vec, int* pool, int* cum_weights, int pool_size) {

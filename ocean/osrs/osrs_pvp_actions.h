@@ -766,6 +766,20 @@ static float calculate_reward(OsrsEnv* env, int agent_idx) {
             if (t->food_count > 0 || t->karambwan_count > 0 || t->brew_doses > 0) {
                 reward += cfg->ko_bonus;
             }
+            // Proportional KO supplies bonus: linear in fraction of starting
+            // supplies the opponent still had at death. Sweep this coef in
+            // [0, ~0.5] to find if "fast KOs" matter as a training signal.
+            float opp_total = (float)(t->food_count + t->karambwan_count
+                                       + t->brew_doses + t->restore_doses
+                                       + t->combat_potion_doses
+                                       + t->ranged_potion_doses);
+            float max_total = (float)(MAXED_FOOD_COUNT + MAXED_KARAMBWAN_COUNT
+                                      + MAXED_BREW_DOSES + MAXED_RESTORE_DOSES
+                                      + MAXED_COMBAT_POTION_DOSES
+                                      + MAXED_RANGED_POTION_DOSES);
+            if (max_total > 0.0f) {
+                reward += cfg->ko_supplies_bonus_coef * (opp_total / max_total);
+            }
         } else if (env->winner == (1 - agent_idx)) {
             // Wasted resources: we died with food left — failed to use supplies
             if (p->food_count > 0 || p->karambwan_count > 0 || p->brew_doses > 0) {

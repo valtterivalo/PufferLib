@@ -865,6 +865,10 @@ extern "C" int pufferl_num_envs(PuffeRL* pufferl) {
     return pufferl->vec->size;
 }
 
+extern "C" void pufferl_set_env_scripted_opps(PuffeRL* pufferl, const int* scripted_opps) {
+    static_vec_set_env_scripted_opps(pufferl->vec, scripted_opps);
+}
+
 // ============================================================================
 // Forward declaration: waits for async GPU training to complete.
 static void sync_pending_train(PuffeRL& pufferl);

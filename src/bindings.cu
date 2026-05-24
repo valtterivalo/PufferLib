@@ -259,6 +259,17 @@ int py_num_envs(py::object pufferl_obj) {
     return pufferl_num_envs(&pufferl);
 }
 
+void py_set_env_scripted_opps(py::object pufferl_obj, py::array_t<int> scripted_opps) {
+    PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
+    auto buf = scripted_opps.request();
+    if (buf.ndim != 1) throw std::runtime_error("scripted_opps must be 1-D");
+    int num_envs = pufferl_num_envs(&pufferl);
+    if ((int)buf.shape[0] != num_envs) {
+        throw std::runtime_error("scripted_opps length must equal num_envs");
+    }
+    pufferl_set_env_scripted_opps(&pufferl, (const int*)buf.ptr);
+}
+
 void py_puff_advantage(
         long long values_ptr, long long rewards_ptr,
         long long dones_ptr,  long long importance_ptr,
@@ -523,6 +534,7 @@ PYBIND11_MODULE(_C, m) {
     m.def("load_frozen_bank", &py_load_frozen_bank);
     m.def("set_agent_perm", &py_set_agent_perm);
     m.def("set_env_tags", &py_set_env_tags);
+    m.def("set_env_scripted_opps", &py_set_env_scripted_opps);
     m.def("count_aligned", &py_count_aligned);
     m.def("num_envs", &py_num_envs);
     m.def("python_vec_recv", &python_vec_recv);

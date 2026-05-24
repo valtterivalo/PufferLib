@@ -1025,6 +1025,7 @@ typedef struct {
     float premature_eat_threshold;   // HP percent above which eating is premature (70/99)
     // Terminal shaping
     float ko_bonus;                  // bonus for KO (opponent had food left)
+    float ko_supplies_bonus_coef;    // bonus per unit of opponent supply fraction remaining at KO
     float wasted_resources_penalty;  // dying with food/brews left
     // Scale (annealed from Python during training)
     float shaping_scale;             // 1.0 → floor over training

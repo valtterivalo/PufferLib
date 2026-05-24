@@ -1905,6 +1905,13 @@ extern "C" int pufferl_num_envs(PuffeRL* pufferl) {
     return pufferl->vec->size;
 }
 
+// Per-env scripted opponent override. Forwarded to the env's static_vec helper
+// which sets each env->scripted_opp_type. Envs not opted in via
+// MY_USES_SCRIPTED_OPPS produce a stderr warning and are no-op.
+extern "C" void pufferl_set_env_scripted_opps(PuffeRL* pufferl, const int* scripted_opps) {
+    static_vec_set_env_scripted_opps(pufferl->vec, scripted_opps);
+}
+
 std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
         const std::string& env_name, Dict* vec_kwargs, Dict* env_kwargs) {
     auto pufferl = std::make_unique<PuffeRL>();

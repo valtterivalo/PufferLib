@@ -775,6 +775,15 @@ PYBIND11_MODULE(_C, m) {
         return pufferl_num_envs(&pufferl);
     }, py::arg("pufferl"));
 
+    m.def("set_env_scripted_opps", [](py::object pufferl_obj, py::array_t<int> scripted_opps) {
+        PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
+        auto buf = scripted_opps.request();
+        if (buf.size != pufferl.vec->size) {
+            throw std::runtime_error("set_env_scripted_opps: array length must equal num_envs");
+        }
+        pufferl_set_env_scripted_opps(&pufferl, (const int*)buf.ptr);
+    }, py::arg("pufferl"), py::arg("scripted_opps"));
+
     m.def("archive_explore", [](
         py::object pufferl_obj,
         int archive_capacity,

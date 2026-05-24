@@ -233,6 +233,63 @@ def setup(pufferl, backend, args, run_id):
             'last_epochs_to_align': 0,
         })
 
+    # Scripted-opponent pool: routes some of the pure-selfplay envs to play
+    # against a specific scripted C-heuristic (env-specific opp_type ints).
+    # The pool is a parallel curriculum to the snapshot-based frozen banks:
+    # different envs in the same training run can face different opponents.
+    # Config:
+    #   selfplay.scripted_opp_pool      "8,10,14,29,30"  (comma-sep opp_type ints)
+    #   selfplay.scripted_opp_weights   "1.0,1.0,1.0,1.0,1.0"  (sampling weights)
+    #   selfplay.scripted_env_pct       0.20  (fraction of selfplay envs to
+    #                                          devote to scripted-opp matchups)
+    pool_str = str(sp.get('scripted_opp_pool', '')).strip()
+    scripted_opps_list = []
+    if pool_str:
+        try:
+            scripted_opps_list = [int(x) for x in pool_str.split(',') if x.strip()]
+        except ValueError:
+            raise RuntimeError(f'selfplay.scripted_opp_pool not parseable as ints: {pool_str!r}')
+
+    weights_str = str(sp.get('scripted_opp_weights', '')).strip()
+    if weights_str and scripted_opps_list:
+        try:
+            weights_list = [float(x) for x in weights_str.split(',') if x.strip()]
+        except ValueError:
+            raise RuntimeError(f'selfplay.scripted_opp_weights not parseable as floats: {weights_str!r}')
+        if len(weights_list) != len(scripted_opps_list):
+            raise RuntimeError('selfplay.scripted_opp_weights length must match scripted_opp_pool')
+    else:
+        weights_list = [1.0] * len(scripted_opps_list)
+
+    scripted_env_pct = float(sp.get('scripted_env_pct', 0.0))
+    selfplay_envs_total = sum(
+        1 for t in tags if t == 0
+    )
+    target_scripted = int(round(selfplay_envs_total * scripted_env_pct))
+
+    scripted_opps = np.full(num_envs, -1, dtype=np.int32)
+    if scripted_opps_list and target_scripted > 0:
+        # Sample which scripted opp each scripted env plays. Sample without
+        # replacement WITHIN each opp's quota (so each opp shows up the
+        # expected number of times based on weights). Distributes determ-
+        # inistically given the rng seed.
+        w = np.asarray(weights_list, dtype=np.float64)
+        w = w / w.sum()
+        # selfplay env indices (tags == 0)
+        sp_env_indices = np.where(tags == 0)[0]
+        # Pick the first target_scripted of them to be scripted envs
+        chosen = sp_env_indices[:target_scripted]
+        # Assign opp types proportionally
+        opp_assignments = rng.choice(
+            len(scripted_opps_list), size=target_scripted, p=w)
+        for env_idx, opp_idx in zip(chosen, opp_assignments):
+            scripted_opps[env_idx] = scripted_opps_list[opp_idx]
+
+    if hasattr(backend, 'set_env_scripted_opps'):
+        backend.set_env_scripted_opps(pufferl, scripted_opps)
+    elif np.any(scripted_opps >= 0):
+        print('WARNING: backend has no set_env_scripted_opps; scripted-opp pool ignored.', flush=True)
+
     return {
         'pool_dir': pool_dir,
         'pool': [{'path': bootstrap_path, 'elo': elo_init,
@@ -251,6 +308,8 @@ def setup(pufferl, backend, args, run_id):
         'primary_elo': elo_init,
         'elo_k': elo_k,
         'last_snapshot_step': int(pufferl.global_step),
+        'scripted_opps_list': scripted_opps_list,
+        'scripted_envs': scripted_opps,
     }
 
 
