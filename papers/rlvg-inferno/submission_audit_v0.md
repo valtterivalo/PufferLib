@@ -1,6 +1,6 @@
 # RLVG Inferno Submission Audit v0
 
-Status: current after commit `49379faa9`.
+Status: current after commit `2f45f72fe`.
 
 ## Hard Requirements
 
