@@ -95,6 +95,24 @@ The Inferno config uses 4096 parallel agents, two rollout buffers, 16 worker thr
 
 The hardest engineering lesson was that the simulator and learner could not be debugged separately. Training exposed missing observations, stale masks, and reward traps. Renderer checks exposed bugs in projectile anchoring, Zuk pathing, healer tags, and action timing. Human controls exposed when the action interface was not playable. The useful loop became: train, watch, find a player-readable failure, trace the simulator, add a contract test, and sweep again.
 
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{lll}
+\toprule
+Observed failure & Visible signal & Contract added \\
+\midrule
+Wrong prayer timing & Prayer correctness and death context & Pending-hit observations \\
+Stale target options & Zero-valid-head counters & Strict target masks \\
+Missed Zuk healers & Healer tag and kill logs & Healer phase diagnostics \\
+Broken Zuk movement & Replay and human click pathing & Shield-path checks \\
+Wrong projectile source & Rendered flight path & Anchored projectile endpoints \\
+\bottomrule
+\end{tabular}
+\caption{Examples where policy watching, metrics, and simulator contracts found different classes of defect.}
+\label{tab:failures}
+\end{table}
+
 \section{Checkpoint Evidence}
 
 The current checkpoint result is a compact recurrent policy trained in the active development branch. It uses the compact Redemption overhead mapping, state curriculum, priority replay, 4096 parallel agents, a two-layer 512 hidden PufferNet, and 171.7M environment steps. The stored run summary reports the development metrics in Table \ref{tab:result}. The summary marks the final metrics as normal-start evaluation, but this artifact is downsampled, so we avoid treating its \texttt{env/n} field as a precise evaluation denominator here.
@@ -124,6 +142,8 @@ Final logged throughput & about 256k steps/s \\
 These numbers should be read with care. The environment, action surface, and visual contract were still changing during development. The result shows that the current benchmark version can train a policy that clears the full encounter and reaches late-Zuk states often. It does not prove that the task is solved, that the checkpoint is robust across future environment versions, or that the policy has no simulator-specific habits.
 
 This distinction is central to the benchmark. In an inspectable game task, success cannot be only a scalar. A policy that clears while wasting supplies, mistiming healers, or leaning on a simulator bug has not solved the benchmark in the player-facing sense. The benchmark should keep these failures visible.
+
+A stricter public benchmark release should do more than run more episodes. It should freeze the observation and action schema, pin the checkpoint metadata, run normal-start no-render evaluation with an explicit episode count, replay sampled wins and losses, and report behavioral counters alongside score. A policy should be judged on full clears, late-phase progress, and whether watched failures remain explainable from logged state.
 
 \section{Lessons And Limitations}
 
