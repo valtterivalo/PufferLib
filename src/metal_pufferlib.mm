@@ -1644,6 +1644,25 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
         mtl_wrap_allocator(&ralloc);
     }
 
+    DictItem* nb_item = dict_get_unsafe(vec_kwargs, "num_frozen_banks");
+    DictItem* fbp_item = dict_get_unsafe(vec_kwargs, "frozen_bank_pct");
+    int num_frozen = nb_item ? (int)nb_item->value : 0;
+    float frozen_pct = fbp_item ? (float)fbp_item->value : 0.0f;
+    if (num_frozen > 0) {
+        int agents_per_buffer = total_agents / num_buffers;
+        int frozen_size = (int)((float)agents_per_buffer * frozen_pct);
+        int frozen_total = num_frozen * frozen_size;
+        if (frozen_size <= 0 || frozen_total > agents_per_buffer) {
+            fprintf(stderr, "metal create_pufferl: invalid frozen bank config "
+                "(num=%d, pct=%.4f -> size=%d, total=%d, agents_per_buffer=%d)\n",
+                num_frozen, frozen_pct, frozen_size, frozen_total, agents_per_buffer);
+            abort();
+        }
+        for (int b = 0; b < num_frozen; b++) {
+            pufferl_add_frozen_bank(pufferl.get(), frozen_size);
+        }
+    }
+
     // No CUDA graph warmup on Metal (cudagraphs always -1)
 
     // Create per-buffer Metal streams for rollout callback workers.

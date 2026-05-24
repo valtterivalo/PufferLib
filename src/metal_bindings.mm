@@ -9,11 +9,17 @@
 #include <pybind11/stl.h>
 #include <stdexcept>
 #include <sys/time.h>
+#include <vector>
 
 namespace py = pybind11;
 
 #define _PUFFER_STRINGIFY(x) #x
 #define PUFFER_STRINGIFY(x) _PUFFER_STRINGIFY(x)
+
+extern "C" void binding_set_pfsp_weights(
+    StaticVec* vec, int* pool, int* cum_weights, int pool_size) __attribute__((weak_import));
+extern "C" void binding_get_pfsp_stats(
+    StaticVec* vec, float* out_wins, float* out_episodes, int* out_pool_size) __attribute__((weak_import));
 
 static double wall_clock() {
     struct timeval tv;
@@ -783,6 +789,46 @@ PYBIND11_MODULE(_C, m) {
         }
         pufferl_set_env_scripted_opps(&pufferl, (const int*)buf.ptr);
     }, py::arg("pufferl"), py::arg("scripted_opps"));
+
+    m.def("set_pfsp_weights", [](py::object pufferl_obj, py::array_t<int> pool,
+                                 py::array_t<int> cum_weights) {
+        if (!binding_set_pfsp_weights) {
+            throw std::runtime_error("set_pfsp_weights: env has no binding_set_pfsp_weights");
+        }
+        PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
+        auto pool_buf = pool.request();
+        auto weights_buf = cum_weights.request();
+        if (pool_buf.ndim != 1) throw std::runtime_error("pfsp pool must be 1-D");
+        if (weights_buf.ndim != 1) throw std::runtime_error("pfsp cum_weights must be 1-D");
+        if (pool_buf.shape[0] != weights_buf.shape[0]) {
+            throw std::runtime_error("pfsp pool and cum_weights lengths must match");
+        }
+        binding_set_pfsp_weights(
+            pufferl.vec,
+            (int*)pool_buf.ptr,
+            (int*)weights_buf.ptr,
+            (int)pool_buf.shape[0]);
+    }, py::arg("pufferl"), py::arg("pool"), py::arg("cum_weights"));
+
+    m.def("get_pfsp_stats", [](py::object pufferl_obj) -> py::dict {
+        if (!binding_get_pfsp_stats) {
+            throw std::runtime_error("get_pfsp_stats: env has no binding_get_pfsp_stats");
+        }
+        PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
+        const int capacity = 64;
+        std::vector<float> wins(capacity, 0.0f);
+        std::vector<float> episodes(capacity, 0.0f);
+        int pool_size = 0;
+        binding_get_pfsp_stats(pufferl.vec, wins.data(), episodes.data(), &pool_size);
+        if (pool_size < 0 || pool_size > capacity) {
+            throw std::runtime_error("get_pfsp_stats: invalid pool_size");
+        }
+        py::dict out;
+        out["pool_size"] = pool_size;
+        out["wins"] = py::array_t<float>(pool_size, wins.data());
+        out["episodes"] = py::array_t<float>(pool_size, episodes.data());
+        return out;
+    }, py::arg("pufferl"));
 
     m.def("archive_explore", [](
         py::object pufferl_obj,

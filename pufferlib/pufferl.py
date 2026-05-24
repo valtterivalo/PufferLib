@@ -887,6 +887,11 @@ def _train_body(env_name, args, sweep_obj=None, result_queue=None, verbose=False
             No-op when pool_state is None (selfplay disabled)."""
             if epoch < train_epochs:
                 selfplay.step(pufferl, backend, pool_state, flat_logs, epoch)
+                for key, value in flat_logs.items():
+                    if (key.startswith('pool/')
+                            or key.startswith('env/historical_winrate')
+                            or key == 'env/elo'):
+                        fresh_logs[key] = value
 
             if verbose:
                 print_dashboard(args, model_size, flat_logs)

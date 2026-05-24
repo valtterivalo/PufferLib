@@ -10,6 +10,30 @@ def test_selfplay_sequence_parser_accepts_literal_tuple_and_comma_text():
     assert selfplay.parse_config_sequence((1, 2), float, 'scripted_opp_weights') == [1.0, 2.0]
 
 
+def test_scripted_pfsp_hard_prioritizes_low_winrate_opponents():
+    weights, cum_weights = selfplay.scripted_pfsp_weights(
+        base_weights=[1.0, 1.0, 1.0],
+        winrates=[0.99, 0.50, 0.10],
+        mode='pfsp_hard',
+        floor=0.001,
+    )
+
+    assert weights[2] > weights[1] > weights[0]
+    assert cum_weights.tolist()[-1] == 1000
+    assert all(cum_weights[i] < cum_weights[i + 1] for i in range(len(cum_weights) - 1))
+
+
+def test_scripted_pfsp_respects_static_priors():
+    weights, _ = selfplay.scripted_pfsp_weights(
+        base_weights=[1.0, 4.0],
+        winrates=[0.5, 0.5],
+        mode='pfsp_hard',
+        floor=0.001,
+    )
+
+    assert weights[1] == 0.8
+
+
 def test_osrs_pvp_v2_sweep_scripted_pool_config_survives_literal_eval(monkeypatch):
     monkeypatch.setattr(sys, 'argv', ['pytest'])
     monkeypatch.setenv('PUFFER_CONFIG_FILE', 'config/ocean/osrs_pvp_v2_sweep.ini')
@@ -26,3 +50,5 @@ def test_osrs_pvp_v2_sweep_scripted_pool_config_survives_literal_eval(monkeypatc
         17, 18, 19, 20, 21, 22, 23, 24, 25, 27, 28, 29, 30,
     ]
     assert len(weights) == len(opponents)
+    assert args['selfplay']['scripted_sampling'] == 'pfsp_hard'
+    assert args['selfplay']['scripted_dispatcher_opp'] == 16

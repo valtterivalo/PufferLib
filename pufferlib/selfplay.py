@@ -24,6 +24,66 @@ import numpy as np
 from pufferlib import _C
 
 
+OPP_PFSP = 16
+
+
+def pfsp_weight(winrate, mode, floor):
+    '''Return an unnormalized opponent-sampling weight.'''
+    if mode == 'uniform':
+        return 1.0
+    if mode == 'pfsp_hard':
+        return max((1.0 - winrate) ** 2, floor)
+    if mode == 'pfsp_var':
+        return max(winrate * (1.0 - winrate), floor)
+    raise RuntimeError(f'unknown PFSP sampling mode: {mode}')
+
+
+def normalize_to_cumulative_thousand(weights):
+    '''Convert positive float weights to C cumulative weights summing to 1000.'''
+    raw = np.asarray(weights, dtype=np.float64)
+    if raw.ndim != 1 or raw.size == 0:
+        raise RuntimeError('PFSP weights must be a nonempty 1-D array')
+    if np.any(raw < 0.0) or not np.all(np.isfinite(raw)):
+        raise RuntimeError(f'PFSP weights must be finite and nonnegative: {weights!r}')
+
+    positive = raw > 0.0
+    if not np.any(positive):
+        raise RuntimeError('PFSP weights must contain at least one positive entry')
+
+    probs = raw / raw.sum()
+    counts = np.floor(probs * 1000.0).astype(np.int32)
+    counts[(counts == 0) & positive] = 1
+
+    while int(counts.sum()) > 1000:
+        idx = int(np.argmax(np.where(counts > 1, counts, -1)))
+        if counts[idx] <= 1:
+            raise RuntimeError('too many positive PFSP weights to preserve a 1000-point floor')
+        counts[idx] -= 1
+
+    while int(counts.sum()) < 1000:
+        residual = probs * 1000.0 - counts
+        idx = int(np.argmax(residual))
+        counts[idx] += 1
+
+    cum_weights = np.cumsum(counts).astype(np.int32)
+    cum_weights[-1] = 1000
+    return cum_weights
+
+
+def scripted_pfsp_weights(base_weights, winrates, mode, floor):
+    '''Combine static scripted-opponent priors with measured PFSP winrates.'''
+    priors = np.asarray(base_weights, dtype=np.float64)
+    rates = np.asarray(winrates, dtype=np.float64)
+    if priors.shape != rates.shape:
+        raise RuntimeError('scripted priors and winrates must have the same shape')
+    raw = np.array(
+        [prior * pfsp_weight(float(rate), mode, floor)
+         for prior, rate in zip(priors, rates)],
+        dtype=np.float64,
+    )
+    return raw / raw.sum(), normalize_to_cumulative_thousand(raw)
+
+
 def sample_opponent(pool, rng, mode='sqrt'):
     '''Pick a historical opponent from the pool. Mode selects the weighting:
 
@@ -50,14 +110,13 @@ def sample_opponent(pool, rng, mode='sqrt'):
         idx = int(rng.integers(n))
     elif mode == 'pfsp_hard':
         weights = np.array(
-            [max((1.0 - e.get('winrate', 0.5)) ** 2, 0.01) for e in pool],
+            [pfsp_weight(e.get('winrate', 0.5), mode, 0.01) for e in pool],
             dtype=np.float64)
         weights /= weights.sum()
         idx = int(rng.choice(n, p=weights))
     elif mode == 'pfsp_var':
         weights = np.array(
-            [max(e.get('winrate', 0.5) * (1.0 - e.get('winrate', 0.5)), 0.01)
-             for e in pool],
+            [pfsp_weight(e.get('winrate', 0.5), mode, 0.01) for e in pool],
             dtype=np.float64)
         weights /= weights.sum()
         idx = int(rng.choice(n, p=weights))
@@ -281,33 +340,62 @@ def setup(pufferl, backend, args, run_id):
         raise RuntimeError('selfplay.scripted_opp_weights requires scripted_opp_pool')
 
     scripted_env_pct = float(sp.get('scripted_env_pct', 0.0))
+    scripted_sampling = str(sp.get('scripted_sampling', 'fixed')).strip()
+    scripted_floor_weight = float(sp.get('scripted_floor_weight', 0.01))
+    scripted_winrate_alpha = float(sp.get('scripted_winrate_alpha', 0.3))
+    scripted_update_interval = int(sp.get('scripted_update_interval', 1_000_000))
+    scripted_dispatcher_opp = int(sp.get('scripted_dispatcher_opp', OPP_PFSP))
     selfplay_envs_total = sum(
         1 for t in tags if t == 0
     )
     target_scripted = int(round(selfplay_envs_total * scripted_env_pct))
 
     scripted_opps = np.full(num_envs, -1, dtype=np.int32)
+    scripted_pfsp_enabled = (
+        scripted_sampling != 'fixed'
+        and len(scripted_opps_list) > 0
+        and target_scripted > 0
+    )
+    scripted_winrates = np.full(len(scripted_opps_list), 0.5, dtype=np.float64)
+    scripted_base_weights = np.asarray(weights_list, dtype=np.float64)
+    scripted_weights = np.zeros(len(scripted_opps_list), dtype=np.float64)
+    scripted_cum_weights = np.zeros(len(scripted_opps_list), dtype=np.int32)
+
     if scripted_opps_list and target_scripted > 0:
-        # Sample which scripted opp each scripted env plays. Sample without
-        # replacement WITHIN each opp's quota (so each opp shows up the
-        # expected number of times based on weights). Distributes determ-
-        # inistically given the rng seed.
-        w = np.asarray(weights_list, dtype=np.float64)
-        w = w / w.sum()
         # selfplay env indices (tags == 0)
         sp_env_indices = np.where(tags == 0)[0]
         # Pick the first target_scripted of them to be scripted envs
         chosen = sp_env_indices[:target_scripted]
-        # Assign opp types proportionally
-        opp_assignments = rng.choice(
-            len(scripted_opps_list), size=target_scripted, p=w)
-        for env_idx, opp_idx in zip(chosen, opp_assignments):
-            scripted_opps[env_idx] = scripted_opps_list[opp_idx]
+        if scripted_pfsp_enabled:
+            if scripted_dispatcher_opp != OPP_PFSP:
+                raise RuntimeError('scripted_dispatcher_opp must be OPP_PFSP for adaptive scripted PFSP')
+            if not hasattr(backend, 'set_pfsp_weights') or not hasattr(backend, 'get_pfsp_stats'):
+                raise RuntimeError('adaptive scripted PFSP requires set_pfsp_weights and get_pfsp_stats')
+            scripted_opps[chosen] = scripted_dispatcher_opp
+            scripted_weights, scripted_cum_weights = scripted_pfsp_weights(
+                scripted_base_weights,
+                scripted_winrates,
+                scripted_sampling,
+                scripted_floor_weight,
+            )
+        else:
+            w = scripted_base_weights / scripted_base_weights.sum()
+            opp_assignments = rng.choice(
+                len(scripted_opps_list), size=target_scripted, p=w)
+            for env_idx, opp_idx in zip(chosen, opp_assignments):
+                scripted_opps[env_idx] = scripted_opps_list[opp_idx]
 
     if hasattr(backend, 'set_env_scripted_opps'):
         backend.set_env_scripted_opps(pufferl, scripted_opps)
     elif np.any(scripted_opps >= 0):
         print('WARNING: backend has no set_env_scripted_opps; scripted-opp pool ignored.', flush=True)
+
+    if scripted_pfsp_enabled:
+        backend.set_pfsp_weights(
+            pufferl,
+            np.asarray(scripted_opps_list, dtype=np.int32),
+            scripted_cum_weights,
+        )
 
     return {
         'pool_dir': pool_dir,
@@ -329,12 +417,98 @@ def setup(pufferl, backend, args, run_id):
         'last_snapshot_step': int(pufferl.global_step),
         'scripted_opps_list': scripted_opps_list,
         'scripted_envs': scripted_opps,
+        'scripted_pfsp_enabled': scripted_pfsp_enabled,
+        'scripted_sampling': scripted_sampling,
+        'scripted_floor_weight': scripted_floor_weight,
+        'scripted_winrate_alpha': scripted_winrate_alpha,
+        'scripted_update_interval': scripted_update_interval,
+        'scripted_base_weights': scripted_base_weights,
+        'scripted_winrates': scripted_winrates,
+        'scripted_games': np.zeros(len(scripted_opps_list), dtype=np.float64),
+        'scripted_weights': scripted_weights,
+        'scripted_cum_weights': scripted_cum_weights,
+        'scripted_last_update_step': int(pufferl.global_step),
+        'scripted_updates': 0,
     }
+
+
+def update_scripted_pfsp(pufferl, backend, pool_state):
+    '''Refresh adaptive scripted-opponent PFSP weights from C-side stats.'''
+    if not pool_state['scripted_pfsp_enabled']:
+        return
+
+    interval = pool_state['scripted_update_interval']
+    if interval > 0 and pufferl.global_step - pool_state['scripted_last_update_step'] < interval:
+        return
+
+    stats = backend.get_pfsp_stats(pufferl)
+    pool_size = int(stats['pool_size'])
+    if pool_size != len(pool_state['scripted_opps_list']):
+        raise RuntimeError(
+            f'scripted PFSP pool size mismatch: C={pool_size}, '
+            f'Python={len(pool_state["scripted_opps_list"])}')
+
+    wins = np.asarray(stats['wins'], dtype=np.float64)
+    episodes = np.asarray(stats['episodes'], dtype=np.float64)
+    for i, n in enumerate(episodes):
+        if n <= 0.0:
+            continue
+        observed = wins[i] / n
+        prev_games = pool_state['scripted_games'][i]
+        alpha = 1.0 if prev_games == 0.0 else pool_state['scripted_winrate_alpha']
+        pool_state['scripted_winrates'][i] = (
+            (1.0 - alpha) * pool_state['scripted_winrates'][i]
+            + alpha * observed
+        )
+        pool_state['scripted_games'][i] += n
+
+    weights, cum_weights = scripted_pfsp_weights(
+        pool_state['scripted_base_weights'],
+        pool_state['scripted_winrates'],
+        pool_state['scripted_sampling'],
+        pool_state['scripted_floor_weight'],
+    )
+    pool_state['scripted_weights'] = weights
+    pool_state['scripted_cum_weights'] = cum_weights
+    pool_state['scripted_last_update_step'] = int(pufferl.global_step)
+    pool_state['scripted_updates'] += 1
+    backend.set_pfsp_weights(
+        pufferl,
+        np.asarray(pool_state['scripted_opps_list'], dtype=np.int32),
+        cum_weights,
+    )
+
+
+def log_scripted_pfsp(pool_state, flat_logs):
+    '''Emit compact adaptive scripted-opponent diagnostics.'''
+    flat_logs['pool/scripted_envs'] = int(np.count_nonzero(pool_state['scripted_envs'] >= 0))
+    flat_logs['pool/scripted_opp_types'] = len(pool_state['scripted_opps_list'])
+    flat_logs['pool/scripted_pfsp_enabled'] = float(pool_state['scripted_pfsp_enabled'])
+    if not pool_state['scripted_pfsp_enabled']:
+        return
+
+    winrates = pool_state['scripted_winrates']
+    weights = pool_state['scripted_weights']
+    games = pool_state['scripted_games']
+    flat_logs['pool/scripted_pfsp_updates'] = pool_state['scripted_updates']
+    flat_logs['pool/scripted_games'] = float(games.sum())
+    flat_logs['pool/scripted_min_winrate'] = float(winrates.min())
+    flat_logs['pool/scripted_mean_winrate'] = float(winrates.mean())
+    flat_logs['pool/scripted_max_winrate'] = float(winrates.max())
+    flat_logs['pool/scripted_max_weight'] = float(weights.max())
+    flat_logs['pool/scripted_min_weight'] = float(weights.min())
+    for opp, winrate, weight, n_games in zip(
+            pool_state['scripted_opps_list'], winrates, weights, games):
+        flat_logs[f'pool/scripted_opp_{opp}_winrate'] = float(winrate)
+        flat_logs[f'pool/scripted_opp_{opp}_weight'] = float(weight)
+        flat_logs[f'pool/scripted_opp_{opp}_games'] = float(n_games)
 
 
 def step(pufferl, backend, pool_state, flat_logs, epoch):
     if pool_state is None:
         return
+
+    update_scripted_pfsp(pufferl, backend, pool_state)
 
     n_window = float(flat_logs.get('env/n', 0.0))
     num_banks = pool_state['num_banks']
@@ -436,8 +610,7 @@ def step(pufferl, backend, pool_state, flat_logs, epoch):
     flat_logs['pool/size']     = len(pool_state['pool'])
     flat_logs['env/elo']       = pool_state['primary_elo']
     flat_logs['pool/num_banks'] = num_banks
-    flat_logs['pool/scripted_envs'] = int(np.count_nonzero(pool_state['scripted_envs'] >= 0))
-    flat_logs['pool/scripted_opp_types'] = len(pool_state['scripted_opps_list'])
+    log_scripted_pfsp(pool_state, flat_logs)
     total_score = 0.0
     total_n     = 0.0
     for b in range(num_banks):
