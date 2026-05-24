@@ -30,7 +30,8 @@ Main feedback:
 - Added the exact logged-score formula to the benchmark surface section.
 - Updated source notes and submission audit to separate logged score from archive `progress_score`.
 - Trimmed the abstract caveat after the final acceptance-risk pass.
-- Replaced the replay figure PNG with a JPEG embed after sequential PDF preview showed the JPEG path rendered cleanly.
+- Replaced the replay figure PNG with a stripped JPEG embed after sequential PDF preview showed the JPEG path rendered cleanly.
+- Omitted PDF date metadata and trailer IDs for double-blind submission hygiene.
 
 ## Validation
 
@@ -38,4 +39,5 @@ Main feedback:
 - `pdfinfo` reports 4 pages on letter paper.
 - `pdftocairo` renders all four pages, including the replay figure.
 - `rg -n '[;—]' papers/rlvg-inferno/paper_v0.tex` returns no matches.
+- Raw PDF strings contain no local paths, author identity strings, W&B ids, run ids, or date metadata.
 - `git diff --check` is clean.

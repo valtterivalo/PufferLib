@@ -6,7 +6,7 @@ Status: current after commit `49379faa9`.
 
 - Short-form limit: pass. `paper_v0.pdf` is 4 pages by `pdfinfo`.
 - References excluded from page limit: pass. The PDF includes references on page 4, still within 4 pages.
-- Double blind: pass in the PDF. The author field is `Anonymous Authors`, and the paper contains no local paths, W&B ids, personal names as authors, or `valtterivalo` references.
+- Double blind: pass in the PDF. The author field is `Anonymous Authors`, PDF date metadata is omitted, and raw PDF strings contain no local paths, W&B ids, personal names as authors, or `valtterivalo` references.
 - CFP fit: pass. The paper clearly targets benchmark design, alignment and evaluation in games, and practical RL systems for modern game-derived tasks.
 - LLM policy: compatible. The CFP allows LLM writing tools if human authors own correctness and originality.
 
@@ -26,7 +26,7 @@ Status: current after commit `49379faa9`.
 - The references to X articles are informal. They support systems context but should not be the only foundation for technical claims.
 - The result table is precise because it reports stored telemetry. The prose now warns that it is downsampled and not a precise public eval.
 - The PDF uses a real replay screenshot, but not an annotated figure with log snippets. That would improve the inspectability argument if there is time.
-- The replay figure is embedded as JPEG. The original PNG rendered correctly as an image file, but the PDF preview path was more robust after switching away from the PNG embed.
+- The replay figure is embedded as stripped JPEG. The original PNG rendered correctly as an image file, but the PDF preview path was more robust after switching away from the PNG embed.
 
 ## Next Useful Edits
 
