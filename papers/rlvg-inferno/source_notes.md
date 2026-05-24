@@ -59,8 +59,11 @@ Status: draft notes, not submission prose.
   - run: `whl5mxay`
   - group: `full-inferno-redemption-repro-compact`
   - tag: `j6bgoiu4-redemption-compact`
+  - patch shape: compact Redemption overhead mapping, 5-action PvE head, old overhead-off action maps to Redemption in Inferno
   - result: wins `0.489635`, score `0.736389`, wave `66.720871`, minimum Zuk HP `240.535599`
   - checkpoint: `latest_eval_0000000255655936.bin`
+- Current source now uses `ENCOUNTER_OVERHEAD_DIM_PVE_REDEMPTION`, so the public Inferno mask surface is 89 logits. The stored compact Redemption checkpoint belongs to the preceding local compact action mapping and should be described as development telemetry, not as a frozen-schema benchmark score.
+- The two stored compact checkpoint binaries are both `7,997,440` bytes. The one-output-logit delta to the current 89-logit decoder would be `512 * 4 = 2,048` bytes, matching the expected incompatibility when loading the compact 88-logit checkpoint into the current explicit-Redemption decoder.
 - `checkpoints/osrs_inferno/redemption_j6bgoiu4_compact/run_whl5mxay.json` shows 171,704,320 agent steps and approximately 256k SPS at the final logged point.
 - The same run JSON records `eval_episodes = 10000`, `seed = 73`, `train.seed = 42`, and `state_curriculum_mode = 1`.
 - The downsampled metric arrays include final `env/n = 6223`, but this should not be treated as a precise eval denominator because `pufferlib/pufferl.py` only exits evaluation after `env/n > eval_episodes`.
