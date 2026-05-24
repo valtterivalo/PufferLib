@@ -37,7 +37,8 @@ Status: draft notes, not submission prose.
 - `ocean/osrs/encounters/inferno/encounter_inferno_forecast.inc` defines the 744 feature observation layout from player state, phase, pillars, NPC slots, step-out forecasts, pending hits, and pending Zuk healer sparks.
 - `ocean/osrs/encounters/inferno/encounter_inferno_obs_mask.inc` fail-loud checks that the obs writer emits exactly `INF_NUM_OBS` features and tracks zero-valid action heads.
 - `ocean/osrs/encounters/inferno/encounter_inferno_render_snapshot.inc` logs wins, damage, prayer correctness, idle ticks, brews, blood healing, wave, NPC kills, gear switches, and minimum Zuk HP.
-- `ocean/osrs/encounters/inferno/encounter_inferno_render_snapshot.inc` also defines a progress score for Zuk transitions, with a win returning 2.0 and partial Zuk progress derived from minimum Zuk HP plus late-add milestones.
+- `ocean/osrs/encounters/inferno/encounter_inferno_render_snapshot.inc` defines the archive `progress_score` for Zuk transitions, with a win returning 2.0 and partial Zuk progress derived from minimum Zuk HP plus late-add milestones.
+- `ocean/osrs_inferno/binding.c` logs the table `score` separately. For full-start runs, `my_log` uses `wins + (1 - wins) * wave / 69 * 0.5`. This is the paper result metric, not the archive `progress_score`.
 
 ## Training And Checkpoint Facts
 
