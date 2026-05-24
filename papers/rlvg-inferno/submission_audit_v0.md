@@ -1,6 +1,6 @@
 # RLVG Inferno Submission Audit v0
 
-Status: current after commit `2f45f72fe`.
+Status: paper artifact current after commit `c682e5a39`. Venue and format documentation checked through `b0b517b4a`.
 
 ## Hard Requirements
 
