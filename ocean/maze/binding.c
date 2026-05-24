@@ -44,11 +44,16 @@ Env* my_vec_init(int* num_envs_out, int* buffer_env_starts, int* buffer_env_coun
         }
 
         State* level = &levels[i];
-        level->width = sz;
-        level->height = sz;
+        init_state(level, max_size, 1);
 
         float difficulty = (float)rand_r(&map_rng) / (float)(RAND_MAX);
-        create_maze_level(level, difficulty, i);
+        Grid level_env = {0};
+        level_env.max_size = max_size;
+        level_env.num_agents = 1;
+        level_env.agents = level->agents;
+        level_env.maze = level->maze;
+        create_maze_level(&level_env, sz, sz, difficulty, i);
+        get_state(&level_env, level);
     }
 
     // Allocate all environments
@@ -62,7 +67,7 @@ Env* my_vec_init(int* num_envs_out, int* buffer_env_starts, int* buffer_env_coun
     unsigned int env_rng = 42;
     for (int i = 0; i < num_envs; i++) {
         Env* env = &envs[i];
-        env->num_levels = num_maps;
+        env->num_maps = num_maps;
         env->num_agents = 1;
         env->levels = levels;
         env->rng = rand_r(&env_rng);
@@ -82,11 +87,20 @@ Env* my_vec_init(int* num_envs_out, int* buffer_env_starts, int* buffer_env_coun
 }
 
 void my_vec_close(Env* envs) {
-    free(envs[0].levels);
+    if (envs == NULL) {
+        return;
+    }
+    State* levels = envs[0].levels;
+    int num_maps = envs[0].num_maps;
+    for (int i = 0; i < num_maps; i++) {
+        free(levels[i].agents);
+        free(levels[i].maze);
+    }
+    free(levels);
 }
 
 void my_init(Env* env, Dict* kwargs) {
-    env->num_levels = (int)dict_get(kwargs, "num_maps")->value;
+    env->num_maps = (int)dict_get(kwargs, "num_maps")->value;
     env->num_agents = 1;
 }
 

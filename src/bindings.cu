@@ -150,6 +150,9 @@ void rollouts(pybind11::object pufferl_obj) {
             }
         }
     }
+    if (pufferl.curriculum_enabled) {
+        curriculum_rollout_begin(&pufferl);
+    }
 
     static_vec_omp_step(pufferl.vec);
     float sec = (float)(wall_clock() - t0);
@@ -486,7 +489,48 @@ std::unique_ptr<PuffeRL> create_pufferl(py::dict args) {
     // Priority
     hypers.prio_alpha = get_config(train_kwargs, "prio_alpha");
     hypers.prio_beta0 = get_config(train_kwargs, "prio_beta0");
+    hypers.anneal_prio_beta = get_config(train_kwargs, "anneal_prio_beta");
+    int state_curriculum_mode = (int)get_config(train_kwargs, "state_curriculum_mode");
+    if (state_curriculum_mode < 0 || state_curriculum_mode > 1) {
+        throw std::runtime_error("state_curriculum_mode must be 0 or 1");
+    }
+    hypers.state_buffer_size = get_config(train_kwargs, "state_buffer_size");
+    hypers.cl_frac = get_config(train_kwargs, "cl_frac");
+    hypers.anneal_cl = get_config(train_kwargs, "anneal_cl");
+    hypers.warmup_states = get_config(train_kwargs, "warmup_states");
+    hypers.state_checkpoint_interval = get_config(train_kwargs, "state_checkpoint_interval");
+    if (hypers.cl_frac < 0.0f || hypers.cl_frac > 0.9f) {
+        throw std::runtime_error("cl_frac must be in [0, 0.9]");
+    }
+    if (hypers.warmup_states < 0) {
+        throw std::runtime_error("warmup_states must be nonnegative");
+    }
+    if (state_curriculum_mode == 0) {
+        hypers.state_buffer_size = 0;
+        hypers.cl_frac = 0.0f;
+        hypers.warmup_states = 0;
+    } else {
+        if (hypers.state_buffer_size <= 0) {
+            throw std::runtime_error("state_curriculum_mode=1 requires state_buffer_size > 0");
+        }
+        if (hypers.cl_frac <= 0.0f) {
+            throw std::runtime_error("state_curriculum_mode=1 requires cl_frac > 0");
+        }
+        if (hypers.warmup_states > hypers.state_buffer_size) {
+            throw std::runtime_error("warmup_states must be <= state_buffer_size");
+        }
+        if (hypers.state_checkpoint_interval <= 0) {
+            throw std::runtime_error("state_checkpoint_interval must be positive");
+        }
+    }
+    hypers.explore_alpha = get_config(train_kwargs, "explore_alpha");
+    hypers.explore_beta = get_config(train_kwargs, "explore_beta");
+    hypers.explore_decay = get_config(train_kwargs, "explore_decay");
+    if (hypers.explore_decay < 0.0f || hypers.explore_decay > 1.0f) {
+        throw std::runtime_error("explore_decay must be in [0, 1]");
+    }
     hypers.reset_state = get_config(args, "reset_state");
+    hypers.terminal_reset_state = get_config(train_kwargs, "terminal_reset_state");
     // Base-level config ([base] section becomes top-level in args)
     hypers.cudagraphs = get_config(args, "cudagraphs");
     hypers.profile = get_config(args, "profile");
@@ -620,6 +664,17 @@ PYBIND11_MODULE(_C, m) {
         .def_readwrite("vtrace_c_clip", &HypersT::vtrace_c_clip)
         .def_readwrite("prio_alpha", &HypersT::prio_alpha)
         .def_readwrite("prio_beta0", &HypersT::prio_beta0)
+        .def_readwrite("anneal_prio_beta", &HypersT::anneal_prio_beta)
+        .def_readwrite("state_buffer_size", &HypersT::state_buffer_size)
+        .def_readwrite("cl_frac", &HypersT::cl_frac)
+        .def_readwrite("anneal_cl", &HypersT::anneal_cl)
+        .def_readwrite("warmup_states", &HypersT::warmup_states)
+        .def_readwrite("state_checkpoint_interval", &HypersT::state_checkpoint_interval)
+        .def_readwrite("explore_alpha", &HypersT::explore_alpha)
+        .def_readwrite("explore_beta", &HypersT::explore_beta)
+        .def_readwrite("explore_decay", &HypersT::explore_decay)
+        .def_readwrite("reset_state", &HypersT::reset_state)
+        .def_readwrite("terminal_reset_state", &HypersT::terminal_reset_state)
         .def_readwrite("cudagraphs", &HypersT::cudagraphs)
         .def_readwrite("profile", &HypersT::profile)
         .def_readwrite("rank", &HypersT::rank)

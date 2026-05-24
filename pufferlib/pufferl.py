@@ -162,13 +162,33 @@ def print_dashboard(args, model_size, flat_logs, clear=False, idx=[0],
     print('\033[0;0H' + capture.get())
 
 def validate_config(args):
-    minibatch_size = args['train']['minibatch_size']
-    horizon = args['train']['horizon']
+    train_args = args['train']
+    minibatch_size = train_args['minibatch_size']
+    horizon = train_args['horizon']
     total_agents = args['vec']['total_agents']
     assert (minibatch_size % horizon) == 0, \
         f'minibatch_size {minibatch_size} must be divisible by horizon {horizon}'
     assert minibatch_size <= horizon * total_agents, \
         f'minibatch_size {minibatch_size} > total_agents {total_agents} * horizon {horizon}'
+    state_curriculum_mode = train_args.get('state_curriculum_mode', 0)
+    assert state_curriculum_mode in (0, 1), \
+        f'state_curriculum_mode must be 0 or 1, got {state_curriculum_mode}'
+    state_buffer_size = train_args.get('state_buffer_size', 0)
+    cl_frac = train_args.get('cl_frac', 0.0)
+    warmup_states = train_args.get('warmup_states', 0)
+    assert 0.0 <= cl_frac <= 0.9, f'cl_frac must be in [0, 0.9], got {cl_frac}'
+    assert warmup_states >= 0, f'warmup_states must be nonnegative, got {warmup_states}'
+    if state_curriculum_mode == 0:
+        return
+    assert state_buffer_size > 0, 'state_curriculum_mode=1 requires state_buffer_size > 0'
+    assert cl_frac > 0.0, 'state_curriculum_mode=1 requires cl_frac > 0'
+    assert warmup_states <= state_buffer_size, \
+        f'warmup_states {warmup_states} > state_buffer_size {state_buffer_size}'
+    assert train_args.get('state_checkpoint_interval', 0) > 0, \
+        'state_checkpoint_interval must be positive'
+    explore_decay = train_args.get('explore_decay', 0.0)
+    assert 0.0 <= explore_decay <= 1.0, \
+        f'explore_decay must be in [0, 1], got {explore_decay}'
 
 def _resolve_backend(args):
     compiled_env = getattr(_C, 'env_name', None)

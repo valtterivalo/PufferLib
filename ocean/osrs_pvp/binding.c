@@ -68,6 +68,13 @@ typedef struct {
     int scripted_opp_type;
 } PvpEnv;
 
+typedef struct {
+    OsrsEnv pvp;
+    int ocean_acts_staging[NUM_ACTION_HEADS];
+    int ocean_acts_staging_p1[NUM_ACTION_HEADS];
+    unsigned char ocean_term_staging;
+} PvpStateSnapshot;
+
 #define OBS_SIZE OCEAN_OBS_SIZE
 #define NUM_ATNS NUM_ACTION_HEADS
 #define ACT_SIZES {LOADOUT_DIM, COMBAT_DIM, OVERHEAD_DIM, FOOD_DIM, POTION_DIM, KARAMBWAN_DIM, VENG_DIM, OFFENSIVE_DIM, MOVE_DIM}
@@ -76,8 +83,74 @@ typedef struct {
 #define MY_USES_TAGS
 #define MY_USES_PERM
 #define MY_USES_SCRIPTED_OPPS
+#define PUFFER_STATE_T PvpStateSnapshot
+#define PUFFER_STATE_STORE pvp_state_store
+#define PUFFER_STATE_LOAD pvp_state_load
+#define PUFFER_STATE_REFRESH pvp_state_refresh
 /* PvP uses obs-embedded action mask (rollout splitter handles via has_mask),
    not the separate MY_ACTION_MASK buffer path. */
+
+static void pvp_env_rewire_internal_buffers(Env* env) {
+    env->pvp.observations = env->pvp._obs_buf;
+    env->pvp.actions = env->pvp._acts_buf;
+    env->pvp.rewards = env->pvp._rews_buf;
+    env->pvp.terminals = env->pvp._terms_buf;
+    env->pvp.action_masks = env->pvp._masks_buf;
+    env->pvp.ocean_io.agent_actions = env->ocean_acts_staging;
+    env->pvp.ocean_io.agent_terminals = &env->ocean_term_staging;
+}
+
+static void pvp_env_rewire_rollout_buffers(Env* env) {
+    env->pvp.ocean_io.agent_obs = env->obs_ptr[0]
+        ? (float*)env->obs_ptr[0] : (float*)env->observations;
+    env->pvp.ocean_io.agent_obs_p1 = env->obs_ptr[1] ? (float*)env->obs_ptr[1] : NULL;
+    env->pvp.ocean_io.agent_rewards = env->rewards;
+    env->pvp.ocean_io.agent_actions = env->ocean_acts_staging;
+    env->pvp.ocean_io.agent_terminals = &env->ocean_term_staging;
+}
+
+static void pvp_env_rewire_after_load(Env* env, void* collision_map, void* client,
+        const void* encounter_def, void* encounter_state, void* encounter_context) {
+    pvp_env_rewire_internal_buffers(env);
+    env->pvp.collision_map = collision_map;
+    env->pvp.client = client;
+    env->pvp.encounter_def = encounter_def;
+    env->pvp.encounter_state = encounter_state;
+    env->pvp.encounter_context = encounter_context;
+    pvp_env_rewire_rollout_buffers(env);
+}
+
+static void pvp_state_store(Env* env, PvpStateSnapshot* out) {
+    out->pvp = env->pvp;
+    memcpy(out->ocean_acts_staging, env->ocean_acts_staging, sizeof(out->ocean_acts_staging));
+    memcpy(out->ocean_acts_staging_p1, env->ocean_acts_staging_p1, sizeof(out->ocean_acts_staging_p1));
+    out->ocean_term_staging = env->ocean_term_staging;
+}
+
+static void pvp_state_load(Env* env, const PvpStateSnapshot* in) {
+    void* collision_map = env->pvp.collision_map;
+    void* client = env->pvp.client;
+    const void* encounter_def = env->pvp.encounter_def;
+    void* encounter_state = env->pvp.encounter_state;
+    void* encounter_context = env->pvp.encounter_context;
+    env->pvp = in->pvp;
+    memcpy(env->ocean_acts_staging, in->ocean_acts_staging, sizeof(env->ocean_acts_staging));
+    memcpy(env->ocean_acts_staging_p1, in->ocean_acts_staging_p1, sizeof(env->ocean_acts_staging_p1));
+    env->ocean_term_staging = in->ocean_term_staging;
+    pvp_env_rewire_after_load(env, collision_map, client,
+        encounter_def, encounter_state, encounter_context);
+}
+
+static void pvp_state_refresh(Env* env) {
+    ocean_write_obs(&env->pvp);
+    if (env->pvp.ocean_io.agent_obs_p1) ocean_write_obs_p1(&env->pvp);
+    env->pvp.ocean_io.agent_rewards[0] = 0.0f;
+    env->pvp.ocean_io.agent_terminals[0] = 0;
+    env->terminals[0] = 0.0f;
+    if (env->terminal_ptr[1]) *env->terminal_ptr[1] = 0.0f;
+    if (env->reward_ptr[1]) *env->reward_ptr[1] = 0.0f;
+    env->boundary_reached = 0;
+}
 
 static void pvp_env_set_gear_tier(Env* env, int tier) {
     if (tier == -1) {
@@ -188,14 +261,8 @@ void c_step(Env* env) {
 }
 
 void c_reset(Env* env) {
-    /* Wire pvp's obs writes to the per-slot rollout buffers. obs_ptr[] is set
-       by my_setup_perm (called from create_static_vec or static_vec_set_perm). */
-    env->pvp.ocean_io.agent_obs = env->obs_ptr[0]
-        ? (float*)env->obs_ptr[0] : (float*)env->observations;
-    env->pvp.ocean_io.agent_obs_p1 = env->obs_ptr[1] ? (float*)env->obs_ptr[1] : NULL;
-    env->pvp.ocean_io.agent_rewards = env->rewards;
-    env->pvp.ocean_io.agent_terminals = &env->ocean_term_staging;
-    env->pvp.ocean_io.agent_actions = env->ocean_acts_staging;
+    pvp_env_rewire_internal_buffers(env);
+    pvp_env_rewire_rollout_buffers(env);
 
     pvp_reset(&env->pvp);
     ocean_write_obs(&env->pvp);
@@ -305,6 +372,7 @@ void my_init(Env* env, Dict* kwargs) {
     env->boundary_reached = 0;
 
     pvp_init(&env->pvp);
+    pvp_env_rewire_internal_buffers(env);
     DictItem* seed_kw = dict_get_unsafe(kwargs, "seed");
     if (seed_kw) {
         int seed = (int)seed_kw->value;
@@ -319,8 +387,6 @@ void my_init(Env* env, Dict* kwargs) {
 
     env->pvp.ocean_io.agent_obs = NULL;
     env->pvp.ocean_io.agent_rewards = env->pvp._rews_buf;
-    env->pvp.ocean_io.agent_terminals = &env->ocean_term_staging;
-    env->pvp.ocean_io.agent_actions = env->ocean_acts_staging;
     env->pvp.ocean_io.agent_obs_p1 = NULL;
     env->pvp.ocean_io.selfplay_mask = NULL;
 
