@@ -875,8 +875,10 @@ def _restore_sweep_observations(env_name, args, sweep_obj):
         if not scores or not costs or not timesteps:
             continue
 
+        filtered_scores, filtered_costs, filtered_timesteps = (
+            _filter_sweep_observation_series(scores, costs, timesteps))
         restored_from_run = 0
-        for score, cost, timestep in zip(scores, costs, timesteps):
+        for score, cost, timestep in zip(filtered_scores, filtered_costs, filtered_timesteps):
             observation_args = deepcopy(logged_args)
             observation_args['train']['total_timesteps'] = timestep
             if not _is_sweep_observation_compatible(args, observation_args, sweep_obj):
