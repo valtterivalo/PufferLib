@@ -1,8 +1,8 @@
 \documentclass[10pt]{article}
 \usepackage[margin=0.72in]{geometry}
 \usepackage{booktabs}
+\usepackage{graphicx}
 \usepackage{hyperref}
-\usepackage{tikz}
 
 \hypersetup{colorlinks=true, urlcolor=blue, linkcolor=black, citecolor=black}
 \setlength{\parskip}{0.35em}
@@ -61,28 +61,9 @@ Reward and score are separate. Reward can be shaped, swept, and replaced. Score 
 
 \begin{figure}[t]
 \centering
-\resizebox{0.95\linewidth}{!}{
-\begin{tikzpicture}[
-  box/.style={draw, rounded corners, thick, align=center, text width=2.75cm, minimum height=1.0cm, fill=white},
-  arrow/.style={->, thick}
-]
-\node[box, draw=teal!65!black, minimum height=1.45cm] (sim) at (0,0) {OSRS Inferno Sim\\{\small waves, pillars, Zuk shield}\\{\small one step = one tick}};
-\node[box, draw=purple!70!black] (obs) at (4.2,1.45) {Observation\\{\small 744 player-readable features}};
-\node[box, draw=orange!80!black] (act) at (4.2,0) {Action Interface\\{\small 9 heads, 89 mask logits}};
-\node[box, draw=teal!80!black] (log) at (4.2,-1.45) {Replay and Logs\\{\small win, wave, prayer, healers, Zuk HP}};
-\node[box, draw=red!70!black, minimum height=1.45cm] (train) at (8.3,1.1) {PufferLib 4\\{\small PufferNet, MinGRU, CUDA}\\{\small Protein sweeps}};
-\node[box, draw=blue!70!black, minimum height=1.25cm] (watch) at (8.3,-1.35) {Human Inspection\\{\small watched mistakes stay legible}};
-\draw[arrow] (sim) -- (obs);
-\draw[arrow] (obs) -- (train);
-\draw[arrow] (train) -- (act);
-\draw[arrow] (act) -- (sim);
-\draw[arrow] (sim) -- (log);
-\draw[arrow] (log) -- (watch);
-\node[align=center, fill=teal!8, draw=teal!60!black, rounded corners, inner sep=5pt] at (4.2,-2.75) {\small If watched behavior looks wrong, simulator state, masks, replay, and logs should explain why.};
-\end{tikzpicture}
-}
-\caption{The benchmark contract. The policy trains on symbolic state and structured masks, while replay and logs expose the same facts for human inspection.}
-\label{fig:contract}
+\fbox{\includegraphics[width=0.93\linewidth]{figures/inferno_replay_wave69.png}}
+\caption{An Inferno wave 69 replay frame. The same contract elements used for training and debugging are visible: tick, target label, arena state, player and Zuk positions, HP and prayer counters, minimap, inventory, and action tabs.}
+\label{fig:replay}
 \end{figure}
 
 \section{Training and Iteration Loop}
