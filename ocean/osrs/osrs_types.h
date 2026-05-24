@@ -1185,6 +1185,7 @@ typedef struct {
 
     uint32_t rng_state;
     uint32_t rng_seed;
+    uint32_t rng_reset_count;
     int has_rng_seed;
 
     // Async action processing (OSRS-accurate timing)

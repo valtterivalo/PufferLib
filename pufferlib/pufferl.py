@@ -404,6 +404,158 @@ def _wandb_eval_payload(flat_logs, agent_steps, env_name=None):
             payload[key] = value
     return _filter_wandb_payload(payload, env_name)
 
+def _pvp_score_from_means(wins, damage_dealt, damage_received):
+    dmg_diff = damage_dealt / 99.0 - damage_received / 99.0
+    dmg_diff_score = min(1.0, max(0.0, 0.5 + 0.25 * dmg_diff))
+    return 0.7 * wins + 0.3 * dmg_diff_score, dmg_diff_score
+
+def _weighted_mean(values, weights):
+    values = np.asarray(values, dtype=np.float64)
+    weights = np.asarray(weights, dtype=np.float64)
+    if values.shape != weights.shape:
+        raise ValueError('weighted mean values and weights must have the same shape')
+    if values.ndim != 1 or values.size == 0:
+        raise ValueError('weighted mean requires a nonempty 1-D array')
+    if np.any(weights < 0.0) or not np.all(np.isfinite(weights)) or weights.sum() <= 0.0:
+        raise ValueError(f'weights must be finite nonnegative values: {weights!r}')
+    return float(np.dot(values, weights / weights.sum()))
+
+def _config_sequence(section, key, cast):
+    return selfplay.parse_config_sequence(section.get(key, ''), cast, key)
+
+def _fixed_eval_enabled(args):
+    return bool(args.get('fixed_eval', {}).get('enabled', 0))
+
+def _fixed_eval_args(args, opponent, seed):
+    eval_args = deepcopy(args)
+    eval_args['wandb'] = False
+    eval_args['checkpoint_interval'] = 0
+    eval_args['reset_state'] = True
+    eval_args.setdefault('selfplay', {})['enabled'] = 0
+    cfg = eval_args.get('fixed_eval', {})
+
+    vec = eval_args.setdefault('vec', {})
+    vec['total_agents'] = int(cfg.get('total_agents', min(512, vec['total_agents'])))
+    vec['num_buffers'] = int(cfg.get('num_buffers', min(2, vec.get('num_buffers', 1))))
+    if vec['total_agents'] % vec['num_buffers'] != 0:
+        raise ValueError('fixed_eval.total_agents must be divisible by fixed_eval.num_buffers')
+
+    train = eval_args.setdefault('train', {})
+    train['horizon'] = int(cfg.get('horizon', train['horizon']))
+    eval_batch_size = train['horizon'] * vec['total_agents']
+    train['minibatch_size'] = int(cfg.get('minibatch_size', eval_batch_size))
+    train['total_timesteps'] = eval_batch_size
+    train['cpu_inference'] = 1
+
+    env = eval_args.setdefault('env', {})
+    env['opponent_type'] = int(opponent)
+    env['use_rollout_opponent'] = 0
+    env['seed'] = int(seed)
+    return eval_args
+
+def _collect_pvp_fixed_eval_opponent(backend, args, model_path, opponent, episodes, seed):
+    eval_args = _fixed_eval_args(args, opponent, seed)
+    pufferl = backend.create_pufferl(eval_args)
+    backend.load_weights(pufferl, model_path)
+
+    total_n = 0.0
+    sums = defaultdict(float)
+    while total_n < episodes:
+        backend.rollouts(pufferl)
+        flat = dict(unroll_nested_dict(backend.log(pufferl)))
+        n = float(flat.get('env/n', 0.0))
+        if n <= 0.0:
+            continue
+        total_n += n
+        for key in (
+                'env/wins',
+                'env/damage_dealt',
+                'env/damage_received',
+                'env/episode_return',
+                'env/episode_length',
+                'env/prayer_correct_rate',
+                'env/food_remaining',
+                'env/karambwan_remaining',
+                'env/brews_remaining',
+                'env/spec_remaining',
+                'env/attacks_landed',
+                'env/off_prayer_hits'):
+            if key in flat:
+                sums[key] += float(flat[key]) * n
+
+    backend.close(pufferl)
+    means = {key: value / total_n for key, value in sums.items()}
+    wins = means.get('env/wins', 0.0)
+    damage_dealt = means.get('env/damage_dealt', 0.0)
+    damage_received = means.get('env/damage_received', 0.0)
+    score, dmg_diff_score = _pvp_score_from_means(wins, damage_dealt, damage_received)
+    means['env/score'] = score
+    means['env/dmg_diff_score'] = dmg_diff_score
+    means['env/n'] = total_n
+    return means
+
+def _run_pvp_fixed_eval_suite(backend, args, model_path):
+    cfg = args.get('fixed_eval', {})
+    opponents = _config_sequence(cfg, 'opponents', int)
+    if not opponents:
+        raise ValueError('fixed_eval.enabled requires fixed_eval.opponents')
+    weights = _config_sequence(cfg, 'opponent_weights', float)
+    if weights and len(weights) != len(opponents):
+        raise ValueError('fixed_eval.opponent_weights length must match opponents')
+    if not weights:
+        weights = [1.0] * len(opponents)
+
+    episodes = int(cfg.get('episodes_per_opponent', 2048))
+    if episodes <= 0:
+        raise ValueError('fixed_eval.episodes_per_opponent must be positive')
+    seed = int(cfg.get('seed', 424242))
+    if seed <= 0:
+        raise ValueError('fixed_eval.seed must be positive')
+
+    started = time.time()
+    logs = {}
+    scores, wins, dmg_scores, ns = [], [], [], []
+    for idx, opponent in enumerate(opponents):
+        means = _collect_pvp_fixed_eval_opponent(
+            backend, args, model_path, opponent, episodes, seed + 100_000 * idx)
+        prefix = f'env/fixed_eval_opp_{opponent}'
+        logs[f'{prefix}_score'] = means['env/score']
+        logs[f'{prefix}_wins'] = means['env/wins']
+        logs[f'{prefix}_dmg_diff_score'] = means['env/dmg_diff_score']
+        logs[f'{prefix}_damage_dealt'] = means.get('env/damage_dealt', 0.0)
+        logs[f'{prefix}_damage_received'] = means.get('env/damage_received', 0.0)
+        logs[f'{prefix}_n'] = means['env/n']
+        scores.append(means['env/score'])
+        wins.append(means['env/wins'])
+        dmg_scores.append(means['env/dmg_diff_score'])
+        ns.append(means['env/n'])
+
+    holdout_scores, holdout_wins = [], []
+    for idx, opponent in enumerate(_config_sequence(cfg, 'holdout_opponents', int)):
+        means = _collect_pvp_fixed_eval_opponent(
+            backend, args, model_path, opponent, episodes, seed + 10_000_000 + 100_000 * idx)
+        prefix = f'env/fixed_eval_holdout_opp_{opponent}'
+        logs[f'{prefix}_score'] = means['env/score']
+        logs[f'{prefix}_wins'] = means['env/wins']
+        logs[f'{prefix}_dmg_diff_score'] = means['env/dmg_diff_score']
+        logs[f'{prefix}_damage_dealt'] = means.get('env/damage_dealt', 0.0)
+        logs[f'{prefix}_damage_received'] = means.get('env/damage_received', 0.0)
+        logs[f'{prefix}_n'] = means['env/n']
+        holdout_scores.append(means['env/score'])
+        holdout_wins.append(means['env/wins'])
+
+    logs['env/fixed_eval_score'] = _weighted_mean(scores, weights)
+    logs['env/fixed_eval_wins'] = _weighted_mean(wins, weights)
+    logs['env/fixed_eval_dmg_diff_score'] = _weighted_mean(dmg_scores, weights)
+    logs['env/fixed_eval_score_unweighted'] = float(np.mean(scores))
+    logs['env/fixed_eval_wins_unweighted'] = float(np.mean(wins))
+    logs['env/fixed_eval_n'] = float(np.sum(ns))
+    logs['env/fixed_eval_elapsed_sec'] = time.time() - started
+    if holdout_scores:
+        logs['env/fixed_eval_holdout_score'] = float(np.mean(holdout_scores))
+        logs['env/fixed_eval_holdout_wins'] = float(np.mean(holdout_wins))
+    return logs
+
 def _resolve_checkpoint_load_path(args, load_path=None, allow_auto_latest=False,
         require_checkpoint=False):
     '''Resolve a checkpoint load request for train and eval entrypoints.'''
@@ -904,17 +1056,17 @@ def _train_body(env_name, args, sweep_obj=None, result_queue=None, verbose=False
                         step=pufferl.global_step,
                     )
 
-            if target_key not in flat_logs:
-                continue
+            has_target_metric = target_key in flat_logs
 
             if epoch < train_epochs:
                 all_logs.append(flat_logs)
 
                 if (sweep_obj is not None
+                        and has_target_metric
                         and pufferl.global_step > min(0.20*total_timesteps, 100_000_000) and
                         sweep_obj.early_stop(logs, target_key)):
                     break
-            elif flat_logs['env/n'] > args['eval_episodes']:
+            elif has_target_metric and flat_logs['env/n'] > args['eval_episodes']:
                 if args['wandb']:
                     wandb.log(
                         _wandb_eval_payload(
@@ -932,8 +1084,28 @@ def _train_body(env_name, args, sweep_obj=None, result_queue=None, verbose=False
                 step=pufferl.global_step,
             )
 
+        fixed_eval_model_path = ''
+        if _fixed_eval_enabled(args):
+            fixed_eval_model_path = os.path.join(checkpoint_dir, 'fixed_eval_weights.bin')
+            backend.save_weights(pufferl, fixed_eval_model_path)
+
         print_dashboard(args, model_size, flat_logs)
         backend.close(pufferl)
+
+    if fixed_eval_model_path:
+        fixed_eval_logs = _run_pvp_fixed_eval_suite(backend, args, fixed_eval_model_path)
+        flat_logs = {**flat_logs, **fixed_eval_logs}
+        if 'uptime' in flat_logs:
+            flat_logs['uptime'] += fixed_eval_logs['env/fixed_eval_elapsed_sec']
+        if args['wandb']:
+            import wandb
+            wandb.log(
+                _wandb_train_payload(fixed_eval_logs, flat_logs.get('agent_steps', 0),
+                    args['env_name']),
+                step=flat_logs.get('agent_steps', 0),
+            )
+        if not args.get('fixed_eval', {}).get('keep_weights', 0):
+            os.remove(fixed_eval_model_path)
 
     if target_key not in flat_logs:
         if result_queue is not None:

@@ -327,7 +327,8 @@ void pvp_reset(OsrsEnv* env) {
             fprintf(stderr, "Error: seed must be non-zero (use seed=1 or higher in reset())\n");
             abort();
         }
-        env->rng_state = env->rng_seed;
+        env->rng_state = env->rng_seed + 0x9E3779B9u * env->rng_reset_count;
+        env->rng_reset_count += 1;
     } else {
         env->rng_state = (uint32_t)(size_t)env ^ 0xDEADBEEF;
     }
@@ -711,6 +712,7 @@ void pvp_step(OsrsEnv* env) {
  */
 void pvp_seed(OsrsEnv* env, uint32_t seed) {
     env->rng_seed = seed;
+    env->rng_reset_count = 0;
     env->has_rng_seed = 1;
 }
 

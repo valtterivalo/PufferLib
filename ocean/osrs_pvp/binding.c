@@ -305,6 +305,17 @@ void my_init(Env* env, Dict* kwargs) {
     env->boundary_reached = 0;
 
     pvp_init(&env->pvp);
+    DictItem* seed_kw = dict_get_unsafe(kwargs, "seed");
+    if (seed_kw) {
+        int seed = (int)seed_kw->value;
+        if (seed <= 0) {
+            fprintf(stderr, "osrs_pvp env.seed must be positive when set\n");
+            abort();
+        }
+        env->pvp.rng_seed = (uint32_t)seed + 9973u * (uint32_t)env->rng;
+        env->pvp.rng_reset_count = 0;
+        env->pvp.has_rng_seed = 1;
+    }
 
     env->pvp.ocean_io.agent_obs = NULL;
     env->pvp.ocean_io.agent_rewards = env->pvp._rews_buf;

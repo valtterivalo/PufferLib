@@ -3,7 +3,12 @@ import sys
 import pytest
 
 from pufferlib import selfplay
-from pufferlib.pufferl import load_config
+from pufferlib.pufferl import (
+    _fixed_eval_args,
+    _pvp_score_from_means,
+    _weighted_mean,
+    load_config,
+)
 
 
 def test_selfplay_sequence_parser_accepts_literal_tuple_and_comma_text():
@@ -72,6 +77,42 @@ def test_scripted_env_assignment_uses_dispatcher_for_adaptive_pfsp():
     assert assignments.tolist() == [-1, selfplay.OPP_PFSP, selfplay.OPP_PFSP, -1, -1, -1]
 
 
+def test_fixed_eval_score_uses_same_pvp_score_contract():
+    score, dmg_diff_score = _pvp_score_from_means(
+        wins=0.5,
+        damage_dealt=99.0,
+        damage_received=0.0,
+    )
+
+    assert dmg_diff_score == 0.75
+    assert score == pytest.approx(0.575)
+
+
+def test_weighted_mean_rejects_empty_or_zero_weight_inputs():
+    assert _weighted_mean([0.0, 1.0], [1.0, 3.0]) == 0.75
+    with pytest.raises(ValueError):
+        _weighted_mean([], [])
+    with pytest.raises(ValueError):
+        _weighted_mean([1.0, 2.0], [0.0, 0.0])
+
+
+def test_fixed_eval_args_construct_valid_native_backend_config(monkeypatch):
+    monkeypatch.setattr(sys, 'argv', ['pytest'])
+    monkeypatch.setenv('PUFFER_CONFIG_FILE', 'config/ocean/osrs_pvp_v2_sweep.ini')
+    args = load_config('osrs_pvp')
+
+    eval_args = _fixed_eval_args(args, opponent=8, seed=12345)
+
+    assert eval_args['train']['total_timesteps'] > 0
+    assert eval_args['train']['total_timesteps'] == (
+        eval_args['train']['horizon'] * eval_args['vec']['total_agents'])
+    assert eval_args['train']['minibatch_size'] == eval_args['train']['total_timesteps']
+    assert eval_args['train']['cpu_inference'] == 1
+    assert eval_args['selfplay']['enabled'] == 0
+    assert eval_args['env']['opponent_type'] == 8
+    assert eval_args['env']['seed'] == 12345
+
+
 def test_osrs_pvp_v2_sweep_scripted_pool_config_survives_literal_eval(monkeypatch):
     monkeypatch.setattr(sys, 'argv', ['pytest'])
     monkeypatch.setenv('PUFFER_CONFIG_FILE', 'config/ocean/osrs_pvp_v2_sweep.ini')
@@ -82,6 +123,10 @@ def test_osrs_pvp_v2_sweep_scripted_pool_config_survives_literal_eval(monkeypatc
         args['selfplay']['scripted_opp_pool'], int, 'scripted_opp_pool')
     weights = selfplay.parse_config_sequence(
         args['selfplay']['scripted_opp_weights'], float, 'scripted_opp_weights')
+    eval_opponents = selfplay.parse_config_sequence(
+        args['fixed_eval']['opponents'], int, 'fixed_eval.opponents')
+    eval_weights = selfplay.parse_config_sequence(
+        args['fixed_eval']['opponent_weights'], float, 'fixed_eval.opponent_weights')
 
     assert opponents == [
         1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
@@ -92,3 +137,9 @@ def test_osrs_pvp_v2_sweep_scripted_pool_config_survives_literal_eval(monkeypatc
     assert args['selfplay']['scripted_dispatcher_opp'] == 16
     assert args['selfplay']['scripted_env_schedule'] == 'adaptive'
     assert args['selfplay']['scripted_env_floor_frac'] == 0.05
+    assert args['sweep']['metric'] == 'fixed_eval_score'
+    assert args['fixed_eval']['enabled'] == 1
+    assert eval_opponents == opponents
+    assert eval_weights == weights
+    assert selfplay.parse_config_sequence(
+        args['fixed_eval']['holdout_opponents'], int, 'fixed_eval.holdout_opponents') == [26]
