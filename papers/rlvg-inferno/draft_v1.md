@@ -58,7 +58,7 @@ The hardest engineering lesson was that the simulator and learner could not be d
 
 ## 4. Checkpoint Evidence
 
-The current checkpoint result is a compact recurrent policy trained in the active development branch. It uses the compact Redemption overhead mapping, state curriculum, priority replay, 4096 agents, a two-layer 512 hidden PufferNet, and 171.7M environment steps. The stored run summary reports the following development metrics:
+The current checkpoint result is a compact recurrent policy trained in the active development branch. It uses the compact Redemption overhead mapping, state curriculum, priority replay, 4096 agents, a two-layer 512 hidden PufferNet, and 171.7M environment steps. The run config requested 10,000 evaluation episodes, and the final logged row reports 6,223 completed evaluation episodes with normal-start fraction 1.0.
 
 | Metric | Value |
 | --- | ---: |
@@ -67,6 +67,9 @@ The current checkpoint result is a compact recurrent policy trained in the activ
 | Score | 0.736389 |
 | Average final wave | 66.720871 |
 | Average minimum Zuk HP on failed runs | 240.535599 |
+| Prayer correctness | 0.853395 |
+| Fraction reaching Zuk healers | 0.847019 |
+| Fraction killing all Zuk healers | 0.718624 |
 | Final logged throughput | about 256k steps per second |
 
 These numbers should be read with care. The environment, action surface, and visual contract were still changing during development. The result proves that the benchmark can train policies that clear the full encounter and reach late-Zuk states often. It does not prove that the task is solved, that the checkpoint is robust across future environment versions, or that the policy has no simulator-specific habits.

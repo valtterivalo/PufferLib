@@ -62,6 +62,8 @@ Status: draft notes, not submission prose.
   - result: wins `0.489635`, score `0.736389`, wave `66.720871`, minimum Zuk HP `240.535599`
   - checkpoint: `latest_eval_0000000255655936.bin`
 - `checkpoints/osrs_inferno/redemption_j6bgoiu4_compact/run_whl5mxay.json` shows 171,704,320 agent steps and approximately 256k SPS at the final logged point.
+- The same run JSON records `eval_episodes = 10000`, `seed = 73`, `train.seed = 42`, `state_curriculum_mode = 1`, and final logged `env/n = 6223`.
+- Final logged metrics also include `env/frac_normal = 1.0`, `env/prayer_correct_rate = 0.853395`, `env/frac_healer_spawned_normal = 0.847019`, `env/frac_all_zuk_healers_dead_normal = 0.718624`, and `env/frac_min_hp_le_150_normal = 0.615780`.
 - Earlier checkpoint folder `pzargw7t_best_20260517` records a higher logged win rate in the older action surface:
   - wins `0.656983`
   - score `0.819216`
