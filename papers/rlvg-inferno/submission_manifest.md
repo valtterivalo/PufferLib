@@ -51,6 +51,7 @@ Expected results:
 - Final external critique found no fatal acceptance risks.
 - The score-definition issue was fixed by separating logged training score from archive `progress_score`.
 - The final caveat frames the checkpoint as development telemetry, not a frozen-schema benchmark evaluation.
-- OpenReview visible venue metadata was checked on 2026-05-25. The listed deadline matches the local CFP AoE deadline, and no extra style-file requirement was visible there.
+- The live RLVG 2026 submission guide and OpenReview venue metadata were checked on 2026-05-25. They match the local CFP mechanics used for this artifact.
 - The submission audit is in `papers/rlvg-inferno/submission_audit_v0.md`.
 - The final external wording review is in `papers/rlvg-inferno/review_notes_v7.md`.
+- The live venue mechanics check is in `papers/rlvg-inferno/review_notes_v8.md`.
