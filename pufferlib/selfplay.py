@@ -84,6 +84,87 @@ def scripted_pfsp_weights(base_weights, winrates, mode, floor):
     return raw / raw.sum(), normalize_to_cumulative_thousand(raw)
 
 
+def scripted_env_hardness(winrates, base_weights, neutral_winrate, solved_winrate):
+    '''Return weighted remaining scripted-opponent hardness in [0, 1].'''
+    rates = np.asarray(winrates, dtype=np.float64)
+    priors = np.asarray(base_weights, dtype=np.float64)
+    if rates.shape != priors.shape:
+        raise RuntimeError('scripted hardness winrates and priors must have the same shape')
+    if rates.ndim != 1 or rates.size == 0:
+        raise RuntimeError('scripted hardness requires a nonempty 1-D winrate array')
+    if not np.all(np.isfinite(rates)) or np.any(rates < 0.0) or np.any(rates > 1.0):
+        raise RuntimeError(f'scripted winrates must be finite probabilities: {winrates!r}')
+    if not np.all(np.isfinite(priors)) or np.any(priors < 0.0) or priors.sum() <= 0.0:
+        raise RuntimeError(f'scripted priors must be finite nonnegative weights: {base_weights!r}')
+    if not (0.0 <= neutral_winrate < solved_winrate <= 1.0):
+        raise RuntimeError(
+            'scripted_env_neutral_winrate must be below scripted_env_solved_winrate')
+
+    difficulty = (solved_winrate - rates) / (solved_winrate - neutral_winrate)
+    difficulty = np.clip(difficulty, 0.0, 1.0)
+    return float(np.dot(difficulty, priors / priors.sum()))
+
+
+def adaptive_scripted_env_pct(max_pct, floor_frac, hardness):
+    '''Scale scripted traffic from max_pct down to a max-relative floor.'''
+    if not (0.0 <= max_pct <= 1.0):
+        raise RuntimeError(f'scripted_env_pct must be in [0, 1], got {max_pct}')
+    if not (0.0 <= floor_frac <= 1.0):
+        raise RuntimeError(f'scripted_env_floor_frac must be in [0, 1], got {floor_frac}')
+    if not (0.0 <= hardness <= 1.0):
+        raise RuntimeError(f'scripted hardness must be in [0, 1], got {hardness}')
+
+    floor_pct = max_pct * floor_frac
+    return floor_pct + (max_pct - floor_pct) * hardness
+
+
+def scripted_env_target_count(num_eligible_envs, effective_pct):
+    '''Convert an effective scripted fraction to an eligible-env count.'''
+    if num_eligible_envs < 0:
+        raise RuntimeError(f'num_eligible_envs must be nonnegative, got {num_eligible_envs}')
+    if not (0.0 <= effective_pct <= 1.0):
+        raise RuntimeError(f'effective scripted env pct must be in [0, 1], got {effective_pct}')
+    if num_eligible_envs == 0 or effective_pct == 0.0:
+        return 0
+    target = int(round(num_eligible_envs * effective_pct))
+    return min(num_eligible_envs, max(1, target))
+
+
+def assign_scripted_envs(
+        num_envs, eligible_env_indices, target_count, scripted_pfsp_enabled,
+        scripted_dispatcher_opp, scripted_opps_list, scripted_base_weights, rng):
+    '''Build per-env scripted opponent assignments for the current curriculum mix.'''
+    if target_count < 0:
+        raise RuntimeError(f'target_count must be nonnegative, got {target_count}')
+    eligible = np.asarray(eligible_env_indices, dtype=np.int32)
+    if target_count > len(eligible):
+        raise RuntimeError(
+            f'target_count {target_count} exceeds eligible scripted envs {len(eligible)}')
+
+    scripted_opps = np.full(num_envs, -1, dtype=np.int32)
+    if target_count == 0:
+        return scripted_opps
+
+    if len(scripted_opps_list) == 0:
+        raise RuntimeError('scripted env assignment requires scripted_opp_pool')
+
+    chosen = eligible[:target_count]
+    if scripted_pfsp_enabled:
+        scripted_opps[chosen] = scripted_dispatcher_opp
+        return scripted_opps
+
+    weights = np.asarray(scripted_base_weights, dtype=np.float64)
+    if weights.ndim != 1 or weights.size != len(scripted_opps_list):
+        raise RuntimeError('scripted base weights must match scripted_opp_pool')
+    if not np.all(np.isfinite(weights)) or np.any(weights < 0.0) or weights.sum() <= 0.0:
+        raise RuntimeError(f'scripted base weights must be finite nonnegative: {weights!r}')
+    probs = weights / weights.sum()
+    opp_assignments = rng.choice(len(scripted_opps_list), size=target_count, p=probs)
+    for env_idx, opp_idx in zip(chosen, opp_assignments):
+        scripted_opps[env_idx] = scripted_opps_list[opp_idx]
+    return scripted_opps
+
+
 def sample_opponent(pool, rng, mode='sqrt'):
     '''Pick a historical opponent from the pool. Mode selects the weighting:
 
@@ -340,64 +421,51 @@ def setup(pufferl, backend, args, run_id):
         raise RuntimeError('selfplay.scripted_opp_weights requires scripted_opp_pool')
 
     scripted_env_pct = float(sp.get('scripted_env_pct', 0.0))
+    scripted_env_schedule = str(sp.get('scripted_env_schedule', 'fixed')).strip()
+    scripted_env_floor_frac = float(sp.get('scripted_env_floor_frac', 0.05))
+    scripted_env_neutral_winrate = float(sp.get('scripted_env_neutral_winrate', 0.5))
+    scripted_env_solved_winrate = float(sp.get('scripted_env_solved_winrate', 0.9))
     scripted_sampling = str(sp.get('scripted_sampling', 'fixed')).strip()
     scripted_floor_weight = float(sp.get('scripted_floor_weight', 0.01))
     scripted_winrate_alpha = float(sp.get('scripted_winrate_alpha', 0.3))
     scripted_update_interval = int(sp.get('scripted_update_interval', 1_000_000))
     scripted_dispatcher_opp = int(sp.get('scripted_dispatcher_opp', OPP_PFSP))
-    selfplay_envs_total = sum(
-        1 for t in tags if t == 0
-    )
-    target_scripted = int(round(selfplay_envs_total * scripted_env_pct))
+    if scripted_env_schedule not in ('fixed', 'adaptive'):
+        raise RuntimeError(f'unknown selfplay.scripted_env_schedule: {scripted_env_schedule}')
+    if scripted_env_schedule == 'adaptive' and scripted_sampling == 'fixed':
+        raise RuntimeError('adaptive scripted env schedule requires adaptive scripted_sampling')
+    if scripted_env_schedule == 'adaptive' and not scripted_opps_list:
+        raise RuntimeError('adaptive scripted env schedule requires scripted_opp_pool')
 
-    scripted_opps = np.full(num_envs, -1, dtype=np.int32)
+    scripted_env_indices = np.where(tags == 0)[0].astype(np.int32)
     scripted_pfsp_enabled = (
         scripted_sampling != 'fixed'
         and len(scripted_opps_list) > 0
-        and target_scripted > 0
+        and scripted_env_pct > 0.0
     )
     scripted_winrates = np.full(len(scripted_opps_list), 0.5, dtype=np.float64)
     scripted_base_weights = np.asarray(weights_list, dtype=np.float64)
     scripted_weights = np.zeros(len(scripted_opps_list), dtype=np.float64)
     scripted_cum_weights = np.zeros(len(scripted_opps_list), dtype=np.int32)
 
-    if scripted_opps_list and target_scripted > 0:
-        # selfplay env indices (tags == 0)
-        sp_env_indices = np.where(tags == 0)[0]
-        # Pick the first target_scripted of them to be scripted envs
-        chosen = sp_env_indices[:target_scripted]
-        if scripted_pfsp_enabled:
-            if scripted_dispatcher_opp != OPP_PFSP:
-                raise RuntimeError('scripted_dispatcher_opp must be OPP_PFSP for adaptive scripted PFSP')
-            if not hasattr(backend, 'set_pfsp_weights') or not hasattr(backend, 'get_pfsp_stats'):
-                raise RuntimeError('adaptive scripted PFSP requires set_pfsp_weights and get_pfsp_stats')
-            scripted_opps[chosen] = scripted_dispatcher_opp
-            scripted_weights, scripted_cum_weights = scripted_pfsp_weights(
-                scripted_base_weights,
-                scripted_winrates,
-                scripted_sampling,
-                scripted_floor_weight,
-            )
-        else:
-            w = scripted_base_weights / scripted_base_weights.sum()
-            opp_assignments = rng.choice(
-                len(scripted_opps_list), size=target_scripted, p=w)
-            for env_idx, opp_idx in zip(chosen, opp_assignments):
-                scripted_opps[env_idx] = scripted_opps_list[opp_idx]
-
-    if hasattr(backend, 'set_env_scripted_opps'):
-        backend.set_env_scripted_opps(pufferl, scripted_opps)
-    elif np.any(scripted_opps >= 0):
-        print('WARNING: backend has no set_env_scripted_opps; scripted-opp pool ignored.', flush=True)
-
     if scripted_pfsp_enabled:
+        if scripted_dispatcher_opp != OPP_PFSP:
+            raise RuntimeError('scripted_dispatcher_opp must be OPP_PFSP for adaptive scripted PFSP')
+        if not hasattr(backend, 'set_pfsp_weights') or not hasattr(backend, 'get_pfsp_stats'):
+            raise RuntimeError('adaptive scripted PFSP requires set_pfsp_weights and get_pfsp_stats')
+        scripted_weights, scripted_cum_weights = scripted_pfsp_weights(
+            scripted_base_weights,
+            scripted_winrates,
+            scripted_sampling,
+            scripted_floor_weight,
+        )
         backend.set_pfsp_weights(
             pufferl,
             np.asarray(scripted_opps_list, dtype=np.int32),
             scripted_cum_weights,
         )
 
-    return {
+    pool_state = {
         'pool_dir': pool_dir,
         'pool': [{'path': bootstrap_path, 'elo': elo_init,
                   'winrate': 0.5, 'n_games': 0}],
@@ -416,9 +484,19 @@ def setup(pufferl, backend, args, run_id):
         'elo_k': elo_k,
         'last_snapshot_step': int(pufferl.global_step),
         'scripted_opps_list': scripted_opps_list,
-        'scripted_envs': scripted_opps,
+        'scripted_env_indices': scripted_env_indices,
+        'scripted_envs': np.full(num_envs, -1, dtype=np.int32),
+        'scripted_env_schedule': scripted_env_schedule,
+        'scripted_env_cap_pct': scripted_env_pct,
+        'scripted_env_floor_frac': scripted_env_floor_frac,
+        'scripted_env_neutral_winrate': scripted_env_neutral_winrate,
+        'scripted_env_solved_winrate': scripted_env_solved_winrate,
+        'scripted_env_effective_pct': 0.0,
+        'scripted_env_hardness': 0.0,
+        'scripted_target_envs': 0,
         'scripted_pfsp_enabled': scripted_pfsp_enabled,
         'scripted_sampling': scripted_sampling,
+        'scripted_dispatcher_opp': scripted_dispatcher_opp,
         'scripted_floor_weight': scripted_floor_weight,
         'scripted_winrate_alpha': scripted_winrate_alpha,
         'scripted_update_interval': scripted_update_interval,
@@ -430,6 +508,68 @@ def setup(pufferl, backend, args, run_id):
         'scripted_last_update_step': int(pufferl.global_step),
         'scripted_updates': 0,
     }
+    refresh_scripted_env_mix(pufferl, backend, pool_state, force=True)
+    return pool_state
+
+
+def scripted_env_mix_target(pool_state):
+    '''Compute the current scripted env target from schedule and winrates.'''
+    cap_pct = pool_state['scripted_env_cap_pct']
+    if pool_state['scripted_env_schedule'] == 'fixed':
+        hardness = 1.0
+        effective_pct = cap_pct
+    elif pool_state['scripted_env_schedule'] == 'adaptive':
+        hardness = scripted_env_hardness(
+            pool_state['scripted_winrates'],
+            pool_state['scripted_base_weights'],
+            pool_state['scripted_env_neutral_winrate'],
+            pool_state['scripted_env_solved_winrate'],
+        )
+        effective_pct = adaptive_scripted_env_pct(
+            cap_pct,
+            pool_state['scripted_env_floor_frac'],
+            hardness,
+        )
+    else:
+        raise RuntimeError(
+            f'unknown scripted env schedule: {pool_state["scripted_env_schedule"]}')
+
+    target = scripted_env_target_count(
+        len(pool_state['scripted_env_indices']),
+        effective_pct,
+    )
+    return target, effective_pct, hardness
+
+
+def refresh_scripted_env_mix(pufferl, backend, pool_state, force=False):
+    '''Apply the current scripted-env curriculum mix to the native envs.'''
+    if not pool_state['scripted_opps_list']:
+        return
+
+    target, effective_pct, hardness = scripted_env_mix_target(pool_state)
+    changed = target != pool_state['scripted_target_envs']
+    pool_state['scripted_env_effective_pct'] = effective_pct
+    pool_state['scripted_env_hardness'] = hardness
+    pool_state['scripted_target_envs'] = target
+    if not force and not changed:
+        return
+    if target == 0 and not np.any(pool_state['scripted_envs'] >= 0):
+        return
+    if not hasattr(backend, 'set_env_scripted_opps'):
+        raise RuntimeError('scripted-opponent pool requires set_env_scripted_opps')
+
+    scripted_envs = assign_scripted_envs(
+        backend.num_envs(pufferl),
+        pool_state['scripted_env_indices'],
+        target,
+        pool_state['scripted_pfsp_enabled'],
+        pool_state['scripted_dispatcher_opp'],
+        pool_state['scripted_opps_list'],
+        pool_state['scripted_base_weights'],
+        pool_state['rng'],
+    )
+    pool_state['scripted_envs'] = scripted_envs
+    backend.set_env_scripted_opps(pufferl, scripted_envs)
 
 
 def update_scripted_pfsp(pufferl, backend, pool_state):
@@ -477,11 +617,19 @@ def update_scripted_pfsp(pufferl, backend, pool_state):
         np.asarray(pool_state['scripted_opps_list'], dtype=np.int32),
         cum_weights,
     )
+    refresh_scripted_env_mix(pufferl, backend, pool_state)
 
 
 def log_scripted_pfsp(pool_state, flat_logs):
     '''Emit compact adaptive scripted-opponent diagnostics.'''
     flat_logs['pool/scripted_envs'] = int(np.count_nonzero(pool_state['scripted_envs'] >= 0))
+    flat_logs['pool/scripted_target_envs'] = int(pool_state['scripted_target_envs'])
+    flat_logs['pool/scripted_env_cap_pct'] = float(pool_state['scripted_env_cap_pct'])
+    flat_logs['pool/scripted_env_effective_pct'] = float(pool_state['scripted_env_effective_pct'])
+    flat_logs['pool/scripted_env_floor_frac'] = float(pool_state['scripted_env_floor_frac'])
+    flat_logs['pool/scripted_env_hardness'] = float(pool_state['scripted_env_hardness'])
+    flat_logs['pool/scripted_env_adaptive'] = float(
+        pool_state['scripted_env_schedule'] == 'adaptive')
     flat_logs['pool/scripted_opp_types'] = len(pool_state['scripted_opps_list'])
     flat_logs['pool/scripted_pfsp_enabled'] = float(pool_state['scripted_pfsp_enabled'])
     if not pool_state['scripted_pfsp_enabled']:

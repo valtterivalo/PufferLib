@@ -1,5 +1,7 @@
 import sys
 
+import pytest
+
 from pufferlib import selfplay
 from pufferlib.pufferl import load_config
 
@@ -34,6 +36,42 @@ def test_scripted_pfsp_respects_static_priors():
     assert weights[1] == 0.8
 
 
+def test_adaptive_scripted_env_pct_decays_after_scripts_are_solved():
+    neutral_hardness = selfplay.scripted_env_hardness(
+        winrates=[0.5, 0.5],
+        base_weights=[1.0, 1.0],
+        neutral_winrate=0.5,
+        solved_winrate=0.9,
+    )
+    solved_hardness = selfplay.scripted_env_hardness(
+        winrates=[0.95, 0.95],
+        base_weights=[1.0, 1.0],
+        neutral_winrate=0.5,
+        solved_winrate=0.9,
+    )
+
+    assert neutral_hardness == 1.0
+    assert solved_hardness == 0.0
+    assert selfplay.adaptive_scripted_env_pct(0.4, 0.05, neutral_hardness) == 0.4
+    assert selfplay.adaptive_scripted_env_pct(
+        0.4, 0.05, solved_hardness) == pytest.approx(0.02)
+
+
+def test_scripted_env_assignment_uses_dispatcher_for_adaptive_pfsp():
+    assignments = selfplay.assign_scripted_envs(
+        num_envs=6,
+        eligible_env_indices=[1, 2, 4, 5],
+        target_count=2,
+        scripted_pfsp_enabled=True,
+        scripted_dispatcher_opp=selfplay.OPP_PFSP,
+        scripted_opps_list=[8, 25],
+        scripted_base_weights=[1.0, 1.0],
+        rng=None,
+    )
+
+    assert assignments.tolist() == [-1, selfplay.OPP_PFSP, selfplay.OPP_PFSP, -1, -1, -1]
+
+
 def test_osrs_pvp_v2_sweep_scripted_pool_config_survives_literal_eval(monkeypatch):
     monkeypatch.setattr(sys, 'argv', ['pytest'])
     monkeypatch.setenv('PUFFER_CONFIG_FILE', 'config/ocean/osrs_pvp_v2_sweep.ini')
@@ -52,3 +90,5 @@ def test_osrs_pvp_v2_sweep_scripted_pool_config_survives_literal_eval(monkeypatc
     assert len(weights) == len(opponents)
     assert args['selfplay']['scripted_sampling'] == 'pfsp_hard'
     assert args['selfplay']['scripted_dispatcher_opp'] == 16
+    assert args['selfplay']['scripted_env_schedule'] == 'adaptive'
+    assert args['selfplay']['scripted_env_floor_frac'] == 0.05
