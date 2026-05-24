@@ -97,12 +97,16 @@ Status: draft notes, not submission prose.
   - PufferLib 3 introduced Protein, Puffer Advantage, and a high-speed Ocean workflow.
   - The blog frames score and wall-clock cost as the sweep target, not a single handpicked run.
 - PufferLib arXiv: https://arxiv.org/abs/2406.12905
+  - Title: PufferLib: Making Reinforcement Learning Libraries and Environments Play Nice
+  - Author: Joseph Suarez
   - PufferLib wraps diverse environments and scales them from classic benchmarks to complex simulators.
 - PufferLib GitHub: https://github.com/PufferAI/PufferLib
   - Public branch is currently 4.0 and repo description matches the open-source toolkit.
 - OSRS Wiki Inferno page: https://oldschool.runescape.wiki/w/Inferno
   - The Inferno is a solo minigame with 69 waves, a level 1400 TzKal-Zuk final boss, no restocking between waves, and a mandatory shield mechanic in the final fight.
 - MinGRU paper: https://arxiv.org/abs/2410.01201
+  - Title: Were RNNs All We Needed?
+  - Authors: Leo Feng, Frederick Tung, Mohamed Osama Ahmed, Yoshua Bengio, and Hossein Hajimirsadeghi
   - Minimal GRU and LSTM variants are designed for parallel training and fewer parameters.
 - Highway Networks: https://arxiv.org/abs/1505.00387
   - Gated highway connections help train deep networks.

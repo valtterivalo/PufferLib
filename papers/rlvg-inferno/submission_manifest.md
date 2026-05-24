@@ -1,21 +1,21 @@
 # RLVG Inferno Submission Manifest
 
-Status: generated 2026-05-25 02:25 EEST at commit `c682e5a3941aef12034c140df5a843b050366d25`.
+Status: generated 2026-05-25 for the current checked-out paper artifacts.
 
 ## Primary Artifact
 
 - PDF: `papers/rlvg-inferno/paper_v0.pdf`
-- SHA-256: `32ac5b581d0513090f77056669a687c40f18f2b31ba0cb24fdbce08ad385d5ba`
+- SHA-256: `1fc3b0436c1dcebdfb2e1a03d9c60af08a36997f2237554024fc234700f1dca5`
 - Pages: 4
 - Page size: letter
-- File size: 434497 bytes
+- File size: 434857 bytes
 - Author metadata: blank
 - Date metadata: omitted
 
 ## Source Artifacts
 
 - TeX: `papers/rlvg-inferno/paper_v0.tex`
-- TeX SHA-256: `0ac38fc0e6388d4d1afe1f862ab29436650dbfc9fa42ed87b591ca4f38a29d14`
+- TeX SHA-256: `82c4389336edb188c5c0b4fbffaa89f39736ecc04c7770ef4c409db896c03ffc`
 - Replay figure: `papers/rlvg-inferno/figures/inferno_replay_wave69.jpg`
 - Replay figure SHA-256: `4ef69b90fd5276f71e9f844f1a7e4ca7d0b45dcfad54459cfc4a5ca128567369`
 
