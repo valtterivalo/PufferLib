@@ -9,6 +9,7 @@ Status: current after commit `2f45f72fe`.
 - Double blind: pass in the PDF. The author field is `Anonymous Authors`, PDF date metadata is omitted, and raw PDF strings contain no local paths, W&B ids, personal names as authors, or `valtterivalo` references.
 - CFP fit: pass. The paper clearly targets benchmark design, alignment and evaluation in games, and practical RL systems for modern game-derived tasks.
 - LLM policy: compatible. The CFP allows LLM writing tools if human authors own correctness and originality.
+- External venue check: pass. On 2026-05-25, the OpenReview RLVG 2026 venue page listed the submission deadline as May 28 2026 11:59 UTC, which matches May 27 23:59 AoE. Its visible text points authors to the venue website and does not add a separate style-file requirement beyond the local CFP.
 
 ## Evidence Strength
 
