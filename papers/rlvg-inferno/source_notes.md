@@ -22,7 +22,7 @@ Status: draft notes, not submission prose.
 
 ## Inferno Environment Facts
 
-- `config/ocean/osrs_inferno.ini` states the compact surface directly: 9 action heads, 89 mask logits, 744 observation features, and long episodes in the 300 to 8000+ tick range.
+- `config/ocean/osrs_inferno.ini` states the compact surface directly: 9 action heads, 89 discrete choices, 744 base observation features, 89 embedded mask entries, and long episodes in the 300 to 8000+ tick range.
 - `ocean/osrs/encounters/inferno/encounter_inferno_model.inc` defines 69 waves, 18,000 max ticks, three pillars, Zuk, the moving shield, Jad, Zuk healers, and Inferno NPC definition ids.
 - `ocean/osrs/encounters/inferno/encounter_inferno_player_actions.inc` defines the 9 action heads:
   - movement
@@ -63,7 +63,7 @@ Status: draft notes, not submission prose.
   - patch shape: compact Redemption overhead mapping, 5-action PvE head, old overhead-off action maps to Redemption in Inferno
   - result: wins `0.489635`, score `0.736389`, wave `66.720871`, minimum Zuk HP `240.535599`
   - checkpoint: `latest_eval_0000000255655936.bin`
-- Current source now uses `ENCOUNTER_OVERHEAD_DIM_PVE_REDEMPTION`, so the public Inferno mask surface is 89 logits. The stored compact Redemption checkpoint belongs to the preceding local compact action mapping and should be described as development telemetry, not as a frozen-schema benchmark score.
+- Current source now uses `ENCOUNTER_OVERHEAD_DIM_PVE_REDEMPTION`, and the native binding reuses `INF_ACTION_DIMS_INIT`, so the public Inferno action surface is 89 choices with matching embedded mask entries. The stored compact Redemption checkpoint belongs to the preceding local compact action mapping and should be described as development telemetry, not as a frozen-schema benchmark score.
 - The two stored compact checkpoint binaries are both `7,997,440` bytes. The one-output-logit delta to the current 89-logit decoder would be `512 * 4 = 2,048` bytes, matching the expected incompatibility when loading the compact 88-logit checkpoint into the current explicit-Redemption decoder.
 - Remote read-only check on 2026-05-25: `/puffertank/docker/goexplore_redemption_repro_20260521` still exists and contains logs plus compact checkpoint files, but it is not a usable source checkout for compatibility evaluation. Git resolves the top level as `/puffertank/docker`, the subdir has no tracked source files, and the run-specific directory mainly contains artifacts.
 - `checkpoints/osrs_inferno/redemption_j6bgoiu4_compact/run_whl5mxay.json` shows 171,704,320 agent steps and approximately 256k SPS at the final logged point.

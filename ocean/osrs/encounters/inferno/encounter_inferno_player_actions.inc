@@ -8,9 +8,18 @@
 #define INF_HEAD_SPELL     6   /* 3: no_change, blood_barrage, ice_barrage */
 #define INF_HEAD_SPEC      7   /* 2: no_change, toggle (arm/disarm blowpipe spec) */
 #define INF_HEAD_OFFENSIVE 8   /* no_change, off, set_refresh_piety/rigour/augury */
-static const int INF_ACTION_DIMS[INF_NUM_ACTION_HEADS] = {
-    ENCOUNTER_MOVE_ACTIONS, ENCOUNTER_OVERHEAD_DIM_PVE_REDEMPTION, INF_OBS_NPCS+1, 4, 2, 4, 3, 2, ENCOUNTER_OFFENSIVE_DIM
-};
+#define INF_ACTION_DIMS_INIT { \
+    ENCOUNTER_MOVE_ACTIONS, \
+    ENCOUNTER_OVERHEAD_DIM_PVE_REDEMPTION, \
+    INF_OBS_NPCS+1, \
+    4, \
+    2, \
+    4, \
+    3, \
+    2, \
+    ENCOUNTER_OFFENSIVE_DIM \
+}
+static const int INF_ACTION_DIMS[INF_NUM_ACTION_HEADS] = INF_ACTION_DIMS_INIT;
 #define INF_ACTION_MASK_SIZE (ENCOUNTER_MOVE_ACTIONS + ENCOUNTER_OVERHEAD_DIM_PVE_REDEMPTION + INF_OBS_NPCS+1 + 4 + 2 + 4 + 3 + 2 + ENCOUNTER_OFFENSIVE_DIM)
 #define INF_OVERHEAD_SET_REFRESH_REDEMPTION ENCOUNTER_OVERHEAD_SET_REFRESH_SMITE
 

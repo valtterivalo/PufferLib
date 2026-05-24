@@ -2867,8 +2867,15 @@ static void test_inferno_obs_shape_includes_step_out_forecast_features(void) {
 
     ASSERT_INT_EQ("gear action head removed tank slot",
         INF_ACTION_DIMS[INF_HEAD_GEAR], 4);
+    ASSERT_INT_EQ("prayer action head includes redemption",
+        INF_ACTION_DIMS[INF_HEAD_PRAYER], ENCOUNTER_OVERHEAD_DIM_PVE_REDEMPTION);
     ASSERT_INT_EQ("action mask includes redemption",
         INF_ACTION_MASK_SIZE, 89);
+    ASSERT_SOURCE_BLOCK_CONTAINS("native binding reuses inferno action dims",
+        "ocean/osrs_inferno/binding.c",
+        "#define OBS_SIZE INF_TOTAL_OBS",
+        "#define OBS_TENSOR_T FloatTensor",
+        "#define ACT_SIZES INF_ACTION_DIMS_INIT");
     ASSERT_INT_EQ("npc obs includes compact target and dig signals",
         INF_TOTAL_NPC_OBS_SIZE, 415);
     ASSERT_INT_EQ("step-out forecast covers every movement action",
