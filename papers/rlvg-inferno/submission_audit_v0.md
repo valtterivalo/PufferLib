@@ -1,6 +1,6 @@
 # RLVG Inferno Submission Audit v0
 
-Status: paper artifact current after the final surface wording pass. Venue and format documentation checked through `b0b517b4a`.
+Status: paper artifact current for the checked-out submission bundle. Venue and format documentation checked through `b0b517b4a`.
 
 ## Hard Requirements
 
@@ -16,7 +16,7 @@ Status: paper artifact current after the final surface wording pass. Venue and f
 - Environment surface: strong. The 744 base observation features, 9 action heads, and 89 discrete choices with matching embedded mask entries come from current Inferno config, encounter constants, and native binding action dimensions.
 - OSRS task description: strong enough for short-form. The paper cites the OSRS Wiki for 69 waves, no restock, pillars, and Zuk shield mechanics.
 - PufferLib 4 systems claims: strong enough for workshop prose. The paper cites public Puffer docs, Joseph Suarez articles, MinGRU, and the PufferLib arXiv paper.
-- Checkpoint result: intentionally caveated. The stored checkpoint belongs to an earlier compact Redemption action surface, not the current explicit 89-logit surface. The paper now says this directly in the abstract and checkpoint section.
+- Checkpoint result: intentionally caveated. The stored checkpoint belongs to an earlier compact Redemption action surface, not the current explicit 89-choice surface. The paper says this directly in the abstract and checkpoint section.
 - Score definition: fixed. Table 3 reports the logged training score from `ocean/osrs_inferno/binding.c`, not the archive `progress_score` from the encounter snapshot path.
 - Fresh evaluation: missing. A frozen-schema no-render eval would make the result table stronger, but the current compact checkpoint size does not match the current decoder. The remote run directory still exists, but it contains artifacts rather than the exact source checkout needed for a clean compatibility eval.
 
