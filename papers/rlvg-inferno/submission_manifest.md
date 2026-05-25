@@ -5,17 +5,17 @@ Status: generated 2026-05-25 for the current checked-out paper artifacts.
 ## Primary Artifact
 
 - PDF: `papers/rlvg-inferno/paper_v0.pdf`
-- SHA-256: `dcecd09ab08ed88cb815e3044aaac581347506abaf1df7fb52fa27dc6e8a9580`
+- SHA-256: `991a88bf034bc0d66782fd08393166a855703596494bc46ed746971f0b6ba5f3`
 - Pages: 4
 - Page size: letter
-- File size: 434935 bytes
+- File size: 435023 bytes
 - Author metadata: blank
 - Date metadata: omitted
 
 ## Source Artifacts
 
 - TeX: `papers/rlvg-inferno/paper_v0.tex`
-- TeX SHA-256: `a1406aceeb635f5516c3c24152735d618adcceb3dbc6b0cf0154fb95ca27f930`
+- TeX SHA-256: `9b916bba0e12ed8bb2052522f97642d203cebd02ae104e976b88f1cbb7eeea0b`
 - Replay figure: `papers/rlvg-inferno/figures/inferno_replay_wave69.jpg`
 - Replay figure SHA-256: `4ef69b90fd5276f71e9f844f1a7e4ca7d0b45dcfad54459cfc4a5ca128567369`
 
@@ -56,3 +56,4 @@ Expected results:
 - The final external wording review is in `papers/rlvg-inferno/review_notes_v7.md`.
 - The live venue mechanics check is in `papers/rlvg-inferno/review_notes_v8.md`.
 - The final blocker review is in `papers/rlvg-inferno/review_notes_v9.md`.
+- The source-strength follow-up cites the PufferLib arXiv paper for the general PufferLib context.

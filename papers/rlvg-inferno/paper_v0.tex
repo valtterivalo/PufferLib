@@ -71,7 +71,7 @@ Reward and score are separate. Reward can be shaped, swept, and replaced. Score 
 
 \section{Training and Iteration Loop}
 
-PufferLib 4 made this loop practical because the bottleneck is the full edit-train-watch cycle. The public Puffer docs describe a native backend with CUDA C kernels, static memory, CUDA graphs, async environment workers, fused operations, action masks, PufferNet policies, and Protein sweeps \cite{puffer-docs}. Joseph Suarez's Puffer 4 engineering notes frame the same systems problem: small-model RL can spend too much time in framework overhead unless memory layout, kernel launch overhead, and fused computation are designed together \cite{puffer4-systems}.
+PufferLib was introduced as a way to make RL libraries and environments interoperate \cite{pufferlib-paper}. PufferLib 4 made this loop practical because the bottleneck is the full edit-train-watch cycle. The public Puffer docs describe a native backend with CUDA C kernels, static memory, CUDA graphs, async environment workers, fused operations, action masks, PufferNet policies, and Protein sweeps \cite{puffer-docs}. Joseph Suarez's Puffer 4 engineering notes frame the same systems problem: small-model RL can spend too much time in framework overhead unless memory layout, kernel launch overhead, and fused computation are designed together \cite{puffer4-systems}.
 
 The recurrent model is PufferNet, which combines MinGRU with highway-style output mixing. MinGRU supports parallel-scan training across sequences and cheap recurrent inference during rollouts \cite{puffernet, mingru}. This fits game tasks where the policy needs memory during rollout, but training must still use long enough sequences to learn delayed consequences.
 
