@@ -12,7 +12,7 @@ Status: upload checklist for the current `paper_v0.pdf` short-form artifact.
 
 ## Preflight
 
-- Confirm PDF SHA-256: `5b48d068765a5af807223c99460d4a3f381acbd2f2aa688597731b8672105e9c`.
+- Confirm PDF SHA-256: `362cd89bf8df9de9e422ddb1e5e2dfa41c3733cce1d3d80b0c0cae9287ffa249`.
 - Confirm the PDF has 4 pages on letter size.
 - Confirm `pdfinfo` shows blank author metadata, no JavaScript, and no encryption.
 - Confirm raw PDF string scans show no local paths, personal names, W&B ids, OpenAI, Codex, or pufferbox strings.
@@ -29,6 +29,7 @@ Status: upload checklist for the current `paper_v0.pdf` short-form artifact.
 - OpenReview form fields: `papers/rlvg-inferno/openreview_form_fields_v0.md`
 - Live venue check: `papers/rlvg-inferno/review_notes_v8.md`
 - Final blocker review: `papers/rlvg-inferno/review_notes_v9.md`
+- Final Extended Pro review: `papers/rlvg-inferno/review_notes_v11.md`
 
 ## Remaining Risks
 

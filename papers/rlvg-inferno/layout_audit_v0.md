@@ -16,7 +16,7 @@ Artifact: `papers/rlvg-inferno/paper_v0.pdf`.
 
 ## Rendered Page Sizes
 
-- Page 1: 393209 bytes
+- Page 1: 393601 bytes
 - Page 2: 731002 bytes
 - Page 3: 388322 bytes
 - Page 4: 333587 bytes

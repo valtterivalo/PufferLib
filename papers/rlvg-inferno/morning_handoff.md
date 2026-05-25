@@ -18,8 +18,8 @@ Status: submit ready short-form bundle for `paper_v0.pdf`.
 
 ## Current Hashes
 
-- PDF SHA-256: `5b48d068765a5af807223c99460d4a3f381acbd2f2aa688597731b8672105e9c`
-- TeX SHA-256: `eccb3d86709bcf181cfdc88b91eb90645711df132c298a11a3f0ebe137a51649`
+- PDF SHA-256: `362cd89bf8df9de9e422ddb1e5e2dfa41c3733cce1d3d80b0c0cae9287ffa249`
+- TeX SHA-256: `22cfeac58c9dfc19c096713179439836967823defa7585528b9d58590e486fc7`
 - Replay figure SHA-256: `4ef69b90fd5276f71e9f844f1a7e4ca7d0b45dcfad54459cfc4a5ca128567369`
 
 ## Current Artifact
@@ -64,6 +64,7 @@ Checked `https://sites.google.com/view/rlvg-2026/submission-guide` and OpenRevie
 - Venue and mechanics check: `papers/rlvg-inferno/review_notes_v8.md`
 - Final blocker review: `papers/rlvg-inferno/review_notes_v9.md`
 - Post-observation-row review: `papers/rlvg-inferno/review_notes_v10.md`
+- Final Extended Pro review: `papers/rlvg-inferno/review_notes_v11.md`
 - Layout audit: `papers/rlvg-inferno/layout_audit_v0.md`
 - Reference link audit: `papers/rlvg-inferno/reference_link_audit_v0.md`
 - Contract test audit: `papers/rlvg-inferno/contract_test_audit_v0.md`

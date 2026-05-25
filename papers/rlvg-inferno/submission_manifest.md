@@ -5,17 +5,17 @@ Status: generated 2026-05-25 for the current checked-out paper artifacts.
 ## Primary Artifact
 
 - PDF: `papers/rlvg-inferno/paper_v0.pdf`
-- SHA-256: `5b48d068765a5af807223c99460d4a3f381acbd2f2aa688597731b8672105e9c`
+- SHA-256: `362cd89bf8df9de9e422ddb1e5e2dfa41c3733cce1d3d80b0c0cae9287ffa249`
 - Pages: 4
 - Page size: letter
-- File size: 435082 bytes
+- File size: 435104 bytes
 - Author metadata: blank
 - Date metadata: omitted
 
 ## Source Artifacts
 
 - TeX: `papers/rlvg-inferno/paper_v0.tex`
-- TeX SHA-256: `eccb3d86709bcf181cfdc88b91eb90645711df132c298a11a3f0ebe137a51649`
+- TeX SHA-256: `22cfeac58c9dfc19c096713179439836967823defa7585528b9d58590e486fc7`
 - Replay figure: `papers/rlvg-inferno/figures/inferno_replay_wave69.jpg`
 - Replay figure SHA-256: `4ef69b90fd5276f71e9f844f1a7e4ca7d0b45dcfad54459cfc4a5ca128567369`
 
@@ -57,6 +57,7 @@ Expected results:
 - The live venue mechanics check is in `papers/rlvg-inferno/review_notes_v8.md`.
 - The final blocker review is in `papers/rlvg-inferno/review_notes_v9.md`.
 - The post-observation-row review is in `papers/rlvg-inferno/review_notes_v10.md`.
+- The final Extended Pro review is in `papers/rlvg-inferno/review_notes_v11.md`.
 - The layout audit is in `papers/rlvg-inferno/layout_audit_v0.md`.
 - The reference link audit is in `papers/rlvg-inferno/reference_link_audit_v0.md`.
 - The Inferno contract test audit is in `papers/rlvg-inferno/contract_test_audit_v0.md`.

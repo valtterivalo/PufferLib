@@ -16,6 +16,7 @@ Artifact: `papers/rlvg-inferno/paper_v0.pdf`.
 - The anonymity scan found only `Anonymous Authors` and false positives from ordinary words such as `wall-clock` and `report`.
 - Draft files still contain draft and placeholder language, but the submission artifact does not reference those drafts.
 - Replaced one awkward sentence, `A stricter public benchmark release needs more than more episodes`, with a direct frozen-protocol sentence.
+- Replaced `no-restock` with `without restocking` so extracted PDF text cannot collapse the hyphen.
 
 ## Conclusion
 

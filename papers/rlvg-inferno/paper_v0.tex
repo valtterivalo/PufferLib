@@ -27,7 +27,7 @@ The contribution is a benchmark design pattern: player-readable state, structure
 
 \section{Introduction and Contribution}
 
-The Old School RuneScape Inferno is a solo player-versus-monster challenge released in 2017. The player must survive 69 waves and defeat TzKal-Zuk to earn the infernal cape. The OSRS Wiki describes the activity as a no-restock encounter with three pillars that block projectiles during the waves and a mandatory shield mechanic in the final fight \cite{osrs-inferno}. That readability makes the Inferno a useful game-RL benchmark. If the agent dies to a Jal-Zek, it may have missed a magic prayer. If a pillar falls, it likely ignored nibblers. If Zuk shield health drops, it failed movement, target priority, or healer timing.
+The Old School RuneScape Inferno is a solo player-versus-monster challenge released in 2017. The player must survive 69 waves and defeat TzKal-Zuk to earn the infernal cape. The OSRS Wiki describes the activity as an encounter without restocking, with three pillars that block projectiles during the waves and a mandatory shield mechanic in the final fight \cite{osrs-inferno}. That readability makes the Inferno a useful game-RL benchmark. If the agent dies to a Jal-Zek, it may have missed a magic prayer. If a pillar falls, it likely ignored nibblers. If Zuk shield health drops, it failed movement, target priority, or healer timing.
 
 This paper is about benchmark construction. We do not wrap a game binary and report a leaderboard number. We build a simulator whose state, actions, masks, renderer, replay path, and logs form one contract. The same game facts used for training must be available when explaining watched behavior. If a policy looks wrong in replay, the logs and simulator should explain why.
 
