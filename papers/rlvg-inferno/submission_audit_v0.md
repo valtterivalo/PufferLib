@@ -38,4 +38,4 @@ Status: paper artifact current for the checked-out submission bundle. Venue and 
 - Add one small appendix or supplemental note later with exact checkpoint metadata if the workshop format allows appendices.
 - If a compatibility eval path is restored, replace Table 3 with explicit no-render evaluation over a pinned episode count.
 - The abstract caveat was trimmed after the final risk pass. Keep it short unless new evidence changes the claim.
-- If space opens, add one sentence saying human play was used as an action-interface test, not only as visual QA.
+- The paper now notes that human controls exposed action-interface problems, so no extra human-play sentence is pending.
