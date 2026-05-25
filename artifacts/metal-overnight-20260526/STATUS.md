@@ -186,3 +186,15 @@
 - Tested dead-transpose skip once.
 - `breakout` regressed from the current accepted median 2.29M SPS to 2.26M SPS, -1.30 percent. `g2048` improved 1.75 percent, but the plan requires no benchmark regression.
 - Decision: reject and revert. The change missed the LOC gate on `breakout`.
+
+## 2026-05-26 02:24 EEST
+
+- Dead-transpose rejection committed as `04f4f5f58`.
+- Starting fourth milestone 04 candidate.
+- Root-cause hypothesis: `puff_advantage_kernel` overwrites every advantage timestep except the final one, so the preceding full-buffer zero exists only to set `adv[horizon - 1] = 0`. Writing that final element inside the kernel should remove a full-buffer zero dispatch with identical advantage values.
+
+## 2026-05-26 02:26 EEST
+
+- Tested advantage-zero folding once.
+- Rejected immediately: `breakout` SPS regressed -1.74 percent and learning shape changed sharply, with training score 6.32. `g2048` SPS regressed -0.51 percent and training score dropped to 92.69.
+- Reverted. Root cause update: the full-buffer zero is not safely equivalent to per-row final-timestep writes in the current execution schedule, or it masks stale advantage state outside the assumed row coverage.
