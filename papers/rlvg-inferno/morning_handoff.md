@@ -2,9 +2,13 @@
 
 Status: submit ready short-form bundle for `paper_v0.pdf`.
 
-## Submit
+## OpenReview Upload
 
-- PDF: `papers/rlvg-inferno/paper_v0.pdf`
+- Upload only `papers/rlvg-inferno/paper_v0.pdf`.
+- Do not upload TeX source, notes, audits, local screenshots, checkpoint artifacts, W&B links, or repository paths.
+
+## Support Bundle
+
 - TeX: `papers/rlvg-inferno/paper_v0.tex`
 - Manifest: `papers/rlvg-inferno/submission_manifest.md`
 - Audit: `papers/rlvg-inferno/submission_audit_v0.md`
