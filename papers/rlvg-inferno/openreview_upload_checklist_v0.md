@@ -12,7 +12,7 @@ Status: upload checklist for the current `paper_v0.pdf` short-form artifact.
 
 ## Preflight
 
-- Confirm PDF SHA-256: `1429ff1b3c4ed8ffefaf8b06eaeef7b7074d349db6586fa906f71d5eb161744d`.
+- Confirm PDF SHA-256: `5a02522b8fab35e07ee9de51b9f8257240c78e38bf37ae8d50da54299f3872cf`.
 - Confirm the PDF has 4 pages on letter size.
 - Confirm `pdfinfo` shows blank author metadata, no JavaScript, and no encryption.
 - Confirm raw PDF string scans show no local paths, personal names, W&B ids, OpenAI, Codex, or pufferbox strings.

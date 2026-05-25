@@ -22,7 +22,7 @@ Status: draft notes, not submission prose.
 
 ## Inferno Environment Facts
 
-- `config/ocean/osrs_inferno.ini` states the compact surface directly: 9 action heads, 89 discrete choices, 744 base observation features, 89 embedded mask entries, and long episodes in the 300 to 8000+ tick range.
+- `config/ocean/osrs_inferno.ini` states the compact surface directly: 9 action heads, 89 discrete choices, 744 base observation features, 89 embedded mask entries, 833 total trainer row floats, and long episodes in the 300 to 8000+ tick range.
 - `ocean/osrs/encounters/inferno/encounter_inferno_model.inc` defines 69 waves, 18,000 max ticks, three pillars, Zuk, the moving shield, Jad, Zuk healers, and Inferno NPC definition ids.
 - `ocean/osrs/encounters/inferno/encounter_inferno_player_actions.inc` defines the 9 action heads:
   - movement
