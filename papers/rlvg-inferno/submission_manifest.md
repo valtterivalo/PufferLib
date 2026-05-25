@@ -56,6 +56,7 @@ Expected results:
 - The final external wording review is in `papers/rlvg-inferno/review_notes_v7.md`.
 - The live venue mechanics check is in `papers/rlvg-inferno/review_notes_v8.md`.
 - The final blocker review is in `papers/rlvg-inferno/review_notes_v9.md`.
+- The post-observation-row review is in `papers/rlvg-inferno/review_notes_v10.md`.
 - The layout audit is in `papers/rlvg-inferno/layout_audit_v0.md`.
 - The Inferno contract test audit is in `papers/rlvg-inferno/contract_test_audit_v0.md`.
 - The writing-style audit is in `papers/rlvg-inferno/style_audit_v0.md`.
