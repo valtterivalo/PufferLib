@@ -25,7 +25,7 @@ action_sum 89
 
 Evidence:
 
-- `python3 - <<'PY' ... import pufferlib._C as C ... C.env_num_action_heads() ... PY`
+- `python3 - <<'PY' ... import pufferlib._C as C ... C.env_name ... C.env_obs_size() ... C.env_num_action_heads() ... C.env_action_dims() ... PY`
 - `ocean/osrs_inferno/binding.c` defines `INF_TOTAL_OBS` as `INF_NUM_OBS + INF_ACTION_MASK_SIZE`.
 - `ocean/osrs/encounters/inferno/encounter_inferno_forecast.inc` defines `INF_NUM_OBS` from player, pillar, NPC, step-out forecast, pending-hit, and pending-spark features.
 - `ocean/osrs/encounters/inferno/encounter_inferno_player_actions.inc` defines the nine action heads and `INF_ACTION_MASK_SIZE`.
