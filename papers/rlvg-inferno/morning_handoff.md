@@ -13,6 +13,7 @@ Status: submit ready short-form bundle for `paper_v0.pdf`.
 - Manifest: `papers/rlvg-inferno/submission_manifest.md`
 - Audit: `papers/rlvg-inferno/submission_audit_v0.md`
 - OpenReview checklist: `papers/rlvg-inferno/openreview_upload_checklist_v0.md`
+- OpenReview form fields: `papers/rlvg-inferno/openreview_form_fields_v0.md`
 - Morning audit checklist: `papers/rlvg-inferno/morning_audit_checklist_v0.md`
 
 ## Current Hashes
@@ -68,4 +69,5 @@ Checked `https://sites.google.com/view/rlvg-2026/submission-guide` and OpenRevie
 - Contract test audit: `papers/rlvg-inferno/contract_test_audit_v0.md`
 - Style audit: `papers/rlvg-inferno/style_audit_v0.md`
 - OpenReview upload checklist: `papers/rlvg-inferno/openreview_upload_checklist_v0.md`
+- OpenReview form fields: `papers/rlvg-inferno/openreview_form_fields_v0.md`
 - Morning audit checklist: `papers/rlvg-inferno/morning_audit_checklist_v0.md`
