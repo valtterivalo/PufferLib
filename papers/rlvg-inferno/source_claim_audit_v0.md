@@ -8,7 +8,7 @@ Status: current source and artifact evidence for the concrete claims in `paper_v
 
 - Repo: `/Users/valtterivalo/Projects/pufferlib-metal`
 - Branch: `inferno-upstream-sync-may-14`
-- Head at audit start: `170496d1c`
+- Head at latest verification: `dcac7745a3f18fdbca17c2526700db75f73c7b83`
 - Inventory command: `python3 ~/.codex/skills/pufferlib/scripts/puffer_inventory.py .`
 - Inventory result: clean checkout, PufferLib package version `4.0.0`
 
@@ -25,7 +25,7 @@ action_sum 89
 
 Evidence:
 
-- `python3 - <<'PY' ... import pufferlib._C as C ... PY`
+- `python3 - <<'PY' ... import pufferlib._C as C ... C.env_num_action_heads() ... PY`
 - `ocean/osrs_inferno/binding.c` defines `INF_TOTAL_OBS` as `INF_NUM_OBS + INF_ACTION_MASK_SIZE`.
 - `ocean/osrs/encounters/inferno/encounter_inferno_forecast.inc` defines `INF_NUM_OBS` from player, pillar, NPC, step-out forecast, pending-hit, and pending-spark features.
 - `ocean/osrs/encounters/inferno/encounter_inferno_player_actions.inc` defines the nine action heads and `INF_ACTION_MASK_SIZE`.
