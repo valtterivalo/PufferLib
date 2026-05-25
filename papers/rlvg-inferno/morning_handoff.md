@@ -1,6 +1,6 @@
 # RLVG Inferno Morning Handoff
 
-Status: submit ready short-form bundle as of commit `af8e93fee`.
+Status: submit ready short-form bundle for `paper_v0.pdf`.
 
 ## Submit
 

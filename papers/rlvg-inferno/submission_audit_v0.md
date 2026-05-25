@@ -1,6 +1,6 @@
 # RLVG Inferno Submission Audit v0
 
-Status: paper artifact current for the checked-out submission bundle. Venue and format documentation checked through `b0b517b4a`.
+Status: paper artifact current for the checked-out submission bundle. Venue and format documentation checked against the local CFP, live RLVG submission guide, and OpenReview.
 
 ## Hard Requirements
 
