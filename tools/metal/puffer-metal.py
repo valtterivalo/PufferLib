@@ -63,6 +63,40 @@ def no_render_eval_requested(argv: list[str]) -> bool:
     return False
 
 
+def arg_flag_present(argv: list[str], flag: str, min_prefix: str | None = None) -> bool:
+    """Return whether a CLI flag is present in split, equals, or accepted abbreviated form."""
+    for arg in argv:
+        name = arg.split("=", 1)[0]
+        if name == flag:
+            return True
+        if min_prefix and name.startswith(min_prefix) and flag.startswith(name):
+            return True
+    return False
+
+
+def eval_total_agents(argv: list[str], env_name: str) -> int:
+    """Parse eval config overrides and return total agent count."""
+    from pufferlib.pufferl import load_config
+
+    saved_argv = sys.argv
+    try:
+        sys.argv = [argv[0], *argv[3:]]
+        args = load_config(env_name)
+    finally:
+        sys.argv = saved_argv
+    return int(args["vec"]["total_agents"])
+
+
+def ensure_eval_minibatch_size(argv: list[str]) -> None:
+    """Keep interactive eval compatible with horizon=1."""
+    if len(argv) < 3 or argv[1] != "eval":
+        return
+    if arg_flag_present(argv, "--train.minibatch-size", "--train.mini"):
+        return
+    total_agents = eval_total_agents(argv, argv[2])
+    argv.extend(["--train.minibatch-size", str(total_agents)])
+
+
 def run_no_render_eval(env_name: str) -> int:
     from pufferlib import _C as backend
     from pufferlib.pufferl import load_config, unroll_nested_dict
@@ -114,6 +148,8 @@ def main() -> int:
         sys.argv.pop(1)
         env_name = sys.argv.pop(1)
         return run_no_render_eval(env_name)
+
+    ensure_eval_minibatch_size(sys.argv)
 
     from pufferlib.pufferl import main as puffer_main
 
