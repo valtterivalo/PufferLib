@@ -19,6 +19,7 @@ This file maps the current paper bundle to the user goal and the RLVG CFP. It is
   - Evidence: references 3, 4, and 6 in `papers/rlvg-inferno/paper_v0.tex`
 - Use external ChatGPT review and iterate from feedback.
   - Evidence: `papers/rlvg-inferno/review_notes_v0.md` through `papers/rlvg-inferno/review_notes_v9.md`
+  - Evidence: `papers/rlvg-inferno/review_notes_v10.md`
   - Evidence: `papers/rlvg-inferno/style_audit_v0.md`
 - Avoid unnecessary jargon and common AI-slop writing patterns.
   - Evidence: `papers/rlvg-inferno/style_audit_v0.md`

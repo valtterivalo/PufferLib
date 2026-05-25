@@ -13,7 +13,7 @@ Status: paper artifact current for the checked-out submission bundle. Venue and 
 
 ## Evidence Strength
 
-- Environment surface: strong. The 744 base observation features, 9 action heads, and 89 discrete choices with matching embedded mask entries come from current Inferno config, encounter constants, and native binding action dimensions.
+- Environment surface: strong. The 744 base observation features, 9 action heads, 89 discrete choices, and 833-float rollout row come from current Inferno config, encounter constants, and native binding action dimensions.
 - OSRS task description: strong enough for short-form. The paper cites the OSRS Wiki for 69 waves, no restock, pillars, and Zuk shield mechanics.
 - PufferLib systems claims: strong enough for workshop prose. The general PufferLib context cites the PufferLib arXiv paper, while PufferLib 4 implementation details cite public docs and Joseph Suarez articles.
 - Checkpoint result: intentionally caveated. The stored checkpoint belongs to an earlier compact Redemption action surface, not the current explicit 89-choice surface. The paper says this directly in the abstract and checkpoint section.
@@ -29,6 +29,7 @@ Status: paper artifact current for the checked-out submission bundle. Venue and 
 - The PDF uses a real replay screenshot, but not an annotated figure with log snippets. That would improve the inspectability argument if there is time.
 - The replay figure is embedded as stripped JPEG. The original PNG rendered correctly as an image file, but the PDF preview path was more robust after switching away from the PNG embed.
 - A final blocker review on 2026-05-25 found no fatal blockers. It suggested one narrower result sentence, which is now applied.
+- A post-observation-row review on 2026-05-25 found no content, anonymity, or 833-wording blocker after the local bibliography check.
 - The focused Inferno C contract test passed on 2026-05-25 with `1441/1441 tests passed`.
 
 ## Next Useful Edits
