@@ -174,3 +174,15 @@
 - Milestone 04 suite passed twice.
 - Repeated-run median versus the prior accepted baseline: `breakout` +0.15 percent SPS, `g2048` -0.15 percent SPS.
 - Decision: keep pending subagent review as a LOC-only cleanup. It is inside the 1 percent LOC gate, but it is not a speed win.
+
+## 2026-05-26 02:20 EEST
+
+- Duplicate action-buffer cleanup committed as `971343e2f`.
+- Starting third milestone 04 candidate.
+- Root-cause hypothesis: training always transposes `rollouts.ratio` and usually transposes `rollouts.logprobs`, but ratio is immediately overwritten with ones, and logprobs are immediately recomputed when `cpu_inference` or `train_fp16` is active. Skipping those dead transposes should remove memory passes without changing PPO inputs.
+
+## 2026-05-26 02:21 EEST
+
+- Tested dead-transpose skip once.
+- `breakout` regressed from the current accepted median 2.29M SPS to 2.26M SPS, -1.30 percent. `g2048` improved 1.75 percent, but the plan requires no benchmark regression.
+- Decision: reject and revert. The change missed the LOC gate on `breakout`.
