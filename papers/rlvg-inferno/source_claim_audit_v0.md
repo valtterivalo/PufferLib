@@ -53,20 +53,20 @@ Conclusion: Table 3's score explanation matches the active logging code.
 
 Artifact: `checkpoints/osrs_inferno/redemption_j6bgoiu4_compact/run_whl5mxay.json`.
 
-Final logged values:
+Final logged values, with scalar telemetry read from `metrics.<name>[-1]`:
 
 ```text
-agent_steps=171704320
-SPS=256536
-env/wins=0.4896352291107178
-env/score=0.7363886833190918
-env/wave=66.72087097167969
-env/min_zuk_hp_normal=240.5355987548828
-env/prayer_correct_rate=0.8533950448036194
-env/frac_healer_spawned_normal=0.8470191359519958
-env/frac_all_zuk_healers_dead_normal=0.718624472618103
-env/frac_normal=1.0
-env/n=6223.0
+metrics.agent_steps[-1]=171704320
+metrics.SPS[-1]=256536
+metrics.env/wins[-1]=0.4896352291107178
+metrics.env/score[-1]=0.7363886833190918
+metrics.env/wave[-1]=66.72087097167969
+metrics.env/min_zuk_hp_normal[-1]=240.5355987548828
+metrics.env/prayer_correct_rate[-1]=0.8533950448036194
+metrics.env/frac_healer_spawned_normal[-1]=0.8470191359519958
+metrics.env/frac_all_zuk_healers_dead_normal[-1]=0.718624472618103
+metrics.env/frac_normal[-1]=1.0
+metrics.env/n[-1]=6223.0
 eval_episodes=10000
 seed=73
 train.seed=42
