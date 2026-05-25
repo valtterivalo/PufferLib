@@ -162,3 +162,15 @@
 - Tested signed-index small GEMM fallback in two full milestone 04 suite runs.
 - Repeated-run medians versus the prior accepted baseline: `breakout` +0.75 percent SPS, `g2048` +0.91 percent SPS.
 - Decision: reject and revert. The change was clean but did not clear the 3 percent speed gate.
+
+## 2026-05-26 02:06 EEST
+
+- Starting second milestone 04 candidate.
+- Root-cause hypothesis: CPU inference already writes sampled float actions into `rollouts.actions`, and training already transposes that buffer before PPO. The separate `rollout_actions_f32` and `train_actions_f32` buffers duplicate the same action data solely for old-logprob recompute, adding rollout copies, one training transpose, and allocator surface without changing semantics.
+
+## 2026-05-26 02:09 EEST
+
+- Removed the duplicate action recompute buffers and pointed old-logprob recompute at the already-transposed training actions.
+- Milestone 04 suite passed twice.
+- Repeated-run median versus the prior accepted baseline: `breakout` +0.15 percent SPS, `g2048` -0.15 percent SPS.
+- Decision: keep pending subagent review as a LOC-only cleanup. It is inside the 1 percent LOC gate, but it is not a speed win.
