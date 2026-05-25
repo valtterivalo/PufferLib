@@ -88,7 +88,9 @@ Evidence:
 
 - `src/pufferlib.cu` registers static rollout and train buffers, copies optional action masks, captures CUDA graphs for rollout, implements priority replay, and transposes rollout layout from `(T, B)` to `(B, T)` for training.
 - `src/models.cu` names MinGRU fused scan as a core 4.0 path and implements MinGRU train and rollout registrations.
-- `src/puffernet.h` implements the C PufferNet inference path used by browser demos and standalone visual runners.
+- `src/models.cu` applies highway-style output mixing in both rollout and scan paths: `sigmoid(proj) * mingru_out + (1 - sigmoid(proj)) * x` for rollout and the same projection gate over `scan_result` during sequence training.
+- `src/puffernet.h` implements the C PufferNet inference path used by browser demos and standalone visual runners, with architecture `Linear encoder -> N x MinGRU -> Linear decoder`.
+- `src/puffernet.h` states that its MinGRU inference layer matches the fused gate and highway connection in `models.cu`.
 - `pufferlib/sweep.py` implements the Protein sweep loop used for score and cost search.
 
 Conclusion: the paper's systems framing is grounded in active source files, not only public prose sources.
