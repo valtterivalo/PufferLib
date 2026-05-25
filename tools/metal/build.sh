@@ -47,7 +47,7 @@ if [ ! -f "$BINDING_SRC" ]; then
     exit 1
 fi
 
-bash ./build.sh "$ENV" --cpu
+EXTRA_CFLAGS="${EXTRA_CFLAGS:-} -Isrc/metal" bash ./build.sh "$ENV" --cpu
 
 RAYLIB_NAME="raylib-5.5_macos"
 RAYLIB_A="$RAYLIB_NAME/lib/libraylib.a"

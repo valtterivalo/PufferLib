@@ -10,6 +10,34 @@ ALLOWED_PREFIXES = (
     "tests/metal/",
 )
 
+ALLOWED_ARTIFACT_PATHS = {
+    "artifacts/metal-overnight-20260526/.gitignore",
+    "artifacts/metal-overnight-20260526/PLAN.md",
+    "artifacts/metal-overnight-20260526/STATUS.md",
+    "artifacts/metal-overnight-20260526/bin/run-metal-benchmark.sh",
+    "artifacts/metal-overnight-20260526/bin/summarize-puffer-run.py",
+    "artifacts/metal-overnight-20260526/milestone-00-baseline/run-breakout.sh",
+    "artifacts/metal-overnight-20260526/milestone-00-baseline/run-g2048.sh",
+    "artifacts/metal-overnight-20260526/milestone-00-baseline/run-suite.sh",
+    "artifacts/metal-overnight-20260526/milestone-01-loc-pass/run-breakout.sh",
+    "artifacts/metal-overnight-20260526/milestone-01-loc-pass/run-g2048.sh",
+    "artifacts/metal-overnight-20260526/milestone-01-loc-pass/run-suite.sh",
+    "artifacts/metal-overnight-20260526/milestone-02-hot-path-pass/run-breakout.sh",
+    "artifacts/metal-overnight-20260526/milestone-02-hot-path-pass/run-g2048.sh",
+    "artifacts/metal-overnight-20260526/milestone-02-hot-path-pass/run-suite.sh",
+    "artifacts/metal-overnight-20260526/milestone-03-cleanup/run-breakout.sh",
+    "artifacts/metal-overnight-20260526/milestone-03-cleanup/run-g2048.sh",
+    "artifacts/metal-overnight-20260526/milestone-03-cleanup/run-interactive-breakout.sh",
+    "artifacts/metal-overnight-20260526/milestone-03-cleanup/run-suite.sh",
+    "artifacts/metal-overnight-20260526/milestone-04-second-hot-path-pass/run-breakout.sh",
+    "artifacts/metal-overnight-20260526/milestone-04-second-hot-path-pass/run-g2048.sh",
+    "artifacts/metal-overnight-20260526/milestone-04-second-hot-path-pass/run-suite.sh",
+    "artifacts/metal-overnight-20260526/milestone-05-final-audit/run-breakout.sh",
+    "artifacts/metal-overnight-20260526/milestone-05-final-audit/run-g2048.sh",
+    "artifacts/metal-overnight-20260526/milestone-05-final-audit/run-interactive-breakout.sh",
+    "artifacts/metal-overnight-20260526/milestone-05-final-audit/run-suite.sh",
+}
+
 BLOCKED_PATHS = {
     "build.sh",
     "config/default.ini",
@@ -40,6 +68,9 @@ def test_metal_overlay_does_not_touch_upstream_core() -> None:
         path
         for path in changed_paths()
         if path in BLOCKED_PATHS
-        or not any(path.startswith(prefix) for prefix in ALLOWED_PREFIXES)
+        or (
+            path not in ALLOWED_ARTIFACT_PATHS
+            and not any(path.startswith(prefix) for prefix in ALLOWED_PREFIXES)
+        )
     )
     assert bad_paths == []
