@@ -54,3 +54,37 @@
 
 - Found that `run-suite.sh` called the parity fixture through pytest even though `test_native_backend_parity.py` is a CLI fixture.
 - Patched all suite scripts to run `tests/metal/test_native_backend_parity.py --backend metal --write-json ...` directly, then run the overlay surface pytest.
+
+## 2026-05-26 02:01 EEST
+
+- Milestone 00 committed as `d699d8db3` with subagent review clear.
+- Starting milestone 01 LOC pass.
+- Root-cause hypothesis: the scan dispatch helpers duplicate host binding code for forward/backward and fp32/fp16 variants, so a tagged helper can reduce lines without changing MSL kernels or dataflow.
+
+## 2026-05-26 02:05 EEST
+
+- Refactored scan dispatch helpers in `src/metal/kernels.mm`.
+- Net diff for the file: 25 insertions, 58 deletions.
+- First milestone 01 suite attempt failed in the benchmark runner because the new `--slo*` guard expanded an empty bash array under `set -u`.
+- Patched the guard to check array length before iterating.
+
+## 2026-05-26 02:14 EEST
+
+- Milestone 01 suite passed.
+- `src/metal/kernels.mm` line count changed from 1652 to 1619.
+- `breakout`: 2.04M baseline SPS to 2.25M milestone SPS, score 2.457 to 2.563, eval score stayed 0.0.
+- `g2048`: 347.6K baseline SPS to 355.3K milestone SPS, score 97.855 to 98.889, eval score 49.43 to 49.48.
+- Decision: keep the LOC refactor pending subagent code review. The benchmark gate shows no regression.
+
+## 2026-05-26 02:23 EEST
+
+- Subagent review found benchmark attribution gap: milestone artifacts recorded only `HEAD`, not the dirty refactor diff.
+- Patched runner to capture `git-status.txt`, `git-diff.patch`, and `git_diff_sha256` in metadata for each run.
+- Corrected stale LOC and numstat after wrap-only formatting.
+
+## 2026-05-26 02:31 EEST
+
+- Reran milestone 01 suite with dirty-diff attribution.
+- `breakout`: 2.04M baseline SPS to 2.20M milestone SPS, score 2.457 to 2.262, eval score stayed 0.0.
+- `g2048`: 347.6K baseline SPS to 358.6K milestone SPS, score 97.855 unchanged, eval score stayed 49.43.
+- Both new run metadata files include identical `git_diff_sha256=755c36ba21d3d04a23f662c2d733e36db320c02926e2d4ce2fa0837ccec78558`.

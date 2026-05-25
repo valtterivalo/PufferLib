@@ -513,9 +513,8 @@ void mtl_mingru_gate(float *out, float *next_state, const float *combined,
   mtl_dispatch_1d(ms, pso, B * H);
 }
 
-// Shared scan dispatch: binds all buffers and dispatches the named kernel.
 static void dispatch_scan_forward(const char *kernel_name, PrefixScan &scan,
-                                   cudaStream_t stream) {
+                                  bool reset, cudaStream_t stream) {
   MetalStream *ms = mtl_resolve_stream(stream);
   ms->compute_encoder();
   auto pso = mtl_pipeline(kernel_name);
@@ -528,14 +527,18 @@ static void dispatch_scan_forward(const char *kernel_name, PrefixScan &scan,
   mtl_set_ptr(ms, scan.combined_ptr, 5);
   mtl_set_ptr(ms, scan.state_ptr, 6);
   mtl_set_ptr(ms, scan.input_ptr, 7);
+  int params_index = 8;
+  if (reset) {
+    mtl_set_ptr(ms, scan.reset_ptr, params_index++);
+  }
   struct { int T_seq, H, B; } params = {scan.T, scan.H, scan.B};
-  mtl_set_params(ms, params, 8);
+  mtl_set_params(ms, params, params_index);
   mtl_dispatch_1d(ms, pso, scan.B * scan.H);
 }
 
 static void dispatch_scan_backward(const char *kernel_name, PrefixScan &scan,
-                                    const void *grad, const void *grad_next_state,
-                                    cudaStream_t stream) {
+                                   const void *grad, const void *grad_next_state,
+                                   bool reset, cudaStream_t stream) {
   MetalStream *ms = mtl_resolve_stream(stream);
   ms->compute_encoder();
   auto pso = mtl_pipeline(kernel_name);
@@ -551,82 +554,46 @@ static void dispatch_scan_backward(const char *kernel_name, PrefixScan &scan,
   mtl_set_ptr(ms, scan.a_star.data, 8);
   mtl_set_ptr(ms, scan.s_vals.data, 9);
   mtl_set_ptr(ms, scan.log_values_buf.data, 10);
+  int params_index = 11;
+  if (reset) {
+    mtl_set_ptr(ms, scan.reset_ptr, params_index++);
+  }
   struct { int T_seq, H, B; } params = {scan.T, scan.H, scan.B};
-  mtl_set_params(ms, params, 11);
-  mtl_dispatch_1d(ms, pso, scan.B * scan.H);
-}
-
-static void dispatch_scan_forward_reset(const char *kernel_name, PrefixScan &scan,
-                                         cudaStream_t stream) {
-  MetalStream *ms = mtl_resolve_stream(stream);
-  ms->compute_encoder();
-  auto pso = mtl_pipeline(kernel_name);
-  mtl_set_pso(ms, pso);
-  mtl_set_ptr(ms, scan.out.data, 0);
-  mtl_set_ptr(ms, scan.next_state.data, 1);
-  mtl_set_ptr(ms, scan.a_star.data, 2);
-  mtl_set_ptr(ms, scan.s_vals.data, 3);
-  mtl_set_ptr(ms, scan.log_values_buf.data, 4);
-  mtl_set_ptr(ms, scan.combined_ptr, 5);
-  mtl_set_ptr(ms, scan.state_ptr, 6);
-  mtl_set_ptr(ms, scan.input_ptr, 7);
-  mtl_set_ptr(ms, scan.reset_ptr, 8);
-  struct { int T_seq, H, B; } params = {scan.T, scan.H, scan.B};
-  mtl_set_params(ms, params, 9);
-  mtl_dispatch_1d(ms, pso, scan.B * scan.H);
-}
-
-static void dispatch_scan_backward_reset(const char *kernel_name, PrefixScan &scan,
-                                          const void *grad, const void *grad_next_state,
-                                          cudaStream_t stream) {
-  MetalStream *ms = mtl_resolve_stream(stream);
-  ms->compute_encoder();
-  auto pso = mtl_pipeline(kernel_name);
-  mtl_set_pso(ms, pso);
-  mtl_set_ptr(ms, scan.grad_combined.data, 0);
-  mtl_set_ptr(ms, scan.grad_state.data, 1);
-  mtl_set_ptr(ms, scan.grad_input.data, 2);
-  mtl_set_ptr(ms, grad, 3);
-  mtl_set_ptr(ms, grad_next_state, 4);
-  mtl_set_ptr(ms, scan.combined_ptr, 5);
-  mtl_set_ptr(ms, scan.state_ptr, 6);
-  mtl_set_ptr(ms, scan.input_ptr, 7);
-  mtl_set_ptr(ms, scan.a_star.data, 8);
-  mtl_set_ptr(ms, scan.s_vals.data, 9);
-  mtl_set_ptr(ms, scan.log_values_buf.data, 10);
-  mtl_set_ptr(ms, scan.reset_ptr, 11);
-  struct { int T_seq, H, B; } params = {scan.T, scan.H, scan.B};
-  mtl_set_params(ms, params, 12);
+  mtl_set_params(ms, params, params_index);
   mtl_dispatch_1d(ms, pso, scan.B * scan.H);
 }
 
 void mtl_mingru_scan_forward(PrefixScan &scan, cudaStream_t stream) {
-  dispatch_scan_forward("mingru_scan_forward_checkpointed", scan, stream);
+  dispatch_scan_forward("mingru_scan_forward_checkpointed", scan, false, stream);
 }
 void mtl_mingru_scan_backward(PrefixScan &scan, const float *grad,
                                const float *grad_next_state, cudaStream_t stream) {
-  dispatch_scan_backward("mingru_scan_backward_checkpointed", scan, grad, grad_next_state, stream);
+  dispatch_scan_backward("mingru_scan_backward_checkpointed", scan, grad,
+                         grad_next_state, false, stream);
 }
 void mtl_mingru_scan_forward_reset(PrefixScan &scan, cudaStream_t stream) {
-  dispatch_scan_forward_reset("mingru_scan_forward_reset", scan, stream);
+  dispatch_scan_forward("mingru_scan_forward_reset", scan, true, stream);
 }
 void mtl_mingru_scan_backward_reset(PrefixScan &scan, const float *grad,
                                      const float *grad_next_state, cudaStream_t stream) {
-  dispatch_scan_backward_reset("mingru_scan_backward_reset", scan, grad, grad_next_state, stream);
+  dispatch_scan_backward("mingru_scan_backward_reset", scan, grad,
+                         grad_next_state, true, stream);
 }
 void mtl_mingru_scan_forward_fp16(PrefixScan &scan, cudaStream_t stream) {
-  dispatch_scan_forward("mingru_scan_forward_checkpointed_fp16", scan, stream);
+  dispatch_scan_forward("mingru_scan_forward_checkpointed_fp16", scan, false, stream);
 }
 void mtl_mingru_scan_backward_fp16(PrefixScan &scan, const void *grad,
                                     const void *grad_next_state, cudaStream_t stream) {
-  dispatch_scan_backward("mingru_scan_backward_checkpointed_fp16", scan, grad, grad_next_state, stream);
+  dispatch_scan_backward("mingru_scan_backward_checkpointed_fp16", scan, grad,
+                         grad_next_state, false, stream);
 }
 void mtl_mingru_scan_forward_reset_fp16(PrefixScan &scan, cudaStream_t stream) {
-  dispatch_scan_forward_reset("mingru_scan_forward_reset_fp16", scan, stream);
+  dispatch_scan_forward("mingru_scan_forward_reset_fp16", scan, true, stream);
 }
 void mtl_mingru_scan_backward_reset_fp16(PrefixScan &scan, const void *grad,
                                           const void *grad_next_state, cudaStream_t stream) {
-  dispatch_scan_backward_reset("mingru_scan_backward_reset_fp16", scan, grad, grad_next_state, stream);
+  dispatch_scan_backward("mingru_scan_backward_reset_fp16", scan, grad,
+                         grad_next_state, true, stream);
 }
 
 // Dispatch GPU sampling kernel on the current command buffer (no sync).
