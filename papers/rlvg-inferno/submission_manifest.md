@@ -5,17 +5,17 @@ Status: generated 2026-05-25 for the current checked-out paper artifacts.
 ## Primary Artifact
 
 - PDF: `papers/rlvg-inferno/paper_v0.pdf`
-- SHA-256: `d44a655214ff4ff6a06f78353f0be9eccf45e10c4efb72062902f7cde1d6841b`
+- SHA-256: `dcecd09ab08ed88cb815e3044aaac581347506abaf1df7fb52fa27dc6e8a9580`
 - Pages: 4
 - Page size: letter
-- File size: 434961 bytes
+- File size: 434935 bytes
 - Author metadata: blank
 - Date metadata: omitted
 
 ## Source Artifacts
 
 - TeX: `papers/rlvg-inferno/paper_v0.tex`
-- TeX SHA-256: `409ad0d188647a1300c2d5ea294061b64f365c24a3f88ebdc646790b3fedb8b3`
+- TeX SHA-256: `a1406aceeb635f5516c3c24152735d618adcceb3dbc6b0cf0154fb95ca27f930`
 - Replay figure: `papers/rlvg-inferno/figures/inferno_replay_wave69.jpg`
 - Replay figure SHA-256: `4ef69b90fd5276f71e9f844f1a7e4ca7d0b45dcfad54459cfc4a5ca128567369`
 
@@ -32,7 +32,7 @@ pdfinfo paper_v0.pdf
 
 ```bash
 cd /Users/valtterivalo/Projects/pufferlib-metal
-rg -n '[;—]' papers/rlvg-inferno/paper_v0.tex
+rg -n '[\x3b\x{2014}]' papers/rlvg-inferno/paper_v0.tex
 git diff --check
 strings papers/rlvg-inferno/paper_v0.pdf | rg -n -i 'creationdate|moddate|eest|valtteri|valo|/users|pufferlib-metal|wandb|whl5mxay|j6bgoiu4|openai|codex|puffertank'
 strings papers/rlvg-inferno/figures/inferno_replay_wave69.jpg | rg -n -i 'exif|xmp|photoshop|date|software|artist|copyright|valtteri|valo|/users|pufferlib'
@@ -55,3 +55,4 @@ Expected results:
 - The submission audit is in `papers/rlvg-inferno/submission_audit_v0.md`.
 - The final external wording review is in `papers/rlvg-inferno/review_notes_v7.md`.
 - The live venue mechanics check is in `papers/rlvg-inferno/review_notes_v8.md`.
+- The final blocker review is in `papers/rlvg-inferno/review_notes_v9.md`.

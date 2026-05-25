@@ -123,7 +123,7 @@ Final logged throughput & about 256k steps/s \\
 \label{tab:result}
 \end{table}
 
-Read these numbers as development evidence. The environment, action surface, and visual contract were still changing during development. The result shows that this benchmark line can train a policy that clears the full encounter and reaches late-Zuk states often. It does not prove that the task is solved, that the checkpoint is robust across future environment versions, or that the policy has no simulator-specific habits.
+Read these numbers as development evidence. The environment, action surface, and visual contract were still changing during development. The result shows logged full clears and frequent late-Zuk states in this benchmark line. It does not prove that the task is solved, that the checkpoint is robust across future environment versions, or that the policy has no simulator-specific habits.
 
 This distinction is central to the benchmark. In an inspectable game task, success cannot be only a scalar. A policy that clears while wasting supplies, mistiming healers, or leaning on a simulator bug has not solved the benchmark in the player-facing sense. The benchmark must keep these failures visible.
 
