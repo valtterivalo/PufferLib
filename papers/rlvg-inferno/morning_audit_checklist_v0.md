@@ -59,6 +59,36 @@ strings papers/rlvg-inferno/figures/inferno_replay_wave69.jpg | rg -n -i 'exif|x
 Expected scan result: no matches.
 
 ```bash
+python3 - <<'PY'
+import pufferlib._C as C
+print(C.env_name)
+print(C.env_obs_size())
+print(C.env_num_action_heads())
+print(list(C.env_action_dims()))
+print(sum(C.env_action_dims()))
+PY
+
+uv run python - <<'PY'
+import pufferlib._C as C
+print(C.env_name)
+print(C.env_obs_size())
+print(C.env_num_action_heads())
+print(list(C.env_action_dims()))
+print(sum(C.env_action_dims()))
+PY
+```
+
+Expected native surface result:
+
+```text
+osrs_inferno
+833
+9
+[25, 6, 38, 4, 2, 4, 3, 2, 5]
+89
+```
+
+```bash
 cc -std=c11 -O0 -g -I. -o /tmp/test_inferno_attack_styles ocean/osrs/tests/test_inferno_attack_styles.c -lm
 /tmp/test_inferno_attack_styles
 ```
