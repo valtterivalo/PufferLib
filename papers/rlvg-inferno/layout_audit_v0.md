@@ -8,7 +8,7 @@ Artifact: `papers/rlvg-inferno/paper_v0.pdf`.
 
 - `pdflatex` ran twice with no warnings found by the log scan.
 - `pdfinfo` reports 4 pages, letter size, no author metadata, no creation date, no modification date, no JavaScript, no encryption, and PDF 1.7.
-- `pdftotext -layout` shows the title, abstract, five sections, three tables, one figure caption, and references in readable order.
+- `pdftotext -layout` shows the title, abstract, five sections, three tables, one figure caption, and references in readable order. Page 2 no longer starts with a stranded sentence fragment after anchoring the first table and replay figure.
 - Table 3 fits on page 3 after the Zuk HP label fix.
 - References fit on page 4.
 - `pdftocairo` rendered all four pages at 1190 by 1540 pixels.
@@ -16,8 +16,8 @@ Artifact: `papers/rlvg-inferno/paper_v0.pdf`.
 
 ## Rendered Page Sizes
 
-- Page 1: 393601 bytes
-- Page 2: 731067 bytes
+- Page 1: 393935 bytes
+- Page 2: 727891 bytes
 - Page 3: 388215 bytes
 - Page 4: 334210 bytes
 

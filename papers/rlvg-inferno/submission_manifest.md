@@ -5,17 +5,17 @@ Status: generated 2026-05-25 for the current checked-out paper artifacts.
 ## Primary Artifact
 
 - PDF: `papers/rlvg-inferno/paper_v0.pdf`
-- SHA-256: `7f2d3d319bee99bb1a2e980b5c0076fdbb0c6e252b2883024d5b2d9c05d10cc7`
+- SHA-256: `b40757544ca92f468be14a4aa85285d013222a663c5c8f5246831f3e5e1338c1`
 - Pages: 4
 - Page size: letter
-- File size: 435104 bytes
+- File size: 435083 bytes
 - Author metadata: blank
 - Date metadata: omitted
 
 ## Source Artifacts
 
 - TeX: `papers/rlvg-inferno/paper_v0.tex`
-- TeX SHA-256: `a35ffafe237c0be63e842c3e0e46ac753befd06ea64b643174c64be784ec4818`
+- TeX SHA-256: `336fa994024b7325a16b3e4b29f5870f1ad597c2efe01b21b858c09f5eb4e43e`
 - Replay figure: `papers/rlvg-inferno/figures/inferno_replay_wave69.jpg`
 - Replay figure SHA-256: `4ef69b90fd5276f71e9f844f1a7e4ca7d0b45dcfad54459cfc4a5ca128567369`
 

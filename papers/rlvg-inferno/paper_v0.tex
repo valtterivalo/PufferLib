@@ -39,9 +39,9 @@ The Inferno environment uses symbolic observations instead of pixels. The curren
 
 The observation vector contains player health, prayer, supplies, wave phase, gear state, combat stats, target state, weapon range, NPC slots, pillar health, pending hits, pending Zuk healer area attacks, and short movement forecasts. Positions are normalized and mostly egocentric or arena-relative. Categories use one-hot structure or slot membership. The design rule is simple: expose player-relevant state, then log whether the policy acts on it.
 
-The action space is a structured interface over OSRS intent: movement, overhead prayer, target selection, gear switching, food, potion, spell, special attack, and offensive prayer. The target head points into observation slots instead of raw entity ids. The mask writer validates every action head and records zero-valid-head failures. Invalid actions are interface noise. The model should decide whether to run west, pray magic, tag a healer, cast barrage, or drink a restore. It should spend capacity on game decisions, not on learning that an absent NPC cannot be attacked.
+The action space is a structured interface over OSRS intent: movement, overhead prayer, target selection, gear switching, food, potion, spell, special attack, and offensive prayer. Targets use observation slots, not raw entity ids. The mask writer validates every action head and records zero-valid-head failures. Invalid actions are interface noise. The model should decide whether to run west, pray magic, tag a healer, cast barrage, or drink a restore. It should spend capacity on game decisions, not on learning that an absent NPC cannot be attacked.
 
-\begin{table}[t]
+\begin{table}[H]
 \centering
 \small
 \begin{tabular}{lll}
@@ -62,7 +62,7 @@ Evaluation & Normal-start summary & Separates full-run progress \\
 
 Reward and score are separate. Reward can be shaped, swept, and replaced. Score is intended to survive those edits. In this environment, reward paid for credit assignment through damage, healer tags, shield preservation, late-wave pressure, and final-phase priorities. The logged score in Table \ref{tab:result} is also separate from the archive \texttt{progress\_score} used for Zuk-state selection. For full-start runs, it is win rate plus half-weighted wave progress on losses: $\mathrm{winrate} + (1-\mathrm{winrate}) \cdot \mathrm{mean\_wave}/69 \cdot 0.5$. This explains why a 0.489635 win rate and 66.720871 mean wave produce a 0.736389 score.
 
-\begin{figure}[t]
+\begin{figure}[H]
 \centering
 \fbox{\includegraphics[width=0.93\linewidth]{figures/inferno_replay_wave69.jpg}}
 \caption{An Inferno wave 69 replay frame. The same contract elements used for training and debugging are visible: tick, target label, arena state, player and Zuk positions, HP and prayer counters, minimap, inventory, and action tabs.}
