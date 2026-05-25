@@ -198,3 +198,15 @@
 - Tested advantage-zero folding once.
 - Rejected immediately: `breakout` SPS regressed -1.74 percent and learning shape changed sharply, with training score 6.32. `g2048` SPS regressed -0.51 percent and training score dropped to 92.69.
 - Reverted. Root cause update: the full-buffer zero is not safely equivalent to per-row final-timestep writes in the current execution schedule, or it masks stale advantage state outside the assumed row coverage.
+
+## 2026-05-26 02:28 EEST
+
+- Advantage-zero rejection committed as `794e671b2`.
+- Starting cleanup candidate.
+- Root-cause hypothesis: Metal priority replay allocates a `cdf` buffer copied from the CUDA structure, but Metal sampling reads normalized `prio_probs` directly and no Metal path reads or writes `cdf`. Removing it should reduce memory and LOC without changing sampling semantics.
+
+## 2026-05-26 02:30 EEST
+
+- Tested unused Metal priority `cdf` removal twice.
+- Rejected and reverted. Repeated-run median versus current accepted baseline: `breakout` -1.58 percent SPS, `g2048` -0.95 percent SPS.
+- Root cause update: the buffer is not referenced by name, but changing allocator layout perturbs performance enough to miss the LOC gate.
