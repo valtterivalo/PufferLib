@@ -59,5 +59,6 @@ Expected results:
 - The layout audit is in `papers/rlvg-inferno/layout_audit_v0.md`.
 - The Inferno contract test audit is in `papers/rlvg-inferno/contract_test_audit_v0.md`.
 - The writing-style audit is in `papers/rlvg-inferno/style_audit_v0.md`.
+- The requirement trace is in `papers/rlvg-inferno/requirements_trace_v0.md`.
 - The source-strength follow-up cites the PufferLib arXiv paper for the general PufferLib context.
 - The Zuk HP result row reports `env/min_zuk_hp_normal`, where wins are logged as 0 HP.
