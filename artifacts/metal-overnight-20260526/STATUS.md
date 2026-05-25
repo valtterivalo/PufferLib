@@ -223,3 +223,14 @@
 - Cleanup suite passed on accepted code.
 - Cleanup `breakout`: 4.2M steps, 2.28M SPS, train score 2.148, eval score 0.0.
 - Cleanup `g2048`: 262K steps, 351.7K SPS, train score 97.855, eval score 49.43.
+
+## 2026-05-26 02:42 EEST
+
+- Cleanup checkpoint committed as `fb88d47ea`.
+- Starting fifth milestone 04 candidate.
+- Root-cause hypothesis: Muon copies `A = src @ src^T` into `gram` before computing `gram = b*A + c*A@A`. On the aligned tensor-ops path, `puf_addmm_nn` first writes `A@A` into a separate temp buffer before mutating `out`, so the first Muon addmm can safely write back into `A` and skip the `A -> gram` copy. Fallback cases must keep the old copy path.
+
+## 2026-05-26 02:44 EEST
+
+- Tested guarded in-place Muon gram once.
+- Rejected and reverted. The run stayed learnable but only reached `breakout` +0.83 percent SPS and `g2048` +0.29 percent SPS versus the current accepted baseline, while adding code. It did not justify a second run under the 3 percent speed gate.
