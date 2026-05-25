@@ -8,7 +8,7 @@ Status: current source and artifact evidence for the concrete claims in `paper_v
 
 - Repo: `/Users/valtterivalo/Projects/pufferlib-metal`
 - Branch: `inferno-upstream-sync-may-14`
-- Head at latest verification: `dcac7745a3f18fdbca17c2526700db75f73c7b83`
+- Evidence mode: command-output verification on the active branch, with exact commands recorded below.
 - Inventory command: `python3 ~/.codex/skills/pufferlib/scripts/puffer_inventory.py .`
 - Inventory result: clean checkout, PufferLib package version `4.0.0`
 
