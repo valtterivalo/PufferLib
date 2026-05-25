@@ -210,3 +210,16 @@
 - Tested unused Metal priority `cdf` removal twice.
 - Rejected and reverted. Repeated-run median versus current accepted baseline: `breakout` -1.58 percent SPS, `g2048` -0.95 percent SPS.
 - Root cause update: the buffer is not referenced by name, but changing allocator layout perturbs performance enough to miss the LOC gate.
+
+## 2026-05-26 02:35 EEST
+
+- CDF cleanup rejection committed as `e64dea8fa`.
+- Starting cleanup cadence pass after milestone 04 attempts.
+- Cleanup scan found no uncommitted backend diff, no temporary logging introduced by accepted commits, and no stale feature flags from the kept changes.
+- Current tracked Metal-owned LOC across `src/metal`, `tools/metal`, and `tests/metal`: 10208.
+
+## 2026-05-26 02:36 EEST
+
+- Cleanup suite passed on accepted code.
+- Cleanup `breakout`: 4.2M steps, 2.28M SPS, train score 2.148, eval score 0.0.
+- Cleanup `g2048`: 262K steps, 351.7K SPS, train score 97.855, eval score 49.43.
