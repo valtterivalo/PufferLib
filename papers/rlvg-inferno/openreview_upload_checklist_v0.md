@@ -29,6 +29,7 @@ Status: upload checklist for the current `paper_v0.pdf` short-form artifact.
 
 - Submission manifest: `papers/rlvg-inferno/submission_manifest.md`
 - Submission audit: `papers/rlvg-inferno/submission_audit_v0.md`
+- Source-claim audit: `papers/rlvg-inferno/source_claim_audit_v0.md`
 - Requirements trace: `papers/rlvg-inferno/requirements_trace_v0.md`
 - Morning handoff: `papers/rlvg-inferno/morning_handoff.md`
 - OpenReview form fields: `papers/rlvg-inferno/openreview_form_fields_v0.md`

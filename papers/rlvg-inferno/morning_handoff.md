@@ -12,6 +12,7 @@ Status: submit ready short-form bundle for `paper_v0.pdf`.
 - TeX: `papers/rlvg-inferno/paper_v0.tex`
 - Manifest: `papers/rlvg-inferno/submission_manifest.md`
 - Audit: `papers/rlvg-inferno/submission_audit_v0.md`
+- Source-claim audit: `papers/rlvg-inferno/source_claim_audit_v0.md`
 - OpenReview checklist: `papers/rlvg-inferno/openreview_upload_checklist_v0.md`
 - OpenReview form fields: `papers/rlvg-inferno/openreview_form_fields_v0.md`
 - Morning audit checklist: `papers/rlvg-inferno/morning_audit_checklist_v0.md`
