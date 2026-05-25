@@ -18,14 +18,16 @@ EXTRA_ARGS=()
 if [ "$#" -gt 0 ]; then
     EXTRA_ARGS=("$@")
 fi
-for arg in "${EXTRA_ARGS[@]}"; do
-    case "$arg" in
-    --slo*)
-        echo "refusing --slowly because this runner measures the native Metal backend"
-        exit 1
-        ;;
-    esac
-done
+if [ "${#EXTRA_ARGS[@]}" -gt 0 ]; then
+    for arg in "${EXTRA_ARGS[@]}"; do
+        case "$arg" in
+        --slo*)
+            echo "refusing --slowly because this runner measures the native Metal backend"
+            exit 1
+            ;;
+        esac
+    done
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ARTIFACT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -50,11 +52,17 @@ if [ "${#EXTRA_ARGS[@]}" -gt 0 ]; then
 fi
 
 mkdir -p "$OUT_DIR"
+git -C "$REPO_ROOT" status --short --untracked-files=all > "$OUT_DIR/git-status.txt"
+git -C "$REPO_ROOT" diff --binary HEAD -- > "$OUT_DIR/git-diff.patch"
+GIT_DIFF_SHA=$(shasum -a 256 "$OUT_DIR/git-diff.patch" | awk '{print $1}')
 
 {
     echo "repo=$REPO_ROOT"
     echo "pwd=$(pwd)"
     echo "git_sha=$(git -C "$REPO_ROOT" rev-parse HEAD)"
+    echo "git_diff_sha256=$GIT_DIFF_SHA"
+    echo "git_status_path=$OUT_DIR/git-status.txt"
+    echo "git_diff_path=$OUT_DIR/git-diff.patch"
     echo "branch=$(git -C "$REPO_ROOT" branch --show-current)"
     echo "date=$(date '+%Y-%m-%d %H:%M:%S %Z %z')"
     echo "env=$ENV_NAME"
