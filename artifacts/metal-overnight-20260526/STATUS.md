@@ -150,3 +150,15 @@
 
 - Confirmed `--train.mini` is the shortest accepted unique abbreviation for `--train.minibatch-size`, while `--train.min` remains ambiguous.
 - Revalidated the guard against exact, equals, `--train.minibatch`, `--train.minibatch-s`, and `--train.mini` forms, including a `load_config` parse check.
+
+## 2026-05-26 02:00 EEST
+
+- Eval minibatch fix committed as `e3f663e6e` after subagent review cleared.
+- Starting milestone 04 second hot-path pass.
+- Root-cause hypothesis: the fp32 small GEMM fallback handles decoder-shaped unaligned NT matmuls with unsigned dimensions and indices, while nearby host dispatch already reasons in signed `int`. Matching the shader parameter and loop types to signed host dimensions may reduce cast and address arithmetic cost without changing memory order or floating-point accumulation.
+
+## 2026-05-26 02:03 EEST
+
+- Tested signed-index small GEMM fallback in two full milestone 04 suite runs.
+- Repeated-run medians versus the prior accepted baseline: `breakout` +0.75 percent SPS, `g2048` +0.91 percent SPS.
+- Decision: reject and revert. The change was clean but did not clear the 3 percent speed gate.
