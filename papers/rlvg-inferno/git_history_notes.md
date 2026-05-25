@@ -2,6 +2,8 @@
 
 Status: evidence notes from local git history, not submission prose.
 
+Verification note: on the current `inferno-upstream-sync-may-14` branch, the named layout, observation, forecast, prayer, renderer, visual, lab, and paper commits are ancestors of `HEAD`. The healer-sequence hashes below are retained as local-history evidence for the iteration path. The active branch evidence for the same claim is the current healer metric surface in `ocean/osrs_inferno/binding.c` and the focused Inferno contract test.
+
 ## Why This Exists
 
 The paper claims that Inferno became useful through a combined simulator, renderer, replay, logging, and training loop. The commit history supports that claim. The useful pattern is not a single miracle checkpoint. It is a sequence of contract repairs that made wrong policy behavior visible.
