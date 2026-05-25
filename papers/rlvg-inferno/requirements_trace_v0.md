@@ -52,8 +52,8 @@ This file maps the current paper bundle to the user goal and the RLVG CFP. It is
 ## Current Artifact Evidence
 
 - Primary PDF: `papers/rlvg-inferno/paper_v0.pdf`
-- PDF SHA-256: `5a02522b8fab35e07ee9de51b9f8257240c78e38bf37ae8d50da54299f3872cf`
-- TeX SHA-256: `4f4ef23e722e69800e21f11b31f68d90958fd51890c70a1e138428ff784a03a3`
+- PDF SHA-256: `5b48d068765a5af807223c99460d4a3f381acbd2f2aa688597731b8672105e9c`
+- TeX SHA-256: `eccb3d86709bcf181cfdc88b91eb90645711df132c298a11a3f0ebe137a51649`
 - Replay figure SHA-256: `4ef69b90fd5276f71e9f844f1a7e4ca7d0b45dcfad54459cfc4a5ca128567369`
 - Morning entrypoint: `papers/rlvg-inferno/morning_handoff.md`
 - Morning audit checklist: `papers/rlvg-inferno/morning_audit_checklist_v0.md`

@@ -15,7 +15,7 @@ Artifact: `papers/rlvg-inferno/paper_v0.pdf`.
 - No blocker-level writing issues found in `paper_v0.pdf`.
 - The anonymity scan found only `Anonymous Authors` and false positives from ordinary words such as `wall-clock` and `report`.
 - Draft files still contain draft and placeholder language, but the submission artifact does not reference those drafts.
-- Replaced one awkward sentence, `A stricter public benchmark release needs more than more episodes`, with `A stricter public benchmark release needs more than extra episodes`.
+- Replaced one awkward sentence, `A stricter public benchmark release needs more than more episodes`, with a direct frozen-protocol sentence.
 
 ## Conclusion
 

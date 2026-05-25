@@ -19,7 +19,7 @@ Artifact: `papers/rlvg-inferno/paper_v0.pdf`.
 - Page 1: 393209 bytes
 - Page 2: 731002 bytes
 - Page 3: 388322 bytes
-- Page 4: 336272 bytes
+- Page 4: 333587 bytes
 
 ## Conclusion
 
