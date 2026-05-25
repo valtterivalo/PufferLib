@@ -70,6 +70,7 @@ def run_no_render_eval(env_name: str) -> int:
     args = load_config(env_name)
     args["reset_state"] = False
     args["train"]["horizon"] = 1
+    args["train"]["minibatch_size"] = args["vec"]["total_agents"]
 
     pufferl = backend.create_pufferl(args)
     load_path = args.get("load_model_path")
