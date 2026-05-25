@@ -26,6 +26,7 @@ This file maps the current paper bundle to the user goal and the RLVG CFP. It is
   - Evidence: `papers/rlvg-inferno/style_audit_v0.md`
 - Keep the loop active until morning rather than closing the goal early.
   - Evidence: this trace remains marked as pre-morning support, not completion.
+  - Evidence: `papers/rlvg-inferno/morning_audit_checklist_v0.md`
 
 ## CFP Requirements
 
@@ -55,6 +56,7 @@ This file maps the current paper bundle to the user goal and the RLVG CFP. It is
 - TeX SHA-256: `4f4ef23e722e69800e21f11b31f68d90958fd51890c70a1e138428ff784a03a3`
 - Replay figure SHA-256: `4ef69b90fd5276f71e9f844f1a7e4ca7d0b45dcfad54459cfc4a5ca128567369`
 - Morning entrypoint: `papers/rlvg-inferno/morning_handoff.md`
+- Morning audit checklist: `papers/rlvg-inferno/morning_audit_checklist_v0.md`
 - Manifest: `papers/rlvg-inferno/submission_manifest.md`
 
 ## Open Risks
