@@ -116,15 +116,14 @@ void mtl_destroy();
 void mtl_kernels_reset();
 id<MTLBuffer> mtl_wrap_allocator(Allocator *alloc);
 id<MTLBuffer> mtl_buffer_for(const PufTensor &t, NSUInteger *out_offset);
+id<MTLBuffer> mtl_buffer_for_ptr(const void *ptr, NSUInteger *out_offset);
 id<MTLComputePipelineState> mtl_pipeline(const char *name);
 inline void mtl_set_pso(MetalStream *ms, id<MTLComputePipelineState> pso) {
   [ms->enc setComputePipelineState:pso];
 }
 
-inline void mtl_set_tensor(MetalStream *ms, const PufTensor &t,
-                           uint32_t index) {
-  NSUInteger offset;
-  id<MTLBuffer> buf = mtl_buffer_for(t, &offset);
+inline void mtl_bind_buffer(MetalStream *ms, id<MTLBuffer> buf,
+                            NSUInteger offset, uint32_t index) {
   uint64_t addr = buf.gpuAddress + offset;
   if (ms->bound_addresses[index] != addr) {
     [ms->arg_table setAddress:addr atIndex:index];
@@ -132,7 +131,18 @@ inline void mtl_set_tensor(MetalStream *ms, const PufTensor &t,
   }
 }
 
-id<MTLBuffer> mtl_buffer_for_ptr(const void *ptr, NSUInteger *out_offset);
+inline void mtl_set_tensor(MetalStream *ms, const PufTensor &t,
+                           uint32_t index) {
+  NSUInteger offset;
+  id<MTLBuffer> buf = mtl_buffer_for(t, &offset);
+  mtl_bind_buffer(ms, buf, offset, index);
+}
+
+inline void mtl_set_ptr(MetalStream *ms, const void *ptr, uint32_t index) {
+  NSUInteger offset;
+  id<MTLBuffer> buf = mtl_buffer_for_ptr(ptr, &offset);
+  mtl_bind_buffer(ms, buf, offset, index);
+}
 
 inline bool mtl_const_ring_reserve_range(NSUInteger current_offset,
                                          NSUInteger raw_size,
@@ -194,11 +204,7 @@ inline void mtl_set_tensor(MetalStream *ms, const FloatTensor &t,
                            uint32_t index) {
   NSUInteger offset;
   id<MTLBuffer> buf = mtl_buffer_for_ptr(t.data, &offset);
-  uint64_t addr = buf.gpuAddress + offset;
-  if (ms->bound_addresses[index] != addr) {
-    [ms->arg_table setAddress:addr atIndex:index];
-    ms->bound_addresses[index] = addr;
-  }
+  mtl_bind_buffer(ms, buf, offset, index);
 }
 template <typename T>
 inline void mtl_set_params(MetalStream *ms, const T &params, uint32_t index) {
