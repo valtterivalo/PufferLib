@@ -25,7 +25,7 @@ Status: paper artifact current for the checked-out submission bundle. Venue and 
 - The paper is more benchmark-construction note than benchmark leaderboard paper. This is acceptable for RLVG short-form but should stay explicit.
 - The checkpoint caveat is honest but reduces headline result strength.
 - The references to X articles are informal. They support systems context but should not be the only foundation for technical claims.
-- The result table is precise because it reports stored telemetry. The prose now warns that it is downsampled and not a precise public eval.
+- The result table is precise because it reports stored telemetry. The Zuk HP row names the logged normal-start low-watermark metric, where wins count as 0 HP. The prose warns that the artifact is downsampled and not a precise public eval.
 - The PDF uses a real replay screenshot, but not an annotated figure with log snippets. That would improve the inspectability argument if there is time.
 - The replay figure is embedded as stripped JPEG. The original PNG rendered correctly as an image file, but the PDF preview path was more robust after switching away from the PNG embed.
 - A final blocker review on 2026-05-25 found no fatal blockers. It suggested one narrower result sentence, which is now applied.
