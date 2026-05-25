@@ -272,11 +272,9 @@ struct PuffeRL {
     FloatTensor mb_masks;
     bool cpu_inference = false;  // CPU forward pass for rollout (no GPU sync)
     bool train_fp16 = false;     // fp16 training activations/grads
-    // Decoder logits + f32 actions for GPU logprob recompute (cpu_inference only).
+    // Decoder logits for GPU logprob recompute.
     FloatTensor rollout_logits;    // (horizon, total_agents, fused_cols)
     FloatTensor train_logits;      // (total_agents, horizon, fused_cols)
-    FloatTensor rollout_actions_f32; // (horizon, total_agents, num_atns)
-    FloatTensor train_actions_f32;   // (total_agents, horizon, num_atns)
 
     /* Self-play frozen banks: each bank has its own fp32 weights + per-buffer
        activations/states sized for the bank's slice. Multi-bank dispatch in
@@ -459,13 +457,11 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
             mask_ptr, mask_stride,
             buf_rng_seed, buf_rng_offset);
 
-        // Store decoder logits + f32 actions for GPU logprob recompute at
-        // training start. CPU sampling uses IEEE expf, PPO uses GPU fast::exp.
+        // Store decoder logits for GPU logprob recompute at training start.
+        // CPU sampling uses IEEE expf, PPO uses GPU fast::exp.
         DecoderActivations *da = (DecoderActivations *)acts.decoder;
         FloatTensor logits_dst = puf_slice(pufferl->rollout_logits, t, start, block_size);
         memcpy(logits_dst.data, da->out.data, block_size * fused_cols * sizeof(float));
-        FloatTensor acts_f32_dst = puf_slice(pufferl->rollout_actions_f32, t, start, block_size);
-        memcpy(acts_f32_dst.data, act_f32_buf.data, block_size * num_atns * sizeof(float));
 
         memcpy(act_slice.data, act_f32_buf.data, block_size * num_atns * sizeof(float));
     } else {
@@ -496,15 +492,13 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
 
         mtl_ensure_stream_synced(stream);
 
-        // Stash logits + f32 actions for logprob recompute when train_fp16=1.
+        // Stash logits for logprob recompute when train_fp16=1.
         // Rollout uses fp32 weights; training uses fp16 → precision mismatch in
         // PPO ratio unless we recompute old_logprobs in fp16 at training start.
         if (pufferl->train_fp16 && pufferl->rollout_logits.data) {
             DecoderActivations *da = (DecoderActivations *)acts.decoder;
             FloatTensor logits_dst = puf_slice(pufferl->rollout_logits, t, start, block_size);
             memcpy(logits_dst.data, da->out.data, block_size * fused_cols * sizeof(float));
-            FloatTensor acts_f32_dst = puf_slice(pufferl->rollout_actions_f32, t, start, block_size);
-            memcpy(acts_f32_dst.data, act_f32_buf.data, block_size * num_atns * sizeof(float));
         }
 
         memcpy(act_slice.data, act_f32_buf.data, block_size * num_atns * sizeof(float));
@@ -841,12 +835,11 @@ void train_impl(PuffeRL& pufferl) {
     // Recompute old logprobs when rollout and training use different math.
     if (pufferl.cpu_inference || pufferl.train_fp16) {
         puf_transpose_01(pufferl.train_logits, pufferl.rollout_logits, train_stream);
-        puf_transpose_01(pufferl.train_actions_f32, pufferl.rollout_actions_f32, train_stream);
         mtl_barrier((MetalStream*)train_stream);
 
         int total_samples = hypers.total_agents * hypers.horizon;
         int fused_cols = (int)pufferl.train_logits.shape[2];
-        int num_atns = (int)pufferl.train_actions_f32.shape[2];
+        int num_atns = (int)rollouts.actions.shape[2];
 
         // Mask: embedded in obs or all-ones fallback
         const float *mask_ptr;
@@ -862,7 +855,7 @@ void train_impl(PuffeRL& pufferl) {
         mtl_recompute_logprobs(
             rollouts.logprobs.data,
             pufferl.train_logits.data,
-            pufferl.train_actions_f32.data,
+            rollouts.actions.data,
             pufferl.act_sizes_puf.data,
             mask_ptr, mask_stride,
             total_samples, num_atns, fused_cols, train_stream);
@@ -1493,18 +1486,13 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
         alloc_register(&alloc, &pufferl->ones_mask);
     }
 
-    // Decoder logits + f32 actions for logprob recompute at training start.
+    // Decoder logits for logprob recompute at training start.
     if (pufferl->cpu_inference || hypers.train_fp16) {
         int fused = decoder_output_size + 1;
-        int na = num_action_heads;
         pufferl->rollout_logits = {.shape = {horizon, total_agents, fused}};
         pufferl->train_logits = {.shape = {total_agents, horizon, fused}};
-        pufferl->rollout_actions_f32 = {.shape = {horizon, total_agents, na}};
-        pufferl->train_actions_f32 = {.shape = {total_agents, horizon, na}};
         alloc_register(&alloc, &pufferl->rollout_logits);
         alloc_register(&alloc, &pufferl->train_logits);
-        alloc_register(&alloc, &pufferl->rollout_actions_f32);
-        alloc_register(&alloc, &pufferl->train_actions_f32);
     }
 
     // Optimizer init (register buffers with shared allocator)
