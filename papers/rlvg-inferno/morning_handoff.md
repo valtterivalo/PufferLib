@@ -41,6 +41,8 @@ Checked `https://sites.google.com/view/rlvg-2026/submission-guide` and OpenRevie
 - Submission is through OpenReview.
 - LLM writing tools are allowed with human responsibility.
 - Review is double blind.
+- If accepted, at least one coauthor must register for RLC 2026 and present in person.
+- The workshop has no remote attendance or presentation option.
 
 ## Remaining Risks
 

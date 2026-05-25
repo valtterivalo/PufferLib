@@ -9,7 +9,7 @@ Status: paper artifact current for the checked-out submission bundle. Venue and 
 - Double blind: pass in the PDF. The author field is `Anonymous Authors`, PDF date metadata is omitted, and raw PDF strings contain no local paths, W&B ids, personal names as authors, or `valtterivalo` references.
 - CFP fit: pass. The paper clearly targets benchmark design, alignment and evaluation in games, and practical RL systems for modern game-derived tasks.
 - LLM policy: compatible. The CFP allows LLM writing tools if human authors own correctness and originality.
-- External venue check: pass. On 2026-05-25, the live RLVG 2026 Google Sites submission guide matched the local CFP: 4-page short-form papers excluding references and appendices, no one-page cover page, OpenReview submission, LLM tools allowed with human authors responsible for correctness, and double-blind review. OpenReview listed the deadline as May 28 2026 11:59 UTC, matching May 27 23:59 AoE.
+- External venue check: pass. On 2026-05-25, the live RLVG 2026 Google Sites submission guide matched the local CFP: 4-page short-form papers excluding references and appendices, no one-page cover page, OpenReview submission, LLM tools allowed with human authors responsible for correctness, and double-blind review. OpenReview listed the deadline as May 28 2026 11:59 UTC, matching May 27 23:59 AoE. Accepted papers require at least one coauthor to register for RLC 2026 and present in person.
 
 ## Evidence Strength
 

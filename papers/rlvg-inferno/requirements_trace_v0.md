@@ -46,6 +46,9 @@ This file maps the current paper bundle to the user goal and the RLVG CFP. It is
 - LLM writing tools are allowed with human author responsibility.
   - Evidence: `RLVG-call-for-papers.md`
   - Evidence: `papers/rlvg-inferno/review_notes_v8.md`
+- Accepted papers require in-person presentation by at least one registered coauthor.
+  - Evidence: `RLVG-call-for-papers.md`
+  - Evidence: `papers/rlvg-inferno/morning_handoff.md`
 - The paper fits benchmark and deployment, alignment and evaluation in games, and practical RL systems themes.
   - Evidence: sections 1, 2, 3, and 5 in `papers/rlvg-inferno/paper_v0.tex`
   - Evidence: `papers/rlvg-inferno/submission_audit_v0.md`

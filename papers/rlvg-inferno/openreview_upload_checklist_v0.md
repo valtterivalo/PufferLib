@@ -20,6 +20,11 @@ Status: upload checklist for the current `paper_v0.pdf` short-form artifact.
 - Confirm the venue is RLVG 2026 on OpenReview.
 - Confirm the review mode remains double blind.
 
+## Accepted-Paper Logistics
+
+- If accepted, at least one coauthor must register for RLC 2026 and present in person.
+- The workshop has no remote attendance or presentation option.
+
 ## Evidence Files
 
 - Submission manifest: `papers/rlvg-inferno/submission_manifest.md`
