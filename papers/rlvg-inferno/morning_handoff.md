@@ -61,6 +61,7 @@ Checked `https://sites.google.com/view/rlvg-2026/submission-guide` and OpenRevie
 - `test_inferno_attack_styles`: 1441/1441 tests passed
 - Style audit found no blocker-level writing issue in `paper_v0.pdf`
 - `_C.env_action_dims()` sums to 89 in the current Inferno native binding check
+- Both `python3` and `uv run python` now load native bindings that report `osrs_inferno`, 833 rollout floats, nine heads, and 89 total choices
 
 ## Evidence Files
 
