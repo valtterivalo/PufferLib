@@ -20,6 +20,10 @@ The contribution is a benchmark design pattern: player-readable state, structure
 
 Short-form.
 
+## Keywords
+
+Reinforcement learning benchmarks, video games, PufferLib, Old School RuneScape, recurrent policies, action masks, simulator debugging, behavioral evaluation
+
 ## Author Fields
 
 Use actual human authors in OpenReview if the site asks for author metadata. Keep the uploaded PDF anonymous.
