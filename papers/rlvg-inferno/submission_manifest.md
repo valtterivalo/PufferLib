@@ -53,7 +53,7 @@ Expected results:
 - The final caveat frames the checkpoint as development telemetry, not a frozen-schema benchmark evaluation.
 - The live RLVG 2026 submission guide and OpenReview venue metadata were checked on 2026-05-25. They match the local CFP mechanics used for this artifact.
 - The submission audit is in `papers/rlvg-inferno/submission_audit_v0.md`.
-- The final external wording review is in `papers/rlvg-inferno/review_notes_v7.md`.
+- The earlier external wording review is in `papers/rlvg-inferno/review_notes_v7.md`.
 - The live venue mechanics check is in `papers/rlvg-inferno/review_notes_v8.md`.
 - The final blocker review is in `papers/rlvg-inferno/review_notes_v9.md`.
 - The post-observation-row review is in `papers/rlvg-inferno/review_notes_v10.md`.
