@@ -736,27 +736,6 @@ bool puf_stream_has_encoder(cudaStream_t stream) {
   return ms->enc_active;
 }
 
-// Find MTLBuffer containing a raw pointer and compute byte offset.
-static id<MTLBuffer> buffer_for_ptr(const void *ptr, NSUInteger *out_offset) {
-  for (auto &wb : g_ctx.buffers) {
-    if ((const char *)ptr >= wb.base &&
-        (const char *)ptr < wb.base + wb.size) {
-      *out_offset = (NSUInteger)((const char *)ptr - wb.base);
-      return wb.buffer;
-    }
-  }
-  assert(false && "Pointer not in any wrapped allocator buffer");
-  __builtin_unreachable();
-}
-
-// Bind a pre-resolved MTLBuffer+offset to a stream binding slot (GEMM helpers).
-static inline void bind_buf(MetalStream *ms, id<MTLBuffer> buf,
-                             NSUInteger offset, uint32_t index) {
-  uint64_t addr = buf.gpuAddress + offset;
-  [ms->arg_table setAddress:addr atIndex:index];
-  ms->bound_addresses[index] = addr;
-}
-
 // ============================================================================
 // Metal compute GEMM: uses simdgroup_matrix hardware instructions (M3+).
 // Stays on the compute encoder (no encoder transitions).
@@ -785,9 +764,9 @@ static void steel_gemm_dispatch(const char *kernel_name,
   mtl_set_pso(ms, pso);
 
   NSUInteger off_a, off_b, off_c;
-  bind_buf(ms, buffer_for_ptr(A, &off_a), off_a, 0);
-  bind_buf(ms, buffer_for_ptr(B, &off_b), off_b, 1);
-  bind_buf(ms, buffer_for_ptr(C, &off_c), off_c, 2);
+  mtl_bind_buffer(ms, mtl_buffer_for_ptr(A, &off_a), off_a, 0);
+  mtl_bind_buffer(ms, mtl_buffer_for_ptr(B, &off_b), off_b, 1);
+  mtl_bind_buffer(ms, mtl_buffer_for_ptr(C, &off_c), off_c, 2);
 
   HostGemmParams params = {M, N, K, lda, ldb, ldc, alpha, beta,
                             trans_a ? 1 : 0, trans_b ? 1 : 0};
@@ -833,13 +812,13 @@ static bool tensor_ops_dispatch(id<MTLComputePipelineState> pso,
   mtl_set_pso(ms, pso);
 
   NSUInteger off_a, off_b, off_c;
-  id<MTLBuffer> buf_a = buffer_for_ptr(A, &off_a);
-  id<MTLBuffer> buf_b = buffer_for_ptr(B, &off_b);
-  id<MTLBuffer> buf_c = buffer_for_ptr(C, &off_c);
+  id<MTLBuffer> buf_a = mtl_buffer_for_ptr(A, &off_a);
+  id<MTLBuffer> buf_b = mtl_buffer_for_ptr(B, &off_b);
+  id<MTLBuffer> buf_c = mtl_buffer_for_ptr(C, &off_c);
 
-  bind_buf(ms, buf_a, off_a, 0);
-  bind_buf(ms, buf_b, off_b, 1);
-  bind_buf(ms, buf_c, off_c, 2);
+  mtl_bind_buffer(ms, buf_a, off_a, 0);
+  mtl_bind_buffer(ms, buf_b, off_b, 1);
+  mtl_bind_buffer(ms, buf_c, off_c, 2);
 
   uint32_t mM = (uint32_t)M, mN = (uint32_t)N, mK = (uint32_t)K;
   mtl_set_params(ms, mM, 3);
@@ -938,13 +917,13 @@ static void compute_gemm_ksplit_tn(const float *A, const float *B, float *C,
   mtl_set_pso(ms, pso_ksplit);
 
   NSUInteger off_a, off_b, off_p;
-  id<MTLBuffer> buf_a = buffer_for_ptr(A, &off_a);
-  id<MTLBuffer> buf_b = buffer_for_ptr(B, &off_b);
-  id<MTLBuffer> buf_p = buffer_for_ptr(ksplit_ptr, &off_p);
+  id<MTLBuffer> buf_a = mtl_buffer_for_ptr(A, &off_a);
+  id<MTLBuffer> buf_b = mtl_buffer_for_ptr(B, &off_b);
+  id<MTLBuffer> buf_p = mtl_buffer_for_ptr(ksplit_ptr, &off_p);
 
-  bind_buf(ms, buf_a, off_a, 0);
-  bind_buf(ms, buf_b, off_b, 1);
-  bind_buf(ms, buf_p, off_p, 2);
+  mtl_bind_buffer(ms, buf_a, off_a, 0);
+  mtl_bind_buffer(ms, buf_b, off_b, 1);
+  mtl_bind_buffer(ms, buf_p, off_p, 2);
 
   HostGemmParams params = {M, N, K, lda, ldb, ldc, 1.0f, 0.0f, 1, 0}; // trans_a=TN
   mtl_set_params(ms, params, 3);
@@ -965,9 +944,9 @@ static void compute_gemm_ksplit_tn(const float *A, const float *B, float *C,
   mtl_set_pso(ms, pso_reduce);
 
   NSUInteger off_c;
-  id<MTLBuffer> buf_c = buffer_for_ptr(C, &off_c);
-  bind_buf(ms, buf_p, off_p, 0);
-  bind_buf(ms, buf_c, off_c, 1);
+  id<MTLBuffer> buf_c = mtl_buffer_for_ptr(C, &off_c);
+  mtl_bind_buffer(ms, buf_p, off_p, 0);
+  mtl_bind_buffer(ms, buf_c, off_c, 1);
 
   struct { int MN, num_splits; float alpha, beta; }
     rp = {M * N, num_splits, 1.0f, 0.0f};
@@ -988,13 +967,13 @@ static void small_gemm_nt_dispatch(const float *A, const float *B, float *C,
   mtl_set_pso(ms, pso);
 
   NSUInteger off_a, off_b, off_c;
-  id<MTLBuffer> buf_a = buffer_for_ptr(A, &off_a);
-  id<MTLBuffer> buf_b = buffer_for_ptr(B, &off_b);
-  id<MTLBuffer> buf_c = buffer_for_ptr(C, &off_c);
+  id<MTLBuffer> buf_a = mtl_buffer_for_ptr(A, &off_a);
+  id<MTLBuffer> buf_b = mtl_buffer_for_ptr(B, &off_b);
+  id<MTLBuffer> buf_c = mtl_buffer_for_ptr(C, &off_c);
 
-  bind_buf(ms, buf_a, off_a, 0);
-  bind_buf(ms, buf_b, off_b, 1);
-  bind_buf(ms, buf_c, off_c, 2);
+  mtl_bind_buffer(ms, buf_a, off_a, 0);
+  mtl_bind_buffer(ms, buf_b, off_b, 1);
+  mtl_bind_buffer(ms, buf_c, off_c, 2);
 
   struct { uint32_t M, N, K; } params = {(uint32_t)M, (uint32_t)N, (uint32_t)K};
   mtl_set_params(ms, params, 3);
@@ -1180,7 +1159,7 @@ void puf_addmm_nn(PufTensor &a, PufTensor &b, PufTensor &out, float alpha,
       auto pso = mtl_pipeline("scale_f32");
       mtl_set_pso(ms, pso);
       NSUInteger off_out;
-      bind_buf(ms, buffer_for_ptr(out.bytes, &off_out), off_out, 0);
+      mtl_bind_buffer(ms, mtl_buffer_for_ptr(out.bytes, &off_out), off_out, 0);
       struct { float alpha; int n; } sp = {beta, count};
       mtl_set_params(ms, sp, 1);
       mtl_dispatch_1d(ms, pso, count);
@@ -1194,8 +1173,8 @@ void puf_addmm_nn(PufTensor &a, PufTensor &b, PufTensor &out, float alpha,
       auto pso = mtl_pipeline("axpy_f32");
       mtl_set_pso(ms, pso);
       NSUInteger off_out, off_temp;
-      bind_buf(ms, buffer_for_ptr(out.bytes, &off_out), off_out, 0);
-      bind_buf(ms, buffer_for_ptr(temp, &off_temp), off_temp, 1);
+      mtl_bind_buffer(ms, mtl_buffer_for_ptr(out.bytes, &off_out), off_out, 0);
+      mtl_bind_buffer(ms, mtl_buffer_for_ptr(temp, &off_temp), off_temp, 1);
       struct { float alpha; int n; } ap = {alpha, count};
       mtl_set_params(ms, ap, 2);
       mtl_dispatch_1d(ms, pso, count);

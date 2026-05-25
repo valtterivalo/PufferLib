@@ -5,24 +5,6 @@
 #include <cstring>
 #include <random>
 
-static inline void mtl_set_ptr(MetalStream *ms, const void *ptr,
-                               uint32_t index) {
-  MetalContext *ctx = mtl_ctx();
-  for (auto &wb : ctx->buffers) {
-    if ((const char *)ptr >= wb.base &&
-        (const char *)ptr < wb.base + wb.size) {
-      NSUInteger offset = (NSUInteger)((const char *)ptr - wb.base);
-      uint64_t addr = wb.buffer.gpuAddress + offset;
-      if (ms->bound_addresses[index] != addr) {
-        [ms->arg_table setAddress:addr atIndex:index];
-        ms->bound_addresses[index] = addr;
-      }
-      return;
-    }
-  }
-  assert(false && "Pointer not in any wrapped allocator buffer");
-}
-
 static inline void mtl_unwrap_ptr(const void *ptr_base) {
   auto &bufs = mtl_ctx()->buffers;
   bufs.erase(

@@ -88,3 +88,29 @@
 - `breakout`: 2.04M baseline SPS to 2.20M milestone SPS, score 2.457 to 2.262, eval score stayed 0.0.
 - `g2048`: 347.6K baseline SPS to 358.6K milestone SPS, score 97.855 unchanged, eval score stayed 49.43.
 - Both new run metadata files include identical `git_diff_sha256=755c36ba21d3d04a23f662c2d733e36db320c02926e2d4ce2fa0837ccec78558`.
+
+## 2026-05-26 02:36 EEST
+
+- Milestone 01 committed as `cdc249e26`.
+- Starting milestone 02 hot-path pass.
+- Root-cause hypothesis: `muon_addmm_dependency_boundary` forces a full stream sync after each Muon `puf_addmm_nn`, but `puf_addmm_nn` already inserts Metal barriers before dependent reads. Removing the CPU-visible sync should reduce Muon wall time without changing GPU ordering.
+
+## 2026-05-26 02:43 EEST
+
+- Tested removing `muon_addmm_dependency_boundary`.
+- Result rejected despite speedup.
+- `breakout` reached 3.2M SPS but losses became NaN by 4.2M steps.
+- `g2048` reached 511K SPS but score collapsed from ~98 to 16, with eval score 13.84.
+- Reverted the sync-removal code. Root cause update: Metal barriers were not enough for this Muon dependency chain, or the missing full sync exposed stale/unstable state before subsequent CPU-visible training bookkeeping.
+
+## 2026-05-26 02:51 EEST
+
+- Starting second milestone 02 candidate.
+- Root-cause hypothesis: raw pointer buffer lookup and argument binding are duplicated across `kernels.mm`, `platform.h`, and GEMM helpers. Consolidating them through shared platform helpers should reduce LOC and may reduce repeated argument-table writes in GEMM paths by honoring `bound_addresses`.
+
+## 2026-05-26 03:00 EEST
+
+- Binding-helper candidate suite passed twice.
+- Code LOC total across Metal-owned paths dropped from 10217 to 10184.
+- Median vs milestone 01 accepted runs: `breakout` +2.70 percent SPS, `g2048` -0.16 percent SPS.
+- Decision: do not count this as a speed win because it does not clear the 3 percent gate on both envs. Keep pending review as a LOC reduction because median SPS stayed within the 1 percent LOC gate and learnability/eval did not regress.
