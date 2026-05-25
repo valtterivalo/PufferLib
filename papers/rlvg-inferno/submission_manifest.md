@@ -5,17 +5,17 @@ Status: generated 2026-05-25 for the current checked-out paper artifacts.
 ## Primary Artifact
 
 - PDF: `papers/rlvg-inferno/paper_v0.pdf`
-- SHA-256: `24de4ce70d3c92a55dd3b5203362b106ec2702dc454ab736d7ecdce6705a19b1`
+- SHA-256: `1429ff1b3c4ed8ffefaf8b06eaeef7b7074d349db6586fa906f71d5eb161744d`
 - Pages: 4
 - Page size: letter
-- File size: 435046 bytes
+- File size: 435049 bytes
 - Author metadata: blank
 - Date metadata: omitted
 
 ## Source Artifacts
 
 - TeX: `papers/rlvg-inferno/paper_v0.tex`
-- TeX SHA-256: `49fba526a2191cbe95cf74c25cf9a05f36440d932c54b960b5c48fffe0135a26`
+- TeX SHA-256: `2782b8d02230982f563ad8b74374a287cac4b3258b7539f5b66b2bd11cd0698b`
 - Replay figure: `papers/rlvg-inferno/figures/inferno_replay_wave69.jpg`
 - Replay figure SHA-256: `4ef69b90fd5276f71e9f844f1a7e4ca7d0b45dcfad54459cfc4a5ca128567369`
 
@@ -58,5 +58,6 @@ Expected results:
 - The final blocker review is in `papers/rlvg-inferno/review_notes_v9.md`.
 - The layout audit is in `papers/rlvg-inferno/layout_audit_v0.md`.
 - The Inferno contract test audit is in `papers/rlvg-inferno/contract_test_audit_v0.md`.
+- The writing-style audit is in `papers/rlvg-inferno/style_audit_v0.md`.
 - The source-strength follow-up cites the PufferLib arXiv paper for the general PufferLib context.
 - The Zuk HP result row reports `env/min_zuk_hp_normal`, where wins are logged as 0 HP.
