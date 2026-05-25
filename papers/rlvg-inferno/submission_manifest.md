@@ -58,6 +58,7 @@ Expected results:
 - The final blocker review is in `papers/rlvg-inferno/review_notes_v9.md`.
 - The post-observation-row review is in `papers/rlvg-inferno/review_notes_v10.md`.
 - The layout audit is in `papers/rlvg-inferno/layout_audit_v0.md`.
+- The reference link audit is in `papers/rlvg-inferno/reference_link_audit_v0.md`.
 - The Inferno contract test audit is in `papers/rlvg-inferno/contract_test_audit_v0.md`.
 - The writing-style audit is in `papers/rlvg-inferno/style_audit_v0.md`.
 - The requirement trace is in `papers/rlvg-inferno/requirements_trace_v0.md`.

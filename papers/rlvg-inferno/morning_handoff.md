@@ -59,6 +59,7 @@ Checked `https://sites.google.com/view/rlvg-2026/submission-guide` and OpenRevie
 - Final blocker review: `papers/rlvg-inferno/review_notes_v9.md`
 - Post-observation-row review: `papers/rlvg-inferno/review_notes_v10.md`
 - Layout audit: `papers/rlvg-inferno/layout_audit_v0.md`
+- Reference link audit: `papers/rlvg-inferno/reference_link_audit_v0.md`
 - Contract test audit: `papers/rlvg-inferno/contract_test_audit_v0.md`
 - Style audit: `papers/rlvg-inferno/style_audit_v0.md`
 - OpenReview upload checklist: `papers/rlvg-inferno/openreview_upload_checklist_v0.md`

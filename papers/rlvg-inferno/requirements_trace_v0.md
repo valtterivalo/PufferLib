@@ -17,6 +17,7 @@ This file maps the current paper bundle to the user goal and the RLVG CFP. It is
 - Use Joseph Suarez's Puffer articles through the browser review and source loop.
   - Evidence: `papers/rlvg-inferno/source_notes.md`
   - Evidence: references 3, 4, and 6 in `papers/rlvg-inferno/paper_v0.tex`
+  - Evidence: `papers/rlvg-inferno/reference_link_audit_v0.md`
 - Use external ChatGPT review and iterate from feedback.
   - Evidence: `papers/rlvg-inferno/review_notes_v0.md` through `papers/rlvg-inferno/review_notes_v9.md`
   - Evidence: `papers/rlvg-inferno/review_notes_v10.md`
