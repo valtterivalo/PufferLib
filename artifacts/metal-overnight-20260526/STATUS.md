@@ -234,3 +234,16 @@
 
 - Tested guarded in-place Muon gram once.
 - Rejected and reverted. The run stayed learnable but only reached `breakout` +0.83 percent SPS and `g2048` +0.29 percent SPS versus the current accepted baseline, while adding code. It did not justify a second run under the 3 percent speed gate.
+
+## 2026-05-26 02:50 EEST
+
+- Resumed from clean commit `7b40b59ab`.
+- Starting sixth milestone 04 candidate.
+- Root-cause hypothesis: `prio_imp_weights_kernel` writes one priority weight per minibatch segment, but the host launches only one 256-thread group while current benchmark configs use 1024 minibatch segments. Rows above 255 can therefore reuse stale `mb_prio` values inside `select_copy_kernel`, which may perturb learning and wastes the intended priority replay contract. Dispatching this as a normal 1D grid should make priority weights total over all minibatch rows. This is a semantic fix candidate, so acceptance requires both learnability and the normal benchmark gates.
+
+## 2026-05-26 02:52 EEST
+
+- Tested priority importance-weight full-grid dispatch twice.
+- `breakout` SPS runs: 2,285,440 and 2,280,391. Median versus current accepted baseline: -0.35 percent. Training scores increased to 4.55 and 6.12, explicit eval scores were 0.40 and 0.0.
+- `g2048` SPS runs: 352,723 and 353,095. Median versus current accepted baseline: -0.82 percent. Training score was 96.21 both runs, explicit eval score was 54.40 both runs.
+- Decision: reject and revert after subagent review. The code-level fix was plausible, but it changed `mb_prio` values consumed by PPO and therefore did not qualify for the LOC-only gate. It also did not clear the milestone 04 speed gate. Keep this as a later explicit correctness item, not an overnight optimization commit.
