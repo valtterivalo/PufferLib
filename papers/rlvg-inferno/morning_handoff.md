@@ -71,6 +71,7 @@ Checked `https://sites.google.com/view/rlvg-2026/submission-guide` and OpenRevie
 - Reference link audit: `papers/rlvg-inferno/reference_link_audit_v0.md`
 - Contract test audit: `papers/rlvg-inferno/contract_test_audit_v0.md`
 - Style audit: `papers/rlvg-inferno/style_audit_v0.md`
+- Source-claim audit: `papers/rlvg-inferno/source_claim_audit_v0.md`
 - OpenReview upload checklist: `papers/rlvg-inferno/openreview_upload_checklist_v0.md`
 - OpenReview form fields: `papers/rlvg-inferno/openreview_form_fields_v0.md`
 - Morning audit checklist: `papers/rlvg-inferno/morning_audit_checklist_v0.md`

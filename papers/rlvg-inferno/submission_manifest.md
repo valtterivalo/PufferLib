@@ -62,6 +62,7 @@ Expected results:
 - The reference link audit is in `papers/rlvg-inferno/reference_link_audit_v0.md`.
 - The Inferno contract test audit is in `papers/rlvg-inferno/contract_test_audit_v0.md`.
 - The writing-style audit is in `papers/rlvg-inferno/style_audit_v0.md`.
+- The source-claim audit is in `papers/rlvg-inferno/source_claim_audit_v0.md`.
 - The requirement trace is in `papers/rlvg-inferno/requirements_trace_v0.md`.
 - The OpenReview upload checklist is in `papers/rlvg-inferno/openreview_upload_checklist_v0.md`.
 - The OpenReview form fields are in `papers/rlvg-inferno/openreview_form_fields_v0.md`.

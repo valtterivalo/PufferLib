@@ -12,6 +12,7 @@ This file maps the current paper bundle to the user goal and the RLVG CFP. It is
   - Evidence: `papers/rlvg-inferno/layout_audit_v0.md`
 - Use actual Puffer source code and local git history rather than only high-level prose.
   - Evidence: `papers/rlvg-inferno/source_notes.md`
+  - Evidence: `papers/rlvg-inferno/source_claim_audit_v0.md`
   - Evidence: `papers/rlvg-inferno/contract_test_audit_v0.md`
   - Evidence: `papers/rlvg-inferno/git_history_notes.md`
 - Use Joseph Suarez's Puffer articles through the browser review and source loop.
