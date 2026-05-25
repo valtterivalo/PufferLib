@@ -29,6 +29,7 @@ Status: paper artifact current for the checked-out submission bundle. Venue and 
 - The PDF uses a real replay screenshot, but not an annotated figure with log snippets. That would improve the inspectability argument if there is time.
 - The replay figure is embedded as stripped JPEG. The original PNG rendered correctly as an image file, but the PDF preview path was more robust after switching away from the PNG embed.
 - A final blocker review on 2026-05-25 found no fatal blockers. It suggested one narrower result sentence, which is now applied.
+- The focused Inferno C contract test passed on 2026-05-25 with `1441/1441 tests passed`.
 
 ## Next Useful Edits
 

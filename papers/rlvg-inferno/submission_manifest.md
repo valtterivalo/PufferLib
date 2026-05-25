@@ -57,5 +57,6 @@ Expected results:
 - The live venue mechanics check is in `papers/rlvg-inferno/review_notes_v8.md`.
 - The final blocker review is in `papers/rlvg-inferno/review_notes_v9.md`.
 - The layout audit is in `papers/rlvg-inferno/layout_audit_v0.md`.
+- The Inferno contract test audit is in `papers/rlvg-inferno/contract_test_audit_v0.md`.
 - The source-strength follow-up cites the PufferLib arXiv paper for the general PufferLib context.
 - The Zuk HP result row reports `env/min_zuk_hp_normal`, where wins are logged as 0 HP.
