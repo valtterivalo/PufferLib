@@ -20,6 +20,11 @@ The contribution is a benchmark design pattern: player-readable state, structure
 
 Short-form.
 
+## Primary CFP Topics
+
+- Benchmarks and Real-world Deployment
+- Alignment and Evaluation in Games
+
 ## Keywords
 
 Reinforcement learning benchmarks, video games, PufferLib, Old School RuneScape, recurrent policies, action masks, simulator debugging, behavioral evaluation
