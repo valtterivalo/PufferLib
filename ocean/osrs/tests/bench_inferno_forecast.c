@@ -27,6 +27,8 @@ static double now_seconds(void) {
 static void init_bench_state(InfernoState* state, int player_x, int player_y) {
     inf_legacy_context()->config = inf_default_config();
     inf_legacy_context()->config.step_out_forecast_obs_enabled = 1;
+    inf_legacy_context()->config.step_out_forecast_obs_mode =
+        INF_STEP_OUT_FORECAST_MODE_EXACT_ROLLOUT;
     inf_build_npc_stats();
     memset(state, 0, sizeof(*state));
     memset(state->npc_los_cache, -1, sizeof(state->npc_los_cache));
@@ -94,21 +96,34 @@ static void init_dense_wave_state(InfernoState* state) {
 static void init_pillar_stack_no_forecast_state(InfernoState* state) {
     init_pillar_stack_state(state);
     inf_legacy_context()->config.step_out_forecast_obs_enabled = 0;
+    inf_legacy_context()->config.step_out_forecast_obs_mode =
+        INF_STEP_OUT_FORECAST_MODE_OFF;
 }
 
 static void init_dense_wave_no_forecast_state(InfernoState* state) {
     init_dense_wave_state(state);
     inf_legacy_context()->config.step_out_forecast_obs_enabled = 0;
+    inf_legacy_context()->config.step_out_forecast_obs_mode =
+        INF_STEP_OUT_FORECAST_MODE_OFF;
 }
 
 typedef void (*BenchInit)(InfernoState*);
 typedef void (*BenchFn)(InfernoState*, float*);
 typedef void (*FixedBenchFn)(const InfernoState*, float*);
 
-static void bench_forecast(InfernoState* state, float* obs) {
+static void bench_forecast_exact(InfernoState* state, float* obs) {
     (void)obs;
     InfStepOutForecast forecast;
-    inf_build_step_out_forecast(state, &forecast);
+    inf_build_step_out_forecast_exact_ctx(state, inf_legacy_context(), &forecast);
+    bench_sink += forecast.actions[0].valid;
+    bench_sink += forecast.actions[ENCOUNTER_MOVE_ACTIONS - 1].ticks[0].max_hit;
+}
+
+static void bench_forecast_fast_static(InfernoState* state, float* obs) {
+    (void)obs;
+    InfStepOutForecast forecast;
+    inf_build_step_out_forecast_fast_static_ctx(
+        state, inf_legacy_context(), &forecast);
     bench_sink += forecast.actions[0].valid;
     bench_sink += forecast.actions[ENCOUNTER_MOVE_ACTIONS - 1].ticks[0].max_hit;
 }
@@ -180,25 +195,104 @@ static void run_fixed_bench(const char* label, BenchInit init, FixedBenchFn fn, 
         label, iters, elapsed * 1000.0, elapsed * 1000000.0 / (double)iters);
 }
 
+static void report_forecast_diff(const char* label, BenchInit init) {
+    InfernoState state;
+    init(&state);
+    InfStepOutForecast exact;
+    InfStepOutForecast fast;
+    InfStepOutForecastOracleDiff diff;
+    inf_build_step_out_forecast_exact_ctx(&state, inf_legacy_context(), &exact);
+    inf_build_step_out_forecast_fast_static_ctx(&state, inf_legacy_context(), &fast);
+    inf_compare_step_out_forecasts(&exact, &fast, &diff);
+    printf("%-24s action_mismatch=%d tick_mismatch=%d dangerous_fn=%d exact_danger=%d fast_danger=%d max_hit_err_sum=%d max_hit_err_max=%d\n",
+        label,
+        diff.action_feature_mismatches,
+        diff.tick_feature_mismatches,
+        diff.dangerous_false_negatives,
+        diff.exact_dangerous_actions,
+        diff.fast_dangerous_actions,
+        diff.max_hit_abs_error_sum,
+        diff.max_hit_abs_error_max);
+}
+
+static void add_forecast_diff(
+    InfStepOutForecastOracleDiff* total,
+    const InfStepOutForecastOracleDiff* diff
+) {
+    total->action_feature_mismatches += diff->action_feature_mismatches;
+    total->tick_feature_mismatches += diff->tick_feature_mismatches;
+    total->dangerous_false_negatives += diff->dangerous_false_negatives;
+    total->exact_dangerous_actions += diff->exact_dangerous_actions;
+    total->fast_dangerous_actions += diff->fast_dangerous_actions;
+    total->max_hit_abs_error_sum += diff->max_hit_abs_error_sum;
+    if (diff->max_hit_abs_error_max > total->max_hit_abs_error_max)
+        total->max_hit_abs_error_max = diff->max_hit_abs_error_max;
+}
+
+static void report_sampled_forecast_diff(
+    const char* label, BenchInit init, int samples
+) {
+    InfernoState state;
+    init(&state);
+    InfStepOutForecastOracleDiff total = {0};
+    int resets = 0;
+    for (int sample = 0; sample < samples; sample++) {
+        InfStepOutForecast exact;
+        InfStepOutForecast fast;
+        InfStepOutForecastOracleDiff diff;
+        inf_build_step_out_forecast_exact_ctx(&state, inf_legacy_context(), &exact);
+        inf_build_step_out_forecast_fast_static_ctx(&state, inf_legacy_context(), &fast);
+        inf_compare_step_out_forecasts(&exact, &fast, &diff);
+        add_forecast_diff(&total, &diff);
+
+        int actions[INF_NUM_ACTION_HEADS] = {0};
+        actions[INF_HEAD_MOVE] = sample % ENCOUNTER_MOVE_ACTIONS;
+        inf_step((EncounterState*)&state, actions);
+        if (state.episode_over) {
+            init(&state);
+            resets++;
+        }
+    }
+
+    printf("%-24s samples=%d resets=%d action_mismatch=%d tick_mismatch=%d dangerous_fn=%d exact_danger=%d fast_danger=%d max_hit_err_sum=%d max_hit_err_max=%d\n",
+        label,
+        samples,
+        resets,
+        total.action_feature_mismatches,
+        total.tick_feature_mismatches,
+        total.dangerous_false_negatives,
+        total.exact_dangerous_actions,
+        total.fast_dangerous_actions,
+        total.max_hit_abs_error_sum,
+        total.max_hit_abs_error_max);
+}
+
 int main(void) {
     printf("sizeof(InfernoState) = %zu\n", sizeof(InfernoState));
     printf("INF_NUM_OBS = %d\n", INF_NUM_OBS);
     printf("INF_STEP_OUT_FORECAST_OBS_SIZE = %d\n", INF_STEP_OUT_FORECAST_OBS_SIZE);
-    run_bench("empty forecast", init_empty_state, bench_forecast, 200000);
+    run_bench("empty exact", init_empty_state, bench_forecast_exact, 200000);
+    run_bench("empty fast", init_empty_state, bench_forecast_fast_static, 200000);
     run_bench("empty obs", init_empty_state, bench_obs, 200000);
     run_bench("empty mask", init_empty_state, bench_mask, 200000);
-    run_bench("stack forecast", init_pillar_stack_state, bench_forecast, 100000);
+    report_forecast_diff("empty exact vs fast", init_empty_state);
+    run_bench("stack exact", init_pillar_stack_state, bench_forecast_exact, 100000);
+    run_bench("stack fast", init_pillar_stack_state, bench_forecast_fast_static, 100000);
     run_bench("stack obs", init_pillar_stack_state, bench_obs, 100000);
     run_bench("stack obs no forecast", init_pillar_stack_no_forecast_state, bench_obs, 100000);
     run_bench("stack mask", init_pillar_stack_state, bench_mask, 100000);
-    run_bench("dense forecast", init_dense_wave_state, bench_forecast, 50000);
+    report_forecast_diff("stack exact vs fast", init_pillar_stack_state);
+    run_bench("dense exact", init_dense_wave_state, bench_forecast_exact, 50000);
+    run_bench("dense fast", init_dense_wave_state, bench_forecast_fast_static, 50000);
     run_bench("dense obs", init_dense_wave_state, bench_obs, 50000);
     run_bench("dense obs no forecast", init_dense_wave_no_forecast_state, bench_obs, 50000);
     run_bench("dense mask", init_dense_wave_state, bench_mask, 50000);
+    report_forecast_diff("dense exact vs fast", init_dense_wave_state);
     run_fixed_bench("dense copy fixed", init_dense_wave_state, bench_copy_fixed, 50000);
     run_fixed_bench("dense step fixed", init_dense_wave_state, bench_step_fixed, 50000);
     run_fixed_bench("dense step+obs+mask", init_dense_wave_state, bench_step_obs_mask_fixed, 50000);
     run_fixed_bench("step+obs+mask no fc", init_dense_wave_no_forecast_state, bench_step_obs_mask_fixed, 50000);
+    report_sampled_forecast_diff("dense sampled diff", init_dense_wave_state, 256);
     printf("bench_sink = %.3f\n", bench_sink);
     return 0;
 }

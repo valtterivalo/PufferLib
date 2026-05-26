@@ -1785,10 +1785,10 @@ static void inferno_env_put_int(Env* env, const char* key, int value) {
 static void inferno_apply_obs_profile(Env* env, int obs_profile) {
     switch (obs_profile) {
         case 0:
-            inferno_env_put_int(env, "step_out_forecast_obs_enabled", 0);
+            inferno_env_put_int(env, "step_out_forecast_obs_mode", 0);
             break;
         case 1:
-            inferno_env_put_int(env, "step_out_forecast_obs_enabled", 1);
+            inferno_env_put_int(env, "step_out_forecast_obs_mode", 1);
             break;
         default:
             fprintf(stderr, "obs_profile must be 0 or 1, got %d\n", obs_profile);
@@ -1916,16 +1916,22 @@ void my_init(Env* env, Dict* kwargs) {
             INF_ENV_STATE(env), INF_ENV_CONTEXT(env), "terminal_penalty_enabled",
             (int)terminal_penalty_enabled->value);
     }
-    DictItem* step_out_forecast_obs_enabled =
-        dict_get_unsafe(kwargs, "step_out_forecast_obs_enabled");
-    if (step_out_forecast_obs_enabled) {
-        ENCOUNTER_INFERNO.put_int(
-            INF_ENV_STATE(env), INF_ENV_CONTEXT(env), "step_out_forecast_obs_enabled",
-            (int)step_out_forecast_obs_enabled->value);
-    }
     DictItem* obs_profile = dict_get_unsafe(kwargs, "obs_profile");
     if (obs_profile) {
         inferno_apply_obs_profile(env, (int)obs_profile->value);
+    }
+    DictItem* step_out_forecast_obs_enabled =
+        dict_get_unsafe(kwargs, "step_out_forecast_obs_enabled");
+    DictItem* step_out_forecast_obs_mode =
+        dict_get_unsafe(kwargs, "step_out_forecast_obs_mode");
+    if (step_out_forecast_obs_mode) {
+        ENCOUNTER_INFERNO.put_int(
+            INF_ENV_STATE(env), INF_ENV_CONTEXT(env), "step_out_forecast_obs_mode",
+            (int)step_out_forecast_obs_mode->value);
+    } else if (step_out_forecast_obs_enabled) {
+        ENCOUNTER_INFERNO.put_int(
+            INF_ENV_STATE(env), INF_ENV_CONTEXT(env), "step_out_forecast_obs_enabled",
+            (int)step_out_forecast_obs_enabled->value);
     }
     DictItem* loadout_profile_mode =
         dict_get_unsafe(kwargs, "loadout_profile_mode");

@@ -1667,6 +1667,8 @@ static void test_inferno_reset_preserves_reward_config(void) {
     ASSERT_INT_EQ("terminal penalty enabled", test_config()->terminal_penalty_enabled, 1);
     ASSERT_INT_EQ("step-out forecast obs disabled",
         test_config()->step_out_forecast_obs_enabled, 0);
+    ASSERT_INT_EQ("step-out forecast obs mode disabled",
+        test_config()->step_out_forecast_obs_mode, INF_STEP_OUT_FORECAST_MODE_OFF);
     ASSERT_INT_EQ("loadout profile mode preserved",
         test_config()->loadout_profile_mode, INF_LOADOUT_PROFILE_MODE_BUDGET_ONLY);
     ASSERT_FLOAT_NEAR("budget loadout fraction preserved",
@@ -3218,6 +3220,8 @@ static void init_step_out_forecast_stack_state(InfernoState* state, int player_x
     state->player_dest_x = -1;
     state->player_dest_y = -1;
     test_config()->step_out_forecast_obs_enabled = 1;
+    test_config()->step_out_forecast_obs_mode =
+        INF_STEP_OUT_FORECAST_MODE_EXACT_ROLLOUT;
     state->weapon_set = INF_GEAR_LONG_RANGE;
     osrs_interaction_init(&state->interaction);
     for (int p = 0; p < INF_NUM_PILLARS; p++) {
@@ -3237,6 +3241,15 @@ static void add_step_out_forecast_npc(
     state->npcs[slot].attack_timer = timer;
     state->npcs[slot].stun_timer = 0;
     state->npcs[slot].frozen_ticks = 0;
+}
+
+static void clear_step_out_forecast_pillars(InfernoState* state) {
+    for (int p = 0; p < INF_NUM_PILLARS; p++) {
+        state->pillars[p].active = 0;
+        state->pillars[p].hp = 0;
+    }
+    inf_rebuild_los(state);
+    inf_rebuild_entity_collision_flags(state);
 }
 
 static void assert_step_out_ranger_then_mager(
@@ -3409,6 +3422,7 @@ static void test_step_out_forecast_obs_can_be_disabled(void) {
     add_step_out_forecast_npc(&state, 0, INF_NPC_RANGER, 24, 31, 0);
     add_step_out_forecast_npc(&state, 1, INF_NPC_MAGER, 29, 30, 0);
     test_config()->step_out_forecast_obs_enabled = 0;
+    test_config()->step_out_forecast_obs_mode = INF_STEP_OUT_FORECAST_MODE_OFF;
 
     float obs[INF_NUM_OBS];
     inf_write_obs((EncounterState*)&state, obs);
@@ -3418,6 +3432,157 @@ static void test_step_out_forecast_obs_can_be_disabled(void) {
         ASSERT_FLOAT_NEAR("disabled forecast obs stays zero",
             obs[forecast_start + j], 0.0f, 1e-6f);
     }
+}
+
+static void test_step_out_forecast_obs_uses_fast_mode(void) {
+    printf("--- step-out forecast obs uses fast mode ---\n");
+
+    InfernoState state;
+    init_step_out_forecast_stack_state(&state, 29, 39);
+    clear_step_out_forecast_pillars(&state);
+    add_step_out_forecast_npc(&state, 0, INF_NPC_RANGER, 24, 31, 1);
+    add_step_out_forecast_npc(&state, 1, INF_NPC_MAGER, 29, 30, 2);
+    inf_rebuild_entity_collision_flags(&state);
+    test_config()->step_out_forecast_obs_enabled = 1;
+    test_config()->step_out_forecast_obs_mode =
+        INF_STEP_OUT_FORECAST_MODE_FAST_STATIC_TILE;
+
+    float obs[INF_NUM_OBS];
+    inf_write_obs((EncounterState*)&state, obs);
+
+    int action_start = inferno_step_out_forecast_obs_start();
+    ASSERT_FLOAT_NEAR("fast obs idle valid",
+        obs[action_start], 1.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("fast obs idle first attack tick",
+        obs[action_start + 1], 1.0f / 4.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("fast obs idle first style mask",
+        obs[action_start + 2], (float)INF_STYLE_MASK_RANGED / 7.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("fast obs idle max hit",
+        obs[action_start + 3], 70.0f / 150.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("fast obs idle off-tick opportunity",
+        obs[action_start + 6], 1.0f, 1e-6f);
+}
+
+static void test_fast_step_out_forecast_matches_movement_head_destinations(void) {
+    printf("--- fast step-out forecast matches movement head destinations ---\n");
+
+    InfernoState state;
+    init_step_out_forecast_stack_state(&state, 29, 39);
+
+    InfStepOutForecast forecast;
+    inf_build_step_out_forecast_fast_static_ctx(
+        &state, inf_legacy_context(), &forecast);
+
+    for (int action = 0; action < ENCOUNTER_MOVE_ACTIONS; action++) {
+        Player moved = state.player;
+        if (action > 0) {
+            InfWalkCtx walk_ctx = { &state, inf_legacy_context() };
+            encounter_move_to_target(
+                &moved,
+                ENCOUNTER_MOVE_TARGET_DX[action],
+                ENCOUNTER_MOVE_TARGET_DY[action],
+                inf_tile_walkable,
+                &walk_ctx);
+        }
+
+        ASSERT_INT_EQ("fast forecast movement landing x",
+            forecast.actions[action].land_x, moved.x);
+        ASSERT_INT_EQ("fast forecast movement landing y",
+            forecast.actions[action].land_y, moved.y);
+    }
+}
+
+static void test_fast_step_out_forecast_immediate_static_threats(void) {
+    printf("--- fast step-out forecast immediate static threats ---\n");
+
+    InfernoState state;
+    init_step_out_forecast_stack_state(&state, 29, 39);
+    clear_step_out_forecast_pillars(&state);
+    add_step_out_forecast_npc(&state, 0, INF_NPC_RANGER, 24, 31, 1);
+    add_step_out_forecast_npc(&state, 1, INF_NPC_MAGER, 29, 30, 2);
+    inf_rebuild_entity_collision_flags(&state);
+
+    InfStepOutForecast exact;
+    InfStepOutForecast fast;
+    InfStepOutForecastOracleDiff diff;
+    inf_build_step_out_forecast_exact_ctx(&state, inf_legacy_context(), &exact);
+    inf_build_step_out_forecast_fast_static_ctx(&state, inf_legacy_context(), &fast);
+    inf_compare_step_out_forecasts(&exact, &fast, &diff);
+
+    const InfStepOutForecastAction* idle = &fast.actions[0];
+    ASSERT_INT_EQ("fast idle ranger fires first", idle->ticks[0].ranger_count, 1);
+    ASSERT_INT_EQ("fast idle mager fires second", idle->ticks[1].mager_count, 1);
+    ASSERT_INT_EQ("fast idle exposes off-tick opportunity",
+        idle->ranger_mager_offtick_opportunity, 1);
+    ASSERT_INT_EQ("fast static has no dangerous false negatives",
+        diff.dangerous_false_negatives, 0);
+}
+
+static void test_fast_step_out_forecast_blob_scan_and_melee_fallback(void) {
+    printf("--- fast step-out forecast blob scan and melee fallback ---\n");
+
+    InfernoState blob_state;
+    init_step_out_forecast_stack_state(&blob_state, 29, 39);
+    clear_step_out_forecast_pillars(&blob_state);
+    add_step_out_forecast_npc(&blob_state, 0, INF_NPC_BLOB, 29, 30, 1);
+    blob_state.npcs[0].blob_scanned_prayer = -1;
+    blob_state.npcs[0].had_los_last_tick = 0;
+    inf_rebuild_entity_collision_flags(&blob_state);
+
+    InfStepOutForecast blob_forecast;
+    inf_build_step_out_forecast_fast_static_ctx(
+        &blob_state, inf_legacy_context(), &blob_forecast);
+    ASSERT_INT_EQ("fast blob scan tick",
+        blob_forecast.actions[0].ticks[0].blob_scan_count, 1);
+
+    InfernoState melee_state;
+    init_step_out_forecast_stack_state(&melee_state, 10, 10);
+    clear_step_out_forecast_pillars(&melee_state);
+    add_step_out_forecast_npc(&melee_state, 0, INF_NPC_MAGER, 11, 10, 1);
+    inf_rebuild_entity_collision_flags(&melee_state);
+
+    InfStepOutForecast melee_forecast;
+    inf_build_step_out_forecast_fast_static_ctx(
+        &melee_state, inf_legacy_context(), &melee_forecast);
+    ASSERT_INT_EQ("fast melee fallback exposure",
+        melee_forecast.actions[0].melee_fallback_exposure, 1);
+    ASSERT_INT_EQ("fast melee fallback mixed style",
+        melee_forecast.actions[0].same_tick_mixed_style_conflict, 1);
+}
+
+static void test_fast_step_out_forecast_does_not_mutate_state(void) {
+    printf("--- fast step-out forecast does not mutate state ---\n");
+
+    InfernoState state;
+    init_step_out_forecast_stack_state(&state, 29, 39);
+    clear_step_out_forecast_pillars(&state);
+    add_step_out_forecast_npc(&state, 0, INF_NPC_BLOB, 29, 30, 1);
+    state.npcs[0].blob_scanned_prayer = -1;
+    state.npcs[0].had_los_last_tick = 0;
+    inf_rebuild_entity_collision_flags(&state);
+
+    InfernoState before = state;
+    InfStepOutForecast forecast;
+    inf_build_step_out_forecast_fast_static_ctx(
+        &state, inf_legacy_context(), &forecast);
+
+    ASSERT_INT_EQ("fast forecast preserves player x",
+        state.player.x, before.player.x);
+    ASSERT_INT_EQ("fast forecast preserves player y",
+        state.player.y, before.player.y);
+    ASSERT_INT_EQ("fast forecast preserves NPC timer",
+        state.npcs[0].attack_timer, before.npcs[0].attack_timer);
+    ASSERT_INT_EQ("fast forecast preserves blob scan state",
+        state.npcs[0].blob_scanned_prayer, before.npcs[0].blob_scanned_prayer);
+    ASSERT_INT_EQ("fast forecast preserves LOS cache",
+        memcmp(state.npc_los_cache, before.npc_los_cache,
+            sizeof(state.npc_los_cache)), 0);
+    ASSERT_INT_EQ("fast forecast preserves player collision flags",
+        memcmp(state.player_collision_flags, before.player_collision_flags,
+            sizeof(state.player_collision_flags)), 0);
+    ASSERT_INT_EQ("fast forecast preserves NPC collision flags",
+        memcmp(state.npc_collision_flags, before.npc_collision_flags,
+            sizeof(state.npc_collision_flags)), 0);
 }
 
 static void test_step_out_forecast_south_pillar_ranger_mager_order(void) {
@@ -7535,29 +7700,23 @@ static void test_inferno_binding_forwards_step_out_forecast_obs_toggle(void) {
     printf("--- inferno binding forwards step-out forecast obs toggle ---\n");
 
     ASSERT_SOURCE_BLOCK_CONTAINS(
-        "step-out forecast obs int config",
+        "step-out forecast obs mode int config",
         "ocean/osrs_inferno/binding.c",
-        "DictItem* step_out_forecast_obs_enabled",
+        "DictItem* step_out_forecast_obs_mode",
         "DictItem* zuk_healer_reward_mode",
-        "\"step_out_forecast_obs_enabled\"");
+        "\"step_out_forecast_obs_mode\"");
     ASSERT_SOURCE_BLOCK_CONTAINS(
-        "step-out forecast obs default config",
+        "step-out forecast obs mode default config",
         "config/ocean/osrs_inferno.ini",
         "[env]",
         "[vec]",
-        "step_out_forecast_obs_enabled = 1");
+        "step_out_forecast_obs_mode = 1");
     ASSERT_SOURCE_BLOCK_CONTAINS(
-        "step-out forecast obs sweep axis",
+        "step-out forecast obs mode sweep axis",
         "config/ocean/osrs_inferno.ini",
-        "[sweep.env.step_out_forecast_obs_enabled]",
+        "[sweep.env.step_out_forecast_obs_mode]",
         "scale = auto",
         "distribution = int_uniform");
-    ASSERT_SOURCE_BLOCK_CONTAINS(
-        "step-out forecast obs sweep-only entry",
-        "config/ocean/osrs_inferno.ini",
-        "[sweep]",
-        "[sweep.train.total_timesteps]",
-        "env.step_out_forecast_obs_enabled");
 }
 
 static void test_inferno_binding_forwards_loadout_profile_config(void) {
@@ -7812,6 +7971,11 @@ int main(void) {
     test_step_out_forecast_north_pillar_ranger_mager_order();
     test_step_out_forecast_obs_exposes_compact_action_affordance();
     test_step_out_forecast_obs_can_be_disabled();
+    test_step_out_forecast_obs_uses_fast_mode();
+    test_fast_step_out_forecast_matches_movement_head_destinations();
+    test_fast_step_out_forecast_immediate_static_threats();
+    test_fast_step_out_forecast_blob_scan_and_melee_fallback();
+    test_fast_step_out_forecast_does_not_mutate_state();
     test_step_out_forecast_south_pillar_ranger_mager_order();
     test_step_out_forecast_west_pillar_ranger_mager_order();
     test_step_out_forecast_inactive_pillar_does_not_create_cover();
