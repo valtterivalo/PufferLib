@@ -299,3 +299,18 @@
 - `breakout`: 2,246,855 SPS, score 2.26, explicit eval score 0.0.
 - `g2048`: 365,522 SPS, score 97.855, explicit eval score 49.43.
 - Decision: reject and revert without a second run. The candidate hurt `breakout` by about 1.9 percent and `g2048` did not clear the 3 percent speed gate.
+
+## 2026-05-26 03:18 EEST
+
+- No-mask rejection committed as `2a04f8910`.
+- Starting milestone 01 follow-up LOC candidate.
+- Root-cause hypothesis: `puf_copy` and `puf_zero` duplicate the same raw f32/f16 GPU and CPU memcpy/memset branches across `PufTensor` and `FloatTensor`. A shared raw helper can reduce host LOC while preserving the current copy rules exactly.
+
+## 2026-05-26 03:22 EEST
+
+- Refactored `FloatTensor` copy/zero helpers to route through the existing `PufTensor` implementations using a local adapter that preserves all tensor shape dimensions.
+- Current tracked Metal-owned LOC across `src/metal`, `tools/metal`, and `tests/metal`: 10205.
+- LOC suite passed.
+- `breakout`: 4.2M steps, 2.31M SPS, train score 2.521, eval score 0.0. Versus current accepted median: +0.71 percent.
+- `g2048`: 262K steps, 362.4K SPS, train score 97.855, eval score 49.43. Versus current accepted median: +1.85 percent.
+- Decision: keep pending subagent review as a LOC cleanup.

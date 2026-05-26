@@ -24,10 +24,16 @@ void mtl_mingru_scan_backward_fp16(PrefixScan &scan, const void *grad,
                                     const void *grad_next_state,
                                     cudaStream_t stream);
 void mtl_assemble_decoder_grad_f32_to_f16(void *grad_out,
-                                            const float *grad_logits,
-                                            const float *grad_value, int B_TT,
-                                            int od, int od1,
-                                            cudaStream_t stream);
+                                          const float *grad_logits,
+                                          const float *grad_value, int B_TT,
+                                          int od, int od1,
+                                          cudaStream_t stream);
+
+static PufTensor float_tensor_as_puf(const FloatTensor &t) {
+  PufTensor out = {.bytes = (char *)t.data, .dtype_size = 4};
+  memcpy(out.shape, t.shape, sizeof(out.shape));
+  return out;
+}
 
 void puf_copy(PufTensor &dst, const PufTensor &src, cudaStream_t stream) {
   assert(dst.numel() == src.numel() && "puf_copy: size mismatch");
@@ -56,23 +62,14 @@ void puf_zero(PufTensor *dst, cudaStream_t stream) {
 }
 
 void puf_copy(FloatTensor &dst, const FloatTensor &src, cudaStream_t stream) {
-  assert(puf_numel(dst.shape) == puf_numel(src.shape) && "puf_copy: size mismatch");
-  bool gpu = puf_is_gpu_training() || puf_stream_has_encoder(stream);
-  if (gpu) {
-    mtl_copy_f32(dst.data, src.data, (int)puf_numel(dst.shape), stream);
-  } else {
-    mtl_ensure_stream_synced(stream);
-    memcpy(dst.data, src.data, puf_numel(dst.shape) * sizeof(float));
-  }
+  PufTensor dst_puf = float_tensor_as_puf(dst);
+  PufTensor src_puf = float_tensor_as_puf(src);
+  puf_copy(dst_puf, src_puf, stream);
 }
 
 void puf_zero(FloatTensor *dst, cudaStream_t stream) {
-  if (puf_is_gpu_training()) {
-    mtl_fill_f32(dst->data, 0.0f, (int)puf_numel(dst->shape), stream);
-  } else {
-    mtl_ensure_stream_synced(stream);
-    memset(dst->data, 0, puf_numel(dst->shape) * sizeof(float));
-  }
+  PufTensor dst_puf = float_tensor_as_puf(*dst);
+  puf_zero(&dst_puf, stream);
 }
 
 void puf_add(PufTensor &dst, const PufTensor &src, cudaStream_t stream) {
