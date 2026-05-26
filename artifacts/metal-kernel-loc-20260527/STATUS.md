@@ -126,3 +126,22 @@
 - Interactive smoke artifact: `milestone-04b-mingru-template-pass/20260527T022406+0300-interactive-breakout-mingru-template`. It built, loaded `resources/breakout/breakout_weights.bin`, reached raylib 5.5 GLFW initialization, then failed with `Failed to determine Monitor to center Window` and exit code `139`, matching the known desktop windowing boundary.
 - Subagent review: Turing found no blocking findings and confirmed exported names, host dispatch strings, buffer indices, fp32 fast math, fp16 clamps, checkpoint semantics, reset semantics, narrow runner allowlist, and LOC arithmetic.
 - Decision: accepted after subagent review. This is a high-risk kernel-scope LOC cleanup, but repeated end-to-end runs, parity, interactive smoke, and review all cleared the gate.
+
+## 2026-05-27 Milestone 04c Dead Kernel Retest Candidate
+
+- Root-cause hypothesis: after the accepted template cleanups, the same six shader entries from milestone 01 still have no host pipeline caller: `scale_f32_dev`, `axpy_f32_dev`, `add_scalar`, `compute_lr_scalars_kernel`, `sum_rows_f16_kernel`, and `cast_f64_to_f32`. Retesting this deletion against the current accepted baseline can distinguish the earlier g2048 miss from real runtime coupling.
+- Risk classification: medium. No host dispatch strings point at these kernels, but milestone 01 was rejected for a same-night g2048 median miss, so this candidate must clear fresh repeated end-to-end gates before review.
+- Acceptance gate: use the dedicated `milestone-04c-dead-kernel-retest` runners, require median SPS within 1 percent of the current accepted baseline or better, require train and eval scores comparable to milestone 04b, and reject again if g2048 falls outside the gate.
+
+## 2026-05-27 Milestone 04c Dead Kernel Retest Results
+
+- Code change: remove six no-caller MSL kernels from `src/metal/shader_src.h`: `scale_f32_dev`, `axpy_f32_dev`, `add_scalar`, `compute_lr_scalars_kernel`, `sum_rows_f16_kernel`, and `cast_f64_to_f32`.
+- LOC: `src/metal/shader_src.h` is `2,562` lines, down from `2,657` after milestone 04b. Kernel scope is `4,183`, down from `4,278` after milestone 04b and down from setup `4,615`. Live backend scope is `9,731`, down from `9,822` after milestone 04b.
+- Static validation passed: `tools/metal/build.sh breakout`, `tools/metal/build.sh g2048`, `git diff --check`, `bash -n` for all milestone 04c runners, and `PYTHONPATH=$PWD python -m pytest tests/metal/test_overlay_surface.py`.
+- First milestone 04c suite: `breakout` artifact `20260527T023224+0300-breakout` at `3,475,584` SPS, train score `2.431506872177124`, eval score `0.0`; `g2048` artifact `20260527T023235+0300-g2048` at `603,709` SPS, train score `97.85507202148438`, eval score `49.43283462524414`.
+- Second milestone 04c suite: `breakout` artifact `20260527T023249+0300-breakout` at `3,447,215` SPS, train score `2.6573257446289062`, eval score `0.0`; `g2048` artifact `20260527T023300+0300-g2048` at `601,542` SPS, train score `97.85507202148438`, eval score `49.43283462524414`.
+- Medians: `breakout` `3,461,400` SPS, `+0.31%` versus milestone 04b accepted median `3,450,780`; `g2048` `602,626` SPS, `+1.51%` versus milestone 04b accepted median `593,658`.
+- Native Metal parity and overlay surface passed in both milestone 04c suites.
+- Interactive smoke artifact: `milestone-04c-dead-kernel-retest/20260527T023325+0300-interactive-breakout-dead-kernel-retest`. It built, loaded `resources/breakout/breakout_weights.bin`, reached raylib 5.5 GLFW initialization, then failed with `Failed to determine Monitor to center Window` and exit code `139`, matching the known desktop windowing boundary.
+- Subagent review: Carson found no blocking findings, verified the six deleted shader names have no reachable host dispatch or dynamic lookup path, confirmed the 04c runner allowlist is exact, and checked STATUS LOC and benchmark arithmetic.
+- Decision: accepted after subagent review. This retest reverses the milestone 01 rejection because the current repeated runs beat the accepted baseline rather than missing it.

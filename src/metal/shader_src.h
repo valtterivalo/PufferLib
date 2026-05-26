@@ -1492,61 +1492,6 @@ kernel void nesterov_f32(
     }
 }
 
-struct ScaleDevParams {
-    int n;
-};
-
-// Scale by device-side scalar: dst[i] *= *alpha_ptr
-kernel void scale_f32_dev(
-    device float* dst                   [[buffer(0)]],
-    const device float* alpha_ptr       [[buffer(1)]],
-    constant ScaleDevParams& p          [[buffer(2)]],
-    uint idx [[thread_position_in_grid]]
-) {
-    float alpha = *alpha_ptr;
-    if ((int)idx < p.n) dst[idx] *= alpha;
-}
-
-struct AxpyDevParams {
-    int n;
-};
-
-// dst += (*alpha) * src
-kernel void axpy_f32_dev(
-    device float* dst                   [[buffer(0)]],
-    const device float* src             [[buffer(1)]],
-    const device float* alpha_ptr       [[buffer(2)]],
-    constant AxpyDevParams& p           [[buffer(3)]],
-    uint idx [[thread_position_in_grid]]
-) {
-    float alpha = *alpha_ptr;
-    if ((int)idx < p.n) dst[idx] += alpha * src[idx];
-}
-
-struct AddScalarParams {
-    float val;
-};
-
-// *ptr += val (single element)
-kernel void add_scalar(
-    device float* ptr               [[buffer(0)]],
-    constant AddScalarParams& p     [[buffer(1)]],
-    uint idx [[thread_position_in_grid]]
-) {
-    if (idx == 0) *ptr += p.val;
-}
-
-// Reads LR from device, computes neg_lr = -lr
-kernel void compute_lr_scalars_kernel(
-    const device float* lr          [[buffer(0)]],
-    device float* neg_lr            [[buffer(1)]],
-    uint idx [[thread_position_in_grid]]
-) {
-    if (idx == 0) {
-        *neg_lr = -(*lr);
-    }
-}
-
 struct MuonParams {
     int n;
     float scale;
@@ -1798,20 +1743,6 @@ kernel void sum_rows_to_f32_kernel(
     dst[col] = sum;
 }
 
-// --- Sum rows fp16 (for bias/LN param grads) ---
-
-kernel void sum_rows_f16_kernel(
-    device half* dst                [[buffer(0)]],
-    const device half* src          [[buffer(1)]],
-    constant SumRowsParams& p       [[buffer(2)]],
-    uint col [[thread_position_in_grid]]
-) {
-    if ((int)col >= p.C) return;
-    float sum = 0.0f;
-    for (int r = 0; r < p.R; r++) sum += float(src[r * p.C + (int)col]);
-    dst[col] = half(sum);
-}
-
 struct AssembleDecoderGradParams {
     int B_TT;
     int od;
@@ -1974,32 +1905,6 @@ kernel void cast_u8_to_f32(
     uint idx [[thread_position_in_grid]]
 ) {
     if ((int)idx < p.n) dst[idx] = float(src[idx]);
-}
-
-// IEEE 754 f64→f32 bit cast. Metal has no native double, so we read each
-// 8-byte double as uint2 and extract
-// sign, exponent, mantissa via bit manipulation. Subnormals flush to zero.
-kernel void cast_f64_to_f32(
-    device const uint2* src [[buffer(0)]],
-    device float* dst       [[buffer(1)]],
-    constant int& count     [[buffer(2)]],
-    uint gid [[thread_position_in_grid]]
-) {
-    if ((int)gid >= count) return;
-    uint2 bits = src[gid];
-    uint hi = bits.y, lo = bits.x;
-    uint sign = hi >> 31;
-    int biased_exp = int((hi >> 20) & 0x7FFu);
-    int exp_f32 = biased_exp - 1023 + 127;
-    // Top 23 bits of the 52-bit mantissa: 20 from hi + 3 from lo
-    uint mantissa = ((hi & 0xFFFFFu) << 3) | (lo >> 29);
-    uint result;
-    if (biased_exp == 0)          result = sign << 31;          // zero / subnormal → ±0
-    else if (biased_exp == 0x7FF) result = (sign << 31) | 0x7F800000u; // inf/nan → ±inf
-    else if (exp_f32 <= 0)        result = sign << 31;          // underflow → ±0
-    else if (exp_f32 >= 255)      result = (sign << 31) | 0x7F800000u; // overflow → ±inf
-    else                          result = (sign << 31) | (uint(exp_f32) << 23) | mantissa;
-    dst[gid] = as_type<float>(result);
 }
 
 // ============================================================================
