@@ -517,3 +517,16 @@
 - Subagent review found no issues in the Muon dependency-boundary replacement.
 - Review checked device ordering across `puf_addmm_nn`, `puf_copy`, tensor-ops, scale, axpy, and steel GEMM fallback paths, confirmed async errors still surface at later stream syncs or waits, and confirmed `PLAN.md` is untouched while `STATUS.md` is append-only.
 - Decision: accept and commit the speedup.
+
+## 2026-05-26 09:00 EEST
+
+- Starting milestone 04 Muon barrier-pruning candidate.
+- Root-cause hypothesis: in each Newton-Schulz iteration, the first `puf_addmm_nn(A, A, gram, c, b)` writes `gram`, but the next dispatch is `puf_copy(dst, src)`, which neither reads nor writes `gram`. The existing barrier after that copy already sits before `puf_addmm_nn(gram, src, dst, ...)`, the first consumer of `gram`. Removing the earlier barrier should reduce hot-path device synchronization without changing read-after-write ordering, optimizer math, determinism, or learnability.
+
+## 2026-05-26 09:02 EEST
+
+- Tested Muon barrier pruning once.
+- `breakout`: 3,220,729 SPS versus current accepted baseline, +1.03 percent. Training score was 2.356, explicit eval score stayed 0.0.
+- `g2048`: 485,517 SPS versus current accepted baseline, +0.61 percent. Training score stayed 97.855, explicit eval score stayed 49.43.
+- Milestone 04 suite also passed native Metal parity and overlay surface tests.
+- Decision: reject and revert without a second run. The removed barrier appears order-safe, but the measured speedup is below the 3 percent milestone 04 gate and not statistically meaningful.
