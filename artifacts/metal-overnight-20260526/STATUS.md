@@ -443,3 +443,16 @@
 - Subagent review found no issues in the stale Muon derived-lr cleanup.
 - Review checked that `PLAN.md` is untouched, `STATUS.md` is append-only, `lr_derived` has no non-artifact source hits, Muon still updates and anneals `lr_ptr`, checkpoint save/load only persists fp32 params and momentum, the LOC benchmark gate passes, and the interactive artifact matches the known GLFW monitor-centering failure.
 - Decision: accept and commit the cleanup.
+
+## 2026-05-26 06:30 EEST
+
+- Starting milestone 03 follow-up cleanup candidate.
+- Root-cause hypothesis: `mtl_axpy_f32` is a dead host wrapper with no source caller. The live Muon addmm path binds `axpy_f32` directly inside `puf_addmm_nn`, so deleting only the unused wrapper should lower LOC without changing shader code, dispatch order, optimizer math, RNG, checkpointing, eval, or interactive behavior.
+
+## 2026-05-26 06:33 EEST
+
+- Tested dead `mtl_axpy_f32` host-wrapper removal twice.
+- `breakout` SPS runs: 2,307,503 and 2,286,707. Median versus current accepted baseline: +0.10 percent. Training scores were 2.550 and 2.449, explicit eval score stayed 0.0.
+- `g2048` SPS runs: 363,462 and 364,558. Median versus current accepted baseline: -5.80 percent. Training score stayed 97.855, explicit eval score stayed 49.43.
+- Milestone 03 suite also passed native Metal parity and overlay surface tests on both runs. Candidate tracked Metal-owned LOC was 10120.
+- Decision: reject and revert. The wrapper has no direct source caller, but deleting it missed the LOC cleanup gate on `g2048` by a lot, so it does not stay.
