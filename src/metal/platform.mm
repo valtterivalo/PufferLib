@@ -25,215 +25,112 @@ static const char *get_tensor_ops_shader_source() {
 using namespace metal;
 using namespace mpp::tensor_ops;
 
-// C(M,N) = A(M,K) @ B(N,K)^T — float32, tensor_inline with device memory.
-// Tile: 64 rows (M) x 32 cols (N), dynamic K.
-// N MUST be a multiple of 32, M MUST be a multiple of 64.
+template <typename T>
+inline void tensor_ops_gemm_nt_body(device T* A_buf, device T* B_buf, device T* C_buf,
+                                    uint M, uint N, uint K, uint2 tgid) {
+    auto A = tensor<device T, dextents<int32_t, 2>, tensor_inline>(
+        A_buf, dextents<int32_t, 2>(K, M));
+    auto B = tensor<device T, dextents<int32_t, 2>, tensor_inline>(
+        B_buf, dextents<int32_t, 2>(K, N));
+    auto C = tensor<device T, dextents<int32_t, 2>, tensor_inline>(
+        C_buf, dextents<int32_t, 2>(N, M));
+
+    constexpr auto desc = matmul2d_descriptor(
+        64, 32, static_cast<int>(dynamic_extent), false, true, false);
+    matmul2d<desc, execution_simdgroups<4>> op;
+
+    auto mA = A.slice(0, tgid.y * 64);
+    auto mB = B.slice(0, tgid.x * 32);
+    auto mC = C.slice(tgid.x * 32, tgid.y * 64);
+    op.run(mA, mB, mC);
+}
+
+template <typename T>
+inline void tensor_ops_gemm_nn_body(device T* A_buf, device T* B_buf, device T* C_buf,
+                                    uint M, uint N, uint K, uint2 tgid) {
+    auto A_cm = tensor<device T, dextents<int32_t, 2>, tensor_inline>(
+        A_buf, dextents<int32_t, 2>(K, M));
+    auto B_cm = tensor<device T, dextents<int32_t, 2>, tensor_inline>(
+        B_buf, dextents<int32_t, 2>(N, K));
+    auto C_cm = tensor<device T, dextents<int32_t, 2>, tensor_inline>(
+        C_buf, dextents<int32_t, 2>(N, M));
+
+    constexpr auto desc = matmul2d_descriptor(
+        64, 32, static_cast<int>(dynamic_extent), false, false, false);
+    matmul2d<desc, execution_simdgroups<4>> op;
+
+    auto mFirst = A_cm.slice(0, tgid.y * 64);
+    auto mSecond = B_cm.slice(tgid.x * 32, 0);
+    auto mResult = C_cm.slice(tgid.x * 32, tgid.y * 64);
+    op.run(mFirst, mSecond, mResult);
+}
+
+template <typename T>
+inline void tensor_ops_gemm_tn_body(device T* A_buf, device T* B_buf, device T* C_buf,
+                                    uint M, uint N, uint K, uint2 tgid) {
+    auto A_cm = tensor<device T, dextents<int32_t, 2>, tensor_inline>(
+        A_buf, dextents<int32_t, 2>(M, K));
+    auto B_cm = tensor<device T, dextents<int32_t, 2>, tensor_inline>(
+        B_buf, dextents<int32_t, 2>(N, K));
+    auto C_cm = tensor<device T, dextents<int32_t, 2>, tensor_inline>(
+        C_buf, dextents<int32_t, 2>(N, M));
+
+    constexpr auto desc = matmul2d_descriptor(
+        64, 32, static_cast<int>(dynamic_extent), true, false, false);
+    matmul2d<desc, execution_simdgroups<4>> op;
+
+    auto mFirst = A_cm.slice(tgid.y * 64, 0);
+    auto mSecond = B_cm.slice(tgid.x * 32, 0);
+    auto mResult = C_cm.slice(tgid.x * 32, tgid.y * 64);
+    op.run(mFirst, mSecond, mResult);
+}
+
 kernel void tensor_ops_gemm_nt_f32(
-    device float* A_buf [[buffer(0)]],
-    device float* B_buf [[buffer(1)]],
-    device float* C_buf [[buffer(2)]],
-    constant uint& M    [[buffer(3)]],
-    constant uint& N    [[buffer(4)]],
-    constant uint& K    [[buffer(5)]],
-    uint2 tgid [[threadgroup_position_in_grid]])
-{
-    auto A = tensor<device float, dextents<int32_t, 2>, tensor_inline>(
-        A_buf, dextents<int32_t, 2>(K, M));
-    auto B = tensor<device float, dextents<int32_t, 2>, tensor_inline>(
-        B_buf, dextents<int32_t, 2>(K, N));
-    auto C = tensor<device float, dextents<int32_t, 2>, tensor_inline>(
-        C_buf, dextents<int32_t, 2>(N, M));
-
-    constexpr auto desc = matmul2d_descriptor(
-        64, 32,
-        static_cast<int>(dynamic_extent),
-        false, true, false
-    );
-    matmul2d<desc, execution_simdgroups<4>> op;
-
-    auto mA = A.slice(0, tgid.y * 64);
-    auto mB = B.slice(0, tgid.x * 32);
-    auto mC = C.slice(tgid.x * 32, tgid.y * 64);
-
-    op.run(mA, mB, mC);
+    device float* A_buf [[buffer(0)]], device float* B_buf [[buffer(1)]],
+    device float* C_buf [[buffer(2)]], constant uint& M [[buffer(3)]],
+    constant uint& N [[buffer(4)]], constant uint& K [[buffer(5)]],
+    uint2 tgid [[threadgroup_position_in_grid]]) {
+    tensor_ops_gemm_nt_body<float>(A_buf, B_buf, C_buf, M, N, K, tgid);
 }
 
-// C(M,N) = A(M,K) @ B(K,N) — float32, tensor_inline with device memory.
-// Row-major NN maps to col-major: C_cm(N,M) = B_cm(N,K) @ A_cm(K,M).
-// Tiling follows NT convention: tgid.y tiles M (stride 64), tgid.x tiles N (stride 32).
-// M % 64 == 0 and N % 32 == 0 required (caller falls back to steel_gemm).
 kernel void tensor_ops_gemm_nn_f32(
-    device float* A_buf [[buffer(0)]],
-    device float* B_buf [[buffer(1)]],
-    device float* C_buf [[buffer(2)]],
-    constant uint& M    [[buffer(3)]],
-    constant uint& N    [[buffer(4)]],
-    constant uint& K    [[buffer(5)]],
-    uint2 tgid [[threadgroup_position_in_grid]])
-{
-    // Row-major A(M,K) in memory == col-major A_cm(K,M)
-    auto A_cm = tensor<device float, dextents<int32_t, 2>, tensor_inline>(
-        A_buf, dextents<int32_t, 2>(K, M));
-    // Row-major B(K,N) in memory == col-major B_cm(N,K)
-    auto B_cm = tensor<device float, dextents<int32_t, 2>, tensor_inline>(
-        B_buf, dextents<int32_t, 2>(N, K));
-    // Row-major C(M,N) in memory == col-major C_cm(N,M)
-    auto C_cm = tensor<device float, dextents<int32_t, 2>, tensor_inline>(
-        C_buf, dextents<int32_t, 2>(N, M));
-
-    // Col-major NN: C_cm(N,M) = B_cm(N,K) @ A_cm(K,M)
-    // op.run convention: result = second @ first (same as NT kernel)
-    // first=A_cm, second=B_cm, no transposes
-    constexpr auto desc = matmul2d_descriptor(
-        64, 32,
-        static_cast<int>(dynamic_extent),
-        false, false, false
-    );
-    matmul2d<desc, execution_simdgroups<4>> op;
-
-    // tgid.y tiles M at stride 64 (tile_M), tgid.x tiles N at stride 32 (tile_N)
-    // Same convention as NT kernel
-    auto mFirst  = A_cm.slice(0, tgid.y * 64);
-    auto mSecond = B_cm.slice(tgid.x * 32, 0);
-    auto mResult = C_cm.slice(tgid.x * 32, tgid.y * 64);
-
-    op.run(mFirst, mSecond, mResult);
+    device float* A_buf [[buffer(0)]], device float* B_buf [[buffer(1)]],
+    device float* C_buf [[buffer(2)]], constant uint& M [[buffer(3)]],
+    constant uint& N [[buffer(4)]], constant uint& K [[buffer(5)]],
+    uint2 tgid [[threadgroup_position_in_grid]]) {
+    tensor_ops_gemm_nn_body<float>(A_buf, B_buf, C_buf, M, N, K, tgid);
 }
 
-// ---- fp16 variants: half inputs/outputs, float accumulation inside matmul2d ----
-
-// C(M,N) = A(M,K) @ B(N,K)^T — half precision, tensor_inline with device memory.
-kernel void tensor_ops_gemm_nt_f16(
-    device half* A_buf [[buffer(0)]],
-    device half* B_buf [[buffer(1)]],
-    device half* C_buf [[buffer(2)]],
-    constant uint& M    [[buffer(3)]],
-    constant uint& N    [[buffer(4)]],
-    constant uint& K    [[buffer(5)]],
-    uint2 tgid [[threadgroup_position_in_grid]])
-{
-    auto A = tensor<device half, dextents<int32_t, 2>, tensor_inline>(
-        A_buf, dextents<int32_t, 2>(K, M));
-    auto B = tensor<device half, dextents<int32_t, 2>, tensor_inline>(
-        B_buf, dextents<int32_t, 2>(K, N));
-    auto C = tensor<device half, dextents<int32_t, 2>, tensor_inline>(
-        C_buf, dextents<int32_t, 2>(N, M));
-
-    constexpr auto desc = matmul2d_descriptor(
-        64, 32,
-        static_cast<int>(dynamic_extent),
-        false, true, false
-    );
-    matmul2d<desc, execution_simdgroups<4>> op;
-
-    auto mA = A.slice(0, tgid.y * 64);
-    auto mB = B.slice(0, tgid.x * 32);
-    auto mC = C.slice(tgid.x * 32, tgid.y * 64);
-
-    op.run(mA, mB, mC);
-}
-
-// C(M,N) = A(M,K) @ B(K,N) — half precision NN variant.
-kernel void tensor_ops_gemm_nn_f16(
-    device half* A_buf [[buffer(0)]],
-    device half* B_buf [[buffer(1)]],
-    device half* C_buf [[buffer(2)]],
-    constant uint& M    [[buffer(3)]],
-    constant uint& N    [[buffer(4)]],
-    constant uint& K    [[buffer(5)]],
-    uint2 tgid [[threadgroup_position_in_grid]])
-{
-    auto A_cm = tensor<device half, dextents<int32_t, 2>, tensor_inline>(
-        A_buf, dextents<int32_t, 2>(K, M));
-    auto B_cm = tensor<device half, dextents<int32_t, 2>, tensor_inline>(
-        B_buf, dextents<int32_t, 2>(N, K));
-    auto C_cm = tensor<device half, dextents<int32_t, 2>, tensor_inline>(
-        C_buf, dextents<int32_t, 2>(N, M));
-
-    constexpr auto desc = matmul2d_descriptor(
-        64, 32,
-        static_cast<int>(dynamic_extent),
-        false, false, false
-    );
-    matmul2d<desc, execution_simdgroups<4>> op;
-
-    auto mFirst  = A_cm.slice(0, tgid.y * 64);
-    auto mSecond = B_cm.slice(tgid.x * 32, 0);
-    auto mResult = C_cm.slice(tgid.x * 32, tgid.y * 64);
-
-    op.run(mFirst, mSecond, mResult);
-}
-
-// C(M,N) = A(K,M)^T @ B(K,N) — float32, tensor_inline with device memory.
-// TN: backward weight gradient. Row-major A(K,M) = col-major (M,K).
-// matmul2d: result(N,M) = second(N,K) @ transpose(first(M,K))
-// M % 64 == 0 and N % 32 == 0 required (caller falls back to steel_gemm).
 kernel void tensor_ops_gemm_tn_f32(
-    device float* A_buf [[buffer(0)]],
-    device float* B_buf [[buffer(1)]],
-    device float* C_buf [[buffer(2)]],
-    constant uint& M    [[buffer(3)]],
-    constant uint& N    [[buffer(4)]],
-    constant uint& K    [[buffer(5)]],
-    uint2 tgid [[threadgroup_position_in_grid]])
-{
-    // Row-major A(K,M) in memory == col-major tensor(M, K)
-    auto A_cm = tensor<device float, dextents<int32_t, 2>, tensor_inline>(
-        A_buf, dextents<int32_t, 2>(M, K));
-    // Row-major B(K,N) in memory == col-major tensor(N, K)
-    auto B_cm = tensor<device float, dextents<int32_t, 2>, tensor_inline>(
-        B_buf, dextents<int32_t, 2>(N, K));
-    // Row-major C(M,N) in memory == col-major tensor(N, M)
-    auto C_cm = tensor<device float, dextents<int32_t, 2>, tensor_inline>(
-        C_buf, dextents<int32_t, 2>(N, M));
-
-    // result(N,M) = second(N,K) @ transpose(first(M,K))
-    // transpose_first=true: matmul sees first as (K,M)
-    // (N,K) @ (K,M) = (N,M) = result
-    constexpr auto desc = matmul2d_descriptor(
-        64, 32,
-        static_cast<int>(dynamic_extent),
-        true, false, false
-    );
-    matmul2d<desc, execution_simdgroups<4>> op;
-
-    // tgid.y tiles M at stride 64, tgid.x tiles N at stride 32
-    auto mFirst  = A_cm.slice(tgid.y * 64, 0);
-    auto mSecond = B_cm.slice(tgid.x * 32, 0);
-    auto mResult = C_cm.slice(tgid.x * 32, tgid.y * 64);
-
-    op.run(mFirst, mSecond, mResult);
+    device float* A_buf [[buffer(0)]], device float* B_buf [[buffer(1)]],
+    device float* C_buf [[buffer(2)]], constant uint& M [[buffer(3)]],
+    constant uint& N [[buffer(4)]], constant uint& K [[buffer(5)]],
+    uint2 tgid [[threadgroup_position_in_grid]]) {
+    tensor_ops_gemm_tn_body<float>(A_buf, B_buf, C_buf, M, N, K, tgid);
 }
 
-// C(M,N) = A(K,M)^T @ B(K,N) — half precision TN variant.
+kernel void tensor_ops_gemm_nt_f16(
+    device half* A_buf [[buffer(0)]], device half* B_buf [[buffer(1)]],
+    device half* C_buf [[buffer(2)]], constant uint& M [[buffer(3)]],
+    constant uint& N [[buffer(4)]], constant uint& K [[buffer(5)]],
+    uint2 tgid [[threadgroup_position_in_grid]]) {
+    tensor_ops_gemm_nt_body<half>(A_buf, B_buf, C_buf, M, N, K, tgid);
+}
+
+kernel void tensor_ops_gemm_nn_f16(
+    device half* A_buf [[buffer(0)]], device half* B_buf [[buffer(1)]],
+    device half* C_buf [[buffer(2)]], constant uint& M [[buffer(3)]],
+    constant uint& N [[buffer(4)]], constant uint& K [[buffer(5)]],
+    uint2 tgid [[threadgroup_position_in_grid]]) {
+    tensor_ops_gemm_nn_body<half>(A_buf, B_buf, C_buf, M, N, K, tgid);
+}
+
 kernel void tensor_ops_gemm_tn_f16(
-    device half* A_buf [[buffer(0)]],
-    device half* B_buf [[buffer(1)]],
-    device half* C_buf [[buffer(2)]],
-    constant uint& M    [[buffer(3)]],
-    constant uint& N    [[buffer(4)]],
-    constant uint& K    [[buffer(5)]],
-    uint2 tgid [[threadgroup_position_in_grid]])
-{
-    auto A_cm = tensor<device half, dextents<int32_t, 2>, tensor_inline>(
-        A_buf, dextents<int32_t, 2>(M, K));
-    auto B_cm = tensor<device half, dextents<int32_t, 2>, tensor_inline>(
-        B_buf, dextents<int32_t, 2>(N, K));
-    auto C_cm = tensor<device half, dextents<int32_t, 2>, tensor_inline>(
-        C_buf, dextents<int32_t, 2>(N, M));
-
-    constexpr auto desc = matmul2d_descriptor(
-        64, 32,
-        static_cast<int>(dynamic_extent),
-        true, false, false
-    );
-    matmul2d<desc, execution_simdgroups<4>> op;
-
-    auto mFirst  = A_cm.slice(tgid.y * 64, 0);
-    auto mSecond = B_cm.slice(tgid.x * 32, 0);
-    auto mResult = C_cm.slice(tgid.x * 32, tgid.y * 64);
-
-    op.run(mFirst, mSecond, mResult);
+    device half* A_buf [[buffer(0)]], device half* B_buf [[buffer(1)]],
+    device half* C_buf [[buffer(2)]], constant uint& M [[buffer(3)]],
+    constant uint& N [[buffer(4)]], constant uint& K [[buffer(5)]],
+    uint2 tgid [[threadgroup_position_in_grid]]) {
+    tensor_ops_gemm_tn_body<half>(A_buf, B_buf, C_buf, M, N, K, tgid);
 }
 )METAL";
 }

@@ -60,6 +60,7 @@ ALLOWED_ARTIFACT_PATHS = {
     "artifacts/metal-kernel-loc-20260527/milestone-03-cleanup/run-suite.sh",
     "artifacts/metal-kernel-loc-20260527/milestone-04-second-kernel-loc-pass/run-breakout.sh",
     "artifacts/metal-kernel-loc-20260527/milestone-04-second-kernel-loc-pass/run-g2048.sh",
+    "artifacts/metal-kernel-loc-20260527/milestone-04-second-kernel-loc-pass/run-interactive-breakout.sh",
     "artifacts/metal-kernel-loc-20260527/milestone-04-second-kernel-loc-pass/run-suite.sh",
     "artifacts/metal-kernel-loc-20260527/milestone-05-final-audit/run-breakout.sh",
     "artifacts/metal-kernel-loc-20260527/milestone-05-final-audit/run-g2048.sh",

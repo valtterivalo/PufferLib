@@ -88,3 +88,22 @@
 - Medians: `breakout` `3,444,754` SPS, `+14.31%` versus milestone 00 baseline `3,013,517`; `g2048` `598,217` SPS, `-0.09%` versus same-night no-change baseline rerun `598,782`.
 - Native Metal parity and overlay surface passed in both milestone 03 suites.
 - Decision: accepted pending subagent review. This cleanup reduces shared host dispatch boilerplate and stays inside the throughput and learnability gates.
+
+## 2026-05-27 Milestone 04 Tensor-Ops Shader Template Candidate
+
+- Root-cause hypothesis: the Metal 4 tensor-ops shader block in `src/metal/platform.mm` duplicates the same fp32 and fp16 kernel bodies for NT, NN, and TN GEMM layouts. Typed MSL helper functions can keep the six exported kernel names and PSO lookup names unchanged while removing duplicated source in the kernel scope.
+- Acceptance gate: build `breakout` and `g2048`, run the milestone 04 suite twice, capture interactive smoke with a milestone 04 runner, require median SPS within 1 percent of the accepted baseline or better, keep train and eval comparable, and block commit on subagent review.
+- Harness fix: add the milestone 04 interactive breakout runner and exact overlay allowlist path before acceptance testing, since the global gate requires interactive usability evidence for every kept backend change.
+
+## 2026-05-27 Milestone 04 Tensor-Ops Shader Template Results
+
+- Code change: replace duplicated fp32 and fp16 tensor-ops NT, NN, and TN shader bodies with three typed MSL helpers. The six exported kernel names remain `tensor_ops_gemm_nt_f32`, `tensor_ops_gemm_nn_f32`, `tensor_ops_gemm_tn_f32`, `tensor_ops_gemm_nt_f16`, `tensor_ops_gemm_nn_f16`, and `tensor_ops_gemm_tn_f16`.
+- LOC: full `src/metal/platform.mm` is `1,093` lines, down from `1,196` after milestone 03. The tensor-ops shader block is `117` lines, down from setup `220`. Kernel scope is `4,430`, down from `4,533` after milestone 03 and down from setup `4,615`. Live backend scope is `9,970`, down from `10,072` after milestone 03.
+- Static validation passed: `tools/metal/build.sh breakout`, `git diff --check`, `bash -n` for the milestone 04 interactive runner, and `PYTHONPATH=$PWD python -m pytest tests/metal/test_overlay_surface.py`.
+- First milestone 04 suite: `breakout` artifact `20260527T020534+0300-breakout` at `3,453,475` SPS, train score `2.7511961460113525`, eval score `0.0`; `g2048` artifact `20260527T020546+0300-g2048` at `608,646` SPS, train score `97.85507202148438`, eval score `49.43283462524414`.
+- Second milestone 04 suite: `breakout` artifact `20260527T020602+0300-breakout` at `3,397,213` SPS, train score `2.3502695560455322`, eval score `0.0`; `g2048` artifact `20260527T020613+0300-g2048` at `577,706` SPS, train score `97.85507202148438`, eval score `49.43283462524414`.
+- Extra g2048 runner: `20260527T020712+0300-g2048` at `595,902` SPS, train score `97.85507202148438`, eval score `49.43283462524414`. This extra run was added because the two-run g2048 median was close to the 1 percent LOC gate.
+- Medians: `breakout` `3,425,344` SPS, `+13.66%` versus milestone 00 baseline `3,013,517`; `g2048` three-run median `595,902` SPS, `-0.48%` versus same-night no-change baseline rerun `598,782`.
+- Native Metal parity and overlay surface passed in both milestone 04 suites.
+- Interactive smoke artifact: `milestone-04-second-kernel-loc-pass/20260527T020631+0300-interactive-breakout-tensor-ops-template`. It built, loaded `resources/breakout/breakout_weights.bin`, reached raylib 5.5 GLFW initialization, then failed with `Failed to determine Monitor to center Window` and exit code `139`, matching the known desktop windowing boundary.
+- Decision: accepted pending subagent review. This is a kernel-scope LOC cleanup with unchanged explicit eval and g2048 throughput inside the 1 percent gate.
