@@ -2275,6 +2275,7 @@ void my_log(Log* log, Dict* out) {
             log->count_died_with_zuk_healer_alive_normal / log->n_normal;
         float healer_resolve =
             log->count_healer_resolved_20_normal / log->n_normal;
+        float reached_240 = log->count_min_hp_le_240_normal;
 
         dict_set(out, "episode_return_normal",
             log->episode_return_normal / log->n_normal);
@@ -2290,6 +2291,16 @@ void my_log(Log* log, Dict* out) {
         dict_set(out, "post_healer_objective_normal",
             healer_resolve + 0.001f * post_healer_zuk_damage -
                 0.1f * frac_died_with_zuk_healer);
+        dict_set(out, "spark_damage_after_240_normal",
+            log->spark_damage_after_240_normal_sum / log->n_normal);
+        dict_set(out, "hp_restored_after_240_normal",
+            log->hp_restored_after_240_normal_sum / log->n_normal);
+        dict_set(out, "spark_damage_after_240_reached_240",
+            reached_240 > 0.0f
+                ? log->spark_damage_after_240_normal_sum / reached_240 : 0.0f);
+        dict_set(out, "hp_restored_after_240_reached_240",
+            reached_240 > 0.0f
+                ? log->hp_restored_after_240_normal_sum / reached_240 : 0.0f);
         dict_set(out, "redemption_proc_opportunities_normal",
             log->redemption_proc_opportunities_normal_sum / log->n_normal);
         dict_set(out, "redemption_active_ticks_normal",
@@ -2308,6 +2319,10 @@ void my_log(Log* log, Dict* out) {
         dict_set(out, "frac_all_zuk_healers_dead_normal", 0.0f);
         dict_set(out, "frac_died_after_240_normal", 0.0f);
         dict_set(out, "post_healer_objective_normal", 0.0f);
+        dict_set(out, "spark_damage_after_240_normal", 0.0f);
+        dict_set(out, "hp_restored_after_240_normal", 0.0f);
+        dict_set(out, "spark_damage_after_240_reached_240", 0.0f);
+        dict_set(out, "hp_restored_after_240_reached_240", 0.0f);
         dict_set(out, "redemption_proc_opportunities_normal", 0.0f);
         dict_set(out, "redemption_active_ticks_normal", 0.0f);
         dict_set(out, "redemption_proc_count_normal", 0.0f);

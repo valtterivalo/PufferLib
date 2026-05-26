@@ -2861,7 +2861,7 @@ static void test_triple_jad_pending_threats_fit_obs_layout(void) {
 
     float obs[INF_NUM_OBS];
     inf_write_obs((EncounterState*)&state, obs);
-    ASSERT_INT_EQ("inferno obs shape includes compact spark slots", INF_NUM_OBS, 744);
+    ASSERT_INT_EQ("inferno obs shape includes exact spark slots", INF_NUM_OBS, 948);
 }
 
 static void test_inferno_obs_shape_includes_step_out_forecast_features(void) {
@@ -2882,10 +2882,10 @@ static void test_inferno_obs_shape_includes_step_out_forecast_features(void) {
         INF_TOTAL_NPC_OBS_SIZE, 415);
     ASSERT_INT_EQ("step-out forecast covers every movement action",
         INF_STEP_OUT_FORECAST_OBS_SIZE, 200);
-    ASSERT_INT_EQ("inferno obs shape includes compact spark summary",
-        INF_PENDING_SPARK_OBS_SIZE, 20);
+    ASSERT_INT_EQ("inferno obs shape includes exact spark landings",
+        INF_PENDING_SPARK_OBS_SIZE, 224);
     ASSERT_INT_EQ("inferno obs shape includes cleanup pass",
-        INF_NUM_OBS, 744);
+        INF_NUM_OBS, 948);
     ASSERT_INFERNO_SOURCE_NOT_CONTAINS("armor_tank state is removed",
         "armor_tank");
     ASSERT_INFERNO_SOURCE_NOT_CONTAINS("extra npc obs scaffold is removed",
@@ -4109,7 +4109,7 @@ static void test_zuk_obs_exposes_attack_timer_summary(void) {
 }
 
 static void test_zuk_obs_exposes_pending_sparks(void) {
-    printf("--- zuk obs exposes compressed pending spark summaries ---\n");
+    printf("--- zuk obs exposes exact pending spark landings ---\n");
 
     InfernoState state;
     init_zuk_timing_state(&state);
@@ -4145,9 +4145,9 @@ static void test_zuk_obs_exposes_pending_sparks(void) {
     };
 
     int spark_start = inferno_spark_obs_start();
-    int spark_features = 5;
-    int spark_slots = 4;
-    ASSERT_INT_EQ("inferno obs has compressed spark section",
+    int spark_features = INF_FEATURES_PER_SPARK;
+    int spark_slots = INF_SPARK_OBS_SLOTS;
+    ASSERT_INT_EQ("inferno obs has full spark section",
         INF_NUM_OBS >= spark_start + spark_features * spark_slots, 1);
     if (INF_NUM_OBS < spark_start + spark_features * spark_slots)
         return;
@@ -4155,19 +4155,27 @@ static void test_zuk_obs_exposes_pending_sparks(void) {
     float obs[INF_NUM_OBS];
     inf_write_obs((EncounterState*)&state, obs);
 
-    ASSERT_FLOAT_NEAR("first spark group active", obs[spark_start], 1.0f, 1e-6f);
-    ASSERT_FLOAT_NEAR("first spark group uses source x",
-        obs[spark_start + 1], 5.0f / (float)INF_ARENA_WIDTH, 1e-6f);
-    ASSERT_FLOAT_NEAR("first spark group uses source y",
-        obs[spark_start + 2], 0.0f, 1e-6f);
-    ASSERT_FLOAT_NEAR("first spark group earliest timer",
-        obs[spark_start + 3], 0.2f, 1e-6f);
-    ASSERT_FLOAT_NEAR("first spark group total damage",
-        obs[spark_start + 4], 1.0f, 1e-6f);
-    ASSERT_FLOAT_NEAR("second spark group active",
-        obs[spark_start + 5], 1.0f, 1e-6f);
-    ASSERT_FLOAT_NEAR("fourth spark group active",
-        obs[spark_start + 15], 1.0f, 1e-6f);
+    ASSERT_INT_EQ("spark obs keeps all pending slots", spark_slots, INF_MAX_PENDING_SPARKS);
+    ASSERT_INT_EQ("spark obs carries landing and source", spark_features, 7);
+    ASSERT_FLOAT_NEAR("first spark active", obs[spark_start], 1.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("first spark landing x",
+        obs[spark_start + 1], -1.0f / (float)INF_ARENA_WIDTH, 1e-6f);
+    ASSERT_FLOAT_NEAR("first spark landing y",
+        obs[spark_start + 2], 2.0f / (float)INF_ARENA_HEIGHT, 1e-6f);
+    ASSERT_FLOAT_NEAR("first spark source x",
+        obs[spark_start + 3], 5.0f / (float)INF_ARENA_WIDTH, 1e-6f);
+    ASSERT_FLOAT_NEAR("first spark source y",
+        obs[spark_start + 4], 0.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("first spark timer",
+        obs[spark_start + 5], 0.2f, 1e-6f);
+    ASSERT_FLOAT_NEAR("first spark damage",
+        obs[spark_start + 6], 0.7f, 1e-6f);
+    ASSERT_FLOAT_NEAR("second spark landing x",
+        obs[spark_start + spark_features + 1],
+        -2.0f / (float)INF_ARENA_WIDTH, 1e-6f);
+    ASSERT_FLOAT_NEAR("third spark sorts same-tick nearest landing first",
+        obs[spark_start + 2 * spark_features + 1],
+        1.0f / (float)INF_ARENA_WIDTH, 1e-6f);
 }
 
 static void assert_human_blowpipe_zuk_chase_endpoint(
