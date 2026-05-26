@@ -396,3 +396,17 @@
 - `g2048` SPS runs: 358,190 and 362,513. Median versus current accepted baseline: -3.33 percent. Training score stayed 97.855, explicit eval score stayed 49.43.
 - Milestone 01 suite also passed native Metal parity and overlay surface tests on both runs. Candidate tracked Metal-owned LOC was 10137.
 - Decision: reject and revert. The change was compile-token neutral for backend behavior, but the `g2048` median missed the LOC cleanup gate.
+
+## 2026-05-26 05:15 EEST
+
+- Starting milestone 03 cleanup candidate.
+- Root-cause hypothesis: the Metal CUDA compatibility shim still exposes no-op stream and error APIs that are not called by the Metal backend, `src/vecenv.h`, `breakout`, or `g2048`: `cudaSetDevice`, `cudaStreamSynchronize`, `cudaStreamCreateWithFlags`, `cudaStreamQuery`, `cudaGetErrorString`, and `cudaStreamNonBlocking`. Removing this unused compatibility surface should lower LOC without touching allocation, memcpy, memset, device sync, rollout, training, eval, determinism, or learnability.
+- Immediate correction before benchmarking: `src/vecenv.h` does call `cudaStreamSynchronize`, so that declaration and implementation stay. The live candidate removes only `cudaSetDevice`, `cudaStreamCreateWithFlags`, `cudaStreamQuery`, `cudaGetErrorString`, and `cudaStreamNonBlocking`.
+
+## 2026-05-26 05:17 EEST
+
+- Tested unused CUDA compatibility stream and error shim removal twice.
+- `breakout` SPS runs: 2,273,330 and 2,324,847. Median versus current accepted baseline: -0.03 percent. Training scores were 2.495 and 2.442, explicit eval score stayed 0.0.
+- `g2048` SPS runs: 356,585 and 359,712. Median versus current accepted baseline: -3.92 percent. Training score stayed 97.855, explicit eval score stayed 49.43.
+- Milestone 03 suite also passed native Metal parity and overlay surface tests on both runs. Candidate tracked Metal-owned LOC was 10125.
+- Decision: reject and revert. The deleted symbols have no benchmark/backend callers after keeping `cudaStreamSynchronize`, but `g2048` missed the LOC cleanup gate.
