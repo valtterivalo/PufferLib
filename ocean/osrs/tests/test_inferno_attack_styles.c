@@ -7990,6 +7990,12 @@ static void test_inferno_binding_forwards_step_out_forecast_obs_toggle(void) {
         "scale = auto",
         "distribution = int_uniform");
     ASSERT_SOURCE_BLOCK_CONTAINS(
+        "step-out forecast obs mode is swept",
+        "config/ocean/osrs_inferno.ini",
+        "[sweep]",
+        "[sweep.train.total_timesteps]",
+        "step_out_forecast_obs_mode");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
         "step-out forecast obs mode sweep covers readonly mode",
         "config/ocean/osrs_inferno.ini",
         "[sweep.env.step_out_forecast_obs_mode]",
