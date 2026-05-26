@@ -247,3 +247,16 @@
 - `breakout` SPS runs: 2,285,440 and 2,280,391. Median versus current accepted baseline: -0.35 percent. Training scores increased to 4.55 and 6.12, explicit eval scores were 0.40 and 0.0.
 - `g2048` SPS runs: 352,723 and 353,095. Median versus current accepted baseline: -0.82 percent. Training score was 96.21 both runs, explicit eval score was 54.40 both runs.
 - Decision: reject and revert after subagent review. The code-level fix was plausible, but it changed `mb_prio` values consumed by PPO and therefore did not qualify for the LOC-only gate. It also did not clear the milestone 04 speed gate. Keep this as a later explicit correctness item, not an overnight optimization commit.
+
+## 2026-05-26 03:00 EEST
+
+- Priority-weight rejection committed as `ae7b01e52`.
+- Starting seventh milestone 04 candidate.
+- Root-cause hypothesis: PPO reduction still carries a legacy `loss_output` buffer and an extra total-loss partial lane. The reducer writes `loss_output`, but logging reads `losses_puf` only. Removing the duplicate lane and unused buffer should reduce one zero dispatch, one buffer allocation, one argument binding, and host/shader LOC without changing logged losses.
+
+## 2026-05-26 03:02 EEST
+
+- Tested dead PPO `loss_output` removal twice.
+- `breakout` SPS runs: 2,280,738 and 2,281,764. Median versus current accepted baseline: -0.42 percent. Training scores were 2.41 and 2.56, explicit eval score stayed 0.0.
+- `g2048` SPS runs: 353,976 and 349,353. Median versus current accepted baseline: -1.16 percent. Training score stayed 97.855, explicit eval score stayed 49.43.
+- Decision: reject and revert. The cleanup was semantically clean, but `g2048` missed the 1 percent LOC gate on repeated runs.
