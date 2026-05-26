@@ -551,3 +551,15 @@
 - Subagent review found no issues in the CPU MinGRU gate indexing rewrite.
 - Review confirmed the nested loops enumerate the same `idx = b * H + h` order as the old flat loop, preserve all `combined`, `state_in`, `x_in`, `next_state`, and `out` indexing, keep recurrent state copy semantics unchanged, and leave `PLAN.md` untouched while appending only to `STATUS.md`.
 - Decision: accept and commit the speedup.
+
+## 2026-05-26 10:01 EEST
+
+- Starting milestone 04 CPU single-head sampler candidate.
+- Root-cause hypothesis: the benchmark envs use one discrete action head, but `cpu_sample_logits` still allocates a `CpuPhiloxState`, copies Philox output, and loops over `num_atns` for every agent. A `num_atns == 1` path can compute the first Philox uniform directly from the same counter/key and keep the generic multi-head sampler unchanged, reducing rollout CPU overhead without changing sampled actions, logprobs, values, RNG offsets, training dispatch, eval, or learnability.
+
+## 2026-05-26 10:03 EEST
+
+- Rejected CPU single-head sampler fast path after first milestone 04 suite.
+- Artifact `milestone-04-second-hot-path-pass/20260526T100028+0300-breakout`: `3,476,718` SPS, `+0.80%` versus accepted baseline, score `2.546757221221924`, rollout `0.1874484270811081`, train `0.2877257764339447`.
+- Artifact `milestone-04-second-hot-path-pass/20260526T100039+0300-g2048`: `593,725` SPS, `-1.97%` versus accepted baseline, score `97.85507202148438`, rollout `0.19911450147628784`, train `0.1729455143213272`.
+- Decision: reject and revert the code patch. It failed both the `+3%` significance gate and the no-regression gate on `g2048`.
