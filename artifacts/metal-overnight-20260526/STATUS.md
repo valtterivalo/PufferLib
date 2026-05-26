@@ -496,3 +496,24 @@
 - Native Metal parity and overlay surface tests passed. Current tracked Metal-owned LOC: 10137.
 - Cleanup scan found no uncommitted backend diff and no leftover markers from rejected experiments. Remaining `fallback` hits are the active mask, GEMM, and tile fallback paths.
 - Interactive smoke artifact: `milestone-03-cleanup/20260526T080017+0300-interactive-breakout-cleanup`. It built, loaded `resources/breakout/breakout_weights.bin`, reached raylib 5.5 GLFW initialization, then failed with `Failed to determine Monitor to center Window` and exit code 139. This matches the existing desktop windowing blocker.
+
+## 2026-05-26 08:33 EEST
+
+- Starting milestone 04 Muon dependency-boundary candidate.
+- Root-cause hypothesis: Muon Newton-Schulz still calls `mtl_ensure_stream_synced` after each `puf_addmm_nn`, forcing a CPU/GPU wait in the dominant `train_muon` bucket. The aligned `puf_addmm_nn` path already stays inside the Metal compute encoder and uses device barriers between tensor-ops GEMM, scale, and axpy. Replacing the post-addmm CPU wait with a device-side dispatch barrier should preserve ordering and visibility while removing hot-path sync stalls.
+
+## 2026-05-26 08:36 EEST
+
+- Tested Muon dependency-boundary replacement twice.
+- `breakout` SPS runs: 3,213,946 and 3,161,637. Median versus current accepted baseline: +38.92 percent. Training scores were 2.530 and 2.459, explicit eval score stayed 0.0.
+- `g2048` SPS runs: 482,749 and 482,362. Median versus current accepted baseline: +24.87 percent. Training score stayed 97.855, explicit eval score stayed 49.43.
+- Milestone 04 suite passed native Metal parity and overlay surface tests on both runs. Current tracked Metal-owned LOC: 10133.
+- Profile smoke artifact: `milestone-04-second-hot-path-pass/20260526T083445+0300-breakout`. A `breakout` train and explicit no-render eval with `--profile True` exited 0. A shorter attempted profile smoke at `milestone-04-second-hot-path-pass/20260526T083429+0300-breakout` failed before eval because the summarizer found no log JSON at only 262,144 timesteps, so it is recorded as a harness-length miss, not a backend crash.
+- Interactive smoke artifact: `milestone-04-second-hot-path-pass/20260526T083416+0300-interactive-breakout-muon-boundary`. It built, loaded `resources/breakout/breakout_weights.bin`, reached raylib 5.5 GLFW initialization, then failed with `Failed to determine Monitor to center Window` and exit code 139. This matches the existing desktop windowing blocker.
+- Decision: keep pending subagent review. The change removes CPU waits from Muon addmm dependency boundaries, preserves device ordering with Metal barriers, passes repeated benchmark gates by a wide margin, and keeps score/eval behavior stable.
+
+## 2026-05-26 08:40 EEST
+
+- Subagent review found no issues in the Muon dependency-boundary replacement.
+- Review checked device ordering across `puf_addmm_nn`, `puf_copy`, tensor-ops, scale, axpy, and steel GEMM fallback paths, confirmed async errors still surface at later stream syncs or waits, and confirmed `PLAN.md` is untouched while `STATUS.md` is append-only.
+- Decision: accept and commit the speedup.
