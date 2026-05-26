@@ -314,3 +314,9 @@
 - `breakout`: 4.2M steps, 2.31M SPS, train score 2.521, eval score 0.0. Versus current accepted median: +0.71 percent.
 - `g2048`: 262K steps, 362.4K SPS, train score 97.855, eval score 49.43. Versus current accepted median: +1.85 percent.
 - Decision: keep pending subagent review as a LOC cleanup.
+
+## 2026-05-26 03:30 EEST
+
+- Tensor copy-helper LOC cleanup passed subagent review after preserving all tensor shape dimensions in the adapter.
+- Cleanup committed as `eaa763e97`.
+- Worktree resumed clean at heartbeat. Current tracked Metal-owned LOC across `src/metal`, `tools/metal`, and `tests/metal`: 10205.
