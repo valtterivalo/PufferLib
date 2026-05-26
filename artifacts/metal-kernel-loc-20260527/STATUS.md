@@ -54,3 +54,21 @@
 - Corrected LOC accounting: setup baseline backend scope is `10,160`. Final live backend scope after rejection is `10,162` because the kept harness fixes add two allowlist lines. If the shader deletion had been kept with those harness fixes, backend scope would have been `10,067`, a net `-93` line candidate.
 - Second subagent review rejected acceptance. The no-change setup rerun measured `598,782` SPS on `g2048`, which makes the candidate median `552,842` SPS a `-7.67%` throughput regression against the comparable same-night baseline.
 - Decision: reject and revert the dead shader kernel removal. The code is back at setup kernel scope: `4,615` kernel lines. Live backend scope is `10,162` lines because the only kept backend changes are the two overlay allowlist entries needed to make milestone 01 auditable.
+
+## 2026-05-27 Milestone 02 Dispatch Boilerplate Candidate
+
+- Root-cause hypothesis: `src/metal/kernels.mm` repeats the same host kernel setup shape across many dispatch wrappers: activate the compute encoder, look up a PSO by name, then bind the PSO. A local helper can remove duplicated source while preserving PSO names, argument binding order, dispatch counts, RNG state, optimizer math, and compiled MSL.
+- Acceptance gate: run the milestone 02 suite twice for `breakout` and `g2048`, capture interactive smoke, require median SPS within 1 percent of the accepted baseline or better, keep train and eval comparable, and block commit on subagent review.
+- Harness fix: the first milestone 02 interactive smoke attempt wrote `milestone-02-kernel-consolidation-pass/20260527T014826+0300-interactive-breakout-dispatch-boilerplate` and failed with exit `127` because `run-interactive-breakout.sh` was missing for this milestone folder. Add the exact runner and allowlist path before rerunning interactive smoke.
+
+## 2026-05-27 Milestone 02 Dispatch Boilerplate Results
+
+- Code change: add `mtl_begin_kernel` in `src/metal/kernels.mm` and replace repeated compute-encoder, PSO lookup, and PSO bind triplets. No MSL source, dispatch dimensions, barrier order, argument indices, RNG, optimizer math, or policy data flow changed.
+- LOC: `src/metal/kernels.mm` is `1,512` lines, down from `1,586`. Kernel scope is `4,541`, down from `4,615`. Live backend scope is `10,089`, down from the post-milestone-01 live scope `10,162`, and down from setup baseline `10,160`.
+- Static validation passed: `git diff --check`, Python compile for the summarizer and overlay test, `bash -n` for the milestone 02 interactive runner, and `PYTHONPATH=$PWD python -m pytest tests/metal/test_overlay_surface.py`.
+- First milestone 02 suite: `breakout` artifact `20260527T014724+0300-breakout` at `3,427,852` SPS, train score `2.5335967540740967`, eval score `0.0`; `g2048` artifact `20260527T014735+0300-g2048` at `599,712` SPS, train score `97.85507202148438`, eval score `49.43283462524414`.
+- Second milestone 02 suite: `breakout` artifact `20260527T014753+0300-breakout` at `3,425,516` SPS, train score `2.4037489891052246`, eval score `0.0`; `g2048` artifact `20260527T014803+0300-g2048` at `597,629` SPS, train score `97.85507202148438`, eval score `49.43283462524414`.
+- Medians: `breakout` `3,426,684` SPS, `+13.71%` versus milestone 00 baseline `3,013,517`; `g2048` `598,671` SPS, `-0.02%` versus the same-night no-change baseline rerun `598,782`.
+- Native Metal parity and overlay surface passed in both milestone 02 suites.
+- Interactive smoke artifact: `milestone-02-kernel-consolidation-pass/20260527T014915+0300-interactive-breakout-dispatch-boilerplate`. It built, loaded `resources/breakout/breakout_weights.bin`, reached raylib 5.5 GLFW initialization, then failed with `Failed to determine Monitor to center Window` and exit code `139`, matching the known desktop windowing boundary.
+- Decision: accepted pending subagent review. This is a LOC cleanup with no learnability regression and no measurable throughput regression on the comparable g2048 rerun baseline.
