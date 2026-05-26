@@ -423,3 +423,23 @@
 - `g2048` SPS runs: 350,482 and 352,723. Median versus current accepted baseline: -5.68 percent. Training score stayed 97.855, explicit eval score stayed 49.43.
 - Milestone 03 suite also passed native Metal parity and overlay surface tests on both runs. Candidate tracked Metal-owned LOC was 10139.
 - Decision: reject and revert. The fill looked dead by coverage of `param_alloc->regs`, but removing it made both benchmarks slower and missed the LOC cleanup gate.
+
+## 2026-05-26 06:00 EEST
+
+- Starting milestone 03 cleanup candidate.
+- Root-cause hypothesis: Muon still carries `lr_derived_ptr` and `lr_derived_puf`, but source search shows the state is only allocated, assigned, and zeroed. The Metal Muon weight update reads only `lr_ptr`, so deleting this stale derived-lr state should reduce LOC and allocator footprint without changing optimizer math, checkpoint state, RNG, eval, or learnability.
+
+## 2026-05-26 06:02 EEST
+
+- Tested stale Muon derived-lr state removal twice.
+- `breakout` SPS runs: 2,299,069 and 2,290,482. Median versus current accepted baseline: -0.21 percent. Training scores were 2.143 and 2.249, explicit eval score stayed 0.0.
+- `g2048` SPS runs: 385,791 and 387,090. Median versus current accepted baseline: +3.67 percent. Training score stayed 97.855, explicit eval score stayed 49.43.
+- Milestone 03 suite also passed native Metal parity and overlay surface tests on both runs. Current tracked Metal-owned LOC: 10137.
+- Interactive smoke artifact: `milestone-03-cleanup/20260526T060051+0300-interactive-breakout`. It built, loaded `resources/breakout/breakout_weights.bin`, and reached raylib 5.5 GLFW initialization, then failed with `Failed to determine Monitor to center Window` and exit code 139. Treat as the existing desktop windowing blocker, not a backend regression, unless subagent review says otherwise.
+- Decision: keep pending subagent review. The deleted state has no source reader, the benchmark and no-render eval gates pass, and the interactive failure matches the existing windowing blocker.
+
+## 2026-05-26 06:04 EEST
+
+- Subagent review found no issues in the stale Muon derived-lr cleanup.
+- Review checked that `PLAN.md` is untouched, `STATUS.md` is append-only, `lr_derived` has no non-artifact source hits, Muon still updates and anneals `lr_ptr`, checkpoint save/load only persists fp32 params and momentum, the LOC benchmark gate passes, and the interactive artifact matches the known GLFW monitor-centering failure.
+- Decision: accept and commit the cleanup.

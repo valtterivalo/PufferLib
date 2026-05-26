@@ -1052,18 +1052,15 @@ void muon_init(Muon *m, Allocator *param_alloc, FloatTensor weight_buffer,
   m->momentum = momentum;
   m->lr_val_init = (float)lr_val;
   m->lr_ptr = nullptr;
-  m->lr_derived_ptr = nullptr;
   m->wb_puf = weight_buffer;
   m->param_alloc = param_alloc;
   m->ns = {};
   int64_t n = puf_numel(m->wb_puf.shape);
   m->lr_puf = {.shape = {1}};
-  m->lr_derived_puf = {.shape = {2}};
   m->mb_puf = {.shape = {n}};
   m->gc_puf = {.shape = {n}};
   m->up_puf = {.shape = {n}};
   alloc_register(&alloc, &m->lr_puf);
-  alloc_register(&alloc, &m->lr_derived_puf);
   alloc_register(&alloc, &m->mb_puf);
   alloc_register(&alloc, &m->gc_puf);
   alloc_register(&alloc, &m->up_puf);
