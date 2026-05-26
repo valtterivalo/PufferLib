@@ -36,6 +36,32 @@ ALLOWED_ARTIFACT_PATHS = {
     "artifacts/metal-overnight-20260526/milestone-05-final-audit/run-g2048.sh",
     "artifacts/metal-overnight-20260526/milestone-05-final-audit/run-interactive-breakout.sh",
     "artifacts/metal-overnight-20260526/milestone-05-final-audit/run-suite.sh",
+    "artifacts/metal-kernel-loc-20260527/.gitignore",
+    "artifacts/metal-kernel-loc-20260527/PLAN.md",
+    "artifacts/metal-kernel-loc-20260527/STATUS.md",
+    "artifacts/metal-kernel-loc-20260527/bin/run-interactive-smoke.sh",
+    "artifacts/metal-kernel-loc-20260527/bin/run-metal-benchmark.sh",
+    "artifacts/metal-kernel-loc-20260527/bin/summarize-puffer-run.py",
+    "artifacts/metal-kernel-loc-20260527/milestone-00-baseline/run-breakout.sh",
+    "artifacts/metal-kernel-loc-20260527/milestone-00-baseline/run-g2048.sh",
+    "artifacts/metal-kernel-loc-20260527/milestone-00-baseline/run-suite.sh",
+    "artifacts/metal-kernel-loc-20260527/milestone-01-kernel-loc-pass/run-breakout.sh",
+    "artifacts/metal-kernel-loc-20260527/milestone-01-kernel-loc-pass/run-g2048.sh",
+    "artifacts/metal-kernel-loc-20260527/milestone-01-kernel-loc-pass/run-suite.sh",
+    "artifacts/metal-kernel-loc-20260527/milestone-02-kernel-consolidation-pass/run-breakout.sh",
+    "artifacts/metal-kernel-loc-20260527/milestone-02-kernel-consolidation-pass/run-g2048.sh",
+    "artifacts/metal-kernel-loc-20260527/milestone-02-kernel-consolidation-pass/run-suite.sh",
+    "artifacts/metal-kernel-loc-20260527/milestone-03-cleanup/run-breakout.sh",
+    "artifacts/metal-kernel-loc-20260527/milestone-03-cleanup/run-g2048.sh",
+    "artifacts/metal-kernel-loc-20260527/milestone-03-cleanup/run-interactive-breakout.sh",
+    "artifacts/metal-kernel-loc-20260527/milestone-03-cleanup/run-suite.sh",
+    "artifacts/metal-kernel-loc-20260527/milestone-04-second-kernel-loc-pass/run-breakout.sh",
+    "artifacts/metal-kernel-loc-20260527/milestone-04-second-kernel-loc-pass/run-g2048.sh",
+    "artifacts/metal-kernel-loc-20260527/milestone-04-second-kernel-loc-pass/run-suite.sh",
+    "artifacts/metal-kernel-loc-20260527/milestone-05-final-audit/run-breakout.sh",
+    "artifacts/metal-kernel-loc-20260527/milestone-05-final-audit/run-g2048.sh",
+    "artifacts/metal-kernel-loc-20260527/milestone-05-final-audit/run-interactive-breakout.sh",
+    "artifacts/metal-kernel-loc-20260527/milestone-05-final-audit/run-suite.sh",
 }
 
 BLOCKED_PATHS = {
@@ -56,9 +82,10 @@ def git_lines(*args: str) -> set[str]:
 
 def changed_paths() -> set[str]:
     committed = git_lines("diff", "--name-only", "upstream/5.0...HEAD")
-    unstaged = git_lines("diff", "--name-only", "upstream/5.0", "--")
+    staged = git_lines("diff", "--cached", "--name-only")
+    unstaged = git_lines("diff", "--name-only", "--")
     untracked = git_lines("ls-files", "--others", "--exclude-standard")
-    return committed | unstaged | untracked
+    return committed | staged | unstaged | untracked
 
 
 def test_metal_overlay_does_not_touch_upstream_core() -> None:
