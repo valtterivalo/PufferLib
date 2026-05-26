@@ -712,8 +712,6 @@ static std::unique_ptr<PuffeRL> create_pufferl(py::dict args) {
     mtl_validate_divisible_config_values(
         "total_agents * horizon", batch_size, "minibatch_size", hypers.minibatch_size);
 
-    mtl_enable_gpu_timing(hypers.profile);
-
     std::string env_name = args["env_name"].cast<std::string>();
     Dict* vec_dict = py_dict_to_c_dict(vec_kwargs, false);
     Dict* env_dict = py_dict_to_c_dict(env_kwargs, true);

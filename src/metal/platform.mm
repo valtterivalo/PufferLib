@@ -272,13 +272,6 @@ static int g_sync_count = 0;
 static double g_sync_total_ns = 0.0;
 static mach_timebase_info_data_t g_timebase = {0, 0};
 
-// GPU timing diagnostic — actual kernel execution vs scheduling delay.
-// Only active when g_gpu_timing_enabled is true (set via mtl_enable_gpu_timing).
-// The MTL4CommitOptions + feedback handler allocation adds ObjC overhead that
-// causes measurable scheduling jitter when sampled unconditionally.
-static bool g_gpu_timing_enabled = false;
-static double g_gpu_exec_ns = 0.0;
-static double g_sched_wait_ns = 0.0;
 static constexpr NSUInteger kMetalSyncTimeoutMs = 300000;
 
 static void mtl_abort_sync_timeout(const char *where) {
@@ -300,35 +293,11 @@ void MetalStream::sync() {
   MetalContext *ctx = mtl_ctx();
   id<MTL4CommandQueue> q =
       (this == &ctx->train_stream) ? ctx->train_queue : ctx->queue;
-  // Sample GPU timing every 32nd sync, only when profiling is enabled.
-  // The MTL4CommitOptions + ObjC feedback handler block allocation adds
-  // measurable jitter (~50-200us) that contributes to SPS variance.
-  bool sample_timing = g_gpu_timing_enabled && (g_sync_count % 32 == 0);
-  if (sample_timing) {
-    CFTimeInterval cpu_commit = CACurrentMediaTime();
-    MTL4CommitOptions *opts = [MTL4CommitOptions new];
-    __block CFTimeInterval gpu_start = 0, gpu_end = 0;
-    [opts addFeedbackHandler:^(id<MTL4CommitFeedback> fb) {
-      gpu_start = fb.GPUStartTime;
-      gpu_end = fb.GPUEndTime;
-    }];
-    [q commit:bufs count:1 options:opts];
-    [q signalEvent:sync_event value:val];
-    BOOL signaled = [sync_event waitUntilSignaledValue:val timeoutMS:kMetalSyncTimeoutMs];
-    if (!signaled) {
-      mtl_abort_sync_timeout("MetalStream::sync");
-    }
-    if (gpu_start > 0 && gpu_end > 0) {
-      g_gpu_exec_ns += (gpu_end - gpu_start) * 1e9;
-      g_sched_wait_ns += (gpu_start - cpu_commit) * 1e9;
-    }
-  } else {
-    [q commit:bufs count:1];
-    [q signalEvent:sync_event value:val];
-    BOOL signaled = [sync_event waitUntilSignaledValue:val timeoutMS:kMetalSyncTimeoutMs];
-    if (!signaled) {
-      mtl_abort_sync_timeout("MetalStream::sync");
-    }
+  [q commit:bufs count:1];
+  [q signalEvent:sync_event value:val];
+  BOOL signaled = [sync_event waitUntilSignaledValue:val timeoutMS:kMetalSyncTimeoutMs];
+  if (!signaled) {
+    mtl_abort_sync_timeout("MetalStream::sync");
   }
   uint64_t t1 = mach_absolute_time();
   g_sync_count++;
@@ -401,24 +370,6 @@ void mtl_sync_stats(int *out_count, double *out_total_ms) {
   *out_total_ms = g_sync_total_ns / 1e6;
   g_sync_count = 0;
   g_sync_total_ns = 0.0;
-}
-
-void mtl_enable_gpu_timing(bool enable) {
-  g_gpu_timing_enabled = enable;
-}
-
-void mtl_gpu_timing_stats(double *gpu_exec_ms, double *sched_wait_ms) {
-  *gpu_exec_ms = g_gpu_exec_ns / 1e6;
-  *sched_wait_ms = g_sched_wait_ns / 1e6;
-  g_gpu_exec_ns = 0.0;
-  g_sched_wait_ns = 0.0;
-}
-
-static int g_gemm_dispatch_count = 0;
-
-void mtl_gemm_stats(int *tensor_ops_count) {
-  *tensor_ops_count = g_gemm_dispatch_count;
-  g_gemm_dispatch_count = 0;
 }
 
 void mtl_init() {
@@ -776,7 +727,6 @@ static void steel_gemm_dispatch(const char *kernel_name,
       threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
 
   ms->pending_work = true;
-  g_gemm_dispatch_count++;
 }
 
 static void compute_gemm(const float *A, const float *B, float *C,
@@ -805,7 +755,6 @@ static bool tensor_ops_dispatch(id<MTLComputePipelineState> pso,
                                 const void *A, const void *B, void *C,
                                 int M, int N, int K, cudaStream_t stream) {
   if (!pso) return false;
-  g_gemm_dispatch_count++;
 
   MetalStream *ms = mtl_resolve_stream(stream);
   ms->compute_encoder();
@@ -985,7 +934,6 @@ static void small_gemm_nt_dispatch(const float *A, const float *B, float *C,
       threadsPerThreadgroup:MTLSizeMake(tg_size, 1, 1)];
 
   ms->pending_work = true;
-  g_gemm_dispatch_count++;
 }
 
 // out(...,N) = a(...,K) @ b(N,K)^T — leading dims folded into M
