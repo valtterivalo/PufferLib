@@ -274,9 +274,6 @@ void puf_mm_nn(PufTensor &a, PufTensor &b, PufTensor &out,
 void puf_addmm_nn(PufTensor &a, PufTensor &b, PufTensor &out, float alpha,
                    float beta, cudaStream_t stream);
 void mtl_sync_stats(int *out_count, double *out_total_ms);
-void mtl_enable_gpu_timing(bool enable);
-void mtl_gpu_timing_stats(double *gpu_exec_ms, double *sched_wait_ms);
-void mtl_gemm_stats(int *tensor_ops_count);
 bool puf_stream_has_encoder(cudaStream_t stream);
 void puf_set_gpu_training(bool val);
 bool puf_is_gpu_training();

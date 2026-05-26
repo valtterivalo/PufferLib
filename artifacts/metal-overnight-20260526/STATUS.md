@@ -358,3 +358,23 @@
 - Milestone 01 suite also passed native Metal parity and overlay surface tests on both runs. Current tracked Metal-owned LOC: 10200.
 - Interactive smoke artifacts: `milestone-01-loc-pass/20260526T043138+0300-interactive-breakout` and `milestone-01-loc-pass/20260526T043225+0300-interactive-breakout-pty`. Both built, loaded `resources/breakout/breakout_weights.bin`, and reached raylib 5.5 initialization, then failed in GLFW window centering with `Failed to determine Monitor to center Window` followed by `Segmentation fault: 11`. Treat as a heartbeat windowing-platform blocker unless subagent review says the global interactive gate requires rejecting this change.
 - Decision: keep pending subagent review. The code deletion is not on any runtime path, benchmark and no-render eval gates pass, and the interactive failure occurs after raylib starts in the desktop windowing layer.
+
+## 2026-05-26 04:59 EEST
+
+- Dead `mtl_sample_logits_expand` cleanup passed subagent review and was committed as `683b87653`.
+- Worktree resumed clean at heartbeat. Current tracked Metal-owned LOC: 10200.
+
+## 2026-05-26 05:00 EEST
+
+- Starting thirteenth milestone 01 LOC candidate.
+- Root-cause hypothesis: `mtl_gpu_timing_stats` and `mtl_gemm_stats` have no source callers, while the backend still samples GPU timing in profile mode and increments GEMM dispatch counters on hot paths for those dead readers. Removing the unobserved diagnostic state should reduce LOC and hot-path side effects without changing training outputs, RNG, dispatch order, checkpointing, or eval behavior.
+
+## 2026-05-26 05:05 EEST
+
+- Tested unobserved GPU timing and GEMM stats removal twice.
+- `breakout` SPS runs: 2,297,815 and 2,301,538. Median versus current accepted baseline: +0.38 percent. Training scores were 2.613 and 2.446, explicit eval score stayed 0.0.
+- `g2048` SPS runs: 383,980 and 361,570. Median versus current accepted baseline: +4.77 percent. Training score stayed 97.855, explicit eval score stayed 49.43.
+- Milestone 01 suite also passed native Metal parity and overlay surface tests on both runs. Current tracked Metal-owned LOC: 10143.
+- Profile smoke artifact: `milestone-01-loc-pass/20260526T050539+0300-profile-smoke-breakout`. A real `breakout` train run with `--profile True` exited 0, so the remaining profile path still runs after deleting the unused GPU commit-feedback sampler.
+- Interactive smoke artifact: `milestone-01-loc-pass/20260526T050357+0300-interactive-breakout`. It built, loaded `resources/breakout/breakout_weights.bin`, and reached raylib 5.5 GLFW initialization, then failed with `Failed to determine Monitor to center Window` and exit code 139. Treat as the existing desktop windowing blocker, not a backend regression, unless subagent review says otherwise.
+- Decision: keep pending subagent review. The deleted diagnostic readers have no source callers, and the remaining runtime change removes only unobserved timing samples plus dead GEMM counter increments.
