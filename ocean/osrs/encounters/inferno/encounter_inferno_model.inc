@@ -607,6 +607,12 @@ enum {
     INF_JOSEPH_REWARD_MODE_ON = 1,
 };
 
+enum {
+    INF_STEP_OUT_FORECAST_MODE_OFF = 0,
+    INF_STEP_OUT_FORECAST_MODE_EXACT_ROLLOUT = 1,
+    INF_STEP_OUT_FORECAST_MODE_FAST_STATIC_TILE = 2,
+};
+
 typedef struct {
     int brew_doses;
     int restore_doses;
@@ -639,6 +645,7 @@ typedef struct {
     float death_penalty_coeff;
     int terminal_penalty_enabled;
     int step_out_forecast_obs_enabled;
+    int step_out_forecast_obs_mode;
     float phase_900_bonus;
     float phase_600_bonus;
     float phase_300_bonus;

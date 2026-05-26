@@ -495,9 +495,9 @@ static void inf_write_obs_ctx(
     }
 
     {
-        if (ctx->config.step_out_forecast_obs_enabled) {
+        if (ctx->config.step_out_forecast_obs_mode != INF_STEP_OUT_FORECAST_MODE_OFF) {
             InfStepOutForecast forecast;
-            inf_build_step_out_forecast_ctx(s, ctx, &forecast);
+            inf_build_step_out_forecast_mode_ctx(s, ctx, &forecast);
             for (int action_idx = 0; action_idx < ENCOUNTER_MOVE_ACTIONS; action_idx++) {
                 const InfStepOutForecastAction* action = &forecast.actions[action_idx];
                 int first_attack_tick = 0;

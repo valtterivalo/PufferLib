@@ -38,6 +38,16 @@ typedef struct {
     InfStepOutForecastAction actions[ENCOUNTER_MOVE_ACTIONS];
 } InfStepOutForecast;
 
+typedef struct {
+    int action_feature_mismatches;
+    int tick_feature_mismatches;
+    int dangerous_false_negatives;
+    int exact_dangerous_actions;
+    int fast_dangerous_actions;
+    int max_hit_abs_error_sum;
+    int max_hit_abs_error_max;
+} InfStepOutForecastOracleDiff;
+
 /* max hit per NPC type, normalized by mager max (70). for prayer priority obs. */
 static const float INF_NPC_MAX_HIT_NORM[INF_NUM_NPC_TYPES] = {
     [INF_NPC_NIBBLER]    = 0.0f,
@@ -98,6 +108,25 @@ static int inf_step_out_forecast_action_valid(InfernoState* s, int action) {
     int nx = s->player.x + ENCOUNTER_MOVE_TARGET_DX[action];
     int ny = s->player.y + ENCOUNTER_MOVE_TARGET_DY[action];
     return inf_in_arena(nx, ny) && !inf_blocked_by_pillar(s, nx, ny, 1);
+}
+
+static void inf_step_out_forecast_action_landing_ctx(
+    const InfernoState* s,
+    const InfernoContext* ctx,
+    int action_idx,
+    Player* moved,
+    int* valid
+) {
+    *moved = s->player;
+    *valid = inf_step_out_forecast_action_valid((InfernoState*)s, action_idx);
+    if (action_idx == 0) return;
+    InfWalkCtx walk_ctx = { (InfernoState*)s, ctx };
+    encounter_move_to_target(
+        moved,
+        ENCOUNTER_MOVE_TARGET_DX[action_idx],
+        ENCOUNTER_MOVE_TARGET_DY[action_idx],
+        inf_tile_walkable,
+        &walk_ctx);
 }
 
 static int inf_forecast_style_max_hit(
@@ -311,7 +340,66 @@ static int inf_step_out_forecast_tick_has_event(
         tick->blob_scan_count > 0;
 }
 
-static void inf_build_step_out_forecast_ctx(
+static int inf_step_out_forecast_npc_fire_tick_idx(const InfNPC* npc) {
+    int tick_idx = npc->attack_timer - 1;
+    return tick_idx > 0 ? tick_idx : 0;
+}
+
+static void inf_step_out_forecast_fast_static_npc(
+    const InfernoState* s,
+    const InfNPC* npc,
+    InfStepOutForecastAction* action
+) {
+    if (!npc->active || npc->death_ticks > 0 || npc->hp <= 0) return;
+    const InfNPCStats* stats = &INF_NPC_STATS[npc->type];
+    if (npc->stun_timer > 0) return;
+    if (npc->dig_freeze_timer > 0 || npc->dig_attack_delay > 0) return;
+    if (npc->type == INF_NPC_ZUK_SHIELD || npc->type == INF_NPC_NIBBLER)
+        return;
+    if (npc->aggro_target >= 0) return;
+
+    int dist = encounter_dist_to_npc(
+        action->land_x, action->land_y, npc->x, npc->y, npc->size);
+    if (dist == 0 || dist > stats->attack_range) return;
+
+    int has_los_now = 1;
+    if (stats->attack_range > 1)
+        has_los_now = inf_npc_has_los_to_tile(s, npc, action->land_x, action->land_y);
+
+    if (npc->type == INF_NPC_BLOB &&
+            npc->blob_scanned_prayer < 0 &&
+            has_los_now &&
+            !npc->had_los_last_tick) {
+        inf_step_out_forecast_record_blob_scan(action, 0);
+        return;
+    }
+
+    int tick_idx = inf_step_out_forecast_npc_fire_tick_idx(npc);
+    if (tick_idx >= INF_STEP_OUT_FORECAST_HORIZON) return;
+
+    if (stats->attack_range > 1 &&
+        !(npc->type == INF_NPC_BLOB && npc->blob_scanned_prayer >= 0) &&
+        !has_los_now) return;
+
+    if (npc->type == INF_NPC_BLOB && npc->blob_scanned_prayer < 0) {
+        inf_step_out_forecast_record_blob_scan(action, tick_idx);
+        return;
+    }
+
+    int style_mask = inf_forecast_jad_unknown_style_mask(npc);
+    if (style_mask == 0) {
+        int planned_style = inf_npc_planned_style_for_obs(npc);
+        if (planned_style == ATTACK_STYLE_NONE) return;
+        style_mask = inf_attack_style_options_mask_at_tile(
+            action->land_x, action->land_y, npc, stats, planned_style, dist);
+    }
+    if (style_mask == 0) return;
+
+    inf_step_out_forecast_record_style_mask(
+        action, tick_idx, npc->type, stats, style_mask);
+}
+
+static void inf_build_step_out_forecast_fast_static_ctx(
     const InfernoState* s,
     const InfernoContext* ctx,
     InfStepOutForecast* out
@@ -322,18 +410,57 @@ static void inf_build_step_out_forecast_ctx(
         s, forecast_slots);
     for (int action_idx = 0; action_idx < ENCOUNTER_MOVE_ACTIONS; action_idx++) {
         InfStepOutForecastAction* action = &out->actions[action_idx];
-        Player moved = s->player;
-        action->valid = inf_step_out_forecast_action_valid(
-            (InfernoState*)s, action_idx);
-        if (action_idx > 0) {
-            InfWalkCtx walk_ctx = { (InfernoState*)s, ctx };
-            encounter_move_to_target(
-                &moved,
-                ENCOUNTER_MOVE_TARGET_DX[action_idx],
-                ENCOUNTER_MOVE_TARGET_DY[action_idx],
-                inf_tile_walkable,
-                &walk_ctx);
+        Player moved;
+        int valid;
+        inf_step_out_forecast_action_landing_ctx(
+            s, ctx, action_idx, &moved, &valid);
+        action->valid = valid;
+        action->land_x = moved.x;
+        action->land_y = moved.y;
+        if (!action->valid || forecast_slot_count == 0) continue;
+
+        int duplicate_idx = -1;
+        for (int prior_idx = 0; prior_idx < action_idx; prior_idx++) {
+            const InfStepOutForecastAction* prior = &out->actions[prior_idx];
+            if (prior->valid &&
+                    prior->land_x == action->land_x &&
+                    prior->land_y == action->land_y) {
+                duplicate_idx = prior_idx;
+                break;
+            }
         }
+        if (duplicate_idx >= 0) {
+            *action = out->actions[duplicate_idx];
+            action->valid = valid;
+            action->land_x = moved.x;
+            action->land_y = moved.y;
+            continue;
+        }
+
+        for (int slot_idx = 0; slot_idx < forecast_slot_count; slot_idx++) {
+            int i = forecast_slots[slot_idx];
+            inf_step_out_forecast_fast_static_npc(s, &s->npcs[i], action);
+        }
+        inf_step_out_forecast_finalize_action(action);
+    }
+}
+
+static void inf_build_step_out_forecast_exact_ctx(
+    const InfernoState* s,
+    const InfernoContext* ctx,
+    InfStepOutForecast* out
+) {
+    memset(out, 0, sizeof(*out));
+    int forecast_slots[INF_MAX_NPCS];
+    int forecast_slot_count = inf_collect_step_out_forecast_slots(
+        s, forecast_slots);
+    for (int action_idx = 0; action_idx < ENCOUNTER_MOVE_ACTIONS; action_idx++) {
+        InfStepOutForecastAction* action = &out->actions[action_idx];
+        Player moved;
+        int valid;
+        inf_step_out_forecast_action_landing_ctx(
+            s, ctx, action_idx, &moved, &valid);
+        action->valid = valid;
         action->land_x = moved.x;
         action->land_y = moved.y;
         if (!action->valid || forecast_slot_count == 0) continue;
@@ -350,6 +477,89 @@ static void inf_build_step_out_forecast_ctx(
                 &sim, ctx, action, tick_idx, forecast_slots, forecast_slot_count);
         }
         inf_step_out_forecast_finalize_action(action);
+    }
+}
+
+static void inf_build_step_out_forecast_ctx(
+    const InfernoState* s,
+    const InfernoContext* ctx,
+    InfStepOutForecast* out
+) {
+    inf_build_step_out_forecast_exact_ctx(s, ctx, out);
+}
+
+static void inf_build_step_out_forecast_mode_ctx(
+    const InfernoState* s,
+    const InfernoContext* ctx,
+    InfStepOutForecast* out
+) {
+    switch (ctx->config.step_out_forecast_obs_mode) {
+        case INF_STEP_OUT_FORECAST_MODE_EXACT_ROLLOUT:
+            inf_build_step_out_forecast_exact_ctx(s, ctx, out);
+            return;
+        case INF_STEP_OUT_FORECAST_MODE_FAST_STATIC_TILE:
+            inf_build_step_out_forecast_fast_static_ctx(s, ctx, out);
+            return;
+        default:
+            fprintf(stderr,
+                "inferno: step_out_forecast_obs_mode must be 1 or 2 for forecast build, got %d\n",
+                ctx->config.step_out_forecast_obs_mode);
+            abort();
+    }
+}
+
+static int inf_step_out_forecast_action_dangerous(
+    const InfStepOutForecastAction* action
+) {
+    if (action->same_tick_mixed_style_conflict) return 1;
+    for (int tick_idx = 0; tick_idx < INF_STEP_OUT_FORECAST_HORIZON; tick_idx++) {
+        const InfStepOutForecastTick* tick = &action->ticks[tick_idx];
+        if (tick->max_hit >= 46) return 1;
+    }
+    return 0;
+}
+
+static void inf_compare_step_out_forecasts(
+    const InfStepOutForecast* exact,
+    const InfStepOutForecast* fast,
+    InfStepOutForecastOracleDiff* out
+) {
+    memset(out, 0, sizeof(*out));
+    for (int action_idx = 0; action_idx < ENCOUNTER_MOVE_ACTIONS; action_idx++) {
+        const InfStepOutForecastAction* a = &exact->actions[action_idx];
+        const InfStepOutForecastAction* b = &fast->actions[action_idx];
+        if (a->valid != b->valid ||
+                a->land_x != b->land_x ||
+                a->land_y != b->land_y ||
+                a->same_tick_mixed_style_conflict != b->same_tick_mixed_style_conflict ||
+                a->ranger_mager_offtick_opportunity != b->ranger_mager_offtick_opportunity ||
+                a->melee_fallback_exposure != b->melee_fallback_exposure) {
+            out->action_feature_mismatches++;
+        }
+        int exact_danger = inf_step_out_forecast_action_dangerous(a);
+        int fast_danger = inf_step_out_forecast_action_dangerous(b);
+        out->exact_dangerous_actions += exact_danger;
+        out->fast_dangerous_actions += fast_danger;
+        if (exact_danger && !fast_danger)
+            out->dangerous_false_negatives++;
+        for (int tick_idx = 0; tick_idx < INF_STEP_OUT_FORECAST_HORIZON; tick_idx++) {
+            const InfStepOutForecastTick* at = &a->ticks[tick_idx];
+            const InfStepOutForecastTick* bt = &b->ticks[tick_idx];
+            if (at->melee_count != bt->melee_count ||
+                    at->ranged_count != bt->ranged_count ||
+                    at->magic_count != bt->magic_count ||
+                    at->blob_scan_count != bt->blob_scan_count ||
+                    at->ranger_count != bt->ranger_count ||
+                    at->mager_count != bt->mager_count ||
+                    at->max_hit != bt->max_hit) {
+                out->tick_feature_mismatches++;
+            }
+            int max_hit_error = at->max_hit - bt->max_hit;
+            if (max_hit_error < 0) max_hit_error = -max_hit_error;
+            out->max_hit_abs_error_sum += max_hit_error;
+            if (max_hit_error > out->max_hit_abs_error_max)
+                out->max_hit_abs_error_max = max_hit_error;
+        }
     }
 }
 
