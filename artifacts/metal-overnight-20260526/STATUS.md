@@ -273,3 +273,16 @@
 - `breakout`: 2,283,270 SPS, score 2.42, explicit eval score 0.0.
 - `g2048`: 354,996 SPS, score 97.855, explicit eval score 49.43.
 - Decision: reject and revert without a second run. The result did not approach the 3 percent speed gate, and the change added shader code.
+
+## 2026-05-26 03:08 EEST
+
+- Paired scatter rejection committed as `289926e1b`.
+- Starting cleanup cadence pass after late milestone 04 attempts.
+- Cleanup scan found no uncommitted backend diff, no temporary logging, and no leftover code from the priority-weight, PPO loss-output, or paired-scatter rejected experiments.
+- Current tracked Metal-owned LOC across `src/metal`, `tools/metal`, and `tests/metal`: 10208.
+
+## 2026-05-26 03:10 EEST
+
+- Cleanup suite passed on accepted code.
+- Cleanup `breakout`: 4.2M steps, 2.27M SPS, train score 2.596, eval score 0.0.
+- Cleanup `g2048`: 262K steps, 354.4K SPS, train score 97.855, eval score 49.43.
