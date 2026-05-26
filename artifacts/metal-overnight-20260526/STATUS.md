@@ -530,3 +530,24 @@
 - `g2048`: 485,517 SPS versus current accepted baseline, +0.61 percent. Training score stayed 97.855, explicit eval score stayed 49.43.
 - Milestone 04 suite also passed native Metal parity and overlay surface tests.
 - Decision: reject and revert without a second run. The removed barrier appears order-safe, but the measured speedup is below the 3 percent milestone 04 gate and not statistically meaningful.
+
+## 2026-05-26 09:32 EEST
+
+- Starting milestone 04 CPU MinGRU gate indexing candidate.
+- Root-cause hypothesis: rollout is now the largest measured phase on `g2048`, and CPU inference calls `cpu_mingru_gate` for every buffer, horizon step, and recurrent layer. The current flat loop recomputes `idx / H`, `idx % H`, and `b * 3 * H` for every hidden element. Rewriting it as a row-major nested loop should remove hot scalar index work while preserving identical element order, activation math, recurrent state updates, RNG, training dispatch, eval, and learnability.
+
+## 2026-05-26 09:34 EEST
+
+- Tested CPU MinGRU gate indexing rewrite twice.
+- `breakout` SPS runs: 3,466,151 and 3,432,180. Median versus current accepted baseline: +8.20 percent. Training scores were 4.028 and 2.337, explicit eval score stayed 0.0.
+- `g2048` SPS runs: 606,993 and 604,323. Median versus current accepted baseline: +25.51 percent. Training score stayed 97.855, explicit eval score stayed 49.43.
+- Milestone 04 suite passed native Metal parity and overlay surface tests on both runs. Current tracked Metal-owned LOC: 10133.
+- Profile smoke artifact: `milestone-04-second-hot-path-pass/20260526T093122+0300-breakout`. A `breakout` train and explicit no-render eval with `--profile True` exited 0.
+- Interactive smoke artifact: `milestone-04-second-hot-path-pass/20260526T093106+0300-interactive-breakout-cpu-gate-indexing`. It built, loaded `resources/breakout/breakout_weights.bin`, reached raylib 5.5 GLFW initialization, then failed with `Failed to determine Monitor to center Window` and exit code 139. This matches the existing desktop windowing blocker.
+- Decision: keep pending subagent review. The code still traverses elements in the same row-major order and only moves row offset arithmetic out of the inner loop.
+
+## 2026-05-26 09:36 EEST
+
+- Subagent review found no issues in the CPU MinGRU gate indexing rewrite.
+- Review confirmed the nested loops enumerate the same `idx = b * H + h` order as the old flat loop, preserve all `combined`, `state_in`, `x_in`, `next_state`, and `out` indexing, keep recurrent state copy semantics unchanged, and leave `PLAN.md` untouched while appending only to `STATUS.md`.
+- Decision: accept and commit the speedup.
