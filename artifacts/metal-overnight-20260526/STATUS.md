@@ -378,3 +378,21 @@
 - Profile smoke artifact: `milestone-01-loc-pass/20260526T050539+0300-profile-smoke-breakout`. A real `breakout` train run with `--profile True` exited 0, so the remaining profile path still runs after deleting the unused GPU commit-feedback sampler.
 - Interactive smoke artifact: `milestone-01-loc-pass/20260526T050357+0300-interactive-breakout`. It built, loaded `resources/breakout/breakout_weights.bin`, and reached raylib 5.5 GLFW initialization, then failed with `Failed to determine Monitor to center Window` and exit code 139. Treat as the existing desktop windowing blocker, not a backend regression, unless subagent review says otherwise.
 - Decision: keep pending subagent review. The deleted diagnostic readers have no source callers, and the remaining runtime change removes only unobserved timing samples plus dead GEMM counter increments.
+
+## 2026-05-26 05:07 EEST
+
+- Unobserved GPU timing and GEMM stats cleanup passed subagent review and was committed as `6e18a4e13`.
+- Worktree resumed clean after commit. Current tracked Metal-owned LOC: 10143.
+
+## 2026-05-26 05:09 EEST
+
+- Starting fourteenth milestone 01 LOC candidate.
+- Root-cause hypothesis: `assert_static_env_name_matches` is a no-op pybind module initialization call that only stringifies `ENV_NAME`. The same `PUFFER_STRINGIFY(ENV_NAME)` macro is already used for exported module attributes, so deleting the helper and call should reduce LOC without changing training, eval, determinism, module identity checks, dispatch order, or learnability.
+
+## 2026-05-26 05:12 EEST
+
+- Tested `assert_static_env_name_matches` no-op removal twice.
+- `breakout` SPS runs: 2,425,960 and 2,272,261. Median versus current accepted baseline: +2.15 percent. Training scores were 2.521 and 2.917, explicit eval score stayed 0.0.
+- `g2048` SPS runs: 358,190 and 362,513. Median versus current accepted baseline: -3.33 percent. Training score stayed 97.855, explicit eval score stayed 49.43.
+- Milestone 01 suite also passed native Metal parity and overlay surface tests on both runs. Candidate tracked Metal-owned LOC was 10137.
+- Decision: reject and revert. The change was compile-token neutral for backend behavior, but the `g2048` median missed the LOC cleanup gate.
