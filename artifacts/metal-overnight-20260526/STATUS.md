@@ -260,3 +260,16 @@
 - `breakout` SPS runs: 2,280,738 and 2,281,764. Median versus current accepted baseline: -0.42 percent. Training scores were 2.41 and 2.56, explicit eval score stayed 0.0.
 - `g2048` SPS runs: 353,976 and 349,353. Median versus current accepted baseline: -1.16 percent. Training score stayed 97.855, explicit eval score stayed 49.43.
 - Decision: reject and revert. The cleanup was semantically clean, but `g2048` missed the 1 percent LOC gate on repeated runs.
+
+## 2026-05-26 03:05 EEST
+
+- Dead PPO cleanup rejection committed as `d05cc4631`.
+- Starting eighth milestone 04 candidate.
+- Root-cause hypothesis: after PPO, `mtl_scatter_ppo_outputs` launches the same indexed row copy twice with identical indices and row width, once for ratio and once for values. A paired scatter kernel can combine the two memory passes into one dispatch without changing the copied data.
+
+## 2026-05-26 03:06 EEST
+
+- Tested paired PPO scatter once.
+- `breakout`: 2,283,270 SPS, score 2.42, explicit eval score 0.0.
+- `g2048`: 354,996 SPS, score 97.855, explicit eval score 49.43.
+- Decision: reject and revert without a second run. The result did not approach the 3 percent speed gate, and the change added shader code.
