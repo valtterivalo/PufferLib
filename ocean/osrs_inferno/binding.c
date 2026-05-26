@@ -2210,64 +2210,14 @@ Env* my_vec_init(int* num_envs_out, int* buffer_env_starts, int* buffer_env_coun
     return envs;
 }
 
-static void inferno_set_death_cause_metrics(
-    Dict* out,
-    const char* const* keys,
-    const float* counts,
-    float denom
-) {
-    for (int t = 0; t < INF_NUM_NPC_TYPES; t++) {
-        dict_set(out, keys[t], denom > 0.0f ? counts[t] / denom : 0.0f);
-    }
-}
-
 void my_log(Log* log, Dict* out) {
-    static const char* killed_by_normal_keys[] = {
-        "frac_deaths_killed_by_nibbler_normal",
-        "frac_deaths_killed_by_bat_normal",
-        "frac_deaths_killed_by_blob_normal",
-        "frac_deaths_killed_by_blob_mel_normal",
-        "frac_deaths_killed_by_blob_rng_normal",
-        "frac_deaths_killed_by_blob_mag_normal",
-        "frac_deaths_killed_by_meleer_normal",
-        "frac_deaths_killed_by_ranger_normal",
-        "frac_deaths_killed_by_mager_normal",
-        "frac_deaths_killed_by_jad_normal",
-        "frac_deaths_killed_by_zuk_normal",
-        "frac_deaths_killed_by_heal_jad_normal",
-        "frac_deaths_killed_by_heal_zuk_normal",
-        "frac_deaths_killed_by_shield_normal",
-    };
-    static const char* zero_valid_head_normal_keys[] = {
-        "zero_valid_action_head_move_normal",
-        "zero_valid_action_head_prayer_normal",
-        "zero_valid_action_head_target_normal",
-        "zero_valid_action_head_gear_normal",
-        "zero_valid_action_head_eat_normal",
-        "zero_valid_action_head_potion_normal",
-        "zero_valid_action_head_spell_normal",
-        "zero_valid_action_head_spec_normal",
-        "zero_valid_action_head_offensive_normal",
-    };
-    static const char* min_valid_head_normal_keys[] = {
-        "valid_action_count_min_move_normal",
-        "valid_action_count_min_prayer_normal",
-        "valid_action_count_min_target_normal",
-        "valid_action_count_min_gear_normal",
-        "valid_action_count_min_eat_normal",
-        "valid_action_count_min_potion_normal",
-        "valid_action_count_min_spell_normal",
-        "valid_action_count_min_spec_normal",
-        "valid_action_count_min_offensive_normal",
-    };
-
     dict_set(out, "episode_return", log->episode_return);
     dict_set(out, "damage_dealt", log->damage_dealt);
     dict_set(out, "damage_received", log->damage_received);
     dict_set(out, "episode_length", log->episode_length);
+
     float damage_per_tick = log->episode_length > 0.0f
         ? log->damage_dealt / log->episode_length : 0.0f;
-    dict_set(out, "damage_per_tick", damage_per_tick);
     dict_set(out, "damage_per_100_ticks", damage_per_tick * 100.0f);
     dict_set(out, "ticks_per_100_damage", log->damage_dealt > 0.0f
         ? 100.0f * log->episode_length / log->damage_dealt : 0.0f);
@@ -2277,489 +2227,84 @@ void my_log(Log* log, Dict* out) {
     dict_set(out, "brews_used", log->brews_used);
     dict_set(out, "blood_healed", log->blood_healed);
 
-    /* prayer analysis: correct rate + unavoidable breakdown */
     float prayer_rate = (log->prayer_total > 0.0f)
         ? log->prayer_correct / log->prayer_total : 0.0f;
     dict_set(out, "prayer_correct_rate", prayer_rate);
-    /* what fraction of off-prayer hits were unavoidable (multi-style same tick) */
-    float off_prayer = log->prayer_total - log->prayer_correct;
-    float unavoidable_rate = (off_prayer > 0.0f)
-        ? log->unavoidable_off_prayer / off_prayer : 0.0f;
-    dict_set(out, "unavoidable_off_prayer_rate", unavoidable_rate);
     dict_set(out, "brews_remaining", log->brews_remaining);
     dict_set(out, "restores_remaining", log->restores_remaining);
     dict_set(out, "prayer_at_death", log->prayer_at_death);
-    dict_set(out, "ranger_mager_same_tick_attacks",
-        log->ranger_mager_same_tick_attacks);
-    dict_set(out, "step_out_ranger_mager_same_tick_attacks",
-        log->step_out_ranger_mager_same_tick_attacks);
-
-    dict_set(out, "current_ranged", log->current_ranged);
-    dict_set(out, "current_magic", log->current_magic);
     dict_set(out, "behind_shield_pct", log->behind_shield_pct);
     dict_set(out, "zuk_hp_remaining", log->zuk_hp_remaining);
     dict_set(out, "min_zuk_hp_seen", log->min_zuk_hp_seen);
     dict_set(out, "hp_restored", log->hp_restored);
     dict_set(out, "zuk_healer_damage", log->zuk_healer_damage);
-    dict_set(out, "deaths_to_jad", log->killed_by_type[INF_NPC_JAD] / log->n);
-    if (log->n_normal > 0.0f) {
-        float min_zhp_n = log->min_zuk_hp_normal / log->n_normal;
-        float score_n = (1200.0f - min_zhp_n) / 1200.0f;
-        float win_rate_n = log->wins_normal / log->n_normal;
-        float frac_le_240_n = log->count_min_hp_le_240_normal / log->n_normal;
-        float frac_le_150_n = log->count_min_hp_le_150_normal / log->n_normal;
-        float frac_tagged_ge_1_n =
-            log->count_zuk_healers_tagged_ge_1_normal / log->n_normal;
-        float frac_tagged_ge_4_n =
-            log->count_zuk_healers_tagged_ge_4_normal / log->n_normal;
-        float frac_killed_ge_1_n =
-            log->count_zuk_healers_killed_ge_1_normal / log->n_normal;
-        float frac_all_healers_dead_n =
-            log->count_all_zuk_healers_dead_normal / log->n_normal;
-        float frac_died_with_zuk_healer_n =
-            log->count_died_with_zuk_healer_alive_normal / log->n_normal;
-        dict_set(out, "episode_return_normal", log->episode_return_normal / log->n_normal);
-        dict_set(out, "wins_normal", win_rate_n);
-        dict_set(out, "min_zuk_hp_normal", min_zhp_n);
-        dict_set(out, "score_normal", score_n);
-        dict_set(out, "zuk_objective_normal", score_n + 2.0f * win_rate_n);
-        dict_set(out, "phase_reached_normal", log->phase_reached_normal_sum / log->n_normal);
-        if (log->n_normal_died > 0.0f) {
-            dict_set(out, "death_tick_normal", log->episode_length_normal_died / log->n_normal_died);
-            dict_set(out, "brews_remaining_normal_died",
-                log->brews_remaining_normal_died / log->n_normal_died);
-            dict_set(out, "restores_remaining_normal_died",
-                log->restores_remaining_normal_died / log->n_normal_died);
-            dict_set(out, "prayer_at_death_normal_died",
-                log->prayer_at_death_normal_died / log->n_normal_died);
-            dict_set(out, "frac_deaths_with_shield_active_normal",
-                log->count_died_with_shield_active_normal / log->n_normal_died);
-            dict_set(out, "frac_deaths_behind_shield_normal",
-                log->count_died_behind_shield_normal / log->n_normal_died);
-            dict_set(out, "frac_deaths_after_240_normal",
-                log->count_died_after_240_normal / log->n_normal_died);
-            inferno_set_death_cause_metrics(out, killed_by_normal_keys,
-                log->killed_by_type_normal, log->n_normal_died);
-        }
-        /* aggregator divides every Log field by n_total, so raw counts arrive
-           as count/n_total. Dividing by n_normal (also count/n_total) cancels
-           n_total and yields the true fraction-of-normal-episodes.
-           best_min_zuk_hp_normal is intentionally not surfaced: averaging mins
-           across envs is meaningless. Use the count grid instead. */
-        dict_set(out, "frac_min_hp_le_300_normal", log->count_min_hp_le_300_normal / log->n_normal);
-        dict_set(out, "frac_min_hp_le_240_normal", frac_le_240_n);
-        dict_set(out, "frac_min_hp_le_150_normal", frac_le_150_n);
-        dict_set(out, "frac_normal", log->n_normal);
-        /* Conditional on having crossed the boundary. The
-           aggregator divided everything by n_total, so dividing by
-           count_min_hp_le_X (also divided by n_total) cancels n_total and
-           gives the true conditional mean. Surface 0 when no eps crossed
-           so pufferl's first-log metric registration always has the keys. */
-        float t300 = log->count_min_hp_le_300_normal > 0.0f
-            ? log->ticks_after_300_normal_sum / log->count_min_hp_le_300_normal : 0.0f;
-        float t240 = log->count_min_hp_le_240_normal > 0.0f
-            ? log->ticks_after_240_normal_sum / log->count_min_hp_le_240_normal : 0.0f;
-        float t150 = log->count_min_hp_le_150_normal > 0.0f
-            ? log->ticks_after_150_normal_sum / log->count_min_hp_le_150_normal : 0.0f;
-        float d300 = log->count_min_hp_le_300_normal > 0.0f
-            ? log->damage_after_300_normal_sum / log->count_min_hp_le_300_normal : 0.0f;
-        float d240 = log->count_min_hp_le_240_normal > 0.0f
-            ? log->damage_after_240_normal_sum / log->count_min_hp_le_240_normal : 0.0f;
-        float d150 = log->count_min_hp_le_150_normal > 0.0f
-            ? log->damage_after_150_normal_sum / log->count_min_hp_le_150_normal : 0.0f;
-        dict_set(out, "ticks_after_300_normal", t300);
-        dict_set(out, "ticks_after_240_normal", t240);
-        dict_set(out, "ticks_after_150_normal", t150);
-        dict_set(out, "damage_after_300_normal", d300);
-        dict_set(out, "damage_after_240_normal", d240);
-        dict_set(out, "damage_after_150_normal", d150);
-        dict_set(out, "frac_healer_spawned_normal",
-            log->count_healer_spawned_normal / log->n_normal);
-        dict_set(out, "shield_tags_normal",
-            log->shield_tags_normal_sum / log->n_normal);
-        dict_set(out, "frac_shield_tags_ge_1_normal",
-            log->count_shield_tags_ge_1_normal / log->n_normal);
-        dict_set(out, "frac_zuk_healers_tagged_ge_1_normal", frac_tagged_ge_1_n);
-        dict_set(out, "frac_zuk_healers_tagged_ge_2_normal",
-            log->count_zuk_healers_tagged_ge_2_normal / log->n_normal);
-        dict_set(out, "frac_zuk_healers_tagged_ge_4_normal", frac_tagged_ge_4_n);
-        dict_set(out, "frac_zuk_healers_killed_ge_1_normal", frac_killed_ge_1_n);
-        dict_set(out, "frac_zuk_healers_killed_ge_2_normal",
-            log->count_zuk_healers_killed_ge_2_normal / log->n_normal);
-        dict_set(out, "frac_zuk_healers_killed_ge_4_normal",
-            log->count_zuk_healers_killed_ge_4_normal / log->n_normal);
-        dict_set(out, "frac_all_zuk_healers_dead_normal", frac_all_healers_dead_n);
-        dict_set(out, "frac_zuk_healers_targeted_ge_1_normal",
-            log->count_zuk_healers_targeted_ge_1_normal / log->n_normal);
-        dict_set(out, "frac_zuk_healers_attacked_ge_1_normal",
-            log->count_zuk_healers_attacked_ge_1_normal / log->n_normal);
-        dict_set(out, "frac_zuk_healers_attackable_ge_1_normal",
-            log->count_zuk_healers_attackable_ge_1_normal / log->n_normal);
-        float target_den = log->count_zuk_healers_targeted_ge_1_normal;
-        dict_set(out, "zuk_healer_target_cannot_attack_ticks_normal",
-            target_den > 0.0f
-                ? log->zuk_healer_target_cannot_attack_ticks_normal_sum / target_den
-                : 0.0f);
-        dict_set(out, "zuk_healer_target_cooldown_ticks_normal",
-            target_den > 0.0f
-                ? log->zuk_healer_target_cooldown_ticks_normal_sum / target_den
-                : 0.0f);
-        dict_set(out, "zuk_healer_target_out_of_range_ticks_normal",
-            target_den > 0.0f
-                ? log->zuk_healer_target_out_of_range_ticks_normal_sum / target_den
-                : 0.0f);
-        dict_set(out, "zuk_healer_target_attackable_ticks_normal",
-            target_den > 0.0f
-                ? log->zuk_healer_target_attackable_ticks_normal_sum / target_den
-                : 0.0f);
-        float untagged_target_coeff =
-            log->zuk_untagged_healer_target_bonus_coeff_normal_sum /
-                log->n_normal;
-        float safe_target_coeff =
-            log->zuk_safe_untagged_healer_target_bonus_coeff_normal_sum /
-                log->n_normal;
-        dict_set(out, "zuk_untagged_healer_target_bonus_coeff_normal",
-            untagged_target_coeff);
-        dict_set(out, "zuk_safe_untagged_healer_target_bonus_coeff_normal",
-            safe_target_coeff);
-        dict_set(out, "zuk_healer_reward_mode_normal",
-            log->zuk_healer_reward_mode_normal_sum / log->n_normal);
-        dict_set(out, "zuk_untagged_healer_targets_normal",
-            log->zuk_untagged_healer_targets_normal_sum / log->n_normal);
-        dict_set(out, "zuk_safe_untagged_healer_targets_normal",
-            log->zuk_safe_untagged_healer_targets_normal_sum / log->n_normal);
-        dict_set(out, "zuk_unsafe_untagged_healer_targets_normal",
-            log->zuk_unsafe_untagged_healer_targets_normal_sum / log->n_normal);
-        dict_set(out, "zuk_untagged_healer_target_reward_count_normal",
-            log->zuk_untagged_healer_target_reward_count_normal_sum /
-                log->n_normal);
-        dict_set(out, "zuk_safe_untagged_healer_target_reward_count_normal",
-            log->zuk_safe_untagged_healer_target_reward_count_normal_sum /
-                log->n_normal);
-        dict_set(out, "zuk_untagged_healer_target_reward_normal",
-            log->zuk_untagged_healer_target_reward_count_normal_sum *
-                untagged_target_coeff / log->n_normal);
-        dict_set(out, "zuk_safe_untagged_healer_target_reward_normal",
-            log->zuk_safe_untagged_healer_target_reward_count_normal_sum *
-                safe_target_coeff / log->n_normal);
-        dict_set(out, "post_healer_set_damage_reward_coeff_normal",
-            log->post_healer_set_damage_reward_coeff_normal_sum / log->n_normal);
-        dict_set(out, "post_healer_set_kill_bonus_coeff_normal",
-            log->post_healer_set_kill_bonus_coeff_normal_sum / log->n_normal);
-        dict_set(out, "post_healer_set_alive_penalty_coeff_normal",
-            log->post_healer_set_alive_penalty_coeff_normal_sum / log->n_normal);
-        dict_set(out, "post_healer_set_alive_penalty_cap_normal",
-            log->post_healer_set_alive_penalty_cap_normal_sum / log->n_normal);
-        dict_set(out, "post_healer_set_damage_reward_normal",
-            log->post_healer_set_damage_reward_normal_sum / log->n_normal);
-        dict_set(out, "post_healer_set_kill_bonus_reward_normal",
-            log->post_healer_set_kill_bonus_reward_normal_sum / log->n_normal);
-        dict_set(out, "post_healer_set_alive_penalty_normal",
-            log->post_healer_set_alive_penalty_normal_sum / log->n_normal);
-        dict_set(out, "post_healer_set_pressure_normal",
-            log->post_healer_set_pressure_normal_sum / log->n_normal);
-        dict_set(out, "action_mask_checks_normal",
-            log->action_mask_checks_normal_sum / log->n_normal);
-        dict_set(out, "target_head_valid_healer_count_normal",
-            log->target_head_valid_healer_count_normal_sum / log->n_normal);
-        dict_set(out, "target_head_valid_zuk_count_normal",
-            log->target_head_valid_zuk_count_normal_sum / log->n_normal);
-        dict_set(out, "target_head_valid_set_count_normal",
-            log->target_head_valid_set_count_normal_sum / log->n_normal);
-        for (int h = 0; h < 9; h++) {
-            dict_set(out, zero_valid_head_normal_keys[h],
-                log->zero_valid_action_head_count_normal_sum[h] / log->n_normal);
-            dict_set(out, min_valid_head_normal_keys[h],
-                log->valid_action_count_min_by_head_normal_sum[h] /
-                    log->n_normal);
-        }
-        float first_target_ticks = log->count_zuk_healers_targeted_ge_1_normal > 0.0f
-            ? log->ticks_240_to_first_healer_target_normal_sum /
-                log->count_zuk_healers_targeted_ge_1_normal : 0.0f;
-        float first_attack_ticks = log->count_zuk_healers_attacked_ge_1_normal > 0.0f
-            ? log->ticks_240_to_first_healer_attack_normal_sum /
-                log->count_zuk_healers_attacked_ge_1_normal : 0.0f;
-        float first_tag_ticks = log->count_zuk_healers_tagged_ge_1_normal > 0.0f
-            ? log->ticks_240_to_first_healer_tag_normal_sum /
-                log->count_zuk_healers_tagged_ge_1_normal : 0.0f;
-        float all_tagged_ticks = log->count_zuk_healers_tagged_ge_4_normal > 0.0f
-            ? log->ticks_240_to_all_healers_tagged_normal_sum /
-                log->count_zuk_healers_tagged_ge_4_normal : 0.0f;
-        float all_dead_ticks = log->count_all_zuk_healers_dead_normal > 0.0f
-            ? log->ticks_240_to_all_healers_dead_normal_sum /
-                log->count_all_zuk_healers_dead_normal : 0.0f;
-        float healer_resolve_n =
-            log->count_healer_resolved_20_normal / log->n_normal;
-        float post_healer_survival_n =
-            log->count_all_zuk_healers_dead_normal > 0.0f
-                ? log->post_healer_survival_ticks_normal_sum /
-                    log->count_all_zuk_healers_dead_normal : 0.0f;
-        float post_healer_zuk_damage_n =
-            log->count_all_zuk_healers_dead_normal > 0.0f
-                ? log->damage_after_all_zuk_healers_dead_normal_sum /
-                    log->count_all_zuk_healers_dead_normal : 0.0f;
-        float reengaged_zuk_after_healers_n =
-            log->count_reengaged_zuk_after_healers_normal / log->n_normal;
-        float first_zuk_hit_after_all_dead_n =
-            log->count_reengaged_zuk_after_healers_normal > 0.0f
-                ? log->ticks_all_healers_dead_to_first_zuk_hit_normal_sum /
-                    log->count_reengaged_zuk_after_healers_normal : 0.0f;
-        float zuk_hp_when_all_dead_n =
-            log->count_all_zuk_healers_dead_normal > 0.0f
-                ? log->zuk_hp_at_all_zuk_healers_dead_normal_sum /
-                    log->count_all_zuk_healers_dead_normal : 0.0f;
-        float hp_restored_after_240 = log->count_min_hp_le_240_normal > 0.0f
-            ? log->hp_restored_after_240_normal_sum /
-                log->count_min_hp_le_240_normal : 0.0f;
-        float spark_damage_after_240 = log->count_min_hp_le_240_normal > 0.0f
-            ? log->spark_damage_after_240_normal_sum /
-                log->count_min_hp_le_240_normal : 0.0f;
-        float max_hp_after_spawn = log->count_healer_spawned_normal > 0.0f
-            ? log->zuk_hp_max_after_healer_spawn_normal_sum /
-                log->count_healer_spawned_normal : 0.0f;
-        float offshield_after_240_n = log->count_min_hp_le_240_normal > 0.0f
-            ? log->offshield_ticks_after_240_normal_sum /
-                log->count_min_hp_le_240_normal : 0.0f;
-        float offshield_after_all_dead_n = log->count_all_zuk_healers_dead_normal > 0.0f
-            ? log->offshield_ticks_after_all_zuk_healers_dead_normal_sum /
-                log->count_all_zuk_healers_dead_normal : 0.0f;
-        dict_set(out, "ticks_240_to_first_healer_target_normal", first_target_ticks);
-        dict_set(out, "ticks_240_to_first_healer_attack_normal", first_attack_ticks);
-        dict_set(out, "ticks_240_to_first_healer_tag_normal", first_tag_ticks);
-        dict_set(out, "ticks_240_to_all_healers_tagged_normal", all_tagged_ticks);
-        dict_set(out, "ticks_240_to_all_healers_dead_normal", all_dead_ticks);
-        dict_set(out, "healer_resolve_normal", healer_resolve_n);
-        dict_set(out, "post_healer_objective_normal",
-            healer_resolve_n + 0.001f * post_healer_zuk_damage_n -
-                0.1f * frac_died_with_zuk_healer_n);
-        dict_set(out, "post_healer_survival_ticks_normal", post_healer_survival_n);
-        dict_set(out, "post_healer_zuk_damage_normal", post_healer_zuk_damage_n);
-        dict_set(out, "frac_reengaged_zuk_after_healers_normal",
-            reengaged_zuk_after_healers_n);
-        dict_set(out, "ticks_all_healers_dead_to_first_zuk_hit_normal",
-            first_zuk_hit_after_all_dead_n);
-        dict_set(out, "zuk_hp_when_all_healers_dead_normal", zuk_hp_when_all_dead_n);
-        dict_set(out, "offshield_ticks_after_240_normal", offshield_after_240_n);
-        dict_set(out, "offshield_ticks_after_all_healers_dead_normal",
-            offshield_after_all_dead_n);
-        dict_set(out, "hp_restored_after_240_normal", hp_restored_after_240);
-        dict_set(out, "zuk_hp_max_after_healer_spawn_normal", max_hp_after_spawn);
-        dict_set(out, "spark_damage_after_240_normal", spark_damage_after_240);
-        dict_set(out, "redemption_proc_opportunities_normal",
-            log->redemption_proc_opportunities_normal_sum / log->n_normal);
-        dict_set(out, "redemption_zero_hit_proc_opportunities_normal",
-            log->redemption_zero_hit_proc_opportunities_normal_sum / log->n_normal);
-        dict_set(out, "redemption_proc_opportunities_after_240_normal",
-            log->redemption_proc_opportunities_after_240_normal_sum / log->n_normal);
-        dict_set(out, "redemption_heal_potential_normal",
-            log->redemption_heal_potential_normal_sum / log->n_normal);
-        dict_set(out, "redemption_heal_potential_after_240_normal",
-            log->redemption_heal_potential_after_240_normal_sum / log->n_normal);
-        dict_set(out, "frac_redemption_deaths_from_band_normal",
-            log->redemption_deaths_from_band_normal / log->n_normal);
-        dict_set(out, "frac_redemption_deaths_from_band_after_240_normal",
-            log->redemption_deaths_from_band_after_240_normal / log->n_normal);
-        dict_set(out, "frac_redemption_deaths_from_above_band_normal",
-            log->redemption_deaths_from_above_band_normal / log->n_normal);
-        dict_set(out, "redemption_action_count_normal",
-            log->redemption_action_count_normal_sum / log->n_normal);
-        dict_set(out, "redemption_active_ticks_normal",
-            log->redemption_active_ticks_normal_sum / log->n_normal);
-        dict_set(out, "redemption_proc_count_normal",
-            log->redemption_proc_count_normal_sum / log->n_normal);
-        dict_set(out, "redemption_zero_hit_proc_count_normal",
-            log->redemption_zero_hit_proc_count_normal_sum / log->n_normal);
-        dict_set(out, "redemption_heal_done_normal",
-            log->redemption_heal_done_normal_sum / log->n_normal);
-        dict_set(out, "redemption_proc_opportunities_heal_zuk_normal",
-            log->redemption_proc_opportunities_by_type_normal[INF_NPC_HEALER_ZUK] /
-                log->n_normal);
-        dict_set(out, "redemption_zero_hit_proc_opportunities_heal_zuk_normal",
-            log->redemption_zero_hit_proc_opportunities_by_type_normal[INF_NPC_HEALER_ZUK] /
-                log->n_normal);
-        dict_set(out, "redemption_heal_potential_heal_zuk_normal",
-            log->redemption_heal_potential_by_type_normal[INF_NPC_HEALER_ZUK] /
-                log->n_normal);
-        dict_set(out, "frac_redemption_deaths_from_band_heal_zuk_normal",
-            log->redemption_deaths_from_band_by_type_normal[INF_NPC_HEALER_ZUK] /
-                log->n_normal);
-        dict_set(out, "redemption_proc_opportunities_ranger_normal",
-            log->redemption_proc_opportunities_by_type_normal[INF_NPC_RANGER] /
-                log->n_normal);
-        dict_set(out, "redemption_zero_hit_proc_opportunities_ranger_normal",
-            log->redemption_zero_hit_proc_opportunities_by_type_normal[INF_NPC_RANGER] /
-                log->n_normal);
-        dict_set(out, "redemption_proc_opportunities_mager_normal",
-            log->redemption_proc_opportunities_by_type_normal[INF_NPC_MAGER] /
-                log->n_normal);
-        dict_set(out, "redemption_zero_hit_proc_opportunities_mager_normal",
-            log->redemption_zero_hit_proc_opportunities_by_type_normal[INF_NPC_MAGER] /
-                log->n_normal);
-        dict_set(out, "redemption_proc_opportunities_zuk_normal",
-            log->redemption_proc_opportunities_by_type_normal[INF_NPC_ZUK] /
-                log->n_normal);
-        dict_set(out, "redemption_zero_hit_proc_opportunities_zuk_normal",
-            log->redemption_zero_hit_proc_opportunities_by_type_normal[INF_NPC_ZUK] /
-                log->n_normal);
-        dict_set(out, "redemption_proc_opportunities_jad_normal",
-            log->redemption_proc_opportunities_by_type_normal[INF_NPC_JAD] /
-                log->n_normal);
-        dict_set(out, "redemption_zero_hit_proc_opportunities_jad_normal",
-            log->redemption_zero_hit_proc_opportunities_by_type_normal[INF_NPC_JAD] /
-                log->n_normal);
-        if (log->n_normal_died > 0.0f) {
-            dict_set(out, "frac_deaths_redemption_from_band_normal",
-                log->redemption_deaths_from_band_normal / log->n_normal_died);
-            dict_set(out, "frac_deaths_redemption_from_band_after_240_normal",
-                log->redemption_deaths_from_band_after_240_normal /
-                    log->n_normal_died);
-        } else {
-            dict_set(out, "frac_deaths_redemption_from_band_normal", 0.0f);
-            dict_set(out, "frac_deaths_redemption_from_band_after_240_normal", 0.0f);
-        }
-        /* Death-cause fractions, out of normal-start episodes. */
-        dict_set(out, "frac_died_with_jad_alive_normal",
-            log->count_died_with_jad_alive_normal / log->n_normal);
-        dict_set(out, "frac_died_with_healer_alive_normal",
-            log->count_died_with_healer_alive_normal / log->n_normal);
-        dict_set(out, "frac_died_with_zuk_healer_alive_normal",
-            frac_died_with_zuk_healer_n);
-        dict_set(out, "frac_died_with_jad_healer_alive_normal",
-            log->count_died_with_jad_healer_alive_normal / log->n_normal);
-        dict_set(out, "frac_died_with_set_alive_normal",
-            log->count_died_with_set_alive_normal / log->n_normal);
-        dict_set(out, "frac_died_after_240_never_tagged_healer_normal",
-            log->count_died_after_240_never_tagged_healer_normal / log->n_normal);
-        dict_set(out, "frac_died_after_240_some_healers_tagged_normal",
-            log->count_died_after_240_some_healers_tagged_normal / log->n_normal);
-        dict_set(out, "frac_died_after_240_some_healers_killed_normal",
-            log->count_died_after_240_some_healers_killed_normal / log->n_normal);
-        dict_set(out, "frac_died_after_240_all_healers_dead_normal",
-            log->count_died_after_240_all_healers_dead_normal / log->n_normal);
-        float all_healers_dead_death_den =
-            log->count_died_after_240_all_healers_dead_normal;
-        dict_set(out, "frac_died_after_all_healers_dead_with_set_alive_normal",
-            log->count_died_after_all_healers_dead_with_set_alive_normal /
-                log->n_normal);
-        dict_set(out, "frac_died_after_all_healers_dead_killed_by_zuk_normal",
-            log->count_died_after_all_healers_dead_killed_by_zuk_normal /
-                log->n_normal);
-        dict_set(out, "frac_died_after_all_healers_dead_killed_by_ranger_normal",
-            log->count_died_after_all_healers_dead_killed_by_ranger_normal /
-                log->n_normal);
-        dict_set(out, "frac_died_after_all_healers_dead_killed_by_mager_normal",
-            log->count_died_after_all_healers_dead_killed_by_mager_normal /
-                log->n_normal);
-        dict_set(out, "frac_died_after_all_healers_dead_with_shield_active_normal",
-            log->count_died_after_all_healers_dead_with_shield_active_normal /
-                log->n_normal);
-        dict_set(out, "frac_died_after_all_healers_dead_behind_shield_normal",
-            log->count_died_after_all_healers_dead_behind_shield_normal /
-                log->n_normal);
-        if (all_healers_dead_death_den > 0.0f) {
-            dict_set(out, "frac_after_all_healers_dead_deaths_with_set_alive_normal",
-                log->count_died_after_all_healers_dead_with_set_alive_normal /
-                    all_healers_dead_death_den);
-            dict_set(out, "frac_after_all_healers_dead_deaths_killed_by_zuk_normal",
-                log->count_died_after_all_healers_dead_killed_by_zuk_normal /
-                    all_healers_dead_death_den);
-            dict_set(out, "frac_after_all_healers_dead_deaths_killed_by_ranger_normal",
-                log->count_died_after_all_healers_dead_killed_by_ranger_normal /
-                    all_healers_dead_death_den);
-            dict_set(out, "frac_after_all_healers_dead_deaths_killed_by_mager_normal",
-                log->count_died_after_all_healers_dead_killed_by_mager_normal /
-                    all_healers_dead_death_den);
-            dict_set(out, "frac_after_all_healers_dead_deaths_with_shield_active_normal",
-                log->count_died_after_all_healers_dead_with_shield_active_normal /
-                    all_healers_dead_death_den);
-            dict_set(out, "frac_after_all_healers_dead_deaths_behind_shield_normal",
-                log->count_died_after_all_healers_dead_behind_shield_normal /
-                    all_healers_dead_death_den);
-            dict_set(out, "brews_remaining_after_all_healers_dead_death_normal",
-                log->brews_remaining_after_all_healers_dead_death_normal_sum /
-                    all_healers_dead_death_den);
-            dict_set(out, "restores_remaining_after_all_healers_dead_death_normal",
-                log->restores_remaining_after_all_healers_dead_death_normal_sum /
-                    all_healers_dead_death_den);
-        } else {
-            dict_set(out, "frac_after_all_healers_dead_deaths_with_set_alive_normal", 0.0f);
-            dict_set(out, "frac_after_all_healers_dead_deaths_killed_by_zuk_normal", 0.0f);
-            dict_set(out, "frac_after_all_healers_dead_deaths_killed_by_ranger_normal", 0.0f);
-            dict_set(out, "frac_after_all_healers_dead_deaths_killed_by_mager_normal", 0.0f);
-            dict_set(out, "frac_after_all_healers_dead_deaths_with_shield_active_normal", 0.0f);
-            dict_set(out, "frac_after_all_healers_dead_deaths_behind_shield_normal", 0.0f);
-            dict_set(out, "brews_remaining_after_all_healers_dead_death_normal", 0.0f);
-            dict_set(out, "restores_remaining_after_all_healers_dead_death_normal", 0.0f);
-        }
-        dict_set(out, "frac_died_with_shield_active_normal",
-            log->count_died_with_shield_active_normal / log->n_normal);
-        dict_set(out, "frac_died_behind_shield_normal",
-            log->count_died_behind_shield_normal / log->n_normal);
-        dict_set(out, "frac_died_after_240_normal",
-            log->count_died_after_240_normal / log->n_normal);
-        if (log->count_died_after_240_normal > 0.0f) {
-            dict_set(out, "brews_remaining_after_240_death_normal",
-                log->brews_remaining_after_240_death_normal_sum /
-                    log->count_died_after_240_normal);
-            dict_set(out, "restores_remaining_after_240_death_normal",
-                log->restores_remaining_after_240_death_normal_sum /
-                    log->count_died_after_240_normal);
-            dict_set(out, "prayer_at_death_after_240_normal",
-                log->prayer_at_death_after_240_normal_sum /
-                    log->count_died_after_240_normal);
-            dict_set(out, "frac_after_240_deaths_with_shield_active_normal",
-                log->count_died_after_240_shield_active_normal /
-                    log->count_died_after_240_normal);
-            dict_set(out, "frac_after_240_deaths_behind_shield_normal",
-                log->count_died_after_240_behind_shield_normal /
-                    log->count_died_after_240_normal);
-        } else {
-            dict_set(out, "brews_remaining_after_240_death_normal", 0.0f);
-            dict_set(out, "restores_remaining_after_240_death_normal", 0.0f);
-            dict_set(out, "prayer_at_death_after_240_normal", 0.0f);
-            dict_set(out, "frac_after_240_deaths_with_shield_active_normal", 0.0f);
-            dict_set(out, "frac_after_240_deaths_behind_shield_normal", 0.0f);
-        }
-    }
-    float gear_switch_rate = (log->episode_length > 0.0f)
-        ? log->gear_switches / log->episode_length : 0.0f;
-    dict_set(out, "gear_switch_rate", gear_switch_rate);
 
     float wr = log->wins;
     float score;
     int start_wave = (int)(log->start_wave + 0.5f);
     if (start_wave >= 68) {
-        /* Zuk-only: score = fraction of lowest Zuk HP reached (0..1), wins = 1.0 */
         score = (1200.0f - log->min_zuk_hp_seen) / 1200.0f;
     } else {
-        /* full runs: wave progress (0..0.5) + win bonus (0..1) */
         float wave_frac = log->wave / (float)INF_NUM_WAVES;
         score = wr + (1.0f - wr) * wave_frac * 0.5f;
     }
     dict_set(out, "score", score);
 
-    /* per-NPC-type prayer rates and damage (wandb only).
-       keys must be string literals — dict_set stores the pointer, not a copy. */
-    /*
-    static const char* pray_keys[] = {
-        "pray_nibbler","pray_bat","pray_blob","pray_blob_mel","pray_blob_rng","pray_blob_mag",
-        "pray_meleer","pray_ranger","pray_mager","pray_jad","pray_zuk","pray_heal_jad","pray_heal_zuk","pray_shield"
-    };
-    static const char* dmg_keys[] = {
-        "dmg_from_nibbler","dmg_from_bat","dmg_from_blob","dmg_from_blob_mel","dmg_from_blob_rng","dmg_from_blob_mag",
-        "dmg_from_meleer","dmg_from_ranger","dmg_from_mager","dmg_from_jad","dmg_from_zuk","dmg_from_heal_jad","dmg_from_heal_zuk","dmg_from_shield"
-    };
-    static const char* kill_keys[] = {
-        "killed_by_nibbler","killed_by_bat","killed_by_blob","killed_by_blob_mel","killed_by_blob_rng","killed_by_blob_mag",
-        "killed_by_meleer","killed_by_ranger","killed_by_mager","killed_by_jad","killed_by_zuk","killed_by_heal_jad","killed_by_heal_zuk","killed_by_shield"
-    };
-    for (int t = 0; t < INF_NUM_NPC_TYPES; t++) {
-        if (log->attacks_by_type[t] > 0.0f) {
-            dict_set(out, pray_keys[t], log->prayer_correct_by_type[t] / log->attacks_by_type[t]);
-            dict_set(out, dmg_keys[t], log->dmg_from_type[t]);
-        }
-        if (log->killed_by_type[t] > 0.0f)
-            dict_set(out, kill_keys[t], log->killed_by_type[t]);
+    float gear_switch_rate = (log->episode_length > 0.0f)
+        ? log->gear_switches / log->episode_length : 0.0f;
+    dict_set(out, "gear_switch_rate", gear_switch_rate);
+
+    if (log->n_normal > 0.0f) {
+        float min_zuk_hp_normal = log->min_zuk_hp_normal / log->n_normal;
+        float score_normal = (1200.0f - min_zuk_hp_normal) / 1200.0f;
+        float frac_all_healers_dead =
+            log->count_all_zuk_healers_dead_normal / log->n_normal;
+        float frac_died_after_240 =
+            log->count_died_after_240_normal / log->n_normal;
+        float post_healer_zuk_damage =
+            log->count_all_zuk_healers_dead_normal > 0.0f
+                ? log->damage_after_all_zuk_healers_dead_normal_sum /
+                    log->count_all_zuk_healers_dead_normal : 0.0f;
+        float frac_died_with_zuk_healer =
+            log->count_died_with_zuk_healer_alive_normal / log->n_normal;
+        float healer_resolve =
+            log->count_healer_resolved_20_normal / log->n_normal;
+
+        dict_set(out, "episode_return_normal",
+            log->episode_return_normal / log->n_normal);
+        dict_set(out, "wins_normal", log->wins_normal / log->n_normal);
+        dict_set(out, "score_normal", score_normal);
+        dict_set(out, "phase_reached_normal",
+            log->phase_reached_normal_sum / log->n_normal);
+        dict_set(out, "min_zuk_hp_normal", min_zuk_hp_normal);
+        dict_set(out, "frac_min_hp_le_240_normal",
+            log->count_min_hp_le_240_normal / log->n_normal);
+        dict_set(out, "frac_all_zuk_healers_dead_normal", frac_all_healers_dead);
+        dict_set(out, "frac_died_after_240_normal", frac_died_after_240);
+        dict_set(out, "post_healer_objective_normal",
+            healer_resolve + 0.001f * post_healer_zuk_damage -
+                0.1f * frac_died_with_zuk_healer);
+        dict_set(out, "redemption_proc_opportunities_normal",
+            log->redemption_proc_opportunities_normal_sum / log->n_normal);
+        dict_set(out, "redemption_active_ticks_normal",
+            log->redemption_active_ticks_normal_sum / log->n_normal);
+        dict_set(out, "redemption_proc_count_normal",
+            log->redemption_proc_count_normal_sum / log->n_normal);
+        dict_set(out, "redemption_heal_done_normal",
+            log->redemption_heal_done_normal_sum / log->n_normal);
+    } else {
+        dict_set(out, "episode_return_normal", 0.0f);
+        dict_set(out, "wins_normal", 0.0f);
+        dict_set(out, "score_normal", 0.0f);
+        dict_set(out, "phase_reached_normal", 0.0f);
+        dict_set(out, "min_zuk_hp_normal", 1200.0f);
+        dict_set(out, "frac_min_hp_le_240_normal", 0.0f);
+        dict_set(out, "frac_all_zuk_healers_dead_normal", 0.0f);
+        dict_set(out, "frac_died_after_240_normal", 0.0f);
+        dict_set(out, "post_healer_objective_normal", 0.0f);
+        dict_set(out, "redemption_proc_opportunities_normal", 0.0f);
+        dict_set(out, "redemption_active_ticks_normal", 0.0f);
+        dict_set(out, "redemption_proc_count_normal", 0.0f);
+        dict_set(out, "redemption_heal_done_normal", 0.0f);
     }
-    */
 }
