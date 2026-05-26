@@ -147,25 +147,25 @@ static inline void cpu_mm_nt(const float *a, const float *b, float *out,
 static void cpu_mingru_gate(float *out, float *next_state,
                              const float *combined, const float *state_in,
                              const float *x_in, int H, int B) {
-    int BH = B * H;
-    for (int idx = 0; idx < BH; idx++) {
-        int b = idx / H;
-        int h = idx % H;
+    for (int b = 0; b < B; b++) {
+        int row = b * H;
         int base = b * 3 * H;
+        for (int h = 0; h < H; h++) {
+            int idx = row + h;
+            float hidden = combined[base + h];
+            float gate   = combined[base + H + h];
+            float proj   = combined[base + 2 * H + h];
+            float state  = state_in[idx];
+            float x      = x_in[idx];
 
-        float hidden = combined[base + h];
-        float gate   = combined[base + H + h];
-        float proj   = combined[base + 2 * H + h];
-        float state  = state_in[idx];
-        float x      = x_in[idx];
+            float gate_sig = cpu_sigmoid(gate);
+            float hidden_tilde = cpu_tilde_relu(hidden);
+            float mingru_out = cpu_lerp(state, hidden_tilde, gate_sig);
+            float proj_sig = cpu_sigmoid(proj);
 
-        float gate_sig = cpu_sigmoid(gate);
-        float hidden_tilde = cpu_tilde_relu(hidden);
-        float mingru_out = cpu_lerp(state, hidden_tilde, gate_sig);
-        float proj_sig = cpu_sigmoid(proj);
-
-        next_state[idx] = fmaxf(mingru_out, 1e-30f);
-        out[idx] = proj_sig * mingru_out + (1.0f - proj_sig) * x;
+            next_state[idx] = fmaxf(mingru_out, 1e-30f);
+            out[idx] = proj_sig * mingru_out + (1.0f - proj_sig) * x;
+        }
     }
 }
 
