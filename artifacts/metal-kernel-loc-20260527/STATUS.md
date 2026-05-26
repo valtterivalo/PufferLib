@@ -165,3 +165,19 @@
 - Interactive smoke artifact: `milestone-04d-dead-helper-cleanup/20260527T024228+0300-interactive-breakout-dead-helper-cleanup`. It built, loaded `resources/breakout/breakout_weights.bin`, reached raylib 5.5 GLFW initialization, then failed with `Failed to determine Monitor to center Window` and exit code `139`, matching the known desktop windowing boundary.
 - Subagent review: Meitner found no blocking findings, verified the deleted helpers have no live Metal references or dynamic lookup path, confirmed the 04d runner allowlist is exact, and checked STATUS LOC and benchmark arithmetic.
 - Decision: accepted after subagent review. This is a small dead-code cleanup with repeated runtime medians inside the LOC gate.
+
+## 2026-05-27 Milestone 04e Host Dispatch Helper Candidate
+
+- Root-cause hypothesis: `src/metal/kernels.mm` still repeats the same one-dimensional host dispatch shape for unary and binary kernels: resolve stream, begin PSO, bind one or two pointers, bind params, dispatch. Local typed helpers can remove that duplication while preserving kernel names, argument indices, parameter structs, dispatch counts, barriers, and math.
+- Risk classification: medium. This touches host dispatch wrappers used by optimizer and copy/cast paths, but not shader math or policy state. Acceptance still requires repeated `breakout` and `g2048`, parity, overlay, interactive smoke, and subagent review.
+- Acceptance gate: use the dedicated `milestone-04e-dispatch-helper-cleanup` runners, require median SPS within 1 percent of the current accepted baseline or better, and reject if either env shows score or eval drift.
+
+## 2026-05-27 Milestone 04e Host Dispatch Helper Results
+
+- Candidate code change: temporarily consolidated repeated one-dimensional unary and binary host dispatch wrappers in `src/metal/kernels.mm` through local typed helpers. The candidate would have reduced `src/metal/kernels.mm` from `1,504` to `1,481` lines, but it is not kept.
+- Static validation passed before benchmark rejection: `tools/metal/build.sh breakout`, `tools/metal/build.sh g2048`, `git diff --check`, `bash -n` for all milestone 04e runners, and `PYTHONPATH=$PWD python -m pytest tests/metal/test_overlay_surface.py`.
+- First milestone 04e suite: `breakout` artifact `20260527T025123+0300-breakout` at `3,447,305` SPS, train score `2.359738349914551`, eval score `0.0`; `g2048` artifact `20260527T025134+0300-g2048` at `589,195` SPS, train score `97.85507202148438`, eval score `49.43283462524414`.
+- Second milestone 04e suite: `breakout` artifact `20260527T025149+0300-breakout` at `3,440,061` SPS, train score `2.3505947589874268`, eval score `0.0`; `g2048` artifact `20260527T025159+0300-g2048` at `587,363` SPS, train score `97.85507202148438`, eval score `49.43283462524414`.
+- Medians: `breakout` `3,443,683` SPS, `-0.16%` versus milestone 04d accepted median `3,449,313`; `g2048` `588,279` SPS, `-1.50%` versus milestone 04d accepted median `597,244`.
+- Native Metal parity and overlay surface passed in both milestone 04e suites.
+- Decision: rejected. The candidate exceeded the 1 percent g2048 LOC gate, so `src/metal/kernels.mm` was restored to the 04d accepted state. Only the rejection artifacts, runner scripts, overlay allowlist, and this status entry remain for audit.
