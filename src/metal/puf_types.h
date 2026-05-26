@@ -571,8 +571,7 @@ struct Muon {
   double momentum;
   float lr_val_init;
   float *lr_ptr;
-  float *lr_derived_ptr;
-  FloatTensor lr_puf, lr_derived_puf;
+  FloatTensor lr_puf;
   FloatTensor ns_norm_puf;
   FloatTensor wb_puf, mb_puf, gc_puf, up_puf;
   NSScratch ns;

@@ -1527,11 +1527,9 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
 
     // muon_post_create: write lr and zero momentum (unified memory)
     pufferl->muon->lr_ptr = pufferl->muon->lr_puf.data;
-    pufferl->muon->lr_derived_ptr = pufferl->muon->lr_derived_puf.data;
     if (pufferl->muon->ns_norm_puf.data)
         pufferl->muon->ns.norm_ptr = pufferl->muon->ns_norm_puf.data;
     *pufferl->muon->lr_ptr = pufferl->muon->lr_val_init;
-    memset(pufferl->muon->lr_derived_ptr, 0, 2 * sizeof(float));
     memset(pufferl->muon->mb_puf.data, 0, puf_numel(pufferl->muon->mb_puf.shape) * sizeof(float));
 
     // Per-buffer inference activations (separate allocators)
