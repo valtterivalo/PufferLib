@@ -145,3 +145,23 @@
 - Interactive smoke artifact: `milestone-04c-dead-kernel-retest/20260527T023325+0300-interactive-breakout-dead-kernel-retest`. It built, loaded `resources/breakout/breakout_weights.bin`, reached raylib 5.5 GLFW initialization, then failed with `Failed to determine Monitor to center Window` and exit code `139`, matching the known desktop windowing boundary.
 - Subagent review: Carson found no blocking findings, verified the six deleted shader names have no reachable host dispatch or dynamic lookup path, confirmed the 04c runner allowlist is exact, and checked STATUS LOC and benchmark arithmetic.
 - Decision: accepted after subagent review. This retest reverses the milestone 01 rejection because the current repeated runs beat the accepted baseline rather than missing it.
+
+## 2026-05-27 Milestone 04d Dead Helper Cleanup Candidate
+
+- Root-cause hypothesis: after the accepted MinGRU and dead-kernel cleanups, several MSL helpers in `src/metal/shader_src.h` have no callers: `sigmoid_backward_f`, `tilde_relu_bwd`, `softplus_bwd`, `relu_f`, `relu_backward_f`, `Philox4x32`, and `atomic_add_float`. Removing them should reduce real dead kernel-source code without touching live kernels, dispatch strings, RNG helpers that are called, PPO math, or scan math.
+- Risk classification: low to medium. These are no-caller helpers, but they live in the monolithic shader source, so the candidate still needs build, repeated end-to-end validation, parity, interactive smoke, and subagent review.
+- Acceptance gate: use the dedicated `milestone-04d-dead-helper-cleanup` runners, require median SPS within 1 percent of the current accepted baseline or better, and reject if either env shows score or eval drift.
+
+## 2026-05-27 Milestone 04d Dead Helper Cleanup Results
+
+- Code change: remove no-caller MSL helpers `sigmoid_backward_f`, `tilde_relu_bwd`, `softplus_bwd`, `relu_f`, `relu_backward_f`, `Philox4x32`, and `atomic_add_float` from `src/metal/shader_src.h`.
+- LOC: `src/metal/shader_src.h` is `2,522` lines, down from `2,562` after milestone 04c. Kernel scope is `4,143`, down from `4,183` after milestone 04c and down from setup `4,615`. Live backend scope is `9,695`, down from `9,731` after milestone 04c.
+- Static validation passed: `tools/metal/build.sh breakout`, `tools/metal/build.sh g2048`, `git diff --check`, `bash -n` for all milestone 04d runners, and `PYTHONPATH=$PWD python -m pytest tests/metal/test_overlay_surface.py`.
+- First milestone 04d suite: `breakout` artifact `20260527T024103+0300-breakout` at `3,460,705` SPS, train score `2.572317361831665`, eval score `0.0`; `g2048` artifact `20260527T024115+0300-g2048` at `597,851` SPS, train score `97.85507202148438`, eval score `49.43283462524414`.
+- Second milestone 04d suite: `breakout` artifact `20260527T024131+0300-breakout` at `3,437,921` SPS, train score `2.332063913345337`, eval score `0.0`; `g2048` artifact `20260527T024142+0300-g2048` at `595,575` SPS, train score `97.85507202148438`, eval score `49.43283462524414`.
+- Extra g2048 runner: `20260527T024206+0300-g2048` at `597,244` SPS, train score `97.85507202148438`, eval score `49.43283462524414`. This extra run was added because the two-run median was only just inside the 1 percent gate.
+- Medians: `breakout` `3,449,313` SPS, `-0.35%` versus milestone 04c accepted median `3,461,400`; `g2048` three-run median `597,244` SPS, `-0.89%` versus milestone 04c accepted median `602,626`.
+- Native Metal parity and overlay surface passed in both milestone 04d suites.
+- Interactive smoke artifact: `milestone-04d-dead-helper-cleanup/20260527T024228+0300-interactive-breakout-dead-helper-cleanup`. It built, loaded `resources/breakout/breakout_weights.bin`, reached raylib 5.5 GLFW initialization, then failed with `Failed to determine Monitor to center Window` and exit code `139`, matching the known desktop windowing boundary.
+- Subagent review: Meitner found no blocking findings, verified the deleted helpers have no live Metal references or dynamic lookup path, confirmed the 04d runner allowlist is exact, and checked STATUS LOC and benchmark arithmetic.
+- Decision: accepted after subagent review. This is a small dead-code cleanup with repeated runtime medians inside the LOC gate.

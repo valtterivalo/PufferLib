@@ -15,11 +15,6 @@ inline float sigmoid_f(float x) {
     return x >= 0.0f ? 1.0f / (1.0f + z) : z / (1.0f + z);
 }
 
-inline float sigmoid_backward_f(float x, float grad_output) {
-    float sig = sigmoid_f(x);
-    return grad_output * sig * (1.0f - sig);
-}
-
 inline float fast_tanh_f(float x) {
     float v1 = clamp(x, -9.0f, 9.0f);
     float v2 = v1 * v1;
@@ -46,12 +41,6 @@ inline float tilde_relu_fwd(float x) {
     return x >= 0.0f ? x + 0.5f : fast_sigmoid_f(x);
 }
 
-inline float tilde_relu_bwd(float x, float grad) {
-    if (x >= 0.0f) return grad;
-    float sig = fast_sigmoid_f(x);
-    return grad * sig * (1.0f - sig);
-}
-
 inline float lerp_f(float a, float b, float w) {
     float diff = b - a;
     return abs(w) < 0.5f ? a + w * diff : b - diff * (1.0f - w);
@@ -69,13 +58,6 @@ constant float SOFTPLUS_THRESHOLD = 20.0f;
 inline float softplus_fwd(float x) {
     float xs = x * SOFTPLUS_BETA;
     return xs > SOFTPLUS_THRESHOLD ? x : log1p_f(exp(xs)) / SOFTPLUS_BETA;
-}
-
-inline float softplus_bwd(float grad_output, float x) {
-    float beta_x = SOFTPLUS_BETA * x;
-    if (beta_x > SOFTPLUS_THRESHOLD) return grad_output;
-    float exp_beta_x = exp(beta_x);
-    return grad_output * (exp_beta_x / (1.0f + exp_beta_x));
 }
 
 inline void log_coeffs_and_values_fwd(float gate, float hidden,
@@ -107,14 +89,6 @@ inline void log_coeffs_and_values_bwd(float grad_lc, float grad_lv,
         grad_hidden = grad_lv * sigmoid_f(-hidden);
     }
 }
-
-inline float relu_f(float x) { return max(0.0f, x); }
-inline float relu_backward_f(float x, float grad_output) { return (x > 0.0f) ? grad_output : 0.0f; }
-
-struct Philox4x32 {
-    uint4 counter;
-    uint2 key;
-};
 
 inline uint4 philox4x32_round(uint4 ctr, uint2 key) {
     constexpr uint PHILOX_M0 = 0xD2511F53u;
@@ -841,20 +815,6 @@ constant int LOSS_CLIPFRAC = 6;
 constant int LOSS_BC = 7;
 constant int LOSS_N = 8;
 constant int MAX_ATN_HEADS = 16;
-
-// Float atomic add via CAS loop (MSL has no native atomic<float>)
-inline void atomic_add_float(device atomic_uint* addr, float val) {
-    uint expected = atomic_load_explicit(addr, memory_order_relaxed);
-    while (true) {
-        float current = as_type<float>(expected);
-        float desired = current + val;
-        uint desired_bits = as_type<uint>(desired);
-        if (atomic_compare_exchange_weak_explicit(addr, &expected, desired_bits,
-                memory_order_relaxed, memory_order_relaxed)) {
-            return;
-        }
-    }
-}
 
 inline void ppo_discrete_head(
     const device float* logits,
