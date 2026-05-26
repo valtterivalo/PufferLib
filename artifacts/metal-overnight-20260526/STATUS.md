@@ -469,3 +469,16 @@
 - `g2048` SPS runs: 361,557 and 355,536. Median versus current accepted baseline: -7.22 percent. Training score stayed 97.855, explicit eval score stayed 49.43.
 - Milestone 04 suite also passed native Metal parity and overlay surface tests on both runs. Candidate tracked Metal-owned LOC was 10136.
 - Decision: reject and revert. The argument-table cleanup was semantically clean and neutral on `breakout`, but `g2048` missed both speed and LOC gates.
+
+## 2026-05-26 07:31 EEST
+
+- Starting milestone 04 rollout timing candidate.
+- Root-cause hypothesis: benchmark runs use `profile=False`, but each rollout callback still samples `mach_absolute_time` four times and locks `g_rollout_profile_mutex` to accumulate fine-grained rollout subphase timings. Gating only those subphase timers behind `hypers.profile` should reduce CPU callback overhead without changing rollout data, RNG, policy math, training dispatch, checkpointing, eval, or interactive behavior.
+
+## 2026-05-26 07:32 EEST
+
+- Tested rollout subphase timing gate once.
+- `breakout`: 2,299,669 SPS versus current accepted baseline, +0.21 percent. Training score was 2.337, explicit eval score stayed 0.0.
+- `g2048`: 355,208 SPS versus current accepted baseline, -8.08 percent. Training score stayed 97.855, explicit eval score stayed 49.43.
+- Milestone 04 suite also passed native Metal parity and overlay surface tests. Candidate tracked Metal-owned LOC was 10136.
+- Decision: reject and revert without a second run. The change removed live CPU timing work in the default non-profile path, but `g2048` was far outside the speed and LOC gates.
