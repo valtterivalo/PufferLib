@@ -286,3 +286,16 @@
 - Cleanup suite passed on accepted code.
 - Cleanup `breakout`: 4.2M steps, 2.27M SPS, train score 2.596, eval score 0.0.
 - Cleanup `g2048`: 262K steps, 354.4K SPS, train score 97.855, eval score 49.43.
+
+## 2026-05-26 03:13 EEST
+
+- Cleanup checkpoint committed as `446954267`.
+- Starting ninth milestone 04 candidate.
+- Root-cause hypothesis: `breakout` and `g2048` use no action masks, but GPU logprob recompute and PPO still load the all-ones mask and call mask-aware branches for every action. A no-mask branch in those kernels should remove mask memory traffic and branch work from the benchmark hot path without changing probabilities.
+
+## 2026-05-26 03:15 EEST
+
+- Tested GPU no-mask recompute/PPO branch once.
+- `breakout`: 2,246,855 SPS, score 2.26, explicit eval score 0.0.
+- `g2048`: 365,522 SPS, score 97.855, explicit eval score 49.43.
+- Decision: reject and revert without a second run. The candidate hurt `breakout` by about 1.9 percent and `g2048` did not clear the 3 percent speed gate.
