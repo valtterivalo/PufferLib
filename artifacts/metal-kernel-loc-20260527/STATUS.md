@@ -106,4 +106,23 @@
 - Medians: `breakout` `3,425,344` SPS, `+13.66%` versus milestone 00 baseline `3,013,517`; `g2048` three-run median `595,902` SPS, `-0.48%` versus same-night no-change baseline rerun `598,782`.
 - Native Metal parity and overlay surface passed in both milestone 04 suites.
 - Interactive smoke artifact: `milestone-04-second-kernel-loc-pass/20260527T020631+0300-interactive-breakout-tensor-ops-template`. It built, loaded `resources/breakout/breakout_weights.bin`, reached raylib 5.5 GLFW initialization, then failed with `Failed to determine Monitor to center Window` and exit code `139`, matching the known desktop windowing boundary.
-- Decision: accepted pending subagent review. This is a kernel-scope LOC cleanup with unchanged explicit eval and g2048 throughput inside the 1 percent gate.
+- Decision: accepted after subagent review and committed as `2dda74c58`. This is a kernel-scope LOC cleanup with unchanged explicit eval and g2048 throughput inside the 1 percent gate.
+
+## 2026-05-27 Milestone 04b MinGRU Scan Template Candidate
+
+- Root-cause hypothesis: `src/metal/shader_src.h` duplicates MinGRU scan forward and backward control flow for fp32 and fp16. A typed MSL helper layer can keep all eight exported kernel names and buffer layouts unchanged while centralizing scalar reads, writes, clamping, and the fp32-versus-fp16 `fast::exp`/`exp` choice.
+- Risk classification: high. This touches policy recurrent-state math, optimizer gradients, and checkpoint buffers, so acceptance requires build success, parity, repeated `breakout` and `g2048` runs, comparable score versus elapsed time, interactive smoke, and subagent review.
+- Acceptance gate: use the dedicated `milestone-04b-mingru-template-pass` runners, require median SPS within 1 percent of the accepted baseline or better, require train and eval scores comparable to milestone 04, and reject immediately on compile failure or determinism/parity drift.
+
+## 2026-05-27 Milestone 04b MinGRU Scan Template Results
+
+- Code change: replace duplicated fp32 and fp16 MinGRU scan forward and backward bodies with four typed MSL helpers plus eight thin exported kernels. Exported kernel names and host dispatch strings remain unchanged.
+- LOC: `src/metal/shader_src.h` is `2,657` lines, down from `2,809` at setup and `2,809` after milestone 04. Kernel scope is `4,278` lines by the established tensor-op block convention, down from `4,430` after milestone 04 and down from setup `4,615`. Live backend scope is `9,822`, down from `9,970` after milestone 04.
+- Static validation passed: `tools/metal/build.sh breakout`, `tools/metal/build.sh g2048`, `git diff --check`, `bash -n` for all milestone 04b runners, and `PYTHONPATH=$PWD python -m pytest tests/metal/test_overlay_surface.py`.
+- First milestone 04b suite: `breakout` artifact `20260527T022242+0300-breakout` at `3,426,147` SPS, train score `2.413498878479004`, eval score `0.0`; `g2048` artifact `20260527T022253+0300-g2048` at `588,898` SPS, train score `97.85507202148438`, eval score `49.43283462524414`.
+- Second milestone 04b suite: `breakout` artifact `20260527T022308+0300-breakout` at `3,475,413` SPS, train score `2.432997703552246`, eval score `0.0`; `g2048` artifact `20260527T022319+0300-g2048` at `598,417` SPS, train score `97.85507202148438`, eval score `49.43283462524414`.
+- Medians: `breakout` `3,450,780` SPS, `+14.51%` versus milestone 00 baseline `3,013,517`; `g2048` `593,658` SPS, `-0.86%` versus same-night no-change baseline rerun `598,782`.
+- Native Metal parity and overlay surface passed in both milestone 04b suites.
+- Interactive smoke artifact: `milestone-04b-mingru-template-pass/20260527T022406+0300-interactive-breakout-mingru-template`. It built, loaded `resources/breakout/breakout_weights.bin`, reached raylib 5.5 GLFW initialization, then failed with `Failed to determine Monitor to center Window` and exit code `139`, matching the known desktop windowing boundary.
+- Subagent review: Turing found no blocking findings and confirmed exported names, host dispatch strings, buffer indices, fp32 fast math, fp16 clamps, checkpoint semantics, reset semantics, narrow runner allowlist, and LOC arithmetic.
+- Decision: accepted after subagent review. This is a high-risk kernel-scope LOC cleanup, but repeated end-to-end runs, parity, interactive smoke, and review all cleared the gate.

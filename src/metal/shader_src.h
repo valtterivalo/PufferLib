@@ -204,17 +204,40 @@ struct ScanParams {
     int B;
 };
 
-kernel void mingru_scan_forward_checkpointed(
-    device float* out               [[buffer(0)]],
-    device float* next_state        [[buffer(1)]],
-    device float* a_star_buf        [[buffer(2)]],
-    device float* s_buf             [[buffer(3)]],
-    device float* log_values_buf    [[buffer(4)]],
-    const device float* combined    [[buffer(5)]],
-    const device float* state       [[buffer(6)]],
-    const device float* input       [[buffer(7)]],
-    constant ScanParams& p          [[buffer(8)]],
-    uint idx [[thread_position_in_grid]]
+inline float scan_read(const device float* src, int idx) { return src[idx]; }
+inline float scan_read(const device half* src, int idx) { return float(src[idx]); }
+
+inline float scan_log_state(const device float* state, int idx) { return fast::log(state[idx]); }
+inline float scan_log_state(const device half* state, int idx) { return log(float(state[idx])); }
+
+inline float scan_exp(device float*, float x) { return fast::exp(x); }
+inline float scan_exp(device half*, float x) { return exp(x); }
+
+inline void scan_write(device float* dst, int idx, float value) { dst[idx] = value; }
+inline void scan_write(device half* dst, int idx, float value) {
+    dst[idx] = half(clamp(value, -65000.0f, 65000.0f));
+}
+
+inline void scan_write_next_checkpointed(device float* dst, int idx, float value) {
+    dst[idx] = max(value, 1e-30f);
+}
+
+inline void scan_write_next_checkpointed(device half* dst, int idx, float value) {
+    dst[idx] = half(min(max(value, 1e-30f), 65000.0f));
+}
+
+template <typename T>
+inline void mingru_scan_forward_checkpointed_body(
+    device T* out,
+    device T* next_state,
+    device float* a_star_buf,
+    device float* s_buf,
+    device float* log_values_buf,
+    const device T* combined,
+    const device T* state,
+    const device T* input,
+    constant ScanParams& p,
+    uint idx
 ) {
     if ((int)idx >= p.B * p.H) return;
 
@@ -228,8 +251,7 @@ kernel void mingru_scan_forward_checkpointed(
 
     float a_star = 0.0f;
     float log_value = 0.0f;
-    // fast:: matches CUDA __expf/__logf (kernels.cu:270-305)
-    float s = fast::log(state[bH + h]);
+    float s = scan_log_state(state, bH + h);
     log_value = s;
 
     int T_out = p.T_seq + 1;
@@ -243,10 +265,10 @@ kernel void mingru_scan_forward_checkpointed(
     int t_offset = 0;
 
     for (int t = 1; t < p.T_seq + 1; t++) {
-        float hidden_val = combined[cbase + h + t_offset];
-        float gate_val = combined[cbase + p.H + h + t_offset];
-        float proj_val = combined[cbase + 2 * p.H + h + t_offset];
-        float x_val = input[out_base + (t - 1) * p.H];
+        float hidden_val = scan_read(combined, cbase + h + t_offset);
+        float gate_val = scan_read(combined, cbase + p.H + h + t_offset);
+        float proj_val = scan_read(combined, cbase + 2 * p.H + h + t_offset);
+        float x_val = scan_read(input, out_base + (t - 1) * p.H);
 
         float log_coeff_val;
         log_coeffs_and_values_fwd(gate_val, hidden_val, log_coeff_val, log_value);
@@ -255,12 +277,13 @@ kernel void mingru_scan_forward_checkpointed(
 
         float z = log_value - a_star;
         float max_val = fmax(s, z);
-        s = max_val + log1p_f(fast::exp(-abs(s - z)));
+        s = max_val + log1p_f(scan_exp(out, -abs(s - z)));
 
-        float scan_result = fast::exp(a_star + s);
+        float scan_result = scan_exp(out, a_star + s);
         float proj_sigmoid = sigmoid_f(proj_val);
+        float out_val = proj_sigmoid * scan_result + (1.0f - proj_sigmoid) * x_val;
 
-        out[out_curr] = proj_sigmoid * scan_result + (1.0f - proj_sigmoid) * x_val;
+        scan_write(out, out_curr, out_val);
 
         buf_curr += p.H;
         out_curr += p.H;
@@ -273,26 +296,39 @@ kernel void mingru_scan_forward_checkpointed(
         }
     }
 
-    // Floor at 1e-30 to prevent log(0)=-inf on the next forward pass.
-    // exp(a_star+s) underflows to exactly 0.0f in fp32 when a_star+s < -87.3.
-    // A zero state causes log(0)=-inf → permanent -inf propagation through
-    // all subsequent scan steps. 1e-30 is well above fp32 denormal range
-    // and below any meaningful state value.
-    next_state[bH + h] = max(fast::exp(a_star + s), 1e-30f);
+    scan_write_next_checkpointed(next_state, bH + h, scan_exp(next_state, a_star + s));
 }
 
-kernel void mingru_scan_forward_reset(
+kernel void mingru_scan_forward_checkpointed(
     device float* out               [[buffer(0)]],
     device float* next_state        [[buffer(1)]],
-    device float* curr_buf          [[buffer(2)]],
-    device float* prev_buf          [[buffer(3)]],
-    device float* unused_buf        [[buffer(4)]],
+    device float* a_star_buf        [[buffer(2)]],
+    device float* s_buf             [[buffer(3)]],
+    device float* log_values_buf    [[buffer(4)]],
     const device float* combined    [[buffer(5)]],
     const device float* state       [[buffer(6)]],
     const device float* input       [[buffer(7)]],
-    const device float* reset       [[buffer(8)]],
-    constant ScanParams& p          [[buffer(9)]],
+    constant ScanParams& p          [[buffer(8)]],
     uint idx [[thread_position_in_grid]]
+) {
+    mingru_scan_forward_checkpointed_body<float>(
+        out, next_state, a_star_buf, s_buf, log_values_buf, combined, state, input,
+        p, idx);
+}
+
+template <typename T>
+inline void mingru_scan_forward_reset_body(
+    device T* out,
+    device T* next_state,
+    device float* curr_buf,
+    device float* prev_buf,
+    device float* unused_buf,
+    const device T* combined,
+    const device T* state,
+    const device T* input,
+    const device float* reset,
+    constant ScanParams& p,
+    uint idx
 ) {
     (void)unused_buf;
     if ((int)idx >= p.B * p.H) return;
@@ -308,7 +344,7 @@ kernel void mingru_scan_forward_reset(
     int T_out = p.T_seq + 1;
     int buf_base = b * T_out * p.H + h;
 
-    float prev = state[bH + h];
+    float prev = scan_read(state, bH + h);
     curr_buf[buf_base] = prev;
     prev_buf[buf_base] = prev;
 
@@ -317,38 +353,58 @@ kernel void mingru_scan_forward_reset(
 
         int t_offset = t * H3;
         int input_idx = out_base + t * p.H;
-        float hidden_val = combined[cbase + h + t_offset];
-        float gate_val = combined[cbase + p.H + h + t_offset];
-        float proj_val = combined[cbase + H2 + h + t_offset];
-        float x_val = input[input_idx];
+        float hidden_val = scan_read(combined, cbase + h + t_offset);
+        float gate_val = scan_read(combined, cbase + p.H + h + t_offset);
+        float proj_val = scan_read(combined, cbase + H2 + h + t_offset);
+        float x_val = scan_read(input, input_idx);
         float gate_sigmoid = sigmoid_f(gate_val);
         float hidden_tilde = tilde_relu_fwd(hidden_val);
         float curr = lerp_f(prev, hidden_tilde, gate_sigmoid);
         float proj_sigmoid = sigmoid_f(proj_val);
+        float out_val = proj_sigmoid * curr + (1.0f - proj_sigmoid) * x_val;
 
-        out[input_idx] = proj_sigmoid * curr + (1.0f - proj_sigmoid) * x_val;
+        scan_write(out, input_idx, out_val);
         curr_buf[buf_base + (t + 1) * p.H] = curr;
         prev_buf[buf_base + (t + 1) * p.H] = prev;
         prev = curr;
     }
 
-    next_state[bH + h] = prev;
+    scan_write(next_state, bH + h, prev);
 }
 
-kernel void mingru_scan_backward_checkpointed(
-    device float* grad_combined          [[buffer(0)]],
-    device float* grad_state             [[buffer(1)]],
-    device float* grad_input             [[buffer(2)]],
-    const device float* grad_out         [[buffer(3)]],
-    const device float* grad_next_state  [[buffer(4)]],
-    const device float* combined         [[buffer(5)]],
-    const device float* state            [[buffer(6)]],
-    const device float* input            [[buffer(7)]],
-    const device float* a_star_buf       [[buffer(8)]],
-    const device float* s_buf            [[buffer(9)]],
-    const device float* log_values_buf   [[buffer(10)]],
-    constant ScanParams& p               [[buffer(11)]],
+kernel void mingru_scan_forward_reset(
+    device float* out               [[buffer(0)]],
+    device float* next_state        [[buffer(1)]],
+    device float* curr_buf          [[buffer(2)]],
+    device float* prev_buf          [[buffer(3)]],
+    device float* unused_buf        [[buffer(4)]],
+    const device float* combined    [[buffer(5)]],
+    const device float* state       [[buffer(6)]],
+    const device float* input       [[buffer(7)]],
+    const device float* reset       [[buffer(8)]],
+    constant ScanParams& p          [[buffer(9)]],
     uint idx [[thread_position_in_grid]]
+) {
+    mingru_scan_forward_reset_body<float>(
+        out, next_state, curr_buf, prev_buf, unused_buf, combined, state, input,
+        reset, p, idx);
+}
+
+template <typename T>
+inline void mingru_scan_backward_checkpointed_body(
+    device T* grad_combined,
+    device T* grad_state,
+    device T* grad_input,
+    const device T* grad_out,
+    const device T* grad_next_state,
+    const device T* combined,
+    const device T* state,
+    const device T* input,
+    const device float* a_star_buf,
+    const device float* s_buf,
+    const device float* log_values_buf,
+    constant ScanParams& p,
+    uint idx
 ) {
     if ((int)idx >= p.B * p.H) return;
 
@@ -371,25 +427,22 @@ kernel void mingru_scan_backward_checkpointed(
         int chunk_start = (chunk_end > CHECKPOINT_INTERVAL) ? (chunk_end - CHECKPOINT_INTERVAL) : 0;
         int chunk_len = chunk_end - chunk_start;
 
-        // Chunk storage in thread-local arrays
         float chunk_a_star[CHECKPOINT_INTERVAL];
         float chunk_s[CHECKPOINT_INTERVAL];
         float chunk_log_values[CHECKPOINT_INTERVAL];
         float chunk_hidden[CHECKPOINT_INTERVAL];
         float chunk_gate[CHECKPOINT_INTERVAL];
 
-        // Load checkpoint
         int ckpt_buf_idx = buf_base + chunk_start * p.H;
         float recomp_a_star = a_star_buf[ckpt_buf_idx];
         float recomp_s = s_buf[ckpt_buf_idx];
         float recomp_log_value = log_values_buf[ckpt_buf_idx];
 
-        // Forward recompute within chunk
         for (int i = 0; i < chunk_len; i++) {
             int t = chunk_start + 1 + i;
             int t_offset = (t - 1) * H3;
-            float hv = combined[cbase + h + t_offset];
-            float gv = combined[cbase + p.H + h + t_offset];
+            float hv = scan_read(combined, cbase + h + t_offset);
+            float gv = scan_read(combined, cbase + p.H + h + t_offset);
 
             float lc;
             log_coeffs_and_values_fwd(gv, hv, lc, recomp_log_value);
@@ -397,7 +450,7 @@ kernel void mingru_scan_backward_checkpointed(
 
             float z = recomp_log_value - recomp_a_star;
             float mv = fmax(recomp_s, z);
-            recomp_s = mv + log1p_f(fast::exp(-abs(recomp_s - z)));
+            recomp_s = mv + log1p_f(scan_exp(grad_combined, -abs(recomp_s - z)));
 
             chunk_a_star[i] = recomp_a_star;
             chunk_s[i] = recomp_s;
@@ -406,7 +459,6 @@ kernel void mingru_scan_backward_checkpointed(
             chunk_gate[i] = gv;
         }
 
-        // Backward through chunk
         for (int i = chunk_len - 1; i >= 0; i--) {
             int t = chunk_start + 1 + i;
             int t_offset = (t - 1) * H3;
@@ -416,20 +468,20 @@ kernel void mingru_scan_backward_checkpointed(
             float log_value_t = chunk_log_values[i];
             float hidden_val = chunk_hidden[i];
             float gate_val = chunk_gate[i];
-            float proj_val = combined[cbase + 2 * p.H + h + t_offset];
+            float proj_val = scan_read(combined, cbase + 2 * p.H + h + t_offset);
             int input_idx = out_base + (t - 1) * p.H;
-            float x_val = input[input_idx];
+            float x_val = scan_read(input, input_idx);
 
-            float scan_result = fast::exp(a_star_t + s_t);
+            float scan_result = scan_exp(grad_combined, a_star_t + s_t);
             float z = log_value_t - a_star_t;
 
-            float grad_out_val = grad_out[input_idx];
-            float grad_scan_from_next = (t == p.T_seq) ? grad_next_state[state_idx] : 0.0f;
+            float grad_out_val = scan_read(grad_out, input_idx);
+            float grad_scan_from_next = (t == p.T_seq) ? scan_read(grad_next_state, state_idx) : 0.0f;
 
             float proj_sigmoid = sigmoid_f(proj_val);
             float grad_scan_result = grad_scan_from_next + grad_out_val * proj_sigmoid;
             float grad_proj = grad_out_val * (scan_result - x_val) * proj_sigmoid * (1.0f - proj_sigmoid);
-            grad_input[input_idx] = grad_out_val * (1.0f - proj_sigmoid);
+            scan_write(grad_input, input_idx, grad_out_val * (1.0f - proj_sigmoid));
 
             float grad_log_h = grad_scan_result * scan_result;
             float grad_s = grad_log_h;
@@ -437,9 +489,9 @@ kernel void mingru_scan_backward_checkpointed(
             if (t == p.T_seq) {
                 acc = grad_s;
             } else {
-                acc = grad_s + acc * fast::exp(s_t - s_val_next);
+                acc = grad_s + acc * scan_exp(grad_combined, s_t - s_val_next);
             }
-            float grad_z = acc * fast::exp(z - s_t);
+            float grad_z = acc * scan_exp(grad_combined, z - s_t);
             s_val_next = s_t;
 
             float grad_a = grad_log_h + carry_grad_a - grad_z;
@@ -448,22 +500,107 @@ kernel void mingru_scan_backward_checkpointed(
             float grad_g, grad_h;
             log_coeffs_and_values_bwd(grad_a, grad_z, gate_val, hidden_val, grad_g, grad_h);
 
-            grad_combined[cbase + h + t_offset] = grad_h;
-            grad_combined[cbase + p.H + h + t_offset] = grad_g;
-            grad_combined[cbase + 2 * p.H + h + t_offset] = grad_proj;
+            scan_write(grad_combined, cbase + h + t_offset, grad_h);
+            scan_write(grad_combined, cbase + p.H + h + t_offset, grad_g);
+            scan_write(grad_combined, cbase + 2 * p.H + h + t_offset, grad_proj);
         }
     }
 
-    // Gradient for initial state (t=0)
     int ckpt_0_idx = buf_base;
     float a_star_0 = a_star_buf[ckpt_0_idx];
     float s_0 = s_buf[ckpt_0_idx];
     float log_value_0 = log_values_buf[ckpt_0_idx];
 
-    acc = acc * fast::exp(s_0 - s_val_next);
-    float grad_z_0 = acc * fast::exp((log_value_0 - a_star_0) - s_0);
+    acc = acc * scan_exp(grad_combined, s_0 - s_val_next);
+    float grad_z_0 = acc * scan_exp(grad_combined, (log_value_0 - a_star_0) - s_0);
 
-    grad_state[state_idx] = (state[state_idx] > 0.0f) ? (grad_z_0 / state[state_idx]) : 0.0f;
+    float state_val = scan_read(state, state_idx);
+    scan_write(grad_state, state_idx, (state_val > 0.0f) ? (grad_z_0 / state_val) : 0.0f);
+}
+
+kernel void mingru_scan_backward_checkpointed(
+    device float* grad_combined          [[buffer(0)]],
+    device float* grad_state             [[buffer(1)]],
+    device float* grad_input             [[buffer(2)]],
+    const device float* grad_out         [[buffer(3)]],
+    const device float* grad_next_state  [[buffer(4)]],
+    const device float* combined         [[buffer(5)]],
+    const device float* state            [[buffer(6)]],
+    const device float* input            [[buffer(7)]],
+    const device float* a_star_buf       [[buffer(8)]],
+    const device float* s_buf            [[buffer(9)]],
+    const device float* log_values_buf   [[buffer(10)]],
+    constant ScanParams& p               [[buffer(11)]],
+    uint idx [[thread_position_in_grid]]
+) {
+    mingru_scan_backward_checkpointed_body<float>(
+        grad_combined, grad_state, grad_input, grad_out, grad_next_state,
+        combined, state, input, a_star_buf, s_buf, log_values_buf, p, idx);
+}
+
+template <typename T>
+inline void mingru_scan_backward_reset_body(
+    device T* grad_combined,
+    device T* grad_state,
+    device T* grad_input,
+    const device T* grad_out,
+    const device T* grad_next_state,
+    const device T* combined,
+    const device T* state,
+    const device T* input,
+    const device float* curr_buf,
+    const device float* prev_buf,
+    const device float* unused_buf,
+    const device float* reset,
+    constant ScanParams& p,
+    uint idx
+) {
+    (void)state;
+    (void)unused_buf;
+    if ((int)idx >= p.B * p.H) return;
+
+    int b = (int)idx / p.H;
+    int h = (int)idx % p.H;
+    int bHT = b * p.H * p.T_seq;
+    int cbase = 3 * bHT;
+    int H3 = 3 * p.H;
+    int H2 = 2 * p.H;
+    int state_idx = b * p.H + h;
+    int out_base = bHT + h;
+    int T_out = p.T_seq + 1;
+    int buf_base = b * T_out * p.H + h;
+
+    float grad_next = scan_read(grad_next_state, state_idx);
+    for (int t = p.T_seq - 1; t >= 0; t--) {
+        int t_offset = t * H3;
+        int input_idx = out_base + t * p.H;
+        float curr = curr_buf[buf_base + (t + 1) * p.H];
+        float prev = prev_buf[buf_base + (t + 1) * p.H];
+        float hidden_val = scan_read(combined, cbase + h + t_offset);
+        float gate_val = scan_read(combined, cbase + p.H + h + t_offset);
+        float proj_val = scan_read(combined, cbase + H2 + h + t_offset);
+        float x_val = scan_read(input, input_idx);
+        float gate_sigmoid = sigmoid_f(gate_val);
+        float hidden_tilde = tilde_relu_fwd(hidden_val);
+        float hidden_grad = hidden_val >= 0.0f
+            ? 1.0f
+            : hidden_tilde * (1.0f - hidden_tilde);
+        float proj_sigmoid = sigmoid_f(proj_val);
+        float grad_out_val = scan_read(grad_out, input_idx);
+        float grad_curr = grad_next + grad_out_val * proj_sigmoid;
+        float grad_proj = grad_out_val * (curr - x_val) * proj_sigmoid * (1.0f - proj_sigmoid);
+        float grad_gate = grad_curr * (hidden_tilde - prev) * gate_sigmoid * (1.0f - gate_sigmoid);
+        float grad_hidden = grad_curr * gate_sigmoid * hidden_grad;
+        float grad_prev = grad_curr * (1.0f - gate_sigmoid);
+
+        scan_write(grad_input, input_idx, grad_out_val * (1.0f - proj_sigmoid));
+        scan_write(grad_combined, cbase + h + t_offset, grad_hidden);
+        scan_write(grad_combined, cbase + p.H + h + t_offset, grad_gate);
+        scan_write(grad_combined, cbase + H2 + h + t_offset, grad_proj);
+        grad_next = reset[b * p.T_seq + t] > 0.5f ? 0.0f : grad_prev;
+    }
+
+    scan_write(grad_state, state_idx, grad_next);
 }
 
 kernel void mingru_scan_backward_reset(
@@ -482,52 +619,9 @@ kernel void mingru_scan_backward_reset(
     constant ScanParams& p               [[buffer(12)]],
     uint idx [[thread_position_in_grid]]
 ) {
-    (void)state;
-    (void)unused_buf;
-    if ((int)idx >= p.B * p.H) return;
-
-    int b = (int)idx / p.H;
-    int h = (int)idx % p.H;
-    int bHT = b * p.H * p.T_seq;
-    int cbase = 3 * bHT;
-    int H3 = 3 * p.H;
-    int H2 = 2 * p.H;
-    int state_idx = b * p.H + h;
-    int out_base = bHT + h;
-    int T_out = p.T_seq + 1;
-    int buf_base = b * T_out * p.H + h;
-
-    float grad_next = grad_next_state[state_idx];
-    for (int t = p.T_seq - 1; t >= 0; t--) {
-        int t_offset = t * H3;
-        int input_idx = out_base + t * p.H;
-        float curr = curr_buf[buf_base + (t + 1) * p.H];
-        float prev = prev_buf[buf_base + (t + 1) * p.H];
-        float hidden_val = combined[cbase + h + t_offset];
-        float gate_val = combined[cbase + p.H + h + t_offset];
-        float proj_val = combined[cbase + H2 + h + t_offset];
-        float x_val = input[input_idx];
-        float gate_sigmoid = sigmoid_f(gate_val);
-        float hidden_tilde = tilde_relu_fwd(hidden_val);
-        float hidden_grad = hidden_val >= 0.0f
-            ? 1.0f
-            : hidden_tilde * (1.0f - hidden_tilde);
-        float proj_sigmoid = sigmoid_f(proj_val);
-        float grad_out_val = grad_out[input_idx];
-        float grad_curr = grad_next + grad_out_val * proj_sigmoid;
-        float grad_proj = grad_out_val * (curr - x_val) * proj_sigmoid * (1.0f - proj_sigmoid);
-        float grad_gate = grad_curr * (hidden_tilde - prev) * gate_sigmoid * (1.0f - gate_sigmoid);
-        float grad_hidden = grad_curr * gate_sigmoid * hidden_grad;
-        float grad_prev = grad_curr * (1.0f - gate_sigmoid);
-
-        grad_input[input_idx] = grad_out_val * (1.0f - proj_sigmoid);
-        grad_combined[cbase + h + t_offset] = grad_hidden;
-        grad_combined[cbase + p.H + h + t_offset] = grad_gate;
-        grad_combined[cbase + H2 + h + t_offset] = grad_proj;
-        grad_next = reset[b * p.T_seq + t] > 0.5f ? 0.0f : grad_prev;
-    }
-
-    grad_state[state_idx] = grad_next;
+    mingru_scan_backward_reset_body<float>(
+        grad_combined, grad_state, grad_input, grad_out, grad_next_state,
+        combined, state, input, curr_buf, prev_buf, unused_buf, reset, p, idx);
 }
 
 struct SampleParams {
@@ -2093,65 +2187,9 @@ kernel void mingru_scan_forward_checkpointed_fp16(
     constant ScanParams& p          [[buffer(8)]],
     uint idx [[thread_position_in_grid]]
 ) {
-    if ((int)idx >= p.B * p.H) return;
-
-    int b = (int)idx / p.H;
-    int h = (int)idx % p.H;
-    int bH = b * p.H;
-    int H3 = 3 * p.H;
-    int bHT = bH * p.T_seq;
-    int out_base = bHT + h;
-    int cbase = 3 * bHT;
-
-    float a_star = 0.0f;
-    float log_value = 0.0f;
-    float s = log(float(state[bH + h]));
-    log_value = s;
-
-    int T_out = p.T_seq + 1;
-    int buf_base = b * T_out * p.H + h;
-    int buf_curr = buf_base;
-    a_star_buf[buf_curr] = a_star;
-    s_buf[buf_curr] = s;
-    log_values_buf[buf_curr] = log_value;
-
-    int out_curr = out_base;
-    int t_offset = 0;
-
-    for (int t = 1; t < p.T_seq + 1; t++) {
-        float hidden_val = float(combined[cbase + h + t_offset]);
-        float gate_val = float(combined[cbase + p.H + h + t_offset]);
-        float proj_val = float(combined[cbase + 2 * p.H + h + t_offset]);
-        float x_val = float(input[out_base + (t - 1) * p.H]);
-
-        float log_coeff_val;
-        log_coeffs_and_values_fwd(gate_val, hidden_val, log_coeff_val, log_value);
-
-        a_star += log_coeff_val;
-
-        float z = log_value - a_star;
-        float max_val = fmax(s, z);
-        s = max_val + log1p_f(exp(-abs(s - z)));
-
-        float scan_result = exp(a_star + s);
-        float proj_sigmoid = sigmoid_f(proj_val);
-        float out_val = proj_sigmoid * scan_result + (1.0f - proj_sigmoid) * x_val;
-
-        out[out_curr] = half(clamp(out_val, -65000.0f, 65000.0f));
-
-        buf_curr += p.H;
-        out_curr += p.H;
-        t_offset += H3;
-
-        if (t % CHECKPOINT_INTERVAL == 0) {
-            a_star_buf[buf_curr] = a_star;
-            s_buf[buf_curr] = s;
-            log_values_buf[buf_curr] = log_value;
-        }
-    }
-
-    float next_state_val = max(exp(a_star + s), 1e-30f);
-    next_state[bH + h] = half(min(next_state_val, 65000.0f));
+    mingru_scan_forward_checkpointed_body<half>(
+        out, next_state, a_star_buf, s_buf, log_values_buf, combined, state, input,
+        p, idx);
 }
 
 kernel void mingru_scan_forward_reset_fp16(
@@ -2167,46 +2205,9 @@ kernel void mingru_scan_forward_reset_fp16(
     constant ScanParams& p          [[buffer(9)]],
     uint idx [[thread_position_in_grid]]
 ) {
-    (void)unused_buf;
-    if ((int)idx >= p.B * p.H) return;
-
-    int b = (int)idx / p.H;
-    int h = (int)idx % p.H;
-    int bH = b * p.H;
-    int H3 = 3 * p.H;
-    int H2 = 2 * p.H;
-    int bHT = bH * p.T_seq;
-    int out_base = bHT + h;
-    int cbase = 3 * bHT;
-    int T_out = p.T_seq + 1;
-    int buf_base = b * T_out * p.H + h;
-
-    float prev = float(state[bH + h]);
-    curr_buf[buf_base] = prev;
-    prev_buf[buf_base] = prev;
-
-    for (int t = 0; t < p.T_seq; t++) {
-        if (reset[b * p.T_seq + t] > 0.5f) prev = 0.0f;
-
-        int t_offset = t * H3;
-        int input_idx = out_base + t * p.H;
-        float hidden_val = float(combined[cbase + h + t_offset]);
-        float gate_val = float(combined[cbase + p.H + h + t_offset]);
-        float proj_val = float(combined[cbase + H2 + h + t_offset]);
-        float x_val = float(input[input_idx]);
-        float gate_sigmoid = sigmoid_f(gate_val);
-        float hidden_tilde = tilde_relu_fwd(hidden_val);
-        float curr = lerp_f(prev, hidden_tilde, gate_sigmoid);
-        float proj_sigmoid = sigmoid_f(proj_val);
-        float out_val = proj_sigmoid * curr + (1.0f - proj_sigmoid) * x_val;
-
-        out[input_idx] = half(clamp(out_val, -65000.0f, 65000.0f));
-        curr_buf[buf_base + (t + 1) * p.H] = curr;
-        prev_buf[buf_base + (t + 1) * p.H] = prev;
-        prev = curr;
-    }
-
-    next_state[bH + h] = half(clamp(prev, -65000.0f, 65000.0f));
+    mingru_scan_forward_reset_body<half>(
+        out, next_state, curr_buf, prev_buf, unused_buf, combined, state, input,
+        reset, p, idx);
 }
 
 kernel void mingru_scan_backward_checkpointed_fp16(
@@ -2224,119 +2225,9 @@ kernel void mingru_scan_backward_checkpointed_fp16(
     constant ScanParams& p                [[buffer(11)]],
     uint idx [[thread_position_in_grid]]
 ) {
-    if ((int)idx >= p.B * p.H) return;
-
-    int b = (int)idx / p.H;
-    int h = (int)idx % p.H;
-    int bHT = b * p.H * p.T_seq;
-    int cbase = 3 * bHT;
-    int H3 = 3 * p.H;
-    int state_idx = b * p.H + h;
-    int out_base = bHT + h;
-
-    int T_out = p.T_seq + 1;
-    int buf_base = b * T_out * p.H + h;
-
-    float acc = 0.0f;
-    float s_val_next = 0.0f;
-    float carry_grad_a = 0.0f;
-
-    for (int chunk_end = p.T_seq; chunk_end > 0; chunk_end -= CHECKPOINT_INTERVAL) {
-        int chunk_start = (chunk_end > CHECKPOINT_INTERVAL) ? (chunk_end - CHECKPOINT_INTERVAL) : 0;
-        int chunk_len = chunk_end - chunk_start;
-
-        float chunk_a_star[CHECKPOINT_INTERVAL];
-        float chunk_s[CHECKPOINT_INTERVAL];
-        float chunk_log_values[CHECKPOINT_INTERVAL];
-        float chunk_hidden[CHECKPOINT_INTERVAL];
-        float chunk_gate[CHECKPOINT_INTERVAL];
-
-        int ckpt_buf_idx = buf_base + chunk_start * p.H;
-        float recomp_a_star = a_star_buf[ckpt_buf_idx];
-        float recomp_s = s_buf[ckpt_buf_idx];
-        float recomp_log_value = log_values_buf[ckpt_buf_idx];
-
-        for (int i = 0; i < chunk_len; i++) {
-            int t = chunk_start + 1 + i;
-            int t_offset = (t - 1) * H3;
-            float hv = float(combined[cbase + h + t_offset]);
-            float gv = float(combined[cbase + p.H + h + t_offset]);
-
-            float lc;
-            log_coeffs_and_values_fwd(gv, hv, lc, recomp_log_value);
-            recomp_a_star += lc;
-
-            float z = recomp_log_value - recomp_a_star;
-            float mv = fmax(recomp_s, z);
-            recomp_s = mv + log1p_f(exp(-abs(recomp_s - z)));
-
-            chunk_a_star[i] = recomp_a_star;
-            chunk_s[i] = recomp_s;
-            chunk_log_values[i] = recomp_log_value;
-            chunk_hidden[i] = hv;
-            chunk_gate[i] = gv;
-        }
-
-        for (int i = chunk_len - 1; i >= 0; i--) {
-            int t = chunk_start + 1 + i;
-            int t_offset = (t - 1) * H3;
-
-            float a_star_t = chunk_a_star[i];
-            float s_t = chunk_s[i];
-            float log_value_t = chunk_log_values[i];
-            float hidden_val = chunk_hidden[i];
-            float gate_val = chunk_gate[i];
-            float proj_val = float(combined[cbase + 2 * p.H + h + t_offset]);
-            int input_idx = out_base + (t - 1) * p.H;
-            float x_val = float(input[input_idx]);
-
-            float scan_result = exp(a_star_t + s_t);
-            float z = log_value_t - a_star_t;
-
-            float grad_out_val = float(grad_out[input_idx]);
-            float grad_scan_from_next = (t == p.T_seq) ? float(grad_next_state[state_idx]) : 0.0f;
-
-            float proj_sigmoid = sigmoid_f(proj_val);
-            float grad_scan_result = grad_scan_from_next + grad_out_val * proj_sigmoid;
-            float grad_proj = grad_out_val * (scan_result - x_val) * proj_sigmoid * (1.0f - proj_sigmoid);
-            float grad_input_val = grad_out_val * (1.0f - proj_sigmoid);
-            grad_input[input_idx] = half(clamp(grad_input_val, -65000.0f, 65000.0f));
-
-            float grad_log_h = grad_scan_result * scan_result;
-            float grad_s = grad_log_h;
-
-            if (t == p.T_seq) {
-                acc = grad_s;
-            } else {
-                acc = grad_s + acc * exp(s_t - s_val_next);
-            }
-            float grad_z = acc * exp(z - s_t);
-            s_val_next = s_t;
-
-            float grad_a = grad_log_h + carry_grad_a - grad_z;
-            carry_grad_a = grad_a;
-
-            float grad_g, grad_h;
-            log_coeffs_and_values_bwd(grad_a, grad_z, gate_val, hidden_val, grad_g, grad_h);
-
-            // Clamp to fp16 range to prevent inf (Metal fp16 max ~65504)
-            grad_combined[cbase + h + t_offset] = half(clamp(grad_h, -65000.0f, 65000.0f));
-            grad_combined[cbase + p.H + h + t_offset] = half(clamp(grad_g, -65000.0f, 65000.0f));
-            grad_combined[cbase + 2 * p.H + h + t_offset] = half(clamp(grad_proj, -65000.0f, 65000.0f));
-        }
-    }
-
-    int ckpt_0_idx = buf_base;
-    float a_star_0 = a_star_buf[ckpt_0_idx];
-    float s_0 = s_buf[ckpt_0_idx];
-    float log_value_0 = log_values_buf[ckpt_0_idx];
-
-    acc = acc * exp(s_0 - s_val_next);
-    float grad_z_0 = acc * exp((log_value_0 - a_star_0) - s_0);
-
-    float state_val = float(state[state_idx]);
-    float grad_state_val = (state_val > 0.0f) ? (grad_z_0 / state_val) : 0.0f;
-    grad_state[state_idx] = half(clamp(grad_state_val, -65000.0f, 65000.0f));
+    mingru_scan_backward_checkpointed_body<half>(
+        grad_combined, grad_state, grad_input, grad_out, grad_next_state,
+        combined, state, input, a_star_buf, s_buf, log_values_buf, p, idx);
 }
 
 kernel void mingru_scan_backward_reset_fp16(
@@ -2355,52 +2246,9 @@ kernel void mingru_scan_backward_reset_fp16(
     constant ScanParams& p                [[buffer(12)]],
     uint idx [[thread_position_in_grid]]
 ) {
-    (void)state;
-    (void)unused_buf;
-    if ((int)idx >= p.B * p.H) return;
-
-    int b = (int)idx / p.H;
-    int h = (int)idx % p.H;
-    int bHT = b * p.H * p.T_seq;
-    int cbase = 3 * bHT;
-    int H3 = 3 * p.H;
-    int H2 = 2 * p.H;
-    int state_idx = b * p.H + h;
-    int out_base = bHT + h;
-    int T_out = p.T_seq + 1;
-    int buf_base = b * T_out * p.H + h;
-
-    float grad_next = float(grad_next_state[state_idx]);
-    for (int t = p.T_seq - 1; t >= 0; t--) {
-        int t_offset = t * H3;
-        int input_idx = out_base + t * p.H;
-        float curr = curr_buf[buf_base + (t + 1) * p.H];
-        float prev = prev_buf[buf_base + (t + 1) * p.H];
-        float hidden_val = float(combined[cbase + h + t_offset]);
-        float gate_val = float(combined[cbase + p.H + h + t_offset]);
-        float proj_val = float(combined[cbase + H2 + h + t_offset]);
-        float x_val = float(input[input_idx]);
-        float gate_sigmoid = sigmoid_f(gate_val);
-        float hidden_tilde = tilde_relu_fwd(hidden_val);
-        float hidden_grad = hidden_val >= 0.0f
-            ? 1.0f
-            : hidden_tilde * (1.0f - hidden_tilde);
-        float proj_sigmoid = sigmoid_f(proj_val);
-        float grad_out_val = float(grad_out[input_idx]);
-        float grad_curr = grad_next + grad_out_val * proj_sigmoid;
-        float grad_proj = grad_out_val * (curr - x_val) * proj_sigmoid * (1.0f - proj_sigmoid);
-        float grad_gate = grad_curr * (hidden_tilde - prev) * gate_sigmoid * (1.0f - gate_sigmoid);
-        float grad_hidden = grad_curr * gate_sigmoid * hidden_grad;
-        float grad_prev = grad_curr * (1.0f - gate_sigmoid);
-
-        grad_input[input_idx] = half(clamp(grad_out_val * (1.0f - proj_sigmoid), -65000.0f, 65000.0f));
-        grad_combined[cbase + h + t_offset] = half(clamp(grad_hidden, -65000.0f, 65000.0f));
-        grad_combined[cbase + p.H + h + t_offset] = half(clamp(grad_gate, -65000.0f, 65000.0f));
-        grad_combined[cbase + H2 + h + t_offset] = half(clamp(grad_proj, -65000.0f, 65000.0f));
-        grad_next = reset[b * p.T_seq + t] > 0.5f ? 0.0f : grad_prev;
-    }
-
-    grad_state[state_idx] = half(clamp(grad_next, -65000.0f, 65000.0f));
+    mingru_scan_backward_reset_body<half>(
+        grad_combined, grad_state, grad_input, grad_out, grad_next_state,
+        combined, state, input, curr_buf, prev_buf, unused_buf, reset, p, idx);
 }
 
 // ============================================================================
