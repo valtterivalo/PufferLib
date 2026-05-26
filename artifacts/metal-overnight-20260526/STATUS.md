@@ -320,3 +320,15 @@
 - Tensor copy-helper LOC cleanup passed subagent review after preserving all tensor shape dimensions in the adapter.
 - Cleanup committed as `eaa763e97`.
 - Worktree resumed clean at heartbeat. Current tracked Metal-owned LOC across `src/metal`, `tools/metal`, and `tests/metal`: 10205.
+
+## 2026-05-26 03:33 EEST
+
+- Starting tenth milestone 01 LOC candidate.
+- Root-cause hypothesis: the host backend still hand-builds `PufTensor` and `PrecisionTensor` wrappers from `FloatTensor` and `PufTensor` in several rollout and training paths. The accepted tensor copy-helper patch showed the safer invariant: wrappers must preserve every shape dimension and the actual dtype. Centralizing that adapter logic in `platform.h` should delete repeated initializer code without changing dispatch, RNG, masks, or learning math.
+
+## 2026-05-26 03:37 EEST
+
+- Tested shared tensor-wrapper adapters twice.
+- `breakout` SPS runs: 2,250,520 and 2,274,256. Median versus current accepted baseline: -1.24 percent. Training scores were 2.674 and 2.509, explicit eval score stayed 0.0.
+- `g2048` SPS runs: 353,648 and 356,293. Median versus current accepted baseline: -0.24 percent. Training score stayed 97.855, explicit eval score stayed 49.43.
+- Decision: reject and revert. The cleanup reduced tracked Metal-owned LOC to 10181, but `breakout` missed the 1 percent LOC gate.
