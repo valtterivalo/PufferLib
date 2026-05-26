@@ -3585,6 +3585,278 @@ static void test_fast_step_out_forecast_does_not_mutate_state(void) {
             sizeof(state.npc_collision_flags)), 0);
 }
 
+static void test_readonly_step_out_forecast_matches_movement_head_destinations(void) {
+    printf("--- readonly step-out forecast matches movement head destinations ---\n");
+
+    InfernoState state;
+    init_step_out_forecast_stack_state(&state, 29, 39);
+
+    InfStepOutForecast forecast;
+    inf_build_step_out_forecast_fast_readonly_ctx(
+        &state, inf_legacy_context(), &forecast);
+
+    for (int action = 0; action < ENCOUNTER_MOVE_ACTIONS; action++) {
+        Player moved = state.player;
+        if (action > 0) {
+            InfWalkCtx walk_ctx = { &state, inf_legacy_context() };
+            encounter_move_to_target(
+                &moved,
+                ENCOUNTER_MOVE_TARGET_DX[action],
+                ENCOUNTER_MOVE_TARGET_DY[action],
+                inf_tile_walkable,
+                &walk_ctx);
+        }
+
+        ASSERT_INT_EQ("readonly forecast movement landing x",
+            forecast.actions[action].land_x, moved.x);
+        ASSERT_INT_EQ("readonly forecast movement landing y",
+            forecast.actions[action].land_y, moved.y);
+    }
+}
+
+static void test_readonly_step_out_forecast_does_not_mutate_state(void) {
+    printf("--- readonly step-out forecast does not mutate state ---\n");
+
+    InfernoState state;
+    init_step_out_forecast_stack_state(&state, 29, 39);
+    add_step_out_forecast_npc(&state, 0, INF_NPC_RANGER, 24, 31, 1);
+    add_step_out_forecast_npc(&state, 1, INF_NPC_MAGER, 29, 30, 2);
+    add_step_out_forecast_npc(&state, 2, INF_NPC_BLOB, 29, 32, 1);
+    state.npcs[2].blob_scanned_prayer = -1;
+    state.npcs[2].had_los_last_tick = 0;
+    inf_rebuild_entity_collision_flags(&state);
+
+    InfernoState before = state;
+    InfStepOutForecast forecast;
+    inf_build_step_out_forecast_fast_readonly_ctx(
+        &state, inf_legacy_context(), &forecast);
+
+    ASSERT_INT_EQ("readonly forecast preserves player x",
+        state.player.x, before.player.x);
+    ASSERT_INT_EQ("readonly forecast preserves player y",
+        state.player.y, before.player.y);
+    ASSERT_INT_EQ("readonly forecast preserves ranger x",
+        state.npcs[0].x, before.npcs[0].x);
+    ASSERT_INT_EQ("readonly forecast preserves ranger y",
+        state.npcs[0].y, before.npcs[0].y);
+    ASSERT_INT_EQ("readonly forecast preserves NPC timer",
+        state.npcs[0].attack_timer, before.npcs[0].attack_timer);
+    ASSERT_INT_EQ("readonly forecast preserves blob scan state",
+        state.npcs[2].blob_scanned_prayer, before.npcs[2].blob_scanned_prayer);
+    ASSERT_INT_EQ("readonly forecast preserves LOS cache",
+        memcmp(state.npc_los_cache, before.npc_los_cache,
+            sizeof(state.npc_los_cache)), 0);
+    ASSERT_INT_EQ("readonly forecast preserves player collision flags",
+        memcmp(state.player_collision_flags, before.player_collision_flags,
+            sizeof(state.player_collision_flags)), 0);
+    ASSERT_INT_EQ("readonly forecast preserves NPC collision flags",
+        memcmp(state.npc_collision_flags, before.npc_collision_flags,
+            sizeof(state.npc_collision_flags)), 0);
+}
+
+static void assert_readonly_step_out_matches_exact_action(
+    const char* label,
+    InfernoState* state,
+    int action_idx
+) {
+    InfStepOutForecast exact;
+    InfStepOutForecast readonly;
+    InfStepOutForecastOracleDiff diff;
+    inf_build_step_out_forecast_exact_ctx(state, inf_legacy_context(), &exact);
+    inf_build_step_out_forecast_fast_readonly_ctx(
+        state, inf_legacy_context(), &readonly);
+    inf_compare_step_out_forecasts(&exact, &readonly, &diff);
+
+    ASSERT_INT_EQ("readonly action oracle has no dangerous false negatives",
+        diff.dangerous_false_negatives, 0);
+    const InfStepOutForecastAction* exact_action = &exact.actions[action_idx];
+    const InfStepOutForecastAction* readonly_action = &readonly.actions[action_idx];
+    char msg[128];
+    snprintf(msg, sizeof(msg), "%s valid", label);
+    ASSERT_INT_EQ(msg, readonly_action->valid, exact_action->valid);
+    snprintf(msg, sizeof(msg), "%s land x", label);
+    ASSERT_INT_EQ(msg, readonly_action->land_x, exact_action->land_x);
+    snprintf(msg, sizeof(msg), "%s land y", label);
+    ASSERT_INT_EQ(msg, readonly_action->land_y, exact_action->land_y);
+    snprintf(msg, sizeof(msg), "%s first ranger count", label);
+    ASSERT_INT_EQ(msg,
+        readonly_action->ticks[0].ranger_count,
+        exact_action->ticks[0].ranger_count);
+    snprintf(msg, sizeof(msg), "%s second mager count", label);
+    ASSERT_INT_EQ(msg,
+        readonly_action->ticks[1].mager_count,
+        exact_action->ticks[1].mager_count);
+}
+
+static void test_readonly_step_out_forecast_pillar_step_out_cases(void) {
+    printf("--- readonly step-out forecast pillar step-out cases ---\n");
+
+    InfernoState north_state;
+    init_step_out_forecast_stack_state(&north_state, 29, 39);
+    add_step_out_forecast_npc(&north_state, 0, INF_NPC_RANGER, 24, 31, 0);
+    add_step_out_forecast_npc(&north_state, 1, INF_NPC_MAGER, 29, 30, 0);
+    assert_readonly_step_out_matches_exact_action(
+        "north pillar run west", &north_state, 11);
+
+    InfernoState south_state;
+    init_step_out_forecast_stack_state(&south_state, 22, 17);
+    add_step_out_forecast_npc(&south_state, 0, INF_NPC_RANGER, 17, 25, 0);
+    add_step_out_forecast_npc(&south_state, 1, INF_NPC_MAGER, 22, 26, 0);
+    assert_readonly_step_out_matches_exact_action(
+        "south pillar run west", &south_state, 11);
+
+    InfernoState west_state;
+    init_step_out_forecast_stack_state(&west_state, 11, 29);
+    add_step_out_forecast_npc(&west_state, 0, INF_NPC_RANGER, 8, 40, 0);
+    add_step_out_forecast_npc(&west_state, 1, INF_NPC_MAGER, 16, 42, 0);
+    assert_readonly_step_out_matches_exact_action(
+        "west pillar walk north", &west_state, 4);
+}
+
+static void test_step_out_forecast_obs_uses_readonly_mode(void) {
+    printf("--- step-out forecast obs uses readonly mode ---\n");
+
+    InfernoState state;
+    init_step_out_forecast_stack_state(&state, 29, 39);
+    add_step_out_forecast_npc(&state, 0, INF_NPC_RANGER, 24, 31, 0);
+    add_step_out_forecast_npc(&state, 1, INF_NPC_MAGER, 29, 30, 0);
+    test_config()->step_out_forecast_obs_enabled = 1;
+    test_config()->step_out_forecast_obs_mode =
+        INF_STEP_OUT_FORECAST_MODE_FAST_READONLY_MOVE;
+
+    float obs[INF_NUM_OBS];
+    inf_write_obs((EncounterState*)&state, obs);
+
+    int action_start = inferno_step_out_forecast_obs_start() +
+        11 * INF_STEP_OUT_FORECAST_ACTION_FEATURES;
+    ASSERT_FLOAT_NEAR("readonly obs run west valid",
+        obs[action_start], 1.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("readonly obs run west first attack tick",
+        obs[action_start + 1], 1.0f / 4.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("readonly obs run west first style mask",
+        obs[action_start + 2], (float)INF_STYLE_MASK_RANGED / 7.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("readonly obs run west off-tick opportunity",
+        obs[action_start + 6], 1.0f, 1e-6f);
+}
+
+static void test_readonly_step_out_forecast_stun_countdown(void) {
+    printf("--- readonly step-out forecast stun countdown ---\n");
+
+    InfernoState state;
+    init_step_out_forecast_stack_state(&state, 20, 20);
+    clear_step_out_forecast_pillars(&state);
+    add_step_out_forecast_npc(&state, 0, INF_NPC_RANGER, 20, 25, 1);
+    state.npcs[0].stun_timer = 2;
+    inf_rebuild_entity_collision_flags(&state);
+
+    InfStepOutForecast forecast;
+    inf_build_step_out_forecast_fast_readonly_ctx(
+        &state, inf_legacy_context(), &forecast);
+
+    ASSERT_INT_EQ("stunned ranger does not fire tick one",
+        forecast.actions[0].ticks[0].ranger_count, 0);
+    ASSERT_INT_EQ("stunned ranger does not fire tick two",
+        forecast.actions[0].ticks[1].ranger_count, 0);
+    ASSERT_INT_EQ("stunned ranger fires after countdown",
+        forecast.actions[0].ticks[2].ranger_count, 1);
+}
+
+static void test_readonly_step_out_forecast_frozen_can_attack(void) {
+    printf("--- readonly step-out forecast frozen can attack ---\n");
+
+    InfernoState state;
+    init_step_out_forecast_stack_state(&state, 20, 20);
+    clear_step_out_forecast_pillars(&state);
+    add_step_out_forecast_npc(&state, 0, INF_NPC_RANGER, 20, 25, 1);
+    state.npcs[0].frozen_ticks = 4;
+    inf_rebuild_entity_collision_flags(&state);
+
+    InfStepOutForecast forecast;
+    inf_build_step_out_forecast_fast_readonly_ctx(
+        &state, inf_legacy_context(), &forecast);
+
+    ASSERT_INT_EQ("frozen ranger still attacks with LOS",
+        forecast.actions[0].ticks[0].ranger_count, 1);
+}
+
+static void test_readonly_step_out_forecast_blob_scanned_fire(void) {
+    printf("--- readonly step-out forecast blob scanned fire ---\n");
+
+    InfernoState state;
+    init_step_out_forecast_stack_state(&state, 20, 20);
+    clear_step_out_forecast_pillars(&state);
+    add_step_out_forecast_npc(&state, 0, INF_NPC_BLOB, 20, 25, 1);
+    state.npcs[0].blob_scanned_prayer = PRAYER_PROTECT_MAGIC;
+    state.npcs[0].attack_style = ATTACK_STYLE_RANGED;
+    state.npcs[0].had_los_last_tick = 1;
+    inf_rebuild_entity_collision_flags(&state);
+
+    InfStepOutForecast forecast;
+    inf_build_step_out_forecast_fast_readonly_ctx(
+        &state, inf_legacy_context(), &forecast);
+
+    ASSERT_INT_EQ("scanned blob fires ranged",
+        forecast.actions[0].ticks[0].ranged_count, 1);
+    ASSERT_INT_EQ("scanned blob fire has max hit",
+        forecast.actions[0].ticks[0].max_hit > 0, 1);
+}
+
+static void test_readonly_step_out_forecast_under_player_overlap_is_danger(void) {
+    printf("--- readonly step-out forecast under-player overlap is danger ---\n");
+
+    InfernoState state;
+    init_step_out_forecast_stack_state(&state, 20, 20);
+    clear_step_out_forecast_pillars(&state);
+    add_step_out_forecast_npc(&state, 0, INF_NPC_RANGER, 20, 20, 1);
+    inf_rebuild_entity_collision_flags(&state);
+    uint32_t rng_before = state.rng_state;
+
+    InfStepOutForecast forecast;
+    inf_build_step_out_forecast_fast_readonly_ctx(
+        &state, inf_legacy_context(), &forecast);
+
+    ASSERT_INT_EQ("under-player overlap marks immediate danger",
+        inf_step_out_forecast_action_dangerous(&forecast.actions[0]), 1);
+    ASSERT_INT_EQ("under-player forecast does not consume RNG",
+        state.rng_state, rng_before);
+}
+
+static void test_readonly_step_out_forecast_invalid_movement_zeroes_payload(void) {
+    printf("--- readonly step-out forecast invalid movement zeroes payload ---\n");
+
+    InfernoState state;
+    init_step_out_forecast_stack_state(&state, INF_ARENA_MIN_X, INF_ARENA_MIN_Y);
+    clear_step_out_forecast_pillars(&state);
+    add_step_out_forecast_npc(&state, 0, INF_NPC_RANGER,
+        INF_ARENA_MIN_X + 3, INF_ARENA_MIN_Y + 3, 1);
+    inf_rebuild_entity_collision_flags(&state);
+
+    InfStepOutForecast forecast;
+    inf_build_step_out_forecast_fast_readonly_ctx(
+        &state, inf_legacy_context(), &forecast);
+
+    const InfStepOutForecastAction* action = &forecast.actions[9];
+    ASSERT_INT_EQ("invalid run-west action is invalid", action->valid, 0);
+    ASSERT_INT_EQ("invalid action has no same-tick conflict",
+        action->same_tick_mixed_style_conflict, 0);
+    ASSERT_INT_EQ("invalid action has no off-tick opportunity",
+        action->ranger_mager_offtick_opportunity, 0);
+    ASSERT_INT_EQ("invalid action has no melee fallback",
+        action->melee_fallback_exposure, 0);
+    for (int tick_idx = 0; tick_idx < INF_STEP_OUT_FORECAST_HORIZON; tick_idx++) {
+        ASSERT_INT_EQ("invalid action has no melee count",
+            action->ticks[tick_idx].melee_count, 0);
+        ASSERT_INT_EQ("invalid action has no ranged count",
+            action->ticks[tick_idx].ranged_count, 0);
+        ASSERT_INT_EQ("invalid action has no magic count",
+            action->ticks[tick_idx].magic_count, 0);
+        ASSERT_INT_EQ("invalid action has no blob scan count",
+            action->ticks[tick_idx].blob_scan_count, 0);
+        ASSERT_INT_EQ("invalid action has no max hit",
+            action->ticks[tick_idx].max_hit, 0);
+    }
+}
+
 static void test_step_out_forecast_south_pillar_ranger_mager_order(void) {
     printf("--- step-out forecast south pillar ranger/mager order ---\n");
 
@@ -7717,6 +7989,24 @@ static void test_inferno_binding_forwards_step_out_forecast_obs_toggle(void) {
         "[sweep.env.step_out_forecast_obs_mode]",
         "scale = auto",
         "distribution = int_uniform");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "step-out forecast obs mode sweep covers readonly mode",
+        "config/ocean/osrs_inferno.ini",
+        "[sweep.env.step_out_forecast_obs_mode]",
+        "scale = auto",
+        "max = 3");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "step-out forecast readonly mode enum",
+        "ocean/osrs/encounters/inferno/encounter_inferno_model.inc",
+        "INF_STEP_OUT_FORECAST_MODE_OFF = 0",
+        "};",
+        "INF_STEP_OUT_FORECAST_MODE_FAST_READONLY_MOVE = 3");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "step-out forecast mode hash is source of truth",
+        "ocean/osrs/encounters/inferno/encounter_inferno_render_snapshot.inc",
+        "static uint64_t inf_config_fingerprint",
+        "return h;",
+        "INF_HASH_CONFIG_FIELD(config, &h, step_out_forecast_obs_mode)");
 }
 
 static void test_inferno_binding_forwards_loadout_profile_config(void) {
@@ -7976,6 +8266,15 @@ int main(void) {
     test_fast_step_out_forecast_immediate_static_threats();
     test_fast_step_out_forecast_blob_scan_and_melee_fallback();
     test_fast_step_out_forecast_does_not_mutate_state();
+    test_readonly_step_out_forecast_matches_movement_head_destinations();
+    test_readonly_step_out_forecast_does_not_mutate_state();
+    test_readonly_step_out_forecast_pillar_step_out_cases();
+    test_step_out_forecast_obs_uses_readonly_mode();
+    test_readonly_step_out_forecast_stun_countdown();
+    test_readonly_step_out_forecast_frozen_can_attack();
+    test_readonly_step_out_forecast_blob_scanned_fire();
+    test_readonly_step_out_forecast_under_player_overlap_is_danger();
+    test_readonly_step_out_forecast_invalid_movement_zeroes_payload();
     test_step_out_forecast_south_pillar_ranger_mager_order();
     test_step_out_forecast_west_pillar_ranger_mager_order();
     test_step_out_forecast_inactive_pillar_does_not_create_cover();
