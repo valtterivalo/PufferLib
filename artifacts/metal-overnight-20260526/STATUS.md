@@ -410,3 +410,16 @@
 - `g2048` SPS runs: 356,585 and 359,712. Median versus current accepted baseline: -3.92 percent. Training score stayed 97.855, explicit eval score stayed 49.43.
 - Milestone 03 suite also passed native Metal parity and overlay surface tests on both runs. Candidate tracked Metal-owned LOC was 10125.
 - Decision: reject and revert. The deleted symbols have no benchmark/backend callers after keeping `cudaStreamSynchronize`, but `g2048` missed the LOC cleanup gate.
+
+## 2026-05-26 05:31 EEST
+
+- Starting milestone 03 cleanup candidate.
+- Root-cause hypothesis: `muon_step` zeros `up_puf` before iterating over every registered parameter and writing the matching update slice. The loop covers the dense update buffer by advancing `offset += puf_numel(e.shape)` for all `param_alloc->regs`, so the zero-fill dispatch and barrier should be dead work. Removing them should reduce LOC and one hot-path dispatch without changing optimizer math, determinism, train/eval outputs, or interactive usability.
+
+## 2026-05-26 05:34 EEST
+
+- Tested Muon update-buffer zero removal twice.
+- `breakout` SPS runs: 2,268,064 and 2,266,089. Median versus current accepted baseline: -1.42 percent. Training scores were 2.319 and 2.367, explicit eval score stayed 0.0.
+- `g2048` SPS runs: 350,482 and 352,723. Median versus current accepted baseline: -5.68 percent. Training score stayed 97.855, explicit eval score stayed 49.43.
+- Milestone 03 suite also passed native Metal parity and overlay surface tests on both runs. Candidate tracked Metal-owned LOC was 10139.
+- Decision: reject and revert. The fill looked dead by coverage of `param_alloc->regs`, but removing it made both benchmarks slower and missed the LOC cleanup gate.
