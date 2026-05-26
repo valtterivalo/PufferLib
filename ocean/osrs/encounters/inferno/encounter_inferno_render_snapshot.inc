@@ -1,9 +1,9 @@
 #line 7460 "encounter_inferno.h"
 static void inf_require_valid_step_out_forecast_obs_mode(int value) {
     if (value < INF_STEP_OUT_FORECAST_MODE_OFF ||
-            value > INF_STEP_OUT_FORECAST_MODE_FAST_STATIC_TILE) {
+            value > INF_STEP_OUT_FORECAST_MODE_FAST_READONLY_MOVE) {
         fprintf(stderr,
-            "inferno: step_out_forecast_obs_mode must be in [0,2], got %d\n",
+            "inferno: step_out_forecast_obs_mode must be in [0,3], got %d\n",
             value);
         abort();
     }
@@ -947,7 +947,6 @@ static uint64_t inf_config_fingerprint(const InfConfig* config) {
     INF_HASH_CONFIG_FIELD(config, &h, supply_milestone_restore_reward_coeff);
     INF_HASH_CONFIG_FIELD(config, &h, death_penalty_coeff);
     INF_HASH_CONFIG_FIELD(config, &h, terminal_penalty_enabled);
-    INF_HASH_CONFIG_FIELD(config, &h, step_out_forecast_obs_enabled);
     INF_HASH_CONFIG_FIELD(config, &h, step_out_forecast_obs_mode);
     INF_HASH_CONFIG_FIELD(config, &h, phase_900_bonus);
     INF_HASH_CONFIG_FIELD(config, &h, phase_600_bonus);
