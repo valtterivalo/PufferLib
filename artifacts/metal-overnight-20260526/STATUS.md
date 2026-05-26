@@ -482,3 +482,17 @@
 - `g2048`: 355,208 SPS versus current accepted baseline, -8.08 percent. Training score stayed 97.855, explicit eval score stayed 49.43.
 - Milestone 04 suite also passed native Metal parity and overlay surface tests. Candidate tracked Metal-owned LOC was 10136.
 - Decision: reject and revert without a second run. The change removed live CPU timing work in the default non-profile path, but `g2048` was far outside the speed and LOC gates.
+
+## 2026-05-26 08:02 EEST
+
+- Starting cleanup cadence pass after the reset-scan and rollout-timing rejections.
+- Scope: no backend code change. Verify the accepted code with the milestone 03 suite, interactive smoke, a dead-code scan, and the current tracked Metal-owned LOC.
+
+## 2026-05-26 08:04 EEST
+
+- Cleanup suite passed on accepted code.
+- `breakout`: 2,294,421 SPS, train score 2.197, explicit eval score 0.0.
+- `g2048`: 385,842 SPS, train score 97.855, explicit eval score 49.43.
+- Native Metal parity and overlay surface tests passed. Current tracked Metal-owned LOC: 10137.
+- Cleanup scan found no uncommitted backend diff and no leftover markers from rejected experiments. Remaining `fallback` hits are the active mask, GEMM, and tile fallback paths.
+- Interactive smoke artifact: `milestone-03-cleanup/20260526T080017+0300-interactive-breakout-cleanup`. It built, loaded `resources/breakout/breakout_weights.bin`, reached raylib 5.5 GLFW initialization, then failed with `Failed to determine Monitor to center Window` and exit code 139. This matches the existing desktop windowing blocker.
