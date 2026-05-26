@@ -332,3 +332,15 @@
 - `breakout` SPS runs: 2,250,520 and 2,274,256. Median versus current accepted baseline: -1.24 percent. Training scores were 2.674 and 2.509, explicit eval score stayed 0.0.
 - `g2048` SPS runs: 353,648 and 356,293. Median versus current accepted baseline: -0.24 percent. Training score stayed 97.855, explicit eval score stayed 49.43.
 - Decision: reject and revert. The cleanup reduced tracked Metal-owned LOC to 10181, but `breakout` missed the 1 percent LOC gate.
+
+## 2026-05-26 04:00 EEST
+
+- Starting eleventh milestone 01 LOC candidate.
+- Root-cause hypothesis: `src/metal/pufferlib.mm` still carries banner comments and obvious section labels that explain file shape rather than invariants. Removing those lines should lower Metal-owned LOC without changing tokens that compile into behavior, dispatch order, RNG state, masks, or learning math. Keep only if end-to-end LOC gates still pass, since the plan requires real benchmark artifacts even for comment-only cleanup.
+
+## 2026-05-26 04:02 EEST
+
+- Tested `pufferlib.mm` banner-comment cleanup twice.
+- `breakout` SPS runs: 2,244,897 and 2,271,970. Median versus current accepted baseline: -1.42 percent. Training scores were 2.634 and 2.502, explicit eval score stayed 0.0.
+- `g2048` SPS runs: 369,367 and 356,003. Median versus current accepted baseline: +1.93 percent. Training score stayed 97.855, explicit eval score stayed 49.43.
+- Decision: reject and revert. The cleanup removed 84 lines and was compile-token neutral, but the benchmark median still missed the milestone 01 LOC gate on `breakout`.
