@@ -456,3 +456,16 @@
 - `g2048` SPS runs: 363,462 and 364,558. Median versus current accepted baseline: -5.80 percent. Training score stayed 97.855, explicit eval score stayed 49.43.
 - Milestone 03 suite also passed native Metal parity and overlay surface tests on both runs. Candidate tracked Metal-owned LOC was 10120.
 - Decision: reject and revert. The wrapper has no direct source caller, but deleting it missed the LOC cleanup gate on `g2048` by a lot, so it does not stay.
+
+## 2026-05-26 07:00 EEST
+
+- Starting milestone 04 reset-scan binding candidate.
+- Root-cause hypothesis: `reset_state=True` is active for the benchmark configs, but reset MinGRU scan kernels still receive checkpoint-only buffers they do not read: forward binds `log_values_buf` as `unused_buf`, backward binds both `state` and `log_values_buf` as unused inputs. Removing those reset-kernel arguments should reduce Metal argument-table writes and shader LOC without changing recurrence math, saved curr/prev buffers, RNG, checkpointing, eval, or learnability.
+
+## 2026-05-26 07:03 EEST
+
+- Tested reset-scan unused-argument removal twice.
+- `breakout` SPS runs: 2,300,996 and 2,288,178. Median versus current accepted baseline: -0.01 percent. Training scores were 2.438 and 2.594, explicit eval score stayed 0.0.
+- `g2048` SPS runs: 361,557 and 355,536. Median versus current accepted baseline: -7.22 percent. Training score stayed 97.855, explicit eval score stayed 49.43.
+- Milestone 04 suite also passed native Metal parity and overlay surface tests on both runs. Candidate tracked Metal-owned LOC was 10136.
+- Decision: reject and revert. The argument-table cleanup was semantically clean and neutral on `breakout`, but `g2048` missed both speed and LOC gates.
