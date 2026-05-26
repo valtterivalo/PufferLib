@@ -344,3 +344,17 @@
 - `breakout` SPS runs: 2,244,897 and 2,271,970. Median versus current accepted baseline: -1.42 percent. Training scores were 2.634 and 2.502, explicit eval score stayed 0.0.
 - `g2048` SPS runs: 369,367 and 356,003. Median versus current accepted baseline: +1.93 percent. Training score stayed 97.855, explicit eval score stayed 49.43.
 - Decision: reject and revert. The cleanup removed 84 lines and was compile-token neutral, but the benchmark median still missed the milestone 01 LOC gate on `breakout`.
+
+## 2026-05-26 04:30 EEST
+
+- Starting twelfth milestone 01 LOC candidate.
+- Root-cause hypothesis: `mtl_sample_logits_expand` is a leftover f32-to-f64 action expansion helper with no source caller and no header declaration. Current rollout code copies f32 actions directly into the env action buffer, so deleting the helper should lower LOC without changing any runtime path.
+
+## 2026-05-26 04:34 EEST
+
+- Tested dead `mtl_sample_logits_expand` removal twice.
+- `breakout` SPS runs: 2,300,542 and 2,297,579. Median versus current accepted baseline: +0.36 percent. Training scores were 2.716 and 2.309, explicit eval score stayed 0.0.
+- `g2048` SPS runs: 384,106 and 356,872. Median versus current accepted baseline: +4.13 percent. Training score stayed 97.855, explicit eval score stayed 49.43.
+- Milestone 01 suite also passed native Metal parity and overlay surface tests on both runs. Current tracked Metal-owned LOC: 10200.
+- Interactive smoke artifacts: `milestone-01-loc-pass/20260526T043138+0300-interactive-breakout` and `milestone-01-loc-pass/20260526T043225+0300-interactive-breakout-pty`. Both built, loaded `resources/breakout/breakout_weights.bin`, and reached raylib 5.5 initialization, then failed in GLFW window centering with `Failed to determine Monitor to center Window` followed by `Segmentation fault: 11`. Treat as a heartbeat windowing-platform blocker unless subagent review says the global interactive gate requires rejecting this change.
+- Decision: keep pending subagent review. The code deletion is not on any runtime path, benchmark and no-render eval gates pass, and the interactive failure occurs after raylib starts in the desktop windowing layer.

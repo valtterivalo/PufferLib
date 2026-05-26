@@ -628,11 +628,6 @@ void mtl_sample_logits_dispatch_to(
   mtl_dispatch_1d(ms, pso, B);
 }
 
-// Expand f32 GPU actions to f64 (call after ensure_gpu_synced).
-void mtl_sample_logits_expand(const float *f32, double *f64, int count) {
-  for (int i = 0; i < count; i++) f64[i] = (double)f32[i];
-}
-
 // Recompute logprobs from CPU-produced logits using GPU fast::exp.
 // Dispatches on the given stream, no sync. The tiny kernel (B threads)
 // completes in ~1us and ensures old_logp matches PPO training precision.
