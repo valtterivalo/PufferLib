@@ -72,3 +72,19 @@
 - Native Metal parity and overlay surface passed in both milestone 02 suites.
 - Interactive smoke artifact: `milestone-02-kernel-consolidation-pass/20260527T014915+0300-interactive-breakout-dispatch-boilerplate`. It built, loaded `resources/breakout/breakout_weights.bin`, reached raylib 5.5 GLFW initialization, then failed with `Failed to determine Monitor to center Window` and exit code `139`, matching the known desktop windowing boundary.
 - Decision: accepted pending subagent review. This is a LOC cleanup with no learnability regression and no measurable throughput regression on the comparable g2048 rerun baseline.
+
+## 2026-05-27 Milestone 03 Shared Dispatch Helper Candidate
+
+- Root-cause hypothesis: milestone 02 proved the dispatch setup helper preserves behavior in `src/metal/kernels.mm`. The same triplet still appears in `src/metal/platform.mm`. Moving the helper to `src/metal/platform.h` and using it in both files should remove more backend duplication without changing MSL source, PSO names, argument binding order, dispatch dimensions, barriers, RNG, optimizer math, or policy data flow.
+- Acceptance gate: run the milestone 03 suite twice for `breakout` and `g2048`, capture interactive smoke through the milestone 03 runner, require median SPS within 1 percent of the accepted baseline or better, keep train and eval comparable, and block commit on subagent review.
+
+## 2026-05-27 Milestone 03 Shared Dispatch Helper Results
+
+- Code change: move `mtl_begin_kernel` from `src/metal/kernels.mm` to `src/metal/platform.h`, then replace the same dispatch setup triplet in `src/metal/platform.mm`. The helper still runs `compute_encoder`, `mtl_pipeline`, and `mtl_set_pso` in that order.
+- LOC: `src/metal/kernels.mm` is `1,504` lines, down from `1,512` after milestone 02. Full `src/metal/platform.mm` is `1,196` lines, down from `1,213`; `src/metal/platform.h` is `294` lines, up from `286`. Kernel scope is `4,533`, down from `4,541`. Live backend scope is `10,072`, down from `10,089`.
+- Static validation passed: `git diff --check`, `bash -n` for the milestone 03 interactive runner, and `PYTHONPATH=$PWD python -m pytest tests/metal/test_overlay_surface.py`.
+- First milestone 03 suite: `breakout` artifact `20260527T015558+0300-breakout` at `3,420,369` SPS, train score `2.294158458709717`, eval score `0.0`; `g2048` artifact `20260527T015609+0300-g2048` at `594,853` SPS, train score `97.85507202148438`, eval score `49.43283462524414`; interactive artifact `20260527T015619+0300-interactive-breakout-cleanup` reached the known GLFW monitor boundary.
+- Second milestone 03 suite: `breakout` artifact `20260527T015635+0300-breakout` at `3,469,139` SPS, train score `2.3981192111968994`, eval score `0.0`; `g2048` artifact `20260527T015646+0300-g2048` at `601,581` SPS, train score `97.85507202148438`, eval score `49.43283462524414`; interactive artifact `20260527T015656+0300-interactive-breakout-cleanup` reached the known GLFW monitor boundary.
+- Medians: `breakout` `3,444,754` SPS, `+14.31%` versus milestone 00 baseline `3,013,517`; `g2048` `598,217` SPS, `-0.09%` versus same-night no-change baseline rerun `598,782`.
+- Native Metal parity and overlay surface passed in both milestone 03 suites.
+- Decision: accepted pending subagent review. This cleanup reduces shared host dispatch boilerplate and stays inside the throughput and learnability gates.

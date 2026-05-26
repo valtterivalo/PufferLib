@@ -710,9 +710,7 @@ static void steel_gemm_dispatch(const char *kernel_name,
                                  float alpha, float beta,
                                  cudaStream_t stream) {
   MetalStream *ms = mtl_resolve_stream(stream);
-  ms->compute_encoder();
-  id<MTLComputePipelineState> pso = mtl_pipeline(kernel_name);
-  mtl_set_pso(ms, pso);
+  auto pso = mtl_begin_kernel(ms, kernel_name);
 
   NSUInteger off_a, off_b, off_c;
   mtl_bind_buffer(ms, mtl_buffer_for_ptr(A, &off_a), off_a, 0);
@@ -860,10 +858,7 @@ static void compute_gemm_ksplit_tn(const float *A, const float *B, float *C,
 
   MetalStream *ms = mtl_resolve_stream(stream);
 
-  // Step 1: K-split GEMM — write partials.
-  ms->compute_encoder();
-  auto pso_ksplit = mtl_pipeline("sgemm_ksplit");
-  mtl_set_pso(ms, pso_ksplit);
+  auto pso_ksplit = mtl_begin_kernel(ms, "sgemm_ksplit");
 
   NSUInteger off_a, off_b, off_p;
   id<MTLBuffer> buf_a = mtl_buffer_for_ptr(A, &off_a);
@@ -887,10 +882,7 @@ static void compute_gemm_ksplit_tn(const float *A, const float *B, float *C,
   // Barrier before reduce.
   mtl_barrier(ms);
 
-  // Step 2: Reduce partials → C.
-  ms->compute_encoder();
-  auto pso_reduce = mtl_pipeline("reduce_ksplit");
-  mtl_set_pso(ms, pso_reduce);
+  auto pso_reduce = mtl_begin_kernel(ms, "reduce_ksplit");
 
   NSUInteger off_c;
   id<MTLBuffer> buf_c = mtl_buffer_for_ptr(C, &off_c);
@@ -911,9 +903,7 @@ static void small_gemm_nt_dispatch(const float *A, const float *B, float *C,
                                     int M, int N, int K,
                                     cudaStream_t stream) {
   MetalStream *ms = mtl_resolve_stream(stream);
-  ms->compute_encoder();
-  id<MTLComputePipelineState> pso = mtl_pipeline("small_gemm_nt_f32");
-  mtl_set_pso(ms, pso);
+  auto pso = mtl_begin_kernel(ms, "small_gemm_nt_f32");
 
   NSUInteger off_a, off_b, off_c;
   id<MTLBuffer> buf_a = mtl_buffer_for_ptr(A, &off_a);
@@ -1098,28 +1088,21 @@ void puf_addmm_nn(PufTensor &a, PufTensor &b, PufTensor &out, float alpha,
     // Metal 4: force visibility of temp writes before scale/axpy reads.
     mtl_barrier(mtl_resolve_stream(stream));
 
-    // Step 2: out *= beta (compute encoder)
     MetalStream *ms = mtl_resolve_stream(stream);
-    ms->compute_encoder();
     int count = M * N;
 
     if (beta != 1.0f) {
-      auto pso = mtl_pipeline("scale_f32");
-      mtl_set_pso(ms, pso);
+      auto pso = mtl_begin_kernel(ms, "scale_f32");
       NSUInteger off_out;
       mtl_bind_buffer(ms, mtl_buffer_for_ptr(out.bytes, &off_out), off_out, 0);
       struct { float alpha; int n; } sp = {beta, count};
       mtl_set_params(ms, sp, 1);
       mtl_dispatch_1d(ms, pso, count);
-      // Ensure scaled out is visible before axpy accumulation.
       mtl_barrier(ms);
-      ms->compute_encoder();
     }
 
-    // Step 3: out += alpha * temp (compute encoder)
     {
-      auto pso = mtl_pipeline("axpy_f32");
-      mtl_set_pso(ms, pso);
+      auto pso = mtl_begin_kernel(ms, "axpy_f32");
       NSUInteger off_out, off_temp;
       mtl_bind_buffer(ms, mtl_buffer_for_ptr(out.bytes, &off_out), off_out, 0);
       mtl_bind_buffer(ms, mtl_buffer_for_ptr(temp, &off_temp), off_temp, 1);

@@ -122,6 +122,14 @@ inline void mtl_set_pso(MetalStream *ms, id<MTLComputePipelineState> pso) {
   [ms->enc setComputePipelineState:pso];
 }
 
+inline id<MTLComputePipelineState> mtl_begin_kernel(MetalStream *ms,
+                                                    const char *name) {
+  ms->compute_encoder();
+  auto pso = mtl_pipeline(name);
+  mtl_set_pso(ms, pso);
+  return pso;
+}
+
 inline void mtl_bind_buffer(MetalStream *ms, id<MTLBuffer> buf,
                             NSUInteger offset, uint32_t index) {
   uint64_t addr = buf.gpuAddress + offset;

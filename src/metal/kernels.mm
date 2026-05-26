@@ -35,14 +35,6 @@ static PufTensor float_tensor_as_puf(const FloatTensor &t) {
   return out;
 }
 
-static id<MTLComputePipelineState> mtl_begin_kernel(MetalStream *ms,
-                                                    const char *name) {
-  ms->compute_encoder();
-  auto pso = mtl_pipeline(name);
-  mtl_set_pso(ms, pso);
-  return pso;
-}
-
 void puf_copy(PufTensor &dst, const PufTensor &src, cudaStream_t stream) {
   assert(dst.numel() == src.numel() && "puf_copy: size mismatch");
   assert(dst.dtype_size == src.dtype_size && "puf_copy: dtype mismatch");
