@@ -1017,10 +1017,6 @@ void mtl_anchor_blend_weights(float *weights, const float *anchor,
 
 static constexpr int kMuonNsIters = 5;
 
-static void muon_addmm_dependency_boundary(cudaStream_t stream) {
-  mtl_ensure_stream_synced(stream);
-}
-
 // ============================================================================
 // Kaiming uniform init (CPU-side, matches CUDA puf_kaiming_init)
 //
@@ -1164,11 +1160,11 @@ void muon_step(Muon *m, cudaStream_t stream) {
         puf_copy(gram, A, stream);
         mtl_barrier(ms);
         puf_addmm_nn(A, A, gram, c, b, stream);
-        muon_addmm_dependency_boundary(stream);
+        mtl_barrier(ms);
         puf_copy(dst, src, stream);
         mtl_barrier(ms);
         puf_addmm_nn(gram, src, dst, 1.0f, a, stream);
-        muon_addmm_dependency_boundary(stream);
+        mtl_barrier(ms);
       }
 
       PufTensor &result_precision = (kMuonNsIters % 2 == 0) ? x : tmp;
