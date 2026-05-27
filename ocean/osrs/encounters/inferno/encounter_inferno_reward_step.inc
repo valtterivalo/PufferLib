@@ -112,6 +112,15 @@ static float inf_zuk_healer_attack_shape_reward(
             (float)s->zuk_healer_mage_attack_fires_this_tick;
 }
 
+static float inf_offensive_prayer_shape_reward(
+    const InfernoState* s,
+    const InfernoContext* ctx
+) {
+    return s->offensive_prayer_correct_this_tick
+        ? ctx->config.offensive_prayer_reward_coeff
+        : 0.0f;
+}
+
 static float inf_compute_joseph_reward(
     const InfernoState* s,
     const InfernoContext* ctx,
@@ -140,6 +149,7 @@ static float inf_compute_joseph_reward(
     }
     reward -= ctx->config.shield_penalty_coeff * s->shield_damage_this_tick;
     reward += inf_zuk_healer_attack_shape_reward(s, ctx);
+    reward += inf_offensive_prayer_shape_reward(s, ctx);
     return reward;
 }
 
@@ -215,6 +225,7 @@ static float inf_compute_reward_ctx(InfernoState* s, const InfernoContext* ctx) 
     }
     reward += ctx->config.tag_reward_coeff * (float)s->healer_tags_this_tick;
     reward += inf_zuk_healer_attack_shape_reward(s, ctx);
+    reward += inf_offensive_prayer_shape_reward(s, ctx);
     if (!tags_first_gate) {
         reward += ctx->config.shield_tag_reward_coeff * (float)s->shield_tags_this_tick;
         reward += ctx->config.zuk_untagged_healer_target_bonus_coeff *
@@ -408,6 +419,7 @@ static void inf_step_ctx(EncounterState* state, EncounterContext* context, const
     s->hp_restored_this_tick = 0.0f;
     s->hp_restored_jad_this_tick = 0.0f;
     s->hp_restored_zuk_this_tick = 0.0f;
+    s->offensive_prayer_correct_this_tick = 0;
     s->prayer_correct_this_tick = 0;
     s->off_prayer_hits_this_tick = 0;
     s->tick_styles_fired = 0;

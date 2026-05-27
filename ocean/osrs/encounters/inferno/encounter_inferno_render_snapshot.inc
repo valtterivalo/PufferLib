@@ -112,6 +112,10 @@ static void inf_put_float_ctx(
     (void)state;
     InfernoContext* ctx = context ? (InfernoContext*)context : inf_legacy_context();
     if (strcmp(key, "damage_reward_coeff") == 0) ctx->config.damage_reward_coeff = value;
+    else if (strcmp(key, "offensive_prayer_reward_coeff") == 0) {
+        inf_require_nonnegative_float_config(key, value);
+        ctx->config.offensive_prayer_reward_coeff = value;
+    }
     else if (strcmp(key, "shield_penalty_coeff") == 0) ctx->config.shield_penalty_coeff = value;
     else if (strcmp(key, "tag_reward_coeff") == 0) ctx->config.tag_reward_coeff = value;
     else if (strcmp(key, "shield_tag_reward_coeff") == 0) ctx->config.shield_tag_reward_coeff = value;
@@ -257,6 +261,16 @@ static void* inf_get_log_ctx(EncounterState* state, EncounterContext* context) {
         ctx->log->wave += (float)s->wave;
         ctx->log->prayer_correct += (float)s->total_prayer_correct;
         ctx->log->prayer_total += (float)s->total_npc_attacks;
+        ctx->log->offensive_prayer_attacks +=
+            (float)s->total_offensive_prayer_attacks;
+        ctx->log->offensive_prayer_correct +=
+            (float)s->total_offensive_prayer_correct;
+        for (int i = 0; i < 4; i++) {
+            ctx->log->offensive_prayer_attacks_by_style[i] +=
+                (float)s->offensive_prayer_attacks_by_style[i];
+            ctx->log->offensive_prayer_correct_by_style[i] +=
+                (float)s->offensive_prayer_correct_by_style[i];
+        }
         ctx->log->idle_ticks += (float)s->total_idle_ticks;
         ctx->log->brews_used += (float)s->total_brews_used;
         ctx->log->blood_healed += (float)s->total_blood_healed;
@@ -967,6 +981,7 @@ static uint64_t inf_config_fingerprint(const InfConfig* config) {
     INF_HASH_CONFIG_FIELD(config, &h, loadout_profile_mode);
     INF_HASH_CONFIG_FIELD(config, &h, budget_loadout_fraction);
     INF_HASH_CONFIG_FIELD(config, &h, damage_reward_coeff);
+    INF_HASH_CONFIG_FIELD(config, &h, offensive_prayer_reward_coeff);
     INF_HASH_CONFIG_FIELD(config, &h, shield_penalty_coeff);
     INF_HASH_CONFIG_FIELD(config, &h, tag_reward_coeff);
     INF_HASH_CONFIG_FIELD(config, &h, late_start_supply_profile_scale);

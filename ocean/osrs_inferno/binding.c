@@ -1249,6 +1249,16 @@ void c_step(Env* env) {
         env->log.wave += (float)s->wave;
         env->log.prayer_correct += (float)s->total_prayer_correct;
         env->log.prayer_total += (float)s->total_npc_attacks;
+        env->log.offensive_prayer_attacks +=
+            (float)s->total_offensive_prayer_attacks;
+        env->log.offensive_prayer_correct +=
+            (float)s->total_offensive_prayer_correct;
+        for (int i = 0; i < 4; i++) {
+            env->log.offensive_prayer_attacks_by_style[i] +=
+                (float)s->offensive_prayer_attacks_by_style[i];
+            env->log.offensive_prayer_correct_by_style[i] +=
+                (float)s->offensive_prayer_correct_by_style[i];
+        }
         env->log.idle_ticks += (float)s->total_idle_ticks;
         env->log.brews_used += (float)s->total_brews_used;
         env->log.blood_healed += (float)s->total_blood_healed;
@@ -1871,6 +1881,7 @@ void my_init(Env* env, Dict* kwargs) {
     static const char* const optional_float_keys[] = {
         "shield_tag_reward_coeff",
         "budget_loadout_fraction",
+        "offensive_prayer_reward_coeff",
         "death_penalty_coeff",
         "phase_900_bonus", "phase_600_bonus", "phase_300_bonus",
         "shield_penalty_episode_cap",
@@ -2259,6 +2270,28 @@ void my_log(Log* log, Dict* out) {
     float prayer_rate = (log->prayer_total > 0.0f)
         ? log->prayer_correct / log->prayer_total : 0.0f;
     dict_set(out, "prayer_correct_rate", prayer_rate);
+    float offensive_prayer_rate = log->offensive_prayer_attacks > 0.0f
+        ? log->offensive_prayer_correct / log->offensive_prayer_attacks : 0.0f;
+    float offensive_prayer_wrong_rate = log->offensive_prayer_attacks > 0.0f
+        ? 1.0f - offensive_prayer_rate : 0.0f;
+    dict_set(out, "offensive_prayer_correct_rate", offensive_prayer_rate);
+    dict_set(out, "offensive_prayer_attacks", log->offensive_prayer_attacks);
+    dict_set(out, "offensive_prayer_wrong_rate", offensive_prayer_wrong_rate);
+    dict_set(out, "offensive_prayer_melee_correct_rate",
+        log->offensive_prayer_attacks_by_style[ATTACK_STYLE_MELEE] > 0.0f
+            ? log->offensive_prayer_correct_by_style[ATTACK_STYLE_MELEE] /
+                log->offensive_prayer_attacks_by_style[ATTACK_STYLE_MELEE]
+            : 0.0f);
+    dict_set(out, "offensive_prayer_ranged_correct_rate",
+        log->offensive_prayer_attacks_by_style[ATTACK_STYLE_RANGED] > 0.0f
+            ? log->offensive_prayer_correct_by_style[ATTACK_STYLE_RANGED] /
+                log->offensive_prayer_attacks_by_style[ATTACK_STYLE_RANGED]
+            : 0.0f);
+    dict_set(out, "offensive_prayer_magic_correct_rate",
+        log->offensive_prayer_attacks_by_style[ATTACK_STYLE_MAGIC] > 0.0f
+            ? log->offensive_prayer_correct_by_style[ATTACK_STYLE_MAGIC] /
+                log->offensive_prayer_attacks_by_style[ATTACK_STYLE_MAGIC]
+            : 0.0f);
     dict_set(out, "brews_remaining", log->brews_remaining);
     dict_set(out, "restores_remaining", log->restores_remaining);
     dict_set(out, "prayer_at_death", log->prayer_at_death);

@@ -1266,6 +1266,147 @@ static void test_zuk_healer_attack_shape_reward_applies_in_joseph_mode(void) {
         inf_compute_reward(&state), 0.60f, 0.0001f);
 }
 
+static void test_offensive_prayer_reward_shapes_normal_and_joseph_mode(void) {
+    printf("--- offensive prayer reward shapes normal and Joseph mode ---\n");
+
+    InfernoState normal = make_test_state(24, 24);
+    inf_put_float((EncounterState*)&normal, "offensive_prayer_reward_coeff", 0.03f);
+    normal.offensive_prayer_correct_this_tick = 1;
+
+    ASSERT_FLOAT_NEAR("normal reward includes correct offensive prayer shape",
+        inf_compute_reward(&normal), 0.03f, 0.0001f);
+
+    InfernoState wrong = make_test_state(24, 24);
+    inf_put_float((EncounterState*)&wrong, "offensive_prayer_reward_coeff", 0.03f);
+
+    ASSERT_FLOAT_NEAR("wrong offensive prayer receives no shape",
+        inf_compute_reward(&wrong), 0.0f, 0.0001f);
+
+    InfernoState joseph = make_test_state(24, 24);
+    test_config()->joseph_reward_mode = 1;
+    inf_put_float((EncounterState*)&joseph, "offensive_prayer_reward_coeff", 0.03f);
+    joseph.offensive_prayer_correct_this_tick = 1;
+
+    ASSERT_FLOAT_NEAR("Joseph reward includes correct offensive prayer shape",
+        inf_compute_reward(&joseph), 0.03f, 0.0001f);
+}
+
+static void init_ranged_offensive_prayer_test_state(InfernoState* state) {
+    init_spell_cast_test_state(state, INF_NPC_NIBBLER);
+    state->weapon_set = INF_GEAR_BP;
+    state->player.autocast_enabled = 0;
+    state->npcs[0].x = 13;
+    state->npcs[0].y = 10;
+    encounter_apply_loadout(&state->player, INF_MAX_RANGE_FAST_LOADOUT, GEAR_RANGED);
+    encounter_compute_loadout_stats(INF_MAX_RANGE_FAST_LOADOUT, ATTACK_STYLE_RANGED,
+        state->player.offensive_prayer, 99, FIGHT_STYLE_RAPID, 0,
+        &state->loadout_stats[INF_GEAR_BP]);
+    inf_refresh_current_obs_slots(state);
+}
+
+static void test_offensive_prayer_attack_events_count_real_attacks(void) {
+    printf("--- offensive prayer attack events count real attacks ---\n");
+
+    InfernoState ranged = make_test_state(10, 10);
+    init_ranged_offensive_prayer_test_state(&ranged);
+    ranged.player.offensive_prayer = OFFENSIVE_PRAYER_RIGOUR;
+    fire_player_action_at_slot_zero(&ranged, 0);
+
+    ASSERT_INT_EQ("ranged attack fires", ranged.player_attacked_this_tick, 1);
+    ASSERT_INT_EQ("ranged attack counted", ranged.total_offensive_prayer_attacks, 1);
+    ASSERT_INT_EQ("ranged Rigour counted correct", ranged.total_offensive_prayer_correct, 1);
+    ASSERT_INT_EQ("ranged style total counted",
+        ranged.offensive_prayer_attacks_by_style[ATTACK_STYLE_RANGED], 1);
+    ASSERT_INT_EQ("ranged style correct counted",
+        ranged.offensive_prayer_correct_by_style[ATTACK_STYLE_RANGED], 1);
+
+    InfernoState wrong_ranged = make_test_state(10, 10);
+    init_ranged_offensive_prayer_test_state(&wrong_ranged);
+    wrong_ranged.player.offensive_prayer = OFFENSIVE_PRAYER_PIETY;
+    fire_player_action_at_slot_zero(&wrong_ranged, 0);
+
+    ASSERT_INT_EQ("wrong ranged attack counted",
+        wrong_ranged.total_offensive_prayer_attacks, 1);
+    ASSERT_INT_EQ("ranged with Piety counted wrong",
+        wrong_ranged.total_offensive_prayer_correct, 0);
+
+    InfernoState magic = make_test_state(10, 10);
+    init_spell_cast_test_state(&magic, INF_NPC_NIBBLER);
+    magic.player.offensive_prayer = OFFENSIVE_PRAYER_AUGURY;
+    fire_player_action_at_slot_zero(&magic, 1);
+
+    ASSERT_INT_EQ("magic attack counted", magic.total_offensive_prayer_attacks, 1);
+    ASSERT_INT_EQ("magic Augury counted correct", magic.total_offensive_prayer_correct, 1);
+    ASSERT_INT_EQ("magic style total counted",
+        magic.offensive_prayer_attacks_by_style[ATTACK_STYLE_MAGIC], 1);
+    ASSERT_INT_EQ("magic style correct counted",
+        magic.offensive_prayer_correct_by_style[ATTACK_STYLE_MAGIC], 1);
+
+    InfernoState wrong_magic = make_test_state(10, 10);
+    init_spell_cast_test_state(&wrong_magic, INF_NPC_NIBBLER);
+    wrong_magic.player.offensive_prayer = OFFENSIVE_PRAYER_RIGOUR;
+    fire_player_action_at_slot_zero(&wrong_magic, 2);
+
+    ASSERT_INT_EQ("magic with Rigour counted wrong",
+        wrong_magic.total_offensive_prayer_correct, 0);
+}
+
+static void test_offensive_prayer_barrage_aoe_counts_once(void) {
+    printf("--- offensive prayer barrage AoE counts once ---\n");
+
+    InfernoState state = make_test_state(10, 10);
+    init_spell_cast_test_state(&state, INF_NPC_NIBBLER);
+    state.player.offensive_prayer = OFFENSIVE_PRAYER_AUGURY;
+    state.npcs[1] = make_test_npc(INF_NPC_NIBBLER, 17, 10, INF_NPC_STATS[INF_NPC_NIBBLER].size);
+    state.npcs[1].active = 1;
+    state.npcs[1].hp = state.npcs[1].max_hp = INF_NPC_STATS[INF_NPC_NIBBLER].hp;
+    inf_refresh_current_obs_slots(&state);
+
+    fire_player_action_at_slot_zero(&state, 1);
+
+    ASSERT_INT_EQ("barrage attack fires", state.player_attacked_this_tick, 1);
+    ASSERT_INT_EQ("barrage counts one offensive prayer event",
+        state.total_offensive_prayer_attacks, 1);
+    ASSERT_INT_EQ("barrage with Augury counts correct",
+        state.total_offensive_prayer_correct, 1);
+}
+
+static void test_offensive_prayer_no_attack_no_event(void) {
+    printf("--- offensive prayer no attack no event ---\n");
+
+    InfernoState state = make_test_state(10, 10);
+    init_spell_cast_test_state(&state, INF_NPC_NIBBLER);
+    state.player.offensive_prayer = OFFENSIVE_PRAYER_AUGURY;
+    state.player.attack_timer = 3;
+
+    int actions[INF_NUM_ACTION_HEADS];
+    memset(actions, 0, sizeof(actions));
+    actions[INF_HEAD_TARGET] = inf_action_target_for_npc(&state, 0);
+    inf_tick_player(&state, actions, 1);
+
+    ASSERT_INT_EQ("cooldown prevents attack", state.player_attacked_this_tick, 0);
+    ASSERT_INT_EQ("cooldown produces no offensive prayer event",
+        state.total_offensive_prayer_attacks, 0);
+    ASSERT_INT_EQ("cooldown produces no correct event",
+        state.offensive_prayer_correct_this_tick, 0);
+}
+
+static void test_offensive_prayer_melee_maps_to_piety(void) {
+    printf("--- offensive prayer melee maps to Piety ---\n");
+
+    InfernoState state = make_test_state(10, 10);
+    state.player.offensive_prayer = OFFENSIVE_PRAYER_PIETY;
+    inf_record_offensive_prayer_attack(&state, ATTACK_STYLE_MELEE);
+
+    ASSERT_INT_EQ("melee requires Piety",
+        inf_required_offensive_prayer_for_style(ATTACK_STYLE_MELEE),
+        OFFENSIVE_PRAYER_PIETY);
+    ASSERT_INT_EQ("melee Piety counted correct",
+        state.total_offensive_prayer_correct, 1);
+    ASSERT_INT_EQ("melee style counted",
+        state.offensive_prayer_attacks_by_style[ATTACK_STYLE_MELEE], 1);
+}
+
 static void test_joseph_reward_mode_damps_healed_zuk_damage(void) {
     printf("--- Joseph reward mode damps healed Zuk damage ---\n");
 
@@ -1625,6 +1766,7 @@ static void test_inferno_reset_preserves_reward_config(void) {
 
     inf_put_float(raw_state, "supply_milestone_brew_reward_coeff", 0.001f);
     inf_put_float(raw_state, "supply_milestone_restore_reward_coeff", 0.002f);
+    inf_put_float(raw_state, "offensive_prayer_reward_coeff", 0.009f);
     inf_put_float(raw_state, "post_healer_zuk_damage_coeff", 0.003f);
     inf_put_float(raw_state, "zuk_healer_phase_hp_delta_coeff", 0.004f);
     inf_put_float(raw_state, "zuk_untagged_healer_tick_penalty_coeff", 0.005f);
@@ -1646,6 +1788,8 @@ static void test_inferno_reset_preserves_reward_config(void) {
         test_config()->supply_milestone_brew_reward_coeff, 0.001f, 1e-6f);
     ASSERT_FLOAT_NEAR("supply milestone restore reward coefficient",
         test_config()->supply_milestone_restore_reward_coeff, 0.002f, 1e-6f);
+    ASSERT_FLOAT_NEAR("offensive prayer reward coefficient",
+        test_config()->offensive_prayer_reward_coeff, 0.009f, 1e-6f);
     ASSERT_FLOAT_NEAR("post-healer Zuk damage coefficient",
         test_config()->post_healer_zuk_damage_coeff, 0.003f, 1e-6f);
     ASSERT_FLOAT_NEAR("Zuk healer-phase HP delta coefficient",
@@ -7970,6 +8114,41 @@ static void test_inferno_binding_forwards_supply_milestone_rewards(void) {
         "supply_milestone_restore_reward_coeff = 0.0");
 }
 
+static void test_inferno_binding_forwards_offensive_prayer_reward(void) {
+    printf("--- inferno binding forwards offensive prayer reward ---\n");
+
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "offensive prayer optional float",
+        "ocean/osrs_inferno/binding.c",
+        "optional_float_keys[]",
+        "};",
+        "\"offensive_prayer_reward_coeff\"");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "offensive prayer default config",
+        "config/ocean/osrs_inferno.ini",
+        "[env]",
+        "[vec]",
+        "offensive_prayer_reward_coeff = 0.0");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "offensive prayer sweep config",
+        "config/ocean/osrs_inferno.ini",
+        "[sweep.env.offensive_prayer_reward_coeff]",
+        "[sweep.env.shield_penalty_coeff]",
+        "max = 0.04");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "offensive prayer sweep only",
+        "config/ocean/osrs_inferno.ini",
+        "sweep_only =",
+        "[sweep.train.total_timesteps]",
+        "offensive_prayer_reward_coeff");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "offensive prayer correct metric",
+        "ocean/osrs_inferno/binding.c",
+        "offensive_prayer_correct_rate",
+        "brews_remaining",
+        "offensive_prayer_magic_correct_rate");
+}
+
 static void test_inferno_binding_forwards_curriculum_supply_config(void) {
     printf("--- inferno binding forwards curriculum supply config ---\n");
 
@@ -8356,6 +8535,11 @@ int main(void) {
     test_zuk_healer_tags_first_reward_mode_resumes_after_all_tags();
     test_joseph_reward_mode_pays_tags_while_healers_heal();
     test_zuk_healer_attack_shape_reward_applies_in_joseph_mode();
+    test_offensive_prayer_reward_shapes_normal_and_joseph_mode();
+    test_offensive_prayer_attack_events_count_real_attacks();
+    test_offensive_prayer_barrage_aoe_counts_once();
+    test_offensive_prayer_no_attack_no_event();
+    test_offensive_prayer_melee_maps_to_piety();
     test_joseph_reward_mode_damps_healed_zuk_damage();
     test_jad_damage_reward_pauses_while_jad_healers_heal();
     test_jad_healer_damage_never_gets_damage_reward();
@@ -8526,6 +8710,7 @@ int main(void) {
     test_inferno_binding_forwards_safe_target_reward_coeff();
     test_inferno_binding_forwards_healer_attack_shape_coeffs();
     test_inferno_binding_forwards_supply_milestone_rewards();
+    test_inferno_binding_forwards_offensive_prayer_reward();
     test_inferno_binding_forwards_curriculum_supply_config();
     test_inferno_binding_forwards_post_healer_set_rewards();
     test_inferno_binding_forwards_joseph_reward_mode();

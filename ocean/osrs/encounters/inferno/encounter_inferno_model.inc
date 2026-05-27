@@ -645,6 +645,7 @@ typedef struct {
     InfLoadoutProfileMode loadout_profile_mode;
     float budget_loadout_fraction;
     float damage_reward_coeff;
+    float offensive_prayer_reward_coeff;
     float shield_penalty_coeff;
     float tag_reward_coeff;
     float late_start_supply_profile_scale;
@@ -774,6 +775,7 @@ typedef struct {
     float damage_received_this_tick;
     float hp_restored_this_tick;
     float hp_restored_zuk_this_tick;
+    int offensive_prayer_correct_this_tick;
     int prayer_correct_this_tick;  /* count of NPC attacks blocked by prayer this tick */
     int wave_completed_this_tick;
     int pillar_lost_this_tick;     /* -1 = none, 0-2 = which pillar was destroyed */
@@ -797,6 +799,10 @@ typedef struct {
     int total_prayer_correct;  /* times prayer blocked an NPC attack */
     int total_npc_attacks;     /* total NPC attacks on player (for prayer_correct_rate) */
     int total_unavoidable_off; /* off-prayer hits where a different style was correctly prayed */
+    int total_offensive_prayer_attacks;
+    int total_offensive_prayer_correct;
+    int offensive_prayer_attacks_by_style[4];
+    int offensive_prayer_correct_by_style[4];
     int off_prayer_hits_this_tick;
     /* per-tick tracking for multi-style analysis */
     int tick_styles_fired;     /* bitmask of styles that fired this tick (bit0=mel,1=rng,2=mag) */
