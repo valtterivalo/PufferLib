@@ -33,6 +33,17 @@ static void inf_put_int_ctx(
     else if (strcmp(key, "terminal_penalty_enabled") == 0)
         ctx->config.terminal_penalty_enabled =
             encounter_require_binary_config("inferno", key, value);
+    else if (strcmp(key, "curriculum_agent") == 0)
+        ctx->config.curriculum_agent =
+            encounter_require_binary_config("inferno", key, value);
+    else if (strcmp(key, "curriculum_supply_jitter_mode") == 0) {
+        inf_require_valid_curriculum_supply_mode(key, value);
+        ctx->config.curriculum_supply_jitter_mode = value;
+    }
+    else if (strcmp(key, "curriculum_no_brew_mode") == 0) {
+        inf_require_valid_curriculum_supply_mode(key, value);
+        ctx->config.curriculum_no_brew_mode = value;
+    }
     else if (strcmp(key, "step_out_forecast_obs_enabled") == 0) {
         int enabled = encounter_require_binary_config("inferno", key, value);
         ctx->config.step_out_forecast_obs_enabled = enabled;
@@ -115,6 +126,22 @@ static void inf_put_float_ctx(
     else if (strcmp(key, "late_start_supply_profile_scale") == 0) {
         inf_require_valid_supply_scale(value);
         ctx->config.late_start_supply_profile_scale = value;
+    }
+    else if (strcmp(key, "curriculum_supply_shared_jitter") == 0) {
+        inf_require_unit_interval_float_config(key, value);
+        ctx->config.curriculum_supply_shared_jitter = value;
+    }
+    else if (strcmp(key, "curriculum_supply_brew_jitter") == 0) {
+        inf_require_unit_interval_float_config(key, value);
+        ctx->config.curriculum_supply_brew_jitter = value;
+    }
+    else if (strcmp(key, "curriculum_supply_restore_jitter") == 0) {
+        inf_require_unit_interval_float_config(key, value);
+        ctx->config.curriculum_supply_restore_jitter = value;
+    }
+    else if (strcmp(key, "curriculum_no_brew_frac") == 0) {
+        inf_require_unit_interval_float_config(key, value);
+        ctx->config.curriculum_no_brew_frac = value;
     }
     else if (strcmp(key, "budget_loadout_fraction") == 0) {
         inf_require_valid_budget_loadout_fraction(value);
@@ -943,6 +970,13 @@ static uint64_t inf_config_fingerprint(const InfConfig* config) {
     INF_HASH_CONFIG_FIELD(config, &h, shield_penalty_coeff);
     INF_HASH_CONFIG_FIELD(config, &h, tag_reward_coeff);
     INF_HASH_CONFIG_FIELD(config, &h, late_start_supply_profile_scale);
+    INF_HASH_CONFIG_FIELD(config, &h, curriculum_agent);
+    INF_HASH_CONFIG_FIELD(config, &h, curriculum_supply_jitter_mode);
+    INF_HASH_CONFIG_FIELD(config, &h, curriculum_supply_shared_jitter);
+    INF_HASH_CONFIG_FIELD(config, &h, curriculum_supply_brew_jitter);
+    INF_HASH_CONFIG_FIELD(config, &h, curriculum_supply_restore_jitter);
+    INF_HASH_CONFIG_FIELD(config, &h, curriculum_no_brew_mode);
+    INF_HASH_CONFIG_FIELD(config, &h, curriculum_no_brew_frac);
     INF_HASH_CONFIG_FIELD(config, &h, supply_milestone_brew_reward_coeff);
     INF_HASH_CONFIG_FIELD(config, &h, supply_milestone_restore_reward_coeff);
     INF_HASH_CONFIG_FIELD(config, &h, death_penalty_coeff);
