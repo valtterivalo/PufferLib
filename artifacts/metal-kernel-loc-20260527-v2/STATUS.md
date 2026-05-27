@@ -164,3 +164,21 @@
 - Overlay surface test passed.
 - Interactive smoke artifact: `milestone-04-second-kernel-loc/20260527T084446+0300-interactive-breakout-second-kernel-loc`. It built, invoked eval with `resources/breakout/breakout_weights.bin`, reached raylib 5.5 GLFW initialization, then failed with `Failed to determine Monitor to center Window` and exit code `139`, matching the known desktop windowing boundary.
 - Decision: accepted pending subagent review. This is a source LOC cleanup with no executable behavior change and repeated runtime medians inside the LOC gate.
+
+## 2026-05-27 08:56 EEST
+
+- Milestone 05 final audit failed for the committed milestone 04 prose cleanup.
+- First final audit run failed on `g2048`: clean committed median `596,486.5` SPS versus required `598,793.085` SPS from milestone 04.
+- Ran one full final-audit rerun with the failed clean samples kept in the same cohort. The combined clean cohort still failed:
+  - `breakout`: four-run median `3,479,308.5` SPS versus milestone 04 median `3,421,539.5`, `+1.6883920235321037%`; train score `2.4856642484664917`, eval score `0.0`.
+  - `g2048`: four-run median `596,477.5` SPS versus milestone 04 median `604,841.5`, `-1.3828416204906602%`; train score `97.85507202148438`, eval score `49.43283462524414`.
+- Final audit artifacts: `artifacts/metal-kernel-loc-20260527-v2/milestone-05-final-audit`.
+- GPU-inference smoke, native parity, and overlay ran before the final-audit median gate failed on both attempts.
+- Interactive smoke did not run in milestone 05 because the median gate stopped both final-audit suite attempts first.
+- Decision: rejected the prose cleanup after final audit. Restored `src/metal/kernels.mm`, `src/metal/platform.mm`, and `src/metal/shader_src.h` to the pre-cleanup source state.
+- Current net source LOC after restore:
+  - `src/metal/shader_src.h`: `2809` lines.
+  - `src/metal/kernels.mm`: `1586` lines.
+  - `src/metal/platform.mm`: `1213` full-file lines, tensor-ops shader block `216`.
+  - Kernel scope total: `4611` lines, net `0` versus baseline.
+  - Backend scope total: `10174` lines, net `0` versus baseline.
