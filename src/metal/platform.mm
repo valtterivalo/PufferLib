@@ -12,11 +12,6 @@
 static MetalContext g_ctx = {};
 static std::mutex g_pipeline_mutex;
 
-// ============================================================================
-// Metal 4 tensor_ops GEMM — MSL source for JIT compilation.
-// Separate library (needs metal_tensor + MetalPerformancePrimitives includes).
-// ============================================================================
-
 static const char *get_tensor_ops_shader_source() {
   return R"METAL(
 #include <metal_stdlib>

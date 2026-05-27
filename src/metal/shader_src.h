@@ -129,11 +129,6 @@ inline float philox_normal(float u1, float u2) {
     return sqrt(-2.0f * log(u1)) * cos(2.0f * M_PI_F * u2);
 }
 
-// mingru_gate_inference: fused chunk + tilde_relu + lerp + highway output gate
-// combined is (B, 3*H) = [hidden, gate, proj], state is (B, H)
-// x_in is (B, H) = input before projection
-// out = sigmoid(proj) * mingru_out + (1 - sigmoid(proj)) * x_in
-// next_state = mingru_out
 struct MingruGateParams {
     int H;
     int B;
@@ -1854,13 +1849,6 @@ kernel void cast_u8_to_f32(
     if ((int)idx < p.n) dst[idx] = float(src[idx]);
 }
 
-// ============================================================================
-// Section 20: Tiled GEMM — C = alpha * op(A) @ op(B) + beta * C
-//
-// 64x64 tiled simdgroup_matrix GEMM for f32. Supports NT, NN, TN layouts
-// via trans_a/trans_b parameters. Runs on the compute encoder.
-// ============================================================================
-
 struct GemmParams {
     int M;       // result rows
     int N;       // result columns
@@ -1879,15 +1867,6 @@ constant int BN = 32;   // tile cols
 constant int BK = 16;   // tile K dimension
 constant int TM = 4;    // per-thread tile rows
 constant int TN = 4;    // per-thread tile cols
-
-// ============================================================================
-// Section 22: K-split GEMM — for tall-K backward weight-gradient GEMMs
-//
-// When M and N are small but K is large (e.g. M=128, N=128, K=32768),
-// regular sgemm_reg has too few threadgroups (M/32 * N/32 = 16). K-split
-// partitions K across multiple TGs in the Z axis, writing partial sums to
-// a scratch buffer. A second kernel reduces the partials into C.
-// ============================================================================
 
 kernel void sgemm_ksplit(
     device const float* A          [[buffer(0)]],
@@ -2102,20 +2081,6 @@ kernel void mingru_scan_backward_reset_fp16(
         combined, input, curr_buf, prev_buf, reset, p, idx);
 }
 
-// ============================================================================
-// Section 26: Steel GEMM — C = alpha * op(A) @ op(B) + beta * C
-//
-// MLX-inspired 64x64 tiled GEMM using simdgroup_matrix (Apple Silicon M3+).
-// 4 simdgroups in 2x2 layout (128 threads), each computing 32x32 output
-// via a 4x4 grid of 8x8 simdgroup_matrix multiply-accumulate operations.
-//
-// Hot loop uses direct device memory loads (ThunderMittens-validated:
-// Apple Silicon's L2 cache provides effective data reuse without explicit
-// threadgroup staging, eliminating barrier overhead). K-remainder and edge
-// tile stores use threadgroup fallback.
-//
-// ============================================================================
-
 constant int STEEL_BM = 64;
 constant int STEEL_BN = 64;
 constant int STEEL_WM = 2;
@@ -2123,6 +2088,7 @@ constant int STEEL_WN = 2;
 constant int STEEL_TM = STEEL_BM / (8 * STEEL_WM);
 constant int STEEL_TN = STEEL_BN / (8 * STEEL_WN);
 
+// Direct device loads beat threadgroup staging here because Apple Silicon L2 handles tile reuse.
 template <typename T, typename Frag, bool StoreHalf>
 inline void steel_gemm_body(
     device const T* A,
@@ -2280,10 +2246,6 @@ kernel void steel_gemm(
     steel_gemm_body<float, simdgroup_float8x8, false>(A, B, C, p, smem, tgid, sgid, lane);
 }
 
-// Used when N doesn't meet tensor_ops alignment (N%32!=0).
-// One threadgroup per output row, threads partition N columns.
-// C(M,N) = A(M,K) @ B(N,K)^T, all row-major.
-
 struct SmallGemmParams {
     uint N;
     uint K;
@@ -2297,7 +2259,6 @@ kernel void small_gemm_nt_f32(
     uint tgid [[threadgroup_position_in_grid]],
     uint tid  [[thread_index_in_threadgroup]])
 {
-    // tgid = output row, tid = output column
     uint m = tgid;
     if (tid >= p.N) return;
 
@@ -2305,27 +2266,17 @@ kernel void small_gemm_nt_f32(
     const device float* b_row = B + tid * p.K;
 
     float sum = 0.0f;
-    // float4 vectorized accumulation (K must be multiple of 4)
     uint K4 = p.K & ~3u;
     for (uint k = 0; k < K4; k += 4) {
         float4 a4 = *reinterpret_cast<const device float4*>(a_row + k);
         float4 b4 = *reinterpret_cast<const device float4*>(b_row + k);
         sum += dot(a4, b4);
     }
-    // handle remainder (K not multiple of 4)
     for (uint k = K4; k < p.K; k++)
         sum += a_row[k] * b_row[k];
 
     C[m * p.N + tid] = sum;
 }
-
-// ============================================================================
-// Section 27: Steel GEMM fp16 — half I/O, float accumulation
-//
-// Same 64x64 tiled GEMM as steel_gemm but with half-precision inputs/outputs.
-// Uses simdgroup_half8x8 for loads, simdgroup_float8x8 for accumulation
-// (mixed-precision multiply_accumulate). Stores back as half.
-// ============================================================================
 
 kernel void steel_gemm_f16(
     device const half* A       [[buffer(0)]],

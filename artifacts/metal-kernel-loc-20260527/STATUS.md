@@ -270,3 +270,24 @@
 - Medians: `breakout` three-run median `3,405,731` SPS, `-1.26%` versus milestone 04g accepted median `3,449,074`; `g2048` two-run median `596,447` SPS, `+0.07%` versus milestone 04g accepted median `596,033`.
 - Native Metal parity and overlay surface passed in both milestone 04i suites.
 - Decision: rejected. The candidate exceeded the 1 percent breakout SPS gate, so `src/metal/shader_src.h` and `src/metal/kernels.mm` were restored to the accepted 04g state. Only rejection artifacts, runner scripts, overlay allowlist, and this status entry remain for audit.
+
+## 2026-05-27 Milestone 04j Kernel Prose Cleanup Candidate
+
+- Root-cause hypothesis: after the real kernel consolidation passes, the Metal kernel scope still carries stale section banners and comments that repeat function names, tensor shapes, or obvious loop roles. Deleting those lines should reduce source LOC without changing executable MSL or C++ control flow. The one retained Steel GEMM comment names a non-obvious optimization invariant: direct device loads beat threadgroup staging here because Apple Silicon L2 handles tile reuse.
+- Candidate code change: delete redundant kernel prose in `src/metal/shader_src.h`, `src/metal/kernels.mm`, and the tensor-ops source preamble in `src/metal/platform.mm`; add dedicated milestone 04j runners and exact overlay allowlist paths.
+- LOC before validation: `src/metal/shader_src.h` is `2,297` lines, down from accepted `2,346`; `src/metal/kernels.mm` is `1,496`, down from accepted `1,504`; full `src/metal/platform.mm` is `1,088`, down from accepted `1,093`. Kernel scope is `3,910`, down from accepted `3,967` and setup `4,615`. Backend scope is `9,481`, down from accepted `9,539` and setup `10,160`.
+- Risk classification: low. This deletes non-executable prose, but the raw shader string changes, so acceptance still requires build success, repeated `breakout` and `g2048`, native parity, overlay surface, interactive smoke, comparable train and eval scores, and subagent review.
+- Acceptance gate: use the dedicated `milestone-04j-prose-cleanup` runners, require median SPS within 1 percent of the current accepted baseline or better, require learnability and eval to remain comparable, and reject on compile, parity, determinism, or score drift.
+
+## 2026-05-27 Milestone 04j Kernel Prose Cleanup Results
+
+- Code change: delete stale section banners and comments that repeated function names, tensor shapes, or local loop roles in `src/metal/shader_src.h`, `src/metal/kernels.mm`, and `src/metal/platform.mm`. One Steel GEMM gotcha comment was retained in a shorter form.
+- LOC: `src/metal/shader_src.h` is `2,297` lines, down from accepted `2,346`; `src/metal/kernels.mm` is `1,496`, down from accepted `1,504`; full `src/metal/platform.mm` is `1,088`, down from accepted `1,093`. Kernel scope is `3,910`, down from accepted `3,967` and setup `4,615`. Backend scope is `9,481`, down from accepted `9,539` and setup `10,160`.
+- Static validation passed: `tools/metal/build.sh breakout`, `tools/metal/build.sh g2048`, `git diff --check`, `bash -n` for all milestone 04j runners, and `PYTHONPATH=$PWD python -m pytest tests/metal/test_overlay_surface.py`.
+- First milestone 04j suite: `breakout` artifact `20260527T040111+0300-breakout` at `3,439,771` SPS, train score `2.497969150543213`, eval score `0.0`; `g2048` artifact `20260527T040122+0300-g2048` at `603,359` SPS, train score `97.85507202148438`, eval score `49.43283462524414`.
+- Second milestone 04j suite: `breakout` artifact `20260527T040138+0300-breakout` at `3,446,814` SPS, train score `2.504157304763794`, eval score `0.0`; `g2048` artifact `20260527T040149+0300-g2048` at `606,448` SPS, train score `97.85507202148438`, eval score `49.43283462524414`.
+- Medians: `breakout` `3,443,293` SPS, `-0.17%` versus milestone 04g accepted median `3,449,074`; `g2048` `604,904` SPS, `+1.49%` versus milestone 04g accepted median `596,033`.
+- Native Metal parity and overlay surface passed in both milestone 04j suites.
+- Interactive smoke artifact: `milestone-04j-prose-cleanup/20260527T040210+0300-interactive-breakout-prose-cleanup`. It built, loaded `resources/breakout/breakout_weights.bin`, reached raylib 5.5 GLFW initialization, then failed with `Failed to determine Monitor to center Window` and exit code `139`, matching the known desktop windowing boundary.
+- Subagent review: Nash found no blocking findings, verified the diff only removes prose apart from the shorter retained Steel GEMM gotcha comment, confirmed runner and overlay scope, and checked LOC and benchmark arithmetic.
+- Decision: accepted after subagent review. This is source cleanup only, with repeated runtime medians inside the LOC gate.
