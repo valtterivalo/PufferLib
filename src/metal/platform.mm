@@ -1,5 +1,4 @@
 #import "platform.h"
-#import <QuartzCore/CABase.h>  // CACurrentMediaTime
 #include "shader_src.h"
 
 #include <cassert>

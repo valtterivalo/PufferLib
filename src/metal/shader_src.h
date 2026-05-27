@@ -7,7 +7,6 @@ static const char *get_all_metal_shader_source() {
 #include <metal_math>
 #include <metal_simdgroup>
 #include <metal_simdgroup_matrix>
-#include <metal_atomic>
 using namespace metal;
 
 inline float sigmoid_f(float x) {
