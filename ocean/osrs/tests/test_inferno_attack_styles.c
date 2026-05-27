@@ -1423,6 +1423,28 @@ static void test_offensive_prayer_melee_maps_to_piety(void) {
         state.offensive_prayer_correct_damage_roll_this_tick, 7.0f, 1e-6f);
 }
 
+static void test_player_reward_damage_uses_xp_drop_tick(void) {
+    printf("--- player reward damage uses XP-drop tick ---\n");
+
+    InfernoState state = make_test_state(10, 10);
+    state.npcs[0] = make_test_npc(
+        INF_NPC_RANGER, 16, 10, INF_NPC_STATS[INF_NPC_RANGER].size);
+    state.npcs[0].active = 1;
+    state.npcs[0].hp = 15;
+    state.npcs[0].max_hp = INF_NPC_STATS[INF_NPC_RANGER].hp;
+
+    float reward_damage = inf_record_player_reward_damage(&state, 0, 50);
+
+    ASSERT_FLOAT_NEAR("reward damage caps to current hp",
+        reward_damage, 15.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("damage dealt stat records on fire tick",
+        state.damage_dealt_this_tick, 15.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("set damage stat records on fire tick",
+        state.damage_set_this_tick, 15.0f, 1e-6f);
+    ASSERT_INT_EQ("reward damage does not apply hp before hitsplat",
+        state.npcs[0].hp, 15);
+}
+
 static void test_joseph_reward_mode_damps_healed_zuk_damage(void) {
     printf("--- Joseph reward mode damps healed Zuk damage ---\n");
 
@@ -7830,10 +7852,10 @@ static void test_npc_overkill_hit_caps_splat_hp_and_damage_stats(void) {
         state.npcs[0].hit_damage, 15);
     ASSERT_INT_EQ("render entity hit splat caps to remaining hp",
         entities[1].hit_damage, 15);
-    ASSERT_FLOAT_NEAR("damage dealt stats use capped damage",
-        state.damage_dealt_this_tick, 15.0f, 1e-6f);
-    ASSERT_FLOAT_NEAR("set damage stats use capped damage",
-        state.damage_set_this_tick, 15.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("landing does not double count XP-drop damage",
+        state.damage_dealt_this_tick, 0.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("landing does not double count set damage",
+        state.damage_set_this_tick, 0.0f, 1e-6f);
     ASSERT_INT_EQ("overkill still counts the kill", state.kill_set_this_tick, 1);
 }
 
@@ -7859,8 +7881,8 @@ static void test_blood_barrage_overkill_heals_from_capped_damage(void) {
 
     ASSERT_INT_EQ("blood barrage hit splat caps to remaining hp",
         state.npcs[0].hit_damage, 8);
-    ASSERT_FLOAT_NEAR("blood barrage damage stat uses capped damage",
-        state.damage_dealt_this_tick, 8.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("blood barrage landing does not double count damage stat",
+        state.damage_dealt_this_tick, 0.0f, 1e-6f);
     ASSERT_INT_EQ("blood barrage heal uses capped damage",
         state.blood_heal_this_tick, 2);
     ASSERT_INT_EQ("player receives capped blood heal",
@@ -8556,6 +8578,7 @@ int main(void) {
     test_offensive_prayer_barrage_aoe_counts_once();
     test_offensive_prayer_no_attack_no_event();
     test_offensive_prayer_melee_maps_to_piety();
+    test_player_reward_damage_uses_xp_drop_tick();
     test_joseph_reward_mode_damps_healed_zuk_damage();
     test_jad_damage_reward_pauses_while_jad_healers_heal();
     test_jad_healer_damage_never_gets_damage_reward();
