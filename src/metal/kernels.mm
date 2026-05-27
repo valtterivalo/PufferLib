@@ -15,6 +15,12 @@ static inline void mtl_unwrap_ptr(const void *ptr_base) {
       bufs.end());
 }
 
+struct HostFloatCountParams { float value; int count; };
+struct HostTwoFloatsCountParams { float first, second; int count; };
+struct HostTwoIntsParams { int first, second; };
+struct HostThreeIntsParams { int first, second, third; };
+struct HostIntFloatParams { int count; float value; };
+
 void mtl_fill_f32(float *ptr, float value, int count, cudaStream_t stream);
 void mtl_copy_f32(float *dst, const float *src, int count, cudaStream_t stream);
 void mtl_fill_f16(void *ptr, int count, cudaStream_t stream);
@@ -162,10 +168,7 @@ void mtl_fill_f16(void *ptr, int count, cudaStream_t stream) {
   auto pso = mtl_begin_kernel(ms, "fill_f32");
   mtl_set_ptr(ms, ptr, 0);
   int f32_count = count / 2;
-  struct {
-    float value;
-    int count;
-  } params = {0.0f, f32_count};
+  HostFloatCountParams params = {0.0f, f32_count};
   mtl_set_params(ms, params, 1);
   mtl_dispatch_1d(ms, pso, f32_count);
 }
@@ -186,10 +189,7 @@ void mtl_fill_f32(float *ptr, float value, int count, cudaStream_t stream) {
   MetalStream *ms = mtl_resolve_stream(stream);
   auto pso = mtl_begin_kernel(ms, "fill_f32");
   mtl_set_ptr(ms, ptr, 0);
-  struct {
-    float value;
-    int count;
-  } params = {value, count};
+  HostFloatCountParams params = {value, count};
   mtl_set_params(ms, params, 1);
   mtl_dispatch_1d(ms, pso, count);
 }
@@ -209,10 +209,7 @@ void mtl_clamp_f32(float *ptr, float lo, float hi, int count,
   MetalStream *ms = mtl_resolve_stream(stream);
   auto pso = mtl_begin_kernel(ms, "clamp_f32");
   mtl_set_ptr(ms, ptr, 0);
-  struct {
-    float lo, hi;
-    int count;
-  } params = {lo, hi, count};
+  HostTwoFloatsCountParams params = {lo, hi, count};
   mtl_set_params(ms, params, 1);
   mtl_dispatch_1d(ms, pso, count);
 }
@@ -221,10 +218,7 @@ void mtl_scale_f32(float *ptr, float scale, int count, cudaStream_t stream) {
   MetalStream *ms = mtl_resolve_stream(stream);
   auto pso = mtl_begin_kernel(ms, "scale_f32");
   mtl_set_ptr(ms, ptr, 0);
-  struct {
-    float scale;
-    int count;
-  } params = {scale, count};
+  HostFloatCountParams params = {scale, count};
   mtl_set_params(ms, params, 1);
   mtl_dispatch_1d(ms, pso, count);
 }
@@ -236,10 +230,7 @@ void mtl_axpy_f32(float *dst, const float *src, float alpha, int count,
   auto pso = mtl_begin_kernel(ms, "axpy_f32");
   mtl_set_ptr(ms, dst, 0);
   mtl_set_ptr(ms, src, 1);
-  struct {
-    float alpha;
-    int count;
-  } params = {alpha, count};
+  HostFloatCountParams params = {alpha, count};
   mtl_set_params(ms, params, 2);
   mtl_dispatch_1d(ms, pso, count);
 }
@@ -250,10 +241,7 @@ void mtl_nesterov_f32(float *momentum, const float *grad, float mu, int count,
   auto pso = mtl_begin_kernel(ms, "nesterov_f32");
   mtl_set_ptr(ms, momentum, 0);
   mtl_set_ptr(ms, grad, 1);
-  struct {
-    float mu;
-    int count;
-  } params = {mu, count};
+  HostFloatCountParams params = {mu, count};
   mtl_set_params(ms, params, 2);
   mtl_dispatch_1d(ms, pso, count);
 }
@@ -291,10 +279,7 @@ void mtl_clip_by_norm_f32(float *data, const float *norm_ptr,
   auto pso = mtl_begin_kernel(ms, "clip_by_norm_f32");
   mtl_set_ptr(ms, data, 0);
   mtl_set_ptr(ms, norm_ptr, 1);
-  struct {
-    float max_norm, eps;
-    int count;
-  } params = {max_norm, eps, count};
+  HostTwoFloatsCountParams params = {max_norm, eps, count};
   mtl_set_params(ms, params, 2);
   mtl_dispatch_1d(ms, pso, count);
 }
@@ -306,10 +291,7 @@ void mtl_normalize_f32(float *data, const float *norm_ptr, float eps,
   auto pso = mtl_begin_kernel(ms, "normalize_f32");
   mtl_set_ptr(ms, data, 0);
   mtl_set_ptr(ms, norm_ptr, 1);
-  struct {
-    float eps;
-    int count;
-  } params = {eps, count};
+  HostFloatCountParams params = {eps, count};
   mtl_set_params(ms, params, 2);
   mtl_dispatch_1d(ms, pso, count);
 }
@@ -336,9 +318,7 @@ void mtl_transpose_f32(float *dst, const float *src, int rows, int cols,
   auto pso = mtl_begin_kernel(ms, "transpose_f32");
   mtl_set_ptr(ms, dst, 0);
   mtl_set_ptr(ms, src, 1);
-  struct {
-    int rows, cols;
-  } params = {rows, cols};
+  HostTwoIntsParams params = {rows, cols};
   mtl_set_params(ms, params, 2);
   mtl_dispatch_1d(ms, pso, rows * cols);
 }
@@ -351,9 +331,7 @@ void mtl_assemble_decoder_grad_f32(float *grad_out, const float *grad_logits,
   mtl_set_ptr(ms, grad_out, 0);
   mtl_set_ptr(ms, grad_logits, 1);
   mtl_set_ptr(ms, grad_value, 2);
-  struct {
-    int B_TT, od, od1;
-  } params = {B_TT, od, od1};
+  HostThreeIntsParams params = {B_TT, od, od1};
   mtl_set_params(ms, params, 3);
   mtl_dispatch_1d(ms, pso, B_TT * od1);
 }
@@ -369,7 +347,7 @@ void mtl_assemble_decoder_grad_f32_to_f16(void *grad_out,
   mtl_set_ptr(ms, grad_out, 0);
   mtl_set_ptr(ms, grad_logits, 1);
   mtl_set_ptr(ms, grad_value, 2);
-  struct { int B_TT, od, od_plus_1; } params = {B_TT, od, od1};
+  HostThreeIntsParams params = {B_TT, od, od1};
   mtl_set_params(ms, params, 3);
   mtl_dispatch_1d(ms, pso, B_TT * od1);
 }
@@ -380,9 +358,7 @@ void mtl_sum_rows_to_f32(float *dst, const float *src, int rows, int cols,
   auto pso = mtl_begin_kernel(ms, "sum_rows_to_f32_kernel");
   mtl_set_ptr(ms, dst, 0);
   mtl_set_ptr(ms, src, 1);
-  struct {
-    int rows, cols;
-  } params = {rows, cols};
+  HostTwoIntsParams params = {rows, cols};
   mtl_set_params(ms, params, 2);
   mtl_dispatch_1d(ms, pso, cols);
 }
@@ -397,9 +373,7 @@ void mtl_mingru_gate(float *out, float *next_state, const float *combined,
   mtl_set_ptr(ms, combined, 2);
   mtl_set_ptr(ms, state_in, 3);
   mtl_set_ptr(ms, x_in, 4);
-  struct {
-    int H, B;
-  } params = {H, B};
+  HostTwoIntsParams params = {H, B};
   mtl_set_params(ms, params, 5);
   mtl_dispatch_1d(ms, pso, B * H);
 }
@@ -420,7 +394,7 @@ static void dispatch_scan_forward(const char *kernel_name, PrefixScan &scan,
   if (reset) {
     mtl_set_ptr(ms, scan.reset_ptr, params_index++);
   }
-  struct { int T_seq, H, B; } params = {scan.T, scan.H, scan.B};
+  HostThreeIntsParams params = {scan.T, scan.H, scan.B};
   mtl_set_params(ms, params, params_index);
   mtl_dispatch_1d(ms, pso, scan.B * scan.H);
 }
@@ -445,7 +419,7 @@ static void dispatch_scan_backward(const char *kernel_name, PrefixScan &scan,
   if (reset) {
     mtl_set_ptr(ms, scan.reset_ptr, params_index++);
   }
-  struct { int T_seq, H, B; } params = {scan.T, scan.H, scan.B};
+  HostThreeIntsParams params = {scan.T, scan.H, scan.B};
   mtl_set_params(ms, params, params_index);
   mtl_dispatch_1d(ms, pso, scan.B * scan.H);
 }
@@ -860,10 +834,7 @@ void mtl_muon_weight_update(float *weights, const float *updates,
   mtl_set_ptr(ms, weights, 0);
   mtl_set_ptr(ms, updates, 1);
   mtl_set_ptr(ms, lr_ptr, 2);
-  struct {
-    int count;
-    float scale;
-  } params = {count, scale};
+  HostIntFloatParams params = {count, scale};
   mtl_set_params(ms, params, 3);
   mtl_dispatch_1d(ms, pso, count);
 }
@@ -874,10 +845,7 @@ void mtl_anchor_blend_weights(float *weights, const float *anchor,
   auto pso = mtl_begin_kernel(ms, "anchor_blend_weights_kernel");
   mtl_set_ptr(ms, weights, 0);
   mtl_set_ptr(ms, anchor, 1);
-  struct {
-    int n;
-    float coef;
-  } params = {count, coef};
+  HostIntFloatParams params = {count, coef};
   mtl_set_params(ms, params, 2);
   mtl_dispatch_1d(ms, pso, count);
 }
