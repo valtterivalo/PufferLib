@@ -357,6 +357,28 @@ static uint32_t visual_policy_parse_seed(const char* value) {
     return (uint32_t)parsed;
 }
 
+static int visual_policy_parse_positive_int(const char* value, const char* name) {
+    errno = 0;
+    char* end = NULL;
+    long parsed = strtol(value, &end, 10);
+    if (errno || !end || *end != '\0' || parsed <= 0 || parsed > INT32_MAX) {
+        fprintf(stderr, "policy: invalid %s: %s\n", name, value);
+        abort();
+    }
+    return (int)parsed;
+}
+
+static int visual_policy_parse_nonnegative_int(const char* value, const char* name) {
+    errno = 0;
+    char* end = NULL;
+    long parsed = strtol(value, &end, 10);
+    if (errno || !end || *end != '\0' || parsed < 0 || parsed > INT32_MAX) {
+        fprintf(stderr, "policy: invalid %s: %s\n", name, value);
+        abort();
+    }
+    return (int)parsed;
+}
+
 static VisualPolicyMode visual_policy_parse_mode(const char* value) {
     if (!value || strcmp(value, "sample") == 0) return VISUAL_POLICY_SAMPLE;
     if (strcmp(value, "argmax") == 0) return VISUAL_POLICY_ARGMAX;
@@ -515,7 +537,9 @@ static void visual_policy_init(
     const EncounterDef* edef,
     const char* model_path,
     VisualPolicyMode mode,
-    uint32_t seed
+    uint32_t seed,
+    int hidden_size,
+    int num_layers
 ) {
     memset(policy, 0, sizeof(*policy));
     if (!model_path || !model_path[0]) return;
@@ -547,8 +571,6 @@ static void visual_policy_init(
         fprintf(stderr, "policy: failed to load model: %s\n", model_path);
         abort();
     }
-    int hidden_size = strcmp(edef->name, "inferno") == 0 ? 512 : 128;
-    int num_layers = 2;
     VisualPolicyModelShape model_shape = visual_policy_select_model_shape(
         policy, edef, hidden_size, num_layers);
     policy->net = visual_policy_make_puffernet(
@@ -573,8 +595,12 @@ static void visual_policy_init(
     policy->mode = mode;
     policy->rng_state = seed;
     policy->enabled = 1;
-    fprintf(stderr, "policy: loaded %s mode=%s seed=%u\n",
-        model_path, mode == VISUAL_POLICY_ARGMAX ? "argmax" : "sample", seed);
+    fprintf(stderr, "policy: loaded %s mode=%s seed=%u hidden=%d layers=%d\n",
+        model_path,
+        mode == VISUAL_POLICY_ARGMAX ? "argmax" : "sample",
+        seed,
+        hidden_size,
+        num_layers);
 }
 
 static void __attribute__((unused)) visual_policy_destroy(VisualPolicy* policy) {
@@ -871,9 +897,12 @@ static void run_visual(
     const char* replay_path,
     int start_wave,
     int gear_tier,
+    int opponent_type,
     const char* model_path,
     VisualPolicyMode policy_mode,
-    uint32_t policy_seed
+    uint32_t policy_seed,
+    int policy_hidden_size,
+    int policy_num_layers
 ) {
     env->client = NULL;
 
@@ -889,12 +918,20 @@ static void run_visual(
         env->encounter_context = visual_create_encounter_context(edef);
         if (encounter_name_is_pvp(encounter_name) && edef->put_int) {
             edef->put_int(env->encounter_state, env->encounter_context, "use_c_opponent", 1);
-            edef->put_int(env->encounter_state, env->encounter_context, "opponent_type", OPP_IMPROVED);
+            edef->put_int(
+                env->encounter_state,
+                env->encounter_context,
+                "opponent_type",
+                opponent_type);
 #ifdef __EMSCRIPTEN__
             edef->put_int(env->encounter_state, env->encounter_context, "use_c_opponent_p0", 0);
 #else
             edef->put_int(env->encounter_state, env->encounter_context, "use_c_opponent_p0", 1);
-            edef->put_int(env->encounter_state, env->encounter_context, "opponent_p0_type", OPP_IMPROVED);
+            edef->put_int(
+                env->encounter_state,
+                env->encounter_context,
+                "opponent_p0_type",
+                opponent_type);
 #endif
             edef->put_int(env->encounter_state, env->encounter_context, "is_lms", 1);
             edef->put_int(env->encounter_state, env->encounter_context, "gear_tier", gear_tier);
@@ -941,6 +978,14 @@ static void run_visual(
                 start_wave);
         }
         edef->reset(env->encounter_state, env->encounter_context, 0);
+        if (encounter_name_is_pvp(encounter_name)) {
+            NhPvpState* pvp_state = (NhPvpState*)env->encounter_state;
+            OpponentType active_opponent = pvp_state->env.pvp_runtime.opponent.type;
+            fprintf(stderr,
+                "pvp opponent: %s (%d)\n",
+                osrs_pvp_opponent_type_name(active_opponent),
+                active_opponent);
+        }
         fprintf(stderr, "encounter: %s (obs=%d, heads=%d)%s\n",
                 edef->name, edef->obs_size, edef->num_action_heads,
                 start_wave >= 0 ? "" : "");
@@ -1132,7 +1177,9 @@ static void run_visual(
         (const EncounterDef*)env->encounter_def,
         model_path,
         policy_mode,
-        policy_seed);
+        policy_seed,
+        policy_hidden_size,
+        policy_num_layers);
 
     /* save initial state as first snapshot */
     render_save_snapshot(rc, env);
@@ -1191,6 +1238,9 @@ int main(int argc, char** argv) {
     const char* replay_path __attribute__((unused)) = NULL;
     const char* model_path __attribute__((unused)) = NULL;
     const char* policy_mode_name __attribute__((unused)) = "sample";
+    int opponent_type __attribute__((unused)) = OPP_IMPROVED;
+    int policy_hidden_size __attribute__((unused)) = 0;
+    int policy_num_layers __attribute__((unused)) = 0;
     uint32_t policy_seed __attribute__((unused)) = 1;
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--visual") == 0) use_visual = 1;
@@ -1205,6 +1255,15 @@ int main(int argc, char** argv) {
             policy_mode_name = argv[++i];
         else if (strcmp(argv[i], "--policy-seed") == 0 && i + 1 < argc)
             policy_seed = visual_policy_parse_seed(argv[++i]);
+        else if (strcmp(argv[i], "--policy-hidden-size") == 0 && i + 1 < argc)
+            policy_hidden_size = visual_policy_parse_positive_int(
+                argv[++i], "policy hidden size");
+        else if (strcmp(argv[i], "--policy-num-layers") == 0 && i + 1 < argc)
+            policy_num_layers = visual_policy_parse_positive_int(
+                argv[++i], "policy num layers");
+        else if (strcmp(argv[i], "--opponent-type") == 0 && i + 1 < argc)
+            opponent_type = visual_policy_parse_nonnegative_int(
+                argv[++i], "opponent type");
         else if (strcmp(argv[i], "--tier") == 0 && i + 1 < argc)
             gear_tier = atoi(argv[++i]);
         else if (strcmp(argv[i], "--wave") == 0 && i + 1 < argc)
@@ -1219,6 +1278,14 @@ int main(int argc, char** argv) {
 #endif
     VisualPolicyMode policy_mode __attribute__((unused)) =
         visual_policy_parse_mode(policy_mode_name);
+    if (policy_hidden_size == 0) {
+        policy_hidden_size = encounter_name && strcmp(encounter_name, "inferno") == 0
+            ? 512
+            : 128;
+    }
+    if (policy_num_layers == 0) {
+        policy_num_layers = 2;
+    }
 
     srand((unsigned int)time(NULL));
 
@@ -1279,9 +1346,12 @@ int main(int argc, char** argv) {
             replay_path,
             start_wave,
             gear_tier,
+            opponent_type,
             model_path,
             policy_mode,
-            policy_seed);
+            policy_seed,
+            policy_hidden_size,
+            policy_num_layers);
         pvp_close(&env);
 #else
         fprintf(stderr, "not compiled with visual support (use: make visual)\n");

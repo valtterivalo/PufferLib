@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OSRS Lab</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #080807;
+      --panel: #11100d;
+      --ink: #ebe5dc;
+      --muted: #9a9185;
+      --line: rgba(235, 229, 220, 0.18);
+      --gold: #d4a843;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      --sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: var(--sans);
+    }
+
+    body {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+
+    .toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      min-height: 2.6rem;
+      padding: 0.55rem 0.75rem;
+      border-bottom: 1px solid var(--line);
+      background: rgba(17, 16, 13, 0.96);
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      line-height: 1.4;
+      text-transform: lowercase;
+    }
+
+    .toolbar strong {
+      color: var(--gold);
+      font-weight: 400;
+    }
+
+    .actions {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+    }
+
+    a,
+    button {
+      border: 1px solid var(--line);
+      background: rgba(235, 229, 220, 0.05);
+      color: var(--ink);
+      font: inherit;
+      padding: 0.35rem 0.55rem;
+      cursor: pointer;
+      text-decoration: none;
+    }
+
+    a[aria-current="page"],
+    a:hover,
+    button:hover {
+      border-color: rgba(212, 168, 67, 0.5);
+      color: var(--gold);
+    }
+
+    .stage {
+      position: relative;
+      min-width: 0;
+      min-height: 0;
+      background: #000;
+    }
+
+    canvas.emscripten {
+      display: block;
+      width: 100vw;
+      height: calc(100vh - 2.6rem);
+      border: 0;
+      outline: 0;
+      background: #000;
+    }
+
+    .status {
+      position: absolute;
+      left: 0.75rem;
+      bottom: 0.75rem;
+      max-width: min(34rem, calc(100% - 1.5rem));
+      border: 1px solid var(--line);
+      background: rgba(8, 8, 7, 0.82);
+      color: var(--muted);
+      padding: 0.5rem 0.65rem;
+      font-family: var(--mono);
+      font-size: 0.7rem;
+      line-height: 1.5;
+      white-space: pre-wrap;
+    }
+
+    .status[hidden] {
+      display: none;
+    }
+
+    @media (max-width: 720px) {
+      .toolbar {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      canvas.emscripten {
+        height: calc(100vh - 5.2rem);
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="toolbar">
+    <div>
+      <strong id="preset-label">osrs lab</strong>
+      <span id="preset-detail">loading</span>
+    </div>
+    <div class="actions">
+      <a id="nav-inferno" href="?encounter=inferno">inferno</a>
+      <a id="nav-zulrah" href="?encounter=zulrah">zulrah</a>
+      <a id="nav-pvp" href="?encounter=pvp">pvp</a>
+      <button id="focus-button" type="button">focus</button>
+      <button id="restart-button" type="button">reset</button>
+    </div>
+  </div>
+  <div class="stage">
+    <canvas class="emscripten" id="canvas" oncontextmenu="event.preventDefault()" tabindex="0"></canvas>
+    <pre class="status" id="status">loading wasm</pre>
+  </div>
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const validEncounters = new Set(["pvp", "zulrah", "inferno"]);
+    const encounter = validEncounters.has(params.get("encounter"))
+      ? params.get("encounter")
+      : "inferno";
+    const assetVersion = "__OSRS_ASSET_VERSION__";
+    const defaults = {
+      inferno: {
+        label: "inferno",
+        detail: "xbeeukiz wave 69",
+        model: "models/osrs_inferno_xbeeukiz.bin",
+        wave: "69",
+        hiddenSize: "512",
+        numLayers: "2",
+        policyMode: "sample"
+      },
+      zulrah: {
+        label: "zulrah",
+        detail: "trip policy, tier 0",
+        model: "models/osrs_zulrah_best_1779475720116.bin",
+        tier: "0",
+        hiddenSize: "128",
+        numLayers: "2",
+        policyMode: "sample"
+      },
+      pvp: {
+        label: "pvp",
+        detail: "n46 selfplay vs nightmare nh",
+        model: "models/osrs_pvp_n46vl1vo_repro.bin",
+        opponentType: "26",
+        hiddenSize: "2048",
+        numLayers: "2",
+        policyMode: "sample"
+      }
+    };
+    const preset = defaults[encounter];
+    const assetRoot = window.location.pathname.endsWith("/rl/") ||
+      window.location.pathname.endsWith("/rl/index.html")
+      ? "../"
+      : "";
+    const wave = params.get("wave") || preset.wave || "";
+    const tier = params.get("tier") || preset.tier || "";
+    const replay = params.get("replay") || "";
+    const model = params.get("model") || preset.model || "";
+    const policyMode = params.get("policyMode") || preset.policyMode || "";
+    const policySeed = params.get("policySeed") || "";
+    const policyHiddenSize = params.get("policyHiddenSize") || preset.hiddenSize || "";
+    const policyNumLayers = params.get("policyNumLayers") || preset.numLayers || "";
+    const opponentType = params.get("opponentType") || preset.opponentType || "";
+    const label = document.getElementById("preset-label");
+    const detail = document.getElementById("preset-detail");
+    const status = document.getElementById("status");
+    const canvas = document.getElementById("canvas");
+    const args = ["--visual", "--encounter", encounter];
+
+    function assetPath(path) {
+      if (!assetRoot || path.startsWith("/") || path.startsWith("../") ||
+          path.startsWith("./") || /^[a-z][a-z0-9+.-]*:/i.test(path)) {
+        return path;
+      }
+      return `${assetRoot}${path}`;
+    }
+
+    function versionedAssetUrl(path) {
+      const resolved = assetPath(path);
+      const separator = resolved.includes("?") ? "&" : "?";
+      return `${resolved}${separator}v=${encodeURIComponent(assetVersion)}`;
+    }
+
+    function loadTextSync(path, optional) {
+      const request = new XMLHttpRequest();
+      request.open("GET", versionedAssetUrl(path), false);
+      request.overrideMimeType("text/plain; charset=x-user-defined");
+      request.send(null);
+      if (request.status === 404 && optional) return null;
+      if (request.status !== 0 && (request.status < 200 || request.status >= 300)) {
+        throw new Error(`failed to load ${path}: ${request.status}`);
+      }
+      return request.responseText;
+    }
+
+    function setEncounterLinks() {
+      for (const key of validEncounters) {
+        const link = document.getElementById(`nav-${key}`);
+        if (key === encounter) link.setAttribute("aria-current", "page");
+      }
+    }
+
+    function pushArg(flag, value) {
+      if (value) args.push(flag, value);
+    }
+
+    function modelName(modelPath) {
+      const parts = modelPath.split("/");
+      return parts[parts.length - 1];
+    }
+
+    function installPolicyModel() {
+      if (!model) return;
+      const fileName = modelName(model);
+      Module.addRunDependency("policy-model");
+      fetch(versionedAssetUrl(model))
+        .then((response) => {
+          if (!response.ok) throw new Error(`failed to load ${model}: ${response.status}`);
+          return response.arrayBuffer();
+        })
+        .then((buffer) => {
+          Module.FS_createPath("/", "models", true, true);
+          Module.FS_createDataFile(
+            "/models",
+            fileName,
+            new Uint8Array(buffer),
+            true,
+            true,
+            true);
+          Module.removeRunDependency("policy-model");
+        })
+        .catch((error) => {
+          Module.printErr(error.message);
+          Module.removeRunDependency("policy-model");
+          throw error;
+        });
+    }
+
+    pushArg("--wave", wave);
+    pushArg("--tier", tier);
+    pushArg("--replay", replay);
+    pushArg("--model", model);
+    pushArg("--policy-mode", policyMode);
+    pushArg("--policy-seed", policySeed);
+    pushArg("--policy-hidden-size", policyHiddenSize);
+    pushArg("--policy-num-layers", policyNumLayers);
+    pushArg("--opponent-type", opponentType);
+    label.textContent = preset.label;
+    detail.textContent = preset.detail;
+    setEncounterLinks();
+    document.getElementById("focus-button").addEventListener("click", () => canvas.focus());
+    document.getElementById("restart-button").addEventListener("click", () => window.location.reload());
+    canvas.addEventListener("click", () => canvas.focus());
+
+    var Module = {
+      arguments: args,
+      canvas,
+      preRun: [installPolicyModel],
+      locateFile(path, prefix) {
+        if (path === "game.wasm" || path === "game.data") {
+          return versionedAssetUrl(`${prefix || ""}${path}`);
+        }
+        return `${prefix || ""}${path}`;
+      },
+      getPreloadedPackage(remotePackageName, remotePackageSize) {
+        const manifest = loadTextSync(`${remotePackageName.split("?")[0]}.chunks.json`, true);
+        if (!manifest) return null;
+        const parsed = JSON.parse(manifest);
+        if (parsed.size !== remotePackageSize) {
+          throw new Error(`data manifest size ${parsed.size} did not match ${remotePackageSize}`);
+        }
+        const data = new Uint8Array(parsed.size);
+        let offset = 0;
+        for (const chunk of parsed.chunks) {
+          Module.setStatus(`loading ${chunk}`);
+          const text = loadTextSync(chunk, false);
+          for (let i = 0; i < text.length; i++) {
+            data[offset + i] = text.charCodeAt(i) & 255;
+          }
+          offset += text.length;
+        }
+        if (offset !== parsed.size) {
+          throw new Error(`loaded ${offset} bytes, expected ${parsed.size}`);
+        }
+        return data.buffer;
+      },
+      print(message) {
+        console.log(message);
+      },
+      printErr(message) {
+        console.error(message);
+        status.hidden = false;
+        status.textContent = message;
+      },
+      setStatus(message) {
+        status.hidden = !message;
+        status.textContent = message;
+      },
+      onRuntimeInitialized() {
+        status.hidden = true;
+        canvas.focus();
+      },
+      monitorRunDependencies(left) {
+        if (left > 0) Module.setStatus(`preparing ${left}`);
+      }
+    };
+  </script>
+  {{{ SCRIPT }}}
+</body>
+</html>

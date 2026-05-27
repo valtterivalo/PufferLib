@@ -1535,7 +1535,7 @@ static RenderClient* render_make_client(void) {
         rc->prev_npc_slot[i] = -1;
     }
 
-    InitWindow(RENDER_WINDOW_W, RENDER_WINDOW_H, "OSRS PvP Debug Viewer");
+    InitWindow(RENDER_WINDOW_W, RENDER_WINDOW_H, "OSRS Lab");
     SetTargetFPS(60);
 
     /* load overhead prayer icon textures from exported sprites.
