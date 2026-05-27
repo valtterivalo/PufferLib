@@ -17,6 +17,13 @@ def metadata_value(path: Path, key: str) -> str:
     raise RuntimeError(f"missing {key} in {path}")
 
 
+def eval_score(payload: dict[str, object]) -> float:
+    """Read eval score from normalized or raw Puffer eval JSON."""
+    if "score" in payload:
+        return float(payload["score"])
+    return float(payload["env/score"])
+
+
 def run_records(milestone_dir: Path, env_name: str) -> list[dict[str, object]]:
     """Load main CPU-overlap train/eval summaries for one env."""
     records: list[dict[str, object]] = []
@@ -35,7 +42,7 @@ def run_records(milestone_dir: Path, env_name: str) -> list[dict[str, object]]:
                 "git_diff_sha256": metadata_value(metadata_path, "git_diff_sha256"),
                 "sps": float(summary["sps"]),
                 "score": float(summary["score"]),
-                "eval_score": float(eval_summary["score"]),
+                "eval_score": eval_score(eval_summary),
                 "uptime": float(summary["uptime"]),
             }
         )

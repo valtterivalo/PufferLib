@@ -19,6 +19,13 @@ def metadata(path: Path) -> dict[str, str]:
     return out
 
 
+def eval_score(payload: dict[str, object]) -> float:
+    """Read eval score from normalized or raw Puffer eval JSON."""
+    if "score" in payload:
+        return float(payload["score"])
+    return float(payload["env/score"])
+
+
 def main() -> None:
     """Write milestone-summary.json next to the runner scripts."""
     if len(sys.argv) != 2:
@@ -30,12 +37,13 @@ def main() -> None:
         for summary_path in sorted(milestone_dir.glob(f"*-{env_name}/summary.json")):
             summary = json.loads(summary_path.read_text())
             run_meta = metadata(summary_path.parent / "metadata.txt")
+            eval_summary = json.loads((summary_path.parent / "eval-summary.json").read_text())
             envs[env_name].append(
                 {
                     "run": summary_path.parent.name,
                     "sps": summary["sps"],
                     "score": summary["score"],
-                    "eval_score": json.loads((summary_path.parent / "eval-summary.json").read_text())["score"],
+                    "eval_score": eval_score(eval_summary),
                     "uptime": summary["uptime"],
                     "metal_cpu_inference": run_meta["metal_cpu_inference"],
                     "metal_train_fp16": run_meta["metal_train_fp16"],
@@ -68,4 +76,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

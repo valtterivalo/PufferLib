@@ -150,7 +150,10 @@ for line in log_path.read_text(errors="ignore").splitlines():
         records.append(json.loads(line))
 if not records:
     raise RuntimeError(f"no JSON eval records found in {log_path}")
-out_path.write_text(json.dumps(records[-1], indent=2, sort_keys=True) + "\n")
+record = records[-1]
+if "score" not in record and "env/score" in record:
+    record["score"] = record["env/score"]
+out_path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
 PY
 
 echo "$OUT_DIR"

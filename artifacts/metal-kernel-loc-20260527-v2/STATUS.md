@@ -19,3 +19,9 @@
 
 - Subagent re-review found two remaining harness blockers: median gate could pass from stale run artifacts, and the automated gate ignored score and eval collapse.
 - Tightening `check-median-gate.py` to use only the latest `git_sha` plus `git_diff_sha256` cohort per env, require at least two runs from that cohort, and fail if train score or positive eval score drops below configured collapse floors.
+
+## 2026-05-27 08:15 EEST
+
+- Milestone 00 baseline executed the benchmark and smoke runs but failed during milestone summarization.
+- Root cause: eval logs emit raw `env/score`, while `summarize-milestone.py` and `check-median-gate.py` expected a normalized `score` key.
+- Fixing the harness parser and rerunning milestone 00 after review.
