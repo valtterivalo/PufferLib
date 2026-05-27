@@ -1270,25 +1270,39 @@ static void test_offensive_prayer_reward_shapes_normal_and_joseph_mode(void) {
     printf("--- offensive prayer reward shapes normal and Joseph mode ---\n");
 
     InfernoState normal = make_test_state(24, 24);
-    inf_put_float((EncounterState*)&normal, "offensive_prayer_reward_coeff", 0.03f);
-    normal.offensive_prayer_correct_this_tick = 1;
+    inf_put_float((EncounterState*)&normal, "damage_reward_coeff", 0.01f);
+    inf_put_float((EncounterState*)&normal, "offensive_prayer_reward_coeff", 0.25f);
+    normal.damage_dealt_this_tick = 40.0f;
+    normal.offensive_prayer_correct_damage_roll_this_tick = 40.0f;
 
-    ASSERT_FLOAT_NEAR("normal reward includes correct offensive prayer shape",
-        inf_compute_reward(&normal), 0.03f, 0.0001f);
+    ASSERT_FLOAT_NEAR("normal reward multiplies correct offensive prayer damage",
+        inf_compute_reward(&normal), 0.50f, 0.0001f);
 
     InfernoState wrong = make_test_state(24, 24);
-    inf_put_float((EncounterState*)&wrong, "offensive_prayer_reward_coeff", 0.03f);
+    inf_put_float((EncounterState*)&wrong, "damage_reward_coeff", 0.01f);
+    inf_put_float((EncounterState*)&wrong, "offensive_prayer_reward_coeff", 0.25f);
+    wrong.damage_dealt_this_tick = 40.0f;
 
-    ASSERT_FLOAT_NEAR("wrong offensive prayer receives no shape",
-        inf_compute_reward(&wrong), 0.0f, 0.0001f);
+    ASSERT_FLOAT_NEAR("wrong offensive prayer receives base damage reward only",
+        inf_compute_reward(&wrong), 0.40f, 0.0001f);
+
+    InfernoState zero = make_test_state(24, 24);
+    inf_put_float((EncounterState*)&zero, "damage_reward_coeff", 0.01f);
+    inf_put_float((EncounterState*)&zero, "offensive_prayer_reward_coeff", 0.25f);
+    zero.offensive_prayer_correct_this_tick = 1;
+
+    ASSERT_FLOAT_NEAR("correct offensive prayer without damage receives no shape",
+        inf_compute_reward(&zero), 0.0f, 0.0001f);
 
     InfernoState joseph = make_test_state(24, 24);
     test_config()->joseph_reward_mode = 1;
-    inf_put_float((EncounterState*)&joseph, "offensive_prayer_reward_coeff", 0.03f);
-    joseph.offensive_prayer_correct_this_tick = 1;
+    inf_put_float((EncounterState*)&joseph, "damage_reward_coeff", 0.01f);
+    inf_put_float((EncounterState*)&joseph, "offensive_prayer_reward_coeff", 0.25f);
+    joseph.damage_dealt_this_tick = 40.0f;
+    joseph.offensive_prayer_correct_damage_roll_this_tick = 40.0f;
 
-    ASSERT_FLOAT_NEAR("Joseph reward includes correct offensive prayer shape",
-        inf_compute_reward(&joseph), 0.03f, 0.0001f);
+    ASSERT_FLOAT_NEAR("Joseph reward multiplies correct offensive prayer damage",
+        inf_compute_reward(&joseph), 0.50f, 0.0001f);
 }
 
 static void init_ranged_offensive_prayer_test_state(InfernoState* state) {
@@ -1396,7 +1410,7 @@ static void test_offensive_prayer_melee_maps_to_piety(void) {
 
     InfernoState state = make_test_state(10, 10);
     state.player.offensive_prayer = OFFENSIVE_PRAYER_PIETY;
-    inf_record_offensive_prayer_attack(&state, ATTACK_STYLE_MELEE);
+    inf_record_offensive_prayer_attack(&state, ATTACK_STYLE_MELEE, 7.0f);
 
     ASSERT_INT_EQ("melee requires Piety",
         inf_required_offensive_prayer_for_style(ATTACK_STYLE_MELEE),
@@ -1405,6 +1419,8 @@ static void test_offensive_prayer_melee_maps_to_piety(void) {
         state.total_offensive_prayer_correct, 1);
     ASSERT_INT_EQ("melee style counted",
         state.offensive_prayer_attacks_by_style[ATTACK_STYLE_MELEE], 1);
+    ASSERT_FLOAT_NEAR("melee correct prayer records damage roll",
+        state.offensive_prayer_correct_damage_roll_this_tick, 7.0f, 1e-6f);
 }
 
 static void test_joseph_reward_mode_damps_healed_zuk_damage(void) {
@@ -8134,7 +8150,7 @@ static void test_inferno_binding_forwards_offensive_prayer_reward(void) {
         "config/ocean/osrs_inferno.ini",
         "[sweep.env.offensive_prayer_reward_coeff]",
         "[sweep.env.shield_penalty_coeff]",
-        "max = 0.04");
+        "max = 1.0");
     ASSERT_SOURCE_BLOCK_CONTAINS(
         "offensive prayer sweep only",
         "config/ocean/osrs_inferno.ini",
