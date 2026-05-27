@@ -72,3 +72,8 @@
   - `breakout` passed: candidate median `3,447,708` SPS versus baseline `3,434,839`, `+0.37466093752864804%`, eval `0.0`.
 - Source restored to `HEAD`; no backend source diff remains.
 - Rejection artifacts: `artifacts/metal-kernel-loc-20260527-v2/milestone-01-port-v1-kernel-loc`.
+
+## 2026-05-27 08:25 EEST
+
+- Because milestone 01 was rejected, milestone 02 must compare against `milestone-00-baseline`, not the rejected milestone 01 folder.
+- Updating the milestone 02 suite gate before trying a smaller LOC candidate.
