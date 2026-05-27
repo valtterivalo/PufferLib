@@ -17,6 +17,7 @@
 
 #include "ocean/osrs/encounters/encounter_inferno.h"
 #include "ocean/osrs/osrs_anim.h"
+#include "ocean/osrs/osrs_projectile_orientation.h"
 #include "ocean/osrs/osrs_render_motion.h"
 #include <math.h>
 
@@ -8122,6 +8123,26 @@ static void test_player_projectile_render_uses_stored_reference_timing(void) {
         bowfa_ov.projectiles[0].impact_gfx_id, 0);
 }
 
+static void test_projectile_anchor_effect_subtile_round_trips_entity_center(void) {
+    printf("--- projectile anchor effect subtile round-trips entity center ---\n");
+
+    int player_sub_x = 10 * 128 + 64;
+    int player_sub_y = 17 * 128 + 64;
+    float anchor_x = osrs_projectile_anchor_coord_from_subtile(player_sub_x);
+    float anchor_y = osrs_projectile_anchor_coord_from_subtile(player_sub_y);
+
+    ASSERT_FLOAT_NEAR("projectile anchor x is tile origin",
+        anchor_x, 10.0f, 0.0001f);
+    ASSERT_FLOAT_NEAR("projectile anchor y is tile origin",
+        anchor_y, 17.0f, 0.0001f);
+    ASSERT_FLOAT_NEAR("projectile effect x returns to entity center",
+        osrs_projectile_subtile_from_anchor_coord(anchor_x),
+        (float)player_sub_x, 0.0001f);
+    ASSERT_FLOAT_NEAR("projectile effect y returns to entity center",
+        osrs_projectile_subtile_from_anchor_coord(anchor_y),
+        (float)player_sub_y, 0.0001f);
+}
+
 static void test_magic_splash_landing_keeps_spell_visual_context(void) {
     printf("--- magic splash landing keeps spell visual context ---\n");
 
@@ -9193,6 +9214,7 @@ int main(void) {
     test_inferno_npc_projectile_render_tracks_target_npc_slot();
     test_inferno_zuk_projectile_render_uses_combat_visual_rows();
     test_player_projectile_render_uses_stored_reference_timing();
+    test_projectile_anchor_effect_subtile_round_trips_entity_center();
     test_magic_splash_landing_keeps_spell_visual_context();
     test_npc_overkill_hit_caps_splat_hp_and_damage_stats();
     test_blood_barrage_overkill_heals_from_capped_damage();

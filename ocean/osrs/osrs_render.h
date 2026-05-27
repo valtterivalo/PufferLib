@@ -639,16 +639,7 @@ static int render_spawn_profile_projectile(
     int fallback_slope
 ) {
     if (!profile) return -1;
-    int launch_slot = -1;
-    if (profile->launch_spotanim_id > 0) {
-        launch_slot = effect_spawn_spotanim_subtile(
-            rc->effects, profile->launch_spotanim_id,
-            src_x * 128.0f + 64.0f, src_y * 128.0f + 64.0f,
-            rc->effect_client_tick_counter + delay_client_ticks,
-            rc->spotanims, rc->anim_cache, rc->model_cache,
-            rc->npc_model_cache, rc->projectile_model_cache);
-    }
-    if (profile->travel_spotanim_id < 0) return launch_slot;
+    if (profile->travel_spotanim_id < 0) return -1;
     return effect_spawn_projectile(
         rc->effects, profile->travel_spotanim_id,
         src_x, src_y, dst_x, dst_y,
@@ -1881,7 +1872,8 @@ static void flight_finish(RenderClient* rc, FlightProjectile* fp) {
     if (fp->impact_gfx_id > 0) {
         effect_spawn_spotanim_subtile(
             rc->effects, fp->impact_gfx_id,
-            fp->dst_x * 128.0f, fp->dst_y * 128.0f,
+            osrs_projectile_subtile_from_anchor_coord(fp->dst_x),
+            osrs_projectile_subtile_from_anchor_coord(fp->dst_y),
             rc->effect_client_tick_counter + 1,
             rc->spotanims, rc->anim_cache, rc->model_cache,
             rc->npc_model_cache, rc->projectile_model_cache);
@@ -2009,14 +2001,6 @@ static void flight_spawn(RenderClient* rc,
     fp->offset_y = offset_y;
     fp->offset_z = offset_z;
     flight_update_live_destination(rc, fp);
-    if (fp->launch_gfx_id > 0) {
-        effect_spawn_spotanim_subtile(
-            rc->effects, fp->launch_gfx_id,
-            fp->src_x * 128.0f, fp->src_y * 128.0f,
-            rc->effect_client_tick_counter + fp->start_delay,
-            rc->spotanims, rc->anim_cache, rc->model_cache,
-            rc->npc_model_cache, rc->projectile_model_cache);
-    }
 
     /* height arc: OSRS SceneProjectile.calculateIncrements
        skip quadratic computation when using sinusoidal arc */
