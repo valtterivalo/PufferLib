@@ -666,3 +666,22 @@
 - Native Metal parity passed and wrote `milestone-04ab-tensor-ops-wrapper-macro/native-metal.json`. Overlay surface passed in both milestone 04ab suites.
 - Subagent review: Bohr found no blocking findings, verified the immutable plan and `src/metal` have no diff after restore, checked runner scope and g2048 overrides, confirmed benchmark arithmetic and rejection, verified `native-metal.json` and generated run dirs are ignored, and reran `git diff --check`, `bash -n`, and overlay surface after source restore.
 - Decision: rejected. The candidate missed the current accepted g2048 gate by `205` SPS against the 1 percent threshold, so `src/metal/platform.mm` was restored to the 04aa accepted state. Only rejection artifacts, runner scripts, overlay allowlist, and this status entry remain for audit.
+
+## 2026-05-27 Milestone 04ac Forward Declaration Cleanup Candidate
+
+- Root-cause hypothesis: `src/metal/kernels.mm` still declares four local fill/copy wrappers before `puf_copy` and `puf_zero` because their definitions sit later in the file. Moving the existing definitions above their first use can delete the declarations while preserving function bodies, exported host symbols, shader names, binding order, dispatch dimensions, command order, RNG, PPO math, and eval behavior.
+- Candidate source change: move `mtl_fill_f16`, `mtl_copy_f16`, `mtl_fill_f32`, and `mtl_copy_f32` above `puf_copy` and delete their top-of-file declarations. Add dedicated milestone 04ac runners and exact overlay allowlist paths.
+- LOC before validation: `src/metal/shader_src.h` is unchanged at `2,256`. `src/metal/kernels.mm` is `1,440`, down from accepted `1,445`. Full `src/metal/platform.mm` is unchanged at `1,087`. Kernel scope is `3,813`, down from accepted `3,818` and setup `4,615`. Backend scope is `9,459` after overlay allowlist growth, down from `9,460` after the rejected 04ab audit commit.
+- Risk classification: low. This is source ordering and declaration cleanup only, but it touches a live translation unit, so acceptance still requires build success, repeated `breakout` and `g2048`, native parity, overlay surface, interactive smoke, comparable train and eval scores, and subagent review.
+- Acceptance gate: use the dedicated `milestone-04ac-forward-decl-cleanup` runners, require repeated medians within 1 percent of the current accepted 04aa baseline or better, require train and eval scores to remain comparable, and reject on compile, parity, determinism, interactive, or score drift.
+
+## 2026-05-27 Milestone 04ac Forward Declaration Cleanup Results
+
+- Candidate code change: temporarily moved the four fill/copy wrapper definitions above `puf_copy` and `puf_zero`, deleting their top-of-file declarations. The candidate would have reduced `src/metal/kernels.mm` from `1,445` to `1,440` and kernel scope from `3,818` to `3,813`, but it is not kept.
+- Static validation passed before benchmark rejection: `tools/metal/build.sh breakout`, `tools/metal/build.sh g2048`, `git diff --check`, `bash -n` for all milestone 04ac runners, and `PYTHONPATH=$PWD python -m pytest -p no:cacheprovider tests/metal/test_overlay_surface.py`.
+- First milestone 04ac suite: `breakout` artifact `20260527T070630+0300-breakout` at `3,384,805` SPS, train score `2.5605483055114746`, eval score `0.0`. `g2048` artifact `20260527T070642+0300-g2048` at `605,841` SPS, train score `97.85507202148438`, eval score `49.43283462524414`.
+- Second milestone 04ac suite: `breakout` artifact `20260527T070657+0300-breakout` at `2,884,416` SPS, train score `2.6388888359069824`, eval score `0.0`. `g2048` artifact `20260527T070710+0300-g2048` at `544,260` SPS, train score `97.9459457397461`, eval score `53.0`.
+- Medians: `breakout` two-run median `3,134,610` SPS, `-8.44%` versus milestone 04aa accepted median `3,423,482`. `g2048` two-run median `575,050` SPS, `-4.79%` versus milestone 04aa accepted median `603,992`.
+- Overlay surface passed in both milestone 04ac suites.
+- Subagent review: Ohm found no blocking findings, verified the immutable plan and `src/metal` have no diff after restore, checked runner scope and g2048 overrides, confirmed benchmark arithmetic and rejection, verified generated benchmark dirs are ignored, and reran `git diff --check`, `bash -n`, and overlay surface after source restore.
+- Decision: rejected. The candidate missed the throughput gate in both benchmark envs, so `src/metal/kernels.mm` was restored to the 04aa accepted state. Only rejection artifacts, runner scripts, overlay allowlist, and this status entry remain for audit.
