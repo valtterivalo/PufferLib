@@ -366,3 +366,22 @@
 - Medians: `breakout` three-run median `3,427,071` SPS, `-1.35%` versus milestone 04l accepted median `3,473,973`; `g2048` two-run median `597,508` SPS, `+0.02%` versus milestone 04l accepted median `597,374`.
 - Native Metal parity and overlay surface passed in both milestone 04m suites.
 - Decision: rejected. The candidate exceeded the 1 percent breakout SPS gate, so `src/metal/shader_src.h` was restored to the 04l accepted state. Only rejection artifacts, runner scripts, overlay allowlist, and this status entry remain for audit.
+
+## 2026-05-27 Milestone 04n Comment Cleanup Candidate
+
+- Root-cause hypothesis: the accepted kernel files still contain comments that repeat branch names, visible formulas, field names, and dispatch shapes. Deleting that prose should reduce source LOC without changing executable C++ or MSL tokens apart from comments and trailing inline text.
+- Candidate code change: remove redundant comments from `src/metal/shader_src.h`, `src/metal/kernels.mm`, and `src/metal/platform.mm`, while keeping comments that explain precision drift, NaN avoidance, determinism, Metal visibility, and measured Steel GEMM behavior.
+- LOC before validation: `src/metal/shader_src.h` is `2,220` lines, down from accepted `2,266`. `src/metal/kernels.mm` is `1,447`, down from accepted `1,477`. Full `src/metal/platform.mm` is `997`, down from accepted `1,088`. Kernel scope is `3,784`, down from accepted `3,860` and setup `4,615`. Backend scope is `9,280` after runner allowlist growth, down from accepted `9,443` after the rejected 04m audit commit.
+- Risk classification: low. This is comment-only cleanup, but the embedded shader source string changes, so acceptance still requires build success, repeated `breakout` and `g2048`, native parity, overlay surface, interactive smoke, comparable train and eval scores, and subagent review.
+- Acceptance gate: use the dedicated `milestone-04n-comment-cleanup` runners, require median SPS within 1 percent of the current accepted baseline or better, require learnability and eval to remain comparable, and reject on compile, parity, determinism, or score drift.
+
+## 2026-05-27 Milestone 04n Comment Cleanup Results
+
+- Candidate code change: temporarily removed redundant comments from Metal shader and host source. The candidate would have reduced kernel scope from `3,860` to `3,784`, but it is not kept.
+- Static validation passed before benchmark rejection: `tools/metal/build.sh breakout`, `tools/metal/build.sh g2048`, `git diff --check`, `bash -n` for all milestone 04n runners, and `PYTHONPATH=$PWD python -m pytest tests/metal/test_overlay_surface.py`.
+- First milestone 04n suite: `breakout` artifact `20260527T044635+0300-breakout` at `3,453,085` SPS, train score `2.370234489440918`, eval score `0.0`. `g2048` artifact `20260527T044646+0300-g2048` at `593,241` SPS, train score `97.85507202148438`, eval score `49.43283462524414`.
+- Second milestone 04n suite: `breakout` artifact `20260527T044715+0300-breakout` at `3,402,927` SPS, train score `2.1449999809265137`, eval score `0.0`. `g2048` artifact `20260527T044726+0300-g2048` at `599,530` SPS, train score `97.85507202148438`, eval score `49.43283462524414`.
+- Extra breakout runner: `20260527T044752+0300-breakout` at `3,407,134` SPS, train score `2.201909065246582`, eval score `0.0`. This extra run was added because the two-run breakout median missed the 1 percent gate.
+- Medians: `breakout` three-run median `3,407,134` SPS, `-1.93%` versus milestone 04l accepted median `3,473,973`. `g2048` two-run median `596,386` SPS, `-0.17%` versus milestone 04l accepted median `597,374`.
+- Native Metal parity and overlay surface passed in both milestone 04n suites.
+- Decision: rejected. The candidate exceeded the 1 percent breakout SPS gate, so `src/metal/shader_src.h`, `src/metal/kernels.mm`, and `src/metal/platform.mm` were restored to the 04l accepted state. Only rejection artifacts, runner scripts, overlay allowlist, and this status entry remain for audit.
