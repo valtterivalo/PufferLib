@@ -44,7 +44,11 @@ kernel void tensor_ops_gemm_nt_f32(
     auto C = tensor<device float, dextents<int32_t, 2>, tensor_inline>(
         C_buf, dextents<int32_t, 2>(N, M));
 
-    constexpr auto desc = matmul2d_descriptor(64, 32, static_cast<int>(dynamic_extent), false, true, false);
+    constexpr auto desc = matmul2d_descriptor(
+        64, 32,
+        static_cast<int>(dynamic_extent),
+        false, true, false
+    );
     matmul2d<desc, execution_simdgroups<4>> op;
 
     auto mA = A.slice(0, tgid.y * 64);
@@ -80,7 +84,11 @@ kernel void tensor_ops_gemm_nn_f32(
     // Col-major NN: C_cm(N,M) = B_cm(N,K) @ A_cm(K,M)
     // op.run convention: result = second @ first (same as NT kernel)
     // first=A_cm, second=B_cm, no transposes
-    constexpr auto desc = matmul2d_descriptor(64, 32, static_cast<int>(dynamic_extent), false, false, false);
+    constexpr auto desc = matmul2d_descriptor(
+        64, 32,
+        static_cast<int>(dynamic_extent),
+        false, false, false
+    );
     matmul2d<desc, execution_simdgroups<4>> op;
 
     // tgid.y tiles M at stride 64 (tile_M), tgid.x tiles N at stride 32 (tile_N)
@@ -111,7 +119,11 @@ kernel void tensor_ops_gemm_nt_f16(
     auto C = tensor<device half, dextents<int32_t, 2>, tensor_inline>(
         C_buf, dextents<int32_t, 2>(N, M));
 
-    constexpr auto desc = matmul2d_descriptor(64, 32, static_cast<int>(dynamic_extent), false, true, false);
+    constexpr auto desc = matmul2d_descriptor(
+        64, 32,
+        static_cast<int>(dynamic_extent),
+        false, true, false
+    );
     matmul2d<desc, execution_simdgroups<4>> op;
 
     auto mA = A.slice(0, tgid.y * 64);
@@ -138,7 +150,11 @@ kernel void tensor_ops_gemm_nn_f16(
     auto C_cm = tensor<device half, dextents<int32_t, 2>, tensor_inline>(
         C_buf, dextents<int32_t, 2>(N, M));
 
-    constexpr auto desc = matmul2d_descriptor(64, 32, static_cast<int>(dynamic_extent), false, false, false);
+    constexpr auto desc = matmul2d_descriptor(
+        64, 32,
+        static_cast<int>(dynamic_extent),
+        false, false, false
+    );
     matmul2d<desc, execution_simdgroups<4>> op;
 
     auto mFirst  = A_cm.slice(0, tgid.y * 64);
@@ -174,7 +190,11 @@ kernel void tensor_ops_gemm_tn_f32(
     // result(N,M) = second(N,K) @ transpose(first(M,K))
     // transpose_first=true: matmul sees first as (K,M)
     // (N,K) @ (K,M) = (N,M) = result
-    constexpr auto desc = matmul2d_descriptor(64, 32, static_cast<int>(dynamic_extent), true, false, false);
+    constexpr auto desc = matmul2d_descriptor(
+        64, 32,
+        static_cast<int>(dynamic_extent),
+        true, false, false
+    );
     matmul2d<desc, execution_simdgroups<4>> op;
 
     // tgid.y tiles M at stride 64, tgid.x tiles N at stride 32
@@ -202,7 +222,11 @@ kernel void tensor_ops_gemm_tn_f16(
     auto C_cm = tensor<device half, dextents<int32_t, 2>, tensor_inline>(
         C_buf, dextents<int32_t, 2>(N, M));
 
-    constexpr auto desc = matmul2d_descriptor(64, 32, static_cast<int>(dynamic_extent), true, false, false);
+    constexpr auto desc = matmul2d_descriptor(
+        64, 32,
+        static_cast<int>(dynamic_extent),
+        true, false, false
+    );
     matmul2d<desc, execution_simdgroups<4>> op;
 
     auto mFirst  = A_cm.slice(tgid.y * 64, 0);

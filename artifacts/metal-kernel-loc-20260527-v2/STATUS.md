@@ -306,3 +306,18 @@
 - Overlay surface test passed.
 - Interactive smoke artifact: `milestone-08-tensor-desc-format/20260527T095937+0300-interactive-breakout-tensor-desc-format`. It built, invoked eval with `resources/breakout/breakout_weights.bin`, reached raylib 5.5 GLFW initialization, then failed with `Failed to determine Monitor to center Window` and exit code `139`, matching the known desktop windowing boundary.
 - Decision: accepted pending subagent review. Because the change touches embedded MSL source text, it still needs a post-commit clean audit before it can be treated as final.
+
+## 2026-05-27 10:04 EEST
+
+- Milestone 08 failed the post-commit clean audit after commit `5e6949654`, so the tensor descriptor formatting change was rejected and source was restored.
+- Clean audit failure:
+  - `breakout`: `3,068,869` SPS versus required `3,400,490.61`, `-10.654647859768684%`; train score `2.3927189111709595`, eval score `0.0`.
+  - `g2048`: `556,697` SPS versus required `600,715.17`, `-8.2543512260561%`; train score `100.07987213134766`, eval score `51.96200942993164`.
+- Clean audit still ran GPU-inference smoke, native Metal parity, and overlay surface before the median gate failed.
+- Interactive smoke did not run in the clean audit because the median gate stopped the suite first.
+- Current accepted source LOC after restore:
+  - `src/metal/shader_src.h`: `2809` lines.
+  - `src/metal/kernels.mm`: `1576` lines.
+  - `src/metal/platform.mm`: `1213` full-file lines, tensor-ops shader block `216`.
+  - Kernel scope total: `4601` lines, net `-10` versus baseline.
+  - Backend scope total after keeping milestone 08 audit allowlist: `10176` lines, net `+2` versus baseline.
