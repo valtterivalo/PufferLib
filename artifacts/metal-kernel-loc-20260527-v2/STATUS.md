@@ -90,7 +90,7 @@
   - `tools/metal/build.sh breakout` passed.
   - `tools/metal/build.sh g2048` passed.
   - Milestone 02 suite reached the median gate after repeated main runs, GPU-inference smoke, native parity, and overlay guard.
-- Decision: rejected and reverting source changes.
+- Decision: rejected and reverted source changes.
 - Rejection reason: `g2048` missed the LOC gate after two main runs.
   - Baseline `g2048` median: `606,783` SPS.
   - Required 1 percent floor: `600,715.17` SPS.
@@ -99,3 +99,32 @@
   - `breakout` passed the gate but regressed to `3,421,469` SPS versus baseline `3,434,839`, `-0.38924677401181995%`.
 - Rejection artifacts: `artifacts/metal-kernel-loc-20260527-v2/milestone-02-kernel-consolidation`.
 - Updated root-cause hypothesis: edits inside `shader_src.h` can change Metal compilation or code layout enough to move g2048 throughput even when removed kernels are not on the measured path. Future LOC candidates should isolate host-side cleanup first, or touch shader source only in tiny audited slices.
+
+## 2026-05-27 08:36 EEST
+
+- Starting milestone 03 cleanup candidate.
+- Root-cause hypothesis: `src/metal/kernels.mm` repeats the same host setup sequence across many dispatch wrappers: activate the compute encoder, look up a PSO by name, and bind it. A tiny helper can remove duplicated host code while preserving MSL source text, PSO names, argument binding order, dispatch dimensions, barriers, RNG state, optimizer math, and policy data flow.
+- Acceptance gate remains the full milestone suite against the accepted milestone 00 baseline. This is a LOC cleanup, so median SPS must stay within the 1 percent floor, scores and positive eval must remain comparable, GPU-inference smoke must pass, native parity and overlay must pass, and commit still requires subagent review.
+- Because milestones 01 and 02 were both rejected, milestone 03 must compare against `milestone-00-baseline`. Updated the milestone 03 runner gate before executing benchmarks.
+
+## 2026-05-27 08:39 EEST
+
+- Milestone 03 candidate: add `mtl_begin_kernel` in `src/metal/kernels.mm` and replace repeated compute-encoder, PSO lookup, and PSO bind triplets.
+- Candidate LOC delta before rejection:
+  - `src/metal/kernels.mm`: `1586` to `1512`, `-74`.
+  - Kernel scope total: `4611` to `4537`, `-74`.
+- Validation run:
+  - Repeated main train and eval ran for both `breakout` and `g2048`.
+  - GPU-inference smoke passed for both envs.
+  - Native Metal parity wrote `milestone-03-cleanup/native-metal.json`.
+  - Overlay surface test passed.
+  - Interactive smoke did not run because the median gate stopped the suite first.
+- Decision: rejected and reverted source changes.
+- Rejection reason: `g2048` missed the LOC gate after two main runs.
+  - Baseline `g2048` median: `606,783` SPS.
+  - Required 1 percent floor: `600,715.17` SPS.
+  - Candidate `g2048` median: `599,601.5` SPS, `-1.1835367833311072%`.
+  - Candidate train score remained `97.85507202148438`, eval score remained `49.43283462524414`, so this was a throughput gate failure.
+  - `breakout` passed: candidate median `3,406,360` SPS versus baseline `3,434,839`, `-0.8291218307466486%`, eval `0.0`.
+- Rejection artifacts: `artifacts/metal-kernel-loc-20260527-v2/milestone-03-cleanup`.
+- Decision discipline: not adding after-the-fact runs to rescue a near miss. The first full gate failed, so the source cleanup is out.
