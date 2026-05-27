@@ -173,9 +173,7 @@ void puf_cast_u8_to_f32(PufTensor &dst, const PufTensor &src,
   mtl_set_pso(ms, pso);
   mtl_set_tensor(ms, dst, 0);
   mtl_set_tensor(ms, src, 1);
-  struct {
-    int count;
-  } params = {(int)src.numel()};
+  struct { int count; } params = {(int)src.numel()};
   mtl_set_params(ms, params, 2);
   mtl_dispatch_1d(ms, pso, (int)src.numel());
 }
@@ -336,9 +334,7 @@ void mtl_norm_f32(float *partials, const float *data, int count,
   mtl_set_pso(ms, pso);
   mtl_set_ptr(ms, partials, 0);
   mtl_set_ptr(ms, data, 1);
-  struct {
-    int count;
-  } params = {count};
+  struct { int count; } params = {count};
   mtl_set_params(ms, params, 2);
   mtl_dispatch_groups(ms, pso, num_blocks, 256);
 }
@@ -351,9 +347,7 @@ void mtl_norm_reduce(float *result, const float *partials, int num_blocks,
   mtl_set_pso(ms, pso);
   mtl_set_ptr(ms, result, 0);
   mtl_set_ptr(ms, partials, 1);
-  struct {
-    int num_blocks;
-  } params = {num_blocks};
+  struct { int num_blocks; } params = {num_blocks};
   mtl_set_params(ms, params, 2);
   mtl_dispatch_groups(ms, pso, 1, 256);
 }
@@ -788,9 +782,7 @@ void ppo_loss_fwd_bwd(PufTensor &dec_out, PufTensor &logstd, TrainGraph &graph,
     mtl_set_ptr(ms, bufs.loss_output.data, 0);
     mtl_set_ptr(ms, losses_acc.data, 1);
     mtl_set_ptr(ms, ppo_partials_buf, 2);
-    struct {
-      int num_blocks;
-    } params = {ppo_grid};
+    struct { int num_blocks; } params = {ppo_grid};
     mtl_set_params(ms, params, 3);
 
     mtl_dispatch_groups(ms, pso, 1, LOSS_N + 1);
@@ -873,9 +865,7 @@ void prio_precompute(FloatTensor &advantages, float prio_alpha,
     auto pso = mtl_pipeline("prio_normalize_kernel");
     mtl_set_pso(ms, pso);
     mtl_set_ptr(ms, bufs.prio_probs.data, 0);
-    struct {
-      int S;
-    } params = {S};
+    struct { int S; } params = {S};
     mtl_set_params(ms, params, 1);
     mtl_dispatch_groups(ms, pso, 1, 256);
   }

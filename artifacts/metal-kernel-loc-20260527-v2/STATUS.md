@@ -216,3 +216,37 @@
   - `src/metal/kernels.mm`: `1586` lines.
   - `src/metal/platform.mm`: `1213` full-file lines, tensor-ops shader block `216`.
   - Kernel scope total: `4611` lines, net `0` versus baseline.
+
+## 2026-05-27 09:46 EEST
+
+- Starting milestone 07 host-param-format candidate.
+- Root-cause hypothesis: `src/metal/kernels.mm` has five one-field anonymous host parameter structs written across three lines each. Collapsing each declaration to one line removes formatting-only host LOC while preserving the same C++ types, initializers, `mtl_set_params` calls, dispatch order, embedded MSL source, RNG, PPO math, and eval behavior.
+- This deliberately avoids the previously rejected dispatch helper and dead shader cleanup paths.
+- Added dedicated milestone 07 runner scripts and overlay allowlist entries before validation.
+- Acceptance gate remains the full milestone suite against `milestone-00-baseline`, plus subagent review before commit.
+- Candidate LOC before validation:
+  - `src/metal/kernels.mm`: `1586` to `1576`, `-10`.
+  - Kernel scope total: `4611` to `4601`, `-10`.
+  - Backend scope total after overlay allowlist growth: `10178` to `10172`, net `-2` versus baseline.
+
+## 2026-05-27 09:44 EEST
+
+- Milestone 07 host-param-format candidate passed the full suite.
+- Code change: collapsed five one-field anonymous host parameter structs in `src/metal/kernels.mm` from three lines each to one line each. No dispatch helper, embedded MSL source, binding order, parameter values, or control flow changed.
+- Accepted LOC delta before commit:
+  - `src/metal/kernels.mm`: `1586` to `1576`, `-10`.
+  - Kernel scope total: `4611` to `4601`, `-10`.
+  - Backend scope total: `10178` to `10172`, net `-2` versus baseline after milestone 06 and 07 allowlist growth.
+- Main CPU-overlap medians:
+  - `breakout`: `3,446,301.5` SPS versus baseline `3,434,839`, `+0.3337128756253138%`; train score `2.3739752769470215`, eval score `0.0`.
+  - `g2048`: `606,157` SPS versus baseline `606,783`, `-0.10316703005852634%`; train score `97.85507202148438`, eval score `49.43283462524414`.
+- Main run artifacts:
+  - `breakout`: `20260527T094212+0300-breakout`, `20260527T094234+0300-breakout`.
+  - `g2048`: `20260527T094224+0300-g2048`, `20260527T094244+0300-g2048`.
+- GPU-inference smoke passed for both envs:
+  - `breakout`: `20260527T094254+0300-breakout`, `3,524,459` SPS, train score `1.002888560295105`, eval score `0.0`.
+  - `g2048`: `20260527T094304+0300-g2048`, `876,325` SPS, train score `97.85507202148438`, eval score `42.0`.
+- Native Metal parity wrote `milestone-07-host-param-format/native-metal.json`.
+- Overlay surface test passed.
+- Interactive smoke artifact: `milestone-07-host-param-format/20260527T094314+0300-interactive-breakout-host-param-format`. It built, invoked eval with `resources/breakout/breakout_weights.bin`, reached raylib 5.5 GLFW initialization, then failed with `Failed to determine Monitor to center Window` and exit code `139`, matching the known desktop windowing boundary.
+- Decision: accepted pending subagent review. Because the previous accepted cleanup failed clean final audit, this candidate still needs a post-commit clean audit before it can be treated as final.
