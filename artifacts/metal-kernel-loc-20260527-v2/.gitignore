@@ -1,0 +1,10 @@
+*
+!/.gitignore
+!/PLAN.md
+!/STATUS.md
+!/bin/
+!/bin/*.sh
+!/bin/*.py
+!/milestone-*/
+!/milestone-*/run-*.sh
+

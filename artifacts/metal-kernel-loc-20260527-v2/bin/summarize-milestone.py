@@ -1,0 +1,71 @@
+#!/usr/bin/env python3
+"""Summarize repeated benchmark runs in one milestone folder."""
+
+from __future__ import annotations
+
+import json
+import statistics
+import sys
+from pathlib import Path
+
+
+def metadata(path: Path) -> dict[str, str]:
+    """Read metadata key-value lines."""
+    out = {}
+    for line in path.read_text().splitlines():
+        if "=" in line:
+            key, value = line.split("=", 1)
+            out[key] = value
+    return out
+
+
+def main() -> None:
+    """Write milestone-summary.json next to the runner scripts."""
+    if len(sys.argv) != 2:
+        raise SystemExit("usage: summarize-milestone.py MILESTONE_DIR")
+
+    milestone_dir = Path(sys.argv[1])
+    envs: dict[str, list[dict[str, object]]] = {"breakout": [], "g2048": []}
+    for env_name in envs:
+        for summary_path in sorted(milestone_dir.glob(f"*-{env_name}/summary.json")):
+            summary = json.loads(summary_path.read_text())
+            run_meta = metadata(summary_path.parent / "metadata.txt")
+            envs[env_name].append(
+                {
+                    "run": summary_path.parent.name,
+                    "sps": summary["sps"],
+                    "score": summary["score"],
+                    "eval_score": json.loads((summary_path.parent / "eval-summary.json").read_text())["score"],
+                    "uptime": summary["uptime"],
+                    "metal_cpu_inference": run_meta["metal_cpu_inference"],
+                    "metal_train_fp16": run_meta["metal_train_fp16"],
+                }
+            )
+
+    out = {"envs": {}}
+    for env_name, records in envs.items():
+        main_records = [
+            record
+            for record in records
+            if record["metal_cpu_inference"] == "1" and record["metal_train_fp16"] == "0"
+        ]
+        out["envs"][env_name] = {
+            "runs": records,
+            "main_run_count": len(main_records),
+            "main_sps_median": statistics.median(record["sps"] for record in main_records)
+            if main_records
+            else None,
+            "main_score_median": statistics.median(record["score"] for record in main_records)
+            if main_records
+            else None,
+            "main_eval_score_median": statistics.median(record["eval_score"] for record in main_records)
+            if main_records
+            else None,
+        }
+
+    (milestone_dir / "milestone-summary.json").write_text(json.dumps(out, indent=2, sort_keys=True) + "\n")
+
+
+if __name__ == "__main__":
+    main()
+
