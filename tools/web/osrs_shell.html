@@ -246,15 +246,56 @@
       return parts[parts.length - 1];
     }
 
+    function containingPath(path) {
+      const index = path.lastIndexOf("/");
+      if (index < 0) return "";
+      return path.slice(0, index + 1);
+    }
+
+    function fetchBinary(path) {
+      return fetch(versionedAssetUrl(`${path}.chunks.json`))
+        .then((manifestResponse) => {
+          if (manifestResponse.status === 404) {
+            return fetch(versionedAssetUrl(path))
+              .then((response) => {
+                if (!response.ok) throw new Error(`failed to load ${path}: ${response.status}`);
+                return response.arrayBuffer();
+              });
+          }
+          if (!manifestResponse.ok) {
+            throw new Error(`failed to load ${path}.chunks.json: ${manifestResponse.status}`);
+          }
+          return manifestResponse.json().then((manifest) => {
+            const data = new Uint8Array(manifest.size);
+            const base = containingPath(path);
+            let offset = 0;
+            return manifest.chunks.reduce((previous, chunk) => previous.then(() => {
+              Module.setStatus(`loading ${chunk}`);
+              return fetch(versionedAssetUrl(`${base}${chunk}`))
+                .then((response) => {
+                  if (!response.ok) throw new Error(`failed to load ${chunk}: ${response.status}`);
+                  return response.arrayBuffer();
+                })
+                .then((buffer) => {
+                  const bytes = new Uint8Array(buffer);
+                  data.set(bytes, offset);
+                  offset += bytes.byteLength;
+                });
+            }), Promise.resolve()).then(() => {
+              if (offset !== manifest.size) {
+                throw new Error(`loaded ${offset} bytes, expected ${manifest.size}`);
+              }
+              return data.buffer;
+            });
+          });
+        });
+    }
+
     function installPolicyModel() {
       if (!model) return;
       const fileName = modelName(model);
       Module.addRunDependency("policy-model");
-      fetch(versionedAssetUrl(model))
-        .then((response) => {
-          if (!response.ok) throw new Error(`failed to load ${model}: ${response.status}`);
-          return response.arrayBuffer();
-        })
+      fetchBinary(model)
         .then((buffer) => {
           Module.FS_createPath("/", "models", true, true);
           Module.FS_createDataFile(

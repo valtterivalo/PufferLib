@@ -73,22 +73,66 @@ def file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def copy_policy_models(out_dir: Path, checkpoint_root: Path) -> list[dict[str, object]]:
+def remove_chunks(path: Path) -> None:
+    """Remove stale chunk files for a split asset."""
+    for chunk in path.parent.glob(f"{path.name}.part*"):
+        chunk.unlink()
+    manifest = path.with_name(f"{path.name}.chunks.json")
+    if manifest.exists():
+        manifest.unlink()
+
+
+def split_binary_file(path: Path, chunk_size: int) -> list[Path]:
+    """Split a binary file into cacheable chunks."""
+    if chunk_size <= 0:
+        raise ValueError("--chunk-size must be positive")
+    remove_chunks(path)
+    chunks = []
+    size = path.stat().st_size
+    with path.open("rb") as source:
+        index = 0
+        while data := source.read(chunk_size):
+            chunk_path = path.with_name(f"{path.name}.part{index:02d}")
+            chunk_path.write_bytes(data)
+            chunks.append(chunk_path)
+            index += 1
+    manifest_path = path.with_name(f"{path.name}.chunks.json")
+    manifest_path.write_text(json.dumps({
+        "size": size,
+        "chunks": [chunk.name for chunk in chunks],
+    }, indent=2) + "\n")
+    path.unlink()
+    return [manifest_path, *chunks]
+
+
+def copy_policy_models(
+    out_dir: Path,
+    checkpoint_root: Path,
+    chunk_size: int,
+) -> tuple[list[dict[str, object]], list[Path]]:
     """Copy selected policy checkpoints into the web bundle."""
     models_dir = out_dir / "models"
     models_dir.mkdir(parents=True, exist_ok=True)
     manifest = []
+    version_paths = []
     for name, spec in POLICIES.items():
         source = checkpoint_root / str(spec["source"])
         if not source.exists():
             raise FileNotFoundError(source)
         target = models_dir / str(spec["target"])
         shutil.copy2(source, target)
+        size = target.stat().st_size
+        sha256 = file_sha256(target)
+        if size > chunk_size:
+            version_paths.extend(split_binary_file(target, chunk_size))
+        else:
+            remove_chunks(target)
+            version_paths.append(target)
         row = {
             "name": name,
             "path": f"models/{target.name}",
-            "bytes": target.stat().st_size,
-            "sha256": file_sha256(target),
+            "bytes": size,
+            "sha256": sha256,
             "hidden_size": spec["hidden_size"],
             "num_layers": spec["num_layers"],
             "encounter": spec["encounter"],
@@ -99,32 +143,20 @@ def copy_policy_models(out_dir: Path, checkpoint_root: Path) -> list[dict[str, o
         manifest.append(row)
     manifest_path = models_dir / "policies.json"
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
-    return manifest
+    version_paths.append(manifest_path)
+    return manifest, version_paths
 
 
 def split_data_file(out_dir: Path, chunk_size: int) -> list[Path]:
     """Split Emscripten's data package into cacheable chunks."""
     data_path = out_dir / "game.data"
     if not data_path.exists():
-        return sorted(out_dir.glob("game.data.part*"))
-    if chunk_size <= 0:
-        raise ValueError("--chunk-size must be positive")
-    chunks = []
-    with data_path.open("rb") as source:
-        index = 0
-        while data := source.read(chunk_size):
-            chunk_path = out_dir / f"game.data.part{index:02d}"
-            chunk_path.write_bytes(data)
-            chunks.append(chunk_path)
-            index += 1
-    manifest = {
-        "size": data_path.stat().st_size,
-        "chunks": [path.name for path in chunks],
-    }
-    (out_dir / "game.data.chunks.json").write_text(
-        json.dumps(manifest, indent=2) + "\n")
-    data_path.unlink()
-    return chunks
+        paths = sorted(out_dir.glob("game.data.part*"))
+        manifest = out_dir / "game.data.chunks.json"
+        if manifest.exists():
+            paths.append(manifest)
+        return paths
+    return split_binary_file(data_path, chunk_size)
 
 
 def replace_asset_version(out_dir: Path, paths: list[Path]) -> str:
@@ -164,14 +196,14 @@ def main() -> None:
     checkpoint_root = args.checkpoint_root or default_checkpoint_root(repo_root)
     if not checkpoint_root.exists():
         raise FileNotFoundError(checkpoint_root)
-    manifest = copy_policy_models(out_dir, checkpoint_root)
+    manifest, model_version_paths = copy_policy_models(
+        out_dir, checkpoint_root, args.chunk_size)
     chunks = split_data_file(out_dir, args.chunk_size)
     version_paths = [
         out_dir / "game.js",
         out_dir / "game.wasm",
         out_dir / "game.wasm.map",
-        out_dir / "game.data.chunks.json",
-        *(out_dir / "models" / str(row["path"]).split("/")[-1] for row in manifest),
+        *model_version_paths,
         *chunks,
     ]
     version = replace_asset_version(out_dir, version_paths)
