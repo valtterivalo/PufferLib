@@ -1745,6 +1745,8 @@ static void test_late_start_supply_profile_anchor_waves(void) {
         { 64, 0.5833f, 0.5000f, 0.7500f, 1.0000f },
         { 68, 0.5833f, 0.4250f, 0.6250f, 1.0000f },
         { 69, 0.5000f, 0.3000f, 0.3750f, 1.0000f },
+        { 70, 0.4375f, 0.2250f, 0.3750f, 1.0000f },
+        { 71, 0.3750f, 0.1500f, 0.3750f, 1.0000f },
     };
 
     EncounterState* raw_state = inf_create();
@@ -1803,6 +1805,84 @@ static void test_late_start_supply_profile_interpolation_and_scale(void) {
     };
     assert_supply_doses("wave 69 scale 0.5", &state->player, half_scale);
 
+    inf_destroy(raw_state);
+}
+
+static void test_curriculum_supply_no_brew_is_curriculum_only(void) {
+    printf("--- curriculum no-brew starts are curriculum-only ---\n");
+
+    EncounterState* raw_state = inf_create();
+    InfernoState* state = (InfernoState*)raw_state;
+
+    inf_put_int(raw_state, "curriculum_no_brew_mode",
+        INF_CURRICULUM_SUPPLY_MODE_ALL);
+    inf_put_float(raw_state, "curriculum_no_brew_frac", 1.0f);
+    reset_inferno_at_public_wave(raw_state, 71, 1.0f);
+    ASSERT_INT_EQ("normal start ignores curriculum no-brew",
+        state->player.brew_doses, 9);
+
+    inf_put_int(raw_state, "curriculum_agent", 1);
+    reset_inferno_at_public_wave(raw_state, 71, 1.0f);
+    ASSERT_INT_EQ("curriculum start applies no-brew",
+        state->player.brew_doses, 0);
+    ASSERT_INT_EQ("curriculum no-brew leaves restores alone",
+        state->player.restore_doses, 6);
+
+    inf_put_int(raw_state, "curriculum_agent", 0);
+    inf_put_int(raw_state, "curriculum_no_brew_mode",
+        INF_CURRICULUM_SUPPLY_MODE_OFF);
+    inf_put_float(raw_state, "curriculum_no_brew_frac", 0.0f);
+    inf_destroy(raw_state);
+}
+
+static void test_curriculum_supply_modes_gate_zuk_and_pre_zuk(void) {
+    printf("--- curriculum supply modes gate Zuk and pre-Zuk starts ---\n");
+
+    ASSERT_INT_EQ("off mode does not apply",
+        inf_curriculum_supply_mode_applies(INF_CURRICULUM_SUPPLY_MODE_OFF, 69), 0);
+    ASSERT_INT_EQ("all mode applies to Zuk",
+        inf_curriculum_supply_mode_applies(INF_CURRICULUM_SUPPLY_MODE_ALL, 69), 1);
+    ASSERT_INT_EQ("Zuk mode applies to wave 69",
+        inf_curriculum_supply_mode_applies(INF_CURRICULUM_SUPPLY_MODE_ZUK, 69), 1);
+    ASSERT_INT_EQ("Zuk mode applies to wave 71",
+        inf_curriculum_supply_mode_applies(INF_CURRICULUM_SUPPLY_MODE_ZUK, 71), 1);
+    ASSERT_INT_EQ("Zuk mode skips wave 54",
+        inf_curriculum_supply_mode_applies(INF_CURRICULUM_SUPPLY_MODE_ZUK, 54), 0);
+    ASSERT_INT_EQ("pre-Zuk mode applies to wave 54",
+        inf_curriculum_supply_mode_applies(INF_CURRICULUM_SUPPLY_MODE_PRE_ZUK, 54), 1);
+    ASSERT_INT_EQ("pre-Zuk mode skips wave 69",
+        inf_curriculum_supply_mode_applies(INF_CURRICULUM_SUPPLY_MODE_PRE_ZUK, 69), 0);
+}
+
+static void test_curriculum_supply_jitter_clamps_to_inventory_bounds(void) {
+    printf("--- curriculum supply jitter clamps to inventory bounds ---\n");
+
+    EncounterState* raw_state = inf_create();
+    InfernoState* state = (InfernoState*)raw_state;
+
+    inf_put_int(raw_state, "curriculum_agent", 1);
+    inf_put_int(raw_state, "curriculum_supply_jitter_mode",
+        INF_CURRICULUM_SUPPLY_MODE_ALL);
+    inf_put_float(raw_state, "curriculum_supply_shared_jitter", 1.0f);
+    inf_put_float(raw_state, "curriculum_supply_brew_jitter", 1.0f);
+    inf_put_float(raw_state, "curriculum_supply_restore_jitter", 1.0f);
+    reset_inferno_at_public_wave(raw_state, 71, 1.0f);
+
+    ASSERT_INT_EQ("jitter keeps brew nonnegative",
+        state->player.brew_doses >= 0, 1);
+    ASSERT_INT_EQ("jitter keeps brew within full supplies",
+        state->player.brew_doses <= 24, 1);
+    ASSERT_INT_EQ("jitter keeps restore nonnegative",
+        state->player.restore_doses >= 0, 1);
+    ASSERT_INT_EQ("jitter keeps restore within full supplies",
+        state->player.restore_doses <= 40, 1);
+
+    inf_put_int(raw_state, "curriculum_agent", 0);
+    inf_put_int(raw_state, "curriculum_supply_jitter_mode",
+        INF_CURRICULUM_SUPPLY_MODE_OFF);
+    inf_put_float(raw_state, "curriculum_supply_shared_jitter", 0.0f);
+    inf_put_float(raw_state, "curriculum_supply_brew_jitter", 0.0f);
+    inf_put_float(raw_state, "curriculum_supply_restore_jitter", 0.0f);
     inf_destroy(raw_state);
 }
 
@@ -7890,6 +7970,47 @@ static void test_inferno_binding_forwards_supply_milestone_rewards(void) {
         "supply_milestone_restore_reward_coeff = 0.0");
 }
 
+static void test_inferno_binding_forwards_curriculum_supply_config(void) {
+    printf("--- inferno binding forwards curriculum supply config ---\n");
+
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "curriculum supply shared jitter optional float",
+        "ocean/osrs_inferno/binding.c",
+        "optional_float_keys[]",
+        "};",
+        "\"curriculum_supply_shared_jitter\"");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "curriculum supply jitter mode optional int",
+        "ocean/osrs_inferno/binding.c",
+        "optional_int_keys[]",
+        "};",
+        "\"curriculum_supply_jitter_mode\"");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "curriculum no-brew mode optional int",
+        "ocean/osrs_inferno/binding.c",
+        "optional_int_keys[]",
+        "};",
+        "\"curriculum_no_brew_mode\"");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "curriculum agent marker assigned by mixer",
+        "ocean/osrs_inferno/binding.c",
+        "\"start_wave\"",
+        "fprintf(stderr, \"curriculum:",
+        "\"curriculum_agent\"");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "curriculum supply defaults off",
+        "config/ocean/osrs_inferno.ini",
+        "[env]",
+        "[vec]",
+        "curriculum_supply_jitter_mode = 0");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "curriculum no-brew defaults off",
+        "config/ocean/osrs_inferno.ini",
+        "[env]",
+        "[vec]",
+        "curriculum_no_brew_frac = 0.0");
+}
+
 static void test_inferno_binding_forwards_post_healer_set_rewards(void) {
     printf("--- inferno binding forwards post-healer set rewards ---\n");
 
@@ -8251,6 +8372,9 @@ int main(void) {
     test_supply_milestone_reward_never_penalizes_shortage();
     test_late_start_supply_profile_anchor_waves();
     test_late_start_supply_profile_interpolation_and_scale();
+    test_curriculum_supply_no_brew_is_curriculum_only();
+    test_curriculum_supply_modes_gate_zuk_and_pre_zuk();
+    test_curriculum_supply_jitter_clamps_to_inventory_bounds();
     test_late_start_supply_observations();
     test_dead_mob_store_eligibility();
     test_resurrected_mob_does_not_reenter_dead_store();
@@ -8402,6 +8526,7 @@ int main(void) {
     test_inferno_binding_forwards_safe_target_reward_coeff();
     test_inferno_binding_forwards_healer_attack_shape_coeffs();
     test_inferno_binding_forwards_supply_milestone_rewards();
+    test_inferno_binding_forwards_curriculum_supply_config();
     test_inferno_binding_forwards_post_healer_set_rewards();
     test_inferno_binding_forwards_joseph_reward_mode();
     test_inferno_binding_forwards_safe_healer_target_mask();

@@ -1889,6 +1889,10 @@ void my_init(Env* env, Dict* kwargs) {
         "zuk_untagged_healer_nonmagic_attack_bonus_coeff",
         "zuk_healer_mage_attack_penalty_coeff",
         "post_jad_zuk_multiplier", "jad_alive_zuk_multiplier",
+        "curriculum_supply_shared_jitter",
+        "curriculum_supply_brew_jitter",
+        "curriculum_supply_restore_jitter",
+        "curriculum_no_brew_frac",
     };
     for (size_t k = 0; k < sizeof(optional_float_keys)/sizeof(*optional_float_keys); k++) {
         DictItem* item = dict_get_unsafe(kwargs, optional_float_keys[k]);
@@ -1915,6 +1919,20 @@ void my_init(Env* env, Dict* kwargs) {
         ENCOUNTER_INFERNO.put_int(
             INF_ENV_STATE(env), INF_ENV_CONTEXT(env), "terminal_penalty_enabled",
             (int)terminal_penalty_enabled->value);
+    }
+    static const char* const optional_int_keys[] = {
+        "curriculum_supply_jitter_mode",
+        "curriculum_no_brew_mode",
+    };
+    for (size_t k = 0; k < sizeof(optional_int_keys)/sizeof(*optional_int_keys); k++) {
+        DictItem* item = dict_get_unsafe(kwargs, optional_int_keys[k]);
+        if (item) {
+            ENCOUNTER_INFERNO.put_int(
+                INF_ENV_STATE(env),
+                INF_ENV_CONTEXT(env),
+                optional_int_keys[k],
+                (int)item->value);
+        }
     }
     DictItem* obs_profile = dict_get_unsafe(kwargs, "obs_profile");
     if (obs_profile) {
@@ -2188,6 +2206,11 @@ Env* my_vec_init(int* num_envs_out, int* buffer_env_starts, int* buffer_env_coun
                     INF_ENV_CONTEXT(&envs[cursor]),
                     "start_wave",
                     curriculum_waves[t]);
+                ENCOUNTER_INFERNO.put_int(
+                    INF_ENV_STATE(&envs[cursor]),
+                    INF_ENV_CONTEXT(&envs[cursor]),
+                    "curriculum_agent",
+                    1);
             }
         }
         fprintf(stderr, "curriculum: %d wave-%d", base_count, base_start_wave);
