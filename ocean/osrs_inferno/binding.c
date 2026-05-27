@@ -1260,6 +1260,23 @@ void c_step(Env* env) {
                 (float)s->offensive_prayer_correct_by_style[i];
         }
         env->log.idle_ticks += (float)s->total_idle_ticks;
+        env->log.attack_ready_no_attack_ticks +=
+            (float)s->total_attack_ready_no_attack_ticks;
+        env->log.target_available_no_attack_ticks +=
+            (float)s->total_target_available_no_attack_ticks;
+        env->log.safe_attack_opportunity_missed_ticks +=
+            (float)s->total_safe_attack_opportunity_missed_ticks;
+        env->log.progressless_ticks += (float)s->total_progressless_ticks;
+        for (int i = 0; i < OSRS_INFERNO_IDLE_PHASE_COUNT; i++) {
+            env->log.attack_ready_no_attack_ticks_by_phase[i] +=
+                (float)s->attack_ready_no_attack_ticks_by_phase[i];
+            env->log.target_available_no_attack_ticks_by_phase[i] +=
+                (float)s->target_available_no_attack_ticks_by_phase[i];
+            env->log.safe_attack_opportunity_missed_ticks_by_phase[i] +=
+                (float)s->safe_attack_opportunity_missed_ticks_by_phase[i];
+            env->log.progressless_ticks_by_phase[i] +=
+                (float)s->progressless_ticks_by_phase[i];
+        }
         env->log.brews_used += (float)s->total_brews_used;
         env->log.blood_healed += (float)s->total_blood_healed;
         env->log.unavoidable_off_prayer += (float)s->total_unavoidable_off;
@@ -2250,6 +2267,28 @@ Env* my_vec_init(int* num_envs_out, int* buffer_env_starts, int* buffer_env_coun
     return envs;
 }
 
+static void inferno_log_idle_metric(
+    Dict* out,
+    const char* name,
+    float total,
+    const float by_phase[OSRS_INFERNO_IDLE_PHASE_COUNT]
+) {
+    static const char* phases[OSRS_INFERNO_IDLE_PHASE_COUNT] = {
+        "set",
+        "jad",
+        "zuk_pre_jad",
+        "zuk_jad",
+        "zuk_healers",
+        "zuk_post_healers",
+    };
+    dict_set(out, name, total);
+    for (int i = 0; i < OSRS_INFERNO_IDLE_PHASE_COUNT; i++) {
+        char key[96];
+        snprintf(key, sizeof(key), "%s_%s", name, phases[i]);
+        dict_set(out, key, by_phase[i]);
+    }
+}
+
 void my_log(Log* log, Dict* out) {
     dict_set(out, "episode_return", log->episode_return);
     dict_set(out, "damage_dealt", log->damage_dealt);
@@ -2264,6 +2303,26 @@ void my_log(Log* log, Dict* out) {
     dict_set(out, "wins", log->wins);
     dict_set(out, "wave", log->wave);
     dict_set(out, "idle_ticks", log->idle_ticks);
+    inferno_log_idle_metric(
+        out,
+        "attack_ready_no_attack_ticks",
+        log->attack_ready_no_attack_ticks,
+        log->attack_ready_no_attack_ticks_by_phase);
+    inferno_log_idle_metric(
+        out,
+        "target_available_no_attack_ticks",
+        log->target_available_no_attack_ticks,
+        log->target_available_no_attack_ticks_by_phase);
+    inferno_log_idle_metric(
+        out,
+        "safe_attack_opportunity_missed_ticks",
+        log->safe_attack_opportunity_missed_ticks,
+        log->safe_attack_opportunity_missed_ticks_by_phase);
+    inferno_log_idle_metric(
+        out,
+        "progressless_ticks",
+        log->progressless_ticks,
+        log->progressless_ticks_by_phase);
     dict_set(out, "brews_used", log->brews_used);
     dict_set(out, "blood_healed", log->blood_healed);
 

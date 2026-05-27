@@ -1445,6 +1445,87 @@ static void test_player_reward_damage_uses_xp_drop_tick(void) {
         state.npcs[0].hp, 15);
 }
 
+static void test_idle_diagnostics_count_missed_attack_opportunities(void) {
+    printf("--- idle diagnostics count missed attack opportunities ---\n");
+
+    InfernoState state = make_test_state(10, 10);
+    state.weapon_set = INF_GEAR_BP;
+    state.loadout_stats[INF_GEAR_BP].attack_range = 7;
+    state.npcs[0] = make_test_npc(
+        INF_NPC_RANGER, 14, 10, INF_NPC_STATS[INF_NPC_RANGER].size);
+    state.npcs[0].active = 1;
+    state.npcs[0].hp = INF_NPC_STATS[INF_NPC_RANGER].hp;
+    state.npcs[0].attack_timer = 5;
+
+    ASSERT_INT_EQ("target exists",
+        inf_has_live_player_target(&state), 1);
+    ASSERT_INT_EQ("target can be attacked",
+        inf_has_attackable_player_target(&state), 1);
+    ASSERT_INT_EQ("no immediate threat",
+        inf_player_has_immediate_threat(&state), 0);
+
+    inf_record_idle_diagnostics(&state, 1, 1, 1, 1);
+
+    ASSERT_INT_EQ("attack ready no attack total",
+        state.total_attack_ready_no_attack_ticks, 1);
+    ASSERT_INT_EQ("target available no attack total",
+        state.total_target_available_no_attack_ticks, 1);
+    ASSERT_INT_EQ("safe opportunity missed total",
+        state.total_safe_attack_opportunity_missed_ticks, 1);
+    ASSERT_INT_EQ("progressless total",
+        state.total_progressless_ticks, 1);
+    ASSERT_INT_EQ("set phase attack ready counter",
+        state.attack_ready_no_attack_ticks_by_phase[INF_IDLE_PHASE_SET], 1);
+    ASSERT_INT_EQ("set phase safe opportunity counter",
+        state.safe_attack_opportunity_missed_ticks_by_phase[INF_IDLE_PHASE_SET], 1);
+    ASSERT_INT_EQ("set phase progressless counter",
+        state.progressless_ticks_by_phase[INF_IDLE_PHASE_SET], 1);
+}
+
+static void test_idle_diagnostics_phase_split(void) {
+    printf("--- idle diagnostics phase split ---\n");
+
+    InfernoState set = make_test_state(10, 10);
+    set.wave = 20;
+    ASSERT_INT_EQ("ordinary waves use set phase",
+        inf_idle_diagnostic_phase(&set), INF_IDLE_PHASE_SET);
+
+    InfernoState jad = make_test_state(10, 10);
+    jad.wave = 66;
+    jad.npcs[0] = make_test_npc(
+        INF_NPC_JAD, 14, 10, INF_NPC_STATS[INF_NPC_JAD].size);
+    jad.npcs[0].active = 1;
+    jad.npcs[0].hp = INF_NPC_STATS[INF_NPC_JAD].hp;
+    ASSERT_INT_EQ("non-final live jad uses jad phase",
+        inf_idle_diagnostic_phase(&jad), INF_IDLE_PHASE_JAD);
+
+    InfernoState zuk = make_test_state(25, 42);
+    zuk.wave = INF_WAVE_ZUK;
+    zuk.tick_at_all_zuk_healers_dead = -1;
+    ASSERT_INT_EQ("final wave before jad uses zuk pre-jad phase",
+        inf_idle_diagnostic_phase(&zuk), INF_IDLE_PHASE_ZUK_PRE_JAD);
+
+    zuk.npcs[0] = make_test_npc(
+        INF_NPC_JAD, 24, 44, INF_NPC_STATS[INF_NPC_JAD].size);
+    zuk.npcs[0].active = 1;
+    zuk.npcs[0].hp = INF_NPC_STATS[INF_NPC_JAD].hp;
+    ASSERT_INT_EQ("final wave live jad uses zuk jad phase",
+        inf_idle_diagnostic_phase(&zuk), INF_IDLE_PHASE_ZUK_JAD);
+
+    zuk.npcs[1] = make_test_npc(
+        INF_NPC_HEALER_ZUK, 22, 44, INF_NPC_STATS[INF_NPC_HEALER_ZUK].size);
+    zuk.npcs[1].active = 1;
+    zuk.npcs[1].hp = INF_NPC_STATS[INF_NPC_HEALER_ZUK].hp;
+    ASSERT_INT_EQ("live zuk healer uses zuk healer phase",
+        inf_idle_diagnostic_phase(&zuk), INF_IDLE_PHASE_ZUK_HEALERS);
+
+    zuk.npcs[0].active = 0;
+    zuk.npcs[1].active = 0;
+    zuk.tick_at_all_zuk_healers_dead = 500;
+    ASSERT_INT_EQ("after healers dead uses post-healer phase",
+        inf_idle_diagnostic_phase(&zuk), INF_IDLE_PHASE_ZUK_POST_HEALERS);
+}
+
 static void test_joseph_reward_mode_damps_healed_zuk_damage(void) {
     printf("--- Joseph reward mode damps healed Zuk damage ---\n");
 
@@ -8407,6 +8488,41 @@ static void test_inferno_binding_logs_post_healer_set_reward_components(void) {
         "post_healer_set_alive_penalty_normal");
 }
 
+static void test_inferno_binding_logs_idle_diagnostics(void) {
+    printf("--- inferno binding logs idle diagnostics ---\n");
+
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "attack-ready idle metric emitted",
+        "ocean/osrs_inferno/binding.c",
+        "void my_log",
+        "float wr = log->wins",
+        "attack_ready_no_attack_ticks");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "target-available idle metric emitted",
+        "ocean/osrs_inferno/binding.c",
+        "void my_log",
+        "float wr = log->wins",
+        "target_available_no_attack_ticks");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "safe opportunity idle metric emitted",
+        "ocean/osrs_inferno/binding.c",
+        "void my_log",
+        "float wr = log->wins",
+        "safe_attack_opportunity_missed_ticks");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "progressless metric emitted",
+        "ocean/osrs_inferno/binding.c",
+        "void my_log",
+        "float wr = log->wins",
+        "progressless_ticks");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "idle phase names emitted",
+        "ocean/osrs_inferno/binding.c",
+        "inferno_log_idle_metric",
+        "void my_log",
+        "zuk_post_healers");
+}
+
 static void test_inferno_binding_emits_post_240_traces(void) {
     printf("--- inferno binding emits post-240 traces ---\n");
 
@@ -8579,6 +8695,8 @@ int main(void) {
     test_offensive_prayer_no_attack_no_event();
     test_offensive_prayer_melee_maps_to_piety();
     test_player_reward_damage_uses_xp_drop_tick();
+    test_idle_diagnostics_count_missed_attack_opportunities();
+    test_idle_diagnostics_phase_split();
     test_joseph_reward_mode_damps_healed_zuk_damage();
     test_jad_damage_reward_pauses_while_jad_healers_heal();
     test_jad_healer_damage_never_gets_damage_reward();
@@ -8758,6 +8876,7 @@ int main(void) {
     test_inferno_binding_forwards_step_out_forecast_obs_toggle();
     test_inferno_binding_forwards_loadout_profile_config();
     test_inferno_binding_logs_post_healer_set_reward_components();
+    test_inferno_binding_logs_idle_diagnostics();
     test_inferno_binding_emits_post_240_traces();
     test_inferno_render_status_survives_overlay_refresh();
     test_inferno_eval_render_post_tick_owns_entity_refresh();

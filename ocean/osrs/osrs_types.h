@@ -355,6 +355,8 @@ typedef enum {
    EquipmentBonuses (osrs_combat.h) but with a different naming convention
    (stab_attack vs attack_stab). the adapter compute_slot_gear_bonuses()
    in osrs_pvp_gear.h bridges them. */
+#define OSRS_INFERNO_IDLE_PHASE_COUNT 6
+
 typedef struct {
     int stab_attack;
     int slash_attack;
@@ -736,6 +738,14 @@ typedef struct {
     float prayer_correct;
     float prayer_total;
     float idle_ticks;
+    float attack_ready_no_attack_ticks;
+    float target_available_no_attack_ticks;
+    float safe_attack_opportunity_missed_ticks;
+    float progressless_ticks;
+    float attack_ready_no_attack_ticks_by_phase[OSRS_INFERNO_IDLE_PHASE_COUNT];
+    float target_available_no_attack_ticks_by_phase[OSRS_INFERNO_IDLE_PHASE_COUNT];
+    float safe_attack_opportunity_missed_ticks_by_phase[OSRS_INFERNO_IDLE_PHASE_COUNT];
+    float progressless_ticks_by_phase[OSRS_INFERNO_IDLE_PHASE_COUNT];
     float brews_used;
     float blood_healed;
     /* behavioral metrics */

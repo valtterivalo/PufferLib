@@ -272,6 +272,23 @@ static void* inf_get_log_ctx(EncounterState* state, EncounterContext* context) {
                 (float)s->offensive_prayer_correct_by_style[i];
         }
         ctx->log->idle_ticks += (float)s->total_idle_ticks;
+        ctx->log->attack_ready_no_attack_ticks +=
+            (float)s->total_attack_ready_no_attack_ticks;
+        ctx->log->target_available_no_attack_ticks +=
+            (float)s->total_target_available_no_attack_ticks;
+        ctx->log->safe_attack_opportunity_missed_ticks +=
+            (float)s->total_safe_attack_opportunity_missed_ticks;
+        ctx->log->progressless_ticks += (float)s->total_progressless_ticks;
+        for (int i = 0; i < OSRS_INFERNO_IDLE_PHASE_COUNT; i++) {
+            ctx->log->attack_ready_no_attack_ticks_by_phase[i] +=
+                (float)s->attack_ready_no_attack_ticks_by_phase[i];
+            ctx->log->target_available_no_attack_ticks_by_phase[i] +=
+                (float)s->target_available_no_attack_ticks_by_phase[i];
+            ctx->log->safe_attack_opportunity_missed_ticks_by_phase[i] +=
+                (float)s->safe_attack_opportunity_missed_ticks_by_phase[i];
+            ctx->log->progressless_ticks_by_phase[i] +=
+                (float)s->progressless_ticks_by_phase[i];
+        }
         ctx->log->brews_used += (float)s->total_brews_used;
         ctx->log->blood_healed += (float)s->total_blood_healed;
         ctx->log->ranger_mager_same_tick_attacks +=
