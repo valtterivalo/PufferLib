@@ -630,6 +630,7 @@ static InfConfig inf_default_config(void) {
         .loadout_profile_mode = INF_LOADOUT_PROFILE_MODE_MAX_ONLY,
         .budget_loadout_fraction = 0.0f,
         .damage_reward_coeff = 0.0f,
+        .offensive_prayer_reward_coeff = 0.0f,
         .shield_penalty_coeff = 0.0f,
         .tag_reward_coeff = 0.0f,
         .late_start_supply_profile_scale = 1.0f,

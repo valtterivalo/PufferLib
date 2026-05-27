@@ -44,6 +44,34 @@ static int inf_local_overhead_action(int action) {
     return action;
 }
 
+static OffensivePrayer inf_required_offensive_prayer_for_style(AttackStyle style) {
+    switch (style) {
+        case ATTACK_STYLE_MELEE:
+            return OFFENSIVE_PRAYER_PIETY;
+        case ATTACK_STYLE_RANGED:
+            return OFFENSIVE_PRAYER_RIGOUR;
+        case ATTACK_STYLE_MAGIC:
+            return OFFENSIVE_PRAYER_AUGURY;
+        case ATTACK_STYLE_NONE:
+            return OFFENSIVE_PRAYER_NONE;
+    }
+    abort();
+}
+
+static void inf_record_offensive_prayer_attack(InfernoState* s, AttackStyle style) {
+    OffensivePrayer required = inf_required_offensive_prayer_for_style(style);
+    if (required == OFFENSIVE_PRAYER_NONE) return;
+
+    int style_idx = (int)style;
+    assert(style_idx > ATTACK_STYLE_NONE && style_idx <= ATTACK_STYLE_MAGIC);
+    int correct = s->player.offensive_prayer == required;
+    s->offensive_prayer_correct_this_tick = correct;
+    s->total_offensive_prayer_attacks++;
+    s->total_offensive_prayer_correct += correct;
+    s->offensive_prayer_attacks_by_style[style_idx]++;
+    s->offensive_prayer_correct_by_style[style_idx] += correct;
+}
+
 /* movement uses shared encounter_move_to_target from osrs_encounter.h */
 
 /* walkability callback for encounter_move_to_target */
@@ -426,6 +454,7 @@ static void inf_tick_player_ctx(
     const int* actions,
     int can_attack
 ) {
+    s->offensive_prayer_correct_this_tick = 0;
     if (s->player_last_interaction_age == 0)
         s->player_last_interaction_age = 1;
 
@@ -902,6 +931,7 @@ static void inf_tick_player_ctx(
                 }
 
                 s->player.attack_timer = ls->attack_speed;
+                inf_record_offensive_prayer_attack(s, ls->style);
                 if (target_npc->type == INF_NPC_HEALER_ZUK) {
                     int target_was_untagged = target_npc->aggro_target >= 0;
                     s->total_zuk_healer_attack_fires++;

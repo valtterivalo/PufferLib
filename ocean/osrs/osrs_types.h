@@ -757,6 +757,10 @@ typedef struct {
     float pending_cloud_count_ticks;
     float zulrah_kills;
     float unavoidable_off_prayer;  /* off-prayer hits where correct prayer was on a different style */
+    float offensive_prayer_attacks;
+    float offensive_prayer_correct;
+    float offensive_prayer_attacks_by_style[4];
+    float offensive_prayer_correct_by_style[4];
     float ranger_mager_same_tick_attacks;
     float step_out_ranger_mager_same_tick_attacks;
     float brews_remaining;         /* brew doses left at end of episode */
