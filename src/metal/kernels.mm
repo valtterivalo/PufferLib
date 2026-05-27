@@ -93,21 +93,9 @@ void puf_transpose_01(PufTensor &dst, const PufTensor &src,
   assert(dst.shape[0] == B && dst.shape[1] == A);
   assert(dst.dtype_size == src.dtype_size);
 
-  if (src.dtype_size == 8) {
-    MetalStream *ms = mtl_resolve_stream(stream);
-    auto pso = mtl_begin_kernel(ms, "transpose_01_u64");
-    mtl_set_tensor(ms, dst, 0);
-    mtl_set_tensor(ms, src, 1);
-    struct {
-      int A, B, C;
-    } params = {A, B, C};
-    mtl_set_params(ms, params, 2);
-    mtl_dispatch_1d(ms, pso, A * B * C);
-    return;
-  }
-
   MetalStream *ms = mtl_resolve_stream(stream);
-  auto pso = mtl_begin_kernel(ms, "transpose_01");
+  const char *kernel_name = (src.dtype_size == 8) ? "transpose_01_u64" : "transpose_01";
+  auto pso = mtl_begin_kernel(ms, kernel_name);
   mtl_set_tensor(ms, dst, 0);
   mtl_set_tensor(ms, src, 1);
   struct {

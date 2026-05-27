@@ -603,3 +603,25 @@
 - Native Metal parity and overlay surface passed in both corrected milestone 04y suites.
 - Subagent review: McClintock found no blocking findings, verified source files were restored, checked the excluded runner-bug artifact, benchmark arithmetic, runner scope, exact allowlist entries, and ignored generated artifacts.
 - Decision: rejected. The candidate exceeded the 1 percent breakout SPS gate, so `src/metal/shader_src.h` was restored to the 04w accepted state. Only rejection artifacts, runner scripts, overlay allowlist, and this status entry remain for audit.
+
+## 2026-05-27 Milestone 04z Transpose Branch Cleanup Candidate
+
+- Root-cause hypothesis: `puf_transpose_01(PufTensor)` duplicates the same host dispatch body for `transpose_01_u64` and `transpose_01`. Selecting the kernel name from `src.dtype_size` and sharing the binding and dispatch body should preserve exported shader names, dtype selection, tensor buffer binding, parameter bytes, dispatch count, RNG, PPO math, and train-buffer ordering while deleting duplicate host code.
+- Candidate source change: collapse the `src.dtype_size == 8` early-return branch in `src/metal/kernels.mm` into a shared dispatch body with `const char *kernel_name`. Add dedicated milestone 04z runners and exact overlay allowlist paths.
+- LOC before validation: `src/metal/shader_src.h` is unchanged at `2,257`. `src/metal/kernels.mm` is `1,445`, down from accepted `1,457`. Full `src/metal/platform.mm` is unchanged at `1,088`. Kernel scope is `3,819`, down from accepted `3,831` and setup `4,615`. Backend scope is `9,454` after overlay allowlist growth, unchanged from after the rejected 04y audit commit because the source reduction offsets the new allowlist lines.
+- Risk classification: low to medium. This is host dispatch cleanup on live transpose paths, including the u64 index path. Acceptance requires build success, repeated `breakout` and `g2048`, native parity, overlay surface, interactive smoke, comparable train and eval scores, and subagent review.
+- Acceptance gate: use the dedicated `milestone-04z-transpose-branch-cleanup` runners, require repeated medians within 1 percent of the current accepted 04w baseline or better, require train and eval scores to remain comparable, and reject on compile, parity, determinism, interactive, or score drift.
+
+## 2026-05-27 Milestone 04z Transpose Branch Cleanup Results
+
+- Code change: collapse the `src.dtype_size == 8` branch in `puf_transpose_01(PufTensor)` into one dispatch body that selects `transpose_01_u64` for eight-byte tensors and `transpose_01` otherwise.
+- LOC: `src/metal/shader_src.h` is unchanged at `2,257`. `src/metal/kernels.mm` is `1,445`, down from accepted `1,457`. Kernel scope is `3,819`, down from accepted `3,831` and setup `4,615`. Backend scope is `9,454`, unchanged from after the rejected 04y audit commit because the source reduction offsets the new allowlist lines.
+- Static validation passed: `tools/metal/build.sh breakout`, `tools/metal/build.sh g2048`, `git diff --check`, `bash -n` for all milestone 04z runners, and `PYTHONPATH=$PWD python -m pytest tests/metal/test_overlay_surface.py`.
+- First milestone 04z suite: `breakout` artifact `20260527T063625+0300-breakout` at `3,383,001` SPS, train score `2.9197020530700684`, eval score `0.0`. `g2048` artifact `20260527T063636+0300-g2048` at `601,509` SPS, train score `97.85507202148438`, eval score `49.43283462524414`.
+- Second milestone 04z suite: `breakout` artifact `20260527T063655+0300-breakout` at `3,427,115` SPS, train score `2.3507626056671143`, eval score `0.0`. `g2048` artifact `20260527T063706+0300-g2048` at `597,515` SPS, train score `97.85507202148438`, eval score `49.43283462524414`.
+- Extra breakout runner: `20260527T063741+0300-breakout` at `3,419,458` SPS, train score `3.071061611175537`, eval score `0.0`. This extra run was added because the two-run breakout median missed the 1 percent gate by a narrow margin.
+- Medians: `breakout` three-run median `3,419,458` SPS, `-0.81%` versus milestone 04w accepted median `3,447,380`. `g2048` two-run median `599,512` SPS, `+0.51%` versus milestone 04w accepted median `596,463`.
+- Native Metal parity and overlay surface passed in both milestone 04z suites.
+- Interactive smoke artifact: `milestone-04z-transpose-branch-cleanup/20260527T063805+0300-interactive-breakout-transpose-branch-cleanup`. It built, loaded `resources/breakout/breakout_weights.bin`, reached raylib 5.5 GLFW initialization, then failed with `Failed to determine Monitor to center Window` and exit code `139`, matching the known desktop windowing boundary.
+- Subagent review: James found no blocking findings, verified the transpose dtype branch equivalence, source scope, benchmark arithmetic, runner scope, exact allowlist entries, ignored generated artifacts, and interactive boundary artifact.
+- Decision: accepted after subagent review. The cleanup clears the throughput gate on both benchmark envs and preserves train, eval, parity, overlay, and interactive boundary behavior.
