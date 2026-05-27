@@ -479,3 +479,27 @@
 - Interactive smoke artifact: `milestone-04s-dead-prototype-retest/20260527T053142+0300-interactive-breakout-dead-prototype-retest`. It built, loaded `resources/breakout/breakout_weights.bin`, reached raylib 5.5 GLFW initialization, then failed with `Failed to determine Monitor to center Window` and exit code `139`, matching the known desktop windowing boundary.
 - Harness note: a first direct invocation of the initial 04s interactive runner recursed through `run-interactive-smoke.sh` because the runner had been copied with the wrong body. The runaway process was terminated, the 04s runner was corrected to the direct eval form used by older milestones, and the accepted interactive smoke artifact above was captured through the shared wrapper after the fix. The bad recursive output folders are ignored local artifacts and are not staged.
 - Decision: accepted pending subagent review. The retest clears the frozen throughput gate on both benchmark envs and preserves train and eval behavior.
+
+## 2026-05-27 Milestone 04s Review Addendum
+
+- Subagent review: Mill found no blocking findings, verified the source diff only removes top declarations in `src/metal/kernels.mm`, confirmed definitions and call sites remain, checked the corrected non-recursive interactive runner, and verified STATUS arithmetic and validation artifacts.
+- Decision update: accepted and committed as `bf5287ef3 Trim dead Metal prototypes`.
+
+## 2026-05-27 Milestone 04t Comment Cleanup Retest Candidate
+
+- Root-cause hypothesis: milestone 04n comment cleanup was rejected on low breakout samples, but milestone 04r no-change control and milestone 04s declaration retest showed sample noise can dominate narrow source changes. Retesting the source-only redundant comment cleanup can reduce kernel and backend LOC without changing executable C++ or MSL tokens beyond comments and trailing inline prose.
+- Candidate source change: reapply the source-only 04n comment cleanup to `src/metal/shader_src.h`, `src/metal/kernels.mm`, and `src/metal/platform.mm`, while keeping comments that explain precision drift, NaN avoidance, determinism, Metal visibility, and measured Steel GEMM behavior.
+- LOC before validation: `src/metal/shader_src.h` is `2,220` lines, down from accepted `2,266`. `src/metal/kernels.mm` is `1,438`, down from accepted `1,468`. Full `src/metal/platform.mm` is `997`, down from accepted `1,088`. Kernel scope is `3,775` by the established convention: `2,220` shader lines, `1,438` kernel host lines, and the `117` line tensor-ops shader block. Backend scope is `9,295` after allowlist growth, down from accepted `9,458`.
+- Risk classification: low to medium. This is comment-only for execution, but embedded shader source strings change and can affect Metal source hashing or compile timing, so full end-to-end acceptance still applies.
+- Acceptance gate: use the dedicated `milestone-04t-comment-cleanup-retest` runners, require repeated medians within 1 percent of the current accepted 04s baseline or better, require train and eval scores to remain comparable, and reject on compile, parity, determinism, interactive, or score drift.
+
+## 2026-05-27 Milestone 04t Comment Cleanup Retest Results
+
+- Candidate code change: temporarily reapplied the source-only redundant comment cleanup to Metal shader and host source. The candidate would have reduced `src/metal/shader_src.h` from `2,266` to `2,220`, `src/metal/kernels.mm` from `1,468` to `1,438`, full `src/metal/platform.mm` from `1,088` to `997`, and kernel scope from `3,851` to `3,775`, but it is not kept.
+- Static validation passed before benchmark rejection: `tools/metal/build.sh breakout`, `tools/metal/build.sh g2048`, `git diff --check`, `bash -n` for all milestone 04t runners, and `PYTHONPATH=$PWD python -m pytest tests/metal/test_overlay_surface.py`.
+- First milestone 04t suite: `breakout` artifact `20260527T054208+0300-breakout` at `3,426,860` SPS, train score `2.780082941055298`, eval score `0.0`. `g2048` artifact `20260527T054219+0300-g2048` at `583,123` SPS, train score `97.85507202148438`, eval score `49.43283462524414`.
+- Second milestone 04t suite: `breakout` artifact `20260527T054233+0300-breakout` at `3,395,397` SPS, train score `2.1866064071655273`, eval score `0.0`. `g2048` artifact `20260527T054244+0300-g2048` at `596,944` SPS, train score `97.85507202148438`, eval score `49.43283462524414`.
+- Medians: `breakout` two-run median `3,411,129` SPS, `-1.80%` versus milestone 04s accepted median `3,473,550`. `g2048` two-run median `590,034` SPS, `-1.67%` versus milestone 04s accepted median `600,074`.
+- Native Metal parity and overlay surface passed in both milestone 04t suites.
+- Subagent review: Heisenberg found no blocking findings, verified the Metal source files were restored to the 04s state, checked benchmark arithmetic and rejection gate, confirmed 04t runners are scoped and non-recursive, checked exact overlay allowlist entries, and confirmed generated benchmark artifacts are ignored rather than staged.
+- Decision: rejected. The candidate exceeded the 1 percent SPS gate in both benchmark envs, so `src/metal/shader_src.h`, `src/metal/kernels.mm`, and `src/metal/platform.mm` were restored to the 04s accepted state. Only rejection artifacts, runner scripts, overlay allowlist, and this status entry remain for audit.
