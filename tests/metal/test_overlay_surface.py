@@ -77,6 +77,10 @@ ALLOWED_ARTIFACT_PATHS = {
     "artifacts/metal-kernel-loc-20260527-v2/milestone-07-host-param-format/run-g2048.sh",
     "artifacts/metal-kernel-loc-20260527-v2/milestone-07-host-param-format/run-interactive-breakout.sh",
     "artifacts/metal-kernel-loc-20260527-v2/milestone-07-host-param-format/run-suite.sh",
+    "artifacts/metal-kernel-loc-20260527-v2/milestone-08-tensor-desc-format/run-breakout.sh",
+    "artifacts/metal-kernel-loc-20260527-v2/milestone-08-tensor-desc-format/run-g2048.sh",
+    "artifacts/metal-kernel-loc-20260527-v2/milestone-08-tensor-desc-format/run-interactive-breakout.sh",
+    "artifacts/metal-kernel-loc-20260527-v2/milestone-08-tensor-desc-format/run-suite.sh",
 }
 
 BLOCKED_PATHS = {

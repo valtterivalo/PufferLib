@@ -270,3 +270,39 @@
   - `src/metal/platform.mm`: `1213` full-file lines, tensor-ops shader block `216`.
   - Kernel scope total: `4601` lines, net `-10` versus baseline.
   - Backend scope total: `10172` lines, net `-2` versus baseline.
+
+## 2026-05-27 09:58 EEST
+
+- Starting milestone 08 tensor-desc-format candidate.
+- Root-cause hypothesis: the tensor-ops shader block in `src/metal/platform.mm` repeats six `matmul2d_descriptor` calls over five lines each. Folding each call into one line removes whitespace-only embedded MSL LOC while preserving descriptor values, transpose flags, execution scope, kernel names, dispatch order, host bindings, RNG, PPO math, and eval behavior.
+- This touches embedded MSL text, so it gets the full suite and a clean post-commit audit if accepted.
+- Added dedicated milestone 08 runner scripts and overlay allowlist entries before validation.
+- Acceptance gate remains the full milestone suite against `milestone-00-baseline`, plus subagent review before commit.
+- Candidate LOC before validation:
+  - `src/metal/platform.mm`: `1213` to `1189`, `-24` full-file lines.
+  - Tensor-ops shader block: `216` to `192`, `-24`.
+  - Kernel scope total: `4601` to `4577`, net `-34` versus baseline.
+  - Backend scope total after overlay allowlist growth: `10172` to `10152`, net `-22` versus baseline.
+
+## 2026-05-27 10:00 EEST
+
+- Milestone 08 tensor-desc-format candidate passed the full suite.
+- Code change: folded six `matmul2d_descriptor` calls in the tensor-ops shader block from five lines each to one line each. Descriptor values, transpose flags, execution scopes, kernel names, host bindings, and dispatch order stayed unchanged.
+- Accepted LOC delta before commit:
+  - `src/metal/platform.mm`: `1213` to `1189`, `-24` full-file lines.
+  - Tensor-ops shader block: `216` to `192`, `-24`.
+  - Kernel scope total: `4601` to `4577`, net `-34` versus baseline.
+  - Backend scope total after overlay allowlist growth: `10172` to `10152`, net `-22` versus baseline.
+- Main CPU-overlap medians:
+  - `breakout`: `3,438,433.5` SPS versus baseline `3,434,839`, `+0.10464828191365516%`; train score `2.4659218788146973`, eval score `0.0`.
+  - `g2048`: `604,770.5` SPS versus baseline `606,783`, `-0.3316671693175288%`; train score `97.85507202148438`, eval score `49.43283462524414`.
+- Main run artifacts:
+  - `breakout`: `20260527T095836+0300-breakout`, `20260527T095857+0300-breakout`.
+  - `g2048`: `20260527T095848+0300-g2048`, `20260527T095908+0300-g2048`.
+- GPU-inference smoke passed for both envs:
+  - `breakout`: `20260527T095917+0300-breakout`, `3,560,856` SPS, train score `0.9913344979286194`, eval score `0.0`.
+  - `g2048`: `20260527T095927+0300-g2048`, `820,988` SPS, train score `97.85507202148438`, eval score `42.0`.
+- Native Metal parity wrote `milestone-08-tensor-desc-format/native-metal.json`.
+- Overlay surface test passed.
+- Interactive smoke artifact: `milestone-08-tensor-desc-format/20260527T095937+0300-interactive-breakout-tensor-desc-format`. It built, invoked eval with `resources/breakout/breakout_weights.bin`, reached raylib 5.5 GLFW initialization, then failed with `Failed to determine Monitor to center Window` and exit code `139`, matching the known desktop windowing boundary.
+- Decision: accepted pending subagent review. Because the change touches embedded MSL source text, it still needs a post-commit clean audit before it can be treated as final.
