@@ -250,3 +250,23 @@
 - Overlay surface test passed.
 - Interactive smoke artifact: `milestone-07-host-param-format/20260527T094314+0300-interactive-breakout-host-param-format`. It built, invoked eval with `resources/breakout/breakout_weights.bin`, reached raylib 5.5 GLFW initialization, then failed with `Failed to determine Monitor to center Window` and exit code `139`, matching the known desktop windowing boundary.
 - Decision: accepted pending subagent review. Because the previous accepted cleanup failed clean final audit, this candidate still needs a post-commit clean audit before it can be treated as final.
+
+## 2026-05-27 09:48 EEST
+
+- Committed milestone 07 as `5052b3732` after subagent review found no blockers.
+- Post-commit clean audit reused the milestone 07 suite so the same dedicated runner folder contains both the dirty candidate cohort and clean committed cohort. The latest clean cohort passed.
+- Clean audit medians:
+  - `breakout`: `3,400,761.5` SPS versus baseline `3,434,839`, `-0.9921134585929692%`; train score `2.2924174070358276`, eval score `0.0`.
+  - `g2048`: `602,675.5` SPS versus baseline `606,783`, `-0.6769306325325575%`; train score `97.85507202148438`, eval score `49.43283462524414`.
+- Clean GPU-inference smoke passed for both envs:
+  - `breakout`: `20260527T094711+0300-breakout`, `3,542,520` SPS, train score `0.9884593486785889`, eval score `0.0`.
+  - `g2048`: `20260527T094721+0300-g2048`, `876,565` SPS, train score `97.85507202148438`, eval score `42.0`.
+- Clean native Metal parity wrote `milestone-07-host-param-format/native-metal.json`.
+- Clean overlay surface test passed.
+- Clean interactive smoke artifact: `milestone-07-host-param-format/20260527T094731+0300-interactive-breakout-host-param-format`, with the same raylib monitor boundary and exit code `139`.
+- Current accepted source LOC:
+  - `src/metal/shader_src.h`: `2809` lines.
+  - `src/metal/kernels.mm`: `1576` lines.
+  - `src/metal/platform.mm`: `1213` full-file lines, tensor-ops shader block `216`.
+  - Kernel scope total: `4601` lines, net `-10` versus baseline.
+  - Backend scope total: `10172` lines, net `-2` versus baseline.
