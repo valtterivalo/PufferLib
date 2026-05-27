@@ -312,3 +312,16 @@
 - Interactive smoke artifact: `milestone-04k-unused-param-fields/20260527T041122+0300-interactive-breakout-unused-param-fields`. It built, loaded `resources/breakout/breakout_weights.bin`, reached raylib 5.5 GLFW initialization, then failed with `Failed to determine Monitor to center Window` and exit code `139`, matching the known desktop windowing boundary.
 - Subagent review: Herschel found no blocking findings, verified shader and host struct layouts, confirmed no removed field is read, checked exported names and buffer indices, and validated LOC and benchmark arithmetic.
 - Decision: accepted after subagent review. This is a narrow constant-buffer cleanup with repeated runtime medians inside the LOC gate.
+
+## 2026-05-27 Milestone 05 Final Audit Rerun
+
+- Current branch and commit: `valtteri/metal-kernel-loc-night-20260527` at `848c90a816`.
+- Current kernel scope: `3,902` lines by the established convention: `src/metal/shader_src.h` `2,294`, `src/metal/kernels.mm` `1,491`, and the `src/metal/platform.mm` tensor-ops shader block `117`. Net accepted kernel-scope delta versus setup `4,615`: `-713` lines.
+- Current backend scope: `9,477` lines across `src/metal`, `tools/metal`, and `tests/metal`. Net accepted backend-scope delta versus setup `10,160`: `-683` lines. This includes audit allowlist growth for accepted and rejected milestone runners.
+- Final audit runner passed: `artifacts/metal-kernel-loc-20260527/milestone-05-final-audit/run-suite.sh`.
+- Final audit `breakout` artifact `20260527T041647+0300-breakout`: `3,393,543` SPS, train score `2.4794721603393555`, eval score `0.0`, uptime `1.2340800762176514`.
+- Final audit `g2048` artifact `20260527T041658+0300-g2048`: `584,232` SPS, train score `97.85507202148438`, eval score `49.43283462524414`, uptime `0.448742151260376`.
+- Native Metal parity passed and wrote `milestone-05-final-audit/native-metal.json`. Overlay surface test passed.
+- Interactive smoke artifact: `milestone-05-final-audit/20260527T041708+0300-interactive-breakout-final-audit`. It built, loaded `resources/breakout/breakout_weights.bin`, reached raylib 5.5 GLFW initialization, then failed with `Failed to determine Monitor to center Window` and exit code `139`, matching the known desktop windowing boundary.
+- Accepted changes since the first final audit: kernel prose cleanup and unused parameter field cleanup.
+- Open risk: the final single g2048 audit sample `584,232` is below the accepted 04k two-run median `603,159`, but train and eval were unchanged and no accepted code change was based on this single audit sample. Treat the repeated milestone medians as the decision data.
