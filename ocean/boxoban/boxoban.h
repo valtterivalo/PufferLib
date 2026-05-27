@@ -17,7 +17,6 @@ static const unsigned char WALLS = 1;
 static const unsigned char BOXES = 2;
 static const unsigned char TARGET = 3;
 
-#define BOXOBAN_STATE_CELLS (BOXOBAN_EXPECTED_ROWS * BOXOBAN_EXPECTED_COLS)
 
 // Required struct. Only use floats!
 typedef struct {
@@ -55,7 +54,6 @@ typedef struct State {
     bool initialized;
     float episode_return;
     unsigned char observations[BOXOBAN_PUZZLE_OBS_BYTES];
-    unsigned char intermediate_rewards[BOXOBAN_STATE_CELLS];
 } State;
 
 // Required that you have some struct for your env
@@ -71,7 +69,6 @@ typedef struct {
     int num_agents;
     int max_steps;
     float int_r_coeff;
-    float target_loss_pen_coeff;
     int difficulty_id; // 0=basic,1=easy,2=medium,3=hard,4=unfiltered,5=incremental
     int curriculum_mode; // 1 when using incremental difficulty mode
     Client* client;
@@ -120,14 +117,6 @@ static inline void set_entity(Boxoban* env, int entity, int x, int y, unsigned c
 
 static inline unsigned char get_entity(Boxoban* env, int entity, int x, int y) {
     return env->state.observations[(entity)*env->size*env->size + (y)*env->size + (x)];
-}
-
-static inline void set_intermediate_reward(Boxoban* env, int x, int y, unsigned char value) {
-    env->state.intermediate_rewards[(y)*env->size + (x)] = value;
-}
-
-static inline unsigned char get_intermediate_reward_status(Boxoban* env, int x, int y) {
-    return env->state.intermediate_rewards[(y)*env->size + (x)];
 }
 
 static inline uint32_t get_random_puzzle_idx(Boxoban* env, size_t puzzle_count) {
@@ -224,9 +213,6 @@ static void load_random_puzzle(Boxoban* env) {
     s->n_targets = (int)meta[3];
     s->on_target = (int)meta[4];
 
-    memcpy(s->intermediate_rewards,
-            s->observations + TARGET * env->size * env->size,
-            (size_t)env->size * (size_t)env->size);
     s->puzzle_tick = 0;
 }
 
@@ -259,12 +245,12 @@ void move_entity(Boxoban* env, unsigned char entity, int x, int y, int dx, int d
     set_entity(env, entity, x + dx, y + dy, 1);
 }
 
-// Updates state and intermediate reward array in place
+// Updates state in place. Returns target transition count for the pushed box.
 int take_action(Boxoban* env, int action) {
     State* s = &env->state;
     int dx = 0;
     int dy = 0;
-    int int_r = 0;
+    int target_delta = 0;
 
     if (action == NOOP) {
         return 0;
@@ -286,27 +272,29 @@ int take_action(Boxoban* env, int action) {
         return 0;
     }
 
+    int box_x = s->agent_x + dx;
+    int box_y = s->agent_y + dy;
+    int box_dest_x = box_x + dx;
+    int box_dest_y = box_y + dy;
+
     // If its not clear, but its a box and box is clear to move, move both.
-    if (clear(env, s->agent_x + 2*dx, s->agent_y + 2*dy) &&
-            get_entity(env, BOXES, s->agent_x + dx, s->agent_y + dy) == 1) {
-        // If box is on target currently, remove from on_target count.
-        if (get_entity(env, TARGET, s->agent_x + dx, s->agent_y + dy) == 1) {
+    if (clear(env, box_dest_x, box_dest_y) &&
+            get_entity(env, BOXES, box_x, box_y) == 1) {
+        if (get_entity(env, TARGET, box_x, box_y) == 1) {
             s->on_target -= 1;
+            target_delta -= 1;
         }
 
-        move_entity(env, BOXES, s->agent_x + dx, s->agent_y + dy, dx, dy);
+        move_entity(env, BOXES, box_x, box_y, dx, dy);
         move_entity(env, AGENT, s->agent_x, s->agent_y, dx, dy);
         s->agent_y += dy;
         s->agent_x += dx;
 
-        // If box is now on target, add to on_target count. If its a new target,
-        // receive intermediate reward and zero out intermediate reward.
-        if (get_entity(env, TARGET, s->agent_x + dx, s->agent_y + dy) == 1) {
+        if (get_entity(env, TARGET, box_dest_x, box_dest_y) == 1) {
             s->on_target += 1;
-            int_r = get_intermediate_reward_status(env, s->agent_x + dx, s->agent_y + dy);
-            set_intermediate_reward(env, s->agent_x + dx, s->agent_y + dy, 0);
+            target_delta += 1;
         }
-        return int_r;
+        return target_delta;
     }
     return 0;
 }
@@ -321,15 +309,8 @@ void c_step(Boxoban* env) {
 
     int action = (int)env->actions[0];
 
-    int on_target = s->on_target;
-    int int_r = take_action(env, action); // int_r: new targets covered, modifies state in place
-    int on_target_after = s->on_target;
-
-    env->rewards[0] += (float)int_r * env->int_r_coeff;
-
-    if (on_target_after < on_target) {
-        env->rewards[0] -= env->target_loss_pen_coeff;
-    }
+    int target_delta = take_action(env, action);
+    env->rewards[0] += (float)target_delta * env->int_r_coeff;
 
     // Terminals
     if (s->on_target == s->n_targets) {
@@ -356,7 +337,7 @@ void c_step(Boxoban* env) {
 
     if (s->puzzle_tick >= env->max_steps) {
         env->terminals[0] = 1;
-        env->rewards[0] -= 1.0f;
+        //env->rewards[0] -= 1.0f;
         s->episode_return += env->rewards[0];
         add_log(env);
         c_reset(env);

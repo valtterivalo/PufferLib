@@ -607,6 +607,20 @@ enum {
     INF_JOSEPH_REWARD_MODE_ON = 1,
 };
 
+enum {
+    INF_STEP_OUT_FORECAST_MODE_OFF = 0,
+    INF_STEP_OUT_FORECAST_MODE_EXACT_ROLLOUT = 1,
+    INF_STEP_OUT_FORECAST_MODE_FAST_STATIC_TILE = 2,
+    INF_STEP_OUT_FORECAST_MODE_FAST_READONLY_MOVE = 3,
+};
+
+enum {
+    INF_CURRICULUM_SUPPLY_MODE_OFF = 0,
+    INF_CURRICULUM_SUPPLY_MODE_ALL = 1,
+    INF_CURRICULUM_SUPPLY_MODE_ZUK = 2,
+    INF_CURRICULUM_SUPPLY_MODE_PRE_ZUK = 3,
+};
+
 typedef struct {
     int brew_doses;
     int restore_doses;
@@ -634,11 +648,19 @@ typedef struct {
     float shield_penalty_coeff;
     float tag_reward_coeff;
     float late_start_supply_profile_scale;
+    int curriculum_agent;
+    int curriculum_supply_jitter_mode;
+    float curriculum_supply_shared_jitter;
+    float curriculum_supply_brew_jitter;
+    float curriculum_supply_restore_jitter;
+    int curriculum_no_brew_mode;
+    float curriculum_no_brew_frac;
     float supply_milestone_brew_reward_coeff;
     float supply_milestone_restore_reward_coeff;
     float death_penalty_coeff;
     int terminal_penalty_enabled;
     int step_out_forecast_obs_enabled;
+    int step_out_forecast_obs_mode;
     float phase_900_bonus;
     float phase_600_bonus;
     float phase_300_bonus;

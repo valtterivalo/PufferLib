@@ -46,7 +46,6 @@ static int setup_demo_env(Boxoban* env, const char* chosen_path) {
     env->num_agents = 1;
     env->max_steps = 500;
     env->int_r_coeff = 0.1f;
-    env->target_loss_pen_coeff = 0.5f;
     env->difficulty_id = -1;
 
     size_t obs_count = 4u * (size_t)env->size * (size_t)env->size;
