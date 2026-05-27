@@ -26,6 +26,19 @@ def eval_score(payload: dict[str, object]) -> float:
     return float(payload["env/score"])
 
 
+def latest_cohort(records: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Keep records from the latest git SHA and dirty-diff cohort."""
+    if not records:
+        return []
+    latest = records[-1]
+    key = (latest["git_sha"], latest["git_diff_sha256"])
+    return [
+        record
+        for record in records
+        if (record["git_sha"], record["git_diff_sha256"]) == key
+    ]
+
+
 def main() -> None:
     """Write milestone-summary.json next to the runner scripts."""
     if len(sys.argv) != 2:
@@ -45,6 +58,8 @@ def main() -> None:
                     "score": summary["score"],
                     "eval_score": eval_score(eval_summary),
                     "uptime": summary["uptime"],
+                    "git_sha": run_meta["git_sha"],
+                    "git_diff_sha256": run_meta["git_diff_sha256"],
                     "metal_cpu_inference": run_meta["metal_cpu_inference"],
                     "metal_train_fp16": run_meta["metal_train_fp16"],
                 }
@@ -54,19 +69,19 @@ def main() -> None:
     for env_name, records in envs.items():
         main_records = [
             record
-            for record in records
+            for record in latest_cohort(records)
             if record["metal_cpu_inference"] == "1" and record["metal_train_fp16"] == "0"
         ]
         out["envs"][env_name] = {
             "runs": records,
-            "main_run_count": len(main_records),
-            "main_sps_median": statistics.median(record["sps"] for record in main_records)
+            "latest_main_run_count": len(main_records),
+            "latest_main_sps_median": statistics.median(record["sps"] for record in main_records)
             if main_records
             else None,
-            "main_score_median": statistics.median(record["score"] for record in main_records)
+            "latest_main_score_median": statistics.median(record["score"] for record in main_records)
             if main_records
             else None,
-            "main_eval_score_median": statistics.median(record["eval_score"] for record in main_records)
+            "latest_main_eval_score_median": statistics.median(record["eval_score"] for record in main_records)
             if main_records
             else None,
         }

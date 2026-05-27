@@ -25,3 +25,9 @@
 - Milestone 00 baseline executed the benchmark and smoke runs but failed during milestone summarization.
 - Root cause: eval logs emit raw `env/score`, while `summarize-milestone.py` and `check-median-gate.py` expected a normalized `score` key.
 - Fixing the harness parser and rerunning milestone 00 after review.
+
+## 2026-05-27 08:18 EEST
+
+- Milestone 00 rerun passed, including repeated main runs, GPU-inference smoke, native parity, overlay guard, and summarization.
+- Found one audit-quality issue after the pass: `milestone-summary.json` includes pre-fix stale runs in aggregate medians, while `check-median-gate.py` correctly uses only the latest git/diff cohort.
+- Aligning the summary helper with the gate script before recording baseline numbers in status.
