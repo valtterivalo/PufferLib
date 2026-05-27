@@ -403,3 +403,21 @@
 - Medians: `breakout` two-run median `3,410,604` SPS, `-1.82%` versus milestone 04l accepted median `3,473,973`. `g2048` two-run median `586,191` SPS, `-1.87%` versus milestone 04l accepted median `597,374`.
 - Native Metal parity and overlay surface passed in both milestone 04o suites.
 - Decision: rejected. The candidate exceeded the 1 percent SPS gate in both benchmark envs, so `src/metal/kernels.mm` was restored to the 04l accepted state. Only rejection artifacts, runner scripts, overlay allowlist, and this status entry remain for audit.
+
+## 2026-05-27 Milestone 04p MinGRU Wrapper Cleanup Candidate
+
+- Root-cause hypothesis: `src/metal/kernels.mm` still has eight local MinGRU scan wrapper functions whose only job is to choose one of four forward or backward shader names and call the shared dispatch helper. Replacing them with two kernel-name helpers and direct dispatch from `mingru_forward` and `mingru_backward` should preserve shader source, exported kernel names, buffer indices, dispatch dimensions, barrier order, math, RNG, and reset behavior while deleting host-only wrapper code.
+- Candidate code change: remove the unused fp16 scan forward/backward prototypes, remove the eight local `mtl_mingru_scan_*` wrappers, add `mingru_scan_forward_kernel_name` and `mingru_scan_backward_kernel_name`, and call `dispatch_scan_forward` and `dispatch_scan_backward` directly from the MinGRU layer loops. Add dedicated milestone 04p runners and exact overlay allowlist paths.
+- LOC before validation: `src/metal/shader_src.h` is unchanged at `2,266`. `src/metal/kernels.mm` is `1,440`, down from accepted `1,477`. Kernel scope is `3,823`, down from accepted `3,860` and setup `4,615`. Backend scope is `9,418` after overlay allowlist growth, down from `9,451` after the rejected 04o audit commit.
+- Risk classification: medium. This is host dispatch cleanup rather than shader math, but it touches MinGRU forward and backward kernel selection for fp32, fp16, reset, and non-reset paths. Acceptance requires build success, repeated `breakout` and `g2048`, native parity, overlay surface, interactive smoke, comparable train and eval scores, and subagent review.
+- Acceptance gate: use the dedicated `milestone-04p-mingru-wrapper-cleanup` runners, require median SPS within 1 percent of the current accepted baseline or better, require learnability and eval to remain comparable, and reject on compile, parity, determinism, or score drift.
+
+## 2026-05-27 Milestone 04p MinGRU Wrapper Cleanup Results
+
+- Candidate code change: temporarily removed local MinGRU scan wrappers and dispatched forward and backward scans through two kernel-name helpers. The candidate would have reduced `src/metal/kernels.mm` from `1,477` to `1,440` and kernel scope from `3,860` to `3,823`, but it is not kept.
+- Static validation passed before benchmark rejection: `tools/metal/build.sh breakout`, `tools/metal/build.sh g2048`, `git diff --check`, `bash -n` for all milestone 04p runners, and `PYTHONPATH=$PWD python -m pytest tests/metal/test_overlay_surface.py`.
+- First milestone 04p suite: `breakout` artifact `20260527T050759+0300-breakout` at `3,390,189` SPS, train score `2.3093252182006836`, eval score `0.0`. `g2048` artifact `20260527T050811+0300-g2048` at `595,074` SPS, train score `97.85507202148438`, eval score `49.43283462524414`.
+- Second milestone 04p suite: `breakout` artifact `20260527T050828+0300-breakout` at `3,418,177` SPS, train score `2.6933438777923584`, eval score `0.0`. `g2048` artifact `20260527T050838+0300-g2048` at `589,770` SPS, train score `97.85507202148438`, eval score `49.43283462524414`.
+- Medians: `breakout` two-run median `3,404,183` SPS, `-2.01%` versus milestone 04l accepted median `3,473,973`. `g2048` two-run median `592,422` SPS, `-0.83%` versus milestone 04l accepted median `597,374`.
+- Native Metal parity and overlay surface passed in both milestone 04p suites.
+- Decision: rejected. The candidate exceeded the 1 percent breakout SPS gate, so `src/metal/kernels.mm` was restored to the 04l accepted state. Only rejection artifacts, runner scripts, overlay allowlist, and this status entry remain for audit.
