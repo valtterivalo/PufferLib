@@ -2130,6 +2130,157 @@ kernel void mingru_scan_backward_reset_fp16(
 //
 // ============================================================================
 
+constant int STEEL_BM = 64;
+constant int STEEL_BN = 64;
+constant int STEEL_WM = 2;
+constant int STEEL_WN = 2;
+constant int STEEL_TM = STEEL_BM / (8 * STEEL_WM);
+constant int STEEL_TN = STEEL_BN / (8 * STEEL_WN);
+
+template <typename T, typename Frag, bool StoreHalf>
+inline void steel_gemm_body(
+    device const T* A,
+    device const T* B,
+    device T* C,
+    constant GemmParams& p,
+    threadgroup float* smem,
+    uint2 tgid,
+    uint sgid,
+    uint lane
+) {
+    const int bm = (int)tgid.y * STEEL_BM;
+    const int bn = (int)tgid.x * STEEL_BN;
+    const int wm = (int)(sgid / STEEL_WN);
+    const int wn = (int)(sgid % STEEL_WN);
+    const int tid = (int)(sgid * 32 + lane);
+    const int sm = bm + wm * 32;
+    const int sn = bn + wn * 32;
+
+    simdgroup_float8x8 acc[STEEL_TM][STEEL_TN];
+    for (int i = 0; i < STEEL_TM; i++)
+        for (int j = 0; j < STEEL_TN; j++)
+            acc[i][j] = simdgroup_float8x8(0);
+
+    const int K_aligned = (p.K / 8) * 8;
+    if (!p.trans_a && p.trans_b) {
+        for (int k = 0; k < K_aligned; k += 8) {
+            Frag a_frag[STEEL_TM];
+            for (int i = 0; i < STEEL_TM; i++)
+                simdgroup_load(a_frag[i], A + (long)(sm + i*8) * p.lda + k, p.lda);
+            for (int j = 0; j < STEEL_TN; j++) {
+                Frag b_frag;
+                simdgroup_load(b_frag, B + (long)(sn + j*8) * p.ldb + k, p.ldb,
+                               ulong2(0,0), true);
+                for (int i = 0; i < STEEL_TM; i++)
+                    simdgroup_multiply_accumulate(acc[i][j], a_frag[i], b_frag, acc[i][j]);
+            }
+        }
+    } else if (!p.trans_a && !p.trans_b) {
+        for (int k = 0; k < K_aligned; k += 8) {
+            Frag a_frag[STEEL_TM];
+            for (int i = 0; i < STEEL_TM; i++)
+                simdgroup_load(a_frag[i], A + (long)(sm + i*8) * p.lda + k, p.lda);
+            for (int j = 0; j < STEEL_TN; j++) {
+                Frag b_frag;
+                simdgroup_load(b_frag, B + (long)k * p.ldb + sn + j*8, p.ldb);
+                for (int i = 0; i < STEEL_TM; i++)
+                    simdgroup_multiply_accumulate(acc[i][j], a_frag[i], b_frag, acc[i][j]);
+            }
+        }
+    } else if (p.trans_a && !p.trans_b) {
+        for (int k = 0; k < K_aligned; k += 8) {
+            Frag a_frag[STEEL_TM];
+            for (int i = 0; i < STEEL_TM; i++)
+                simdgroup_load(a_frag[i], A + (long)k * p.lda + sm + i*8, p.lda,
+                               ulong2(0,0), true);
+            for (int j = 0; j < STEEL_TN; j++) {
+                Frag b_frag;
+                simdgroup_load(b_frag, B + (long)k * p.ldb + sn + j*8, p.ldb);
+                for (int i = 0; i < STEEL_TM; i++)
+                    simdgroup_multiply_accumulate(acc[i][j], a_frag[i], b_frag, acc[i][j]);
+            }
+        }
+    }
+
+    constexpr int SMEM_STRIDE = STEEL_BN;
+
+    if (K_aligned < p.K) {
+        threadgroup T* sA = (threadgroup T*)smem;
+        threadgroup T* sB = sA + STEEL_BM * 9;
+        constexpr int sB_stride = STEEL_BN + 1;
+        int k = K_aligned;
+        int rem = p.K - k;
+
+        for (int idx = tid; idx < STEEL_BM * 8; idx += 128) {
+            int r = idx / 8;
+            int c = idx % 8;
+            int gr = bm + r;
+            int gc = k + c;
+            sA[r * 9 + c] = (gr < p.M && c < rem)
+                ? (p.trans_a ? A[(long)gc * p.lda + gr] : A[(long)gr * p.lda + gc])
+                : T(0);
+        }
+
+        for (int idx = tid; idx < 8 * STEEL_BN; idx += 128) {
+            int r = idx / STEEL_BN;
+            int c = idx % STEEL_BN;
+            int gr = k + r;
+            int gc = bn + c;
+            sB[r * sB_stride + c] = (r < rem && gc < p.N)
+                ? (p.trans_b ? B[(long)gc * p.ldb + gr] : B[(long)gr * p.ldb + gc])
+                : T(0);
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        Frag a_frag[STEEL_TM];
+        for (int i = 0; i < STEEL_TM; i++)
+            simdgroup_load(a_frag[i], sA + (wm * 32 + i * 8) * 9, 9);
+        for (int j = 0; j < STEEL_TN; j++) {
+            Frag b_frag;
+            simdgroup_load(b_frag, sB + (wn * 32 + j * 8), sB_stride);
+            for (int i = 0; i < STEEL_TM; i++)
+                simdgroup_multiply_accumulate(acc[i][j], a_frag[i], b_frag, acc[i][j]);
+        }
+    }
+
+    if constexpr (!StoreHalf) {
+        bool fast_store = (p.alpha == 1.0f && p.beta == 0.0f
+                           && bm + STEEL_BM <= p.M && bn + STEEL_BN <= p.N);
+        if (fast_store) {
+            for (int i = 0; i < STEEL_TM; i++)
+                for (int j = 0; j < STEEL_TN; j++)
+                    simdgroup_store(acc[i][j],
+                        C + (long)(sm + i*8) * p.ldc + sn + j*8, p.ldc);
+            return;
+        }
+    } else {
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    for (int i = 0; i < STEEL_TM; i++)
+        for (int j = 0; j < STEEL_TN; j++)
+            simdgroup_store(acc[i][j],
+                smem + (wm*32 + i*8) * SMEM_STRIDE + (wn*32 + j*8),
+                SMEM_STRIDE);
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    for (int idx = tid; idx < STEEL_BM * STEEL_BN; idx += 128) {
+        int r = idx / STEEL_BN;
+        int c = idx % STEEL_BN;
+        int gr = bm + r;
+        int gc = bn + c;
+        if (gr < p.M && gc < p.N) {
+            long out_idx = (long)gr * p.ldc + gc;
+            float val = smem[r * SMEM_STRIDE + c];
+            if (p.beta == 0.0f)
+                C[out_idx] = T(p.alpha * val);
+            else
+                C[out_idx] = T(p.alpha * val + p.beta * float(C[out_idx]));
+        }
+    }
+}
+
 kernel void steel_gemm(
     device const float* A      [[buffer(0)]],
     device const float* B      [[buffer(1)]],
@@ -2139,172 +2290,8 @@ kernel void steel_gemm(
     uint sgid                  [[simdgroup_index_in_threadgroup]],
     uint lane                  [[thread_index_in_simdgroup]]
 ) {
-    // 64x64 output tile, 4 simdgroups (2x2), each 32x32 = 4x4 grid of 8x8
-    constexpr int BM = 64, BN = 64;
-    constexpr int WM = 2, WN = 2;
-    constexpr int TM = BM / (8 * WM); // 4
-    constexpr int TN = BN / (8 * WN); // 4
-
-    const int bm = (int)tgid.y * BM;
-    const int bn = (int)tgid.x * BN;
-    const int wm = (int)(sgid / WN);
-    const int wn = (int)(sgid % WN);
-    const int tid = (int)(sgid * 32 + lane);
-
-    // Per-simdgroup 32x32 output starts at (sm, sn)
-    const int sm = bm + wm * 32;
-    const int sn = bn + wn * 32;
-
-    // 4x4 accumulator grid of 8x8 simdgroup matrices (16 per simd group)
-    simdgroup_float8x8 acc[TM][TN];
-    for (int i = 0; i < TM; i++)
-        for (int j = 0; j < TN; j++)
-            acc[i][j] = simdgroup_float8x8(0);
-
-    const int K_aligned = (p.K / 8) * 8;
-
-    // ---- Main loop: direct device loads, no threadgroup, no barriers ----
-    // Each simd group loads its own A and B fragments independently.
-    // L2 cache provides cross-simdgroup data reuse (validated by
-    // ThunderMittens: 9% faster than MLX's threadgroup approach on M2 Pro).
-
-    if (!p.trans_a && p.trans_b) {
-        // NT: C = A(M,K) @ B(N,K)^T — forward pass, Muon
-        for (int k = 0; k < K_aligned; k += 8) {
-            simdgroup_float8x8 a_frag[TM];
-            for (int i = 0; i < TM; i++)
-                simdgroup_load(a_frag[i], A + (long)(sm + i*8) * p.lda + k, p.lda);
-            for (int j = 0; j < TN; j++) {
-                simdgroup_float8x8 b_frag;
-                simdgroup_load(b_frag, B + (long)(sn + j*8) * p.ldb + k, p.ldb,
-                               ulong2(0,0), true);
-                for (int i = 0; i < TM; i++)
-                    simdgroup_multiply_accumulate(acc[i][j], a_frag[i], b_frag, acc[i][j]);
-            }
-        }
-    } else if (!p.trans_a && !p.trans_b) {
-        // NN: C = A(M,K) @ B(K,N) — backward input grad, Muon addmm
-        for (int k = 0; k < K_aligned; k += 8) {
-            simdgroup_float8x8 a_frag[TM];
-            for (int i = 0; i < TM; i++)
-                simdgroup_load(a_frag[i], A + (long)(sm + i*8) * p.lda + k, p.lda);
-            for (int j = 0; j < TN; j++) {
-                simdgroup_float8x8 b_frag;
-                simdgroup_load(b_frag, B + (long)k * p.ldb + sn + j*8, p.ldb);
-                for (int i = 0; i < TM; i++)
-                    simdgroup_multiply_accumulate(acc[i][j], a_frag[i], b_frag, acc[i][j]);
-            }
-        }
-    } else if (p.trans_a && !p.trans_b) {
-        // TN: C = A(K,M)^T @ B(K,N) — backward weight grad
-        for (int k = 0; k < K_aligned; k += 8) {
-            simdgroup_float8x8 a_frag[TM];
-            for (int i = 0; i < TM; i++)
-                simdgroup_load(a_frag[i], A + (long)k * p.lda + sm + i*8, p.lda,
-                               ulong2(0,0), true);
-            for (int j = 0; j < TN; j++) {
-                simdgroup_float8x8 b_frag;
-                simdgroup_load(b_frag, B + (long)k * p.ldb + sn + j*8, p.ldb);
-                for (int i = 0; i < TM; i++)
-                    simdgroup_multiply_accumulate(acc[i][j], a_frag[i], b_frag, acc[i][j]);
-            }
-        }
-    }
-
-    // Single threadgroup allocation shared between K-remainder and store phases.
-    // These phases are sequential (barriers between), so memory is safely reused.
-    // The compiler doubles explicit threadgroup memory (simdgroup register spill),
-    // so separate arrays for sA+sB+sC exceed 32KB. Aliasing them into one buffer
-    // keeps total at BM*BN*4*2 = 32768 = limit.
-    constexpr int SMEM_STRIDE = BN;
-    threadgroup float _smem[BM * SMEM_STRIDE];
-
-    // ---- K-remainder: threadgroup fallback for last partial chunk ----
-    // Only triggered when K % 8 != 0 (e.g., K=373). Loads remaining
-    // elements into zero-padded 8-wide threadgroup tiles.
-    // Reinterprets _smem as sA (BM×9 float) and sB (8×(BN+1) float).
-    if (K_aligned < p.K) {
-        threadgroup float* sA = _smem;                // BM*9 = 576 floats
-        threadgroup float* sB = _smem + BM * 9;       // 8*(BN+1) = 520 floats
-        constexpr int sB_stride = BN + 1;
-
-        int k = K_aligned;
-        int rem = p.K - k;
-
-        // Cooperative load A: BM × 8 (zero-padded beyond rem)
-        int total_a = BM * 8;
-        for (int idx = tid; idx < total_a; idx += 128) {
-            int r = idx / 8;
-            int c = idx % 8;
-            int gr = bm + r;
-            int gc = k + c;
-            sA[r * 9 + c] = (gr < p.M && c < rem)
-                ? (p.trans_a ? A[(long)gc * p.lda + gr] : A[(long)gr * p.lda + gc])
-                : 0.0f;
-        }
-
-        // Cooperative load B: 8 × BN (zero-padded beyond rem)
-        int total_b = 8 * BN;
-        for (int idx = tid; idx < total_b; idx += 128) {
-            int r = idx / BN;
-            int c = idx % BN;
-            int gr = k + r;
-            int gc = bn + c;
-            sB[r * sB_stride + c] = (r < rem && gc < p.N)
-                ? (p.trans_b ? B[(long)gc * p.ldb + gr] : B[(long)gr * p.ldb + gc])
-                : 0.0f;
-        }
-
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-
-        simdgroup_float8x8 a_frag[TM];
-        for (int i = 0; i < TM; i++)
-            simdgroup_load(a_frag[i], sA + (wm * 32 + i * 8) * 9, 9);
-        for (int j = 0; j < TN; j++) {
-            simdgroup_float8x8 b_frag;
-            simdgroup_load(b_frag, sB + (wn * 32 + j * 8), sB_stride);
-            for (int i = 0; i < TM; i++)
-                simdgroup_multiply_accumulate(acc[i][j], a_frag[i], b_frag, acc[i][j]);
-        }
-    }
-
-    // ---- Store results ----
-    // Fast path: direct simdgroup_store for interior tiles with alpha=1, beta=0.
-    // Slow path: threadgroup staging via _smem for edge tiles and non-trivial alpha/beta.
-    // CRITICAL: condition must be uniform across the threadgroup — all simdgroups
-    // must take the same branch, otherwise the threadgroup_barrier in the slow
-    // path causes undefined behavior (some threads skip it).
-    bool fast_store = (p.alpha == 1.0f && p.beta == 0.0f
-                       && bm + BM <= p.M && bn + BN <= p.N);
-    if (fast_store) {
-        for (int i = 0; i < TM; i++)
-            for (int j = 0; j < TN; j++)
-                simdgroup_store(acc[i][j],
-                    C + (long)(sm + i*8) * p.ldc + sn + j*8, p.ldc);
-    } else {
-        for (int i = 0; i < TM; i++)
-            for (int j = 0; j < TN; j++)
-                simdgroup_store(acc[i][j],
-                    _smem + (wm*32 + i*8) * SMEM_STRIDE + (wn*32 + j*8),
-                    SMEM_STRIDE);
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-
-        // Cooperative store to device: each thread handles BM*BN/128 = 32 elements
-        for (int idx = tid; idx < BM * BN; idx += 128) {
-            int r = idx / BN;
-            int c = idx % BN;
-            int gr = bm + r;
-            int gc = bn + c;
-            if (gr < p.M && gc < p.N) {
-                long out_idx = (long)gr * p.ldc + gc;
-                float val = _smem[r * SMEM_STRIDE + c];
-                if (p.beta == 0.0f)
-                    C[out_idx] = p.alpha * val;
-                else
-                    C[out_idx] = p.alpha * val + p.beta * C[out_idx];
-            }
-        }
-    }
+    threadgroup float smem[STEEL_BM * STEEL_BN];
+    steel_gemm_body<float, simdgroup_float8x8, false>(A, B, C, p, smem, tgid, sgid, lane);
 }
 
 // Used when N doesn't meet tensor_ops alignment (N%32!=0).
@@ -2364,156 +2351,8 @@ kernel void steel_gemm_f16(
     uint sgid                  [[simdgroup_index_in_threadgroup]],
     uint lane                  [[thread_index_in_simdgroup]]
 ) {
-    constexpr int BM = 64, BN = 64;
-    constexpr int WM = 2, WN = 2;
-    constexpr int TM = BM / (8 * WM); // 4
-    constexpr int TN = BN / (8 * WN); // 4
-
-    const int bm = (int)tgid.y * BM;
-    const int bn = (int)tgid.x * BN;
-    const int wm = (int)(sgid / WN);
-    const int wn = (int)(sgid % WN);
-    const int tid = (int)(sgid * 32 + lane);
-
-    const int sm = bm + wm * 32;
-    const int sn = bn + wn * 32;
-
-    // f32 accumulators for numerical stability
-    simdgroup_float8x8 acc[TM][TN];
-    for (int i = 0; i < TM; i++)
-        for (int j = 0; j < TN; j++)
-            acc[i][j] = simdgroup_float8x8(0);
-
-    const int K_aligned = (p.K / 8) * 8;
-
-    if (!p.trans_a && p.trans_b) {
-        // NT: C = A(M,K) @ B(N,K)^T
-        for (int k = 0; k < K_aligned; k += 8) {
-            simdgroup_half8x8 a_frag[TM];
-            for (int i = 0; i < TM; i++)
-                simdgroup_load(a_frag[i], A + (long)(sm + i*8) * p.lda + k, p.lda);
-            for (int j = 0; j < TN; j++) {
-                simdgroup_half8x8 b_frag;
-                simdgroup_load(b_frag, B + (long)(sn + j*8) * p.ldb + k, p.ldb,
-                               ulong2(0,0), true);
-                for (int i = 0; i < TM; i++)
-                    simdgroup_multiply_accumulate(acc[i][j], a_frag[i], b_frag, acc[i][j]);
-            }
-        }
-    } else if (!p.trans_a && !p.trans_b) {
-        // NN: C = A(M,K) @ B(K,N)
-        for (int k = 0; k < K_aligned; k += 8) {
-            simdgroup_half8x8 a_frag[TM];
-            for (int i = 0; i < TM; i++)
-                simdgroup_load(a_frag[i], A + (long)(sm + i*8) * p.lda + k, p.lda);
-            for (int j = 0; j < TN; j++) {
-                simdgroup_half8x8 b_frag;
-                simdgroup_load(b_frag, B + (long)k * p.ldb + sn + j*8, p.ldb);
-                for (int i = 0; i < TM; i++)
-                    simdgroup_multiply_accumulate(acc[i][j], a_frag[i], b_frag, acc[i][j]);
-            }
-        }
-    } else if (p.trans_a && !p.trans_b) {
-        // TN: C = A(K,M)^T @ B(K,N)
-        for (int k = 0; k < K_aligned; k += 8) {
-            simdgroup_half8x8 a_frag[TM];
-            for (int i = 0; i < TM; i++)
-                simdgroup_load(a_frag[i], A + (long)k * p.lda + sm + i*8, p.lda,
-                               ulong2(0,0), true);
-            for (int j = 0; j < TN; j++) {
-                simdgroup_half8x8 b_frag;
-                simdgroup_load(b_frag, B + (long)k * p.ldb + sn + j*8, p.ldb);
-                for (int i = 0; i < TM; i++)
-                    simdgroup_multiply_accumulate(acc[i][j], a_frag[i], b_frag, acc[i][j]);
-            }
-        }
-    }
-
-    // Single threadgroup allocation shared between K-remainder and store phases.
-    // These phases are sequential (barriers between), so memory is safely reused.
-    // Store needs BM*BN floats = 16384 bytes (largest consumer).
-    // K-remainder needs BM*9 + 8*(BN+1) halves = 2192 bytes (fits inside).
-    // Without aliasing, the compiler allocates all three arrays statically and
-    // exceeds the 32KB threadgroup memory limit. The compiler doubles explicit
-    // threadgroup memory (simdgroup register spill), so BM*BN*4*2 = 32768 = limit.
-    // No +1 stride padding: minor bank conflict on simdgroup_store vs. correctness.
-    constexpr int SMEM_STRIDE = BN;
-    threadgroup float _smem[BM * SMEM_STRIDE];
-
-    // K-remainder: reinterpret _smem as half arrays for partial-K accumulation
-    if (K_aligned < p.K) {
-        threadgroup half* sA = (threadgroup half*)_smem;
-        threadgroup half* sB = sA + BM * 9;
-        constexpr int sB_stride = BN + 1;
-
-        int k = K_aligned;
-        int rem = p.K - k;
-
-        int total_a = BM * 8;
-        for (int idx = tid; idx < total_a; idx += 128) {
-            int r = idx / 8;
-            int c = idx % 8;
-            int gr = bm + r;
-            int gc = k + c;
-            sA[r * 9 + c] = (gr < p.M && c < rem)
-                ? (p.trans_a ? A[(long)gc * p.lda + gr] : A[(long)gr * p.lda + gc])
-                : half(0);
-        }
-
-        int total_b = 8 * BN;
-        for (int idx = tid; idx < total_b; idx += 128) {
-            int r = idx / BN;
-            int c = idx % BN;
-            int gr = k + r;
-            int gc = bn + c;
-            sB[r * sB_stride + c] = (r < rem && gc < p.N)
-                ? (p.trans_b ? B[(long)gc * p.ldb + gr] : B[(long)gr * p.ldb + gc])
-                : half(0);
-        }
-
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-
-        simdgroup_half8x8 a_frag[TM];
-        for (int i = 0; i < TM; i++)
-            simdgroup_load(a_frag[i], sA + (wm * 32 + i * 8) * 9, 9);
-        for (int j = 0; j < TN; j++) {
-            simdgroup_half8x8 b_frag;
-            simdgroup_load(b_frag, sB + (wn * 32 + j * 8), sB_stride);
-            for (int i = 0; i < TM; i++)
-                simdgroup_multiply_accumulate(acc[i][j], a_frag[i], b_frag, acc[i][j]);
-        }
-    }
-
-    // Barrier: K-remainder reads _smem as half, store writes it as float.
-    // Without this, a fast simdgroup's float writes corrupt a slow one's half reads.
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-
-    // Store: f32 acc → half output via _smem staging (reuses same memory)
-    // simdgroup_store of float8x8 requires float* destination, so we stage
-    // through _smem then convert element-by-element to half for output.
-    {
-        for (int i = 0; i < TM; i++)
-            for (int j = 0; j < TN; j++)
-                simdgroup_store(acc[i][j],
-                    _smem + (wm*32 + i*8) * SMEM_STRIDE + (wn*32 + j*8),
-                    SMEM_STRIDE);
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-
-        for (int idx = tid; idx < BM * BN; idx += 128) {
-            int r = idx / BN;
-            int c = idx % BN;
-            int gr = bm + r;
-            int gc = bn + c;
-            if (gr < p.M && gc < p.N) {
-                long out_idx = (long)gr * p.ldc + gc;
-                float val = _smem[r * SMEM_STRIDE + c];
-                if (p.beta == 0.0f)
-                    C[out_idx] = half(p.alpha * val);
-                else
-                    C[out_idx] = half(p.alpha * val + p.beta * float(C[out_idx]));
-            }
-        }
-    }
+    threadgroup float smem[STEEL_BM * STEEL_BN];
+    steel_gemm_body<half, simdgroup_half8x8, true>(A, B, C, p, smem, tgid, sgid, lane);
 }
 
 )METAL";

@@ -181,3 +181,23 @@
 - Medians: `breakout` `3,443,683` SPS, `-0.16%` versus milestone 04d accepted median `3,449,313`; `g2048` `588,279` SPS, `-1.50%` versus milestone 04d accepted median `597,244`.
 - Native Metal parity and overlay surface passed in both milestone 04e suites.
 - Decision: rejected. The candidate exceeded the 1 percent g2048 LOC gate, so `src/metal/kernels.mm` was restored to the 04d accepted state. Only the rejection artifacts, runner scripts, overlay allowlist, and this status entry remain for audit.
+
+## 2026-05-27 Milestone 04f Steel GEMM Template Candidate
+
+- Root-cause hypothesis: `steel_gemm` and `steel_gemm_f16` duplicate the same Metal tile traversal, three GEMM layout branches, K-remainder path, accumulator staging, and scalar edge store. A typed MSL helper can keep both exported kernel names unchanged while preserving fp32 direct fast-store behavior and fp16 staged half-output behavior.
+- Risk classification: high. This touches the unaligned GEMM fallback path and fp16 fallback path, so acceptance requires runtime Metal JIT success, build success, repeated `breakout` and `g2048` runs, parity, overlay, interactive smoke, and subagent review.
+- Acceptance gate: use the dedicated `milestone-04f-steel-gemm-template` runners, require median SPS within 1 percent of the current accepted baseline or better, require train and eval scores comparable to milestone 04d, and reject immediately on compile, parity, determinism, or score drift.
+
+## 2026-05-27 Milestone 04f Steel GEMM Template Results
+
+- First 04f suite attempt artifact `20260527T030833+0300-breakout` failed during Metal JIT. Root cause: program-scope constants needed `constant` address space, and threadgroup memory had to be declared in the exported kernel wrappers rather than inside the inline helper. The candidate was patched in place and rerun from the top.
+- Code change: replace duplicated fp32 and fp16 Steel GEMM tile traversal, layout branches, K-remainder loading, and scalar edge store with one typed MSL helper plus two exported wrappers. Exported kernel names remain `steel_gemm` and `steel_gemm_f16`. The fp32 wrapper keeps the direct simdgroup fast-store path, while the fp16 wrapper keeps the staged half-output store and pre-store barrier.
+- LOC: `src/metal/shader_src.h` is `2,361` lines, down from `2,522` after milestone 04d. Kernel scope is `3,982`, down from `4,143` after milestone 04d and down from setup `4,615`. Live backend scope is `9,542`, down from `9,699` before 04f and down from setup `10,160`.
+- Static validation passed: `tools/metal/build.sh breakout`, `git diff --check`, `bash -n` for all milestone 04f runners, and `PYTHONPATH=$PWD python -m pytest tests/metal/test_overlay_surface.py`.
+- First successful milestone 04f suite: `breakout` artifact `20260527T030928+0300-breakout` at `3,486,329` SPS, train score `2.109865427017212`, eval score `0.0`; `g2048` artifact `20260527T030940+0300-g2048` at `597,526` SPS, train score `97.85507202148438`, eval score `49.43283462524414`.
+- Second milestone 04f suite: `breakout` artifact `20260527T030957+0300-breakout` at `3,398,993` SPS, train score `1.8505362272262573`, eval score `0.0`; `g2048` artifact `20260527T031007+0300-g2048` at `596,433` SPS, train score `97.85507202148438`, eval score `49.43283462524414`.
+- Medians: `breakout` `3,442,661` SPS, `-0.19%` versus milestone 04d accepted median `3,449,313`; `g2048` `596,980` SPS, `-0.04%` versus milestone 04d accepted median `597,244`.
+- Native Metal parity and overlay surface passed in both successful milestone 04f suites.
+- Interactive smoke artifact: `milestone-04f-steel-gemm-template/20260527T031048+0300-interactive-breakout-steel-gemm-template`. It built, loaded `resources/breakout/breakout_weights.bin`, reached raylib 5.5 GLFW initialization, then failed with `Failed to determine Monitor to center Window` and exit code `139`, matching the known desktop windowing boundary.
+- Subagent review: Aristotle found no blocking findings, verified exported Steel GEMM names, fp32 fast-store behavior, fp16 pre-store barrier behavior, exact runner allowlist scope, and STATUS LOC and benchmark arithmetic.
+- Decision: accepted after subagent review. This is the largest kept kernel-scope LOC cleanup of the night so far and remains inside the throughput and learnability gates.
