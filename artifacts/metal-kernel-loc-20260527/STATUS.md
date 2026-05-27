@@ -385,3 +385,21 @@
 - Medians: `breakout` three-run median `3,407,134` SPS, `-1.93%` versus milestone 04l accepted median `3,473,973`. `g2048` two-run median `596,386` SPS, `-0.17%` versus milestone 04l accepted median `597,374`.
 - Native Metal parity and overlay surface passed in both milestone 04n suites.
 - Decision: rejected. The candidate exceeded the 1 percent breakout SPS gate, so `src/metal/shader_src.h`, `src/metal/kernels.mm`, and `src/metal/platform.mm` were restored to the 04l accepted state. Only rejection artifacts, runner scripts, overlay allowlist, and this status entry remain for audit.
+
+## 2026-05-27 Milestone 04o F16 Wrapper Cleanup Candidate
+
+- Root-cause hypothesis: `mtl_fill_f16` and `mtl_copy_f16` duplicate the exact `fill_f32` and `copy_f32` dispatch shapes over `count / 2` fp32 words. Delegating to the existing f32 wrappers should preserve kernel names, buffer slots, dispatch dimensions, math, RNG, reductions, and command order while deleting host code.
+- Candidate code change: replace the f16 fill and copy wrapper bodies in `src/metal/kernels.mm` with calls to `mtl_fill_f32` and `mtl_copy_f32`, keeping the odd-count assertions and adding dedicated milestone 04o runners plus exact overlay allowlist paths.
+- LOC before validation: `src/metal/shader_src.h` is unchanged at `2,266`. `src/metal/kernels.mm` is `1,462`, down from accepted `1,477`. Kernel scope is `3,845`, down from accepted `3,860` and setup `4,615`. Backend scope is `9,436` after runner allowlist growth, down from `9,447` after the rejected 04n audit commit.
+- Risk classification: low to medium. This is host wrapper cleanup, but it can affect fp16 training buffers and should still pass full `breakout` and `g2048` train and eval gates.
+- Acceptance gate: use the dedicated `milestone-04o-f16-wrapper-cleanup` runners, require median SPS within 1 percent of the current accepted baseline or better, require learnability and eval to remain comparable, and reject on compile, parity, determinism, or score drift.
+
+## 2026-05-27 Milestone 04o F16 Wrapper Cleanup Results
+
+- Candidate code change: temporarily delegated `mtl_fill_f16` and `mtl_copy_f16` to the f32 wrappers over `count / 2` fp32 words. The candidate would have reduced `src/metal/kernels.mm` from `1,477` to `1,462` and kernel scope from `3,860` to `3,845`, but it is not kept.
+- Static validation passed before benchmark rejection: `tools/metal/build.sh breakout`, `tools/metal/build.sh g2048`, `git diff --check`, `bash -n` for all milestone 04o runners, and `PYTHONPATH=$PWD python -m pytest tests/metal/test_overlay_surface.py`.
+- First milestone 04o suite: `breakout` artifact `20260527T045715+0300-breakout` at `3,401,507` SPS, train score `2.6478328704833984`, eval score `0.0`. `g2048` artifact `20260527T045726+0300-g2048` at `588,431` SPS, train score `97.85507202148438`, eval score `49.43283462524414`.
+- Second milestone 04o suite: `breakout` artifact `20260527T045748+0300-breakout` at `3,419,701` SPS, train score `2.790774345397949`, eval score `0.0`. `g2048` artifact `20260527T045759+0300-g2048` at `583,951` SPS, train score `97.85507202148438`, eval score `49.43283462524414`.
+- Medians: `breakout` two-run median `3,410,604` SPS, `-1.82%` versus milestone 04l accepted median `3,473,973`. `g2048` two-run median `586,191` SPS, `-1.87%` versus milestone 04l accepted median `597,374`.
+- Native Metal parity and overlay surface passed in both milestone 04o suites.
+- Decision: rejected. The candidate exceeded the 1 percent SPS gate in both benchmark envs, so `src/metal/kernels.mm` was restored to the 04l accepted state. Only rejection artifacts, runner scripts, overlay allowlist, and this status entry remain for audit.
