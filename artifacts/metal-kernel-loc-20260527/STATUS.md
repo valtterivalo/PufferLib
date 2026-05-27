@@ -237,3 +237,17 @@
 - Medians: `breakout` `3,436,038` SPS, `-0.38%` versus milestone 04g accepted median `3,449,074`; `g2048` `581,593` SPS, `-2.42%` versus milestone 04g accepted median `596,033`.
 - Native Metal parity and overlay surface passed in both milestone 04h suites.
 - Decision: rejected. The candidate exceeded the 1 percent g2048 LOC gate, so `src/metal/kernels.mm` and `src/metal/platform.mm` were restored to the 04g accepted state. Only rejection artifacts, runner scripts, overlay allowlist, and this status entry remain for audit.
+
+## 2026-05-27 Milestone 05 Final Audit
+
+- Current branch and commit: `valtteri/metal-kernel-loc-night-20260527` at `f67656e87`.
+- Current kernel scope: `3,967` lines by the established convention: `src/metal/shader_src.h` `2,346`, `src/metal/kernels.mm` `1,504`, and the `src/metal/platform.mm` tensor-ops shader block `117`. Net accepted kernel-scope delta versus setup `4,615`: `-648` lines.
+- Current backend scope: `9,535` lines across `src/metal`, `tools/metal`, and `tests/metal`. Net accepted backend-scope delta versus setup `10,160`: `-625` lines. This includes audit allowlist growth for rejected and accepted milestone runners.
+- Final audit runner passed: `artifacts/metal-kernel-loc-20260527/milestone-05-final-audit/run-suite.sh`.
+- Final audit `breakout` artifact `20260527T033222+0300-breakout`: `3,457,145` SPS, train score `2.242490768432617`, eval score `0.0`, uptime `1.2224819660186768`.
+- Final audit `g2048` artifact `20260527T033233+0300-g2048`: `589,636` SPS, train score `97.85507202148438`, eval score `49.43283462524414`, uptime `0.44462013244628906`.
+- Native Metal parity passed and wrote `milestone-05-final-audit/native-metal.json`. Overlay surface test passed.
+- Interactive smoke artifact: `milestone-05-final-audit/20260527T033243+0300-interactive-breakout-final-audit`. It built, loaded `resources/breakout/breakout_weights.bin`, reached raylib 5.5 GLFW initialization, then failed with `Failed to determine Monitor to center Window` and exit code `139`, matching the known desktop windowing boundary.
+- Accepted changes: dispatch helper consolidation, shared dispatch helper, tensor-ops shader template, MinGRU scan template, dead shader kernel deletion, dead helper deletion, Steel GEMM shader template, and tiny shader plumbing cleanup.
+- Rejected changes: first dead shader cleanup against the setup baseline due g2048 miss, host dispatch helper cleanup due `-1.50%` g2048 median, and host tensor-ops/transpose cleanup due `-2.42%` g2048 median.
+- Open risk: the final single g2048 audit sample `589,636` is below the accepted 04g three-run median `596,033`, but train and eval were unchanged and the sample sits inside the observed same-night variation. No accepted code change is based on this single audit sample.
