@@ -291,3 +291,24 @@
 - Interactive smoke artifact: `milestone-04j-prose-cleanup/20260527T040210+0300-interactive-breakout-prose-cleanup`. It built, loaded `resources/breakout/breakout_weights.bin`, reached raylib 5.5 GLFW initialization, then failed with `Failed to determine Monitor to center Window` and exit code `139`, matching the known desktop windowing boundary.
 - Subagent review: Nash found no blocking findings, verified the diff only removes prose apart from the shorter retained Steel GEMM gotcha comment, confirmed runner and overlay scope, and checked LOC and benchmark arithmetic.
 - Decision: accepted after subagent review. This is source cleanup only, with repeated runtime medians inside the LOC gate.
+
+## 2026-05-27 Milestone 04k Unused Parameter Fields Candidate
+
+- Root-cause hypothesis: the broad 04i parameter cleanup mixed several independent changes and missed the breakout SPS gate. A narrower cleanup can remove only fields no live shader reads: `SampleParams.num_atns_total`, `SampleParams.logstd_stride`, and `PPOFusedParams.num_atns_total`, plus the matching host payload fields and one now-unused local variable. This should reduce constant-buffer source without changing math, reductions, wrapper structs, dispatch order, RNG, exported kernel names, or buffer indices.
+- Candidate code change: remove the three unused fields from `src/metal/shader_src.h` and `src/metal/kernels.mm`; add dedicated milestone 04k runners and exact overlay allowlist paths.
+- LOC before validation: `src/metal/shader_src.h` is `2,294` lines, down from accepted `2,297`; `src/metal/kernels.mm` is `1,491`, down from accepted `1,496`. Kernel scope is `3,902`, down from accepted `3,910` and setup `4,615`. Backend scope is `9,477`, down from accepted `9,481` and setup `10,160`.
+- Risk classification: medium. This changes live constant-buffer layouts in sampling and PPO, so acceptance requires build success, repeated `breakout` and `g2048`, native parity, overlay surface, interactive smoke, comparable train and eval scores, and subagent review.
+- Acceptance gate: use the dedicated `milestone-04k-unused-param-fields` runners, require median SPS within 1 percent of the current accepted baseline or better, require learnability and eval to remain comparable, and reject on compile, parity, determinism, or score drift.
+
+## 2026-05-27 Milestone 04k Unused Parameter Fields Results
+
+- Code change: remove `SampleParams.num_atns_total`, `SampleParams.logstd_stride`, and `PPOFusedParams.num_atns_total`, plus matching host payload fields and one now-unused local variable.
+- LOC: `src/metal/shader_src.h` is `2,294` lines, down from accepted `2,297`; `src/metal/kernels.mm` is `1,491`, down from accepted `1,496`. Kernel scope is `3,902`, down from accepted `3,910` and setup `4,615`. Backend scope is `9,477`, down from accepted `9,481` and setup `10,160`.
+- Static validation passed: `tools/metal/build.sh breakout`, `tools/metal/build.sh g2048`, `git diff --check`, `bash -n` for all milestone 04k runners, and `PYTHONPATH=$PWD python -m pytest tests/metal/test_overlay_surface.py`.
+- First milestone 04k suite: `breakout` artifact `20260527T041023+0300-breakout` at `3,426,297` SPS, train score `2.4714393615722656`, eval score `0.0`; `g2048` artifact `20260527T041034+0300-g2048` at `597,198` SPS, train score `97.85507202148438`, eval score `49.43283462524414`.
+- Second milestone 04k suite: `breakout` artifact `20260527T041048+0300-breakout` at `3,428,588` SPS, train score `2.4022727012634277`, eval score `0.0`; `g2048` artifact `20260527T041059+0300-g2048` at `609,120` SPS, train score `97.85507202148438`, eval score `49.43283462524414`.
+- Medians: `breakout` `3,427,443` SPS, `-0.46%` versus milestone 04j accepted median `3,443,293`; `g2048` `603,159` SPS, `-0.29%` versus milestone 04j accepted median `604,904`.
+- Native Metal parity and overlay surface passed in both milestone 04k suites.
+- Interactive smoke artifact: `milestone-04k-unused-param-fields/20260527T041122+0300-interactive-breakout-unused-param-fields`. It built, loaded `resources/breakout/breakout_weights.bin`, reached raylib 5.5 GLFW initialization, then failed with `Failed to determine Monitor to center Window` and exit code `139`, matching the known desktop windowing boundary.
+- Subagent review: Herschel found no blocking findings, verified shader and host struct layouts, confirmed no removed field is read, checked exported names and buffer indices, and validated LOC and benchmark arithmetic.
+- Decision: accepted after subagent review. This is a narrow constant-buffer cleanup with repeated runtime medians inside the LOC gate.

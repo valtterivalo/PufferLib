@@ -590,13 +590,11 @@ struct SampleParams {
     uint64_t seed;
     uint offset;
     int num_atns;
-    int num_atns_total;  // sum of act_sizes
     int B;
     int logits_stride;
-    int logstd_stride;
     int value_stride;
     int is_continuous;  // 1 for continuous, 0 for discrete
-    int mask_stride;    // stride between rows in mask buffer (may differ from num_atns_total)
+    int mask_stride;    // stride between rows in mask buffer
 };
 
 inline float masked_logit(float l, float m) {
@@ -879,7 +877,6 @@ struct PPOFusedParams {
     int values_stride_n;
     int values_stride_t;
     int is_continuous;
-    int num_atns_total;  // sum of act_sizes, for mask buffer indexing
     int mask_stride;     // stride in floats between consecutive mask rows in obs
 };
 

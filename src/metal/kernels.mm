@@ -536,7 +536,6 @@ void mtl_sample_logits_dispatch_to(
   int B = (int)dec_out.shape[0];
   int fused_cols = (int)dec_out.shape[1];
   int num_atns = (int)puf_numel(act_sizes_puf.shape);
-  int A_total = fused_cols - 1;
 
   assert(action_out_f32 && "sampling destination buffer must be allocated");
 
@@ -558,15 +557,13 @@ void mtl_sample_logits_dispatch_to(
     uint64_t seed;
     uint32_t offset;
     int num_atns;
-    int num_atns_total;
     int B;
     int logits_stride;
-    int logstd_stride;
     int value_stride;
     int is_continuous;
     int mask_stride;
-  } params = {seed, offset_snapshot, num_atns, A_total, B,
-              fused_cols, 0, fused_cols, is_continuous ? 1 : 0, mask_stride};
+  } params = {seed, offset_snapshot, num_atns, B, fused_cols,
+              fused_cols, is_continuous ? 1 : 0, mask_stride};
   mtl_set_params(ms, params, 7);
 
   mtl_set_ptr(ms, (void *)action_mask, 8);
@@ -690,7 +687,6 @@ void ppo_loss_fwd_bwd(PufTensor &dec_out, PufTensor &logstd, TrainGraph &graph,
       int logits_stride_n, logits_stride_t, logits_stride_a;
       int values_stride_n, values_stride_t;
       int is_continuous;
-      int num_atns_total;
       int mask_stride_val;
     } params = {num_atns,
                 clip_coef,
@@ -706,7 +702,6 @@ void ppo_loss_fwd_bwd(PufTensor &dec_out, PufTensor &logstd, TrainGraph &graph,
                 values_stride_n,
                 values_stride_t,
                 is_continuous ? 1 : 0,
-                A_total,
                 mask_stride};
     mtl_set_params(ms, params, 16);
     mtl_set_ptr(ms, (void *)mask_ptr, 17);
