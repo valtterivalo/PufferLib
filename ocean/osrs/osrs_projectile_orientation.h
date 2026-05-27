@@ -40,6 +40,10 @@ static inline float osrs_projectile_anchor_coord_from_subtile(int subtile_coord)
     return (float)subtile_coord / 128.0f - 0.5f;
 }
 
+static inline float osrs_projectile_subtile_from_anchor_coord(float anchor_coord) {
+    return (anchor_coord + 0.5f) * 128.0f;
+}
+
 static inline OsrsProjectileOrientation osrs_projectile_orientation_from_step(
     float osrs_dx,
     float osrs_dy,
