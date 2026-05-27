@@ -77,3 +77,25 @@
 
 - Because milestone 01 was rejected, milestone 02 must compare against `milestone-00-baseline`, not the rejected milestone 01 folder.
 - Updating the milestone 02 suite gate before trying a smaller LOC candidate.
+
+## 2026-05-27 08:32 EEST
+
+- Milestone 02 candidate: dead-code-only source subset from the previous accepted v1 run.
+- Candidate LOC delta before rejection:
+  - `src/metal/shader_src.h`: `2809` to `2653`, `-156`.
+  - `src/metal/kernels.mm`: `1586` to `1562`, `-24`.
+  - `src/metal/platform.mm`: `1213` to `1212`, `-1`.
+  - Kernel scope total: `4611` to `4431`, `-180`.
+- Validation run:
+  - `tools/metal/build.sh breakout` passed.
+  - `tools/metal/build.sh g2048` passed.
+  - Milestone 02 suite reached the median gate after repeated main runs, GPU-inference smoke, native parity, and overlay guard.
+- Decision: rejected and reverting source changes.
+- Rejection reason: `g2048` missed the LOC gate after two main runs.
+  - Baseline `g2048` median: `606,783` SPS.
+  - Required 1 percent floor: `600,715.17` SPS.
+  - Candidate `g2048` median: `588,629` SPS, `-2.9918438716971307%`.
+  - Candidate train score remained `97.85507202148438`, eval score remained `49.43283462524414`, so this was a throughput gate failure, not a learnability failure.
+  - `breakout` passed the gate but regressed to `3,421,469` SPS versus baseline `3,434,839`, `-0.38924677401181995%`.
+- Rejection artifacts: `artifacts/metal-kernel-loc-20260527-v2/milestone-02-kernel-consolidation`.
+- Updated root-cause hypothesis: edits inside `shader_src.h` can change Metal compilation or code layout enough to move g2048 throughput even when removed kernels are not on the measured path. Future LOC candidates should isolate host-side cleanup first, or touch shader source only in tiny audited slices.
