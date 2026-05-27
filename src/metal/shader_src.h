@@ -296,7 +296,6 @@ inline void mingru_scan_forward_reset_body(
     device T* next_state,
     device float* curr_buf,
     device float* prev_buf,
-    device float* unused_buf,
     const device T* combined,
     const device T* state,
     const device T* input,
@@ -304,7 +303,6 @@ inline void mingru_scan_forward_reset_body(
     constant ScanParams& p,
     uint idx
 ) {
-    (void)unused_buf;
     if ((int)idx >= p.B * p.H) return;
 
     int b = (int)idx / p.H;
@@ -360,8 +358,7 @@ kernel void mingru_scan_forward_reset(
     uint idx [[thread_position_in_grid]]
 ) {
     mingru_scan_forward_reset_body<float>(
-        out, next_state, curr_buf, prev_buf, unused_buf, combined, state, input,
-        reset, p, idx);
+        out, next_state, curr_buf, prev_buf, combined, state, input, reset, p, idx);
 }
 
 template <typename T>
@@ -520,17 +517,13 @@ inline void mingru_scan_backward_reset_body(
     const device T* grad_out,
     const device T* grad_next_state,
     const device T* combined,
-    const device T* state,
     const device T* input,
     const device float* curr_buf,
     const device float* prev_buf,
-    const device float* unused_buf,
     const device float* reset,
     constant ScanParams& p,
     uint idx
 ) {
-    (void)state;
-    (void)unused_buf;
     if ((int)idx >= p.B * p.H) return;
 
     int b = (int)idx / p.H;
@@ -595,7 +588,7 @@ kernel void mingru_scan_backward_reset(
 ) {
     mingru_scan_backward_reset_body<float>(
         grad_combined, grad_state, grad_input, grad_out, grad_next_state,
-        combined, state, input, curr_buf, prev_buf, unused_buf, reset, p, idx);
+        combined, input, curr_buf, prev_buf, reset, p, idx);
 }
 
 struct SampleParams {
@@ -1337,10 +1330,7 @@ kernel void prio_imp_weights_kernel(
     const device float* prio_probs      [[buffer(1)]],
     device float* mb_prio               [[buffer(2)]],
     constant PrioImpParams& pp          [[buffer(3)]],
-    uint tx [[thread_position_in_grid]],
-    uint tid [[thread_index_in_threadgroup]],
-    uint simd_lane [[thread_index_in_simdgroup]],
-    uint simd_id [[simdgroup_index_in_threadgroup]]
+    uint tx [[thread_position_in_grid]]
 ) {
     if ((int)tx < pp.minibatch_segments) {
         float value = prio_probs[indices[tx]] * float(pp.total_agents);
@@ -1507,12 +1497,12 @@ struct Transpose01Params {
     int C;
 };
 
-// Transpose dims 0 and 1 of (A, B, C) tensor: dst[b*A*C + a*C + c] = src[a*B*C + b*C + c]
-kernel void transpose_01(
-    device float* dst               [[buffer(0)]],
-    const device float* src         [[buffer(1)]],
-    constant Transpose01Params& p   [[buffer(2)]],
-    uint idx [[thread_position_in_grid]]
+template <typename T>
+inline void transpose_01_body(
+    device T* dst,
+    const device T* src,
+    constant Transpose01Params& p,
+    uint idx
 ) {
     int total = p.A * p.B * p.C;
     if ((int)idx >= total) return;
@@ -1523,22 +1513,22 @@ kernel void transpose_01(
     dst[b * p.A * p.C + a * p.C + c] = src[idx];
 }
 
-// Transpose dims 0 and 1 for 8-byte elements (f64/u64), using uint2 pairs.
-// Metal has no native double support, so we treat each 8-byte element as uint2.
-// Same index math as transpose_01 — just operates on uint2 instead of float.
+kernel void transpose_01(
+    device float* dst               [[buffer(0)]],
+    const device float* src         [[buffer(1)]],
+    constant Transpose01Params& p   [[buffer(2)]],
+    uint idx [[thread_position_in_grid]]
+) {
+    transpose_01_body<float>(dst, src, p, idx);
+}
+
 kernel void transpose_01_u64(
     device uint2* dst                   [[buffer(0)]],
     const device uint2* src             [[buffer(1)]],
     constant Transpose01Params& p       [[buffer(2)]],
     uint idx [[thread_position_in_grid]]
 ) {
-    int total = p.A * p.B * p.C;
-    if ((int)idx >= total) return;
-    int a = (int)idx / (p.B * p.C);
-    int rem = (int)idx % (p.B * p.C);
-    int b = rem / p.C;
-    int c = rem % p.C;
-    dst[b * p.A * p.C + a * p.C + c] = src[idx];
+    transpose_01_body<uint2>(dst, src, p, idx);
 }
 
 struct NormParams {
@@ -1815,7 +1805,14 @@ struct IndexCopyParams {
     int row_bytes;
 };
 
-// Indexed copy: for each i, copy src row i to dst row idx[i]
+inline void copy_indexed_row(device char* dst, const device char* src, int row_bytes) {
+    int words = row_bytes / 4;
+    const device uint* src4 = (const device uint*)src;
+    device uint* dst4 = (device uint*)dst;
+    for (int b = 0; b < words; b++) dst4[b] = src4[b];
+    for (int b = words * 4; b < row_bytes; b++) dst[b] = src[b];
+}
+
 kernel void index_copy_kernel(
     device char* dst                    [[buffer(0)]],
     const device int64_t* idx           [[buffer(1)]],
@@ -1825,17 +1822,11 @@ kernel void index_copy_kernel(
 ) {
     if ((int)i >= p.num_idx) return;
     int64_t dst_row = idx[i];
-    const device char* s = src + (int64_t)i * p.row_bytes;
-    device char* d = dst + dst_row * p.row_bytes;
-    // Copy as 4-byte words, then handle remainder bytes
-    int words = p.row_bytes / 4;
-    const device uint* s4 = (const device uint*)s;
-    device uint* d4 = (device uint*)d;
-    for (int b = 0; b < words; b++) d4[b] = s4[b];
-    for (int b = words * 4; b < p.row_bytes; b++) d[b] = s[b];
+    copy_indexed_row(dst + dst_row * p.row_bytes,
+                     src + (int64_t)i * p.row_bytes,
+                     p.row_bytes);
 }
 
-// index_gather_kernel: dst[i] = src[idx[i]] (gather, inverse of index_copy)
 kernel void index_gather_kernel(
     device char* dst                    [[buffer(0)]],
     const device int64_t* idx           [[buffer(1)]],
@@ -1845,13 +1836,9 @@ kernel void index_gather_kernel(
 ) {
     if ((int)i >= p.num_idx) return;
     int64_t src_row = idx[i];
-    const device char* s = src + src_row * p.row_bytes;
-    device char* d = dst + (int64_t)i * p.row_bytes;
-    int words = p.row_bytes / 4;
-    const device uint* s4 = (const device uint*)s;
-    device uint* d4 = (device uint*)d;
-    for (int b = 0; b < words; b++) d4[b] = s4[b];
-    for (int b = words * 4; b < p.row_bytes; b++) d[b] = s[b];
+    copy_indexed_row(dst + (int64_t)i * p.row_bytes,
+                     src + src_row * p.row_bytes,
+                     p.row_bytes);
 }
 
 struct CastU8Params {
@@ -2071,8 +2058,7 @@ kernel void mingru_scan_forward_reset_fp16(
     uint idx [[thread_position_in_grid]]
 ) {
     mingru_scan_forward_reset_body<half>(
-        out, next_state, curr_buf, prev_buf, unused_buf, combined, state, input,
-        reset, p, idx);
+        out, next_state, curr_buf, prev_buf, combined, state, input, reset, p, idx);
 }
 
 kernel void mingru_scan_backward_checkpointed_fp16(
@@ -2113,7 +2099,7 @@ kernel void mingru_scan_backward_reset_fp16(
 ) {
     mingru_scan_backward_reset_body<half>(
         grad_combined, grad_state, grad_input, grad_out, grad_next_state,
-        combined, state, input, curr_buf, prev_buf, unused_buf, reset, p, idx);
+        combined, input, curr_buf, prev_buf, reset, p, idx);
 }
 
 // ============================================================================
@@ -2299,7 +2285,6 @@ kernel void steel_gemm(
 // C(M,N) = A(M,K) @ B(N,K)^T, all row-major.
 
 struct SmallGemmParams {
-    uint M;
     uint N;
     uint K;
 };

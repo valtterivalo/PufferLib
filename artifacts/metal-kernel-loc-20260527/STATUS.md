@@ -201,3 +201,23 @@
 - Interactive smoke artifact: `milestone-04f-steel-gemm-template/20260527T031048+0300-interactive-breakout-steel-gemm-template`. It built, loaded `resources/breakout/breakout_weights.bin`, reached raylib 5.5 GLFW initialization, then failed with `Failed to determine Monitor to center Window` and exit code `139`, matching the known desktop windowing boundary.
 - Subagent review: Aristotle found no blocking findings, verified exported Steel GEMM names, fp32 fast-store behavior, fp16 pre-store barrier behavior, exact runner allowlist scope, and STATUS LOC and benchmark arithmetic.
 - Decision: accepted after subagent review. This is the largest kept kernel-scope LOC cleanup of the night so far and remains inside the throughput and learnability gates.
+
+## 2026-05-27 Milestone 04g Tiny Kernel Cleanup Candidate
+
+- Root-cause hypothesis: after the large Steel GEMM cleanup, several small pieces of kernel-source dead plumbing and duplication remain: reset MinGRU helpers accept unused buffers only to preserve exported wrapper slots, `prio_imp_weights_kernel` declares unused thread attributes, `transpose_01` duplicates index math for `float` and `uint2`, index copy and gather duplicate row-copy loops, and `SmallGemmParams.M` is never read by the shader.
+- Risk classification: medium. This touches scan wrappers, rollout row copy, transpose, and the small unaligned GEMM fallback. The exported kernel names and buffer slots stay unchanged, and host param layout changes with the shader for `SmallGemmParams`.
+- Acceptance gate: use the dedicated `milestone-04g-tiny-kernel-cleanup` runners, require median SPS within 1 percent of the current accepted baseline or better, require train and eval scores comparable to milestone 04f, and reject on compile, parity, determinism, or score drift.
+
+## 2026-05-27 Milestone 04g Tiny Kernel Cleanup Results
+
+- Code change: remove dead MinGRU reset helper parameters while preserving exported kernel buffer slots, remove unused priority-weight thread attributes, share `transpose_01` index math through a typed helper, share index copy and gather row-copy loops, and remove unused `SmallGemmParams.M` with the host parameter layout updated in `small_gemm_nt_dispatch`.
+- LOC: `src/metal/shader_src.h` is `2,346` lines, down from `2,361` after milestone 04f. Kernel scope is `3,967`, down from `3,982` after milestone 04f and down from setup `4,615`. Live backend scope is `9,531`, down from `9,542` after milestone 04f and down from setup `10,160`.
+- Static validation passed: `git diff --check`, `bash -n` for all milestone 04g runners, and `PYTHONPATH=$PWD python -m pytest tests/metal/test_overlay_surface.py`.
+- First milestone 04g suite: `breakout` artifact `20260527T031828+0300-breakout` at `3,417,038` SPS, train score `2.611736297607422`, eval score `0.0`; `g2048` artifact `20260527T031840+0300-g2048` at `590,317` SPS, train score `97.85507202148438`, eval score `49.212120056152344`.
+- Second milestone 04g suite: `breakout` artifact `20260527T031857+0300-breakout` at `3,481,110` SPS, train score `2.367737054824829`, eval score `0.0`; `g2048` artifact `20260527T031908+0300-g2048` at `598,345` SPS, train score `97.85507202148438`, eval score `49.43283462524414`.
+- Extra g2048 runner: `20260527T031940+0300-g2048` at `596,033` SPS, train score `97.85507202148438`, eval score `49.43283462524414`. This extra run was added because the first g2048 sample missed the 1 percent gate and had a slightly lower single eval sample.
+- Medians: `breakout` `3,449,074` SPS, `+0.19%` versus milestone 04f accepted median `3,442,661`; `g2048` three-run median `596,033` SPS, `-0.16%` versus milestone 04f accepted median `596,980`.
+- Native Metal parity and overlay surface passed in both milestone 04g suites.
+- Interactive smoke artifact: `milestone-04g-tiny-kernel-cleanup/20260527T032004+0300-interactive-breakout-tiny-kernel-cleanup`. It built, loaded `resources/breakout/breakout_weights.bin`, reached raylib 5.5 GLFW initialization, then failed with `Failed to determine Monitor to center Window` and exit code `139`, matching the known desktop windowing boundary.
+- Subagent review: Hooke found no blocking findings, verified MinGRU exported buffer slots, priority-weight buffer contract, typed transpose semantics, indexed row-copy address spaces, `SmallGemmParams` host and shader layout, exact runner allowlist scope, and STATUS LOC and benchmark arithmetic.
+- Decision: accepted after subagent review. This is a small kernel-scope cleanup with repeated runtime medians inside the LOC gate.

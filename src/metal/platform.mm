@@ -811,7 +811,7 @@ static void small_gemm_nt_dispatch(const float *A, const float *B, float *C,
   mtl_bind_buffer(ms, buf_b, off_b, 1);
   mtl_bind_buffer(ms, buf_c, off_c, 2);
 
-  struct { uint32_t M, N, K; } params = {(uint32_t)M, (uint32_t)N, (uint32_t)K};
+  struct { uint32_t N, K; } params = {(uint32_t)N, (uint32_t)K};
   mtl_set_params(ms, params, 3);
 
   // threadgroup size: round N up to next multiple of 32 for simdgroup alignment
