@@ -775,6 +775,7 @@ typedef struct {
     float damage_received_this_tick;
     float hp_restored_this_tick;
     float hp_restored_zuk_this_tick;
+    float offensive_prayer_correct_damage_roll_this_tick;
     int offensive_prayer_correct_this_tick;
     int prayer_correct_this_tick;  /* count of NPC attacks blocked by prayer this tick */
     int wave_completed_this_tick;

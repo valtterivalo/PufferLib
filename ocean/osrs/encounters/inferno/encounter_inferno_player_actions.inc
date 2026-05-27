@@ -58,7 +58,11 @@ static OffensivePrayer inf_required_offensive_prayer_for_style(AttackStyle style
     abort();
 }
 
-static void inf_record_offensive_prayer_attack(InfernoState* s, AttackStyle style) {
+static void inf_record_offensive_prayer_attack(
+    InfernoState* s,
+    AttackStyle style,
+    float damage_roll
+) {
     OffensivePrayer required = inf_required_offensive_prayer_for_style(style);
     if (required == OFFENSIVE_PRAYER_NONE) return;
 
@@ -70,6 +74,8 @@ static void inf_record_offensive_prayer_attack(InfernoState* s, AttackStyle styl
     s->total_offensive_prayer_correct += correct;
     s->offensive_prayer_attacks_by_style[style_idx]++;
     s->offensive_prayer_correct_by_style[style_idx] += correct;
+    if (correct && damage_roll > 0.0f)
+        s->offensive_prayer_correct_damage_roll_this_tick += damage_roll;
 }
 
 /* movement uses shared encounter_move_to_target from osrs_encounter.h */
@@ -931,7 +937,7 @@ static void inf_tick_player_ctx(
                 }
 
                 s->player.attack_timer = ls->attack_speed;
-                inf_record_offensive_prayer_attack(s, ls->style);
+                inf_record_offensive_prayer_attack(s, ls->style, (float)total_dmg);
                 if (target_npc->type == INF_NPC_HEALER_ZUK) {
                     int target_was_untagged = target_npc->aggro_target >= 0;
                     s->total_zuk_healer_attack_fires++;
