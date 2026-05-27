@@ -182,3 +182,37 @@
   - `src/metal/platform.mm`: `1213` full-file lines, tensor-ops shader block `216`.
   - Kernel scope total: `4611` lines, net `0` versus baseline.
   - Backend scope total: `10174` lines, net `0` versus baseline.
+
+## 2026-05-27 09:27 EEST
+
+- Heartbeat resumed the overnight loop from clean commit `85f3ef428`.
+- Starting milestone 06 dead-prototype candidate.
+- Root-cause hypothesis: the top-of-file declarations for `mtl_mingru_scan_forward_fp16`, `mtl_mingru_scan_backward_fp16`, and `mtl_assemble_decoder_grad_f32_to_f16` are redundant because their definitions appear before every call site in `src/metal/kernels.mm`. Removing those declarations should reduce source LOC without changing definitions, call sites, dispatch order, MSL source, exported kernel names, argument binding, RNG, PPO math, or eval behavior.
+- Added dedicated milestone 06 runner scripts and overlay allowlist entries before validation.
+- Acceptance gate remains the full milestone suite against `milestone-00-baseline`, plus subagent review before commit.
+- Candidate LOC before validation:
+  - `src/metal/kernels.mm`: `1586` to `1577`, `-9`.
+  - Kernel scope total: `4611` to `4602`, `-9`.
+  - Backend scope total after overlay allowlist growth: `10174` to `10169`, net `-5`.
+
+## 2026-05-27 09:31 EEST
+
+- Milestone 06 dead-prototype candidate failed the acceptance gate and source was restored.
+- Validation run:
+  - Repeated main train and eval ran for both `breakout` and `g2048`.
+  - GPU-inference smoke ran for both envs before the median gate.
+  - Native Metal parity wrote `milestone-06-dead-prototypes/native-metal.json`.
+  - Overlay surface test passed.
+  - Interactive smoke did not run because the median gate stopped the suite first.
+- Rejection reason: `breakout` missed the LOC throughput gate.
+  - Baseline `breakout` median: `3,434,839` SPS.
+  - Required 1 percent floor: `3,400,490.61` SPS.
+  - Candidate `breakout` median: `3,369,743.5` SPS, `-1.8951543289219663%`.
+  - Candidate train score remained comparable at `2.330354332923889`, eval score remained `0.0`.
+  - `g2048` passed: candidate median `602,639` SPS versus baseline `606,783`, `-0.6829459625599221%`, train score `97.85507202148438`, eval median `49.56490135192871`.
+- Rejection artifacts: `artifacts/metal-kernel-loc-20260527-v2/milestone-06-dead-prototypes`.
+- Current source LOC after restore:
+  - `src/metal/shader_src.h`: `2809` lines.
+  - `src/metal/kernels.mm`: `1586` lines.
+  - `src/metal/platform.mm`: `1213` full-file lines, tensor-ops shader block `216`.
+  - Kernel scope total: `4611` lines, net `0` versus baseline.

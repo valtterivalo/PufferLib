@@ -69,6 +69,10 @@ ALLOWED_ARTIFACT_PATHS = {
     "artifacts/metal-kernel-loc-20260527-v2/milestone-05-final-audit/run-g2048.sh",
     "artifacts/metal-kernel-loc-20260527-v2/milestone-05-final-audit/run-interactive-breakout.sh",
     "artifacts/metal-kernel-loc-20260527-v2/milestone-05-final-audit/run-suite.sh",
+    "artifacts/metal-kernel-loc-20260527-v2/milestone-06-dead-prototypes/run-breakout.sh",
+    "artifacts/metal-kernel-loc-20260527-v2/milestone-06-dead-prototypes/run-g2048.sh",
+    "artifacts/metal-kernel-loc-20260527-v2/milestone-06-dead-prototypes/run-interactive-breakout.sh",
+    "artifacts/metal-kernel-loc-20260527-v2/milestone-06-dead-prototypes/run-suite.sh",
 }
 
 BLOCKED_PATHS = {
