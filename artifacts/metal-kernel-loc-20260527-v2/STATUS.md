@@ -31,3 +31,44 @@
 - Milestone 00 rerun passed, including repeated main runs, GPU-inference smoke, native parity, overlay guard, and summarization.
 - Found one audit-quality issue after the pass: `milestone-summary.json` includes pre-fix stale runs in aggregate medians, while `check-median-gate.py` correctly uses only the latest git/diff cohort.
 - Aligning the summary helper with the gate script before recording baseline numbers in status.
+
+## 2026-05-27 08:20 EEST
+
+- Milestone 00 accepted baseline from latest fixed-run cohort at commit `918a901b6`.
+- Main CPU-overlap baseline medians:
+  - `breakout`: `3,434,839` SPS, train score `2.4234288930892944`, eval score `0.0`, median uptime `1.2305485010147095`.
+  - `g2048`: `606,783` SPS, train score `97.85507202148438`, eval score `49.43283462524414`, median uptime `0.4320704936981201`.
+- GPU-inference smoke passed for both envs:
+  - `breakout`: `20260527T081642+0300-breakout`, `3,622,999` SPS, train score `0.9873490333557129`, eval score `0.0`.
+  - `g2048`: `20260527T081652+0300-g2048`, `854,334` SPS, train score `97.85507202148438`, eval score `42.0`.
+- Baseline LOC:
+  - `src/metal/shader_src.h`: `2809` lines.
+  - `src/metal/kernels.mm`: `1586` lines.
+  - `src/metal/platform.mm`: `1213` full lines, tensor-ops shader block `216` lines.
+  - Kernel scope total: `4611` lines.
+  - Backend scope total across tracked `src/metal`, `tools/metal`, and `tests/metal`: `10174` lines.
+- Milestone 00 artifacts: `artifacts/metal-kernel-loc-20260527-v2/milestone-00-baseline`.
+- Starting milestone 01 source port.
+
+## 2026-05-27 08:23 EEST
+
+- Milestone 01 candidate: ported the final accepted v1 source state into `src/metal/kernels.mm`, `src/metal/platform.h`, `src/metal/platform.mm`, and `src/metal/shader_src.h`.
+- Candidate LOC delta before rejection:
+  - `src/metal/shader_src.h`: `2809` to `2162`, `-647`.
+  - `src/metal/kernels.mm`: `1586` to `1413`, `-173`.
+  - `src/metal/platform.mm`: tensor-ops shader block `216` to `113`, `-103`.
+  - Kernel scope total: `4611` to `3688`, `-923`.
+  - Backend scope total: `10174` to `9236`, `-938`.
+- Validation run:
+  - `tools/metal/build.sh breakout` passed.
+  - `tools/metal/build.sh g2048` passed.
+  - Milestone 01 suite reached the median gate after repeated main runs, GPU-inference smoke, native parity, and overlay guard.
+- Decision: rejected and reverted source port.
+- Rejection reason: `g2048` missed the LOC gate after three main runs.
+  - Baseline `g2048` median: `606,783` SPS.
+  - Required 1 percent floor: `600,715.17` SPS.
+  - Candidate `g2048` median: `598,730` SPS, `-1.327163087957306%`.
+  - Candidate train score remained `97.85507202148438`, eval score remained `49.43283462524414`, so this was a throughput gate failure, not a learnability failure.
+  - `breakout` passed: candidate median `3,447,708` SPS versus baseline `3,434,839`, `+0.37466093752864804%`, eval `0.0`.
+- Source restored to `HEAD`; no backend source diff remains.
+- Rejection artifacts: `artifacts/metal-kernel-loc-20260527-v2/milestone-01-port-v1-kernel-loc`.
