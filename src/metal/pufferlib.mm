@@ -266,7 +266,7 @@ struct PuffeRL {
     int env_obs_width = 0;  // raw obs width from env (e.g. 1096 = features + mask)
     int mask_width = 0;     // total action mask width = sum of all action head sizes (e.g. 79)
     FloatTensor ones_mask;  // (act_n) all 1.0f, fallback mask when !has_mask
-    // External mask path: when has_mask, masks are split from obs at rollout time.
+    // External mask path: when has_mask, masks are copied from obs at rollout time.
     FloatTensor rollout_masks;
     FloatTensor train_masks;
     FloatTensor mb_masks;
@@ -355,10 +355,9 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
 
     uint64_t tp0 = mach_absolute_time();
 
-    // Copy env obs to rollout buffer, splitting features and mask.
-    // env writes [features | mask] at env_obs_width stride.
-    // rollout obs stores only features at input_size stride.
-    // rollout masks stores only mask at act_n stride.
+    // Copy env obs to rollout buffer and copy the embedded mask separately.
+    // CUDA keeps the embedded mask in the encoder input, so Metal must preserve
+    // the full obs width for checkpoint compatibility.
     PufTensor& obs_env = env.obs;
     int env_obs_width = pufferl->env_obs_width;
     int input_size = (int)rollouts.observations.shape[2];
@@ -367,16 +366,16 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
     FloatTensor obs_dst = puf_slice(rollouts.observations, t, start, block_size);
 
     if (pufferl->has_mask) {
-        // split copy: features prefix + mask suffix, row by row
         FloatTensor mask_dst = puf_slice(pufferl->rollout_masks, t, start, block_size);
         assert(pufferl->env.obs_raw_dtype == METAL_OBS_FLOAT && "mask split only supports float32 obs");
         const float* src_base = (const float*)(obs_env.bytes + (int64_t)start * env_obs_width * sizeof(float));
-        float* feat_base = obs_dst.data;
+        float* obs_base = obs_dst.data;
         float* mask_base = mask_dst.data;
+        int mask_offset = env_obs_width - mask_w;
         for (int b = 0; b < block_size; b++) {
-            memcpy(feat_base + b * input_size, src_base + b * env_obs_width,
+            memcpy(obs_base + b * input_size, src_base + b * env_obs_width,
                    input_size * sizeof(float));
-            memcpy(mask_base + b * mask_w, src_base + b * env_obs_width + input_size,
+            memcpy(mask_base + b * mask_w, src_base + b * env_obs_width + mask_offset,
                    mask_w * sizeof(float));
         }
     } else {
@@ -1233,8 +1232,7 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     }
     pufferl->env_obs_width = env_obs_width;
     pufferl->mask_width = act_n;  // total mask width = sum of action head sizes
-    // when mask is embedded, split it: encoder sees only the feature prefix
-    int input_size = pufferl->has_mask ? (env_obs_width - act_n) : env_obs_width;
+    int input_size = env_obs_width;
 
     bool is_continuous = pufferl->is_continuous;
     int decoder_output_size = is_continuous ? num_action_heads : act_n;
