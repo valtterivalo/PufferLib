@@ -128,3 +128,39 @@
   - `breakout` passed: candidate median `3,406,360` SPS versus baseline `3,434,839`, `-0.8291218307466486%`, eval `0.0`.
 - Rejection artifacts: `artifacts/metal-kernel-loc-20260527-v2/milestone-03-cleanup`.
 - Decision discipline: not adding after-the-fact runs to rescue a near miss. The first full gate failed, so the source cleanup is out.
+
+## 2026-05-27 08:43 EEST
+
+- Starting milestone 04 second kernel LOC candidate.
+- Root-cause hypothesis: after the failed behavioral cleanups, the kernel scope still contains stale section banners and prose that repeat function names, tensor shapes, or obvious local loop roles. Deleting those lines should reduce source LOC without changing executable C++ control flow or MSL semantics. The one retained Steel GEMM comment names a non-obvious optimization invariant: direct device loads beat threadgroup staging because Apple Silicon L2 handles tile reuse.
+- Because milestones 01, 02, and 03 were rejected, milestone 04 must compare against `milestone-00-baseline`. Updated the milestone 04 runner gate before executing benchmarks and added the missing interactive smoke step after the median gate.
+- Acceptance gate remains the full milestone suite against the accepted milestone 00 baseline. This is a LOC cleanup, so median SPS must stay within the 1 percent floor, scores and positive eval must remain comparable, GPU-inference smoke must pass, native parity and overlay must pass, interactive use must reach the known platform boundary or better, and commit still requires subagent review.
+- Candidate LOC before validation:
+  - `src/metal/shader_src.h`: `2809` to `2760`, `-49`.
+  - `src/metal/kernels.mm`: `1586` to `1578`, `-8`.
+  - `src/metal/platform.mm`: `1213` to `1208`, `-5` full-file lines, with the counted tensor-ops shader block unchanged at `216`.
+  - Kernel scope total: `4611` to `4554`, `-57`.
+
+## 2026-05-27 08:47 EEST
+
+- Milestone 04 candidate passed the full suite.
+- Code change: deleted stale section banners and comments that repeated function names, tensor shapes, or obvious local loop roles in `src/metal/shader_src.h`, `src/metal/kernels.mm`, and `src/metal/platform.mm`. Retained one shorter Steel GEMM invariant comment.
+- Accepted LOC delta:
+  - `src/metal/shader_src.h`: `2809` to `2760`, `-49`.
+  - `src/metal/kernels.mm`: `1586` to `1578`, `-8`.
+  - `src/metal/platform.mm`: `1213` to `1208`, `-5` full-file lines, with the counted tensor-ops shader block unchanged at `216`.
+  - Kernel scope total: `4611` to `4554`, `-57`.
+  - Backend scope total: `10174` to `10112`, `-62`.
+- Main CPU-overlap medians:
+  - `breakout`: `3,421,539.5` SPS versus baseline `3,434,839`, `-0.387194276063596%`; train score `2.310427665710449`, eval score `0.0`.
+  - `g2048`: `604,841.5` SPS versus baseline `606,783`, `-0.3199661163875711%`; train score `97.85507202148438`, eval score `49.43283462524414`.
+- Main run artifacts:
+  - `breakout`: `20260527T084342+0300-breakout`, `20260527T084404+0300-breakout`.
+  - `g2048`: `20260527T084354+0300-g2048`, `20260527T084415+0300-g2048`.
+- GPU-inference smoke passed for both envs:
+  - `breakout`: `20260527T084425+0300-breakout`, `3,613,712` SPS, train score `0.9953243732452393`, eval score `0.0`.
+  - `g2048`: `20260527T084435+0300-g2048`, `872,777` SPS, train score `97.85507202148438`, eval score `42.0`.
+- Native Metal parity wrote `milestone-04-second-kernel-loc/native-metal.json`.
+- Overlay surface test passed.
+- Interactive smoke artifact: `milestone-04-second-kernel-loc/20260527T084446+0300-interactive-breakout-second-kernel-loc`. It built, invoked eval with `resources/breakout/breakout_weights.bin`, reached raylib 5.5 GLFW initialization, then failed with `Failed to determine Monitor to center Window` and exit code `139`, matching the known desktop windowing boundary.
+- Decision: accepted pending subagent review. This is a source LOC cleanup with no executable behavior change and repeated runtime medians inside the LOC gate.

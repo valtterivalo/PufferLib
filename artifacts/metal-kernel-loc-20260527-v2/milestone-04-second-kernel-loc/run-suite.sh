@@ -14,4 +14,5 @@ cd "$REPO_ROOT"
 PYTHONPATH="$REPO_ROOT" python tests/metal/test_native_backend_parity.py --backend metal --write-json "$SCRIPT_DIR/native-metal.json"
 METAL_OVERLAY_BASE_REF="$BASE_SHA" METAL_OVERLAY_BASE_SHA="$BASE_SHA" PYTHONPATH="$REPO_ROOT" python -m pytest tests/metal/test_overlay_surface.py
 "$SCRIPT_DIR/../bin/summarize-milestone.py" "$SCRIPT_DIR"
-"$SCRIPT_DIR/../bin/check-median-gate.py" "$ARTIFACT_ROOT/milestone-03-cleanup" "$SCRIPT_DIR" loc
+"$SCRIPT_DIR/../bin/check-median-gate.py" "$ARTIFACT_ROOT/milestone-00-baseline" "$SCRIPT_DIR" loc
+"$SCRIPT_DIR/../bin/run-interactive-smoke.sh" milestone-04-second-kernel-loc second-kernel-loc

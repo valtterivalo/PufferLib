@@ -1017,14 +1017,6 @@ void mtl_anchor_blend_weights(float *weights, const float *anchor,
 
 static constexpr int kMuonNsIters = 5;
 
-// ============================================================================
-// Kaiming uniform init (CPU-side, matches CUDA puf_kaiming_init)
-//
-// U(-bound, bound) where bound = gain / sqrt(fan_in).
-// For 2D weight [rows, cols], fan_in = cols.
-// Runs once at model init — not perf-critical.
-// ============================================================================
-
 void puf_kaiming_init(PufTensor &dst, float gain, uint64_t seed,
                       cudaStream_t stream) {
   mtl_ensure_stream_synced(stream);
