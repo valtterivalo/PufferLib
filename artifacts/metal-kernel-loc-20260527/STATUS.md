@@ -542,3 +542,24 @@
 - Interpretation: the accepted source itself is currently below the frozen accepted-source gate by a little over 1 percent on both envs, while train and eval behavior remain unchanged. The 04t and 04u misses are therefore not strong evidence of source-specific slowdown, but the immutable gate still blocks retaining those candidates.
 - Subagent review: Zeno found no blocking findings, verified there is no `src/metal` or `tools/metal` diff, checked STATUS arithmetic and interpretation, confirmed 04v runners are scoped and non-recursive, checked exact overlay allowlist entries, and confirmed generated artifacts are ignored rather than staged.
 - Decision: record control after subagent review. This is not a retained optimization.
+
+## 2026-05-27 Milestone 04w Dead U8 Cast Cleanup Candidate
+
+- Root-cause hypothesis: the GPU `puf_cast_u8_to_f32` wrapper and `cast_u8_to_f32` shader have no caller. The live u8 observation conversion path calls `cpu_cast_u8_to_f32` directly from `src/metal/pufferlib.mm`, so deleting the unused GPU wrapper and shader should preserve rollout data, train data, exported live kernel names, dispatch order, RNG, PPO math, and eval behavior.
+- Candidate source change: remove `puf_cast_u8_to_f32` from `src/metal/kernels.mm` and remove `cast_u8_to_f32` from `src/metal/shader_src.h`. Keep `cpu_cast_u8_to_f32` and its declaration because it is the live conversion path.
+- LOC before validation: `src/metal/shader_src.h` is `2,257`, down from accepted `2,266`. `src/metal/kernels.mm` is `1,457`, down from accepted `1,468`. Full `src/metal/platform.mm` is unchanged at `1,088`. Kernel scope is `3,831`, down from accepted `3,851` and setup `4,615`. Backend scope is `9,454` after overlay allowlist growth, down from `9,470` after the no-change control commit.
+- Risk classification: low to medium. This deletes apparently unreachable GPU code, but it also changes the shader library contents, so acceptance still requires build success, repeated `breakout` and `g2048`, native parity, overlay surface, interactive smoke, comparable train and eval scores, and subagent review.
+- Acceptance gate: use the dedicated `milestone-04w-dead-u8-cast-cleanup` runners, require repeated medians within 1 percent of the current accepted 04s baseline or better, require train and eval scores to remain comparable, and reject on compile, parity, determinism, interactive, or score drift.
+
+## 2026-05-27 Milestone 04w Dead U8 Cast Cleanup Results
+
+- Code change: remove the uncalled GPU `puf_cast_u8_to_f32` wrapper and `cast_u8_to_f32` shader. The live `cpu_cast_u8_to_f32` helper and declaration remain.
+- LOC: `src/metal/shader_src.h` is `2,257`, down from accepted `2,266`. `src/metal/kernels.mm` is `1,457`, down from accepted `1,468`. Kernel scope is `3,831`, down from accepted `3,851` and setup `4,615`. Backend scope is `9,454`, down from `9,470` after the no-change control commit.
+- Static validation passed: `tools/metal/build.sh breakout`, `tools/metal/build.sh g2048`, `git diff --check`, `bash -n` for all milestone 04w runners, and `PYTHONPATH=$PWD python -m pytest tests/metal/test_overlay_surface.py`.
+- First milestone 04w suite: `breakout` artifact `20260527T060204+0300-breakout` at `3,479,025` SPS, train score `2.772841691970825`, eval score `0.0`. `g2048` artifact `20260527T060215+0300-g2048` at `597,543` SPS, train score `97.85507202148438`, eval score `49.43283462524414`.
+- Second milestone 04w suite: `breakout` artifact `20260527T060230+0300-breakout` at `3,415,735` SPS, train score `2.526562452316284`, eval score `0.0`. `g2048` artifact `20260527T060241+0300-g2048` at `595,383` SPS, train score `97.85507202148438`, eval score `49.43283462524414`.
+- Medians: `breakout` two-run median `3,447,380` SPS, `-0.75%` versus milestone 04s accepted median `3,473,550`. `g2048` two-run median `596,463` SPS, `-0.60%` versus milestone 04s accepted median `600,074`.
+- Native Metal parity and overlay surface passed in both milestone 04w suites.
+- Interactive smoke artifact: `milestone-04w-dead-u8-cast-cleanup/20260527T060308+0300-interactive-breakout-dead-u8-cast-cleanup`. It built, loaded `resources/breakout/breakout_weights.bin`, reached raylib 5.5 GLFW initialization, then failed with `Failed to determine Monitor to center Window` and exit code `139`, matching the known desktop windowing boundary.
+- Subagent review: Pascal found no blocking findings, verified exact symbol search leaves only STATUS prose for the removed GPU u8 cast while the live CPU helper remains declared, defined, and called, checked LOC and benchmark arithmetic, confirmed the 04w runners are scoped and non-recursive, checked exact overlay allowlist entries, and confirmed generated artifacts are ignored rather than staged.
+- Decision: accepted after subagent review. The dead-code deletion clears the frozen throughput gate on both benchmark envs and preserves train, eval, parity, overlay, and interactive boundary behavior.

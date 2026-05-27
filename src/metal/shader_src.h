@@ -1809,15 +1809,6 @@ kernel void index_gather_kernel(
                      p.row_bytes);
 }
 
-kernel void cast_u8_to_f32(
-    device float* dst                       [[buffer(0)]],
-    const device uchar* src                 [[buffer(1)]],
-    constant int& n                         [[buffer(2)]],
-    uint idx [[thread_position_in_grid]]
-) {
-    if ((int)idx < n) dst[idx] = float(src[idx]);
-}
-
 struct GemmParams {
     int M;       // result rows
     int N;       // result columns

@@ -148,17 +148,6 @@ void cpu_cast_u8_to_f32(float *dst, const uint8_t *src, int count) {
   for (; i < count; i++) dst[i] = (float)src[i];
 }
 
-void puf_cast_u8_to_f32(PufTensor &dst, const PufTensor &src,
-                          cudaStream_t stream) {
-  MetalStream *ms = mtl_resolve_stream(stream);
-  auto pso = mtl_begin_kernel(ms, "cast_u8_to_f32");
-  mtl_set_tensor(ms, dst, 0);
-  mtl_set_tensor(ms, src, 1);
-  int count = (int)src.numel();
-  mtl_set_params(ms, count, 2);
-  mtl_dispatch_1d(ms, pso, (int)src.numel());
-}
-
 void mtl_cast_f32_to_f16(void *dst, const float *src, int count,
                           cudaStream_t stream) {
   MetalStream *ms = mtl_resolve_stream(stream);
