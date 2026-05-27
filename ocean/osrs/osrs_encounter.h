@@ -379,6 +379,7 @@ typedef struct {
     int npc_slot;  /* source slot index in encounter's NPC array; -1 for player */
     uint32_t npc_instance_id;  /* stable for one NPC lifetime; 0 means slot+def only */
     int attack_target_entity_idx;  /* render entity index of attack target, -1 = none */
+    char display_name[32];
 } RenderEntity;
 
 typedef enum {
@@ -430,6 +431,37 @@ static inline RenderEntityFacingMode render_entity_select_facing_mode(
     if (moved)
         return RENDER_ENTITY_FACE_MOVEMENT;
     return RENDER_ENTITY_FACE_DEST_TILE;
+}
+
+static inline int render_target_label_entity_idx_from_entities(
+    const RenderEntity* entities, int count, int gui_entity_idx
+) {
+    if (!entities || count <= 0) return -1;
+    int two_player_scene = count == 2 &&
+        entities[0].entity_type == ENTITY_PLAYER &&
+        entities[1].entity_type == ENTITY_PLAYER;
+
+    if (two_player_scene) {
+        if (gui_entity_idx >= 0 && gui_entity_idx < count) {
+            int target = entities[gui_entity_idx].attack_target_entity_idx;
+            if (target >= 0 && target < count) return target;
+        }
+        int target = entities[0].attack_target_entity_idx;
+        if (target >= 0 && target < count) return target;
+        if (gui_entity_idx >= 0 && gui_entity_idx < count) return 1 - gui_entity_idx;
+        return 1;
+    }
+
+    int target = entities[0].attack_target_entity_idx;
+    if (target >= 0 && target < count) return target;
+    if (gui_entity_idx >= 0 && gui_entity_idx < count) {
+        target = entities[gui_entity_idx].attack_target_entity_idx;
+        if (target >= 0 && target < count) return target;
+    }
+    for (int ei = 0; ei < count; ei++) {
+        if (entities[ei].entity_type == ENTITY_NPC) return ei;
+    }
+    return count > 1 ? 1 : -1;
 }
 
 /** Fill a RenderEntity from a Player struct. */

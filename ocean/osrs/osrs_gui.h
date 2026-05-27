@@ -446,6 +446,7 @@ typedef struct {
        positions are user-rearrangeable via drag-and-drop. */
     InvSlot inv_grid[INV_GRID_SLOTS];
     int inv_grid_dirty;   /* 1 = needs full rebuild from player state */
+    int inv_owner_entity_idx;
 
     /* previous player state for incremental inventory updates.
        compared each tick to detect gear switches and consumable use. */
@@ -1991,6 +1992,7 @@ static int gui_inventory_consumables_changed(const GuiState* gs, const Player* p
 /** Clear inventory-only GUI state that must not leak across resets. */
 static void gui_reset_inventory_ui_state(GuiState* gs) {
     gs->inv_grid_dirty = 1;
+    gs->inv_owner_entity_idx = -1;
     gs->human_clicked_inv_slot = -1;
     gs->inv_dim_slot = -1;
     gs->inv_dim_timer = 0;
@@ -2083,6 +2085,61 @@ static void gui_populate_inventory(GuiState* gs, Player* p) {
 
     /* snapshot player state for incremental change detection */
     gui_snapshot_inventory_state(gs, p);
+    gs->inv_owner_entity_idx = gs->gui_entity_idx;
+}
+
+static int gui_inventory_equipment_count(const GuiState* gs, uint8_t item) {
+    int count = 0;
+    for (int i = 0; i < INV_GRID_SLOTS; i++) {
+        if (gs->inv_grid[i].type == INV_SLOT_EQUIPMENT &&
+                gs->inv_grid[i].item_db_idx == item) {
+            count++;
+        }
+    }
+    return count;
+}
+
+static int gui_player_has_equipped_item(const Player* p, uint8_t item) {
+    for (int e = 0; e < NUM_GEAR_SLOTS; e++) {
+        if (p->equipped[e] == item) return 1;
+    }
+    return 0;
+}
+
+static int gui_player_has_inventory_item(const Player* p, uint8_t item) {
+    for (int s = 0; s < NUM_GEAR_SLOTS; s++) {
+        for (int i = 0; i < p->num_items_in_slot[s]; i++) {
+            if (p->inventory[s][i] == item) return 1;
+        }
+    }
+    return 0;
+}
+
+static int gui_inventory_projection_matches_player(
+    const GuiState* gs, const Player* p
+) {
+    for (int s = 0; s < NUM_GEAR_SLOTS; s++) {
+        for (int i = 0; i < p->num_items_in_slot[s]; i++) {
+            uint8_t item = p->inventory[s][i];
+            if (item == ITEM_NONE) continue;
+            int count = gui_inventory_equipment_count(gs, item);
+            if (gui_player_has_equipped_item(p, item)) {
+                if (count != 0) return 0;
+            } else if (count != 1) {
+                return 0;
+            }
+        }
+    }
+
+    for (int i = 0; i < INV_GRID_SLOTS; i++) {
+        const InvSlot* slot = &gs->inv_grid[i];
+        if (slot->type != INV_SLOT_EQUIPMENT) continue;
+        if (slot->item_db_idx == ITEM_NONE) return 0;
+        if (gui_player_has_equipped_item(p, slot->item_db_idx)) return 0;
+        if (!gui_player_has_inventory_item(p, slot->item_db_idx)) return 0;
+    }
+
+    return 1;
 }
 
 /** Update potion vial doses in-place when doses change.
@@ -2204,6 +2261,9 @@ static void gui_update_inventory(GuiState* gs, Player* p) {
                     gs->inv_grid[src].item_db_idx = 0;
                     gs->inv_grid[src].osrs_id = 0;
                 }
+            } else {
+                gui_populate_inventory(gs, p);
+                return;
             }
         } else if (curr != ITEM_NONE) {
             /* equipping from inventory, nothing was in this gear slot before */
@@ -2212,6 +2272,9 @@ static void gui_update_inventory(GuiState* gs, Player* p) {
                 gs->inv_grid[src].type = INV_SLOT_EMPTY;
                 gs->inv_grid[src].item_db_idx = 0;
                 gs->inv_grid[src].osrs_id = 0;
+            } else {
+                gui_populate_inventory(gs, p);
+                return;
             }
         } else if (prev != ITEM_NONE) {
             /* gear slot cleared (e.g. shield removed by 2H weapon equip).
@@ -2732,6 +2795,9 @@ static void gui_draw_inventory_manual(GuiState* gs) {
 }
 
 static void gui_draw_inventory(GuiState* gs, Player* p) {
+    if (gs->inv_owner_entity_idx != gs->gui_entity_idx) {
+        gs->inv_grid_dirty = 1;
+    }
     if (gs->inv_grid_dirty) {
         gui_populate_inventory(gs, p);
         gs->inv_grid_dirty = 0;
@@ -3554,6 +3620,7 @@ static void gui_draw_stats(GuiState* gs, Player* p) {
 static void gui_cycle_entity(GuiState* gs) {
     if (gs->gui_entity_count <= 0) return;
     gs->gui_entity_idx = (gs->gui_entity_idx + 1) % gs->gui_entity_count;
+    gs->inv_grid_dirty = 1;
 }
 
 /* Draw the resizable-mode side panel: minimap area at top (handled outside),
