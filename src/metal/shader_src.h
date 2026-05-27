@@ -267,23 +267,6 @@ inline void mingru_scan_forward_checkpointed_body(
     scan_write_next_checkpointed(next_state, bH + h, scan_exp(next_state, a_star + s));
 }
 
-kernel void mingru_scan_forward_checkpointed(
-    device float* out               [[buffer(0)]],
-    device float* next_state        [[buffer(1)]],
-    device float* a_star_buf        [[buffer(2)]],
-    device float* s_buf             [[buffer(3)]],
-    device float* log_values_buf    [[buffer(4)]],
-    const device float* combined    [[buffer(5)]],
-    const device float* state       [[buffer(6)]],
-    const device float* input       [[buffer(7)]],
-    constant ScanParams& p          [[buffer(8)]],
-    uint idx [[thread_position_in_grid]]
-) {
-    mingru_scan_forward_checkpointed_body<float>(
-        out, next_state, a_star_buf, s_buf, log_values_buf, combined, state, input,
-        p, idx);
-}
-
 template <typename T>
 inline void mingru_scan_forward_reset_body(
     device T* out,
@@ -336,23 +319,6 @@ inline void mingru_scan_forward_reset_body(
     }
 
     scan_write(next_state, bH + h, prev);
-}
-
-kernel void mingru_scan_forward_reset(
-    device float* out               [[buffer(0)]],
-    device float* next_state        [[buffer(1)]],
-    device float* curr_buf          [[buffer(2)]],
-    device float* prev_buf          [[buffer(3)]],
-    device float* unused_buf        [[buffer(4)]],
-    const device float* combined    [[buffer(5)]],
-    const device float* state       [[buffer(6)]],
-    const device float* input       [[buffer(7)]],
-    const device float* reset       [[buffer(8)]],
-    constant ScanParams& p          [[buffer(9)]],
-    uint idx [[thread_position_in_grid]]
-) {
-    mingru_scan_forward_reset_body<float>(
-        out, next_state, curr_buf, prev_buf, combined, state, input, reset, p, idx);
 }
 
 template <typename T>
@@ -483,26 +449,6 @@ inline void mingru_scan_backward_checkpointed_body(
     scan_write(grad_state, state_idx, (state_val > 0.0f) ? (grad_z_0 / state_val) : 0.0f);
 }
 
-kernel void mingru_scan_backward_checkpointed(
-    device float* grad_combined          [[buffer(0)]],
-    device float* grad_state             [[buffer(1)]],
-    device float* grad_input             [[buffer(2)]],
-    const device float* grad_out         [[buffer(3)]],
-    const device float* grad_next_state  [[buffer(4)]],
-    const device float* combined         [[buffer(5)]],
-    const device float* state            [[buffer(6)]],
-    const device float* input            [[buffer(7)]],
-    const device float* a_star_buf       [[buffer(8)]],
-    const device float* s_buf            [[buffer(9)]],
-    const device float* log_values_buf   [[buffer(10)]],
-    constant ScanParams& p               [[buffer(11)]],
-    uint idx [[thread_position_in_grid]]
-) {
-    mingru_scan_backward_checkpointed_body<float>(
-        grad_combined, grad_state, grad_input, grad_out, grad_next_state,
-        combined, state, input, a_star_buf, s_buf, log_values_buf, p, idx);
-}
-
 template <typename T>
 inline void mingru_scan_backward_reset_body(
     device T* grad_combined,
@@ -564,26 +510,56 @@ inline void mingru_scan_backward_reset_body(
     scan_write(grad_state, state_idx, grad_next);
 }
 
-kernel void mingru_scan_backward_reset(
-    device float* grad_combined          [[buffer(0)]],
-    device float* grad_state             [[buffer(1)]],
-    device float* grad_input             [[buffer(2)]],
-    const device float* grad_out         [[buffer(3)]],
-    const device float* grad_next_state  [[buffer(4)]],
-    const device float* combined         [[buffer(5)]],
-    const device float* state            [[buffer(6)]],
-    const device float* input            [[buffer(7)]],
-    const device float* curr_buf         [[buffer(8)]],
-    const device float* prev_buf         [[buffer(9)]],
-    const device float* unused_buf       [[buffer(10)]],
-    const device float* reset            [[buffer(11)]],
-    constant ScanParams& p               [[buffer(12)]],
-    uint idx [[thread_position_in_grid]]
-) {
-    mingru_scan_backward_reset_body<float>(
-        grad_combined, grad_state, grad_input, grad_out, grad_next_state,
-        combined, input, curr_buf, prev_buf, reset, p, idx);
+#define MINGRU_FORWARD_CHECKPOINTED_KERNEL(NAME, T) \
+kernel void NAME(device T* out [[buffer(0)]], device T* next_state [[buffer(1)]], \
+    device float* a_star_buf [[buffer(2)]], device float* s_buf [[buffer(3)]], \
+    device float* log_values_buf [[buffer(4)]], const device T* combined [[buffer(5)]], \
+    const device T* state [[buffer(6)]], const device T* input [[buffer(7)]], \
+    constant ScanParams& p [[buffer(8)]], uint idx [[thread_position_in_grid]]) { \
+    mingru_scan_forward_checkpointed_body<T>(out, next_state, a_star_buf, \
+        s_buf, log_values_buf, combined, state, input, p, idx); \
 }
+
+#define MINGRU_FORWARD_RESET_KERNEL(NAME, T) \
+kernel void NAME(device T* out [[buffer(0)]], device T* next_state [[buffer(1)]], \
+    device float* curr_buf [[buffer(2)]], device float* prev_buf [[buffer(3)]], \
+    device float* unused_buf [[buffer(4)]], const device T* combined [[buffer(5)]], \
+    const device T* state [[buffer(6)]], const device T* input [[buffer(7)]], \
+    const device float* reset [[buffer(8)]], constant ScanParams& p [[buffer(9)]], \
+    uint idx [[thread_position_in_grid]]) { \
+    mingru_scan_forward_reset_body<T>(out, next_state, curr_buf, prev_buf, \
+        combined, state, input, reset, p, idx); \
+}
+
+#define MINGRU_BACKWARD_CHECKPOINTED_KERNEL(NAME, T) \
+kernel void NAME(device T* grad_combined [[buffer(0)]], device T* grad_state [[buffer(1)]], \
+    device T* grad_input [[buffer(2)]], const device T* grad_out [[buffer(3)]], \
+    const device T* grad_next_state [[buffer(4)]], const device T* combined [[buffer(5)]], \
+    const device T* state [[buffer(6)]], const device T* input [[buffer(7)]], \
+    const device float* a_star_buf [[buffer(8)]], const device float* s_buf [[buffer(9)]], \
+    const device float* log_values_buf [[buffer(10)]], constant ScanParams& p [[buffer(11)]], \
+    uint idx [[thread_position_in_grid]]) { \
+    mingru_scan_backward_checkpointed_body<T>(grad_combined, grad_state, grad_input, \
+        grad_out, grad_next_state, combined, state, input, a_star_buf, s_buf, \
+        log_values_buf, p, idx); \
+}
+
+#define MINGRU_BACKWARD_RESET_KERNEL(NAME, T) \
+kernel void NAME(device T* grad_combined [[buffer(0)]], device T* grad_state [[buffer(1)]], \
+    device T* grad_input [[buffer(2)]], const device T* grad_out [[buffer(3)]], \
+    const device T* grad_next_state [[buffer(4)]], const device T* combined [[buffer(5)]], \
+    const device T* state [[buffer(6)]], const device T* input [[buffer(7)]], \
+    const device float* curr_buf [[buffer(8)]], const device float* prev_buf [[buffer(9)]], \
+    const device float* unused_buf [[buffer(10)]], const device float* reset [[buffer(11)]], \
+    constant ScanParams& p [[buffer(12)]], uint idx [[thread_position_in_grid]]) { \
+    mingru_scan_backward_reset_body<T>(grad_combined, grad_state, grad_input, \
+        grad_out, grad_next_state, combined, input, curr_buf, prev_buf, reset, p, idx); \
+}
+
+MINGRU_FORWARD_CHECKPOINTED_KERNEL(mingru_scan_forward_checkpointed, float)
+MINGRU_FORWARD_RESET_KERNEL(mingru_scan_forward_reset, float)
+MINGRU_BACKWARD_CHECKPOINTED_KERNEL(mingru_scan_backward_checkpointed, float)
+MINGRU_BACKWARD_RESET_KERNEL(mingru_scan_backward_reset, float)
 
 struct SampleParams {
     uint64_t seed;
@@ -1965,80 +1941,10 @@ kernel void cast_f16_to_f32(
     dst[gid] = float(src[gid]);
 }
 
-kernel void mingru_scan_forward_checkpointed_fp16(
-    device half* out                [[buffer(0)]],
-    device half* next_state         [[buffer(1)]],
-    device float* a_star_buf        [[buffer(2)]],
-    device float* s_buf             [[buffer(3)]],
-    device float* log_values_buf    [[buffer(4)]],
-    const device half* combined     [[buffer(5)]],
-    const device half* state        [[buffer(6)]],
-    const device half* input        [[buffer(7)]],
-    constant ScanParams& p          [[buffer(8)]],
-    uint idx [[thread_position_in_grid]]
-) {
-    mingru_scan_forward_checkpointed_body<half>(
-        out, next_state, a_star_buf, s_buf, log_values_buf, combined, state, input,
-        p, idx);
-}
-
-kernel void mingru_scan_forward_reset_fp16(
-    device half* out                [[buffer(0)]],
-    device half* next_state         [[buffer(1)]],
-    device float* curr_buf          [[buffer(2)]],
-    device float* prev_buf          [[buffer(3)]],
-    device float* unused_buf        [[buffer(4)]],
-    const device half* combined     [[buffer(5)]],
-    const device half* state        [[buffer(6)]],
-    const device half* input        [[buffer(7)]],
-    const device float* reset       [[buffer(8)]],
-    constant ScanParams& p          [[buffer(9)]],
-    uint idx [[thread_position_in_grid]]
-) {
-    mingru_scan_forward_reset_body<half>(
-        out, next_state, curr_buf, prev_buf, combined, state, input, reset, p, idx);
-}
-
-kernel void mingru_scan_backward_checkpointed_fp16(
-    device half* grad_combined            [[buffer(0)]],
-    device half* grad_state               [[buffer(1)]],
-    device half* grad_input               [[buffer(2)]],
-    const device half* grad_out           [[buffer(3)]],
-    const device half* grad_next_state    [[buffer(4)]],
-    const device half* combined           [[buffer(5)]],
-    const device half* state              [[buffer(6)]],
-    const device half* input              [[buffer(7)]],
-    const device float* a_star_buf        [[buffer(8)]],
-    const device float* s_buf             [[buffer(9)]],
-    const device float* log_values_buf    [[buffer(10)]],
-    constant ScanParams& p                [[buffer(11)]],
-    uint idx [[thread_position_in_grid]]
-) {
-    mingru_scan_backward_checkpointed_body<half>(
-        grad_combined, grad_state, grad_input, grad_out, grad_next_state,
-        combined, state, input, a_star_buf, s_buf, log_values_buf, p, idx);
-}
-
-kernel void mingru_scan_backward_reset_fp16(
-    device half* grad_combined            [[buffer(0)]],
-    device half* grad_state               [[buffer(1)]],
-    device half* grad_input               [[buffer(2)]],
-    const device half* grad_out           [[buffer(3)]],
-    const device half* grad_next_state    [[buffer(4)]],
-    const device half* combined           [[buffer(5)]],
-    const device half* state              [[buffer(6)]],
-    const device half* input              [[buffer(7)]],
-    const device float* curr_buf          [[buffer(8)]],
-    const device float* prev_buf          [[buffer(9)]],
-    const device float* unused_buf        [[buffer(10)]],
-    const device float* reset             [[buffer(11)]],
-    constant ScanParams& p                [[buffer(12)]],
-    uint idx [[thread_position_in_grid]]
-) {
-    mingru_scan_backward_reset_body<half>(
-        grad_combined, grad_state, grad_input, grad_out, grad_next_state,
-        combined, input, curr_buf, prev_buf, reset, p, idx);
-}
+MINGRU_FORWARD_CHECKPOINTED_KERNEL(mingru_scan_forward_checkpointed_fp16, half)
+MINGRU_FORWARD_RESET_KERNEL(mingru_scan_forward_reset_fp16, half)
+MINGRU_BACKWARD_CHECKPOINTED_KERNEL(mingru_scan_backward_checkpointed_fp16, half)
+MINGRU_BACKWARD_RESET_KERNEL(mingru_scan_backward_reset_fp16, half)
 
 constant int STEEL_BM = 64;
 constant int STEEL_BN = 64;
