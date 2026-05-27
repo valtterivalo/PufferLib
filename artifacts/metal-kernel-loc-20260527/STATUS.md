@@ -458,3 +458,24 @@
 - Native Metal parity and overlay surface passed in both milestone 04r suites.
 - Interpretation: the current accepted source still lands inside the frozen breakout gate on paired control runs. The lower 04q declaration-only samples look like run noise rather than a durable baseline collapse. Future source candidates should still be judged against the accepted-source gate, with this control band used as noise context.
 - Decision: record control after subagent review. This is not a retained optimization.
+
+## 2026-05-27 Milestone 04s Dead Prototype Retest Candidate
+
+- Root-cause hypothesis: milestone 04q rejected the same declaration cleanup after low breakout samples, but milestone 04r showed the accepted source still sits inside the frozen gate. Retesting the declaration-only cleanup can distinguish sample noise from a real source-level effect.
+- Candidate code change: remove the unused top-of-file declarations for fp16 MinGRU scans and fp16 decoder-gradient assembly again, with no changes to definitions, call sites, shader source, exported kernel names, dispatch order, buffer indices, math, RNG, or barriers.
+- LOC before validation: `src/metal/shader_src.h` is unchanged at `2,266`. `src/metal/kernels.mm` is `1,468`, down from accepted `1,477`. Kernel scope is `3,851`, down from accepted `3,860` and setup `4,615`. Backend scope is `9,458` after overlay allowlist growth, down from `9,459` after the no-change control commit.
+- Risk classification: low. This removes declarations only. Acceptance still requires build success, repeated `breakout` and `g2048`, native parity, overlay surface, interactive smoke, comparable train and eval scores, and subagent review.
+- Acceptance gate: use the dedicated `milestone-04s-dead-prototype-retest` runners, require median SPS within 1 percent of the current accepted baseline or better, require learnability and eval to remain comparable, and reject on compile, parity, determinism, or score drift.
+
+## 2026-05-27 Milestone 04s Dead Prototype Retest Results
+
+- Code change: remove unused top-of-file declarations for fp16 MinGRU scans and fp16 decoder-gradient assembly. Definitions and call sites remain unchanged.
+- LOC: `src/metal/shader_src.h` is unchanged at `2,266`. `src/metal/kernels.mm` is `1,468`, down from accepted `1,477`. Kernel scope is `3,851`, down from accepted `3,860` and setup `4,615`. Backend scope is `9,458`, down from `9,459` after the no-change control commit.
+- Static validation passed: `tools/metal/build.sh breakout`, `tools/metal/build.sh g2048`, `git diff --check`, `bash -n` for all milestone 04s runners, and `PYTHONPATH=$PWD python -m pytest tests/metal/test_overlay_surface.py`.
+- First milestone 04s suite: `breakout` artifact `20260527T052709+0300-breakout` at `3,452,513` SPS, train score `3.1199324131011963`, eval score `0.0`. `g2048` artifact `20260527T052720+0300-g2048` at `599,004` SPS, train score `97.85507202148438`, eval score `49.43283462524414`.
+- Second milestone 04s suite: `breakout` artifact `20260527T052736+0300-breakout` at `3,494,587` SPS, train score `2.2248005867004395`, eval score `0.0`. `g2048` artifact `20260527T052746+0300-g2048` at `601,143` SPS, train score `97.85507202148438`, eval score `49.43283462524414`.
+- Medians: `breakout` two-run median `3,473,550` SPS, `-0.01%` versus milestone 04l accepted median `3,473,973`. `g2048` two-run median `600,074` SPS, `+0.45%` versus milestone 04l accepted median `597,374`.
+- Native Metal parity and overlay surface passed in both milestone 04s suites.
+- Interactive smoke artifact: `milestone-04s-dead-prototype-retest/20260527T053142+0300-interactive-breakout-dead-prototype-retest`. It built, loaded `resources/breakout/breakout_weights.bin`, reached raylib 5.5 GLFW initialization, then failed with `Failed to determine Monitor to center Window` and exit code `139`, matching the known desktop windowing boundary.
+- Harness note: a first direct invocation of the initial 04s interactive runner recursed through `run-interactive-smoke.sh` because the runner had been copied with the wrong body. The runaway process was terminated, the 04s runner was corrected to the direct eval form used by older milestones, and the accepted interactive smoke artifact above was captured through the shared wrapper after the fix. The bad recursive output folders are ignored local artifacts and are not staged.
+- Decision: accepted pending subagent review. The retest clears the frozen throughput gate on both benchmark envs and preserves train and eval behavior.

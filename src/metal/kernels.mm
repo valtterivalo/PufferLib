@@ -19,15 +19,6 @@ void mtl_fill_f32(float *ptr, float value, int count, cudaStream_t stream);
 void mtl_copy_f32(float *dst, const float *src, int count, cudaStream_t stream);
 void mtl_fill_f16(void *ptr, int count, cudaStream_t stream);
 void mtl_copy_f16(void *dst, const void *src, int count, cudaStream_t stream);
-void mtl_mingru_scan_forward_fp16(PrefixScan &scan, cudaStream_t stream);
-void mtl_mingru_scan_backward_fp16(PrefixScan &scan, const void *grad,
-                                    const void *grad_next_state,
-                                    cudaStream_t stream);
-void mtl_assemble_decoder_grad_f32_to_f16(void *grad_out,
-                                          const float *grad_logits,
-                                          const float *grad_value, int B_TT,
-                                          int od, int od1,
-                                          cudaStream_t stream);
 
 static PufTensor float_tensor_as_puf(const FloatTensor &t) {
   PufTensor out = {.bytes = (char *)t.data, .dtype_size = 4};
