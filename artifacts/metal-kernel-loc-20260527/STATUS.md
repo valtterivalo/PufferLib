@@ -522,3 +522,23 @@
 - Native Metal parity and overlay surface passed in both milestone 04u suites.
 - Subagent review: Gauss found no blocking findings, verified `src/metal/kernels.mm` was restored to the 04s state, checked benchmark arithmetic and rejection gate, confirmed 04u runners are scoped and non-recursive, checked exact overlay allowlist entries, and confirmed generated benchmark artifacts are ignored rather than staged.
 - Decision: rejected. The candidate exceeded the 1 percent SPS gate in both benchmark envs, so `src/metal/kernels.mm` was restored to the 04s accepted state. Only rejection artifacts, runner scripts, overlay allowlist, and this status entry remain for audit.
+
+## 2026-05-27 Milestone 04v No-Change Control Candidate
+
+- Root-cause hypothesis: milestones 04t and 04u both missed the 1 percent gate in both benchmark envs despite restored source and low-risk changes. A no-change control against the current accepted source can measure whether current machine state has drifted lower before the next source edit. This does not alter the immutable plan or acceptance rules.
+- Candidate change: add dedicated no-change control runners and exact overlay allowlist paths only. No files in `src/metal` or `tools/metal` are changed.
+- LOC before validation: kernel scope is unchanged at `3,851`: `src/metal/shader_src.h` `2,266`, `src/metal/kernels.mm` `1,468`, and the tensor-ops shader block `117`. Backend scope is `9,470` after overlay allowlist growth, up from `9,466` after the rejected 04u audit commit. This is audit overhead only.
+- Risk classification: low. This is a harness/control milestone, not a backend source change. Acceptance requires build success, repeated `breakout` and `g2048`, native parity, overlay surface, and subagent review before committing the control record.
+- Acceptance gate: use the dedicated `milestone-04v-no-change-control` runners. Treat the results as a same-source control band for interpreting benchmark noise, not as a retained optimization.
+
+## 2026-05-27 Milestone 04v No-Change Control Results
+
+- Code change: none in `src/metal` or `tools/metal`. This milestone adds only control runners, overlay allowlist entries, and this status record.
+- Static validation passed: `git diff --check`, `bash -n` for all milestone 04v runners, and `PYTHONPATH=$PWD python -m pytest tests/metal/test_overlay_surface.py`.
+- First no-change control suite: `breakout` artifact `20260527T055500+0300-breakout` at `3,440,874` SPS, train score `2.151296854019165`, eval score `0.0`. `g2048` artifact `20260527T055511+0300-g2048` at `593,174` SPS, train score `97.85507202148438`, eval score `49.43283462524414`.
+- Second no-change control suite: `breakout` artifact `20260527T055526+0300-breakout` at `3,429,645` SPS, train score `2.2331838607788086`, eval score `0.0`. `g2048` artifact `20260527T055536+0300-g2048` at `593,704` SPS, train score `97.85507202148438`, eval score `49.43283462524414`.
+- Medians: `breakout` two-run median `3,435,260` SPS, `-1.10%` versus milestone 04s accepted median `3,473,550`. `g2048` two-run median `593,439` SPS, `-1.11%` versus milestone 04s accepted median `600,074`.
+- Native Metal parity and overlay surface passed in both milestone 04v suites.
+- Interpretation: the accepted source itself is currently below the frozen accepted-source gate by a little over 1 percent on both envs, while train and eval behavior remain unchanged. The 04t and 04u misses are therefore not strong evidence of source-specific slowdown, but the immutable gate still blocks retaining those candidates.
+- Subagent review: Zeno found no blocking findings, verified there is no `src/metal` or `tools/metal` diff, checked STATUS arithmetic and interpretation, confirmed 04v runners are scoped and non-recursive, checked exact overlay allowlist entries, and confirmed generated artifacts are ignored rather than staged.
+- Decision: record control after subagent review. This is not a retained optimization.
