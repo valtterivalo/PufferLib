@@ -221,3 +221,19 @@
 - Interactive smoke artifact: `milestone-04g-tiny-kernel-cleanup/20260527T032004+0300-interactive-breakout-tiny-kernel-cleanup`. It built, loaded `resources/breakout/breakout_weights.bin`, reached raylib 5.5 GLFW initialization, then failed with `Failed to determine Monitor to center Window` and exit code `139`, matching the known desktop windowing boundary.
 - Subagent review: Hooke found no blocking findings, verified MinGRU exported buffer slots, priority-weight buffer contract, typed transpose semantics, indexed row-copy address spaces, `SmallGemmParams` host and shader layout, exact runner allowlist scope, and STATUS LOC and benchmark arithmetic.
 - Decision: accepted after subagent review. This is a small kernel-scope cleanup with repeated runtime medians inside the LOC gate.
+
+## 2026-05-27 Milestone 04h Host Cleanup Candidate
+
+- Root-cause hypothesis: after the kernel-source passes, two host-side duplication clusters remain: six tensor-ops forwarding wrappers only pass a cached PSO into `tensor_ops_dispatch`, and `puf_transpose_01(FloatTensor)` duplicates the existing `PufTensor` transpose dispatch shape. Inlining the PSO at call sites and delegating the FloatTensor overload should reduce backend LOC without changing PSO names, argument binding, dispatch dimensions, shader code, or tensor data flow.
+- Risk classification: low to medium. This is host dispatch code, not shader math, but tensor-ops GEMM dispatch and transpose are live paths. Acceptance requires the same repeated benchmark, parity, overlay, interactive smoke, and subagent review gates.
+- Acceptance gate: use the dedicated `milestone-04h-host-cleanup` runners, require median SPS within 1 percent of the current accepted baseline or better, and reject on compile, parity, determinism, or score drift.
+
+## 2026-05-27 Milestone 04h Host Cleanup Results
+
+- Candidate code change: temporarily removed six tensor-ops forwarding wrappers and delegated `puf_transpose_01(FloatTensor)` through the `PufTensor` overload. The candidate would have reduced `src/metal/kernels.mm` from `1,504` to `1,494` lines and full `src/metal/platform.mm` from `1,093` to `1,071` lines, but it is not kept.
+- Static validation passed before benchmark rejection: `git diff --check`, `bash -n` for all milestone 04h runners, and `PYTHONPATH=$PWD python -m pytest tests/metal/test_overlay_surface.py`.
+- First milestone 04h suite: `breakout` artifact `20260527T032735+0300-breakout` at `3,414,858` SPS, train score `2.3648035526275635`, eval score `0.0`; `g2048` artifact `20260527T032747+0300-g2048` at `582,103` SPS, train score `97.85507202148438`, eval score `49.43283462524414`.
+- Second milestone 04h suite: `breakout` artifact `20260527T032805+0300-breakout` at `3,457,217` SPS, train score `2.671255111694336`, eval score `0.0`; `g2048` artifact `20260527T032816+0300-g2048` at `581,083` SPS, train score `97.85507202148438`, eval score `49.43283462524414`.
+- Medians: `breakout` `3,436,038` SPS, `-0.38%` versus milestone 04g accepted median `3,449,074`; `g2048` `581,593` SPS, `-2.42%` versus milestone 04g accepted median `596,033`.
+- Native Metal parity and overlay surface passed in both milestone 04h suites.
+- Decision: rejected. The candidate exceeded the 1 percent g2048 LOC gate, so `src/metal/kernels.mm` and `src/metal/platform.mm` were restored to the 04g accepted state. Only rejection artifacts, runner scripts, overlay allowlist, and this status entry remain for audit.
