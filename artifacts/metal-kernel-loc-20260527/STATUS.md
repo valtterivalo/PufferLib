@@ -347,3 +347,22 @@
 - Interactive smoke artifact: `milestone-04l-scalar-int-params/20260527T042726+0300-interactive-breakout-scalar-int-params`. It built, loaded `resources/breakout/breakout_weights.bin`, reached raylib 5.5 GLFW initialization, then failed with `Failed to determine Monitor to center Window` and exit code `139`, matching the known desktop windowing boundary.
 - Subagent review: Lovelace found no blocking findings, verified scalar shader and host bindings, confirmed exported names, buffer indices, dispatch dimensions, math and reduction order, runner scope, ignored generated artifacts, and STATUS LOC and benchmark arithmetic.
 - Decision: accepted after subagent review. This is a LOC cleanup only, not a throughput claim, because g2048 sits inside the allowed slowdown window.
+
+## 2026-05-27 Milestone 04m Reset Kernel Argument Cleanup Candidate
+
+- Root-cause hypothesis: MinGRU reset wrappers still declare unused exported shader arguments that exist only as dead placeholders. Because every later argument uses an explicit `[[buffer(N)]]` index, removing the dead declarations should preserve host binding slots, exported kernel names, dispatch dimensions, math, reduction order, RNG, and data flow while reducing shader source LOC.
+- Candidate code change: remove `unused_buf` from forward reset f32/fp16 kernels and remove unused `state` and `unused_buf` from backward reset f32/fp16 kernels; add dedicated milestone 04m runners and exact overlay allowlist paths.
+- LOC before validation: `src/metal/shader_src.h` is `2,260` lines, down from accepted `2,266`. `src/metal/kernels.mm` is unchanged at `1,477`. Kernel scope is `3,854`, down from accepted `3,860` and setup `4,615`. Backend scope is `9,437`, down from accepted `9,439` and setup `10,160`.
+- Risk classification: medium. This touches live MinGRU reset kernel signatures, so acceptance requires build success, repeated `breakout` and `g2048`, native parity, overlay surface, interactive smoke, comparable train and eval scores, and subagent review.
+- Acceptance gate: use the dedicated `milestone-04m-reset-arg-cleanup` runners, require median SPS within 1 percent of the current accepted baseline or better, require learnability and eval to remain comparable, and reject on compile, parity, determinism, or score drift.
+
+## 2026-05-27 Milestone 04m Reset Kernel Argument Cleanup Results
+
+- Candidate code change: temporarily removed dead exported shader arguments from MinGRU reset wrappers. The candidate would have reduced `src/metal/shader_src.h` from `2,266` to `2,260` and kernel scope from `3,860` to `3,854`, but it is not kept.
+- Static validation passed before benchmark rejection: `tools/metal/build.sh breakout`, `tools/metal/build.sh g2048`, `git diff --check`, `bash -n` for all milestone 04m runners, and `PYTHONPATH=$PWD python -m pytest tests/metal/test_overlay_surface.py`.
+- First milestone 04m suite: `breakout` artifact `20260527T043601+0300-breakout` at `3,427,071` SPS, train score `2.417233467102051`, eval score `0.0`. `g2048` artifact `20260527T043612+0300-g2048` at `599,462` SPS, train score `97.85507202148438`, eval score `49.43283462524414`.
+- Second milestone 04m suite: `breakout` artifact `20260527T043636+0300-breakout` at `3,448,160` SPS, train score `2.4175572395324707`, eval score `0.0`. `g2048` artifact `20260527T043647+0300-g2048` at `595,554` SPS, train score `97.85507202148438`, eval score `49.43283462524414`.
+- Extra breakout runner: `20260527T043714+0300-breakout` at `3,420,879` SPS, train score `2.210171937942505`, eval score `0.0`. This extra run was added because the two-run breakout median narrowly missed the 1 percent gate.
+- Medians: `breakout` three-run median `3,427,071` SPS, `-1.35%` versus milestone 04l accepted median `3,473,973`; `g2048` two-run median `597,508` SPS, `+0.02%` versus milestone 04l accepted median `597,374`.
+- Native Metal parity and overlay surface passed in both milestone 04m suites.
+- Decision: rejected. The candidate exceeded the 1 percent breakout SPS gate, so `src/metal/shader_src.h` was restored to the 04l accepted state. Only rejection artifacts, runner scripts, overlay allowlist, and this status entry remain for audit.
