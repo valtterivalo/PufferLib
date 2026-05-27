@@ -421,3 +421,21 @@
 - Medians: `breakout` two-run median `3,404,183` SPS, `-2.01%` versus milestone 04l accepted median `3,473,973`. `g2048` two-run median `592,422` SPS, `-0.83%` versus milestone 04l accepted median `597,374`.
 - Native Metal parity and overlay surface passed in both milestone 04p suites.
 - Decision: rejected. The candidate exceeded the 1 percent breakout SPS gate, so `src/metal/kernels.mm` was restored to the 04l accepted state. Only rejection artifacts, runner scripts, overlay allowlist, and this status entry remain for audit.
+
+## 2026-05-27 Milestone 04q Dead Prototype Cleanup Candidate
+
+- Root-cause hypothesis: three top-of-file forward declarations in `src/metal/kernels.mm` are no longer needed. `mtl_mingru_scan_forward_fp16`, `mtl_mingru_scan_backward_fp16`, and `mtl_assemble_decoder_grad_f32_to_f16` are all defined before their first call site. Removing these declarations should not change shader source, exported kernel names, host function definitions, call order, dispatch dimensions, buffer indices, math, RNG, or barriers.
+- Candidate code change: remove the unused fp16 MinGRU scan and fp16 decoder-gradient forward declarations; add dedicated milestone 04q runners and exact overlay allowlist paths.
+- LOC before validation: `src/metal/shader_src.h` is unchanged at `2,266`. `src/metal/kernels.mm` is `1,468`, down from accepted `1,477`. Kernel scope is `3,851`, down from accepted `3,860` and setup `4,615`. Backend scope is `9,450` after overlay allowlist growth, down from `9,455` after the rejected 04p audit commit.
+- Risk classification: low. This removes declarations only, not definitions or runtime control flow. Acceptance still requires build success, repeated `breakout` and `g2048`, native parity, overlay surface, interactive smoke, comparable train and eval scores, and subagent review.
+- Acceptance gate: use the dedicated `milestone-04q-dead-prototype-cleanup` runners, require median SPS within 1 percent of the current accepted baseline or better, require learnability and eval to remain comparable, and reject on compile, parity, determinism, or score drift.
+
+## 2026-05-27 Milestone 04q Dead Prototype Cleanup Results
+
+- Candidate code change: temporarily removed unused top-of-file declarations for fp16 MinGRU scans and fp16 decoder-gradient assembly. The candidate would have reduced `src/metal/kernels.mm` from `1,477` to `1,468` and kernel scope from `3,860` to `3,851`, but it is not kept.
+- Static validation passed before benchmark rejection: `tools/metal/build.sh breakout`, `tools/metal/build.sh g2048`, `git diff --check`, `bash -n` for all milestone 04q runners, and `PYTHONPATH=$PWD python -m pytest tests/metal/test_overlay_surface.py`.
+- First milestone 04q suite: `breakout` artifact `20260527T051443+0300-breakout` at `3,385,654` SPS, train score `2.2921934127807617`, eval score `0.0`. `g2048` artifact `20260527T051454+0300-g2048` at `597,725` SPS, train score `97.85507202148438`, eval score `49.43283462524414`.
+- Second milestone 04q suite: `breakout` artifact `20260527T051511+0300-breakout` at `3,384,780` SPS, train score `2.514263153076172`, eval score `0.0`. `g2048` artifact `20260527T051522+0300-g2048` at `606,069` SPS, train score `97.85507202148438`, eval score `49.43283462524414`.
+- Medians: `breakout` two-run median `3,385,217` SPS, `-2.55%` versus milestone 04l accepted median `3,473,973`. `g2048` two-run median `601,897` SPS, `+0.76%` versus milestone 04l accepted median `597,374`.
+- Native Metal parity and overlay surface passed in both milestone 04q suites.
+- Decision: rejected. The candidate exceeded the 1 percent breakout SPS gate, so `src/metal/kernels.mm` was restored to the 04l accepted state. Only rejection artifacts, runner scripts, overlay allowlist, and this status entry remain for audit.
