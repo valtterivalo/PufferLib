@@ -163,10 +163,8 @@ void puf_cast_u8_to_f32(PufTensor &dst, const PufTensor &src,
   auto pso = mtl_begin_kernel(ms, "cast_u8_to_f32");
   mtl_set_tensor(ms, dst, 0);
   mtl_set_tensor(ms, src, 1);
-  struct {
-    int count;
-  } params = {(int)src.numel()};
-  mtl_set_params(ms, params, 2);
+  int count = (int)src.numel();
+  mtl_set_params(ms, count, 2);
   mtl_dispatch_1d(ms, pso, (int)src.numel());
 }
 
@@ -304,10 +302,7 @@ void mtl_norm_f32(float *partials, const float *data, int count,
   auto pso = mtl_begin_kernel(ms, "norm_f32_kernel");
   mtl_set_ptr(ms, partials, 0);
   mtl_set_ptr(ms, data, 1);
-  struct {
-    int count;
-  } params = {count};
-  mtl_set_params(ms, params, 2);
+  mtl_set_params(ms, count, 2);
   mtl_dispatch_groups(ms, pso, num_blocks, 256);
 }
 
@@ -317,10 +312,7 @@ void mtl_norm_reduce(float *result, const float *partials, int num_blocks,
   auto pso = mtl_begin_kernel(ms, "norm_reduce_kernel");
   mtl_set_ptr(ms, result, 0);
   mtl_set_ptr(ms, partials, 1);
-  struct {
-    int num_blocks;
-  } params = {num_blocks};
-  mtl_set_params(ms, params, 2);
+  mtl_set_params(ms, num_blocks, 2);
   mtl_dispatch_groups(ms, pso, 1, 256);
 }
 
@@ -624,8 +616,8 @@ void ppo_loss_fwd_bwd(PufTensor &dec_out, PufTensor &logstd, TrainGraph &graph,
     mtl_set_ptr(ms, graph.mb_advantages.data, 0);
     mtl_set_ptr(ms, bufs.adv_scratch.data, 1);
     mtl_set_ptr(ms, bufs.adv_scratch.data + 1, 2);
-    struct { int count; } params = {(int)puf_numel(graph.mb_advantages.shape)};
-    mtl_set_params(ms, params, 3);
+    int count = (int)puf_numel(graph.mb_advantages.shape);
+    mtl_set_params(ms, count, 3);
     mtl_dispatch_groups(ms, pso, 1, 256);
   }
 
@@ -721,10 +713,7 @@ void ppo_loss_fwd_bwd(PufTensor &dec_out, PufTensor &logstd, TrainGraph &graph,
     mtl_set_ptr(ms, bufs.loss_output.data, 0);
     mtl_set_ptr(ms, losses_acc.data, 1);
     mtl_set_ptr(ms, ppo_partials_buf, 2);
-    struct {
-      int num_blocks;
-    } params = {ppo_grid};
-    mtl_set_params(ms, params, 3);
+    mtl_set_params(ms, ppo_grid, 3);
 
     mtl_dispatch_groups(ms, pso, 1, LOSS_N + 1);
   }
@@ -798,10 +787,7 @@ void prio_precompute(FloatTensor &advantages, float prio_alpha,
   {
     auto pso = mtl_begin_kernel(ms, "prio_normalize_kernel");
     mtl_set_ptr(ms, bufs.prio_probs.data, 0);
-    struct {
-      int S;
-    } params = {S};
-    mtl_set_params(ms, params, 1);
+    mtl_set_params(ms, S, 1);
     mtl_dispatch_groups(ms, pso, 1, 256);
   }
   mtl_barrier(ms); // normalize -> sample

@@ -1136,21 +1136,17 @@ kernel void ppo_loss_fwd_bwd_kernel(
 }
 
 // Deterministic reduction of per-block PPO loss partials + count increment
-struct PPOReduceParams {
-    int num_blocks;
-};
-
 kernel void ppo_loss_reduce_kernel(
     device float* loss                      [[buffer(0)]],
     device float* losses_acc                [[buffer(1)]],
     const device float* partials            [[buffer(2)]],
-    constant PPOReduceParams& pp            [[buffer(3)]],
+    constant int& num_blocks                [[buffer(3)]],
     uint tid [[thread_index_in_threadgroup]]
 ) {
     if ((int)tid > LOSS_N) return;
 
     float sum = 0.0f;
-    for (int b = 0; b < pp.num_blocks; b++) {
+    for (int b = 0; b < num_blocks; b++) {
         sum += partials[b * (LOSS_N + 1) + (int)tid];
     }
 
@@ -1238,13 +1234,9 @@ kernel void prio_adv_reduction_kernel(
     }
 }
 
-struct PrioNormParams {
-    int length;
-};
-
 kernel void prio_normalize_kernel(
     device float* prio_weights          [[buffer(0)]],
-    constant PrioNormParams& pp         [[buffer(1)]],
+    constant int& length                [[buffer(1)]],
     uint tx [[thread_index_in_threadgroup]],
     uint simd_lane [[thread_index_in_simdgroup]],
     uint simd_id [[simdgroup_index_in_threadgroup]]
@@ -1256,7 +1248,7 @@ kernel void prio_normalize_kernel(
     threadgroup float block_sum;
 
     float local_sum = 0.0f;
-    for (int t = (int)tx; t < pp.length; t += 256) {
+    for (int t = (int)tx; t < length; t += 256) {
         local_sum += prio_weights[t];
     }
 
@@ -1273,7 +1265,7 @@ kernel void prio_normalize_kernel(
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    for (int t = (int)tx; t < pp.length; t += 256) {
+    for (int t = (int)tx; t < length; t += 256) {
         prio_weights[t] = (prio_weights[t] + eps) / block_sum;
     }
 }
@@ -1393,26 +1385,22 @@ kernel void axpy_f32(
     if ((int)idx < p.n) dst[idx] += p.alpha * src[idx];
 }
 
-struct AddParams {
-    int n;
-};
-
 kernel void add_f32(
     device float* dst               [[buffer(0)]],
     const device float* src         [[buffer(1)]],
-    constant AddParams& p           [[buffer(2)]],
+    constant int& n                 [[buffer(2)]],
     uint idx [[thread_position_in_grid]]
 ) {
-    if ((int)idx < p.n) dst[idx] += src[idx];
+    if ((int)idx < n) dst[idx] += src[idx];
 }
 
 kernel void add_f16(
     device half* dst                [[buffer(0)]],
     const device half* src          [[buffer(1)]],
-    constant AddParams& p           [[buffer(2)]],
+    constant int& n                 [[buffer(2)]],
     uint idx [[thread_position_in_grid]]
 ) {
-    if ((int)idx < p.n) dst[idx] = half(float(dst[idx]) + float(src[idx]));
+    if ((int)idx < n) dst[idx] = half(float(dst[idx]) + float(src[idx]));
 }
 
 struct NesterovParams {
@@ -1523,15 +1511,11 @@ kernel void transpose_01_u64(
     transpose_01_body<uint2>(dst, src, p, idx);
 }
 
-struct NormParams {
-    int n;
-};
-
 // Per-block sum of squares (partial reduction)
 kernel void norm_f32_kernel(
     device float* partials              [[buffer(0)]],
     const device float* src             [[buffer(1)]],
-    constant NormParams& p              [[buffer(2)]],
+    constant int& n                     [[buffer(2)]],
     uint idx [[thread_position_in_grid]],
     uint tid [[thread_index_in_threadgroup]],
     uint block_id [[threadgroup_position_in_grid]],
@@ -1542,7 +1526,7 @@ kernel void norm_f32_kernel(
     constexpr int NUM_WARPS = 8;  // 256 / 32
     threadgroup float sdata[NUM_WARPS];
     float sum = 0.0f;
-    for (int i = (int)idx; i < p.n; i += (int)grid_size) {
+    for (int i = (int)idx; i < n; i += (int)grid_size) {
         sum += src[i] * src[i];
     }
     sum = simd_sum(sum);
@@ -1555,22 +1539,18 @@ kernel void norm_f32_kernel(
     }
 }
 
-struct NormReduceParams {
-    int num_blocks;
-};
-
 // Reduce per-block partials to a single sum-of-squares value
 kernel void norm_reduce_kernel(
     device float* out                   [[buffer(0)]],
     const device float* partials        [[buffer(1)]],
-    constant NormReduceParams& p        [[buffer(2)]],
+    constant int& num_blocks            [[buffer(2)]],
     uint tid [[thread_index_in_threadgroup]],
     uint simd_lane [[thread_index_in_simdgroup]],
     uint simd_id [[simdgroup_index_in_threadgroup]]
 ) {
     constexpr int NUM_WARPS = 8;
     threadgroup float sdata[NUM_WARPS];
-    float val = ((int)tid < p.num_blocks) ? partials[tid] : 0.0f;
+    float val = ((int)tid < num_blocks) ? partials[tid] : 0.0f;
     val = simd_sum(val);
     if (simd_lane == 0) sdata[simd_id] = val;
     threadgroup_barrier(mem_flags::mem_threadgroup);
@@ -1617,16 +1597,12 @@ kernel void normalize_f32(
     if ((int)idx < p.n) dst[idx] = dst[idx] * inv_norm;
 }
 
-struct VarMeanParams {
-    int n;
-};
-
 // Compute variance and mean of a float array (single threadgroup)
 kernel void var_mean_kernel(
     const device float* src         [[buffer(0)]],
     device float* var_out           [[buffer(1)]],
     device float* mean_out          [[buffer(2)]],
-    constant VarMeanParams& p       [[buffer(3)]],
+    constant int& n                 [[buffer(3)]],
     uint tid [[thread_index_in_threadgroup]],
     uint simd_lane [[thread_index_in_simdgroup]],
     uint simd_id [[simdgroup_index_in_threadgroup]]
@@ -1636,7 +1612,7 @@ kernel void var_mean_kernel(
 
     // Pass 1: compute mean
     float sum = 0.0f;
-    for (int i = (int)tid; i < p.n; i += 256) sum += src[i];
+    for (int i = (int)tid; i < n; i += 256) sum += src[i];
     sum = simd_sum(sum);
     if (simd_lane == 0) sdata[simd_id] = sum;
     threadgroup_barrier(mem_flags::mem_threadgroup);
@@ -1646,12 +1622,12 @@ kernel void var_mean_kernel(
         if (simd_lane == 0) sdata[0] = sum;
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
-    float mean = sdata[0] / float(p.n);
+    float mean = sdata[0] / float(n);
     if (tid == 0) *mean_out = mean;
 
     // Pass 2: compute variance
     float ss = 0.0f;
-    for (int i = (int)tid; i < p.n; i += 256) {
+    for (int i = (int)tid; i < n; i += 256) {
         float d = src[i] - mean;
         ss += d * d;
     }
@@ -1664,7 +1640,7 @@ kernel void var_mean_kernel(
         if (simd_lane == 0) sdata[0] = ss;
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
-    if (tid == 0) *var_out = sdata[0] / float(p.n - 1);
+    if (tid == 0) *var_out = sdata[0] / float(n - 1);
 }
 
 struct SumRowsParams {
@@ -1833,17 +1809,13 @@ kernel void index_gather_kernel(
                      p.row_bytes);
 }
 
-struct CastU8Params {
-    int n;
-};
-
 kernel void cast_u8_to_f32(
     device float* dst                       [[buffer(0)]],
     const device uchar* src                 [[buffer(1)]],
-    constant CastU8Params& p                [[buffer(2)]],
+    constant int& n                         [[buffer(2)]],
     uint idx [[thread_position_in_grid]]
 ) {
-    if ((int)idx < p.n) dst[idx] = float(src[idx]);
+    if ((int)idx < n) dst[idx] = float(src[idx]);
 }
 
 struct GemmParams {
