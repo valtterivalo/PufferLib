@@ -503,3 +503,22 @@
 - Native Metal parity and overlay surface passed in both milestone 04t suites.
 - Subagent review: Heisenberg found no blocking findings, verified the Metal source files were restored to the 04s state, checked benchmark arithmetic and rejection gate, confirmed 04t runners are scoped and non-recursive, checked exact overlay allowlist entries, and confirmed generated benchmark artifacts are ignored rather than staged.
 - Decision: rejected. The candidate exceeded the 1 percent SPS gate in both benchmark envs, so `src/metal/shader_src.h`, `src/metal/kernels.mm`, and `src/metal/platform.mm` were restored to the 04s accepted state. Only rejection artifacts, runner scripts, overlay allowlist, and this status entry remain for audit.
+
+## 2026-05-27 Milestone 04u Transpose Overload Cleanup Candidate
+
+- Root-cause hypothesis: `puf_transpose_01(FloatTensor)` duplicates the existing `PufTensor` transpose dispatch shape. Wrapping `FloatTensor` with the existing `float_tensor_as_puf` helper and delegating to the `PufTensor` overload should preserve exported shader names, buffer indices, dispatch dimensions, dtype, shape, data pointers, and stream order while deleting duplicate host code.
+- Candidate source change: replace the duplicated `FloatTensor` transpose dispatch body in `src/metal/kernels.mm` with a wrapper through `float_tensor_as_puf` and the `PufTensor` overload. Add dedicated milestone 04u runners and exact overlay allowlist paths.
+- LOC before validation: `src/metal/shader_src.h` is unchanged at `2,266`. `src/metal/kernels.mm` is `1,458`, down from accepted `1,468`. Full `src/metal/platform.mm` is unchanged at `1,088`. Kernel scope is `3,841`, down from accepted `3,851` and setup `4,615`. Backend scope is `9,456` after overlay allowlist growth, down from `9,462` after the rejected 04t audit commit.
+- Risk classification: low to medium. This is host dispatch cleanup on a live train-buffer transpose path, so acceptance still requires build success, repeated `breakout` and `g2048`, native parity, overlay surface, interactive smoke, comparable train and eval scores, and subagent review.
+- Acceptance gate: use the dedicated `milestone-04u-transpose-overload-cleanup` runners, require repeated medians within 1 percent of the current accepted 04s baseline or better, require train and eval scores to remain comparable, and reject on compile, parity, determinism, interactive, or score drift.
+
+## 2026-05-27 Milestone 04u Transpose Overload Cleanup Results
+
+- Candidate code change: temporarily delegated `puf_transpose_01(FloatTensor)` through `float_tensor_as_puf` and the existing `PufTensor` overload. The candidate would have reduced `src/metal/kernels.mm` from `1,468` to `1,458` and kernel scope from `3,851` to `3,841`, but it is not kept.
+- Static validation passed before benchmark rejection: `tools/metal/build.sh breakout`, `tools/metal/build.sh g2048`, `git diff --check`, `bash -n` for all milestone 04u runners, and `PYTHONPATH=$PWD python -m pytest tests/metal/test_overlay_surface.py`.
+- First milestone 04u suite: `breakout` artifact `20260527T054959+0300-breakout` at `3,401,395` SPS, train score `2.6614906787872314`, eval score `0.0`. `g2048` artifact `20260527T055011+0300-g2048` at `589,515` SPS, train score `97.85507202148438`, eval score `49.43283462524414`.
+- Second milestone 04u suite: `breakout` artifact `20260527T055027+0300-breakout` at `3,427,109` SPS, train score `2.2034149169921875`, eval score `0.0`. `g2048` artifact `20260527T055038+0300-g2048` at `586,936` SPS, train score `97.85507202148438`, eval score `49.43283462524414`.
+- Medians: `breakout` two-run median `3,414,252` SPS, `-1.71%` versus milestone 04s accepted median `3,473,550`. `g2048` two-run median `588,226` SPS, `-1.97%` versus milestone 04s accepted median `600,074`.
+- Native Metal parity and overlay surface passed in both milestone 04u suites.
+- Subagent review: Gauss found no blocking findings, verified `src/metal/kernels.mm` was restored to the 04s state, checked benchmark arithmetic and rejection gate, confirmed 04u runners are scoped and non-recursive, checked exact overlay allowlist entries, and confirmed generated benchmark artifacts are ignored rather than staged.
+- Decision: rejected. The candidate exceeded the 1 percent SPS gate in both benchmark envs, so `src/metal/kernels.mm` was restored to the 04s accepted state. Only rejection artifacts, runner scripts, overlay allowlist, and this status entry remain for audit.
