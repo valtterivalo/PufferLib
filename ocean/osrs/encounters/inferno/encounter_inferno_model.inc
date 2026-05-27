@@ -621,6 +621,15 @@ enum {
     INF_CURRICULUM_SUPPLY_MODE_PRE_ZUK = 3,
 };
 
+typedef enum {
+    INF_IDLE_PHASE_SET = 0,
+    INF_IDLE_PHASE_JAD = 1,
+    INF_IDLE_PHASE_ZUK_PRE_JAD = 2,
+    INF_IDLE_PHASE_ZUK_JAD = 3,
+    INF_IDLE_PHASE_ZUK_HEALERS = 4,
+    INF_IDLE_PHASE_ZUK_POST_HEALERS = 5,
+} InfIdleDiagnosticPhase;
+
 typedef struct {
     int brew_doses;
     int restore_doses;
@@ -834,6 +843,14 @@ typedef struct {
     int last_hit_by_type;      /* NPC type that last dealt damage to player (-1=none) */
     int killed_by_type[INF_NUM_NPC_TYPES];  /* count of deaths caused by each NPC type */
     int total_idle_ticks;      /* cumulative ticks of ticks_without_action > 0 */
+    int total_attack_ready_no_attack_ticks;
+    int total_target_available_no_attack_ticks;
+    int total_safe_attack_opportunity_missed_ticks;
+    int total_progressless_ticks;
+    int attack_ready_no_attack_ticks_by_phase[OSRS_INFERNO_IDLE_PHASE_COUNT];
+    int target_available_no_attack_ticks_by_phase[OSRS_INFERNO_IDLE_PHASE_COUNT];
+    int safe_attack_opportunity_missed_ticks_by_phase[OSRS_INFERNO_IDLE_PHASE_COUNT];
+    int progressless_ticks_by_phase[OSRS_INFERNO_IDLE_PHASE_COUNT];
     int total_brews_used;      /* brew doses consumed this episode */
     int total_blood_healed;    /* HP healed via blood barrage this episode */
     int total_npc_kills;       /* NPCs killed this episode */
