@@ -439,3 +439,22 @@
 - Medians: `breakout` two-run median `3,385,217` SPS, `-2.55%` versus milestone 04l accepted median `3,473,973`. `g2048` two-run median `601,897` SPS, `+0.76%` versus milestone 04l accepted median `597,374`.
 - Native Metal parity and overlay surface passed in both milestone 04q suites.
 - Decision: rejected. The candidate exceeded the 1 percent breakout SPS gate, so `src/metal/kernels.mm` was restored to the 04l accepted state. Only rejection artifacts, runner scripts, overlay allowlist, and this status entry remain for audit.
+
+## 2026-05-27 Milestone 04r No-Change Control Candidate
+
+- Root-cause hypothesis: 04o, 04p, and 04q all missed the frozen breakout gate, and 04q touched only forward declarations before restoration. A no-change control against the current accepted source can measure whether breakout throughput has drifted lower under current machine state before the next source edit. This does not alter the immutable plan or acceptance rules.
+- Candidate change: add dedicated no-change control runners and exact overlay allowlist paths only. No files in `src/metal` or `tools/metal` are changed.
+- LOC before validation: kernel scope is unchanged at `3,860`: `src/metal/shader_src.h` `2,266`, `src/metal/kernels.mm` `1,477`, and the tensor-ops shader block `117`. Backend scope is `9,463` after overlay allowlist growth, up from `9,459` after the rejected 04q audit commit. This is audit overhead only.
+- Risk classification: low. This is a harness/control milestone, not a backend source change. Acceptance requires build success, repeated `breakout` and `g2048`, native parity, overlay surface, and subagent review before committing the control record.
+- Acceptance gate: use the dedicated `milestone-04r-no-change-control` runners. Treat the results as a same-source control band for interpreting future benchmark noise, not as a retained optimization.
+
+## 2026-05-27 Milestone 04r No-Change Control Results
+
+- Code change: none in `src/metal` or `tools/metal`. This milestone adds only control runners, overlay allowlist entries, and this status record.
+- Static validation passed: `git diff --check`, `bash -n` for all milestone 04r runners, and `PYTHONPATH=$PWD python -m pytest tests/metal/test_overlay_surface.py`.
+- First no-change control suite: `breakout` artifact `20260527T052055+0300-breakout` at `3,443,166` SPS, train score `2.594615936279297`, eval score `0.0`. `g2048` artifact `20260527T052107+0300-g2048` at `602,775` SPS, train score `97.85507202148438`, eval score `49.43283462524414`.
+- Second no-change control suite: `breakout` artifact `20260527T052122+0300-breakout` at `3,437,052` SPS, train score `2.1233673095703125`, eval score `0.0`. `g2048` artifact `20260527T052133+0300-g2048` at `597,806` SPS, train score `97.85507202148438`, eval score `49.43283462524414`.
+- Medians: `breakout` two-run median `3,440,109` SPS, `-0.97%` versus milestone 04l accepted median `3,473,973`. `g2048` two-run median `600,291` SPS, `+0.49%` versus milestone 04l accepted median `597,374`.
+- Native Metal parity and overlay surface passed in both milestone 04r suites.
+- Interpretation: the current accepted source still lands inside the frozen breakout gate on paired control runs. The lower 04q declaration-only samples look like run noise rather than a durable baseline collapse. Future source candidates should still be judged against the accepted-source gate, with this control band used as noise context.
+- Decision: record control after subagent review. This is not a retained optimization.
