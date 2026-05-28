@@ -189,8 +189,8 @@ static void inf_write_obs_ctx(
         int has_melee_2 = 0, has_ranged_2 = 0, has_magic_2 = 0;
 
         /* 1. Pending hits (handles Jad, which checks prayer on impact) */
-        for (int h = 0; h < s->player_pending_hit_count; h++) {
-            EncounterPendingHit* ph = &s->player_pending_hits[h];
+        for (int h = 0; h < s->player_pending_hits.count; h++) {
+            EncounterPendingHit* ph = &s->player_pending_hits.hits[h];
             if (ph->check_prayer) {
                 int t = inf_pending_hit_obs_timer(ph);
                 if (t < min_timer) {
@@ -488,8 +488,8 @@ static void inf_write_obs_ctx(
 
     /* pending hits on player (INF_FEATURES_PER_HIT * ENCOUNTER_MAX_PENDING_HITS) */
     for (int h = 0; h < ENCOUNTER_MAX_PENDING_HITS; h++) {
-        if (h < s->player_pending_hit_count) {
-            EncounterPendingHit* ph = &s->player_pending_hits[h];
+        if (h < s->player_pending_hits.count) {
+            EncounterPendingHit* ph = &s->player_pending_hits.hits[h];
             obs[i++] = 1.0f;  /* active */
             obs[i++] = (ph->attack_style == ATTACK_STYLE_RANGED) ? 1.0f : 0.0f;
             obs[i++] = (ph->attack_style == ATTACK_STYLE_MAGIC) ? 1.0f : 0.0f;

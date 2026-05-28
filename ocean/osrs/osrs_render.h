@@ -5643,13 +5643,13 @@ void pvp_render(OsrsEnv* env) {
 
             /* pending hits */
             int mag_hits = 0, rng_hits = 0;
-            for (int h = 0; h < is->player_pending_hit_count; h++) {
-                if (is->player_pending_hits[h].attack_style == ATTACK_STYLE_MAGIC) mag_hits++;
+            for (int h = 0; h < is->player_pending_hits.count; h++) {
+                if (is->player_pending_hits.hits[h].attack_style == ATTACK_STYLE_MAGIC) mag_hits++;
                 else rng_hits++;
             }
-            if (is->player_pending_hit_count > 0) {
+            if (is->player_pending_hits.count > 0) {
                 DrawText(TextFormat("INCOMING: %d (%dM %dR)",
-                    is->player_pending_hit_count, mag_hits, rng_hits),
+                    is->player_pending_hits.count, mag_hits, rng_hits),
                     dx, dy, fs, (Color){255, 150, 150, 255});
             }
         }

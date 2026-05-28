@@ -187,7 +187,7 @@ static void inf_apply_npc_death(InfernoState* s, int npc_idx) {
     if (!osrs_npc_death_linger_start(
             npc->hp, npc->active, &npc->death_ticks, INF_NPC_DEATH_LINGER_TICKS))
         return;
-    inf_clear_npc_pending_hits(npc);
+    encounter_pending_hit_queue_clear(&npc->pending_hits);
     s->total_npc_kills++;
 
     if (npc->type == INF_NPC_BLOB)
@@ -1068,8 +1068,8 @@ static void inf_resolve_player_projectiles_on_npcs(InfernoState* s) {
     for (int i = 0; i < INF_MAX_NPCS; i++) {
         if (!s->npcs[i].active || s->npcs[i].death_ticks > 0) continue;
         InfNPC* npc = &s->npcs[i];
-        for (int h = 0; h < npc->pending_hit_count;) {
-            EncounterPendingHit* ph = &npc->pending_hits[h];
+        for (int h = 0; h < npc->pending_hits.count;) {
+            EncounterPendingHit* ph = &npc->pending_hits.hits[h];
             int spell = ph->spell_type;
             int hit_success = ph->hit_success;
             int old_hit_landed = npc->hit_landed_this_tick;
@@ -1080,7 +1080,7 @@ static void inf_resolve_player_projectiles_on_npcs(InfernoState* s) {
                 &npc->frozen_ticks, &blood_heal_acc, NULL);
             if (!landed) {
                 if (!ph->active) {
-                    inf_remove_npc_pending_hit(npc, h);
+                    encounter_pending_hit_queue_remove(&npc->pending_hits, h, "inferno npc");
                     continue;
                 }
                 h++;
@@ -1114,7 +1114,7 @@ static void inf_resolve_player_projectiles_on_npcs(InfernoState* s) {
                 npc->aggro_target = -1;
                 npc->stun_timer = 2;
             }
-            inf_remove_npc_pending_hit(npc, h);
+            encounter_pending_hit_queue_remove(&npc->pending_hits, h, "inferno npc");
             inf_apply_npc_death(s, i);
             if (!npc->active || npc->death_ticks > 0)
                 break;
@@ -1124,8 +1124,8 @@ static void inf_resolve_player_projectiles_on_npcs(InfernoState* s) {
 }
 
 static void inf_resolve_player_pending_hits_ctx(InfernoState* s, const InfernoContext* ctx) {
-    for (int i = 0; i < s->player_pending_hit_count; i++) {
-        EncounterPendingHit* hit = &s->player_pending_hits[i];
+    for (int i = 0; i < s->player_pending_hits.count; i++) {
+        EncounterPendingHit* hit = &s->player_pending_hits.hits[i];
 
         if (hit->check_prayer && hit->prayer_check_delay > 0 &&
             hit->source_npc_type != INF_NPC_JAD) {
@@ -1166,8 +1166,7 @@ static void inf_resolve_player_pending_hits_ctx(InfernoState* s, const InfernoCo
             }
             inf_apply_echo_boots_recoil(s, dmg);
             inf_damage_player_from_type(s, hit->source_npc_type, dmg);
-            s->player_pending_hits[i] =
-                s->player_pending_hits[--s->player_pending_hit_count];
+            encounter_pending_hit_queue_remove(&s->player_pending_hits, i, "inferno player");
             i--;
         }
     }
@@ -1181,8 +1180,8 @@ static void inf_resolve_jad_prayer_checks_after_player(
     InfernoState* s,
     const InfernoContext* ctx
 ) {
-    for (int i = 0; i < s->player_pending_hit_count; i++) {
-        EncounterPendingHit* hit = &s->player_pending_hits[i];
+    for (int i = 0; i < s->player_pending_hits.count; i++) {
+        EncounterPendingHit* hit = &s->player_pending_hits.hits[i];
         if (!hit->check_prayer ||
             hit->source_npc_type != INF_NPC_JAD ||
             hit->prayer_check_delay <= 0) {

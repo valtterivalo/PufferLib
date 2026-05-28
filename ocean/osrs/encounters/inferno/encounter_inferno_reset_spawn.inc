@@ -508,7 +508,7 @@ static void inf_deactivate_npc(InfernoState* s, int idx) {
     InfNPC* npc = &s->npcs[idx];
     if (npc->active && inf_npc_sets_collision_flag(npc->type))
         inf_unstamp_npc_collision_footprint(s, npc->x, npc->y, inf_npc_effective_size(npc));
-    inf_clear_npc_pending_hits(npc);
+    encounter_pending_hit_queue_clear(&npc->pending_hits);
     npc->active = 0;
 }
 
@@ -617,7 +617,7 @@ static void inf_spawn_wave(InfernoState* s) {
 
     /* clear all NPCs and pending hits */
     for (int i = 0; i < INF_MAX_NPCS; i++) s->npcs[i].active = 0;
-    s->player_pending_hit_count = 0;
+    encounter_pending_hit_queue_clear(&s->player_pending_hits);
     memset(s->npc_collision_flags, 0, sizeof(s->npc_collision_flags));
     inf_rebuild_player_collision_flags(s);
 

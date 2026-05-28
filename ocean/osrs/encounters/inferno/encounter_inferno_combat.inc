@@ -698,19 +698,17 @@ static void inf_npc_attack_ctx(InfernoState* s, InfernoContext* ctx, int idx) {
                rolled 0..max_hit, queued at T and lands at T+4 unchanged. */
             int max_hit = osrs_npc_magic_max_hit(stats->magic_base_dmg, stats->magic_dmg_pct);
             int dmg = encounter_rand_int(&s->rng_state, max_hit + 1);
-            if (s->player_pending_hit_count < ENCOUNTER_MAX_PENDING_HITS) {
-                EncounterPendingHit* ph = &s->player_pending_hits[s->player_pending_hit_count++];
-                ph->active = 1;
-                ph->damage = dmg;
-                ph->ticks_remaining = 4;
-                ph->attack_style = ATTACK_STYLE_NONE;  /* typeless — not blockable */
-                ph->check_prayer = 0;
-                ph->prayer_check_delay = 0;
-                ph->spell_type = 0;
-                ph->source_npc_type = npc->type;
-                ph->hit_success = 1;
-                ph->elysian_reduced = 0;
-            }
+            inf_queue_player_pending_hit(s, idx, npc->type, (EncounterPendingHit){
+                .damage = dmg,
+                .ticks_remaining = 4,
+                .attack_style = ATTACK_STYLE_NONE,
+                .check_prayer = 0,
+                .prayer_check_delay = 0,
+                .spell_type = 0,
+                .source_npc_type = npc->type,
+                .hit_success = 1,
+                .elysian_reduced = 0,
+            });
             s->last_hit_by_type = INF_NPC_ZUK;
             npc->attacked_this_tick = 1;
             npc->attack_style_this_tick = ATTACK_STYLE_MAGIC;
@@ -793,8 +791,13 @@ static void inf_npc_attack_ctx(InfernoState* s, InfernoContext* ctx, int idx) {
     if (hit_delay == 0) {
         /* melee: instant damage, check prayer now */
         int prayer_matches = encounter_prayer_correct_for_style(s->player.prayer, actual_style);
-          if (prayer_matches) { dmg = 0; s->prayer_correct_this_tick++; s->prayer_correct_by_type[npc->type]++; }
-          else if (dmg > 0) { s->off_prayer_hits_this_tick++; }
+        if (prayer_matches) {
+            dmg = 0;
+            s->prayer_correct_this_tick++;
+            s->prayer_correct_by_type[npc->type]++;
+        } else if (dmg > 0) {
+            s->off_prayer_hits_this_tick++;
+        }
         int elysian_reduced = 0;
         dmg = inf_apply_elysian_to_player_hit(s, dmg, &elysian_reduced);
         if (elysian_reduced) s->player.elysian_proc_this_tick = 1;
@@ -803,40 +806,43 @@ static void inf_npc_attack_ctx(InfernoState* s, InfernoContext* ctx, int idx) {
         if (dmg > 0) s->last_hit_by_type = npc->type;
         inf_damage_player_from_type(s, npc->type, dmg);
     } else {
-            /* ranged/magic: queue pending hit on player */
-        if (s->player_pending_hit_count < ENCOUNTER_MAX_PENDING_HITS) {
-            int is_jad = (npc->type == INF_NPC_JAD);
-            if (!is_jad) {
-                int prayer_matches = encounter_prayer_correct_for_style(s->player.prayer, actual_style);
-          if (prayer_matches) { dmg = 0; s->prayer_correct_this_tick++; s->prayer_correct_by_type[npc->type]++; }
-          else if (dmg > 0) { s->off_prayer_hits_this_tick++; }
+        /* ranged/magic: queue pending hit on player */
+        int is_jad = (npc->type == INF_NPC_JAD);
+        if (!is_jad) {
+            int prayer_matches = encounter_prayer_correct_for_style(s->player.prayer, actual_style);
+            if (prayer_matches) {
+                dmg = 0;
+                s->prayer_correct_this_tick++;
+                s->prayer_correct_by_type[npc->type]++;
+            } else if (dmg > 0) {
+                s->off_prayer_hits_this_tick++;
             }
-            if (!is_delayed_jad) {
-                s->dmg_from_type[npc->type] += (float)dmg;
-                if (dmg > 0) s->last_hit_by_type = npc->type;
-            }
-            /* bat stat drain: 50% chance on successful hit when not praying protect
-               from missiles, drain all combat stats by 1. ref: OSRS wiki Jal-MejRah */
-            if (npc->type == INF_NPC_BAT && dmg > 0 &&
-                encounter_rand_int(&s->rng_state, 2) == 0) {
-                if (s->player.current_attack > 0) s->player.current_attack--;
-                if (s->player.current_strength > 0) s->player.current_strength--;
-                if (s->player.current_defence > 0) s->player.current_defence--;
-                if (s->player.current_ranged > 0) s->player.current_ranged--;
-                if (s->player.current_magic > 0) s->player.current_magic--;
-            }
-            EncounterPendingHit* ph = &s->player_pending_hits[s->player_pending_hit_count++];
-            ph->active = 1;
-            ph->damage = dmg;
-            ph->ticks_remaining = hit_delay;
-            ph->attack_style = actual_style;
-            ph->check_prayer = is_jad ? 1 : 0;
-            ph->prayer_check_delay = is_jad ? INF_JAD_PROJECTILE_DELAY + 1 : 0;
-            ph->spell_type = 0;
-            ph->source_npc_type = npc->type;
-            ph->hit_success = accuracy_hit;
-            ph->elysian_reduced = 0;
         }
+        if (!is_delayed_jad) {
+            s->dmg_from_type[npc->type] += (float)dmg;
+            if (dmg > 0) s->last_hit_by_type = npc->type;
+        }
+        /* bat stat drain: 50% chance on successful hit when not praying protect
+           from missiles, drain all combat stats by 1. ref: OSRS wiki Jal-MejRah */
+        if (npc->type == INF_NPC_BAT && dmg > 0 &&
+            encounter_rand_int(&s->rng_state, 2) == 0) {
+            if (s->player.current_attack > 0) s->player.current_attack--;
+            if (s->player.current_strength > 0) s->player.current_strength--;
+            if (s->player.current_defence > 0) s->player.current_defence--;
+            if (s->player.current_ranged > 0) s->player.current_ranged--;
+            if (s->player.current_magic > 0) s->player.current_magic--;
+        }
+        inf_queue_player_pending_hit(s, idx, npc->type, (EncounterPendingHit){
+            .damage = dmg,
+            .ticks_remaining = hit_delay,
+            .attack_style = actual_style,
+            .check_prayer = is_jad ? 1 : 0,
+            .prayer_check_delay = is_jad ? INF_JAD_PROJECTILE_DELAY + 1 : 0,
+            .spell_type = 0,
+            .source_npc_type = npc->type,
+            .hit_success = accuracy_hit,
+            .elysian_reduced = 0,
+        });
     }
 
     npc->attacked_this_tick = 1;

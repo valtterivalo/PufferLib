@@ -436,8 +436,8 @@ static InfIdleDiagnosticPhase inf_idle_diagnostic_phase(const InfernoState* s) {
 
 static int inf_player_has_immediate_threat(const InfernoState* s) {
     if (s->tick_attacks_fired > 0) return 1;
-    for (int h = 0; h < s->player_pending_hit_count; h++) {
-        const EncounterPendingHit* ph = &s->player_pending_hits[h];
+    for (int h = 0; h < s->player_pending_hits.count; h++) {
+        const EncounterPendingHit* ph = &s->player_pending_hits.hits[h];
         if (ph->check_prayer && inf_pending_hit_obs_timer(ph) <= 1)
             return 1;
     }

@@ -228,7 +228,7 @@ static void test_lab_snapshot_restore_round_trip(void) {
     state->rng_state = 0x1234abcd;
     state->player.brew_doses = 7;
     state->player.restore_doses = 11;
-    state->player_pending_hit_count = 2;
+    state->player_pending_hits.count = 2;
 
     size_t snapshot_size = ENCOUNTER_INFERNO.snapshot_size(
         (EncounterState*)state, (EncounterContext*)inf_legacy_context());
@@ -259,7 +259,7 @@ static void test_lab_snapshot_restore_round_trip(void) {
     state->rng_state = 7;
     state->player.brew_doses = 0;
     state->player.restore_doses = 0;
-    state->player_pending_hit_count = 0;
+    encounter_pending_hit_queue_clear(&state->player_pending_hits);
 
     ENCOUNTER_INFERNO.restore(
         (EncounterState*)state,
@@ -280,7 +280,7 @@ static void test_lab_snapshot_restore_round_trip(void) {
     ASSERT_INT_EQ("restored rng", (int)state->rng_state, (int)0x1234abcd);
     ASSERT_INT_EQ("restored brews", state->player.brew_doses, 7);
     ASSERT_INT_EQ("restored restores", state->player.restore_doses, 11);
-    ASSERT_INT_EQ("restored pending hits", state->player_pending_hit_count, 2);
+    ASSERT_INT_EQ("restored pending hits", state->player_pending_hits.count, 2);
 
     free(snapshot);
     inf_destroy((EncounterState*)state);

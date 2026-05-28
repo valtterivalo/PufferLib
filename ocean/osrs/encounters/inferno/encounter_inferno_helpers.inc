@@ -2,11 +2,6 @@
 /* prayer check and RNG: use shared encounter_prayer_correct_for_style(),
    encounter_rand_int(), encounter_rand_float() from osrs_combat.h */
 
-static void inf_clear_npc_pending_hits(InfNPC* npc) {
-    memset(npc->pending_hits, 0, sizeof(npc->pending_hits));
-    npc->pending_hit_count = 0;
-}
-
 static EncounterPendingHit* inf_queue_npc_pending_hit(
     InfernoState* s,
     int npc_idx,
@@ -31,18 +26,7 @@ static EncounterPendingHit* inf_queue_npc_pending_hit(
         abort();
     }
 
-    if (npc->pending_hit_count >= ENCOUNTER_MAX_PENDING_HITS) {
-        fprintf(stderr,
-            "inferno: npc pending-hit queue overflow tick=%d slot=%d type=%d "
-            "count=%d delay=%d style=%d spell=%d damage=%d\n",
-            s->tick, npc_idx, npc->type, npc->pending_hit_count,
-            ticks_remaining, attack_style, spell_type, damage);
-        abort();
-    }
-
-    EncounterPendingHit* ph = &npc->pending_hits[npc->pending_hit_count++];
-    *ph = (EncounterPendingHit){
-        .active = 1,
+    EncounterPendingHit hit = {
         .damage = damage,
         .ticks_remaining = ticks_remaining,
         .attack_style = attack_style,
@@ -51,42 +35,18 @@ static EncounterPendingHit* inf_queue_npc_pending_hit(
         .hit_success = hit_success,
         .elysian_reduced = 0,
     };
-    return ph;
+    return encounter_pending_hit_queue_push(
+        &npc->pending_hits, hit, "inferno npc", s->tick, npc_idx, npc->type);
 }
 
-static void inf_remove_npc_pending_hit(InfNPC* npc, int idx) {
-    if (idx < 0 || idx >= npc->pending_hit_count) {
-        fprintf(stderr, "inferno: invalid pending-hit remove idx %d count %d\n",
-            idx, npc->pending_hit_count);
-        abort();
-    }
-    for (int i = idx + 1; i < npc->pending_hit_count; i++)
-        npc->pending_hits[i - 1] = npc->pending_hits[i];
-    npc->pending_hit_count--;
-    memset(&npc->pending_hits[npc->pending_hit_count], 0,
-        sizeof(npc->pending_hits[npc->pending_hit_count]));
-}
-
-static const EncounterPendingHit* inf_earliest_npc_pending_hit(
-    const InfNPC* npc
+static EncounterPendingHit* inf_queue_player_pending_hit(
+    InfernoState* s,
+    int npc_idx,
+    int npc_type,
+    EncounterPendingHit hit
 ) {
-    const EncounterPendingHit* best = NULL;
-    for (int i = 0; i < npc->pending_hit_count; i++) {
-        const EncounterPendingHit* ph = &npc->pending_hits[i];
-        if (!ph->active) continue;
-        if (!best || ph->ticks_remaining < best->ticks_remaining)
-            best = ph;
-    }
-    return best;
-}
-
-static int inf_npc_pending_hit_damage_sum(const InfNPC* npc) {
-    int total = 0;
-    for (int i = 0; i < npc->pending_hit_count; i++) {
-        if (npc->pending_hits[i].active)
-            total += npc->pending_hits[i].damage;
-    }
-    return total;
+    return encounter_pending_hit_queue_push(
+        &s->player_pending_hits, hit, "inferno player", s->tick, npc_idx, npc_type);
 }
 
 static void inf_shuffle_spawns(InfernoState* s) {

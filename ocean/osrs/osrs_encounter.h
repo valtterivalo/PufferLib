@@ -132,6 +132,88 @@ typedef struct {
     int elysian_reduced;   /* shield proc already applied before queuing */
 } EncounterPendingHit;
 
+typedef struct {
+    EncounterPendingHit hits[ENCOUNTER_MAX_PENDING_HITS];
+    int count;
+} EncounterPendingHitQueue;
+
+static inline void encounter_pending_hit_queue_clear(EncounterPendingHitQueue* q) {
+    memset(q, 0, sizeof(*q));
+}
+
+static inline EncounterPendingHit* encounter_pending_hit_queue_push(
+    EncounterPendingHitQueue* q,
+    EncounterPendingHit hit,
+    const char* owner_label,
+    int tick,
+    int slot,
+    int type
+) {
+    if (q->count < 0 || q->count > ENCOUNTER_MAX_PENDING_HITS) {
+        fprintf(stderr,
+            "%s pending-hit queue corrupt tick=%d slot=%d type=%d count=%d\n",
+            owner_label, tick, slot, type, q->count);
+        abort();
+    }
+    if (q->count >= ENCOUNTER_MAX_PENDING_HITS) {
+        fprintf(stderr,
+            "%s pending-hit queue overflow tick=%d slot=%d type=%d count=%d "
+            "delay=%d style=%d spell=%d damage=%d\n",
+            owner_label, tick, slot, type, q->count,
+            hit.ticks_remaining, hit.attack_style, hit.spell_type, hit.damage);
+        abort();
+    }
+
+    hit.active = 1;
+    q->hits[q->count] = hit;
+    return &q->hits[q->count++];
+}
+
+static inline void encounter_pending_hit_queue_remove(
+    EncounterPendingHitQueue* q,
+    int idx,
+    const char* owner_label
+) {
+    if (q->count < 0 || q->count > ENCOUNTER_MAX_PENDING_HITS) {
+        fprintf(stderr, "%s pending-hit queue corrupt before remove count=%d\n",
+            owner_label, q->count);
+        abort();
+    }
+    if (idx < 0 || idx >= q->count) {
+        fprintf(stderr, "%s pending-hit queue invalid remove idx=%d count=%d\n",
+            owner_label, idx, q->count);
+        abort();
+    }
+    for (int i = idx + 1; i < q->count; i++)
+        q->hits[i - 1] = q->hits[i];
+    q->count--;
+    memset(&q->hits[q->count], 0, sizeof(q->hits[q->count]));
+}
+
+static inline const EncounterPendingHit* encounter_pending_hit_queue_earliest(
+    const EncounterPendingHitQueue* q
+) {
+    const EncounterPendingHit* best = NULL;
+    for (int i = 0; i < q->count; i++) {
+        const EncounterPendingHit* hit = &q->hits[i];
+        if (!hit->active) continue;
+        if (!best || hit->ticks_remaining < best->ticks_remaining)
+            best = hit;
+    }
+    return best;
+}
+
+static inline int encounter_pending_hit_queue_damage_sum(
+    const EncounterPendingHitQueue* q
+) {
+    int total = 0;
+    for (int i = 0; i < q->count; i++) {
+        if (q->hits[i].active)
+            total += q->hits[i].damage;
+    }
+    return total;
+}
+
 /* visual overlay data: shared between encounter and renderer.
    encounter's render_post_tick populates this, renderer reads it. */
 #define ENCOUNTER_MAX_OVERLAY_TILES 16
@@ -1411,45 +1493,46 @@ static inline int encounter_resolve_npc_pending_hit(
     prayer_correct_count: incremented for each deferred prayer check that succeeds.
     multiple hits can land on the same tick (e.g. mager + ranger). */
 static inline void encounter_resolve_player_pending_hits(
-    EncounterPendingHit* hits, int* hit_count,
+    EncounterPendingHitQueue* queue,
     Player* player, OverheadPrayer active_prayer,
     float* damage_received_acc, int* prayer_correct_count,
     int* off_prayer_hit_count
 ) {
-    for (int i = 0; i < *hit_count; i++) {
+    for (int i = 0; i < queue->count; i++) {
+        EncounterPendingHit* hit = &queue->hits[i];
         /* deferred prayer check (jad): lock in damage at T + prayer_check_delay.
            runs BEFORE ticks_remaining decrement so the check happens on the exact
            tick prayer_check_delay reaches 0, regardless of whether the hit lands
            same tick or later. after the check, damage is frozen (possibly 0)
            and further flicks don't affect this hit. */
-        if (hits[i].check_prayer && hits[i].prayer_check_delay > 0) {
-            hits[i].prayer_check_delay--;
-            if (hits[i].prayer_check_delay == 0) {
-                if (encounter_prayer_correct_for_style(active_prayer, hits[i].attack_style)) {
-                    hits[i].damage = 0;
+        if (hit->check_prayer && hit->prayer_check_delay > 0) {
+            hit->prayer_check_delay--;
+            if (hit->prayer_check_delay == 0) {
+                if (encounter_prayer_correct_for_style(active_prayer, hit->attack_style)) {
+                    hit->damage = 0;
                     if (prayer_correct_count) (*prayer_correct_count)++;
-                } else if (hits[i].damage > 0 && hits[i].attack_style != ATTACK_STYLE_NONE) {
+                } else if (hit->damage > 0 && hit->attack_style != ATTACK_STYLE_NONE) {
                     if (off_prayer_hit_count) (*off_prayer_hit_count)++;
                 }
-                hits[i].check_prayer = 0;
+                hit->check_prayer = 0;
             }
         }
-        hits[i].ticks_remaining--;
-        if (hits[i].ticks_remaining <= 0) {
-            int dmg = hits[i].damage;
-            if (hits[i].check_prayer) {
-                if (encounter_prayer_correct_for_style(active_prayer, hits[i].attack_style)) {
+        hit->ticks_remaining--;
+        if (hit->ticks_remaining <= 0) {
+            int dmg = hit->damage;
+            if (hit->check_prayer) {
+                if (encounter_prayer_correct_for_style(active_prayer, hit->attack_style)) {
                     dmg = 0;
                     if (prayer_correct_count) (*prayer_correct_count)++;
-                } else if (dmg > 0 && hits[i].attack_style != ATTACK_STYLE_NONE) {
+                } else if (dmg > 0 && hit->attack_style != ATTACK_STYLE_NONE) {
                     if (off_prayer_hit_count) (*off_prayer_hit_count)++;
                 }
-            } else if (dmg > 0 && hits[i].attack_style != ATTACK_STYLE_NONE) {
+            } else if (dmg > 0 && hit->attack_style != ATTACK_STYLE_NONE) {
                 if (off_prayer_hit_count) (*off_prayer_hit_count)++;
             }
 
             encounter_damage_player(player, dmg, damage_received_acc);
-            hits[i] = hits[--(*hit_count)];
+            encounter_pending_hit_queue_remove(queue, i, "player");
             i--;
         }
     }

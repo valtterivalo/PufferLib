@@ -108,8 +108,8 @@ static float inf_zuk_attack_timer_obs(const InfernoState* s) {
         min_timer = timer;
     }
 
-    for (int h = 0; h < s->player_pending_hit_count; h++) {
-        const EncounterPendingHit* hit = &s->player_pending_hits[h];
+    for (int h = 0; h < s->player_pending_hits.count; h++) {
+        const EncounterPendingHit* hit = &s->player_pending_hits.hits[h];
         if (hit->source_npc_type != INF_NPC_ZUK) continue;
         if (hit->ticks_remaining < min_timer)
             min_timer = hit->ticks_remaining;
