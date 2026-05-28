@@ -545,10 +545,10 @@ static void test_final_wave_reward_applies_healer_tags_and_heal_cost(void) {
     inf_put_float((EncounterState*)&healing_state, "shield_penalty_coeff", 0.01f);
     inf_put_float((EncounterState*)&healing_state, "tag_reward_coeff", 0.25f);
     healing_state.wave = INF_NUM_WAVES - 1;
-    healing_state.damage_dealt_this_tick = 50.0f;
-    healing_state.hp_restored_this_tick = 10.0f;
-    healing_state.shield_damage_this_tick = 7.0f;
-    healing_state.healer_tags_this_tick = 2;
+    healing_state.tick_scratch.damage_dealt = 50.0f;
+    healing_state.tick_scratch.hp_restored = 10.0f;
+    healing_state.tick_scratch.shield_damage = 7.0f;
+    healing_state.tick_scratch.healer_tags = 2;
     healing_state.npcs[0] = make_test_npc(INF_NPC_HEALER_ZUK, 26, 24, 1);
     healing_state.npcs[0].active = 1;
     healing_state.npcs[0].aggro_target = 1;
@@ -560,7 +560,7 @@ static void test_final_wave_reward_applies_healer_tags_and_heal_cost(void) {
     damage_state = healing_state;
     damage_state.wave = 0;
     damage_state.npcs[0].aggro_target = -1;
-    damage_state.healer_tags_this_tick = 0;
+    damage_state.tick_scratch.healer_tags = 0;
 
     ASSERT_FLOAT_NEAR("active healer reward includes tags, heal cost, and shield penalty",
         inf_compute_reward(&healing_state), 0.33f, 0.0001f);
@@ -587,37 +587,37 @@ static void test_final_wave_reward_uses_zuk_low_watermark_progress(void) {
     state.npcs[1] = make_test_npc(INF_NPC_JAD, 24, 32, 5);
     state.npcs[1].active = 1;
 
-    state.damage_dealt_this_tick = 250.0f;
-    state.hp_restored_this_tick = 100.0f;
-    state.shield_damage_this_tick = 7.0f;
+    state.tick_scratch.damage_dealt = 250.0f;
+    state.tick_scratch.hp_restored = 100.0f;
+    state.tick_scratch.shield_damage = 7.0f;
     ASSERT_FLOAT_NEAR("first zuk low watermark pays progress minus shield penalty",
         inf_compute_reward(&state), 0.43f, 0.0001f);
     ASSERT_FLOAT_NEAR("first zuk low watermark updates state",
         state.min_zuk_hp_seen, 1150.0f, 0.0001f);
 
-    state.damage_dealt_this_tick = 400.0f;
-    state.hp_restored_this_tick = 0.0f;
-    state.shield_damage_this_tick = 0.0f;
+    state.tick_scratch.damage_dealt = 400.0f;
+    state.tick_scratch.hp_restored = 0.0f;
+    state.tick_scratch.shield_damage = 0.0f;
     ASSERT_FLOAT_NEAR("repeated hits at same zuk hp give zero reward",
         inf_compute_reward(&state), 0.0f, 0.0001f);
     ASSERT_FLOAT_NEAR("same-hp hits keep low watermark",
         state.min_zuk_hp_seen, 1150.0f, 0.0001f);
 
-    state.damage_dealt_this_tick = 600.0f;
+    state.tick_scratch.damage_dealt = 600.0f;
     state.npcs[0].hp = 1180;
     ASSERT_FLOAT_NEAR("healed zuk above low watermark gives zero reward",
         inf_compute_reward(&state), 0.0f, 0.0001f);
     ASSERT_FLOAT_NEAR("healed zuk does not revoke low watermark",
         state.min_zuk_hp_seen, 1150.0f, 0.0001f);
 
-    state.damage_dealt_this_tick = 900.0f;
+    state.tick_scratch.damage_dealt = 900.0f;
     ASSERT_FLOAT_NEAR("non-zuk damage without new low watermark gives zero reward",
         inf_compute_reward(&state), 0.0f, 0.0001f);
     ASSERT_FLOAT_NEAR("non-zuk damage leaves low watermark unchanged",
         state.min_zuk_hp_seen, 1150.0f, 0.0001f);
 
     state.npcs[0].hp = 1140;
-    state.damage_dealt_this_tick = 50.0f;
+    state.tick_scratch.damage_dealt = 50.0f;
     ASSERT_FLOAT_NEAR("new lower zuk hp pays only incremental progress",
         inf_compute_reward(&state), 0.10f, 0.0001f);
     ASSERT_FLOAT_NEAR("new lower zuk hp refreshes low watermark",
@@ -678,8 +678,8 @@ static void test_final_wave_reward_pays_zuk_healer_damage(void) {
     state.wave = INF_NUM_WAVES - 1;
     state.min_zuk_hp_seen = 240.0f;
     state.zuk.healer_spawned = 1;
-    state.damage_dealt_this_tick = 31.0f;
-    state.damage_zuk_healers_this_tick = 31.0f;
+    state.tick_scratch.damage_dealt = 31.0f;
+    state.tick_scratch.damage_zuk_healers = 31.0f;
     state.npcs[0] = make_test_npc(INF_NPC_ZUK, 22, 50, 5);
     state.npcs[0].active = 1;
     state.npcs[0].hp = 240;
@@ -705,8 +705,8 @@ static void test_post_healer_zuk_damage_reward_is_after_clear_only(void) {
     state.min_zuk_hp_seen = 180.0f;
     state.zuk.healer_spawned = 1;
     state.tick_at_all_zuk_healers_dead = -1;
-    state.damage_dealt_this_tick = 50.0f;
-    state.damage_zuk_this_tick = 50.0f;
+    state.tick_scratch.damage_dealt = 50.0f;
+    state.tick_scratch.damage_zuk = 50.0f;
     state.npcs[0] = make_test_npc(INF_NPC_ZUK, 22, 50, 5);
     state.npcs[0].active = 1;
     state.npcs[0].hp = 220;
@@ -732,8 +732,8 @@ static void test_zuk_healer_phase_hp_delta_default_preserves_low_watermark(void)
     state.wave = INF_NUM_WAVES - 1;
     state.zuk.healer_spawned = 1;
     state.min_zuk_hp_seen = 180.0f;
-    state.damage_zuk_this_tick = 50.0f;
-    state.damage_dealt_this_tick = 50.0f;
+    state.tick_scratch.damage_zuk = 50.0f;
+    state.tick_scratch.damage_dealt = 50.0f;
     state.npcs[0] = make_test_npc(INF_NPC_ZUK, 22, 50, 5);
     state.npcs[0].active = 1;
     state.npcs[0].hp = 220;
@@ -755,8 +755,8 @@ static void test_zuk_healer_phase_hp_delta_pays_healed_back_zuk_damage(void) {
     state.wave = INF_NUM_WAVES - 1;
     state.zuk.healer_spawned = 1;
     state.min_zuk_hp_seen = 180.0f;
-    state.damage_zuk_this_tick = 50.0f;
-    state.damage_dealt_this_tick = 50.0f;
+    state.tick_scratch.damage_zuk = 50.0f;
+    state.tick_scratch.damage_dealt = 50.0f;
     state.npcs[0] = make_test_npc(INF_NPC_ZUK, 22, 50, 5);
     state.npcs[0].active = 1;
     state.npcs[0].hp = 220;
@@ -778,8 +778,8 @@ static void test_zuk_healer_phase_hp_delta_avoids_double_pay_below_low_watermark
     state.wave = INF_NUM_WAVES - 1;
     state.zuk.healer_spawned = 1;
     state.min_zuk_hp_seen = 245.0f;
-    state.damage_zuk_this_tick = 10.0f;
-    state.damage_dealt_this_tick = 10.0f;
+    state.tick_scratch.damage_zuk = 10.0f;
+    state.tick_scratch.damage_dealt = 10.0f;
     state.npcs[0] = make_test_npc(INF_NPC_ZUK, 22, 50, 5);
     state.npcs[0].active = 1;
     state.npcs[0].hp = 235;
@@ -801,8 +801,8 @@ static void test_zuk_healer_phase_hp_delta_penalizes_zuk_healing_once(void) {
     state.wave = INF_NUM_WAVES - 1;
     state.zuk.healer_spawned = 1;
     state.min_zuk_hp_seen = 180.0f;
-    state.hp_restored_this_tick = 40.0f;
-    state.hp_restored_zuk_this_tick = 40.0f;
+    state.tick_scratch.hp_restored = 40.0f;
+    state.tick_scratch.hp_restored_zuk = 40.0f;
     state.npcs[0] = make_test_npc(INF_NPC_ZUK, 22, 50, 5);
     state.npcs[0].active = 1;
     state.npcs[0].hp = 220;
@@ -827,10 +827,10 @@ static void test_zuk_healer_phase_hp_delta_pays_net_same_tick_delta(void) {
     state.wave = INF_NUM_WAVES - 1;
     state.zuk.healer_spawned = 1;
     state.min_zuk_hp_seen = 180.0f;
-    state.damage_zuk_this_tick = 50.0f;
-    state.damage_dealt_this_tick = 50.0f;
-    state.hp_restored_this_tick = 20.0f;
-    state.hp_restored_zuk_this_tick = 20.0f;
+    state.tick_scratch.damage_zuk = 50.0f;
+    state.tick_scratch.damage_dealt = 50.0f;
+    state.tick_scratch.hp_restored = 20.0f;
+    state.tick_scratch.hp_restored_zuk = 20.0f;
     state.npcs[0] = make_test_npc(INF_NPC_ZUK, 22, 50, 5);
     state.npcs[0].active = 1;
     state.npcs[0].hp = 220;
@@ -855,8 +855,8 @@ static void test_zuk_healer_phase_hp_delta_keeps_non_zuk_heal_cost(void) {
     state.wave = INF_NUM_WAVES - 1;
     state.zuk.healer_spawned = 1;
     state.min_zuk_hp_seen = 180.0f;
-    state.hp_restored_this_tick = 30.0f;
-    state.hp_restored_zuk_this_tick = 0.0f;
+    state.tick_scratch.hp_restored = 30.0f;
+    state.tick_scratch.hp_restored_zuk = 0.0f;
     state.npcs[0] = make_test_npc(INF_NPC_ZUK, 22, 50, 5);
     state.npcs[0].active = 1;
     state.npcs[0].hp = 220;
@@ -892,7 +892,7 @@ static void test_post_healer_set_damage_reward_defaults_off(void) {
 
     InfernoState state;
     init_post_healer_set_reward_state(&state);
-    state.damage_set_this_tick = 50.0f;
+    state.tick_scratch.damage_set = 50.0f;
 
     ASSERT_FLOAT_NEAR("default post-healer set damage reward is off",
         inf_compute_reward(&state), 0.0f, 0.0001f);
@@ -905,7 +905,7 @@ static void test_post_healer_set_damage_reward_pays_after_healer_clear(void) {
     init_post_healer_set_reward_state(&state);
     inf_put_float((EncounterState*)&state,
         "post_healer_set_damage_reward_coeff", 0.002f);
-    state.damage_set_this_tick = 50.0f;
+    state.tick_scratch.damage_set = 50.0f;
 
     ASSERT_FLOAT_NEAR("post-healer set damage is rewarded",
         inf_compute_reward(&state), 0.10f, 0.0001f);
@@ -917,7 +917,7 @@ static void test_post_healer_set_kill_bonus_uses_existing_emitter(void) {
     InfernoState state;
     init_post_healer_set_reward_state(&state);
     inf_put_float((EncounterState*)&state, "post_healer_set_kill_bonus", 0.09f);
-    state.kill_set_this_tick = 1;
+    state.tick_scratch.kill_set = 1;
 
     ASSERT_FLOAT_NEAR("post-healer set kill bonus emits through set channel",
         inf_compute_reward(&state), 0.03f, 0.0001f);
@@ -1030,7 +1030,7 @@ static void test_zuk_untagged_healer_target_bonus_defaults_off(void) {
     inf_tick_player(&state, actions, 1);
 
     ASSERT_INT_EQ("default target bonus pays no per-tick target reward",
-        state.zuk_untagged_healer_targets_this_tick, 0);
+        state.tick_scratch.zuk_untagged_healer_targets, 0);
     ASSERT_INT_EQ("default target bonus still records target attempts",
         state.total_zuk_untagged_healer_targets, 1);
     ASSERT_FLOAT_NEAR("default target bonus pays nothing",
@@ -1071,24 +1071,24 @@ static void test_zuk_untagged_healer_target_bonus_rewards_distinct_healers(void)
     inf_tick_player(&state, actions, 1);
 
     ASSERT_INT_EQ("first untagged healer target rewarded",
-        state.zuk_untagged_healer_targets_this_tick, 1);
+        state.tick_scratch.zuk_untagged_healer_targets, 1);
     ASSERT_INT_EQ("first untagged healer target reward count",
         state.total_zuk_untagged_healer_target_rewards, 1);
     ASSERT_FLOAT_NEAR("first untagged healer target reward",
         inf_compute_reward(&state), 0.07f, 0.0001f);
 
-    state.zuk_untagged_healer_targets_this_tick = 0;
+    state.tick_scratch.zuk_untagged_healer_targets = 0;
     actions[INF_HEAD_TARGET] = 34;
     inf_tick_player(&state, actions, 1);
 
     ASSERT_INT_EQ("repeat target does not reward twice",
-        state.zuk_untagged_healer_targets_this_tick, 0);
+        state.tick_scratch.zuk_untagged_healer_targets, 0);
 
     actions[INF_HEAD_TARGET] = 35;
     inf_tick_player(&state, actions, 1);
 
     ASSERT_INT_EQ("second distinct untagged healer target rewarded",
-        state.zuk_untagged_healer_targets_this_tick, 1);
+        state.tick_scratch.zuk_untagged_healer_targets, 1);
     ASSERT_INT_EQ("second distinct untagged healer target reward count",
         state.total_zuk_untagged_healer_target_rewards, 2);
 }
@@ -1126,7 +1126,7 @@ static void test_zuk_safe_untagged_healer_target_bonus_records_safe_subset(void)
     ASSERT_INT_EQ("safe untagged healer target reward count",
         state.total_zuk_safe_untagged_healer_target_rewards, 1);
     ASSERT_INT_EQ("safe untagged healer per-tick reward event",
-        state.zuk_safe_untagged_healer_targets_this_tick, 1);
+        state.tick_scratch.zuk_safe_untagged_healer_targets, 1);
     ASSERT_FLOAT_NEAR("safe untagged healer target reward",
         inf_compute_reward(&state), 0.11f, 0.0001f);
 }
@@ -1155,7 +1155,7 @@ static void test_zuk_untagged_healer_target_bonus_excludes_tagged_healers(void) 
     inf_tick_player(&state, actions, 1);
 
     ASSERT_INT_EQ("already tagged healer target gets no bonus",
-        state.zuk_untagged_healer_targets_this_tick, 0);
+        state.tick_scratch.zuk_untagged_healer_targets, 0);
 }
 
 static void test_zuk_healer_tags_first_reward_mode_blocks_pre_tag_damage(void) {
@@ -1171,11 +1171,11 @@ static void test_zuk_healer_tags_first_reward_mode_blocks_pre_tag_damage(void) {
     inf_put_float((EncounterState*)&state, "zuk_healer_kill_bonus", 0.30f);
     state.min_zuk_hp_seen = 300.0f;
     state.total_zuk_healer_tags = 2;
-    state.healer_tags_this_tick = 1;
-    state.zuk_healer_tags_this_tick = 1;
-    state.damage_zuk_this_tick = 80.0f;
-    state.damage_zuk_healers_this_tick = 10.0f;
-    state.kill_zuk_healer_this_tick = 1;
+    state.tick_scratch.healer_tags = 1;
+    state.tick_scratch.zuk_healer_tags = 1;
+    state.tick_scratch.damage_zuk = 80.0f;
+    state.tick_scratch.damage_zuk_healers = 10.0f;
+    state.tick_scratch.kill_zuk_healer = 1;
     state.npcs[0] = make_test_npc(INF_NPC_ZUK, 22, 50, 5);
     state.npcs[0].active = 1;
     state.npcs[0].hp = 220;
@@ -1201,9 +1201,9 @@ static void test_zuk_healer_tags_first_reward_mode_resumes_after_all_tags(void) 
     inf_put_float((EncounterState*)&state, "zuk_healer_kill_bonus", 0.30f);
     state.min_zuk_hp_seen = 300.0f;
     state.total_zuk_healer_tags = 4;
-    state.damage_zuk_this_tick = 80.0f;
-    state.damage_zuk_healers_this_tick = 10.0f;
-    state.kill_zuk_healer_this_tick = 1;
+    state.tick_scratch.damage_zuk = 80.0f;
+    state.tick_scratch.damage_zuk_healers = 10.0f;
+    state.tick_scratch.kill_zuk_healer = 1;
     state.npcs[0] = make_test_npc(INF_NPC_ZUK, 22, 50, 5);
     state.npcs[0].active = 1;
     state.npcs[0].hp = 220;
@@ -1222,9 +1222,9 @@ static void test_joseph_reward_mode_pays_tags_while_healers_heal(void) {
     state.min_zuk_hp_seen = 300.0f;
     inf_put_float((EncounterState*)&state, "damage_reward_coeff", 0.01f);
     inf_put_float((EncounterState*)&state, "tag_reward_coeff", 0.50f);
-    state.damage_dealt_this_tick = 70.0f;
-    state.damage_zuk_this_tick = 70.0f;
-    state.healer_tags_this_tick = 1;
+    state.tick_scratch.damage_dealt = 70.0f;
+    state.tick_scratch.damage_zuk = 70.0f;
+    state.tick_scratch.healer_tags = 1;
     state.npcs[0] = make_test_npc(INF_NPC_ZUK, 22, 50, 5);
     state.npcs[0].active = 1;
     state.npcs[0].hp = 220;
@@ -1250,9 +1250,9 @@ static void test_zuk_healer_attack_shape_reward_applies_in_joseph_mode(void) {
     inf_put_float((EncounterState*)&state,
         "zuk_untagged_healer_nonmagic_attack_bonus_coeff", 0.07f);
     inf_put_float((EncounterState*)&state, "zuk_healer_mage_attack_penalty_coeff", 0.04f);
-    state.healer_tags_this_tick = 1;
-    state.zuk_untagged_healer_nonmagic_attacks_this_tick = 2;
-    state.zuk_healer_mage_attack_fires_this_tick = 1;
+    state.tick_scratch.healer_tags = 1;
+    state.tick_scratch.zuk_untagged_healer_nonmagic_attacks = 2;
+    state.tick_scratch.zuk_healer_mage_attack_fires = 1;
     state.npcs[0] = make_test_npc(INF_NPC_ZUK, 22, 50, 5);
     state.npcs[0].active = 1;
     state.npcs[0].hp = 220;
@@ -1273,8 +1273,8 @@ static void test_joseph_reward_mode_damps_healed_zuk_damage(void) {
     state.wave = INF_NUM_WAVES - 1;
     test_config()->joseph_reward_mode = 1;
     inf_put_float((EncounterState*)&state, "damage_reward_coeff", 0.01f);
-    state.damage_dealt_this_tick = 100.0f;
-    state.damage_zuk_this_tick = 100.0f;
+    state.tick_scratch.damage_dealt = 100.0f;
+    state.tick_scratch.damage_zuk = 100.0f;
     state.total_hp_restored_zuk = 1200.0f;
     state.npcs[0] = make_test_npc(INF_NPC_ZUK, 22, 50, 5);
     state.npcs[0].active = 1;
@@ -1294,8 +1294,8 @@ static void test_jad_damage_reward_pauses_while_jad_healers_heal(void) {
     inf_put_float((EncounterState*)&state, "shield_penalty_coeff", 0.01f);
     inf_put_float((EncounterState*)&state, "tag_reward_coeff", 0.25f);
     state.wave = 66;
-    state.damage_dealt_this_tick = 40.0f;
-    state.damage_jad_this_tick = 40.0f;
+    state.tick_scratch.damage_dealt = 40.0f;
+    state.tick_scratch.damage_jad = 40.0f;
     state.npcs[0] = make_test_npc(INF_NPC_JAD, 24, 32, 5);
     state.npcs[0].active = 1;
     state.npcs[0].hp = 200;
@@ -1325,8 +1325,8 @@ static void test_jad_healer_damage_never_gets_damage_reward(void) {
     inf_put_float((EncounterState*)&state, "shield_penalty_coeff", 0.01f);
     inf_put_float((EncounterState*)&state, "tag_reward_coeff", 0.25f);
     state.wave = 66;
-    state.damage_dealt_this_tick = 40.0f;
-    state.damage_jad_healers_this_tick = 40.0f;
+    state.tick_scratch.damage_dealt = 40.0f;
+    state.tick_scratch.damage_jad_healers = 40.0f;
     state.npcs[0] = make_test_npc(INF_NPC_HEALER_JAD, 20, 34, 1);
     state.npcs[0].active = 1;
     state.npcs[0].hp = state.npcs[0].max_hp =
@@ -1385,7 +1385,7 @@ static void test_shield_tag_reward_excludes_zuk(void) {
     ASSERT_INT_EQ("shield cannot be tagged off itself",
         inf_is_shield_taggable_slot(&state, 0), 0);
 
-    state.shield_tags_this_tick = 3;
+    state.tick_scratch.shield_tags = 3;
     ASSERT_FLOAT_NEAR("shield tag reward pays per valid shield tag",
         inf_compute_reward(&state), 0.60f, 0.0001f);
 }
@@ -2773,7 +2773,7 @@ static void test_jad_prayer_on_third_tick_blocks(void) {
 
     ASSERT_INT_EQ("jad prayer check consumed pending protection", state.player_pending_hits[0].check_prayer, 0);
     ASSERT_INT_EQ("jad protected damage is frozen at zero", state.player_pending_hits[0].damage, 0);
-    ASSERT_INT_EQ("jad prayer check counted correct prayer", state.prayer_correct_this_tick, 1);
+    ASSERT_INT_EQ("jad prayer check counted correct prayer", state.tick_scratch.prayer_correct, 1);
 
     step_inferno_with_prayer(&state, 0);
     ASSERT_INT_EQ("jad protected hit removed after landing", state.player_pending_hit_count, 0);
@@ -2796,7 +2796,7 @@ static void test_jad_prayer_first_on_fourth_tick_does_not_block(void) {
         ASSERT_INT_EQ("late-prayer test reaches checked pending hit", state.player_pending_hits[0].check_prayer, 0);
 
         step_inferno_with_prayer(&state, ENCOUNTER_OVERHEAD_SET_REFRESH_MAGIC);
-        if (state.damage_received_this_tick > 0.0f) {
+        if (state.tick_scratch.damage_received > 0.0f) {
             saw_late_damage = 1;
             ASSERT_INT_EQ("late prayer did not block queued jad damage", state.player.current_hitpoints < 99, 1);
         }
@@ -2825,10 +2825,10 @@ static void test_jad_long_distance_damage_uses_delayed_projectile_landing(void) 
         step_inferno_with_prayer(&state, 0);
         for (int t = 1; t < expected_landing_after_fire; t++) {
             step_inferno_with_prayer(&state, 0);
-            ASSERT_FLOAT_NEAR("jad long-distance hit has not landed early", state.damage_received_this_tick, 0.0f, 1e-6f);
+            ASSERT_FLOAT_NEAR("jad long-distance hit has not landed early", state.tick_scratch.damage_received, 0.0f, 1e-6f);
         }
         step_inferno_with_prayer(&state, 0);
-        if (state.damage_received_this_tick > 0.0f) {
+        if (state.tick_scratch.damage_received > 0.0f) {
             saw_expected_landing = 1;
         }
     }
@@ -3488,7 +3488,7 @@ static void test_step_out_same_tick_ranger_mager_event_logs(void) {
     inf_step((EncounterState*)&state, actions);
 
     ASSERT_INT_EQ("step-out tick moved the player",
-        state.player_moved_this_tick, 1);
+        state.tick_scratch.player_moved, 1);
     ASSERT_INT_EQ("movement tick does not count attacks before NPCs see new tile",
         state.total_step_out_ranger_mager_same_tick_attacks, 0);
 
@@ -4162,9 +4162,9 @@ static void test_zuk_healer_target_action_tags_on_landed_hit(void) {
     ASSERT_INT_EQ("player attack records healer attack fire count",
         state.total_zuk_healer_attack_fires, 1);
     ASSERT_INT_EQ("non-magic attack at untagged healer is counted",
-        state.zuk_untagged_healer_nonmagic_attacks_this_tick, 1);
+        state.tick_scratch.zuk_untagged_healer_nonmagic_attacks, 1);
     ASSERT_INT_EQ("non-magic attack does not count mage healer fire",
-        state.zuk_healer_mage_attack_fires_this_tick, 0);
+        state.tick_scratch.zuk_healer_mage_attack_fires, 0);
     ASSERT_INT_EQ("attackable healer target tick counted",
         state.total_zuk_healer_attackable_ticks, 1);
     ASSERT_INT_EQ("healer target was not blocked by cooldown",
@@ -4179,7 +4179,7 @@ static void test_zuk_healer_target_action_tags_on_landed_hit(void) {
     ASSERT_INT_EQ("landed zero-damage hit tags zuk healer",
         state.npcs[2].aggro_target, -1);
     ASSERT_INT_EQ("landed zero-damage hit increments tag count",
-        state.healer_tags_this_tick, 1);
+        state.tick_scratch.healer_tags, 1);
 }
 
 static void test_zuk_healer_mage_attack_counts_penalty_event(void) {
@@ -4213,9 +4213,9 @@ static void test_zuk_healer_mage_attack_counts_penalty_event(void) {
     inf_tick_player(&state, actions, 1);
 
     ASSERT_INT_EQ("mage healer attack fires once",
-        state.zuk_healer_mage_attack_fires_this_tick, 1);
+        state.tick_scratch.zuk_healer_mage_attack_fires, 1);
     ASSERT_INT_EQ("mage healer attack gets no non-magic attempt count",
-        state.zuk_untagged_healer_nonmagic_attacks_this_tick, 0);
+        state.tick_scratch.zuk_untagged_healer_nonmagic_attacks, 0);
     ASSERT_INT_EQ("mage attack still records total healer fire count",
         state.total_zuk_healer_attack_fires, 1);
 }
@@ -4472,7 +4472,7 @@ static void test_set_attack_to_shield_is_projectile_delayed(void) {
 
         inf_npc_attack(&state, 2);
         if (state.npcs[1].hp < state.npcs[1].max_hp ||
-            state.shield_damage_this_tick > 0.0f) {
+            state.tick_scratch.shield_damage > 0.0f) {
             found_immediate_damage = 1;
             break;
         }
@@ -4657,7 +4657,7 @@ static void test_phantom_barrage_hits_aoe_on_first_cast_window(void) {
 
         ASSERT_INT_EQ("phantom primary does not receive stale pending hit",
             state.npcs[0].pending_hit.active, 0);
-        if (state.player_attacked_this_tick &&
+        if (state.tick_scratch.player_attacked &&
                 state.npcs[1].pending_hit.active &&
                 state.npcs[1].pending_hit.attack_style == ATTACK_STYLE_MAGIC) {
             found_aoe_hit = 1;
@@ -4685,7 +4685,7 @@ static void test_ranged_attack_cannot_fire_on_dying_target(void) {
     inf_tick_player(&state, actions, 1);
 
     ASSERT_INT_EQ("ranged attack does not fire on dying target",
-        state.player_attacked_this_tick, 0);
+        state.tick_scratch.player_attacked, 0);
     ASSERT_INT_EQ("ranged attack does not queue dying target pending hit",
         state.npcs[0].pending_hit.active, 0);
     ASSERT_INT_EQ("ranged attack does not start cooldown",
@@ -4707,7 +4707,7 @@ static void test_autocast_barrage_cannot_fire_on_dying_target(void) {
     inf_tick_player(&state, actions, 1);
 
     ASSERT_INT_EQ("autocast does not fire on dying target",
-        state.player_attacked_this_tick, 0);
+        state.tick_scratch.player_attacked, 0);
     ASSERT_INT_EQ("autocast does not queue dying target pending hit",
         state.npcs[0].pending_hit.active, 0);
     ASSERT_INT_EQ("autocast does not start cooldown",
@@ -4734,10 +4734,10 @@ static void test_manual_blood_barrage_can_heal_from_dying_primary(void) {
         inf_tick_player(&state, actions, 1);
 
         ASSERT_INT_EQ("manual blood barrage fires on dying target",
-            state.player_attacked_this_tick, 1);
+            state.tick_scratch.player_attacked, 1);
         ASSERT_INT_EQ("manual blood barrage does not queue dying target pending hit",
             state.npcs[0].pending_hit.active, 0);
-        if (state.blood_heal_this_tick > 0 &&
+        if (state.tick_scratch.blood_heal > 0 &&
                 state.player.current_hitpoints > 80) {
             found_heal = 1;
         }
@@ -4763,7 +4763,7 @@ static void test_phantom_barrage_close_barrage_timing_cannot_recast(void) {
     inf_tick_player(&state, actions, 1);
 
     ASSERT_INT_EQ("cooldown prevents phantom barrage fire",
-        state.player_attacked_this_tick, 0);
+        state.tick_scratch.player_attacked, 0);
     ASSERT_INT_EQ("cooldown prevents AoE pending hit",
         state.npcs[1].pending_hit.active, 0);
     ASSERT_INT_EQ("attack timer only decrements",
@@ -5011,7 +5011,7 @@ static void test_spell_without_target_does_not_affect_later_attack(void) {
     actions[INF_HEAD_SPELL] = 2;
     inf_tick_player(&state, actions, 1);
     ASSERT_INT_EQ("spell without target does not fire",
-        state.player_attacked_this_tick, 0);
+        state.tick_scratch.player_attacked, 0);
 
     fire_player_action_at_slot_zero(&state, 0);
     ASSERT_INT_EQ("next normal attack uses autocast blood",
@@ -5065,7 +5065,7 @@ static void test_blood_barrage_at_full_hp_is_valid_and_heals_zero(void) {
     inf_resolve_player_projectiles_on_npcs(&state);
 
     ASSERT_INT_EQ("full HP blood barrage heals zero",
-        state.blood_heal_this_tick, 0);
+        state.tick_scratch.blood_heal, 0);
     ASSERT_INT_EQ("HP stays capped",
         state.player.current_hitpoints, state.player.base_hitpoints);
 }
@@ -5124,7 +5124,7 @@ static void test_phantom_barrage_allows_explicit_spell_from_range_gear(void) {
     inf_tick_player(&state, actions, 1);
 
     ASSERT_INT_EQ("explicit phantom barrage fires from range gear",
-        state.player_attacked_this_tick, 1);
+        state.tick_scratch.player_attacked, 1);
     ASSERT_INT_EQ("explicit phantom barrage uses magic style",
         state.player_attack_style_id, ATTACK_STYLE_MAGIC);
 }
@@ -5718,7 +5718,7 @@ static void test_echo_boots_recoil_hits_nearby_npcs_once(void) {
     ASSERT_INT_EQ("Zuk avoids echo recoil",
         state.npcs[2].hp, 1200);
     ASSERT_FLOAT_NEAR("echo recoil records one damage",
-        state.damage_dealt_this_tick, 1.0f, 1e-6f);
+        state.tick_scratch.damage_dealt, 1.0f, 1e-6f);
 }
 
 static void test_redemption_pressure_counts_zero_hit_low_hp_landing(void) {
@@ -6417,9 +6417,9 @@ static void test_inferno_healer_transition_stats_track_episode_progress(void) {
         state.npcs[i].max_hp = 100;
     }
 
-    state.zuk_healer_tags_this_tick = 1;
-    state.hp_restored_this_tick = 21.0f;
-    state.spark_damage_this_tick = 7.0f;
+    state.tick_scratch.zuk_healer_tags = 1;
+    state.tick_scratch.hp_restored = 21.0f;
+    state.tick_scratch.spark_damage = 7.0f;
     inf_update_healer_transition_stats(&state);
 
     ASSERT_INT_EQ("healer spawn tick recorded",
@@ -6439,10 +6439,10 @@ static void test_inferno_healer_transition_stats_track_episode_progress(void) {
 
     state.tick = 121;
     state.npcs[0].hp = 420;
-    state.zuk_healer_tags_this_tick = 3;
-    state.kill_zuk_healer_this_tick = 2;
-    state.hp_restored_this_tick = 13.0f;
-    state.spark_damage_this_tick = 5.0f;
+    state.tick_scratch.zuk_healer_tags = 3;
+    state.tick_scratch.kill_zuk_healer = 2;
+    state.tick_scratch.hp_restored = 13.0f;
+    state.tick_scratch.spark_damage = 5.0f;
     inf_update_healer_transition_stats(&state);
 
     ASSERT_INT_EQ("all healer tag tick recorded",
@@ -6455,10 +6455,10 @@ static void test_inferno_healer_transition_stats_track_episode_progress(void) {
         state.zuk_hp_max_after_healer_spawn, 420.0f, 1e-6f);
 
     state.tick = 122;
-    state.zuk_healer_tags_this_tick = 0;
-    state.kill_zuk_healer_this_tick = 2;
-    state.hp_restored_this_tick = 0.0f;
-    state.spark_damage_this_tick = 0.0f;
+    state.tick_scratch.zuk_healer_tags = 0;
+    state.tick_scratch.kill_zuk_healer = 2;
+    state.tick_scratch.hp_restored = 0.0f;
+    state.tick_scratch.spark_damage = 0.0f;
     for (int i = 1; i <= 4; i++)
         state.npcs[i].active = 0;
     inf_update_healer_transition_stats(&state);
@@ -6973,7 +6973,7 @@ static void test_player_projectile_render_uses_stored_reference_timing(void) {
     blowpipe_state.npcs[0] = make_test_npc(
         INF_NPC_JAD, 18, 10, INF_NPC_STATS[INF_NPC_JAD].size);
     blowpipe_state.npcs[0].active = 1;
-    blowpipe_state.player_attacked_this_tick = 1;
+    blowpipe_state.tick_scratch.player_attacked = 1;
     blowpipe_state.player_attack_npc_idx = 0;
     blowpipe_state.player_attack_style_id = ATTACK_STYLE_RANGED;
     blowpipe_state.player_attack_dmg = 7;
@@ -7019,7 +7019,7 @@ static void test_player_projectile_render_uses_stored_reference_timing(void) {
     tbow_state.npcs[0] = make_test_npc(
         INF_NPC_JAD, 18, 10, INF_NPC_STATS[INF_NPC_JAD].size);
     tbow_state.npcs[0].active = 1;
-    tbow_state.player_attacked_this_tick = 1;
+    tbow_state.tick_scratch.player_attacked = 1;
     tbow_state.player_attack_npc_idx = 0;
     tbow_state.player_attack_style_id = ATTACK_STYLE_RANGED;
     tbow_state.player_attack_dmg = 7;
@@ -7060,7 +7060,7 @@ static void test_player_projectile_render_uses_stored_reference_timing(void) {
     bowfa_state.npcs[0] = make_test_npc(
         INF_NPC_JAD, 18, 10, INF_NPC_STATS[INF_NPC_JAD].size);
     bowfa_state.npcs[0].active = 1;
-    bowfa_state.player_attacked_this_tick = 1;
+    bowfa_state.tick_scratch.player_attacked = 1;
     bowfa_state.player_attack_npc_idx = 0;
     bowfa_state.player_attack_style_id = ATTACK_STYLE_RANGED;
     bowfa_state.player_attack_dmg = 7;
@@ -7146,10 +7146,10 @@ static void test_npc_overkill_hit_caps_splat_hp_and_damage_stats(void) {
     ASSERT_INT_EQ("render entity hit splat caps to remaining hp",
         entities[1].hit_damage, 15);
     ASSERT_FLOAT_NEAR("damage dealt stats use capped damage",
-        state.damage_dealt_this_tick, 15.0f, 1e-6f);
+        state.tick_scratch.damage_dealt, 15.0f, 1e-6f);
     ASSERT_FLOAT_NEAR("set damage stats use capped damage",
-        state.damage_set_this_tick, 15.0f, 1e-6f);
-    ASSERT_INT_EQ("overkill still counts the kill", state.kill_set_this_tick, 1);
+        state.tick_scratch.damage_set, 15.0f, 1e-6f);
+    ASSERT_INT_EQ("overkill still counts the kill", state.tick_scratch.kill_set, 1);
 }
 
 static void test_blood_barrage_overkill_heals_from_capped_damage(void) {
@@ -7175,9 +7175,9 @@ static void test_blood_barrage_overkill_heals_from_capped_damage(void) {
     ASSERT_INT_EQ("blood barrage hit splat caps to remaining hp",
         state.npcs[0].hit_damage, 8);
     ASSERT_FLOAT_NEAR("blood barrage damage stat uses capped damage",
-        state.damage_dealt_this_tick, 8.0f, 1e-6f);
+        state.tick_scratch.damage_dealt, 8.0f, 1e-6f);
     ASSERT_INT_EQ("blood barrage heal uses capped damage",
-        state.blood_heal_this_tick, 2);
+        state.tick_scratch.blood_heal, 2);
     ASSERT_INT_EQ("player receives capped blood heal",
         state.player.current_hitpoints, 82);
 }
@@ -7263,7 +7263,7 @@ static void test_final_wave_completion_emits_terminal_reward(void) {
     ASSERT_INT_EQ("final wave completion ends episode", state.episode_over, 1);
     ASSERT_INT_EQ("final wave completion marks win", state.winner, 0);
     ASSERT_INT_EQ("final wave completion marks wave clear",
-        state.wave_completed_this_tick, 1);
+        state.tick_scratch.wave_completed, 1);
     ASSERT_FLOAT_NEAR("final wave completion emits clipped terminal reward",
         state.reward, 1.0f, 1e-6f);
     ASSERT_FLOAT_NEAR("episode return includes terminal reward",

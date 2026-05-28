@@ -159,7 +159,7 @@ static void inf_lab_clear_transient(InfernoState* s) {
     s->player_pending_hit_count = 0;
     memset(s->pending_sparks, 0, sizeof(s->pending_sparks));
     memset(s->npc_target_hits, 0, sizeof(s->npc_target_hits));
-    s->player_attacked_this_tick = 0;
+    s->tick_scratch.player_attacked = 0;
     s->player_attack_npc_idx = -1;
     s->player_attack_dmg = 0;
     s->player_attack_style_id = ATTACK_STYLE_NONE;

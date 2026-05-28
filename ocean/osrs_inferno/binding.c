@@ -483,8 +483,8 @@ static int inferno_stall_trace_tick_matches(const InfernoState* s) {
     if (s->wave_spawn_delay > 0 || s->wave_ready_delay > 0) return 0;
     if (!inferno_stall_trace_has_alive_target(s)) return 0;
     if (s->player.attack_timer != 0) return 0;
-    if (s->player_attacked_this_tick) return 0;
-    if (s->damage_dealt_this_tick > 0.0f) return 0;
+    if (s->tick_scratch.player_attacked) return 0;
+    if (s->tick_scratch.damage_dealt > 0.0f) return 0;
     return 1;
 }
 
@@ -653,7 +653,7 @@ static void inferno_stall_trace_capture(
         s->player.attack_timer,
         s->player_dest_x,
         s->player_dest_y,
-        s->player_moved_this_tick,
+        s->tick_scratch.player_moved,
         s->player.prayer,
         s->player.offensive_prayer,
         s->weapon_set,
@@ -884,7 +884,7 @@ static void inferno_post_240_trace_write_healers(
                 in_range = inf_player_can_attack_npc_from_current_tile(s, npc_idx);
                 targeted = osrs_interaction_active(&s->interaction) &&
                     s->interaction.target_slot == npc_idx;
-                hit_this_tick = s->player_attacked_this_tick &&
+                hit_this_tick = s->tick_scratch.player_attacked &&
                     s->player_attack_npc_idx == npc_idx;
                 healing_zuk = inf_is_untagged_live_zuk_healer_slot(s, npc_idx);
                 attack_timer = npc->attack_timer;
@@ -1033,7 +1033,7 @@ static void inferno_post_240_trace_capture(Env* env, int is_term) {
             s->offshield_ticks_after_240,
             spark_count,
             spark_min_ticks,
-            s->spark_damage_this_tick,
+            s->tick_scratch.spark_damage,
             set_count,
             ranger_alive,
             mager_alive,
@@ -1061,13 +1061,13 @@ static void inferno_post_240_trace_capture(Env* env, int is_term) {
             target_is_zuk,
             target_attackable,
             target_in_range,
-            s->player_attacked_this_tick,
+            s->tick_scratch.player_attacked,
             s->player_attack_npc_idx,
-            s->player_attacked_this_tick && s->player_attack_dmg > 0,
+            s->tick_scratch.player_attacked && s->player_attack_dmg > 0,
             s->player_attack_dmg,
-            s->damage_zuk_this_tick,
-            s->damage_set_this_tick,
-            s->damage_zuk_healers_this_tick,
+            s->tick_scratch.damage_zuk,
+            s->tick_scratch.damage_set,
+            s->tick_scratch.damage_zuk_healers,
             s->total_zuk_healer_tags,
             s->total_zuk_healer_kills,
             s->tick_at_first_zuk_healer_target,

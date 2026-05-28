@@ -373,7 +373,7 @@ static void inf_render_post_tick_ctx(
                         .dst_x = target_x,
                         .dst_y = target_y,
                         .style = proj_style,
-                        .damage = (int)s->damage_received_this_tick,
+                        .damage = (int)s->tick_scratch.damage_received,
                         .duration_ticks = duration,
                         .start_h = start_h,
                         .end_h = end_h,
@@ -391,7 +391,7 @@ static void inf_render_post_tick_ctx(
                         .dst_x = target_x,
                         .dst_y = target_y,
                         .style = proj_style,
-                        .damage = (int)s->damage_received_this_tick,
+                        .damage = (int)s->tick_scratch.damage_received,
                         .duration_ticks = duration,
                         .start_h = start_h,
                         .end_h = end_h,
@@ -419,7 +419,7 @@ static void inf_render_post_tick_ctx(
                 .dst_x = target_x,
                 .dst_y = target_y,
                 .style = proj_style,
-                .damage = (int)s->damage_received_this_tick,
+                .damage = (int)s->tick_scratch.damage_received,
                 .duration_ticks = duration,
                 .start_h = start_h,
                 .end_h = end_h,
@@ -438,7 +438,7 @@ static void inf_render_post_tick_ctx(
                 .dst_x = target_x,
                 .dst_y = target_y,
                 .style = proj_style,
-                .damage = (int)s->damage_received_this_tick,
+                .damage = (int)s->tick_scratch.damage_received,
                 .duration_ticks = duration,
                 .start_h = start_h,
                 .end_h = end_h,
@@ -498,7 +498,7 @@ static void inf_render_post_tick_ctx(
     }
 
     /* player attack projectile (ranged/magic only — melee has no projectile) */
-    if (s->player_attacked_this_tick &&
+    if (s->tick_scratch.player_attacked &&
         s->player_attack_style_id != ATTACK_STYLE_MELEE) {
         int target_idx = s->player_attack_npc_idx;
         if (target_idx >= 0 && target_idx < INF_MAX_NPCS) {

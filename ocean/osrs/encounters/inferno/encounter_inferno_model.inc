@@ -682,8 +682,57 @@ typedef struct {
     int human_command_mode;
 } InfernoContext;
 
+/* per-tick scratch: reward/diagnostic accumulators and event flags, fully
+   reset at the start of every step by a single assignment. add new per-tick
+   counters here so they cannot be left out of the reset. distinct from the
+   InfNPC per-tick flags (reset per-NPC) and the player-attack render fields
+   (valid only when an attack fired, not pure scratch). */
+typedef struct {
+    /* player damage dealt this tick, partitioned by target class */
+    float damage_dealt;
+    float damage_resurrected;
+    float damage_zuk;
+    float damage_zuk_healers;
+    float damage_jad_healers;
+    float damage_jad;
+    float damage_set;
+    float shield_damage;
+    /* damage / healing received or restored this tick */
+    float spark_damage;
+    float damage_received;
+    float hp_restored;
+    float hp_restored_jad;
+    float hp_restored_zuk;
+    /* kills and tags credited this tick */
+    int kill_jad;
+    int kill_zuk_healer;
+    int kill_set;
+    int healer_tags;
+    int zuk_healer_tags;
+    int shield_tags;
+    /* zuk healer targeting / attack-shape counters */
+    int zuk_untagged_healer_targets;
+    int zuk_safe_untagged_healer_targets;
+    int zuk_untagged_healer_nonmagic_attacks;
+    int zuk_healer_mage_attack_fires;
+    /* prayer / movement / event flags */
+    int prayer_correct;
+    int off_prayer_hits;
+    int styles_fired;   /* bitmask: bit0 melee, bit1 ranged, bit2 magic */
+    int attacks_fired;  /* count of NPC attacks that fired this tick */
+    int wave_completed;
+    int pillar_lost;    /* -1 = none, 0-2 = pillar destroyed this tick */
+    int player_moved;
+    int player_attacked; /* 1 if the player fired an attack this tick */
+    int behind_shield;  /* 1 if behind shield this tick (for reward) */
+    int brewed;         /* 1 if the player drank a brew this tick */
+    int blood_heal;     /* HP healed from blood barrage this tick */
+} InfTickScratch;
+
 typedef struct {
     Player player;
+
+    InfTickScratch tick_scratch;
 
     InfNPC npcs[INF_MAX_NPCS];
     uint32_t next_npc_render_id;
@@ -734,28 +783,6 @@ typedef struct {
     float hp_restored_after_240;
     float spark_damage_after_240;
     float zuk_hp_max_after_healer_spawn;
-    float damage_dealt_this_tick;
-    float damage_resurrected_this_tick;
-    float damage_zuk_this_tick;
-    float damage_zuk_healers_this_tick;
-    float damage_jad_this_tick;
-    float damage_set_this_tick;
-    int kill_jad_this_tick;
-    int kill_zuk_healer_this_tick;
-    int kill_set_this_tick;
-    float shield_damage_this_tick;
-    int healer_tags_this_tick;
-    int zuk_healer_tags_this_tick;
-    int zuk_untagged_healer_targets_this_tick;
-    int zuk_safe_untagged_healer_targets_this_tick;
-    float spark_damage_this_tick;
-    float damage_received_this_tick;
-    float hp_restored_this_tick;
-    float hp_restored_zuk_this_tick;
-    int prayer_correct_this_tick;  /* count of NPC attacks blocked by prayer this tick */
-    int wave_completed_this_tick;
-    int pillar_lost_this_tick;     /* -1 = none, 0-2 = which pillar was destroyed */
-    int player_moved_this_tick;
     int player_moved_last_tick;
 
     /* cumulative stats for diagnostics */
@@ -775,10 +802,7 @@ typedef struct {
     int total_prayer_correct;  /* times prayer blocked an NPC attack */
     int total_npc_attacks;     /* total NPC attacks on player (for prayer_correct_rate) */
     int total_unavoidable_off; /* off-prayer hits where a different style was correctly prayed */
-    int off_prayer_hits_this_tick;
     /* per-tick tracking for multi-style analysis */
-    int tick_styles_fired;     /* bitmask of styles that fired this tick (bit0=mel,1=rng,2=mag) */
-    int tick_attacks_fired;    /* count of NPC attacks that fired this tick */
     int total_ranger_mager_same_tick_attacks;
     int total_step_out_ranger_mager_same_tick_attacks;
     /* per-NPC-type prayer and damage tracking (for wandb, not dashboard) */
@@ -812,14 +836,11 @@ typedef struct {
 
     /* Zuk-specific diagnostics */
     int behind_shield_ticks;       /* ticks spent behind shield during Zuk wave */
-    int behind_shield_this_tick;   /* 1 if behind shield this tick (for reward) */
     int total_zuk_ticks;           /* total ticks during Zuk wave (for behind_shield_pct) */
     int offshield_ticks_after_240;
     int offshield_ticks_after_all_zuk_healers_dead;
 
     /* per-tick reward event flags (cleared each tick) */
-    int brewed_this_tick;      /* 1 if player drank a brew this tick */
-    int blood_heal_this_tick;  /* HP healed from blood barrage this tick */
 
     /* player combat state */
     OsrsInteraction interaction;  /* shared interaction state */
@@ -834,7 +855,6 @@ typedef struct {
     int stamina_active_ticks;  /* countdown for stamina effect */
 
     /* per-tick player attack event for renderer projectiles */
-    int player_attacked_this_tick;  /* 1 if player fired an attack this tick */
     int player_attack_npc_idx;      /* NPC index targeted by player attack */
     int player_attack_dmg;          /* total damage dealt */
     int player_attack_style_id;     /* ATTACK_STYLE_* of the player attack */
@@ -892,19 +912,14 @@ typedef struct {
     int total_zuk_healer_cooldown_ticks;
     int total_zuk_healer_out_of_range_ticks;
     int total_zuk_healer_attackable_ticks;
-    int zuk_untagged_healer_nonmagic_attacks_this_tick;
-    int zuk_healer_mage_attack_fires_this_tick;
     int total_action_mask_checks;
     int zero_valid_action_head_count[9];
     int min_valid_action_count_by_head[9];
     int target_head_valid_healer_count;
     int target_head_valid_zuk_count;
     int target_head_valid_set_count;
-    float damage_jad_healers_this_tick;
-    int shield_tags_this_tick;
     int total_shield_tags;
     float shield_tag_reward_coeff;
-    float hp_restored_jad_this_tick;
     float total_hp_restored_jad;
     float total_hp_restored_zuk;
 } InfernoState;
