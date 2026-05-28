@@ -773,7 +773,7 @@ static void inferno_trace_jad_state(
         if (npc->type != INF_NPC_JAD)
             continue;
         *alive = 1;
-        *next_style = npc->jad_attack_style;
+        *next_style = inf_npc_jad_const(npc)->attack_style;
         return;
     }
 }

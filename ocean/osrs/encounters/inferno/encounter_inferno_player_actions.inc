@@ -205,7 +205,7 @@ static InfOraclePick inf_oracle_pick_full(const InfernoState* s, int mode) {
             pick.target_slot = o;
             pick.gear = INF_GEAR_LONG_RANGE;
             pick.offensive = OFFENSIVE_PRAYER_RIGOUR;
-            int jas = s->npcs[n].jad_attack_style;
+            int jas = inf_npc_jad(&s->npcs[n])->attack_style;
             if (jas == ATTACK_STYLE_RANGED) pick.overhead_style = ATTACK_STYLE_RANGED;
             else if (jas == ATTACK_STYLE_MAGIC) pick.overhead_style = ATTACK_STYLE_MAGIC;
             return pick;

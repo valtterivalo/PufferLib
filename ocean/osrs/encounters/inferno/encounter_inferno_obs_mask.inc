@@ -286,7 +286,7 @@ static void inf_write_obs_ctx(
                 if (scanned == PRAYER_PROTECT_MAGIC) style = ATTACK_STYLE_RANGED;
                 else if (scanned == PRAYER_PROTECT_RANGED) style = ATTACK_STYLE_MAGIC;
             } else if (npc->type == INF_NPC_JAD) {
-                style = npc->jad_attack_style;
+                style = inf_npc_jad(npc)->attack_style;
                 if (style == ATTACK_STYLE_NONE) continue;
             }
             int style_mask = inf_attack_style_telegraph_mask(
@@ -423,7 +423,7 @@ static void inf_write_obs_ctx(
             if (has_timer) obs[i++] = (float)npc->attack_timer / 10.0f;
 
             if (has_style) {
-                int style = (npc->type == INF_NPC_JAD) ? npc->jad_attack_style : npc->attack_style;
+                int style = (npc->type == INF_NPC_JAD) ? inf_npc_jad(npc)->attack_style : npc->attack_style;
                 obs[i++] = (style == ATTACK_STYLE_MELEE) ? 1.0f : 0.0f;
                 obs[i++] = (style == ATTACK_STYLE_RANGED) ? 1.0f : 0.0f;
                 obs[i++] = (style == ATTACK_STYLE_MAGIC) ? 1.0f : 0.0f;

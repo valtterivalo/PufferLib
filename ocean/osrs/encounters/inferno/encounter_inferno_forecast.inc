@@ -89,7 +89,7 @@ static int inf_npc_planned_style_for_obs(const InfNPC* npc) {
         if (scanned == PRAYER_PROTECT_RANGED) return ATTACK_STYLE_MAGIC;
     }
     if (npc->type == INF_NPC_JAD)
-        return npc->jad_attack_style;
+        return inf_npc_jad_const(npc)->attack_style;
     return npc->attack_style;
 }
 
@@ -162,7 +162,7 @@ static void inf_step_out_forecast_record_blob_scan(
 
 static int inf_forecast_jad_unknown_style_mask(const InfNPC* npc) {
     if (npc->type != INF_NPC_JAD) return 0;
-    if (npc->jad_attack_style != ATTACK_STYLE_NONE) return 0;
+    if (inf_npc_jad_const(npc)->attack_style != ATTACK_STYLE_NONE) return 0;
     return INF_STYLE_MASK_RANGED | INF_STYLE_MASK_MAGIC;
 }
 
@@ -238,7 +238,7 @@ static void inf_step_out_forecast_npc_attack(
     if (npc->type == INF_NPC_BLOB)
         npc->blob_scanned_prayer = -1;
     if (npc->type == INF_NPC_JAD)
-        npc->jad_attack_style = ATTACK_STYLE_NONE;
+        inf_npc_jad(npc)->attack_style = ATTACK_STYLE_NONE;
     npc->attack_timer = stats->attack_speed;
     if (npc->type == INF_NPC_JAD) {
         if (s->wave == 66)      npc->attack_timer = 8;

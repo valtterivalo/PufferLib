@@ -4970,7 +4970,7 @@ static void render_draw_overhead_status(RenderClient* rc, OsrsEnv* env) {
                 /* attack timer + style */
                 const char* style_str = "???";
                 Color style_col = WHITE;
-                int style = (npc->type == INF_NPC_JAD) ? npc->jad_attack_style : npc->attack_style;
+                int style = (npc->type == INF_NPC_JAD) ? inf_npc_jad(npc)->attack_style : npc->attack_style;
                 if (style == ATTACK_STYLE_MAGIC)  { style_str = "MAG"; style_col = BLUE; }
                 if (style == ATTACK_STYLE_RANGED) { style_str = "RNG"; style_col = GREEN; }
                 if (style == ATTACK_STYLE_MELEE)  { style_str = "MEL"; style_col = RED; }

@@ -376,6 +376,13 @@ typedef struct {
     int ticks_remaining;
 } InfNpcTargetHit;
 
+/* jad-only state. valid iff type is INF_NPC_JAD. reach it through inf_npc_jad();
+   never touch InfNPC.type_state.jad directly. */
+typedef struct {
+    int attack_style;    /* committed next ranged/magic style preview, NONE if unknown */
+    int healer_spawned;  /* 1 once this jad has spawned its healers */
+} InfJadState;
+
 /* healer-only state. valid iff type is INF_NPC_HEALER_JAD or INF_NPC_HEALER_ZUK.
    reach it through inf_npc_healer(); never touch InfNPC.type_state.healer directly. */
 typedef struct {
@@ -405,10 +412,6 @@ typedef struct {
     int blob_scanned_prayer; /* blob: prayer read during scan (OverheadPrayer value) */
     int had_los_last_tick; /* blob: previous-tick LOS latch for immediate scans on LOS gain */
 
-    /* jad state */
-    int jad_attack_style;  /* jad: committed next ranged/magic style preview, or NONE if unknown */
-    int jad_healer_spawned; /* jad: 1 if healers have been spawned */
-
     /* mager resurrection state */
     int resurrect_cooldown; /* mager: ticks until next resurrection attempt */
     int resurrection_count; /* number of times this original mob has been resurrected */
@@ -422,6 +425,7 @@ typedef struct {
        valid; reach it through the asserting inf_npc_*() accessors, never
        through type_state directly. */
     union {
+        InfJadState jad;        /* type is INF_NPC_JAD */
         InfHealerState healer;  /* type is INF_NPC_HEALER_JAD or INF_NPC_HEALER_ZUK */
     } type_state;
 
@@ -461,12 +465,27 @@ static inline InfHealerState* inf_npc_healer(InfNPC* npc) {
     return &npc->type_state.healer;
 }
 
+/* asserting accessor for the jad arm of InfNPC.type_state. see inf_npc_healer(). */
+static inline InfJadState* inf_npc_jad(InfNPC* npc) {
+    assert(npc->type == INF_NPC_JAD);
+    return &npc->type_state.jad;
+}
+
+static inline const InfJadState* inf_npc_jad_const(const InfNPC* npc) {
+    assert(npc->type == INF_NPC_JAD);
+    return &npc->type_state.jad;
+}
+
 /* write the spawn-time defaults for npc->type's type_state arm. caller must have
    zeroed the NPC (memset) and set npc->type first. types whose arm has no
    non-zero defaults, and types with no arm, are left zeroed. keeps arm
    initialization in one place so a new arm cannot be forgotten at a spawn site. */
 static void inf_npc_init_type_state(InfNPC* npc) {
     switch (npc->type) {
+        case INF_NPC_JAD:
+            npc->type_state.jad = (InfJadState){
+                .attack_style = ATTACK_STYLE_NONE, .healer_spawned = 0 };
+            break;
         case INF_NPC_HEALER_JAD:
         case INF_NPC_HEALER_ZUK:
             npc->type_state.healer = (InfHealerState){

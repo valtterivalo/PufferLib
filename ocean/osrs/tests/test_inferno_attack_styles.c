@@ -265,7 +265,6 @@ static InfNPC make_test_npc(InfNPCType type, int x, int y, int size) {
     npc.resurrection_visual_target = -1;
     npc.attack_style = INF_NPC_STATS[type].default_style;
     npc.blob_scanned_prayer = -1;
-    npc.jad_attack_style = ATTACK_STYLE_NONE;
     inf_npc_init_type_state(&npc);
     return npc;
 }
@@ -417,7 +416,7 @@ static void init_jad_timing_test_state(InfernoState* state, int player_x, int pl
         INF_NPC_JAD, jad_x, jad_y, INF_NPC_STATS[INF_NPC_JAD].size);
     state->npcs[0].active = 1;
     state->npcs[0].attack_timer = 0;
-    state->npcs[0].jad_attack_style = ATTACK_STYLE_MAGIC;
+    inf_npc_jad(&state->npcs[0])->attack_style = ATTACK_STYLE_MAGIC;
     state->npcs[0].attack_style = ATTACK_STYLE_RANGED;
 }
 
@@ -2728,7 +2727,7 @@ static void test_jad_has_no_pre_fire_style_preview(void) {
     inf_npc_attack(&state, 0);
 
     ASSERT_INT_EQ("jad timer decrements without preview", state.npcs[0].attack_timer, 1);
-    ASSERT_INT_EQ("jad style stays hidden before fire", state.npcs[0].jad_attack_style, ATTACK_STYLE_NONE);
+    ASSERT_INT_EQ("jad style stays hidden before fire", inf_npc_jad(&state.npcs[0])->attack_style, ATTACK_STYLE_NONE);
 
     float obs[INF_NUM_OBS];
     inf_write_obs((EncounterState*)&state, obs);
@@ -2746,7 +2745,7 @@ static void test_jad_fire_tick_exposes_three_tick_prayer_deadline(void) {
     step_inferno_with_prayer(&state, 0);
 
     ASSERT_INT_EQ("jad attack queued one pending hit", state.player_pending_hit_count, 1);
-    ASSERT_INT_EQ("jad style resets after firing", state.npcs[0].jad_attack_style, ATTACK_STYLE_NONE);
+    ASSERT_INT_EQ("jad style resets after firing", inf_npc_jad(&state.npcs[0])->attack_style, ATTACK_STYLE_NONE);
     ASSERT_INT_EQ("jad pending hit shows three tick prayer delay after fire", state.player_pending_hits[0].prayer_check_delay, 3);
     ASSERT_INT_EQ("jad close-range hit lands four ticks after fire", state.player_pending_hits[0].ticks_remaining, 4);
 
@@ -2844,11 +2843,11 @@ static void test_triple_jad_pending_threats_fit_obs_layout(void) {
     state.npcs[1] = make_test_npc(INF_NPC_JAD, 28, 33, INF_NPC_STATS[INF_NPC_JAD].size);
     state.npcs[1].active = 1;
     state.npcs[1].attack_timer = 0;
-    state.npcs[1].jad_attack_style = ATTACK_STYLE_RANGED;
+    inf_npc_jad(&state.npcs[1])->attack_style = ATTACK_STYLE_RANGED;
     state.npcs[2] = make_test_npc(INF_NPC_JAD, 23, 22, INF_NPC_STATS[INF_NPC_JAD].size);
     state.npcs[2].active = 1;
     state.npcs[2].attack_timer = 0;
-    state.npcs[2].jad_attack_style = ATTACK_STYLE_MAGIC;
+    inf_npc_jad(&state.npcs[2])->attack_style = ATTACK_STYLE_MAGIC;
 
     step_inferno_with_prayer(&state, 0);
 
@@ -3058,7 +3057,7 @@ static void test_jad_melee_stays_instant_and_untelegraphed(void) {
         INF_NPC_JAD, 6, 5, INF_NPC_STATS[INF_NPC_JAD].size);
     preview_state.npcs[0].active = 1;
     preview_state.npcs[0].attack_timer = 1;
-    preview_state.npcs[0].jad_attack_style = ATTACK_STYLE_RANGED;
+    inf_npc_jad(&preview_state.npcs[0])->attack_style = ATTACK_STYLE_RANGED;
 
     float obs[INF_NUM_OBS];
     inf_write_obs((EncounterState*)&preview_state, obs);
@@ -3088,7 +3087,7 @@ static void test_jad_melee_stays_instant_and_untelegraphed(void) {
             INF_NPC_JAD, 6, 5, INF_NPC_STATS[INF_NPC_JAD].size);
         attack_state.npcs[0].active = 1;
         attack_state.npcs[0].attack_timer = 0;
-        attack_state.npcs[0].jad_attack_style = ATTACK_STYLE_RANGED;
+        inf_npc_jad(&attack_state.npcs[0])->attack_style = ATTACK_STYLE_RANGED;
 
         inf_npc_attack(&attack_state, 0);
 

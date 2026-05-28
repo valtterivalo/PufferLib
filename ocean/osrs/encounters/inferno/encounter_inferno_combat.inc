@@ -605,7 +605,7 @@ static void inf_npc_attack_ctx(InfernoState* s, InfernoContext* ctx, int idx) {
         if (target->active) {
             int actual_style = npc->attack_style;
             if (npc->type == INF_NPC_JAD) {
-                actual_style = npc->jad_attack_style;
+                actual_style = inf_npc_jad(npc)->attack_style;
                 if (actual_style == ATTACK_STYLE_NONE)
                     actual_style = inf_jad_roll_primary_style(&s->rng_state);
             }
@@ -623,7 +623,7 @@ static void inf_npc_attack_ctx(InfernoState* s, InfernoContext* ctx, int idx) {
             npc->attack_visual_target = npc->aggro_target;
             npc->attack_timer = stats->attack_speed;
             if (npc->type == INF_NPC_JAD) {
-                npc->jad_attack_style = ATTACK_STYLE_NONE;
+                inf_npc_jad(npc)->attack_style = ATTACK_STYLE_NONE;
                 if (s->wave == 66)      npc->attack_timer = 8;
                 else if (s->wave == 67) npc->attack_timer = 9;
                 else                    npc->attack_timer = 8;
@@ -671,7 +671,7 @@ static void inf_npc_attack_ctx(InfernoState* s, InfernoContext* ctx, int idx) {
     /* jad: use the committed preview style if present. if the preview was not
        seeded, fall back to the 50/50 primary-style roll. */
     if (npc->type == INF_NPC_JAD) {
-        actual_style = npc->jad_attack_style;
+        actual_style = inf_npc_jad(npc)->attack_style;
         if (actual_style == ATTACK_STYLE_NONE)
             actual_style = inf_jad_roll_primary_style(&s->rng_state);
     }
@@ -844,7 +844,7 @@ static void inf_npc_attack_ctx(InfernoState* s, InfernoContext* ctx, int idx) {
     npc->attacked_this_tick = 1;
     npc->attack_style_this_tick = actual_style;
     if (npc->type == INF_NPC_JAD)
-        npc->jad_attack_style = ATTACK_STYLE_NONE;
+        inf_npc_jad(npc)->attack_style = ATTACK_STYLE_NONE;
     npc->attack_timer = stats->attack_speed;
 
     /* jad attack speed varies by wave */
@@ -986,11 +986,11 @@ static void inf_sample_jad_healer_spawn(
 static void inf_jad_check_healers_ctx(InfernoState* s, const InfernoContext* ctx, int idx) {
     InfNPC* npc = &s->npcs[idx];
     if (npc->type != INF_NPC_JAD || !npc->active) return;
-    if (npc->jad_healer_spawned) return;
+    if (inf_npc_jad(npc)->healer_spawned) return;
 
     /* spawn healers when below 50% HP */
     if (npc->hp > npc->max_hp / 2) return;
-    npc->jad_healer_spawned = 1;
+    inf_npc_jad(npc)->healer_spawned = 1;
 
     int num_healers;
     if (s->wave == 66)      num_healers = 5;  /* wave 67: 5 healers */

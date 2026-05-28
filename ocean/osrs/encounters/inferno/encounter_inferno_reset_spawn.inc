@@ -445,7 +445,6 @@ static void inf_init_npc(InfernoState* s, int idx, InfNPCType type, int x, int y
     npc->render_id = s->next_npc_render_id;
     npc->attack_timer = stats->attack_speed;
     npc->attack_style = stats->default_style;
-    npc->jad_attack_style = ATTACK_STYLE_NONE;
     npc->attack_style_this_tick = ATTACK_STYLE_NONE;
     npc->active = 1;
     npc->x = x;
