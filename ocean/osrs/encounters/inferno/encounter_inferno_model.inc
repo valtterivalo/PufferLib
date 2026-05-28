@@ -416,8 +416,9 @@ typedef struct {
     int heal_target;       /* healer: NPC index being healed (-1 = none) */
     int heal_timer;        /* healer: ticks until next heal tick */
 
-    /* pending hit from player attack (projectile in flight) */
-    EncounterPendingHit pending_hit;
+    /* pending hits from player attacks (projectiles in flight) */
+    EncounterPendingHit pending_hits[ENCOUNTER_MAX_PENDING_HITS];
+    int pending_hit_count;
 
     /* death linger: NPC stays visible for death animation + final hitsplat.
        >0 means dying (decremented each tick), 0 = alive or fully removed. */
