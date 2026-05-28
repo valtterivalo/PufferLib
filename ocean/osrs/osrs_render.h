@@ -5379,6 +5379,19 @@ static int render_scene_is_pvp(OsrsEnv* env) {
     return strcmp(def->name, "nh_pvp") == 0 || strcmp(def->name, "pvp") == 0;
 }
 
+static int render_scene_is_inferno(OsrsEnv* env) {
+    if (!env->encounter_def) return 0;
+    const EncounterDef* def = (const EncounterDef*)env->encounter_def;
+    return strcmp(def->name, "inferno") == 0;
+}
+
+static const char* render_control_hint_text(OsrsEnv* env) {
+    if (render_scene_is_inferno(env)) {
+        return "Right-drag: orbit  Mid-drag: pan  Scroll: zoom  D: debug  H: human  F8: lab";
+    }
+    return "Right-drag: orbit  Mid-drag: pan  Scroll: zoom  SPACE: pause  S: safe spots  D: debug  G: cycle entity  H: human";
+}
+
 static void render_follow_pvp_fighter_midpoint(RenderClient* rc, OsrsEnv* env, double frame_dt) {
     if (!render_scene_is_pvp(env) || rc->human_input.enabled || rc->entity_count < 2)
         return;
@@ -5543,8 +5556,7 @@ void pvp_render(OsrsEnv* env) {
         DrawText(hp_txt, RENDER_GRID_W - hp_w - 12, 12, 16, COLOR_TEXT);
     }
 
-    DrawText("Right-drag: orbit  Mid-drag: pan  Scroll: zoom  SPACE: pause  S: safe spots  D: debug  G: cycle entity  H: human",
-             10, RENDER_WINDOW_H - 20, 10, COLOR_TEXT_DIM);
+    DrawText(render_control_hint_text(env), 10, RENDER_WINDOW_H - 20, 10, COLOR_TEXT_DIM);
 
     /* OSRS GUI panel system: shows selected entity's state.
        Renders in both 2D and 3D mode as a side panel overlay.
