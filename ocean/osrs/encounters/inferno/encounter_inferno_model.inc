@@ -403,20 +403,20 @@ typedef struct {
     int target_x, target_y; /* movement destination */
     int stun_timer;        /* ticks of stun remaining (cannot act) */
 
-    /* type-specific state */
+    /* meleer dig state (read in generic per-tick loops, so kept flat not unionized) */
     int no_los_ticks;      /* meleer: consecutive ticks without LOS to player */
     int dig_freeze_timer;  /* meleer: ticks remaining in dig animation */
     int dig_attack_delay;  /* meleer: ticks after emerging before first attack */
 
     /* blob prayer-reading state */
     int blob_scanned_prayer; /* blob: prayer read during scan (OverheadPrayer value) */
-    int had_los_last_tick; /* blob: previous-tick LOS latch for immediate scans on LOS gain */
+    /* per-NPC LOS latch, written every attack tick for every NPC; only the blob
+       scan logic reads it (to fire an immediate scan on LOS gain). */
+    int had_los_last_tick;
 
-    /* mager resurrection state */
-    int resurrect_cooldown; /* mager: ticks until next resurrection attempt */
-    int resurrection_count; /* number of times this original mob has been resurrected */
-    int resurrecting_this_tick;
-    int resurrection_visual_target;
+    /* resurrection state */
+    int resurrect_cooldown; /* mager: ticks until its next resurrection attempt */
+    int resurrection_count; /* >0 marks an NPC (any type) spawned by mager resurrection */
 
     /* freeze state (ice barrage) */
     int frozen_ticks;       /* ticks remaining in ice barrage freeze */
@@ -444,6 +444,8 @@ typedef struct {
     int attacked_this_tick;     /* 1 when NPC attacks this tick */
     int attack_style_this_tick; /* actual style that fired this tick */
     int attack_visual_target;   /* NPC index this attack visually targets (-1 = player) */
+    int resurrecting_this_tick;     /* 1 when a mager fires its resurrection visual this tick */
+    int resurrection_visual_target; /* NPC index the resurrection visual points at (-1 = none) */
     int moved_this_tick;        /* 1 when NPC moves this tick */
     int hit_landed_this_tick; /* 1 when this NPC was hit by player */
     int hit_damage;          /* damage dealt to this NPC this tick */
