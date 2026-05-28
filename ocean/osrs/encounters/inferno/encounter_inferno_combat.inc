@@ -603,7 +603,7 @@ static void inf_npc_attack_ctx(InfernoState* s, InfernoContext* ctx, int idx) {
     if (npc->aggro_target >= 0 && npc->aggro_target < INF_MAX_NPCS) {
         InfNPC* target = &s->npcs[npc->aggro_target];
         if (target->active) {
-            int actual_style = npc->attack_style;
+            AttackStyle actual_style = npc->attack_style;
             if (npc->type == INF_NPC_JAD) {
                 actual_style = inf_npc_jad(npc)->attack_style;
                 if (actual_style == ATTACK_STYLE_NONE)
@@ -666,7 +666,7 @@ static void inf_npc_attack_ctx(InfernoState* s, InfernoContext* ctx, int idx) {
     }
 
     /* determine actual attack style */
-    int actual_style = npc->attack_style;
+    AttackStyle actual_style = npc->attack_style;
 
     /* jad: use the committed preview style if present. if the preview was not
        seeded, fall back to the 50/50 primary-style roll. */

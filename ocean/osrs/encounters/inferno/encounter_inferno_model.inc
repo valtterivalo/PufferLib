@@ -107,8 +107,8 @@ typedef struct {
     int attack_speed;
     int attack_range;
     int size;
-    int default_style;   /* ATTACK_STYLE_* */
-    int melee_style;     /* MELEE_STYLE_STAB/SLASH/CRUSH for incoming defence bonus selection */
+    AttackStyle default_style;
+    MeleeStyle melee_style;  /* selects incoming-hit defence bonus */
     int can_melee;       /* 1 if can switch to melee when close */
 
     /* combat levels (used for attack rolls and max hit computation) */
@@ -141,8 +141,8 @@ typedef struct {
 /* encounter-specific fields not in the generated monster database */
 typedef struct {
     int attack_range;
-    int default_style;   /* ATTACK_STYLE_* */
-    int melee_style;     /* MELEE_STYLE_STAB/SLASH/CRUSH for incoming defence bonus selection */
+    AttackStyle default_style;
+    MeleeStyle melee_style;  /* selects incoming-hit defence bonus */
     int can_melee;       /* 1 if can switch to melee when close */
     int magic_base_dmg;  /* base spell damage (magicMaxHit() in InfernoTrainer) */
     int magic_dmg_pct;   /* magic damage multiplier as % (100 = 1.0x) */
@@ -379,7 +379,7 @@ typedef struct {
 /* jad-only state. valid iff type is INF_NPC_JAD. reach it through inf_npc_jad();
    never touch InfNPC.type_state.jad directly. */
 typedef struct {
-    int attack_style;    /* committed next ranged/magic style preview, NONE if unknown */
+    AttackStyle attack_style;  /* committed next ranged/magic style preview, NONE if unknown */
     int healer_spawned;  /* 1 once this jad has spawned its healers */
 } InfJadState;
 
@@ -398,7 +398,7 @@ typedef struct {
     int size;
     uint32_t render_id;
     int attack_timer;      /* ticks until next attack */
-    int attack_style;      /* current attack style (may differ from default for blobs) */
+    AttackStyle attack_style;  /* current attack style (may differ from default for blobs) */
     int active;
     int target_x, target_y; /* movement destination */
     int stun_timer;        /* ticks of stun remaining (cannot act) */
@@ -442,7 +442,7 @@ typedef struct {
 
     /* per-tick render flags (cleared at start of each tick) */
     int attacked_this_tick;     /* 1 when NPC attacks this tick */
-    int attack_style_this_tick; /* actual style that fired this tick */
+    AttackStyle attack_style_this_tick; /* actual style that fired this tick */
     int attack_visual_target;   /* NPC index this attack visually targets (-1 = player) */
     int resurrecting_this_tick;     /* 1 when a mager fires its resurrection visual this tick */
     int resurrection_visual_target; /* NPC index the resurrection visual points at (-1 = none) */
@@ -915,7 +915,7 @@ typedef struct {
     /* per-tick player attack event for renderer projectiles */
     int player_attack_npc_idx;      /* NPC index targeted by player attack */
     int player_attack_dmg;          /* total damage dealt */
-    int player_attack_style_id;     /* ATTACK_STYLE_* of the player attack */
+    AttackStyle player_attack_style_id;
     EncounterProjectileTiming player_attack_timing;
 
     /* pending hits on player from NPC attacks (projectiles in flight) */

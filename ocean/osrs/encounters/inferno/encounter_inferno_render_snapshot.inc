@@ -234,11 +234,11 @@ static void* inf_get_log(EncounterState* state) {
 }
 
 static const OsrsCombatVisualRow* inf_npc_combat_visual_row(
-    InfNPCType type, int style
+    InfNPCType type, AttackStyle style
 ) {
     assert(type >= 0 && type < INF_NUM_NPC_TYPES);
     return osrs_combat_visual_find_npc_id(
-        (uint16_t)INF_NPC_DEF_IDS[type], (AttackStyle)style);
+        (uint16_t)INF_NPC_DEF_IDS[type], style);
 }
 
 
@@ -268,7 +268,7 @@ static void inf_render_post_tick_ctx(
         if (npc->type == INF_NPC_BLOB && npc->blob_scanned_prayer >= 0) continue;
 
         const InfNPCStats* stats = &INF_NPC_STATS[npc->type];
-        int actual_style = npc->attack_style_this_tick;
+        AttackStyle actual_style = npc->attack_style_this_tick;
 
         /* Zuk is typeless — show as magic for visual purposes. */
         if (actual_style == ATTACK_STYLE_NONE && npc->type == INF_NPC_ZUK)
@@ -542,7 +542,7 @@ static void inf_render_post_tick_ctx(
                             .src_size = 1,
                             .dst_size = target_size,
                             .target_npc_slot = target_idx,
-                            .attack_style = (AttackStyle)s->player_attack_style_id,
+                            .attack_style = s->player_attack_style_id,
                             .damage = visual_damage,
                             .duration_ticks = p_duration,
                             .start_delay = p_start_delay,

@@ -912,7 +912,7 @@ static void inf_fill_render_entities_ctx(
             .current_hitpoints = npc->hp,
             .base_hitpoints = npc->max_hp,
             .attack_style_this_tick = npc->attacked_this_tick
-                ? (AttackStyle)npc->attack_style_this_tick
+                ? npc->attack_style_this_tick
                 : ATTACK_STYLE_NONE,
             .hit_landed_this_tick = npc->hit_landed_this_tick,
             .hit_damage = npc->hit_damage,
