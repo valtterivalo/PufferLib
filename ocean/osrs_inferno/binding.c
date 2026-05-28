@@ -2379,8 +2379,6 @@ void my_log(Log* log, Dict* out) {
             log->count_died_with_zuk_healer_alive_normal / log->n_normal;
         float healer_resolve =
             log->count_healer_resolved_20_normal / log->n_normal;
-        float reached_240 = log->count_min_hp_le_240_normal;
-
         dict_set(out, "score_normal", score_normal);
         dict_set(out, "phase_reached_normal",
             log->phase_reached_normal_sum / log->n_normal);
