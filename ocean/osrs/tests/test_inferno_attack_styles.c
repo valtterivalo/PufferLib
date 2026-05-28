@@ -6387,7 +6387,7 @@ static void test_inferno_progress_score_rewards_late_add_transitions(void) {
 
     InfernoState win = healer_alive;
     win.episode_over = 1;
-    win.winner = 0;
+    win.winner = INF_OUTCOME_PLAYER_WON;
     float q_win = inf_progress_score((EncounterState*)&win);
     ASSERT_FLOAT_GT("win scores above partial state", q_win, q_healer_dead);
 }
@@ -7239,11 +7239,11 @@ static void test_terminal_reward_uses_fixed_win_reward(void) {
 
     InfernoState state = make_test_state(10, 10);
     state.episode_over = 1;
-    state.winner = 0;
+    state.winner = INF_OUTCOME_PLAYER_WON;
     ASSERT_FLOAT_NEAR("terminal win reward is fixed",
         inf_compute_reward(&state), 1.0f, 1e-6f);
 
-    state.winner = 1;
+    state.winner = INF_OUTCOME_PLAYER_DIED;
     test_config()->death_penalty_coeff = 0.25f;
     ASSERT_FLOAT_NEAR("terminal loss uses configured death penalty",
         inf_compute_reward(&state), -0.25f, 1e-6f);
@@ -7260,7 +7260,7 @@ static void test_final_wave_completion_emits_terminal_reward(void) {
     step_inferno_noop(&state);
 
     ASSERT_INT_EQ("final wave completion ends episode", state.episode_over, 1);
-    ASSERT_INT_EQ("final wave completion marks win", state.winner, 0);
+    ASSERT_INT_EQ("final wave completion marks win", state.winner, INF_OUTCOME_PLAYER_WON);
     ASSERT_INT_EQ("final wave completion marks wave clear",
         state.tick_scratch.wave_completed, 1);
     ASSERT_FLOAT_NEAR("final wave completion emits clipped terminal reward",
@@ -7288,7 +7288,7 @@ static void test_lethal_pending_hit_banks_damage_stats_before_terminal(void) {
     step_inferno_noop(&state);
 
     ASSERT_INT_EQ("lethal hit ends episode", state.episode_over, 1);
-    ASSERT_INT_EQ("lethal hit marks loss", state.winner, 1);
+    ASSERT_INT_EQ("lethal hit marks loss", state.winner, INF_OUTCOME_PLAYER_DIED);
     ASSERT_INT_EQ("lethal source counted", state.killed_by_type[INF_NPC_ZUK], 1);
     ASSERT_FLOAT_NEAR("lethal damage is banked",
         state.total_damage_received, 20.0f, 1e-6f);
@@ -7317,7 +7317,7 @@ static void test_terminal_penalty_applies_to_death_when_enabled(void) {
     step_inferno_noop(&state);
 
     ASSERT_INT_EQ("lethal hit ends episode", state.episode_over, 1);
-    ASSERT_INT_EQ("lethal hit marks loss", state.winner, 1);
+    ASSERT_INT_EQ("lethal hit marks loss", state.winner, INF_OUTCOME_PLAYER_DIED);
     ASSERT_FLOAT_NEAR("lethal tick emits terminal penalty",
         state.reward, -1.0f, 1e-6f);
     ASSERT_FLOAT_NEAR("episode return includes terminal penalty",
@@ -7335,7 +7335,7 @@ static void test_timeout_reward_matches_episode_return(void) {
     step_inferno_noop(&state);
 
     ASSERT_INT_EQ("timeout ends episode", state.episode_over, 1);
-    ASSERT_INT_EQ("timeout marks loss", state.winner, 1);
+    ASSERT_INT_EQ("timeout marks loss", state.winner, INF_OUTCOME_PLAYER_DIED);
     ASSERT_FLOAT_NEAR("timeout emits zero reward", state.reward, 0.0f, 1e-6f);
     ASSERT_FLOAT_NEAR("episode return matches timeout reward",
         state.episode_return, 0.0f, 1e-6f);
@@ -7353,7 +7353,7 @@ static void test_terminal_penalty_applies_to_timeout_when_enabled(void) {
     step_inferno_noop(&state);
 
     ASSERT_INT_EQ("timeout ends episode", state.episode_over, 1);
-    ASSERT_INT_EQ("timeout marks loss", state.winner, 1);
+    ASSERT_INT_EQ("timeout marks loss", state.winner, INF_OUTCOME_PLAYER_DIED);
     ASSERT_FLOAT_NEAR("timeout emits terminal penalty", state.reward, -1.0f, 1e-6f);
     ASSERT_FLOAT_NEAR("episode return includes terminal penalty",
         state.episode_return, -1.0f, 1e-6f);
@@ -7364,7 +7364,7 @@ static void test_inferno_render_overlay_reports_death_source(void) {
 
     InfernoState state = make_test_state(10, 10);
     state.episode_over = 1;
-    state.winner = 1;
+    state.winner = INF_OUTCOME_PLAYER_DIED;
     state.last_hit_by_type = INF_NPC_ZUK;
 
     EncounterOverlay ov;

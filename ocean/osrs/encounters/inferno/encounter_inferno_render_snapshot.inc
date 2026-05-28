@@ -190,7 +190,7 @@ static void inf_write_terminal_status_text(const InfernoState* s, char* out, siz
     if (cap == 0) return;
     out[0] = '\0';
     if (!s->episode_over) return;
-    if (s->winner == 0) {
+    if (s->winner == INF_OUTCOME_PLAYER_WON) {
         snprintf(out, cap, "Inferno cleared");
         return;
     }
@@ -203,7 +203,7 @@ static void* inf_get_log_ctx(EncounterState* state, EncounterContext* context) {
     if (s->episode_over && ctx->log) {
         ctx->log->episode_return += s->episode_return;
         ctx->log->episode_length += (float)s->tick;
-        ctx->log->wins += (s->winner == 0) ? 1.0f : 0.0f;
+        ctx->log->wins += (s->winner == INF_OUTCOME_PLAYER_WON) ? 1.0f : 0.0f;
         ctx->log->damage_dealt += s->total_damage_dealt;
         ctx->log->zuk_healer_damage += s->total_zuk_healer_damage;
         ctx->log->damage_received += s->total_damage_received;
@@ -222,7 +222,7 @@ static void* inf_get_log_ctx(EncounterState* state, EncounterContext* context) {
         ctx->log->gear_switches += (float)s->total_gear_switches;
         ctx->log->current_ranged += (float)s->player.current_ranged;
         ctx->log->current_magic += (float)s->player.current_magic;
-        ctx->log->min_zuk_hp_seen += (s->winner == 0)
+        ctx->log->min_zuk_hp_seen += (s->winner == INF_OUTCOME_PLAYER_WON)
             ? 0.0f
             : (s->min_zuk_hp_seen > 0.0f ? s->min_zuk_hp_seen : 1200.0f);
     }
@@ -850,7 +850,7 @@ static void inf_write_cell_key(EncounterState* state, void* out) {
 static float inf_progress_score_ctx(EncounterState* state, EncounterContext* context) {
     (void)context;
     const InfernoState* s = (const InfernoState*)state;
-    if (s->episode_over && s->winner == 0) return 2.0f;
+    if (s->episode_over && s->winner == INF_OUTCOME_PLAYER_WON) return 2.0f;
 
     float min_zhp = (s->min_zuk_hp_seen > 0.0f) ? s->min_zuk_hp_seen : 1200.0f;
     if (min_zhp < 0.0f) min_zhp = 0.0f;

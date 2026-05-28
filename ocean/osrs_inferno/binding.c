@@ -1229,7 +1229,7 @@ void c_step(Env* env) {
             sizeof(env->render_status_text));
         env->render_status_frames =
             env->render_status_text[0] != '\0' ? INF_RENDER_STATUS_FRAMES : 0;
-        float min_zuk_hp_term = (s->winner == 0)
+        float min_zuk_hp_term = (s->winner == INF_OUTCOME_PLAYER_WON)
             ? 0.0f
             : (s->min_zuk_hp_seen > 0.0f ? s->min_zuk_hp_seen : 1200.0f);
         int terminal_shield_active = inferno_terminal_shield_active(s);
@@ -1245,7 +1245,7 @@ void c_step(Env* env) {
         env->log.zuk_healer_damage += s->total_zuk_healer_damage;
         env->log.damage_received += s->total_damage_received;
         env->log.hp_restored += s->total_hp_restored;
-        env->log.wins += (s->winner == 0) ? 1.0f : 0.0f;
+        env->log.wins += (s->winner == INF_OUTCOME_PLAYER_WON) ? 1.0f : 0.0f;
         env->log.wave += (float)s->wave;
         env->log.prayer_correct += (float)s->total_prayer_correct;
         env->log.prayer_total += (float)s->total_npc_attacks;
@@ -1286,7 +1286,7 @@ void c_step(Env* env) {
                     break;
                 }
             }
-            if (s->winner == 0) zhp = 0.0f;
+            if (s->winner == INF_OUTCOME_PLAYER_WON) zhp = 0.0f;
             env->log.zuk_hp_remaining += zhp;
         }
         env->log.min_zuk_hp_seen += min_zuk_hp_term;
@@ -1295,10 +1295,10 @@ void c_step(Env* env) {
 
         {
             env->log.episode_return_normal += s->episode_return;
-            env->log.wins_normal += (s->winner == 0) ? 1.0f : 0.0f;
+            env->log.wins_normal += (s->winner == INF_OUTCOME_PLAYER_WON) ? 1.0f : 0.0f;
             env->log.min_zuk_hp_normal += min_zuk_hp_term;
             env->log.n_normal += 1.0f;
-            int won = (s->winner == 0);
+            int won = (s->winner == INF_OUTCOME_PLAYER_WON);
             int phase_bucket = won ? 4
                 : (min_zuk_hp_term <= 300.0f) ? 3
                 : (min_zuk_hp_term <= 600.0f) ? 2
@@ -1574,7 +1574,7 @@ void c_step(Env* env) {
             InfernoState* st = INF_ENV_INFERNO(env);
             int wave = st->wave;
             int ticks = env->episode_action_len;
-            int min_zuk_hp = (st->winner == 0)
+            int min_zuk_hp = (st->winner == INF_OUTCOME_PLAYER_WON)
                 ? 0
                 : (st->min_zuk_hp_seen > 0.0f ? (int)st->min_zuk_hp_seen : 1200);
 

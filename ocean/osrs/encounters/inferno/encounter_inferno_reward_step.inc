@@ -154,7 +154,7 @@ static float inf_compute_reward_ctx(InfernoState* s, const InfernoContext* ctx) 
     if (s->tick_scratch.kill_jad > 0) s->jad_killed_this_episode = 1;
 
     if (s->episode_over) {
-        if (s->winner == 0) return 1.0f;
+        if (s->winner == INF_OUTCOME_PLAYER_WON) return 1.0f;
         if (ctx->config.terminal_penalty_enabled) return -1.0f;
         return -ctx->config.death_penalty_coeff;
     }
@@ -438,7 +438,7 @@ static void inf_step_ctx(EncounterState* state, EncounterContext* context, const
         if (s->last_hit_by_type >= 0 && s->last_hit_by_type < INF_NUM_NPC_TYPES)
             s->killed_by_type[s->last_hit_by_type]++;
         s->episode_over = 1;
-        s->winner = 1;
+        s->winner = INF_OUTCOME_PLAYER_DIED;
         s->reward = inf_terminal_loss_reward(s, ctx);
         s->episode_return += s->reward;
         return;
@@ -537,7 +537,7 @@ static void inf_step_ctx(EncounterState* state, EncounterContext* context, const
         if (s->last_hit_by_type >= 0 && s->last_hit_by_type < INF_NUM_NPC_TYPES)
             s->killed_by_type[s->last_hit_by_type]++;
         s->episode_over = 1;
-        s->winner = 1;
+        s->winner = INF_OUTCOME_PLAYER_DIED;
         s->reward = inf_terminal_loss_reward(s, ctx);
         goto finish_step;
     }
@@ -563,7 +563,7 @@ static void inf_step_ctx(EncounterState* state, EncounterContext* context, const
         s->reward = wave_clear_reward;
         if (s->wave + 1 >= INF_NUM_WAVES) {
             s->episode_over = 1;
-            s->winner = 0;
+            s->winner = INF_OUTCOME_PLAYER_WON;
         } else {
             s->wave_spawn_target = s->wave + 1;
             s->wave_spawn_delay = 9;
@@ -572,7 +572,7 @@ static void inf_step_ctx(EncounterState* state, EncounterContext* context, const
 
     if (s->tick >= INF_MAX_TICKS) {
         s->episode_over = 1;
-        s->winner = 1;
+        s->winner = INF_OUTCOME_PLAYER_DIED;
         s->reward = inf_terminal_loss_reward(s, ctx);
     }
 

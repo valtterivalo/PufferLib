@@ -63,6 +63,12 @@ typedef enum {
     INF_NUM_NPC_TYPES
 } InfNPCType;
 
+/* terminal result of an inferno episode (the InfernoState.winner field) */
+typedef enum {
+    INF_OUTCOME_PLAYER_WON = 0,   /* reached and killed Zuk */
+    INF_OUTCOME_PLAYER_DIED = 1,  /* died or hit the tick cap */
+} InfOutcome;
+
 /* OSRS NPC definition IDs — maps InfNPCType enum to actual cache NPC IDs
  * used by the renderer to look up models/animations in npc_models.h */
 static const int INF_NPC_DEF_IDS[INF_NUM_NPC_TYPES] = {
@@ -813,7 +819,7 @@ typedef struct {
     int wave_spawn_delay;  /* ticks until first wave spawns (0 = spawn immediately) */
     int wave_ready_delay;
     int episode_over;
-    int winner;            /* 0 = player won (zuk dead), 1 = player died */
+    InfOutcome winner;     /* valid only when episode_over is set */
 
     /* reward tracking */
     float reward;
