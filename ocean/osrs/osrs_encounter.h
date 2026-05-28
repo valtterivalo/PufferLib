@@ -109,7 +109,7 @@ static inline int encounter_require_int_range_config(
 }
 
 
-#define ENCOUNTER_MAX_PENDING_HITS 8
+#define ENCOUNTER_MAX_PENDING_HITS 32
 
 /* spell types for barrage freeze/heal effects on pending hits */
 #define ENCOUNTER_SPELL_NONE  0
