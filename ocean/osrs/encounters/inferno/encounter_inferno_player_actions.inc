@@ -114,6 +114,7 @@ static void inf_apply_npc_death(InfernoState* s, int npc_idx) {
     if (!osrs_npc_death_linger_start(
             npc->hp, npc->active, &npc->death_ticks, INF_NPC_DEATH_LINGER_TICKS))
         return;
+    inf_clear_npc_pending_hits(npc);
     s->total_npc_kills++;
 
     if (npc->type == INF_NPC_BLOB)
@@ -831,15 +832,9 @@ static void inf_tick_player_ctx(
                         if (!btargets[i].active || !btargets[i].rolled) continue;
                         int nidx = btargets[i].npc_idx;
                         if (s->npcs[nidx].death_ticks > 0) continue;
-                        EncounterPendingHit* ph = &s->npcs[nidx].pending_hit;
-                        ph->active = 1;
-                        ph->damage = btargets[i].damage;
-                        ph->ticks_remaining = hit_delay;
-                        ph->attack_style = ATTACK_STYLE_MAGIC;
-                        ph->check_prayer = 0;
-                        ph->spell_type = active_spell;
-                        ph->hit_success = btargets[i].hit;
-                        ph->elysian_reduced = 0;
+                        inf_queue_npc_pending_hit(
+                            s, nidx, hit_delay, btargets[i].damage,
+                            ATTACK_STYLE_MAGIC, active_spell, btargets[i].hit);
                     }
 
                 } else if (is_blowpipe_spec_attack) {
@@ -856,15 +851,9 @@ static void inf_tick_player_ctx(
                     s->player.current_hitpoints += heal;
                     if (s->player.current_hitpoints > s->player.base_hitpoints)
                         s->player.current_hitpoints = s->player.base_hitpoints;
-                    EncounterPendingHit* ph = &target_npc->pending_hit;
-                    ph->active = 1;
-                    ph->damage = total_dmg;
-                    ph->ticks_remaining = hit_delay;
-                    ph->attack_style = ATTACK_STYLE_RANGED;
-                    ph->check_prayer = 0;
-                    ph->spell_type = 0;
-                    ph->hit_success = total_dmg > 0;
-                    ph->elysian_reduced = 0;
+                    inf_queue_npc_pending_hit(
+                        s, s->interaction.target_slot, hit_delay, total_dmg,
+                        ATTACK_STYLE_RANGED, ENCOUNTER_SPELL_NONE, total_dmg > 0);
 
                 } else if (ls->style == ATTACK_STYLE_RANGED) {
                     const InfNPCStats* ns = &INF_NPC_STATS[target_npc->type];
@@ -890,15 +879,9 @@ static void inf_tick_player_ctx(
                     if (hit_success) {
                         total_dmg = encounter_rand_int(&s->rng_state, attack_effects.max_hit + 1);
                     }
-                    EncounterPendingHit* ph = &target_npc->pending_hit;
-                    ph->active = 1;
-                    ph->damage = total_dmg;
-                    ph->ticks_remaining = hit_delay;
-                    ph->attack_style = ATTACK_STYLE_RANGED;
-                    ph->check_prayer = 0;
-                    ph->spell_type = 0;
-                    ph->hit_success = hit_success;
-                    ph->elysian_reduced = 0;
+                    inf_queue_npc_pending_hit(
+                        s, s->interaction.target_slot, hit_delay, total_dmg,
+                        ATTACK_STYLE_RANGED, ENCOUNTER_SPELL_NONE, hit_success);
                 }
 
                 s->player.attack_timer = ls->attack_speed;
@@ -999,19 +982,34 @@ static void inf_resolve_player_projectiles_on_npcs(InfernoState* s) {
     int blood_heal_acc = 0;
     for (int i = 0; i < INF_MAX_NPCS; i++) {
         if (!s->npcs[i].active || s->npcs[i].death_ticks > 0) continue;
-        int spell = s->npcs[i].pending_hit.spell_type;
-        int hit_success = s->npcs[i].pending_hit.hit_success;
-        float dmg_before = s->damage_dealt_this_tick;
-        int hp_before = s->npcs[i].hp;
-        int landed = encounter_resolve_npc_pending_hit(
-            &s->npcs[i].pending_hit,
-            &s->npcs[i].hp, &s->npcs[i].hit_landed_this_tick, &s->npcs[i].hit_damage,
-            &s->npcs[i].frozen_ticks, &blood_heal_acc, &s->damage_dealt_this_tick);
-        if (landed) {
+        InfNPC* npc = &s->npcs[i];
+        for (int h = 0; h < npc->pending_hit_count;) {
+            EncounterPendingHit* ph = &npc->pending_hits[h];
+            int spell = ph->spell_type;
+            int hit_success = ph->hit_success;
+            int old_hit_landed = npc->hit_landed_this_tick;
+            int old_hit_damage = npc->hit_damage;
+            float dmg_before = s->damage_dealt_this_tick;
+            int hp_before = npc->hp;
+            int landed = encounter_resolve_npc_pending_hit(
+                ph, &npc->hp, &npc->hit_landed_this_tick, &npc->hit_damage,
+                &npc->frozen_ticks, &blood_heal_acc, &s->damage_dealt_this_tick);
+            if (!landed) {
+                if (!ph->active) {
+                    inf_remove_npc_pending_hit(npc, h);
+                    continue;
+                }
+                h++;
+                continue;
+            }
+
+            if (old_hit_landed)
+                npc->hit_damage += old_hit_damage;
+
             float landed_damage = s->damage_dealt_this_tick - dmg_before;
-            int t = s->npcs[i].type;
-            int hp_after = s->npcs[i].hp;
-            int is_resurrected = s->npcs[i].resurrection_count != 0;
+            int t = npc->type;
+            int hp_after = npc->hp;
+            int is_resurrected = npc->resurrection_count != 0;
             if (is_resurrected) {
                 s->damage_resurrected_this_tick += landed_damage;
             } else {
@@ -1034,22 +1032,26 @@ static void inf_resolve_player_projectiles_on_npcs(InfernoState* s) {
                              t != INF_NPC_HEALER_JAD) s->kill_set_this_tick++;
                 }
             }
-            s->npcs[i].hit_spell_type = spell;
-            s->npcs[i].hit_was_successful_this_tick = hit_success;
+            npc->hit_spell_type = spell;
+            if (hit_success)
+                npc->hit_was_successful_this_tick = 1;
             int shield_taggable = inf_is_shield_taggable_slot(s, i);
-            if (s->npcs[i].aggro_target != -1) {
-                if (s->npcs[i].type == INF_NPC_HEALER_ZUK ||
-                    s->npcs[i].type == INF_NPC_HEALER_JAD) {
+            if (npc->aggro_target != -1) {
+                if (npc->type == INF_NPC_HEALER_ZUK ||
+                    npc->type == INF_NPC_HEALER_JAD) {
                     s->healer_tags_this_tick++;
-                    if (s->npcs[i].type == INF_NPC_HEALER_ZUK)
+                    if (npc->type == INF_NPC_HEALER_ZUK)
                         s->zuk_healer_tags_this_tick++;
                 }
                 if (shield_taggable)
                     s->shield_tags_this_tick++;
-                s->npcs[i].aggro_target = -1;
-                s->npcs[i].stun_timer = 2;
+                npc->aggro_target = -1;
+                npc->stun_timer = 2;
             }
+            inf_remove_npc_pending_hit(npc, h);
             inf_apply_npc_death(s, i);
+            if (!npc->active || npc->death_ticks > 0)
+                break;
         }
     }
     inf_apply_blood_barrage_heal_damage(s, blood_heal_acc);

@@ -354,7 +354,8 @@ static void fire_player_action_at_slot_zero(
     actions[INF_HEAD_TARGET] = inf_action_target_for_npc(state, 0);
     actions[INF_HEAD_SPELL] = spell_action;
     state->player.attack_timer = 0;
-    state->npcs[0].pending_hit = (EncounterPendingHit){0};
+    state->npcs[0].pending_hits[0] = (EncounterPendingHit){0};
+    state->npcs[0].pending_hit_count = 0;
     inf_tick_player(state, actions, 1);
 }
 
@@ -3767,7 +3768,7 @@ static void assert_human_blowpipe_zuk_chase_endpoint(
     ASSERT_INT_EQ("Zuk blowpipe endpoint remains out of range",
         inf_player_can_attack_npc_from_current_tile(&endpoint_state, 0), 0);
     ASSERT_INT_EQ("Zuk blowpipe endpoint does not fire",
-        endpoint_state.npcs[0].pending_hit.active, 0);
+        endpoint_state.npcs[0].pending_hits[0].active, 0);
     ASSERT_INT_EQ("Zuk blowpipe endpoint keeps interaction active",
         osrs_interaction_active(&endpoint_state.interaction), 1);
 }
@@ -3807,7 +3808,7 @@ static void test_human_blowpipe_click_chases_zuk_out_of_range(void) {
     ASSERT_INT_EQ("north-row Zuk click remains outside blowpipe range",
         inf_player_can_attack_npc_from_current_tile(&edge_state, 0), 0);
     ASSERT_INT_EQ("north-row Zuk cooldown prevents immediate hit",
-        edge_state.npcs[0].pending_hit.active, 0);
+        edge_state.npcs[0].pending_hits[0].active, 0);
     ASSERT_INT_EQ("north-row Zuk interaction remains active",
         osrs_interaction_active(&edge_state.interaction), 1);
 
@@ -3839,7 +3840,7 @@ static void test_human_blowpipe_click_chases_zuk_out_of_range(void) {
     ASSERT_INT_EQ("human Zuk click walks north toward range", state.player.y > 37, 1);
     ASSERT_INT_EQ("human Zuk click stays inside arena", state.player.y <= INF_ARENA_MAX_Y, 1);
     ASSERT_INT_EQ("cooldown prevents immediate Zuk hit",
-        state.npcs[0].pending_hit.active, 0);
+        state.npcs[0].pending_hits[0].active, 0);
     ASSERT_INT_EQ("attack timer decrements after chase", state.player.attack_timer, 2);
 
     for (int i = 0; i < 8; i++) {
@@ -3852,7 +3853,7 @@ static void test_human_blowpipe_click_chases_zuk_out_of_range(void) {
     ASSERT_INT_EQ("human Zuk click never reaches blowpipe attack tile",
         inf_player_can_attack_npc_from_current_tile(&state, 0), 0);
     ASSERT_INT_EQ("human Zuk click does not fire unreachable blowpipe hit",
-        state.npcs[0].pending_hit.active, 0);
+        state.npcs[0].pending_hits[0].active, 0);
     ASSERT_INT_EQ("human Zuk click keeps interaction after chase",
         osrs_interaction_active(&state.interaction), 1);
 }
@@ -3894,7 +3895,7 @@ static void test_zuk_healer_blowpipe_target_chases_out_of_range(void) {
     ASSERT_INT_EQ("healer target remains active while still out of range",
         inf_player_can_attack_npc_from_current_tile(&state, 2), 0);
     ASSERT_INT_EQ("cooldown prevents immediate healer hit",
-        state.npcs[2].pending_hit.active, 0);
+        state.npcs[2].pending_hits[0].active, 0);
     ASSERT_INT_EQ("attack timer decrements after healer chase",
         state.player.attack_timer, 2);
     ASSERT_INT_EQ("healer target is counted as cooldown after chase",
@@ -3906,7 +3907,7 @@ static void test_zuk_healer_blowpipe_target_chases_out_of_range(void) {
     for (int i = 0; i < 4 && !healer_hit_seen; i++) {
         memset(actions, 0, sizeof(actions));
         inf_tick_player(&state, actions, 1);
-        healer_hit_seen = state.npcs[2].pending_hit.active;
+        healer_hit_seen = state.npcs[2].pending_hits[0].active;
     }
 
     ASSERT_INT_EQ("healer target eventually fires after chase and cooldown",
@@ -4156,7 +4157,7 @@ static void test_zuk_healer_target_action_tags_on_landed_hit(void) {
     ASSERT_INT_EQ("target action records healer target tick count",
         state.total_zuk_healer_target_ticks, 1);
     ASSERT_INT_EQ("player attack queues healer hit",
-        state.npcs[2].pending_hit.active, 1);
+        state.npcs[2].pending_hits[0].active, 1);
     ASSERT_INT_EQ("player attack records first healer attack tick",
         state.tick_at_first_zuk_healer_attack, 321);
     ASSERT_INT_EQ("player attack records healer attack fire count",
@@ -4172,8 +4173,8 @@ static void test_zuk_healer_target_action_tags_on_landed_hit(void) {
     ASSERT_INT_EQ("healer target was not blocked by range",
         state.total_zuk_healer_out_of_range_ticks, 0);
 
-    state.npcs[2].pending_hit.damage = 0;
-    state.npcs[2].pending_hit.ticks_remaining = 1;
+    state.npcs[2].pending_hits[0].damage = 0;
+    state.npcs[2].pending_hits[0].ticks_remaining = 1;
     inf_resolve_player_projectiles_on_npcs(&state);
 
     ASSERT_INT_EQ("landed zero-damage hit tags zuk healer",
@@ -4443,10 +4444,11 @@ static void test_zuk_hp_threshold_pause_happens_before_set_tick(void) {
     state.npcs[0].attack_timer = 100;
     state.npcs[0].stun_timer = 0;
     state.zuk.set_timer = 10;
-    state.npcs[0].pending_hit.active = 1;
-    state.npcs[0].pending_hit.damage = 2;
-    state.npcs[0].pending_hit.ticks_remaining = 1;
-    state.npcs[0].pending_hit.attack_style = ATTACK_STYLE_RANGED;
+    state.npcs[0].pending_hits[0].active = 1;
+    state.npcs[0].pending_hits[0].damage = 2;
+    state.npcs[0].pending_hits[0].ticks_remaining = 1;
+    state.npcs[0].pending_hits[0].attack_style = ATTACK_STYLE_RANGED;
+    state.npcs[0].pending_hit_count = 1;
 
     step_inferno_noop(&state);
 
@@ -4656,10 +4658,10 @@ static void test_phantom_barrage_hits_aoe_on_first_cast_window(void) {
         inf_tick_player(&state, actions, 1);
 
         ASSERT_INT_EQ("phantom primary does not receive stale pending hit",
-            state.npcs[0].pending_hit.active, 0);
+            state.npcs[0].pending_hits[0].active, 0);
         if (state.player_attacked_this_tick &&
-                state.npcs[1].pending_hit.active &&
-                state.npcs[1].pending_hit.attack_style == ATTACK_STYLE_MAGIC) {
+                state.npcs[1].pending_hits[0].active &&
+                state.npcs[1].pending_hits[0].attack_style == ATTACK_STYLE_MAGIC) {
             found_aoe_hit = 1;
         }
     }
@@ -4687,7 +4689,7 @@ static void test_ranged_attack_cannot_fire_on_dying_target(void) {
     ASSERT_INT_EQ("ranged attack does not fire on dying target",
         state.player_attacked_this_tick, 0);
     ASSERT_INT_EQ("ranged attack does not queue dying target pending hit",
-        state.npcs[0].pending_hit.active, 0);
+        state.npcs[0].pending_hits[0].active, 0);
     ASSERT_INT_EQ("ranged attack does not start cooldown",
         state.player.attack_timer, 0);
 }
@@ -4709,7 +4711,7 @@ static void test_autocast_barrage_cannot_fire_on_dying_target(void) {
     ASSERT_INT_EQ("autocast does not fire on dying target",
         state.player_attacked_this_tick, 0);
     ASSERT_INT_EQ("autocast does not queue dying target pending hit",
-        state.npcs[0].pending_hit.active, 0);
+        state.npcs[0].pending_hits[0].active, 0);
     ASSERT_INT_EQ("autocast does not start cooldown",
         state.player.attack_timer, 0);
 }
@@ -4736,7 +4738,7 @@ static void test_manual_blood_barrage_can_heal_from_dying_primary(void) {
         ASSERT_INT_EQ("manual blood barrage fires on dying target",
             state.player_attacked_this_tick, 1);
         ASSERT_INT_EQ("manual blood barrage does not queue dying target pending hit",
-            state.npcs[0].pending_hit.active, 0);
+            state.npcs[0].pending_hits[0].active, 0);
         if (state.blood_heal_this_tick > 0 &&
                 state.player.current_hitpoints > 80) {
             found_heal = 1;
@@ -4765,7 +4767,7 @@ static void test_phantom_barrage_close_barrage_timing_cannot_recast(void) {
     ASSERT_INT_EQ("cooldown prevents phantom barrage fire",
         state.player_attacked_this_tick, 0);
     ASSERT_INT_EQ("cooldown prevents AoE pending hit",
-        state.npcs[1].pending_hit.active, 0);
+        state.npcs[1].pending_hits[0].active, 0);
     ASSERT_INT_EQ("attack timer only decrements",
         state.player.attack_timer, 1);
 }
@@ -4864,10 +4866,11 @@ static int inferno_fire_blood_barrage_at_slot_zero(
     memset(actions, 0, sizeof(actions));
     state->rng_state = seed;
     state->player.attack_timer = 0;
-    state->npcs[0].pending_hit = (EncounterPendingHit){0};
+    state->npcs[0].pending_hits[0] = (EncounterPendingHit){0};
+    state->npcs[0].pending_hit_count = 0;
     osrs_interaction_set(&state->interaction, 0);
     inf_tick_player(state, actions, 1);
-    return state->npcs[0].pending_hit.hit_success;
+    return state->npcs[0].pending_hits[0].hit_success;
 }
 
 static void test_default_autocast_casts_blood_barrage(void) {
@@ -4883,7 +4886,7 @@ static void test_default_autocast_casts_blood_barrage(void) {
     inf_tick_player(&state, actions, 1);
 
     ASSERT_INT_EQ("pending hit records blood barrage",
-        state.npcs[0].pending_hit.spell_type, ENCOUNTER_SPELL_BLOOD);
+        state.npcs[0].pending_hits[0].spell_type, ENCOUNTER_SPELL_BLOOD);
     ASSERT_INT_EQ("player render spell records blood barrage",
         state.player.magic_type_this_tick, ENCOUNTER_SPELL_BLOOD);
 }
@@ -4903,10 +4906,10 @@ static void test_ice_barrage_success_freezes_target_and_records_spell(void) {
         state.player.attack_timer = 0;
         inf_tick_player(&state, actions, 1);
 
-        if (state.npcs[0].pending_hit.hit_success) {
+        if (state.npcs[0].pending_hits[0].hit_success) {
             found = 1;
             ASSERT_INT_EQ("ice pending hit records ice barrage",
-                state.npcs[0].pending_hit.spell_type, ENCOUNTER_SPELL_ICE);
+                state.npcs[0].pending_hits[0].spell_type, ENCOUNTER_SPELL_ICE);
             ASSERT_INT_EQ("ice barrage freezes on successful accuracy",
                 state.npcs[0].frozen_ticks, BARRAGE_FREEZE_TICKS);
             ASSERT_INT_EQ("player render spell records ice barrage",
@@ -4924,7 +4927,7 @@ static void test_inferno_barrage_primes_confliction_and_reuses_double_accuracy(v
     for (uint32_t seed = 1; seed < 10000 && miss_seed == 0; seed++) {
         init_confliction_barrage_test_state(&state, INF_NPC_RANGER);
         int hit = inferno_fire_blood_barrage_at_slot_zero(&state, seed);
-        if (state.npcs[0].pending_hit.active && !hit)
+        if (state.npcs[0].pending_hits[0].active && !hit)
             miss_seed = seed;
     }
     ASSERT_INT_EQ("deterministic miss seed found", miss_seed > 0, 1);
@@ -4979,6 +4982,183 @@ static void test_barrage_accuracy_regression_against_ranger_and_mager(void) {
     }
 }
 
+static void init_barrage_pending_queue_edge_state(InfernoState* state) {
+    init_confliction_barrage_test_state(state, INF_NPC_RANGER);
+    state->player.x = 24;
+    state->player.y = 14;
+    state->npcs[0].x = 12;
+    state->npcs[0].y = 14;
+    state->npcs[0].hp = state->npcs[0].max_hp = INF_NPC_STATS[INF_NPC_RANGER].hp;
+    inf_clear_npc_pending_hits(&state->npcs[0]);
+    osrs_interaction_set(&state->interaction, 0);
+}
+
+static void tick_barrage_pending_queue_edge_state(InfernoState* state) {
+    int actions[INF_NUM_ACTION_HEADS];
+    memset(actions, 0, sizeof(actions));
+    actions[INF_HEAD_SPELL] = 1;
+    state->player_attacked_this_tick = 0;
+    state->npcs[0].hit_landed_this_tick = 0;
+    state->npcs[0].hit_damage = 0;
+    state->npcs[0].hit_was_successful_this_tick = 0;
+    inf_resolve_player_projectiles_on_npcs(state);
+    inf_tick_player(state, actions, 1);
+    state->tick++;
+}
+
+static void test_barrage_pending_queue_handles_slow_hit_delay(void) {
+    printf("--- barrage pending queue handles slow hit delay ---\n");
+
+    InfernoState state;
+    init_barrage_pending_queue_edge_state(&state);
+
+    int closest = encounter_projectile_distance(
+        state.player.x, state.player.y, 1,
+        state.npcs[0].x, state.npcs[0].y, state.npcs[0].size,
+        ENCOUNTER_PROJECTILE_DISTANCE_CLOSEST_TILE);
+    int sw_tile = encounter_projectile_distance(
+        state.player.x, state.player.y, 1,
+        state.npcs[0].x, state.npcs[0].y, state.npcs[0].size,
+        ENCOUNTER_PROJECTILE_DISTANCE_TARGET_SW_TILE);
+    ASSERT_INT_EQ("ranger is attackable at closest-tile range ten", closest, 10);
+    ASSERT_INT_EQ("barrage timing still sees target SW distance twelve", sw_tile, 12);
+    ASSERT_INT_EQ("player can cast at closest-tile range ten",
+        inf_player_can_attack_npc_from_current_tile(&state, 0), 1);
+
+    tick_barrage_pending_queue_edge_state(&state);
+    ASSERT_INT_EQ("first cast queues one hit",
+        state.npcs[0].pending_hit_count, 1);
+    ASSERT_INT_EQ("first queued hit uses slow barrage travel",
+        state.npcs[0].pending_hits[0].ticks_remaining,
+        encounter_magic_hit_delay(sw_tile, 1));
+
+    for (int i = 0; i < 5; i++)
+        tick_barrage_pending_queue_edge_state(&state);
+
+    ASSERT_INT_EQ("second cast queues behind the first in-flight hit",
+        state.npcs[0].pending_hit_count, 2);
+    ASSERT_INT_EQ("oldest hit is one tick from landing",
+        state.npcs[0].pending_hits[0].ticks_remaining, 1);
+
+    tick_barrage_pending_queue_edge_state(&state);
+    ASSERT_INT_EQ("oldest hit lands instead of being overwritten",
+        state.npcs[0].hit_landed_this_tick, 1);
+    ASSERT_INT_EQ("one queued hit remains after first land",
+        state.npcs[0].pending_hit_count, 1);
+    ASSERT_INT_EQ("ranger took damage from queued hit",
+        state.npcs[0].hp < state.npcs[0].max_hp, 1);
+}
+
+static void test_barrage_aoe_queues_hits_on_multiple_npcs(void) {
+    printf("--- barrage AoE queues hits on multiple NPCs ---\n");
+
+    InfernoState state;
+    init_confliction_barrage_test_state(&state, INF_NPC_RANGER);
+    state.npcs[1] = make_test_npc(
+        INF_NPC_RANGER, 17, 10, INF_NPC_STATS[INF_NPC_RANGER].size);
+    state.npcs[1].active = 1;
+    state.npcs[1].hp = state.npcs[1].max_hp = INF_NPC_STATS[INF_NPC_RANGER].hp;
+
+    int actions[INF_NUM_ACTION_HEADS];
+    memset(actions, 0, sizeof(actions));
+    state.player.attack_timer = 0;
+    inf_tick_player(&state, actions, 1);
+
+    ASSERT_INT_EQ("primary ranger has queued barrage hit",
+        state.npcs[0].pending_hit_count, 1);
+    ASSERT_INT_EQ("secondary ranger has queued barrage hit",
+        state.npcs[1].pending_hit_count, 1);
+    ASSERT_INT_EQ("primary queued hit is magic",
+        state.npcs[0].pending_hits[0].attack_style, ATTACK_STYLE_MAGIC);
+    ASSERT_INT_EQ("secondary queued hit is magic",
+        state.npcs[1].pending_hits[0].attack_style, ATTACK_STYLE_MAGIC);
+    ASSERT_INT_EQ("secondary queued hit preserves spell type",
+        state.npcs[1].pending_hits[0].spell_type, ENCOUNTER_SPELL_BLOOD);
+}
+
+static void test_repeated_edge_barrages_kill_ranger(void) {
+    printf("--- repeated edge barrages kill ranger ---\n");
+
+    InfernoState state;
+    init_barrage_pending_queue_edge_state(&state);
+
+    for (int tick = 0; tick < 240 && state.npcs[0].hp > 0; tick++)
+        tick_barrage_pending_queue_edge_state(&state);
+
+    ASSERT_INT_EQ("edge barrage loop kills the ranger",
+        state.npcs[0].hp <= 0, 1);
+}
+
+static void test_npc_pending_queue_lands_multiple_hits_in_order(void) {
+    printf("--- npc pending queue lands multiple hits in order ---\n");
+
+    InfernoState state = make_test_state(10, 10);
+    state.npcs[0] = make_test_npc(
+        INF_NPC_RANGER, 16, 10, INF_NPC_STATS[INF_NPC_RANGER].size);
+    state.npcs[0].active = 1;
+    state.npcs[0].hp = state.npcs[0].max_hp = INF_NPC_STATS[INF_NPC_RANGER].hp;
+    inf_queue_npc_pending_hit(
+        &state, 0, 1, 7, ATTACK_STYLE_MAGIC, ENCOUNTER_SPELL_BLOOD, 1);
+    inf_queue_npc_pending_hit(
+        &state, 0, 2, 11, ATTACK_STYLE_MAGIC, ENCOUNTER_SPELL_BLOOD, 1);
+
+    inf_resolve_player_projectiles_on_npcs(&state);
+    ASSERT_INT_EQ("first queued hit lands",
+        state.npcs[0].hit_damage, 7);
+    ASSERT_INT_EQ("second hit remains queued",
+        state.npcs[0].pending_hit_count, 1);
+    state.npcs[0].hit_landed_this_tick = 0;
+    state.npcs[0].hit_damage = 0;
+
+    inf_resolve_player_projectiles_on_npcs(&state);
+    ASSERT_INT_EQ("second queued hit lands",
+        state.npcs[0].hit_damage, 11);
+    ASSERT_INT_EQ("queue is empty after both hits",
+        state.npcs[0].pending_hit_count, 0);
+}
+
+static void test_npc_death_clears_pending_hits(void) {
+    printf("--- npc death clears pending hits ---\n");
+
+    InfernoState state = make_test_state(10, 10);
+    state.npcs[0] = make_test_npc(
+        INF_NPC_RANGER, 16, 10, INF_NPC_STATS[INF_NPC_RANGER].size);
+    state.npcs[0].active = 1;
+    state.npcs[0].hp = 5;
+    state.npcs[0].max_hp = INF_NPC_STATS[INF_NPC_RANGER].hp;
+    inf_queue_npc_pending_hit(
+        &state, 0, 1, 7, ATTACK_STYLE_MAGIC, ENCOUNTER_SPELL_BLOOD, 1);
+    inf_queue_npc_pending_hit(
+        &state, 0, 4, 11, ATTACK_STYLE_MAGIC, ENCOUNTER_SPELL_BLOOD, 1);
+
+    inf_resolve_player_projectiles_on_npcs(&state);
+    ASSERT_INT_EQ("lethal hit starts death linger",
+        state.npcs[0].death_ticks > 0, 1);
+    ASSERT_INT_EQ("death clears remaining pending hits",
+        state.npcs[0].pending_hit_count, 0);
+}
+
+static void test_lab_dump_reports_npc_pending_hit_queue(void) {
+    printf("--- lab dump reports npc pending hit queue ---\n");
+
+    InfernoState state = make_test_state(10, 10);
+    state.npcs[0] = make_test_npc(
+        INF_NPC_RANGER, 16, 10, INF_NPC_STATS[INF_NPC_RANGER].size);
+    state.npcs[0].active = 1;
+    state.npcs[0].hp = state.npcs[0].max_hp = INF_NPC_STATS[INF_NPC_RANGER].hp;
+    inf_queue_npc_pending_hit(
+        &state, 0, 3, 17, ATTACK_STYLE_MAGIC, ENCOUNTER_SPELL_BLOOD, 1);
+
+    char* dump = inf_lab_alloc_json(&state);
+    ASSERT_INT_EQ("lab dump includes pending count",
+        strstr(dump, "\"pending_count\":1") != NULL, 1);
+    ASSERT_INT_EQ("lab dump includes pending timer",
+        strstr(dump, "\"pending_earliest_ticks\":3") != NULL, 1);
+    ASSERT_INT_EQ("lab dump includes pending damage",
+        strstr(dump, "\"pending_damage\":17") != NULL, 1);
+    free(dump);
+}
+
 static void test_explicit_spell_cast_does_not_persist(void) {
     printf("--- explicit spell cast does not persist ---\n");
 
@@ -4988,15 +5168,16 @@ static void test_explicit_spell_cast_does_not_persist(void) {
 
     fire_player_action_at_slot_zero(&state, 2);
     ASSERT_INT_EQ("manual ice cast records ice pending hit",
-        state.npcs[0].pending_hit.spell_type, ENCOUNTER_SPELL_ICE);
+        state.npcs[0].pending_hits[0].spell_type, ENCOUNTER_SPELL_ICE);
     ASSERT_INT_EQ("manual ice render records ice",
         state.player.magic_type_this_tick, ENCOUNTER_SPELL_ICE);
 
     state.player.attack_timer = 0;
-    state.npcs[0].pending_hit = (EncounterPendingHit){0};
+    state.npcs[0].pending_hits[0] = (EncounterPendingHit){0};
+    state.npcs[0].pending_hit_count = 0;
     fire_player_action_at_slot_zero(&state, 0);
     ASSERT_INT_EQ("later normal attack falls back to blood autocast",
-        state.npcs[0].pending_hit.spell_type, ENCOUNTER_SPELL_BLOOD);
+        state.npcs[0].pending_hits[0].spell_type, ENCOUNTER_SPELL_BLOOD);
 }
 
 static void test_spell_without_target_does_not_affect_later_attack(void) {
@@ -5015,7 +5196,7 @@ static void test_spell_without_target_does_not_affect_later_attack(void) {
 
     fire_player_action_at_slot_zero(&state, 0);
     ASSERT_INT_EQ("next normal attack uses autocast blood",
-        state.npcs[0].pending_hit.spell_type, ENCOUNTER_SPELL_BLOOD);
+        state.npcs[0].pending_hits[0].spell_type, ENCOUNTER_SPELL_BLOOD);
 }
 
 static void test_target_without_spell_uses_autocast(void) {
@@ -5027,7 +5208,7 @@ static void test_target_without_spell_uses_autocast(void) {
 
     fire_player_action_at_slot_zero(&state, 0);
     ASSERT_INT_EQ("no-spell target attack uses ice autocast",
-        state.npcs[0].pending_hit.spell_type, ENCOUNTER_SPELL_ICE);
+        state.npcs[0].pending_hits[0].spell_type, ENCOUNTER_SPELL_ICE);
 }
 
 static void test_manual_spell_overrides_autocast(void) {
@@ -5039,13 +5220,13 @@ static void test_manual_spell_overrides_autocast(void) {
 
     fire_player_action_at_slot_zero(&state, 2);
     ASSERT_INT_EQ("manual ice overrides blood autocast",
-        state.npcs[0].pending_hit.spell_type, ENCOUNTER_SPELL_ICE);
+        state.npcs[0].pending_hits[0].spell_type, ENCOUNTER_SPELL_ICE);
 
     init_spell_cast_test_state(&state, INF_NPC_RANGER);
     state.player.autocast_spell = ENCOUNTER_SPELL_ICE;
     fire_player_action_at_slot_zero(&state, 1);
     ASSERT_INT_EQ("manual blood overrides ice autocast",
-        state.npcs[0].pending_hit.spell_type, ENCOUNTER_SPELL_BLOOD);
+        state.npcs[0].pending_hits[0].spell_type, ENCOUNTER_SPELL_BLOOD);
 }
 
 static void test_blood_barrage_at_full_hp_is_valid_and_heals_zero(void) {
@@ -5059,8 +5240,8 @@ static void test_blood_barrage_at_full_hp_is_valid_and_heals_zero(void) {
         mask[inferno_action_head_mask_offset(INF_HEAD_SPELL) + 1], 1.0f, 1e-6f);
 
     fire_player_action_at_slot_zero(&state, 1);
-    state.npcs[0].pending_hit.damage = 12;
-    state.npcs[0].pending_hit.ticks_remaining = 1;
+    state.npcs[0].pending_hits[0].damage = 12;
+    state.npcs[0].pending_hits[0].ticks_remaining = 1;
     state.player.current_hitpoints = state.player.base_hitpoints;
     inf_resolve_player_projectiles_on_npcs(&state);
 
@@ -7098,12 +7279,13 @@ static void test_magic_splash_landing_keeps_spell_visual_context(void) {
         INF_NPC_RANGER, 16, 10, INF_NPC_STATS[INF_NPC_RANGER].size);
     state.npcs[0].active = 1;
     state.npcs[0].hp = state.npcs[0].max_hp = INF_NPC_STATS[INF_NPC_RANGER].hp;
-    state.npcs[0].pending_hit.active = 1;
-    state.npcs[0].pending_hit.ticks_remaining = 1;
-    state.npcs[0].pending_hit.damage = 0;
-    state.npcs[0].pending_hit.attack_style = ATTACK_STYLE_MAGIC;
-    state.npcs[0].pending_hit.spell_type = ENCOUNTER_SPELL_BLOOD;
-    state.npcs[0].pending_hit.hit_success = 0;
+    state.npcs[0].pending_hits[0].active = 1;
+    state.npcs[0].pending_hits[0].ticks_remaining = 1;
+    state.npcs[0].pending_hits[0].damage = 0;
+    state.npcs[0].pending_hits[0].attack_style = ATTACK_STYLE_MAGIC;
+    state.npcs[0].pending_hits[0].spell_type = ENCOUNTER_SPELL_BLOOD;
+    state.npcs[0].pending_hits[0].hit_success = 0;
+    state.npcs[0].pending_hit_count = 1;
 
     inf_resolve_player_projectiles_on_npcs(&state);
 
@@ -7128,11 +7310,12 @@ static void test_npc_overkill_hit_caps_splat_hp_and_damage_stats(void) {
     state.npcs[0].active = 1;
     state.npcs[0].hp = 15;
     state.npcs[0].max_hp = INF_NPC_STATS[INF_NPC_RANGER].hp;
-    state.npcs[0].pending_hit.active = 1;
-    state.npcs[0].pending_hit.ticks_remaining = 1;
-    state.npcs[0].pending_hit.damage = 50;
-    state.npcs[0].pending_hit.attack_style = ATTACK_STYLE_RANGED;
-    state.npcs[0].pending_hit.hit_success = 1;
+    state.npcs[0].pending_hits[0].active = 1;
+    state.npcs[0].pending_hits[0].ticks_remaining = 1;
+    state.npcs[0].pending_hits[0].damage = 50;
+    state.npcs[0].pending_hits[0].attack_style = ATTACK_STYLE_RANGED;
+    state.npcs[0].pending_hits[0].hit_success = 1;
+    state.npcs[0].pending_hit_count = 1;
 
     inf_resolve_player_projectiles_on_npcs(&state);
 
@@ -7163,12 +7346,13 @@ static void test_blood_barrage_overkill_heals_from_capped_damage(void) {
     state.npcs[0].active = 1;
     state.npcs[0].hp = 8;
     state.npcs[0].max_hp = INF_NPC_STATS[INF_NPC_RANGER].hp;
-    state.npcs[0].pending_hit.active = 1;
-    state.npcs[0].pending_hit.ticks_remaining = 1;
-    state.npcs[0].pending_hit.damage = 40;
-    state.npcs[0].pending_hit.attack_style = ATTACK_STYLE_MAGIC;
-    state.npcs[0].pending_hit.spell_type = ENCOUNTER_SPELL_BLOOD;
-    state.npcs[0].pending_hit.hit_success = 1;
+    state.npcs[0].pending_hits[0].active = 1;
+    state.npcs[0].pending_hits[0].ticks_remaining = 1;
+    state.npcs[0].pending_hits[0].damage = 40;
+    state.npcs[0].pending_hits[0].attack_style = ATTACK_STYLE_MAGIC;
+    state.npcs[0].pending_hits[0].spell_type = ENCOUNTER_SPELL_BLOOD;
+    state.npcs[0].pending_hits[0].hit_success = 1;
+    state.npcs[0].pending_hit_count = 1;
 
     inf_resolve_player_projectiles_on_npcs(&state);
 
@@ -7635,6 +7819,29 @@ static void test_inferno_binding_emits_post_240_traces(void) {
         "inferno_post_240_trace_close(env, \"close\")");
 }
 
+static void test_inferno_stall_trace_reports_player_to_npc_pending_hits(void) {
+    printf("--- inferno stall trace reports player-to-npc pending hits ---\n");
+
+    ASSERT_SOURCE_BLOCK_NOT_CONTAINS(
+        "stall trace does not ignore attack ticks",
+        "ocean/osrs_inferno/binding.c",
+        "static int inferno_stall_trace_tick_matches",
+        "static void inferno_stall_trace_write_npcs",
+        "player_attacked_this_tick");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "stall trace includes npc pending hit queue",
+        "ocean/osrs_inferno/binding.c",
+        "static void inferno_stall_trace_write_npcs",
+        "static void inferno_stall_trace_close",
+        "pending_count");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "stall trace includes current target pending hit queue",
+        "ocean/osrs_inferno/binding.c",
+        "current_target_pending_count",
+        "inferno_stall_trace_write_npcs",
+        "current_target_pending_damage");
+}
+
 static void test_inferno_render_status_survives_overlay_refresh(void) {
     printf("--- inferno render status survives overlay refresh ---\n");
 
@@ -7840,6 +8047,12 @@ int main(void) {
     test_ice_barrage_success_freezes_target_and_records_spell();
     test_inferno_barrage_primes_confliction_and_reuses_double_accuracy();
     test_barrage_accuracy_regression_against_ranger_and_mager();
+    test_barrage_pending_queue_handles_slow_hit_delay();
+    test_barrage_aoe_queues_hits_on_multiple_npcs();
+    test_repeated_edge_barrages_kill_ranger();
+    test_npc_pending_queue_lands_multiple_hits_in_order();
+    test_npc_death_clears_pending_hits();
+    test_lab_dump_reports_npc_pending_hit_queue();
     test_explicit_spell_cast_does_not_persist();
     test_spell_without_target_does_not_affect_later_attack();
     test_target_without_spell_uses_autocast();
@@ -7933,6 +8146,7 @@ int main(void) {
     test_inferno_binding_forwards_loadout_profile_config();
     test_inferno_binding_logs_post_healer_set_reward_components();
     test_inferno_binding_emits_post_240_traces();
+    test_inferno_stall_trace_reports_player_to_npc_pending_hits();
     test_inferno_render_status_survives_overlay_refresh();
     test_inferno_eval_render_post_tick_owns_entity_refresh();
     test_inferno_eval_render_env_syncs_tick_for_animation_events();

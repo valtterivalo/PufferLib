@@ -892,7 +892,7 @@ static float inf_progress_score(EncounterState* state) {
 /* snapshot/restore stores only gameplay state. live process data stays in context. */
 
 #define INF_SNAPSHOT_MAGIC 0x1FE00001u
-#define INF_SNAPSHOT_VERSION 17u
+#define INF_SNAPSHOT_VERSION 18u
 
 typedef struct {
     uint32_t magic;

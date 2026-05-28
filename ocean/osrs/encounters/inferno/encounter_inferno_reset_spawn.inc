@@ -425,6 +425,7 @@ static void inf_deactivate_npc(InfernoState* s, int idx) {
     InfNPC* npc = &s->npcs[idx];
     if (npc->active && inf_npc_sets_collision_flag(npc->type))
         inf_unstamp_npc_collision_footprint(s, npc->x, npc->y, inf_npc_effective_size(npc));
+    inf_clear_npc_pending_hits(npc);
     npc->active = 0;
 }
 

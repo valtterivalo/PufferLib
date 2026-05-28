@@ -482,8 +482,6 @@ static int inferno_stall_trace_tick_matches(const InfernoState* s) {
     if (s->episode_over) return 0;
     if (s->wave_spawn_delay > 0 || s->wave_ready_delay > 0) return 0;
     if (!inferno_stall_trace_has_alive_target(s)) return 0;
-    if (s->player.attack_timer != 0) return 0;
-    if (s->player_attacked_this_tick) return 0;
     if (s->damage_dealt_this_tick > 0.0f) return 0;
     return 1;
 }
@@ -501,14 +499,26 @@ static void inferno_stall_trace_write_npcs(FILE* fp, InfernoState* s) {
         int player_can_attack =
             inf_player_can_attack_npc_from_current_tile(s, i);
         int npc_has_los = inf_npc_has_los_direct(s, i);
+        const EncounterPendingHit* pending =
+            inf_earliest_npc_pending_hit(npc);
+        int pending_ticks = pending ? pending->ticks_remaining : 0;
+        int pending_style = pending ? pending->attack_style : ATTACK_STYLE_NONE;
+        int pending_spell = pending ? pending->spell_type : ENCOUNTER_SPELL_NONE;
+        int pending_hit_success = pending ? pending->hit_success : 0;
+        int pending_damage = inf_npc_pending_hit_damage_sum(npc);
         if (!first) fprintf(fp, ",");
         first = 0;
         fprintf(fp,
             "{\"slot\":%d,\"type\":%d,\"hp\":%d,\"x\":%d,\"y\":%d,"
             "\"size\":%d,\"attack_timer\":%d,\"obs_slot\":%d,"
-            "\"player_can_attack\":%d,\"npc_has_los\":%d}",
+            "\"player_can_attack\":%d,\"npc_has_los\":%d,"
+            "\"pending_count\":%d,\"pending_earliest_ticks\":%d,"
+            "\"pending_style\":%d,\"pending_spell\":%d,"
+            "\"pending_hit_success\":%d,\"pending_damage\":%d}",
             i, npc->type, npc->hp, npc->x, npc->y, npc->size,
-            npc->attack_timer, obs_slot, player_can_attack, npc_has_los);
+            npc->attack_timer, obs_slot, player_can_attack, npc_has_los,
+            npc->pending_hit_count, pending_ticks, pending_style,
+            pending_spell, pending_hit_success, pending_damage);
     }
     fprintf(fp, "]");
 }
@@ -612,8 +622,15 @@ static void inferno_stall_trace_capture(
     int current_target_attackable = 0;
     int current_target_in_range = 0;
     int current_target_los = 0;
+    int current_target_pending_count = 0;
+    int current_target_pending_ticks = 0;
+    int current_target_pending_style = ATTACK_STYLE_NONE;
+    int current_target_pending_spell = ENCOUNTER_SPELL_NONE;
+    int current_target_pending_hit_success = 0;
+    int current_target_pending_damage = 0;
     if (current_target_slot >= 0 && current_target_slot < INF_MAX_NPCS) {
-        current_target_type = s->npcs[current_target_slot].type;
+        InfNPC* current_target = &s->npcs[current_target_slot];
+        current_target_type = current_target->type;
         current_target_attackable = inf_obs_slot_is_targetable(
             s,
             INF_ENV_INFERNO_CONTEXT(env),
@@ -621,6 +638,17 @@ static void inferno_stall_trace_capture(
         current_target_in_range =
             inf_player_can_attack_npc_from_current_tile(s, current_target_slot);
         current_target_los = inf_npc_has_los_direct(s, current_target_slot);
+        const EncounterPendingHit* pending =
+            inf_earliest_npc_pending_hit(current_target);
+        current_target_pending_count = current_target->pending_hit_count;
+        current_target_pending_ticks = pending ? pending->ticks_remaining : 0;
+        current_target_pending_style =
+            pending ? pending->attack_style : ATTACK_STYLE_NONE;
+        current_target_pending_spell =
+            pending ? pending->spell_type : ENCOUNTER_SPELL_NONE;
+        current_target_pending_hit_success = pending ? pending->hit_success : 0;
+        current_target_pending_damage =
+            inf_npc_pending_hit_damage_sum(current_target);
     }
 
     fprintf(env->stall_trace_file,
@@ -630,6 +658,8 @@ static void inferno_stall_trace_capture(
         "\"player_hp\":%d,\"player_prayer\":%d,"
         "\"player_attack_timer\":%d,\"player_dest_x\":%d,"
         "\"player_dest_y\":%d,\"player_moved\":%d,"
+        "\"player_attacked\":%d,\"player_attack_target\":%d,"
+        "\"player_attack_style\":%d,\"player_attack_damage\":%d,"
         "\"active_overhead\":%d,"
         "\"offensive_prayer\":%d,\"weapon\":%d,\"ranged\":%d,"
         "\"magic\":%d,\"brews\":%d,\"restores\":%d,\"bastions\":%d,"
@@ -654,6 +684,10 @@ static void inferno_stall_trace_capture(
         s->player_dest_x,
         s->player_dest_y,
         s->player_moved_this_tick,
+        s->player_attacked_this_tick,
+        s->player_attack_npc_idx,
+        s->player_attack_style_id,
+        s->player_attack_dmg,
         s->player.prayer,
         s->player.offensive_prayer,
         s->weapon_set,
@@ -682,12 +716,24 @@ static void inferno_stall_trace_capture(
     fprintf(env->stall_trace_file,
         "],\"current_target_slot\":%d,\"current_target_type\":%d,"
         "\"current_target_attackable\":%d,\"current_target_in_range\":%d,"
-        "\"current_target_los\":%d,",
+        "\"current_target_los\":%d,"
+        "\"current_target_pending_count\":%d,"
+        "\"current_target_pending_earliest_ticks\":%d,"
+        "\"current_target_pending_style\":%d,"
+        "\"current_target_pending_spell\":%d,"
+        "\"current_target_pending_hit_success\":%d,"
+        "\"current_target_pending_damage\":%d,",
         current_target_slot,
         current_target_type,
         current_target_attackable,
         current_target_in_range,
-        current_target_los);
+        current_target_los,
+        current_target_pending_count,
+        current_target_pending_ticks,
+        current_target_pending_style,
+        current_target_pending_spell,
+        current_target_pending_hit_success,
+        current_target_pending_damage);
     inferno_stall_trace_write_npcs(env->stall_trace_file, s);
     fprintf(env->stall_trace_file, "}\n");
     env->stall_trace_rows++;
