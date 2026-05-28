@@ -5373,6 +5373,15 @@ static void render_draw_target_label(RenderClient* rc) {
     DrawText(label, x, 12, 16, COLOR_TEXT);
 }
 
+static int render_display_tick(OsrsEnv* env) {
+    if (env->encounter_def && env->encounter_state) {
+        return ((const EncounterDef*)env->encounter_def)->get_tick(
+            (EncounterState*)env->encounter_state,
+            (EncounterContext*)env->encounter_context);
+    }
+    return env->tick;
+}
+
 static int render_scene_is_pvp(OsrsEnv* env) {
     if (!env->encounter_def) return 1;
     const EncounterDef* def = (const EncounterDef*)env->encounter_def;
@@ -5390,6 +5399,40 @@ static const char* render_control_hint_text(OsrsEnv* env) {
         return "Right-drag: orbit  Mid-drag: pan  Scroll: zoom  D: debug  H: human  F8: lab";
     }
     return "Right-drag: orbit  Mid-drag: pan  Scroll: zoom  SPACE: pause  S: safe spots  D: debug  G: cycle entity  H: human";
+}
+
+static void render_draw_default_top_hud(RenderClient* rc, int display_tick) {
+    DrawText(TextFormat("Tick: %d", display_tick), 10, 12, 16, COLOR_TEXT);
+    render_draw_target_label(rc);
+
+    if (rc->entity_count >= 2) {
+        RenderEntity* p0 = &rc->entities[0];
+        RenderEntity* p1 = &rc->entities[1];
+        const char* hp_txt = TextFormat("P0: %d/%d   P1: %d/%d",
+            p0->current_hitpoints, p0->base_hitpoints,
+            p1->current_hitpoints, p1->base_hitpoints);
+        int hp_w = MeasureText(hp_txt, 16);
+        DrawText(hp_txt, RENDER_GRID_W - hp_w - 12, 12, 16, COLOR_TEXT);
+    }
+}
+
+static void render_draw_inferno_top_hud(OsrsEnv* env, int display_tick) {
+    InfernoState* s = render_inferno_state_from_env(env);
+    if (!s) {
+        DrawText(TextFormat("Tick: %d", display_tick), 10, 12, 16, COLOR_TEXT);
+        return;
+    }
+    DrawText(TextFormat("Tick: %d   Wave: %d / %d",
+        display_tick, s->wave + 1, INF_NUM_WAVES), 10, 12, 16, COLOR_TEXT);
+}
+
+static void render_draw_top_hud(RenderClient* rc, OsrsEnv* env) {
+    int display_tick = render_display_tick(env);
+    if (render_scene_is_inferno(env)) {
+        render_draw_inferno_top_hud(env, display_tick);
+        return;
+    }
+    render_draw_default_top_hud(rc, display_tick);
 }
 
 static void render_follow_pvp_fighter_midpoint(RenderClient* rc, OsrsEnv* env, double frame_dt) {
@@ -5538,24 +5581,7 @@ void pvp_render(OsrsEnv* env) {
             }
         }
 
-    int display_tick = env->tick;
-    if (env->encounter_def && env->encounter_state)
-        display_tick = ((const EncounterDef*)env->encounter_def)->get_tick(
-            (EncounterState*)env->encounter_state,
-            (EncounterContext*)env->encounter_context);
-    DrawText(TextFormat("Tick: %d", display_tick), 10, 12, 16, COLOR_TEXT);
-    render_draw_target_label(rc);
-
-    if (rc->entity_count >= 2) {
-        RenderEntity* p0 = &rc->entities[0];
-        RenderEntity* p1 = &rc->entities[1];
-        const char* hp_txt = TextFormat("P0: %d/%d   P1: %d/%d",
-            p0->current_hitpoints, p0->base_hitpoints,
-            p1->current_hitpoints, p1->base_hitpoints);
-        int hp_w = MeasureText(hp_txt, 16);
-        DrawText(hp_txt, RENDER_GRID_W - hp_w - 12, 12, 16, COLOR_TEXT);
-    }
-
+    render_draw_top_hud(rc, env);
     DrawText(render_control_hint_text(env), 10, RENDER_WINDOW_H - 20, 10, COLOR_TEXT_DIM);
 
     /* OSRS GUI panel system: shows selected entity's state.
