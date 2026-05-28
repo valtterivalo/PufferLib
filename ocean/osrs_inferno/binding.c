@@ -1106,6 +1106,36 @@ static inline void inferno_env_refresh_after_state_load(Env* env) {
     inferno_env_write_post_restore_state(env);
 }
 
+static inline void inferno_env_clear_render_input(Env* env, RenderClient* rc) {
+    if (!rc) return;
+    human_input_clear_pending(&rc->human_input);
+    human_input_clear_move(&rc->human_input);
+    human_input_clear_selected_ui_target(&rc->human_input);
+    ENCOUNTER_INFERNO.put_int(
+        INF_ENV_STATE(env), INF_ENV_CONTEXT(env), "player_dest_x", -1);
+    ENCOUNTER_INFERNO.put_int(
+        INF_ENV_STATE(env), INF_ENV_CONTEXT(env), "player_dest_y", -1);
+    ENCOUNTER_INFERNO.put_int(
+        INF_ENV_STATE(env), INF_ENV_CONTEXT(env), "human_command_mode", 0);
+}
+
+static inline void inferno_env_emit_lab_restore_terminal(
+    Env* env,
+    RenderClient* rc
+) {
+    rc->inferno_lab_restore_requested = 0;
+    inferno_env_clear_render_input(env, rc);
+    inferno_env_refresh_after_state_load(env);
+    env->rewards[0] = 0.0f;
+    env->term_staging = 1;
+    env->terminals[0] = 1.0f;
+}
+
+static inline void inferno_env_freeze_for_lab(Env* env, RenderClient* rc) {
+    inferno_env_clear_render_input(env, rc);
+    inferno_env_write_post_restore_state(env);
+}
+
 static inline void inferno_env_mark_episode_start(Env* env) {
     env->episode_rng_start = INF_ENV_INFERNO(env)->rng_state;
 }
@@ -1135,6 +1165,22 @@ void c_step(Env* env) {
     double inf_prof_t0 = inf_prof_total_t0;
     int used_human_commands = 0;
     RenderClient* render_client = (RenderClient*)env->render_env.client;
+
+    if (render_client && render_client->inferno_lab_restore_requested) {
+        inferno_env_emit_lab_restore_terminal(env, render_client);
+        if (inf_prof_enabled)
+            INF_PROFILE_ADD(INF_PROF_C_STEP_TOTAL,
+                INF_PROFILE_NOW_MS() - inf_prof_total_t0);
+        return;
+    }
+
+    if (render_client && render_client->inferno_lab_enabled) {
+        inferno_env_freeze_for_lab(env, render_client);
+        if (inf_prof_enabled)
+            INF_PROFILE_ADD(INF_PROF_C_STEP_TOTAL,
+                INF_PROFILE_NOW_MS() - inf_prof_total_t0);
+        return;
+    }
 
     /* replay playback: if this env has a loaded replay, override policy actions */
     if (env->replay_actions && env->replay_cursor < env->replay_num_ticks) {
@@ -1640,6 +1686,8 @@ void c_step(Env* env) {
         env->episode_initial_snapshot_valid = 0;
         INF_PROFILE_MARK(INF_PROF_C_TERMINAL_LOG);
 
+        if (render_client)
+            render_inferno_lab_clear_entry_snapshot(render_client);
         ENCOUNTER_INFERNO.reset(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), 0);
         ENCOUNTER_INFERNO.write_obs(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), obs);
         ENCOUNTER_INFERNO.write_mask(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), obs + INF_NUM_OBS);
@@ -1655,6 +1703,9 @@ void c_reset(Env* env) {
     inferno_post_240_trace_close(env, "reset");
     inferno_stall_trace_close(env, "reset");
     env->stall_trace_ticks = 0;
+    if (env->render_env.client)
+        render_inferno_lab_clear_entry_snapshot(
+            (RenderClient*)env->render_env.client);
     uint32_t seed = env->replay_actions ? env->replay_rng_seed : 0;
     if (env->replay_actions && env->replay_has_initial_snapshot) {
         ENCOUNTER_INFERNO.restore(
@@ -1752,12 +1803,14 @@ void c_render(Env* env) {
         env->pending_render_reset = 0;
     }
 
-    /* update NPC visual positions once per tick (not per frame).
-       render_post_tick snapshots the existing rc->entities before repopulating
-       so it can detect new NPC identities and clear stale splats/HP bars. */
-    render_post_tick(rc, re);
-    inferno_env_apply_render_status_overlay(env, rc);
-    if (env->render_status_frames > 0) env->render_status_frames--;
+    if (!rc->inferno_lab_enabled) {
+        /* update NPC visual positions once per tick (not per frame).
+           render_post_tick snapshots the existing rc->entities before repopulating
+           so it can detect new NPC identities and clear stale splats/HP bars. */
+        render_post_tick(rc, re);
+        inferno_env_apply_render_status_overlay(env, rc);
+        if (env->render_status_frames > 0) env->render_status_frames--;
+    }
 
     /* Match the standalone viewer's visual_frame pattern: render until the
        next sim tick is due. pvp_render scales the client-tick clock by replay

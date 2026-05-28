@@ -8702,6 +8702,35 @@ static void test_inferno_eval_render_env_syncs_tick_for_animation_events(void) {
         "re->tick = ENCOUNTER_INFERNO.get_tick(");
 }
 
+static void test_inferno_lab_freeze_binding_precedes_action_sources(void) {
+    printf("--- inferno lab freeze binding precedes action sources ---\n");
+
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "lab restore checked before replay",
+        "ocean/osrs_inferno/binding.c",
+        "RenderClient* render_client",
+        "/* replay playback",
+        "inferno_env_emit_lab_restore_terminal(env, render_client)");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "lab freeze checked before replay",
+        "ocean/osrs_inferno/binding.c",
+        "RenderClient* render_client",
+        "/* replay playback",
+        "inferno_env_freeze_for_lab(env, render_client)");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "lab restore emits terminal without reset",
+        "ocean/osrs_inferno/binding.c",
+        "static inline void inferno_env_emit_lab_restore_terminal",
+        "static inline void inferno_env_freeze_for_lab",
+        "env->terminals[0] = 1.0f");
+    ASSERT_SOURCE_BLOCK_NOT_CONTAINS(
+        "lab restore helper does not reset encounter",
+        "ocean/osrs_inferno/binding.c",
+        "static inline void inferno_env_emit_lab_restore_terminal",
+        "static inline void inferno_env_freeze_for_lab",
+        "ENCOUNTER_INFERNO.reset");
+}
+
 static void test_curriculum_supports_wave60_bridge_tier(void) {
     printf("--- curriculum supports wave60 bridge tier ---\n");
 
@@ -8981,6 +9010,7 @@ int main(void) {
     test_inferno_render_status_survives_overlay_refresh();
     test_inferno_eval_render_post_tick_owns_entity_refresh();
     test_inferno_eval_render_env_syncs_tick_for_animation_events();
+    test_inferno_lab_freeze_binding_precedes_action_sources();
     test_curriculum_supports_wave60_bridge_tier();
     test_inferno_reset_uses_osrs_run_energy_units();
 

@@ -419,6 +419,11 @@ typedef struct RenderClient {
     int inferno_lab_selected_npc_slot;
     int inferno_lab_prev_paused;
     int inferno_lab_prev_human_enabled;
+    void* inferno_lab_entry_snapshot;
+    size_t inferno_lab_entry_snapshot_size;
+    int inferno_lab_entry_snapshot_valid;
+    int inferno_lab_restore_requested;
+    int inferno_lab_restore_generation;
 
     /* UI layout mode: 0 = fixed (1182/1183 chrome), 1 = resizable (1177/1178).
        L key toggles. mirrors OSRS client display modes. */
@@ -586,6 +591,8 @@ typedef struct RenderClient {
 static Camera3D render_build_3d_camera(RenderClient* rc);
 static void render_populate_entities(RenderClient* rc, OsrsEnv* env);
 static void render_seed_entity_visual_slot(RenderClient* rc, int i);
+static void render_reset_episode_visual_state(RenderClient* rc, OsrsEnv* env);
+static void context_menu_dismiss(ContextMenu* cm);
 static inline int render_world_to_screen_x_rc(RenderClient* rc, int world_x);
 static inline int render_world_to_screen_y_rc(RenderClient* rc, int world_y);
 
@@ -778,6 +785,91 @@ static void render_inferno_lab_apply_command(
     }
     render_populate_entities(rc, env);
     render_inferno_lab_snap_all_visuals(rc);
+}
+
+static void render_inferno_lab_clear_entry_snapshot(RenderClient* rc) {
+    if (!rc) return;
+    free(rc->inferno_lab_entry_snapshot);
+    rc->inferno_lab_entry_snapshot = NULL;
+    rc->inferno_lab_entry_snapshot_size = 0;
+    rc->inferno_lab_entry_snapshot_valid = 0;
+}
+
+static const EncounterDef* render_inferno_lab_def_or_abort(OsrsEnv* env) {
+    if (!env || !env->encounter_def || !env->encounter_state) {
+        fprintf(stderr, "inferno lab: missing encounter state\n");
+        abort();
+    }
+    const EncounterDef* def = (const EncounterDef*)env->encounter_def;
+    if (strcmp(def->name, "inferno") != 0 ||
+            !def->snapshot_size || !def->snapshot || !def->restore) {
+        fprintf(stderr, "inferno lab: snapshot contract unavailable\n");
+        abort();
+    }
+    return def;
+}
+
+static void render_inferno_lab_capture_entry_snapshot(
+    RenderClient* rc,
+    OsrsEnv* env
+) {
+    const EncounterDef* def = render_inferno_lab_def_or_abort(env);
+    size_t size = def->snapshot_size(
+        (EncounterState*)env->encounter_state,
+        (EncounterContext*)env->encounter_context);
+    void* snapshot = malloc(size);
+    if (!snapshot) {
+        fprintf(stderr, "inferno lab: snapshot allocation failed\n");
+        abort();
+    }
+    def->snapshot(
+        (EncounterState*)env->encounter_state,
+        (EncounterContext*)env->encounter_context,
+        snapshot);
+
+    render_inferno_lab_clear_entry_snapshot(rc);
+    rc->inferno_lab_entry_snapshot = snapshot;
+    rc->inferno_lab_entry_snapshot_size = size;
+    rc->inferno_lab_entry_snapshot_valid = 1;
+}
+
+static void render_inferno_lab_restore_controls(RenderClient* rc) {
+    rc->inferno_lab_enabled = 0;
+    rc->inferno_lab_show_forecast = 0;
+    rc->inferno_lab_selected_npc_slot = -1;
+    rc->is_paused = rc->inferno_lab_prev_paused;
+    rc->human_input.enabled = rc->inferno_lab_prev_human_enabled;
+    human_input_clear_pending(&rc->human_input);
+    human_input_clear_move(&rc->human_input);
+    human_input_clear_selected_ui_target(&rc->human_input);
+    context_menu_dismiss(&rc->context_menu);
+}
+
+static int render_inferno_lab_restore_entry_snapshot(
+    RenderClient* rc,
+    OsrsEnv* env
+) {
+    if (!rc || !rc->inferno_lab_entry_snapshot_valid ||
+            !rc->inferno_lab_entry_snapshot) {
+        return 0;
+    }
+    const EncounterDef* def = render_inferno_lab_def_or_abort(env);
+    def->restore(
+        (EncounterState*)env->encounter_state,
+        (EncounterContext*)env->encounter_context,
+        rc->inferno_lab_entry_snapshot,
+        rc->inferno_lab_entry_snapshot_size);
+    if (def->get_tick) {
+        env->tick = def->get_tick(
+            (EncounterState*)env->encounter_state,
+            (EncounterContext*)env->encounter_context);
+    }
+    rc->inferno_lab_restore_requested = 1;
+    rc->inferno_lab_restore_generation++;
+    render_inferno_lab_restore_controls(rc);
+    render_reset_episode_visual_state(rc, env);
+    fprintf(stderr, "inferno lab: restored entry snapshot\n");
+    return 1;
 }
 
 
@@ -1466,10 +1558,10 @@ static void render_inferno_lab_draw_hud(RenderClient* rc) {
         snprintf(selected_text, sizeof(selected_text), "%d %s", selected,
             inf_lab_npc_type_name(s->npcs[selected].type));
     }
-    DrawRectangle(8, 8, 455, 58, CLITERAL(Color){ 15, 10, 18, 220 });
-    DrawRectangleLines(8, 8, 455, 58, CLITERAL(Color){ 190, 80, 255, 255 });
+    DrawRectangle(8, 8, 650, 58, CLITERAL(Color){ 15, 10, 18, 220 });
+    DrawRectangleLines(8, 8, 650, 58, CLITERAL(Color){ 190, 80, 255, 255 });
     DrawText("INFERNO LAB", 16, 14, 16, CLITERAL(Color){ 230, 210, 255, 255 });
-    DrawText(TextFormat("F8 off  F7 forecast %s  F9 dump  selected: %s",
+    DrawText(TextFormat("F8 commit  F6 restore  F7 forecast %s  F9 dump  selected: %s",
         rc->inferno_lab_show_forecast ? "on" : "off", selected_text),
         16, 38, 12, CLITERAL(Color){ 230, 230, 230, 255 });
 }
@@ -1516,6 +1608,11 @@ static RenderClient* render_make_client(void) {
     rc->inferno_lab_selected_npc_slot = -1;
     rc->inferno_lab_prev_paused = 0;
     rc->inferno_lab_prev_human_enabled = 0;
+    rc->inferno_lab_entry_snapshot = NULL;
+    rc->inferno_lab_entry_snapshot_size = 0;
+    rc->inferno_lab_entry_snapshot_valid = 0;
+    rc->inferno_lab_restore_requested = 0;
+    rc->inferno_lab_restore_generation = 0;
     rc->layout_mode = 1;  /* default to resizable mode (modern OSRS layout) */
     rc->cam_yaw = 0.0f;
     rc->cam_pitch = 0.6f;    /* ~34 degrees, similar to OSRS default */
@@ -2205,6 +2302,7 @@ static void __attribute__((unused)) render_destroy_client(RenderClient* rc) {
     }
     human_input_destroy(&rc->human_input);
     CloseWindow();
+    render_inferno_lab_clear_entry_snapshot(rc);
     free(rc->history);
     free(rc);
 }
@@ -2254,6 +2352,7 @@ static void render_handle_input(RenderClient* rc, OsrsEnv* env) {
             if (enable_lab) {
                 rc->inferno_lab_prev_paused = rc->is_paused;
                 rc->inferno_lab_prev_human_enabled = rc->human_input.enabled;
+                render_inferno_lab_capture_entry_snapshot(rc, env);
             }
             rc->inferno_lab_enabled = enable_lab;
             rc->inferno_lab_show_forecast = rc->inferno_lab_enabled;
@@ -2268,14 +2367,16 @@ static void render_handle_input(RenderClient* rc, OsrsEnv* env) {
                 render_populate_entities(rc, env);
                 render_inferno_lab_snap_all_visuals(rc);
             } else {
-                rc->is_paused = rc->inferno_lab_prev_paused;
-                rc->human_input.enabled = rc->inferno_lab_prev_human_enabled;
-                human_input_clear_pending(&rc->human_input);
-                human_input_clear_move(&rc->human_input);
-                human_input_clear_selected_ui_target(&rc->human_input);
+                render_inferno_lab_restore_controls(rc);
             }
             fprintf(stderr, "inferno lab: %s\n",
                 rc->inferno_lab_enabled ? "ON" : "OFF");
+        }
+    }
+    if (IsKeyPressed(KEY_F6)) {
+        InfernoState* s = render_inferno_state_from_env(env);
+        if (s && !render_inferno_lab_restore_entry_snapshot(rc, env)) {
+            fprintf(stderr, "inferno lab: no entry snapshot to restore\n");
         }
     }
     if (IsKeyPressed(KEY_F7) && rc->inferno_lab_enabled) {
