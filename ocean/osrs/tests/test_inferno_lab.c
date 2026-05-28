@@ -196,11 +196,102 @@ static void test_lab_spawn_wave_and_delete(void) {
     inf_destroy((EncounterState*)state);
 }
 
+static void test_lab_snapshot_restore_round_trip(void) {
+    printf("--- inferno lab snapshot restore round trip ---\n");
+
+    InfernoState* state = make_lab_state();
+    inf_lab_apply_command(state, &(InfernoLabCommand){
+        .kind = INF_LAB_COMMAND_SET_PLAYER,
+        .as.tile = { .x = 29, .y = 39 },
+    });
+    inf_lab_apply_command(state, &(InfernoLabCommand){
+        .kind = INF_LAB_COMMAND_SPAWN_NPC,
+        .as.spawn_npc = {
+            .slot = 3,
+            .type = INF_NPC_MAGER,
+            .x = 27,
+            .y = 32,
+            .hp = { .kind = INF_LAB_OPTIONAL_INT_SET, .value = 99 },
+            .timer = { .kind = INF_LAB_OPTIONAL_INT_SET, .value = 2 },
+        },
+    });
+    inf_lab_apply_command(state, &(InfernoLabCommand){
+        .kind = INF_LAB_COMMAND_SET_PILLAR,
+        .as.pillar = {
+            .pillar_idx = 1,
+            .state = INF_LAB_PILLAR_REMOVED,
+            .hp = { .kind = INF_LAB_OPTIONAL_INT_SET, .value = 0 },
+        },
+    });
+    state->wave = 11;
+    state->tick = 321;
+    state->rng_state = 0x1234abcd;
+    state->player.brew_doses = 7;
+    state->player.restore_doses = 11;
+    state->player_pending_hits.count = 2;
+
+    size_t snapshot_size = ENCOUNTER_INFERNO.snapshot_size(
+        (EncounterState*)state, (EncounterContext*)inf_legacy_context());
+    ASSERT_INT_EQ("snapshot size", (int)snapshot_size, (int)sizeof(InfSnapshot));
+    InfSnapshot* snapshot = (InfSnapshot*)malloc(snapshot_size);
+    ENCOUNTER_INFERNO.snapshot(
+        (EncounterState*)state,
+        (EncounterContext*)inf_legacy_context(),
+        snapshot);
+
+    inf_lab_apply_command(state, &(InfernoLabCommand){
+        .kind = INF_LAB_COMMAND_SET_PLAYER,
+        .as.tile = { .x = 18, .y = 18 },
+    });
+    inf_lab_apply_command(state, &(InfernoLabCommand){
+        .kind = INF_LAB_COMMAND_CLEAR_NPCS,
+    });
+    inf_lab_apply_command(state, &(InfernoLabCommand){
+        .kind = INF_LAB_COMMAND_SET_PILLAR,
+        .as.pillar = {
+            .pillar_idx = 1,
+            .state = INF_LAB_PILLAR_ACTIVE,
+            .hp = { .kind = INF_LAB_OPTIONAL_INT_SET, .value = INF_PILLAR_HP },
+        },
+    });
+    state->wave = 60;
+    state->tick = 999;
+    state->rng_state = 7;
+    state->player.brew_doses = 0;
+    state->player.restore_doses = 0;
+    encounter_pending_hit_queue_clear(&state->player_pending_hits);
+
+    ENCOUNTER_INFERNO.restore(
+        (EncounterState*)state,
+        (EncounterContext*)inf_legacy_context(),
+        snapshot,
+        snapshot_size);
+
+    ASSERT_INT_EQ("restored player x", state->player.x, 29);
+    ASSERT_INT_EQ("restored player y", state->player.y, 39);
+    ASSERT_INT_EQ("restored mager active", state->npcs[3].active, 1);
+    ASSERT_INT_EQ("restored mager type", state->npcs[3].type, INF_NPC_MAGER);
+    ASSERT_INT_EQ("restored mager hp", state->npcs[3].hp, 99);
+    ASSERT_INT_EQ("restored mager timer", state->npcs[3].attack_timer, 2);
+    ASSERT_INT_EQ("restored west pillar inactive", state->pillars[1].active, 0);
+    ASSERT_INT_EQ("restored LOS blockers", state->los_blocker_count, 2);
+    ASSERT_INT_EQ("restored wave", state->wave, 11);
+    ASSERT_INT_EQ("restored tick", state->tick, 321);
+    ASSERT_INT_EQ("restored rng", (int)state->rng_state, (int)0x1234abcd);
+    ASSERT_INT_EQ("restored brews", state->player.brew_doses, 7);
+    ASSERT_INT_EQ("restored restores", state->player.restore_doses, 11);
+    ASSERT_INT_EQ("restored pending hits", state->player_pending_hits.count, 2);
+
+    free(snapshot);
+    inf_destroy((EncounterState*)state);
+}
+
 int main(void) {
     test_lab_typed_commands_mutate_state();
     test_lab_script_reaches_exact_forecast();
     test_lab_json_contains_state_and_forecast();
     test_lab_spawn_wave_and_delete();
+    test_lab_snapshot_restore_round_trip();
 
     printf("\n%d/%d tests passed", tests_passed, tests_run);
     if (tests_failed) {
