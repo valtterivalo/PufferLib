@@ -2298,8 +2298,6 @@ void my_log(Log* log, Dict* out) {
     float damage_per_tick = log->episode_length > 0.0f
         ? log->damage_dealt / log->episode_length : 0.0f;
     dict_set(out, "damage_per_100_ticks", damage_per_tick * 100.0f);
-    dict_set(out, "ticks_per_100_damage", log->damage_dealt > 0.0f
-        ? 100.0f * log->episode_length / log->damage_dealt : 0.0f);
     dict_set(out, "wins", log->wins);
     dict_set(out, "wave", log->wave);
     dict_set(out, "idle_ticks", log->idle_ticks);
@@ -2336,11 +2334,6 @@ void my_log(Log* log, Dict* out) {
     dict_set(out, "offensive_prayer_correct_rate", offensive_prayer_rate);
     dict_set(out, "offensive_prayer_attacks", log->offensive_prayer_attacks);
     dict_set(out, "offensive_prayer_wrong_rate", offensive_prayer_wrong_rate);
-    dict_set(out, "offensive_prayer_melee_correct_rate",
-        log->offensive_prayer_attacks_by_style[ATTACK_STYLE_MELEE] > 0.0f
-            ? log->offensive_prayer_correct_by_style[ATTACK_STYLE_MELEE] /
-                log->offensive_prayer_attacks_by_style[ATTACK_STYLE_MELEE]
-            : 0.0f);
     dict_set(out, "offensive_prayer_ranged_correct_rate",
         log->offensive_prayer_attacks_by_style[ATTACK_STYLE_RANGED] > 0.0f
             ? log->offensive_prayer_correct_by_style[ATTACK_STYLE_RANGED] /
@@ -2371,10 +2364,6 @@ void my_log(Log* log, Dict* out) {
     }
     dict_set(out, "score", score);
 
-    float gear_switch_rate = (log->episode_length > 0.0f)
-        ? log->gear_switches / log->episode_length : 0.0f;
-    dict_set(out, "gear_switch_rate", gear_switch_rate);
-
     if (log->n_normal > 0.0f) {
         float min_zuk_hp_normal = log->min_zuk_hp_normal / log->n_normal;
         float score_normal = (1200.0f - min_zuk_hp_normal) / 1200.0f;
@@ -2392,9 +2381,6 @@ void my_log(Log* log, Dict* out) {
             log->count_healer_resolved_20_normal / log->n_normal;
         float reached_240 = log->count_min_hp_le_240_normal;
 
-        dict_set(out, "episode_return_normal",
-            log->episode_return_normal / log->n_normal);
-        dict_set(out, "wins_normal", log->wins_normal / log->n_normal);
         dict_set(out, "score_normal", score_normal);
         dict_set(out, "phase_reached_normal",
             log->phase_reached_normal_sum / log->n_normal);
@@ -2410,23 +2396,11 @@ void my_log(Log* log, Dict* out) {
             log->spark_damage_after_240_normal_sum / log->n_normal);
         dict_set(out, "hp_restored_after_240_normal",
             log->hp_restored_after_240_normal_sum / log->n_normal);
-        dict_set(out, "spark_damage_after_240_reached_240",
-            reached_240 > 0.0f
-                ? log->spark_damage_after_240_normal_sum / reached_240 : 0.0f);
-        dict_set(out, "hp_restored_after_240_reached_240",
-            reached_240 > 0.0f
-                ? log->hp_restored_after_240_normal_sum / reached_240 : 0.0f);
         dict_set(out, "redemption_proc_opportunities_normal",
             log->redemption_proc_opportunities_normal_sum / log->n_normal);
-        dict_set(out, "redemption_active_ticks_normal",
-            log->redemption_active_ticks_normal_sum / log->n_normal);
         dict_set(out, "redemption_proc_count_normal",
             log->redemption_proc_count_normal_sum / log->n_normal);
-        dict_set(out, "redemption_heal_done_normal",
-            log->redemption_heal_done_normal_sum / log->n_normal);
     } else {
-        dict_set(out, "episode_return_normal", 0.0f);
-        dict_set(out, "wins_normal", 0.0f);
         dict_set(out, "score_normal", 0.0f);
         dict_set(out, "phase_reached_normal", 0.0f);
         dict_set(out, "min_zuk_hp_normal", 1200.0f);
@@ -2436,11 +2410,7 @@ void my_log(Log* log, Dict* out) {
         dict_set(out, "post_healer_objective_normal", 0.0f);
         dict_set(out, "spark_damage_after_240_normal", 0.0f);
         dict_set(out, "hp_restored_after_240_normal", 0.0f);
-        dict_set(out, "spark_damage_after_240_reached_240", 0.0f);
-        dict_set(out, "hp_restored_after_240_reached_240", 0.0f);
         dict_set(out, "redemption_proc_opportunities_normal", 0.0f);
-        dict_set(out, "redemption_active_ticks_normal", 0.0f);
         dict_set(out, "redemption_proc_count_normal", 0.0f);
-        dict_set(out, "redemption_heal_done_normal", 0.0f);
     }
 }
