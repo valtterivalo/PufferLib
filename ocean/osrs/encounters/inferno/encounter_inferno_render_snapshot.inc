@@ -241,7 +241,7 @@ static void inf_write_terminal_status_text(const InfernoState* s, char* out, siz
     if (cap == 0) return;
     out[0] = '\0';
     if (!s->episode_over) return;
-    if (s->winner == 0) {
+    if (s->winner == INF_OUTCOME_PLAYER_WON) {
         snprintf(out, cap, "Inferno cleared");
         return;
     }
@@ -254,7 +254,7 @@ static void* inf_get_log_ctx(EncounterState* state, EncounterContext* context) {
     if (s->episode_over && ctx->log) {
         ctx->log->episode_return += s->episode_return;
         ctx->log->episode_length += (float)s->tick;
-        ctx->log->wins += (s->winner == 0) ? 1.0f : 0.0f;
+        ctx->log->wins += (s->winner == INF_OUTCOME_PLAYER_WON) ? 1.0f : 0.0f;
         ctx->log->damage_dealt += s->total_damage_dealt;
         ctx->log->zuk_healer_damage += s->total_zuk_healer_damage;
         ctx->log->damage_received += s->total_damage_received;
@@ -300,7 +300,7 @@ static void* inf_get_log_ctx(EncounterState* state, EncounterContext* context) {
         ctx->log->gear_switches += (float)s->total_gear_switches;
         ctx->log->current_ranged += (float)s->player.current_ranged;
         ctx->log->current_magic += (float)s->player.current_magic;
-        ctx->log->min_zuk_hp_seen += (s->winner == 0)
+        ctx->log->min_zuk_hp_seen += (s->winner == INF_OUTCOME_PLAYER_WON)
             ? 0.0f
             : (s->min_zuk_hp_seen > 0.0f ? s->min_zuk_hp_seen : 1200.0f);
     }
@@ -312,11 +312,11 @@ static void* inf_get_log(EncounterState* state) {
 }
 
 static const OsrsCombatVisualRow* inf_npc_combat_visual_row(
-    InfNPCType type, int style
+    InfNPCType type, AttackStyle style
 ) {
     assert(type >= 0 && type < INF_NUM_NPC_TYPES);
     return osrs_combat_visual_find_npc_id(
-        (uint16_t)INF_NPC_DEF_IDS[type], (AttackStyle)style);
+        (uint16_t)INF_NPC_DEF_IDS[type], style);
 }
 
 
@@ -346,7 +346,7 @@ static void inf_render_post_tick_ctx(
         if (npc->type == INF_NPC_BLOB && npc->blob_scanned_prayer >= 0) continue;
 
         const InfNPCStats* stats = &INF_NPC_STATS[npc->type];
-        int actual_style = npc->attack_style_this_tick;
+        AttackStyle actual_style = npc->attack_style_this_tick;
 
         /* Zuk is typeless — show as magic for visual purposes. */
         if (actual_style == ATTACK_STYLE_NONE && npc->type == INF_NPC_ZUK)
@@ -451,7 +451,7 @@ static void inf_render_post_tick_ctx(
                         .dst_x = target_x,
                         .dst_y = target_y,
                         .style = proj_style,
-                        .damage = (int)s->damage_received_this_tick,
+                        .damage = (int)s->tick_scratch.damage_received,
                         .duration_ticks = duration,
                         .start_h = start_h,
                         .end_h = end_h,
@@ -469,7 +469,7 @@ static void inf_render_post_tick_ctx(
                         .dst_x = target_x,
                         .dst_y = target_y,
                         .style = proj_style,
-                        .damage = (int)s->damage_received_this_tick,
+                        .damage = (int)s->tick_scratch.damage_received,
                         .duration_ticks = duration,
                         .start_h = start_h,
                         .end_h = end_h,
@@ -497,7 +497,7 @@ static void inf_render_post_tick_ctx(
                 .dst_x = target_x,
                 .dst_y = target_y,
                 .style = proj_style,
-                .damage = (int)s->damage_received_this_tick,
+                .damage = (int)s->tick_scratch.damage_received,
                 .duration_ticks = duration,
                 .start_h = start_h,
                 .end_h = end_h,
@@ -516,7 +516,7 @@ static void inf_render_post_tick_ctx(
                 .dst_x = target_x,
                 .dst_y = target_y,
                 .style = proj_style,
-                .damage = (int)s->damage_received_this_tick,
+                .damage = (int)s->tick_scratch.damage_received,
                 .duration_ticks = duration,
                 .start_h = start_h,
                 .end_h = end_h,
@@ -576,7 +576,7 @@ static void inf_render_post_tick_ctx(
     }
 
     /* player attack projectile (ranged/magic only — melee has no projectile) */
-    if (s->player_attacked_this_tick &&
+    if (s->tick_scratch.player_attacked &&
         s->player_attack_style_id != ATTACK_STYLE_MELEE) {
         int target_idx = s->player_attack_npc_idx;
         if (target_idx >= 0 && target_idx < INF_MAX_NPCS) {
@@ -620,7 +620,7 @@ static void inf_render_post_tick_ctx(
                             .src_size = 1,
                             .dst_size = target_size,
                             .target_npc_slot = target_idx,
-                            .attack_style = (AttackStyle)s->player_attack_style_id,
+                            .attack_style = s->player_attack_style_id,
                             .damage = visual_damage,
                             .duration_ticks = p_duration,
                             .start_delay = p_start_delay,
@@ -928,7 +928,7 @@ static void inf_write_cell_key(EncounterState* state, void* out) {
 static float inf_progress_score_ctx(EncounterState* state, EncounterContext* context) {
     (void)context;
     const InfernoState* s = (const InfernoState*)state;
-    if (s->episode_over && s->winner == 0) return 2.0f;
+    if (s->episode_over && s->winner == INF_OUTCOME_PLAYER_WON) return 2.0f;
 
     float min_zhp = (s->min_zuk_hp_seen > 0.0f) ? s->min_zuk_hp_seen : 1200.0f;
     if (min_zhp < 0.0f) min_zhp = 0.0f;

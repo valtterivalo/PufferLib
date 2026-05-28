@@ -501,7 +501,7 @@ static inline int inf_npc_planned_style_for_current_state(const InfNPC* npc) {
         if (scanned == PRAYER_PROTECT_RANGED) return ATTACK_STYLE_MAGIC;
     }
     if (npc->type == INF_NPC_JAD)
-        return npc->jad_attack_style;
+        return inf_npc_jad_const(npc)->attack_style;
     return npc->attack_style;
 }
 

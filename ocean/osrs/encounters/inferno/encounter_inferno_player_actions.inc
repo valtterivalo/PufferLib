@@ -69,13 +69,13 @@ static void inf_record_offensive_prayer_attack(
     int style_idx = (int)style;
     assert(style_idx > ATTACK_STYLE_NONE && style_idx <= ATTACK_STYLE_MAGIC);
     int correct = s->player.offensive_prayer == required;
-    s->offensive_prayer_correct_this_tick = correct;
+    s->tick_scratch.offensive_prayer_correct = correct;
     s->total_offensive_prayer_attacks++;
     s->total_offensive_prayer_correct += correct;
     s->offensive_prayer_attacks_by_style[style_idx]++;
     s->offensive_prayer_correct_by_style[style_idx] += correct;
     if (correct && damage_roll > 0.0f)
-        s->offensive_prayer_correct_damage_roll_this_tick += damage_roll;
+        s->tick_scratch.offensive_prayer_correct_damage_roll += damage_roll;
 }
 
 static float inf_record_player_reward_damage(
@@ -89,29 +89,29 @@ static float inf_record_player_reward_damage(
     if (!npc->active || npc->death_ticks > 0 || npc->hp <= 0) return 0.0f;
 
     float damage = (float)(damage_roll > npc->hp ? npc->hp : damage_roll);
-    s->damage_dealt_this_tick += damage;
+    s->tick_scratch.damage_dealt += damage;
     if (npc->resurrection_count != 0) {
-        s->damage_resurrected_this_tick += damage;
+        s->tick_scratch.damage_resurrected += damage;
         return damage;
     }
 
     switch (npc->type) {
         case INF_NPC_ZUK:
-            s->damage_zuk_this_tick += damage;
+            s->tick_scratch.damage_zuk += damage;
             break;
         case INF_NPC_HEALER_ZUK:
-            s->damage_zuk_healers_this_tick += damage;
+            s->tick_scratch.damage_zuk_healers += damage;
             break;
         case INF_NPC_HEALER_JAD:
-            s->damage_jad_healers_this_tick += damage;
+            s->tick_scratch.damage_jad_healers += damage;
             break;
         case INF_NPC_JAD:
-            s->damage_jad_this_tick += damage;
+            s->tick_scratch.damage_jad += damage;
             break;
         case INF_NPC_ZUK_SHIELD:
             break;
         default:
-            s->damage_set_this_tick += damage;
+            s->tick_scratch.damage_set += damage;
             break;
     }
     return damage;
@@ -198,7 +198,7 @@ static void inf_apply_npc_death(InfernoState* s, int npc_idx) {
         for (int j = 0; j < INF_MAX_NPCS; j++) {
             if (s->npcs[j].active &&
                 s->npcs[j].type == INF_NPC_HEALER_JAD &&
-                s->npcs[j].jad_owner_idx == npc_idx) {
+                inf_npc_healer(&s->npcs[j])->owner_idx == npc_idx) {
                 inf_deactivate_npc(s, j);
             }
         }
@@ -211,7 +211,7 @@ static void inf_apply_blood_barrage_heal_damage(InfernoState* s, int damage) {
     s->player.current_hitpoints += damage / 4;
     if (s->player.current_hitpoints > s->player.base_hitpoints)
         s->player.current_hitpoints = s->player.base_hitpoints;
-    s->blood_heal_this_tick += s->player.current_hitpoints - hp_before;
+    s->tick_scratch.blood_heal += s->player.current_hitpoints - hp_before;
 }
 
 typedef struct {
@@ -279,7 +279,7 @@ static InfOraclePick inf_oracle_pick_full(const InfernoState* s, int mode) {
             pick.target_slot = o;
             pick.gear = INF_GEAR_LONG_RANGE;
             pick.offensive = OFFENSIVE_PRAYER_RIGOUR;
-            int jas = s->npcs[n].jad_attack_style;
+            AttackStyle jas = inf_npc_jad_const(&s->npcs[n])->attack_style;
             if (jas == ATTACK_STYLE_RANGED) pick.overhead_style = ATTACK_STYLE_RANGED;
             else if (jas == ATTACK_STYLE_MAGIC) pick.overhead_style = ATTACK_STYLE_MAGIC;
             return pick;
@@ -500,7 +500,7 @@ static void inf_tick_player_ctx(
     const int* actions,
     int can_attack
 ) {
-    s->offensive_prayer_correct_this_tick = 0;
+    s->tick_scratch.offensive_prayer_correct = 0;
     if (s->player_last_interaction_age == 0)
         s->player_last_interaction_age = 1;
 
@@ -577,7 +577,7 @@ static void inf_tick_player_ctx(
         s->player.brew_doses--;
         s->player.potion_timer = 3;
         s->player.ate_food_this_tick = 1;
-        s->brewed_this_tick = 1;
+        s->tick_scratch.brewed = 1;
         encounter_brew_drain_stats(&s->player);
         encounter_recompute_loadout_max_hits(s->loadout_stats, INF_NUM_WEAPON_SETS, &s->player);
         if (ctx->human_command_mode)
@@ -651,13 +651,13 @@ static void inf_tick_player_ctx(
                     s->total_zuk_unsafe_untagged_healer_targets++;
                 if ((s->rewarded_zuk_healer_target_mask & (1u << npc_idx)) == 0) {
                     if (ctx->config.zuk_untagged_healer_target_bonus_coeff > 0.0f) {
-                        s->zuk_untagged_healer_targets_this_tick++;
+                        s->tick_scratch.zuk_untagged_healer_targets++;
                         s->total_zuk_untagged_healer_target_rewards++;
                         s->rewarded_zuk_healer_target_mask |= 1u << npc_idx;
                     } else if (
                             ctx->config.zuk_safe_untagged_healer_target_bonus_coeff > 0.0f &&
                             is_safe_target) {
-                        s->zuk_safe_untagged_healer_targets_this_tick++;
+                        s->tick_scratch.zuk_safe_untagged_healer_targets++;
                         s->total_zuk_safe_untagged_healer_target_rewards++;
                         s->rewarded_zuk_healer_target_mask |= 1u << npc_idx;
                     }
@@ -974,15 +974,15 @@ static void inf_tick_player_ctx(
                     int target_was_untagged = target_npc->aggro_target >= 0;
                     s->total_zuk_healer_attack_fires++;
                     if (target_was_untagged && !is_magic_attack)
-                        s->zuk_untagged_healer_nonmagic_attacks_this_tick++;
+                        s->tick_scratch.zuk_untagged_healer_nonmagic_attacks++;
                     if (is_magic_attack)
-                        s->zuk_healer_mage_attack_fires_this_tick++;
+                        s->tick_scratch.zuk_healer_mage_attack_fires++;
                     if (s->tick_at_first_zuk_healer_attack < 0)
                         s->tick_at_first_zuk_healer_attack = s->tick;
                 }
 
                 /* player projectile event for renderer */
-                s->player_attacked_this_tick = 1;
+                s->tick_scratch.player_attacked = 1;
                 s->player_attack_npc_idx = s->interaction.target_slot;
                 s->player_attack_dmg = total_dmg;
                 s->player_attack_style_id = ls->style;
@@ -1047,7 +1047,7 @@ static void inf_apply_delayed_prayer_check(
 ) {
     if (encounter_prayer_correct_for_style(s->player.prayer, hit->attack_style)) {
         hit->damage = 0;
-        s->prayer_correct_this_tick++;
+        s->tick_scratch.prayer_correct++;
         if (hit->source_npc_type >= 0 && hit->source_npc_type < INF_NUM_NPC_TYPES)
             s->prayer_correct_by_type[hit->source_npc_type]++;
     } else if (hit->source_npc_type == INF_NPC_JAD) {
@@ -1055,10 +1055,10 @@ static void inf_apply_delayed_prayer_check(
         s->dmg_from_type[INF_NPC_JAD] += (float)hit->damage;
         if (hit->damage > 0) {
             s->last_hit_by_type = INF_NPC_JAD;
-            s->off_prayer_hits_this_tick++;
+            s->tick_scratch.off_prayer_hits++;
         }
     } else if (hit->damage > 0 && hit->attack_style != ATTACK_STYLE_NONE) {
-        s->off_prayer_hits_this_tick++;
+        s->tick_scratch.off_prayer_hits++;
     }
     hit->check_prayer = 0;
 }
@@ -1093,10 +1093,10 @@ static void inf_resolve_player_projectiles_on_npcs(InfernoState* s) {
             int t = npc->type;
             int hp_after = npc->hp;
             if (hp_before > 0 && hp_after <= 0) {
-                if (t == INF_NPC_JAD) s->kill_jad_this_tick++;
-                else if (t == INF_NPC_HEALER_ZUK) s->kill_zuk_healer_this_tick++;
+                if (t == INF_NPC_JAD) s->tick_scratch.kill_jad++;
+                else if (t == INF_NPC_HEALER_ZUK) s->tick_scratch.kill_zuk_healer++;
                 else if (t != INF_NPC_ZUK && t != INF_NPC_ZUK_SHIELD &&
-                         t != INF_NPC_HEALER_JAD) s->kill_set_this_tick++;
+                         t != INF_NPC_HEALER_JAD) s->tick_scratch.kill_set++;
             }
             npc->hit_spell_type = spell;
             if (hit_success)
@@ -1105,12 +1105,12 @@ static void inf_resolve_player_projectiles_on_npcs(InfernoState* s) {
             if (npc->aggro_target != -1) {
                 if (npc->type == INF_NPC_HEALER_ZUK ||
                     npc->type == INF_NPC_HEALER_JAD) {
-                    s->healer_tags_this_tick++;
+                    s->tick_scratch.healer_tags++;
                     if (npc->type == INF_NPC_HEALER_ZUK)
-                        s->zuk_healer_tags_this_tick++;
+                        s->tick_scratch.zuk_healer_tags++;
                 }
                 if (shield_taggable)
-                    s->shield_tags_this_tick++;
+                    s->tick_scratch.shield_tags++;
                 npc->aggro_target = -1;
                 npc->stun_timer = 2;
             }
@@ -1141,15 +1141,15 @@ static void inf_resolve_player_pending_hits_ctx(InfernoState* s, const InfernoCo
             if (hit->check_prayer) {
                 if (encounter_prayer_correct_for_style(s->player.prayer, hit->attack_style)) {
                     dmg = 0;
-                    s->prayer_correct_this_tick++;
+                    s->tick_scratch.prayer_correct++;
                     if (hit->source_npc_type >= 0 && hit->source_npc_type < INF_NUM_NPC_TYPES)
                         s->prayer_correct_by_type[hit->source_npc_type]++;
                 } else if (dmg > 0 && hit->attack_style != ATTACK_STYLE_NONE) {
-                    s->off_prayer_hits_this_tick++;
+                    s->tick_scratch.off_prayer_hits++;
                 }
             } else if (dmg > 0 && hit->attack_style != ATTACK_STYLE_NONE &&
                        hit->source_npc_type != INF_NPC_JAD) {
-                s->off_prayer_hits_this_tick++;
+                s->tick_scratch.off_prayer_hits++;
             }
 
             if (dmg > 0 &&

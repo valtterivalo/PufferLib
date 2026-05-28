@@ -482,7 +482,7 @@ static int inferno_stall_trace_tick_matches(const InfernoState* s) {
     if (s->episode_over) return 0;
     if (s->wave_spawn_delay > 0 || s->wave_ready_delay > 0) return 0;
     if (!inferno_stall_trace_has_alive_target(s)) return 0;
-    if (s->damage_dealt_this_tick > 0.0f) return 0;
+    if (s->tick_scratch.damage_dealt > 0.0f) return 0;
     return 1;
 }
 
@@ -683,8 +683,8 @@ static void inferno_stall_trace_capture(
         s->player.attack_timer,
         s->player_dest_x,
         s->player_dest_y,
-        s->player_moved_this_tick,
-        s->player_attacked_this_tick,
+        s->tick_scratch.player_moved,
+        s->tick_scratch.player_attacked,
         s->player_attack_npc_idx,
         s->player_attack_style_id,
         s->player_attack_dmg,
@@ -819,7 +819,7 @@ static void inferno_trace_jad_state(
         if (npc->type != INF_NPC_JAD)
             continue;
         *alive = 1;
-        *next_style = npc->jad_attack_style;
+        *next_style = inf_npc_jad_const(npc)->attack_style;
         return;
     }
 }
@@ -930,7 +930,7 @@ static void inferno_post_240_trace_write_healers(
                 in_range = inf_player_can_attack_npc_from_current_tile(s, npc_idx);
                 targeted = osrs_interaction_active(&s->interaction) &&
                     s->interaction.target_slot == npc_idx;
-                hit_this_tick = s->player_attacked_this_tick &&
+                hit_this_tick = s->tick_scratch.player_attacked &&
                     s->player_attack_npc_idx == npc_idx;
                 healing_zuk = inf_is_untagged_live_zuk_healer_slot(s, npc_idx);
                 attack_timer = npc->attack_timer;
@@ -1079,7 +1079,7 @@ static void inferno_post_240_trace_capture(Env* env, int is_term) {
             s->offshield_ticks_after_240,
             spark_count,
             spark_min_ticks,
-            s->spark_damage_this_tick,
+            s->tick_scratch.spark_damage,
             set_count,
             ranger_alive,
             mager_alive,
@@ -1107,13 +1107,13 @@ static void inferno_post_240_trace_capture(Env* env, int is_term) {
             target_is_zuk,
             target_attackable,
             target_in_range,
-            s->player_attacked_this_tick,
+            s->tick_scratch.player_attacked,
             s->player_attack_npc_idx,
-            s->player_attacked_this_tick && s->player_attack_dmg > 0,
+            s->tick_scratch.player_attacked && s->player_attack_dmg > 0,
             s->player_attack_dmg,
-            s->damage_zuk_this_tick,
-            s->damage_set_this_tick,
-            s->damage_zuk_healers_this_tick,
+            s->tick_scratch.damage_zuk,
+            s->tick_scratch.damage_set,
+            s->tick_scratch.damage_zuk_healers,
             s->total_zuk_healer_tags,
             s->total_zuk_healer_kills,
             s->tick_at_first_zuk_healer_target,
@@ -1309,7 +1309,7 @@ void c_step(Env* env) {
             sizeof(env->render_status_text));
         env->render_status_frames =
             env->render_status_text[0] != '\0' ? INF_RENDER_STATUS_FRAMES : 0;
-        float min_zuk_hp_term = (s->winner == 0)
+        float min_zuk_hp_term = (s->winner == INF_OUTCOME_PLAYER_WON)
             ? 0.0f
             : (s->min_zuk_hp_seen > 0.0f ? s->min_zuk_hp_seen : 1200.0f);
         int terminal_shield_active = inferno_terminal_shield_active(s);
@@ -1325,7 +1325,7 @@ void c_step(Env* env) {
         env->log.zuk_healer_damage += s->total_zuk_healer_damage;
         env->log.damage_received += s->total_damage_received;
         env->log.hp_restored += s->total_hp_restored;
-        env->log.wins += (s->winner == 0) ? 1.0f : 0.0f;
+        env->log.wins += (s->winner == INF_OUTCOME_PLAYER_WON) ? 1.0f : 0.0f;
         env->log.wave += (float)s->wave;
         env->log.prayer_correct += (float)s->total_prayer_correct;
         env->log.prayer_total += (float)s->total_npc_attacks;
@@ -1393,7 +1393,7 @@ void c_step(Env* env) {
                     break;
                 }
             }
-            if (s->winner == 0) zhp = 0.0f;
+            if (s->winner == INF_OUTCOME_PLAYER_WON) zhp = 0.0f;
             env->log.zuk_hp_remaining += zhp;
         }
         env->log.min_zuk_hp_seen += min_zuk_hp_term;
@@ -1402,10 +1402,10 @@ void c_step(Env* env) {
 
         {
             env->log.episode_return_normal += s->episode_return;
-            env->log.wins_normal += (s->winner == 0) ? 1.0f : 0.0f;
+            env->log.wins_normal += (s->winner == INF_OUTCOME_PLAYER_WON) ? 1.0f : 0.0f;
             env->log.min_zuk_hp_normal += min_zuk_hp_term;
             env->log.n_normal += 1.0f;
-            int won = (s->winner == 0);
+            int won = (s->winner == INF_OUTCOME_PLAYER_WON);
             int phase_bucket = won ? 4
                 : (min_zuk_hp_term <= 300.0f) ? 3
                 : (min_zuk_hp_term <= 600.0f) ? 2
@@ -1681,7 +1681,7 @@ void c_step(Env* env) {
             InfernoState* st = INF_ENV_INFERNO(env);
             int wave = st->wave;
             int ticks = env->episode_action_len;
-            int min_zuk_hp = (st->winner == 0)
+            int min_zuk_hp = (st->winner == INF_OUTCOME_PLAYER_WON)
                 ? 0
                 : (st->min_zuk_hp_seen > 0.0f ? (int)st->min_zuk_hp_seen : 1200);
 

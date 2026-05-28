@@ -159,9 +159,9 @@ static void inf_lab_clear_transient(InfernoState* s) {
     encounter_pending_hit_queue_clear(&s->player_pending_hits);
     memset(s->pending_sparks, 0, sizeof(s->pending_sparks));
     memset(s->npc_target_hits, 0, sizeof(s->npc_target_hits));
-    s->offensive_prayer_correct_damage_roll_this_tick = 0.0f;
-    s->offensive_prayer_correct_this_tick = 0;
-    s->player_attacked_this_tick = 0;
+    s->tick_scratch.offensive_prayer_correct_damage_roll = 0.0f;
+    s->tick_scratch.offensive_prayer_correct = 0;
+    s->tick_scratch.player_attacked = 0;
     s->player_attack_npc_idx = -1;
     s->player_attack_dmg = 0;
     s->player_attack_style_id = ATTACK_STYLE_NONE;
@@ -901,7 +901,7 @@ static char* inf_lab_alloc_json(InfernoState* s) {
         s->tick, s->wave + 1,
         s->player.x, s->player.y,
         s->player.current_hitpoints, s->player.current_prayer,
-        s->player.attack_timer, s->player_attacked_this_tick,
+        s->player.attack_timer, s->tick_scratch.player_attacked,
         s->player_attack_npc_idx, s->player_attack_style_id,
         s->player_attack_dmg);
     inf_lab_append_pillars_json(s, &out);
