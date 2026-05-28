@@ -52,14 +52,12 @@ typedef struct {
 } InfStepOutForecastOracleDiff;
 
 typedef struct {
-    int src_slot;
     int active;
     InfNPCType type;
     int x;
     int y;
     int size;
     int hp;
-    int death_ticks;
     int attack_timer;
     int stun_timer;
     int frozen_ticks;
@@ -160,6 +158,63 @@ static void inf_step_out_forecast_action_landing_ctx(
         ENCOUNTER_MOVE_TARGET_DY[action_idx],
         inf_tile_walkable,
         &walk_ctx);
+}
+
+static Player inf_step_out_forecast_set_action_landing_ctx(
+    const InfernoState* s,
+    const InfernoContext* ctx,
+    int action_idx,
+    InfStepOutForecastAction* action
+) {
+    Player moved;
+    int valid;
+    inf_step_out_forecast_action_landing_ctx(
+        s, ctx, action_idx, &moved, &valid);
+    action->valid = valid;
+    action->land_x = moved.x;
+    action->land_y = moved.y;
+    return moved;
+}
+
+static int inf_step_out_forecast_duplicate_landing(
+    const InfStepOutForecast* forecast,
+    int action_idx
+) {
+    const InfStepOutForecastAction* action = &forecast->actions[action_idx];
+    for (int prior_idx = 0; prior_idx < action_idx; prior_idx++) {
+        const InfStepOutForecastAction* prior = &forecast->actions[prior_idx];
+        if (prior->valid &&
+                prior->land_x == action->land_x &&
+                prior->land_y == action->land_y) {
+            return prior_idx;
+        }
+    }
+    return -1;
+}
+
+static int inf_step_out_forecast_prepare_unique_action_ctx(
+    const InfernoState* s,
+    const InfernoContext* ctx,
+    InfStepOutForecast* out,
+    int action_idx,
+    int forecast_slot_count
+) {
+    InfStepOutForecastAction* action = &out->actions[action_idx];
+    Player moved = inf_step_out_forecast_set_action_landing_ctx(
+        s, ctx, action_idx, action);
+    if (!action->valid || forecast_slot_count == 0) return 0;
+
+    int duplicate_idx = inf_step_out_forecast_duplicate_landing(
+        out, action_idx);
+    if (duplicate_idx >= 0) {
+        int valid = action->valid;
+        *action = out->actions[duplicate_idx];
+        action->valid = valid;
+        action->land_x = moved.x;
+        action->land_y = moved.y;
+        return 0;
+    }
+    return 1;
 }
 
 static int inf_forecast_style_max_hit(
@@ -511,14 +566,12 @@ static void inf_forecast_local_copy_npcs(
         const InfNPC* npc = &s->npcs[i];
         if (!npc->active || npc->death_ticks > 0) continue;
         npcs[i] = (InfForecastNpcLocal){
-            .src_slot = i,
             .active = 1,
             .type = npc->type,
             .x = npc->x,
             .y = npc->y,
             .size = inf_npc_effective_size(npc),
             .hp = npc->hp,
-            .death_ticks = npc->death_ticks,
             .attack_timer = npc->attack_timer,
             .stun_timer = npc->stun_timer,
             .frozen_ticks = npc->frozen_ticks,
@@ -541,7 +594,7 @@ static void inf_forecast_local_rebuild_npc_flags(
     memset(npc_flags, 0, INF_ARENA_WIDTH * INF_ARENA_HEIGHT * sizeof(uint8_t));
     for (int i = 0; i < INF_MAX_NPCS; i++) {
         const InfForecastNpcLocal* npc = &npcs[i];
-        if (!npc->active || npc->hp <= 0 || npc->death_ticks > 0) continue;
+        if (!npc->active || npc->hp <= 0) continue;
         if (!inf_npc_sets_collision_flag(npc->type)) continue;
         inf_forecast_local_stamp_npc(npc_flags, npc->x, npc->y, npc->size);
     }
@@ -716,7 +769,7 @@ static void inf_forecast_local_move_npc(
     int tick_idx
 ) {
     InfForecastNpcLocal* npc = &npcs[idx];
-    if (!npc->active || npc->hp <= 0 || npc->death_ticks > 0) return;
+    if (!npc->active || npc->hp <= 0) return;
     if (npc->stun_timer > 0) return;
     if (npc->dig_freeze_timer > 0) return;
     if (npc->frozen_ticks > 0) return;
@@ -775,7 +828,7 @@ static void inf_forecast_local_attack_npc(
     InfStepOutForecastAction* action,
     int tick_idx
 ) {
-    if (!npc->active || npc->death_ticks > 0 || npc->hp <= 0) return;
+    if (!npc->active || npc->hp <= 0) return;
     const InfNPCStats* stats = &INF_NPC_STATS[npc->type];
     if (npc->attack_timer > 0) npc->attack_timer--;
     if (npc->stun_timer > 0) { npc->stun_timer--; return; }
@@ -931,33 +984,10 @@ static void inf_build_step_out_forecast_fast_static_ctx(
     int forecast_slot_count = inf_collect_step_out_forecast_slots(
         s, forecast_slots);
     for (int action_idx = 0; action_idx < ENCOUNTER_MOVE_ACTIONS; action_idx++) {
-        InfStepOutForecastAction* action = &out->actions[action_idx];
-        Player moved;
-        int valid;
-        inf_step_out_forecast_action_landing_ctx(
-            s, ctx, action_idx, &moved, &valid);
-        action->valid = valid;
-        action->land_x = moved.x;
-        action->land_y = moved.y;
-        if (!action->valid || forecast_slot_count == 0) continue;
-
-        int duplicate_idx = -1;
-        for (int prior_idx = 0; prior_idx < action_idx; prior_idx++) {
-            const InfStepOutForecastAction* prior = &out->actions[prior_idx];
-            if (prior->valid &&
-                    prior->land_x == action->land_x &&
-                    prior->land_y == action->land_y) {
-                duplicate_idx = prior_idx;
-                break;
-            }
-        }
-        if (duplicate_idx >= 0) {
-            *action = out->actions[duplicate_idx];
-            action->valid = valid;
-            action->land_x = moved.x;
-            action->land_y = moved.y;
+        if (!inf_step_out_forecast_prepare_unique_action_ctx(
+                s, ctx, out, action_idx, forecast_slot_count))
             continue;
-        }
+        InfStepOutForecastAction* action = &out->actions[action_idx];
 
         for (int slot_idx = 0; slot_idx < forecast_slot_count; slot_idx++) {
             int i = forecast_slots[slot_idx];
@@ -990,33 +1020,10 @@ static void inf_build_step_out_forecast_fast_readonly_ctx(
         inf_forecast_local_rebuild_npc_flags(base_npcs, base_npc_flags);
     }
     for (int action_idx = 0; action_idx < ENCOUNTER_MOVE_ACTIONS; action_idx++) {
-        InfStepOutForecastAction* action = &out->actions[action_idx];
-        Player moved;
-        int valid;
-        inf_step_out_forecast_action_landing_ctx(
-            s, ctx, action_idx, &moved, &valid);
-        action->valid = valid;
-        action->land_x = moved.x;
-        action->land_y = moved.y;
-        if (!action->valid || forecast_slot_count == 0) continue;
-
-        int duplicate_idx = -1;
-        for (int prior_idx = 0; prior_idx < action_idx; prior_idx++) {
-            const InfStepOutForecastAction* prior = &out->actions[prior_idx];
-            if (prior->valid &&
-                    prior->land_x == action->land_x &&
-                    prior->land_y == action->land_y) {
-                duplicate_idx = prior_idx;
-                break;
-            }
-        }
-        if (duplicate_idx >= 0) {
-            *action = out->actions[duplicate_idx];
-            action->valid = valid;
-            action->land_x = moved.x;
-            action->land_y = moved.y;
+        if (!inf_step_out_forecast_prepare_unique_action_ctx(
+                s, ctx, out, action_idx, forecast_slot_count))
             continue;
-        }
+        InfStepOutForecastAction* action = &out->actions[action_idx];
 
         for (int slot_idx = 0; slot_idx < forecast_slot_count; slot_idx++) {
             int i = forecast_slots[slot_idx];
@@ -1052,13 +1059,8 @@ static void inf_build_step_out_forecast_exact_ctx(
         s, forecast_slots);
     for (int action_idx = 0; action_idx < ENCOUNTER_MOVE_ACTIONS; action_idx++) {
         InfStepOutForecastAction* action = &out->actions[action_idx];
-        Player moved;
-        int valid;
-        inf_step_out_forecast_action_landing_ctx(
-            s, ctx, action_idx, &moved, &valid);
-        action->valid = valid;
-        action->land_x = moved.x;
-        action->land_y = moved.y;
+        Player moved = inf_step_out_forecast_set_action_landing_ctx(
+            s, ctx, action_idx, action);
         if (!action->valid || forecast_slot_count == 0) continue;
 
         InfernoState sim = *s;

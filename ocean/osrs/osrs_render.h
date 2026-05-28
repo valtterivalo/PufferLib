@@ -421,7 +421,6 @@ typedef struct RenderClient {
     int inferno_lab_prev_human_enabled;
     void* inferno_lab_entry_snapshot;
     size_t inferno_lab_entry_snapshot_size;
-    int inferno_lab_entry_snapshot_valid;
     int inferno_lab_restore_requested;
     int inferno_lab_restore_generation;
 
@@ -792,7 +791,6 @@ static void render_inferno_lab_clear_entry_snapshot(RenderClient* rc) {
     free(rc->inferno_lab_entry_snapshot);
     rc->inferno_lab_entry_snapshot = NULL;
     rc->inferno_lab_entry_snapshot_size = 0;
-    rc->inferno_lab_entry_snapshot_valid = 0;
 }
 
 static const EncounterDef* render_inferno_lab_def_or_abort(OsrsEnv* env) {
@@ -830,7 +828,6 @@ static void render_inferno_lab_capture_entry_snapshot(
     render_inferno_lab_clear_entry_snapshot(rc);
     rc->inferno_lab_entry_snapshot = snapshot;
     rc->inferno_lab_entry_snapshot_size = size;
-    rc->inferno_lab_entry_snapshot_valid = 1;
 }
 
 static void render_inferno_lab_restore_controls(RenderClient* rc) {
@@ -849,8 +846,7 @@ static int render_inferno_lab_restore_entry_snapshot(
     RenderClient* rc,
     OsrsEnv* env
 ) {
-    if (!rc || !rc->inferno_lab_entry_snapshot_valid ||
-            !rc->inferno_lab_entry_snapshot) {
+    if (!rc || !rc->inferno_lab_entry_snapshot) {
         return 0;
     }
     const EncounterDef* def = render_inferno_lab_def_or_abort(env);
@@ -1610,7 +1606,6 @@ static RenderClient* render_make_client(void) {
     rc->inferno_lab_prev_human_enabled = 0;
     rc->inferno_lab_entry_snapshot = NULL;
     rc->inferno_lab_entry_snapshot_size = 0;
-    rc->inferno_lab_entry_snapshot_valid = 0;
     rc->inferno_lab_restore_requested = 0;
     rc->inferno_lab_restore_generation = 0;
     rc->layout_mode = 1;  /* default to resizable mode (modern OSRS layout) */

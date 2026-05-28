@@ -1110,7 +1110,6 @@ static inline void inferno_env_clear_render_input(Env* env, RenderClient* rc) {
     if (!rc) return;
     human_input_clear_pending(&rc->human_input);
     human_input_clear_move(&rc->human_input);
-    human_input_clear_selected_ui_target(&rc->human_input);
     ENCOUNTER_INFERNO.put_int(
         INF_ENV_STATE(env), INF_ENV_CONTEXT(env), "player_dest_x", -1);
     ENCOUNTER_INFERNO.put_int(
@@ -1125,14 +1124,15 @@ static inline void inferno_env_emit_lab_restore_terminal(
 ) {
     rc->inferno_lab_restore_requested = 0;
     inferno_env_clear_render_input(env, rc);
+    human_input_clear_selected_ui_target(&rc->human_input);
     inferno_env_refresh_after_state_load(env);
-    env->rewards[0] = 0.0f;
     env->term_staging = 1;
     env->terminals[0] = 1.0f;
 }
 
 static inline void inferno_env_freeze_for_lab(Env* env, RenderClient* rc) {
     inferno_env_clear_render_input(env, rc);
+    human_input_clear_selected_ui_target(&rc->human_input);
     inferno_env_write_post_restore_state(env);
 }
 
@@ -1188,13 +1188,7 @@ void c_step(Env* env) {
         for (int i = 0; i < NUM_ATNS; i++)
             env->acts_staging[i] = env->replay_actions[off + i];
         env->replay_cursor++;
-        if (render_client) {
-            human_input_clear_pending(&render_client->human_input);
-            human_input_clear_move(&render_client->human_input);
-            ENCOUNTER_INFERNO.put_int(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), "player_dest_x", -1);
-            ENCOUNTER_INFERNO.put_int(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), "player_dest_y", -1);
-            ENCOUNTER_INFERNO.put_int(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), "human_command_mode", 0);
-        }
+        inferno_env_clear_render_input(env, render_client);
     } else if (render_client && render_client->human_input.enabled &&
                ENCOUNTER_INFERNO.step_human_commands) {
         if (env->episode_actions && render_client->human_input.commands.count > 0) {
@@ -1204,13 +1198,7 @@ void c_step(Env* env) {
         ENCOUNTER_INFERNO.step_human_commands(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), &render_client->human_input);
         used_human_commands = 1;
     } else {
-        if (render_client) {
-            human_input_clear_pending(&render_client->human_input);
-            human_input_clear_move(&render_client->human_input);
-            ENCOUNTER_INFERNO.put_int(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), "player_dest_x", -1);
-            ENCOUNTER_INFERNO.put_int(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), "player_dest_y", -1);
-            ENCOUNTER_INFERNO.put_int(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), "human_command_mode", 0);
-        }
+        inferno_env_clear_render_input(env, render_client);
         for (int i = 0; i < NUM_ATNS; i++)
             env->acts_staging[i] = (int)env->actions[i];
     }
