@@ -16,6 +16,10 @@ verify, not gospel (see "Trust nothing blindly").
   - `da3aa430a` delete dead `blob_scan_timer`; `be7d3f9b5` healer arm;
     `9178dc582` jad arm; `60bf1286f` ownership-comment fixes. Hotspot #2 DONE,
     narrowed to jad + healer only.
+  - `e57b69f6e` style fields to `AttackStyle`/`MeleeStyle`; `0125fda4d` route a
+    const jad read through `inf_npc_jad_const` (the #2 union had left it
+    discarding const); `1e31acb2e` `winner` int to `InfOutcome` enum. Hotspot #3
+    DONE.
 - Hotspot #2 is DONE but NARROWED. A read-site audit found the "type-specific"
   field groupings in this doc WRONG: most are read in generic per-tick loops that
   rely on uniform zero-init. Only jad (`jad_attack_style`, `jad_healer_spawned`)
@@ -25,8 +29,12 @@ verify, not gospel (see "Trust nothing blindly").
   type-guards threaded through hot loops — judged not worth it). `dig_freeze_timer`,
   `dig_attack_delay`, `had_los_last_tick`, `resurrection_count`,
   `resurrecting_this_tick`, `resurrection_visual_target` are NOT type-owned.
-  #3 and #4 still marginal, skipped. The recipe/groupings below are kept for
-  history but are partly inaccurate — trust the code and commits over them.
+  #3 enum-typing DONE (commits above): style fields are now `AttackStyle`/
+  `MeleeStyle` and `winner` is an `InfOutcome` enum, values preserved so JSON +
+  golden digest are unchanged. #4 stats dedup stays skipped: `InfNPCStats` /
+  `InfNPCOverlay` encode a real provenance boundary (runtime merge vs hand-authored
+  DB deltas), not redundancy. The recipe/groupings below are kept for history but
+  are partly inaccurate, so trust the code and commits over them.
 
 ## Trust nothing blindly
 
