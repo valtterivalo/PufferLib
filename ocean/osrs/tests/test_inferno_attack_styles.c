@@ -8392,6 +8392,26 @@ static void test_inferno_binding_forwards_post_healer_set_rewards(void) {
         "optional_float_keys[]",
         "};",
         "\"post_healer_set_alive_tick_penalty_coeff\"");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "post-healer set alive penalty default off",
+        "config/ocean/osrs_inferno.ini",
+        "[env]",
+        "[vec]",
+        "post_healer_set_alive_penalty_cap = 0.0");
+    ASSERT_SOURCE_BLOCK_NOT_CONTAINS(
+        "post-healer set alive penalty not swept",
+        "config/ocean/osrs_inferno.ini",
+        "[sweep]",
+        "[sweep.train.total_timesteps]",
+        "post_healer_set_alive_tick_penalty_coeff");
+    ASSERT_SOURCE_NOT_CONTAINS(
+        "post-healer set alive penalty sweep section removed",
+        "config/ocean/osrs_inferno.ini",
+        "[sweep.env.post_healer_set_alive_tick_penalty_coeff]");
+    ASSERT_SOURCE_NOT_CONTAINS(
+        "post-healer set alive cap sweep section removed",
+        "config/ocean/osrs_inferno.ini",
+        "[sweep.env.post_healer_set_alive_penalty_cap]");
 }
 
 static void test_inferno_binding_forwards_joseph_reward_mode(void) {
@@ -8455,12 +8475,16 @@ static void test_inferno_binding_forwards_terminal_penalty_toggle(void) {
         "[env]",
         "[vec]",
         "terminal_penalty_enabled = 0");
-    ASSERT_SOURCE_BLOCK_CONTAINS(
-        "terminal penalty sweep axis",
+    ASSERT_SOURCE_BLOCK_NOT_CONTAINS(
+        "terminal penalty not swept",
         "config/ocean/osrs_inferno.ini",
-        "[sweep.env.terminal_penalty_enabled]",
-        "scale = auto",
-        "distribution = int_uniform");
+        "[sweep]",
+        "[sweep.train.total_timesteps]",
+        "terminal_penalty_enabled");
+    ASSERT_SOURCE_NOT_CONTAINS(
+        "terminal penalty sweep section removed",
+        "config/ocean/osrs_inferno.ini",
+        "[sweep.env.terminal_penalty_enabled]");
 }
 
 static void test_inferno_binding_forwards_step_out_forecast_obs_toggle(void) {
