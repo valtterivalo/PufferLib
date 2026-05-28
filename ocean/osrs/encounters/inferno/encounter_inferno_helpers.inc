@@ -646,7 +646,7 @@ static inline EncounterProjectileTiming inf_player_projectile_timing(
     return encounter_projectile_timing(distance, 1, kind, options);
 }
 
-static inline int inf_jad_roll_primary_style(uint32_t* rng_state) {
+static inline AttackStyle inf_jad_roll_primary_style(uint32_t* rng_state) {
     return (encounter_rand_int(rng_state, 2) == 0)
         ? ATTACK_STYLE_RANGED
         : ATTACK_STYLE_MAGIC;
@@ -708,13 +708,14 @@ static inline int inf_npc_death_anim_id(const InfNPC* npc, const NpcModelMapping
     }
 }
 
-static inline int inf_choose_attack_style_for_tick(
+static inline AttackStyle inf_choose_attack_style_for_tick(
     uint32_t* rng_state, int style_mask
 ) {
-    int primary_style = inf_attack_style_from_mask(style_mask & ~INF_STYLE_MASK_MELEE);
+    AttackStyle primary_style = (AttackStyle)inf_attack_style_from_mask(
+        style_mask & ~INF_STYLE_MASK_MELEE);
     if ((style_mask & INF_STYLE_MASK_MELEE) && primary_style != ATTACK_STYLE_NONE)
         return (encounter_rand_int(rng_state, 2) == 0) ? ATTACK_STYLE_MELEE : primary_style;
-    return inf_attack_style_from_mask(style_mask);
+    return (AttackStyle)inf_attack_style_from_mask(style_mask);
 }
 
 
