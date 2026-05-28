@@ -5180,6 +5180,29 @@ static void render_ensure_minimap_surface(RenderClient* rc, int w, int h) {
     rc->minimap_surface_h = h;
 }
 
+static void render_draw_minimap_compass(RenderClient* rc, GuiState* gs, Rectangle compass) {
+    int masked = gs->minimap_compass_masked.id != 0;
+    Texture2D comp = masked ? gs->minimap_compass_masked : gui_asset(gs, "compass");
+    if (comp.id == 0) comp = gs->minimap_compass;
+    if (comp.id != 0) {
+        Rectangle src = {0, 0, (float)comp.width, (float)comp.height};
+        float draw_w = masked ? (float)comp.width : compass.width;
+        float draw_h = masked ? (float)comp.height : compass.height;
+        Rectangle dst = {
+            compass.x + compass.width * 0.5f,
+            compass.y + compass.height * 0.5f,
+            draw_w,
+            draw_h,
+        };
+        Vector2 origin = {draw_w * 0.5f, draw_h * 0.5f};
+        float angle_deg = rc->cam_yaw * (180.0f / 3.14159265f);
+        DrawTexturePro(comp, src, dst, origin, angle_deg, WHITE);
+    } else {
+        gui_draw_named_asset(gs, "resize_compass_mask", compass, WHITE);
+        gui_text_shadow(gs, "N", (int)compass.x + 16, (int)compass.y + 12, 14, GUI_TEXT_ORANGE);
+    }
+}
+
 /* Draw the minimap area at the top of the right-hand panel: dark backdrop, the
    circular minimap with arena tiles (terrain base color + walls + entity dots),
    the rotating compass at top-left, and four stat orbs (HP, prayer, run, spec).
@@ -5272,6 +5295,14 @@ static void render_draw_minimap_area(RenderClient* rc, OsrsEnv* env, Player* p) 
     DrawTexturePro(rc->minimap_surface.texture, surface_src, surface_dst,
                    (Vector2){0, 0}, 0.0f, WHITE);
 
+    Rectangle compass = {
+        (float)compass_x,
+        (float)compass_y,
+        (float)GUI_COMPASS_W,
+        (float)GUI_COMPASS_H,
+    };
+    render_draw_minimap_compass(rc, gs, compass);
+
     Rectangle cover = {
         (float)(map_x + GUI_MAP_SURROUND_X),
         (float)(map_y + GUI_MAP_SURROUND_Y),
@@ -5286,31 +5317,6 @@ static void render_draw_minimap_area(RenderClient* rc, OsrsEnv* env, Player* p) 
             Rectangle src = {0, 0, (float)chrome_sprite.width, (float)chrome_sprite.height};
             DrawTexturePro(chrome_sprite, src, cover, (Vector2){0, 0}, 0.0f, WHITE);
         }
-    }
-
-    Rectangle compass = {
-        (float)compass_x,
-        (float)compass_y,
-        (float)GUI_COMPASS_W,
-        (float)GUI_COMPASS_H,
-    };
-    Texture2D compass_tex = gui_asset(gs, "compass");
-    if (compass_tex.id == 0) compass_tex = gs->minimap_compass;
-    if (compass_tex.id != 0) {
-        Texture2D comp = compass_tex;
-        Rectangle src = {0, 0, (float)comp.width, (float)comp.height};
-        Rectangle dst = {
-            compass.x + compass.width * 0.5f,
-            compass.y + compass.height * 0.5f,
-            compass.width,
-            compass.height,
-        };
-        Vector2 origin = {compass.width * 0.5f, compass.height * 0.5f};
-        float angle_deg = -rc->cam_yaw * (180.0f / 3.14159265f);
-        DrawTexturePro(comp, src, dst, origin, angle_deg, WHITE);
-    } else {
-        gui_draw_named_asset(gs, "resize_compass_mask", compass, WHITE);
-        gui_text_shadow(gs, "N", (int)compass.x + 16, (int)compass.y + 12, 14, GUI_TEXT_ORANGE);
     }
 
     int orbs_x = map_x + GUI_ORBS_X;
