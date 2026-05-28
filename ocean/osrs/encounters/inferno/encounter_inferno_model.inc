@@ -394,7 +394,6 @@ typedef struct {
     int dig_attack_delay;  /* meleer: ticks after emerging before first attack */
 
     /* blob prayer-reading state */
-    int blob_scan_timer;   /* blob: ticks remaining in scan phase (reads prayer) */
     int blob_scanned_prayer; /* blob: prayer read during scan (OverheadPrayer value) */
     int had_los_last_tick; /* blob: previous-tick LOS latch for immediate scans on LOS gain */
 
