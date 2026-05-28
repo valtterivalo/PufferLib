@@ -34,6 +34,17 @@ static int tests_failed = 0;
     } \
 } while (0)
 
+#define ASSERT_INT_LE(label, actual, expected) do { \
+    tests_run++; \
+    if ((actual) <= (expected)) { \
+        tests_passed++; \
+    } else { \
+        tests_failed++; \
+        printf("  FAIL: %s - got %d, expected <= %d\n", \
+            (label), (actual), (expected)); \
+    } \
+} while (0)
+
 static void assert_child_aborts(const char* label, void (*fn)(void)) {
     fflush(NULL);
     pid_t pid = fork();
@@ -109,6 +120,63 @@ static int source_block_contains(
     *end = saved;
     free(source);
     return found;
+}
+
+static int source_count_token(const char* start, const char* token) {
+    int count = 0;
+    size_t token_len = strlen(token);
+    const char* p = start;
+    while ((p = strstr(p, token)) != NULL) {
+        count++;
+        p += token_len;
+    }
+    return count;
+}
+
+static int source_seen_key(char keys[128][96], int key_count, const char* key) {
+    for (int i = 0; i < key_count; i++) {
+        if (strcmp(keys[i], key) == 0) return 1;
+    }
+    return 0;
+}
+
+static int inferno_my_log_metric_key_count(void) {
+    char* source = read_source_file("ocean/osrs_inferno/binding.c");
+    if (!source) return -1;
+    char* start = strstr(source, "void my_log");
+    if (!start) {
+        free(source);
+        return -1;
+    }
+
+    char keys[128][96] = {{0}};
+    int key_count = 0;
+    const char* prefix = "dict_set(out, \"";
+    size_t prefix_len = strlen(prefix);
+    char* p = start;
+    while ((p = strstr(p, prefix)) != NULL) {
+        p += prefix_len;
+        char* end = strchr(p, '"');
+        if (!end) break;
+        size_t len = (size_t)(end - p);
+        if (len >= sizeof(keys[0])) len = sizeof(keys[0]) - 1;
+        char key[96] = {0};
+        memcpy(key, p, len);
+        if (!source_seen_key(keys, key_count, key)) {
+            if (key_count >= 128) {
+                free(source);
+                return 10000;
+            }
+            memcpy(keys[key_count], key, len + 1);
+            key_count++;
+        }
+        p = end + 1;
+    }
+
+    int idle_metric_calls = source_count_token(start, "inferno_log_idle_metric(");
+    free(source);
+    return key_count +
+        idle_metric_calls * (1 + OSRS_INFERNO_IDLE_PHASE_COUNT);
 }
 
 #define ASSERT_SOURCE_BLOCK_CONTAINS(label, path, block_start, block_end, needle) do { \
@@ -8523,6 +8591,13 @@ static void test_inferno_binding_logs_idle_diagnostics(void) {
         "zuk_post_healers");
 }
 
+static void test_inferno_log_metrics_fit_cuda_dict(void) {
+    printf("--- inferno log metrics fit CUDA dict ---\n");
+
+    int metric_count = inferno_my_log_metric_key_count();
+    ASSERT_INT_LE("my_log metric key count", metric_count, 64);
+}
+
 static void test_inferno_binding_emits_post_240_traces(void) {
     printf("--- inferno binding emits post-240 traces ---\n");
 
@@ -8877,6 +8952,7 @@ int main(void) {
     test_inferno_binding_forwards_loadout_profile_config();
     test_inferno_binding_logs_post_healer_set_reward_components();
     test_inferno_binding_logs_idle_diagnostics();
+    test_inferno_log_metrics_fit_cuda_dict();
     test_inferno_binding_emits_post_240_traces();
     test_inferno_render_status_survives_overlay_refresh();
     test_inferno_eval_render_post_tick_owns_entity_refresh();
