@@ -13,8 +13,20 @@ verify, not gospel (see "Trust nothing blindly").
 - Done and committed:
   - `07999e287` golden-master trajectory test (the regression net).
   - `6c27d9425` hotspot #1: per-tick scratch grouped into `InfTickScratch`.
-- Next: hotspot #2 (InfNPC tagged union) via the safe recipe below. #3 and #4
-  were judged marginal — see verdicts.
+  - `da3aa430a` delete dead `blob_scan_timer`; `be7d3f9b5` healer arm;
+    `9178dc582` jad arm; `60bf1286f` ownership-comment fixes. Hotspot #2 DONE,
+    narrowed to jad + healer only.
+- Hotspot #2 is DONE but NARROWED. A read-site audit found the "type-specific"
+  field groupings in this doc WRONG: most are read in generic per-tick loops that
+  rely on uniform zero-init. Only jad (`jad_attack_style`, `jad_healer_spawned`)
+  and healer (`jad_owner_idx`, `heal_target`, `heal_timer`) state was cleanly
+  type-guarded, so only those became `type_state` union arms behind asserting
+  accessors. meleer/blob/mager fields stay flat (forcing them in would need
+  type-guards threaded through hot loops — judged not worth it). `dig_freeze_timer`,
+  `dig_attack_delay`, `had_los_last_tick`, `resurrection_count`,
+  `resurrecting_this_tick`, `resurrection_visual_target` are NOT type-owned.
+  #3 and #4 still marginal, skipped. The recipe/groupings below are kept for
+  history but are partly inaccurate — trust the code and commits over them.
 
 ## Trust nothing blindly
 
