@@ -376,6 +376,14 @@ typedef struct {
     int ticks_remaining;
 } InfNpcTargetHit;
 
+/* healer-only state. valid iff type is INF_NPC_HEALER_JAD or INF_NPC_HEALER_ZUK.
+   reach it through inf_npc_healer(); never touch InfNPC.type_state.healer directly. */
+typedef struct {
+    int owner_idx;  /* which jad/zuk this healer heals (-1 = none) */
+    int target;     /* NPC index of the unit currently being healed (-1 = none) */
+    int timer;      /* ticks until the in-flight heal lands (0 = none) */
+} InfHealerState;
+
 typedef struct {
     InfNPCType type;
     int x, y;
@@ -400,7 +408,6 @@ typedef struct {
     /* jad state */
     int jad_attack_style;  /* jad: committed next ranged/magic style preview, or NONE if unknown */
     int jad_healer_spawned; /* jad: 1 if healers have been spawned */
-    int jad_owner_idx;     /* healer: which jad this healer belongs to (-1 = none) */
 
     /* mager resurrection state */
     int resurrect_cooldown; /* mager: ticks until next resurrection attempt */
@@ -411,9 +418,12 @@ typedef struct {
     /* freeze state (ice barrage) */
     int frozen_ticks;       /* ticks remaining in ice barrage freeze */
 
-    /* heal state */
-    int heal_target;       /* healer: NPC index being healed (-1 = none) */
-    int heal_timer;        /* healer: ticks until next heal tick */
+    /* type-specific state, keyed on `type`. only the owning type's arm is
+       valid; reach it through the asserting inf_npc_*() accessors, never
+       through type_state directly. */
+    union {
+        InfHealerState healer;  /* type is INF_NPC_HEALER_JAD or INF_NPC_HEALER_ZUK */
+    } type_state;
 
     /* pending hit from player attack (projectile in flight) */
     EncounterPendingHit pending_hit;
@@ -438,6 +448,34 @@ typedef struct {
     int spawn_blob_splits_on_removal;
 } InfNPC;
 
+static inline int inf_npc_is_healer(InfNPCType type) {
+    return type == INF_NPC_HEALER_JAD || type == INF_NPC_HEALER_ZUK;
+}
+
+/* asserting accessor for the healer arm of InfNPC.type_state. asserts the NPC is
+   a healer so a wrong-arm access crashes loud in debug/test builds (where the
+   1435-assertion scenario test exercises the healer paths) instead of silently
+   reading another arm. asserts compile out under -DNDEBUG in the training build. */
+static inline InfHealerState* inf_npc_healer(InfNPC* npc) {
+    assert(inf_npc_is_healer(npc->type));
+    return &npc->type_state.healer;
+}
+
+/* write the spawn-time defaults for npc->type's type_state arm. caller must have
+   zeroed the NPC (memset) and set npc->type first. types whose arm has no
+   non-zero defaults, and types with no arm, are left zeroed. keeps arm
+   initialization in one place so a new arm cannot be forgotten at a spawn site. */
+static void inf_npc_init_type_state(InfNPC* npc) {
+    switch (npc->type) {
+        case INF_NPC_HEALER_JAD:
+        case INF_NPC_HEALER_ZUK:
+            npc->type_state.healer = (InfHealerState){
+                .owner_idx = -1, .target = -1, .timer = 0 };
+            break;
+        default:
+            break;
+    }
+}
 
 typedef struct {
     int x, y;

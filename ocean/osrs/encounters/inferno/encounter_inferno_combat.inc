@@ -533,18 +533,19 @@ static void inf_npc_attack_ctx(InfernoState* s, InfernoContext* ctx, int idx) {
     /* zuk healer: heal Zuk while it is untapped, switch to player-facing
        sparks after tag. */
     if (npc->type == INF_NPC_HEALER_ZUK) {
+        InfHealerState* h = inf_npc_healer(npc);
         if (npc->aggro_target >= 0) {
             /* heal Zuk with a 3-tick projectile */
             int ti = npc->aggro_target;
             if (ti >= 0 && ti < INF_MAX_NPCS && s->npcs[ti].active && s->npcs[ti].type == INF_NPC_ZUK) {
-                npc->heal_target = ti;
-                npc->heal_timer = 3;
+                h->target = ti;
+                h->timer = 3;
                 npc->attack_visual_target = ti;
             }
         } else {
             /* tagged healer: stop healing and fire the 3-spark ground pattern. */
-            npc->heal_target = -1;
-            npc->heal_timer = 0;
+            h->target = -1;
+            h->timer = 0;
             npc->attack_visual_target = -1;
             inf_queue_zuk_healer_sparks(s, npc);
         }
@@ -557,13 +558,14 @@ static void inf_npc_attack_ctx(InfernoState* s, InfernoContext* ctx, int idx) {
     /* jad healer: heals its Jad while aggro_target points at the boss, then
        switches to crush melee after a player tag. */
     if (npc->type == INF_NPC_HEALER_JAD) {
-        int jad_idx = npc->jad_owner_idx;
+        InfHealerState* h = inf_npc_healer(npc);
+        int jad_idx = h->owner_idx;
         if (npc->aggro_target >= 0) {
             if (jad_idx >= 0 && s->npcs[jad_idx].active &&
                 s->npcs[jad_idx].type == INF_NPC_JAD) {
                 /* heal Jad with the reference 3-tick delay. */
-                npc->heal_target = jad_idx;
-                npc->heal_timer = 3;
+                h->target = jad_idx;
+                h->timer = 3;
                 npc->attack_visual_target = jad_idx;
             }
             npc->attacked_this_tick = 1;
@@ -1002,7 +1004,7 @@ static void inf_jad_check_healers_ctx(InfernoState* s, const InfernoContext* ctx
         int hy = npc->y;
         inf_sample_jad_healer_spawn(s, ctx, npc, &hx, &hy);
         inf_init_npc(s, slot, INF_NPC_HEALER_JAD, hx, hy);
-        s->npcs[slot].jad_owner_idx = idx;
+        inf_npc_healer(&s->npcs[slot])->owner_idx = idx;
         s->npcs[slot].aggro_target = idx;
     }
 }
@@ -1115,10 +1117,11 @@ static void inf_zuk_tick(InfernoState* s) {
 
 static void inf_healer_apply_landed_heal(InfernoState* s, int idx) {
     InfNPC* npc = &s->npcs[idx];
-    int target_idx = npc->heal_target;
+    InfHealerState* h = inf_npc_healer(npc);
+    int target_idx = h->target;
     int heal_cap = (npc->type == INF_NPC_HEALER_ZUK) ? 25 : 20;
 
-    npc->heal_target = -1;
+    h->target = -1;
     if (target_idx < 0 || target_idx >= INF_MAX_NPCS) return;
     if (!s->npcs[target_idx].active) return;
 
@@ -1311,10 +1314,13 @@ static void inf_tick_npcs_ctx(InfernoState* s, InfernoContext* ctx) {
         if (!s->npcs[i].active) continue;
 
         if ((s->npcs[i].type == INF_NPC_HEALER_JAD || s->npcs[i].type == INF_NPC_HEALER_ZUK) &&
-            s->npcs[i].death_ticks == 0 && s->npcs[i].heal_timer > 0) {
-            s->npcs[i].heal_timer--;
-            if (s->npcs[i].heal_timer == 0)
-                inf_healer_apply_landed_heal(s, i);
+            s->npcs[i].death_ticks == 0) {
+            InfHealerState* h = inf_npc_healer(&s->npcs[i]);
+            if (h->timer > 0) {
+                h->timer--;
+                if (h->timer == 0)
+                    inf_healer_apply_landed_heal(s, i);
+            }
         }
 
         if (s->npcs[i].death_ticks > 0) {

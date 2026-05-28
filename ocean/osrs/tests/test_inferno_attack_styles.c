@@ -264,9 +264,9 @@ static InfNPC make_test_npc(InfNPCType type, int x, int y, int size) {
     npc.attack_visual_target = -1;
     npc.resurrection_visual_target = -1;
     npc.attack_style = INF_NPC_STATS[type].default_style;
-    npc.jad_owner_idx = -1;
     npc.blob_scanned_prayer = -1;
     npc.jad_attack_style = ATTACK_STYLE_NONE;
+    inf_npc_init_type_state(&npc);
     return npc;
 }
 
@@ -1304,7 +1304,7 @@ static void test_jad_damage_reward_pauses_while_jad_healers_heal(void) {
     state.npcs[1].active = 1;
     state.npcs[1].hp = state.npcs[1].max_hp =
         INF_NPC_STATS[INF_NPC_HEALER_JAD].hp;
-    state.npcs[1].jad_owner_idx = 0;
+    inf_npc_healer(&state.npcs[1])->owner_idx = 0;
     state.npcs[1].aggro_target = 0;
 
     ASSERT_FLOAT_NEAR("jad damage pays nothing while a healer heals jad",
@@ -2092,7 +2092,7 @@ static void test_jad_healer_spawn_offsets_match_wave_67_reference(void) {
         healers++;
         int dx = state.npcs[i].x - state.npcs[0].x;
         int dy = state.npcs[i].y - state.npcs[0].y;
-        ASSERT_INT_EQ("wave 67 healer owner", state.npcs[i].jad_owner_idx, 0);
+        ASSERT_INT_EQ("wave 67 healer owner", inf_npc_healer(&state.npcs[i])->owner_idx, 0);
         ASSERT_INT_EQ("wave 67 healer aggro", state.npcs[i].aggro_target, 0);
         ASSERT_INT_EQ("wave 67 healer x min", dx >= -5, 1);
         ASSERT_INT_EQ("wave 67 healer x max", dx <= 5, 1);

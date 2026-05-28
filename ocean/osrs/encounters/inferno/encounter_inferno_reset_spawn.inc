@@ -454,12 +454,11 @@ static void inf_init_npc(InfernoState* s, int idx, InfNPCType type, int x, int y
     npc->target_y = y;
     npc->attack_visual_target = -1;
     npc->resurrection_visual_target = -1;
-    npc->heal_target = -1;
-    npc->jad_owner_idx = -1;
     npc->aggro_target = -1;
     npc->blob_scanned_prayer = -1;
     npc->had_los_last_tick = 0;
     npc->stun_timer = stats->stun_on_spawn;
+    inf_npc_init_type_state(npc);
 
     if (inf_npc_sets_collision_flag(type))
         inf_stamp_npc_collision_footprint(s, x, y, stats->size);

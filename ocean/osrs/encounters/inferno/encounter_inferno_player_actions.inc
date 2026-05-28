@@ -124,7 +124,7 @@ static void inf_apply_npc_death(InfernoState* s, int npc_idx) {
         for (int j = 0; j < INF_MAX_NPCS; j++) {
             if (s->npcs[j].active &&
                 s->npcs[j].type == INF_NPC_HEALER_JAD &&
-                s->npcs[j].jad_owner_idx == npc_idx) {
+                inf_npc_healer(&s->npcs[j])->owner_idx == npc_idx) {
                 inf_deactivate_npc(s, j);
             }
         }
