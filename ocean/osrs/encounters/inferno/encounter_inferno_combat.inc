@@ -233,6 +233,29 @@ static int inf_player_can_attack_npc_from_current_tile(
         s->los_blocker_count);
 }
 
+static int inf_player_has_los_to_npc_from_current_tile(
+    const InfernoState* s,
+    int npc_idx
+) {
+    if (npc_idx < 0 || npc_idx >= INF_MAX_NPCS) return 0;
+
+    const InfNPC* npc = &s->npcs[npc_idx];
+    if (!npc->active || npc->death_ticks != 0 || npc->hp <= 0 ||
+            npc->type == INF_NPC_ZUK_SHIELD)
+        return 0;
+
+    return entity_has_line_of_sight(
+        s->los_blockers,
+        s->los_blocker_count,
+        s->player.x,
+        s->player.y,
+        1,
+        npc->x,
+        npc->y,
+        npc->size,
+        0);
+}
+
 static int inf_player_can_phantom_barrage_npc(
     InfernoState* s,
     const InfernoContext* ctx,

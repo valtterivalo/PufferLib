@@ -1,7 +1,7 @@
 #line 5216 "encounter_inferno.h"
 /* obs layout: player + Zuk phase + pillars + NPC slots + step-out forecast + pending hits + pending Zuk healer sparks */
 #define INF_PLAYER_OBS_SIZE 57
-#define INF_BASE_NPC_OBS_SIZE 415
+#define INF_BASE_NPC_OBS_SIZE 637
 #define INF_TOTAL_NPC_OBS_SIZE INF_BASE_NPC_OBS_SIZE
 #define INF_STEP_OUT_FORECAST_HORIZON 4
 #define INF_STEP_OUT_FORECAST_TICK_FEATURES 7
@@ -121,17 +121,6 @@ static float inf_zuk_attack_timer_obs(const InfernoState* s) {
 static int inf_npc_targets_player_for_obs(const InfernoState* s, const InfNPC* npc) {
     InfTargetArea target = inf_npc_current_target_area(s, npc);
     return target.is_player;
-}
-
-static int inf_npc_planned_style_for_obs(const InfNPC* npc) {
-    if (npc->type == INF_NPC_BLOB && npc->blob_scanned_prayer >= 0) {
-        OverheadPrayer scanned = (OverheadPrayer)npc->blob_scanned_prayer;
-        if (scanned == PRAYER_PROTECT_MAGIC) return ATTACK_STYLE_RANGED;
-        if (scanned == PRAYER_PROTECT_RANGED) return ATTACK_STYLE_MAGIC;
-    }
-    if (npc->type == INF_NPC_JAD)
-        return npc->jad_attack_style;
-    return npc->attack_style;
 }
 
 static int inf_step_out_forecast_action_valid(InfernoState* s, int action) {
@@ -342,7 +331,7 @@ static void inf_step_out_forecast_npc_attack(
 
     int style_mask = inf_forecast_jad_unknown_style_mask(npc);
     if (style_mask == 0) {
-        int planned_style = inf_npc_planned_style_for_obs(npc);
+        int planned_style = inf_npc_planned_style_for_current_state(npc);
         if (planned_style == ATTACK_STYLE_NONE) return;
         style_mask = inf_attack_style_options_mask(
             s, npc, stats, planned_style, dist);
@@ -476,7 +465,7 @@ static void inf_step_out_forecast_fast_static_npc(
 
     int style_mask = inf_forecast_jad_unknown_style_mask(npc);
     if (style_mask == 0) {
-        int planned_style = inf_npc_planned_style_for_obs(npc);
+        int planned_style = inf_npc_planned_style_for_current_state(npc);
         if (planned_style == ATTACK_STYLE_NONE) return;
         style_mask = inf_attack_style_options_mask_at_tile(
             action->land_x, action->land_y, npc, stats, planned_style, dist);

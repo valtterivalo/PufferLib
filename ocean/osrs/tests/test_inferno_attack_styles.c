@@ -430,6 +430,7 @@ static void fire_player_action_at_slot_zero(
 static int inferno_pending_hit_obs_start(void);
 static int inferno_spark_obs_start(void);
 static int inferno_obs_slot_dig_index(int slot_idx);
+static int inferno_obs_slot_player_has_los_index(int slot_idx);
 static int inferno_obs_slot_phantom_index(int slot_idx);
 static int inferno_obs_slot_target_category_start(int slot_idx);
 static void init_zuk_timing_state(InfernoState* state);
@@ -3273,7 +3274,7 @@ static void test_triple_jad_pending_threats_fit_obs_layout(void) {
 
     float obs[INF_NUM_OBS];
     inf_write_obs((EncounterState*)&state, obs);
-    ASSERT_INT_EQ("inferno obs shape includes exact spark slots", INF_NUM_OBS, 948);
+    ASSERT_INT_EQ("inferno obs shape includes exact spark slots", INF_NUM_OBS, 1170);
 }
 
 static void test_inferno_obs_shape_includes_step_out_forecast_features(void) {
@@ -3291,13 +3292,13 @@ static void test_inferno_obs_shape_includes_step_out_forecast_features(void) {
         "#define OBS_TENSOR_T FloatTensor",
         "#define ACT_SIZES INF_ACTION_DIMS_INIT");
     ASSERT_INT_EQ("npc obs includes compact target and dig signals",
-        INF_TOTAL_NPC_OBS_SIZE, 415);
+        INF_TOTAL_NPC_OBS_SIZE, 637);
     ASSERT_INT_EQ("step-out forecast covers every movement action",
         INF_STEP_OUT_FORECAST_OBS_SIZE, 200);
     ASSERT_INT_EQ("inferno obs shape includes exact spark landings",
         INF_PENDING_SPARK_OBS_SIZE, 224);
     ASSERT_INT_EQ("inferno obs shape includes cleanup pass",
-        INF_NUM_OBS, 948);
+        INF_NUM_OBS, 1170);
     ASSERT_INFERNO_SOURCE_NOT_CONTAINS("armor_tank state is removed",
         "armor_tank");
     ASSERT_INFERNO_SOURCE_NOT_CONTAINS("extra npc obs scaffold is removed",
@@ -3557,7 +3558,7 @@ static int inferno_obs_slot_feature_count(int slot_idx) {
     int has_targeted = 1;
     int has_meleer_dig = (type == INF_NPC_MELEER);
 
-    return 4 + has_timer + 3 * has_style + has_los + 3 * has_scan +
+    return 10 + has_timer + 3 * has_style + has_los + 3 * has_scan +
         4 * has_target_category + has_targeted + 1 + 3 * has_meleer_dig;
 }
 
@@ -3590,7 +3591,7 @@ static int inferno_spark_obs_start(void) {
         INF_FEATURES_PER_HIT * ENCOUNTER_MAX_PENDING_HITS;
 }
 
-static int inferno_obs_slot_target_category_start(int slot_idx) {
+static int inferno_obs_slot_barrage_count_index(int slot_idx) {
     int type = inferno_obs_slot_type(slot_idx);
     int has_style = (type == INF_NPC_BLOB || type == INF_NPC_JAD);
     int has_scan = (type == INF_NPC_BLOB);
@@ -3599,8 +3600,36 @@ static int inferno_obs_slot_target_category_start(int slot_idx) {
     int has_timer = (type != INF_NPC_NIBBLER && type != INF_NPC_HEALER_JAD &&
         type != INF_NPC_ZUK_SHIELD);
 
-    return inferno_obs_slot_start(slot_idx) + 4 + has_timer +
+    return inferno_obs_slot_start(slot_idx) + 3 + has_timer +
         3 * has_style + has_los + 3 * has_scan;
+}
+
+static int inferno_obs_slot_edge_distance_index(int slot_idx) {
+    return inferno_obs_slot_barrage_count_index(slot_idx) + 1;
+}
+
+static int inferno_obs_slot_npc_can_attack_if_ready_index(int slot_idx) {
+    return inferno_obs_slot_edge_distance_index(slot_idx) + 1;
+}
+
+static int inferno_obs_slot_npc_can_attack_this_tick_index(int slot_idx) {
+    return inferno_obs_slot_npc_can_attack_if_ready_index(slot_idx) + 1;
+}
+
+static int inferno_obs_slot_frozen_index(int slot_idx) {
+    return inferno_obs_slot_npc_can_attack_this_tick_index(slot_idx) + 1;
+}
+
+static int inferno_obs_slot_player_can_attack_index(int slot_idx) {
+    return inferno_obs_slot_frozen_index(slot_idx) + 1;
+}
+
+static int inferno_obs_slot_player_has_los_index(int slot_idx) {
+    return inferno_obs_slot_player_can_attack_index(slot_idx) + 1;
+}
+
+static int inferno_obs_slot_target_category_start(int slot_idx) {
+    return inferno_obs_slot_barrage_count_index(slot_idx) + 7;
 }
 
 static int inferno_obs_slot_targeted_index(int slot_idx) {
@@ -3618,6 +3647,190 @@ static int inferno_obs_slot_phantom_index(int slot_idx) {
 
 static int inferno_obs_slot_dig_index(int slot_idx) {
     return inferno_obs_slot_phantom_index(slot_idx) + 1;
+}
+
+static void init_threat_obs_state(InfernoState* state, int player_x, int player_y) {
+    inf_build_npc_stats();
+    *state = make_test_state(player_x, player_y);
+    state->player.entity_type = ENTITY_PLAYER;
+    state->player.base_hitpoints = 99;
+    state->player.current_hitpoints = 99;
+    state->player.base_attack = 99;
+    state->player.base_strength = 99;
+    state->player.base_defence = 99;
+    state->player.base_ranged = 99;
+    state->player.base_magic = 99;
+    state->player.current_attack = 99;
+    state->player.current_strength = 99;
+    state->player.current_defence = 99;
+    state->player.current_ranged = 99;
+    state->player.current_magic = 99;
+    state->weapon_set = INF_GEAR_BP;
+    osrs_interaction_init(&state->interaction);
+    encounter_compute_loadout_stats(INF_MAX_MAGE_LOADOUT, ATTACK_STYLE_MAGIC,
+        OFFENSIVE_PRAYER_NONE, 99, FIGHT_STYLE_AUTOCAST, 30,
+        &state->loadout_stats[INF_GEAR_MAGE]);
+    encounter_compute_loadout_stats(INF_MAX_RANGE_LONG_LOADOUT, ATTACK_STYLE_RANGED,
+        OFFENSIVE_PRAYER_NONE, 99, FIGHT_STYLE_RAPID, 0,
+        &state->loadout_stats[INF_GEAR_LONG_RANGE]);
+    encounter_compute_loadout_stats(INF_MAX_RANGE_FAST_LOADOUT, ATTACK_STYLE_RANGED,
+        OFFENSIVE_PRAYER_NONE, 99, FIGHT_STYLE_RAPID, 0,
+        &state->loadout_stats[INF_GEAR_BP]);
+}
+
+static void add_threat_obs_npc(
+    InfernoState* state,
+    int slot,
+    InfNPCType type,
+    int x,
+    int y
+) {
+    state->npcs[slot] = make_test_npc(type, x, y, INF_NPC_STATS[type].size);
+    state->npcs[slot].active = 1;
+    state->npcs[slot].hp = state->npcs[slot].max_hp = INF_NPC_STATS[type].hp;
+    state->npcs[slot].attack_timer = 1;
+}
+
+static void test_npc_threat_obs_exposes_frozen_meleer_pressure(void) {
+    printf("--- npc threat obs exposes frozen meleer pressure ---\n");
+
+    InfernoState state;
+    init_threat_obs_state(&state, 10, 10);
+    add_threat_obs_npc(&state, 0, INF_NPC_MELEER, 11, 10);
+    state.npcs[0].frozen_ticks = 8;
+    inf_refresh_current_obs_slots(&state);
+
+    InfNpcPlayerThreat threat = inf_npc_player_threat(&state, &state.npcs[0]);
+    ASSERT_INT_EQ("frozen adjacent meleer can attack if ready",
+        threat.can_attack_if_ready, 1);
+    ASSERT_INT_EQ("frozen adjacent meleer can attack this tick",
+        threat.can_attack_this_tick, 1);
+    ASSERT_INT_EQ("immediate threat includes frozen adjacent meleer",
+        inf_player_has_immediate_threat(&state), 1);
+
+    float obs[INF_NUM_OBS];
+    inf_write_obs((EncounterState*)&state, obs);
+    int obs_slot = inf_find_target_obs_slot(&state, 0);
+    ASSERT_INT_EQ("frozen meleer has obs slot", obs_slot >= 0, 1);
+    ASSERT_FLOAT_NEAR("frozen meleer threat if ready obs",
+        obs[inferno_obs_slot_npc_can_attack_if_ready_index(obs_slot)], 1.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("frozen meleer threat this tick obs",
+        obs[inferno_obs_slot_npc_can_attack_this_tick_index(obs_slot)], 1.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("frozen ticks obs",
+        obs[inferno_obs_slot_frozen_index(obs_slot)],
+        8.0f / (float)BARRAGE_FREEZE_TICKS, 1e-6f);
+    ASSERT_FLOAT_NEAR("prayer critical includes frozen melee pressure",
+        obs[INF_OBS_PRAYER_MELEE], 1.0f, 1e-6f);
+}
+
+static void test_npc_threat_obs_respects_overlap_range_and_stun(void) {
+    printf("--- npc threat obs respects overlap range and stun ---\n");
+
+    InfernoState under;
+    init_threat_obs_state(&under, 10, 10);
+    add_threat_obs_npc(&under, 0, INF_NPC_MELEER, 9, 9);
+    under.npcs[0].frozen_ticks = 8;
+    InfNpcPlayerThreat under_threat = inf_npc_player_threat(&under, &under.npcs[0]);
+    ASSERT_INT_EQ("standing under frozen meleer is not attackable",
+        under_threat.can_attack_if_ready, 0);
+
+    InfernoState far;
+    init_threat_obs_state(&far, 10, 10);
+    add_threat_obs_npc(&far, 0, INF_NPC_MELEER, 13, 10);
+    far.npcs[0].frozen_ticks = 8;
+    InfNpcPlayerThreat far_threat = inf_npc_player_threat(&far, &far.npcs[0]);
+    ASSERT_INT_EQ("frozen meleer outside melee distance is not attackable",
+        far_threat.can_attack_if_ready, 0);
+
+    InfernoState stunned;
+    init_threat_obs_state(&stunned, 10, 10);
+    add_threat_obs_npc(&stunned, 0, INF_NPC_MELEER, 11, 10);
+    stunned.npcs[0].stun_timer = 2;
+    InfNpcPlayerThreat stunned_threat =
+        inf_npc_player_threat(&stunned, &stunned.npcs[0]);
+    ASSERT_INT_EQ("stunned adjacent meleer would threaten if ready",
+        stunned_threat.can_attack_if_ready, 1);
+    ASSERT_INT_EQ("stunned adjacent meleer cannot attack this tick",
+        stunned_threat.can_attack_this_tick, 0);
+}
+
+static void test_npc_threat_obs_keeps_ranger_mager_diagonal_melee(void) {
+    printf("--- npc threat obs keeps ranger and mager diagonal melee ---\n");
+
+    InfernoState ranger_state;
+    init_threat_obs_state(&ranger_state, 10, 10);
+    add_threat_obs_npc(&ranger_state, 0, INF_NPC_RANGER, 11, 11);
+    InfNpcPlayerThreat ranger_threat =
+        inf_npc_player_threat(&ranger_state, &ranger_state.npcs[0]);
+    ASSERT_INT_EQ("diagonal ranger can attack player",
+        ranger_threat.can_attack_if_ready, 1);
+    ASSERT_INT_EQ("diagonal ranger threat includes melee fallback",
+        (ranger_threat.style_mask & INF_STYLE_MASK_MELEE) != 0, 1);
+
+    InfernoState mager_state;
+    init_threat_obs_state(&mager_state, 10, 10);
+    add_threat_obs_npc(&mager_state, 0, INF_NPC_MAGER, 11, 11);
+    InfNpcPlayerThreat mager_threat =
+        inf_npc_player_threat(&mager_state, &mager_state.npcs[0]);
+    ASSERT_INT_EQ("diagonal mager can attack player",
+        mager_threat.can_attack_if_ready, 1);
+    ASSERT_INT_EQ("diagonal mager threat includes melee fallback",
+        (mager_threat.style_mask & INF_STYLE_MASK_MELEE) != 0, 1);
+}
+
+static void test_player_attackability_obs_exposes_current_loadout_and_los(void) {
+    printf("--- player attackability obs exposes current loadout and LOS ---\n");
+
+    InfernoState state;
+    init_threat_obs_state(&state, 10, 10);
+    add_threat_obs_npc(&state, 0, INF_NPC_RANGER, 20, 10);
+    inf_refresh_current_obs_slots(&state);
+
+    float obs[INF_NUM_OBS];
+    inf_write_obs((EncounterState*)&state, obs);
+    int obs_slot = inf_find_target_obs_slot(&state, 0);
+    ASSERT_INT_EQ("range test ranger has obs slot", obs_slot >= 0, 1);
+    ASSERT_FLOAT_NEAR("blowpipe cannot attack distance ten ranger",
+        obs[inferno_obs_slot_player_can_attack_index(obs_slot)], 0.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("player has LOS to distance ten ranger",
+        obs[inferno_obs_slot_player_has_los_index(obs_slot)], 1.0f, 1e-6f);
+
+    state.los_blockers[0] = (LOSBlocker){15, 10, 1, LOS_FULL_MASK};
+    state.los_blocker_count = 1;
+    inf_invalidate_los_cache(&state);
+    inf_write_obs((EncounterState*)&state, obs);
+    ASSERT_FLOAT_NEAR("LOS blocker hides player LOS",
+        obs[inferno_obs_slot_player_has_los_index(obs_slot)], 0.0f, 1e-6f);
+}
+
+static void test_barrage_total_target_count_matches_resolution_targets(void) {
+    printf("--- barrage total target count matches resolution targets ---\n");
+
+    InfernoState state;
+    init_threat_obs_state(&state, 10, 10);
+    add_threat_obs_npc(&state, 0, INF_NPC_RANGER, 16, 10);
+    add_threat_obs_npc(&state, 1, INF_NPC_NIBBLER, 17, 11);
+    add_threat_obs_npc(&state, 2, INF_NPC_MAGER, 15, 9);
+    add_threat_obs_npc(&state, 3, INF_NPC_ZUK_SHIELD, 16, 11);
+    add_threat_obs_npc(&state, 4, INF_NPC_BAT, 17, 10);
+    state.npcs[4].death_ticks = 2;
+
+    ASSERT_INT_EQ("barrage count includes primary and active non-shields",
+        inf_barrage_total_target_count(&state, 0), 3);
+
+    inf_refresh_current_obs_slots(&state);
+    float obs[INF_NUM_OBS];
+    inf_write_obs((EncounterState*)&state, obs);
+    int obs_slot = inf_find_target_obs_slot(&state, 0);
+    ASSERT_FLOAT_NEAR("barrage count obs includes primary target",
+        obs[inferno_obs_slot_barrage_count_index(obs_slot)],
+        3.0f / (float)BARRAGE_MAX_HITS, 1e-6f);
+
+    for (int i = 5; i < 16; i++) {
+        add_threat_obs_npc(&state, i, INF_NPC_BAT, 15 + (i % 3), 9 + (i % 3));
+    }
+    ASSERT_INT_EQ("barrage count caps at max hits",
+        inf_barrage_total_target_count(&state, 0), BARRAGE_MAX_HITS);
 }
 
 static void init_step_out_forecast_stack_state(InfernoState* state, int player_x, int player_y) {
@@ -9093,6 +9306,11 @@ int main(void) {
     test_inferno_obs_shape_includes_step_out_forecast_features();
     test_inferno_obs_wave_phase_one_hot();
     test_inferno_obs_exposes_meleer_dig_state();
+    test_npc_threat_obs_exposes_frozen_meleer_pressure();
+    test_npc_threat_obs_respects_overlap_range_and_stun();
+    test_npc_threat_obs_keeps_ranger_mager_diagonal_melee();
+    test_player_attackability_obs_exposes_current_loadout_and_los();
+    test_barrage_total_target_count_matches_resolution_targets();
     test_jad_special_wave_spawn_cadence_matches_reference();
     test_triple_jad_first_attacks_are_staggered();
     test_jad_melee_stays_instant_and_untelegraphed();

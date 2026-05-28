@@ -486,6 +486,101 @@ static inline int inf_attack_style_telegraph_mask(
     return inf_attack_style_options_mask(s, npc, stats, planned_style, dist);
 }
 
+typedef struct {
+    int edge_distance;
+    int style_mask;
+    int telegraph_style_mask;
+    int can_attack_if_ready;
+    int can_attack_this_tick;
+} InfNpcPlayerThreat;
+
+static inline int inf_npc_planned_style_for_current_state(const InfNPC* npc) {
+    if (npc->type == INF_NPC_BLOB && npc->blob_scanned_prayer >= 0) {
+        OverheadPrayer scanned = (OverheadPrayer)npc->blob_scanned_prayer;
+        if (scanned == PRAYER_PROTECT_MAGIC) return ATTACK_STYLE_RANGED;
+        if (scanned == PRAYER_PROTECT_RANGED) return ATTACK_STYLE_MAGIC;
+    }
+    if (npc->type == INF_NPC_JAD)
+        return npc->jad_attack_style;
+    return npc->attack_style;
+}
+
+static inline int inf_npc_type_has_player_pressure(InfNPCType type) {
+    return type != INF_NPC_NIBBLER &&
+        type != INF_NPC_ZUK &&
+        type != INF_NPC_ZUK_SHIELD &&
+        type != INF_NPC_HEALER_ZUK;
+}
+
+static inline InfNpcPlayerThreat inf_npc_player_threat(
+    const InfernoState* s,
+    const InfNPC* npc
+) {
+    InfNpcPlayerThreat threat = {0};
+    if (!npc->active || npc->death_ticks > 0)
+        return threat;
+    if (!inf_npc_type_has_player_pressure(npc->type))
+        return threat;
+
+    InfTargetArea target = inf_npc_current_target_area(s, npc);
+    if (!target.is_player)
+        return threat;
+
+    const InfNPCStats* stats = &INF_NPC_STATS[npc->type];
+    int dist = encounter_dist_to_npc(
+        s->player.x, s->player.y, npc->x, npc->y, npc->size);
+    threat.edge_distance = dist;
+    if (dist == 0 || dist > stats->attack_range)
+        return threat;
+
+    if (stats->attack_range > 1 &&
+            !(npc->type == INF_NPC_BLOB && npc->blob_scanned_prayer >= 0) &&
+            !inf_npc_has_los_to_tile(s, npc, s->player.x, s->player.y))
+        return threat;
+
+    threat.can_attack_if_ready = 1;
+
+    int planned_style = inf_npc_planned_style_for_current_state(npc);
+    if (planned_style != ATTACK_STYLE_NONE) {
+        threat.style_mask = inf_attack_style_options_mask(
+            s, npc, stats, planned_style, dist);
+        threat.telegraph_style_mask = inf_attack_style_telegraph_mask(
+            s, npc, stats, planned_style, dist);
+    }
+
+    threat.can_attack_this_tick = npc->attack_timer <= 1 &&
+        npc->stun_timer == 0 &&
+        npc->dig_freeze_timer == 0 &&
+        npc->dig_attack_delay == 0;
+    return threat;
+}
+
+static inline int inf_barrage_total_target_count(
+    const InfernoState* s,
+    int primary_idx
+) {
+    if (primary_idx < 0 || primary_idx >= INF_MAX_NPCS) return 0;
+    const InfNPC* primary = &s->npcs[primary_idx];
+    if (!primary->active || primary->death_ticks > 0 ||
+            primary->type == INF_NPC_ZUK_SHIELD)
+        return 0;
+
+    int count = 1;
+    for (int i = 0; i < INF_MAX_NPCS && count < BARRAGE_MAX_HITS; i++) {
+        if (i == primary_idx) continue;
+        const InfNPC* npc = &s->npcs[i];
+        if (!npc->active || npc->death_ticks > 0 ||
+                npc->type == INF_NPC_ZUK_SHIELD)
+            continue;
+
+        int dx = npc->x - primary->x;
+        int dy = npc->y - primary->y;
+        if (dx >= -1 && dx <= 1 && dy >= -1 && dy <= 1)
+            count++;
+    }
+    return count;
+}
+
 static inline int inf_pending_hit_obs_timer(const EncounterPendingHit* ph) {
     if (ph->check_prayer && ph->prayer_check_delay > 0)
         return ph->prayer_check_delay;

@@ -210,30 +210,13 @@ static void inf_write_obs_ctx(
         for (int n = 0; n < INF_MAX_NPCS; n++) {
             InfNPC* npc = &s->npcs[n];
             if (!npc->active || npc->death_ticks > 0) continue;
-            if (npc->type == INF_NPC_ZUK ||
-                npc->type == INF_NPC_ZUK_SHIELD || npc->type == INF_NPC_NIBBLER ||
-                npc->type == INF_NPC_HEALER_ZUK) continue;
-
-            const InfNPCStats* st = &INF_NPC_STATS[npc->type];
-            if (npc->frozen_ticks > 0 || npc->stun_timer > 0) continue;
-
-            InfTargetArea target = inf_npc_current_target_area(s, npc);
-            if (!target.is_player) continue;
-
-            int dist = encounter_dist_to_npc(s->player.x, s->player.y, npc->x, npc->y, npc->size);
-            if (dist == 0) continue;
-
-            int style = npc->attack_style;
-            if (npc->type == INF_NPC_BLOB && npc->blob_scanned_prayer >= 0) {
-                OverheadPrayer scanned = (OverheadPrayer)npc->blob_scanned_prayer;
-                if (scanned == PRAYER_PROTECT_MAGIC) style = ATTACK_STYLE_RANGED;
-                else if (scanned == PRAYER_PROTECT_RANGED) style = ATTACK_STYLE_MAGIC;
-            } else if (npc->type == INF_NPC_JAD) {
-                style = npc->jad_attack_style;
-                if (style == ATTACK_STYLE_NONE) continue;
-            }
-            int style_mask = inf_attack_style_telegraph_mask(
-                s, npc, st, style, dist);
+            InfNpcPlayerThreat threat = inf_npc_player_threat(s, npc);
+            int style_mask = threat.telegraph_style_mask;
+            if (!style_mask) continue;
+            if (npc->stun_timer > 0 ||
+                    npc->dig_freeze_timer > 0 ||
+                    npc->dig_attack_delay > 0)
+                continue;
             int preview_style = inf_attack_style_obs_preview(style_mask);
 
             int t = npc->attack_timer;
@@ -348,7 +331,7 @@ static void inf_write_obs_ctx(
         int has_targeted = 1;
         int has_meleer_dig = (type == INF_NPC_MELEER);
 
-        int num_features = 4; // HP, RelX, RelY, AoE
+        int num_features = 10;
         if (has_timer) num_features += 1;
         if (has_style) num_features += 3;
         if (has_los) num_features += 1;
@@ -385,21 +368,17 @@ static void inf_write_obs_ctx(
                 }
             }
 
-            /* barrage AoE count: unique blocking NPCs in the 3x3 area */
+            obs[i++] = (float)inf_barrage_total_target_count(s, n) /
+                (float)BARRAGE_MAX_HITS;
+
             {
-                int aoe_count = 0;
-                for (int oidx = 0; oidx < INF_MAX_NPCS; oidx++) {
-                    if (oidx == n) continue;
-                    InfNPC* other = &s->npcs[oidx];
-                    if (!other->active) continue;
-                    if (!inf_npc_sets_collision_flag(other->type)) continue;
-                    if (encounter_entity_footprints_overlap(
-                            other->x, other->y, inf_npc_effective_size(other),
-                            npc->x - 1, npc->y - 1, 3)) {
-                        aoe_count++;
-                    }
-                }
-                obs[i++] = (float)aoe_count / 8.0f;
+                InfNpcPlayerThreat threat = inf_npc_player_threat(s, npc);
+                obs[i++] = (float)threat.edge_distance / (float)INF_ARENA_HEIGHT;
+                obs[i++] = threat.can_attack_if_ready ? 1.0f : 0.0f;
+                obs[i++] = threat.can_attack_this_tick ? 1.0f : 0.0f;
+                obs[i++] = (float)npc->frozen_ticks / (float)BARRAGE_FREEZE_TICKS;
+                obs[i++] = inf_player_can_attack_npc_from_current_tile(s, n) ? 1.0f : 0.0f;
+                obs[i++] = inf_player_has_los_to_npc_from_current_tile(s, n) ? 1.0f : 0.0f;
             }
 
             if (has_target_category) {

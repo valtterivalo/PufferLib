@@ -443,37 +443,8 @@ static int inf_player_has_immediate_threat(const InfernoState* s) {
     }
     for (int i = 0; i < INF_MAX_NPCS; i++) {
         const InfNPC* npc = &s->npcs[i];
-        if (!npc->active || npc->death_ticks > 0 || npc->hp <= 0)
-            continue;
-        if (npc->type == INF_NPC_ZUK ||
-                npc->type == INF_NPC_ZUK_SHIELD ||
-                npc->type == INF_NPC_NIBBLER ||
-                npc->type == INF_NPC_HEALER_ZUK)
-            continue;
-        if (npc->frozen_ticks > 0 || npc->stun_timer > 0)
-            continue;
-
-        InfTargetArea target = inf_npc_current_target_area(s, npc);
-        if (!target.is_player) continue;
-
-        const InfNPCStats* st = &INF_NPC_STATS[npc->type];
-        int dist = encounter_dist_to_npc(
-            s->player.x, s->player.y, npc->x, npc->y, npc->size);
-        if (dist == 0 || dist > st->attack_range)
-            continue;
-
-        int planned_style = npc->attack_style;
-        if (npc->type == INF_NPC_BLOB && npc->blob_scanned_prayer >= 0) {
-            OverheadPrayer scanned = (OverheadPrayer)npc->blob_scanned_prayer;
-            planned_style = scanned == PRAYER_PROTECT_MAGIC
-                ? ATTACK_STYLE_RANGED : ATTACK_STYLE_MAGIC;
-        } else if (npc->type == INF_NPC_JAD) {
-            planned_style = npc->jad_attack_style;
-            if (planned_style == ATTACK_STYLE_NONE) continue;
-        }
-
-        if (inf_attack_style_telegraph_mask(s, npc, st, planned_style, dist) &&
-                (npc->attack_timer <= 1))
+        InfNpcPlayerThreat threat = inf_npc_player_threat(s, npc);
+        if (threat.telegraph_style_mask && threat.can_attack_this_tick)
             return 1;
     }
     return 0;
