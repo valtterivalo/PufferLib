@@ -44,6 +44,79 @@ static int inf_local_overhead_action(int action) {
     return action;
 }
 
+static OffensivePrayer inf_required_offensive_prayer_for_style(AttackStyle style) {
+    switch (style) {
+        case ATTACK_STYLE_MELEE:
+            return OFFENSIVE_PRAYER_PIETY;
+        case ATTACK_STYLE_RANGED:
+            return OFFENSIVE_PRAYER_RIGOUR;
+        case ATTACK_STYLE_MAGIC:
+            return OFFENSIVE_PRAYER_AUGURY;
+        case ATTACK_STYLE_NONE:
+            return OFFENSIVE_PRAYER_NONE;
+    }
+    abort();
+}
+
+static void inf_record_offensive_prayer_attack(
+    InfernoState* s,
+    AttackStyle style,
+    float damage_roll
+) {
+    OffensivePrayer required = inf_required_offensive_prayer_for_style(style);
+    if (required == OFFENSIVE_PRAYER_NONE) return;
+
+    int style_idx = (int)style;
+    assert(style_idx > ATTACK_STYLE_NONE && style_idx <= ATTACK_STYLE_MAGIC);
+    int correct = s->player.offensive_prayer == required;
+    s->offensive_prayer_correct_this_tick = correct;
+    s->total_offensive_prayer_attacks++;
+    s->total_offensive_prayer_correct += correct;
+    s->offensive_prayer_attacks_by_style[style_idx]++;
+    s->offensive_prayer_correct_by_style[style_idx] += correct;
+    if (correct && damage_roll > 0.0f)
+        s->offensive_prayer_correct_damage_roll_this_tick += damage_roll;
+}
+
+static float inf_record_player_reward_damage(
+    InfernoState* s,
+    int npc_idx,
+    int damage_roll
+) {
+    if (npc_idx < 0 || npc_idx >= INF_MAX_NPCS || damage_roll <= 0) return 0.0f;
+
+    InfNPC* npc = &s->npcs[npc_idx];
+    if (!npc->active || npc->death_ticks > 0 || npc->hp <= 0) return 0.0f;
+
+    float damage = (float)(damage_roll > npc->hp ? npc->hp : damage_roll);
+    s->damage_dealt_this_tick += damage;
+    if (npc->resurrection_count != 0) {
+        s->damage_resurrected_this_tick += damage;
+        return damage;
+    }
+
+    switch (npc->type) {
+        case INF_NPC_ZUK:
+            s->damage_zuk_this_tick += damage;
+            break;
+        case INF_NPC_HEALER_ZUK:
+            s->damage_zuk_healers_this_tick += damage;
+            break;
+        case INF_NPC_HEALER_JAD:
+            s->damage_jad_healers_this_tick += damage;
+            break;
+        case INF_NPC_JAD:
+            s->damage_jad_this_tick += damage;
+            break;
+        case INF_NPC_ZUK_SHIELD:
+            break;
+        default:
+            s->damage_set_this_tick += damage;
+            break;
+    }
+    return damage;
+}
+
 /* movement uses shared encounter_move_to_target from osrs_encounter.h */
 
 /* walkability callback for encounter_move_to_target */
@@ -426,6 +499,7 @@ static void inf_tick_player_ctx(
     const int* actions,
     int can_attack
 ) {
+    s->offensive_prayer_correct_this_tick = 0;
     if (s->player_last_interaction_age == 0)
         s->player_last_interaction_age = 1;
 
@@ -802,6 +876,7 @@ static void inf_tick_player_ctx(
                         btargets, bt_count, attack_effects.attack_roll, attack_effects.max_hit,
                         &s->rng_state, active_spell, attack_effects.use_double_accuracy);
                     total_dmg = br.total_damage;
+                    float reward_damage = 0.0f;
                     int phantom_primary_blood_damage = 0;
                     if (target_npc->death_ticks > 0) {
                         if (active_spell == ENCOUNTER_SPELL_BLOOD && btargets[0].hit)
@@ -831,6 +906,8 @@ static void inf_tick_player_ctx(
                         if (!btargets[i].active || !btargets[i].rolled) continue;
                         int nidx = btargets[i].npc_idx;
                         if (s->npcs[nidx].death_ticks > 0) continue;
+                        reward_damage += inf_record_player_reward_damage(
+                            s, nidx, btargets[i].damage);
                         EncounterPendingHit* ph = &s->npcs[nidx].pending_hit;
                         ph->active = 1;
                         ph->damage = btargets[i].damage;
@@ -841,6 +918,7 @@ static void inf_tick_player_ctx(
                         ph->hit_success = btargets[i].hit;
                         ph->elysian_reduced = 0;
                     }
+                    total_dmg = (int)reward_damage;
 
                 } else if (is_blowpipe_spec_attack) {
                     /* blowpipe spec: 2x accuracy, 1.5x max hit, heal 50% of damage */
@@ -856,6 +934,8 @@ static void inf_tick_player_ctx(
                     s->player.current_hitpoints += heal;
                     if (s->player.current_hitpoints > s->player.base_hitpoints)
                         s->player.current_hitpoints = s->player.base_hitpoints;
+                    int reward_damage = (int)inf_record_player_reward_damage(
+                        s, s->interaction.target_slot, total_dmg);
                     EncounterPendingHit* ph = &target_npc->pending_hit;
                     ph->active = 1;
                     ph->damage = total_dmg;
@@ -865,6 +945,7 @@ static void inf_tick_player_ctx(
                     ph->spell_type = 0;
                     ph->hit_success = total_dmg > 0;
                     ph->elysian_reduced = 0;
+                    total_dmg = reward_damage;
 
                 } else if (ls->style == ATTACK_STYLE_RANGED) {
                     const InfNPCStats* ns = &INF_NPC_STATS[target_npc->type];
@@ -890,6 +971,8 @@ static void inf_tick_player_ctx(
                     if (hit_success) {
                         total_dmg = encounter_rand_int(&s->rng_state, attack_effects.max_hit + 1);
                     }
+                    int reward_damage = (int)inf_record_player_reward_damage(
+                        s, s->interaction.target_slot, total_dmg);
                     EncounterPendingHit* ph = &target_npc->pending_hit;
                     ph->active = 1;
                     ph->damage = total_dmg;
@@ -899,9 +982,11 @@ static void inf_tick_player_ctx(
                     ph->spell_type = 0;
                     ph->hit_success = hit_success;
                     ph->elysian_reduced = 0;
+                    total_dmg = reward_damage;
                 }
 
                 s->player.attack_timer = ls->attack_speed;
+                inf_record_offensive_prayer_attack(s, ls->style, (float)total_dmg);
                 if (target_npc->type == INF_NPC_HEALER_ZUK) {
                     int target_was_untagged = target_npc->aggro_target >= 0;
                     s->total_zuk_healer_attack_fires++;
@@ -1001,38 +1086,19 @@ static void inf_resolve_player_projectiles_on_npcs(InfernoState* s) {
         if (!s->npcs[i].active || s->npcs[i].death_ticks > 0) continue;
         int spell = s->npcs[i].pending_hit.spell_type;
         int hit_success = s->npcs[i].pending_hit.hit_success;
-        float dmg_before = s->damage_dealt_this_tick;
         int hp_before = s->npcs[i].hp;
         int landed = encounter_resolve_npc_pending_hit(
             &s->npcs[i].pending_hit,
             &s->npcs[i].hp, &s->npcs[i].hit_landed_this_tick, &s->npcs[i].hit_damage,
-            &s->npcs[i].frozen_ticks, &blood_heal_acc, &s->damage_dealt_this_tick);
+            &s->npcs[i].frozen_ticks, &blood_heal_acc, NULL);
         if (landed) {
-            float landed_damage = s->damage_dealt_this_tick - dmg_before;
             int t = s->npcs[i].type;
             int hp_after = s->npcs[i].hp;
-            int is_resurrected = s->npcs[i].resurrection_count != 0;
-            if (is_resurrected) {
-                s->damage_resurrected_this_tick += landed_damage;
-            } else {
-                if (t == INF_NPC_ZUK) {
-                    s->damage_zuk_this_tick += landed_damage;
-                } else if (t == INF_NPC_HEALER_ZUK) {
-                    s->damage_zuk_healers_this_tick += landed_damage;
-                } else if (t == INF_NPC_HEALER_JAD) {
-                    s->damage_jad_healers_this_tick += landed_damage;
-                } else if (t == INF_NPC_JAD) {
-                    s->damage_jad_this_tick += landed_damage;
-                } else if (t != INF_NPC_ZUK && t != INF_NPC_ZUK_SHIELD &&
-                           t != INF_NPC_HEALER_JAD) {
-                    s->damage_set_this_tick += landed_damage;
-                }
-                if (hp_before > 0 && hp_after <= 0) {
-                    if (t == INF_NPC_JAD) s->kill_jad_this_tick++;
-                    else if (t == INF_NPC_HEALER_ZUK) s->kill_zuk_healer_this_tick++;
-                    else if (t != INF_NPC_ZUK && t != INF_NPC_ZUK_SHIELD &&
-                             t != INF_NPC_HEALER_JAD) s->kill_set_this_tick++;
-                }
+            if (hp_before > 0 && hp_after <= 0) {
+                if (t == INF_NPC_JAD) s->kill_jad_this_tick++;
+                else if (t == INF_NPC_HEALER_ZUK) s->kill_zuk_healer_this_tick++;
+                else if (t != INF_NPC_ZUK && t != INF_NPC_ZUK_SHIELD &&
+                         t != INF_NPC_HEALER_JAD) s->kill_set_this_tick++;
             }
             s->npcs[i].hit_spell_type = spell;
             s->npcs[i].hit_was_successful_this_tick = hit_success;

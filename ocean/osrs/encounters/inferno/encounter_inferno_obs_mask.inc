@@ -43,82 +43,25 @@ static int inf_npc_is_phantom_barrage_targetable_now(
         inf_player_can_phantom_barrage_npc(s, ctx, npc_idx);
 }
 
-typedef struct {
-    int active;
-    int src_x;
-    int src_y;
-    int earliest_ticks_remaining;
-    int total_damage;
-} InfSparkObsBucket;
-
-static int inf_spark_bucket_obs_less(
+static int inf_pending_spark_obs_less(
     const InfernoState* s,
-    const InfSparkObsBucket* a,
-    const InfSparkObsBucket* b
+    const InfPendingSpark* a,
+    int ai,
+    const InfPendingSpark* b,
+    int bi
 ) {
-    if (a->earliest_ticks_remaining != b->earliest_ticks_remaining)
-        return a->earliest_ticks_remaining < b->earliest_ticks_remaining;
-    int adx = abs(a->src_x - s->player.x);
-    int ady = abs(a->src_y - s->player.y);
-    int bdx = abs(b->src_x - s->player.x);
-    int bdy = abs(b->src_y - s->player.y);
+    if (a->ticks_remaining != b->ticks_remaining)
+        return a->ticks_remaining < b->ticks_remaining;
+    int adx = abs(a->x - s->player.x);
+    int ady = abs(a->y - s->player.y);
+    int bdx = abs(b->x - s->player.x);
+    int bdy = abs(b->y - s->player.y);
     int ad = adx > ady ? adx : ady;
     int bd = bdx > bdy ? bdx : bdy;
     if (ad != bd) return ad < bd;
-    if (a->src_x != b->src_x) return a->src_x < b->src_x;
-    return a->src_y < b->src_y;
-}
-
-static int inf_build_spark_obs_buckets(
-    const InfernoState* s,
-    InfSparkObsBucket* buckets,
-    int capacity
-) {
-    int count = 0;
-    for (int i = 0; i < INF_MAX_PENDING_SPARKS; i++) {
-        const InfPendingSpark* spark = &s->pending_sparks[i];
-        if (!spark->active) continue;
-
-        int bucket_idx = -1;
-        for (int b = 0; b < count; b++) {
-            if (buckets[b].src_x == spark->src_x &&
-                    buckets[b].src_y == spark->src_y) {
-                bucket_idx = b;
-                break;
-            }
-        }
-
-        if (bucket_idx < 0) {
-            if (count >= capacity) {
-                fprintf(stderr, "BUG: spark obs bucket overflow\n");
-                abort();
-            }
-            bucket_idx = count++;
-            buckets[bucket_idx] = (InfSparkObsBucket){
-                .active = 1,
-                .src_x = spark->src_x,
-                .src_y = spark->src_y,
-                .earliest_ticks_remaining = spark->ticks_remaining,
-                .total_damage = 0,
-            };
-        }
-
-        if (spark->ticks_remaining < buckets[bucket_idx].earliest_ticks_remaining)
-            buckets[bucket_idx].earliest_ticks_remaining = spark->ticks_remaining;
-        buckets[bucket_idx].total_damage += spark->damage;
-    }
-
-    for (int i = 0; i < count; i++) {
-        for (int j = i + 1; j < count; j++) {
-            if (inf_spark_bucket_obs_less(s, &buckets[j], &buckets[i])) {
-                InfSparkObsBucket tmp = buckets[i];
-                buckets[i] = buckets[j];
-                buckets[j] = tmp;
-            }
-        }
-    }
-
-    return count;
+    if (a->x != b->x) return a->x < b->x;
+    if (a->y != b->y) return a->y < b->y;
+    return ai < bi;
 }
 
 static void inf_refresh_current_obs_slots_ctx(InfernoState* s, const InfernoContext* ctx) {
@@ -495,9 +438,9 @@ static void inf_write_obs_ctx(
     }
 
     {
-        if (ctx->config.step_out_forecast_obs_enabled) {
+        if (ctx->config.step_out_forecast_obs_mode != INF_STEP_OUT_FORECAST_MODE_OFF) {
             InfStepOutForecast forecast;
-            inf_build_step_out_forecast_ctx(s, ctx, &forecast);
+            inf_build_step_out_forecast_mode_ctx(s, ctx, &forecast);
             for (int action_idx = 0; action_idx < ENCOUNTER_MOVE_ACTIONS; action_idx++) {
                 const InfStepOutForecastAction* action = &forecast.actions[action_idx];
                 int first_attack_tick = 0;
@@ -560,21 +503,31 @@ static void inf_write_obs_ctx(
     INF_PROFILE_MARK(INF_PROF_OBS_PENDING_HITS);
 #endif
 
-    {
-        InfSparkObsBucket buckets[INF_MAX_PENDING_SPARKS];
-        memset(buckets, 0, sizeof(buckets));
-        int bucket_count = inf_build_spark_obs_buckets(s, buckets, INF_MAX_PENDING_SPARKS);
-        for (int slot = 0; slot < INF_SPARK_OBS_SLOTS; slot++) {
-            if (slot < bucket_count) {
-                const InfSparkObsBucket* bucket = &buckets[slot];
-                obs[i++] = 1.0f;
-                obs[i++] = (float)(bucket->src_x - px) / (float)INF_ARENA_WIDTH;
-                obs[i++] = (float)(bucket->src_y - py) / (float)INF_ARENA_HEIGHT;
-                obs[i++] = (float)bucket->earliest_ticks_remaining / 10.0f;
-                obs[i++] = (float)bucket->total_damage / 10.0f;
-            } else {
-                for (int j = 0; j < INF_FEATURES_PER_SPARK; j++) obs[i++] = 0.0f;
+    int used_sparks[INF_MAX_PENDING_SPARKS] = {0};
+    for (int slot = 0; slot < INF_SPARK_OBS_SLOTS; slot++) {
+        int best = -1;
+        for (int sp = 0; sp < INF_MAX_PENDING_SPARKS; sp++) {
+            if (used_sparks[sp] || !s->pending_sparks[sp].active) continue;
+            if (best < 0 ||
+                inf_pending_spark_obs_less(
+                    s, &s->pending_sparks[sp], sp,
+                    &s->pending_sparks[best], best)) {
+                best = sp;
             }
+        }
+
+        if (best >= 0) {
+            const InfPendingSpark* spark = &s->pending_sparks[best];
+            used_sparks[best] = 1;
+            obs[i++] = 1.0f;
+            obs[i++] = (float)(spark->x - px) / (float)INF_ARENA_WIDTH;
+            obs[i++] = (float)(spark->y - py) / (float)INF_ARENA_HEIGHT;
+            obs[i++] = (float)(spark->src_x - px) / (float)INF_ARENA_WIDTH;
+            obs[i++] = (float)(spark->src_y - py) / (float)INF_ARENA_HEIGHT;
+            obs[i++] = (float)spark->ticks_remaining / 10.0f;
+            obs[i++] = (float)spark->damage / 10.0f;
+        } else {
+            for (int j = 0; j < INF_FEATURES_PER_SPARK; j++) obs[i++] = 0.0f;
         }
     }
 #ifdef INF_PROFILE_ENABLED

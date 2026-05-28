@@ -1,4 +1,14 @@
 #line 7460 "encounter_inferno.h"
+static void inf_require_valid_step_out_forecast_obs_mode(int value) {
+    if (value < INF_STEP_OUT_FORECAST_MODE_OFF ||
+            value > INF_STEP_OUT_FORECAST_MODE_FAST_READONLY_MOVE) {
+        fprintf(stderr,
+            "inferno: step_out_forecast_obs_mode must be in [0,3], got %d\n",
+            value);
+        abort();
+    }
+}
+
 static void inf_put_int_ctx(
     EncounterState* state,
     EncounterContext* context,
@@ -23,9 +33,30 @@ static void inf_put_int_ctx(
     else if (strcmp(key, "terminal_penalty_enabled") == 0)
         ctx->config.terminal_penalty_enabled =
             encounter_require_binary_config("inferno", key, value);
-    else if (strcmp(key, "step_out_forecast_obs_enabled") == 0)
-        ctx->config.step_out_forecast_obs_enabled =
+    else if (strcmp(key, "curriculum_agent") == 0)
+        ctx->config.curriculum_agent =
             encounter_require_binary_config("inferno", key, value);
+    else if (strcmp(key, "curriculum_supply_jitter_mode") == 0) {
+        inf_require_valid_curriculum_supply_mode(key, value);
+        ctx->config.curriculum_supply_jitter_mode = value;
+    }
+    else if (strcmp(key, "curriculum_no_brew_mode") == 0) {
+        inf_require_valid_curriculum_supply_mode(key, value);
+        ctx->config.curriculum_no_brew_mode = value;
+    }
+    else if (strcmp(key, "step_out_forecast_obs_enabled") == 0) {
+        int enabled = encounter_require_binary_config("inferno", key, value);
+        ctx->config.step_out_forecast_obs_enabled = enabled;
+        ctx->config.step_out_forecast_obs_mode = enabled ?
+            INF_STEP_OUT_FORECAST_MODE_EXACT_ROLLOUT :
+            INF_STEP_OUT_FORECAST_MODE_OFF;
+    }
+    else if (strcmp(key, "step_out_forecast_obs_mode") == 0) {
+        inf_require_valid_step_out_forecast_obs_mode(value);
+        ctx->config.step_out_forecast_obs_mode = value;
+        ctx->config.step_out_forecast_obs_enabled =
+            value != INF_STEP_OUT_FORECAST_MODE_OFF;
+    }
     else if (strcmp(key, "loadout_profile_mode") == 0) {
         inf_require_valid_loadout_profile_mode(value);
         ctx->config.loadout_profile_mode = (InfLoadoutProfileMode)value;
@@ -81,6 +112,10 @@ static void inf_put_float_ctx(
     (void)state;
     InfernoContext* ctx = context ? (InfernoContext*)context : inf_legacy_context();
     if (strcmp(key, "damage_reward_coeff") == 0) ctx->config.damage_reward_coeff = value;
+    else if (strcmp(key, "offensive_prayer_reward_coeff") == 0) {
+        inf_require_nonnegative_float_config(key, value);
+        ctx->config.offensive_prayer_reward_coeff = value;
+    }
     else if (strcmp(key, "shield_penalty_coeff") == 0) ctx->config.shield_penalty_coeff = value;
     else if (strcmp(key, "tag_reward_coeff") == 0) ctx->config.tag_reward_coeff = value;
     else if (strcmp(key, "shield_tag_reward_coeff") == 0) ctx->config.shield_tag_reward_coeff = value;
@@ -95,6 +130,22 @@ static void inf_put_float_ctx(
     else if (strcmp(key, "late_start_supply_profile_scale") == 0) {
         inf_require_valid_supply_scale(value);
         ctx->config.late_start_supply_profile_scale = value;
+    }
+    else if (strcmp(key, "curriculum_supply_shared_jitter") == 0) {
+        inf_require_unit_interval_float_config(key, value);
+        ctx->config.curriculum_supply_shared_jitter = value;
+    }
+    else if (strcmp(key, "curriculum_supply_brew_jitter") == 0) {
+        inf_require_unit_interval_float_config(key, value);
+        ctx->config.curriculum_supply_brew_jitter = value;
+    }
+    else if (strcmp(key, "curriculum_supply_restore_jitter") == 0) {
+        inf_require_unit_interval_float_config(key, value);
+        ctx->config.curriculum_supply_restore_jitter = value;
+    }
+    else if (strcmp(key, "curriculum_no_brew_frac") == 0) {
+        inf_require_unit_interval_float_config(key, value);
+        ctx->config.curriculum_no_brew_frac = value;
     }
     else if (strcmp(key, "budget_loadout_fraction") == 0) {
         inf_require_valid_budget_loadout_fraction(value);
@@ -210,7 +261,34 @@ static void* inf_get_log_ctx(EncounterState* state, EncounterContext* context) {
         ctx->log->wave += (float)s->wave;
         ctx->log->prayer_correct += (float)s->total_prayer_correct;
         ctx->log->prayer_total += (float)s->total_npc_attacks;
+        ctx->log->offensive_prayer_attacks +=
+            (float)s->total_offensive_prayer_attacks;
+        ctx->log->offensive_prayer_correct +=
+            (float)s->total_offensive_prayer_correct;
+        for (int i = 0; i < 4; i++) {
+            ctx->log->offensive_prayer_attacks_by_style[i] +=
+                (float)s->offensive_prayer_attacks_by_style[i];
+            ctx->log->offensive_prayer_correct_by_style[i] +=
+                (float)s->offensive_prayer_correct_by_style[i];
+        }
         ctx->log->idle_ticks += (float)s->total_idle_ticks;
+        ctx->log->attack_ready_no_attack_ticks +=
+            (float)s->total_attack_ready_no_attack_ticks;
+        ctx->log->target_available_no_attack_ticks +=
+            (float)s->total_target_available_no_attack_ticks;
+        ctx->log->safe_attack_opportunity_missed_ticks +=
+            (float)s->total_safe_attack_opportunity_missed_ticks;
+        ctx->log->progressless_ticks += (float)s->total_progressless_ticks;
+        for (int i = 0; i < OSRS_INFERNO_IDLE_PHASE_COUNT; i++) {
+            ctx->log->attack_ready_no_attack_ticks_by_phase[i] +=
+                (float)s->attack_ready_no_attack_ticks_by_phase[i];
+            ctx->log->target_available_no_attack_ticks_by_phase[i] +=
+                (float)s->target_available_no_attack_ticks_by_phase[i];
+            ctx->log->safe_attack_opportunity_missed_ticks_by_phase[i] +=
+                (float)s->safe_attack_opportunity_missed_ticks_by_phase[i];
+            ctx->log->progressless_ticks_by_phase[i] +=
+                (float)s->progressless_ticks_by_phase[i];
+        }
         ctx->log->brews_used += (float)s->total_brews_used;
         ctx->log->blood_healed += (float)s->total_blood_healed;
         ctx->log->ranger_mager_same_tick_attacks +=
@@ -920,14 +998,22 @@ static uint64_t inf_config_fingerprint(const InfConfig* config) {
     INF_HASH_CONFIG_FIELD(config, &h, loadout_profile_mode);
     INF_HASH_CONFIG_FIELD(config, &h, budget_loadout_fraction);
     INF_HASH_CONFIG_FIELD(config, &h, damage_reward_coeff);
+    INF_HASH_CONFIG_FIELD(config, &h, offensive_prayer_reward_coeff);
     INF_HASH_CONFIG_FIELD(config, &h, shield_penalty_coeff);
     INF_HASH_CONFIG_FIELD(config, &h, tag_reward_coeff);
     INF_HASH_CONFIG_FIELD(config, &h, late_start_supply_profile_scale);
+    INF_HASH_CONFIG_FIELD(config, &h, curriculum_agent);
+    INF_HASH_CONFIG_FIELD(config, &h, curriculum_supply_jitter_mode);
+    INF_HASH_CONFIG_FIELD(config, &h, curriculum_supply_shared_jitter);
+    INF_HASH_CONFIG_FIELD(config, &h, curriculum_supply_brew_jitter);
+    INF_HASH_CONFIG_FIELD(config, &h, curriculum_supply_restore_jitter);
+    INF_HASH_CONFIG_FIELD(config, &h, curriculum_no_brew_mode);
+    INF_HASH_CONFIG_FIELD(config, &h, curriculum_no_brew_frac);
     INF_HASH_CONFIG_FIELD(config, &h, supply_milestone_brew_reward_coeff);
     INF_HASH_CONFIG_FIELD(config, &h, supply_milestone_restore_reward_coeff);
     INF_HASH_CONFIG_FIELD(config, &h, death_penalty_coeff);
     INF_HASH_CONFIG_FIELD(config, &h, terminal_penalty_enabled);
-    INF_HASH_CONFIG_FIELD(config, &h, step_out_forecast_obs_enabled);
+    INF_HASH_CONFIG_FIELD(config, &h, step_out_forecast_obs_mode);
     INF_HASH_CONFIG_FIELD(config, &h, phase_900_bonus);
     INF_HASH_CONFIG_FIELD(config, &h, phase_600_bonus);
     INF_HASH_CONFIG_FIELD(config, &h, phase_300_bonus);

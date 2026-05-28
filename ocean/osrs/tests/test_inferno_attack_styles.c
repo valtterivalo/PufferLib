@@ -34,6 +34,17 @@ static int tests_failed = 0;
     } \
 } while (0)
 
+#define ASSERT_INT_LE(label, actual, expected) do { \
+    tests_run++; \
+    if ((actual) <= (expected)) { \
+        tests_passed++; \
+    } else { \
+        tests_failed++; \
+        printf("  FAIL: %s - got %d, expected <= %d\n", \
+            (label), (actual), (expected)); \
+    } \
+} while (0)
+
 static void assert_child_aborts(const char* label, void (*fn)(void)) {
     fflush(NULL);
     pid_t pid = fork();
@@ -109,6 +120,63 @@ static int source_block_contains(
     *end = saved;
     free(source);
     return found;
+}
+
+static int source_count_token(const char* start, const char* token) {
+    int count = 0;
+    size_t token_len = strlen(token);
+    const char* p = start;
+    while ((p = strstr(p, token)) != NULL) {
+        count++;
+        p += token_len;
+    }
+    return count;
+}
+
+static int source_seen_key(char keys[128][96], int key_count, const char* key) {
+    for (int i = 0; i < key_count; i++) {
+        if (strcmp(keys[i], key) == 0) return 1;
+    }
+    return 0;
+}
+
+static int inferno_my_log_metric_key_count(void) {
+    char* source = read_source_file("ocean/osrs_inferno/binding.c");
+    if (!source) return -1;
+    char* start = strstr(source, "void my_log");
+    if (!start) {
+        free(source);
+        return -1;
+    }
+
+    char keys[128][96] = {{0}};
+    int key_count = 0;
+    const char* prefix = "dict_set(out, \"";
+    size_t prefix_len = strlen(prefix);
+    char* p = start;
+    while ((p = strstr(p, prefix)) != NULL) {
+        p += prefix_len;
+        char* end = strchr(p, '"');
+        if (!end) break;
+        size_t len = (size_t)(end - p);
+        if (len >= sizeof(keys[0])) len = sizeof(keys[0]) - 1;
+        char key[96] = {0};
+        memcpy(key, p, len);
+        if (!source_seen_key(keys, key_count, key)) {
+            if (key_count >= 128) {
+                free(source);
+                return 10000;
+            }
+            memcpy(keys[key_count], key, len + 1);
+            key_count++;
+        }
+        p = end + 1;
+    }
+
+    int idle_metric_calls = source_count_token(start, "inferno_log_idle_metric(");
+    free(source);
+    return key_count +
+        idle_metric_calls * (1 + OSRS_INFERNO_IDLE_PHASE_COUNT);
 }
 
 #define ASSERT_SOURCE_BLOCK_CONTAINS(label, path, block_start, block_end, needle) do { \
@@ -1266,6 +1334,266 @@ static void test_zuk_healer_attack_shape_reward_applies_in_joseph_mode(void) {
         inf_compute_reward(&state), 0.60f, 0.0001f);
 }
 
+static void test_offensive_prayer_reward_shapes_normal_and_joseph_mode(void) {
+    printf("--- offensive prayer reward shapes normal and Joseph mode ---\n");
+
+    InfernoState normal = make_test_state(24, 24);
+    inf_put_float((EncounterState*)&normal, "damage_reward_coeff", 0.01f);
+    inf_put_float((EncounterState*)&normal, "offensive_prayer_reward_coeff", 0.25f);
+    normal.damage_dealt_this_tick = 40.0f;
+    normal.offensive_prayer_correct_damage_roll_this_tick = 40.0f;
+
+    ASSERT_FLOAT_NEAR("normal reward multiplies correct offensive prayer damage",
+        inf_compute_reward(&normal), 0.50f, 0.0001f);
+
+    InfernoState wrong = make_test_state(24, 24);
+    inf_put_float((EncounterState*)&wrong, "damage_reward_coeff", 0.01f);
+    inf_put_float((EncounterState*)&wrong, "offensive_prayer_reward_coeff", 0.25f);
+    wrong.damage_dealt_this_tick = 40.0f;
+
+    ASSERT_FLOAT_NEAR("wrong offensive prayer receives base damage reward only",
+        inf_compute_reward(&wrong), 0.40f, 0.0001f);
+
+    InfernoState zero = make_test_state(24, 24);
+    inf_put_float((EncounterState*)&zero, "damage_reward_coeff", 0.01f);
+    inf_put_float((EncounterState*)&zero, "offensive_prayer_reward_coeff", 0.25f);
+    zero.offensive_prayer_correct_this_tick = 1;
+
+    ASSERT_FLOAT_NEAR("correct offensive prayer without damage receives no shape",
+        inf_compute_reward(&zero), 0.0f, 0.0001f);
+
+    InfernoState joseph = make_test_state(24, 24);
+    test_config()->joseph_reward_mode = 1;
+    inf_put_float((EncounterState*)&joseph, "damage_reward_coeff", 0.01f);
+    inf_put_float((EncounterState*)&joseph, "offensive_prayer_reward_coeff", 0.25f);
+    joseph.damage_dealt_this_tick = 40.0f;
+    joseph.offensive_prayer_correct_damage_roll_this_tick = 40.0f;
+
+    ASSERT_FLOAT_NEAR("Joseph reward multiplies correct offensive prayer damage",
+        inf_compute_reward(&joseph), 0.50f, 0.0001f);
+}
+
+static void init_ranged_offensive_prayer_test_state(InfernoState* state) {
+    init_spell_cast_test_state(state, INF_NPC_NIBBLER);
+    state->weapon_set = INF_GEAR_BP;
+    state->player.autocast_enabled = 0;
+    state->npcs[0].x = 13;
+    state->npcs[0].y = 10;
+    encounter_apply_loadout(&state->player, INF_MAX_RANGE_FAST_LOADOUT, GEAR_RANGED);
+    encounter_compute_loadout_stats(INF_MAX_RANGE_FAST_LOADOUT, ATTACK_STYLE_RANGED,
+        state->player.offensive_prayer, 99, FIGHT_STYLE_RAPID, 0,
+        &state->loadout_stats[INF_GEAR_BP]);
+    inf_refresh_current_obs_slots(state);
+}
+
+static void test_offensive_prayer_attack_events_count_real_attacks(void) {
+    printf("--- offensive prayer attack events count real attacks ---\n");
+
+    InfernoState ranged = make_test_state(10, 10);
+    init_ranged_offensive_prayer_test_state(&ranged);
+    ranged.player.offensive_prayer = OFFENSIVE_PRAYER_RIGOUR;
+    fire_player_action_at_slot_zero(&ranged, 0);
+
+    ASSERT_INT_EQ("ranged attack fires", ranged.player_attacked_this_tick, 1);
+    ASSERT_INT_EQ("ranged attack counted", ranged.total_offensive_prayer_attacks, 1);
+    ASSERT_INT_EQ("ranged Rigour counted correct", ranged.total_offensive_prayer_correct, 1);
+    ASSERT_INT_EQ("ranged style total counted",
+        ranged.offensive_prayer_attacks_by_style[ATTACK_STYLE_RANGED], 1);
+    ASSERT_INT_EQ("ranged style correct counted",
+        ranged.offensive_prayer_correct_by_style[ATTACK_STYLE_RANGED], 1);
+
+    InfernoState wrong_ranged = make_test_state(10, 10);
+    init_ranged_offensive_prayer_test_state(&wrong_ranged);
+    wrong_ranged.player.offensive_prayer = OFFENSIVE_PRAYER_PIETY;
+    fire_player_action_at_slot_zero(&wrong_ranged, 0);
+
+    ASSERT_INT_EQ("wrong ranged attack counted",
+        wrong_ranged.total_offensive_prayer_attacks, 1);
+    ASSERT_INT_EQ("ranged with Piety counted wrong",
+        wrong_ranged.total_offensive_prayer_correct, 0);
+
+    InfernoState magic = make_test_state(10, 10);
+    init_spell_cast_test_state(&magic, INF_NPC_NIBBLER);
+    magic.player.offensive_prayer = OFFENSIVE_PRAYER_AUGURY;
+    fire_player_action_at_slot_zero(&magic, 1);
+
+    ASSERT_INT_EQ("magic attack counted", magic.total_offensive_prayer_attacks, 1);
+    ASSERT_INT_EQ("magic Augury counted correct", magic.total_offensive_prayer_correct, 1);
+    ASSERT_INT_EQ("magic style total counted",
+        magic.offensive_prayer_attacks_by_style[ATTACK_STYLE_MAGIC], 1);
+    ASSERT_INT_EQ("magic style correct counted",
+        magic.offensive_prayer_correct_by_style[ATTACK_STYLE_MAGIC], 1);
+
+    InfernoState wrong_magic = make_test_state(10, 10);
+    init_spell_cast_test_state(&wrong_magic, INF_NPC_NIBBLER);
+    wrong_magic.player.offensive_prayer = OFFENSIVE_PRAYER_RIGOUR;
+    fire_player_action_at_slot_zero(&wrong_magic, 2);
+
+    ASSERT_INT_EQ("magic with Rigour counted wrong",
+        wrong_magic.total_offensive_prayer_correct, 0);
+}
+
+static void test_offensive_prayer_barrage_aoe_counts_once(void) {
+    printf("--- offensive prayer barrage AoE counts once ---\n");
+
+    InfernoState state = make_test_state(10, 10);
+    init_spell_cast_test_state(&state, INF_NPC_NIBBLER);
+    state.player.offensive_prayer = OFFENSIVE_PRAYER_AUGURY;
+    state.npcs[1] = make_test_npc(INF_NPC_NIBBLER, 17, 10, INF_NPC_STATS[INF_NPC_NIBBLER].size);
+    state.npcs[1].active = 1;
+    state.npcs[1].hp = state.npcs[1].max_hp = INF_NPC_STATS[INF_NPC_NIBBLER].hp;
+    inf_refresh_current_obs_slots(&state);
+
+    fire_player_action_at_slot_zero(&state, 1);
+
+    ASSERT_INT_EQ("barrage attack fires", state.player_attacked_this_tick, 1);
+    ASSERT_INT_EQ("barrage counts one offensive prayer event",
+        state.total_offensive_prayer_attacks, 1);
+    ASSERT_INT_EQ("barrage with Augury counts correct",
+        state.total_offensive_prayer_correct, 1);
+}
+
+static void test_offensive_prayer_no_attack_no_event(void) {
+    printf("--- offensive prayer no attack no event ---\n");
+
+    InfernoState state = make_test_state(10, 10);
+    init_spell_cast_test_state(&state, INF_NPC_NIBBLER);
+    state.player.offensive_prayer = OFFENSIVE_PRAYER_AUGURY;
+    state.player.attack_timer = 3;
+
+    int actions[INF_NUM_ACTION_HEADS];
+    memset(actions, 0, sizeof(actions));
+    actions[INF_HEAD_TARGET] = inf_action_target_for_npc(&state, 0);
+    inf_tick_player(&state, actions, 1);
+
+    ASSERT_INT_EQ("cooldown prevents attack", state.player_attacked_this_tick, 0);
+    ASSERT_INT_EQ("cooldown produces no offensive prayer event",
+        state.total_offensive_prayer_attacks, 0);
+    ASSERT_INT_EQ("cooldown produces no correct event",
+        state.offensive_prayer_correct_this_tick, 0);
+}
+
+static void test_offensive_prayer_melee_maps_to_piety(void) {
+    printf("--- offensive prayer melee maps to Piety ---\n");
+
+    InfernoState state = make_test_state(10, 10);
+    state.player.offensive_prayer = OFFENSIVE_PRAYER_PIETY;
+    inf_record_offensive_prayer_attack(&state, ATTACK_STYLE_MELEE, 7.0f);
+
+    ASSERT_INT_EQ("melee requires Piety",
+        inf_required_offensive_prayer_for_style(ATTACK_STYLE_MELEE),
+        OFFENSIVE_PRAYER_PIETY);
+    ASSERT_INT_EQ("melee Piety counted correct",
+        state.total_offensive_prayer_correct, 1);
+    ASSERT_INT_EQ("melee style counted",
+        state.offensive_prayer_attacks_by_style[ATTACK_STYLE_MELEE], 1);
+    ASSERT_FLOAT_NEAR("melee correct prayer records damage roll",
+        state.offensive_prayer_correct_damage_roll_this_tick, 7.0f, 1e-6f);
+}
+
+static void test_player_reward_damage_uses_xp_drop_tick(void) {
+    printf("--- player reward damage uses XP-drop tick ---\n");
+
+    InfernoState state = make_test_state(10, 10);
+    state.npcs[0] = make_test_npc(
+        INF_NPC_RANGER, 16, 10, INF_NPC_STATS[INF_NPC_RANGER].size);
+    state.npcs[0].active = 1;
+    state.npcs[0].hp = 15;
+    state.npcs[0].max_hp = INF_NPC_STATS[INF_NPC_RANGER].hp;
+
+    float reward_damage = inf_record_player_reward_damage(&state, 0, 50);
+
+    ASSERT_FLOAT_NEAR("reward damage caps to current hp",
+        reward_damage, 15.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("damage dealt stat records on fire tick",
+        state.damage_dealt_this_tick, 15.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("set damage stat records on fire tick",
+        state.damage_set_this_tick, 15.0f, 1e-6f);
+    ASSERT_INT_EQ("reward damage does not apply hp before hitsplat",
+        state.npcs[0].hp, 15);
+}
+
+static void test_idle_diagnostics_count_missed_attack_opportunities(void) {
+    printf("--- idle diagnostics count missed attack opportunities ---\n");
+
+    InfernoState state = make_test_state(10, 10);
+    state.weapon_set = INF_GEAR_BP;
+    state.loadout_stats[INF_GEAR_BP].attack_range = 7;
+    state.npcs[0] = make_test_npc(
+        INF_NPC_RANGER, 14, 10, INF_NPC_STATS[INF_NPC_RANGER].size);
+    state.npcs[0].active = 1;
+    state.npcs[0].hp = INF_NPC_STATS[INF_NPC_RANGER].hp;
+    state.npcs[0].attack_timer = 5;
+
+    ASSERT_INT_EQ("target exists",
+        inf_has_live_player_target(&state), 1);
+    ASSERT_INT_EQ("target can be attacked",
+        inf_has_attackable_player_target(&state), 1);
+    ASSERT_INT_EQ("no immediate threat",
+        inf_player_has_immediate_threat(&state), 0);
+
+    inf_record_idle_diagnostics(&state, 1, 1, 1, 1);
+
+    ASSERT_INT_EQ("attack ready no attack total",
+        state.total_attack_ready_no_attack_ticks, 1);
+    ASSERT_INT_EQ("target available no attack total",
+        state.total_target_available_no_attack_ticks, 1);
+    ASSERT_INT_EQ("safe opportunity missed total",
+        state.total_safe_attack_opportunity_missed_ticks, 1);
+    ASSERT_INT_EQ("progressless total",
+        state.total_progressless_ticks, 1);
+    ASSERT_INT_EQ("set phase attack ready counter",
+        state.attack_ready_no_attack_ticks_by_phase[INF_IDLE_PHASE_SET], 1);
+    ASSERT_INT_EQ("set phase safe opportunity counter",
+        state.safe_attack_opportunity_missed_ticks_by_phase[INF_IDLE_PHASE_SET], 1);
+    ASSERT_INT_EQ("set phase progressless counter",
+        state.progressless_ticks_by_phase[INF_IDLE_PHASE_SET], 1);
+}
+
+static void test_idle_diagnostics_phase_split(void) {
+    printf("--- idle diagnostics phase split ---\n");
+
+    InfernoState set = make_test_state(10, 10);
+    set.wave = 20;
+    ASSERT_INT_EQ("ordinary waves use set phase",
+        inf_idle_diagnostic_phase(&set), INF_IDLE_PHASE_SET);
+
+    InfernoState jad = make_test_state(10, 10);
+    jad.wave = 66;
+    jad.npcs[0] = make_test_npc(
+        INF_NPC_JAD, 14, 10, INF_NPC_STATS[INF_NPC_JAD].size);
+    jad.npcs[0].active = 1;
+    jad.npcs[0].hp = INF_NPC_STATS[INF_NPC_JAD].hp;
+    ASSERT_INT_EQ("non-final live jad uses jad phase",
+        inf_idle_diagnostic_phase(&jad), INF_IDLE_PHASE_JAD);
+
+    InfernoState zuk = make_test_state(25, 42);
+    zuk.wave = INF_WAVE_ZUK;
+    zuk.tick_at_all_zuk_healers_dead = -1;
+    ASSERT_INT_EQ("final wave before jad uses zuk pre-jad phase",
+        inf_idle_diagnostic_phase(&zuk), INF_IDLE_PHASE_ZUK_PRE_JAD);
+
+    zuk.npcs[0] = make_test_npc(
+        INF_NPC_JAD, 24, 44, INF_NPC_STATS[INF_NPC_JAD].size);
+    zuk.npcs[0].active = 1;
+    zuk.npcs[0].hp = INF_NPC_STATS[INF_NPC_JAD].hp;
+    ASSERT_INT_EQ("final wave live jad uses zuk jad phase",
+        inf_idle_diagnostic_phase(&zuk), INF_IDLE_PHASE_ZUK_JAD);
+
+    zuk.npcs[1] = make_test_npc(
+        INF_NPC_HEALER_ZUK, 22, 44, INF_NPC_STATS[INF_NPC_HEALER_ZUK].size);
+    zuk.npcs[1].active = 1;
+    zuk.npcs[1].hp = INF_NPC_STATS[INF_NPC_HEALER_ZUK].hp;
+    ASSERT_INT_EQ("live zuk healer uses zuk healer phase",
+        inf_idle_diagnostic_phase(&zuk), INF_IDLE_PHASE_ZUK_HEALERS);
+
+    zuk.npcs[0].active = 0;
+    zuk.npcs[1].active = 0;
+    zuk.tick_at_all_zuk_healers_dead = 500;
+    ASSERT_INT_EQ("after healers dead uses post-healer phase",
+        inf_idle_diagnostic_phase(&zuk), INF_IDLE_PHASE_ZUK_POST_HEALERS);
+}
+
 static void test_joseph_reward_mode_damps_healed_zuk_damage(void) {
     printf("--- Joseph reward mode damps healed Zuk damage ---\n");
 
@@ -1625,6 +1953,7 @@ static void test_inferno_reset_preserves_reward_config(void) {
 
     inf_put_float(raw_state, "supply_milestone_brew_reward_coeff", 0.001f);
     inf_put_float(raw_state, "supply_milestone_restore_reward_coeff", 0.002f);
+    inf_put_float(raw_state, "offensive_prayer_reward_coeff", 0.009f);
     inf_put_float(raw_state, "post_healer_zuk_damage_coeff", 0.003f);
     inf_put_float(raw_state, "zuk_healer_phase_hp_delta_coeff", 0.004f);
     inf_put_float(raw_state, "zuk_untagged_healer_tick_penalty_coeff", 0.005f);
@@ -1646,6 +1975,8 @@ static void test_inferno_reset_preserves_reward_config(void) {
         test_config()->supply_milestone_brew_reward_coeff, 0.001f, 1e-6f);
     ASSERT_FLOAT_NEAR("supply milestone restore reward coefficient",
         test_config()->supply_milestone_restore_reward_coeff, 0.002f, 1e-6f);
+    ASSERT_FLOAT_NEAR("offensive prayer reward coefficient",
+        test_config()->offensive_prayer_reward_coeff, 0.009f, 1e-6f);
     ASSERT_FLOAT_NEAR("post-healer Zuk damage coefficient",
         test_config()->post_healer_zuk_damage_coeff, 0.003f, 1e-6f);
     ASSERT_FLOAT_NEAR("Zuk healer-phase HP delta coefficient",
@@ -1667,6 +1998,8 @@ static void test_inferno_reset_preserves_reward_config(void) {
     ASSERT_INT_EQ("terminal penalty enabled", test_config()->terminal_penalty_enabled, 1);
     ASSERT_INT_EQ("step-out forecast obs disabled",
         test_config()->step_out_forecast_obs_enabled, 0);
+    ASSERT_INT_EQ("step-out forecast obs mode disabled",
+        test_config()->step_out_forecast_obs_mode, INF_STEP_OUT_FORECAST_MODE_OFF);
     ASSERT_INT_EQ("loadout profile mode preserved",
         test_config()->loadout_profile_mode, INF_LOADOUT_PROFILE_MODE_BUDGET_ONLY);
     ASSERT_FLOAT_NEAR("budget loadout fraction preserved",
@@ -1743,6 +2076,8 @@ static void test_late_start_supply_profile_anchor_waves(void) {
         { 64, 0.5833f, 0.5000f, 0.7500f, 1.0000f },
         { 68, 0.5833f, 0.4250f, 0.6250f, 1.0000f },
         { 69, 0.5000f, 0.3000f, 0.3750f, 1.0000f },
+        { 70, 0.4375f, 0.2250f, 0.3750f, 1.0000f },
+        { 71, 0.3750f, 0.1500f, 0.3750f, 1.0000f },
     };
 
     EncounterState* raw_state = inf_create();
@@ -1801,6 +2136,84 @@ static void test_late_start_supply_profile_interpolation_and_scale(void) {
     };
     assert_supply_doses("wave 69 scale 0.5", &state->player, half_scale);
 
+    inf_destroy(raw_state);
+}
+
+static void test_curriculum_supply_no_brew_is_curriculum_only(void) {
+    printf("--- curriculum no-brew starts are curriculum-only ---\n");
+
+    EncounterState* raw_state = inf_create();
+    InfernoState* state = (InfernoState*)raw_state;
+
+    inf_put_int(raw_state, "curriculum_no_brew_mode",
+        INF_CURRICULUM_SUPPLY_MODE_ALL);
+    inf_put_float(raw_state, "curriculum_no_brew_frac", 1.0f);
+    reset_inferno_at_public_wave(raw_state, 71, 1.0f);
+    ASSERT_INT_EQ("normal start ignores curriculum no-brew",
+        state->player.brew_doses, 9);
+
+    inf_put_int(raw_state, "curriculum_agent", 1);
+    reset_inferno_at_public_wave(raw_state, 71, 1.0f);
+    ASSERT_INT_EQ("curriculum start applies no-brew",
+        state->player.brew_doses, 0);
+    ASSERT_INT_EQ("curriculum no-brew leaves restores alone",
+        state->player.restore_doses, 6);
+
+    inf_put_int(raw_state, "curriculum_agent", 0);
+    inf_put_int(raw_state, "curriculum_no_brew_mode",
+        INF_CURRICULUM_SUPPLY_MODE_OFF);
+    inf_put_float(raw_state, "curriculum_no_brew_frac", 0.0f);
+    inf_destroy(raw_state);
+}
+
+static void test_curriculum_supply_modes_gate_zuk_and_pre_zuk(void) {
+    printf("--- curriculum supply modes gate Zuk and pre-Zuk starts ---\n");
+
+    ASSERT_INT_EQ("off mode does not apply",
+        inf_curriculum_supply_mode_applies(INF_CURRICULUM_SUPPLY_MODE_OFF, 69), 0);
+    ASSERT_INT_EQ("all mode applies to Zuk",
+        inf_curriculum_supply_mode_applies(INF_CURRICULUM_SUPPLY_MODE_ALL, 69), 1);
+    ASSERT_INT_EQ("Zuk mode applies to wave 69",
+        inf_curriculum_supply_mode_applies(INF_CURRICULUM_SUPPLY_MODE_ZUK, 69), 1);
+    ASSERT_INT_EQ("Zuk mode applies to wave 71",
+        inf_curriculum_supply_mode_applies(INF_CURRICULUM_SUPPLY_MODE_ZUK, 71), 1);
+    ASSERT_INT_EQ("Zuk mode skips wave 54",
+        inf_curriculum_supply_mode_applies(INF_CURRICULUM_SUPPLY_MODE_ZUK, 54), 0);
+    ASSERT_INT_EQ("pre-Zuk mode applies to wave 54",
+        inf_curriculum_supply_mode_applies(INF_CURRICULUM_SUPPLY_MODE_PRE_ZUK, 54), 1);
+    ASSERT_INT_EQ("pre-Zuk mode skips wave 69",
+        inf_curriculum_supply_mode_applies(INF_CURRICULUM_SUPPLY_MODE_PRE_ZUK, 69), 0);
+}
+
+static void test_curriculum_supply_jitter_clamps_to_inventory_bounds(void) {
+    printf("--- curriculum supply jitter clamps to inventory bounds ---\n");
+
+    EncounterState* raw_state = inf_create();
+    InfernoState* state = (InfernoState*)raw_state;
+
+    inf_put_int(raw_state, "curriculum_agent", 1);
+    inf_put_int(raw_state, "curriculum_supply_jitter_mode",
+        INF_CURRICULUM_SUPPLY_MODE_ALL);
+    inf_put_float(raw_state, "curriculum_supply_shared_jitter", 1.0f);
+    inf_put_float(raw_state, "curriculum_supply_brew_jitter", 1.0f);
+    inf_put_float(raw_state, "curriculum_supply_restore_jitter", 1.0f);
+    reset_inferno_at_public_wave(raw_state, 71, 1.0f);
+
+    ASSERT_INT_EQ("jitter keeps brew nonnegative",
+        state->player.brew_doses >= 0, 1);
+    ASSERT_INT_EQ("jitter keeps brew within full supplies",
+        state->player.brew_doses <= 24, 1);
+    ASSERT_INT_EQ("jitter keeps restore nonnegative",
+        state->player.restore_doses >= 0, 1);
+    ASSERT_INT_EQ("jitter keeps restore within full supplies",
+        state->player.restore_doses <= 40, 1);
+
+    inf_put_int(raw_state, "curriculum_agent", 0);
+    inf_put_int(raw_state, "curriculum_supply_jitter_mode",
+        INF_CURRICULUM_SUPPLY_MODE_OFF);
+    inf_put_float(raw_state, "curriculum_supply_shared_jitter", 0.0f);
+    inf_put_float(raw_state, "curriculum_supply_brew_jitter", 0.0f);
+    inf_put_float(raw_state, "curriculum_supply_restore_jitter", 0.0f);
     inf_destroy(raw_state);
 }
 
@@ -2859,7 +3272,7 @@ static void test_triple_jad_pending_threats_fit_obs_layout(void) {
 
     float obs[INF_NUM_OBS];
     inf_write_obs((EncounterState*)&state, obs);
-    ASSERT_INT_EQ("inferno obs shape includes compact spark slots", INF_NUM_OBS, 744);
+    ASSERT_INT_EQ("inferno obs shape includes exact spark slots", INF_NUM_OBS, 948);
 }
 
 static void test_inferno_obs_shape_includes_step_out_forecast_features(void) {
@@ -2880,10 +3293,10 @@ static void test_inferno_obs_shape_includes_step_out_forecast_features(void) {
         INF_TOTAL_NPC_OBS_SIZE, 415);
     ASSERT_INT_EQ("step-out forecast covers every movement action",
         INF_STEP_OUT_FORECAST_OBS_SIZE, 200);
-    ASSERT_INT_EQ("inferno obs shape includes compact spark summary",
-        INF_PENDING_SPARK_OBS_SIZE, 20);
+    ASSERT_INT_EQ("inferno obs shape includes exact spark landings",
+        INF_PENDING_SPARK_OBS_SIZE, 224);
     ASSERT_INT_EQ("inferno obs shape includes cleanup pass",
-        INF_NUM_OBS, 744);
+        INF_NUM_OBS, 948);
     ASSERT_INFERNO_SOURCE_NOT_CONTAINS("armor_tank state is removed",
         "armor_tank");
     ASSERT_INFERNO_SOURCE_NOT_CONTAINS("extra npc obs scaffold is removed",
@@ -3218,6 +3631,8 @@ static void init_step_out_forecast_stack_state(InfernoState* state, int player_x
     state->player_dest_x = -1;
     state->player_dest_y = -1;
     test_config()->step_out_forecast_obs_enabled = 1;
+    test_config()->step_out_forecast_obs_mode =
+        INF_STEP_OUT_FORECAST_MODE_EXACT_ROLLOUT;
     state->weapon_set = INF_GEAR_LONG_RANGE;
     osrs_interaction_init(&state->interaction);
     for (int p = 0; p < INF_NUM_PILLARS; p++) {
@@ -3237,6 +3652,15 @@ static void add_step_out_forecast_npc(
     state->npcs[slot].attack_timer = timer;
     state->npcs[slot].stun_timer = 0;
     state->npcs[slot].frozen_ticks = 0;
+}
+
+static void clear_step_out_forecast_pillars(InfernoState* state) {
+    for (int p = 0; p < INF_NUM_PILLARS; p++) {
+        state->pillars[p].active = 0;
+        state->pillars[p].hp = 0;
+    }
+    inf_rebuild_los(state);
+    inf_rebuild_entity_collision_flags(state);
 }
 
 static void assert_step_out_ranger_then_mager(
@@ -3409,6 +3833,7 @@ static void test_step_out_forecast_obs_can_be_disabled(void) {
     add_step_out_forecast_npc(&state, 0, INF_NPC_RANGER, 24, 31, 0);
     add_step_out_forecast_npc(&state, 1, INF_NPC_MAGER, 29, 30, 0);
     test_config()->step_out_forecast_obs_enabled = 0;
+    test_config()->step_out_forecast_obs_mode = INF_STEP_OUT_FORECAST_MODE_OFF;
 
     float obs[INF_NUM_OBS];
     inf_write_obs((EncounterState*)&state, obs);
@@ -3417,6 +3842,429 @@ static void test_step_out_forecast_obs_can_be_disabled(void) {
     for (int j = 0; j < INF_STEP_OUT_FORECAST_OBS_SIZE; j++) {
         ASSERT_FLOAT_NEAR("disabled forecast obs stays zero",
             obs[forecast_start + j], 0.0f, 1e-6f);
+    }
+}
+
+static void test_step_out_forecast_obs_uses_fast_mode(void) {
+    printf("--- step-out forecast obs uses fast mode ---\n");
+
+    InfernoState state;
+    init_step_out_forecast_stack_state(&state, 29, 39);
+    clear_step_out_forecast_pillars(&state);
+    add_step_out_forecast_npc(&state, 0, INF_NPC_RANGER, 24, 31, 1);
+    add_step_out_forecast_npc(&state, 1, INF_NPC_MAGER, 29, 30, 2);
+    inf_rebuild_entity_collision_flags(&state);
+    test_config()->step_out_forecast_obs_enabled = 1;
+    test_config()->step_out_forecast_obs_mode =
+        INF_STEP_OUT_FORECAST_MODE_FAST_STATIC_TILE;
+
+    float obs[INF_NUM_OBS];
+    inf_write_obs((EncounterState*)&state, obs);
+
+    int action_start = inferno_step_out_forecast_obs_start();
+    ASSERT_FLOAT_NEAR("fast obs idle valid",
+        obs[action_start], 1.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("fast obs idle first attack tick",
+        obs[action_start + 1], 1.0f / 4.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("fast obs idle first style mask",
+        obs[action_start + 2], (float)INF_STYLE_MASK_RANGED / 7.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("fast obs idle max hit",
+        obs[action_start + 3], 70.0f / 150.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("fast obs idle off-tick opportunity",
+        obs[action_start + 6], 1.0f, 1e-6f);
+}
+
+static void test_fast_step_out_forecast_matches_movement_head_destinations(void) {
+    printf("--- fast step-out forecast matches movement head destinations ---\n");
+
+    InfernoState state;
+    init_step_out_forecast_stack_state(&state, 29, 39);
+
+    InfStepOutForecast forecast;
+    inf_build_step_out_forecast_fast_static_ctx(
+        &state, inf_legacy_context(), &forecast);
+
+    for (int action = 0; action < ENCOUNTER_MOVE_ACTIONS; action++) {
+        Player moved = state.player;
+        if (action > 0) {
+            InfWalkCtx walk_ctx = { &state, inf_legacy_context() };
+            encounter_move_to_target(
+                &moved,
+                ENCOUNTER_MOVE_TARGET_DX[action],
+                ENCOUNTER_MOVE_TARGET_DY[action],
+                inf_tile_walkable,
+                &walk_ctx);
+        }
+
+        ASSERT_INT_EQ("fast forecast movement landing x",
+            forecast.actions[action].land_x, moved.x);
+        ASSERT_INT_EQ("fast forecast movement landing y",
+            forecast.actions[action].land_y, moved.y);
+    }
+}
+
+static void test_fast_step_out_forecast_immediate_static_threats(void) {
+    printf("--- fast step-out forecast immediate static threats ---\n");
+
+    InfernoState state;
+    init_step_out_forecast_stack_state(&state, 29, 39);
+    clear_step_out_forecast_pillars(&state);
+    add_step_out_forecast_npc(&state, 0, INF_NPC_RANGER, 24, 31, 1);
+    add_step_out_forecast_npc(&state, 1, INF_NPC_MAGER, 29, 30, 2);
+    inf_rebuild_entity_collision_flags(&state);
+
+    InfStepOutForecast exact;
+    InfStepOutForecast fast;
+    InfStepOutForecastOracleDiff diff;
+    inf_build_step_out_forecast_exact_ctx(&state, inf_legacy_context(), &exact);
+    inf_build_step_out_forecast_fast_static_ctx(&state, inf_legacy_context(), &fast);
+    inf_compare_step_out_forecasts(&exact, &fast, &diff);
+
+    const InfStepOutForecastAction* idle = &fast.actions[0];
+    ASSERT_INT_EQ("fast idle ranger fires first", idle->ticks[0].ranger_count, 1);
+    ASSERT_INT_EQ("fast idle mager fires second", idle->ticks[1].mager_count, 1);
+    ASSERT_INT_EQ("fast idle exposes off-tick opportunity",
+        idle->ranger_mager_offtick_opportunity, 1);
+    ASSERT_INT_EQ("fast static has no dangerous false negatives",
+        diff.dangerous_false_negatives, 0);
+}
+
+static void test_fast_step_out_forecast_blob_scan_and_melee_fallback(void) {
+    printf("--- fast step-out forecast blob scan and melee fallback ---\n");
+
+    InfernoState blob_state;
+    init_step_out_forecast_stack_state(&blob_state, 29, 39);
+    clear_step_out_forecast_pillars(&blob_state);
+    add_step_out_forecast_npc(&blob_state, 0, INF_NPC_BLOB, 29, 30, 1);
+    blob_state.npcs[0].blob_scanned_prayer = -1;
+    blob_state.npcs[0].had_los_last_tick = 0;
+    inf_rebuild_entity_collision_flags(&blob_state);
+
+    InfStepOutForecast blob_forecast;
+    inf_build_step_out_forecast_fast_static_ctx(
+        &blob_state, inf_legacy_context(), &blob_forecast);
+    ASSERT_INT_EQ("fast blob scan tick",
+        blob_forecast.actions[0].ticks[0].blob_scan_count, 1);
+
+    InfernoState melee_state;
+    init_step_out_forecast_stack_state(&melee_state, 10, 10);
+    clear_step_out_forecast_pillars(&melee_state);
+    add_step_out_forecast_npc(&melee_state, 0, INF_NPC_MAGER, 11, 10, 1);
+    inf_rebuild_entity_collision_flags(&melee_state);
+
+    InfStepOutForecast melee_forecast;
+    inf_build_step_out_forecast_fast_static_ctx(
+        &melee_state, inf_legacy_context(), &melee_forecast);
+    ASSERT_INT_EQ("fast melee fallback exposure",
+        melee_forecast.actions[0].melee_fallback_exposure, 1);
+    ASSERT_INT_EQ("fast melee fallback mixed style",
+        melee_forecast.actions[0].same_tick_mixed_style_conflict, 1);
+}
+
+static void test_fast_step_out_forecast_does_not_mutate_state(void) {
+    printf("--- fast step-out forecast does not mutate state ---\n");
+
+    InfernoState state;
+    init_step_out_forecast_stack_state(&state, 29, 39);
+    clear_step_out_forecast_pillars(&state);
+    add_step_out_forecast_npc(&state, 0, INF_NPC_BLOB, 29, 30, 1);
+    state.npcs[0].blob_scanned_prayer = -1;
+    state.npcs[0].had_los_last_tick = 0;
+    inf_rebuild_entity_collision_flags(&state);
+
+    InfernoState before = state;
+    InfStepOutForecast forecast;
+    inf_build_step_out_forecast_fast_static_ctx(
+        &state, inf_legacy_context(), &forecast);
+
+    ASSERT_INT_EQ("fast forecast preserves player x",
+        state.player.x, before.player.x);
+    ASSERT_INT_EQ("fast forecast preserves player y",
+        state.player.y, before.player.y);
+    ASSERT_INT_EQ("fast forecast preserves NPC timer",
+        state.npcs[0].attack_timer, before.npcs[0].attack_timer);
+    ASSERT_INT_EQ("fast forecast preserves blob scan state",
+        state.npcs[0].blob_scanned_prayer, before.npcs[0].blob_scanned_prayer);
+    ASSERT_INT_EQ("fast forecast preserves LOS cache",
+        memcmp(state.npc_los_cache, before.npc_los_cache,
+            sizeof(state.npc_los_cache)), 0);
+    ASSERT_INT_EQ("fast forecast preserves player collision flags",
+        memcmp(state.player_collision_flags, before.player_collision_flags,
+            sizeof(state.player_collision_flags)), 0);
+    ASSERT_INT_EQ("fast forecast preserves NPC collision flags",
+        memcmp(state.npc_collision_flags, before.npc_collision_flags,
+            sizeof(state.npc_collision_flags)), 0);
+}
+
+static void test_readonly_step_out_forecast_matches_movement_head_destinations(void) {
+    printf("--- readonly step-out forecast matches movement head destinations ---\n");
+
+    InfernoState state;
+    init_step_out_forecast_stack_state(&state, 29, 39);
+
+    InfStepOutForecast forecast;
+    inf_build_step_out_forecast_fast_readonly_ctx(
+        &state, inf_legacy_context(), &forecast);
+
+    for (int action = 0; action < ENCOUNTER_MOVE_ACTIONS; action++) {
+        Player moved = state.player;
+        if (action > 0) {
+            InfWalkCtx walk_ctx = { &state, inf_legacy_context() };
+            encounter_move_to_target(
+                &moved,
+                ENCOUNTER_MOVE_TARGET_DX[action],
+                ENCOUNTER_MOVE_TARGET_DY[action],
+                inf_tile_walkable,
+                &walk_ctx);
+        }
+
+        ASSERT_INT_EQ("readonly forecast movement landing x",
+            forecast.actions[action].land_x, moved.x);
+        ASSERT_INT_EQ("readonly forecast movement landing y",
+            forecast.actions[action].land_y, moved.y);
+    }
+}
+
+static void test_readonly_step_out_forecast_does_not_mutate_state(void) {
+    printf("--- readonly step-out forecast does not mutate state ---\n");
+
+    InfernoState state;
+    init_step_out_forecast_stack_state(&state, 29, 39);
+    add_step_out_forecast_npc(&state, 0, INF_NPC_RANGER, 24, 31, 1);
+    add_step_out_forecast_npc(&state, 1, INF_NPC_MAGER, 29, 30, 2);
+    add_step_out_forecast_npc(&state, 2, INF_NPC_BLOB, 29, 32, 1);
+    state.npcs[2].blob_scanned_prayer = -1;
+    state.npcs[2].had_los_last_tick = 0;
+    inf_rebuild_entity_collision_flags(&state);
+
+    InfernoState before = state;
+    InfStepOutForecast forecast;
+    inf_build_step_out_forecast_fast_readonly_ctx(
+        &state, inf_legacy_context(), &forecast);
+
+    ASSERT_INT_EQ("readonly forecast preserves player x",
+        state.player.x, before.player.x);
+    ASSERT_INT_EQ("readonly forecast preserves player y",
+        state.player.y, before.player.y);
+    ASSERT_INT_EQ("readonly forecast preserves ranger x",
+        state.npcs[0].x, before.npcs[0].x);
+    ASSERT_INT_EQ("readonly forecast preserves ranger y",
+        state.npcs[0].y, before.npcs[0].y);
+    ASSERT_INT_EQ("readonly forecast preserves NPC timer",
+        state.npcs[0].attack_timer, before.npcs[0].attack_timer);
+    ASSERT_INT_EQ("readonly forecast preserves blob scan state",
+        state.npcs[2].blob_scanned_prayer, before.npcs[2].blob_scanned_prayer);
+    ASSERT_INT_EQ("readonly forecast preserves LOS cache",
+        memcmp(state.npc_los_cache, before.npc_los_cache,
+            sizeof(state.npc_los_cache)), 0);
+    ASSERT_INT_EQ("readonly forecast preserves player collision flags",
+        memcmp(state.player_collision_flags, before.player_collision_flags,
+            sizeof(state.player_collision_flags)), 0);
+    ASSERT_INT_EQ("readonly forecast preserves NPC collision flags",
+        memcmp(state.npc_collision_flags, before.npc_collision_flags,
+            sizeof(state.npc_collision_flags)), 0);
+}
+
+static void assert_readonly_step_out_matches_exact_action(
+    const char* label,
+    InfernoState* state,
+    int action_idx
+) {
+    InfStepOutForecast exact;
+    InfStepOutForecast readonly;
+    InfStepOutForecastOracleDiff diff;
+    inf_build_step_out_forecast_exact_ctx(state, inf_legacy_context(), &exact);
+    inf_build_step_out_forecast_fast_readonly_ctx(
+        state, inf_legacy_context(), &readonly);
+    inf_compare_step_out_forecasts(&exact, &readonly, &diff);
+
+    ASSERT_INT_EQ("readonly action oracle has no dangerous false negatives",
+        diff.dangerous_false_negatives, 0);
+    const InfStepOutForecastAction* exact_action = &exact.actions[action_idx];
+    const InfStepOutForecastAction* readonly_action = &readonly.actions[action_idx];
+    char msg[128];
+    snprintf(msg, sizeof(msg), "%s valid", label);
+    ASSERT_INT_EQ(msg, readonly_action->valid, exact_action->valid);
+    snprintf(msg, sizeof(msg), "%s land x", label);
+    ASSERT_INT_EQ(msg, readonly_action->land_x, exact_action->land_x);
+    snprintf(msg, sizeof(msg), "%s land y", label);
+    ASSERT_INT_EQ(msg, readonly_action->land_y, exact_action->land_y);
+    snprintf(msg, sizeof(msg), "%s first ranger count", label);
+    ASSERT_INT_EQ(msg,
+        readonly_action->ticks[0].ranger_count,
+        exact_action->ticks[0].ranger_count);
+    snprintf(msg, sizeof(msg), "%s second mager count", label);
+    ASSERT_INT_EQ(msg,
+        readonly_action->ticks[1].mager_count,
+        exact_action->ticks[1].mager_count);
+}
+
+static void test_readonly_step_out_forecast_pillar_step_out_cases(void) {
+    printf("--- readonly step-out forecast pillar step-out cases ---\n");
+
+    InfernoState north_state;
+    init_step_out_forecast_stack_state(&north_state, 29, 39);
+    add_step_out_forecast_npc(&north_state, 0, INF_NPC_RANGER, 24, 31, 0);
+    add_step_out_forecast_npc(&north_state, 1, INF_NPC_MAGER, 29, 30, 0);
+    assert_readonly_step_out_matches_exact_action(
+        "north pillar run west", &north_state, 11);
+
+    InfernoState south_state;
+    init_step_out_forecast_stack_state(&south_state, 22, 17);
+    add_step_out_forecast_npc(&south_state, 0, INF_NPC_RANGER, 17, 25, 0);
+    add_step_out_forecast_npc(&south_state, 1, INF_NPC_MAGER, 22, 26, 0);
+    assert_readonly_step_out_matches_exact_action(
+        "south pillar run west", &south_state, 11);
+
+    InfernoState west_state;
+    init_step_out_forecast_stack_state(&west_state, 11, 29);
+    add_step_out_forecast_npc(&west_state, 0, INF_NPC_RANGER, 8, 40, 0);
+    add_step_out_forecast_npc(&west_state, 1, INF_NPC_MAGER, 16, 42, 0);
+    assert_readonly_step_out_matches_exact_action(
+        "west pillar walk north", &west_state, 4);
+}
+
+static void test_step_out_forecast_obs_uses_readonly_mode(void) {
+    printf("--- step-out forecast obs uses readonly mode ---\n");
+
+    InfernoState state;
+    init_step_out_forecast_stack_state(&state, 29, 39);
+    add_step_out_forecast_npc(&state, 0, INF_NPC_RANGER, 24, 31, 0);
+    add_step_out_forecast_npc(&state, 1, INF_NPC_MAGER, 29, 30, 0);
+    test_config()->step_out_forecast_obs_enabled = 1;
+    test_config()->step_out_forecast_obs_mode =
+        INF_STEP_OUT_FORECAST_MODE_FAST_READONLY_MOVE;
+
+    float obs[INF_NUM_OBS];
+    inf_write_obs((EncounterState*)&state, obs);
+
+    int action_start = inferno_step_out_forecast_obs_start() +
+        11 * INF_STEP_OUT_FORECAST_ACTION_FEATURES;
+    ASSERT_FLOAT_NEAR("readonly obs run west valid",
+        obs[action_start], 1.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("readonly obs run west first attack tick",
+        obs[action_start + 1], 1.0f / 4.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("readonly obs run west first style mask",
+        obs[action_start + 2], (float)INF_STYLE_MASK_RANGED / 7.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("readonly obs run west off-tick opportunity",
+        obs[action_start + 6], 1.0f, 1e-6f);
+}
+
+static void test_readonly_step_out_forecast_stun_countdown(void) {
+    printf("--- readonly step-out forecast stun countdown ---\n");
+
+    InfernoState state;
+    init_step_out_forecast_stack_state(&state, 20, 20);
+    clear_step_out_forecast_pillars(&state);
+    add_step_out_forecast_npc(&state, 0, INF_NPC_RANGER, 20, 25, 1);
+    state.npcs[0].stun_timer = 2;
+    inf_rebuild_entity_collision_flags(&state);
+
+    InfStepOutForecast forecast;
+    inf_build_step_out_forecast_fast_readonly_ctx(
+        &state, inf_legacy_context(), &forecast);
+
+    ASSERT_INT_EQ("stunned ranger does not fire tick one",
+        forecast.actions[0].ticks[0].ranger_count, 0);
+    ASSERT_INT_EQ("stunned ranger does not fire tick two",
+        forecast.actions[0].ticks[1].ranger_count, 0);
+    ASSERT_INT_EQ("stunned ranger fires after countdown",
+        forecast.actions[0].ticks[2].ranger_count, 1);
+}
+
+static void test_readonly_step_out_forecast_frozen_can_attack(void) {
+    printf("--- readonly step-out forecast frozen can attack ---\n");
+
+    InfernoState state;
+    init_step_out_forecast_stack_state(&state, 20, 20);
+    clear_step_out_forecast_pillars(&state);
+    add_step_out_forecast_npc(&state, 0, INF_NPC_RANGER, 20, 25, 1);
+    state.npcs[0].frozen_ticks = 4;
+    inf_rebuild_entity_collision_flags(&state);
+
+    InfStepOutForecast forecast;
+    inf_build_step_out_forecast_fast_readonly_ctx(
+        &state, inf_legacy_context(), &forecast);
+
+    ASSERT_INT_EQ("frozen ranger still attacks with LOS",
+        forecast.actions[0].ticks[0].ranger_count, 1);
+}
+
+static void test_readonly_step_out_forecast_blob_scanned_fire(void) {
+    printf("--- readonly step-out forecast blob scanned fire ---\n");
+
+    InfernoState state;
+    init_step_out_forecast_stack_state(&state, 20, 20);
+    clear_step_out_forecast_pillars(&state);
+    add_step_out_forecast_npc(&state, 0, INF_NPC_BLOB, 20, 25, 1);
+    state.npcs[0].blob_scanned_prayer = PRAYER_PROTECT_MAGIC;
+    state.npcs[0].attack_style = ATTACK_STYLE_RANGED;
+    state.npcs[0].had_los_last_tick = 1;
+    inf_rebuild_entity_collision_flags(&state);
+
+    InfStepOutForecast forecast;
+    inf_build_step_out_forecast_fast_readonly_ctx(
+        &state, inf_legacy_context(), &forecast);
+
+    ASSERT_INT_EQ("scanned blob fires ranged",
+        forecast.actions[0].ticks[0].ranged_count, 1);
+    ASSERT_INT_EQ("scanned blob fire has max hit",
+        forecast.actions[0].ticks[0].max_hit > 0, 1);
+}
+
+static void test_readonly_step_out_forecast_under_player_overlap_is_danger(void) {
+    printf("--- readonly step-out forecast under-player overlap is danger ---\n");
+
+    InfernoState state;
+    init_step_out_forecast_stack_state(&state, 20, 20);
+    clear_step_out_forecast_pillars(&state);
+    add_step_out_forecast_npc(&state, 0, INF_NPC_RANGER, 20, 20, 1);
+    inf_rebuild_entity_collision_flags(&state);
+    uint32_t rng_before = state.rng_state;
+
+    InfStepOutForecast forecast;
+    inf_build_step_out_forecast_fast_readonly_ctx(
+        &state, inf_legacy_context(), &forecast);
+
+    ASSERT_INT_EQ("under-player overlap marks immediate danger",
+        inf_step_out_forecast_action_dangerous(&forecast.actions[0]), 1);
+    ASSERT_INT_EQ("under-player forecast does not consume RNG",
+        state.rng_state, rng_before);
+}
+
+static void test_readonly_step_out_forecast_invalid_movement_zeroes_payload(void) {
+    printf("--- readonly step-out forecast invalid movement zeroes payload ---\n");
+
+    InfernoState state;
+    init_step_out_forecast_stack_state(&state, INF_ARENA_MIN_X, INF_ARENA_MIN_Y);
+    clear_step_out_forecast_pillars(&state);
+    add_step_out_forecast_npc(&state, 0, INF_NPC_RANGER,
+        INF_ARENA_MIN_X + 3, INF_ARENA_MIN_Y + 3, 1);
+    inf_rebuild_entity_collision_flags(&state);
+
+    InfStepOutForecast forecast;
+    inf_build_step_out_forecast_fast_readonly_ctx(
+        &state, inf_legacy_context(), &forecast);
+
+    const InfStepOutForecastAction* action = &forecast.actions[9];
+    ASSERT_INT_EQ("invalid run-west action is invalid", action->valid, 0);
+    ASSERT_INT_EQ("invalid action has no same-tick conflict",
+        action->same_tick_mixed_style_conflict, 0);
+    ASSERT_INT_EQ("invalid action has no off-tick opportunity",
+        action->ranger_mager_offtick_opportunity, 0);
+    ASSERT_INT_EQ("invalid action has no melee fallback",
+        action->melee_fallback_exposure, 0);
+    for (int tick_idx = 0; tick_idx < INF_STEP_OUT_FORECAST_HORIZON; tick_idx++) {
+        ASSERT_INT_EQ("invalid action has no melee count",
+            action->ticks[tick_idx].melee_count, 0);
+        ASSERT_INT_EQ("invalid action has no ranged count",
+            action->ticks[tick_idx].ranged_count, 0);
+        ASSERT_INT_EQ("invalid action has no magic count",
+            action->ticks[tick_idx].magic_count, 0);
+        ASSERT_INT_EQ("invalid action has no blob scan count",
+            action->ticks[tick_idx].blob_scan_count, 0);
+        ASSERT_INT_EQ("invalid action has no max hit",
+            action->ticks[tick_idx].max_hit, 0);
     }
 }
 
@@ -3672,7 +4520,7 @@ static void test_zuk_obs_exposes_attack_timer_summary(void) {
 }
 
 static void test_zuk_obs_exposes_pending_sparks(void) {
-    printf("--- zuk obs exposes compressed pending spark summaries ---\n");
+    printf("--- zuk obs exposes exact pending spark landings ---\n");
 
     InfernoState state;
     init_zuk_timing_state(&state);
@@ -3708,9 +4556,9 @@ static void test_zuk_obs_exposes_pending_sparks(void) {
     };
 
     int spark_start = inferno_spark_obs_start();
-    int spark_features = 5;
-    int spark_slots = 4;
-    ASSERT_INT_EQ("inferno obs has compressed spark section",
+    int spark_features = INF_FEATURES_PER_SPARK;
+    int spark_slots = INF_SPARK_OBS_SLOTS;
+    ASSERT_INT_EQ("inferno obs has full spark section",
         INF_NUM_OBS >= spark_start + spark_features * spark_slots, 1);
     if (INF_NUM_OBS < spark_start + spark_features * spark_slots)
         return;
@@ -3718,19 +4566,27 @@ static void test_zuk_obs_exposes_pending_sparks(void) {
     float obs[INF_NUM_OBS];
     inf_write_obs((EncounterState*)&state, obs);
 
-    ASSERT_FLOAT_NEAR("first spark group active", obs[spark_start], 1.0f, 1e-6f);
-    ASSERT_FLOAT_NEAR("first spark group uses source x",
-        obs[spark_start + 1], 5.0f / (float)INF_ARENA_WIDTH, 1e-6f);
-    ASSERT_FLOAT_NEAR("first spark group uses source y",
-        obs[spark_start + 2], 0.0f, 1e-6f);
-    ASSERT_FLOAT_NEAR("first spark group earliest timer",
-        obs[spark_start + 3], 0.2f, 1e-6f);
-    ASSERT_FLOAT_NEAR("first spark group total damage",
-        obs[spark_start + 4], 1.0f, 1e-6f);
-    ASSERT_FLOAT_NEAR("second spark group active",
-        obs[spark_start + 5], 1.0f, 1e-6f);
-    ASSERT_FLOAT_NEAR("fourth spark group active",
-        obs[spark_start + 15], 1.0f, 1e-6f);
+    ASSERT_INT_EQ("spark obs keeps all pending slots", spark_slots, INF_MAX_PENDING_SPARKS);
+    ASSERT_INT_EQ("spark obs carries landing and source", spark_features, 7);
+    ASSERT_FLOAT_NEAR("first spark active", obs[spark_start], 1.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("first spark landing x",
+        obs[spark_start + 1], -1.0f / (float)INF_ARENA_WIDTH, 1e-6f);
+    ASSERT_FLOAT_NEAR("first spark landing y",
+        obs[spark_start + 2], 2.0f / (float)INF_ARENA_HEIGHT, 1e-6f);
+    ASSERT_FLOAT_NEAR("first spark source x",
+        obs[spark_start + 3], 5.0f / (float)INF_ARENA_WIDTH, 1e-6f);
+    ASSERT_FLOAT_NEAR("first spark source y",
+        obs[spark_start + 4], 0.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("first spark timer",
+        obs[spark_start + 5], 0.2f, 1e-6f);
+    ASSERT_FLOAT_NEAR("first spark damage",
+        obs[spark_start + 6], 0.7f, 1e-6f);
+    ASSERT_FLOAT_NEAR("second spark landing x",
+        obs[spark_start + spark_features + 1],
+        -2.0f / (float)INF_ARENA_WIDTH, 1e-6f);
+    ASSERT_FLOAT_NEAR("third spark sorts same-tick nearest landing first",
+        obs[spark_start + 2 * spark_features + 1],
+        1.0f / (float)INF_ARENA_WIDTH, 1e-6f);
 }
 
 static void assert_human_blowpipe_zuk_chase_endpoint(
@@ -7145,10 +8001,10 @@ static void test_npc_overkill_hit_caps_splat_hp_and_damage_stats(void) {
         state.npcs[0].hit_damage, 15);
     ASSERT_INT_EQ("render entity hit splat caps to remaining hp",
         entities[1].hit_damage, 15);
-    ASSERT_FLOAT_NEAR("damage dealt stats use capped damage",
-        state.damage_dealt_this_tick, 15.0f, 1e-6f);
-    ASSERT_FLOAT_NEAR("set damage stats use capped damage",
-        state.damage_set_this_tick, 15.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("landing does not double count XP-drop damage",
+        state.damage_dealt_this_tick, 0.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("landing does not double count set damage",
+        state.damage_set_this_tick, 0.0f, 1e-6f);
     ASSERT_INT_EQ("overkill still counts the kill", state.kill_set_this_tick, 1);
 }
 
@@ -7174,8 +8030,8 @@ static void test_blood_barrage_overkill_heals_from_capped_damage(void) {
 
     ASSERT_INT_EQ("blood barrage hit splat caps to remaining hp",
         state.npcs[0].hit_damage, 8);
-    ASSERT_FLOAT_NEAR("blood barrage damage stat uses capped damage",
-        state.damage_dealt_this_tick, 8.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("blood barrage landing does not double count damage stat",
+        state.damage_dealt_this_tick, 0.0f, 1e-6f);
     ASSERT_INT_EQ("blood barrage heal uses capped damage",
         state.blood_heal_this_tick, 2);
     ASSERT_INT_EQ("player receives capped blood heal",
@@ -7445,6 +8301,82 @@ static void test_inferno_binding_forwards_supply_milestone_rewards(void) {
         "supply_milestone_restore_reward_coeff = 0.0");
 }
 
+static void test_inferno_binding_forwards_offensive_prayer_reward(void) {
+    printf("--- inferno binding forwards offensive prayer reward ---\n");
+
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "offensive prayer optional float",
+        "ocean/osrs_inferno/binding.c",
+        "optional_float_keys[]",
+        "};",
+        "\"offensive_prayer_reward_coeff\"");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "offensive prayer default config",
+        "config/ocean/osrs_inferno.ini",
+        "[env]",
+        "[vec]",
+        "offensive_prayer_reward_coeff = 0.0");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "offensive prayer sweep config",
+        "config/ocean/osrs_inferno.ini",
+        "[sweep.env.offensive_prayer_reward_coeff]",
+        "[sweep.env.shield_penalty_coeff]",
+        "max = 1.0");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "offensive prayer sweep only",
+        "config/ocean/osrs_inferno.ini",
+        "sweep_only =",
+        "[sweep.train.total_timesteps]",
+        "offensive_prayer_reward_coeff");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "offensive prayer correct metric",
+        "ocean/osrs_inferno/binding.c",
+        "offensive_prayer_correct_rate",
+        "brews_remaining",
+        "offensive_prayer_magic_correct_rate");
+}
+
+static void test_inferno_binding_forwards_curriculum_supply_config(void) {
+    printf("--- inferno binding forwards curriculum supply config ---\n");
+
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "curriculum supply shared jitter optional float",
+        "ocean/osrs_inferno/binding.c",
+        "optional_float_keys[]",
+        "};",
+        "\"curriculum_supply_shared_jitter\"");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "curriculum supply jitter mode optional int",
+        "ocean/osrs_inferno/binding.c",
+        "optional_int_keys[]",
+        "};",
+        "\"curriculum_supply_jitter_mode\"");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "curriculum no-brew mode optional int",
+        "ocean/osrs_inferno/binding.c",
+        "optional_int_keys[]",
+        "};",
+        "\"curriculum_no_brew_mode\"");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "curriculum agent marker assigned by mixer",
+        "ocean/osrs_inferno/binding.c",
+        "\"start_wave\"",
+        "fprintf(stderr, \"curriculum:",
+        "\"curriculum_agent\"");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "curriculum supply defaults off",
+        "config/ocean/osrs_inferno.ini",
+        "[env]",
+        "[vec]",
+        "curriculum_supply_jitter_mode = 0");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "curriculum no-brew defaults off",
+        "config/ocean/osrs_inferno.ini",
+        "[env]",
+        "[vec]",
+        "curriculum_no_brew_frac = 0.0");
+}
+
 static void test_inferno_binding_forwards_post_healer_set_rewards(void) {
     printf("--- inferno binding forwards post-healer set rewards ---\n");
 
@@ -7460,6 +8392,26 @@ static void test_inferno_binding_forwards_post_healer_set_rewards(void) {
         "optional_float_keys[]",
         "};",
         "\"post_healer_set_alive_tick_penalty_coeff\"");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "post-healer set alive penalty default off",
+        "config/ocean/osrs_inferno.ini",
+        "[env]",
+        "[vec]",
+        "post_healer_set_alive_penalty_cap = 0.0");
+    ASSERT_SOURCE_BLOCK_NOT_CONTAINS(
+        "post-healer set alive penalty not swept",
+        "config/ocean/osrs_inferno.ini",
+        "[sweep]",
+        "[sweep.train.total_timesteps]",
+        "post_healer_set_alive_tick_penalty_coeff");
+    ASSERT_SOURCE_NOT_CONTAINS(
+        "post-healer set alive penalty sweep section removed",
+        "config/ocean/osrs_inferno.ini",
+        "[sweep.env.post_healer_set_alive_tick_penalty_coeff]");
+    ASSERT_SOURCE_NOT_CONTAINS(
+        "post-healer set alive cap sweep section removed",
+        "config/ocean/osrs_inferno.ini",
+        "[sweep.env.post_healer_set_alive_penalty_cap]");
 }
 
 static void test_inferno_binding_forwards_joseph_reward_mode(void) {
@@ -7523,41 +8475,63 @@ static void test_inferno_binding_forwards_terminal_penalty_toggle(void) {
         "[env]",
         "[vec]",
         "terminal_penalty_enabled = 0");
-    ASSERT_SOURCE_BLOCK_CONTAINS(
-        "terminal penalty sweep axis",
+    ASSERT_SOURCE_BLOCK_NOT_CONTAINS(
+        "terminal penalty not swept",
         "config/ocean/osrs_inferno.ini",
-        "[sweep.env.terminal_penalty_enabled]",
-        "scale = auto",
-        "distribution = int_uniform");
+        "[sweep]",
+        "[sweep.train.total_timesteps]",
+        "terminal_penalty_enabled");
+    ASSERT_SOURCE_NOT_CONTAINS(
+        "terminal penalty sweep section removed",
+        "config/ocean/osrs_inferno.ini",
+        "[sweep.env.terminal_penalty_enabled]");
 }
 
 static void test_inferno_binding_forwards_step_out_forecast_obs_toggle(void) {
     printf("--- inferno binding forwards step-out forecast obs toggle ---\n");
 
     ASSERT_SOURCE_BLOCK_CONTAINS(
-        "step-out forecast obs int config",
+        "step-out forecast obs mode int config",
         "ocean/osrs_inferno/binding.c",
-        "DictItem* step_out_forecast_obs_enabled",
+        "DictItem* step_out_forecast_obs_mode",
         "DictItem* zuk_healer_reward_mode",
-        "\"step_out_forecast_obs_enabled\"");
+        "\"step_out_forecast_obs_mode\"");
     ASSERT_SOURCE_BLOCK_CONTAINS(
-        "step-out forecast obs default config",
+        "step-out forecast obs mode default config",
         "config/ocean/osrs_inferno.ini",
         "[env]",
         "[vec]",
-        "step_out_forecast_obs_enabled = 1");
+        "step_out_forecast_obs_mode = 1");
     ASSERT_SOURCE_BLOCK_CONTAINS(
-        "step-out forecast obs sweep axis",
+        "step-out forecast obs mode sweep axis",
         "config/ocean/osrs_inferno.ini",
-        "[sweep.env.step_out_forecast_obs_enabled]",
+        "[sweep.env.step_out_forecast_obs_mode]",
         "scale = auto",
         "distribution = int_uniform");
     ASSERT_SOURCE_BLOCK_CONTAINS(
-        "step-out forecast obs sweep-only entry",
+        "step-out forecast obs mode is swept",
         "config/ocean/osrs_inferno.ini",
         "[sweep]",
         "[sweep.train.total_timesteps]",
-        "env.step_out_forecast_obs_enabled");
+        "step_out_forecast_obs_mode");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "step-out forecast obs mode sweep covers readonly mode",
+        "config/ocean/osrs_inferno.ini",
+        "[sweep.env.step_out_forecast_obs_mode]",
+        "scale = auto",
+        "max = 3");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "step-out forecast readonly mode enum",
+        "ocean/osrs/encounters/inferno/encounter_inferno_model.inc",
+        "INF_STEP_OUT_FORECAST_MODE_OFF = 0",
+        "};",
+        "INF_STEP_OUT_FORECAST_MODE_FAST_READONLY_MOVE = 3");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "step-out forecast mode hash is source of truth",
+        "ocean/osrs/encounters/inferno/encounter_inferno_render_snapshot.inc",
+        "static uint64_t inf_config_fingerprint",
+        "return h;",
+        "INF_HASH_CONFIG_FIELD(config, &h, step_out_forecast_obs_mode)");
 }
 
 static void test_inferno_binding_forwards_loadout_profile_config(void) {
@@ -7604,6 +8578,48 @@ static void test_inferno_binding_logs_post_healer_set_reward_components(void) {
         "post_healer_set_damage_reward_normal",
         "action_mask_checks_normal",
         "post_healer_set_alive_penalty_normal");
+}
+
+static void test_inferno_binding_logs_idle_diagnostics(void) {
+    printf("--- inferno binding logs idle diagnostics ---\n");
+
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "attack-ready idle metric emitted",
+        "ocean/osrs_inferno/binding.c",
+        "void my_log",
+        "float wr = log->wins",
+        "attack_ready_no_attack_ticks");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "target-available idle metric emitted",
+        "ocean/osrs_inferno/binding.c",
+        "void my_log",
+        "float wr = log->wins",
+        "target_available_no_attack_ticks");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "safe opportunity idle metric emitted",
+        "ocean/osrs_inferno/binding.c",
+        "void my_log",
+        "float wr = log->wins",
+        "safe_attack_opportunity_missed_ticks");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "progressless metric emitted",
+        "ocean/osrs_inferno/binding.c",
+        "void my_log",
+        "float wr = log->wins",
+        "progressless_ticks");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "idle phase names emitted",
+        "ocean/osrs_inferno/binding.c",
+        "inferno_log_idle_metric",
+        "void my_log",
+        "zuk_post_healers");
+}
+
+static void test_inferno_log_metrics_fit_cuda_dict(void) {
+    printf("--- inferno log metrics fit CUDA dict ---\n");
+
+    int metric_count = inferno_my_log_metric_key_count();
+    ASSERT_INT_LE("my_log metric key count plus env/n", metric_count + 1, 64);
 }
 
 static void test_inferno_binding_emits_post_240_traces(void) {
@@ -7684,6 +8700,35 @@ static void test_inferno_eval_render_env_syncs_tick_for_animation_events(void) {
         "void c_render",
         "render_post_tick(rc, re);",
         "re->tick = ENCOUNTER_INFERNO.get_tick(");
+}
+
+static void test_inferno_lab_freeze_binding_precedes_action_sources(void) {
+    printf("--- inferno lab freeze binding precedes action sources ---\n");
+
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "lab restore checked before replay",
+        "ocean/osrs_inferno/binding.c",
+        "RenderClient* render_client",
+        "/* replay playback",
+        "inferno_env_emit_lab_restore_terminal(env, render_client)");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "lab freeze checked before replay",
+        "ocean/osrs_inferno/binding.c",
+        "RenderClient* render_client",
+        "/* replay playback",
+        "inferno_env_freeze_for_lab(env, render_client)");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "lab restore emits terminal without reset",
+        "ocean/osrs_inferno/binding.c",
+        "static inline void inferno_env_emit_lab_restore_terminal",
+        "static inline void inferno_env_freeze_for_lab",
+        "env->terminals[0] = 1.0f");
+    ASSERT_SOURCE_BLOCK_NOT_CONTAINS(
+        "lab restore helper does not reset encounter",
+        "ocean/osrs_inferno/binding.c",
+        "static inline void inferno_env_emit_lab_restore_terminal",
+        "static inline void inferno_env_freeze_for_lab",
+        "ENCOUNTER_INFERNO.reset");
 }
 
 static void test_curriculum_supports_wave60_bridge_tier(void) {
@@ -7772,6 +8817,14 @@ int main(void) {
     test_zuk_healer_tags_first_reward_mode_resumes_after_all_tags();
     test_joseph_reward_mode_pays_tags_while_healers_heal();
     test_zuk_healer_attack_shape_reward_applies_in_joseph_mode();
+    test_offensive_prayer_reward_shapes_normal_and_joseph_mode();
+    test_offensive_prayer_attack_events_count_real_attacks();
+    test_offensive_prayer_barrage_aoe_counts_once();
+    test_offensive_prayer_no_attack_no_event();
+    test_offensive_prayer_melee_maps_to_piety();
+    test_player_reward_damage_uses_xp_drop_tick();
+    test_idle_diagnostics_count_missed_attack_opportunities();
+    test_idle_diagnostics_phase_split();
     test_joseph_reward_mode_damps_healed_zuk_damage();
     test_jad_damage_reward_pauses_while_jad_healers_heal();
     test_jad_healer_damage_never_gets_damage_reward();
@@ -7788,6 +8841,9 @@ int main(void) {
     test_supply_milestone_reward_never_penalizes_shortage();
     test_late_start_supply_profile_anchor_waves();
     test_late_start_supply_profile_interpolation_and_scale();
+    test_curriculum_supply_no_brew_is_curriculum_only();
+    test_curriculum_supply_modes_gate_zuk_and_pre_zuk();
+    test_curriculum_supply_jitter_clamps_to_inventory_bounds();
     test_late_start_supply_observations();
     test_dead_mob_store_eligibility();
     test_resurrected_mob_does_not_reenter_dead_store();
@@ -7812,6 +8868,20 @@ int main(void) {
     test_step_out_forecast_north_pillar_ranger_mager_order();
     test_step_out_forecast_obs_exposes_compact_action_affordance();
     test_step_out_forecast_obs_can_be_disabled();
+    test_step_out_forecast_obs_uses_fast_mode();
+    test_fast_step_out_forecast_matches_movement_head_destinations();
+    test_fast_step_out_forecast_immediate_static_threats();
+    test_fast_step_out_forecast_blob_scan_and_melee_fallback();
+    test_fast_step_out_forecast_does_not_mutate_state();
+    test_readonly_step_out_forecast_matches_movement_head_destinations();
+    test_readonly_step_out_forecast_does_not_mutate_state();
+    test_readonly_step_out_forecast_pillar_step_out_cases();
+    test_step_out_forecast_obs_uses_readonly_mode();
+    test_readonly_step_out_forecast_stun_countdown();
+    test_readonly_step_out_forecast_frozen_can_attack();
+    test_readonly_step_out_forecast_blob_scanned_fire();
+    test_readonly_step_out_forecast_under_player_overlap_is_danger();
+    test_readonly_step_out_forecast_invalid_movement_zeroes_payload();
     test_step_out_forecast_south_pillar_ranger_mager_order();
     test_step_out_forecast_west_pillar_ranger_mager_order();
     test_step_out_forecast_inactive_pillar_does_not_create_cover();
@@ -7925,6 +8995,8 @@ int main(void) {
     test_inferno_binding_forwards_safe_target_reward_coeff();
     test_inferno_binding_forwards_healer_attack_shape_coeffs();
     test_inferno_binding_forwards_supply_milestone_rewards();
+    test_inferno_binding_forwards_offensive_prayer_reward();
+    test_inferno_binding_forwards_curriculum_supply_config();
     test_inferno_binding_forwards_post_healer_set_rewards();
     test_inferno_binding_forwards_joseph_reward_mode();
     test_inferno_binding_forwards_safe_healer_target_mask();
@@ -7932,10 +9004,13 @@ int main(void) {
     test_inferno_binding_forwards_step_out_forecast_obs_toggle();
     test_inferno_binding_forwards_loadout_profile_config();
     test_inferno_binding_logs_post_healer_set_reward_components();
+    test_inferno_binding_logs_idle_diagnostics();
+    test_inferno_log_metrics_fit_cuda_dict();
     test_inferno_binding_emits_post_240_traces();
     test_inferno_render_status_survives_overlay_refresh();
     test_inferno_eval_render_post_tick_owns_entity_refresh();
     test_inferno_eval_render_env_syncs_tick_for_animation_events();
+    test_inferno_lab_freeze_binding_precedes_action_sources();
     test_curriculum_supports_wave60_bridge_tier();
     test_inferno_reset_uses_osrs_run_energy_units();
 

@@ -607,6 +607,29 @@ enum {
     INF_JOSEPH_REWARD_MODE_ON = 1,
 };
 
+enum {
+    INF_STEP_OUT_FORECAST_MODE_OFF = 0,
+    INF_STEP_OUT_FORECAST_MODE_EXACT_ROLLOUT = 1,
+    INF_STEP_OUT_FORECAST_MODE_FAST_STATIC_TILE = 2,
+    INF_STEP_OUT_FORECAST_MODE_FAST_READONLY_MOVE = 3,
+};
+
+enum {
+    INF_CURRICULUM_SUPPLY_MODE_OFF = 0,
+    INF_CURRICULUM_SUPPLY_MODE_ALL = 1,
+    INF_CURRICULUM_SUPPLY_MODE_ZUK = 2,
+    INF_CURRICULUM_SUPPLY_MODE_PRE_ZUK = 3,
+};
+
+typedef enum {
+    INF_IDLE_PHASE_SET = 0,
+    INF_IDLE_PHASE_JAD = 1,
+    INF_IDLE_PHASE_ZUK_PRE_JAD = 2,
+    INF_IDLE_PHASE_ZUK_JAD = 3,
+    INF_IDLE_PHASE_ZUK_HEALERS = 4,
+    INF_IDLE_PHASE_ZUK_POST_HEALERS = 5,
+} InfIdleDiagnosticPhase;
+
 typedef struct {
     int brew_doses;
     int restore_doses;
@@ -631,14 +654,23 @@ typedef struct {
     InfLoadoutProfileMode loadout_profile_mode;
     float budget_loadout_fraction;
     float damage_reward_coeff;
+    float offensive_prayer_reward_coeff;
     float shield_penalty_coeff;
     float tag_reward_coeff;
     float late_start_supply_profile_scale;
+    int curriculum_agent;
+    int curriculum_supply_jitter_mode;
+    float curriculum_supply_shared_jitter;
+    float curriculum_supply_brew_jitter;
+    float curriculum_supply_restore_jitter;
+    int curriculum_no_brew_mode;
+    float curriculum_no_brew_frac;
     float supply_milestone_brew_reward_coeff;
     float supply_milestone_restore_reward_coeff;
     float death_penalty_coeff;
     int terminal_penalty_enabled;
     int step_out_forecast_obs_enabled;
+    int step_out_forecast_obs_mode;
     float phase_900_bonus;
     float phase_600_bonus;
     float phase_300_bonus;
@@ -752,6 +784,8 @@ typedef struct {
     float damage_received_this_tick;
     float hp_restored_this_tick;
     float hp_restored_zuk_this_tick;
+    float offensive_prayer_correct_damage_roll_this_tick;
+    int offensive_prayer_correct_this_tick;
     int prayer_correct_this_tick;  /* count of NPC attacks blocked by prayer this tick */
     int wave_completed_this_tick;
     int pillar_lost_this_tick;     /* -1 = none, 0-2 = which pillar was destroyed */
@@ -775,6 +809,10 @@ typedef struct {
     int total_prayer_correct;  /* times prayer blocked an NPC attack */
     int total_npc_attacks;     /* total NPC attacks on player (for prayer_correct_rate) */
     int total_unavoidable_off; /* off-prayer hits where a different style was correctly prayed */
+    int total_offensive_prayer_attacks;
+    int total_offensive_prayer_correct;
+    int offensive_prayer_attacks_by_style[4];
+    int offensive_prayer_correct_by_style[4];
     int off_prayer_hits_this_tick;
     /* per-tick tracking for multi-style analysis */
     int tick_styles_fired;     /* bitmask of styles that fired this tick (bit0=mel,1=rng,2=mag) */
@@ -805,6 +843,14 @@ typedef struct {
     int last_hit_by_type;      /* NPC type that last dealt damage to player (-1=none) */
     int killed_by_type[INF_NUM_NPC_TYPES];  /* count of deaths caused by each NPC type */
     int total_idle_ticks;      /* cumulative ticks of ticks_without_action > 0 */
+    int total_attack_ready_no_attack_ticks;
+    int total_target_available_no_attack_ticks;
+    int total_safe_attack_opportunity_missed_ticks;
+    int total_progressless_ticks;
+    int attack_ready_no_attack_ticks_by_phase[OSRS_INFERNO_IDLE_PHASE_COUNT];
+    int target_available_no_attack_ticks_by_phase[OSRS_INFERNO_IDLE_PHASE_COUNT];
+    int safe_attack_opportunity_missed_ticks_by_phase[OSRS_INFERNO_IDLE_PHASE_COUNT];
+    int progressless_ticks_by_phase[OSRS_INFERNO_IDLE_PHASE_COUNT];
     int total_brews_used;      /* brew doses consumed this episode */
     int total_blood_healed;    /* HP healed via blood barrage this episode */
     int total_npc_kills;       /* NPCs killed this episode */

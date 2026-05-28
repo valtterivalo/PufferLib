@@ -72,15 +72,31 @@ static InfTargetArea inf_npc_current_target_area(const InfernoState* s, const In
     };
 }
 
-/* check if NPC at index i has LOS to its current target */
-static int inf_npc_has_los_direct(InfernoState* s, int i) {
-    InfNPC* npc = &s->npcs[i];
+static int inf_npc_has_los_to_area(
+    const InfernoState* s,
+    const InfNPC* npc,
+    int target_x,
+    int target_y,
+    int target_size
+) {
     const InfNPCStats* stats = &INF_NPC_STATS[npc->type];
-    InfTargetArea target = inf_npc_current_target_area(s, npc);
     return entity_has_line_of_sight(s->los_blockers, s->los_blocker_count,
-                                    npc->x, npc->y, npc->size,
-                                    target.x, target.y, target.size,
-                                    stats->attack_range);
+        npc->x, npc->y, npc->size,
+        target_x, target_y, target_size,
+        stats->attack_range);
+}
+
+static int inf_npc_has_los_to_tile(
+    const InfernoState* s, const InfNPC* npc, int target_x, int target_y
+) {
+    return inf_npc_has_los_to_area(s, npc, target_x, target_y, 1);
+}
+
+/* check if NPC at index i has LOS to its current target */
+static int inf_npc_has_los_direct(const InfernoState* s, int i) {
+    const InfNPC* npc = &s->npcs[i];
+    InfTargetArea target = inf_npc_current_target_area(s, npc);
+    return inf_npc_has_los_to_area(s, npc, target.x, target.y, target.size);
 }
 
 /* cached LOS check — lazy: computes on first access per tick, caches for reuse.
@@ -350,8 +366,8 @@ static inline int inf_cardinal_contact_with_npc(int px, int py, int nx, int ny, 
     return dx + dy == 1;
 }
 
-static inline int inf_melee_fallback_possible(
-    const InfernoState* s, const InfNPC* npc, const InfNPCStats* stats,
+static inline int inf_melee_fallback_possible_at_tile(
+    int player_x, int player_y, const InfNPC* npc, const InfNPCStats* stats,
     int planned_style, int dist
 ) {
     if (!stats->can_melee || planned_style == ATTACK_STYLE_MELEE || dist != 1)
@@ -364,20 +380,37 @@ static inline int inf_melee_fallback_possible(
         case INF_NPC_BLOB:
         case INF_NPC_JAD:
             return inf_cardinal_contact_with_npc(
-                s->player.x, s->player.y, npc->x, npc->y, npc->size);
+                player_x, player_y, npc->x, npc->y, npc->size);
         default:
             return 0;
     }
+}
+
+static inline int inf_melee_fallback_possible(
+    const InfernoState* s, const InfNPC* npc, const InfNPCStats* stats,
+    int planned_style, int dist
+) {
+    return inf_melee_fallback_possible_at_tile(
+        s->player.x, s->player.y, npc, stats, planned_style, dist);
+}
+
+static inline int inf_attack_style_options_mask_at_tile(
+    int player_x, int player_y, const InfNPC* npc, const InfNPCStats* stats,
+    int planned_style, int dist
+) {
+    int mask = inf_attack_style_mask_bit(planned_style);
+    if (inf_melee_fallback_possible_at_tile(
+            player_x, player_y, npc, stats, planned_style, dist))
+        mask |= INF_STYLE_MASK_MELEE;
+    return mask;
 }
 
 static inline int inf_attack_style_options_mask(
     const InfernoState* s, const InfNPC* npc, const InfNPCStats* stats,
     int planned_style, int dist
 ) {
-    int mask = inf_attack_style_mask_bit(planned_style);
-    if (inf_melee_fallback_possible(s, npc, stats, planned_style, dist))
-        mask |= INF_STYLE_MASK_MELEE;
-    return mask;
+    return inf_attack_style_options_mask_at_tile(
+        s->player.x, s->player.y, npc, stats, planned_style, dist);
 }
 
 static inline int inf_attack_style_from_mask(int style_mask) {
@@ -597,14 +630,23 @@ static InfConfig inf_default_config(void) {
         .loadout_profile_mode = INF_LOADOUT_PROFILE_MODE_MAX_ONLY,
         .budget_loadout_fraction = 0.0f,
         .damage_reward_coeff = 0.0f,
+        .offensive_prayer_reward_coeff = 0.0f,
         .shield_penalty_coeff = 0.0f,
         .tag_reward_coeff = 0.0f,
         .late_start_supply_profile_scale = 1.0f,
+        .curriculum_agent = 0,
+        .curriculum_supply_jitter_mode = INF_CURRICULUM_SUPPLY_MODE_OFF,
+        .curriculum_supply_shared_jitter = 0.0f,
+        .curriculum_supply_brew_jitter = 0.0f,
+        .curriculum_supply_restore_jitter = 0.0f,
+        .curriculum_no_brew_mode = INF_CURRICULUM_SUPPLY_MODE_OFF,
+        .curriculum_no_brew_frac = 0.0f,
         .supply_milestone_brew_reward_coeff = 0.0f,
         .supply_milestone_restore_reward_coeff = 0.0f,
         .death_penalty_coeff = 0.0f,
         .terminal_penalty_enabled = 0,
         .step_out_forecast_obs_enabled = 1,
+        .step_out_forecast_obs_mode = INF_STEP_OUT_FORECAST_MODE_EXACT_ROLLOUT,
         .phase_900_bonus = 0.0f,
         .phase_600_bonus = 0.0f,
         .phase_300_bonus = 0.0f,

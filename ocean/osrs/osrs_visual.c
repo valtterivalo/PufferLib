@@ -585,6 +585,15 @@ static void __attribute__((unused)) visual_policy_destroy(VisualPolicy* policy) 
     memset(policy, 0, sizeof(*policy));
 }
 
+static void visual_policy_reset_recurrent(VisualPolicy* policy) {
+    if (!policy || !policy->net || !policy->net->mingru) return;
+    memset(policy->net->mingru->state, 0,
+        (size_t)policy->net->mingru->num_layers *
+        (size_t)policy->net->mingru->batch_size *
+        (size_t)policy->net->mingru->hidden_size *
+        sizeof(float));
+}
+
 static int visual_policy_argmax_masked(const float* logits, const float* mask, int dim) {
     int best_action = -1;
     float best_logit = -INFINITY;
@@ -669,12 +678,18 @@ typedef struct {
     /* per-frame state */
     double episode_end_time;  /* >0 when holding final frame */
     int episode_ended;
+    int seen_lab_restore_generation;
 } VisualState;
 
 static void visual_frame(void* arg) {
     VisualState* vs = (VisualState*)arg;
     OsrsEnv* env = vs->env;
     RenderClient* rc = (RenderClient*)env->client;
+    if (rc->inferno_lab_restore_generation != vs->seen_lab_restore_generation) {
+        vs->seen_lab_restore_generation = rc->inferno_lab_restore_generation;
+        vs->episode_ended = 0;
+        visual_policy_reset_recurrent(&vs->policy);
+    }
 
     /* rewind: restore historical state and re-render */
     if (rc->step_back) {
@@ -708,12 +723,7 @@ static void visual_frame(void* arg) {
                 pvp_reset(env);
             }
             render_reset_episode_visual_state(rc, env);
-            if (vs->policy.net && vs->policy.net->mingru)
-                memset(vs->policy.net->mingru->state, 0,
-                    (size_t)vs->policy.net->mingru->num_layers *
-                    (size_t)vs->policy.net->mingru->batch_size *
-                    (size_t)vs->policy.net->mingru->hidden_size *
-                    sizeof(float));
+            visual_policy_reset_recurrent(&vs->policy);
             render_save_snapshot(rc, env);
         }
         return;
@@ -1147,6 +1157,7 @@ static void run_visual(
         .start_wave = start_wave,
         .episode_end_time = 0,
         .episode_ended = 0,
+        .seen_lab_restore_generation = rc->inferno_lab_restore_generation,
     };
     emscripten_set_main_loop_arg(visual_frame, &web_visual_state, 0, 1);
 #else
@@ -1158,6 +1169,7 @@ static void run_visual(
         .start_wave = start_wave,
         .episode_end_time = 0,
         .episode_ended = 0,
+        .seen_lab_restore_generation = rc->inferno_lab_restore_generation,
     };
 
     while (!WindowShouldClose()) {
