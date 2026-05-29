@@ -31,6 +31,16 @@ def test_eval_action_mode_reaches_cuda_and_metal_samplers() -> None:
     assert "action_mode == 1" in text("src/metal/cpu_inference.h")
 
 
+def test_parity_hashes_compare_semantic_backend_state() -> None:
+    assert "parity_hashes" in text("src/bindings.cu")
+    assert "parity_hashes" in text("src/metal/bindings.mm")
+    assert "rollout_actions_i32" in text("src/bindings.cu")
+    assert "rollout_actions_i32" in text("src/metal/bindings.mm")
+    harness = text("tools/metal/osrs_eval_parity.py")
+    assert "initial_hashes" in harness
+    assert "rollout parity hash mismatch" in harness
+
+
 def test_masked_sampler_fallback_uses_last_legal_action() -> None:
     cuda = text("src/pufferlib.cu")
     metal = text("src/metal/shader_src.h")

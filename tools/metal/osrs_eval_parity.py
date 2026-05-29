@@ -153,6 +153,10 @@ def flat_dict(data: dict[str, Any]) -> dict[str, Any]:
     return dict(unroll_nested_dict(data))
 
 
+def backend_parity_hashes(backend: Any, pufferl: Any) -> dict[str, Any]:
+    return dict(backend.parity_hashes(pufferl)) if hasattr(backend, "parity_hashes") else {}
+
+
 def run_rollout(args: argparse.Namespace) -> None:
     root = repo_root()
     sys.path.insert(0, str(root))
@@ -181,6 +185,7 @@ def run_rollout(args: argparse.Namespace) -> None:
     traces: list[dict[str, Any]] = []
     logs: dict[str, Any] = {}
     rollout_index = 0
+    initial_hashes = backend_parity_hashes(backend, pufferl)
     while (
         rollout_index < int(args.rollouts)
         if args.rollouts is not None
@@ -195,6 +200,7 @@ def run_rollout(args: argparse.Namespace) -> None:
                 "global_step": int(pufferl.global_step),
                 "env_n": int(logs.get("env/n", 0)),
                 "hashes": dict(hashes),
+                "parity_hashes": backend_parity_hashes(backend, pufferl),
             })
         rollout_index += 1
 
@@ -220,6 +226,7 @@ def run_rollout(args: argparse.Namespace) -> None:
         "action_dims": list(backend.env_action_dims()) if hasattr(backend, "env_action_dims") else None,
         "num_params": num_params,
         "logs": logs,
+        "initial_hashes": initial_hashes,
         "traces": traces,
     }
     args.write_json.parent.mkdir(parents=True, exist_ok=True)
@@ -248,10 +255,15 @@ def compare_outputs(args: argparse.Namespace) -> None:
             raise AssertionError(f"missing metric {key}")
         compare_float(key, left["logs"][key], right["logs"][key], args.tolerance)
 
+    if left.get("initial_hashes") != right.get("initial_hashes"):
+        raise AssertionError("initial parity hash mismatch")
+
     trace_count = min(len(left["traces"]), len(right["traces"]))
     for i in range(trace_count):
-        if left["traces"][i]["hashes"] != right["traces"][i]["hashes"]:
-            raise AssertionError(f"rollout hash mismatch at trace {i}")
+        left_hashes = left["traces"][i].get("parity_hashes") or left["traces"][i]["hashes"]
+        right_hashes = right["traces"][i].get("parity_hashes") or right["traces"][i]["hashes"]
+        if left_hashes != right_hashes:
+            raise AssertionError(f"rollout parity hash mismatch at trace {i}")
 
     print("OSRS eval parity outputs match")
 

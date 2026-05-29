@@ -1,6 +1,7 @@
 #include "pufferlib.mm"
 
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <cstdint>
 #include <cstring>
@@ -45,6 +46,28 @@ static std::string hash_float_tensor(const FloatTensor& tensor) {
     if (tensor.data == nullptr) return "";
     size_t nbytes = (size_t)puf_numel(tensor.shape) * sizeof(float);
     return hash_host_bytes((const unsigned char*)tensor.data, nbytes);
+}
+
+static std::string hash_puf_tensor(const PufTensor& tensor) {
+    if (tensor.bytes == nullptr) return "";
+    size_t nbytes = (size_t)tensor.numel() * tensor.dtype_size;
+    return hash_host_bytes((const unsigned char*)tensor.bytes, nbytes);
+}
+
+static std::string hash_actions_i32(const FloatTensor& tensor) {
+    if (tensor.data == nullptr) return "";
+    size_t n = (size_t)puf_numel(tensor.shape);
+    std::vector<int32_t> ints(n);
+    for (size_t i = 0; i < n; i++) {
+        ints[i] = (int32_t)lrintf(tensor.data[i]);
+    }
+    return hash_host_bytes((const unsigned char*)ints.data(), ints.size() * sizeof(int32_t));
+}
+
+static std::string hash_vec_action_mask(const StaticVec* vec) {
+    if (vec == nullptr || vec->gpu_action_mask == nullptr || vec->action_mask_size <= 0) return "";
+    size_t nbytes = (size_t)vec->total_agents * vec->action_mask_size;
+    return hash_host_bytes((const unsigned char*)vec->gpu_action_mask, nbytes);
 }
 
 static std::string tensor_repr(const FloatTensor& tensor) {
@@ -262,6 +285,24 @@ static py::dict rollout_hashes(py::object pufferl_obj) {
     out["ratio"] = hash_float_tensor(pufferl.rollouts.ratio);
     out["importance"] = hash_float_tensor(pufferl.rollouts.importance);
     out["action_mask"] = pufferl.has_mask ? hash_float_tensor(pufferl.rollout_masks) : "";
+    return out;
+}
+
+static py::dict parity_hashes(py::object pufferl_obj) {
+    PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
+    if (pufferl.train_pending) {
+        sync_pending_train(pufferl);
+    }
+    if (!pufferl.cpu_inference) {
+        mtl_ensure_stream_synced((cudaStream_t)mtl_stream());
+    }
+
+    py::dict out;
+    out["env_observations"] = hash_puf_tensor(pufferl.env.obs);
+    out["env_rewards"] = hash_float_tensor(pufferl.env.rewards);
+    out["env_terminals"] = hash_float_tensor(pufferl.env.terminals);
+    out["env_action_mask"] = hash_vec_action_mask(pufferl.vec);
+    out["rollout_actions_i32"] = hash_actions_i32(pufferl.rollouts.actions);
     return out;
 }
 
@@ -788,6 +829,7 @@ PYBIND11_MODULE(_C, m) {
     m.def("render", &render);
     m.def("rollouts", &rollouts);
     m.def("rollout_hashes", &rollout_hashes);
+    m.def("parity_hashes", &parity_hashes);
     m.def("train", &train);
     m.def("close", &puf_close);
     m.def("save_weights", &save_weights);

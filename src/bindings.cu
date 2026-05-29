@@ -8,6 +8,7 @@
 #include <pybind11/stl.h>
 #include <pybind11/numpy.h>
 #include <iomanip>
+#include <cmath>
 #include <sstream>
 #include <vector>
 #include "pufferlib.cu"
@@ -42,6 +43,36 @@ static std::string hash_precision_tensor(const PrecisionTensor& tensor) {
     return hash_cuda_bytes(tensor.data, (size_t)numel(tensor.shape) * sizeof(precision_t));
 }
 
+static std::string hash_float_tensor(const FloatTensor& tensor) {
+    if (tensor.data == nullptr) return "";
+    return hash_cuda_bytes(tensor.data, (size_t)numel(tensor.shape) * sizeof(float));
+}
+
+static std::string hash_byte_tensor(const ByteTensor& tensor) {
+    if (tensor.data == nullptr) return "";
+    return hash_cuda_bytes(tensor.data, (size_t)numel(tensor.shape));
+}
+
+static std::string hash_obs_tensor(const OBS_TENSOR_T& tensor) {
+    if (tensor.data == nullptr) return "";
+    return hash_cuda_bytes(tensor.data, (size_t)numel(tensor.shape) * get_obs_elem_size());
+}
+
+static std::string hash_precision_tensor_i32(const PrecisionTensor& tensor) {
+    if (tensor.data == nullptr) return "";
+    size_t n = (size_t)numel(tensor.shape);
+    std::vector<precision_t> host(n);
+    if (n > 0) {
+        cudaMemcpy(host.data(), tensor.data, n * sizeof(precision_t), cudaMemcpyDeviceToHost);
+    }
+
+    std::vector<int32_t> ints(n);
+    for (size_t i = 0; i < n; i++) {
+        ints[i] = (int32_t)lrintf(to_float(host[i]));
+    }
+    return hash_host_bytes((const unsigned char*)ints.data(), ints.size() * sizeof(int32_t));
+}
+
 py::dict rollout_hashes(py::object pufferl_obj) {
     auto& pufferl = pufferl_obj.cast<PuffeRL&>();
     py::dict out;
@@ -54,6 +85,17 @@ py::dict rollout_hashes(py::object pufferl_obj) {
     out["ratio"] = hash_precision_tensor(pufferl.rollouts.ratio);
     out["importance"] = hash_precision_tensor(pufferl.rollouts.importance);
     out["action_mask"] = hash_precision_tensor(pufferl.rollouts.action_mask);
+    return out;
+}
+
+py::dict parity_hashes(py::object pufferl_obj) {
+    auto& pufferl = pufferl_obj.cast<PuffeRL&>();
+    py::dict out;
+    out["env_observations"] = hash_obs_tensor(pufferl.env.obs);
+    out["env_rewards"] = hash_float_tensor(pufferl.env.rewards);
+    out["env_terminals"] = hash_float_tensor(pufferl.env.terminals);
+    out["env_action_mask"] = hash_byte_tensor(pufferl.env.action_mask);
+    out["rollout_actions_i32"] = hash_precision_tensor_i32(pufferl.rollouts.actions);
     return out;
 }
 
@@ -589,6 +631,7 @@ PYBIND11_MODULE(_C, m) {
     m.def("render", &render);
     m.def("rollouts", &rollouts);
     m.def("rollout_hashes", &rollout_hashes);
+    m.def("parity_hashes", &parity_hashes);
     m.def("train", &train);
     m.def("close", &puf_close);
     m.def("save_weights", &save_weights);
@@ -676,6 +719,14 @@ PYBIND11_MODULE(_C, m) {
     });
     m.def("puff_advantage", &py_puff_advantage);
     m.def("create_vec", &create_vec, py::arg("args"), py::arg("gpu") = 1);
+    m.def("env_obs_size", []() -> int { return get_obs_size(); });
+    m.def("env_num_action_heads", []() -> int { return get_num_atns(); });
+    m.def("env_action_dims", []() {
+        py::list dims;
+        int* sizes = get_act_sizes();
+        for (int i = 0; i < get_num_act_sizes(); i++) dims.append(sizes[i]);
+        return dims;
+    });
     py::class_<VecEnv, std::unique_ptr<VecEnv>>(m, "VecEnv")
         .def_readonly("total_agents",  &VecEnv::total_agents)
         .def_readonly("obs_size",      &VecEnv::obs_size)
