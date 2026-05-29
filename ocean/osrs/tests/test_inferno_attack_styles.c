@@ -428,6 +428,7 @@ static void fire_player_action_at_slot_zero(
 
 static int inferno_pending_hit_obs_start(void);
 static int inferno_spark_obs_start(void);
+static int inferno_pillar_obs_start(int pillar_idx);
 static int inferno_obs_slot_dig_index(int slot_idx);
 static int inferno_obs_slot_player_has_los_index(int slot_idx);
 static int inferno_obs_slot_phantom_index(int slot_idx);
@@ -3343,7 +3344,7 @@ static void test_triple_jad_pending_threats_fit_obs_layout(void) {
 
     float obs[INF_NUM_OBS];
     inf_write_obs((EncounterState*)&state, obs);
-    ASSERT_INT_EQ("inferno obs shape includes exact spark slots", INF_NUM_OBS, 1567);
+    ASSERT_INT_EQ("inferno obs shape includes exact spark slots", INF_NUM_OBS, 1570);
 }
 
 static void test_inferno_obs_shape_includes_step_out_forecast_features(void) {
@@ -3362,6 +3363,8 @@ static void test_inferno_obs_shape_includes_step_out_forecast_features(void) {
         "#define ACT_SIZES INF_ACTION_DIMS_INIT");
     ASSERT_INT_EQ("player obs includes NPC pressure summary",
         INF_PLAYER_OBS_SIZE, 75);
+    ASSERT_INT_EQ("pillar obs includes footprint size",
+        INF_PILLAR_OBS_SIZE, 15);
     ASSERT_INT_EQ("npc obs includes loadout reachability signals",
         INF_TOTAL_NPC_OBS_SIZE, 896);
     ASSERT_INT_EQ("step-out forecast covers every movement action",
@@ -3369,7 +3372,7 @@ static void test_inferno_obs_shape_includes_step_out_forecast_features(void) {
     ASSERT_INT_EQ("inferno obs shape includes exact spark landings",
         INF_PENDING_SPARK_OBS_SIZE, 224);
     ASSERT_INT_EQ("inferno obs shape includes reachability pass",
-        INF_NUM_OBS, 1567);
+        INF_NUM_OBS, 1570);
     ASSERT_INFERNO_SOURCE_NOT_CONTAINS("armor_tank state is removed",
         "armor_tank");
     ASSERT_INFERNO_SOURCE_NOT_CONTAINS("extra npc obs scaffold is removed",
@@ -3416,6 +3419,51 @@ static void test_inferno_obs_wave_phase_one_hot(void) {
     inf_write_obs((EncounterState*)&triple_jad, obs);
     ASSERT_FLOAT_NEAR("wave 68 stays in Jad phase",
         obs[INF_OBS_WAVE_PHASE_START + 4], 1.0f, 1e-6f);
+}
+
+static void test_inferno_obs_exposes_pillar_footprint_size(void) {
+    printf("--- inferno obs exposes pillar footprint size ---\n");
+
+    InfernoState state = make_test_state(20, 20);
+    state.player.current_hitpoints = 99;
+    state.player.base_hitpoints = 99;
+    state.player.base_prayer = 99;
+    state.player.current_prayer = 99;
+    state.pillars[0] = (InfPillar){
+        .x = INF_PILLAR_POS[0][0],
+        .y = INF_PILLAR_POS[0][1],
+        .hp = INF_PILLAR_HP,
+        .active = 1,
+    };
+    state.pillars[1] = (InfPillar){
+        .x = INF_PILLAR_POS[1][0],
+        .y = INF_PILLAR_POS[1][1],
+        .hp = 0,
+        .active = 0,
+    };
+
+    float obs[INF_NUM_OBS];
+    inf_write_obs((EncounterState*)&state, obs);
+
+    int active_start = inferno_pillar_obs_start(0);
+    ASSERT_FLOAT_NEAR("active pillar active bit",
+        obs[active_start], 1.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("active pillar hp",
+        obs[active_start + 1], 1.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("active pillar relative x",
+        obs[active_start + 2],
+        (float)(INF_PILLAR_POS[0][0] - state.player.x) / (float)INF_ARENA_WIDTH,
+        1e-6f);
+    ASSERT_FLOAT_NEAR("active pillar relative y",
+        obs[active_start + 3],
+        (float)(INF_PILLAR_POS[0][1] - state.player.y) / (float)INF_ARENA_HEIGHT,
+        1e-6f);
+    ASSERT_FLOAT_NEAR("active pillar footprint size",
+        obs[active_start + 4], (float)INF_PILLAR_SIZE / 7.0f, 1e-6f);
+
+    int inactive_start = inferno_pillar_obs_start(1);
+    ASSERT_FLOAT_NEAR("inactive pillar footprint size",
+        obs[inactive_start + 4], 0.0f, 1e-6f);
 }
 
 static void test_inferno_obs_exposes_meleer_dig_state(void) {
@@ -3634,11 +3682,15 @@ static int inferno_obs_slot_feature_count(int slot_idx) {
 }
 
 static int inferno_obs_slot_start(int slot_idx) {
-    int start = INF_PLAYER_OBS_SIZE + 12;
+    int start = INF_PLAYER_OBS_SIZE + INF_PILLAR_OBS_SIZE;
     for (int i = 0; i < slot_idx; i++) {
         start += inferno_obs_slot_feature_count(i);
     }
     return start;
+}
+
+static int inferno_pillar_obs_start(int pillar_idx) {
+    return INF_PLAYER_OBS_SIZE + pillar_idx * 5;
 }
 
 static int inferno_target_mask_slot_offset(int slot_idx) {
@@ -3650,7 +3702,7 @@ static int inferno_target_mask_none_offset(void) {
 }
 
 static int inferno_step_out_forecast_obs_start(void) {
-    return INF_PLAYER_OBS_SIZE + 12 + INF_TOTAL_NPC_OBS_SIZE;
+    return INF_PLAYER_OBS_SIZE + INF_PILLAR_OBS_SIZE + INF_TOTAL_NPC_OBS_SIZE;
 }
 
 static int inferno_pending_hit_obs_start(void) {
@@ -9499,6 +9551,7 @@ int main(void) {
     test_triple_jad_pending_threats_fit_obs_layout();
     test_inferno_obs_shape_includes_step_out_forecast_features();
     test_inferno_obs_wave_phase_one_hot();
+    test_inferno_obs_exposes_pillar_footprint_size();
     test_inferno_obs_exposes_meleer_dig_state();
     test_npc_threat_obs_exposes_frozen_meleer_pressure();
     test_npc_threat_obs_respects_overlap_range_and_stun();
