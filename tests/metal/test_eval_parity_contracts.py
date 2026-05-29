@@ -71,6 +71,12 @@ def test_cuda_close_handles_disabled_cudagraphs() -> None:
     assert "if (pufferl.fused_rollout_cudagraphs)" in source
 
 
+def test_cuda_graph_capture_resets_recurrent_state() -> None:
+    source = text("src/pufferlib.cu")
+    assert "puf_zero(&pufferl->buffer_states[b], pufferl->default_stream)" in source
+    assert "puf_zero(&bank->buffer_states[b], pufferl->default_stream)" in source
+
+
 def test_parity_harness_merges_defaults_and_reports_filled_keys(tmp_path: Path) -> None:
     mod = load_parity_module()
     defaults = {

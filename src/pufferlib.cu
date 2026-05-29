@@ -2178,6 +2178,15 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
         }
         cudaMemset(pufferl->rng_offset_puf.data, 0,
             numel(pufferl->rng_offset_puf.shape) * sizeof(long));
+        for (int b = 0; b < num_buffers; b++) {
+            puf_zero(&pufferl->buffer_states[b], pufferl->default_stream);
+        }
+        for (int bank_idx = 0; bank_idx < pufferl->num_frozen_banks; bank_idx++) {
+            WeightBank* bank = &pufferl->frozen_banks[bank_idx];
+            for (int b = 0; b < num_buffers; b++) {
+                puf_zero(&bank->buffer_states[b], pufferl->default_stream);
+            }
+        }
         cudaDeviceSynchronize();
 
         pufferl->epoch = 0;
