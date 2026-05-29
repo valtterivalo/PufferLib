@@ -17,6 +17,7 @@
 
 #include "ocean/osrs/encounters/encounter_inferno.h"
 #include "ocean/osrs/osrs_anim.h"
+#include "ocean/osrs/osrs_pvp_effects.h"
 #include "ocean/osrs/osrs_projectile_orientation.h"
 #include "ocean/osrs/osrs_render_motion.h"
 #include <math.h>
@@ -5405,6 +5406,42 @@ static void test_sub_x_run_arrives_at_two_tiles_in_one_game_tick(void) {
         reached, 1);
 }
 
+static void test_entity_model_ground_lift_keeps_floor_planes_above_terrain(void) {
+    printf("--- entity model ground lift keeps floor planes above terrain ---\n");
+
+    float ground = 2.0f;
+    ASSERT_FLOAT_NEAR("model ground is lifted above terrain",
+        osrs_render_entity_model_ground(ground),
+        ground + OSRS_RENDER_ENTITY_GROUND_LIFT,
+        1e-6f);
+    ASSERT_INT_EQ("model ground lift is positive",
+        OSRS_RENDER_ENTITY_GROUND_LIFT > 0.0f, 1);
+}
+
+static void test_spotanim_lookup_prefers_recolored_model_alias(void) {
+    printf("--- spotanim lookup prefers recolored model alias ---\n");
+
+    OsrsModel models[2];
+    memset(models, 0, sizeof(models));
+    models[0].model_id = 3136;
+    models[1].model_id = OSRS_SPOTANIM_RECOLOR_MODEL_BASE | 1384u;
+
+    ModelCache secondary_cache;
+    memset(&secondary_cache, 0, sizeof(secondary_cache));
+    secondary_cache.models = models;
+    secondary_cache.count = 2;
+
+    OsrsSpotAnimDef meta;
+    memset(&meta, 0, sizeof(meta));
+    meta.id = 1384;
+    meta.model_id = 3136;
+
+    OsrsModel* found = effect_find_model(&meta, NULL, &secondary_cache, NULL);
+    ASSERT_INT_EQ("blob magic spotanim resolves recolored model",
+        found ? (int)found->model_id : -1,
+        (int)(OSRS_SPOTANIM_RECOLOR_MODEL_BASE | 1384u));
+}
+
 static void test_inferno_npc_spawn_id_changes_on_slot_reuse(void) {
     printf("--- inferno npc spawn id changes on slot reuse ---\n");
 
@@ -9633,6 +9670,8 @@ int main(void) {
     test_render_identity_single_player_unchanged();
     test_sub_x_walk_arrives_at_dest_in_one_game_tick();
     test_sub_x_run_arrives_at_two_tiles_in_one_game_tick();
+    test_entity_model_ground_lift_keeps_floor_planes_above_terrain();
+    test_spotanim_lookup_prefers_recolored_model_alias();
     test_inferno_npc_spawn_id_changes_on_slot_reuse();
     test_anim_rest_pose_resets_working_vertices();
     test_zuk_healer_target_action_tags_on_landed_hit();

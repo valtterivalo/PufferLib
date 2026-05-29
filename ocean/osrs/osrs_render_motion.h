@@ -12,6 +12,13 @@
 
 #define OSRS_RENDER_SUB_UNITS_PER_TILE 128.0f
 #define OSRS_RENDER_CLIENT_TICKS_PER_GAME_TICK 30.0f
+#define OSRS_RENDER_ENTITY_GROUND_LIFT_OSRS_UNITS 8.0f
+#define OSRS_RENDER_ENTITY_GROUND_LIFT \
+    (OSRS_RENDER_ENTITY_GROUND_LIFT_OSRS_UNITS / OSRS_RENDER_SUB_UNITS_PER_TILE)
+
+static inline float osrs_render_entity_model_ground(float ground) {
+    return ground + OSRS_RENDER_ENTITY_GROUND_LIFT;
+}
 
 /**
  * Per-client-tick walk speed in sub-units. 128/30 = 4.2667 for walk,
