@@ -1113,15 +1113,13 @@ static void zul_attack_ranged(ZulrahState* s) {
         s->total_prayer_correct++;
         /* prayer blocks damage but venom still applies (unless miss) */
         int def_roll = zul_player_def_roll(s, ATTACK_STYLE_RANGED);
-        float chance = osrs_hit_chance(npc_att_roll, def_roll);
-        did_hit = (encounter_rand_float(&s->rng_state) < chance);
+        did_hit = encounter_roll_hit_chance(&s->rng_state, npc_att_roll, def_roll);
         if (did_hit) {
             s->prayer_blocked_this_tick = 1;
         }
     } else {
         int def_roll = zul_player_def_roll(s, ATTACK_STYLE_RANGED);
-        float chance = osrs_hit_chance(npc_att_roll, def_roll);
-        if (encounter_rand_float(&s->rng_state) < chance) {
+        if (encounter_roll_hit_chance(&s->rng_state, npc_att_roll, def_roll)) {
             did_hit = 1;
             dmg = encounter_rand_int(&s->rng_state, m->max_hit + 1);
             zul_apply_player_damage(s, dmg, ATTACK_STYLE_RANGED, &s->zulrah);
@@ -1285,11 +1283,9 @@ static int zul_player_attack_hits(
     int def_roll = (MONSTER_DATABASE[ZUL_FORM_MONSTER_IDX[s->current_form]].def_level + 8) * (def_bonus + 64);
     if (def_roll < 0) def_roll = 0;
 
-    if (attack_effects->use_double_accuracy) {
-        return encounter_rand_float(&s->rng_state) < osrs_hit_chance_double(att_roll, def_roll);
-    }
-
-    return encounter_rand_float(&s->rng_state) < osrs_hit_chance(att_roll, def_roll);
+    return attack_effects->use_double_accuracy
+        ? encounter_roll_hit_chance_double(&s->rng_state, att_roll, def_roll)
+        : encounter_roll_hit_chance(&s->rng_state, att_roll, def_roll);
 }
 
 static void zul_player_attack(ZulrahState* s, int is_mage) {

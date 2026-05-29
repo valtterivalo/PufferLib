@@ -156,10 +156,12 @@ static void inf_lab_clear_transient(InfernoState* s) {
     s->player_last_interaction_age = 1;
     s->player_dest_x = -1;
     s->player_dest_y = -1;
-    s->player_pending_hit_count = 0;
+    encounter_pending_hit_queue_clear(&s->player_pending_hits);
     memset(s->pending_sparks, 0, sizeof(s->pending_sparks));
     memset(s->npc_target_hits, 0, sizeof(s->npc_target_hits));
-    s->player_attacked_this_tick = 0;
+    s->tick_scratch.offensive_prayer_correct_damage_roll = 0.0f;
+    s->tick_scratch.offensive_prayer_correct = 0;
+    s->tick_scratch.player_attacked = 0;
     s->player_attack_npc_idx = -1;
     s->player_attack_dmg = 0;
     s->player_attack_style_id = ATTACK_STYLE_NONE;
@@ -173,7 +175,7 @@ static void inf_lab_clear_transient(InfernoState* s) {
         npc->hit_damage = 0;
         npc->hit_was_successful_this_tick = 0;
         npc->hit_spell_type = ENCOUNTER_SPELL_NONE;
-        memset(&npc->pending_hit, 0, sizeof(npc->pending_hit));
+        encounter_pending_hit_queue_clear(&npc->pending_hits);
     }
 }
 
@@ -847,16 +849,28 @@ static void inf_lab_append_npcs_json(InfernoState* s, InfLabString* out) {
         if (!npc->active) continue;
         if (emitted > 0) inf_lab_string_append(out, ",");
         int los = npc->death_ticks > 0 ? 0 : inf_npc_has_los(s, i);
+        const EncounterPendingHit* pending =
+            encounter_pending_hit_queue_earliest(&npc->pending_hits);
+        int pending_ticks = pending ? pending->ticks_remaining : 0;
+        int pending_style = pending ? pending->attack_style : ATTACK_STYLE_NONE;
+        int pending_spell = pending ? pending->spell_type : ENCOUNTER_SPELL_NONE;
+        int pending_hit_success = pending ? pending->hit_success : 0;
+        int pending_damage = encounter_pending_hit_queue_damage_sum(&npc->pending_hits);
         inf_lab_string_append(out,
             "{\"slot\":%d,\"type\":\"%s\",\"type_id\":%d,\"def_id\":%d,"
             "\"x\":%d,\"y\":%d,\"size\":%d,\"hp\":%d,\"max_hp\":%d,"
             "\"timer\":%d,\"stun\":%d,\"frozen\":%d,\"death_ticks\":%d,"
-            "\"los_to_player\":%d}",
+            "\"los_to_player\":%d,\"pending_count\":%d,"
+            "\"pending_earliest_ticks\":%d,\"pending_style\":%d,"
+            "\"pending_spell\":%d,\"pending_hit_success\":%d,"
+            "\"pending_damage\":%d}",
             i, inf_lab_npc_type_name(npc->type), npc->type,
             INF_NPC_DEF_IDS[npc->type], npc->x, npc->y,
             inf_npc_effective_size(npc), npc->hp, npc->max_hp,
             npc->attack_timer, npc->stun_timer, npc->frozen_ticks,
-            npc->death_ticks, los);
+            npc->death_ticks, los, npc->pending_hits.count,
+            pending_ticks, pending_style, pending_spell,
+            pending_hit_success, pending_damage);
         emitted++;
     }
     inf_lab_string_append(out, "]");
@@ -881,10 +895,15 @@ static char* inf_lab_alloc_json(InfernoState* s) {
     inf_invalidate_los_cache(s);
     inf_lab_string_append(&out,
         "{\"tick\":%d,\"wave\":%d,"
-        "\"player\":{\"x\":%d,\"y\":%d,\"hp\":%d,\"prayer\":%d},",
+        "\"player\":{\"x\":%d,\"y\":%d,\"hp\":%d,\"prayer\":%d,"
+        "\"attack_timer\":%d,\"attacked\":%d,\"attack_target\":%d,"
+        "\"attack_style\":%d,\"attack_damage\":%d},",
         s->tick, s->wave + 1,
         s->player.x, s->player.y,
-        s->player.current_hitpoints, s->player.current_prayer);
+        s->player.current_hitpoints, s->player.current_prayer,
+        s->player.attack_timer, s->tick_scratch.player_attacked,
+        s->player_attack_npc_idx, s->player_attack_style_id,
+        s->player_attack_dmg);
     inf_lab_append_pillars_json(s, &out);
     inf_lab_string_append(&out, ",");
     inf_lab_append_npcs_json(s, &out);

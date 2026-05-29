@@ -419,6 +419,10 @@ typedef struct RenderClient {
     int inferno_lab_selected_npc_slot;
     int inferno_lab_prev_paused;
     int inferno_lab_prev_human_enabled;
+    void* inferno_lab_entry_snapshot;
+    size_t inferno_lab_entry_snapshot_size;
+    int inferno_lab_restore_requested;
+    int inferno_lab_restore_generation;
 
     /* UI layout mode: 0 = fixed (1182/1183 chrome), 1 = resizable (1177/1178).
        L key toggles. mirrors OSRS client display modes. */
@@ -586,6 +590,8 @@ typedef struct RenderClient {
 static Camera3D render_build_3d_camera(RenderClient* rc);
 static void render_populate_entities(RenderClient* rc, OsrsEnv* env);
 static void render_seed_entity_visual_slot(RenderClient* rc, int i);
+static void render_reset_episode_visual_state(RenderClient* rc, OsrsEnv* env);
+static void context_menu_dismiss(ContextMenu* cm);
 static inline int render_world_to_screen_x_rc(RenderClient* rc, int world_x);
 static inline int render_world_to_screen_y_rc(RenderClient* rc, int world_y);
 
@@ -633,16 +639,7 @@ static int render_spawn_profile_projectile(
     int fallback_slope
 ) {
     if (!profile) return -1;
-    int launch_slot = -1;
-    if (profile->launch_spotanim_id > 0) {
-        launch_slot = effect_spawn_spotanim_subtile(
-            rc->effects, profile->launch_spotanim_id,
-            src_x * 128.0f + 64.0f, src_y * 128.0f + 64.0f,
-            rc->effect_client_tick_counter + delay_client_ticks,
-            rc->spotanims, rc->anim_cache, rc->model_cache,
-            rc->npc_model_cache, rc->projectile_model_cache);
-    }
-    if (profile->travel_spotanim_id < 0) return launch_slot;
+    if (profile->travel_spotanim_id < 0) return -1;
     return effect_spawn_projectile(
         rc->effects, profile->travel_spotanim_id,
         src_x, src_y, dst_x, dst_y,
@@ -778,6 +775,88 @@ static void render_inferno_lab_apply_command(
     }
     render_populate_entities(rc, env);
     render_inferno_lab_snap_all_visuals(rc);
+}
+
+static void render_inferno_lab_clear_entry_snapshot(RenderClient* rc) {
+    if (!rc) return;
+    free(rc->inferno_lab_entry_snapshot);
+    rc->inferno_lab_entry_snapshot = NULL;
+    rc->inferno_lab_entry_snapshot_size = 0;
+}
+
+static const EncounterDef* render_inferno_lab_def_or_abort(OsrsEnv* env) {
+    if (!env || !env->encounter_def || !env->encounter_state) {
+        fprintf(stderr, "inferno lab: missing encounter state\n");
+        abort();
+    }
+    const EncounterDef* def = (const EncounterDef*)env->encounter_def;
+    if (strcmp(def->name, "inferno") != 0 ||
+            !def->snapshot_size || !def->snapshot || !def->restore) {
+        fprintf(stderr, "inferno lab: snapshot contract unavailable\n");
+        abort();
+    }
+    return def;
+}
+
+static void render_inferno_lab_capture_entry_snapshot(
+    RenderClient* rc,
+    OsrsEnv* env
+) {
+    const EncounterDef* def = render_inferno_lab_def_or_abort(env);
+    size_t size = def->snapshot_size(
+        (EncounterState*)env->encounter_state,
+        (EncounterContext*)env->encounter_context);
+    void* snapshot = malloc(size);
+    if (!snapshot) {
+        fprintf(stderr, "inferno lab: snapshot allocation failed\n");
+        abort();
+    }
+    def->snapshot(
+        (EncounterState*)env->encounter_state,
+        (EncounterContext*)env->encounter_context,
+        snapshot);
+
+    render_inferno_lab_clear_entry_snapshot(rc);
+    rc->inferno_lab_entry_snapshot = snapshot;
+    rc->inferno_lab_entry_snapshot_size = size;
+}
+
+static void render_inferno_lab_restore_controls(RenderClient* rc) {
+    rc->inferno_lab_enabled = 0;
+    rc->inferno_lab_show_forecast = 0;
+    rc->inferno_lab_selected_npc_slot = -1;
+    rc->is_paused = rc->inferno_lab_prev_paused;
+    rc->human_input.enabled = rc->inferno_lab_prev_human_enabled;
+    human_input_clear_pending(&rc->human_input);
+    human_input_clear_move(&rc->human_input);
+    human_input_clear_selected_ui_target(&rc->human_input);
+    context_menu_dismiss(&rc->context_menu);
+}
+
+static int render_inferno_lab_restore_entry_snapshot(
+    RenderClient* rc,
+    OsrsEnv* env
+) {
+    if (!rc || !rc->inferno_lab_entry_snapshot) {
+        return 0;
+    }
+    const EncounterDef* def = render_inferno_lab_def_or_abort(env);
+    def->restore(
+        (EncounterState*)env->encounter_state,
+        (EncounterContext*)env->encounter_context,
+        rc->inferno_lab_entry_snapshot,
+        rc->inferno_lab_entry_snapshot_size);
+    if (def->get_tick) {
+        env->tick = def->get_tick(
+            (EncounterState*)env->encounter_state,
+            (EncounterContext*)env->encounter_context);
+    }
+    rc->inferno_lab_restore_requested = 1;
+    rc->inferno_lab_restore_generation++;
+    render_inferno_lab_restore_controls(rc);
+    render_reset_episode_visual_state(rc, env);
+    fprintf(stderr, "inferno lab: restored entry snapshot\n");
+    return 1;
 }
 
 
@@ -1466,10 +1545,10 @@ static void render_inferno_lab_draw_hud(RenderClient* rc) {
         snprintf(selected_text, sizeof(selected_text), "%d %s", selected,
             inf_lab_npc_type_name(s->npcs[selected].type));
     }
-    DrawRectangle(8, 8, 455, 58, CLITERAL(Color){ 15, 10, 18, 220 });
-    DrawRectangleLines(8, 8, 455, 58, CLITERAL(Color){ 190, 80, 255, 255 });
+    DrawRectangle(8, 8, 650, 58, CLITERAL(Color){ 15, 10, 18, 220 });
+    DrawRectangleLines(8, 8, 650, 58, CLITERAL(Color){ 190, 80, 255, 255 });
     DrawText("INFERNO LAB", 16, 14, 16, CLITERAL(Color){ 230, 210, 255, 255 });
-    DrawText(TextFormat("F8 off  F7 forecast %s  F9 dump  selected: %s",
+    DrawText(TextFormat("F8 commit  F6 restore  F7 forecast %s  F9 dump  selected: %s",
         rc->inferno_lab_show_forecast ? "on" : "off", selected_text),
         16, 38, 12, CLITERAL(Color){ 230, 230, 230, 255 });
 }
@@ -1516,6 +1595,10 @@ static RenderClient* render_make_client(void) {
     rc->inferno_lab_selected_npc_slot = -1;
     rc->inferno_lab_prev_paused = 0;
     rc->inferno_lab_prev_human_enabled = 0;
+    rc->inferno_lab_entry_snapshot = NULL;
+    rc->inferno_lab_entry_snapshot_size = 0;
+    rc->inferno_lab_restore_requested = 0;
+    rc->inferno_lab_restore_generation = 0;
     rc->layout_mode = 1;  /* default to resizable mode (modern OSRS layout) */
     rc->cam_yaw = 0.0f;
     rc->cam_pitch = 0.6f;    /* ~34 degrees, similar to OSRS default */
@@ -1789,7 +1872,8 @@ static void flight_finish(RenderClient* rc, FlightProjectile* fp) {
     if (fp->impact_gfx_id > 0) {
         effect_spawn_spotanim_subtile(
             rc->effects, fp->impact_gfx_id,
-            fp->dst_x * 128.0f, fp->dst_y * 128.0f,
+            osrs_projectile_subtile_from_anchor_coord(fp->dst_x),
+            osrs_projectile_subtile_from_anchor_coord(fp->dst_y),
             rc->effect_client_tick_counter + 1,
             rc->spotanims, rc->anim_cache, rc->model_cache,
             rc->npc_model_cache, rc->projectile_model_cache);
@@ -1917,14 +2001,6 @@ static void flight_spawn(RenderClient* rc,
     fp->offset_y = offset_y;
     fp->offset_z = offset_z;
     flight_update_live_destination(rc, fp);
-    if (fp->launch_gfx_id > 0) {
-        effect_spawn_spotanim_subtile(
-            rc->effects, fp->launch_gfx_id,
-            fp->src_x * 128.0f, fp->src_y * 128.0f,
-            rc->effect_client_tick_counter + fp->start_delay,
-            rc->spotanims, rc->anim_cache, rc->model_cache,
-            rc->npc_model_cache, rc->projectile_model_cache);
-    }
 
     /* height arc: OSRS SceneProjectile.calculateIncrements
        skip quadratic computation when using sinusoidal arc */
@@ -2205,6 +2281,7 @@ static void __attribute__((unused)) render_destroy_client(RenderClient* rc) {
     }
     human_input_destroy(&rc->human_input);
     CloseWindow();
+    render_inferno_lab_clear_entry_snapshot(rc);
     free(rc->history);
     free(rc);
 }
@@ -2254,6 +2331,7 @@ static void render_handle_input(RenderClient* rc, OsrsEnv* env) {
             if (enable_lab) {
                 rc->inferno_lab_prev_paused = rc->is_paused;
                 rc->inferno_lab_prev_human_enabled = rc->human_input.enabled;
+                render_inferno_lab_capture_entry_snapshot(rc, env);
             }
             rc->inferno_lab_enabled = enable_lab;
             rc->inferno_lab_show_forecast = rc->inferno_lab_enabled;
@@ -2268,14 +2346,16 @@ static void render_handle_input(RenderClient* rc, OsrsEnv* env) {
                 render_populate_entities(rc, env);
                 render_inferno_lab_snap_all_visuals(rc);
             } else {
-                rc->is_paused = rc->inferno_lab_prev_paused;
-                rc->human_input.enabled = rc->inferno_lab_prev_human_enabled;
-                human_input_clear_pending(&rc->human_input);
-                human_input_clear_move(&rc->human_input);
-                human_input_clear_selected_ui_target(&rc->human_input);
+                render_inferno_lab_restore_controls(rc);
             }
             fprintf(stderr, "inferno lab: %s\n",
                 rc->inferno_lab_enabled ? "ON" : "OFF");
+        }
+    }
+    if (IsKeyPressed(KEY_F6)) {
+        InfernoState* s = render_inferno_state_from_env(env);
+        if (s && !render_inferno_lab_restore_entry_snapshot(rc, env)) {
+            fprintf(stderr, "inferno lab: no entry snapshot to restore\n");
         }
     }
     if (IsKeyPressed(KEY_F7) && rc->inferno_lab_enabled) {
@@ -4591,6 +4671,7 @@ static void render_draw_3d_world(RenderClient* rc) {
 
             float px, pz, ground;
             render_get_visual_pos(rc, i, &px, &pz, &ground);
+            float model_ground = osrs_render_entity_model_ground(ground);
 
             /* negate X scale to fix model mirroring: OSRS models are authored
                in a left-handed coordinate system but we render in right-handed
@@ -4598,7 +4679,7 @@ static void render_draw_3d_world(RenderClient* rc) {
                appear in the correct (right) hand. */
             Matrix base = MatrixScale(-ms, ms, ms);
             base = MatrixMultiply(base, MatrixRotateY(rc->yaw[i]));
-            base = MatrixMultiply(base, MatrixTranslate(px, ground, pz));
+            base = MatrixMultiply(base, MatrixTranslate(px, model_ground, pz));
 
             /* rebuild composite if equipment changed, animate, upload, draw */
             render_player_composite(rc, i, base);
@@ -4622,13 +4703,13 @@ static void render_draw_3d_world(RenderClient* rc) {
             float visual_height_tiles = 0.0f;
             if (nv > 0 && min_model_y <= max_model_y) {
                 visual_height_tiles = (max_model_y - min_model_y) * ms;
-                rc->entity_visual_mid_y[i] = ground + min_model_y * ms
+                rc->entity_visual_mid_y[i] = model_ground + min_model_y * ms
                     + (max_model_y - min_model_y) * ms * 0.5f;
-                rc->entity_visual_top_y[i] = ground + max_model_y * ms;
+                rc->entity_visual_top_y[i] = model_ground + max_model_y * ms;
             } else {
                 int ent_size = (ep->entity_type == ENTITY_NPC && ep->npc_size > 1) ? ep->npc_size : 1;
-                rc->entity_visual_mid_y[i] = ground + 0.75f + 0.25f * (float)ent_size;
-                rc->entity_visual_top_y[i] = ground + 1.5f + 0.5f * (float)ent_size;
+                rc->entity_visual_mid_y[i] = model_ground + 0.75f + 0.25f * (float)ent_size;
+                rc->entity_visual_top_y[i] = model_ground + 1.5f + 0.5f * (float)ent_size;
                 visual_height_tiles = (float)ent_size;
             }
             for (int vi = 0; vi < nv; vi++) {
@@ -4641,7 +4722,7 @@ static void render_draw_3d_world(RenderClient* rc) {
             }
             Vector3 clickbox_points[RENDER_CLICKBOX_PRISM_POINT_COUNT];
             int clickbox_n = render_build_entity_clickbox_prism_points(
-                ep, px, pz, ground, visual_height_tiles,
+                ep, px, pz, model_ground, visual_height_tiles,
                 clickbox_points, RENDER_CLICKBOX_PRISM_POINT_COUNT);
             for (int ci = 0; ci < clickbox_n; ci++) {
                 hull_append_projected_world_point(&hull_cam, clickbox_points[ci],
@@ -4970,7 +5051,7 @@ static void render_draw_overhead_status(RenderClient* rc, OsrsEnv* env) {
                 /* attack timer + style */
                 const char* style_str = "???";
                 Color style_col = WHITE;
-                int style = (npc->type == INF_NPC_JAD) ? npc->jad_attack_style : npc->attack_style;
+                int style = (npc->type == INF_NPC_JAD) ? inf_npc_jad(npc)->attack_style : npc->attack_style;
                 if (style == ATTACK_STYLE_MAGIC)  { style_str = "MAG"; style_col = BLUE; }
                 if (style == ATTACK_STYLE_RANGED) { style_str = "RNG"; style_col = GREEN; }
                 if (style == ATTACK_STYLE_MELEE)  { style_str = "MEL"; style_col = RED; }
@@ -5180,6 +5261,29 @@ static void render_ensure_minimap_surface(RenderClient* rc, int w, int h) {
     rc->minimap_surface_h = h;
 }
 
+static void render_draw_minimap_compass(RenderClient* rc, GuiState* gs, Rectangle compass) {
+    int masked = gs->minimap_compass_masked.id != 0;
+    Texture2D comp = masked ? gs->minimap_compass_masked : gui_asset(gs, "compass");
+    if (comp.id == 0) comp = gs->minimap_compass;
+    if (comp.id != 0) {
+        Rectangle src = {0, 0, (float)comp.width, (float)comp.height};
+        float draw_w = masked ? (float)comp.width : compass.width;
+        float draw_h = masked ? (float)comp.height : compass.height;
+        Rectangle dst = {
+            compass.x + compass.width * 0.5f,
+            compass.y + compass.height * 0.5f,
+            draw_w,
+            draw_h,
+        };
+        Vector2 origin = {draw_w * 0.5f, draw_h * 0.5f};
+        float angle_deg = rc->cam_yaw * (180.0f / 3.14159265f);
+        DrawTexturePro(comp, src, dst, origin, angle_deg, WHITE);
+    } else {
+        gui_draw_named_asset(gs, "resize_compass_mask", compass, WHITE);
+        gui_text_shadow(gs, "N", (int)compass.x + 16, (int)compass.y + 12, 14, GUI_TEXT_ORANGE);
+    }
+}
+
 /* Draw the minimap area at the top of the right-hand panel: dark backdrop, the
    circular minimap with arena tiles (terrain base color + walls + entity dots),
    the rotating compass at top-left, and four stat orbs (HP, prayer, run, spec).
@@ -5272,6 +5376,14 @@ static void render_draw_minimap_area(RenderClient* rc, OsrsEnv* env, Player* p) 
     DrawTexturePro(rc->minimap_surface.texture, surface_src, surface_dst,
                    (Vector2){0, 0}, 0.0f, WHITE);
 
+    Rectangle compass = {
+        (float)compass_x,
+        (float)compass_y,
+        (float)GUI_COMPASS_W,
+        (float)GUI_COMPASS_H,
+    };
+    render_draw_minimap_compass(rc, gs, compass);
+
     Rectangle cover = {
         (float)(map_x + GUI_MAP_SURROUND_X),
         (float)(map_y + GUI_MAP_SURROUND_Y),
@@ -5286,31 +5398,6 @@ static void render_draw_minimap_area(RenderClient* rc, OsrsEnv* env, Player* p) 
             Rectangle src = {0, 0, (float)chrome_sprite.width, (float)chrome_sprite.height};
             DrawTexturePro(chrome_sprite, src, cover, (Vector2){0, 0}, 0.0f, WHITE);
         }
-    }
-
-    Rectangle compass = {
-        (float)compass_x,
-        (float)compass_y,
-        (float)GUI_COMPASS_W,
-        (float)GUI_COMPASS_H,
-    };
-    Texture2D compass_tex = gui_asset(gs, "compass");
-    if (compass_tex.id == 0) compass_tex = gs->minimap_compass;
-    if (compass_tex.id != 0) {
-        Texture2D comp = compass_tex;
-        Rectangle src = {0, 0, (float)comp.width, (float)comp.height};
-        Rectangle dst = {
-            compass.x + compass.width * 0.5f,
-            compass.y + compass.height * 0.5f,
-            compass.width,
-            compass.height,
-        };
-        Vector2 origin = {compass.width * 0.5f, compass.height * 0.5f};
-        float angle_deg = -rc->cam_yaw * (180.0f / 3.14159265f);
-        DrawTexturePro(comp, src, dst, origin, angle_deg, WHITE);
-    } else {
-        gui_draw_named_asset(gs, "resize_compass_mask", compass, WHITE);
-        gui_text_shadow(gs, "N", (int)compass.x + 16, (int)compass.y + 12, 14, GUI_TEXT_ORANGE);
     }
 
     int orbs_x = map_x + GUI_ORBS_X;
@@ -5373,10 +5460,66 @@ static void render_draw_target_label(RenderClient* rc) {
     DrawText(label, x, 12, 16, COLOR_TEXT);
 }
 
+static int render_display_tick(OsrsEnv* env) {
+    if (env->encounter_def && env->encounter_state) {
+        return ((const EncounterDef*)env->encounter_def)->get_tick(
+            (EncounterState*)env->encounter_state,
+            (EncounterContext*)env->encounter_context);
+    }
+    return env->tick;
+}
+
 static int render_scene_is_pvp(OsrsEnv* env) {
     if (!env->encounter_def) return 1;
     const EncounterDef* def = (const EncounterDef*)env->encounter_def;
     return strcmp(def->name, "nh_pvp") == 0 || strcmp(def->name, "pvp") == 0;
+}
+
+static int render_scene_is_inferno(OsrsEnv* env) {
+    if (!env->encounter_def) return 0;
+    const EncounterDef* def = (const EncounterDef*)env->encounter_def;
+    return strcmp(def->name, "inferno") == 0;
+}
+
+static const char* render_control_hint_text(OsrsEnv* env) {
+    if (render_scene_is_inferno(env)) {
+        return "Right-drag: orbit  Mid-drag: pan  Scroll: zoom  D: debug  H: human  F8: lab";
+    }
+    return "Right-drag: orbit  Mid-drag: pan  Scroll: zoom  SPACE: pause  S: safe spots  D: debug  G: cycle entity  H: human";
+}
+
+static void render_draw_default_top_hud(RenderClient* rc, int display_tick) {
+    DrawText(TextFormat("Tick: %d", display_tick), 10, 12, 16, COLOR_TEXT);
+    render_draw_target_label(rc);
+
+    if (rc->entity_count >= 2) {
+        RenderEntity* p0 = &rc->entities[0];
+        RenderEntity* p1 = &rc->entities[1];
+        const char* hp_txt = TextFormat("P0: %d/%d   P1: %d/%d",
+            p0->current_hitpoints, p0->base_hitpoints,
+            p1->current_hitpoints, p1->base_hitpoints);
+        int hp_w = MeasureText(hp_txt, 16);
+        DrawText(hp_txt, RENDER_GRID_W - hp_w - 12, 12, 16, COLOR_TEXT);
+    }
+}
+
+static void render_draw_inferno_top_hud(OsrsEnv* env, int display_tick) {
+    InfernoState* s = render_inferno_state_from_env(env);
+    if (!s) {
+        DrawText(TextFormat("Tick: %d", display_tick), 10, 12, 16, COLOR_TEXT);
+        return;
+    }
+    DrawText(TextFormat("Tick: %d   Wave: %d / %d",
+        display_tick, s->wave + 1, INF_NUM_WAVES), 10, 12, 16, COLOR_TEXT);
+}
+
+static void render_draw_top_hud(RenderClient* rc, OsrsEnv* env) {
+    int display_tick = render_display_tick(env);
+    if (render_scene_is_inferno(env)) {
+        render_draw_inferno_top_hud(env, display_tick);
+        return;
+    }
+    render_draw_default_top_hud(rc, display_tick);
 }
 
 static void render_follow_pvp_fighter_midpoint(RenderClient* rc, OsrsEnv* env, double frame_dt) {
@@ -5501,13 +5644,13 @@ void pvp_render(OsrsEnv* env) {
 
             /* pending hits */
             int mag_hits = 0, rng_hits = 0;
-            for (int h = 0; h < is->player_pending_hit_count; h++) {
-                if (is->player_pending_hits[h].attack_style == ATTACK_STYLE_MAGIC) mag_hits++;
+            for (int h = 0; h < is->player_pending_hits.count; h++) {
+                if (is->player_pending_hits.hits[h].attack_style == ATTACK_STYLE_MAGIC) mag_hits++;
                 else rng_hits++;
             }
-            if (is->player_pending_hit_count > 0) {
+            if (is->player_pending_hits.count > 0) {
                 DrawText(TextFormat("INCOMING: %d (%dM %dR)",
-                    is->player_pending_hit_count, mag_hits, rng_hits),
+                    is->player_pending_hits.count, mag_hits, rng_hits),
                     dx, dy, fs, (Color){255, 150, 150, 255});
             }
         }
@@ -5525,26 +5668,8 @@ void pvp_render(OsrsEnv* env) {
             }
         }
 
-    int display_tick = env->tick;
-    if (env->encounter_def && env->encounter_state)
-        display_tick = ((const EncounterDef*)env->encounter_def)->get_tick(
-            (EncounterState*)env->encounter_state,
-            (EncounterContext*)env->encounter_context);
-    DrawText(TextFormat("Tick: %d", display_tick), 10, 12, 16, COLOR_TEXT);
-    render_draw_target_label(rc);
-
-    if (rc->entity_count >= 2) {
-        RenderEntity* p0 = &rc->entities[0];
-        RenderEntity* p1 = &rc->entities[1];
-        const char* hp_txt = TextFormat("P0: %d/%d   P1: %d/%d",
-            p0->current_hitpoints, p0->base_hitpoints,
-            p1->current_hitpoints, p1->base_hitpoints);
-        int hp_w = MeasureText(hp_txt, 16);
-        DrawText(hp_txt, RENDER_GRID_W - hp_w - 12, 12, 16, COLOR_TEXT);
-    }
-
-    DrawText("Right-drag: orbit  Mid-drag: pan  Scroll: zoom  SPACE: pause  S: safe spots  D: debug  G: cycle entity  H: human",
-             10, RENDER_WINDOW_H - 20, 10, COLOR_TEXT_DIM);
+    render_draw_top_hud(rc, env);
+    DrawText(render_control_hint_text(env), 10, RENDER_WINDOW_H - 20, 10, COLOR_TEXT_DIM);
 
     /* OSRS GUI panel system: shows selected entity's state.
        Renders in both 2D and 3D mode as a side panel overlay.

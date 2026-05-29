@@ -457,11 +457,43 @@ static inline int pvp_ranged_hit_delay_for_weapon(int distance, int is_special, 
     }
 }
 
-static void queue_hit(Player* attacker, Player* defender, int damage,
+static void pvp_remove_pending_hit(Player* attacker, int idx) {
+    if (attacker->num_pending_hits < 0 || attacker->num_pending_hits > MAX_PENDING_HITS) {
+        fprintf(stderr, "pvp pending-hit queue corrupt before remove count=%d\n",
+            attacker->num_pending_hits);
+        abort();
+    }
+    if (idx < 0 || idx >= attacker->num_pending_hits) {
+        fprintf(stderr, "pvp pending-hit queue invalid remove idx=%d count=%d\n",
+            idx, attacker->num_pending_hits);
+        abort();
+    }
+    for (int i = idx + 1; i < attacker->num_pending_hits; i++)
+        attacker->pending_hits[i - 1] = attacker->pending_hits[i];
+    attacker->num_pending_hits--;
+    memset(&attacker->pending_hits[attacker->num_pending_hits], 0,
+        sizeof(attacker->pending_hits[attacker->num_pending_hits]));
+}
+
+static void queue_hit(int tick, int attacker_idx, int defender_idx,
+                     Player* attacker, Player* defender, int damage,
                      AttackStyle style, int delay, int is_special, int hit_success,
                      int freeze_ticks, int heal_percent, int drain_type, int drain_percent,
                      int flat_heal) {
-    if (attacker->num_pending_hits >= MAX_PENDING_HITS) return;
+    if (attacker->num_pending_hits < 0 || attacker->num_pending_hits > MAX_PENDING_HITS) {
+        fprintf(stderr,
+            "pvp pending-hit queue corrupt tick=%d attacker=%d defender=%d count=%d\n",
+            tick, attacker_idx, defender_idx, attacker->num_pending_hits);
+        abort();
+    }
+    if (attacker->num_pending_hits >= MAX_PENDING_HITS) {
+        fprintf(stderr,
+            "pvp pending-hit queue overflow tick=%d attacker=%d defender=%d "
+            "count=%d delay=%d style=%d special=%d damage=%d\n",
+            tick, attacker_idx, defender_idx, attacker->num_pending_hits,
+            delay, style, is_special, damage);
+        abort();
+    }
 
     PendingHit* hit = &attacker->pending_hits[attacker->num_pending_hits++];
     hit->damage = damage;
@@ -598,10 +630,7 @@ static void process_pending_hits(OsrsEnv* env, int attacker_idx, int defender_id
         if (hit->ticks_until_hit < 0) {
             apply_damage(env, attacker_idx, defender_idx, hit);
 
-            for (int j = i; j < attacker->num_pending_hits - 1; j++) {
-                attacker->pending_hits[j] = attacker->pending_hits[j + 1];
-            }
-            attacker->num_pending_hits--;
+            pvp_remove_pending_hit(attacker, i);
             i--;
         }
     }
@@ -1019,7 +1048,8 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
             /* dark bow second arrow uses different delay formula */
             if (spec_item_idx == ITEM_DARK_BOW && i == 1)
                 this_delay = pvp_ranged_hit_delay_dbow_second(distance);
-            queue_hit(attacker, defender, sr.damage[i], hit_style, this_delay, 1,
+            queue_hit(env->tick, attacker_idx, defender_idx,
+                      attacker, defender, sr.damage[i], hit_style, this_delay, 1,
                       sr.damage[i] > 0, freeze_ticks, heal_percent, drain_type, drain_percent, flat_heal);
         }
 
@@ -1028,7 +1058,8 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
         /* ancient godsword blood sacrifice: 25 magic damage at 8 ticks + heal */
         if (spec_item_idx == ITEM_ANCIENT_GS && total_damage > 0) {
             int ags_heal = clamp((int)(defender->base_hitpoints * 0.15f), 0, 15);
-            queue_hit(attacker, defender, 25, ATTACK_STYLE_MAGIC, 8, 1, 1, 0, 0, 0, 0, ags_heal);
+            queue_hit(env->tick, attacker_idx, defender_idx,
+                      attacker, defender, 25, ATTACK_STYLE_MAGIC, 8, 1, 1, 0, 0, 0, 0, ags_heal);
         }
 
         /* morrigan's javelin phantom strike bleed */
@@ -1118,7 +1149,8 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
                 }
                 queued_freeze_ticks = 0;
             }
-            queue_hit(attacker, defender, damage, style, hit_delay, is_special,
+            queue_hit(env->tick, attacker_idx, defender_idx,
+                      attacker, defender, damage, style, hit_delay, is_special,
                       hit_success, queued_freeze_ticks, heal_percent, 0, 0, 0);
         }
         register_hit_calculated(env, attacker_idx, defender_idx, style, total_damage);

@@ -2,6 +2,54 @@
 /* prayer check and RNG: use shared encounter_prayer_correct_for_style(),
    encounter_rand_int(), encounter_rand_float() from osrs_combat.h */
 
+static EncounterPendingHit* inf_queue_npc_pending_hit(
+    InfernoState* s,
+    int npc_idx,
+    int ticks_remaining,
+    int damage,
+    AttackStyle attack_style,
+    int spell_type,
+    int hit_success
+) {
+    if (npc_idx < 0 || npc_idx >= INF_MAX_NPCS) {
+        fprintf(stderr, "inferno: invalid pending-hit npc slot %d\n", npc_idx);
+        abort();
+    }
+
+    InfNPC* npc = &s->npcs[npc_idx];
+    if (!npc->active) {
+        fprintf(stderr,
+            "inferno: pending-hit queued for inactive npc tick=%d slot=%d "
+            "type=%d delay=%d style=%d spell=%d damage=%d\n",
+            s->tick, npc_idx, npc->type, ticks_remaining, attack_style,
+            spell_type, damage);
+        abort();
+    }
+
+    EncounterPendingHit hit = {
+        .damage = damage,
+        .ticks_remaining = ticks_remaining,
+        .attack_style = attack_style,
+        .check_prayer = 0,
+        .spell_type = spell_type,
+        .hit_success = hit_success,
+        .elysian_reduced = 0,
+    };
+    return encounter_pending_hit_queue_push(
+        &npc->pending_hits, hit, "inferno npc", s->tick, npc_idx, npc->type);
+}
+
+static EncounterPendingHit* inf_queue_player_pending_hit(
+    InfernoState* s,
+    int npc_idx,
+    int npc_type,
+    EncounterPendingHit hit
+) {
+    hit.source_npc_slot = npc_idx;
+    return encounter_pending_hit_queue_push(
+        &s->player_pending_hits, hit, "inferno player", s->tick, npc_idx, npc_type);
+}
+
 static void inf_shuffle_spawns(InfernoState* s) {
     for (int i = 0; i < INF_NUM_SPAWN_POS; i++)
         s->spawn_order[i] = i;
@@ -72,15 +120,31 @@ static InfTargetArea inf_npc_current_target_area(const InfernoState* s, const In
     };
 }
 
-/* check if NPC at index i has LOS to its current target */
-static int inf_npc_has_los_direct(InfernoState* s, int i) {
-    InfNPC* npc = &s->npcs[i];
+static int inf_npc_has_los_to_area(
+    const InfernoState* s,
+    const InfNPC* npc,
+    int target_x,
+    int target_y,
+    int target_size
+) {
     const InfNPCStats* stats = &INF_NPC_STATS[npc->type];
-    InfTargetArea target = inf_npc_current_target_area(s, npc);
     return entity_has_line_of_sight(s->los_blockers, s->los_blocker_count,
-                                    npc->x, npc->y, npc->size,
-                                    target.x, target.y, target.size,
-                                    stats->attack_range);
+        npc->x, npc->y, npc->size,
+        target_x, target_y, target_size,
+        stats->attack_range);
+}
+
+static int inf_npc_has_los_to_tile(
+    const InfernoState* s, const InfNPC* npc, int target_x, int target_y
+) {
+    return inf_npc_has_los_to_area(s, npc, target_x, target_y, 1);
+}
+
+/* check if NPC at index i has LOS to its current target */
+static int inf_npc_has_los_direct(const InfernoState* s, int i) {
+    const InfNPC* npc = &s->npcs[i];
+    InfTargetArea target = inf_npc_current_target_area(s, npc);
+    return inf_npc_has_los_to_area(s, npc, target.x, target.y, target.size);
 }
 
 /* cached LOS check — lazy: computes on first access per tick, caches for reuse.
@@ -277,27 +341,6 @@ static void inf_reset_transition_diagnostics_for_restored_start(InfernoState* s)
     s->spark_damage_after_240 = 0.0f;
     s->zuk_hp_max_after_healer_spawn =
         s->zuk.healer_spawned && has_live_zuk ? zuk_hp : 0.0f;
-    s->redemption_proc_opportunities = 0;
-    s->redemption_zero_hit_proc_opportunities = 0;
-    s->redemption_proc_opportunities_after_240 = 0;
-    s->redemption_deaths_from_band = 0;
-    s->redemption_deaths_from_band_after_240 = 0;
-    s->redemption_deaths_from_above_band = 0;
-    s->redemption_heal_potential = 0.0f;
-    s->redemption_heal_potential_after_240 = 0.0f;
-    memset(s->redemption_proc_opportunities_by_type, 0,
-        sizeof(s->redemption_proc_opportunities_by_type));
-    memset(s->redemption_zero_hit_proc_opportunities_by_type, 0,
-        sizeof(s->redemption_zero_hit_proc_opportunities_by_type));
-    memset(s->redemption_deaths_from_band_by_type, 0,
-        sizeof(s->redemption_deaths_from_band_by_type));
-    memset(s->redemption_heal_potential_by_type, 0,
-        sizeof(s->redemption_heal_potential_by_type));
-    s->redemption_action_count = 0;
-    s->redemption_active_ticks = 0;
-    s->redemption_proc_count = 0;
-    s->redemption_zero_hit_proc_count = 0;
-    s->redemption_heal_done = 0.0f;
 
     InfZukHealerCounts healers = inf_zuk_healer_counts(s);
     s->total_zuk_healer_tags = healers.tagged_count;
@@ -350,34 +393,58 @@ static inline int inf_cardinal_contact_with_npc(int px, int py, int nx, int ny, 
     return dx + dy == 1;
 }
 
-static inline int inf_melee_fallback_possible(
-    const InfernoState* s, const InfNPC* npc, const InfNPCStats* stats,
+static inline int inf_npc_melee_contact_allows_attack_at_tile(
+    int player_x,
+    int player_y,
+    InfNPCType npc_type,
+    int npc_x,
+    int npc_y,
+    int npc_size,
+    int dist
+) {
+    if (dist != 1) return 0;
+    if (npc_type == INF_NPC_RANGER || npc_type == INF_NPC_MAGER)
+        return 1;
+    return inf_cardinal_contact_with_npc(
+        player_x, player_y, npc_x, npc_y, npc_size);
+}
+
+static inline int inf_melee_fallback_possible_at_tile(
+    int player_x, int player_y, const InfNPC* npc, const InfNPCStats* stats,
     int planned_style, int dist
 ) {
     if (!stats->can_melee || planned_style == ATTACK_STYLE_MELEE || dist != 1)
         return 0;
 
-    switch (npc->type) {
-        case INF_NPC_RANGER:
-        case INF_NPC_MAGER:
-            return 1;
-        case INF_NPC_BLOB:
-        case INF_NPC_JAD:
-            return inf_cardinal_contact_with_npc(
-                s->player.x, s->player.y, npc->x, npc->y, npc->size);
-        default:
-            return 0;
-    }
+    return inf_npc_melee_contact_allows_attack_at_tile(
+        player_x, player_y, npc->type, npc->x, npc->y, npc->size, dist);
+}
+
+static inline int inf_melee_fallback_possible(
+    const InfernoState* s, const InfNPC* npc, const InfNPCStats* stats,
+    int planned_style, int dist
+) {
+    return inf_melee_fallback_possible_at_tile(
+        s->player.x, s->player.y, npc, stats, planned_style, dist);
+}
+
+static inline int inf_attack_style_options_mask_at_tile(
+    int player_x, int player_y, const InfNPC* npc, const InfNPCStats* stats,
+    int planned_style, int dist
+) {
+    int mask = inf_attack_style_mask_bit(planned_style);
+    if (inf_melee_fallback_possible_at_tile(
+            player_x, player_y, npc, stats, planned_style, dist))
+        mask |= INF_STYLE_MASK_MELEE;
+    return mask;
 }
 
 static inline int inf_attack_style_options_mask(
     const InfernoState* s, const InfNPC* npc, const InfNPCStats* stats,
     int planned_style, int dist
 ) {
-    int mask = inf_attack_style_mask_bit(planned_style);
-    if (inf_melee_fallback_possible(s, npc, stats, planned_style, dist))
-        mask |= INF_STYLE_MASK_MELEE;
-    return mask;
+    return inf_attack_style_options_mask_at_tile(
+        s->player.x, s->player.y, npc, stats, planned_style, dist);
 }
 
 static inline int inf_attack_style_from_mask(int style_mask) {
@@ -385,6 +452,46 @@ static inline int inf_attack_style_from_mask(int style_mask) {
     if (style_mask == INF_STYLE_MASK_RANGED) return ATTACK_STYLE_RANGED;
     if (style_mask == INF_STYLE_MASK_MAGIC) return ATTACK_STYLE_MAGIC;
     return ATTACK_STYLE_NONE;
+}
+
+static inline int inf_style_count_from_mask(int style_mask) {
+    int mask = style_mask & (INF_STYLE_MASK_MELEE |
+        INF_STYLE_MASK_RANGED | INF_STYLE_MASK_MAGIC);
+    return ((mask & INF_STYLE_MASK_MELEE) != 0) +
+        ((mask & INF_STYLE_MASK_RANGED) != 0) +
+        ((mask & INF_STYLE_MASK_MAGIC) != 0);
+}
+
+static inline int inf_npc_style_max_hit(
+    const InfNPCStats* stats, int style
+) {
+    if (style == ATTACK_STYLE_NONE) return 0;
+    int max_hit = osrs_npc_max_hit(style,
+        stats->str_level, stats->range_level,
+        stats->melee_str_bonus, stats->ranged_str_bonus,
+        stats->magic_base_dmg, stats->magic_dmg_pct);
+    if (stats->max_hit_cap > 0 && max_hit > stats->max_hit_cap)
+        max_hit = stats->max_hit_cap;
+    return max_hit;
+}
+
+static inline int inf_npc_style_mask_max_hit(
+    const InfNPCStats* stats, int style_mask
+) {
+    int max_hit = 0;
+    if (style_mask & INF_STYLE_MASK_MELEE) {
+        int style_max = inf_npc_style_max_hit(stats, ATTACK_STYLE_MELEE);
+        if (style_max > max_hit) max_hit = style_max;
+    }
+    if (style_mask & INF_STYLE_MASK_RANGED) {
+        int style_max = inf_npc_style_max_hit(stats, ATTACK_STYLE_RANGED);
+        if (style_max > max_hit) max_hit = style_max;
+    }
+    if (style_mask & INF_STYLE_MASK_MAGIC) {
+        int style_max = inf_npc_style_max_hit(stats, ATTACK_STYLE_MAGIC);
+        if (style_max > max_hit) max_hit = style_max;
+    }
+    return max_hit;
 }
 
 static inline int inf_attack_style_obs_preview(int style_mask) {
@@ -404,6 +511,195 @@ static inline int inf_attack_style_telegraph_mask(
     if (npc->type == INF_NPC_JAD)
         return inf_attack_style_mask_bit(planned_style);
     return inf_attack_style_options_mask(s, npc, stats, planned_style, dist);
+}
+
+typedef struct {
+    int edge_distance;
+    int style_mask;
+    int telegraph_style_mask;
+    int can_attack_if_ready;
+    int can_attack_this_tick;
+} InfNpcPlayerThreat;
+
+static inline int inf_npc_planned_style_for_current_state(const InfNPC* npc) {
+    if (npc->type == INF_NPC_BLOB && npc->blob_scanned_prayer >= 0) {
+        OverheadPrayer scanned = (OverheadPrayer)npc->blob_scanned_prayer;
+        if (scanned == PRAYER_PROTECT_MAGIC) return ATTACK_STYLE_RANGED;
+        if (scanned == PRAYER_PROTECT_RANGED) return ATTACK_STYLE_MAGIC;
+    }
+    if (npc->type == INF_NPC_JAD)
+        return inf_npc_jad_const(npc)->attack_style;
+    return npc->attack_style;
+}
+
+static inline int inf_npc_type_has_player_pressure(InfNPCType type) {
+    return type != INF_NPC_NIBBLER &&
+        type != INF_NPC_ZUK &&
+        type != INF_NPC_ZUK_SHIELD &&
+        type != INF_NPC_HEALER_ZUK;
+}
+
+static inline InfNpcPlayerThreat inf_npc_player_threat(
+    const InfernoState* s,
+    const InfNPC* npc
+) {
+    InfNpcPlayerThreat threat = {0};
+    if (!npc->active || npc->death_ticks > 0)
+        return threat;
+    if (!inf_npc_type_has_player_pressure(npc->type))
+        return threat;
+
+    InfTargetArea target = inf_npc_current_target_area(s, npc);
+    if (!target.is_player)
+        return threat;
+
+    const InfNPCStats* stats = &INF_NPC_STATS[npc->type];
+    int dist = encounter_dist_to_npc(
+        s->player.x, s->player.y, npc->x, npc->y, npc->size);
+    threat.edge_distance = dist;
+    if (dist == 0 || dist > stats->attack_range)
+        return threat;
+    if (stats->attack_range == 1 &&
+            !inf_npc_melee_contact_allows_attack_at_tile(
+                s->player.x, s->player.y, npc->type,
+                npc->x, npc->y, npc->size, dist))
+        return threat;
+
+    if (stats->attack_range > 1 &&
+            !(npc->type == INF_NPC_BLOB && npc->blob_scanned_prayer >= 0) &&
+            !inf_npc_has_los_to_tile(s, npc, s->player.x, s->player.y))
+        return threat;
+
+    threat.can_attack_if_ready = 1;
+
+    int planned_style = inf_npc_planned_style_for_current_state(npc);
+    if (planned_style != ATTACK_STYLE_NONE) {
+        threat.style_mask = inf_attack_style_options_mask(
+            s, npc, stats, planned_style, dist);
+        threat.telegraph_style_mask = inf_attack_style_telegraph_mask(
+            s, npc, stats, planned_style, dist);
+    }
+
+    threat.can_attack_this_tick = npc->attack_timer <= 1 &&
+        npc->stun_timer == 0 &&
+        npc->dig_freeze_timer == 0 &&
+        npc->dig_attack_delay == 0;
+    return threat;
+}
+
+static inline int inf_npc_is_live_player_target(
+    const InfernoState* s,
+    int npc_idx
+) {
+    if (npc_idx < 0 || npc_idx >= INF_MAX_NPCS) return 0;
+    const InfNPC* npc = &s->npcs[npc_idx];
+    return npc->active && npc->death_ticks == 0 && npc->hp > 0 &&
+        npc->type != INF_NPC_ZUK_SHIELD;
+}
+
+typedef struct {
+    int if_ready_total;
+    int if_ready_melee;
+    int if_ready_ranged;
+    int if_ready_magic;
+    int if_ready_max_hit;
+    int if_ready_sum_max_hit;
+    int this_tick_total;
+    int this_tick_melee;
+    int this_tick_ranged;
+    int this_tick_magic;
+    int this_tick_max_hit;
+    int this_tick_sum_max_hit;
+    int timer_lte_1;
+    int timer_lte_2;
+    int timer_lte_4;
+    int if_ready_style_count;
+    int this_tick_style_count;
+    int nearest_timer;
+} InfNpcPressureSummary;
+
+static inline int inf_npc_pressure_timer(const InfNPC* npc) {
+    return npc->attack_timer > 0 ? npc->attack_timer : 1;
+}
+
+static inline int inf_npc_attack_unblocked_for_pressure(const InfNPC* npc) {
+    return npc->stun_timer == 0 &&
+        npc->dig_freeze_timer == 0 &&
+        npc->dig_attack_delay == 0;
+}
+
+static inline InfNpcPressureSummary inf_npc_pressure_summary(
+    const InfernoState* s
+) {
+    InfNpcPressureSummary out = { .nearest_timer = 999 };
+    int if_ready_style_mask = 0;
+    int this_tick_style_mask = 0;
+
+    for (int i = 0; i < INF_MAX_NPCS; i++) {
+        const InfNPC* npc = &s->npcs[i];
+        InfNpcPlayerThreat threat = inf_npc_player_threat(s, npc);
+        if (!threat.can_attack_if_ready || !threat.style_mask)
+            continue;
+
+        const InfNPCStats* stats = &INF_NPC_STATS[npc->type];
+        int max_hit = inf_npc_style_mask_max_hit(stats, threat.style_mask);
+        out.if_ready_total++;
+        if (threat.style_mask & INF_STYLE_MASK_MELEE) out.if_ready_melee++;
+        if (threat.style_mask & INF_STYLE_MASK_RANGED) out.if_ready_ranged++;
+        if (threat.style_mask & INF_STYLE_MASK_MAGIC) out.if_ready_magic++;
+        if (max_hit > out.if_ready_max_hit) out.if_ready_max_hit = max_hit;
+        out.if_ready_sum_max_hit += max_hit;
+        if_ready_style_mask |= threat.style_mask;
+
+        if (inf_npc_attack_unblocked_for_pressure(npc)) {
+            int timer = inf_npc_pressure_timer(npc);
+            if (timer < out.nearest_timer) out.nearest_timer = timer;
+            if (timer <= 1) out.timer_lte_1++;
+            if (timer <= 2) out.timer_lte_2++;
+            if (timer <= 4) out.timer_lte_4++;
+        }
+
+        if (!threat.can_attack_this_tick)
+            continue;
+
+        out.this_tick_total++;
+        if (threat.style_mask & INF_STYLE_MASK_MELEE) out.this_tick_melee++;
+        if (threat.style_mask & INF_STYLE_MASK_RANGED) out.this_tick_ranged++;
+        if (threat.style_mask & INF_STYLE_MASK_MAGIC) out.this_tick_magic++;
+        if (max_hit > out.this_tick_max_hit) out.this_tick_max_hit = max_hit;
+        out.this_tick_sum_max_hit += max_hit;
+        this_tick_style_mask |= threat.style_mask;
+    }
+
+    out.if_ready_style_count = inf_style_count_from_mask(if_ready_style_mask);
+    out.this_tick_style_count = inf_style_count_from_mask(this_tick_style_mask);
+    return out;
+}
+
+static inline int inf_barrage_total_target_count(
+    const InfernoState* s,
+    int primary_idx
+) {
+    if (primary_idx < 0 || primary_idx >= INF_MAX_NPCS) return 0;
+    const InfNPC* primary = &s->npcs[primary_idx];
+    if (!primary->active || primary->death_ticks > 0 ||
+            primary->type == INF_NPC_ZUK_SHIELD)
+        return 0;
+
+    int count = 1;
+    for (int i = 0; i < INF_MAX_NPCS && count < BARRAGE_MAX_HITS; i++) {
+        if (i == primary_idx) continue;
+        const InfNPC* npc = &s->npcs[i];
+        if (!npc->active || npc->death_ticks > 0 ||
+                npc->type == INF_NPC_ZUK_SHIELD)
+            continue;
+
+        int dx = npc->x - primary->x;
+        int dy = npc->y - primary->y;
+        if (dx >= -1 && dx <= 1 && dy >= -1 && dy <= 1)
+            count++;
+    }
+    return count;
 }
 
 static inline int inf_pending_hit_obs_timer(const EncounterPendingHit* ph) {
@@ -471,7 +767,7 @@ static inline EncounterProjectileTiming inf_player_projectile_timing(
     return encounter_projectile_timing(distance, 1, kind, options);
 }
 
-static inline int inf_jad_roll_primary_style(uint32_t* rng_state) {
+static inline AttackStyle inf_jad_roll_primary_style(uint32_t* rng_state) {
     return (encounter_rand_int(rng_state, 2) == 0)
         ? ATTACK_STYLE_RANGED
         : ATTACK_STYLE_MAGIC;
@@ -533,13 +829,14 @@ static inline int inf_npc_death_anim_id(const InfNPC* npc, const NpcModelMapping
     }
 }
 
-static inline int inf_choose_attack_style_for_tick(
+static inline AttackStyle inf_choose_attack_style_for_tick(
     uint32_t* rng_state, int style_mask
 ) {
-    int primary_style = inf_attack_style_from_mask(style_mask & ~INF_STYLE_MASK_MELEE);
+    AttackStyle primary_style = (AttackStyle)inf_attack_style_from_mask(
+        style_mask & ~INF_STYLE_MASK_MELEE);
     if ((style_mask & INF_STYLE_MASK_MELEE) && primary_style != ATTACK_STYLE_NONE)
         return (encounter_rand_int(rng_state, 2) == 0) ? ATTACK_STYLE_MELEE : primary_style;
-    return inf_attack_style_from_mask(style_mask);
+    return (AttackStyle)inf_attack_style_from_mask(style_mask);
 }
 
 
@@ -597,14 +894,23 @@ static InfConfig inf_default_config(void) {
         .loadout_profile_mode = INF_LOADOUT_PROFILE_MODE_MAX_ONLY,
         .budget_loadout_fraction = 0.0f,
         .damage_reward_coeff = 0.0f,
+        .offensive_prayer_reward_coeff = 0.0f,
         .shield_penalty_coeff = 0.0f,
         .tag_reward_coeff = 0.0f,
         .late_start_supply_profile_scale = 1.0f,
+        .curriculum_agent = 0,
+        .curriculum_supply_jitter_mode = INF_CURRICULUM_SUPPLY_MODE_OFF,
+        .curriculum_supply_shared_jitter = 0.0f,
+        .curriculum_supply_brew_jitter = 0.0f,
+        .curriculum_supply_restore_jitter = 0.0f,
+        .curriculum_no_brew_mode = INF_CURRICULUM_SUPPLY_MODE_OFF,
+        .curriculum_no_brew_frac = 0.0f,
         .supply_milestone_brew_reward_coeff = 0.0f,
         .supply_milestone_restore_reward_coeff = 0.0f,
         .death_penalty_coeff = 0.0f,
         .terminal_penalty_enabled = 0,
         .step_out_forecast_obs_enabled = 1,
+        .step_out_forecast_obs_mode = INF_STEP_OUT_FORECAST_MODE_EXACT_ROLLOUT,
         .phase_900_bonus = 0.0f,
         .phase_600_bonus = 0.0f,
         .phase_300_bonus = 0.0f,
@@ -634,6 +940,7 @@ static InfConfig inf_default_config(void) {
         .oracle_mode = 0,
         .shield_tag_reward_coeff = 0.0f,
         .joseph_reward_mode = INF_JOSEPH_REWARD_MODE_OFF,
+        .prayer_switch_fail_prob = 0.0f,
     };
 }
 

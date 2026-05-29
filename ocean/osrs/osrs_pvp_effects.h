@@ -40,8 +40,9 @@ static OsrsModel* effect_find_model(
     ModelCache* projectile_model_cache
 ) {
     if (!meta || meta->model_id < 0) return NULL;
-    uint32_t model_ids[2] = {
+    uint32_t model_ids[3] = {
         OSRS_SPOTANIM_MODEL_BASE + meta->id,
+        OSRS_SPOTANIM_RECOLOR_MODEL_BASE | meta->id,
         (uint32_t)meta->model_id,
     };
     ModelCache* caches[3] = {
@@ -49,7 +50,7 @@ static OsrsModel* effect_find_model(
         model_cache,
         secondary_model_cache,
     };
-    for (int m = 0; m < 2; m++) {
+    for (int m = 0; m < 3; m++) {
         for (int c = 0; c < 3; c++) {
             OsrsModel* om = effect_find_model_in_cache(caches[c], model_ids[m]);
             if (om) return om;
