@@ -951,8 +951,8 @@ static void inf_tick_player_ctx(
                         s->player.base_hitpoints
                     );
                     int def_roll = (ns->def_level + 9) * (ns->ranged_def_bonus + 64);
-                    int hit_success = encounter_rand_float(&s->rng_state) <
-                        osrs_hit_chance(attack_effects.attack_roll, def_roll);
+                    int hit_success = encounter_roll_hit_chance(
+                        &s->rng_state, attack_effects.attack_roll, def_roll);
                     if (hit_success) {
                         total_dmg = encounter_rand_int(&s->rng_state, attack_effects.max_hit + 1);
                     }
@@ -1031,7 +1031,7 @@ static int inf_roll_delayed_jad_damage(
         attack_style, stats->melee_style);
     int def_roll = osrs_player_def_roll_vs_npc(
         s->player.current_defence, s->player.current_magic, def_bonus, attack_style);
-    if (encounter_rand_float(&s->rng_state) >= osrs_hit_chance(att_roll, def_roll))
+    if (!encounter_roll_hit_chance(&s->rng_state, att_roll, def_roll))
         dmg = 0;
     return dmg;
 }
