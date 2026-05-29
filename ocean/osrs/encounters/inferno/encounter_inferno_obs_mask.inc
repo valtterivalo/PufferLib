@@ -78,6 +78,10 @@ static inline float inf_obs_norm_range_deficit(int deficit) {
     return value > 1.0f ? 1.0f : value;
 }
 
+static inline float inf_obs_norm_npc_size(int size) {
+    return (float)size / 7.0f;
+}
+
 static void inf_refresh_current_obs_slots_ctx(InfernoState* s, const InfernoContext* ctx) {
     int obs_slots[INF_OBS_NPCS];
     for (int j = 0; j < INF_OBS_NPCS; j++) obs_slots[j] = -1;
@@ -369,7 +373,7 @@ static void inf_write_obs_ctx(
         int has_targeted = 1;
         int has_meleer_dig = (type == INF_NPC_MELEER);
 
-        int num_features = 10;
+        int num_features = 11;
         if (has_timer) num_features += 1;
         if (has_style) num_features += 3;
         if (has_los) num_features += 1;
@@ -385,6 +389,7 @@ static void inf_write_obs_ctx(
             obs[i++] = (float)npc->hp / (float)npc->max_hp;
             obs[i++] = (float)(npc->x - px) / (float)INF_ARENA_WIDTH;
             obs[i++] = (float)(npc->y - py) / (float)INF_ARENA_HEIGHT;
+            obs[i++] = inf_obs_norm_npc_size(npc->size);
             if (has_timer) obs[i++] = (float)npc->attack_timer / 10.0f;
 
             if (has_style) {

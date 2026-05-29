@@ -1,7 +1,7 @@
 #line 5216 "encounter_inferno.h"
 /* obs layout: player + Zuk phase + pillars + NPC slots + step-out forecast + pending hits + pending Zuk healer sparks */
 #define INF_PLAYER_OBS_SIZE 75
-#define INF_BASE_NPC_OBS_SIZE 859
+#define INF_BASE_NPC_OBS_SIZE 896
 #define INF_TOTAL_NPC_OBS_SIZE INF_BASE_NPC_OBS_SIZE
 #define INF_STEP_OUT_FORECAST_HORIZON 4
 #define INF_STEP_OUT_FORECAST_TICK_FEATURES 7
@@ -305,6 +305,11 @@ static void inf_step_out_forecast_npc_attack(
     int dist = encounter_dist_to_npc(
         s->player.x, s->player.y, npc->x, npc->y, npc->size);
     if (dist == 0 || dist > stats->attack_range) return;
+    if (stats->attack_range == 1 &&
+            !inf_npc_melee_contact_allows_attack_at_tile(
+                s->player.x, s->player.y, npc->type,
+                npc->x, npc->y, npc->size, dist))
+        return;
 
     if (npc->type == INF_NPC_BLOB && npc->blob_scanned_prayer < 0) {
         npc->blob_scanned_prayer = (int)s->player.prayer;
@@ -425,6 +430,11 @@ static void inf_step_out_forecast_fast_static_npc(
     int dist = encounter_dist_to_npc(
         action->land_x, action->land_y, npc->x, npc->y, npc->size);
     if (dist == 0 || dist > stats->attack_range) return;
+    if (stats->attack_range == 1 &&
+            !inf_npc_melee_contact_allows_attack_at_tile(
+                action->land_x, action->land_y, npc->type,
+                npc->x, npc->y, npc->size, dist))
+        return;
 
     int has_los_now = 1;
     if (stats->attack_range > 1)
@@ -677,17 +687,8 @@ static int inf_forecast_local_melee_fallback_possible_at_tile(
     if (!stats->can_melee || planned_style == ATTACK_STYLE_MELEE || dist != 1)
         return 0;
 
-    switch (npc->type) {
-        case INF_NPC_RANGER:
-        case INF_NPC_MAGER:
-            return 1;
-        case INF_NPC_BLOB:
-        case INF_NPC_JAD:
-            return inf_cardinal_contact_with_npc(
-                player_x, player_y, npc->x, npc->y, npc->size);
-        default:
-            return 0;
-    }
+    return inf_npc_melee_contact_allows_attack_at_tile(
+        player_x, player_y, npc->type, npc->x, npc->y, npc->size, dist);
 }
 
 static int inf_forecast_local_attack_style_options_mask_at_tile(
@@ -856,6 +857,11 @@ static void inf_forecast_local_attack_npc(
     int dist = encounter_dist_to_npc(
         action->land_x, action->land_y, npc->x, npc->y, npc->size);
     if (dist == 0 || dist > stats->attack_range) return;
+    if (stats->attack_range == 1 &&
+            !inf_npc_melee_contact_allows_attack_at_tile(
+                action->land_x, action->land_y, (InfNPCType)npc->type,
+                npc->x, npc->y, npc->size, dist))
+        return;
 
     if (npc->type == INF_NPC_BLOB && npc->blob_scanned_prayer < 0) {
         npc->blob_scanned_prayer = (int)s->player.prayer;

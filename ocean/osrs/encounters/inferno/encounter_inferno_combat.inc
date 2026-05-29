@@ -703,6 +703,11 @@ static void inf_npc_attack_ctx(InfernoState* s, InfernoContext* ctx, int idx) {
     int dist = encounter_dist_to_npc(s->player.x, s->player.y,
                                       npc->x, npc->y, npc->size);
     if (dist == 0 || dist > stats->attack_range) return;
+    if (stats->attack_range == 1 &&
+            !inf_npc_melee_contact_allows_attack_at_tile(
+                s->player.x, s->player.y, npc->type,
+                npc->x, npc->y, npc->size, dist))
+        return;
 
     /* blob prayer reading: 2-phase attack with attack_speed = 3.
        scan tick: read player prayer, set timer, return (shows scan animation).

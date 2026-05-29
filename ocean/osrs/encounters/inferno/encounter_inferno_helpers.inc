@@ -413,6 +413,22 @@ static inline int inf_cardinal_contact_with_npc(int px, int py, int nx, int ny, 
     return dx + dy == 1;
 }
 
+static inline int inf_npc_melee_contact_allows_attack_at_tile(
+    int player_x,
+    int player_y,
+    InfNPCType npc_type,
+    int npc_x,
+    int npc_y,
+    int npc_size,
+    int dist
+) {
+    if (dist != 1) return 0;
+    if (npc_type == INF_NPC_RANGER || npc_type == INF_NPC_MAGER)
+        return 1;
+    return inf_cardinal_contact_with_npc(
+        player_x, player_y, npc_x, npc_y, npc_size);
+}
+
 static inline int inf_melee_fallback_possible_at_tile(
     int player_x, int player_y, const InfNPC* npc, const InfNPCStats* stats,
     int planned_style, int dist
@@ -420,17 +436,8 @@ static inline int inf_melee_fallback_possible_at_tile(
     if (!stats->can_melee || planned_style == ATTACK_STYLE_MELEE || dist != 1)
         return 0;
 
-    switch (npc->type) {
-        case INF_NPC_RANGER:
-        case INF_NPC_MAGER:
-            return 1;
-        case INF_NPC_BLOB:
-        case INF_NPC_JAD:
-            return inf_cardinal_contact_with_npc(
-                player_x, player_y, npc->x, npc->y, npc->size);
-        default:
-            return 0;
-    }
+    return inf_npc_melee_contact_allows_attack_at_tile(
+        player_x, player_y, npc->type, npc->x, npc->y, npc->size, dist);
 }
 
 static inline int inf_melee_fallback_possible(
@@ -571,6 +578,11 @@ static inline InfNpcPlayerThreat inf_npc_player_threat(
         s->player.x, s->player.y, npc->x, npc->y, npc->size);
     threat.edge_distance = dist;
     if (dist == 0 || dist > stats->attack_range)
+        return threat;
+    if (stats->attack_range == 1 &&
+            !inf_npc_melee_contact_allows_attack_at_tile(
+                s->player.x, s->player.y, npc->type,
+                npc->x, npc->y, npc->size, dist))
         return threat;
 
     if (stats->attack_range > 1 &&

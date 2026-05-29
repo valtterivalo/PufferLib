@@ -2275,6 +2275,7 @@ static void test_tagged_jad_healer_melee_geometry(void) {
 
     InfernoState diagonal_state = make_test_state(5, 5);
     InfernoState cardinal_state = make_test_state(5, 5);
+    InfernoState meleer_diagonal_state = make_test_state(5, 5);
 
     diagonal_state.player.current_defence = 99;
     diagonal_state.player.current_magic = 99;
@@ -2286,6 +2287,11 @@ static void test_tagged_jad_healer_melee_geometry(void) {
     cardinal_state.player.prayer = PRAYER_NONE;
     cardinal_state.weapon_set = INF_GEAR_MAGE;
 
+    meleer_diagonal_state.player.current_defence = 99;
+    meleer_diagonal_state.player.current_magic = 99;
+    meleer_diagonal_state.player.prayer = PRAYER_NONE;
+    meleer_diagonal_state.weapon_set = INF_GEAR_MAGE;
+
     diagonal_state.npcs[0] = make_test_npc(INF_NPC_HEALER_JAD, 6, 6, 1);
     diagonal_state.npcs[0].active = 1;
     diagonal_state.npcs[0].aggro_target = -1;
@@ -2294,8 +2300,13 @@ static void test_tagged_jad_healer_melee_geometry(void) {
     cardinal_state.npcs[0].active = 1;
     cardinal_state.npcs[0].aggro_target = -1;
 
+    meleer_diagonal_state.npcs[0] = make_test_npc(INF_NPC_MELEER, 6, 6, 1);
+    meleer_diagonal_state.npcs[0].active = 1;
+    meleer_diagonal_state.npcs[0].aggro_target = -1;
+
     inf_npc_attack(&diagonal_state, 0);
     inf_npc_attack(&cardinal_state, 0);
+    inf_npc_attack(&meleer_diagonal_state, 0);
 
     ASSERT_INT_EQ("diagonal healer does not attack", diagonal_state.npcs[0].attacked_this_tick, 0);
     ASSERT_INT_EQ("diagonal healer keeps attack style none",
@@ -2303,6 +2314,10 @@ static void test_tagged_jad_healer_melee_geometry(void) {
     ASSERT_INT_EQ("cardinal healer attacks", cardinal_state.npcs[0].attacked_this_tick, 1);
     ASSERT_INT_EQ("cardinal healer uses melee",
                   cardinal_state.npcs[0].attack_style_this_tick, ATTACK_STYLE_MELEE);
+    ASSERT_INT_EQ("diagonal pure meleer does not attack",
+                  meleer_diagonal_state.npcs[0].attacked_this_tick, 0);
+    ASSERT_INT_EQ("diagonal pure meleer keeps attack style none",
+                  meleer_diagonal_state.npcs[0].attack_style_this_tick, ATTACK_STYLE_NONE);
 }
 
 static void test_overlap_shuffle_hold_after_recent_target_click(void) {
@@ -3292,7 +3307,7 @@ static void test_triple_jad_pending_threats_fit_obs_layout(void) {
 
     float obs[INF_NUM_OBS];
     inf_write_obs((EncounterState*)&state, obs);
-    ASSERT_INT_EQ("inferno obs shape includes exact spark slots", INF_NUM_OBS, 1530);
+    ASSERT_INT_EQ("inferno obs shape includes exact spark slots", INF_NUM_OBS, 1567);
 }
 
 static void test_inferno_obs_shape_includes_step_out_forecast_features(void) {
@@ -3312,13 +3327,13 @@ static void test_inferno_obs_shape_includes_step_out_forecast_features(void) {
     ASSERT_INT_EQ("player obs includes NPC pressure summary",
         INF_PLAYER_OBS_SIZE, 75);
     ASSERT_INT_EQ("npc obs includes loadout reachability signals",
-        INF_TOTAL_NPC_OBS_SIZE, 859);
+        INF_TOTAL_NPC_OBS_SIZE, 896);
     ASSERT_INT_EQ("step-out forecast covers every movement action",
         INF_STEP_OUT_FORECAST_OBS_SIZE, 200);
     ASSERT_INT_EQ("inferno obs shape includes exact spark landings",
         INF_PENDING_SPARK_OBS_SIZE, 224);
     ASSERT_INT_EQ("inferno obs shape includes reachability pass",
-        INF_NUM_OBS, 1530);
+        INF_NUM_OBS, 1567);
     ASSERT_INFERNO_SOURCE_NOT_CONTAINS("armor_tank state is removed",
         "armor_tank");
     ASSERT_INFERNO_SOURCE_NOT_CONTAINS("extra npc obs scaffold is removed",
@@ -3578,7 +3593,7 @@ static int inferno_obs_slot_feature_count(int slot_idx) {
     int has_targeted = 1;
     int has_meleer_dig = (type == INF_NPC_MELEER);
 
-    return 10 + has_timer + 3 * has_style + has_los + 3 * has_scan +
+    return 11 + has_timer + 3 * has_style + has_los + 3 * has_scan +
         4 * has_target_category + has_targeted + 1 + 6 + 3 * has_meleer_dig;
 }
 
@@ -3620,8 +3635,20 @@ static int inferno_obs_slot_barrage_count_index(int slot_idx) {
     int has_timer = (type != INF_NPC_NIBBLER && type != INF_NPC_HEALER_JAD &&
         type != INF_NPC_ZUK_SHIELD);
 
-    return inferno_obs_slot_start(slot_idx) + 3 + has_timer +
+    return inferno_obs_slot_start(slot_idx) + 4 + has_timer +
         3 * has_style + has_los + 3 * has_scan;
+}
+
+static int inferno_obs_slot_size_index(int slot_idx) {
+    return inferno_obs_slot_start(slot_idx) + 3;
+}
+
+static int inferno_obs_slot_npc_los_index(int slot_idx) {
+    int type = inferno_obs_slot_type(slot_idx);
+    int has_timer = (type != INF_NPC_NIBBLER && type != INF_NPC_HEALER_JAD &&
+        type != INF_NPC_ZUK_SHIELD);
+    int has_style = (type == INF_NPC_BLOB || type == INF_NPC_JAD);
+    return inferno_obs_slot_start(slot_idx) + 4 + has_timer + 3 * has_style;
 }
 
 static int inferno_obs_slot_edge_distance_index(int slot_idx) {
@@ -3795,6 +3822,17 @@ static void test_npc_threat_obs_respects_overlap_range_and_stun(void) {
     ASSERT_INT_EQ("standing under frozen meleer is not pressure",
         inf_npc_pressure_summary(&under).if_ready_total, 0);
 
+    InfernoState diagonal;
+    init_threat_obs_state(&diagonal, 10, 10);
+    add_threat_obs_npc(&diagonal, 0, INF_NPC_MELEER, 11, 11);
+    diagonal.npcs[0].frozen_ticks = 8;
+    InfNpcPlayerThreat diagonal_threat =
+        inf_npc_player_threat(&diagonal, &diagonal.npcs[0]);
+    ASSERT_INT_EQ("frozen meleer diagonal corner contact is not attackable",
+        diagonal_threat.can_attack_if_ready, 0);
+    ASSERT_INT_EQ("frozen meleer diagonal corner contact is not pressure",
+        inf_npc_pressure_summary(&diagonal).if_ready_total, 0);
+
     InfernoState far;
     init_threat_obs_state(&far, 10, 10);
     add_threat_obs_npc(&far, 0, INF_NPC_MELEER, 13, 10);
@@ -3895,6 +3933,8 @@ static void test_player_attackability_obs_exposes_current_loadout_and_los(void) 
     inf_write_obs((EncounterState*)&state, obs);
     int obs_slot = inf_find_target_obs_slot(&state, 0);
     ASSERT_INT_EQ("range test ranger has obs slot", obs_slot >= 0, 1);
+    ASSERT_FLOAT_NEAR("ranger size obs is normalized",
+        obs[inferno_obs_slot_size_index(obs_slot)], 3.0f / 7.0f, 1e-6f);
     ASSERT_FLOAT_NEAR("blowpipe cannot attack distance ten ranger",
         obs[inferno_obs_slot_player_can_attack_index(obs_slot)], 0.0f, 1e-6f);
     ASSERT_FLOAT_NEAR("player has LOS to distance ten ranger",
@@ -6703,10 +6743,10 @@ static void test_zuk_set_obs_los_uses_current_target(void) {
     float obs[INF_NUM_OBS];
     inf_write_obs((EncounterState*)&state, obs);
 
-    int mager_start = inferno_obs_slot_start(0);
     int mager_target_category = inferno_obs_slot_target_category_start(0);
     ASSERT_INT_EQ("mager occupies first obs slot", state.current_obs_slots[0], 0);
-    ASSERT_FLOAT_NEAR("mager los follows shield target", obs[mager_start + 4], 1.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("mager los follows shield target",
+        obs[inferno_obs_slot_npc_los_index(0)], 1.0f, 1e-6f);
     ASSERT_FLOAT_NEAR("mager target_shield stays on", obs[mager_target_category + 2], 1.0f, 1e-6f);
 }
 
@@ -8245,7 +8285,7 @@ static void test_inferno_npc_projectile_render_uses_reference_visual_timing(void
     ASSERT_INT_EQ("ranger projectile model",
         ranger_ov.projectiles[0].model_id, INF_GFX_1377_MODEL);
     ASSERT_INT_EQ("ranger impact spotanim",
-        ranger_ov.projectiles[0].impact_gfx_id, 1378);
+        ranger_ov.projectiles[0].impact_gfx_id, 0);
     ASSERT_INT_EQ("ranger projectile tracks player", ranger_ov.projectiles[0].tracks_target, 1);
     ASSERT_INT_EQ("ranger projectile target kind",
         ranger_ov.projectiles[0].target_kind, ENCOUNTER_PROJECTILE_TARGET_PLAYER);
@@ -8270,11 +8310,72 @@ static void test_inferno_npc_projectile_render_uses_reference_visual_timing(void
     inf_render_post_tick((EncounterState*)&blob_state, &blob_ov);
 
     ASSERT_INT_EQ("blob projectile count", blob_ov.projectile_count, 1);
+    ASSERT_INT_EQ("blob ranged projectile model",
+        blob_ov.projectiles[0].model_id, INF_GFX_1383_MODEL);
+    ASSERT_INT_EQ("blob ranged projectile animation",
+        blob_ov.projectiles[0].anim_id, INF_GFX_1383_ANIM);
+    ASSERT_INT_EQ("blob ranged impact spotanim",
+        blob_ov.projectiles[0].impact_gfx_id, 0);
     ASSERT_INT_EQ("blob projectile source kind",
         blob_ov.projectiles[0].source_kind, ENCOUNTER_PROJECTILE_TARGET_NPC_SLOT);
     ASSERT_INT_EQ("blob projectile source slot", blob_ov.projectiles[0].source_npc_slot, 3);
     ASSERT_INT_EQ("blob projectile target kind",
         blob_ov.projectiles[0].target_kind, ENCOUNTER_PROJECTILE_TARGET_PLAYER);
+
+    InfernoState blob_magic_state = make_test_state(10, 10);
+    blob_magic_state.npcs[3] = make_test_npc(
+        INF_NPC_BLOB, 16, 10, INF_NPC_STATS[INF_NPC_BLOB].size);
+    blob_magic_state.npcs[3].active = 1;
+    blob_magic_state.npcs[3].attacked_this_tick = 1;
+    blob_magic_state.npcs[3].attack_style_this_tick = ATTACK_STYLE_MAGIC;
+
+    EncounterOverlay blob_magic_ov;
+    memset(&blob_magic_ov, 0, sizeof(blob_magic_ov));
+    inf_render_post_tick((EncounterState*)&blob_magic_state, &blob_magic_ov);
+
+    ASSERT_INT_EQ("blob magic projectile count", blob_magic_ov.projectile_count, 1);
+    ASSERT_INT_EQ("blob magic projectile model",
+        blob_magic_ov.projectiles[0].model_id, INF_GFX_1384_MODEL);
+    ASSERT_INT_EQ("blob magic projectile has no placeholder animation",
+        blob_magic_ov.projectiles[0].anim_id, OSRS_COMBAT_PROJECTILE_MISSING);
+    ASSERT_INT_EQ("blob magic impact spotanim",
+        blob_magic_ov.projectiles[0].impact_gfx_id, 0);
+
+    InfernoState blob_split_range_state = make_test_state(10, 10);
+    blob_split_range_state.npcs[3] = make_test_npc(
+        INF_NPC_BLOB_RANGE, 16, 10, INF_NPC_STATS[INF_NPC_BLOB_RANGE].size);
+    blob_split_range_state.npcs[3].active = 1;
+    blob_split_range_state.npcs[3].attacked_this_tick = 1;
+    blob_split_range_state.npcs[3].attack_style_this_tick = ATTACK_STYLE_RANGED;
+
+    EncounterOverlay blob_split_range_ov;
+    memset(&blob_split_range_ov, 0, sizeof(blob_split_range_ov));
+    inf_render_post_tick((EncounterState*)&blob_split_range_state, &blob_split_range_ov);
+
+    ASSERT_INT_EQ("blob split ranged projectile count",
+        blob_split_range_ov.projectile_count, 1);
+    ASSERT_INT_EQ("blob split ranged projectile model",
+        blob_split_range_ov.projectiles[0].model_id, INF_GFX_1379_MODEL);
+    ASSERT_INT_EQ("blob split ranged projectile animation",
+        blob_split_range_ov.projectiles[0].anim_id, INF_GFX_1379_ANIM);
+
+    InfernoState blob_split_magic_state = make_test_state(10, 10);
+    blob_split_magic_state.npcs[3] = make_test_npc(
+        INF_NPC_BLOB_MAGE, 16, 10, INF_NPC_STATS[INF_NPC_BLOB_MAGE].size);
+    blob_split_magic_state.npcs[3].active = 1;
+    blob_split_magic_state.npcs[3].attacked_this_tick = 1;
+    blob_split_magic_state.npcs[3].attack_style_this_tick = ATTACK_STYLE_MAGIC;
+
+    EncounterOverlay blob_split_magic_ov;
+    memset(&blob_split_magic_ov, 0, sizeof(blob_split_magic_ov));
+    inf_render_post_tick((EncounterState*)&blob_split_magic_state, &blob_split_magic_ov);
+
+    ASSERT_INT_EQ("blob split magic projectile count",
+        blob_split_magic_ov.projectile_count, 1);
+    ASSERT_INT_EQ("blob split magic projectile model",
+        blob_split_magic_ov.projectiles[0].model_id, INF_GFX_1381_MODEL);
+    ASSERT_INT_EQ("blob split magic projectile animation",
+        blob_split_magic_ov.projectiles[0].anim_id, INF_GFX_1381_ANIM);
 }
 
 static void test_inferno_npc_projectile_render_tracks_target_npc_slot(void) {
