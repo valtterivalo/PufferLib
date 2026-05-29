@@ -565,7 +565,6 @@ static void inf_seed_joseph_zuk_checkpoint(InfernoState* s) {
 
     InfNPC* zuk = &s->npcs[zuk_idx];
     zuk->stun_timer = 0;
-    s->zuk.initial_delay = 0;
     s->zuk.has_paused = 1;
     s->zuk.timer_paused = 0;
     s->zuk.jad_spawned = 1;
@@ -721,7 +720,6 @@ static void inf_spawn_wave(InfernoState* s) {
         }
 
         /* zuk state */
-        s->zuk.initial_delay = 14;
         s->zuk.set_timer = 72;
         s->zuk.set_interval = 350;
         s->zuk.enraged = 0;

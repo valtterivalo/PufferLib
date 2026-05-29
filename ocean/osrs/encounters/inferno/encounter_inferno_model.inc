@@ -522,7 +522,6 @@ typedef struct {
     int shield_freeze;     /* ticks of freeze at boundary */
 
     /* spawn timers */
-    int initial_delay;     /* 14 ticks before first attack */
     int set_timer;         /* ticks until next set spawn (starts at 72) */
     int set_interval;      /* 350 ticks between set spawns */
     int enraged;           /* 1 when HP < 240 */
