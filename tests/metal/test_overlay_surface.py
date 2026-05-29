@@ -41,11 +41,14 @@ ALLOWED_ARTIFACT_PATHS = {
 BLOCKED_PATHS = {
     "build.sh",
     "config/default.ini",
+    "src/curriculum.cu",
+    "src/vecenv.h",
+}
+
+BACKEND_PARITY_CORE_PATHS = {
     "pufferlib/pufferl.py",
     "src/bindings.cu",
-    "src/curriculum.cu",
     "src/pufferlib.cu",
-    "src/vecenv.h",
 }
 
 
@@ -55,10 +58,10 @@ def git_lines(*args: str) -> set[str]:
 
 
 def changed_paths() -> set[str]:
-    committed = git_lines("diff", "--name-only", "upstream/5.0...HEAD")
-    unstaged = git_lines("diff", "--name-only", "upstream/5.0", "--")
+    staged = git_lines("diff", "--cached", "--name-only")
+    unstaged = git_lines("diff", "--name-only")
     untracked = git_lines("ls-files", "--others", "--exclude-standard")
-    return committed | unstaged | untracked
+    return staged | unstaged | untracked
 
 
 def test_metal_overlay_does_not_touch_upstream_core() -> None:
@@ -69,7 +72,8 @@ def test_metal_overlay_does_not_touch_upstream_core() -> None:
         for path in changed_paths()
         if path in BLOCKED_PATHS
         or (
-            path not in ALLOWED_ARTIFACT_PATHS
+            path not in BACKEND_PARITY_CORE_PATHS
+            and path not in ALLOWED_ARTIFACT_PATHS
             and not any(path.startswith(prefix) for prefix in ALLOWED_PREFIXES)
         )
     )

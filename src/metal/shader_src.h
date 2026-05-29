@@ -541,6 +541,7 @@ struct SampleParams {
     int value_stride;
     int is_continuous;  // 1 for continuous, 0 for discrete
     int mask_stride;    // stride between rows in mask buffer (may differ from num_atns_total)
+    int action_mode;
 };
 
 inline float masked_logit(float l, float m) {
@@ -581,15 +582,17 @@ kernel void sample_logits_kernel(
             float log_std = logstd[h];
             float std = exp(log_std);
 
-            // Need 2 uniforms for Box-Muller
-            float u1 = philox_uniform(rng_idx, rng_out);
-            float u2 = philox_uniform(rng_idx, rng_out);
-            if (rng_idx >= 4) {
-                counter.z++;
-                rng_out = philox4x32_10(counter, key);
-                rng_idx = 0;
+            float noise = 0.0f;
+            if (sp.action_mode != 1) {
+                float u1 = philox_uniform(rng_idx, rng_out);
+                float u2 = philox_uniform(rng_idx, rng_out);
+                if (rng_idx >= 4) {
+                    counter.z++;
+                    rng_out = philox4x32_10(counter, key);
+                    rng_idx = 0;
+                }
+                noise = philox_normal(u1, u2);
             }
-            float noise = philox_normal(u1, u2);
             float action = mean + std * noise;
 
             float normalized = (action - mean) / std;
@@ -632,25 +635,43 @@ kernel void sample_logits_kernel(
             }
             float logsumexp_val = max_val + log(sum_exp);
 
-            // Random sample
-            float rand_val = philox_uniform(rng_idx, rng_out);
-            if (rng_idx >= 4) {
-                counter.z++;
-                rng_out = philox4x32_10(counter, key);
-                rng_idx = 0;
-            }
+            int sampled_action = -1;
+            if (sp.action_mode == 1) {
+                float best_logit = -INFINITY;
+                for (int a = 0; a < A; a++) {
+                    float l = masked_logit(logits[logits_base + logits_offset + a],
+                                           action_mask[mask_base + logits_offset + a]);
+                    if (sampled_action < 0 || l > best_logit) {
+                        sampled_action = a;
+                        best_logit = l;
+                    }
+                }
+            } else {
+                float rand_val = philox_uniform(rng_idx, rng_out);
+                if (rng_idx >= 4) {
+                    counter.z++;
+                    rng_out = philox4x32_10(counter, key);
+                    rng_idx = 0;
+                }
 
-            // Inverse CDF sampling (with mask)
-            float cumsum = 0.0f;
-            int sampled_action = A - 1;
-            for (int a = 0; a < A; a++) {
-                float l = masked_logit(logits[logits_base + logits_offset + a],
-                                       action_mask[mask_base + logits_offset + a]);
-                float prob = exp(l - logsumexp_val);
-                cumsum += prob;
-                if (rand_val < cumsum) {
-                    sampled_action = a;
-                    break;
+                float cumsum = 0.0f;
+                for (int a = 0; a < A; a++) {
+                    float l = masked_logit(logits[logits_base + logits_offset + a],
+                                           action_mask[mask_base + logits_offset + a]);
+                    float prob = exp(l - logsumexp_val);
+                    cumsum += prob;
+                    if (rand_val < cumsum) {
+                        sampled_action = a;
+                        break;
+                    }
+                }
+                if (sampled_action < 0) {
+                    for (int a = A - 1; a >= 0; a--) {
+                        if (action_mask[mask_base + logits_offset + a] >= 0.5f) {
+                            sampled_action = a;
+                            break;
+                        }
+                    }
                 }
             }
 

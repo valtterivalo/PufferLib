@@ -7,6 +7,8 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <pybind11/numpy.h>
+#include <iomanip>
+#include <sstream>
 #include <vector>
 #include "pufferlib.cu"
 
@@ -14,6 +16,46 @@
 #define PUFFER_STRINGIFY(x) _PUFFER_STRINGIFY(x)
 
 namespace py = pybind11;
+
+static std::string hash_host_bytes(const unsigned char* data, size_t nbytes) {
+    uint64_t h = 1469598103934665603ull;
+    for (size_t i = 0; i < nbytes; i++) {
+        h ^= (uint64_t)data[i];
+        h *= 1099511628211ull;
+    }
+    std::ostringstream out;
+    out << std::hex << std::setw(16) << std::setfill('0') << h;
+    return out.str();
+}
+
+static std::string hash_cuda_bytes(const void* ptr, size_t nbytes) {
+    if (ptr == nullptr) return "";
+    std::vector<unsigned char> host(nbytes);
+    if (nbytes > 0) {
+        cudaMemcpy(host.data(), ptr, nbytes, cudaMemcpyDeviceToHost);
+    }
+    return hash_host_bytes(host.data(), host.size());
+}
+
+static std::string hash_precision_tensor(const PrecisionTensor& tensor) {
+    if (tensor.data == nullptr) return "";
+    return hash_cuda_bytes(tensor.data, (size_t)numel(tensor.shape) * sizeof(precision_t));
+}
+
+py::dict rollout_hashes(py::object pufferl_obj) {
+    auto& pufferl = pufferl_obj.cast<PuffeRL&>();
+    py::dict out;
+    out["observations"] = hash_precision_tensor(pufferl.rollouts.observations);
+    out["actions"] = hash_precision_tensor(pufferl.rollouts.actions);
+    out["values"] = hash_precision_tensor(pufferl.rollouts.values);
+    out["logprobs"] = hash_precision_tensor(pufferl.rollouts.logprobs);
+    out["rewards"] = hash_precision_tensor(pufferl.rollouts.rewards);
+    out["terminals"] = hash_precision_tensor(pufferl.rollouts.terminals);
+    out["ratio"] = hash_precision_tensor(pufferl.rollouts.ratio);
+    out["importance"] = hash_precision_tensor(pufferl.rollouts.importance);
+    out["action_mask"] = hash_precision_tensor(pufferl.rollouts.action_mask);
+    return out;
+}
 
 // Wrapper functions for Python bindings
 pybind11::dict puf_log(pybind11::object pufferl_obj) {
@@ -297,6 +339,11 @@ double get_config(py::dict& kwargs, const char* key) {
     }
 }
 
+double get_optional_config(py::dict& kwargs, const char* key, double default_value) {
+    if (!kwargs.contains(key)) return default_value;
+    return get_config(kwargs, key);
+}
+
 Dict* py_dict_to_c_dict(py::dict py_dict) {
     Dict* c_dict = create_dict(py_dict.size());
     for (auto item : py_dict) {
@@ -453,6 +500,13 @@ std::unique_ptr<PuffeRL> create_pufferl(py::dict args) {
     // Base-level config ([base] section becomes top-level in args)
     hypers.cudagraphs = get_config(args, "cudagraphs");
     hypers.profile = get_config(args, "profile");
+    hypers.eval_action_mode = (int)get_optional_config(args, "eval_action_mode", 0.0);
+    if (hypers.eval_action_mode < 0 || hypers.eval_action_mode > 2) {
+        throw std::runtime_error("eval_action_mode must be 0, 1, or 2");
+    }
+    if (hypers.eval_action_mode == 2 && hypers.cudagraphs >= 0) {
+        throw std::runtime_error("eval_action_mode=2 requires cudagraphs=-1");
+    }
     // Multi-GPU / device selection
     hypers.rank = get_config(args, "rank");
     hypers.world_size = get_config(args, "world_size");
@@ -534,6 +588,7 @@ PYBIND11_MODULE(_C, m) {
     m.def("eval_log", &puf_eval_log);
     m.def("render", &render);
     m.def("rollouts", &rollouts);
+    m.def("rollout_hashes", &rollout_hashes);
     m.def("train", &train);
     m.def("close", &puf_close);
     m.def("save_weights", &save_weights);
@@ -589,6 +644,7 @@ PYBIND11_MODULE(_C, m) {
         .def_readwrite("explore_decay", &HypersT::explore_decay)
         .def_readwrite("cudagraphs", &HypersT::cudagraphs)
         .def_readwrite("profile", &HypersT::profile)
+        .def_readwrite("eval_action_mode", &HypersT::eval_action_mode)
         .def_readwrite("rank", &HypersT::rank)
         .def_readwrite("world_size", &HypersT::world_size)
         .def_readwrite("gpu_id", &HypersT::gpu_id)

@@ -4,10 +4,12 @@
 #include <cstdlib>
 #include <cstdint>
 #include <cstring>
+#include <iomanip>
 #include <mach/mach.h>
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include <sstream>
 #include <stdexcept>
 #include <sys/time.h>
 #include <vector>
@@ -26,6 +28,23 @@ static double wall_clock() {
     struct timeval tv;
     gettimeofday(&tv, NULL);
     return tv.tv_sec + tv.tv_usec * 1e-6;
+}
+
+static std::string hash_host_bytes(const unsigned char* data, size_t nbytes) {
+    uint64_t h = 1469598103934665603ull;
+    for (size_t i = 0; i < nbytes; i++) {
+        h ^= (uint64_t)data[i];
+        h *= 1099511628211ull;
+    }
+    std::ostringstream out;
+    out << std::hex << std::setw(16) << std::setfill('0') << h;
+    return out.str();
+}
+
+static std::string hash_float_tensor(const FloatTensor& tensor) {
+    if (tensor.data == nullptr) return "";
+    size_t nbytes = (size_t)puf_numel(tensor.shape) * sizeof(float);
+    return hash_host_bytes((const unsigned char*)tensor.data, nbytes);
 }
 
 static std::string tensor_repr(const FloatTensor& tensor) {
@@ -222,6 +241,28 @@ static void rollouts(py::object pufferl_obj) {
     mtl_sync_stats(&pufferl.rollout_sync_count, &pufferl.rollout_sync_ms);
     pufferl.global_step += pufferl.hypers.horizon * pufferl.hypers.total_agents;
 
+}
+
+static py::dict rollout_hashes(py::object pufferl_obj) {
+    PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
+    if (pufferl.train_pending) {
+        sync_pending_train(pufferl);
+    }
+    if (!pufferl.cpu_inference) {
+        mtl_ensure_stream_synced((cudaStream_t)mtl_stream());
+    }
+
+    py::dict out;
+    out["observations"] = hash_float_tensor(pufferl.rollouts.observations);
+    out["actions"] = hash_float_tensor(pufferl.rollouts.actions);
+    out["values"] = hash_float_tensor(pufferl.rollouts.values);
+    out["logprobs"] = hash_float_tensor(pufferl.rollouts.logprobs);
+    out["rewards"] = hash_float_tensor(pufferl.rollouts.rewards);
+    out["terminals"] = hash_float_tensor(pufferl.rollouts.terminals);
+    out["ratio"] = hash_float_tensor(pufferl.rollouts.ratio);
+    out["importance"] = hash_float_tensor(pufferl.rollouts.importance);
+    out["action_mask"] = pufferl.has_mask ? hash_float_tensor(pufferl.rollout_masks) : "";
+    return out;
 }
 
 static py::dict train(py::object pufferl_obj) {
@@ -696,6 +737,10 @@ static std::unique_ptr<PuffeRL> create_pufferl(py::dict args) {
     hypers.terminal_reset_state = get_optional_config(train_kwargs, "terminal_reset_state", 0.0) > 0;
     hypers.profile = train_kwargs.contains("profile") ? get_config(train_kwargs, "profile")
         : args.contains("profile") ? get_config(args, "profile") : 0;
+    hypers.eval_action_mode = (int)get_optional_config(args, "eval_action_mode", 0.0);
+    if (hypers.eval_action_mode < 0 || hypers.eval_action_mode > 2) {
+        throw std::runtime_error("eval_action_mode must be 0, 1, or 2");
+    }
     hypers.overlap = metal_env_flag("PUFFER_METAL_OVERLAP");
     hypers.cpu_inference = metal_env_flag("PUFFER_METAL_CPU_INFERENCE");
     hypers.train_fp16 = metal_env_flag("PUFFER_METAL_TRAIN_FP16");
@@ -742,6 +787,7 @@ PYBIND11_MODULE(_C, m) {
     m.def("eval_log", &puf_eval_log);
     m.def("render", &render);
     m.def("rollouts", &rollouts);
+    m.def("rollout_hashes", &rollout_hashes);
     m.def("train", &train);
     m.def("close", &puf_close);
     m.def("save_weights", &save_weights);
@@ -871,6 +917,7 @@ PYBIND11_MODULE(_C, m) {
         .def_readwrite("reset_state", &HypersT::reset_state)
         .def_readwrite("terminal_reset_state", &HypersT::terminal_reset_state)
         .def_readwrite("profile", &HypersT::profile)
+        .def_readwrite("eval_action_mode", &HypersT::eval_action_mode)
         .def_readwrite("overlap", &HypersT::overlap)
         .def_readwrite("cpu_inference", &HypersT::cpu_inference)
         .def_readwrite("train_fp16", &HypersT::train_fp16)

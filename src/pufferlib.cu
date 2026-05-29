@@ -294,6 +294,7 @@ typedef struct {
     bool reset_state;
     int cudagraphs;
     bool profile;
+    int eval_action_mode;
     // Multi-GPU
     int rank;
     int world_size;
@@ -414,6 +415,53 @@ __global__ void rng_init(curandStatePhilox4_32_10_t* states, uint64_t seed, int 
     }
 }
 
+__device__ __forceinline__ uint4 puf_philox_round(uint4 ctr, uint2 key) {
+    constexpr uint32_t M0 = 0xD2511F53u;
+    constexpr uint32_t M1 = 0xCD9E8D57u;
+    uint32_t hi0 = __umulhi(M0, ctr.x);
+    uint32_t lo0 = M0 * ctr.x;
+    uint32_t hi1 = __umulhi(M1, ctr.z);
+    uint32_t lo1 = M1 * ctr.z;
+    return make_uint4(hi1 ^ ctr.y ^ key.x, lo1, hi0 ^ ctr.w ^ key.y, lo0);
+}
+
+__device__ __forceinline__ uint4 puf_philox4x32_10(uint4 counter, uint2 key) {
+    constexpr uint32_t W0 = 0x9E3779B9u;
+    constexpr uint32_t W1 = 0xBB67AE85u;
+    #pragma unroll
+    for (int i = 0; i < 10; i++) {
+        counter = puf_philox_round(counter, key);
+        key.x += W0;
+        key.y += W1;
+    }
+    return counter;
+}
+
+__device__ __forceinline__ float puf_philox_uniform(
+        uint4* counter, uint2 key, uint4* rng_out, uint32_t* rng_idx) {
+    if (*rng_idx >= 4) {
+        counter->z += 1;
+        *rng_out = puf_philox4x32_10(*counter, key);
+        *rng_idx = 0;
+    }
+
+    uint32_t val = rng_out->x;
+    switch (*rng_idx & 3) {
+        case 1: val = rng_out->y; break;
+        case 2: val = rng_out->z; break;
+        case 3: val = rng_out->w; break;
+    }
+    *rng_idx += 1;
+    return ((float)(val >> 8) + 0.5f) / 16777216.0f;
+}
+
+__device__ __forceinline__ float puf_philox_normal(
+        uint4* counter, uint2 key, uint4* rng_out, uint32_t* rng_idx) {
+    float u1 = puf_philox_uniform(counter, key, rng_out, rng_idx);
+    float u2 = puf_philox_uniform(counter, key, rng_out, rng_idx);
+    return sqrtf(-2.0f * logf(u1)) * cosf(6.2831853071795864769f * u2);
+}
+
 __device__ __forceinline__ float safe_logit(const precision_t* logits,
         int logits_base, int logits_offset, int offset) {
     float l = to_float(logits[logits_base + logits_offset + offset]);
@@ -447,7 +495,10 @@ __global__ void sample_logits(
         precision_t* __restrict__ value_out,  // (B,)
         curandStatePhilox4_32_10_t* __restrict__ rng_states,
         const precision_t* __restrict__ action_mask, // (B, A_total) or nullptr
-        int mask_stride) {                    // 0 when action_mask is nullptr
+        int mask_stride,
+        int action_mode,
+        uint64_t sample_seed,
+        uint32_t sample_offset) {
     int B = dec_out.shape[0];
     int fused_cols = dec_out.shape[1];
     int num_atns = numel(act_sizes_puf.shape);
@@ -465,8 +516,15 @@ __global__ void sample_logits(
         return;
     }
 
-    // Load persistent RNG state (advanced in-place each call)
-    curandStatePhilox4_32_10_t state = rng_states[idx];
+    bool use_curand = action_mode == 0;
+    curandStatePhilox4_32_10_t state;
+    if (use_curand) {
+        state = rng_states[idx];
+    }
+    uint4 counter = make_uint4((uint32_t)idx, sample_offset, 0u, 0u);
+    uint2 key = make_uint2((uint32_t)(sample_seed & 0xffffffffu), (uint32_t)(sample_seed >> 32));
+    uint4 rng_out = puf_philox4x32_10(counter, key);
+    uint32_t rng_idx = 0;
 
     int logits_base = idx * logits_stride;
     float total_log_prob = 0.0f;
@@ -481,8 +539,12 @@ __global__ void sample_logits(
             float log_std = to_float(logstd[logstd_base + h]);
             float std = expf(log_std);
 
-            // Sample from N(0,1) and transform: action = mean + std * noise
-            float noise = curand_normal(&state);
+            float noise = 0.0f;
+            if (action_mode == 0) {
+                noise = curand_normal(&state);
+            } else if (action_mode == 2) {
+                noise = puf_philox_normal(&counter, key, &rng_out, &rng_idx);
+            }
             float action = mean + std * noise;
 
             // Log probability: -0.5 * ((action - mean) / std)^2 - 0.5 * log(2*pi) - log(std)
@@ -493,7 +555,6 @@ __global__ void sample_logits(
             total_log_prob += log_prob;
         }
     } else {
-        // Discrete action sampling (original multinomial logic)
         int logits_offset = 0;  // offset within row for current action head
         int mask_base = (action_mask != nullptr) ? idx * mask_stride : 0;
 
@@ -503,7 +564,12 @@ __global__ void sample_logits(
             // Step 1: Find max and sum for numerical stability (with nan_to_num)
             float max_val = -INFINITY;
             float sum_exp = 0.0f;
+            bool has_valid_action = action_mask == nullptr;
             for (int a = 0; a < A; ++a) {
+                if (action_mask != nullptr &&
+                        to_float(action_mask[mask_base + logits_offset + a]) != 0.0f) {
+                    has_valid_action = true;
+                }
                 float l = masked_logit(logits, logits_base, logits_offset, a, action_mask, mask_base);
                 if (l > max_val) {
                     sum_exp *= expf(max_val - l);
@@ -511,22 +577,38 @@ __global__ void sample_logits(
                 }
                 sum_exp += expf(l - max_val);
             }
+            if (!has_valid_action) {
+                assert(false && "no valid actions for discrete action head");
+                actions[idx * num_atns + h] = from_float(NAN);
+                total_log_prob = NAN;
+                logits_offset += A;
+                continue;
+            }
             float logsumexp = max_val + logf(sum_exp);
 
-            // Step 3: Generate random value for this action head
-            float rand_val = curand_uniform(&state);
-
-            // Step 4: Multinomial sampling using inverse CDF
-            float cumsum = 0.0f;
             int sampled_action = -1;  // sentinel: no action chosen yet
-
-            for (int a = 0; a < A; ++a) {
-                float l = masked_logit(logits, logits_base, logits_offset, a, action_mask, mask_base);
-                float prob = expf(l - logsumexp);
-                cumsum += prob;
-                if (rand_val < cumsum) {
-                    sampled_action = a;
-                    break;
+            if (action_mode == 1) {
+                float best_logit = -INFINITY;
+                for (int a = 0; a < A; ++a) {
+                    float l = masked_logit(logits, logits_base, logits_offset, a, action_mask, mask_base);
+                    if (sampled_action < 0 || l > best_logit) {
+                        sampled_action = a;
+                        best_logit = l;
+                    }
+                }
+            } else {
+                float rand_val = use_curand
+                    ? curand_uniform(&state)
+                    : puf_philox_uniform(&counter, key, &rng_out, &rng_idx);
+                float cumsum = 0.0f;
+                for (int a = 0; a < A; ++a) {
+                    float l = masked_logit(logits, logits_base, logits_offset, a, action_mask, mask_base);
+                    float prob = expf(l - logsumexp);
+                    cumsum += prob;
+                    if (rand_val < cumsum) {
+                        sampled_action = a;
+                        break;
+                    }
                 }
             }
 
@@ -563,7 +645,9 @@ __global__ void sample_logits(
     value_out[idx] = value[idx * value_stride];
 
     // Save RNG state back for next call
-    rng_states[idx] = state;
+    if (use_curand) {
+        rng_states[idx] = state;
+    }
 }
 
 // Single step rollout forward pass. Called by each environment worker in their
@@ -677,11 +761,14 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
         }
 
         // Offset RNG by bank_off so banks don't collide on per-buffer rng slots.
+        uint32_t sample_offset = (uint32_t)(pufferl->global_step / hypers.total_agents + t + bank_off);
         sample_logits<<<grid_size(bank_size), BLOCK_SIZE, 0, stream>>>(
             dec_puf, p_logstd, pufferl->act_sizes_puf,
             act_b.data, lp_b.data, val_b.data,
             pufferl->rng_states[buf] + bank_off,
-            mask_b.data, mask_stride_b);
+            mask_b.data, mask_stride_b,
+            hypers.eval_action_mode, (uint64_t)hypers.seed + (uint64_t)buf,
+            sample_offset);
 
         cast<<<grid_size(numel(act_b.shape)), BLOCK_SIZE, 0, stream>>>(
                 env.actions.data + (long)sub_start * act_cols,
@@ -2129,9 +2216,15 @@ void close_impl(PuffeRL& pufferl) {
         cudaProfilerStop();
     }
 
-    cudaGraphExecDestroy(pufferl.train_cudagraph);
-    for (int i = 0; i < pufferl.hypers.horizon * pufferl.hypers.num_buffers; i++) {
-        cudaGraphExecDestroy(pufferl.fused_rollout_cudagraphs[i]);
+    if (pufferl.train_cudagraph) {
+        cudaGraphExecDestroy(pufferl.train_cudagraph);
+    }
+    if (pufferl.fused_rollout_cudagraphs) {
+        for (int i = 0; i < pufferl.hypers.horizon * pufferl.hypers.num_buffers; i++) {
+            if (pufferl.fused_rollout_cudagraphs[i]) {
+                cudaGraphExecDestroy(pufferl.fused_rollout_cudagraphs[i]);
+            }
+        }
     }
 
     policy_weights_free(&pufferl.policy, &pufferl.weights);

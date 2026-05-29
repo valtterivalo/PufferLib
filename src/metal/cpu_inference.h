@@ -190,7 +190,7 @@ static void cpu_sample_logits(
         const int *act_sizes, int num_atns,
         float *action_out_f32, float *logprobs, float *value_out,
         const float *action_mask, int mask_stride,
-        uint64_t seed, uint32_t *offset_ptr, int B) {
+        uint64_t seed, uint32_t *offset_ptr, int B, int action_mode) {
 
     uint32_t offset_snapshot = *offset_ptr;
     *offset_ptr = offset_snapshot + 1u;
@@ -212,41 +212,60 @@ static void cpu_sample_logits(
         for (int h = 0; h < num_atns; h++) {
             int A = act_sizes[h];
 
-            // max for numerical stability
             float max_val = -INFINITY;
+            bool has_valid_action = action_mask == nullptr;
             for (int a = 0; a < A; a++) {
-                float l = cpu_mask_logit(logits[logits_offset + a],
-                                          mask[logits_offset + a]);
+                float m = action_mask == nullptr ? 1.0f : mask[logits_offset + a];
+                if (m >= 0.5f) has_valid_action = true;
+                float l = cpu_mask_logit(logits[logits_offset + a], m);
                 if (l > max_val) max_val = l;
             }
+            assert(has_valid_action && "no valid actions for discrete action head");
 
-            // logsumexp
             float sum_exp = 0.0f;
             for (int a = 0; a < A; a++) {
                 float l = cpu_mask_logit(logits[logits_offset + a],
-                                          mask[logits_offset + a]);
+                    action_mask == nullptr ? 1.0f : mask[logits_offset + a]);
                 sum_exp += expf(l - max_val);
             }
             float logsumexp_val = max_val + logf(sum_exp);
 
-            // Philox uniform sample
-            float rand_val = cpu_philox_uniform(rng);
-
-            // Inverse CDF sampling
-            float cumsum = 0.0f;
-            int sampled = A - 1;
-            for (int a = 0; a < A; a++) {
-                float l = cpu_mask_logit(logits[logits_offset + a],
-                                          mask[logits_offset + a]);
-                cumsum += expf(l - logsumexp_val);
-                if (rand_val < cumsum) {
-                    sampled = a;
-                    break;
+            int sampled = -1;
+            if (action_mode == 1) {
+                float best_logit = -INFINITY;
+                for (int a = 0; a < A; a++) {
+                    float l = cpu_mask_logit(logits[logits_offset + a],
+                        action_mask == nullptr ? 1.0f : mask[logits_offset + a]);
+                    if (sampled < 0 || l > best_logit) {
+                        sampled = a;
+                        best_logit = l;
+                    }
+                }
+            } else {
+                float rand_val = cpu_philox_uniform(rng);
+                float cumsum = 0.0f;
+                for (int a = 0; a < A; a++) {
+                    float l = cpu_mask_logit(logits[logits_offset + a],
+                        action_mask == nullptr ? 1.0f : mask[logits_offset + a]);
+                    cumsum += expf(l - logsumexp_val);
+                    if (rand_val < cumsum) {
+                        sampled = a;
+                        break;
+                    }
+                }
+                if (sampled < 0) {
+                    for (int a = A - 1; a >= 0; a--) {
+                        float m = action_mask == nullptr ? 1.0f : mask[logits_offset + a];
+                        if (m >= 0.5f) {
+                            sampled = a;
+                            break;
+                        }
+                    }
                 }
             }
 
             float sl = cpu_mask_logit(logits[logits_offset + sampled],
-                                       mask[logits_offset + sampled]);
+                action_mask == nullptr ? 1.0f : mask[logits_offset + sampled]);
             total_log_prob += sl - logsumexp_val;
 
             action_out_f32[idx * num_atns + h] = (float)sampled;
@@ -276,7 +295,7 @@ static void cpu_forward_and_sample(
         float *logprobs_out,        // (B,)
         float *values_out,          // (B,)
         const float *action_mask, int mask_stride,
-        uint64_t rng_seed, uint32_t *rng_offset_ptr) {
+        uint64_t rng_seed, uint32_t *rng_offset_ptr, int action_mode) {
 
     int B = (int)obs.shape[0];
     int obs_dim = (int)obs.shape[1];
@@ -322,7 +341,7 @@ static void cpu_forward_and_sample(
         act_sizes_puf.data, (int)puf_numel(act_sizes_puf.shape),
         act_f32_buf.data, logprobs_out, values_out,
         action_mask, mask_stride,
-        rng_seed, rng_offset_ptr, B);
+        rng_seed, rng_offset_ptr, B, action_mode);
 }
 
 #endif // PUFFERLIB_CPU_INFERENCE_H

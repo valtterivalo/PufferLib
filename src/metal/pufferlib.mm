@@ -116,6 +116,7 @@ typedef struct {
     bool reset_state;
     bool terminal_reset_state;
     bool profile;
+    int eval_action_mode;
     bool overlap;  // async training overlap: train on separate GPU queue
     bool cpu_inference;  // CPU forward pass during rollout (no GPU sync)
     bool train_fp16;     // fp16 activations/grads during training (rollout stays fp32)
@@ -454,7 +455,7 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
             pufferl->act_sizes_puf, act_f32_buf,
             lp_slice.data, val_slice.data,
             mask_ptr, mask_stride,
-            buf_rng_seed, buf_rng_offset);
+            buf_rng_seed, buf_rng_offset, hypers.eval_action_mode);
 
         // Store decoder logits for GPU logprob recompute at training start.
         // CPU sampling uses IEEE expf, PPO uses GPU fast::exp.
@@ -487,7 +488,7 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
             dec_pt, pufferl->act_sizes_puf, rollout_logstd, pufferl->is_continuous,
             act_f32_buf.data, lp_slice.data, val_slice.data,
             mask_ptr, mask_stride,
-            buf_rng_seed, buf_rng_offset, stream);
+            buf_rng_seed, buf_rng_offset, hypers.eval_action_mode, stream);
 
         mtl_ensure_stream_synced(stream);
 
@@ -562,7 +563,7 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
                     fb_lp.data, fb_val.data,
                     fb_mask_ptr, fb_mask_stride,
                     /* RNG offset by bank_off so banks don't collide */
-                    buf_rng_seed, buf_rng_offset);
+                    buf_rng_seed, buf_rng_offset, hypers.eval_action_mode);
                 memcpy(fb_act.data, fb_act_buf.data, bank_size * num_atns * sizeof(float));
             } else {
                 PrecisionTensor fb_obs_pt = {
@@ -585,7 +586,7 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
                     fb_dec, pufferl->act_sizes_puf, fb_logstd, pufferl->is_continuous,
                     fb_act_buf.data, fb_lp.data, fb_val.data,
                     fb_mask_ptr, fb_mask_stride,
-                    buf_rng_seed, buf_rng_offset, stream);
+                    buf_rng_seed, buf_rng_offset, hypers.eval_action_mode, stream);
                 mtl_ensure_stream_synced(stream);
                 memcpy(fb_act.data, fb_act_buf.data, bank_size * num_atns * sizeof(float));
             }

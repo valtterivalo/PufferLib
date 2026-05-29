@@ -583,7 +583,7 @@ void mtl_sample_logits_dispatch_to(
     PufTensor &logstd, bool is_continuous,
     float *action_out_f32, float *logprobs, float *value_out,
     const float *action_mask, int mask_stride,
-    uint64_t seed, uint32_t *offset_ptr, cudaStream_t stream) {
+    uint64_t seed, uint32_t *offset_ptr, int action_mode, cudaStream_t stream) {
 
   int B = (int)dec_out.shape[0];
   int fused_cols = (int)dec_out.shape[1];
@@ -619,8 +619,10 @@ void mtl_sample_logits_dispatch_to(
     int value_stride;
     int is_continuous;
     int mask_stride;
+    int action_mode;
   } params = {seed, offset_snapshot, num_atns, A_total, B,
-              fused_cols, 0, fused_cols, is_continuous ? 1 : 0, mask_stride};
+              fused_cols, 0, fused_cols, is_continuous ? 1 : 0, mask_stride,
+              action_mode};
   mtl_set_params(ms, params, 7);
 
   mtl_set_ptr(ms, (void *)action_mask, 8);

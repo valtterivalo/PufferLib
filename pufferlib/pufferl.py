@@ -12,6 +12,8 @@ import ast
 import time
 import argparse
 import configparser
+import hashlib
+import subprocess
 from collections import defaultdict
 import multiprocessing as mp
 from copy import deepcopy
@@ -46,6 +48,81 @@ def unroll_nested_dict(d):
                 yield f"{k}/{k2}", v2
         else:
             yield k, v
+
+EVAL_ACTION_MODES = {
+    'sample': 0,
+    'argmax': 1,
+    'shared_sample': 2,
+    'shared-sample': 2,
+}
+
+def normalize_eval_action_mode(value):
+    if isinstance(value, str):
+        if value.isdigit():
+            value = int(value)
+        else:
+            if value not in EVAL_ACTION_MODES:
+                raise ValueError(f'Invalid eval_action_mode: {value}')
+            return EVAL_ACTION_MODES[value]
+
+    value = int(value)
+    if value not in EVAL_ACTION_MODES.values():
+        raise ValueError(f'Invalid eval_action_mode: {value}')
+    return value
+
+def canonical_json(data):
+    def normalize(value):
+        if isinstance(value, defaultdict):
+            value = dict(value)
+        if isinstance(value, dict):
+            return {str(k): normalize(v) for k, v in sorted(value.items())}
+        if isinstance(value, (list, tuple)):
+            return [normalize(v) for v in value]
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            return value
+        return repr(value)
+
+    return json.dumps(normalize(data), sort_keys=True, separators=(',', ':'))
+
+def file_sha256(path):
+    h = hashlib.sha256()
+    with open(path, 'rb') as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b''):
+            h.update(chunk)
+    return h.hexdigest()
+
+def git_sha():
+    repo_dir = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+    return subprocess.check_output(
+        ['git', 'rev-parse', 'HEAD'],
+        cwd=repo_dir,
+        text=True,
+    ).strip()
+
+def write_checkpoint_metadata(path, args, backend, pufferl, epoch, phase):
+    config_text = canonical_json(args)
+    metadata = {
+        'checkpoint_path': os.path.abspath(path),
+        'checkpoint_sha256': file_sha256(path),
+        'config_sha256': hashlib.sha256(config_text.encode()).hexdigest(),
+        'git_sha': git_sha(),
+        'backend': getattr(backend, '__name__', 'unknown'),
+        'env_name': args.get('env_name'),
+        'global_step': int(pufferl.global_step),
+        'epoch': int(epoch),
+        'phase': phase,
+        'eval_action_mode': normalize_eval_action_mode(args.get('eval_action_mode', 0)),
+        'obs_size': int(backend.env_obs_size()) if hasattr(backend, 'env_obs_size') else None,
+        'action_dims': list(backend.env_action_dims()) if hasattr(backend, 'env_action_dims') else None,
+        'num_params': int(pufferl.num_params()),
+        'policy': args.get('policy', {}),
+        'train': args.get('train', {}),
+        'vec': args.get('vec', {}),
+        'env': args.get('env', {}),
+    }
+    with open(path + '.json', 'w') as f:
+        json.dump(metadata, f, indent=2, sort_keys=True)
+        f.write('\n')
 
 def abbreviate(num, b2, c2):
     prefixes = ['', 'K', 'M', 'B', 'T']
@@ -247,19 +324,21 @@ def _train(env_name, args, sweep_obj=None, result_queue=None, verbose=False):
     train_epochs = int(total_timesteps // (args['vec']['total_agents'] * args['train']['horizon']))
     eval_epochs = train_epochs // 2
     for epoch in range(train_epochs + eval_epochs):
+        train_phase = epoch < train_epochs
         backend.rollouts(pufferl)
 
-        if epoch < train_epochs:
+        if train_phase:
             backend.train(pufferl)
 
-        # In match-sweep mode we need the final checkpoint to feed into match().
         is_final = epoch == train_epochs - 1
         should_save = (sweep_obj is None
+            and train_phase
             and (epoch % args['checkpoint_interval'] == 0 or is_final)
         ) or (match_mode and is_final)
         if should_save:
             model_path = os.path.join(checkpoint_dir, f'{pufferl.global_step:016d}.bin')
             backend.save_weights(pufferl, model_path)
+            write_checkpoint_metadata(model_path, args, backend, pufferl, epoch, 'train')
 
         # Rate limit, but always log for eval to maintain determinism
         if time.time() < pufferl.last_log_time + 0.6 and epoch < train_epochs - 1:
@@ -297,6 +376,7 @@ def _train(env_name, args, sweep_obj=None, result_queue=None, verbose=False):
     if match_mode and not model_path:
         model_path = os.path.join(checkpoint_dir, f'{pufferl.global_step:016d}.bin')
         backend.save_weights(pufferl, model_path)
+        write_checkpoint_metadata(model_path, args, backend, pufferl, pufferl.epoch, 'train_final')
     backend.close(pufferl)
 
     if target_key not in flat_logs:
@@ -470,6 +550,8 @@ def eval(env_name, args=None, load_path=None):
     args = args or load_config(env_name)
     args['reset_state'] = False
     args['train']['horizon'] = 1
+    if normalize_eval_action_mode(args.get('eval_action_mode', 0)) == 2:
+        args['cudagraphs'] = -1
 
     backend = _resolve_backend(args)
     pufferl = backend.create_pufferl(args)
@@ -606,6 +688,8 @@ def load_config(env_name):
     parser.add_argument('--save-frames', type=int, default=0)
     parser.add_argument('--gif-path', type=str, default='eval.gif')
     parser.add_argument('--fps', type=float, default=15)
+    parser.add_argument('--eval-action-mode', type=str, default='sample',
+        choices=['sample', 'argmax', 'shared_sample', 'shared-sample', '0', '1', '2'])
     parser.description = f':blowfish: PufferLib [bright_cyan]{pufferlib.__version__}[/]' \
         ' demo options. Shows valid args for your env and policy'
 
@@ -654,6 +738,7 @@ def load_config(env_name):
         prev[subkey] = value
 
     args['env_name'] = env_name
+    args['eval_action_mode'] = normalize_eval_action_mode(args.get('eval_action_mode', 0))
     for section in p.sections():
         args.setdefault(section, {})
     return dict(args)
