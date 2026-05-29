@@ -77,6 +77,15 @@ def test_cuda_graph_capture_resets_recurrent_state() -> None:
     assert "puf_zero(&bank->buffer_states[b], pufferl->default_stream)" in source
 
 
+def test_metal_keeps_embedded_masks_out_of_sampler_by_default() -> None:
+    source = text("src/metal/pufferlib.mm")
+    runner = text("tools/metal/puffer-metal.py")
+    assert "sample_mask_in_obs" in source
+    assert "pufferl->has_mask = hypers.sample_mask_in_obs && mask_in_obs" in source
+    assert "PUFFER_METAL_SAMPLE_MASK_IN_OBS requires env.mask_in_obs" in source
+    assert '"--metal-sample-mask-in-obs": "PUFFER_METAL_SAMPLE_MASK_IN_OBS"' in runner
+
+
 def test_parity_harness_merges_defaults_and_reports_filled_keys(tmp_path: Path) -> None:
     mod = load_parity_module()
     defaults = {

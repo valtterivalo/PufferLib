@@ -866,6 +866,7 @@ static std::unique_ptr<PuffeRL> create_pufferl(py::dict args) {
     hypers.overlap = metal_env_flag("PUFFER_METAL_OVERLAP");
     hypers.cpu_inference = metal_env_flag("PUFFER_METAL_CPU_INFERENCE");
     hypers.train_fp16 = metal_env_flag("PUFFER_METAL_TRAIN_FP16");
+    hypers.sample_mask_in_obs = metal_env_flag("PUFFER_METAL_SAMPLE_MASK_IN_OBS");
     hypers.gpu_id = args.contains("gpu_id") ? get_config_int(args, "gpu_id") : 0;
     mtl_validate_divisible_config_values(
         "total_agents", hypers.total_agents, "num_buffers", hypers.num_buffers);

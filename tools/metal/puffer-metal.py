@@ -14,6 +14,7 @@ METAL_FLAGS = {
     "--metal-overlap": "PUFFER_METAL_OVERLAP",
     "--metal-cpu-inference": "PUFFER_METAL_CPU_INFERENCE",
     "--metal-train-fp16": "PUFFER_METAL_TRAIN_FP16",
+    "--metal-sample-mask-in-obs": "PUFFER_METAL_SAMPLE_MASK_IN_OBS",
 }
 
 
