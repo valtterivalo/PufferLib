@@ -679,6 +679,10 @@ static void inf_step_ctx(EncounterState* state, EncounterContext* context, const
         s->wave = s->wave_spawn_target;
         inf_spawn_wave(s);
         inf_invalidate_los_cache(s);
+        if (getenv("INF_SUPPLY_ANCHOR_LOG"))
+            fprintf(stderr, "SUPPLYLOG wave=%d brew=%d restore=%d bastion=%d stamina=%d\n",
+                s->wave + 1, s->player.brew_doses, s->player.restore_doses,
+                s->player.bastion_doses, s->player.stamina_doses);
         goto finish_step;
     }
     if (s->wave_spawn_delay > 0) goto finish_step;
