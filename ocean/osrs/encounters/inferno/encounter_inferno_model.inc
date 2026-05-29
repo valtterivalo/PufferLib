@@ -768,6 +768,7 @@ typedef struct {
     int oracle_mode;
     float shield_tag_reward_coeff;
     int joseph_reward_mode;
+    float prayer_switch_fail_prob;
 } InfConfig;
 
 typedef struct {

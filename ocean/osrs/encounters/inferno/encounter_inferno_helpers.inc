@@ -940,6 +940,7 @@ static InfConfig inf_default_config(void) {
         .oracle_mode = 0,
         .shield_tag_reward_coeff = 0.0f,
         .joseph_reward_mode = INF_JOSEPH_REWARD_MODE_OFF,
+        .prayer_switch_fail_prob = 0.0f,
     };
 }
 

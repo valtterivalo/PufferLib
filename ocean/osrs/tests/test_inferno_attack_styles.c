@@ -9497,6 +9497,47 @@ static void test_inferno_reset_uses_osrs_run_energy_units(void) {
         osrs_run_energy_percent(state.player.run_energy), 100);
 }
 
+static void test_overhead_switch_slip_rate_matches_probability(void) {
+    printf("--- overhead switch slip rate matches probability ---\n");
+    uint32_t rng = 0xC0FFEEu;
+    int slips = 0;
+    int trials = 200000;
+    for (int i = 0; i < trials; i++)
+        slips += inf_overhead_switch_slips(&rng, 0.25f);
+    ASSERT_FLOAT_NEAR("quarter slip rate", (float)slips / (float)trials, 0.25f, 0.01f);
+
+    int none = 0, all = 0;
+    uint32_t rng2 = 1u;
+    for (int i = 0; i < 1000; i++) {
+        none += inf_overhead_switch_slips(&rng2, 0.0f);
+        all += inf_overhead_switch_slips(&rng2, 1.0f);
+    }
+    ASSERT_INT_EQ("zero prob never slips", none, 0);
+    ASSERT_INT_EQ("unit prob always slips", all, 1000);
+}
+
+static void test_overhead_switch_slip_disabled_applies_switch(void) {
+    printf("--- overhead switch slip disabled applies switch ---\n");
+    InfernoState state;
+    init_jad_timing_test_state(&state, 10, 10, 16, 10);
+    test_config()->prayer_switch_fail_prob = 0.0f;
+    state.player.prayer = PRAYER_NONE;
+    step_inferno_with_prayer(&state, ENCOUNTER_OVERHEAD_SET_REFRESH_MAGIC);
+    ASSERT_INT_EQ("switch applies when slip disabled",
+        state.player.prayer, PRAYER_PROTECT_MAGIC);
+}
+
+static void test_overhead_switch_slip_full_fail_blocks_switch(void) {
+    printf("--- overhead switch slip full fail blocks switch ---\n");
+    InfernoState state;
+    init_jad_timing_test_state(&state, 10, 10, 16, 10);
+    test_config()->prayer_switch_fail_prob = 1.0f;
+    state.player.prayer = PRAYER_PROTECT_RANGED;
+    step_inferno_with_prayer(&state, ENCOUNTER_OVERHEAD_SET_REFRESH_MAGIC);
+    ASSERT_INT_EQ("switch blocked when slip certain",
+        state.player.prayer, PRAYER_PROTECT_RANGED);
+}
+
 int main(void) {
     inf_build_npc_stats();
 
@@ -9584,6 +9625,9 @@ int main(void) {
     test_jad_fire_tick_exposes_three_tick_prayer_deadline();
     test_jad_prayer_on_third_tick_blocks();
     test_jad_prayer_first_on_fourth_tick_does_not_block();
+    test_overhead_switch_slip_rate_matches_probability();
+    test_overhead_switch_slip_disabled_applies_switch();
+    test_overhead_switch_slip_full_fail_blocks_switch();
     test_jad_long_distance_damage_uses_delayed_projectile_landing();
     test_triple_jad_pending_threats_fit_obs_layout();
     test_inferno_obs_shape_includes_step_out_forecast_features();

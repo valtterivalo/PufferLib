@@ -376,6 +376,15 @@ static int inf_oracle_gear_action_for(const InfernoState* s, int wanted_gear) {
     return wanted_gear + 1;
 }
 
+/* Joseph's anti-god-flick mechanic: drop an attempted overhead-protection
+   switch with probability fail_prob, so perfect center-flicking is unreliable
+   and pillar safespotting gains value. integer-quantized against the 16-bit
+   roll so the draw stays bit-identical across CUDA and Metal. */
+static int inf_overhead_switch_slips(uint32_t* rng_state, float fail_prob) {
+    uint64_t numerator = (uint64_t)(fail_prob * 65536.0f);
+    return encounter_roll_ratio_u16(rng_state, numerator, 65536);
+}
+
 static void inf_player_pretick(InfernoState* s, InfernoContext* ctx, const int* actions) {
     /* apply prayer actions. each helper returns 1 when the final active prayer
        was activated this tick, so that slot skips drain. */
@@ -395,7 +404,15 @@ static void inf_player_pretick(InfernoState* s, InfernoContext* ctx, const int* 
             }
         }
     }
-    if (encounter_apply_overhead_action(&s->player.prayer, prayer_act)) {
+    OverheadPrayer prev_overhead = s->player.prayer;
+    int overhead_activated = encounter_apply_overhead_action(&s->player.prayer, prayer_act);
+    if (s->player.prayer != prev_overhead &&
+            ctx->config.prayer_switch_fail_prob > 0.0f &&
+            inf_overhead_switch_slips(&s->rng_state, ctx->config.prayer_switch_fail_prob)) {
+        s->player.prayer = prev_overhead;
+        overhead_activated = 0;
+    }
+    if (overhead_activated) {
         s->player.prayer_just_activated = 1;
     }
     if (encounter_apply_offensive_action(&s->player.offensive_prayer, offensive_act)) {

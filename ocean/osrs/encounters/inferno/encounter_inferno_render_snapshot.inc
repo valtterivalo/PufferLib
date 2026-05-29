@@ -119,6 +119,10 @@ static void inf_put_float_ctx(
     else if (strcmp(key, "shield_penalty_coeff") == 0) ctx->config.shield_penalty_coeff = value;
     else if (strcmp(key, "tag_reward_coeff") == 0) ctx->config.tag_reward_coeff = value;
     else if (strcmp(key, "shield_tag_reward_coeff") == 0) ctx->config.shield_tag_reward_coeff = value;
+    else if (strcmp(key, "prayer_switch_fail_prob") == 0) {
+        inf_require_unit_interval_float_config(key, value);
+        ctx->config.prayer_switch_fail_prob = value;
+    }
     else if (strcmp(key, "death_penalty_coeff") == 0) {
         inf_require_nonnegative_float_config(key, value);
         ctx->config.death_penalty_coeff = value;
@@ -1083,6 +1087,7 @@ static uint64_t inf_config_fingerprint(const InfConfig* config) {
     INF_HASH_CONFIG_FIELD(config, &h, oracle_mode);
     INF_HASH_CONFIG_FIELD(config, &h, shield_tag_reward_coeff);
     INF_HASH_CONFIG_FIELD(config, &h, joseph_reward_mode);
+    INF_HASH_CONFIG_FIELD(config, &h, prayer_switch_fail_prob);
     return h;
 }
 
