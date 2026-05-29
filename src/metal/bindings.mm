@@ -457,8 +457,25 @@ static py::dict policy_debug_rows(py::object pufferl_obj, int start_row, int row
 
     py::dict out;
     out["actions"] = float_actions_rows_range(pufferl.rollouts.actions, start_row, rows);
-    DecoderActivations* decoder = (DecoderActivations*)pufferl.buffer_activations[0].decoder;
-    out["decoder_out"] = precision_rows_range(decoder->out, start_row, rows);
+    py::list decoder_rows;
+    int agents_per_buffer = pufferl.vec->total_agents / pufferl.hypers.num_buffers;
+    for (int row = 0; row < rows; row++) {
+        int global_row = start_row + row;
+        if (global_row < 0 || global_row >= pufferl.vec->total_agents) {
+            decoder_rows.append(py::list());
+            continue;
+        }
+        int buf = global_row / agents_per_buffer;
+        int local_row = global_row % agents_per_buffer;
+        DecoderActivations* decoder = (DecoderActivations*)pufferl.buffer_activations[buf].decoder;
+        py::list one = precision_rows_range(decoder->out, local_row, 1);
+        if (one.size() > 0) {
+            decoder_rows.append(one[0]);
+        } else {
+            decoder_rows.append(py::list());
+        }
+    }
+    out["decoder_out"] = decoder_rows;
     return out;
 }
 
