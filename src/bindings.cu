@@ -59,6 +59,21 @@ static std::string hash_obs_tensor(const OBS_TENSOR_T& tensor) {
     return hash_cuda_bytes(tensor.data, (size_t)numel(tensor.shape) * get_obs_elem_size());
 }
 
+static py::list hash_obs_rows(const OBS_TENSOR_T& tensor, int row_limit) {
+    py::list out;
+    if (tensor.data == nullptr || ndim(tensor.shape) < 2 || row_limit <= 0) return out;
+    int rows = std::min(row_limit, (int)tensor.shape[0]);
+    int cols = (int)tensor.shape[1];
+    size_t elem_size = get_obs_elem_size();
+    size_t row_bytes = (size_t)cols * elem_size;
+    std::vector<unsigned char> host((size_t)rows * row_bytes);
+    cudaMemcpy(host.data(), tensor.data, host.size(), cudaMemcpyDeviceToHost);
+    for (int r = 0; r < rows; r++) {
+        out.append(hash_host_bytes(host.data() + (size_t)r * row_bytes, row_bytes));
+    }
+    return out;
+}
+
 static std::string hash_precision_tensor_i32(const PrecisionTensor& tensor) {
     if (tensor.data == nullptr) return "";
     size_t n = (size_t)numel(tensor.shape);
@@ -180,6 +195,11 @@ py::dict env_debug_sample(py::object pufferl_obj) {
     py::dict out;
     out["observations"] = obs_rows_f32(pufferl.env.obs, 1);
     return out;
+}
+
+py::list env_obs_row_hashes(py::object pufferl_obj, int row_limit) {
+    auto& pufferl = pufferl_obj.cast<PuffeRL&>();
+    return hash_obs_rows(pufferl.env.obs, row_limit);
 }
 
 // Wrapper functions for Python bindings
@@ -717,6 +737,7 @@ PYBIND11_MODULE(_C, m) {
     m.def("parity_hashes", &parity_hashes);
     m.def("policy_debug_sample", &policy_debug_sample);
     m.def("env_debug_sample", &env_debug_sample);
+    m.def("env_obs_row_hashes", &env_obs_row_hashes);
     m.def("train", &train);
     m.def("close", &puf_close);
     m.def("save_weights", &save_weights);

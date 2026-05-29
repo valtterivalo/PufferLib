@@ -55,6 +55,19 @@ static std::string hash_puf_tensor(const PufTensor& tensor) {
     return hash_host_bytes((const unsigned char*)tensor.bytes, nbytes);
 }
 
+static py::list hash_puf_rows(const PufTensor& tensor, int row_limit) {
+    py::list out;
+    if (tensor.bytes == nullptr || tensor.ndim() < 2 || row_limit <= 0) return out;
+    int rows = std::min(row_limit, (int)tensor.shape[0]);
+    int cols = (int)tensor.shape[1];
+    size_t row_bytes = (size_t)cols * tensor.dtype_size;
+    const unsigned char* bytes = (const unsigned char*)tensor.bytes;
+    for (int r = 0; r < rows; r++) {
+        out.append(hash_host_bytes(bytes + (size_t)r * row_bytes, row_bytes));
+    }
+    return out;
+}
+
 static std::string hash_actions_i32(const FloatTensor& tensor) {
     if (tensor.data == nullptr) return "";
     size_t n = (size_t)puf_numel(tensor.shape);
@@ -385,6 +398,18 @@ static py::dict env_debug_sample(py::object pufferl_obj) {
     py::dict out;
     out["observations"] = puf_rows_f32(pufferl.env.obs, 1);
     return out;
+}
+
+static py::list env_obs_row_hashes(py::object pufferl_obj, int row_limit) {
+    PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
+    if (pufferl.train_pending) {
+        sync_pending_train(pufferl);
+    }
+    if (!pufferl.cpu_inference) {
+        mtl_ensure_stream_synced((cudaStream_t)mtl_stream());
+    }
+
+    return hash_puf_rows(pufferl.env.obs, row_limit);
 }
 
 static py::dict train(py::object pufferl_obj) {
@@ -914,6 +939,7 @@ PYBIND11_MODULE(_C, m) {
     m.def("parity_hashes", &parity_hashes);
     m.def("policy_debug_sample", &policy_debug_sample);
     m.def("env_debug_sample", &env_debug_sample);
+    m.def("env_obs_row_hashes", &env_obs_row_hashes);
     m.def("train", &train);
     m.def("close", &puf_close);
     m.def("save_weights", &save_weights);

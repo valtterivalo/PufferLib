@@ -165,6 +165,12 @@ def backend_env_debug_sample(backend: Any, pufferl: Any) -> dict[str, Any]:
     return dict(backend.env_debug_sample(pufferl)) if hasattr(backend, "env_debug_sample") else {}
 
 
+def backend_env_obs_row_hashes(backend: Any, pufferl: Any, row_limit: int) -> list[str]:
+    if row_limit <= 0 or not hasattr(backend, "env_obs_row_hashes"):
+        return []
+    return list(backend.env_obs_row_hashes(pufferl, row_limit))
+
+
 def env_only_hashes(hashes: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in hashes.items() if key.startswith("env_")}
 
@@ -215,6 +221,8 @@ def run_rollout(args: argparse.Namespace) -> None:
                 "hashes": dict(hashes),
                 "parity_hashes": backend_parity_hashes(backend, pufferl),
                 "policy_debug": backend_policy_debug_sample(backend, pufferl),
+                "env_obs_row_hashes": backend_env_obs_row_hashes(
+                    backend, pufferl, args.record_row_hashes),
             })
         rollout_index += 1
 
@@ -278,7 +286,14 @@ def compare_outputs(args: argparse.Namespace) -> None:
         left_hashes = left["traces"][i].get("parity_hashes") or left["traces"][i]["hashes"]
         right_hashes = right["traces"][i].get("parity_hashes") or right["traces"][i]["hashes"]
         if left_hashes != right_hashes:
-            raise AssertionError(f"rollout parity hash mismatch at trace {i}")
+            row_msg = ""
+            left_rows = left["traces"][i].get("env_obs_row_hashes", [])
+            right_rows = right["traces"][i].get("env_obs_row_hashes", [])
+            for row_idx, (lrow, rrow) in enumerate(zip(left_rows, right_rows)):
+                if lrow != rrow:
+                    row_msg = f", first env obs row mismatch {row_idx}"
+                    break
+            raise AssertionError(f"rollout parity hash mismatch at trace {i}{row_msg}")
 
     print("OSRS eval parity outputs match")
 
@@ -296,6 +311,7 @@ def main() -> None:
     rollout.add_argument("--eval-action-mode", choices=sorted(ACTION_MODES), default="argmax")
     rollout.add_argument("--seed", type=int)
     rollout.add_argument("--record-hashes", type=int, default=8)
+    rollout.add_argument("--record-row-hashes", type=int, default=0)
     rollout.add_argument("--backend-label", default="unknown")
     rollout.add_argument("--write-json", type=Path, required=True)
     rollout.set_defaults(func=run_rollout)

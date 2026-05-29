@@ -43,8 +43,11 @@ def test_parity_hashes_compare_semantic_backend_state() -> None:
     assert "policy_debug_sample" in text("src/metal/bindings.mm")
     assert "env_debug_sample" in text("src/bindings.cu")
     assert "env_debug_sample" in text("src/metal/bindings.mm")
+    assert "env_obs_row_hashes" in text("src/bindings.cu")
+    assert "env_obs_row_hashes" in text("src/metal/bindings.mm")
     assert "policy_debug" in harness
     assert "initial_debug" in harness
+    assert "record_row_hashes" in harness
 
 
 def test_masked_sampler_fallback_uses_last_legal_action() -> None:
