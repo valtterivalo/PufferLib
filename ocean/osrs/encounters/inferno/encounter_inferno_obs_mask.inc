@@ -82,6 +82,10 @@ static inline float inf_obs_norm_npc_size(int size) {
     return (float)size / 7.0f;
 }
 
+static inline float inf_obs_norm_pillar_size(const InfPillar* pillar) {
+    return pillar->active ? (float)INF_PILLAR_SIZE / 7.0f : 0.0f;
+}
+
 static void inf_refresh_current_obs_slots_ctx(InfernoState* s, const InfernoContext* ctx) {
     int obs_slots[INF_OBS_NPCS];
     for (int j = 0; j < INF_OBS_NPCS; j++) obs_slots[j] = -1;
@@ -327,12 +331,13 @@ static void inf_write_obs_ctx(
         }
     }
 
-    /* pillars (12 features: active, hp, relative dx, relative dy per pillar) */
+    /* pillars: active, hp, relative southwest tile, active footprint size */
     for (int p = 0; p < INF_NUM_PILLARS; p++) {
         obs[i++] = s->pillars[p].active ? 1.0f : 0.0f;
         obs[i++] = (float)s->pillars[p].hp / (float)INF_PILLAR_HP;
         obs[i++] = (float)(s->pillars[p].x - px) / (float)INF_ARENA_WIDTH;
         obs[i++] = (float)(s->pillars[p].y - py) / (float)INF_ARENA_HEIGHT;
+        obs[i++] = inf_obs_norm_pillar_size(&s->pillars[p]);
     }
 
 #ifdef INF_PROFILE_ENABLED
@@ -464,7 +469,8 @@ static void inf_write_obs_ctx(
     /* assert NPC section wrote exactly the right number of features.
        if this fires, INF_FEATURES_PER_NPC doesn't match the actual feature count. */
     {
-        int expected_npc_end = INF_PLAYER_OBS_SIZE + 12 + INF_TOTAL_NPC_OBS_SIZE;
+        int expected_npc_end = INF_PLAYER_OBS_SIZE + INF_PILLAR_OBS_SIZE +
+            INF_TOTAL_NPC_OBS_SIZE;
         if (i != expected_npc_end) {
             fprintf(stderr, "FATAL: obs misaligned after NPC section: i=%d expected=%d\n",
                     i, expected_npc_end);
@@ -512,7 +518,7 @@ static void inf_write_obs_ctx(
 #endif
 
     {
-        int expected_forecast_end = INF_PLAYER_OBS_SIZE + 12 +
+        int expected_forecast_end = INF_PLAYER_OBS_SIZE + INF_PILLAR_OBS_SIZE +
             INF_TOTAL_NPC_OBS_SIZE + INF_STEP_OUT_FORECAST_OBS_SIZE;
         if (i != expected_forecast_end) {
             fprintf(stderr, "FATAL: obs misaligned after step-out forecast: i=%d expected=%d\n",
