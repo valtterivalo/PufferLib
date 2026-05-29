@@ -157,6 +157,14 @@ def backend_parity_hashes(backend: Any, pufferl: Any) -> dict[str, Any]:
     return dict(backend.parity_hashes(pufferl)) if hasattr(backend, "parity_hashes") else {}
 
 
+def backend_policy_debug_sample(backend: Any, pufferl: Any) -> dict[str, Any]:
+    return dict(backend.policy_debug_sample(pufferl)) if hasattr(backend, "policy_debug_sample") else {}
+
+
+def env_only_hashes(hashes: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in hashes.items() if key.startswith("env_")}
+
+
 def run_rollout(args: argparse.Namespace) -> None:
     root = repo_root()
     sys.path.insert(0, str(root))
@@ -185,7 +193,7 @@ def run_rollout(args: argparse.Namespace) -> None:
     traces: list[dict[str, Any]] = []
     logs: dict[str, Any] = {}
     rollout_index = 0
-    initial_hashes = backend_parity_hashes(backend, pufferl)
+    initial_hashes = env_only_hashes(backend_parity_hashes(backend, pufferl))
     while (
         rollout_index < int(args.rollouts)
         if args.rollouts is not None
@@ -201,6 +209,7 @@ def run_rollout(args: argparse.Namespace) -> None:
                 "env_n": int(logs.get("env/n", 0)),
                 "hashes": dict(hashes),
                 "parity_hashes": backend_parity_hashes(backend, pufferl),
+                "policy_debug": backend_policy_debug_sample(backend, pufferl),
             })
         rollout_index += 1
 
@@ -255,7 +264,7 @@ def compare_outputs(args: argparse.Namespace) -> None:
             raise AssertionError(f"missing metric {key}")
         compare_float(key, left["logs"][key], right["logs"][key], args.tolerance)
 
-    if left.get("initial_hashes") != right.get("initial_hashes"):
+    if env_only_hashes(left.get("initial_hashes", {})) != env_only_hashes(right.get("initial_hashes", {})):
         raise AssertionError("initial parity hash mismatch")
 
     trace_count = min(len(left["traces"]), len(right["traces"]))

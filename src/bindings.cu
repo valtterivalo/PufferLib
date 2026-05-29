@@ -7,6 +7,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <pybind11/numpy.h>
+#include <algorithm>
 #include <iomanip>
 #include <cmath>
 #include <sstream>
@@ -96,6 +97,55 @@ py::dict parity_hashes(py::object pufferl_obj) {
     out["env_terminals"] = hash_float_tensor(pufferl.env.terminals);
     out["env_action_mask"] = hash_byte_tensor(pufferl.env.action_mask);
     out["rollout_actions_i32"] = hash_precision_tensor_i32(pufferl.rollouts.actions);
+    return out;
+}
+
+static py::list precision_actions_rows(const PrecisionTensor& tensor, int rows) {
+    py::list out;
+    if (tensor.data == nullptr || ndim(tensor.shape) < 3) return out;
+    int row_count = std::min(rows, (int)tensor.shape[1]);
+    int cols = (int)tensor.shape[2];
+    size_t n = (size_t)row_count * cols;
+    std::vector<precision_t> host(n);
+    if (n > 0) {
+        cudaMemcpy(host.data(), tensor.data, n * sizeof(precision_t), cudaMemcpyDeviceToHost);
+    }
+    for (int r = 0; r < row_count; r++) {
+        py::list row;
+        for (int c = 0; c < cols; c++) {
+            row.append((int)lrintf(to_float(host[(size_t)r * cols + c])));
+        }
+        out.append(row);
+    }
+    return out;
+}
+
+static py::list precision_rows_f32(const PrecisionTensor& tensor, int rows) {
+    py::list out;
+    if (tensor.data == nullptr || ndim(tensor.shape) < 2) return out;
+    int row_count = std::min(rows, (int)tensor.shape[0]);
+    int cols = (int)tensor.shape[1];
+    size_t n = (size_t)row_count * cols;
+    std::vector<precision_t> host(n);
+    if (n > 0) {
+        cudaMemcpy(host.data(), tensor.data, n * sizeof(precision_t), cudaMemcpyDeviceToHost);
+    }
+    for (int r = 0; r < row_count; r++) {
+        py::list row;
+        for (int c = 0; c < cols; c++) {
+            row.append(to_float(host[(size_t)r * cols + c]));
+        }
+        out.append(row);
+    }
+    return out;
+}
+
+py::dict policy_debug_sample(py::object pufferl_obj) {
+    auto& pufferl = pufferl_obj.cast<PuffeRL&>();
+    py::dict out;
+    out["actions"] = precision_actions_rows(pufferl.rollouts.actions, 4);
+    DecoderActivations* decoder = (DecoderActivations*)pufferl.buffer_activations[0].decoder;
+    out["decoder_out"] = precision_rows_f32(decoder->out, 4);
     return out;
 }
 
@@ -632,6 +682,7 @@ PYBIND11_MODULE(_C, m) {
     m.def("rollouts", &rollouts);
     m.def("rollout_hashes", &rollout_hashes);
     m.def("parity_hashes", &parity_hashes);
+    m.def("policy_debug_sample", &policy_debug_sample);
     m.def("train", &train);
     m.def("close", &puf_close);
     m.def("save_weights", &save_weights);

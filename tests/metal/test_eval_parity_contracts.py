@@ -39,6 +39,9 @@ def test_parity_hashes_compare_semantic_backend_state() -> None:
     harness = text("tools/metal/osrs_eval_parity.py")
     assert "initial_hashes" in harness
     assert "rollout parity hash mismatch" in harness
+    assert "policy_debug_sample" in text("src/bindings.cu")
+    assert "policy_debug_sample" in text("src/metal/bindings.mm")
+    assert "policy_debug" in harness
 
 
 def test_masked_sampler_fallback_uses_last_legal_action() -> None:
