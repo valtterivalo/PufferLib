@@ -3158,6 +3158,42 @@ static void test_pending_hit_obs_timer_prefers_prayer_window(void) {
     ASSERT_INT_EQ("normal timer uses travel time", inf_pending_hit_obs_timer(&normal_hit), 2);
 }
 
+static void test_blob_attacks_player_on_six_tick_cadence(void) {
+    printf("--- blob attacks the player on a 6-tick cadence ---\n");
+
+    InfernoState state = make_test_state(10, 10);
+    state.player.current_defence = 99;
+    state.player.current_magic = 99;
+    state.player.prayer = PRAYER_NONE;
+    state.weapon_set = INF_GEAR_MAGE;
+
+    state.npcs[0] = make_test_npc(
+        INF_NPC_BLOB, 20, 10, INF_NPC_STATS[INF_NPC_BLOB].size);
+    state.npcs[0].active = 1;
+    state.npcs[0].hp = INF_NPC_STATS[INF_NPC_BLOB].hp;
+
+    /* the blob fires on a 2-phase scan/fire cycle; the scan latches a prayer read
+       and the fire clears it. fire-to-fire spacing is the damage cadence: 6 ticks
+       (per-phase speed 3). ref: InfernoTrainer JalAk.ts attackSpeed=3. */
+    int prev_scanned = state.npcs[0].blob_scanned_prayer;
+    int last_fire = -1, gap_a = -1, gap_b = -1;
+    for (int tick = 0; tick < 40; tick++) {
+        inf_npc_attack(&state, 0);
+        int cur_scanned = state.npcs[0].blob_scanned_prayer;
+        if (prev_scanned >= 0 && cur_scanned < 0) {  /* fire cleared the scan this tick */
+            if (last_fire >= 0) {
+                if (gap_a < 0) gap_a = tick - last_fire;
+                else if (gap_b < 0) gap_b = tick - last_fire;
+            }
+            last_fire = tick;
+        }
+        prev_scanned = cur_scanned;
+    }
+
+    ASSERT_INT_EQ("blob fire-to-fire cadence is 6 ticks", gap_a, 6);
+    ASSERT_INT_EQ("blob cadence stays 6 across cycles", gap_b, 6);
+}
+
 static void test_jad_has_no_pre_fire_style_preview(void) {
     printf("--- jad has no pre-fire style preview ---\n");
 
@@ -7104,8 +7140,8 @@ static void test_autocast_is_inactive_with_non_autocast_weapon(void) {
         state.player.autocast_spell, ENCOUNTER_SPELL_ICE);
 }
 
-static void test_echo_boots_recoil_hits_nearby_npcs_once(void) {
-    printf("--- echo boots recoil hits nearby NPCs once ---\n");
+static void test_echo_boots_recoil_reflects_to_attacker_only(void) {
+    printf("--- echo boots recoil reflects to the attacking NPC only ---\n");
 
     InfernoState state = make_test_state(20, 20);
     memset(state.player.equipped, ITEM_NONE, sizeof(state.player.equipped));
@@ -7113,6 +7149,7 @@ static void test_echo_boots_recoil_hits_nearby_npcs_once(void) {
     state.player.equipped[GEAR_SLOT_FEET] = ITEM_ECHO_BOOTS;
     osrs_refresh_player_equipment(&state.player);
 
+    /* slot 0: adjacent bystander; slot 1: the (distant) attacker; slot 2: Zuk */
     state.npcs[0] = make_test_npc(INF_NPC_BAT, 21, 20, INF_NPC_STATS[INF_NPC_BAT].size);
     state.npcs[0].active = 1;
     state.npcs[0].hp = state.npcs[0].max_hp = 10;
@@ -7123,23 +7160,28 @@ static void test_echo_boots_recoil_hits_nearby_npcs_once(void) {
     state.npcs[2].active = 1;
     state.npcs[2].hp = state.npcs[2].max_hp = 1200;
 
-    inf_apply_echo_boots_recoil(&state, 0);
+    /* zero damage: no recoil, no charge spent */
+    inf_apply_echo_boots_recoil(&state, 1, 0);
     ASSERT_INT_EQ("zero damage does not consume echo charge",
         state.player.item_effect_state.echo_boot_charges, OSRS_ECHO_BOOTS_MAX_CHARGES);
-    ASSERT_INT_EQ("zero damage does not recoil nearby NPC",
-        state.npcs[0].hp, 10);
+    ASSERT_INT_EQ("zero damage does not recoil the attacker",
+        state.npcs[1].hp, 10);
 
-    inf_apply_echo_boots_recoil(&state, 7);
+    /* the distant attacker (slot 1) takes recoil; the adjacent bystander does not */
+    inf_apply_echo_boots_recoil(&state, 1, 7);
     ASSERT_INT_EQ("positive damage consumes one echo charge",
         state.player.item_effect_state.echo_boot_charges, OSRS_ECHO_BOOTS_MAX_CHARGES - 1);
-    ASSERT_INT_EQ("nearby NPC takes echo recoil",
-        state.npcs[0].hp, 9);
-    ASSERT_INT_EQ("far NPC avoids echo recoil",
-        state.npcs[1].hp, 10);
-    ASSERT_INT_EQ("Zuk avoids echo recoil",
-        state.npcs[2].hp, 1200);
+    ASSERT_INT_EQ("the attacker takes echo recoil regardless of distance",
+        state.npcs[1].hp, 9);
+    ASSERT_INT_EQ("an adjacent bystander is not hit",
+        state.npcs[0].hp, 10);
     ASSERT_FLOAT_NEAR("echo recoil records one damage",
         state.tick_scratch.damage_dealt, 1.0f, 1e-6f);
+
+    /* a Zuk attacker is excluded from recoil */
+    inf_apply_echo_boots_recoil(&state, 2, 7);
+    ASSERT_INT_EQ("Zuk attacker avoids echo recoil",
+        state.npcs[2].hp, 1200);
 }
 
 static void test_redemption_pressure_counts_zero_hit_low_hp_landing(void) {
@@ -9529,6 +9571,7 @@ int main(void) {
     test_mager_resurrection_render_event_is_not_magic_projectile();
     test_double_mager_wave_resurrection_limit();
     test_pending_hit_obs_timer_prefers_prayer_window();
+    test_blob_attacks_player_on_six_tick_cadence();
     test_jad_has_no_pre_fire_style_preview();
     test_jad_fire_tick_exposes_three_tick_prayer_deadline();
     test_jad_prayer_on_third_tick_blocks();
@@ -9639,7 +9682,7 @@ int main(void) {
     test_human_walk_command_sends_no_selected_spell_cast();
     test_human_autocast_selection_persists_across_weapon_switches();
     test_autocast_is_inactive_with_non_autocast_weapon();
-    test_echo_boots_recoil_hits_nearby_npcs_once();
+    test_echo_boots_recoil_reflects_to_attacker_only();
     test_redemption_pressure_counts_zero_hit_low_hp_landing();
     test_redemption_pressure_splits_lethal_band_deaths();
     test_redemption_action_maps_without_smite();

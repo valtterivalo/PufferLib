@@ -206,6 +206,10 @@ static void inf_build_npc_stats(void) {
         /* from generated monster DB */
         s->hp              = m->hp;
         s->attack_speed    = m->attack_speed;
+        /* blob fires on a 2-phase scan/fire cycle; per-phase speed 3 gives a
+           6-tick damage cadence. the DB's 6 is the full cadence, wrong for this
+           2-phase model. ref: InfernoTrainer JalAk.ts attackSpeed=3. */
+        if (i == INF_NPC_BLOB) s->attack_speed = 3;
         s->size            = m->size;
         s->att_level       = m->att_level;
         s->str_level       = m->str_level;

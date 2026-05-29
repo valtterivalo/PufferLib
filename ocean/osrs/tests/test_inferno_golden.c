@@ -140,9 +140,9 @@ static const GoldenConfig CONFIGS[] = {
 /* baseline digests captured on the pre-refactor commit. regenerate with
    --print only when an intentional behavior change is made, and explain why. */
 static const uint64_t BASELINE[NUM_CONFIGS] = {
-    0xe14f738134f300d2ULL,  /* wave1_a */
+    0x392d2a7dfee04582ULL,  /* wave1_a */
     0x85ca94938e2680b7ULL,  /* wave1_b */
-    0x629656a924edbf58ULL,  /* wave1_c */
+    0x875528314f9d6e2eULL,  /* wave1_c */
     0x13be850dcc8e98f4ULL,  /* meleer_a */
     0x2b1efb7280b314b1ULL,  /* meleer_b */
     0x3845465a254bf044ULL,  /* ranger_a */
