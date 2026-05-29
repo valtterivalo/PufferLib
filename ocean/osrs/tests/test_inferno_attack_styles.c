@@ -9538,6 +9538,23 @@ static void test_overhead_switch_slip_full_fail_blocks_switch(void) {
         state.player.prayer, PRAYER_PROTECT_RANGED);
 }
 
+static void test_inferno_binding_forwards_prayer_switch_fail_prob(void) {
+    printf("--- inferno binding forwards prayer switch fail prob ---\n");
+
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "prayer switch fail prob optional float",
+        "ocean/osrs_inferno/binding.c",
+        "optional_float_keys[]",
+        "};",
+        "\"prayer_switch_fail_prob\"");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "prayer switch fail prob default config",
+        "config/ocean/osrs_inferno.ini",
+        "[env]",
+        "[vec]",
+        "prayer_switch_fail_prob = 0.0");
+}
+
 int main(void) {
     inf_build_npc_stats();
 
@@ -9628,6 +9645,7 @@ int main(void) {
     test_overhead_switch_slip_rate_matches_probability();
     test_overhead_switch_slip_disabled_applies_switch();
     test_overhead_switch_slip_full_fail_blocks_switch();
+    test_inferno_binding_forwards_prayer_switch_fail_prob();
     test_jad_long_distance_damage_uses_delayed_projectile_landing();
     test_triple_jad_pending_threats_fit_obs_layout();
     test_inferno_obs_shape_includes_step_out_forecast_features();
