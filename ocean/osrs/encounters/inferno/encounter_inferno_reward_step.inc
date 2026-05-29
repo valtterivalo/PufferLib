@@ -183,14 +183,25 @@ static float inf_compute_reward_ctx(InfernoState* s, const InfernoContext* ctx) 
         return inf_compute_joseph_reward(s, ctx, healer_is_actively_healing);
     }
 
+    /* The tags-first gate suppresses every shaped reward term until four Zuk
+       healers are tagged. It can only be active on the final wave (it requires
+       zuk.healer_spawned), so handle it as an early return and let the shared
+       reward block below run unguarded. */
     float reward = 0.0f;
     if (inf_is_final_wave(s)) {
+        if (tags_first_gate) {
+            reward = inf_zuk_low_watermark_reward(
+                s, ctx, INF_ZUK_LOWWATERMARK_TRACK_ONLY);
+            reward += ctx->config.tag_reward_coeff * (float)s->tick_scratch.healer_tags;
+            reward += inf_zuk_healer_attack_shape_reward(s, ctx);
+            return reward;
+        }
         int use_zuk_healer_phase_hp_delta =
-            !tags_first_gate && s->zuk.healer_spawned &&
+            s->zuk.healer_spawned &&
             ctx->config.zuk_healer_phase_hp_delta_coeff > 0.0f;
         InfZukLowWatermarkMode watermark_mode =
             INF_ZUK_LOWWATERMARK_REWARD_ALLOWED;
-        if (tags_first_gate || use_zuk_healer_phase_hp_delta) {
+        if (use_zuk_healer_phase_hp_delta) {
             watermark_mode = INF_ZUK_LOWWATERMARK_TRACK_ONLY;
         } else if (zuk_is_actively_healed) {
             watermark_mode = INF_ZUK_LOWWATERMARK_REWARD_BLOCKED_EXCEPT_THRESHOLD;
@@ -200,16 +211,15 @@ static float inf_compute_reward_ctx(InfernoState* s, const InfernoContext* ctx) 
             reward += ctx->config.zuk_healer_phase_hp_delta_coeff *
                 (s->tick_scratch.damage_zuk - s->tick_scratch.hp_restored_zuk);
         }
-        if (!tags_first_gate)
-            reward += ctx->config.damage_reward_coeff * s->tick_scratch.damage_zuk_healers;
-        if (!tags_first_gate && healer_is_actively_healing) {
+        reward += ctx->config.damage_reward_coeff * s->tick_scratch.damage_zuk_healers;
+        if (healer_is_actively_healing) {
             float generic_heal_cost = s->tick_scratch.hp_restored;
             if (use_zuk_healer_phase_hp_delta)
                 generic_heal_cost -= s->tick_scratch.hp_restored_zuk;
             if (generic_heal_cost < 0.0f) generic_heal_cost = 0.0f;
             reward -= ctx->config.damage_reward_coeff * generic_heal_cost;
         }
-        if (!tags_first_gate && s->zuk.healer_spawned &&
+        if (s->zuk.healer_spawned &&
                 ctx->config.zuk_untagged_healer_tick_penalty_coeff > 0.0f) {
             reward -= ctx->config.zuk_untagged_healer_tick_penalty_coeff *
                 (float)inf_count_untagged_zuk_healers(s);
@@ -223,22 +233,21 @@ static float inf_compute_reward_ctx(InfernoState* s, const InfernoContext* ctx) 
         reward = ctx->config.damage_reward_coeff *
             fmaxf(0.0f, rewardable_damage - s->tick_scratch.hp_restored);
     }
-    if (!tags_first_gate) reward += inf_offensive_prayer_damage_reward(s, ctx);
+
+    reward += inf_offensive_prayer_damage_reward(s, ctx);
     reward += ctx->config.tag_reward_coeff * (float)s->tick_scratch.healer_tags;
     reward += inf_zuk_healer_attack_shape_reward(s, ctx);
-    if (!tags_first_gate) {
-        reward += ctx->config.shield_tag_reward_coeff * (float)s->tick_scratch.shield_tags;
-        reward += ctx->config.zuk_untagged_healer_target_bonus_coeff *
-            (float)s->tick_scratch.zuk_untagged_healer_targets;
-        reward += ctx->config.zuk_safe_untagged_healer_target_bonus_coeff *
-            (float)s->tick_scratch.zuk_safe_untagged_healer_targets;
-    }
+    reward += ctx->config.shield_tag_reward_coeff * (float)s->tick_scratch.shield_tags;
+    reward += ctx->config.zuk_untagged_healer_target_bonus_coeff *
+        (float)s->tick_scratch.zuk_untagged_healer_targets;
+    reward += ctx->config.zuk_safe_untagged_healer_target_bonus_coeff *
+        (float)s->tick_scratch.zuk_safe_untagged_healer_targets;
 
     /* Late-game reward shape. */
     int zuk_idx = inf_find_live_zuk_idx(s);
     int zuk_hp_now = (zuk_idx >= 0) ? s->npcs[zuk_idx].hp : 1200;
     int late_add_reward_active = s->zuk.jad_spawned || zuk_hp_now <= 600;
-    if (late_add_reward_active && !tags_first_gate) {
+    if (late_add_reward_active) {
         float rewardable_jad_damage =
             jad_is_actively_healed ? 0.0f : s->tick_scratch.damage_jad;
         reward += ctx->config.jad_damage_reward_coeff * rewardable_jad_damage;
@@ -279,45 +288,43 @@ static float inf_compute_reward_ctx(InfernoState* s, const InfernoContext* ctx) 
     }
     /* emit pending kill bonuses gradually so a single-tick kill doesn't
        saturate the [-1, 1] PPO reward clamp. */
-    if (!tags_first_gate && s->pending_jad_kill_bonus > 0.0f) {
+    if (s->pending_jad_kill_bonus > 0.0f) {
         float emit = fminf(0.07f, s->pending_jad_kill_bonus);
         reward += emit;
         s->pending_jad_kill_bonus -= emit;
     }
-    if (!tags_first_gate && s->pending_zuk_healer_kill_bonus > 0.0f) {
+    if (s->pending_zuk_healer_kill_bonus > 0.0f) {
         float emit = fminf(0.05f, s->pending_zuk_healer_kill_bonus);
         reward += emit;
         s->pending_zuk_healer_kill_bonus -= emit;
     }
-    if (!tags_first_gate && s->pending_set_kill_bonus > 0.0f) {
+    if (s->pending_set_kill_bonus > 0.0f) {
         float emit = fminf(0.03f, s->pending_set_kill_bonus);
         reward += emit;
         s->pending_set_kill_bonus -= emit;
     }
 
-    if (!tags_first_gate) {
-        float shield_penalty = ctx->config.shield_penalty_coeff * s->tick_scratch.shield_damage;
-        if (ctx->config.shield_penalty_episode_cap > 0.0f) {
-            float remaining = ctx->config.shield_penalty_episode_cap -
-                s->shield_penalty_episode_total;
-            if (remaining < 0.0f) remaining = 0.0f;
-            if (shield_penalty > remaining) shield_penalty = remaining;
-        }
-        s->shield_penalty_episode_total += shield_penalty;
-        reward -= shield_penalty;
+    float shield_penalty = ctx->config.shield_penalty_coeff * s->tick_scratch.shield_damage;
+    if (ctx->config.shield_penalty_episode_cap > 0.0f) {
+        float remaining = ctx->config.shield_penalty_episode_cap -
+            s->shield_penalty_episode_total;
+        if (remaining < 0.0f) remaining = 0.0f;
+        if (shield_penalty > remaining) shield_penalty = remaining;
     }
+    s->shield_penalty_episode_total += shield_penalty;
+    reward -= shield_penalty;
 
-    if (!tags_first_gate && ctx->config.phase_900_bonus > 0.0f && !s->phase_900_fired
+    if (ctx->config.phase_900_bonus > 0.0f && !s->phase_900_fired
             && s->min_zuk_hp_seen <= 900.0f && s->min_zuk_hp_seen > 0.0f) {
         reward += ctx->config.phase_900_bonus;
         s->phase_900_fired = 1;
     }
-    if (!tags_first_gate && ctx->config.phase_600_bonus > 0.0f && !s->phase_600_fired
+    if (ctx->config.phase_600_bonus > 0.0f && !s->phase_600_fired
             && s->min_zuk_hp_seen <= 600.0f && s->min_zuk_hp_seen > 0.0f) {
         reward += ctx->config.phase_600_bonus;
         s->phase_600_fired = 1;
     }
-    if (!tags_first_gate && ctx->config.phase_300_bonus > 0.0f && !s->phase_300_fired
+    if (ctx->config.phase_300_bonus > 0.0f && !s->phase_300_fired
             && s->min_zuk_hp_seen <= 300.0f && s->min_zuk_hp_seen > 0.0f) {
         reward += ctx->config.phase_300_bonus;
         s->phase_300_fired = 1;
@@ -528,7 +535,7 @@ static void inf_step_ctx(EncounterState* state, EncounterContext* context, const
     int in_ready_gap = s->wave_ready_delay > 0;
 
     inf_resolve_player_projectiles_on_npcs(s);
-    inf_resolve_player_pending_hits_ctx(s, ctx);
+    inf_resolve_player_pending_hits(s);
     inf_resolve_pending_sparks(s);
 
     if (!in_wave_gap && !in_ready_gap) {

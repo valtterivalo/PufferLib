@@ -1585,42 +1585,6 @@ void c_step(Env* env) {
                         (float)(s->tick_at_all_zuk_healers_dead - s->tick_at_le_240);
                 }
             }
-            env->log.redemption_proc_opportunities_normal_sum +=
-                (float)s->redemption_proc_opportunities;
-            env->log.redemption_zero_hit_proc_opportunities_normal_sum +=
-                (float)s->redemption_zero_hit_proc_opportunities;
-            env->log.redemption_proc_opportunities_after_240_normal_sum +=
-                (float)s->redemption_proc_opportunities_after_240;
-            env->log.redemption_heal_potential_normal_sum +=
-                s->redemption_heal_potential;
-            env->log.redemption_heal_potential_after_240_normal_sum +=
-                s->redemption_heal_potential_after_240;
-            env->log.redemption_deaths_from_band_normal +=
-                (float)s->redemption_deaths_from_band;
-            env->log.redemption_deaths_from_band_after_240_normal +=
-                (float)s->redemption_deaths_from_band_after_240;
-            env->log.redemption_deaths_from_above_band_normal +=
-                (float)s->redemption_deaths_from_above_band;
-            env->log.redemption_action_count_normal_sum +=
-                (float)s->redemption_action_count;
-            env->log.redemption_active_ticks_normal_sum +=
-                (float)s->redemption_active_ticks;
-            env->log.redemption_proc_count_normal_sum +=
-                (float)s->redemption_proc_count;
-            env->log.redemption_zero_hit_proc_count_normal_sum +=
-                (float)s->redemption_zero_hit_proc_count;
-            env->log.redemption_heal_done_normal_sum +=
-                s->redemption_heal_done;
-            for (int t = 0; t < INF_NUM_NPC_TYPES; t++) {
-                env->log.redemption_proc_opportunities_by_type_normal[t] +=
-                    (float)s->redemption_proc_opportunities_by_type[t];
-                env->log.redemption_zero_hit_proc_opportunities_by_type_normal[t] +=
-                    (float)s->redemption_zero_hit_proc_opportunities_by_type[t];
-                env->log.redemption_heal_potential_by_type_normal[t] +=
-                    s->redemption_heal_potential_by_type[t];
-                env->log.redemption_deaths_from_band_by_type_normal[t] +=
-                    (float)s->redemption_deaths_from_band_by_type[t];
-            }
             /* Terminal death pressure by phase. */
             if (!won) {
                 int jad_alive = 0, zuk_healer_alive = 0, jad_healer_alive = 0, set_alive = 0;
@@ -2493,10 +2457,6 @@ void my_log(Log* log, Dict* out) {
             log->spark_damage_after_240_normal_sum / log->n_normal);
         dict_set(out, "hp_restored_after_240_normal",
             log->hp_restored_after_240_normal_sum / log->n_normal);
-        dict_set(out, "redemption_proc_opportunities_normal",
-            log->redemption_proc_opportunities_normal_sum / log->n_normal);
-        dict_set(out, "redemption_proc_count_normal",
-            log->redemption_proc_count_normal_sum / log->n_normal);
     } else {
         dict_set(out, "score_normal", 0.0f);
         dict_set(out, "phase_reached_normal", 0.0f);
@@ -2507,7 +2467,5 @@ void my_log(Log* log, Dict* out) {
         dict_set(out, "post_healer_objective_normal", 0.0f);
         dict_set(out, "spark_damage_after_240_normal", 0.0f);
         dict_set(out, "hp_restored_after_240_normal", 0.0f);
-        dict_set(out, "redemption_proc_opportunities_normal", 0.0f);
-        dict_set(out, "redemption_proc_count_normal", 0.0f);
     }
 }

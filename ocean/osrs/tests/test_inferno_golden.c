@@ -140,21 +140,21 @@ static const GoldenConfig CONFIGS[] = {
 /* baseline digests captured on the pre-refactor commit. regenerate with
    --print only when an intentional behavior change is made, and explain why. */
 static const uint64_t BASELINE[NUM_CONFIGS] = {
-    0x420f1c4b3e07c193ULL,  /* wave1_a */
-    0x974d67433e944c07ULL,  /* wave1_b */
-    0x7bb22b80c6ad1397ULL,  /* wave1_c */
-    0x627334cfa1546997ULL,  /* meleer_a */
-    0x68a8b0a45bce0dbeULL,  /* meleer_b */
-    0x7258e5bb1cf1f03fULL,  /* ranger_a */
-    0x9ad1b77d7d2b8d69ULL,  /* ranger_b */
-    0xf10ecca7b95afae2ULL,  /* mager_a */
-    0x60d3c5afc8256a4eULL,  /* mager_b */
-    0x946900f452296cfcULL,  /* jad_a */
-    0x812f7c8c5052ecb8ULL,  /* jad_b */
-    0xa56aef3cc4206864ULL,  /* jad_c */
-    0xe314acc9b371d9bdULL,  /* zuk_a */
-    0xa40678547943109dULL,  /* zuk_b */
-    0x027a7395b16bc901ULL,  /* zuk_c */
+    0xedd0891d9c989453ULL,  /* wave1_a */
+    0xebf9eeab026a1a6eULL,  /* wave1_b */
+    0xaa3a8c231b1cdf05ULL,  /* wave1_c */
+    0x475ff3d00ab8f5e9ULL,  /* meleer_a */
+    0x2b1efb7280b314b1ULL,  /* meleer_b */
+    0x0460fa2a3bbf748aULL,  /* ranger_a */
+    0x7a77b4b9d6d3546eULL,  /* ranger_b */
+    0x1c33f72182f375a1ULL,  /* mager_a */
+    0x49b891bf5154ab31ULL,  /* mager_b */
+    0x6e163506a4a3aabcULL,  /* jad_a */
+    0xa0fa046c872a6580ULL,  /* jad_b */
+    0x99c910e532cb08f4ULL,  /* jad_c */
+    0x896e9b459e42ec5aULL,  /* zuk_a */
+    0xcd80891d974a5643ULL,  /* zuk_b */
+    0x907aed0bd291e1e8ULL,  /* zuk_c */
 };
 
 int main(int argc, char** argv) {

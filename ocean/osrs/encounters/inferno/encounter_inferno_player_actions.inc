@@ -398,8 +398,6 @@ static void inf_player_pretick(InfernoState* s, InfernoContext* ctx, const int* 
     if (encounter_apply_overhead_action(&s->player.prayer, prayer_act)) {
         s->player.prayer_just_activated = 1;
     }
-    if (prayer_act == ENCOUNTER_OVERHEAD_SET_REFRESH_REDEMPTION)
-        s->redemption_action_count++;
     if (encounter_apply_offensive_action(&s->player.offensive_prayer, offensive_act)) {
         s->player.offensive_prayer_just_activated = 1;
     }
@@ -407,8 +405,6 @@ static void inf_player_pretick(InfernoState* s, InfernoContext* ctx, const int* 
        AFTER drain to catch both the apply-side change and the drain-side clear. */
     encounter_drain_all_prayers(
         &s->player, encounter_player_prayer_bonus(&s->player));
-    if (s->player.prayer == PRAYER_REDEMPTION)
-        s->redemption_active_ticks++;
     /* offensive prayer is baked into eff_level/max_hit via the loadout cache.
        recompute all loadouts on any change so combat math reflects current state. */
     if (s->player.offensive_prayer != prev_offensive) {
@@ -849,7 +845,7 @@ static void inf_tick_player_ctx(
                         const InfNPCStats* ns = &INF_NPC_STATS[target_npc->type];
                         btargets[bt_count++] = (BarrageTarget){
                             .active = 1, .x = target_npc->x, .y = target_npc->y,
-                            .def_level = ns->def_level, .magic_def_bonus = ns->magic_def_bonus,
+                            .magic_level = ns->magic_level, .magic_def_bonus = ns->magic_def_bonus,
                             .npc_idx = s->interaction.target_slot,
                             .frozen_ticks = &s->npcs[s->interaction.target_slot].frozen_ticks,
                             .hit = 0, .damage = 0
@@ -864,7 +860,7 @@ static void inf_tick_player_ctx(
                         const InfNPCStats* ns2 = &INF_NPC_STATS[s->npcs[i].type];
                         btargets[bt_count++] = (BarrageTarget){
                             .active = 1, .x = s->npcs[i].x, .y = s->npcs[i].y,
-                            .def_level = ns2->def_level, .magic_def_bonus = ns2->magic_def_bonus,
+                            .magic_level = ns2->magic_level, .magic_def_bonus = ns2->magic_def_bonus,
                             .npc_idx = i,
                             .frozen_ticks = &s->npcs[i].frozen_ticks,
                             .hit = 0, .damage = 0
@@ -954,7 +950,7 @@ static void inf_tick_player_ctx(
                         s->player.current_hitpoints,
                         s->player.base_hitpoints
                     );
-                    int def_roll = (ns->def_level + 8) * (ns->ranged_def_bonus + 64);
+                    int def_roll = (ns->def_level + 9) * (ns->ranged_def_bonus + 64);
                     int hit_success = encounter_rand_float(&s->rng_state) <
                         osrs_hit_chance(attack_effects.attack_roll, def_roll);
                     if (hit_success) {
@@ -1123,17 +1119,9 @@ static void inf_resolve_player_projectiles_on_npcs(InfernoState* s) {
     inf_apply_blood_barrage_heal_damage(s, blood_heal_acc);
 }
 
-static void inf_resolve_player_pending_hits_ctx(InfernoState* s, const InfernoContext* ctx) {
+static void inf_resolve_player_pending_hits(InfernoState* s) {
     for (int i = 0; i < s->player_pending_hits.count; i++) {
         EncounterPendingHit* hit = &s->player_pending_hits.hits[i];
-
-        if (hit->check_prayer && hit->prayer_check_delay > 0 &&
-            hit->source_npc_type != INF_NPC_JAD) {
-            hit->prayer_check_delay--;
-            if (hit->prayer_check_delay == 0) {
-                inf_apply_delayed_prayer_check(s, ctx, hit);
-            }
-        }
 
         hit->ticks_remaining--;
         if (hit->ticks_remaining <= 0) {
@@ -1164,16 +1152,12 @@ static void inf_resolve_player_pending_hits_ctx(InfernoState* s, const InfernoCo
                 dmg = inf_apply_elysian_to_player_hit(s, dmg, &elysian_reduced);
                 if (elysian_reduced) s->player.elysian_proc_this_tick = 1;
             }
-            inf_apply_echo_boots_recoil(s, dmg);
+            inf_apply_echo_boots_recoil(s, hit->source_npc_slot, dmg);
             inf_damage_player_from_type(s, hit->source_npc_type, dmg);
             encounter_pending_hit_queue_remove(&s->player_pending_hits, i, "inferno player");
             i--;
         }
     }
-}
-
-static void inf_resolve_player_pending_hits(InfernoState* s) {
-    inf_resolve_player_pending_hits_ctx(s, inf_legacy_context());
 }
 
 static void inf_resolve_jad_prayer_checks_after_player(

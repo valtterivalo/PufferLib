@@ -120,7 +120,7 @@ static inline float encounter_rand_float(uint32_t* rng_state) {
 typedef struct {
     int active;          /* in: 1 if this target slot is valid */
     int x, y;            /* in: NPC SW corner tile position */
-    int def_level;       /* in: NPC defence level */
+    int magic_level;     /* in: NPC magic level (magic rolls vs magic level, not defence) */
     int magic_def_bonus; /* in: NPC magic defence bonus */
     int npc_idx;         /* in: index into caller's NPC array (for callbacks) */
     int* frozen_ticks;   /* in: pointer to NPC's frozen_ticks (NULL = no freeze tracking) */
@@ -164,7 +164,7 @@ static inline BarrageResult osrs_barrage_resolve(
     /* primary target (index 0) always gets rolled */
     int px = targets[0].x, py = targets[0].y;
     {
-        int def_roll = (targets[0].def_level + 8) * (targets[0].magic_def_bonus + 64);
+        int def_roll = (targets[0].magic_level + 9) * (targets[0].magic_def_bonus + 64);
         float chance = primary_use_double_accuracy
             ? osrs_hit_chance_double(att_roll, def_roll)
             : osrs_hit_chance(att_roll, def_roll);
@@ -188,7 +188,7 @@ static inline BarrageResult osrs_barrage_resolve(
         int dy = targets[i].y - py;
         if (dx < -1 || dx > 1 || dy < -1 || dy > 1) continue;
 
-        int def_roll = (targets[i].def_level + 8) * (targets[i].magic_def_bonus + 64);
+        int def_roll = (targets[i].magic_level + 9) * (targets[i].magic_def_bonus + 64);
         float chance = osrs_hit_chance(att_roll, def_roll);
         targets[i].rolled = 1;
         targets[i].hit = encounter_rand_float(rng_state) < chance;
@@ -206,14 +206,14 @@ static inline BarrageResult osrs_barrage_resolve(
 }
 
 
-/* NPC melee max hit: floor((str + 8) * (melee_str_bonus + 64) + 320) / 640) */
+/* NPC melee max hit: floor((str + 9) * (melee_str_bonus + 64) + 320) / 640) */
 static inline int osrs_npc_melee_max_hit(int str_level, int melee_str_bonus) {
-    return ((str_level + 8) * (melee_str_bonus + 64) + 320) / 640;
+    return ((str_level + 9) * (melee_str_bonus + 64) + 320) / 640;
 }
 
-/* NPC ranged max hit: floor(0.5 + (range + 8) * (ranged_str_bonus + 64) / 640) */
+/* NPC ranged max hit: floor(0.5 + (range + 9) * (ranged_str_bonus + 64) / 640) */
 static inline int osrs_npc_ranged_max_hit(int range_level, int ranged_str_bonus) {
-    return (int)(0.5 + (double)(range_level + 8) * (ranged_str_bonus + 64) / 640.0);
+    return (int)(0.5 + (double)(range_level + 9) * (ranged_str_bonus + 64) / 640.0);
 }
 
 /* NPC magic max hit: floor(base_spell_dmg * magic_dmg_pct / 100).

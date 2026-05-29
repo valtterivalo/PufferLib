@@ -34,7 +34,7 @@ static const int INF_SPAWN_POS[INF_NUM_SPAWN_POS][2] = {
 
 /* nibbler spawn position (near pillars) */
 #define INF_NIBBLER_SPAWN_X 20
-#define INF_NIBBLER_SPAWN_Y 32
+#define INF_NIBBLER_SPAWN_Y 31
 
 #define INF_MAX_TICKS     18000  /* 3 hours at 0.6s/tick */
 #define INF_NUM_WAVES     69
@@ -206,6 +206,10 @@ static void inf_build_npc_stats(void) {
         /* from generated monster DB */
         s->hp              = m->hp;
         s->attack_speed    = m->attack_speed;
+        /* blob fires on a 2-phase scan/fire cycle; per-phase speed 3 gives a
+           6-tick damage cadence. the DB's 6 is the full cadence, wrong for this
+           2-phase model. ref: InfernoTrainer JalAk.ts attackSpeed=3. */
+        if (i == INF_NPC_BLOB) s->attack_speed = 3;
         s->size            = m->size;
         s->att_level       = m->att_level;
         s->str_level       = m->str_level;
@@ -518,7 +522,6 @@ typedef struct {
     int shield_freeze;     /* ticks of freeze at boundary */
 
     /* spawn timers */
-    int initial_delay;     /* 14 ticks before first attack */
     int set_timer;         /* ticks until next set spawn (starts at 72) */
     int set_interval;      /* 350 ticks between set spawns */
     int enraged;           /* 1 when HP < 240 */
@@ -911,23 +914,6 @@ typedef struct {
     int prayer_correct_by_type[INF_NUM_NPC_TYPES];
     int attacks_by_type[INF_NUM_NPC_TYPES];
     float dmg_from_type[INF_NUM_NPC_TYPES];
-    int redemption_proc_opportunities;
-    int redemption_zero_hit_proc_opportunities;
-    int redemption_proc_opportunities_after_240;
-    int redemption_deaths_from_band;
-    int redemption_deaths_from_band_after_240;
-    int redemption_deaths_from_above_band;
-    float redemption_heal_potential;
-    float redemption_heal_potential_after_240;
-    int redemption_proc_opportunities_by_type[INF_NUM_NPC_TYPES];
-    int redemption_zero_hit_proc_opportunities_by_type[INF_NUM_NPC_TYPES];
-    int redemption_deaths_from_band_by_type[INF_NUM_NPC_TYPES];
-    float redemption_heal_potential_by_type[INF_NUM_NPC_TYPES];
-    int redemption_action_count;
-    int redemption_active_ticks;
-    int redemption_proc_count;
-    int redemption_zero_hit_proc_count;
-    float redemption_heal_done;
     int last_hit_by_type;      /* NPC type that last dealt damage to player (-1=none) */
     int killed_by_type[INF_NUM_NPC_TYPES];  /* count of deaths caused by each NPC type */
     int total_idle_ticks;      /* cumulative ticks of ticks_without_action > 0 */
