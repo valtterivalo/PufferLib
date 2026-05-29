@@ -954,7 +954,7 @@ static void inf_tick_player_ctx(
                         s->player.current_hitpoints,
                         s->player.base_hitpoints
                     );
-                    int def_roll = (ns->def_level + 8) * (ns->ranged_def_bonus + 64);
+                    int def_roll = (ns->def_level + 9) * (ns->ranged_def_bonus + 64);
                     int hit_success = encounter_rand_float(&s->rng_state) <
                         osrs_hit_chance(attack_effects.attack_roll, def_roll);
                     if (hit_success) {

@@ -143,8 +143,8 @@ static const uint64_t BASELINE[NUM_CONFIGS] = {
     0x2c14e8f52ec4c10dULL,  /* wave1_a */
     0xaf760c0ade931e35ULL,  /* wave1_b */
     0xc02614998d57e614ULL,  /* wave1_c */
-    0x0f8912becc06aa27ULL,  /* meleer_a */
-    0xfbd8b0141d9f4fd7ULL,  /* meleer_b */
+    0x269c9050934cc788ULL,  /* meleer_a */
+    0x4bfb2de091d58916ULL,  /* meleer_b */
     0xabef9fcd462abcffULL,  /* ranger_a */
     0xce59a3778406a0eeULL,  /* ranger_b */
     0xa4b5214ecaadd78fULL,  /* mager_a */

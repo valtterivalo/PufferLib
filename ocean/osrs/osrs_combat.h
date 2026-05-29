@@ -206,14 +206,14 @@ static inline BarrageResult osrs_barrage_resolve(
 }
 
 
-/* NPC melee max hit: floor((str + 8) * (melee_str_bonus + 64) + 320) / 640) */
+/* NPC melee max hit: floor((str + 9) * (melee_str_bonus + 64) + 320) / 640) */
 static inline int osrs_npc_melee_max_hit(int str_level, int melee_str_bonus) {
-    return ((str_level + 8) * (melee_str_bonus + 64) + 320) / 640;
+    return ((str_level + 9) * (melee_str_bonus + 64) + 320) / 640;
 }
 
-/* NPC ranged max hit: floor(0.5 + (range + 8) * (ranged_str_bonus + 64) / 640) */
+/* NPC ranged max hit: floor(0.5 + (range + 9) * (ranged_str_bonus + 64) / 640) */
 static inline int osrs_npc_ranged_max_hit(int range_level, int ranged_str_bonus) {
-    return (int)(0.5 + (double)(range_level + 8) * (ranged_str_bonus + 64) / 640.0);
+    return (int)(0.5 + (double)(range_level + 9) * (ranged_str_bonus + 64) / 640.0);
 }
 
 /* NPC magic max hit: floor(base_spell_dmg * magic_dmg_pct / 100).

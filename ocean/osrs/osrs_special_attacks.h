@@ -36,7 +36,7 @@ static inline int osrs_blowpipe_spec_resolve(
     uint32_t* rng_state
 ) {
     int att_roll = base_att_roll * BLOWPIPE_SPEC_ACC_MULT;
-    int def_roll = (target_def_level + 8) * (target_ranged_def_bonus + 64);
+    int def_roll = (target_def_level + 9) * (target_ranged_def_bonus + 64);
     int spec_max = base_max_hit * BLOWPIPE_SPEC_DMG_NUM / BLOWPIPE_SPEC_DMG_DEN;
     if (encounter_rand_float(rng_state) < osrs_hit_chance(att_roll, def_roll))
         return encounter_rand_int(rng_state, spec_max + 1);
