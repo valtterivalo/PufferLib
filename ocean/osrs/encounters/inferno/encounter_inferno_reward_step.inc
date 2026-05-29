@@ -528,7 +528,7 @@ static void inf_step_ctx(EncounterState* state, EncounterContext* context, const
     int in_ready_gap = s->wave_ready_delay > 0;
 
     inf_resolve_player_projectiles_on_npcs(s);
-    inf_resolve_player_pending_hits_ctx(s, ctx);
+    inf_resolve_player_pending_hits(s);
     inf_resolve_pending_sparks(s);
 
     if (!in_wave_gap && !in_ready_gap) {

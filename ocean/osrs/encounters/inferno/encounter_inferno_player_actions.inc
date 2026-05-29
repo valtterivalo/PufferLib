@@ -1119,17 +1119,9 @@ static void inf_resolve_player_projectiles_on_npcs(InfernoState* s) {
     inf_apply_blood_barrage_heal_damage(s, blood_heal_acc);
 }
 
-static void inf_resolve_player_pending_hits_ctx(InfernoState* s, const InfernoContext* ctx) {
+static void inf_resolve_player_pending_hits(InfernoState* s) {
     for (int i = 0; i < s->player_pending_hits.count; i++) {
         EncounterPendingHit* hit = &s->player_pending_hits.hits[i];
-
-        if (hit->check_prayer && hit->prayer_check_delay > 0 &&
-            hit->source_npc_type != INF_NPC_JAD) {
-            hit->prayer_check_delay--;
-            if (hit->prayer_check_delay == 0) {
-                inf_apply_delayed_prayer_check(s, ctx, hit);
-            }
-        }
 
         hit->ticks_remaining--;
         if (hit->ticks_remaining <= 0) {
@@ -1166,10 +1158,6 @@ static void inf_resolve_player_pending_hits_ctx(InfernoState* s, const InfernoCo
             i--;
         }
     }
-}
-
-static void inf_resolve_player_pending_hits(InfernoState* s) {
-    inf_resolve_player_pending_hits_ctx(s, inf_legacy_context());
 }
 
 static void inf_resolve_jad_prayer_checks_after_player(

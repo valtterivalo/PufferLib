@@ -7256,7 +7256,6 @@ static void test_redemption_procs_on_locked_zero_projectile_landing(void) {
     printf("--- redemption procs on locked zero projectile landing ---\n");
 
     InfernoState state = make_test_state(20, 20);
-    InfernoContext* ctx = inf_legacy_context();
     state.player.base_hitpoints = 99;
     state.player.current_hitpoints = 7;
     state.player.base_prayer = 99;
@@ -7274,7 +7273,7 @@ static void test_redemption_procs_on_locked_zero_projectile_landing(void) {
         .hit_success = 1,
     };
 
-    inf_resolve_player_pending_hits_ctx(&state, ctx);
+    inf_resolve_player_pending_hits(&state);
 
     ASSERT_INT_EQ("locked zero projectile lands",
         state.player_pending_hits.count, 0);
