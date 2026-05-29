@@ -1043,8 +1043,8 @@ static void inf_jad_check_healers_ctx(InfernoState* s, const InfernoContext* ctx
     if (npc->type != INF_NPC_JAD || !npc->active) return;
     if (inf_npc_jad(npc)->healer_spawned) return;
 
-    /* spawn healers when below 50% HP */
-    if (npc->hp > npc->max_hp / 2) return;
+    /* spawn healers when below 50% HP (strict, matches JalTokJad.ts:170) */
+    if (npc->hp >= npc->max_hp / 2) return;
     inf_npc_jad(npc)->healer_spawned = 1;
 
     int num_healers;

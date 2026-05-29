@@ -140,15 +140,15 @@ static const GoldenConfig CONFIGS[] = {
 /* baseline digests captured on the pre-refactor commit. regenerate with
    --print only when an intentional behavior change is made, and explain why. */
 static const uint64_t BASELINE[NUM_CONFIGS] = {
-    0xf8e22fba0907f6cbULL,  /* wave1_a */
-    0xaf760c0ade931e35ULL,  /* wave1_b */
-    0xc02614998d57e614ULL,  /* wave1_c */
-    0x269c9050934cc788ULL,  /* meleer_a */
-    0x4bfb2de091d58916ULL,  /* meleer_b */
-    0xd416490824ee42e9ULL,  /* ranger_a */
-    0xce59a3778406a0eeULL,  /* ranger_b */
-    0xa4b5214ecaadd78fULL,  /* mager_a */
-    0xfdf2d56e3814b949ULL,  /* mager_b */
+    0xe14f738134f300d2ULL,  /* wave1_a */
+    0x85ca94938e2680b7ULL,  /* wave1_b */
+    0x629656a924edbf58ULL,  /* wave1_c */
+    0x13be850dcc8e98f4ULL,  /* meleer_a */
+    0x2b1efb7280b314b1ULL,  /* meleer_b */
+    0x3845465a254bf044ULL,  /* ranger_a */
+    0xa9faee4e818ca7a9ULL,  /* ranger_b */
+    0xe5701028d2803904ULL,  /* mager_a */
+    0x25ce8057b39e2082ULL,  /* mager_b */
     0x6e163506a4a3aabcULL,  /* jad_a */
     0xa0fa046c872a6580ULL,  /* jad_b */
     0x99c910e532cb08f4ULL,  /* jad_c */

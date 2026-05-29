@@ -34,7 +34,7 @@ static const int INF_SPAWN_POS[INF_NUM_SPAWN_POS][2] = {
 
 /* nibbler spawn position (near pillars) */
 #define INF_NIBBLER_SPAWN_X 20
-#define INF_NIBBLER_SPAWN_Y 32
+#define INF_NIBBLER_SPAWN_Y 31
 
 #define INF_MAX_TICKS     18000  /* 3 hours at 0.6s/tick */
 #define INF_NUM_WAVES     69
