@@ -1089,14 +1089,13 @@ static void inf_zuk_tick(InfernoState* s) {
             if (inf_npc_sets_collision_flag(shield->type))
                 inf_unstamp_npc_collision_footprint(s, ox, oy, shield->size);
             shield->x += s->zuk.shield_dir;
-            /* boundary check: 5-tick freeze at edges */
+            /* boundary: reverse with a 4-tick pause; the shield rests on the
+               edge tile (x=10 / x=36), no clamp-back. ref: ZukShield.ts:142-156 */
             if (shield->x < 11) {
-                shield->x = 11;
-                s->zuk.shield_freeze = 5;
+                s->zuk.shield_freeze = 4;
                 s->zuk.shield_dir = 1;
             } else if (shield->x > 35) {
-                shield->x = 35;
-                s->zuk.shield_freeze = 5;
+                s->zuk.shield_freeze = 4;
                 s->zuk.shield_dir = -1;
             }
             if (inf_npc_sets_collision_flag(shield->type))
