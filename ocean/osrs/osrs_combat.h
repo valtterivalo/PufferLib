@@ -111,6 +111,71 @@ static inline float encounter_rand_float(uint32_t* rng_state) {
     return (float)(encounter_xorshift(rng_state) & 0xFFFF) / 65536.0f;
 }
 
+static inline int encounter_roll_ratio_u16(
+    uint32_t* rng_state,
+    uint64_t numerator,
+    uint64_t denominator
+) {
+    uint32_t roll = encounter_xorshift(rng_state) & 0xFFFFu;
+    if (denominator == 0 || numerator == 0) return 0;
+    if (numerator >= denominator) return 1;
+    return (uint64_t)roll * denominator < numerator * 65536ull;
+}
+
+static inline void osrs_hit_chance_fraction(
+    int att_roll,
+    int def_roll,
+    uint64_t* numerator,
+    uint64_t* denominator
+) {
+    if (att_roll > def_roll) {
+        *numerator = (uint64_t)(2 * att_roll - def_roll);
+        *denominator = (uint64_t)(2 * (att_roll + 1));
+    } else {
+        *numerator = (uint64_t)att_roll;
+        *denominator = (uint64_t)(2 * (def_roll + 1));
+    }
+}
+
+static inline int encounter_roll_hit_chance(
+    uint32_t* rng_state,
+    int att_roll,
+    int def_roll
+) {
+    uint64_t numerator, denominator;
+    osrs_hit_chance_fraction(att_roll, def_roll, &numerator, &denominator);
+    return encounter_roll_ratio_u16(rng_state, numerator, denominator);
+}
+
+static inline void osrs_hit_chance_double_fraction(
+    int att_roll,
+    int def_roll,
+    uint64_t* numerator,
+    uint64_t* denominator
+) {
+    uint64_t a = (uint64_t)att_roll;
+    uint64_t d = (uint64_t)def_roll;
+    if (att_roll >= def_roll) {
+        uint64_t miss_num = (d + 2ull) * (2ull * d + 3ull);
+        uint64_t den = 6ull * (a + 1ull) * (a + 1ull);
+        *numerator = den > miss_num ? den - miss_num : 0;
+        *denominator = den;
+    } else {
+        *numerator = a * (4ull * a + 5ull);
+        *denominator = 6ull * (a + 1ull) * (d + 1ull);
+    }
+}
+
+static inline int encounter_roll_hit_chance_double(
+    uint32_t* rng_state,
+    int att_roll,
+    int def_roll
+) {
+    uint64_t numerator, denominator;
+    osrs_hit_chance_double_fraction(att_roll, def_roll, &numerator, &denominator);
+    return encounter_roll_ratio_u16(rng_state, numerator, denominator);
+}
+
 
 #define BARRAGE_MAX_HITS 9
 #define BARRAGE_FREEZE_TICKS 32
@@ -165,11 +230,10 @@ static inline BarrageResult osrs_barrage_resolve(
     int px = targets[0].x, py = targets[0].y;
     {
         int def_roll = (targets[0].magic_level + 9) * (targets[0].magic_def_bonus + 64);
-        float chance = primary_use_double_accuracy
-            ? osrs_hit_chance_double(att_roll, def_roll)
-            : osrs_hit_chance(att_roll, def_roll);
         targets[0].rolled = 1;
-        targets[0].hit = encounter_rand_float(rng_state) < chance;
+        targets[0].hit = primary_use_double_accuracy
+            ? encounter_roll_hit_chance_double(rng_state, att_roll, def_roll)
+            : encounter_roll_hit_chance(rng_state, att_roll, def_roll);
         targets[0].damage = targets[0].hit ? encounter_rand_int(rng_state, max_hit + 1) : 0;
         result.total_damage += targets[0].damage;
         result.num_hits++;
@@ -189,9 +253,8 @@ static inline BarrageResult osrs_barrage_resolve(
         if (dx < -1 || dx > 1 || dy < -1 || dy > 1) continue;
 
         int def_roll = (targets[i].magic_level + 9) * (targets[i].magic_def_bonus + 64);
-        float chance = osrs_hit_chance(att_roll, def_roll);
         targets[i].rolled = 1;
-        targets[i].hit = encounter_rand_float(rng_state) < chance;
+        targets[i].hit = encounter_roll_hit_chance(rng_state, att_roll, def_roll);
         targets[i].damage = targets[i].hit ? encounter_rand_int(rng_state, max_hit + 1) : 0;
         result.total_damage += targets[i].damage;
         result.num_hits++;
@@ -285,7 +348,7 @@ static inline int encounter_npc_roll_attack(
     int att_roll, int def_roll, int max_hit, uint32_t* rng_state
 ) {
     int dmg = encounter_rand_int(rng_state, max_hit + 1);
-    if (encounter_rand_float(rng_state) >= osrs_hit_chance(att_roll, def_roll))
+    if (!encounter_roll_hit_chance(rng_state, att_roll, def_roll))
         dmg = 0;
     return dmg;
 }

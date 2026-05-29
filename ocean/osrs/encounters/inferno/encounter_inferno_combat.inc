@@ -630,7 +630,7 @@ static void inf_npc_attack_ctx(InfernoState* s, InfernoContext* ctx, int idx) {
             const EncounterLoadoutStats* ls = inf_current_loadout_stats(s, ctx);
             int def_bonus = ls->def_crush;
             int def_roll = osrs_player_def_roll_vs_npc(s->player.current_defence, s->player.current_magic, def_bonus, ATTACK_STYLE_MELEE);
-            if (encounter_rand_float(&s->rng_state) >= osrs_hit_chance(att_roll, def_roll)) dmg = 0;
+            if (!encounter_roll_hit_chance(&s->rng_state, att_roll, def_roll)) dmg = 0;
             int prayer_matches = (s->player.prayer == PRAYER_PROTECT_MELEE);
               if (prayer_matches) { dmg = 0; s->tick_scratch.prayer_correct = 1; }
               else if (dmg > 0) { s->tick_scratch.off_prayer_hits++; }
@@ -814,7 +814,7 @@ static void inf_npc_attack_ctx(InfernoState* s, InfernoContext* ctx, int idx) {
             ls->def_stab, ls->def_slash, ls->def_crush, ls->def_magic, ls->def_ranged,
             actual_style, stats->melee_style);
         int def_roll = osrs_player_def_roll_vs_npc(s->player.current_defence, s->player.current_magic, def_bonus, actual_style);
-        if (encounter_rand_float(&s->rng_state) >= osrs_hit_chance(att_roll, def_roll)) {
+        if (!encounter_roll_hit_chance(&s->rng_state, att_roll, def_roll)) {
             dmg = 0;  /* missed */
             accuracy_hit = 0;
         }
