@@ -119,6 +119,7 @@ typedef struct {
     bool overlap;  // async training overlap: train on separate GPU queue
     bool cpu_inference;  // CPU forward pass during rollout (no GPU sync)
     bool train_fp16;     // fp16 activations/grads during training (rollout stays fp32)
+    bool sample_mask_in_obs;
     // Single GPU (Metal has no multi-GPU, but kept for upstream compat)
     int gpu_id;
     // Threading
@@ -1225,10 +1226,14 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     int hidden_size = hypers.hidden_size;
     int num_layers = hypers.num_layers;
 
-    // Action mask: env_config "mask_in_obs" > 0 means mask is embedded in obs.
+    // Keep mask_in_obs inside model input for CUDA checkpoint parity. Sampling
+    // from that embedded mask is a separate Metal-only mode.
     {
         DictItem* mask_entry = dict_get_unsafe(env_kwargs, "mask_in_obs");
-        pufferl->has_mask = (mask_entry && mask_entry->value > 0.0f);
+        bool mask_in_obs = mask_entry && mask_entry->value > 0.0f;
+        pufferl->has_mask = hypers.sample_mask_in_obs && mask_in_obs;
+        assert((!hypers.sample_mask_in_obs || mask_in_obs) &&
+            "PUFFER_METAL_SAMPLE_MASK_IN_OBS requires env.mask_in_obs");
     }
     pufferl->env_obs_width = env_obs_width;
     pufferl->mask_width = act_n;  // total mask width = sum of action head sizes
