@@ -728,7 +728,7 @@ static void inf_npc_attack_ctx(InfernoState* s, InfernoContext* ctx, int idx) {
     /* zuk: typeless attack (not blockable by prayer).
        InfernoTrainer TzKalZuk.ts: Zuk always fires at the shield if the player is
        behind it (shield absorbs, 0 damage). otherwise fires at the player.
-       hit delay = 4 ticks (ZukWeapon: setDelay=4). */
+       ZukWeapon setDelay=4 in the SDK; the hit lands at T+3 (remainingDelay-1). */
     if (npc->type == INF_NPC_ZUK) {
         int si = s->zuk.shield_idx;
         int player_behind_shield = 0;
@@ -746,12 +746,13 @@ static void inf_npc_attack_ctx(InfernoState* s, InfernoContext* ctx, int idx) {
             npc->attack_visual_target = si;
         } else {
             /* typeless hit on player — not blockable by prayer, no accuracy roll.
-               rolled 0..max_hit, queued at T and lands at T+4 unchanged. */
+               rolled 0..max_hit, lands at T+3 (mob->player projectile is onTicked
+               on its creation tick, so remainingDelay-1). */
             int max_hit = osrs_npc_magic_max_hit(stats->magic_base_dmg, stats->magic_dmg_pct);
             int dmg = encounter_rand_int(&s->rng_state, max_hit + 1);
             inf_queue_player_pending_hit(s, idx, npc->type, (EncounterPendingHit){
                 .damage = dmg,
-                .ticks_remaining = 4,
+                .ticks_remaining = 3,
                 .attack_style = ATTACK_STYLE_NONE,
                 .check_prayer = 0,
                 .prayer_check_delay = 0,
@@ -885,7 +886,10 @@ static void inf_npc_attack_ctx(InfernoState* s, InfernoContext* ctx, int idx) {
         }
         inf_queue_player_pending_hit(s, idx, npc->type, (EncounterPendingHit){
             .damage = dmg,
-            .ticks_remaining = hit_delay,
+            /* mob->player projectile lands at remainingDelay-1 (it is onTicked on
+               its creation tick). jad is the exception: its DelayedAction defers the
+               whole resolution, so the SDK keeps jad's full delay. */
+            .ticks_remaining = is_jad ? hit_delay : hit_delay - 1,
             .attack_style = actual_style,
             .check_prayer = is_jad ? 1 : 0,
             .prayer_check_delay = is_jad ? INF_JAD_PROJECTILE_DELAY + 1 : 0,
@@ -1319,18 +1323,21 @@ static void inf_queue_zuk_healer_sparks(InfernoState* s, const InfNPC* npc) {
     /* InfernoTrainer JalMejJak AoeWeapon: 2 random sparks target y=14+rand(0..3)
        in reference coords. our coord system is Y-flipped (ours_y = 57 - ref_y),
        so ref y=14..17 maps to ours y=40..43 (near player/zuk band). */
+    /* spark damage lands at T+3: the AoE DelayedAction spawns the spark entities,
+       which deal damage on their first tick (ref: JalMejJak.ts + InfernoHealerSpark.ts).
+       the setDelay=4 in the reference is the visual projectile, not the damage. */
     inf_queue_pending_spark(s, npc->x, npc->y, clamped_x, s->player.y,
-                            5 + encounter_rand_int(&s->rng_state, 6), 4);
+                            5 + encounter_rand_int(&s->rng_state, 6), 3);
     inf_queue_pending_spark(s,
                             npc->x, npc->y,
                             npc->x + encounter_rand_int(&s->rng_state, 11) - 5,
                             40 + encounter_rand_int(&s->rng_state, 4),
-                            5 + encounter_rand_int(&s->rng_state, 6), 4);
+                            5 + encounter_rand_int(&s->rng_state, 6), 3);
     inf_queue_pending_spark(s,
                             npc->x, npc->y,
                             npc->x + encounter_rand_int(&s->rng_state, 11) - 5,
                             40 + encounter_rand_int(&s->rng_state, 4),
-                            5 + encounter_rand_int(&s->rng_state, 6), 4);
+                            5 + encounter_rand_int(&s->rng_state, 6), 3);
 }
 
 static void inf_resolve_pending_sparks(InfernoState* s) {

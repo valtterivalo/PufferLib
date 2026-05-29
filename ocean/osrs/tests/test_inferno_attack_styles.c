@@ -5825,8 +5825,11 @@ static void test_npc_player_projectile_delays_use_reference_options(void) {
     inf_npc_attack(&state, 0);
 
     ASSERT_INT_EQ("ranger queued one pending hit", state.player_pending_hits.count, 1);
-    ASSERT_INT_EQ("ranger pending hit uses reduceDelay -2",
-        state.player_pending_hits.hits[0].ticks_remaining, timing.damage_delay_ticks);
+    /* mob->player projectiles land at remainingDelay-1: the SDK processes the
+       player's incoming hits in the same tickRegion the mob fires (World.ts
+       player.attackStep), so the projectile is onTicked on its creation tick. */
+    ASSERT_INT_EQ("ranger pending hit lands one tick before the raw projectile delay",
+        state.player_pending_hits.hits[0].ticks_remaining, timing.damage_delay_ticks - 1);
 }
 
 static void test_player_projectile_timing_uses_reference_options(void) {
