@@ -1269,18 +1269,21 @@ static void inf_queue_zuk_healer_sparks(InfernoState* s, const InfNPC* npc) {
     /* spark damage lands at T+3: the AoE DelayedAction spawns the spark entities,
        which deal damage on their first tick (ref: JalMejJak.ts + InfernoHealerSpark.ts).
        the setDelay=4 in the reference is the visual projectile, not the damage. */
+    int direct_damage = 5 + encounter_rand_int(&s->rng_state, 6);
     inf_queue_pending_spark(s, npc->x, npc->y, clamped_x, s->player.y,
-                            5 + encounter_rand_int(&s->rng_state, 6), 3);
-    inf_queue_pending_spark(s,
-                            npc->x, npc->y,
-                            npc->x + encounter_rand_int(&s->rng_state, 11) - 5,
-                            40 + encounter_rand_int(&s->rng_state, 4),
-                            5 + encounter_rand_int(&s->rng_state, 6), 3);
-    inf_queue_pending_spark(s,
-                            npc->x, npc->y,
-                            npc->x + encounter_rand_int(&s->rng_state, 11) - 5,
-                            40 + encounter_rand_int(&s->rng_state, 4),
-                            5 + encounter_rand_int(&s->rng_state, 6), 3);
+                            direct_damage, 3);
+
+    int spark1_x = npc->x + encounter_rand_int(&s->rng_state, 11) - 5;
+    int spark1_y = 40 + encounter_rand_int(&s->rng_state, 4);
+    int spark1_damage = 5 + encounter_rand_int(&s->rng_state, 6);
+    inf_queue_pending_spark(s, npc->x, npc->y, spark1_x, spark1_y,
+                            spark1_damage, 3);
+
+    int spark2_x = npc->x + encounter_rand_int(&s->rng_state, 11) - 5;
+    int spark2_y = 40 + encounter_rand_int(&s->rng_state, 4);
+    int spark2_damage = 5 + encounter_rand_int(&s->rng_state, 6);
+    inf_queue_pending_spark(s, npc->x, npc->y, spark2_x, spark2_y,
+                            spark2_damage, 3);
 }
 
 static void inf_resolve_pending_sparks(InfernoState* s) {
