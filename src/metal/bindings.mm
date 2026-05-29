@@ -337,6 +337,26 @@ static py::list precision_rows(const PrecisionTensor& tensor, int rows) {
     return out;
 }
 
+static py::list puf_rows_f32(const PufTensor& tensor, int rows) {
+    py::list out;
+    if (tensor.bytes == nullptr || tensor.ndim() < 2) return out;
+    int row_count = std::min(rows, (int)tensor.shape[0]);
+    int cols = (int)tensor.shape[1];
+    for (int r = 0; r < row_count; r++) {
+        py::list row;
+        for (int c = 0; c < cols; c++) {
+            size_t idx = (size_t)r * cols + c;
+            if (tensor.dtype_size == sizeof(float)) {
+                row.append(((float*)tensor.bytes)[idx]);
+            } else {
+                row.append((float)((unsigned char*)tensor.bytes)[idx]);
+            }
+        }
+        out.append(row);
+    }
+    return out;
+}
+
 static py::dict policy_debug_sample(py::object pufferl_obj) {
     PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
     if (pufferl.train_pending) {
@@ -350,6 +370,20 @@ static py::dict policy_debug_sample(py::object pufferl_obj) {
     out["actions"] = float_actions_rows(pufferl.rollouts.actions, 4);
     DecoderActivations* decoder = (DecoderActivations*)pufferl.buffer_activations[0].decoder;
     out["decoder_out"] = precision_rows(decoder->out, 4);
+    return out;
+}
+
+static py::dict env_debug_sample(py::object pufferl_obj) {
+    PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
+    if (pufferl.train_pending) {
+        sync_pending_train(pufferl);
+    }
+    if (!pufferl.cpu_inference) {
+        mtl_ensure_stream_synced((cudaStream_t)mtl_stream());
+    }
+
+    py::dict out;
+    out["observations"] = puf_rows_f32(pufferl.env.obs, 1);
     return out;
 }
 
@@ -878,6 +912,7 @@ PYBIND11_MODULE(_C, m) {
     m.def("rollout_hashes", &rollout_hashes);
     m.def("parity_hashes", &parity_hashes);
     m.def("policy_debug_sample", &policy_debug_sample);
+    m.def("env_debug_sample", &env_debug_sample);
     m.def("train", &train);
     m.def("close", &puf_close);
     m.def("save_weights", &save_weights);

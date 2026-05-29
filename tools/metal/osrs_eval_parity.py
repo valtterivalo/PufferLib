@@ -161,6 +161,10 @@ def backend_policy_debug_sample(backend: Any, pufferl: Any) -> dict[str, Any]:
     return dict(backend.policy_debug_sample(pufferl)) if hasattr(backend, "policy_debug_sample") else {}
 
 
+def backend_env_debug_sample(backend: Any, pufferl: Any) -> dict[str, Any]:
+    return dict(backend.env_debug_sample(pufferl)) if hasattr(backend, "env_debug_sample") else {}
+
+
 def env_only_hashes(hashes: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in hashes.items() if key.startswith("env_")}
 
@@ -194,6 +198,7 @@ def run_rollout(args: argparse.Namespace) -> None:
     logs: dict[str, Any] = {}
     rollout_index = 0
     initial_hashes = env_only_hashes(backend_parity_hashes(backend, pufferl))
+    initial_debug = backend_env_debug_sample(backend, pufferl)
     while (
         rollout_index < int(args.rollouts)
         if args.rollouts is not None
@@ -236,6 +241,7 @@ def run_rollout(args: argparse.Namespace) -> None:
         "num_params": num_params,
         "logs": logs,
         "initial_hashes": initial_hashes,
+        "initial_debug": initial_debug,
         "traces": traces,
     }
     args.write_json.parent.mkdir(parents=True, exist_ok=True)
