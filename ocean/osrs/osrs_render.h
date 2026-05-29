@@ -4671,6 +4671,7 @@ static void render_draw_3d_world(RenderClient* rc) {
 
             float px, pz, ground;
             render_get_visual_pos(rc, i, &px, &pz, &ground);
+            float model_ground = osrs_render_entity_model_ground(ground);
 
             /* negate X scale to fix model mirroring: OSRS models are authored
                in a left-handed coordinate system but we render in right-handed
@@ -4678,7 +4679,7 @@ static void render_draw_3d_world(RenderClient* rc) {
                appear in the correct (right) hand. */
             Matrix base = MatrixScale(-ms, ms, ms);
             base = MatrixMultiply(base, MatrixRotateY(rc->yaw[i]));
-            base = MatrixMultiply(base, MatrixTranslate(px, ground, pz));
+            base = MatrixMultiply(base, MatrixTranslate(px, model_ground, pz));
 
             /* rebuild composite if equipment changed, animate, upload, draw */
             render_player_composite(rc, i, base);
@@ -4702,13 +4703,13 @@ static void render_draw_3d_world(RenderClient* rc) {
             float visual_height_tiles = 0.0f;
             if (nv > 0 && min_model_y <= max_model_y) {
                 visual_height_tiles = (max_model_y - min_model_y) * ms;
-                rc->entity_visual_mid_y[i] = ground + min_model_y * ms
+                rc->entity_visual_mid_y[i] = model_ground + min_model_y * ms
                     + (max_model_y - min_model_y) * ms * 0.5f;
-                rc->entity_visual_top_y[i] = ground + max_model_y * ms;
+                rc->entity_visual_top_y[i] = model_ground + max_model_y * ms;
             } else {
                 int ent_size = (ep->entity_type == ENTITY_NPC && ep->npc_size > 1) ? ep->npc_size : 1;
-                rc->entity_visual_mid_y[i] = ground + 0.75f + 0.25f * (float)ent_size;
-                rc->entity_visual_top_y[i] = ground + 1.5f + 0.5f * (float)ent_size;
+                rc->entity_visual_mid_y[i] = model_ground + 0.75f + 0.25f * (float)ent_size;
+                rc->entity_visual_top_y[i] = model_ground + 1.5f + 0.5f * (float)ent_size;
                 visual_height_tiles = (float)ent_size;
             }
             for (int vi = 0; vi < nv; vi++) {
@@ -4721,7 +4722,7 @@ static void render_draw_3d_world(RenderClient* rc) {
             }
             Vector3 clickbox_points[RENDER_CLICKBOX_PRISM_POINT_COUNT];
             int clickbox_n = render_build_entity_clickbox_prism_points(
-                ep, px, pz, ground, visual_height_tiles,
+                ep, px, pz, model_ground, visual_height_tiles,
                 clickbox_points, RENDER_CLICKBOX_PRISM_POINT_COUNT);
             for (int ci = 0; ci < clickbox_n; ci++) {
                 hull_append_projected_world_point(&hull_cam, clickbox_points[ci],
