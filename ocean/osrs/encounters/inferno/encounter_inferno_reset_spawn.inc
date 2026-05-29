@@ -355,6 +355,8 @@ static void inf_reset_ctx(EncounterState* state, EncounterContext* context, uint
     InfSupplyDoses full_supplies = inf_full_starting_supplies();
     InfSupplyDoses start_supplies = inf_supplies_for_start_wave(
         full_supplies, s->start_wave, ctx->config.late_start_supply_profile_scale);
+    if (ctx->config.curriculum_supply_learned)
+        inf_supply_learn_sample(ctx, s->start_wave, &s->rng_state, &start_supplies);
     s->player.brew_doses = start_supplies.brew_doses;
     s->player.restore_doses = start_supplies.restore_doses;
     s->player.bastion_doses = start_supplies.bastion_doses;

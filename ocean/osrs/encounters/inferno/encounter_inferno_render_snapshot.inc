@@ -96,6 +96,10 @@ static void inf_put_int_ctx(
         ctx->config.zuk_force_safe_untagged_healer_target_mask =
             encounter_require_binary_config("inferno", key, value);
     }
+    else if (strcmp(key, "curriculum_supply_learned") == 0) {
+        ctx->config.curriculum_supply_learned =
+            encounter_require_binary_config("inferno", key, value);
+    }
     else encounter_abort_unknown_config("inferno", "int", key);
 }
 
@@ -1083,6 +1087,7 @@ static uint64_t inf_config_fingerprint(const InfConfig* config) {
     INF_HASH_CONFIG_FIELD(config, &h, oracle_mode);
     INF_HASH_CONFIG_FIELD(config, &h, shield_tag_reward_coeff);
     INF_HASH_CONFIG_FIELD(config, &h, joseph_reward_mode);
+    INF_HASH_CONFIG_FIELD(config, &h, curriculum_supply_learned);
     return h;
 }
 

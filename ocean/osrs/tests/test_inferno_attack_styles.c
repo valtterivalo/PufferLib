@@ -9497,6 +9497,47 @@ static void test_inferno_reset_uses_osrs_run_energy_units(void) {
         osrs_run_energy_percent(state.player.run_energy), 100);
 }
 
+static void test_curriculum_supply_learned_ring(void) {
+    printf("--- curriculum supply learned ring ---\n");
+    InfernoContext ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    Player p;
+    memset(&p, 0, sizeof(p));
+    p.brew_doses = 2; p.restore_doses = 20; p.bastion_doses = 8; p.stamina_doses = 1;
+    int wave = 53; /* internal wave for public 54 */
+    uint32_t rng = 1u;
+    InfSupplyDoses out = {0};
+
+    for (int i = 0; i < INF_SUPPLY_LEARN_MIN_SAMPLES - 1; i++)
+        inf_supply_learn_record(&ctx, wave, &p);
+    ASSERT_INT_EQ("cold start declines", inf_supply_learn_sample(&ctx, wave, &rng, &out), 0);
+
+    inf_supply_learn_record(&ctx, wave, &p);
+    inf_supply_learn_record(&ctx, wave, &p);
+    ASSERT_INT_EQ("samples past threshold", inf_supply_learn_sample(&ctx, wave, &rng, &out), 1);
+    ASSERT_INT_EQ("sampled brew matches recorded", out.brew_doses, 2);
+    ASSERT_INT_EQ("sampled restore matches recorded", out.restore_doses, 20);
+
+    ASSERT_INT_EQ("untouched wave stays cold",
+        inf_supply_learn_sample(&ctx, 10, &rng, &out), 0);
+}
+
+static void test_inferno_binding_forwards_curriculum_supply_learned(void) {
+    printf("--- inferno binding forwards curriculum supply learned ---\n");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "learned supply optional int",
+        "ocean/osrs_inferno/binding.c",
+        "optional_int_keys[]",
+        "};",
+        "\"curriculum_supply_learned\"");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "learned supply default config",
+        "config/ocean/osrs_inferno.ini",
+        "[env]",
+        "[vec]",
+        "curriculum_supply_learned = 0");
+}
+
 int main(void) {
     inf_build_npc_stats();
 
@@ -9584,6 +9625,8 @@ int main(void) {
     test_jad_fire_tick_exposes_three_tick_prayer_deadline();
     test_jad_prayer_on_third_tick_blocks();
     test_jad_prayer_first_on_fourth_tick_does_not_block();
+    test_curriculum_supply_learned_ring();
+    test_inferno_binding_forwards_curriculum_supply_learned();
     test_jad_long_distance_damage_uses_delayed_projectile_landing();
     test_triple_jad_pending_threats_fit_obs_layout();
     test_inferno_obs_shape_includes_step_out_forecast_features();

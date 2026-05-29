@@ -716,6 +716,24 @@ typedef struct {
     InfSupplyFractions fractions;
 } InfSupplyProfileAnchor;
 
+/* learned curriculum supply distribution: a per-wave recent ring of supply
+   tuples observed when agents cross into that wave. lives in InfernoContext, so
+   it is per-env and persists across episode resets, and each env is stepped by
+   one thread at a time so no locking is needed. only consulted when
+   config.curriculum_supply_learned is set; otherwise the hardcoded profile is
+   used. the cold-start threshold makes the staged bootstrap up the waves
+   emergent: a wave only samples empirically once enough real crossings exist. */
+#define INF_SUPPLY_LEARN_RING 64
+#define INF_SUPPLY_LEARN_MIN_SAMPLES 32
+typedef struct { uint8_t brew, restore, bastion, stamina; } InfSupplyDosesU8;
+typedef struct {
+    InfSupplyDosesU8 ring[INF_SUPPLY_LEARN_RING];
+    uint32_t count;
+} InfSupplyLearnWave;
+typedef struct {
+    InfSupplyLearnWave waves[INF_NUM_WAVES];
+} InfSupplyLearnRing;
+
 typedef struct {
     int start_wave;        /* internal wave index used when reset starts a new episode */
     InfLoadoutProfileMode loadout_profile_mode;
@@ -768,6 +786,7 @@ typedef struct {
     int oracle_mode;
     float shield_tag_reward_coeff;
     int joseph_reward_mode;
+    int curriculum_supply_learned;
 } InfConfig;
 
 typedef struct {
@@ -779,6 +798,7 @@ typedef struct {
     const HumanCommand* human_commands;
     int human_command_count;
     int human_command_mode;
+    InfSupplyLearnRing supply_learn;
 } InfernoContext;
 
 /* per-tick scratch: reward/diagnostic accumulators and event flags, fully

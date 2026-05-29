@@ -679,6 +679,8 @@ static void inf_step_ctx(EncounterState* state, EncounterContext* context, const
         s->wave = s->wave_spawn_target;
         inf_spawn_wave(s);
         inf_invalidate_los_cache(s);
+        if (ctx->config.curriculum_supply_learned)
+            inf_supply_learn_record(ctx, s->wave, &s->player);
         goto finish_step;
     }
     if (s->wave_spawn_delay > 0) goto finish_step;

@@ -940,7 +940,38 @@ static InfConfig inf_default_config(void) {
         .oracle_mode = 0,
         .shield_tag_reward_coeff = 0.0f,
         .joseph_reward_mode = INF_JOSEPH_REWARD_MODE_OFF,
+        .curriculum_supply_learned = 0,
     };
+}
+
+/* record the player's current supplies into the learned ring for the wave just
+   entered. overwrites the oldest slot once the ring is full (recent window). */
+static void inf_supply_learn_record(InfernoContext* ctx, int internal_wave,
+                                    const Player* p) {
+    if (internal_wave < 0 || internal_wave >= INF_NUM_WAVES) return;
+    InfSupplyLearnWave* w = &ctx->supply_learn.waves[internal_wave];
+    InfSupplyDosesU8* slot = &w->ring[w->count % INF_SUPPLY_LEARN_RING];
+    slot->brew = (uint8_t)p->brew_doses;
+    slot->restore = (uint8_t)p->restore_doses;
+    slot->bastion = (uint8_t)p->bastion_doses;
+    slot->stamina = (uint8_t)p->stamina_doses;
+    w->count++;
+}
+
+/* draw a recorded supply tuple for the wave into *out. returns 0 (caller keeps
+   the hardcoded profile) until the wave has at least MIN_SAMPLES crossings. */
+static int inf_supply_learn_sample(const InfernoContext* ctx, int internal_wave,
+                                   uint32_t* rng_state, InfSupplyDoses* out) {
+    if (internal_wave < 0 || internal_wave >= INF_NUM_WAVES) return 0;
+    const InfSupplyLearnWave* w = &ctx->supply_learn.waves[internal_wave];
+    if (w->count < INF_SUPPLY_LEARN_MIN_SAMPLES) return 0;
+    uint32_t n = w->count < INF_SUPPLY_LEARN_RING ? w->count : INF_SUPPLY_LEARN_RING;
+    const InfSupplyDosesU8* s = &w->ring[(uint32_t)encounter_rand_int(rng_state, (int)n)];
+    out->brew_doses = s->brew;
+    out->restore_doses = s->restore;
+    out->bastion_doses = s->bastion;
+    out->stamina_doses = s->stamina;
+    return 1;
 }
 
 static void inf_init_context_typed(InfernoContext* ctx) {
