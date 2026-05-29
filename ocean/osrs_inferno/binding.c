@@ -1982,6 +1982,7 @@ void my_init(Env* env, Dict* kwargs) {
         "curriculum_supply_brew_jitter",
         "curriculum_supply_restore_jitter",
         "curriculum_no_brew_frac",
+        "prayer_switch_fail_prob",
     };
     for (size_t k = 0; k < sizeof(optional_float_keys)/sizeof(*optional_float_keys); k++) {
         DictItem* item = dict_get_unsafe(kwargs, optional_float_keys[k]);
