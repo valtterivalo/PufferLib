@@ -256,6 +256,43 @@ static int inf_player_has_los_to_npc_from_current_tile(
         0);
 }
 
+typedef struct {
+    int can_attack_now;
+    int range_deficit;
+} InfPlayerNpcLoadoutReach;
+
+static InfPlayerNpcLoadoutReach inf_player_loadout_reach_to_npc(
+    const InfernoState* s,
+    int npc_idx,
+    int weapon_set
+) {
+    InfPlayerNpcLoadoutReach out = {0};
+    if (!inf_npc_is_live_player_target(s, npc_idx))
+        return out;
+    if (weapon_set < 0 || weapon_set >= INF_NUM_WEAPON_SETS) {
+        fprintf(stderr, "BUG: invalid Inferno weapon set %d\n", weapon_set);
+        abort();
+    }
+
+    const InfNPC* npc = &s->npcs[npc_idx];
+    const EncounterLoadoutStats* ls = &s->loadout_stats[weapon_set];
+    int edge_distance = encounter_dist_to_npc(
+        s->player.x, s->player.y, npc->x, npc->y, npc->size);
+    out.range_deficit = edge_distance > ls->attack_range
+        ? edge_distance - ls->attack_range
+        : 0;
+    out.can_attack_now = encounter_player_can_attack(
+        s->player.x,
+        s->player.y,
+        npc->x,
+        npc->y,
+        npc->size,
+        ls->attack_range,
+        s->los_blockers,
+        s->los_blocker_count);
+    return out;
+}
+
 static int inf_player_can_phantom_barrage_npc(
     InfernoState* s,
     const InfernoContext* ctx,

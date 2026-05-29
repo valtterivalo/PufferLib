@@ -935,6 +935,11 @@ typedef struct {
     int total_target_available_no_attack_ticks;
     int total_safe_attack_opportunity_missed_ticks;
     int total_progressless_ticks;
+    float total_npc_pressure_if_ready_count;
+    float total_npc_pressure_this_tick_count;
+    float total_npc_pressure_if_ready_max_hit;
+    float total_npc_pressure_this_tick_max_hit;
+    float max_npc_pressure_incoming_hit;
     int attack_ready_no_attack_ticks_by_phase[OSRS_INFERNO_IDLE_PHASE_COUNT];
     int target_available_no_attack_ticks_by_phase[OSRS_INFERNO_IDLE_PHASE_COUNT];
     int safe_attack_opportunity_missed_ticks_by_phase[OSRS_INFERNO_IDLE_PHASE_COUNT];

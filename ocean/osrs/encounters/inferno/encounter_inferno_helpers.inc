@@ -467,6 +467,46 @@ static inline int inf_attack_style_from_mask(int style_mask) {
     return ATTACK_STYLE_NONE;
 }
 
+static inline int inf_style_count_from_mask(int style_mask) {
+    int mask = style_mask & (INF_STYLE_MASK_MELEE |
+        INF_STYLE_MASK_RANGED | INF_STYLE_MASK_MAGIC);
+    return ((mask & INF_STYLE_MASK_MELEE) != 0) +
+        ((mask & INF_STYLE_MASK_RANGED) != 0) +
+        ((mask & INF_STYLE_MASK_MAGIC) != 0);
+}
+
+static inline int inf_npc_style_max_hit(
+    const InfNPCStats* stats, int style
+) {
+    if (style == ATTACK_STYLE_NONE) return 0;
+    int max_hit = osrs_npc_max_hit(style,
+        stats->str_level, stats->range_level,
+        stats->melee_str_bonus, stats->ranged_str_bonus,
+        stats->magic_base_dmg, stats->magic_dmg_pct);
+    if (stats->max_hit_cap > 0 && max_hit > stats->max_hit_cap)
+        max_hit = stats->max_hit_cap;
+    return max_hit;
+}
+
+static inline int inf_npc_style_mask_max_hit(
+    const InfNPCStats* stats, int style_mask
+) {
+    int max_hit = 0;
+    if (style_mask & INF_STYLE_MASK_MELEE) {
+        int style_max = inf_npc_style_max_hit(stats, ATTACK_STYLE_MELEE);
+        if (style_max > max_hit) max_hit = style_max;
+    }
+    if (style_mask & INF_STYLE_MASK_RANGED) {
+        int style_max = inf_npc_style_max_hit(stats, ATTACK_STYLE_RANGED);
+        if (style_max > max_hit) max_hit = style_max;
+    }
+    if (style_mask & INF_STYLE_MASK_MAGIC) {
+        int style_max = inf_npc_style_max_hit(stats, ATTACK_STYLE_MAGIC);
+        if (style_max > max_hit) max_hit = style_max;
+    }
+    return max_hit;
+}
+
 static inline int inf_attack_style_obs_preview(int style_mask) {
     int primary_mask = style_mask & (INF_STYLE_MASK_RANGED | INF_STYLE_MASK_MAGIC);
     int primary_style = inf_attack_style_from_mask(primary_mask);
@@ -553,6 +593,95 @@ static inline InfNpcPlayerThreat inf_npc_player_threat(
         npc->dig_freeze_timer == 0 &&
         npc->dig_attack_delay == 0;
     return threat;
+}
+
+static inline int inf_npc_is_live_player_target(
+    const InfernoState* s,
+    int npc_idx
+) {
+    if (npc_idx < 0 || npc_idx >= INF_MAX_NPCS) return 0;
+    const InfNPC* npc = &s->npcs[npc_idx];
+    return npc->active && npc->death_ticks == 0 && npc->hp > 0 &&
+        npc->type != INF_NPC_ZUK_SHIELD;
+}
+
+typedef struct {
+    int if_ready_total;
+    int if_ready_melee;
+    int if_ready_ranged;
+    int if_ready_magic;
+    int if_ready_max_hit;
+    int if_ready_sum_max_hit;
+    int this_tick_total;
+    int this_tick_melee;
+    int this_tick_ranged;
+    int this_tick_magic;
+    int this_tick_max_hit;
+    int this_tick_sum_max_hit;
+    int timer_lte_1;
+    int timer_lte_2;
+    int timer_lte_4;
+    int if_ready_style_count;
+    int this_tick_style_count;
+    int nearest_timer;
+} InfNpcPressureSummary;
+
+static inline int inf_npc_pressure_timer(const InfNPC* npc) {
+    return npc->attack_timer > 0 ? npc->attack_timer : 1;
+}
+
+static inline int inf_npc_attack_unblocked_for_pressure(const InfNPC* npc) {
+    return npc->stun_timer == 0 &&
+        npc->dig_freeze_timer == 0 &&
+        npc->dig_attack_delay == 0;
+}
+
+static inline InfNpcPressureSummary inf_npc_pressure_summary(
+    const InfernoState* s
+) {
+    InfNpcPressureSummary out = { .nearest_timer = 999 };
+    int if_ready_style_mask = 0;
+    int this_tick_style_mask = 0;
+
+    for (int i = 0; i < INF_MAX_NPCS; i++) {
+        const InfNPC* npc = &s->npcs[i];
+        InfNpcPlayerThreat threat = inf_npc_player_threat(s, npc);
+        if (!threat.can_attack_if_ready || !threat.style_mask)
+            continue;
+
+        const InfNPCStats* stats = &INF_NPC_STATS[npc->type];
+        int max_hit = inf_npc_style_mask_max_hit(stats, threat.style_mask);
+        out.if_ready_total++;
+        if (threat.style_mask & INF_STYLE_MASK_MELEE) out.if_ready_melee++;
+        if (threat.style_mask & INF_STYLE_MASK_RANGED) out.if_ready_ranged++;
+        if (threat.style_mask & INF_STYLE_MASK_MAGIC) out.if_ready_magic++;
+        if (max_hit > out.if_ready_max_hit) out.if_ready_max_hit = max_hit;
+        out.if_ready_sum_max_hit += max_hit;
+        if_ready_style_mask |= threat.style_mask;
+
+        if (inf_npc_attack_unblocked_for_pressure(npc)) {
+            int timer = inf_npc_pressure_timer(npc);
+            if (timer < out.nearest_timer) out.nearest_timer = timer;
+            if (timer <= 1) out.timer_lte_1++;
+            if (timer <= 2) out.timer_lte_2++;
+            if (timer <= 4) out.timer_lte_4++;
+        }
+
+        if (!threat.can_attack_this_tick)
+            continue;
+
+        out.this_tick_total++;
+        if (threat.style_mask & INF_STYLE_MASK_MELEE) out.this_tick_melee++;
+        if (threat.style_mask & INF_STYLE_MASK_RANGED) out.this_tick_ranged++;
+        if (threat.style_mask & INF_STYLE_MASK_MAGIC) out.this_tick_magic++;
+        if (max_hit > out.this_tick_max_hit) out.this_tick_max_hit = max_hit;
+        out.this_tick_sum_max_hit += max_hit;
+        this_tick_style_mask |= threat.style_mask;
+    }
+
+    out.if_ready_style_count = inf_style_count_from_mask(if_ready_style_mask);
+    out.this_tick_style_count = inf_style_count_from_mask(this_tick_style_mask);
+    return out;
 }
 
 static inline int inf_barrage_total_target_count(
