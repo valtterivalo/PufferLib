@@ -447,6 +447,45 @@ static py::list env_obs_rows(py::object pufferl_obj, int start_row, int rows) {
     return puf_rows_f32_range(pufferl.env.obs, start_row, rows);
 }
 
+static py::dict env_state_debug(py::object pufferl_obj, int row) {
+    PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
+    if (pufferl.train_pending) {
+        sync_pending_train(pufferl);
+    }
+    if (!pufferl.cpu_inference) {
+        mtl_ensure_stream_synced((cudaStream_t)mtl_stream());
+    }
+
+    py::dict out;
+#ifdef INF_TOTAL_OBS
+    if (row < 0 || row >= pufferl.vec->size) return out;
+    Env* env = &pufferl.vec->envs[row];
+    InfernoState* s = (InfernoState*)INF_ENV_STATE(env);
+    out["tick"] = s->tick;
+    out["wave"] = s->wave;
+    out["rng_state"] = s->rng_state;
+    out["player_x"] = s->player.x;
+    out["player_y"] = s->player.y;
+    out["player_hp"] = s->player.current_hitpoints;
+    py::list sparks;
+    for (int i = 0; i < INF_MAX_PENDING_SPARKS; i++) {
+        const InfPendingSpark* spark = &s->pending_sparks[i];
+        if (!spark->active) continue;
+        py::dict item;
+        item["slot"] = i;
+        item["x"] = spark->x;
+        item["y"] = spark->y;
+        item["src_x"] = spark->src_x;
+        item["src_y"] = spark->src_y;
+        item["damage"] = spark->damage;
+        item["ticks_remaining"] = spark->ticks_remaining;
+        sparks.append(item);
+    }
+    out["pending_sparks"] = sparks;
+#endif
+    return out;
+}
+
 static py::dict train(py::object pufferl_obj) {
     PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
     { int count; double ms; mtl_sync_stats(&count, &ms); }
@@ -976,6 +1015,7 @@ PYBIND11_MODULE(_C, m) {
     m.def("env_debug_sample", &env_debug_sample);
     m.def("env_obs_row_hashes", &env_obs_row_hashes);
     m.def("env_obs_rows", &env_obs_rows);
+    m.def("env_state_debug", &env_state_debug);
     m.def("train", &train);
     m.def("close", &puf_close);
     m.def("save_weights", &save_weights);
