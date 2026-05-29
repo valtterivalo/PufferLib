@@ -128,6 +128,7 @@ typedef struct {
                               ref: InfernoTrainer JalTokJad.ts:49-57. */
     int spell_type;        /* ENCOUNTER_SPELL_* for freeze/heal effects */
     int source_npc_type;   /* encounter-local NPC type for custom delayed rolls */
+    int source_npc_slot;   /* source NPC slot, for attacker-targeted effects (recoil); -1 if none */
     int hit_success;       /* accuracy result; 0 can still be a visible splash */
     int elysian_reduced;   /* shield proc already applied before queuing */
 } EncounterPendingHit;

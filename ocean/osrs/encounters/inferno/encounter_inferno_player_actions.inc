@@ -1164,7 +1164,7 @@ static void inf_resolve_player_pending_hits_ctx(InfernoState* s, const InfernoCo
                 dmg = inf_apply_elysian_to_player_hit(s, dmg, &elysian_reduced);
                 if (elysian_reduced) s->player.elysian_proc_this_tick = 1;
             }
-            inf_apply_echo_boots_recoil(s, dmg);
+            inf_apply_echo_boots_recoil(s, hit->source_npc_slot, dmg);
             inf_damage_player_from_type(s, hit->source_npc_type, dmg);
             encounter_pending_hit_queue_remove(&s->player_pending_hits, i, "inferno player");
             i--;

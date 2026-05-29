@@ -454,58 +454,42 @@ static int inf_apply_elysian_to_player_hit(InfernoState* s, int damage, int* red
     return damage * 75 / 100;
 }
 
-static int inf_npc_footprint_overlaps_player_3x3(const InfernoState* s, const InfNPC* npc) {
-    int size = inf_npc_effective_size(npc);
-    int min_x = s->player.x - 1;
-    int max_x = s->player.x + 1;
-    int min_y = s->player.y - 1;
-    int max_y = s->player.y + 1;
-    return npc->x <= max_x &&
-        npc->x + size - 1 >= min_x &&
-        npc->y <= max_y &&
-        npc->y + size - 1 >= min_y;
-}
-
-static void inf_apply_echo_boots_recoil(InfernoState* s, int final_damage) {
+static void inf_apply_echo_boots_recoil(InfernoState* s, int attacker_slot, int final_damage) {
     osrs_ensure_player_equipment(&s->player);
     int recoil_damage = osrs_echo_boots_recoil_damage(
         &s->player.equipment_effect_profile,
         &s->player.item_effect_state,
         final_damage);
     if (recoil_damage <= 0) return;
+    if (attacker_slot < 0 || attacker_slot >= INF_MAX_NPCS) return;
+
+    /* recoil reflects to the single attacker (any range), not an AoE to neighbours */
+    InfNPC* npc = &s->npcs[attacker_slot];
+    if (!npc->active || npc->death_ticks > 0 || npc->hp <= 0) return;
+    if (npc->type == INF_NPC_ZUK || npc->type == INF_NPC_ZUK_SHIELD) return;
 
     osrs_consume_echo_boots_charge(&s->player);
-    for (int i = 0; i < INF_MAX_NPCS; i++) {
-        InfNPC* npc = &s->npcs[i];
-        if (!npc->active || npc->death_ticks > 0 || npc->hp <= 0)
-            continue;
-        if (npc->type == INF_NPC_ZUK || npc->type == INF_NPC_ZUK_SHIELD)
-            continue;
-        if (!inf_npc_footprint_overlaps_player_3x3(s, npc))
-            continue;
+    int applied = encounter_damage_npc(
+        &npc->hp, &npc->hit_landed_this_tick, &npc->hit_damage,
+        recoil_damage);
+    if (applied <= 0) return;
 
-        int applied = encounter_damage_npc(
-            &npc->hp, &npc->hit_landed_this_tick, &npc->hit_damage,
-            recoil_damage);
-        if (applied <= 0) continue;
+    s->tick_scratch.damage_dealt += (float)applied;
+    if (npc->type == INF_NPC_HEALER_ZUK) {
+        s->tick_scratch.damage_zuk_healers += (float)applied;
+    } else if (npc->type == INF_NPC_HEALER_JAD) {
+        s->tick_scratch.damage_jad_healers += (float)applied;
+    } else if (npc->type == INF_NPC_JAD) {
+        s->tick_scratch.damage_jad += (float)applied;
+    } else {
+        s->tick_scratch.damage_set += (float)applied;
+    }
 
-        s->tick_scratch.damage_dealt += (float)applied;
-        if (npc->type == INF_NPC_HEALER_ZUK) {
-            s->tick_scratch.damage_zuk_healers += (float)applied;
-        } else if (npc->type == INF_NPC_HEALER_JAD) {
-            s->tick_scratch.damage_jad_healers += (float)applied;
-        } else if (npc->type == INF_NPC_JAD) {
-            s->tick_scratch.damage_jad += (float)applied;
-        } else {
-            s->tick_scratch.damage_set += (float)applied;
-        }
-
-        if (npc->hp <= 0) {
-            if (npc->type == INF_NPC_JAD) s->tick_scratch.kill_jad++;
-            else if (npc->type == INF_NPC_HEALER_ZUK) s->tick_scratch.kill_zuk_healer++;
-            else if (npc->type != INF_NPC_HEALER_JAD) s->tick_scratch.kill_set++;
-            inf_apply_npc_death(s, i);
-        }
+    if (npc->hp <= 0) {
+        if (npc->type == INF_NPC_JAD) s->tick_scratch.kill_jad++;
+        else if (npc->type == INF_NPC_HEALER_ZUK) s->tick_scratch.kill_zuk_healer++;
+        else if (npc->type != INF_NPC_HEALER_JAD) s->tick_scratch.kill_set++;
+        inf_apply_npc_death(s, attacker_slot);
     }
 }
 
@@ -650,7 +634,7 @@ static void inf_npc_attack_ctx(InfernoState* s, InfernoContext* ctx, int idx) {
             int prayer_matches = (s->player.prayer == PRAYER_PROTECT_MELEE);
               if (prayer_matches) { dmg = 0; s->tick_scratch.prayer_correct = 1; }
               else if (dmg > 0) { s->tick_scratch.off_prayer_hits++; }
-            inf_apply_echo_boots_recoil(s, dmg);
+            inf_apply_echo_boots_recoil(s, idx, dmg);
             inf_damage_player_from_type(s, npc->type, dmg);
             npc->attack_style_this_tick = ATTACK_STYLE_MELEE;
             npc->attacked_this_tick = 1;
@@ -868,7 +852,7 @@ static void inf_npc_attack_ctx(InfernoState* s, InfernoContext* ctx, int idx) {
         int elysian_reduced = 0;
         dmg = inf_apply_elysian_to_player_hit(s, dmg, &elysian_reduced);
         if (elysian_reduced) s->player.elysian_proc_this_tick = 1;
-        inf_apply_echo_boots_recoil(s, dmg);
+        inf_apply_echo_boots_recoil(s, idx, dmg);
         s->dmg_from_type[npc->type] += (float)dmg;
         if (dmg > 0) s->last_hit_by_type = npc->type;
         inf_damage_player_from_type(s, npc->type, dmg);

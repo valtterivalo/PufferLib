@@ -45,6 +45,7 @@ static EncounterPendingHit* inf_queue_player_pending_hit(
     int npc_type,
     EncounterPendingHit hit
 ) {
+    hit.source_npc_slot = npc_idx;
     return encounter_pending_hit_queue_push(
         &s->player_pending_hits, hit, "inferno player", s->tick, npc_idx, npc_type);
 }
