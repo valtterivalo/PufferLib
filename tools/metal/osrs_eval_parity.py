@@ -161,14 +161,35 @@ def backend_policy_debug_sample(backend: Any, pufferl: Any) -> dict[str, Any]:
     return dict(backend.policy_debug_sample(pufferl)) if hasattr(backend, "policy_debug_sample") else {}
 
 
+def backend_policy_debug_rows(backend: Any, pufferl: Any, start_row: int, rows: int) -> dict[str, Any]:
+    if start_row < 0 or rows <= 0 or not hasattr(backend, "policy_debug_rows"):
+        return {}
+    return dict(backend.policy_debug_rows(pufferl, start_row, rows))
+
+
 def backend_env_debug_sample(backend: Any, pufferl: Any) -> dict[str, Any]:
     return dict(backend.env_debug_sample(pufferl)) if hasattr(backend, "env_debug_sample") else {}
+
+
+def backend_env_state_debug_rows(backend: Any, pufferl: Any, start_row: int, rows: int) -> list[dict[str, Any]]:
+    if start_row < 0 or rows <= 0 or not hasattr(backend, "env_state_debug"):
+        return []
+    return [
+        dict(backend.env_state_debug(pufferl, start_row + row))
+        for row in range(rows)
+    ]
 
 
 def backend_env_obs_row_hashes(backend: Any, pufferl: Any, row_limit: int) -> list[str]:
     if row_limit <= 0 or not hasattr(backend, "env_obs_row_hashes"):
         return []
     return list(backend.env_obs_row_hashes(pufferl, row_limit))
+
+
+def backend_env_obs_rows(backend: Any, pufferl: Any, start_row: int, rows: int) -> list[list[float]]:
+    if start_row < 0 or rows <= 0 or not hasattr(backend, "env_obs_rows"):
+        return []
+    return list(backend.env_obs_rows(pufferl, start_row, rows))
 
 
 def env_only_hashes(hashes: dict[str, Any]) -> dict[str, Any]:
@@ -214,7 +235,7 @@ def run_rollout(args: argparse.Namespace) -> None:
         logs = flat_dict(backend.eval_log(pufferl))
         if rollout_index < args.record_hashes:
             hashes = backend.rollout_hashes(pufferl) if hasattr(backend, "rollout_hashes") else {}
-            traces.append({
+            trace = {
                 "rollout": rollout_index,
                 "global_step": int(pufferl.global_step),
                 "env_n": int(logs.get("env/n", 0)),
@@ -223,7 +244,16 @@ def run_rollout(args: argparse.Namespace) -> None:
                 "policy_debug": backend_policy_debug_sample(backend, pufferl),
                 "env_obs_row_hashes": backend_env_obs_row_hashes(
                     backend, pufferl, args.record_row_hashes),
-            })
+            }
+            if args.record_debug_row >= 0:
+                trace["debug_row"] = int(args.record_debug_row)
+                trace["policy_debug_rows"] = backend_policy_debug_rows(
+                    backend, pufferl, args.record_debug_row, args.record_debug_rows)
+                trace["env_state_debug_rows"] = backend_env_state_debug_rows(
+                    backend, pufferl, args.record_debug_row, args.record_debug_rows)
+                trace["env_obs_rows"] = backend_env_obs_rows(
+                    backend, pufferl, args.record_debug_row, args.record_debug_rows)
+            traces.append(trace)
         rollout_index += 1
 
     num_params = int(pufferl.num_params()) if hasattr(pufferl, "num_params") else None
@@ -312,6 +342,8 @@ def main() -> None:
     rollout.add_argument("--seed", type=int)
     rollout.add_argument("--record-hashes", type=int, default=8)
     rollout.add_argument("--record-row-hashes", type=int, default=0)
+    rollout.add_argument("--record-debug-row", type=int, default=-1)
+    rollout.add_argument("--record-debug-rows", type=int, default=1)
     rollout.add_argument("--backend-label", default="unknown")
     rollout.add_argument("--write-json", type=Path, required=True)
     rollout.set_defaults(func=run_rollout)

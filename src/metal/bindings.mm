@@ -335,6 +335,24 @@ static py::list float_actions_rows(const FloatTensor& tensor, int rows) {
     return out;
 }
 
+static py::list float_actions_rows_range(const FloatTensor& tensor, int start_row, int rows) {
+    py::list out;
+    if (tensor.data == nullptr || puf_ndim(tensor.shape) < 3 || rows <= 0) return out;
+    int total_rows = (int)tensor.shape[1];
+    if (start_row < 0 || start_row >= total_rows) return out;
+    int row_count = std::min(rows, total_rows - start_row);
+    int cols = (int)tensor.shape[2];
+    for (int r = 0; r < row_count; r++) {
+        py::list row;
+        for (int c = 0; c < cols; c++) {
+            size_t idx = ((size_t)start_row + r) * cols + c;
+            row.append((int)lrintf(tensor.data[idx]));
+        }
+        out.append(row);
+    }
+    return out;
+}
+
 static py::list precision_rows(const PrecisionTensor& tensor, int rows) {
     py::list out;
     if (tensor.data == nullptr || puf_ndim(tensor.shape) < 2) return out;
@@ -344,6 +362,25 @@ static py::list precision_rows(const PrecisionTensor& tensor, int rows) {
         py::list row;
         for (int c = 0; c < cols; c++) {
             row.append(tensor.data[(size_t)r * cols + c]);
+        }
+        out.append(row);
+    }
+    return out;
+}
+
+static py::list precision_rows_range(
+        const PrecisionTensor& tensor, int start_row, int rows) {
+    py::list out;
+    if (tensor.data == nullptr || puf_ndim(tensor.shape) < 2 || rows <= 0) return out;
+    int total_rows = (int)tensor.shape[0];
+    if (start_row < 0 || start_row >= total_rows) return out;
+    int row_count = std::min(rows, total_rows - start_row);
+    int cols = (int)tensor.shape[1];
+    for (int r = 0; r < row_count; r++) {
+        py::list row;
+        for (int c = 0; c < cols; c++) {
+            size_t idx = ((size_t)start_row + r) * cols + c;
+            row.append(tensor.data[idx]);
         }
         out.append(row);
     }
@@ -406,6 +443,22 @@ static py::dict policy_debug_sample(py::object pufferl_obj) {
     out["actions"] = float_actions_rows(pufferl.rollouts.actions, 4);
     DecoderActivations* decoder = (DecoderActivations*)pufferl.buffer_activations[0].decoder;
     out["decoder_out"] = precision_rows(decoder->out, 4);
+    return out;
+}
+
+static py::dict policy_debug_rows(py::object pufferl_obj, int start_row, int rows) {
+    PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
+    if (pufferl.train_pending) {
+        sync_pending_train(pufferl);
+    }
+    if (!pufferl.cpu_inference) {
+        mtl_ensure_stream_synced((cudaStream_t)mtl_stream());
+    }
+
+    py::dict out;
+    out["actions"] = float_actions_rows_range(pufferl.rollouts.actions, start_row, rows);
+    DecoderActivations* decoder = (DecoderActivations*)pufferl.buffer_activations[0].decoder;
+    out["decoder_out"] = precision_rows_range(decoder->out, start_row, rows);
     return out;
 }
 
@@ -1012,6 +1065,7 @@ PYBIND11_MODULE(_C, m) {
     m.def("rollout_hashes", &rollout_hashes);
     m.def("parity_hashes", &parity_hashes);
     m.def("policy_debug_sample", &policy_debug_sample);
+    m.def("policy_debug_rows", &policy_debug_rows);
     m.def("env_debug_sample", &env_debug_sample);
     m.def("env_obs_row_hashes", &env_obs_row_hashes);
     m.def("env_obs_rows", &env_obs_rows);
