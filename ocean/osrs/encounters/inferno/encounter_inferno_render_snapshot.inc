@@ -329,6 +329,40 @@ static const OsrsCombatVisualRow* inf_npc_combat_visual_row(
         (uint16_t)INF_NPC_DEF_IDS[type], style);
 }
 
+static void inf_npc_projectile_fallback(
+    InfNPCType type,
+    AttackStyle style,
+    uint32_t* model_id,
+    int* anim_id
+) {
+    assert(model_id && anim_id);
+    switch (type) {
+        case INF_NPC_BAT:
+            *model_id = INF_GFX_1374_MODEL;
+            *anim_id = INF_GFX_1374_ANIM;
+            return;
+        case INF_NPC_BLOB:
+            if (style == ATTACK_STYLE_RANGED) {
+                *model_id = INF_GFX_1383_MODEL;
+                *anim_id = INF_GFX_1383_ANIM;
+            } else if (style == ATTACK_STYLE_MAGIC) {
+                *model_id = INF_GFX_1384_MODEL;
+                *anim_id = OSRS_COMBAT_PROJECTILE_MISSING;
+            }
+            return;
+        case INF_NPC_BLOB_RANGE:
+            *model_id = INF_GFX_1379_MODEL;
+            *anim_id = INF_GFX_1379_ANIM;
+            return;
+        case INF_NPC_BLOB_MAGE:
+            *model_id = INF_GFX_1381_MODEL;
+            *anim_id = INF_GFX_1381_ANIM;
+            return;
+        default:
+            return;
+    }
+}
+
 
 
 static void inf_render_post_tick_ctx(
@@ -415,16 +449,9 @@ static void inf_render_post_tick_ctx(
                 impact_gfx_id = npc_visual->projectile.impact_spotanim_id;
         }
 
-        if (proj_model_id == 0) {
-            switch (npc->type) {
-                case INF_NPC_BAT:        proj_model_id = INF_GFX_1374_MODEL; break;
-                case INF_NPC_BLOB:       proj_model_id = (actual_style == ATTACK_STYLE_RANGED) ? INF_GFX_1378_MODEL : INF_GFX_1380_MODEL; break;
-                case INF_NPC_BLOB_RANGE: proj_model_id = INF_GFX_1379_MODEL; break;
-                case INF_NPC_BLOB_MAGE:  proj_model_id = INF_GFX_1381_MODEL; break;
-                case INF_NPC_BLOB_MELEE: proj_model_id = INF_GFX_1382_MODEL; break;
-                default: break;
-            }
-        }
+        if (proj_model_id == 0)
+            inf_npc_projectile_fallback(
+                npc->type, actual_style, &proj_model_id, &proj_anim_id);
 
         /* NPC-specific flight overrides */
         switch (npc->type) {
@@ -497,6 +524,9 @@ static void inf_render_post_tick_ctx(
             }
             continue;
         }
+
+        if (target_npc_slot < 0)
+            impact_gfx_id = 0;
 
         if (npc->type == INF_NPC_HEALER_ZUK && impact_gfx_id <= 0)
             impact_gfx_id = INF_GFX_659_ID;
