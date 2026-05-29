@@ -181,6 +181,38 @@ static py::list obs_rows_f32(const OBS_TENSOR_T& tensor, int rows) {
     return out;
 }
 
+static py::list obs_rows_f32_range(const OBS_TENSOR_T& tensor, int start_row, int rows) {
+    py::list out;
+    if (tensor.data == nullptr || ndim(tensor.shape) < 2 || rows <= 0) return out;
+    int total_rows = (int)tensor.shape[0];
+    if (start_row < 0 || start_row >= total_rows) return out;
+    int row_count = std::min(rows, total_rows - start_row);
+    int cols = (int)tensor.shape[1];
+    size_t elem_size = get_obs_elem_size();
+    size_t n = (size_t)row_count * cols;
+    std::vector<unsigned char> host(n * elem_size);
+    if (n > 0) {
+        cudaMemcpy(
+            host.data(),
+            tensor.data + (size_t)start_row * cols,
+            host.size(),
+            cudaMemcpyDeviceToHost);
+    }
+    for (int r = 0; r < row_count; r++) {
+        py::list row;
+        for (int c = 0; c < cols; c++) {
+            size_t idx = (size_t)r * cols + c;
+            if (elem_size == sizeof(float)) {
+                row.append(((float*)host.data())[idx]);
+            } else {
+                row.append((float)host[idx]);
+            }
+        }
+        out.append(row);
+    }
+    return out;
+}
+
 py::dict policy_debug_sample(py::object pufferl_obj) {
     auto& pufferl = pufferl_obj.cast<PuffeRL&>();
     py::dict out;
@@ -200,6 +232,11 @@ py::dict env_debug_sample(py::object pufferl_obj) {
 py::list env_obs_row_hashes(py::object pufferl_obj, int row_limit) {
     auto& pufferl = pufferl_obj.cast<PuffeRL&>();
     return hash_obs_rows(pufferl.env.obs, row_limit);
+}
+
+py::list env_obs_rows(py::object pufferl_obj, int start_row, int rows) {
+    auto& pufferl = pufferl_obj.cast<PuffeRL&>();
+    return obs_rows_f32_range(pufferl.env.obs, start_row, rows);
 }
 
 // Wrapper functions for Python bindings
@@ -738,6 +775,7 @@ PYBIND11_MODULE(_C, m) {
     m.def("policy_debug_sample", &policy_debug_sample);
     m.def("env_debug_sample", &env_debug_sample);
     m.def("env_obs_row_hashes", &env_obs_row_hashes);
+    m.def("env_obs_rows", &env_obs_rows);
     m.def("train", &train);
     m.def("close", &puf_close);
     m.def("save_weights", &save_weights);

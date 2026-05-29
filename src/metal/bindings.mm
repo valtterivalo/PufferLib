@@ -370,6 +370,29 @@ static py::list puf_rows_f32(const PufTensor& tensor, int rows) {
     return out;
 }
 
+static py::list puf_rows_f32_range(const PufTensor& tensor, int start_row, int rows) {
+    py::list out;
+    if (tensor.bytes == nullptr || tensor.ndim() < 2 || rows <= 0) return out;
+    int total_rows = (int)tensor.shape[0];
+    if (start_row < 0 || start_row >= total_rows) return out;
+    int row_count = std::min(rows, total_rows - start_row);
+    int cols = (int)tensor.shape[1];
+    const unsigned char* bytes = (const unsigned char*)tensor.bytes;
+    for (int r = 0; r < row_count; r++) {
+        py::list row;
+        for (int c = 0; c < cols; c++) {
+            size_t idx = ((size_t)start_row + r) * cols + c;
+            if (tensor.dtype_size == sizeof(float)) {
+                row.append(((float*)bytes)[idx]);
+            } else {
+                row.append((float)bytes[idx]);
+            }
+        }
+        out.append(row);
+    }
+    return out;
+}
+
 static py::dict policy_debug_sample(py::object pufferl_obj) {
     PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
     if (pufferl.train_pending) {
@@ -410,6 +433,18 @@ static py::list env_obs_row_hashes(py::object pufferl_obj, int row_limit) {
     }
 
     return hash_puf_rows(pufferl.env.obs, row_limit);
+}
+
+static py::list env_obs_rows(py::object pufferl_obj, int start_row, int rows) {
+    PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
+    if (pufferl.train_pending) {
+        sync_pending_train(pufferl);
+    }
+    if (!pufferl.cpu_inference) {
+        mtl_ensure_stream_synced((cudaStream_t)mtl_stream());
+    }
+
+    return puf_rows_f32_range(pufferl.env.obs, start_row, rows);
 }
 
 static py::dict train(py::object pufferl_obj) {
@@ -940,6 +975,7 @@ PYBIND11_MODULE(_C, m) {
     m.def("policy_debug_sample", &policy_debug_sample);
     m.def("env_debug_sample", &env_debug_sample);
     m.def("env_obs_row_hashes", &env_obs_row_hashes);
+    m.def("env_obs_rows", &env_obs_rows);
     m.def("train", &train);
     m.def("close", &puf_close);
     m.def("save_weights", &save_weights);
