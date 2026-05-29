@@ -914,23 +914,6 @@ typedef struct {
     int prayer_correct_by_type[INF_NUM_NPC_TYPES];
     int attacks_by_type[INF_NUM_NPC_TYPES];
     float dmg_from_type[INF_NUM_NPC_TYPES];
-    int redemption_proc_opportunities;
-    int redemption_zero_hit_proc_opportunities;
-    int redemption_proc_opportunities_after_240;
-    int redemption_deaths_from_band;
-    int redemption_deaths_from_band_after_240;
-    int redemption_deaths_from_above_band;
-    float redemption_heal_potential;
-    float redemption_heal_potential_after_240;
-    int redemption_proc_opportunities_by_type[INF_NUM_NPC_TYPES];
-    int redemption_zero_hit_proc_opportunities_by_type[INF_NUM_NPC_TYPES];
-    int redemption_deaths_from_band_by_type[INF_NUM_NPC_TYPES];
-    float redemption_heal_potential_by_type[INF_NUM_NPC_TYPES];
-    int redemption_action_count;
-    int redemption_active_ticks;
-    int redemption_proc_count;
-    int redemption_zero_hit_proc_count;
-    float redemption_heal_done;
     int last_hit_by_type;      /* NPC type that last dealt damage to player (-1=none) */
     int killed_by_type[INF_NUM_NPC_TYPES];  /* count of deaths caused by each NPC type */
     int total_idle_ticks;      /* cumulative ticks of ticks_without_action > 0 */

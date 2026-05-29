@@ -341,27 +341,6 @@ static void inf_reset_transition_diagnostics_for_restored_start(InfernoState* s)
     s->spark_damage_after_240 = 0.0f;
     s->zuk_hp_max_after_healer_spawn =
         s->zuk.healer_spawned && has_live_zuk ? zuk_hp : 0.0f;
-    s->redemption_proc_opportunities = 0;
-    s->redemption_zero_hit_proc_opportunities = 0;
-    s->redemption_proc_opportunities_after_240 = 0;
-    s->redemption_deaths_from_band = 0;
-    s->redemption_deaths_from_band_after_240 = 0;
-    s->redemption_deaths_from_above_band = 0;
-    s->redemption_heal_potential = 0.0f;
-    s->redemption_heal_potential_after_240 = 0.0f;
-    memset(s->redemption_proc_opportunities_by_type, 0,
-        sizeof(s->redemption_proc_opportunities_by_type));
-    memset(s->redemption_zero_hit_proc_opportunities_by_type, 0,
-        sizeof(s->redemption_zero_hit_proc_opportunities_by_type));
-    memset(s->redemption_deaths_from_band_by_type, 0,
-        sizeof(s->redemption_deaths_from_band_by_type));
-    memset(s->redemption_heal_potential_by_type, 0,
-        sizeof(s->redemption_heal_potential_by_type));
-    s->redemption_action_count = 0;
-    s->redemption_active_ticks = 0;
-    s->redemption_proc_count = 0;
-    s->redemption_zero_hit_proc_count = 0;
-    s->redemption_heal_done = 0.0f;
 
     InfZukHealerCounts healers = inf_zuk_healer_counts(s);
     s->total_zuk_healer_tags = healers.tagged_count;

@@ -7187,69 +7187,6 @@ static void test_echo_boots_recoil_reflects_to_attacker_only(void) {
         state.npcs[2].hp, 1200);
 }
 
-static void test_redemption_pressure_counts_zero_hit_low_hp_landing(void) {
-    printf("--- redemption pressure counts zero-hit low-HP landing ---\n");
-
-    InfernoState state = make_test_state(20, 20);
-    state.player.base_hitpoints = 99;
-    state.player.current_hitpoints = 7;
-    state.player.base_prayer = 99;
-    state.player.current_prayer = 12;
-    state.tick_at_le_240 = 10;
-
-    inf_damage_player_from_type(&state, INF_NPC_HEALER_ZUK, 0);
-
-    ASSERT_INT_EQ("zero hit preserves HP",
-        state.player.current_hitpoints, 7);
-    ASSERT_INT_EQ("zero hit at low HP counts proc opportunity",
-        state.redemption_proc_opportunities, 1);
-    ASSERT_INT_EQ("zero hit opportunity is classified",
-        state.redemption_zero_hit_proc_opportunities, 1);
-    ASSERT_INT_EQ("zero hit after 240 is classified",
-        state.redemption_proc_opportunities_after_240, 1);
-    ASSERT_INT_EQ("healer-Zuk source gets opportunity",
-        state.redemption_proc_opportunities_by_type[INF_NPC_HEALER_ZUK], 1);
-    ASSERT_INT_EQ("healer-Zuk source gets zero-hit opportunity",
-        state.redemption_zero_hit_proc_opportunities_by_type[INF_NPC_HEALER_ZUK], 1);
-    ASSERT_FLOAT_NEAR("heal potential is capped at prayer heal",
-        state.redemption_heal_potential, 24.0f, 1e-6f);
-}
-
-static void test_redemption_pressure_splits_lethal_band_deaths(void) {
-    printf("--- redemption pressure splits lethal band deaths ---\n");
-
-    InfernoState band = make_test_state(20, 20);
-    band.player.base_hitpoints = 99;
-    band.player.current_hitpoints = 7;
-    band.player.base_prayer = 99;
-    band.player.current_prayer = 12;
-    band.tick_at_le_240 = 10;
-
-    inf_damage_player_from_type(&band, INF_NPC_HEALER_ZUK, 8);
-
-    ASSERT_INT_EQ("band lethal hit kills player",
-        band.player.current_hitpoints, 0);
-    ASSERT_INT_EQ("band lethal hit counts death from band",
-        band.redemption_deaths_from_band, 1);
-    ASSERT_INT_EQ("band lethal hit counts after 240",
-        band.redemption_deaths_from_band_after_240, 1);
-    ASSERT_INT_EQ("band lethal hit counts source",
-        band.redemption_deaths_from_band_by_type[INF_NPC_HEALER_ZUK], 1);
-
-    InfernoState above = make_test_state(20, 20);
-    above.player.base_hitpoints = 99;
-    above.player.current_hitpoints = 20;
-    above.player.base_prayer = 99;
-    above.player.current_prayer = 12;
-
-    inf_damage_player_from_type(&above, INF_NPC_ZUK, 25);
-
-    ASSERT_INT_EQ("above-band lethal hit is not redemption-saveable",
-        above.redemption_deaths_from_band, 0);
-    ASSERT_INT_EQ("above-band lethal hit is classified separately",
-        above.redemption_deaths_from_above_band, 1);
-}
-
 static void test_redemption_action_maps_without_smite(void) {
     printf("--- redemption action maps without smite ---\n");
 
@@ -7268,10 +7205,6 @@ static void test_redemption_action_maps_without_smite(void) {
         state.player.prayer, PRAYER_REDEMPTION);
     ASSERT_INT_EQ("inferno action five is not smite",
         state.player.prayer == PRAYER_SMITE, 0);
-    ASSERT_INT_EQ("redemption action is counted",
-        state.redemption_action_count, 1);
-    ASSERT_INT_EQ("active redemption tick is counted",
-        state.redemption_active_ticks, 1);
 }
 
 static void test_redemption_zero_hit_landing_heals_and_drains(void) {
@@ -7299,12 +7232,6 @@ static void test_redemption_zero_hit_landing_heals_and_drains(void) {
         state.player.hit_landed_this_tick, 1);
     ASSERT_INT_EQ("zero hit remains zero damage",
         state.player.hit_damage, 0);
-    ASSERT_INT_EQ("redemption proc is counted",
-        state.redemption_proc_count, 1);
-    ASSERT_INT_EQ("zero-hit redemption proc is counted",
-        state.redemption_zero_hit_proc_count, 1);
-    ASSERT_FLOAT_NEAR("redemption heal amount is counted",
-        state.redemption_heal_done, 24.0f, 1e-6f);
 }
 
 static void test_redemption_does_not_prevent_lethal_damage(void) {
@@ -7323,10 +7250,6 @@ static void test_redemption_does_not_prevent_lethal_damage(void) {
         state.player.current_hitpoints, 0);
     ASSERT_INT_EQ("lethal damage does not drain redemption",
         state.player.current_prayer, 12);
-    ASSERT_INT_EQ("lethal damage does not count a redemption proc",
-        state.redemption_proc_count, 0);
-    ASSERT_FLOAT_NEAR("lethal damage does not count redemption healing",
-        state.redemption_heal_done, 0.0f, 1e-6f);
 }
 
 static void test_redemption_procs_on_locked_zero_projectile_landing(void) {
@@ -7359,12 +7282,6 @@ static void test_redemption_procs_on_locked_zero_projectile_landing(void) {
         state.player.current_hitpoints, 31);
     ASSERT_INT_EQ("redemption drains prayer on landing",
         state.player.current_prayer, 0);
-    ASSERT_INT_EQ("zero-hit opportunity source is still logged",
-        state.redemption_zero_hit_proc_opportunities_by_type[INF_NPC_HEALER_ZUK], 1);
-    ASSERT_INT_EQ("locked zero projectile counts a real proc",
-        state.redemption_proc_count, 1);
-    ASSERT_INT_EQ("locked zero projectile counts a zero-hit proc",
-        state.redemption_zero_hit_proc_count, 1);
 }
 
 static void test_human_autocast_works_with_dragon_hunter_wand(void) {
@@ -9686,8 +9603,6 @@ int main(void) {
     test_human_autocast_selection_persists_across_weapon_switches();
     test_autocast_is_inactive_with_non_autocast_weapon();
     test_echo_boots_recoil_reflects_to_attacker_only();
-    test_redemption_pressure_counts_zero_hit_low_hp_landing();
-    test_redemption_pressure_splits_lethal_band_deaths();
     test_redemption_action_maps_without_smite();
     test_redemption_zero_hit_landing_heals_and_drains();
     test_redemption_does_not_prevent_lethal_damage();

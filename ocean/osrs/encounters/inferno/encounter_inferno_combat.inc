@@ -1196,62 +1196,11 @@ static void inf_healer_apply_landed_heal(InfernoState* s, int idx) {
         s->tick_scratch.hp_restored_zuk += effective_heal;
 }
 
-static void inf_record_redemption_pressure(
-    InfernoState* s,
-    int source_type,
-    int damage
-) {
-    if (s->player.current_prayer <= 0) return;
-
-    int before_hp = s->player.current_hitpoints;
-    int after_hp = before_hp - (damage > 0 ? damage : 0);
-    if (after_hp < 0) after_hp = 0;
-
-    int before_band = before_hp > 0 && before_hp <= 9;
-    int after_band = after_hp > 0 && after_hp <= 9;
-    int source_valid = source_type >= 0 && source_type < INF_NUM_NPC_TYPES;
-    int after_240 = s->tick_at_le_240 >= 0;
-
-    if (before_band || after_band) {
-        int heal = s->player.base_prayer / 4;
-        int missing = s->player.base_hitpoints - after_hp;
-        float heal_potential = (float)(missing > heal ? heal : missing);
-        if (heal_potential < 0.0f) heal_potential = 0.0f;
-
-        s->redemption_proc_opportunities++;
-        s->redemption_heal_potential += heal_potential;
-        if (damage <= 0)
-            s->redemption_zero_hit_proc_opportunities++;
-        if (after_240) {
-            s->redemption_proc_opportunities_after_240++;
-            s->redemption_heal_potential_after_240 += heal_potential;
-        }
-        if (source_valid) {
-            s->redemption_proc_opportunities_by_type[source_type]++;
-            s->redemption_heal_potential_by_type[source_type] += heal_potential;
-            if (damage <= 0)
-                s->redemption_zero_hit_proc_opportunities_by_type[source_type]++;
-        }
-    }
-
-    if (damage > 0 && before_hp > 0 && after_hp <= 0) {
-        if (before_band) {
-            s->redemption_deaths_from_band++;
-            if (after_240)
-                s->redemption_deaths_from_band_after_240++;
-            if (source_valid)
-                s->redemption_deaths_from_band_by_type[source_type]++;
-        } else {
-            s->redemption_deaths_from_above_band++;
-        }
-    }
-}
-
 static int inf_redemption_threshold(const InfernoState* s) {
     return (s->player.base_hitpoints - 1) / 10;
 }
 
-static void inf_apply_redemption_if_due(InfernoState* s, int before_hp, int damage) {
+static void inf_apply_redemption_if_due(InfernoState* s, int before_hp) {
     Player* p = &s->player;
     if (p->prayer != PRAYER_REDEMPTION || p->current_prayer <= 0)
         return;
@@ -1265,15 +1214,10 @@ static void inf_apply_redemption_if_due(InfernoState* s, int before_hp, int dama
         return;
 
     int old_offensive = p->offensive_prayer;
-    int hp_before_heal = p->current_hitpoints;
     int heal = p->base_prayer / 4;
     p->current_hitpoints += heal;
     if (p->current_hitpoints > p->base_hitpoints)
         p->current_hitpoints = p->base_hitpoints;
-    s->redemption_proc_count++;
-    if (damage <= 0)
-        s->redemption_zero_hit_proc_count++;
-    s->redemption_heal_done += (float)(p->current_hitpoints - hp_before_heal);
     p->current_prayer = 0;
     p->prayer = PRAYER_NONE;
     p->offensive_prayer = OFFENSIVE_PRAYER_NONE;
@@ -1290,9 +1234,8 @@ static void inf_damage_player_from_type(
     int damage
 ) {
     int before_hp = s->player.current_hitpoints;
-    inf_record_redemption_pressure(s, source_type, damage);
     encounter_damage_player(&s->player, damage, &s->tick_scratch.damage_received);
-    inf_apply_redemption_if_due(s, before_hp, damage);
+    inf_apply_redemption_if_due(s, before_hp);
 }
 
 static void inf_queue_pending_spark(

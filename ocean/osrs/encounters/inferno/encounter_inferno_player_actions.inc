@@ -398,8 +398,6 @@ static void inf_player_pretick(InfernoState* s, InfernoContext* ctx, const int* 
     if (encounter_apply_overhead_action(&s->player.prayer, prayer_act)) {
         s->player.prayer_just_activated = 1;
     }
-    if (prayer_act == ENCOUNTER_OVERHEAD_SET_REFRESH_REDEMPTION)
-        s->redemption_action_count++;
     if (encounter_apply_offensive_action(&s->player.offensive_prayer, offensive_act)) {
         s->player.offensive_prayer_just_activated = 1;
     }
@@ -407,8 +405,6 @@ static void inf_player_pretick(InfernoState* s, InfernoContext* ctx, const int* 
        AFTER drain to catch both the apply-side change and the drain-side clear. */
     encounter_drain_all_prayers(
         &s->player, encounter_player_prayer_bonus(&s->player));
-    if (s->player.prayer == PRAYER_REDEMPTION)
-        s->redemption_active_ticks++;
     /* offensive prayer is baked into eff_level/max_hit via the loadout cache.
        recompute all loadouts on any change so combat math reflects current state. */
     if (s->player.offensive_prayer != prev_offensive) {
