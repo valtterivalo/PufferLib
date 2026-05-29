@@ -849,7 +849,7 @@ static void inf_tick_player_ctx(
                         const InfNPCStats* ns = &INF_NPC_STATS[target_npc->type];
                         btargets[bt_count++] = (BarrageTarget){
                             .active = 1, .x = target_npc->x, .y = target_npc->y,
-                            .def_level = ns->def_level, .magic_def_bonus = ns->magic_def_bonus,
+                            .magic_level = ns->magic_level, .magic_def_bonus = ns->magic_def_bonus,
                             .npc_idx = s->interaction.target_slot,
                             .frozen_ticks = &s->npcs[s->interaction.target_slot].frozen_ticks,
                             .hit = 0, .damage = 0
@@ -864,7 +864,7 @@ static void inf_tick_player_ctx(
                         const InfNPCStats* ns2 = &INF_NPC_STATS[s->npcs[i].type];
                         btargets[bt_count++] = (BarrageTarget){
                             .active = 1, .x = s->npcs[i].x, .y = s->npcs[i].y,
-                            .def_level = ns2->def_level, .magic_def_bonus = ns2->magic_def_bonus,
+                            .magic_level = ns2->magic_level, .magic_def_bonus = ns2->magic_def_bonus,
                             .npc_idx = i,
                             .frozen_ticks = &s->npcs[i].frozen_ticks,
                             .hit = 0, .damage = 0

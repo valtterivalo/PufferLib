@@ -120,7 +120,7 @@ static inline float encounter_rand_float(uint32_t* rng_state) {
 typedef struct {
     int active;          /* in: 1 if this target slot is valid */
     int x, y;            /* in: NPC SW corner tile position */
-    int def_level;       /* in: NPC defence level */
+    int magic_level;     /* in: NPC magic level (magic rolls vs magic level, not defence) */
     int magic_def_bonus; /* in: NPC magic defence bonus */
     int npc_idx;         /* in: index into caller's NPC array (for callbacks) */
     int* frozen_ticks;   /* in: pointer to NPC's frozen_ticks (NULL = no freeze tracking) */
@@ -164,7 +164,7 @@ static inline BarrageResult osrs_barrage_resolve(
     /* primary target (index 0) always gets rolled */
     int px = targets[0].x, py = targets[0].y;
     {
-        int def_roll = (targets[0].def_level + 8) * (targets[0].magic_def_bonus + 64);
+        int def_roll = (targets[0].magic_level + 9) * (targets[0].magic_def_bonus + 64);
         float chance = primary_use_double_accuracy
             ? osrs_hit_chance_double(att_roll, def_roll)
             : osrs_hit_chance(att_roll, def_roll);
@@ -188,7 +188,7 @@ static inline BarrageResult osrs_barrage_resolve(
         int dy = targets[i].y - py;
         if (dx < -1 || dx > 1 || dy < -1 || dy > 1) continue;
 
-        int def_roll = (targets[i].def_level + 8) * (targets[i].magic_def_bonus + 64);
+        int def_roll = (targets[i].magic_level + 9) * (targets[i].magic_def_bonus + 64);
         float chance = osrs_hit_chance(att_roll, def_roll);
         targets[i].rolled = 1;
         targets[i].hit = encounter_rand_float(rng_state) < chance;
