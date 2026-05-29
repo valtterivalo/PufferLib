@@ -64,6 +64,20 @@ static int inf_pending_spark_obs_less(
     return ai < bi;
 }
 
+static inline float inf_obs_norm_count(int count) {
+    return (float)count / (float)INF_OBS_NPCS;
+}
+
+static inline float inf_obs_norm_damage_sum(int damage) {
+    float value = (float)damage / 300.0f;
+    return value > 1.0f ? 1.0f : value;
+}
+
+static inline float inf_obs_norm_range_deficit(int deficit) {
+    float value = (float)deficit / 15.0f;
+    return value > 1.0f ? 1.0f : value;
+}
+
 static void inf_refresh_current_obs_slots_ctx(InfernoState* s, const InfernoContext* ctx) {
     int obs_slots[INF_OBS_NPCS];
     for (int j = 0; j < INF_OBS_NPCS; j++) obs_slots[j] = -1;
@@ -241,6 +255,30 @@ static void inf_write_obs_ctx(
         obs[i++] = (float)conflict_count / 3.0f;
     }
 
+    {
+        InfNpcPressureSummary pressure = inf_npc_pressure_summary(s);
+        obs[i++] = inf_obs_norm_count(pressure.if_ready_total);
+        obs[i++] = inf_obs_norm_count(pressure.if_ready_melee);
+        obs[i++] = inf_obs_norm_count(pressure.if_ready_ranged);
+        obs[i++] = inf_obs_norm_count(pressure.if_ready_magic);
+        obs[i++] = (float)pressure.if_ready_max_hit / 150.0f;
+        obs[i++] = inf_obs_norm_damage_sum(pressure.if_ready_sum_max_hit);
+        obs[i++] = inf_obs_norm_count(pressure.this_tick_total);
+        obs[i++] = inf_obs_norm_count(pressure.this_tick_melee);
+        obs[i++] = inf_obs_norm_count(pressure.this_tick_ranged);
+        obs[i++] = inf_obs_norm_count(pressure.this_tick_magic);
+        obs[i++] = (float)pressure.this_tick_max_hit / 150.0f;
+        obs[i++] = inf_obs_norm_damage_sum(pressure.this_tick_sum_max_hit);
+        obs[i++] = inf_obs_norm_count(pressure.timer_lte_1);
+        obs[i++] = inf_obs_norm_count(pressure.timer_lte_2);
+        obs[i++] = inf_obs_norm_count(pressure.timer_lte_4);
+        obs[i++] = (float)pressure.if_ready_style_count / 3.0f;
+        obs[i++] = (float)pressure.this_tick_style_count / 3.0f;
+        obs[i++] = (pressure.nearest_timer < 999)
+            ? (float)pressure.nearest_timer / 10.0f
+            : 1.0f;
+    }
+
     /* Zuk-phase features (10 features: 1 flag + 9 Zuk-specific) */
     {
         int is_zuk = (s->wave == 68);
@@ -339,6 +377,7 @@ static void inf_write_obs_ctx(
         if (has_target_category) num_features += 4;
         if (has_targeted) num_features += 1;
         num_features += 1;
+        num_features += 6;
         if (has_meleer_dig) num_features += 3;
 
         if (n >= 0) {
@@ -379,6 +418,18 @@ static void inf_write_obs_ctx(
                 obs[i++] = (float)npc->frozen_ticks / (float)BARRAGE_FREEZE_TICKS;
                 obs[i++] = inf_player_can_attack_npc_from_current_tile(s, n) ? 1.0f : 0.0f;
                 obs[i++] = inf_player_has_los_to_npc_from_current_tile(s, n) ? 1.0f : 0.0f;
+                InfPlayerNpcLoadoutReach mage =
+                    inf_player_loadout_reach_to_npc(s, n, INF_GEAR_MAGE);
+                InfPlayerNpcLoadoutReach long_range =
+                    inf_player_loadout_reach_to_npc(s, n, INF_GEAR_LONG_RANGE);
+                InfPlayerNpcLoadoutReach blowpipe =
+                    inf_player_loadout_reach_to_npc(s, n, INF_GEAR_BP);
+                obs[i++] = mage.can_attack_now ? 1.0f : 0.0f;
+                obs[i++] = long_range.can_attack_now ? 1.0f : 0.0f;
+                obs[i++] = blowpipe.can_attack_now ? 1.0f : 0.0f;
+                obs[i++] = inf_obs_norm_range_deficit(mage.range_deficit);
+                obs[i++] = inf_obs_norm_range_deficit(long_range.range_deficit);
+                obs[i++] = inf_obs_norm_range_deficit(blowpipe.range_deficit);
             }
 
             if (has_target_category) {

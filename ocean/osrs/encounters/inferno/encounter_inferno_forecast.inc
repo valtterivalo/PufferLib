@@ -1,7 +1,7 @@
 #line 5216 "encounter_inferno.h"
 /* obs layout: player + Zuk phase + pillars + NPC slots + step-out forecast + pending hits + pending Zuk healer sparks */
-#define INF_PLAYER_OBS_SIZE 57
-#define INF_BASE_NPC_OBS_SIZE 637
+#define INF_PLAYER_OBS_SIZE 75
+#define INF_BASE_NPC_OBS_SIZE 859
 #define INF_TOTAL_NPC_OBS_SIZE INF_BASE_NPC_OBS_SIZE
 #define INF_STEP_OUT_FORECAST_HORIZON 4
 #define INF_STEP_OUT_FORECAST_TICK_FEATURES 7
@@ -206,19 +206,6 @@ static int inf_step_out_forecast_prepare_unique_action_ctx(
     return 1;
 }
 
-static int inf_forecast_style_max_hit(
-    const InfNPCStats* stats, int style
-) {
-    if (style == ATTACK_STYLE_NONE) return 0;
-    int max_hit = osrs_npc_max_hit(style,
-        stats->str_level, stats->range_level,
-        stats->melee_str_bonus, stats->ranged_str_bonus,
-        stats->magic_base_dmg, stats->magic_dmg_pct);
-    if (stats->max_hit_cap > 0 && max_hit > stats->max_hit_cap)
-        max_hit = stats->max_hit_cap;
-    return max_hit;
-}
-
 static void inf_step_out_forecast_record_style_mask(
     InfStepOutForecastAction* action,
     int tick_idx,
@@ -231,19 +218,19 @@ static void inf_step_out_forecast_record_style_mask(
     int styles = 0;
     if (style_mask & INF_STYLE_MASK_MELEE) {
         tick->melee_count++;
-        int max_hit = inf_forecast_style_max_hit(stats, ATTACK_STYLE_MELEE);
+        int max_hit = inf_npc_style_max_hit(stats, ATTACK_STYLE_MELEE);
         if (max_hit > tick->max_hit) tick->max_hit = max_hit;
         styles++;
     }
     if (style_mask & INF_STYLE_MASK_RANGED) {
         tick->ranged_count++;
-        int max_hit = inf_forecast_style_max_hit(stats, ATTACK_STYLE_RANGED);
+        int max_hit = inf_npc_style_max_hit(stats, ATTACK_STYLE_RANGED);
         if (max_hit > tick->max_hit) tick->max_hit = max_hit;
         styles++;
     }
     if (style_mask & INF_STYLE_MASK_MAGIC) {
         tick->magic_count++;
-        int max_hit = inf_forecast_style_max_hit(stats, ATTACK_STYLE_MAGIC);
+        int max_hit = inf_npc_style_max_hit(stats, ATTACK_STYLE_MAGIC);
         if (max_hit > tick->max_hit) tick->max_hit = max_hit;
         styles++;
     }

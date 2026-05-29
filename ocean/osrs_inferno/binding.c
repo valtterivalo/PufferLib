@@ -1347,6 +1347,16 @@ void c_step(Env* env) {
         env->log.safe_attack_opportunity_missed_ticks +=
             (float)s->total_safe_attack_opportunity_missed_ticks;
         env->log.progressless_ticks += (float)s->total_progressless_ticks;
+        env->log.npc_pressure_if_ready_count +=
+            s->total_npc_pressure_if_ready_count;
+        env->log.npc_pressure_this_tick_count +=
+            s->total_npc_pressure_this_tick_count;
+        env->log.npc_pressure_if_ready_max_hit +=
+            s->total_npc_pressure_if_ready_max_hit;
+        env->log.npc_pressure_this_tick_max_hit +=
+            s->total_npc_pressure_this_tick_max_hit;
+        env->log.npc_pressure_max_incoming_hit +=
+            s->max_npc_pressure_incoming_hit;
         for (int i = 0; i < OSRS_INFERNO_IDLE_PHASE_COUNT; i++) {
             env->log.attack_ready_no_attack_ticks_by_phase[i] +=
                 (float)s->attack_ready_no_attack_ticks_by_phase[i];
@@ -2408,8 +2418,15 @@ void my_log(Log* log, Dict* out) {
         "progressless_ticks",
         log->progressless_ticks,
         log->progressless_ticks_by_phase);
+    float pressure_denom = log->episode_length > 0.0f
+        ? log->episode_length : 1.0f;
+    dict_set(out, "npc_pressure_if_ready_count_per_tick",
+        log->npc_pressure_if_ready_count / pressure_denom);
+    dict_set(out, "npc_pressure_this_tick_count_per_tick",
+        log->npc_pressure_this_tick_count / pressure_denom);
+    dict_set(out, "npc_pressure_max_incoming_hit",
+        log->npc_pressure_max_incoming_hit);
     dict_set(out, "brews_used", log->brews_used);
-    dict_set(out, "blood_healed", log->blood_healed);
 
     float prayer_rate = (log->prayer_total > 0.0f)
         ? log->prayer_correct / log->prayer_total : 0.0f;
@@ -2430,9 +2447,7 @@ void my_log(Log* log, Dict* out) {
             : 0.0f);
     dict_set(out, "brews_remaining", log->brews_remaining);
     dict_set(out, "restores_remaining", log->restores_remaining);
-    dict_set(out, "prayer_at_death", log->prayer_at_death);
     dict_set(out, "behind_shield_pct", log->behind_shield_pct);
-    dict_set(out, "zuk_hp_remaining", log->zuk_hp_remaining);
     dict_set(out, "min_zuk_hp_seen", log->min_zuk_hp_seen);
     dict_set(out, "hp_restored", log->hp_restored);
     dict_set(out, "zuk_healer_damage", log->zuk_healer_damage);

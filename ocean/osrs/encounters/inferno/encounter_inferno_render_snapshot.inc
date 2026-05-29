@@ -279,6 +279,16 @@ static void* inf_get_log_ctx(EncounterState* state, EncounterContext* context) {
         ctx->log->safe_attack_opportunity_missed_ticks +=
             (float)s->total_safe_attack_opportunity_missed_ticks;
         ctx->log->progressless_ticks += (float)s->total_progressless_ticks;
+        ctx->log->npc_pressure_if_ready_count +=
+            s->total_npc_pressure_if_ready_count;
+        ctx->log->npc_pressure_this_tick_count +=
+            s->total_npc_pressure_this_tick_count;
+        ctx->log->npc_pressure_if_ready_max_hit +=
+            s->total_npc_pressure_if_ready_max_hit;
+        ctx->log->npc_pressure_this_tick_max_hit +=
+            s->total_npc_pressure_this_tick_max_hit;
+        ctx->log->npc_pressure_max_incoming_hit +=
+            s->max_npc_pressure_incoming_hit;
         for (int i = 0; i < OSRS_INFERNO_IDLE_PHASE_COUNT; i++) {
             ctx->log->attack_ready_no_attack_ticks_by_phase[i] +=
                 (float)s->attack_ready_no_attack_ticks_by_phase[i];
