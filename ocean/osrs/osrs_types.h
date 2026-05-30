@@ -799,6 +799,7 @@ typedef struct {
     float min_zuk_hp_seen;     /* lowest Zuk HP reached during the episode */
     float hp_restored;         /* HP restored to enemies (healers + mager) this episode */
     float zuk_healer_damage;   /* total damage dealt to Zuk healers this episode */
+    float dense_score;         /* continuous per-episode progress + clean-play metric (mean after aggregation) */
     float episode_return_normal;
     float episode_return_snapshot;
     float wins_normal;

@@ -1205,6 +1205,25 @@ static int inferno_terminal_behind_shield(const InfernoState* s) {
         s->player.y >= 41;
 }
 
+/* Pre-Zuk dense_score progress curve in [0.0, 0.25], keyed on the completed
+   wave index. Linearly interpolates between calibrated anchor points so wave
+   progress before reaching Zuk is rewarded continuously and capped well below
+   the reached-Zuk band. Clamped to the endpoints outside the anchor range. */
+static float inf_dense_prezuk_progress(float w) {
+    static const float anchor_wave[5] = {1.0f, 40.0f, 60.0f, 63.0f, 67.0f};
+    static const float anchor_val[5] = {0.0f, 0.031f, 0.063f, 0.125f, 0.25f};
+    if (w <= anchor_wave[0]) return anchor_val[0];
+    if (w >= anchor_wave[4]) return anchor_val[4];
+    for (int i = 0; i < 4; i++) {
+        if (w <= anchor_wave[i + 1]) {
+            float span = anchor_wave[i + 1] - anchor_wave[i];
+            float t = (w - anchor_wave[i]) / span;
+            return anchor_val[i] + t * (anchor_val[i + 1] - anchor_val[i]);
+        }
+    }
+    return anchor_val[4];
+}
+
 void c_step(Env* env) {
     int inf_prof_enabled = INF_PROFILE_ENABLED();
     double inf_prof_total_t0 = inf_prof_enabled ? INF_PROFILE_NOW_MS() : 0.0;
@@ -1409,6 +1428,33 @@ void c_step(Env* env) {
         env->log.min_zuk_hp_seen += min_zuk_hp_term;
 
         env->log.n += 1.0f;
+
+        /* dense_score: continuous, low-variance per-episode progress signal.
+           Rewards reaching Zuk and damaging it, with a clean-play multiplier
+           that penalizes unavoidable same-tick multi-style off-prayer hits.
+           Wins sit above 1.0; reached-Zuk in (0.25, 0.95]; pre-Zuk in [0, 0.25].
+           Accumulated per episode; SUMMED then divided by n downstream, so this
+           becomes a per-episode mean by the time my_log reads it. */
+        {
+            float atk = (s->total_npc_attacks > 0) ? (float)s->total_npc_attacks : 1.0f;
+            float unavoid_rate = (float)s->total_unavoidable_off / atk;
+            if (unavoid_rate > 1.0f) unavoid_rate = 1.0f;
+            if (unavoid_rate < 0.0f) unavoid_rate = 0.0f;
+            float clean = 1.0f - 0.3f * unavoid_rate;
+            float dense;
+            if (s->winner == INF_OUTCOME_PLAYER_WON) {
+                float speed = (8000.0f - (float)s->tick) / 8000.0f;
+                if (speed < 0) speed = 0;
+                if (speed > 1) speed = 1;
+                dense = 1.0f + 0.2f * speed + 0.1f * (1.0f - unavoid_rate);
+            } else if (min_zuk_hp_term < 1200.0f) {
+                float zp = (1200.0f - min_zuk_hp_term) / 1200.0f;
+                dense = (0.25f + 0.70f * zp) * clean;
+            } else {
+                dense = inf_dense_prezuk_progress((float)s->wave) * clean;
+            }
+            env->log.dense_score += dense;
+        }
 
         {
             env->log.episode_return_normal += s->episode_return;
@@ -2430,6 +2476,7 @@ void my_log(Log* log, Dict* out) {
         score = wr + (1.0f - wr) * wave_frac * 0.5f;
     }
     dict_set(out, "score", score);
+    dict_set(out, "dense_score", log->dense_score);
 
     if (log->n_normal > 0.0f) {
         float min_zuk_hp_normal = log->min_zuk_hp_normal / log->n_normal;

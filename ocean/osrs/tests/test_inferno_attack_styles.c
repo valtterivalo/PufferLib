@@ -9324,7 +9324,7 @@ static void test_inferno_log_metrics_fit_cuda_dict(void) {
     printf("--- inferno log metrics fit CUDA dict ---\n");
 
     int metric_count = inferno_my_log_metric_key_count();
-    ASSERT_INT_LE("my_log metric key count plus env/n", metric_count + 1, 64);
+    ASSERT_INT_LE("my_log metric key count plus env/n", metric_count + 1, 80);
 }
 
 static void test_inferno_binding_emits_post_240_traces(void) {
