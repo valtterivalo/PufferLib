@@ -1298,9 +1298,17 @@ static void inf_build_step_out_forecast_project_once_ctx(
             continue;
         InfStepOutForecastAction* action = &out->actions[action_idx];
 
+        for (int slot_idx = 0; slot_idx < forecast_slot_count; slot_idx++) {
+            int i = forecast_slots[slot_idx];
+            if (inf_forecast_npc_uses_readonly_sim(&s->npcs[i])) continue;
+            inf_step_out_forecast_fast_static_npc(s, &s->npcs[i], action);
+            inf_step_out_forecast_conservative_meleer_npc(&s->npcs[i], action);
+        }
+
         for (int tick_idx = 0; tick_idx < INF_STEP_OUT_FORECAST_HORIZON; tick_idx++) {
             for (int slot_idx = 0; slot_idx < forecast_slot_count; slot_idx++) {
                 int i = forecast_slots[slot_idx];
+                if (!inf_forecast_npc_uses_readonly_sim(&s->npcs[i])) continue;
                 inf_step_out_forecast_project_once_apply(
                     s, &captures[tick_idx][i], action, tick_idx);
             }
