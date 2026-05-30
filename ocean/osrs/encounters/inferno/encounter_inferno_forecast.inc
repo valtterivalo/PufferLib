@@ -1411,7 +1411,7 @@ static void inf_compare_step_out_forecasts(
    tile is safe when the exact rollout says it is deadly). */
 static int g_inf_fa_enabled = -1;
 static long g_inf_fa_calls = 0;
-static long g_inf_fa[17];
+static long g_inf_fa[24];
 
 static int inf_forecast_agree_enabled(void) {
     if (g_inf_fa_enabled < 0) {
@@ -1429,14 +1429,16 @@ static void inf_forecast_agree_record(
     g_inf_fa_calls += 1;
     if (g_inf_fa_calls % 8 != 0) return;
 
-    InfStepOutForecast ex, m2, m3;
+    InfStepOutForecast ex, m2, m3, m4;
     inf_build_step_out_forecast_exact_ctx(s, ctx, &ex);
     inf_build_step_out_forecast_fast_static_ctx(s, ctx, &m2);
     inf_build_step_out_forecast_fast_readonly_ctx(s, ctx, &m3);
+    inf_build_step_out_forecast_project_once_ctx(s, ctx, &m4);
 
-    InfStepOutForecastOracleDiff d2, d3;
+    InfStepOutForecastOracleDiff d2, d3, d4;
     inf_compare_step_out_forecasts(&ex, &m2, &d2);
     inf_compare_step_out_forecasts(&ex, &m3, &d3);
+    inf_compare_step_out_forecasts(&ex, &m4, &d4);
 
     long add2[7] = {d2.action_feature_mismatches, d2.tick_feature_mismatches,
         d2.dangerous_false_negatives, d2.dangerous_false_positives,
@@ -1446,6 +1448,10 @@ static void inf_forecast_agree_record(
         d3.dangerous_false_negatives, d3.dangerous_false_positives,
         d3.exact_dangerous_actions, d3.fast_dangerous_actions,
         d3.max_hit_abs_error_sum};
+    long add4[7] = {d4.action_feature_mismatches, d4.tick_feature_mismatches,
+        d4.dangerous_false_negatives, d4.dangerous_false_positives,
+        d4.exact_dangerous_actions, d4.fast_dangerous_actions,
+        d4.max_hit_abs_error_sum};
 
     #pragma omp atomic update
     g_inf_fa[0] += 1;
@@ -1460,26 +1466,30 @@ static void inf_forecast_agree_record(
         g_inf_fa[3 + k] += add2[k];
         #pragma omp atomic update
         g_inf_fa[10 + k] += add3[k];
+        #pragma omp atomic update
+        g_inf_fa[17 + k] += add4[k];
     }
 }
 
 #ifdef INFERNO_ENV_EXPORT
-static const char* g_inf_fa_names[17] = {
+static const char* g_inf_fa_names[24] = {
     "states", "high_danger_states", "sampled_actions",
     "m2_action_mismatch", "m2_tick_mismatch", "m2_dfn", "m2_dfp",
     "m2_exact_danger", "m2_fast_danger", "m2_maxhit_err_sum",
     "m3_action_mismatch", "m3_tick_mismatch", "m3_dfn", "m3_dfp",
-    "m3_exact_danger", "m3_fast_danger", "m3_maxhit_err_sum"
+    "m3_exact_danger", "m3_fast_danger", "m3_maxhit_err_sum",
+    "m4_action_mismatch", "m4_tick_mismatch", "m4_dfn", "m4_dfp",
+    "m4_exact_danger", "m4_fast_danger", "m4_maxhit_err_sum"
 };
 INFERNO_ENV_EXPORT int inferno_env_forecast_agree_count(void) {
-    return inf_forecast_agree_enabled() ? 17 : 0;
+    return inf_forecast_agree_enabled() ? 24 : 0;
 }
 INFERNO_ENV_EXPORT const char* inferno_env_forecast_agree_name(int slot) {
-    if (slot < 0 || slot >= 17) abort();
+    if (slot < 0 || slot >= 24) abort();
     return g_inf_fa_names[slot];
 }
 INFERNO_ENV_EXPORT double inferno_env_forecast_agree_read(int slot) {
-    if (slot < 0 || slot >= 17) abort();
+    if (slot < 0 || slot >= 24) abort();
     return (double)g_inf_fa[slot];
 }
 #endif
