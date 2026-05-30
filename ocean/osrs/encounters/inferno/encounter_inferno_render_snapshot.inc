@@ -1,9 +1,9 @@
 #line 7460 "encounter_inferno.h"
 static void inf_require_valid_step_out_forecast_obs_mode(int value) {
     if (value < INF_STEP_OUT_FORECAST_MODE_OFF ||
-            value > INF_STEP_OUT_FORECAST_MODE_FAST_READONLY_MOVE) {
+            value > INF_STEP_OUT_FORECAST_MODE_PROJECT_ONCE) {
         fprintf(stderr,
-            "inferno: step_out_forecast_obs_mode must be in [0,3], got %d\n",
+            "inferno: step_out_forecast_obs_mode must be in [0,4], got %d\n",
             value);
         abort();
     }

@@ -1063,6 +1063,252 @@ static void inf_build_step_out_forecast_exact_ctx(
     }
 }
 
+/* Captured fire opportunity from the single project-once roll. The local NPC
+   snapshot is taken at the projected position for this tick so the per-candidate
+   readout can reuse the same range/LOS/style helpers mode 3 uses, without
+   re-pathing NPC movement per candidate tile. */
+typedef struct {
+    int fired;
+    int blob_scan;
+    InfForecastNpcLocal npc;
+} InfForecastProjectedFire;
+
+/* Mirror of inf_forecast_local_attack_npc, evaluated against the held player
+   tile (px,py) so NPC timer/blob/jad state advances identically across the
+   four projected ticks. Instead of recording danger against a candidate tile,
+   it captures the fire opportunity (planned style snapshot + position) so each
+   candidate tile can later re-gate range and LOS against the projected NPC. */
+static void inf_step_out_forecast_project_once_capture(
+    const InfernoState* s,
+    InfForecastNpcLocal* npc,
+    int px,
+    int py,
+    InfForecastProjectedFire* capture
+) {
+    if (!npc->active || npc->hp <= 0) return;
+    const InfNPCStats* stats = &INF_NPC_STATS[npc->type];
+    if (npc->attack_timer > 0) npc->attack_timer--;
+    if (npc->stun_timer > 0) { npc->stun_timer--; return; }
+    if (npc->dig_freeze_timer > 0 || npc->dig_attack_delay > 0) return;
+    if (npc->type == INF_NPC_ZUK_SHIELD || npc->type == INF_NPC_NIBBLER)
+        return;
+    if (npc->aggro_target >= 0) return;
+
+    if (inf_forecast_local_overlaps_player(
+            npc->x, npc->y, npc->size, px, py)) {
+        capture->fired = 1;
+        capture->npc = *npc;
+        return;
+    }
+
+    int has_los_now = 0;
+    if (npc->type == INF_NPC_BLOB && stats->attack_range > 1) {
+        has_los_now = inf_forecast_local_has_los_to_player(s, npc, px, py);
+        if (npc->blob_scanned_prayer < 0 &&
+            has_los_now &&
+            !npc->had_los_last_tick) {
+            npc->blob_scanned_prayer = (int)s->player.prayer;
+            if (s->player.prayer == PRAYER_PROTECT_MAGIC)
+                npc->attack_style = ATTACK_STYLE_RANGED;
+            else if (s->player.prayer == PRAYER_PROTECT_RANGED)
+                npc->attack_style = ATTACK_STYLE_MAGIC;
+            else
+                npc->attack_style = ATTACK_STYLE_RANGED;
+            npc->had_los_last_tick = has_los_now;
+            npc->attack_timer = stats->attack_speed;
+            capture->blob_scan = 1;
+            capture->npc = *npc;
+            return;
+        }
+        npc->had_los_last_tick = has_los_now;
+    }
+    if (npc->attack_timer > 0) return;
+
+    if (npc->type != INF_NPC_BLOB && stats->attack_range > 1) {
+        has_los_now = inf_forecast_local_has_los_to_player(s, npc, px, py);
+    }
+
+    if (stats->attack_range > 1 &&
+        !(npc->type == INF_NPC_BLOB && npc->blob_scanned_prayer >= 0) &&
+        !has_los_now) return;
+
+    int dist = encounter_dist_to_npc(px, py, npc->x, npc->y, npc->size);
+    if (dist == 0 || dist > stats->attack_range) return;
+    if (stats->attack_range == 1 &&
+            !inf_npc_melee_contact_allows_attack_at_tile(
+                px, py, (InfNPCType)npc->type,
+                npc->x, npc->y, npc->size, dist))
+        return;
+
+    if (npc->type == INF_NPC_BLOB && npc->blob_scanned_prayer < 0) {
+        npc->blob_scanned_prayer = (int)s->player.prayer;
+        if (s->player.prayer == PRAYER_PROTECT_MAGIC)
+            npc->attack_style = ATTACK_STYLE_RANGED;
+        else if (s->player.prayer == PRAYER_PROTECT_RANGED)
+            npc->attack_style = ATTACK_STYLE_MAGIC;
+        else
+            npc->attack_style = ATTACK_STYLE_RANGED;
+        npc->attack_timer = stats->attack_speed;
+        capture->blob_scan = 1;
+        capture->npc = *npc;
+        return;
+    }
+
+    int style_mask = inf_forecast_local_jad_unknown_style_mask(npc);
+    if (style_mask == 0) {
+        int planned_style = inf_forecast_local_planned_style(npc);
+        if (planned_style == ATTACK_STYLE_NONE) return;
+        style_mask = inf_forecast_local_attack_style_options_mask_at_tile(
+            px, py, npc, stats, planned_style, dist);
+    }
+    if (style_mask == 0) return;
+
+    capture->fired = 1;
+    capture->npc = *npc;
+
+    if (npc->type == INF_NPC_BLOB)
+        npc->blob_scanned_prayer = -1;
+    if (npc->type == INF_NPC_JAD)
+        npc->jad_attack_style = ATTACK_STYLE_NONE;
+    npc->attack_timer = stats->attack_speed;
+    if (npc->type == INF_NPC_JAD) {
+        if (s->wave == 66)      npc->attack_timer = 8;
+        else if (s->wave == 67) npc->attack_timer = 9;
+        else                    npc->attack_timer = 8;
+    }
+}
+
+/* One projected tick: move every NPC toward the held player tile, then capture
+   any fire opportunity. Movement reuses mode 3's local mover so trajectories
+   match the readonly mode; only the per-candidate re-pathing is dropped. */
+static void inf_step_out_forecast_project_once_tick(
+    const InfernoState* s,
+    const InfernoContext* ctx,
+    InfForecastNpcLocal npcs[INF_MAX_NPCS],
+    uint8_t npc_flags[INF_ARENA_WIDTH][INF_ARENA_HEIGHT],
+    int tick_idx,
+    int player_x,
+    int player_y,
+    const int slots[INF_MAX_NPCS],
+    int slot_count,
+    InfForecastProjectedFire captures[INF_STEP_OUT_FORECAST_HORIZON][INF_MAX_NPCS]
+) {
+    InfStepOutForecastAction held = {
+        .valid = 1, .land_x = player_x, .land_y = player_y };
+    for (int slot_idx = 0; slot_idx < slot_count; slot_idx++) {
+        int i = slots[slot_idx];
+        InfForecastNpcLocal* npc = &npcs[i];
+        if (npc->frozen_ticks > 0) npc->frozen_ticks--;
+        inf_forecast_local_move_npc(
+            s, ctx, npcs, npc_flags, i, &held, tick_idx);
+        inf_step_out_forecast_project_once_capture(
+            s, npc, player_x, player_y, &captures[tick_idx][i]);
+    }
+}
+
+/* Per-candidate readout for one captured fire: re-gate the projected NPC's
+   range, LOS and melee contact against the candidate landing tile, then feed
+   the recorder/blob-scan recorder exactly as modes 1/3 do so the eight obs
+   features derive identically. */
+static void inf_step_out_forecast_project_once_apply(
+    const InfernoState* s,
+    const InfForecastProjectedFire* capture,
+    InfStepOutForecastAction* action,
+    int tick_idx
+) {
+    if (!capture->fired && !capture->blob_scan) return;
+    const InfForecastNpcLocal* npc = &capture->npc;
+    const InfNPCStats* stats = &INF_NPC_STATS[npc->type];
+
+    if (inf_forecast_local_overlaps_player(
+            npc->x, npc->y, npc->size, action->land_x, action->land_y)) {
+        InfForecastNpcLocal overlap_npc = *npc;
+        inf_forecast_local_record_overlap_danger(
+            s, &overlap_npc, action, tick_idx);
+        return;
+    }
+
+    int has_los_now = 1;
+    if (stats->attack_range > 1)
+        has_los_now = inf_forecast_local_has_los_to_tile(
+            s, npc, action->land_x, action->land_y);
+
+    if (capture->blob_scan) {
+        if (npc->type == INF_NPC_BLOB && stats->attack_range > 1 &&
+                !has_los_now)
+            return;
+        inf_step_out_forecast_record_blob_scan(action, tick_idx);
+        return;
+    }
+
+    if (stats->attack_range > 1 &&
+        !(npc->type == INF_NPC_BLOB && npc->blob_scanned_prayer >= 0) &&
+        !has_los_now) return;
+
+    int dist = encounter_dist_to_npc(
+        action->land_x, action->land_y, npc->x, npc->y, npc->size);
+    if (dist == 0 || dist > stats->attack_range) return;
+    if (stats->attack_range == 1 &&
+            !inf_npc_melee_contact_allows_attack_at_tile(
+                action->land_x, action->land_y, (InfNPCType)npc->type,
+                npc->x, npc->y, npc->size, dist))
+        return;
+
+    int style_mask = inf_forecast_local_jad_unknown_style_mask(npc);
+    if (style_mask == 0) {
+        int planned_style = inf_forecast_local_planned_style(npc);
+        if (planned_style == ATTACK_STYLE_NONE) return;
+        style_mask = inf_forecast_local_attack_style_options_mask_at_tile(
+            action->land_x, action->land_y, npc, stats, planned_style, dist);
+    }
+    if (style_mask == 0) return;
+
+    inf_step_out_forecast_record_style_mask(
+        action, tick_idx, npc->type, stats, style_mask);
+}
+
+static void inf_build_step_out_forecast_project_once_ctx(
+    const InfernoState* s,
+    const InfernoContext* ctx,
+    InfStepOutForecast* out
+) {
+    memset(out, 0, sizeof(*out));
+    int forecast_slots[INF_MAX_NPCS];
+    int forecast_slot_count = inf_collect_step_out_forecast_slots(
+        s, forecast_slots);
+
+    InfForecastProjectedFire captures[INF_STEP_OUT_FORECAST_HORIZON][INF_MAX_NPCS];
+    memset(captures, 0, sizeof(captures));
+    if (forecast_slot_count > 0) {
+        InfForecastNpcLocal npcs[INF_MAX_NPCS];
+        uint8_t npc_flags[INF_ARENA_WIDTH][INF_ARENA_HEIGHT];
+        inf_forecast_local_copy_npcs(s, npcs);
+        inf_forecast_local_rebuild_npc_flags(npcs, npc_flags);
+        for (int tick_idx = 0; tick_idx < INF_STEP_OUT_FORECAST_HORIZON; tick_idx++) {
+            inf_step_out_forecast_project_once_tick(
+                s, ctx, npcs, npc_flags, tick_idx,
+                s->player.x, s->player.y,
+                forecast_slots, forecast_slot_count, captures);
+        }
+    }
+
+    for (int action_idx = 0; action_idx < ENCOUNTER_MOVE_ACTIONS; action_idx++) {
+        if (!inf_step_out_forecast_prepare_unique_action_ctx(
+                s, ctx, out, action_idx, forecast_slot_count))
+            continue;
+        InfStepOutForecastAction* action = &out->actions[action_idx];
+
+        for (int tick_idx = 0; tick_idx < INF_STEP_OUT_FORECAST_HORIZON; tick_idx++) {
+            for (int slot_idx = 0; slot_idx < forecast_slot_count; slot_idx++) {
+                int i = forecast_slots[slot_idx];
+                inf_step_out_forecast_project_once_apply(
+                    s, &captures[tick_idx][i], action, tick_idx);
+            }
+        }
+        inf_step_out_forecast_finalize_action(action);
+    }
+}
+
 static void inf_build_step_out_forecast_ctx(
     const InfernoState* s,
     const InfernoContext* ctx,
@@ -1086,9 +1332,12 @@ static void inf_build_step_out_forecast_mode_ctx(
         case INF_STEP_OUT_FORECAST_MODE_FAST_READONLY_MOVE:
             inf_build_step_out_forecast_fast_readonly_ctx(s, ctx, out);
             return;
+        case INF_STEP_OUT_FORECAST_MODE_PROJECT_ONCE:
+            inf_build_step_out_forecast_project_once_ctx(s, ctx, out);
+            return;
         default:
             fprintf(stderr,
-                "inferno: step_out_forecast_obs_mode must be 1, 2, or 3 for forecast build, got %d\n",
+                "inferno: step_out_forecast_obs_mode must be 1, 2, 3, or 4 for forecast build, got %d\n",
                 ctx->config.step_out_forecast_obs_mode);
             abort();
     }
