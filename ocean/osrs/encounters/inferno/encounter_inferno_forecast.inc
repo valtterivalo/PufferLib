@@ -1154,6 +1154,87 @@ static void inf_compare_step_out_forecasts(
     }
 }
 
+/* Forecast mode-agreement diagnostic. Gated by env PUFFER_INFERNO_FORECAST_AGREE,
+   fully inert otherwise. Builds exact/mode2/mode3 forecasts on the same live state
+   and accumulates fast-vs-exact divergence so we can validate cheaper forecast
+   modes by output-equivalence instead of noisy training scores. The single metric
+   that matters is m3_dfn (mode-3 dangerous false negatives: cheap says a step-out
+   tile is safe when the exact rollout says it is deadly). */
+static int g_inf_fa_enabled = -1;
+static long g_inf_fa_calls = 0;
+static long g_inf_fa[17];
+
+static int inf_forecast_agree_enabled(void) {
+    if (g_inf_fa_enabled < 0) {
+        const char* text = getenv("PUFFER_INFERNO_FORECAST_AGREE");
+        g_inf_fa_enabled = (text && text[0] && text[0] != '0') ? 1 : 0;
+    }
+    return g_inf_fa_enabled;
+}
+
+static void inf_forecast_agree_record(
+    const InfernoState* s,
+    const InfernoContext* ctx
+) {
+    #pragma omp atomic update
+    g_inf_fa_calls += 1;
+    if (g_inf_fa_calls % 8 != 0) return;
+
+    InfStepOutForecast ex, m2, m3;
+    inf_build_step_out_forecast_exact_ctx(s, ctx, &ex);
+    inf_build_step_out_forecast_fast_static_ctx(s, ctx, &m2);
+    inf_build_step_out_forecast_fast_readonly_ctx(s, ctx, &m3);
+
+    InfStepOutForecastOracleDiff d2, d3;
+    inf_compare_step_out_forecasts(&ex, &m2, &d2);
+    inf_compare_step_out_forecasts(&ex, &m3, &d3);
+
+    long add2[7] = {d2.action_feature_mismatches, d2.tick_feature_mismatches,
+        d2.dangerous_false_negatives, d2.dangerous_false_positives,
+        d2.exact_dangerous_actions, d2.fast_dangerous_actions,
+        d2.max_hit_abs_error_sum};
+    long add3[7] = {d3.action_feature_mismatches, d3.tick_feature_mismatches,
+        d3.dangerous_false_negatives, d3.dangerous_false_positives,
+        d3.exact_dangerous_actions, d3.fast_dangerous_actions,
+        d3.max_hit_abs_error_sum};
+
+    #pragma omp atomic update
+    g_inf_fa[0] += 1;
+    if (d3.exact_dangerous_actions > 0) {
+        #pragma omp atomic update
+        g_inf_fa[1] += 1;
+    }
+    #pragma omp atomic update
+    g_inf_fa[2] += d3.sampled_actions;
+    for (int k = 0; k < 7; k++) {
+        #pragma omp atomic update
+        g_inf_fa[3 + k] += add2[k];
+        #pragma omp atomic update
+        g_inf_fa[10 + k] += add3[k];
+    }
+}
+
+#ifdef INFERNO_ENV_EXPORT
+static const char* g_inf_fa_names[17] = {
+    "states", "high_danger_states", "sampled_actions",
+    "m2_action_mismatch", "m2_tick_mismatch", "m2_dfn", "m2_dfp",
+    "m2_exact_danger", "m2_fast_danger", "m2_maxhit_err_sum",
+    "m3_action_mismatch", "m3_tick_mismatch", "m3_dfn", "m3_dfp",
+    "m3_exact_danger", "m3_fast_danger", "m3_maxhit_err_sum"
+};
+INFERNO_ENV_EXPORT int inferno_env_forecast_agree_count(void) {
+    return inf_forecast_agree_enabled() ? 17 : 0;
+}
+INFERNO_ENV_EXPORT const char* inferno_env_forecast_agree_name(int slot) {
+    if (slot < 0 || slot >= 17) abort();
+    return g_inf_fa_names[slot];
+}
+INFERNO_ENV_EXPORT double inferno_env_forecast_agree_read(int slot) {
+    if (slot < 0 || slot >= 17) abort();
+    return (double)g_inf_fa[slot];
+}
+#endif
+
 static void inf_build_step_out_forecast(
     const InfernoState* s,
     InfStepOutForecast* out

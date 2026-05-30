@@ -513,6 +513,7 @@ static void inf_write_obs_ctx(
             i += INF_STEP_OUT_FORECAST_OBS_SIZE;
         }
     }
+    if (inf_forecast_agree_enabled()) inf_forecast_agree_record(s, ctx);
 #ifdef INF_PROFILE_ENABLED
     INF_PROFILE_MARK(INF_PROF_OBS_FORECAST);
 #endif
