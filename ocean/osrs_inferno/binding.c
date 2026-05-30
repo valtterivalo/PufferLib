@@ -2395,6 +2395,10 @@ void my_log(Log* log, Dict* out) {
     float prayer_rate = (log->prayer_total > 0.0f)
         ? log->prayer_correct / log->prayer_total : 0.0f;
     dict_set(out, "prayer_correct_rate", prayer_rate);
+    dict_set(out, "unavoidable_off", log->unavoidable_off_prayer);
+    dict_set(out, "ranger_mager_same_tick", log->ranger_mager_same_tick_attacks);
+    dict_set(out, "step_out_ranger_mager_same_tick",
+        log->step_out_ranger_mager_same_tick_attacks);
     float offensive_prayer_rate = log->offensive_prayer_attacks > 0.0f
         ? log->offensive_prayer_correct / log->offensive_prayer_attacks : 0.0f;
     dict_set(out, "offensive_prayer_correct_rate", offensive_prayer_rate);
