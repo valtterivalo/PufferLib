@@ -64,8 +64,7 @@ static inline BoltProcResult osrs_resolve_bolt_proc(
     case ITEM_DIAMOND_BOLTS_E:
     case ITEM_DIAMOND_DRAGON_BOLTS_E: {
         if (!hit_accurate && !is_zcb_spec) break;
-        float chance = 0.11f;  /* 10% * 1.1 kandarin diary */
-        if (is_zcb_spec || encounter_rand_float(rng_state) < chance) {
+        if (is_zcb_spec || encounter_roll_ratio_u16(rng_state, 11, 100)) {
             int effect_max = max_hit * (is_zcb_spec ? 126 : 115) / 100;
             r.proc_triggered = 1;
             r.modified_damage = encounter_rand_int(rng_state, effect_max + 1);
@@ -74,8 +73,7 @@ static inline BoltProcResult osrs_resolve_bolt_proc(
     }
 
     case ITEM_OPAL_DRAGON_BOLTS: {
-        float chance = 0.055f;  /* 5% * 1.1 */
-        if (is_zcb_spec || encounter_rand_float(rng_state) < chance) {
+        if (is_zcb_spec || encounter_roll_ratio_u16(rng_state, 11, 200)) {
             int bonus = ranged_level / (is_zcb_spec ? 9 : 10);
             r.proc_triggered = 1;
             r.modified_damage = base_damage + bonus;
@@ -85,8 +83,7 @@ static inline BoltProcResult osrs_resolve_bolt_proc(
 
     case ITEM_RUBY_DRAGON_BOLTS_E: {
         if (!hit_accurate) break;
-        float chance = 0.066f;  /* 6% * 1.1 */
-        if (is_zcb_spec || encounter_rand_float(rng_state) < chance) {
+        if (is_zcb_spec || encounter_roll_ratio_u16(rng_state, 33, 500)) {
             int cap = is_zcb_spec ? 110 : 100;
             int effect_dmg = target_current_hp * (is_zcb_spec ? 22 : 20) / 100;
             if (effect_dmg > cap) effect_dmg = cap;

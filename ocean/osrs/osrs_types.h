@@ -355,6 +355,8 @@ typedef enum {
    EquipmentBonuses (osrs_combat.h) but with a different naming convention
    (stab_attack vs attack_stab). the adapter compute_slot_gear_bonuses()
    in osrs_pvp_gear.h bridges them. */
+#define OSRS_INFERNO_IDLE_PHASE_COUNT 6
+
 typedef struct {
     int stab_attack;
     int slash_attack;
@@ -736,6 +738,19 @@ typedef struct {
     float prayer_correct;
     float prayer_total;
     float idle_ticks;
+    float attack_ready_no_attack_ticks;
+    float target_available_no_attack_ticks;
+    float safe_attack_opportunity_missed_ticks;
+    float progressless_ticks;
+    float npc_pressure_if_ready_count;
+    float npc_pressure_this_tick_count;
+    float npc_pressure_if_ready_max_hit;
+    float npc_pressure_this_tick_max_hit;
+    float npc_pressure_max_incoming_hit;
+    float attack_ready_no_attack_ticks_by_phase[OSRS_INFERNO_IDLE_PHASE_COUNT];
+    float target_available_no_attack_ticks_by_phase[OSRS_INFERNO_IDLE_PHASE_COUNT];
+    float safe_attack_opportunity_missed_ticks_by_phase[OSRS_INFERNO_IDLE_PHASE_COUNT];
+    float progressless_ticks_by_phase[OSRS_INFERNO_IDLE_PHASE_COUNT];
     float brews_used;
     float blood_healed;
     /* behavioral metrics */
@@ -757,6 +772,10 @@ typedef struct {
     float pending_cloud_count_ticks;
     float zulrah_kills;
     float unavoidable_off_prayer;  /* off-prayer hits where correct prayer was on a different style */
+    float offensive_prayer_attacks;
+    float offensive_prayer_correct;
+    float offensive_prayer_attacks_by_style[4];
+    float offensive_prayer_correct_by_style[4];
     float ranger_mager_same_tick_attacks;
     float step_out_ranger_mager_same_tick_attacks;
     float brews_remaining;         /* brew doses left at end of episode */
@@ -780,6 +799,7 @@ typedef struct {
     float min_zuk_hp_seen;     /* lowest Zuk HP reached during the episode */
     float hp_restored;         /* HP restored to enemies (healers + mager) this episode */
     float zuk_healer_damage;   /* total damage dealt to Zuk healers this episode */
+    float dense_score;         /* continuous per-episode progress + clean-play metric (mean after aggregation) */
     float episode_return_normal;
     float episode_return_snapshot;
     float wins_normal;
@@ -915,23 +935,6 @@ typedef struct {
     float prayer_correct_by_type[14];
     float attacks_by_type[14];
     float dmg_from_type[14];
-    float redemption_proc_opportunities_normal_sum;
-    float redemption_zero_hit_proc_opportunities_normal_sum;
-    float redemption_proc_opportunities_after_240_normal_sum;
-    float redemption_heal_potential_normal_sum;
-    float redemption_heal_potential_after_240_normal_sum;
-    float redemption_deaths_from_band_normal;
-    float redemption_deaths_from_band_after_240_normal;
-    float redemption_deaths_from_above_band_normal;
-    float redemption_proc_opportunities_by_type_normal[14];
-    float redemption_zero_hit_proc_opportunities_by_type_normal[14];
-    float redemption_heal_potential_by_type_normal[14];
-    float redemption_deaths_from_band_by_type_normal[14];
-    float redemption_action_count_normal_sum;
-    float redemption_active_ticks_normal_sum;
-    float redemption_proc_count_normal_sum;
-    float redemption_zero_hit_proc_count_normal_sum;
-    float redemption_heal_done_normal_sum;
     float killed_by_type[14];
     float killed_by_type_normal[14];
     float killed_by_type_snapshot[14];

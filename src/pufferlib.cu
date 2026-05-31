@@ -383,9 +383,10 @@ typedef struct {
 #undef PUFFER_CURRICULUM_IMPL
 
 Dict* log_environments_impl(PuffeRL& pufferl) {
-    // Capacity raised from 32 to 64 to accommodate chess's per-bank
-    // hist_score_bank_<b> / hist_n_bank_<b> entries (16 keys for 8 banks).
-    Dict* out = create_dict(64);
+    // Capacity sized for the widest env log: inferno emits 65 metric keys
+    // plus the trailing "n" key, and chess needs 16 per-bank
+    // hist_score_bank_<b> / hist_n_bank_<b> entries on top of its base fields.
+    Dict* out = create_dict(80);
     static_vec_log(pufferl.vec, out);
     return out;
 }
@@ -2091,6 +2092,11 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
         }
         cudaMemset(pufferl->rng_offset_puf.data, 0,
             numel(pufferl->rng_offset_puf.shape) * sizeof(long));
+        for (int bank = 0; bank < 1 + pufferl->num_frozen_banks; bank++) {
+            PrecisionTensor* bs = (bank == 0) ? pufferl->buffer_states
+                                              : pufferl->frozen_banks[bank - 1].buffer_states;
+            for (int b = 0; b < num_buffers; b++) puf_zero(&bs[b], pufferl->default_stream);
+        }
         cudaDeviceSynchronize();
 
         pufferl->epoch = 0;

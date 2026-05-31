@@ -107,9 +107,18 @@ static float inf_zuk_healer_attack_shape_reward(
 ) {
     return
         ctx->config.zuk_untagged_healer_nonmagic_attack_bonus_coeff *
-            (float)s->zuk_untagged_healer_nonmagic_attacks_this_tick -
+            (float)s->tick_scratch.zuk_untagged_healer_nonmagic_attacks -
         ctx->config.zuk_healer_mage_attack_penalty_coeff *
-            (float)s->zuk_healer_mage_attack_fires_this_tick;
+            (float)s->tick_scratch.zuk_healer_mage_attack_fires;
+}
+
+static float inf_offensive_prayer_damage_reward(
+    const InfernoState* s,
+    const InfernoContext* ctx
+) {
+    return ctx->config.offensive_prayer_reward_coeff *
+        ctx->config.damage_reward_coeff *
+        s->tick_scratch.offensive_prayer_correct_damage_roll;
 }
 
 static float inf_compute_joseph_reward(
@@ -119,42 +128,43 @@ static float inf_compute_joseph_reward(
 ) {
     float reward = 0.0f;
     if (healer_is_actively_healing) {
-        reward = ctx->config.tag_reward_coeff * (float)s->healer_tags_this_tick;
+        reward = ctx->config.tag_reward_coeff * (float)s->tick_scratch.healer_tags;
     } else {
         float rewarded_other_damage = fmaxf(
             0.0f,
-            s->damage_dealt_this_tick -
-                s->damage_jad_this_tick -
-                s->damage_zuk_this_tick -
-                s->damage_jad_healers_this_tick);
+            s->tick_scratch.damage_dealt -
+                s->tick_scratch.damage_jad -
+                s->tick_scratch.damage_zuk -
+                s->tick_scratch.damage_jad_healers);
         reward = ctx->config.damage_reward_coeff * (
             rewarded_other_damage +
             inf_joseph_heal_damped_damage(
-                s->damage_jad_this_tick,
+                s->tick_scratch.damage_jad,
                 (float)INF_NPC_STATS[INF_NPC_JAD].hp,
                 s->total_hp_restored_jad) +
             inf_joseph_heal_damped_damage(
-                s->damage_zuk_this_tick,
+                s->tick_scratch.damage_zuk,
                 (float)INF_NPC_STATS[INF_NPC_ZUK].hp,
                 s->total_hp_restored_zuk));
+        reward += inf_offensive_prayer_damage_reward(s, ctx);
     }
-    reward -= ctx->config.shield_penalty_coeff * s->shield_damage_this_tick;
+    reward -= ctx->config.shield_penalty_coeff * s->tick_scratch.shield_damage;
     reward += inf_zuk_healer_attack_shape_reward(s, ctx);
     return reward;
 }
 
 static float inf_compute_reward_ctx(InfernoState* s, const InfernoContext* ctx) {
-    s->total_damage_dealt += s->damage_dealt_this_tick;
-    s->total_zuk_healer_damage += s->damage_zuk_healers_this_tick;
-    s->total_damage_received += s->damage_received_this_tick;
-    s->total_hp_restored += s->hp_restored_this_tick;
-    s->total_hp_restored_jad += s->hp_restored_jad_this_tick;
-    s->total_hp_restored_zuk += s->hp_restored_zuk_this_tick;
+    s->total_damage_dealt += s->tick_scratch.damage_dealt;
+    s->total_zuk_healer_damage += s->tick_scratch.damage_zuk_healers;
+    s->total_damage_received += s->tick_scratch.damage_received;
+    s->total_hp_restored += s->tick_scratch.hp_restored;
+    s->total_hp_restored_jad += s->tick_scratch.hp_restored_jad;
+    s->total_hp_restored_zuk += s->tick_scratch.hp_restored_zuk;
 
-    if (s->kill_jad_this_tick > 0) s->jad_killed_this_episode = 1;
+    if (s->tick_scratch.kill_jad > 0) s->jad_killed_this_episode = 1;
 
     if (s->episode_over) {
-        if (s->winner == 0) return 1.0f;
+        if (s->winner == INF_OUTCOME_PLAYER_WON) return 1.0f;
         if (ctx->config.terminal_penalty_enabled) return -1.0f;
         return -ctx->config.death_penalty_coeff;
     }
@@ -173,14 +183,25 @@ static float inf_compute_reward_ctx(InfernoState* s, const InfernoContext* ctx) 
         return inf_compute_joseph_reward(s, ctx, healer_is_actively_healing);
     }
 
+    /* The tags-first gate suppresses every shaped reward term until four Zuk
+       healers are tagged. It can only be active on the final wave (it requires
+       zuk.healer_spawned), so handle it as an early return and let the shared
+       reward block below run unguarded. */
     float reward = 0.0f;
     if (inf_is_final_wave(s)) {
+        if (tags_first_gate) {
+            reward = inf_zuk_low_watermark_reward(
+                s, ctx, INF_ZUK_LOWWATERMARK_TRACK_ONLY);
+            reward += ctx->config.tag_reward_coeff * (float)s->tick_scratch.healer_tags;
+            reward += inf_zuk_healer_attack_shape_reward(s, ctx);
+            return reward;
+        }
         int use_zuk_healer_phase_hp_delta =
-            !tags_first_gate && s->zuk.healer_spawned &&
+            s->zuk.healer_spawned &&
             ctx->config.zuk_healer_phase_hp_delta_coeff > 0.0f;
         InfZukLowWatermarkMode watermark_mode =
             INF_ZUK_LOWWATERMARK_REWARD_ALLOWED;
-        if (tags_first_gate || use_zuk_healer_phase_hp_delta) {
+        if (use_zuk_healer_phase_hp_delta) {
             watermark_mode = INF_ZUK_LOWWATERMARK_TRACK_ONLY;
         } else if (zuk_is_actively_healed) {
             watermark_mode = INF_ZUK_LOWWATERMARK_REWARD_BLOCKED_EXCEPT_THRESHOLD;
@@ -188,57 +209,56 @@ static float inf_compute_reward_ctx(InfernoState* s, const InfernoContext* ctx) 
         reward = inf_zuk_low_watermark_reward(s, ctx, watermark_mode);
         if (use_zuk_healer_phase_hp_delta) {
             reward += ctx->config.zuk_healer_phase_hp_delta_coeff *
-                (s->damage_zuk_this_tick - s->hp_restored_zuk_this_tick);
+                (s->tick_scratch.damage_zuk - s->tick_scratch.hp_restored_zuk);
         }
-        if (!tags_first_gate)
-            reward += ctx->config.damage_reward_coeff * s->damage_zuk_healers_this_tick;
-        if (!tags_first_gate && healer_is_actively_healing) {
-            float generic_heal_cost = s->hp_restored_this_tick;
+        reward += ctx->config.damage_reward_coeff * s->tick_scratch.damage_zuk_healers;
+        if (healer_is_actively_healing) {
+            float generic_heal_cost = s->tick_scratch.hp_restored;
             if (use_zuk_healer_phase_hp_delta)
-                generic_heal_cost -= s->hp_restored_zuk_this_tick;
+                generic_heal_cost -= s->tick_scratch.hp_restored_zuk;
             if (generic_heal_cost < 0.0f) generic_heal_cost = 0.0f;
             reward -= ctx->config.damage_reward_coeff * generic_heal_cost;
         }
-        if (!tags_first_gate && s->zuk.healer_spawned &&
+        if (s->zuk.healer_spawned &&
                 ctx->config.zuk_untagged_healer_tick_penalty_coeff > 0.0f) {
             reward -= ctx->config.zuk_untagged_healer_tick_penalty_coeff *
                 (float)inf_count_untagged_zuk_healers(s);
         }
     } else {
-        float rewardable_damage = s->damage_dealt_this_tick -
-            s->damage_jad_healers_this_tick -
-            s->damage_resurrected_this_tick;
+        float rewardable_damage = s->tick_scratch.damage_dealt -
+            s->tick_scratch.damage_jad_healers -
+            s->tick_scratch.damage_resurrected;
         if (jad_is_actively_healed)
-            rewardable_damage -= s->damage_jad_this_tick;
+            rewardable_damage -= s->tick_scratch.damage_jad;
         reward = ctx->config.damage_reward_coeff *
-            fmaxf(0.0f, rewardable_damage - s->hp_restored_this_tick);
+            fmaxf(0.0f, rewardable_damage - s->tick_scratch.hp_restored);
     }
-    reward += ctx->config.tag_reward_coeff * (float)s->healer_tags_this_tick;
+
+    reward += inf_offensive_prayer_damage_reward(s, ctx);
+    reward += ctx->config.tag_reward_coeff * (float)s->tick_scratch.healer_tags;
     reward += inf_zuk_healer_attack_shape_reward(s, ctx);
-    if (!tags_first_gate) {
-        reward += ctx->config.shield_tag_reward_coeff * (float)s->shield_tags_this_tick;
-        reward += ctx->config.zuk_untagged_healer_target_bonus_coeff *
-            (float)s->zuk_untagged_healer_targets_this_tick;
-        reward += ctx->config.zuk_safe_untagged_healer_target_bonus_coeff *
-            (float)s->zuk_safe_untagged_healer_targets_this_tick;
-    }
+    reward += ctx->config.shield_tag_reward_coeff * (float)s->tick_scratch.shield_tags;
+    reward += ctx->config.zuk_untagged_healer_target_bonus_coeff *
+        (float)s->tick_scratch.zuk_untagged_healer_targets;
+    reward += ctx->config.zuk_safe_untagged_healer_target_bonus_coeff *
+        (float)s->tick_scratch.zuk_safe_untagged_healer_targets;
 
     /* Late-game reward shape. */
     int zuk_idx = inf_find_live_zuk_idx(s);
     int zuk_hp_now = (zuk_idx >= 0) ? s->npcs[zuk_idx].hp : 1200;
     int late_add_reward_active = s->zuk.jad_spawned || zuk_hp_now <= 600;
-    if (late_add_reward_active && !tags_first_gate) {
+    if (late_add_reward_active) {
         float rewardable_jad_damage =
-            jad_is_actively_healed ? 0.0f : s->damage_jad_this_tick;
+            jad_is_actively_healed ? 0.0f : s->tick_scratch.damage_jad;
         reward += ctx->config.jad_damage_reward_coeff * rewardable_jad_damage;
-        reward += ctx->config.zuk_healer_damage_reward_coeff * s->damage_zuk_healers_this_tick;
-        reward += ctx->config.set_damage_reward_coeff * s->damage_set_this_tick;
+        reward += ctx->config.zuk_healer_damage_reward_coeff * s->tick_scratch.damage_zuk_healers;
+        reward += ctx->config.set_damage_reward_coeff * s->tick_scratch.damage_set;
         if (s->tick_at_all_zuk_healers_dead >= 0) {
-            reward += ctx->config.post_healer_zuk_damage_coeff * s->damage_zuk_this_tick;
+            reward += ctx->config.post_healer_zuk_damage_coeff * s->tick_scratch.damage_zuk;
             float post_healer_set_damage_reward =
-                ctx->config.post_healer_set_damage_reward_coeff * s->damage_set_this_tick;
+                ctx->config.post_healer_set_damage_reward_coeff * s->tick_scratch.damage_set;
             float post_healer_set_kill_bonus =
-                (float)s->kill_set_this_tick * ctx->config.post_healer_set_kill_bonus;
+                (float)s->tick_scratch.kill_set * ctx->config.post_healer_set_kill_bonus;
             reward += post_healer_set_damage_reward;
             s->post_healer_set_damage_reward_total +=
                 post_healer_set_damage_reward;
@@ -260,53 +280,51 @@ static float inf_compute_reward_ctx(InfernoState* s, const InfernoContext* ctx) 
             }
         }
         s->pending_jad_kill_bonus +=
-            (float)s->kill_jad_this_tick * ctx->config.jad_kill_bonus;
+            (float)s->tick_scratch.kill_jad * ctx->config.jad_kill_bonus;
         s->pending_zuk_healer_kill_bonus +=
-            (float)s->kill_zuk_healer_this_tick * ctx->config.zuk_healer_kill_bonus;
+            (float)s->tick_scratch.kill_zuk_healer * ctx->config.zuk_healer_kill_bonus;
         s->pending_set_kill_bonus +=
-            (float)s->kill_set_this_tick * ctx->config.set_kill_bonus;
+            (float)s->tick_scratch.kill_set * ctx->config.set_kill_bonus;
     }
     /* emit pending kill bonuses gradually so a single-tick kill doesn't
        saturate the [-1, 1] PPO reward clamp. */
-    if (!tags_first_gate && s->pending_jad_kill_bonus > 0.0f) {
+    if (s->pending_jad_kill_bonus > 0.0f) {
         float emit = fminf(0.07f, s->pending_jad_kill_bonus);
         reward += emit;
         s->pending_jad_kill_bonus -= emit;
     }
-    if (!tags_first_gate && s->pending_zuk_healer_kill_bonus > 0.0f) {
+    if (s->pending_zuk_healer_kill_bonus > 0.0f) {
         float emit = fminf(0.05f, s->pending_zuk_healer_kill_bonus);
         reward += emit;
         s->pending_zuk_healer_kill_bonus -= emit;
     }
-    if (!tags_first_gate && s->pending_set_kill_bonus > 0.0f) {
+    if (s->pending_set_kill_bonus > 0.0f) {
         float emit = fminf(0.03f, s->pending_set_kill_bonus);
         reward += emit;
         s->pending_set_kill_bonus -= emit;
     }
 
-    if (!tags_first_gate) {
-        float shield_penalty = ctx->config.shield_penalty_coeff * s->shield_damage_this_tick;
-        if (ctx->config.shield_penalty_episode_cap > 0.0f) {
-            float remaining = ctx->config.shield_penalty_episode_cap -
-                s->shield_penalty_episode_total;
-            if (remaining < 0.0f) remaining = 0.0f;
-            if (shield_penalty > remaining) shield_penalty = remaining;
-        }
-        s->shield_penalty_episode_total += shield_penalty;
-        reward -= shield_penalty;
+    float shield_penalty = ctx->config.shield_penalty_coeff * s->tick_scratch.shield_damage;
+    if (ctx->config.shield_penalty_episode_cap > 0.0f) {
+        float remaining = ctx->config.shield_penalty_episode_cap -
+            s->shield_penalty_episode_total;
+        if (remaining < 0.0f) remaining = 0.0f;
+        if (shield_penalty > remaining) shield_penalty = remaining;
     }
+    s->shield_penalty_episode_total += shield_penalty;
+    reward -= shield_penalty;
 
-    if (!tags_first_gate && ctx->config.phase_900_bonus > 0.0f && !s->phase_900_fired
+    if (ctx->config.phase_900_bonus > 0.0f && !s->phase_900_fired
             && s->min_zuk_hp_seen <= 900.0f && s->min_zuk_hp_seen > 0.0f) {
         reward += ctx->config.phase_900_bonus;
         s->phase_900_fired = 1;
     }
-    if (!tags_first_gate && ctx->config.phase_600_bonus > 0.0f && !s->phase_600_fired
+    if (ctx->config.phase_600_bonus > 0.0f && !s->phase_600_fired
             && s->min_zuk_hp_seen <= 600.0f && s->min_zuk_hp_seen > 0.0f) {
         reward += ctx->config.phase_600_bonus;
         s->phase_600_fired = 1;
     }
-    if (!tags_first_gate && ctx->config.phase_300_bonus > 0.0f && !s->phase_300_fired
+    if (ctx->config.phase_300_bonus > 0.0f && !s->phase_300_fired
             && s->min_zuk_hp_seen <= 300.0f && s->min_zuk_hp_seen > 0.0f) {
         reward += ctx->config.phase_300_bonus;
         s->phase_300_fired = 1;
@@ -327,7 +345,7 @@ static float inf_terminal_loss_reward(
 }
 
 static void inf_update_healer_transition_stats(InfernoState* s) {
-    s->total_shield_tags += s->shield_tags_this_tick;
+    s->total_shield_tags += s->tick_scratch.shield_tags;
 
     if (!s->zuk.healer_spawned) return;
 
@@ -343,9 +361,9 @@ static void inf_update_healer_transition_stats(InfernoState* s) {
             s->zuk_hp_max_after_healer_spawn = hp;
     }
 
-    s->total_zuk_healer_tags += s->zuk_healer_tags_this_tick;
+    s->total_zuk_healer_tags += s->tick_scratch.zuk_healer_tags;
     if (s->total_zuk_healer_tags > 4) s->total_zuk_healer_tags = 4;
-    s->total_zuk_healer_kills += s->kill_zuk_healer_this_tick;
+    s->total_zuk_healer_kills += s->tick_scratch.kill_zuk_healer;
     if (s->total_zuk_healer_kills > 4) s->total_zuk_healer_kills = 4;
 
     if (s->total_zuk_healer_tags > 0 && s->tick_at_first_zuk_healer_tag < 0)
@@ -365,18 +383,113 @@ static void inf_update_healer_transition_stats(InfernoState* s) {
             zuk_idx >= 0 ? (float)s->npcs[zuk_idx].hp : 0.0f;
     }
 
-    if (s->tick_at_all_zuk_healers_dead >= 0 && s->damage_zuk_this_tick > 0.0f) {
-        s->damage_after_all_zuk_healers_dead += s->damage_zuk_this_tick;
+    if (s->tick_at_all_zuk_healers_dead >= 0 && s->tick_scratch.damage_zuk > 0.0f) {
+        s->damage_after_all_zuk_healers_dead += s->tick_scratch.damage_zuk;
         if (s->tick_at_first_zuk_hit_after_all_healers_dead < 0)
             s->tick_at_first_zuk_hit_after_all_healers_dead = s->tick;
     }
 
     if (s->tick_at_le_240 >= 0) {
-        s->hp_restored_after_240 += s->hp_restored_this_tick;
-        s->spark_damage_after_240 += s->spark_damage_this_tick;
+        s->hp_restored_after_240 += s->tick_scratch.hp_restored;
+        s->spark_damage_after_240 += s->tick_scratch.spark_damage;
     }
 }
 
+static int inf_has_live_player_target(const InfernoState* s) {
+    for (int i = 0; i < INF_MAX_NPCS; i++) {
+        if (inf_npc_is_live_player_target(s, i)) return 1;
+    }
+    return 0;
+}
+
+static int inf_has_attackable_player_target(const InfernoState* s) {
+    for (int i = 0; i < INF_MAX_NPCS; i++) {
+        if (inf_npc_is_live_player_target(s, i) &&
+                inf_player_can_attack_npc_from_current_tile(s, i))
+            return 1;
+    }
+    return 0;
+}
+
+static int inf_has_live_npc_type(const InfernoState* s, InfNPCType type) {
+    for (int i = 0; i < INF_MAX_NPCS; i++) {
+        const InfNPC* npc = &s->npcs[i];
+        if (npc->active && npc->death_ticks == 0 && npc->hp > 0 &&
+                npc->type == type)
+            return 1;
+    }
+    return 0;
+}
+
+static InfIdleDiagnosticPhase inf_idle_diagnostic_phase(const InfernoState* s) {
+    if (!inf_is_final_wave(s))
+        return inf_has_live_npc_type(s, INF_NPC_JAD)
+            ? INF_IDLE_PHASE_JAD : INF_IDLE_PHASE_SET;
+    if (inf_has_live_npc_type(s, INF_NPC_HEALER_ZUK))
+        return INF_IDLE_PHASE_ZUK_HEALERS;
+    if (inf_has_live_npc_type(s, INF_NPC_JAD))
+        return INF_IDLE_PHASE_ZUK_JAD;
+    if (s->tick_at_all_zuk_healers_dead >= 0)
+        return INF_IDLE_PHASE_ZUK_POST_HEALERS;
+    return INF_IDLE_PHASE_ZUK_PRE_JAD;
+}
+
+static int inf_player_has_immediate_threat(const InfernoState* s) {
+    if (s->tick_scratch.attacks_fired > 0) return 1;
+    for (int h = 0; h < s->player_pending_hits.count; h++) {
+        const EncounterPendingHit* ph = &s->player_pending_hits.hits[h];
+        if (ph->check_prayer && inf_pending_hit_obs_timer(ph) <= 1)
+            return 1;
+    }
+    for (int i = 0; i < INF_MAX_NPCS; i++) {
+        const InfNPC* npc = &s->npcs[i];
+        InfNpcPlayerThreat threat = inf_npc_player_threat(s, npc);
+        if (threat.telegraph_style_mask && threat.can_attack_this_tick)
+            return 1;
+    }
+    return 0;
+}
+
+static int inf_progress_happened_this_tick(const InfernoState* s) {
+    return s->tick_scratch.damage_dealt > 0.0f ||
+        s->tick_scratch.healer_tags > 0 ||
+        s->tick_scratch.shield_tags > 0 ||
+        s->tick_scratch.kill_jad > 0 ||
+        s->tick_scratch.kill_zuk_healer > 0 ||
+        s->tick_scratch.kill_set > 0 ||
+        s->tick_scratch.wave_completed > 0;
+}
+
+static void inf_record_idle_diagnostics(
+    InfernoState* s,
+    int can_player_attack,
+    int attack_ready_no_attack,
+    int target_available_no_attack,
+    int safe_attack_opportunity_missed
+) {
+    if (!can_player_attack || !inf_has_live_player_target(s))
+        return;
+
+    InfIdleDiagnosticPhase phase = inf_idle_diagnostic_phase(s);
+    assert((int)phase >= 0 && (int)phase < OSRS_INFERNO_IDLE_PHASE_COUNT);
+
+    if (attack_ready_no_attack) {
+        s->total_attack_ready_no_attack_ticks++;
+        s->attack_ready_no_attack_ticks_by_phase[phase]++;
+    }
+    if (target_available_no_attack) {
+        s->total_target_available_no_attack_ticks++;
+        s->target_available_no_attack_ticks_by_phase[phase]++;
+    }
+    if (safe_attack_opportunity_missed) {
+        s->total_safe_attack_opportunity_missed_ticks++;
+        s->safe_attack_opportunity_missed_ticks_by_phase[phase]++;
+    }
+    if (!inf_progress_happened_this_tick(s)) {
+        s->total_progressless_ticks++;
+        s->progressless_ticks_by_phase[phase]++;
+    }
+}
 
 static void inf_step_ctx(EncounterState* state, EncounterContext* context, const int* actions) {
     InfernoState* s = (InfernoState*)state;
@@ -385,42 +498,13 @@ static void inf_step_ctx(EncounterState* state, EncounterContext* context, const
 
     /* clear per-tick state */
     s->reward = 0.0f;
-    s->damage_dealt_this_tick = 0.0f;
-    s->damage_resurrected_this_tick = 0.0f;
-    s->damage_zuk_this_tick = 0.0f;
-    s->damage_zuk_healers_this_tick = 0.0f;
-    s->damage_jad_healers_this_tick = 0.0f;
-    s->damage_jad_this_tick = 0.0f;
-    s->damage_set_this_tick = 0.0f;
-    s->kill_jad_this_tick = 0;
-    s->kill_zuk_healer_this_tick = 0;
-    s->kill_set_this_tick = 0;
-    s->shield_damage_this_tick = 0.0f;
-    s->healer_tags_this_tick = 0;
-    s->zuk_healer_tags_this_tick = 0;
-    s->zuk_untagged_healer_targets_this_tick = 0;
-    s->zuk_safe_untagged_healer_targets_this_tick = 0;
-    s->zuk_untagged_healer_nonmagic_attacks_this_tick = 0;
-    s->zuk_healer_mage_attack_fires_this_tick = 0;
-    s->shield_tags_this_tick = 0;
-    s->spark_damage_this_tick = 0.0f;
-    s->damage_received_this_tick = 0.0f;
-    s->hp_restored_this_tick = 0.0f;
-    s->hp_restored_jad_this_tick = 0.0f;
-    s->hp_restored_zuk_this_tick = 0.0f;
-    s->prayer_correct_this_tick = 0;
-    s->off_prayer_hits_this_tick = 0;
-    s->tick_styles_fired = 0;
-    s->tick_attacks_fired = 0;
-    s->wave_completed_this_tick = 0;
-    s->pillar_lost_this_tick = -1;
-    s->player_moved_last_tick = s->player_moved_this_tick;
-    s->player_moved_this_tick = 0;
-    s->player_attacked_this_tick = 0;
+    /* one assignment resets every per-tick accumulator and flag, so a field
+       added to InfTickScratch is reset for free. pillar_lost is the only
+       non-zero default (-1 = no pillar lost this tick); player_moved is read
+       into player_moved_last_tick before it is cleared. */
+    s->player_moved_last_tick = s->tick_scratch.player_moved;
+    s->tick_scratch = (InfTickScratch){ .pillar_lost = -1 };
     s->player_attack_timing = (EncounterProjectileTiming){0};
-    s->brewed_this_tick = 0;
-    s->blood_heal_this_tick = 0;
-    s->behind_shield_this_tick = 0;
     encounter_clear_tick_flags(&s->player);
     /* clear NPC per-tick flags BEFORE player actions, so hit flags set by
        inf_tick_player survive through inf_tick_npcs into render_post_tick */
@@ -451,7 +535,7 @@ static void inf_step_ctx(EncounterState* state, EncounterContext* context, const
     int in_ready_gap = s->wave_ready_delay > 0;
 
     inf_resolve_player_projectiles_on_npcs(s);
-    inf_resolve_player_pending_hits_ctx(s, ctx);
+    inf_resolve_player_pending_hits(s);
     inf_resolve_pending_sparks(s);
 
     if (!in_wave_gap && !in_ready_gap) {
@@ -467,7 +551,7 @@ static void inf_step_ctx(EncounterState* state, EncounterContext* context, const
         if (s->last_hit_by_type >= 0 && s->last_hit_by_type < INF_NUM_NPC_TYPES)
             s->killed_by_type[s->last_hit_by_type]++;
         s->episode_over = 1;
-        s->winner = 1;
+        s->winner = INF_OUTCOME_PLAYER_DIED;
         s->reward = inf_terminal_loss_reward(s, ctx);
         s->episode_return += s->reward;
         return;
@@ -475,36 +559,40 @@ static void inf_step_ctx(EncounterState* state, EncounterContext* context, const
 
     /* player actions */
     int can_player_attack = !in_wave_gap && !in_ready_gap;
+    int attack_ready_no_attack = 0;
+    int target_available_no_attack = 0;
+    int safe_attack_opportunity_missed = 0;
     int player_x_before_tick_player = s->player.x;
     int player_y_before_tick_player = s->player.y;
     inf_tick_player_ctx(s, ctx, actions, can_player_attack);
-    s->player_moved_this_tick =
+    s->tick_scratch.player_moved =
         (s->player.x != player_x_before_tick_player ||
          s->player.y != player_y_before_tick_player) ? 1 : 0;
-    if (s->player_moved_this_tick)
+    if (s->tick_scratch.player_moved)
         inf_invalidate_los_cache(s);
     inf_resolve_jad_prayer_checks_after_player(s, ctx);
 
     /* idle penalty counter: consecutive ticks where player could attack but didn't */
     {
-        int has_alive_npc = 0;
-        if (can_player_attack) {
-            for (int i = 0; i < INF_MAX_NPCS; i++) {
-                if (s->npcs[i].active && s->npcs[i].death_ticks == 0) {
-                    has_alive_npc = 1; break;
-                }
-            }
-        }
-        if (has_alive_npc && s->player.attack_timer == 0 && !s->player_attacked_this_tick)
+        int has_alive_npc = can_player_attack && inf_has_live_player_target(s);
+        if (has_alive_npc && s->player.attack_timer == 0 && !s->tick_scratch.player_attacked)
             s->ticks_without_action++;
         else
             s->ticks_without_action = 0;
+        attack_ready_no_attack = s->ticks_without_action > 0;
+        if (attack_ready_no_attack) {
+            int target_available = inf_has_live_player_target(s);
+            int attackable_target = inf_has_attackable_player_target(s);
+            target_available_no_attack = target_available;
+            safe_attack_opportunity_missed =
+                attackable_target && !inf_player_has_immediate_threat(s);
+        }
     }
 
     /* accumulate diagnostic counters.
        prayer_correct_this_tick is a count (multiple NPCs can attack same tick).
        total_npc_attacks counts attacks directed at the player (not nibbler→pillar). */
-    s->total_prayer_correct += s->prayer_correct_this_tick;
+    s->total_prayer_correct += s->tick_scratch.prayer_correct;
     int ranger_attacked_this_tick = 0;
     int mager_attacked_this_tick = 0;
     for (int i = 0; i < INF_MAX_NPCS; i++) {
@@ -529,26 +617,42 @@ static void inf_step_ctx(EncounterState* state, EncounterContext* context, const
        a different style was correctly prayed on the same tick. popcount of
        tick_styles_fired tells us how many distinct styles fired. if 2+, the
        off-prayer hits from non-prayed styles are "unavoidable" (can only pray one). */
-    if (s->tick_attacks_fired > 0) {
-        int styles = s->tick_styles_fired;
+    if (s->tick_scratch.attacks_fired > 0) {
+        int styles = s->tick_scratch.styles_fired;
         int n_styles = ((styles >> 0) & 1) + ((styles >> 1) & 1) + ((styles >> 2) & 1);
-        if (n_styles >= 2 && s->prayer_correct_this_tick > 0) {
+        if (n_styles >= 2 && s->tick_scratch.prayer_correct > 0) {
             /* we prayed correctly against at least one style, but other styles
                also fired — those off-prayer hits were unavoidable */
-            int off_prayer = s->tick_attacks_fired - s->prayer_correct_this_tick;
+            int off_prayer = s->tick_scratch.attacks_fired - s->tick_scratch.prayer_correct;
             s->total_unavoidable_off += off_prayer;
         }
     }
     if (s->ticks_without_action > 0) s->total_idle_ticks++;
-    s->total_brews_used += s->brewed_this_tick;
-    s->total_blood_healed += s->blood_heal_this_tick;
+    s->total_brews_used += s->tick_scratch.brewed;
+    s->total_blood_healed += s->tick_scratch.blood_heal;
+    {
+        InfNpcPressureSummary pressure = inf_npc_pressure_summary(s);
+        s->total_npc_pressure_if_ready_count +=
+            (float)pressure.if_ready_total;
+        s->total_npc_pressure_this_tick_count +=
+            (float)pressure.this_tick_total;
+        s->total_npc_pressure_if_ready_max_hit +=
+            (float)pressure.if_ready_max_hit;
+        s->total_npc_pressure_this_tick_max_hit +=
+            (float)pressure.this_tick_max_hit;
+        int max_incoming_hit = pressure.if_ready_max_hit >
+            pressure.this_tick_max_hit ? pressure.if_ready_max_hit :
+            pressure.this_tick_max_hit;
+        if ((float)max_incoming_hit > s->max_npc_pressure_incoming_hit)
+            s->max_npc_pressure_incoming_hit = (float)max_incoming_hit;
+    }
 
     if (can_player_attack && s->wave == 68) {
         s->total_zuk_ticks++;
         int is_behind_shield = inf_player_behind_zuk_shield_now(s);
         if (is_behind_shield) {
             s->behind_shield_ticks++;
-            s->behind_shield_this_tick = 1;
+            s->tick_scratch.behind_shield = 1;
         }
         if (!is_behind_shield && s->tick_at_le_240 >= 0)
             s->offshield_ticks_after_240++;
@@ -566,7 +670,7 @@ static void inf_step_ctx(EncounterState* state, EncounterContext* context, const
         if (s->last_hit_by_type >= 0 && s->last_hit_by_type < INF_NUM_NPC_TYPES)
             s->killed_by_type[s->last_hit_by_type]++;
         s->episode_over = 1;
-        s->winner = 1;
+        s->winner = INF_OUTCOME_PLAYER_DIED;
         s->reward = inf_terminal_loss_reward(s, ctx);
         goto finish_step;
     }
@@ -584,7 +688,7 @@ static void inf_step_ctx(EncounterState* state, EncounterContext* context, const
         if (s->npcs[i].active) { all_dead = 0; break; }
     }
     if (all_dead) {
-        s->wave_completed_this_tick = 1;
+        s->tick_scratch.wave_completed = 1;
         s->total_waves_cleared++;
         int next_public_wave = s->wave + 2;
         float wave_clear_reward = 1.0f +
@@ -592,7 +696,7 @@ static void inf_step_ctx(EncounterState* state, EncounterContext* context, const
         s->reward = wave_clear_reward;
         if (s->wave + 1 >= INF_NUM_WAVES) {
             s->episode_over = 1;
-            s->winner = 0;
+            s->winner = INF_OUTCOME_PLAYER_WON;
         } else {
             s->wave_spawn_target = s->wave + 1;
             s->wave_spawn_delay = 9;
@@ -601,11 +705,17 @@ static void inf_step_ctx(EncounterState* state, EncounterContext* context, const
 
     if (s->tick >= INF_MAX_TICKS) {
         s->episode_over = 1;
-        s->winner = 1;
+        s->winner = INF_OUTCOME_PLAYER_DIED;
         s->reward = inf_terminal_loss_reward(s, ctx);
     }
 
 finish_step:
+    inf_record_idle_diagnostics(
+        s,
+        can_player_attack,
+        attack_ready_no_attack,
+        target_available_no_attack,
+        safe_attack_opportunity_missed);
     s->episode_return += s->reward;
 }
 
