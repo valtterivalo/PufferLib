@@ -2306,10 +2306,13 @@ Env* my_vec_init(int* num_envs_out, int* buffer_env_starts, int* buffer_env_coun
     Env* envs = (Env*)calloc(total_agents, sizeof(Env));
     int num_envs = 0;
     int agents_created = 0;
+    const char* seed_off_s = getenv("PUFFER_ENV_SEED_OFFSET");
+    uint32_t seed_off = seed_off_s ? (uint32_t)strtoul(seed_off_s, NULL, 10) : 0u;
     while (agents_created < total_agents) {
         srand(num_envs);
         envs[num_envs].rng = num_envs;
         my_init(&envs[num_envs], env_kwargs);
+        INF_ENV_INFERNO(&envs[num_envs])->rng_state = (uint32_t)(seed_off + (uint32_t)num_envs);
         agents_created += envs[num_envs].num_agents;
         num_envs++;
     }
