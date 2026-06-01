@@ -2261,6 +2261,21 @@ void my_init(Env* env, Dict* kwargs) {
    base-start agents are scored normally; curriculum agents train but don't affect sweep metric. */
 #define MAX_CURRICULUM_TIERS 8
 
+/** mix an env index into a well-distributed nonzero xorshift seed.
+    raw sequential seeds (0,1,2,...) give correlated openings under the (13,17,5)
+    xorshift, and index 0 with offset 0 lands on the xorshift fixed point (state 0
+    stays 0 and then resolve_seed falls back to the old hardcoded 12345 stream).
+    lowbias32 finalizer: avalanche-distinct for adjacent inputs, guaranteed nonzero. */
+static inline uint32_t inf_seed_mix(uint32_t x) {
+    x += 0x9E3779B9u;
+    x ^= x >> 16;
+    x *= 0x21F0AAADu;
+    x ^= x >> 15;
+    x *= 0x735A2D97u;
+    x ^= x >> 15;
+    return x ? x : 0x9E3779B9u;
+}
+
 Env* my_vec_init(int* num_envs_out, int* buffer_env_starts, int* buffer_env_counts,
                  Dict* vec_kwargs, Dict* env_kwargs) {
     int total_agents = (int)dict_get(vec_kwargs, "total_agents")->value;
@@ -2312,7 +2327,7 @@ Env* my_vec_init(int* num_envs_out, int* buffer_env_starts, int* buffer_env_coun
         srand(num_envs);
         envs[num_envs].rng = num_envs;
         my_init(&envs[num_envs], env_kwargs);
-        INF_ENV_INFERNO(&envs[num_envs])->rng_state = (uint32_t)(seed_off + (uint32_t)num_envs);
+        INF_ENV_INFERNO(&envs[num_envs])->rng_state = inf_seed_mix(seed_off + (uint32_t)num_envs);
         agents_created += envs[num_envs].num_agents;
         num_envs++;
     }
