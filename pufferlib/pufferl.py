@@ -429,6 +429,29 @@ def sweep(env_name, args=None, pareto=False):
 
     active = {}
     completed = 0
+    # Resume: replay prior runs' downsampled (score, cost, timestep) curves through
+    # observe() so a restart rebuilds the sweep model from disk instead of cold, and
+    # counts them against max_runs. Set PUFFER_SWEEP_RESUME_LOGS to a log dir.
+    resume_dir = os.environ.get('PUFFER_SWEEP_RESUME_LOGS')
+    if resume_dir:
+        import glob
+        resume_key = f'env/{sweep_config["metric"]}'
+        for path in sorted(glob.glob(os.path.join(resume_dir, '*.json'))):
+            with open(path) as resume_file:
+                prior_run = json.load(resume_file)
+            metrics = prior_run.get('metrics') or {}
+            scores = metrics.get(resume_key)
+            costs = metrics.get('uptime')
+            steps = metrics.get('agent_steps')
+            if not (scores and costs and steps):
+                continue
+            prior_args = {k: v for k, v in prior_run.items() if k != 'metrics'}
+            for s, c, t in zip(scores, costs, steps):
+                prior_args['train']['total_timesteps'] = t
+                sweep_obj.observe(prior_args, s, c, is_failure=False)
+            completed += 1
+        print(f'[sweep] resumed {completed} prior runs from {resume_dir}; '
+              f'budget {completed}/{num_experiments}', flush=True)
     while completed < num_experiments:
         if len(active) >= sweep_gpus//exp_gpus: # Collect completed runs
             gpu_id, scores, costs, timesteps = result_queue.get()
