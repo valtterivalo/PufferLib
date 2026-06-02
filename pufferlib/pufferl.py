@@ -436,6 +436,7 @@ def sweep(env_name, args=None, pareto=False):
     if resume_dir:
         import glob
         resume_key = f'env/{sweep_config["metric"]}'
+        skipped = 0
         for path in sorted(glob.glob(os.path.join(resume_dir, '*.json'))):
             with open(path) as resume_file:
                 prior_run = json.load(resume_file)
@@ -446,12 +447,21 @@ def sweep(env_name, args=None, pareto=False):
             if not (scores and costs and steps):
                 continue
             prior_args = {k: v for k, v in prior_run.items() if k != 'metrics'}
+            # A logged config holds runtime-derived values (e.g. state_buffer_size=0)
+            # that can fall outside the current log/pow2 sweep domains. Skip those runs
+            # rather than crash the whole resume; the rest still seed the model.
+            try:
+                sweep_obj.hyperparameters.from_dict(prior_args)
+            except (ValueError, AssertionError):
+                skipped += 1
+                continue
             for s, c, t in zip(scores, costs, steps):
                 prior_args['train']['total_timesteps'] = t
                 sweep_obj.observe(prior_args, s, c, is_failure=False)
             completed += 1
-        print(f'[sweep] resumed {completed} prior runs from {resume_dir}; '
-              f'budget {completed}/{num_experiments}', flush=True)
+        print(f'[sweep] resumed {completed} prior runs from {resume_dir} '
+              f'({skipped} skipped: out-of-domain values); budget {completed}/{num_experiments}',
+              flush=True)
     while completed < num_experiments:
         if len(active) >= sweep_gpus//exp_gpus: # Collect completed runs
             gpu_id, scores, costs, timesteps = result_queue.get()
