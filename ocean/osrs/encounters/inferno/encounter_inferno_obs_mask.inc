@@ -82,6 +82,22 @@ static inline float inf_obs_norm_npc_size(int size) {
     return (float)size / 7.0f;
 }
 
+static inline float inf_obs_norm_combat_roll(int roll) {
+    return (float)roll / 100000.0f;
+}
+
+static inline int inf_player_loadout_attack_roll(const EncounterLoadoutStats* ls) {
+    return ls->eff_level * (ls->attack_bonus + 64);
+}
+
+static inline int inf_npc_ranged_def_roll(const InfNPCStats* stats) {
+    return (stats->def_level + 9) * (stats->ranged_def_bonus + 64);
+}
+
+static inline int inf_npc_magic_def_roll(const InfNPCStats* stats) {
+    return (stats->magic_level + 9) * (stats->magic_def_bonus + 64);
+}
+
 static inline float inf_obs_norm_pillar_size(const InfPillar* pillar) {
     return pillar->active ? (float)INF_PILLAR_SIZE / 7.0f : 0.0f;
 }
@@ -202,6 +218,7 @@ static void inf_write_obs_ctx(
     obs[i++] = (float)ls->def_stab / 300.0f;
     obs[i++] = (float)ls->def_magic / 300.0f;
     obs[i++] = (float)ls->def_ranged / 300.0f;
+    obs[i++] = inf_obs_norm_combat_roll(inf_player_loadout_attack_roll(ls));
     obs[i++] = (float)s->player.special_energy / 100.0f;
 
     /* prayer-critical: distilled from NPC array and pending hits */
@@ -378,7 +395,7 @@ static void inf_write_obs_ctx(
         int has_targeted = 1;
         int has_meleer_dig = (type == INF_NPC_MELEER);
 
-        int num_features = 11;
+        int num_features = 13;
         if (has_timer) num_features += 1;
         if (has_style) num_features += 3;
         if (has_los) num_features += 1;
@@ -391,10 +408,13 @@ static void inf_write_obs_ctx(
 
         if (n >= 0) {
             InfNPC* npc = &s->npcs[n];
+            const InfNPCStats* stats = &INF_NPC_STATS[npc->type];
             obs[i++] = (float)npc->hp / (float)npc->max_hp;
             obs[i++] = (float)(npc->x - px) / (float)INF_ARENA_WIDTH;
             obs[i++] = (float)(npc->y - py) / (float)INF_ARENA_HEIGHT;
             obs[i++] = inf_obs_norm_npc_size(npc->size);
+            obs[i++] = inf_obs_norm_combat_roll(inf_npc_ranged_def_roll(stats));
+            obs[i++] = inf_obs_norm_combat_roll(inf_npc_magic_def_roll(stats));
             if (has_timer) obs[i++] = (float)npc->attack_timer / 10.0f;
 
             if (has_style) {

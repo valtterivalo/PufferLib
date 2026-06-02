@@ -1,8 +1,8 @@
 #line 5216 "encounter_inferno.h"
 /* obs layout: player + Zuk phase + pillars + NPC slots + step-out forecast + pending hits + pending Zuk healer sparks */
-#define INF_PLAYER_OBS_SIZE 75
+#define INF_PLAYER_OBS_SIZE 76
 #define INF_PILLAR_OBS_SIZE (INF_NUM_PILLARS * 5)
-#define INF_BASE_NPC_OBS_SIZE 896
+#define INF_BASE_NPC_OBS_SIZE 970
 #define INF_TOTAL_NPC_OBS_SIZE INF_BASE_NPC_OBS_SIZE
 #define INF_STEP_OUT_FORECAST_HORIZON 4
 #define INF_STEP_OUT_FORECAST_TICK_FEATURES 7
