@@ -11,11 +11,21 @@
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-function"
+#include "../osrs/encounters/encounter_nh_pvp.h"
+#ifdef OSRS_VISUAL
 #include "../osrs/encounters/encounter_inferno.h"
 #include "../osrs/encounters/encounter_zulrah.h"
-#include "../osrs/encounters/encounter_nh_pvp.h"
+#ifdef __CUDACC__
+#define float3 raymath_float3
+#define float16 raymath_float16
+#endif
 #include "../osrs/osrs_render.h"
+#ifdef __CUDACC__
+#undef float3
+#undef float16
+#endif
 #include "../osrs/osrs_scene_assets.h"
+#endif
 #pragma GCC diagnostic pop
 
 typedef struct {
@@ -171,6 +181,7 @@ static void pvp_env_set_gear_tier(Env* env, int tier) {
 }
 
 void c_step(Env* env) {
+#ifdef OSRS_VISUAL
     RenderClient* rc = (RenderClient*)env->pvp.client;
     int used_human_commands = 0;
 
@@ -179,6 +190,9 @@ void c_step(Env* env) {
             (EncounterState*)&env->pvp, NULL, &rc->human_input);
         used_human_commands = 1;
     }
+#else
+    int used_human_commands = 0;
+#endif
 
     if (!used_human_commands) {
         /* slot 0 actions: float → int into ocean_acts_staging.
@@ -279,6 +293,7 @@ void c_reset(Env* env) {
 
 void c_close(Env* env) { pvp_close(&env->pvp); }
 
+#ifdef OSRS_VISUAL
 void c_render(Env* env) {
     env->pvp.encounter_def = (const void*)&ENCOUNTER_NH_PVP;
     env->pvp.encounter_state = (void*)&env->pvp;
@@ -330,6 +345,9 @@ void c_render(Env* env) {
     rc->last_tick_time = GetTime();
     env->last_step_time = rc->last_tick_time;
 }
+#else
+void c_render(Env* env) { (void)env; }
+#endif
 
 #include "vecenv.h"
 
