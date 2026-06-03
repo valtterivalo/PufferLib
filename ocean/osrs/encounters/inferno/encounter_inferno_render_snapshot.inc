@@ -57,6 +57,10 @@ static void inf_put_int_ctx(
         ctx->config.step_out_forecast_obs_enabled =
             value != INF_STEP_OUT_FORECAST_MODE_OFF;
     }
+    else if (strcmp(key, "mask_in_obs") == 0) {
+        ctx->config.mask_in_obs =
+            encounter_require_binary_config("inferno", key, value);
+    }
     else if (strcmp(key, "loadout_profile_mode") == 0) {
         inf_require_valid_loadout_profile_mode(value);
         ctx->config.loadout_profile_mode = (InfLoadoutProfileMode)value;
@@ -1054,6 +1058,7 @@ static uint64_t inf_config_fingerprint(const InfConfig* config) {
     INF_HASH_CONFIG_FIELD(config, &h, death_penalty_coeff);
     INF_HASH_CONFIG_FIELD(config, &h, terminal_penalty_enabled);
     INF_HASH_CONFIG_FIELD(config, &h, step_out_forecast_obs_mode);
+    INF_HASH_CONFIG_FIELD(config, &h, mask_in_obs);
     INF_HASH_CONFIG_FIELD(config, &h, phase_900_bonus);
     INF_HASH_CONFIG_FIELD(config, &h, phase_600_bonus);
     INF_HASH_CONFIG_FIELD(config, &h, phase_300_bonus);

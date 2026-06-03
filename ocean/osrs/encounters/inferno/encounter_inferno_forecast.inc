@@ -1,12 +1,11 @@
 #line 5216 "encounter_inferno.h"
-/* obs layout: player + Zuk phase + pillars + NPC slots + step-out forecast + pending hits + pending Zuk healer sparks */
 #define INF_PLAYER_OBS_SIZE 76
 #define INF_PILLAR_OBS_SIZE (INF_NUM_PILLARS * 5)
 #define INF_BASE_NPC_OBS_SIZE 970
 #define INF_TOTAL_NPC_OBS_SIZE INF_BASE_NPC_OBS_SIZE
 #define INF_STEP_OUT_FORECAST_HORIZON 4
 #define INF_STEP_OUT_FORECAST_TICK_FEATURES 7
-#define INF_STEP_OUT_FORECAST_ACTION_FEATURES 8
+#define INF_STEP_OUT_FORECAST_ACTION_FEATURES 11
 #define INF_STEP_OUT_FORECAST_OBS_SIZE (ENCOUNTER_MOVE_ACTIONS * INF_STEP_OUT_FORECAST_ACTION_FEATURES)
 #define INF_FEATURES_PER_HIT 5
 #define INF_SPARK_OBS_SLOTS INF_MAX_PENDING_SPARKS
@@ -66,7 +65,6 @@ typedef struct {
     int dig_attack_delay;
     int blob_scanned_prayer;
     int had_los_last_tick;
-    int jad_attack_style;
     int attack_style;
     int aggro_target;
     int los_to_player_cache;
@@ -80,7 +78,6 @@ typedef struct {
     int player_y;
 } InfForecastMoveCtx;
 
-/* max hit per NPC type, normalized by mager max (70). for prayer priority obs. */
 static const float INF_NPC_MAX_HIT_NORM[INF_NUM_NPC_TYPES] = {
     [INF_NPC_NIBBLER]    = 0.0f,
     [INF_NPC_BAT]        = 19.0f / 70.0f,
@@ -254,12 +251,6 @@ static void inf_step_out_forecast_record_blob_scan(
     action->ticks[tick_idx].blob_scan_count++;
 }
 
-static int inf_forecast_jad_unknown_style_mask(const InfNPC* npc) {
-    if (npc->type != INF_NPC_JAD) return 0;
-    if (inf_npc_jad_const(npc)->attack_style != ATTACK_STYLE_NONE) return 0;
-    return INF_STYLE_MASK_RANGED | INF_STYLE_MASK_MAGIC;
-}
-
 static void inf_step_out_forecast_npc_attack(
     InfernoState* s,
     int idx,
@@ -322,13 +313,10 @@ static void inf_step_out_forecast_npc_attack(
         return;
     }
 
-    int style_mask = inf_forecast_jad_unknown_style_mask(npc);
-    if (style_mask == 0) {
-        int planned_style = inf_npc_planned_style_for_current_state(npc);
-        if (planned_style == ATTACK_STYLE_NONE) return;
-        style_mask = inf_attack_style_options_mask(
-            s, npc, stats, planned_style, dist);
-    }
+    int planned_style = inf_npc_planned_style_for_current_state(npc);
+    if (planned_style == ATTACK_STYLE_NONE) return;
+    int style_mask = inf_attack_style_options_mask(
+        s, npc, stats, planned_style, dist);
     if (style_mask == 0) return;
 
     inf_step_out_forecast_record_style_mask(
@@ -336,14 +324,7 @@ static void inf_step_out_forecast_npc_attack(
 
     if (npc->type == INF_NPC_BLOB)
         npc->blob_scanned_prayer = -1;
-    if (npc->type == INF_NPC_JAD)
-        inf_npc_jad(npc)->attack_style = ATTACK_STYLE_NONE;
     npc->attack_timer = stats->attack_speed;
-    if (npc->type == INF_NPC_JAD) {
-        if (s->wave == 66)      npc->attack_timer = 8;
-        else if (s->wave == 67) npc->attack_timer = 9;
-        else                    npc->attack_timer = 8;
-    }
 }
 
 static int inf_collect_step_out_forecast_slots(
@@ -354,6 +335,7 @@ static int inf_collect_step_out_forecast_slots(
     for (int i = 0; i < INF_MAX_NPCS; i++) {
         const InfNPC* npc = &s->npcs[i];
         if (!npc->active || npc->death_ticks > 0) continue;
+        if (npc->type == INF_NPC_JAD) continue;
         slots[count++] = i;
     }
     return count;
@@ -461,13 +443,10 @@ static void inf_step_out_forecast_fast_static_npc(
         return;
     }
 
-    int style_mask = inf_forecast_jad_unknown_style_mask(npc);
-    if (style_mask == 0) {
-        int planned_style = inf_npc_planned_style_for_current_state(npc);
-        if (planned_style == ATTACK_STYLE_NONE) return;
-        style_mask = inf_attack_style_options_mask_at_tile(
-            action->land_x, action->land_y, npc, stats, planned_style, dist);
-    }
+    int planned_style = inf_npc_planned_style_for_current_state(npc);
+    if (planned_style == ATTACK_STYLE_NONE) return;
+    int style_mask = inf_attack_style_options_mask_at_tile(
+        action->land_x, action->land_y, npc, stats, planned_style, dist);
     if (style_mask == 0) return;
 
     inf_step_out_forecast_record_style_mask(
@@ -566,9 +545,6 @@ static void inf_forecast_local_copy_npcs(
             .dig_attack_delay = npc->dig_attack_delay,
             .blob_scanned_prayer = npc->blob_scanned_prayer,
             .had_los_last_tick = npc->had_los_last_tick,
-            .jad_attack_style = (npc->type == INF_NPC_JAD)
-                ? inf_npc_jad_const(npc)->attack_style
-                : ATTACK_STYLE_NONE,
             .attack_style = npc->attack_style,
             .aggro_target = npc->aggro_target,
             .los_to_player_cache = -1,
@@ -672,8 +648,6 @@ static int inf_forecast_local_planned_style(
         if (scanned == PRAYER_PROTECT_MAGIC) return ATTACK_STYLE_RANGED;
         if (scanned == PRAYER_PROTECT_RANGED) return ATTACK_STYLE_MAGIC;
     }
-    if (npc->type == INF_NPC_JAD)
-        return npc->jad_attack_style;
     return npc->attack_style;
 }
 
@@ -707,14 +681,6 @@ static int inf_forecast_local_attack_style_options_mask_at_tile(
     return mask;
 }
 
-static int inf_forecast_local_jad_unknown_style_mask(
-    const InfForecastNpcLocal* npc
-) {
-    if (npc->type != INF_NPC_JAD) return 0;
-    if (npc->jad_attack_style != ATTACK_STYLE_NONE) return 0;
-    return INF_STYLE_MASK_RANGED | INF_STYLE_MASK_MAGIC;
-}
-
 static void inf_forecast_local_record_overlap_danger(
     const InfernoState* s,
     InfForecastNpcLocal* npc,
@@ -727,11 +693,8 @@ static void inf_forecast_local_record_overlap_danger(
         inf_step_out_forecast_record_blob_scan(action, tick_idx);
     }
 
-    int style_mask = inf_forecast_local_jad_unknown_style_mask(npc);
-    if (style_mask == 0) {
-        int planned_style = inf_forecast_local_planned_style(npc);
-        style_mask = inf_attack_style_mask_bit(planned_style);
-    }
+    int planned_style = inf_forecast_local_planned_style(npc);
+    int style_mask = inf_attack_style_mask_bit(planned_style);
     if (stats->can_melee)
         style_mask |= INF_STYLE_MASK_MELEE;
     if (style_mask == 0) return;
@@ -877,14 +840,10 @@ static void inf_forecast_local_attack_npc(
         return;
     }
 
-    int style_mask = inf_forecast_local_jad_unknown_style_mask(npc);
-    if (style_mask == 0) {
-        int planned_style = inf_forecast_local_planned_style(npc);
-        if (planned_style == ATTACK_STYLE_NONE) return;
-        style_mask = inf_forecast_local_attack_style_options_mask_at_tile(
-            action->land_x, action->land_y, npc,
-            stats, planned_style, dist);
-    }
+    int planned_style = inf_forecast_local_planned_style(npc);
+    if (planned_style == ATTACK_STYLE_NONE) return;
+    int style_mask = inf_forecast_local_attack_style_options_mask_at_tile(
+        action->land_x, action->land_y, npc, stats, planned_style, dist);
     if (style_mask == 0) return;
 
     inf_step_out_forecast_record_style_mask(
@@ -892,21 +851,13 @@ static void inf_forecast_local_attack_npc(
 
     if (npc->type == INF_NPC_BLOB)
         npc->blob_scanned_prayer = -1;
-    if (npc->type == INF_NPC_JAD)
-        npc->jad_attack_style = ATTACK_STYLE_NONE;
     npc->attack_timer = stats->attack_speed;
-    if (npc->type == INF_NPC_JAD) {
-        if (s->wave == 66)      npc->attack_timer = 8;
-        else if (s->wave == 67) npc->attack_timer = 9;
-        else                    npc->attack_timer = 8;
-    }
 }
 
 static int inf_forecast_npc_uses_readonly_sim(const InfNPC* npc) {
     switch (npc->type) {
         case INF_NPC_RANGER:
         case INF_NPC_MAGER:
-        case INF_NPC_JAD:
             return 1;
         default:
             return 0;
@@ -1063,21 +1014,12 @@ static void inf_build_step_out_forecast_exact_ctx(
     }
 }
 
-/* Captured fire opportunity from the single project-once roll. The local NPC
-   snapshot is taken at the projected position for this tick so the per-candidate
-   readout can reuse the same range/LOS/style helpers mode 3 uses, without
-   re-pathing NPC movement per candidate tile. */
 typedef struct {
     int fired;
     int blob_scan;
     InfForecastNpcLocal npc;
 } InfForecastProjectedFire;
 
-/* Mirror of inf_forecast_local_attack_npc, evaluated against the held player
-   tile (px,py) so NPC timer/blob/jad state advances identically across the
-   four projected ticks. Instead of recording danger against a candidate tile,
-   it captures the fire opportunity (planned style snapshot + position) so each
-   candidate tile can later re-gate range and LOS against the projected NPC. */
 static void inf_step_out_forecast_project_once_capture(
     const InfernoState* s,
     InfForecastNpcLocal* npc,
@@ -1154,13 +1096,10 @@ static void inf_step_out_forecast_project_once_capture(
         return;
     }
 
-    int style_mask = inf_forecast_local_jad_unknown_style_mask(npc);
-    if (style_mask == 0) {
-        int planned_style = inf_forecast_local_planned_style(npc);
-        if (planned_style == ATTACK_STYLE_NONE) return;
-        style_mask = inf_forecast_local_attack_style_options_mask_at_tile(
-            px, py, npc, stats, planned_style, dist);
-    }
+    int planned_style = inf_forecast_local_planned_style(npc);
+    if (planned_style == ATTACK_STYLE_NONE) return;
+    int style_mask = inf_forecast_local_attack_style_options_mask_at_tile(
+        px, py, npc, stats, planned_style, dist);
     if (style_mask == 0) return;
 
     capture->fired = 1;
@@ -1168,19 +1107,9 @@ static void inf_step_out_forecast_project_once_capture(
 
     if (npc->type == INF_NPC_BLOB)
         npc->blob_scanned_prayer = -1;
-    if (npc->type == INF_NPC_JAD)
-        npc->jad_attack_style = ATTACK_STYLE_NONE;
     npc->attack_timer = stats->attack_speed;
-    if (npc->type == INF_NPC_JAD) {
-        if (s->wave == 66)      npc->attack_timer = 8;
-        else if (s->wave == 67) npc->attack_timer = 9;
-        else                    npc->attack_timer = 8;
-    }
 }
 
-/* One projected tick: move every NPC toward the held player tile, then capture
-   any fire opportunity. Movement reuses mode 3's local mover so trajectories
-   match the readonly mode; only the per-candidate re-pathing is dropped. */
 static void inf_step_out_forecast_project_once_tick(
     const InfernoState* s,
     const InfernoContext* ctx,
@@ -1206,10 +1135,6 @@ static void inf_step_out_forecast_project_once_tick(
     }
 }
 
-/* Per-candidate readout for one captured fire: re-gate the projected NPC's
-   range, LOS and melee contact against the candidate landing tile, then feed
-   the recorder/blob-scan recorder exactly as modes 1/3 do so the eight obs
-   features derive identically. */
 static void inf_step_out_forecast_project_once_apply(
     const InfernoState* s,
     const InfForecastProjectedFire* capture,
@@ -1254,13 +1179,10 @@ static void inf_step_out_forecast_project_once_apply(
                 npc->x, npc->y, npc->size, dist))
         return;
 
-    int style_mask = inf_forecast_local_jad_unknown_style_mask(npc);
-    if (style_mask == 0) {
-        int planned_style = inf_forecast_local_planned_style(npc);
-        if (planned_style == ATTACK_STYLE_NONE) return;
-        style_mask = inf_forecast_local_attack_style_options_mask_at_tile(
-            action->land_x, action->land_y, npc, stats, planned_style, dist);
-    }
+    int planned_style = inf_forecast_local_planned_style(npc);
+    if (planned_style == ATTACK_STYLE_NONE) return;
+    int style_mask = inf_forecast_local_attack_style_options_mask_at_tile(
+        action->land_x, action->land_y, npc, stats, planned_style, dist);
     if (style_mask == 0) return;
 
     inf_step_out_forecast_record_style_mask(
@@ -1411,12 +1333,6 @@ static void inf_compare_step_out_forecasts(
     }
 }
 
-/* Forecast mode-agreement diagnostic. Gated by env PUFFER_INFERNO_FORECAST_AGREE,
-   fully inert otherwise. Builds exact/mode2/mode3 forecasts on the same live state
-   and accumulates fast-vs-exact divergence so we can validate cheaper forecast
-   modes by output-equivalence instead of noisy training scores. The single metric
-   that matters is m3_dfn (mode-3 dangerous false negatives: cheap says a step-out
-   tile is safe when the exact rollout says it is deadly). */
 static int g_inf_fa_enabled = -1;
 static long g_inf_fa_calls = 0;
 static long g_inf_fa[24];

@@ -739,6 +739,7 @@ typedef struct {
     int terminal_penalty_enabled;
     int step_out_forecast_obs_enabled;
     int step_out_forecast_obs_mode;
+    int mask_in_obs;
     float phase_900_bonus;
     float phase_600_bonus;
     float phase_300_bonus;

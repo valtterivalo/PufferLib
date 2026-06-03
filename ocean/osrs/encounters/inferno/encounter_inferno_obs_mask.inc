@@ -102,13 +102,111 @@ static inline float inf_obs_norm_pillar_size(const InfPillar* pillar) {
     return pillar->active ? (float)INF_PILLAR_SIZE / 7.0f : 0.0f;
 }
 
+typedef struct {
+    int npc_idx;
+    int phase_rank;
+    int threat_rank;
+    int timer_rank;
+    int targetable_rank;
+    int hp_rank;
+    int distance_rank;
+} InfObsSlotCandidateKey;
+
+static InfObsSlotCandidateKey inf_obs_slot_candidate_key(
+    const InfernoState* s,
+    const InfernoContext* ctx,
+    int npc_idx
+) {
+    (void)ctx;
+    const InfNPC* npc = &s->npcs[npc_idx];
+    InfObsSlotCandidateKey key = {
+        .npc_idx = npc_idx,
+        .phase_rank = npc->death_ticks > 0 ? 1 : 0,
+        .threat_rank = 3,
+        .timer_rank = npc->death_ticks > 0 ? npc->death_ticks :
+            inf_npc_pressure_timer(npc),
+        .targetable_rank = npc->type == INF_NPC_ZUK_SHIELD ? 1 : 0,
+        .hp_rank = npc->hp > 0 ? npc->hp : 0,
+        .distance_rank = encounter_dist_to_npc(
+            s->player.x, s->player.y, npc->x, npc->y, npc->size),
+    };
+
+    if (npc->active && npc->death_ticks == 0 && npc->hp > 0) {
+        InfNpcPlayerThreat threat = inf_npc_player_threat(s, npc);
+        if (threat.can_attack_this_tick) {
+            key.threat_rank = 0;
+        } else if (threat.can_attack_if_ready) {
+            key.threat_rank = 1;
+        } else if (npc->attack_timer <= 2 &&
+                inf_npc_attack_unblocked_for_pressure(npc)) {
+            key.threat_rank = 2;
+        }
+    }
+
+    return key;
+}
+
+static int inf_obs_slot_candidate_key_less(
+    InfObsSlotCandidateKey a,
+    InfObsSlotCandidateKey b
+) {
+    if (a.phase_rank != b.phase_rank) return a.phase_rank < b.phase_rank;
+    if (a.threat_rank != b.threat_rank) return a.threat_rank < b.threat_rank;
+    if (a.timer_rank != b.timer_rank) return a.timer_rank < b.timer_rank;
+    if (a.targetable_rank != b.targetable_rank)
+        return a.targetable_rank < b.targetable_rank;
+    if (a.hp_rank != b.hp_rank) return a.hp_rank < b.hp_rank;
+    if (a.distance_rank != b.distance_rank)
+        return a.distance_rank < b.distance_rank;
+    return a.npc_idx < b.npc_idx;
+}
+
+static void inf_insert_current_obs_slot_candidate(
+    InfernoState* s,
+    const InfernoContext* ctx,
+    int obs_slots[INF_OBS_NPCS],
+    int slot_counts[INF_NUM_NPC_TYPES],
+    const int slot_offsets[INF_NUM_NPC_TYPES],
+    const int slot_max[INF_NUM_NPC_TYPES],
+    int npc_idx
+) {
+    int type = s->npcs[npc_idx].type;
+    int start = slot_offsets[type];
+    int count = slot_counts[type];
+    int max_count = slot_max[type];
+    if (max_count <= 0) return;
+
+    InfObsSlotCandidateKey new_key =
+        inf_obs_slot_candidate_key(s, ctx, npc_idx);
+    int insert_pos = count;
+    for (int pos = 0; pos < count; pos++) {
+        InfObsSlotCandidateKey existing_key =
+            inf_obs_slot_candidate_key(s, ctx, obs_slots[start + pos]);
+        if (inf_obs_slot_candidate_key_less(new_key, existing_key)) {
+            insert_pos = pos;
+            break;
+        }
+    }
+
+    if (count < max_count) {
+        for (int pos = count; pos > insert_pos; pos--)
+            obs_slots[start + pos] = obs_slots[start + pos - 1];
+        obs_slots[start + insert_pos] = npc_idx;
+        slot_counts[type]++;
+    } else if (insert_pos < max_count) {
+        for (int pos = max_count - 1; pos > insert_pos; pos--)
+            obs_slots[start + pos] = obs_slots[start + pos - 1];
+        obs_slots[start + insert_pos] = npc_idx;
+    }
+}
+
 static void inf_refresh_current_obs_slots_ctx(InfernoState* s, const InfernoContext* ctx) {
     int obs_slots[INF_OBS_NPCS];
     for (int j = 0; j < INF_OBS_NPCS; j++) obs_slots[j] = -1;
 
     int slot_counts[INF_NUM_NPC_TYPES] = {0};
-    int slot_offsets[INF_NUM_NPC_TYPES];
-    int slot_max[INF_NUM_NPC_TYPES];
+    int slot_offsets[INF_NUM_NPC_TYPES] = {0};
+    int slot_max[INF_NUM_NPC_TYPES] = {0};
 
     slot_offsets[INF_NPC_MAGER] = 0; slot_max[INF_NPC_MAGER] = 2;
     slot_offsets[INF_NPC_RANGER] = 2; slot_max[INF_NPC_RANGER] = 2;
@@ -127,25 +225,17 @@ static void inf_refresh_current_obs_slots_ctx(InfernoState* s, const InfernoCont
 
     for (int n = 0; n < INF_MAX_NPCS; n++) {
         InfNPC* npc = &s->npcs[n];
-        if (npc->active && npc->death_ticks == 0) {
-            int t = npc->type;
-            if (slot_counts[t] < slot_max[t]) {
-                obs_slots[slot_offsets[t] + slot_counts[t]] = n;
-                slot_counts[t]++;
-            }
-        }
+        if (npc->active && npc->death_ticks == 0)
+            inf_insert_current_obs_slot_candidate(
+                s, ctx, obs_slots, slot_counts, slot_offsets, slot_max, n);
     }
 
     for (int n = 0; n < INF_MAX_NPCS; n++) {
         InfNPC* npc = &s->npcs[n];
         if (npc->active && npc->death_ticks > 0 &&
-                inf_npc_is_phantom_barrage_obs_candidate(s, ctx, n)) {
-            int t = npc->type;
-            if (slot_counts[t] < slot_max[t]) {
-                obs_slots[slot_offsets[t] + slot_counts[t]] = n;
-                slot_counts[t]++;
-            }
-        }
+                inf_npc_is_phantom_barrage_obs_candidate(s, ctx, n))
+            inf_insert_current_obs_slot_candidate(
+                s, ctx, obs_slots, slot_counts, slot_offsets, slot_max, n);
     }
 
     for (int j = 0; j < INF_OBS_NPCS; j++) {
@@ -506,6 +596,7 @@ static void inf_write_obs_ctx(
                 const InfStepOutForecastAction* action = &forecast.actions[action_idx];
                 int first_attack_tick = 0;
                 int first_style_mask = 0;
+                int first_blob_scan_tick = 0;
                 int max_hit = 0;
                 int ranger_mager_same_tick = 0;
                 for (int tick_idx = 0; tick_idx < INF_STEP_OUT_FORECAST_HORIZON; tick_idx++) {
@@ -516,18 +607,23 @@ static void inf_write_obs_ctx(
                         first_attack_tick = tick_idx + 1;
                         first_style_mask = style_mask;
                     }
+                    if (first_blob_scan_tick == 0 && tick->blob_scan_count > 0)
+                        first_blob_scan_tick = tick_idx + 1;
                     if (tick->max_hit > max_hit) max_hit = tick->max_hit;
                     if (tick->ranger_count > 0 && tick->mager_count > 0)
                         ranger_mager_same_tick = 1;
                 }
                 obs[i++] = action->valid ? 1.0f : 0.0f;
                 obs[i++] = (float)first_attack_tick / (float)INF_STEP_OUT_FORECAST_HORIZON;
-                obs[i++] = (float)first_style_mask / 7.0f;
+                obs[i++] = (first_style_mask & INF_STYLE_MASK_MELEE) ? 1.0f : 0.0f;
+                obs[i++] = (first_style_mask & INF_STYLE_MASK_RANGED) ? 1.0f : 0.0f;
+                obs[i++] = (first_style_mask & INF_STYLE_MASK_MAGIC) ? 1.0f : 0.0f;
                 obs[i++] = (float)max_hit / 150.0f;
                 obs[i++] = action->same_tick_mixed_style_conflict ? 1.0f : 0.0f;
                 obs[i++] = ranger_mager_same_tick ? 1.0f : 0.0f;
                 obs[i++] = action->ranger_mager_offtick_opportunity ? 1.0f : 0.0f;
                 obs[i++] = action->melee_fallback_exposure ? 1.0f : 0.0f;
+                obs[i++] = (float)first_blob_scan_tick / (float)INF_STEP_OUT_FORECAST_HORIZON;
             }
         } else {
             i += INF_STEP_OUT_FORECAST_OBS_SIZE;

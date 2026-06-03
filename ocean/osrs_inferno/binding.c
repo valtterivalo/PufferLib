@@ -141,6 +141,7 @@ INFERNO_ENV_EXPORT double inferno_env_profile_read_reset_ms(int slot) {
 
 typedef struct InfernoEnv {
     void* observations;
+    unsigned char* action_mask;
     float* actions;
     float* rewards;
     float* terminals;
@@ -206,6 +207,7 @@ typedef struct InfernoEnv {
 #define NUM_ATNS INF_NUM_ACTION_HEADS
 #define ACT_SIZES INF_ACTION_DIMS_INIT
 #define OBS_TENSOR_T FloatTensor
+#define MY_ACTION_MASK INF_ACTION_MASK_SIZE
 #define Env InfernoEnv
 #define INF_RENDER_STATUS_FRAMES 180
 
@@ -1134,10 +1136,22 @@ static void inferno_post_240_trace_capture(Env* env, int is_term) {
         inferno_post_240_trace_close(env, "terminal");
 }
 
+static inline void inferno_env_write_mask(Env* env, float* obs_mask) {
+    float mask[INF_ACTION_MASK_SIZE];
+    ENCOUNTER_INFERNO.write_mask(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), mask);
+    for (int i = 0; i < INF_ACTION_MASK_SIZE; i++)
+        env->action_mask[i] = mask[i] > 0.5f ? 1 : 0;
+    if (INF_ENV_INFERNO_CONTEXT(env)->config.mask_in_obs) {
+        memcpy(obs_mask, mask, sizeof(mask));
+    } else {
+        memset(obs_mask, 0, sizeof(mask));
+    }
+}
+
 static inline void inferno_env_write_obs_mask(Env* env) {
     float* obs = (float*)env->observations;
     ENCOUNTER_INFERNO.write_obs(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), obs);
-    ENCOUNTER_INFERNO.write_mask(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), obs + INF_NUM_OBS);
+    inferno_env_write_mask(env, obs + INF_NUM_OBS);
 }
 
 static inline void inferno_env_write_post_restore_state(Env* env) {
@@ -1270,9 +1284,8 @@ void c_step(Env* env) {
 
     INF_PROFILE_MARK(INF_PROF_C_ACTIONS);
     float action_mask_before[INF_ACTION_MASK_SIZE];
-    memcpy(action_mask_before,
-        (float*)env->observations + INF_NUM_OBS,
-        sizeof(action_mask_before));
+    for (int i = 0; i < INF_ACTION_MASK_SIZE; i++)
+        action_mask_before[i] = (float)env->action_mask[i];
     InfernoStallTraceDecision stall_decision;
     inferno_stall_trace_capture_decision(
         env, action_mask_before, &stall_decision);
@@ -1302,7 +1315,7 @@ void c_step(Env* env) {
     float* obs = (float*)env->observations;
     ENCOUNTER_INFERNO.write_obs(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), obs);
     INF_PROFILE_MARK(INF_PROF_C_WRITE_OBS);
-    ENCOUNTER_INFERNO.write_mask(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), obs + INF_NUM_OBS);
+    inferno_env_write_mask(env, obs + INF_NUM_OBS);
     INF_PROFILE_MARK(INF_PROF_C_WRITE_MASK);
 
     env->rewards[0] = ENCOUNTER_INFERNO.get_reward(INF_ENV_STATE(env), INF_ENV_CONTEXT(env));
@@ -1744,7 +1757,7 @@ void c_step(Env* env) {
             render_inferno_lab_clear_entry_snapshot(render_client);
         ENCOUNTER_INFERNO.reset(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), 0);
         ENCOUNTER_INFERNO.write_obs(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), obs);
-        ENCOUNTER_INFERNO.write_mask(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), obs + INF_NUM_OBS);
+        inferno_env_write_mask(env, obs + INF_NUM_OBS);
         inferno_env_mark_episode_start(env);
         env->pending_render_reset = 1;
         INF_PROFILE_MARK(INF_PROF_C_RESET);
@@ -2058,6 +2071,7 @@ void my_init(Env* env, Dict* kwargs) {
     static const char* const optional_int_keys[] = {
         "curriculum_supply_jitter_mode",
         "curriculum_no_brew_mode",
+        "mask_in_obs",
     };
     for (size_t k = 0; k < sizeof(optional_int_keys)/sizeof(*optional_int_keys); k++) {
         DictItem* item = dict_get_unsafe(kwargs, optional_int_keys[k]);

@@ -1989,6 +1989,7 @@ static void test_inferno_reset_preserves_reward_config(void) {
     inf_put_int(raw_state, "joseph_reward_mode", 1);
     inf_put_int(raw_state, "terminal_penalty_enabled", 1);
     inf_put_int(raw_state, "step_out_forecast_obs_enabled", 0);
+    inf_put_int(raw_state, "mask_in_obs", 0);
     inf_put_int(raw_state, "loadout_profile_mode", INF_LOADOUT_PROFILE_MODE_BUDGET_ONLY);
     inf_put_float(raw_state, "budget_loadout_fraction", 1.0f);
     inf_reset(raw_state, 123u);
@@ -2022,6 +2023,7 @@ static void test_inferno_reset_preserves_reward_config(void) {
         test_config()->step_out_forecast_obs_enabled, 0);
     ASSERT_INT_EQ("step-out forecast obs mode disabled",
         test_config()->step_out_forecast_obs_mode, INF_STEP_OUT_FORECAST_MODE_OFF);
+    ASSERT_INT_EQ("mask-in-obs disabled", test_config()->mask_in_obs, 0);
     ASSERT_INT_EQ("loadout profile mode preserved",
         test_config()->loadout_profile_mode, INF_LOADOUT_PROFILE_MODE_BUDGET_ONLY);
     ASSERT_FLOAT_NEAR("budget loadout fraction preserved",
@@ -3345,7 +3347,7 @@ static void test_triple_jad_pending_threats_fit_obs_layout(void) {
 
     float obs[INF_NUM_OBS];
     inf_write_obs((EncounterState*)&state, obs);
-    ASSERT_INT_EQ("inferno obs shape includes exact spark slots", INF_NUM_OBS, 1645);
+    ASSERT_INT_EQ("inferno obs shape includes exact spark slots", INF_NUM_OBS, 1720);
 }
 
 static void test_inferno_obs_shape_includes_step_out_forecast_features(void) {
@@ -3362,6 +3364,21 @@ static void test_inferno_obs_shape_includes_step_out_forecast_features(void) {
         "#define OBS_SIZE INF_TOTAL_OBS",
         "#define OBS_TENSOR_T FloatTensor",
         "#define ACT_SIZES INF_ACTION_DIMS_INIT");
+    ASSERT_SOURCE_BLOCK_CONTAINS("native binding exposes separate action mask",
+        "ocean/osrs_inferno/binding.c",
+        "#define OBS_TENSOR_T FloatTensor",
+        "#define Env InfernoEnv",
+        "#define MY_ACTION_MASK INF_ACTION_MASK_SIZE");
+    ASSERT_SOURCE_BLOCK_CONTAINS("binding can ablate embedded mask features",
+        "ocean/osrs_inferno/binding.c",
+        "static inline void inferno_env_write_mask",
+        "static inline void inferno_env_write_obs_mask",
+        "memset(obs_mask, 0, sizeof(mask))");
+    ASSERT_SOURCE_BLOCK_CONTAINS("binding forwards mask-in-obs config",
+        "ocean/osrs_inferno/binding.c",
+        "optional_int_keys[]",
+        "};",
+        "\"mask_in_obs\"");
     ASSERT_INT_EQ("player obs includes current loadout attack roll",
         INF_PLAYER_OBS_SIZE, 76);
     ASSERT_INT_EQ("pillar obs includes footprint size",
@@ -3369,11 +3386,11 @@ static void test_inferno_obs_shape_includes_step_out_forecast_features(void) {
     ASSERT_INT_EQ("npc obs includes target defence rolls",
         INF_TOTAL_NPC_OBS_SIZE, 970);
     ASSERT_INT_EQ("step-out forecast covers every movement action",
-        INF_STEP_OUT_FORECAST_OBS_SIZE, 200);
+        INF_STEP_OUT_FORECAST_OBS_SIZE, 275);
     ASSERT_INT_EQ("inferno obs shape includes exact spark landings",
         INF_PENDING_SPARK_OBS_SIZE, 224);
     ASSERT_INT_EQ("inferno obs shape includes accuracy stats",
-        INF_NUM_OBS, 1645);
+        INF_NUM_OBS, 1720);
     ASSERT_INFERNO_SOURCE_NOT_CONTAINS("armor_tank state is removed",
         "armor_tank");
     ASSERT_INFERNO_SOURCE_NOT_CONTAINS("extra npc obs scaffold is removed",
@@ -3851,6 +3868,35 @@ static void add_threat_obs_npc(
     state->npcs[slot].attack_timer = 1;
 }
 
+static void test_current_obs_slots_sort_same_type_by_threat(void) {
+    printf("--- current obs slots sort same type by threat ---\n");
+
+    InfernoState state;
+    init_threat_obs_state(&state, 10, 10);
+    add_threat_obs_npc(&state, 0, INF_NPC_RANGER, 10, 22);
+    add_threat_obs_npc(&state, 1, INF_NPC_RANGER, 10, 20);
+    add_threat_obs_npc(&state, 2, INF_NPC_RANGER, 10, 21);
+    state.npcs[0].attack_timer = 5;
+    state.npcs[1].attack_timer = 1;
+    state.npcs[2].attack_timer = 2;
+
+    inf_refresh_current_obs_slots(&state);
+
+    ASSERT_INT_EQ("ready ranger fills first ranger slot",
+        state.current_obs_slots[2], 1);
+    ASSERT_INT_EQ("next ranger fills second ranger slot",
+        state.current_obs_slots[3], 2);
+    ASSERT_INT_EQ("slow raw-first ranger falls outside capped band",
+        inf_find_target_obs_slot(&state, 0), -1);
+
+    float mask[INF_ACTION_MASK_SIZE];
+    inf_write_mask((EncounterState*)&state, mask);
+    ASSERT_FLOAT_NEAR("first sorted ranger target mask is valid",
+        mask[inferno_target_mask_slot_offset(2)], 1.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("second sorted ranger target mask is valid",
+        mask[inferno_target_mask_slot_offset(3)], 1.0f, 1e-6f);
+}
+
 static void test_npc_threat_obs_exposes_frozen_meleer_pressure(void) {
     printf("--- npc threat obs exposes frozen meleer pressure ---\n");
 
@@ -4287,18 +4333,51 @@ static void test_step_out_forecast_obs_exposes_compact_action_affordance(void) {
         obs[action_start], 1.0f, 1e-6f);
     ASSERT_FLOAT_NEAR("run west obs first attack tick",
         obs[action_start + 1], 1.0f / 4.0f, 1e-6f);
-    ASSERT_FLOAT_NEAR("run west obs first style mask",
-        obs[action_start + 2], (float)INF_STYLE_MASK_RANGED / 7.0f, 1e-6f);
-    ASSERT_FLOAT_NEAR("run west obs has max hit",
-        obs[action_start + 3], 70.0f / 150.0f, 1e-6f);
-    ASSERT_FLOAT_NEAR("run west obs same-tick conflict",
+    ASSERT_FLOAT_NEAR("run west obs first melee bit",
+        obs[action_start + 2], 0.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("run west obs first ranged bit",
+        obs[action_start + 3], 1.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("run west obs first magic bit",
         obs[action_start + 4], 0.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("run west obs has max hit",
+        obs[action_start + 5], 70.0f / 150.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("run west obs same-tick conflict",
+        obs[action_start + 6], 0.0f, 1e-6f);
     ASSERT_FLOAT_NEAR("run west obs ranger/mager conflict",
-        obs[action_start + 5], 0.0f, 1e-6f);
-    ASSERT_FLOAT_NEAR("run west obs off-tick opportunity",
-        obs[action_start + 6], 1.0f, 1e-6f);
-    ASSERT_FLOAT_NEAR("run west obs melee fallback exposure",
         obs[action_start + 7], 0.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("run west obs off-tick opportunity",
+        obs[action_start + 8], 1.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("run west obs melee fallback exposure",
+        obs[action_start + 9], 0.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("run west obs blob scan tick",
+        obs[action_start + 10], 0.0f, 1e-6f);
+}
+
+static void test_step_out_forecast_obs_exposes_blob_scan_tick(void) {
+    printf("--- step-out forecast obs exposes blob scan tick ---\n");
+
+    InfernoState state;
+    init_step_out_forecast_stack_state(&state, 29, 39);
+    clear_step_out_forecast_pillars(&state);
+    add_step_out_forecast_npc(&state, 0, INF_NPC_BLOB, 29, 30, 1);
+    inf_rebuild_entity_collision_flags(&state);
+
+    float obs[INF_NUM_OBS];
+    inf_write_obs((EncounterState*)&state, obs);
+
+    int action_start = inferno_step_out_forecast_obs_start();
+    ASSERT_FLOAT_NEAR("blob obs idle valid",
+        obs[action_start], 1.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("blob obs first event tick",
+        obs[action_start + 1], 1.0f / 4.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("blob obs first melee bit",
+        obs[action_start + 2], 0.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("blob obs first ranged bit",
+        obs[action_start + 3], 0.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("blob obs first magic bit",
+        obs[action_start + 4], 0.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("blob obs first scan tick",
+        obs[action_start + 10], 1.0f / 4.0f, 1e-6f);
 }
 
 static void test_step_out_forecast_obs_can_be_disabled(void) {
@@ -4342,12 +4421,16 @@ static void test_step_out_forecast_obs_uses_fast_mode(void) {
         obs[action_start], 1.0f, 1e-6f);
     ASSERT_FLOAT_NEAR("fast obs idle first attack tick",
         obs[action_start + 1], 1.0f / 4.0f, 1e-6f);
-    ASSERT_FLOAT_NEAR("fast obs idle first style mask",
-        obs[action_start + 2], (float)INF_STYLE_MASK_RANGED / 7.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("fast obs idle first melee bit",
+        obs[action_start + 2], 0.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("fast obs idle first ranged bit",
+        obs[action_start + 3], 1.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("fast obs idle first magic bit",
+        obs[action_start + 4], 0.0f, 1e-6f);
     ASSERT_FLOAT_NEAR("fast obs idle max hit",
-        obs[action_start + 3], 70.0f / 150.0f, 1e-6f);
+        obs[action_start + 5], 70.0f / 150.0f, 1e-6f);
     ASSERT_FLOAT_NEAR("fast obs idle off-tick opportunity",
-        obs[action_start + 6], 1.0f, 1e-6f);
+        obs[action_start + 8], 1.0f, 1e-6f);
 }
 
 static void test_fast_step_out_forecast_matches_movement_head_destinations(void) {
@@ -4620,10 +4703,14 @@ static void test_step_out_forecast_obs_uses_readonly_mode(void) {
         obs[action_start], 1.0f, 1e-6f);
     ASSERT_FLOAT_NEAR("readonly obs run west first attack tick",
         obs[action_start + 1], 1.0f / 4.0f, 1e-6f);
-    ASSERT_FLOAT_NEAR("readonly obs run west first style mask",
-        obs[action_start + 2], (float)INF_STYLE_MASK_RANGED / 7.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("readonly obs run west first melee bit",
+        obs[action_start + 2], 0.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("readonly obs run west first ranged bit",
+        obs[action_start + 3], 1.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("readonly obs run west first magic bit",
+        obs[action_start + 4], 0.0f, 1e-6f);
     ASSERT_FLOAT_NEAR("readonly obs run west off-tick opportunity",
-        obs[action_start + 6], 1.0f, 1e-6f);
+        obs[action_start + 8], 1.0f, 1e-6f);
 }
 
 static void test_readonly_step_out_forecast_stun_countdown(void) {
@@ -9195,8 +9282,6 @@ static void test_inferno_binding_forwards_step_out_forecast_obs_toggle(void) {
         "DictItem* step_out_forecast_obs_mode",
         "DictItem* zuk_healer_reward_mode",
         "\"step_out_forecast_obs_mode\"");
-    /* Mode is now FIXED at 3 (FAST_READONLY_MOVE), validated 3x-cheaper-faithful,
-       and deliberately dropped from the sweep so every trial runs the fast forecast. */
     ASSERT_SOURCE_BLOCK_CONTAINS(
         "step-out forecast obs mode default config (fixed at mode 3)",
         "config/ocean/osrs_inferno.ini",
@@ -9574,6 +9659,7 @@ int main(void) {
     test_inferno_obs_wave_phase_one_hot();
     test_inferno_obs_exposes_pillar_footprint_size();
     test_inferno_obs_exposes_meleer_dig_state();
+    test_current_obs_slots_sort_same_type_by_threat();
     test_npc_threat_obs_exposes_frozen_meleer_pressure();
     test_npc_threat_obs_respects_overlap_range_and_stun();
     test_npc_pressure_summary_respects_los_target_and_mixed_styles();
@@ -9587,6 +9673,7 @@ int main(void) {
     test_inferno_npc_travel_uses_sw_origin_around_all_pillars();
     test_step_out_forecast_north_pillar_ranger_mager_order();
     test_step_out_forecast_obs_exposes_compact_action_affordance();
+    test_step_out_forecast_obs_exposes_blob_scan_tick();
     test_step_out_forecast_obs_can_be_disabled();
     test_step_out_forecast_obs_uses_fast_mode();
     test_fast_step_out_forecast_matches_movement_head_destinations();
