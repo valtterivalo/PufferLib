@@ -308,7 +308,8 @@ static void inf_write_obs_ctx(
     obs[i++] = (float)ls->def_stab / 300.0f;
     obs[i++] = (float)ls->def_magic / 300.0f;
     obs[i++] = (float)ls->def_ranged / 300.0f;
-    obs[i++] = inf_obs_norm_combat_roll(inf_player_loadout_attack_roll(ls));
+    obs[i++] = ctx->config.combat_roll_obs_enabled ?
+        inf_obs_norm_combat_roll(inf_player_loadout_attack_roll(ls)) : 0.0f;
     obs[i++] = (float)s->player.special_energy / 100.0f;
 
     /* prayer-critical: distilled from NPC array and pending hits */
@@ -503,8 +504,13 @@ static void inf_write_obs_ctx(
             obs[i++] = (float)(npc->x - px) / (float)INF_ARENA_WIDTH;
             obs[i++] = (float)(npc->y - py) / (float)INF_ARENA_HEIGHT;
             obs[i++] = inf_obs_norm_npc_size(npc->size);
-            obs[i++] = inf_obs_norm_combat_roll(inf_npc_ranged_def_roll(stats));
-            obs[i++] = inf_obs_norm_combat_roll(inf_npc_magic_def_roll(stats));
+            if (ctx->config.combat_roll_obs_enabled) {
+                obs[i++] = inf_obs_norm_combat_roll(inf_npc_ranged_def_roll(stats));
+                obs[i++] = inf_obs_norm_combat_roll(inf_npc_magic_def_roll(stats));
+            } else {
+                obs[i++] = 0.0f;
+                obs[i++] = 0.0f;
+            }
             if (has_timer) obs[i++] = (float)npc->attack_timer / 10.0f;
 
             if (has_style) {

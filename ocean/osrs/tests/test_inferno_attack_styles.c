@@ -440,6 +440,7 @@ enum {
     INF_OBS_WAVE_NORM = 14,
     INF_OBS_WAVE_PHASE_START = 15,
     INF_OBS_ZUK_ATTACK_TIMER = 21,
+    INF_OBS_CURRENT_LOADOUT_ATTACK_ROLL = 41,
     INF_OBS_PRAYER_TIMER = 43,
     INF_OBS_PRAYER_MELEE = 44,
     INF_OBS_PRAYER_RANGED = 45,
@@ -1990,6 +1991,7 @@ static void test_inferno_reset_preserves_reward_config(void) {
     inf_put_int(raw_state, "terminal_penalty_enabled", 1);
     inf_put_int(raw_state, "step_out_forecast_obs_enabled", 0);
     inf_put_int(raw_state, "mask_in_obs", 0);
+    inf_put_int(raw_state, "combat_roll_obs_enabled", 0);
     inf_put_int(raw_state, "loadout_profile_mode", INF_LOADOUT_PROFILE_MODE_BUDGET_ONLY);
     inf_put_float(raw_state, "budget_loadout_fraction", 1.0f);
     inf_reset(raw_state, 123u);
@@ -2024,6 +2026,8 @@ static void test_inferno_reset_preserves_reward_config(void) {
     ASSERT_INT_EQ("step-out forecast obs mode disabled",
         test_config()->step_out_forecast_obs_mode, INF_STEP_OUT_FORECAST_MODE_OFF);
     ASSERT_INT_EQ("mask-in-obs disabled", test_config()->mask_in_obs, 0);
+    ASSERT_INT_EQ("combat roll obs disabled",
+        test_config()->combat_roll_obs_enabled, 0);
     ASSERT_INT_EQ("loadout profile mode preserved",
         test_config()->loadout_profile_mode, INF_LOADOUT_PROFILE_MODE_BUDGET_ONLY);
     ASSERT_FLOAT_NEAR("budget loadout fraction preserved",
@@ -3749,6 +3753,14 @@ static int inferno_obs_slot_size_index(int slot_idx) {
     return inferno_obs_slot_start(slot_idx) + 3;
 }
 
+static int inferno_obs_slot_ranged_def_roll_index(int slot_idx) {
+    return inferno_obs_slot_start(slot_idx) + 4;
+}
+
+static int inferno_obs_slot_magic_def_roll_index(int slot_idx) {
+    return inferno_obs_slot_start(slot_idx) + 5;
+}
+
 static int inferno_obs_slot_npc_los_index(int slot_idx) {
     int type = inferno_obs_slot_type(slot_idx);
     int has_timer = (type != INF_NPC_NIBBLER && type != INF_NPC_HEALER_JAD &&
@@ -3895,6 +3907,64 @@ static void test_current_obs_slots_sort_same_type_by_threat(void) {
         mask[inferno_target_mask_slot_offset(2)], 1.0f, 1e-6f);
     ASSERT_FLOAT_NEAR("second sorted ranger target mask is valid",
         mask[inferno_target_mask_slot_offset(3)], 1.0f, 1e-6f);
+}
+
+static void test_combat_roll_obs_can_be_disabled(void) {
+    printf("--- combat roll obs can be disabled ---\n");
+
+    InfernoState state;
+    init_threat_obs_state(&state, 10, 10);
+    add_threat_obs_npc(&state, 0, INF_NPC_RANGER, 10, 20);
+
+    float obs[INF_NUM_OBS];
+    inf_write_obs((EncounterState*)&state, obs);
+    int ranger_slot = 2;
+    ASSERT_FLOAT_GT("current loadout attack roll visible",
+        obs[INF_OBS_CURRENT_LOADOUT_ATTACK_ROLL], 0.0f);
+    ASSERT_FLOAT_GT("ranger ranged defence roll visible",
+        obs[inferno_obs_slot_ranged_def_roll_index(ranger_slot)], 0.0f);
+    ASSERT_FLOAT_GT("ranger magic defence roll visible",
+        obs[inferno_obs_slot_magic_def_roll_index(ranger_slot)], 0.0f);
+
+    float hp_before = obs[inferno_obs_slot_start(ranger_slot)];
+    float size_before = obs[inferno_obs_slot_size_index(ranger_slot)];
+    test_config()->combat_roll_obs_enabled = 0;
+    inf_write_obs((EncounterState*)&state, obs);
+
+    ASSERT_FLOAT_NEAR("current loadout attack roll zeroed",
+        obs[INF_OBS_CURRENT_LOADOUT_ATTACK_ROLL], 0.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("ranger ranged defence roll zeroed",
+        obs[inferno_obs_slot_ranged_def_roll_index(ranger_slot)], 0.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("ranger magic defence roll zeroed",
+        obs[inferno_obs_slot_magic_def_roll_index(ranger_slot)], 0.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("combat roll toggle preserves slot hp",
+        obs[inferno_obs_slot_start(ranger_slot)], hp_before, 1e-6f);
+    ASSERT_FLOAT_NEAR("combat roll toggle preserves slot size",
+        obs[inferno_obs_slot_size_index(ranger_slot)], size_before, 1e-6f);
+}
+
+static void test_mask_in_obs_does_not_gate_action_mask(void) {
+    printf("--- mask-in-obs does not gate action mask ---\n");
+
+    InfernoState state;
+    init_threat_obs_state(&state, 10, 10);
+    add_threat_obs_npc(&state, 0, INF_NPC_RANGER, 10, 20);
+    test_config()->mask_in_obs = 0;
+    inf_refresh_current_obs_slots(&state);
+
+    float mask[INF_ACTION_MASK_SIZE];
+    inf_write_mask((EncounterState*)&state, mask);
+
+    ASSERT_FLOAT_NEAR("none target action remains valid",
+        mask[inferno_target_mask_none_offset()], 1.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("target action mask remains valid",
+        mask[inferno_target_mask_slot_offset(2)], 1.0f, 1e-6f);
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "embedded obs mask zeroes independently",
+        "ocean/osrs_inferno/binding.c",
+        "static inline void inferno_env_write_mask",
+        "static inline void inferno_env_write_obs_mask",
+        "memset(obs_mask, 0, sizeof(mask))");
 }
 
 static void test_npc_threat_obs_exposes_frozen_meleer_pressure(void) {
@@ -4398,6 +4468,31 @@ static void test_step_out_forecast_obs_can_be_disabled(void) {
         ASSERT_FLOAT_NEAR("disabled forecast obs stays zero",
             obs[forecast_start + j], 0.0f, 1e-6f);
     }
+    ASSERT_INT_EQ("disabled forecast keeps observation shape",
+        inferno_pending_hit_obs_start(), forecast_start + INF_STEP_OUT_FORECAST_OBS_SIZE);
+}
+
+static void test_obs_profile_two_maps_to_readonly_mode(void) {
+    printf("--- obs profile two maps to readonly mode ---\n");
+
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "obs profile accepts readonly mode",
+        "ocean/osrs_inferno/binding.c",
+        "static void inferno_apply_obs_profile",
+        "static void inferno_zero_phase_reward_coeffs",
+        "case 2:");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "obs profile maps readonly mode",
+        "ocean/osrs_inferno/binding.c",
+        "case 2:",
+        "default:",
+        "step_out_forecast_obs_mode\", 3");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "default obs profile is readonly",
+        "config/ocean/osrs_inferno.ini",
+        "[env]",
+        "[vec]",
+        "obs_profile = 2");
 }
 
 static void test_step_out_forecast_obs_uses_fast_mode(void) {
@@ -9282,12 +9377,12 @@ static void test_inferno_binding_forwards_step_out_forecast_obs_toggle(void) {
         "DictItem* step_out_forecast_obs_mode",
         "DictItem* zuk_healer_reward_mode",
         "\"step_out_forecast_obs_mode\"");
-    ASSERT_SOURCE_BLOCK_CONTAINS(
-        "step-out forecast obs mode default config (fixed at mode 3)",
+    ASSERT_SOURCE_BLOCK_NOT_CONTAINS(
+        "anchor config avoids redundant forecast mode override",
         "config/ocean/osrs_inferno.ini",
         "[env]",
         "[vec]",
-        "step_out_forecast_obs_mode = 3");
+        "step_out_forecast_obs_mode");
     ASSERT_SOURCE_BLOCK_CONTAINS(
         "step-out forecast readonly mode enum",
         "ocean/osrs/encounters/inferno/encounter_inferno_model.inc",
@@ -9300,6 +9395,18 @@ static void test_inferno_binding_forwards_step_out_forecast_obs_toggle(void) {
         "static uint64_t inf_config_fingerprint",
         "return h;",
         "INF_HASH_CONFIG_FIELD(config, &h, step_out_forecast_obs_mode)");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "combat roll obs optional int config",
+        "ocean/osrs_inferno/binding.c",
+        "optional_int_keys[]",
+        "};",
+        "\"combat_roll_obs_enabled\"");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "combat roll obs hash is source of truth",
+        "ocean/osrs/encounters/inferno/encounter_inferno_render_snapshot.inc",
+        "static uint64_t inf_config_fingerprint",
+        "return h;",
+        "INF_HASH_CONFIG_FIELD(config, &h, combat_roll_obs_enabled)");
 }
 
 static void test_inferno_binding_forwards_loadout_profile_config(void) {
@@ -9393,7 +9500,19 @@ static void test_inferno_log_metrics_fit_cuda_dict(void) {
     printf("--- inferno log metrics fit CUDA dict ---\n");
 
     int metric_count = inferno_my_log_metric_key_count();
-    ASSERT_INT_LE("my_log metric key count plus env/n", metric_count + 1, 80);
+    ASSERT_INT_LE("my_log metric key count plus env/n", metric_count + 1, 128);
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "CUDA vec log has room for profile metrics",
+        "src/bindings.cu",
+        "py::dict vec_log",
+        "static_vec_log",
+        "create_dict(128)");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "CPU vec log has room for profile metrics",
+        "src/bindings_cpu.cpp",
+        "static py::dict vec_log",
+        "static_vec_log",
+        "create_dict(128)");
 }
 
 static void test_inferno_binding_emits_post_240_traces(void) {
@@ -9660,6 +9779,8 @@ int main(void) {
     test_inferno_obs_exposes_pillar_footprint_size();
     test_inferno_obs_exposes_meleer_dig_state();
     test_current_obs_slots_sort_same_type_by_threat();
+    test_combat_roll_obs_can_be_disabled();
+    test_mask_in_obs_does_not_gate_action_mask();
     test_npc_threat_obs_exposes_frozen_meleer_pressure();
     test_npc_threat_obs_respects_overlap_range_and_stun();
     test_npc_pressure_summary_respects_los_target_and_mixed_styles();
@@ -9675,6 +9796,7 @@ int main(void) {
     test_step_out_forecast_obs_exposes_compact_action_affordance();
     test_step_out_forecast_obs_exposes_blob_scan_tick();
     test_step_out_forecast_obs_can_be_disabled();
+    test_obs_profile_two_maps_to_readonly_mode();
     test_step_out_forecast_obs_uses_fast_mode();
     test_fast_step_out_forecast_matches_movement_head_destinations();
     test_fast_step_out_forecast_immediate_static_threats();

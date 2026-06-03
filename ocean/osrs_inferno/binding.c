@@ -68,6 +68,25 @@ static const char* g_inferno_profile_names[INF_PROF_COUNT] = {
     "obs_sparks",
 };
 
+static const char* g_inferno_profile_log_names[INF_PROF_COUNT] = {
+    "profile_c_step_total_ms",
+    "profile_c_actions_ms",
+    "profile_c_pre_step_traces_ms",
+    "profile_c_encounter_step_ms",
+    "profile_c_write_obs_ms",
+    "profile_c_write_mask_ms",
+    "profile_c_reward_terminal_ms",
+    "profile_c_post_step_traces_ms",
+    "profile_c_terminal_log_ms",
+    "profile_c_reset_ms",
+    "profile_obs_prefix_ms",
+    "profile_obs_refresh_slots_ms",
+    "profile_obs_npc_slots_ms",
+    "profile_obs_forecast_ms",
+    "profile_obs_pending_hits_ms",
+    "profile_obs_sparks_ms",
+};
+
 static int inferno_profile_enabled(void) {
     if (g_inferno_profile_enabled < 0) {
         const char* text = getenv("PUFFER_INFERNO_PROFILE");
@@ -1937,8 +1956,11 @@ static void inferno_apply_obs_profile(Env* env, int obs_profile) {
         case 1:
             inferno_env_put_int(env, "step_out_forecast_obs_mode", 1);
             break;
+        case 2:
+            inferno_env_put_int(env, "step_out_forecast_obs_mode", 3);
+            break;
         default:
-            fprintf(stderr, "obs_profile must be 0 or 1, got %d\n", obs_profile);
+            fprintf(stderr, "obs_profile must be 0, 1, or 2, got %d\n", obs_profile);
             abort();
     }
 }
@@ -2072,6 +2094,7 @@ void my_init(Env* env, Dict* kwargs) {
         "curriculum_supply_jitter_mode",
         "curriculum_no_brew_mode",
         "mask_in_obs",
+        "combat_roll_obs_enabled",
     };
     for (size_t k = 0; k < sizeof(optional_int_keys)/sizeof(*optional_int_keys); k++) {
         DictItem* item = dict_get_unsafe(kwargs, optional_int_keys[k]);
@@ -2509,6 +2532,11 @@ void my_log(Log* log, Dict* out) {
     }
     dict_set(out, "score", score);
     dict_set(out, "dense_score", log->dense_score);
+    if (inferno_profile_enabled()) {
+        for (int i = 0; i < INF_PROF_COUNT; i++)
+            dict_set(out, g_inferno_profile_log_names[i],
+                inferno_env_profile_read_reset_ms(i));
+    }
 
     if (log->n_normal > 0.0f) {
         float min_zuk_hp_normal = log->min_zuk_hp_normal / log->n_normal;

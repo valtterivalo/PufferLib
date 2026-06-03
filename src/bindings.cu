@@ -112,10 +112,7 @@ pybind11::dict puf_eval_log(pybind11::object pufferl_obj) {
     pufferl.last_log_step = pufferl.global_step;
  
     pybind11::dict env_dict;
-    // Capacity sized for the widest env log: inferno emits 65 metric keys plus
-    // "n", and chess needs 16 per-bank hist_score_bank/hist_n_bank entries on
-    // top of its base env-log fields.
-    Dict* env_out = create_dict(80);
+    Dict* env_out = create_dict(128);
     static_vec_eval_log(pufferl.vec, env_out);
     for (int i = 0; i < env_out->size; i++) {
         env_dict[env_out->items[i].key] = env_out->items[i].value;
@@ -382,8 +379,7 @@ void cpu_vec_step_py(VecEnv& ve, long long actions_ptr) {
 }
 
 py::dict vec_log(VecEnv& ve) {
-    // Capacity sized for the widest env log (inferno: 65 metric keys plus "n").
-    Dict* out = create_dict(80);
+    Dict* out = create_dict(128);
     static_vec_log(ve.vec, out);
     py::dict result;
     for (int i = 0; i < out->size; i++) {

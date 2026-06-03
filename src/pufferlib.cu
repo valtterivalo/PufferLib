@@ -383,10 +383,7 @@ typedef struct {
 #undef PUFFER_CURRICULUM_IMPL
 
 Dict* log_environments_impl(PuffeRL& pufferl) {
-    // Capacity sized for the widest env log: inferno emits 65 metric keys
-    // plus the trailing "n" key, and chess needs 16 per-bank
-    // hist_score_bank_<b> / hist_n_bank_<b> entries on top of its base fields.
-    Dict* out = create_dict(80);
+    Dict* out = create_dict(128);
     static_vec_log(pufferl.vec, out);
     return out;
 }

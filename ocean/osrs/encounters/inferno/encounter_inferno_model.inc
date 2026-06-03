@@ -740,6 +740,7 @@ typedef struct {
     int step_out_forecast_obs_enabled;
     int step_out_forecast_obs_mode;
     int mask_in_obs;
+    int combat_roll_obs_enabled;
     float phase_900_bonus;
     float phase_600_bonus;
     float phase_300_bonus;

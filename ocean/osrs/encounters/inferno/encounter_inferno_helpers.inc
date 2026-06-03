@@ -912,6 +912,7 @@ static InfConfig inf_default_config(void) {
         .step_out_forecast_obs_enabled = 1,
         .step_out_forecast_obs_mode = INF_STEP_OUT_FORECAST_MODE_EXACT_ROLLOUT,
         .mask_in_obs = 1,
+        .combat_roll_obs_enabled = 1,
         .phase_900_bonus = 0.0f,
         .phase_600_bonus = 0.0f,
         .phase_300_bonus = 0.0f,
