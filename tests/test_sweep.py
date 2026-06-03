@@ -22,6 +22,7 @@ def test_sweep_only_matches_nested_parameter_paths():
         'metric': 'score',
         'metric_distribution': 'linear',
         'goal': 'maximize',
+        'resume_from_log_dir': '/tmp/puffer-sweep-logs',
         'sweep_only': 'train.total_timesteps, policy.hidden_size',
         'train': {
             'total_timesteps': {
