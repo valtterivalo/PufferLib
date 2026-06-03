@@ -440,33 +440,33 @@ enum {
     INF_OBS_WAVE_NORM = 14,
     INF_OBS_WAVE_PHASE_START = 15,
     INF_OBS_ZUK_ATTACK_TIMER = 21,
-    INF_OBS_PRAYER_TIMER = 42,
-    INF_OBS_PRAYER_MELEE = 43,
-    INF_OBS_PRAYER_RANGED = 44,
-    INF_OBS_PRAYER_MAGIC = 45,
-    INF_OBS_PRAYER_CONFLICT = 46,
-    INF_OBS_PRESSURE_START = 47,
-    INF_OBS_PRESSURE_IF_READY_TOTAL = 47,
-    INF_OBS_PRESSURE_IF_READY_MELEE = 48,
-    INF_OBS_PRESSURE_IF_READY_RANGED = 49,
-    INF_OBS_PRESSURE_IF_READY_MAGIC = 50,
-    INF_OBS_PRESSURE_IF_READY_MAX_HIT = 51,
-    INF_OBS_PRESSURE_IF_READY_SUM_MAX_HIT = 52,
-    INF_OBS_PRESSURE_THIS_TICK_TOTAL = 53,
-    INF_OBS_PRESSURE_THIS_TICK_MELEE = 54,
-    INF_OBS_PRESSURE_THIS_TICK_RANGED = 55,
-    INF_OBS_PRESSURE_THIS_TICK_MAGIC = 56,
-    INF_OBS_PRESSURE_THIS_TICK_MAX_HIT = 57,
-    INF_OBS_PRESSURE_THIS_TICK_SUM_MAX_HIT = 58,
-    INF_OBS_PRESSURE_TIMER_LTE_1 = 59,
-    INF_OBS_PRESSURE_TIMER_LTE_2 = 60,
-    INF_OBS_PRESSURE_TIMER_LTE_4 = 61,
-    INF_OBS_PRESSURE_IF_READY_STYLE_COUNT = 62,
-    INF_OBS_PRESSURE_THIS_TICK_STYLE_COUNT = 63,
-    INF_OBS_PRESSURE_NEAREST_TIMER = 64,
-    INF_OBS_ZUK_PHASE_START = 65,
-    INF_OBS_ZUK_SHIELD_DIR = 66,
-    INF_OBS_ZUK_SHIELD_FREEZE = 67,
+    INF_OBS_PRAYER_TIMER = 43,
+    INF_OBS_PRAYER_MELEE = 44,
+    INF_OBS_PRAYER_RANGED = 45,
+    INF_OBS_PRAYER_MAGIC = 46,
+    INF_OBS_PRAYER_CONFLICT = 47,
+    INF_OBS_PRESSURE_START = 48,
+    INF_OBS_PRESSURE_IF_READY_TOTAL = 48,
+    INF_OBS_PRESSURE_IF_READY_MELEE = 49,
+    INF_OBS_PRESSURE_IF_READY_RANGED = 50,
+    INF_OBS_PRESSURE_IF_READY_MAGIC = 51,
+    INF_OBS_PRESSURE_IF_READY_MAX_HIT = 52,
+    INF_OBS_PRESSURE_IF_READY_SUM_MAX_HIT = 53,
+    INF_OBS_PRESSURE_THIS_TICK_TOTAL = 54,
+    INF_OBS_PRESSURE_THIS_TICK_MELEE = 55,
+    INF_OBS_PRESSURE_THIS_TICK_RANGED = 56,
+    INF_OBS_PRESSURE_THIS_TICK_MAGIC = 57,
+    INF_OBS_PRESSURE_THIS_TICK_MAX_HIT = 58,
+    INF_OBS_PRESSURE_THIS_TICK_SUM_MAX_HIT = 59,
+    INF_OBS_PRESSURE_TIMER_LTE_1 = 60,
+    INF_OBS_PRESSURE_TIMER_LTE_2 = 61,
+    INF_OBS_PRESSURE_TIMER_LTE_4 = 62,
+    INF_OBS_PRESSURE_IF_READY_STYLE_COUNT = 63,
+    INF_OBS_PRESSURE_THIS_TICK_STYLE_COUNT = 64,
+    INF_OBS_PRESSURE_NEAREST_TIMER = 65,
+    INF_OBS_ZUK_PHASE_START = 66,
+    INF_OBS_ZUK_SHIELD_DIR = 67,
+    INF_OBS_ZUK_SHIELD_FREEZE = 68,
 };
 
 static void init_jad_timing_test_state(InfernoState* state, int player_x, int player_y, int jad_x, int jad_y) {
@@ -3345,7 +3345,7 @@ static void test_triple_jad_pending_threats_fit_obs_layout(void) {
 
     float obs[INF_NUM_OBS];
     inf_write_obs((EncounterState*)&state, obs);
-    ASSERT_INT_EQ("inferno obs shape includes exact spark slots", INF_NUM_OBS, 1570);
+    ASSERT_INT_EQ("inferno obs shape includes exact spark slots", INF_NUM_OBS, 1645);
 }
 
 static void test_inferno_obs_shape_includes_step_out_forecast_features(void) {
@@ -3362,18 +3362,18 @@ static void test_inferno_obs_shape_includes_step_out_forecast_features(void) {
         "#define OBS_SIZE INF_TOTAL_OBS",
         "#define OBS_TENSOR_T FloatTensor",
         "#define ACT_SIZES INF_ACTION_DIMS_INIT");
-    ASSERT_INT_EQ("player obs includes NPC pressure summary",
-        INF_PLAYER_OBS_SIZE, 75);
+    ASSERT_INT_EQ("player obs includes current loadout attack roll",
+        INF_PLAYER_OBS_SIZE, 76);
     ASSERT_INT_EQ("pillar obs includes footprint size",
         INF_PILLAR_OBS_SIZE, 15);
-    ASSERT_INT_EQ("npc obs includes loadout reachability signals",
-        INF_TOTAL_NPC_OBS_SIZE, 896);
+    ASSERT_INT_EQ("npc obs includes target defence rolls",
+        INF_TOTAL_NPC_OBS_SIZE, 970);
     ASSERT_INT_EQ("step-out forecast covers every movement action",
         INF_STEP_OUT_FORECAST_OBS_SIZE, 200);
     ASSERT_INT_EQ("inferno obs shape includes exact spark landings",
         INF_PENDING_SPARK_OBS_SIZE, 224);
-    ASSERT_INT_EQ("inferno obs shape includes reachability pass",
-        INF_NUM_OBS, 1570);
+    ASSERT_INT_EQ("inferno obs shape includes accuracy stats",
+        INF_NUM_OBS, 1645);
     ASSERT_INFERNO_SOURCE_NOT_CONTAINS("armor_tank state is removed",
         "armor_tank");
     ASSERT_INFERNO_SOURCE_NOT_CONTAINS("extra npc obs scaffold is removed",
@@ -3678,7 +3678,7 @@ static int inferno_obs_slot_feature_count(int slot_idx) {
     int has_targeted = 1;
     int has_meleer_dig = (type == INF_NPC_MELEER);
 
-    return 11 + has_timer + 3 * has_style + has_los + 3 * has_scan +
+    return 13 + has_timer + 3 * has_style + has_los + 3 * has_scan +
         4 * has_target_category + has_targeted + 1 + 6 + 3 * has_meleer_dig;
 }
 
@@ -3724,7 +3724,7 @@ static int inferno_obs_slot_barrage_count_index(int slot_idx) {
     int has_timer = (type != INF_NPC_NIBBLER && type != INF_NPC_HEALER_JAD &&
         type != INF_NPC_ZUK_SHIELD);
 
-    return inferno_obs_slot_start(slot_idx) + 4 + has_timer +
+    return inferno_obs_slot_start(slot_idx) + 6 + has_timer +
         3 * has_style + has_los + 3 * has_scan;
 }
 
@@ -3737,7 +3737,7 @@ static int inferno_obs_slot_npc_los_index(int slot_idx) {
     int has_timer = (type != INF_NPC_NIBBLER && type != INF_NPC_HEALER_JAD &&
         type != INF_NPC_ZUK_SHIELD);
     int has_style = (type == INF_NPC_BLOB || type == INF_NPC_JAD);
-    return inferno_obs_slot_start(slot_idx) + 4 + has_timer + 3 * has_style;
+    return inferno_obs_slot_start(slot_idx) + 6 + has_timer + 3 * has_style;
 }
 
 static int inferno_obs_slot_edge_distance_index(int slot_idx) {
@@ -8991,13 +8991,13 @@ static void test_inferno_binding_forwards_supply_milestone_rewards(void) {
         "config/ocean/osrs_inferno.ini",
         "[env]",
         "[vec]",
-        "supply_milestone_brew_reward_coeff = 0.0");
+        "supply_milestone_brew_reward_coeff = 0");
     ASSERT_SOURCE_BLOCK_CONTAINS(
         "supply milestone restore default off",
         "config/ocean/osrs_inferno.ini",
         "[env]",
         "[vec]",
-        "supply_milestone_restore_reward_coeff = 0.0");
+        "supply_milestone_restore_reward_coeff = 0");
 }
 
 static void test_inferno_binding_forwards_offensive_prayer_reward(void) {
@@ -9014,15 +9014,15 @@ static void test_inferno_binding_forwards_offensive_prayer_reward(void) {
         "config/ocean/osrs_inferno.ini",
         "[env]",
         "[vec]",
-        "offensive_prayer_reward_coeff = 0.0");
+        "offensive_prayer_reward_coeff = 0");
     ASSERT_SOURCE_BLOCK_CONTAINS(
-        "offensive prayer sweep config",
+        "offensive prayer sweep range remains defined",
         "config/ocean/osrs_inferno.ini",
         "[sweep.env.offensive_prayer_reward_coeff]",
         "[sweep.env.shield_penalty_coeff]",
         "max = 1.0");
-    ASSERT_SOURCE_BLOCK_CONTAINS(
-        "offensive prayer sweep only",
+    ASSERT_SOURCE_BLOCK_NOT_CONTAINS(
+        "offensive prayer not active in anchor sweep",
         "config/ocean/osrs_inferno.ini",
         "sweep_only =",
         "[sweep.train.total_timesteps]",
@@ -9073,7 +9073,7 @@ static void test_inferno_binding_forwards_curriculum_supply_config(void) {
         "config/ocean/osrs_inferno.ini",
         "[env]",
         "[vec]",
-        "curriculum_no_brew_frac = 0.0");
+        "curriculum_no_brew_frac = 0");
 }
 
 static void test_inferno_binding_forwards_post_healer_set_rewards(void) {
@@ -9096,7 +9096,7 @@ static void test_inferno_binding_forwards_post_healer_set_rewards(void) {
         "config/ocean/osrs_inferno.ini",
         "[env]",
         "[vec]",
-        "post_healer_set_alive_penalty_cap = 0.0");
+        "post_healer_set_alive_penalty_cap = 0");
     ASSERT_SOURCE_BLOCK_NOT_CONTAINS(
         "post-healer set alive penalty not swept",
         "config/ocean/osrs_inferno.ini",
@@ -9243,7 +9243,7 @@ static void test_inferno_binding_forwards_loadout_profile_config(void) {
         "config/ocean/osrs_inferno.ini",
         "[env]",
         "[vec]",
-        "budget_loadout_fraction = 0.0");
+        "budget_loadout_fraction = 0");
 }
 
 static void test_inferno_binding_logs_post_healer_set_reward_components(void) {
