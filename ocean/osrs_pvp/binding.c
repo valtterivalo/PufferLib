@@ -43,6 +43,7 @@ typedef struct {
     float* actions;
     float* rewards;
     float* terminals;
+    unsigned char* action_mask;
     int num_agents;
     int rng;
     Log log;
@@ -74,10 +75,8 @@ typedef struct {
     float* action_ptr[2];
     float* reward_ptr[2];
     float* terminal_ptr[2];
+    unsigned char* action_mask_ptr[2];
 
-    /* When 1, p1 actions come from the rollout (action_ptr[1]); when 0, the
-       legacy C-heuristic opponent path is used (use_c_opponent driven).
-       selfplay setups should flip this on via env kwargs. */
     int use_rollout_opponent;
 
     /* Per-env scripted opponent override. >= 0 = OpponentType to use for slot
@@ -96,8 +95,7 @@ typedef struct {
 #define MY_USES_TAGS
 #define MY_USES_PERM
 #define MY_USES_SCRIPTED_OPPS
-/* PvP uses obs-embedded action mask (rollout splitter handles via has_mask),
-   not the separate MY_ACTION_MASK buffer path. */
+#define MY_ACTION_MASK ACTION_MASK_SIZE
 
 static void pvp_env_rewire_internal_buffers(Env* env) {
     env->pvp.observations = env->pvp._obs_buf;
@@ -129,6 +127,16 @@ static void pvp_env_rewire_after_load(Env* env, void* collision_map, void* clien
     pvp_env_rewire_rollout_buffers(env);
 }
 
+static void pvp_env_copy_action_masks_to_rollout(Env* env) {
+    if (env->action_mask_ptr[0]) {
+        memcpy(env->action_mask_ptr[0], env->pvp._masks_buf, ACTION_MASK_SIZE);
+    }
+    if (env->action_mask_ptr[1]) {
+        memcpy(env->action_mask_ptr[1], env->pvp._masks_buf + ACTION_MASK_SIZE,
+            ACTION_MASK_SIZE);
+    }
+}
+
 static void pvp_state_store(Env* env, PvpStateSnapshot* out) {
     out->pvp = env->pvp;
     memcpy(out->ocean_acts_staging, env->ocean_acts_staging, sizeof(out->ocean_acts_staging));
@@ -154,6 +162,7 @@ static void puffer_state_refresh(Env* env) {
     pvp_state_load(env, &env->state);
     ocean_write_obs(&env->pvp);
     if (env->pvp.ocean_io.agent_obs_p1) ocean_write_obs_p1(&env->pvp);
+    pvp_env_copy_action_masks_to_rollout(env);
     env->pvp.ocean_io.agent_rewards[0] = 0.0f;
     env->pvp.ocean_io.agent_terminals[0] = 0;
     env->terminals[0] = 0.0f;
@@ -272,6 +281,7 @@ void c_step(Env* env) {
     if (env->ocean_term_staging && env->pvp.auto_reset) {
         ocean_write_obs(&env->pvp);
     }
+    pvp_env_copy_action_masks_to_rollout(env);
     pvp_state_store(env, &env->state);
 }
 
@@ -282,6 +292,7 @@ void c_reset(Env* env) {
     pvp_reset(&env->pvp);
     ocean_write_obs(&env->pvp);
     if (env->pvp.ocean_io.agent_obs_p1) ocean_write_obs_p1(&env->pvp);
+    pvp_env_copy_action_masks_to_rollout(env);
     env->pvp.ocean_io.agent_rewards[0] = 0.0f;
     env->pvp.ocean_io.agent_terminals[0] = 0;
     env->terminals[0] = 0.0f;
@@ -351,12 +362,6 @@ void c_render(Env* env) { (void)env; }
 
 #include "vecenv.h"
 
-/* Self-play opt-in: route both rollout slots' obs/action/reward/terminal
-   pointers through vec->agent_perm (identity when NULL). vecenv calls this
-   from create_static_vec (init) and from static_vec_set_perm (when selfplay
-   reroutes envs to frozen-bank slots). Both ocean_io.agent_obs and
-   agent_obs_p1 also get rewired so pvp_step's ocean_write_obs / _p1 land in
-   the rollout buffer rather than internal scratch. */
 void my_setup_perm(StaticVec* vec, Env* env, int slot_base) {
     int n = env->num_agents;
     if (n > 2) n = 2;
@@ -367,14 +372,20 @@ void my_setup_perm(StaticVec* vec, Env* env, int slot_base) {
         env->action_ptr[s]   = vec->actions   + (size_t)phys * NUM_ATNS;
         env->reward_ptr[s]   = vec->rewards   + phys;
         env->terminal_ptr[s] = vec->terminals + phys;
+        env->action_mask_ptr[s] = vec->action_mask + (size_t)phys * MY_ACTION_MASK;
     }
-    /* Keep header fields pointing at slot 0 so vecenv reset/log scanning still
-       finds the expected per-env reward/terminal cell. */
+    for (int s = n; s < 2; s++) {
+        env->obs_ptr[s] = NULL;
+        env->action_ptr[s] = NULL;
+        env->reward_ptr[s] = NULL;
+        env->terminal_ptr[s] = NULL;
+        env->action_mask_ptr[s] = NULL;
+    }
     env->observations = env->obs_ptr[0];
     env->actions      = env->action_ptr[0];
     env->rewards      = env->reward_ptr[0];
     env->terminals    = env->terminal_ptr[0];
-    /* Wire pvp_step's observation writes to land in the rollout buffer. */
+    env->action_mask  = env->action_mask_ptr[0];
     env->pvp.ocean_io.agent_obs    = (float*)env->obs_ptr[0];
     if (n >= 2) {
         env->pvp.ocean_io.agent_obs_p1 = (float*)env->obs_ptr[1];
@@ -382,10 +393,6 @@ void my_setup_perm(StaticVec* vec, Env* env, int slot_base) {
 }
 
 void my_init(Env* env, Dict* kwargs) {
-    /* num_agents is determined at init by the use_rollout_opponent kwarg.
-       When 1, both players are rollout-driven (self-play). When 0 (default),
-       only slot 0 is exposed and the C-heuristic opponent drives slot 1
-       internally, preserving OPP_IMPROVED backward compat. */
     DictItem* use_roll_opp_kw = dict_get_unsafe(kwargs, "use_rollout_opponent");
     int rollout_opponent = use_roll_opp_kw ? (int)use_roll_opp_kw->value : 0;
     env->num_agents = rollout_opponent ? 2 : 1;
