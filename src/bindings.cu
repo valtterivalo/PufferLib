@@ -270,6 +270,62 @@ int py_num_envs(py::object pufferl_obj) {
     return pufferl_num_envs(&pufferl);
 }
 
+void py_set_env_scripted_opps(py::object pufferl_obj, py::array_t<int> scripted_opps) {
+    PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
+    auto buf = scripted_opps.request();
+    if (buf.ndim != 1) throw std::runtime_error("scripted_opps must be 1-D");
+    int num_envs = pufferl_num_envs(&pufferl);
+    if ((int)buf.shape[0] != num_envs) {
+        throw std::runtime_error("scripted_opps length must equal num_envs");
+    }
+    pufferl_set_env_scripted_opps(&pufferl, (const int*)buf.ptr);
+}
+
+extern "C" void binding_set_pfsp_weights(
+    StaticVec* vec, int* pool, int* cum_weights, int pool_size) __attribute__((weak));
+extern "C" void binding_get_pfsp_stats(
+    StaticVec* vec, float* out_wins, float* out_episodes, int* out_pool_size) __attribute__((weak));
+
+void py_set_pfsp_weights(
+        py::object pufferl_obj, py::array_t<int> pool, py::array_t<int> cum_weights) {
+    if (!binding_set_pfsp_weights) {
+        throw std::runtime_error("set_pfsp_weights: env has no binding_set_pfsp_weights");
+    }
+    PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
+    auto pool_buf = pool.request();
+    auto weights_buf = cum_weights.request();
+    if (pool_buf.ndim != 1) throw std::runtime_error("pfsp pool must be 1-D");
+    if (weights_buf.ndim != 1) throw std::runtime_error("pfsp cum_weights must be 1-D");
+    if (pool_buf.shape[0] != weights_buf.shape[0]) {
+        throw std::runtime_error("pfsp pool and cum_weights lengths must match");
+    }
+    binding_set_pfsp_weights(
+        pufferl.vec,
+        (int*)pool_buf.ptr,
+        (int*)weights_buf.ptr,
+        (int)pool_buf.shape[0]);
+}
+
+py::dict py_get_pfsp_stats(py::object pufferl_obj) {
+    if (!binding_get_pfsp_stats) {
+        throw std::runtime_error("get_pfsp_stats: env has no binding_get_pfsp_stats");
+    }
+    PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
+    const int capacity = 64;
+    std::vector<float> wins(capacity, 0.0f);
+    std::vector<float> episodes(capacity, 0.0f);
+    int pool_size = 0;
+    binding_get_pfsp_stats(pufferl.vec, wins.data(), episodes.data(), &pool_size);
+    if (pool_size < 0 || pool_size > capacity) {
+        throw std::runtime_error("get_pfsp_stats: invalid pool_size");
+    }
+    py::dict out;
+    out["pool_size"] = pool_size;
+    out["wins"] = py::array_t<float>(pool_size, wins.data());
+    out["episodes"] = py::array_t<float>(pool_size, episodes.data());
+    return out;
+}
+
 void py_puff_advantage(
         long long values_ptr, long long rewards_ptr,
         long long dones_ptr,  long long importance_ptr,
@@ -542,6 +598,9 @@ PYBIND11_MODULE(_C, m) {
     m.def("load_frozen_bank", &py_load_frozen_bank);
     m.def("set_agent_perm", &py_set_agent_perm);
     m.def("set_env_tags", &py_set_env_tags);
+    m.def("set_env_scripted_opps", &py_set_env_scripted_opps);
+    m.def("set_pfsp_weights", &py_set_pfsp_weights);
+    m.def("get_pfsp_stats", &py_get_pfsp_stats);
     m.def("count_aligned", &py_count_aligned);
     m.def("num_envs", &py_num_envs);
     m.def("python_vec_recv", &python_vec_recv);

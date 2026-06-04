@@ -266,6 +266,12 @@ void c_step(Env* env) {
         env->log.wins += env->pvp.log.wins;
         env->log.damage_dealt += env->pvp.log.damage_dealt;
         env->log.damage_received += env->pvp.log.damage_received;
+        env->log.expected_damage_dealt += env->pvp.log.expected_damage_dealt;
+        env->log.expected_damage_received += env->pvp.log.expected_damage_received;
+        env->log.expected_damage_diff += env->pvp.log.expected_damage_diff;
+        env->log.expected_damage_score += env->pvp.log.expected_damage_score;
+        env->log.ko_supply_score += env->pvp.log.ko_supply_score;
+        env->log.performance_score += env->pvp.log.performance_score;
         env->log.prayer_correct += env->pvp.log.prayer_correct;
         env->log.prayer_total += env->pvp.log.prayer_total;
         env->log.food_remaining += env->pvp.log.food_remaining;
@@ -492,6 +498,12 @@ void my_log(Log* log, Dict* out) {
     dict_set(out, "wins", log->wins);
     dict_set(out, "damage_dealt", log->damage_dealt);
     dict_set(out, "damage_received", log->damage_received);
+    dict_set(out, "expected_damage_dealt", log->expected_damage_dealt);
+    dict_set(out, "expected_damage_received", log->expected_damage_received);
+    dict_set(out, "expected_damage_diff", log->expected_damage_diff);
+    dict_set(out, "expected_damage_score", log->expected_damage_score);
+    dict_set(out, "ko_supply_score", log->ko_supply_score);
+    dict_set(out, "performance_score", log->performance_score);
 
     float prayer_rate = (log->prayer_total > 0.0f)
         ? log->prayer_correct / log->prayer_total : 0.0f;
@@ -528,22 +540,10 @@ void my_log(Log* log, Dict* out) {
         ? log->damage_dealt / log->attacks_landed : 0.0f;
     dict_set(out, "damage_per_hit", dph);
 
-    /* Score (fixed across all sweep trials — this is the Protein yardstick).
-       Two components:
-         - wins (0/1): the static "you KO'd them" signal, the only thing that
-           truly matters in OSRS PvP.
-         - damage_differential: dealt - received, normalized by 2 * base_hp
-           (so range [-1, +1]) then shifted to [0, 1]. Captures "how decisively
-           did you outpace them in the damage race" as a tiebreaker.
-
-       Reward shaping (separate from score, swept per trial) controls the
-       training-time incentives. Score stays fixed so Protein has a stable
-       metric. */
     float wr = log->wins;
     float dmg_dealt_norm = log->damage_dealt / 99.0f;
     float dmg_recv_norm  = log->damage_received / 99.0f;
     float dmg_diff = dmg_dealt_norm - dmg_recv_norm;
-    /* Map [-2, +2] linearly to [0, 1] (saturates beyond ±base_hp on each side). */
     float dmg_diff_score = 0.5f + 0.25f * dmg_diff;
     if (dmg_diff_score < 0.0f) dmg_diff_score = 0.0f;
     if (dmg_diff_score > 1.0f) dmg_diff_score = 1.0f;

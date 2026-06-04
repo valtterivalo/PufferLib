@@ -101,6 +101,19 @@ static int tests_failed = 0;
     } \
 } while (0)
 
+#define ASSERT_FLOAT_NEAR(label, actual, expected, tolerance) do { \
+    tests_run++; \
+    float actual_value = (float)(actual); \
+    float expected_value = (float)(expected); \
+    if (fabsf(actual_value - expected_value) <= (tolerance)) { \
+        tests_passed++; \
+    } else { \
+        tests_failed++; \
+        printf("  FAIL: %s got %.6f expected %.6f\n", \
+            (label), actual_value, expected_value); \
+    } \
+} while (0)
+
 static Dict* pvp_kwargs(void) {
     Dict* kwargs = create_dict(8);
     dict_set(kwargs, "seed", 73);
@@ -175,8 +188,123 @@ static void test_static_binding_exposes_separate_action_mask(void) {
     c_close(&env);
 }
 
+static void test_static_binding_sets_scripted_opponents(void) {
+    printf("--- PvP static binding sets scripted opponents ---\n");
+
+    Env envs[2];
+    memset(envs, 0, sizeof(envs));
+    StaticVec vec;
+    memset(&vec, 0, sizeof(vec));
+    vec.envs = envs;
+    vec.size = 2;
+
+    int scripted_opps[2] = { OPP_MASTER_NH, -1 };
+    static_vec_set_env_scripted_opps(&vec, scripted_opps);
+
+    ASSERT_INT_EQ("env 0 scripted opponent", envs[0].scripted_opp_type, OPP_MASTER_NH);
+    ASSERT_INT_EQ("env 1 scripted opponent", envs[1].scripted_opp_type, -1);
+}
+
+static void test_binding_pfsp_stats_round_trip(void) {
+    printf("--- PvP binding PFSP stats round trip ---\n");
+
+    Env envs[2];
+    memset(envs, 0, sizeof(envs));
+    StaticVec vec;
+    memset(&vec, 0, sizeof(vec));
+    vec.envs = envs;
+    vec.size = 2;
+
+    envs[0].pvp.pvp_runtime.pfsp.pool_size = 1;
+    envs[1].pvp.pvp_runtime.pfsp.pool_size = 1;
+
+    int pool[2] = { OPP_MASTER_NH, OPP_SAVANT_NH };
+    int cum_weights[2] = { 400, 1000 };
+    binding_set_pfsp_weights(&vec, pool, cum_weights, 2);
+
+    envs[0].pvp.pvp_runtime.pfsp.wins[0] = 1.0f;
+    envs[0].pvp.pvp_runtime.pfsp.episodes[0] = 2.0f;
+    envs[1].pvp.pvp_runtime.pfsp.wins[1] = 3.0f;
+    envs[1].pvp.pvp_runtime.pfsp.episodes[1] = 4.0f;
+
+    float wins[MAX_OPPONENT_POOL];
+    float episodes[MAX_OPPONENT_POOL];
+    memset(wins, 0, sizeof(wins));
+    memset(episodes, 0, sizeof(episodes));
+    int pool_size = 0;
+    binding_get_pfsp_stats(&vec, wins, episodes, &pool_size);
+
+    ASSERT_INT_EQ("pfsp pool size", pool_size, 2);
+    ASSERT_FLOAT_NEAR("pfsp wins 0", wins[0], 1.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("pfsp episodes 0", episodes[0], 2.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("pfsp wins 1", wins[1], 3.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("pfsp episodes 1", episodes[1], 4.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("pfsp stats reset", envs[0].pvp.pvp_runtime.pfsp.episodes[0], 0.0f, 1e-6f);
+
+}
+
+static void test_expected_damage_prayer_modifier(void) {
+    printf("--- PvP expected damage prayer modifier ---\n");
+
+    float off_prayer = pvp_expected_reduced_uniform_damage(
+        0, 100, PRAYER_NONE, ATTACK_STYLE_RANGED);
+    float on_prayer = pvp_expected_reduced_uniform_damage(
+        0, 100, PRAYER_PROTECT_RANGED, ATTACK_STYLE_RANGED);
+
+    ASSERT_FLOAT_NEAR("off-prayer uniform EV", off_prayer, 50.0f, 1e-6f);
+    ASSERT_TRUE("on-prayer EV is lower", on_prayer < off_prayer);
+    ASSERT_FLOAT_NEAR("on-prayer EV ratio", on_prayer / off_prayer, 0.59f, 0.02f);
+}
+
+static void test_expected_damage_zero_accuracy(void) {
+    printf("--- PvP expected damage zero accuracy ---\n");
+
+    float ev = pvp_expected_spec_damage(
+        ITEM_AGS, 0, 50, 100000, PRAYER_NONE, ATTACK_STYLE_MELEE);
+
+    ASSERT_FLOAT_NEAR("zero accuracy EV", ev, 0.0f, 1e-6f);
+}
+
+static void test_expected_damage_standard_uniform(void) {
+    printf("--- PvP expected damage standard uniform ---\n");
+
+    float ev = pvp_expected_reduced_uniform_damage(
+        0, 10, PRAYER_NONE, ATTACK_STYLE_MELEE);
+
+    ASSERT_FLOAT_NEAR("uniform 0..10 EV", ev, 5.0f, 1e-6f);
+}
+
+static void test_expected_damage_representative_specs(void) {
+    printf("--- PvP expected damage representative specs ---\n");
+
+    float ags = pvp_expected_spec_damage(
+        ITEM_AGS, 100000, 40, 0, PRAYER_NONE, ATTACK_STYLE_MELEE);
+    float ags_expected = osrs_hit_chance(200000, 0)
+        * pvp_expected_reduced_uniform_damage(0, 55, PRAYER_NONE, ATTACK_STYLE_MELEE);
+    float claws = pvp_expected_spec_damage(
+        ITEM_DRAGON_CLAWS, 100000, 40, 0, PRAYER_NONE, ATTACK_STYLE_MELEE);
+    float dark_bow_miss = pvp_expected_spec_damage(
+        ITEM_DARK_BOW, 0, 40, 100000, PRAYER_NONE, ATTACK_STYLE_RANGED);
+    float voidwaker_off_prayer = pvp_expected_spec_damage(
+        ITEM_VOIDWAKER, 100000, 40, 0, PRAYER_NONE, ATTACK_STYLE_MELEE);
+    float voidwaker_on_prayer = pvp_expected_spec_damage(
+        ITEM_VOIDWAKER, 100000, 40, 0, PRAYER_PROTECT_MAGIC, ATTACK_STYLE_MELEE);
+
+    ASSERT_FLOAT_NEAR("AGS EV formula", ags, ags_expected, 1e-5f);
+    ASSERT_TRUE("claws EV positive", claws > 0.0f);
+    ASSERT_FLOAT_NEAR("dark bow miss min EV", dark_bow_miss, 16.0f, 1e-6f);
+    ASSERT_TRUE("voidwaker magic prayer reduces EV", voidwaker_on_prayer < voidwaker_off_prayer);
+}
+
 int main(void) {
+    setbuf(stdout, NULL);
     test_static_binding_exposes_separate_action_mask();
+    test_static_binding_sets_scripted_opponents();
+    test_binding_pfsp_stats_round_trip();
+    test_expected_damage_prayer_modifier();
+    test_expected_damage_zero_accuracy();
+    test_expected_damage_standard_uniform();
+    test_expected_damage_representative_specs();
 
     printf("\n=== results: %d/%d passed ===\n", tests_passed, tests_run);
     if (tests_failed != 0) {

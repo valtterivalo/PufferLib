@@ -282,6 +282,12 @@ def _collect_pvp_fixed_eval_opponent(backend, args, model_path, opponent, episod
                 'env/wins',
                 'env/damage_dealt',
                 'env/damage_received',
+                'env/expected_damage_dealt',
+                'env/expected_damage_received',
+                'env/expected_damage_diff',
+                'env/expected_damage_score',
+                'env/ko_supply_score',
+                'env/performance_score',
                 'env/episode_return',
                 'env/episode_length',
                 'env/prayer_correct_rate',
@@ -302,6 +308,16 @@ def _collect_pvp_fixed_eval_opponent(backend, args, model_path, opponent, episod
     score, dmg_diff_score = _pvp_score_from_means(wins, damage_dealt, damage_received)
     means['env/score'] = score
     means['env/dmg_diff_score'] = dmg_diff_score
+    means.setdefault('env/expected_damage_diff',
+        means.get('env/expected_damage_dealt', 0.0)
+        - means.get('env/expected_damage_received', 0.0))
+    means.setdefault('env/expected_damage_score',
+        min(1.0, max(0.0, 0.5 + means['env/expected_damage_diff'] / 198.0)))
+    means.setdefault('env/ko_supply_score', 0.0)
+    means.setdefault('env/performance_score',
+        0.55 * means['env/expected_damage_score']
+        + 0.30 * wins
+        + 0.15 * means['env/ko_supply_score'])
     means['env/n'] = total_n
     return means
 
@@ -325,45 +341,67 @@ def _run_pvp_fixed_eval_suite(backend, args, model_path):
 
     started = time.time()
     logs = {}
-    scores, wins, dmg_scores, ns = [], [], [], []
+    scores, wins, dmg_scores, performance_scores, expected_scores, ko_supply_scores, ns = (
+        [], [], [], [], [], [], [])
     for idx, opponent in enumerate(opponents):
         means = _collect_pvp_fixed_eval_opponent(
             backend, args, model_path, opponent, episodes, seed + 100_000 * idx)
         prefix = f'env/fixed_eval_opp_{opponent}'
         logs[f'{prefix}_score'] = means['env/score']
+        logs[f'{prefix}_performance_score'] = means['env/performance_score']
         logs[f'{prefix}_wins'] = means['env/wins']
         logs[f'{prefix}_dmg_diff_score'] = means['env/dmg_diff_score']
+        logs[f'{prefix}_expected_damage_score'] = means['env/expected_damage_score']
+        logs[f'{prefix}_expected_damage_diff'] = means['env/expected_damage_diff']
+        logs[f'{prefix}_expected_damage_dealt'] = means.get('env/expected_damage_dealt', 0.0)
+        logs[f'{prefix}_expected_damage_received'] = means.get('env/expected_damage_received', 0.0)
+        logs[f'{prefix}_ko_supply_score'] = means['env/ko_supply_score']
         logs[f'{prefix}_damage_dealt'] = means.get('env/damage_dealt', 0.0)
         logs[f'{prefix}_damage_received'] = means.get('env/damage_received', 0.0)
         logs[f'{prefix}_n'] = means['env/n']
         scores.append(means['env/score'])
         wins.append(means['env/wins'])
         dmg_scores.append(means['env/dmg_diff_score'])
+        performance_scores.append(means['env/performance_score'])
+        expected_scores.append(means['env/expected_damage_score'])
+        ko_supply_scores.append(means['env/ko_supply_score'])
         ns.append(means['env/n'])
 
-    holdout_scores, holdout_wins = [], []
+    holdout_scores, holdout_wins, holdout_performance_scores = [], [], []
     for idx, opponent in enumerate(_config_sequence(cfg, 'holdout_opponents', int)):
         means = _collect_pvp_fixed_eval_opponent(
             backend, args, model_path, opponent, episodes, seed + 10_000_000 + 100_000 * idx)
         prefix = f'env/fixed_eval_holdout_opp_{opponent}'
         logs[f'{prefix}_score'] = means['env/score']
+        logs[f'{prefix}_performance_score'] = means['env/performance_score']
         logs[f'{prefix}_wins'] = means['env/wins']
         logs[f'{prefix}_dmg_diff_score'] = means['env/dmg_diff_score']
+        logs[f'{prefix}_expected_damage_score'] = means['env/expected_damage_score']
+        logs[f'{prefix}_expected_damage_diff'] = means['env/expected_damage_diff']
+        logs[f'{prefix}_expected_damage_dealt'] = means.get('env/expected_damage_dealt', 0.0)
+        logs[f'{prefix}_expected_damage_received'] = means.get('env/expected_damage_received', 0.0)
+        logs[f'{prefix}_ko_supply_score'] = means['env/ko_supply_score']
         logs[f'{prefix}_damage_dealt'] = means.get('env/damage_dealt', 0.0)
         logs[f'{prefix}_damage_received'] = means.get('env/damage_received', 0.0)
         logs[f'{prefix}_n'] = means['env/n']
         holdout_scores.append(means['env/score'])
         holdout_wins.append(means['env/wins'])
+        holdout_performance_scores.append(means['env/performance_score'])
 
     logs['env/fixed_eval_score'] = _weighted_mean(scores, weights)
+    logs['env/fixed_eval_performance_score'] = _weighted_mean(performance_scores, weights)
     logs['env/fixed_eval_wins'] = _weighted_mean(wins, weights)
     logs['env/fixed_eval_dmg_diff_score'] = _weighted_mean(dmg_scores, weights)
+    logs['env/fixed_eval_expected_damage_score'] = _weighted_mean(expected_scores, weights)
+    logs['env/fixed_eval_ko_supply_score'] = _weighted_mean(ko_supply_scores, weights)
     logs['env/fixed_eval_score_unweighted'] = float(np.mean(scores))
+    logs['env/fixed_eval_performance_score_unweighted'] = float(np.mean(performance_scores))
     logs['env/fixed_eval_wins_unweighted'] = float(np.mean(wins))
     logs['env/fixed_eval_n'] = float(np.sum(ns))
     logs['env/fixed_eval_elapsed_sec'] = time.time() - started
     if holdout_scores:
         logs['env/fixed_eval_holdout_score'] = float(np.mean(holdout_scores))
+        logs['env/fixed_eval_holdout_performance_score'] = float(np.mean(holdout_performance_scores))
         logs['env/fixed_eval_holdout_wins'] = float(np.mean(holdout_wins))
     return logs
 
