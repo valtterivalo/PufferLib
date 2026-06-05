@@ -728,6 +728,45 @@ typedef struct {
     int gui_strength_bonus;
 } Player;
 
+typedef enum {
+    PVP_TERMINAL_PRESENTATION_INACTIVE = 0,
+    PVP_TERMINAL_PRESENTATION_DEATH = 1,
+    PVP_TERMINAL_PRESENTATION_WINNER = 2,
+} PvpTerminalPresentationPhase;
+
+#define PVP_TERMINAL_PRESENTATION_NAME_LEN 32
+
+typedef struct {
+    PvpTerminalPresentationPhase phase;
+    int winner;
+    Player players[NUM_AGENTS];
+    char opponent_name[PVP_TERMINAL_PRESENTATION_NAME_LEN];
+} PvpTerminalPresentation;
+
+typedef struct {
+    float damage[NUM_AGENTS];
+    float expected_damage[NUM_AGENTS];
+    float damage_diff;
+    float expected_damage_diff;
+    int expected_leader;
+} PvpPerformanceTrackerValues;
+
+static inline PvpPerformanceTrackerValues pvp_performance_tracker_values(
+    const Player* p0,
+    const Player* p1
+) {
+    PvpPerformanceTrackerValues out = {0};
+    out.damage[0] = p0->total_damage_dealt;
+    out.damage[1] = p1->total_damage_dealt;
+    out.expected_damage[0] = p0->expected_damage_dealt;
+    out.expected_damage[1] = p1->expected_damage_dealt;
+    out.damage_diff = out.damage[0] - out.damage[1];
+    out.expected_damage_diff = out.expected_damage[0] - out.expected_damage[1];
+    out.expected_leader = out.expected_damage_diff > 0.001f ? 0 :
+        (out.expected_damage_diff < -0.001f ? 1 : -1);
+    return out;
+}
+
 typedef struct {
     float episode_return;
     float episode_length;
@@ -1149,6 +1188,7 @@ typedef struct {
     OpponentState opponent;
     OpponentState opponent_p0;
     PFSPState pfsp;
+    PvpTerminalPresentation terminal_presentation;
     float gear_tier_weights[4];  /* 4 tiers, sum to 1.0 */
     /* BFS walk destinations per agent (-1 = no pending walk). consumed by
        osrs_encounter_player_step via OSRS_PLAYER_MOVE_DESTINATION; cleared when
@@ -1230,6 +1270,36 @@ typedef struct {
     unsigned char _masks_buf[NUM_AGENTS * ACTION_MASK_SIZE];
 
 } OsrsEnv;
+
+static inline int pvp_terminal_presentation_active(const OsrsEnv* env) {
+    return env->pvp_runtime.terminal_presentation.phase !=
+        PVP_TERMINAL_PRESENTATION_INACTIVE;
+}
+
+static inline int pvp_terminal_presentation_entity_count(const OsrsEnv* env) {
+    if (!pvp_terminal_presentation_active(env)) return NUM_AGENTS;
+    if (env->pvp_runtime.terminal_presentation.phase ==
+            PVP_TERMINAL_PRESENTATION_WINNER) {
+        return 1;
+    }
+    return NUM_AGENTS;
+}
+
+static inline int pvp_terminal_presentation_player_index(const OsrsEnv* env, int entity_idx) {
+    if (!pvp_terminal_presentation_active(env)) return entity_idx;
+    if (env->pvp_runtime.terminal_presentation.phase ==
+            PVP_TERMINAL_PRESENTATION_WINNER) {
+        return env->pvp_runtime.terminal_presentation.winner;
+    }
+    return entity_idx;
+}
+
+static inline void pvp_terminal_presentation_clear(OsrsEnv* env) {
+    memset(&env->pvp_runtime.terminal_presentation, 0,
+        sizeof(env->pvp_runtime.terminal_presentation));
+    env->pvp_runtime.terminal_presentation.phase =
+        PVP_TERMINAL_PRESENTATION_INACTIVE;
+}
 
 static inline int abs_int(int val) {
     return val < 0 ? -val : val;

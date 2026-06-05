@@ -309,6 +309,41 @@ void c_reset(Env* env) {
 void c_close(Env* env) { pvp_close(&env->pvp); }
 
 #ifdef OSRS_VISUAL
+static const double PVP_TERMINAL_DEATH_SECONDS = 1.2;
+static const double PVP_TERMINAL_WINNER_SECONDS = 0.8;
+
+static void pvp_render_frame(Env* env, RenderClient* rc) {
+    render_post_tick(rc, &env->pvp);
+    pvp_render(&env->pvp);
+    rc->last_tick_time = GetTime();
+    env->last_step_time = rc->last_tick_time;
+}
+
+static void pvp_render_terminal_presentation(Env* env, RenderClient* rc) {
+    PvpTerminalPresentation* p = &env->pvp.pvp_runtime.terminal_presentation;
+    if (p->phase == PVP_TERMINAL_PRESENTATION_INACTIVE) return;
+
+    p->phase = PVP_TERMINAL_PRESENTATION_DEATH;
+    render_reset_episode_visual_state(rc, &env->pvp);
+    double start = GetTime();
+    int winner_phase_started = 0;
+    double total = PVP_TERMINAL_DEATH_SECONDS + PVP_TERMINAL_WINNER_SECONDS;
+
+    while (GetTime() - start < total) {
+        double elapsed = GetTime() - start;
+        if (!winner_phase_started && elapsed >= PVP_TERMINAL_DEATH_SECONDS) {
+            p->phase = PVP_TERMINAL_PRESENTATION_WINNER;
+            render_reset_episode_visual_state(rc, &env->pvp);
+            winner_phase_started = 1;
+        }
+        pvp_render_frame(env, rc);
+    }
+
+    pvp_terminal_presentation_clear(&env->pvp);
+    pvp_state_store(env, &env->state);
+    render_reset_episode_visual_state(rc, &env->pvp);
+}
+
 void c_render(Env* env) {
     env->pvp.encounter_def = (const void*)&ENCOUNTER_NH_PVP;
     env->pvp.encounter_state = (void*)&env->pvp;
@@ -343,6 +378,11 @@ void c_render(Env* env) {
     RenderClient* rc = (RenderClient*)env->pvp.client;
     if (!rc) return;
     rc->show_arena_boundary = 0;
+
+    if (pvp_terminal_presentation_active(&env->pvp)) {
+        pvp_render_terminal_presentation(env, rc);
+        return;
+    }
 
     render_post_tick(rc, &env->pvp);
 
@@ -501,6 +541,9 @@ void my_log(Log* log, Dict* out) {
     dict_set(out, "episode_return", log->episode_return);
     dict_set(out, "episode_length", log->episode_length);
     dict_set(out, "wins", log->wins);
+    dict_set(out, "slot_0_score", log->wins);
+    dict_set(out, "slot_1_score", 1.0f - log->wins);
+    dict_set(out, "draw_rate", 0.0f);
     dict_set(out, "damage_dealt", log->damage_dealt);
     dict_set(out, "damage_received", log->damage_received);
     dict_set(out, "expected_damage_dealt", log->expected_damage_dealt);

@@ -5374,6 +5374,68 @@ static void render_follow_pvp_fighter_midpoint(RenderClient* rc, OsrsEnv* env, d
     rc->cam_target_z += (target_z - rc->cam_target_z) * lerp;
 }
 
+static const char* render_pvp_tracker_player_name(RenderClient* rc, OsrsEnv* env, int player_idx) {
+    if (player_idx == 0) return "Player 0";
+    if (pvp_terminal_presentation_active(env) &&
+            env->pvp_runtime.terminal_presentation.opponent_name[0]) {
+        return env->pvp_runtime.terminal_presentation.opponent_name;
+    }
+    if (rc->entity_count >= 2 && rc->entities[1].display_name[0])
+        return rc->entities[1].display_name;
+    return "Opponent";
+}
+
+static Color render_pvp_tracker_value_color(int leader, int player_idx) {
+    if (leader == player_idx) return (Color){92, 220, 140, 255};
+    if (leader >= 0) return (Color){220, 120, 120, 255};
+    return COLOR_TEXT;
+}
+
+static void render_draw_pvp_performance_tracker(RenderClient* rc, OsrsEnv* env) {
+    if (!render_scene_is_pvp(env)) return;
+
+    const Player* p0 = &env->players[0];
+    const Player* p1 = &env->players[1];
+    if (pvp_terminal_presentation_active(env)) {
+        p0 = &env->pvp_runtime.terminal_presentation.players[0];
+        p1 = &env->pvp_runtime.terminal_presentation.players[1];
+    }
+    PvpPerformanceTrackerValues v = pvp_performance_tracker_values(p0, p1);
+    const char* p0_name = render_pvp_tracker_player_name(rc, env, 0);
+    const char* p1_name = render_pvp_tracker_player_name(rc, env, 1);
+    const char* leader_name = v.expected_leader == 0 ? p0_name :
+        (v.expected_leader == 1 ? p1_name : "Even");
+
+    int x = 10;
+    int y = RENDER_WINDOW_H - 126;
+    int w = 330;
+    int h = 96;
+    int fs = 12;
+    Color panel = (Color){18, 20, 24, 220};
+    Color edge = (Color){90, 96, 108, 180};
+    Color p0_color = render_pvp_tracker_value_color(v.expected_leader, 0);
+    Color p1_color = render_pvp_tracker_value_color(v.expected_leader, 1);
+
+    DrawRectangle(x, y, w, h, panel);
+    DrawRectangleLinesEx((Rectangle){(float)x, (float)y, (float)w, (float)h}, 1.0f, edge);
+    DrawText("PvP Performance", x + 10, y + 8, 14, COLOR_TEXT);
+    DrawText(p0_name, x + 74, y + 28, fs, p0_color);
+    DrawText(p1_name, x + 200, y + 28, fs, p1_color);
+    DrawText("D", x + 10, y + 46, fs, COLOR_TEXT_DIM);
+    DrawText(TextFormat("%.1f (%+.1f)", v.damage[0], v.damage_diff),
+        x + 74, y + 46, fs, COLOR_TEXT);
+    DrawText(TextFormat("%.1f (%+.1f)", v.damage[1], -v.damage_diff),
+        x + 200, y + 46, fs, COLOR_TEXT);
+    DrawText("eD", x + 10, y + 62, fs, COLOR_TEXT_DIM);
+    DrawText(TextFormat("%.1f (%+.1f)", v.expected_damage[0], v.expected_damage_diff),
+        x + 74, y + 62, fs, p0_color);
+    DrawText(TextFormat("%.1f (%+.1f)", v.expected_damage[1], -v.expected_damage_diff),
+        x + 200, y + 62, fs, p1_color);
+    DrawText("Lead", x + 10, y + 78, fs, COLOR_TEXT_DIM);
+    DrawText(TextFormat("%s %+.1f eD", leader_name, fabsf(v.expected_damage_diff)),
+        x + 74, y + 78, fs, COLOR_TEXT);
+}
+
 
 void pvp_render(OsrsEnv* env) {
     RenderClient* rc = (RenderClient*)env->client;
@@ -5520,6 +5582,8 @@ void pvp_render(OsrsEnv* env) {
         int hp_w = MeasureText(hp_txt, 16);
         DrawText(hp_txt, RENDER_GRID_W - hp_w - 12, 12, 16, COLOR_TEXT);
     }
+
+    render_draw_pvp_performance_tracker(rc, env);
 
     DrawText("Right-drag: orbit  Mid-drag: pan  Scroll: zoom  SPACE: pause  S: safe spots  D: debug  G: cycle entity  H: human",
              10, RENDER_WINDOW_H - 20, 10, COLOR_TEXT_DIM);

@@ -184,15 +184,19 @@ static int nh_pvp_is_terminal(EncounterState* state, EncounterContext* context) 
 
 
 static int nh_pvp_get_entity_count(EncounterState* state, EncounterContext* context) {
-    (void)state;
     (void)context;
-    return NUM_AGENTS;  /* always 2 for NH PvP */
+    NhPvpState* s = (NhPvpState*)state;
+    return pvp_terminal_presentation_entity_count(&s->env);
 }
 
 static void* nh_pvp_get_entity(EncounterState* state, EncounterContext* context, int index) {
     (void)context;
     NhPvpState* s = (NhPvpState*)state;
-    return &s->env.players[index];
+    int player_idx = pvp_terminal_presentation_player_index(&s->env, index);
+    if (player_idx < 0 || player_idx >= NUM_AGENTS) return NULL;
+    if (pvp_terminal_presentation_active(&s->env))
+        return &s->env.pvp_runtime.terminal_presentation.players[player_idx];
+    return &s->env.players[player_idx];
 }
 
 static const char* nh_pvp_render_entity_name(OsrsEnv* env, int player_idx) {
@@ -231,15 +235,41 @@ static void nh_pvp_fill_render_entities(
 ) {
     (void)context;
     NhPvpState* s = (NhPvpState*)state;
-    int n = NUM_AGENTS < max_entities ? NUM_AGENTS : max_entities;
+    int wanted = pvp_terminal_presentation_entity_count(&s->env);
+    int n = wanted < max_entities ? wanted : max_entities;
     for (int i = 0; i < n; i++) {
-        osrs_render_entity_from_player_entity(&s->env.players[i], &out[i]);
+        int player_idx = pvp_terminal_presentation_player_index(&s->env, i);
+        Player* player = pvp_terminal_presentation_active(&s->env)
+            ? &s->env.pvp_runtime.terminal_presentation.players[player_idx]
+            : &s->env.players[player_idx];
+        osrs_render_entity_from_player_entity(player, &out[i]);
         out[i].attack_target_entity_idx =
-            nh_pvp_render_attack_target_idx(&s->env.players[i], n);
-        snprintf(out[i].display_name, sizeof(out[i].display_name), "%s",
-            nh_pvp_render_entity_name(&s->env, i));
+            s->env.pvp_runtime.terminal_presentation.phase ==
+                PVP_TERMINAL_PRESENTATION_WINNER
+            ? -1
+            : nh_pvp_render_attack_target_idx(player, n);
+        const char* name = player_idx == 1 &&
+            pvp_terminal_presentation_active(&s->env)
+            ? s->env.pvp_runtime.terminal_presentation.opponent_name
+            : nh_pvp_render_entity_name(&s->env, player_idx);
+        snprintf(out[i].display_name, sizeof(out[i].display_name), "%s", name);
     }
     *count = n;
+}
+
+static void nh_pvp_render_post_tick(
+    EncounterState* state,
+    EncounterContext* context,
+    EncounterOverlay* overlay
+) {
+    (void)context;
+    NhPvpState* s = (NhPvpState*)state;
+    if (!pvp_terminal_presentation_active(&s->env)) return;
+
+    PvpTerminalPresentation* p = &s->env.pvp_runtime.terminal_presentation;
+    const char* winner_name = p->winner == 0 ? "Player 0" : p->opponent_name;
+    snprintf(overlay->status_text, sizeof(overlay->status_text), "%s won", winner_name);
+    overlay->status_text_active = 1;
 }
 
 
@@ -366,7 +396,7 @@ static const EncounterDef ENCOUNTER_NH_PVP = {
     .head_prayer = -1,
     .head_target = -1,
 
-    .render_post_tick = NULL,
+    .render_post_tick = nh_pvp_render_post_tick,
     .get_log = nh_pvp_get_log,
     .get_tick = nh_pvp_get_tick,
     .get_winner = nh_pvp_get_winner,
