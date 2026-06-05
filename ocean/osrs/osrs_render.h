@@ -525,9 +525,9 @@ typedef struct RenderClient {
        number of steps per render frame, matching the real client exactly. */
     double client_tick_accumulator;
 
-    /* arena bounds (overridden by encounter, defaults to FIGHT_AREA_*) */
     int arena_base_x, arena_base_y;
     int arena_width, arena_height;
+    int show_arena_boundary;
 
     /* encounter visual overlay (populated by encounter's render_post_tick) */
     EncounterOverlay encounter_overlay;
@@ -1501,6 +1501,7 @@ static RenderClient* render_make_client(void) {
     rc->arena_base_y = FIGHT_AREA_BASE_Y;
     rc->arena_width = FIGHT_AREA_WIDTH;
     rc->arena_height = FIGHT_AREA_HEIGHT;
+    rc->show_arena_boundary = 1;
     rc->show_safe_spots = 0;
     rc->show_debug = 0;
     rc->inferno_lab_enabled = 0;
@@ -4733,24 +4734,27 @@ static void render_draw_3d_world(RenderClient* rc) {
         rlEnableBackfaceCulling();
     }
 
-    /* fight area boundary wireframe (Z negated) */
-    float fa_x = (float)rc->arena_base_x;
-    float fa_z = -(float)rc->arena_base_y;
-    float fa_w = (float)rc->arena_width;
-    float fa_h = -(float)rc->arena_height;  /* negative because Z is negated */
-    float bh = rc->terrain ? terrain_height_at(rc->terrain, rc->arena_base_x, rc->arena_base_y) : 2.0f;
-    DrawLine3D(
-        (Vector3){ fa_x, bh, fa_z },
-        (Vector3){ fa_x + fa_w, bh, fa_z }, YELLOW);
-    DrawLine3D(
-        (Vector3){ fa_x + fa_w, bh, fa_z },
-        (Vector3){ fa_x + fa_w, bh, fa_z + fa_h }, YELLOW);
-    DrawLine3D(
-        (Vector3){ fa_x + fa_w, bh, fa_z + fa_h },
-        (Vector3){ fa_x, bh, fa_z + fa_h }, YELLOW);
-    DrawLine3D(
-        (Vector3){ fa_x, bh, fa_z + fa_h },
-        (Vector3){ fa_x, bh, fa_z }, YELLOW);
+    if (rc->show_arena_boundary) {
+        float fa_x = (float)rc->arena_base_x;
+        float fa_z = -(float)rc->arena_base_y;
+        float fa_w = (float)rc->arena_width;
+        float fa_h = -(float)rc->arena_height;
+        float bh = rc->terrain
+            ? terrain_height_at(rc->terrain, rc->arena_base_x, rc->arena_base_y)
+            : 2.0f;
+        DrawLine3D(
+            (Vector3){ fa_x, bh, fa_z },
+            (Vector3){ fa_x + fa_w, bh, fa_z }, YELLOW);
+        DrawLine3D(
+            (Vector3){ fa_x + fa_w, bh, fa_z },
+            (Vector3){ fa_x + fa_w, bh, fa_z + fa_h }, YELLOW);
+        DrawLine3D(
+            (Vector3){ fa_x + fa_w, bh, fa_z + fa_h },
+            (Vector3){ fa_x, bh, fa_z + fa_h }, YELLOW);
+        DrawLine3D(
+            (Vector3){ fa_x, bh, fa_z + fa_h },
+            (Vector3){ fa_x, bh, fa_z }, YELLOW);
+    }
 
     /* click cross is now drawn as 2D overlay in pvp_render, not in 3D world */
 
@@ -5377,9 +5381,8 @@ void pvp_render(OsrsEnv* env) {
         rc = render_make_client();
         env->client = rc;
     }
+    rc->show_arena_boundary = 0;
 
-    /* ensure entity pointers are current (may be called without render_post_tick
-       during pause, rewind, or initial frame) */
     render_populate_entities(rc, env);
     render_ensure_entity_visual_slots(rc);
 

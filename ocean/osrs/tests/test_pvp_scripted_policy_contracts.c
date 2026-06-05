@@ -38,9 +38,23 @@ static int tests_failed = 0;
     } \
 } while (0)
 
+static CollisionMap* test_wilderness_collision_map(void) {
+    static CollisionMap* cmap = NULL;
+    if (cmap == NULL) {
+        osrs_asset_require_group(OSRS_ASSET_GROUP_PVP);
+        cmap = collision_map_load(OSRS_ASSET("wilderness.cmap"));
+        if (cmap == NULL) {
+            fprintf(stderr, "test setup: failed to load wilderness.cmap\n");
+            abort();
+        }
+    }
+    return cmap;
+}
+
 static void setup_pvp_env(OsrsEnv* env, OpponentType type) {
     memset(env, 0, sizeof(*env));
     pvp_init(env);
+    env->collision_map = test_wilderness_collision_map();
     env->ocean_io.agent_obs = env->_obs_buf;
     env->ocean_io.agent_actions = env->_acts_buf;
     env->ocean_io.agent_rewards = env->_rews_buf;

@@ -52,25 +52,15 @@ typedef struct {
     PvpStateSnapshot state;
 
     int ocean_acts_staging[NUM_ACTION_HEADS];
-    int ocean_acts_staging_p1[NUM_ACTION_HEADS];  /* slot 1's int actions, fed to external_opponent_actions */
+    int ocean_acts_staging_p1[NUM_ACTION_HEADS];
     unsigned char ocean_term_staging;
 
     float ticks_per_second;
     double last_step_time;
 
-    /* Self-play env-side opt-in (see vecenv.h MY_USES_TAGS / MY_USES_PERM).
-       tag: 0 = primary selfplay, >=1 = playing frozen bank (tag-1). Used to
-       attribute episode outcomes to the correct bank's hist_score_bank entry.
-       boundary_reached: set on episode terminal so selfplay.step() knows
-       this env finished its current matchup and can be counted into the swap
-       decision via count_aligned. */
     int tag;
     int boundary_reached;
 
-    /* Per-slot pointer arrays for num_agents=2 self-play opt-in (MY_USES_PERM).
-       Routed by my_setup_perm using vec->agent_perm. Slot 0 = learner, slot 1
-       = opponent (driven by primary policy in pure-selfplay envs, by frozen
-       bank in historical envs, by C-heuristic in scripted-opp envs). */
     void* obs_ptr[2];
     float* action_ptr[2];
     float* reward_ptr[2];
@@ -79,11 +69,6 @@ typedef struct {
 
     int use_rollout_opponent;
 
-    /* Per-env scripted opponent override. >= 0 = OpponentType to use for slot
-       1 (C-heuristic). -1 = use whatever the global mode dictates (rollout if
-       use_rollout_opponent else default opponent_type). Set by selfplay.setup
-       via pufferl_set_env_scripted_opps to distribute envs across pure
-       self-play (-1), frozen-bank (-1), and scripted-opp (>= 0) curricula. */
     int scripted_opp_type;
 } PvpEnv;
 
@@ -96,6 +81,19 @@ typedef struct {
 #define MY_USES_PERM
 #define MY_USES_SCRIPTED_OPPS
 #define MY_ACTION_MASK ACTION_MASK_SIZE
+
+static CollisionMap* pvp_shared_wilderness_collision_map(void) {
+    static CollisionMap* cmap = NULL;
+    if (cmap == NULL) {
+        osrs_asset_require_group(OSRS_ASSET_GROUP_PVP);
+        cmap = collision_map_load(OSRS_ASSET("wilderness.cmap"));
+        if (cmap == NULL) {
+            fprintf(stderr, "osrs_pvp: failed to load wilderness.cmap\n");
+            abort();
+        }
+    }
+    return cmap;
+}
 
 static void pvp_env_rewire_internal_buffers(Env* env) {
     env->pvp.observations = env->pvp._obs_buf;
@@ -330,15 +328,21 @@ void c_render(Env* env) {
             },
             .terrain_path = OSRS_ASSET("wilderness.terrain"),
             .objects_path = OSRS_ASSET("wilderness.objects"),
-            .cmap_path = OSRS_ASSET("wilderness.cmap"),
+            .cmap_path = NULL,
         };
-        CollisionMap* cmap = encounter_load_scene_assets(rc, &scene);
-        if (cmap) env->pvp.collision_map = cmap;
+        encounter_load_scene_assets(rc, &scene);
+        CollisionMap* cmap = pvp_shared_wilderness_collision_map();
+        rc->collision_map = cmap;
+        rc->collision_world_offset_x = 0;
+        rc->collision_world_offset_y = 0;
+        rc->show_arena_boundary = 0;
+        env->pvp.collision_map = cmap;
         env->last_step_time = GetTime();
     }
 
     RenderClient* rc = (RenderClient*)env->pvp.client;
     if (!rc) return;
+    rc->show_arena_boundary = 0;
 
     render_post_tick(rc, &env->pvp);
 
@@ -409,6 +413,7 @@ void my_init(Env* env, Dict* kwargs) {
 
     pvp_init(&env->pvp);
     pvp_env_rewire_internal_buffers(env);
+    env->pvp.collision_map = pvp_shared_wilderness_collision_map();
     DictItem* seed_kw = dict_get_unsafe(kwargs, "seed");
     if (!seed_kw) {
         fprintf(stderr, "osrs_pvp env.seed is required for deterministic native runs\n");

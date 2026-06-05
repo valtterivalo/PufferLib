@@ -207,32 +207,130 @@ static void init_player(Player* p) {
     p->prev_hp_percent = 1.0f;  // Full HP at start
 }
 
-/**
- * Set initial fight positions for both players.
- *
- * In seeded mode: deterministic positions.
- * Otherwise: random positions within fight area, nearby each other.
- *
- * @param env Environment
- */
+static int pvp_abs_int(int value) {
+    return value < 0 ? -value : value;
+}
+
+static const CollisionMap* pvp_require_collision_map(OsrsEnv* env) {
+    const CollisionMap* cmap = (const CollisionMap*)env->collision_map;
+    if (cmap == NULL) {
+        fprintf(stderr, "osrs_pvp: reset requires wilderness collision_map\n");
+        abort();
+    }
+    return cmap;
+}
+
+static int pvp_spawn_tile_valid(
+    const CollisionMap* cmap,
+    int x,
+    int y,
+    int avoid_x,
+    int avoid_y
+) {
+    if (x == avoid_x && y == avoid_y) return 0;
+    return pvp_tile_walkable((void*)cmap, x, y);
+}
+
+static int pvp_find_nearest_walkable_spawn(
+    const CollisionMap* cmap,
+    int desired_x,
+    int desired_y,
+    int avoid_x,
+    int avoid_y,
+    int* out_x,
+    int* out_y
+) {
+    int max_radius = max_int(FIGHT_AREA_WIDTH, FIGHT_AREA_HEIGHT);
+    int min_x = FIGHT_AREA_BASE_X;
+    int min_y = FIGHT_AREA_BASE_Y;
+    int max_x = FIGHT_AREA_BASE_X + FIGHT_AREA_WIDTH;
+    int max_y = FIGHT_AREA_BASE_Y + FIGHT_AREA_HEIGHT;
+
+    for (int radius = 0; radius <= max_radius; radius++) {
+        for (int dy = -radius; dy <= radius; dy++) {
+            for (int dx = -radius; dx <= radius; dx++) {
+                if (max_int(pvp_abs_int(dx), pvp_abs_int(dy)) != radius) {
+                    continue;
+                }
+                int x = desired_x + dx;
+                int y = desired_y + dy;
+                if (x < min_x || x >= max_x || y < min_y || y >= max_y) {
+                    continue;
+                }
+                if (!pvp_spawn_tile_valid(cmap, x, y, avoid_x, avoid_y)) {
+                    continue;
+                }
+                *out_x = x;
+                *out_y = y;
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+static int pvp_find_random_walkable_spawn(
+    OsrsEnv* env,
+    const CollisionMap* cmap,
+    int min_x,
+    int min_y,
+    int max_x,
+    int max_y,
+    int avoid_x,
+    int avoid_y,
+    int* out_x,
+    int* out_y
+) {
+    int count = 0;
+    for (int y = min_y; y < max_y; y++) {
+        for (int x = min_x; x < max_x; x++) {
+            if (pvp_spawn_tile_valid(cmap, x, y, avoid_x, avoid_y)) {
+                count++;
+            }
+        }
+    }
+    if (count == 0) return 0;
+
+    int pick = rand_int(env, count);
+    for (int y = min_y; y < max_y; y++) {
+        for (int x = min_x; x < max_x; x++) {
+            if (!pvp_spawn_tile_valid(cmap, x, y, avoid_x, avoid_y)) {
+                continue;
+            }
+            if (pick == 0) {
+                *out_x = x;
+                *out_y = y;
+                return 1;
+            }
+            pick--;
+        }
+    }
+    return 0;
+}
+
+static void pvp_set_player_spawn(Player* p, int x, int y) {
+    p->x = x;
+    p->y = y;
+    p->dest_x = x;
+    p->dest_y = y;
+    p->is_moving = 0;
+}
+
 static void set_fight_positions(OsrsEnv* env) {
+    const CollisionMap* cmap = pvp_require_collision_map(env);
+    int x0 = FIGHT_AREA_BASE_X;
+    int y0 = FIGHT_AREA_BASE_Y;
+    int x1 = FIGHT_AREA_BASE_X + FIGHT_NEARBY_RADIUS;
+    int y1 = FIGHT_AREA_BASE_Y + 1;
+
     if (env->has_rng_seed) {
-        int x0 = FIGHT_AREA_BASE_X;
-        int y0 = FIGHT_AREA_BASE_Y;
-        int x1 = FIGHT_AREA_BASE_X + FIGHT_NEARBY_RADIUS;
-        int y1 = FIGHT_AREA_BASE_Y;
-
-        env->players[0].x = x0;
-        env->players[0].y = y0;
-        env->players[0].dest_x = x0;
-        env->players[0].dest_y = y0;
-        env->players[0].is_moving = 0;
-
-        env->players[1].x = x1;
-        env->players[1].y = y1;
-        env->players[1].dest_x = x1;
-        env->players[1].dest_y = y1;
-        env->players[1].is_moving = 0;
+        if (!pvp_find_nearest_walkable_spawn(cmap, x0, y0, -1, -1, &x0, &y0) ||
+                !pvp_find_nearest_walkable_spawn(cmap, x1, y1, x0, y0, &x1, &y1)) {
+            fprintf(stderr, "osrs_pvp: no walkable fixed spawn pair in fight area\n");
+            abort();
+        }
+        pvp_set_player_spawn(&env->players[0], x0, y0);
+        pvp_set_player_spawn(&env->players[1], x1, y1);
         return;
     }
 
@@ -241,28 +339,28 @@ static void set_fight_positions(OsrsEnv* env) {
     int max_x = base_x + FIGHT_AREA_WIDTH;
     int max_y = base_y + FIGHT_AREA_HEIGHT;
 
-    int x0 = base_x + rand_int(env, FIGHT_AREA_WIDTH);
-    int y0 = base_y + rand_int(env, FIGHT_AREA_HEIGHT);
+    if (!pvp_find_random_walkable_spawn(
+            env, cmap, base_x, base_y, max_x, max_y, -1, -1, &x0, &y0)) {
+        fprintf(stderr, "osrs_pvp: no walkable player spawn in fight area\n");
+        abort();
+    }
 
     int near_min_x = max_int(base_x, x0 - FIGHT_NEARBY_RADIUS);
     int near_min_y = max_int(base_y, y0 - FIGHT_NEARBY_RADIUS);
-    int near_max_x = min_int(max_x, x0 + FIGHT_NEARBY_RADIUS);
-    int near_max_y = min_int(max_y, y0 + FIGHT_NEARBY_RADIUS);
+    int near_max_x = min_int(max_x, x0 + FIGHT_NEARBY_RADIUS + 1);
+    int near_max_y = min_int(max_y, y0 + FIGHT_NEARBY_RADIUS + 1);
 
-    int x1 = near_min_x + rand_int(env, near_max_x - near_min_x);
-    int y1 = near_min_y + rand_int(env, near_max_y - near_min_y);
+    if (!pvp_find_random_walkable_spawn(
+            env, cmap, near_min_x, near_min_y, near_max_x, near_max_y,
+            x0, y0, &x1, &y1) &&
+            !pvp_find_nearest_walkable_spawn(
+                cmap, x0 + FIGHT_NEARBY_RADIUS, y0, x0, y0, &x1, &y1)) {
+        fprintf(stderr, "osrs_pvp: no walkable opponent spawn in fight area\n");
+        abort();
+    }
 
-    env->players[0].x = x0;
-    env->players[0].y = y0;
-    env->players[0].dest_x = x0;
-    env->players[0].dest_y = y0;
-    env->players[0].is_moving = 0;
-
-    env->players[1].x = x1;
-    env->players[1].y = y1;
-    env->players[1].dest_x = x1;
-    env->players[1].dest_y = y1;
-    env->players[1].is_moving = 0;
+    pvp_set_player_spawn(&env->players[0], x0, y0);
+    pvp_set_player_spawn(&env->players[1], x1, y1);
 }
 
 /**
