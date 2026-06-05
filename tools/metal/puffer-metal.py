@@ -107,6 +107,13 @@ def disable_state_curriculum(args: dict[str, object]) -> None:
     train["warmup_states"] = 0
 
 
+def disable_frozen_banks(args: dict[str, object]) -> None:
+    """Disable selfplay frozen banks for small interactive Metal eval."""
+    vec = args["vec"]
+    vec["num_frozen_banks"] = 0
+    vec["frozen_bank_pct"] = 0
+
+
 def ensure_eval_state_curriculum_disabled(argv: list[str]) -> None:
     """Append Metal eval overrides for CUDA-only state-buffer curriculum."""
     if len(argv) < 3 or argv[1] != "eval":
@@ -122,6 +129,19 @@ def ensure_eval_state_curriculum_disabled(argv: list[str]) -> None:
             argv.extend([flag, value])
 
 
+def ensure_eval_frozen_banks_disabled(argv: list[str]) -> None:
+    """Append Metal eval overrides for selfplay frozen banks."""
+    if len(argv) < 3 or argv[1] != "eval":
+        return
+    overrides = [
+        ("--vec.num-frozen-banks", "0"),
+        ("--vec.frozen-bank-pct", "0"),
+    ]
+    for flag, value in overrides:
+        if not arg_flag_present(argv, flag):
+            argv.extend([flag, value])
+
+
 def run_no_render_eval(env_name: str) -> int:
     from pufferlib import _C as backend
     from pufferlib.pufferl import load_config, unroll_nested_dict
@@ -131,6 +151,7 @@ def run_no_render_eval(env_name: str) -> int:
     args["train"]["horizon"] = 1
     args["train"]["minibatch_size"] = args["vec"]["total_agents"]
     disable_state_curriculum(args)
+    disable_frozen_banks(args)
 
     pufferl = backend.create_pufferl(args)
     load_path = args.get("load_model_path")
@@ -177,6 +198,7 @@ def main() -> int:
 
     ensure_eval_minibatch_size(sys.argv)
     ensure_eval_state_curriculum_disabled(sys.argv)
+    ensure_eval_frozen_banks_disabled(sys.argv)
 
     from pufferlib.pufferl import main as puffer_main
 
