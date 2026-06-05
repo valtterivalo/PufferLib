@@ -98,6 +98,30 @@ def ensure_eval_minibatch_size(argv: list[str]) -> None:
     argv.extend(["--train.minibatch-size", str(total_agents)])
 
 
+def disable_state_curriculum(args: dict[str, object]) -> None:
+    """Disable CUDA-only state-buffer curriculum for Metal eval."""
+    train = args["train"]
+    train["state_curriculum_mode"] = 0
+    train["state_buffer_size"] = 0
+    train["cl_frac"] = 0
+    train["warmup_states"] = 0
+
+
+def ensure_eval_state_curriculum_disabled(argv: list[str]) -> None:
+    """Append Metal eval overrides for CUDA-only state-buffer curriculum."""
+    if len(argv) < 3 or argv[1] != "eval":
+        return
+    overrides = [
+        ("--train.state-curriculum-mode", "0"),
+        ("--train.state-buffer-size", "0"),
+        ("--train.cl-frac", "0"),
+        ("--train.warmup-states", "0"),
+    ]
+    for flag, value in overrides:
+        if not arg_flag_present(argv, flag):
+            argv.extend([flag, value])
+
+
 def run_no_render_eval(env_name: str) -> int:
     from pufferlib import _C as backend
     from pufferlib.pufferl import load_config, unroll_nested_dict
@@ -106,6 +130,7 @@ def run_no_render_eval(env_name: str) -> int:
     args["reset_state"] = False
     args["train"]["horizon"] = 1
     args["train"]["minibatch_size"] = args["vec"]["total_agents"]
+    disable_state_curriculum(args)
 
     pufferl = backend.create_pufferl(args)
     load_path = args.get("load_model_path")
@@ -151,6 +176,7 @@ def main() -> int:
         return run_no_render_eval(env_name)
 
     ensure_eval_minibatch_size(sys.argv)
+    ensure_eval_state_curriculum_disabled(sys.argv)
 
     from pufferlib.pufferl import main as puffer_main
 
