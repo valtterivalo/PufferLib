@@ -893,6 +893,7 @@ static const char* inferno_npc_name(int npc_def_id);
     Uses the same lookup chain as render_draw_panel_npc: zulrah forms,
     inferno NPCs, then fallback to "NPC <def_id>". */
 static const char* render_entity_display_name(RenderEntity* ent) {
+    if (ent->display_name[0]) return ent->display_name;
     if (ent->entity_type == ENTITY_PLAYER) return "Player";
 
     /* zulrah forms */
@@ -5435,18 +5436,8 @@ static void render_draw_minimap_area(RenderClient* rc, OsrsEnv* env, Player* p) 
 }
 
 static int render_target_label_entity_idx(RenderClient* rc) {
-    if (rc->entity_count <= 0) return -1;
-    int target = rc->entities[0].attack_target_entity_idx;
-    if (target >= 0 && target < rc->entity_count) return target;
-    int gui_idx = rc->gui.gui_entity_idx;
-    if (gui_idx >= 0 && gui_idx < rc->entity_count) {
-        target = rc->entities[gui_idx].attack_target_entity_idx;
-        if (target >= 0 && target < rc->entity_count) return target;
-    }
-    for (int ei = 0; ei < rc->entity_count; ei++) {
-        if (rc->entities[ei].entity_type == ENTITY_NPC) return ei;
-    }
-    return rc->entity_count > 1 ? 1 : -1;
+    return render_target_label_entity_idx_from_entities(
+        rc->entities, rc->entity_count, rc->gui.gui_entity_idx);
 }
 
 static void render_draw_target_label(RenderClient* rc) {

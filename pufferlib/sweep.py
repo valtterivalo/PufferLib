@@ -138,26 +138,33 @@ class Logit(Space):
         log_spaced = zero_one*(math.log(1-self.max, self.base) - math.log(1-self.min, self.base)) + math.log(1-self.min, self.base)
         return 1 - self.base**log_spaced
 
-def _params_from_puffer_sweep(sweep_config, only_include=None):
+def _params_from_puffer_sweep(sweep_config, only_include=None, prefix=()):
     param_spaces = {}
 
     if 'sweep_only' in sweep_config:
-        only_include = [p.strip() for p in sweep_config['sweep_only'].split(',')]
+        only_include = [
+            p.strip().replace('/', '.')
+            for p in sweep_config['sweep_only'].split(',')
+            if p.strip()
+        ]
 
     for name, param in sweep_config.items():
         if name in ('method', 'metric', 'metric_distribution', 'goal',
                 'downsample', 'use_gpu', 'prune_pareto', 'sweep_only',
                 'max_suggestion_cost', 'early_stop_quantile', 'gpus',
                 'max_runs', 'match_enemy_model_path', 'match_num_games',
-                'match_enemy_hidden_size', 'match_enemy_num_layers'):
+                'match_enemy_hidden_size', 'match_enemy_num_layers',
+                'resume_from_log_dir'):
             continue
 
         assert isinstance(param, dict), f'Param {name} is not a dict'
         if any(isinstance(param[k], dict) for k in param):
-            param_spaces[name] = _params_from_puffer_sweep(param, only_include)
+            param_spaces[name] = _params_from_puffer_sweep(
+                param, only_include, prefix=(*prefix, name))
             continue
  
-        if only_include and not any(k in name for k in only_include):
+        full_name = '.'.join((*prefix, name))
+        if only_include and full_name not in only_include and name not in only_include:
             continue
 
         assert 'distribution' in param

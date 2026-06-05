@@ -277,33 +277,31 @@ static inline int osrs_emit_combat_projectile_profile_player_to_npc(
     int curve = spec->curve > 0
         ? spec->curve
         : osrs_combat_projectile_value_or(profile->projectile_angle, 16);
-    int idx = osrs_emit_projectile_with_spec(
-        overlay,
-        &(OsrsProjectileEventSpec){
-            .src_x = spec->src_x,
-            .src_y = spec->src_y,
-            .dst_x = spec->dst_x,
-            .dst_y = spec->dst_y,
-            .style = encounter_attack_style_to_proj_style(spec->attack_style),
-            .damage = spec->damage,
-            .duration_ticks = spec->duration_ticks,
-            .start_h = osrs_combat_projectile_value_or(
-                profile->projectile_start_height, spec->fallback_start_h),
-            .end_h = osrs_combat_projectile_value_or(
-                profile->projectile_end_height, spec->fallback_end_h),
-            .curve = curve,
-            .arc_height = osrs_combat_projectile_profile_arc_height(
-                profile, spec->attack_style),
-            .src_size = spec->src_size,
-            .dst_size = spec->dst_size,
-            .model_id = (uint32_t)profile->projectile_model_id,
-            .anim_id = profile->projectile_anim_id,
-            .launch_gfx_id = osrs_combat_projectile_value_or(
-                profile->launch_spotanim_id, 0),
-            .impact_gfx_id = impact_gfx,
-            .start_delay = spec->start_delay,
-        },
-        1);
+    OsrsProjectileEventSpec projectile_spec = {
+        .src_x = spec->src_x,
+        .src_y = spec->src_y,
+        .dst_x = spec->dst_x,
+        .dst_y = spec->dst_y,
+        .style = encounter_attack_style_to_proj_style(spec->attack_style),
+        .damage = spec->damage,
+        .duration_ticks = spec->duration_ticks,
+        .start_h = osrs_combat_projectile_value_or(
+            profile->projectile_start_height, spec->fallback_start_h),
+        .end_h = osrs_combat_projectile_value_or(
+            profile->projectile_end_height, spec->fallback_end_h),
+        .curve = curve,
+        .arc_height = osrs_combat_projectile_profile_arc_height(
+            profile, spec->attack_style),
+        .src_size = spec->src_size,
+        .dst_size = spec->dst_size,
+        .model_id = (uint32_t)profile->projectile_model_id,
+        .anim_id = profile->projectile_anim_id,
+        .launch_gfx_id = osrs_combat_projectile_value_or(
+            profile->launch_spotanim_id, 0),
+        .impact_gfx_id = impact_gfx,
+        .start_delay = spec->start_delay,
+    };
+    int idx = osrs_emit_projectile_with_spec(overlay, &projectile_spec, 1);
     encounter_set_projectile_source_player(overlay, idx);
     encounter_set_projectile_target_npc_slot(overlay, idx, spec->target_npc_slot);
     return idx;

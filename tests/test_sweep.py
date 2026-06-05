@@ -17,6 +17,44 @@ try:
 except:
     pass
 
+def test_sweep_only_matches_nested_parameter_paths():
+    config = {
+        'metric': 'score',
+        'metric_distribution': 'linear',
+        'goal': 'maximize',
+        'resume_from_log_dir': '/tmp/puffer-sweep-logs',
+        'sweep_only': 'train.total_timesteps, policy.hidden_size',
+        'train': {
+            'total_timesteps': {
+                'distribution': 'log_normal',
+                'min': 1_000_000,
+                'max': 100_000_000,
+                'scale': 'time',
+            },
+            'learning_rate': {
+                'distribution': 'log_normal',
+                'min': 0.0001,
+                'max': 0.1,
+                'scale': 'auto',
+            },
+        },
+        'policy': {
+            'hidden_size': {
+                'distribution': 'uniform_pow2',
+                'min': 64,
+                'max': 2048,
+                'scale': 'auto',
+            },
+        },
+    }
+
+    hyperparameters = pufferlib.sweep.Hyperparameters(config, verbose=False)
+
+    assert set(hyperparameters.flat_spaces) == {
+        'train/total_timesteps',
+        'policy/hidden_size',
+    }
+
 def synthetic_basic_task(args):
     train_args = args['train']
     learning_rate = train_args['learning_rate']

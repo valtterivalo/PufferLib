@@ -190,6 +190,8 @@ static void init_player(Player* p) {
 
     p->total_damage_dealt = 0;
     p->total_damage_received = 0;
+    p->expected_damage_dealt = 0.0f;
+    p->expected_damage_received = 0.0f;
 
     p->is_lunar_spellbook = 0;
     p->observed_target_lunar_spellbook = 0;
@@ -679,10 +681,32 @@ void pvp_step(OsrsEnv* env) {
         }
 
         Player* p0 = &env->players[0];
+        Player* p1 = &env->players[1];
+        float expected_diff = p0->expected_damage_dealt - p0->expected_damage_received;
+        float expected_damage_score = clampf(0.5f + expected_diff / 198.0f, 0.0f, 1.0f);
+        BrewResult opp_brew = osrs_brew_effect(p1->base_hitpoints, p1->base_attack,
+            p1->base_strength, p1->base_ranged, p1->base_magic);
+        float remaining_supply_hp = 20.0f * (float)p1->food_count
+            + 18.0f * (float)p1->karambwan_count
+            + (float)opp_brew.hp_healed * (float)p1->brew_doses;
+        float max_supply_hp = 20.0f * (float)MAXED_FOOD_COUNT
+            + 18.0f * (float)MAXED_KARAMBWAN_COUNT
+            + (float)opp_brew.hp_healed * (float)MAXED_BREW_DOSES;
+        float ko_supply_score = (env->winner == 0 && max_supply_hp > 0.0f)
+            ? clampf(remaining_supply_hp / max_supply_hp, 0.0f, 1.0f)
+            : 0.0f;
         env->log.episode_return = env->_episode_return;
         env->log.episode_length = (float)env->tick;
         env->log.damage_dealt = p0->total_damage_dealt;
         env->log.damage_received = p0->total_damage_received;
+        env->log.expected_damage_dealt = p0->expected_damage_dealt;
+        env->log.expected_damage_received = p0->expected_damage_received;
+        env->log.expected_damage_diff = expected_diff;
+        env->log.expected_damage_score = expected_damage_score;
+        env->log.ko_supply_score = ko_supply_score;
+        env->log.performance_score = 0.55f * expected_damage_score
+            + 0.30f * ((env->winner == 0) ? 1.0f : 0.0f)
+            + 0.15f * ko_supply_score;
         env->log.wins = (env->winner == 0) ? 1.0f : 0.0f;
         env->log.prayer_correct = (float)p0->target_pray_correct_count;
         env->log.prayer_total = (float)(p0->target_pray_melee_count +

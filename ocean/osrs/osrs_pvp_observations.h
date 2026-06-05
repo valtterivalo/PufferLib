@@ -275,11 +275,6 @@ static void ensure_obs_norm_initialized(void) {
     }
 }
 
-/**
- * Write normalized agent 0 observations + action mask to ocean buffer.
- *
- * Output layout: [normalized_obs(334), action_mask_as_float(39)] = 373 floats.
- */
 static void ocean_write_obs(OsrsEnv* env) {
     ensure_obs_norm_initialized();
     float* dst = env->ocean_io.agent_obs;
@@ -297,12 +292,6 @@ static void ocean_write_obs(OsrsEnv* env) {
     }
 }
 
-/**
- * Write normalized agent 1 observations + action mask to self-play buffer.
- *
- * Mirrors ocean_write_obs() but reads from agent 1's internal buffer offsets.
- * Only called when ocean_io.agent_obs_p1 is set (self-play enabled).
- */
 static void ocean_write_obs_p1(OsrsEnv* env) {
     ensure_obs_norm_initialized();
     float* dst = env->ocean_io.agent_obs_p1;

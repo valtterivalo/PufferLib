@@ -381,6 +381,216 @@ static int calculate_max_hit(Player* p, AttackStyle style, float str_mult, int m
     return max_hit;
 }
 
+static inline float pvp_expected_reduced_fixed_damage(
+        int damage, int target_prayer, AttackStyle style) {
+    return (float)osrs_prayer_reduce_damage(damage, target_prayer, style, 1);
+}
+
+static float pvp_expected_reduced_uniform_damage(
+        int low, int high, int target_prayer, AttackStyle style) {
+    if (high < low) return 0.0f;
+    float total = 0.0f;
+    for (int damage = low; damage <= high; damage++) {
+        total += pvp_expected_reduced_fixed_damage(damage, target_prayer, style);
+    }
+    return total / (float)(high - low + 1);
+}
+
+static float pvp_expected_dark_bow_arrow_damage(
+        float hit_chance, int spec_max, int target_prayer, AttackStyle style) {
+    float hit_total = 0.0f;
+    for (int damage = 0; damage <= spec_max; damage++) {
+        hit_total += pvp_expected_reduced_fixed_damage(
+            damage < 8 ? 8 : damage, target_prayer, style);
+    }
+    float hit_ev = hit_total / (float)(spec_max + 1);
+    float miss_ev = pvp_expected_reduced_fixed_damage(8, target_prayer, style);
+    return hit_chance * hit_ev + (1.0f - hit_chance) * miss_ev;
+}
+
+static float pvp_expected_claw_split_damage(
+        int low, int high, int split_idx, int target_prayer, AttackStyle style) {
+    if (high < low) return 0.0f;
+    float total = 0.0f;
+    for (int rolled = low; rolled <= high; rolled++) {
+        int damage[4] = {0, 0, 0, 0};
+        if (split_idx == 0) {
+            damage[0] = rolled / 2;
+            damage[1] = rolled / 4;
+            damage[2] = rolled / 8;
+            damage[3] = rolled / 8 + 1;
+        } else if (split_idx == 1) {
+            damage[0] = rolled / 2;
+            damage[1] = rolled / 4;
+            damage[2] = rolled / 4 + 1;
+        } else if (split_idx == 2) {
+            damage[0] = rolled / 2;
+            damage[1] = rolled / 2 + 1;
+        } else if (split_idx == 3) {
+            damage[0] = rolled + 1;
+        } else {
+            abort();
+        }
+        for (int i = 0; i < 4; i++) {
+            total += pvp_expected_reduced_fixed_damage(damage[i], target_prayer, style);
+        }
+    }
+    return total / (float)(high - low + 1);
+}
+
+static float pvp_expected_dragon_claws_damage(
+        int att_roll, int max_hit, int def_roll, int target_prayer, AttackStyle style) {
+    float hit_chance = clampf(osrs_hit_chance(att_roll, def_roll), 0.0f, 1.0f);
+    float miss_chance = 1.0f - hit_chance;
+    float ev = 0.0f;
+    ev += hit_chance * pvp_expected_claw_split_damage(
+        max_hit, max_hit + max_hit - 1, 0, target_prayer, style);
+    ev += miss_chance * hit_chance * pvp_expected_claw_split_damage(
+        max_hit * 3 / 4, max_hit + max_hit * 3 / 4 - 1, 1, target_prayer, style);
+    ev += miss_chance * miss_chance * hit_chance * pvp_expected_claw_split_damage(
+        max_hit / 2, max_hit + max_hit / 2 - 1, 2, target_prayer, style);
+    ev += miss_chance * miss_chance * miss_chance * hit_chance * pvp_expected_claw_split_damage(
+        max_hit / 4, max_hit + max_hit / 4 - 1, 3, target_prayer, style);
+    float all_miss = 2.0f / 3.0f * (
+        pvp_expected_reduced_fixed_damage(1, target_prayer, style)
+        + pvp_expected_reduced_fixed_damage(1, target_prayer, style));
+    ev += miss_chance * miss_chance * miss_chance * miss_chance * all_miss;
+    return ev;
+}
+
+static float pvp_expected_spec_damage(
+        int weapon_item_idx, int att_roll, int max_hit, int def_roll,
+        int target_prayer, AttackStyle style) {
+    switch (weapon_item_idx) {
+        case ITEM_AGS:
+            return osrs_hit_chance(att_roll * 2, def_roll)
+                * pvp_expected_reduced_uniform_damage(0, max_hit * 11 / 8, target_prayer, style);
+        case ITEM_DRAGON_CLAWS:
+            return pvp_expected_dragon_claws_damage(att_roll, max_hit, def_roll, target_prayer, style);
+        case ITEM_STATIUS_WARHAMMER:
+            return osrs_hit_chance(att_roll * 5 / 4, def_roll)
+                * pvp_expected_reduced_uniform_damage(0, max_hit * 5 / 4, target_prayer, style);
+        case ITEM_BGS:
+            return osrs_hit_chance(att_roll * 2, def_roll)
+                * pvp_expected_reduced_uniform_damage(0, max_hit * 121 / 100, target_prayer, style);
+        case ITEM_ZGS:
+        case ITEM_SGS:
+            return osrs_hit_chance(att_roll * 2, def_roll)
+                * pvp_expected_reduced_uniform_damage(0, max_hit * 11 / 10, target_prayer, style);
+        case ITEM_ANCIENT_GS: {
+            int spec_max = max_hit * 11 / 10;
+            float hit_chance = osrs_hit_chance(att_roll * 2, def_roll);
+            float base_ev = hit_chance * pvp_expected_reduced_uniform_damage(
+                0, spec_max, target_prayer, style);
+            float blood_prob = spec_max > 0
+                ? hit_chance * (float)spec_max / (float)(spec_max + 1)
+                : 0.0f;
+            return base_ev + blood_prob * pvp_expected_reduced_fixed_damage(
+                25, target_prayer, ATTACK_STYLE_MAGIC);
+        }
+        case ITEM_VESTAS:
+            return osrs_hit_chance(att_roll, def_roll / 4)
+                * pvp_expected_reduced_uniform_damage(
+                    max_hit / 5, max_hit * 6 / 5, target_prayer, style);
+        case ITEM_VOIDWAKER:
+            return osrs_hit_chance(att_roll, def_roll / 4)
+                * pvp_expected_reduced_uniform_damage(
+                    max_hit / 2, max_hit * 3 / 2, target_prayer, ATTACK_STYLE_MAGIC);
+        case ITEM_GRANITE_MAUL:
+            return osrs_hit_chance(att_roll, def_roll)
+                * pvp_expected_reduced_uniform_damage(0, max_hit, target_prayer, style);
+        case ITEM_DRAGON_DAGGER:
+            return 2.0f * osrs_hit_chance(att_roll * 23 / 20, def_roll)
+                * pvp_expected_reduced_uniform_damage(0, max_hit * 23 / 20, target_prayer, style);
+        case ITEM_ELDER_MAUL:
+            return osrs_hit_chance(att_roll * 5 / 4, def_roll)
+                * pvp_expected_reduced_uniform_damage(0, max_hit, target_prayer, style);
+        case ITEM_TOXIC_BLOWPIPE:
+            return osrs_hit_chance(att_roll * 2, def_roll)
+                * pvp_expected_reduced_uniform_damage(0, max_hit * 3 / 2, target_prayer, style);
+        case ITEM_MAGIC_SHORTBOW_I:
+            return 2.0f * osrs_hit_chance(att_roll * 10 / 7, def_roll)
+                * pvp_expected_reduced_uniform_damage(0, max_hit, target_prayer, style);
+        case ITEM_DARK_BOW: {
+            int spec_max = max_hit * 3 / 2;
+            if (spec_max > 48) spec_max = 48;
+            return 2.0f * pvp_expected_dark_bow_arrow_damage(
+                osrs_hit_chance(att_roll, def_roll), spec_max, target_prayer, style);
+        }
+        case ITEM_HEAVY_BALLISTA:
+            return osrs_hit_chance(att_roll * 5 / 4, def_roll)
+                * pvp_expected_reduced_uniform_damage(0, max_hit * 5 / 4, target_prayer, style);
+        case ITEM_ZARYTE_CROSSBOW:
+            return osrs_hit_chance(att_roll * 2, def_roll)
+                * pvp_expected_reduced_uniform_damage(0, max_hit, target_prayer, style);
+        case ITEM_MORRIGANS_JAVELIN:
+            return osrs_hit_chance(att_roll, def_roll / 4)
+                * pvp_expected_reduced_uniform_damage(
+                    max_hit / 5, max_hit * 6 / 5, target_prayer, style);
+        case ITEM_ARMADYL_CROSSBOW:
+            return osrs_hit_chance(att_roll * 2, def_roll)
+                * pvp_expected_reduced_uniform_damage(0, max_hit, target_prayer, style);
+        case ITEM_VOLATILE_STAFF:
+            return osrs_hit_chance(att_roll * 3 / 2, def_roll)
+                * pvp_expected_reduced_uniform_damage(0, 58, target_prayer, style);
+        case ITEM_EYE_OF_AYAK:
+            return osrs_hit_chance(att_roll * 2, def_roll)
+                * pvp_expected_reduced_uniform_damage(0, max_hit * 13 / 10, target_prayer, style);
+        default:
+            fprintf(stderr, "pvp_expected_spec_damage: unknown special item %d\n", weapon_item_idx);
+            abort();
+    }
+}
+
+static float pvp_expected_normal_bolt_damage(
+        int ammo_item, float hit_chance, int max_hit, int ranged_level,
+        int target_hp, int target_prayer, AttackStyle style) {
+    switch (ammo_item) {
+        case ITEM_DIAMOND_BOLTS_E:
+        case ITEM_DIAMOND_DRAGON_BOLTS_E: {
+            float chance = 0.11f;
+            float base = pvp_expected_reduced_uniform_damage(0, max_hit, target_prayer, style);
+            float proc = pvp_expected_reduced_uniform_damage(
+                0, max_hit * 115 / 100, target_prayer, style);
+            return hit_chance * ((1.0f - chance) * base + chance * proc);
+        }
+        case ITEM_OPAL_DRAGON_BOLTS: {
+            float chance = 0.055f;
+            int bonus = ranged_level / 10;
+            float hit_total = 0.0f;
+            for (int damage = 0; damage <= max_hit; damage++) {
+                float no_proc = pvp_expected_reduced_fixed_damage(damage, target_prayer, style);
+                float proc = pvp_expected_reduced_fixed_damage(
+                    damage + bonus, target_prayer, style);
+                hit_total += (1.0f - chance) * no_proc + chance * proc;
+            }
+            float hit_ev = hit_total / (float)(max_hit + 1);
+            float miss_ev = chance * pvp_expected_reduced_fixed_damage(
+                bonus, target_prayer, style);
+            return hit_chance * hit_ev + (1.0f - hit_chance) * miss_ev;
+        }
+        case ITEM_RUBY_DRAGON_BOLTS_E: {
+            float chance = 0.066f;
+            int effect_dmg = target_hp * 20 / 100;
+            if (effect_dmg > 100) effect_dmg = 100;
+            float base = pvp_expected_reduced_uniform_damage(0, max_hit, target_prayer, style);
+            float proc = pvp_expected_reduced_fixed_damage(effect_dmg, target_prayer, style);
+            return hit_chance * ((1.0f - chance) * base + chance * proc);
+        }
+        default:
+            return hit_chance * pvp_expected_reduced_uniform_damage(0, max_hit, target_prayer, style);
+    }
+}
+
+static void register_expected_damage(
+        OsrsEnv* env, int attacker_idx, int defender_idx, float expected_damage) {
+    Player* attacker = &env->players[attacker_idx];
+    Player* defender = &env->players[defender_idx];
+    attacker->expected_damage_dealt += expected_damage;
+    defender->expected_damage_received += expected_damage;
+}
+
+
 static inline int get_ice_freeze_ticks(int current_magic) {
     if (current_magic >= ICE_BARRAGE_LEVEL) return 32;
     if (current_magic >= ICE_BLITZ_LEVEL) return 24;
@@ -1006,6 +1216,9 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
 
         int magic_base_hit = 30;
         int max_hit = calculate_max_hit(attacker, style, 1.0f, magic_base_hit);
+        float expected_damage = pvp_expected_spec_damage(
+            spec_item_idx, att_roll, max_hit, def_roll, defender->prayer, style);
+        register_expected_damage(env, attacker_idx, defender_idx, expected_damage);
 
         SpecResult sr = osrs_resolve_spec(
             spec_item_idx, att_roll, max_hit, def_roll,
@@ -1112,6 +1325,13 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
         /* bolt proc setup */
         int ammo_item = attacker->equipped[GEAR_SLOT_AMMO];
         int is_crossbow_ranged = (style == ATTACK_STYLE_RANGED && !is_special);
+        float expected_damage = is_crossbow_ranged
+            ? pvp_expected_normal_bolt_damage(
+                ammo_item, hit_chance, max_hit, attacker->current_ranged,
+                defender->current_hitpoints, defender->prayer, style)
+            : hit_chance * pvp_expected_reduced_uniform_damage(
+                0, max_hit, defender->prayer, style);
+        register_expected_damage(env, attacker_idx, defender_idx, expected_damage);
 
         int hit_count = 1;
         for (int i = 0; i < hit_count; i++) {

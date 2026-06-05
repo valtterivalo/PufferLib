@@ -676,6 +676,8 @@ typedef struct {
     // Total damage
     float total_damage_dealt;
     float total_damage_received;
+    float expected_damage_dealt;
+    float expected_damage_received;
 
     // Equipment flags
     int is_lunar_spellbook;
@@ -734,6 +736,12 @@ typedef struct {
     float wins;
     float damage_dealt;
     float damage_received;
+    float expected_damage_dealt;
+    float expected_damage_received;
+    float expected_damage_diff;
+    float expected_damage_score;
+    float ko_supply_score;
+    float performance_score;
     float wave;
     float prayer_correct;
     float prayer_total;

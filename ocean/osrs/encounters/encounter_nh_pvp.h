@@ -195,6 +195,32 @@ static void* nh_pvp_get_entity(EncounterState* state, EncounterContext* context,
     return &s->env.players[index];
 }
 
+static const char* nh_pvp_render_entity_name(OsrsEnv* env, int player_idx) {
+    if (player_idx == 0) {
+        if (env->pvp_runtime.use_c_opponent_p0)
+            return osrs_pvp_opponent_state_display_name(&env->pvp_runtime.opponent_p0);
+        return "Agent";
+    }
+
+    if (env->pvp_runtime.use_external_opponent_actions ||
+            env->pvp_runtime.opponent.type == OPP_SELFPLAY) {
+        return "Opponent Agent";
+    }
+
+    if (env->pvp_runtime.opponent.type != OPP_NONE ||
+            env->pvp_runtime.opponent.active_sub_policy != OPP_NONE) {
+        return osrs_pvp_opponent_state_display_name(&env->pvp_runtime.opponent);
+    }
+
+    return "Opponent";
+}
+
+static int nh_pvp_render_attack_target_idx(Player* player, int entity_count) {
+    if (!osrs_interaction_active(&player->interaction)) return -1;
+    int target = player->interaction.target_slot;
+    if (target < 0 || target >= entity_count) return -1;
+    return target;
+}
 
 static void nh_pvp_fill_render_entities(
     EncounterState* state,
@@ -208,7 +234,10 @@ static void nh_pvp_fill_render_entities(
     int n = NUM_AGENTS < max_entities ? NUM_AGENTS : max_entities;
     for (int i = 0; i < n; i++) {
         osrs_render_entity_from_player_entity(&s->env.players[i], &out[i]);
-        out[i].attack_target_entity_idx = (n >= 2) ? (1 - i) : -1;
+        out[i].attack_target_entity_idx =
+            nh_pvp_render_attack_target_idx(&s->env.players[i], n);
+        snprintf(out[i].display_name, sizeof(out[i].display_name), "%s",
+            nh_pvp_render_entity_name(&s->env, i));
     }
     *count = n;
 }
@@ -331,15 +360,16 @@ static const EncounterDef ENCOUNTER_NH_PVP = {
     .put_float = nh_pvp_put_float,
     .put_ptr = nh_pvp_put_ptr,
 
+    .translate_human_input = NULL,
+    .is_human_targetable_npc_slot = NULL,
+    .head_move = -1,
+    .head_prayer = -1,
+    .head_target = -1,
+
     .render_post_tick = NULL,
     .get_log = nh_pvp_get_log,
     .get_tick = nh_pvp_get_tick,
     .get_winner = nh_pvp_get_winner,
-
-    .translate_human_input = NULL,
-    .head_move = -1,
-    .head_prayer = -1,
-    .head_target = -1,
 };
 
 /* auto-register on include */
