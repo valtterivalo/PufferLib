@@ -125,6 +125,74 @@ static Dict* pvp_kwargs(void) {
     return kwargs;
 }
 
+static int action_head_offset(int head) {
+    int offset = 0;
+    for (int i = 0; i < head; i++) {
+        offset += ACTION_HEAD_DIMS[i];
+    }
+    return offset;
+}
+
+static void test_native_init_loads_collision_map_and_walkable_spawns(void) {
+    printf("--- PvP native init loads collision map and walkable spawns ---\n");
+
+    Env env;
+    memset(&env, 0, sizeof(env));
+
+    Dict* kwargs = pvp_kwargs();
+    my_init(&env, kwargs);
+
+    const CollisionMap* cmap = (const CollisionMap*)env.pvp.collision_map;
+    ASSERT_TRUE("native init collision map", cmap != NULL);
+    ASSERT_INT_EQ("agent fixed spawn x", env.pvp.players[0].x, 3041);
+    ASSERT_INT_EQ("agent fixed spawn y", env.pvp.players[0].y, 3530);
+    ASSERT_INT_EQ("opponent fixed spawn x", env.pvp.players[1].x, 3046);
+    ASSERT_INT_EQ("opponent fixed spawn y", env.pvp.players[1].y, 3531);
+    ASSERT_TRUE("agent spawn walkable",
+        collision_tile_walkable(cmap, 0, env.pvp.players[0].x, env.pvp.players[0].y));
+    ASSERT_TRUE("opponent spawn walkable",
+        collision_tile_walkable(cmap, 0, env.pvp.players[1].x, env.pvp.players[1].y));
+    ASSERT_TRUE("spawns are distinct",
+        env.pvp.players[0].x != env.pvp.players[1].x ||
+        env.pvp.players[0].y != env.pvp.players[1].y);
+
+    free(kwargs->items);
+    free(kwargs);
+    c_close(&env);
+}
+
+static void test_movement_masks_respect_blocked_tiles(void) {
+    printf("--- PvP movement masks respect blocked tiles ---\n");
+
+    OsrsEnv env;
+    memset(&env, 0, sizeof(env));
+    pvp_init(&env);
+    CollisionMap* cmap = collision_map_create();
+    env.collision_map = cmap;
+    pvp_seed(&env, 73);
+    pvp_reset(&env);
+
+    Player* agent = &env.players[0];
+    Player* target = &env.players[1];
+    pvp_set_player_spawn(agent, 3041, 3530);
+    pvp_set_player_spawn(target, 3042, 3530);
+    agent->last_obs_target_x = target->x;
+    agent->last_obs_target_y = target->y;
+    target->frozen_ticks = 8;
+    collision_mark_blocked(cmap, 0, target->x, target->y);
+
+    compute_action_masks(&env, 0);
+
+    int combat_offset = action_head_offset(HEAD_COMBAT);
+    int move_offset = action_head_offset(HEAD_MOVE);
+    ASSERT_INT_EQ("blocked MOVE_UNDER mask",
+        env.action_masks[combat_offset + MOVE_UNDER], 0);
+    ASSERT_INT_EQ("blocked HEAD_MOVE east mask",
+        env.action_masks[move_offset + 7], 0);
+
+    collision_map_free(cmap);
+}
+
 static void test_static_binding_exposes_separate_action_mask(void) {
     printf("--- PvP static binding exposes separate action mask ---\n");
 
@@ -298,6 +366,8 @@ static void test_expected_damage_representative_specs(void) {
 
 int main(void) {
     setbuf(stdout, NULL);
+    test_native_init_loads_collision_map_and_walkable_spawns();
+    test_movement_masks_respect_blocked_tiles();
     test_static_binding_exposes_separate_action_mask();
     test_static_binding_sets_scripted_opponents();
     test_binding_pfsp_stats_round_trip();

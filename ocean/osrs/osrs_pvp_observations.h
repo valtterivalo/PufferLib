@@ -175,9 +175,11 @@ static inline int can_move_adjacent(Player* p, Player* target, const CollisionMa
 }
 
 /** Check if moving under target is useful (they're frozen). */
-static inline int can_move_under(Player* p, Player* target) {
+static inline int can_move_under(Player* p, Player* target, const CollisionMap* cmap) {
     int dist = chebyshev_distance(p->x, p->y, p->last_obs_target_x, p->last_obs_target_y);
-    return remaining_ticks(target->frozen_ticks) > 0 && dist != 0;
+    return remaining_ticks(target->frozen_ticks) > 0 &&
+        dist != 0 &&
+        pvp_tile_walkable((void*)cmap, p->last_obs_target_x, p->last_obs_target_y);
 }
 
 /** Check if farcast tile at distance is reachable. */
@@ -721,7 +723,7 @@ static void compute_action_masks(OsrsEnv* env, int agent_idx) {
     mask[offset + ATTACK_BLOOD] = attack_ready && can_cast_blood_spell(p);
     const CollisionMap* cmap = (const CollisionMap*)env->collision_map;
     mask[offset + MOVE_ADJACENT] = can_move_now && can_move_adjacent(p, t, cmap);
-    mask[offset + MOVE_UNDER] = can_move_now && can_move_under(p, t);
+    mask[offset + MOVE_UNDER] = can_move_now && can_move_under(p, t, cmap);
     mask[offset + MOVE_DIAGONAL] = can_move_now && can_move_diagonal(p, t, cmap);
     mask[offset + MOVE_FARCAST_2] = can_move_now && can_move_to_farcast(p, t, 2, cmap);
     mask[offset + MOVE_FARCAST_3] = can_move_now && can_move_to_farcast(p, t, 3, cmap);
