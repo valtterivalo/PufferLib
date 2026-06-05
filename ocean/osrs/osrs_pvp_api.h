@@ -19,6 +19,7 @@
 #include "osrs_pvp_movement.h"
 #include "osrs_pvp_observations.h"
 #include "osrs_pvp_actions.h"
+#include "osrs_pvp_opponents.h"
 
 /**
  * Initialize a player with default pure build stats and gear.
@@ -400,6 +401,7 @@ void pvp_init(OsrsEnv* env) {
     memset(&env->pvp_runtime.opponent, 0, sizeof(env->pvp_runtime.opponent));
     memset(&env->pvp_runtime.opponent_p0, 0, sizeof(env->pvp_runtime.opponent_p0));
     memset(&env->pvp_runtime.pfsp, 0, sizeof(env->pvp_runtime.pfsp));
+    pvp_terminal_presentation_clear(env);
     memset(env->pvp_runtime.gear_tier_weights, 0, sizeof(env->pvp_runtime.gear_tier_weights));
     for (int i = 0; i < NUM_AGENTS; i++) {
         env->pvp_runtime.walk_dest_x[i] = -1;
@@ -520,24 +522,35 @@ void pvp_reset(OsrsEnv* env) {
     }
 }
 
-/**
- * Execute one game tick with OSRS-accurate 1-tick delay timing.
- *
- * Actions submitted on tick N are applied IMMEDIATELY in the same step,
- * producing tick N+1 state. This gives proper 1-tick delay:
- * action at tick N → effects visible at tick N+1.
- *
- * Flow:
- *   1. Copy model/external actions to env->actions
- *   2. Generate C opponent actions into env->actions
- *   3. Apply actions immediately (execute switches, then attacks)
- *   4. Increment tick
- *   5. Check win conditions
- *   6. Calculate rewards
- *   7. Generate observations
- *
- * @param env Environment
- */
+static const char* pvp_terminal_opponent_name(OsrsEnv* env) {
+    if (env->pvp_runtime.use_external_opponent_actions ||
+            env->pvp_runtime.opponent.type == OPP_SELFPLAY) {
+        return "Opponent Agent";
+    }
+    if (env->pvp_runtime.opponent.type != OPP_NONE ||
+            env->pvp_runtime.opponent.active_sub_policy != OPP_NONE) {
+        return osrs_pvp_opponent_state_display_name(&env->pvp_runtime.opponent);
+    }
+    return "Opponent";
+}
+
+static void pvp_terminal_presentation_capture(OsrsEnv* env) {
+    PvpTerminalPresentation* p = &env->pvp_runtime.terminal_presentation;
+    memset(p, 0, sizeof(*p));
+    p->phase = PVP_TERMINAL_PRESENTATION_DEATH;
+    p->winner = env->winner;
+    memcpy(p->players, env->players, sizeof(p->players));
+    snprintf(p->opponent_name, sizeof(p->opponent_name), "%s",
+        pvp_terminal_opponent_name(env));
+
+    if (env->winner >= 0 && env->winner < NUM_AGENTS) {
+        int loser = 1 - env->winner;
+        p->players[loser].current_hitpoints = 0;
+        osrs_interaction_set(&p->players[env->winner].interaction, loser);
+        osrs_interaction_set(&p->players[loser].interaction, env->winner);
+    }
+}
+
 void pvp_step(OsrsEnv* env) {
     memset(env->rewards, 0, NUM_AGENTS * sizeof(float));
     memset(env->terminals, 0, NUM_AGENTS);
@@ -816,8 +829,8 @@ void pvp_step(OsrsEnv* env) {
         env->log.attacks_landed = (float)p0->total_target_hit_count;
         env->log.off_prayer_hits = (float)p0->target_hit_off_prayer_count;
         env->log.n = 1.0f;
+        pvp_terminal_presentation_capture(env);
 
-        // Auto-reset for next episode
         if (env->auto_reset) {
             pvp_reset(env);
         }

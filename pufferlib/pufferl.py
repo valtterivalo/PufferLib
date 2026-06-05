@@ -848,20 +848,31 @@ def eval(env_name, args=None, load_path=None):
 
     backend.close(pufferl)
 
+def _match_render_enabled(args):
+    return str(args.get('render_mode', 'auto')).lower() in ('human', 'raylib')
+
+def _pin_match_eval_args(args):
+    args['reset_state'] = False
+    args.setdefault('nccl_id', b'')
+    args.setdefault('env', {})['use_rollout_opponent'] = 1
+    args.setdefault('vec', {})['num_buffers'] = 2
+    args['vec']['total_agents'] = 8192
+    args.setdefault('train', {})['horizon'] = 1
+    args['train']['minibatch_size'] = 8192
+    args['train']['state_curriculum_mode'] = 0
+    args['train']['state_buffer_size'] = 0
+    args['train']['cl_frac'] = 0
+    args['train']['warmup_states'] = 0
+
 def match(env_name, policy_a_path, policy_b_path, num_games=4096, args=None, verbose=True):
     '''Head-to-head match between two trained policies in a 2-agent selfplay env.
     Policy A plays slot 0 (e.g. white in chess), policy B plays slot 1 (black).
     Both checkpoints must come from the same env / arch.
     '''
     args = args or load_config(env_name)
-    args['reset_state'] = False
-    args['train']['horizon'] = 1
-    args.setdefault('nccl_id', b'')  # match is always single-GPU
-    # Sweep suggestions can give odd agents_per_buffer (e.g. num_buffers=5,
-    # total_agents=4096 -> 819). Pin to a stable eval config that guarantees
-    # clean slot-0/slot-1 split; ignores trial's vec tuning (eval, not train).
-    args['vec']['num_buffers'] = 2
-    args['vec']['total_agents'] = 8192
+    _pin_match_eval_args(args)
+    num_games = int(num_games)
+    render_enabled = _match_render_enabled(args)
     backend = _resolve_backend(args)
     if backend is not _C:
         raise RuntimeError('match() requires the native CUDA backend')
@@ -884,14 +895,8 @@ def match(env_name, policy_a_path, policy_b_path, num_games=4096, args=None, ver
     if 2 * half != agents_per_buffer:
         raise RuntimeError(f'agents_per_buffer ({agents_per_buffer}) must be even for 2-agent selfplay')
 
-    # Primary holds policy A (owns first half of each buffer); one frozen bank
-    # holds policy B (owns second half). Bank is created inside create_pufferl
-    # before cudagraph capture so the graph bakes in its pointers; weight loads
-    # later only update data.
     args['vec']['num_frozen_banks'] = 1
     args['vec']['frozen_bank_pct'] = 0.5
-    # CLI flags take precedence; fall back to [sweep].match_enemy_* so the same
-    # config drives sweep-time and CLI-time matches. 0 / None means "use primary".
     sweep_cfg = args.get('sweep', {})
     enemy_hidden = args.get('enemy_hidden_size') or sweep_cfg.get('match_enemy_hidden_size')
     enemy_layers = args.get('enemy_num_layers')  or sweep_cfg.get('match_enemy_num_layers')
@@ -902,9 +907,6 @@ def match(env_name, policy_a_path, policy_b_path, num_games=4096, args=None, ver
 
     pufferl = backend.create_pufferl(args)
 
-    # Per-buffer perm: each env's slot 0 lands in primary's slice [0, half),
-    # slot 1 lands in frozen bank's slice [half, agents_per_buffer). The env
-    # side randomizes slot<->color per env, so A and B each play both colors.
     perm = np.empty(total_agents, dtype=np.int32)
     envs_per_buffer = half
     for b in range(num_buffers):
@@ -919,6 +921,8 @@ def match(env_name, policy_a_path, policy_b_path, num_games=4096, args=None, ver
 
     logs = {}
     while True:
+        if render_enabled:
+            backend.render(pufferl, 0)
         backend.rollouts(pufferl)
         logs = dict(unroll_nested_dict(backend.eval_log(pufferl)))
         n = int(logs.get('env/n', 0))
@@ -926,8 +930,9 @@ def match(env_name, policy_a_path, policy_b_path, num_games=4096, args=None, ver
             a = logs.get('env/slot_0_score', 0.0)
             b = logs.get('env/slot_1_score', 0.0)
             draws = logs.get('env/draw_rate', 0.0)
-            print(f'\rgames={n}/{num_games}  A={a:.3f}  B={b:.3f}  draw={draws:.3f}', end='')
-        if n >= num_games:
+            target = str(num_games) if num_games > 0 else 'inf'
+            print(f'\rgames={n}/{target}  A={a:.3f}  B={b:.3f}  draw={draws:.3f}', end='')
+        if num_games > 0 and n >= num_games:
             break
 
     if verbose:
