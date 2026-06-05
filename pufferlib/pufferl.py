@@ -887,7 +887,15 @@ def load_config(env_name):
         p = configparser.ConfigParser()
         p.read(puffer_default_config)
     else:
-        for path in glob.glob(puffer_config_dir, recursive=True):
+        config_paths = glob.glob(puffer_config_dir, recursive=True)
+        exact_config = [
+            path for path in config_paths
+            if os.path.splitext(os.path.basename(path))[0] == env_name
+        ]
+        search_paths = exact_config + [
+            path for path in config_paths if path not in exact_config
+        ]
+        for path in search_paths:
             p = configparser.ConfigParser()
             p.read([puffer_default_config, path])
             if env_name in p['base']['env_name'].split(): break
