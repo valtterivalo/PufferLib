@@ -745,6 +745,11 @@ typedef struct {
     char opponent_name[PVP_TERMINAL_PRESENTATION_NAME_LEN];
 } PvpTerminalPresentation;
 
+typedef enum {
+    PVP_START_RANDOMIZED = 0,
+    PVP_START_FIXED_PAIR = 1,
+} PvpStartMode;
+
 typedef struct {
     float damage[NUM_AGENTS];
     float expected_damage[NUM_AGENTS];
@@ -1192,6 +1197,7 @@ typedef struct {
     PFSPState pfsp;
     PvpTerminalPresentation terminal_presentation;
     float gear_tier_weights[4];  /* 4 tiers, sum to 1.0 */
+    PvpStartMode start_mode;
     /* BFS walk destinations per agent (-1 = no pending walk). consumed by
        osrs_encounter_player_step via OSRS_PLAYER_MOVE_DESTINATION; cleared when
        the agent arrives. survives across ticks for human click-to-walk. */

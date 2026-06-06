@@ -94,8 +94,7 @@ static void nh_pvp_reset(EncounterState* state, EncounterContext* context, uint3
     (void)context;
     NhPvpState* s = (NhPvpState*)state;
     if (seed != 0) {
-        s->env.has_rng_seed = 1;
-        s->env.rng_seed = seed;
+        pvp_seed(&s->env, seed);
     }
     pvp_reset(&s->env);
 }
@@ -293,6 +292,8 @@ static void nh_pvp_put_int(
         s->env.pvp_runtime.use_c_opponent_p0 = value;
     } else if (strcmp(key, "auto_reset") == 0) {
         s->env.auto_reset = value;
+    } else if (strcmp(key, "fixed_spawns") == 0) {
+        s->env.pvp_runtime.start_mode = pvp_start_mode_from_fixed_spawns(value);
     } else if (strcmp(key, "gear_tier") == 0) {
         if (value < 0) {
             s->env.pvp_runtime.gear_tier_weights[0] = 0.60f;
@@ -309,8 +310,7 @@ static void nh_pvp_put_int(
             s->env.pvp_runtime.gear_tier_weights[value] = 1.0f;
         }
     } else if (strcmp(key, "seed") == 0) {
-        s->env.has_rng_seed = 1;
-        s->env.rng_seed = (uint32_t)value;
+        pvp_seed(&s->env, (uint32_t)value);
     }
 }
 

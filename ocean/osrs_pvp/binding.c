@@ -469,6 +469,12 @@ void my_init(Env* env, Dict* kwargs) {
     env->pvp.rng_reset_count = 0;
     env->pvp.has_rng_seed = 1;
 
+    DictItem* fixed_spawns = dict_get_unsafe(kwargs, "fixed_spawns");
+    if (fixed_spawns) {
+        env->pvp.pvp_runtime.start_mode =
+            pvp_start_mode_from_fixed_spawns((int)fixed_spawns->value);
+    }
+
     env->pvp.ocean_io.agent_obs = NULL;
     env->pvp.ocean_io.agent_rewards = env->pvp._rews_buf;
     env->pvp.ocean_io.agent_obs_p1 = NULL;

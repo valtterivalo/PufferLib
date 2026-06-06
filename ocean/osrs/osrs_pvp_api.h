@@ -318,6 +318,13 @@ static void pvp_set_player_spawn(Player* p, int x, int y) {
     p->is_moving = 0;
 }
 
+static PvpStartMode pvp_start_mode_from_fixed_spawns(int fixed_spawns) {
+    if (fixed_spawns == 0) return PVP_START_RANDOMIZED;
+    if (fixed_spawns == 1) return PVP_START_FIXED_PAIR;
+    fprintf(stderr, "osrs_pvp: fixed_spawns must be 0 or 1, got %d\n", fixed_spawns);
+    abort();
+}
+
 static void set_fight_positions(OsrsEnv* env) {
     const CollisionMap* cmap = pvp_require_collision_map(env);
     int x0 = FIGHT_AREA_BASE_X;
@@ -325,15 +332,21 @@ static void set_fight_positions(OsrsEnv* env) {
     int x1 = FIGHT_AREA_BASE_X + FIGHT_NEARBY_RADIUS;
     int y1 = FIGHT_AREA_BASE_Y + 1;
 
-    if (env->has_rng_seed) {
-        if (!pvp_find_nearest_walkable_spawn(cmap, x0, y0, -1, -1, &x0, &y0) ||
-                !pvp_find_nearest_walkable_spawn(cmap, x1, y1, x0, y0, &x1, &y1)) {
-            fprintf(stderr, "osrs_pvp: no walkable fixed spawn pair in fight area\n");
+    switch (env->pvp_runtime.start_mode) {
+        case PVP_START_FIXED_PAIR:
+            if (!pvp_find_nearest_walkable_spawn(cmap, x0, y0, -1, -1, &x0, &y0) ||
+                    !pvp_find_nearest_walkable_spawn(cmap, x1, y1, x0, y0, &x1, &y1)) {
+                fprintf(stderr, "osrs_pvp: no walkable fixed spawn pair in fight area\n");
+                abort();
+            }
+            pvp_set_player_spawn(&env->players[0], x0, y0);
+            pvp_set_player_spawn(&env->players[1], x1, y1);
+            return;
+        case PVP_START_RANDOMIZED:
+            break;
+        default:
+            fprintf(stderr, "osrs_pvp: invalid start_mode %d\n", (int)env->pvp_runtime.start_mode);
             abort();
-        }
-        pvp_set_player_spawn(&env->players[0], x0, y0);
-        pvp_set_player_spawn(&env->players[1], x1, y1);
-        return;
     }
 
     int base_x = FIGHT_AREA_BASE_X;
@@ -404,6 +417,7 @@ void pvp_init(OsrsEnv* env) {
     memset(&env->pvp_runtime.pfsp, 0, sizeof(env->pvp_runtime.pfsp));
     pvp_terminal_presentation_clear(env);
     memset(env->pvp_runtime.gear_tier_weights, 0, sizeof(env->pvp_runtime.gear_tier_weights));
+    env->pvp_runtime.start_mode = PVP_START_RANDOMIZED;
     for (int i = 0; i < NUM_AGENTS; i++) {
         env->pvp_runtime.walk_dest_x[i] = -1;
         env->pvp_runtime.walk_dest_y[i] = -1;
@@ -431,6 +445,7 @@ void pvp_reset(OsrsEnv* env) {
             abort();
         }
         env->rng_state = env->rng_seed + 0x9E3779B9u * env->rng_reset_count;
+        if (env->rng_state == 0) env->rng_state = 0x6D2B79F5u;
         env->rng_reset_count += 1;
     } else {
         env->rng_state = (uint32_t)(size_t)env ^ 0xDEADBEEF;
@@ -462,12 +477,8 @@ void pvp_reset(OsrsEnv* env) {
     env->tick = 0;
     env->episode_over = 0;
     env->winner = -1;
-    if (env->has_rng_seed) {
-        env->pid_holder = 1 - (int)(env->rng_seed & 1u);
-    } else {
-        env->pid_holder = rand_int(env, 2);
-    }
-    env->pid_shuffle_countdown = 100 + rand_int(env, 51); // 100-150 ticks
+    env->pid_holder = rand_int(env, 2);
+    env->pid_shuffle_countdown = 100 + rand_int(env, 51);
 
     env->pvp_runtime.is_pvp_arena = 0;
     for (int i = 0; i < NUM_AGENTS; i++) {
@@ -726,12 +737,10 @@ void pvp_step(OsrsEnv* env) {
     }
     env->tick++;
 
-    if (!env->has_rng_seed) {
-        env->pid_shuffle_countdown--;
-        if (env->pid_shuffle_countdown <= 0) {
-            env->pid_holder = 1 - env->pid_holder;
-            env->pid_shuffle_countdown = 100 + rand_int(env, 51); // 100-150 ticks
-        }
+    env->pid_shuffle_countdown--;
+    if (env->pid_shuffle_countdown <= 0) {
+        env->pid_holder = 1 - env->pid_holder;
+        env->pid_shuffle_countdown = 100 + rand_int(env, 51);
     }
 
     memcpy(env->pending_actions, env->actions,

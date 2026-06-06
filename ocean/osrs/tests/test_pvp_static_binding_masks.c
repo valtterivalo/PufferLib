@@ -151,6 +151,44 @@ static int action_head_offset(int head) {
     return offset;
 }
 
+typedef struct {
+    int p0_x;
+    int p0_y;
+    int p1_x;
+    int p1_y;
+    int pid_holder;
+} PvpResetSignature;
+
+static void pvp_setup_seeded_reset_env(OsrsEnv* env, CollisionMap* cmap, uint32_t seed) {
+    memset(env, 0, sizeof(*env));
+    pvp_init(env);
+    env->collision_map = cmap;
+    env->ocean_io.agent_obs = env->_obs_buf;
+    env->ocean_io.agent_actions = env->_acts_buf;
+    env->ocean_io.agent_rewards = env->_rews_buf;
+    env->ocean_io.agent_terminals = env->_terms_buf;
+    env->pvp_runtime.gear_tier_weights[3] = 1.0f;
+    pvp_seed(env, seed);
+}
+
+static PvpResetSignature pvp_reset_signature(OsrsEnv* env) {
+    return (PvpResetSignature){
+        .p0_x = env->players[0].x,
+        .p0_y = env->players[0].y,
+        .p1_x = env->players[1].x,
+        .p1_y = env->players[1].y,
+        .pid_holder = env->pid_holder,
+    };
+}
+
+static int pvp_reset_signature_equal(PvpResetSignature a, PvpResetSignature b) {
+    return a.p0_x == b.p0_x &&
+        a.p0_y == b.p0_y &&
+        a.p1_x == b.p1_x &&
+        a.p1_y == b.p1_y &&
+        a.pid_holder == b.pid_holder;
+}
+
 static void test_native_init_loads_collision_map_and_walkable_spawns(void) {
     printf("--- PvP native init loads collision map and walkable spawns ---\n");
 
@@ -162,10 +200,8 @@ static void test_native_init_loads_collision_map_and_walkable_spawns(void) {
 
     const CollisionMap* cmap = (const CollisionMap*)env.pvp.collision_map;
     ASSERT_TRUE("native init collision map", cmap != NULL);
-    ASSERT_INT_EQ("agent fixed spawn x", env.pvp.players[0].x, 3041);
-    ASSERT_INT_EQ("agent fixed spawn y", env.pvp.players[0].y, 3530);
-    ASSERT_INT_EQ("opponent fixed spawn x", env.pvp.players[1].x, 3046);
-    ASSERT_INT_EQ("opponent fixed spawn y", env.pvp.players[1].y, 3531);
+    ASSERT_INT_EQ("native init default random starts",
+        (int)env.pvp.pvp_runtime.start_mode, PVP_START_RANDOMIZED);
     ASSERT_TRUE("agent spawn walkable",
         collision_tile_walkable(cmap, 0, env.pvp.players[0].x, env.pvp.players[0].y));
     ASSERT_TRUE("opponent spawn walkable",
@@ -177,6 +213,80 @@ static void test_native_init_loads_collision_map_and_walkable_spawns(void) {
     free(kwargs->items);
     free(kwargs);
     c_close(&env);
+}
+
+static void test_fixed_spawn_override_uses_walkable_pair(void) {
+    printf("--- PvP fixed spawn override uses walkable pair ---\n");
+
+    Env env;
+    memset(&env, 0, sizeof(env));
+
+    Dict* kwargs = pvp_kwargs();
+    dict_set(kwargs, "fixed_spawns", 1);
+    my_init(&env, kwargs);
+
+    const CollisionMap* cmap = (const CollisionMap*)env.pvp.collision_map;
+    ASSERT_INT_EQ("fixed spawn override mode",
+        (int)env.pvp.pvp_runtime.start_mode, PVP_START_FIXED_PAIR);
+    ASSERT_INT_EQ("agent fixed spawn x", env.pvp.players[0].x, 3041);
+    ASSERT_INT_EQ("agent fixed spawn y", env.pvp.players[0].y, 3530);
+    ASSERT_INT_EQ("opponent fixed spawn x", env.pvp.players[1].x, 3046);
+    ASSERT_INT_EQ("opponent fixed spawn y", env.pvp.players[1].y, 3531);
+    ASSERT_TRUE("agent fixed spawn walkable",
+        collision_tile_walkable(cmap, 0, env.pvp.players[0].x, env.pvp.players[0].y));
+    ASSERT_TRUE("opponent fixed spawn walkable",
+        collision_tile_walkable(cmap, 0, env.pvp.players[1].x, env.pvp.players[1].y));
+
+    free(kwargs->items);
+    free(kwargs);
+    c_close(&env);
+}
+
+static void test_seeded_resets_replay_varied_setup_sequence(void) {
+    printf("--- PvP seeded resets replay varied setup sequence ---\n");
+
+    CollisionMap* cmap = collision_map_create();
+    OsrsEnv a;
+    OsrsEnv b;
+    pvp_setup_seeded_reset_env(&a, cmap, 73);
+    pvp_setup_seeded_reset_env(&b, cmap, 73);
+
+    int varied = 0;
+    PvpResetSignature first = {0};
+    for (int i = 0; i < 8; i++) {
+        pvp_reset(&a);
+        pvp_reset(&b);
+        PvpResetSignature sa = pvp_reset_signature(&a);
+        PvpResetSignature sb = pvp_reset_signature(&b);
+        ASSERT_TRUE("same seed replays reset signature",
+            pvp_reset_signature_equal(sa, sb));
+        if (i == 0) {
+            first = sa;
+        } else if (!pvp_reset_signature_equal(sa, first)) {
+            varied = 1;
+        }
+    }
+
+    ASSERT_TRUE("seeded reset sequence varies fight setup", varied);
+    collision_map_free(cmap);
+}
+
+static void test_seeded_pid_shuffles_during_episode(void) {
+    printf("--- PvP seeded PID shuffles during episode ---\n");
+
+    CollisionMap* cmap = collision_map_create();
+    OsrsEnv env;
+    pvp_setup_seeded_reset_env(&env, cmap, 73);
+    pvp_reset(&env);
+
+    int initial_pid = env.pid_holder;
+    env.pid_shuffle_countdown = 1;
+    pvp_step(&env);
+
+    ASSERT_INT_EQ("seeded PID shuffle flips holder", env.pid_holder, 1 - initial_pid);
+    ASSERT_TRUE("seeded PID shuffle resets countdown", env.pid_shuffle_countdown >= 100);
+
+    collision_map_free(cmap);
 }
 
 static void test_movement_masks_respect_blocked_tiles(void) {
@@ -547,6 +657,9 @@ static void test_expected_damage_representative_specs(void) {
 int main(void) {
     setbuf(stdout, NULL);
     test_native_init_loads_collision_map_and_walkable_spawns();
+    test_fixed_spawn_override_uses_walkable_pair();
+    test_seeded_resets_replay_varied_setup_sequence();
+    test_seeded_pid_shuffles_during_episode();
     test_movement_masks_respect_blocked_tiles();
     test_collision_los_blocks_impenetrable_tiles();
     test_magic_attack_execution_respects_collision_los();
