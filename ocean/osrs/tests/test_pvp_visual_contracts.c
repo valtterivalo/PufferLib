@@ -399,6 +399,35 @@ static void test_pvp_gmaul_loadout_requires_owned_item(void) {
         player.equipped[GEAR_SLOT_SHIELD], ITEM_NONE);
 }
 
+static void test_pvp_randomized_resets_keep_valid_weapon_profiles(void) {
+    printf("--- PvP randomized resets keep valid weapon profiles ---\n");
+
+    NhPvpState state;
+    setup_pvp_state(&state);
+    memset(state.env.pvp_runtime.gear_tier_weights, 0,
+        sizeof(state.env.pvp_runtime.gear_tier_weights));
+    state.env.pvp_runtime.gear_tier_weights[3] = 1.0f;
+
+    for (int seed = 1; seed <= 512; seed++) {
+        pvp_seed(&state.env, (uint32_t)seed);
+        pvp_reset(&state.env);
+        for (int agent = 0; agent < NUM_AGENTS; agent++) {
+            Player* player = &state.env.players[agent];
+            AttackStyle style = get_slot_weapon_attack_style(player);
+            ASSERT_INT_EQ("reset weapon style valid",
+                style != ATTACK_STYLE_NONE, 1);
+            OsrsPlayerAttackProfile profile =
+                osrs_player_attack_profile_for_loadout(
+                    player->equipped,
+                    style,
+                    player->fight_style,
+                    style == ATTACK_STYLE_MAGIC ? 30 : 0);
+            ASSERT_INT_EQ("reset attack profile has cycle",
+                profile.cycle_ticks > 0, 1);
+        }
+    }
+}
+
 static void test_pvp_loot_replacement_preserves_owned_set(void) {
     printf("--- PvP loot replacement preserves owned set ---\n");
 
@@ -1220,6 +1249,7 @@ int main(void) {
     test_flat_inventory_two_handed_weapon_moves_shield();
     test_flat_inventory_policy_loadout_uses_bag();
     test_pvp_gmaul_loadout_requires_owned_item();
+    test_pvp_randomized_resets_keep_valid_weapon_profiles();
     test_pvp_loot_replacement_preserves_owned_set();
     test_pvp_human_item_click_equips_and_attacks_with_weapon();
     test_pvp_human_armor_click_updates_equipment();
