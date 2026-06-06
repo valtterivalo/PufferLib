@@ -355,8 +355,6 @@ typedef enum {
    EquipmentBonuses (osrs_combat.h) but with a different naming convention
    (stab_attack vs attack_stab). the adapter compute_slot_gear_bonuses()
    in osrs_pvp_gear.h bridges them. */
-#define OSRS_INFERNO_IDLE_PHASE_COUNT 6
-
 typedef struct {
     int stab_attack;
     int slash_attack;
@@ -393,6 +391,7 @@ typedef struct {
     AttackStyle attack_type;
     int is_special;
     int hit_success;
+    int spell_type;
     int freeze_ticks;
     int heal_percent;
     int drain_type;
@@ -593,11 +592,11 @@ typedef struct {
     PendingHit pending_hits[MAX_PENDING_HITS];
     int num_pending_hits;
     int damage_applied_this_tick;
-    int did_attack_auto_move;  // set in attack movement phase, read in attack combat phase
 
     // Hit event tracking for event log
     int hit_landed_this_tick;
     int hit_was_successful;
+    int hit_spell_type;
     int hit_damage;
     AttackStyle hit_style;
     OverheadPrayer hit_defender_prayer;
@@ -712,6 +711,7 @@ typedef struct {
     // Per-tick action tracking for reward shaping
     // These are set when actions actually execute (not when queued)
     AttackStyle attack_style_this_tick;  // Actual attack style used (NONE if no attack)
+    uint8_t attack_weapon_this_tick;
     int magic_type_this_tick;            // 0=none, 1=ice, 2=blood (for visual effects)
     int used_special_this_tick;          // 1 if special attack was used
     int ate_food_this_tick;              // 1 if regular food was consumed
@@ -785,19 +785,6 @@ typedef struct {
     float prayer_correct;
     float prayer_total;
     float idle_ticks;
-    float attack_ready_no_attack_ticks;
-    float target_available_no_attack_ticks;
-    float safe_attack_opportunity_missed_ticks;
-    float progressless_ticks;
-    float npc_pressure_if_ready_count;
-    float npc_pressure_this_tick_count;
-    float npc_pressure_if_ready_max_hit;
-    float npc_pressure_this_tick_max_hit;
-    float npc_pressure_max_incoming_hit;
-    float attack_ready_no_attack_ticks_by_phase[OSRS_INFERNO_IDLE_PHASE_COUNT];
-    float target_available_no_attack_ticks_by_phase[OSRS_INFERNO_IDLE_PHASE_COUNT];
-    float safe_attack_opportunity_missed_ticks_by_phase[OSRS_INFERNO_IDLE_PHASE_COUNT];
-    float progressless_ticks_by_phase[OSRS_INFERNO_IDLE_PHASE_COUNT];
     float brews_used;
     float blood_healed;
     /* behavioral metrics */
@@ -819,10 +806,6 @@ typedef struct {
     float pending_cloud_count_ticks;
     float zulrah_kills;
     float unavoidable_off_prayer;  /* off-prayer hits where correct prayer was on a different style */
-    float offensive_prayer_attacks;
-    float offensive_prayer_correct;
-    float offensive_prayer_attacks_by_style[4];
-    float offensive_prayer_correct_by_style[4];
     float ranger_mager_same_tick_attacks;
     float step_out_ranger_mager_same_tick_attacks;
     float brews_remaining;         /* brew doses left at end of episode */
@@ -981,6 +964,23 @@ typedef struct {
     float prayer_correct_by_type[14];
     float attacks_by_type[14];
     float dmg_from_type[14];
+    float redemption_proc_opportunities_normal_sum;
+    float redemption_zero_hit_proc_opportunities_normal_sum;
+    float redemption_proc_opportunities_after_240_normal_sum;
+    float redemption_heal_potential_normal_sum;
+    float redemption_heal_potential_after_240_normal_sum;
+    float redemption_deaths_from_band_normal;
+    float redemption_deaths_from_band_after_240_normal;
+    float redemption_deaths_from_above_band_normal;
+    float redemption_proc_opportunities_by_type_normal[14];
+    float redemption_zero_hit_proc_opportunities_by_type_normal[14];
+    float redemption_heal_potential_by_type_normal[14];
+    float redemption_deaths_from_band_by_type_normal[14];
+    float redemption_action_count_normal_sum;
+    float redemption_active_ticks_normal_sum;
+    float redemption_proc_count_normal_sum;
+    float redemption_zero_hit_proc_count_normal_sum;
+    float redemption_heal_done_normal_sum;
     float killed_by_type[14];
     float killed_by_type_normal[14];
     float killed_by_type_snapshot[14];

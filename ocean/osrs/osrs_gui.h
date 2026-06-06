@@ -403,7 +403,6 @@ typedef struct {
        both fixed-mode (1182/1183/1184) and resizable-mode (1177/1178/1179)
        variants are kept resident so the layout can be switched at runtime. */
     Texture2D minimap_compass;       /* 169: compass disc, rotates with cam yaw */
-    Texture2D minimap_compass_masked;
     Texture2D minimap_alpha_mask;    /* 1183: fixed-mode circular cutout */
     Texture2D minimap_frame;         /* 1182: fixed-mode frame chrome */
     Texture2D rm_minimap_alpha_mask; /* 1178: resizable-mode circular cutout */
@@ -495,33 +494,6 @@ static int gui_try_load(Texture2D* tex, const char* path) {
         return 1;
     }
     return 0;
-}
-
-static int gui_try_load_masked_compass(Texture2D* tex, const char* path) {
-    if (!osrs_asset_exists(path)) return 0;
-    Image image = osrs_asset_load_image(path);
-    if (!image.data) return 0;
-
-    ImageFormat(&image, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
-    Color* pixels = (Color*)image.data;
-    int min_side = image.width < image.height ? image.width : image.height;
-    float cx = (float)image.width * 0.5f;
-    float cy = (float)image.height * 0.5f;
-    float radius = (float)min_side * (19.0f / 51.0f);
-    float radius_sq = radius * radius;
-    for (int y = 0; y < image.height; y++) {
-        for (int x = 0; x < image.width; x++) {
-            float dx = ((float)x + 0.5f) - cx;
-            float dy = ((float)y + 0.5f) - cy;
-            if (dx * dx + dy * dy > radius_sq) {
-                pixels[x + y * image.width].a = 0;
-            }
-        }
-    }
-
-    *tex = LoadTextureFromImage(image);
-    UnloadImage(image);
-    return tex->id != 0;
 }
 
 static int gui_rect_has_area(Rectangle rect) {
@@ -825,8 +797,6 @@ static void gui_load_sprites(GuiState* gs) {
        the asset bundle predates the export pipeline update). */
     gs->minimap_chrome_loaded = 1;
     gs->minimap_chrome_loaded &= gui_try_load(&gs->minimap_compass,
-        OSRS_ASSET("sprites/gui/compass.png"));
-    gui_try_load_masked_compass(&gs->minimap_compass_masked,
         OSRS_ASSET("sprites/gui/compass.png"));
     gs->minimap_chrome_loaded &= gui_try_load(&gs->minimap_alpha_mask,
         OSRS_ASSET("sprites/gui/minimap_alpha_mask.png"));
@@ -1141,7 +1111,6 @@ static void gui_unload_sprites(GuiState* gs) {
     if (gs->slot_selected.id) UnloadTexture(gs->slot_selected);
     if (gs->orb_frame.id) UnloadTexture(gs->orb_frame);
     if (gs->minimap_compass.id) UnloadTexture(gs->minimap_compass);
-    if (gs->minimap_compass_masked.id) UnloadTexture(gs->minimap_compass_masked);
     if (gs->minimap_alpha_mask.id) UnloadTexture(gs->minimap_alpha_mask);
     if (gs->minimap_frame.id) UnloadTexture(gs->minimap_frame);
     if (gs->rm_minimap_alpha_mask.id) UnloadTexture(gs->rm_minimap_alpha_mask);

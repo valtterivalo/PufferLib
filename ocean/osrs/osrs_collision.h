@@ -392,12 +392,35 @@ static inline int collision_map_save(const CollisionMap* map, const char* path) 
 /* an entity that blocks line of sight. pillars, walls, etc.
  * the los_mask indicates which directions are blocked. */
 typedef struct {
-    int x, y;       /* top-left tile of the blocker */
-    int size;       /* NxN footprint */
-    uint32_t los_mask;  /* bitmask: which directions block LOS */
+    int x, y;
+    int size;
+    uint32_t los_mask;
 } LOSBlocker;
 
-/* check if point (px,py) overlaps any blocker, return its mask or 0 */
+typedef struct {
+    const LOSBlocker* blockers;
+    int count;
+} OsrsLosBlockers;
+
+typedef struct {
+    const CollisionMap* map;
+    int height;
+} OsrsCollisionLos;
+
+typedef struct {
+    const CollisionMap* map;
+    int height;
+    const LOSBlocker* blockers;
+    int blocker_count;
+} OsrsCombinedLos;
+
+typedef uint32_t (*OsrsLosTileMaskFn)(void* ctx, int px, int py);
+
+typedef struct {
+    OsrsLosTileMaskFn mask_at;
+    void* ctx;
+} OsrsLosTileMaskSource;
+
 static uint32_t los_check_tile(const LOSBlocker* blockers, int count,
                                 int px, int py) {
     for (int i = 0; i < count; i++) {
@@ -410,28 +433,95 @@ static uint32_t los_check_tile(const LOSBlocker* blockers, int count,
     return 0;
 }
 
-/* AABB overlap check for two entities */
+static inline uint32_t collision_los_mask_from_flags(int flags) {
+    uint32_t mask = 0;
+    if (flags & COLLISION_IMPENETRABLE_BLOCKED) mask |= LOS_FULL_MASK;
+    if (flags & COLLISION_IMPENETRABLE_WALL_EAST) mask |= LOS_EAST_MASK;
+    if (flags & COLLISION_IMPENETRABLE_WALL_WEST) mask |= LOS_WEST_MASK;
+    if (flags & COLLISION_IMPENETRABLE_WALL_NORTH) mask |= LOS_NORTH_MASK;
+    if (flags & COLLISION_IMPENETRABLE_WALL_SOUTH) mask |= LOS_SOUTH_MASK;
+    return mask;
+}
+
+static inline uint32_t collision_los_check_tile(
+    const CollisionMap* map,
+    int height,
+    int px,
+    int py
+) {
+    return collision_los_mask_from_flags(collision_get_flags(map, height, px, py));
+}
+
+static inline uint32_t osrs_los_blockers_mask_at(void* ctx, int px, int py) {
+    const OsrsLosBlockers* source = (const OsrsLosBlockers*)ctx;
+    if (source == NULL || source->count < 0 ||
+            (source->count > 0 && source->blockers == NULL)) {
+        fprintf(stderr, "invalid LOS blocker source\n");
+        abort();
+    }
+    return los_check_tile(source->blockers, source->count, px, py);
+}
+
+static inline uint32_t osrs_los_collision_mask_at(void* ctx, int px, int py) {
+    const OsrsCollisionLos* source = (const OsrsCollisionLos*)ctx;
+    if (source == NULL || source->map == NULL) {
+        fprintf(stderr, "invalid collision LOS source\n");
+        abort();
+    }
+    return collision_los_check_tile(source->map, source->height, px, py);
+}
+
+static inline uint32_t osrs_los_combined_mask_at(void* ctx, int px, int py) {
+    const OsrsCombinedLos* source = (const OsrsCombinedLos*)ctx;
+    if (source == NULL || source->map == NULL || source->blocker_count < 0 ||
+            (source->blocker_count > 0 && source->blockers == NULL)) {
+        fprintf(stderr, "invalid combined LOS source\n");
+        abort();
+    }
+    OsrsLosBlockers blockers = {
+        .blockers = source->blockers,
+        .count = source->blocker_count,
+    };
+    OsrsCollisionLos collision = {
+        .map = source->map,
+        .height = source->height,
+    };
+    return osrs_los_blockers_mask_at(&blockers, px, py) |
+           osrs_los_collision_mask_at(&collision, px, py);
+}
+
+static inline void osrs_los_tile_mask_source_require_valid(
+    const OsrsLosTileMaskSource* source
+) {
+    if (source == NULL || source->mask_at == NULL) {
+        fprintf(stderr, "invalid LOS tile mask source\n");
+        abort();
+    }
+}
+
 static int los_aabb_overlap(int x1, int y1, int s1, int x2, int y2, int s2) {
     return !(x1 >= x2 + s2 || x1 + s1 <= x2 || y1 >= y2 + s2 || y1 + s1 <= y2);
 }
 
-/* fixed-point Q16 ray trace. returns 1 if clear LOS, 0 if blocked.
- * traces from (x1,y1) to (x2,y2). src_size is the source entity size (1 for player).
- * range is max tile distance (-1 = unlimited). */
-static int has_line_of_sight(const LOSBlocker* blockers, int blocker_count,
-                              int x1, int y1, int x2, int y2,
-                              int src_size, int range) {
+static int osrs_has_line_of_sight_from_source(
+    const OsrsLosTileMaskSource* source,
+    int x1,
+    int y1,
+    int x2,
+    int y2,
+    int src_size,
+    int range
+) {
+    osrs_los_tile_mask_source_require_valid(source);
+
     int dx = x2 - x1;
     int dy = y2 - y1;
 
-    /* reject if either endpoint is inside a blocker */
-    if (los_check_tile(blockers, blocker_count, x1, y1)) return 0;
-    if (los_check_tile(blockers, blocker_count, x2, y2)) return 0;
+    if (source->mask_at(source->ctx, x1, y1)) return 0;
+    if (source->mask_at(source->ctx, x2, y2)) return 0;
 
-    /* self-overlap check */
     if (los_aabb_overlap(x1, y1, src_size, x2, y2, 1)) return 0;
 
-    /* range check */
     if (range > 0) {
         int adx = dx < 0 ? -dx : dx;
         int ady = dy < 0 ? -dy : dy;
@@ -442,7 +532,6 @@ static int has_line_of_sight(const LOSBlocker* blockers, int blocker_count,
     int ady = dy < 0 ? -dy : dy;
 
     if (adx > ady) {
-        /* x-dominant ray */
         int x_tile = x1;
         int y_fp = y1 * LOS_FP_SCALE + LOS_FP_HALF;
         int slope = (adx > 0) ? ((dy * LOS_FP_SCALE) / adx) : 0;
@@ -456,17 +545,16 @@ static int has_line_of_sight(const LOSBlocker* blockers, int blocker_count,
         while (x_tile != x2) {
             x_tile += x_inc;
             int y_tile = y_fp >> 16;
-            if (los_check_tile(blockers, blocker_count, x_tile, y_tile) & x_mask)
+            if (source->mask_at(source->ctx, x_tile, y_tile) & x_mask)
                 return 0;
             y_fp += slope;
             int new_y = y_fp >> 16;
             if (new_y != y_tile) {
-                if (los_check_tile(blockers, blocker_count, x_tile, new_y) & y_mask)
+                if (source->mask_at(source->ctx, x_tile, new_y) & y_mask)
                     return 0;
             }
         }
     } else if (ady > 0) {
-        /* y-dominant ray */
         int y_tile = y1;
         int x_fp = x1 * LOS_FP_SCALE + LOS_FP_HALF;
         int slope = (ady > 0) ? ((dx * LOS_FP_SCALE) / ady) : 0;
@@ -480,17 +568,16 @@ static int has_line_of_sight(const LOSBlocker* blockers, int blocker_count,
         while (y_tile != y2) {
             y_tile += y_inc;
             int x_tile = x_fp >> 16;
-            if (los_check_tile(blockers, blocker_count, x_tile, y_tile) & y_mask)
+            if (source->mask_at(source->ctx, x_tile, y_tile) & y_mask)
                 return 0;
             x_fp += slope;
             int new_x = x_fp >> 16;
             if (new_x != x_tile) {
-                if (los_check_tile(blockers, blocker_count, new_x, y_tile) & x_mask)
+                if (source->mask_at(source->ctx, new_x, y_tile) & x_mask)
                     return 0;
             }
         }
     }
-    /* else dx==0 && dy==0: same tile, always has LOS */
 
     return 1;
 }
@@ -499,12 +586,8 @@ static inline int los_intervals_overlap(int a0, int a1, int b0, int b1) {
     return !(a1 < b0 || b1 < a0);
 }
 
-/* generic LOS between two entity footprints.
- * ref: osrs-sdk LineOfSight.ts playerHasLineOfSightOfMob() and
- * mobHasLineOfSightToMob(). ranged/magic uses closest points on both
- * footprints. melee is pure cardinal adjacency between footprint edges. */
-static inline int entity_has_line_of_sight(
-    const LOSBlocker* blockers, int blocker_count,
+static inline int osrs_entity_has_line_of_sight_from_source(
+    const OsrsLosTileMaskSource* source,
     int ax, int ay, int a_size,
     int tx, int ty, int t_size,
     int range
@@ -541,10 +624,124 @@ static inline int entity_has_line_of_sight(
     if (t_py < ty) t_py = ty;
     if (t_py >= ty + t_size) t_py = ty + t_size - 1;
 
-    return has_line_of_sight(blockers, blocker_count, a_px, a_py, t_px, t_py, 1, range);
+    return osrs_has_line_of_sight_from_source(
+        source, a_px, a_py, t_px, t_py, 1, range);
 }
 
-/* NPC LOS wrapper for the common "NPC footprint to 1x1 target" case. */
+static int has_line_of_sight(
+    const LOSBlocker* blockers,
+    int blocker_count,
+    int x1,
+    int y1,
+    int x2,
+    int y2,
+    int src_size,
+    int range
+) {
+    OsrsLosBlockers ctx = {
+        .blockers = blockers,
+        .count = blocker_count,
+    };
+    OsrsLosTileMaskSource source = {
+        .mask_at = osrs_los_blockers_mask_at,
+        .ctx = &ctx,
+    };
+    return osrs_has_line_of_sight_from_source(
+        &source, x1, y1, x2, y2, src_size, range);
+}
+
+static int collision_has_line_of_sight(
+    const CollisionMap* map,
+    int height,
+    int x1,
+    int y1,
+    int x2,
+    int y2,
+    int src_size,
+    int range
+) {
+    if (map == NULL) return 1;
+    OsrsCollisionLos ctx = {
+        .map = map,
+        .height = height,
+    };
+    OsrsLosTileMaskSource source = {
+        .mask_at = osrs_los_collision_mask_at,
+        .ctx = &ctx,
+    };
+    return osrs_has_line_of_sight_from_source(
+        &source, x1, y1, x2, y2, src_size, range);
+}
+
+static inline int entity_has_line_of_sight(
+    const LOSBlocker* blockers, int blocker_count,
+    int ax, int ay, int a_size,
+    int tx, int ty, int t_size,
+    int range
+) {
+    OsrsLosBlockers ctx = {
+        .blockers = blockers,
+        .count = blocker_count,
+    };
+    OsrsLosTileMaskSource source = {
+        .mask_at = osrs_los_blockers_mask_at,
+        .ctx = &ctx,
+    };
+    return osrs_entity_has_line_of_sight_from_source(
+        &source, ax, ay, a_size, tx, ty, t_size, range);
+}
+
+static inline int collision_entity_has_line_of_sight(
+    const CollisionMap* map,
+    int height,
+    int ax,
+    int ay,
+    int a_size,
+    int tx,
+    int ty,
+    int t_size,
+    int range
+) {
+    if (map == NULL) return 1;
+    OsrsCollisionLos ctx = {
+        .map = map,
+        .height = height,
+    };
+    OsrsLosTileMaskSource source = {
+        .mask_at = osrs_los_collision_mask_at,
+        .ctx = &ctx,
+    };
+    return osrs_entity_has_line_of_sight_from_source(
+        &source, ax, ay, a_size, tx, ty, t_size, range);
+}
+
+static inline int osrs_combined_entity_has_line_of_sight(
+    const CollisionMap* map,
+    int height,
+    const LOSBlocker* blockers,
+    int blocker_count,
+    int ax,
+    int ay,
+    int a_size,
+    int tx,
+    int ty,
+    int t_size,
+    int range
+) {
+    OsrsCombinedLos ctx = {
+        .map = map,
+        .height = height,
+        .blockers = blockers,
+        .blocker_count = blocker_count,
+    };
+    OsrsLosTileMaskSource source = {
+        .mask_at = osrs_los_combined_mask_at,
+        .ctx = &ctx,
+    };
+    return osrs_entity_has_line_of_sight_from_source(
+        &source, ax, ay, a_size, tx, ty, t_size, range);
+}
+
 static inline int npc_has_line_of_sight(const LOSBlocker* blockers, int blocker_count,
                                         int nx, int ny, int npc_size,
                                         int tx, int ty, int range) {

@@ -81,6 +81,24 @@ static int tests_run = 0;
 static int tests_passed = 0;
 static int tests_failed = 0;
 
+static int test_pvp_projectile_can_reach(
+    const CollisionMap* cmap,
+    int source_x,
+    int source_y,
+    int target_x,
+    int target_y,
+    int range
+) {
+    OsrsAttackReachQuery reach = {
+        .source = osrs_footprint(source_x, source_y, 1),
+        .target = osrs_footprint(target_x, target_y, 1),
+        .delivery = OSRS_ATTACK_DELIVERY_PROJECTILE,
+        .range = range,
+        .occlusion = osrs_projectile_occlusion_collision_map(cmap, 0),
+    };
+    return osrs_attack_can_reach(&reach);
+}
+
 #define ASSERT_INT_EQ(label, actual, expected) do { \
     tests_run++; \
     if ((actual) == (expected)) { \
@@ -189,6 +207,168 @@ static void test_movement_masks_respect_blocked_tiles(void) {
         env.action_masks[combat_offset + MOVE_UNDER], 0);
     ASSERT_INT_EQ("blocked HEAD_MOVE east mask",
         env.action_masks[move_offset + 7], 0);
+
+    collision_map_free(cmap);
+}
+
+static void test_collision_los_blocks_impenetrable_tiles(void) {
+    printf("--- PvP collision LOS blocks impenetrable tiles ---\n");
+
+    CollisionMap* cmap = collision_map_create();
+    collision_mark_occupant(cmap, 0, 3042, 3530, 1, 1, 1);
+
+    ASSERT_INT_EQ("clear side has LOS",
+        test_pvp_projectile_can_reach(cmap, 3040, 3530, 3041, 3530, 10),
+        1);
+    ASSERT_INT_EQ("impenetrable middle tile blocks LOS",
+        test_pvp_projectile_can_reach(cmap, 3041, 3530, 3043, 3530, 10),
+        0);
+
+    collision_map_free(cmap);
+}
+
+static void setup_pvp_los_test_env(OsrsEnv* env, CollisionMap* cmap) {
+    memset(env, 0, sizeof(*env));
+    pvp_init(env);
+    env->collision_map = cmap;
+    pvp_seed(env, 73);
+    pvp_reset(env);
+
+    Player* agent = &env->players[0];
+    Player* target = &env->players[1];
+    pvp_set_player_spawn(agent, 3041, 3530);
+    pvp_set_player_spawn(target, 3043, 3530);
+    agent->last_obs_target_x = target->x;
+    agent->last_obs_target_y = target->y;
+    target->last_obs_target_x = agent->x;
+    target->last_obs_target_y = agent->y;
+    apply_loadout(agent, LOADOUT_MAGE);
+    agent->current_magic = 99;
+    agent->attack_timer = 0;
+    collision_mark_occupant(cmap, 0, 3042, 3530, 1, 1, 1);
+}
+
+static void test_magic_attack_execution_respects_collision_los(void) {
+    printf("--- PvP magic attack execution respects collision LOS ---\n");
+
+    CollisionMap* cmap = collision_map_create();
+    OsrsEnv env;
+    setup_pvp_los_test_env(&env, cmap);
+    Player* agent = &env.players[0];
+    Player* target = &env.players[1];
+    agent->frozen_ticks = 8;
+
+    int actions[NUM_ACTION_HEADS];
+    memset(actions, 0, sizeof(actions));
+    actions[HEAD_COMBAT] = ATTACK_ICE;
+
+    ASSERT_INT_EQ("magic reach blocked by LOS",
+        test_pvp_projectile_can_reach(cmap, agent->x, agent->y, target->x, target->y,
+            get_attack_range(agent, ATTACK_STYLE_MAGIC)), 0);
+    execute_attack_combat(&env, 0, actions);
+
+    ASSERT_INT_EQ("no pending hit through LOS blocker", target->num_pending_hits, 0);
+    ASSERT_INT_EQ("attack did not click through LOS blocker", agent->clicks_this_tick, 0);
+
+    collision_map_free(cmap);
+}
+
+static void test_pvp_barrage_uses_shared_five_tick_cadence(void) {
+    printf("--- PvP barrage uses shared five tick cadence ---\n");
+
+    CollisionMap* cmap = collision_map_create();
+    OsrsEnv env;
+    memset(&env, 0, sizeof(env));
+    pvp_init(&env);
+    env.collision_map = cmap;
+    pvp_seed(&env, 73);
+    pvp_reset(&env);
+
+    Player* agent = &env.players[0];
+    Player* target = &env.players[1];
+    pvp_set_player_spawn(agent, 3041, 3530);
+    pvp_set_player_spawn(target, 3042, 3530);
+    apply_loadout(agent, LOADOUT_MAGE);
+    agent->current_magic = 99;
+    agent->attack_timer = 0;
+    agent->attack_timer_uncapped = 0;
+    agent->has_attack_timer = 0;
+
+    generate_slot_observations(&env, 0);
+    ASSERT_FLOAT_NEAR("mage attack speed observation",
+        env.observations[123], 5.0f, 1e-6f);
+
+    perform_attack(&env, 0, 1, ATTACK_STYLE_MAGIC, 0, 1, 1);
+
+    ASSERT_INT_EQ("barrage post-action timer", agent->attack_timer, 4);
+    ASSERT_INT_EQ("barrage uncapped post-action timer",
+        agent->attack_timer_uncapped, 4);
+    ASSERT_INT_EQ("barrage timer flag", agent->has_attack_timer, 1);
+
+    collision_map_free(cmap);
+}
+
+static void test_attack_masks_respect_frozen_collision_los(void) {
+    printf("--- PvP attack masks respect frozen collision LOS ---\n");
+
+    CollisionMap* cmap = collision_map_create();
+    OsrsEnv env;
+    setup_pvp_los_test_env(&env, cmap);
+    Player* agent = &env.players[0];
+    agent->frozen_ticks = 8;
+
+    compute_action_masks(&env, 0);
+
+    int combat_offset = action_head_offset(HEAD_COMBAT);
+    ASSERT_INT_EQ("frozen ice through LOS blocker masked",
+        env.action_masks[combat_offset + ATTACK_ICE], 0);
+    ASSERT_INT_EQ("frozen blood through LOS blocker masked",
+        env.action_masks[combat_offset + ATTACK_BLOOD], 0);
+
+    agent->frozen_ticks = 0;
+    compute_action_masks(&env, 0);
+    ASSERT_INT_EQ("mobile ice attack-click remains valid",
+        env.action_masks[combat_offset + ATTACK_ICE], 1);
+
+    collision_map_free(cmap);
+}
+
+static void test_mobile_attack_click_chases_around_collision_los(void) {
+    printf("--- PvP mobile attack click chases around collision LOS ---\n");
+
+    CollisionMap* cmap = collision_map_create();
+    OsrsEnv env;
+    setup_pvp_los_test_env(&env, cmap);
+    Player* agent = &env.players[0];
+
+    int actions[NUM_ACTION_HEADS];
+    memset(actions, 0, sizeof(actions));
+    actions[HEAD_COMBAT] = ATTACK_ICE;
+
+    int chased = 0;
+    int reached_los = 0;
+    for (int i = 0; i < 8; i++) {
+        PvpAttackMoveIntent intent = pvp_attack_move_intent(&env, 0, actions);
+        OsrsPlayerStepResult step = pvp_step_player_movement(&env, 0, intent);
+        chased |= step.chased_target;
+        ASSERT_TRUE("chase avoids blocked LOS tile",
+            !(agent->x == 3042 && agent->y == 3530));
+        ASSERT_TRUE("chase remains walkable",
+            collision_tile_walkable(cmap, 0, agent->x, agent->y));
+        if (test_pvp_projectile_can_reach(cmap, agent->x, agent->y,
+                env.players[1].x, env.players[1].y,
+                get_attack_range(agent, ATTACK_STYLE_MAGIC))) {
+            reached_los = 1;
+            break;
+        }
+    }
+
+    ASSERT_INT_EQ("attack click starts target interaction",
+        osrs_interaction_active(&agent->interaction), 1);
+    ASSERT_INT_EQ("attack click chased target",
+        chased, 1);
+    ASSERT_INT_EQ("chase reaches projectile LOS",
+        reached_los, 1);
 
     collision_map_free(cmap);
 }
@@ -368,6 +548,11 @@ int main(void) {
     setbuf(stdout, NULL);
     test_native_init_loads_collision_map_and_walkable_spawns();
     test_movement_masks_respect_blocked_tiles();
+    test_collision_los_blocks_impenetrable_tiles();
+    test_magic_attack_execution_respects_collision_los();
+    test_pvp_barrage_uses_shared_five_tick_cadence();
+    test_attack_masks_respect_frozen_collision_los();
+    test_mobile_attack_click_chases_around_collision_los();
     test_static_binding_exposes_separate_action_mask();
     test_static_binding_sets_scripted_opponents();
     test_binding_pfsp_stats_round_trip();

@@ -16,8 +16,6 @@ static const InfSupplyProfileAnchor INF_SUPPLY_PROFILE_ANCHORS[] = {
     { 64, { 0.5833f, 0.5000f, 0.7500f, 1.0000f } },
     { 68, { 0.5833f, 0.4250f, 0.6250f, 1.0000f } },
     { 69, { 0.5000f, 0.3000f, 0.3750f, 1.0000f } },
-    { 70, { 0.4375f, 0.2250f, 0.3750f, 1.0000f } },
-    { 71, { 0.3750f, 0.1500f, 0.3750f, 1.0000f } },
 };
 
 static float inf_lerp_float(float a, float b, float t) {
@@ -33,14 +31,6 @@ static void inf_require_unit_interval_float_config(const char* key, float value)
 
 static void inf_require_valid_supply_scale(float scale) {
     inf_require_unit_interval_float_config("late_start_supply_profile_scale", scale);
-}
-
-static void inf_require_valid_curriculum_supply_mode(const char* key, int mode) {
-    if (mode < INF_CURRICULUM_SUPPLY_MODE_OFF ||
-            mode > INF_CURRICULUM_SUPPLY_MODE_PRE_ZUK) {
-        fprintf(stderr, "inferno %s must be in [0, 3], got %d\n", key, mode);
-        abort();
-    }
 }
 
 static void inf_require_valid_budget_loadout_fraction(float fraction) {
@@ -98,6 +88,8 @@ static int inf_initial_attack_timer_after_stun(int attack_speed, int stun_timer)
 
 static InfSupplyFractions inf_supply_profile_fractions(int public_wave) {
     inf_require_valid_public_wave(public_wave);
+    if (public_wave > INF_NUM_WAVES)
+        public_wave = INF_NUM_WAVES;
 
     const int n = (int)(sizeof(INF_SUPPLY_PROFILE_ANCHORS) /
         sizeof(INF_SUPPLY_PROFILE_ANCHORS[0]));
@@ -142,80 +134,6 @@ static int inf_profiled_supply_count(int full_doses, float profile_fraction, flo
     if (doses < 0) doses = 0;
     if (doses > full_doses) doses = full_doses;
     return doses;
-}
-
-static int inf_clamp_supply_doses(int doses, int full_doses) {
-    if (doses < 0) return 0;
-    if (doses > full_doses) return full_doses;
-    return doses;
-}
-
-static int inf_round_signed_float_to_int(float value) {
-    return value >= 0.0f ? (int)(value + 0.5f) : (int)(value - 0.5f);
-}
-
-static int inf_curriculum_supply_mode_applies(int mode, int public_wave) {
-    inf_require_valid_curriculum_supply_mode("curriculum supply mode", mode);
-    switch (mode) {
-        case INF_CURRICULUM_SUPPLY_MODE_OFF:
-            return 0;
-        case INF_CURRICULUM_SUPPLY_MODE_ALL:
-            return 1;
-        case INF_CURRICULUM_SUPPLY_MODE_ZUK:
-            return public_wave >= INF_NUM_WAVES;
-        case INF_CURRICULUM_SUPPLY_MODE_PRE_ZUK:
-            return public_wave < INF_NUM_WAVES;
-        default:
-            abort();
-    }
-}
-
-static void inf_apply_curriculum_supply_variation(
-    InfernoState* s,
-    const InfernoContext* ctx,
-    InfSupplyDoses full
-) {
-    if (!ctx->config.curriculum_agent) return;
-
-    int public_wave = s->start_wave + 1;
-    int jitter_applies = inf_curriculum_supply_mode_applies(
-        ctx->config.curriculum_supply_jitter_mode, public_wave);
-    float shared_jitter = ctx->config.curriculum_supply_shared_jitter;
-    float brew_jitter = ctx->config.curriculum_supply_brew_jitter;
-    float restore_jitter = ctx->config.curriculum_supply_restore_jitter;
-
-    if (jitter_applies &&
-            (shared_jitter > 0.0f || brew_jitter > 0.0f || restore_jitter > 0.0f)) {
-        float shared = (2.0f * encounter_rand_float(&s->rng_state) - 1.0f) *
-            shared_jitter;
-        float brew_delta = shared;
-        float restore_delta = shared;
-        if (brew_jitter > 0.0f) {
-            brew_delta += (2.0f * encounter_rand_float(&s->rng_state) - 1.0f) *
-                brew_jitter;
-        }
-        if (restore_jitter > 0.0f) {
-            restore_delta += (2.0f * encounter_rand_float(&s->rng_state) - 1.0f) *
-                restore_jitter;
-        }
-
-        s->player.brew_doses = inf_clamp_supply_doses(
-            s->player.brew_doses +
-                inf_round_signed_float_to_int((float)full.brew_doses * brew_delta),
-            full.brew_doses);
-        s->player.restore_doses = inf_clamp_supply_doses(
-            s->player.restore_doses +
-                inf_round_signed_float_to_int((float)full.restore_doses * restore_delta),
-            full.restore_doses);
-    }
-
-    int no_brew_applies = inf_curriculum_supply_mode_applies(
-        ctx->config.curriculum_no_brew_mode, public_wave);
-    if (no_brew_applies &&
-            ctx->config.curriculum_no_brew_frac > 0.0f &&
-            encounter_rand_float(&s->rng_state) < ctx->config.curriculum_no_brew_frac) {
-        s->player.brew_doses = 0;
-    }
 }
 
 static InfSupplyDoses inf_supplies_for_start_wave(InfSupplyDoses full,
@@ -359,7 +277,6 @@ static void inf_reset_ctx(EncounterState* state, EncounterContext* context, uint
     s->player.restore_doses = start_supplies.restore_doses;
     s->player.bastion_doses = start_supplies.bastion_doses;
     s->player.stamina_doses = start_supplies.stamina_doses;
-    inf_apply_curriculum_supply_variation(s, ctx, full_supplies);
     s->stamina_active_ticks = 0;
     s->player.prayer = PRAYER_NONE;
     s->player.autocast_enabled = 1;
@@ -508,7 +425,6 @@ static void inf_deactivate_npc(InfernoState* s, int idx) {
     InfNPC* npc = &s->npcs[idx];
     if (npc->active && inf_npc_sets_collision_flag(npc->type))
         inf_unstamp_npc_collision_footprint(s, npc->x, npc->y, inf_npc_effective_size(npc));
-    encounter_pending_hit_queue_clear(&npc->pending_hits);
     npc->active = 0;
 }
 
@@ -529,6 +445,7 @@ static void inf_init_npc(InfernoState* s, int idx, InfNPCType type, int x, int y
     npc->render_id = s->next_npc_render_id;
     npc->attack_timer = stats->attack_speed;
     npc->attack_style = stats->default_style;
+    npc->jad_attack_style = ATTACK_STYLE_NONE;
     npc->attack_style_this_tick = ATTACK_STYLE_NONE;
     npc->active = 1;
     npc->x = x;
@@ -537,11 +454,12 @@ static void inf_init_npc(InfernoState* s, int idx, InfNPCType type, int x, int y
     npc->target_y = y;
     npc->attack_visual_target = -1;
     npc->resurrection_visual_target = -1;
+    npc->heal_target = -1;
+    npc->jad_owner_idx = -1;
     npc->aggro_target = -1;
     npc->blob_scanned_prayer = -1;
     npc->had_los_last_tick = 0;
     npc->stun_timer = stats->stun_on_spawn;
-    inf_npc_init_type_state(npc);
 
     if (inf_npc_sets_collision_flag(type))
         inf_stamp_npc_collision_footprint(s, x, y, stats->size);
@@ -565,6 +483,7 @@ static void inf_seed_joseph_zuk_checkpoint(InfernoState* s) {
 
     InfNPC* zuk = &s->npcs[zuk_idx];
     zuk->stun_timer = 0;
+    s->zuk.initial_delay = 0;
     s->zuk.has_paused = 1;
     s->zuk.timer_paused = 0;
     s->zuk.jad_spawned = 1;
@@ -614,7 +533,7 @@ static void inf_spawn_wave(InfernoState* s) {
 
     /* clear all NPCs and pending hits */
     for (int i = 0; i < INF_MAX_NPCS; i++) s->npcs[i].active = 0;
-    encounter_pending_hit_queue_clear(&s->player_pending_hits);
+    s->player_pending_hit_count = 0;
     memset(s->npc_collision_flags, 0, sizeof(s->npc_collision_flags));
     inf_rebuild_player_collision_flags(s);
 
@@ -720,6 +639,7 @@ static void inf_spawn_wave(InfernoState* s) {
         }
 
         /* zuk state */
+        s->zuk.initial_delay = 14;
         s->zuk.set_timer = 72;
         s->zuk.set_interval = 350;
         s->zuk.enraged = 0;

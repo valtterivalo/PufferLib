@@ -852,13 +852,16 @@ def _match_render_enabled(args):
     return str(args.get('render_mode', 'auto')).lower() in ('human', 'raylib')
 
 def _pin_match_eval_args(args):
+    render_enabled = _match_render_enabled(args)
+    total_agents = 4 if render_enabled else 8192
+
     args['reset_state'] = False
     args.setdefault('nccl_id', b'')
     args.setdefault('env', {})['use_rollout_opponent'] = 1
     args.setdefault('vec', {})['num_buffers'] = 2
-    args['vec']['total_agents'] = 8192
+    args['vec']['total_agents'] = total_agents
     args.setdefault('train', {})['horizon'] = 1
-    args['train']['minibatch_size'] = 8192
+    args['train']['minibatch_size'] = total_agents
     args['train']['state_curriculum_mode'] = 0
     args['train']['state_buffer_size'] = 0
     args['train']['cl_frac'] = 0

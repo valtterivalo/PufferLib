@@ -165,12 +165,16 @@ typedef struct {
 #define COMPOSITE_MAX_BASE_VERTS 12000  /* ~16 models * ~750 base verts each */
 #define COMPOSITE_MAX_FACES      8000   /* ~16 models * ~500 faces each */
 #define COMPOSITE_MAX_EXP_VERTS  (COMPOSITE_MAX_FACES * 3)
+#define RENDER_COLLISION_OVERLAY_RADIUS 48
 
 typedef struct {
     /* merged base geometry for animation */
     int16_t   base_vertices[COMPOSITE_MAX_BASE_VERTS * 3];
     uint8_t   vertex_skins[COMPOSITE_MAX_BASE_VERTS];
     uint16_t  face_indices[COMPOSITE_MAX_FACES * 3];
+    uint8_t   face_priorities[COMPOSITE_MAX_FACES];
+    uint8_t   base_face_alphas[COMPOSITE_MAX_FACES];
+    uint8_t   face_alpha_labels[COMPOSITE_MAX_FACES];
     int       base_vert_count;
     int       face_count;
 
@@ -419,10 +423,6 @@ typedef struct RenderClient {
     int inferno_lab_selected_npc_slot;
     int inferno_lab_prev_paused;
     int inferno_lab_prev_human_enabled;
-    void* inferno_lab_entry_snapshot;
-    size_t inferno_lab_entry_snapshot_size;
-    int inferno_lab_restore_requested;
-    int inferno_lab_restore_generation;
 
     /* UI layout mode: 0 = fixed (1182/1183 chrome), 1 = resizable (1177/1178).
        L key toggles. mirrors OSRS client display modes. */
@@ -532,6 +532,9 @@ typedef struct RenderClient {
     int arena_base_x, arena_base_y;
     int arena_width, arena_height;
     int show_arena_boundary;
+    int world_bounds_active;
+    int world_min_x, world_min_y;
+    int world_max_x, world_max_y;
 
     /* encounter visual overlay (populated by encounter's render_post_tick) */
     EncounterOverlay encounter_overlay;
@@ -590,8 +593,6 @@ typedef struct RenderClient {
 static Camera3D render_build_3d_camera(RenderClient* rc);
 static void render_populate_entities(RenderClient* rc, OsrsEnv* env);
 static void render_seed_entity_visual_slot(RenderClient* rc, int i);
-static void render_reset_episode_visual_state(RenderClient* rc, OsrsEnv* env);
-static void context_menu_dismiss(ContextMenu* cm);
 static inline int render_world_to_screen_x_rc(RenderClient* rc, int world_x);
 static inline int render_world_to_screen_y_rc(RenderClient* rc, int world_y);
 
@@ -630,17 +631,159 @@ static int render_projectile_profile_value_or(int value, int fallback) {
     return osrs_combat_projectile_value_or(value, fallback);
 }
 
+static uint8_t render_entity_attack_visual_weapon(const RenderEntity* p) {
+    if (p->attack_weapon_this_tick < NUM_ITEMS &&
+            ITEM_DATABASE[p->attack_weapon_this_tick].slot == SLOT_WEAPON) {
+        return p->attack_weapon_this_tick;
+    }
+    return p->equipped[GEAR_SLOT_WEAPON];
+}
+
+enum {
+    RENDER_ACTOR_SPOTANIM_SLOT_COMBAT = 0,
+};
+
+typedef enum {
+    RENDER_EFFECT_ATTACHMENT_WORLD_TILE = 0,
+    RENDER_EFFECT_ATTACHMENT_ACTOR,
+} RenderEffectAttachmentKind;
+
+typedef struct {
+    RenderEffectAttachmentKind kind;
+    const RenderEntity* entity;
+    int entity_idx;
+    int world_x;
+    int world_y;
+} RenderEffectAttachment;
+
+static RenderEffectAttachment render_effect_attachment_world_tile(
+    int world_x,
+    int world_y
+) {
+    return (RenderEffectAttachment){
+        .kind = RENDER_EFFECT_ATTACHMENT_WORLD_TILE,
+        .entity = NULL,
+        .entity_idx = -1,
+        .world_x = world_x,
+        .world_y = world_y,
+    };
+}
+
+static RenderEffectAttachment render_effect_attachment_actor(
+    const RenderEntity* entity,
+    int entity_idx
+) {
+    if (!entity || entity_idx < 0) {
+        fprintf(stderr, "invalid render effect actor attachment\n");
+        abort();
+    }
+    return (RenderEffectAttachment){
+        .kind = RENDER_EFFECT_ATTACHMENT_ACTOR,
+        .entity = entity,
+        .entity_idx = entity_idx,
+        .world_x = entity->x,
+        .world_y = entity->y,
+    };
+}
+
+static ActiveEffectActorOwner render_actor_effect_owner_from_entity(
+    const RenderEntity* entity,
+    int entity_idx
+) {
+    return (ActiveEffectActorOwner){
+        .entity_idx = entity_idx,
+        .entity_type = entity->entity_type,
+        .npc_slot = entity->npc_slot,
+        .npc_instance_id = entity->npc_instance_id,
+    };
+}
+
+static int render_spawn_entity_spotanim_height(
+    RenderClient* rc,
+    const RenderEntity* entity,
+    int entity_idx,
+    int gfx_id,
+    int height_subtile,
+    int current_client_tick
+) {
+    ActiveEffectActorOwner owner =
+        render_actor_effect_owner_from_entity(entity, entity_idx);
+    return effect_spawn_actor_spotanim_height(rc->effects, gfx_id,
+        owner, RENDER_ACTOR_SPOTANIM_SLOT_COMBAT,
+        render_entity_center_subtile_x(entity),
+        render_entity_center_subtile_y(entity),
+        (float)height_subtile,
+        current_client_tick,
+        rc->spotanims, rc->anim_cache, rc->model_cache,
+        rc->npc_model_cache, rc->projectile_model_cache);
+}
+
+static int render_spawn_attached_spotanim_height(
+    RenderClient* rc,
+    const RenderEffectAttachment* attachment,
+    int gfx_id,
+    int height_subtile,
+    int current_client_tick
+) {
+    if (!rc || !attachment) {
+        fprintf(stderr, "invalid attached spotanim input\n");
+        abort();
+    }
+    switch (attachment->kind) {
+        case RENDER_EFFECT_ATTACHMENT_WORLD_TILE:
+            return effect_spawn_spotanim_subtile_height(
+                rc->effects, gfx_id,
+                (float)attachment->world_x * 128.0f + 64.0f,
+                (float)attachment->world_y * 128.0f + 64.0f,
+                (float)height_subtile,
+                current_client_tick,
+                rc->spotanims, rc->anim_cache, rc->model_cache,
+                rc->npc_model_cache, rc->projectile_model_cache);
+        case RENDER_EFFECT_ATTACHMENT_ACTOR:
+            return render_spawn_entity_spotanim_height(
+                rc, attachment->entity, attachment->entity_idx,
+                gfx_id, height_subtile, current_client_tick);
+        default:
+            fprintf(stderr, "invalid render effect attachment kind %d\n",
+                attachment->kind);
+            abort();
+    }
+}
+
 static int render_spawn_profile_projectile(
     RenderClient* rc,
     const OsrsCombatProjectileProfile* profile,
+    const RenderEffectAttachment* launch_attachment,
+    const RenderEffectAttachment* impact_attachment,
     int src_x, int src_y, int dst_x, int dst_y,
     int delay_client_ticks, int duration_client_ticks,
     int fallback_start_height, int fallback_end_height,
     int fallback_slope
 ) {
     if (!profile) return -1;
-    if (profile->travel_spotanim_id < 0) return -1;
-    return effect_spawn_projectile(
+    if (!launch_attachment || !impact_attachment) {
+        fprintf(stderr, "missing projectile profile attachments\n");
+        abort();
+    }
+    int launch_gfx = render_projectile_profile_value_or(
+        profile->launch_spotanim_id, 0);
+    int launch_slot = -1;
+    if (launch_gfx > 0) {
+        launch_slot = render_spawn_attached_spotanim_height(
+            rc, launch_attachment, launch_gfx, 0,
+            rc->effect_client_tick_counter);
+    }
+    if (profile->travel_spotanim_id < 0) {
+        if (profile->impact_spotanim_id >= 0) {
+            int impact_slot = render_spawn_attached_spotanim_height(
+                rc, impact_attachment, profile->impact_spotanim_id,
+                osrs_combat_projectile_profile_impact_height_subtile(profile),
+                rc->effect_client_tick_counter);
+            return impact_slot >= 0 ? impact_slot : launch_slot;
+        }
+        return launch_slot;
+    }
+    int projectile_slot = effect_spawn_projectile(
         rc->effects, profile->travel_spotanim_id,
         src_x, src_y, dst_x, dst_y,
         delay_client_ticks, duration_client_ticks,
@@ -653,6 +796,7 @@ static int render_spawn_profile_projectile(
         rc->effect_client_tick_counter,
         rc->spotanims, rc->model_cache, rc->npc_model_cache,
         rc->projectile_model_cache);
+    return projectile_slot >= 0 ? projectile_slot : launch_slot;
 }
 
 /** Get the raw Player* for a given entity index (for GUI functions that need full Player state).
@@ -777,88 +921,6 @@ static void render_inferno_lab_apply_command(
     render_inferno_lab_snap_all_visuals(rc);
 }
 
-static void render_inferno_lab_clear_entry_snapshot(RenderClient* rc) {
-    if (!rc) return;
-    free(rc->inferno_lab_entry_snapshot);
-    rc->inferno_lab_entry_snapshot = NULL;
-    rc->inferno_lab_entry_snapshot_size = 0;
-}
-
-static const EncounterDef* render_inferno_lab_def_or_abort(OsrsEnv* env) {
-    if (!env || !env->encounter_def || !env->encounter_state) {
-        fprintf(stderr, "inferno lab: missing encounter state\n");
-        abort();
-    }
-    const EncounterDef* def = (const EncounterDef*)env->encounter_def;
-    if (strcmp(def->name, "inferno") != 0 ||
-            !def->snapshot_size || !def->snapshot || !def->restore) {
-        fprintf(stderr, "inferno lab: snapshot contract unavailable\n");
-        abort();
-    }
-    return def;
-}
-
-static void render_inferno_lab_capture_entry_snapshot(
-    RenderClient* rc,
-    OsrsEnv* env
-) {
-    const EncounterDef* def = render_inferno_lab_def_or_abort(env);
-    size_t size = def->snapshot_size(
-        (EncounterState*)env->encounter_state,
-        (EncounterContext*)env->encounter_context);
-    void* snapshot = malloc(size);
-    if (!snapshot) {
-        fprintf(stderr, "inferno lab: snapshot allocation failed\n");
-        abort();
-    }
-    def->snapshot(
-        (EncounterState*)env->encounter_state,
-        (EncounterContext*)env->encounter_context,
-        snapshot);
-
-    render_inferno_lab_clear_entry_snapshot(rc);
-    rc->inferno_lab_entry_snapshot = snapshot;
-    rc->inferno_lab_entry_snapshot_size = size;
-}
-
-static void render_inferno_lab_restore_controls(RenderClient* rc) {
-    rc->inferno_lab_enabled = 0;
-    rc->inferno_lab_show_forecast = 0;
-    rc->inferno_lab_selected_npc_slot = -1;
-    rc->is_paused = rc->inferno_lab_prev_paused;
-    rc->human_input.enabled = rc->inferno_lab_prev_human_enabled;
-    human_input_clear_pending(&rc->human_input);
-    human_input_clear_move(&rc->human_input);
-    human_input_clear_selected_ui_target(&rc->human_input);
-    context_menu_dismiss(&rc->context_menu);
-}
-
-static int render_inferno_lab_restore_entry_snapshot(
-    RenderClient* rc,
-    OsrsEnv* env
-) {
-    if (!rc || !rc->inferno_lab_entry_snapshot) {
-        return 0;
-    }
-    const EncounterDef* def = render_inferno_lab_def_or_abort(env);
-    def->restore(
-        (EncounterState*)env->encounter_state,
-        (EncounterContext*)env->encounter_context,
-        rc->inferno_lab_entry_snapshot,
-        rc->inferno_lab_entry_snapshot_size);
-    if (def->get_tick) {
-        env->tick = def->get_tick(
-            (EncounterState*)env->encounter_state,
-            (EncounterContext*)env->encounter_context);
-    }
-    rc->inferno_lab_restore_requested = 1;
-    rc->inferno_lab_restore_generation++;
-    render_inferno_lab_restore_controls(rc);
-    render_reset_episode_visual_state(rc, env);
-    fprintf(stderr, "inferno lab: restored entry snapshot\n");
-    return 1;
-}
-
 
 static inline int render_world_to_screen_x_rc(RenderClient* rc, int world_x) {
     return (world_x - rc->arena_base_x) * RENDER_TILE_SIZE;
@@ -879,6 +941,113 @@ static inline int render_world_to_screen_y(int world_y) {
     int local_y = world_y - FIGHT_AREA_BASE_Y;
     int flipped = (FIGHT_AREA_HEIGHT - 1) - local_y;
     return RENDER_HEADER_HEIGHT + flipped * RENDER_TILE_SIZE;
+}
+
+static void render_set_world_bounds(
+    RenderClient* rc,
+    int min_x,
+    int min_y,
+    int max_x,
+    int max_y
+) {
+    rc->world_bounds_active = 1;
+    rc->world_min_x = min_x;
+    rc->world_min_y = min_y;
+    rc->world_max_x = max_x;
+    rc->world_max_y = max_y;
+}
+
+static int render_tile_in_world_bounds(RenderClient* rc, int wx, int wy) {
+    if (rc->world_bounds_active) {
+        return wx >= rc->world_min_x && wy >= rc->world_min_y &&
+            wx <= rc->world_max_x && wy <= rc->world_max_y;
+    }
+    return wx >= rc->arena_base_x && wy >= rc->arena_base_y &&
+        wx < rc->arena_base_x + rc->arena_width &&
+        wy < rc->arena_base_y + rc->arena_height;
+}
+
+static float render_ground_height_for_tile(RenderClient* rc, int wx, int wy) {
+    return rc->terrain ? terrain_height_avg(rc->terrain, wx, wy) : 2.0f;
+}
+
+static int render_pick_ground_tile_from_ray(
+    RenderClient* rc,
+    Ray ray,
+    int* out_wx,
+    int* out_wy,
+    Vector3* out_hit
+) {
+    if (fabsf(ray.direction.y) < 1e-6f) return 0;
+
+    float plane_y = rc->terrain
+        ? terrain_height_at(rc->terrain, (int)rc->cam_target_x, (int)(-rc->cam_target_z))
+        : 2.0f;
+    Vector3 hit = {0};
+    int wx = -1;
+    int wy = -1;
+
+    for (int i = 0; i < 2; i++) {
+        float t = (plane_y - ray.position.y) / ray.direction.y;
+        if (t < 0.0f) return 0;
+
+        hit = (Vector3){
+            ray.position.x + ray.direction.x * t,
+            ray.position.y + ray.direction.y * t,
+            ray.position.z + ray.direction.z * t,
+        };
+        wx = (int)floorf(hit.x);
+        wy = (int)floorf(-hit.z);
+        if (!render_tile_in_world_bounds(rc, wx, wy)) return 0;
+        plane_y = render_ground_height_for_tile(rc, wx, wy);
+    }
+
+    *out_wx = wx;
+    *out_wy = wy;
+    if (out_hit) *out_hit = hit;
+    return 1;
+}
+
+static int render_pick_ground_tile(
+    RenderClient* rc,
+    int mx,
+    int my,
+    int* out_wx,
+    int* out_wy,
+    Vector3* out_hit
+) {
+    Camera3D cam = render_build_3d_camera(rc);
+    Ray ray = GetScreenToWorldRay((Vector2){ (float)mx, (float)my }, cam);
+    rc->debug_ray_origin = ray.position;
+    rc->debug_ray_dir = ray.direction;
+    return render_pick_ground_tile_from_ray(rc, ray, out_wx, out_wy, out_hit);
+}
+
+static void render_collision_overlay_bounds(
+    RenderClient* rc,
+    int* min_x,
+    int* min_y,
+    int* max_x,
+    int* max_y
+) {
+    if (rc->world_bounds_active) {
+        int cx = (int)floorf(rc->cam_target_x);
+        int cy = (int)floorf(-rc->cam_target_z);
+        *min_x = cx - RENDER_COLLISION_OVERLAY_RADIUS;
+        *max_x = cx + RENDER_COLLISION_OVERLAY_RADIUS;
+        *min_y = cy - RENDER_COLLISION_OVERLAY_RADIUS;
+        *max_y = cy + RENDER_COLLISION_OVERLAY_RADIUS;
+        if (*min_x < rc->world_min_x) *min_x = rc->world_min_x;
+        if (*max_x > rc->world_max_x) *max_x = rc->world_max_x;
+        if (*min_y < rc->world_min_y) *min_y = rc->world_min_y;
+        if (*max_y > rc->world_max_y) *max_y = rc->world_max_y;
+        return;
+    }
+
+    *min_x = rc->arena_base_x;
+    *min_y = rc->arena_base_y;
+    *max_x = rc->arena_base_x + rc->arena_width - 1;
+    *max_y = rc->arena_base_y + rc->arena_height - 1;
 }
 
 /* forward declarations for composite model system (defined after lifecycle) */
@@ -1027,29 +1196,7 @@ static void context_menu_build(RenderClient* rc, OsrsEnv* env, int mx, int my) {
         }
     }
 
-    Camera3D cam = render_build_3d_camera(rc);
-    Ray ray = GetScreenToWorldRay((Vector2){ (float)mx, (float)my }, cam);
-    float best_dist = 1e30f;
-    for (int dy = 0; dy < rc->arena_height; dy++) {
-        for (int dx = 0; dx < rc->arena_width; dx++) {
-            int wx = rc->arena_base_x + dx;
-            int wy = rc->arena_base_y + dy;
-            float tx = (float)wx;
-            float tz = -(float)(wy + 1);
-            float ground_y = rc->terrain
-                ? terrain_height_avg(rc->terrain, wx, wy) : 2.0f;
-            BoundingBox box = {
-                .min = { tx, ground_y - 0.1f, tz },
-                .max = { tx + 1.0f, ground_y, tz + 1.0f },
-            };
-            RayCollision col = GetRayCollisionBox(ray, box);
-            if (col.hit && col.distance < best_dist) {
-                best_dist = col.distance;
-                cm->walk_tile_x = wx;
-                cm->walk_tile_y = wy;
-            }
-        }
-    }
+    render_pick_ground_tile(rc, mx, my, &cm->walk_tile_x, &cm->walk_tile_y, NULL);
 
     /* build menu items: "Attack <NPC>" for each hit entity, then "Walk here" */
     for (int i = 0; i < hit_count; i++) {
@@ -1546,10 +1693,10 @@ static void render_inferno_lab_draw_hud(RenderClient* rc) {
         snprintf(selected_text, sizeof(selected_text), "%d %s", selected,
             inf_lab_npc_type_name(s->npcs[selected].type));
     }
-    DrawRectangle(8, 8, 650, 58, CLITERAL(Color){ 15, 10, 18, 220 });
-    DrawRectangleLines(8, 8, 650, 58, CLITERAL(Color){ 190, 80, 255, 255 });
+    DrawRectangle(8, 8, 455, 58, CLITERAL(Color){ 15, 10, 18, 220 });
+    DrawRectangleLines(8, 8, 455, 58, CLITERAL(Color){ 190, 80, 255, 255 });
     DrawText("INFERNO LAB", 16, 14, 16, CLITERAL(Color){ 230, 210, 255, 255 });
-    DrawText(TextFormat("F8 commit  F6 restore  F7 forecast %s  F9 dump  selected: %s",
+    DrawText(TextFormat("F8 off  F7 forecast %s  F9 dump  selected: %s",
         rc->inferno_lab_show_forecast ? "on" : "off", selected_text),
         16, 38, 12, CLITERAL(Color){ 230, 230, 230, 255 });
 }
@@ -1597,10 +1744,6 @@ static RenderClient* render_make_client(void) {
     rc->inferno_lab_selected_npc_slot = -1;
     rc->inferno_lab_prev_paused = 0;
     rc->inferno_lab_prev_human_enabled = 0;
-    rc->inferno_lab_entry_snapshot = NULL;
-    rc->inferno_lab_entry_snapshot_size = 0;
-    rc->inferno_lab_restore_requested = 0;
-    rc->inferno_lab_restore_generation = 0;
     rc->layout_mode = 1;  /* default to resizable mode (modern OSRS layout) */
     rc->cam_yaw = 0.0f;
     rc->cam_pitch = 0.6f;    /* ~34 degrees, similar to OSRS default */
@@ -2283,7 +2426,6 @@ static void __attribute__((unused)) render_destroy_client(RenderClient* rc) {
     }
     human_input_destroy(&rc->human_input);
     CloseWindow();
-    render_inferno_lab_clear_entry_snapshot(rc);
     free(rc->history);
     free(rc);
 }
@@ -2333,7 +2475,6 @@ static void render_handle_input(RenderClient* rc, OsrsEnv* env) {
             if (enable_lab) {
                 rc->inferno_lab_prev_paused = rc->is_paused;
                 rc->inferno_lab_prev_human_enabled = rc->human_input.enabled;
-                render_inferno_lab_capture_entry_snapshot(rc, env);
             }
             rc->inferno_lab_enabled = enable_lab;
             rc->inferno_lab_show_forecast = rc->inferno_lab_enabled;
@@ -2348,16 +2489,14 @@ static void render_handle_input(RenderClient* rc, OsrsEnv* env) {
                 render_populate_entities(rc, env);
                 render_inferno_lab_snap_all_visuals(rc);
             } else {
-                render_inferno_lab_restore_controls(rc);
+                rc->is_paused = rc->inferno_lab_prev_paused;
+                rc->human_input.enabled = rc->inferno_lab_prev_human_enabled;
+                human_input_clear_pending(&rc->human_input);
+                human_input_clear_move(&rc->human_input);
+                human_input_clear_selected_ui_target(&rc->human_input);
             }
             fprintf(stderr, "inferno lab: %s\n",
                 rc->inferno_lab_enabled ? "ON" : "OFF");
-        }
-    }
-    if (IsKeyPressed(KEY_F6)) {
-        InfernoState* s = render_inferno_state_from_env(env);
-        if (s && !render_inferno_lab_restore_entry_snapshot(rc, env)) {
-            fprintf(stderr, "inferno lab: no entry snapshot to restore\n");
         }
     }
     if (IsKeyPressed(KEY_F7) && rc->inferno_lab_enabled) {
@@ -2551,36 +2690,12 @@ static void render_handle_input(RenderClient* rc, OsrsEnv* env) {
             }
 
             if (!entity_hit) {
-                Camera3D cam = render_build_3d_camera(rc);
-                Ray ray = GetScreenToWorldRay((Vector2){ (float)mx, (float)my }, cam);
-                rc->debug_ray_origin = ray.position;
-                rc->debug_ray_dir = ray.direction;
-
-                float best_dist = 1e30f;
                 int best_wx = -1, best_wy = -1;
-                for (int dy = 0; dy < rc->arena_height; dy++) {
-                    for (int dx = 0; dx < rc->arena_width; dx++) {
-                        int wx = rc->arena_base_x + dx;
-                        int wy = rc->arena_base_y + dy;
-                        float tx = (float)wx;
-                        float tz = -(float)(wy + 1);
-                        float ground_y = rc->terrain
-                            ? terrain_height_avg(rc->terrain, wx, wy)
-                            : 2.0f;
-                        BoundingBox box = {
-                            .min = { tx, ground_y - 0.1f, tz },
-                            .max = { tx + 1.0f, ground_y, tz + 1.0f },
-                        };
-                        RayCollision col = GetRayCollisionBox(ray, box);
-                        if (col.hit && col.distance < best_dist) {
-                            best_dist = col.distance;
-                            best_wx = wx;
-                            best_wy = wy;
-                            rc->debug_ray_hit_x = col.point.x;
-                            rc->debug_ray_hit_y = col.point.y;
-                            rc->debug_ray_hit_z = col.point.z;
-                        }
-                    }
+                Vector3 hit = {0};
+                if (render_pick_ground_tile(rc, mx, my, &best_wx, &best_wy, &hit)) {
+                    rc->debug_ray_hit_x = hit.x;
+                    rc->debug_ray_hit_y = hit.y;
+                    rc->debug_ray_hit_z = hit.z;
                 }
                 rc->debug_hit_wx = best_wx;
                 rc->debug_hit_wy = best_wy;
@@ -2633,30 +2748,8 @@ static void render_handle_input(RenderClient* rc, OsrsEnv* env) {
     int hmy = GetMouseY();
     if (hmx >= 0 && hmx < rc->gui.panel_x &&
         hmy >= 0 && hmy < RENDER_WINDOW_H) {
-        Camera3D hcam = render_build_3d_camera(rc);
-        Ray hray = GetScreenToWorldRay((Vector2){ (float)hmx, (float)hmy }, hcam);
-        float best_dist = 1e30f;
-        for (int dy = 0; dy < rc->arena_height; dy++) {
-            for (int dx = 0; dx < rc->arena_width; dx++) {
-                int wx = rc->arena_base_x + dx;
-                int wy = rc->arena_base_y + dy;
-                float tx = (float)wx;
-                float tz = -(float)(wy + 1);
-                float ground_y = rc->terrain
-                    ? terrain_height_avg(rc->terrain, wx, wy)
-                    : 2.0f;
-                BoundingBox box = {
-                    .min = { tx, ground_y - 0.1f, tz },
-                    .max = { tx + 1.0f, ground_y, tz + 1.0f },
-                };
-                RayCollision col = GetRayCollisionBox(hray, box);
-                if (col.hit && col.distance < best_dist) {
-                    best_dist = col.distance;
-                    rc->hover_tile_x = wx;
-                    rc->hover_tile_y = wy;
-                }
-            }
-        }
+        render_pick_ground_tile(
+            rc, hmx, hmy, &rc->hover_tile_x, &rc->hover_tile_y, NULL);
     }
 }
 
@@ -3041,35 +3134,42 @@ static void render_post_tick(RenderClient* rc, OsrsEnv* env) {
             ((const EncounterDef*)env->encounter_def)->render_post_tick);
 
         if (!has_encounter_overlay) {
-            /* attacker cast a spell this tick — spawn projectile */
+            RenderEffectAttachment attacker_attachment =
+                render_effect_attachment_actor(p, i);
+            RenderEffectAttachment target_attachment =
+                render_effect_attachment_actor(t, target_i);
+
             if (p->attack_style_this_tick == ATTACK_STYLE_MAGIC) {
-                uint8_t wpn = p->equipped[GEAR_SLOT_WEAPON];
+                uint8_t wpn = render_entity_attack_visual_weapon(p);
                 int dist = render_pvp_distance_to_target(p, t);
                 int duration_ticks = pvp_magic_hit_delay(dist) * 30;
-                const OsrsCombatProjectileProfile* profile =
-                    osrs_combat_visual_magic_projectile_profile(wpn);
+                const OsrsCombatVisualRow* special_effect =
+                    p->used_special_this_tick && wpn < NUM_ITEMS
+                        ? osrs_combat_visual_find_special_projectile_item_id(
+                            ITEM_DATABASE[wpn].item_id, ATTACK_STYLE_MAGIC)
+                        : NULL;
+                const OsrsCombatProjectileProfile* profile = special_effect
+                    ? &special_effect->projectile
+                    : osrs_combat_visual_magic_projectile_profile(wpn);
                 if (profile) {
                     render_spawn_profile_projectile(rc, profile,
+                        &attacker_attachment, &target_attachment,
                         p->x, p->y, t->x, t->y,
                         0, duration_ticks, 40 * 4, 30 * 4, 16);
                 } else {
                     profile = osrs_combat_visual_spell_projectile(p->magic_type_this_tick);
                     if (profile && profile->travel_spotanim_id >= 0) {
                         render_spawn_profile_projectile(rc, profile,
+                            &attacker_attachment, &target_attachment,
                             t->x, t->y, t->x, t->y,
                             0, 56, 43 * 4, 0, 16);
                     }
                 }
             }
 
-            /* attacker fired a ranged attack this tick */
             if (p->attack_style_this_tick == ATTACK_STYLE_RANGED) {
-                uint8_t wpn = p->equipped[GEAR_SLOT_WEAPON];
+                uint8_t wpn = render_entity_attack_visual_weapon(p);
                 int dist = render_pvp_distance_to_target(p, t);
-                const OsrsCombatProjectileProfile* special_profile =
-                    p->used_special_this_tick
-                        ? osrs_combat_visual_ranged_special_projectile_profile(wpn)
-                        : NULL;
                 const OsrsCombatProjectileProfile* base_profile =
                     osrs_combat_visual_ranged_projectile_profile(
                         wpn, OSRS_COMBAT_PROJECTILE_BOLT);
@@ -3077,31 +3177,57 @@ static void render_post_tick(RenderClient* rc, OsrsEnv* env) {
                     ? pvp_ranged_hit_delay_for_weapon(
                         dist, 1, render_pvp_ranged_spec_weapon_for_item(wpn)) * 30
                     : pvp_ranged_hit_delay(dist) * 30;
-                if (special_profile) {
-                    render_spawn_profile_projectile(rc, special_profile,
+                const OsrsCombatVisualRow* special_effect =
+                    p->used_special_this_tick && wpn < NUM_ITEMS
+                        ? osrs_combat_visual_find_special_projectile_item_id(
+                            ITEM_DATABASE[wpn].item_id, ATTACK_STYLE_RANGED)
+                        : NULL;
+                if (special_effect) {
+                    OsrsCombatProjectileSequencePart parts[OSRS_COMBAT_PROJECTILE_SEQUENCE_MAX];
+                    int part_count = osrs_combat_visual_build_projectile_sequence(
+                        base_profile, special_effect, parts,
+                        OSRS_COMBAT_PROJECTILE_SEQUENCE_MAX);
+                    if (part_count < 0) abort();
+                    for (int part_i = 0; part_i < part_count; part_i++) {
+                        render_spawn_profile_projectile(rc, &parts[part_i].projectile,
+                            &attacker_attachment, &target_attachment,
+                            p->x, p->y, t->x, t->y,
+                            0, duration_ticks, 43 * 4, 31 * 4, 16);
+                    }
+                } else {
+                    render_spawn_profile_projectile(rc, base_profile,
+                        &attacker_attachment, &target_attachment,
                         p->x, p->y, t->x, t->y,
                         0, duration_ticks, 43 * 4, 31 * 4, 16);
                 }
-                if (!special_profile || special_profile->travel_spotanim_id < 0) {
-                    render_spawn_profile_projectile(rc, base_profile,
-                        p->x, p->y, t->x, t->y,
-                        0, duration_ticks, 43 * 4, 31 * 4, 16);
+            }
+
+            if (p->used_special_this_tick &&
+                    p->attack_style_this_tick == ATTACK_STYLE_MELEE) {
+                uint8_t wpn = render_entity_attack_visual_weapon(p);
+                if (wpn < NUM_ITEMS) {
+                    const OsrsCombatVisualRow* special_effect =
+                        osrs_combat_visual_find_special_projectile_item_id(
+                            ITEM_DATABASE[wpn].item_id, ATTACK_STYLE_MELEE);
+                    if (special_effect) {
+                        render_spawn_profile_projectile(rc,
+                            &special_effect->projectile,
+                            &attacker_attachment, &target_attachment,
+                            p->x, p->y, t->x, t->y,
+                            0, 1, 43 * 4, 31 * 4, 16);
+                    }
                 }
             }
         }
 
-        /* defender: check what landed on entity p this tick.
-           for NPC defenders, the attacker is entity 0 (the player).
-           for player (entity 0), attacker is the current target entity. */
         if (p->hit_landed_this_tick) {
             RenderEntity* att;
             if (i == 0) {
-                att = t;  /* player was hit — attacker is target entity */
+                att = t;
             } else {
-                att = &rc->entities[0];  /* NPC was hit — attacker is player */
+                att = &rc->entities[0];
             }
 
-            /* check if attacker used a powered staff (trident/sang/ayak) */
             uint8_t att_wpn = att->equipped[GEAR_SLOT_WEAPON];
             const OsrsCombatProjectileProfile* att_magic_profile =
                 osrs_combat_visual_magic_projectile_profile(att_wpn);
@@ -3115,48 +3241,23 @@ static void render_post_tick(RenderClient* rc, OsrsEnv* env) {
 
             if (att_is_powered_staff &&
                     att->attack_style_this_tick == ATTACK_STYLE_MAGIC) {
-                /* powered staff hit: trident impact splash */
                 if (p->hit_was_successful) {
-                    effect_spawn_spotanim(rc->effects, att_magic_profile->impact_spotanim_id,
-                        p->x, p->y, ct, rc->spotanims, rc->anim_cache,
-                        rc->model_cache, rc->npc_model_cache,
-                        rc->projectile_model_cache);
+                    render_spawn_entity_spotanim_height(
+                        rc, p, i, att_magic_profile->impact_spotanim_id,
+                        osrs_combat_projectile_profile_impact_height_subtile(
+                            att_magic_profile),
+                        ct);
                 } else {
-                    effect_spawn_spotanim(rc->effects, GFX_SPLASH,
-                        p->x, p->y, ct, rc->spotanims, rc->anim_cache,
-                        rc->model_cache, rc->npc_model_cache,
-                        rc->projectile_model_cache);
+                    render_spawn_entity_spotanim_height(rc, p, i, GFX_SPLASH, 0, ct);
                 }
             } else {
-                /* barrage impact: use hit_spell_type (set when pending hit resolves)
-                   instead of magic_type_this_tick (stale by deferred hit landing).
-                   ENCOUNTER_SPELL_ICE=1 -> ice barrage, ENCOUNTER_SPELL_BLOOD=2 -> blood. */
-                /* use hit_spell_type from pending hit resolution only. the magic_type_this_tick
-                   fallback caused blood/ice effects on tbow hits when barrage fired same tick. */
                 int spell = p->hit_spell_type;
                 if (spell > 0) {
-                    const OsrsCombatProjectileProfile* profile =
-                        osrs_combat_visual_spell_projectile(spell);
-                    if (!profile || profile->impact_spotanim_id < 0) {
-                        fprintf(stderr, "render: missing spell impact visual %d\n", spell);
-                        abort();
-                    }
-                    /* center effect on NPC footprint center using sub-tile precision.
-                       for size 2: center at (x*128 + 128, y*128 + 128) = between 4 tiles.
-                       for size 3: center at (x*128 + 192, y*128 + 192) = middle tile center. */
-                    float fx = (float)p->x * 128.0f + (float)p->npc_size * 64.0f;
-                    float fy = (float)p->y * 128.0f + (float)p->npc_size * 64.0f;
-                    if (p->hit_was_successful) {
-                        effect_spawn_spotanim_subtile(rc->effects, profile->impact_spotanim_id,
-                            fx, fy, ct, rc->spotanims, rc->anim_cache,
-                            rc->model_cache,
-                            rc->npc_model_cache, rc->projectile_model_cache);
-                    } else {
-                        effect_spawn_spotanim_subtile(rc->effects, GFX_SPLASH,
-                            fx, fy, ct, rc->spotanims, rc->anim_cache,
-                            rc->model_cache,
-                            rc->npc_model_cache, rc->projectile_model_cache);
-                    }
+                    int gfx_id = osrs_combat_visual_spell_impact_gfx(
+                        spell, p->hit_was_successful);
+                    int height = osrs_combat_visual_spell_impact_height_subtile(
+                        spell, p->hit_was_successful);
+                    render_spawn_entity_spotanim_height(rc, p, i, gfx_id, height, ct);
                 }
             }
         }
@@ -3431,6 +3532,52 @@ static void render_get_visual_pos(
     }
 }
 
+static int render_actor_effect_owner_is_current(
+    const RenderClient* rc,
+    const ActiveEffect* effect
+) {
+    int idx = effect->actor_owner.entity_idx;
+    if (idx < 0 || idx >= rc->entity_count) return 0;
+    const RenderEntity* entity = &rc->entities[idx];
+    if (entity->entity_type != effect->actor_owner.entity_type) return 0;
+    if (entity->entity_type == ENTITY_NPC) {
+        if (entity->npc_slot != effect->actor_owner.npc_slot) return 0;
+        if ((entity->npc_instance_id || effect->actor_owner.npc_instance_id) &&
+                entity->npc_instance_id != effect->actor_owner.npc_instance_id) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static int render_effect_world_position(
+    RenderClient* rc,
+    const ActiveEffect* effect,
+    float* out_x,
+    float* out_z,
+    float* out_y
+) {
+    float tile_x;
+    float tile_y;
+    if (effect->type == EFFECT_ACTOR_SPOTANIM) {
+        if (!render_actor_effect_owner_is_current(rc, effect)) return 0;
+        int idx = effect->actor_owner.entity_idx;
+        tile_x = (float)effect_resolve_subtile_x(effect, rc->sub_x[idx]) / 128.0f;
+        tile_y = (float)effect_resolve_subtile_y(effect, rc->sub_y[idx]) / 128.0f;
+    } else {
+        tile_x = (float)(effect_resolve_subtile_x(effect, 0.0) / 128.0);
+        tile_y = (float)(effect_resolve_subtile_y(effect, 0.0) / 128.0);
+    }
+
+    float ground = rc->terrain
+        ? terrain_height_avg(rc->terrain, (int)tile_x, (int)tile_y)
+        : 2.0f;
+    *out_x = tile_x;
+    *out_z = -tile_y;
+    *out_y = ground + (float)(effect->height / 128.0);
+    return 1;
+}
+
 
 /* advance splat animation by one client tick (20ms).
    exact OSRS logic from Client.java:6107-6143 (mode 2 animated):
@@ -3689,12 +3836,12 @@ static int render_select_primary(RenderEntity* p) {
 
     if (p->attack_style_this_tick != ATTACK_STYLE_NONE) {
         if (p->attack_style_this_tick == ATTACK_STYLE_MAGIC) {
-            uint8_t wpn = p->equipped[GEAR_SLOT_WEAPON];
+            uint8_t wpn = render_entity_attack_visual_weapon(p);
             return osrs_combat_visual_magic_attack_anim_for_fight_style(
                 wpn, p->fight_style, p->used_special_this_tick, ANIM_SEQ_CAST_BARRAGE);
         }
         return osrs_combat_visual_weapon_attack_anim_for_fight_style(
-            p->equipped[GEAR_SLOT_WEAPON],
+            render_entity_attack_visual_weapon(p),
             (AttackStyle)p->attack_style_this_tick,
             p->fight_style,
             p->used_special_this_tick,
@@ -3806,6 +3953,24 @@ static OsrsModelAppendResult composite_try_add_model(PlayerComposite* comp, Osrs
     for (int f = 0; f < nfi; f++) {
         comp->face_indices[fc_off * 3 + f] = om->face_indices[f] + (uint16_t)bv_off;
     }
+    if (om->face_priorities) {
+        memcpy(comp->face_priorities + fc_off,
+               om->face_priorities, om->mesh.triangleCount);
+    } else {
+        memset(comp->face_priorities + fc_off, 0, om->mesh.triangleCount);
+    }
+    if (om->base_face_alphas) {
+        memcpy(comp->base_face_alphas + fc_off,
+               om->base_face_alphas, om->mesh.triangleCount);
+    } else {
+        memset(comp->base_face_alphas + fc_off, 0, om->mesh.triangleCount);
+    }
+    if (om->face_alpha_labels) {
+        memcpy(comp->face_alpha_labels + fc_off,
+               om->face_alpha_labels, om->mesh.triangleCount);
+    } else {
+        memset(comp->face_alpha_labels + fc_off, 255, om->mesh.triangleCount);
+    }
 
     /* append expanded colors into the composite mesh color buffer */
     int exp_off = fc_off * 3;
@@ -3826,6 +3991,86 @@ static OsrsModelAppendResult composite_try_add_model(PlayerComposite* comp, Osrs
     comp->base_vert_count += om->base_vert_count;
     comp->face_count += om->mesh.triangleCount;
     return OSRS_MODEL_APPEND_OK;
+}
+
+static void composite_sort_faces_by_priority(PlayerComposite* comp) {
+    int face_count = comp->face_count;
+    if (face_count <= 1) return;
+
+    int sorted = 1;
+    for (int i = 1; i < face_count; i++) {
+        if (comp->face_priorities[i - 1] > comp->face_priorities[i]) {
+            sorted = 0;
+            break;
+        }
+    }
+    if (sorted) return;
+
+    int counts[256] = {0};
+    for (int i = 0; i < face_count; i++) {
+        counts[comp->face_priorities[i]]++;
+    }
+
+    int cursors[256];
+    int offset = 0;
+    for (int i = 0; i < 256; i++) {
+        cursors[i] = offset;
+        offset += counts[i];
+    }
+
+    uint16_t* sorted_indices = (uint16_t*)osrs_malloc_or_abort(
+        (size_t)face_count * 3 * sizeof(uint16_t), "composite sorted face indices");
+    uint8_t* sorted_priorities = (uint8_t*)osrs_malloc_or_abort(
+        (size_t)face_count, "composite sorted face priorities");
+    uint8_t* sorted_alphas = (uint8_t*)osrs_malloc_or_abort(
+        (size_t)face_count, "composite sorted face alphas");
+    uint8_t* sorted_labels = (uint8_t*)osrs_malloc_or_abort(
+        (size_t)face_count, "composite sorted face alpha labels");
+    unsigned char* sorted_colors = (unsigned char*)osrs_malloc_or_abort(
+        (size_t)face_count * 3 * 4, "composite sorted colors");
+    float* sorted_texcoords = NULL;
+    if (comp->mesh.texcoords) {
+        sorted_texcoords = (float*)osrs_malloc_or_abort(
+            (size_t)face_count * 3 * 2 * sizeof(float), "composite sorted texcoords");
+    }
+
+    for (int face = 0; face < face_count; face++) {
+        uint8_t priority = comp->face_priorities[face];
+        int dst = cursors[priority]++;
+
+        memcpy(sorted_indices + dst * 3,
+               comp->face_indices + face * 3,
+               3 * sizeof(uint16_t));
+        sorted_priorities[dst] = priority;
+        sorted_alphas[dst] = comp->base_face_alphas[face];
+        sorted_labels[dst] = comp->face_alpha_labels[face];
+        memcpy(sorted_colors + dst * 3 * 4,
+               comp->mesh.colors + face * 3 * 4,
+               3 * 4);
+        if (sorted_texcoords) {
+            memcpy(sorted_texcoords + dst * 3 * 2,
+                   comp->mesh.texcoords + face * 3 * 2,
+                   3 * 2 * sizeof(float));
+        }
+    }
+
+    memcpy(comp->face_indices, sorted_indices,
+           (size_t)face_count * 3 * sizeof(uint16_t));
+    memcpy(comp->face_priorities, sorted_priorities, (size_t)face_count);
+    memcpy(comp->base_face_alphas, sorted_alphas, (size_t)face_count);
+    memcpy(comp->face_alpha_labels, sorted_labels, (size_t)face_count);
+    memcpy(comp->mesh.colors, sorted_colors, (size_t)face_count * 3 * 4);
+    if (sorted_texcoords) {
+        memcpy(comp->mesh.texcoords, sorted_texcoords,
+               (size_t)face_count * 3 * 2 * sizeof(float));
+    }
+
+    free(sorted_texcoords);
+    free(sorted_colors);
+    free(sorted_labels);
+    free(sorted_alphas);
+    free(sorted_priorities);
+    free(sorted_indices);
 }
 
 static void composite_add_model_or_abort(
@@ -3895,14 +4140,18 @@ static void composite_rebuild(
         composite_add_model_or_abort(comp, om, model_id, "equipment");
     }
 
+    composite_sort_faces_by_priority(comp);
+
     /* rebuild animation state for the new composite geometry */
     if (comp->anim_state) {
         anim_model_state_free(comp->anim_state);
         comp->anim_state = NULL;
     }
     if (comp->base_vert_count > 0) {
-        comp->anim_state = anim_model_state_create(
-            comp->vertex_skins, comp->base_vert_count);
+        comp->anim_state = anim_model_state_create_with_face_alpha(
+            comp->vertex_skins, comp->base_vert_count,
+            comp->face_alpha_labels, comp->base_face_alphas,
+            comp->face_count);
     }
 
     /* save equipment state for change detection */
@@ -3948,6 +4197,7 @@ static void composite_rebuild_npc(
         abort();
     }
     composite_add_model_or_abort(comp, om, model_id, "npc");
+    composite_sort_faces_by_priority(comp);
 
     /* rebuild animation state */
     if (comp->anim_state) {
@@ -3955,8 +4205,10 @@ static void composite_rebuild_npc(
         comp->anim_state = NULL;
     }
     if (comp->base_vert_count > 0) {
-        comp->anim_state = anim_model_state_create(
-            comp->vertex_skins, comp->base_vert_count);
+        comp->anim_state = anim_model_state_create_with_face_alpha(
+            comp->vertex_skins, comp->base_vert_count,
+            comp->face_alpha_labels, comp->base_face_alphas,
+            comp->face_count);
     }
 
     comp->last_npc_def_id = npc_def_id;
@@ -4029,6 +4281,7 @@ static void composite_animate_and_draw(
     /* re-expand animated base verts into mesh vertex buffer */
     anim_update_mesh(comp->mesh.vertices, comp->anim_state,
                      comp->face_indices, comp->face_count);
+    anim_update_mesh_alpha(comp->mesh.colors, comp->anim_state, comp->face_count);
 
     /* sanity clamp: catch degenerate animation frames that produce extreme
        vertex positions (int16_t overflow in animation math). without this,
@@ -4233,11 +4486,14 @@ static void render_draw_3d_world(RenderClient* rc) {
 
         /* 3D collision overlay on terrain: semi-transparent quads at tile height */
         if (rc->show_collision && rc->collision_map) {
-            for (int dx = 0; dx < rc->arena_width; dx++) {
-                for (int dy = 0; dy < rc->arena_height; dy++) {
-                    int wx = rc->arena_base_x + dx + rc->collision_world_offset_x;
-                    int wy = rc->arena_base_y + dy + rc->collision_world_offset_y;
-                    int flags = collision_get_flags(rc->collision_map, 0, wx, wy);
+            int min_x, min_y, max_x, max_y;
+            render_collision_overlay_bounds(rc, &min_x, &min_y, &max_x, &max_y);
+            for (int wx = min_x; wx <= max_x; wx++) {
+                for (int wy = min_y; wy <= max_y; wy++) {
+                    int flags = collision_get_flags(
+                        rc->collision_map, 0,
+                        wx + rc->collision_world_offset_x,
+                        wy + rc->collision_world_offset_y);
 
                     Color col = { 0, 0, 0, 0 };
                     if (flags & COLLISION_BLOCKED) {
@@ -4250,11 +4506,10 @@ static void render_draw_3d_world(RenderClient* rc) {
                         col = CLITERAL(Color){ 50, 200, 50, 40 };
                     }
 
-                    float tx = (float)(rc->arena_base_x + dx);
-                    float tz = -(float)(rc->arena_base_y + dy + 1);
+                    float tx = (float)wx;
+                    float tz = -(float)(wy + 1);
                     /* sample terrain height at tile */
-                    float ground = terrain_height_avg(rc->terrain,
-                        rc->arena_base_x + dx, rc->arena_base_y + dy);
+                    float ground = terrain_height_avg(rc->terrain, wx, wy);
                     DrawCube((Vector3){ tx + 0.5f, ground + 0.05f, tz + 0.5f },
                              1.0f, 0.02f, 1.0f, col);
                 }
@@ -4673,7 +4928,6 @@ static void render_draw_3d_world(RenderClient* rc) {
 
             float px, pz, ground;
             render_get_visual_pos(rc, i, &px, &pz, &ground);
-            float model_ground = osrs_render_entity_model_ground(ground);
 
             /* negate X scale to fix model mirroring: OSRS models are authored
                in a left-handed coordinate system but we render in right-handed
@@ -4681,7 +4935,7 @@ static void render_draw_3d_world(RenderClient* rc) {
                appear in the correct (right) hand. */
             Matrix base = MatrixScale(-ms, ms, ms);
             base = MatrixMultiply(base, MatrixRotateY(rc->yaw[i]));
-            base = MatrixMultiply(base, MatrixTranslate(px, model_ground, pz));
+            base = MatrixMultiply(base, MatrixTranslate(px, ground, pz));
 
             /* rebuild composite if equipment changed, animate, upload, draw */
             render_player_composite(rc, i, base);
@@ -4705,13 +4959,13 @@ static void render_draw_3d_world(RenderClient* rc) {
             float visual_height_tiles = 0.0f;
             if (nv > 0 && min_model_y <= max_model_y) {
                 visual_height_tiles = (max_model_y - min_model_y) * ms;
-                rc->entity_visual_mid_y[i] = model_ground + min_model_y * ms
+                rc->entity_visual_mid_y[i] = ground + min_model_y * ms
                     + (max_model_y - min_model_y) * ms * 0.5f;
-                rc->entity_visual_top_y[i] = model_ground + max_model_y * ms;
+                rc->entity_visual_top_y[i] = ground + max_model_y * ms;
             } else {
                 int ent_size = (ep->entity_type == ENTITY_NPC && ep->npc_size > 1) ? ep->npc_size : 1;
-                rc->entity_visual_mid_y[i] = model_ground + 0.75f + 0.25f * (float)ent_size;
-                rc->entity_visual_top_y[i] = model_ground + 1.5f + 0.5f * (float)ent_size;
+                rc->entity_visual_mid_y[i] = ground + 0.75f + 0.25f * (float)ent_size;
+                rc->entity_visual_top_y[i] = ground + 1.5f + 0.5f * (float)ent_size;
                 visual_height_tiles = (float)ent_size;
             }
             for (int vi = 0; vi < nv; vi++) {
@@ -4724,7 +4978,7 @@ static void render_draw_3d_world(RenderClient* rc) {
             }
             Vector3 clickbox_points[RENDER_CLICKBOX_PRISM_POINT_COUNT];
             int clickbox_n = render_build_entity_clickbox_prism_points(
-                ep, px, pz, model_ground, visual_height_tiles,
+                ep, px, pz, ground, visual_height_tiles,
                 clickbox_points, RENDER_CLICKBOX_PRISM_POINT_COUNT);
             for (int ci = 0; ci < clickbox_n; ci++) {
                 hull_append_projected_world_point(&hull_cam, clickbox_points[ci],
@@ -4751,13 +5005,8 @@ static void render_draw_3d_world(RenderClient* rc) {
                 rc->npc_model_cache, rc->projectile_model_cache);
             if (!om) continue;
 
-            /* position: sub-tile coords -> tile coords -> raylib world */
-            float ex = (float)(e->cur_x / 128.0);
-            float ez = -(float)(e->cur_y / 128.0);
-            float ground = rc->terrain
-                ? terrain_height_avg(rc->terrain, (int)ex, (int)(e->cur_y / 128.0))
-                : 2.0f;
-            float ey = ground + (float)(e->height / 128.0);
+            float ex, ez, ey;
+            if (!render_effect_world_position(rc, e, &ex, &ez, &ey)) continue;
 
             /* apply scale from spotanim def */
             float scale_xy = eff_scale * (float)e->meta->resize_xy / 128.0f;
@@ -4806,6 +5055,13 @@ static void render_draw_3d_world(RenderClient* rc) {
                 t = render_projectile_transform(scale_xy, scale_y, scale_xy,
                     orientation.yaw, orientation.pitch,
                     (Vector3){ ex, ey, ez });
+            } else if (e->type == EFFECT_ACTOR_SPOTANIM &&
+                    render_actor_effect_owner_is_current(rc, e)) {
+                int owner_idx = e->actor_owner.entity_idx;
+                t = MatrixMultiply(
+                    MatrixScale(-scale_xy, scale_y, scale_xy),
+                    MatrixRotateY(rc->yaw[owner_idx]));
+                t = MatrixMultiply(t, MatrixTranslate(ex, ey, ez));
             } else {
                 t = MatrixMultiply(
                     MatrixScale(-scale_xy, scale_y, scale_xy),
@@ -4815,7 +5071,9 @@ static void render_draw_3d_world(RenderClient* rc) {
 
             /* spotanim fade: 20% fade in, 60% full, 20% fade out */
             Color tint = WHITE;
-            if (e->type == EFFECT_SPOTANIM && e->stop_tick > e->start_tick) {
+            if ((e->type == EFFECT_SPOTANIM ||
+                    e->type == EFFECT_ACTOR_SPOTANIM) &&
+                    e->stop_tick > e->start_tick) {
                 int total = e->stop_tick - e->start_tick;
                 int elapsed = eff_ct - e->start_tick;
                 float progress = (float)elapsed / (float)total;
@@ -4895,13 +5153,20 @@ static void render_draw_3d_world(RenderClient* rc) {
                     if (!npc->active || npc->death_ticks > 0) continue;
                     const EncounterLoadoutStats* ls =
                         &debug_inferno_state->loadout_stats[debug_inferno_state->weapon_set];
-                    int can_atk = encounter_player_can_attack(
-                        debug_inferno_state->player.x,
-                        debug_inferno_state->player.y,
-                        npc->x, npc->y, npc->size,
-                        ls->attack_range,
-                        debug_inferno_state->los_blockers,
-                        debug_inferno_state->los_blocker_count);
+                    OsrsAttackReachQuery reach = {
+                        .source = osrs_footprint(
+                            debug_inferno_state->player.x,
+                            debug_inferno_state->player.y,
+                            1),
+                        .target = osrs_footprint(
+                            npc->x,
+                            npc->y,
+                            inf_npc_footprint_size(npc)),
+                        .delivery = encounter_attack_delivery_from_style(ls->style),
+                        .range = ls->attack_range,
+                        .occlusion = inf_projectile_occlusion(debug_inferno_state),
+                    };
+                    int can_atk = osrs_attack_can_reach(&reach);
                     lc = can_atk ? GREEN : RED;
                 }
 
@@ -5056,7 +5321,7 @@ static void render_draw_overhead_status(RenderClient* rc, OsrsEnv* env) {
                 /* attack timer + style */
                 const char* style_str = "???";
                 Color style_col = WHITE;
-                int style = (npc->type == INF_NPC_JAD) ? inf_npc_jad(npc)->attack_style : npc->attack_style;
+                int style = (npc->type == INF_NPC_JAD) ? npc->jad_attack_style : npc->attack_style;
                 if (style == ATTACK_STYLE_MAGIC)  { style_str = "MAG"; style_col = BLUE; }
                 if (style == ATTACK_STYLE_RANGED) { style_str = "RNG"; style_col = GREEN; }
                 if (style == ATTACK_STYLE_MELEE)  { style_str = "MEL"; style_col = RED; }
@@ -5087,10 +5352,17 @@ static void render_draw_overhead_status(RenderClient* rc, OsrsEnv* env) {
                 /* player→NPC LOS + range */
                 {
                     const EncounterLoadoutStats* ls = &is->loadout_stats[is->weapon_set];
-                    int can_atk = encounter_player_can_attack(
-                        is->player.x, is->player.y,
-                        npc->x, npc->y, npc->size,
-                        ls->attack_range, is->los_blockers, is->los_blocker_count);
+                    OsrsAttackReachQuery reach = {
+                        .source = osrs_footprint(is->player.x, is->player.y, 1),
+                        .target = osrs_footprint(
+                            npc->x,
+                            npc->y,
+                            inf_npc_footprint_size(npc)),
+                        .delivery = encounter_attack_delivery_from_style(ls->style),
+                        .range = ls->attack_range,
+                        .occlusion = inf_projectile_occlusion(is),
+                    };
+                    int can_atk = osrs_attack_can_reach(&reach);
                     const char* patk_txt = can_atk ? "P>NPC" : "P>NPC X";
                     Color patk_col = can_atk ? GREEN : RED;
                     int pw = MeasureText(patk_txt, fs);
@@ -5176,9 +5448,7 @@ static int render_minimap_collision_flags(RenderClient* rc, int wx, int wy) {
 }
 
 static Color render_minimap_tile_color(RenderClient* rc, int wx, int wy) {
-    if (wx < rc->arena_base_x || wy < rc->arena_base_y ||
-        wx >= rc->arena_base_x + rc->arena_width ||
-        wy >= rc->arena_base_y + rc->arena_height) {
+    if (!render_tile_in_world_bounds(rc, wx, wy)) {
         return (Color){10, 8, 6, 255};
     }
 
@@ -5215,16 +5485,14 @@ static float render_minimap_entity_center_x(RenderClient* rc, int entity_idx) {
     int sub = rc->sub_x[entity_idx];
     if (sub != 0) return (float)sub / 128.0f;
     RenderEntity* ent = &rc->entities[entity_idx];
-    int size = ent->npc_size > 1 ? ent->npc_size : 1;
-    return (float)ent->x + (float)size * 0.5f;
+    return render_entity_center_subtile_x(ent) / 128.0f;
 }
 
 static float render_minimap_entity_center_y(RenderClient* rc, int entity_idx) {
     int sub = rc->sub_y[entity_idx];
     if (sub != 0) return (float)sub / 128.0f;
     RenderEntity* ent = &rc->entities[entity_idx];
-    int size = ent->npc_size > 1 ? ent->npc_size : 1;
-    return (float)ent->y + (float)size * 0.5f;
+    return render_entity_center_subtile_y(ent) / 128.0f;
 }
 
 /* Draw a single entity dot on the minimap. Picks the right canonical sprite
@@ -5264,29 +5532,6 @@ static void render_ensure_minimap_surface(RenderClient* rc, int w, int h) {
     SetTextureFilter(rc->minimap_surface.texture, TEXTURE_FILTER_POINT);
     rc->minimap_surface_w = w;
     rc->minimap_surface_h = h;
-}
-
-static void render_draw_minimap_compass(RenderClient* rc, GuiState* gs, Rectangle compass) {
-    int masked = gs->minimap_compass_masked.id != 0;
-    Texture2D comp = masked ? gs->minimap_compass_masked : gui_asset(gs, "compass");
-    if (comp.id == 0) comp = gs->minimap_compass;
-    if (comp.id != 0) {
-        Rectangle src = {0, 0, (float)comp.width, (float)comp.height};
-        float draw_w = masked ? (float)comp.width : compass.width;
-        float draw_h = masked ? (float)comp.height : compass.height;
-        Rectangle dst = {
-            compass.x + compass.width * 0.5f,
-            compass.y + compass.height * 0.5f,
-            draw_w,
-            draw_h,
-        };
-        Vector2 origin = {draw_w * 0.5f, draw_h * 0.5f};
-        float angle_deg = rc->cam_yaw * (180.0f / 3.14159265f);
-        DrawTexturePro(comp, src, dst, origin, angle_deg, WHITE);
-    } else {
-        gui_draw_named_asset(gs, "resize_compass_mask", compass, WHITE);
-        gui_text_shadow(gs, "N", (int)compass.x + 16, (int)compass.y + 12, 14, GUI_TEXT_ORANGE);
-    }
 }
 
 /* Draw the minimap area at the top of the right-hand panel: dark backdrop, the
@@ -5381,14 +5626,6 @@ static void render_draw_minimap_area(RenderClient* rc, OsrsEnv* env, Player* p) 
     DrawTexturePro(rc->minimap_surface.texture, surface_src, surface_dst,
                    (Vector2){0, 0}, 0.0f, WHITE);
 
-    Rectangle compass = {
-        (float)compass_x,
-        (float)compass_y,
-        (float)GUI_COMPASS_W,
-        (float)GUI_COMPASS_H,
-    };
-    render_draw_minimap_compass(rc, gs, compass);
-
     Rectangle cover = {
         (float)(map_x + GUI_MAP_SURROUND_X),
         (float)(map_y + GUI_MAP_SURROUND_Y),
@@ -5403,6 +5640,31 @@ static void render_draw_minimap_area(RenderClient* rc, OsrsEnv* env, Player* p) 
             Rectangle src = {0, 0, (float)chrome_sprite.width, (float)chrome_sprite.height};
             DrawTexturePro(chrome_sprite, src, cover, (Vector2){0, 0}, 0.0f, WHITE);
         }
+    }
+
+    Rectangle compass = {
+        (float)compass_x,
+        (float)compass_y,
+        (float)GUI_COMPASS_W,
+        (float)GUI_COMPASS_H,
+    };
+    Texture2D compass_tex = gui_asset(gs, "compass");
+    if (compass_tex.id == 0) compass_tex = gs->minimap_compass;
+    if (compass_tex.id != 0) {
+        Texture2D comp = compass_tex;
+        Rectangle src = {0, 0, (float)comp.width, (float)comp.height};
+        Rectangle dst = {
+            compass.x + compass.width * 0.5f,
+            compass.y + compass.height * 0.5f,
+            compass.width,
+            compass.height,
+        };
+        Vector2 origin = {compass.width * 0.5f, compass.height * 0.5f};
+        float angle_deg = -rc->cam_yaw * (180.0f / 3.14159265f);
+        DrawTexturePro(comp, src, dst, origin, angle_deg, WHITE);
+    } else {
+        gui_draw_named_asset(gs, "resize_compass_mask", compass, WHITE);
+        gui_text_shadow(gs, "N", (int)compass.x + 16, (int)compass.y + 12, 14, GUI_TEXT_ORANGE);
     }
 
     int orbs_x = map_x + GUI_ORBS_X;
@@ -5455,66 +5717,10 @@ static void render_draw_target_label(RenderClient* rc) {
     DrawText(label, x, 12, 16, COLOR_TEXT);
 }
 
-static int render_display_tick(OsrsEnv* env) {
-    if (env->encounter_def && env->encounter_state) {
-        return ((const EncounterDef*)env->encounter_def)->get_tick(
-            (EncounterState*)env->encounter_state,
-            (EncounterContext*)env->encounter_context);
-    }
-    return env->tick;
-}
-
 static int render_scene_is_pvp(OsrsEnv* env) {
     if (!env->encounter_def) return 1;
     const EncounterDef* def = (const EncounterDef*)env->encounter_def;
     return strcmp(def->name, "nh_pvp") == 0 || strcmp(def->name, "pvp") == 0;
-}
-
-static int render_scene_is_inferno(OsrsEnv* env) {
-    if (!env->encounter_def) return 0;
-    const EncounterDef* def = (const EncounterDef*)env->encounter_def;
-    return strcmp(def->name, "inferno") == 0;
-}
-
-static const char* render_control_hint_text(OsrsEnv* env) {
-    if (render_scene_is_inferno(env)) {
-        return "Right-drag: orbit  Mid-drag: pan  Scroll: zoom  D: debug  H: human  F8: lab";
-    }
-    return "Right-drag: orbit  Mid-drag: pan  Scroll: zoom  SPACE: pause  S: safe spots  D: debug  G: cycle entity  H: human";
-}
-
-static void render_draw_default_top_hud(RenderClient* rc, int display_tick) {
-    DrawText(TextFormat("Tick: %d", display_tick), 10, 12, 16, COLOR_TEXT);
-    render_draw_target_label(rc);
-
-    if (rc->entity_count >= 2) {
-        RenderEntity* p0 = &rc->entities[0];
-        RenderEntity* p1 = &rc->entities[1];
-        const char* hp_txt = TextFormat("P0: %d/%d   P1: %d/%d",
-            p0->current_hitpoints, p0->base_hitpoints,
-            p1->current_hitpoints, p1->base_hitpoints);
-        int hp_w = MeasureText(hp_txt, 16);
-        DrawText(hp_txt, RENDER_GRID_W - hp_w - 12, 12, 16, COLOR_TEXT);
-    }
-}
-
-static void render_draw_inferno_top_hud(OsrsEnv* env, int display_tick) {
-    InfernoState* s = render_inferno_state_from_env(env);
-    if (!s) {
-        DrawText(TextFormat("Tick: %d", display_tick), 10, 12, 16, COLOR_TEXT);
-        return;
-    }
-    DrawText(TextFormat("Tick: %d   Wave: %d / %d",
-        display_tick, s->wave + 1, INF_NUM_WAVES), 10, 12, 16, COLOR_TEXT);
-}
-
-static void render_draw_top_hud(RenderClient* rc, OsrsEnv* env) {
-    int display_tick = render_display_tick(env);
-    if (render_scene_is_inferno(env)) {
-        render_draw_inferno_top_hud(env, display_tick);
-        return;
-    }
-    render_draw_default_top_hud(rc, display_tick);
 }
 
 static void render_follow_pvp_fighter_midpoint(RenderClient* rc, OsrsEnv* env, double frame_dt) {
@@ -5700,13 +5906,13 @@ void pvp_render(OsrsEnv* env) {
 
             /* pending hits */
             int mag_hits = 0, rng_hits = 0;
-            for (int h = 0; h < is->player_pending_hits.count; h++) {
-                if (is->player_pending_hits.hits[h].attack_style == ATTACK_STYLE_MAGIC) mag_hits++;
+            for (int h = 0; h < is->player_pending_hit_count; h++) {
+                if (is->player_pending_hits[h].attack_style == ATTACK_STYLE_MAGIC) mag_hits++;
                 else rng_hits++;
             }
-            if (is->player_pending_hits.count > 0) {
+            if (is->player_pending_hit_count > 0) {
                 DrawText(TextFormat("INCOMING: %d (%dM %dR)",
-                    is->player_pending_hits.count, mag_hits, rng_hits),
+                    is->player_pending_hit_count, mag_hits, rng_hits),
                     dx, dy, fs, (Color){255, 150, 150, 255});
             }
         }
@@ -5724,9 +5930,28 @@ void pvp_render(OsrsEnv* env) {
             }
         }
 
-    render_draw_top_hud(rc, env);
+    int display_tick = env->tick;
+    if (env->encounter_def && env->encounter_state)
+        display_tick = ((const EncounterDef*)env->encounter_def)->get_tick(
+            (EncounterState*)env->encounter_state,
+            (EncounterContext*)env->encounter_context);
+    DrawText(TextFormat("Tick: %d", display_tick), 10, 12, 16, COLOR_TEXT);
+    render_draw_target_label(rc);
+
+    if (rc->entity_count >= 2) {
+        RenderEntity* p0 = &rc->entities[0];
+        RenderEntity* p1 = &rc->entities[1];
+        const char* hp_txt = TextFormat("P0: %d/%d   P1: %d/%d",
+            p0->current_hitpoints, p0->base_hitpoints,
+            p1->current_hitpoints, p1->base_hitpoints);
+        int hp_w = MeasureText(hp_txt, 16);
+        DrawText(hp_txt, RENDER_GRID_W - hp_w - 12, 12, 16, COLOR_TEXT);
+    }
+
     render_draw_pvp_performance_tracker(rc, env);
-    DrawText(render_control_hint_text(env), 10, RENDER_WINDOW_H - 20, 10, COLOR_TEXT_DIM);
+
+    DrawText("Right-drag: orbit  Mid-drag: pan  Scroll: zoom  SPACE: pause  S: safe spots  D: debug  G: cycle entity  H: human",
+             10, RENDER_WINDOW_H - 20, 10, COLOR_TEXT_DIM);
 
     /* OSRS GUI panel system: shows selected entity's state.
        Renders in both 2D and 3D mode as a side panel overlay.

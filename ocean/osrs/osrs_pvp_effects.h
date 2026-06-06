@@ -1,10 +1,9 @@
 /**
  * @fileoverview Visual effect system for spell impacts and projectiles.
  *
- * Manages animated spotanim effects (ice barrage splash, blood barrage) and
- * traveling projectiles (crossbow bolts, ice barrage orb). Each effect has a
- * model, animation, position, and lifetime. Projectiles follow parabolic arcs
- * matching OSRS SceneProjectile.java trajectory math.
+ * Manages animated world spotanims, actor spotanims, and traveling projectiles.
+ * Each effect has a model, animation, position, owner if actor-attached, and
+ * lifetime. Projectiles follow parabolic arcs matching OSRS trajectory math.
  *
  * Effects are spawned from game state in render_post_tick and drawn as 3D
  * models in the render pipeline. Animation advances at 50 Hz client ticks.
@@ -18,6 +17,7 @@
 #include "osrs_spotanims.h"
 #include "osrs_gfx_ids.h"
 #include <math.h>
+#include <stdint.h>
 
 #define MAX_ACTIVE_EFFECTS 16
 
@@ -40,9 +40,8 @@ static OsrsModel* effect_find_model(
     ModelCache* projectile_model_cache
 ) {
     if (!meta || meta->model_id < 0) return NULL;
-    uint32_t model_ids[3] = {
+    uint32_t model_ids[2] = {
         OSRS_SPOTANIM_MODEL_BASE + meta->id,
-        OSRS_SPOTANIM_RECOLOR_MODEL_BASE | meta->id,
         (uint32_t)meta->model_id,
     };
     ModelCache* caches[3] = {
@@ -50,7 +49,7 @@ static OsrsModel* effect_find_model(
         model_cache,
         secondary_model_cache,
     };
-    for (int m = 0; m < 3; m++) {
+    for (int m = 0; m < 2; m++) {
         for (int c = 0; c < 3; c++) {
             OsrsModel* om = effect_find_model_in_cache(caches[c], model_ids[m]);
             if (om) return om;
@@ -62,9 +61,17 @@ static OsrsModel* effect_find_model(
 
 typedef enum {
     EFFECT_NONE = 0,
-    EFFECT_SPOTANIM,     /* plays at a fixed position (impact effects) */
-    EFFECT_PROJECTILE,   /* travels from source to target with parabolic arc */
+    EFFECT_SPOTANIM,
+    EFFECT_ACTOR_SPOTANIM,
+    EFFECT_PROJECTILE,
 } EffectType;
+
+typedef struct {
+    int entity_idx;
+    int entity_type;
+    int npc_slot;
+    uint32_t npc_instance_id;
+} ActiveEffectActorOwner;
 
 typedef struct {
     EffectType type;
@@ -91,6 +98,8 @@ typedef struct {
     int start_tick;
     int stop_tick;
     int started;               /* has calculateIncrements been called? */
+    ActiveEffectActorOwner actor_owner;
+    int actor_spotanim_slot;
 
     /* animation state */
     int anim_frame;
@@ -126,6 +135,63 @@ static int effect_find_slot(ActiveEffect effects[MAX_ACTIVE_EFFECTS]) {
     return oldest;
 }
 
+static int effect_actor_owner_matches(
+    const ActiveEffect* effect,
+    ActiveEffectActorOwner owner,
+    int actor_spotanim_slot
+) {
+    return effect->type == EFFECT_ACTOR_SPOTANIM &&
+        effect->actor_owner.entity_idx == owner.entity_idx &&
+        effect->actor_owner.entity_type == owner.entity_type &&
+        effect->actor_owner.npc_slot == owner.npc_slot &&
+        effect->actor_owner.npc_instance_id == owner.npc_instance_id &&
+        effect->actor_spotanim_slot == actor_spotanim_slot;
+}
+
+static int effect_find_actor_spotanim_slot(
+    ActiveEffect effects[MAX_ACTIVE_EFFECTS],
+    ActiveEffectActorOwner owner,
+    int actor_spotanim_slot
+) {
+    for (int i = 0; i < MAX_ACTIVE_EFFECTS; i++) {
+        if (effect_actor_owner_matches(&effects[i], owner, actor_spotanim_slot)) {
+            effect_free(&effects[i]);
+            return i;
+        }
+    }
+    return effect_find_slot(effects);
+}
+
+static void effect_clear_actor_spotanim_slot(
+    ActiveEffect effects[MAX_ACTIVE_EFFECTS],
+    ActiveEffectActorOwner owner,
+    int actor_spotanim_slot
+) {
+    for (int i = 0; i < MAX_ACTIVE_EFFECTS; i++) {
+        if (effect_actor_owner_matches(&effects[i], owner, actor_spotanim_slot)) {
+            effect_free(&effects[i]);
+        }
+    }
+}
+
+static double effect_resolve_subtile_x(
+    const ActiveEffect* effect,
+    double actor_subtile_x
+) {
+    return effect->type == EFFECT_ACTOR_SPOTANIM
+        ? actor_subtile_x
+        : effect->cur_x;
+}
+
+static double effect_resolve_subtile_y(
+    const ActiveEffect* effect,
+    double actor_subtile_y
+) {
+    return effect->type == EFFECT_ACTOR_SPOTANIM
+        ? actor_subtile_y
+        : effect->cur_y;
+}
+
 /** Create AnimModelState for an effect's model (if it has animation data). */
 static void effect_init_anim_state(
     ActiveEffect* e,
@@ -144,16 +210,29 @@ static void effect_init_anim_state(
         om->face_alpha_labels, om->base_face_alphas, om->mesh.triangleCount);
 }
 
+static int effect_spotanim_duration_client_ticks(
+    const OsrsSpotAnimDef* meta,
+    AnimCache* anim_cache
+) {
+    int duration = 30;
+    if (meta->animation_id >= 0 && anim_cache) {
+        AnimSequence* seq = anim_get_sequence(anim_cache, meta->animation_id);
+        if (seq) {
+            duration = 0;
+            for (int f = 0; f < seq->frame_count; f++) {
+                duration += seq->frames[f].delay;
+            }
+        }
+    }
+    return duration;
+}
 
-/**
- * Spawn a spotanim effect at a world position (impact splash, etc).
- * Duration is determined by the animation length, or a fixed 30 client ticks
- * for static models.
- */
-static int effect_spawn_spotanim_subtile(
+
+static int effect_spawn_spotanim_subtile_height(
     ActiveEffect effects[MAX_ACTIVE_EFFECTS],
     int gfx_id,
     float subtile_x, float subtile_y,
+    float height_subtile,
     int current_client_tick,
     const OsrsSpotAnimSet* spotanims,
     AnimCache* anim_cache,
@@ -173,28 +252,74 @@ static int effect_spawn_spotanim_subtile(
 
     e->cur_x = subtile_x;
     e->cur_y = subtile_y;
-    e->height = 0;
+    e->height = height_subtile;
 
     e->start_tick = current_client_tick;
 
-    /* duration from animation, or 30 client ticks default */
-    int duration = 30;
-    if (meta->animation_id >= 0 && anim_cache) {
-        AnimSequence* seq = anim_get_sequence(anim_cache, meta->animation_id);
-        if (seq) {
-            duration = 0;
-            for (int f = 0; f < seq->frame_count; f++) {
-                duration += seq->frames[f].delay;
-            }
-        }
-    }
-    e->stop_tick = current_client_tick + duration;
+    e->stop_tick = current_client_tick +
+        effect_spotanim_duration_client_ticks(meta, anim_cache);
 
     effect_init_anim_state(e, model_cache, secondary_model_cache, projectile_model_cache);
     return slot;
 }
 
-/* convenience wrapper: integer tile coords → sub-tile center */
+static int effect_spawn_spotanim_subtile(
+    ActiveEffect effects[MAX_ACTIVE_EFFECTS],
+    int gfx_id,
+    float subtile_x, float subtile_y,
+    int current_client_tick,
+    const OsrsSpotAnimSet* spotanims,
+    AnimCache* anim_cache,
+    ModelCache* model_cache,
+    ModelCache* secondary_model_cache,
+    ModelCache* projectile_model_cache
+) {
+    return effect_spawn_spotanim_subtile_height(
+        effects, gfx_id, subtile_x, subtile_y, 0.0f,
+        current_client_tick, spotanims, anim_cache, model_cache,
+        secondary_model_cache, projectile_model_cache);
+}
+
+static int effect_spawn_actor_spotanim_height(
+    ActiveEffect effects[MAX_ACTIVE_EFFECTS],
+    int gfx_id,
+    ActiveEffectActorOwner owner,
+    int actor_spotanim_slot,
+    float subtile_x,
+    float subtile_y,
+    float height_subtile,
+    int current_client_tick,
+    const OsrsSpotAnimSet* spotanims,
+    AnimCache* anim_cache,
+    ModelCache* model_cache,
+    ModelCache* secondary_model_cache,
+    ModelCache* projectile_model_cache
+) {
+    const OsrsSpotAnimDef* meta = spotanim_lookup(spotanims, gfx_id);
+    if (!meta) return -1;
+
+    int slot = effect_find_actor_spotanim_slot(
+        effects, owner, actor_spotanim_slot);
+    ActiveEffect* e = &effects[slot];
+    memset(e, 0, sizeof(ActiveEffect));
+    e->type = EFFECT_ACTOR_SPOTANIM;
+    e->gfx_id = gfx_id;
+    e->meta = meta;
+    e->actor_owner = owner;
+    e->actor_spotanim_slot = actor_spotanim_slot;
+
+    e->cur_x = subtile_x;
+    e->cur_y = subtile_y;
+    e->height = height_subtile;
+    e->start_tick = current_client_tick;
+    e->stop_tick = current_client_tick +
+        effect_spotanim_duration_client_ticks(meta, anim_cache);
+
+    effect_init_anim_state(e, model_cache, secondary_model_cache,
+        projectile_model_cache);
+    return slot;
+}
+
 static int effect_spawn_spotanim(
     ActiveEffect effects[MAX_ACTIVE_EFFECTS],
     int gfx_id, int world_x, int world_y,

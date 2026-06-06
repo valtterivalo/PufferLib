@@ -545,8 +545,15 @@ static void generate_slot_observations(OsrsEnv* env, int agent_idx) {
     obs[120] = (float)slot_bonuses->magic_strength;
     obs[121] = (float)slot_bonuses->ranged_attack;
     obs[122] = (float)slot_bonuses->ranged_strength;
-    obs[123] = (float)slot_bonuses->attack_speed;
-    obs[124] = (float)slot_bonuses->attack_range;
+    AttackStyle current_weapon_style = get_slot_weapon_attack_style(p);
+    OsrsPlayerAttackProfile current_attack_profile =
+        osrs_player_attack_profile_for_loadout(
+            p->equipped,
+            current_weapon_style,
+            p->fight_style,
+            current_weapon_style == ATTACK_STYLE_MAGIC ? 30 : 0);
+    obs[123] = (float)current_attack_profile.cycle_ticks;
+    obs[124] = (float)current_attack_profile.range;
     obs[125] = (float)slot_bonuses->slash_attack;
     obs[126] = (float)slot_bonuses->melee_strength;
     obs[127] = (float)slot_bonuses->ranged_defence;
@@ -617,7 +624,6 @@ static void generate_slot_observations(OsrsEnv* env, int agent_idx) {
     obs[183] = p->used_special_this_tick ? 1.0f : 0.0f;
     obs[184] = p->ate_food_this_tick ? 1.0f : 0.0f;
     obs[185] = p->ate_karambwan_this_tick ? 1.0f : 0.0f;
-    AttackStyle current_weapon_style = get_slot_weapon_attack_style(p);
     obs[186] = (current_weapon_style == ATTACK_STYLE_MAGIC) ? 1.0f : 0.0f;
     obs[187] = (current_weapon_style == ATTACK_STYLE_RANGED) ? 1.0f : 0.0f;
     obs[188] = (current_weapon_style == ATTACK_STYLE_MELEE) ? 1.0f : 0.0f;
@@ -699,29 +705,36 @@ static void compute_action_masks(OsrsEnv* env, int agent_idx) {
     mask[offset + LOADOUT_GMAUL] = player_has_gmaul(p) &&
         (p->special_energy >= 50) && !frozen_no_melee;
 
-    // Mask MELEE when frozen and out of melee range
     if (frozen_no_melee) {
         mask[offset + LOADOUT_MELEE] = 0;
     }
     offset += LOADOUT_DIM;
 
-    // COMBAT head (13 options: attacks 1-3, movement 4-12, idle 0)
     int attack_ready = remaining_ticks(p->attack_timer) == 0;
     int current_loadout = get_current_loadout(p);
     int in_mage_loadout = (current_loadout == LOADOUT_MAGE);
     int in_tank_loadout = (current_loadout == LOADOUT_TANK);
     int weapon_style = get_slot_weapon_attack_style(p);
-    int melee_reachable = (weapon_style == ATTACK_STYLE_MELEE)
-        ? (is_in_melee_range(p, t) || can_move(p))
-        : 1;
     int can_move_now = can_move(p);
-    mask[offset + ATTACK_NONE] = 1;  // NONE = idle (always valid)
+    const CollisionMap* cmap = (const CollisionMap*)env->collision_map;
+    AttackStyle attack_style = weapon_style == ATTACK_STYLE_MAGIC
+        ? ATTACK_STYLE_MELEE
+        : (AttackStyle)weapon_style;
+    int weapon_reachable = 0;
+    if (weapon_style != ATTACK_STYLE_NONE) {
+        OsrsAttackReachQuery weapon_reach = pvp_attack_reach_query(
+            cmap, p, t, attack_style);
+        weapon_reachable = osrs_attack_can_reach(&weapon_reach) || can_move_now;
+    }
+    OsrsAttackReachQuery magic_reach = pvp_attack_reach_query(
+        cmap, p, t, ATTACK_STYLE_MAGIC);
+    int magic_reachable = osrs_attack_can_reach(&magic_reach) || can_move_now;
+    mask[offset + ATTACK_NONE] = 1;
     mask[offset + ATTACK_ATK] = attack_ready && !in_mage_loadout && !in_tank_loadout &&
                                  weapon_style != ATTACK_STYLE_NONE &&
-                                 melee_reachable;
-    mask[offset + ATTACK_ICE] = attack_ready && can_cast_ice_spell(p);
-    mask[offset + ATTACK_BLOOD] = attack_ready && can_cast_blood_spell(p);
-    const CollisionMap* cmap = (const CollisionMap*)env->collision_map;
+                                 weapon_reachable;
+    mask[offset + ATTACK_ICE] = attack_ready && can_cast_ice_spell(p) && magic_reachable;
+    mask[offset + ATTACK_BLOOD] = attack_ready && can_cast_blood_spell(p) && magic_reachable;
     mask[offset + MOVE_ADJACENT] = can_move_now && can_move_adjacent(p, t, cmap);
     mask[offset + MOVE_UNDER] = can_move_now && can_move_under(p, t, cmap);
     mask[offset + MOVE_DIAGONAL] = can_move_now && can_move_diagonal(p, t, cmap);

@@ -370,6 +370,7 @@ void c_render(Env* env) {
         rc->collision_map = cmap;
         rc->collision_world_offset_x = 0;
         rc->collision_world_offset_y = 0;
+        render_set_world_bounds(rc, WILD_MIN_X, WILD_MIN_Y, WILD_MAX_X, WILD_MAX_Y);
         rc->show_arena_boundary = 0;
         env->pvp.collision_map = cmap;
         env->last_step_time = GetTime();

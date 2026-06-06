@@ -144,6 +144,7 @@ enum {
 };
 
 #include "osrs_combat_visuals_generated.h"
+#include "osrs_combat_visuals_local.h"
 
 typedef struct {
     uint16_t item_id;
@@ -171,16 +172,9 @@ static const OsrsCombatProjectileProfile OSRS_POWERED_STAFF_PROJECTILE_PROFILE =
 };
 
 static const OsrsCombatSpecialFallback OSRS_COMBAT_SPECIAL_FALLBACKS[] = {
-    {OSRS_ITEM_ID_GRANITE_MAUL, 1667},
     {OSRS_ITEM_ID_DRAGON_DAGGER, 1062},
     {OSRS_ITEM_ID_MAGIC_SHORTBOW_I, 1074},
-    {OSRS_ITEM_ID_DRAGON_CLAWS, 7514},
-    {OSRS_ITEM_ID_VESTAS_LONGSWORD, 7515},
-    {OSRS_ITEM_ID_STATIUSS_WARHAMMER, 1378},
     {OSRS_ITEM_ID_INQUISITORS_MACE, 1060},
-    {OSRS_ITEM_ID_VOLATILE_NIGHTMARE_STAFF, 8532},
-    {OSRS_ITEM_ID_ANCIENT_GODSWORD, 7644},
-    {OSRS_ITEM_ID_VOIDWAKER, 1378},
 };
 
 static const OsrsCombatWeaponProjectileDefault OSRS_RANGED_PROJECTILE_DEFAULTS[] = {
@@ -203,6 +197,13 @@ static const uint16_t OSRS_POWERED_STAFF_ITEMS[] = {
 
 static inline int osrs_combat_projectile_value_or(int value, int fallback) {
     return value == OSRS_COMBAT_PROJECTILE_MISSING ? fallback : value;
+}
+
+static inline int osrs_combat_projectile_profile_impact_height_subtile(
+    const OsrsCombatProjectileProfile* profile
+) {
+    if (!profile) abort();
+    return osrs_combat_projectile_value_or(profile->projectile_end_height, 0);
 }
 
 static inline int osrs_combat_visual_row_has_projectile(
@@ -422,7 +423,9 @@ static inline int osrs_combat_visual_key_matches(
         strcmp(row->key_name, key_name) == 0;
 }
 
-static inline const OsrsCombatVisualRow* osrs_combat_visual_find_row(
+static inline const OsrsCombatVisualRow* osrs_combat_visual_find_row_in_table(
+    const OsrsCombatVisualRow* rows,
+    size_t row_count,
     int kind,
     int32_t key_id,
     const char* key_name,
@@ -434,8 +437,8 @@ static inline const OsrsCombatVisualRow* osrs_combat_visual_find_row(
     const OsrsCombatVisualRow* fallback = NULL;
     const OsrsCombatVisualRow* style_fallback = NULL;
     const OsrsCombatVisualRow* stance_fallback = NULL;
-    for (size_t i = 0; i < OSRS_COMBAT_VISUAL_ROW_COUNT; i++) {
-        const OsrsCombatVisualRow* row = &OSRS_COMBAT_VISUAL_ROWS[i];
+    for (size_t i = 0; i < row_count; i++) {
+        const OsrsCombatVisualRow* row = &rows[i];
         if (!osrs_combat_visual_key_matches(row, kind, key_id, key_name)) continue;
         if (!osrs_combat_visual_style_matches(row, style)) continue;
         if (!osrs_combat_visual_stance_matches(row, stance_idx)) continue;
@@ -460,6 +463,28 @@ static inline const OsrsCombatVisualRow* osrs_combat_visual_find_row(
     }
     return style_fallback ? style_fallback
         : (stance_fallback ? stance_fallback : fallback);
+}
+
+static inline const OsrsCombatVisualRow* osrs_combat_visual_find_row(
+    int kind,
+    int32_t key_id,
+    const char* key_name,
+    AttackStyle style,
+    int stance_idx,
+    int require_attack_anim,
+    int require_projectile
+) {
+    const OsrsCombatVisualRow* local = osrs_combat_visual_find_row_in_table(
+        OSRS_COMBAT_VISUAL_LOCAL_ROWS,
+        OSRS_COMBAT_VISUAL_LOCAL_ROW_COUNT,
+        kind, key_id, key_name, style, stance_idx,
+        require_attack_anim, require_projectile);
+    if (local) return local;
+    return osrs_combat_visual_find_row_in_table(
+        OSRS_COMBAT_VISUAL_ROWS,
+        OSRS_COMBAT_VISUAL_ROW_COUNT,
+        kind, key_id, key_name, style, stance_idx,
+        require_attack_anim, require_projectile);
 }
 
 static inline const OsrsCombatVisualRow* osrs_combat_visual_find_item_id(
@@ -535,6 +560,42 @@ static inline const OsrsCombatProjectileProfile* osrs_combat_visual_spell_projec
 ) {
     const OsrsCombatVisualRow* row = osrs_combat_visual_find_spell(spell_type);
     return row ? &row->projectile : NULL;
+}
+
+static inline int osrs_combat_visual_spell_impact_gfx(
+    int spell_type,
+    int hit_success
+) {
+    if (spell_type <= OSRS_COMBAT_VISUAL_SPELL_NONE) {
+        fprintf(stderr, "missing spell impact type\n");
+        abort();
+    }
+    if (!hit_success) return GFX_SPLASH;
+    const OsrsCombatProjectileProfile* profile =
+        osrs_combat_visual_spell_projectile(spell_type);
+    if (!profile || profile->impact_spotanim_id < 0) {
+        fprintf(stderr, "missing spell impact visual %d\n", spell_type);
+        abort();
+    }
+    return profile->impact_spotanim_id;
+}
+
+static inline int osrs_combat_visual_spell_impact_height_subtile(
+    int spell_type,
+    int hit_success
+) {
+    if (spell_type <= OSRS_COMBAT_VISUAL_SPELL_NONE) {
+        fprintf(stderr, "missing spell impact type\n");
+        abort();
+    }
+    if (!hit_success) return 0;
+    const OsrsCombatProjectileProfile* profile =
+        osrs_combat_visual_spell_projectile(spell_type);
+    if (!profile) {
+        fprintf(stderr, "missing spell impact visual %d\n", spell_type);
+        abort();
+    }
+    return osrs_combat_projectile_profile_impact_height_subtile(profile);
 }
 
 static inline const OsrsCombatVisualRow* osrs_combat_visual_find_item_db(
