@@ -140,150 +140,15 @@ static const uint8_t MELEE_RING_PRIORITY[] = {ITEM_BERSERKER_RING};
 
 static const uint8_t MAGE_RING_PRIORITY[] = {ITEM_LIGHTBEARER, ITEM_SEERS_RING_I, ITEM_BERSERKER_RING};
 #define MAGE_RING_PRIORITY_LEN 3
-// SLOT-BASED GEAR COMPUTATION FROM EQUIPPED[] ARRAY
-
-/**
- * Compute total gear bonuses from equipped[] array.
- * Delegates to osrs_sum_equipment_bonuses() from osrs_combat.h, then maps
- * EquipmentBonuses field names to GearBonuses field names.
- */
 static inline GearBonuses compute_slot_gear_bonuses(Player* p) {
     EquipmentBonuses eb;
     osrs_sum_equipment_bonuses(p->equipped, &eb);
     return osrs_gear_bonuses_from_equipment_bonuses(&eb);
 }
 
-/** Get cached slot-based gear bonuses, recomputing if dirty. */
 static inline GearBonuses* get_slot_gear_bonuses(Player* p) {
     osrs_ensure_player_equipment(p);
     return &p->slot_cached_bonuses;
-}
-
-/** Set spec weapon enums based on equipped weapon. */
-static inline void update_spec_weapons_for_weapon(Player* p, uint8_t weapon_item) {
-    p->melee_spec_weapon = MELEE_SPEC_NONE;
-    p->ranged_spec_weapon = RANGED_SPEC_NONE;
-    p->magic_spec_weapon = MAGIC_SPEC_NONE;
-
-    switch (weapon_item) {
-        case ITEM_DRAGON_DAGGER:
-            p->melee_spec_weapon = MELEE_SPEC_DRAGON_DAGGER; break;
-        case ITEM_DRAGON_CLAWS:
-            p->melee_spec_weapon = MELEE_SPEC_DRAGON_CLAWS; break;
-        case ITEM_AGS:
-            p->melee_spec_weapon = MELEE_SPEC_AGS; break;
-        case ITEM_ANCIENT_GS:
-            p->melee_spec_weapon = MELEE_SPEC_ANCIENT_GS; break;
-        case ITEM_GRANITE_MAUL:
-            p->melee_spec_weapon = MELEE_SPEC_GRANITE_MAUL; break;
-        case ITEM_VESTAS:
-            p->melee_spec_weapon = MELEE_SPEC_VESTAS; break;
-        case ITEM_VOIDWAKER:
-            p->melee_spec_weapon = MELEE_SPEC_VOIDWAKER; break;
-        case ITEM_STATIUS_WARHAMMER:
-            p->melee_spec_weapon = MELEE_SPEC_DWH; break;
-        case ITEM_ELDER_MAUL:
-            break; // Elder maul has no spec
-        case ITEM_DARK_BOW:
-            p->ranged_spec_weapon = RANGED_SPEC_DARK_BOW; break;
-        case ITEM_HEAVY_BALLISTA:
-            p->ranged_spec_weapon = RANGED_SPEC_BALLISTA; break;
-        case ITEM_ARMADYL_CROSSBOW:
-            p->ranged_spec_weapon = RANGED_SPEC_ACB; break;
-        case ITEM_ZARYTE_CROSSBOW:
-            p->ranged_spec_weapon = RANGED_SPEC_ZCB; break;
-        case ITEM_MORRIGANS_JAVELIN:
-            p->ranged_spec_weapon = RANGED_SPEC_MORRIGANS; break;
-        case ITEM_VOLATILE_STAFF:
-            p->magic_spec_weapon = MAGIC_SPEC_VOLATILE_STAFF; break;
-        default:
-            break;
-    }
-}
-
-/** Check if a weapon is a spec weapon (any spec enum becomes non-NONE). */
-static inline int item_is_spec_weapon(uint8_t weapon_item) {
-    // Quick check without modifying player state
-    switch (weapon_item) {
-        case ITEM_DRAGON_DAGGER:
-        case ITEM_DRAGON_CLAWS:
-        case ITEM_AGS:
-        case ITEM_ANCIENT_GS:
-        case ITEM_GRANITE_MAUL:
-        case ITEM_VESTAS:
-        case ITEM_VOIDWAKER:
-        case ITEM_STATIUS_WARHAMMER:
-        case ITEM_DARK_BOW:
-        case ITEM_HEAVY_BALLISTA:
-        case ITEM_ARMADYL_CROSSBOW:
-        case ITEM_ZARYTE_CROSSBOW:
-        case ITEM_MORRIGANS_JAVELIN:
-        case ITEM_VOLATILE_STAFF:
-            return 1;
-        default:
-            return 0;
-    }
-}
-
-/**
- * Equip item in slot-based mode.
- * Returns 1 if equipment changed, 0 if already equipped.
- *
- * NOT using osrs_equip_from_inventory(): PvP uses per-slot arrays (each gear
- * slot has its own item pool for the LMS upgrade system), not the flat 28-slot
- * bag model that osrs_inventory.h provides.
- */
-static inline int slot_equip_item(Player* p, int gear_slot, uint8_t item_idx) {
-    if (gear_slot < 0 || gear_slot >= NUM_GEAR_SLOTS) return 0;
-    if (p->equipped[gear_slot] == item_idx) return 0;
-
-    p->equipped[gear_slot] = item_idx;
-    p->slot_gear_dirty = 1;
-
-    // Update gear state based on weapon
-    if (gear_slot == GEAR_SLOT_WEAPON && item_idx < NUM_ITEMS) {
-        update_spec_weapons_for_weapon(p, item_idx);
-        int style = get_item_attack_style(item_idx);
-
-        // current_gear: internal, used for gear_bonuses[] index (GEAR_SPEC for spec weapons)
-        if (item_is_spec_weapon(item_idx)) {
-            p->current_gear = GEAR_SPEC;
-        } else if (style == ATTACK_STYLE_MELEE) {
-            p->current_gear = GEAR_MELEE;
-        } else if (style == ATTACK_STYLE_RANGED) {
-            p->current_gear = GEAR_RANGED;
-        } else if (style == ATTACK_STYLE_MAGIC) {
-            p->current_gear = GEAR_MAGE;
-        }
-
-        // visible_gear: external, actual damage type (no GEAR_SPEC)
-        // voidwaker deals magic damage despite being a melee weapon
-        if (item_idx == ITEM_VOIDWAKER) {
-            p->visible_gear = GEAR_MAGE;
-        } else if (style == ATTACK_STYLE_MELEE) {
-            p->visible_gear = GEAR_MELEE;
-        } else if (style == ATTACK_STYLE_RANGED) {
-            p->visible_gear = GEAR_RANGED;
-        } else if (style == ATTACK_STYLE_MAGIC) {
-            p->visible_gear = GEAR_MAGE;
-        }
-    }
-
-    // Handle 2H weapons: unequip shield
-    if (gear_slot == GEAR_SLOT_WEAPON && item_is_two_handed(item_idx)) {
-        p->equipped[GEAR_SLOT_SHIELD] = ITEM_NONE;
-    }
-
-    osrs_refresh_player_equipment(p);
-    return 1;
-}
-
-/** Check if player has an item in the given slot's inventory. */
-static inline int player_has_item_in_slot(Player* p, int gear_slot, uint8_t item_idx) {
-    for (int i = 0; i < p->num_items_in_slot[gear_slot]; i++) {
-        if (p->inventory[gear_slot][i] == item_idx) return 1;
-    }
-    return 0;
 }
 
 /**
@@ -294,8 +159,9 @@ static inline uint8_t find_best_available(
     Player* p, int gear_slot,
     const uint8_t* priority, int priority_len
 ) {
+    (void)gear_slot;
     for (int i = 0; i < priority_len; i++) {
-        if (player_has_item_in_slot(p, gear_slot, priority[i])) {
+        if (osrs_player_owns_item(p, priority[i])) {
             return priority[i];
         }
     }
@@ -319,7 +185,7 @@ static inline uint8_t find_best_magic_spec(Player* p) {
 
 /** Check if player has granite maul in weapon inventory. */
 static inline int player_has_gmaul(Player* p) {
-    return player_has_item_in_slot(p, GEAR_SLOT_WEAPON, ITEM_GRANITE_MAUL);
+    return osrs_player_owns_item(p, ITEM_GRANITE_MAUL);
 }
 
 /**
@@ -422,7 +288,6 @@ static inline void resolve_loadout(Player* p, int loadout, uint8_t out[NUM_DYNAM
         case LOADOUT_SPEC_MELEE: {
             uint8_t weapon = find_best_melee_spec(p);
             if (weapon != ITEM_NONE) out[0] = weapon;
-            // If 2H, shield gets cleared by slot_equip_item
             if (!item_is_two_handed(out[0])) {
                 uint8_t shield = find_best_available(p, GEAR_SLOT_SHIELD, MELEE_SHIELD_PRIORITY, MELEE_SHIELD_PRIORITY_LEN);
                 if (shield != ITEM_NONE) out[1] = shield;
@@ -486,7 +351,6 @@ static inline void resolve_loadout(Player* p, int loadout, uint8_t out[NUM_DYNAM
             break;
         }
         case LOADOUT_GMAUL: {
-            // GMAUL: 2H weapon, must clear shield
             out[0] = ITEM_GRANITE_MAUL;
             out[1] = ITEM_NONE;
             break;
@@ -508,9 +372,25 @@ static inline int apply_loadout(Player* p, int loadout) {
 
     int changed = 0;
     for (int i = 0; i < NUM_DYNAMIC_GEAR_SLOTS; i++) {
+        uint8_t item = resolved[i];
         int gear_slot = DYNAMIC_GEAR_SLOTS[i];
-        changed += slot_equip_item(p, gear_slot, resolved[i]);
+        if (item == ITEM_NONE) {
+            if (p->equipped[gear_slot] != ITEM_NONE) {
+                p->equipped[gear_slot] = ITEM_NONE;
+                p->slot_gear_dirty = 1;
+                changed++;
+            }
+            continue;
+        }
+        if (p->equipped[gear_slot] == item) continue;
+        if (!osrs_player_equip_inventory_item(p, item)) {
+            fprintf(stderr, "apply_loadout: item %u is not owned\n", (unsigned)item);
+            abort();
+        }
+        changed++;
     }
+    if (changed > 0)
+        osrs_refresh_player_equipment(p);
 
     return changed;
 }
@@ -558,9 +438,7 @@ static inline GearSet loadout_to_gear_set(int loadout) {
 
 /** Get attack style for currently equipped weapon. */
 static inline AttackStyle get_slot_weapon_attack_style(Player* p) {
-    uint8_t weapon = p->equipped[GEAR_SLOT_WEAPON];
-    if (weapon >= NUM_ITEMS) return ATTACK_STYLE_NONE;
-    return (AttackStyle)get_item_attack_style(weapon);
+    return osrs_player_weapon_attack_style(p);
 }
 
 /**
@@ -568,11 +446,9 @@ static inline AttackStyle get_slot_weapon_attack_style(Player* p) {
  * Sets equipped[] and inventory[] arrays for the basic loadout.
  */
 static inline void init_slot_equipment_lms(Player* p) {
-    // Clear all inventory
-    memset(p->inventory, ITEM_NONE, sizeof(p->inventory));
-    memset(p->num_items_in_slot, 0, sizeof(p->num_items_in_slot));
+    memset(p->equipped, ITEM_NONE, sizeof(p->equipped));
+    osrs_player_inventory_clear(p);
 
-    // Default to melee style starting gear
     p->equipped[GEAR_SLOT_HEAD] = ITEM_HELM_NEITIZNOT;
     p->equipped[GEAR_SLOT_CAPE] = ITEM_GOD_CAPE;
     p->equipped[GEAR_SLOT_NECK] = ITEM_GLORY;
@@ -584,78 +460,23 @@ static inline void init_slot_equipment_lms(Player* p) {
     p->equipped[GEAR_SLOT_HANDS] = ITEM_BARROWS_GLOVES;
     p->equipped[GEAR_SLOT_FEET] = ITEM_CLIMBING_BOOTS;
     p->equipped[GEAR_SLOT_RING] = ITEM_BERSERKER_RING;
-    update_spec_weapons_for_weapon(p, p->equipped[GEAR_SLOT_WEAPON]);
+    osrs_player_refresh_weapon_state(p, p->equipped[GEAR_SLOT_WEAPON]);
 
-    // HEAD
-    p->inventory[GEAR_SLOT_HEAD][0] = ITEM_HELM_NEITIZNOT;
-    p->num_items_in_slot[GEAR_SLOT_HEAD] = 1;
-
-    // CAPE
-    p->inventory[GEAR_SLOT_CAPE][0] = ITEM_GOD_CAPE;
-    p->num_items_in_slot[GEAR_SLOT_CAPE] = 1;
-
-    // NECK
-    p->inventory[GEAR_SLOT_NECK][0] = ITEM_GLORY;
-    p->num_items_in_slot[GEAR_SLOT_NECK] = 1;
-
-    // AMMO
-    p->inventory[GEAR_SLOT_AMMO][0] = ITEM_DIAMOND_BOLTS_E;
-    p->num_items_in_slot[GEAR_SLOT_AMMO] = 1;
-
-    // WEAPON: whip, rcb, staff, dds
-    p->inventory[GEAR_SLOT_WEAPON][0] = ITEM_WHIP;
-    p->inventory[GEAR_SLOT_WEAPON][1] = ITEM_RUNE_CROSSBOW;
-    p->inventory[GEAR_SLOT_WEAPON][2] = ITEM_AHRIM_STAFF;
-    p->inventory[GEAR_SLOT_WEAPON][3] = ITEM_DRAGON_DAGGER;
-    p->num_items_in_slot[GEAR_SLOT_WEAPON] = 4;
-
-    // SHIELD: defender, spirit
-    p->inventory[GEAR_SLOT_SHIELD][0] = ITEM_DRAGON_DEFENDER;
-    p->inventory[GEAR_SLOT_SHIELD][1] = ITEM_SPIRIT_SHIELD;
-    p->num_items_in_slot[GEAR_SLOT_SHIELD] = 2;
-
-    // BODY: dhide, mystic
-    p->inventory[GEAR_SLOT_BODY][0] = ITEM_BLACK_DHIDE_BODY;
-    p->inventory[GEAR_SLOT_BODY][1] = ITEM_MYSTIC_TOP;
-    p->num_items_in_slot[GEAR_SLOT_BODY] = 2;
-
-    // LEGS: rune, mystic
-    p->inventory[GEAR_SLOT_LEGS][0] = ITEM_RUNE_PLATELEGS;
-    p->inventory[GEAR_SLOT_LEGS][1] = ITEM_MYSTIC_BOTTOM;
-    p->num_items_in_slot[GEAR_SLOT_LEGS] = 2;
-
-    // HANDS
-    p->inventory[GEAR_SLOT_HANDS][0] = ITEM_BARROWS_GLOVES;
-    p->num_items_in_slot[GEAR_SLOT_HANDS] = 1;
-
-    // FEET
-    p->inventory[GEAR_SLOT_FEET][0] = ITEM_CLIMBING_BOOTS;
-    p->num_items_in_slot[GEAR_SLOT_FEET] = 1;
-
-    // RING
-    p->inventory[GEAR_SLOT_RING][0] = ITEM_BERSERKER_RING;
-    p->num_items_in_slot[GEAR_SLOT_RING] = 1;
+    osrs_player_inventory_add(p, ITEM_RUNE_CROSSBOW);
+    osrs_player_inventory_add(p, ITEM_AHRIM_STAFF);
+    osrs_player_inventory_add(p, ITEM_DRAGON_DAGGER);
+    osrs_player_inventory_add(p, ITEM_SPIRIT_SHIELD);
+    osrs_player_inventory_add(p, ITEM_MYSTIC_TOP);
+    osrs_player_inventory_add(p, ITEM_MYSTIC_BOTTOM);
 
     osrs_refresh_player_equipment(p);
     p->current_gear = GEAR_MELEE;
 }
 
-/**
- * Add an item to a player's slot inventory.
- * Returns 1 if added, 0 if slot is full or item already present.
- */
 static inline int add_item_to_inventory(Player* p, int gear_slot, uint8_t item_idx) {
-    if (gear_slot < 0 || gear_slot >= NUM_GEAR_SLOTS) return 0;
-    if (p->num_items_in_slot[gear_slot] >= MAX_ITEMS_PER_SLOT) return 0;
-
-    // Check duplicate
-    for (int i = 0; i < p->num_items_in_slot[gear_slot]; i++) {
-        if (p->inventory[gear_slot][i] == item_idx) return 0;
-    }
-
-    p->inventory[gear_slot][p->num_items_in_slot[gear_slot]] = item_idx;
-    p->num_items_in_slot[gear_slot]++;
-    return 1;
+    (void)gear_slot;
+    if (osrs_player_owns_item(p, item_idx)) return 0;
+    return osrs_player_inventory_add(p, item_idx) >= 0;
 }
 
 // Maps each loot item to the basic item it replaces (ITEM_NONE = doesn't replace)
@@ -725,29 +546,25 @@ static const uint8_t UPGRADE_REPLACES[NUM_ITEMS] = {
     [ITEM_OPAL_DRAGON_BOLTS]    = ITEM_NONE,  // conditional, handled in add_loot_item
 };
 
-/**
- * Remove an item from a player's slot inventory.
- * Returns 1 if removed, 0 if item not found.
- */
 static inline int remove_item_from_inventory(Player* p, int gear_slot, uint8_t item_idx) {
-    for (int i = 0; i < p->num_items_in_slot[gear_slot]; i++) {
-        if (p->inventory[gear_slot][i] == item_idx) {
-            for (int j = i; j < p->num_items_in_slot[gear_slot] - 1; j++) {
-                p->inventory[gear_slot][j] = p->inventory[gear_slot][j + 1];
-            }
-            p->num_items_in_slot[gear_slot]--;
-            p->inventory[gear_slot][p->num_items_in_slot[gear_slot]] = ITEM_NONE;
+    (void)gear_slot;
+    if (osrs_player_inventory_remove_item(p, item_idx)) return 1;
+    for (int s = 0; s < NUM_GEAR_SLOTS; s++) {
+        if (p->equipped[s] == item_idx) {
+            p->equipped[s] = ITEM_NONE;
+            if (s == GEAR_SLOT_WEAPON)
+                osrs_player_refresh_weapon_state(p, ITEM_NONE);
+            p->slot_gear_dirty = 1;
+            osrs_refresh_player_equipment(p);
             return 1;
         }
     }
     return 0;
 }
 
-/** Map item database index to GearSlotIndex. Thin wrapper over osrs_item_gear_slot(). */
 static inline int item_to_gear_slot(uint8_t item_idx) {
     return osrs_item_gear_slot(item_idx);
 }
-// LOOT UPGRADE + 28-SLOT INVENTORY MODEL
 
 // Chain upgrades: loot items that also obsolete other loot items.
 // UPGRADE_REPLACES handles basic→loot, these handle loot→loot chains.
@@ -845,8 +662,8 @@ static inline void add_loot_item(Player* p, uint8_t item_idx) {
         if (CHAIN_REPLACES[i][1] == item_idx) {
             uint8_t better = CHAIN_REPLACES[i][0];
             int better_slot = item_to_gear_slot(better);
-            if (better_slot >= 0 && player_has_item_in_slot(p, better_slot, better)) {
-                return;  // better item already owned, skip adding inferior one
+            if (better_slot >= 0 && osrs_player_owns_item(p, better)) {
+                return;
             }
         }
     }
@@ -875,7 +692,7 @@ static inline void add_loot_item(Player* p, uint8_t item_idx) {
 
     // Crossbow bolt trigger: ACB/ZCB + opal bolts in inventory → swap bolts
     if ((item_idx == ITEM_ARMADYL_CROSSBOW || item_idx == ITEM_ZARYTE_CROSSBOW)
-        && player_has_item_in_slot(p, GEAR_SLOT_AMMO, ITEM_OPAL_DRAGON_BOLTS)) {
+        && osrs_player_owns_item(p, ITEM_OPAL_DRAGON_BOLTS)) {
         remove_item_from_inventory(p, GEAR_SLOT_AMMO, ITEM_DIAMOND_BOLTS_E);
         p->equipped[GEAR_SLOT_AMMO] = ITEM_OPAL_DRAGON_BOLTS;
     }
@@ -887,13 +704,7 @@ static inline void add_loot_item(Player* p, uint8_t item_idx) {
 
 /** Count switch items: items beyond the first in each gear slot. */
 static inline int count_switch_items(Player* p) {
-    int switches = 0;
-    for (int s = 0; s < NUM_GEAR_SLOTS; s++) {
-        if (p->num_items_in_slot[s] > 1) {
-            switches += p->num_items_in_slot[s] - 1;
-        }
-    }
-    return switches;
+    return osrs_player_unequipped_gear_count(p);
 }
 
 /** Compute food count from 28-slot inventory model. */
@@ -979,14 +790,22 @@ static inline void init_player_gear_randomized(Player* p, int tier, uint32_t* rn
 
     // Tier 3 only: drop defender if no 1-handed melee weapon exists.
     // At lower tiers future loot might add a 1H melee (VLS, SWH, voidwaker).
-    if (tier >= 3 && player_has_item_in_slot(p, GEAR_SLOT_SHIELD, ITEM_DRAGON_DEFENDER)) {
+    if (tier >= 3 && osrs_player_owns_item(p, ITEM_DRAGON_DEFENDER)) {
         int has_1h_melee = 0;
-        for (int i = 0; i < p->num_items_in_slot[GEAR_SLOT_WEAPON]; i++) {
-            uint8_t w = p->inventory[GEAR_SLOT_WEAPON][i];
+        for (int i = 0; i < OSRS_INVENTORY_SIZE; i++) {
+            uint8_t w = p->inventory[i];
+            if (w == ITEM_NONE) continue;
+            if (osrs_item_gear_slot(w) != GEAR_SLOT_WEAPON) continue;
             if (get_item_attack_style(w) == ATTACK_STYLE_MELEE && !item_is_two_handed(w)) {
                 has_1h_melee = 1;
                 break;
             }
+        }
+        uint8_t equipped_weapon = p->equipped[GEAR_SLOT_WEAPON];
+        if (equipped_weapon < NUM_ITEMS &&
+                get_item_attack_style(equipped_weapon) == ATTACK_STYLE_MELEE &&
+                !item_is_two_handed(equipped_weapon)) {
+            has_1h_melee = 1;
         }
         if (!has_1h_melee) {
             remove_item_from_inventory(p, GEAR_SLOT_SHIELD, ITEM_DRAGON_DEFENDER);
@@ -997,7 +816,15 @@ static inline void init_player_gear_randomized(Player* p, int tier, uint32_t* rn
     uint8_t resolved[NUM_DYNAMIC_GEAR_SLOTS];
     resolve_loadout(p, LOADOUT_MELEE, resolved);
     for (int i = 0; i < NUM_DYNAMIC_GEAR_SLOTS; i++) {
-        slot_equip_item(p, DYNAMIC_GEAR_SLOTS[i], resolved[i]);
+        uint8_t item = resolved[i];
+        if (item == ITEM_NONE) {
+            p->equipped[DYNAMIC_GEAR_SLOTS[i]] = ITEM_NONE;
+        } else if (p->equipped[DYNAMIC_GEAR_SLOTS[i]] != item &&
+                !osrs_player_equip_inventory_item(p, item)) {
+            fprintf(stderr, "init_player_gear_randomized: item %u is not owned\n",
+                (unsigned)item);
+            abort();
+        }
     }
 
     osrs_refresh_player_equipment(p);

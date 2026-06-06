@@ -451,6 +451,7 @@ typedef struct {
     /* previous player state for incremental inventory updates.
        compared each tick to detect gear switches and consumable use. */
     uint8_t inv_prev_equipped[NUM_GEAR_SLOTS];
+    uint8_t inv_prev_inventory[OSRS_INVENTORY_SIZE];
     int inv_prev_food_count;
     int inv_prev_karambwan_count;
     int inv_prev_brew_doses;
@@ -1961,6 +1962,7 @@ static int gui_inv_place_equipment(GuiState* gs, uint8_t item_db_idx) {
 /** Copy the player-side inventory snapshot that incremental GUI updates diff against. */
 static void gui_snapshot_inventory_state(GuiState* gs, const Player* p) {
     memcpy(gs->inv_prev_equipped, p->equipped, NUM_GEAR_SLOTS);
+    memcpy(gs->inv_prev_inventory, p->inventory, OSRS_INVENTORY_SIZE);
     gs->inv_prev_food_count = p->food_count;
     gs->inv_prev_karambwan_count = p->karambwan_count;
     gs->inv_prev_brew_doses = p->brew_doses;
@@ -2012,58 +2014,37 @@ static void gui_reset_inventory_ui_state(GuiState* gs) {
     After this, use gui_update_inventory() for incremental changes. */
 static void gui_populate_inventory(GuiState* gs, Player* p) {
     memset(gs->inv_grid, 0, sizeof(gs->inv_grid));
-    int n = 0;
 
-    /* unequipped gear items from the slot inventory */
-    for (int s = 0; s < NUM_GEAR_SLOTS && n < INV_GRID_SLOTS; s++) {
-        for (int i = 0; i < p->num_items_in_slot[s] && n < INV_GRID_SLOTS; i++) {
-            uint8_t item = p->inventory[s][i];
-            if (item == ITEM_NONE) continue;
-            /* skip if currently equipped */
-            int is_equipped = 0;
-            for (int e = 0; e < NUM_GEAR_SLOTS; e++) {
-                if (p->equipped[e] == item) { is_equipped = 1; break; }
-            }
-            if (is_equipped) continue;
-            /* skip duplicates */
-            int dup = 0;
-            for (int j = 0; j < n; j++) {
-                if (gs->inv_grid[j].type == INV_SLOT_EQUIPMENT &&
-                    gs->inv_grid[j].item_db_idx == item) { dup = 1; break; }
-            }
-            if (dup) continue;
-            gs->inv_grid[n].type = INV_SLOT_EQUIPMENT;
-            gs->inv_grid[n].item_db_idx = item;
-            gs->inv_grid[n].osrs_id = ITEM_DATABASE[item].item_id;
-            n++;
-        }
+    for (int i = 0; i < OSRS_INVENTORY_SIZE; i++) {
+        uint8_t item = p->inventory[i];
+        if (item == ITEM_NONE) continue;
+        gs->inv_grid[i].type = INV_SLOT_EQUIPMENT;
+        gs->inv_grid[i].item_db_idx = item;
+        gs->inv_grid[i].osrs_id = ITEM_DATABASE[item].item_id;
     }
 
-    /* consumables: food/potions are NOT stackable in OSRS.
-       each shark = 1 slot. each potion vial = 1 slot (with dose-specific sprite).
-       total doses are split into individual vials: e.g. 7 brew doses = 1x3-dose + 1x4-dose. */
-
-    /* food: each unit = 1 slot */
-    for (int i = 0; i < p->food_count && n < INV_GRID_SLOTS; i++) {
-        gs->inv_grid[n].type = INV_SLOT_FOOD;
-        gs->inv_grid[n].osrs_id = OSRS_ID_SHARK;
-        n++;
+    for (int i = 0; i < p->food_count; i++) {
+        int slot = gui_inv_first_empty(gs);
+        if (slot < 0) break;
+        gs->inv_grid[slot].type = INV_SLOT_FOOD;
+        gs->inv_grid[slot].osrs_id = OSRS_ID_SHARK;
     }
-    for (int i = 0; i < p->karambwan_count && n < INV_GRID_SLOTS; i++) {
-        gs->inv_grid[n].type = INV_SLOT_KARAMBWAN;
-        gs->inv_grid[n].osrs_id = OSRS_ID_KARAMBWAN;
-        n++;
+    for (int i = 0; i < p->karambwan_count; i++) {
+        int slot = gui_inv_first_empty(gs);
+        if (slot < 0) break;
+        gs->inv_grid[slot].type = INV_SLOT_KARAMBWAN;
+        gs->inv_grid[slot].osrs_id = OSRS_ID_KARAMBWAN;
     }
 
-    /* potions: split doses into individual vials (4-dose first, remainder last) */
     #define ADD_POTION_VIALS(doses_total, slot_type) do { \
         int _rem = (doses_total); \
-        while (_rem > 0 && n < INV_GRID_SLOTS) { \
+        while (_rem > 0) { \
+            int _slot = gui_inv_first_empty(gs); \
+            if (_slot < 0) break; \
             int _d = (_rem >= 4) ? 4 : _rem; \
-            gs->inv_grid[n].type = (slot_type); \
-            gs->inv_grid[n].osrs_id = gui_consumable_osrs_id((slot_type), _d); \
+            gs->inv_grid[_slot].type = (slot_type); \
+            gs->inv_grid[_slot].osrs_id = gui_consumable_osrs_id((slot_type), _d); \
             _rem -= _d; \
-            n++; \
         } \
     } while(0)
 
@@ -2077,10 +2058,11 @@ static void gui_populate_inventory(GuiState* gs, Player* p) {
     ADD_POTION_VIALS(p->prayer_pot_doses, INV_SLOT_PRAYER_POT);
     #undef ADD_POTION_VIALS
 
-    for (int i = 0; i < p->saturated_heart_count && n < INV_GRID_SLOTS; i++) {
-        gs->inv_grid[n].type = INV_SLOT_SATURATED_HEART;
-        gs->inv_grid[n].osrs_id = OSRS_ID_SATURATED_HEART;
-        n++;
+    for (int i = 0; i < p->saturated_heart_count; i++) {
+        int slot = gui_inv_first_empty(gs);
+        if (slot < 0) break;
+        gs->inv_grid[slot].type = INV_SLOT_SATURATED_HEART;
+        gs->inv_grid[slot].osrs_id = OSRS_ID_SATURATED_HEART;
     }
 
     /* snapshot player state for incremental change detection */
@@ -2107,28 +2089,16 @@ static int gui_player_has_equipped_item(const Player* p, uint8_t item) {
 }
 
 static int gui_player_has_inventory_item(const Player* p, uint8_t item) {
-    for (int s = 0; s < NUM_GEAR_SLOTS; s++) {
-        for (int i = 0; i < p->num_items_in_slot[s]; i++) {
-            if (p->inventory[s][i] == item) return 1;
-        }
-    }
-    return 0;
+    return osrs_player_inventory_has_item(p, item);
 }
 
 static int gui_inventory_projection_matches_player(
     const GuiState* gs, const Player* p
 ) {
-    for (int s = 0; s < NUM_GEAR_SLOTS; s++) {
-        for (int i = 0; i < p->num_items_in_slot[s]; i++) {
-            uint8_t item = p->inventory[s][i];
-            if (item == ITEM_NONE) continue;
-            int count = gui_inventory_equipment_count(gs, item);
-            if (gui_player_has_equipped_item(p, item)) {
-                if (count != 0) return 0;
-            } else if (count != 1) {
-                return 0;
-            }
-        }
+    for (int i = 0; i < OSRS_INVENTORY_SIZE; i++) {
+        uint8_t item = p->inventory[i];
+        if (item == ITEM_NONE) continue;
+        if (gui_inventory_equipment_count(gs, item) != 1) return 0;
     }
 
     for (int i = 0; i < INV_GRID_SLOTS; i++) {
@@ -2223,82 +2193,25 @@ static void gui_inv_update_potion_doses(GuiState* gs, InvSlotType type,
     }
 }
 
-/** Incremental inventory update. Detects gear switches and consumable changes
-    by comparing against the previous snapshot, then modifies only affected slots.
-    Items stay in their assigned positions — no compaction on eat/drink.
-
-    OSRS gear swap rule: when you click an inventory item to equip it, the
-    previously equipped item goes into that exact inventory slot (direct swap).
-    Exception: equipping a 2H weapon while a shield is equipped — the shield
-    goes to the first empty inventory slot since it wasn't directly clicked. */
 static void gui_update_inventory(GuiState* gs, Player* p) {
-    /* --- gear switches: direct slot swaps --- */
-    for (int s = 0; s < NUM_GEAR_SLOTS; s++) {
-        uint8_t prev = gs->inv_prev_equipped[s];
-        uint8_t curr = p->equipped[s];
-        if (prev == curr) continue;
-
-        if (curr != ITEM_NONE && prev != ITEM_NONE) {
-            /* swap: new item was in inventory, old item takes its exact slot */
-            int src = gui_inv_find_equipment(gs, curr);
-            if (src >= 0) {
-                /* check if old item is still a valid swap item */
-                int in_loadout = 0;
-                for (int g = 0; g < NUM_GEAR_SLOTS; g++) {
-                    for (int i = 0; i < p->num_items_in_slot[g]; i++) {
-                        if (p->inventory[g][i] == prev) { in_loadout = 1; break; }
-                    }
-                    if (in_loadout) break;
-                }
-                if (in_loadout) {
-                    /* direct swap: old item goes into the slot the new item came from */
-                    gs->inv_grid[src].type = INV_SLOT_EQUIPMENT;
-                    gs->inv_grid[src].item_db_idx = prev;
-                    gs->inv_grid[src].osrs_id = ITEM_DATABASE[prev].item_id;
-                } else {
-                    /* old item not in loadout — just clear the slot */
-                    gs->inv_grid[src].type = INV_SLOT_EMPTY;
-                    gs->inv_grid[src].item_db_idx = 0;
-                    gs->inv_grid[src].osrs_id = 0;
-                }
-            } else {
-                gui_populate_inventory(gs, p);
-                return;
+    for (int i = 0; i < OSRS_INVENTORY_SIZE; i++) {
+        uint8_t item = p->inventory[i];
+        if (item == ITEM_NONE) {
+            if (gs->inv_grid[i].type == INV_SLOT_EQUIPMENT) {
+                gs->inv_grid[i].type = INV_SLOT_EMPTY;
+                gs->inv_grid[i].item_db_idx = 0;
+                gs->inv_grid[i].osrs_id = 0;
             }
-        } else if (curr != ITEM_NONE) {
-            /* equipping from inventory, nothing was in this gear slot before */
-            int src = gui_inv_find_equipment(gs, curr);
-            if (src >= 0) {
-                gs->inv_grid[src].type = INV_SLOT_EMPTY;
-                gs->inv_grid[src].item_db_idx = 0;
-                gs->inv_grid[src].osrs_id = 0;
-            } else {
-                gui_populate_inventory(gs, p);
-                return;
-            }
-        } else if (prev != ITEM_NONE) {
-            /* gear slot cleared (e.g. shield removed by 2H weapon equip).
-               the old item goes to the first empty inventory slot. */
-            int in_loadout = 0;
-            for (int g = 0; g < NUM_GEAR_SLOTS; g++) {
-                for (int i = 0; i < p->num_items_in_slot[g]; i++) {
-                    if (p->inventory[g][i] == prev) { in_loadout = 1; break; }
-                }
-                if (in_loadout) break;
-            }
-            if (in_loadout && gui_inv_find_equipment(gs, prev) < 0) {
-                gui_inv_place_equipment(gs, prev);
-            }
+        } else {
+            gs->inv_grid[i].type = INV_SLOT_EQUIPMENT;
+            gs->inv_grid[i].item_db_idx = item;
+            gs->inv_grid[i].osrs_id = ITEM_DATABASE[item].item_id;
         }
     }
 
-    /* --- consumable changes: remove clicked slot or fall back to last --- */
-
-    /* if a human clicked a specific consumable slot, remove that exact slot first */
     int clicked = gs->human_clicked_inv_slot;
     int clicked_used = 0;
 
-    /* food */
     int food_diff = gs->inv_prev_food_count - p->food_count;
     for (int i = 0; i < food_diff; i++) {
         if (!clicked_used && clicked >= 0 && clicked < INV_GRID_SLOTS &&
@@ -2312,7 +2225,6 @@ static void gui_update_inventory(GuiState* gs, Player* p) {
         }
     }
 
-    /* karambwan */
     int karam_diff = gs->inv_prev_karambwan_count - p->karambwan_count;
     for (int i = 0; i < karam_diff; i++) {
         if (!clicked_used && clicked >= 0 && clicked < INV_GRID_SLOTS &&
@@ -2326,9 +2238,6 @@ static void gui_update_inventory(GuiState* gs, Player* p) {
         }
     }
 
-    /* potions: dose changes update existing vials in-place (sprite change),
-       and remove empty vials when a full vial is consumed.
-       human_clicked_inv_slot is still set here so the clicked vial loses the dose. */
     if (p->brew_doses != gs->inv_prev_brew_doses) {
         gui_inv_update_potion_doses(gs, INV_SLOT_BREW, p->brew_doses);
     }
@@ -2511,7 +2420,8 @@ static InvAction gui_inv_click(GuiState* gs, Player* p, int slot,
                     human_input_queue_equip_inventory_item(hi, slot, inv->item_db_idx, gear_slot);
                     gs->human_clicked_inv_slot = slot;
                 } else {
-                    slot_equip_item(p, gear_slot, inv->item_db_idx);
+                    (void)gear_slot;
+                    osrs_player_equip_from_inventory_slot(p, slot);
                 }
             }
             return INV_ACTION_EQUIP;
@@ -2614,6 +2524,13 @@ static void gui_inv_handle_mouse(GuiState* gs, Player* p, HumanInput* hi) {
                 InvSlot tmp = gs->inv_grid[target];
                 gs->inv_grid[target] = gs->inv_grid[gs->inv_drag_src_slot];
                 gs->inv_grid[gs->inv_drag_src_slot] = tmp;
+                p->inventory[target] = gs->inv_grid[target].type == INV_SLOT_EQUIPMENT
+                    ? (uint8_t)gs->inv_grid[target].item_db_idx
+                    : ITEM_NONE;
+                p->inventory[gs->inv_drag_src_slot] =
+                    gs->inv_grid[gs->inv_drag_src_slot].type == INV_SLOT_EQUIPMENT
+                    ? (uint8_t)gs->inv_grid[gs->inv_drag_src_slot].item_db_idx
+                    : ITEM_NONE;
             }
             gs->inv_drag_active = 0;
             gs->inv_drag_src_slot = -1;

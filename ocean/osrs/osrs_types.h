@@ -63,6 +63,7 @@
 
 // Number of equipment slots (HEAD, CAPE, NECK, AMMO, WEAPON, SHIELD, BODY, LEGS, HANDS, FEET, RING)
 #define NUM_GEAR_SLOTS 11
+#define OSRS_INVENTORY_SIZE 28
 /* 9 action heads. HEAD_MOVE expresses the OSRS click-anywhere movement as
    a 25-action delta grid (idle + 8 walk + 16 run), identical to the
    shared ENCOUNTER_MOVE_ACTIONS used by inferno/zulrah. HEAD_COMBAT keeps
@@ -114,7 +115,6 @@ static const int ACTION_HEAD_DIMS[NUM_ACTION_HEADS] = {
 #define NUM_ITEM_STATS 18
 
 // Maximum items per slot for observation padding
-#define MAX_ITEMS_PER_SLOT 10
 
 // Dynamic gear slots that change during combat
 // 8 slots: weapon, shield, body, legs, head, cape, neck, ring
@@ -692,18 +692,9 @@ typedef struct {
     float bolt_proc_damage;
     int bolt_ignores_defense;
 
-    // Slot-based mode equipment (per-slot item indices, 255 = empty)
-    // equipped[GEAR_SLOT_*] = item index from ITEMS_BY_SLOT table, or 255 if empty
     uint8_t equipped[NUM_GEAR_SLOTS];
+    uint8_t inventory[OSRS_INVENTORY_SIZE];
 
-    // Available items per slot (for action masking and observations)
-    // inventory[slot][item_idx] = item database index, 255 = no item
-    uint8_t inventory[NUM_GEAR_SLOTS][MAX_ITEMS_PER_SLOT];
-
-    // Number of items available per slot
-    uint8_t num_items_in_slot[NUM_GEAR_SLOTS];
-
-    // Cached bonuses for slot-based mode
     GearBonuses slot_cached_bonuses;
     OsrsEquipmentEffectProfile equipment_effect_profile;
     int slot_gear_dirty;

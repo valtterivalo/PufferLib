@@ -33,6 +33,7 @@
 #define ENCOUNTER_ZULRAH_H
 
 #include "../osrs_encounter.h"
+#include "../osrs_human_commands.h"
 #include "../osrs_encounter_player.h"
 #include "../osrs_encounter_visual_events.h"
 #include "../osrs_interaction.h"
@@ -2037,7 +2038,8 @@ static void zul_apply_human_player_commands(ZulrahState* s) {
         if (cmd->kind == HUMAN_COMMAND_EQUIP_INVENTORY_ITEM) {
             if (cmd->gear_slot >= 0 && cmd->gear_slot < NUM_GEAR_SLOTS &&
                 cmd->item_db_idx >= 0 && cmd->item_db_idx < NUM_ITEMS) {
-                int changed = slot_equip_item(&s->player, cmd->gear_slot, (uint8_t)cmd->item_db_idx);
+                int changed = osrs_player_equip_command_item(
+                    &s->player, cmd->inventory_slot, (uint8_t)cmd->item_db_idx);
                 if (changed) {
                     s->total_gear_switches++;
                     did_change_stats = 1;
@@ -3234,76 +3236,43 @@ static int zul_attack_action_for_weapon(uint8_t weapon) {
 
 static void zul_translate_human_commands(HumanInput* hi, int* actions, ZulrahState* s) {
     for (int h = 0; h < ZUL_NUM_ACTION_HEADS; h++) actions[h] = 0;
+    OsrsHumanCommandFrame frame =
+        osrs_human_command_frame_from_input(hi, s->player.equipped[GEAR_SLOT_WEAPON]);
 
-    uint8_t queued_weapon = s->player.equipped[GEAR_SLOT_WEAPON];
-    int path_command_seen = 0;
-    for (int i = 0; i < hi->commands.count; i++) {
-        const HumanCommand* cmd = &hi->commands.items[i];
-        if (cmd->kind == HUMAN_COMMAND_EQUIP_INVENTORY_ITEM &&
-            cmd->gear_slot == GEAR_SLOT_WEAPON &&
-            cmd->item_db_idx >= 0 && cmd->item_db_idx < NUM_ITEMS) {
-            queued_weapon = (uint8_t)cmd->item_db_idx;
-        }
-
-        switch (cmd->kind) {
-            case HUMAN_COMMAND_WALK:
-                path_command_seen = 1;
-                s->player_dest_x = cmd->world_x;
-                s->player_dest_y = cmd->world_y;
-                s->player_dest_explicit = 1;
-                actions[ZUL_HEAD_ATTACK] = ZUL_ATK_NONE;
-                osrs_interaction_clear(&s->interaction);
-                break;
-            case HUMAN_COMMAND_ATTACK_NPC:
-                path_command_seen = 1;
-                actions[ZUL_HEAD_ATTACK] = zul_attack_action_for_weapon(queued_weapon);
-                s->player_dest_x = -1;
-                s->player_dest_y = -1;
-                s->player_dest_explicit = 0;
-                break;
-            case HUMAN_COMMAND_SPELL_TARGET:
-                path_command_seen = 1;
-                actions[ZUL_HEAD_ATTACK] = ZUL_ATK_MAGE;
-                s->player_dest_x = -1;
-                s->player_dest_y = -1;
-                s->player_dest_explicit = 0;
-                break;
-            case HUMAN_COMMAND_OVERHEAD_PRAYER:
-                actions[ZUL_HEAD_PRAYER] = cmd->overhead_prayer;
-                break;
-            case HUMAN_COMMAND_OFFENSIVE_PRAYER:
-                actions[ZUL_HEAD_OFFENSIVE] = cmd->offensive_prayer;
-                break;
-            case HUMAN_COMMAND_EAT:
-                actions[ZUL_HEAD_FOOD] = cmd->food == 1 ? 2 : 1;
-                break;
-            case HUMAN_COMMAND_DRINK:
-                if (cmd->potion == POTION_BREW) actions[ZUL_HEAD_FOOD] = 1;
-                else if (cmd->potion == POTION_RESTORE ||
-                         cmd->potion == POTION_PRAYER_POT) actions[ZUL_HEAD_POTION] = 1;
-                else if (cmd->potion == POTION_ANTIVENOM) actions[ZUL_HEAD_POTION] = 2;
-                break;
-            case HUMAN_COMMAND_SPEC_TOGGLE:
-                actions[ZUL_HEAD_SPEC] = 1;
-                break;
-            case HUMAN_COMMAND_EQUIP_INVENTORY_ITEM:
-            case HUMAN_COMMAND_FIGHT_STYLE:
-            case HUMAN_COMMAND_SET_AUTOCAST:
-            case HUMAN_COMMAND_ITEM_ON_ITEM:
-            case HUMAN_COMMAND_ITEM_ON_WIDGET:
-            case HUMAN_COMMAND_SPELL_ON_WIDGET:
-            case HUMAN_COMMAND_NONE:
-                break;
-        }
-    }
-
-    if (!path_command_seen && hi->pending_move_x >= 0 && hi->pending_move_y >= 0) {
-        s->player_dest_x = hi->pending_move_x;
-        s->player_dest_y = hi->pending_move_y;
+    if (frame.has_walk) {
+        s->player_dest_x = frame.walk_x;
+        s->player_dest_y = frame.walk_y;
         s->player_dest_explicit = 1;
         actions[ZUL_HEAD_ATTACK] = ZUL_ATK_NONE;
         osrs_interaction_clear(&s->interaction);
+    } else if (frame.has_spell_target) {
+        actions[ZUL_HEAD_ATTACK] = ZUL_ATK_MAGE;
+        s->player_dest_x = -1;
+        s->player_dest_y = -1;
+        s->player_dest_explicit = 0;
+    } else if (frame.has_attack_target) {
+        actions[ZUL_HEAD_ATTACK] = zul_attack_action_for_weapon(frame.queued_weapon);
+        s->player_dest_x = -1;
+        s->player_dest_y = -1;
+        s->player_dest_explicit = 0;
     }
+
+    if (frame.overhead_prayer >= 0)
+        actions[ZUL_HEAD_PRAYER] = frame.overhead_prayer;
+    if (frame.offensive_prayer >= 0)
+        actions[ZUL_HEAD_OFFENSIVE] = frame.offensive_prayer;
+    if (frame.food)
+        actions[ZUL_HEAD_FOOD] = 1;
+    if (frame.karambwan)
+        actions[ZUL_HEAD_FOOD] = 2;
+    if (frame.potion == POTION_BREW)
+        actions[ZUL_HEAD_FOOD] = 1;
+    else if (frame.potion == POTION_RESTORE || frame.potion == POTION_PRAYER_POT)
+        actions[ZUL_HEAD_POTION] = 1;
+    else if (frame.potion == POTION_ANTIVENOM)
+        actions[ZUL_HEAD_POTION] = 2;
+    if (frame.spec_toggle)
+        actions[ZUL_HEAD_SPEC] = 1;
 }
 
 static void zul_step_human_commands(EncounterState* state, HumanInput* hi) {

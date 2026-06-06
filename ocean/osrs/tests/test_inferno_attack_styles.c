@@ -314,6 +314,14 @@ static void init_spell_cast_test_state(InfernoState* state, InfNPCType target_ty
     state->player_dest_y = -1;
     osrs_interaction_init(&state->interaction);
     encounter_apply_loadout(&state->player, INF_MAX_MAGE_LOADOUT, GEAR_MAGE);
+    {
+        const uint8_t* loadouts[] = {
+            INF_MAX_MAGE_LOADOUT,
+            INF_MAX_RANGE_LONG_LOADOUT,
+            INF_MAX_RANGE_FAST_LOADOUT,
+        };
+        encounter_populate_inventory(&state->player, loadouts, 3, NULL);
+    }
     encounter_compute_loadout_stats(INF_MAX_MAGE_LOADOUT, ATTACK_STYLE_MAGIC,
         OFFENSIVE_PRAYER_NONE, 99, FIGHT_STYLE_AUTOCAST, 30,
         &state->loadout_stats[INF_GEAR_MAGE]);
@@ -1410,24 +1418,7 @@ static int test_inventory_potion_vials(int doses) {
 }
 
 static int test_player_inventory_occupied_slots(Player* p) {
-    int occupied = 0;
-
-    for (int s = 0; s < NUM_GEAR_SLOTS; s++) {
-        for (int i = 0; i < p->num_items_in_slot[s]; i++) {
-            uint8_t item = p->inventory[s][i];
-            if (item == ITEM_NONE) continue;
-
-            int is_equipped = 0;
-            for (int e = 0; e < NUM_GEAR_SLOTS; e++) {
-                if (p->equipped[e] == item) {
-                    is_equipped = 1;
-                    break;
-                }
-            }
-            if (!is_equipped)
-                occupied++;
-        }
-    }
+    int occupied = osrs_player_inventory_count(p);
 
     occupied += p->food_count;
     occupied += p->karambwan_count;
@@ -1447,11 +1438,8 @@ static int test_player_slot_inventory_contains(
     int gear_slot,
     uint8_t item
 ) {
-    for (int i = 0; i < p->num_items_in_slot[gear_slot]; i++) {
-        if (p->inventory[gear_slot][i] == item)
-            return 1;
-    }
-    return 0;
+    (void)gear_slot;
+    return osrs_player_inventory_has_item(p, item);
 }
 
 static void test_inferno_reset_inventory_leaves_one_empty_slot(void) {

@@ -15,6 +15,7 @@
 #define ENCOUNTER_NH_PVP_H
 
 #include "../osrs_encounter.h"
+#include "../osrs_human_commands.h"
 #include "../osrs_encounter_visual_events.h"
 #include "../osrs_env.h"
 
@@ -33,35 +34,127 @@ typedef struct {
     int unused;
 } NhPvpContext;
 
-static void nh_pvp_translate_human_input(HumanInput* hi, int* actions, Player* agent, Player* target) {
-    for (int h = 0; h < NUM_ACTION_HEADS; h++) actions[h] = 0;
-    actions[HEAD_LOADOUT] = LOADOUT_KEEP;
-
-    /* HEAD_COMBAT only carries attack intent now; movement flows via walk_dest
-       in nh_pvp_step_human_commands. encounter_translate_attack_or_move would
-       still emit MOVE_* values if the click is not on the opponent, so we
-       only consult it for attacks. */
-    if (hi->pending_attack) {
-        if (hi->pending_spell == ATTACK_ICE) actions[HEAD_COMBAT] = ATTACK_ICE;
-        else if (hi->pending_spell == ATTACK_BLOOD) actions[HEAD_COMBAT] = ATTACK_BLOOD;
-        else actions[HEAD_COMBAT] = ATTACK_ATK;
-    }
-    encounter_translate_prayer(hi, actions, HEAD_OVERHEAD);
-    encounter_translate_offensive_prayer(hi, actions, HEAD_OFFENSIVE);
-
-    if (hi->pending_food) actions[HEAD_FOOD] = FOOD_EAT;
-    if (hi->pending_potion > 0) actions[HEAD_POTION] = hi->pending_potion;
-    if (hi->pending_karambwan) actions[HEAD_KARAMBWAN] = KARAM_EAT;
-    if (hi->pending_veng) actions[HEAD_VENG] = VENG_CAST;
-    if (hi->pending_spec) {
-        AttackStyle style = (AttackStyle)get_item_attack_style(agent->equipped[GEAR_SLOT_WEAPON]);
-        if (style == ATTACK_STYLE_MELEE) actions[HEAD_LOADOUT] = LOADOUT_SPEC_MELEE;
-        else if (style == ATTACK_STYLE_RANGED) actions[HEAD_LOADOUT] = LOADOUT_SPEC_RANGE;
-        else if (style == ATTACK_STYLE_MAGIC) actions[HEAD_LOADOUT] = LOADOUT_SPEC_MAGIC;
-    }
-    (void)target;
+static FightStyle nh_pvp_default_fight_style_for_style(AttackStyle style) {
+    if (style == ATTACK_STYLE_MAGIC) return FIGHT_STYLE_AUTOCAST;
+    if (style == ATTACK_STYLE_RANGED) return FIGHT_STYLE_RAPID;
+    return FIGHT_STYLE_ACCURATE;
 }
 
+static void nh_pvp_apply_human_player_commands(OsrsEnv* env, HumanInput* hi) {
+    Player* agent = &env->players[0];
+    for (int i = 0; i < hi->commands.count; i++) {
+        const HumanCommand* cmd = &hi->commands.items[i];
+        switch (cmd->kind) {
+            case HUMAN_COMMAND_EQUIP_INVENTORY_ITEM:
+                if (cmd->item_db_idx >= 0 && cmd->item_db_idx < NUM_ITEMS) {
+                    int changed = osrs_player_equip_command_item(
+                        agent, cmd->inventory_slot, (uint8_t)cmd->item_db_idx);
+                    if (changed && cmd->gear_slot == GEAR_SLOT_WEAPON) {
+                        AttackStyle style = osrs_player_weapon_attack_style(agent);
+                        if (item_supports_ancient_autocast(agent->equipped[GEAR_SLOT_WEAPON])) {
+                            agent->fight_style = agent->autocast_defensive
+                                ? FIGHT_STYLE_DEFENSIVE_AUTOCAST
+                                : FIGHT_STYLE_AUTOCAST;
+                        } else {
+                            agent->fight_style = nh_pvp_default_fight_style_for_style(style);
+                        }
+                    }
+                }
+                break;
+            case HUMAN_COMMAND_FIGHT_STYLE:
+                if (cmd->fight_style >= FIGHT_STYLE_ACCURATE &&
+                        cmd->fight_style <= FIGHT_STYLE_DEFENSIVE_AUTOCAST) {
+                    agent->fight_style = (FightStyle)cmd->fight_style;
+                    if (cmd->fight_style == FIGHT_STYLE_AUTOCAST ||
+                            cmd->fight_style == FIGHT_STYLE_DEFENSIVE_AUTOCAST) {
+                        agent->autocast_enabled = 1;
+                        agent->autocast_defensive =
+                            cmd->fight_style == FIGHT_STYLE_DEFENSIVE_AUTOCAST;
+                    }
+                }
+                break;
+            case HUMAN_COMMAND_SET_AUTOCAST:
+                if (cmd->autocast_spell == ENCOUNTER_SPELL_ICE ||
+                        cmd->autocast_spell == ENCOUNTER_SPELL_BLOOD) {
+                    agent->autocast_enabled = 1;
+                    agent->autocast_spell = cmd->autocast_spell;
+                    agent->autocast_defensive = cmd->autocast_defensive != 0;
+                    if (item_supports_ancient_autocast(agent->equipped[GEAR_SLOT_WEAPON])) {
+                        agent->fight_style = agent->autocast_defensive
+                            ? FIGHT_STYLE_DEFENSIVE_AUTOCAST
+                            : FIGHT_STYLE_AUTOCAST;
+                    }
+                }
+                break;
+            case HUMAN_COMMAND_SPEC_TOGGLE:
+                agent->spec_armed = 1;
+                break;
+            case HUMAN_COMMAND_WALK:
+            case HUMAN_COMMAND_ATTACK_NPC:
+            case HUMAN_COMMAND_OVERHEAD_PRAYER:
+            case HUMAN_COMMAND_OFFENSIVE_PRAYER:
+            case HUMAN_COMMAND_EAT:
+            case HUMAN_COMMAND_DRINK:
+            case HUMAN_COMMAND_SPELL_TARGET:
+            case HUMAN_COMMAND_ITEM_ON_ITEM:
+            case HUMAN_COMMAND_ITEM_ON_WIDGET:
+            case HUMAN_COMMAND_SPELL_ON_WIDGET:
+            case HUMAN_COMMAND_NONE:
+                break;
+            default:
+                fprintf(stderr, "nh_pvp_apply_human_player_commands: bad command kind %d\n",
+                    (int)cmd->kind);
+                abort();
+        }
+    }
+}
+
+static void nh_pvp_translate_human_commands(HumanInput* hi, int* actions, OsrsEnv* env) {
+    Player* agent = &env->players[0];
+    for (int h = 0; h < NUM_ACTION_HEADS; h++) actions[h] = 0;
+    actions[HEAD_LOADOUT] = LOADOUT_KEEP;
+    OsrsHumanCommandFrame frame =
+        osrs_human_command_frame_from_input(hi, agent->equipped[GEAR_SLOT_WEAPON]);
+
+    if (frame.has_walk) {
+        env->pvp_runtime.walk_dest_x[0] = frame.walk_x;
+        env->pvp_runtime.walk_dest_y[0] = frame.walk_y;
+    } else if (frame.has_spell_target) {
+        if (frame.spell == ATTACK_ICE)
+            actions[HEAD_COMBAT] = ATTACK_ICE;
+        else if (frame.spell == ATTACK_BLOOD)
+            actions[HEAD_COMBAT] = ATTACK_BLOOD;
+    } else if (frame.has_attack_target) {
+        uint8_t weapon = frame.queued_weapon;
+        AttackStyle style = weapon < NUM_ITEMS
+            ? (AttackStyle)get_item_attack_style(weapon)
+            : ATTACK_STYLE_NONE;
+        if (style == ATTACK_STYLE_MAGIC && agent->autocast_enabled &&
+                agent->autocast_spell == ENCOUNTER_SPELL_BLOOD) {
+            actions[HEAD_COMBAT] = ATTACK_BLOOD;
+        } else if (style == ATTACK_STYLE_MAGIC && agent->autocast_enabled &&
+                agent->autocast_spell == ENCOUNTER_SPELL_ICE) {
+            actions[HEAD_COMBAT] = ATTACK_ICE;
+        } else {
+            actions[HEAD_COMBAT] = ATTACK_ATK;
+        }
+    }
+
+    if (frame.overhead_prayer >= 0)
+        actions[HEAD_OVERHEAD] = frame.overhead_prayer;
+    if (frame.offensive_prayer >= 0)
+        actions[HEAD_OFFENSIVE] = frame.offensive_prayer;
+    if (frame.food)
+        actions[HEAD_FOOD] = FOOD_EAT;
+    if (frame.potion > 0)
+        actions[HEAD_POTION] = frame.potion;
+    if (frame.karambwan)
+        actions[HEAD_KARAMBWAN] = KARAM_EAT;
+    if (frame.vengeance)
+        actions[HEAD_VENG] = VENG_CAST;
+    if (frame.spec_toggle)
+        agent->spec_armed = 1;
+}
 
 static EncounterState* nh_pvp_create(void) {
     NhPvpState* s = (NhPvpState*)calloc(1, sizeof(NhPvpState));
@@ -116,34 +209,17 @@ static void nh_pvp_step_human_commands(
     NhPvpState* s = (NhPvpState*)state;
     int saved_use_c_opponent_p0 = s->env.pvp_runtime.use_c_opponent_p0;
     s->env.pvp_runtime.use_c_opponent_p0 = 0;
-    /* click-anywhere: write raw click coords to agent 0's walk_dest before the
-       step. BFS pathfinder walks toward it across as many ticks as needed and
-       clears it on arrival. attack click still flows through HEAD_COMBAT. */
-    if (hi->pending_move_x >= 0 && hi->pending_move_y >= 0) {
-        s->env.pvp_runtime.walk_dest_x[0] = hi->pending_move_x;
-        s->env.pvp_runtime.walk_dest_y[0] = hi->pending_move_y;
-    }
-    nh_pvp_translate_human_input(
+    nh_pvp_apply_human_player_commands(&s->env, hi);
+    nh_pvp_translate_human_commands(
         hi,
         s->env.ocean_io.agent_actions,
-        &s->env.players[0],
-        &s->env.players[1]);
+        &s->env);
     pvp_step(&s->env);
     s->env.pvp_runtime.use_c_opponent_p0 = saved_use_c_opponent_p0;
-    /* only clear non-move pending fields; pending_move stays until the player
-       arrives at the clicked tile so subsequent ticks keep extending walk_dest. */
     if (s->env.pvp_runtime.walk_dest_x[0] < 0 || s->env.pvp_runtime.walk_dest_y[0] < 0) {
         human_input_clear_move(hi);
     }
-    hi->pending_attack = 0;
-    hi->pending_spell = 0;
-    hi->pending_prayer = 0;
-    hi->pending_offensive_prayer = 0;
-    hi->pending_food = 0;
-    hi->pending_potion = 0;
-    hi->pending_karambwan = 0;
-    hi->pending_veng = 0;
-    hi->pending_spec = 0;
+    human_input_clear_pending(hi);
 }
 
 
