@@ -351,12 +351,29 @@ static inline void resolve_loadout(Player* p, int loadout, uint8_t out[NUM_DYNAM
             break;
         }
         case LOADOUT_GMAUL: {
-            out[0] = ITEM_GRANITE_MAUL;
-            out[1] = ITEM_NONE;
+            if (player_has_gmaul(p)) {
+                out[0] = ITEM_GRANITE_MAUL;
+                out[1] = ITEM_NONE;
+            }
             break;
         }
         default:
             break;
+    }
+}
+
+static inline int pvp_loadout_can_arm_spec(Player* p, int loadout) {
+    switch (loadout) {
+        case LOADOUT_SPEC_MELEE:
+            return find_best_melee_spec(p) != ITEM_NONE;
+        case LOADOUT_SPEC_RANGE:
+            return find_best_ranged_spec(p) != ITEM_NONE;
+        case LOADOUT_SPEC_MAGIC:
+            return find_best_magic_spec(p) != ITEM_NONE;
+        case LOADOUT_GMAUL:
+            return player_has_gmaul(p);
+        default:
+            return 0;
     }
 }
 

@@ -370,6 +370,35 @@ static void test_flat_inventory_policy_loadout_uses_bag(void) {
         osrs_player_inventory_has_item(player, old_weapon), 1);
 }
 
+static void test_pvp_gmaul_loadout_requires_owned_item(void) {
+    printf("--- PvP gmaul loadout requires owned item ---\n");
+
+    Player player;
+    memset(&player, 0, sizeof(player));
+    init_slot_equipment_lms(&player);
+
+    uint8_t old_weapon = player.equipped[GEAR_SLOT_WEAPON];
+    ASSERT_INT_EQ("gmaul starts unowned",
+        player_has_gmaul(&player), 0);
+    ASSERT_INT_EQ("unowned gmaul loadout is noop",
+        apply_loadout(&player, LOADOUT_GMAUL), 0);
+    ASSERT_INT_EQ("unowned gmaul does not arm spec",
+        pvp_loadout_can_arm_spec(&player, LOADOUT_GMAUL), 0);
+    ASSERT_INT_EQ("weapon unchanged",
+        player.equipped[GEAR_SLOT_WEAPON], old_weapon);
+
+    ASSERT_INT_EQ("gmaul inserted",
+        osrs_player_inventory_add(&player, ITEM_GRANITE_MAUL) >= 0, 1);
+    ASSERT_INT_EQ("owned gmaul can arm spec",
+        pvp_loadout_can_arm_spec(&player, LOADOUT_GMAUL), 1);
+    ASSERT_INT_EQ("owned gmaul equips",
+        apply_loadout(&player, LOADOUT_GMAUL) > 0, 1);
+    ASSERT_INT_EQ("gmaul equipped",
+        player.equipped[GEAR_SLOT_WEAPON], ITEM_GRANITE_MAUL);
+    ASSERT_INT_EQ("gmaul clears shield",
+        player.equipped[GEAR_SLOT_SHIELD], ITEM_NONE);
+}
+
 static void test_pvp_loot_replacement_preserves_owned_set(void) {
     printf("--- PvP loot replacement preserves owned set ---\n");
 
@@ -1190,6 +1219,7 @@ int main(void) {
     test_flat_inventory_equipment_swaps_clicked_slot();
     test_flat_inventory_two_handed_weapon_moves_shield();
     test_flat_inventory_policy_loadout_uses_bag();
+    test_pvp_gmaul_loadout_requires_owned_item();
     test_pvp_loot_replacement_preserves_owned_set();
     test_pvp_human_item_click_equips_and_attacks_with_weapon();
     test_pvp_human_armor_click_updates_equipment();
