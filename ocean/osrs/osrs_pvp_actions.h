@@ -313,9 +313,7 @@ static void execute_switches(OsrsEnv* env, int agent_idx, int* actions) {
     if (loadout_switches > 0)
         osrs_interaction_check_interrupt(&p->interaction, OSRS_IACT_EQUIP);
 
-    /* spec toggle: LOADOUT_SPEC_* arms spec for next attack */
-    if (loadout_action == LOADOUT_SPEC_MELEE || loadout_action == LOADOUT_SPEC_RANGE ||
-        loadout_action == LOADOUT_SPEC_MAGIC || loadout_action == LOADOUT_GMAUL) {
+    if (pvp_loadout_can_arm_spec(p, loadout_action)) {
         p->spec_armed = 1;
     }
     int food_action = actions[HEAD_FOOD];
