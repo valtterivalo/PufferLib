@@ -428,6 +428,27 @@ static void test_pvp_randomized_resets_keep_valid_weapon_profiles(void) {
     }
 }
 
+static void test_pvp_invalid_spec_loadout_does_not_clear_weapon(void) {
+    printf("--- PvP invalid spec loadout does not clear weapon ---\n");
+
+    Player player;
+    memset(&player, 0, sizeof(player));
+    init_slot_equipment_lms(&player);
+    ASSERT_INT_EQ("gmaul inserted",
+        osrs_player_inventory_add(&player, ITEM_GRANITE_MAUL) >= 0, 1);
+    ASSERT_INT_EQ("gmaul equips",
+        apply_loadout(&player, LOADOUT_GMAUL) > 0, 1);
+    ASSERT_INT_EQ("magic spec unavailable",
+        pvp_loadout_can_arm_spec(&player, LOADOUT_SPEC_MAGIC), 0);
+
+    ASSERT_INT_EQ("invalid spec magic noops",
+        apply_loadout(&player, LOADOUT_SPEC_MAGIC), 0);
+    ASSERT_INT_EQ("gmaul still equipped",
+        player.equipped[GEAR_SLOT_WEAPON], ITEM_GRANITE_MAUL);
+    ASSERT_INT_EQ("shield stays empty",
+        player.equipped[GEAR_SLOT_SHIELD], ITEM_NONE);
+}
+
 static void test_pvp_loot_replacement_preserves_owned_set(void) {
     printf("--- PvP loot replacement preserves owned set ---\n");
 
@@ -1250,6 +1271,7 @@ int main(void) {
     test_flat_inventory_policy_loadout_uses_bag();
     test_pvp_gmaul_loadout_requires_owned_item();
     test_pvp_randomized_resets_keep_valid_weapon_profiles();
+    test_pvp_invalid_spec_loadout_does_not_clear_weapon();
     test_pvp_loot_replacement_preserves_owned_set();
     test_pvp_human_item_click_equips_and_attacks_with_weapon();
     test_pvp_human_armor_click_updates_equipment();

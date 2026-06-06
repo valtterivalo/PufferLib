@@ -371,10 +371,7 @@ static void execute_switches(OsrsEnv* env, int agent_idx, int* actions) {
     }
     int combat_action = actions[HEAD_COMBAT];
     int head_move = actions[HEAD_MOVE];
-    int is_spec_loadout = (loadout_action == LOADOUT_SPEC_MELEE ||
-                           loadout_action == LOADOUT_SPEC_RANGE ||
-                           loadout_action == LOADOUT_SPEC_MAGIC ||
-                           loadout_action == LOADOUT_GMAUL);
+    int is_spec_loadout = pvp_loadout_can_arm_spec(p, loadout_action);
 
     int command_issued = 0;
     if (!is_spec_loadout && head_move > 0 && head_move < MOVE_DIM) {
@@ -449,7 +446,7 @@ static PvpAttackMoveIntent pvp_attack_move_intent(
     int combat_action = actions[HEAD_COMBAT];
     int attack_action = is_attack_action(combat_action) ? combat_action : ATTACK_NONE;
 
-    int is_gmaul = (loadout_action == LOADOUT_GMAUL);
+    int is_gmaul = loadout_action == LOADOUT_GMAUL && player_has_gmaul(p);
     if (is_gmaul) {
         attack_action = ATTACK_ATK;
     }
@@ -516,7 +513,7 @@ static void execute_attack_combat(OsrsEnv* env, int agent_idx, int* actions) {
     int combat_action = actions[HEAD_COMBAT];
     int attack_action = is_attack_action(combat_action) ? combat_action : ATTACK_NONE;
 
-    int is_gmaul = (loadout_action == LOADOUT_GMAUL);
+    int is_gmaul = loadout_action == LOADOUT_GMAUL && player_has_gmaul(p);
     if (is_gmaul) {
         attack_action = ATTACK_ATK;
     }
