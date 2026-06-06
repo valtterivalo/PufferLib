@@ -14,7 +14,10 @@
 
 #include "ocean/osrs/osrs_env.h"
 #include "ocean/osrs/encounters/encounter_nh_pvp.h"
+#include "ocean/osrs/osrs_anim.h"
 #include "ocean/osrs/osrs_gui.h"
+#include "ocean/osrs/osrs_pvp_effects.h"
+#include "ocean/osrs/osrs_spotanims.h"
 
 static int tests_run = 0;
 static int tests_passed = 0;
@@ -67,6 +70,30 @@ static CollisionMap* test_wilderness_collision_map(void) {
     return cmap;
 }
 
+static AnimCache* test_equipment_animation_cache(void) {
+    static AnimCache* cache = NULL;
+    if (cache == NULL) {
+        cache = anim_cache_load("ocean/osrs/data/equipment.anims");
+        if (cache == NULL) {
+            fprintf(stderr, "test setup: failed to load equipment.anims\n");
+            abort();
+        }
+    }
+    return cache;
+}
+
+static OsrsSpotAnimSet* test_spotanim_set(void) {
+    static OsrsSpotAnimSet* set = NULL;
+    if (set == NULL) {
+        set = osrs_spotanims_load("ocean/osrs/data/spotanims.bin");
+        if (set == NULL) {
+            fprintf(stderr, "test setup: failed to load spotanims.bin\n");
+            abort();
+        }
+    }
+    return set;
+}
+
 static void setup_pvp_state(NhPvpState* state) {
     memset(state, 0, sizeof(*state));
     pvp_init(&state->env);
@@ -77,6 +104,43 @@ static void setup_pvp_state(NhPvpState* state) {
     state->env.ocean_io.agent_terminals = state->env._terms_buf;
     pvp_seed(&state->env, 73);
     pvp_reset(&state->env);
+}
+
+static void test_wilderness_collision_asset_spans_pvp_area(void) {
+    printf("--- PvP wilderness collision asset spans full area ---\n");
+
+    CollisionMap* cmap = test_wilderness_collision_map();
+    ASSERT_INT_EQ("expanded wilderness region count", cmap->count >= 100, 1);
+    ASSERT_INT_EQ("southwest wilderness region loaded",
+        collision_map_get(cmap,
+            collision_region_hash(WILD_MIN_X, WILD_MIN_Y)) != NULL, 1);
+    ASSERT_INT_EQ("northeast wilderness region loaded",
+        collision_map_get(cmap,
+            collision_region_hash(WILD_MAX_X - 1, WILD_MAX_Y - 1)) != NULL, 1);
+}
+
+static void test_runtime_animation_assets_are_anm2(void) {
+    printf("--- runtime animation assets are ANM2 ---\n");
+
+    const char* paths[] = {
+        "ocean/osrs/data/equipment.anims",
+        "ocean/osrs/data/zulrah.anims",
+        "ocean/osrs/data/inferno.anims",
+        "ocean/osrs/data/inferno_npcs.anims",
+    };
+    for (size_t i = 0; i < sizeof(paths) / sizeof(paths[0]); i++) {
+        FILE* f = fopen(paths[i], "rb");
+        ASSERT_INT_EQ("animation asset opens", f != NULL, 1);
+        if (!f) continue;
+        unsigned char magic[4] = {0};
+        size_t n = fread(magic, 1, sizeof(magic), f);
+        fclose(f);
+        ASSERT_INT_EQ("animation asset has ANM2 header",
+            n == 4 &&
+            magic[0] == 'A' && magic[1] == 'N' &&
+            magic[2] == 'M' && magic[3] == '2',
+            1);
+    }
 }
 
 static void fill_pvp_entities(NhPvpState* state, RenderEntity* entities, int* count) {
@@ -379,6 +443,445 @@ static void test_performance_tracker_values(void) {
     ASSERT_INT_EQ("expected leader", v.expected_leader, 1);
 }
 
+static void assert_special_visual_row(
+    const char* name,
+    int item_idx,
+    AttackStyle style,
+    int attack_anim_id,
+    int launch_spotanim_id,
+    int travel_spotanim_id,
+    int impact_spotanim_id,
+    int projectile_model_id,
+    int projectile_anim_id
+) {
+    char label[160];
+    uint16_t item_id = ITEM_DATABASE[item_idx].item_id;
+    const OsrsCombatVisualRow* row =
+        osrs_combat_visual_find_special_item_id(item_id, style);
+
+    snprintf(label, sizeof(label), "%s special row exists", name);
+    ASSERT_INT_EQ(label, row != NULL, 1);
+    if (!row) return;
+
+    snprintf(label, sizeof(label), "%s special attack anim", name);
+    ASSERT_INT_EQ(label,
+        osrs_combat_visual_weapon_attack_anim(
+            (uint8_t)item_idx, style, 1, OSRS_COMBAT_VISUAL_NO_ANIMATION),
+        attack_anim_id);
+    snprintf(label, sizeof(label), "%s attack anim is cached", name);
+    ASSERT_INT_EQ(label,
+        anim_get_sequence(test_equipment_animation_cache(),
+            (uint16_t)attack_anim_id) != NULL,
+        1);
+
+    snprintf(label, sizeof(label), "%s launch spotanim", name);
+    ASSERT_INT_EQ(label, row->projectile.launch_spotanim_id, launch_spotanim_id);
+    snprintf(label, sizeof(label), "%s travel spotanim", name);
+    ASSERT_INT_EQ(label, row->projectile.travel_spotanim_id, travel_spotanim_id);
+    snprintf(label, sizeof(label), "%s impact spotanim", name);
+    ASSERT_INT_EQ(label, row->projectile.impact_spotanim_id, impact_spotanim_id);
+    snprintf(label, sizeof(label), "%s projectile model", name);
+    ASSERT_INT_EQ(label, row->projectile.projectile_model_id, projectile_model_id);
+    snprintf(label, sizeof(label), "%s projectile anim", name);
+    ASSERT_INT_EQ(label, row->projectile.projectile_anim_id, projectile_anim_id);
+
+    int spotanim_ids[] = {launch_spotanim_id, travel_spotanim_id, impact_spotanim_id};
+    for (size_t i = 0; i < sizeof(spotanim_ids) / sizeof(spotanim_ids[0]); i++) {
+        int spotanim_id = spotanim_ids[i];
+        if (spotanim_id == OSRS_COMBAT_PROJECTILE_MISSING) continue;
+        const OsrsSpotAnimDef* def =
+            osrs_spotanim_find(test_spotanim_set(), spotanim_id);
+        snprintf(label, sizeof(label), "%s spotanim %d is cached", name, spotanim_id);
+        ASSERT_INT_EQ(label, def != NULL, 1);
+        if (def && def->animation_id >= 0) {
+            snprintf(label, sizeof(label), "%s spotanim %d animation is cached",
+                name, spotanim_id);
+            ASSERT_INT_EQ(label,
+                anim_get_sequence(test_equipment_animation_cache(),
+                    (uint16_t)def->animation_id) != NULL,
+                1);
+        }
+    }
+
+    if (launch_spotanim_id != OSRS_COMBAT_PROJECTILE_MISSING ||
+            travel_spotanim_id != OSRS_COMBAT_PROJECTILE_MISSING ||
+            impact_spotanim_id != OSRS_COMBAT_PROJECTILE_MISSING) {
+        const OsrsCombatVisualRow* projectile_row =
+            osrs_combat_visual_find_special_projectile_item_id(item_id, style);
+        snprintf(label, sizeof(label), "%s special projectile lookup", name);
+        ASSERT_INT_EQ(label, projectile_row == row, 1);
+    }
+}
+
+static void test_pvp_current_special_visual_rows(void) {
+    printf("--- PvP current special visual rows ---\n");
+
+    assert_special_visual_row("Granite maul", ITEM_GRANITE_MAUL,
+        ATTACK_STYLE_MELEE, 1667, 340,
+        OSRS_COMBAT_PROJECTILE_MISSING, OSRS_COMBAT_PROJECTILE_MISSING,
+        OSRS_COMBAT_PROJECTILE_MISSING, OSRS_COMBAT_PROJECTILE_MISSING);
+    assert_special_visual_row("Dragon claws", ITEM_DRAGON_CLAWS,
+        ATTACK_STYLE_MELEE, 7514, 1171,
+        OSRS_COMBAT_PROJECTILE_MISSING, OSRS_COMBAT_PROJECTILE_MISSING,
+        OSRS_COMBAT_PROJECTILE_MISSING, OSRS_COMBAT_PROJECTILE_MISSING);
+    assert_special_visual_row("Statius warhammer", ITEM_STATIUS_WARHAMMER,
+        ATTACK_STYLE_MELEE, 1378, 844,
+        OSRS_COMBAT_PROJECTILE_MISSING, OSRS_COMBAT_PROJECTILE_MISSING,
+        OSRS_COMBAT_PROJECTILE_MISSING, OSRS_COMBAT_PROJECTILE_MISSING);
+    assert_special_visual_row("Vesta longsword", ITEM_VESTAS,
+        ATTACK_STYLE_MELEE, 7515, OSRS_COMBAT_PROJECTILE_MISSING,
+        OSRS_COMBAT_PROJECTILE_MISSING, OSRS_COMBAT_PROJECTILE_MISSING,
+        OSRS_COMBAT_PROJECTILE_MISSING, OSRS_COMBAT_PROJECTILE_MISSING);
+    assert_special_visual_row("Ancient godsword", ITEM_ANCIENT_GS,
+        ATTACK_STYLE_MELEE, 9171, 1996,
+        OSRS_COMBAT_PROJECTILE_MISSING, OSRS_COMBAT_PROJECTILE_MISSING,
+        OSRS_COMBAT_PROJECTILE_MISSING, OSRS_COMBAT_PROJECTILE_MISSING);
+    assert_special_visual_row("Voidwaker", ITEM_VOIDWAKER,
+        ATTACK_STYLE_MELEE, 11275, 2834,
+        OSRS_COMBAT_PROJECTILE_MISSING, 2363,
+        OSRS_COMBAT_PROJECTILE_MISSING, OSRS_COMBAT_PROJECTILE_MISSING);
+    assert_special_visual_row("Armadyl crossbow", ITEM_ARMADYL_CROSSBOW,
+        ATTACK_STYLE_RANGED, 4230, 301,
+        OSRS_COMBAT_PROJECTILE_MISSING, OSRS_COMBAT_PROJECTILE_MISSING,
+        OSRS_COMBAT_PROJECTILE_MISSING, OSRS_COMBAT_PROJECTILE_MISSING);
+    assert_special_visual_row("Zaryte crossbow", ITEM_ZARYTE_CROSSBOW,
+        ATTACK_STYLE_RANGED, 9166, 1995,
+        OSRS_COMBAT_PROJECTILE_MISSING, OSRS_COMBAT_PROJECTILE_MISSING,
+        OSRS_COMBAT_PROJECTILE_MISSING, OSRS_COMBAT_PROJECTILE_MISSING);
+    assert_special_visual_row("Morrigan javelin", ITEM_MORRIGANS_JAVELIN,
+        ATTACK_STYLE_RANGED, 11467, 2919, 2920,
+        OSRS_COMBAT_PROJECTILE_MISSING, 54231, 11472);
+    assert_special_visual_row("Volatile staff", ITEM_VOLATILE_STAFF,
+        ATTACK_STYLE_MAGIC, 8532, 1760,
+        OSRS_COMBAT_PROJECTILE_MISSING, 1759,
+        OSRS_COMBAT_PROJECTILE_MISSING, OSRS_COMBAT_PROJECTILE_MISSING);
+}
+
+static void test_special_visual_fallbacks_do_not_overlap_local_rows(void) {
+    printf("--- special visual fallbacks do not overlap local rows ---\n");
+
+    for (size_t i = 0; i < OSRS_COMBAT_VISUAL_LOCAL_ROW_COUNT; i++) {
+        const OsrsCombatVisualRow* row = &OSRS_COMBAT_VISUAL_LOCAL_ROWS[i];
+        if (row->kind != OSRS_COMBAT_VISUAL_KIND_SPECIAL) continue;
+        ASSERT_INT_EQ("local special row has no fallback",
+            osrs_combat_visual_special_fallback_anim((uint16_t)row->key_id),
+            OSRS_COMBAT_VISUAL_NO_ANIMATION);
+    }
+}
+
+static void assert_item_pose_anims(
+    const char* name,
+    int item_idx,
+    uint32_t ready,
+    uint32_t walk,
+    uint32_t run
+) {
+    char label[160];
+    uint16_t item_id = ITEM_DATABASE[item_idx].item_id;
+
+    snprintf(label, sizeof(label), "%s ready anim", name);
+    ASSERT_INT_EQ(label, item_render_ready_anim(item_id), ready);
+    snprintf(label, sizeof(label), "%s walk anim", name);
+    ASSERT_INT_EQ(label, item_render_walk_anim(item_id), walk);
+    snprintf(label, sizeof(label), "%s run anim", name);
+    ASSERT_INT_EQ(label, item_render_run_anim(item_id), run);
+
+    uint32_t ids[] = {ready, walk, run};
+    for (size_t i = 0; i < sizeof(ids) / sizeof(ids[0]); i++) {
+        snprintf(label, sizeof(label), "%s pose anim %u cached", name, ids[i]);
+        ASSERT_INT_EQ(label,
+            anim_get_sequence(test_equipment_animation_cache(),
+                (uint16_t)ids[i]) != NULL,
+            1);
+    }
+}
+
+static void test_pvp_weapon_pose_anims_are_mapped(void) {
+    printf("--- PvP weapon pose anims are mapped ---\n");
+
+    assert_item_pose_anims("Granite maul", ITEM_GRANITE_MAUL, 1662, 1663, 1664);
+    assert_item_pose_anims("Heavy ballista", ITEM_HEAVY_BALLISTA, 7220, 7223, 7221);
+    assert_item_pose_anims("Voidwaker", ITEM_VOIDWAKER, 244, 247, 248);
+}
+
+static void test_pvp_voidwaker_special_uses_melee_visual_and_magic_damage(void) {
+    printf("--- PvP Voidwaker special visual and damage styles ---\n");
+
+    NhPvpState state;
+    setup_pvp_state(&state);
+    Player* attacker = &state.env.players[0];
+    Player* defender = &state.env.players[1];
+
+    attacker->x = 3041;
+    attacker->y = 3530;
+    attacker->dest_x = attacker->x;
+    attacker->dest_y = attacker->y;
+    defender->x = 3042;
+    defender->y = 3530;
+    defender->dest_x = defender->x;
+    defender->dest_y = defender->y;
+
+    slot_equip_item(attacker, GEAR_SLOT_WEAPON, ITEM_WHIP);
+    attacker->melee_spec_weapon = MELEE_SPEC_VOIDWAKER;
+    attacker->special_energy = 100;
+
+    perform_attack(&state.env, 0, 1, ATTACK_STYLE_MELEE, 1, 0, 1);
+
+    ASSERT_INT_EQ("Voidwaker records special weapon",
+        attacker->attack_weapon_this_tick, ITEM_VOIDWAKER);
+    ASSERT_INT_EQ("Voidwaker visual style",
+        attacker->attack_style_this_tick, ATTACK_STYLE_MELEE);
+    ASSERT_INT_EQ("Voidwaker damage style",
+        attacker->last_attack_style, ATTACK_STYLE_MAGIC);
+    ASSERT_INT_EQ("Voidwaker queues one hit",
+        attacker->num_pending_hits, 1);
+    ASSERT_INT_EQ("Voidwaker pending hit is magic",
+        attacker->pending_hits[0].attack_type, ATTACK_STYLE_MAGIC);
+    ASSERT_INT_EQ("Voidwaker special animation",
+        osrs_combat_visual_weapon_attack_anim(
+            attacker->attack_weapon_this_tick,
+            attacker->attack_style_this_tick,
+            attacker->used_special_this_tick,
+            OSRS_COMBAT_VISUAL_NO_ANIMATION),
+        11275);
+}
+
+static void test_pvp_special_attack_visual_weapon_and_effect_contract(void) {
+    printf("--- PvP special attack visual weapon and effect contract ---\n");
+
+    NhPvpState state;
+    setup_pvp_state(&state);
+    Player* attacker = &state.env.players[0];
+    Player* defender = &state.env.players[1];
+
+    attacker->x = 3041;
+    attacker->y = 3530;
+    attacker->dest_x = attacker->x;
+    attacker->dest_y = attacker->y;
+    defender->x = 3042;
+    defender->y = 3530;
+    defender->dest_x = defender->x;
+    defender->dest_y = defender->y;
+
+    slot_equip_item(attacker, GEAR_SLOT_WEAPON, ITEM_WHIP);
+    attacker->melee_spec_weapon = MELEE_SPEC_AGS;
+    attacker->special_energy = 100;
+
+    perform_attack(&state.env, 0, 1, ATTACK_STYLE_MELEE, 1, 0, 1);
+
+    RenderEntity entities[NUM_AGENTS];
+    int count = 0;
+    fill_pvp_entities(&state, entities, &count);
+
+    ASSERT_INT_EQ("special event records AGS weapon",
+        attacker->attack_weapon_this_tick, ITEM_AGS);
+    ASSERT_INT_EQ("render entity records AGS attack weapon",
+        entities[0].attack_weapon_this_tick, ITEM_AGS);
+    ASSERT_INT_EQ("render entity shows AGS for attack frame",
+        entities[0].equipped[GEAR_SLOT_WEAPON], ITEM_AGS);
+    ASSERT_INT_EQ("render entity clears shield for AGS attack frame",
+        entities[0].equipped[GEAR_SLOT_SHIELD], ITEM_NONE);
+
+    const OsrsCombatVisualRow* ags_effect =
+        osrs_combat_visual_find_special_projectile_item_id(
+            ITEM_DATABASE[ITEM_AGS].item_id, ATTACK_STYLE_MELEE);
+    ASSERT_INT_EQ("AGS special visual row exists", ags_effect != NULL, 1);
+    if (!ags_effect) return;
+    ASSERT_INT_EQ("AGS special launch gfx", ags_effect->projectile.launch_spotanim_id, 1206);
+    ASSERT_INT_EQ("AGS special has no travel projectile",
+        ags_effect->projectile.travel_spotanim_id, OSRS_COMBAT_PROJECTILE_MISSING);
+    ASSERT_INT_EQ("AGS special animation",
+        osrs_combat_visual_weapon_attack_anim(
+            ITEM_AGS, ATTACK_STYLE_MELEE, 1, -1),
+        7644);
+}
+
+static void test_pvp_magic_landing_keeps_spell_visual_context(void) {
+    printf("--- PvP magic landing keeps spell visual context ---\n");
+
+    NhPvpState state;
+    setup_pvp_state(&state);
+    Player* attacker = &state.env.players[0];
+    Player* defender = &state.env.players[1];
+
+    queue_hit(attacker, defender, 0, ATTACK_STYLE_MAGIC, 0, 0, 0,
+        OSRS_COMBAT_VISUAL_SPELL_BLOOD_BARRAGE, 0, 0, 0, 0, 0);
+    process_pending_hits(&state.env, 0, 1);
+
+    RenderEntity entities[NUM_AGENTS];
+    int count = 0;
+    fill_pvp_entities(&state, entities, &count);
+
+    ASSERT_INT_EQ("splashing player emits landed visual event",
+        entities[1].hit_landed_this_tick, 1);
+    ASSERT_INT_EQ("splashing player records failed accuracy",
+        entities[1].hit_was_successful, 0);
+    ASSERT_INT_EQ("splashing player records blood barrage spell",
+        entities[1].hit_spell_type, OSRS_COMBAT_VISUAL_SPELL_BLOOD_BARRAGE);
+    ASSERT_INT_EQ("blood barrage miss uses splash gfx",
+        osrs_combat_visual_spell_impact_gfx(
+            OSRS_COMBAT_VISUAL_SPELL_BLOOD_BARRAGE, 0),
+        GFX_SPLASH);
+
+    defender->hit_landed_this_tick = 0;
+    defender->hit_was_successful = 0;
+    defender->hit_spell_type = 0;
+    defender->hit_damage = 0;
+
+    queue_hit(attacker, defender, 7, ATTACK_STYLE_MAGIC, 0, 0, 1,
+        OSRS_COMBAT_VISUAL_SPELL_ICE_BARRAGE, 0, 0, 0, 0, 0);
+    process_pending_hits(&state.env, 0, 1);
+    fill_pvp_entities(&state, entities, &count);
+
+    ASSERT_INT_EQ("ice barrage hit records successful accuracy",
+        entities[1].hit_was_successful, 1);
+    ASSERT_INT_EQ("ice barrage hit records spell",
+        entities[1].hit_spell_type, OSRS_COMBAT_VISUAL_SPELL_ICE_BARRAGE);
+    ASSERT_INT_EQ("ice barrage hit uses ice impact gfx",
+        osrs_combat_visual_spell_impact_gfx(
+            OSRS_COMBAT_VISUAL_SPELL_ICE_BARRAGE, 1),
+        GFX_ICE_BARRAGE_HIT);
+    ASSERT_INT_EQ("blood barrage hit uses blood impact gfx",
+        osrs_combat_visual_spell_impact_gfx(
+            OSRS_COMBAT_VISUAL_SPELL_BLOOD_BARRAGE, 1),
+        GFX_BLOOD_BARRAGE_HIT);
+}
+
+static void test_spell_impact_entity_center_normalizes_size(void) {
+    printf("--- spell impact entity center normalizes size ---\n");
+
+    RenderEntity player = {0};
+    player.entity_type = ENTITY_PLAYER;
+    player.x = 10;
+    player.y = 20;
+    player.npc_size = 0;
+
+    ASSERT_FLOAT_NEAR("player center x",
+        render_entity_center_subtile_x(&player), 1344.0f, 0.001f);
+    ASSERT_FLOAT_NEAR("player center y",
+        render_entity_center_subtile_y(&player), 2624.0f, 0.001f);
+    ASSERT_INT_EQ("player footprint size",
+        render_entity_footprint_size(&player), 1);
+
+    RenderEntity npc = {0};
+    npc.entity_type = ENTITY_NPC;
+    npc.x = 7;
+    npc.y = 9;
+    npc.npc_size = 3;
+
+    ASSERT_FLOAT_NEAR("npc center x",
+        render_entity_center_subtile_x(&npc), 1088.0f, 0.001f);
+    ASSERT_FLOAT_NEAR("npc center y",
+        render_entity_center_subtile_y(&npc), 1344.0f, 0.001f);
+    ASSERT_INT_EQ("npc footprint size",
+        render_entity_footprint_size(&npc), 3);
+}
+
+static void test_spell_impact_profile_heights(void) {
+    printf("--- spell impact profile heights ---\n");
+
+    ASSERT_INT_EQ("ice barrage hit height",
+        osrs_combat_visual_spell_impact_height_subtile(
+            OSRS_COMBAT_VISUAL_SPELL_ICE_BARRAGE, 1),
+        0);
+    ASSERT_INT_EQ("blood barrage hit height",
+        osrs_combat_visual_spell_impact_height_subtile(
+            OSRS_COMBAT_VISUAL_SPELL_BLOOD_BARRAGE, 1),
+        124);
+    ASSERT_INT_EQ("ice barrage miss height",
+        osrs_combat_visual_spell_impact_height_subtile(
+            OSRS_COMBAT_VISUAL_SPELL_ICE_BARRAGE, 0),
+        0);
+}
+
+static void test_height_aware_spotanim_spawn_stores_height(void) {
+    printf("--- height-aware spotanim spawn stores height ---\n");
+
+    ActiveEffect effects[MAX_ACTIVE_EFFECTS] = {0};
+    int slot = effect_spawn_spotanim_subtile_height(
+        effects, GFX_BLOOD_BARRAGE_HIT, 1344.0f, 2624.0f, 124.0f, 7,
+        test_spotanim_set(), NULL, NULL, NULL, NULL);
+
+    ASSERT_INT_EQ("spotanim spawn succeeds", slot >= 0, 1);
+    if (slot < 0) return;
+    ASSERT_INT_EQ("spotanim type", effects[slot].type, EFFECT_SPOTANIM);
+    ASSERT_FLOAT_NEAR("spotanim x fixed",
+        (float)effects[slot].cur_x, 1344.0f, 0.001f);
+    ASSERT_FLOAT_NEAR("spotanim y fixed",
+        (float)effects[slot].cur_y, 2624.0f, 0.001f);
+    ASSERT_FLOAT_NEAR("spotanim height stored",
+        (float)effects[slot].height, 124.0f, 0.001f);
+
+    effect_clear_all(effects);
+}
+
+static void test_actor_spotanim_follows_owner_and_slot_replaces(void) {
+    printf("--- actor spotanim follows owner and slot replaces ---\n");
+
+    ActiveEffectActorOwner owner = {
+        .entity_idx = 1,
+        .entity_type = ENTITY_PLAYER,
+        .npc_slot = -1,
+        .npc_instance_id = 0,
+    };
+    ActiveEffect effects[MAX_ACTIVE_EFFECTS] = {0};
+    int slot = effect_spawn_actor_spotanim_height(
+        effects, GFX_ICE_BARRAGE_HIT, owner, 0, 1344.0f, 2624.0f, 0.0f, 11,
+        test_spotanim_set(), NULL, NULL, NULL, NULL);
+
+    ASSERT_INT_EQ("ice actor spotanim spawn succeeds", slot >= 0, 1);
+    if (slot < 0) return;
+    ASSERT_INT_EQ("ice actor spotanim type",
+        effects[slot].type, EFFECT_ACTOR_SPOTANIM);
+    ASSERT_INT_EQ("actor owner entity index",
+        effects[slot].actor_owner.entity_idx, 1);
+    ASSERT_INT_EQ("actor spotanim slot",
+        effects[slot].actor_spotanim_slot, 0);
+    ASSERT_FLOAT_NEAR("actor spotanim follows owner x",
+        (float)effect_resolve_subtile_x(&effects[slot], 1472.0), 1472.0f, 0.001f);
+    ASSERT_FLOAT_NEAR("actor spotanim follows owner y",
+        (float)effect_resolve_subtile_y(&effects[slot], 2752.0), 2752.0f, 0.001f);
+
+    int replacement_slot = effect_spawn_actor_spotanim_height(
+        effects, GFX_BLOOD_BARRAGE_HIT, owner, 0, 1472.0f, 2752.0f, 124.0f, 12,
+        test_spotanim_set(), NULL, NULL, NULL, NULL);
+    ASSERT_INT_EQ("same actor spotanim slot is replaced",
+        replacement_slot, slot);
+    ASSERT_INT_EQ("replacement gfx stored",
+        effects[slot].gfx_id, GFX_BLOOD_BARRAGE_HIT);
+    ASSERT_FLOAT_NEAR("replacement height stored",
+        (float)effects[slot].height, 124.0f, 0.001f);
+
+    int active = 0;
+    for (int i = 0; i < MAX_ACTIVE_EFFECTS; i++) {
+        if (effects[i].type != EFFECT_NONE) active++;
+    }
+    ASSERT_INT_EQ("slot replacement leaves one active effect", active, 1);
+
+    effect_clear_all(effects);
+}
+
+static void test_actor_spotanim_explicit_slot_clear_removes_ice(void) {
+    printf("--- actor spotanim explicit slot clear removes ice ---\n");
+
+    ActiveEffectActorOwner owner = {
+        .entity_idx = 1,
+        .entity_type = ENTITY_PLAYER,
+        .npc_slot = -1,
+        .npc_instance_id = 0,
+    };
+    ActiveEffect effects[MAX_ACTIVE_EFFECTS] = {0};
+    int slot = effect_spawn_actor_spotanim_height(
+        effects, GFX_ICE_BARRAGE_HIT, owner, 0, 1344.0f, 2624.0f, 0.0f, 11,
+        test_spotanim_set(), NULL, NULL, NULL, NULL);
+
+    ASSERT_INT_EQ("ice actor spotanim spawn succeeds", slot >= 0, 1);
+    if (slot < 0) return;
+    effect_clear_actor_spotanim_slot(effects, owner, 0);
+    ASSERT_INT_EQ("explicit combat slot clear removes ice",
+        effects[slot].type, EFFECT_NONE);
+}
+
 static void test_terminal_render_clear_resets_visual_state_source(void) {
     printf("--- PvP terminal render clear resets visual state source ---\n");
 
@@ -405,7 +908,103 @@ static void test_terminal_render_clear_resets_visual_state_source(void) {
     free(text);
 }
 
+static void test_pvp_render_uses_wilderness_world_bounds(void) {
+    printf("--- PvP render uses wilderness world bounds ---\n");
+
+    FILE* f = fopen("ocean/osrs_pvp/binding.c", "rb");
+    ASSERT_INT_EQ("binding source opens", f != NULL, 1);
+    if (!f) return;
+    fseek(f, 0, SEEK_END);
+    long n = ftell(f);
+    rewind(f);
+    char* text = (char*)malloc((size_t)n + 1);
+    ASSERT_INT_EQ("binding source allocates", text != NULL, 1);
+    if (!text) {
+        fclose(f);
+        return;
+    }
+    size_t read_n = fread(text, 1, (size_t)n, f);
+    text[read_n] = '\0';
+    fclose(f);
+
+    ASSERT_INT_EQ("PvP sets wilderness render bounds",
+        strstr(text, "render_set_world_bounds(rc, WILD_MIN_X, WILD_MIN_Y, WILD_MAX_X, WILD_MAX_Y)") != NULL, 1);
+    free(text);
+
+    f = fopen("ocean/osrs/osrs_render.h", "rb");
+    ASSERT_INT_EQ("render source opens", f != NULL, 1);
+    if (!f) return;
+    fseek(f, 0, SEEK_END);
+    n = ftell(f);
+    rewind(f);
+    text = (char*)malloc((size_t)n + 1);
+    ASSERT_INT_EQ("render source allocates", text != NULL, 1);
+    if (!text) {
+        fclose(f);
+        return;
+    }
+    read_n = fread(text, 1, (size_t)n, f);
+    text[read_n] = '\0';
+    fclose(f);
+
+    ASSERT_INT_EQ("minimap uses render world bounds",
+        strstr(text, "render_tile_in_world_bounds(rc, wx, wy)") != NULL, 1);
+    ASSERT_INT_EQ("ground picking uses render world bounds",
+        strstr(text, "render_pick_ground_tile_from_ray") != NULL &&
+        strstr(text, "render_tile_in_world_bounds(rc, wx, wy)") != NULL, 1);
+    free(text);
+}
+
+static void test_shared_special_effect_render_contract(void) {
+    printf("--- shared special effect render contract ---\n");
+
+    FILE* f = fopen("ocean/osrs/osrs_render.h", "rb");
+    ASSERT_INT_EQ("render source opens", f != NULL, 1);
+    if (!f) return;
+    fseek(f, 0, SEEK_END);
+    long n = ftell(f);
+    rewind(f);
+    char* text = (char*)malloc((size_t)n + 1);
+    ASSERT_INT_EQ("render source allocates", text != NULL, 1);
+    if (!text) {
+        fclose(f);
+        return;
+    }
+    size_t read_n = fread(text, 1, (size_t)n, f);
+    text[read_n] = '\0';
+    fclose(f);
+
+    ASSERT_INT_EQ("render defines typed effect attachments",
+        strstr(text, "RenderEffectAttachmentKind") != NULL &&
+        strstr(text, "RENDER_EFFECT_ATTACHMENT_ACTOR") != NULL, 1);
+    ASSERT_INT_EQ("render spawns launch spotanims through attachments",
+        strstr(text, "profile->launch_spotanim_id") != NULL &&
+        strstr(text, "render_spawn_attached_spotanim_height(\n"
+            "            rc, launch_attachment") != NULL, 1);
+    ASSERT_INT_EQ("render spawns impact-only spotanims through attachments",
+        strstr(text, "profile->travel_spotanim_id < 0") != NULL &&
+        strstr(text, "profile->impact_spotanim_id") != NULL &&
+        strstr(text, "render_spawn_attached_spotanim_height(\n"
+            "                rc, impact_attachment") != NULL, 1);
+    ASSERT_INT_EQ("PvP passes actor attachments into combat profiles",
+        strstr(text, "RenderEffectAttachment attacker_attachment") != NULL &&
+        strstr(text, "render_effect_attachment_actor(p, i)") != NULL &&
+        strstr(text, "RenderEffectAttachment target_attachment") != NULL &&
+        strstr(text, "render_effect_attachment_actor(t, target_i)") != NULL, 1);
+    ASSERT_INT_EQ("render uses attack visual weapon",
+        strstr(text, "render_entity_attack_visual_weapon") != NULL, 1);
+    ASSERT_INT_EQ("render uses actor-attached entity impact helper",
+        strstr(text, "render_spawn_entity_spotanim_height") != NULL, 1);
+    ASSERT_INT_EQ("render does not generic-clear actor spotanims on attacks",
+        strstr(text, "render_clear_entity_combat_spotanim") == NULL, 1);
+    ASSERT_INT_EQ("render builds special projectile sequences",
+        strstr(text, "osrs_combat_visual_build_projectile_sequence") != NULL, 1);
+    free(text);
+}
+
 int main(void) {
+    test_wilderness_collision_asset_spans_pvp_area();
+    test_runtime_animation_assets_are_anm2();
     test_reset_has_no_forced_targets();
     test_attack_sets_render_target();
     test_explicit_move_clears_render_target();
@@ -419,7 +1018,20 @@ int main(void) {
     test_terminal_render_entities_use_snapshot();
     test_terminal_winner_phase_removes_loser();
     test_performance_tracker_values();
+    test_pvp_current_special_visual_rows();
+    test_special_visual_fallbacks_do_not_overlap_local_rows();
+    test_pvp_weapon_pose_anims_are_mapped();
+    test_pvp_voidwaker_special_uses_melee_visual_and_magic_damage();
+    test_pvp_special_attack_visual_weapon_and_effect_contract();
+    test_pvp_magic_landing_keeps_spell_visual_context();
+    test_spell_impact_entity_center_normalizes_size();
+    test_spell_impact_profile_heights();
+    test_height_aware_spotanim_spawn_stores_height();
+    test_actor_spotanim_follows_owner_and_slot_replaces();
+    test_actor_spotanim_explicit_slot_clear_removes_ice();
     test_terminal_render_clear_resets_visual_state_source();
+    test_pvp_render_uses_wilderness_world_bounds();
+    test_shared_special_effect_render_contract();
 
     printf("\n%d/%d tests passed\n", tests_passed, tests_run);
     return tests_failed == 0 ? 0 : 1;

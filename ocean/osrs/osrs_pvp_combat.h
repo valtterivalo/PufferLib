@@ -25,6 +25,7 @@
 #include "osrs_damage.h"
 #include "osrs_bolt_procs.h"
 #include "osrs_pvp_gear.h"
+#include "osrs_player_attack_profile.h"
 
 static void register_hit_calculated(OsrsEnv* env, int attacker_idx, int defender_idx,
                                      AttackStyle style, int total_damage);
@@ -669,8 +670,8 @@ static inline int pvp_ranged_hit_delay_for_weapon(int distance, int is_special, 
 
 static void queue_hit(Player* attacker, Player* defender, int damage,
                      AttackStyle style, int delay, int is_special, int hit_success,
-                     int freeze_ticks, int heal_percent, int drain_type, int drain_percent,
-                     int flat_heal) {
+                     int spell_type, int freeze_ticks, int heal_percent,
+                     int drain_type, int drain_percent, int flat_heal) {
     if (attacker->num_pending_hits >= MAX_PENDING_HITS) return;
 
     PendingHit* hit = &attacker->pending_hits[attacker->num_pending_hits++];
@@ -679,6 +680,7 @@ static void queue_hit(Player* attacker, Player* defender, int damage,
     hit->attack_type = style;
     hit->is_special = is_special;
     hit->hit_success = hit_success;
+    hit->spell_type = spell_type;
     hit->freeze_ticks = freeze_ticks;
     hit->heal_percent = heal_percent;
     hit->drain_type = drain_type;
@@ -717,6 +719,7 @@ static void apply_damage(OsrsEnv* env, int attacker_idx, int defender_idx,
     /* hit event recording for observations */
     defender->hit_landed_this_tick = 1;
     defender->hit_was_successful = hit->hit_success;
+    defender->hit_spell_type = hit->spell_type;
     defender->hit_damage += damage;
     defender->hit_style = hit->attack_type;
     defender->hit_defender_prayer = hit->defender_prayer_at_attack;
@@ -1103,11 +1106,49 @@ static inline int get_attack_range(Player* p, AttackStyle style) {
             if (is_halberd_weapon(p->melee_spec_weapon)) return 2;
             return 1;
         case ATTACK_STYLE_RANGED:
-        case ATTACK_STYLE_MAGIC:
-            return get_slot_gear_bonuses(p)->attack_range;
+        case ATTACK_STYLE_MAGIC: {
+            OsrsPlayerAttackProfile profile =
+                osrs_player_attack_profile_for_loadout(
+                    p->equipped,
+                    style,
+                    p->fight_style,
+                    style == ATTACK_STYLE_MAGIC ? 30 : 0);
+            return profile.range;
+        }
         default:
             return 1;
     }
+}
+
+static inline OsrsAttackReachQuery pvp_attack_reach_query(
+    const CollisionMap* cmap,
+    Player* attacker,
+    Player* defender,
+    AttackStyle style
+) {
+    OsrsAttackDelivery delivery;
+    int range;
+    switch (style) {
+        case ATTACK_STYLE_MELEE:
+            delivery = OSRS_ATTACK_DELIVERY_MELEE;
+            range = 1;
+            break;
+        case ATTACK_STYLE_RANGED:
+        case ATTACK_STYLE_MAGIC:
+            delivery = OSRS_ATTACK_DELIVERY_PROJECTILE;
+            range = get_attack_range(attacker, style);
+            break;
+        default:
+            fprintf(stderr, "invalid PvP attack reach style: %d\n", style);
+            abort();
+    }
+    return (OsrsAttackReachQuery){
+        .source = osrs_footprint(attacker->x, attacker->y, 1),
+        .target = osrs_footprint(defender->x, defender->y, 1),
+        .delivery = delivery,
+        .range = range,
+        .occlusion = osrs_projectile_occlusion_collision_map(cmap, 0),
+    };
 }
 // ATTACK EXECUTION (uses osrs_resolve_spec + osrs_resolve_bolt_proc)
 
@@ -1129,6 +1170,7 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
     int spec_cost = 0;
     int was_special_requested = is_special;
     int spec_item_idx = ITEM_NONE;
+    SpecResult resolved_spec = {0};
 
     if (is_special) {
         switch (style) {
@@ -1191,13 +1233,19 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
             spec_item_idx, att_roll, max_hit, def_roll, defender->prayer, style);
         register_expected_damage(env, attacker_idx, defender_idx, expected_damage);
 
-        SpecResult sr = osrs_resolve_spec(
+        resolved_spec = osrs_resolve_spec(
             spec_item_idx, att_roll, max_hit, def_roll,
             defender->current_defence, &env->rng_state
         );
+        OsrsPlayerAttackProfile attack_profile =
+            osrs_player_attack_profile_for_special(
+                attacker->equipped[GEAR_SLOT_WEAPON],
+                style,
+                attacker->fight_style,
+                spec_item_idx,
+                resolved_spec);
 
-        /* queue each hit from the SpecResult */
-        int total_damage = sr.total_damage;
+        int total_damage = resolved_spec.total_damage;
         int hit_delay;
         if (style == ATTACK_STYLE_MELEE)
             hit_delay = 0;
@@ -1208,10 +1256,10 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
 
         /* determine PvP-specific hit effects */
         int drain_type = 0, drain_percent = 0;
-        int freeze_ticks = sr.freeze_ticks;
+        int freeze_ticks = resolved_spec.freeze_ticks;
         int heal_percent = 0, flat_heal = 0;
 
-        if (sr.def_drain > 0) {
+        if (resolved_spec.def_drain > 0) {
             if (spec_item_idx == ITEM_BGS) {
                 drain_type = 2;  /* drain def by damage dealt */
             } else {
@@ -1220,20 +1268,20 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
                                 (spec_item_idx == ITEM_ELDER_MAUL) ? 35 : 0;
             }
         }
-        if (sr.heal > 0 && spec_item_idx == ITEM_SGS) {
+        if (resolved_spec.heal > 0 && spec_item_idx == ITEM_SGS) {
             heal_percent = 50;
         }
 
-        /* voidwaker deals magic damage */
-        AttackStyle hit_style = (spec_item_idx == ITEM_VOIDWAKER) ? ATTACK_STYLE_MAGIC : style;
+        AttackStyle hit_style = attack_profile.damage_style;
 
-        for (int i = 0; i < sr.num_hits; i++) {
+        for (int i = 0; i < resolved_spec.num_hits; i++) {
             int this_delay = hit_delay;
             /* dark bow second arrow uses different delay formula */
             if (spec_item_idx == ITEM_DARK_BOW && i == 1)
                 this_delay = pvp_ranged_hit_delay_dbow_second(distance);
-            queue_hit(attacker, defender, sr.damage[i], hit_style, this_delay, 1,
-                      sr.damage[i] > 0, freeze_ticks, heal_percent, drain_type, drain_percent, flat_heal);
+            queue_hit(attacker, defender, resolved_spec.damage[i], hit_style, this_delay, 1,
+                      resolved_spec.damage[i] > 0, 0, freeze_ticks, heal_percent,
+                      drain_type, drain_percent, flat_heal);
         }
 
         register_hit_calculated(env, attacker_idx, defender_idx, hit_style, total_damage);
@@ -1241,7 +1289,8 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
         /* ancient godsword blood sacrifice: 25 magic damage at 8 ticks + heal */
         if (spec_item_idx == ITEM_ANCIENT_GS && total_damage > 0) {
             int ags_heal = clamp((int)(defender->base_hitpoints * 0.15f), 0, 15);
-            queue_hit(attacker, defender, 25, ATTACK_STYLE_MAGIC, 8, 1, 1, 0, 0, 0, 0, ags_heal);
+            queue_hit(attacker, defender, 25, ATTACK_STYLE_MAGIC, 8, 1, 1,
+                      0, 0, 0, 0, 0, ags_heal);
         }
 
         /* morrigan's javelin phantom strike bleed */
@@ -1338,24 +1387,52 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
                 }
                 queued_freeze_ticks = 0;
             }
+            int spell_type = style == ATTACK_STYLE_MAGIC ? magic_type : 0;
             queue_hit(attacker, defender, damage, style, hit_delay, is_special,
-                      hit_success, queued_freeze_ticks, heal_percent, 0, 0, 0);
+                      hit_success, spell_type, queued_freeze_ticks, heal_percent, 0, 0, 0);
         }
         register_hit_calculated(env, attacker_idx, defender_idx, style, total_damage);
     }
 
-post_attack:
+post_attack:;
+    OsrsPlayerAttackProfile attack_profile = is_special && spec_item_idx != ITEM_NONE
+        ? osrs_player_attack_profile_for_special(
+            attacker->equipped[GEAR_SLOT_WEAPON],
+            style,
+            attacker->fight_style,
+            spec_item_idx,
+            resolved_spec)
+        : osrs_player_attack_profile(&(OsrsPlayerAttackProfileQuery){
+            .weapon_item = attacker->equipped[GEAR_SLOT_WEAPON],
+            .action_kind = osrs_player_attack_action_kind(
+                attacker->equipped[GEAR_SLOT_WEAPON],
+                style,
+                style == ATTACK_STYLE_MAGIC && magic_type != 0 ? 30 : 0),
+            .action_style = style,
+            .fight_style = attacker->fight_style,
+            .magic_kind = style == ATTACK_STYLE_MAGIC
+                ? (magic_type == 1
+                    ? OSRS_MAGIC_ATTACK_ANCIENT_ICE
+                    : magic_type == 2
+                        ? OSRS_MAGIC_ATTACK_ANCIENT_BLOOD
+                        : OSRS_MAGIC_ATTACK_NONE)
+                : OSRS_MAGIC_ATTACK_NONE,
+            .special_item = ITEM_NONE,
+            .special_result = {0},
+        });
     attacker->just_attacked = 1;
-    attacker->last_attack_style = (is_special && spec_item_idx == ITEM_VOIDWAKER) ? ATTACK_STYLE_MAGIC : style;
-    attacker->attack_style_this_tick = attacker->last_attack_style;
+    attacker->last_attack_style = attack_profile.damage_style;
+    attacker->attack_style_this_tick = attack_profile.visual_style;
+    attacker->attack_weapon_this_tick =
+        (is_special && spec_item_idx != ITEM_NONE)
+            ? (uint8_t)spec_item_idx
+            : attacker->equipped[GEAR_SLOT_WEAPON];
     attacker->magic_type_this_tick = magic_type;
     attacker->used_special_this_tick = is_special;
 
-    int attack_speed = get_slot_gear_bonuses(attacker)->attack_speed;
-    int is_instant = (is_special && spec_item_idx == ITEM_GRANITE_MAUL);
-    if (!is_instant) {
-        attacker->attack_timer = attack_speed - 1;
-        attacker->attack_timer_uncapped = attack_speed - 1;
+    if (attack_profile.cooldown_kind == OSRS_PLAYER_ATTACK_COOLDOWN_STANDARD) {
+        attacker->attack_timer = attack_profile.post_action_timer;
+        attacker->attack_timer_uncapped = attack_profile.post_action_timer;
         attacker->has_attack_timer = 1;
     }
 }

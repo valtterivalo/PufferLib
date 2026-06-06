@@ -123,8 +123,8 @@ static void set_dead_zone_state(OsrsEnv* env, OpponentType type, int distance) {
     Player* target = &env->players[0];
     Player* self = &env->players[1];
     set_basic_hybrid_weapons(self);
-    set_player_position(self, FIGHT_AREA_BASE_X, FIGHT_AREA_BASE_Y);
-    set_player_position(target, FIGHT_AREA_BASE_X + distance, FIGHT_AREA_BASE_Y);
+    set_player_position(self, 3042, 3520);
+    set_player_position(target, 3042 + distance, 3520);
 
     target->prayer = PRAYER_PROTECT_MAGIC;
     target->frozen_ticks = 0;
@@ -279,12 +279,12 @@ static void test_spec_range_gate_respects_weapon_range(void) {
     const uint8_t acb_weapons[] = {ITEM_ARMADYL_CROSSBOW, ITEM_AHRIM_STAFF};
     set_weapon_inventory(self, acb_weapons, 2);
     ASSERT_INT_EQ("armadyl crossbow spec cannot hit distance 10",
-        opp_loadout_can_hit_now(self, target, LOADOUT_SPEC_RANGE, OPP_STYLE_RANGED), 0);
+        opp_loadout_can_hit_now(&env, self, target, LOADOUT_SPEC_RANGE, OPP_STYLE_RANGED), 0);
 
     const uint8_t dark_bow_weapons[] = {ITEM_DARK_BOW, ITEM_AHRIM_STAFF};
     set_weapon_inventory(self, dark_bow_weapons, 2);
     ASSERT_INT_EQ("dark bow spec can hit distance 10",
-        opp_loadout_can_hit_now(self, target, LOADOUT_SPEC_RANGE, OPP_STYLE_RANGED), 1);
+        opp_loadout_can_hit_now(&env, self, target, LOADOUT_SPEC_RANGE, OPP_STYLE_RANGED), 1);
 }
 
 int main(void) {

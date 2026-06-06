@@ -391,6 +391,7 @@ typedef struct {
     AttackStyle attack_type;
     int is_special;
     int hit_success;
+    int spell_type;
     int freeze_ticks;
     int heal_percent;
     int drain_type;
@@ -591,11 +592,11 @@ typedef struct {
     PendingHit pending_hits[MAX_PENDING_HITS];
     int num_pending_hits;
     int damage_applied_this_tick;
-    int did_attack_auto_move;  // set in attack movement phase, read in attack combat phase
 
     // Hit event tracking for event log
     int hit_landed_this_tick;
     int hit_was_successful;
+    int hit_spell_type;
     int hit_damage;
     AttackStyle hit_style;
     OverheadPrayer hit_defender_prayer;
@@ -710,6 +711,7 @@ typedef struct {
     // Per-tick action tracking for reward shaping
     // These are set when actions actually execute (not when queued)
     AttackStyle attack_style_this_tick;  // Actual attack style used (NONE if no attack)
+    uint8_t attack_weapon_this_tick;
     int magic_type_this_tick;            // 0=none, 1=ice, 2=blood (for visual effects)
     int used_special_this_tick;          // 1 if special attack was used
     int ate_food_this_tick;              // 1 if regular food was consumed

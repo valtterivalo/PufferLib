@@ -763,6 +763,7 @@ static int zul_lookup_player_attack_target(
         .y = s->zulrah.y,
         .size = ZUL_NPC_SIZE,
         .attack_range = ls->attack_range,
+        .delivery = encounter_attack_delivery_from_style(ls->style),
     };
     return 1;
 }
@@ -1263,10 +1264,14 @@ static int zul_player_can_attack_zulrah(
     ZulrahState* s,
     const EncounterLoadoutStats* loadout_stats
 ) {
-    return encounter_player_can_attack(
-        s->player.x, s->player.y,
-        s->zulrah.x, s->zulrah.y, ZUL_NPC_SIZE,
-        loadout_stats->attack_range, NULL, 0);
+    OsrsAttackReachQuery reach = {
+        .source = osrs_footprint(s->player.x, s->player.y, 1),
+        .target = osrs_footprint(s->zulrah.x, s->zulrah.y, ZUL_NPC_SIZE),
+        .delivery = encounter_attack_delivery_from_style(loadout_stats->style),
+        .range = loadout_stats->attack_range,
+        .occlusion = osrs_projectile_occlusion_open(),
+    };
+    return osrs_attack_can_reach(&reach);
 }
 
 static int zul_player_attack_hits(
@@ -1398,14 +1403,21 @@ static void zul_player_spec(ZulrahState* s) {
     int att_roll = osrs_player_att_roll(ls->eff_level, ls->attack_bonus);
     SpecResult sr = osrs_resolve_spec(weapon, att_roll, ls->max_hit,
                                        def_roll, m->def_level, &s->rng_state);
+    OsrsPlayerAttackProfile attack_profile =
+        osrs_player_attack_profile_for_special(
+            (uint8_t)weapon,
+            is_mage ? ATTACK_STYLE_MAGIC : ATTACK_STYLE_RANGED,
+            s->player.fight_style,
+            weapon,
+            sr);
 
     s->player.special_energy -= sr.spec_cost;
     s->player.special_energy = s->player.special_energy;
     s->player.just_attacked = 1;
     s->player.used_special_this_tick = 1;
-    s->player.last_attack_style = is_mage ? ATTACK_STYLE_MAGIC : ATTACK_STYLE_RANGED;
-    s->player.attack_style_this_tick = s->player.last_attack_style;
-    s->player.attack_timer = sr.attack_speed_override ? sr.attack_speed_override : ls->attack_speed;
+    s->player.last_attack_style = attack_profile.damage_style;
+    s->player.attack_style_this_tick = attack_profile.visual_style;
+    s->player.attack_timer = attack_profile.cycle_ticks;
     zul_record_player_attack_visual(s, s->player.attack_style_this_tick, 0, 1);
 
     /* apply damage with per-hit capping */
@@ -2611,6 +2623,7 @@ static void zul_step(EncounterState* state, const int* actions) {
             .world_offset_y = s->world_offset_y,
             .is_walkable = zul_tile_walkable,
             .walkable_ctx = s,
+            .projectile_occlusion = osrs_projectile_occlusion_open(),
             .arena_base_x = 0,
             .arena_base_y = 0,
             .arena_w = ZUL_ARENA_SIZE,

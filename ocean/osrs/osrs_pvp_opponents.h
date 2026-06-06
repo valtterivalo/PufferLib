@@ -208,9 +208,10 @@ static inline uint8_t opp_resolved_style_weapon(Player* self, int style) {
     return resolved[0];
 }
 
-static inline int opp_style_can_hit_now(Player* self, Player* target, int style) {
+static inline int opp_style_can_hit_now(OsrsEnv* env, Player* self, Player* target, int style) {
     int dist = chebyshev_distance(self->x, self->y, target->x, target->y);
     if (dist <= 0) return 0;
+    const CollisionMap* cmap = (const CollisionMap*)env->collision_map;
 
     if (style == OPP_STYLE_MELEE) {
         return is_in_melee_range(self, target);
@@ -229,14 +230,23 @@ static inline int opp_style_can_hit_now(Player* self, Player* target, int style)
     }
 
     int range = ITEM_DATABASE[weapon].attack_range;
-    return range > 0 && dist <= range;
+    if (range <= 0) return 0;
+    OsrsAttackReachQuery reach = {
+        .source = osrs_footprint(self->x, self->y, 1),
+        .target = osrs_footprint(target->x, target->y, 1),
+        .delivery = OSRS_ATTACK_DELIVERY_PROJECTILE,
+        .range = range,
+        .occlusion = osrs_projectile_occlusion_collision_map(cmap, 0),
+    };
+    return osrs_attack_can_reach(&reach);
 }
 
 static inline int opp_loadout_can_hit_now(
-    Player* self, Player* target, int loadout, int style
+    OsrsEnv* env, Player* self, Player* target, int loadout, int style
 ) {
     int dist = chebyshev_distance(self->x, self->y, target->x, target->y);
     if (dist <= 0) return 0;
+    const CollisionMap* cmap = (const CollisionMap*)env->collision_map;
     if (style == OPP_STYLE_MELEE || style == OPP_STYLE_SPEC) {
         return is_in_melee_range(self, target);
     }
@@ -250,15 +260,23 @@ static inline int opp_loadout_can_hit_now(
     if (style == OPP_STYLE_MAGE && weapon_style != 3) return 0;
 
     int range = ITEM_DATABASE[weapon].attack_range;
-    return range > 0 && dist <= range;
+    if (range <= 0) return 0;
+    OsrsAttackReachQuery reach = {
+        .source = osrs_footprint(self->x, self->y, 1),
+        .target = osrs_footprint(target->x, target->y, 1),
+        .delivery = OSRS_ATTACK_DELIVERY_PROJECTILE,
+        .range = range,
+        .occlusion = osrs_projectile_occlusion_collision_map(cmap, 0),
+    };
+    return osrs_attack_can_reach(&reach);
 }
 
-static inline int opp_hit_now_style_mask(Player* self, Player* target, int allowed_mask) {
+static inline int opp_hit_now_style_mask(OsrsEnv* env, Player* self, Player* target, int allowed_mask) {
     int mask = 0;
     allowed_mask &= OPP_STYLE_MASK_ALL;
     for (int style = 0; style < 3; style++) {
         if (!(allowed_mask & (1 << style))) continue;
-        if (opp_style_can_hit_now(self, target, style)) mask |= (1 << style);
+        if (opp_style_can_hit_now(env, self, target, style)) mask |= (1 << style);
     }
     return mask;
 }
@@ -297,7 +315,7 @@ static inline OppStyleChoice opp_resolve_attack_style(
     allowed_mask &= OPP_STYLE_MASK_ALL;
     if (allowed_mask == 0) allowed_mask = OPP_STYLE_MASK_ALL;
 
-    int hit_mask = opp_hit_now_style_mask(self, target, allowed_mask);
+    int hit_mask = opp_hit_now_style_mask(env, self, target, allowed_mask);
     preference_mask &= allowed_mask;
 
     int choice_mask = preference_mask & hit_mask;
@@ -1827,13 +1845,13 @@ static void opp_onetick(OsrsEnv* env, OpponentState* opp, int* actions) {
                       self->special_energy >= get_ranged_spec_cost(self->ranged_spec_weapon) &&
                       target->prayer != PRAYER_PROTECT_RANGED &&
                       target_hp_pct < 0.55f &&
-                      opp_loadout_can_hit_now(self, target, LOADOUT_SPEC_RANGE, OPP_STYLE_RANGED);
+                      opp_loadout_can_hit_now(env, self, target, LOADOUT_SPEC_RANGE, OPP_STYLE_RANGED);
 
     int should_magic_spec = opp_attack_ready(self) && magic_spec != ITEM_NONE &&
                       self->special_energy >= get_magic_spec_cost(self->magic_spec_weapon) &&
                       target->prayer != PRAYER_PROTECT_MAGIC &&
                       target_hp_pct < 0.55f &&
-                      opp_loadout_can_hit_now(self, target, LOADOUT_SPEC_MAGIC, OPP_STYLE_MAGE);
+                      opp_loadout_can_hit_now(env, self, target, LOADOUT_SPEC_MAGIC, OPP_STYLE_MAGE);
 
     /* Anti-kite: cancel melee spec if target fleeing */
     if (should_melee_spec && opp->target_fleeing_ticks >= 2 && dist > 1) {
@@ -2120,13 +2138,13 @@ static void opp_unpredictable_onetick(OsrsEnv* env, OpponentState* opp, int* act
                       self->special_energy >= get_ranged_spec_cost(self->ranged_spec_weapon) &&
                       target->prayer != PRAYER_PROTECT_RANGED &&
                       target_hp_pct < 0.55f &&
-                      opp_loadout_can_hit_now(self, target, LOADOUT_SPEC_RANGE, OPP_STYLE_RANGED);
+                      opp_loadout_can_hit_now(env, self, target, LOADOUT_SPEC_RANGE, OPP_STYLE_RANGED);
 
     int should_magic_spec = opp_attack_ready(self) && magic_spec != ITEM_NONE &&
                       self->special_energy >= get_magic_spec_cost(self->magic_spec_weapon) &&
                       target->prayer != PRAYER_PROTECT_MAGIC &&
                       target_hp_pct < 0.55f &&
-                      opp_loadout_can_hit_now(self, target, LOADOUT_SPEC_MAGIC, OPP_STYLE_MAGE);
+                      opp_loadout_can_hit_now(env, self, target, LOADOUT_SPEC_MAGIC, OPP_STYLE_MAGE);
 
     /* Anti-kite: cancel melee spec if target fleeing */
     if (should_melee_spec && opp->target_fleeing_ticks >= 2 && dist > 1) {
@@ -2394,13 +2412,13 @@ static void opp_master_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
                       self->special_energy >= get_ranged_spec_cost(self->ranged_spec_weapon) &&
                       target->prayer != PRAYER_PROTECT_RANGED &&
                       target_hp_pct < 0.55f &&
-                      opp_loadout_can_hit_now(self, target, LOADOUT_SPEC_RANGE, OPP_STYLE_RANGED);
+                      opp_loadout_can_hit_now(env, self, target, LOADOUT_SPEC_RANGE, OPP_STYLE_RANGED);
 
     int should_magic_spec = opp_attack_ready(self) && magic_spec != ITEM_NONE &&
                       self->special_energy >= get_magic_spec_cost(self->magic_spec_weapon) &&
                       target->prayer != PRAYER_PROTECT_MAGIC &&
                       target_hp_pct < 0.55f &&
-                      opp_loadout_can_hit_now(self, target, LOADOUT_SPEC_MAGIC, OPP_STYLE_MAGE);
+                      opp_loadout_can_hit_now(env, self, target, LOADOUT_SPEC_MAGIC, OPP_STYLE_MAGE);
 
     /* With read, cancel specs the agent is praying against */
     if (opp->has_read_this_tick) {
@@ -2716,7 +2734,7 @@ static void opp_gmaul_combo(OsrsEnv* env, OpponentState* opp, int* actions) {
                                  target_hp_pct < opp->ko_threshold &&
                                  self->special_energy >= get_ranged_spec_cost(self->ranged_spec_weapon) &&
                                  target->prayer != PRAYER_PROTECT_RANGED &&
-                                 opp_loadout_can_hit_now(self, target, LOADOUT_SPEC_RANGE, OPP_STYLE_RANGED) &&
+                                 opp_loadout_can_hit_now(env, self, target, LOADOUT_SPEC_RANGE, OPP_STYLE_RANGED) &&
                                  rand_float(env) < 0.25f);  /* 25% chance to use ranged spec */
 
         /* Anti-kite: cancel melee combo if target fleeing */
@@ -2813,7 +2831,7 @@ static void opp_range_kiter(OsrsEnv* env, OpponentState* opp, int* actions) {
         int should_ranged_spec = (has_ranged_spec &&
                                  self->special_energy >= ranged_spec_cost &&
                                  target->prayer != PRAYER_PROTECT_RANGED &&
-                                 opp_loadout_can_hit_now(self, target, LOADOUT_SPEC_RANGE, OPP_STYLE_RANGED) &&
+                                 opp_loadout_can_hit_now(env, self, target, LOADOUT_SPEC_RANGE, OPP_STYLE_RANGED) &&
                                  target_hp_pct < 0.55f);
 
         /* Anti-kite not needed for ranged — we WANT distance */

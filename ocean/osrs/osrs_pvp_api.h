@@ -109,6 +109,7 @@ static void init_player(Player* p) {
 
     p->just_attacked = 0;
     p->last_attack_style = ATTACK_STYLE_NONE;
+    p->attack_weapon_this_tick = ITEM_NONE;
     p->attack_was_on_prayer = 0;
     p->last_attack_dx = 0;
     p->last_attack_dy = 0;
@@ -119,11 +120,11 @@ static void init_player(Player* p) {
     memset(p->pending_hits, 0, sizeof(p->pending_hits));
     p->num_pending_hits = 0;
     p->damage_applied_this_tick = 0;
-    p->did_attack_auto_move = 0;
 
     // Hit event tracking
     p->hit_landed_this_tick = 0;
     p->hit_was_successful = 0;
+    p->hit_spell_type = 0;
     p->hit_damage = 0;
     p->hit_style = ATTACK_STYLE_NONE;
     p->hit_defender_prayer = PRAYER_NONE;
@@ -560,6 +561,7 @@ void pvp_step(OsrsEnv* env) {
     for (int i = 0; i < NUM_AGENTS; i++) {
         env->players[i].hit_landed_this_tick = 0;
         env->players[i].hit_was_successful = 0;
+        env->players[i].hit_spell_type = 0;
         env->players[i].hit_damage = 0;
         env->players[i].hit_style = ATTACK_STYLE_NONE;
         env->players[i].hit_defender_prayer = PRAYER_NONE;
@@ -670,20 +672,12 @@ void pvp_step(OsrsEnv* env) {
         if (pi->karambwan_timer > 0) pi->karambwan_timer--;
     }
 
-    /* canonical movement via the shared encounter SDK. only fires when
-       walk_dest is set (HEAD_MOVE > 0, legacy HEAD_COMBAT MOVE_*, or a
-       persistent human click). attack-driven auto-chase still flows through
-       execute_attack_movement below until that path is migrated. */
-    pvp_step_player_movement(env, first);
-    pvp_step_player_movement(env, second);
+    PvpAttackMoveIntent move_intents[NUM_AGENTS];
+    move_intents[first] = pvp_attack_move_intent(env, first, agent_actions[first]);
+    move_intents[second] = pvp_attack_move_intent(env, second, agent_actions[second]);
 
-    if (env->players[0].x == env->players[1].x &&
-        env->players[0].y == env->players[1].y) {
-        resolve_same_tile(&env->players[second], &env->players[first], (const CollisionMap*)env->collision_map);
-    }
-
-    execute_attack_movement(env, first, agent_actions[first]);
-    execute_attack_movement(env, second, agent_actions[second]);
+    pvp_step_player_movement(env, first, move_intents[first]);
+    pvp_step_player_movement(env, second, move_intents[second]);
 
     if (env->players[0].x == env->players[1].x &&
         env->players[0].y == env->players[1].y) {

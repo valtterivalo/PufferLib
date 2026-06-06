@@ -142,6 +142,11 @@ def test_match_render_mode_human_calls_backend_render(monkeypatch):
 
     run_fake_match(monkeypatch, fake, match_args("human"), 2)
 
+    args = fake.created_args
+    assert args["vec"]["num_buffers"] == 2
+    assert args["vec"]["total_agents"] == 4
+    assert args["train"]["minibatch_size"] == 4
+    assert fake.agent_perm.tolist() == [0, 1, 2, 3]
     assert fake.render_calls == 2
     assert fake.rollout_calls == 2
 

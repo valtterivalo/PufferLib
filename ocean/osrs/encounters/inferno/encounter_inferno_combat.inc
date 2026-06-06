@@ -99,8 +99,6 @@ static void inf_compute_manual_spell_stats(
         inf_player_spell_fight_style(&s->player),
         inf_spell_base_damage(spell),
         out);
-    out->attack_speed = 5;
-    out->attack_range = 10;
 }
 
 static int inf_resolve_player_attack_ctx(
@@ -137,8 +135,6 @@ static int inf_resolve_player_attack_ctx(
 
     out->spell = autocast_spell;
     out->is_barrage = 1;
-    out->stats.attack_speed = 5;
-    out->stats.attack_range = 10;
     return 1;
 }
 
@@ -222,15 +218,14 @@ static int inf_player_can_attack_npc_from_current_tile(
     if (!npc->active || npc->death_ticks != 0 || npc->hp <= 0) return 0;
 
     const EncounterLoadoutStats* ls = &s->loadout_stats[s->weapon_set];
-    return encounter_player_can_attack(
-        s->player.x,
-        s->player.y,
-        npc->x,
-        npc->y,
-        npc->size,
-        ls->attack_range,
-        s->los_blockers,
-        s->los_blocker_count);
+    OsrsAttackReachQuery reach = {
+        .source = osrs_footprint(s->player.x, s->player.y, 1),
+        .target = osrs_footprint(npc->x, npc->y, inf_npc_footprint_size(npc)),
+        .delivery = encounter_attack_delivery_from_style(ls->style),
+        .range = ls->attack_range,
+        .occlusion = inf_projectile_occlusion(s),
+    };
+    return osrs_attack_can_reach(&reach);
 }
 
 static int inf_player_can_phantom_barrage_npc(
@@ -247,15 +242,14 @@ static int inf_player_can_phantom_barrage_npc(
 
     if (!inf_player_has_any_barrage_spell_available(s)) return 0;
 
-    return encounter_player_can_attack(
-        s->player.x,
-        s->player.y,
-        npc->x,
-        npc->y,
-        npc->size,
-        10,
-        s->los_blockers,
-        s->los_blocker_count);
+    OsrsAttackReachQuery reach = {
+        .source = osrs_footprint(s->player.x, s->player.y, 1),
+        .target = osrs_footprint(npc->x, npc->y, inf_npc_footprint_size(npc)),
+        .delivery = OSRS_ATTACK_DELIVERY_PROJECTILE,
+        .range = 10,
+        .occlusion = inf_projectile_occlusion(s),
+    };
+    return osrs_attack_can_reach(&reach);
 }
 
 static int inf_npc_is_phantom_barrage_obs_candidate(
@@ -572,11 +566,14 @@ static void inf_npc_attack_ctx(InfernoState* s, InfernoContext* ctx, int idx) {
         }
         /* if player has tagged this healer, it only attacks on cardinal melee
            contact. diagonal corners do not count. */
-        if (entity_has_line_of_sight(
-                s->los_blockers, s->los_blocker_count,
-                npc->x, npc->y, 1,
-                s->player.x, s->player.y, 1,
-                1)) {
+        OsrsAttackReachQuery healer_reach = {
+            .source = osrs_footprint(npc->x, npc->y, 1),
+            .target = osrs_footprint(s->player.x, s->player.y, 1),
+            .delivery = OSRS_ATTACK_DELIVERY_MELEE,
+            .range = 1,
+            .occlusion = inf_projectile_occlusion(s),
+        };
+        if (osrs_attack_can_reach(&healer_reach)) {
             int max_hit = osrs_npc_melee_max_hit(stats->str_level, stats->melee_str_bonus);
             int dmg = encounter_rand_int(&s->rng_state, max_hit + 1);
             /* accuracy roll */

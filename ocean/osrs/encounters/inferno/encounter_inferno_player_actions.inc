@@ -91,12 +91,18 @@ static int inf_lookup_player_attack_target(
     const EncounterLoadoutStats* ls = has_attack
         ? &attack.stats
         : inf_current_loadout_stats(s, ctx);
+    int use_reference_seek =
+        npc->type == INF_NPC_HEALER_ZUK;
+    int target_size = inf_npc_footprint_size(npc);
     *out = (OsrsAttackTarget){
         .slot = target_slot,
         .x = npc->x,
         .y = npc->y,
-        .size = npc->size,
-        .attack_range = ls->attack_range,
+        .size = target_size,
+        .attack_range = use_reference_seek ? 1 : ls->attack_range,
+        .delivery = use_reference_seek
+            ? OSRS_ATTACK_DELIVERY_MELEE
+            : encounter_attack_delivery_from_style(ls->style),
     };
     return 1;
 }
@@ -676,8 +682,7 @@ static void inf_tick_player_ctx(
             .walkable_ctx = &wc,
             .extra_blocked = inf_pathfind_blocked,
             .blocked_ctx = &wc,
-            .los_blockers = s->los_blockers,
-            .los_blocker_count = s->los_blocker_count,
+            .projectile_occlusion = inf_projectile_occlusion(s),
             .arena_base_x = INF_ARENA_MIN_X,
             .arena_base_y = INF_ARENA_MIN_Y,
             .arena_w = INF_ARENA_WIDTH,
@@ -699,9 +704,21 @@ static void inf_tick_player_ctx(
             InfNPC* target_npc = &s->npcs[s->interaction.target_slot];
             InfPlayerAttack healer_attack;
             int has_healer_attack = inf_resolve_player_attack_ctx(s, ctx, manual_spell, &healer_attack);
-            if (has_healer_attack && encounter_player_can_attack(s->player.x, s->player.y,
-                    target_npc->x, target_npc->y, target_npc->size,
-                    healer_attack.stats.attack_range, s->los_blockers, s->los_blocker_count)) {
+            int healer_reachable = 0;
+            if (has_healer_attack) {
+                OsrsAttackReachQuery healer_reach = {
+                    .source = osrs_footprint(s->player.x, s->player.y, 1),
+                    .target = osrs_footprint(
+                        target_npc->x,
+                        target_npc->y,
+                        inf_npc_footprint_size(target_npc)),
+                    .delivery = encounter_attack_delivery_from_style(healer_attack.stats.style),
+                    .range = healer_attack.stats.attack_range,
+                    .occlusion = inf_projectile_occlusion(s),
+                };
+                healer_reachable = osrs_attack_can_reach(&healer_reach);
+            }
+            if (healer_reachable) {
                 s->total_zuk_healer_attackable_ticks++;
             } else {
                 s->total_zuk_healer_out_of_range_ticks++;
@@ -723,9 +740,18 @@ static void inf_tick_player_ctx(
 
             if (target_npc->death_ticks > 0 && !is_manual_dying_barrage) {
                 osrs_interaction_clear(&s->interaction);
-            } else if (has_attack && encounter_player_can_attack(s->player.x, s->player.y,
-                    target_npc->x, target_npc->y, target_npc->size,
-                    ls->attack_range, s->los_blockers, s->los_blocker_count)) {
+            } else if (has_attack) {
+                OsrsAttackReachQuery attack_reach = {
+                    .source = osrs_footprint(s->player.x, s->player.y, 1),
+                    .target = osrs_footprint(
+                        target_npc->x,
+                        target_npc->y,
+                        inf_npc_footprint_size(target_npc)),
+                    .delivery = encounter_attack_delivery_from_style(ls->style),
+                    .range = ls->attack_range,
+                    .occlusion = inf_projectile_occlusion(s),
+                };
+                if (osrs_attack_can_reach(&attack_reach)) {
                 int is_blowpipe_spec_attack = weapon_is_blowpipe &&
                     s->player.spec_armed && s->player.special_energy >= BLOWPIPE_SPEC_COST;
                 EncounterProjectileDistanceMode distance_mode = is_magic_attack
@@ -928,6 +954,7 @@ static void inf_tick_player_ctx(
                 }
                 if (target_npc->death_ticks > 0)
                     osrs_interaction_clear(&s->interaction);
+                }
             }
         }
     }
