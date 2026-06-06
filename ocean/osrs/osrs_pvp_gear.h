@@ -417,6 +417,11 @@ static inline int apply_loadout(Player* p, int loadout) {
  */
 static inline int is_loadout_active(Player* p, int loadout) {
     if (loadout <= LOADOUT_KEEP || loadout > LOADOUT_GMAUL) return 0;
+    if ((loadout == LOADOUT_SPEC_MELEE || loadout == LOADOUT_SPEC_RANGE ||
+            loadout == LOADOUT_SPEC_MAGIC || loadout == LOADOUT_GMAUL) &&
+            !pvp_loadout_can_arm_spec(p, loadout)) {
+        return 0;
+    }
 
     uint8_t resolved[NUM_DYNAMIC_GEAR_SLOTS];
     resolve_loadout(p, loadout, resolved);
