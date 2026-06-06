@@ -1142,13 +1142,13 @@ static inline OsrsAttackReachQuery pvp_attack_reach_query(
             fprintf(stderr, "invalid PvP attack reach style: %d\n", style);
             abort();
     }
-    return (OsrsAttackReachQuery){
-        .source = osrs_footprint(attacker->x, attacker->y, 1),
-        .target = osrs_footprint(defender->x, defender->y, 1),
-        .delivery = delivery,
-        .range = range,
-        .occlusion = osrs_projectile_occlusion_collision_map(cmap, 0),
-    };
+    OsrsAttackReachQuery query;
+    query.source = osrs_footprint(attacker->x, attacker->y, 1);
+    query.target = osrs_footprint(defender->x, defender->y, 1);
+    query.delivery = delivery;
+    query.range = range;
+    query.occlusion = osrs_projectile_occlusion_collision_map(cmap, 0);
+    return query;
 }
 // ATTACK EXECUTION (uses osrs_resolve_spec + osrs_resolve_bolt_proc)
 
@@ -1395,31 +1395,35 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
     }
 
 post_attack:;
-    OsrsPlayerAttackProfile attack_profile = is_special && spec_item_idx != ITEM_NONE
-        ? osrs_player_attack_profile_for_special(
+    OsrsPlayerAttackProfile attack_profile;
+    if (is_special && spec_item_idx != ITEM_NONE) {
+        attack_profile = osrs_player_attack_profile_for_special(
             attacker->equipped[GEAR_SLOT_WEAPON],
             style,
             attacker->fight_style,
             spec_item_idx,
-            resolved_spec)
-        : osrs_player_attack_profile(&(OsrsPlayerAttackProfileQuery){
-            .weapon_item = attacker->equipped[GEAR_SLOT_WEAPON],
-            .action_kind = osrs_player_attack_action_kind(
-                attacker->equipped[GEAR_SLOT_WEAPON],
-                style,
-                style == ATTACK_STYLE_MAGIC && magic_type != 0 ? 30 : 0),
-            .action_style = style,
-            .fight_style = attacker->fight_style,
-            .magic_kind = style == ATTACK_STYLE_MAGIC
-                ? (magic_type == 1
-                    ? OSRS_MAGIC_ATTACK_ANCIENT_ICE
-                    : magic_type == 2
-                        ? OSRS_MAGIC_ATTACK_ANCIENT_BLOOD
-                        : OSRS_MAGIC_ATTACK_NONE)
-                : OSRS_MAGIC_ATTACK_NONE,
-            .special_item = ITEM_NONE,
-            .special_result = {0},
-        });
+            resolved_spec);
+    } else {
+        SpecResult no_spec = {0};
+        OsrsPlayerAttackProfileQuery profile_query;
+        profile_query.weapon_item = attacker->equipped[GEAR_SLOT_WEAPON];
+        profile_query.action_kind = osrs_player_attack_action_kind(
+            attacker->equipped[GEAR_SLOT_WEAPON],
+            style,
+            style == ATTACK_STYLE_MAGIC && magic_type != 0 ? 30 : 0);
+        profile_query.action_style = style;
+        profile_query.fight_style = attacker->fight_style;
+        profile_query.magic_kind = style == ATTACK_STYLE_MAGIC
+            ? (magic_type == 1
+                ? OSRS_MAGIC_ATTACK_ANCIENT_ICE
+                : magic_type == 2
+                    ? OSRS_MAGIC_ATTACK_ANCIENT_BLOOD
+                    : OSRS_MAGIC_ATTACK_NONE)
+            : OSRS_MAGIC_ATTACK_NONE;
+        profile_query.special_item = ITEM_NONE;
+        profile_query.special_result = no_spec;
+        attack_profile = osrs_player_attack_profile(&profile_query);
+    }
     attacker->just_attacked = 1;
     attacker->last_attack_style = attack_profile.damage_style;
     attacker->attack_style_this_tick = attack_profile.visual_style;
