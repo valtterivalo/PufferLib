@@ -233,6 +233,27 @@ def _filter_sweep_observation_series(scores, costs, timesteps):
         out_timesteps.append(timestep_scalar)
     return out_scores, out_costs, out_timesteps
 
+PVP_FIXED_EVAL_KEYS = (
+    'env/wins',
+    'env/damage_dealt',
+    'env/damage_received',
+    'env/expected_damage_dealt',
+    'env/expected_damage_received',
+    'env/expected_damage_diff',
+    'env/expected_damage_score',
+    'env/ko_supply_score',
+    'env/performance_score',
+    'env/episode_return',
+    'env/episode_length',
+    'env/prayer_correct_rate',
+    'env/food_remaining',
+    'env/karambwan_remaining',
+    'env/brews_remaining',
+    'env/spec_remaining',
+    'env/attacks_landed',
+    'env/off_prayer_hits',
+)
+
 def _fixed_eval_enabled(args):
     return bool(args.get('fixed_eval', {}).get('enabled', 0))
 
@@ -264,11 +285,7 @@ def _fixed_eval_args(args, opponent, seed):
     env['seed'] = int(seed)
     return eval_args
 
-def _collect_pvp_fixed_eval_opponent(backend, args, model_path, opponent, episodes, seed):
-    eval_args = _fixed_eval_args(args, opponent, seed)
-    pufferl = backend.create_pufferl(eval_args)
-    backend.load_weights(pufferl, model_path)
-
+def _collect_pvp_eval_means(backend, pufferl, episodes):
     total_n = 0.0
     sums = defaultdict(float)
     while total_n < episodes:
@@ -278,29 +295,10 @@ def _collect_pvp_fixed_eval_opponent(backend, args, model_path, opponent, episod
         if n <= 0.0:
             continue
         total_n += n
-        for key in (
-                'env/wins',
-                'env/damage_dealt',
-                'env/damage_received',
-                'env/expected_damage_dealt',
-                'env/expected_damage_received',
-                'env/expected_damage_diff',
-                'env/expected_damage_score',
-                'env/ko_supply_score',
-                'env/performance_score',
-                'env/episode_return',
-                'env/episode_length',
-                'env/prayer_correct_rate',
-                'env/food_remaining',
-                'env/karambwan_remaining',
-                'env/brews_remaining',
-                'env/spec_remaining',
-                'env/attacks_landed',
-                'env/off_prayer_hits'):
+        for key in PVP_FIXED_EVAL_KEYS:
             if key in flat:
                 sums[key] += float(flat[key]) * n
 
-    backend.close(pufferl)
     means = {key: value / total_n for key, value in sums.items()}
     wins = means.get('env/wins', 0.0)
     damage_dealt = means.get('env/damage_dealt', 0.0)
@@ -321,16 +319,98 @@ def _collect_pvp_fixed_eval_opponent(backend, args, model_path, opponent, episod
     means['env/n'] = total_n
     return means
 
+def _collect_pvp_fixed_eval_opponent(backend, args, model_path, opponent, episodes, seed):
+    eval_args = _fixed_eval_args(args, opponent, seed)
+    pufferl = backend.create_pufferl(eval_args)
+    backend.load_weights(pufferl, model_path)
+    means = _collect_pvp_eval_means(backend, pufferl, episodes)
+    backend.close(pufferl)
+    return means
+
+def _set_two_policy_eval_perm(backend, pufferl, total_agents, num_buffers):
+    agents_per_buffer = total_agents // num_buffers
+    half = agents_per_buffer // 2
+    if 2 * half != agents_per_buffer:
+        raise RuntimeError(f'agents_per_buffer ({agents_per_buffer}) must be even for 2-agent eval')
+
+    perm = np.empty(total_agents, dtype=np.int32)
+    for b in range(num_buffers):
+        off = b * agents_per_buffer
+        for i in range(half):
+            perm[off + 2*i] = off + i
+            perm[off + 2*i + 1] = off + half + i
+    backend.set_agent_perm(pufferl, perm)
+
+def _fixed_eval_policy_args(args, seed):
+    eval_args = _fixed_eval_args(args, 0, seed)
+    cfg = eval_args.get('fixed_eval', {})
+    eval_args['env']['use_rollout_opponent'] = 1
+    eval_args['vec']['num_frozen_banks'] = 1
+    eval_args['vec']['frozen_bank_pct'] = 0.5
+    if cfg.get('policy_opponent_hidden_size'):
+        eval_args['vec']['frozen_bank_hidden_size'] = int(cfg['policy_opponent_hidden_size'])
+    if cfg.get('policy_opponent_num_layers'):
+        eval_args['vec']['frozen_bank_num_layers'] = int(cfg['policy_opponent_num_layers'])
+    return eval_args
+
+def _repo_relative_path(path):
+    if os.path.isabs(path):
+        return path
+    repo_dir = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+    return os.path.join(repo_dir, path)
+
+def _collect_pvp_fixed_eval_policy_opponent(backend, args, model_path, policy_path, episodes, seed):
+    policy_path = _repo_relative_path(policy_path)
+    if not os.path.exists(policy_path):
+        raise FileNotFoundError(f'fixed_eval.policy_opponent_path not found: {policy_path}')
+
+    eval_args = _fixed_eval_policy_args(args, seed)
+    pufferl = backend.create_pufferl(eval_args)
+    _set_two_policy_eval_perm(
+        backend,
+        pufferl,
+        int(eval_args['vec']['total_agents']),
+        int(eval_args['vec']['num_buffers']),
+    )
+    backend.load_weights(pufferl, model_path)
+    backend.load_frozen_bank(pufferl, 0, policy_path)
+    means = _collect_pvp_eval_means(backend, pufferl, episodes)
+    backend.close(pufferl)
+    return means
+
+def _fixed_eval_log_suffix(value):
+    suffix = ''.join(ch if ch.isalnum() else '_' for ch in str(value).strip())
+    suffix = suffix.strip('_').lower()
+    return suffix or 'policy'
+
+def _write_pvp_fixed_eval_means(logs, prefix, means):
+    logs[f'{prefix}_score'] = means['env/score']
+    logs[f'{prefix}_performance_score'] = means['env/performance_score']
+    logs[f'{prefix}_wins'] = means['env/wins']
+    logs[f'{prefix}_dmg_diff_score'] = means['env/dmg_diff_score']
+    logs[f'{prefix}_expected_damage_score'] = means['env/expected_damage_score']
+    logs[f'{prefix}_expected_damage_diff'] = means['env/expected_damage_diff']
+    logs[f'{prefix}_expected_damage_dealt'] = means.get('env/expected_damage_dealt', 0.0)
+    logs[f'{prefix}_expected_damage_received'] = means.get('env/expected_damage_received', 0.0)
+    logs[f'{prefix}_ko_supply_score'] = means['env/ko_supply_score']
+    logs[f'{prefix}_damage_dealt'] = means.get('env/damage_dealt', 0.0)
+    logs[f'{prefix}_damage_received'] = means.get('env/damage_received', 0.0)
+    logs[f'{prefix}_n'] = means['env/n']
+
 def _run_pvp_fixed_eval_suite(backend, args, model_path):
     cfg = args.get('fixed_eval', {})
     opponents = _config_sequence(cfg, 'opponents', int)
-    if not opponents:
-        raise ValueError('fixed_eval.enabled requires fixed_eval.opponents')
+    policy_opponent_path = str(cfg.get('policy_opponent_path', '')).strip()
+    if not opponents and not policy_opponent_path:
+        raise ValueError('fixed_eval.enabled requires fixed_eval.opponents or fixed_eval.policy_opponent_path')
     weights = _config_sequence(cfg, 'opponent_weights', float)
     if weights and len(weights) != len(opponents):
         raise ValueError('fixed_eval.opponent_weights length must match opponents')
     if not weights:
         weights = [1.0] * len(opponents)
+    policy_opponent_weight = float(cfg.get('policy_opponent_weight', 1.0))
+    if policy_opponent_path and policy_opponent_weight <= 0.0:
+        raise ValueError('fixed_eval.policy_opponent_weight must be positive')
 
     episodes = int(cfg.get('episodes_per_opponent', 2048))
     if episodes <= 0:
@@ -347,18 +427,7 @@ def _run_pvp_fixed_eval_suite(backend, args, model_path):
         means = _collect_pvp_fixed_eval_opponent(
             backend, args, model_path, opponent, episodes, seed + 100_000 * idx)
         prefix = f'env/fixed_eval_opp_{opponent}'
-        logs[f'{prefix}_score'] = means['env/score']
-        logs[f'{prefix}_performance_score'] = means['env/performance_score']
-        logs[f'{prefix}_wins'] = means['env/wins']
-        logs[f'{prefix}_dmg_diff_score'] = means['env/dmg_diff_score']
-        logs[f'{prefix}_expected_damage_score'] = means['env/expected_damage_score']
-        logs[f'{prefix}_expected_damage_diff'] = means['env/expected_damage_diff']
-        logs[f'{prefix}_expected_damage_dealt'] = means.get('env/expected_damage_dealt', 0.0)
-        logs[f'{prefix}_expected_damage_received'] = means.get('env/expected_damage_received', 0.0)
-        logs[f'{prefix}_ko_supply_score'] = means['env/ko_supply_score']
-        logs[f'{prefix}_damage_dealt'] = means.get('env/damage_dealt', 0.0)
-        logs[f'{prefix}_damage_received'] = means.get('env/damage_received', 0.0)
-        logs[f'{prefix}_n'] = means['env/n']
+        _write_pvp_fixed_eval_means(logs, prefix, means)
         scores.append(means['env/score'])
         wins.append(means['env/wins'])
         dmg_scores.append(means['env/dmg_diff_score'])
@@ -367,23 +436,43 @@ def _run_pvp_fixed_eval_suite(backend, args, model_path):
         ko_supply_scores.append(means['env/ko_supply_score'])
         ns.append(means['env/n'])
 
+    if opponents:
+        logs['env/fixed_eval_scripted_score'] = _weighted_mean(scores, weights)
+        logs['env/fixed_eval_scripted_performance_score'] = _weighted_mean(
+            performance_scores, weights)
+        logs['env/fixed_eval_scripted_wins'] = _weighted_mean(wins, weights)
+
+    if policy_opponent_path:
+        policy_name = _fixed_eval_log_suffix(cfg.get('policy_opponent_name', 'policy'))
+        means = _collect_pvp_fixed_eval_policy_opponent(
+            backend,
+            args,
+            model_path,
+            policy_opponent_path,
+            episodes,
+            seed + 9_000_000,
+        )
+        prefix = f'env/fixed_eval_policy_{policy_name}'
+        _write_pvp_fixed_eval_means(logs, prefix, means)
+        logs['env/fixed_eval_policy_score'] = means['env/score']
+        logs['env/fixed_eval_policy_performance_score'] = means['env/performance_score']
+        logs['env/fixed_eval_policy_wins'] = means['env/wins']
+        logs['env/fixed_eval_policy_weight'] = policy_opponent_weight
+        scores.append(means['env/score'])
+        wins.append(means['env/wins'])
+        dmg_scores.append(means['env/dmg_diff_score'])
+        performance_scores.append(means['env/performance_score'])
+        expected_scores.append(means['env/expected_damage_score'])
+        ko_supply_scores.append(means['env/ko_supply_score'])
+        ns.append(means['env/n'])
+        weights.append(policy_opponent_weight)
+
     holdout_scores, holdout_wins, holdout_performance_scores = [], [], []
     for idx, opponent in enumerate(_config_sequence(cfg, 'holdout_opponents', int)):
         means = _collect_pvp_fixed_eval_opponent(
             backend, args, model_path, opponent, episodes, seed + 10_000_000 + 100_000 * idx)
         prefix = f'env/fixed_eval_holdout_opp_{opponent}'
-        logs[f'{prefix}_score'] = means['env/score']
-        logs[f'{prefix}_performance_score'] = means['env/performance_score']
-        logs[f'{prefix}_wins'] = means['env/wins']
-        logs[f'{prefix}_dmg_diff_score'] = means['env/dmg_diff_score']
-        logs[f'{prefix}_expected_damage_score'] = means['env/expected_damage_score']
-        logs[f'{prefix}_expected_damage_diff'] = means['env/expected_damage_diff']
-        logs[f'{prefix}_expected_damage_dealt'] = means.get('env/expected_damage_dealt', 0.0)
-        logs[f'{prefix}_expected_damage_received'] = means.get('env/expected_damage_received', 0.0)
-        logs[f'{prefix}_ko_supply_score'] = means['env/ko_supply_score']
-        logs[f'{prefix}_damage_dealt'] = means.get('env/damage_dealt', 0.0)
-        logs[f'{prefix}_damage_received'] = means.get('env/damage_received', 0.0)
-        logs[f'{prefix}_n'] = means['env/n']
+        _write_pvp_fixed_eval_means(logs, prefix, means)
         holdout_scores.append(means['env/score'])
         holdout_wins.append(means['env/wins'])
         holdout_performance_scores.append(means['env/performance_score'])
@@ -826,14 +915,7 @@ def match(env_name, policy_a_path, policy_b_path, num_games=4096, args=None, ver
 
     pufferl = backend.create_pufferl(args)
 
-    perm = np.empty(total_agents, dtype=np.int32)
-    envs_per_buffer = half
-    for b in range(num_buffers):
-        off = b * agents_per_buffer
-        for i in range(envs_per_buffer):
-            perm[off + 2*i]     = off + i
-            perm[off + 2*i + 1] = off + half + i
-    backend.set_agent_perm(pufferl, perm)
+    _set_two_policy_eval_perm(backend, pufferl, total_agents, num_buffers)
 
     backend.load_weights(pufferl, policy_a_path)
     backend.load_frozen_bank(pufferl, 0, policy_b_path)

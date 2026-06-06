@@ -72,6 +72,52 @@ class FakeMatchBackend:
         self.closed = True
 
 
+class FakeFixedEvalBackend:
+    env_name = "osrs_pvp"
+
+    def __init__(self) -> None:
+        self.created_args = []
+        self.loaded_weights = []
+        self.loaded_banks = []
+        self.agent_perms = []
+        self.closed = 0
+
+    def create_pufferl(self, args):
+        copied = deepcopy(args)
+        self.created_args.append(copied)
+        return SimpleNamespace(args=copied, rollouts=0)
+
+    def set_agent_perm(self, pufferl_obj, perm):
+        self.agent_perms.append(np.asarray(perm, dtype=np.int32))
+
+    def load_weights(self, pufferl_obj, path):
+        self.loaded_weights.append(path)
+
+    def load_frozen_bank(self, pufferl_obj, bank_idx, path):
+        self.loaded_banks.append((bank_idx, path))
+
+    def rollouts(self, pufferl_obj):
+        pufferl_obj.rollouts += 1
+
+    def log(self, pufferl_obj):
+        env_args = pufferl_obj.args["env"]
+        learned_policy_eval = bool(env_args["use_rollout_opponent"])
+        performance_score = 1.0 if learned_policy_eval else 0.5
+        wins = 1.0 if learned_policy_eval else 0.5
+        return {
+            "env": {
+                "n": 1.0,
+                "wins": wins,
+                "expected_damage_score": performance_score,
+                "ko_supply_score": 0.0,
+                "performance_score": performance_score,
+            }
+        }
+
+    def close(self, pufferl_obj):
+        self.closed += 1
+
+
 def match_args(render_mode: str = "auto") -> dict:
     return {
         "env_name": "osrs_pvp",
@@ -168,3 +214,77 @@ def test_match_zero_games_runs_until_external_stop(monkeypatch):
 
     assert fake.render_calls == 3
     assert fake.rollout_calls == 3
+
+
+def fixed_eval_args(policy_path: str) -> dict:
+    return {
+        "env_name": "osrs_pvp",
+        "wandb": False,
+        "checkpoint_interval": 0,
+        "reset_state": True,
+        "fixed_eval": {
+            "enabled": 1,
+            "episodes_per_opponent": 2,
+            "total_agents": 8,
+            "num_buffers": 2,
+            "horizon": 4,
+            "seed": 424242,
+            "opponents": [1],
+            "opponent_weights": [3],
+            "policy_opponent_path": policy_path,
+            "policy_opponent_name": "latest selfplay",
+            "policy_opponent_weight": 1,
+            "policy_opponent_hidden_size": 2048,
+            "policy_opponent_num_layers": 2,
+            "holdout_opponents": [],
+        },
+        "selfplay": {
+            "enabled": 1,
+        },
+        "env": {
+            "seed": 73,
+            "opponent_type": 0,
+            "use_rollout_opponent": 1,
+        },
+        "vec": {
+            "total_agents": 4096,
+            "num_buffers": 2,
+            "num_frozen_banks": 2,
+            "frozen_bank_pct": 0.005,
+        },
+        "train": {
+            "horizon": 8,
+            "minibatch_size": 16384,
+            "cpu_inference": 0,
+        },
+    }
+
+
+def test_fixed_eval_can_include_one_learned_policy_opponent(tmp_path):
+    policy_path = tmp_path / "policy.bin"
+    policy_path.write_bytes(b"policy")
+    fake = FakeFixedEvalBackend()
+
+    logs = pufferl._run_pvp_fixed_eval_suite(
+        fake,
+        fixed_eval_args(str(policy_path)),
+        "candidate.bin",
+    )
+
+    assert logs["env/fixed_eval_scripted_performance_score"] == pytest.approx(0.5)
+    assert logs["env/fixed_eval_policy_latest_selfplay_performance_score"] == pytest.approx(1.0)
+    assert logs["env/fixed_eval_policy_performance_score"] == pytest.approx(1.0)
+    assert logs["env/fixed_eval_performance_score"] == pytest.approx(0.625)
+    assert fake.loaded_weights == ["candidate.bin", "candidate.bin"]
+    assert fake.loaded_banks == [(0, str(policy_path))]
+    assert fake.closed == 2
+
+    policy_args = fake.created_args[1]
+    assert policy_args["selfplay"]["enabled"] == 0
+    assert policy_args["env"]["use_rollout_opponent"] == 1
+    assert policy_args["vec"]["num_frozen_banks"] == 1
+    assert policy_args["vec"]["frozen_bank_pct"] == 0.5
+    assert policy_args["vec"]["frozen_bank_hidden_size"] == 2048
+    assert policy_args["vec"]["frozen_bank_num_layers"] == 2
+    assert policy_args["train"]["cpu_inference"] == 1
+    assert fake.agent_perms[0].tolist() == [0, 2, 1, 3, 4, 6, 5, 7]
