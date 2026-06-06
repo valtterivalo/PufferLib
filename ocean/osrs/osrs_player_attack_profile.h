@@ -204,19 +204,19 @@ static inline OsrsPlayerAttackProfile osrs_player_attack_profile(
         damage_style = ATTACK_STYLE_MAGIC;
     }
 
-    return (OsrsPlayerAttackProfile){
-        .cooldown_kind = cooldown_kind,
-        .cycle_ticks = cooldown_kind == OSRS_PLAYER_ATTACK_COOLDOWN_NONE
-            ? 0
-            : cycle_ticks,
-        .post_action_timer = cooldown_kind == OSRS_PLAYER_ATTACK_COOLDOWN_NONE
-            ? 0
-            : cycle_ticks - 1,
-        .range = osrs_player_attack_base_range(query),
-        .delivery = osrs_player_attack_delivery_from_style(query->action_style),
-        .visual_style = query->action_style,
-        .damage_style = damage_style,
-    };
+    OsrsPlayerAttackProfile out;
+    out.cooldown_kind = cooldown_kind;
+    out.cycle_ticks = cooldown_kind == OSRS_PLAYER_ATTACK_COOLDOWN_NONE
+        ? 0
+        : cycle_ticks;
+    out.post_action_timer = cooldown_kind == OSRS_PLAYER_ATTACK_COOLDOWN_NONE
+        ? 0
+        : cycle_ticks - 1;
+    out.range = osrs_player_attack_base_range(query);
+    out.delivery = osrs_player_attack_delivery_from_style(query->action_style);
+    out.visual_style = query->action_style;
+    out.damage_style = damage_style;
+    return out;
 }
 
 static inline OsrsPlayerAttackProfile osrs_player_attack_profile_for_loadout(
@@ -226,16 +226,16 @@ static inline OsrsPlayerAttackProfile osrs_player_attack_profile_for_loadout(
     int spell_base_damage
 ) {
     uint8_t weapon = loadout[GEAR_SLOT_WEAPON];
-    OsrsPlayerAttackProfileQuery query = {
-        .weapon_item = weapon,
-        .action_kind = osrs_player_attack_action_kind(
-            weapon, style, spell_base_damage),
-        .action_style = style,
-        .fight_style = fight_style,
-        .magic_kind = OSRS_MAGIC_ATTACK_NONE,
-        .special_item = ITEM_NONE,
-        .special_result = {0},
-    };
+    SpecResult no_spec = {0};
+    OsrsPlayerAttackProfileQuery query;
+    query.weapon_item = weapon;
+    query.action_kind = osrs_player_attack_action_kind(
+        weapon, style, spell_base_damage);
+    query.action_style = style;
+    query.fight_style = fight_style;
+    query.magic_kind = OSRS_MAGIC_ATTACK_NONE;
+    query.special_item = ITEM_NONE;
+    query.special_result = no_spec;
     return osrs_player_attack_profile(&query);
 }
 
@@ -246,15 +246,14 @@ static inline OsrsPlayerAttackProfile osrs_player_attack_profile_for_special(
     int special_item,
     SpecResult special_result
 ) {
-    OsrsPlayerAttackProfileQuery query = {
-        .weapon_item = current_weapon,
-        .action_kind = OSRS_PLAYER_ATTACK_ACTION_SPECIAL,
-        .action_style = action_style,
-        .fight_style = fight_style,
-        .magic_kind = OSRS_MAGIC_ATTACK_NONE,
-        .special_item = special_item,
-        .special_result = special_result,
-    };
+    OsrsPlayerAttackProfileQuery query;
+    query.weapon_item = current_weapon;
+    query.action_kind = OSRS_PLAYER_ATTACK_ACTION_SPECIAL;
+    query.action_style = action_style;
+    query.fight_style = fight_style;
+    query.magic_kind = OSRS_MAGIC_ATTACK_NONE;
+    query.special_item = special_item;
+    query.special_result = special_result;
     return osrs_player_attack_profile(&query);
 }
 

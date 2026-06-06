@@ -49,39 +49,39 @@ typedef enum {
 } OsrsAttackReachResult;
 
 static inline OsrsFootprint osrs_footprint(int x, int y, int size) {
-    return (OsrsFootprint){.x = x, .y = y, .size = size};
+    OsrsFootprint out;
+    out.x = x;
+    out.y = y;
+    out.size = size;
+    return out;
 }
 
 static inline OsrsProjectileOcclusion osrs_projectile_occlusion_open(void) {
-    return (OsrsProjectileOcclusion){
-        .kind = OSRS_PROJECTILE_OCCLUSION_OPEN,
-    };
+    OsrsProjectileOcclusion out;
+    out.kind = OSRS_PROJECTILE_OCCLUSION_OPEN;
+    return out;
 }
 
 static inline OsrsProjectileOcclusion osrs_projectile_occlusion_los_blockers(
     const LOSBlocker* blockers,
     int count
 ) {
-    return (OsrsProjectileOcclusion){
-        .kind = OSRS_PROJECTILE_OCCLUSION_LOS_BLOCKERS,
-        .data.blockers = {
-            .blockers = blockers,
-            .count = count,
-        },
-    };
+    OsrsProjectileOcclusion out;
+    out.kind = OSRS_PROJECTILE_OCCLUSION_LOS_BLOCKERS;
+    out.data.blockers.blockers = blockers;
+    out.data.blockers.count = count;
+    return out;
 }
 
 static inline OsrsProjectileOcclusion osrs_projectile_occlusion_collision_map(
     const CollisionMap* map,
     int height
 ) {
-    return (OsrsProjectileOcclusion){
-        .kind = OSRS_PROJECTILE_OCCLUSION_COLLISION_MAP,
-        .data.collision = {
-            .map = map,
-            .height = height,
-        },
-    };
+    OsrsProjectileOcclusion out;
+    out.kind = OSRS_PROJECTILE_OCCLUSION_COLLISION_MAP;
+    out.data.collision.map = map;
+    out.data.collision.height = height;
+    return out;
 }
 
 static inline OsrsProjectileOcclusion osrs_projectile_occlusion_collision_map_and_blockers(
@@ -90,15 +90,13 @@ static inline OsrsProjectileOcclusion osrs_projectile_occlusion_collision_map_an
     const LOSBlocker* blockers,
     int blocker_count
 ) {
-    return (OsrsProjectileOcclusion){
-        .kind = OSRS_PROJECTILE_OCCLUSION_COLLISION_MAP_AND_BLOCKERS,
-        .data.combined = {
-            .map = map,
-            .height = height,
-            .blockers = blockers,
-            .blocker_count = blocker_count,
-        },
-    };
+    OsrsProjectileOcclusion out;
+    out.kind = OSRS_PROJECTILE_OCCLUSION_COLLISION_MAP_AND_BLOCKERS;
+    out.data.combined.map = map;
+    out.data.combined.height = height;
+    out.data.combined.blockers = blockers;
+    out.data.combined.blocker_count = blocker_count;
+    return out;
 }
 
 static inline void osrs_footprint_require_valid(OsrsFootprint footprint) {

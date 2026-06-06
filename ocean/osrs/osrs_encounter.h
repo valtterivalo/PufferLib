@@ -834,13 +834,13 @@ static inline OsrsAttackReachQuery encounter_attack_reach_query_from_tile(
         fprintf(stderr, "attack reach query source is missing target or arena\n");
         abort();
     }
-    return (OsrsAttackReachQuery){
-        .source = osrs_footprint(source_x, source_y, 1),
-        .target = osrs_footprint(target->x, target->y, target->size),
-        .delivery = target->delivery,
-        .range = target->attack_range,
-        .occlusion = arena->projectile_occlusion,
-    };
+    OsrsAttackReachQuery query;
+    query.source = osrs_footprint(source_x, source_y, 1);
+    query.target = osrs_footprint(target->x, target->y, target->size);
+    query.delivery = target->delivery;
+    query.range = target->attack_range;
+    query.occlusion = arena->projectile_occlusion;
+    return query;
 }
 
 static inline int encounter_attack_target_can_reach_from_tile(
