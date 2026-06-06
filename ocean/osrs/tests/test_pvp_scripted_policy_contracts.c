@@ -74,13 +74,11 @@ static void set_player_position(Player* player, int x, int y) {
 }
 
 static void set_weapon_inventory(Player* player, const uint8_t* weapons, int count) {
-    memset(player->inventory[GEAR_SLOT_WEAPON], ITEM_NONE,
-        sizeof(player->inventory[GEAR_SLOT_WEAPON]));
-    player->num_items_in_slot[GEAR_SLOT_WEAPON] = (uint8_t)count;
-    for (int i = 0; i < count; i++) {
-        player->inventory[GEAR_SLOT_WEAPON][i] = weapons[i];
+    osrs_player_inventory_clear(player);
+    osrs_player_set_equipment_slot(player, GEAR_SLOT_WEAPON, weapons[0]);
+    for (int i = 1; i < count; i++) {
+        if (osrs_player_inventory_add(player, weapons[i]) < 0) abort();
     }
-    slot_equip_item(player, GEAR_SLOT_WEAPON, weapons[0]);
 }
 
 static void set_basic_hybrid_weapons(Player* player) {

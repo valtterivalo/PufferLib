@@ -39,7 +39,7 @@
  *
  *   gear switching:
  *     encounter_apply_loadout()        memcpy loadout + set gear state
- *     encounter_populate_inventory()   dedup items from multiple loadouts for GUI
+ *     encounter_populate_inventory()   dedup unequipped loadout items for GUI
  *
  *   combat stats:
  *     EncounterLoadoutStats            derived stats (att bonus, max hit, eff level...)
@@ -67,6 +67,7 @@
 #include "osrs_combat.h"
 #include "osrs_consumables.h"
 #include "osrs_item_effects.h"
+#include "osrs_inventory.h"
 #include "osrs_human_input_types.h"
 #include "osrs_attack_reach.h"
 #include "osrs_player_attack_profile.h"
@@ -2030,44 +2031,43 @@ static inline int encounter_use_spec(Player* p, int cost) {
 }
 
 
-/** apply a full static loadout to player equipment and set gear state.
-    used by Zulrah, Inferno, and future boss encounters with fixed loadouts. */
 static inline void encounter_apply_loadout(
     Player* p, const uint8_t loadout[NUM_GEAR_SLOTS], GearSet gear_set
 ) {
     memcpy(p->equipped, loadout, NUM_GEAR_SLOTS);
     p->current_gear = gear_set;
     p->visible_gear = gear_set;
+    osrs_player_refresh_weapon_state(p, p->equipped[GEAR_SLOT_WEAPON]);
     osrs_refresh_player_equipment(p);
 }
 
-/** populate player inventory from multiple loadouts (deduped per slot).
-    extra_items is an optional overlay array (e.g. justiciar for tank), NULL to skip.
-    the GUI reads p->inventory[][] to display available gear switches. */
 static void encounter_populate_inventory(
     Player* p,
     const uint8_t* const* loadouts, int num_loadouts,
     const uint8_t extra_items[NUM_GEAR_SLOTS]
 ) {
-    memset(p->inventory, 255 /* ITEM_NONE */, sizeof(p->inventory));
-    memset(p->num_items_in_slot, 0, sizeof(p->num_items_in_slot));
+    osrs_player_inventory_clear(p);
 
     for (int s = 0; s < NUM_GEAR_SLOTS; s++) {
-        int n = 0;
-        for (int l = 0; l < num_loadouts && n < MAX_ITEMS_PER_SLOT; l++) {
+        for (int l = 0; l < num_loadouts; l++) {
             uint8_t item = loadouts[l][s];
-            if (item == 255 /* ITEM_NONE */) continue;
-            int dup = 0;
-            for (int j = 0; j < n; j++) { if (p->inventory[s][j] == item) { dup = 1; break; } }
-            if (dup) continue;
-            p->inventory[s][n++] = item;
+            if (item == ITEM_NONE || osrs_player_has_equipped_item(p, item) ||
+                    osrs_player_inventory_has_item(p, item)) {
+                continue;
+            }
+            if (osrs_player_inventory_add(p, item) < 0) {
+                fprintf(stderr, "encounter_populate_inventory: inventory full\n");
+                abort();
+            }
         }
-        if (extra_items && extra_items[s] != 255 /* ITEM_NONE */ && n < MAX_ITEMS_PER_SLOT) {
-            int dup = 0;
-            for (int j = 0; j < n; j++) { if (p->inventory[s][j] == extra_items[s]) { dup = 1; break; } }
-            if (!dup) p->inventory[s][n++] = extra_items[s];
+        if (extra_items && extra_items[s] != ITEM_NONE &&
+                !osrs_player_has_equipped_item(p, extra_items[s]) &&
+                !osrs_player_inventory_has_item(p, extra_items[s])) {
+            if (osrs_player_inventory_add(p, extra_items[s]) < 0) {
+                fprintf(stderr, "encounter_populate_inventory: inventory full\n");
+                abort();
+            }
         }
-        p->num_items_in_slot[s] = n;
     }
 }
 

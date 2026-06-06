@@ -626,62 +626,44 @@ static void inf_translate_human_commands_ctx(
 ) {
     for (int h = 0; h < INF_NUM_ACTION_HEADS; h++) actions[h] = 0;
     inf_refresh_current_obs_slots_ctx(s, ctx);
+    OsrsHumanCommandFrame frame =
+        osrs_human_command_frame_from_input(hi, s->player.equipped[GEAR_SLOT_WEAPON]);
 
-    for (int i = 0; i < hi->commands.count; i++) {
-        const HumanCommand* cmd = &hi->commands.items[i];
-        switch (cmd->kind) {
-            case HUMAN_COMMAND_WALK:
-                s->player_dest_x = cmd->world_x;
-                s->player_dest_y = cmd->world_y;
-                actions[INF_HEAD_TARGET] = 0;
-                actions[INF_HEAD_SPELL] = 0;
-                break;
-            case HUMAN_COMMAND_ATTACK_NPC: {
-                int found_slot = inf_find_target_obs_slot(s, cmd->npc_slot);
-                actions[INF_HEAD_TARGET] = inf_obs_slot_is_targetable(s, ctx, found_slot)
-                    ? found_slot + 1 : 0;
-                s->player_dest_x = -1;
-                s->player_dest_y = -1;
-                break;
-            }
-            case HUMAN_COMMAND_SPELL_TARGET: {
-                int found_slot = inf_find_target_obs_slot(s, cmd->npc_slot);
-                actions[INF_HEAD_TARGET] = inf_obs_slot_is_targetable(s, ctx, found_slot)
-                    ? found_slot + 1 : 0;
-                if (cmd->spell == ATTACK_BLOOD) actions[INF_HEAD_SPELL] = 1;
-                else if (cmd->spell == ATTACK_ICE) actions[INF_HEAD_SPELL] = 2;
-                s->player_dest_x = -1;
-                s->player_dest_y = -1;
-                break;
-            }
-            case HUMAN_COMMAND_OVERHEAD_PRAYER:
-                actions[INF_HEAD_PRAYER] = inf_local_overhead_action(cmd->overhead_prayer);
-                break;
-            case HUMAN_COMMAND_OFFENSIVE_PRAYER:
-                actions[INF_HEAD_OFFENSIVE] = cmd->offensive_prayer;
-                break;
-            case HUMAN_COMMAND_EAT:
-                actions[INF_HEAD_EAT] = 1;
-                break;
-            case HUMAN_COMMAND_DRINK:
-                if (cmd->potion == POTION_BREW) actions[INF_HEAD_EAT] = 1;
-                else if (cmd->potion == POTION_RESTORE) actions[INF_HEAD_POTION] = 1;
-                else if (cmd->potion == POTION_BASTION) actions[INF_HEAD_POTION] = 2;
-                else if (cmd->potion == POTION_STAMINA) actions[INF_HEAD_POTION] = 3;
-                break;
-            case HUMAN_COMMAND_SPEC_TOGGLE:
-                actions[INF_HEAD_SPEC] = 1;
-                break;
-            case HUMAN_COMMAND_EQUIP_INVENTORY_ITEM:
-            case HUMAN_COMMAND_FIGHT_STYLE:
-            case HUMAN_COMMAND_SET_AUTOCAST:
-            case HUMAN_COMMAND_ITEM_ON_ITEM:
-            case HUMAN_COMMAND_ITEM_ON_WIDGET:
-            case HUMAN_COMMAND_SPELL_ON_WIDGET:
-            case HUMAN_COMMAND_NONE:
-                break;
-        }
+    if (frame.has_walk) {
+        s->player_dest_x = frame.walk_x;
+        s->player_dest_y = frame.walk_y;
+        actions[INF_HEAD_TARGET] = 0;
+        actions[INF_HEAD_SPELL] = 0;
+    } else if (frame.has_spell_target) {
+        int found_slot = inf_find_target_obs_slot(s, frame.spell_target_slot);
+        actions[INF_HEAD_TARGET] = inf_obs_slot_is_targetable(s, ctx, found_slot)
+            ? found_slot + 1 : 0;
+        if (frame.spell == ATTACK_BLOOD) actions[INF_HEAD_SPELL] = 1;
+        else if (frame.spell == ATTACK_ICE) actions[INF_HEAD_SPELL] = 2;
+        s->player_dest_x = -1;
+        s->player_dest_y = -1;
+    } else if (frame.has_attack_target) {
+        int found_slot = inf_find_target_obs_slot(s, frame.target_slot);
+        actions[INF_HEAD_TARGET] = inf_obs_slot_is_targetable(s, ctx, found_slot)
+            ? found_slot + 1 : 0;
+        s->player_dest_x = -1;
+        s->player_dest_y = -1;
     }
+
+    if (frame.overhead_prayer >= 0)
+        actions[INF_HEAD_PRAYER] = inf_local_overhead_action(frame.overhead_prayer);
+    if (frame.offensive_prayer >= 0)
+        actions[INF_HEAD_OFFENSIVE] = frame.offensive_prayer;
+    if (frame.food || frame.potion == POTION_BREW)
+        actions[INF_HEAD_EAT] = 1;
+    if (frame.potion == POTION_RESTORE)
+        actions[INF_HEAD_POTION] = 1;
+    else if (frame.potion == POTION_BASTION)
+        actions[INF_HEAD_POTION] = 2;
+    else if (frame.potion == POTION_STAMINA)
+        actions[INF_HEAD_POTION] = 3;
+    if (frame.spec_toggle)
+        actions[INF_HEAD_SPEC] = 1;
 }
 
 static void inf_translate_human_commands(HumanInput* hi, int* actions, InfernoState* s) {

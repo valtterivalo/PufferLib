@@ -375,7 +375,8 @@ static void inf_apply_human_player_commands_ctx(InfernoState* s, InfernoContext*
         if (cmd->kind == HUMAN_COMMAND_EQUIP_INVENTORY_ITEM) {
             if (cmd->gear_slot >= 0 && cmd->gear_slot < NUM_GEAR_SLOTS &&
                 cmd->item_db_idx >= 0 && cmd->item_db_idx < NUM_ITEMS) {
-                int changed = slot_equip_item(&s->player, cmd->gear_slot, (uint8_t)cmd->item_db_idx);
+                int changed = osrs_player_equip_command_item(
+                    &s->player, cmd->inventory_slot, (uint8_t)cmd->item_db_idx);
                 if (changed) {
                     s->total_gear_switches++;
                     did_change_equipment = 1;

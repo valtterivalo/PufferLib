@@ -166,8 +166,10 @@ static void clear_agent_actions(NhPvpState* state) {
 
 static uint8_t first_weapon_switch(Player* player) {
     uint8_t equipped = player->equipped[GEAR_SLOT_WEAPON];
-    for (int i = 0; i < player->num_items_in_slot[GEAR_SLOT_WEAPON]; i++) {
-        uint8_t item = player->inventory[GEAR_SLOT_WEAPON][i];
+    for (int i = 0; i < OSRS_INVENTORY_SIZE; i++) {
+        uint8_t item = player->inventory[i];
+        if (item != ITEM_NONE && osrs_item_gear_slot(item) != GEAR_SLOT_WEAPON)
+            continue;
         if (item != ITEM_NONE && item != equipped) return item;
     }
     fprintf(stderr, "test setup: player has no weapon switch\n");
@@ -175,15 +177,13 @@ static uint8_t first_weapon_switch(Player* player) {
 }
 
 static void assert_player_item_sprites_exist(const Player* player) {
-    for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
-        for (int i = 0; i < player->num_items_in_slot[slot]; i++) {
-            uint8_t item = player->inventory[slot][i];
-            if (item == ITEM_NONE) continue;
-            char path[128];
-            snprintf(path, sizeof(path), "sprites/items/%d.png",
-                ITEM_DATABASE[item].item_id);
-            ASSERT_INT_EQ("PvP item sprite exists", osrs_asset_exists(path), 1);
-        }
+    for (int i = 0; i < OSRS_INVENTORY_SIZE; i++) {
+        uint8_t item = player->inventory[i];
+        if (item == ITEM_NONE) continue;
+        char path[128];
+        snprintf(path, sizeof(path), "sprites/items/%d.png",
+            ITEM_DATABASE[item].item_id);
+        ASSERT_INT_EQ("PvP item sprite exists", osrs_asset_exists(path), 1);
     }
 }
 
@@ -264,7 +264,7 @@ static void test_opponent_target_is_independent(void) {
 }
 
 static void test_inventory_projection_matches_player(void) {
-    printf("--- PvP inventory projection matches slot inventory ---\n");
+    printf("--- PvP inventory projection matches flat inventory ---\n");
 
     NhPvpState state;
     setup_pvp_state(&state);
@@ -281,7 +281,7 @@ static void test_inventory_projection_matches_player(void) {
 
     uint8_t previous_weapon = player->equipped[GEAR_SLOT_WEAPON];
     uint8_t next_weapon = first_weapon_switch(player);
-    slot_equip_item(player, GEAR_SLOT_WEAPON, next_weapon);
+    osrs_player_equip_inventory_item(player, next_weapon);
     gui_update_inventory(&gui, player);
 
     ASSERT_INT_EQ("switched inventory projection",
@@ -312,6 +312,182 @@ static void test_inventory_cycle_marks_rebuild(void) {
     gui.inv_grid_dirty = 0;
     ASSERT_INT_EQ("cycled inventory projection",
         gui_inventory_projection_matches_player(&gui, &state.env.players[1]), 1);
+}
+
+static void test_flat_inventory_equipment_swaps_clicked_slot(void) {
+    printf("--- flat inventory equipment swaps clicked slot ---\n");
+
+    NhPvpState state;
+    setup_pvp_state(&state);
+    Player* player = &state.env.players[0];
+    uint8_t old_weapon = player->equipped[GEAR_SLOT_WEAPON];
+    uint8_t next_weapon = first_weapon_switch(player);
+    int slot = osrs_player_inventory_find(player, next_weapon);
+
+    ASSERT_INT_EQ("switch weapon is in flat bag", slot >= 0, 1);
+    ASSERT_INT_EQ("equip from slot succeeds",
+        osrs_player_equip_from_inventory_slot(player, slot), 1);
+    ASSERT_INT_EQ("new weapon equipped",
+        player->equipped[GEAR_SLOT_WEAPON], next_weapon);
+    ASSERT_INT_EQ("old weapon returns to clicked slot",
+        player->inventory[slot], old_weapon);
+}
+
+static void test_flat_inventory_two_handed_weapon_moves_shield(void) {
+    printf("--- flat inventory two-handed weapon moves shield ---\n");
+
+    NhPvpState state;
+    setup_pvp_state(&state);
+    Player* player = &state.env.players[0];
+    uint8_t old_weapon = player->equipped[GEAR_SLOT_WEAPON];
+    uint8_t old_shield = player->equipped[GEAR_SLOT_SHIELD];
+    int slot = osrs_player_inventory_add(player, ITEM_AGS);
+
+    ASSERT_INT_EQ("ags inserted into flat bag", slot >= 0, 1);
+    ASSERT_INT_EQ("equip ags succeeds",
+        osrs_player_equip_from_inventory_slot(player, slot), 1);
+    ASSERT_INT_EQ("ags equipped", player->equipped[GEAR_SLOT_WEAPON], ITEM_AGS);
+    ASSERT_INT_EQ("shield cleared", player->equipped[GEAR_SLOT_SHIELD], ITEM_NONE);
+    ASSERT_INT_EQ("old weapon is clicked-slot swap",
+        player->inventory[slot], old_weapon);
+    ASSERT_INT_EQ("old shield remains owned",
+        osrs_player_inventory_has_item(player, old_shield), 1);
+}
+
+static void test_flat_inventory_policy_loadout_uses_bag(void) {
+    printf("--- flat inventory policy loadout uses bag ---\n");
+
+    NhPvpState state;
+    setup_pvp_state(&state);
+    Player* player = &state.env.players[0];
+    uint8_t old_weapon = player->equipped[GEAR_SLOT_WEAPON];
+
+    ASSERT_INT_EQ("range loadout changed gear",
+        apply_loadout(player, LOADOUT_RANGE) > 0, 1);
+    ASSERT_INT_EQ("range weapon equipped",
+        player->equipped[GEAR_SLOT_WEAPON], ITEM_RUNE_CROSSBOW);
+    ASSERT_INT_EQ("old weapon returned to bag",
+        osrs_player_inventory_has_item(player, old_weapon), 1);
+}
+
+static void test_pvp_loot_replacement_preserves_owned_set(void) {
+    printf("--- PvP loot replacement preserves owned set ---\n");
+
+    Player player;
+    memset(&player, 0, sizeof(player));
+    init_slot_equipment_lms(&player);
+
+    ASSERT_INT_EQ("ahrim staff starts owned",
+        osrs_player_owns_item(&player, ITEM_AHRIM_STAFF), 1);
+    add_loot_item(&player, ITEM_KODAI_WAND);
+    ASSERT_INT_EQ("kodai added",
+        osrs_player_owns_item(&player, ITEM_KODAI_WAND), 1);
+    ASSERT_INT_EQ("ahrim staff removed",
+        osrs_player_owns_item(&player, ITEM_AHRIM_STAFF), 0);
+}
+
+static void test_pvp_human_item_click_equips_and_attacks_with_weapon(void) {
+    printf("--- PvP human item click equips and attacks with weapon ---\n");
+
+    NhPvpState state;
+    setup_pvp_state(&state);
+    Player* player = &state.env.players[0];
+    int slot = osrs_player_inventory_find(player, ITEM_RUNE_CROSSBOW);
+
+    HumanInput hi;
+    human_input_init(&hi);
+    hi.enabled = 1;
+    human_input_queue_equip_inventory_item(
+        &hi, slot, ITEM_RUNE_CROSSBOW, GEAR_SLOT_WEAPON);
+    human_input_queue_attack_npc(&hi, 1);
+
+    nh_pvp_step_human_commands((EncounterState*)&state, NULL, &hi);
+
+    ASSERT_INT_EQ("human click equipped crossbow",
+        player->equipped[GEAR_SLOT_WEAPON], ITEM_RUNE_CROSSBOW);
+    ASSERT_INT_EQ("human attack used ranged style",
+        player->attack_style_this_tick, ATTACK_STYLE_RANGED);
+    ASSERT_INT_EQ("human command queue cleared", hi.commands.count, 0);
+
+    human_input_destroy(&hi);
+}
+
+static void test_pvp_human_armor_click_updates_equipment(void) {
+    printf("--- PvP human armor click updates equipment ---\n");
+
+    NhPvpState state;
+    setup_pvp_state(&state);
+    Player* player = &state.env.players[0];
+    int slot = osrs_player_inventory_find(player, ITEM_MYSTIC_TOP);
+
+    HumanInput hi;
+    human_input_init(&hi);
+    hi.enabled = 1;
+    human_input_queue_equip_inventory_item(
+        &hi, slot, ITEM_MYSTIC_TOP, GEAR_SLOT_BODY);
+
+    nh_pvp_step_human_commands((EncounterState*)&state, NULL, &hi);
+
+    ASSERT_INT_EQ("human click equipped mystic top",
+        player->equipped[GEAR_SLOT_BODY], ITEM_MYSTIC_TOP);
+    ASSERT_INT_EQ("human command queue cleared", hi.commands.count, 0);
+
+    human_input_destroy(&hi);
+}
+
+static void test_pvp_human_command_frame_maps_actions(void) {
+    printf("--- PvP human command frame maps actions ---\n");
+
+    NhPvpState state;
+    setup_pvp_state(&state);
+    int actions[NUM_ACTION_HEADS];
+
+    HumanInput hi;
+    human_input_init(&hi);
+    hi.enabled = 1;
+    human_input_queue_overhead_prayer(&hi, ENCOUNTER_OVERHEAD_SET_REFRESH_MAGIC);
+    human_input_queue_offensive_prayer(&hi, ENCOUNTER_OFFENSIVE_SET_REFRESH_RIGOUR);
+    human_input_queue_eat(&hi, 0);
+    human_input_queue_eat(&hi, 1);
+    human_input_queue_drink(&hi, POTION_RESTORE, 7);
+    human_input_queue_spec_toggle(&hi);
+    human_input_queue_spell_target(&hi, ATTACK_ICE, 1);
+    hi.pending_veng = 1;
+
+    nh_pvp_translate_human_commands(&hi, actions, &state.env);
+
+    ASSERT_INT_EQ("human spell target maps ice", actions[HEAD_COMBAT], ATTACK_ICE);
+    ASSERT_INT_EQ("human overhead maps",
+        actions[HEAD_OVERHEAD], ENCOUNTER_OVERHEAD_SET_REFRESH_MAGIC);
+    ASSERT_INT_EQ("human offensive maps",
+        actions[HEAD_OFFENSIVE], ENCOUNTER_OFFENSIVE_SET_REFRESH_RIGOUR);
+    ASSERT_INT_EQ("human food maps", actions[HEAD_FOOD], FOOD_EAT);
+    ASSERT_INT_EQ("human karambwan maps", actions[HEAD_KARAMBWAN], KARAM_EAT);
+    ASSERT_INT_EQ("human potion maps", actions[HEAD_POTION], POTION_RESTORE);
+    ASSERT_INT_EQ("human vengeance maps", actions[HEAD_VENG], VENG_CAST);
+    ASSERT_INT_EQ("human spec arms current weapon", state.env.players[0].spec_armed, 1);
+
+    human_input_destroy(&hi);
+}
+
+static void test_pvp_human_walk_persists_until_runtime_clears(void) {
+    printf("--- PvP human walk persists until runtime clears ---\n");
+
+    NhPvpState state;
+    setup_pvp_state(&state);
+
+    HumanInput hi;
+    human_input_init(&hi);
+    hi.enabled = 1;
+    human_input_queue_walk(&hi, state.env.players[0].x + 3, state.env.players[0].y);
+
+    nh_pvp_step_human_commands((EncounterState*)&state, NULL, &hi);
+
+    ASSERT_INT_EQ("walk destination remains in runtime",
+        state.env.pvp_runtime.walk_dest_x[0] >= 0, 1);
+    ASSERT_INT_EQ("command queue clears after step", hi.commands.count, 0);
+
+    human_input_destroy(&hi);
 }
 
 static void test_pvp_item_sprites_exist(void) {
@@ -621,7 +797,7 @@ static void test_pvp_voidwaker_special_uses_melee_visual_and_magic_damage(void) 
     defender->dest_x = defender->x;
     defender->dest_y = defender->y;
 
-    slot_equip_item(attacker, GEAR_SLOT_WEAPON, ITEM_WHIP);
+    osrs_player_set_equipment_slot(attacker, GEAR_SLOT_WEAPON, ITEM_WHIP);
     attacker->melee_spec_weapon = MELEE_SPEC_VOIDWAKER;
     attacker->special_energy = 100;
 
@@ -663,7 +839,7 @@ static void test_pvp_special_attack_visual_weapon_and_effect_contract(void) {
     defender->dest_x = defender->x;
     defender->dest_y = defender->y;
 
-    slot_equip_item(attacker, GEAR_SLOT_WEAPON, ITEM_WHIP);
+    osrs_player_set_equipment_slot(attacker, GEAR_SLOT_WEAPON, ITEM_WHIP);
     attacker->melee_spec_weapon = MELEE_SPEC_AGS;
     attacker->special_energy = 100;
 
@@ -1011,6 +1187,14 @@ int main(void) {
     test_opponent_target_is_independent();
     test_inventory_projection_matches_player();
     test_inventory_cycle_marks_rebuild();
+    test_flat_inventory_equipment_swaps_clicked_slot();
+    test_flat_inventory_two_handed_weapon_moves_shield();
+    test_flat_inventory_policy_loadout_uses_bag();
+    test_pvp_loot_replacement_preserves_owned_set();
+    test_pvp_human_item_click_equips_and_attacks_with_weapon();
+    test_pvp_human_armor_click_updates_equipment();
+    test_pvp_human_command_frame_maps_actions();
+    test_pvp_human_walk_persists_until_runtime_clears();
     test_pvp_item_sprites_exist();
     test_pvp_display_names_and_label_target();
     test_terminal_presentation_captures_loser_before_auto_reset();
