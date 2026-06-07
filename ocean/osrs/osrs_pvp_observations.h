@@ -657,14 +657,19 @@ static void generate_slot_observations(OsrsEnv* env, int agent_idx) {
     obs[121] = (float)slot_bonuses->ranged_attack;
     obs[122] = (float)slot_bonuses->ranged_strength;
     AttackStyle current_weapon_style = get_slot_weapon_attack_style(p);
-    OsrsPlayerAttackProfile current_attack_profile =
-        osrs_player_attack_profile_for_loadout(
-            p->equipped,
-            current_weapon_style,
-            p->fight_style,
-            current_weapon_style == ATTACK_STYLE_MAGIC ? 30 : 0);
-    obs[123] = (float)current_attack_profile.cycle_ticks;
-    obs[124] = (float)current_attack_profile.range;
+    if (current_weapon_style == ATTACK_STYLE_NONE) {
+        obs[123] = 0.0f;
+        obs[124] = 0.0f;
+    } else {
+        OsrsPlayerAttackProfile current_attack_profile =
+            osrs_player_attack_profile_for_loadout(
+                p->equipped,
+                current_weapon_style,
+                p->fight_style,
+                current_weapon_style == ATTACK_STYLE_MAGIC ? 30 : 0);
+        obs[123] = (float)current_attack_profile.cycle_ticks;
+        obs[124] = (float)current_attack_profile.range;
+    }
     obs[125] = (float)slot_bonuses->slash_attack;
     obs[126] = (float)slot_bonuses->melee_strength;
     obs[127] = (float)slot_bonuses->ranged_defence;
