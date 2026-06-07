@@ -742,6 +742,39 @@ static void test_pvp_human_walk_persists_until_runtime_clears(void) {
     human_input_destroy(&hi);
 }
 
+static void test_pvp_human_walk_clears_active_attack_interaction(void) {
+    printf("--- PvP human walk clears active attack interaction ---\n");
+
+    NhPvpState state;
+    setup_pvp_state(&state);
+    Player* agent = &state.env.players[0];
+    Player* target = &state.env.players[1];
+    pvp_set_player_spawn(agent, 3041, 3530);
+    pvp_set_player_spawn(target, 3043, 3530);
+
+    HumanInput hi;
+    human_input_init(&hi);
+    hi.enabled = 1;
+    human_input_queue_attack_npc(&hi, 1);
+    nh_pvp_step_human_commands((EncounterState*)&state, NULL, &hi);
+
+    ASSERT_INT_EQ("attack click leaves interaction active",
+        osrs_interaction_active(&agent->interaction), 1);
+
+    int start_x = agent->x;
+    int start_y = agent->y;
+    human_input_queue_walk(&hi, start_x - 2, start_y);
+    nh_pvp_step_human_commands((EncounterState*)&state, NULL, &hi);
+
+    ASSERT_INT_EQ("walk click clears interaction",
+        osrs_interaction_active(&agent->interaction), 0);
+    ASSERT_INT_EQ("walk click moves west", agent->x < start_x, 1);
+    ASSERT_INT_EQ("walk click stays on row", agent->y, start_y);
+    ASSERT_INT_EQ("walk command queue clears", hi.commands.count, 0);
+
+    human_input_destroy(&hi);
+}
+
 static void test_pvp_item_sprites_exist(void) {
     printf("--- PvP item sprites exist ---\n");
 
@@ -1545,6 +1578,7 @@ int main(void) {
     test_pvp_human_armor_click_updates_equipment();
     test_pvp_human_command_frame_maps_actions();
     test_pvp_human_walk_persists_until_runtime_clears();
+    test_pvp_human_walk_clears_active_attack_interaction();
     test_pvp_item_sprites_exist();
     test_pvp_gear_pool_assets_exist();
     test_pvp_display_names_and_label_target();
