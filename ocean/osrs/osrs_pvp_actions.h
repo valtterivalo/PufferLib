@@ -262,6 +262,57 @@ static inline AttackStyle resolve_attack_style_for_action(Player* p, int attack_
     }
 }
 
+static int execute_equip_clicks(OsrsEnv* env, int agent_idx, int* actions) {
+    Player* p = &env->players[agent_idx];
+    int clicks = 0;
+
+    for (int h = 0; h < PVP_EQUIP_CLICKS_PER_TICK; h++) {
+        int action = actions[HEAD_EQUIP_0 + h];
+        if (action <= 0 || action > OSRS_INVENTORY_SIZE) continue;
+
+        int inventory_slot = action - 1;
+        if (!osrs_player_can_equip_from_inventory_slot(p, inventory_slot)) continue;
+
+        if (!osrs_player_equip_from_inventory_slot(p, inventory_slot)) {
+            fprintf(stderr, "execute_equip_clicks: mask/execution mismatch slot=%d\n",
+                inventory_slot);
+            abort();
+        }
+        clicks++;
+    }
+
+    if (clicks > 0) {
+        p->clicks_this_tick += clicks;
+        osrs_interaction_check_interrupt(&p->interaction, OSRS_IACT_EQUIP);
+    }
+    return clicks;
+}
+
+static void execute_special_action(Player* p, int special_action) {
+    switch (special_action) {
+        case SPECIAL_NOOP:
+            return;
+        case SPECIAL_ARM: {
+            uint8_t weapon = p->equipped[GEAR_SLOT_WEAPON];
+            int cost = osrs_spec_cost(weapon);
+            if (cost > 0 && p->special_energy >= cost && !p->spec_armed) {
+                p->spec_armed = 1;
+                p->clicks_this_tick++;
+            }
+            return;
+        }
+        case SPECIAL_DISARM:
+            if (p->spec_armed) {
+                p->spec_armed = 0;
+                p->clicks_this_tick++;
+            }
+            return;
+        default:
+            fprintf(stderr, "execute_special_action: invalid action %d\n", special_action);
+            abort();
+    }
+}
+
 /**
  * Execute switch-phase actions for an agent (Phase 1).
  *
@@ -307,15 +358,8 @@ static void execute_switches(OsrsEnv* env, int agent_idx, int* actions) {
     }
     if (prayer_commanded || p->prayer != prev_prayer || p->offensive_prayer != prev_offensive)
         p->clicks_this_tick++;
-    int loadout_action = actions[HEAD_LOADOUT];
-    int loadout_switches = apply_loadout(p, loadout_action);
-    p->clicks_this_tick += loadout_switches;
-    if (loadout_switches > 0)
-        osrs_interaction_check_interrupt(&p->interaction, OSRS_IACT_EQUIP);
-
-    if (pvp_loadout_can_arm_spec(p, loadout_action)) {
-        p->spec_armed = 1;
-    }
+    execute_equip_clicks(env, agent_idx, actions);
+    execute_special_action(p, actions[HEAD_SPECIAL]);
     int food_action = actions[HEAD_FOOD];
     if (food_action == FOOD_EAT && can_eat_food(p)) {
         eat_food(p, 0);
@@ -369,15 +413,14 @@ static void execute_switches(OsrsEnv* env, int agent_idx, int* actions) {
         p->clicks_this_tick++;
         osrs_interaction_check_interrupt(&p->interaction, OSRS_IACT_EAT);
     }
-    int combat_action = actions[HEAD_COMBAT];
+    int combat_action = actions[HEAD_ATTACK];
     int head_move = actions[HEAD_MOVE];
-    int is_spec_loadout = pvp_loadout_can_arm_spec(p, loadout_action);
 
     int command_issued = 0;
-    if (!is_spec_loadout && head_move > 0 && head_move < MOVE_DIM) {
+    if (head_move > 0 && head_move < MOVE_DIM) {
         pvp_set_walk_dest_from_head_move(env, agent_idx, head_move);
         command_issued = 1;
-    } else if (!is_spec_loadout && is_move_action(combat_action)) {
+    } else if (is_move_action(combat_action)) {
         int tx = p->last_obs_target_x;
         int ty = p->last_obs_target_y;
         int dest_x = -1, dest_y = -1;
@@ -442,21 +485,8 @@ static PvpAttackMoveIntent pvp_attack_move_intent(
 ) {
     Player* p = &env->players[agent_idx];
 
-    int loadout_action = actions[HEAD_LOADOUT];
-    int combat_action = actions[HEAD_COMBAT];
+    int combat_action = actions[HEAD_ATTACK];
     int attack_action = is_attack_action(combat_action) ? combat_action : ATTACK_NONE;
-
-    int is_gmaul = loadout_action == LOADOUT_GMAUL && player_has_gmaul(p);
-    if (is_gmaul) {
-        attack_action = ATTACK_ATK;
-    }
-
-    int current_loadout = get_current_loadout(p);
-    int in_mage_loadout = (current_loadout == LOADOUT_MAGE);
-    int in_tank_loadout = (current_loadout == LOADOUT_TANK);
-    if (attack_action == ATTACK_ATK && (in_mage_loadout || in_tank_loadout) && !is_gmaul) {
-        attack_action = ATTACK_NONE;
-    }
 
     AttackStyle attack_style = ATTACK_STYLE_NONE;
     if (attack_action != ATTACK_NONE) {
@@ -509,21 +539,8 @@ static void execute_attack_combat(OsrsEnv* env, int agent_idx, int* actions) {
     Player* t = &env->players[1 - agent_idx];
     const CollisionMap* cmap = (const CollisionMap*)env->collision_map;
 
-    int loadout_action = actions[HEAD_LOADOUT];
-    int combat_action = actions[HEAD_COMBAT];
+    int combat_action = actions[HEAD_ATTACK];
     int attack_action = is_attack_action(combat_action) ? combat_action : ATTACK_NONE;
-
-    int is_gmaul = loadout_action == LOADOUT_GMAUL && player_has_gmaul(p);
-    if (is_gmaul) {
-        attack_action = ATTACK_ATK;
-    }
-
-    int current_loadout = get_current_loadout(p);
-    int in_mage_loadout = (current_loadout == LOADOUT_MAGE);
-    int in_tank_loadout = (current_loadout == LOADOUT_TANK);
-    if (attack_action == ATTACK_ATK && (in_mage_loadout || in_tank_loadout) && !is_gmaul) {
-        attack_action = ATTACK_NONE;
-    }
 
     if (attack_action == ATTACK_NONE && osrs_interaction_active(&p->interaction)) {
         AttackStyle weapon_style = get_slot_weapon_attack_style(p);
@@ -560,8 +577,10 @@ static void execute_attack_combat(OsrsEnv* env, int agent_idx, int* actions) {
         attack_style = ATTACK_STYLE_NONE;
     }
 
-    /* gmaul is instant: bypasses attack timer */
-    int can_attack = attack_ready || (is_gmaul && is_granite_maul_attack_available(p));
+    int gmaul_spec_ready = p->spec_armed &&
+        p->equipped[GEAR_SLOT_WEAPON] == ITEM_GRANITE_MAUL &&
+        is_granite_maul_attack_available(p);
+    int can_attack = attack_ready || gmaul_spec_ready;
 
     switch (attack_action) {
         case ATTACK_ATK:

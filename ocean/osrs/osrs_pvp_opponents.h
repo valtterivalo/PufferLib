@@ -877,9 +877,15 @@ static void opp_handle_delayed_prayer(OsrsEnv* env, OpponentState* opp, int* act
 
 /* --- TrueRandom: random value per action head --- */
 static void opp_true_random(OsrsEnv* env, int* actions) {
-    for (int i = 0; i < NUM_ACTION_HEADS; i++) {
-        actions[i] = rand_int(env, ACTION_HEAD_DIMS[i]);
-    }
+    actions[HEAD_LOADOUT] = rand_int(env, LOADOUT_DIM);
+    actions[HEAD_COMBAT] = rand_int(env, COMBAT_DIM);
+    actions[HEAD_OVERHEAD] = rand_int(env, OVERHEAD_DIM);
+    actions[HEAD_FOOD] = rand_int(env, FOOD_DIM);
+    actions[HEAD_POTION] = rand_int(env, POTION_DIM);
+    actions[HEAD_KARAMBWAN] = rand_int(env, KARAMBWAN_DIM);
+    actions[HEAD_VENG] = rand_int(env, VENG_DIM);
+    actions[HEAD_OFFENSIVE] = rand_int(env, OFFENSIVE_DIM);
+    actions[HEAD_MOVE] = rand_int(env, MOVE_DIM);
 }
 
 /* --- Panicking: fixed prayer, fixed style, 30% attack chance, panic eat --- */
@@ -2230,6 +2236,29 @@ static void opp_unpredictable_onetick(OsrsEnv* env, OpponentState* opp, int* act
     }
 }
 
+static uint8_t pvp_predict_action_weapon_after_equip_clicks(Player* p, const int* actions) {
+    uint8_t weapon = p->equipped[GEAR_SLOT_WEAPON];
+
+    for (int h = 0; h < PVP_EQUIP_CLICKS_PER_TICK; h++) {
+        int action = actions[HEAD_EQUIP_0 + h];
+        if (action <= 0 || action > OSRS_INVENTORY_SIZE) continue;
+
+        int inventory_slot = action - 1;
+        uint8_t item = p->inventory[inventory_slot];
+        if (item == ITEM_NONE || item >= NUM_ITEMS) continue;
+
+        int gear_slot = osrs_item_gear_slot(item);
+        if (gear_slot == GEAR_SLOT_WEAPON) {
+            weapon = item;
+        } else if (gear_slot == GEAR_SLOT_SHIELD &&
+                weapon < NUM_ITEMS && item_is_two_handed(weapon)) {
+            weapon = ITEM_NONE;
+        }
+    }
+
+    return weapon;
+}
+
 static void opp_read_agent_action(OsrsEnv* env, OpponentState* opp) {
     opp->has_read_this_tick = 0;
     opp->read_agent_style = ATTACK_STYLE_NONE;
@@ -2246,28 +2275,14 @@ static void opp_read_agent_action(OsrsEnv* env, OpponentState* opp) {
      * env->actions is populated from ocean_acts before opponent generation. */
     int* agent_actions = &env->actions[0];
 
-    /* Extract attack style: loadout determines weapon, so it takes priority.
-     * Only fall back to attack head when loadout is KEEP/TANK (no switch). */
-    int loadout = agent_actions[HEAD_LOADOUT];
-    int attack = agent_actions[HEAD_COMBAT];
+    int attack = agent_actions[HEAD_ATTACK];
 
-    if (loadout != LOADOUT_KEEP && loadout != LOADOUT_TANK) {
-        /* Loadout switch — weapon determines what's physically possible */
-        if (loadout == LOADOUT_MELEE || loadout == LOADOUT_SPEC_MELEE || loadout == LOADOUT_GMAUL) {
-            opp->read_agent_style = ATTACK_STYLE_MELEE;
-        } else if (loadout == LOADOUT_RANGE || loadout == LOADOUT_SPEC_RANGE) {
-            opp->read_agent_style = ATTACK_STYLE_RANGED;
-        } else if (loadout == LOADOUT_MAGE || loadout == LOADOUT_SPEC_MAGIC) {
-            opp->read_agent_style = ATTACK_STYLE_MAGIC;
-        }
-        opp->has_read_this_tick = 1;
-    } else if (attack == ATTACK_ICE || attack == ATTACK_BLOOD) {
-        /* KEEP/TANK + spell cast — must already be holding a staff */
+    if (attack == ATTACK_ICE || attack == ATTACK_BLOOD) {
         opp->read_agent_style = ATTACK_STYLE_MAGIC;
         opp->has_read_this_tick = 1;
     } else if (attack == ATTACK_ATK) {
-        /* KEEP/TANK + generic attack — use current equipped weapon */
-        uint8_t weapon = env->players[0].equipped[GEAR_SLOT_WEAPON];
+        uint8_t weapon = pvp_predict_action_weapon_after_equip_clicks(
+            &env->players[0], agent_actions);
         int style = get_item_attack_style(weapon);
         if (style == 1) opp->read_agent_style = ATTACK_STYLE_MELEE;
         else if (style == 2) opp->read_agent_style = ATTACK_STYLE_RANGED;
@@ -2283,7 +2298,7 @@ static void opp_read_agent_action(OsrsEnv* env, OpponentState* opp) {
     else if (overhead == ENCOUNTER_OVERHEAD_SET_REFRESH_SMITE)  opp->read_agent_prayer = PRAYER_SMITE;
     else if (overhead == ENCOUNTER_OVERHEAD_SET_REFRESH_REDEMPTION) opp->read_agent_prayer = PRAYER_REDEMPTION;
 
-    opp->read_agent_moving = is_move_action(attack) ? 1 : 0;
+    opp->read_agent_moving = (agent_actions[HEAD_MOVE] != 0 || is_move_action(attack)) ? 1 : 0;
 }
 
 static inline int opp_get_read_defensive_prayer(OpponentState* opp) {
@@ -3085,6 +3100,53 @@ static void opponent_reset(OsrsEnv* env, OpponentState* opp) {
     }
 }
 
+static void pvp_legacy_loadout_to_slotclicks(Player* p, int legacy_loadout, int* actions) {
+    if (legacy_loadout <= LOADOUT_KEEP || legacy_loadout > LOADOUT_GMAUL) return;
+
+    uint8_t resolved[NUM_DYNAMIC_GEAR_SLOTS];
+    resolve_loadout(p, legacy_loadout, resolved);
+
+    int click_head = 0;
+    for (int i = 0; i < NUM_DYNAMIC_GEAR_SLOTS && click_head < PVP_EQUIP_CLICKS_PER_TICK; i++) {
+        uint8_t item = resolved[i];
+        if (item == ITEM_NONE) continue;
+
+        int gear_slot = DYNAMIC_GEAR_SLOTS[i];
+        if (p->equipped[gear_slot] == item) continue;
+
+        int inventory_slot = osrs_player_inventory_find(p, item);
+        if (inventory_slot < 0) continue;
+
+        actions[HEAD_EQUIP_0 + click_head] = inventory_slot + 1;
+        click_head++;
+    }
+
+    if (legacy_loadout == LOADOUT_SPEC_MELEE ||
+            legacy_loadout == LOADOUT_SPEC_RANGE ||
+            legacy_loadout == LOADOUT_SPEC_MAGIC ||
+            legacy_loadout == LOADOUT_GMAUL) {
+        actions[HEAD_SPECIAL] = SPECIAL_ARM;
+    }
+}
+
+static void pvp_translate_legacy_loadout_action_to_slotclicks(
+    OsrsEnv* env,
+    int agent_idx,
+    int* actions
+) {
+    int legacy_loadout = actions[HEAD_LOADOUT];
+    int legacy_combat = actions[HEAD_COMBAT];
+
+    for (int h = 0; h < PVP_EQUIP_CLICKS_PER_TICK; h++) {
+        actions[HEAD_EQUIP_0 + h] = 0;
+    }
+    actions[HEAD_SPECIAL] = SPECIAL_NOOP;
+    actions[HEAD_ATTACK] = ATTACK_NONE;
+
+    pvp_legacy_loadout_to_slotclicks(&env->players[agent_idx], legacy_loadout, actions);
+    actions[HEAD_ATTACK] = legacy_combat;
+}
+
 static void generate_opponent_action(OsrsEnv* env, OpponentState* opp) {
     int* actions = &env->pending_actions[1 * NUM_ACTION_HEADS];
 
@@ -3183,6 +3245,8 @@ static void generate_opponent_action(OsrsEnv* env, OpponentState* opp) {
             /* OPP_NONE or unsupported: leave NOOPs */
             break;
     }
+
+    pvp_translate_legacy_loadout_action_to_slotclicks(env, 1, actions);
 }
 
 static void swap_players_and_pending(OsrsEnv* env) {

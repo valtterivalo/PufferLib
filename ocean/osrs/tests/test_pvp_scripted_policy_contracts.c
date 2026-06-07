@@ -145,18 +145,13 @@ static void set_dead_zone_state(OsrsEnv* env, OpponentType type, int distance) {
     memset(env->actions, 0, NUM_AGENTS * NUM_ACTION_HEADS * sizeof(int));
 }
 
-static int opponent_loadout(const OsrsEnv* env) {
-    return env->pending_actions[NUM_ACTION_HEADS + HEAD_LOADOUT];
-}
-
 static int opponent_combat(const OsrsEnv* env) {
-    return env->pending_actions[NUM_ACTION_HEADS + HEAD_COMBAT];
+    return env->pending_actions[NUM_ACTION_HEADS + HEAD_ATTACK];
 }
 
 static int opponent_casts_spell(const OsrsEnv* env) {
     int combat = opponent_combat(env);
-    return opponent_loadout(env) == LOADOUT_MAGE &&
-        (combat == ATTACK_ICE || combat == ATTACK_BLOOD);
+    return combat == ATTACK_ICE || combat == ATTACK_BLOOD;
 }
 
 static void test_resolver_distance_10_uses_mage_into_prayer(void) {
@@ -262,7 +257,7 @@ static void test_veng_fighter_excludes_mage(void) {
     set_dead_zone_state(&env, OPP_VENG_FIGHTER, 10);
     generate_opponent_action(&env, &env.pvp_runtime.opponent);
 
-    ASSERT_TRUE("veng fighter does not mage", opponent_loadout(&env) != LOADOUT_MAGE);
+    ASSERT_TRUE("veng fighter does not mage", !opponent_casts_spell(&env));
 }
 
 static void test_spec_range_gate_respects_weapon_range(void) {

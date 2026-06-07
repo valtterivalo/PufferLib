@@ -64,44 +64,58 @@
 // Number of equipment slots (HEAD, CAPE, NECK, AMMO, WEAPON, SHIELD, BODY, LEGS, HANDS, FEET, RING)
 #define NUM_GEAR_SLOTS 11
 #define OSRS_INVENTORY_SIZE 28
-/* 9 action heads. HEAD_MOVE expresses the OSRS click-anywhere movement as
-   a 25-action delta grid (idle + 8 walk + 16 run), identical to the
-   shared ENCOUNTER_MOVE_ACTIONS used by inferno/zulrah. HEAD_COMBAT keeps
-   its existing 13 values for backward compatibility during the migration;
-   when HEAD_MOVE > 0 the COMBAT-head MOVE_* values are ignored. */
+#define PVP_ACTION_SCHEMA_LOADOUT_V8 8
+#define PVP_ACTION_SCHEMA_SLOTCLICK_V9 9
+#define PVP_ACTION_SCHEMA PVP_ACTION_SCHEMA_SLOTCLICK_V9
 
-#define NUM_ACTION_HEADS 9
+#define PVP_EQUIP_CLICKS_PER_TICK 4
+#define EQUIP_CLICK_DIM (OSRS_INVENTORY_SIZE + 1)
+#define ATTACK_DIM 4
+#define SPECIAL_DIM 3
+#define LEGACY_LOADOUT_DIM 9
+#define LEGACY_COMBAT_DIM 13
+#define LOADOUT_DIM LEGACY_LOADOUT_DIM
+#define COMBAT_DIM LEGACY_COMBAT_DIM
 
-// Action head indices
-#define HEAD_LOADOUT    0
-#define HEAD_COMBAT     1   // attack type + legacy MOVE_* fallback for unmigrated opponents
-#define HEAD_OVERHEAD   2
-#define HEAD_FOOD       3
-#define HEAD_POTION     4
-#define HEAD_KARAMBWAN  5
-#define HEAD_VENG       6
-#define HEAD_OFFENSIVE  7   // set or refresh piety/rigour/augury
-#define HEAD_MOVE       8   // 25-action delta grid (ENCOUNTER_MOVE_TARGET_DX/DY)
+#define NUM_ACTION_HEADS 13
 
-// Per-head action dimensions
-#define LOADOUT_DIM     9   // KEEP, MELEE, RANGE, MAGE, TANK, SPEC_MELEE, SPEC_RANGE, SPEC_MAGIC, GMAUL
-#define COMBAT_DIM     13   // NONE, ATK, ICE, BLOOD, ADJACENT, UNDER, DIAGONAL, FARCAST_2..7
-#define OVERHEAD_DIM    7   // no_change, off, set_refresh_{melee,ranged,magic,smite,redemption}
-#define FOOD_DIM        2   // NONE, EAT
-#define POTION_DIM      5   // PvP head only: NONE, BREW, RESTORE, COMBAT, RANGED
-#define KARAMBWAN_DIM   2   // NONE, EAT
-#define VENG_DIM        2   // NONE, CAST
-#define OFFENSIVE_DIM   5   // no_change, off, set_refresh_{piety,rigour,augury}
-#define MOVE_DIM       25   // matches ENCOUNTER_MOVE_ACTIONS in osrs_encounter.h
+#define HEAD_EQUIP_0    0
+#define HEAD_EQUIP_1    1
+#define HEAD_EQUIP_2    2
+#define HEAD_EQUIP_3    3
+#define HEAD_ATTACK     4
+#define HEAD_SPECIAL    5
+#define HEAD_OVERHEAD   6
+#define HEAD_FOOD       7
+#define HEAD_POTION     8
+#define HEAD_KARAMBWAN  9
+#define HEAD_VENG       10
+#define HEAD_OFFENSIVE  11
+#define HEAD_MOVE       12
 
-// Total action mask size: sum of all head dims
-#define ACTION_MASK_SIZE (LOADOUT_DIM + COMBAT_DIM + OVERHEAD_DIM + \
-    FOOD_DIM + POTION_DIM + KARAMBWAN_DIM + VENG_DIM + OFFENSIVE_DIM + MOVE_DIM)
+#define HEAD_LOADOUT HEAD_EQUIP_0
+#define HEAD_COMBAT HEAD_ATTACK
 
-// Per-head action dims array
+#define OVERHEAD_DIM    7
+#define FOOD_DIM        2
+#define POTION_DIM      5
+#define KARAMBWAN_DIM   2
+#define VENG_DIM        2
+#define OFFENSIVE_DIM   5
+#define MOVE_DIM       25
+
+#define ACTION_MASK_SIZE ( \
+    PVP_EQUIP_CLICKS_PER_TICK * EQUIP_CLICK_DIM + \
+    ATTACK_DIM + SPECIAL_DIM + OVERHEAD_DIM + FOOD_DIM + POTION_DIM + \
+    KARAMBWAN_DIM + VENG_DIM + OFFENSIVE_DIM + MOVE_DIM)
+
 static const int ACTION_HEAD_DIMS[NUM_ACTION_HEADS] = {
-    LOADOUT_DIM,
-    COMBAT_DIM,
+    EQUIP_CLICK_DIM,
+    EQUIP_CLICK_DIM,
+    EQUIP_CLICK_DIM,
+    EQUIP_CLICK_DIM,
+    ATTACK_DIM,
+    SPECIAL_DIM,
     OVERHEAD_DIM,
     FOOD_DIM,
     POTION_DIM,
@@ -114,19 +128,28 @@ static const int ACTION_HEAD_DIMS[NUM_ACTION_HEADS] = {
 // Number of item stats per item (for observations)
 #define NUM_ITEM_STATS 18
 
-// Maximum items per slot for observation padding
-
-// Dynamic gear slots that change during combat
-// 8 slots: weapon, shield, body, legs, head, cape, neck, ring
 #define NUM_DYNAMIC_GEAR_SLOTS 8
 
-/* Observation size:
-   190 = 182 base + 1 voidwaker flag + 7 reward signals.
-   +4 = normalized player position (dist to N/S/E/W wilderness arena edges).
-   +2 = opponent egocentric position (signed dx, dy normalized).
-   +25 = per-HEAD_MOVE walkability flags (mirrors mask for value-head reasoning).
-   total = 221. */
-#define SLOT_NUM_OBSERVATIONS 221
+#define PVP_BASE_OBSERVATIONS 221
+#define OSRS_ITEM_FEATURE_DIM 32
+#define PVP_EQUIPPED_SELF_FEATURE_DIM 24
+#define PVP_EQUIPPED_TARGET_FEATURE_DIM 18
+#define PVP_INVENTORY_OBS_OFFSET PVP_BASE_OBSERVATIONS
+#define PVP_SELF_EQUIPPED_OBS_OFFSET \
+    (PVP_INVENTORY_OBS_OFFSET + OSRS_INVENTORY_SIZE * OSRS_ITEM_FEATURE_DIM)
+#define PVP_TARGET_EQUIPPED_OBS_OFFSET \
+    (PVP_SELF_EQUIPPED_OBS_OFFSET + NUM_GEAR_SLOTS * PVP_EQUIPPED_SELF_FEATURE_DIM)
+#define SLOT_NUM_OBSERVATIONS \
+    (PVP_TARGET_EQUIPPED_OBS_OFFSET + NUM_GEAR_SLOTS * PVP_EQUIPPED_TARGET_FEATURE_DIM)
+
+#ifdef __cplusplus
+#define OSRS_STATIC_ASSERT static_assert
+#else
+#define OSRS_STATIC_ASSERT _Static_assert
+#endif
+
+OSRS_STATIC_ASSERT(OSRS_INVENTORY_SIZE == 28, "slot-click schema assumes 28 inventory slots");
+OSRS_STATIC_ASSERT(NUM_GEAR_SLOTS == 11, "equipment feature schema assumes 11 gear slots");
 // PLAYER BASE STATS (NH maxed accounts - 99 all combat)
 
 #define MAXED_BASE_ATTACK 99
@@ -306,6 +329,12 @@ typedef enum {
 
 static inline int is_attack_action(int v) { return v >= ATTACK_ATK && v <= ATTACK_BLOOD; }
 static inline int is_move_action(int v) { return v >= MOVE_ADJACENT && v <= MOVE_FARCAST_7; }
+
+typedef enum {
+    SPECIAL_NOOP = 0,
+    SPECIAL_ARM,
+    SPECIAL_DISARM,
+} PvpSpecialAction;
 
 /** Overhead prayer action head options. */
 typedef enum {

@@ -574,6 +574,33 @@ static void test_pvp_human_item_click_equips_and_attacks_with_weapon(void) {
     human_input_destroy(&hi);
 }
 
+static void test_pvp_slotclick_action_equips_and_attacks_same_tick(void) {
+    printf("--- PvP slot-click action equips and attacks same tick ---\n");
+
+    NhPvpState state;
+    setup_pvp_state(&state);
+    Player* player = &state.env.players[0];
+    Player* target = &state.env.players[1];
+    int slot = osrs_player_inventory_find(player, ITEM_RUNE_CROSSBOW);
+    ASSERT_INT_EQ("slot-click crossbow exists", slot >= 0, 1);
+
+    pvp_set_player_spawn(player, 3041, 3530);
+    pvp_set_player_spawn(target, 3043, 3530);
+    player->attack_timer = 0;
+
+    int actions[NUM_ACTION_HEADS];
+    memset(actions, 0, sizeof(actions));
+    actions[HEAD_EQUIP_0] = slot + 1;
+    actions[HEAD_ATTACK] = ATTACK_ATK;
+
+    nh_pvp_step((EncounterState*)&state, NULL, actions);
+
+    ASSERT_INT_EQ("slot-click equipped crossbow",
+        player->equipped[GEAR_SLOT_WEAPON], ITEM_RUNE_CROSSBOW);
+    ASSERT_INT_EQ("slot-click attack used ranged",
+        player->attack_style_this_tick, ATTACK_STYLE_RANGED);
+}
+
 static void test_pvp_human_armor_click_updates_equipment(void) {
     printf("--- PvP human armor click updates equipment ---\n");
 
@@ -627,7 +654,7 @@ static void test_pvp_human_command_frame_maps_actions(void) {
     ASSERT_INT_EQ("human karambwan maps", actions[HEAD_KARAMBWAN], KARAM_EAT);
     ASSERT_INT_EQ("human potion maps", actions[HEAD_POTION], POTION_RESTORE);
     ASSERT_INT_EQ("human vengeance maps", actions[HEAD_VENG], VENG_CAST);
-    ASSERT_INT_EQ("human spec arms current weapon", state.env.players[0].spec_armed, 1);
+    ASSERT_INT_EQ("human spec maps", actions[HEAD_SPECIAL], SPECIAL_ARM);
 
     human_input_destroy(&hi);
 }
@@ -1430,6 +1457,7 @@ int main(void) {
     test_pvp_invalid_spec_loadout_does_not_clear_weapon();
     test_pvp_loot_replacement_preserves_owned_set();
     test_pvp_human_item_click_equips_and_attacks_with_weapon();
+    test_pvp_slotclick_action_equips_and_attacks_same_tick();
     test_pvp_human_armor_click_updates_equipment();
     test_pvp_human_command_frame_maps_actions();
     test_pvp_human_walk_persists_until_runtime_clears();
