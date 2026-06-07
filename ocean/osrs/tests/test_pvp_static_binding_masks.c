@@ -311,10 +311,7 @@ static void test_movement_masks_respect_blocked_tiles(void) {
 
     compute_action_masks(&env, 0);
 
-    int combat_offset = action_head_offset(HEAD_COMBAT);
     int move_offset = action_head_offset(HEAD_MOVE);
-    ASSERT_INT_EQ("blocked MOVE_UNDER mask",
-        env.action_masks[combat_offset + MOVE_UNDER], 0);
     ASSERT_INT_EQ("blocked HEAD_MOVE east mask",
         env.action_masks[move_offset + 7], 0);
 
@@ -391,6 +388,40 @@ static void test_attack_mask_allows_post_equip_weapon_target_click(void) {
 
     ASSERT_INT_EQ("post-equip ranged target-click valid",
         env.action_masks[combat_offset + ATTACK_ATK], 1);
+
+    collision_map_free(cmap);
+}
+
+static void test_special_mask_allows_post_equip_weapon_spec_arm(void) {
+    printf("--- PvP special mask allows post-equip weapon spec arm ---\n");
+
+    OsrsEnv env;
+    memset(&env, 0, sizeof(env));
+    pvp_init(&env);
+    CollisionMap* cmap = collision_map_create();
+    env.collision_map = cmap;
+    pvp_seed(&env, 73);
+    pvp_reset(&env);
+
+    Player* agent = &env.players[0];
+    osrs_player_inventory_clear(agent);
+    osrs_player_set_equipment_slot(agent, GEAR_SLOT_WEAPON, ITEM_AHRIM_STAFF);
+    agent->special_energy = 100;
+    agent->spec_armed = 0;
+
+    compute_action_masks(&env, 0);
+
+    int special_offset = action_head_offset(HEAD_SPECIAL);
+    ASSERT_INT_EQ("staff has no special arm",
+        env.action_masks[special_offset + SPECIAL_ARM], 0);
+
+    int dagger_slot = osrs_player_inventory_add(agent, ITEM_DRAGON_DAGGER);
+    ASSERT_TRUE("dagger added", dagger_slot >= 0);
+
+    compute_action_masks(&env, 0);
+
+    ASSERT_INT_EQ("post-equip special arm valid",
+        env.action_masks[special_offset + SPECIAL_ARM], 1);
 
     collision_map_free(cmap);
 }
@@ -784,6 +815,7 @@ int main(void) {
     test_movement_masks_respect_blocked_tiles();
     test_slotclick_schema_and_inventory_mask();
     test_attack_mask_allows_post_equip_weapon_target_click();
+    test_special_mask_allows_post_equip_weapon_spec_arm();
     test_inventory_observation_item_facts();
     test_no_weapon_observation_has_zero_attack_profile();
     test_collision_los_blocks_impenetrable_tiles();

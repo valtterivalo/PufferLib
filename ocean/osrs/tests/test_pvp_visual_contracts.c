@@ -623,6 +623,47 @@ static void test_pvp_slotclick_command_frame_equips_and_attacks(void) {
         player->attack_style_this_tick, ATTACK_STYLE_RANGED);
 }
 
+static void test_pvp_slotclick_command_frame_equips_specs_and_attacks(void) {
+    printf("--- PvP slot-click command frame equips specs and attacks ---\n");
+
+    NhPvpState state;
+    setup_pvp_state(&state);
+    Player* player = &state.env.players[0];
+    Player* target = &state.env.players[1];
+
+    osrs_player_inventory_clear(player);
+    osrs_player_set_equipment_slot(player, GEAR_SLOT_WEAPON, ITEM_AHRIM_STAFF);
+    int slot = osrs_player_inventory_add(player, ITEM_DRAGON_DAGGER);
+    ASSERT_INT_EQ("slot-click dagger exists", slot >= 0, 1);
+
+    pvp_set_player_spawn(player, 3041, 3530);
+    pvp_set_player_spawn(target, 3042, 3530);
+    player->attack_timer = 0;
+    player->special_energy = 100;
+    player->spec_armed = 0;
+
+    int actions[NUM_ACTION_HEADS];
+    memset(actions, 0, sizeof(actions));
+    actions[HEAD_EQUIP_0] = slot + 1;
+    actions[HEAD_SPECIAL] = SPECIAL_ARM;
+    actions[HEAD_ATTACK] = ATTACK_ATK;
+
+    nh_pvp_step((EncounterState*)&state, NULL, actions);
+
+    ASSERT_INT_EQ("slot-click equipped dagger",
+        player->equipped[GEAR_SLOT_WEAPON], ITEM_DRAGON_DAGGER);
+    ASSERT_INT_EQ("slot-click special used dagger",
+        player->attack_weapon_this_tick, ITEM_DRAGON_DAGGER);
+    ASSERT_INT_EQ("slot-click special used melee",
+        player->attack_style_this_tick, ATTACK_STYLE_MELEE);
+    ASSERT_INT_EQ("slot-click special fired",
+        player->used_special_this_tick, 1);
+    ASSERT_INT_EQ("slot-click special disarmed",
+        player->spec_armed, 0);
+    ASSERT_INT_EQ("slot-click special energy spent",
+        player->special_energy < 100, 1);
+}
+
 static void test_pvp_human_armor_click_updates_equipment(void) {
     printf("--- PvP human armor click updates equipment ---\n");
 
@@ -1500,6 +1541,7 @@ int main(void) {
     test_pvp_loot_replacement_preserves_owned_set();
     test_pvp_human_item_click_equips_and_attacks_with_weapon();
     test_pvp_slotclick_command_frame_equips_and_attacks();
+    test_pvp_slotclick_command_frame_equips_specs_and_attacks();
     test_pvp_human_armor_click_updates_equipment();
     test_pvp_human_command_frame_maps_actions();
     test_pvp_human_walk_persists_until_runtime_clears();
