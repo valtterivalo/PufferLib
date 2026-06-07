@@ -594,6 +594,56 @@ static void test_target_click_overrides_stale_walk_destination(void) {
     collision_map_free(cmap);
 }
 
+static void test_shared_player_step_destination_clears_interaction(void) {
+    printf("--- shared player step destination clears interaction ---\n");
+
+    CollisionMap* cmap = collision_map_create();
+    OsrsEnv env;
+    memset(&env, 0, sizeof(env));
+    pvp_init(&env);
+    env.collision_map = cmap;
+    pvp_seed(&env, 73);
+    pvp_reset(&env);
+
+    Player* agent = &env.players[0];
+    Player* target = &env.players[1];
+    pvp_set_player_spawn(agent, 3041, 3530);
+    pvp_set_player_spawn(target, 3043, 3530);
+    osrs_player_set_equipment_slot(agent, GEAR_SLOT_WEAPON, ITEM_WHIP);
+    osrs_interaction_set(&agent->interaction, 1);
+
+    int dest_x = 3040;
+    int dest_y = 3530;
+    PvpAttackMoveIntent intent = {
+        .env = &env,
+        .agent_idx = 0,
+        .target_slot = 1,
+        .style = ATTACK_STYLE_MELEE,
+        .range = 1,
+    };
+    OsrsEncounterArena arena = pvp_build_arena(&env);
+    OsrsPlayerStepResult step = osrs_encounter_player_step(&(OsrsPlayerStepInput){
+        .player = agent,
+        .interaction = &agent->interaction,
+        .target_lookup = pvp_lookup_attack_target,
+        .target_ctx = &intent,
+        .move_kind = OSRS_PLAYER_MOVE_DESTINATION,
+        .target_move_policy = OSRS_PLAYER_TARGET_MOVE_EXPLICIT_FIRST,
+        .dest_x = &dest_x,
+        .dest_y = &dest_y,
+        .arena = arena,
+    });
+
+    ASSERT_INT_EQ("shared step explicit moved", step.explicit_moved, 1);
+    ASSERT_INT_EQ("shared step did not chase target", step.chased_target, 0);
+    ASSERT_INT_EQ("shared step cleared interaction result", step.interaction_active, 0);
+    ASSERT_INT_EQ("shared step cleared interaction state",
+        osrs_interaction_active(&agent->interaction), 0);
+    ASSERT_INT_EQ("shared step moved toward destination", agent->x, 3040);
+
+    collision_map_free(cmap);
+}
+
 static void test_persistent_staff_target_click_executes_melee(void) {
     printf("--- PvP persistent staff target click executes melee ---\n");
 
@@ -813,6 +863,7 @@ int main(void) {
     test_mobile_attack_click_chases_around_collision_los();
     test_target_click_staff_bash_chases_into_melee_range();
     test_target_click_overrides_stale_walk_destination();
+    test_shared_player_step_destination_clears_interaction();
     test_persistent_staff_target_click_executes_melee();
     test_static_binding_exposes_separate_action_mask();
     test_static_binding_sets_scripted_opponents();

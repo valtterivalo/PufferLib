@@ -352,7 +352,7 @@ static inline OsrsPlayerStepResult pvp_step_player_movement(
     int* dest_y = &env->pvp_runtime.walk_dest_y[agent_idx];
     Player* p = &env->players[agent_idx];
 
-    if (intent.has_new_target || osrs_interaction_active(&p->interaction)) {
+    if (intent.has_new_target) {
         *dest_x = -1;
         *dest_y = -1;
     }
