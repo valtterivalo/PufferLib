@@ -16,6 +16,7 @@
 #include "ocean/osrs/encounters/encounter_nh_pvp.h"
 #include "ocean/osrs/osrs_anim.h"
 #include "ocean/osrs/osrs_gui.h"
+#include "ocean/osrs/osrs_models.h"
 #include "ocean/osrs/osrs_pvp_effects.h"
 #include "ocean/osrs/osrs_spotanims.h"
 
@@ -154,6 +155,57 @@ static void fill_pvp_entities_raw(NhPvpState* state, RenderEntity* entities, int
         (EncounterState*)state, NULL, entities, NUM_AGENTS, count);
 }
 
+static void test_shared_render_target_refs_resolve(void) {
+    printf("--- shared render target refs resolve ---\n");
+
+    RenderEntity entities[3] = {0};
+    entities[0].entity_type = ENTITY_PLAYER;
+    entities[0].player_slot = 0;
+    entities[0].attack_target_entity_idx = -1;
+    entities[1].entity_type = ENTITY_PLAYER;
+    entities[1].player_slot = 1;
+    entities[1].attack_target_entity_idx = -1;
+    entities[2].entity_type = ENTITY_NPC;
+    entities[2].player_slot = -1;
+    entities[2].npc_slot = 7;
+    entities[2].attack_target_entity_idx = -1;
+
+    ASSERT_INT_EQ("none ref resolves inactive",
+        osrs_render_target_ref_resolve_entity_idx(
+            entities, 3, osrs_render_target_none()),
+        -1);
+    ASSERT_INT_EQ("player-slot ref resolves player",
+        osrs_render_target_ref_resolve_entity_idx(
+            entities, 3, osrs_render_target_player_slot(1)),
+        1);
+    ASSERT_INT_EQ("npc-slot ref resolves npc",
+        osrs_render_target_ref_resolve_entity_idx(
+            entities, 3, osrs_render_target_npc_slot(7)),
+        2);
+    ASSERT_INT_EQ("entity-index ref resolves direct index",
+        osrs_render_target_ref_resolve_entity_idx(
+            entities, 3, osrs_render_target_entity_index(0)),
+        0);
+
+    osrs_render_entity_set_preferred_attack_target_ref(
+        entities,
+        3,
+        0,
+        osrs_render_target_player_slot(1),
+        osrs_render_target_npc_slot(7));
+    ASSERT_INT_EQ("preferred target uses primary",
+        entities[0].attack_target_entity_idx, 1);
+
+    osrs_render_entity_set_preferred_attack_target_ref(
+        entities,
+        3,
+        0,
+        osrs_render_target_player_slot(8),
+        osrs_render_target_npc_slot(7));
+    ASSERT_INT_EQ("preferred target falls back",
+        entities[0].attack_target_entity_idx, 2);
+}
+
 static void set_agent_actions(NhPvpState* state, const int* actions) {
     memcpy(state->env.ocean_io.agent_actions, actions,
         NUM_ACTION_HEADS * sizeof(int));
@@ -221,6 +273,37 @@ static void test_attack_sets_render_target(void) {
 
     ASSERT_INT_EQ("agent render target follows interaction",
         entities[0].attack_target_entity_idx, 1);
+}
+
+static void test_attack_event_faces_target_after_interaction_clear(void) {
+    printf("--- PvP attack event faces target after interaction clear ---\n");
+
+    NhPvpState state;
+    setup_pvp_state(&state);
+    Player* attacker = &state.env.players[0];
+    Player* defender = &state.env.players[1];
+
+    attacker->x = 3041;
+    attacker->y = 3530;
+    attacker->dest_x = attacker->x;
+    attacker->dest_y = attacker->y;
+    defender->x = 3042;
+    defender->y = 3530;
+    defender->dest_x = defender->x;
+    defender->dest_y = defender->y;
+
+    perform_attack(&state.env, 0, 1, ATTACK_STYLE_MELEE, 0, 0, 1);
+    osrs_interaction_clear(&attacker->interaction);
+
+    RenderEntity entities[NUM_AGENTS];
+    int count = 0;
+    fill_pvp_entities(&state, entities, &count);
+
+    ASSERT_INT_EQ("attack event target resolves player slot",
+        entities[0].attack_target_entity_idx, 1);
+    ASSERT_INT_EQ("attack event faces target",
+        render_entity_select_facing_mode(&entities[0], 0),
+        RENDER_ENTITY_FACE_ATTACK_TARGET);
 }
 
 static void test_explicit_move_clears_render_target(void) {
@@ -812,6 +895,63 @@ static void test_pvp_current_special_visual_rows(void) {
         OSRS_COMBAT_PROJECTILE_MISSING, OSRS_COMBAT_PROJECTILE_MISSING);
 }
 
+static void test_pvp_godsword_and_voidwaker_specials_are_distinct(void) {
+    printf("--- PvP godsword and Voidwaker specials are distinct ---\n");
+
+    const OsrsCombatVisualRow* ancient =
+        osrs_combat_visual_find_special_item_id(
+            ITEM_DATABASE[ITEM_ANCIENT_GS].item_id, ATTACK_STYLE_MELEE);
+    const OsrsCombatVisualRow* ags =
+        osrs_combat_visual_find_special_item_id(
+            ITEM_DATABASE[ITEM_AGS].item_id, ATTACK_STYLE_MELEE);
+    const OsrsCombatVisualRow* voidwaker =
+        osrs_combat_visual_find_special_item_id(
+            ITEM_DATABASE[ITEM_VOIDWAKER].item_id, ATTACK_STYLE_MELEE);
+
+    ASSERT_INT_EQ("Ancient row exists", ancient != NULL, 1);
+    ASSERT_INT_EQ("AGS row exists", ags != NULL, 1);
+    ASSERT_INT_EQ("Voidwaker row exists", voidwaker != NULL, 1);
+    if (!ancient || !ags || !voidwaker) return;
+
+    ASSERT_INT_EQ("Ancient anim", ancient->attack_anim_id, 9171);
+    ASSERT_INT_EQ("AGS anim", ags->attack_anim_id, 7644);
+    ASSERT_INT_EQ("Voidwaker anim", voidwaker->attack_anim_id, 11275);
+    ASSERT_INT_EQ("Ancient launch differs from AGS",
+        ancient->projectile.launch_spotanim_id != ags->projectile.launch_spotanim_id,
+        1);
+    ASSERT_INT_EQ("Voidwaker impact differs from Ancient",
+        voidwaker->projectile.impact_spotanim_id !=
+            ancient->projectile.impact_spotanim_id,
+        1);
+}
+
+static void test_pvp_ancient_priority_has_wield_model(void) {
+    printf("--- PvP Ancient priority has wield model ---\n");
+
+    NhPvpState state;
+    setup_pvp_state(&state);
+    Player* attacker = &state.env.players[0];
+
+    osrs_player_inventory_clear(attacker);
+    osrs_player_set_equipment_slot(attacker, GEAR_SLOT_WEAPON, ITEM_WHIP);
+    ASSERT_INT_EQ("add Voidwaker", osrs_player_inventory_add(attacker, ITEM_VOIDWAKER) >= 0, 1);
+    ASSERT_INT_EQ("add Ancient godsword",
+        osrs_player_inventory_add(attacker, ITEM_ANCIENT_GS) >= 0, 1);
+    ASSERT_INT_EQ("spec melee loadout applies",
+        apply_loadout(attacker, LOADOUT_SPEC_MELEE) > 0, 1);
+
+    ASSERT_INT_EQ("Ancient priority remains above Voidwaker",
+        attacker->equipped[GEAR_SLOT_WEAPON], ITEM_ANCIENT_GS);
+    ASSERT_INT_EQ("Ancient spec enum selected",
+        attacker->melee_spec_weapon, MELEE_SPEC_ANCIENT_GS);
+    ASSERT_INT_EQ("Ancient wield model exists",
+        item_to_wield_model(ITEM_DATABASE[ITEM_ANCIENT_GS].item_id) !=
+            ITEM_RENDER_MODEL_MISSING,
+        1);
+    ASSERT_INT_EQ("Ancient is treated as two-handed",
+        item_render_is_two_handed(ITEM_DATABASE[ITEM_ANCIENT_GS].item_id), 1);
+}
+
 static void test_special_visual_fallbacks_do_not_overlap_local_rows(void) {
     printf("--- special visual fallbacks do not overlap local rows ---\n");
 
@@ -882,8 +1022,22 @@ static void test_pvp_voidwaker_special_uses_melee_visual_and_magic_damage(void) 
 
     perform_attack(&state.env, 0, 1, ATTACK_STYLE_MELEE, 1, 0, 1);
 
+    RenderEntity entities[NUM_AGENTS];
+    int count = 0;
+    fill_pvp_entities(&state, entities, &count);
+
     ASSERT_INT_EQ("Voidwaker records special weapon",
         attacker->attack_weapon_this_tick, ITEM_VOIDWAKER);
+    ASSERT_INT_EQ("Voidwaker render entity records special weapon",
+        entities[0].attack_weapon_this_tick, ITEM_VOIDWAKER);
+    ASSERT_INT_EQ("Voidwaker render entity shows special weapon",
+        entities[0].equipped[GEAR_SLOT_WEAPON], ITEM_VOIDWAKER);
+    ASSERT_INT_EQ("Voidwaker render target resolves defender",
+        entities[0].attack_target_entity_idx, 1);
+    ASSERT_INT_EQ("Voidwaker wield model exists",
+        item_to_wield_model(ITEM_DATABASE[ITEM_VOIDWAKER].item_id) !=
+            ITEM_RENDER_MODEL_MISSING,
+        1);
     ASSERT_INT_EQ("Voidwaker visual style",
         attacker->attack_style_this_tick, ATTACK_STYLE_MELEE);
     ASSERT_INT_EQ("Voidwaker damage style",
@@ -1260,8 +1414,10 @@ static void test_shared_special_effect_render_contract(void) {
 int main(void) {
     test_wilderness_collision_asset_spans_pvp_area();
     test_runtime_animation_assets_are_anm2();
+    test_shared_render_target_refs_resolve();
     test_reset_has_no_forced_targets();
     test_attack_sets_render_target();
+    test_attack_event_faces_target_after_interaction_clear();
     test_explicit_move_clears_render_target();
     test_opponent_target_is_independent();
     test_inventory_projection_matches_player();
@@ -1285,6 +1441,8 @@ int main(void) {
     test_terminal_winner_phase_removes_loser();
     test_performance_tracker_values();
     test_pvp_current_special_visual_rows();
+    test_pvp_godsword_and_voidwaker_specials_are_distinct();
+    test_pvp_ancient_priority_has_wield_model();
     test_special_visual_fallbacks_do_not_overlap_local_rows();
     test_pvp_weapon_pose_anims_are_mapped();
     test_pvp_voidwaker_special_uses_melee_visual_and_magic_damage();

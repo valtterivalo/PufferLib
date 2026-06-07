@@ -295,11 +295,12 @@ static const char* nh_pvp_render_entity_name(OsrsEnv* env, int player_idx) {
     return "Opponent";
 }
 
-static int nh_pvp_render_attack_target_idx(Player* player, int entity_count) {
-    if (!osrs_interaction_active(&player->interaction)) return -1;
+static OsrsRenderTargetRef nh_pvp_render_interaction_target_ref(Player* player) {
+    if (!osrs_interaction_active(&player->interaction))
+        return osrs_render_target_none();
     int target = player->interaction.target_slot;
-    if (target < 0 || target >= entity_count) return -1;
-    return target;
+    if (target < 0 || target >= NUM_AGENTS) abort();
+    return osrs_render_target_player_slot(target);
 }
 
 static void nh_pvp_fill_render_entities(
@@ -318,17 +319,29 @@ static void nh_pvp_fill_render_entities(
         Player* player = pvp_terminal_presentation_active(&s->env)
             ? &s->env.pvp_runtime.terminal_presentation.players[player_idx]
             : &s->env.players[player_idx];
-        osrs_render_entity_from_player_entity(player, &out[i]);
-        out[i].attack_target_entity_idx =
-            s->env.pvp_runtime.terminal_presentation.phase ==
-                PVP_TERMINAL_PRESENTATION_WINNER
-            ? -1
-            : nh_pvp_render_attack_target_idx(player, n);
+        osrs_render_entity_from_player_slot(player, &out[i], player_idx);
         const char* name = player_idx == 1 &&
             pvp_terminal_presentation_active(&s->env)
             ? s->env.pvp_runtime.terminal_presentation.opponent_name
             : nh_pvp_render_entity_name(&s->env, player_idx);
         snprintf(out[i].display_name, sizeof(out[i].display_name), "%s", name);
+    }
+    for (int i = 0; i < n; i++) {
+        if (s->env.pvp_runtime.terminal_presentation.phase ==
+                PVP_TERMINAL_PRESENTATION_WINNER) {
+            out[i].attack_target_entity_idx = -1;
+            continue;
+        }
+        int player_idx = pvp_terminal_presentation_player_index(&s->env, i);
+        Player* player = pvp_terminal_presentation_active(&s->env)
+            ? &s->env.pvp_runtime.terminal_presentation.players[player_idx]
+            : &s->env.players[player_idx];
+        osrs_render_entity_set_preferred_attack_target_ref(
+            out,
+            n,
+            i,
+            player->render_attack_target_this_tick,
+            nh_pvp_render_interaction_target_ref(player));
     }
     *count = n;
 }

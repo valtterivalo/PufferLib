@@ -1431,6 +1431,8 @@ post_attack:;
         (is_special && spec_item_idx != ITEM_NONE)
             ? (uint8_t)spec_item_idx
             : attacker->equipped[GEAR_SLOT_WEAPON];
+    attacker->render_attack_target_this_tick =
+        osrs_render_target_player_slot(defender_idx);
     attacker->magic_type_this_tick = magic_type;
     attacker->used_special_this_tick = is_special;
 

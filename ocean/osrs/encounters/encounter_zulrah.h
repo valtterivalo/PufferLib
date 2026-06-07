@@ -725,6 +725,7 @@ static void zul_record_player_attack_visual(
     s->player_attack_is_special = is_special;
     s->player_attack_timing = zul_player_projectile_timing(
         style, s->player.equipped[GEAR_SLOT_WEAPON], is_special, distance);
+    s->player.render_attack_target_this_tick = osrs_render_target_npc_slot(0);
 }
 
 static uint32_t zul_next_npc_instance_id(ZulrahState* s) {
@@ -2510,6 +2511,7 @@ static void zul_step(EncounterState* state, const int* actions) {
     s->player.just_attacked = 0;
     s->player.hit_landed_this_tick = 0;
     s->player.attack_style_this_tick = ATTACK_STYLE_NONE;
+    s->player.render_attack_target_this_tick = osrs_render_target_none();
     s->player.used_special_this_tick = 0;
     s->player.ate_food_this_tick = 0;
     s->player.ate_karambwan_this_tick = 0;
@@ -2829,7 +2831,8 @@ static void* zul_get_entity(EncounterState* state, int index) {
 static void zul_fill_render_entities(EncounterState* state, RenderEntity* out, int max_entities, int* count) {
     ZulrahState* s = (ZulrahState*)state;
     int n = 0;
-    if (n < max_entities) osrs_render_entity_from_player_entity(&s->player, &out[n++]);
+    if (n < max_entities)
+        osrs_render_entity_from_player_slot(&s->player, &out[n++], 0);
     if (n < max_entities) {
         osrs_render_entity_from_npc_player(
             &s->zulrah, &out[n], 0, s->zulrah_npc_instance_id);
@@ -2854,17 +2857,25 @@ static void zul_fill_render_entities(EncounterState* state, RenderEntity* out, i
             osrs_render_entity_suppress_pose_anims(
                 &out[n], SNAKELING_ANIM_IDLE, SNAKELING_ANIM_WALK);
             n++;
-            /* snakelings face player when in attack range */
             int adx = abs(s->snakelings[i].entity.x - s->player.x);
             int ady = abs(s->snakelings[i].entity.y - s->player.y);
             if (adx <= 1 && ady <= 1)
-                out[n - 1].attack_target_entity_idx = 0;
+                osrs_render_entity_set_attack_target_ref(
+                    out,
+                    n,
+                    n - 1,
+                    osrs_render_target_entity_index(0));
         }
     }
     if ((s->player_attacked_this_tick || s->player_chased_target_this_tick ||
                 (osrs_interaction_active(&s->interaction) && !s->player_moved_this_tick)) &&
             s->zulrah_visible && !s->is_diving) {
-        encounter_resolve_attack_target(out, n, 0);
+        osrs_render_entity_set_preferred_attack_target_ref(
+            out,
+            n,
+            0,
+            s->player.render_attack_target_this_tick,
+            osrs_render_target_npc_slot(0));
     }
     int attack_anim_active = s->zulrah.npc_anim_id >= 0 &&
         s->zulrah.npc_anim_id != ZULRAH_ANIM_SURFACE &&
@@ -2875,7 +2886,11 @@ static void zul_fill_render_entities(EncounterState* state, RenderEntity* out, i
     if ((s->attack_event_count > 0 || s->cloud_event_count > 0 ||
             s->melee_pending || attack_anim_active) &&
         s->zulrah_visible && !s->is_diving && n > 1)
-        out[1].attack_target_entity_idx = 0;
+        osrs_render_entity_set_attack_target_ref(
+            out,
+            n,
+            1,
+            osrs_render_target_entity_index(0));
     *count = n;
 }
 

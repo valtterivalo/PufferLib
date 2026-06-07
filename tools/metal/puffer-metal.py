@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/Users/valtterivalo/.pyenv/versions/3.12.3/bin/python
 """Run PufferLib through the local Metal overlay."""
 
 from __future__ import annotations

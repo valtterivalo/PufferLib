@@ -842,9 +842,8 @@ static void inf_fill_render_entities_ctx(
         s->player.gui_strength_bonus = ls->strength_bonus;
     }
 
-    /* index 0: the player */
     if (n < max_entities) {
-        osrs_render_entity_from_player_entity(&s->player, &out[n++]);
+        osrs_render_entity_from_player_slot(&s->player, &out[n++], 0);
     }
 
     for (int i = 0; i < INF_MAX_NPCS && n < max_entities; i++) {
@@ -922,7 +921,15 @@ static void inf_fill_render_entities_ctx(
         }, re);
     }
 
-    encounter_resolve_attack_target(out, n, s->interaction.target_slot);
+    OsrsRenderTargetRef interaction_target = osrs_interaction_active(&s->interaction)
+        ? osrs_render_target_npc_slot(s->interaction.target_slot)
+        : osrs_render_target_none();
+    osrs_render_entity_set_preferred_attack_target_ref(
+        out,
+        n,
+        0,
+        s->player.render_attack_target_this_tick,
+        interaction_target);
     *count = n;
 }
 

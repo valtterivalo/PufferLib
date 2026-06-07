@@ -69,6 +69,65 @@ typedef struct {
     int splash_gfx_id;
 } OsrsCombatProjectileEmitSpec;
 
+static inline int osrs_render_target_ref_resolve_entity_idx(
+    const RenderEntity* entities,
+    int count,
+    OsrsRenderTargetRef target
+) {
+    if (!entities || count < 0) abort();
+    switch (target.kind) {
+        case OSRS_RENDER_TARGET_NONE:
+            return -1;
+        case OSRS_RENDER_TARGET_ENTITY_INDEX:
+            if (target.slot < 0) abort();
+            return target.slot < count ? target.slot : -1;
+        case OSRS_RENDER_TARGET_PLAYER_SLOT:
+            if (target.slot < 0) abort();
+            for (int i = 0; i < count; i++) {
+                if (entities[i].entity_type == ENTITY_PLAYER &&
+                        entities[i].player_slot == target.slot) {
+                    return i;
+                }
+            }
+            return -1;
+        case OSRS_RENDER_TARGET_NPC_SLOT:
+            if (target.slot < 0) abort();
+            for (int i = 0; i < count; i++) {
+                if (entities[i].entity_type == ENTITY_NPC &&
+                        entities[i].npc_slot == target.slot) {
+                    return i;
+                }
+            }
+            return -1;
+    }
+    abort();
+}
+
+static inline void osrs_render_entity_set_attack_target_ref(
+    RenderEntity* entities,
+    int count,
+    int source_entity_idx,
+    OsrsRenderTargetRef target
+) {
+    if (!entities || source_entity_idx < 0 || source_entity_idx >= count) abort();
+    entities[source_entity_idx].attack_target_entity_idx =
+        osrs_render_target_ref_resolve_entity_idx(entities, count, target);
+}
+
+static inline void osrs_render_entity_set_preferred_attack_target_ref(
+    RenderEntity* entities,
+    int count,
+    int source_entity_idx,
+    OsrsRenderTargetRef primary,
+    OsrsRenderTargetRef fallback
+) {
+    if (!entities || source_entity_idx < 0 || source_entity_idx >= count) abort();
+    int target = osrs_render_target_ref_resolve_entity_idx(entities, count, primary);
+    if (target < 0)
+        target = osrs_render_target_ref_resolve_entity_idx(entities, count, fallback);
+    entities[source_entity_idx].attack_target_entity_idx = target;
+}
+
 static inline int osrs_npc_death_linger_start(
     int current_hitpoints,
     int active,
@@ -108,6 +167,7 @@ static inline void osrs_render_entity_from_npc_spec(
     memset(out->equipped, ITEM_NONE, NUM_GEAR_SLOTS);
     out->entity_type = ENTITY_NPC;
     out->npc_def_id = spec->npc_def_id;
+    out->player_slot = -1;
     out->npc_slot = spec->npc_slot;
     out->npc_instance_id = spec->npc_instance_id;
     out->npc_visible = spec->npc_visible;
@@ -189,6 +249,16 @@ static inline void osrs_render_entity_from_player_entity(
         fprintf(stderr, "render entity is not a player\n");
         abort();
     }
+}
+
+static inline void osrs_render_entity_from_player_slot(
+    const Player* player,
+    RenderEntity* out,
+    int player_slot
+) {
+    if (player_slot < 0) abort();
+    osrs_render_entity_from_player_entity(player, out);
+    out->player_slot = player_slot;
 }
 
 static inline void osrs_render_entity_suppress_pose_anims(

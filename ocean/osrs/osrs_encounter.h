@@ -10,7 +10,6 @@
  *   rendering:
  *     RenderEntity                     value struct for renderer (not Player*)
  *     render_entity_from_player()      copy Player fields to RenderEntity
- *     encounter_resolve_attack_target() match npc_slot to render entity index
  *     EncounterOverlay                 visual overlay (hazards, projectiles, boss)
  *
  *   prayer (set/refresh semantic for RL tick commands):
@@ -401,6 +400,7 @@ typedef struct {
     int ate_karambwan_this_tick;
     int used_special_this_tick;
     uint8_t equipped[NUM_GEAR_SLOTS];
+    int player_slot;
     int npc_slot;  /* source slot index in encounter's NPC array; -1 for player */
     uint32_t npc_instance_id;  /* stable for one NPC lifetime; 0 means slot+def only */
     int attack_target_entity_idx;  /* render entity index of attack target, -1 = none */
@@ -436,9 +436,12 @@ static inline int render_entity_find_previous_identity_index(
 ) {
     if (entity->entity_type == ENTITY_PLAYER) {
         for (int j = 0; j < previous_count; j++) {
-            if (!previous_used[j] && previous[j].entity_type == ENTITY_PLAYER) {
-                return j;
-            }
+            if (previous_used[j] || previous[j].entity_type != ENTITY_PLAYER)
+                continue;
+            if ((entity->player_slot >= 0 || previous[j].player_slot >= 0) &&
+                    entity->player_slot != previous[j].player_slot)
+                continue;
+            return j;
         }
         return -1;
     }
@@ -545,26 +548,12 @@ static inline void render_entity_from_player(const Player* p, RenderEntity* out)
         if (item_is_two_handed(out->attack_weapon_this_tick))
             out->equipped[GEAR_SLOT_SHIELD] = ITEM_NONE;
     }
-    out->npc_slot = -1;  /* player, not an NPC */
+    out->player_slot = -1;
+    out->npc_slot = -1;
     out->npc_instance_id = 0;
     out->attack_target_entity_idx = -1;
 }
 
-/** Resolve attack_target_entity_idx for entity 0 (player) by matching npc_slot.
-    call after fill_render_entities populates the entity array. any encounter with
-    NPC targeting should call this so the renderer faces the correct target. */
-static inline void encounter_resolve_attack_target(
-    RenderEntity* entities, int count, int target_npc_slot
-) {
-    entities[0].attack_target_entity_idx = -1;
-    if (target_npc_slot < 0) return;
-    for (int i = 1; i < count; i++) {
-        if (entities[i].npc_slot == target_npc_slot) {
-            entities[0].attack_target_entity_idx = i;
-            return;
-        }
-    }
-}
 /* canonical prayer action encoding for simulator tick commands              */
 /*                                                                           */
 /* the RL action space uses explicit no_change, off, and set_refresh actions.*/
@@ -1523,6 +1512,7 @@ static inline void encounter_resolve_player_pending_hits(
 static inline void encounter_clear_tick_flags(Player* p) {
     p->attack_style_this_tick = ATTACK_STYLE_NONE;
     p->attack_weapon_this_tick = ITEM_NONE;
+    p->render_attack_target_this_tick = osrs_render_target_none();
     p->magic_type_this_tick = 0;
     p->hit_landed_this_tick = 0;
     p->hit_damage = 0;
