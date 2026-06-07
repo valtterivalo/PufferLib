@@ -356,6 +356,45 @@ static void test_slotclick_schema_and_inventory_mask(void) {
     collision_map_free(cmap);
 }
 
+static void test_attack_mask_allows_post_equip_weapon_target_click(void) {
+    printf("--- PvP attack mask allows post-equip weapon target click ---\n");
+
+    OsrsEnv env;
+    memset(&env, 0, sizeof(env));
+    pvp_init(&env);
+    CollisionMap* cmap = collision_map_create();
+    env.collision_map = cmap;
+    pvp_seed(&env, 73);
+    pvp_reset(&env);
+
+    Player* agent = &env.players[0];
+    Player* target = &env.players[1];
+    pvp_set_player_spawn(agent, 3041, 3530);
+    pvp_set_player_spawn(target, 3043, 3530);
+    agent->last_obs_target_x = target->x;
+    agent->last_obs_target_y = target->y;
+    agent->attack_timer = 0;
+    agent->frozen_ticks = 8;
+    osrs_player_inventory_clear(agent);
+    osrs_player_set_equipment_slot(agent, GEAR_SLOT_WEAPON, ITEM_AHRIM_STAFF);
+
+    compute_action_masks(&env, 0);
+
+    int combat_offset = action_head_offset(HEAD_COMBAT);
+    ASSERT_INT_EQ("frozen staff bash out of range masked",
+        env.action_masks[combat_offset + ATTACK_ATK], 0);
+
+    int crossbow_slot = osrs_player_inventory_add(agent, ITEM_RUNE_CROSSBOW);
+    ASSERT_TRUE("crossbow added", crossbow_slot >= 0);
+
+    compute_action_masks(&env, 0);
+
+    ASSERT_INT_EQ("post-equip ranged target-click valid",
+        env.action_masks[combat_offset + ATTACK_ATK], 1);
+
+    collision_map_free(cmap);
+}
+
 static void test_inventory_observation_item_facts(void) {
     printf("--- PvP inventory observation item facts ---\n");
 
@@ -744,6 +783,7 @@ int main(void) {
     test_seeded_pid_shuffles_during_episode();
     test_movement_masks_respect_blocked_tiles();
     test_slotclick_schema_and_inventory_mask();
+    test_attack_mask_allows_post_equip_weapon_target_click();
     test_inventory_observation_item_facts();
     test_no_weapon_observation_has_zero_attack_profile();
     test_collision_los_blocks_impenetrable_tiles();

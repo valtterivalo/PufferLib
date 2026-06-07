@@ -239,6 +239,28 @@ static void assert_player_item_sprites_exist(const Player* player) {
     }
 }
 
+static void assert_pvp_item_sprite_exists(uint8_t item) {
+    if (item == ITEM_NONE) return;
+    char path[128];
+    snprintf(path, sizeof(path), "sprites/items/%d.png",
+        ITEM_DATABASE[item].item_id);
+    ASSERT_INT_EQ("PvP gear-pool sprite exists", osrs_asset_exists(path), 1);
+}
+
+static void assert_pvp_weapon_model_exists(uint8_t item) {
+    if (item == ITEM_NONE) return;
+    if (osrs_item_gear_slot(item) != GEAR_SLOT_WEAPON) return;
+    ASSERT_INT_EQ("PvP gear-pool weapon model exists",
+        item_to_wield_model(ITEM_DATABASE[item].item_id) !=
+            ITEM_RENDER_MODEL_MISSING,
+        1);
+}
+
+static void assert_pvp_gear_pool_item_assets(uint8_t item) {
+    assert_pvp_item_sprite_exists(item);
+    assert_pvp_weapon_model_exists(item);
+}
+
 static void test_reset_has_no_forced_targets(void) {
     printf("--- PvP reset has no forced render targets ---\n");
 
@@ -686,6 +708,26 @@ static void test_pvp_item_sprites_exist(void) {
     setup_pvp_state(&state);
     assert_player_item_sprites_exist(&state.env.players[0]);
     assert_player_item_sprites_exist(&state.env.players[1]);
+}
+
+static void test_pvp_gear_pool_assets_exist(void) {
+    printf("--- PvP gear pool assets exist ---\n");
+
+    NhPvpState state;
+    setup_pvp_state(&state);
+
+    for (int i = 0; i < NUM_GEAR_SLOTS; i++) {
+        assert_pvp_gear_pool_item_assets(state.env.players[0].equipped[i]);
+    }
+    for (int i = 0; i < OSRS_INVENTORY_SIZE; i++) {
+        assert_pvp_gear_pool_item_assets(state.env.players[0].inventory[i]);
+    }
+    for (int i = 0; i < CHEST_LOOT_LEN; i++) {
+        assert_pvp_gear_pool_item_assets(CHEST_LOOT[i]);
+    }
+    for (int i = 0; i < BLOODIER_LOOT_LEN; i++) {
+        assert_pvp_gear_pool_item_assets(BLOODIER_LOOT[i]);
+    }
 }
 
 static void test_pvp_display_names_and_label_target(void) {
@@ -1462,6 +1504,7 @@ int main(void) {
     test_pvp_human_command_frame_maps_actions();
     test_pvp_human_walk_persists_until_runtime_clears();
     test_pvp_item_sprites_exist();
+    test_pvp_gear_pool_assets_exist();
     test_pvp_display_names_and_label_target();
     test_terminal_presentation_captures_loser_before_auto_reset();
     test_terminal_status_text_for_player_and_opponent_wins();

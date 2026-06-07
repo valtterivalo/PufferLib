@@ -420,6 +420,59 @@ static void pvp_write_equipped_policy_observations(Player* self, Player* target,
     }
 }
 
+static int pvp_attack_head_reachable_for_player(
+    const CollisionMap* cmap,
+    Player* attacker,
+    Player* target,
+    int can_move_now
+) {
+    AttackStyle weapon_style = get_slot_weapon_attack_style(attacker);
+    if (weapon_style == ATTACK_STYLE_NONE) return 0;
+
+    AttackStyle actual_style = weapon_style == ATTACK_STYLE_MAGIC
+        ? ATTACK_STYLE_MELEE
+        : weapon_style;
+    OsrsAttackReachQuery reach = pvp_attack_reach_query(
+        cmap, attacker, target, actual_style);
+    return osrs_attack_can_reach(&reach) || can_move_now;
+}
+
+static int pvp_attack_head_reachable_after_equip(
+    const CollisionMap* cmap,
+    const Player* attacker,
+    Player* target,
+    int inventory_slot,
+    int can_move_now
+) {
+    uint8_t item_idx = attacker->inventory[inventory_slot];
+    if (item_idx == ITEM_NONE) return 0;
+    if (osrs_item_gear_slot(item_idx) != GEAR_SLOT_WEAPON) return 0;
+    if (!osrs_player_can_equip_from_inventory_slot(attacker, inventory_slot)) return 0;
+
+    Player next = *attacker;
+    if (!osrs_player_equip_from_inventory_slot(&next, inventory_slot)) {
+        fprintf(stderr, "pvp_attack_head_reachable_after_equip: slot %d precheck failed\n",
+            inventory_slot);
+        abort();
+    }
+    return pvp_attack_head_reachable_for_player(cmap, &next, target, can_move_now);
+}
+
+static int pvp_attack_head_reachable_after_any_weapon_equip(
+    const CollisionMap* cmap,
+    const Player* attacker,
+    Player* target,
+    int can_move_now
+) {
+    for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
+        if (pvp_attack_head_reachable_after_equip(
+                cmap, attacker, target, slot, can_move_now)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /**
  * Generate slot-mode observations with per-slot item stats.
  *
@@ -795,18 +848,12 @@ static void compute_action_masks(OsrsEnv* env, int agent_idx) {
     }
 
     int attack_ready = remaining_ticks(p->attack_timer) == 0;
-    int weapon_style = get_slot_weapon_attack_style(p);
     int can_move_now = can_move(p);
     const CollisionMap* cmap = (const CollisionMap*)env->collision_map;
-    AttackStyle attack_style = weapon_style == ATTACK_STYLE_MAGIC
-        ? ATTACK_STYLE_MELEE
-        : (AttackStyle)weapon_style;
-    int weapon_reachable = 0;
-    if (weapon_style != ATTACK_STYLE_NONE) {
-        OsrsAttackReachQuery weapon_reach = pvp_attack_reach_query(
-            cmap, p, t, attack_style);
-        weapon_reachable = osrs_attack_can_reach(&weapon_reach) || can_move_now;
-    }
+    int weapon_reachable = pvp_attack_head_reachable_for_player(
+        cmap, p, t, can_move_now) ||
+        pvp_attack_head_reachable_after_any_weapon_equip(
+            cmap, p, t, can_move_now);
     OsrsAttackReachQuery magic_reach = pvp_attack_reach_query(
         cmap, p, t, ATTACK_STYLE_MAGIC);
     int magic_reachable = osrs_attack_can_reach(&magic_reach) || can_move_now;
@@ -815,7 +862,6 @@ static void compute_action_masks(OsrsEnv* env, int agent_idx) {
         p->equipped[GEAR_SLOT_WEAPON] == ITEM_GRANITE_MAUL &&
         is_granite_maul_attack_available(p);
     mask[offset + ATTACK_ATK] = (attack_ready || gmaul_spec_ready) &&
-        weapon_style != ATTACK_STYLE_NONE &&
         weapon_reachable;
     mask[offset + ATTACK_ICE] = attack_ready && can_cast_ice_spell(p) && magic_reachable;
     mask[offset + ATTACK_BLOOD] = attack_ready && can_cast_blood_spell(p) && magic_reachable;
