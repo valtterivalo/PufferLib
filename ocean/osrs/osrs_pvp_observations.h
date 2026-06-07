@@ -309,6 +309,117 @@ static void ocean_write_obs_p1(OsrsEnv* env) {
     }
 }
 
+static inline float pvp_item_index_norm(uint8_t item_idx) {
+    if (item_idx >= NUM_ITEMS) return 0.0f;
+    return (float)item_idx / (float)(NUM_ITEMS - 1);
+}
+
+static inline float pvp_item_slot_norm(uint8_t item_idx) {
+    int slot = osrs_item_gear_slot(item_idx);
+    if (slot < 0) return 0.0f;
+    return (float)(slot + 1) / (float)NUM_GEAR_SLOTS;
+}
+
+static inline int pvp_item_spec_is_multihit(uint8_t item_idx) {
+    return item_idx == ITEM_DRAGON_CLAWS ||
+        item_idx == ITEM_DRAGON_DAGGER ||
+        item_idx == ITEM_DARK_BOW;
+}
+
+static inline int pvp_item_spec_has_heal(uint8_t item_idx) {
+    return item_idx == ITEM_SGS ||
+        item_idx == ITEM_ANCIENT_GS ||
+        item_idx == ITEM_TOXIC_BLOWPIPE ||
+        item_idx == ITEM_SANGUINESTI_STAFF;
+}
+
+static inline int pvp_item_spec_has_drain(uint8_t item_idx) {
+    return item_idx == ITEM_STATIUS_WARHAMMER ||
+        item_idx == ITEM_BGS ||
+        item_idx == ITEM_EYE_OF_AYAK;
+}
+
+static inline float pvp_item_melee_off_score(const Item* item) {
+    int best = max_int(item->attack_stab, max_int(item->attack_slash, item->attack_crush));
+    return (float)best / STAT_NORM_ATTACK;
+}
+
+static inline float pvp_item_melee_def_score(const Item* item) {
+    int best = max_int(item->defence_stab, max_int(item->defence_slash, item->defence_crush));
+    return (float)best / STAT_NORM_DEFENCE;
+}
+
+static void pvp_write_item_policy_features(uint8_t item_idx, int can_equip, float* out) {
+    for (int i = 0; i < OSRS_ITEM_FEATURE_DIM; i++) out[i] = 0.0f;
+    if (item_idx >= NUM_ITEMS) return;
+
+    const Item* item = &ITEM_DATABASE[item_idx];
+    int style = get_item_attack_style(item_idx);
+    int spec_cost = osrs_spec_cost(item_idx);
+    uint32_t effects = item->effect_mask;
+
+    out[0] = 1.0f;
+    out[1] = pvp_item_index_norm(item_idx);
+    out[2] = pvp_item_slot_norm(item_idx);
+    out[3] = item->slot == SLOT_WEAPON ? 1.0f : 0.0f;
+    out[4] = item_is_two_handed(item_idx) ? 1.0f : 0.0f;
+    out[5] = style == ATTACK_STYLE_MELEE ? 1.0f : 0.0f;
+    out[6] = style == ATTACK_STYLE_RANGED ? 1.0f : 0.0f;
+    out[7] = style == ATTACK_STYLE_MAGIC ? 1.0f : 0.0f;
+    out[8] = (float)item->attack_speed / STAT_NORM_SPEED;
+    out[9] = (float)item->attack_range / STAT_NORM_RANGE;
+    out[10] = (float)spec_cost / 100.0f;
+    out[11] = spec_cost > 0 ? 1.0f : 0.0f;
+    out[12] = item_idx == ITEM_GRANITE_MAUL ? 1.0f : 0.0f;
+    out[13] = pvp_item_spec_is_multihit(item_idx) ? 1.0f : 0.0f;
+    out[14] = item_idx == ITEM_ANCIENT_GS ? 1.0f : 0.0f;
+    out[15] = pvp_item_spec_has_heal(item_idx) ? 1.0f : 0.0f;
+    out[16] = item_idx == ITEM_ZGS ? 1.0f : 0.0f;
+    out[17] = pvp_item_spec_has_drain(item_idx) ? 1.0f : 0.0f;
+    out[18] = pvp_item_melee_off_score(item);
+    out[19] = (float)item->attack_ranged / STAT_NORM_ATTACK;
+    out[20] = (float)item->attack_magic / STAT_NORM_ATTACK;
+    out[21] = pvp_item_melee_def_score(item);
+    out[22] = (float)item->defence_ranged / STAT_NORM_DEFENCE;
+    out[23] = (float)item->defence_magic / STAT_NORM_DEFENCE;
+    out[24] = (float)item->melee_strength / STAT_NORM_STRENGTH;
+    out[25] = (float)item->ranged_strength / STAT_NORM_STRENGTH;
+    out[26] = (float)item->magic_damage / STAT_NORM_MAGIC_DMG;
+    out[27] = (float)item->prayer / STAT_NORM_PRAYER;
+    out[28] = (effects & (OSRS_ITEM_EFFECT_LIGHTBEARER | OSRS_ITEM_EFFECT_RECOIL_RING)) ? 1.0f : 0.0f;
+    out[29] = (effects & OSRS_ITEM_EFFECT_VIRTUS_PIECE) ? 1.0f : 0.0f;
+    out[30] = (effects & (OSRS_ITEM_EFFECT_DHAROK_PIECE | OSRS_ITEM_EFFECT_CRYSTAL_ARMOUR)) ? 1.0f : 0.0f;
+    out[31] = can_equip ? 1.0f : 0.0f;
+}
+
+static void pvp_write_inventory_policy_observations(Player* p, float* obs) {
+    for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
+        float* row = obs + PVP_INVENTORY_OBS_OFFSET + slot * OSRS_ITEM_FEATURE_DIM;
+        pvp_write_item_policy_features(
+            p->inventory[slot],
+            osrs_player_can_equip_from_inventory_slot(p, slot),
+            row);
+    }
+}
+
+static void pvp_write_equipped_policy_observations(Player* self, Player* target, float* obs) {
+    for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
+        float tmp[OSRS_ITEM_FEATURE_DIM];
+        pvp_write_item_policy_features(self->equipped[slot], 0, tmp);
+        float* self_row = obs + PVP_SELF_EQUIPPED_OBS_OFFSET +
+            slot * PVP_EQUIPPED_SELF_FEATURE_DIM;
+        for (int i = 0; i < PVP_EQUIPPED_SELF_FEATURE_DIM; i++) self_row[i] = tmp[i];
+
+        float target_stats[NUM_ITEM_STATS];
+        get_item_stats_normalized(target->equipped[slot], target_stats);
+        float* target_row = obs + PVP_TARGET_EQUIPPED_OBS_OFFSET +
+            slot * PVP_EQUIPPED_TARGET_FEATURE_DIM;
+        for (int i = 0; i < PVP_EQUIPPED_TARGET_FEATURE_DIM; i++) {
+            target_row[i] = target_stats[i];
+        }
+    }
+}
+
 /**
  * Generate slot-mode observations with per-slot item stats.
  *
@@ -588,7 +699,7 @@ static void generate_slot_observations(OsrsEnv* env, int agent_idx) {
     obs[149] = (p->attack_timer <= 0) ? 1.0f : 0.0f;
 
     // Slot mode specific features (150-181)
-    obs[150] = (float)p->equipped[GEAR_SLOT_WEAPON] / 63.0f;  // normalized weapon index
+    obs[150] = pvp_item_index_norm(p->equipped[GEAR_SLOT_WEAPON]);
     // actual attack style used THIS TICK (not current weapon)
     obs[151] = (p->attack_style_this_tick == ATTACK_STYLE_MAGIC) ? 1.0f : 0.0f;
     obs[152] = (p->attack_style_this_tick == ATTACK_STYLE_RANGED) ? 1.0f : 0.0f;
@@ -605,12 +716,12 @@ static void generate_slot_observations(OsrsEnv* env, int agent_idx) {
 
     // Current equipped gear per slot (160-170 = 11 slots)
     for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
-        obs[160 + slot] = (float)p->equipped[slot] / 63.0f;
+        obs[160 + slot] = pvp_item_index_norm(p->equipped[slot]);
     }
 
     // Target equipped gear per slot (171-181)
     for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
-        obs[171 + slot] = (float)t->equipped[slot] / 63.0f;
+        obs[171 + slot] = pvp_item_index_norm(t->equipped[slot]);
     }
 
     // Per-slot item stats removed: 144 features (8 slots x 18 stats) were redundant
@@ -657,14 +768,11 @@ static void generate_slot_observations(OsrsEnv* env, int agent_idx) {
         int ny = p->y + ENCOUNTER_MOVE_TARGET_DY[m];
         obs[196 + m] = pvp_tile_walkable((void*)cmap_obs, nx, ny) ? 1.0f : 0.0f;
     }
+
+    pvp_write_inventory_policy_observations(p, obs);
+    pvp_write_equipped_policy_observations(p, t, obs);
 }
 
-/**
- * Compute action masks for loadout-based action space.
- *
- * Writes ACTION_MASK_SIZE bytes: one per action value across all heads.
- * mask[i] = 1 if action is valid, 0 if invalid.
- */
 static void compute_action_masks(OsrsEnv* env, int agent_idx) {
     Player* p = &env->players[agent_idx];
     Player* t = &env->players[1 - agent_idx];
@@ -672,48 +780,16 @@ static void compute_action_masks(OsrsEnv* env, int agent_idx) {
     unsigned char* mask = env->action_masks + agent_idx * ACTION_MASK_SIZE;
     int offset = 0;
 
-    // LOADOUT head (9 options: KEEP, MELEE, RANGE, MAGE, TANK, SPEC_MELEE, SPEC_RANGE, SPEC_MAGIC, GMAUL)
-    mask[offset + LOADOUT_KEEP] = 1;
-    // Non-spec loadouts: mask if already active
-    for (int l = LOADOUT_MELEE; l <= LOADOUT_TANK; l++) {
-        mask[offset + l] = is_loadout_active(p, l) ? 0 : 1;
+    for (int h = 0; h < PVP_EQUIP_CLICKS_PER_TICK; h++) {
+        mask[offset] = 1;
+        for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
+            mask[offset + slot + 1] =
+                osrs_player_can_equip_from_inventory_slot(p, slot) ? 1 : 0;
+        }
+        offset += EQUIP_CLICK_DIM;
     }
-
-    int frozen_no_melee = !can_move(p) && !is_in_melee_range(p, t);
-
-    /* SPEC_MELEE: available if melee spec weapon exists + enough energy.
-       no timer check — spec is a toggle (arm now, fires on next attack). */
-    uint8_t best_melee_spec = find_best_melee_spec(p);
-    int melee_spec_cost = 25;
-    if (best_melee_spec == ITEM_AGS || best_melee_spec == ITEM_ANCIENT_GS) melee_spec_cost = 50;
-    if (best_melee_spec == ITEM_STATIUS_WARHAMMER) melee_spec_cost = 35;
-    mask[offset + LOADOUT_SPEC_MELEE] = (best_melee_spec != ITEM_NONE) &&
-        (p->special_energy >= melee_spec_cost) && !frozen_no_melee;
-
-    /* SPEC_RANGE: available if ranged spec weapon exists + enough energy */
-    uint8_t best_range_spec = find_best_ranged_spec(p);
-    int range_spec_cost = 50;
-    mask[offset + LOADOUT_SPEC_RANGE] = (best_range_spec != ITEM_NONE) &&
-        (p->special_energy >= range_spec_cost);
-
-    /* SPEC_MAGIC: available if magic spec weapon (volatile) exists + enough energy */
-    uint8_t best_magic_spec = find_best_magic_spec(p);
-    mask[offset + LOADOUT_SPEC_MAGIC] = (best_magic_spec != ITEM_NONE) &&
-        (p->special_energy >= 55);
-
-    // GMAUL: available if granite maul in inventory + enough energy, NO timer requirement (instant)
-    mask[offset + LOADOUT_GMAUL] = player_has_gmaul(p) &&
-        (p->special_energy >= 50) && !frozen_no_melee;
-
-    if (frozen_no_melee) {
-        mask[offset + LOADOUT_MELEE] = 0;
-    }
-    offset += LOADOUT_DIM;
 
     int attack_ready = remaining_ticks(p->attack_timer) == 0;
-    int current_loadout = get_current_loadout(p);
-    int in_mage_loadout = (current_loadout == LOADOUT_MAGE);
-    int in_tank_loadout = (current_loadout == LOADOUT_TANK);
     int weapon_style = get_slot_weapon_attack_style(p);
     int can_move_now = can_move(p);
     const CollisionMap* cmap = (const CollisionMap*)env->collision_map;
@@ -730,23 +806,23 @@ static void compute_action_masks(OsrsEnv* env, int agent_idx) {
         cmap, p, t, ATTACK_STYLE_MAGIC);
     int magic_reachable = osrs_attack_can_reach(&magic_reach) || can_move_now;
     mask[offset + ATTACK_NONE] = 1;
-    mask[offset + ATTACK_ATK] = attack_ready && !in_mage_loadout && !in_tank_loadout &&
-                                 weapon_style != ATTACK_STYLE_NONE &&
-                                 weapon_reachable;
+    int gmaul_spec_ready = p->spec_armed &&
+        p->equipped[GEAR_SLOT_WEAPON] == ITEM_GRANITE_MAUL &&
+        is_granite_maul_attack_available(p);
+    mask[offset + ATTACK_ATK] = (attack_ready || gmaul_spec_ready) &&
+        weapon_style != ATTACK_STYLE_NONE &&
+        weapon_reachable;
     mask[offset + ATTACK_ICE] = attack_ready && can_cast_ice_spell(p) && magic_reachable;
     mask[offset + ATTACK_BLOOD] = attack_ready && can_cast_blood_spell(p) && magic_reachable;
-    mask[offset + MOVE_ADJACENT] = can_move_now && can_move_adjacent(p, t, cmap);
-    mask[offset + MOVE_UNDER] = can_move_now && can_move_under(p, t, cmap);
-    mask[offset + MOVE_DIAGONAL] = can_move_now && can_move_diagonal(p, t, cmap);
-    mask[offset + MOVE_FARCAST_2] = can_move_now && can_move_to_farcast(p, t, 2, cmap);
-    mask[offset + MOVE_FARCAST_3] = can_move_now && can_move_to_farcast(p, t, 3, cmap);
-    mask[offset + MOVE_FARCAST_4] = can_move_now && can_move_to_farcast(p, t, 4, cmap);
-    mask[offset + MOVE_FARCAST_5] = can_move_now && can_move_to_farcast(p, t, 5, cmap);
-    mask[offset + MOVE_FARCAST_6] = can_move_now && can_move_to_farcast(p, t, 6, cmap);
-    mask[offset + MOVE_FARCAST_7] = can_move_now && can_move_to_farcast(p, t, 7, cmap);
-    offset += COMBAT_DIM;
+    offset += ATTACK_DIM;
 
-    // OVERHEAD head: no_change, off, set_refresh_{melee,ranged,magic,smite,redemption}.
+    uint8_t weapon = p->equipped[GEAR_SLOT_WEAPON];
+    int spec_cost = osrs_spec_cost(weapon);
+    mask[offset + SPECIAL_NOOP] = 1;
+    mask[offset + SPECIAL_ARM] = spec_cost > 0 && p->special_energy >= spec_cost && !p->spec_armed;
+    mask[offset + SPECIAL_DISARM] = p->spec_armed ? 1 : 0;
+    offset += SPECIAL_DIM;
+
     int has_prayer = p->current_prayer > 0;
     mask[offset + ENCOUNTER_OVERHEAD_NO_CHANGE] = 1;
     mask[offset + ENCOUNTER_OVERHEAD_OFF] = p->prayer != PRAYER_NONE;
@@ -757,12 +833,10 @@ static void compute_action_masks(OsrsEnv* env, int agent_idx) {
     mask[offset + ENCOUNTER_OVERHEAD_SET_REFRESH_REDEMPTION] = has_prayer && !env->is_lms;
     offset += OVERHEAD_DIM;
 
-    // FOOD head (2 options)
     mask[offset + FOOD_NONE] = 1;
     mask[offset + FOOD_EAT] = can_eat_food(p);
     offset += FOOD_DIM;
 
-    // POTION head (5 options)
     mask[offset + POTION_NONE] = 1;
     mask[offset + POTION_BREW] = can_use_potion(p, 1) && can_use_brew_boost(p);
     mask[offset + POTION_RESTORE] = can_use_potion(p, 2) && can_restore_stats(p);
@@ -770,18 +844,15 @@ static void compute_action_masks(OsrsEnv* env, int agent_idx) {
     mask[offset + POTION_RANGED] = can_use_potion(p, 4) && can_boost_ranged(p);
     offset += POTION_DIM;
 
-    // KARAMBWAN head (2 options)
     mask[offset + KARAM_NONE] = 1;
     mask[offset + KARAM_EAT] = can_eat_karambwan(p);
     offset += KARAMBWAN_DIM;
 
-    // VENG head (2 options)
     mask[offset + VENG_NONE] = 1;
     mask[offset + VENG_CAST] = !env->is_lms && p->is_lunar_spellbook && !p->veng_active &&
                                 (remaining_ticks(p->veng_cooldown) == 0) && p->current_magic >= 94;
     offset += VENG_DIM;
 
-    // OFFENSIVE head: no_change, off, set_refresh_{piety,rigour,augury}.
     mask[offset + ENCOUNTER_OFFENSIVE_NO_CHANGE] = 1;
     mask[offset + ENCOUNTER_OFFENSIVE_OFF] = p->offensive_prayer != OFFENSIVE_PRAYER_NONE;
     mask[offset + ENCOUNTER_OFFENSIVE_SET_REFRESH_PIETY]  = has_prayer;
@@ -789,10 +860,7 @@ static void compute_action_masks(OsrsEnv* env, int agent_idx) {
     mask[offset + ENCOUNTER_OFFENSIVE_SET_REFRESH_AUGURY] = has_prayer;
     offset += OFFENSIVE_DIM;
 
-    /* MOVE head: 25-action delta grid (idle + 8 walk + 16 run). idle (action 0)
-       is always valid. each non-idle action is valid iff its target tile is in
-       wilderness bounds and walkable, AND the player is not frozen. */
-    mask[offset + 0] = 1;  /* idle */
+    mask[offset + 0] = 1;
     int can_move_for_move_head = can_move(p);
     for (int m = 1; m < MOVE_DIM; m++) {
         if (!can_move_for_move_head) {

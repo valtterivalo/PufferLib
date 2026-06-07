@@ -619,21 +619,6 @@ void pvp_step(OsrsEnv* env) {
     memcpy(actions_p0, env->actions, NUM_ACTION_HEADS * sizeof(int));
     memcpy(actions_p1, env->actions + NUM_ACTION_HEADS, NUM_ACTION_HEADS * sizeof(int));
 
-    // Clamp impossible cross-head combos:
-    // - MELEE/RANGE/SPEC_MELEE/SPEC_RANGE/GMAUL cannot cast spells
-    // - MAGE/TANK cannot use ATK (except SPEC_MAGIC which forces ATK internally)
-    for (int i = 0; i < NUM_AGENTS; i++) {
-        int* a = (i == 0) ? actions_p0 : actions_p1;
-        int lo = a[HEAD_LOADOUT];
-        int cv = a[HEAD_COMBAT];
-        if (lo == LOADOUT_MAGE || lo == LOADOUT_TANK || lo == LOADOUT_SPEC_MAGIC) {
-            if (cv == ATTACK_ATK) {
-                a[HEAD_COMBAT] = ATTACK_NONE;
-            }
-        }
-    }
-
-    // Write clamped actions back for recording and read functions
     memcpy(env->actions, actions_p0, NUM_ACTION_HEADS * sizeof(int));
     memcpy(env->actions + NUM_ACTION_HEADS, actions_p1, NUM_ACTION_HEADS * sizeof(int));
 

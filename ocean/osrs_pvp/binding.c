@@ -74,7 +74,11 @@ typedef struct {
 
 #define OBS_SIZE OCEAN_OBS_SIZE
 #define NUM_ATNS NUM_ACTION_HEADS
-#define ACT_SIZES {LOADOUT_DIM, COMBAT_DIM, OVERHEAD_DIM, FOOD_DIM, POTION_DIM, KARAMBWAN_DIM, VENG_DIM, OFFENSIVE_DIM, MOVE_DIM}
+#define ACT_SIZES { \
+    EQUIP_CLICK_DIM, EQUIP_CLICK_DIM, EQUIP_CLICK_DIM, EQUIP_CLICK_DIM, \
+    ATTACK_DIM, SPECIAL_DIM, OVERHEAD_DIM, FOOD_DIM, POTION_DIM, \
+    KARAMBWAN_DIM, VENG_DIM, OFFENSIVE_DIM, MOVE_DIM \
+}
 #define OBS_TENSOR_T FloatTensor
 #define Env PvpEnv
 #define MY_USES_TAGS
@@ -539,6 +543,9 @@ void my_init(Env* env, Dict* kwargs) {
 }
 
 void my_log(Log* log, Dict* out) {
+    dict_set(out, "action_schema_id", (float)PVP_ACTION_SCHEMA);
+    dict_set(out, "obs_schema_id", (float)PVP_ACTION_SCHEMA);
+    dict_set(out, "mask_schema_id", (float)PVP_ACTION_SCHEMA);
     dict_set(out, "episode_return", log->episode_return);
     dict_set(out, "episode_length", log->episode_length);
     dict_set(out, "wins", log->wins);

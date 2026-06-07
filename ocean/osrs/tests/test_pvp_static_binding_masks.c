@@ -211,6 +211,67 @@ static void test_movement_masks_respect_blocked_tiles(void) {
     collision_map_free(cmap);
 }
 
+static void test_slotclick_schema_and_inventory_mask(void) {
+    printf("--- PvP slot-click schema and inventory mask ---\n");
+
+    ASSERT_INT_EQ("PvP action schema", PVP_ACTION_SCHEMA, PVP_ACTION_SCHEMA_SLOTCLICK_V9);
+    ASSERT_INT_EQ("PvP action head count", NUM_ACTION_HEADS, 13);
+    ASSERT_INT_EQ("equip click dim", ACTION_HEAD_DIMS[HEAD_EQUIP_0], OSRS_INVENTORY_SIZE + 1);
+    ASSERT_INT_EQ("attack dim", ACTION_HEAD_DIMS[HEAD_ATTACK], ATTACK_DIM);
+    ASSERT_INT_EQ("special dim", ACTION_HEAD_DIMS[HEAD_SPECIAL], SPECIAL_DIM);
+    ASSERT_INT_EQ("action mask size", ACTION_MASK_SIZE, 171);
+
+    OsrsEnv env;
+    memset(&env, 0, sizeof(env));
+    pvp_init(&env);
+    CollisionMap* cmap = collision_map_create();
+    env.collision_map = cmap;
+    pvp_seed(&env, 73);
+    pvp_reset(&env);
+
+    Player* agent = &env.players[0];
+    int slot = osrs_player_inventory_find(agent, ITEM_RUNE_CROSSBOW);
+    ASSERT_TRUE("crossbow inventory slot", slot >= 0);
+
+    compute_action_masks(&env, 0);
+
+    int equip_offset = action_head_offset(HEAD_EQUIP_0);
+    int special_offset = action_head_offset(HEAD_SPECIAL);
+    ASSERT_INT_EQ("equip noop valid", env.action_masks[equip_offset], 1);
+    ASSERT_INT_EQ("crossbow slot-click valid",
+        env.action_masks[equip_offset + slot + 1], 1);
+    ASSERT_INT_EQ("special noop valid",
+        env.action_masks[special_offset + SPECIAL_NOOP], 1);
+
+    collision_map_free(cmap);
+}
+
+static void test_inventory_observation_item_facts(void) {
+    printf("--- PvP inventory observation item facts ---\n");
+
+    OsrsEnv env;
+    memset(&env, 0, sizeof(env));
+    pvp_init(&env);
+    CollisionMap* cmap = collision_map_create();
+    env.collision_map = cmap;
+    pvp_seed(&env, 73);
+    pvp_reset(&env);
+
+    Player* agent = &env.players[0];
+    agent->inventory[0] = ITEM_VOIDWAKER;
+    generate_slot_observations(&env, 0);
+
+    float* row = env.observations + PVP_INVENTORY_OBS_OFFSET;
+    ASSERT_FLOAT_NEAR("inventory present", row[0], 1.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("inventory item id normalized",
+        row[1], (float)ITEM_VOIDWAKER / (float)(NUM_ITEMS - 1), 1e-6f);
+    ASSERT_FLOAT_NEAR("inventory melee style", row[5], 1.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("inventory spec cost", row[10], 0.5f, 1e-6f);
+    ASSERT_FLOAT_NEAR("inventory can equip", row[31], 1.0f, 1e-6f);
+
+    collision_map_free(cmap);
+}
+
 static void test_collision_los_blocks_impenetrable_tiles(void) {
     printf("--- PvP collision LOS blocks impenetrable tiles ---\n");
 
@@ -548,6 +609,8 @@ int main(void) {
     setbuf(stdout, NULL);
     test_native_init_loads_collision_map_and_walkable_spawns();
     test_movement_masks_respect_blocked_tiles();
+    test_slotclick_schema_and_inventory_mask();
+    test_inventory_observation_item_facts();
     test_collision_los_blocks_impenetrable_tiles();
     test_magic_attack_execution_respects_collision_los();
     test_pvp_barrage_uses_shared_five_tick_cadence();

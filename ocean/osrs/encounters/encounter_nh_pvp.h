@@ -21,7 +21,8 @@
 
 /* obs/action dimensions from osrs_types.h. order must match HEAD_* indices. */
 static const int NH_PVP_ACTION_DIMS[] = {
-    LOADOUT_DIM, COMBAT_DIM, OVERHEAD_DIM,
+    EQUIP_CLICK_DIM, EQUIP_CLICK_DIM, EQUIP_CLICK_DIM, EQUIP_CLICK_DIM,
+    ATTACK_DIM, SPECIAL_DIM, OVERHEAD_DIM,
     FOOD_DIM, POTION_DIM, KARAMBWAN_DIM, VENG_DIM, OFFENSIVE_DIM, MOVE_DIM
 };
 
@@ -112,7 +113,6 @@ static void nh_pvp_apply_human_player_commands(OsrsEnv* env, HumanInput* hi) {
 static void nh_pvp_translate_human_commands(HumanInput* hi, int* actions, OsrsEnv* env) {
     Player* agent = &env->players[0];
     for (int h = 0; h < NUM_ACTION_HEADS; h++) actions[h] = 0;
-    actions[HEAD_LOADOUT] = LOADOUT_KEEP;
     OsrsHumanCommandFrame frame =
         osrs_human_command_frame_from_input(hi, agent->equipped[GEAR_SLOT_WEAPON]);
 
@@ -121,9 +121,9 @@ static void nh_pvp_translate_human_commands(HumanInput* hi, int* actions, OsrsEn
         env->pvp_runtime.walk_dest_y[0] = frame.walk_y;
     } else if (frame.has_spell_target) {
         if (frame.spell == ATTACK_ICE)
-            actions[HEAD_COMBAT] = ATTACK_ICE;
+            actions[HEAD_ATTACK] = ATTACK_ICE;
         else if (frame.spell == ATTACK_BLOOD)
-            actions[HEAD_COMBAT] = ATTACK_BLOOD;
+            actions[HEAD_ATTACK] = ATTACK_BLOOD;
     } else if (frame.has_attack_target) {
         uint8_t weapon = frame.queued_weapon;
         AttackStyle style = weapon < NUM_ITEMS
@@ -131,12 +131,12 @@ static void nh_pvp_translate_human_commands(HumanInput* hi, int* actions, OsrsEn
             : ATTACK_STYLE_NONE;
         if (style == ATTACK_STYLE_MAGIC && agent->autocast_enabled &&
                 agent->autocast_spell == ENCOUNTER_SPELL_BLOOD) {
-            actions[HEAD_COMBAT] = ATTACK_BLOOD;
+            actions[HEAD_ATTACK] = ATTACK_BLOOD;
         } else if (style == ATTACK_STYLE_MAGIC && agent->autocast_enabled &&
                 agent->autocast_spell == ENCOUNTER_SPELL_ICE) {
-            actions[HEAD_COMBAT] = ATTACK_ICE;
+            actions[HEAD_ATTACK] = ATTACK_ICE;
         } else {
-            actions[HEAD_COMBAT] = ATTACK_ATK;
+            actions[HEAD_ATTACK] = ATTACK_ATK;
         }
     }
 
@@ -153,7 +153,7 @@ static void nh_pvp_translate_human_commands(HumanInput* hi, int* actions, OsrsEn
     if (frame.vengeance)
         actions[HEAD_VENG] = VENG_CAST;
     if (frame.spec_toggle)
-        agent->spec_armed = 1;
+        actions[HEAD_SPECIAL] = SPECIAL_ARM;
 }
 
 static EncounterState* nh_pvp_create(void) {

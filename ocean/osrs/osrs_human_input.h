@@ -360,83 +360,61 @@ static void human_handle_combat_click(HumanInput* hi, GuiState* gs, Player* p,
 }
 
 
-/** Translate human input to PvP 7-head action array for agent 0.
-    Movement is target-relative (ADJACENT/UNDER/DIAGONAL/FARCAST_N). */
 static void human_to_pvp_actions(HumanInput* hi, int* actions,
                                   Player* agent, Player* target) {
-    /* zero all heads */
     for (int h = 0; h < NUM_ACTION_HEADS; h++) actions[h] = 0;
 
-    /* HEAD_LOADOUT: keep current gear (human equips items via inventory clicks) */
-    actions[HEAD_LOADOUT] = LOADOUT_KEEP;
-
-    /* HEAD_COMBAT: attack or movement */
     if (hi->pending_attack) {
         if (hi->pending_spell == ATTACK_ICE) {
-            actions[HEAD_COMBAT] = ATTACK_ICE;
+            actions[HEAD_ATTACK] = ATTACK_ICE;
         } else if (hi->pending_spell == ATTACK_BLOOD) {
-            actions[HEAD_COMBAT] = ATTACK_BLOOD;
+            actions[HEAD_ATTACK] = ATTACK_BLOOD;
         } else {
-            actions[HEAD_COMBAT] = ATTACK_ATK;
+            actions[HEAD_ATTACK] = ATTACK_ATK;
         }
     } else if (hi->pending_move_x >= 0 && hi->pending_move_y >= 0) {
-        /* convert absolute tile to target-relative movement */
         int dx = hi->pending_move_x - target->x;
         int dy = hi->pending_move_y - target->y;
-        int dist = (abs(dx) > abs(dy)) ? abs(dx) : abs(dy);  /* chebyshev */
+        int dist = (abs(dx) > abs(dy)) ? abs(dx) : abs(dy);
 
         if (dist == 0) {
-            actions[HEAD_COMBAT] = MOVE_UNDER;
+            actions[HEAD_ATTACK] = MOVE_UNDER;
         } else if (dist == 1) {
-            /* check if cardinal (adjacent) or diagonal */
             if (dx == 0 || dy == 0) {
-                actions[HEAD_COMBAT] = MOVE_ADJACENT;
+                actions[HEAD_ATTACK] = MOVE_ADJACENT;
             } else {
-                actions[HEAD_COMBAT] = MOVE_DIAGONAL;
+                actions[HEAD_ATTACK] = MOVE_DIAGONAL;
             }
         } else {
-            /* farcast: clamp to 2-7 */
             int fc = dist;
             if (fc < 2) fc = 2;
             if (fc > 7) fc = 7;
-            actions[HEAD_COMBAT] = MOVE_FARCAST_2 + (fc - 2);
+            actions[HEAD_ATTACK] = MOVE_FARCAST_2 + (fc - 2);
         }
     }
 
-    /* HEAD_OVERHEAD: prayer */
     if (hi->pending_prayer >= 0) {
         actions[HEAD_OVERHEAD] = hi->pending_prayer;
     }
 
-    /* HEAD_FOOD */
     if (hi->pending_food) {
         actions[HEAD_FOOD] = FOOD_EAT;
     }
 
-    /* HEAD_POTION */
     if (hi->pending_potion > 0) {
         actions[HEAD_POTION] = hi->pending_potion;
     }
 
-    /* HEAD_KARAMBWAN */
     if (hi->pending_karambwan) {
         actions[HEAD_KARAMBWAN] = KARAM_EAT;
     }
 
-    /* HEAD_VENG */
     if (hi->pending_veng) {
         actions[HEAD_VENG] = VENG_CAST;
     }
 
-    /* spec: use LOADOUT_SPEC_MELEE/RANGE/MAGIC based on current weapon style */
     if (hi->pending_spec) {
-        AttackStyle style = (AttackStyle)get_item_attack_style(agent->equipped[GEAR_SLOT_WEAPON]);
-        switch (style) {
-            case ATTACK_STYLE_MELEE:  actions[HEAD_LOADOUT] = LOADOUT_SPEC_MELEE; break;
-            case ATTACK_STYLE_RANGED: actions[HEAD_LOADOUT] = LOADOUT_SPEC_RANGE; break;
-            case ATTACK_STYLE_MAGIC:  actions[HEAD_LOADOUT] = LOADOUT_SPEC_MAGIC; break;
-            default: break;
-        }
+        actions[HEAD_SPECIAL] = SPECIAL_ARM;
     }
 
     (void)agent;

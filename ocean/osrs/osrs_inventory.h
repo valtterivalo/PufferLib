@@ -229,6 +229,29 @@ static inline void osrs_player_equip_direct_item(Player* p, uint8_t item_idx) {
     osrs_player_set_equipment_slot(p, gear_slot, item_idx);
 }
 
+static inline int osrs_player_can_equip_from_inventory_slot(const Player* p, int inventory_slot) {
+    if (inventory_slot < 0 || inventory_slot >= OSRS_INVENTORY_SIZE) return 0;
+    uint8_t item_idx = p->inventory[inventory_slot];
+    if (item_idx == ITEM_NONE) return 0;
+
+    int gear_slot = osrs_item_gear_slot(item_idx);
+    if (gear_slot < 0) return 0;
+    if (p->equipped[gear_slot] == item_idx) return 0;
+
+    uint8_t old_item = p->equipped[gear_slot];
+    uint8_t old_shield = p->equipped[GEAR_SLOT_SHIELD];
+
+    int equipping_two_handed =
+        gear_slot == GEAR_SLOT_WEAPON && item_is_two_handed(item_idx);
+
+    if (equipping_two_handed && old_shield != ITEM_NONE && old_item != ITEM_NONE &&
+            osrs_player_inventory_free_slots(p) <= 0) {
+        return 0;
+    }
+
+    return 1;
+}
+
 static inline int osrs_player_equip_from_inventory_slot(Player* p, int inventory_slot) {
     if (inventory_slot < 0 || inventory_slot >= OSRS_INVENTORY_SIZE) return 0;
     uint8_t item_idx = p->inventory[inventory_slot];
@@ -271,6 +294,9 @@ static inline int osrs_player_equip_from_inventory_slot(Player* p, int inventory
 
     if (gear_slot == GEAR_SLOT_WEAPON || equipping_shield_over_two_handed) {
         osrs_player_refresh_weapon_state(p, p->equipped[GEAR_SLOT_WEAPON]);
+        if (p->equipped[GEAR_SLOT_WEAPON] != old_weapon) {
+            p->spec_armed = 0;
+        }
     }
     p->slot_gear_dirty = 1;
     osrs_refresh_player_equipment(p);
