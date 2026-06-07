@@ -473,6 +473,22 @@ static int pvp_attack_head_reachable_after_any_weapon_equip(
     return 0;
 }
 
+static int pvp_special_arm_available_for_weapon(uint8_t weapon, int special_energy) {
+    int cost = osrs_spec_cost(weapon);
+    return cost > 0 && special_energy >= cost;
+}
+
+static int pvp_special_arm_available_after_any_weapon_equip(const Player* p) {
+    for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
+        uint8_t item_idx = p->inventory[slot];
+        if (item_idx == ITEM_NONE) continue;
+        if (osrs_item_gear_slot(item_idx) != GEAR_SLOT_WEAPON) continue;
+        if (!osrs_player_can_equip_from_inventory_slot(p, slot)) continue;
+        if (pvp_special_arm_available_for_weapon(item_idx, p->special_energy)) return 1;
+    }
+    return 0;
+}
+
 /**
  * Generate slot-mode observations with per-slot item stats.
  *
@@ -868,9 +884,11 @@ static void compute_action_masks(OsrsEnv* env, int agent_idx) {
     offset += ATTACK_DIM;
 
     uint8_t weapon = p->equipped[GEAR_SLOT_WEAPON];
-    int spec_cost = osrs_spec_cost(weapon);
+    int special_arm_available = pvp_special_arm_available_for_weapon(
+        weapon, p->special_energy) ||
+        pvp_special_arm_available_after_any_weapon_equip(p);
     mask[offset + SPECIAL_NOOP] = 1;
-    mask[offset + SPECIAL_ARM] = spec_cost > 0 && p->special_energy >= spec_cost && !p->spec_armed;
+    mask[offset + SPECIAL_ARM] = special_arm_available && !p->spec_armed;
     mask[offset + SPECIAL_DISARM] = p->spec_armed ? 1 : 0;
     offset += SPECIAL_DIM;
 
