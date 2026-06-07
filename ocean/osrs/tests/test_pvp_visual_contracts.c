@@ -596,8 +596,8 @@ static void test_pvp_human_item_click_equips_and_attacks_with_weapon(void) {
     human_input_destroy(&hi);
 }
 
-static void test_pvp_slotclick_action_equips_and_attacks_same_tick(void) {
-    printf("--- PvP slot-click action equips and attacks same tick ---\n");
+static void test_pvp_slotclick_command_frame_equips_and_attacks(void) {
+    printf("--- PvP slot-click command frame equips and attacks ---\n");
 
     NhPvpState state;
     setup_pvp_state(&state);
@@ -1499,7 +1499,7 @@ int main(void) {
     test_pvp_invalid_spec_loadout_does_not_clear_weapon();
     test_pvp_loot_replacement_preserves_owned_set();
     test_pvp_human_item_click_equips_and_attacks_with_weapon();
-    test_pvp_slotclick_action_equips_and_attacks_same_tick();
+    test_pvp_slotclick_command_frame_equips_and_attacks();
     test_pvp_human_armor_click_updates_equipment();
     test_pvp_human_command_frame_maps_actions();
     test_pvp_human_walk_persists_until_runtime_clears();
