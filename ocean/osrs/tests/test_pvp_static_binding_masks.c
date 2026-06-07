@@ -635,6 +635,107 @@ static void test_mobile_attack_click_chases_around_collision_los(void) {
     collision_map_free(cmap);
 }
 
+static void test_target_click_staff_bash_chases_into_melee_range(void) {
+    printf("--- PvP target click staff bash chases into melee range ---\n");
+
+    CollisionMap* cmap = collision_map_create();
+    OsrsEnv env;
+    memset(&env, 0, sizeof(env));
+    pvp_init(&env);
+    env.collision_map = cmap;
+    pvp_seed(&env, 73);
+    pvp_reset(&env);
+
+    Player* agent = &env.players[0];
+    Player* target = &env.players[1];
+    pvp_set_player_spawn(agent, 3041, 3530);
+    pvp_set_player_spawn(target, 3043, 3530);
+    osrs_player_set_equipment_slot(agent, GEAR_SLOT_WEAPON, ITEM_AHRIM_STAFF);
+
+    int actions[NUM_ACTION_HEADS];
+    memset(actions, 0, sizeof(actions));
+    actions[HEAD_ATTACK] = ATTACK_ATK;
+
+    PvpAttackMoveIntent intent = pvp_attack_move_intent(&env, 0, actions);
+    OsrsPlayerStepResult step = pvp_step_player_movement(&env, 0, intent);
+
+    ASSERT_INT_EQ("staff target-click chased target", step.chased_target, 1);
+    ASSERT_INT_EQ("staff target-click moved east", agent->x, 3042);
+    ASSERT_INT_EQ("staff target-click stayed on row", agent->y, 3530);
+
+    OsrsAttackReachQuery reach = pvp_attack_reach_query(
+        cmap, agent, target, ATTACK_STYLE_MELEE);
+    ASSERT_INT_EQ("staff target-click reached melee", osrs_attack_can_reach(&reach), 1);
+
+    collision_map_free(cmap);
+}
+
+static void test_target_click_overrides_stale_walk_destination(void) {
+    printf("--- PvP target click overrides stale walk destination ---\n");
+
+    CollisionMap* cmap = collision_map_create();
+    OsrsEnv env;
+    memset(&env, 0, sizeof(env));
+    pvp_init(&env);
+    env.collision_map = cmap;
+    pvp_seed(&env, 73);
+    pvp_reset(&env);
+
+    Player* agent = &env.players[0];
+    Player* target = &env.players[1];
+    pvp_set_player_spawn(agent, 3041, 3530);
+    pvp_set_player_spawn(target, 3043, 3530);
+    osrs_player_set_equipment_slot(agent, GEAR_SLOT_WEAPON, ITEM_WHIP);
+    env.pvp_runtime.walk_dest_x[0] = 3040;
+    env.pvp_runtime.walk_dest_y[0] = 3530;
+
+    int actions[NUM_ACTION_HEADS];
+    memset(actions, 0, sizeof(actions));
+    actions[HEAD_ATTACK] = ATTACK_ATK;
+
+    PvpAttackMoveIntent intent = pvp_attack_move_intent(&env, 0, actions);
+    OsrsPlayerStepResult step = pvp_step_player_movement(&env, 0, intent);
+
+    ASSERT_INT_EQ("target-click chased instead of old walk", step.chased_target, 1);
+    ASSERT_INT_EQ("target-click moved toward target", agent->x, 3042);
+    ASSERT_INT_EQ("target-click cleared old walk x", env.pvp_runtime.walk_dest_x[0], -1);
+    ASSERT_INT_EQ("target-click cleared old walk y", env.pvp_runtime.walk_dest_y[0], -1);
+
+    collision_map_free(cmap);
+}
+
+static void test_persistent_staff_target_click_executes_melee(void) {
+    printf("--- PvP persistent staff target click executes melee ---\n");
+
+    CollisionMap* cmap = collision_map_create();
+    OsrsEnv env;
+    memset(&env, 0, sizeof(env));
+    pvp_init(&env);
+    env.collision_map = cmap;
+    pvp_seed(&env, 73);
+    pvp_reset(&env);
+
+    Player* agent = &env.players[0];
+    Player* target = &env.players[1];
+    pvp_set_player_spawn(agent, 3041, 3530);
+    pvp_set_player_spawn(target, 3042, 3530);
+    osrs_player_set_equipment_slot(agent, GEAR_SLOT_WEAPON, ITEM_AHRIM_STAFF);
+    agent->attack_timer = 0;
+    osrs_interaction_set(&agent->interaction, 1);
+
+    int actions[NUM_ACTION_HEADS];
+    memset(actions, 0, sizeof(actions));
+
+    execute_attack_combat(&env, 0, actions);
+
+    ASSERT_INT_EQ("persistent staff target-click used melee",
+        agent->attack_style_this_tick, ATTACK_STYLE_MELEE);
+    ASSERT_INT_EQ("persistent staff target-click attacked",
+        agent->just_attacked, 1);
+
+    collision_map_free(cmap);
+}
+
 static void test_static_binding_exposes_separate_action_mask(void) {
     printf("--- PvP static binding exposes separate action mask ---\n");
 
@@ -823,6 +924,9 @@ int main(void) {
     test_pvp_barrage_uses_shared_five_tick_cadence();
     test_attack_masks_respect_frozen_collision_los();
     test_mobile_attack_click_chases_around_collision_los();
+    test_target_click_staff_bash_chases_into_melee_range();
+    test_target_click_overrides_stale_walk_destination();
+    test_persistent_staff_target_click_executes_melee();
     test_static_binding_exposes_separate_action_mask();
     test_static_binding_sets_scripted_opponents();
     test_binding_pfsp_stats_round_trip();
