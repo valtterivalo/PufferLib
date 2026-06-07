@@ -249,11 +249,17 @@ static void reset_tick_flags(Player* p) {
 static void execute_switches(OsrsEnv* env, int agent_idx, int* actions);
 static void execute_attacks(OsrsEnv* env, int agent_idx, int* actions);
 
-/** Resolve attack style from attack action value. */
+static inline AttackStyle pvp_target_click_attack_style(Player* p) {
+    AttackStyle weapon_style = get_slot_weapon_attack_style(p);
+    return weapon_style == ATTACK_STYLE_MAGIC
+        ? ATTACK_STYLE_MELEE
+        : weapon_style;
+}
+
 static inline AttackStyle resolve_attack_style_for_action(Player* p, int attack_action) {
     switch (attack_action) {
         case ATTACK_ATK:
-            return get_slot_weapon_attack_style(p);
+            return pvp_target_click_attack_style(p);
         case ATTACK_ICE:
         case ATTACK_BLOOD:
             return ATTACK_STYLE_MAGIC;
@@ -490,21 +496,9 @@ static PvpAttackMoveIntent pvp_attack_move_intent(
 
     AttackStyle attack_style = ATTACK_STYLE_NONE;
     if (attack_action != ATTACK_NONE) {
-        switch (attack_action) {
-            case ATTACK_ATK:
-                attack_style = get_slot_weapon_attack_style(p);
-                break;
-            case ATTACK_ICE:
-                attack_style = ATTACK_STYLE_MAGIC;
-                break;
-            case ATTACK_BLOOD:
-                attack_style = ATTACK_STYLE_MAGIC;
-                break;
-            default:
-                break;
-        }
+        attack_style = resolve_attack_style_for_action(p, attack_action);
     } else if (osrs_interaction_active(&p->interaction)) {
-        attack_style = get_slot_weapon_attack_style(p);
+        attack_style = pvp_target_click_attack_style(p);
     }
     if (attack_action == ATTACK_ICE && !can_cast_ice_spell(p)) {
         attack_style = ATTACK_STYLE_NONE;
@@ -543,8 +537,8 @@ static void execute_attack_combat(OsrsEnv* env, int agent_idx, int* actions) {
     int attack_action = is_attack_action(combat_action) ? combat_action : ATTACK_NONE;
 
     if (attack_action == ATTACK_NONE && osrs_interaction_active(&p->interaction)) {
-        AttackStyle weapon_style = get_slot_weapon_attack_style(p);
-        if (weapon_style != ATTACK_STYLE_MAGIC) {
+        AttackStyle target_click_style = pvp_target_click_attack_style(p);
+        if (target_click_style != ATTACK_STYLE_NONE) {
             attack_action = ATTACK_ATK;
         }
     }
@@ -557,7 +551,7 @@ static void execute_attack_combat(OsrsEnv* env, int agent_idx, int* actions) {
 
     switch (attack_action) {
         case ATTACK_ATK:
-            attack_style = get_slot_weapon_attack_style(p);
+            attack_style = pvp_target_click_attack_style(p);
             break;
         case ATTACK_ICE:
             attack_style = ATTACK_STYLE_MAGIC;
@@ -585,16 +579,12 @@ static void execute_attack_combat(OsrsEnv* env, int agent_idx, int* actions) {
     switch (attack_action) {
         case ATTACK_ATK:
             if (can_attack && attack_style != ATTACK_STYLE_NONE) {
-                /* ATK with magic staff uses melee (staff bash) */
-                AttackStyle actual_style = (attack_style == ATTACK_STYLE_MAGIC)
-                    ? ATTACK_STYLE_MELEE
-                    : attack_style;
                 OsrsAttackReachQuery reach = pvp_attack_reach_query(
-                    cmap, p, t, actual_style);
+                    cmap, p, t, attack_style);
                 int in_attack_range = osrs_attack_can_reach(&reach);
                 if (in_attack_range) {
-                    int is_special = p->spec_armed && is_special_ready(p, actual_style);
-                    perform_attack(env, agent_idx, 1 - agent_idx, actual_style, is_special, 0, dist);
+                    int is_special = p->spec_armed && is_special_ready(p, attack_style);
+                    perform_attack(env, agent_idx, 1 - agent_idx, attack_style, is_special, 0, dist);
                     if (is_special)
                         osrs_spec_disarm(&p->spec_armed);
                     p->clicks_this_tick++;
