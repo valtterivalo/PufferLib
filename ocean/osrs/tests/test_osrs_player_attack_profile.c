@@ -43,6 +43,18 @@ static void test_traditional_barrage_is_five_ticks(void) {
         profile.delivery, OSRS_ATTACK_DELIVERY_PROJECTILE);
 }
 
+static void test_traditional_barrage_profile_allows_no_weapon(void) {
+    uint8_t loadout[NUM_GEAR_SLOTS];
+    test_loadout(ITEM_NONE, loadout);
+
+    OsrsPlayerAttackProfile profile =
+        osrs_player_attack_profile_for_loadout(
+            loadout, ATTACK_STYLE_MAGIC, FIGHT_STYLE_AUTOCAST, 30);
+
+    ASSERT_INT_EQ("weaponless traditional spell cycle", profile.cycle_ticks, 5);
+    ASSERT_INT_EQ("weaponless traditional spell range", profile.range, 10);
+}
+
 static void test_powered_staff_uses_weapon_speed(void) {
     uint8_t loadout[NUM_GEAR_SLOTS];
     test_loadout(ITEM_TRIDENT_OF_SWAMP, loadout);
@@ -155,6 +167,7 @@ static void test_invalid_profile_aborts(void) {
 
 int main(void) {
     test_traditional_barrage_is_five_ticks();
+    test_traditional_barrage_profile_allows_no_weapon();
     test_powered_staff_uses_weapon_speed();
     test_ranged_rapid_reduces_speed();
     test_representative_weapon_speeds();
