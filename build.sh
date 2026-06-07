@@ -143,7 +143,7 @@ else
     echo "Error: environment '$ENV' not found" && exit 1
 fi
 
-if [ "$ENV" = "osrs_inferno" ]; then
+if [ "$ENV" = "osrs_inferno" ] || [ "$ENV" = "osrs_pvp" ]; then
     bash ocean/osrs/scripts/setup-data.sh
 fi
 

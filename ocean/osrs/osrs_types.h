@@ -427,6 +427,41 @@ typedef struct {
 } OsrsTargetRef;
 
 typedef enum {
+    OSRS_RENDER_TARGET_NONE = 0,
+    OSRS_RENDER_TARGET_PLAYER_SLOT,
+    OSRS_RENDER_TARGET_NPC_SLOT,
+    OSRS_RENDER_TARGET_ENTITY_INDEX,
+} OsrsRenderTargetKind;
+
+typedef struct {
+    OsrsRenderTargetKind kind;
+    int slot;
+} OsrsRenderTargetRef;
+
+static inline OsrsRenderTargetRef osrs_render_target_none(void) {
+    return (OsrsRenderTargetRef){ .kind = OSRS_RENDER_TARGET_NONE, .slot = -1 };
+}
+
+static inline OsrsRenderTargetRef osrs_render_target_player_slot(int slot) {
+    if (slot < 0) abort();
+    return (OsrsRenderTargetRef){ .kind = OSRS_RENDER_TARGET_PLAYER_SLOT, .slot = slot };
+}
+
+static inline OsrsRenderTargetRef osrs_render_target_npc_slot(int slot) {
+    if (slot < 0) abort();
+    return (OsrsRenderTargetRef){ .kind = OSRS_RENDER_TARGET_NPC_SLOT, .slot = slot };
+}
+
+static inline OsrsRenderTargetRef osrs_render_target_entity_index(int index) {
+    if (index < 0) abort();
+    return (OsrsRenderTargetRef){ .kind = OSRS_RENDER_TARGET_ENTITY_INDEX, .slot = index };
+}
+
+static inline int osrs_render_target_ref_active(OsrsRenderTargetRef target) {
+    return target.kind != OSRS_RENDER_TARGET_NONE;
+}
+
+typedef enum {
     OSRS_TARGET_CLASS_STANDARD = 0,
     OSRS_TARGET_CLASS_DRAGON,
 } OsrsTargetClass;
@@ -703,6 +738,7 @@ typedef struct {
     // These are set when actions actually execute (not when queued)
     AttackStyle attack_style_this_tick;  // Actual attack style used (NONE if no attack)
     uint8_t attack_weapon_this_tick;
+    OsrsRenderTargetRef render_attack_target_this_tick;
     int magic_type_this_tick;            // 0=none, 1=ice, 2=blood (for visual effects)
     int used_special_this_tick;          // 1 if special attack was used
     int ate_food_this_tick;              // 1 if regular food was consumed

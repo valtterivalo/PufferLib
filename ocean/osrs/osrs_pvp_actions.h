@@ -232,9 +232,9 @@ static void reset_tick_flags(Player* p) {
     p->last_potion_was_waste = 0;
     p->attack_click_canceled = 0;
     p->attack_click_ready = 0;
-    // Reset reward shaping action flags
     p->attack_style_this_tick = ATTACK_STYLE_NONE;
     p->attack_weapon_this_tick = ITEM_NONE;
+    p->render_attack_target_this_tick = osrs_render_target_none();
     p->magic_type_this_tick = 0;
     p->hit_spell_type = 0;
     p->used_special_this_tick = 0;

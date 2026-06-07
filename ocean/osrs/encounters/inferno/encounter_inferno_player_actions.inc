@@ -940,17 +940,16 @@ static void inf_tick_player_ctx(
                         s->tick_at_first_zuk_healer_attack = s->tick;
                 }
 
-                /* player projectile event for renderer */
                 s->player_attacked_this_tick = 1;
                 s->player_attack_npc_idx = s->interaction.target_slot;
                 s->player_attack_dmg = total_dmg;
                 s->player_attack_style_id = ls->style;
                 s->player_attack_timing = hit_timing;
 
-                /* player attack animation + spell type for renderer effect system */
                 s->player.attack_style_this_tick = ls->style;
+                s->player.render_attack_target_this_tick =
+                    osrs_render_target_npc_slot(s->interaction.target_slot);
                 if (ls->style == ATTACK_STYLE_MAGIC) {
-                    /* 0=none, 1=ice, 2=blood */
                     s->player.magic_type_this_tick = (active_spell == ENCOUNTER_SPELL_ICE) ? 1 : 2;
                 }
                 if (target_npc->death_ticks > 0)
