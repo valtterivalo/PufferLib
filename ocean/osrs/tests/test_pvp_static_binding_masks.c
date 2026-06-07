@@ -382,6 +382,27 @@ static void test_inventory_observation_item_facts(void) {
     collision_map_free(cmap);
 }
 
+static void test_no_weapon_observation_has_zero_attack_profile(void) {
+    printf("--- PvP no weapon observation has zero attack profile ---\n");
+
+    OsrsEnv env;
+    memset(&env, 0, sizeof(env));
+    pvp_init(&env);
+    CollisionMap* cmap = collision_map_create();
+    env.collision_map = cmap;
+    pvp_seed(&env, 73);
+    pvp_reset(&env);
+
+    Player* agent = &env.players[0];
+    osrs_player_set_equipment_slot(agent, GEAR_SLOT_WEAPON, ITEM_NONE);
+    generate_slot_observations(&env, 0);
+
+    ASSERT_FLOAT_NEAR("no weapon cycle", env.observations[123], 0.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("no weapon range", env.observations[124], 0.0f, 1e-6f);
+
+    collision_map_free(cmap);
+}
+
 static void test_collision_los_blocks_impenetrable_tiles(void) {
     printf("--- PvP collision LOS blocks impenetrable tiles ---\n");
 
@@ -724,6 +745,7 @@ int main(void) {
     test_movement_masks_respect_blocked_tiles();
     test_slotclick_schema_and_inventory_mask();
     test_inventory_observation_item_facts();
+    test_no_weapon_observation_has_zero_attack_profile();
     test_collision_los_blocks_impenetrable_tiles();
     test_magic_attack_execution_respects_collision_los();
     test_pvp_barrage_uses_shared_five_tick_cadence();
