@@ -189,7 +189,9 @@ static inline OsrsPlayerAttackProfile osrs_player_attack_profile(
         abort();
     }
     osrs_player_attack_require_style(query->action_style);
-    osrs_player_attack_require_weapon(query->weapon_item);
+    if (query->action_kind != OSRS_PLAYER_ATTACK_ACTION_TRADITIONAL_SPELL) {
+        osrs_player_attack_require_weapon(query->weapon_item);
+    }
 
     int cycle_ticks = osrs_player_attack_base_cycle_ticks(query);
     OsrsPlayerAttackCooldownKind cooldown_kind =
