@@ -322,11 +322,14 @@ static void test_slotclick_schema_and_inventory_mask(void) {
     printf("--- PvP slot-click schema and inventory mask ---\n");
 
     ASSERT_INT_EQ("PvP action schema", PVP_ACTION_SCHEMA, PVP_ACTION_SCHEMA_SLOTCLICK_V9);
+    ASSERT_INT_EQ("PvP obs schema",
+        PVP_OBS_SCHEMA, PVP_OBS_SCHEMA_SLOTCLICK_ITEM_AFFORDANCE_V10);
     ASSERT_INT_EQ("PvP action head count", NUM_ACTION_HEADS, 13);
     ASSERT_INT_EQ("equip click dim", ACTION_HEAD_DIMS[HEAD_EQUIP_0], OSRS_INVENTORY_SIZE + 1);
     ASSERT_INT_EQ("attack dim", ACTION_HEAD_DIMS[HEAD_ATTACK], ATTACK_DIM);
     ASSERT_INT_EQ("special dim", ACTION_HEAD_DIMS[HEAD_SPECIAL], SPECIAL_DIM);
     ASSERT_INT_EQ("action mask size", ACTION_MASK_SIZE, 171);
+    ASSERT_INT_EQ("item feature dim", OSRS_ITEM_FEATURE_DIM, 56);
 
     OsrsEnv env;
     memset(&env, 0, sizeof(env));
@@ -438,7 +441,10 @@ static void test_inventory_observation_item_facts(void) {
     pvp_reset(&env);
 
     Player* agent = &env.players[0];
+    osrs_player_inventory_clear(agent);
+    osrs_player_set_equipment_slot(agent, GEAR_SLOT_WEAPON, ITEM_AHRIM_STAFF);
     agent->inventory[0] = ITEM_VOIDWAKER;
+    agent->special_energy = 100;
     generate_slot_observations(&env, 0);
 
     float* row = env.observations + PVP_INVENTORY_OBS_OFFSET;
@@ -448,8 +454,64 @@ static void test_inventory_observation_item_facts(void) {
     ASSERT_FLOAT_NEAR("inventory melee style", row[5], 1.0f, 1e-6f);
     ASSERT_FLOAT_NEAR("inventory spec cost", row[10], 0.5f, 1e-6f);
     ASSERT_FLOAT_NEAR("inventory can equip", row[31], 1.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("inventory physical slot",
+        row[32], 1.0f / (float)OSRS_INVENTORY_SIZE, 1e-6f);
+    ASSERT_FLOAT_NEAR("inventory weapon slot onehot",
+        row[33 + GEAR_SLOT_WEAPON], 1.0f, 1e-6f);
+    ASSERT_TRUE("inventory split slash attack", row[45] > 0.0f);
+    ASSERT_TRUE("inventory post-equip melee attack delta", row[50] > 0.0f);
+
+    osrs_player_set_equipment_slot(agent, GEAR_SLOT_WEAPON, ITEM_VOIDWAKER);
+    generate_slot_observations(&env, 0);
+    ASSERT_FLOAT_NEAR("current weapon special affordance",
+        env.observations[182], 1.0f, 1e-6f);
 
     collision_map_free(cmap);
+}
+
+static void test_pvp_log_emits_command_diagnostics(void) {
+    printf("--- PvP log emits command diagnostics ---\n");
+
+    Log log;
+    memset(&log, 0, sizeof(log));
+    log.wins = 1.0f;
+    log.damage_dealt = 40.0f;
+    log.damage_received = 10.0f;
+    log.performance_score = 0.75f;
+    log.attacks_landed = 4.0f;
+    log.equip_click_attempts = 5.0f;
+    log.equip_click_noop_rate = 0.2f;
+    log.special_arm_attempts = 2.0f;
+    log.special_arm_noop_rate = 0.5f;
+    log.target_click_attempts = 6.0f;
+    log.target_click_no_fire_rate = 0.25f;
+    log.spell_attack_attempts = 3.0f;
+    log.spell_attack_no_fire_rate = 0.33333334f;
+    log.weapon_attack_rate = 0.6f;
+    log.melee_attack_rate = 0.2f;
+    log.ranged_attack_rate = 0.3f;
+    log.magic_attack_rate = 0.5f;
+    log.attack_after_equip_rate = 0.4f;
+    log.spec_after_equip_rate = 0.1f;
+
+    Dict* out = create_dict(128);
+    my_log(&log, out);
+
+    ASSERT_FLOAT_NEAR("log obs schema",
+        dict_get(out, "obs_schema_id")->value, (float)PVP_OBS_SCHEMA, 1e-6f);
+    ASSERT_FLOAT_NEAR("log damage per hit",
+        dict_get(out, "damage_per_hit")->value, 10.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("log equip noop",
+        dict_get(out, "equip_click_noop_rate")->value, 0.2f, 1e-6f);
+    ASSERT_FLOAT_NEAR("log target click no fire",
+        dict_get(out, "target_click_no_fire_rate")->value, 0.25f, 1e-6f);
+    ASSERT_FLOAT_NEAR("log weapon attack rate",
+        dict_get(out, "weapon_attack_rate")->value, 0.6f, 1e-6f);
+    ASSERT_FLOAT_NEAR("log spec after equip",
+        dict_get(out, "spec_after_equip_rate")->value, 0.1f, 1e-6f);
+
+    free(out->items);
+    free(out);
 }
 
 static void test_no_weapon_observation_has_zero_attack_profile(void) {
@@ -968,6 +1030,7 @@ int main(void) {
     test_attack_mask_allows_post_equip_weapon_target_click();
     test_special_mask_allows_post_equip_weapon_spec_arm();
     test_inventory_observation_item_facts();
+    test_pvp_log_emits_command_diagnostics();
     test_no_weapon_observation_has_zero_attack_profile();
     test_collision_los_blocks_impenetrable_tiles();
     test_magic_attack_execution_respects_collision_los();

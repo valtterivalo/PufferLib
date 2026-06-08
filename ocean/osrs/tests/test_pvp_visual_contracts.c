@@ -662,6 +662,14 @@ static void test_pvp_slotclick_command_frame_equips_specs_and_attacks(void) {
         player->spec_armed, 0);
     ASSERT_INT_EQ("slot-click special energy spent",
         player->special_energy < 100, 1);
+    ASSERT_INT_EQ("slot-click equip counted",
+        player->equip_click_successes, 1);
+    ASSERT_INT_EQ("slot-click spec arm counted",
+        player->special_arm_successes, 1);
+    ASSERT_INT_EQ("slot-click target counted",
+        player->target_click_successes, 1);
+    ASSERT_INT_EQ("slot-click spec after equip counted",
+        player->spec_after_equip_successes, 1);
 }
 
 static void test_pvp_human_armor_click_updates_equipment(void) {

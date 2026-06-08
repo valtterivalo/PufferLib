@@ -67,6 +67,8 @@
 #define PVP_ACTION_SCHEMA_LOADOUT_V8 8
 #define PVP_ACTION_SCHEMA_SLOTCLICK_V9 9
 #define PVP_ACTION_SCHEMA PVP_ACTION_SCHEMA_SLOTCLICK_V9
+#define PVP_OBS_SCHEMA_SLOTCLICK_ITEM_AFFORDANCE_V10 10
+#define PVP_OBS_SCHEMA PVP_OBS_SCHEMA_SLOTCLICK_ITEM_AFFORDANCE_V10
 
 #define PVP_EQUIP_CLICKS_PER_TICK 4
 #define EQUIP_CLICK_DIM (OSRS_INVENTORY_SIZE + 1)
@@ -131,7 +133,7 @@ static const int ACTION_HEAD_DIMS[NUM_ACTION_HEADS] = {
 #define NUM_DYNAMIC_GEAR_SLOTS 8
 
 #define PVP_BASE_OBSERVATIONS 221
-#define OSRS_ITEM_FEATURE_DIM 32
+#define OSRS_ITEM_FEATURE_DIM 56
 #define PVP_EQUIPPED_SELF_FEATURE_DIM 24
 #define PVP_EQUIPPED_TARGET_FEATURE_DIM 18
 #define PVP_INVENTORY_OBS_OFFSET PVP_BASE_OBSERVATIONS
@@ -775,6 +777,22 @@ typedef struct {
     int ate_brew_this_tick;             // 1 if saradomin brew was consumed
     int cast_veng_this_tick;            // 1 if vengeance was cast (for animation)
     int clicks_this_tick;               // accumulated click count for progressive penalty
+    int weapon_equipped_this_tick;
+
+    int equip_click_attempts;
+    int equip_click_successes;
+    int special_arm_attempts;
+    int special_arm_successes;
+    int target_click_attempts;
+    int target_click_successes;
+    int spell_attack_attempts;
+    int spell_attack_successes;
+    int weapon_attack_successes;
+    int melee_attack_successes;
+    int ranged_attack_successes;
+    int magic_attack_successes;
+    int attack_after_equip_successes;
+    int spec_after_equip_successes;
 
     // Previous tick HP percent for reward shaping (premature/wasted eat checks)
     float prev_hp_percent;
@@ -878,6 +896,20 @@ typedef struct {
     float spec_energy_remaining;
     float attacks_landed;
     float off_prayer_hits;
+    float equip_click_attempts;
+    float equip_click_noop_rate;
+    float special_arm_attempts;
+    float special_arm_noop_rate;
+    float target_click_attempts;
+    float target_click_no_fire_rate;
+    float spell_attack_attempts;
+    float spell_attack_no_fire_rate;
+    float weapon_attack_rate;
+    float melee_attack_rate;
+    float ranged_attack_rate;
+    float magic_attack_rate;
+    float attack_after_equip_rate;
+    float spec_after_equip_rate;
     float brews_remaining_normal_died;
     float restores_remaining_normal_died;
     float prayer_at_death_normal_died;

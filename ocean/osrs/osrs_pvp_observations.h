@@ -349,7 +349,24 @@ static inline float pvp_item_melee_def_score(const Item* item) {
     return (float)best / STAT_NORM_DEFENCE;
 }
 
-static void pvp_write_item_policy_features(uint8_t item_idx, int can_equip, float* out) {
+static inline float pvp_gear_melee_attack_score(const GearBonuses* gear) {
+    int best = max_int(gear->stab_attack, max_int(gear->slash_attack, gear->crush_attack));
+    return (float)best / STAT_NORM_ATTACK;
+}
+
+static inline float pvp_gear_melee_def_score(const GearBonuses* gear) {
+    int best = max_int(gear->stab_defence, max_int(gear->slash_defence, gear->crush_defence));
+    return (float)best / STAT_NORM_DEFENCE;
+}
+
+static void pvp_write_item_policy_features(
+    uint8_t item_idx,
+    int physical_inventory_slot,
+    int can_equip,
+    const GearBonuses* current,
+    const GearBonuses* post_equip,
+    float* out
+) {
     for (int i = 0; i < OSRS_ITEM_FEATURE_DIM; i++) out[i] = 0.0f;
     if (item_idx >= NUM_ITEMS) return;
 
@@ -390,14 +407,60 @@ static void pvp_write_item_policy_features(uint8_t item_idx, int can_equip, floa
     out[29] = (effects & OSRS_ITEM_EFFECT_VIRTUS_PIECE) ? 1.0f : 0.0f;
     out[30] = (effects & (OSRS_ITEM_EFFECT_DHAROK_PIECE | OSRS_ITEM_EFFECT_CRYSTAL_ARMOUR)) ? 1.0f : 0.0f;
     out[31] = can_equip ? 1.0f : 0.0f;
+
+    out[32] = physical_inventory_slot >= 0
+        ? (float)(physical_inventory_slot + 1) / (float)OSRS_INVENTORY_SIZE
+        : 0.0f;
+    int gear_slot = osrs_item_gear_slot(item_idx);
+    if (gear_slot >= 0 && gear_slot < NUM_GEAR_SLOTS)
+        out[33 + gear_slot] = 1.0f;
+
+    out[44] = (float)item->attack_stab / STAT_NORM_ATTACK;
+    out[45] = (float)item->attack_slash / STAT_NORM_ATTACK;
+    out[46] = (float)item->attack_crush / STAT_NORM_ATTACK;
+    out[47] = (float)item->defence_stab / STAT_NORM_DEFENCE;
+    out[48] = (float)item->defence_slash / STAT_NORM_DEFENCE;
+    out[49] = (float)item->defence_crush / STAT_NORM_DEFENCE;
+
+    if (current != NULL && post_equip != NULL) {
+        out[50] = pvp_gear_melee_attack_score(post_equip)
+            - pvp_gear_melee_attack_score(current);
+        out[51] = (float)(post_equip->ranged_attack - current->ranged_attack) /
+            STAT_NORM_ATTACK;
+        out[52] = (float)(post_equip->magic_attack - current->magic_attack) /
+            STAT_NORM_ATTACK;
+        out[53] = pvp_gear_melee_def_score(post_equip)
+            - pvp_gear_melee_def_score(current);
+        out[54] = (float)(post_equip->ranged_defence - current->ranged_defence) /
+            STAT_NORM_DEFENCE;
+        out[55] = (float)(post_equip->magic_defence - current->magic_defence) /
+            STAT_NORM_DEFENCE;
+    }
 }
 
 static void pvp_write_inventory_policy_observations(Player* p, float* obs) {
+    GearBonuses current = *get_slot_gear_bonuses(p);
     for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
         float* row = obs + PVP_INVENTORY_OBS_OFFSET + slot * OSRS_ITEM_FEATURE_DIM;
+        int can_equip = osrs_player_can_equip_from_inventory_slot(p, slot);
+        GearBonuses post_equip = current;
+        const GearBonuses* post_ptr = NULL;
+        if (can_equip) {
+            Player next = *p;
+            if (!osrs_player_equip_from_inventory_slot(&next, slot)) {
+                fprintf(stderr, "pvp_write_inventory_policy_observations: slot %d precheck failed\n",
+                    slot);
+                abort();
+            }
+            post_equip = *get_slot_gear_bonuses(&next);
+            post_ptr = &post_equip;
+        }
         pvp_write_item_policy_features(
             p->inventory[slot],
-            osrs_player_can_equip_from_inventory_slot(p, slot),
+            slot,
+            can_equip,
+            &current,
+            post_ptr,
             row);
     }
 }
@@ -405,7 +468,7 @@ static void pvp_write_inventory_policy_observations(Player* p, float* obs) {
 static void pvp_write_equipped_policy_observations(Player* self, Player* target, float* obs) {
     for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
         float tmp[OSRS_ITEM_FEATURE_DIM];
-        pvp_write_item_policy_features(self->equipped[slot], 0, tmp);
+        pvp_write_item_policy_features(self->equipped[slot], -1, 0, NULL, NULL, tmp);
         float* self_row = obs + PVP_SELF_EQUIPPED_OBS_OFFSET +
             slot * PVP_EQUIPPED_SELF_FEATURE_DIM;
         for (int i = 0; i < PVP_EQUIPPED_SELF_FEATURE_DIM; i++) self_row[i] = tmp[i];
@@ -489,17 +552,6 @@ static int pvp_special_arm_available_after_any_weapon_equip(const Player* p) {
     return 0;
 }
 
-/**
- * Generate slot-mode observations with per-slot item stats.
- *
- * Observation layout (190 features):
- *   [0-118]   Core observations (gear/prayer/hp/consumables/timers/combat history/stats)
- *   [119-132] Gear bonuses (player + target visible defences)
- *   [133-149] Game mode flags, ability checks, attack_timer_ready
- *   [150-181] Slot-specific features (weapon/style/prayer/equipped per slot)
- *   [182]     Voidwaker magic damage flag
- *   [183-189] Reward shaping signals
- */
 static void generate_slot_observations(OsrsEnv* env, int agent_idx) {
     Player* p = &env->players[agent_idx];
     Player* t = &env->players[1 - agent_idx];
@@ -798,12 +850,9 @@ static void generate_slot_observations(OsrsEnv* env, int agent_idx) {
         obs[171 + slot] = pvp_item_index_norm(t->equipped[slot]);
     }
 
-    // Per-slot item stats removed: 144 features (8 slots x 18 stats) were redundant
-    // with gear bonuses (obs 119-132) and per-slot equipped indices (obs 160-181)
-
-    // Voidwaker magic damage flag (182)
-    uint8_t best_mspec = find_best_melee_spec(p);
-    obs[182] = (best_mspec == ITEM_VOIDWAKER) ? 1.0f : 0.0f;
+    uint8_t current_weapon = p->equipped[GEAR_SLOT_WEAPON];
+    obs[182] = pvp_special_arm_available_for_weapon(
+        current_weapon, p->special_energy) ? 1.0f : 0.0f;
 
     // Reward shaping signals (183-189)
     obs[183] = p->used_special_this_tick ? 1.0f : 0.0f;

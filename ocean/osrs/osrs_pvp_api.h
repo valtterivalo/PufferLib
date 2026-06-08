@@ -194,6 +194,21 @@ static void init_player(Player* p) {
     p->total_damage_received = 0;
     p->expected_damage_dealt = 0.0f;
     p->expected_damage_received = 0.0f;
+    p->weapon_equipped_this_tick = 0;
+    p->equip_click_attempts = 0;
+    p->equip_click_successes = 0;
+    p->special_arm_attempts = 0;
+    p->special_arm_successes = 0;
+    p->target_click_attempts = 0;
+    p->target_click_successes = 0;
+    p->spell_attack_attempts = 0;
+    p->spell_attack_successes = 0;
+    p->weapon_attack_successes = 0;
+    p->melee_attack_successes = 0;
+    p->ranged_attack_successes = 0;
+    p->magic_attack_successes = 0;
+    p->attack_after_equip_successes = 0;
+    p->spec_after_equip_successes = 0;
 
     p->is_lunar_spellbook = 0;
     p->observed_target_lunar_spellbook = 0;
@@ -816,6 +831,48 @@ void pvp_step(OsrsEnv* env) {
         env->log.spec_energy_remaining = (float)p0->special_energy;
         env->log.attacks_landed = (float)p0->total_target_hit_count;
         env->log.off_prayer_hits = (float)p0->target_hit_off_prayer_count;
+        env->log.equip_click_attempts = (float)p0->equip_click_attempts;
+        env->log.equip_click_noop_rate = p0->equip_click_attempts > 0
+            ? 1.0f - (float)p0->equip_click_successes /
+                (float)p0->equip_click_attempts
+            : 0.0f;
+        env->log.special_arm_attempts = (float)p0->special_arm_attempts;
+        env->log.special_arm_noop_rate = p0->special_arm_attempts > 0
+            ? 1.0f - (float)p0->special_arm_successes /
+                (float)p0->special_arm_attempts
+            : 0.0f;
+        env->log.target_click_attempts = (float)p0->target_click_attempts;
+        env->log.target_click_no_fire_rate = p0->target_click_attempts > 0
+            ? 1.0f - (float)p0->target_click_successes /
+                (float)p0->target_click_attempts
+            : 0.0f;
+        env->log.spell_attack_attempts = (float)p0->spell_attack_attempts;
+        env->log.spell_attack_no_fire_rate = p0->spell_attack_attempts > 0
+            ? 1.0f - (float)p0->spell_attack_successes /
+                (float)p0->spell_attack_attempts
+            : 0.0f;
+        float attack_successes = (float)(p0->weapon_attack_successes +
+            p0->spell_attack_successes);
+        env->log.weapon_attack_rate = attack_successes > 0.0f
+            ? (float)p0->weapon_attack_successes / attack_successes
+            : 0.0f;
+        env->log.melee_attack_rate = attack_successes > 0.0f
+            ? (float)p0->melee_attack_successes / attack_successes
+            : 0.0f;
+        env->log.ranged_attack_rate = attack_successes > 0.0f
+            ? (float)p0->ranged_attack_successes / attack_successes
+            : 0.0f;
+        env->log.magic_attack_rate = attack_successes > 0.0f
+            ? (float)p0->magic_attack_successes / attack_successes
+            : 0.0f;
+        env->log.attack_after_equip_rate = p0->target_click_successes > 0
+            ? (float)p0->attack_after_equip_successes /
+                (float)p0->target_click_successes
+            : 0.0f;
+        env->log.spec_after_equip_rate = p0->target_click_successes > 0
+            ? (float)p0->spec_after_equip_successes /
+                (float)p0->target_click_successes
+            : 0.0f;
         env->log.n = 1.0f;
         pvp_terminal_presentation_capture(env);
 

@@ -243,6 +243,7 @@ static void reset_tick_flags(Player* p) {
     p->ate_brew_this_tick = 0;
     p->cast_veng_this_tick = 0;
     p->clicks_this_tick = 0;
+    p->weapon_equipped_this_tick = 0;
 }
 
 // Forward declarations for phased execution
@@ -276,14 +277,19 @@ static int execute_equip_clicks(OsrsEnv* env, int agent_idx, int* actions) {
         int action = actions[HEAD_EQUIP_0 + h];
         if (action <= 0 || action > OSRS_INVENTORY_SIZE) continue;
 
+        p->equip_click_attempts++;
         int inventory_slot = action - 1;
         if (!osrs_player_can_equip_from_inventory_slot(p, inventory_slot)) continue;
 
+        uint8_t old_weapon = p->equipped[GEAR_SLOT_WEAPON];
         if (!osrs_player_equip_from_inventory_slot(p, inventory_slot)) {
             fprintf(stderr, "execute_equip_clicks: mask/execution mismatch slot=%d\n",
                 inventory_slot);
             abort();
         }
+        p->equip_click_successes++;
+        if (p->equipped[GEAR_SLOT_WEAPON] != old_weapon)
+            p->weapon_equipped_this_tick = 1;
         clicks++;
     }
 
@@ -299,10 +305,12 @@ static void execute_special_action(Player* p, int special_action) {
         case SPECIAL_NOOP:
             return;
         case SPECIAL_ARM: {
+            p->special_arm_attempts++;
             uint8_t weapon = p->equipped[GEAR_SLOT_WEAPON];
             int cost = osrs_spec_cost(weapon);
             if (cost > 0 && p->special_energy >= cost && !p->spec_armed) {
                 p->spec_armed = 1;
+                p->special_arm_successes++;
                 p->clicks_this_tick++;
             }
             return;
@@ -578,6 +586,7 @@ static void execute_attack_combat(OsrsEnv* env, int agent_idx, int* actions) {
 
     switch (attack_action) {
         case ATTACK_ATK:
+            p->target_click_attempts++;
             if (can_attack && attack_style != ATTACK_STYLE_NONE) {
                 OsrsAttackReachQuery reach = pvp_attack_reach_query(
                     cmap, p, t, attack_style);
@@ -585,6 +594,12 @@ static void execute_attack_combat(OsrsEnv* env, int agent_idx, int* actions) {
                 if (in_attack_range) {
                     int is_special = p->spec_armed && is_special_ready(p, attack_style);
                     perform_attack(env, agent_idx, 1 - agent_idx, attack_style, is_special, 0, dist);
+                    p->target_click_successes++;
+                    p->weapon_attack_successes++;
+                    if (p->weapon_equipped_this_tick)
+                        p->attack_after_equip_successes++;
+                    if (is_special && p->weapon_equipped_this_tick)
+                        p->spec_after_equip_successes++;
                     if (is_special)
                         osrs_spec_disarm(&p->spec_armed);
                     p->clicks_this_tick++;
@@ -593,6 +608,7 @@ static void execute_attack_combat(OsrsEnv* env, int agent_idx, int* actions) {
             break;
         case ATTACK_ICE:
         case ATTACK_BLOOD:
+            p->spell_attack_attempts++;
             if (attack_ready && attack_style == ATTACK_STYLE_MAGIC) {
                 int can_cast = (attack_action == ATTACK_ICE)
                     ? can_cast_ice_spell(p)
@@ -602,6 +618,7 @@ static void execute_attack_combat(OsrsEnv* env, int agent_idx, int* actions) {
                     cmap, p, t, ATTACK_STYLE_MAGIC);
                 if (osrs_attack_can_reach(&reach)) {
                     perform_attack(env, agent_idx, 1 - agent_idx, ATTACK_STYLE_MAGIC, 0, magic_type, dist);
+                    p->spell_attack_successes++;
                     p->clicks_this_tick++;
                 }
             }

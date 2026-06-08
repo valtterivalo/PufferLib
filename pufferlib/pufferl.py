@@ -278,6 +278,10 @@ def _fixed_eval_args(args, opponent, seed):
     train['minibatch_size'] = int(cfg.get('minibatch_size', eval_batch_size))
     train['total_timesteps'] = eval_batch_size
     train['cpu_inference'] = 1
+    train['state_curriculum_mode'] = 0
+    train['state_buffer_size'] = 0
+    train['cl_frac'] = 0
+    train['warmup_states'] = 0
 
     env = eval_args.setdefault('env', {})
     env['opponent_type'] = int(opponent)
@@ -619,7 +623,22 @@ def _train(env_name, args, sweep_obj=None, result_queue=None, verbose=False):
     backend.close(pufferl)
 
     if fixed_eval_model_path:
-        fixed_eval_logs = _run_pvp_fixed_eval_suite(backend, args, fixed_eval_model_path)
+        try:
+            fixed_eval_logs = _run_pvp_fixed_eval_suite(backend, args, fixed_eval_model_path)
+        except RuntimeError as err:
+            if 'OOM:' not in str(err):
+                raise
+            print(f'WARNING: fixed eval failed with {err}')
+            if args['wandb']:
+                wandb.log({'sweep/fixed_eval_oom': 1}, step=flat_logs.get('agent_steps', 0))
+                wandb.run.finish(exit_code=1)
+            if (not args.get('fixed_eval', {}).get('keep_weights', 0)
+                    and os.path.exists(fixed_eval_model_path)):
+                os.remove(fixed_eval_model_path)
+            if result_queue is not None:
+                result_queue.put((args['gpu_id'], None, None, None))
+                return
+            raise
         flat_logs = {**flat_logs, **fixed_eval_logs}
         if 'uptime' in flat_logs:
             flat_logs['uptime'] += fixed_eval_logs['env/fixed_eval_elapsed_sec']

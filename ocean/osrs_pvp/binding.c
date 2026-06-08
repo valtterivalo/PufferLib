@@ -550,7 +550,7 @@ void my_init(Env* env, Dict* kwargs) {
 
 void my_log(Log* log, Dict* out) {
     dict_set(out, "action_schema_id", (float)PVP_ACTION_SCHEMA);
-    dict_set(out, "obs_schema_id", (float)PVP_ACTION_SCHEMA);
+    dict_set(out, "obs_schema_id", (float)PVP_OBS_SCHEMA);
     dict_set(out, "mask_schema_id", (float)PVP_ACTION_SCHEMA);
     dict_set(out, "episode_return", log->episode_return);
     dict_set(out, "episode_length", log->episode_length);
@@ -577,6 +577,20 @@ void my_log(Log* log, Dict* out) {
     dict_set(out, "spec_remaining", log->spec_energy_remaining);
     dict_set(out, "attacks_landed", log->attacks_landed);
     dict_set(out, "off_prayer_hits", log->off_prayer_hits);
+    dict_set(out, "equip_click_attempts", log->equip_click_attempts);
+    dict_set(out, "equip_click_noop_rate", log->equip_click_noop_rate);
+    dict_set(out, "special_arm_attempts", log->special_arm_attempts);
+    dict_set(out, "special_arm_noop_rate", log->special_arm_noop_rate);
+    dict_set(out, "target_click_attempts", log->target_click_attempts);
+    dict_set(out, "target_click_no_fire_rate", log->target_click_no_fire_rate);
+    dict_set(out, "spell_attack_attempts", log->spell_attack_attempts);
+    dict_set(out, "spell_attack_no_fire_rate", log->spell_attack_no_fire_rate);
+    dict_set(out, "weapon_attack_rate", log->weapon_attack_rate);
+    dict_set(out, "melee_attack_rate", log->melee_attack_rate);
+    dict_set(out, "ranged_attack_rate", log->ranged_attack_rate);
+    dict_set(out, "magic_attack_rate", log->magic_attack_rate);
+    dict_set(out, "attack_after_equip_rate", log->attack_after_equip_rate);
+    dict_set(out, "spec_after_equip_rate", log->spec_after_equip_rate);
 
     /* Per-bank PFSP stats. Keys MUST be literal strings — dict_set stores the
        key pointer, so a stack-formatted "hist_score_bank_%d" would alias to

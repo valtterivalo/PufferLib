@@ -1435,6 +1435,19 @@ post_attack:;
         osrs_render_target_player_slot(defender_idx);
     attacker->magic_type_this_tick = magic_type;
     attacker->used_special_this_tick = is_special;
+    switch (attack_profile.damage_style) {
+        case ATTACK_STYLE_MELEE:
+            attacker->melee_attack_successes++;
+            break;
+        case ATTACK_STYLE_RANGED:
+            attacker->ranged_attack_successes++;
+            break;
+        case ATTACK_STYLE_MAGIC:
+            attacker->magic_attack_successes++;
+            break;
+        default:
+            break;
+    }
 
     if (attack_profile.cooldown_kind == OSRS_PLAYER_ATTACK_COOLDOWN_STANDARD) {
         attacker->attack_timer = attack_profile.post_action_timer;
