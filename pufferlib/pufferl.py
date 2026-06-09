@@ -142,13 +142,14 @@ def print_dashboard(args, model_size, flat_logs, clear=False, idx=[0],
     right.add_column(f"{c1}User Stats", justify="left", width=20)
     right.add_column(f"{c1}Value", justify="right", width=10)
 
+    max_env_stats = 96
     i = 0
     for k, v in flat_logs.items():
         if k.startswith('env/'):
             u = left if i % 2 == 0 else right
             u.add_row(f'{b2}{k[4:]}', f'{b2}{v:.3f}')
             i += 1
-            if i == 30:
+            if i == max_env_stats:
                 break
 
     if clear:

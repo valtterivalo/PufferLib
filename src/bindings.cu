@@ -8,6 +8,8 @@
 #include <pybind11/stl.h>
 #include <pybind11/numpy.h>
 #include <vector>
+#include <string>
+#include <string.h>
 #include "pufferlib.cu"
 
 #define _PUFFER_STRINGIFY(x) #x
@@ -360,7 +362,12 @@ Dict* py_dict_to_c_dict(py::dict py_dict) {
         try {
             dict_set(c_dict, key, item.second.cast<double>());
         } catch (const py::cast_error&) {
-            // Skip non-numeric values
+            if (PyUnicode_Check(item.second.ptr()) ||
+                    PyList_Check(item.second.ptr()) ||
+                    PyTuple_Check(item.second.ptr())) {
+                std::string value = py::str(item.second);
+                dict_set_ptr(c_dict, key, strdup(value.c_str()));
+            }
         }
     }
     return c_dict;
@@ -489,6 +496,7 @@ std::unique_ptr<PuffeRL> create_pufferl(py::dict args) {
     // GAE
     hypers.gamma = get_config(train_kwargs, "gamma");
     hypers.gae_lambda = get_config(train_kwargs, "gae_lambda");
+    hypers.state_lambda = get_config(train_kwargs, "state_lambda");
     // VTrace
     hypers.vtrace_rho_clip = get_config(train_kwargs, "vtrace_rho_clip");
     hypers.vtrace_c_clip = get_config(train_kwargs, "vtrace_c_clip");
@@ -505,6 +513,7 @@ std::unique_ptr<PuffeRL> create_pufferl(py::dict args) {
     hypers.explore_alpha = get_config(train_kwargs, "explore_alpha");
     hypers.explore_beta = get_config(train_kwargs, "explore_beta");
     hypers.explore_decay = get_config(train_kwargs, "explore_decay");
+    hypers.state_priority_decay = get_config(train_kwargs, "state_priority_decay");
     hypers.reset_state = get_config(args, "reset_state");
     // Base-level config ([base] section becomes top-level in args)
     hypers.cudagraphs = get_config(args, "cudagraphs");
@@ -633,6 +642,7 @@ PYBIND11_MODULE(_C, m) {
         .def_readwrite("anneal_ent_coef", &HypersT::anneal_ent_coef)
         .def_readwrite("gamma", &HypersT::gamma)
         .def_readwrite("gae_lambda", &HypersT::gae_lambda)
+        .def_readwrite("state_lambda", &HypersT::state_lambda)
         .def_readwrite("vtrace_rho_clip", &HypersT::vtrace_rho_clip)
         .def_readwrite("vtrace_c_clip", &HypersT::vtrace_c_clip)
         .def_readwrite("prio_alpha", &HypersT::prio_alpha)
@@ -646,6 +656,7 @@ PYBIND11_MODULE(_C, m) {
         .def_readwrite("explore_alpha", &HypersT::explore_alpha)
         .def_readwrite("explore_beta", &HypersT::explore_beta)
         .def_readwrite("explore_decay", &HypersT::explore_decay)
+        .def_readwrite("state_priority_decay", &HypersT::state_priority_decay)
         .def_readwrite("cudagraphs", &HypersT::cudagraphs)
         .def_readwrite("profile", &HypersT::profile)
         .def_readwrite("rank", &HypersT::rank)

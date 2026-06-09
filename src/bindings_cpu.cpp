@@ -8,6 +8,8 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <string>
+#include <string.h>
 
 namespace py = pybind11;
 
@@ -119,6 +121,17 @@ static void dict_set(Dict* dict, const char* key, double value) {
     dict->size++;
 }
 
+static void dict_set_ptr(Dict* dict, const char* key, void* ptr) {
+    DictItem* item = dict_get_unsafe(dict, key);
+    if (item != NULL) {
+        item->ptr = ptr;
+        return;
+    }
+    dict->items[dict->size].key = key;
+    dict->items[dict->size].ptr = ptr;
+    dict->size++;
+}
+
 // ============================================================================
 // CPU advantage (same as puff_advantage_row_scalar but plain C++)
 // ============================================================================
@@ -168,7 +181,14 @@ static Dict* py_dict_to_c_dict(py::dict py_dict) {
     for (auto item : py_dict) {
         const char* key = PyUnicode_AsUTF8(item.first.ptr());
         try { dict_set(c_dict, key, item.second.cast<double>()); }
-        catch (const py::cast_error&) {}
+        catch (const py::cast_error&) {
+            if (PyUnicode_Check(item.second.ptr()) ||
+                    PyList_Check(item.second.ptr()) ||
+                    PyTuple_Check(item.second.ptr())) {
+                std::string value = py::str(item.second);
+                dict_set_ptr(c_dict, key, strdup(value.c_str()));
+            }
+        }
     }
     return c_dict;
 }

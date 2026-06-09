@@ -52,6 +52,8 @@ struct StateBuffer {
     int num_checkpoints;
     int checkpoint_interval;
     int candidate_capacity;
+    int score_capacity;
+    float min_priority;
     int agents_per_env;
     int num_cl_envs;
     int num_fresh_envs;
@@ -71,9 +73,11 @@ void register_state_buffer(StateBuffer* buf, Allocator* alloc,
     buf->checkpoint_interval = checkpoint_interval;
     buf->num_checkpoints = (horizon + checkpoint_interval - 1) / checkpoint_interval;
     buf->candidate_capacity = num_envs * buf->num_checkpoints;
+    buf->score_capacity = buf->candidate_capacity + num_envs;
+    buf->min_priority = 0.0f;
     buf->agents_per_env = agents_per_env;
     buf->advantages = {.shape = {capacity}};
-    buf->env_scores = {.shape = {buf->candidate_capacity}};
+    buf->env_scores = {.shape = {buf->score_capacity}};
     buf->importance = {.shape = {total_agents}};
     alloc_register(alloc, &buf->advantages);
     alloc_register(alloc, &buf->env_scores);
@@ -93,7 +97,7 @@ int init_state_buffer(StateBuffer* buf, int total_agents) {
     buf->priorities = (float*)malloc(capacity * sizeof(float));
     buf->priorities_host = (precision_t*)malloc(capacity * sizeof(precision_t));
     buf->env_scores_host = (precision_t*)malloc(
-        (size_t)buf->candidate_capacity * sizeof(precision_t));
+        (size_t)buf->score_capacity * sizeof(precision_t));
     buf->heap = (int*)malloc(capacity * sizeof(int));
     buf->heap_pos = (int*)malloc(capacity * sizeof(int));
     buf->env_state_inds_host = (int*)malloc((size_t)buf->num_envs * sizeof(int));
@@ -174,12 +178,12 @@ __global__ void compute_prio_abs(
 __global__ void compute_curriculum_checkpoint_scores(
         precision_t* __restrict__ dst,
         const precision_t* __restrict__ advantages_bt,
-        int num_fresh_envs, int num_cl_envs,
+        int num_envs, int num_fresh_envs, int num_cl_envs,
         int num_checkpoints, int checkpoint_interval,
         int agents_per_env, int horizon) {
     int row = blockIdx.x * blockDim.x + threadIdx.x;
-    int fresh_rows = num_checkpoints * num_fresh_envs;
-    int total_rows = fresh_rows + num_cl_envs;
+    int checkpoint_rows = num_checkpoints * num_envs;
+    int total_rows = checkpoint_rows + num_cl_envs;
     if (row >= total_rows) {
         return;
     }
@@ -187,16 +191,16 @@ __global__ void compute_curriculum_checkpoint_scores(
     int env_idx;
     int start_t = 0;
     int end_t = horizon;
-    if (row < fresh_rows) {
-        int c = row / num_fresh_envs;
-        env_idx = row - c * num_fresh_envs;
+    if (row < checkpoint_rows) {
+        int c = row / num_envs;
+        env_idx = row - c * num_envs;
         start_t = c * checkpoint_interval;
         end_t = start_t + checkpoint_interval;
         if (end_t > horizon) {
             end_t = horizon;
         }
     } else {
-        int i = row - fresh_rows;
+        int i = row - checkpoint_rows;
         env_idx = num_fresh_envs + i;
     }
 
@@ -366,11 +370,17 @@ static inline void state_heap_sift_down(StateBuffer* buf, int pos) {
     }
 }
 
+static inline void state_heap_refresh_min(StateBuffer* buf) {
+    buf->min_priority = buf->size > 0
+        ? buf->priorities[buf->heap[0]]
+        : 0.0f;
+}
+
 static inline void state_heap_update_slot(StateBuffer* buf, int slot, float priority,
         float decay) {
     priority = clean_state_priority(priority);
     float old_priority = buf->priorities[slot];
-    if (priority < old_priority) {
+    if (decay > 0.0f && priority < old_priority) {
         priority = decay * old_priority;
     }
     buf->priorities[slot] = priority;
@@ -381,9 +391,10 @@ static inline void state_heap_update_slot(StateBuffer* buf, int slot, float prio
     } else {
         state_heap_sift_down(buf, pos);
     }
+    state_heap_refresh_min(buf);
 }
 
-static inline void state_heap_insert(StateBuffer* buf, const PufferState* state, float priority) {
+static inline int state_heap_insert(StateBuffer* buf, const PufferState* state, float priority) {
     priority = clean_state_priority(priority);
     if (buf->size < buf->capacity) {
         int slot = buf->size;
@@ -394,17 +405,20 @@ static inline void state_heap_insert(StateBuffer* buf, const PufferState* state,
         buf->heap_pos[slot] = slot;
         buf->size++;
         state_heap_sift_up(buf, slot);
-        return;
+        state_heap_refresh_min(buf);
+        return 1;
     }
 
-    int min_slot = buf->heap[0];
-    if (priority <= buf->priorities[min_slot]) {
-        return;
+    if (priority <= buf->min_priority) {
+        return 0;
     }
+    int min_slot = buf->heap[0];
     buf->states[min_slot] = *state;
     buf->priorities[min_slot] = priority;
     buf->priorities_host[min_slot] = from_float(priority);
     state_heap_sift_down(buf, 0);
+    state_heap_refresh_min(buf);
+    return 1;
 }
 
 static inline void capture_curriculum_checkpoint(PuffeRL* pufferl, int buffer_idx, int t) {
@@ -418,13 +432,6 @@ static inline void capture_curriculum_checkpoint(PuffeRL* pufferl, int buffer_id
     StaticVec* vec = pufferl->vec;
     int env_start = vec->buffer_env_starts[buffer_idx];
     int env_end = env_start + vec->buffer_env_counts[buffer_idx];
-    if (env_start >= buf->num_fresh_envs) {
-        return;
-    }
-    if (env_end > buf->num_fresh_envs) {
-        env_end = buf->num_fresh_envs;
-    }
-
     Env* envs = vec->envs;
     PufferState* dst = buf->candidate_states + checkpoint_idx * buf->num_envs;
     for (int env_idx = env_start; env_idx < env_end; env_idx++) {
@@ -477,6 +484,17 @@ void curriculum_rollout_begin(PuffeRL* pufferl) {
             env->state = buf->states[state_inds[i]];
             puffer_state_refresh(env);
         }
+        int cl_agent_start = num_fresh_envs * agents_per_env;
+        int cl_agents = num_cl_envs * agents_per_env;
+        memset(vec->rewards + cl_agent_start, 0, (size_t)cl_agents * sizeof(float));
+        memset(vec->terminals + cl_agent_start, 0, (size_t)cl_agents * sizeof(float));
+        if (vec->gpu) {
+            cudaMemsetAsync(vec->gpu_rewards + cl_agent_start, 0,
+                (size_t)cl_agents * sizeof(float), stream);
+            cudaMemsetAsync(vec->gpu_terminals + cl_agent_start, 0,
+                (size_t)cl_agents * sizeof(float), stream);
+            cudaStreamSynchronize(stream);
+        }
         cudaMemcpy(vec->gpu_observations.data, vec->observations.data,
             (size_t)vec->total_agents * get_obs_size() * get_obs_elem_size(),
             cudaMemcpyHostToDevice);
@@ -494,14 +512,16 @@ void curriculum_update_advantages(PuffeRL* pufferl, PrecisionTensor* advantages,
     int horizon = advantages->shape[1];
     int num_fresh_envs = buf->num_fresh_envs;
     int num_cl_envs = buf->num_cl_envs;
+    int num_envs = buf->num_envs;
     int agents_per_env = buf->agents_per_env;
 
-    int score_rows = buf->num_checkpoints * num_fresh_envs + num_cl_envs;
+    int checkpoint_rows = buf->num_checkpoints * num_envs;
+    int score_rows = checkpoint_rows + num_cl_envs;
     compute_curriculum_checkpoint_scores<<<grid_size(score_rows), BLOCK_SIZE, 0, stream>>>(
-        buf->env_scores.data, advantages->data, num_fresh_envs,
+        buf->env_scores.data, advantages->data, num_envs, num_fresh_envs,
         num_cl_envs, buf->num_checkpoints,
         buf->checkpoint_interval, agents_per_env, horizon);
-    int cl_score_offset = buf->num_checkpoints * num_fresh_envs;
+    int cl_score_offset = checkpoint_rows;
     cudaMemcpyAsync(buf->env_scores_host, buf->env_scores.data,
         (size_t)score_rows * sizeof(precision_t), cudaMemcpyDeviceToHost, stream);
     cudaStreamSynchronize(stream);
@@ -510,14 +530,17 @@ void curriculum_update_advantages(PuffeRL* pufferl, PrecisionTensor* advantages,
         int env_idx = num_fresh_envs + i;
         int slot = buf->env_state_inds_host[env_idx];
         float priority = to_float(buf->env_scores_host[cl_score_offset + i]);
-        state_heap_update_slot(buf, slot, priority, pufferl->hypers.explore_decay);
+        state_heap_update_slot(buf, slot, priority, pufferl->hypers.state_priority_decay);
     }
 
     for (int c = 0; c < buf->num_checkpoints; c++) {
         int candidate_offset = c * buf->num_envs;
-        for (int i = 0; i < num_fresh_envs; i++) {
+        for (int i = 0; i < num_envs; i++) {
             int candidate_idx = candidate_offset + i;
-            float priority = to_float(buf->env_scores_host[c * num_fresh_envs + i]);
+            float priority = clean_state_priority(to_float(buf->env_scores_host[candidate_idx]));
+            if (buf->size >= buf->capacity && priority <= buf->min_priority) {
+                continue;
+            }
             state_heap_insert(buf, &buf->candidate_states[candidate_idx], priority);
         }
     }
