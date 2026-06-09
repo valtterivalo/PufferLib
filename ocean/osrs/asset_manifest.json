@@ -50,6 +50,17 @@
       ]
     },
     {
+      "name": "colosseum",
+      "files": [
+        "colosseum.terrain",
+        "colosseum.objects",
+        "colosseum.atlas",
+        "colosseum.cmap",
+        "colosseum_npcs.models",
+        "colosseum_npcs.anims"
+      ]
+    },
+    {
       "name": "gui",
       "files": [
         "sprites/gui/compass.png",

@@ -17,6 +17,7 @@ typedef enum {
     OSRS_ASSET_GROUP_CORE = 0,
     OSRS_ASSET_GROUP_INFERNO,
     OSRS_ASSET_GROUP_ZULRAH,
+    OSRS_ASSET_GROUP_COLOSSEUM,
     OSRS_ASSET_GROUP_GUI,
     OSRS_ASSET_GROUP_ITEMS,
     OSRS_ASSET_GROUP_HEADERS,
@@ -65,6 +66,15 @@ static const char* const OSRS_ASSET_ZULRAH_PATHS[] = {
     "zulrah.objects",
     "zulrah.atlas",
     "zulrah.cmap",
+};
+
+static const char* const OSRS_ASSET_COLOSSEUM_PATHS[] = {
+    "colosseum.terrain",
+    "colosseum.objects",
+    "colosseum.atlas",
+    "colosseum.cmap",
+    "colosseum_npcs.models",
+    "colosseum_npcs.anims",
 };
 
 static const char* const OSRS_ASSET_GUI_PATHS[] = {
@@ -147,6 +157,11 @@ static const OsrsAssetGroup OSRS_ASSET_GROUPS[OSRS_ASSET_GROUP_COUNT] = {
         .name = "zulrah",
         .paths = OSRS_ASSET_ZULRAH_PATHS,
         .path_count = sizeof(OSRS_ASSET_ZULRAH_PATHS) / sizeof(OSRS_ASSET_ZULRAH_PATHS[0]),
+    },
+    [OSRS_ASSET_GROUP_COLOSSEUM] = {
+        .name = "colosseum",
+        .paths = OSRS_ASSET_COLOSSEUM_PATHS,
+        .path_count = sizeof(OSRS_ASSET_COLOSSEUM_PATHS) / sizeof(OSRS_ASSET_COLOSSEUM_PATHS[0]),
     },
     [OSRS_ASSET_GROUP_GUI] = {
         .name = "gui",
