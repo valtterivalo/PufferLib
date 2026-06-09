@@ -184,7 +184,7 @@ static void run_profile(OsrsEnv* env, const char* encounter_name) {
                 edef->put_int(
                     env->encounter_state, env->encounter_context, "world_offset_x", 1807);
                 edef->put_int(
-                    env->encounter_state, env->encounter_context, "world_offset_y", 9489);
+                    env->encounter_state, env->encounter_context, "world_offset_y", 3089);
                 env->collision_map = cmap;
             }
         }
@@ -962,9 +962,9 @@ static void run_visual(
                 edef->put_int(
                     env->encounter_state, env->encounter_context, "world_offset_x", 1807);
                 edef->put_int(
-                    env->encounter_state, env->encounter_context, "world_offset_y", 9489);
+                    env->encounter_state, env->encounter_context, "world_offset_y", 3089);
                 env->collision_map = cmap;
-                fprintf(stderr, "colosseum collision map: %d regions, offset (1807, 9489)\n",
+                fprintf(stderr, "colosseum collision map: %d regions, offset (1807, 3089)\n",
                         cmap->count);
             }
         }
@@ -1109,22 +1109,22 @@ static void run_visual(
                 rc->npc_model_cache ? rc->npc_model_cache->count : 0,
                 rc->npc_anim_cache ? rc->npc_anim_cache->seq_count : 0);
     } else if (encounter_name && strcmp(encounter_name, "colosseum") == 0) {
-        /* Fortis Colosseum instanced arena: map region (28, 148) starts at world
-           (1792, 9472). The encounter uses arena-local coords (0..33); the 34x34
-           playable square sits at world SW corner (1807, 9489), so offset
-           terrain/objects/collision so local coord 0 maps to world 1807/9489. */
+        /* Fortis Colosseum overworld stadium: map region (28, 48) starts at world
+           (1792, 3072). The encounter uses arena-local coords (0..33); the 34x34
+           playable square sits at world SW corner (1807, 3089), so offset
+           terrain/objects/collision so local coord 0 maps to world 1807/3089. */
         rc->terrain = terrain_load(OSRS_ASSET("colosseum.terrain"));
         rc->objects = objects_load(OSRS_ASSET("colosseum.objects"));
         if (rc->terrain)
-            terrain_offset(rc->terrain, 1807, 9489);
+            terrain_offset(rc->terrain, 1807, 3089);
         if (rc->objects)
-            objects_offset(rc->objects, 1807, 9489);
+            objects_offset(rc->objects, 1807, 3089);
         rc->npc_model_cache = model_cache_load(OSRS_ASSET("colosseum_npcs.models"));
         rc->npc_anim_cache = anim_cache_load(OSRS_ASSET("colosseum_npcs.anims"));
         if (env->collision_map) {
             rc->collision_map = (const CollisionMap*)env->collision_map;
             rc->collision_world_offset_x = 1807;
-            rc->collision_world_offset_y = 9489;
+            rc->collision_world_offset_y = 3089;
         }
         fprintf(stderr, "colosseum: terrain=%s, cmap=%s, npc_models=%d, npc_anims=%d seqs\n",
                 rc->terrain ? "loaded" : "MISSING",
