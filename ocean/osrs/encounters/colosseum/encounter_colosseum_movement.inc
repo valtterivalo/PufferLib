@@ -55,6 +55,30 @@ static int col_npc_blocked(void* ctx, int x, int y, int size) {
     return 0;
 }
 
+/** Red Flag minotaur sidestep: when the greedy step toward the player is blocked,
+    try a one-tile step along whichever axis still has distance to close, in both
+    directions, taking the first that is not blocked. Returns 1 if it moved. */
+static int col_npc_red_flag_sidestep(
+    ColosseumState* s, int* x, int* y, int tx, int ty, int size
+) {
+    int dx = (tx > *x) - (tx < *x);
+    int dy = (ty > *y) - (ty < *y);
+    /* try the axis the greedy step could not advance: if dx was the main pull, try
+       vertical detours first, and vice versa. */
+    int try_order[4][2];
+    int n = 0;
+    if (dy != 0) { try_order[n][0] = 0; try_order[n][1] = dy; n++; }
+    if (dx != 0) { try_order[n][0] = dx; try_order[n][1] = 0; n++; }
+    try_order[n][0] = 0; try_order[n][1] = (dy != 0) ? -dy : 1; n++;
+    try_order[n][0] = (dx != 0) ? -dx : 1; try_order[n][1] = 0; n++;
+    for (int i = 0; i < n; i++) {
+        int sdx = try_order[i][0], sdy = try_order[i][1];
+        if (sdx == 0 && sdy == 0) continue;
+        if (encounter_npc_try_step(x, y, size, sdx, sdy, col_npc_blocked, s)) return 1;
+    }
+    return 0;
+}
+
 /** per-NPC movement: simple chase toward the player (no obstacle routefinding,
     matching the wiki default). Melee NPCs path into cardinal melee contact; ranged
     NPCs (serpent/archer/seer/manticore/javelin/shockwave) hold once within
@@ -84,6 +108,11 @@ static void col_npc_move_ctx(ColosseumState* s, ColosseumContext* ctx, int idx) 
     col_stamp_npc_collision_footprint(s, npc->x, npc->y, size, 0);
     int moved = encounter_npc_step_toward(
         &npc->x, &npc->y, tx, ty, size, 1, is_ranged ? 0 : 1, col_npc_blocked, s);
+    /* Red Flag: a stuck minotaur routes around the blocker by sidestepping along
+       the orthogonal axis (a lightweight stand-in for full obstacle pathing; a
+       3x3 BFS each tick is overkill for one reinforcement species). */
+    if (!moved && npc->type == COLO_MINOTAUR && col_mod_active(s, COLO_MOD_RED_FLAG))
+        moved = col_npc_red_flag_sidestep(s, &npc->x, &npc->y, tx, ty, size);
     col_stamp_npc_collision_footprint(s, npc->x, npc->y, size, 1);
     npc->moved_this_tick = moved ? 1 : 0;
 }

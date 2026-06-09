@@ -330,12 +330,130 @@ static const ColoWaveDef COLO_WAVES[COLO_NUM_WAVES] = {
 #define COLO_NUM_MODIFIERS 16
 #define COLO_MODIFIER_DRAFT_OPTIONS 3
 
+/** highest wave (0-based) after whose clear a modifier draft is offered. Waves
+    1..COLO_MODIFIER_LAST_WAVE clear into a draft; the spec flags four modifiers as
+    "not offered after wave 11", and leaves whether ANY choice is offered after
+    wave 11 UNCONFIRMED. We offer through wave 11 (index 10) so the last meaningful
+    choice lands before the boss; one-line tunable. */
+#define COLO_MODIFIER_LAST_WAVE 10
+
+/** per-modifier max tier: single-tier modifiers cap at 1, I/II/III cap at 3. */
+static const uint8_t COLO_MODIFIER_MAX_TIER[COLO_NUM_REAL_MODIFIERS] = {
+    [COLO_MOD_BEES]        = 3,
+    [COLO_MOD_BLASPHEMY]   = 3,
+    [COLO_MOD_DOOM]        = 3,
+    [COLO_MOD_DYNAMIC_DUO] = 1,
+    [COLO_MOD_FRAILTY]     = 3,
+    [COLO_MOD_MANTIMAYHEM] = 3,
+    [COLO_MOD_MYOPIA]      = 3,
+    [COLO_MOD_REENTRY]     = 3,
+    [COLO_MOD_RED_FLAG]    = 1,
+    [COLO_MOD_RELENTLESS]  = 3,
+    [COLO_MOD_SOLARFLARE]  = 3,
+    [COLO_MOD_QUARTET]     = 1,
+    [COLO_MOD_TOTEMIC]     = 1,
+    [COLO_MOD_VOLATILITY]  = 3,
+};
+
+/** modifiers whose affected entities only spawn before the boss, so the spec
+    flags them "not offered after wave 11". 1 = pre-boss-only. */
+static const uint8_t COLO_MODIFIER_PRE_BOSS_ONLY[COLO_NUM_REAL_MODIFIERS] = {
+    [COLO_MOD_DYNAMIC_DUO] = 1,
+    [COLO_MOD_MANTIMAYHEM] = 1,
+    [COLO_MOD_REENTRY]     = 1,
+    [COLO_MOD_RED_FLAG]    = 1,
+};
+
 typedef struct {
     uint32_t active_mask;                  /* bit i set = modifier i active */
     uint8_t tier[COLO_NUM_MODIFIERS];      /* per-modifier tier (0 = inactive) */
     int draft_options[COLO_MODIFIER_DRAFT_OPTIONS];  /* modifier ids offered, -1 = none */
     int draft_pending;                     /* 1 while a between-wave draft awaits a pick */
+    int draft_timer;                       /* ticks left to act on the open draft */
 } ColoModifierState;
+
+
+/** Bees! hazard: a roaming swarm converging on the player, moving every
+    COLO_BEE_MOVE_INTERVAL ticks and dealing up to COLO_BEE_MAX_POISON unblockable
+    damage on contact. Tier I/II/III field 1/2/3 swarms. A swarm dies in one hit but
+    respawns; we model the kill+respawn as a move-only entity (no separate HP). */
+#define COLO_MAX_BEE_SWARMS 3
+#define COLO_BEE_MOVE_INTERVAL 12   /* swarm steps one tile every 12 ticks */
+#define COLO_BEE_MAX_POISON 10      /* up to 10 unblockable contact damage/tick */
+
+typedef struct {
+    int active;
+    int x, y;
+    int move_timer;   /* ticks until the next step toward the player */
+} ColoBeeSwarm;
+
+/** Totemic hazard: when an NPC first drops to <=50% HP a healing totem spawns near
+    it, healing that NPC ~COLO_TOTEM_HEAL_PCT% of its max HP every
+    COLO_TOTEM_HEAL_INTERVAL ticks until destroyed. The totem is destroyed by
+    standing adjacent to it (modelled as the player being within 1 tile), matching
+    "until destroyed" without adding a separate combat target. UNCONFIRMED cadence. */
+#define COLO_MAX_TOTEMS COLO_MAX_NPCS
+#define COLO_TOTEM_HEAL_PCT 30        /* heal ~30% of the NPC's max HP per pulse */
+#define COLO_TOTEM_HEAL_INTERVAL 5    /* ticks between heal pulses (UNCONFIRMED) */
+
+typedef struct {
+    int active;
+    int x, y;
+    int npc_slot;     /* the NPC this totem heals (-1 if that NPC has since died) */
+    int heal_timer;   /* ticks until the next heal pulse */
+} ColoTotem;
+
+/** Solarflare hazard: a damaging orb circling the four boss pillars. Tiers change
+    cadence/damage and T3 disables prayer on hit. We reuse the boss pillar ring as
+    the orb path on every wave (the spec says "circles the pillars"); pre-boss the
+    ring is the four arena spawn corners so the orb still sweeps the play space.
+    UNCONFIRMED higher-tier damage; constants below are the modelled values. */
+#define COLO_SOLARFLARE_CORNER_PAUSE 7   /* T1 pauses 7 ticks at each corner */
+#define COLO_SOLARFLARE_MAX_HIT_T1 12    /* contact damage, tier I */
+#define COLO_SOLARFLARE_MAX_HIT_T2 18    /* tier II "more damage" (UNCONFIRMED) */
+#define COLO_SOLARFLARE_MAX_HIT_T3 24    /* tier III "increased damage" (UNCONFIRMED) */
+
+typedef struct {
+    int active;
+    int x, y;
+    int step;          /* position index around the orb ring perimeter */
+    int move_timer;    /* ticks until the next step (cadence is tier-driven) */
+    int pause_timer;   /* T1 corner pause countdown */
+} ColoSolarflareOrb;
+
+/** Doom: stacks gained per damage instance; reaching the tier cap (15/10/5) kills
+    the player. Stacks reset between waves. */
+static const int COLO_DOOM_CAP[4] = { 0, 15, 10, 5 };  /* indexed by tier (1..3) */
+
+/** Volatility death explosion radius (tiles beyond the NPC footprint) by tier, and
+    its contact max hit. T3 additionally leaves a temporary molten pool. */
+#define COLO_VOLATILITY_MAX_HIT 25       /* explosion contact damage (UNCONFIRMED) */
+#define COLO_VOLATILITY_POOL_TICKS 10    /* T3 molten pool lifetime */
+
+/** general-arena molten pool (Reentry / Volatility T3 on waves 1-11): contact
+    damage and the sentinel marking a permanent pool (Reentry T2, until wave end). */
+#define COLO_MOLTEN_MAX_HIT 12
+#define COLO_POOL_PERMANENT (-1)
+#define COLO_REENTRY_POOL_TICKS 8        /* Reentry T1 temporary pool lifetime */
+
+/** Relentless: defence-bypass fraction (percent) and flat max-hit bonus by tier. */
+static const int COLO_RELENTLESS_DEF_BYPASS_PCT[4] = { 0, 33, 66, 100 };
+static const int COLO_RELENTLESS_MAX_HIT_BONUS[4]  = { 0, 1, 3, 6 };
+
+/** Blasphemy: prayer drained as a percent of damage taken, by tier. */
+static const int COLO_BLASPHEMY_DRAIN_PCT[4] = { 0, 20, 40, 60 };
+
+/** Frailty: max-HP reduction percent by tier (T1 also disables overheal). */
+static const int COLO_FRAILTY_HP_CUT_PCT[4] = { 0, 10, 20, 40 };
+
+/** Myopia: player attack-range reduction (tiles) by tier. */
+static const int COLO_MYOPIA_RANGE_CUT[4] = { 0, 2, 4, 6 };
+
+/** Mantimayhem T2 venom: poison applied to the player on an unprotected manticore
+    hit, decaying by COLO_VENOM_DECAY each application until it expires. */
+#define COLO_VENOM_START 6     /* initial venom damage per tick */
+#define COLO_VENOM_DECAY 1     /* venom drops by this each tick it deals damage */
+#define COLO_VENOM_INTERVAL 5  /* ticks between venom damage applications */
 
 
 /** Sol Heredit AoE attack ids. The fight alternates spear/shield; if the same
@@ -607,6 +725,7 @@ typedef struct {
     float death_penalty_coeff;       /* magnitude of the death reward when enabled */
     int terminal_penalty_enabled;
     int curriculum_agent;
+    int modifier_draft_window_ticks; /* ticks a between-wave draft stays open (<=0 = stays until picked) */
 } ColConfig;
 
 typedef struct {
@@ -648,6 +767,8 @@ typedef struct {
     int total_npc_kills;
     int total_prayer_correct;
     int total_npc_attacks;
+    int modifiers_picked;      /* draft selections made this run (skips excluded) */
+    int active_tier_sum;       /* sum of active modifier tiers (run difficulty proxy) */
 } ColosseumLog;
 
 
@@ -672,6 +793,21 @@ typedef struct {
 
     ColoModifierState modifiers;
     SolHereditState sol;
+
+    /* modifier runtime state (zeroed each reset; a fresh run carries none). */
+    int doom_stacks;                       /* Doom: reset to 0 at each wave spawn */
+    ColoBeeSwarm bees[COLO_MAX_BEE_SWARMS];
+    ColoTotem totems[COLO_MAX_TOTEMS];
+    ColoSolarflareOrb solarflare;
+    int player_venom;                      /* Mantimayhem T2: current venom damage (0 = none) */
+    int player_venom_timer;                /* ticks until the next venom application */
+    /* general-arena molten pools (Reentry / Volatility T3) for waves 1-11. Boss
+       wave reuses SolHereditState.hazard_tile_*; this list is the non-boss analog.
+       permanent pools (Reentry T2) use ticks_remaining = COLO_POOL_PERMANENT. */
+    int molten_x[COLO_SOL_HAZARD_TILES_MAX];
+    int molten_y[COLO_SOL_HAZARD_TILES_MAX];
+    int molten_ticks[COLO_SOL_HAZARD_TILES_MAX];
+    int molten_count;
 
     /* reward bookkeeping */
     float reward;
@@ -707,5 +843,6 @@ typedef struct {
 
     /* config copy / RNG */
     int start_wave;
+    int config_modifier_draft_window;  /* resolved from ColConfig at reset */
     uint32_t rng_state;
 } ColosseumState;

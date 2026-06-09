@@ -141,6 +141,7 @@ static void col_sol_resolve_aoe(ColosseumState* s) {
     if (encounter_entity_footprints_overlap(ox, oy, span, s->player.x, s->player.y, 1)) {
         encounter_damage_player(&s->player, COLO_SOL_AOE_MAX_HIT, &s->tick_scratch.damage_received);
         s->last_hit_by_type = COLO_SOL_HEREDIT;
+        col_mod_on_player_damaged(s, COLO_SOL_AOE_MAX_HIT);
     }
     sol->aoe_attack = COLO_SOL_AOE_NONE;
 }
@@ -252,6 +253,7 @@ static void col_sol_tick_grapple(ColosseumState* s) {
     if (sol->grapple_timer == 0 && !sol->grapple_resolved) {
         encounter_damage_player(&s->player, COLO_SOL_GRAPPLE_MAX_HIT, &s->tick_scratch.damage_received);
         s->last_hit_by_type = COLO_SOL_HEREDIT;
+        col_mod_on_player_damaged(s, COLO_SOL_GRAPPLE_MAX_HIT);
         sol->grapple_active = 0;
         sol->grapple_resolved = 1;
     }
@@ -330,6 +332,7 @@ static void col_sol_tick_crystal(ColosseumState* s) {
         if (s->player.x == sp->tile_x && s->player.y == sp->tile_y) {
             encounter_damage_player(&s->player, sp->damage, &s->tick_scratch.damage_received);
             s->last_hit_by_type = COLO_SOL_HEREDIT;
+            col_mod_on_player_damaged(s, sp->damage);
         }
         sp->active = 0;
     }
@@ -360,6 +363,7 @@ static void col_sol_tick_molten_sand(ColosseumState* s) {
         if (s->player.x == sol->hazard_tile_x[i] && s->player.y == sol->hazard_tile_y[i]) {
             encounter_damage_player(&s->player, COLO_SOL_MOLTEN_MAX_HIT, &s->tick_scratch.damage_received);
             s->last_hit_by_type = COLO_SOL_HEREDIT;
+            col_mod_on_player_damaged(s, COLO_SOL_MOLTEN_MAX_HIT);
             break;  /* one burn per tick regardless of overlapping pools */
         }
     }

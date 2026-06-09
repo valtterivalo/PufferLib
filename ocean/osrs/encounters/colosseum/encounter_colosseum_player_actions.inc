@@ -85,7 +85,15 @@ static int col_pathfind_blocked(void* ctx, int abs_x, int abs_y) {
     return col_player_walkable(wc->s, abs_x, abs_y) ? 0 : 1;
 }
 
-/** attack-target lookup callback: returns the NPC at an obs slot. */
+/** the player's effective attack reach, after Myopia's range reduction. */
+static int col_player_attack_range(const ColosseumState* s) {
+    const EncounterLoadoutStats* ls = &s->loadout_stats[s->weapon_set];
+    int base = ls->attack_range > 0 ? ls->attack_range : 1;
+    return col_mod_myopia_range(s, base);
+}
+
+/** attack-target lookup callback: returns the NPC at an obs slot. The reach the
+    chase uses is the PLAYER's effective range (Myopia-reduced), not the NPC's. */
 static int col_lookup_player_attack_target(void* ctx, int target_slot, OsrsAttackTarget* out) {
     ColosseumState* s = (ColosseumState*)ctx;
     if (target_slot < 0 || target_slot >= COLO_MAX_NPCS) return 0;
@@ -95,8 +103,7 @@ static int col_lookup_player_attack_target(void* ctx, int target_slot, OsrsAttac
     out->x = npc->x;
     out->y = npc->y;
     out->size = col_npc_effective_size(npc);
-    out->attack_range = COLO_NPC_STATS[npc->type].attack_range > 0
-        ? COLO_NPC_STATS[npc->type].attack_range : 1;
+    out->attack_range = col_player_attack_range(s);
     return 1;
 }
 
@@ -172,6 +179,12 @@ static void col_tick_player_ctx(
     if (actions[COLO_HEAD_SPEC] == 1)
         s->player.spec_armed = !s->player.spec_armed;
 
+    /* modifier draft: index 0 skips; index k activates draft option (k-1). Only
+       acts while a between-wave draft is pending (the mask gates the rest). */
+    int modifier_act = actions[COLO_HEAD_MODIFIER_SELECT];
+    if (modifier_act > 0 && s->modifiers.draft_pending)
+        col_modifier_apply_selection(s, modifier_act - 1);
+
     /* grapple parry: during an active Sol grapple, action index k clicks gear slot
        (k-1). A correct slot parries; clicking on the last tick is a perfect parry. */
     int grapple_act = actions[COLO_HEAD_GRAPPLE_PARRY];
@@ -244,10 +257,9 @@ static void col_tick_player_ctx(
         int slot = s->interaction.target_slot;
         ColoNPC* npc = &s->npcs[slot];
         if (npc->active) {
-            const EncounterLoadoutStats* ls = &s->loadout_stats[s->weapon_set];
             if (encounter_player_can_attack(s->player.x, s->player.y,
                     npc->x, npc->y, col_npc_effective_size(npc),
-                    ls->attack_range, NULL, 0)) {
+                    col_player_attack_range(s), NULL, 0)) {
                 col_player_attack_target(s, slot);
             }
         }

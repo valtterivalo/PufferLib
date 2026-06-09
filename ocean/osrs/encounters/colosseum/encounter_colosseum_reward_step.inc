@@ -89,10 +89,12 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
     if (!in_wave_gap && !in_ready_gap) {
         col_rebuild_player_collision_flags(s);
         col_tick_npcs_ctx(s, ctx);
+        col_modifiers_tick(s);
     }
 
-    /* early death check before player actions: a lethal hit can't be brewed back */
-    if (s->player.current_hitpoints <= 0) {
+    /* early death check before player actions: a lethal hit can't be brewed back.
+       Doom reaching its tier stack cap is also lethal. */
+    if (s->player.current_hitpoints <= 0 || col_mod_doom_lethal(s)) {
         (void)col_compute_reward_ctx(s, ctx);
         s->episode_over = 1;
         s->winner = COLO_OUTCOME_PLAYER_DIED;
@@ -110,8 +112,8 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
     s->reward = col_compute_reward_ctx(s, ctx);
     int all_dead = 1;
 
-    /* post-action death check */
-    if (s->player.current_hitpoints <= 0) {
+    /* post-action death check (HP or a lethal Doom stack). */
+    if (s->player.current_hitpoints <= 0 || col_mod_doom_lethal(s)) {
         s->episode_over = 1;
         s->winner = COLO_OUTCOME_PLAYER_DIED;
         s->reward = col_terminal_loss_reward(s, ctx);
@@ -149,6 +151,10 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
             s->winner = COLO_OUTCOME_PLAYER_WON;
             s->reward += ctx->config.win_bonus;
         } else {
+            /* between-wave modifier draft: offered after clearing waves
+               1..COLO_MODIFIER_LAST_WAVE, during the inter-wave gap. */
+            if (s->wave <= COLO_MODIFIER_LAST_WAVE)
+                col_modifier_offer_draft(s, s->wave);
             s->wave_spawn_target = s->wave + 1;
             s->wave_spawn_delay = 9;
             s->log.wave_reached = s->wave + 1;

@@ -62,10 +62,35 @@ typedef enum {
     COLO_OUTCOME_PLAYER_DIED = 1,  /* died or hit the tick cap */
 } ColoOutcome;
 
+/** the 14 real Fortis Colosseum modifiers (the between-wave handicap draft).
+    Order is the modifier-id space: it indexes ColoModifierState.tier[] and the
+    obs/draft slots, so it must stay stable. COLO_NUM_MODIFIERS (16) leaves two
+    unused ids of headroom; only these 14 are ever drafted. Tier counts and exact
+    per-tier effects live in COLO_MODIFIER_MAX_TIER + encounter_colosseum_modifiers.inc,
+    keyed to .colosseum-notes/mechanics-to-code.md ("Modifiers (14)"). */
+typedef enum {
+    COLO_MOD_BEES = 0,      /* I/II/III: 1/2/3 roaming poison swarms */
+    COLO_MOD_BLASPHEMY,     /* I/II/III: drain prayer = 20/40/60% of damage taken */
+    COLO_MOD_DOOM,          /* I/II/III: stack on damage, die at 15/10/5 (reset/wave) */
+    COLO_MOD_DYNAMIC_DUO,   /* single: Shockwave Colossi spawn in pairs */
+    COLO_MOD_FRAILTY,       /* I/II/III: -10/-20/-40% max HP (T1 disables overheal) */
+    COLO_MOD_MANTIMAYHEM,   /* I/II/III: manticore extra orb / venom / unpredictable */
+    COLO_MOD_MYOPIA,        /* I/II/III: player attack range -2/-4/-6 */
+    COLO_MOD_REENTRY,       /* I/II/III: javelin skyfall leaves molten sand */
+    COLO_MOD_RED_FLAG,      /* single: minotaurs route around obstacles */
+    COLO_MOD_RELENTLESS,    /* I/II/III: bypass 33/66/100% def, +1/+3/+6 max hit */
+    COLO_MOD_SOLARFLARE,    /* I/II/III: orb circling the boss pillars */
+    COLO_MOD_QUARTET,       /* single: +1 random warbander each wave (incl W12) */
+    COLO_MOD_TOTEMIC,       /* single: 50%-HP NPCs spawn a healing totem */
+    COLO_MOD_VOLATILITY,    /* I/II/III: death explosion / molten pool */
+    COLO_NUM_REAL_MODIFIERS
+} ColoModifier;
+
 #include "colosseum/encounter_colosseum_model.inc"
 #include "colosseum/encounter_colosseum_helpers.inc"
 #include "colosseum/encounter_colosseum_reset_spawn.inc"
 #include "colosseum/encounter_colosseum_movement.inc"
+#include "colosseum/encounter_colosseum_modifiers.inc"
 #include "colosseum/encounter_colosseum_combat.inc"
 #include "colosseum/encounter_colosseum_boss.inc"
 #include "colosseum/encounter_colosseum_player_actions.inc"

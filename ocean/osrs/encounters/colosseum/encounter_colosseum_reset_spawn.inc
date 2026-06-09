@@ -79,6 +79,25 @@ static void col_init_npc(ColosseumState* s, int idx, ColoNpcType type, int x, in
         col_stamp_npc_collision_footprint(s, x, y, col_npc_effective_size(npc), 1);
 }
 
+/** spawn one NPC of `type` at the next shuffled corner (or Sol's fixed tile),
+    advancing *cursor. No-op when no slot is free. Shared by the wave roster, the
+    Dynamic Duo pair, and the Quartet extra warbander. */
+static void col_spawn_one_at_position(ColosseumState* s, ColoNpcType type, int* cursor) {
+    int slot = col_find_free_npc(s);
+    if (slot < 0) return;
+    int x, y;
+    if (type == COLO_SOL_HEREDIT) {
+        x = COLO_SOL_HEREDIT_X;
+        y = COLO_SOL_HEREDIT_Y;
+    } else {
+        int pos = s->spawn_order[(*cursor) % COLO_NUM_SPAWN_POS];
+        x = COLO_SPAWN_POS[pos][0];
+        y = COLO_SPAWN_POS[pos][1];
+        (*cursor)++;
+    }
+    col_init_npc(s, slot, type, x, y);
+}
+
 /** spawn the current wave's NPCs at shuffled spawn positions. */
 static void col_spawn_wave(ColosseumState* s) {
     for (int i = 0; i < COLO_MAX_NPCS; i++) {
@@ -91,25 +110,27 @@ static void col_spawn_wave(ColosseumState* s) {
     for (int i = 0; i < COLO_NUM_SPAWN_POS; i++) s->spawn_order[i] = i;
     encounter_shuffle(s->spawn_order, COLO_NUM_SPAWN_POS, &s->rng_state);
 
+    int spawn_cursor = 0;
     for (int i = 0; i < def->count; i++) {
-        int slot = col_find_free_npc(s);
-        if (slot < 0) break;
         ColoNpcType type = (ColoNpcType)def->types[i];
-        int x, y;
-        if (type == COLO_SOL_HEREDIT) {
-            x = COLO_SOL_HEREDIT_X;
-            y = COLO_SOL_HEREDIT_Y;
-        } else {
-            int pos = s->spawn_order[i % COLO_NUM_SPAWN_POS];
-            x = COLO_SPAWN_POS[pos][0];
-            y = COLO_SPAWN_POS[pos][1];
-        }
-        col_init_npc(s, slot, type, x, y);
+        col_spawn_one_at_position(s, type, &spawn_cursor);
+        /* Dynamic Duo: Shockwave Colossi spawn in pairs. */
+        if (type == COLO_SHOCKWAVE_COLOSSUS && col_mod_active(s, COLO_MOD_DYNAMIC_DUO))
+            col_spawn_one_at_position(s, type, &spawn_cursor);
+    }
+
+    /* Quartet: one extra random Fremennik warbander every wave, including wave 12. */
+    if (col_mod_active(s, COLO_MOD_QUARTET)) {
+        static const ColoNpcType WARBAND[3] = {
+            COLO_FREMENNIK_BERSERKER, COLO_FREMENNIK_ARCHER, COLO_FREMENNIK_SEER };
+        ColoNpcType extra = WARBAND[encounter_rand_int(&s->rng_state, 3)];
+        col_spawn_one_at_position(s, extra, &spawn_cursor);
     }
 
     s->reinforcement_timer = COLO_REINFORCEMENT_TICKS;
 
     if (s->wave == COLO_WAVE_BOSS) col_sol_begin_boss_arena(s);
+    col_modifiers_on_wave_spawn(s);
 }
 
 /** sentinel reinforcement_timer value meaning this wave already reinforced. */
@@ -156,6 +177,7 @@ static void col_reset_ctx(EncounterState* state, EncounterContext* context, uint
     uint32_t saved_rng = s->rng_state;
     memset(s, 0, sizeof(ColosseumState));
     s->start_wave = saved_start;
+    s->config_modifier_draft_window = ctx->config.modifier_draft_window_ticks;
     s->rng_state = encounter_resolve_seed(saved_rng, seed);
 
     s->player_dest_x = -1;

@@ -20,7 +20,14 @@
 #define COLO_PLAYER_OBS_SIZE      29
 #define COLO_FEATURES_PER_NPC     22
 #define COLO_NPC_OBS_SIZE         (COLO_OBS_NPCS * COLO_FEATURES_PER_NPC)  /* 264 */
-#define COLO_MODIFIER_OBS_SIZE    (2 * COLO_NUM_MODIFIERS + 1 + COLO_MODIFIER_DRAFT_OPTIONS)  /* 36 */
+/** modifier obs = per-modifier active flag + tier (2 * 16) + draft pending + 3
+    draft option ids (36), then a derived-hazard tail (13): Doom stacks, player
+    venom, nearest bee swarm, the Solarflare orb tile, and the nearest non-boss
+    molten pool. The tail gives the policy the modifier-driven state it must react
+    to but cannot read from the static active/tier flags. */
+#define COLO_MODIFIER_FLAGS_OBS_SIZE  (2 * COLO_NUM_MODIFIERS + 1 + COLO_MODIFIER_DRAFT_OPTIONS)  /* 36 */
+#define COLO_MODIFIER_HAZARD_OBS_SIZE 13
+#define COLO_MODIFIER_OBS_SIZE    (COLO_MODIFIER_FLAGS_OBS_SIZE + COLO_MODIFIER_HAZARD_OBS_SIZE)  /* 49 */
 #define COLO_WAVE_OBS_SIZE        4
 #define COLO_BOSS_OBS_SIZE        45
 /** obs surfaces the soonest-landing pending hits only (the 32-deep queue rarely
@@ -306,6 +313,69 @@ static int col_collect_obs_pending_hits(const ColosseumState* s, int* out) {
 }
 
 
+/** nearest non-boss molten pool (Reentry / Volatility) to the player: writes
+    dx, dy, present (3 floats). */
+static void col_write_nearest_modifier_molten(const ColosseumState* s, float* obs, int* idx) {
+    int i = *idx;
+    int best = -1, best_d = 1 << 30;
+    for (int k = 0; k < s->molten_count; k++) {
+        int dx = abs(s->molten_x[k] - s->player.x);
+        int dy = abs(s->molten_y[k] - s->player.y);
+        int d = dx > dy ? dx : dy;
+        if (d < best_d) { best_d = d; best = k; }
+    }
+    if (best >= 0) {
+        obs[i++] = col_obs_rel_x(s->molten_x[best], s->player.x);
+        obs[i++] = col_obs_rel_y(s->molten_y[best], s->player.y);
+        obs[i++] = 1.0f;
+    } else {
+        obs[i++] = 0.0f; obs[i++] = 0.0f; obs[i++] = 0.0f;
+    }
+    *idx = i;
+}
+
+/** write the modifier-hazard obs tail (COLO_MODIFIER_HAZARD_OBS_SIZE floats):
+    Doom (active, stacks frac), player venom (active, frac), nearest bee swarm
+    (dx, dy, present), Solarflare orb (dx, dy, active), nearest molten pool. */
+static void col_write_modifier_hazards(const ColosseumState* s, float* obs, int* idx) {
+    int i = *idx;
+    int doom_tier = col_mod_tier(s, COLO_MOD_DOOM);
+    int doom_cap = doom_tier > 0 ? COLO_DOOM_CAP[doom_tier] : 0;
+    obs[i++] = doom_tier > 0 ? 1.0f : 0.0f;
+    obs[i++] = doom_cap > 0 ? col_clamp01((float)s->doom_stacks / (float)doom_cap) : 0.0f;
+
+    obs[i++] = s->player_venom > 0 ? 1.0f : 0.0f;
+    obs[i++] = col_clamp01((float)s->player_venom / (float)COLO_VENOM_START);
+
+    int bee = -1, bee_d = 1 << 30;
+    for (int b = 0; b < COLO_MAX_BEE_SWARMS; b++) {
+        if (!s->bees[b].active) continue;
+        int dx = abs(s->bees[b].x - s->player.x);
+        int dy = abs(s->bees[b].y - s->player.y);
+        int d = dx > dy ? dx : dy;
+        if (d < bee_d) { bee_d = d; bee = b; }
+    }
+    if (bee >= 0) {
+        obs[i++] = col_obs_rel_x(s->bees[bee].x, s->player.x);
+        obs[i++] = col_obs_rel_y(s->bees[bee].y, s->player.y);
+        obs[i++] = 1.0f;
+    } else {
+        obs[i++] = 0.0f; obs[i++] = 0.0f; obs[i++] = 0.0f;
+    }
+
+    if (s->solarflare.active) {
+        obs[i++] = col_obs_rel_x(s->solarflare.x, s->player.x);
+        obs[i++] = col_obs_rel_y(s->solarflare.y, s->player.y);
+        obs[i++] = 1.0f;
+    } else {
+        obs[i++] = 0.0f; obs[i++] = 0.0f; obs[i++] = 0.0f;
+    }
+    *idx = i;
+
+    col_write_nearest_modifier_molten(s, obs, idx);
+}
+
+
 /* ----- top-level obs writer ------------------------------------------------- */
 
 static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, float* obs) {
@@ -371,6 +441,7 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
         obs[i++] = (s->modifiers.draft_pending && opt >= 0)
             ? (float)(opt + 1) / (float)COLO_NUM_MODIFIERS : 0.0f;
     }
+    col_write_modifier_hazards(s, obs, &i);
     assert(i == COLO_OBS_AFTER_MODS);
 
     /* wave block (4) */

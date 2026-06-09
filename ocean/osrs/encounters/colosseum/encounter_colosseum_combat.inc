@@ -11,6 +11,13 @@
 
 static void col_apply_npc_death(ColosseumState* s, int idx) {
     s->log.total_npc_kills++;
+    ColoNPC* npc = &s->npcs[idx];
+    /* Volatility: an explosion beyond the dying NPC's footprint (and a molten pool
+       at tier III). Read its position/size before the slot is recycled. */
+    col_mod_volatility_on_death(s, npc->x, npc->y, col_npc_effective_size(npc));
+    /* free any totem bound to this slot. */
+    for (int t = 0; t < COLO_MAX_TOTEMS; t++)
+        if (s->totems[t].active && s->totems[t].npc_slot == idx) s->totems[t].active = 0;
     col_deactivate_npc(s, idx);
 }
 
@@ -38,6 +45,8 @@ static void col_resolve_player_projectiles_on_npcs(ColosseumState* s) {
                     col_apply_npc_death(s, i);
                     break;
                 }
+                /* Totemic: a healing totem appears once this NPC drops to <=50% HP. */
+                col_mod_on_npc_hp_changed(s, i);
                 encounter_pending_hit_queue_remove(&npc->pending_hits, h, "colosseum-npc");
                 h--;
             }
@@ -45,7 +54,9 @@ static void col_resolve_player_projectiles_on_npcs(ColosseumState* s) {
     }
 }
 
-/** resolve NPC attack projectiles landing on the player. */
+/** resolve NPC attack projectiles landing on the player. Blasphemy drains prayer
+    by a fraction of the damage taken this tick; Doom adds one stack per damaging
+    instance (off-prayer hits that dealt damage). */
 static void col_resolve_player_pending_hits(ColosseumState* s) {
     int prayer_correct = 0;
     int off_prayer = 0;
@@ -55,6 +66,14 @@ static void col_resolve_player_pending_hits(ColosseumState* s) {
         &dmg_received, &prayer_correct, &off_prayer);
     s->tick_scratch.damage_received += dmg_received;
     s->tick_scratch.prayer_correct += prayer_correct;
+
+    int blas = col_mod_tier(s, COLO_MOD_BLASPHEMY);
+    if (blas > 0 && dmg_received > 0.0f && s->player.current_prayer > 0) {
+        int drain = ((int)dmg_received * COLO_BLASPHEMY_DRAIN_PCT[blas]) / 100;
+        s->player.current_prayer -= drain;
+        if (s->player.current_prayer < 0) s->player.current_prayer = 0;
+    }
+    if (col_mod_active(s, COLO_MOD_DOOM)) s->doom_stacks += off_prayer;
 }
 
 /** rect distance from the player to an NPC footprint (closest tile). */
@@ -90,8 +109,15 @@ static int col_npc_roll_vs_player(
     }
     int att_roll = osrs_npc_attack_roll(att_level, att_bonus);
     int def_roll = col_player_def_roll(s, style, stats->melee_style);
-    int dmg = encounter_rand_int(&s->rng_state, max_hit + 1);
-    *hit_success = encounter_roll_hit_chance(&s->rng_state, att_roll, def_roll);
+
+    /* Relentless: bypass a fraction of the player's defence, add a flat max hit,
+       and (T3) ignore accuracy entirely. */
+    int force_hit = 0;
+    int max_hit_bonus = col_mod_relentless_apply(s, &def_roll, &force_hit);
+    int effective_max = max_hit + max_hit_bonus;
+
+    int dmg = encounter_rand_int(&s->rng_state, effective_max + 1);
+    *hit_success = force_hit ? 1 : encounter_roll_hit_chance(&s->rng_state, att_roll, def_roll);
     return *hit_success ? dmg : 0;
 }
 
@@ -196,7 +222,12 @@ static void col_npc_resolve_javelin_skyfall(ColosseumState* s, int idx) {
     int on_tile = (s->player.x == jv->skyfall_tile_x && s->player.y == jv->skyfall_tile_y);
     int dmg = on_tile ? jv->skyfall_damage : 0;
     encounter_damage_player(&s->player, dmg, &s->tick_scratch.damage_received);
-    if (dmg > 0) s->last_hit_by_type = npc->type;
+    if (dmg > 0) {
+        s->last_hit_by_type = npc->type;
+        col_mod_on_player_damaged(s, dmg);
+    }
+    /* Reentry: the skyfall leaves molten sand on the marked tile. */
+    col_mod_reentry_on_skyfall(s, jv->skyfall_tile_x, jv->skyfall_tile_y);
 }
 
 /** Manticore: 10-tick cycle 3-orb barrage. orbs 0&1 are {ranged, magic} in random
@@ -218,16 +249,26 @@ static int col_manticore_orb_max_hit(AttackStyle style) {
     return COLO_MANTICORE_MAX_HIT_MELEE;
 }
 
-/** fire one manticore orb (flight time 0): each orb prayed individually. */
+/** fire one manticore orb (flight time 0): each orb prayed individually.
+    Mantimayhem T1 fires a second projectile of the same orb; T2 inflicts venom on
+    an unprotected hit (the player's current overhead does not block the style). */
 static void col_npc_manticore_fire_orb(ColosseumState* s, int idx, const ColoNpcStats* stats) {
     ColoNPC* npc = &s->npcs[idx];
     ColoManticoreState* mc = colo_npc_manticore(npc);
     AttackStyle style = mc->orb_style[mc->cycle_step];
     int max_hit = col_manticore_orb_max_hit(style);
-    int hit_success = 0;
-    int dmg = col_npc_roll_vs_player(s, stats, style, max_hit, &hit_success);
-    /* flight time 0: lands next tick, prayer checked individually at land. */
-    col_queue_player_pending_hit(s, idx, npc->type, dmg, 1, style, 1, hit_success);
+    int mayhem = col_mod_tier(s, COLO_MOD_MANTIMAYHEM);
+    int shots = (mayhem >= 1) ? 2 : 1;   /* T1+: an extra projectile per orb */
+
+    for (int shot = 0; shot < shots; shot++) {
+        int hit_success = 0;
+        int dmg = col_npc_roll_vs_player(s, stats, style, max_hit, &hit_success);
+        /* flight time 0: lands next tick, prayer checked individually at land. */
+        col_queue_player_pending_hit(s, idx, npc->type, dmg, 1, style, 1, hit_success);
+        /* T2 venom: a successful hit the current prayer does not block inflicts venom. */
+        if (hit_success && !encounter_prayer_correct_for_style(s->player.prayer, style))
+            col_mod_manticore_apply_venom(s, hit_success);
+    }
     npc->attacked_this_tick = 1;
     npc->attack_style_this_tick = style;
     s->tick_scratch.attacks_fired++;
@@ -256,15 +297,21 @@ static void col_npc_attack_manticore(ColosseumState* s, int idx, const ColoNpcSt
         return;
     }
 
-    /* orbs 0 & 1 are {ranged, magic} in random order; orb 2 is always melee. */
-    if (encounter_rand_int(&s->rng_state, 2) == 0) {
+    if (col_mod_tier(s, COLO_MOD_MANTIMAYHEM) >= 3) {
+        /* T3 unpredictable: every orb's style is independently random. */
+        static const AttackStyle ANY[3] = { ATTACK_STYLE_RANGED, ATTACK_STYLE_MAGIC, ATTACK_STYLE_MELEE };
+        for (int o = 0; o < 3; o++)
+            mc->orb_style[o] = ANY[encounter_rand_int(&s->rng_state, 3)];
+    } else if (encounter_rand_int(&s->rng_state, 2) == 0) {
+        /* orbs 0 & 1 are {ranged, magic} in random order; orb 2 is always melee. */
         mc->orb_style[0] = ATTACK_STYLE_RANGED;
         mc->orb_style[1] = ATTACK_STYLE_MAGIC;
+        mc->orb_style[2] = ATTACK_STYLE_MELEE;
     } else {
         mc->orb_style[0] = ATTACK_STYLE_MAGIC;
         mc->orb_style[1] = ATTACK_STYLE_RANGED;
+        mc->orb_style[2] = ATTACK_STYLE_MELEE;
     }
-    mc->orb_style[2] = ATTACK_STYLE_MELEE;
     mc->cycle_step = 0;
     col_npc_manticore_fire_orb(s, idx, stats);
 }

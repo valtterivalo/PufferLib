@@ -33,6 +33,10 @@ static void col_put_int_ctx(
     else if (strcmp(key, "curriculum_agent") == 0)
         ctx->config.curriculum_agent =
             encounter_require_binary_config("colosseum", key, value);
+    else if (strcmp(key, "modifier_draft_window_ticks") == 0) {
+        ctx->config.modifier_draft_window_ticks = value;
+        s->config_modifier_draft_window = value;
+    }
     else encounter_abort_unknown_config("colosseum", "int", key);
 }
 
@@ -98,6 +102,7 @@ static void* col_get_log_ctx(EncounterState* state, EncounterContext* context) {
     s->log.win = (s->episode_over && s->winner == COLO_OUTCOME_PLAYER_WON) ? 1 : 0;
     s->log.died = (s->episode_over && s->winner == COLO_OUTCOME_PLAYER_DIED) ? 1 : 0;
     s->log.boss_phase_reached = s->sol.phase;
+    s->log.active_tier_sum = col_modifier_active_tier_sum(s);
     return &s->log;
 }
 
