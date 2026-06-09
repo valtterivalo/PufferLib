@@ -1181,6 +1181,27 @@ static void inf_restore(EncounterState* state, const void* data, size_t n) {
 }
 
 
+/* scenario-lab vtable hook: route one command line through the inferno lab parser.
+   on a dump line the parser allocates the JSON, which we print and free here so the
+   viewer's apply path stays encounter-neutral. */
+static int inf_apply_lab_command_ctx(
+    EncounterState* state,
+    EncounterContext* context,
+    const char* line
+) {
+    (void)context;
+    InfernoState* s = (InfernoState*)state;
+    char* json = NULL;
+    InfLabLineResult result = inf_lab_apply_script_line_alloc_json(s, line, &json);
+    if (result == INF_LAB_LINE_DUMP && json) {
+        printf("%s\n", json);
+        fflush(stdout);
+    }
+    free(json);
+    return result == INF_LAB_LINE_DUMP ? 1 : 0;
+}
+
+
 static const EncounterDef ENCOUNTER_INFERNO = {
     .name = "inferno",
     .obs_size = INF_NUM_OBS,
@@ -1228,6 +1249,7 @@ static const EncounterDef ENCOUNTER_INFERNO = {
 
     .translate_human_input = inf_translate_human_input_ctx,
     .is_human_targetable_npc_slot = inf_is_human_targetable_npc_slot_ctx,
+    .apply_lab_command = inf_apply_lab_command_ctx,
     .head_move = INF_HEAD_MOVE,
     .head_prayer = INF_HEAD_PRAYER,
     .head_target = INF_HEAD_TARGET,

@@ -2267,6 +2267,14 @@ typedef struct {
     int (*is_human_targetable_npc_slot)(
         EncounterState* state, EncounterContext* context, int npc_slot);
 
+    /* scenario lab: apply one line of the encounter's line-based command language
+       to hand-edit the live scenario (spawn/move/kill NPCs, set wave/boss/player,
+       etc). NULL = encounter has no lab. The viewer drives both encounters through
+       this one hook. Returns 1 if the line requested a JSON dump (the encounter
+       printed it to stdout), 0 otherwise. Invalid lines abort loudly. */
+    int (*apply_lab_command)(
+        EncounterState* state, EncounterContext* context, const char* line);
+
     /* action head indices used by shared translate helpers and renderer.
        set to -1 if the encounter doesn't have that action head. */
     int head_move;     /* movement (walk/run) */

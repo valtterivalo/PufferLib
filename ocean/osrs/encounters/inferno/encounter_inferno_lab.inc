@@ -217,7 +217,13 @@ static void inf_lab_apply_command(InfernoState* s, const InfernoLabCommand* cmd)
             return;
 
         case INF_LAB_COMMAND_SPAWN_NPC: {
-            const InfLabSpawnNpcCommand* spawn = &cmd->as.spawn_npc;
+            InfLabSpawnNpcCommand spawn_local = cmd->as.spawn_npc;
+            InfLabSpawnNpcCommand* spawn = &spawn_local;
+            if (spawn->slot < 0) {
+                spawn->slot = inf_find_free_npc(s);
+                if (spawn->slot < 0)
+                    inf_lab_abort("no free npc slot (all %d in use)", INF_MAX_NPCS);
+            }
             inf_lab_require_slot(spawn->slot);
             inf_lab_require_type(spawn->type);
             if (s->npcs[spawn->slot].active)
@@ -669,8 +675,9 @@ static InfernoLabCommand inf_lab_build_script_command(
         case INF_LAB_COMMAND_SPAWN_NPC:
             if (args->x == INT32_MIN || args->y == INT32_MIN)
                 inf_lab_abort("command %s requires x and y", command);
-            if (args->slot < 0 || args->type < 0)
-                inf_lab_abort("npc command requires slot and type");
+            if (args->type < 0)
+                inf_lab_abort("npc command requires type");
+            /* slot omitted (-1) = auto-pick a free slot at apply time. */
             out.kind = INF_LAB_COMMAND_SPAWN_NPC;
             out.as.spawn_npc.slot = args->slot;
             out.as.spawn_npc.type = (InfNPCType)args->type;

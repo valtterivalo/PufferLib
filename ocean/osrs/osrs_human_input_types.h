@@ -83,6 +83,8 @@ typedef struct HumanInput {
     int pending_spell;                     /* 0=none, ATTACK_ICE or ATTACK_BLOOD */
     int pending_target_idx;                /* NPC entity index to attack, -1 = none */
     int pending_gear;                      /* gear switch action value, 0 = none */
+    int pending_modifier_select;           /* Colosseum draft: 0=none, 1..N = pick option N-1 */
+    int pending_grapple_slot;              /* Colosseum Sol grapple: 0=none, 1..NUM_GEAR_SLOTS = click slot N-1 */
 
     CursorMode cursor_mode;
     int selected_item_inventory_slot;       /* inventory slot selected with Use. -1 = none */
@@ -154,6 +156,8 @@ static inline void human_input_clear_pending(HumanInput* hi) {
     hi->pending_spell = 0;
     hi->pending_target_idx = -1;
     hi->pending_gear = 0;
+    hi->pending_modifier_select = 0;
+    hi->pending_grapple_slot = 0;
     human_input_clear_commands(hi);
 }
 

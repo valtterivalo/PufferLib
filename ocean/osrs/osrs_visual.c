@@ -698,8 +698,8 @@ static void visual_frame(void* arg) {
     VisualState* vs = (VisualState*)arg;
     OsrsEnv* env = vs->env;
     RenderClient* rc = (RenderClient*)env->client;
-    if (rc->inferno_lab_restore_generation != vs->seen_lab_restore_generation) {
-        vs->seen_lab_restore_generation = rc->inferno_lab_restore_generation;
+    if (rc->lab_restore_generation != vs->seen_lab_restore_generation) {
+        vs->seen_lab_restore_generation = rc->lab_restore_generation;
         vs->episode_ended = 0;
         visual_policy_reset_recurrent(&vs->policy);
     }
@@ -1209,7 +1209,7 @@ static void run_visual(
         .start_wave = start_wave,
         .episode_end_time = 0,
         .episode_ended = 0,
-        .seen_lab_restore_generation = rc->inferno_lab_restore_generation,
+        .seen_lab_restore_generation = rc->lab_restore_generation,
     };
     emscripten_set_main_loop_arg(visual_frame, &web_visual_state, 0, 1);
 #else
@@ -1221,7 +1221,7 @@ static void run_visual(
         .start_wave = start_wave,
         .episode_end_time = 0,
         .episode_ended = 0,
-        .seen_lab_restore_generation = rc->inferno_lab_restore_generation,
+        .seen_lab_restore_generation = rc->lab_restore_generation,
     };
 
     while (!WindowShouldClose()) {

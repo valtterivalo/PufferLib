@@ -414,15 +414,15 @@ typedef struct RenderClient {
     int show_models;
     int show_safe_spots;
     int show_debug;       /* toggle raycast debug, hulls, hitboxes, projectile trails */
-    int inferno_lab_enabled;
-    int inferno_lab_show_forecast;
-    int inferno_lab_selected_npc_slot;
-    int inferno_lab_prev_paused;
-    int inferno_lab_prev_human_enabled;
-    void* inferno_lab_entry_snapshot;
-    size_t inferno_lab_entry_snapshot_size;
-    int inferno_lab_restore_requested;
-    int inferno_lab_restore_generation;
+    int lab_enabled;
+    int lab_show_forecast;
+    int lab_selected_npc_slot;
+    int lab_prev_paused;
+    int lab_prev_human_enabled;
+    void* lab_entry_snapshot;
+    size_t lab_entry_snapshot_size;
+    int lab_restore_requested;
+    int lab_restore_generation;
 
     /* UI layout mode: 0 = fixed (1182/1183 chrome), 1 = resizable (1177/1178).
        L key toggles. mirrors OSRS client display modes. */
@@ -701,6 +701,13 @@ static InfernoState* render_inferno_state_from_client(RenderClient* rc) {
     return (InfernoState*)rc->gui.encounter_state;
 }
 
+static ColosseumState* render_colosseum_state_from_env(OsrsEnv* env) {
+    if (!env || !env->encounter_def || !env->encounter_state) return NULL;
+    const EncounterDef* def = (const EncounterDef*)env->encounter_def;
+    if (strcmp(def->name, "colosseum") != 0) return NULL;
+    return (ColosseumState*)env->encounter_state;
+}
+
 static Color render_inferno_lab_forecast_color(
     const InfStepOutForecastAction* action
 ) {
@@ -717,7 +724,7 @@ static Color render_inferno_lab_forecast_color(
 
 static void render_inferno_lab_draw_forecast_3d(RenderClient* rc) {
     InfernoState* s = render_inferno_state_from_client(rc);
-    if (!s || !rc->inferno_lab_enabled || !rc->inferno_lab_show_forecast) return;
+    if (!s || !rc->lab_enabled || !rc->lab_show_forecast) return;
 
     InfStepOutForecast forecast;
     inf_build_step_out_forecast(s, &forecast);
@@ -739,76 +746,72 @@ static void render_inferno_lab_draw_forecast_3d(RenderClient* rc) {
     }
 }
 
-static void render_inferno_lab_dump_json(InfernoState* s) {
-    char* json = inf_lab_alloc_json(s);
-    printf("%s\n", json);
-    fflush(stdout);
-    free(json);
-}
-
-static void render_inferno_lab_snap_entity_visual(RenderClient* rc, int entity_idx) {
+static void render_lab_snap_entity_visual(RenderClient* rc, int entity_idx) {
     if (entity_idx < 0 || entity_idx >= rc->entity_count) return;
     render_seed_entity_visual_slot(rc, entity_idx);
     rc->visual_moving[entity_idx] = 0;
     rc->step_tracker[entity_idx] = 0;
 }
 
-static void render_inferno_lab_snap_all_visuals(RenderClient* rc) {
+static void render_lab_snap_all_visuals(RenderClient* rc) {
     for (int i = 0; i < rc->entity_count; i++)
-        render_inferno_lab_snap_entity_visual(rc, i);
+        render_lab_snap_entity_visual(rc, i);
     rc->prev_entity_count = rc->entity_count;
 }
 
-static void render_inferno_lab_apply_command(
-    RenderClient* rc, OsrsEnv* env, InfernoLabCommand cmd
-) {
-    InfernoState* s = render_inferno_state_from_env(env);
-    if (!s) return;
-    inf_lab_apply_command(s, &cmd);
-    if ((cmd.kind == INF_LAB_COMMAND_DELETE_NPC ||
-            cmd.kind == INF_LAB_COMMAND_KILL_NPC ||
-            cmd.kind == INF_LAB_COMMAND_CLEAR_NPCS) &&
-            rc->inferno_lab_selected_npc_slot >= 0) {
-        int slot = rc->inferno_lab_selected_npc_slot;
-        if (slot >= INF_MAX_NPCS || !s->npcs[slot].active)
-            rc->inferno_lab_selected_npc_slot = -1;
-    }
-    render_populate_entities(rc, env);
-    render_inferno_lab_snap_all_visuals(rc);
-}
-
-static void render_inferno_lab_clear_entry_snapshot(RenderClient* rc) {
-    if (!rc) return;
-    free(rc->inferno_lab_entry_snapshot);
-    rc->inferno_lab_entry_snapshot = NULL;
-    rc->inferno_lab_entry_snapshot_size = 0;
-}
-
-static const EncounterDef* render_inferno_lab_def_or_abort(OsrsEnv* env) {
-    if (!env || !env->encounter_def || !env->encounter_state) {
-        fprintf(stderr, "inferno lab: missing encounter state\n");
-        abort();
-    }
+/** the active encounter def iff it supports the scenario lab (a command hook plus
+    a snapshot/restore contract for entry/exit), else NULL. Encounter-neutral: the
+    viewer drives inferno and colosseum through the same hook. */
+static const EncounterDef* render_lab_def(OsrsEnv* env) {
+    if (!env || !env->encounter_def || !env->encounter_state) return NULL;
     const EncounterDef* def = (const EncounterDef*)env->encounter_def;
-    if (strcmp(def->name, "inferno") != 0 ||
-            !def->snapshot_size || !def->snapshot || !def->restore) {
-        fprintf(stderr, "inferno lab: snapshot contract unavailable\n");
-        abort();
-    }
+    if (!def->apply_lab_command ||
+            !def->snapshot_size || !def->snapshot || !def->restore)
+        return NULL;
     return def;
 }
 
-static void render_inferno_lab_capture_entry_snapshot(
-    RenderClient* rc,
-    OsrsEnv* env
-) {
-    const EncounterDef* def = render_inferno_lab_def_or_abort(env);
+/** apply one lab command line to the live encounter via the vtable hook, then
+    refresh the renderer's entity list + visual slots so the edit shows at once.
+    Drops a stale selected-NPC slot once its entity is gone. */
+static void render_lab_apply_line(RenderClient* rc, OsrsEnv* env, const char* line) {
+    const EncounterDef* def = render_lab_def(env);
+    if (!def) return;
+    (void)def->apply_lab_command(
+        (EncounterState*)env->encounter_state,
+        (EncounterContext*)env->encounter_context,
+        line);
+    render_populate_entities(rc, env);
+    if (rc->lab_selected_npc_slot >= 0) {
+        int still_active = 0;
+        for (int i = 0; i < rc->entity_count; i++) {
+            if (rc->entities[i].entity_type == ENTITY_NPC &&
+                    rc->entities[i].npc_slot == rc->lab_selected_npc_slot) {
+                still_active = 1;
+                break;
+            }
+        }
+        if (!still_active) rc->lab_selected_npc_slot = -1;
+    }
+    render_lab_snap_all_visuals(rc);
+}
+
+static void render_lab_clear_entry_snapshot(RenderClient* rc) {
+    if (!rc) return;
+    free(rc->lab_entry_snapshot);
+    rc->lab_entry_snapshot = NULL;
+    rc->lab_entry_snapshot_size = 0;
+}
+
+static void render_lab_capture_entry_snapshot(RenderClient* rc, OsrsEnv* env) {
+    const EncounterDef* def = render_lab_def(env);
+    if (!def) return;
     size_t size = def->snapshot_size(
         (EncounterState*)env->encounter_state,
         (EncounterContext*)env->encounter_context);
     void* snapshot = malloc(size);
     if (!snapshot) {
-        fprintf(stderr, "inferno lab: snapshot allocation failed\n");
+        fprintf(stderr, "lab: snapshot allocation failed\n");
         abort();
     }
     def->snapshot(
@@ -816,46 +819,42 @@ static void render_inferno_lab_capture_entry_snapshot(
         (EncounterContext*)env->encounter_context,
         snapshot);
 
-    render_inferno_lab_clear_entry_snapshot(rc);
-    rc->inferno_lab_entry_snapshot = snapshot;
-    rc->inferno_lab_entry_snapshot_size = size;
+    render_lab_clear_entry_snapshot(rc);
+    rc->lab_entry_snapshot = snapshot;
+    rc->lab_entry_snapshot_size = size;
 }
 
-static void render_inferno_lab_restore_controls(RenderClient* rc) {
-    rc->inferno_lab_enabled = 0;
-    rc->inferno_lab_show_forecast = 0;
-    rc->inferno_lab_selected_npc_slot = -1;
-    rc->is_paused = rc->inferno_lab_prev_paused;
-    rc->human_input.enabled = rc->inferno_lab_prev_human_enabled;
+static void render_lab_restore_controls(RenderClient* rc) {
+    rc->lab_enabled = 0;
+    rc->lab_show_forecast = 0;
+    rc->lab_selected_npc_slot = -1;
+    rc->is_paused = rc->lab_prev_paused;
+    rc->human_input.enabled = rc->lab_prev_human_enabled;
     human_input_clear_pending(&rc->human_input);
     human_input_clear_move(&rc->human_input);
     human_input_clear_selected_ui_target(&rc->human_input);
     context_menu_dismiss(&rc->context_menu);
 }
 
-static int render_inferno_lab_restore_entry_snapshot(
-    RenderClient* rc,
-    OsrsEnv* env
-) {
-    if (!rc || !rc->inferno_lab_entry_snapshot) {
-        return 0;
-    }
-    const EncounterDef* def = render_inferno_lab_def_or_abort(env);
+static int render_lab_restore_entry_snapshot(RenderClient* rc, OsrsEnv* env) {
+    if (!rc || !rc->lab_entry_snapshot) return 0;
+    const EncounterDef* def = render_lab_def(env);
+    if (!def) return 0;
     def->restore(
         (EncounterState*)env->encounter_state,
         (EncounterContext*)env->encounter_context,
-        rc->inferno_lab_entry_snapshot,
-        rc->inferno_lab_entry_snapshot_size);
+        rc->lab_entry_snapshot,
+        rc->lab_entry_snapshot_size);
     if (def->get_tick) {
         env->tick = def->get_tick(
             (EncounterState*)env->encounter_state,
             (EncounterContext*)env->encounter_context);
     }
-    rc->inferno_lab_restore_requested = 1;
-    rc->inferno_lab_restore_generation++;
-    render_inferno_lab_restore_controls(rc);
+    rc->lab_restore_requested = 1;
+    rc->lab_restore_generation++;
+    render_lab_restore_controls(rc);
     render_reset_episode_visual_state(rc, env);
-    fprintf(stderr, "inferno lab: restored entry snapshot\n");
+    fprintf(stderr, "lab: restored entry snapshot\n");
     return 1;
 }
 
@@ -972,6 +971,52 @@ static void context_menu_add_lab_npc(
     item->npc_type = npc_type;
 }
 
+/** entity index of the lab's selected NPC slot, or -1 if it has no live entity.
+    encounter-neutral: reads the renderer's populated entity list, not encounter
+    state. */
+static int render_lab_selected_npc_entity_idx(RenderClient* rc) {
+    if (rc->lab_selected_npc_slot < 0) return -1;
+    for (int i = 0; i < rc->entity_count; i++) {
+        if (rc->entities[i].entity_type == ENTITY_NPC &&
+                rc->entities[i].npc_slot == rc->lab_selected_npc_slot)
+            return i;
+    }
+    return -1;
+}
+
+/** add the per-encounter "Lab spawn X" palette. item->npc_type holds the
+    encounter's own NPC type id; the executor formats it as a numeric type token
+    that the encounter's lab parser accepts, so no per-encounter executor branch
+    is needed. */
+static void render_lab_add_spawn_palette(ContextMenu* cm, const char* encounter_name) {
+    if (strcmp(encounter_name, "inferno") == 0) {
+        context_menu_add_lab_npc(cm, INF_NPC_RANGER, "Lab spawn ranger");
+        context_menu_add_lab_npc(cm, INF_NPC_MAGER, "Lab spawn mager");
+        context_menu_add_lab_npc(cm, INF_NPC_JAD, "Lab spawn jad");
+        context_menu_add_lab_npc(cm, INF_NPC_ZUK, "Lab spawn Zuk");
+        context_menu_add_lab_npc(cm, INF_NPC_BLOB, "Lab spawn blob");
+        context_menu_add_lab_npc(cm, INF_NPC_MELEER, "Lab spawn meleer");
+        context_menu_add_lab_npc(cm, INF_NPC_BAT, "Lab spawn bat");
+        context_menu_add_lab_npc(cm, INF_NPC_NIBBLER, "Lab spawn nibbler");
+        context_menu_add_lab_npc(cm, INF_NPC_HEALER_JAD, "Lab spawn Jad healer");
+        context_menu_add_lab_npc(cm, INF_NPC_HEALER_ZUK, "Lab spawn Zuk healer");
+        context_menu_add_lab_npc(cm, INF_NPC_ZUK_SHIELD, "Lab spawn Zuk shield");
+        return;
+    }
+    if (strcmp(encounter_name, "colosseum") == 0) {
+        context_menu_add_lab_npc(cm, COLO_FREMENNIK_BERSERKER, "Lab spawn berserker");
+        context_menu_add_lab_npc(cm, COLO_FREMENNIK_ARCHER, "Lab spawn archer");
+        context_menu_add_lab_npc(cm, COLO_FREMENNIK_SEER, "Lab spawn seer");
+        context_menu_add_lab_npc(cm, COLO_SERPENT_SHAMAN, "Lab spawn shaman");
+        context_menu_add_lab_npc(cm, COLO_JAGUAR_WARRIOR, "Lab spawn jaguar");
+        context_menu_add_lab_npc(cm, COLO_JAVELIN_COLOSSUS, "Lab spawn javelin");
+        context_menu_add_lab_npc(cm, COLO_SHOCKWAVE_COLOSSUS, "Lab spawn shockwave");
+        context_menu_add_lab_npc(cm, COLO_MINOTAUR, "Lab spawn minotaur");
+        context_menu_add_lab_npc(cm, COLO_MANTICORE, "Lab spawn manticore");
+        context_menu_add_lab_npc(cm, COLO_SOL_HEREDIT, "Lab spawn Sol Heredit");
+    }
+}
+
 static void context_menu_finish_layout(ContextMenu* cm, int mx, int my) {
     int max_w = CONTEXT_MENU_MIN_W;
     int title_w = MeasureText("Choose Option", 11) + CONTEXT_MENU_PADDING * 2 + 10;
@@ -1001,8 +1046,8 @@ static void context_menu_finish_layout(ContextMenu* cm, int mx, int my) {
 static void context_menu_build(RenderClient* rc, OsrsEnv* env, int mx, int my) {
     ContextMenu* cm = &rc->context_menu;
     RenderHumanAttackCtx attack_ctx = { .rc = rc, .env = env };
-    InfernoState* lab_state = rc->inferno_lab_enabled
-        ? render_inferno_state_from_env(env) : NULL;
+    const EncounterDef* lab_def = rc->lab_enabled ? render_lab_def(env) : NULL;
+    int lab_on = lab_def != NULL;
     cm->item_count = 0;
     cm->hover_idx = -1;
     cm->walk_tile_x = -1;
@@ -1013,7 +1058,7 @@ static void context_menu_build(RenderClient* rc, OsrsEnv* env, int mx, int my) {
 
     for (int ei = 0; ei < rc->entity_count; ei++) {
         RenderEntity* ent = &rc->entities[ei];
-        int usable_entity = lab_state
+        int usable_entity = lab_on
             ? (ent->entity_type == ENTITY_NPC && ent->npc_slot >= 0)
             : render_can_human_attack_entity(
                 &attack_ctx, ent, ei, rc->gui.gui_entity_idx);
@@ -1056,7 +1101,7 @@ static void context_menu_build(RenderClient* rc, OsrsEnv* env, int mx, int my) {
         RenderEntity* ent = &rc->entities[ei];
         const char* name = render_entity_display_name(ent);
         char label[64];
-        if (lab_state) {
+        if (lab_on) {
             snprintf(label, sizeof(label), "Lab select %s", name);
             context_menu_add(cm, CMENU_ACTION_LAB_SELECT_NPC, ei, label);
             snprintf(label, sizeof(label), "Lab kill %s", name);
@@ -1064,39 +1109,29 @@ static void context_menu_build(RenderClient* rc, OsrsEnv* env, int mx, int my) {
             snprintf(label, sizeof(label), "Lab delete %s", name);
             context_menu_add(cm, CMENU_ACTION_LAB_DELETE_NPC, ei, label);
         }
-        if (!lab_state || render_can_human_attack_entity(
+        if (!lab_on || render_can_human_attack_entity(
                 &attack_ctx, ent, ei, rc->gui.gui_entity_idx)) {
             snprintf(label, sizeof(label), "Attack %s", name);
             context_menu_add(cm, CMENU_ACTION_ATTACK, ei, label);
         }
     }
 
-    if (lab_state && cm->walk_tile_x >= 0) {
+    if (lab_on && cm->walk_tile_x >= 0) {
         context_menu_add(cm, CMENU_ACTION_LAB_PLACE_PLAYER, -1, "Lab place player");
-        if (rc->inferno_lab_selected_npc_slot >= 0 &&
-                rc->inferno_lab_selected_npc_slot < INF_MAX_NPCS &&
-                lab_state->npcs[rc->inferno_lab_selected_npc_slot].active) {
+        if (render_lab_selected_npc_entity_idx(rc) >= 0)
             context_menu_add(cm, CMENU_ACTION_LAB_MOVE_SELECTED_NPC, -1,
                 "Lab move selected NPC");
-        }
-        context_menu_add_lab_npc(cm, INF_NPC_RANGER, "Lab spawn ranger");
-        context_menu_add_lab_npc(cm, INF_NPC_MAGER, "Lab spawn mager");
-        context_menu_add_lab_npc(cm, INF_NPC_JAD, "Lab spawn jad");
-        context_menu_add_lab_npc(cm, INF_NPC_ZUK, "Lab spawn Zuk");
-        context_menu_add_lab_npc(cm, INF_NPC_BLOB, "Lab spawn blob");
-        context_menu_add_lab_npc(cm, INF_NPC_MELEER, "Lab spawn meleer");
-        context_menu_add_lab_npc(cm, INF_NPC_BAT, "Lab spawn bat");
-        context_menu_add_lab_npc(cm, INF_NPC_NIBBLER, "Lab spawn nibbler");
-        context_menu_add_lab_npc(cm, INF_NPC_HEALER_JAD, "Lab spawn Jad healer");
-        context_menu_add_lab_npc(cm, INF_NPC_HEALER_ZUK, "Lab spawn Zuk healer");
-        context_menu_add_lab_npc(cm, INF_NPC_ZUK_SHIELD, "Lab spawn Zuk shield");
-        int pillar_idx = inf_lab_nearest_pillar_idx(
-            lab_state, cm->walk_tile_x, cm->walk_tile_y);
-        if (pillar_idx >= 0) {
-            ContextMenuItem* item = context_menu_add(
-                cm, CMENU_ACTION_LAB_TOGGLE_PILLAR, -1,
-                TextFormat("Lab toggle pillar %d", pillar_idx));
-            if (item) item->pillar_idx = pillar_idx;
+        render_lab_add_spawn_palette(cm, lab_def->name);
+        if (strcmp(lab_def->name, "inferno") == 0) {
+            InfernoState* inf = render_inferno_state_from_env(env);
+            int pillar_idx = inf
+                ? inf_lab_nearest_pillar_idx(inf, cm->walk_tile_x, cm->walk_tile_y) : -1;
+            if (pillar_idx >= 0) {
+                ContextMenuItem* item = context_menu_add(
+                    cm, CMENU_ACTION_LAB_TOGGLE_PILLAR, -1,
+                    TextFormat("Lab toggle pillar %d", pillar_idx));
+                if (item) item->pillar_idx = pillar_idx;
+            }
         }
     }
 
@@ -1243,7 +1278,7 @@ static void context_menu_execute(RenderClient* rc, OsrsEnv* env, int item_idx) {
     ContextMenu* cm = &rc->context_menu;
     if (item_idx < 0 || item_idx >= cm->item_count) return;
     ContextMenuItem* item = &cm->items[item_idx];
-    InfernoState* lab_state = render_inferno_state_from_env(env);
+    int lab_on = render_lab_def(env) != NULL;
 
     switch (item->action) {
         case CMENU_ACTION_WALK_HERE:
@@ -1382,93 +1417,79 @@ static void context_menu_execute(RenderClient* rc, OsrsEnv* env, int item_idx) {
         case CMENU_ACTION_LAB_SELECT_NPC: {
             int ei = item->entity_idx;
             if (ei >= 0 && ei < rc->entity_count)
-                rc->inferno_lab_selected_npc_slot = rc->entities[ei].npc_slot;
+                rc->lab_selected_npc_slot = rc->entities[ei].npc_slot;
             break;
         }
 
         case CMENU_ACTION_LAB_MOVE_SELECTED_NPC:
-            if (lab_state && rc->inferno_lab_selected_npc_slot >= 0) {
-                InfernoLabCommand command;
-                memset(&command, 0, sizeof(command));
-                command.kind = INF_LAB_COMMAND_MOVE_NPC;
-                command.as.move_npc.slot = rc->inferno_lab_selected_npc_slot;
-                command.as.move_npc.x = cm->walk_tile_x;
-                command.as.move_npc.y = cm->walk_tile_y;
-                render_inferno_lab_apply_command(rc, env, command);
+            if (lab_on && rc->lab_selected_npc_slot >= 0) {
+                char line[96];
+                snprintf(line, sizeof(line), "move_npc slot=%d x=%d y=%d",
+                    rc->lab_selected_npc_slot, cm->walk_tile_x, cm->walk_tile_y);
+                render_lab_apply_line(rc, env, line);
             }
             break;
 
         case CMENU_ACTION_LAB_PLACE_PLAYER: {
-            InfernoLabCommand command;
-            memset(&command, 0, sizeof(command));
-            command.kind = INF_LAB_COMMAND_SET_PLAYER;
-            command.as.tile.x = cm->walk_tile_x;
-            command.as.tile.y = cm->walk_tile_y;
-            render_inferno_lab_apply_command(rc, env, command);
+            char line[64];
+            snprintf(line, sizeof(line), "player x=%d y=%d",
+                cm->walk_tile_x, cm->walk_tile_y);
+            render_lab_apply_line(rc, env, line);
             break;
         }
 
         case CMENU_ACTION_LAB_SPAWN_NPC:
-            if (lab_state) {
-                int slot = inf_find_free_npc(lab_state);
-                if (slot >= 0) {
-                    InfernoLabCommand command;
-                    memset(&command, 0, sizeof(command));
-                    command.kind = INF_LAB_COMMAND_SPAWN_NPC;
-                    command.as.spawn_npc.slot = slot;
-                    command.as.spawn_npc.type = (InfNPCType)item->npc_type;
-                    command.as.spawn_npc.x = cm->walk_tile_x;
-                    command.as.spawn_npc.y = cm->walk_tile_y;
-                    command.as.spawn_npc.hp = inf_lab_optional_int_unset();
-                    command.as.spawn_npc.timer = inf_lab_optional_int_unset();
-                    render_inferno_lab_apply_command(rc, env, command);
-                    rc->inferno_lab_selected_npc_slot = slot;
+            if (lab_on) {
+                char line[96];
+                snprintf(line, sizeof(line), "npc type=%d x=%d y=%d",
+                    item->npc_type, cm->walk_tile_x, cm->walk_tile_y);
+                render_lab_apply_line(rc, env, line);
+                /* re-select: the just-spawned NPC is the highest active slot. */
+                int newest = -1;
+                for (int i = 0; i < rc->entity_count; i++) {
+                    if (rc->entities[i].entity_type == ENTITY_NPC &&
+                            rc->entities[i].npc_slot > newest)
+                        newest = rc->entities[i].npc_slot;
                 }
+                rc->lab_selected_npc_slot = newest;
             }
             break;
 
         case CMENU_ACTION_LAB_KILL_NPC: {
             int ei = item->entity_idx;
-            if (ei >= 0 && ei < rc->entity_count) {
-                int slot = rc->entities[ei].npc_slot;
-                InfernoLabCommand command;
-                memset(&command, 0, sizeof(command));
-                command.kind = INF_LAB_COMMAND_KILL_NPC;
-                command.as.npc_slot.slot = slot;
-                render_inferno_lab_apply_command(rc, env, command);
+            if (lab_on && ei >= 0 && ei < rc->entity_count) {
+                char line[48];
+                snprintf(line, sizeof(line), "kill_npc slot=%d",
+                    rc->entities[ei].npc_slot);
+                render_lab_apply_line(rc, env, line);
             }
             break;
         }
 
         case CMENU_ACTION_LAB_DELETE_NPC: {
             int ei = item->entity_idx;
-            if (ei >= 0 && ei < rc->entity_count) {
-                int slot = rc->entities[ei].npc_slot;
-                InfernoLabCommand command;
-                memset(&command, 0, sizeof(command));
-                command.kind = INF_LAB_COMMAND_DELETE_NPC;
-                command.as.npc_slot.slot = slot;
-                render_inferno_lab_apply_command(rc, env, command);
+            if (lab_on && ei >= 0 && ei < rc->entity_count) {
+                char line[48];
+                snprintf(line, sizeof(line), "delete_npc slot=%d",
+                    rc->entities[ei].npc_slot);
+                render_lab_apply_line(rc, env, line);
             }
             break;
         }
 
-        case CMENU_ACTION_LAB_TOGGLE_PILLAR:
-            if (lab_state && item->pillar_idx >= 0) {
+        case CMENU_ACTION_LAB_TOGGLE_PILLAR: {
+            /* pillars are inferno-only; toggle the current state via a lab line. */
+            InfernoState* inf = render_inferno_state_from_env(env);
+            if (inf && item->pillar_idx >= 0) {
                 int idx = item->pillar_idx;
-                InfernoLabCommand command;
-                memset(&command, 0, sizeof(command));
-                command.kind = INF_LAB_COMMAND_SET_PILLAR;
-                command.as.pillar.pillar_idx = idx;
-                command.as.pillar.state = lab_state->pillars[idx].active
-                    ? INF_LAB_PILLAR_REMOVED
-                    : INF_LAB_PILLAR_ACTIVE;
-                command.as.pillar.hp = lab_state->pillars[idx].active
-                    ? inf_lab_optional_int_set(0)
-                    : inf_lab_optional_int_unset();
-                render_inferno_lab_apply_command(rc, env, command);
+                int active = inf->pillars[idx].active;
+                char line[64];
+                snprintf(line, sizeof(line), "pillar idx=%d active=%d",
+                    idx, active ? 0 : 1);
+                render_lab_apply_line(rc, env, line);
             }
             break;
+        }
 
         case CMENU_ACTION_CANCEL:
         case CMENU_ACTION_NONE:
@@ -1535,22 +1556,48 @@ static void context_menu_draw(RenderClient* rc) {
     }
 }
 
-static void render_inferno_lab_draw_hud(RenderClient* rc) {
-    InfernoState* s = render_inferno_state_from_client(rc);
-    if (!s || !rc->inferno_lab_enabled) return;
+/** the active encounter def iff it supports the scenario lab, from the render
+    client (no env handle). Encounter-neutral mirror of render_lab_def. */
+static const EncounterDef* render_lab_def_from_client(RenderClient* rc) {
+    if (!rc || !rc->gui.encounter_def || !rc->gui.encounter_state) return NULL;
+    const EncounterDef* def = (const EncounterDef*)rc->gui.encounter_def;
+    if (!def->apply_lab_command ||
+            !def->snapshot_size || !def->snapshot || !def->restore)
+        return NULL;
+    return def;
+}
 
-    int selected = rc->inferno_lab_selected_npc_slot;
+static void render_lab_draw_hud(RenderClient* rc) {
+    const EncounterDef* def = render_lab_def_from_client(rc);
+    if (!def || !rc->lab_enabled) return;
+
+    int selected = rc->lab_selected_npc_slot;
     char selected_text[64] = "none";
-    if (selected >= 0 && selected < INF_MAX_NPCS && s->npcs[selected].active) {
-        snprintf(selected_text, sizeof(selected_text), "%d %s", selected,
-            inf_lab_npc_type_name(s->npcs[selected].type));
+    for (int i = 0; i < rc->entity_count; i++) {
+        if (rc->entities[i].entity_type == ENTITY_NPC &&
+                rc->entities[i].npc_slot == selected) {
+            snprintf(selected_text, sizeof(selected_text), "%d %s", selected,
+                render_entity_display_name(&rc->entities[i]));
+            break;
+        }
     }
+    int is_inferno = strcmp(def->name, "inferno") == 0;
+    char title[48];
+    snprintf(title, sizeof(title), "%s LAB", def->name);
+    for (char* c = title; *c; c++) *c = (char)toupper((unsigned char)*c);
+
     DrawRectangle(8, 8, 650, 58, CLITERAL(Color){ 15, 10, 18, 220 });
     DrawRectangleLines(8, 8, 650, 58, CLITERAL(Color){ 190, 80, 255, 255 });
-    DrawText("INFERNO LAB", 16, 14, 16, CLITERAL(Color){ 230, 210, 255, 255 });
-    DrawText(TextFormat("F8 commit  F6 restore  F7 forecast %s  F9 dump  selected: %s",
-        rc->inferno_lab_show_forecast ? "on" : "off", selected_text),
-        16, 38, 12, CLITERAL(Color){ 230, 230, 230, 255 });
+    DrawText(title, 16, 14, 16, CLITERAL(Color){ 230, 210, 255, 255 });
+    if (is_inferno) {
+        DrawText(TextFormat("F8 commit  F6 restore  F7 forecast %s  F9 dump  selected: %s",
+            rc->lab_show_forecast ? "on" : "off", selected_text),
+            16, 38, 12, CLITERAL(Color){ 230, 230, 230, 255 });
+    } else {
+        DrawText(TextFormat("F8 commit  F6 restore  F9 dump  selected: %s",
+            selected_text),
+            16, 38, 12, CLITERAL(Color){ 230, 230, 230, 255 });
+    }
 }
 
 static void render_draw_encounter_status_text(RenderClient* rc) {
@@ -1590,15 +1637,15 @@ static RenderClient* render_make_client(void) {
     rc->arena_height = FIGHT_AREA_HEIGHT;
     rc->show_safe_spots = 0;
     rc->show_debug = 0;
-    rc->inferno_lab_enabled = 0;
-    rc->inferno_lab_show_forecast = 0;
-    rc->inferno_lab_selected_npc_slot = -1;
-    rc->inferno_lab_prev_paused = 0;
-    rc->inferno_lab_prev_human_enabled = 0;
-    rc->inferno_lab_entry_snapshot = NULL;
-    rc->inferno_lab_entry_snapshot_size = 0;
-    rc->inferno_lab_restore_requested = 0;
-    rc->inferno_lab_restore_generation = 0;
+    rc->lab_enabled = 0;
+    rc->lab_show_forecast = 0;
+    rc->lab_selected_npc_slot = -1;
+    rc->lab_prev_paused = 0;
+    rc->lab_prev_human_enabled = 0;
+    rc->lab_entry_snapshot = NULL;
+    rc->lab_entry_snapshot_size = 0;
+    rc->lab_restore_requested = 0;
+    rc->lab_restore_generation = 0;
     rc->layout_mode = 1;  /* default to resizable mode (modern OSRS layout) */
     rc->cam_yaw = 0.0f;
     rc->cam_pitch = 0.6f;    /* ~34 degrees, similar to OSRS default */
@@ -2281,7 +2328,7 @@ static void __attribute__((unused)) render_destroy_client(RenderClient* rc) {
     }
     human_input_destroy(&rc->human_input);
     CloseWindow();
-    render_inferno_lab_clear_entry_snapshot(rc);
+    render_lab_clear_entry_snapshot(rc);
     free(rc->history);
     free(rc);
 }
@@ -2325,45 +2372,42 @@ static void render_handle_input(RenderClient* rc, OsrsEnv* env) {
     if (IsKeyPressed(KEY_D))      rc->show_debug = !rc->show_debug;
     if (IsKeyPressed(KEY_L))      rc->layout_mode = !rc->layout_mode;
     if (IsKeyPressed(KEY_F8)) {
-        InfernoState* s = render_inferno_state_from_env(env);
-        if (s) {
-            int enable_lab = !rc->inferno_lab_enabled;
+        const EncounterDef* lab_def = render_lab_def(env);
+        if (lab_def) {
+            int enable_lab = !rc->lab_enabled;
             if (enable_lab) {
-                rc->inferno_lab_prev_paused = rc->is_paused;
-                rc->inferno_lab_prev_human_enabled = rc->human_input.enabled;
-                render_inferno_lab_capture_entry_snapshot(rc, env);
+                rc->lab_prev_paused = rc->is_paused;
+                rc->lab_prev_human_enabled = rc->human_input.enabled;
+                render_lab_capture_entry_snapshot(rc, env);
             }
-            rc->inferno_lab_enabled = enable_lab;
-            rc->inferno_lab_show_forecast = rc->inferno_lab_enabled;
-            rc->inferno_lab_selected_npc_slot = -1;
+            rc->lab_enabled = enable_lab;
+            rc->lab_show_forecast = rc->lab_enabled;
+            rc->lab_selected_npc_slot = -1;
             context_menu_dismiss(&rc->context_menu);
-            if (rc->inferno_lab_enabled) {
+            if (rc->lab_enabled) {
                 rc->is_paused = 1;
                 rc->human_input.enabled = 1;
                 human_input_clear_pending(&rc->human_input);
                 human_input_clear_move(&rc->human_input);
-                inf_lab_refresh_geometry(s);
                 render_populate_entities(rc, env);
-                render_inferno_lab_snap_all_visuals(rc);
+                render_lab_snap_all_visuals(rc);
             } else {
-                render_inferno_lab_restore_controls(rc);
+                render_lab_restore_controls(rc);
             }
-            fprintf(stderr, "inferno lab: %s\n",
-                rc->inferno_lab_enabled ? "ON" : "OFF");
+            fprintf(stderr, "%s lab: %s\n",
+                lab_def->name, rc->lab_enabled ? "ON" : "OFF");
         }
     }
     if (IsKeyPressed(KEY_F6)) {
-        InfernoState* s = render_inferno_state_from_env(env);
-        if (s && !render_inferno_lab_restore_entry_snapshot(rc, env)) {
-            fprintf(stderr, "inferno lab: no entry snapshot to restore\n");
+        if (render_lab_def(env) && !render_lab_restore_entry_snapshot(rc, env)) {
+            fprintf(stderr, "lab: no entry snapshot to restore\n");
         }
     }
-    if (IsKeyPressed(KEY_F7) && rc->inferno_lab_enabled) {
-        rc->inferno_lab_show_forecast = !rc->inferno_lab_show_forecast;
+    if (IsKeyPressed(KEY_F7) && rc->lab_enabled) {
+        rc->lab_show_forecast = !rc->lab_show_forecast;
     }
-    if (IsKeyPressed(KEY_F9) && rc->inferno_lab_enabled) {
-        InfernoState* s = render_inferno_state_from_env(env);
-        if (s) render_inferno_lab_dump_json(s);
+    if (IsKeyPressed(KEY_F9) && rc->lab_enabled) {
+        if (render_lab_def(env)) render_lab_apply_line(rc, env, "dump");
     }
 
     float wheel = GetMouseWheelMove();
@@ -2446,6 +2490,21 @@ static void render_handle_input(RenderClient* rc, OsrsEnv* env) {
             context_menu_dismiss(&rc->context_menu);
         }
         fprintf(stderr, "human control: %s\n", rc->human_input.enabled ? "ON" : "OFF");
+    }
+
+    /* Colosseum-only human controls (no inferno analog): keys 6/7/8 pick a
+       between-wave modifier draft option, and B parries the currently-called Sol
+       grapple body slot. Both stage a pending_* intent consumed at the tick
+       boundary, mirroring the existing prayer/spec keybind pattern. */
+    if (rc->human_input.enabled) {
+        ColosseumState* cs = render_colosseum_state_from_env(env);
+        if (cs) {
+            if (IsKeyPressed(KEY_SIX))   rc->human_input.pending_modifier_select = 1;
+            if (IsKeyPressed(KEY_SEVEN)) rc->human_input.pending_modifier_select = 2;
+            if (IsKeyPressed(KEY_EIGHT)) rc->human_input.pending_modifier_select = 3;
+            if (IsKeyPressed(KEY_B) && cs->sol.grapple_active)
+                rc->human_input.pending_grapple_slot = cs->sol.grapple_body_slot + 1;
+        }
     }
 
     /* ESC: dismiss context menu first, then cancel spell targeting */
@@ -5723,7 +5782,7 @@ void pvp_render(OsrsEnv* env) {
     }
 
     render_draw_encounter_status_text(rc);
-    render_inferno_lab_draw_hud(rc);
+    render_lab_draw_hud(rc);
 
     /* right-click context menu: drawn last so it renders on top of everything */
     context_menu_draw(rc);

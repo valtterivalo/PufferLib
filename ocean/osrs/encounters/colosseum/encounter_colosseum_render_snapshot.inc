@@ -119,6 +119,172 @@ static void col_render_post_tick_ctx(
 }
 
 
+/* ----- human mode --------------------------------------------------------- */
+/* Maps semantic HumanInput intents onto the 9 Colosseum action heads. Mirrors
+   inferno's translate/step pair: MOVE (25-dir walk) + TARGET (obs slot of the
+   clicked NPC) drive attacking, plus prayer/gear/eat/potion/spec. The two
+   Colosseum-only heads have no inferno analog: MODIFIER_SELECT picks a draft
+   option and GRAPPLE_PARRY clicks a Sol grapple body slot. */
+
+static void* col_get_player_for_input(void* state, int idx) {
+    ColosseumState* s = (ColosseumState*)state;
+    return (idx == 0) ? (void*)&s->player : NULL;
+}
+
+/** obs slot the agent sees for a raw NPC array index, or -1. Inverse of
+    current_obs_slots, refreshed by the caller. */
+static int col_find_target_obs_slot(const ColosseumState* s, int npc_slot) {
+    for (int o = 0; o < COLO_OBS_NPCS; o++)
+        if (s->current_obs_slots[o] == npc_slot) return o;
+    return -1;
+}
+
+static int col_is_human_targetable_npc_slot_ctx(
+    EncounterState* state,
+    EncounterContext* context,
+    int npc_slot
+) {
+    ColosseumState* s = (ColosseumState*)state;
+    ColosseumContext* ctx = context ? (ColosseumContext*)context : col_legacy_context();
+    col_refresh_current_obs_slots_ctx(s, ctx);
+    int obs_slot = col_find_target_obs_slot(s, npc_slot);
+    if (obs_slot < 0) return 0;
+    return col_obs_slot_is_targetable(s, obs_slot);
+}
+
+static int col_is_human_targetable_npc_slot(EncounterState* state, int npc_slot) {
+    return col_is_human_targetable_npc_slot_ctx(
+        state, (EncounterContext*)col_legacy_context(), npc_slot);
+}
+
+static void col_translate_human_input_ctx(
+    HumanInput* hi,
+    int* actions,
+    EncounterState* state,
+    EncounterContext* context
+) {
+    for (int h = 0; h < COLO_NUM_ACTION_HEADS; h++) actions[h] = 0;
+
+    encounter_translate_movement(hi, actions, COLO_HEAD_MOVE, col_get_player_for_input, state);
+    encounter_translate_prayer(hi, actions, COLO_HEAD_PRAYER);
+
+    ColosseumState* s = (ColosseumState*)state;
+    ColosseumContext* ctx = context ? (ColosseumContext*)context : col_legacy_context();
+    col_refresh_current_obs_slots_ctx(s, ctx);
+
+    /* map raw pending_target_idx to the observation slot the agent sees */
+    if (hi->pending_target_idx >= 0) {
+        int found_slot = col_find_target_obs_slot(s, hi->pending_target_idx);
+        actions[COLO_HEAD_TARGET] =
+            (found_slot >= 0 && col_obs_slot_is_targetable(s, found_slot))
+                ? found_slot + 1 : 0;
+    } else {
+        actions[COLO_HEAD_TARGET] = 0;
+    }
+
+    if (hi->pending_gear > 0) actions[COLO_HEAD_GEAR] = hi->pending_gear;
+    if (hi->pending_food) actions[COLO_HEAD_EAT] = 1;
+    if (hi->pending_potion) actions[COLO_HEAD_POTION] = 1;
+    if (hi->pending_spec) actions[COLO_HEAD_SPEC] = 1;
+
+    /* Colosseum-only heads: draft pick (0=none, 1..3) + grapple body slot. */
+    if (hi->pending_modifier_select > 0 &&
+            hi->pending_modifier_select <= COLO_MODIFIER_DRAFT_OPTIONS)
+        actions[COLO_HEAD_MODIFIER_SELECT] = hi->pending_modifier_select;
+    if (hi->pending_grapple_slot > 0 && hi->pending_grapple_slot <= NUM_GEAR_SLOTS)
+        actions[COLO_HEAD_GRAPPLE_PARRY] = hi->pending_grapple_slot;
+}
+
+static void col_translate_human_input(HumanInput* hi, int* actions, EncounterState* state) {
+    col_translate_human_input_ctx(
+        hi, actions, state, (EncounterContext*)col_legacy_context());
+}
+
+static void col_translate_human_commands_ctx(
+    HumanInput* hi,
+    int* actions,
+    ColosseumState* s,
+    ColosseumContext* ctx
+) {
+    for (int h = 0; h < COLO_NUM_ACTION_HEADS; h++) actions[h] = 0;
+    col_refresh_current_obs_slots_ctx(s, ctx);
+
+    for (int i = 0; i < hi->commands.count; i++) {
+        const HumanCommand* cmd = &hi->commands.items[i];
+        switch (cmd->kind) {
+            case HUMAN_COMMAND_WALK:
+                s->player_dest_x = cmd->world_x;
+                s->player_dest_y = cmd->world_y;
+                actions[COLO_HEAD_TARGET] = 0;
+                break;
+            case HUMAN_COMMAND_ATTACK_NPC: {
+                int found_slot = col_find_target_obs_slot(s, cmd->npc_slot);
+                actions[COLO_HEAD_TARGET] =
+                    (found_slot >= 0 && col_obs_slot_is_targetable(s, found_slot))
+                        ? found_slot + 1 : 0;
+                s->player_dest_x = -1;
+                s->player_dest_y = -1;
+                break;
+            }
+            case HUMAN_COMMAND_OVERHEAD_PRAYER:
+                actions[COLO_HEAD_PRAYER] = cmd->overhead_prayer;
+                break;
+            case HUMAN_COMMAND_EAT:
+                actions[COLO_HEAD_EAT] = 1;
+                break;
+            case HUMAN_COMMAND_DRINK:
+                actions[COLO_HEAD_POTION] = 1;
+                break;
+            case HUMAN_COMMAND_SPEC_TOGGLE:
+                actions[COLO_HEAD_SPEC] = 1;
+                break;
+            case HUMAN_COMMAND_OFFENSIVE_PRAYER:
+            case HUMAN_COMMAND_SPELL_TARGET:
+            case HUMAN_COMMAND_EQUIP_INVENTORY_ITEM:
+            case HUMAN_COMMAND_FIGHT_STYLE:
+            case HUMAN_COMMAND_SET_AUTOCAST:
+            case HUMAN_COMMAND_ITEM_ON_ITEM:
+            case HUMAN_COMMAND_ITEM_ON_WIDGET:
+            case HUMAN_COMMAND_SPELL_ON_WIDGET:
+            case HUMAN_COMMAND_NONE:
+                break;
+        }
+    }
+
+    /* gear/draft/grapple intents are staged on pending_* (not the command queue),
+       so fold them in here exactly as the per-tick translate path does. */
+    if (hi->pending_gear > 0) actions[COLO_HEAD_GEAR] = hi->pending_gear;
+    if (hi->pending_modifier_select > 0 &&
+            hi->pending_modifier_select <= COLO_MODIFIER_DRAFT_OPTIONS)
+        actions[COLO_HEAD_MODIFIER_SELECT] = hi->pending_modifier_select;
+    if (hi->pending_grapple_slot > 0 && hi->pending_grapple_slot <= NUM_GEAR_SLOTS)
+        actions[COLO_HEAD_GRAPPLE_PARRY] = hi->pending_grapple_slot;
+}
+
+static void col_step_human_commands_ctx(
+    EncounterState* state,
+    EncounterContext* context,
+    HumanInput* hi
+) {
+    ColosseumState* s = (ColosseumState*)state;
+    ColosseumContext* ctx = context ? (ColosseumContext*)context : col_legacy_context();
+    int actions[COLO_NUM_ACTION_HEADS];
+    ctx->human_command_mode = 1;
+    ctx->human_commands = hi->commands.items;
+    ctx->human_command_count = hi->commands.count;
+    col_translate_human_commands_ctx(hi, actions, s, ctx);
+    col_step_ctx(state, (EncounterContext*)ctx, actions);
+    ctx->human_commands = NULL;
+    ctx->human_command_count = 0;
+    human_input_clear_pending(hi);
+}
+
+static void col_step_human_commands(EncounterState* state, HumanInput* hi) {
+    col_step_human_commands_ctx(
+        state, (EncounterContext*)col_legacy_context(), hi);
+}
+
+
 /* snapshot/restore stores only gameplay state; live process data stays in context. */
 
 #define COLO_SNAPSHOT_MAGIC 0xC010C001u
@@ -189,6 +355,27 @@ static void col_restore_ctx(
 }
 
 
+/* scenario-lab vtable hook: route one command line through the Colosseum lab
+   parser. on a dump line the parser allocates the JSON, which we print and free
+   here so the viewer's apply path stays encounter-neutral. */
+static int col_apply_lab_command_ctx(
+    EncounterState* state,
+    EncounterContext* context,
+    const char* line
+) {
+    (void)context;
+    ColosseumState* s = (ColosseumState*)state;
+    char* json = NULL;
+    ColoLabLineResult result = col_lab_apply_script_line_alloc_json(s, line, &json);
+    if (result == COLO_LAB_LINE_DUMP && json) {
+        printf("%s\n", json);
+        fflush(stdout);
+    }
+    free(json);
+    return result == COLO_LAB_LINE_DUMP ? 1 : 0;
+}
+
+
 static const EncounterDef ENCOUNTER_COLOSSEUM = {
     .name = "colosseum",
     .obs_size = COLO_NUM_OBS,
@@ -206,7 +393,7 @@ static const EncounterDef ENCOUNTER_COLOSSEUM = {
     .destroy = col_destroy,
     .reset = col_reset_ctx,
     .step = col_step_ctx,
-    .step_human_commands = NULL,
+    .step_human_commands = col_step_human_commands_ctx,
 
     .snapshot_size = col_snapshot_size_ctx,
     .snapshot = col_snapshot_ctx,
@@ -234,8 +421,9 @@ static const EncounterDef ENCOUNTER_COLOSSEUM = {
     .arena_width = COLO_ARENA_WIDTH,
     .arena_height = COLO_ARENA_HEIGHT,
 
-    .translate_human_input = NULL,
-    .is_human_targetable_npc_slot = NULL,
+    .translate_human_input = col_translate_human_input_ctx,
+    .is_human_targetable_npc_slot = col_is_human_targetable_npc_slot_ctx,
+    .apply_lab_command = col_apply_lab_command_ctx,
     .head_move = COLO_HEAD_MOVE,
     .head_prayer = COLO_HEAD_PRAYER,
     .head_target = COLO_HEAD_TARGET,
