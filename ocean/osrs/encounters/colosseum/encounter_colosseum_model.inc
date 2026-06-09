@@ -72,18 +72,18 @@ static const int COLO_BOSS_PILLARS[COLO_BOSS_NUM_PILLARS][2] = {
 
 
 /** OSRS cache NPC definition ids, used by the renderer to look up models.
-    Placeholder ids reuse inferno def ids until the cache export lands. */
+    Real Fortis Colosseum cache ids (exported via tools/export_colosseum_npcs.py). */
 static const int COLO_NPC_DEF_IDS[COLO_NUM_NPC_TYPES] = {
-    [COLO_FREMENNIK_BERSERKER] = 7691,
-    [COLO_FREMENNIK_ARCHER]    = 7692,
-    [COLO_FREMENNIK_SEER]      = 7693,
-    [COLO_SERPENT_SHAMAN]      = 7694,
-    [COLO_JAGUAR_WARRIOR]      = 7696,
-    [COLO_JAVELIN_COLOSSUS]    = 7697,
-    [COLO_SHOCKWAVE_COLOSSUS]  = 7698,
-    [COLO_MINOTAUR]            = 7699,
-    [COLO_MANTICORE]           = 7700,
-    [COLO_SOL_HEREDIT]         = 7706,
+    [COLO_FREMENNIK_BERSERKER] = 12816,
+    [COLO_FREMENNIK_ARCHER]    = 12814,
+    [COLO_FREMENNIK_SEER]      = 12815,
+    [COLO_SERPENT_SHAMAN]      = 12811,
+    [COLO_JAGUAR_WARRIOR]      = 12810,
+    [COLO_JAVELIN_COLOSSUS]    = 12817,
+    [COLO_SHOCKWAVE_COLOSSUS]  = 12819,
+    [COLO_MINOTAUR]            = 12812,
+    [COLO_MANTICORE]           = 12818,
+    [COLO_SOL_HEREDIT]         = 12821,
 };
 
 static const char* colo_npc_type_name(int type) {
