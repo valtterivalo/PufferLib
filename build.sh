@@ -143,9 +143,9 @@ else
     echo "Error: environment '$ENV' not found" && exit 1
 fi
 
-if [ "$ENV" = "osrs_inferno" ]; then
-    bash ocean/osrs/scripts/setup-data.sh
-fi
+case "$ENV" in
+    osrs_*) bash ocean/osrs/scripts/setup-data.sh ;;
+esac
 
 CPU_STUB_INCLUDE=()
 if [ "$MODE" = "cpu" ] && [ -d "$SRC_DIR/cpu_stubs" ]; then
@@ -153,9 +153,9 @@ if [ "$MODE" = "cpu" ] && [ -d "$SRC_DIR/cpu_stubs" ]; then
 fi
 
 NVCC_ENV_HOST_FLAGS=()
-if [ "$ENV" = "osrs_inferno" ]; then
-    NVCC_ENV_HOST_FLAGS=(-Xcompiler=-fpermissive)
-fi
+case "$ENV" in
+    osrs_*) NVCC_ENV_HOST_FLAGS=(-Xcompiler=-fpermissive) ;;
+esac
 
 OUTPUT_NAME=${OUTPUT_NAME:-$ENV}
 

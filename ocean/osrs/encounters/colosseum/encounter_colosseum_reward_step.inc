@@ -1,0 +1,147 @@
+#line 76 "encounter_colosseum.h"
+/**
+ * @file encounter_colosseum_reward_step.inc
+ * @brief Reward shaping + the per-tick step loop, mirroring inferno reward_step.
+ *
+ * Scaffold reward is 0 by default (all coeffs default to 0). The step loop keeps
+ * inferno's exact ordering so gameplay can be filled in without re-plumbing.
+ */
+
+static float col_terminal_loss_reward(const ColosseumState* s, const ColosseumContext* ctx) {
+    (void)s;
+    if (ctx->config.terminal_penalty_enabled) return -1.0f;
+    return -ctx->config.death_penalty_coeff;
+}
+
+/**
+ * Bank per-tick damage totals into episode totals and return the shaped reward.
+ * Scaffold: returns the dense damage terms (all coeffs default to 0).
+ */
+static float col_compute_reward_ctx(ColosseumState* s, const ColosseumContext* ctx) {
+    const ColConfig* cfg = &ctx->config;
+    ColoTickScratch* t = &s->tick_scratch;
+
+    s->log.total_damage_dealt += t->damage_dealt;
+    s->log.total_boss_damage += t->damage_boss;
+    s->log.total_damage_received += t->damage_received;
+    s->log.total_prayer_correct += t->prayer_correct;
+    s->log.total_npc_attacks += t->attacks_fired;
+
+    float reward = 0.0f;
+    reward += cfg->damage_reward_coeff * t->damage_dealt;
+    reward += cfg->boss_damage_reward_coeff * t->damage_boss;
+    return reward;
+}
+
+static float col_compute_reward(ColosseumState* s) {
+    return col_compute_reward_ctx(s, col_legacy_context());
+}
+
+
+static void col_step_ctx(EncounterState* state, EncounterContext* context, const int* actions) {
+    ColosseumState* s = (ColosseumState*)state;
+    ColosseumContext* ctx = context ? (ColosseumContext*)context : col_legacy_context();
+    if (s->episode_over) return;
+
+    /* clear per-tick state. one assignment resets every accumulator/flag. */
+    s->reward = 0.0f;
+    s->tick_scratch = (ColoTickScratch){0};
+    s->player_attack_timing = (EncounterProjectileTiming){0};
+    encounter_clear_tick_flags(&s->player);
+    for (int i = 0; i < COLO_MAX_NPCS; i++) {
+        s->npcs[i].attacked_this_tick = 0;
+        s->npcs[i].attack_style_this_tick = ATTACK_STYLE_NONE;
+        s->npcs[i].attack_visual_target = -1;
+        s->npcs[i].moved_this_tick = 0;
+        s->npcs[i].hit_landed_this_tick = 0;
+        s->npcs[i].hit_damage = 0;
+        s->npcs[i].hit_was_successful_this_tick = 0;
+        s->npcs[i].hit_spell_type = 0;
+    }
+    s->tick++;
+    col_player_pretick(s, ctx, actions);
+
+    int spawn_wave_now = 0;
+    if (s->wave_spawn_delay > 0) {
+        s->wave_spawn_delay--;
+        if (s->wave_spawn_delay == 0) spawn_wave_now = 1;
+    }
+    int in_wave_gap = (s->wave_spawn_delay > 0 || spawn_wave_now);
+    if (s->wave_ready_delay > 0) s->wave_ready_delay--;
+    int in_ready_gap = s->wave_ready_delay > 0;
+
+    /* resolve in-flight projectiles (always, even during gaps) */
+    col_resolve_player_projectiles_on_npcs(s);
+    col_resolve_player_pending_hits(s);
+
+    if (!in_wave_gap && !in_ready_gap) {
+        col_rebuild_player_collision_flags(s);
+        col_tick_npcs_ctx(s, ctx);
+    }
+
+    /* early death check before player actions: a lethal hit can't be brewed back */
+    if (s->player.current_hitpoints <= 0) {
+        (void)col_compute_reward_ctx(s, ctx);
+        s->episode_over = 1;
+        s->winner = COLO_OUTCOME_PLAYER_DIED;
+        s->reward = col_terminal_loss_reward(s, ctx);
+        s->episode_return += s->reward;
+        return;
+    }
+
+    /* player actions (gated out during wave/ready gaps) */
+    int can_player_attack = !in_wave_gap && !in_ready_gap;
+    int px = s->player.x, py = s->player.y;
+    col_tick_player_ctx(s, ctx, actions, can_player_attack);
+    s->tick_scratch.player_moved = (s->player.x != px || s->player.y != py) ? 1 : 0;
+
+    s->reward = col_compute_reward_ctx(s, ctx);
+    int all_dead = 1;
+
+    /* post-action death check */
+    if (s->player.current_hitpoints <= 0) {
+        s->episode_over = 1;
+        s->winner = COLO_OUTCOME_PLAYER_DIED;
+        s->reward = col_terminal_loss_reward(s, ctx);
+        goto finish_step;
+    }
+
+    if (spawn_wave_now) {
+        s->wave = s->wave_spawn_target;
+        col_spawn_wave(s);
+        goto finish_step;
+    }
+    if (s->wave_spawn_delay > 0) goto finish_step;
+
+    /* wave completion: all NPC slots inactive -> bonus + next/win */
+    for (int i = 0; i < COLO_MAX_NPCS; i++) {
+        if (s->npcs[i].active) { all_dead = 0; break; }
+    }
+    if (all_dead) {
+        s->tick_scratch.wave_completed = 1;
+        s->log.waves_cleared++;
+        s->reward = 1.0f + ctx->config.wave_clear_bonus;
+        if (s->wave + 1 >= COLO_NUM_WAVES) {
+            s->episode_over = 1;
+            s->winner = COLO_OUTCOME_PLAYER_WON;
+            s->reward += ctx->config.win_bonus;
+        } else {
+            s->wave_spawn_target = s->wave + 1;
+            s->wave_spawn_delay = 9;
+            s->log.wave_reached = s->wave + 1;
+        }
+    }
+
+    if (s->tick >= COLO_MAX_TICKS) {
+        s->episode_over = 1;
+        s->winner = COLO_OUTCOME_PLAYER_DIED;
+        s->reward = col_terminal_loss_reward(s, ctx);
+    }
+
+finish_step:
+    s->episode_return += s->reward;
+}
+
+static void col_step(EncounterState* state, const int* actions) {
+    col_step_ctx(state, (EncounterContext*)col_legacy_context(), actions);
+}

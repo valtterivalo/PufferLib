@@ -24,6 +24,7 @@
 #pragma GCC diagnostic ignored "-Wunused-function"
 #endif
 #include "encounters/encounter_inferno.h"
+#include "encounters/encounter_colosseum.h"
 #if defined(__clang__) || defined(__GNUC__)
 #pragma GCC diagnostic pop
 #endif
@@ -165,6 +166,18 @@ static void run_profile(OsrsEnv* env, const char* encounter_name) {
                 env->collision_map = cmap;
             }
         } else if (strcmp(encounter_name, "inferno") == 0) {
+            CollisionMap* cmap = collision_map_load(OSRS_ASSET("inferno.cmap"));
+            if (cmap) {
+                edef->put_ptr(
+                    env->encounter_state, env->encounter_context, "collision_map", cmap);
+                edef->put_int(
+                    env->encounter_state, env->encounter_context, "world_offset_x", 2246);
+                edef->put_int(
+                    env->encounter_state, env->encounter_context, "world_offset_y", 5315);
+                env->collision_map = cmap;
+            }
+        } else if (strcmp(encounter_name, "colosseum") == 0) {
+            /* placeholder: reuse inferno cmap/offsets until colosseum assets land */
             CollisionMap* cmap = collision_map_load(OSRS_ASSET("inferno.cmap"));
             if (cmap) {
                 edef->put_ptr(
@@ -547,7 +560,8 @@ static void visual_policy_init(
         fprintf(stderr, "policy: failed to load model: %s\n", model_path);
         abort();
     }
-    int hidden_size = strcmp(edef->name, "inferno") == 0 ? 512 : 128;
+    int hidden_size = (strcmp(edef->name, "inferno") == 0 ||
+                       strcmp(edef->name, "colosseum") == 0) ? 512 : 128;
     int num_layers = 2;
     VisualPolicyModelShape model_shape = visual_policy_select_model_shape(
         policy, edef, hidden_size, num_layers);
@@ -941,6 +955,20 @@ static void run_visual(
                 fprintf(stderr, "inferno collision map: %d regions, offset (2246, 5315)\n",
                         cmap->count);
             }
+        } else if (strcmp(encounter_name, "colosseum") == 0) {
+            /* placeholder: reuse inferno cmap/offsets until colosseum assets land */
+            CollisionMap* cmap = collision_map_load(OSRS_ASSET("inferno.cmap"));
+            if (cmap) {
+                edef->put_ptr(
+                    env->encounter_state, env->encounter_context, "collision_map", cmap);
+                edef->put_int(
+                    env->encounter_state, env->encounter_context, "world_offset_x", 2246);
+                edef->put_int(
+                    env->encounter_state, env->encounter_context, "world_offset_y", 5315);
+                env->collision_map = cmap;
+                fprintf(stderr, "colosseum collision map: %d regions, offset (2246, 5315)\n",
+                        cmap->count);
+            }
         }
 
         if (start_wave >= 0 && edef->put_int) {
@@ -988,6 +1016,10 @@ static void run_visual(
         osrs_asset_require_group(OSRS_ASSET_GROUP_ZULRAH);
         osrs_asset_require_group(OSRS_ASSET_GROUP_COMBAT_VISUALS);
     } else if (strcmp(encounter_name, "inferno") == 0) {
+        osrs_asset_require_group(OSRS_ASSET_GROUP_INFERNO);
+        osrs_asset_require_group(OSRS_ASSET_GROUP_COMBAT_VISUALS);
+    } else if (strcmp(encounter_name, "colosseum") == 0) {
+        /* placeholder: reuse inferno asset group until colosseum assets land */
         osrs_asset_require_group(OSRS_ASSET_GROUP_INFERNO);
         osrs_asset_require_group(OSRS_ASSET_GROUP_COMBAT_VISUALS);
     }
@@ -1079,6 +1111,21 @@ static void run_visual(
                 rc->collision_map ? "loaded" : "MISSING",
                 rc->npc_model_cache ? rc->npc_model_cache->count : 0,
                 rc->npc_anim_cache ? rc->npc_anim_cache->seq_count : 0);
+    } else if (encounter_name && strcmp(encounter_name, "colosseum") == 0) {
+        /* placeholder: reuse inferno terrain/models until colosseum assets land */
+        rc->terrain = terrain_load(OSRS_ASSET("inferno.terrain"));
+        rc->objects = objects_load(OSRS_ASSET("inferno.objects"));
+        if (rc->terrain)
+            terrain_offset(rc->terrain, 2246, 5315);
+        if (rc->objects)
+            objects_offset(rc->objects, 2246, 5315);
+        rc->npc_model_cache = model_cache_load(OSRS_ASSET("inferno.models"));
+        rc->npc_anim_cache = anim_cache_load(OSRS_ASSET("inferno.anims"));
+        if (env->collision_map) {
+            rc->collision_map = (const CollisionMap*)env->collision_map;
+            rc->collision_world_offset_x = 2246;
+            rc->collision_world_offset_y = 5315;
+        }
     }
 
     /* populate entity pointers (also sets arena bounds from encounter) */
