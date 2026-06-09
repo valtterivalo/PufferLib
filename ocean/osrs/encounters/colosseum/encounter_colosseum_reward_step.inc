@@ -117,6 +117,17 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
     for (int i = 0; i < COLO_MAX_NPCS; i++) {
         if (s->npcs[i].active) { all_dead = 0; break; }
     }
+
+    /* reinforcement: an uncleared wave that overruns COLO_REINFORCEMENT_TICKS
+       streams its reinforce species in once from the gate nearest the player.
+       reinforcement_timer counts down only while NPCs remain and gameplay is
+       live; col_spawn_reinforcements sets it to COLO_REINFORCE_FIRED so a wave
+       reinforces at most once. */
+    if (!all_dead && s->reinforcement_timer > 0) {
+        s->reinforcement_timer--;
+        if (s->reinforcement_timer == 0) col_spawn_reinforcements(s);
+    }
+
     if (all_dead) {
         s->tick_scratch.wave_completed = 1;
         s->log.waves_cleared++;

@@ -36,6 +36,12 @@ static const int COLO_SPAWN_POS[COLO_NUM_SPAWN_POS][2] = {
     {17, 4}, {4, 17}, {29, 17}, {17, 29},
 };
 
+/* north/south gate tiles reinforcements stream in from; the nearer one to the
+   player by y is chosen at overrun time (col_spawn_reinforcements). */
+#define COLO_GATE_X       17
+#define COLO_GATE_NORTH_Y 4
+#define COLO_GATE_SOUTH_Y 29
+
 #define COLO_SOL_HEREDIT_X 17
 #define COLO_SOL_HEREDIT_Y 17
 
@@ -228,15 +234,26 @@ static void col_build_npc_stats(void) {
 }
 
 
-#define COLO_MAX_NPCS_PER_WAVE 6
+/** wiki-exact Fortis Colosseum roster: W8/W11 start 7 NPCs, so 8 leaves headroom. */
+#define COLO_MAX_NPCS_PER_WAVE 8
+/** at most Jaguar + Serpent (W4-6) or Minotaur + Serpent (W10-11) reinforce per overrun. */
+#define COLO_MAX_REINFORCE_PER_WAVE 2
 
+/** one wave's full starting roster plus its single-overrun reinforcement set.
+    types/count list every NPC that spawns at wave start (warband listed
+    explicitly for waves 1-11). reinforce/reinforce_count is the species set
+    spawned once if the wave is not cleared within COLO_REINFORCEMENT_TICKS. */
 typedef struct {
     uint8_t types[COLO_MAX_NPCS_PER_WAVE];
     int count;
+    uint8_t reinforce[COLO_MAX_REINFORCE_PER_WAVE];
+    int reinforce_count;
 } ColoWaveDef;
 
-/** Placeholder wave script. The lead replaces counts/composition with the real
-    12-wave roster and reinforcement structure. */
+/** wiki-exact 12-wave script. Waves 1-11 (indices 0-10) open with the Fremennik
+    warband (berserker + archer + seer) listed explicitly; wave 12 (index 11) is
+    Sol Heredit alone. Reinforcements: W1-3 Jaguar, W4-6 Jaguar + Serpent,
+    W7-9 Minotaur, W10-11 Minotaur + Serpent, W12 none. */
 static const ColoWaveDef COLO_WAVES[COLO_NUM_WAVES] = {
     #define BZ COLO_FREMENNIK_BERSERKER
     #define AR COLO_FREMENNIK_ARCHER
@@ -248,20 +265,25 @@ static const ColoWaveDef COLO_WAVES[COLO_NUM_WAVES] = {
     #define MT COLO_MINOTAUR
     #define MC COLO_MANTICORE
     #define SOL COLO_SOL_HEREDIT
-    #define W(...) { .types = { __VA_ARGS__ }, .count = sizeof((uint8_t[]){__VA_ARGS__}) }
+    #define W(start, reinf) { \
+        .types = { COLO_WAVE_UNPACK start }, \
+        .count = sizeof((uint8_t[]){ COLO_WAVE_UNPACK start }), \
+        .reinforce = { COLO_WAVE_UNPACK reinf }, \
+        .reinforce_count = sizeof((uint8_t[]){ COLO_WAVE_UNPACK reinf }) }
+    #define COLO_WAVE_UNPACK(...) __VA_ARGS__
 
-    [0]  = W(BZ),
-    [1]  = W(BZ, AR),
-    [2]  = W(BZ, AR, SE),
-    [3]  = W(JG, AR),
-    [4]  = W(SH, MT),
-    [5]  = W(JV, MC),
-    [6]  = W(BZ, AR, SE, JG),
-    [7]  = W(SW, MT),
-    [8]  = W(MC, SH),
-    [9]  = W(JV, SW, MT),
-    [10] = W(BZ, AR, SE, JG, MC),
-    [11] = W(SOL),
+    [0]  = W((BZ, AR, SE, SH),              (JG)),
+    [1]  = W((BZ, AR, SE, SH, JV),          (JG)),
+    [2]  = W((BZ, AR, SE, SH, JV, JV),      (JG)),
+    [3]  = W((BZ, AR, SE, SH, MC),          (JG, SH)),
+    [4]  = W((BZ, AR, SE, SH, JV, MC),      (JG, SH)),
+    [5]  = W((BZ, AR, SE, SH, JV, JV, MC),  (JG, SH)),
+    [6]  = W((BZ, AR, SE, JV, MC, SW),      (MT)),
+    [7]  = W((BZ, AR, SE, JV, JV, MC, SW),  (MT)),
+    [8]  = W((BZ, AR, SE, JV, MC, MC),      (MT)),
+    [9]  = W((BZ, AR, SE, JV, JV, MC, MC),  (MT, SH)),
+    [10] = W((BZ, AR, SE, JV, MC, MC, SW),  (MT, SH)),
+    [11] = W((SOL),                         ()),
 
     #undef BZ
     #undef AR
@@ -274,6 +296,7 @@ static const ColoWaveDef COLO_WAVES[COLO_NUM_WAVES] = {
     #undef MC
     #undef SOL
     #undef W
+    #undef COLO_WAVE_UNPACK
 };
 
 

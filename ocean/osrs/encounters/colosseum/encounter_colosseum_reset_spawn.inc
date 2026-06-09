@@ -110,6 +110,41 @@ static void col_spawn_wave(ColosseumState* s) {
     s->reinforcement_timer = COLO_REINFORCEMENT_TICKS;
 }
 
+/** sentinel reinforcement_timer value meaning this wave already reinforced. */
+#define COLO_REINFORCE_FIRED (-1)
+
+/**
+ * Spawn the current wave's reinforcement species from the gate nearer the player.
+ *
+ * Gate choice is the smaller |player.y - gate_y| between the north and south
+ * gates. Stacks each species one tile apart along x so 3x3 colossi do not share
+ * a footprint. Sets reinforcement_timer to COLO_REINFORCE_FIRED so an overrun
+ * reinforces exactly once per wave.
+ */
+static void col_spawn_reinforcements(ColosseumState* s) {
+    if (s->wave < 0 || s->wave >= COLO_NUM_WAVES) return;
+    const ColoWaveDef* def = &COLO_WAVES[s->wave];
+    if (def->reinforce_count <= 0) {
+        s->reinforcement_timer = COLO_REINFORCE_FIRED;
+        return;
+    }
+
+    int dist_north = abs(s->player.y - COLO_GATE_NORTH_Y);
+    int dist_south = abs(s->player.y - COLO_GATE_SOUTH_Y);
+    int gate_y = (dist_north <= dist_south) ? COLO_GATE_NORTH_Y : COLO_GATE_SOUTH_Y;
+
+    for (int i = 0; i < def->reinforce_count; i++) {
+        int slot = col_find_free_npc(s);
+        if (slot < 0) break;
+        ColoNpcType type = (ColoNpcType)def->reinforce[i];
+        int x = COLO_GATE_X + i * COLO_NPC_STATS[type].size;
+        if (x + COLO_NPC_STATS[type].size > COLO_ARENA_MAX_X) x = COLO_GATE_X - i;
+        col_init_npc(s, slot, type, x, gate_y);
+    }
+
+    s->reinforcement_timer = COLO_REINFORCE_FIRED;
+}
+
 
 static void col_reset_ctx(EncounterState* state, EncounterContext* context, uint32_t seed) {
     col_build_npc_stats();
