@@ -71,6 +71,7 @@ typedef enum {
 #include "colosseum/encounter_colosseum_player_actions.inc"
 #include "colosseum/encounter_colosseum_reward_step.inc"
 #include "colosseum/encounter_colosseum_obs_mask.inc"
+#include "colosseum/encounter_colosseum_mask_render.inc"
 #include "colosseum/encounter_colosseum_render_snapshot.inc"
 
 #endif /* ENCOUNTER_COLOSSEUM_H */

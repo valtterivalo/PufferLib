@@ -3,9 +3,10 @@
  * @file encounter_colosseum_player_actions.inc
  * @brief Action head layout + player tick, mirroring inferno player_actions.
  *
- * Action heads (8): MOVE, PRAYER, TARGET, GEAR, EAT, POTION, SPEC, MODIFIER_SELECT.
- * The player tick reuses the shared osrs_encounter_player_step orchestrator for
- * target acquisition, movement, and chase-into-range.
+ * Action heads (9): MOVE, PRAYER, TARGET, GEAR, EAT, POTION, SPEC,
+ * MODIFIER_SELECT, GRAPPLE_PARRY. The player tick reuses the shared
+ * osrs_encounter_player_step orchestrator for target acquisition, movement, and
+ * chase-into-range.
  */
 
 #define COLO_HEAD_MOVE            0  /* 25: idle + 8 walk + 16 run */
@@ -16,12 +17,16 @@
 #define COLO_HEAD_POTION          5  /* none, drink */
 #define COLO_HEAD_SPEC            6  /* no_change, toggle spec */
 #define COLO_HEAD_MODIFIER_SELECT 7  /* none + pick draft option 0/1/2 */
+#define COLO_HEAD_GRAPPLE_PARRY   8  /* none + click one of the NUM_GEAR_SLOTS body parts */
 
 #define COLO_GEAR_DIM 3
 #define COLO_EAT_DIM 2
 #define COLO_POTION_DIM 2
 #define COLO_SPEC_DIM 2
 #define COLO_MODIFIER_SELECT_DIM (1 + COLO_MODIFIER_DRAFT_OPTIONS)  /* 4 */
+/** grapple-parry head: index 0 = no click, index k = click gear slot (k-1). The
+    domain matches SolHereditState.grapple_body_slot, drawn over NUM_GEAR_SLOTS. */
+#define COLO_GRAPPLE_PARRY_DIM (1 + NUM_GEAR_SLOTS)  /* 12 */
 
 #define COLO_ACTION_DIMS_INIT { \
     ENCOUNTER_MOVE_ACTIONS, \
@@ -31,12 +36,13 @@
     COLO_EAT_DIM, \
     COLO_POTION_DIM, \
     COLO_SPEC_DIM, \
-    COLO_MODIFIER_SELECT_DIM \
+    COLO_MODIFIER_SELECT_DIM, \
+    COLO_GRAPPLE_PARRY_DIM \
 }
 static const int COLO_ACTION_DIMS[COLO_NUM_ACTION_HEADS] = COLO_ACTION_DIMS_INIT;
 #define COLO_ACTION_MASK_SIZE (ENCOUNTER_MOVE_ACTIONS + ENCOUNTER_OVERHEAD_DIM_PVE + \
     COLO_OBS_NPCS + 1 + COLO_GEAR_DIM + COLO_EAT_DIM + COLO_POTION_DIM + COLO_SPEC_DIM + \
-    COLO_MODIFIER_SELECT_DIM)
+    COLO_MODIFIER_SELECT_DIM + COLO_GRAPPLE_PARRY_DIM)
 
 static int col_action_head_mask_offset(int head) {
     int offset = 0;
@@ -165,6 +171,12 @@ static void col_tick_player_ctx(
     /* spec toggle */
     if (actions[COLO_HEAD_SPEC] == 1)
         s->player.spec_armed = !s->player.spec_armed;
+
+    /* grapple parry: during an active Sol grapple, action index k clicks gear slot
+       (k-1). A correct slot parries; clicking on the last tick is a perfect parry. */
+    int grapple_act = actions[COLO_HEAD_GRAPPLE_PARRY];
+    if (grapple_act > 0 && grapple_act <= NUM_GEAR_SLOTS)
+        col_sol_grapple_parry_attempt(s, grapple_act - 1);
 
     /* target acquisition: translate the obs-slot target action into an NPC slot */
     int target_act = actions[COLO_HEAD_TARGET];

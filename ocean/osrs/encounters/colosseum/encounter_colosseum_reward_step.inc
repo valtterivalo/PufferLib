@@ -3,8 +3,11 @@
  * @file encounter_colosseum_reward_step.inc
  * @brief Reward shaping + the per-tick step loop, mirroring inferno reward_step.
  *
- * Scaffold reward is 0 by default (all coeffs default to 0). The step loop keeps
- * inferno's exact ordering so gameplay can be filled in without re-plumbing.
+ * Reward is sparse-leaning (sparse > dense, anti suicide-perversity): event
+ * bonuses (wave clear / boss phase / win) dominate, with small dense damage +
+ * prayer-correct shaping. All coeffs default to 0 so the lead opts in per term.
+ * Death/terminal penalty defaults off. The step loop keeps inferno's exact
+ * ordering so gameplay can be filled in without re-plumbing.
  */
 
 static float col_terminal_loss_reward(const ColosseumState* s, const ColosseumContext* ctx) {
@@ -14,8 +17,10 @@ static float col_terminal_loss_reward(const ColosseumState* s, const ColosseumCo
 }
 
 /**
- * Bank per-tick damage totals into episode totals and return the shaped reward.
- * Scaffold: returns the dense damage terms (all coeffs default to 0).
+ * Bank this tick's accumulators into episode totals and return the shaped per-tick
+ * reward: small dense damage + prayer-correct terms, plus a boss_phase_bonus for
+ * every Sol HP-threshold phase crossed this tick. Event bonuses (wave clear, win)
+ * are added on top by col_step_ctx so a clear tick still pays its dense terms.
  */
 static float col_compute_reward_ctx(ColosseumState* s, const ColosseumContext* ctx) {
     const ColConfig* cfg = &ctx->config;
@@ -26,10 +31,17 @@ static float col_compute_reward_ctx(ColosseumState* s, const ColosseumContext* c
     s->log.total_damage_received += t->damage_received;
     s->log.total_prayer_correct += t->prayer_correct;
     s->log.total_npc_attacks += t->attacks_fired;
+    if (s->sol.phase > s->log.boss_phase_reached) s->log.boss_phase_reached = s->sol.phase;
 
     float reward = 0.0f;
     reward += cfg->damage_reward_coeff * t->damage_dealt;
     reward += cfg->boss_damage_reward_coeff * t->damage_boss;
+    reward += cfg->prayer_correct_reward * (float)t->prayer_correct;
+
+    if (s->sol.started && s->sol.phase > s->rewarded_boss_phase) {
+        reward += cfg->boss_phase_bonus * (float)(s->sol.phase - s->rewarded_boss_phase);
+        s->rewarded_boss_phase = s->sol.phase;
+    }
     return reward;
 }
 
@@ -131,7 +143,7 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
     if (all_dead) {
         s->tick_scratch.wave_completed = 1;
         s->log.waves_cleared++;
-        s->reward = 1.0f + ctx->config.wave_clear_bonus;
+        s->reward += 1.0f + ctx->config.wave_clear_bonus;
         if (s->wave + 1 >= COLO_NUM_WAVES) {
             s->episode_over = 1;
             s->winner = COLO_OUTCOME_PLAYER_WON;

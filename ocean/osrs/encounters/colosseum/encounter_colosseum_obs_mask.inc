@@ -1,24 +1,61 @@
 #line 76 "encounter_colosseum.h"
 /**
  * @file encounter_colosseum_obs_mask.inc
- * @brief Obs writer + action mask + render entities, mirroring inferno obs_mask.
+ * @brief Obs section sizes + obs writer, mirroring inferno obs_mask.
  *
- * Obs layout (flat): player block + per-NPC slots + modifier flags + wave block
- * + boss block. col_write_obs_ctx hard-asserts the running index matches the
- * section constants, exactly like inferno.
+ * Obs layout (flat float vector, every feature egocentric + normalized):
+ *   player(29) + npc slots(12 * 22) + modifiers(36) + wave(4) + boss(45)
+ *   + pending-hit forecast(16 * 7).
+ * col_write_obs_ctx hard-asserts the running index against the section constants
+ * after each block and aborts on mismatch, exactly like inferno: this is the
+ * contract that keeps the obs honest as the layout grows.
+ *
+ * The action mask, reward/terminal getters, and render-entity fill live in
+ * encounter_colosseum_mask_render.inc (included right after this file) to keep
+ * each .inc under ~500 lines.
  */
 
-/* obs section sizes */
-#define COLO_PLAYER_OBS_SIZE     20
-#define COLO_FEATURES_PER_NPC    8
-#define COLO_NPC_OBS_SIZE        (COLO_OBS_NPCS * COLO_FEATURES_PER_NPC)  /* 96 */
-#define COLO_MODIFIER_OBS_SIZE   COLO_NUM_MODIFIERS                       /* 16 */
-#define COLO_WAVE_OBS_SIZE       4
-#define COLO_BOSS_OBS_SIZE       8
-#define COLO_FEATURES_PER_HIT    5
-#define COLO_PENDING_HIT_OBS_SIZE (COLO_FEATURES_PER_HIT * ENCOUNTER_MAX_PENDING_HITS)
+/* ----- obs section sizes ---------------------------------------------------- */
+
+#define COLO_PLAYER_OBS_SIZE      29
+#define COLO_FEATURES_PER_NPC     22
+#define COLO_NPC_OBS_SIZE         (COLO_OBS_NPCS * COLO_FEATURES_PER_NPC)  /* 264 */
+#define COLO_MODIFIER_OBS_SIZE    (2 * COLO_NUM_MODIFIERS + 1 + COLO_MODIFIER_DRAFT_OPTIONS)  /* 36 */
+#define COLO_WAVE_OBS_SIZE        4
+#define COLO_BOSS_OBS_SIZE        45
+/** obs surfaces the soonest-landing pending hits only (the 32-deep queue rarely
+    fills; 16 covers a jaguar triple + manticore barrage + a parry combo at once). */
+#define COLO_OBS_PENDING_HITS     16
+#define COLO_FEATURES_PER_HIT     7
+#define COLO_PENDING_HIT_OBS_SIZE (COLO_FEATURES_PER_HIT * COLO_OBS_PENDING_HITS)  /* 112 */
+
 #define COLO_NUM_OBS (COLO_PLAYER_OBS_SIZE + COLO_NPC_OBS_SIZE + COLO_MODIFIER_OBS_SIZE + \
     COLO_WAVE_OBS_SIZE + COLO_BOSS_OBS_SIZE + COLO_PENDING_HIT_OBS_SIZE)
+
+/* running-index checkpoints, asserted after each obs block. */
+#define COLO_OBS_AFTER_PLAYER   COLO_PLAYER_OBS_SIZE
+#define COLO_OBS_AFTER_NPCS     (COLO_OBS_AFTER_PLAYER + COLO_NPC_OBS_SIZE)
+#define COLO_OBS_AFTER_MODS     (COLO_OBS_AFTER_NPCS + COLO_MODIFIER_OBS_SIZE)
+#define COLO_OBS_AFTER_WAVE     (COLO_OBS_AFTER_MODS + COLO_WAVE_OBS_SIZE)
+#define COLO_OBS_AFTER_BOSS     (COLO_OBS_AFTER_WAVE + COLO_BOSS_OBS_SIZE)
+
+
+/* ----- normalization helpers ------------------------------------------------ */
+
+static inline float col_clamp01(float v) {
+    if (v < 0.0f) return 0.0f;
+    if (v > 1.0f) return 1.0f;
+    return v;
+}
+
+/** egocentric x offset, normalized to [-1, 1] by arena width. */
+static inline float col_obs_rel_x(int nx, int px) {
+    return (float)(nx - px) / (float)COLO_ARENA_WIDTH;
+}
+
+static inline float col_obs_rel_y(int ny, int py) {
+    return (float)(ny - py) / (float)COLO_ARENA_HEIGHT;
+}
 
 
 /** assign each active NPC to a fixed obs slot in array order. */
@@ -39,6 +76,238 @@ static int col_obs_slot_is_targetable(const ColosseumState* s, int obs_slot) {
 }
 
 
+/* ----- per-NPC obs ---------------------------------------------------------- */
+
+/** write the 4-wide per-type tell block for an NPC slot (always 4 floats):
+    manticore  -> [barrage cycle frac, next-orb ranged, next-orb magic, next-orb melee]
+    javelin    -> [skyfall incoming, skyfall ticks frac, 0, 0]
+    minotaur   -> [in heal-cast range (player not in its melee), 0, 0, 0]
+    jaguar     -> [multi-hit marker, 0, 0, 0]
+    everything else -> zeros. */
+static void col_write_npc_tells(const ColosseumState* s, const ColoNPC* npc, float* obs, int* idx) {
+    int i = *idx;
+    float t0 = 0.0f, t1 = 0.0f, t2 = 0.0f, t3 = 0.0f;
+    switch (npc->type) {
+        case COLO_MANTICORE: {
+            const ColoManticoreState* mc = &npc->type_state.manticore;
+            int step = mc->cycle_step < 0 ? 0 : mc->cycle_step;
+            t0 = (float)step / 3.0f;
+            if (mc->cycle_step >= 0 && mc->cycle_step < 3) {
+                AttackStyle next = mc->orb_style[mc->cycle_step];
+                t1 = (next == ATTACK_STYLE_RANGED) ? 1.0f : 0.0f;
+                t2 = (next == ATTACK_STYLE_MAGIC) ? 1.0f : 0.0f;
+                t3 = (next == ATTACK_STYLE_MELEE) ? 1.0f : 0.0f;
+            }
+            break;
+        }
+        case COLO_JAVELIN_COLOSSUS: {
+            const ColoJavelinState* jv = &npc->type_state.javelin;
+            t0 = jv->skyfall_pending ? 1.0f : 0.0f;
+            t1 = jv->skyfall_pending
+                ? col_clamp01((float)jv->skyfall_timer / (float)COLO_JAVELIN_SKYFALL_DELAY)
+                : 0.0f;
+            break;
+        }
+        case COLO_MINOTAUR: {
+            int size = col_npc_effective_size(npc);
+            int dist = encounter_dist_to_npc(s->player.x, s->player.y, npc->x, npc->y, size);
+            t0 = (dist > 1) ? 1.0f : 0.0f;  /* heals allies when player not in its melee */
+            break;
+        }
+        case COLO_JAGUAR_WARRIOR:
+            t0 = 1.0f;  /* multi-hit (3 independent rolls per attack) marker */
+            break;
+        default:
+            break;
+    }
+    obs[i++] = t0;
+    obs[i++] = t1;
+    obs[i++] = t2;
+    obs[i++] = t3;
+    *idx = i;
+}
+
+/** write one NPC slot (COLO_FEATURES_PER_NPC floats). Caller has cleared obs to 0. */
+static void col_write_npc_slot(const ColosseumState* s, const ColoNPC* npc, float* obs, int* idx) {
+    int i = *idx;
+    int px = s->player.x, py = s->player.y;
+    const ColoNpcStats* ns = &COLO_NPC_STATS[npc->type];
+    int size = col_npc_effective_size(npc);
+
+    for (int t = 0; t < COLO_NUM_NPC_TYPES; t++)
+        obs[i++] = (npc->type == t) ? 1.0f : 0.0f;
+    obs[i++] = col_obs_rel_x(npc->x, px);
+    obs[i++] = col_obs_rel_y(npc->y, py);
+    obs[i++] = npc->max_hp > 0 ? col_clamp01((float)npc->hp / (float)npc->max_hp) : 0.0f;
+    obs[i++] = (npc->attack_style == ATTACK_STYLE_MELEE) ? 1.0f : 0.0f;
+    obs[i++] = (npc->attack_style == ATTACK_STYLE_RANGED) ? 1.0f : 0.0f;
+    obs[i++] = (npc->attack_style == ATTACK_STYLE_MAGIC) ? 1.0f : 0.0f;
+    obs[i++] = col_clamp01((float)npc->attack_timer / 8.0f);
+    int dist = encounter_dist_to_npc(px, py, npc->x, npc->y, size);
+    int range = ns->attack_range > 0 ? ns->attack_range : 1;
+    obs[i++] = (dist >= 1 && dist <= range) ? 1.0f : 0.0f;
+    *idx = i;
+    col_write_npc_tells(s, npc, obs, idx);
+}
+
+
+/* ----- boss obs ------------------------------------------------------------- */
+
+/** nearest in-flight crystal sphere to the player: writes dx, dy, ticks frac,
+    present flag (4 floats). dx/dy are egocentric tile-to-player offsets. */
+static void col_write_nearest_sphere(const ColosseumState* s, float* obs, int* idx) {
+    int i = *idx;
+    int best = -1, best_d = 1 << 30;
+    for (int k = 0; k < COLO_SOL_SPHERE_QUEUE_MAX; k++) {
+        const ColoSolSphere* sp = &s->sol.spheres[k];
+        if (!sp->active) continue;
+        int dx = abs(sp->tile_x - s->player.x);
+        int dy = abs(sp->tile_y - s->player.y);
+        int d = dx > dy ? dx : dy;
+        if (d < best_d) { best_d = d; best = k; }
+    }
+    if (best >= 0) {
+        const ColoSolSphere* sp = &s->sol.spheres[best];
+        obs[i++] = col_obs_rel_x(sp->tile_x, s->player.x);
+        obs[i++] = col_obs_rel_y(sp->tile_y, s->player.y);
+        obs[i++] = col_clamp01((float)sp->ticks_remaining / (float)COLO_SOL_SPHERE_DELAY);
+        obs[i++] = 1.0f;
+    } else {
+        obs[i++] = 0.0f; obs[i++] = 0.0f; obs[i++] = 0.0f; obs[i++] = 0.0f;
+    }
+    *idx = i;
+}
+
+/** nearest molten-sand pool to the player: dx, dy, present flag (3 floats). */
+static void col_write_nearest_molten(const ColosseumState* s, float* obs, int* idx) {
+    int i = *idx;
+    int best = -1, best_d = 1 << 30;
+    for (int k = 0; k < s->sol.hazard_tile_count; k++) {
+        int dx = abs(s->sol.hazard_tile_x[k] - s->player.x);
+        int dy = abs(s->sol.hazard_tile_y[k] - s->player.y);
+        int d = dx > dy ? dx : dy;
+        if (d < best_d) { best_d = d; best = k; }
+    }
+    if (best >= 0) {
+        obs[i++] = col_obs_rel_x(s->sol.hazard_tile_x[best], s->player.x);
+        obs[i++] = col_obs_rel_y(s->sol.hazard_tile_y[best], s->player.y);
+        obs[i++] = 1.0f;
+    } else {
+        obs[i++] = 0.0f; obs[i++] = 0.0f; obs[i++] = 0.0f;
+    }
+    *idx = i;
+}
+
+/** is the player currently standing inside the telegraphed AoE dust footprint? */
+static int col_player_in_aoe_danger(const ColosseumState* s) {
+    const SolHereditState* sol = &s->sol;
+    if (sol->aoe_attack == COLO_SOL_AOE_NONE || sol->boss_idx < 0) return 0;
+    const ColoNPC* boss = &s->npcs[sol->boss_idx];
+    int span = col_sol_aoe_span(sol->aoe_attack);
+    int ox, oy;
+    col_sol_aoe_block_origin(boss, span, &ox, &oy);
+    return encounter_entity_footprints_overlap(ox, oy, span, s->player.x, s->player.y, 1);
+}
+
+/** write the Sol Heredit boss block (COLO_BOSS_OBS_SIZE floats). Rich enough to
+    learn the dodge / triple-parry / grapple responses. All zeros pre-wave-12. */
+static void col_write_boss_obs(const ColosseumState* s, float* obs, int* idx) {
+    int i = *idx;
+    const SolHereditState* sol = &s->sol;
+    int px = s->player.x, py = s->player.y;
+
+    obs[i++] = (float)sol->phase / (float)(COLO_SOL_NUM_PHASES - 1);
+    for (int p = 0; p < COLO_SOL_NUM_PHASES; p++)
+        obs[i++] = (sol->phase == p) ? 1.0f : 0.0f;
+
+    /* current AoE one-hot (none/spear1/spear2/shield1/shield2) + resolve timer */
+    obs[i++] = (sol->aoe_attack == COLO_SOL_AOE_NONE) ? 1.0f : 0.0f;
+    obs[i++] = (sol->aoe_attack == COLO_SOL_AOE_SPEAR1) ? 1.0f : 0.0f;
+    obs[i++] = (sol->aoe_attack == COLO_SOL_AOE_SPEAR2) ? 1.0f : 0.0f;
+    obs[i++] = (sol->aoe_attack == COLO_SOL_AOE_SHIELD1) ? 1.0f : 0.0f;
+    obs[i++] = (sol->aoe_attack == COLO_SOL_AOE_SHIELD2) ? 1.0f : 0.0f;
+    obs[i++] = col_clamp01((float)sol->aoe_resolve_timer / (float)COLO_SOL_AOE_TELEGRAPH);
+
+    /* safe-direction cue: boss-relative player offset + danger flag + dust span.
+       lets the policy learn which way to step off the telegraphed footprint. */
+    if (sol->boss_idx >= 0) {
+        const ColoNPC* boss = &s->npcs[sol->boss_idx];
+        int bsz = boss->size > 0 ? boss->size : 5;
+        int bcx = boss->x + bsz / 2, bcy = boss->y + bsz / 2;
+        obs[i++] = col_obs_rel_x(px, bcx);   /* player offset FROM boss centre */
+        obs[i++] = col_obs_rel_y(py, bcy);
+    } else {
+        obs[i++] = 0.0f; obs[i++] = 0.0f;
+    }
+    obs[i++] = col_player_in_aoe_danger(s) ? 1.0f : 0.0f;
+    obs[i++] = col_clamp01((float)col_sol_aoe_span(sol->aoe_attack) / 9.0f);
+
+    /* triple parry: active, ticks-to-next-hit, combo id, combo cursor */
+    obs[i++] = sol->parry_sequence_active ? 1.0f : 0.0f;
+    obs[i++] = col_clamp01((float)sol->parry_ticks_remaining / 10.0f);
+    obs[i++] = sol->parry_combo_b ? 1.0f : 0.0f;
+    obs[i++] = sol->combo_len > 0
+        ? col_clamp01((float)sol->combo_cursor / (float)sol->combo_len) : 0.0f;
+
+    /* grapple: active, called body-slot one-hot (NUM_GEAR_SLOTS), timer,
+       guaranteed-max-armed flag */
+    obs[i++] = sol->grapple_active ? 1.0f : 0.0f;
+    for (int g = 0; g < NUM_GEAR_SLOTS; g++)
+        obs[i++] = (sol->grapple_active && sol->grapple_body_slot == g) ? 1.0f : 0.0f;
+    obs[i++] = col_clamp01((float)sol->grapple_timer / (float)COLO_SOL_GRAPPLE_WINDOW);
+    obs[i++] = sol->next_attack_guaranteed_max ? 1.0f : 0.0f;
+
+    /* rotating crystal + nearest sphere (active, dx, dy, ticks, present) */
+    obs[i++] = sol->crystal_active ? 1.0f : 0.0f;
+    *idx = i;
+    col_write_nearest_sphere(s, obs, idx);
+
+    /* nearest molten-sand pool (dx, dy, present) */
+    col_write_nearest_molten(s, obs, idx);
+    i = *idx;
+
+    /* phase-transition light beams (active, ticks frac) */
+    obs[i++] = sol->beam_count > 0 ? 1.0f : 0.0f;
+    obs[i++] = col_clamp01((float)sol->beam_ticks_remaining / (float)COLO_SOL_BEAM_TICKS);
+    *idx = i;
+}
+
+
+/* ----- pending-hit forecast ------------------------------------------------- */
+
+/** a pending hit ignores Protect prayer iff it is not flagged for a prayer check
+    yet carries a non-zero typeless-style hit (javelin skyfall / Sol AoE land via
+    encounter_damage_player, so they never enter the queue; queued ignore-prayer
+    hits are the ones pushed with check_prayer=0 and a real style). */
+static inline int col_pending_hit_ignores_prayer(const EncounterPendingHit* ph) {
+    return (!ph->check_prayer && ph->attack_style != ATTACK_STYLE_NONE) ? 1 : 0;
+}
+
+/** order the player's pending hits by soonest landing into out[] (indices into
+    the queue), returning how many were written (<= COLO_OBS_PENDING_HITS). */
+static int col_collect_obs_pending_hits(const ColosseumState* s, int* out) {
+    int n = 0;
+    for (int h = 0; h < s->player_pending_hits.count && h < ENCOUNTER_MAX_PENDING_HITS; h++) {
+        if (!s->player_pending_hits.hits[h].active) continue;
+        out[n++] = h;
+    }
+    /* insertion sort by ticks_remaining (n is tiny). */
+    for (int a = 1; a < n; a++) {
+        int key = out[a];
+        int kt = s->player_pending_hits.hits[key].ticks_remaining;
+        int b = a - 1;
+        while (b >= 0 && s->player_pending_hits.hits[out[b]].ticks_remaining > kt) {
+            out[b + 1] = out[b];
+            b--;
+        }
+        out[b + 1] = key;
+    }
+    return n < COLO_OBS_PENDING_HITS ? n : COLO_OBS_PENDING_HITS;
+}
+
+
+/* ----- top-level obs writer ------------------------------------------------- */
+
 static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, float* obs) {
     ColosseumState* s = (ColosseumState*)state;
     ColosseumContext* ctx = context ? (ColosseumContext*)context : col_legacy_context();
@@ -48,82 +317,90 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
     int px = s->player.x, py = s->player.y;
     const EncounterLoadoutStats* ls = &s->loadout_stats[s->weapon_set];
 
-    /* player block (20) */
-    obs[i++] = (float)s->player.current_hitpoints / 99.0f;
-    obs[i++] = (float)(px - COLO_ARENA_MIN_X) / (float)COLO_ARENA_WIDTH;
-    obs[i++] = (float)(COLO_ARENA_MAX_X - px) / (float)COLO_ARENA_WIDTH;
-    obs[i++] = (float)(py - COLO_ARENA_MIN_Y) / (float)COLO_ARENA_HEIGHT;
-    obs[i++] = (float)(COLO_ARENA_MAX_Y - py) / (float)COLO_ARENA_HEIGHT;
+    /* player block (29) */
+    obs[i++] = col_clamp01((float)s->player.current_hitpoints / 99.0f);
+    obs[i++] = (float)(px - COLO_ARENA_MIN_X) / (float)COLO_ARENA_WIDTH;   /* dist to west wall */
+    obs[i++] = (float)(COLO_ARENA_MAX_X - px) / (float)COLO_ARENA_WIDTH;   /* dist to east wall */
+    obs[i++] = (float)(py - COLO_ARENA_MIN_Y) / (float)COLO_ARENA_HEIGHT;  /* dist to south wall */
+    obs[i++] = (float)(COLO_ARENA_MAX_Y - py) / (float)COLO_ARENA_HEIGHT;  /* dist to north wall */
     obs[i++] = (s->player.prayer == PRAYER_PROTECT_MELEE) ? 1.0f : 0.0f;
     obs[i++] = (s->player.prayer == PRAYER_PROTECT_RANGED) ? 1.0f : 0.0f;
     obs[i++] = (s->player.prayer == PRAYER_PROTECT_MAGIC) ? 1.0f : 0.0f;
-    obs[i++] = (float)s->player.current_prayer / 99.0f;
+    obs[i++] = (s->player.offensive_prayer == OFFENSIVE_PRAYER_PIETY) ? 1.0f : 0.0f;
+    obs[i++] = (s->player.offensive_prayer == OFFENSIVE_PRAYER_RIGOUR) ? 1.0f : 0.0f;
+    obs[i++] = (s->player.offensive_prayer == OFFENSIVE_PRAYER_AUGURY) ? 1.0f : 0.0f;
+    obs[i++] = col_clamp01((float)s->player.current_prayer / 99.0f);
+    obs[i++] = col_clamp01((float)s->player.run_energy / 10000.0f);
+    obs[i++] = col_clamp01((float)s->player.special_energy / 100.0f);
     obs[i++] = (s->weapon_set == COLO_GEAR_MELEE) ? 1.0f : 0.0f;
     obs[i++] = (s->weapon_set == COLO_GEAR_RANGED) ? 1.0f : 0.0f;
-    obs[i++] = (float)s->player.attack_timer / 8.0f;
-    obs[i++] = (float)s->player.potion_timer / 3.0f;
-    obs[i++] = (float)s->player.special_energy / 100.0f;
+    obs[i++] = col_clamp01((float)s->player.attack_timer / 8.0f);
+    obs[i++] = col_clamp01((float)s->player.food_timer / 3.0f);
+    obs[i++] = col_clamp01((float)s->player.potion_timer / 3.0f);
     obs[i++] = osrs_interaction_active(&s->interaction) ? 1.0f : 0.0f;
-    obs[i++] = (float)ls->attack_range / 15.0f;
-    obs[i++] = (float)ls->max_hit / 80.0f;
-    obs[i++] = (float)ls->attack_speed / 6.0f;
-    obs[i++] = (float)s->player.current_defence / 99.0f;
-    obs[i++] = (float)s->player.run_energy / 10000.0f;
-    assert(i == COLO_PLAYER_OBS_SIZE);
+    obs[i++] = col_clamp01((float)ls->attack_range / 15.0f);
+    obs[i++] = col_clamp01((float)ls->max_hit / 80.0f);
+    obs[i++] = col_clamp01((float)ls->attack_speed / 6.0f);
+    obs[i++] = col_clamp01((float)s->player.current_defence / 99.0f);
+    obs[i++] = col_clamp01((float)ls->def_stab / 300.0f);
+    obs[i++] = col_clamp01((float)ls->def_slash / 300.0f);
+    obs[i++] = col_clamp01((float)ls->def_crush / 300.0f);
+    obs[i++] = col_clamp01((float)ls->def_magic / 300.0f);
+    obs[i++] = col_clamp01((float)ls->def_ranged / 300.0f);
+    assert(i == COLO_OBS_AFTER_PLAYER);
 
-    /* per-NPC slots (COLO_OBS_NPCS * 8) */
+    /* per-NPC slots (COLO_OBS_NPCS * COLO_FEATURES_PER_NPC) */
     for (int n = 0; n < COLO_OBS_NPCS; n++) {
         int npc_idx = s->current_obs_slots[n];
         if (npc_idx < 0 || npc_idx >= COLO_MAX_NPCS || !s->npcs[npc_idx].active) {
             i += COLO_FEATURES_PER_NPC;
             continue;
         }
-        const ColoNPC* npc = &s->npcs[npc_idx];
-        obs[i++] = (float)(npc->type + 1) / (float)COLO_NUM_NPC_TYPES;
-        obs[i++] = (float)(npc->x - px) / (float)COLO_ARENA_WIDTH;
-        obs[i++] = (float)(npc->y - py) / (float)COLO_ARENA_HEIGHT;
-        obs[i++] = npc->max_hp > 0 ? (float)npc->hp / (float)npc->max_hp : 0.0f;
-        obs[i++] = (npc->attack_style == ATTACK_STYLE_MELEE) ? 1.0f : 0.0f;
-        obs[i++] = (npc->attack_style == ATTACK_STYLE_RANGED) ? 1.0f : 0.0f;
-        obs[i++] = (npc->attack_style == ATTACK_STYLE_MAGIC) ? 1.0f : 0.0f;
-        obs[i++] = (float)npc->attack_timer / 8.0f;
+        col_write_npc_slot(s, &s->npcs[npc_idx], obs, &i);
     }
-    assert(i == COLO_PLAYER_OBS_SIZE + COLO_NPC_OBS_SIZE);
+    assert(i == COLO_OBS_AFTER_NPCS);
 
-    /* active modifier flags (COLO_NUM_MODIFIERS) */
-    for (int m = 0; m < COLO_NUM_MODIFIERS; m++)
+    /* modifiers: per-modifier active flag + tier, then draft state */
+    for (int m = 0; m < COLO_NUM_MODIFIERS; m++) {
         obs[i++] = (s->modifiers.active_mask & (1u << m)) ? 1.0f : 0.0f;
-    assert(i == COLO_PLAYER_OBS_SIZE + COLO_NPC_OBS_SIZE + COLO_MODIFIER_OBS_SIZE);
+        obs[i++] = col_clamp01((float)s->modifiers.tier[m] / 3.0f);
+    }
+    obs[i++] = s->modifiers.draft_pending ? 1.0f : 0.0f;
+    for (int o = 0; o < COLO_MODIFIER_DRAFT_OPTIONS; o++) {
+        int opt = s->modifiers.draft_options[o];
+        obs[i++] = (s->modifiers.draft_pending && opt >= 0)
+            ? (float)(opt + 1) / (float)COLO_NUM_MODIFIERS : 0.0f;
+    }
+    assert(i == COLO_OBS_AFTER_MODS);
 
     /* wave block (4) */
-    obs[i++] = (float)s->wave / (float)COLO_NUM_WAVES;
-    obs[i++] = (float)s->reinforcement_timer / (float)COLO_REINFORCEMENT_TICKS;
-    obs[i++] = s->modifiers.draft_pending ? 1.0f : 0.0f;
-    obs[i++] = (s->wave == COLO_WAVE_BOSS) ? 1.0f : 0.0f;
-    assert(i == COLO_PLAYER_OBS_SIZE + COLO_NPC_OBS_SIZE + COLO_MODIFIER_OBS_SIZE +
-        COLO_WAVE_OBS_SIZE);
+    int npcs_remaining = 0;
+    for (int n = 0; n < COLO_MAX_NPCS; n++)
+        if (s->npcs[n].active && s->npcs[n].death_ticks == 0) npcs_remaining++;
+    obs[i++] = col_clamp01((float)(s->wave + 1) / (float)COLO_NUM_WAVES);
+    obs[i++] = col_clamp01((float)npcs_remaining / (float)COLO_MAX_NPCS);
+    obs[i++] = (s->reinforcement_timer > 0)
+        ? col_clamp01((float)s->reinforcement_timer / (float)COLO_REINFORCEMENT_TICKS) : 0.0f;
+    obs[i++] = (s->wave_spawn_delay > 0 || s->wave_ready_delay > 0) ? 1.0f : 0.0f;
+    assert(i == COLO_OBS_AFTER_WAVE);
 
-    /* boss block (8) */
-    obs[i++] = (float)s->sol.phase / 6.0f;
-    obs[i++] = (float)s->sol.combo_len / (float)COLO_SOL_COMBO_QUEUE_MAX;
-    obs[i++] = (float)s->sol.combo_cursor / (float)COLO_SOL_COMBO_QUEUE_MAX;
-    obs[i++] = s->sol.parry_sequence_active ? 1.0f : 0.0f;
-    obs[i++] = (float)s->sol.parry_ticks_remaining / 8.0f;
-    obs[i++] = s->sol.grapple_active ? 1.0f : 0.0f;
-    obs[i++] = (float)s->sol.grapple_timer / 4.0f;
-    obs[i++] = (float)s->sol.hazard_tile_count / (float)COLO_SOL_HAZARD_TILES_MAX;
-    assert(i == COLO_PLAYER_OBS_SIZE + COLO_NPC_OBS_SIZE + COLO_MODIFIER_OBS_SIZE +
-        COLO_WAVE_OBS_SIZE + COLO_BOSS_OBS_SIZE);
+    /* boss block (45) */
+    col_write_boss_obs(s, obs, &i);
+    assert(i == COLO_OBS_AFTER_BOSS);
 
-    /* pending hits on player (COLO_FEATURES_PER_HIT * ENCOUNTER_MAX_PENDING_HITS) */
-    for (int h = 0; h < ENCOUNTER_MAX_PENDING_HITS; h++) {
-        if (h < s->player_pending_hits.count) {
-            const EncounterPendingHit* ph = &s->player_pending_hits.hits[h];
-            obs[i++] = ph->active ? 1.0f : 0.0f;
+    /* pending-hit forecast on the player (soonest-landing first) */
+    int order[ENCOUNTER_MAX_PENDING_HITS];
+    int nhits = col_collect_obs_pending_hits(s, order);
+    for (int h = 0; h < COLO_OBS_PENDING_HITS; h++) {
+        if (h < nhits) {
+            const EncounterPendingHit* ph = &s->player_pending_hits.hits[order[h]];
+            obs[i++] = 1.0f;
             obs[i++] = (ph->attack_style == ATTACK_STYLE_RANGED) ? 1.0f : 0.0f;
             obs[i++] = (ph->attack_style == ATTACK_STYLE_MAGIC) ? 1.0f : 0.0f;
-            obs[i++] = (float)ph->ticks_remaining / 10.0f;
-            obs[i++] = (float)ph->damage / 50.0f;
+            obs[i++] = (ph->attack_style == ATTACK_STYLE_MELEE) ? 1.0f : 0.0f;
+            obs[i++] = col_clamp01((float)ph->ticks_remaining / 10.0f);
+            obs[i++] = col_clamp01((float)ph->damage / 75.0f);
+            obs[i++] = col_pending_hit_ignores_prayer(ph) ? 1.0f : 0.0f;
         } else {
             i += COLO_FEATURES_PER_HIT;
         }
@@ -136,144 +413,4 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
 
 static void col_write_obs(EncounterState* state, float* obs) {
     col_write_obs_ctx(state, (EncounterContext*)col_legacy_context(), obs);
-}
-
-
-static void col_write_mask_ctx(EncounterState* state, EncounterContext* context, float* mask) {
-    ColosseumState* s = (ColosseumState*)state;
-    ColosseumContext* ctx = context ? (ColosseumContext*)context : col_legacy_context();
-    col_refresh_current_obs_slots_ctx(s, ctx);
-    int offset = 0;
-
-    /* HEAD_MOVE (25): idle always valid, walk/run valid iff target in-arena */
-    mask[offset++] = 1.0f;
-    for (int d = 1; d < ENCOUNTER_MOVE_ACTIONS; d++) {
-        int nx = s->player.x + ENCOUNTER_MOVE_TARGET_DX[d];
-        int ny = s->player.y + ENCOUNTER_MOVE_TARGET_DY[d];
-        mask[offset++] = col_in_arena(nx, ny) ? 1.0f : 0.0f;
-    }
-
-    /* HEAD_PRAYER (5): no_change, off, set melee/ranged/magic */
-    mask[offset++] = 1.0f;
-    mask[offset++] = s->player.prayer != PRAYER_NONE ? 1.0f : 0.0f;
-    mask[offset++] = s->player.current_prayer > 0 ? 1.0f : 0.0f;
-    mask[offset++] = s->player.current_prayer > 0 ? 1.0f : 0.0f;
-    mask[offset++] = s->player.current_prayer > 0 ? 1.0f : 0.0f;
-
-    /* HEAD_TARGET (COLO_OBS_NPCS+1): none valid, slot valid iff targetable */
-    mask[offset++] = 1.0f;
-    for (int n = 0; n < COLO_OBS_NPCS; n++)
-        mask[offset++] = col_obs_slot_is_targetable(s, n) ? 1.0f : 0.0f;
-
-    /* HEAD_GEAR (3): no_switch, melee, ranged */
-    mask[offset++] = 1.0f;
-    mask[offset++] = (s->weapon_set != COLO_GEAR_MELEE) ? 1.0f : 0.0f;
-    mask[offset++] = (s->weapon_set != COLO_GEAR_RANGED) ? 1.0f : 0.0f;
-
-    /* HEAD_EAT (2): none, eat */
-    mask[offset++] = 1.0f;
-    mask[offset++] = (s->player.food_count > 0 && s->player.food_timer == 0 &&
-                      s->player.current_hitpoints < s->player.base_hitpoints) ? 1.0f : 0.0f;
-
-    /* HEAD_POTION (2): none, drink */
-    mask[offset++] = 1.0f;
-    mask[offset++] = (s->player.restore_doses > 0 && s->player.potion_timer == 0) ? 1.0f : 0.0f;
-
-    /* HEAD_SPEC (2): no_change, toggle */
-    mask[offset++] = 1.0f;
-    mask[offset++] = (s->player.special_energy >= 25) ? 1.0f : 0.0f;
-
-    /* HEAD_MODIFIER_SELECT (4): none + pick option 0/1/2, valid only during a draft */
-    mask[offset++] = 1.0f;
-    for (int o = 0; o < COLO_MODIFIER_DRAFT_OPTIONS; o++)
-        mask[offset++] = (s->modifiers.draft_pending && s->modifiers.draft_options[o] >= 0)
-            ? 1.0f : 0.0f;
-
-    if (offset != COLO_ACTION_MASK_SIZE) {
-        fprintf(stderr, "colosseum mask index mismatch: wrote %d, expected %d\n",
-            offset, COLO_ACTION_MASK_SIZE);
-        abort();
-    }
-}
-
-static void col_write_mask(EncounterState* state, float* mask) {
-    col_write_mask_ctx(state, (EncounterContext*)col_legacy_context(), mask);
-}
-
-
-static float col_get_reward_ctx(EncounterState* state, EncounterContext* context) {
-    (void)context;
-    return ((ColosseumState*)state)->reward;
-}
-
-static int col_is_terminal_ctx(EncounterState* state, EncounterContext* context) {
-    (void)context;
-    return ((ColosseumState*)state)->episode_over;
-}
-
-static int col_get_entity_count_ctx(EncounterState* state, EncounterContext* context) {
-    (void)context;
-    ColosseumState* s = (ColosseumState*)state;
-    int count = 1;
-    for (int i = 0; i < COLO_MAX_NPCS; i++)
-        if (s->npcs[i].active) count++;
-    return count;
-}
-
-static void* col_get_entity_ctx(EncounterState* state, EncounterContext* context, int index) {
-    (void)context;
-    ColosseumState* s = (ColosseumState*)state;
-    if (index == 0) return &s->player;
-    return NULL;
-}
-
-/** populate render entities (player + active NPCs). */
-static void col_fill_render_entities_ctx(
-    EncounterState* state,
-    EncounterContext* context,
-    RenderEntity* out,
-    int max_entities,
-    int* count
-) {
-    (void)context;
-    ColosseumState* s = (ColosseumState*)state;
-    const EncounterLoadoutStats* ls = &s->loadout_stats[s->weapon_set];
-    s->player.gui_max_hit = ls->max_hit;
-    s->player.gui_attack_speed = ls->attack_speed;
-    s->player.gui_attack_range = ls->attack_range;
-    s->player.gui_strength_bonus = ls->strength_bonus;
-
-    int n = 0;
-    if (n < max_entities)
-        osrs_render_entity_from_player_entity(&s->player, &out[n++]);
-
-    for (int i = 0; i < COLO_MAX_NPCS && n < max_entities; i++) {
-        ColoNPC* npc = &s->npcs[i];
-        if (!npc->active) continue;
-        RenderEntity* re = &out[n++];
-        osrs_render_entity_from_npc_spec(&(OsrsNpcRenderEntitySpec){
-            .npc_def_id = COLO_NPC_DEF_IDS[npc->type],
-            .npc_slot = i,
-            .npc_instance_id = npc->render_id,
-            .npc_visible = npc->active,
-            .npc_size = npc->size,
-            .npc_anim_id = -1,
-            .x = npc->x,
-            .y = npc->y,
-            .dest_x = npc->target_x,
-            .dest_y = npc->target_y,
-            .current_hitpoints = npc->hp,
-            .base_hitpoints = npc->max_hp,
-            .attack_style_this_tick = npc->attacked_this_tick
-                ? npc->attack_style_this_tick : ATTACK_STYLE_NONE,
-            .hit_landed_this_tick = npc->hit_landed_this_tick,
-            .hit_damage = npc->hit_damage,
-            .hit_was_successful = npc->hit_was_successful_this_tick,
-            .hit_spell_type = npc->hit_spell_type,
-            .attack_target_entity_idx = 0,
-        }, re);
-    }
-
-    encounter_resolve_attack_target(out, n, s->interaction.target_slot);
-    *count = n;
 }

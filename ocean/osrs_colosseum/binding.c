@@ -240,6 +240,7 @@ void my_init(Env* env, Dict* kwargs) {
         "wave_clear_bonus",
         "boss_phase_bonus",
         "win_bonus",
+        "prayer_correct_reward",
         "death_penalty_coeff",
     };
     for (size_t k = 0; k < sizeof(optional_float_keys) / sizeof(*optional_float_keys); k++) {

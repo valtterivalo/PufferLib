@@ -23,7 +23,7 @@
 #define COLO_WAVE_BOSS      (COLO_NUM_WAVES - 1)  /* wave index 11 = Sol Heredit */
 #define COLO_START_READY_TICKS 6
 #define COLO_REINFORCEMENT_TICKS 66   /* 40s reinforcement cadence */
-#define COLO_NUM_ACTION_HEADS 8
+#define COLO_NUM_ACTION_HEADS 9
 
 /* max active NPCs at once + obs slot count (one obs slot per active NPC) */
 #define COLO_MAX_NPCS 24
@@ -593,15 +593,18 @@ static const uint8_t* const COLO_LOADOUTS[COLO_NUM_WEAPON_SETS] = {
 };
 
 
-/** Colosseum env-knob struct. Scaffold reward terms; the lead tunes these. */
+/** Colosseum env-knob struct. Sparse-leaning reward terms; the lead tunes these.
+    Dense damage terms stay small (PPO clamps per-step rewards). Death/terminal
+    penalty defaults off to avoid suicide-perversity (sparse > dense). */
 typedef struct {
     int start_wave;        /* internal wave index (0-based) */
-    float damage_reward_coeff;
-    float boss_damage_reward_coeff;
-    float wave_clear_bonus;
-    float boss_phase_bonus;
-    float win_bonus;
-    float death_penalty_coeff;
+    float damage_reward_coeff;       /* per-point reward for damage dealt to NPCs */
+    float boss_damage_reward_coeff;  /* per-point reward for damage dealt to Sol */
+    float wave_clear_bonus;          /* added on top of the +1 each wave cleared */
+    float boss_phase_bonus;          /* per Sol HP-threshold phase crossed */
+    float win_bonus;                 /* on Sol death (wave 12 cleared) */
+    float prayer_correct_reward;     /* per correctly-prayed incoming hit */
+    float death_penalty_coeff;       /* magnitude of the death reward when enabled */
     int terminal_penalty_enabled;
     int curriculum_agent;
 } ColConfig;
@@ -674,6 +677,7 @@ typedef struct {
     float reward;
     float episode_return;
     int last_hit_by_type;     /* NPC type that last damaged the player (-1 = none) */
+    int rewarded_boss_phase;  /* highest Sol phase already paid a boss_phase_bonus */
 
     /* player combat state */
     OsrsInteraction interaction;

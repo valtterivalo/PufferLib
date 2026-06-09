@@ -94,6 +94,7 @@ static ColConfig col_default_config(void) {
         .wave_clear_bonus = 0.0f,
         .boss_phase_bonus = 0.0f,
         .win_bonus = 0.0f,
+        .prayer_correct_reward = 0.0f,
         .death_penalty_coeff = 0.0f,
         .terminal_penalty_enabled = 0,
         .curriculum_agent = 0,
