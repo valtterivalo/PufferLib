@@ -44,26 +44,39 @@ static void col_queue_npc_pending_hit(
         &npc->pending_hits, hit, "colosseum-npc", s->tick, npc_slot, npc->type);
 }
 
-/** queue an NPC-attack hit on the player's pending-hit queue. */
+/** queue an NPC-attack hit on the player's pending-hit queue.
+
+    check_prayer=1 + prayer_check_delay defers the Protect-from-X test to land time
+    (the shared resolver re-checks at T+prayer_check_delay, or at landing when the
+    delay is 0), so prayer flicking matters for projectile attacks. Set
+    ignore_prayer for hits that bypass Protect (e.g. javelin skyfall) by passing
+    check_prayer=0 with a non-prayer style. */
 static void col_queue_player_pending_hit(
     ColosseumState* s,
     int source_npc_slot,
+    int source_npc_type,
     int damage,
     int ticks,
     AttackStyle style,
-    int check_prayer
+    int check_prayer,
+    int hit_success
 ) {
     EncounterPendingHit hit = {
         .active = 1,
         .damage = damage,
         .ticks_remaining = ticks,
         .attack_style = style,
-        .spell_type = ENCOUNTER_SPELL_NONE,
         .check_prayer = check_prayer,
+        .prayer_check_delay = 0,
+        .spell_type = ENCOUNTER_SPELL_NONE,
+        .source_npc_type = source_npc_type,
         .source_npc_slot = source_npc_slot,
+        .hit_success = hit_success,
+        .elysian_reduced = 0,
     };
     encounter_pending_hit_queue_push(
-        &s->player_pending_hits, hit, "colosseum-player", s->tick, source_npc_slot, 0);
+        &s->player_pending_hits, hit, "colosseum-player", s->tick, source_npc_slot,
+        source_npc_type);
 }
 
 

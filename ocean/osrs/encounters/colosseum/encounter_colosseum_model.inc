@@ -3,9 +3,9 @@
  * @file encounter_colosseum_model.inc
  * @brief Colosseum data model: arena, NPC roster, wave defs, state structs.
  *
- * Scaffold values are placeholders. col_build_npc_stats() returns small constant
- * stats the lead replaces with wiki values. The struct layout, union accessors,
- * and obs/action constants are final.
+ * NPC combat stats are the canonical COLO_NPC_BASE table (refs/osrs-dps-calc,
+ * cross-checked vs wiki) merged with a behavior overlay by col_build_npc_stats().
+ * The wave roster, modifiers, and Sol boss sub-state are later phases.
  */
 
 #define COLO_ARENA_MIN_X    0
@@ -71,7 +71,9 @@ static const char* colo_npc_type_name(int type) {
     }
 }
 
-/** resolved per-type combat stats, populated at startup by col_build_npc_stats(). */
+/** resolved per-type combat stats, populated at startup by col_build_npc_stats().
+    accuracy is driven by levels + bonuses through the shared NPC roll; damage is
+    driven by the Jagex-handset max_hit, never recomputed from levels. */
 typedef struct {
     int hp;
     int attack_speed;
@@ -84,69 +86,114 @@ typedef struct {
     int att_level, str_level, def_level, range_level, magic_level;
     int melee_att_bonus, range_att_bonus, magic_att_bonus;
     int melee_str_bonus, ranged_str_bonus;
-    int magic_base_dmg, magic_dmg_pct;
     int stab_def, slash_def, crush_def, magic_def_bonus, ranged_def_bonus;
 
-    int max_hit_cap;     /* 0 = no cap, >0 = clamp formula result */
+    int max_hit;         /* Jagex handset max hit for the default attack */
+    AttackStyle player_style_that_max_hits;  /* RPS weakness, ATTACK_STYLE_NONE = none */
     int stun_on_spawn;
     int can_move;
 } ColoNpcStats;
 
-/** encounter-specific overlay merged on top of the generated monster database. */
+/** encounter-specific behavior overlay merged on top of COLO_NPC_BASE stats. */
 typedef struct {
     int attack_range;
     AttackStyle default_style;
     MeleeStyle melee_style;
     int can_melee;
-    int magic_base_dmg;
-    int magic_dmg_pct;
-    int max_hit_cap;
+    AttackStyle player_style_that_max_hits;
     int stun_on_spawn;
     int can_move;
 } ColoNpcOverlay;
 
-/** maps ColoNpcType -> MonsterIndex for MONSTER_DATABASE lookup. Placeholder
-    rows reuse inferno monster ids until COLO mobs are added to monsters.json. */
-static const MonsterIndex COLO_NPC_TO_MON[COLO_NUM_NPC_TYPES] = {
-    [COLO_FREMENNIK_BERSERKER] = MON_JAL_IMKOT,
-    [COLO_FREMENNIK_ARCHER]    = MON_JAL_XIL,
-    [COLO_FREMENNIK_SEER]      = MON_JAL_ZEK,
-    [COLO_SERPENT_SHAMAN]      = MON_JAL_ZEK,
-    [COLO_JAGUAR_WARRIOR]      = MON_JAL_IMKOT,
-    [COLO_JAVELIN_COLOSSUS]    = MON_JAL_XIL,
-    [COLO_SHOCKWAVE_COLOSSUS]  = MON_JALTOK_JAD,
-    [COLO_MINOTAUR]            = MON_JAL_IMKOT,
-    [COLO_MANTICORE]           = MON_JALTOK_JAD,
-    [COLO_SOL_HEREDIT]         = MON_TZKAL_ZUK,
+/** Canonical Fortis Colosseum NPC combat stats (refs/osrs-dps-calc, cross-checked
+    vs OSRS wiki). Self-contained: the shared combat fns take plain ints, so
+    Colosseum needs no MONSTER_DATABASE entry. Field order follows MonsterStats. */
+static const MonsterStats COLO_NPC_BASE[COLO_NUM_NPC_TYPES] = {
+    [COLO_FREMENNIK_BERSERKER] = { .npc_id=12816, .name="Fremennik berserker",
+        .hp=48, .att_level=110,.str_level=110,.def_level=80,.magic_level=110,.range_level=110,
+        .attack_speed=6,.size=1,.max_hit=29,
+        .melee_att_bonus=150,.melee_str_bonus=90,.magic_att_bonus=150,.magic_str_bonus=0,.range_att_bonus=0,.ranged_str_bonus=0,
+        .stab_def=50,.slash_def=50,.crush_def=50,.magic_def=0,.ranged_def=75 },
+    [COLO_FREMENNIK_ARCHER] = { .npc_id=12814, .name="Fremennik archer",
+        .hp=50, .att_level=110,.str_level=110,.def_level=80,.magic_level=110,.range_level=110,
+        .attack_speed=6,.size=1,.max_hit=14,
+        .melee_att_bonus=150,.melee_str_bonus=150,.magic_att_bonus=150,.magic_str_bonus=0,.range_att_bonus=150,.ranged_str_bonus=10,
+        .stab_def=0,.slash_def=0,.crush_def=0,.magic_def=75,.ranged_def=50 },
+    [COLO_FREMENNIK_SEER] = { .npc_id=12815, .name="Fremennik seer",
+        .hp=50, .att_level=110,.str_level=110,.def_level=80,.magic_level=110,.range_level=110,
+        .attack_speed=6,.size=1,.max_hit=12,
+        .melee_att_bonus=0,.melee_str_bonus=0,.magic_att_bonus=150,.magic_str_bonus=0,.range_att_bonus=0,.ranged_str_bonus=0,
+        .stab_def=50,.slash_def=50,.crush_def=50,.magic_def=30,.ranged_def=0 },
+    [COLO_SERPENT_SHAMAN] = { .npc_id=12811, .name="Serpent shaman",
+        .hp=125, .att_level=100,.str_level=90,.def_level=90,.magic_level=220,.range_level=160,
+        .attack_speed=5,.size=1,.max_hit=28,
+        .melee_att_bonus=0,.melee_str_bonus=0,.magic_att_bonus=50,.magic_str_bonus=15,.range_att_bonus=0,.ranged_str_bonus=0,
+        .stab_def=30,.slash_def=30,.crush_def=30,.magic_def=15,.ranged_def=50 },
+    [COLO_JAGUAR_WARRIOR] = { .npc_id=12810, .name="Jaguar warrior",
+        .hp=125, .att_level=200,.str_level=330,.def_level=125,.magic_level=100,.range_level=160,
+        .attack_speed=5,.size=2,.max_hit=47,
+        .melee_att_bonus=0,.melee_str_bonus=25,.magic_att_bonus=0,.magic_str_bonus=0,.range_att_bonus=0,.ranged_str_bonus=0,
+        .stab_def=30,.slash_def=30,.crush_def=30,.magic_def=15,.ranged_def=45 },
+    [COLO_JAVELIN_COLOSSUS] = { .npc_id=12817, .name="Javelin Colossus",
+        .hp=220, .att_level=200,.str_level=300,.def_level=190,.magic_level=225,.range_level=360,
+        .attack_speed=5,.size=3,.max_hit=48,
+        .melee_att_bonus=0,.melee_str_bonus=0,.magic_att_bonus=0,.magic_str_bonus=0,.range_att_bonus=25,.ranged_str_bonus=20,
+        .stab_def=15,.slash_def=15,.crush_def=15,.magic_def=20,.ranged_def=30 },
+    [COLO_SHOCKWAVE_COLOSSUS] = { .npc_id=12819, .name="Shockwave Colossus",
+        .hp=125, .att_level=120,.str_level=190,.def_level=150,.magic_level=350,.range_level=220,
+        .attack_speed=5,.size=3,.max_hit=56,
+        .melee_att_bonus=0,.melee_str_bonus=0,.magic_att_bonus=55,.magic_str_bonus=35,.range_att_bonus=0,.ranged_str_bonus=0,
+        .stab_def=15,.slash_def=15,.crush_def=15,.magic_def=5,.ranged_def=35 },
+    [COLO_MINOTAUR] = { .npc_id=12812, .name="Minotaur",
+        .hp=225, .att_level=300,.str_level=360,.def_level=190,.magic_level=250,.range_level=120,
+        .attack_speed=5,.size=3,.max_hit=74,
+        .melee_att_bonus=15,.melee_str_bonus=64,.magic_att_bonus=0,.magic_str_bonus=0,.range_att_bonus=0,.ranged_str_bonus=0,
+        .stab_def=0,.slash_def=0,.crush_def=0,.magic_def=0,.ranged_def=12 },
+    [COLO_MANTICORE] = { .npc_id=12818, .name="Manticore",
+        .hp=250, .att_level=300,.str_level=300,.def_level=250,.magic_level=300,.range_level=350,
+        .attack_speed=10,.size=3,.max_hit=36, /* per-style rng36/mag31/melee31 set in barrage logic */
+        .melee_att_bonus=0,.melee_str_bonus=0,.magic_att_bonus=0,.magic_str_bonus=0,.range_att_bonus=0,.ranged_str_bonus=0,
+        .stab_def=0,.slash_def=0,.crush_def=0,.magic_def=10,.ranged_def=25 },
+    [COLO_SOL_HEREDIT] = { .npc_id=12821, .name="Sol Heredit",
+        .hp=1500, .att_level=350,.str_level=400,.def_level=200,.magic_level=300,.range_level=350,
+        .attack_speed=5,.size=5,.max_hit=44, /* AoE/grapple 44; TP combos handled in boss logic */
+        .melee_att_bonus=250,.melee_str_bonus=5,.magic_att_bonus=0,.magic_str_bonus=0,.range_att_bonus=150,.ranged_str_bonus=5,
+        .stab_def=65,.slash_def=5,.crush_def=30,.magic_def=750,.ranged_def=825 },
 };
 
-/** encounter overlay extras. Placeholder values; the lead replaces with wiki data. */
+/** per-style barrage max hits for the Manticore (mechanics-to-code.md). */
+#define COLO_MANTICORE_MAX_HIT_RANGED 36
+#define COLO_MANTICORE_MAX_HIT_MAGIC  31
+#define COLO_MANTICORE_MAX_HIT_MELEE  31
+
+/** encounter behavior overlay. attack_range/default_style/RPS weakness per type;
+    Sol can_move=0 (boss logic drives it later). magic damage is the handset
+    max_hit, so no base/pct fields are needed here. */
 static const ColoNpcOverlay COLO_NPC_OVERLAY[COLO_NUM_NPC_TYPES] = {
-    [COLO_FREMENNIK_BERSERKER] = { 1, ATTACK_STYLE_MELEE,  MELEE_STYLE_SLASH, 0,  0,   0, 0, 0, 1 },
-    [COLO_FREMENNIK_ARCHER]    = { 7, ATTACK_STYLE_RANGED, MELEE_STYLE_STAB,  0,  0,   0, 0, 0, 1 },
-    [COLO_FREMENNIK_SEER]      = { 7, ATTACK_STYLE_MAGIC,  MELEE_STYLE_STAB,  0,  10, 100, 0, 0, 1 },
-    [COLO_SERPENT_SHAMAN]      = { 7, ATTACK_STYLE_MAGIC,  MELEE_STYLE_STAB,  0,  10, 100, 0, 0, 1 },
-    [COLO_JAGUAR_WARRIOR]      = { 1, ATTACK_STYLE_MELEE,  MELEE_STYLE_SLASH, 0,  0,   0, 0, 0, 1 },
-    [COLO_JAVELIN_COLOSSUS]    = { 10, ATTACK_STYLE_RANGED, MELEE_STYLE_STAB, 0,  0,   0, 0, 0, 1 },
-    [COLO_SHOCKWAVE_COLOSSUS]  = { 1, ATTACK_STYLE_MELEE,  MELEE_STYLE_CRUSH, 1,  0,   0, 0, 0, 1 },
-    [COLO_MINOTAUR]            = { 1, ATTACK_STYLE_MELEE,  MELEE_STYLE_CRUSH, 0,  0,   0, 0, 0, 1 },
-    [COLO_MANTICORE]           = { 10, ATTACK_STYLE_MAGIC, MELEE_STYLE_STAB,  0,  10, 100, 0, 0, 1 },
-    [COLO_SOL_HEREDIT]         = { 1, ATTACK_STYLE_MELEE,  MELEE_STYLE_STAB,  1,  0,   0, 0, 0, 0 },
+    [COLO_FREMENNIK_BERSERKER] = { .attack_range=1,  .default_style=ATTACK_STYLE_MELEE,  .melee_style=MELEE_STYLE_STAB,  .can_melee=1, .player_style_that_max_hits=ATTACK_STYLE_MAGIC,  .can_move=1 },
+    [COLO_FREMENNIK_ARCHER]    = { .attack_range=10, .default_style=ATTACK_STYLE_RANGED, .melee_style=MELEE_STYLE_STAB,  .can_melee=0, .player_style_that_max_hits=ATTACK_STYLE_MELEE,  .can_move=1 },
+    [COLO_FREMENNIK_SEER]      = { .attack_range=10, .default_style=ATTACK_STYLE_MAGIC,  .melee_style=MELEE_STYLE_STAB,  .can_melee=0, .player_style_that_max_hits=ATTACK_STYLE_RANGED, .can_move=1 },
+    [COLO_SERPENT_SHAMAN]      = { .attack_range=10, .default_style=ATTACK_STYLE_MAGIC,  .melee_style=MELEE_STYLE_STAB,  .can_melee=0, .player_style_that_max_hits=ATTACK_STYLE_NONE,  .can_move=1 },
+    [COLO_JAGUAR_WARRIOR]      = { .attack_range=1,  .default_style=ATTACK_STYLE_MELEE,  .melee_style=MELEE_STYLE_SLASH, .can_melee=1, .player_style_that_max_hits=ATTACK_STYLE_NONE,  .can_move=1 },
+    [COLO_JAVELIN_COLOSSUS]    = { .attack_range=15, .default_style=ATTACK_STYLE_RANGED, .melee_style=MELEE_STYLE_STAB,  .can_melee=0, .player_style_that_max_hits=ATTACK_STYLE_NONE,  .can_move=1 },
+    [COLO_SHOCKWAVE_COLOSSUS]  = { .attack_range=15, .default_style=ATTACK_STYLE_MAGIC,  .melee_style=MELEE_STYLE_STAB,  .can_melee=0, .player_style_that_max_hits=ATTACK_STYLE_NONE,  .can_move=1 },
+    [COLO_MINOTAUR]            = { .attack_range=1,  .default_style=ATTACK_STYLE_MELEE,  .melee_style=MELEE_STYLE_CRUSH, .can_melee=1, .player_style_that_max_hits=ATTACK_STYLE_NONE,  .can_move=1 },
+    [COLO_MANTICORE]           = { .attack_range=15, .default_style=ATTACK_STYLE_RANGED, .melee_style=MELEE_STYLE_STAB,  .can_melee=1, .player_style_that_max_hits=ATTACK_STYLE_NONE,  .can_move=1 },
+    [COLO_SOL_HEREDIT]         = { .attack_range=1,  .default_style=ATTACK_STYLE_MELEE,  .melee_style=MELEE_STYLE_SLASH, .can_melee=1, .player_style_that_max_hits=ATTACK_STYLE_NONE,  .can_move=0 },
 };
 
 /** populated at startup by col_build_npc_stats(). */
 static ColoNpcStats COLO_NPC_STATS[COLO_NUM_NPC_TYPES];
 
 /**
- * Merge MONSTER_DATABASE + COLO_NPC_OVERLAY into COLO_NPC_STATS.
+ * Merge COLO_NPC_BASE + COLO_NPC_OVERLAY into COLO_NPC_STATS.
  *
- * Scaffold stub: produces placeholder stats so combat/obs compile and run. The
- * lead replaces the per-type values with exact OSRS Wiki numbers (HP, levels,
- * bonuses, max-hit caps) when wiring real combat.
+ * Accuracy stays level + bonus driven (shared NPC roll); damage uses the handset
+ * max_hit. No max-hit formula is run for these NPCs.
  */
 static void col_build_npc_stats(void) {
     for (int i = 0; i < COLO_NUM_NPC_TYPES; i++) {
-        const MonsterStats* m = &MONSTER_DATABASE[COLO_NPC_TO_MON[i]];
+        const MonsterStats* m = &COLO_NPC_BASE[i];
         const ColoNpcOverlay* o = &COLO_NPC_OVERLAY[i];
         ColoNpcStats* s = &COLO_NPC_STATS[i];
 
@@ -168,14 +215,13 @@ static void col_build_npc_stats(void) {
         s->crush_def       = m->crush_def;
         s->magic_def_bonus = m->magic_def;
         s->ranged_def_bonus = m->ranged_def;
+        s->max_hit         = m->max_hit;
 
         s->attack_range    = o->attack_range;
         s->default_style   = o->default_style;
         s->melee_style     = o->melee_style;
         s->can_melee       = o->can_melee;
-        s->magic_base_dmg  = o->magic_base_dmg;
-        s->magic_dmg_pct   = o->magic_dmg_pct;
-        s->max_hit_cap     = o->max_hit_cap;
+        s->player_style_that_max_hits = o->player_style_that_max_hits;
         s->stun_on_spawn   = o->stun_on_spawn;
         s->can_move        = o->can_move;
     }
@@ -266,17 +312,34 @@ typedef struct {
 } SolHereditState;
 
 
-/** berserker/jaguar 3-hit combo state. valid iff type is COLO_JAGUAR_WARRIOR;
-    reach it through colo_npc_jaguar(). */
+/** jaguar 3-hit combo state. valid iff type is COLO_JAGUAR_WARRIOR;
+    reach it through colo_npc_jaguar(). The 3 hits resolve in one attack cycle, so
+    no per-hit cursor persists across ticks. Placeholder field keeps the union
+    arm non-empty for future combo extensions. */
 typedef struct {
-    int combo_step;            /* which hit of the 3-hit combo is next */
+    int unused;
 } ColoJaguarState;
 
-/** manticore 3-style barrage cycle. valid iff type is COLO_MANTICORE;
-    reach it through colo_npc_manticore(). */
+/** manticore 3-orb barrage cycle. valid iff type is COLO_MANTICORE; reach it
+    through colo_npc_manticore(). cycle_step counts ticks within a barrage:
+    -1 = idle (waiting on attack_timer), 0/1/2 = next orb to fire 1 tick apart.
+    orb_style holds the resolved per-orb styles (orbs 0&1 are {ranged,magic} in
+    random order, orb 2 is always melee). */
 typedef struct {
-    int cycle_step;            /* 0=magic, 1=ranged, 2=melee in the barrage cycle */
+    int cycle_step;
+    AttackStyle orb_style[3];
 } ColoManticoreState;
+
+/** javelin skyfall cadence. valid iff type is COLO_JAVELIN_COLOSSUS; reach it
+    through colo_npc_javelin(). skyfall fires on every 5th throw; the marked tile
+    lands COLO_JAVELIN_SKYFALL_DELAY ticks later, ignoring Protect-from-Missiles. */
+typedef struct {
+    int attack_count;          /* throws since spawn; every 5th is a skyfall */
+    int skyfall_pending;       /* 1 while a marked tile is in flight */
+    int skyfall_tile_x, skyfall_tile_y;
+    int skyfall_timer;         /* ticks until the marked tile lands */
+    int skyfall_damage;        /* damage rolled at mark time */
+} ColoJavelinState;
 
 
 /** single struct for every Colosseum monster; `type` is the discriminant.
@@ -299,6 +362,7 @@ typedef struct {
     union {
         ColoJaguarState jaguar;       /* COLO_JAGUAR_WARRIOR */
         ColoManticoreState manticore; /* COLO_MANTICORE */
+        ColoJavelinState javelin;     /* COLO_JAVELIN_COLOSSUS */
     } type_state;
 
     EncounterPendingHitQueue pending_hits;
@@ -327,15 +391,31 @@ static inline ColoManticoreState* colo_npc_manticore(ColoNPC* npc) {
     return &npc->type_state.manticore;
 }
 
+static inline ColoJavelinState* colo_npc_javelin(ColoNPC* npc) {
+    assert(npc->type == COLO_JAVELIN_COLOSSUS);
+    return &npc->type_state.javelin;
+}
+
+/** ticks the marked skyfall tile lands after the javelin throws it. */
+#define COLO_JAVELIN_SKYFALL_DELAY 3
+/** a ready manticore delays its barrage start while another is mid-barrage. */
+#define COLO_MANTICORE_STAGGER_TICKS 5
+
 /** write the spawn-time defaults for npc->type's type_state arm. caller must
     have zeroed the NPC and set npc->type first. */
 static void colo_npc_init_type_state(ColoNPC* npc) {
     switch (npc->type) {
         case COLO_JAGUAR_WARRIOR:
-            npc->type_state.jaguar = (ColoJaguarState){ .combo_step = 0 };
+            npc->type_state.jaguar = (ColoJaguarState){0};
             break;
         case COLO_MANTICORE:
-            npc->type_state.manticore = (ColoManticoreState){ .cycle_step = 0 };
+            npc->type_state.manticore = (ColoManticoreState){
+                .cycle_step = -1,
+                .orb_style = { ATTACK_STYLE_NONE, ATTACK_STYLE_NONE, ATTACK_STYLE_NONE },
+            };
+            break;
+        case COLO_JAVELIN_COLOSSUS:
+            npc->type_state.javelin = (ColoJavelinState){0};
             break;
         default:
             break;

@@ -18,6 +18,14 @@ static int col_player_walkable(void* ctx, int x, int y) {
     return s->player_collision_flags[gx][gy] ? 0 : 1;
 }
 
+/** open arena: no LoS blockers, so an NPC has line of sight whenever in range.
+    kept as a named predicate so adding pillars later is a one-line change. */
+static int col_npc_has_los_to_player(const ColosseumState* s, const ColoNPC* npc) {
+    (void)s;
+    (void)npc;
+    return 1;
+}
+
 /** NPC-blocked callback (size-aware) for the shared chase step. */
 static int col_npc_blocked(void* ctx, int x, int y, int size) {
     ColosseumState* s = (ColosseumState*)ctx;
@@ -32,7 +40,11 @@ static int col_npc_blocked(void* ctx, int x, int y, int size) {
     return 0;
 }
 
-/** per-NPC movement: step toward the player while not stunned or frozen. */
+/** per-NPC movement: simple chase toward the player (no obstacle routefinding,
+    matching the wiki default). Melee NPCs path into cardinal melee contact; ranged
+    NPCs (serpent/archer/seer/manticore/javelin/shockwave) hold once within
+    attack_range AND in line of sight, else step closer. Multi-tile NPCs use the
+    shared size-aware step. */
 static void col_npc_move_ctx(ColosseumState* s, ColosseumContext* ctx, int idx) {
     (void)ctx;
     ColoNPC* npc = &s->npcs[idx];
@@ -45,9 +57,18 @@ static void col_npc_move_ctx(ColosseumState* s, ColosseumContext* ctx, int idx) 
     npc->target_x = tx;
     npc->target_y = ty;
 
+    int is_ranged = st->attack_range > 1;
+    if (is_ranged) {
+        int dist = encounter_dist_to_npc(s->player.x, s->player.y, npc->x, npc->y, size);
+        if (dist >= 1 && dist <= st->attack_range && col_npc_has_los_to_player(s, npc)) {
+            npc->moved_this_tick = 0;
+            return;  /* in range with LoS: hold position */
+        }
+    }
+
     col_stamp_npc_collision_footprint(s, npc->x, npc->y, size, 0);
     int moved = encounter_npc_step_toward(
-        &npc->x, &npc->y, tx, ty, size, 1, 1, col_npc_blocked, s);
+        &npc->x, &npc->y, tx, ty, size, 1, is_ranged ? 0 : 1, col_npc_blocked, s);
     col_stamp_npc_collision_footprint(s, npc->x, npc->y, size, 1);
     npc->moved_this_tick = moved ? 1 : 0;
 }

@@ -102,21 +102,30 @@ static int col_obs_slot_to_npc(const ColosseumState* s, int obs_slot) {
 
 
 /**
- * Resolve a player attack on the targeted NPC. Scaffold: rolls accuracy + damage
- * via shared combat math and queues a pending hit. The lead refines style/spec
- * handling and special weapons.
+ * Resolve a player attack on the targeted NPC. Rolls accuracy + damage via the
+ * shared combat math and queues a pending hit. Honors the Fremennik RPS weakness:
+ * when the player's style matches the NPC's player_style_that_max_hits, the hit is
+ * a forced max (full accuracy + max damage).
  */
 static void col_player_attack_target(ColosseumState* s, int npc_slot) {
     ColoNPC* npc = &s->npcs[npc_slot];
     const ColoNpcStats* ns = &COLO_NPC_STATS[npc->type];
     const EncounterLoadoutStats* ls = &s->loadout_stats[s->weapon_set];
 
-    int def_bonus = ls->style == ATTACK_STYLE_MAGIC ? ns->magic_def_bonus
-        : ls->style == ATTACK_STYLE_RANGED ? ns->ranged_def_bonus
-        : ns->stab_def;
-    int target_def_roll = (ns->def_level + 9) * (def_bonus + 64);
-    int att_roll = osrs_player_att_roll(ls->eff_level, ls->attack_bonus);
-    int damage = encounter_npc_roll_attack(att_roll, target_def_roll, ls->max_hit, &s->rng_state);
+    int rps_max_hit = ns->player_style_that_max_hits != ATTACK_STYLE_NONE &&
+                      ns->player_style_that_max_hits == ls->style;
+
+    int damage;
+    if (rps_max_hit) {
+        damage = ls->max_hit;
+    } else {
+        int def_bonus = ls->style == ATTACK_STYLE_MAGIC ? ns->magic_def_bonus
+            : ls->style == ATTACK_STYLE_RANGED ? ns->ranged_def_bonus
+            : ns->stab_def;
+        int target_def_roll = (ns->def_level + 9) * (def_bonus + 64);
+        int att_roll = osrs_player_att_roll(ls->eff_level, ls->attack_bonus);
+        damage = encounter_npc_roll_attack(att_roll, target_def_roll, ls->max_hit, &s->rng_state);
+    }
 
     int ticks = ls->attack_range > 1 ? 3 : 1;
     col_queue_npc_pending_hit(s, npc_slot, damage, ticks, ls->style, ENCOUNTER_SPELL_NONE);
