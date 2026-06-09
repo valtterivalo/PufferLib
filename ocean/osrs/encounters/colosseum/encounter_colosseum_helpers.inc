@@ -20,6 +20,12 @@ static void col_rebuild_player_collision_flags(ColosseumState* s);
 static void col_refresh_current_obs_slots_ctx(ColosseumState* s, const ColosseumContext* ctx);
 static float col_terminal_loss_reward(const ColosseumState* s, const ColosseumContext* ctx);
 
+/* Sol Heredit boss machine (encounter_colosseum_boss.inc, included after combat). */
+static void col_sol_boss_tick(ColosseumState* s, ColosseumContext* ctx);
+static void col_sol_begin_boss_arena(ColosseumState* s);
+static int col_sol_clamp_active(const ColosseumState* s);
+static int col_in_boss_arena(const ColosseumState* s, int x, int y);
+
 
 /** queue a player-attack hit on an NPC's pending-hit queue. */
 static void col_queue_npc_pending_hit(

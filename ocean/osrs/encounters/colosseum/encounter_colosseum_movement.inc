@@ -9,10 +9,22 @@ static int col_in_arena(int x, int y) {
            y >= COLO_ARENA_MIN_Y && y <= COLO_ARENA_MAX_Y;
 }
 
-/** player-walkability callback for shared movement helpers. */
+/** a tile is a Sol pillar (1x1 LoS blocker, also blocks movement) iff the boss
+    arena is active and (x, y) matches one of the four pillar positions. */
+static int col_is_boss_pillar(const ColosseumState* s, int x, int y) {
+    if (!col_sol_clamp_active(s)) return 0;
+    for (int p = 0; p < COLO_BOSS_NUM_PILLARS; p++)
+        if (COLO_BOSS_PILLARS[p][0] == x && COLO_BOSS_PILLARS[p][1] == y) return 1;
+    return 0;
+}
+
+/** player-walkability callback for shared movement helpers. During wave 12 the
+    player is confined to the boss arena and cannot stand on a pillar tile. */
 static int col_player_walkable(void* ctx, int x, int y) {
     ColosseumState* s = (ColosseumState*)ctx;
     if (!col_in_arena(x, y)) return 0;
+    if (col_sol_clamp_active(s) && !col_in_boss_arena(s, x, y)) return 0;
+    if (col_is_boss_pillar(s, x, y)) return 0;
     int gx, gy;
     if (!col_grid_index(x, y, &gx, &gy)) return 0;
     return s->player_collision_flags[gx][gy] ? 0 : 1;
@@ -26,12 +38,15 @@ static int col_npc_has_los_to_player(const ColosseumState* s, const ColoNPC* npc
     return 1;
 }
 
-/** NPC-blocked callback (size-aware) for the shared chase step. */
+/** NPC-blocked callback (size-aware) for the shared chase step. During wave 12
+    NPC movement is confined to the boss arena and blocked by pillar tiles. */
 static int col_npc_blocked(void* ctx, int x, int y, int size) {
     ColosseumState* s = (ColosseumState*)ctx;
     for (int dx = 0; dx < size; dx++) {
         for (int dy = 0; dy < size; dy++) {
             if (!col_in_arena(x + dx, y + dy)) return 1;
+            if (col_sol_clamp_active(s) && !col_in_boss_arena(s, x + dx, y + dy)) return 1;
+            if (col_is_boss_pillar(s, x + dx, y + dy)) return 1;
             int gx, gy;
             if (!col_grid_index(x + dx, y + dy, &gx, &gy)) return 1;
             if (s->npc_collision_flags[gx][gy]) return 1;

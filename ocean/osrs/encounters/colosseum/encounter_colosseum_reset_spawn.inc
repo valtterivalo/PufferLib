@@ -108,6 +108,8 @@ static void col_spawn_wave(ColosseumState* s) {
     }
 
     s->reinforcement_timer = COLO_REINFORCEMENT_TICKS;
+
+    if (s->wave == COLO_WAVE_BOSS) col_sol_begin_boss_arena(s);
 }
 
 /** sentinel reinforcement_timer value meaning this wave already reinforced. */

@@ -45,6 +45,31 @@ static const int COLO_SPAWN_POS[COLO_NUM_SPAWN_POS][2] = {
 #define COLO_SOL_HEREDIT_X 17
 #define COLO_SOL_HEREDIT_Y 17
 
+/* Sol Heredit boss arena: a 16x16 box centred on the 5x5 boss footprint
+   ([17,21] x [17,21], centre ~ (19,19)). Player + boss are clamped to this box
+   during wave 12 (col_sol_clamp_to_boss_arena). The four pillars sit one tile in
+   from each corner and block line of sight for the rotating crystal's spheres.
+   Dims are UNCONFIRMED in the wiki; 16x16 is the documented arena size. */
+#define COLO_BOSS_ARENA_MIN_X 12
+#define COLO_BOSS_ARENA_MIN_Y 12
+#define COLO_BOSS_ARENA_MAX_X 27
+#define COLO_BOSS_ARENA_MAX_Y 27
+#define COLO_BOSS_ARENA_SIZE  (COLO_BOSS_ARENA_MAX_X - COLO_BOSS_ARENA_MIN_X + 1)  /* 16 */
+
+/* player melee-start tile for the boss wave: south-centre of the boss arena,
+   in cardinal contact range of Sol's south edge once the player steps up. */
+#define COLO_BOSS_PLAYER_START_X 19
+#define COLO_BOSS_PLAYER_START_Y 26
+
+/* four pillars, one tile in from each boss-arena corner (1x1 LoS blockers). */
+#define COLO_BOSS_NUM_PILLARS 4
+static const int COLO_BOSS_PILLARS[COLO_BOSS_NUM_PILLARS][2] = {
+    {COLO_BOSS_ARENA_MIN_X + 2, COLO_BOSS_ARENA_MIN_Y + 2},
+    {COLO_BOSS_ARENA_MAX_X - 2, COLO_BOSS_ARENA_MIN_Y + 2},
+    {COLO_BOSS_ARENA_MIN_X + 2, COLO_BOSS_ARENA_MAX_Y - 2},
+    {COLO_BOSS_ARENA_MAX_X - 2, COLO_BOSS_ARENA_MAX_Y - 2},
+};
+
 
 /** OSRS cache NPC definition ids, used by the renderer to look up models.
     Placeholder ids reuse inferno def ids until the cache export lands. */
@@ -313,26 +338,108 @@ typedef struct {
 } ColoModifierState;
 
 
-/** Sol Heredit boss sub-state. Scaffold fields cover the documented phases,
-    attack-combo queue, triple-parry, grapple, and molten-sand hazards. */
+/** Sol Heredit AoE attack ids. The fight alternates spear/shield; if the same
+    style lands twice in a row the second uses the other sub-pattern, and the
+    fight always opens with COLO_SOL_AOE_SPEAR1. Footprints + dodge in boss.inc. */
+typedef enum {
+    COLO_SOL_AOE_NONE = 0,
+    COLO_SOL_AOE_SPEAR1,   /* 6x6 dust under boss; dodge = step off centre/edge */
+    COLO_SOL_AOE_SPEAR2,   /* 6x6 dust;            dodge = step to off-centre tile */
+    COLO_SOL_AOE_SHIELD1,  /* 7x7 with a 1-tile gap; dodge = back 1 */
+    COLO_SOL_AOE_SHIELD2,  /* 9x9;                   dodge = back 2 */
+} ColoSolAoeAttack;
+
+/** which family the last AoE belonged to, for the spear/shield alternation. */
+typedef enum {
+    COLO_SOL_STYLE_NONE = 0,
+    COLO_SOL_STYLE_SPEAR,
+    COLO_SOL_STYLE_SHIELD,
+} ColoSolAttackStyle;
+
+/** Sol Heredit boss sub-state. Covers the documented phases, AoE rotation,
+    triple-parry combo, grapple, rotating-crystal spheres, and enrage molten sand.
+    combo_queue/combo_len/combo_cursor + parry_* describe the active triple parry;
+    the actual per-hit block runs through the player's deferred prayer check. */
 #define COLO_SOL_COMBO_QUEUE_MAX 8
 #define COLO_SOL_HAZARD_TILES_MAX 32
+#define COLO_SOL_SPHERE_QUEUE_MAX 8
+#define COLO_SOL_NUM_PHASES 6  /* >90 / <90 / <75 / <50 / <25 / <10 (enrage) */
+#define COLO_SOL_HP_MAX 1500
+
+/** one in-flight light sphere from the rotating crystal: marks a tile and lands
+    COLO_SOL_SPHERE_DELAY ticks later for up to COLO_SOL_SPHERE_MAX_HIT typeless. */
+typedef struct {
+    int active;
+    int tile_x, tile_y;
+    int damage;
+    int ticks_remaining;
+} ColoSolSphere;
 
 typedef struct {
-    int phase;                 /* 0..N HP-threshold phase (100/90/75/50/25/10%) */
-    int combo_queue[COLO_SOL_COMBO_QUEUE_MAX];  /* queued attack ids */
+    int started;               /* 1 once the boss machine has been initialised */
+    int phase;                 /* 0..5 HP-threshold phase (>90/<90/<75/<50/<25/<10) */
+    int boss_idx;              /* NPC slot of the live Sol, refreshed each tick (-1) */
+    int attack_timer;          /* ticks until Sol's next AoE / triple-parry decision */
+
+    /* AoE rotation */
+    int aoe_attack;            /* ColoSolAoeAttack currently telegraphed (or NONE) */
+    int aoe_resolve_timer;     /* ticks until the telegraphed dust resolves */
+    int last_style;            /* ColoSolAttackStyle of the previous AoE */
+    int last_attack;           /* ColoSolAoeAttack of the previous AoE */
+
+    /* triple parry (available <90% HP): obs telemetry; hits run as pending hits */
+    int combo_queue[COLO_SOL_COMBO_QUEUE_MAX];  /* per-hit misprayed damage */
     int combo_len;
-    int combo_cursor;          /* index into combo_queue of the next attack */
-    int parry_sequence_active; /* 1 while the triple-parry sequence runs (<90%) */
-    int parry_ticks_remaining;
-    int grapple_active;        /* 1 while a grapple is in progress (<75%) */
-    int grapple_body_slot;     /* which body-part slot the player must click */
-    int grapple_timer;         /* 4-tick grapple resolution window */
-    int hazard_tile_x[COLO_SOL_HAZARD_TILES_MAX];  /* molten-sand tiles (<10%) */
+    int combo_cursor;          /* index of the next un-landed hit */
+    int parry_sequence_active; /* 1 while the triple-parry sequence runs */
+    int parry_ticks_remaining; /* ticks until the next hit in the combo lands */
+    int parry_combo_b;         /* 0 = combo A (15/25/35), 1 = combo B (15/30/45) */
+
+    /* grapple (available <75% HP): clicked-slot parry, hook in boss.inc */
+    int grapple_active;        /* 1 while a grapple is in progress */
+    int grapple_body_slot;     /* equipment slot the player must click to parry */
+    int grapple_timer;         /* 4-tick grapple resolution window (4..1, 0 = lands) */
+    int grapple_resolved;      /* 1 once parried/failed this grapple (latches result) */
+    int next_attack_guaranteed_max; /* set by a perfect parry: next player hit maxes */
+    int guaranteed_max_ticks;  /* ticks left on the guaranteed-max window (<=5) */
+
+    /* phase-transition hazards */
+    int crystal_active;        /* 1 once the rotating crystal is up (phase >= 2) */
+    int crystal_fire_timer;    /* ticks until the crystal fires its next sphere */
+    int crystal_step;          /* crystal position index around the arena edge */
+    int beam_ticks_remaining;  /* >0 while the 6 light-beam telegraphs are showing */
+    int beam_count;            /* number of active light-beam telegraphs (<= 6) */
+    ColoSolSphere spheres[COLO_SOL_SPHERE_QUEUE_MAX];
+
+    /* enrage molten sand (<10% HP) + skyfall reentry pools share this tile set */
+    int hazard_tile_x[COLO_SOL_HAZARD_TILES_MAX];
     int hazard_tile_y[COLO_SOL_HAZARD_TILES_MAX];
     int hazard_tile_count;
-    int hazard_timer;          /* ticks until next molten-sand placement */
+    int hazard_timer;          /* ticks until the next molten-sand placement */
+
+    /* boss arena bounds, set when wave 12 starts (col_sol_begin_boss_arena). */
+    int boss_arena_min_x, boss_arena_min_y;
+    int boss_arena_max_x, boss_arena_max_y;
 } SolHereditState;
+
+/* Sol timing + damage constants (mechanics-to-code.md "Sol Heredit state machine").
+   All damage below is typeless: prayer never reduces it, only dodging/parrying. */
+#define COLO_SOL_ATTACK_INTERVAL   5   /* ticks between Sol's AoE / TP decisions */
+#define COLO_SOL_AOE_TELEGRAPH     2   /* dodge window before the dust resolves */
+#define COLO_SOL_AOE_MAX_HIT       44  /* typeless dust max hit */
+#define COLO_SOL_GRAPPLE_MAX_HIT   44  /* typeless grapple-fail max hit */
+#define COLO_SOL_GRAPPLE_WINDOW    4   /* ticks to click the called slot */
+#define COLO_SOL_PERFECT_MAX_TICKS 5   /* guaranteed-max window after a perfect parry */
+#define COLO_SOL_TP_HIT_GAP        3   /* base ticks between triple-parry hits */
+#define COLO_SOL_TP_HIT3_GAP_LOW   4   /* 3rd-hit gap once Sol is under 50% HP */
+#define COLO_SOL_SPHERE_DELAY      4   /* ticks the crystal sphere takes to land */
+#define COLO_SOL_SPHERE_MAX_HIT    75  /* typeless sphere max hit */
+#define COLO_SOL_CRYSTAL_INTERVAL  6   /* ticks between crystal sphere fires */
+#define COLO_SOL_CRYSTAL_ENRAGE_INTERVAL 2  /* faster sphere cadence at enrage */
+#define COLO_SOL_BEAM_COUNT        6   /* light-beam telegraphs per phase transition */
+#define COLO_SOL_BEAM_TICKS        4   /* how long the beam telegraphs linger */
+#define COLO_SOL_MOLTEN_INTERVAL   3   /* enrage: molten sand spawns every 3 ticks */
+#define COLO_SOL_MOLTEN_MAX_HIT    12  /* per-tick contact damage from molten sand */
 
 
 /** jaguar 3-hit combo state. valid iff type is COLO_JAGUAR_WARRIOR;

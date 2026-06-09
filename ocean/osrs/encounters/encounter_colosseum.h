@@ -67,6 +67,7 @@ typedef enum {
 #include "colosseum/encounter_colosseum_reset_spawn.inc"
 #include "colosseum/encounter_colosseum_movement.inc"
 #include "colosseum/encounter_colosseum_combat.inc"
+#include "colosseum/encounter_colosseum_boss.inc"
 #include "colosseum/encounter_colosseum_player_actions.inc"
 #include "colosseum/encounter_colosseum_reward_step.inc"
 #include "colosseum/encounter_colosseum_obs_mask.inc"

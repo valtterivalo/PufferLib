@@ -14,7 +14,9 @@ static void col_apply_npc_death(ColosseumState* s, int idx) {
     col_deactivate_npc(s, idx);
 }
 
-/** resolve player attack projectiles landing on NPCs. */
+/** resolve player attack projectiles landing on NPCs. A hit that lands this tick
+    is removed from the queue (the shared resolver only flags it inactive), so a
+    long fight like Sol does not pile up resolved hits until the queue overflows. */
 static void col_resolve_player_projectiles_on_npcs(ColosseumState* s) {
     for (int i = 0; i < COLO_MAX_NPCS; i++) {
         ColoNPC* npc = &s->npcs[i];
@@ -36,6 +38,8 @@ static void col_resolve_player_projectiles_on_npcs(ColosseumState* s) {
                     col_apply_npc_death(s, i);
                     break;
                 }
+                encounter_pending_hit_queue_remove(&npc->pending_hits, h, "colosseum-npc");
+                h--;
             }
         }
     }
@@ -335,12 +339,13 @@ static void col_npc_attack_ctx(ColosseumState* s, ColosseumContext* ctx, int idx
 }
 
 /**
- * Sol Heredit boss tick. Scaffold stub: the lead implements the phase machine,
- * attack-combo queue, triple-parry, grapple, and molten-sand hazards here.
+ * Sol Heredit boss tick. Drives the wave-12 boss: phase transitions, the AoE
+ * spear/shield rotation, the triple-parry combo, the grapple, and the rotating
+ * crystal + enrage hazards. The machine lives in encounter_colosseum_boss.inc
+ * (included after this file) to keep combat.inc under ~500 lines.
  */
 static void col_sol_tick(ColosseumState* s, ColosseumContext* ctx) {
-    (void)s;
-    (void)ctx;
+    col_sol_boss_tick(s, ctx);
 }
 
 /** the NPC update loop, mirroring inferno's tick_npcs. */
