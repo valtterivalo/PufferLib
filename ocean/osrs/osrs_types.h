@@ -852,6 +852,7 @@ typedef struct {
     float episode_return;
     float episode_length;
     float wins;
+    float draws;
     float damage_dealt;
     float damage_received;
     float expected_damage_dealt;
@@ -1364,6 +1365,8 @@ typedef struct {
     float _rews_buf[NUM_AGENTS];
     unsigned char _terms_buf[NUM_AGENTS];
     unsigned char _masks_buf[NUM_AGENTS * ACTION_MASK_SIZE];
+    float step_rewards[NUM_AGENTS];
+    unsigned char step_terminals[NUM_AGENTS];
 
 } OsrsEnv;
 

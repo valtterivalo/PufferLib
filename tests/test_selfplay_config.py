@@ -12,6 +12,7 @@ class FakeBackend:
         self.agent_perm = None
         self.env_tags = None
         self.scripted_opps = None
+        self.train_mask = None
         self.pfsp_pool = None
         self.pfsp_cum_weights = None
         self.loaded_banks = []
@@ -34,6 +35,9 @@ class FakeBackend:
 
     def set_env_scripted_opps(self, pufferl, scripted_opps):
         self.scripted_opps = np.asarray(scripted_opps, dtype=np.int32)
+
+    def set_train_mask(self, pufferl, train_mask):
+        self.train_mask = np.asarray(train_mask, dtype=np.uint8)
 
     def set_pfsp_weights(self, pufferl, pool, cum_weights):
         self.pfsp_pool = np.asarray(pool, dtype=np.int32)
@@ -104,6 +108,7 @@ def test_adaptive_scripted_setup_assigns_pfsp_dispatcher(tmp_path):
         -1,
         -1,
     ]
+    assert fake.train_mask.tolist() == [1, 0, 1, 0, 1, 1, 1, 1]
     assert pool_state['scripted_target_envs'] == 2
 
 
@@ -142,6 +147,60 @@ def test_scripted_setup_fails_when_backend_hook_missing(tmp_path):
             selfplay.setup(pufferl, fake, args, 'run-id')
 
     with_fake_c(fake, run)
+
+
+def test_scripted_setup_fails_when_train_mask_hook_missing(tmp_path):
+    class FakeBackendNoTrainMask:
+        def __init__(self):
+            self.impl = FakeBackend()
+
+        def num_envs(self, pufferl):
+            return self.impl.num_envs(pufferl)
+
+        def set_agent_perm(self, pufferl, perm):
+            self.impl.set_agent_perm(pufferl, perm)
+
+        def set_env_tags(self, pufferl, tags):
+            self.impl.set_env_tags(pufferl, tags)
+
+        def save_weights(self, pufferl, path):
+            self.impl.save_weights(pufferl, path)
+
+        def load_frozen_bank(self, pufferl, bank_idx, path):
+            self.impl.load_frozen_bank(pufferl, bank_idx, path)
+
+        def set_env_scripted_opps(self, pufferl, scripted_opps):
+            self.impl.set_env_scripted_opps(pufferl, scripted_opps)
+
+        def set_pfsp_weights(self, pufferl, pool, cum_weights):
+            self.impl.set_pfsp_weights(pufferl, pool, cum_weights)
+
+        def get_pfsp_stats(self, pufferl):
+            return self.impl.get_pfsp_stats(pufferl)
+
+    fake = FakeBackendNoTrainMask()
+    pufferl = SimpleNamespace(global_step=0)
+    args = selfplay_args(tmp_path)
+
+    def run():
+        with pytest.raises(RuntimeError, match='set_train_mask'):
+            selfplay.setup(pufferl, fake, args, 'run-id')
+
+    with_fake_c(fake, run)
+
+
+def test_scripted_train_mask_preserves_pure_selfplay_rows():
+    perm = np.asarray([0, 1, 2, 3, 6, 7, 4, 5], dtype=np.int32)
+    scripted_envs = np.asarray([8, -1, -1, -1], dtype=np.int32)
+
+    train_mask = selfplay.scripted_train_mask(
+        total_agents=8,
+        agents_per_env=2,
+        perm=perm,
+        scripted_envs=scripted_envs,
+    )
+
+    assert train_mask.tolist() == [1, 0, 1, 1, 1, 1, 1, 1]
 
 
 def test_log_scripted_pfsp_emits_curriculum_keys():

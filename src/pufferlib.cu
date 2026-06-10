@@ -57,6 +57,7 @@ struct RolloutBuf {
     PrecisionTensor terminals;
     PrecisionTensor ratio;
     PrecisionTensor importance;
+    PrecisionTensor train_mask;
     PrecisionTensor action_mask;   // (horizon, agents, mask_size); .data=nullptr when env opts out
 };
 
@@ -73,6 +74,7 @@ void register_rollout_buffers(RolloutBuf& bufs, Allocator* alloc, int T, int B, 
         .terminals    = {.shape = {T, B}},
         .ratio        = {.shape = {T, B}},
         .importance   = {.shape = {T, B}},
+        .train_mask   = {.shape = {T, B}},
         .action_mask  = {},
     };
     alloc_register(alloc, &bufs.observations);
@@ -83,6 +85,7 @@ void register_rollout_buffers(RolloutBuf& bufs, Allocator* alloc, int T, int B, 
     alloc_register(alloc, &bufs.terminals);
     alloc_register(alloc, &bufs.ratio);
     alloc_register(alloc, &bufs.importance);
+    alloc_register(alloc, &bufs.train_mask);
     if (mask_size > 0) {
         bufs.action_mask = {.shape = {T, B, mask_size}};
         alloc_register(alloc, &bufs.action_mask);
@@ -103,6 +106,7 @@ struct TrainGraph {
     PrecisionTensor mb_ratio;
     PrecisionTensor mb_newvalue;
     PrecisionTensor mb_prio;        // (B,)
+    PrecisionTensor mb_train_mask;  // (B, T)
     PrecisionTensor mb_action_mask; // (B, T, mask_size); .data=nullptr when disabled
 };
 
@@ -119,6 +123,7 @@ void register_train_buffers(TrainGraph& bufs, Allocator* alloc, int B, int T, in
         .mb_ratio =         {.shape = {B, T}},
         .mb_newvalue =      {.shape = {B, T}},
         .mb_prio =          {.shape = {B}},
+        .mb_train_mask =    {.shape = {B, T}},
         .mb_action_mask =   {},
     };
     alloc_register(alloc, &bufs.mb_obs);
@@ -131,6 +136,7 @@ void register_train_buffers(TrainGraph& bufs, Allocator* alloc, int B, int T, in
     alloc_register(alloc, &bufs.mb_returns);
     alloc_register(alloc, &bufs.mb_ratio);
     alloc_register(alloc, &bufs.mb_newvalue);
+    alloc_register(alloc, &bufs.mb_train_mask);
     if (mask_size > 0) {
         bufs.mb_action_mask = {.shape = {B, T, mask_size}};
         alloc_register(alloc, &bufs.mb_action_mask);
@@ -148,6 +154,7 @@ struct PPOGraphArgs {
     const precision_t* prio;
     const precision_t* values;
     const precision_t* returns;
+    const precision_t* train_mask;
 };
 
 struct PPOKernelArgs {
@@ -222,6 +229,7 @@ struct EnvBuf {
     FloatTensor actions;   // (total_agents, num_atns)
     FloatTensor rewards;   // (total_agents,)
     FloatTensor terminals; // (total_agents,)
+    ByteTensor train_mask; // (total_agents,)
     ByteTensor action_mask; // (total_agents, mask_size); .data=nullptr when env opts out
 };
 
@@ -232,6 +240,7 @@ StaticVec* create_environments(int num_buffers, int total_agents,
     env.actions = { .data = (float*)vec->gpu_actions, .shape = {total_agents, get_num_atns()} };
     env.rewards = { .data = (float*)vec->gpu_rewards, .shape = {total_agents} };
     env.terminals = { .data = (float*)vec->gpu_terminals, .shape = {total_agents} };
+    env.train_mask = { .data = vec->gpu_train_mask, .shape = {total_agents} };
     if (vec->action_mask_size > 0) {
         env.action_mask = { .data = vec->gpu_action_mask,
                             .shape = {total_agents, vec->action_mask_size} };
@@ -615,6 +624,10 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
     cast<<<grid_size(n), BLOCK_SIZE, 0, stream>>>(
         term_dst.data, env.terminals.data + start, n);
 
+    PrecisionTensor train_mask_dst = puf_slice(rollouts.train_mask, t, start, block_size);
+    cast<<<grid_size(n), BLOCK_SIZE, 0, stream>>>(
+        train_mask_dst.data, env.train_mask.data + start, n);
+
     // Copy action mask from env into rollout buffer (if env opted in)
     PrecisionTensor mask_slice = {};
     int mask_stride = 0;
@@ -795,6 +808,7 @@ __global__ void ppo_loss_compute(
     float old_logp = to_float(g.old_logprobs[nt]);
     float adv = to_float(g.advantages[nt]);
     float w = to_float(g.prio[n]);
+    float train_weight = to_float(g.train_mask[nt]);
     float val = to_float(g.values[nt]);
     float ret = to_float(g.returns[nt]);
     float val_pred = to_float(a.values_pred[values_idx]);
@@ -804,7 +818,7 @@ __global__ void ppo_loss_compute(
     float adv_normalized = (adv - float(a.adv_mean[0])) / (adv_std + 1e-8f);
 
     // grad_loss is always 1.0 (set in post_create, never changes)
-    float dL = inv_NT;
+    float dL = inv_NT * train_weight;
     float d_pg_loss = dL;
     float d_entropy_term = dL * (-a.ent_coef);
 
@@ -922,14 +936,14 @@ __global__ void ppo_loss_compute(
     }
 
     // Forward: loss partials
-    float thread_loss = (pg_loss + a.vf_coef * v_loss - a.ent_coef * total_entropy) * inv_NT;
-    block_losses[LOSS_PG][tid] = pg_loss * inv_NT;
-    block_losses[LOSS_VF][tid] = v_loss * inv_NT;
-    block_losses[LOSS_ENT][tid] = total_entropy * inv_NT;
+    float thread_loss = (pg_loss + a.vf_coef * v_loss - a.ent_coef * total_entropy) * dL;
+    block_losses[LOSS_PG][tid] = pg_loss * dL;
+    block_losses[LOSS_VF][tid] = v_loss * dL;
+    block_losses[LOSS_ENT][tid] = total_entropy * dL;
     block_losses[LOSS_TOTAL][tid] = thread_loss;
-    block_losses[LOSS_OLD_APPROX_KL][tid] = (-logratio) * inv_NT;
-    block_losses[LOSS_APPROX_KL][tid] = ((ratio - 1.0f) - logratio) * inv_NT;
-    block_losses[LOSS_CLIPFRAC][tid] = (fabsf(ratio - 1.0f) > a.clip_coef ? 1.0f : 0.0f) * inv_NT;
+    block_losses[LOSS_OLD_APPROX_KL][tid] = (-logratio) * dL;
+    block_losses[LOSS_APPROX_KL][tid] = ((ratio - 1.0f) - logratio) * dL;
+    block_losses[LOSS_CLIPFRAC][tid] = (fabsf(ratio - 1.0f) > a.clip_coef ? 1.0f : 0.0f) * dL;
     } // end if (idx < total_elements)
 
 // Deterministic aggregation
@@ -1061,6 +1075,7 @@ void ppo_loss_fwd_bwd(
         .prio = graph.mb_prio.data,
         .values = graph.mb_values.data,
         .returns = graph.mb_returns.data,
+        .train_mask = graph.mb_train_mask.data,
     };
 
     bool has_mask = (graph.mb_action_mask.data != nullptr);
@@ -1221,28 +1236,95 @@ void puff_advantage_cuda(PrecisionTensor& values, PrecisionTensor& rewards,
         advantages.data, gamma, lambda, rho_clip, c_clip, num_steps, horizon);
 }
 
-// Zero advantages on frozen-bank rows so prio_replay never samples them. Frozen
-// rollout rows hold actions/logprobs from the frozen policy — training the
-// primary's PPO on them produces garbage ratios and poisoned gradients.
-__global__ void zero_frozen_advantages_kernel(precision_t* advantages,
-        int agents_per_buffer, int primary_per_buffer, int total_rows, int horizon) {
+__global__ void zero_excluded_advantages_kernel(
+        precision_t* advantages,
+        const precision_t* train_mask,
+        int agents_per_buffer,
+        int primary_per_buffer,
+        int total_rows,
+        int horizon) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     int total = total_rows * horizon;
     if (idx >= total) return;
     int row = idx / horizon;
+    int excluded = 0;
     int rel = row % agents_per_buffer;
-    if (rel >= primary_per_buffer) {
+    if (primary_per_buffer >= 0 && rel >= primary_per_buffer) {
+        excluded = 1;
+    }
+    if (train_mask != nullptr && to_float(train_mask[idx]) == 0.0f) {
+        excluded = 1;
+    }
+    if (excluded) {
         advantages[idx] = from_float(0.0f);
     }
 }
 
-void zero_frozen_advantages_cuda(PrecisionTensor& advantages,
-        int agents_per_buffer, int primary_per_buffer, cudaStream_t stream) {
+void zero_excluded_advantages_cuda(
+        PrecisionTensor& advantages,
+        PrecisionTensor& train_mask,
+        int agents_per_buffer,
+        int primary_per_buffer,
+        cudaStream_t stream) {
     int total_rows = advantages.shape[0];
     int horizon = advantages.shape[1];
     int total = total_rows * horizon;
-    zero_frozen_advantages_kernel<<<grid_size(total), BLOCK_SIZE, 0, stream>>>(
-        advantages.data, agents_per_buffer, primary_per_buffer, total_rows, horizon);
+    zero_excluded_advantages_kernel<<<grid_size(total), BLOCK_SIZE, 0, stream>>>(
+        advantages.data,
+        train_mask.data,
+        agents_per_buffer,
+        primary_per_buffer,
+        total_rows,
+        horizon);
+}
+
+__global__ void zero_excluded_prio_kernel(
+        float* prio_weights,
+        const precision_t* train_mask,
+        int agents_per_buffer,
+        int primary_per_buffer,
+        int total_rows,
+        int horizon) {
+    int row = blockIdx.x * blockDim.x + threadIdx.x;
+    if (row >= total_rows) return;
+
+    int rel = row % agents_per_buffer;
+    if (primary_per_buffer >= 0 && rel >= primary_per_buffer) {
+        prio_weights[row] = 0.0f;
+        return;
+    }
+    if (train_mask == nullptr) {
+        return;
+    }
+
+    int trainable = 0;
+    int offset = row * horizon;
+    for (int t = 0; t < horizon; t++) {
+        if (to_float(train_mask[offset + t]) != 0.0f) {
+            trainable = 1;
+            break;
+        }
+    }
+    if (!trainable) {
+        prio_weights[row] = 0.0f;
+    }
+}
+
+void zero_excluded_prio_cuda(
+        FloatTensor& prio_weights,
+        PrecisionTensor& train_mask,
+        int agents_per_buffer,
+        int primary_per_buffer,
+        int horizon,
+        cudaStream_t stream) {
+    int total_rows = prio_weights.shape[0];
+    zero_excluded_prio_kernel<<<grid_size(total_rows), BLOCK_SIZE, 0, stream>>>(
+        prio_weights.data,
+        train_mask.data,
+        agents_per_buffer,
+        primary_per_buffer,
+        total_rows,
+        horizon);
 }
 
 // Minor copy bandwidth optimizations
@@ -1288,6 +1370,7 @@ __global__ void select_copy(RolloutBuf rollouts, TrainGraph graph,
     int obs_row_bytes = (numel(rollouts.observations.shape) / rollouts.observations.shape[0]) * sizeof(precision_t);
     int act_row_bytes = (numel(rollouts.actions.shape) / rollouts.actions.shape[0]) * sizeof(precision_t);
     int lp_row_bytes = (numel(rollouts.logprobs.shape) / rollouts.logprobs.shape[0]) * sizeof(precision_t);
+    int train_mask_row_bytes = (numel(rollouts.train_mask.shape) / rollouts.train_mask.shape[0]) * sizeof(precision_t);
     int horizon = rollouts.values.shape[1];
 
     switch (ch) {
@@ -1315,6 +1398,10 @@ __global__ void select_copy(RolloutBuf rollouts, TrainGraph graph,
         }
         break;
     case 5:
+        copy_bytes((const char*)rollouts.train_mask.data,
+                   (char*)graph.mb_train_mask.data, src_row, mb, train_mask_row_bytes);
+        break;
+    case 6:
         if (graph.mb_action_mask.data != nullptr) {
             int mask_row_bytes = (numel(rollouts.action_mask.shape)
                 / rollouts.action_mask.shape[0]) * sizeof(precision_t);
@@ -1362,6 +1449,8 @@ void train_impl(PuffeRL& pufferl) {
         rollouts.ratio.data, src.ratio.data, T, B, 1);
     transpose_102<<<grid_size(T*B), BLOCK_SIZE, 0, train_stream>>>(
         rollouts.values.data, src.values.data, T, B, 1);
+    transpose_102<<<grid_size(T*B), BLOCK_SIZE, 0, train_stream>>>(
+        rollouts.train_mask.data, src.train_mask.data, T, B, 1);
     if (src.action_mask.data != nullptr) {
         int mask_size = src.action_mask.shape[2];
         transpose_102<<<grid_size(T*B*mask_size), BLOCK_SIZE, 0, train_stream>>>(
@@ -1421,11 +1510,12 @@ void train_impl(PuffeRL& pufferl) {
         puff_advantage_cuda(rollouts.values, rollouts.rewards, rollouts.terminals,
             rollouts.ratio, advantages_puf, hypers.gamma, hypers.gae_lambda,
             hypers.vtrace_rho_clip, hypers.vtrace_c_clip, train_stream);
-        if (pufferl.num_frozen_banks > 0 && pufferl.bank_layout != NULL) {
-            int apb = hypers.total_agents / hypers.num_buffers;
-            zero_frozen_advantages_cuda(advantages_puf, apb,
-                pufferl.bank_layout[1], train_stream);
-        }
+        int apb = hypers.total_agents / hypers.num_buffers;
+        int primary_per_buffer = (pufferl.num_frozen_banks > 0 && pufferl.bank_layout != NULL)
+            ? pufferl.bank_layout[1]
+            : -1;
+        zero_excluded_advantages_cuda(
+            advantages_puf, rollouts.train_mask, apb, primary_per_buffer, train_stream);
         profile_end(hypers.profile);
 
         profile_begin("compute_prio", hypers.profile);
@@ -1436,6 +1526,13 @@ void train_impl(PuffeRL& pufferl) {
         compute_prio_abs<<<prio_rows, PRIO_WARP_SIZE, 0, train_stream>>>(
             advantages_puf.data, pufferl.prio_bufs.prio_weights.data,
             prio_alpha, 1e-6f, prio_rows, prio_stride);
+        zero_excluded_prio_cuda(
+            pufferl.prio_bufs.prio_weights,
+            rollouts.train_mask,
+            hypers.total_agents / hypers.num_buffers,
+            primary_per_buffer,
+            prio_stride,
+            train_stream);
         sample_prio_indices(&pufferl.prio_bufs, prio_rows, minibatch_segments,
             pufferl.seed, train_rng_offset, pufferl.prio_bufs.mb_prio.data,
             NULL, 0, 1, anneal_beta, train_stream);
@@ -1447,7 +1544,7 @@ void train_impl(PuffeRL& pufferl) {
             RolloutBuf sel_src = rollouts;
             sel_src.values = rollouts.values;
             int mb_segs = pufferl.prio_bufs.idx.shape[0];
-            int channels = (graph.mb_action_mask.data != nullptr) ? 6 : 5;
+            int channels = (graph.mb_action_mask.data != nullptr) ? 7 : 6;
             const precision_t* row_importance = pufferl.curriculum_enabled
                 ? pufferl.state_buf.importance.data : nullptr;
             select_copy<<<dim3(mb_segs, channels), SELECT_COPY_THREADS, 0, train_stream>>>(
@@ -1532,11 +1629,12 @@ void train_impl(PuffeRL& pufferl) {
         puff_advantage_cuda(rollouts.values, rollouts.rewards, rollouts.terminals,
             rollouts.ratio, advantages_puf, hypers.gamma, hypers.state_lambda,
             hypers.vtrace_rho_clip, hypers.vtrace_c_clip, train_stream);
-        if (pufferl.num_frozen_banks > 0 && pufferl.bank_layout != NULL) {
-            int apb = hypers.total_agents / hypers.num_buffers;
-            zero_frozen_advantages_cuda(advantages_puf, apb,
-                pufferl.bank_layout[1], train_stream);
-        }
+        int apb = hypers.total_agents / hypers.num_buffers;
+        int primary_per_buffer = (pufferl.num_frozen_banks > 0 && pufferl.bank_layout != NULL)
+            ? pufferl.bank_layout[1]
+            : -1;
+        zero_excluded_advantages_cuda(
+            advantages_puf, rollouts.train_mask, apb, primary_per_buffer, train_stream);
         curriculum_update_advantages(&pufferl, &advantages_puf, train_stream);
     }
     pufferl.epoch += 1;
@@ -1790,6 +1888,10 @@ extern "C" int pufferl_num_envs(PuffeRL* pufferl) {
 
 extern "C" void pufferl_set_env_scripted_opps(PuffeRL* pufferl, const int* scripted_opps) {
     static_vec_set_env_scripted_opps(pufferl->vec, scripted_opps);
+}
+
+extern "C" void pufferl_set_train_mask(PuffeRL* pufferl, const unsigned char* train_mask) {
+    static_vec_set_train_mask(pufferl->vec, train_mask);
 }
 
 std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,

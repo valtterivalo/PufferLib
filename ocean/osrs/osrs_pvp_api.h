@@ -415,6 +415,8 @@ void pvp_init(OsrsEnv* env) {
     memset(env->_rews_buf, 0, sizeof(env->_rews_buf));
     memset(env->_terms_buf, 0, sizeof(env->_terms_buf));
     memset(env->_masks_buf, 0, sizeof(env->_masks_buf));
+    memset(env->step_rewards, 0, sizeof(env->step_rewards));
+    memset(env->step_terminals, 0, sizeof(env->step_terminals));
 
     env->_episode_return = 0.0f;
     env->has_rng_seed = 0;
@@ -745,24 +747,25 @@ void pvp_step(OsrsEnv* env) {
 
     memcpy(env->pending_actions, env->actions,
            NUM_AGENTS * NUM_ACTION_HEADS * sizeof(int));
-    for (int i = 0; i < NUM_AGENTS; i++) {
-        if (env->players[i].current_hitpoints <= 0) {
-            env->episode_over = 1;
-            env->winner = 1 - i;
-        }
+    memset(env->step_rewards, 0, sizeof(env->step_rewards));
+    memset(env->step_terminals, 0, sizeof(env->step_terminals));
+
+    int p0_dead = env->players[0].current_hitpoints <= 0;
+    int p1_dead = env->players[1].current_hitpoints <= 0;
+    if (p0_dead || p1_dead) {
+        env->episode_over = 1;
+        env->winner = (p0_dead && p1_dead) ? -1 : (p0_dead ? 1 : 0);
     }
 
-    // Tick limit: treat timeout as agent 0 loss
     if (!env->episode_over && env->tick >= MAX_EPISODE_TICKS) {
         env->episode_over = 1;
-        env->winner = 1;
+        env->winner = -1;
     }
     for (int i = 0; i < NUM_AGENTS; i++) {
         env->rewards[i] = calculate_reward(env, i);
-
-        if (env->episode_over) {
-            env->terminals[i] = 1;
-        }
+        env->terminals[i] = env->episode_over ? 1 : 0;
+        env->step_rewards[i] = env->rewards[i];
+        env->step_terminals[i] = env->terminals[i];
     }
 
     // Accumulate agent 0's episode return (written to log at episode end)
@@ -822,6 +825,7 @@ void pvp_step(OsrsEnv* env) {
             + 0.30f * ((env->winner == 0) ? 1.0f : 0.0f)
             + 0.15f * ko_supply_score;
         env->log.wins = (env->winner == 0) ? 1.0f : 0.0f;
+        env->log.draws = (env->winner < 0) ? 1.0f : 0.0f;
         env->log.prayer_correct = (float)p0->target_pray_correct_count;
         env->log.prayer_total = (float)(p0->target_pray_melee_count +
             p0->target_pray_ranged_count + p0->target_pray_magic_count);

@@ -350,7 +350,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .melee_strength = 0, .ranged_strength = 0, .magic_damage = 15, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
     [ITEM_ZURIELS_STAFF] = { /* Zuriel's staff (LMS-only, not in wiki equipment.json) (manual) */
-        .item_id = 13867, .name = "Zuriel's staff", .slot = SLOT_WEAPON,
+        .item_id = 23617, .name = "Zuriel's staff", .slot = SLOT_WEAPON,
         .attack_speed = 5, .attack_range = 10,
         .attack_stab = 13, .attack_slash = -1, .attack_crush = 65,
         .attack_magic = 18, .attack_ranged = 0,

@@ -575,7 +575,7 @@ static void generate_slot_observations(OsrsEnv* env, int agent_idx) {
     obs[9] = (p->prayer == PRAYER_REDEMPTION) ? 1.0f : 0.0f;
 
     obs[10] = (float)p->current_hitpoints / (float)p->base_hitpoints;
-    obs[11] = p->last_target_health_percent;
+    obs[11] = (float)t->current_hitpoints / (float)t->base_hitpoints;
 
     // Target last attack style (more reliable than gear type — can't be faked)
     obs[12] = (t->last_attack_style == ATTACK_STYLE_MELEE) ? 1.0f : 0.0f;

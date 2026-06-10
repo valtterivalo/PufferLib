@@ -143,6 +143,25 @@ static Dict* pvp_kwargs(void) {
     return kwargs;
 }
 
+static Dict* pvp_vec_kwargs(int total_agents, int num_buffers) {
+    Dict* kwargs = create_dict(4);
+    dict_set(kwargs, "total_agents", total_agents);
+    dict_set(kwargs, "num_buffers", num_buffers);
+    return kwargs;
+}
+
+static StaticVec* pvp_test_vec(int total_agents, int num_buffers) {
+    Dict* vec_kwargs = pvp_vec_kwargs(total_agents, num_buffers);
+    Dict* env_kwargs = pvp_kwargs();
+    StaticVec* vec = create_static_vec(total_agents, num_buffers, 0, vec_kwargs, env_kwargs);
+    static_vec_reset(vec);
+    free(vec_kwargs->items);
+    free(vec_kwargs);
+    free(env_kwargs->items);
+    free(env_kwargs);
+    return vec;
+}
+
 static int action_head_offset(int head) {
     int offset = 0;
     for (int i = 0; i < head; i++) {
@@ -187,6 +206,229 @@ static int pvp_reset_signature_equal(PvpResetSignature a, PvpResetSignature b) {
         a.p1_x == b.p1_x &&
         a.p1_y == b.p1_y &&
         a.pid_holder == b.pid_holder;
+}
+
+static void test_terminal_reward_survives_auto_reset(void) {
+    printf("--- PvP terminal reward survives auto-reset ---\n");
+
+    StaticVec* vec = pvp_test_vec(2, 1);
+    Env* env = &vec->envs[0];
+    env->pvp.shaping.enabled = 0;
+    env->pvp.players[1].current_hitpoints = 0;
+
+    c_step(env);
+
+    ASSERT_FLOAT_NEAR("p0 terminal win reward", vec->rewards[0], 1.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("p1 terminal loss reward", vec->rewards[1], 0.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("p0 terminal flag", vec->terminals[0], 1.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("p1 terminal flag", vec->terminals[1], 1.0f, 1e-6f);
+
+    static_vec_close(vec);
+}
+
+static void test_terminal_loss_and_draw_rewards_zero(void) {
+    printf("--- PvP terminal loss and draw rewards are zero ---\n");
+
+    CollisionMap* cmap = collision_map_create();
+    OsrsEnv env;
+    pvp_setup_seeded_reset_env(&env, cmap, 73);
+    pvp_reset(&env);
+    env.shaping.enabled = 0;
+    env.episode_over = 1;
+
+    env.winner = 1;
+    ASSERT_FLOAT_NEAR("p0 loss reward", calculate_reward(&env, 0), 0.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("p1 win reward", calculate_reward(&env, 1), 1.0f, 1e-6f);
+
+    env.winner = -1;
+    ASSERT_FLOAT_NEAR("p0 draw reward", calculate_reward(&env, 0), 0.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("p1 draw reward", calculate_reward(&env, 1), 0.0f, 1e-6f);
+
+    collision_map_free(cmap);
+}
+
+static void test_timeout_and_simultaneous_death_are_draws(void) {
+    printf("--- PvP timeout and simultaneous death are draws ---\n");
+
+    CollisionMap* cmap = collision_map_create();
+    OsrsEnv env;
+    pvp_setup_seeded_reset_env(&env, cmap, 73);
+    env.auto_reset = 0;
+    pvp_reset(&env);
+    env.tick = MAX_EPISODE_TICKS - 1;
+    pvp_step(&env);
+
+    ASSERT_INT_EQ("timeout winner draw", env.winner, -1);
+    ASSERT_FLOAT_NEAR("timeout p0 reward", env.step_rewards[0], 0.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("timeout p1 reward", env.step_rewards[1], 0.0f, 1e-6f);
+
+    pvp_reset(&env);
+    env.auto_reset = 0;
+    env.players[0].current_hitpoints = 0;
+    env.players[1].current_hitpoints = 0;
+    pvp_step(&env);
+
+    ASSERT_INT_EQ("sim death winner draw", env.winner, -1);
+    ASSERT_FLOAT_NEAR("sim death p0 reward", env.step_rewards[0], 0.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("sim death p1 reward", env.step_rewards[1], 0.0f, 1e-6f);
+
+    collision_map_free(cmap);
+}
+
+static void test_p1_reset_obs_refreshes_after_auto_reset(void) {
+    printf("--- PvP p1 reset obs refreshes after auto-reset ---\n");
+
+    StaticVec* vec = pvp_test_vec(2, 1);
+    Env* env = &vec->envs[0];
+    env->pvp.shaping.enabled = 0;
+    env->pvp.players[1].current_hitpoints = 0;
+
+    c_step(env);
+
+    ASSERT_FLOAT_NEAR("p1 reset self hp obs", vec->observations.data[OBS_SIZE + 10], 1.0f, 1e-6f);
+
+    static_vec_close(vec);
+}
+
+static void test_target_hp_observation_is_current(void) {
+    printf("--- PvP target HP obs is current ---\n");
+
+    StaticVec* vec = pvp_test_vec(2, 1);
+    Env* env = &vec->envs[0];
+
+    ASSERT_FLOAT_NEAR("target hp starts full", vec->observations.data[11], 1.0f, 1e-6f);
+
+    env->pvp.players[1].current_hitpoints = env->pvp.players[1].base_hitpoints / 2;
+    generate_slot_observations(&env->pvp, 0);
+    ocean_write_obs(&env->pvp);
+
+    float expected = (float)env->pvp.players[1].current_hitpoints /
+        (float)env->pvp.players[1].base_hitpoints;
+    ASSERT_FLOAT_NEAR("target hp reflects damage", vec->observations.data[11], expected, 1e-6f);
+
+    env->pvp.players[1].current_hitpoints = env->pvp.players[1].base_hitpoints;
+    generate_slot_observations(&env->pvp, 0);
+    ocean_write_obs(&env->pvp);
+    ASSERT_FLOAT_NEAR("target hp reflects healing", vec->observations.data[11], 1.0f, 1e-6f);
+
+    static_vec_close(vec);
+}
+
+static void test_shaping_disabled_emits_only_terminal_reward(void) {
+    printf("--- PvP shaping disabled emits only terminal reward ---\n");
+
+    CollisionMap* cmap = collision_map_create();
+    OsrsEnv env;
+    pvp_setup_seeded_reset_env(&env, cmap, 73);
+    pvp_reset(&env);
+    env.shaping.enabled = 0;
+    env.players[0].damage_dealt_scale = 1.0f;
+    env.players[1].just_attacked = 1;
+    env.players[0].player_prayed_correct = 1;
+
+    ASSERT_FLOAT_NEAR("nonterminal sparse reward", calculate_reward(&env, 0), 0.0f, 1e-6f);
+
+    env.episode_over = 1;
+    env.winner = 0;
+    ASSERT_FLOAT_NEAR("terminal sparse win reward", calculate_reward(&env, 0), 1.0f, 1e-6f);
+
+    collision_map_free(cmap);
+}
+
+static void test_shaping_uses_encounter_overhead_and_spec_prayer_style(void) {
+    printf("--- PvP shaping overhead and spec prayer style ---\n");
+
+    CollisionMap* cmap = collision_map_create();
+    OsrsEnv env;
+    pvp_setup_seeded_reset_env(&env, cmap, 73);
+    pvp_reset(&env);
+    env.shaping.enabled = 1;
+    env.shaping.shaping_scale = 1.0f;
+    env.shaping.prayer_penalty_enabled = 1;
+    env.shaping.prayer_switch_no_attack_penalty = -0.25f;
+    env.players[1].just_attacked = 0;
+    env.last_executed_actions[HEAD_OVERHEAD] = ENCOUNTER_OVERHEAD_SET_REFRESH_MAGIC;
+
+    ASSERT_FLOAT_NEAR("encounter overhead penalty", calculate_reward(&env, 0), -0.25f, 1e-6f);
+
+    env.last_executed_actions[HEAD_OVERHEAD] = ENCOUNTER_OVERHEAD_OFF;
+    ASSERT_FLOAT_NEAR("overhead off no penalty", calculate_reward(&env, 0), 0.0f, 1e-6f);
+
+    pvp_reset(&env);
+    env.shaping.enabled = 1;
+    env.shaping.shaping_scale = 1.0f;
+    env.shaping.spec_off_prayer_bonus = 0.75f;
+    env.players[0].just_attacked = 1;
+    env.players[0].used_special_this_tick = 1;
+    env.players[0].target_prayed_correct = 1;
+    ASSERT_FLOAT_NEAR("spec on-prayer no bonus", calculate_reward(&env, 0), 0.0f, 1e-6f);
+
+    env.players[0].target_prayed_correct = 0;
+    ASSERT_FLOAT_NEAR("spec off-prayer bonus", calculate_reward(&env, 0), 0.75f, 1e-6f);
+
+    collision_map_free(cmap);
+}
+
+static void test_scripted_legacy_movement_maps_to_head_move(void) {
+    printf("--- PvP scripted legacy movement maps to HEAD_MOVE ---\n");
+
+    StaticVec* vec = pvp_test_vec(2, 1);
+    Env* env = &vec->envs[0];
+    Player* p = &env->pvp.players[1];
+    Player* target = &env->pvp.players[0];
+    pvp_set_player_spawn(p, 3041, 3530);
+    pvp_set_player_spawn(target, 3046, 3530);
+    p->last_obs_target_x = target->x;
+    p->last_obs_target_y = target->y;
+
+    int actions[NUM_ACTION_HEADS] = {0};
+    actions[HEAD_LOADOUT] = LOADOUT_KEEP;
+    actions[HEAD_COMBAT] = MOVE_FARCAST_3;
+    pvp_translate_legacy_loadout_action_to_slotclicks(&env->pvp, 1, actions);
+
+    ASSERT_INT_EQ("legacy movement clears attack head", actions[HEAD_ATTACK], ATTACK_NONE);
+    ASSERT_TRUE("legacy movement sets head move", actions[HEAD_MOVE] > 0);
+
+    static_vec_close(vec);
+}
+
+static void test_duplicate_equip_clicks_apply_once(void) {
+    printf("--- PvP duplicate equip clicks apply once ---\n");
+
+    CollisionMap* cmap = collision_map_create();
+    OsrsEnv env;
+    pvp_setup_seeded_reset_env(&env, cmap, 73);
+    pvp_reset(&env);
+    Player* p = &env.players[0];
+    osrs_player_inventory_clear(p);
+    osrs_player_set_equipment_slot(p, GEAR_SLOT_WEAPON, ITEM_AHRIM_STAFF);
+    p->inventory[0] = ITEM_RUNE_CROSSBOW;
+
+    int actions[NUM_ACTION_HEADS] = {0};
+    actions[HEAD_EQUIP_0] = 1;
+    actions[HEAD_EQUIP_1] = 1;
+    int clicks = execute_equip_clicks(&env, 0, actions);
+
+    ASSERT_INT_EQ("duplicate equip click success count", clicks, 1);
+    ASSERT_INT_EQ("crossbow equipped once", p->equipped[GEAR_SLOT_WEAPON], ITEM_RUNE_CROSSBOW);
+    ASSERT_INT_EQ("old weapon swapped into slot", p->inventory[0], ITEM_AHRIM_STAFF);
+
+    collision_map_free(cmap);
+}
+
+static void test_static_vec_train_mask_round_trip(void) {
+    printf("--- Static vec train mask round trip ---\n");
+
+    StaticVec* vec = pvp_test_vec(2, 1);
+    unsigned char train_mask[2] = {1, 0};
+    static_vec_set_train_mask(vec, train_mask);
+
+    ASSERT_INT_EQ("host train mask p0", vec->train_mask[0], 1);
+    ASSERT_INT_EQ("host train mask p1", vec->train_mask[1], 0);
+    ASSERT_INT_EQ("device train mask p0", vec->gpu_train_mask[0], 1);
+    ASSERT_INT_EQ("device train mask p1", vec->gpu_train_mask[1], 0);
+
+    static_vec_close(vec);
 }
 
 static void test_native_init_loads_collision_map_and_walkable_spawns(void) {
@@ -1021,6 +1263,16 @@ static void test_expected_damage_representative_specs(void) {
 
 int main(void) {
     setbuf(stdout, NULL);
+    test_terminal_reward_survives_auto_reset();
+    test_terminal_loss_and_draw_rewards_zero();
+    test_timeout_and_simultaneous_death_are_draws();
+    test_p1_reset_obs_refreshes_after_auto_reset();
+    test_target_hp_observation_is_current();
+    test_shaping_disabled_emits_only_terminal_reward();
+    test_shaping_uses_encounter_overhead_and_spec_prayer_style();
+    test_scripted_legacy_movement_maps_to_head_move();
+    test_duplicate_equip_clicks_apply_once();
+    test_static_vec_train_mask_round_trip();
     test_native_init_loads_collision_map_and_walkable_spawns();
     test_fixed_spawn_override_uses_walkable_pair();
     test_seeded_resets_replay_varied_setup_sequence();

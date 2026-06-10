@@ -398,4 +398,95 @@ static inline void pvp_set_walk_dest_from_head_move(OsrsEnv* env, int agent_idx,
     env->pvp_runtime.walk_dest_y[agent_idx] = p->y + ENCOUNTER_MOVE_TARGET_DY[move_action];
 }
 
+static inline int pvp_select_legacy_target_move_destination(
+    OsrsEnv* env,
+    int agent_idx,
+    int legacy_move,
+    const CollisionMap* cmap,
+    int* dest_x,
+    int* dest_y
+) {
+    Player* p = &env->players[agent_idx];
+    int tx = p->last_obs_target_x;
+    int ty = p->last_obs_target_y;
+    *dest_x = -1;
+    *dest_y = -1;
+
+    switch (legacy_move) {
+        case MOVE_ADJACENT:
+            return select_closest_adjacent_tile(p, tx, ty, dest_x, dest_y, cmap);
+        case MOVE_UNDER:
+            if (is_in_wilderness(tx, ty) && collision_tile_walkable(cmap, 0, tx, ty)) {
+                *dest_x = tx;
+                *dest_y = ty;
+                return 1;
+            }
+            return 0;
+        case MOVE_DIAGONAL:
+            return select_closest_diagonal_tile(p, tx, ty, dest_x, dest_y, cmap);
+        case MOVE_FARCAST_2:
+        case MOVE_FARCAST_3:
+        case MOVE_FARCAST_4:
+        case MOVE_FARCAST_5:
+        case MOVE_FARCAST_6:
+        case MOVE_FARCAST_7: {
+            int distance = legacy_move - MOVE_FARCAST_2 + 2;
+            return select_farcast_tile(p, tx, ty, distance, dest_x, dest_y, cmap);
+        }
+        default:
+            return 0;
+    }
+}
+
+static inline int pvp_set_walk_dest_from_legacy_target_move(
+    OsrsEnv* env,
+    int agent_idx,
+    int legacy_move,
+    const CollisionMap* cmap
+) {
+    int dest_x = -1;
+    int dest_y = -1;
+    if (!pvp_select_legacy_target_move_destination(
+            env, agent_idx, legacy_move, cmap, &dest_x, &dest_y)) {
+        return 0;
+    }
+
+    env->pvp_runtime.walk_dest_x[agent_idx] = dest_x;
+    env->pvp_runtime.walk_dest_y[agent_idx] = dest_y;
+    return 1;
+}
+
+static inline int pvp_head_move_toward_tile(const Player* p, int dest_x, int dest_y) {
+    int dx = dest_x - p->x;
+    int dy = dest_y - p->y;
+    if (dx < -2) dx = -2;
+    if (dx > 2) dx = 2;
+    if (dy < -2) dy = -2;
+    if (dy > 2) dy = 2;
+
+    for (int action = 1; action < MOVE_DIM; action++) {
+        if (ENCOUNTER_MOVE_TARGET_DX[action] == dx &&
+                ENCOUNTER_MOVE_TARGET_DY[action] == dy) {
+            return action;
+        }
+    }
+    return 0;
+}
+
+static inline int pvp_head_move_from_legacy_target_move(
+    OsrsEnv* env,
+    int agent_idx,
+    int legacy_move,
+    const CollisionMap* cmap
+) {
+    int dest_x = -1;
+    int dest_y = -1;
+    if (!pvp_select_legacy_target_move_destination(
+            env, agent_idx, legacy_move, cmap, &dest_x, &dest_y)) {
+        return 0;
+    }
+
+    return pvp_head_move_toward_tile(&env->players[agent_idx], dest_x, dest_y);
+}
+
 #endif // OSRS_PVP_MOVEMENT_H

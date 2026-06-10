@@ -167,6 +167,8 @@ static void puffer_state_refresh(Env* env) {
     pvp_env_copy_action_masks_to_rollout(env);
     env->pvp.ocean_io.agent_rewards[0] = 0.0f;
     env->pvp.ocean_io.agent_terminals[0] = 0;
+    memset(env->pvp.step_rewards, 0, sizeof(env->pvp.step_rewards));
+    memset(env->pvp.step_terminals, 0, sizeof(env->pvp.step_terminals));
     env->terminals[0] = 0.0f;
     if (env->terminal_ptr[1]) *env->terminal_ptr[1] = 0.0f;
     if (env->reward_ptr[1]) *env->reward_ptr[1] = 0.0f;
@@ -237,20 +239,18 @@ void c_step(Env* env) {
            (learner) in scripted-opp envs. */
         if (env->scripted_opp_type >= 0) {
             env->pvp._rews_buf[1] = 0.0f;
+            env->pvp.step_rewards[1] = 0.0f;
         }
     }
 
-    /* Terminals: mirror to both slots. pvp_step writes the shared episode_over
-       to env->pvp.terminals[0..1]; copy each cell into its rollout slot. */
-    env->terminals[0] = (float)env->ocean_term_staging;
+    env->terminals[0] = (float)env->pvp.step_terminals[0];
     if (env->terminal_ptr[1]) {
-        *env->terminal_ptr[1] = (float)env->ocean_term_staging;
+        *env->terminal_ptr[1] = (float)env->pvp.step_terminals[1];
     }
-    /* Rewards: p0 from pvp internal _rews_buf[0], p1 from _rews_buf[1]. */
-    if (env->reward_ptr[0]) *env->reward_ptr[0] = env->pvp._rews_buf[0];
-    if (env->reward_ptr[1]) *env->reward_ptr[1] = env->pvp._rews_buf[1];
+    if (env->reward_ptr[0]) *env->reward_ptr[0] = env->pvp.step_rewards[0];
+    if (env->reward_ptr[1]) *env->reward_ptr[1] = env->pvp.step_rewards[1];
 
-    if (env->ocean_term_staging) {
+    if (env->pvp.step_terminals[0]) {
         /* Self-play per-bank attribution. When env->tag > 0, this env is the
            learner playing against frozen bank (tag - 1). Accumulate the win
            (1.0) or loss (0.0) and game count so selfplay.step() sees this
@@ -266,6 +266,7 @@ void c_step(Env* env) {
         env->log.episode_return += env->pvp.log.episode_return;
         env->log.episode_length += env->pvp.log.episode_length;
         env->log.wins += env->pvp.log.wins;
+        env->log.draws += env->pvp.log.draws;
         env->log.damage_dealt += env->pvp.log.damage_dealt;
         env->log.damage_received += env->pvp.log.damage_received;
         env->log.expected_damage_dealt += env->pvp.log.expected_damage_dealt;
@@ -286,8 +287,9 @@ void c_step(Env* env) {
         memset(&env->pvp.log, 0, sizeof(env->pvp.log));
     }
 
-    if (env->ocean_term_staging && env->pvp.auto_reset) {
+    if (env->pvp.step_terminals[0] && env->pvp.auto_reset) {
         ocean_write_obs(&env->pvp);
+        if (env->pvp.ocean_io.agent_obs_p1) ocean_write_obs_p1(&env->pvp);
     }
     pvp_env_copy_action_masks_to_rollout(env);
     pvp_state_store(env, &env->state);
@@ -303,6 +305,8 @@ void c_reset(Env* env) {
     pvp_env_copy_action_masks_to_rollout(env);
     env->pvp.ocean_io.agent_rewards[0] = 0.0f;
     env->pvp.ocean_io.agent_terminals[0] = 0;
+    memset(env->pvp.step_rewards, 0, sizeof(env->pvp.step_rewards));
+    memset(env->pvp.step_terminals, 0, sizeof(env->pvp.step_terminals));
     env->terminals[0] = 0.0f;
     if (env->terminal_ptr[1]) *env->terminal_ptr[1] = 0.0f;
     if (env->reward_ptr[1]) *env->reward_ptr[1] = 0.0f;
@@ -355,7 +359,7 @@ void c_render(Env* env) {
 
     int first_call = env->pvp.client == NULL;
     if (first_call) {
-        env->pvp.client = render_make_client();
+        env->pvp.client = render_make_client_for_encounter(&ENCOUNTER_NH_PVP);
         RenderClient* rc = (RenderClient*)env->pvp.client;
         rc->ticks_per_second = env->ticks_per_second;
         EncounterSceneConfig scene = {
@@ -556,8 +560,8 @@ void my_log(Log* log, Dict* out) {
     dict_set(out, "episode_length", log->episode_length);
     dict_set(out, "wins", log->wins);
     dict_set(out, "slot_0_score", log->wins);
-    dict_set(out, "slot_1_score", 1.0f - log->wins);
-    dict_set(out, "draw_rate", 0.0f);
+    dict_set(out, "slot_1_score", 1.0f - log->wins - log->draws);
+    dict_set(out, "draw_rate", log->draws);
     dict_set(out, "damage_dealt", log->damage_dealt);
     dict_set(out, "damage_received", log->damage_received);
     dict_set(out, "expected_damage_dealt", log->expected_damage_dealt);
@@ -617,8 +621,8 @@ void my_log(Log* log, Dict* out) {
     dict_set(out, "damage_per_hit", dph);
 
     float wr = log->wins;
-    float dmg_dealt_norm = log->damage_dealt / 99.0f;
-    float dmg_recv_norm  = log->damage_received / 99.0f;
+    float dmg_dealt_norm = log->damage_dealt;
+    float dmg_recv_norm  = log->damage_received;
     float dmg_diff = dmg_dealt_norm - dmg_recv_norm;
     float dmg_diff_score = 0.5f + 0.25f * dmg_diff;
     if (dmg_diff_score < 0.0f) dmg_diff_score = 0.0f;

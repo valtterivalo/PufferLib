@@ -196,7 +196,7 @@ def _config_sequence(section, key, cast):
     return [cast(value)]
 
 def _pvp_score_from_means(wins, damage_dealt, damage_received):
-    dmg_diff = damage_dealt / 99.0 - damage_received / 99.0
+    dmg_diff = damage_dealt - damage_received
     dmg_diff_score = min(1.0, max(0.0, 0.5 + 0.25 * dmg_diff))
     return 0.7 * wins + 0.3 * dmg_diff_score, dmg_diff_score
 

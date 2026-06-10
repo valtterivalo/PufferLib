@@ -283,6 +283,16 @@ void py_set_env_scripted_opps(py::object pufferl_obj, py::array_t<int> scripted_
     pufferl_set_env_scripted_opps(&pufferl, (const int*)buf.ptr);
 }
 
+void py_set_train_mask(py::object pufferl_obj, py::array_t<unsigned char> train_mask) {
+    PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
+    auto buf = train_mask.request();
+    if (buf.ndim != 1) throw std::runtime_error("train_mask must be 1-D");
+    if ((int)buf.shape[0] != pufferl.vec->total_agents) {
+        throw std::runtime_error("train_mask length must equal total_agents");
+    }
+    pufferl_set_train_mask(&pufferl, (const unsigned char*)buf.ptr);
+}
+
 extern "C" void binding_set_pfsp_weights(
     StaticVec* vec, int* pool, int* cum_weights, int pool_size) __attribute__((weak));
 extern "C" void binding_get_pfsp_stats(
@@ -608,6 +618,7 @@ PYBIND11_MODULE(_C, m) {
     m.def("set_agent_perm", &py_set_agent_perm);
     m.def("set_env_tags", &py_set_env_tags);
     m.def("set_env_scripted_opps", &py_set_env_scripted_opps);
+    m.def("set_train_mask", &py_set_train_mask);
     m.def("set_pfsp_weights", &py_set_pfsp_weights);
     m.def("get_pfsp_stats", &py_get_pfsp_stats);
     m.def("count_aligned", &py_count_aligned);

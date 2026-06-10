@@ -1723,7 +1723,48 @@ static void render_draw_encounter_status_text(RenderClient* rc) {
 }
 
 
-static RenderClient* render_make_client(void) {
+static char render_title_char_to_upper(char c) {
+    return (c >= 'a' && c <= 'z') ? (char)(c - 'a' + 'A') : c;
+}
+
+static const char* render_encounter_display_name(const EncounterDef* encounter_def) {
+    const char* name = encounter_def ? encounter_def->name : NULL;
+    if (!name || !name[0]) return "";
+    if (strcmp(name, "nh_pvp") == 0 || strcmp(name, "pvp") == 0) return "PvP";
+    if (strcmp(name, "inferno") == 0) return "Inferno";
+    if (strcmp(name, "zulrah") == 0) return "Zulrah";
+
+    static char display[64];
+    int out = 0;
+    int cap_next = 1;
+    for (int i = 0; name[i] && out < (int)sizeof(display) - 1; i++) {
+        char c = name[i];
+        if (c == '_' || c == '-') {
+            if (out > 0 && display[out - 1] != ' ') {
+                display[out++] = ' ';
+            }
+            cap_next = 1;
+            continue;
+        }
+        display[out++] = cap_next ? render_title_char_to_upper(c) : c;
+        cap_next = 0;
+    }
+    display[out] = '\0';
+    return display;
+}
+
+static const char* render_window_title(const EncounterDef* encounter_def) {
+    static char title[96];
+    const char* encounter_name = render_encounter_display_name(encounter_def);
+    if (encounter_name[0]) {
+        snprintf(title, sizeof(title), "Puffer OSRS %s", encounter_name);
+    } else {
+        snprintf(title, sizeof(title), "Puffer OSRS");
+    }
+    return title;
+}
+
+static RenderClient* render_make_client_for_encounter(const EncounterDef* encounter_def) {
     osrs_asset_require_group(OSRS_ASSET_GROUP_CORE);
     osrs_asset_require_group(OSRS_ASSET_GROUP_GUI);
 
@@ -1771,7 +1812,7 @@ static RenderClient* render_make_client(void) {
         rc->prev_npc_slot[i] = -1;
     }
 
-    InitWindow(RENDER_WINDOW_W, RENDER_WINDOW_H, "OSRS PvP Debug Viewer");
+    InitWindow(RENDER_WINDOW_W, RENDER_WINDOW_H, render_window_title(encounter_def));
     SetTargetFPS(60);
 
     /* load overhead prayer icon textures from exported sprites.
@@ -1857,6 +1898,10 @@ static RenderClient* render_make_client(void) {
     gui_load_sprites(&rc->gui);
 
     return rc;
+}
+
+static RenderClient* render_make_client(void) {
+    return render_make_client_for_encounter(NULL);
 }
 
 /**
@@ -5802,7 +5847,7 @@ static void render_draw_pvp_performance_tracker(RenderClient* rc, OsrsEnv* env) 
 void pvp_render(OsrsEnv* env) {
     RenderClient* rc = (RenderClient*)env->client;
     if (rc == NULL) {
-        rc = render_make_client();
+        rc = render_make_client_for_encounter((const EncounterDef*)env->encounter_def);
         env->client = rc;
     }
     rc->show_arena_boundary = 0;
