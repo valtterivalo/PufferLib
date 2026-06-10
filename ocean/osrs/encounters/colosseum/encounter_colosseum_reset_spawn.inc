@@ -128,11 +128,6 @@ static int col_spawn_anchor_candidates(const ColosseumState* s, int* out) {
     return n;
 }
 
-static int col_type_is_warbander(ColoNpcType type) {
-    return type == COLO_FREMENNIK_BERSERKER || type == COLO_FREMENNIK_ARCHER ||
-           type == COLO_FREMENNIK_SEER;
-}
-
 /** uniform free tile inside the warband centre box (B2(d)): rejection-sample,
     then fall back to a deterministic scan; asserts the box is not full. */
 static void col_draw_warband_box_tile(ColosseumState* s, int* ox, int* oy) {
@@ -189,26 +184,28 @@ static void col_spawn_pair_adjacent(ColosseumState* s, ColoNpcType type, int px,
 }
 
 /** A6+D19: the Quartet warbander on wave 12 spawns on a random walkable
-    interior tile outside the B3-mirrored player exclusion. */
+    interior tile outside the B3-mirrored player exclusion. B2(c): the Quartet
+    extra holds the SOUTH diamond slot. */
 static void col_spawn_quartet_boss_wave(ColosseumState* s, ColoNpcType type) {
     int span = COLO_BOSS_ARENA_SIZE;
-    for (int t = 0; t < 64; t++) {
+    int qx = -1, qy = -1;
+    for (int t = 0; t < 64 && qx < 0; t++) {
         int x = COLO_BOSS_ARENA_MIN_X + encounter_rand_int(&s->rng_state, span);
         int y = COLO_BOSS_ARENA_MIN_Y + encounter_rand_int(&s->rng_state, span);
         if (col_spawn_excluded_near_player(s, x, y, 1)) continue;
         if (!col_spawn_footprint_free(s, x, y, 1)) continue;
-        col_spawn_npc_at(s, type, x, y);
-        return;
+        qx = x; qy = y;
     }
-    for (int y = COLO_BOSS_ARENA_MIN_Y; y <= COLO_BOSS_ARENA_MAX_Y; y++) {
-        for (int x = COLO_BOSS_ARENA_MIN_X; x <= COLO_BOSS_ARENA_MAX_X; x++) {
+    for (int y = COLO_BOSS_ARENA_MIN_Y; y <= COLO_BOSS_ARENA_MAX_Y && qx < 0; y++) {
+        for (int x = COLO_BOSS_ARENA_MIN_X; x <= COLO_BOSS_ARENA_MAX_X && qx < 0; x++) {
             if (col_spawn_excluded_near_player(s, x, y, 1)) continue;
             if (!col_spawn_footprint_free(s, x, y, 1)) continue;
-            col_spawn_npc_at(s, type, x, y);
-            return;
+            qx = x; qy = y;
         }
     }
-    assert(0 && "no spawn tile for the wave-12 Quartet warbander");
+    assert(qx >= 0 && "no spawn tile for the wave-12 Quartet warbander");
+    int slot = col_spawn_npc_at(s, type, qx, qy);
+    colo_npc_warband(&s->npcs[slot])->formation_dir = COLO_WARBAND_FORM_SOUTH;
 }
 
 static const ColoNpcType COLO_WARBAND_TYPES[3] = {
@@ -232,6 +229,10 @@ static void col_spawn_wave(ColosseumState* s) {
     }
     /* heal any stale footprint stamps (e.g. NPCs force-killed without cleanup). */
     memset(s->npc_collision_flags, 0, sizeof(s->npc_collision_flags));
+
+    /* B2(a): re-arm the shared warband cycle; the step loop anchors it to the
+       wave's first actionable tick N. */
+    s->warband_cycle_anchor = -1;
 
     if (s->wave < 0 || s->wave >= COLO_NUM_WAVES) return;
     const ColoWaveDef* def = &COLO_WAVES[s->wave];
@@ -283,12 +284,14 @@ static void col_spawn_wave(ColosseumState* s) {
                 col_spawn_pair_adjacent(s, type, ax, ay);
         }
 
-        /* Quartet: one extra random warbander every wave, also centre-box. */
+        /* Quartet: one extra random warbander every wave, also centre-box; it
+           holds the SOUTH diamond slot (B2(c)). */
         if (col_mod_active(s, COLO_MOD_QUARTET)) {
             ColoNpcType extra = COLO_WARBAND_TYPES[encounter_rand_int(&s->rng_state, 3)];
             int qx, qy;
             col_draw_warband_box_tile(s, &qx, &qy);
-            col_spawn_npc_at(s, extra, qx, qy);
+            int slot = col_spawn_npc_at(s, extra, qx, qy);
+            colo_npc_warband(&s->npcs[slot])->formation_dir = COLO_WARBAND_FORM_SOUTH;
         }
     }
 

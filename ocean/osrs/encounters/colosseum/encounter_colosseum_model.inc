@@ -129,11 +129,40 @@ static const int COLO_SPAWN_ANCHORS[COLO_NUM_SPAWN_ANCHORS][2] = {
 
 /* B2(d) geometry: the warband does NOT use the anchors. The ranger spawns
    uniformly inside the b5 centre box, world (1820,3105)-(1826,3111); berserker +
-   seer take adjacent tiles. Warband behavior (cycle/formation/speed) is P2. */
+   seer take adjacent tiles. */
 #define COLO_WARBAND_BOX_MIN_X 12
 #define COLO_WARBAND_BOX_MIN_Y 15
 #define COLO_WARBAND_BOX_MAX_X 18
 #define COLO_WARBAND_BOX_MAX_Y 21
+
+/* B2(a): the trio attacks on ONE shared 6-tick cycle anchored to the wave's
+   first actionable tick N (the COLO_START_READY_TICKS ready delay = the
+   researched click+6): berserker window N+1, seer N+2, archer N+3, then 3
+   silent ticks. D30: assume the wave-anchored phase survived the April 2024
+   rebalance. */
+#define COLO_WARBAND_CYCLE_TICKS 6
+
+/* B2(e)+D3: warbanders "dart" — 2 path steps per tick (OSRS run pace; no
+   tiles/tick figure exists in any source). Everything else stays 1. */
+#define COLO_WARBAND_TILES_PER_TICK 2
+
+/** B2(c): the diamond slot a warbander holds around the player. Berserker
+    prioritises NORTH, seer EAST, archer WEST; the Quartet extra takes SOUTH.
+    World north = sim +y. */
+typedef enum {
+    COLO_WARBAND_FORM_NORTH = 0,
+    COLO_WARBAND_FORM_EAST,
+    COLO_WARBAND_FORM_WEST,
+    COLO_WARBAND_FORM_SOUTH,
+} ColoWarbandFormation;
+
+/** (dx, dy) from the player's tile to each formation slot's preferred tile. */
+static const int COLO_WARBAND_FORM_OFFSET[4][2] = {
+    [COLO_WARBAND_FORM_NORTH] = { 0, 1 },
+    [COLO_WARBAND_FORM_EAST]  = { 1, 0 },
+    [COLO_WARBAND_FORM_WEST]  = { -1, 0 },
+    [COLO_WARBAND_FORM_SOUTH] = { 0, -1 },
+};
 
 /* A17+B8+D2: gates are wall GAPS spanning sim x 15-18 in the north (sim row 33)
    and south (sim row 0) inner wall rows (doors blocked, flanks walkable).
@@ -178,7 +207,7 @@ static const int COLO_NPC_DEF_IDS[COLO_NUM_NPC_TYPES] = {
     [COLO_JAGUAR_WARRIOR]      = 12810,
     [COLO_JAVELIN_COLOSSUS]    = 12817,
     [COLO_SHOCKWAVE_COLOSSUS]  = 12819,
-    [COLO_MINOTAUR]            = 12812,
+    [COLO_MINOTAUR]            = 12812,  /* A30: Red Flag variant 12813 deferred — no exported model yet */
     [COLO_MANTICORE]           = 12818,
     [COLO_SOL_HEREDIT]         = 12821,
 };
@@ -234,18 +263,21 @@ typedef struct {
 } ColoNpcOverlay;
 
 /** Canonical Fortis Colosseum NPC combat stats (refs/osrs-dps-calc, cross-checked
-    vs OSRS wiki). Self-contained: the shared combat fns take plain ints, so
-    Colosseum needs no MONSTER_DATABASE entry. Field order follows MonsterStats. */
+    vs OSRS wiki; warband offensive bonuses aligned to the decoded cache params,
+    A31). Self-contained: the shared combat fns take plain ints, so Colosseum
+    needs no MONSTER_DATABASE entry. Field order follows MonsterStats.
+    D30: warband attack_speed is the scripted 6t shared cycle; cache param 14=5
+    is treated as engine-internal. */
 static const MonsterStats COLO_NPC_BASE[COLO_NUM_NPC_TYPES] = {
     [COLO_FREMENNIK_BERSERKER] = { .npc_id=12816, .name="Fremennik berserker",
         .hp=48, .att_level=110,.str_level=110,.def_level=80,.magic_level=110,.range_level=110,
         .attack_speed=6,.size=1,.max_hit=29,
-        .melee_att_bonus=150,.melee_str_bonus=90,.magic_att_bonus=150,.magic_str_bonus=0,.range_att_bonus=0,.ranged_str_bonus=0,
+        .melee_att_bonus=150,.melee_str_bonus=90,.magic_att_bonus=0,.magic_str_bonus=0,.range_att_bonus=0,.ranged_str_bonus=0,
         .stab_def=50,.slash_def=50,.crush_def=50,.magic_def=0,.ranged_def=75 },
     [COLO_FREMENNIK_ARCHER] = { .npc_id=12814, .name="Fremennik archer",
         .hp=50, .att_level=110,.str_level=110,.def_level=80,.magic_level=110,.range_level=110,
         .attack_speed=6,.size=1,.max_hit=14,
-        .melee_att_bonus=150,.melee_str_bonus=150,.magic_att_bonus=150,.magic_str_bonus=0,.range_att_bonus=150,.ranged_str_bonus=10,
+        .melee_att_bonus=150,.melee_str_bonus=0,.magic_att_bonus=0,.magic_str_bonus=0,.range_att_bonus=150,.ranged_str_bonus=10,
         .stab_def=0,.slash_def=0,.crush_def=0,.magic_def=75,.ranged_def=50 },
     [COLO_FREMENNIK_SEER] = { .npc_id=12815, .name="Fremennik seer",
         .hp=50, .att_level=110,.str_level=110,.def_level=80,.magic_level=110,.range_level=110,
@@ -296,11 +328,13 @@ static const MonsterStats COLO_NPC_BASE[COLO_NUM_NPC_TYPES] = {
 
 /** encounter behavior overlay. attack_range/default_style/RPS weakness per type;
     Sol can_move=0 (boss logic drives it later). magic damage is the handset
-    max_hit, so no base/pct fields are needed here. */
+    max_hit, so no base/pct fields are needed here. A5: ALL THREE warbanders
+    attack only at melee distance while standing still — the archer/seer fire
+    their style point-blank, never at range. */
 static const ColoNpcOverlay COLO_NPC_OVERLAY[COLO_NUM_NPC_TYPES] = {
     [COLO_FREMENNIK_BERSERKER] = { .attack_range=1,  .default_style=ATTACK_STYLE_MELEE,  .melee_style=MELEE_STYLE_STAB,  .can_melee=1, .player_style_that_max_hits=ATTACK_STYLE_MAGIC,  .can_move=1 },
-    [COLO_FREMENNIK_ARCHER]    = { .attack_range=10, .default_style=ATTACK_STYLE_RANGED, .melee_style=MELEE_STYLE_STAB,  .can_melee=0, .player_style_that_max_hits=ATTACK_STYLE_MELEE,  .can_move=1 },
-    [COLO_FREMENNIK_SEER]      = { .attack_range=10, .default_style=ATTACK_STYLE_MAGIC,  .melee_style=MELEE_STYLE_STAB,  .can_melee=0, .player_style_that_max_hits=ATTACK_STYLE_RANGED, .can_move=1 },
+    [COLO_FREMENNIK_ARCHER]    = { .attack_range=1,  .default_style=ATTACK_STYLE_RANGED, .melee_style=MELEE_STYLE_STAB,  .can_melee=0, .player_style_that_max_hits=ATTACK_STYLE_MELEE,  .can_move=1 },
+    [COLO_FREMENNIK_SEER]      = { .attack_range=1,  .default_style=ATTACK_STYLE_MAGIC,  .melee_style=MELEE_STYLE_STAB,  .can_melee=0, .player_style_that_max_hits=ATTACK_STYLE_RANGED, .can_move=1 },
     [COLO_SERPENT_SHAMAN]      = { .attack_range=10, .default_style=ATTACK_STYLE_MAGIC,  .melee_style=MELEE_STYLE_STAB,  .can_melee=0, .player_style_that_max_hits=ATTACK_STYLE_NONE,  .can_move=1 },
     [COLO_JAGUAR_WARRIOR]      = { .attack_range=1,  .default_style=ATTACK_STYLE_MELEE,  .melee_style=MELEE_STYLE_SLASH, .can_melee=1, .player_style_that_max_hits=ATTACK_STYLE_NONE,  .can_move=1 },
     [COLO_JAVELIN_COLOSSUS]    = { .attack_range=15, .default_style=ATTACK_STYLE_RANGED, .melee_style=MELEE_STYLE_STAB,  .can_melee=0, .player_style_that_max_hits=ATTACK_STYLE_NONE,  .can_move=1 },
@@ -668,6 +702,19 @@ typedef struct {
     int unused;
 } ColoJaguarState;
 
+static int col_type_is_warbander(ColoNpcType type) {
+    return type == COLO_FREMENNIK_BERSERKER || type == COLO_FREMENNIK_ARCHER ||
+           type == COLO_FREMENNIK_SEER;
+}
+
+/** Fremennik warbander state. valid iff col_type_is_warbander(type); reach it
+    through colo_npc_warband(). formation_dir is the diamond slot the member
+    holds around the player (B2(c)): species default N/E/W, the Quartet extra
+    overridden to SOUTH at spawn. */
+typedef struct {
+    int formation_dir;   /* ColoWarbandFormation */
+} ColoWarbandState;
+
 /** manticore 3-orb barrage cycle. valid iff type is COLO_MANTICORE; reach it
     through colo_npc_manticore(). cycle_step counts ticks within a barrage:
     -1 = idle (waiting on attack_timer), 0/1/2 = next orb to fire 1 tick apart.
@@ -711,6 +758,7 @@ typedef struct {
         ColoJaguarState jaguar;       /* COLO_JAGUAR_WARRIOR */
         ColoManticoreState manticore; /* COLO_MANTICORE */
         ColoJavelinState javelin;     /* COLO_JAVELIN_COLOSSUS */
+        ColoWarbandState warband;     /* col_type_is_warbander(type) */
     } type_state;
 
     EncounterPendingHitQueue pending_hits;
@@ -744,6 +792,23 @@ static inline ColoJavelinState* colo_npc_javelin(ColoNPC* npc) {
     return &npc->type_state.javelin;
 }
 
+static inline ColoWarbandState* colo_npc_warband(ColoNPC* npc) {
+    assert(col_type_is_warbander(npc->type));
+    return &npc->type_state.warband;
+}
+
+/** B2(a): a species' attack-window offset inside the shared wave-anchored cycle. */
+static inline int col_warband_window_offset(ColoNpcType type) {
+    switch (type) {
+        case COLO_FREMENNIK_BERSERKER: return 1;
+        case COLO_FREMENNIK_SEER:      return 2;
+        case COLO_FREMENNIK_ARCHER:    return 3;
+        default:
+            assert(0 && "warband window offset queried for a non-warbander");
+            return 0;
+    }
+}
+
 /** ticks the marked skyfall tile lands after the javelin throws it. */
 #define COLO_JAVELIN_SKYFALL_DELAY 3
 /** a ready manticore delays its barrage start while another is mid-barrage. */
@@ -753,6 +818,15 @@ static inline ColoJavelinState* colo_npc_javelin(ColoNPC* npc) {
     have zeroed the NPC and set npc->type first. */
 static void colo_npc_init_type_state(ColoNPC* npc) {
     switch (npc->type) {
+        case COLO_FREMENNIK_BERSERKER:
+            npc->type_state.warband = (ColoWarbandState){ .formation_dir = COLO_WARBAND_FORM_NORTH };
+            break;
+        case COLO_FREMENNIK_SEER:
+            npc->type_state.warband = (ColoWarbandState){ .formation_dir = COLO_WARBAND_FORM_EAST };
+            break;
+        case COLO_FREMENNIK_ARCHER:
+            npc->type_state.warband = (ColoWarbandState){ .formation_dir = COLO_WARBAND_FORM_WEST };
+            break;
         case COLO_JAGUAR_WARRIOR:
             npc->type_state.jaguar = (ColoJaguarState){0};
             break;
@@ -888,6 +962,7 @@ typedef struct {
     int wave_spawn_delay;
     int wave_ready_delay;
     int reinforcement_timer;  /* 40s (66-tick) reinforcement countdown */
+    int warband_cycle_anchor; /* B2(a): the wave's first actionable tick N (-1 until live) */
     int episode_over;
     ColoOutcome winner;       /* valid only when episode_over is set */
 

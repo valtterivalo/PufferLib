@@ -94,7 +94,7 @@ Format: ledger | sim value (file:line) | correct value | source | confidence | i
 - Confidence: verified (multi-source, exact-coordinate agreement).
 - Impact: 5. Spawn geometry is the wave game: aggro timing, offtick setups, safespot routes.
 
-### A5. Warband archer/seer attack range (ledger 3.5, 3.6, 7.9-part)
+### A5. Warband archer/seer attack range (ledger 3.5, 3.6, 7.9-part) — IMPLEMENTED P2
 - Sim: archer and seer attack_range=10, hold-at-range with LoS (model:205-206, move:87-118).
 - Correct: ALL THREE warbanders only attack in MELEE DISTANCE while standing still ("They
   attack on a fixed 6 tick cycle, only attacking when they are in melee distance and are not
@@ -368,7 +368,7 @@ Format: ledger | sim value (file:line) | correct value | source | confidence | i
 - Confidence: verified (derived).
 - Impact: 2 (overflow/dropped-spawn bug under modifier combos).
 
-### A30. Red Flag implementation (ledger 5.18)
+### A30. Red Flag implementation (ledger 5.18) — IMPLEMENTED P2 (BFS routefinding; viewer def-id 12813 deferred, no exported model)
 - Sim: blocked minotaur takes a 1-tile orthogonal sidestep (move:61-80).
 - Correct: Red Flag swaps the minotaur to a dedicated ROUTEFINDING variant (distinct NPC id
   12813, COLOSSEUM_MINOTAUR_ROUTEFIND) with real pathing around obstacles — "impossible to
@@ -378,7 +378,7 @@ Format: ledger | sim value (file:line) | correct value | source | confidence | i
 - Confidence: verified.
 - Impact: 2 (5 once B1 lands; gates the pillar-safespot strategy).
 
-### A31. Warband offensive-bonus table skew vs cache (ledger 3.1, 3.2-part)
+### A31. Warband offensive-bonus table skew vs cache (ledger 3.1, 3.2-part) — IMPLEMENTED P2
 - Sim: archer melee_str_bonus=150 (model:151) vs cache param 10 = 0; berserker/archer
   magic_att_bonus=150 (model:146,151) vs cache param 3 = 0 (dps-calc carries the 150s; LRF
   recorded the divergence). Combat-irrelevant today (archer never melees, berserker never
@@ -398,7 +398,7 @@ stationary, so it is a contradiction, with the movement system to build); Quarte
 exists but is broken → A6; Bees under-player damage already exists (ledger 5.9) → C; the sim
 already carries post-3-April-2024 warband stats, so there is no launch-stat skew to fix → C.
 
-### B1. The four arena pillars on waves 1-11 (+ routefinding/LoS) (ledger 1.12 omission) — IMPLEMENTED P1 (pillars + LoS + attack gating; NPC routefinding lands in P2)
+### B1. The four arena pillars on waves 1-11 (+ routefinding/LoS) (ledger 1.12 omission) — IMPLEMENTED P1 (pillars + LoS + attack gating; NPC routefinding landed in P2: warband + Red Flag minotaur)
 - Missing: four 3x3 pillars (obj 52490) at world SW (1816,3098), (1831,3098), (1816,3113),
   (1831,3113) (sim-local (9,9),(24,9),(9,24),(24,24)) exist on EVERY wave. They block movement
   and line of sight. Consequences the sim currently cannot express: pillar safespotting vs
@@ -412,7 +412,7 @@ already carries post-3-April-2024 warband stats, so there is no launch-stat skew
 - Confidence: verified.
 - Impact: 5. The single largest structural gap in the sim.
 
-### B2. Warband shared cycle, attack-skip, formation, centre spawn (ledger 3.10, 3.4-part, 7.20-part)
+### B2. Warband shared cycle, attack-skip, formation, centre spawn (ledger 3.10, 3.4-part, 7.20-part) — IMPLEMENTED P2 (centre spawn was P1)
 - Missing: (a) the trio attacks on ONE shared 6-tick cycle anchored to wave start — berserker
   at N+1, seer N+2, archer N+3, then 3 silent ticks (launch-week writeup: wave starts 6 ticks
   after the start click; first berserker window 1 tick after spawn — not after a full 6-tick
@@ -627,6 +627,7 @@ Format: sim's current value | evidence state | recommendation (all MODELED DECIS
    (local x 16-19) on the inner walkable row of the chosen wall. IMPLEMENTED P1.
 3. Warband movement speed (7.17): sim 1 tile/tick | "runs"/"darts", no tiles/tick figure
    anywhere | 2 tiles/tick for the three warbanders (OSRS run pace), 1 for everything else.
+   IMPLEMENTED P2.
 4. Spawn-slot RNG (1.4): sim Fisher-Yates over the table | only the 4-tile exclusion plus
    outcome odds ("4/9 see you on SW", "1 in 6 double south on 8/10/11 NW", "~2/3 double
    north SW") are documented | uniform without replacement over non-excluded anchors;
@@ -701,7 +702,7 @@ Format: sim's current value | evidence state | recommendation (all MODELED DECIS
 30. Warband attack-rate param: cache param 14 = 5 vs wiki/dps-calc 6t | the scripted shared
     cycle is 6t (B2/C) | model the 6t cycle; treat param 14 as engine-internal. Also D:
     whether the wave-anchored cycle phase survived the April 2024 rebalance (writeup is
-    launch-week) | assume yes.
+    launch-week) | assume yes. IMPLEMENTED P2.
 31. Reentry offered after wave 11 (5.5): sim excludes it | only Red Flag/Dynamic Duo/
     Mantimayhem exclusions are sourced | keep excluding (it is inert vs Sol, same logic
     Jagex applied to Mantimayhem).
@@ -710,7 +711,8 @@ Format: sim's current value | evidence state | recommendation (all MODELED DECIS
 33. Melee gate diagonals (7.10): sim Chebyshev-1 for all | minotaur heal text implies
     diagonal counts as melee distance; per-NPC attack diagonality unpinned (OSRS 1x1 melee
     is normally cardinal-only) | keep Chebyshev for size-2/3 NPCs and Sol; consider
-    cardinal-only for the 1x1 warband/shaman if cheap.
+    cardinal-only for the 1x1 warband/shaman if cheap. IMPLEMENTED P2 (warbanders
+    cardinal-only; shaman unchanged).
 34. Bees spawn location / diagonal step / boss-arena clamp immunity (5.9): sim random
     spawn-table tile, diagonal allowed, ignores clamp | unpinned; bees ARE active during the
     Sol fight (CA "Reinforcements" requires Bees! II vs Sol) | keep all three (clamp

@@ -13,7 +13,11 @@
  *      pillar blocking, spawn-anchor placement + the B3 player-proximity
  *      exclusion, gate-gap reinforcements with the b5 yellow-line side rule,
  *      static-mask line of sight + the ranged attack gate, and the wave-12
- *      quartet-reachability + Sol-death-wins predicate.
+ *      quartet-reachability + Sol-death-wins predicate;
+ *   4. P2 warband rework: the shared wave-anchored 6-tick cycle offsets (A5+B2),
+ *      the player-moving attack skip, the cardinal melee-distance gate, formation
+ *      convergence (diamond N/E/W/S), 2-tiles/tick routefinding around pillars vs
+ *      the safespottable greedy shaman, and Red Flag minotaur routefinding (A30).
  *
  * BUILD:
  *   cc -std=c11 -O0 -g -I. -o /tmp/test_colosseum_modifiers \
@@ -481,7 +485,9 @@ static void test_static_arena_mask(void) {
 }
 
 /* 3b. static-mask LoS + the ranged attack gate: pillars and gate doors block
-   centre-to-centre rays; an archer without LoS holds fire and chases instead. */
+   centre-to-centre rays; a shaman without LoS holds fire and chases instead.
+   (A5 made the warband archer melee-only, so the serpent shaman now carries the
+   range-10 LoS-gate coverage this test originally pinned on the archer.) */
 static void test_static_los_and_attack_gate(void) {
     printf("test_static_los_and_attack_gate\n");
     ColosseumContext ctx;
@@ -497,24 +503,24 @@ static void test_static_los_and_attack_gate(void) {
     CHECK("north gate doors block along the inner row", !col_tiles_have_los(&s, 14, 33, 19, 33));
     CHECK("row 32 inside the north gate is clear", col_tiles_have_los(&s, 14, 32, 19, 32));
 
-    /* archer at (13,9) vs player at (5,9): pillar (8..10, 8..10) between them. */
+    /* shaman at (13,9) vs player at (5,9): pillar (8..10, 8..10) between them. */
     s.player.x = 5; s.player.y = 9;
-    col_init_npc(&s, 0, COLO_FREMENNIK_ARCHER, 13, 9);
+    col_init_npc(&s, 0, COLO_SERPENT_SHAMAN, 13, 9);
     s.npcs[0].attack_timer = 0;
-    CHECK("archer behind the pillar has no LoS", !col_npc_has_los_to_player(&s, &s.npcs[0]));
+    CHECK("shaman behind the pillar has no LoS", !col_npc_has_los_to_player(&s, &s.npcs[0]));
     col_npc_attack_ctx(&s, &ctx, 0);
-    CHECK("no-LoS archer holds fire", s.npcs[0].attacked_this_tick == 0);
+    CHECK("no-LoS shaman holds fire", s.npcs[0].attacked_this_tick == 0);
     col_npc_move_ctx(&s, &ctx, 0);
-    CHECK("no-LoS archer steps toward the player instead", s.npcs[0].moved_this_tick == 1);
+    CHECK("no-LoS shaman steps toward the player instead", s.npcs[0].moved_this_tick == 1);
 
     /* same range with a clear row: the attack fires. */
     geo_clear_npcs(&s);
     s.player.x = 5; s.player.y = 12;
-    col_init_npc(&s, 0, COLO_FREMENNIK_ARCHER, 13, 12);
+    col_init_npc(&s, 0, COLO_SERPENT_SHAMAN, 13, 12);
     s.npcs[0].attack_timer = 0;
-    CHECK("clear-row archer has LoS", col_npc_has_los_to_player(&s, &s.npcs[0]));
+    CHECK("clear-row shaman has LoS", col_npc_has_los_to_player(&s, &s.npcs[0]));
     col_npc_attack_ctx(&s, &ctx, 0);
-    CHECK("clear-row archer attacks", s.npcs[0].attacked_this_tick == 1);
+    CHECK("clear-row shaman attacks", s.npcs[0].attacked_this_tick == 1);
 }
 
 /* 3c. spawn anchors: NPC SW lands ON an anchor, the B3 exclusion suppresses
@@ -729,6 +735,319 @@ static void test_wave12_quartet_and_win(void) {
     CHECK("the surviving warbander does not block the win", survivor_ok);
 }
 
+/* ---- 4. P2 warband rework + Red Flag routefinding -------------------------- */
+
+static int wb_find_npc(const ColosseumState* s, ColoNpcType type) {
+    for (int i = 0; i < COLO_MAX_NPCS; i++)
+        if (s->npcs[i].active && s->npcs[i].type == type) return i;
+    return -1;
+}
+
+/* deactivate every non-warbander so warband behavior runs in isolation. */
+static void wb_isolate_warband(ColosseumState* s) {
+    for (int i = 0; i < COLO_MAX_NPCS; i++)
+        if (s->npcs[i].active && !col_type_is_warbander(s->npcs[i].type))
+            col_deactivate_npc(s, i);
+}
+
+/* teleport an NPC with clean collision restamping (mirrors the lab move). */
+static void wb_move_npc(ColosseumState* s, int slot, int x, int y) {
+    int size = col_npc_effective_size(&s->npcs[slot]);
+    col_stamp_npc_collision_footprint(s, s->npcs[slot].x, s->npcs[slot].y, size, 0);
+    s->npcs[slot].x = x;
+    s->npcs[slot].y = y;
+    col_stamp_npc_collision_footprint(s, x, y, size, 1);
+}
+
+/* count of active warbanders flagged attacked_this_tick after a step. */
+static int wb_attacks_this_tick(const ColosseumState* s, ColoNpcType type) {
+    int n = 0;
+    for (int i = 0; i < COLO_MAX_NPCS; i++)
+        if (s->npcs[i].active && s->npcs[i].type == type &&
+            s->npcs[i].attacked_this_tick) n++;
+    return n;
+}
+
+/* 4a. B2(a): one shared cycle anchored to the wave's first actionable tick N —
+   berserker lands only on ticks = N+1 (mod 6), seer N+2, archer N+3, and the
+   first berserker window is exactly N+1 (not a full attack-speed timer later). */
+static void test_warband_cycle_offsets(void) {
+    printf("test_warband_cycle_offsets\n");
+    ColosseumContext ctx;
+    col_init_context_typed(&ctx);
+    ctx.config.start_wave = 0;
+    ColosseumState s;
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 51);
+    wb_isolate_warband(&s);
+
+    /* park the trio on its formation tiles so every window is eligible. */
+    wb_move_npc(&s, wb_find_npc(&s, COLO_FREMENNIK_BERSERKER), s.player.x, s.player.y + 1);
+    wb_move_npc(&s, wb_find_npc(&s, COLO_FREMENNIK_SEER), s.player.x + 1, s.player.y);
+    wb_move_npc(&s, wb_find_npc(&s, COLO_FREMENNIK_ARCHER), s.player.x - 1, s.player.y);
+
+    int idle[COLO_NUM_ACTION_HEADS] = {0};
+    int anchor = -1;
+    int first_tick[3] = { -1, -1, -1 };   /* berserker, seer, archer */
+    int count[3] = { 0, 0, 0 };
+    int offsets_ok = 1;
+    static const ColoNpcType SPECIES[3] = {
+        COLO_FREMENNIK_BERSERKER, COLO_FREMENNIK_SEER, COLO_FREMENNIK_ARCHER };
+
+    for (int t = 0; t < 46 && !s.episode_over; t++) {
+        s.player.current_hitpoints = 9999;   /* survive the full standing cycle */
+        step_and_observe(&s, &ctx, idle);
+        if (anchor < 0) anchor = s.warband_cycle_anchor;
+        for (int sp = 0; sp < 3; sp++) {
+            if (!wb_attacks_this_tick(&s, SPECIES[sp])) continue;
+            count[sp]++;
+            if (first_tick[sp] < 0) first_tick[sp] = s.tick;
+            if (anchor < 0 || (s.tick - anchor) % COLO_WARBAND_CYCLE_TICKS != sp + 1)
+                offsets_ok = 0;
+        }
+    }
+    CHECK("cycle anchored at the wave's first actionable tick", anchor >= 0);
+    CHECK("standing player eats repeated full cycles (berserker)", count[0] >= 4);
+    CHECK("standing player eats repeated full cycles (seer)", count[1] >= 4);
+    CHECK("standing player eats repeated full cycles (archer)", count[2] >= 4);
+    CHECK("berserker only lands on ticks = N+1 mod 6; seer +2; archer +3", offsets_ok);
+    CHECK("first berserker window is exactly N+1 (wave-anchored, no spawn timer)",
+        first_tick[0] == anchor + 1);
+    CHECK("seer first window N+2", first_tick[1] == anchor + 2);
+    CHECK("archer first window N+3", first_tick[2] == anchor + 3);
+}
+
+/* 4b. B2(b): the player moving on a window tick makes that member skip its whole
+   cycle — a scripted stutter-step (walk south every tick) takes zero warband
+   damage even with the trio glued to the player. */
+static void test_warband_move_skip(void) {
+    printf("test_warband_move_skip\n");
+    ColosseumContext ctx;
+    col_init_context_typed(&ctx);
+    ctx.config.start_wave = 0;
+    ColosseumState s;
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 53);
+    wb_isolate_warband(&s);
+    wb_move_npc(&s, wb_find_npc(&s, COLO_FREMENNIK_BERSERKER), s.player.x, s.player.y + 1);
+    wb_move_npc(&s, wb_find_npc(&s, COLO_FREMENNIK_SEER), s.player.x + 1, s.player.y);
+    wb_move_npc(&s, wb_find_npc(&s, COLO_FREMENNIK_ARCHER), s.player.x - 1, s.player.y);
+
+    int idle[COLO_NUM_ACTION_HEADS] = {0};
+    int walk_south[COLO_NUM_ACTION_HEADS] = {0};
+    walk_south[COLO_HEAD_MOVE] = 4;   /* walk (0,-1) */
+
+    /* idle through the ready gap; the anchor arms on the first live tick (a
+       windowless phase-0 tick, safe to stand on). */
+    while (s.warband_cycle_anchor < 0 && !s.episode_over)
+        step_and_observe(&s, &ctx, idle);
+
+    int attacks = 0;
+    int moved_every_tick = 1;
+    for (int t = 0; t < 14 && !s.episode_over; t++) {
+        s.player.current_hitpoints = 9999;
+        step_and_observe(&s, &ctx, walk_south);
+        if (!s.tick_scratch.player_moved) moved_every_tick = 0;
+        for (int sp = 0; sp < COLO_MAX_NPCS; sp++)
+            if (s.npcs[sp].active && col_type_is_warbander(s.npcs[sp].type) &&
+                s.npcs[sp].attacked_this_tick) attacks++;
+    }
+    CHECK("the scripted stutter-step actually moved every tick", moved_every_tick);
+    CHECK("warband fired zero attacks across the stutter-step run", attacks == 0);
+    CHECK("zero warband damage across the stutter-step run",
+        s.log.total_damage_received == 0.0f);
+}
+
+/* 4c. A5+D33: the melee-distance gate — an archer at range never attacks on its
+   window even with clear LoS; cardinal contact attacks; diagonal contact does
+   not (1x1 OSRS melee is cardinal-only). */
+static void test_warband_melee_distance_gate(void) {
+    printf("test_warband_melee_distance_gate\n");
+    ColosseumContext ctx;
+    col_init_context_typed(&ctx);
+    ColosseumState s;
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 57);
+    geo_clear_npcs(&s);
+    s.player.x = 7; s.player.y = 18;
+    s.tick_scratch.player_moved = 0;
+    s.tick = 100;
+
+    /* distance 5 along a clear row (LoS verified): the pre-A5 sim attacked here. */
+    col_init_npc(&s, 0, COLO_FREMENNIK_ARCHER, 12, 18);
+    CHECK("rig sanity: the ranged archer has clear LoS",
+        col_npc_has_los_to_player(&s, &s.npcs[0]));
+    s.warband_cycle_anchor = s.tick - 3;   /* phase 3 = archer window NOW */
+    col_warband_attack_phase(&s);
+    CHECK("archer at distance never attacks, even with LoS on its window",
+        s.npcs[0].attacked_this_tick == 0);
+
+    /* cardinal contact on the window attacks. */
+    wb_move_npc(&s, 0, 8, 18);
+    col_warband_attack_phase(&s);
+    CHECK("cardinally adjacent archer attacks on its window",
+        s.npcs[0].attacked_this_tick == 1);
+
+    /* diagonal contact is not melee distance for a 1x1 warbander (D33). */
+    s.npcs[0].attacked_this_tick = 0;
+    wb_move_npc(&s, 0, 8, 19);
+    col_warband_attack_phase(&s);
+    CHECK("diagonally adjacent archer does not attack (cardinal-only)",
+        s.npcs[0].attacked_this_tick == 0);
+}
+
+/* 4d. B2(c): formation convergence — the trio ends N/E/W of a stationary player,
+   and a Quartet run completes the diamond with the extra member SOUTH. */
+static void test_warband_formation_convergence(void) {
+    printf("test_warband_formation_convergence\n");
+    ColosseumContext ctx;
+    col_init_context_typed(&ctx);
+    ctx.config.start_wave = 0;
+    int idle[COLO_NUM_ACTION_HEADS] = {0};
+
+    for (int quartet = 0; quartet <= 1; quartet++) {
+        ColosseumState s;
+        memset(&s, 0, sizeof(s));
+        col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 59 + (uint32_t)quartet);
+        if (quartet) {
+            s.modifiers.active_mask |= (1u << COLO_MOD_QUARTET);
+            s.modifiers.tier[COLO_MOD_QUARTET] = 1;
+            s.wave = 0;
+            col_spawn_wave(&s);
+        }
+        wb_isolate_warband(&s);
+
+        for (int t = 0; t < 30 && !s.episode_over; t++) {
+            s.player.current_hitpoints = 9999;
+            step_and_observe(&s, &ctx, idle);
+        }
+
+        int formed_ok = 1, members = 0;
+        for (int i = 0; i < COLO_MAX_NPCS; i++) {
+            ColoNPC* npc = &s.npcs[i];
+            if (!npc->active || !col_type_is_warbander(npc->type)) continue;
+            members++;
+            int dir = colo_npc_warband(npc)->formation_dir;
+            int ex = s.player.x + COLO_WARBAND_FORM_OFFSET[dir][0];
+            int ey = s.player.y + COLO_WARBAND_FORM_OFFSET[dir][1];
+            if (npc->x != ex || npc->y != ey) formed_ok = 0;
+        }
+        if (quartet) {
+            CHECK("Quartet diamond: 4 members each on their N/E/W/S slot",
+                formed_ok && members == 4);
+        } else {
+            CHECK("trio converges to exactly N/E/W of a stationary player",
+                formed_ok && members == 3);
+        }
+    }
+}
+
+/* 4e. B2(e)+D3: a warbander covers 2 tiles in a single movement tick. */
+static void test_warband_two_tile_speed(void) {
+    printf("test_warband_two_tile_speed\n");
+    ColosseumContext ctx;
+    col_init_context_typed(&ctx);
+    ColosseumState s;
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 61);
+    geo_clear_npcs(&s);
+    s.player.x = 7; s.player.y = 18;
+
+    col_init_npc(&s, 0, COLO_FREMENNIK_ARCHER, 20, 18);
+    col_npc_move_ctx(&s, &ctx, 0);
+    CHECK("warbander closes 2 tiles in one tick on open ground",
+        s.npcs[0].x == 18 && s.npcs[0].y == 18 && s.npcs[0].moved_this_tick == 1);
+    col_npc_move_ctx(&s, &ctx, 0);
+    CHECK("second tick closes 2 more", s.npcs[0].x == 16 && s.npcs[0].y == 18);
+}
+
+/* 4f. B2(e): warband routefinding rounds a pillar to reach the player while the
+   greedy serpent shaman wedges against it — the pillar-safespot asymmetry. */
+static void test_warband_pillar_routefind_vs_shaman_safespot(void) {
+    printf("test_warband_pillar_routefind_vs_shaman_safespot\n");
+    ColosseumContext ctx;
+    col_init_context_typed(&ctx);
+    int idle[COLO_NUM_ACTION_HEADS] = {0};
+
+    /* player flush behind the SW pillar (8..10, 8..10) on row 9; the chaser
+       starts due east so the greedy x-pull has no y component to slide on. */
+    ColosseumState s;
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 67);
+    geo_clear_npcs(&s);
+    s.player.x = 7; s.player.y = 9;
+    col_rebuild_player_collision_flags(&s);
+
+    col_init_npc(&s, 0, COLO_FREMENNIK_ARCHER, 13, 9);
+    int adjacent_by = -1;
+    int archer_attacks = 0;
+    for (int t = 0; t < 40 && !s.episode_over; t++) {
+        s.player.current_hitpoints = 9999;
+        step_and_observe(&s, &ctx, idle);
+        int dx = abs(s.npcs[0].x - s.player.x), dy = abs(s.npcs[0].y - s.player.y);
+        if (dx + dy == 1 && adjacent_by < 0) adjacent_by = t;
+        archer_attacks += wb_attacks_this_tick(&s, COLO_FREMENNIK_ARCHER);
+    }
+    CHECK("archer routefinds around the pillar into melee contact",
+        adjacent_by >= 0 && adjacent_by <= 14);
+    CHECK("the routefinding archer then lands cycle attacks", archer_attacks > 0);
+
+    /* same spot, greedy shaman: wedges on the pillar face with no LoS, never
+       attacks — the shaman is MEANT to be pillar-safespottable. */
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 67);
+    geo_clear_npcs(&s);
+    s.player.x = 7; s.player.y = 9;
+    col_rebuild_player_collision_flags(&s);
+    col_init_npc(&s, 0, COLO_SERPENT_SHAMAN, 13, 9);
+    int shaman_attacks = 0;
+    for (int t = 0; t < 40 && !s.episode_over; t++) {
+        s.player.current_hitpoints = 9999;
+        step_and_observe(&s, &ctx, idle);
+        shaman_attacks += s.npcs[0].attacked_this_tick;
+    }
+    CHECK("greedy shaman wedges against the pillar (safespot holds)",
+        s.npcs[0].x == 11 && s.npcs[0].y == 9);
+    CHECK("safespotted shaman never attacks", shaman_attacks == 0);
+}
+
+/* 4g. A30: the Red Flag minotaur routefinds a pillar-safespotted player; the
+   plain minotaur stays wedged (safespottable by design). */
+static void test_red_flag_minotaur_routefind(void) {
+    printf("test_red_flag_minotaur_routefind\n");
+    ColosseumContext ctx;
+    col_init_context_typed(&ctx);
+
+    for (int red_flag = 0; red_flag <= 1; red_flag++) {
+        ColosseumState s;
+        memset(&s, 0, sizeof(s));
+        col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 71);
+        geo_clear_npcs(&s);
+        if (red_flag) {
+            s.modifiers.active_mask |= (1u << COLO_MOD_RED_FLAG);
+            s.modifiers.tier[COLO_MOD_RED_FLAG] = 1;
+        }
+        s.player.x = 7; s.player.y = 9;
+        col_rebuild_player_collision_flags(&s);
+
+        /* 3x3 footprint (11..13, 9..11), pure-west pull into the pillar face. */
+        col_init_npc(&s, 0, COLO_MINOTAUR, 11, 9);
+        int min_dist = 99;
+        for (int t = 0; t < 40; t++) {
+            col_npc_move_ctx(&s, &ctx, 0);
+            int d = encounter_dist_to_npc(
+                s.player.x, s.player.y, s.npcs[0].x, s.npcs[0].y, 3);
+            if (d < min_dist) min_dist = d;
+        }
+        if (red_flag) {
+            CHECK("Red Flag minotaur routefinds into melee contact", min_dist == 1);
+        } else {
+            CHECK("plain minotaur stays wedged on the pillar (safespot holds)",
+                s.npcs[0].x == 11 && s.npcs[0].y == 9 && min_dist == 4);
+        }
+    }
+}
+
 int main(void) {
     test_fuzz_obs_mask();
     test_step_loop_draft();
@@ -746,6 +1065,13 @@ int main(void) {
     test_reinforcement_gates();
     test_roster_cap_nine();
     test_wave12_quartet_and_win();
+    test_warband_cycle_offsets();
+    test_warband_move_skip();
+    test_warband_melee_distance_gate();
+    test_warband_formation_convergence();
+    test_warband_two_tile_speed();
+    test_warband_pillar_routefind_vs_shaman_safespot();
+    test_red_flag_minotaur_routefind();
 
     printf("\n%d/%d passed", tests_passed, tests_run);
     if (tests_failed) printf(", %d FAILED", tests_failed);

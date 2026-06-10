@@ -328,6 +328,9 @@ static void col_npc_attack_ctx(ColosseumState* s, ColosseumContext* ctx, int idx
     const ColoNpcStats* stats = &COLO_NPC_STATS[npc->type];
 
     if (npc->type == COLO_SOL_HEREDIT) return;  /* boss handled in col_sol_tick */
+    /* B2(a): warbanders attack on the shared wave-anchored cycle, resolved in
+       col_warband_attack_phase after the player's move phase — never here. */
+    if (col_type_is_warbander(npc->type)) return;
 
     /* an in-flight manticore barrage fires its remaining orbs 1 tick apart,
        independent of the main attack cadence. */
@@ -370,11 +373,6 @@ static void col_npc_attack_ctx(ColosseumState* s, ColosseumContext* ctx, int idx
         case COLO_MANTICORE:
             col_npc_attack_manticore(s, idx, stats);
             return;  /* manticore sets its own timer at barrage end */
-        case COLO_FREMENNIK_BERSERKER:
-            col_npc_queue_melee(s, idx, stats, stats->max_hit);
-            break;
-        case COLO_FREMENNIK_ARCHER:
-        case COLO_FREMENNIK_SEER:
         case COLO_SERPENT_SHAMAN:
         case COLO_SHOCKWAVE_COLOSSUS:
             col_npc_queue_projectile(s, idx, stats, style, stats->max_hit);
@@ -383,6 +381,49 @@ static void col_npc_attack_ctx(ColosseumState* s, ColosseumContext* ctx, int idx
             return;
     }
     npc->attack_timer = stats->attack_speed;
+}
+
+/** A5+D33: warbander melee gate — cardinal-only adjacency (1x1 OSRS melee). */
+static int col_warband_melee_adjacent(const ColosseumState* s, const ColoNPC* npc) {
+    int dx = npc->x > s->player.x ? npc->x - s->player.x : s->player.x - npc->x;
+    int dy = npc->y > s->player.y ? npc->y - s->player.y : s->player.y - npc->y;
+    return dx + dy == 1;
+}
+
+/**
+ * B2: the warband's shared 6-tick attack cycle, anchored to the wave's first
+ * actionable tick N (warband_cycle_anchor): berserker window N+1, seer N+2,
+ * archer N+3, then 3 silent ticks. A member attacks on its window only when it
+ * is cardinally adjacent (A5), did not move this tick, and the player did not
+ * move this tick (B2(b) — movement is the dodge mechanic); otherwise it misses
+ * the whole cycle. Quartet extras share the window of their species. Runs AFTER
+ * the player's move phase of the same tick (NPCs otherwise act first), so
+ * "moving" means the player changed tile on the window tick itself.
+ *
+ * attack_timer no longer gates these attacks; it is rewritten every live tick
+ * as ticks-until-window so the obs slot stays meaningful.
+ */
+static void col_warband_attack_phase(ColosseumState* s) {
+    if (s->warband_cycle_anchor < 0) return;
+    int phase = (s->tick - s->warband_cycle_anchor) % COLO_WARBAND_CYCLE_TICKS;
+    for (int i = 0; i < COLO_MAX_NPCS; i++) {
+        ColoNPC* npc = &s->npcs[i];
+        if (!npc->active || npc->death_ticks > 0) continue;
+        if (!col_type_is_warbander(npc->type)) continue;
+        int wait = (col_warband_window_offset(npc->type) - phase
+                    + COLO_WARBAND_CYCLE_TICKS) % COLO_WARBAND_CYCLE_TICKS;
+        npc->attack_timer = wait;
+        if (wait != 0) continue;
+        if (npc->stun_timer > 0 || npc->frozen_ticks > 0) continue;
+        if (npc->moved_this_tick) continue;
+        if (s->tick_scratch.player_moved) continue;
+        if (!col_warband_melee_adjacent(s, npc)) continue;
+        const ColoNpcStats* stats = &COLO_NPC_STATS[npc->type];
+        if (npc->type == COLO_FREMENNIK_BERSERKER)
+            col_npc_queue_melee(s, i, stats, stats->max_hit);
+        else
+            col_npc_queue_projectile(s, i, stats, stats->default_style, stats->max_hit);
+    }
 }
 
 /**

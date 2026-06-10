@@ -91,41 +91,111 @@ static int col_npc_blocked(void* ctx, int x, int y, int size) {
     return 0;
 }
 
-/** Red Flag minotaur sidestep: when the greedy step toward the player is blocked,
-    try a one-tile step along whichever axis still has distance to close, in both
-    directions, taking the first that is not blocked. Returns 1 if it moved. */
-static int col_npc_red_flag_sidestep(
-    ColosseumState* s, int* x, int* y, int tx, int ty, int size
-) {
-    int dx = (tx > *x) - (tx < *x);
-    int dy = (ty > *y) - (ty < *y);
-    /* try the axis the greedy step could not advance: if dx was the main pull, try
-       vertical detours first, and vice versa. */
-    int try_order[4][2];
-    int n = 0;
-    if (dy != 0) { try_order[n][0] = 0; try_order[n][1] = dy; n++; }
-    if (dx != 0) { try_order[n][0] = dx; try_order[n][1] = 0; n++; }
-    try_order[n][0] = 0; try_order[n][1] = (dy != 0) ? -dy : 1; n++;
-    try_order[n][0] = (dx != 0) ? -dx : 1; try_order[n][1] = 0; n++;
-    for (int i = 0; i < n; i++) {
-        int sdx = try_order[i][0], sdy = try_order[i][1];
-        if (sdx == 0 && sdy == 0) continue;
-        if (encounter_npc_try_step(x, y, size, sdx, sdy, col_npc_blocked, s)) return 1;
-    }
-    return 0;
+typedef struct {
+    ColosseumState* s;
+    int size;
+} ColoNpcPathCtx;
+
+/** BFS blocked predicate for NPC routefinding (B2(e)+A30): a size x size
+    footprint at SW (x, y) vs the static mask, the boss clamp, other NPC bodies,
+    and the player's tile. Caller lifts the moving NPC's own footprint stamp. */
+static int col_npc_path_blocked(void* ctx, int x, int y) {
+    ColoNpcPathCtx* pc = (ColoNpcPathCtx*)ctx;
+    ColosseumState* s = pc->s;
+    if (s->player.x >= x && s->player.x < x + pc->size &&
+        s->player.y >= y && s->player.y < y + pc->size) return 1;
+    return col_npc_blocked(s, x, y, pc->size);
 }
 
-/** per-NPC movement: simple chase toward the player (no obstacle routefinding,
-    matching the wiki default). Melee NPCs path into cardinal melee contact; ranged
-    NPCs (serpent/archer/seer/manticore/javelin/shockwave) hold once within
-    attack_range AND in line of sight, else step closer. Multi-tile NPCs use the
-    shared size-aware step. */
+/** one routefinding step (D3) of a size x size NPC toward SW-anchor dest over
+    the shared arena BFS; an unreachable dest degrades to the nearest reachable
+    tile (shared pathfinder fallback). Returns 1 if the NPC advanced. */
+static int col_npc_path_step(ColosseumState* s, int* x, int* y, int size, int tx, int ty) {
+    if (tx < COLO_ARENA_MIN_X) tx = COLO_ARENA_MIN_X;
+    if (tx > COLO_ARENA_MAX_X) tx = COLO_ARENA_MAX_X;
+    if (ty < COLO_ARENA_MIN_Y) ty = COLO_ARENA_MIN_Y;
+    if (ty > COLO_ARENA_MAX_Y) ty = COLO_ARENA_MAX_Y;
+    if (*x == tx && *y == ty) return 0;
+    ColoNpcPathCtx pc = { s, size };
+    PathResult pr = pathfind_step_arena(NULL, 0, *x, *y, tx, ty,
+        col_npc_path_blocked, &pc,
+        COLO_ARENA_MIN_X, COLO_ARENA_MIN_Y, COLO_ARENA_WIDTH, COLO_ARENA_HEIGHT);
+    if (!pr.found || (pr.next_dx == 0 && pr.next_dy == 0)) return 0;
+    *x += pr.next_dx;
+    *y += pr.next_dy;
+    return 1;
+}
+
+/** B2(c): pick a warbander's movement target — its formation tile when free,
+    else the nearest free player-adjacent tile, cardinals before diagonals
+    (diagonal contact cannot attack, A5+D33). The member's own footprint stamp
+    is lifted, so the tile it already holds counts as free and it stands still
+    rather than orbit the player. */
+static void col_warband_pick_target(ColosseumState* s, ColoNPC* npc, int* tx, int* ty) {
+    int px = s->player.x, py = s->player.y;
+    int pref = colo_npc_warband(npc)->formation_dir;
+    int fx = px + COLO_WARBAND_FORM_OFFSET[pref][0];
+    int fy = py + COLO_WARBAND_FORM_OFFSET[pref][1];
+    ColoNpcPathCtx pc = { s, 1 };
+    *tx = fx;
+    *ty = fy;
+    if (!col_npc_path_blocked(&pc, fx, fy)) return;
+
+    static const int ADJ[8][2] = {
+        {0, 1}, {1, 0}, {-1, 0}, {0, -1},        /* cardinals */
+        {1, 1}, {1, -1}, {-1, 1}, {-1, -1} };    /* diagonals */
+    int best_key = 1 << 30;
+    for (int a = 0; a < 8; a++) {
+        int x = px + ADJ[a][0], y = py + ADJ[a][1];
+        if (col_npc_path_blocked(&pc, x, y)) continue;
+        int dx = npc->x > x ? npc->x - x : x - npc->x;
+        int dy = npc->y > y ? npc->y - y : y - npc->y;
+        int cheb = dx > dy ? dx : dy;
+        int key = (a >= 4 ? 4096 : 0) + cheb * 16 + a;
+        if (key < best_key) { best_key = key; *tx = x; *ty = y; }
+    }
+}
+
+/** B2(c)+(e)+D3: warbander movement — up to COLO_WARBAND_TILES_PER_TICK BFS
+    steps ("darts") toward the member's diamond tile, routing around pillars,
+    walls, and other NPCs. Standing on the chosen tile is attack position: the
+    member holds still so its cycle window can fire (a member that moved this
+    tick is ineligible to attack, A5). */
+static void col_warband_move(ColosseumState* s, int idx) {
+    ColoNPC* npc = &s->npcs[idx];
+    npc->target_x = s->player.x;
+    npc->target_y = s->player.y;
+    col_stamp_npc_collision_footprint(s, npc->x, npc->y, 1, 0);
+    int tx, ty;
+    col_warband_pick_target(s, npc, &tx, &ty);
+    int steps = 0;
+    for (int k = 0; k < COLO_WARBAND_TILES_PER_TICK; k++) {
+        if (npc->x == tx && npc->y == ty) break;
+        if (!col_npc_path_step(s, &npc->x, &npc->y, 1, tx, ty)) break;
+        steps++;
+    }
+    col_stamp_npc_collision_footprint(s, npc->x, npc->y, 1, 1);
+    npc->moved_this_tick = steps > 0 ? 1 : 0;
+}
+
+/** per-NPC movement. Warbanders route to their formation tiles (B2). The Red
+    Flag minotaur is the routefinding variant (npc 12813): full BFS around
+    obstacles, "impossible to safespot" (A30). Everything else keeps the simple
+    greedy chase and is MEANT to be pillar-safespottable: melee NPCs path into
+    melee contact; ranged NPCs (serpent/manticore/javelin/shockwave) hold once
+    within attack_range AND in line of sight, else step closer. Multi-tile NPCs
+    use the shared size-aware step. */
 static void col_npc_move_ctx(ColosseumState* s, ColosseumContext* ctx, int idx) {
     (void)ctx;
     ColoNPC* npc = &s->npcs[idx];
     const ColoNpcStats* st = &COLO_NPC_STATS[npc->type];
     if (!st->can_move) return;
     if (npc->stun_timer > 0 || npc->frozen_ticks > 0) return;
+
+    if (col_type_is_warbander(npc->type)) {
+        col_warband_move(s, idx);
+        return;
+    }
 
     int size = col_npc_effective_size(npc);
     int tx = s->player.x, ty = s->player.y;
@@ -142,13 +212,17 @@ static void col_npc_move_ctx(ColosseumState* s, ColosseumContext* ctx, int idx) 
     }
 
     col_stamp_npc_collision_footprint(s, npc->x, npc->y, size, 0);
-    int moved = encounter_npc_step_toward(
-        &npc->x, &npc->y, tx, ty, size, 1, is_ranged ? 0 : 1, col_npc_blocked, s);
-    /* Red Flag: a stuck minotaur routes around the blocker by sidestepping along
-       the orthogonal axis (a lightweight stand-in for full obstacle pathing; a
-       3x3 BFS each tick is overkill for one reinforcement species). */
-    if (!moved && npc->type == COLO_MINOTAUR && col_mod_active(s, COLO_MOD_RED_FLAG))
-        moved = col_npc_red_flag_sidestep(s, &npc->x, &npc->y, tx, ty, size);
+    int moved;
+    if (npc->type == COLO_MINOTAUR && col_mod_active(s, COLO_MOD_RED_FLAG)) {
+        /* A30: BFS toward the footprint-on-player anchor; the blocked dest
+           degrades to the nearest reachable flush anchor. Stops in melee. */
+        moved = 0;
+        if (encounter_dist_to_npc(tx, ty, npc->x, npc->y, size) > 1)
+            moved = col_npc_path_step(s, &npc->x, &npc->y, size, tx - 1, ty - 1);
+    } else {
+        moved = encounter_npc_step_toward(
+            &npc->x, &npc->y, tx, ty, size, 1, is_ranged ? 0 : 1, col_npc_blocked, s);
+    }
     col_stamp_npc_collision_footprint(s, npc->x, npc->y, size, 1);
     npc->moved_this_tick = moved ? 1 : 0;
 }

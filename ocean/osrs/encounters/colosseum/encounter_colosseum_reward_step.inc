@@ -87,6 +87,9 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
     col_resolve_player_pending_hits(s);
 
     if (!in_wave_gap && !in_ready_gap) {
+        /* B2(a): anchor the shared warband cycle to the wave's first actionable
+           tick N (the ready delay models the researched click+6). */
+        if (s->warband_cycle_anchor < 0) s->warband_cycle_anchor = s->tick;
         col_rebuild_player_collision_flags(s);
         col_tick_npcs_ctx(s, ctx);
         col_modifiers_tick(s);
@@ -108,6 +111,10 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
     int px = s->player.x, py = s->player.y;
     col_tick_player_ctx(s, ctx, actions, can_player_attack);
     s->tick_scratch.player_moved = (s->player.x != px || s->player.y != py) ? 1 : 0;
+
+    /* B2(b): warband windows resolve after the player's move phase of the same
+       tick, so "the player is moving" is exact on the window tick itself. */
+    if (!in_wave_gap && !in_ready_gap) col_warband_attack_phase(s);
 
     s->reward = col_compute_reward_ctx(s, ctx);
     int all_dead = 1;
