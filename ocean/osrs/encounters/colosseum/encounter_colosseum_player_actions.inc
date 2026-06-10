@@ -313,32 +313,48 @@ static void col_player_attack_target(ColosseumState* s, int npc_slot) {
         osrs_target_effect_context_magic(ns->magic_level, ns->magic_att_bonus),
         s->player.current_hitpoints, s->player.base_hitpoints);
 
-    int damage;
-    if (col_type_is_hazard_entity(npc->type)) {
-        damage = npc->hp;
-    } else if (s->sol.next_attack_guaranteed_max) {
-        damage = prepared.max_hit;
-        s->sol.next_attack_guaranteed_max = 0;
-        s->sol.guaranteed_max_ticks = 0;
-    } else if (rps_max_hit) {
-        damage = prepared.max_hit;
-    } else {
-        int def_bonus;
-        if (ls->style == ATTACK_STYLE_MAGIC) {
-            def_bonus = ns->magic_def_bonus;
-        } else if (ls->style == ATTACK_STYLE_RANGED) {
-            def_bonus = ns->ranged_def_bonus;
-        } else {
-            def_bonus = col_melee_def_bonus(ns, col_item_melee_style(weapon_item));
-        }
-        int target_def_roll =
-            (col_npc_effective_def_level(npc, ns) + 9) * (def_bonus + 64);
-        damage = encounter_npc_roll_attack(prepared.attack_roll, target_def_roll,
-                                           prepared.max_hit, &s->rng_state);
+    /* scythe of vitur: 3 splats vs 3x3+ targets, 2 vs 2x2, 1 vs 1x1; splat k
+       caps at max/2^k, each rolled independently. This is WHY the scythe is
+       the speedrun weapon into 5x5 Sol while the fang wins on 1x1 warbanders
+       (wiki Budget footnote j). ref: OSRS wiki Scythe of vitur. */
+    int num_splats = 1;
+    if (weapon_item == ITEM_SCYTHE_OF_VITUR && !col_type_is_hazard_entity(npc->type)) {
+        int npc_size = col_npc_effective_size(npc);
+        num_splats = npc_size >= 3 ? 3 : npc_size == 2 ? 2 : 1;
     }
 
+    int def_bonus;
+    if (ls->style == ATTACK_STYLE_MAGIC) {
+        def_bonus = ns->magic_def_bonus;
+    } else if (ls->style == ATTACK_STYLE_RANGED) {
+        def_bonus = ns->ranged_def_bonus;
+    } else {
+        def_bonus = col_melee_def_bonus(ns, col_item_melee_style(weapon_item));
+    }
+    int target_def_roll =
+        (col_npc_effective_def_level(npc, ns) + 9) * (def_bonus + 64);
+
     int ticks = ls->attack_range > 1 ? 3 : 1;
-    col_queue_npc_pending_hit(s, npc_slot, damage, ticks, ls->style, ENCOUNTER_SPELL_NONE);
+    int damage = 0;
+    for (int splat = 0; splat < num_splats; splat++) {
+        int splat_max = prepared.max_hit >> splat;
+        int splat_damage;
+        if (col_type_is_hazard_entity(npc->type)) {
+            splat_damage = npc->hp;
+        } else if (s->sol.next_attack_guaranteed_max) {
+            splat_damage = splat_max;
+            s->sol.next_attack_guaranteed_max = 0;
+            s->sol.guaranteed_max_ticks = 0;
+        } else if (rps_max_hit) {
+            splat_damage = splat_max;
+        } else {
+            splat_damage = encounter_npc_roll_attack(prepared.attack_roll,
+                target_def_roll, splat_max, &s->rng_state);
+        }
+        col_queue_npc_pending_hit(s, npc_slot, splat_damage, ticks, ls->style,
+                                  ENCOUNTER_SPELL_NONE);
+        damage += splat_damage;
+    }
 
     /* blood fury heal (beginner melee neck) via the shared post-attack effects */
     OsrsPostAttackEffects post = osrs_finalize_attack_effects(

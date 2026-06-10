@@ -651,7 +651,9 @@ static const int COLO_MYOPIA_RANGE_CUT[4] = { 0, 2, 4, 6 };
 /** A25: Mantimayhem T2 venom is STANDARD OSRS venom — first proc 6, each
     damage tick escalates +2 toward the 20 cap, damage every 30 ticks (18s);
     a reapplication while envenomed bumps the next damage +2 instead of
-    resetting. No cure exists in the loadout; venom clears between waves (the
+    resetting. The speedrun kit's sanfew cures it (L5), the beginner's serp
+    helm blocks new applications while the melee set is worn (active-set
+    check); otherwise venom clears between waves (the
     modeled anti-venom sip point). */
 #define COLO_VENOM_START 6      /* first venom hit */
 #define COLO_VENOM_STEP 2       /* escalation per damage tick / reapplication */

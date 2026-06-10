@@ -227,7 +227,8 @@ static void col_mod_manticore_apply_venom(ColosseumState* s, int hit_success) {
 
 /** tick the player's venom: every COLO_VENOM_INTERVAL ticks deal the current
     venom damage, then escalate it +2 toward the cap (6, 8, 10 .. 20). Venom
-    never expires mid-wave (no cure in the loadout); it clears between waves. */
+    never expires mid-wave on its own (it clears between waves), but the
+    speedrun kit's sanfew serum cures it on drink (L5). */
 static void col_mod_tick_venom(ColosseumState* s) {
     if (s->player_venom <= 0) return;
     if (s->player_venom_timer > 0) s->player_venom_timer--;

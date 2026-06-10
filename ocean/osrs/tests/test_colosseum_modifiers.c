@@ -33,7 +33,12 @@
  *      (5-slot domain, perfect-parry guaranteed max consumed by the player
  *      attack), A3 shield safe rings + spear lines, A9/A10 accumulating
  *      crystals with 25-35t cooldowns + 60-75 spheres, and A11 beams becoming
- *      permanent 5-9/tick molten pools.
+ *      permanent 5-9/tick molten pools;
+ *   7. researched loadout profiles (L1-L16): profile sampling + gear/supply
+ *      tables, brew/restore/combat/ranging/surge consumables with the L12
+ *      max-hit recompute invariant, sanfew venom cure + serp-helm immunity,
+ *      claws/elder-maul/SGS spec weapons, scythe splats, tbow/crystal/blood-
+ *      fury item effects, and the offensive prayer head.
  *
  * BUILD:
  *   cc -std=c11 -O0 -g -I. -o /tmp/test_colosseum_modifiers \
@@ -123,6 +128,8 @@ static void test_fuzz_obs_mask(void) {
     ColosseumContext ctx;
     col_init_context_typed(&ctx);
     ctx.config.start_wave = 0;
+    ctx.config.loadout_profile_mode = COLO_LOADOUT_PROFILE_MODE_MIXED;
+    ctx.config.beginner_loadout_fraction = 0.5f;
 
     ColosseumState s;
     memset(&s, 0, sizeof(s));
@@ -2358,12 +2365,13 @@ static void test_sol_grapple_perfect_parry(void) {
     CHECK("a last-tick click is a perfect parry: no damage, max armed",
         s.player.current_hitpoints == 99 && s.sol.next_attack_guaranteed_max == 1);
 
-    /* B7: the next player attack consumes the guaranteed max at exactly max_hit. */
+    /* B7: the next player attack consumes the guaranteed max on its FIRST splat
+       (the scythe's extra splats into 5x5 Sol roll normally on top). */
     int max_hit = s.loadout_stats[COLO_GEAR_MELEE].max_hit;
     CHECK("rig sanity: the melee loadout has a positive max hit", max_hit > 0);
     col_player_attack_target(&s, idx);
-    CHECK("the guaranteed max is consumed at exactly the loadout max hit",
-        s.player_attack_dmg == max_hit && s.sol.next_attack_guaranteed_max == 0 &&
+    CHECK("the guaranteed max is consumed at no less than the loadout max hit",
+        s.player_attack_dmg >= max_hit && s.sol.next_attack_guaranteed_max == 0 &&
         s.sol.guaranteed_max_ticks == 0);
 
     /* expiry: an armed window not consumed within 5 ticks lapses. */
@@ -2633,6 +2641,420 @@ static void test_sol_beams_become_pools(void) {
     CHECK("pools persist for the rest of the fight", s.sol.hazard_tile_count == 6);
 }
 
+
+/* ---- 7. researched loadout profiles (L1-L16): gear, supplies, consumables,
+   spec weapons, item effects, offensive prayers. */
+
+static void loadout_reset(ColosseumState* s, ColosseumContext* ctx, int mode,
+                          float frac, uint32_t seed) {
+    col_init_context_typed(ctx);
+    ctx->config.loadout_profile_mode = mode;
+    ctx->config.beginner_loadout_fraction = frac;
+    memset(s, 0, sizeof(*s));
+    col_reset_ctx((EncounterState*)s, (EncounterContext*)ctx, seed);
+}
+
+static void test_loadout_profiles_and_supplies(void) {
+    printf("test_loadout_profiles_and_supplies\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_BEGINNER_ONLY, 0.0f, 11);
+    CHECK("beginner mode pins the beginner profile",
+        s.active_loadout_profile == COLO_LOADOUT_PROFILE_BEGINNER);
+    CHECK("beginner melee weapon is the fang",
+        s.player.equipped[GEAR_SLOT_WEAPON] == ITEM_OSMUMTENS_FANG);
+    CHECK("beginner supplies match the budget example",
+        s.player.brew_doses == 24 && s.player.restore_doses == 32 &&
+        s.player.combat_potion_doses == 8 && s.player.ranged_potion_doses == 8 &&
+        s.surge_doses == 0);
+    CHECK("beginner restore kind is super restore",
+        s.full_supplies.restore_kind == COLO_RESTORE_SUPER_RESTORE);
+    CHECK("beginner bowfa set carries full crystal points (1+2+3)",
+        s.set_effects[COLO_GEAR_RANGED].crystal_armour_points == 6);
+    CHECK("beginner melee neck carries blood fury",
+        osrs_effect_profile_has(&s.set_effects[COLO_GEAR_MELEE], OSRS_ITEM_EFFECT_BLOOD_FURY));
+    CHECK("beginner melee head carries venom immunity",
+        osrs_effect_profile_has(&s.set_effects[COLO_GEAR_MELEE], OSRS_ITEM_EFFECT_VENOM_IMMUNE));
+    int beginner_melee_max = s.loadout_stats[COLO_GEAR_MELEE].max_hit;
+
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 1.0f, 12);
+    CHECK("speedrun mode pins the speedrun profile",
+        s.active_loadout_profile == COLO_LOADOUT_PROFILE_SPEEDRUN);
+    CHECK("speedrun melee weapon is the scythe",
+        s.player.equipped[GEAR_SLOT_WEAPON] == ITEM_SCYTHE_OF_VITUR);
+    CHECK("speedrun supplies match the high-efficiency kit",
+        s.player.brew_doses == 4 && s.player.restore_doses == 28 &&
+        s.player.combat_potion_doses == 4 && s.player.ranged_potion_doses == 4 &&
+        s.surge_doses == 4);
+    CHECK("speedrun restore kind is sanfew",
+        s.full_supplies.restore_kind == COLO_RESTORE_SANFEW);
+    CHECK("speedrun ranged set has the tbow effect",
+        osrs_effect_profile_has(&s.set_effects[COLO_GEAR_RANGED], OSRS_ITEM_EFFECT_TWISTED_BOW));
+    /* per-splat the fang can rival the scythe (wiki Budget footnote j: the fang
+       wins on 1x1s); the scythe's edge is the 7/4 splat total into 3x3+ NPCs. */
+    CHECK("speedrun scythe total (7/4 splats) out-hits the beginner fang",
+        s.loadout_stats[COLO_GEAR_MELEE].max_hit * 7 / 4 > beginner_melee_max);
+    CHECK("both loadouts melee-style on the melee set",
+        s.loadout_stats[COLO_GEAR_MELEE].style == ATTACK_STYLE_MELEE &&
+        s.loadout_stats[COLO_GEAR_RANGED].style == ATTACK_STYLE_RANGED);
+    CHECK("spec stats computed for both spec weapons",
+        s.spec_stats[0].max_hit > 0 && s.spec_stats[1].max_hit > 0);
+
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_MIXED, 1.0f, 13);
+    CHECK("mixed fraction 1.0 always samples beginner",
+        s.active_loadout_profile == COLO_LOADOUT_PROFILE_BEGINNER);
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_MIXED, 0.0f, 14);
+    CHECK("mixed fraction 0.0 always samples speedrun",
+        s.active_loadout_profile == COLO_LOADOUT_PROFILE_SPEEDRUN);
+}
+
+static void test_loadout_consumables(void) {
+    printf("test_loadout_consumables\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_BEGINNER_ONLY, 0.0f, 21);
+    complete_open_draft(&s, &ctx, 1);
+    int idle[COLO_NUM_ACTION_HEADS] = {0};
+    int base_max_hit = s.loadout_stats[COLO_GEAR_MELEE].max_hit;
+
+    /* brew: heals 16, drains stats, melee max hit drops (L12) */
+    s.player.current_hitpoints = 50;
+    int brew[COLO_NUM_ACTION_HEADS] = {0};
+    brew[COLO_HEAD_EAT] = 1;
+    step_and_observe(&s, &ctx, brew);
+    CHECK("brew heals 16", s.player.current_hitpoints == 66);
+    CHECK("brew consumes a dose and starts the timer",
+        s.player.brew_doses == 23 && s.player.potion_timer == 3);
+    CHECK("brew drains attack below base", s.player.current_attack < 99);
+    CHECK("brew drain lowers the melee max hit",
+        s.loadout_stats[COLO_GEAR_MELEE].max_hit < base_max_hit);
+
+    /* restore: stats (and the max hit) come back once the timer clears */
+    for (int t = 0; t < 3; t++) step_and_observe(&s, &ctx, idle);
+    int restore[COLO_NUM_ACTION_HEADS] = {0};
+    restore[COLO_HEAD_POTION] = COLO_POTION_RESTORE;
+    step_and_observe(&s, &ctx, restore);
+    CHECK("super restore returns attack to base", s.player.current_attack == 99);
+    CHECK("restore recovers the melee max hit",
+        s.loadout_stats[COLO_GEAR_MELEE].max_hit == base_max_hit);
+    CHECK("restore consumed a dose", s.player.restore_doses == 31);
+
+    /* super combat: boosts att/str/def to 118 and raises the max hit */
+    for (int t = 0; t < 3; t++) step_and_observe(&s, &ctx, idle);
+    int combat[COLO_NUM_ACTION_HEADS] = {0};
+    combat[COLO_HEAD_POTION] = COLO_POTION_COMBAT;
+    step_and_observe(&s, &ctx, combat);
+    CHECK("super combat boosts attack to 118", s.player.current_attack == 118);
+    CHECK("super combat boosts strength to 118", s.player.current_strength == 118);
+    CHECK("super combat raises the melee max hit",
+        s.loadout_stats[COLO_GEAR_MELEE].max_hit > base_max_hit);
+    CHECK("combat pot consumed a dose", s.player.combat_potion_doses == 7);
+
+    /* boosted: the combat-pot mask entry closes (inferno [base, base+5] window) */
+    float mask[COLO_ACTION_MASK_SIZE];
+    col_write_mask_ctx((EncounterState*)&s, (EncounterContext*)&ctx, mask);
+    int pot_off = col_action_head_mask_offset(COLO_HEAD_POTION);
+    CHECK("combat pot masked while boosted past the window",
+        mask[pot_off + COLO_POTION_COMBAT] == 0.0f);
+    CHECK("surge masked for the beginner (no doses)",
+        mask[pot_off + COLO_POTION_SURGE] == 0.0f);
+
+    /* ranging potion boosts ranged to 112 */
+    for (int t = 0; t < 3; t++) step_and_observe(&s, &ctx, idle);
+    int rng_pot[COLO_NUM_ACTION_HEADS] = {0};
+    rng_pot[COLO_HEAD_POTION] = COLO_POTION_RANGING;
+    step_and_observe(&s, &ctx, rng_pot);
+    CHECK("ranging potion boosts ranged to 112", s.player.current_ranged == 112);
+
+    /* prayer restore amount: super restore = +32 */
+    for (int t = 0; t < 3; t++) step_and_observe(&s, &ctx, idle);
+    s.player.current_prayer = 40;
+    step_and_observe(&s, &ctx, restore);
+    CHECK("super restore gives +32 prayer", s.player.current_prayer == 72);
+}
+
+static void test_loadout_sanfew_and_serp_helm(void) {
+    printf("test_loadout_sanfew_and_serp_helm\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+
+    /* sanfew (speedrun restore) cures venom on drink (L5) */
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 0.0f, 31);
+    complete_open_draft(&s, &ctx, 1);
+    s.player_venom = 8;
+    s.player_venom_timer = 12;
+    s.player.current_prayer = 40;
+    int restore[COLO_NUM_ACTION_HEADS] = {0};
+    restore[COLO_HEAD_POTION] = COLO_POTION_RESTORE;
+    step_and_observe(&s, &ctx, restore);
+    CHECK("sanfew clears venom", s.player_venom == 0 && s.player_venom_timer == 0);
+    CHECK("sanfew gives +33 prayer", s.player.current_prayer == 73);
+    CHECK("sanfew consumed a restore dose", s.player.restore_doses == 27);
+
+    /* serp helm: blocks venom application in the melee set only; an existing
+       stack survives switching back (no cure). */
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_BEGINNER_ONLY, 0.0f, 32);
+    s.modifiers.active_mask |= (1u << COLO_MOD_MANTIMAYHEM);
+    s.modifiers.tier[COLO_MOD_MANTIMAYHEM] = 2;
+    CHECK("rig sanity: beginner starts in the melee set",
+        s.weapon_set == COLO_GEAR_MELEE);
+    col_mod_manticore_apply_venom(&s, 1);
+    CHECK("serp helm blocks venom in the melee set", s.player_venom == 0);
+    s.weapon_set = COLO_GEAR_RANGED;   /* crystal helm: no immunity */
+    col_mod_manticore_apply_venom(&s, 1);
+    CHECK("venom applies in the ranged set", s.player_venom == COLO_VENOM_START);
+    s.weapon_set = COLO_GEAR_MELEE;
+    int venom_before = s.player_venom;
+    col_mod_manticore_apply_venom(&s, 1);
+    CHECK("serp helm does not cure or escalate an existing stack",
+        s.player_venom == venom_before);
+}
+
+static void test_loadout_surge_potion(void) {
+    printf("test_loadout_surge_potion\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 0.0f, 41);
+    int idle[COLO_NUM_ACTION_HEADS] = {0};
+
+    /* drink during the open draft (consumables stay live in the gap), with the
+       cooldown frozen until gameplay starts (L13). */
+    s.player.special_energy = 40;
+    int surge[COLO_NUM_ACTION_HEADS] = {0};
+    surge[COLO_HEAD_POTION] = COLO_POTION_SURGE;
+    step_and_observe(&s, &ctx, surge);
+    CHECK("surge restores 25 energy", s.player.special_energy == 65);
+    CHECK("surge consumes a dose and arms the cooldown",
+        s.surge_doses == 3 && s.surge_cooldown == COLO_SURGE_COOLDOWN_TICKS);
+    step_and_observe(&s, &ctx, idle);
+    CHECK("surge cooldown frozen during the draft gap",
+        s.surge_cooldown == COLO_SURGE_COOLDOWN_TICKS);
+    complete_open_draft(&s, &ctx, 1);
+    while (s.wave_ready_delay > 0) step_and_observe(&s, &ctx, idle);
+    int cd_before = s.surge_cooldown;
+    step_and_observe(&s, &ctx, idle);
+    CHECK("surge cooldown ticks during live gameplay", s.surge_cooldown == cd_before - 1);
+
+    /* full energy gates the drink */
+    s.player.special_energy = 100;
+    s.surge_cooldown = 0;
+    s.player.potion_timer = 0;
+    float mask[COLO_ACTION_MASK_SIZE];
+    col_write_mask_ctx((EncounterState*)&s, (EncounterContext*)&ctx, mask);
+    int pot_off = col_action_head_mask_offset(COLO_HEAD_POTION);
+    CHECK("surge masked at full special energy",
+        mask[pot_off + COLO_POTION_SURGE] == 0.0f);
+}
+
+static void test_loadout_spec_weapons(void) {
+    printf("test_loadout_spec_weapons\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+
+    /* speedrun spec A = dragon claws: arming + firing drains 50 and queues 4 splats */
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 0.0f, 51);
+    geo_clear_npcs(&s);
+    s.modifiers.draft_pending = 0;
+    s.wave_ready_delay = 0;
+    s.player.x = 16; s.player.y = 16;
+    col_init_npc(&s, 0, COLO_FREMENNIK_BERSERKER, 16, 17);
+    s.player.special_energy = 100;
+    s.spec_armed_kind = 1;
+    osrs_interaction_set(&s.interaction, 0);
+    s.player.attack_timer = 0;
+    col_player_attack_target(&s, 0);
+    CHECK("claws spec drains 50 energy", s.player.special_energy == 50);
+    CHECK("claws spec disarms after firing", s.spec_armed_kind == 0);
+    CHECK("claws spec queues the 4-splat cascade",
+        s.npcs[0].pending_hits.count == 4);
+    CHECK("spec sets the claws attack speed", s.player.attack_timer ==
+        get_item(ITEM_DRAGON_CLAWS)->attack_speed);
+
+    /* scythe splat counts: 3 into a 5x5 (Sol-sized), 1 into a 1x1 warbander */
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 0.0f, 54);
+    geo_clear_npcs(&s);
+    s.modifiers.draft_pending = 0;
+    s.wave_ready_delay = 0;
+    s.player.x = 10; s.player.y = 16;
+    col_init_npc(&s, 0, COLO_SOL_HEREDIT, 11, 14);
+    s.player.attack_timer = 0;
+    col_player_attack_target(&s, 0);
+    CHECK("scythe queues 3 splats into the 5x5 boss",
+        s.npcs[0].pending_hits.count == 3);
+    geo_clear_npcs(&s);
+    col_init_npc(&s, 0, COLO_FREMENNIK_BERSERKER, 10, 17);
+    s.player.attack_timer = 0;
+    col_player_attack_target(&s, 0);
+    CHECK("scythe queues 1 splat into a 1x1 warbander",
+        s.npcs[0].pending_hits.count == 1);
+
+    /* speedrun spec B = elder maul: a landed spec drains 35% of current def */
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 0.0f, 52);
+    geo_clear_npcs(&s);
+    s.modifiers.draft_pending = 0;
+    s.wave_ready_delay = 0;
+    s.player.x = 16; s.player.y = 16;
+    col_init_npc(&s, 0, COLO_FREMENNIK_BERSERKER, 16, 17);
+    const ColoNpcStats* zerk = &COLO_NPC_STATS[COLO_FREMENNIK_BERSERKER];
+    int tries = 0;
+    while (s.npcs[0].def_drained == 0 && tries < 200) {
+        s.player.special_energy = 100;
+        s.spec_armed_kind = 2;
+        s.player.attack_timer = 0;
+        s.npcs[0].hp = zerk->hp;
+        col_player_attack_target(&s, 0);
+        tries++;
+    }
+    CHECK("elder maul spec eventually lands", s.npcs[0].def_drained > 0);
+    CHECK("elder maul drains 35% of current defence",
+        s.npcs[0].def_drained == zerk->def_level * 35 / 100);
+
+    /* beginner spec A = SGS: a landed spec heals >= 10 and restores >= 5 prayer */
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_BEGINNER_ONLY, 0.0f, 53);
+    geo_clear_npcs(&s);
+    s.modifiers.draft_pending = 0;
+    s.wave_ready_delay = 0;
+    s.player.x = 16; s.player.y = 16;
+    col_init_npc(&s, 0, COLO_FREMENNIK_SEER, 16, 17);
+    const ColoNpcStats* seer = &COLO_NPC_STATS[COLO_FREMENNIK_SEER];
+    int healed = 0;
+    tries = 0;
+    while (!healed && tries < 200) {
+        s.player.current_hitpoints = 20;
+        s.player.current_prayer = 10;
+        s.player.special_energy = 100;
+        s.spec_armed_kind = 1;
+        s.player.attack_timer = 0;
+        s.npcs[0].hp = seer->hp;
+        col_player_attack_target(&s, 0);
+        if (s.player.current_hitpoints > 20) healed = 1;
+        tries++;
+    }
+    CHECK("SGS spec eventually lands", healed);
+    CHECK("SGS heal honors the wiki minimum (>= 10)",
+        s.player.current_hitpoints >= 30);
+    CHECK("SGS prayer restore honors the wiki minimum (>= 5)",
+        s.player.current_prayer >= 15);
+
+    /* arming gates on energy; an armed spec pulls the reach to melee */
+    s.player.special_energy = 10;
+    s.spec_armed_kind = 0;
+    int arm[COLO_NUM_ACTION_HEADS] = {0};
+    arm[COLO_HEAD_SPEC] = 1;
+    col_tick_player_ctx(&s, &ctx, arm, 0);
+    CHECK("arming is refused without the energy", s.spec_armed_kind == 0);
+    s.player.special_energy = 100;
+    col_tick_player_ctx(&s, &ctx, arm, 0);
+    CHECK("arming succeeds with the energy", s.spec_armed_kind == 1);
+    s.weapon_set = COLO_GEAR_RANGED;
+    CHECK("an armed melee spec pulls the reach to 1",
+        col_player_attack_range(&s) == 1);
+    s.weapon_set = COLO_GEAR_MELEE;
+    col_tick_player_ctx(&s, &ctx, arm, 0);
+    CHECK("re-pressing the armed spec disarms it", s.spec_armed_kind == 0);
+}
+
+static void test_loadout_item_effects(void) {
+    printf("test_loadout_item_effects\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+
+    /* L11 tbow scaling: max hit vs Sol (magic 300) beats max hit vs the jaguar
+       (magic 100) with the same base stats. */
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 0.0f, 61);
+    const EncounterLoadoutStats* rls = &s.loadout_stats[COLO_GEAR_RANGED];
+    int base_att = osrs_player_att_roll(rls->eff_level, rls->attack_bonus);
+    const ColoNpcStats* sol = &COLO_NPC_STATS[COLO_SOL_HEREDIT];
+    const ColoNpcStats* jag = &COLO_NPC_STATS[COLO_JAGUAR_WARRIOR];
+    OsrsPreparedAttackEffects vs_sol = osrs_prepare_attack_effects(
+        &s.set_effects[COLO_GEAR_RANGED], &s.player.item_effect_state,
+        ITEM_TWISTED_BOW, ATTACK_STYLE_RANGED, OSRS_MAGIC_ATTACK_NONE,
+        osrs_target_ref_none(), 1, base_att, rls->max_hit,
+        osrs_target_effect_context_magic(sol->magic_level, sol->magic_att_bonus),
+        s.player.current_hitpoints, s.player.base_hitpoints);
+    OsrsPreparedAttackEffects vs_jag = osrs_prepare_attack_effects(
+        &s.set_effects[COLO_GEAR_RANGED], &s.player.item_effect_state,
+        ITEM_TWISTED_BOW, ATTACK_STYLE_RANGED, OSRS_MAGIC_ATTACK_NONE,
+        osrs_target_ref_none(), 1, base_att, rls->max_hit,
+        osrs_target_effect_context_magic(jag->magic_level, jag->magic_att_bonus),
+        s.player.current_hitpoints, s.player.base_hitpoints);
+    CHECK("tbow hits harder into Sol's 300 magic than the jaguar's 100",
+        vs_sol.max_hit > vs_jag.max_hit && vs_sol.attack_roll > vs_jag.attack_roll);
+
+    /* L11 crystal armour: bowfa + full crystal = x26/20 accuracy, x46/40 damage */
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_BEGINNER_ONLY, 0.0f, 62);
+    const EncounterLoadoutStats* bls = &s.loadout_stats[COLO_GEAR_RANGED];
+    int bowfa_att = osrs_player_att_roll(bls->eff_level, bls->attack_bonus);
+    OsrsPreparedAttackEffects bowfa = osrs_prepare_attack_effects(
+        &s.set_effects[COLO_GEAR_RANGED], &s.player.item_effect_state,
+        ITEM_BOW_OF_FAERDHINEN, ATTACK_STYLE_RANGED, OSRS_MAGIC_ATTACK_NONE,
+        osrs_target_ref_none(), 1, bowfa_att, bls->max_hit,
+        osrs_target_effect_context_magic(100, 0),
+        s.player.current_hitpoints, s.player.base_hitpoints);
+    CHECK("crystal armour scales the bowfa damage by 46/40",
+        bowfa.max_hit == bls->max_hit * 46 / 40);
+    CHECK("crystal armour scales the bowfa accuracy by 26/20",
+        bowfa.attack_roll == bowfa_att * 26 / 20);
+
+    /* blood fury: ~20% of melee damage events heal 30% of the damage */
+    int procs = 0;
+    uint32_t rng = 777;
+    for (int i = 0; i < 400; i++) {
+        OsrsPostAttackEffects post = osrs_finalize_attack_effects(
+            &s.set_effects[COLO_GEAR_MELEE], &s.player.item_effect_state,
+            ITEM_OSMUMTENS_FANG, ATTACK_STYLE_MELEE, OSRS_MAGIC_ATTACK_NONE,
+            osrs_target_ref_none(), 1, 0, 1, 30, &rng);
+        if (post.heal_amount > 0) {
+            procs++;
+            CHECK("blood fury heals 30% of the damage", post.heal_amount == 9);
+            if (post.heal_amount != 9) break;
+        }
+    }
+    CHECK("blood fury procs at a plausible 20% rate", procs > 40 && procs < 130);
+
+    /* no blood fury on the ranged set */
+    OsrsPostAttackEffects ranged_post = osrs_finalize_attack_effects(
+        &s.set_effects[COLO_GEAR_RANGED], &s.player.item_effect_state,
+        ITEM_BOW_OF_FAERDHINEN, ATTACK_STYLE_RANGED, OSRS_MAGIC_ATTACK_NONE,
+        osrs_target_ref_none(), 1, 0, 1, 30, &rng);
+    CHECK("no blood fury heal on the ranged set", ranged_post.heal_amount == 0);
+}
+
+static void test_loadout_offensive_prayers(void) {
+    printf("test_loadout_offensive_prayers\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 0.0f, 71);
+    complete_open_draft(&s, &ctx, 1);
+    int base_max_hit = s.loadout_stats[COLO_GEAR_MELEE].max_hit;
+
+    int piety[COLO_NUM_ACTION_HEADS] = {0};
+    piety[COLO_HEAD_OFFENSIVE] = ENCOUNTER_OFFENSIVE_SET_REFRESH_PIETY;
+    step_and_observe(&s, &ctx, piety);
+    CHECK("piety activates", s.player.offensive_prayer == OFFENSIVE_PRAYER_PIETY);
+    CHECK("piety raises the melee max hit (L12)",
+        s.loadout_stats[COLO_GEAR_MELEE].max_hit > base_max_hit);
+    CHECK("piety raises the spec max hits too",
+        s.spec_stats[0].max_hit > 0 && s.spec_stats[1].max_hit > 0);
+
+    int off[COLO_NUM_ACTION_HEADS] = {0};
+    off[COLO_HEAD_OFFENSIVE] = ENCOUNTER_OFFENSIVE_OFF;
+    step_and_observe(&s, &ctx, off);
+    CHECK("offensive off restores the base max hit",
+        s.player.offensive_prayer == OFFENSIVE_PRAYER_NONE &&
+        s.loadout_stats[COLO_GEAR_MELEE].max_hit == base_max_hit);
+
+    float mask[COLO_ACTION_MASK_SIZE];
+    col_write_mask_ctx((EncounterState*)&s, (EncounterContext*)&ctx, mask);
+    int off_offset = col_action_head_mask_offset(COLO_HEAD_OFFENSIVE);
+    CHECK("augury stays masked (no magic set, L1)",
+        mask[off_offset + ENCOUNTER_OFFENSIVE_SET_REFRESH_AUGURY] == 0.0f);
+    CHECK("piety and rigour are offered",
+        mask[off_offset + ENCOUNTER_OFFENSIVE_SET_REFRESH_PIETY] == 1.0f &&
+        mask[off_offset + ENCOUNTER_OFFENSIVE_SET_REFRESH_RIGOUR] == 1.0f);
+}
+
 int main(void) {
     test_fuzz_obs_mask();
     test_step_loop_draft();
@@ -2679,6 +3101,13 @@ int main(void) {
     test_sol_spear_lines();
     test_sol_crystal_lifecycle();
     test_sol_beams_become_pools();
+    test_loadout_profiles_and_supplies();
+    test_loadout_consumables();
+    test_loadout_sanfew_and_serp_helm();
+    test_loadout_surge_potion();
+    test_loadout_spec_weapons();
+    test_loadout_item_effects();
+    test_loadout_offensive_prayers();
 
     printf("\n%d/%d passed", tests_passed, tests_run);
     if (tests_failed) printf(", %d FAILED", tests_failed);
