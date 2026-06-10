@@ -193,7 +193,7 @@ Format: ledger | sim value (file:line) | correct value | source | confidence | i
 - Confidence: multi-source.
 - Impact: 4. Parry difficulty and the action-head design both change (5 candidates, not 11).
 
-### A13. Minotaur heal semantics (ledger 4.18, 4.19)
+### A13. Minotaur heal semantics (ledger 4.18, 4.19) — IMPLEMENTED P3
 - Sim: heals ALL wounded, non-full-HP NPCs (including other minotaurs) within rect distance 6
   of its footprint, 0..10 HP each per 5-tick cycle (combat:173-188).
 - Correct: heals ONE eligible NPC TO FULL per heal action. Eligibility: not a minotaur, below
@@ -262,7 +262,7 @@ Format: ledger | sim value (file:line) | correct value | source | confidence | i
 - Confidence: multi-source.
 - Impact: 3. Start tile + 4-tile exclusion together set which anchors can spawn on top of you.
 
-### A19. Manticore effective cycle 12t → 10t (ledger 4.26)
+### A19. Manticore effective cycle 12t → 10t (ledger 4.26) — IMPLEMENTED P3
 - Sim: attack_timer reset to 10 AFTER orb 3 fires → 12-tick barrage-to-barrage period
   (combat:276-279).
 - Correct: 10-tick full cycle ("full 10-tick charge-up"; Skairunner: 7-tick charge-up + 3
@@ -333,7 +333,7 @@ Format: ledger | sim value (file:line) | correct value | source | confidence | i
   the natural reading.
 - Impact: 2 (current model is both faster and far weaker).
 
-### A26. Dynamic Duo pair placement (ledger 5.12-part)
+### A26. Dynamic Duo pair placement (ledger 5.12-part) — IMPLEMENTED P3
 - Sim: second Shockwave Colossus takes the next shuffled spawn-table position (spawn:117-119).
 - Correct: "The paired Colossus spawns near the main Colossus, but not necessarily on one of
   the 12 default spawns" — place it adjacent/near its partner, off-anchor allowed.
@@ -493,7 +493,7 @@ already carries post-3-April-2024 warband stats, so there is no launch-stat skew
 - Confidence: verified.
 - Impact: 2.
 
-### B10. Manticore pair pattern-copy (absent; relates ledger 4.24)
+### B10. Manticore pair pattern-copy (absent; relates ledger 4.24) — IMPLEMENTED P3
 - Missing: from wave 9, when one manticore selects its orb pattern, another within 15 tiles
   WITH LoS copies that pattern. Affects double-manticore flick planning alongside the
   confirmed 5-tick stagger.
@@ -639,19 +639,21 @@ Format: sim's current value | evidence state | recommendation (all MODELED DECIS
 7. Skyfall accuracy/damage (4.11): sim accuracy-rolled vs ranged def, uniform 0..48 | wiki
    frames it as unblockable "heavy damage" dodged by moving; no roll documented | DROP the
    accuracy gate (guaranteed when standing on the mark at land), keep the 0..48 roll.
+   IMPLEMENTED P3.
 8. Skyfall resolution order (4.12): resolved pre-NPC-movement on the player's land-tick tile
    | absent | keep.
 9. Minotaur heal-check period (4.19-part): sim every 5t cycle | the page ties heals to "the
    timer" that also drives melee (attack speed 5t), never states the period | KEEP 5t,
-   restructured per A13 (one target, to full).
+   restructured per A13 (one target, to full). IMPLEMENTED P3.
 10. Minotaur passive self-regen: not modeled | single unresolved talk-page report (~5 hp /
-    20t, anonymous, 2026-02) | do NOT model.
+    20t, anonymous, 2026-02) | do NOT model. IMPLEMENTED P3 (not modeled; noted in code).
 11. Manticore movement/charge coupling (4.29): sim unrestricted movement | "charge-up"
     described, no movement rule anywhere | keep unrestricted; first-attack timing from
-    spawn-uncharged ≈ sim's full 10t timer, keep.
+    spawn-uncharged ≈ sim's full 10t timer, keep. IMPLEMENTED P3 (kept unrestricted; noted
+    in code).
 12. Manticore orb travel (7.5): sim fires then lands next tick | wiki: orbs launched on
     consecutive ticks and "land with a projectile travel time of 0" | land on the launch
-    tick (shift by one); flick cadence is unchanged either way.
+    tick (shift by one); flick cadence is unchanged either way. IMPLEMENTED P3.
 13. Sol AoE/grapple max hit 44 vs 45 + slam minimum (6.11, 6.20): sim 44 flat | W-MAIN live
     fetch says 44/44, RuneC wiki-cache infobox says 45/45, W-STRAT prose "up to 45", colosim
     20-44 with an author comment doubting the min | adopt colosim 20 + rand(0..24) = 20-44

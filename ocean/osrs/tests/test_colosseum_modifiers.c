@@ -17,7 +17,12 @@
  *   4. P2 warband rework: the shared wave-anchored 6-tick cycle offsets (A5+B2),
  *      the player-moving attack skip, the cardinal melee-distance gate, formation
  *      convergence (diamond N/E/W/S), 2-tiles/tick routefinding around pillars vs
- *      the safespottable greedy shaman, and Red Flag minotaur routefinding (A30).
+ *      the safespottable greedy shaman, and Red Flag minotaur routefinding (A30);
+ *   5. P3 NPC mechanic fixes: minotaur single-target heal-to-full with the
+ *      <75%/7-tile/centre-LoS gates + melee priority (A13+D9), the manticore
+ *      10-tick barrage period (A19), travel-time-0 orbs with fire-tick flicks
+ *      (D12), the wave-9 pair pattern-copy (B10), and the gateless javelin
+ *      skyfall (D7).
  *
  * BUILD:
  *   cc -std=c11 -O0 -g -I. -o /tmp/test_colosseum_modifiers \
@@ -1048,6 +1053,378 @@ static void test_red_flag_minotaur_routefind(void) {
     }
 }
 
+/* ---- 5. P3 NPC mechanic fixes ---------------------------------------------- */
+
+/* 5a. A13+D9: on its 5-tick action timer the minotaur heals exactly ONE eligible
+   ally (non-minotaur, below 75% max HP, centre <=7 tiles, centre-to-centre LoS)
+   TO FULL — lowest HP-fraction first — never through a pillar, and a player in
+   melee distance preempts the heal with the 1-tick-delayed crush. */
+static void test_minotaur_heal_semantics(void) {
+    printf("test_minotaur_heal_semantics\n");
+    ColosseumContext ctx;
+    col_init_context_typed(&ctx);
+    ColosseumState s;
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 73);
+
+    /* one action, four wounded candidates: only the lowest-fraction eligible
+       shaman heals to full; the above-75% shaman and the minotaur ally never do. */
+    geo_clear_npcs(&s);
+    s.player.x = 30; s.player.y = 18;   /* far outside melee distance */
+    col_rebuild_player_collision_flags(&s);
+    col_init_npc(&s, 0, COLO_MINOTAUR, 12, 12);        /* healer, centre (13,13) */
+    col_init_npc(&s, 1, COLO_SERPENT_SHAMAN, 16, 13);  /* 62/125 ~ 50%, dist 3 */
+    col_init_npc(&s, 2, COLO_SERPENT_SHAMAN, 17, 17);  /* 30/125 = 24%, dist 4 */
+    col_init_npc(&s, 3, COLO_SERPENT_SHAMAN, 13, 17);  /* 100/125 = 80%, dist 4 */
+    col_init_npc(&s, 4, COLO_MINOTAUR, 18, 12);        /* wounded minotaur, dist 6 */
+    s.npcs[1].hp = 62;
+    s.npcs[2].hp = 30;
+    s.npcs[3].hp = 100;
+    s.npcs[4].hp = 100;
+    s.npcs[0].attack_timer = 0;
+    col_npc_attack_ctx(&s, &ctx, 0);
+    CHECK("the lowest-HP-fraction eligible ally heals to FULL", s.npcs[2].hp == 125);
+    CHECK("exactly one ally healed per action", s.npcs[1].hp == 62);
+    CHECK("an ally at/above 75% max HP is not eligible", s.npcs[3].hp == 100);
+    CHECK("another minotaur is never healed", s.npcs[4].hp == 100);
+    CHECK("healing is not an attack", s.npcs[0].attacked_this_tick == 0);
+    CHECK("the heal action re-arms the 5-tick timer (D9)",
+        s.npcs[0].attack_timer == COLO_NPC_STATS[COLO_MINOTAUR].attack_speed);
+
+    /* range edge: centre-to-centre 7 heals, 8 does not. */
+    geo_clear_npcs(&s);
+    col_init_npc(&s, 0, COLO_MINOTAUR, 12, 12);        /* centre (13,13) */
+    col_init_npc(&s, 1, COLO_SERPENT_SHAMAN, 20, 13);  /* centre dist exactly 7 */
+    s.npcs[1].hp = 30;
+    s.npcs[0].attack_timer = 0;
+    col_npc_attack_ctx(&s, &ctx, 0);
+    CHECK("centre distance 7 is in heal reach", s.npcs[1].hp == 125);
+    geo_clear_npcs(&s);
+    col_init_npc(&s, 0, COLO_MINOTAUR, 12, 12);
+    col_init_npc(&s, 1, COLO_SERPENT_SHAMAN, 21, 13);  /* centre dist 8 */
+    s.npcs[1].hp = 30;
+    s.npcs[0].attack_timer = 0;
+    col_npc_attack_ctx(&s, &ctx, 0);
+    CHECK("centre distance 8 is out of heal reach", s.npcs[1].hp == 30);
+
+    /* pillar LoS: the lower-fraction ally behind the SW pillar is skipped; the
+       clear-LoS ally heals instead. */
+    geo_clear_npcs(&s);
+    s.player.x = 5; s.player.y = 14;
+    col_rebuild_player_collision_flags(&s);
+    col_init_npc(&s, 0, COLO_MINOTAUR, 4, 8);          /* centre (5,9), W of pillar */
+    col_init_npc(&s, 1, COLO_SERPENT_SHAMAN, 12, 9);   /* 10/125, ray crosses pillar */
+    col_init_npc(&s, 2, COLO_SERPENT_SHAMAN, 5, 16);   /* 60/125, clear column ray */
+    s.npcs[1].hp = 10;
+    s.npcs[2].hp = 60;
+    s.npcs[0].attack_timer = 0;
+    col_npc_attack_ctx(&s, &ctx, 0);
+    CHECK("pillars block the heal (blocked ally skipped)", s.npcs[1].hp == 10);
+    CHECK("the clear-LoS ally heals instead", s.npcs[2].hp == 125);
+
+    /* melee priority: a (diagonally) adjacent player preempts the heal, and the
+       crush is queued with the confirmed 1-tick delay (tick-eatable). */
+    geo_clear_npcs(&s);
+    s.player.x = 11; s.player.y = 11;   /* diagonal corner contact, rect dist 1 */
+    col_rebuild_player_collision_flags(&s);
+    col_init_npc(&s, 0, COLO_MINOTAUR, 12, 12);
+    col_init_npc(&s, 1, COLO_SERPENT_SHAMAN, 16, 13);
+    s.npcs[1].hp = 30;
+    s.npcs[0].attack_timer = 0;
+    s.player.current_hitpoints = 99;
+    int queue_before = s.player_pending_hits.count;
+    col_npc_attack_ctx(&s, &ctx, 0);
+    CHECK("player in melee distance: the minotaur attacks instead of healing",
+        s.npcs[0].attacked_this_tick == 1 && s.npcs[1].hp == 30);
+    CHECK("the crush is 1-tick-delayed (queued, no damage this tick)",
+        s.player_pending_hits.count == queue_before + 1 &&
+        s.player.current_hitpoints == 99);
+}
+
+/* 5b. A19: barrage-to-barrage period is exactly 10 ticks — 3 orbs on consecutive
+   ticks + a 7-tick recharge — measured over 3+ consecutive barrages (the old
+   fresh-10 reset after orb 3 gave 12). */
+static void test_manticore_barrage_period(void) {
+    printf("test_manticore_barrage_period\n");
+    ColosseumContext ctx;
+    col_init_context_typed(&ctx);
+    ColosseumState s;
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 79);
+    geo_clear_npcs(&s);
+    s.player.x = 17; s.player.y = 16;
+    col_rebuild_player_collision_flags(&s);
+    col_init_npc(&s, 0, COLO_MANTICORE, 16, 12);   /* dist 2, clear LoS */
+    s.npcs[0].attack_timer = 2;
+
+    ColoManticoreState* mc = colo_npc_manticore(&s.npcs[0]);
+    int starts[8];
+    int nstarts = 0;
+    for (int t = 0; t < 36; t++) {
+        s.player.current_hitpoints = 99;   /* orbs land inline now; stay alive */
+        int prev = mc->cycle_step;
+        col_npc_attack_ctx(&s, &ctx, 0);
+        if (prev < 0 && mc->cycle_step >= 0 && nstarts < 8) starts[nstarts++] = t;
+    }
+    CHECK("4 barrage starts inside 36 ticks", nstarts == 4);
+    int period_ok = nstarts >= 4;
+    for (int b = 1; b < nstarts; b++)
+        if (starts[b] - starts[b - 1] != 10) period_ok = 0;
+    CHECK("barrage-to-barrage period is exactly 10 ticks across 3 gaps", period_ok);
+}
+
+/* 5c. D12: orbs land ON their launch tick — nothing enters the pending queue,
+   damage applies on the fire tick, and the prayer set that tick (pretick runs
+   before NPC actions) blocks the orb. Step-loop layer: flicking the telegraphed
+   next-orb style each tick blocks orbs 1 and 2 of every barrage. */
+static void test_manticore_orb_same_tick_flick(void) {
+    printf("test_manticore_orb_same_tick_flick\n");
+    ColosseumContext ctx;
+    col_init_context_typed(&ctx);
+    ColosseumState s;
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 83);
+    geo_clear_npcs(&s);
+    s.player.x = 17; s.player.y = 16;
+    col_rebuild_player_collision_flags(&s);
+    col_init_npc(&s, 0, COLO_MANTICORE, 16, 12);
+    ColoManticoreState* mc = colo_npc_manticore(&s.npcs[0]);
+
+    /* prayed orb: zero damage, zero queue entries, prayer_correct counted. */
+    int blocked_ok = 1, queued = 0, prayer_counted = 0;
+    for (int rep = 0; rep < 16; rep++) {
+        mc->cycle_step = 1;                       /* mid-barrage: next orb = 1 */
+        mc->orb_style[1] = ATTACK_STYLE_MAGIC;
+        s.player.prayer = PRAYER_PROTECT_MAGIC;   /* flicked on the fire tick */
+        s.player.current_hitpoints = 99;
+        int pc_before = s.tick_scratch.prayer_correct;
+        col_npc_attack_ctx(&s, &ctx, 0);
+        if (s.player.current_hitpoints != 99) blocked_ok = 0;
+        if (s.tick_scratch.prayer_correct > pc_before) prayer_counted = 1;
+        queued += s.player_pending_hits.count;
+    }
+    CHECK("praying the orb's style on its fire tick blocks it", blocked_ok);
+    CHECK("orbs never enter the pending queue (travel time 0)", queued == 0);
+    CHECK("a blocked orb still counts prayer_correct", prayer_counted);
+
+    /* unprayed orb: damage lands on the very same call (Relentless III forces
+       the accuracy roll so only the 1/32 zero-roll can blank a given orb). */
+    s.modifiers.active_mask |= (1u << COLO_MOD_RELENTLESS);
+    s.modifiers.tier[COLO_MOD_RELENTLESS] = 3;
+    int same_tick_damage = 0;
+    for (int rep = 0; rep < 32 && !same_tick_damage; rep++) {
+        mc->cycle_step = 1;
+        mc->orb_style[1] = ATTACK_STYLE_MAGIC;
+        s.player.prayer = PRAYER_PROTECT_RANGED;   /* wrong prayer */
+        s.player.current_hitpoints = 99;
+        col_npc_attack_ctx(&s, &ctx, 0);
+        if (s.player.current_hitpoints < 99) same_tick_damage = 1;
+    }
+    CHECK("an unprayed orb damages the player on the fire tick", same_tick_damage);
+    CHECK("nothing was queued for a later landing", s.player_pending_hits.count == 0);
+
+    /* step loop: pray the telegraphed next-orb style each tick. cycle_step from
+       the prior tick names the orb that fires next, so orbs 1 and 2 are always
+       blockable; only orb 0's 50/50 lead can connect. */
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 83);
+    geo_clear_npcs(&s);
+    s.player.x = 17; s.player.y = 16;
+    col_rebuild_player_collision_flags(&s);
+    col_init_npc(&s, 0, COLO_MANTICORE, 16, 12);
+    s.npcs[0].attack_timer = 4;
+    mc = colo_npc_manticore(&s.npcs[0]);
+
+    int actions[COLO_NUM_ACTION_HEADS] = {0};
+    int protected_ticks = 0, flicked_damage = 0;
+    for (int t = 0; t < 40 && !s.episode_over; t++) {
+        int expect_orb = mc->cycle_step >= 0 && mc->cycle_step < 3;
+        if (expect_orb) {
+            AttackStyle next = mc->orb_style[mc->cycle_step];
+            actions[COLO_HEAD_PRAYER] =
+                next == ATTACK_STYLE_MAGIC ? ENCOUNTER_OVERHEAD_SET_REFRESH_MAGIC :
+                next == ATTACK_STYLE_RANGED ? ENCOUNTER_OVERHEAD_SET_REFRESH_RANGED :
+                ENCOUNTER_OVERHEAD_SET_REFRESH_MELEE;
+        } else {
+            actions[COLO_HEAD_PRAYER] = ENCOUNTER_OVERHEAD_NO_CHANGE;
+        }
+        int hp_before = s.player.current_hitpoints;
+        step_and_observe(&s, &ctx, actions);
+        if (expect_orb) {
+            protected_ticks++;
+            if (s.player.current_hitpoints < hp_before) flicked_damage = 1;
+        }
+        s.player.current_hitpoints = 99;
+        s.player.current_prayer = 99;
+    }
+    CHECK("multiple telegraphed orb ticks observed through the step loop",
+        protected_ticks >= 6);
+    CHECK("flicking the telegraphed style each fire tick blocks every such orb",
+        !flicked_damage);
+}
+
+/* 5d. B10: from wave 9 a freshly drawn orb pattern is copied by the other
+   manticore when within 15 tiles (centre-to-centre) with LoS; out-of-LoS,
+   out-of-range, and pre-wave-9 peers do not copy. The copy is consumed at the
+   peer's own barrage start without re-propagating, and the 5-tick stagger is
+   unchanged. */
+static void test_manticore_pattern_copy(void) {
+    printf("test_manticore_pattern_copy\n");
+    ColosseumContext ctx;
+    col_init_context_typed(&ctx);
+    ColosseumState s;
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 89);
+
+    /* wave 9, in range + LoS: the idle peer copies A's fresh draw. */
+    geo_clear_npcs(&s);
+    s.wave = 8;   /* wave 9, 0-based */
+    s.player.x = 13; s.player.y = 12;
+    col_rebuild_player_collision_flags(&s);
+    col_init_npc(&s, 0, COLO_MANTICORE, 12, 16);   /* A: centre (13,17) */
+    col_init_npc(&s, 1, COLO_MANTICORE, 18, 16);   /* B: centre (19,17), dist 6 */
+    ColoManticoreState* amc = colo_npc_manticore(&s.npcs[0]);
+    ColoManticoreState* bmc = colo_npc_manticore(&s.npcs[1]);
+    s.npcs[0].attack_timer = 0;
+    s.npcs[1].attack_timer = 30;
+    s.player.current_hitpoints = 99;
+    col_npc_attack_ctx(&s, &ctx, 0);
+    CHECK("A committed and fired orb 0", amc->cycle_step == 1);
+    CHECK("the in-LoS peer copied the fresh pattern",
+        bmc->pattern_copied == 1 &&
+        bmc->orb_style[0] == amc->orb_style[0] &&
+        bmc->orb_style[1] == amc->orb_style[1] &&
+        bmc->orb_style[2] == amc->orb_style[2]);
+
+    /* stagger unchanged: a ready B mid-A-barrage delays 5 ticks, copy intact. */
+    s.npcs[1].attack_timer = 0;
+    col_npc_attack_ctx(&s, &ctx, 1);
+    CHECK("a ready peer still staggers 5 ticks during A's barrage",
+        s.npcs[1].attack_timer == COLO_MANTICORE_STAGGER_TICKS &&
+        bmc->cycle_step == -1 && bmc->pattern_copied == 1);
+
+    /* B consumes the copy at its barrage start; a consumed copy does not
+       re-propagate back onto the now-idle A (no echo-lock). */
+    AttackStyle a0 = amc->orb_style[0], a1 = amc->orb_style[1], a2 = amc->orb_style[2];
+    s.player.current_hitpoints = 99;
+    col_npc_attack_ctx(&s, &ctx, 0);   /* A orb 1 */
+    s.player.current_hitpoints = 99;
+    col_npc_attack_ctx(&s, &ctx, 0);   /* A orb 2 -> idle */
+    s.npcs[1].attack_timer = 0;
+    s.player.current_hitpoints = 99;
+    col_npc_attack_ctx(&s, &ctx, 1);   /* B starts on the copied pattern */
+    CHECK("B fired the copied pattern (consumed, not re-rolled)",
+        bmc->cycle_step == 1 && bmc->pattern_copied == 0 &&
+        bmc->orb_style[0] == a0 && bmc->orb_style[1] == a1 && bmc->orb_style[2] == a2);
+    CHECK("a consumed copy does not re-propagate to the idle peer",
+        amc->pattern_copied == 0);
+
+    /* wave gate: identical rig on wave 8 (index 7) never copies. */
+    geo_clear_npcs(&s);
+    s.wave = 7;
+    col_init_npc(&s, 0, COLO_MANTICORE, 12, 16);
+    col_init_npc(&s, 1, COLO_MANTICORE, 18, 16);
+    bmc = colo_npc_manticore(&s.npcs[1]);
+    s.npcs[0].attack_timer = 0;
+    s.npcs[1].attack_timer = 30;
+    s.player.current_hitpoints = 99;
+    col_npc_attack_ctx(&s, &ctx, 0);
+    CHECK("before wave 9 the pattern is never copied", bmc->pattern_copied == 0);
+
+    /* pillar LoS: a peer behind the SW pillar does not copy. */
+    geo_clear_npcs(&s);
+    s.wave = 8;
+    s.player.x = 5; s.player.y = 14;
+    col_rebuild_player_collision_flags(&s);
+    col_init_npc(&s, 0, COLO_MANTICORE, 4, 8);     /* A: centre (5,9), W of pillar */
+    col_init_npc(&s, 1, COLO_MANTICORE, 11, 8);    /* B: centre (12,9), E of pillar */
+    bmc = colo_npc_manticore(&s.npcs[1]);
+    s.npcs[0].attack_timer = 0;
+    s.npcs[1].attack_timer = 30;
+    s.player.current_hitpoints = 99;
+    col_npc_attack_ctx(&s, &ctx, 0);
+    CHECK("a peer with the pillar in the centre ray does not copy",
+        bmc->pattern_copied == 0);
+
+    /* range: clear LoS but >15 tiles apart does not copy. */
+    geo_clear_npcs(&s);
+    s.wave = 8;
+    s.player.x = 5; s.player.y = 12;
+    col_rebuild_player_collision_flags(&s);
+    col_init_npc(&s, 0, COLO_MANTICORE, 4, 15);    /* A: centre (5,16) */
+    col_init_npc(&s, 1, COLO_MANTICORE, 26, 15);   /* B: centre (27,16), dist 22 */
+    bmc = colo_npc_manticore(&s.npcs[1]);
+    s.npcs[0].attack_timer = 0;
+    s.npcs[1].attack_timer = 30;
+    s.player.current_hitpoints = 99;
+    col_npc_attack_ctx(&s, &ctx, 0);
+    CHECK("a peer beyond 15 tiles does not copy", bmc->pattern_copied == 0);
+}
+
+/* 5e. D7: the javelin skyfall has no accuracy/defence gate — marks carry the raw
+   uniform 0..48 roll (the removed roll zeroed ~half vs this maxed player), land
+   on the marked tile through Protect-from-Missiles, and miss entirely off-tile.
+   Cadence: every 5th attack, D6 3-tick delay. */
+static void test_javelin_skyfall_no_defence_gate(void) {
+    printf("test_javelin_skyfall_no_defence_gate\n");
+    ColosseumContext ctx;
+    col_init_context_typed(&ctx);
+    ColosseumState s;
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 97);
+    geo_clear_npcs(&s);
+    s.player.x = 17; s.player.y = 16;
+    col_rebuild_player_collision_flags(&s);
+    col_init_npc(&s, 0, COLO_JAVELIN_COLOSSUS, 16, 12);
+    ColoJavelinState* jv = colo_npc_javelin(&s.npcs[0]);
+    const ColoNpcStats* stats = &COLO_NPC_STATS[COLO_JAVELIN_COLOSSUS];
+
+    /* cadence: throws 1-4 queue normal (prayable) projectiles, the 5th marks. */
+    int queue_before = s.player_pending_hits.count;
+    for (int a = 0; a < 4; a++) col_npc_attack_javelin(&s, 0, stats);
+    CHECK("attacks 1-4 are normal queued throws",
+        s.player_pending_hits.count == queue_before + 4 && jv->skyfall_pending == 0);
+    col_npc_attack_javelin(&s, 0, stats);
+    CHECK("the 5th attack marks the player's tile with the D6 3-tick delay",
+        jv->skyfall_pending == 1 && jv->skyfall_timer == COLO_JAVELIN_SKYFALL_DELAY &&
+        jv->skyfall_tile_x == s.player.x && jv->skyfall_tile_y == s.player.y);
+
+    /* no defence gate: raw uniform damage rolls vs a maxed-defence player. */
+    int nonzero = 0, in_range_ok = 1, high_roll = 0;
+    for (int rep = 0; rep < 300; rep++) {
+        jv->attack_count = 4;
+        jv->skyfall_pending = 0;
+        col_npc_attack_javelin(&s, 0, stats);
+        if (jv->skyfall_damage > 0) nonzero++;
+        if (jv->skyfall_damage < 0 || jv->skyfall_damage > stats->max_hit) in_range_ok = 0;
+        if (jv->skyfall_damage >= 45) high_roll = 1;
+    }
+    CHECK("skyfall damage ignores defence (>=80% of 300 marks nonzero)", nonzero >= 240);
+    CHECK("rolls span the raw 0..48 band up to the top", in_range_ok && high_roll);
+
+    /* PfM ignored on-tile; stepping off dodges fully. */
+    s.player.prayer = PRAYER_PROTECT_RANGED;
+    s.player.current_hitpoints = 99;
+    jv->skyfall_pending = 1;
+    jv->skyfall_timer = 1;
+    jv->skyfall_damage = 37;
+    jv->skyfall_tile_x = s.player.x;
+    jv->skyfall_tile_y = s.player.y;
+    col_npc_resolve_javelin_skyfall(&s, 0);
+    CHECK("on the marked tile the skyfall lands through Protect-from-Missiles",
+        s.player.current_hitpoints == 99 - 37 && jv->skyfall_pending == 0);
+
+    s.player.current_hitpoints = 99;
+    jv->skyfall_pending = 1;
+    jv->skyfall_timer = 1;
+    jv->skyfall_damage = 37;
+    jv->skyfall_tile_x = s.player.x + 1;
+    jv->skyfall_tile_y = s.player.y;
+    col_npc_resolve_javelin_skyfall(&s, 0);
+    CHECK("off the marked tile the skyfall misses entirely",
+        s.player.current_hitpoints == 99 && jv->skyfall_pending == 0);
+}
+
 int main(void) {
     test_fuzz_obs_mask();
     test_step_loop_draft();
@@ -1072,6 +1449,11 @@ int main(void) {
     test_warband_two_tile_speed();
     test_warband_pillar_routefind_vs_shaman_safespot();
     test_red_flag_minotaur_routefind();
+    test_minotaur_heal_semantics();
+    test_manticore_barrage_period();
+    test_manticore_orb_same_tick_flick();
+    test_manticore_pattern_copy();
+    test_javelin_skyfall_no_defence_gate();
 
     printf("\n%d/%d passed", tests_passed, tests_run);
     if (tests_failed) printf(", %d FAILED", tests_failed);

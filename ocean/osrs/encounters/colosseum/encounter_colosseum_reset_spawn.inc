@@ -160,8 +160,12 @@ static void col_spawn_warbander_adjacent(ColosseumState* s, ColoNpcType type, in
     col_spawn_npc_at(s, type, x, y);
 }
 
-/** A26: the Dynamic Duo pair spawns near its primary, off-anchor allowed — the
-    first free footprint flush with the primary's, else the next free anchor. */
+/** A26: the Dynamic Duo pair spawns NEAR its primary, off-anchor allowed ("The
+    paired Colossus spawns near the main Colossus, but not necessarily on one of
+    the 12 default spawns"). Every fallback stays near the partner: the 8
+    footprints flush with the primary's first, then outward SW-anchor rings of
+    growing Chebyshev radius, and as a last resort the free anchor NEAREST the
+    primary (never the table-order-first one). */
 static void col_spawn_pair_adjacent(ColosseumState* s, ColoNpcType type, int px, int py) {
     int size = COLO_NPC_STATS[type].size;
     const int off[8][2] = {
@@ -173,14 +177,29 @@ static void col_spawn_pair_adjacent(ColosseumState* s, ColoNpcType type, int px,
         col_spawn_npc_at(s, type, x, y);
         return;
     }
+    for (int r = 1; r <= size + 2; r++) {
+        for (int dy = -r; dy <= r; dy++) {
+            for (int dx = -r; dx <= r; dx++) {
+                if (dx > -r && dx < r && dy > -r && dy < r) continue;  /* shell only */
+                int x = px + dx, y = py + dy;
+                if (!col_spawn_footprint_free(s, x, y, size)) continue;
+                col_spawn_npc_at(s, type, x, y);
+                return;
+            }
+        }
+    }
+    int best = -1, best_dist = 1 << 30;
     for (int a = 0; a < COLO_NUM_SPAWN_ANCHORS; a++) {
         int ax = COLO_SPAWN_ANCHORS[a][0], ay = COLO_SPAWN_ANCHORS[a][1];
         if (col_spawn_excluded_near_player(s, ax, ay, COLO_SPAWN_ZONE_SIZE)) continue;
         if (!col_spawn_footprint_free(s, ax, ay, COLO_SPAWN_ZONE_SIZE)) continue;
-        col_spawn_npc_at(s, type, ax, ay);
-        return;
+        int dx = ax > px ? ax - px : px - ax;
+        int dy = ay > py ? ay - py : py - ay;
+        int cheb = dx > dy ? dx : dy;
+        if (cheb < best_dist) { best_dist = cheb; best = a; }
     }
-    assert(0 && "no spawn spot for the Dynamic Duo pair");
+    assert(best >= 0 && "no spawn spot for the Dynamic Duo pair");
+    col_spawn_npc_at(s, type, COLO_SPAWN_ANCHORS[best][0], COLO_SPAWN_ANCHORS[best][1]);
 }
 
 /** A6+D19: the Quartet warbander on wave 12 spawns on a random walkable

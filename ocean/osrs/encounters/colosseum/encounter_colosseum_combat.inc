@@ -168,40 +168,54 @@ static void col_npc_attack_jaguar(ColosseumState* s, int idx, const ColoNpcStats
         col_npc_queue_melee(s, idx, stats, stats->max_hit);
 }
 
-/** Minotaur: heal every wounded NPC within 6 tiles each attack cycle, unless the
-    player is within the minotaur's melee range (heal suppressed). */
-static void col_npc_minotaur_heal_allies(ColosseumState* s, int idx) {
+/** A13: minotaur heal — pick ONE eligible ally per heal action and restore it
+    TO FULL. Eligibility: not a minotaur, below 75% of max HP, centre within
+    COLO_MINOTAUR_HEAL_RANGE tiles of the minotaur's centre (Chebyshev), and
+    centre-to-centre line of sight (pillars block heals). Modeled tiebreak: the
+    lowest-HP-fraction candidate (no source ranks multiple eligibles).
+    D10: NO passive self-regen — the ~5hp/20t talk-page report is a single
+    unresolved anonymous claim and is deliberately not modeled. */
+static void col_npc_minotaur_heal_ally(ColosseumState* s, int idx) {
     ColoNPC* mino = &s->npcs[idx];
+    int mcx = mino->x + 1, mcy = mino->y + 1;   /* centre of the 3x3 */
+    int best = -1;
     for (int i = 0; i < COLO_MAX_NPCS; i++) {
         if (i == idx) continue;
         ColoNPC* other = &s->npcs[i];
         if (!other->active || other->death_ticks > 0 || other->hp <= 0) continue;
-        if (other->hp >= other->max_hp) continue;
-        int d = encounter_rect_distance(
-            mino->x, mino->y, col_npc_effective_size(mino),
-            other->x, other->y, col_npc_effective_size(other));
-        if (d > 6) continue;
-        int heal = encounter_rand_int(&s->rng_state, 11);  /* 0..10 per cycle */
-        other->hp += heal;
-        if (other->hp > other->max_hp) other->hp = other->max_hp;
+        if (other->type == COLO_MINOTAUR) continue;
+        if (other->hp * 4 >= other->max_hp * 3) continue;   /* at/above 75% */
+        int osz = col_npc_effective_size(other);
+        int ocx = other->x + osz / 2, ocy = other->y + osz / 2;
+        int dx = ocx > mcx ? ocx - mcx : mcx - ocx;
+        int dy = ocy > mcy ? ocy - mcy : mcy - ocy;
+        if ((dx > dy ? dx : dy) > COLO_MINOTAUR_HEAL_RANGE) continue;
+        if (!col_tiles_have_los(s, mcx, mcy, ocx, ocy)) continue;
+        if (best < 0 ||
+            other->hp * s->npcs[best].max_hp < s->npcs[best].hp * other->max_hp)
+            best = i;
     }
+    if (best >= 0) s->npcs[best].hp = s->npcs[best].max_hp;
 }
 
 /** Javelin Colossus: normal throw is Protect-from-Missiles blockable; every 5th
-    throw is a skyfall that marks the player's current tile and lands 3 ticks later
-    ignoring Protect-from-Missiles (dodge by leaving the tile). */
+    throw is a skyfall that marks the player's current tile and lands
+    COLO_JAVELIN_SKYFALL_DELAY ticks later (D6), ignoring Protect-from-Missiles.
+    D7: the skyfall has NO accuracy/defence gate — a player on the marked tile at
+    land eats the raw 0..max roll (Relentless still raises the max); stepping off
+    the tile dodges it fully. */
 static void col_npc_attack_javelin(ColosseumState* s, int idx, const ColoNpcStats* stats) {
     ColoNPC* npc = &s->npcs[idx];
     ColoJavelinState* jv = colo_npc_javelin(npc);
     jv->attack_count++;
     if (jv->attack_count % 5 == 0) {
-        int hit_success = 0;
-        int dmg = col_npc_roll_vs_player(s, stats, ATTACK_STYLE_RANGED, stats->max_hit, &hit_success);
+        int max_hit = stats->max_hit
+            + COLO_RELENTLESS_MAX_HIT_BONUS[col_mod_tier(s, COLO_MOD_RELENTLESS)];
         jv->skyfall_pending = 1;
         jv->skyfall_tile_x = s->player.x;
         jv->skyfall_tile_y = s->player.y;
         jv->skyfall_timer = COLO_JAVELIN_SKYFALL_DELAY;
-        jv->skyfall_damage = hit_success ? dmg : 0;
+        jv->skyfall_damage = encounter_rand_int(&s->rng_state, max_hit + 1);
         npc->attacked_this_tick = 1;
         npc->attack_style_this_tick = ATTACK_STYLE_RANGED;
         s->tick_scratch.attacks_fired++;
@@ -211,7 +225,9 @@ static void col_npc_attack_javelin(ColosseumState* s, int idx, const ColoNpcStat
 }
 
 /** resolve a javelin's in-flight skyfall: land on the marked tile, ignoring
-    Protect-from-Missiles. The player dodges by standing off the tile at land time. */
+    Protect-from-Missiles (D7: no defence gate either — on-tile means hit). The
+    player dodges by standing off the tile at land time; resolution runs before
+    NPC and player movement of the land tick (D8). */
 static void col_npc_resolve_javelin_skyfall(ColosseumState* s, int idx) {
     ColoNPC* npc = &s->npcs[idx];
     ColoJavelinState* jv = colo_npc_javelin(npc);
@@ -230,9 +246,12 @@ static void col_npc_resolve_javelin_skyfall(ColosseumState* s, int idx) {
     col_mod_reentry_on_skyfall(s, jv->skyfall_tile_x, jv->skyfall_tile_y);
 }
 
-/** Manticore: 10-tick cycle 3-orb barrage. orbs 0&1 are {ranged, magic} in random
-    order, orb 2 is always melee. orbs fire 1 tick apart with 0 flight time, each
-    prayed individually. A ready manticore staggers 5 ticks if another is mid-barrage. */
+/** Manticore: 10-tick barrage-to-barrage cycle (A19) — 3 orbs on consecutive
+    ticks, then a 7-tick recharge. orbs 0&1 are {ranged, magic} in random order,
+    orb 2 is always melee. orbs land with travel time 0 (D12), each prayed
+    individually on its fire tick. A ready manticore staggers 5 ticks if another
+    is mid-barrage. Spawns uncharged: the first barrage waits a full cycle.
+    D11: movement stays unrestricted while charging. */
 static int col_any_other_manticore_mid_barrage(const ColosseumState* s, int idx) {
     for (int i = 0; i < COLO_MAX_NPCS; i++) {
         if (i == idx) continue;
@@ -249,9 +268,12 @@ static int col_manticore_orb_max_hit(AttackStyle style) {
     return COLO_MANTICORE_MAX_HIT_MELEE;
 }
 
-/** fire one manticore orb (flight time 0): each orb prayed individually.
-    Mantimayhem T1 fires a second projectile of the same orb; T2 inflicts venom on
-    an unprotected hit (the player's current overhead does not block the style). */
+/** fire one manticore orb. D12: orbs have travel time 0 — damage and the
+    per-orb prayer check resolve ON the launch tick. The tick's prayer is final
+    by NPC time (prayer actions apply in col_player_pretick), so praying the
+    orb's style on its fire tick blocks it; the flick cadence is per-orb.
+    Mantimayhem T1 fires a second projectile of the same orb; T2 inflicts venom
+    on an unprotected successful hit. */
 static void col_npc_manticore_fire_orb(ColosseumState* s, int idx, const ColoNpcStats* stats) {
     ColoNPC* npc = &s->npcs[idx];
     ColoManticoreState* mc = colo_npc_manticore(npc);
@@ -259,15 +281,22 @@ static void col_npc_manticore_fire_orb(ColosseumState* s, int idx, const ColoNpc
     int max_hit = col_manticore_orb_max_hit(style);
     int mayhem = col_mod_tier(s, COLO_MOD_MANTIMAYHEM);
     int shots = (mayhem >= 1) ? 2 : 1;   /* T1+: an extra projectile per orb */
+    int prayed = encounter_prayer_correct_for_style(s->player.prayer, style);
 
     for (int shot = 0; shot < shots; shot++) {
         int hit_success = 0;
         int dmg = col_npc_roll_vs_player(s, stats, style, max_hit, &hit_success);
-        /* flight time 0: lands next tick, prayer checked individually at land. */
-        col_queue_player_pending_hit(s, idx, npc->type, dmg, 1, style, 1, hit_success);
-        /* T2 venom: a successful hit the current prayer does not block inflicts venom. */
-        if (hit_success && !encounter_prayer_correct_for_style(s->player.prayer, style))
-            col_mod_manticore_apply_venom(s, hit_success);
+        if (prayed) {
+            dmg = 0;
+            s->tick_scratch.prayer_correct++;
+        }
+        encounter_damage_player(&s->player, dmg, &s->tick_scratch.damage_received);
+        if (dmg > 0) {
+            s->last_hit_by_type = npc->type;
+            col_mod_on_player_damaged(s, dmg);
+        }
+        /* T2 venom: a successful hit the current prayer does not block. */
+        if (hit_success && !prayed) col_mod_manticore_apply_venom(s, hit_success);
     }
     npc->attacked_this_tick = 1;
     npc->attack_style_this_tick = style;
@@ -275,7 +304,11 @@ static void col_npc_manticore_fire_orb(ColosseumState* s, int idx, const ColoNpc
     mc->cycle_step++;
     if (mc->cycle_step >= 3) {
         mc->cycle_step = -1;
-        npc->attack_timer = stats->attack_speed;  /* 10-tick cycle restart */
+        /* A19: 10-tick barrage-to-barrage. The timer is set on the LAST orb's
+           tick, two ticks after the barrage started, so attack_speed - 2 makes
+           the next orb 0 land exactly attack_speed (10) ticks after this one's
+           — the 7-tick recharge + 3 orb ticks of the researched cycle. */
+        npc->attack_timer = stats->attack_speed - 2;
     }
 }
 
@@ -287,7 +320,36 @@ static void col_npc_manticore_advance_barrage(ColosseumState* s, int idx, const 
     col_npc_manticore_fire_orb(s, idx, stats);
 }
 
-/** start a manticore barrage: roll the 3 orb styles and fire orb 0 this tick. */
+/** B10: from wave 9, a freshly-drawn orb pattern is copied onto every other
+    manticore within COLO_MANTICORE_COPY_RANGE tiles (centre-to-centre) with
+    line of sight that has not committed its own pattern (a mid-barrage peer
+    keeps its own). Modeled: a CONSUMED copy does not re-propagate — only fresh
+    draws count as "selecting" a pattern, so a pair cannot echo-lock one
+    pattern forever. */
+static void col_manticore_copy_pattern_to_peers(ColosseumState* s, int idx) {
+    if (s->wave < COLO_MANTICORE_COPY_MIN_WAVE) return;
+    ColoNPC* src = &s->npcs[idx];
+    ColoManticoreState* smc = colo_npc_manticore(src);
+    int scx = src->x + 1, scy = src->y + 1;   /* centre of the 3x3 */
+    for (int i = 0; i < COLO_MAX_NPCS; i++) {
+        if (i == idx) continue;
+        ColoNPC* other = &s->npcs[i];
+        if (!other->active || other->death_ticks > 0) continue;
+        if (other->type != COLO_MANTICORE) continue;
+        ColoManticoreState* omc = colo_npc_manticore(other);
+        if (omc->cycle_step >= 0) continue;   /* mid-barrage = committed */
+        int ocx = other->x + 1, ocy = other->y + 1;
+        int dx = ocx > scx ? ocx - scx : scx - ocx;
+        int dy = ocy > scy ? ocy - scy : scy - ocy;
+        if ((dx > dy ? dx : dy) > COLO_MANTICORE_COPY_RANGE) continue;
+        if (!col_tiles_have_los(s, scx, scy, ocx, ocy)) continue;
+        for (int o = 0; o < 3; o++) omc->orb_style[o] = smc->orb_style[o];
+        omc->pattern_copied = 1;
+    }
+}
+
+/** start a manticore barrage: consume a copied pattern (B10) or roll the 3 orb
+    styles fresh (and propagate the draw to peers), then fire orb 0 this tick. */
 static void col_npc_attack_manticore(ColosseumState* s, int idx, const ColoNpcStats* stats) {
     ColoNPC* npc = &s->npcs[idx];
     ColoManticoreState* mc = colo_npc_manticore(npc);
@@ -297,20 +359,25 @@ static void col_npc_attack_manticore(ColosseumState* s, int idx, const ColoNpcSt
         return;
     }
 
-    if (col_mod_tier(s, COLO_MOD_MANTIMAYHEM) >= 3) {
-        /* T3 unpredictable: every orb's style is independently random. */
-        static const AttackStyle ANY[3] = { ATTACK_STYLE_RANGED, ATTACK_STYLE_MAGIC, ATTACK_STYLE_MELEE };
-        for (int o = 0; o < 3; o++)
-            mc->orb_style[o] = ANY[encounter_rand_int(&s->rng_state, 3)];
-    } else if (encounter_rand_int(&s->rng_state, 2) == 0) {
-        /* orbs 0 & 1 are {ranged, magic} in random order; orb 2 is always melee. */
-        mc->orb_style[0] = ATTACK_STYLE_RANGED;
-        mc->orb_style[1] = ATTACK_STYLE_MAGIC;
-        mc->orb_style[2] = ATTACK_STYLE_MELEE;
+    if (mc->pattern_copied) {
+        mc->pattern_copied = 0;   /* consume; copied patterns do not re-propagate */
     } else {
-        mc->orb_style[0] = ATTACK_STYLE_MAGIC;
-        mc->orb_style[1] = ATTACK_STYLE_RANGED;
-        mc->orb_style[2] = ATTACK_STYLE_MELEE;
+        if (col_mod_tier(s, COLO_MOD_MANTIMAYHEM) >= 3) {
+            /* T3 unpredictable: every orb's style is independently random. */
+            static const AttackStyle ANY[3] = { ATTACK_STYLE_RANGED, ATTACK_STYLE_MAGIC, ATTACK_STYLE_MELEE };
+            for (int o = 0; o < 3; o++)
+                mc->orb_style[o] = ANY[encounter_rand_int(&s->rng_state, 3)];
+        } else if (encounter_rand_int(&s->rng_state, 2) == 0) {
+            /* orbs 0 & 1 are {ranged, magic} in random order; orb 2 is always melee. */
+            mc->orb_style[0] = ATTACK_STYLE_RANGED;
+            mc->orb_style[1] = ATTACK_STYLE_MAGIC;
+            mc->orb_style[2] = ATTACK_STYLE_MELEE;
+        } else {
+            mc->orb_style[0] = ATTACK_STYLE_MAGIC;
+            mc->orb_style[1] = ATTACK_STYLE_RANGED;
+            mc->orb_style[2] = ATTACK_STYLE_MELEE;
+        }
+        col_manticore_copy_pattern_to_peers(s, idx);
     }
     mc->cycle_step = 0;
     col_npc_manticore_fire_orb(s, idx, stats);
@@ -346,11 +413,13 @@ static void col_npc_attack_ctx(ColosseumState* s, ColosseumContext* ctx, int idx
     AttackStyle style = stats->default_style;
     int dist = col_npc_dist_to_player(s, npc);
 
-    /* Minotaur runs its cycle whether or not it can reach the player: in melee
-       contact it crushes, otherwise it heals wounded allies within 6 tiles. */
+    /* A13+D9: the minotaur runs its 5-tick action timer whether or not it can
+       reach the player. In melee distance (incl. diagonal) it crushes — melee
+       has priority over healing — with the confirmed 1-tick-delayed,
+       tick-eatable damage; otherwise it heals ONE eligible ally to full. */
     if (npc->type == COLO_MINOTAUR) {
         if (dist == 1) col_npc_queue_melee(s, idx, stats, stats->max_hit);
-        else col_npc_minotaur_heal_allies(s, idx);
+        else col_npc_minotaur_heal_ally(s, idx);
         npc->attack_timer = stats->attack_speed;
         return;
     }

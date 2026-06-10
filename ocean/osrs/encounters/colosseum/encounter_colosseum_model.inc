@@ -719,10 +719,14 @@ typedef struct {
     through colo_npc_manticore(). cycle_step counts ticks within a barrage:
     -1 = idle (waiting on attack_timer), 0/1/2 = next orb to fire 1 tick apart.
     orb_style holds the resolved per-orb styles (orbs 0&1 are {ranged,magic} in
-    random order, orb 2 is always melee). */
+    random order, orb 2 is always melee). pattern_copied (B10): orb_style holds
+    a pattern copied from a peer's fresh draw, consumed at the next barrage
+    start instead of rolling. D11: movement is NOT restricted while charging
+    (a "charge-up" is described but no movement rule exists in any source). */
 typedef struct {
     int cycle_step;
     AttackStyle orb_style[3];
+    int pattern_copied;
 } ColoManticoreState;
 
 /** javelin skyfall cadence. valid iff type is COLO_JAVELIN_COLOSSUS; reach it
@@ -809,10 +813,19 @@ static inline int col_warband_window_offset(ColoNpcType type) {
     }
 }
 
-/** ticks the marked skyfall tile lands after the javelin throws it. */
+/** ticks the marked skyfall tile lands after the javelin throws it (D6: wiki
+    says only "a few ticks"; 3 is the modeled value). */
 #define COLO_JAVELIN_SKYFALL_DELAY 3
 /** a ready manticore delays its barrage start while another is mid-barrage. */
 #define COLO_MANTICORE_STAGGER_TICKS 5
+/** B10: from this wave (0-based; wave 9), a manticore's freshly-drawn orb
+    pattern is copied by peers within COLO_MANTICORE_COPY_RANGE tiles
+    (centre-to-centre) with line of sight. */
+#define COLO_MANTICORE_COPY_MIN_WAVE 8
+#define COLO_MANTICORE_COPY_RANGE 15
+/** A13: minotaur heal reach, centre-to-centre tiles (the wiki's 6-from-edge
+    phrasing reconciles to 7-from-centre for the 3x3 minotaur). */
+#define COLO_MINOTAUR_HEAL_RANGE 7
 
 /** write the spawn-time defaults for npc->type's type_state arm. caller must
     have zeroed the NPC and set npc->type first. */
