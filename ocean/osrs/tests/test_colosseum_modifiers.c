@@ -8,7 +8,12 @@
  *      state (the standalone --profile harness skips the obs writer);
  *   2. deterministic scenario checks that each modifier mechanic actually fires:
  *      draft offer + selection + persistence, Frailty max-HP cut, Relentless
- *      damage uplift, Quartet extra warbander, and a per-tick hazard (Bees).
+ *      damage uplift, Quartet extra warbander, and a per-tick hazard (Bees);
+ *   3. P1 arena geometry: the los `Lr` wall-mask port (hardcoded row extents),
+ *      pillar blocking, spawn-anchor placement + the B3 player-proximity
+ *      exclusion, gate-gap reinforcements with the b5 yellow-line side rule,
+ *      static-mask line of sight + the ranged attack gate, and the wave-12
+ *      quartet-reachability + Sol-death-wins predicate.
  *
  * BUILD:
  *   cc -std=c11 -O0 -g -I. -o /tmp/test_colosseum_modifiers \
@@ -400,6 +405,330 @@ static void test_volatility_explosion(void) {
     CHECK("Volatility explosion hits an adjacent player", s.player.current_hitpoints < hp_before);
 }
 
+/* ---- 3. P1 arena geometry ------------------------------------------------- */
+
+/* clear every NPC and its collision stamps so geometry checks run on an empty
+   arena (mirrors what col_spawn_wave does before placing a roster). */
+static void geo_clear_npcs(ColosseumState* s) {
+    memset(s->npcs, 0, sizeof(s->npcs));
+    memset(s->npc_collision_flags, 0, sizeof(s->npc_collision_flags));
+    col_rebuild_player_collision_flags(s);
+}
+
+/* 3a. los `Lr` port spot-checks: hardcoded row/column extents, the gate doors +
+   flanks, the west entrance, the fully walled east edge, and the one
+   asymmetric north/south row pair (catches a row-flip bug outright). */
+static void test_static_arena_mask(void) {
+    printf("test_static_arena_mask\n");
+    col_build_npc_stats();
+
+    int gate_rows_ok = 1;
+    for (int x = 0; x <= 33; x++) {
+        int walkable = (x == 13 || x == 14 || x == 19 || x == 20);
+        if (col_static_blocked(x, 0) != !walkable) gate_rows_ok = 0;
+        if (col_static_blocked(x, 33) != !walkable) gate_rows_ok = 0;
+    }
+    CHECK("south+north inner rows walkable exactly at the gate flanks {13,14,19,20}",
+        gate_rows_ok);
+
+    int west_ok = 1;
+    for (int y = 0; y <= 33; y++) {
+        int walkable = (y == 13 || y == 14 || y == 19 || y == 20);
+        if (col_static_blocked(0, y) != !walkable) west_ok = 0;
+    }
+    CHECK("west col 0 open exactly at the entrance rows {13,14,19,20}", west_ok);
+
+    int east_ok = 1;
+    for (int y = 0; y <= 33; y++)
+        if (!col_static_blocked(33, y)) east_ok = 0;
+    CHECK("east col 33 fully walled", east_ok);
+
+    /* the only asymmetric row pair: sim y=3 (los 30) blocks x<5, sim y=30
+       (los 3) blocks x<6. A row flip inverts these. */
+    CHECK("row 3 west extent [0,5)", col_static_blocked(4, 3) && !col_static_blocked(5, 3));
+    CHECK("row 30 west extent [0,6)", col_static_blocked(5, 30) && !col_static_blocked(6, 30));
+    CHECK("row 29 east extent [29,34)", !col_static_blocked(28, 29) && col_static_blocked(29, 29));
+
+    int pillars_ok = 1, rim_ok = 1;
+    for (int p = 0; p < COLO_NUM_PILLARS; p++) {
+        int px = COLO_PILLARS[p][0], py = COLO_PILLARS[p][1];
+        for (int dx = 0; dx < 3; dx++)
+            for (int dy = 0; dy < 3; dy++)
+                if (!col_static_blocked(px + dx, py + dy)) pillars_ok = 0;
+        if (col_static_blocked(px - 1, py + 1)) rim_ok = 0;   /* west flank open */
+        if (col_static_blocked(px + 3, py + 1)) rim_ok = 0;   /* east flank open */
+    }
+    CHECK("all 36 pillar tiles blocked on every wave", pillars_ok);
+    CHECK("tiles flanking each pillar stay walkable", rim_ok);
+
+    int zones_ok = 1;
+    for (int a = 0; a < COLO_NUM_SPAWN_ANCHORS; a++)
+        for (int dx = 0; dx < COLO_SPAWN_ZONE_SIZE; dx++)
+            for (int dy = 0; dy < COLO_SPAWN_ZONE_SIZE; dy++)
+                if (col_static_blocked(COLO_SPAWN_ANCHORS[a][0] + dx,
+                                       COLO_SPAWN_ANCHORS[a][1] + dy)) zones_ok = 0;
+    CHECK("every 3x3 spawn-anchor zone fully walkable on the static mask", zones_ok);
+
+    CHECK("wave start (7,18) walkable",
+        !col_static_blocked(COLO_PLAYER_START_X, COLO_PLAYER_START_Y));
+    CHECK("boss start (16,10) walkable",
+        !col_static_blocked(COLO_BOSS_PLAYER_START_X, COLO_BOSS_PLAYER_START_Y));
+    int sol_ok = 1;
+    for (int dx = 0; dx < 5; dx++)
+        for (int dy = 0; dy < 5; dy++)
+            if (col_static_blocked(COLO_SOL_SPAWN_X + dx, COLO_SOL_SPAWN_Y + dy)) sol_ok = 0;
+    CHECK("Sol's 5x5 footprint at (16,19) unblocked", sol_ok);
+}
+
+/* 3b. static-mask LoS + the ranged attack gate: pillars and gate doors block
+   centre-to-centre rays; an archer without LoS holds fire and chases instead. */
+static void test_static_los_and_attack_gate(void) {
+    printf("test_static_los_and_attack_gate\n");
+    ColosseumContext ctx;
+    col_init_context_typed(&ctx);
+    ColosseumState s;
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 31);
+    geo_clear_npcs(&s);
+
+    CHECK("SW pillar blocks a ray along row 9", !col_tiles_have_los(&s, 7, 9, 12, 9));
+    CHECK("pillar block is symmetric", !col_tiles_have_los(&s, 12, 9, 7, 9));
+    CHECK("ray one row north of the pillar is clear", col_tiles_have_los(&s, 7, 12, 12, 12));
+    CHECK("north gate doors block along the inner row", !col_tiles_have_los(&s, 14, 33, 19, 33));
+    CHECK("row 32 inside the north gate is clear", col_tiles_have_los(&s, 14, 32, 19, 32));
+
+    /* archer at (13,9) vs player at (5,9): pillar (8..10, 8..10) between them. */
+    s.player.x = 5; s.player.y = 9;
+    col_init_npc(&s, 0, COLO_FREMENNIK_ARCHER, 13, 9);
+    s.npcs[0].attack_timer = 0;
+    CHECK("archer behind the pillar has no LoS", !col_npc_has_los_to_player(&s, &s.npcs[0]));
+    col_npc_attack_ctx(&s, &ctx, 0);
+    CHECK("no-LoS archer holds fire", s.npcs[0].attacked_this_tick == 0);
+    col_npc_move_ctx(&s, &ctx, 0);
+    CHECK("no-LoS archer steps toward the player instead", s.npcs[0].moved_this_tick == 1);
+
+    /* same range with a clear row: the attack fires. */
+    geo_clear_npcs(&s);
+    s.player.x = 5; s.player.y = 12;
+    col_init_npc(&s, 0, COLO_FREMENNIK_ARCHER, 13, 12);
+    s.npcs[0].attack_timer = 0;
+    CHECK("clear-row archer has LoS", col_npc_has_los_to_player(&s, &s.npcs[0]));
+    col_npc_attack_ctx(&s, &ctx, 0);
+    CHECK("clear-row archer attacks", s.npcs[0].attacked_this_tick == 1);
+}
+
+/* 3c. spawn anchors: NPC SW lands ON an anchor, the B3 exclusion suppresses
+   anchors near the player (exactly 3 of 12 on the b5 spawn-fix tile), anchors
+   draw without replacement, and no footprint ever touches a blocked tile. */
+static void test_spawn_anchor_exclusion(void) {
+    printf("test_spawn_anchor_exclusion\n");
+    ColosseumContext ctx;
+    col_init_context_typed(&ctx);
+    ColosseumState s;
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 37);
+
+    /* the b5 spawn-fix tile, world (1813,3108): suppresses exactly anchors
+       (3,14), (9,16), (3,19) -> 9 candidates ("4 out of 9" guide arithmetic). */
+    geo_clear_npcs(&s);
+    s.player.x = 5; s.player.y = 18;
+    int cand[COLO_NUM_SPAWN_ANCHORS];
+    int n = col_spawn_anchor_candidates(&s, cand);
+    CHECK("b5 spawn-fix tile leaves exactly 9 candidate anchors", n == 9);
+    int suppressed_ok = 1;
+    for (int i = 0; i < n; i++)
+        if (cand[i] == 0 || cand[i] == 1 || cand[i] == 2) suppressed_ok = 0;
+    CHECK("the 3 suppressed anchors are (3,14),(9,16),(3,19)", suppressed_ok);
+
+    int on_anchor_ok = 1, excluded_ok = 1, distinct_ok = 1, unblocked_ok = 1;
+    int warband_ok = 1;
+    for (int rep = 0; rep < 30; rep++) {
+        s.player.x = 5; s.player.y = 18;
+        s.wave = 4;   /* wave 5: BZ AR SE SH JV MC -> 3 primaries */
+        col_spawn_wave(&s);
+        int used[COLO_NUM_SPAWN_ANCHORS] = {0};
+        int archer_x = -1, archer_y = -1;
+        for (int i = 0; i < COLO_MAX_NPCS; i++) {
+            if (!s.npcs[i].active || s.npcs[i].type != COLO_FREMENNIK_ARCHER) continue;
+            archer_x = s.npcs[i].x; archer_y = s.npcs[i].y;
+        }
+        for (int i = 0; i < COLO_MAX_NPCS; i++) {
+            ColoNPC* npc = &s.npcs[i];
+            if (!npc->active) continue;
+            int size = col_npc_effective_size(npc);
+            for (int dx = 0; dx < size; dx++)
+                for (int dy = 0; dy < size; dy++)
+                    if (col_static_blocked(npc->x + dx, npc->y + dy)) unblocked_ok = 0;
+            if (col_type_is_warbander(npc->type)) {
+                /* trio: archer in the centre box, the others adjacent to it. */
+                if (npc->type == COLO_FREMENNIK_ARCHER) {
+                    if (npc->x < COLO_WARBAND_BOX_MIN_X || npc->x > COLO_WARBAND_BOX_MAX_X ||
+                        npc->y < COLO_WARBAND_BOX_MIN_Y || npc->y > COLO_WARBAND_BOX_MAX_Y)
+                        warband_ok = 0;
+                } else {
+                    int ddx = abs(npc->x - archer_x), ddy = abs(npc->y - archer_y);
+                    if ((ddx > ddy ? ddx : ddy) > 1) warband_ok = 0;
+                }
+                continue;
+            }
+            int anchor = -1;
+            for (int a = 0; a < COLO_NUM_SPAWN_ANCHORS; a++)
+                if (COLO_SPAWN_ANCHORS[a][0] == npc->x &&
+                    COLO_SPAWN_ANCHORS[a][1] == npc->y) anchor = a;
+            if (anchor < 0) { on_anchor_ok = 0; continue; }
+            if (used[anchor]) distinct_ok = 0;
+            used[anchor] = 1;
+            if (col_spawn_excluded_near_player(&s, npc->x, npc->y, COLO_SPAWN_ZONE_SIZE))
+                excluded_ok = 0;
+        }
+    }
+    CHECK("every primary spawns with its SW tile ON one of the 12 anchors", on_anchor_ok);
+    CHECK("no primary ever lands within Chebyshev 4 of the player", excluded_ok);
+    CHECK("anchors draw without replacement (no double-booking)", distinct_ok);
+    CHECK("no spawned footprint touches a blocked tile", unblocked_ok);
+    CHECK("warband trio spawns centre-box, berserker+seer adjacent to the ranger", warband_ok);
+}
+
+/* 3d. reinforcements: side-by-side inside the gate gap (x 15-18) on the
+   innermost walkable row, side chosen by the b5 yellow line (y>=16 north /
+   y<=15 south), exercised at the exact boundary where nearest-distance differs. */
+static void test_reinforcement_gates(void) {
+    printf("test_reinforcement_gates\n");
+    ColosseumContext ctx;
+    col_init_context_typed(&ctx);
+    ctx.config.start_wave = 10;   /* wave 11: reinforce set = minotaur + shaman */
+    ColosseumState s;
+
+    for (int north = 0; north <= 1; north++) {
+        memset(&s, 0, sizeof(s));
+        col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 41);
+        geo_clear_npcs(&s);
+        s.player.x = 16;
+        s.player.y = north ? 16 : 15;   /* both sit nearer the SOUTH gate rows */
+        col_spawn_reinforcements(&s);
+
+        int count = 0, in_gap_ok = 1, row_ok = 1;
+        for (int i = 0; i < COLO_MAX_NPCS; i++) {
+            ColoNPC* npc = &s.npcs[i];
+            if (!npc->active) continue;
+            count++;
+            int size = col_npc_effective_size(npc);
+            if (npc->x < COLO_GATE_MIN_X || npc->x + size - 1 > COLO_GATE_MAX_X)
+                in_gap_ok = 0;
+            int inner_row = north ? npc->y + size - 1 : npc->y;
+            if (inner_row != (north ? COLO_GATE_NORTH_SPAWN_ROW : COLO_GATE_SOUTH_SPAWN_ROW))
+                row_ok = 0;
+            for (int dx = 0; dx < size; dx++)
+                for (int dy = 0; dy < size; dy++)
+                    if (col_static_blocked(npc->x + dx, npc->y + dy)) row_ok = 0;
+        }
+        CHECK("reinforcement set spawned (minotaur + shaman)", count == 2);
+        CHECK("reinforcements land inside the gate gap x 15-18", in_gap_ok);
+        CHECK(north ? "player y=16 -> north gate row (yellow line, not nearest)"
+                    : "player y=15 -> south gate row", row_ok);
+    }
+}
+
+/* 3d2. A29 roster cap: the largest initial spawn set (wave 8's 7 scripted NPCs +
+   Quartet + Dynamic Duo pair = 9) places everyone — the spawn asserts replace
+   the old silent drop, so reaching 9 actives IS the regression check. */
+static void test_roster_cap_nine(void) {
+    printf("test_roster_cap_nine\n");
+    ColosseumContext ctx;
+    col_init_context_typed(&ctx);
+    ColosseumState s;
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 47);
+    s.modifiers.active_mask |= (1u << COLO_MOD_QUARTET) | (1u << COLO_MOD_DYNAMIC_DUO);
+    s.modifiers.tier[COLO_MOD_QUARTET] = 1;
+    s.modifiers.tier[COLO_MOD_DYNAMIC_DUO] = 1;
+    s.wave = 7;   /* wave 8: BZ AR SE JV JV MC SW */
+    col_spawn_wave(&s);
+    int count = 0;
+    for (int i = 0; i < COLO_MAX_NPCS; i++) if (s.npcs[i].active) count++;
+    CHECK("wave 8 + Quartet + Dynamic Duo spawns all 9 NPCs", count == 9);
+}
+
+/* 3e. wave 12: clamp + Sol placement, the Quartet warbander spawns reachable
+   inside the interior, and Sol's death wins with the warbander still alive. */
+static void test_wave12_quartet_and_win(void) {
+    printf("test_wave12_quartet_and_win\n");
+    ColosseumContext ctx;
+    col_init_context_typed(&ctx);
+    ctx.config.start_wave = 11;
+    ColosseumState s;
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 43);
+
+    CHECK("boss-wave player start (16,10)",
+        s.player.x == COLO_BOSS_PLAYER_START_X && s.player.y == COLO_BOSS_PLAYER_START_Y);
+    CHECK("boss arena clamp is (9,9)-(24,24)",
+        s.sol.boss_arena_min_x == 9 && s.sol.boss_arena_min_y == 9 &&
+        s.sol.boss_arena_max_x == 24 && s.sol.boss_arena_max_y == 24);
+    int sol_idx = col_sol_find_idx(&s);
+    CHECK("Sol spawned at SW (16,19)", sol_idx >= 0 &&
+        s.npcs[sol_idx].x == COLO_SOL_SPAWN_X && s.npcs[sol_idx].y == COLO_SOL_SPAWN_Y);
+
+    int placement_ok = 1, reachable_ok = 1, win_ok = 1, survivor_ok = 1;
+    for (int rep = 0; rep < 10; rep++) {
+        memset(&s, 0, sizeof(s));
+        col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 43 + (uint32_t)rep);
+        s.modifiers.active_mask |= (1u << COLO_MOD_QUARTET);
+        s.modifiers.tier[COLO_MOD_QUARTET] = 1;
+        s.wave = COLO_WAVE_BOSS;
+        col_spawn_wave(&s);
+
+        int wb = -1;
+        for (int i = 0; i < COLO_MAX_NPCS; i++)
+            if (s.npcs[i].active && col_type_is_warbander(s.npcs[i].type)) wb = i;
+        if (wb < 0) { placement_ok = 0; continue; }
+        int wx = s.npcs[wb].x, wy = s.npcs[wb].y;
+        int cheb_dx = abs(wx - s.player.x), cheb_dy = abs(wy - s.player.y);
+        if (wx < 9 || wx > 24 || wy < 9 || wy > 24) placement_ok = 0;
+        if (col_static_blocked(wx, wy)) placement_ok = 0;
+        if ((cheb_dx > cheb_dy ? cheb_dx : cheb_dy) <= COLO_SPAWN_EXCLUSION_CHEB)
+            placement_ok = 0;
+
+        /* BFS from the player over clamped, unblocked, NPC-free tiles: the
+           warbander must be attackable (some cardinal neighbor reachable). */
+        int seen[COLO_ARENA_WIDTH][COLO_ARENA_HEIGHT] = {{0}};
+        int qx[34 * 34], qy[34 * 34], head = 0, tail = 0;
+        qx[tail] = s.player.x; qy[tail] = s.player.y; tail++;
+        seen[s.player.x][s.player.y] = 1;
+        int reached = 0;
+        while (head < tail && !reached) {
+            int cx = qx[head], cy = qy[head]; head++;
+            static const int D[4][2] = { {1,0}, {-1,0}, {0,1}, {0,-1} };
+            for (int d = 0; d < 4; d++) {
+                int nx = cx + D[d][0], ny = cy + D[d][1];
+                if (nx == wx && ny == wy) { reached = 1; break; }
+                if (nx < 9 || nx > 24 || ny < 9 || ny > 24) continue;
+                if (seen[nx][ny] || col_static_blocked(nx, ny)) continue;
+                int gx, gy;
+                if (!col_grid_index(nx, ny, &gx, &gy)) continue;
+                if (s.npc_collision_flags[gx][gy]) continue;
+                seen[nx][ny] = 1;
+                qx[tail] = nx; qy[tail] = ny; tail++;
+            }
+        }
+        if (!reached) reachable_ok = 0;
+
+        /* A6: killing Sol ends the run in victory with the warbander alive. */
+        int sol = col_sol_find_idx(&s);
+        if (sol < 0) { win_ok = 0; continue; }
+        col_apply_npc_death(&s, sol);
+        int idle[COLO_NUM_ACTION_HEADS] = {0};
+        step_and_observe(&s, &ctx, idle);
+        if (!(s.episode_over && s.winner == COLO_OUTCOME_PLAYER_WON)) win_ok = 0;
+        if (!s.npcs[wb].active) survivor_ok = 0;
+    }
+    CHECK("Quartet warbander spawns on a walkable interior tile outside the exclusion",
+        placement_ok);
+    CHECK("Quartet warbander is pathable from the player", reachable_ok);
+    CHECK("Sol's death wins the wave-12 run (A6)", win_ok);
+    CHECK("the surviving warbander does not block the win", survivor_ok);
+}
+
 int main(void) {
     test_fuzz_obs_mask();
     test_step_loop_draft();
@@ -411,6 +740,12 @@ int main(void) {
     test_relentless_damage();
     test_quartet_extra_spawn();
     test_bees_hazard();
+    test_static_arena_mask();
+    test_static_los_and_attack_gate();
+    test_spawn_anchor_exclusion();
+    test_reinforcement_gates();
+    test_roster_cap_nine();
+    test_wave12_quartet_and_win();
 
     printf("\n%d/%d passed", tests_passed, tests_run);
     if (tests_failed) printf(", %d FAILED", tests_failed);

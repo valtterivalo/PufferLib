@@ -8,6 +8,10 @@
  * The wave roster, modifiers, and Sol boss sub-state are later phases.
  */
 
+/* SIM-LOCAL frame: (0,0) = world (1808,3090), the SW corner of the 34x34
+   playable square (the los.colosim.com grid); x+ = world east, y+ = world NORTH.
+   sim (x,y) <-> world (1808+x, 3090+y); los grid: sim_x = los_col,
+   sim_y = 33 - los_row (los y+ = south). */
 #define COLO_ARENA_MIN_X    0
 #define COLO_ARENA_MAX_X    33
 #define COLO_ARENA_MIN_Y    0
@@ -15,8 +19,10 @@
 #define COLO_ARENA_WIDTH    (COLO_ARENA_MAX_X - COLO_ARENA_MIN_X + 1)   /* 34 */
 #define COLO_ARENA_HEIGHT   (COLO_ARENA_MAX_Y - COLO_ARENA_MIN_Y + 1)  /* 34 */
 
-#define COLO_PLAYER_START_X 17
-#define COLO_PLAYER_START_Y 5
+/* A18: canonical wave start, the los default player tile = world (1815,3108),
+   west side by the west entrance. */
+#define COLO_PLAYER_START_X 7
+#define COLO_PLAYER_START_Y 18
 
 #define COLO_MAX_TICKS      9000   /* 90 minutes at 0.6s/tick */
 #define COLO_NUM_WAVES      12
@@ -29,46 +35,137 @@
 #define COLO_MAX_NPCS 24
 #define COLO_OBS_NPCS 12
 
-/* NPC spawn positions around the arena gates (shuffled per wave) */
-#define COLO_NUM_SPAWN_POS 8
-static const int COLO_SPAWN_POS[COLO_NUM_SPAWN_POS][2] = {
-    {4, 4}, {29, 4}, {4, 29}, {29, 29},
-    {17, 4}, {4, 17}, {29, 17}, {17, 29},
+/* A7+B1: static arena terrain. Walls: the los `Lr` per-row blocked x-extents
+   (half-open [lo,hi)), row-flipped into sim rows, cross-verified against the wiki
+   deadzone outline with 0 mismatches (WSN#GAP1). Pillars: four 3x3 objects
+   (obj 52490, cache-verified SW anchors), present on EVERY wave; they block
+   movement and line of sight. */
+typedef struct { uint8_t lo, hi; } ColoWallSpan;   /* blocked x in [lo, hi) */
+#define COLO_WALL_SPANS_PER_ROW 3
+static const ColoWallSpan COLO_WALL_SPANS[COLO_ARENA_HEIGHT][COLO_WALL_SPANS_PER_ROW] = {
+    [0]  = { {0,13}, {15,19}, {21,34} },   /* los row 33: south inner row, gate doors */
+    [1]  = { {0,9},  {25,34} },            /* los row 32 */
+    [2]  = { {0,7},  {27,34} },            /* los row 31 */
+    [3]  = { {0,5},  {29,34} },            /* los row 30 */
+    [4]  = { {0,5},  {29,34} },            /* los row 29 */
+    [5]  = { {0,3},  {31,34} },            /* los row 28 */
+    [6]  = { {0,3},  {31,34} },            /* los row 27 */
+    [7]  = { {0,2},  {32,34} },            /* los row 26 */
+    [8]  = { {0,2},  {32,34} },            /* los row 25 */
+    [9]  = { {0,1},  {33,34} },            /* los row 24 */
+    [10] = { {0,1},  {33,34} },            /* los row 23 */
+    [11] = { {0,1},  {32,34} },            /* los row 22 */
+    [12] = { {0,1},  {31,34} },            /* los row 21 */
+    [13] = { {31,34} },                    /* los row 20: west entrance flank */
+    [14] = { {31,34} },                    /* los row 19: west entrance flank */
+    [15] = { {0,1},  {31,34} },            /* los row 18 */
+    [16] = { {0,1},  {31,34} },            /* los row 17 */
+    [17] = { {0,1},  {31,34} },            /* los row 16 */
+    [18] = { {0,1},  {31,34} },            /* los row 15 */
+    [19] = { {31,34} },                    /* los row 14: west entrance flank */
+    [20] = { {31,34} },                    /* los row 13: west entrance flank */
+    [21] = { {0,1},  {31,34} },            /* los row 12 */
+    [22] = { {0,1},  {32,34} },            /* los row 11 */
+    [23] = { {0,1},  {33,34} },            /* los row 10 */
+    [24] = { {0,1},  {33,34} },            /* los row 9 */
+    [25] = { {0,2},  {32,34} },            /* los row 8 */
+    [26] = { {0,2},  {32,34} },            /* los row 7 */
+    [27] = { {0,3},  {31,34} },            /* los row 6 */
+    [28] = { {0,3},  {31,34} },            /* los row 5 */
+    [29] = { {0,5},  {29,34} },            /* los row 4 */
+    [30] = { {0,6},  {29,34} },            /* los row 3: asymmetric vs sim row 3 */
+    [31] = { {0,7},  {27,34} },            /* los row 2 */
+    [32] = { {0,9},  {25,34} },            /* los row 1 */
+    [33] = { {0,13}, {15,19}, {21,34} },   /* los row 0: north inner row, gate doors */
 };
 
-/* north/south gate tiles reinforcements stream in from; the nearer one to the
-   player by y is chosen at overrun time (col_spawn_reinforcements). */
-#define COLO_GATE_X       17
-#define COLO_GATE_NORTH_Y 4
-#define COLO_GATE_SOUTH_Y 29
+/* B1: the four arena pillars, SW tiles, world (1816,3098) (1831,3098)
+   (1816,3113) (1831,3113); 15-tile spacing both axes. */
+#define COLO_NUM_PILLARS  4
+#define COLO_PILLAR_SIZE  3
+static const int COLO_PILLARS[COLO_NUM_PILLARS][2] = {
+    {8, 8}, {23, 8}, {8, 23}, {23, 23},
+};
 
-#define COLO_SOL_HEREDIT_X 17
-#define COLO_SOL_HEREDIT_Y 17
+/** blocked-tile grid, COLO_WALL_SPANS + COLO_PILLARS, built by
+    col_build_static_arena (called from col_build_npc_stats at every entry point). */
+static uint8_t COLO_STATIC_BLOCKED[COLO_ARENA_WIDTH][COLO_ARENA_HEIGHT];
 
-/* Sol Heredit boss arena: a 16x16 box centred on the 5x5 boss footprint
-   ([17,21] x [17,21], centre ~ (19,19)). Player + boss are clamped to this box
-   during wave 12 (col_sol_clamp_to_boss_arena). The four pillars sit one tile in
-   from each corner and block line of sight for the rotating crystal's spheres.
-   Dims are UNCONFIRMED in the wiki; 16x16 is the documented arena size. */
-#define COLO_BOSS_ARENA_MIN_X 12
-#define COLO_BOSS_ARENA_MIN_Y 12
-#define COLO_BOSS_ARENA_MAX_X 27
-#define COLO_BOSS_ARENA_MAX_Y 27
+static void col_build_static_arena(void) {
+    memset(COLO_STATIC_BLOCKED, 0, sizeof(COLO_STATIC_BLOCKED));
+    for (int y = 0; y < COLO_ARENA_HEIGHT; y++) {
+        for (int sp = 0; sp < COLO_WALL_SPANS_PER_ROW; sp++) {
+            ColoWallSpan span = COLO_WALL_SPANS[y][sp];
+            for (int x = span.lo; x < span.hi; x++) COLO_STATIC_BLOCKED[x][y] = 1;
+        }
+    }
+    for (int p = 0; p < COLO_NUM_PILLARS; p++)
+        for (int dx = 0; dx < COLO_PILLAR_SIZE; dx++)
+            for (int dy = 0; dy < COLO_PILLAR_SIZE; dy++)
+                COLO_STATIC_BLOCKED[COLO_PILLARS[p][0] + dx][COLO_PILLARS[p][1] + dy] = 1;
+}
+
+/** wall/pillar lookup; out-of-bounds counts as blocked. */
+static inline int col_static_blocked(int x, int y) {
+    if (x < COLO_ARENA_MIN_X || x > COLO_ARENA_MAX_X ||
+        y < COLO_ARENA_MIN_Y || y > COLO_ARENA_MAX_Y) return 1;
+    return COLO_STATIC_BLOCKED[x][y];
+}
+
+/* A4: the 12 canonical primary-spawn anchors, SW tile of each 3x3 zone; the NPC's
+   SW tile is placed ON the anchor. Three-way cross-verified (los `ao` array + b5
+   pastebin + wiki "12 default spawns", WSN#GAP1). D5: the b5 13th tile
+   (1824,3110) and cyan tile (1824,3106) are excluded — semantics unstated. */
+#define COLO_NUM_SPAWN_ANCHORS 12
+#define COLO_SPAWN_ZONE_SIZE   3
+static const int COLO_SPAWN_ANCHORS[COLO_NUM_SPAWN_ANCHORS][2] = {
+    {3, 14}, {9, 16}, {3, 19}, {13, 19}, {19, 19}, {17, 24},
+    {13, 13}, {19, 13}, {16, 9}, {24, 17}, {28, 19}, {28, 14},
+};
+
+/** B3: primary spawns cannot land within Chebyshev 4 of the player at spawn
+    resolution (the b5 9x9 red box). */
+#define COLO_SPAWN_EXCLUSION_CHEB 4
+
+/* B2(d) geometry: the warband does NOT use the anchors. The ranger spawns
+   uniformly inside the b5 centre box, world (1820,3105)-(1826,3111); berserker +
+   seer take adjacent tiles. Warband behavior (cycle/formation/speed) is P2. */
+#define COLO_WARBAND_BOX_MIN_X 12
+#define COLO_WARBAND_BOX_MIN_Y 15
+#define COLO_WARBAND_BOX_MAX_X 18
+#define COLO_WARBAND_BOX_MAX_Y 21
+
+/* A17+B8+D2: gates are wall GAPS spanning sim x 15-18 in the north (sim row 33)
+   and south (sim row 0) inner wall rows (doors blocked, flanks walkable).
+   Reinforcements materialize side-by-side inside the gap on the innermost
+   walkable row of the chosen wall. Side selection: the b5 yellow line at the
+   world y 3105/3106 boundary — player y <= 15 -> SOUTH gate, y >= 16 -> NORTH —
+   a fixed threshold, NOT nearest-distance. WORLD north = sim +y. */
+#define COLO_GATE_MIN_X            15
+#define COLO_GATE_MAX_X            18
+#define COLO_GATE_LINE_NORTH_MIN_Y 16
+#define COLO_GATE_NORTH_SPAWN_ROW  32
+#define COLO_GATE_SOUTH_SPAWN_ROW  1
+
+/* A8: Sol Heredit SW spawn tile, world (1824,3109) (npc 12821, RuneC
+   test-asserted; private-server verified). */
+#define COLO_SOL_SPAWN_X 16
+#define COLO_SOL_SPAWN_Y 19
+
+/* A8+D29: wave-12 outer box world (1816,3098)-(1833,3115) = sim (8,8)-(25,25);
+   the usable interior is (9,9)-(24,24). The four 3x3 pillars sit at the outer
+   box's corners, so the static mask clips a 2x2 notch out of each interior
+   corner — the clamp + mask together produce the researched usable area. */
+#define COLO_BOSS_ARENA_MIN_X 9
+#define COLO_BOSS_ARENA_MIN_Y 9
+#define COLO_BOSS_ARENA_MAX_X 24
+#define COLO_BOSS_ARENA_MAX_Y 24
 #define COLO_BOSS_ARENA_SIZE  (COLO_BOSS_ARENA_MAX_X - COLO_BOSS_ARENA_MIN_X + 1)  /* 16 */
 
-/* player melee-start tile for the boss wave: south-centre of the boss arena,
-   in cardinal contact range of Sol's south edge once the player steps up. */
-#define COLO_BOSS_PLAYER_START_X 19
-#define COLO_BOSS_PLAYER_START_Y 26
-
-/* four pillars, one tile in from each boss-arena corner (1x1 LoS blockers). */
-#define COLO_BOSS_NUM_PILLARS 4
-static const int COLO_BOSS_PILLARS[COLO_BOSS_NUM_PILLARS][2] = {
-    {COLO_BOSS_ARENA_MIN_X + 2, COLO_BOSS_ARENA_MIN_Y + 2},
-    {COLO_BOSS_ARENA_MAX_X - 2, COLO_BOSS_ARENA_MIN_Y + 2},
-    {COLO_BOSS_ARENA_MIN_X + 2, COLO_BOSS_ARENA_MAX_Y - 2},
-    {COLO_BOSS_ARENA_MAX_X - 2, COLO_BOSS_ARENA_MAX_Y - 2},
-};
+/* D27: boss-wave start tile, south-centre interior, world (1824,3100). No
+   teleport exists in any source; the teleport is a training affordance. */
+#define COLO_BOSS_PLAYER_START_X 16
+#define COLO_BOSS_PLAYER_START_Y 10
 
 
 /** OSRS cache NPC definition ids, used by the renderer to look up models.
@@ -217,12 +314,14 @@ static const ColoNpcOverlay COLO_NPC_OVERLAY[COLO_NUM_NPC_TYPES] = {
 static ColoNpcStats COLO_NPC_STATS[COLO_NUM_NPC_TYPES];
 
 /**
- * Merge COLO_NPC_BASE + COLO_NPC_OVERLAY into COLO_NPC_STATS.
+ * Merge COLO_NPC_BASE + COLO_NPC_OVERLAY into COLO_NPC_STATS, and (re)build the
+ * static arena mask. Idempotent; every entry point (reset, lab, snapshot) runs it.
  *
  * Accuracy stays level + bonus driven (shared NPC roll); damage uses the handset
  * max_hit. No max-hit formula is run for these NPCs.
  */
 static void col_build_npc_stats(void) {
+    col_build_static_arena();
     for (int i = 0; i < COLO_NUM_NPC_TYPES; i++) {
         const MonsterStats* m = &COLO_NPC_BASE[i];
         const ColoNpcOverlay* o = &COLO_NPC_OVERLAY[i];
@@ -259,8 +358,10 @@ static void col_build_npc_stats(void) {
 }
 
 
-/** wiki-exact Fortis Colosseum roster: W8/W11 start 7 NPCs, so 8 leaves headroom. */
-#define COLO_MAX_NPCS_PER_WAVE 8
+/** A29: the roster cap must hold the largest initial spawn set — 7 scripted
+    (W8/W11) + 1 Quartet warbander + 1 Dynamic Duo pair = 9. Spawn paths assert
+    a free NPC slot instead of silently dropping. */
+#define COLO_MAX_NPCS_PER_WAVE 10
 /** at most Jaguar + Serpent (W4-6) or Minotaur + Serpent (W10-11) reinforce per overrun. */
 #define COLO_MAX_REINFORCE_PER_WAVE 2
 
@@ -403,11 +504,10 @@ typedef struct {
     int heal_timer;   /* ticks until the next heal pulse */
 } ColoTotem;
 
-/** Solarflare hazard: a damaging orb circling the four boss pillars. Tiers change
-    cadence/damage and T3 disables prayer on hit. We reuse the boss pillar ring as
-    the orb path on every wave (the spec says "circles the pillars"); pre-boss the
-    ring is the four arena spawn corners so the orb still sweeps the play space.
-    UNCONFIRMED higher-tier damage; constants below are the modelled values. */
+/** Solarflare hazard: a damaging orb circling the four arena pillars (which
+    exist on every wave, B1). Tiers change cadence/damage and T3 disables prayer
+    on hit. UNCONFIRMED higher-tier damage; constants below are the modelled
+    values. Full A27 cadence retune is P5. */
 #define COLO_SOLARFLARE_CORNER_PAUSE 7   /* T1 pauses 7 ticks at each corner */
 #define COLO_SOLARFLARE_MAX_HIT_T1 12    /* contact damage, tier I */
 #define COLO_SOLARFLARE_MAX_HIT_T2 18    /* tier II "more damage" (UNCONFIRMED) */
@@ -828,9 +928,6 @@ typedef struct {
 
     /* pending hits on the player from NPC attacks (projectiles in flight) */
     EncounterPendingHitQueue player_pending_hits;
-
-    /* spawn position shuffle buffer */
-    int spawn_order[COLO_NUM_SPAWN_POS];
 
     /* human click-to-move destination (-1 = no dest) */
     int player_dest_x, player_dest_y;

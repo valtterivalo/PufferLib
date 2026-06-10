@@ -208,7 +208,7 @@ static void col_mod_on_npc_hp_changed(ColosseumState* s, int npc_slot) {
         s->totems[t].npc_slot = npc_slot;
         int size = col_npc_effective_size(npc);
         s->totems[t].x = npc->x + size;       /* one tile off the NPC's east edge */
-        if (!col_in_arena(s->totems[t].x, npc->y)) s->totems[t].x = npc->x - 1;
+        if (col_static_blocked(s->totems[t].x, npc->y)) s->totems[t].x = npc->x - 1;
         s->totems[t].y = npc->y;
         s->totems[t].heal_timer = COLO_TOTEM_HEAL_INTERVAL;
         return;
@@ -244,7 +244,7 @@ static void col_mod_tick_totems(ColosseumState* s) {
 /** add a molten pool at (x,y) living `ticks` ticks (COLO_POOL_PERMANENT = forever).
     Overflow recycles the oldest slot so the list never asserts. */
 static void col_mod_add_molten_pool(ColosseumState* s, int x, int y, int ticks) {
-    if (!col_in_arena(x, y)) return;
+    if (col_static_blocked(x, y)) return;
     int slot;
     if (s->molten_count < COLO_SOL_HAZARD_TILES_MAX) slot = s->molten_count++;
     else slot = encounter_rand_int(&s->rng_state, COLO_SOL_HAZARD_TILES_MAX);
@@ -307,8 +307,9 @@ static void col_mod_volatility_on_death(ColosseumState* s, int x, int y, int siz
 
 /* ----- Bees! (roaming poison swarms) ---------------------------------------- */
 
-/** sync the live bee-swarm count to the Bees! tier (1/2/3), spawning new swarms at
-    a random arena edge and despawning extras. Called at each wave spawn. */
+/** sync the live bee-swarm count to the Bees! tier (1/2/3), spawning new swarms
+    on a random spawn-anchor tile (D34: spawn location unpinned) and despawning
+    extras. Called at each wave spawn. */
 static void col_mod_sync_bees(ColosseumState* s) {
     int want = col_mod_tier(s, COLO_MOD_BEES);
     for (int b = 0; b < COLO_MAX_BEE_SWARMS; b++) {
@@ -316,9 +317,9 @@ static void col_mod_sync_bees(ColosseumState* s) {
         if (b < want) {
             if (bee->active) continue;
             bee->active = 1;
-            int pos = encounter_rand_int(&s->rng_state, COLO_NUM_SPAWN_POS);
-            bee->x = COLO_SPAWN_POS[pos][0];
-            bee->y = COLO_SPAWN_POS[pos][1];
+            int pos = encounter_rand_int(&s->rng_state, COLO_NUM_SPAWN_ANCHORS);
+            bee->x = COLO_SPAWN_ANCHORS[pos][0];
+            bee->y = COLO_SPAWN_ANCHORS[pos][1];
             bee->move_timer = COLO_BEE_MOVE_INTERVAL;
         } else {
             bee->active = 0;
@@ -352,18 +353,15 @@ static void col_mod_tick_bees(ColosseumState* s) {
 
 /* ----- Solarflare (orb circling the pillars) -------------------------------- */
 
-/** the orb path: the four boss pillars on the boss wave, else the four arena
-    spawn corners (so the orb still sweeps the play space pre-boss). Writes the
-    `corner`-th ring node (0..3, clockwise) into (*cx,*cy). */
+/** the orb path circles the four arena pillars (A27 ring geometry; the pillars
+    exist on every wave, B1), ring-ordered SW -> SE -> NE -> NW. Writes the
+    `corner`-th ring node (0..3) into (*cx,*cy). Cadence retune is P5. */
 static void col_mod_solarflare_corner(const ColosseumState* s, int corner, int* cx, int* cy) {
-    corner &= 3;
-    if (s->wave == COLO_WAVE_BOSS) {
-        *cx = COLO_BOSS_PILLARS[corner][0];
-        *cy = COLO_BOSS_PILLARS[corner][1];
-    } else {
-        *cx = COLO_SPAWN_POS[corner][0];   /* first four spawn positions are the corners */
-        *cy = COLO_SPAWN_POS[corner][1];
-    }
+    (void)s;
+    static const int RING[4] = { 0, 1, 3, 2 };   /* COLO_PILLARS indices in ring order */
+    const int* p = COLO_PILLARS[RING[corner & 3]];
+    *cx = p[0];
+    *cy = p[1];
 }
 
 /** start/refresh the Solarflare orb at the first ring corner when active. */

@@ -127,13 +127,17 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
     }
     if (s->wave_spawn_delay > 0) goto finish_step;
 
-    /* wave completion: all NPC slots inactive -> bonus + next/win */
+    /* wave completion: all NPC slots inactive. A6: on the boss wave Sol's death
+       alone ends the run in victory, even with a Quartet warbander alive. */
     for (int i = 0; i < COLO_MAX_NPCS; i++) {
         if (s->npcs[i].active) { all_dead = 0; break; }
     }
+    int wave_cleared = all_dead;
+    if (s->wave == COLO_WAVE_BOSS && s->sol.started)
+        wave_cleared = col_sol_find_idx(s) < 0;
 
     /* reinforcement: an uncleared wave that overruns COLO_REINFORCEMENT_TICKS
-       streams its reinforce species in once from the gate nearest the player.
+       streams its reinforce species in once, gate side by the yellow-line rule.
        reinforcement_timer counts down only while NPCs remain and gameplay is
        live; col_spawn_reinforcements sets it to COLO_REINFORCE_FIRED so a wave
        reinforces at most once. */
@@ -142,7 +146,7 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
         if (s->reinforcement_timer == 0) col_spawn_reinforcements(s);
     }
 
-    if (all_dead) {
+    if (wave_cleared) {
         s->tick_scratch.wave_completed = 1;
         s->log.waves_cleared++;
         s->reward += 1.0f + ctx->config.wave_clear_bonus;

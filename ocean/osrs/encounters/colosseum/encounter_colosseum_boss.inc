@@ -49,9 +49,10 @@ static int col_sol_find_idx(const ColosseumState* s) {
 }
 
 /**
- * Initialise the boss machine for wave 12: set the 16x16 arena bounds, drop the
- * player onto the south melee-start tile, and zero the boss sub-state so a fight
- * reached by wave progression starts identically to a direct start_wave=12.
+ * Initialise the boss machine for wave 12: set the (9,9)-(24,24) interior bounds
+ * (A8+D29; the static-mask pillars clip the corners), drop the player onto the
+ * south-centre start tile (D27), and zero the boss sub-state so a fight reached
+ * by wave progression starts identically to a direct start_wave=12.
  */
 static void col_sol_begin_boss_arena(ColosseumState* s) {
     s->sol = (SolHereditState){0};
@@ -277,26 +278,11 @@ static void col_sol_crystal_pos(const ColosseumState* s, int* cx, int* cy) {
     *cx = min_x;             *cy = max_y - step;
 }
 
-/** true if the segment from (ax,ay) to (bx,by) passes through a pillar tile. */
-static int col_sol_segment_hits_pillar(const ColosseumState* s, int ax, int ay, int bx, int by) {
-    int dx = abs(bx - ax), dy = -abs(by - ay);
-    int sx = ax < bx ? 1 : -1, sy = ay < by ? 1 : -1;
-    int err = dx + dy;
-    int x = ax, y = ay;
-    for (;;) {
-        if ((x != ax || y != ay) && (x != bx || y != by) && col_is_boss_pillar(s, x, y))
-            return 1;
-        if (x == bx && y == by) break;
-        int e2 = 2 * err;
-        if (e2 >= dy) { err += dy; x += sx; }
-        if (e2 <= dx) { err += dx; y += sy; }
-    }
-    return 0;
-}
-
-/** queue a crystal sphere at the player's tile, unless a pillar blocks LoS. */
+/** queue a crystal sphere at the player's tile, unless a pillar blocks LoS
+    (C 6.25: pillar LoS blocks spheres; col_tiles_have_los exempts the source
+    tile so a crystal parked on a blocked ring corner still fires). */
 static void col_sol_fire_sphere(ColosseumState* s, int cx, int cy) {
-    if (col_sol_segment_hits_pillar(s, cx, cy, s->player.x, s->player.y)) return;
+    if (!col_tiles_have_los(s, cx, cy, s->player.x, s->player.y)) return;
     SolHereditState* sol = &s->sol;
     for (int i = 0; i < COLO_SOL_SPHERE_QUEUE_MAX; i++) {
         if (sol->spheres[i].active) continue;
